@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentank": {
+      "command": "python",
+      "args": ["agentank_mcp_server.py"]
+    }
+  }
+}

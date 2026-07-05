@@ -43,6 +43,7 @@ class Step:
 @dataclass
 class Turn:
     user_message: str
+    images: list = field(default_factory=list)       # list[str] 用户附带的图片(data URL)，多模态用
     steps: list = field(default_factory=list)        # list[Step]
     answer: str = ""
     summary: str = ""
@@ -59,8 +60,8 @@ class Session:
         self._current: Optional[Turn] = None  # 进行中的轮（run 期间）
 
     # ========== 构建 ==========
-    def start_turn(self, user_message: str):
-        self._current = Turn(user_message=user_message)
+    def start_turn(self, user_message: str, images: Optional[list] = None):
+        self._current = Turn(user_message=user_message, images=images or [])
 
     def add_step(self, step: Step):
         if self._current is None:
@@ -93,16 +94,25 @@ class Session:
 
         recent = self.turns[-self.recent_window_turns:]
         for t in recent:
-            msgs.append({"role": "user", "content": t.user_message})
+            msgs.append({"role": "user", "content": self._user_content(t)})
             msgs.extend(self._steps_to_messages(t.steps))
             if t.answer:
                 msgs.append({"role": "assistant", "content": t.answer})
 
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
-            msgs.append({"role": "user", "content": self._current.user_message})
+            msgs.append({"role": "user", "content": self._user_content(self._current)})
             msgs.extend(self._steps_to_messages(self._current.steps))
         return msgs
+
+    @staticmethod
+    def _user_content(turn: "Turn"):
+        """构造 user 消息内容：纯文本→str；带图片→多模态 [text + image_url] 块。"""
+        if not turn.images:
+            return turn.user_message
+        blocks = [{"type": "text", "text": turn.user_message}]
+        blocks.extend({"type": "image_url", "image_url": {"url": img}} for img in turn.images)
+        return blocks
 
     @staticmethod
     def _steps_to_messages(steps: list[Step]) -> list[dict]:
@@ -206,6 +216,7 @@ class Session:
 
 def _turn_from_dict(d: dict) -> Turn:
     t = Turn(user_message=d.get("user_message", ""),
+             images=d.get("images", []),
              answer=d.get("answer", ""), summary=d.get("summary", ""))
     for s in d.get("steps", []):
         step = Step(reasoning=s.get("reasoning", ""))

@@ -1,29 +1,23 @@
-# 任务指引（AGENT.md）
+# 任务指引（AGENT.md）— 通用示例
 
 > 本文件由你（用户）维护，放在**启动目录**（即 workspace / cwd）中，启动时会被读取并拼进 Agent 的 SYSTEM。
-> 改这里就能调整 Agent 的领域行为/策略，无需改代码，重启 chat.py 生效。
+> 这是框架自带的**通用示例**——把它复制到你的任务目录，按实际任务改写即可。改这里就能调整 Agent 的领域行为/策略，无需改代码，重启生效。
 
-你正在参加 **AgenTank 坦克编程比赛**。
+## 你是谁/在做什么
+（在这里用一两句写清当前任务的领域与目标。例：「你是一个帮助我分析数据并产出报告的助手」「你正在维护 XXX 项目」。）
 
-## AgenTank 工具（由 MCP server 提供，名字带前缀 `__mcp__agentank__`）
-- `get_tank` — 读当前坦克上下文（段位 / 版本 / 技能 / 排名 / 下次可模拟时间）
-- `simulate` — 跑模拟（**不计排名**），可传候选 `code`、`opponent_id`（如 `nova-scout`）、`map_id`
-- `publish_code` — 发布新代码（`code` 必须定义 `onIdle`；`branch`: main/raid/multiplayer）
-- `get_matches` — 读最近真实对战记录（胜者 / 原因 / 地图 / 双方）
-- `get_leaderboard` — 排行榜（`period`=today/week/all；`sort`=win_rate/wins/excitement/score）
-- `find_opponents` — 搜可挑战的公开对手
-- `challenge` — 发起真实对战（**会计入战绩和排名！**）
-- `get_match_analysis` — 读对战分析（默认 compact；`view=events` 关键事件；`raw` 很费 token 慎用）
+## 可用工具
+- **内置工具**：run_python（写并运行 Python）/ read_file / write_file / edit（精确替换）/ grep（内容搜索）/ list_dir / web_search / run_shell（慎用）。
+- **MCP 工具**：由任务目录 `.mcp.json` 声明的 MCP server 提供，名字带 `__mcp__<server>__<tool>` 前缀，按描述选用。
+- **多 Agent**：可用 create_agent(name, model, system, tools) 创建带工具的子 Agent，agent_prompt(name, prompt) 派任务，并行可同时进行的子任务。
+- **技能**：见 `.agent/skills/`（SYSTEM 里有摘要；匹配时先 read_skill(name) 取详细 SOP）。
 
-## 工作原则
-- 改代码前先 `get_tank` 读当前版本；**小步改动**、保留已验证行为。
-- 坦克脚本是 JS，必须定义 `onIdle(me, enemy, game)`；所有 `position` / `star` 坐标都是**数组 `[x,y]`**，不是 `{x,y}`。
-- 发布前尽量先 `simulate` 验证（不计排名，可放心迭代）。
-- 分析回放先看 compact，需要细节再 `view=events`，`raw` 很费 token 慎用。
-- `challenge` / `publish` 是正式操作（影响排名 / 配额）：**执行前先向用户确认**。
-- 优先**简单稳健**的逻辑，避免花哨易碎的代码（警惕 runtime 超时）。
-- 文件操作（read_file/write_file/edit/grep/list_dir）和 run_python 都在**当前目录(cwd)**下进行。
+## 工作原则（按需改写）
+- 先理解需求再动手；复杂任务拆成小步，每步用合适的工具。
+- 改文件优先用 edit（精确替换），避免整体覆盖；改动前先读懂现有内容。
+- 执行有副作用或不可逆的操作（删除、发布、联网提交等）前，先向用户确认。
+- 优先简单稳健的方案；遇到错误如实上报并尝试修正。
+- 文件操作（read/write/edit/grep/list_dir）和 run_python 都在**当前目录(cwd)**下进行。
 
-## 当前坦克
-**Brick Power #5134**，技能 `stun`。实时段位用 `__mcp__agentank__get_tank` 查。
-（最近观察：对「倒数第一」1 胜 4 负导致掉段，可重点分析该对手回放找改进点。）
+## 当前上下文（可选）
+（写一些模型不知道、但任务需要的背景：当前日期、项目状态、已知约束、用户偏好等。）

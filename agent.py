@@ -1,16 +1,17 @@
-"""agent.py —— 自主 Agent（Step 8 强化版）。
+"""agent.py —— 自主 Agent（事件化输出，CLI 与 Web 各取所需）。
 
-升级点（相对早期版本）：
-  - 记忆改用 Session（分层 Turn>Step>ToolCall + 摘要/窗口融合），替代朴素滑动窗口。
-  - 长程自主：max_steps 默认 50（可 /config 调）；ReAct 循环"工具失败→观察→再改"天然支持闭环。
-  - 软 token 预算：累计到预算上限强制收尾（一次无工具的总结调用），防止失控烧钱。
-  - Ctrl+C 优雅打断：保留已完成的轮次到会话，不丢上下文。
+输出抽象成结构化事件流：`_emit(event)`。若设了 `on_event`（如 Web 后端）则回调它；
+同时若 `verbose=True` 则 `_print_event` 复刻原控制台格式。故 `chat.py`（不设 on_event、
+verbose=True）输出与之前完全一致；`web.py` 设 on_event 把事件推给浏览器。
+
+能力：ReAct 主循环、长程自主、单步并行工具、软 token 预算、Ctrl+C 优雅打断、
+多模型热切换、多 Agent（self.sub_agents）。
 """
 from __future__ import annotations
 
 import config
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import Callable, Optional
 
 from llm_client import LLMClient
 from session import Session, Step, ToolCall
@@ -32,12 +33,14 @@ class Agent:
         verbose: bool = True,
         recent_window_turns: int = 4,
         model_name: Optional[str] = None,
+        on_event: Optional[Callable[[dict], None]] = None,
     ):
         self.base_system = system
         self.tools = tools
         self.max_steps = max_steps
         self.token_budget = token_budget
         self.verbose = verbose
+        self.on_event = on_event
         self.model_name = model_name or config.DEFAULT_MODEL
 
         self.llm = LLMClient(model_name=self.model_name,
@@ -46,14 +49,46 @@ class Agent:
         self.cumulative_tokens = 0
         self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
 
-    def _log(self, *args):
+    # ========== 事件输出 ==========
+    def _emit(self, event: dict):
+        """发一个事件：回调 on_event（Web）；verbose 时打印（CLI）。"""
+        if self.on_event:
+            try:
+                self.on_event(event)
+            except Exception:
+                pass
         if self.verbose:
-            print(*args)
+            self._print_event(event)
 
-    def switch_model(self, name: str):
-        """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。"""
-        self.llm.switch_model(name)
-        self.model_name = name
+    def _print_event(self, e: dict):
+        """复刻原控制台输出格式（保证 CLI 行为不变）。"""
+        t = e.get("type")
+        if t == "user":
+            print(f"\n🧑 用户: {e['text']}")
+        elif t == "step":
+            print(f"\n{GRAY}━━━ 第 {e['n']} 步 (累计 {e['tokens']} token) ━━━{RESET}")
+        elif t == "warn":
+            print(f"{GRAY}{e['text']}{RESET}")
+        elif t == "budget_hit":
+            print(f"\n⚠️ token 预算({self.token_budget})已用尽，强制收尾。")
+        elif t == "thinking":
+            print(f"{GRAY}[思考] {e['text']}{RESET}")
+        elif t == "parallel":
+            print(f"{GRAY}⚡ 并行执行 {e['count']} 个工具调用{RESET}")
+        elif t == "tool_call":
+            print(f"🔧 调用 {e['name']}({e['arguments']})")
+        elif t == "tool_result":
+            prefix = f"   → [{e['name']}]" if e.get("parallel") else "   →"
+            print(f"{prefix} {e['result']}")
+        elif t == "answer":
+            print(f"\n🤖 最终回答: {e['text'].strip()}")
+            print(f"{GRAY}[本次累计 token: {e.get('tokens', self.cumulative_tokens)}]{RESET}")
+        elif t == "wrap_up":
+            print(f"\n⚠️ 达到最大步数 {self.max_steps}，强制收尾。")
+        elif t == "wrap_answer":
+            print(f"\n🤖 收尾回答: {e['text'].strip()}")
+        elif t == "interrupted":
+            print("\n\n⏹ 已中断（已完成的轮次保留在会话中，可用 /save 保存）。")
 
     @staticmethod
     def _truncate(s, n=500):
@@ -61,13 +96,11 @@ class Agent:
         return s if len(s) <= n else s[:n] + f"...(+{len(s) - n}字)"
 
     def _run_tools_parallel(self, calls: list) -> list:
-        """并行执行一组工具调用，按原顺序返回结果。子 Agent 各有独立 LLMClient/Session，线程安全。"""
+        """并行执行一组工具调用，按原顺序返回结果。"""
         results = [None] * len(calls)
         with ThreadPoolExecutor(max_workers=len(calls)) as ex:
-            fut_to_idx = {
-                ex.submit(self.tools.call, tc["name"], tc["arguments"]): i
-                for i, tc in enumerate(calls)
-            }
+            fut_to_idx = {ex.submit(self.tools.call, tc["name"], tc["arguments"]): i
+                          for i, tc in enumerate(calls)}
             for fut in as_completed(fut_to_idx):
                 i = fut_to_idx[fut]
                 try:
@@ -76,70 +109,72 @@ class Agent:
                     results[i] = f"[执行出错] {type(e).__name__}: {e}"
         return results
 
-    def run(self, user_message: str) -> str:
-        """跑 ReAct 主循环。每步记录到当前 Turn；超步数/预算则优雅收尾。"""
-        self.session.start_turn(user_message)
-        self._log(f"\n🧑 用户: {user_message}")
+    def switch_model(self, name: str):
+        """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。"""
+        self.llm.switch_model(name)
+        self.model_name = name
+
+    # ========== ReAct 主循环 ==========
+    def run(self, user_message: str, images: Optional[list] = None) -> str:
+        self.session.start_turn(user_message, images)
+        self._emit({"type": "user", "text": user_message, "image_count": len(images or [])})
         tool_schemas = self.tools.schemas()
 
         try:
             for step_num in range(1, self.max_steps + 1):
-                # —— 软预算硬墙：到顶就收尾 ——
                 if self.cumulative_tokens >= self.token_budget:
-                    self._log(f"\n⚠️ token 预算({self.token_budget})已用尽，强制收尾。")
+                    self._emit({"type": "budget_hit"})
                     return self._wrap_up()
 
-                self._log(f"\n{GRAY}━━━ 第 {step_num} 步 (累计 {self.cumulative_tokens} token) ━━━{RESET}")
+                self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens})
                 resp = self.llm.chat(self.session.messages_for_llm(), tools=tool_schemas)
                 if resp.usage:
                     self.cumulative_tokens += resp.usage.get("total_tokens", 0)
 
-                # 预算 80% 提醒（仅打印；不往消息里插，避免打乱工具流）
                 if self.cumulative_tokens >= self.token_budget * 0.8:
-                    self._log(f"{GRAY}⚠️ 预算已用 80%+，即将触顶收尾{RESET}")
+                    self._emit({"type": "warn", "text": "⚠️ 预算已用 80%+，即将触顶收尾"})
 
                 if resp.reasoning:
                     snippet = resp.reasoning[:200].replace("\n", " ")
                     if len(resp.reasoning) > 200:
                         snippet += "..."
-                    self._log(f"{GRAY}[思考] {snippet}{RESET}")
+                    self._emit({"type": "thinking", "text": snippet})
 
                 # 不再调用工具 → 最终答案
                 if not resp.tool_calls:
                     self.session.finish_turn(resp.content)
-                    self._log(f"\n🤖 最终回答: {resp.content.strip()}")
-                    self._log(f"{GRAY}[本次累计 token: {self.cumulative_tokens}]{RESET}")
+                    self._emit({"type": "answer", "text": resp.content,
+                                "tokens": self.cumulative_tokens})
                     return resp.content
 
-                # 执行工具，记录到当前 Turn 的一个 Step
-                step = Step(reasoning=resp.reasoning)
+                # 执行工具
                 calls = resp.tool_calls
+                step = Step(reasoning=resp.reasoning)
                 if len(calls) == 1:
                     tc = calls[0]
-                    self._log(f"🔧 调用 {tc['name']}({tc['arguments']})")
+                    self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
                     result = self.tools.call(tc["name"], tc["arguments"])
-                    self._log(f"   → {self._truncate(result)}")
-                    step.tool_calls.append(ToolCall(
-                        id=tc.get("id", ""), name=tc["name"],
-                        arguments=tc["arguments"], result=result))
+                    self._emit({"type": "tool_result", "name": tc["name"],
+                                "result": self._truncate(result), "parallel": False})
+                    step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
+                                                     arguments=tc["arguments"], result=result))
                 else:
-                    # 单步多工具调用：并行执行（如多个 agent_prompt 派给不同子 Agent）
-                    self._log(f"{GRAY}⚡ 并行执行 {len(calls)} 个工具调用{RESET}")
+                    self._emit({"type": "parallel", "count": len(calls)})
                     for tc in calls:
-                        self._log(f"🔧 调用 {tc['name']}({tc['arguments']})")
+                        self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
                     results = self._run_tools_parallel(calls)
                     for tc, result in zip(calls, results):
-                        self._log(f"   → [{tc['name']}] {self._truncate(result)}")
-                        step.tool_calls.append(ToolCall(
-                            id=tc.get("id", ""), name=tc["name"],
-                            arguments=tc["arguments"], result=result))
+                        self._emit({"type": "tool_result", "name": tc["name"],
+                                    "result": self._truncate(result), "parallel": True})
+                        step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
+                                                         arguments=tc["arguments"], result=result))
                 self.session.add_step(step)
 
-            self._log(f"\n⚠️ 达到最大步数 {self.max_steps}，强制收尾。")
+            self._emit({"type": "wrap_up"})
             return self._wrap_up()
 
         except KeyboardInterrupt:
-            self._log("\n\n⏹ 已中断（已完成的轮次保留在会话中，可用 /save 保存）。")
+            self._emit({"type": "interrupted"})
             self.session.abort_current_turn("（被用户中断）")
             return ""
 
@@ -157,5 +192,5 @@ class Agent:
         except Exception as e:
             answer = f"（收尾调用失败：{e}）"
         self.session.finish_turn(answer)
-        self._log(f"\n🤖 收尾回答: {answer.strip()}")
+        self._emit({"type": "wrap_answer", "text": answer})
         return answer

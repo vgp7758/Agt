@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agt Agent</title>
+<style>
+  :root { --bg:#f5f6f8; --me:#2563eb; --bot:#ffffff; --line:#e2e5ea; --muted:#8a9099; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); display:flex; flex-direction:column; color:#1f2329; }
+  header { padding:10px 16px; background:#1f2329; color:#fff; display:flex; align-items:center; gap:10px; }
+  header .dot { width:9px;height:9px;border-radius:50%;background:#22c55e; }
+  header .dot.off { background:#ef4444; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .sub { font-size:12px; color:#9aa0a6; margin-left:auto; }
+  #msgArea { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
+  .row { display:flex; }
+  .row.me { justify-content:flex-end; }
+  .bubble { max-width:78%; padding:9px 13px; border-radius:13px; line-height:1.55; font-size:14px;
+            white-space:pre-wrap; word-break:break-word; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  .row.me .bubble { background:var(--me); color:#fff; border-bottom-right-radius:4px; }
+  .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .row.sys .bubble { background:#eef2ff; border:1px solid #c7d2fe; color:#3730a3; font-size:12.5px; max-width:92%; white-space:pre-wrap; }
+  .row.err .bubble { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; }
+  .gal { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .gal img { width:120px; height:120px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,.3); }
+  .row.me .gal img { border-color:rgba(255,255,255,.4); }
+  details.trace { background:#fff; border:1px solid var(--line); border-radius:10px; padding:5px 10px; font-size:12.5px; color:#4b5158; max-width:78%; }
+  details.trace > summary { cursor:pointer; color:var(--muted); user-select:none; }
+  .ev { white-space:pre-wrap; word-break:break-word; margin:3px 0; line-height:1.5; }
+  .ev.think { color:#9aa0a6; font-style:italic; }
+  .ev.tool { color:#1f6feb; }
+  .ev.res { color:#5b6470; padding-left:14px; border-left:2px solid var(--line); margin-left:2px; }
+  .ev.step { color:var(--muted); font-size:11.5px; margin-top:6px; }
+  .ev.warn { color:#b45309; }
+  /* 控件栏 */
+  #controls { display:flex; gap:8px; padding:8px 12px; background:#fff; border-top:1px solid var(--line); flex-wrap:wrap; align-items:center; }
+  #modelSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; max-width:240px; }
+  .btn { padding:5px 10px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:12.5px; cursor:pointer; color:#374151; }
+  .btn:hover { background:#f3f4f6; }
+  .btn.primary { background:var(--me); color:#fff; border-color:var(--me); }
+  .btn.spacer { margin-left:auto; }
+  /* 附件 */
+  #attBar { display:none; gap:8px; padding:6px 12px 0; background:#fff; flex-wrap:wrap; }
+  .thumb { position:relative; }
+  .thumb img { width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+  .thumb .rm { position:absolute; top:-6px; right:-6px; background:#ef4444; color:#fff; width:18px; height:18px;
+               border-radius:50%; font-size:12px; line-height:18px; text-align:center; cursor:pointer; }
+  #inputBar { display:flex; gap:10px; padding:10px 12px; background:#fff; border-top:1px solid var(--line); }
+  #inp { flex:1; resize:none; height:46px; max-height:140px; padding:9px 12px; border:1px solid var(--line); border-radius:10px;
+         font-size:14px; font-family:inherit; outline:none; }
+  #inp:focus { border-color:var(--me); }
+  #sendBtn { padding:0 18px; border:none; background:var(--me); color:#fff; border-radius:10px; font-size:14px; cursor:pointer; }
+  #sendBtn:disabled { background:#9aa0a6; cursor:not-allowed; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>Agt Agent</h1>
+    <span class="sub" id="status">连接中…</span>
+  </header>
+
+  <div id="msgArea"></div>
+
+  <div id="attBar"></div>
+
+  <div id="controls">
+    <select id="modelSel" title="切换模型"></select>
+    <button class="btn" id="btnImg">📁 加图</button>
+    <button class="btn" id="btnTank">🚗 查坦克</button>
+    <button class="btn" id="btnSave">💾 /save</button>
+    <button class="btn" id="btnList">📋 /list</button>
+    <button class="btn" id="btnHelp">❓ /help</button>
+    <button class="btn spacer" id="btnClear">🚮 清空</button>
+    <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
+  </div>
+
+  <div id="inputBar">
+    <textarea id="inp" placeholder="输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片"></textarea>
+    <button id="sendBtn">发送</button>
+  </div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const msgArea = document.getElementById('msgArea');
+const inp = document.getElementById('inp');
+const sendBtn = document.getElementById('sendBtn');
+const statusEl = document.getElementById('status');
+const dot = document.getElementById('dot');
+const modelSel = document.getElementById('modelSel');
+const attBar = document.getElementById('attBar');
+const fileInput = document.getElementById('fileInput');
+
+let busy = false;
+let curTurn = null;
+const attachments = []; // data URL 数组
+
+function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
+function setBusy(b){ busy=b; sendBtn.disabled=b; if(!b) inp.focus(); }
+function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on?'已连接':'已断开'; }
+
+function addRow(cls, text){
+  const row=document.createElement('div'); row.className='row '+cls;
+  const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
+  row.appendChild(b); msgArea.appendChild(row); scrollBottom(); return row;
+}
+
+function newTurn(){
+  const wrap=document.createElement('div'); wrap.className='row bot';
+  const col=document.createElement('div'); col.className='turn';
+  const det=document.createElement('details'); det.className='trace'; det.open=true;
+  const sum=document.createElement('summary'); sum.textContent='过程'; det.appendChild(sum);
+  const box=document.createElement('div'); det.appendChild(box);
+  const ans=document.createElement('div'); ans.className='bubble';
+  col.appendChild(det); col.appendChild(ans); wrap.appendChild(col);
+  msgArea.appendChild(wrap);
+  curTurn={traceBox:box, answerEl:ans, det};
+  scrollBottom();
+}
+function addTrace(cls, text){
+  if(!curTurn) newTurn();
+  const e=document.createElement('div'); e.className='ev '+cls; e.textContent=text;
+  curTurn.traceBox.appendChild(e); scrollBottom();
+}
+function finishAnswer(text){
+  if(!curTurn) newTurn();
+  curTurn.answerEl.textContent=text;
+  if(curTurn.det) curTurn.det.open=false;
+  scrollBottom();
+}
+
+// —— 图片附件 ——
+function renderThumbs(){
+  attBar.innerHTML='';
+  attachments.forEach((src,i)=>{
+    const d=document.createElement('div'); d.className='thumb';
+    const img=document.createElement('img'); img.src=src;
+    const x=document.createElement('span'); x.textContent='×'; x.className='rm';
+    x.onclick=()=>{ attachments.splice(i,1); renderThumbs(); };
+    d.appendChild(img); d.appendChild(x); attBar.appendChild(d);
+  });
+  attBar.style.display = attachments.length?'flex':'none';
+}
+function addImageFile(file){
+  const r=new FileReader();
+  r.onload=()=>{ attachments.push(r.result); renderThumbs(); };
+  r.readAsDataURL(file);
+}
+document.addEventListener('paste', e=>{
+  const items = e.clipboardData?.items || [];
+  for(const it of items){ if(it.type.startsWith('image/')){ const f=it.getAsFile(); if(f) addImageFile(f); } }
+});
+fileInput.addEventListener('change', e=>{
+  for(const f of e.target.files) addImageFile(f);
+  e.target.value='';
+});
+
+// —— 发送 ——
+function sendRaw(text, images){
+  ws.send(JSON.stringify({text, images: images||[]}));
+}
+function addUserBubble(text, imgs){
+  const row=document.createElement('div'); row.className='row me';
+  const b=document.createElement('div'); b.className='bubble';
+  if(text){ const t=document.createElement('div'); t.textContent=text; b.appendChild(t); }
+  if(imgs && imgs.length){
+    const gal=document.createElement('div'); gal.className='gal';
+    imgs.forEach(s=>{ const im=document.createElement('img'); im.src=s; gal.appendChild(im); });
+    b.appendChild(gal);
+  }
+  row.appendChild(b); msgArea.appendChild(row); scrollBottom();
+}
+function send(){
+  const t=inp.value.trim();
+  if((!t && !attachments.length) || busy) return;
+  const imgs=attachments.slice();
+  sendRaw(t, imgs);
+  addUserBubble(t, imgs);
+  inp.value=''; inp.style.height='auto';
+  attachments.length=0; renderThumbs();
+  setBusy(true); curTurn=null;
+}
+
+// —— 按钮 ——
+sendBtn.onclick=send;
+document.getElementById('btnImg').onclick=()=>fileInput.click();
+document.getElementById('btnTank').onclick=()=>sendRaw('查一下当前坦克的段位和最新战绩', []);
+document.getElementById('btnSave').onclick=()=>sendRaw('/save', []);
+document.getElementById('btnList').onclick=()=>sendRaw('/list', []);
+document.getElementById('btnHelp').onclick=()=>sendRaw('/help', []);
+document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
+modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
+inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });
+
+// —— WS 事件 ——
+ws.onopen=()=>setOnline(true);
+ws.onclose=()=>{ setOnline(false); inp.placeholder='连接已断开，请刷新页面'; };
+ws.onerror=()=>setOnline(false);
+ws.onmessage=(ev)=>{
+  let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
+  switch(m.type){
+    case 'system':
+      if(m.models){
+        modelSel.innerHTML='';
+        m.models.forEach(md=>{
+          const o=document.createElement('option'); o.value=md.name;
+          o.textContent=md.name + (md.desc?(' — '+md.desc):'');
+          if(md.name===m.current_model) o.selected=true;
+          modelSel.appendChild(o);
+        });
+      }
+      addRow('sys', m.text); scrollBottom(); break;
+    case 'error': addRow('err', m.text); setBusy(false); break;
+    case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;
+    case 'thinking': addTrace('think', '💭 '+m.text); break;
+    case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
+    case 'tool_call': addTrace('tool', `🔧 ${m.name}(${fmtArgs(m.arguments)})`); break;
+    case 'tool_result': addTrace('res', `→ ${m.result}`); break;
+    case 'warn': addTrace('warn', '⚠️ '+m.text); break;
+    case 'answer': case 'wrap_answer': finishAnswer(m.text); break;
+    case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
+    case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
+    case 'interrupted': addRow('sys','⏹ 已中断'); setBusy(false); break;
+    case '_done':
+      if(curTurn && !curTurn.answerEl.textContent){
+        curTurn.answerEl.textContent='（本轮无最终回答）'; curTurn.answerEl.style.color='#8a9099';
+      }
+      if(curTurn && curTurn.det) curTurn.det.open=false;
+      setBusy(false); break;
+  }
+};
+function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }
+
+inp.focus();
+</script>
+</body>
+</html>

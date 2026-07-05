@@ -166,12 +166,6 @@ def _cmd_budget(ctx: CommandContext, args):
     print(f"💰 本次运行 token：已用 {used} / 预算 {budget} ({pct:.0f}%)")
 
 
-def _cmd_tank(ctx: CommandContext, args):
-    from agentank_tools import get_tank
-    print("🔍 查询当前坦克状态…")
-    print(get_tank())
-
-
 def _cmd_model(ctx: CommandContext, args):
     import config
     from models import MODELS
@@ -200,7 +194,6 @@ def build_default_registry() -> CommandRegistry:
     reg.register("reset", _cmd_reset, "重置会话（清空历史）")
     reg.register("config", _cmd_config, "<key> <value>  改运行时配置(max_steps/token_budget)")
     reg.register("budget", _cmd_budget, "查看本次 token 消耗")
-    reg.register("tank", _cmd_tank, "查看当前坦克段位（AgenTank）")
     reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")

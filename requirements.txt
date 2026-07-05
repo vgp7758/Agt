@@ -5,3 +5,6 @@ pydantic>=2.0.0
 requests>=2.28.0
 mcp>=1.0.0
 pyyaml>=6.0
+fastapi>=0.100
+uvicorn[standard]>=0.20
+websockets>=12.0

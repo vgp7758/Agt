@@ -130,9 +130,26 @@ def make_wiki_tools(agent) -> list:
     """主 Agent 的 wiki 工具集 = CRUD + update_wiki（后者绑定主 Agent，起子 Agent 维护）。"""
     tools = wiki_crud_tools()
 
-    def update_wiki(summary: str) -> str:
-        """完成重要功能或修改后调用：把【改动摘要】交给一个 wiki 维护子 Agent，
-        由它读取现有 wiki 并更新/新建受影响模块的页面。主 Agent 无需自己写 wiki。"""
+    def update_wiki(summary: str = "") -> str:
+        """完成重要功能或修改后调用。
+        summary 留空 → 自动把当前 Turn 的完整上下文(任务+工具调用+结果+计划)交给子 Agent 理解；
+        自己填 summary → 用它（更聚焦）。"""
+        # 自动摘要：无 summary 时从最近一轮 Turn 提取上下文
+        prompt = summary.strip()
+        if not prompt:
+            last = agent.session.turns[-1] if agent.session.turns else None
+            blocks = []
+            if last:
+                blocks.append(f"用户任务：{last.user_message}")
+                for step in last.steps:
+                    for tc in step.tool_calls:
+                        blocks.append(f"- {tc.name}({tc.arguments}) → {tc.result[:200]}")
+                if last.answer:
+                    blocks.append(f"最终结果：{last.answer[:300]}")
+            if agent.plan:
+                from plan_tools import _plan_text
+                blocks.append(f"执行计划：\n{_plan_text(agent)}")
+            prompt = "\n".join(blocks) if blocks else "(无上下文)"
         from agent import Agent
         sub = Agent(
             system=WIKI_UPDATER_SYSTEM,
@@ -143,10 +160,9 @@ def make_wiki_tools(agent) -> list:
             on_event=None,           # 静默执行；结果以工具返回值回到主 Agent
         )
         report = sub.run(
-            f"主 Agent 刚完成了以下工作，请据此更新 repo-wiki（.agent/wiki/）：\n\n"
-            f"{summary}\n\n"
+            f"请据此更新 repo-wiki（.agent/wiki/）：\n\n{prompt}\n\n"
             f"先 wiki_tree/wiki_read 了解现有 wiki 结构，再 wiki_write 按业务/技术逻辑更新/新建页面"
-            f"（引用相关代码相对路径、文档间可 Markdown 相对链接互相跳转）。聚焦本次改动涉及的模块。"
+            f"（引用相关代码相对路径、文档间可 Markdown 相对链接互相跳转）。聚焦改动涉及的模块。"
         )
         return report or "(wiki 维护子 Agent 未产出报告)"
 

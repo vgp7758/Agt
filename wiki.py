@@ -1,7 +1,12 @@
-"""wiki.py —— repo-wiki 知识库工具（.agent/wiki/，结构镜像仓库目录）。
+"""wiki.py —— repo-wiki 知识库工具（.agent/wiki/，按业务/技术逻辑自由组织）。
 
 让 Agent 给仓库积累"项目记忆"：开始不熟悉的任务前先查 wiki；完成重要功能/修改后
 调用 update_wiki(summary)，由一个【wiki 维护子 Agent】按摘要更新对应页面。
+
+wiki 结构不强制镜像仓库目录——按业务/技术逻辑自由组织。每篇 wiki 页可以：
+  - 引用相关代码的相对路径（如 \"详见 src/auth/login.py\"）
+  - 关联多个代码文件（不限于 1:1）
+  - 通过 Markdown 相对链接跳转到其他 wiki 页（如 \"[认证流程](auth/flow.md)\"）
 
 工具：
   wiki_read / wiki_list / wiki_search / wiki_tree   查（限定 .agent/wiki/）
@@ -18,10 +23,14 @@ from tools import Tool, Toolbox
 WIKI_ROOT = lambda: WORKSPACE / ".agent" / "wiki"
 
 WIKI_UPDATER_SYSTEM = (
-    "你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，更新 `.agent/wiki/` 下相关的 wiki 页面。"
-    "wiki 结构镜像仓库目录（如 src/auth/login.py 对应 .agent/wiki/src/auth/login.md）。"
-    "先用 wiki_list/wiki_read 了解现有 wiki 结构，再用 wiki_write 更新/新建受影响模块的页面。"
-    "每页聚焦：模块职责、关键函数/类、数据流、依赖、注意事项。简洁，只写本次改动涉及的模块。"
+    "你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，维护 `.agent/wiki/` 下的知识库页面。\n"
+    "wiki 按【业务 / 技术逻辑】自由组织（不必镜像仓库文件目录），如 features/auth.md、architecture/data-flow.md。\n"
+    "原则：\n"
+    "- 先用 wiki_tree/wiki_read 了解现有 wiki 结构与内容\n"
+    "- 用 wiki_write 更新/新建受影响模块的页面（聚焦改动，简洁）\n"
+    "- 每页可引用相关代码的相对路径（如 src/auth/login.py），可关联多个文件\n"
+    "- 文档间通过 Markdown 相对链接互相跳转（如 [认证流程](auth/flow.md)），形成知识网\n"
+    "- 每页核心内容：模块职责、关键函数/类、与其它模块的关系、依赖、注意事项"
 )
 
 
@@ -134,9 +143,10 @@ def make_wiki_tools(agent) -> list:
             on_event=None,           # 静默执行；结果以工具返回值回到主 Agent
         )
         report = sub.run(
-            f"主 Agent 刚完成了以下工作，请据此更新 repo-wiki（.agent/wiki/，结构镜像仓库目录）：\n\n"
+            f"主 Agent 刚完成了以下工作，请据此更新 repo-wiki（.agent/wiki/）：\n\n"
             f"{summary}\n\n"
-            f"先 wiki_tree/wiki_read 了解现有 wiki，再 wiki_write 更新/新建受影响模块的页面（聚焦本次改动）。"
+            f"先 wiki_tree/wiki_read 了解现有 wiki 结构，再 wiki_write 按业务/技术逻辑更新/新建页面"
+            f"（引用相关代码相对路径、文档间可 Markdown 相对链接互相跳转）。聚焦本次改动涉及的模块。"
         )
         return report or "(wiki 维护子 Agent 未产出报告)"
 

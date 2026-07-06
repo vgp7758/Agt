@@ -153,7 +153,7 @@ class Agent:
 
                 # 不再调用工具 → 最终答案
                 if not resp.tool_calls:
-                    self.session.finish_turn(resp.content)
+                    self.session.finish_turn(resp.content, resp.reasoning)
                     self._emit({"type": "answer", "text": resp.content,
                                 "tokens": self.cumulative_tokens})
                     return resp.content

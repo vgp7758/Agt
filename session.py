@@ -60,6 +60,7 @@ class Turn:
     snapshot_sha: str = ""                           # 该轮发送前的工作区快照(检查点回溯用)
     steps: list = field(default_factory=list)        # list[Step]
     answer: str = ""
+    answer_reasoning: str = ""                       # 最终回答那步的 reasoning_content（GLM 等要求回传）
     summary: str = ""
 
 
@@ -83,10 +84,11 @@ class Session:
             raise RuntimeError("没有进行中的 Turn，请先 start_turn()")
         self._current.steps.append(step)
 
-    def finish_turn(self, answer: str):
+    def finish_turn(self, answer: str, answer_reasoning: str = ""):
         if self._current is None:
             return
         self._current.answer = answer
+        self._current.answer_reasoning = answer_reasoning
         self.turns.append(self._current)
         self._current = None
         self._compact()
@@ -123,7 +125,10 @@ class Session:
             msgs.append({"role": "user", "content": self._user_content(t)})
             msgs.extend(self._steps_to_messages(t.steps))
             if t.answer:
-                msgs.append({"role": "assistant", "content": t.answer})
+                a_msg = {"role": "assistant", "content": t.answer}
+                if t.answer_reasoning:
+                    a_msg["reasoning_content"] = t.answer_reasoning
+                msgs.append(a_msg)
 
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
@@ -142,12 +147,12 @@ class Session:
 
     @staticmethod
     def _steps_to_messages(steps: list[Step]) -> list[dict]:
-        """把一组 Step 还原成 role 消息：assistant(tool_calls) + 各 tool 结果。"""
+        """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。"""
         msgs = []
         for step in steps:
             if not step.tool_calls:
                 continue
-            msgs.append({
+            a_msg = {
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
@@ -156,7 +161,10 @@ class Session:
                                   "arguments": json.dumps(tc.arguments, ensure_ascii=False)}}
                     for i, tc in enumerate(step.tool_calls)
                 ],
-            })
+            }
+            if step.reasoning:
+                a_msg["reasoning_content"] = step.reasoning
+            msgs.append(a_msg)
             for i, tc in enumerate(step.tool_calls):
                 msgs.append({"role": "tool", "tool_call_id": tc.id or str(i), "content": tc.result})
         return msgs
@@ -247,7 +255,8 @@ def _turn_from_dict(d: dict) -> Turn:
     t = Turn(user_message=d.get("user_message", ""),
              images=d.get("images", []),
              snapshot_sha=d.get("snapshot_sha", ""),
-             answer=d.get("answer", ""), summary=d.get("summary", ""))
+             answer=d.get("answer", ""), answer_reasoning=d.get("answer_reasoning", ""),
+             summary=d.get("summary", ""))
     for s in d.get("steps", []):
         step = Step(reasoning=s.get("reasoning", ""))
         for tc in s.get("tool_calls", []):

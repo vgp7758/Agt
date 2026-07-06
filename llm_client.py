@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 
 import config
 
@@ -67,6 +67,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.fallback_chain: list[str] = []   # 回退优先级链(如 glm,deepseek,qwen)
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: dict):
@@ -107,7 +108,28 @@ class LLMClient:
         return float(a)
 
     def chat(self, messages, **overrides) -> LLMResponse:
-        """普通（非流式）调用。遇到空响应自动退避重试。"""
+        """普通（非流式）调用。空响应退避重试；耗完后若设了回退链则沿链切换模型再试。"""
+        tried = [self.model_name]
+        while True:
+            try:
+                return self._chat_inner(messages, **overrides)
+            except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError) as e:
+                if not self.fallback_chain:
+                    raise
+                try:
+                    idx = self.fallback_chain.index(self.model_name)
+                except ValueError:
+                    raise  # 当前模型不在回退链，不处理
+                next_m = self.fallback_chain[idx + 1] if idx + 1 < len(self.fallback_chain) else None
+                if not next_m or next_m in tried:
+                    raise RuntimeError(
+                        f"回退链中所有模型均已尝试({', '.join(tried)})：{e}") from e
+                tried.append(next_m)
+                self.switch_model(next_m)
+                time.sleep(self._backoff(len(tried) - 1))  # 切换前小退避
+
+    def _chat_inner(self, messages, **overrides) -> LLMResponse:
+        """单模型调用 + 空响应重试（被 chat() 的回退循环包裹）。"""
         last_info = None
         for attempt in range(self.max_retries):
             resp = self._client.chat.completions.create(

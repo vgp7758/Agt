@@ -157,14 +157,23 @@ CONFIGURABLE = {
 
 
 def read_config(agent) -> dict:
-    """读取所有可配置项的当前值。"""
-    return {k: getattr(agent if tgt == "agent" else agent.llm, k)
-            for k, (tgt, _) in CONFIGURABLE.items()}
+    """读取所有可配置项的当前值。fallback_chain 以逗号分隔字符串展示。"""
+    cfg = {k: getattr(agent if tgt == "agent" else agent.llm, k)
+           for k, (tgt, _) in CONFIGURABLE.items()}
+    chain = getattr(agent.llm, "fallback_chain", [])
+    cfg["fallback_chain"] = ",".join(chain) if chain else ""
+    return cfg
 
 
 def apply_config(agent, values: dict) -> list:
     """应用一组配置（key->value），返回每项的结果文案列表。"""
     results = []
+    # fallback_chain 特殊处理（逗号分隔 → list）
+    if "fallback_chain" in values:
+        v = values.pop("fallback_chain")
+        chain = [m.strip() for m in str(v).split(",") if m.strip()]
+        agent.llm.fallback_chain = chain
+        results.append(f"✅ fallback_chain = {chain or '(空, 无回退)'}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")

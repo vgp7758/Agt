@@ -57,6 +57,12 @@
   .restore-btn { display:block; margin-bottom:6px; font-size:11px; padding:3px 8px; border-radius:6px;
     border:1px solid rgba(255,255,255,.4); background:rgba(255,255,255,.15); color:#fff; cursor:pointer; }
   .restore-btn:hover { background:rgba(255,255,255,.3); }
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:100; }
+  .modal { background:#fff; padding:18px 20px; border-radius:12px; min-width:320px; display:flex; flex-direction:column; gap:10px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
+  .modal h3 { margin:0 0 4px; font-size:15px; }
+  .modal label { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:10px; }
+  .modal input[type=number]{ width:130px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
+  .modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -77,6 +83,7 @@
     <button class="btn" id="btnSave">💾 /save</button>
     <button class="btn" id="btnList">📋 /list</button>
     <button class="btn" id="btnHelp">❓ /help</button>
+    <button class="btn" id="btnSettings">⚙ 设置</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
@@ -85,6 +92,21 @@
     <textarea id="inp" placeholder="输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片"></textarea>
     <button id="sendBtn">发送</button>
   </div>
+
+<div id="settingsModal" class="modal-overlay">
+  <div class="modal">
+    <h3>⚙ 运行时设置</h3>
+    <label>max_steps <input id="cfg_max_steps" type="number"></label>
+    <label>token_budget <input id="cfg_token_budget" type="number"></label>
+    <label>max_retries <input id="cfg_max_retries" type="number"></label>
+    <label>temperature <input id="cfg_temperature" type="number" step="0.1"></label>
+    <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
+    <div class="modal-btns">
+      <button class="btn" id="cfgCancel">取消</button>
+      <button class="btn primary" id="cfgSave">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -96,6 +118,7 @@ const dot = document.getElementById('dot');
 const modelSel = document.getElementById('modelSel');
 const attBar = document.getElementById('attBar');
 const fileInput = document.getElementById('fileInput');
+const settingsModal = document.getElementById('settingsModal');
 
 let busy = false;
 let curTurn = null;
@@ -198,6 +221,19 @@ document.getElementById('btnSave').onclick=()=>sendRaw('/save', []);
 document.getElementById('btnList').onclick=()=>sendRaw('/list', []);
 document.getElementById('btnHelp').onclick=()=>sendRaw('/help', []);
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
+document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); };
+document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
+document.getElementById('cfgSave').onclick=()=>{
+  const values={
+    max_steps: parseInt(document.getElementById('cfg_max_steps').value),
+    token_budget: parseInt(document.getElementById('cfg_token_budget').value),
+    max_retries: parseInt(document.getElementById('cfg_max_retries').value),
+    temperature: parseFloat(document.getElementById('cfg_temperature').value),
+    enable_thinking: document.getElementById('cfg_enable_thinking').checked,
+  };
+  ws.send(JSON.stringify({action:'set_config', values}));
+  settingsModal.style.display='none';
+};
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });
@@ -244,6 +280,15 @@ ws.onmessage=(ev)=>{
         restoreTargetBubble=null; curTurn=null; setBusy(false);
       }
       addRow('sys', '✅ 已回溯：工作区文件与对话已恢复到该指令之前。');
+      break;
+    case 'config':
+      if(m.values){
+        document.getElementById('cfg_max_steps').value = m.values.max_steps;
+        document.getElementById('cfg_token_budget').value = m.values.token_budget;
+        document.getElementById('cfg_max_retries').value = m.values.max_retries;
+        document.getElementById('cfg_temperature').value = m.values.temperature;
+        document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
+      }
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;

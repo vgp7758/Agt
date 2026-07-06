@@ -142,21 +142,58 @@ def _cmd_reset(ctx: CommandContext, args):
     print("🔄 已重置会话（历史清空，system 保留）。")
 
 
+def _to_bool(v):
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+# 可配置项：名字 -> (设在 agent 还是 agent.llm 上, 类型转换)
+CONFIGURABLE = {
+    "max_steps": ("agent", int),
+    "token_budget": ("agent", int),
+    "max_retries": ("llm", int),
+    "temperature": ("llm", float),
+    "enable_thinking": ("llm", _to_bool),
+}
+
+
+def read_config(agent) -> dict:
+    """读取所有可配置项的当前值。"""
+    return {k: getattr(agent if tgt == "agent" else agent.llm, k)
+            for k, (tgt, _) in CONFIGURABLE.items()}
+
+
+def apply_config(agent, values: dict) -> list:
+    """应用一组配置（key->value），返回每项的结果文案列表。"""
+    results = []
+    for k, v in values.items():
+        if k not in CONFIGURABLE:
+            results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")
+            continue
+        tgt, cast = CONFIGURABLE[k]
+        try:
+            cv = cast(v)
+        except Exception:
+            results.append(f"❌ {k} 值非法：{v}")
+            continue
+        setattr(agent if tgt == "agent" else agent.llm, k, cv)
+        results.append(f"✅ {k} = {cv}")
+    return results
+
+
 def _cmd_config(ctx: CommandContext, args):
     positional = _parse_args(args)[0]
-    if len(positional) < 2:
-        print("用法：/config <key> <value>  （可配置：max_steps, token_budget）")
-        print(f"  当前：max_steps={ctx.agent.max_steps}  token_budget={ctx.agent.token_budget}")
+    if not positional:
+        print("当前配置：")
+        for k, v in read_config(ctx.agent).items():
+            print(f"  {k} = {v}")
+        print("用法：/config <key> <value> [<key> <value> ...]；可配置：" + " / ".join(CONFIGURABLE))
         return
-    key, val = positional[0], positional[1]
-    if key in ("max_steps", "token_budget"):
-        try:
-            setattr(ctx.agent, key, int(val))
-            print(f"✅ {key} = {int(val)}")
-        except ValueError:
-            print(f"❌ {key} 需要整数，收到 {val}")
-    else:
-        print(f"❌ 未知配置项 {key}（可配置：max_steps, token_budget）")
+    if len(positional) % 2 != 0:
+        print("❌ 参数须成对，如：/config max_steps 100 token_budget 100000")
+        return
+    values = {positional[i]: positional[i + 1] for i in range(0, len(positional), 2)}
+    for line in apply_config(ctx.agent, values):
+        print(line)
 
 
 def _cmd_budget(ctx: CommandContext, args):

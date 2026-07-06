@@ -22,7 +22,7 @@ import chat as chatmod
 import config
 from agent import Agent
 from agent_config import SKILL_TOOLS
-from commands import CommandContext, build_default_registry
+from commands import CommandContext, build_default_registry, apply_config, read_config
 from mcp_client import MCPManager
 from multiagent import make_subagent_tools
 from real_tools import REAL_TOOLS, WORKSPACE
@@ -97,6 +97,13 @@ async def ws_endpoint(websocket: WebSocket):
                     await _send(websocket, {"type": "restored", "target": target or ""})
                 except Exception as e:
                     await _send(websocket, {"type": "system", "text": f"⚠️ 回溯失败: {type(e).__name__}: {e}"})
+                continue
+            if isinstance(_d, dict) and _d.get("action") == "get_config":
+                await _send(websocket, {"type": "config", "values": read_config(agent)})
+                continue
+            if isinstance(_d, dict) and _d.get("action") == "set_config":
+                lines = apply_config(agent, _d.get("values") or {})
+                await _send(websocket, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
                 continue
             text, images = _parse_client_msg(raw)
             text = text.strip()

@@ -100,8 +100,11 @@ class LLMClient:
         return kwargs
 
     def _backoff(self, attempt: int) -> float:
-        """指数退避：1s, 2s, 4s……"""
-        return 2 ** attempt
+        """斐波那契退避（从 1 开始）：1, 1, 2, 3, 5, 8……比指数更平缓。"""
+        a, b = 1, 1
+        for _ in range(attempt):
+            a, b = b, a + b
+        return float(a)
 
     def chat(self, messages, **overrides) -> LLMResponse:
         """普通（非流式）调用。遇到空响应自动退避重试。"""

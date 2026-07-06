@@ -3,6 +3,7 @@
 models.py
 workspace/
 sessions/
+.agt/
 
 # === Python ===
 __pycache__/

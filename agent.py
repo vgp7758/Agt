@@ -34,6 +34,7 @@ class Agent:
         recent_window_turns: int = 4,
         model_name: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
+        snapshot_manager=None,
     ):
         self.base_system = system
         self.tools = tools
@@ -41,6 +42,7 @@ class Agent:
         self.token_budget = token_budget
         self.verbose = verbose
         self.on_event = on_event
+        self.snapshot_manager = snapshot_manager
         self.model_name = model_name or config.DEFAULT_MODEL
 
         self.llm = LLMClient(model_name=self.model_name,
@@ -118,6 +120,14 @@ class Agent:
     def run(self, user_message: str, images: Optional[list] = None) -> str:
         self.session.start_turn(user_message, images)
         self._emit({"type": "user", "text": user_message, "image_count": len(images or [])})
+        # 检查点：本轮工具改动前给工作区打快照（用于"回溯到这条指令之前"）
+        if self.snapshot_manager is not None:
+            try:
+                sha = self.snapshot_manager.snapshot()
+                self.session._current.snapshot_sha = sha
+                self._emit({"type": "checkpoint", "sha": sha})
+            except Exception as e:
+                self._emit({"type": "warn", "text": f"快照失败: {type(e).__name__}: {e}"})
         tool_schemas = self.tools.schemas()
 
         try:

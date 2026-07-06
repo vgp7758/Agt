@@ -26,6 +26,7 @@ from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager
 from multiagent import make_subagent_tools
 from real_tools import REAL_TOOLS, WORKSPACE
+from snapshots import SnapshotManager
 
 app = FastAPI(title="Agt Agent WebUI")
 
@@ -33,6 +34,7 @@ app = FastAPI(title="Agt Agent WebUI")
 _mcp = MCPManager()
 _mcp.connect_from_config(str(WORKSPACE / ".mcp.json"))
 _MCP_TOOLS = _mcp.get_tools()
+_snap = SnapshotManager(WORKSPACE)  # 工作区检查点快照/回溯（独立 git 仓库）
 
 _INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
 
@@ -40,7 +42,8 @@ _INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_t
 def _new_agent(on_event) -> Agent:
     """每个 WS 连接建一个独立 Agent（独立会话），注册全部工具。"""
     agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
-                  max_steps=50, token_budget=80000, verbose=False, on_event=on_event)
+                  max_steps=50, token_budget=80000, verbose=False, on_event=on_event,
+                  snapshot_manager=_snap)
     for t in _MCP_TOOLS:
         agent.tools.register(t)
     for t in make_subagent_tools(agent):
@@ -81,6 +84,20 @@ async def ws_endpoint(websocket: WebSocket):
     try:
         while True:
             raw = await websocket.receive_text()
+            # 检查点回溯请求 {action:"restore", sha}
+            try:
+                _d = json.loads(raw) if raw.lstrip().startswith("{") else None
+            except Exception:
+                _d = None
+            if isinstance(_d, dict) and _d.get("action") == "restore":
+                sha = _d.get("sha", "")
+                try:
+                    _snap.restore(sha)
+                    target = agent.session.restore_to_snapshot(sha)
+                    await _send(websocket, {"type": "restored", "target": target or ""})
+                except Exception as e:
+                    await _send(websocket, {"type": "system", "text": f"⚠️ 回溯失败: {type(e).__name__}: {e}"})
+                continue
             text, images = _parse_client_msg(raw)
             text = text.strip()
             if not text and not images:

@@ -22,6 +22,7 @@
 - **WebUI**：`web.py`（FastAPI + WebSocket）+ `static/index.html`——浏览器聊天界面，实时展示思考/工具调用/结果，支持模型下拉、指令按钮、**图片粘贴/上传**（多模态）。
 - **结构化输出**：Pydantic 模型 + JSON Schema 约束 + 校验失败自动重试。
 - **可观测**：每步打印思考过程（节选）、工具调用与结果、累计 token。
+- **检查点回溯**：每条用户指令前自动给工作区打 git 快照（独立仓库，不碰用户的 `.git`）；WebUI 每条消息带"↩ 回溯"按钮，一键把工作区文件 + 对话回滚到该指令之前。
 
 ---
 
@@ -58,6 +59,7 @@
 | `llm_client.py` | 统一 LLM 调用：多模型 profile、`switch_model` 热切换、空响应指数退避重试、`reasoning_content` 处理、`tool_calls` 解析、流式 |
 | `tools.py` | `Tool`/`Toolbox`：由函数签名 + docstring 自动生成 JSON Schema；按名派发执行 |
 | `real_tools.py` | 内置工具（run_python/read_file/write_file/edit/grep/list_dir/web_search/run_shell）；`WORKSPACE = cwd`，沙箱边界即启动目录 |
+| `snapshots.py` | 检查点快照/回溯（独立 git 仓库于 `.agt/snapshots`，与用户 `.git` 隔离） |
 | `mcp_client.py` | `MCPManager`（后台 asyncio 线程 + AsyncExitStack 长连 + 同步桥，从任务目录拉起 server）+ `MCPTool`（`__mcp__server__tool` 命名空间） |
 | `multiagent.py` | `SubAgent`（带工具的自主子 Agent）+ 子 Agent 管理工具（create_agent/agent_prompt/kill_agent/list_agents） |
 | `agent_config.py` | `.agent/` rules + skills 加载；`read_skill` / `save_skill` 工具 |
@@ -130,6 +132,7 @@ Agt/
 ├── llm_client.py            # 多模型 LLM 客户端
 ├── tools.py                 # Tool / Toolbox（自动 schema）
 ├── real_tools.py            # 内置工具（cwd 沙箱）
+├── snapshots.py             # 检查点快照/回溯
 ├── mcp_client.py            # MCP client（异步桥 + 命名空间）
 ├── multiagent.py            # 子 Agent 协作
 ├── agent_config.py          # .agent/ rules + skills
@@ -157,6 +160,7 @@ Agt/
 - [x] MCP client（接入任意 MCP server）
 - [x] `.agent/` rules + skills（渐进披露 + 自动沉淀）
 - [x] WebUI（聊天界面 + 实时过程 + 图片多模态）
+- [x] 检查点回溯（每条指令前的 git 快照 + 一键回滚）
 - [ ] `.agent/agents/` 子 Agent 模板（按 frontmatter 定义可复用专家）
 - [ ] 可观测性：每步思考 / 工具 / token 落盘日志
 - [ ] 子 Agent 内部步骤也流式到 WebUI

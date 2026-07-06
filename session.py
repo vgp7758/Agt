@@ -44,6 +44,7 @@ class Step:
 class Turn:
     user_message: str
     images: list = field(default_factory=list)       # list[str] 用户附带的图片(data URL)，多模态用
+    snapshot_sha: str = ""                           # 该轮发送前的工作区快照(检查点回溯用)
     steps: list = field(default_factory=list)        # list[Step]
     answer: str = ""
     summary: str = ""
@@ -84,6 +85,17 @@ class Session:
         self.turns.append(self._current)
         self._current = None
         self._compact()
+
+    def restore_to_snapshot(self, sha: str) -> Optional[str]:
+        """检查点回溯：找到 snapshot_sha==sha 的那轮，截断它及之后的轮，回到它【之前】。
+        返回那轮的用户消息（供 UI 提示）；找不到返回 None。"""
+        for i, t in enumerate(self.turns):
+            if t.snapshot_sha == sha:
+                target_msg = t.user_message
+                self.turns = self.turns[:i]
+                self._current = None
+                return target_msg
+        return None
 
     # ========== 融合上下文（关键）==========
     def messages_for_llm(self) -> list[dict]:
@@ -217,6 +229,7 @@ class Session:
 def _turn_from_dict(d: dict) -> Turn:
     t = Turn(user_message=d.get("user_message", ""),
              images=d.get("images", []),
+             snapshot_sha=d.get("snapshot_sha", ""),
              answer=d.get("answer", ""), summary=d.get("summary", ""))
     for s in d.get("steps", []):
         step = Step(reasoning=s.get("reasoning", ""))

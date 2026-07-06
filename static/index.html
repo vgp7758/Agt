@@ -54,6 +54,9 @@
   #inp:focus { border-color:var(--me); }
   #sendBtn { padding:0 18px; border:none; background:var(--me); color:#fff; border-radius:10px; font-size:14px; cursor:pointer; }
   #sendBtn:disabled { background:#9aa0a6; cursor:not-allowed; }
+  .restore-btn { display:block; margin-bottom:6px; font-size:11px; padding:3px 8px; border-radius:6px;
+    border:1px solid rgba(255,255,255,.4); background:rgba(255,255,255,.15); color:#fff; cursor:pointer; }
+  .restore-btn:hover { background:rgba(255,255,255,.3); }
 </style>
 </head>
 <body>
@@ -97,6 +100,8 @@ const fileInput = document.getElementById('fileInput');
 let busy = false;
 let curTurn = null;
 const attachments = []; // data URL 数组
+let lastUserBubble = null;      // 最近一条用户气泡（挂检查点按钮用）
+let restoreTargetBubble = null; // 回溯目标气泡
 
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
 function setBusy(b){ busy=b; sendBtn.disabled=b; if(!b) inp.focus(); }
@@ -172,13 +177,14 @@ function addUserBubble(text, imgs){
     b.appendChild(gal);
   }
   row.appendChild(b); msgArea.appendChild(row); scrollBottom();
+  return row;
 }
 function send(){
   const t=inp.value.trim();
   if((!t && !attachments.length) || busy) return;
   const imgs=attachments.slice();
   sendRaw(t, imgs);
-  addUserBubble(t, imgs);
+  lastUserBubble = addUserBubble(t, imgs);
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
   setBusy(true); curTurn=null;
@@ -195,6 +201,19 @@ document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });
+
+function attachRestoreButton(bubble, sha){
+  if(!bubble || bubble.querySelector('.restore-btn')) return;
+  const btn=document.createElement('button');
+  btn.className='restore-btn'; btn.textContent='↩ 回溯到这里之前';
+  btn.title='丢弃这条及之后的改动与对话，工作区回滚到本条之前';
+  btn.onclick=()=>{
+    if(!confirm('回溯到这里之前？这条及之后的【文件改动】与【对话】都会被丢弃。')) return;
+    restoreTargetBubble=bubble;
+    ws.send(JSON.stringify({action:'restore', sha}));
+  };
+  bubble.insertBefore(btn, bubble.firstChild);
+}
 
 // —— WS 事件 ——
 ws.onopen=()=>setOnline(true);
@@ -214,6 +233,18 @@ ws.onmessage=(ev)=>{
         });
       }
       addRow('sys', m.text); scrollBottom(); break;
+    case 'checkpoint':
+      if(lastUserBubble) attachRestoreButton(lastUserBubble, m.sha);
+      break;
+    case 'restored':
+      if(restoreTargetBubble){
+        const kids=[...msgArea.children];
+        const idx=kids.indexOf(restoreTargetBubble);
+        if(idx>=0) kids.slice(idx).forEach(k=>k.remove());
+        restoreTargetBubble=null; curTurn=null; setBusy(false);
+      }
+      addRow('sys', '✅ 已回溯：工作区文件与对话已恢复到该指令之前。');
+      break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;
     case 'thinking': addTrace('think', '💭 '+m.text); break;

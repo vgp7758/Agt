@@ -14,6 +14,7 @@ from pathlib import Path
 import config
 from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, skills_summary
+from plan_tools import make_plan_tools
 from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager
 from multiagent import make_subagent_tools
@@ -52,6 +53,7 @@ SYSTEM = build_system(
         "你是一个强大的自主 Agent。用户用自然语言布置任务，你自主决定用哪些工具、分几步完成。\n"
         "内置工具：run_python(写并运行 Python) / read_file / write_file / edit(精确替换) / grep(内容搜索) / "
         "list_dir(workspace 内) / web_search / run_shell(慎用)。其它工具由 MCP server 动态提供，名字带 __mcp__ 前缀（按描述选用）。\n"
+        "复杂任务建议先 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"
         "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
         "tools 留空=继承你的全部工具(自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
         "agent_prompt(name, prompt) 派任务，子 Agent 自主用工具完成再回复；kill_agent(name) 销毁；list_agents() 查看。"
@@ -89,6 +91,9 @@ def main():
         agent.tools.register(t)
     # 注册技能工具（.agent/skills 渐进式披露 + 自动沉淀）
     for t in SKILL_TOOLS:
+        agent.tools.register(t)
+    # 注册计划工具（create_plan / update_plan）
+    for t in make_plan_tools(agent):
         agent.tools.register(t)
     registry = build_default_registry()
 

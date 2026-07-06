@@ -63,6 +63,10 @@
   .modal label { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:10px; }
   .modal input[type=number]{ width:130px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
   .modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+  .plan-panel { background:#fff; border-bottom:1px solid var(--line); padding:6px 14px; font-size:13px; max-height:200px; overflow-y:auto; }
+  .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
+  .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
+  .plan-item .pi { width:20px; text-align:center; }
 </style>
 </head>
 <body>
@@ -71,6 +75,8 @@
     <h1>Agt Agent</h1>
     <span class="sub" id="status">连接中…</span>
   </header>
+
+  <div id="planPanel" class="plan-panel" style="display:none"><details open><summary>📋 计划清单</summary><div id="planList"></div></details></div>
 
   <div id="msgArea"></div>
 
@@ -251,6 +257,23 @@ function attachRestoreButton(bubble, sha){
   bubble.insertBefore(btn, bubble.firstChild);
 }
 
+function renderPlan(plan){
+  const panel=document.getElementById('planPanel');
+  const list=document.getElementById('planList');
+  list.innerHTML='';
+  if(!plan || !plan.length){ panel.style.display='none'; return; }
+  panel.style.display='block';
+  const icon={'pending':'☐','in_progress':'▶','completed':'✅'};
+  plan.forEach((s,i)=>{
+    const row=document.createElement('div'); row.className='plan-item';
+    const ic=document.createElement('span'); ic.className='pi'; ic.textContent=icon[s.status]||'?';
+    const tx=document.createElement('span'); tx.textContent=(i+1)+'. '+s.description;
+    if(s.status==='completed'){ tx.style.textDecoration='line-through'; tx.style.color='#8a9099'; }
+    if(s.status==='in_progress'){ tx.style.fontWeight='600'; }
+    row.appendChild(ic); row.appendChild(tx); list.appendChild(row);
+  });
+}
+
 // —— WS 事件 ——
 ws.onopen=()=>setOnline(true);
 ws.onclose=()=>{ setOnline(false); inp.placeholder='连接已断开，请刷新页面'; };
@@ -289,6 +312,9 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_temperature').value = m.values.temperature;
         document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
       }
+      break;
+    case 'plan':
+      renderPlan(m.plan);
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;

@@ -17,8 +17,8 @@ import config
 from agent import Agent
 from tools import Tool, Toolbox
 
-# 子 Agent 绝不能继承的工具（防止递归生子 Agent、互相操控）
-_AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"}
+# 子 Agent 绝不能继承的工具（防止递归生子 Agent、互相操控；计划工具绑定主 Agent）
+_AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents", "create_plan", "update_plan"}
 
 
 class SubAgent:

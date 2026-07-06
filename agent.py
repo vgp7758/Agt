@@ -50,6 +50,7 @@ class Agent:
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns)
         self.cumulative_tokens = 0
         self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
+        self.plan: list = []        # 计划清单（create_plan/update_plan 维护）
 
     # ========== 事件输出 ==========
     def _emit(self, event: dict):

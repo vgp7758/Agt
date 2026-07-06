@@ -25,6 +25,7 @@ from agent_config import SKILL_TOOLS
 from commands import CommandContext, build_default_registry, apply_config, read_config
 from mcp_client import MCPManager
 from multiagent import make_subagent_tools
+from plan_tools import make_plan_tools
 from real_tools import REAL_TOOLS, WORKSPACE
 from snapshots import SnapshotManager
 
@@ -49,6 +50,8 @@ def _new_agent(on_event) -> Agent:
     for t in make_subagent_tools(agent):
         agent.tools.register(t)
     for t in SKILL_TOOLS:
+        agent.tools.register(t)
+    for t in make_plan_tools(agent):
         agent.tools.register(t)
     return agent
 

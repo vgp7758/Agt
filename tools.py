@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Callable, get_type_hints
+from typing import Callable, get_origin, get_type_hints
 
 # Python 类型 → JSON Schema 类型
 _PY_TO_JSON_SCHEMA = {
@@ -20,6 +20,17 @@ _PY_TO_JSON_SCHEMA = {
     float: "number",
     bool: "boolean",
 }
+
+
+def _type_to_schema(ptype):
+    """Python 类型 → JSON Schema 片段。支持 str/int/float/bool/list/dict。"""
+    if ptype in _PY_TO_JSON_SCHEMA:
+        return {"type": _PY_TO_JSON_SCHEMA[ptype]}
+    if get_origin(ptype) is list or ptype is list:
+        return {"type": "array", "items": {}}
+    if get_origin(ptype) is dict or ptype is dict:
+        return {"type": "object"}
+    return None
 
 
 class Tool:
@@ -37,17 +48,14 @@ class Tool:
         self.schema = self._build_schema()
 
     def _build_schema(self) -> dict:
-        """生成 OpenAI function-calling 的 schema。"""
+        """生成 OpenAI function-calling 的 schema。支持 str/int/float/bool/list/dict。"""
         properties, required = {}, []
         for pname, param in self._sig.parameters.items():
             ptype = self._hints.get(pname, str)
-            json_type = _PY_TO_JSON_SCHEMA.get(ptype)
-            if json_type is None:
-                raise TypeError(
-                    f"工具 {self.name} 参数 {pname} 类型 {ptype} 暂不支持，"
-                    f"仅支持 {set(_PY_TO_JSON_SCHEMA)}"
-                )
-            properties[pname] = {"type": json_type}
+            sch = _type_to_schema(ptype)
+            if sch is None:
+                raise TypeError(f"工具 {self.name} 参数 {pname} 类型 {ptype} 暂不支持")
+            properties[pname] = sch
             # 有默认值的参数不算必填
             if param.default is inspect.Parameter.empty:
                 required.append(pname)

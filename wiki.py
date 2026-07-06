@@ -1,0 +1,144 @@
+"""wiki.py —— repo-wiki 知识库工具（.agent/wiki/，结构镜像仓库目录）。
+
+让 Agent 给仓库积累"项目记忆"：开始不熟悉的任务前先查 wiki；完成重要功能/修改后
+调用 update_wiki(summary)，由一个【wiki 维护子 Agent】按摘要更新对应页面。
+
+工具：
+  wiki_read / wiki_list / wiki_search / wiki_tree   查（限定 .agent/wiki/）
+  wiki_write / wiki_delete                          改（同上）
+  update_wiki(summary)                              绑定主 Agent：起子 Agent 自动维护
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from real_tools import WORKSPACE
+from tools import Tool, Toolbox
+
+WIKI_ROOT = lambda: WORKSPACE / ".agent" / "wiki"
+
+WIKI_UPDATER_SYSTEM = (
+    "你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，更新 `.agent/wiki/` 下相关的 wiki 页面。"
+    "wiki 结构镜像仓库目录（如 src/auth/login.py 对应 .agent/wiki/src/auth/login.md）。"
+    "先用 wiki_list/wiki_read 了解现有 wiki 结构，再用 wiki_write 更新/新建受影响模块的页面。"
+    "每页聚焦：模块职责、关键函数/类、数据流、依赖、注意事项。简洁，只写本次改动涉及的模块。"
+)
+
+
+def _wiki_resolve(path: str) -> Path:
+    """把路径解析到 .agent/wiki/ 内；越界拒绝。"""
+    base = WIKI_ROOT().resolve()
+    target = (base / path).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise PermissionError(f"拒绝访问 wiki 外的路径: {path}")
+    return target
+
+
+# ========== 查 ==========
+
+def wiki_read(path: str) -> str:
+    """读取 .agent/wiki/ 下某个 wiki 页面的内容。path 相对 wiki 根（如 'src/auth/login.md'）。"""
+    p = _wiki_resolve(path)
+    if not p.exists():
+        return f"[wiki 页面不存在] {path}（用 wiki_list/wiki_tree 查看已有页面）"
+    return p.read_text(encoding="utf-8")
+
+
+def wiki_list(path: str = ".") -> str:
+    """列出 .agent/wiki/ 下某子目录的 wiki 页面。"""
+    p = _wiki_resolve(path)
+    if not p.exists():
+        return f"[目录不存在] {path}"
+    entries = sorted(x.relative_to(WIKI_ROOT()).as_posix() + ("/" if x.is_dir() else "") for x in p.iterdir())
+    return "\n".join(entries) if entries else "(空)"
+
+
+def wiki_tree() -> str:
+    """显示整个 .agent/wiki/ 的页面树（相对路径）。"""
+    root = WIKI_ROOT()
+    if not root.exists():
+        return "(wiki 还没有任何页面)"
+    files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+    return "\n".join(files) if files else "(空)"
+
+
+def wiki_search(query: str, regex: bool = False, max_results: int = 30) -> str:
+    """在 .agent/wiki/ 全文搜索。返回 '相对路径:行号:匹配行'。regex=True 按正则。"""
+    import re
+    root = WIKI_ROOT()
+    if not root.exists():
+        return "(wiki 为空)"
+    try:
+        rx = re.compile(query if regex else re.escape(query))
+    except re.error as e:
+        return f"[正则错误] {e}"
+    out = []
+    for fp in sorted(root.rglob("*")):
+        if not fp.is_file():
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        rel = fp.relative_to(root).as_posix()
+        for i, line in enumerate(text.splitlines(), 1):
+            if rx.search(line):
+                out.append(f"{rel}:{i}: {line.strip()[:200]}")
+                if len(out) >= max_results:
+                    out.append(f"...（达 max_results={max_results}）")
+                    return "\n".join(out)
+    return "\n".join(out) if out else "(未找到)"
+
+
+# ========== 改 ==========
+
+def wiki_write(path: str, content: str) -> str:
+    """写入/更新 .agent/wiki/ 下一个 wiki 页面（覆盖）。path 相对 wiki 根。"""
+    p = _wiki_resolve(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return f"✅ 已写入 wiki 页面 {path}（{len(content)} 字符）"
+
+
+def wiki_delete(path: str) -> str:
+    """删除 .agent/wiki/ 下一个 wiki 页面。"""
+    p = _wiki_resolve(path)
+    if not p.exists():
+        return f"[页面不存在] {path}"
+    p.unlink()
+    return f"✅ 已删除 wiki 页面 {path}"
+
+
+def wiki_crud_tools() -> list:
+    """wiki 增删改查工具（不依赖具体 Agent，可被任意 Agent 使用）。"""
+    return [Tool(wiki_read), Tool(wiki_list), Tool(wiki_tree), Tool(wiki_search),
+            Tool(wiki_write), Tool(wiki_delete)]
+
+
+def make_wiki_tools(agent) -> list:
+    """主 Agent 的 wiki 工具集 = CRUD + update_wiki（后者绑定主 Agent，起子 Agent 维护）。"""
+    tools = wiki_crud_tools()
+
+    def update_wiki(summary: str) -> str:
+        """完成重要功能或修改后调用：把【改动摘要】交给一个 wiki 维护子 Agent，
+        由它读取现有 wiki 并更新/新建受影响模块的页面。主 Agent 无需自己写 wiki。"""
+        from agent import Agent
+        sub = Agent(
+            system=WIKI_UPDATER_SYSTEM,
+            tools=Toolbox(*wiki_crud_tools()),
+            model_name=agent.model_name,
+            enable_thinking=False,
+            verbose=False,
+            on_event=None,           # 静默执行；结果以工具返回值回到主 Agent
+        )
+        report = sub.run(
+            f"主 Agent 刚完成了以下工作，请据此更新 repo-wiki（.agent/wiki/，结构镜像仓库目录）：\n\n"
+            f"{summary}\n\n"
+            f"先 wiki_tree/wiki_read 了解现有 wiki，再 wiki_write 更新/新建受影响模块的页面（聚焦本次改动）。"
+        )
+        return report or "(wiki 维护子 Agent 未产出报告)"
+
+    tools.append(Tool(update_wiki))
+    return tools

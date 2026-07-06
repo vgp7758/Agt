@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field, asdict
@@ -22,6 +23,18 @@ from llm_client import LLMClient
 
 SESSIONS_DIR = Path(__file__).parent / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
+
+
+def _repo_hash(workspace) -> str:
+    """把工作区路径稳定地哈希成 12 位十六进制（固定位、文件系统安全、跨运行稳定）。"""
+    return hashlib.sha1(str(Path(workspace).resolve()).encode("utf-8")).hexdigest()[:12]
+
+
+def _repo_sessions_dir(workspace) -> Path:
+    """该工作区的会话子目录：sessions/<hash>/。每个 repo 的存档互相隔离。"""
+    d = SESSIONS_DIR / _repo_hash(workspace)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 GLOBAL_SUMMARY_CAP = 2000  # global_summary 超过这么多字就再压缩一次
 
@@ -52,10 +65,11 @@ class Turn:
 
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
-                 recent_window_turns: int = 4):
+                 recent_window_turns: int = 4, workspace=None):
         self.system = system
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         self.recent_window_turns = recent_window_turns
+        self.workspace = Path(workspace) if workspace else Path.cwd()
         self.turns: list[Turn] = []
         self.global_summary = ""
         self._current: Optional[Turn] = None  # 进行中的轮（run 期间）
@@ -189,7 +203,9 @@ class Session:
         name = name or f"session_{int(time.time())}"
         if not name.endswith(".json"):
             name += ".json"
-        path = SESSIONS_DIR / name
+        d = _repo_sessions_dir(self.workspace)
+        (d / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")  # 便于人眼追溯
+        path = d / name
         data = {
             "system": self.system,
             "global_summary": self.global_summary,
@@ -201,11 +217,12 @@ class Session:
         return path
 
     @classmethod
-    def load(cls, path_or_name: str, llm: Optional[LLMClient] = None) -> "Session":
-        path = _resolve_session_path(path_or_name)
+    def load(cls, path_or_name: str, llm: Optional[LLMClient] = None, workspace=None) -> "Session":
+        ws = workspace or Path.cwd()
+        path = _resolve_session_path(path_or_name, ws)
         data = json.loads(path.read_text(encoding="utf-8"))
         s = cls(system=data["system"], llm=llm,
-                recent_window_turns=data.get("recent_window_turns", 4))
+                recent_window_turns=data.get("recent_window_turns", 4), workspace=ws)
         s.global_summary = data.get("global_summary", "")
         s.turns = [_turn_from_dict(d) for d in data.get("turns", [])]
         return s
@@ -241,14 +258,17 @@ def _turn_from_dict(d: dict) -> Turn:
     return t
 
 
-def _resolve_session_path(path_or_name: str) -> Path:
-    for cand in (Path(path_or_name),
-                 SESSIONS_DIR / path_or_name,
-                 SESSIONS_DIR / (path_or_name + ".json")):
-        if cand.exists():
-            return cand
+def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
+    """查找会话文件：优先该工作区的 hash 子目录，再回退到扁平根目录(兼容旧存档)。"""
+    repo_dir = _repo_sessions_dir(workspace or Path.cwd())
+    for base in (repo_dir, SESSIONS_DIR):
+        for cand in (Path(path_or_name), base / path_or_name, base / (path_or_name + ".json")):
+            if cand.exists():
+                return cand
     raise FileNotFoundError(f"找不到会话文件: {path_or_name}（可在 /list 查看）")
 
 
-def list_sessions() -> list[Path]:
-    return sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+def list_sessions(workspace=None) -> list[Path]:
+    """列出该工作区 hash 子目录下的会话（按修改时间倒序）。"""
+    return sorted(_repo_sessions_dir(workspace or Path.cwd()).glob("*.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)

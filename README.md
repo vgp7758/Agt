@@ -14,7 +14,7 @@
 - **多模型字典 + 运行时热切换**：`models.py` 用一个字典集中管理所有 provider（base_url / api_token / model / desc），`/model <name>` 随时切换，无需重启。
 - **ReAct 自主推理循环**：思考 → 工具调用 → 观察结果 → 继续，直到任务完成；支持**长程任务**（默认 50 步、可配）+ **软 token 预算**（80% 提醒 / 100% 收尾）+ `Ctrl+C` 优雅打断保留会话。
 - **分层上下文工程**：`Turn > Step > ToolCall` 三级结构；喂给 LLM 的是「**全局摘要 + 近期窗口**」的融合——旧轮自动压成摘要，近期轮保留逐 step 原文，长会话也不丢关键决策、不爆上下文。
-- **结构化持久化**：会话结构化存盘，`/save` `/resume` 跨进程恢复，记忆完整接续。
+- **结构化持久化**：会话结构化存盘，`/save` `/resume` 跨进程恢复，记忆完整接续；存档按**工作区路径哈希**分子目录（`sessions/<hash>/`），各 repo 互不干扰。
 - **Function Calling 工具体系**：从 Python 函数签名 + docstring **自动生成 JSON Schema**；内置代码执行 / 文件读写 / `edit`（精确替换）/ `grep`（内容搜索）/ 目录浏览 / 联网搜索 / shell，含**超时 + 目录沙箱 + 限流重试**安全设计。
 - **多 Agent 协作**：主 Agent 调度**带工具的自主子 Agent**（继承工具、可选模型、有记忆）；单步内多个工具调用**并行执行**（线程池）。
 - **MCP 客户端**：`mcp_client.py` 读任务目录的 `.mcp.json`，连接任意 MCP server（后台 asyncio 桥接、`__mcp__<server>__<tool>` 命名空间）——**任何 MCP server 插上即用**，框架不绑定具体服务。

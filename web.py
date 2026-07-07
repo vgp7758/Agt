@@ -128,6 +128,14 @@ async def ws_endpoint(websocket: WebSocket):
                                         recent_window_turns=agent.session.recent_window_turns)
                 await _send(websocket, {"type": "system", "text": "🔄 已创建新会话。"})
                 continue
+            if isinstance(_d, dict) and _d.get("action") == "save_session":
+                name = (_d.get("name") or "").strip() or None
+                p = agent.session.save(name)
+                await _send(websocket, {"type": "saved", "name": p.stem})
+                from session import list_sessions
+                sessions = list_sessions(workspace=WORKSPACE)
+                await _send(websocket, {"type": "sessions", "names": [s.stem for s in sessions]})
+                continue
             text, images = _parse_client_msg(raw)
             text = text.strip()
             if not text and not images:

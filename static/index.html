@@ -225,7 +225,11 @@ function send(){
 sendBtn.onclick=send;
 document.getElementById('btnImg').onclick=()=>fileInput.click();
 document.getElementById('btnTank').onclick=()=>sendRaw('查一下当前坦克的段位和最新战绩', []);
-document.getElementById('btnSave').onclick=()=>sendRaw('/save', []);
+document.getElementById('btnSave').onclick=()=>{
+  const sel=document.getElementById('sessionSel');
+  const name=sel.value==='__new__'?null:sel.value;
+  ws.send(JSON.stringify({action:'save_session', name}));
+};
 document.getElementById('btnHelp').onclick=()=>sendRaw('/help', []);
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
@@ -323,14 +327,23 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
       }
       break;
+    case 'saved':
+      // 存档后重新拉取列表，然后选中刚存的
+      ws.send(JSON.stringify({action:'list_sessions'}));
+      if(m.name) window._lastSaved=m.name;  // 等 sessions 事件回来时选中
+      break;
     case 'plan':
       renderPlan(m.plan);
       break;
     case 'sessions':
       if(m.names){
         const sel=document.getElementById('sessionSel');
+        const curVal=sel.value;
         sel.innerHTML='<option value="__new__">➕ 新会话</option>';
         m.names.forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); });
+        if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
+        else if(curVal && curVal!=='__new__' && sel.querySelector(`option[value="${curVal}"]`)) sel.value=curVal;
+        window._lastSaved=null;
       }
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;

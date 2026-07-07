@@ -23,7 +23,7 @@ import config
 from agent import Agent
 from agent_config import SKILL_TOOLS
 from commands import CommandContext, build_default_registry, apply_config, read_config
-from mcp_client import MCPManager
+from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from plan_tools import make_plan_tools
 from wiki import make_wiki_tools
@@ -55,6 +55,8 @@ def _new_agent(on_event) -> Agent:
     for t in make_plan_tools(agent):
         agent.tools.register(t)
     for t in make_wiki_tools(agent):
+        agent.tools.register(t)
+    for t in make_mcp_tools(_mcp, str(WORKSPACE / ".mcp.json")):
         agent.tools.register(t)
     return agent
 

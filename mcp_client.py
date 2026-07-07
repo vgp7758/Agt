@@ -110,6 +110,20 @@ class MCPManager:
         self.sessions[name] = {"session": session, "tools": tools_resp.tools}
         print(f"[MCP] 已连接 '{name}'，发现 {len(tools_resp.tools)} 个工具")
 
+    # —— 重连 ——
+    def reconnect_from_config_one(self, path: str, name: str) -> None:
+        """断开并重连 .mcp.json 中指定的 server。旧进程待 shutdown 时清理。"""
+        cfg_path = Path(path)
+        if not cfg_path.exists():
+            raise RuntimeError(f".mcp.json 不存在: {path}")
+        config = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg = config.get("mcpServers", {}).get(name)
+        if not cfg:
+            raise RuntimeError(f"在 .mcp.json 中未找到 server '{name}'")
+        self.sessions.pop(name, None)   # 断开旧会话（旧进程不主动杀，等 stack 一起清理）
+        self._run_coro(self._connect_one(name, cfg))
+        print(f"[MCP] 已重连 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
+
     # —— 调用 ——
     def call_tool_sync(self, server: str, name: str, args: dict) -> str:
         if server not in self.sessions:
@@ -135,3 +149,19 @@ class MCPManager:
         # 不显式 aclose 上下文（anyio cancel scope 有任务亲和性，跨任务 aclose 会报错）。
         # 直接停 loop；进程退出时 server 子进程的 stdin 被 EOF，自行退出。
         self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+def make_mcp_tools(mcp_mgr, config_path: str) -> list:
+    """生成 reload_mcp_server 工具（闭包绑定 MCPManager + .mcp.json 路径）。"""
+    from tools import Tool
+
+    def reload_mcp_server(name: str) -> str:
+        """断开并重连指定 MCP server。当该 server 的代码被修改后调用，无需重启 Agent。
+        name: .mcp.json 中 mcpServers 下的键名（如 'agentank'）。"""
+        try:
+            mcp_mgr.reconnect_from_config_one(config_path, name)
+            return f"✅ MCP server '{name}' 已重新连接"
+        except Exception as e:
+            return f"[重连失败] {type(e).__name__}: {e}"
+
+    return [Tool(reload_mcp_server)]

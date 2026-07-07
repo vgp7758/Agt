@@ -217,7 +217,7 @@ function send(){
   lastUserBubble = addUserBubble(t, imgs);
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
-  setBusy(true); curTurn=null;
+  if(!t.startsWith('/')){ setBusy(true); curTurn=null; }  // 斜杠命令不走 _done 流
 }
 
 // —— 按钮 ——

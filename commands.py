@@ -212,6 +212,20 @@ def _cmd_budget(ctx: CommandContext, args):
     print(f"💰 本次运行 token：已用 {used} / 预算 {budget} ({pct:.0f}%)")
 
 
+def _cmd_reload_mcp(ctx: CommandContext, args):
+    """断开并重连指定 MCP server，使代码修改后生效。"""
+    positional = _parse_args(args)[0]
+    if not positional:
+        print("用法：/reload_mcp <name>  （.mcp.json 中 mcpServers 的键名）")
+        return
+    name = positional[0]
+    tool = next((t for t in ctx.agent.tools if t.name == "reload_mcp_server"), None)
+    if tool is None:
+        print("❌ reload_mcp_server 工具未注册（MCP 未启用）")
+        return
+    print(tool.run(name=name))
+
+
 def _cmd_model(ctx: CommandContext, args):
     import config
     from models import MODELS
@@ -241,6 +255,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("config", _cmd_config, "<key> <value>  改运行时配置(max_steps/token_budget)")
     reg.register("budget", _cmd_budget, "查看本次 token 消耗")
     reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
+    reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

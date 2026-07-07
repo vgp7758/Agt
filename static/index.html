@@ -135,7 +135,7 @@ let lastUserBubble = null;      // 最近一条用户气泡（挂检查点按钮
 let restoreTargetBubble = null; // 回溯目标气泡
 
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
-function setBusy(b){ busy=b; sendBtn.disabled=b; document.getElementById('btnStop').style.display=b?'inline':'none'; if(!b) inp.focus(); }
+function setBusy(b){ busy=b; sendBtn.disabled=b; document.getElementById('btnStop').style.display=b?'inline-block':'none'; if(!b) inp.focus(); }
 function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on?'已连接':'已断开'; }
 
 function addRow(cls, text){

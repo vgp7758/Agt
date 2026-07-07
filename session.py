@@ -66,10 +66,12 @@ class Turn:
 
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
-                 recent_window_turns: int = 4, workspace=None):
+                 recent_window_turns: int = 4, max_steps_per_turn: int = 80,
+                 workspace=None):
         self.system = system
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         self.recent_window_turns = recent_window_turns
+        self.max_steps_per_turn = max_steps_per_turn  # 0/None = 不限
         self.workspace = Path(workspace) if workspace else Path.cwd()
         self.turns: list[Turn] = []
         self.global_summary = ""
@@ -123,7 +125,7 @@ class Session:
         recent = self.turns[-self.recent_window_turns:]
         for t in recent:
             msgs.append({"role": "user", "content": self._user_content(t)})
-            msgs.extend(self._steps_to_messages(t.steps))
+            msgs.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
             if t.answer:
                 a_msg = {"role": "assistant", "content": t.answer}
                 if t.answer_reasoning:
@@ -133,7 +135,7 @@ class Session:
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
-            msgs.extend(self._steps_to_messages(self._current.steps))
+            msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn))
         return msgs
 
     @staticmethod
@@ -146,9 +148,14 @@ class Session:
         return blocks
 
     @staticmethod
-    def _steps_to_messages(steps: list[Step]) -> list[dict]:
-        """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。"""
+    def _steps_to_messages(steps: list[Step], max_steps: int = 0) -> list[dict]:
+        """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
+        max_steps>0 时只保留最近 max_steps 步，超过的在开头加省略提示。"""
         msgs = []
+        if max_steps and len(steps) > max_steps:
+            skipped = len(steps) - max_steps
+            steps = steps[-max_steps:]
+            msgs.append({"role": "system", "content": f"（本轮的 {skipped} 个早期步骤已省略，仅保留最近 {max_steps} 步）"})
         for step in steps:
             if not step.tool_calls:
                 continue
@@ -218,6 +225,7 @@ class Session:
             "system": self.system,
             "global_summary": self.global_summary,
             "recent_window_turns": self.recent_window_turns,
+            "max_steps_per_turn": self.max_steps_per_turn,
             "turns": [asdict(t) for t in self.turns],
             "saved_at": int(time.time()),
         }
@@ -230,7 +238,8 @@ class Session:
         path = _resolve_session_path(path_or_name, ws)
         data = json.loads(path.read_text(encoding="utf-8"))
         s = cls(system=data["system"], llm=llm,
-                recent_window_turns=data.get("recent_window_turns", 4), workspace=ws)
+                recent_window_turns=data.get("recent_window_turns", 4),
+                max_steps_per_turn=data.get("max_steps_per_turn", 80), workspace=ws)
         s.global_summary = data.get("global_summary", "")
         s.turns = [_turn_from_dict(d) for d in data.get("turns", [])]
         return s

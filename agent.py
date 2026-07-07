@@ -32,6 +32,7 @@ class Agent:
         temperature: float = 0.7,
         verbose: bool = True,
         recent_window_turns: int = 4,
+        max_steps_per_turn: int = 80,
         model_name: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         snapshot_manager=None,
@@ -47,7 +48,8 @@ class Agent:
 
         self.llm = LLMClient(model_name=self.model_name,
                              temperature=temperature, enable_thinking=enable_thinking)
-        self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns)
+        self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
+                               max_steps_per_turn=max_steps_per_turn)
         self.cumulative_tokens = 0
         self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
         self.plan: list = []        # 计划清单（create_plan/update_plan 维护）

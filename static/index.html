@@ -15,6 +15,9 @@
   header .dot.off { background:#ef4444; }
   header h1 { font-size:15px; margin:0; font-weight:600; }
   header .sub { font-size:12px; color:#9aa0a6; margin-left:auto; }
+  /* 自主模式状态指示器 */
+  .auto-badge { background:#7c3aed; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px; margin-left:8px; }
+  .auto-badge.hidden { display:none; }
   #msgArea { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
   .row { display:flex; }
   .row.me { justify-content:flex-end; }
@@ -35,12 +38,14 @@
   .ev.res { color:#5b6470; padding-left:14px; border-left:2px solid var(--line); margin-left:2px; }
   .ev.step { color:var(--muted); font-size:11.5px; margin-top:6px; }
   .ev.warn { color:#b45309; }
+  .ev.auto { color:#7c3aed; font-weight:600; }
   /* 控件栏 */
   #controls { display:flex; gap:8px; padding:8px 12px; background:#fff; border-top:1px solid var(--line); flex-wrap:wrap; align-items:center; }
   #modelSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; max-width:240px; }
   .btn { padding:5px 10px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:12.5px; cursor:pointer; color:#374151; }
   .btn:hover { background:#f3f4f6; }
   .btn.primary { background:var(--me); color:#fff; border-color:var(--me); }
+  .btn.auto { background:#7c3aed; color:#fff; border-color:#7c3aed; }
   .btn.spacer { margin-left:auto; }
   /* 附件 */
   #attBar { display:none; gap:8px; padding:6px 12px 0; background:#fff; flex-wrap:wrap; }
@@ -54,6 +59,8 @@
   #inp:focus { border-color:var(--me); }
   #sendBtn { padding:0 18px; border:none; background:var(--me); color:#fff; border-radius:10px; font-size:14px; cursor:pointer; }
   #sendBtn:disabled { background:#9aa0a6; cursor:not-allowed; }
+  /* 自主模式下发送按钮样式 */
+  #sendBtn.auto-active { background:#7c3aed; }
   .restore-btn { display:block; margin-bottom:6px; font-size:11px; padding:3px 8px; border-radius:6px;
     border:1px solid rgba(255,255,255,.4); background:rgba(255,255,255,.15); color:#fff; cursor:pointer; }
   .restore-btn:hover { background:rgba(255,255,255,.3); }
@@ -67,6 +74,9 @@
   .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
   .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
   .plan-item .pi { width:20px; text-align:center; }
+  /* 队列消息提示 */
+  #queueStatus { font-size:12px; color:#7c3aed; padding:4px 12px; background:#f3e8ff; display:none; }
+  #queueStatus.show { display:block; }
 </style>
 </head>
 <body>
@@ -74,9 +84,11 @@
     <span class="dot" id="dot"></span>
     <h1>Agt Agent</h1>
     <span class="sub" id="status">连接中…</span>
+    <span class="auto-badge hidden" id="autoBadge">🔁 自主模式</span>
   </header>
 
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary>📋 计划清单</summary><div id="planList"></div></details></div>
+  <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
 
@@ -89,6 +101,7 @@
     <button class="btn" id="btnSave">💾 /save</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <button class="btn" id="btnHelp">❓ /help</button>
+    <button class="btn auto" id="btnAuto" title="开启/关闭纯自主模式">🔁 自主</button>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
@@ -127,16 +140,43 @@ const modelSel = document.getElementById('modelSel');
 const attBar = document.getElementById('attBar');
 const fileInput = document.getElementById('fileInput');
 const settingsModal = document.getElementById('settingsModal');
+const autoBadge = document.getElementById('autoBadge');
+const queueStatus = document.getElementById('queueStatus');
+const queueCount = document.getElementById('queueCount');
 
 let busy = false;
+let autonomousMode = false;
 let curTurn = null;
 const attachments = []; // data URL 数组
 let lastUserBubble = null;      // 最近一条用户气泡（挂检查点按钮用）
 let restoreTargetBubble = null; // 回溯目标气泡
+let messageQueueSize = 0;
 
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
-function setBusy(b){ busy=b; sendBtn.disabled=b; document.getElementById('btnStop').style.display=b?'inline-block':'none'; if(!b) inp.focus(); }
-function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on?'已连接':'已断开'; }
+function setBusy(b){
+  busy = b;
+  // 自主模式下即使 busy 也可以发送
+  sendBtn.disabled = b && !autonomousMode;
+  sendBtn.classList.toggle('auto-active', autonomousMode && b);
+  document.getElementById('btnStop').style.display = b ? 'inline-block' : 'none';
+  if(!b) inp.focus();
+}
+function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on ? '已连接' : '已断开'; }
+function setAutonomousMode(on){
+  autonomousMode = on;
+  autoBadge.classList.toggle('hidden', !on);
+  // 更新输入框提示
+  if(on){
+    inp.placeholder = "自主模式进行中… 输入消息将在当前任务完成后插入（Enter 发送）";
+  } else {
+    inp.placeholder = "输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片";
+  }
+}
+function updateQueueStatus(size){
+  messageQueueSize = size;
+  queueCount.textContent = size;
+  queueStatus.classList.toggle('show', size > 0);
+}
 
 function addRow(cls, text){
   const row=document.createElement('div'); row.className='row '+cls;
@@ -198,6 +238,10 @@ fileInput.addEventListener('change', e=>{
 function sendRaw(text, images){
   ws.send(JSON.stringify({text, images: images||[]}));
 }
+function sendInsertMessage(text, imgs){
+  // 自主模式下插入消息（即使 busy；当前不带图片，预留 imgs）
+  ws.send(JSON.stringify({action:'insert_message', text}));
+}
 function addUserBubble(text, imgs){
   const row=document.createElement('div'); row.className='row me';
   const b=document.createElement('div'); b.className='bubble';
@@ -212,7 +256,18 @@ function addUserBubble(text, imgs){
 }
 function send(){
   const t=inp.value.trim();
-  if((!t && !attachments.length) || busy) return;
+  if(!t && !attachments.length) return;
+  // 自主模式且 busy 时，插入消息到队列
+  if(busy && autonomousMode){
+    const imgs=attachments.slice();
+    sendInsertMessage(t, imgs);
+    lastUserBubble = addUserBubble(t, imgs);
+    inp.value=''; inp.style.height='auto';
+    attachments.length=0; renderThumbs();
+    return;
+  }
+  // 普通模式或自主模式但不 busy 时，正常发送
+  if(busy) return;
   const imgs=attachments.slice();
   sendRaw(t, imgs);
   lastUserBubble = addUserBubble(t, imgs);
@@ -238,6 +293,10 @@ document.getElementById('sessionSel').addEventListener('change',e=>{
   if(v==='__new__') ws.send(JSON.stringify({action:'new_session'}));
   else sendRaw('/resume '+v, []);
 });
+document.getElementById('btnAuto').onclick=()=>{
+  // 切换自主模式：发送命令
+  sendRaw('/autonomous', []);
+};
 document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 document.getElementById('cfgSave').onclick=()=>{
@@ -328,9 +387,8 @@ ws.onmessage=(ev)=>{
       }
       break;
     case 'saved':
-      // 存档后重新拉取列表，然后选中刚存的
       ws.send(JSON.stringify({action:'list_sessions'}));
-      if(m.name) window._lastSaved=m.name;  // 等 sessions 事件回来时选中
+      if(m.name) window._lastSaved=m.name;
       break;
     case 'plan':
       renderPlan(m.plan);
@@ -357,12 +415,32 @@ ws.onmessage=(ev)=>{
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
     case 'interrupted': addRow('sys','⏹ 已中断'); setBusy(false); break;
+    case 'autonomous_status':
+      setAutonomousMode(!!m.active);
+      if(m.active){
+        addRow('sys', `🔁 纯自主模式已开启，持续到 ${new Date(m.end_time).toLocaleString()}`);
+      } else {
+        addRow('sys', '🔁 纯自主模式已关闭');
+      }
+      break;
+    case 'autonomous_continue':
+      addTrace('auto', `🔁 自主继续：${m.text}`);
+      break;
+    case 'autonomous_next':
+      addTrace('auto', `🔁 准备下一轮：${m.text}`);
+      break;
+    case 'message_queued':
+      updateQueueStatus(m.queue_size);
+      addRow('sys', `📨 消息已入队（当前队列：${m.queue_size} 条）`);
+      break;
     case '_done':
       if(curTurn && !curTurn.answerEl.textContent){
         curTurn.answerEl.textContent='（本轮无最终回答）'; curTurn.answerEl.style.color='#8a9099';
       }
       if(curTurn && curTurn.det) curTurn.det.open=false;
-      setBusy(false); break;
+      // 自主模式下不解除 busy 状态（会继续下一轮）
+      if(!autonomousMode) setBusy(false);
+      break;
   }
 };
 function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }

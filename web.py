@@ -27,7 +27,7 @@ from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from plan_tools import make_plan_tools
 from wiki import make_wiki_tools
-from real_tools import REAL_TOOLS, WORKSPACE
+from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
 
 app = FastAPI(title="Agt Agent WebUI")
@@ -57,6 +57,8 @@ def _new_agent(on_event) -> Agent:
     for t in make_wiki_tools(agent):
         agent.tools.register(t)
     for t in make_mcp_tools(_mcp, str(WORKSPACE / ".mcp.json")):
+        agent.tools.register(t)
+    for t in make_autonomous_tools(agent):
         agent.tools.register(t)
     return agent
 
@@ -104,7 +106,7 @@ async def ws_endpoint(websocket: WebSocket):
                     target = agent.session.restore_to_snapshot(sha)
                     await _send(websocket, {"type": "restored", "target": target or ""})
                 except Exception as e:
-                    await _send(websocket, {"type": "system", "text": f"⚠️ 回溯失败: {type(e).__name__}: {e}"})
+                    await _send(websocket, {"type": "system", "text": f"⚠️ 回溯失败：{type(e).__name__}: {e}"})
                 continue
             if isinstance(_d, dict) and _d.get("action") == "get_config":
                 await _send(websocket, {"type": "config", "values": read_config(agent)})
@@ -135,6 +137,19 @@ async def ws_endpoint(websocket: WebSocket):
                 from session import list_sessions
                 sessions = list_sessions(workspace=WORKSPACE)
                 await _send(websocket, {"type": "sessions", "names": [s.stem for s in sessions]})
+                continue
+            # 纯自主模式下插入新消息（即使 busy 也可以发送）
+            if isinstance(_d, dict) and _d.get("action") == "insert_message":
+                text = _d.get("text", "").strip()
+                if not text:
+                    continue
+                if agent.autonomous_mode and agent.is_autonomous_active():
+                    agent.queue_user_message(text)
+                    await _send(websocket, {"type": "system",
+                                            "text": f"✅ 消息已加入队列（当前队列：{len(agent.pending_messages)} 条），将在当前任务完成后处理"})
+                else:
+                    await _send(websocket, {"type": "system",
+                                            "text": "⚠️ 纯自主模式未开启，无法插入消息。先用 /autonomous on <时间> 开启"})
                 continue
             text, images = _parse_client_msg(raw)
             text = text.strip()

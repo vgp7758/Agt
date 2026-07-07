@@ -87,8 +87,9 @@
     <button class="btn" id="btnImg">📁 加图</button>
     <button class="btn" id="btnTank">🚗 查坦克</button>
     <button class="btn" id="btnSave">💾 /save</button>
-    <button class="btn" id="btnList">📋 /list</button>
+    <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <button class="btn" id="btnHelp">❓ /help</button>
+    <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
@@ -134,7 +135,7 @@ let lastUserBubble = null;      // 最近一条用户气泡（挂检查点按钮
 let restoreTargetBubble = null; // 回溯目标气泡
 
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
-function setBusy(b){ busy=b; sendBtn.disabled=b; if(!b) inp.focus(); }
+function setBusy(b){ busy=b; sendBtn.disabled=b; document.getElementById('btnStop').style.display=b?'inline':'none'; if(!b) inp.focus(); }
 function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on?'已连接':'已断开'; }
 
 function addRow(cls, text){
@@ -225,9 +226,14 @@ sendBtn.onclick=send;
 document.getElementById('btnImg').onclick=()=>fileInput.click();
 document.getElementById('btnTank').onclick=()=>sendRaw('查一下当前坦克的段位和最新战绩', []);
 document.getElementById('btnSave').onclick=()=>sendRaw('/save', []);
-document.getElementById('btnList').onclick=()=>sendRaw('/list', []);
 document.getElementById('btnHelp').onclick=()=>sendRaw('/help', []);
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
+document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
+document.getElementById('sessionSel').addEventListener('change',e=>{
+  const v=e.target.value; e.target.value='';
+  if(v==='__new__') ws.send(JSON.stringify({action:'new_session'}));
+  else sendRaw('/resume '+v, []);
+});
 document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 document.getElementById('cfgSave').onclick=()=>{
@@ -292,6 +298,7 @@ ws.onmessage=(ev)=>{
           if(md.name===m.current_model) o.selected=true;
           modelSel.appendChild(o);
         });
+        ws.send(JSON.stringify({action:'list_sessions'}));
       }
       addRow('sys', m.text); scrollBottom(); break;
     case 'checkpoint':
@@ -318,6 +325,13 @@ ws.onmessage=(ev)=>{
       break;
     case 'plan':
       renderPlan(m.plan);
+      break;
+    case 'sessions':
+      if(m.names){
+        const sel=document.getElementById('sessionSel');
+        sel.innerHTML='<option value="__new__">➕ 新会话</option>';
+        m.names.forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); });
+      }
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;

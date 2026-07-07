@@ -119,6 +119,7 @@ class Agent:
 
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None) -> str:
+        self._stop_flag = False  # 每轮 run 开始时清掉停止标志
         self.session.start_turn(user_message, images)
         self._emit({"type": "user", "text": user_message, "image_count": len(images or [])})
         # 检查点：本轮工具改动前给工作区打快照（用于"回溯到这条指令之前"）
@@ -133,6 +134,10 @@ class Agent:
 
         try:
             for step_num in range(1, self.max_steps + 1):
+                if self._stop_flag:
+                    self._emit({"type": "interrupted"})
+                    self.session.abort_current_turn("（被用户停止）")
+                    return ""
                 if self.cumulative_tokens >= self.token_budget:
                     self._emit({"type": "budget_hit"})
                     return self._wrap_up()

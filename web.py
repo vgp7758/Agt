@@ -113,6 +113,21 @@ async def ws_endpoint(websocket: WebSocket):
                 lines = apply_config(agent, _d.get("values") or {})
                 await _send(websocket, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
                 continue
+            if isinstance(_d, dict) and _d.get("action") == "stop":
+                agent._stop_flag = True
+                await _send(websocket, {"type": "system", "text": "⏹ 已请求停止，当前步完成后 Agent 会停下来。"})
+                continue
+            if isinstance(_d, dict) and _d.get("action") == "list_sessions":
+                from session import list_sessions
+                sessions = list_sessions(workspace=WORKSPACE)
+                await _send(websocket, {"type": "sessions", "names": [p.stem for p in sessions]})
+                continue
+            if isinstance(_d, dict) and _d.get("action") == "new_session":
+                from session import Session
+                agent.session = Session(agent.base_system, llm=agent.llm,
+                                        recent_window_turns=agent.session.recent_window_turns)
+                await _send(websocket, {"type": "system", "text": "🔄 已创建新会话。"})
+                continue
             text, images = _parse_client_msg(raw)
             text = text.strip()
             if not text and not images:

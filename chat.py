@@ -2,7 +2,7 @@
 
 在上一版基础上叠加：
   - 斜杠命令（/save /resume /list /config /tank …）
-  - 分层上下文引擎（摘要+窗口融合，长会话不丢关键决策）
+  - 分层上下文引擎（摘要 + 窗口融合，长会话不丢关键决策）
   - 长程自主（默认 50 步 + 软 token 预算，撑住"改→测→观→改"闭环）
   - AgenTank 原生工具（替代 curl 现写）
 
@@ -20,13 +20,13 @@ from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from prompts import build_system
-from real_tools import REAL_TOOLS, WORKSPACE
+from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 
 _MODELS_DESC = "；".join(f"{n}（{m.get('desc', '').strip()}）" for n, m in config.MODELS.items())
 
 
 def _load_agent_md() -> str:
-    """读取启动目录(cwd)中用户自编辑的 AGENT.md，作为领域任务指引拼进 SYSTEM。"""
+    """读取启动目录 (cwd) 中用户自编辑的 AGENT.md，作为领域任务指引拼进 SYSTEM。"""
     p = WORKSPACE / "AGENT.md"
     if not p.exists():
         return "(未找到 AGENT.md，可在当前目录创建后重启生效)"
@@ -34,7 +34,7 @@ def _load_agent_md() -> str:
 
 
 def _rules_and_skills_section() -> str:
-    """读取 .agent/ 下的 rules(始终生效) 和 skills 摘要(渐进式披露)。"""
+    """读取 .agent/ 下的 rules(始终生效) 和 skills 摘要 (渐进式披露)。"""
     parts = []
     rules = load_rules(WORKSPACE)
     if rules:
@@ -58,7 +58,7 @@ SYSTEM = build_system(
         "接手不熟悉的任务前可用 wiki_search/wiki_read 查 .agent/wiki/ 里的仓库知识；"
         "完成重要功能或修改后调用 update_wiki(改动摘要)，由子 Agent 自动更新 repo-wiki。\n"
         "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
-        "tools 留空=继承你的全部工具(自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
+        "tools 留空=继承你的全部工具 (自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
         "agent_prompt(name, prompt) 派任务，子 Agent 自主用工具完成再回复；kill_agent(name) 销毁；list_agents() 查看。"
         "复杂任务可拆分派给不同角色/模型的子 Agent 再综合。"
         "【并行】可同时进行的子任务，请在【同一步】里发起多个 agent_prompt 调用，并行更快；只有存在依赖关系时才分步。"
@@ -73,14 +73,14 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent · AgenTank 比赛版")
     print("=" * 64)
-    print("工具: get_tank/simulate/publish_code/challenge/... + run_python/文件/搜索/shell")
-    print("命令: /save /resume /list /show /reset /config /budget /tank /model /help")
-    print("退出: quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
+    print("工具：get_tank/simulate/publish_code/challenge/... + run_python/文件/搜索/shell")
+    print("命令：/save /resume /list /show /reset /config /budget /tank /model /autonomous /help")
+    print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
     print("=" * 64)
 
     agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
                   enable_thinking=True, max_steps=50, token_budget=80000)
-    print(f"当前模型: {agent.model_name}  (输入 /model 切换)")
+    print(f"当前模型：{agent.model_name}  (输入 /model 切换)")
 
     # 连接 MCP server（读 workspace/.mcp.json），发现并注册 AgenTank 等工具
     mcp_mgr = MCPManager()
@@ -101,6 +101,9 @@ def main():
     # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
     for t in make_wiki_tools(agent):
         agent.tools.register(t)
+    # 注册纯自主模式工具
+    for t in make_autonomous_tools(agent):
+        agent.tools.register(t)
     for t in make_mcp_tools(mcp_mgr, str(WORKSPACE / ".mcp.json")):
         agent.tools.register(t)
     registry = build_default_registry()
@@ -108,7 +111,7 @@ def main():
     try:
         while True:
             try:
-                user = input("\n🧑 你: ").strip()
+                user = input("\n🧑 你：").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n再见！")
                 break
@@ -126,7 +129,7 @@ def main():
             try:
                 agent.run(user)
             except Exception as e:
-                print(f"\n⚠️ 执行出错: {e}")
+                print(f"\n⚠️ 执行出错：{e}")
     finally:
         mcp_mgr.shutdown()
 

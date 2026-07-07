@@ -195,3 +195,57 @@ REAL_TOOLS = Toolbox(
     Tool(web_search),
     Tool(run_shell),
 )
+
+
+def make_autonomous_tools(agent) -> list:
+    """生成绑定到指定 Agent 的纯自主模式工具。"""
+    from datetime import datetime, timedelta
+
+    def set_autonomous_mode(end_time: str = None, duration_minutes: int = None,
+                            prompt: str = None) -> str:
+        """开启纯自主模式：任务完成后自动继续工作，直到约定时间或手动退出。
+        end_time: 结束时间，格式 "HH:MM"（今天）或 "YYYY-MM-DD HH:MM"；
+        duration_minutes: 或者指定持续分钟数（如 30=半小时后结束）；
+        prompt: 自动继续时使用的提示词（默认："当前为纯自主模式，请继续按照要求完成更多工作"）。
+        二者选一即可；退出用 /autonomous off 或 exit_autonomous_mode 工具。"""
+        try:
+            if duration_minutes is not None:
+                target = datetime.now() + timedelta(minutes=int(duration_minutes))
+            elif end_time:
+                end_time = end_time.strip()
+                # 尝试解析 "YYYY-MM-DD HH:MM"
+                try:
+                    target = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    # 尝试解析 "HH:MM"（今天）
+                    today = datetime.now().date()
+                    target = datetime.strptime(f"{today} {end_time}", "%Y-%m-%d %H:%M")
+                    # 如果时间已过，算明天
+                    if target < datetime.now():
+                        from datetime import timedelta
+                        target += timedelta(days=1)
+            else:
+                return "[参数缺失] 请提供 end_time（如 '17:30' 或 '2026-07-08 17:30'）或 duration_minutes（持续分钟数）"
+
+            agent.set_autonomous_mode(target, prompt)
+            return f"✅ 纯自主模式已开启，持续到 {target.strftime('%Y-%m-%d %H:%M')}（提示词：{prompt or '默认'}）"
+        except Exception as e:
+            return f"[开启失败] {type(e).__name__}: {e}"
+
+    def exit_autonomous_mode() -> str:
+        """退出纯自主模式。"""
+        agent.exit_autonomous_mode()
+        return "✅ 纯自主模式已关闭"
+
+    def autonomous_status() -> str:
+        """查看纯自主模式当前状态。"""
+        if not agent.autonomous_mode:
+            return "纯自主模式：未开启"
+        if agent.is_autonomous_active():
+            return f"纯自主模式：已开启，持续到 {agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}\n" \
+                   f"自动提示词：{agent.autonomous_prompt}\n" \
+                   f"待处理消息队列：{len(agent.pending_messages)} 条"
+        else:
+            return "纯自主模式：已超时（自动关闭）"
+
+    return [Tool(set_autonomous_mode), Tool(exit_autonomous_mode), Tool(autonomous_status)]

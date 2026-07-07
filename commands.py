@@ -35,7 +35,7 @@ class CommandRegistry:
         self._cmds[name] = (handler, help_text)
 
     def dispatch(self, line: str, ctx: CommandContext) -> bool:
-        """处理一行输入。返回 True=是命令(已处理)，False=不是命令(交给 Agent)。"""
+        """处理一行输入。返回 True=是命令 (已处理)，False=不是命令 (交给 Agent)。"""
         if not line.startswith("/"):
             return False
         try:
@@ -61,7 +61,7 @@ class CommandRegistry:
 # ========== 参数解析 ==========
 
 def _parse_args(args: list[str]) -> tuple[list[str], dict]:
-    """把 ['--k','v', 'pos'] 拆成 (位置参数, {flag: value/True})。"""
+    """把 ['--k','v', 'pos'] 拆成 (位置参数，{flag: value/True})。"""
     positional, flags = [], {}
     i = 0
     while i < len(args):
@@ -146,7 +146,7 @@ def _to_bool(v):
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-# 可配置项：名字 -> (设在 agent 还是 agent.llm 上, 类型转换)
+# 可配置项：名字 -> (设在 agent 还是 agent.llm 上，类型转换)
 CONFIGURABLE = {
     "max_steps": ("agent", int),
     "token_budget": ("agent", int),
@@ -173,7 +173,7 @@ def apply_config(agent, values: dict) -> list:
         v = values.pop("fallback_chain")
         chain = [m.strip() for m in str(v).split(",") if m.strip()]
         agent.llm.fallback_chain = chain
-        results.append(f"✅ fallback_chain = {chain or '(空, 无回退)'}")
+        results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")
@@ -245,6 +245,89 @@ def _cmd_model(ctx: CommandContext, args):
     print(f"✅ 已切换到 {name}: {m['model']} @ {m['base_url']}")
 
 
+def _cmd_autonomous(ctx: CommandContext, args):
+    """纯自主模式控制：/autonomous on <时间> /autonomous off /autonomous status"""
+    from datetime import datetime, timedelta
+
+    if not args:
+        # 显示状态
+        if not ctx.agent.autonomous_mode:
+            print("纯自主模式：未开启")
+        elif ctx.agent.is_autonomous_active():
+            print(f"纯自主模式：已开启，持续到 {ctx.agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}")
+            print(f"自动提示词：{ctx.agent.autonomous_prompt}")
+            print(f"待处理消息队列：{len(ctx.agent.pending_messages)} 条")
+        else:
+            print("纯自主模式：已超时（自动关闭）")
+        print("\n用法：")
+        print("  /autonomous on 17:30           # 到今天 17:30")
+        print("  /autonomous on 2026-07-09 10:00  # 到指定时间")
+        print("  /autonomous duration 30        # 持续 30 分钟")
+        print("  /autonomous off                # 手动关闭")
+        print("  /autonomous status             # 查看状态")
+        print("  /autonomous prompt <文字>       # 修改自动继续提示词")
+        return
+
+    cmd = args[0].lower()
+    if cmd in ("on", "start"):
+        if len(args) < 2:
+            print("❌ 请指定结束时间，如：/autonomous on 17:30")
+            return
+        time_str = args[1]
+        try:
+            # 尝试解析 "YYYY-MM-DD HH:MM"
+            try:
+                target = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            except ValueError:
+                # 尝试解析 "HH:MM"（今天）
+                today = datetime.now().date()
+                target = datetime.strptime(f"{today} {time_str}", "%Y-%m-%d %H:%M")
+                if target < datetime.now():
+                    target += timedelta(days=1)
+            ctx.agent.set_autonomous_mode(target)
+            print(f"✅ 纯自主模式已开启，持续到 {target.strftime('%Y-%m-%d %H:%M')}")
+        except Exception as e:
+            print(f"❌ 开启失败：{type(e).__name__}: {e}")
+
+    elif cmd in ("off", "stop", "exit"):
+        ctx.agent.exit_autonomous_mode()
+        print("✅ 纯自主模式已关闭")
+
+    elif cmd == "duration":
+        if len(args) < 2:
+            print("❌ 请指定持续分钟数，如：/autonomous duration 30")
+            return
+        try:
+            minutes = int(args[1])
+            target = datetime.now() + timedelta(minutes=minutes)
+            ctx.agent.set_autonomous_mode(target)
+            print(f"✅ 纯自主模式已开启，持续 {minutes} 分钟（到 {target.strftime('%Y-%m-%d %H:%M')}）")
+        except Exception as e:
+            print(f"❌ 开启失败：{type(e).__name__}: {e}")
+
+    elif cmd == "status":
+        if not ctx.agent.autonomous_mode:
+            print("纯自主模式：未开启")
+        elif ctx.agent.is_autonomous_active():
+            print(f"纯自主模式：已开启，持续到 {ctx.agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}")
+            print(f"自动提示词：{ctx.agent.autonomous_prompt}")
+            print(f"待处理消息队列：{len(ctx.agent.pending_messages)} 条")
+        else:
+            print("纯自主模式：已超时（自动关闭）")
+
+    elif cmd == "prompt":
+        if len(args) < 2:
+            print(f"当前自动提示词：{ctx.agent.autonomous_prompt}")
+            print("用法：/autonomous prompt <新的提示词>")
+            return
+        new_prompt = " ".join(args[1:])
+        ctx.agent.autonomous_prompt = new_prompt
+        print(f"✅ 自动提示词已更新：{new_prompt}")
+
+    else:
+        print(f"❌ 未知子命令：{cmd}，输入 /autonomous 查看用法")
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -252,10 +335,11 @@ def build_default_registry() -> CommandRegistry:
     reg.register("list", _cmd_list, "列出所有已保存会话")
     reg.register("show", _cmd_show, "[name]  查看会话详情（不传=当前）")
     reg.register("reset", _cmd_reset, "重置会话（清空历史）")
-    reg.register("config", _cmd_config, "<key> <value>  改运行时配置(max_steps/token_budget)")
+    reg.register("config", _cmd_config, "<key> <value>  改运行时配置 (max_steps/token_budget)")
     reg.register("budget", _cmd_budget, "查看本次 token 消耗")
     reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
     reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
+    reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

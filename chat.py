@@ -17,7 +17,7 @@ from agent_config import SKILL_TOOLS, load_rules, skills_summary
 from plan_tools import make_plan_tools
 from wiki import make_wiki_tools
 from commands import CommandContext, build_default_registry
-from mcp_client import MCPManager
+from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from prompts import build_system
 from real_tools import REAL_TOOLS, WORKSPACE
@@ -100,6 +100,8 @@ def main():
         agent.tools.register(t)
     # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
     for t in make_wiki_tools(agent):
+        agent.tools.register(t)
+    for t in make_mcp_tools(mcp_mgr, str(WORKSPACE / ".mcp.json")):
         agent.tools.register(t)
     registry = build_default_registry()
 

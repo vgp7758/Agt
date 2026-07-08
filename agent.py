@@ -59,6 +59,7 @@ class Agent:
         self.autonomous_end_time: Optional[datetime] = None
         self.autonomous_prompt: str = "当前为纯自主模式，请继续按照要求完成更多工作"
         self.pending_messages: List[str] = []  # 用户插入的消息队列
+        self.goal_check_script: str = ""       # 目标达成验证脚本(Python，输出 PASS=达成)
 
     # ========== 事件输出 ==========
     def _emit(self, event: dict):
@@ -177,6 +178,26 @@ class Agent:
             return self.autonomous_prompt
         return None
 
+    def run_goal_check(self) -> str:
+        """运行目标验证脚本（独立子进程），返回输出。'PASS' 表示目标达成。"""
+        if not self.goal_check_script:
+            return ""
+        import subprocess, sys, tempfile, os
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
+            f.write(self.goal_check_script)
+            tmp = f.name
+        try:
+            proc = subprocess.run([sys.executable, tmp], capture_output=True,
+                                  text=True, timeout=30, cwd=os.getcwd())
+            return (proc.stdout or "").strip()
+        except subprocess.TimeoutExpired:
+            return "[目标检查超时]"
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None, _autonomous_continue: bool = False) -> str:
         """
@@ -231,6 +252,12 @@ class Agent:
                             self.session.finish_turn(resp.content, resp.reasoning)
                             self._emit({"type": "answer", "text": resp.content,
                                         "tokens": self.cumulative_tokens})
+                            # 目标检查：跑验证脚本，PASS 则结束自主模式
+                            if self.goal_check_script:
+                                result = self.run_goal_check()
+                                if result and result.startswith("PASS"):
+                                    self._emit({"type": "system", "text": f"🎯 目标达成：{result}"})
+                                    self.exit_autonomous_mode()
                             # 纯自主模式：完成后检查是否继续
                             if self.is_autonomous_active():
                                 next_msg = self.get_next_message()

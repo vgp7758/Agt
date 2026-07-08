@@ -266,6 +266,8 @@ def _cmd_autonomous(ctx: CommandContext, args):
         print("  /autonomous off                # 手动关闭")
         print("  /autonomous status             # 查看状态")
         print("  /autonomous prompt <文字>       # 修改自动继续提示词")
+        print("  /autonomous goal <Python脚本>    # 设目标验证脚本(PASS=达成)")
+        print("  /autonomous check               # 手动运行目标验证脚本")
         return
 
     cmd = args[0].lower()
@@ -323,6 +325,22 @@ def _cmd_autonomous(ctx: CommandContext, args):
         new_prompt = " ".join(args[1:])
         ctx.agent.autonomous_prompt = new_prompt
         print(f"✅ 自动提示词已更新：{new_prompt}")
+
+    elif cmd == "goal":
+        print("用法：/autonomous goal <Python脚本内容>")
+        print("  脚本须在目标达成时 print('PASS')，否则输出当前状态（如分数）")
+        print("  自主循环每轮结束后自动跑该脚本检查")
+        print("示例：")
+        print('  /autonomous goal "print(\\"PASS\\") if score >= 3000 else print(score)"')
+        return
+
+    elif cmd == "check":
+        if not ctx.agent.goal_check_script:
+            print("(未设置目标验证脚本，用 /autonomous goal 设置)")
+            return
+        print("🔍 运行目标验证脚本…")
+        result = ctx.agent.run_goal_check()
+        print(f"结果：{result}")
 
     else:
         print(f"❌ 未知子命令：{cmd}，输入 /autonomous 查看用法")

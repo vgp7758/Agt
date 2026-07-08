@@ -265,4 +265,19 @@ def make_autonomous_tools(agent) -> list:
         else:
             return "纯自主模式：已超时（自动关闭）"
 
-    return [Tool(set_autonomous_mode), Tool(exit_autonomous_mode), Tool(autonomous_status)]
+    def set_goal_check(script: str) -> str:
+        """设置目标达成验证脚本（Python）。自主循环每轮结束后跑它：输出 'PASS' 表示目标达成、自动结束自主模式；
+        否则继续。如：拉坦克天梯分 ≥ 3000 → print('PASS')。"""
+        if not script or not script.strip():
+            return "[错误] script 不能为空"
+        agent.goal_check_script = script.strip()
+        return "✅ 目标验证脚本已设置（自主循环每轮结束后自动检查）"
+
+    def check_goal() -> str:
+        """手动运行一次目标验证脚本，返回输出（PASS=达成/FAIL=未达成/空=未设目标）。"""
+        if not agent.goal_check_script:
+            return "(未设置目标验证脚本，用 set_goal_check(script) 设置)"
+        return agent.run_goal_check() or "(空输出)"
+
+    return [Tool(set_autonomous_mode), Tool(exit_autonomous_mode), Tool(autonomous_status),
+            Tool(set_goal_check), Tool(check_goal)]

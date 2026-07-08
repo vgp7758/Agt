@@ -237,33 +237,40 @@ def make_autonomous_tools(agent) -> list:
     from datetime import datetime, timedelta
 
     def set_autonomous_mode(end_time: str = None, duration_minutes: int = None,
-                            prompt: str = None) -> str:
-        """开启纯自主模式：任务完成后自动继续工作，直到约定时间或手动退出。
-        end_time: 结束时间，格式 "HH:MM"（今天）或 "YYYY-MM-DD HH:MM"；
-        duration_minutes: 或者指定持续分钟数（如 30=半小时后结束）；
-        prompt: 自动继续时使用的提示词（默认："当前为纯自主模式，请继续按照要求完成更多工作"）。
-        二者选一即可；退出用 /autonomous off 或 exit_autonomous_mode 工具。"""
+                            prompt: str = None, goal_check_code: str = None) -> str:
+        """开启纯自主模式：任务完成后自动继续工作，直到时间到或目标达成（哪个先满足）。
+        end_time: 结束时间 "HH:MM"（今天）或 "YYYY-MM-DD HH:MM"；
+        duration_minutes: 持续分钟数（如 180=3小时）；
+        goal_check_code: 目标验证 Python 脚本（print('PASS')=达成→自动停止）；
+        prompt: 自动继续时的提示词。
+        以上四个参数至少提供一个（end_time/duration_minutes/goal_check_code 三选一即可）。"""
         from datetime import datetime, timedelta
         try:
+            # 目标脚本
+            if goal_check_code:
+                agent.goal_check_script = goal_check_code.strip()
+            # 结束时间
+            target = None
             if duration_minutes is not None:
                 target = datetime.now() + timedelta(minutes=int(duration_minutes))
             elif end_time:
                 end_time = end_time.strip()
-                # 尝试解析 "YYYY-MM-DD HH:MM"
                 try:
                     target = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
                 except ValueError:
-                    # 尝试解析 "HH:MM"（今天）
                     today = datetime.now().date()
                     target = datetime.strptime(f"{today} {end_time}", "%Y-%m-%d %H:%M")
-                    # 如果时间已过，算明天
                     if target < datetime.now():
                         target += timedelta(days=1)
-            else:
-                return "[参数缺失] 请提供 end_time（如 '17:30' 或 '2026-07-08 17:30'）或 duration_minutes（持续分钟数）"
-
-            agent.set_autonomous_mode(target, prompt)
-            return f"✅ 纯自主模式已开启，持续到 {target.strftime('%Y-%m-%d %H:%M')}（提示词：{prompt or '默认'}）"
+            if target is None and not goal_check_code:
+                return "[参数缺失] 至少提供 end_time / duration_minutes / goal_check_code 之一"
+            agent.set_autonomous_mode(target or datetime.max, prompt)
+            parts = []
+            if target:
+                parts.append(f"持续到 {target.strftime('%Y-%m-%d %H:%M')}")
+            if goal_check_code:
+                parts.append("目标验证脚本已设置")
+            return f"✅ 纯自主模式已开启（{'，'.join(parts)}）"
         except Exception as e:
             return f"[开启失败] {type(e).__name__}: {e}"
 

@@ -65,7 +65,7 @@ def run_python(code: str) -> str:
             out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
         return out.strip() or "(无输出)"
     except subprocess.TimeoutExpired:
-        return f"[执行超时（>{TOOL_TIMEOUT}s），已终止]"
+        return f"[执行超时（>{TOOL_TIMEOUT}s），已终止。如任务确实需要更长时间，先调用 set_tool_timeout(seconds) 调大超时（最大 7200s=2小时），再重试。]"
     finally:
         try:
             os.unlink(tmp)
@@ -198,7 +198,7 @@ def run_shell(command: str) -> str:
             out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
         return out.strip() or "(无输出)"
     except subprocess.TimeoutExpired:
-        return f"[命令超时（>{TOOL_TIMEOUT}s），已终止]"
+        return f"[命令超时（>{TOOL_TIMEOUT}s），已终止。如任务确实需要更长时间，先调用 set_tool_timeout(seconds) 调大超时（最大 7200s=2小时），再重试。]"
 
 
 def set_tool_timeout(seconds: int) -> str:

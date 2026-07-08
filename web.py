@@ -42,39 +42,36 @@ _snap = SnapshotManager(WORKSPACE)
 
 _INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
 
-# ===== 全局 Agent 单例 + 事件缓冲 =====
+# ===== 全局 Agent 单例 + 事件缓冲 + 多客户端广播 =====
 _agent: Agent | None = None
 _agent_busy: bool = False
-_event_log: list[tuple[int, dict]] = []   # [(seq, event)]  断线期间的事件
+_event_log: list[tuple[int, dict]] = []
 _seq: int = 0
-_last_ws: WebSocket | None = None          # 当前活跃的 WS（供 on_event 判断是否在线）
-_ws_lock = asyncio.Lock()                   # 防并发 run
+_clients: list[dict] = []     # [{ws, queue}]  所有活跃连接
 
 
-def _log_and_forward(ev: dict, loop, queue):
-    """记录事件到日志缓冲 + 尝试推给当前连接。"""
+def _broadcast(ev: dict):
+    """记录事件到日志缓冲 + 广播给所有活跃客户端。"""
     global _seq
     _seq += 1
     _event_log.append((_seq, ev))
     if len(_event_log) > 500:
         _event_log.pop(0)
-    if _last_ws is not None:
+    for c in _clients:
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, ev)
+            asyncio.get_event_loop().call_soon_threadsafe(c["queue"].put_nowait, ev)
         except Exception:
-            pass  # loop 可能已关
+            pass
 
 
-def _get_or_create_agent(loop, queue) -> Agent:
-    """获取全局 Agent（首次创建，之后复用）。"""
+def _get_or_create_agent() -> Agent:
+    """获取全局 Agent（首次创建，之后复用）。on_event 广播给所有客户端。"""
     global _agent
     if _agent is not None:
-        # 重连：更新 on_event 指向新 queue
-        _agent.on_event = lambda ev: _log_and_forward(ev, loop, queue)
         return _agent
-    # 首次创建
-    def on_event(ev):
-        _log_and_forward(ev, loop, queue)
+    agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
+                  max_steps=50, token_budget=80000, verbose=False, on_event=_broadcast,
+                  snapshot_manager=_snap)
     agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
                   max_steps=50, token_budget=80000, verbose=False, on_event=on_event,
                   snapshot_manager=_snap)
@@ -107,15 +104,18 @@ async def index():
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    global _last_ws, _agent_busy
+    global _agent_busy
     await websocket.accept()
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     registry = build_default_registry()
 
-    # 获取/创建 Agent（断线重连时复用）
-    agent = _get_or_create_agent(loop, queue)
-    _last_ws = websocket
+    # 获取/创建 Agent（断线重连/多客户端复用）
+    agent = _get_or_create_agent()
+
+    # 注册到客户端列表（广播目标）
+    client = {"ws": websocket, "queue": queue}
+    _clients.append(client)
 
     # 判断是首次连接还是重连
     is_reconnect = len(_event_log) > 0
@@ -183,7 +183,8 @@ async def ws_endpoint(websocket: WebSocket):
     except Exception:
         pass
     finally:
-        _last_ws = None
+        if client in _clients:
+            _clients.remove(client)
 
 
 async def _handle_user_input(ws, agent, raw, queue, loop, registry):
@@ -284,22 +285,22 @@ def _parse_client_msg(raw: str):
 
 
 async def _run_streaming(ws, agent, msg, images, queue, loop):
+    """跑 Agent，事件通过 _broadcast 广播到所有客户端；
+    本连接从自己的 queue 消费，直到 _done。"""
     global _agent_busy
     _agent_busy = True
     try:
-        done_event = asyncio.Event()
-
         def run_it():
             try:
                 agent.run(msg, images=images)
             except Exception as e:
-                _log_and_forward({"type": "error", "text": f"{type(e).__name__}: {e}"}, loop, queue)
+                _broadcast({"type": "error", "text": f"{type(e).__name__}: {e}"})
             finally:
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "_done"})
+                _broadcast({"type": "_done"})
 
         threading.Thread(target=run_it, daemon=True).start()
 
-        # 持续从队列读事件推给 WS，直到 _done
+        # 本连接从自己的 queue 消费事件
         while True:
             ev = await queue.get()
             try:

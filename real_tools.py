@@ -40,6 +40,17 @@ def _resolve(path: str) -> Path:
     return target
 
 
+def _py_check(target: Path) -> str:
+    """对刚写入的 Python 文件做即时语法检查（compile，不解引用，不跑代码，零开销）。
+    有语法错误则返回可操作的报错行（Agent 看到后可自行修正）。"""
+    if target.suffix not in (".py", ".pyw"):
+        return ""
+    try:
+        code = target.read_text(encoding="utf-8")
+        compile(code, str(target), "exec")
+    except SyntaxError as e:
+        return f"\n⚠️ 语法错误 {e.filename or target.name}:{e.lineno}:{e.offset} — {e.msg}"
+    return ""
 def run_python(code: str) -> str:
     """运行一段 Python 代码，返回标准输出（出错时附 stderr）。独立子进程执行，超时 10 秒。"""
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
@@ -76,7 +87,10 @@ def write_file(path: str, content: str) -> str:
     target = _resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return f"已写入 {len(content)} 字符到 {path}"
+    msg = f"已写入 {len(content)} 字符到 {path}"
+    if path.endswith(".py") or path.endswith(".pyw"):
+        msg += _py_check(target)
+    return msg
 
 
 def list_dir(path: str = ".") -> str:
@@ -139,7 +153,10 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False)
         return "[无变化] old_string 与 new_string 相同"
     new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
     target.write_text(new_content, encoding="utf-8")
-    return f"✅ 已替换 {count if replace_all else 1} 处（{path}）"
+    msg = f"✅ 已替换 {count if replace_all else 1} 处（{path}）"
+    if path.endswith(".py") or path.endswith(".pyw"):
+        msg += _py_check(target)
+    return msg
 
 
 def web_search(query: str) -> str:

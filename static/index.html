@@ -437,6 +437,8 @@ ws.onmessage=(ev)=>{
       addRow('sys', `📨 用户消息已注入 Agent 上下文：${m.text}`);
       updateQueueStatus(0);
       break;
+    case '_ping':
+      break;  // 心跳，不渲染
     case '_done':
       if(curTurn && !curTurn.answerEl.textContent){
         curTurn.answerEl.textContent='（本轮无最终回答）'; curTurn.answerEl.style.color='#8a9099';

@@ -289,6 +289,13 @@ class Agent:
                                 step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
                                                                  arguments=tc["arguments"], result=result))
                         self.session.add_step(step)
+                        # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
+                        if self.autonomous_mode and self.pending_messages:
+                            inject = "；".join(self.pending_messages)
+                            self.pending_messages.clear()
+                            self._emit({"type": "message_injected", "text": inject})
+                            # 在下一步发给 LLM 的上下文里，通过 system 消息注入用户提示
+                            self.session._current._user_hint = inject
 
                     if continue_loop:
                         continue

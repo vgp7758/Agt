@@ -433,6 +433,10 @@ ws.onmessage=(ev)=>{
       updateQueueStatus(m.queue_size);
       addRow('sys', `📨 消息已入队（当前队列：${m.queue_size} 条）`);
       break;
+    case 'message_injected':
+      addRow('sys', `📨 用户消息已注入 Agent 上下文：${m.text}`);
+      updateQueueStatus(0);
+      break;
     case '_done':
       if(curTurn && !curTurn.answerEl.textContent){
         curTurn.answerEl.textContent='（本轮无最终回答）'; curTurn.answerEl.style.color='#8a9099';

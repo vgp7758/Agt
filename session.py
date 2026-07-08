@@ -136,6 +136,10 @@ class Session:
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
             msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn))
+            # 自主模式下用户插入的消息：在工具结果后以 system 消息注入，Agent 下一步就能看到
+            hint = getattr(self._current, "_user_hint", None)
+            if hint:
+                msgs.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
         return msgs
 
     @staticmethod

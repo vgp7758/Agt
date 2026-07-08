@@ -25,8 +25,8 @@ from tools import Tool, Toolbox
 # 故可从任意目录 `python /path/to/chat.py` 启动，在当前目录执行任务。
 WORKSPACE = Path.cwd()
 
-# 代码执行与 shell 的超时秒数
-TIMEOUT = 10
+# 代码执行与 shell 的超时秒数（可通过 set_timeout 工具运行时调整）
+TOOL_TIMEOUT = 10
 
 
 def _resolve(path: str) -> Path:
@@ -59,14 +59,13 @@ def run_python(code: str) -> str:
     try:
         proc = subprocess.run(
             [sys.executable, tmp],
-            capture_output=True, text=True, timeout=TIMEOUT, cwd=str(WORKSPACE),
-        )
+            capture_output=True, text=True, timeout=TOOL_TIMEOUT, cwd=str(WORKSPACE),        )
         out = proc.stdout
         if proc.returncode != 0 and proc.stderr:
             out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
         return out.strip() or "(无输出)"
     except subprocess.TimeoutExpired:
-        return f"[执行超时（>{TIMEOUT}s），已终止]"
+        return f"[执行超时（>{TOOL_TIMEOUT}s），已终止]"
     finally:
         try:
             os.unlink(tmp)
@@ -192,14 +191,31 @@ def run_shell(command: str) -> str:
     try:
         proc = subprocess.run(
             command, shell=True, capture_output=True, text=True,
-            timeout=TIMEOUT, cwd=str(WORKSPACE),
+            timeout=TOOL_TIMEOUT, cwd=str(WORKSPACE),
         )
         out = proc.stdout
         if proc.stderr:
             out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
         return out.strip() or "(无输出)"
     except subprocess.TimeoutExpired:
-        return f"[命令超时（>{TIMEOUT}s），已终止]"
+        return f"[命令超时（>{TOOL_TIMEOUT}s），已终止]"
+
+
+def set_tool_timeout(seconds: int) -> str:
+    """设置 run_python / run_shell 的超时秒数（默认 10）。
+    某些工具调用可能很长（如模拟、训练），可调大到 600（10分钟）甚至 1800（30分钟）。
+    seconds: 超时秒数（1~7200）。"""
+    global TOOL_TIMEOUT
+    if not (1 <= seconds <= 7200):
+        return f"❌ seconds 需在 1~7200 之间，收到 {seconds}"
+    old = TOOL_TIMEOUT
+    TOOL_TIMEOUT = seconds
+    return f"✅ 工具超时已从 {old}s 改为 {seconds}s"
+
+
+def get_tool_timeout() -> str:
+    """查看当前 run_python / run_shell 的超时秒数。"""
+    return f"当前工具超时：{TOOL_TIMEOUT}s"
 
 
 REAL_TOOLS = Toolbox(
@@ -211,6 +227,8 @@ REAL_TOOLS = Toolbox(
     Tool(grep),
     Tool(web_search),
     Tool(run_shell),
+    Tool(set_tool_timeout),
+    Tool(get_tool_timeout),
 )
 
 

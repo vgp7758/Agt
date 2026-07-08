@@ -233,7 +233,8 @@ class Agent:
                             self._emit({"type": "budget_hit"})
                             return self._wrap_up()
 
-                        self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens})
+                        self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens,
+                                    "model": self.llm.model_name})
                         resp = self.llm.chat(self.session.messages_for_llm(), tools=tool_schemas)
                         if resp.usage:
                             self.cumulative_tokens += resp.usage.get("total_tokens", 0)

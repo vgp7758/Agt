@@ -405,7 +405,7 @@ ws.onmessage=(ev)=>{
       }
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
-    case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token —`); break;
+    case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking': addTrace('think', '💭 '+m.text); break;
     case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
     case 'tool_call': addTrace('tool', `🔧 ${m.name}(${fmtArgs(m.arguments)})`); break;

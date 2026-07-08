@@ -314,4 +314,4 @@ async def _run_streaming(ws, agent, msg, images, queue, loop):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("web:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("web:app", host="0.0.0.0", port=8000, reload=False)

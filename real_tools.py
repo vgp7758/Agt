@@ -243,6 +243,7 @@ def make_autonomous_tools(agent) -> list:
         duration_minutes: 或者指定持续分钟数（如 30=半小时后结束）；
         prompt: 自动继续时使用的提示词（默认："当前为纯自主模式，请继续按照要求完成更多工作"）。
         二者选一即可；退出用 /autonomous off 或 exit_autonomous_mode 工具。"""
+        from datetime import datetime, timedelta
         try:
             if duration_minutes is not None:
                 target = datetime.now() + timedelta(minutes=int(duration_minutes))
@@ -257,7 +258,6 @@ def make_autonomous_tools(agent) -> list:
                     target = datetime.strptime(f"{today} {end_time}", "%Y-%m-%d %H:%M")
                     # 如果时间已过，算明天
                     if target < datetime.now():
-                        from datetime import timedelta
                         target += timedelta(days=1)
             else:
                 return "[参数缺失] 请提供 end_time（如 '17:30' 或 '2026-07-08 17:30'）或 duration_minutes（持续分钟数）"

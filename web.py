@@ -72,9 +72,6 @@ def _get_or_create_agent() -> Agent:
     agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
                   max_steps=50, token_budget=80000, verbose=False, on_event=_broadcast,
                   snapshot_manager=_snap)
-    agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
-                  max_steps=50, token_budget=80000, verbose=False, on_event=on_event,
-                  snapshot_manager=_snap)
     for t in _MCP_TOOLS:
         agent.tools.register(t)
     for t in make_subagent_tools(agent):

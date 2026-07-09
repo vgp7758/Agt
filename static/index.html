@@ -409,6 +409,19 @@ ws.onmessage=(ev)=>{
     case 'thinking': addTrace('think', '💭 '+m.text); break;
     case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
     case 'tool_call': addTrace('tool', `🔧 ${m.name}(${fmtArgs(m.arguments)})`); break;
+    case 'tool_stream':
+      // 流式输出：追加到当前 trace 的最后一个 stream 行，或新建
+      if(!curTurn) newTurn();
+      const last = curTurn.traceBox.lastElementChild;
+      if(last && last.classList.contains('ev') && last.dataset.stream){
+        last.textContent += m.text; scrollBottom();
+      } else {
+        const e=document.createElement('div'); e.className='ev res'; e.dataset.stream='1'; e.textContent=m.text; curTurn.traceBox.appendChild(e); scrollBottom();
+      }
+      break;
+    case 'tool_progress':
+      addTrace('warn', `⏳ ${m.name} 运行中 ${m.elapsed}s，${m.lines||0} 行输出`);
+      break;
     case 'tool_result': addTrace('res', `→ ${m.result}`); break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
     case 'answer': case 'wrap_answer': finishAnswer(m.text); break;

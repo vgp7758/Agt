@@ -14,9 +14,12 @@
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from tools import Tool, Toolbox
@@ -27,6 +30,9 @@ WORKSPACE = Path.cwd()
 
 # 代码执行与 shell 的超时秒数（可通过 set_timeout 工具运行时调整）
 TOOL_TIMEOUT = 10
+
+# 工具执行进度回调（由 agent 在执行工具前设置；流式输出/心跳通过它推给 UI）
+_tool_emit = None
 
 
 def _resolve(path: str) -> Path:
@@ -51,21 +57,91 @@ def _py_check(target: Path) -> str:
     except SyntaxError as e:
         return f"\n⚠️ 语法错误 {e.filename or target.name}:{e.lineno}:{e.offset} — {e.msg}"
     return ""
+def _run_subprocess_streaming(args, name, shell=False):
+    """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
+    通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。"""
+    proc = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, cwd=str(WORKSPACE), shell=shell,
+        bufsize=1, encoding="utf-8", errors="replace",
+    )
+    start = time.time()
+
+    # reader 线程：逐行读 stdout → queue
+    line_q: queue.Queue = queue.Queue()
+
+    def _reader():
+        try:
+            for line in proc.stdout:
+                line_q.put(line)
+        except Exception:
+            pass
+        line_q.put(None)  # EOF
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    output_lines = []
+    stream_buf = []
+    last_hb = start
+    last_flush = start
+
+    while True:
+        try:
+            line = line_q.get(timeout=0.5)
+        except queue.Empty:
+            line = "__poll__"  # 无输出，走心跳/超时检查
+
+        if line is None:
+            break  # EOF
+        elif line != "__poll__":
+            output_lines.append(line)
+            stream_buf.append(line)
+
+        now = time.time()
+        elapsed = now - start
+
+        # 流式输出（每 ~1 秒 flush 一次，避免事件风暴）
+        if stream_buf and now - last_flush >= 1.0:
+            if _tool_emit:
+                _tool_emit({"type": "tool_stream", "name": name,
+                            "text": "".join(stream_buf), "elapsed": round(elapsed, 1)})
+            stream_buf = []
+            last_flush = now
+
+        # 心跳（每 30 秒）
+        if now - last_hb >= 30.0:
+            if _tool_emit:
+                preview = "".join(output_lines[-5:])[-200:]
+                _tool_emit({"type": "tool_progress", "name": name,
+                            "elapsed": round(elapsed, 1), "lines": len(output_lines),
+                            "preview": preview})
+            last_hb = now
+
+        # 超时
+        if elapsed > TOOL_TIMEOUT:
+            proc.kill()
+            proc.wait()
+            if stream_buf and _tool_emit:
+                _tool_emit({"type": "tool_stream", "name": name, "text": "".join(stream_buf)})
+            return (f"[执行超时（>{TOOL_TIMEOUT}s），已终止。"
+                    f"如任务确实需要更长时间，先调用 set_tool_timeout(seconds) "
+                    f"调大超时（最大 7200s=2小时），再重试。]")
+
+    proc.wait()
+    # 最终 flush
+    if stream_buf and _tool_emit:
+        _tool_emit({"type": "tool_stream", "name": name, "text": "".join(stream_buf)})
+
+    return "".join(output_lines).strip() or "(无输出)"
+
+
 def run_python(code: str) -> str:
-    """运行一段 Python 代码，返回标准输出（出错时附 stderr）。独立子进程执行，超时 10 秒。"""
+    """运行一段 Python 代码，实时流式输出（支持长任务进度）。独立子进程执行。"""
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmp = f.name
     try:
-        proc = subprocess.run(
-            [sys.executable, tmp],
-            capture_output=True, text=True, timeout=TOOL_TIMEOUT, cwd=str(WORKSPACE),        )
-        out = proc.stdout
-        if proc.returncode != 0 and proc.stderr:
-            out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
-        return out.strip() or "(无输出)"
-    except subprocess.TimeoutExpired:
-        return f"[执行超时（>{TOOL_TIMEOUT}s），已终止。如任务确实需要更长时间，先调用 set_tool_timeout(seconds) 调大超时（最大 7200s=2小时），再重试。]"
+        return _run_subprocess_streaming([sys.executable, tmp], "run_python")
     finally:
         try:
             os.unlink(tmp)
@@ -187,18 +263,8 @@ def web_search(query: str) -> str:
 
 
 def run_shell(command: str) -> str:
-    """执行一条系统 shell 命令，返回输出。超时 10 秒。【最强大也最危险，慎用】。"""
-    try:
-        proc = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=TOOL_TIMEOUT, cwd=str(WORKSPACE),
-        )
-        out = proc.stdout
-        if proc.stderr:
-            out += ("\n[stderr]\n" + proc.stderr) if out else proc.stderr
-        return out.strip() or "(无输出)"
-    except subprocess.TimeoutExpired:
-        return f"[命令超时（>{TOOL_TIMEOUT}s），已终止。如任务确实需要更长时间，先调用 set_tool_timeout(seconds) 调大超时（最大 7200s=2小时），再重试。]"
+    """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
+    return _run_subprocess_streaming(command, "run_shell", shell=True)
 
 
 def set_tool_timeout(seconds: int) -> str:

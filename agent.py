@@ -62,6 +62,14 @@ class Agent:
         self.goal_check_script: str = ""       # 目标达成验证脚本(Python，输出 PASS=达成)
 
     # ========== 事件输出 ==========
+    def _print_only_emit(self, event: dict):
+        """CLI 模式的流式回调：tool_stream/tool_progress 直接打印。"""
+        t = event.get("type")
+        if t == "tool_stream":
+            print(f"{GRAY}{event.get('text', '')}{RESET}", end="", flush=True)
+        elif t == "tool_progress":
+            print(f"{GRAY}⏳ {event['name']} 已运行 {event['elapsed']}s，{event.get('lines', 0)} 行输出{RESET}")
+
     def _emit(self, event: dict):
         """发一个事件：回调 on_event（Web）；verbose 时打印（CLI）。"""
         if self.on_event:
@@ -110,6 +118,11 @@ class Agent:
             print(f"\n{GRAY}🔁 自主继续：{e['text']}{RESET}")
         elif t == "autonomous_next":
             print(f"{GRAY}🔁 准备自主继续：{e['text']}{RESET}")
+        elif t == "tool_stream":
+            # CLI 模式：流式输出直接 print，不加换行（全靠子进程自己控制）
+            pass  # _print_only_emit 已在流式回调中处理
+        elif t == "tool_progress":
+            print(f"{GRAY}⏳ {e['name']} 运行中 {e['elapsed']}s，{e.get('lines',0)} 行输出{RESET}")
         elif t == "message_queued":
             print(f"{GRAY}📨 消息已入队（队列大小：{e['queue_size']}）{RESET}")
 
@@ -271,6 +284,9 @@ class Agent:
                         # 执行工具
                         calls = resp.tool_calls
                         step = Step(reasoning=resp.reasoning)
+                        # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
+                        import real_tools as _rt
+                        _rt._tool_emit = self.on_event if self.on_event else (self._print_only_emit if self.verbose else None)
                         if len(calls) == 1:
                             tc = calls[0]
                             self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
@@ -289,6 +305,7 @@ class Agent:
                                             "result": self._truncate(result), "parallel": True})
                                 step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
                                                                  arguments=tc["arguments"], result=result))
+                        _rt._tool_emit = None  # 清理
                         self.session.add_step(step)
                         # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
                         if self.autonomous_mode and self.pending_messages:

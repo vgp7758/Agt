@@ -129,6 +129,7 @@ let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
 let expandedFields=new Set();      // 展开的 object 字段键: "nodeId::fieldName::in|out"
+let _pendingHandles=[];            // 连线断开 handle（延后到节点之上绘制）
 
 // ============ 工具 ============
 function elm(tag,attrs={},text){
@@ -202,6 +203,7 @@ function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 // ============ 渲染 ============
 function renderAll(){
   svg.innerHTML='';
+  _pendingHandles=[];
   // defs（箭头）
   const defs=elm('defs');
   defs.innerHTML=`<marker id="arrowFlow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#fff"/></marker>
@@ -237,10 +239,8 @@ function renderAll(){
       const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
       path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
       svg.appendChild(path);
-      // 目标端断开 handle：从这里拽出，松手空白即断开
-      const handle=elm('circle',{cx:tp.x,cy:tp.y,r:4,fill:col,stroke:'#fff','stroke-width':1,class:'edge-handle',style:'cursor:grab'});
-      handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect({kind:'var',key,tgtNode:tn.id,tgtField:p.name},sx,col);};
-      svg.appendChild(handle);
+      // 目标端断开 handle：延后到节点之上绘制（避免被节点遮挡）
+      _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:p.name},sp:sx,color:col});
     });
   });
 
@@ -255,14 +255,19 @@ function renderAll(){
     if(ed.sourcePortID){
       svg.appendChild(elm('text',{x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2-8,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
     }
-    // 目标端断开 handle
-    const handle=elm('circle',{cx:tp.x,cy:tp.y,r:5,fill:'#fff',stroke:'#533483','stroke-width':1.5,class:'edge-handle',style:'cursor:grab'});
-    handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect({kind:'flow',i,sp},sp,'#fff');};
-    svg.appendChild(handle);
+    // 目标端断开 handle：延后绘制
+    _pendingHandles.push({x:tp.x,y:tp.y,r:5,fill:'#fff',stroke:'#533483',info:{kind:'flow',i},sp:sp,color:'#fff'});
   });
 
   // ---- 节点 ----
   WF.nodes.forEach(n=>svg.appendChild(renderNode(n)));
+
+  // ---- 连线断开 handle（最上层，避免被节点遮挡）----
+  _pendingHandles.forEach(h=>{
+    const handle=elm('circle',{cx:h.x,cy:h.y,r:h.r,fill:h.fill,stroke:h.stroke,'stroke-width':1.5,class:'edge-handle',style:'cursor:grab'});
+    handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect(h.info,h.sp,h.color);};
+    svg.appendChild(handle);
+  });
 
   // ---- 拖拽临时线 ----
   if(edgeFrom){

@@ -959,7 +959,25 @@ function setField(kind,i,field,v){
   showProps();renderAll();}
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
-function setSubWf(v){const n=findN(selNode);n.data.inputs.workflowId=v;}
+async function setSubWf(v){
+  const n=findN(selNode);n.data.inputs.workflowId=v;
+  if(!v){showProps();return;}
+  // 拉取目标工作流的 entry/exit 定义
+  try{
+    const r=await api('GET','/api/wf/'+v);
+    if(r.error){toast(r.error);showProps();return;}
+    const canvas=r.canvas;
+    const entry=(canvas.nodes||[]).find(nn=>nn.id==='100001');
+    const exit=(canvas.nodes||[]).find(nn=>nn.id==='900001');
+    // 输入 = entry 的 outputs（ref 格式）
+    n.data.inputs.inputParameters=(entry?.data?.outputs||[]).map(o=>({name:o.name,input:{type:o.type||'string',schema:o.schema,value:{type:'ref',content:{source:'block-output',blockID:'',name:o.name}}}}));
+    // 输出 = exit 的 inputParameters（子工作流返回的字段）
+    n.data.outputs=(exit?.data?.inputs?.inputParameters||[]).map(p=>({name:p.name,type:p.input?.type||'string',description:''}));
+    n.data.inputs.spaceId=''; n.data.inputs.type=0;
+    toast('已同步 '+v+' 的入参('+n.data.inputs.inputParameters.length+')和出参('+n.data.outputs.length+')');
+  }catch(e){toast('同步失败: '+e);}
+  showProps();renderAll();
+}
 // 复合节点配置
 function addLocalVar(){const n=findN(selNode);n.data.inputs.variableParameters=n.data.inputs.variableParameters||[];n.data.inputs.variableParameters.push({name:'var'+n.data.inputs.variableParameters.length,input:{type:'string',value:{type:'literal',content:''}}});showProps();}
 function setLocalVar(i,field,v){const n=findN(selNode);const vp=n.data.inputs.variableParameters[i];if(field==='name')vp.name=v;if(field==='init')vp.input.value.content=v;if(field==='type')vp.input.type=v;showProps();}

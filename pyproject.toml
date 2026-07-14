@@ -47,6 +47,7 @@ dev = ["pytest>=7", "pytest-asyncio>=0.21"]
 
 [project.scripts]
 agt = "src.chat:main"
+agt-web = "src.web:main"
 
 [project.urls]
 Homepage = "https://github.com/vgp7758/Agt"

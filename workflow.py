@@ -823,8 +823,12 @@ def _handle_input_receiver(node: dict, ctx) -> dict:
     raise WorkflowError("InputReceiver(30) 需要交互式用户输入，工具模式下不支持（仅 chatflow 场景）")
 
 
-# type → 处理器。Entry/Exit 在调度器里特判；Break(19)/Continue(29) 在复合体调度里判类型；31=注释忽略。
+# type → 处理器。Entry(1)/Exit(2) 在顶层调度器里特判；Break(19)/Continue(29) 在复合体调度里判类型；31=注释忽略。
+# 子画布内可能有 type 1/2 作为视觉标记——通过处理（不报错）。
+def _passthrough(node, ctx): return {"outputs": {}, "port": None}
 NODE_HANDLERS = {
+    "1": _passthrough,
+    "2": _passthrough,
     "3": _handle_llm,
     "5": _handle_code,
     "15": _handle_text,

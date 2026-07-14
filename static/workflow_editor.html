@@ -722,8 +722,8 @@ function showProps(){
     h+=renderIOFields(nodeOutputs(n),'out');
   }
 
-  // 批处理（所有非 entry/exit 节点）
-  if(!['1','2'].includes(n.type)){
+  // 批处理（非 entry/exit、非复合节点）
+  if(!['1','2','21','28'].includes(n.type)){
     h+=renderBatchConfig(n);
   }
 
@@ -894,24 +894,35 @@ function openComposite(nodeId){
   _compositeStack.push({parentId:_currentParent, name:WF.name||'', nodes:WF.nodes, edges:WF.edges});
   _currentParent=nodeId;
   n.blocks=n.blocks||[]; n.edges=n.edges||[];
-  // 空复合节点：自动生成模板（迭代上下文节点）
-  if(!n.blocks.length){
-    const inList=n.data.inputs?.inputParameters?.find(p=>p.input?.type==='list');
-    const itemName=inList?.name||'input';
-    const varNames=(n.data.inputs?.variableParameters||[]).map(v=>v.name);
-    let hintText='# 可用变量(通过父节点 '+nodeId+' ref):';
-    hintText+='\n# - '+itemName+': 当前元素  - index: 当前索引(0起)';
-    if(varNames.length) hintText+='\n# 循环变量: '+varNames.join(', ');
-    hintText+='\n# 在此添加节点处理每个元素';
-    const tplId=genId();
-    const tplNode={id:tplId,type:'15',x:120,y:80,w:280,
-      data:{nodeMeta:{title:'迭代处理'},inputs:{method:'concat',inputParameters:[],
-        concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:hintText}}}]},
-        outputs:[{name:'output',type:'string'}]}};
-    n.blocks=[tplNode];
-    n.edges=[];
-    toast('已生成模板。可用 ref: '+itemName+', index'+(varNames.length?', '+varNames.join(', '):''));
+  // 自动生成子画布控制点模板（始终存在，无论 blocks 是否为空）
+  const inList=n.data.inputs?.inputParameters?.find(p=>p.input?.type==='list');
+  const itemName=inList?.name||'input';
+  const varNames=(n.data.inputs?.variableParameters||[]).map(v=>v.name);
+  const ENTRY_ID='__entry__', CONT_ID='__continue__', BREAK_ID='__break__';
+  // 移除非控制点的旧 blocks 中的 entry/continue/break（若从旧模板升级）
+  n.blocks=(n.blocks||[]).filter(b=>!['__entry__','__continue__','__break__'].includes(b.id));
+  // 入口节点：展示可用变量（item/index/本地变量）
+  let ctxOuts=[{name:itemName,type:'string',description:'当前元素'},{name:'index',type:'integer',description:'当前索引(0起)'}];
+  varNames.forEach(vn=>{ctxOuts.push({name:vn,type:'string',description:'本地变量(可被 LoopSetVariable 修改)'});});
+  const entryNode={id:ENTRY_ID,type:'1',x:60,y:80,w:200,
+    data:{nodeMeta:{title:'迭代入口'},outputs:ctxOuts,trigger_parameters:[]}};
+  // Break 控制点
+  const breakNode={id:BREAK_ID,type:'19',x:700,y:80,w:120,
+    data:{nodeMeta:{title:'中断(Break)'}}};
+  // Continue 控制点（正常结束本轮→下一轮）
+  const contNode={id:CONT_ID,type:'2',x:700,y:200,w:140,
+    data:{nodeMeta:{title:'继续(Continue)'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}}};
+  // 组装：入口放最前，出口放最后；保理用户已有的中间节点
+  const userBlocks=n.blocks.filter(b=>!['__entry__','__continue__','__break__'].includes(b.id));
+  n.blocks=[entryNode,...userBlocks,breakNode,contNode];
+  // 基础连线：入口 → (第一个用户节点 或 继续) → 继续
+  if(userBlocks.length){
+    n.edges=(n.edges||[]).filter(e=>e.sourceNodeID!==ENTRY_ID&&e.sourceNodeID!==CONT_ID&&e.sourceNodeID!==BREAK_ID);
+    if(!n.edges.length) n.edges=[{sourceNodeID:ENTRY_ID,targetNodeID:userBlocks[0].id,sourcePortID:''}];
+  }else{
+    n.edges=[{sourceNodeID:ENTRY_ID,targetNodeID:CONT_ID,sourcePortID:''}];
   }
+  toast('子画布已就绪。入口→你的节点→继续(下一轮) 或 中断(Break)。'+(varNames.length?' 本地变量: '+varNames.join(', '):''));
   // 给 blocks 里每个节点补位置
   n.blocks.forEach((b,i)=>{if(!b.x)b.x=120+i*30;if(!b.y)b.y=80+i*30;b.w=b.w||200;});
   WF.nodes=n.blocks; WF.edges=n.edges;
@@ -924,9 +935,12 @@ function openComposite(nodeId){
 }
 function exitComposite(){
   if(!_currentParent||!_compositeStack.length)return;
-  // 把当前编辑写回复合节点
+  // 把当前编辑写回复合节点（过滤控制点标记节点）
   const n=findN(_currentParent);
-  if(n){n.blocks=WF.nodes.map(m=>{const{id,type,data}=m;return{id,type,data};});n.edges=WF.edges.map(e=>({sourceNodeID:e.sourceNodeID,targetNodeID:e.targetNodeID,sourcePortID:e.sourcePortID||''}));}
+  if(n){
+    n.blocks=WF.nodes.filter(m=>!['__entry__','__continue__','__break__'].includes(m.id)).map(m=>{const{id,type,data}=m;return{id,type,data};});
+    n.edges=WF.edges.filter(e=>!['__entry__','__continue__','__break__'].includes(e.sourceNodeID)&&!['__entry__','__continue__','__break__'].includes(e.targetNodeID)).map(e=>({sourceNodeID:e.sourceNodeID,targetNodeID:e.targetNodeID,sourcePortID:e.sourcePortID||''}));
+  }
   // 恢复上层画布
   const prev=_compositeStack.pop();
   _currentParent=prev.parentId;

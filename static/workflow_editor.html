@@ -894,6 +894,20 @@ function openComposite(nodeId){
   _compositeStack.push({parentId:_currentParent, name:WF.name||'', nodes:WF.nodes, edges:WF.edges});
   _currentParent=nodeId;
   n.blocks=n.blocks||[]; n.edges=n.edges||[];
+  // 空复合节点：自动生成模板（迭代上下文代码节点）
+  if(!n.blocks.length){
+    const inList=n.data.inputs?.inputParameters?.find(p=>p.input?.type==='list');
+    const itemName=inList?.name||'input';
+    const vars=(n.data.inputs?.variableParameters||[]).map(v=>v.name);
+    const hint=`# 可用变量(通过父节点 ${nodeId} ref):
+# - ${itemName}: 当前元素  - index: 当前索引(0起)`;
+    const tplId=genId();
+    n.blocks=[{id:tplId,type:'15',x:120,y:80,w:280,
+      data:{nodeMeta:{title:'迭代处理'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:hint+'\n'+(vars.length?'# 循环变量: '+vars.join(', ')+'\n':'')+'# 在此添加节点处理每个元素，结果流向出口'}}]}},outputs:[{name:'output',type:'string'}]}
+    }];
+    n.edges=[];
+    toast('已生成模板。添加处理节点→连线→保存即可。可用 ref: '+itemName+', index'+(vars.length?', '+vars.join(', '):''));
+  }
   // 给 blocks 里每个节点补位置
   n.blocks.forEach((b,i)=>{if(!b.x)b.x=120+i*30;if(!b.y)b.y=80+i*30;b.w=b.w||200;});
   WF.nodes=n.blocks; WF.edges=n.edges;

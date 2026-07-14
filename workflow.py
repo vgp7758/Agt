@@ -524,8 +524,11 @@ def _handle_loop(node: dict, ctx) -> dict:
     ctx.loop_vars = loop_vars
 
     outer = ctx.node_outputs
+    saved_item, saved_idx = ctx.batch_item, ctx.batch_index
     last_exposed, last_body = {}, {}
     for idx, elem in enumerate(items[:_MAX_LOOP_ITERS]):
+        ctx.batch_item = elem
+        ctx.batch_index = idx
         exposed = dict(other_inputs)
         if elem_name is not None:
             exposed[elem_name] = elem
@@ -549,6 +552,7 @@ def _handle_loop(node: dict, ctx) -> dict:
     finally:
         ctx.node_outputs = saved
     ctx.loop_vars = None
+    ctx.batch_item, ctx.batch_index = saved_item, saved_idx
     return {"outputs": outputs, "port": None}
 
 
@@ -569,10 +573,13 @@ def _handle_batch(node: dict, ctx) -> dict:
             other_inputs[p.get("name")] = val
 
     outer = ctx.node_outputs
+    saved_item, saved_idx = ctx.batch_item, ctx.batch_index
     decl = node.get("data", {}).get("outputs", [])
     collected = {o.get("name"): [] for o in decl}
     last_body = {}
     for idx, elem in enumerate(elements[:_MAX_LOOP_ITERS]):
+        ctx.batch_item = elem
+        ctx.batch_index = idx
         exposed = dict(other_inputs)
         if elem_name is not None:
             exposed[elem_name] = elem
@@ -602,6 +609,7 @@ def _handle_batch(node: dict, ctx) -> dict:
                 outputs[nm] = resolve_value(o.get("input"), ctx)
             finally:
                 ctx.node_outputs = saved
+    ctx.batch_item, ctx.batch_index = saved_item, saved_idx
     return {"outputs": outputs, "port": None}
 
 

@@ -22,7 +22,7 @@ from mcp.client.stdio import stdio_client
 # mcp_client.py 自身目录（保留备查）。注意：server 子进程的默认 cwd 现在跟随 chat.py
 # 的启动目录(cwd)，而不再锚定在这里——这样 .mcp.json 的查找目录(WORKSPACE=cwd)与 server
 # 执行目录一致：从哪个目录启动就用哪个目录的脚本/.env。.mcp.json 里仍可用 "cwd" 字段覆盖。
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _extract_text(result) -> str:

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # 读与 config.py 同目录（项目根）的 .env，与启动 cwd 解耦——从任意目录启动都能拿到配置。
 # override=True：.env 优先于系统同名环境变量。
-load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 # === 模型字典（来源 models.py）===
 try:

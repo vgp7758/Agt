@@ -21,7 +21,7 @@ from typing import Optional
 
 from llm_client import LLMClient
 
-SESSIONS_DIR = Path(__file__).parent / "sessions"
+SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 

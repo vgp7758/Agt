@@ -804,6 +804,14 @@ function showProps(){
     h+='<div style="font-size:10px;color:#8a9099">'+(n.type==='20'?'在循环体内修改本地变量，left指向复合节点的变量名。':'修改全局变量(global_variable_app)，left为变量名路径。')+'</div>';
   }
 
+  // 子工作流: workflowId 下拉选择
+  if(n.type==='9'){
+    h+='<h3>子工作流</h3><label>调用 <select onchange="setSubWf(this.value)"><option value="">选择工作流…</option>';
+    const curWfId=n.data.inputs?.workflowId||'';
+    (WFLIST||[]).forEach(w=>{h+='<option value="'+w.name+'"'+(curWfId===w.name?' selected':'')+'>'+w.name+(w.description?' - '+w.description.slice(0,30):'')+'</option>';});
+    h+='</select></label>';
+  }
+
   // 选择器
   if(n.type==='8'){
     h+='<h3>选择器分支</h3><button onclick="addBranchCanvas()">+ 分支</button><div style="font-size:10px;color:#8a9099">分支条件与每分支的流程出口在画布节点上编辑。</div>';
@@ -951,6 +959,7 @@ function setField(kind,i,field,v){
   showProps();renderAll();}
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
+function setSubWf(v){const n=findN(selNode);n.data.inputs.workflowId=v;}
 // 复合节点配置
 function addLocalVar(){const n=findN(selNode);n.data.inputs.variableParameters=n.data.inputs.variableParameters||[];n.data.inputs.variableParameters.push({name:'var'+n.data.inputs.variableParameters.length,input:{type:'string',value:{type:'literal',content:''}}});showProps();}
 function setLocalVar(i,field,v){const n=findN(selNode);const vp=n.data.inputs.variableParameters[i];if(field==='name')vp.name=v;if(field==='init')vp.input.value.content=v;if(field==='type')vp.input.type=v;showProps();}
@@ -1067,8 +1076,9 @@ async function api(method,path,body){
 }
 async function loadFileList(){
   const r=await api('GET','/api/wf/list');const sel=document.getElementById('fileSel');
+  WFLIST=r.items||[];
   sel.innerHTML='<option value="">选择工作流…</option>';
-  (r.items||[]).forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
+  WFLIST.forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
 }
 async function openWf(name){
   const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}
@@ -1125,6 +1135,7 @@ function renderLegend(){
 
 // ============ Agent 工具节点 ============
 let AGENT_TOOLS=[];
+let WFLIST=[];  // 工作流文件列表(供子工作流下拉选择)
 async function loadTools(){
   const r=await api('GET','/api/tools');
   AGENT_TOOLS=r.tools||[];

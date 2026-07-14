@@ -10,6 +10,12 @@ from dotenv import load_dotenv
 # override=True：.env 优先于系统同名环境变量。
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
+# models.py 在项目根(含 token, gitignored)，确保根目录在 sys.path
+import sys
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 # === 模型字典（来源 models.py）===
 try:
     from models import MODELS, DEFAULT_MODEL

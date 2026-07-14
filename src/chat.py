@@ -9,9 +9,7 @@
 跑法：python chat.py
 退出：quit / Ctrl+C / Ctrl+D ；运行中 Ctrl+C 可打断当前任务但保留会话。
 """
-import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import config
 from agent import Agent

@@ -9,11 +9,8 @@
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-
 import asyncio
+from pathlib import Path
 import contextlib
 import io
 import json
@@ -44,7 +41,7 @@ _mcp.connect_from_config(str(WORKSPACE / ".mcp.json"))
 _MCP_TOOLS = _mcp.get_tools()
 _snap = SnapshotManager(WORKSPACE)
 
-_INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
+_INDEX_HTML = (Path(__file__).resolve().parent.parent / "static" / "index.html").read_text(encoding="utf-8")
 
 # ===== 全局 Agent 单例 + 事件缓冲 + 多客户端广播 =====
 _agent: Agent | None = None
@@ -102,7 +99,7 @@ async def _send(ws: WebSocket, obj: dict):
 
 
 _WF_DIR = WORKSPACE / ".agent" / "workflows"
-_EDITOR_HTML = (Path(__file__).resolve().parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
+_EDITOR_HTML = (Path(__file__).resolve().parent.parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
 
 
 def _safe_wf_path(name: str) -> Path:
@@ -478,6 +475,9 @@ async def _run_streaming(ws, agent, msg, images, queue, loop):
         _agent_busy = False
 
 
-if __name__ == "__main__":
+def main():
     import uvicorn
-    uvicorn.run("web:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("src.web:app", host="0.0.0.0", port=8000, reload=False)
+
+if __name__ == "__main__":
+    main()

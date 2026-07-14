@@ -1058,6 +1058,7 @@ window.onerror=function(msg,url,line,col,err){
   console.error(msg,err);
   return false;
 };
+window.onerror=function(m,u,l,c,e){if(m&&typeof m==='string'&&!m.includes('Script error'))toast('JS: '+(m+'').slice(0,150)+' L'+l);return false;};
 renderLegend();loadFileList();loadTools();renderAll();
 </script>
 </body></html>

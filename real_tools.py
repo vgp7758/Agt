@@ -149,16 +149,30 @@ def run_python(code: str) -> str:
             pass
 
 
-def read_file(path: str) -> str:
-    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取）。"""
+def read_file(path: str, start_line: int = None, end_line: int = None) -> str:
+    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取）。
+    start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
     if target.suffix.lower() in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
         text = _extract_text(target)
-        if text:
-            return text
-    return target.read_text(encoding="utf-8")
+        if text is None:
+            text = target.read_text(encoding="utf-8", errors="ignore")
+        lines = text.splitlines()
+    else:
+        text = target.read_text(encoding="utf-8")
+        lines = text.splitlines()
+    total = len(lines)
+    if start_line is None and end_line is None:
+        return text
+    start = max(1, start_line or 1) - 1
+    end = min(total, end_line or total)
+    if start >= total:
+        return f"[行号越界] 文件共 {total} 行，请求 start_line={start_line}"
+    selected = lines[start:end]
+    header = f"[{path} L{start+1}-L{end}/{total}]\n"
+    return header + "\n".join(selected)
 
 
 def write_file(path: str, content: str) -> str:

@@ -184,8 +184,11 @@ function nodeH(n){
   const rows=nodeRows(n);
   const inRows=rows.filter(r=>r.side==='in').length;
   const outRows=rows.filter(r=>r.side==='out').length;
-  return HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
+  let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
+  if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：加大文本框高度
+  return h;
 }
+const TEXTAREA_H=120;
 // 取某端口的 y（按它在所在侧的行序）
 function portY(n, side, field){
   const rows=nodeRows(n).filter(r=>r.side===side);
@@ -374,6 +377,16 @@ function renderNode(n){
     }
   }
 
+  // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）
+  if(n.type==='15'){
+    const fo=makeTextArea(n);
+    if(fo){
+      const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+      g.appendChild(fo);
+    }
+  }
+
   // 选择器：分支行 + 每分支流程出口（foreignObject）
   if(n.type==='8'){
     renderSelectorBranches(g,n);
@@ -430,6 +443,28 @@ function setInputLiteral(nodeId,i,value){
   const n=findN(nodeId);if(!n)return;
   n.data.inputs.inputParameters[i].input.value=value;
   renderAll();
+}
+
+// 文本节点大文本框
+function makeTextArea(n){
+  const fo=document.createElementNS(NS,'foreignObject');
+  fo.setAttribute('width',200);fo.setAttribute('height',100);
+  const ta=document.createElement('textarea');
+  const cp=(n.data.inputs.concatParams||[])[0];
+  const cur=cp?.input?.value?.content||'';
+  ta.value=cur;
+  // 列出可用占位符（输入字段名）作提示
+  const vars=nodeInputs(n).map(p=>p.name).filter(Boolean);
+  ta.placeholder=vars.length?('可用占位符: '+vars.map(v=>'{{'+v+'}}').join('  ')):'先添加输入字段，再用 {{字段名}} 引用';
+  ta.style.cssText='width:100%;height:100%;font-size:11px;font-family:monospace;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px;resize:none;box-sizing:border-box';
+  ta.oninput=()=>{
+    if(!n.data.inputs.concatParams||!n.data.inputs.concatParams.length)
+      n.data.inputs.concatParams=[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}];
+    n.data.inputs.concatParams[0].input.value.content=ta.value;
+  };
+  ta.onmousedown=(e)=>e.stopPropagation();  // 不触发节点拖动
+  fo.appendChild(ta);fo.style.pointerEvents='auto';
+  return fo;
 }
 
 // ============ 连线交互 ============

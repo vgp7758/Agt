@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 import chat as chatmod
@@ -98,9 +98,134 @@ async def _send(ws: WebSocket, obj: dict):
     await ws.send_text(json.dumps(obj, ensure_ascii=False))
 
 
+_WF_DIR = WORKSPACE / ".agent" / "workflows"
+_EDITOR_HTML = (Path(__file__).resolve().parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
+
+
+def _safe_wf_path(name: str) -> Path:
+    """解析工作流文件名，防越界。自动补 .json 后缀。"""
+    safe = Path(name).name
+    if safe != name or not safe:
+        raise ValueError(f"非法文件名: {name!r}")
+    if not safe.endswith(".json"):
+        safe = safe + ".json"
+    return _WF_DIR / safe
+
+
 @app.get("/")
 async def index():
     return HTMLResponse(_INDEX_HTML)
+
+
+@app.get("/editor")
+async def workflow_editor():
+    return HTMLResponse(_EDITOR_HTML)
+
+
+# ===== 工作流编辑器 REST API =====
+
+@app.get("/api/wf/list")
+async def api_wf_list():
+    """列出所有工作流（名称+状态摘要）。"""
+    from workflow import workflows_info
+    items = []
+    for it in workflows_info(WORKSPACE):
+        items.append({"name": it["name"], "tool": it["tool"], "status": it["status"],
+                       "detail": it["detail"], "description": it["description"], "coze_url": it["coze_url"]})
+    return {"items": items}
+
+
+@app.get("/api/wf/{name}")
+async def api_wf_get(name: str):
+    """获取单个工作流的画布 JSON + meta。"""
+    try:
+        jf = _safe_wf_path(name)
+        mp = jf.with_name(jf.name + ".meta")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not jf.exists():
+        return {"error": f"工作流 {name!r} 不存在"}
+    import json as _j
+    canvas = _j.loads(jf.read_text(encoding="utf-8"))
+    meta = {}
+    if mp.exists():
+        try:
+            meta = _j.loads(mp.read_text(encoding="utf-8")) or {}
+        except Exception:
+            meta = {}
+    meta.setdefault("name", jf.stem)
+    return {"name": jf.stem, "canvas": canvas, "meta": meta}
+
+
+@app.put("/api/wf/{name}")
+async def api_wf_save(name: str, request: Request):
+    """保存工作流画布 + meta。请求体: {canvas, meta}。"""
+    import json as _j
+    try:
+        jf = _safe_wf_path(name)
+        mp = jf.with_name(jf.name + ".meta")
+    except ValueError as e:
+        return {"error": str(e)}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    canvas = body.get("canvas") or {}
+    meta = body.get("meta") or {}
+    meta.setdefault("name", name.replace(".json", ""))
+    _WF_DIR.mkdir(parents=True, exist_ok=True)
+    jf.write_text(_j.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
+    mp.write_text(_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 如果 Agent存在，刷新工作流工具
+    global _agent
+    if _agent is not None:
+        try:
+            refresh_workflow_tools(_agent.tools, WORKSPACE, _agent)
+        except Exception:
+            pass
+    return {"ok": True, "name": jf.stem}
+
+
+@app.post("/api/wf/create")
+async def api_wf_create(request: Request):
+    """创建新工作流。请求体: {name}。"""
+    import json as _j
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    wname = (body.get("name") or "").strip()
+    if not wname:
+        return {"error": "name 不能为空"}
+    import re
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", wname).strip("_") or "new_workflow"
+    jf = _WF_DIR / f"{safe}.json"
+    mp = jf.with_name(jf.name + ".meta")
+    _WF_DIR.mkdir(parents=True, exist_ok=True)
+    default_canvas = {"nodes": [
+        {"id": "100001", "type": "1", "data": {"outputs": [], "trigger_parameters": []}},
+        {"id": "900001", "type": "2", "data": {"inputs": {"terminatePlan": "returnVariables", "inputParameters": []}}}
+    ], "edges": [], "versions": {}}
+    default_meta = {"name": safe, "description": "", "enabled": True, "coze_url": ""}
+    jf.write_text(_j.dumps(default_canvas, ensure_ascii=False, indent=2), encoding="utf-8")
+    mp.write_text(_j.dumps(default_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "name": safe}
+
+
+@app.delete("/api/wf/{name}")
+async def api_wf_delete(name: str):
+    """删除工作流文件 + meta。"""
+    try:
+        jf = _safe_wf_path(name)
+        mp = jf.with_name(jf.name + ".meta")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not jf.exists():
+        return {"error": f"工作流 {name!r} 不存在"}
+    jf.unlink()
+    if mp.exists():
+        mp.unlink()
+    return {"ok": True}
 
 
 @app.websocket("/ws")

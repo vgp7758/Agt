@@ -1220,6 +1220,21 @@ def workflows_info(workspace=None) -> list[dict]:
     return out
 
 
+def get_auto_workflows(workspace: Path = None) -> list[dict]:
+    """返回所有 auto:true 的工作流 [{name, canvas, meta, auto_param}]。agent.run() 调用。"""
+    out = []
+    for it in scan_workflows(workspace):
+        meta = it.get("meta") or {}
+        if meta.get("auto") and it.get("canvas") and not it.get("error"):
+            out.append({
+                "name": it["name"],
+                "canvas": it["canvas"],
+                "meta": meta,
+                "auto_param": meta.get("auto_param", "query"),  # 默认参数名
+            })
+    return out
+
+
 def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple[list, list]:
     """每轮调用：清掉旧 wf_* 工具，按当前 .agent/workflows/ 重新注册。返回 (ok_names, broken)。"""
     workspace = workspace or WORKSPACE

@@ -73,6 +73,8 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
+  <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
+  <input id="fautoparam" placeholder="自动参数名(默认query)" style="width:130px" onchange="WF.meta.auto_param=this.value">
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
   <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
   <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
@@ -1109,6 +1111,8 @@ async function openWf(name){
   document.getElementById('fileSel').value=name;
   document.getElementById('fdesc').value=WF.meta.description||'';
   document.getElementById('fcoze').value=WF.meta.coze_url||'';
+  document.getElementById('fauto').checked=!!WF.meta.auto;
+  document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
   document.getElementById('fstatus').textContent='';
   selNode=null;showProps();renderAll();toast('已打开 '+name);
 }
@@ -1119,6 +1123,8 @@ async function saveWf(){
   document.getElementById('fstatus').textContent='保存中…';
   WF.meta.description=document.getElementById('fdesc').value;
   WF.meta.coze_url=document.getElementById('fcoze').value;
+  WF.meta.auto=document.getElementById('fauto').checked;
+  WF.meta.auto_param=document.getElementById('fautoparam').value||'query';
   // 保存时剥离 x/y/w/h（这些是编辑器视图状态）
   const canvas={nodes:WF.nodes.map(n=>{const c={id:n.id,type:n.type,data:JSON.parse(JSON.stringify(n.data))};return c;}),edges:WF.edges,versions:{}};
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta});

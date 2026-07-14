@@ -464,6 +464,9 @@ ws.onmessage=(ev)=>{
       if(m.url){ window.open(m.url, '_blank'); }
       else addRow('sys', '⚠️ 该工作流未配置 coze_url');
       break;
+    case 'auto_wf':
+      addTrace('auto', '🔍 自动工作流['+m.name+']: '+m.text);
+      break;
     case 'workflow_message':
       addRow('sys', '💬 '+m.text);
       break;

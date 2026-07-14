@@ -743,21 +743,49 @@ def _handle_subworkflow(node: dict, ctx) -> dict:
 
 
 def _handle_plugin(node: dict, ctx) -> dict:
-    """type 4 插件：按 apiName 匹配 Agent 工具箱中的工具并调用（把工作流接入既有工具/MCP 生态）。"""
+    """type 4 插件/工具节点：按 toolName（或 apiName）匹配 Agent 工具箱中的工具并调用。
+    输入参数取自 inputParameters；输出默认 raw（工具原始返回），若用户编辑了 outputs 字段，
+    则尝试从 raw（先 JSON 解析，再支持 a.b 点号取值）按字段名解析填充。"""
     inputs = node.get("data", {}).get("inputs", {})
-    api_name = None
-    for p in inputs.get("apiParam", []) or []:
-        if p.get("name") == "apiName":
-            api_name = resolve_value(p.get("input"), ctx)
+    tool_name = node.get("data", {}).get("toolName") or inputs.get("toolName")
+    if not tool_name:
+        for p in inputs.get("apiParam", []) or []:
+            if p.get("name") == "apiName":
+                tool_name = resolve_value(p.get("input"), ctx)
     args = _resolve_input_params(inputs.get("inputParameters", []), ctx)
-    if not api_name:
-        raise WorkflowError("插件节点缺少 apiName")
+    if not tool_name:
+        raise WorkflowError("工具节点缺少 toolName")
     if ctx.tools is None:
-        raise WorkflowError("插件节点需要工具上下文(tools)")
-    if api_name not in ctx.tools:
-        raise WorkflowError(f"插件 {api_name!r} 未在工具箱中找到（按 apiName 匹配 Agent 工具）")
-    result = ctx.tools.call(api_name, args)
-    return {"outputs": {"output": result, "data": _try_parse(result)}, "port": None}
+        raise WorkflowError("工具节点需要工具上下文(tools)")
+    if tool_name not in ctx.tools:
+        raise WorkflowError(f"工具 {tool_name!r} 未在工具箱中找到")
+    raw = ctx.tools.call(tool_name, args)
+    outputs = {"raw": raw}
+    # 尝试解析 raw 为结构化，按用户声明的 outputs 字段填充
+    parsed = _try_parse(raw)
+    declared = node.get("data", {}).get("outputs", []) or []
+    for o in declared:
+        nm = o.get("name")
+        if not nm or nm == "raw":
+            continue
+        outputs[nm] = _extract_field(parsed if parsed else raw, nm, o)
+    return {"outputs": outputs, "port": None}
+
+
+def _extract_field(data, name: str, var: dict):
+    """从工具返回里抽取某字段：先直接取键，再点号路径，再按 description 提示取，失败返回 None。"""
+    if isinstance(data, dict):
+        if name in data:
+            return data[name]
+        if "." in name:
+            v = _dotted_get(data, name)
+            if v is not None:
+                return v
+        # 模糊：按 description 里写的键名
+        desc = (var.get("description") or "").strip()
+        if desc and desc in data:
+            return data[desc]
+    return None
 
 
 def _handle_output_emitter(node: dict, ctx) -> dict:

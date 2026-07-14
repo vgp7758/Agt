@@ -20,7 +20,8 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 .pal-item.branch{background:#6b3a1a}.pal-item.composite{background:#1a6b6b}
 .pal-item.data{background:#4a4a1a}.pal-item.ext{background:#4a1a4a}
 /* 中：画布 */
-#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative}
+#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab}
+#canvasWrap:active{cursor:grabbing}
 #svgCanvas{width:3000px;height:2200px;display:block}
 .grid-line{stroke:#ffffff08}
 .node-body{fill:#16213e;stroke:#533483;stroke-width:1.5}
@@ -95,8 +96,10 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
     <h3>外部</h3>
     <button class="pal-item ext" data-type="45">🌐 HTTP</button>
     <button class="pal-item ext" data-type="9">🔗 子工作流</button>
-    <button class="pal-item ext" data-type="4">🔌 插件</button>
     <button class="pal-item ext" data-type="13">💬 输出</button>
+    <h3>Agent 工具</h3>
+    <div id="toolPalette" style="font-size:10px;color:#8a9099">加载中…</div>
+    <input id="toolFilter" placeholder="🔍 过滤工具…" style="width:100%;margin-top:4px;font-size:11px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:3px">
     <h3>图例</h3>
     <div class="legend" id="legend"></div>
   </div>
@@ -122,6 +125,7 @@ let WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze
 let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
 let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
+let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
 
 // ============ 工具 ============
 function elm(tag,attrs={},text){
@@ -340,11 +344,14 @@ function finishVar(tgtId,field,color){
 svg.addEventListener('mousemove',(e)=>{
   if(dragNode){const n=findN(dragNode);if(n){n.x=e.clientX+dragDX;n.y=e.clientY+dragDY;renderAll();}}
   if(edgeFrom){edgeFrom.mx=e.clientX;edgeFrom.my=e.clientY;renderAll();}
+  if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
-svg.addEventListener('mouseup',()=>{dragNode=null;});
-svg.addEventListener('mouseup',(e)=>{
-  // 点空白取消连线/选择
-  if(edgeFrom&&e.target===svg){edgeFrom=null;renderAll();}
+svg.addEventListener('mouseup',()=>{dragNode=null;panning=false;});
+svg.addEventListener('mousedown',(e)=>{
+  if(e.target===svg||e.target.classList.contains('grid-line')){
+    panning=true;panX=e.clientX;panY=e.clientY;
+    const wrap=document.getElementById('canvasWrap');panStartX=wrap.scrollLeft;panStartY=wrap.scrollTop;
+  }
 });
 svg.addEventListener('click',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
@@ -617,8 +624,34 @@ function renderLegend(){
   const d=document.getElementById('legend');
   d.innerHTML='<div style="margin-bottom:3px"><span class="swatch" style="background:#fff"></span>流程线（白实线）</div>'+
     Object.entries(TYPE_COLOR).map(([t,c])=>`<div><span class="swatch" style="background:${c}"></span>${t}</div>`).join('')+
-    '<div style="margin-top:3px;font-size:9px">变量线=彩色虚线<br>同色端口才可互连</div>';
+    '<div style="margin-top:3px;font-size:9px">变量线=彩色虚线<br>同色端口才可互连<br>空白拖动=平移画布</div>';
 }
+
+// ============ Agent 工具节点 ============
+let AGENT_TOOLS=[];
+async function loadTools(){
+  const r=await api('GET','/api/tools');
+  AGENT_TOOLS=r.tools||[];
+  renderToolPalette('');
+}
+function renderToolPalette(filter){
+  const d=document.getElementById('toolPalette');
+  const f=filter.toLowerCase();
+  const list=AGENT_TOOLS.filter(t=>!f||t.name.toLowerCase().includes(f)||(t.description||'').toLowerCase().includes(f));
+  if(!list.length){d.innerHTML='<span style="color:#8a9099">无匹配</span>';return;}
+  d.innerHTML=list.map(t=>`<button class="pal-item ext" onclick="addToolNode('${t.name}')" title="${ext(t.description).slice(0,60)}">🔧 ${t.name}</button>`).join('');
+}
+function addToolNode(toolName){
+  const t=AGENT_TOOLS.find(x=>x.name===toolName);if(!t)return;
+  const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
+  const n={id:genId(),type:'4',x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:230,h:80,
+    data:{nodeMeta:{title:toolName},toolName,
+      inputs:{inputParameters},
+      outputs:[{name:'raw',type:'string',description:'工具原始返回'}]}};
+  WF.nodes.push(n);selNode=n.id;showProps();renderAll();
+}
+function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}
+document.getElementById('toolFilter').oninput=function(){renderToolPalette(this.value);};
 
 document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
 document.addEventListener('keydown',(e)=>{
@@ -630,6 +663,6 @@ document.addEventListener('keydown',(e)=>{
   }
 });
 window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
-renderLegend();loadFileList();renderAll();
+renderLegend();loadFileList();loadTools();renderAll();
 </script>
 </body></html>

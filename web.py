@@ -135,6 +135,21 @@ async def api_wf_list():
     return {"items": items}
 
 
+@app.get("/api/tools")
+async def api_tools():
+    """返回当前 Agent 已注册的所有工具（名+描述+参数schema），供编辑器生成工具节点。"""
+    agent = _get_or_create_agent()
+    out = []
+    for t in agent.tools:
+        s = t.schema["function"]
+        props = s.get("parameters", {}).get("properties", {}) or {}
+        params = []
+        for pname, psch in props.items():
+            params.append({"name": pname, "type": (psch.get("type") if isinstance(psch, dict) else "string") or "string"})
+        out.append({"name": s["name"], "description": s.get("description", ""), "params": params})
+    return {"tools": out}
+
+
 @app.get("/api/wf/{name}")
 async def api_wf_get(name: str):
     """获取单个工作流的画布 JSON + meta。"""

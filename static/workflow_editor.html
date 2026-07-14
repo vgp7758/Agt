@@ -192,7 +192,10 @@ function nodeH(n){
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
   if(n.type==='5') h+=40;            // 代码节点：预览行
-  if([21,28].includes(n.type)) h+=30; // 复合节点：编辑按钮
+  if(n.type==='8'){                  // 选择器：分支行高度
+    const brs=(n.data.inputs?.branches||[]).length;
+    h+=(brs+1)*22+8;
+  }
   return h;
 }
 const TEXTAREA_H=120;
@@ -619,14 +622,13 @@ function renderSelectorBranches(g,n){
       rI.onchange=()=>{ensureCond(br);br.cond.conditions[0].right={input:{type:'string',value:{type:'literal',content:rI.value}}};saveBranchCond(n,br);};
       const del=document.createElement('button');del.textContent='×';del.style.cssText='font-size:9px;padding:0 4px;background:#6b2020;color:#fff;border:none;border-radius:2px;cursor:pointer';
       del.onclick=()=>{n.data.inputs.branches.splice(branchesAll.indexOf(br),1);renderAll();};
-      [opS,lI,rI,del].forEach(c=>{c.onmousedown=(e)=>e.stopPropagation();div.appendChild(c);});
+      [lI,opS,rI,del].forEach(c=>{c.onmousedown=(e)=>e.stopPropagation();div.appendChild(c);});
     }else{
       const lab=document.createElement('span');lab.textContent='否则';lab.style.cssText='color:#8a9099;font-size:9px';div.appendChild(lab);
     }
     fo.appendChild(div);fo.style.pointerEvents='auto';g.appendChild(fo);
     yOff+=22;
   });
-  n.h=yOff+4;
   // 每分支的流程出口（标题栏下右侧）—— 重新画端口在节点右侧对应行
   branchesAll.forEach((br,i)=>{
     const yy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4+i*22+10;

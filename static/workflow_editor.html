@@ -561,6 +561,11 @@ function showProps(){
   h+=`<h3>输出字段 <button onclick="addIO('out')">+ 添加</button></h3>`;
   h+=renderIOFields(nodeOutputs(n),'out');
 
+  // 批处理（所有非 entry/exit 节点）
+  if(!['1','2'].includes(n.type)){
+    h+=renderBatchConfig(n);
+  }
+
   // LLM
   if(n.type==='3'){
     h+='<h3>LLM 提示词</h3>';
@@ -583,6 +588,53 @@ function showProps(){
   p.innerHTML=h;
 }
 
+// 批处理配置区
+function renderBatchConfig(n){
+  const b=n.data.inputs.batch||(n.data.inputs.batch={});
+  if(b.enabled===undefined)b.enabled=false;
+  let h='<h3>批处理（逐元素执行）</h3>';
+  h+=`<label><input type="checkbox" ${b.enabled?'checked':''} onchange="setBatch('enabled',this.checked)" style="width:auto"> 启用批处理</label>`;
+  if(!b.enabled)return h+'<div style="font-size:10px;color:#8a9099">启用后，节点对数组逐元素执行，输出 all_outputs / filtered_outputs / nth_output。</div>';
+  // array 源
+  h+='<label>数组源 (blockID.name) <input value="'+ext(b.input?.value?.content?.blockID)+'.'+ext(b.input?.value?.content?.name)+'" onchange="setBatchSource(this.value)" placeholder="节点ID.字段名"></label>';
+  // item 类型
+  h+=`<label>item 类型 <select onchange="setBatch('itemType',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${b.itemType===x?'selected':''}>${x}</option>`).join('')}</select></label>`;
+  if(b.itemType==='object'){
+    h+='<div style="font-size:10px;color:#8a9099">item 为 object 时，输入字段可引用 item.字段（在下方输入字段"源"选 item）。</div>';
+  }
+  // 筛选条件
+  h+='<h3 style="margin-top:8px">筛选条件 (filtered_outputs)</h3>';
+  const filt=b.filter||(b.filter={logic:2,conditions:[]});
+  if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});
+  const c=filt.conditions[0];
+  h+=`<div style="display:flex;gap:2px"><input value="${ext(c.left?.input?.value?.content?.name)}" placeholder="输出字段" onchange="setBatchCond('left',this.value)" style="flex:1">
+    <select onchange="setBatchCond('op',parseInt(this.value))" style="width:50px">${OPERATORS.map(o=>`<option value="${o.v}" ${c.operator===o.v?'selected':''}>${o.t}</option>`).join('')}</select>
+    <input value="${ext(c.right?.input?.value?.content)}" placeholder="值" onchange="setBatchCond('right',this.value)" style="flex:1"></div>`;
+  // nth
+  h+=`<label>nth（取 filtered 第几个；负/越界取最后）<input type="number" value="${ext(b.nth,0)}" onchange="setBatch('nth',parseInt(this.value)||0)"></label>`;
+  h+='<div style="font-size:10px;color:#8a9099">输入字段"源"可选：节点输出 / item(整个) / item.字段 / index。</div>';
+  return h;
+}
+function setBatch(k,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};n.data.inputs.batch[k]=v;showProps();}
+function setBatchSource(s){
+  const n=findN(selNode);const b=n.data.inputs.batch;
+  const[bid,name]=(s||'.').split('.');b.input={type:'list',value:{type:'ref',content:{source:'block-output',blockID:bid||'',name:name||''}}};showProps();
+}
+function setBatchCond(side,v){
+  const n=findN(selNode);const c=n.data.inputs.batch.filter.conditions[0];
+  if(side==='op')c.operator=v;
+  if(side==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}
+  if(side==='right')c.right.input.value.content=v;
+}
+function setInputSource(i,src){
+  const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
+  if(src==='item')p.input.value={type:'ref',content:{source:'loop-item',name:''}};
+  else if(src==='index')p.input.value={type:'ref',content:{source:'loop-index'}};
+  else if(src.startsWith('item.'))p.input.value={type:'ref',content:{source:'loop-item',name:src.slice(5)}};
+  else p.input.value={type:'literal',content:''};  // node: 回到连线模式
+  showProps();renderAll();
+}
+
 // 渲染输入/输出字段表（含 object 子字段 / list item 类型）
 function renderIOFields(arr,kind){
   if(!arr.length)return '<div style="color:#8a9099;font-size:11px">（无）</div>';
@@ -593,6 +645,24 @@ function renderIOFields(arr,kind){
       <td style="width:70px"><select onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td><button class="del" onclick="delField('${kind}',${i})">×</button></td></tr>`;
     h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
+    // 输入字段：若节点开启批处理，加"源"选择（节点输出/item/item.字段/index）
+    if(kind==='in'){
+      const n=findN(selNode);
+      if(n&&n.data.inputs.batch?.enabled){
+        const src=f.input?.value?.content?.source;
+        let srcType='node';
+        if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
+        else if(src==='loop-index')srcType='index';
+        h+=`<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource(${i},this.value)">
+          <option value="node" ${srcType==='node'?'selected':''}>节点输出(连线)</option>
+          <option value="item" ${srcType==='item'?'selected':''}>item(整个)</option>
+          <option value="index" ${srcType==='index'?'selected':''}>index</option></select>`;
+        if(srcType.startsWith('item.')){
+          h+=` <input value="${srcType.slice(5)}" placeholder="item字段" style="width:60px;font-size:10px" onchange="setInputSource(${i},'item.'+this.value)">`;
+        }
+        h+=`</td></tr>`;
+      }
+    }
     // list：选 item 类型
     if(t==='list'){
       const itemT=getListItemType(f);

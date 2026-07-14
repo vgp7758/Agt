@@ -91,6 +91,15 @@ def _resolve_ref(content: dict, ctx) -> object:
         block_id = str(content.get("blockID", ""))
         name = content.get("name", "")
         return _dotted_get(ctx.node_outputs.get(block_id, {}), name)
+    if source == "loop-item":
+        # 批处理模式：取当前 item（name 空=整个 item，name=字段名取子字段）
+        item = getattr(ctx, "batch_item", None)
+        if item is None:
+            return None
+        name = content.get("name", "")
+        return item if not name else _dotted_get(item, name)
+    if source == "loop-index":
+        return getattr(ctx, "batch_index", None)
     if source in ("global_variable_app", "global_variable_system", "global_variable_user"):
         path = content.get("path") or []
         return _dotted_get(ctx.global_vars, ".".join(str(p) for p in path))
@@ -835,6 +844,8 @@ class _Ctx:
         self.node_outputs: dict[str, dict] = {}
         self.global_vars: dict = {}
         self.loop_vars: dict | None = None   # 当前循环的累加变量（LoopSetVariable 读写）
+        self.batch_item = None               # 当前批处理的 item（loop-item source 用）
+        self.batch_index = None              # 当前批处理的 index（loop-index source 用）
         self.tools = tools
         self.llm = llm
         self.emit = emit
@@ -900,6 +911,121 @@ def _next_node(edges: list, node_id: str, port) -> str | None:
     return str(outs[0]["targetNodeID"])
 
 
+def _run_node_with_batch(node: dict, handler, ctx):
+    """执行一个节点；若其 data.inputs.batch.enabled，则对数组逐元素执行，输出三组结果。
+    返回与普通 handler 一致的 {outputs, port}。"""
+    batch = (node.get("data", {}).get("inputs", {}) or {}).get("batch") or {}
+    if not batch.get("enabled"):
+        return handler(node, ctx)
+
+    # 解析批处理数据源（array）
+    arr = resolve_value(batch.get("input"), ctx)
+    if isinstance(arr, str):
+        try:
+            arr = json.loads(arr)
+        except json.JSONDecodeError:
+            arr = [arr]
+    if not isinstance(arr, list):
+        arr = [arr] if arr is not None else []
+
+    # 逐元素执行：注入 batch_item/batch_index，调用 handler
+    all_outputs = []
+    saved_item, saved_idx = ctx.batch_item, ctx.batch_index
+    try:
+        for idx, item in enumerate(arr[:_MAX_LOOP_ITERS]):
+            ctx.batch_item = item
+            ctx.batch_index = idx
+            try:
+                r = handler(node, ctx)
+                all_outputs.append(r.get("outputs") or {})
+            except WorkflowError as e:
+                all_outputs.append({"_error": str(e)})  # 单次失败不中断
+            except Exception as e:
+                all_outputs.append({"_error": f"{type(e).__name__}: {e}"})
+    finally:
+        ctx.batch_item, ctx.batch_index = saved_item, saved_idx
+
+    # 组2：非 null/空 且满足 filter 条件
+    filt = batch.get("filter")
+    filtered = []
+    for out in all_outputs:
+        if not out or (len(out) == 1 and "_error" in out):
+            continue
+        if _is_null_output(out):
+            continue
+        if filt and not _eval_batch_filter(filt, out):
+            continue
+        filtered.append(out)
+
+    # 组3：filtered 的第 nth 个
+    nth = batch.get("nth", 0)
+    try:
+        nth = int(nth)
+    except (TypeError, ValueError):
+        nth = 0
+    if not filtered:
+        nth_output = None
+    elif nth < 0 or nth >= len(filtered):
+        nth_output = filtered[-1]
+    else:
+        nth_output = filtered[nth]
+
+    return {"outputs": {
+        "all_outputs": all_outputs,
+        "filtered_outputs": filtered,
+        "nth_output": nth_output,
+    }, "port": None}
+
+
+def _is_null_output(out: dict) -> bool:
+    """判断单次输出是否算 null（全空值）。"""
+    vals = [v for k, v in out.items() if k != "_error"]
+    if not vals:
+        return True
+    return all(v is None or v == "" or v == [] or v == {} for v in vals)
+
+
+def _eval_batch_filter(condition: dict, output: dict) -> bool:
+    """批处理筛选：复用 Selector 的 condition 结构，left 引用本次输出字段。
+    left 的 ref 用特殊 blockID='__batch_output__' 指向本次 output。"""
+    class _Proxy:
+        node_outputs = {"__batch_output__": output}
+        global_vars = {}
+    # 临时让 _eval_condition / _cmp 的 left ref 能解析到本次 output
+    conds = condition.get("conditions", [])
+    logic = condition.get("logic", 2)
+    results = []
+    for c in conds:
+        left_input = (c.get("left") or {}).get("input")
+        right_input = (c.get("right") or {}).get("input") if "right" in c else None
+        # 把 left 的 ref blockID 重定向到本次 output
+        l = _redirect_ref(left_input, output)
+        r = _resolve_filter_value(right_input, output)
+        results.append(_cmp(c.get("operator"), l, r))
+    if not results:
+        return True
+    return any(results) if logic == 1 else all(results)
+
+
+def _redirect_ref(block_input, output):
+    """若 block_input 是 ref(block-output)，重定向到本次 batch output；否则解析字面量。"""
+    if block_input is None:
+        return None
+    val = block_input.get("value", block_input) if isinstance(block_input, dict) else None
+    if isinstance(val, dict) and val.get("type") == "ref":
+        name = (val.get("content") or {}).get("name", "")
+        return _dotted_get(output, name)
+    if isinstance(val, dict) and val.get("type") == "literal":
+        return val.get("content")
+    return None
+
+
+def _resolve_filter_value(block_input, output):
+    if block_input is None:
+        return None
+    return _redirect_ref(block_input, output)
+
+
 def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000) -> str:
     """执行一个 Coze 画布，返回结束节点的输出（字符串）。"""
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
@@ -925,7 +1051,7 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
         handler = NODE_HANDLERS.get(ntype)
         if handler is None:
             raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）——该节点类型将在后续阶段支持")
-        result = handler(node, ctx)
+        result = _run_node_with_batch(node, handler, ctx)
         ctx.node_outputs[current] = result.get("outputs") or {}
         nxt = _next_node(edges, current, result.get("port"))
         if nxt is None:

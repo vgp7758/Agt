@@ -1,0 +1,5 @@
+{
+  "name": "batch_double",
+  "description": "对一组数字逐个翻倍并聚合成列表返回（演示：批处理 type28 + 代码节点 + 列表聚合）",
+  "enabled": true
+}

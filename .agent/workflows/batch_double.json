@@ -1,0 +1,43 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "nums", "type": "list", "schema": {"type": "integer"}, "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130050", "type": "28", "data": {
+      "inputs": {
+        "batchSize": {"type": "integer", "value": {"type": "literal", "content": 10}},
+        "concurrentSize": {"type": "integer", "value": {"type": "literal", "content": 1}},
+        "inputParameters": [
+          {"name": "input", "input": {"type": "list", "schema": {"type": "integer"}, "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "nums"}}}}
+        ]
+      },
+      "outputs": [
+        {"name": "doubled_list", "type": "list", "schema": {"type": "integer"}, "input": {"type": "list", "schema": {"type": "integer"}, "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130051", "name": "doubled"}}}}
+      ]
+    }, "blocks": [
+      {"id": "130051", "type": "5", "data": {"inputs": {
+        "inputParameters": [
+          {"name": "n", "input": {"type": "integer", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130050", "name": "input"}}}}
+        ],
+        "code": "async def main(args):\n    return {'doubled': args.params['n'] * 2}",
+        "language": 3
+      }, "outputs": [{"name": "doubled", "type": "integer"}]}}
+    ], "edges": [
+      {"sourceNodeID": "130050", "targetNodeID": "130051", "sourcePortID": "batch-function-inline-output"},
+      {"sourceNodeID": "130051", "targetNodeID": "130050", "sourcePortID": "", "targetPortID": "batch-function-inline-input"}
+    ]},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [
+        {"name": "result", "input": {"type": "list", "schema": {"type": "integer"}, "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130050", "name": "doubled_list"}}}}
+      ]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130050", "sourcePortID": ""},
+    {"sourceNodeID": "130050", "targetNodeID": "900001", "sourcePortID": "batch-output"}
+  ],
+  "versions": {"batch": "v2"}
+}

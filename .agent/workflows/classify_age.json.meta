@@ -1,0 +1,5 @@
+{
+  "name": "classify_age",
+  "description": "根据年龄判断成年/未成年并生成不同问候语（演示：选择器分支 type8 + 变量聚合 type32）",
+  "enabled": true
+}

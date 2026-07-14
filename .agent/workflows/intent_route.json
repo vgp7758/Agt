@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "query", "type": "string", "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130060", "type": "22", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "query", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "query"}}}}
+      ],
+      "intents": [{"name": "退款"}, {"name": "咨询"}],
+      "mode": "all"
+    }, "outputs": [{"name": "classificationId", "type": "integer"}, {"name": "reason", "type": "string"}]}},
+
+    {"id": "130061", "type": "3", "data": {"inputs": {
+      "inputParameters": [{"name": "query", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "query"}}}}],
+      "llmParam": [{"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用户想退款（原文：{{query}}）。用一句话安抚并简述退款流程。"}}}]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "130062", "type": "3", "data": {"inputs": {
+      "inputParameters": [{"name": "query", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "query"}}}}],
+      "llmParam": [{"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用户在咨询（原文：{{query}}）。用一句话友善解答。"}}}]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "130063", "type": "3", "data": {"inputs": {
+      "inputParameters": [{"name": "query", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "query"}}}}],
+      "llmParam": [{"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "未明确识别用户意图（原文：{{query}}）。用一句话引导用户说明需求。"}}}]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "130064", "type": "32", "data": {"inputs": {"mergeGroups": [
+      {"name": "reply", "variables": [
+        {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130061", "name": "output"}}},
+        {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130062", "name": "output"}}},
+        {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130063", "name": "output"}}}
+      ]}
+    ]}, "outputs": [{"name": "reply", "type": "string"}]}},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [{"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130064", "name": "reply"}}}}]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130060", "sourcePortID": ""},
+    {"sourceNodeID": "130060", "targetNodeID": "130061", "sourcePortID": "branch_0"},
+    {"sourceNodeID": "130060", "targetNodeID": "130062", "sourcePortID": "branch_1"},
+    {"sourceNodeID": "130060", "targetNodeID": "130063", "sourcePortID": "default"},
+    {"sourceNodeID": "130061", "targetNodeID": "130064", "sourcePortID": ""},
+    {"sourceNodeID": "130062", "targetNodeID": "130064", "sourcePortID": ""},
+    {"sourceNodeID": "130063", "targetNodeID": "130064", "sourcePortID": ""},
+    {"sourceNodeID": "130064", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

@@ -96,6 +96,18 @@ class Toolbox:
         self._tools[tool.name] = tool
         return self
 
+    def register_or_replace(self, tool: Tool) -> "Toolbox":
+        """注册工具，同名则覆盖（用于工作流每轮刷新：删了再加等价，但更省事）。"""
+        self._tools[tool.name] = tool
+        return self
+
+    def drop(self, prefix: str) -> int:
+        """删除所有名字以 prefix 开头的工具，返回删除数（工作流刷新前清掉旧的 wf_*）。"""
+        gone = [k for k in self._tools if k.startswith(prefix)]
+        for k in gone:
+            del self._tools[k]
+        return len(gone)
+
     def schemas(self) -> list[dict]:
         """产出传给 API 的 tools 列表。"""
         return [t.schema for t in self._tools.values()]

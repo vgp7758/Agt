@@ -234,6 +234,13 @@ class Agent:
                     self._emit({"type": "checkpoint", "sha": sha})
                 except Exception as e:
                     self._emit({"type": "warn", "text": f"快照失败：{type(e).__name__}: {e}"})
+            # 每轮扫描 .agent/workflows/，把工作流刷新成工具（新增/改动的工作流即时生效）
+            try:
+                from real_tools import WORKSPACE as _ws
+                from workflow import refresh_workflow_tools
+                refresh_workflow_tools(self.tools, _ws, self)
+            except Exception:
+                pass  # 工作流刷新绝不影响主循环
             tool_schemas = self.tools.schemas()
             continue_loop = False
             try:

@@ -1,0 +1,5 @@
+{
+  "name": "json_roundtrip",
+  "description": "解析输入的 JSON 文本，统计字段数与键名，再序列化返回（演示：FromJSON type59 + 代码 type5 + ToJSON type58）",
+  "enabled": true
+}

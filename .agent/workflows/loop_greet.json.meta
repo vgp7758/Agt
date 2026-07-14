@@ -1,0 +1,5 @@
+{
+  "name": "loop_greet",
+  "description": "循环遍历一组名字，逐个用 LLM 打招呼并拼接成一段问候（演示：循环 type21 array 模式 + 文本拼接 + LoopSetVariable 累加）",
+  "enabled": true
+}

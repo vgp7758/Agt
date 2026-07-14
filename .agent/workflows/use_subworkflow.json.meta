@@ -1,0 +1,5 @@
+{
+  "name": "use_subworkflow",
+  "description": "调用 greet 子工作流打招呼（演示：子工作流 type9，workflowId 按本地工作流名匹配）",
+  "enabled": true
+}

@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "name", "type": "string", "required": true},
+      {"name": "age", "type": "integer", "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130002", "type": "8", "data": {"inputs": {"branches": [
+      {"condition": {"logic": 2, "conditions": [
+        {"operator": 14,
+         "left": {"input": {"type": "integer", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "age"}}}},
+         "right": {"input": {"type": "integer", "value": {"type": "literal", "content": 18}}}}
+      ]}}
+    ]}}},
+
+    {"id": "130003", "type": "3", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "name", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "name"}}}},
+        {"name": "age", "input": {"type": "integer", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "age"}}}}
+      ],
+      "llmParam": [
+        {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用一句话欢迎成年用户 {{name}}，顺带提一句已满 {{age}} 岁。只输出问候语。"}}}
+      ]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "130004", "type": "3", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "name", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "name"}}}},
+        {"name": "age", "input": {"type": "integer", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "age"}}}}
+      ],
+      "llmParam": [
+        {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用一句话友善提醒未成年用户 {{name}}，提一下才 {{age}} 岁。只输出问候语。"}}}
+      ]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "130005", "type": "32", "data": {"inputs": {"mergeGroups": [
+      {"name": "greeting", "variables": [
+        {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130003", "name": "output"}}},
+        {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130004", "name": "output"}}}
+      ]}
+    ]}, "outputs": [{"name": "greeting", "type": "string"}]}},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [
+        {"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130005", "name": "greeting"}}}}
+      ]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130002", "sourcePortID": ""},
+    {"sourceNodeID": "130002", "targetNodeID": "130003", "sourcePortID": "true"},
+    {"sourceNodeID": "130002", "targetNodeID": "130004", "sourcePortID": "false"},
+    {"sourceNodeID": "130003", "targetNodeID": "130005", "sourcePortID": ""},
+    {"sourceNodeID": "130004", "targetNodeID": "130005", "sourcePortID": ""},
+    {"sourceNodeID": "130005", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

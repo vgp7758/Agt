@@ -1,0 +1,6 @@
+{
+  "name": "greet",
+  "description": "热情地和指定名字的人打招呼（演示工作流：开始→LLM→结束）",
+  "enabled": true,
+  "coze_url": "https://www.coze.com"
+}

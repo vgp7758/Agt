@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "json_str", "type": "string", "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130010", "type": "59", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "json_str"}}}}
+      ]
+    }, "outputs": [{"name": "output", "type": "object"}]}},
+
+    {"id": "130011", "type": "5", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "obj", "input": {"type": "object", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130010", "name": "output"}}}}
+      ],
+      "code": "async def main(args):\n    o = args.params['obj']\n    return {'count': len(o), 'keys': list(o.keys())}",
+      "language": 3
+    }, "outputs": [{"name": "count", "type": "integer"}, {"name": "keys", "type": "list"}]}},
+
+    {"id": "130012", "type": "58", "data": {"inputs": {
+      "inputParameters": [
+        {"name": "input", "input": {"type": "object", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130011", "name": ""}}}}
+      ]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [
+        {"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130012", "name": "output"}}}}
+      ]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130010", "sourcePortID": ""},
+    {"sourceNodeID": "130010", "targetNodeID": "130011", "sourcePortID": ""},
+    {"sourceNodeID": "130011", "targetNodeID": "130012", "sourcePortID": ""},
+    {"sourceNodeID": "130012", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

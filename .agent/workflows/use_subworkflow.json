@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "name", "type": "string", "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130070", "type": "9", "data": {"inputs": {
+      "workflowId": "greet",
+      "type": 0,
+      "inputParameters": [
+        {"name": "name", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "name"}}}}
+      ]
+    }, "outputs": [{"name": "output", "type": "string"}]}},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [{"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130070", "name": "output"}}}}]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130070", "sourcePortID": ""},
+    {"sourceNodeID": "130070", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

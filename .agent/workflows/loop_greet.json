@@ -1,0 +1,65 @@
+{
+  "nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [
+      {"name": "names", "type": "list", "schema": {"type": "string"}, "required": true}
+    ], "trigger_parameters": []}},
+
+    {"id": "130040", "type": "21", "data": {
+      "inputs": {
+        "loopType": "array",
+        "inputParameters": [
+          {"name": "input", "input": {"type": "list", "schema": {"type": "string"}, "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "names"}}}}
+        ],
+        "variableParameters": [
+          {"name": "greeting", "input": {"type": "string", "value": {"type": "literal", "content": ""}}}
+        ]
+      },
+      "outputs": [
+        {"name": "greetings", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130040", "name": "greeting"}}}}
+      ]
+    }, "blocks": [
+      {"id": "130041", "type": "3", "data": {"inputs": {
+        "inputParameters": [
+          {"name": "input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130040", "name": "input"}}}}
+        ],
+        "llmParam": [
+          {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用简短一句话跟 {{input}} 打招呼，只输出问候语本身，不要多余的话。"}}}
+        ]
+      }, "outputs": [{"name": "output", "type": "string"}]}},
+
+      {"id": "130042", "type": "15", "data": {"inputs": {
+        "method": "concat",
+        "inputParameters": [
+          {"name": "greeting", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130040", "name": "greeting"}}}},
+          {"name": "output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130041", "name": "output"}}}}
+        ],
+        "concatParams": [
+          {"name": "concatResult", "input": {"type": "string", "value": {"type": "literal", "content": "{{greeting}}\n{{output}}"}}}
+        ]
+      }, "outputs": [{"name": "output", "type": "string"}]}},
+
+      {"id": "130043", "type": "20", "data": {"inputs": {
+        "inputParameters": [
+          {"name": "greeting", "left": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130040", "name": "greeting"}}}, "right": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130042", "name": "output"}}}}
+        ]
+      }}}
+    ], "edges": [
+      {"sourceNodeID": "130040", "targetNodeID": "130041", "sourcePortID": "loop-function-inline-output"},
+      {"sourceNodeID": "130041", "targetNodeID": "130042", "sourcePortID": ""},
+      {"sourceNodeID": "130042", "targetNodeID": "130043", "sourcePortID": ""},
+      {"sourceNodeID": "130043", "targetNodeID": "130040", "sourcePortID": "", "targetPortID": "loop-function-inline-input"}
+    ]},
+
+    {"id": "900001", "type": "2", "data": {"inputs": {
+      "terminatePlan": "returnVariables",
+      "inputParameters": [
+        {"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130040", "name": "greetings"}}}}
+      ]
+    }}}
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130040", "sourcePortID": ""},
+    {"sourceNodeID": "130040", "targetNodeID": "900001", "sourcePortID": "loop-output"}
+  ],
+  "versions": {"loop": "v2"}
+}

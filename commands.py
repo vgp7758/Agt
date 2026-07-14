@@ -346,6 +346,33 @@ def _cmd_autonomous(ctx: CommandContext, args):
         print(f"❌ 未知子命令：{cmd}，输入 /autonomous 查看用法")
 
 
+def _cmd_workflows(ctx: CommandContext, args):
+    """工作流管理：/workflows（列出） / /workflows reload（重载）"""
+    from real_tools import WORKSPACE
+    from workflow import workflows_info, refresh_workflow_tools
+
+    sub = args[0].lower() if args else "list"
+    if sub == "reload":
+        ok, broken = refresh_workflow_tools(ctx.agent.tools, WORKSPACE, ctx.agent)
+        print(f"🔄 已重载：{len(ok)} 个可用" + (f"，{len(broken)} 个失败" if broken else ""))
+        for name, err in broken:
+            print(f"  ⚠️ {name}: {err}")
+        return
+
+    items = workflows_info(WORKSPACE)
+    if not items:
+        print("📁 .agent/workflows/ 为空或不存在（放 Coze 画布 .json + .json.meta 即可）")
+        return
+    mark = {"ok": "✅", "warn": "⚠️", "error": "❌", "disabled": "⏸"}
+    print(f"🧩 工作流（{len(items)} 个）：")
+    for it in items:
+        desc = f"（{it['description']}）" if it["description"] else ""
+        print(f"  {mark.get(it['status'], '?')} {it['tool']}{desc}")
+        if it["detail"]:
+            print(f"      └ {it['detail']}")
+    print("用法：/workflows reload  重新扫描注册")
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -358,6 +385,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
     reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
     reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")
+    reg.register("workflows", _cmd_workflows, "[reload]  列出/重载 .agent/workflows/ 工作流")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

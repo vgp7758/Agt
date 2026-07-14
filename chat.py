@@ -21,6 +21,7 @@ from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from prompts import build_system
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
+from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 
 _MODELS_DESC = "；".join(f"{n}（{m.get('desc', '').strip()}）" for n, m in config.MODELS.items())
 
@@ -104,8 +105,16 @@ def main():
     # 注册纯自主模式工具
     for t in make_autonomous_tools(agent):
         agent.tools.register(t)
+    # 注册工作流管理工具 + 首次扫描 .agent/workflows/ 注册工作流（之后每轮自动刷新）
+    for t in make_workflow_mgmt_tools(WORKSPACE):
+        agent.tools.register(t)
+    ok, broken = refresh_workflow_tools(agent.tools, WORKSPACE, agent)
     for t in make_mcp_tools(mcp_mgr, str(WORKSPACE / ".mcp.json")):
         agent.tools.register(t)
+    if ok:
+        print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")
+    if broken:
+        print(f"⚠️ {len(broken)} 个工作流加载失败：{broken}")
     registry = build_default_registry()
 
     try:

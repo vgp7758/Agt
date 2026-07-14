@@ -1,0 +1,48 @@
+{
+  "nodes": [
+    {
+      "id": "100001",
+      "type": "1",
+      "data": {
+        "outputs": [
+          {"name": "name", "type": "string", "required": true}
+        ],
+        "trigger_parameters": []
+      }
+    },
+    {
+      "id": "130001",
+      "type": "3",
+      "data": {
+        "inputs": {
+          "inputParameters": [
+            {"name": "name", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "name"}}}}
+          ],
+          "llmParam": [
+            {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用一句话热情地打招呼，对方名字是 {{name}}。只输出问候语本身。"}}},
+            {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": "你是友好的助手。"}}},
+            {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": 0.9}}}
+          ]
+        },
+        "outputs": [{"name": "output", "type": "string"}]
+      }
+    },
+    {
+      "id": "900001",
+      "type": "2",
+      "data": {
+        "inputs": {
+          "terminatePlan": "returnVariables",
+          "inputParameters": [
+            {"name": "greeting", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130001", "name": "output"}}}}
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "130001", "sourcePortID": ""},
+    {"sourceNodeID": "130001", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

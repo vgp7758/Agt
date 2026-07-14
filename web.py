@@ -31,6 +31,7 @@ from plan_tools import make_plan_tools
 from wiki import make_wiki_tools
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
+from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 
 app = FastAPI(title="Agt Agent WebUI")
 
@@ -86,6 +87,9 @@ def _get_or_create_agent() -> Agent:
         agent.tools.register(t)
     for t in make_autonomous_tools(agent):
         agent.tools.register(t)
+    for t in make_workflow_mgmt_tools(WORKSPACE):
+        agent.tools.register(t)
+    refresh_workflow_tools(agent.tools, WORKSPACE, agent)
     _agent = agent
     return agent
 
@@ -137,6 +141,9 @@ async def ws_endpoint(websocket: WebSocket):
     # 发送会话列表
     from session import list_sessions
     await _send(websocket, {"type": "sessions", "names": [p.stem for p in list_sessions(workspace=WORKSPACE)]})
+    # 发送工作流列表
+    from workflow import workflows_info
+    await _send(websocket, {"type": "workflows", "items": workflows_info(WORKSPACE)})
 
     # ===== 主循环：同时监听 WS 输入 + 队列事件 + 心跳 =====
     try:
@@ -236,6 +243,24 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})
         else:
             await _send(ws, {"type": "system", "text": "⚠️ 自主模式未开启"})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "list_workflows":
+        from workflow import workflows_info
+        await _send(ws, {"type": "workflows", "items": workflows_info(WORKSPACE)})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "reload_workflows":
+        from workflow import workflows_info
+        ok, broken = refresh_workflow_tools(agent.tools, WORKSPACE, agent)
+        await _send(ws, {"type": "workflows", "items": workflows_info(WORKSPACE)})
+        await _send(ws, {"type": "system", "text":
+                         f"🔄 已重载工作流：{len(ok)} 可用" + (f"，{len(broken)} 个失败" if broken else "")})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "open_coze":
+        from workflow import workflows_info
+        name = _d.get("name")
+        url = next((it["coze_url"] for it in workflows_info(WORKSPACE)
+                    if it["name"] == name or it["tool"] == name), "") or "https://www.coze.com"
+        await _send(ws, {"type": "coze_url", "url": url, "name": name})
         return
 
     # 文本消息

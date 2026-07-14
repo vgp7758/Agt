@@ -1,0 +1,5 @@
+{
+  "name": "intent_route",
+  "description": "识别用户输入意图（退款/咨询/其他）并分流到不同回复（演示：意图识别 type22 分支 branch_0/branch_1/default）",
+  "enabled": true
+}

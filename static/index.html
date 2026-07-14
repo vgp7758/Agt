@@ -90,6 +90,11 @@
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary>📋 计划清单</summary><div id="planList"></div></details></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
+  <div id="wfPanel" class="plan-panel" style="display:none"><details open>
+    <summary>🧩 工作流（点 <b>Coze</b> 在编辑器打开 · <a href="#" id="wfReload">🔄 重载</a>）</summary>
+    <div id="wfList"></div>
+  </details></div>
+
   <div id="msgArea"></div>
 
   <div id="attBar"></div>
@@ -98,6 +103,7 @@
     <select id="modelSel" title="切换模型"></select>
     <button class="btn" id="btnImg">📁 加图</button>
     <button class="btn" id="btnTank">🚗 查坦克</button>
+    <button class="btn" id="btnWf" title="工作流：查看/重载/在 Coze 中编辑">🧩 工作流</button>
     <button class="btn" id="btnSave">💾 /save</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <button class="btn" id="btnHelp">❓ /help</button>
@@ -450,6 +456,16 @@ ws.onmessage=(ev)=>{
       addRow('sys', `📨 用户消息已注入 Agent 上下文：${m.text}`);
       updateQueueStatus(0);
       break;
+    case 'workflows':
+      renderWorkflows(m.items||[]);
+      break;
+    case 'coze_url':
+      if(m.url){ window.open(m.url, '_blank'); }
+      else addRow('sys', '⚠️ 该工作流未配置 coze_url');
+      break;
+    case 'workflow_message':
+      addRow('sys', '💬 '+m.text);
+      break;
     case '_ping':
       break;  // 心跳，不渲染
     case '_done':
@@ -463,6 +479,26 @@ ws.onmessage=(ev)=>{
   }
 };
 function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }
+
+function renderWorkflows(items){
+  const box=document.getElementById('wfList');
+  if(!items.length){ box.innerHTML='<div class="ev" style="color:#8a9099">（无工作流。把 Coze 画布 .json + .json.meta 放进 .agent/workflows/）</div>'; return; }
+  const mark={ok:'✅',warn:'⚠️',error:'❌',disabled:'⏸'};
+  box.innerHTML=items.map(it=>{
+    const desc=it.description?` <span style="color:#8a9099">${it.description}</span>`:'';
+    const detail=it.detail?` <span style="color:#e6a23c">— ${it.detail}</span>`:'';
+    return `<div class="ev">${mark[it.status]||'•'} <b>${it.tool}</b>${desc}${detail}`+
+           ` <a href="#" data-wf="${it.name}" class="wfCoze" style="margin-left:8px">Coze ↗</a></div>`;
+  }).join('');
+  box.querySelectorAll('.wfCoze').forEach(a=>a.onclick=(e)=>{ e.preventDefault(); e.stopPropagation();
+    ws.send(JSON.stringify({action:'open_coze', name:a.dataset.wf})); });
+}
+document.getElementById('btnWf').onclick=()=>{
+  const p=document.getElementById('wfPanel');
+  p.style.display = p.style.display==='none' ? 'block' : 'none';
+  ws.send(JSON.stringify({action:'list_workflows'}));
+};
+document.getElementById('wfReload').onclick=(e)=>{ e.preventDefault(); e.stopPropagation(); ws.send(JSON.stringify({action:'reload_workflows'})); };
 
 inp.focus();
 </script>

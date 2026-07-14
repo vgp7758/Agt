@@ -602,6 +602,7 @@ svg.addEventListener('contextmenu',(e)=>{
 
 // ============ Selector 分支（画布内 foreignObject）============
 function renderSelectorBranches(g,n){
+  try{
   const branches=n.data.inputs?.branches||[];
   // else 分支
   const branchesAll=[...branches.map((b,i)=>({port:i===0?'true':`true_${i}`,cond:b.condition,label:'分支'+(i+1)})),{port:'false',cond:null,label:'else'}];
@@ -637,6 +638,7 @@ function renderSelectorBranches(g,n){
     g.appendChild(port);
     g.appendChild(elm('text',{x:n.w-10,y:yy+3,class:'node-type-tag','text-anchor':'end'},br.label));
   });
+  }catch(e){console.error('renderSelectorBranches:',e);}
 }
 function ensureCond(br){if(!br.cond)br.cond={logic:2,conditions:[]};if(!br.cond.conditions.length)br.cond.conditions.push({operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}});}
 function saveBranchCond(n,br){/* 已就地改 */}
@@ -693,6 +695,7 @@ function showProps(){
   const p=document.getElementById('propsContent');
   if(!selNode){p.innerHTML='<span style="color:#8a9099">← 点击节点编辑属性</span>';return;}
   const n=findN(selNode);if(!n){p.innerHTML='';return;}
+  try{
   let h=`<h3>节点</h3>
     <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
     <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
@@ -743,6 +746,7 @@ function showProps(){
     h+='<h3>选择器分支</h3><button onclick="addBranchCanvas()">+ 分支</button><div style="font-size:10px;color:#8a9099">分支条件与每分支的流程出口在画布节点上编辑。</div>';
   }
   p.innerHTML=h;
+  }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
 }
 
 // 批处理配置区
@@ -1048,6 +1052,12 @@ document.addEventListener('keydown',(e)=>{
   }
 });
 window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
+// 全局错误捕获——JS 报错弹出 toast 便于定位
+window.onerror=function(msg,url,line,col,err){
+  toast('⚠️ JS错误: '+(msg||'').toString().slice(0,120)+' (行'+line+')');
+  console.error(msg,err);
+  return false;
+};
 renderLegend();loadFileList();loadTools();renderAll();
 </script>
 </body></html>

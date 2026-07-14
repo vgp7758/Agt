@@ -227,6 +227,31 @@ async def api_wf_create(request: Request):
     return {"ok": True, "name": safe}
 
 
+# ===== 模型配置 API =====
+
+@app.get("/api/models")
+async def api_models():
+    """返回模型列表+默认模型名。"""
+    return {"models": config.MODELS, "default": config.DEFAULT_MODEL}
+
+
+@app.put("/api/models")
+async def api_models_save(request: Request):
+    """保存模型配置到 ~/.agt/models.json。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    models = body.get("models") or {}
+    default = body.get("default") or ""
+    config.save_user_models(models, default)
+    # 热更新：重新加载 MODELS/DEFAULT_MODEL
+    m, d = config._load_models()
+    config.MODELS.clear(); config.MODELS.update(m)
+    config.DEFAULT_MODEL = d or config.DEFAULT_MODEL
+    return {"ok": True, "default": config.DEFAULT_MODEL}
+
+
 @app.delete("/api/wf/{name}")
 async def api_wf_delete(name: str):
     """删除工作流文件 + meta。"""

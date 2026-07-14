@@ -1,0 +1,4 @@
+include README.md LICENSE requirements.txt
+recursive-include static *.html
+recursive-include .agent *
+recursive-include examples *.py

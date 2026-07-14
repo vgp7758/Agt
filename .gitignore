@@ -12,6 +12,11 @@ __pycache__/
 .venv/
 venv/
 
+# === 构建产物 ===
+dist/
+build/
+*.egg
+
 # === IDE / 编辑器 ===
 .vscode/
 .idea/

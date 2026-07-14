@@ -102,12 +102,9 @@
   <div id="controls">
     <select id="modelSel" title="切换模型"></select>
     <button class="btn" id="btnImg">📁 加图</button>
-    <button class="btn" id="btnTank">🚗 查坦克</button>
     <button class="btn" id="btnWf" title="工作流：查看/重载/在 Coze 中编辑">🧩 工作流</button>
     <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">✏ 编辑器</button>
-    <button class="btn" id="btnSave">💾 /save</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
-    <button class="btn" id="btnHelp">❓ /help</button>
     <button class="btn auto" id="btnAuto" title="开启/关闭纯自主模式">🔁 自主</button>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
@@ -121,17 +118,29 @@
   </div>
 
 <div id="settingsModal" class="modal-overlay">
-  <div class="modal">
-    <h3>⚙ 运行时设置</h3>
+  <div class="modal" style="max-width:700px;width:90%">
+    <h3>⚙ 设置</h3>
+    <div style="display:flex;gap:16px">
+    <div style="flex:1;min-width:0">
+    <h4>模型管理</h4>
+    <div id="modelList" style="max-height:300px;overflow-y:auto;margin:4px 0"></div>
+    <button onclick="addModel()" style="font-size:12px">+ 添加模型</button>
+    <button onclick="saveModels()" style="font-size:12px">💾 保存模型配置</button>
+    <div style="font-size:10px;color:#8a9099;margin-top:4px">保存到 ~/.agt/models.json</div>
+    </div>
+    <div style="flex:1;min-width:0">
+    <h4>运行时</h4>
     <label>max_steps <input id="cfg_max_steps" type="number"></label>
     <label>token_budget <input id="cfg_token_budget" type="number"></label>
     <label>max_retries <input id="cfg_max_retries" type="number"></label>
     <label>temperature <input id="cfg_temperature" type="number" step="0.1"></label>
-    <label>回退链 <input id="cfg_fallback_chain" type="text" placeholder="glm,deepseek,qwen" title="主模型不可用时按此顺序回退，留空=不回退"></label>
+    <label>回退链 <input id="cfg_fallback_chain" type="text" placeholder="glm,deepseek,qwen"></label>
     <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
+    </div>
+    </div>
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
-      <button class="btn primary" id="cfgSave">保存</button>
+      <button class="btn primary" id="cfgSave">保存运行时</button>
     </div>
   </div>
 </div>
@@ -286,13 +295,6 @@ function send(){
 // —— 按钮 ——
 sendBtn.onclick=send;
 document.getElementById('btnImg').onclick=()=>fileInput.click();
-document.getElementById('btnTank').onclick=()=>sendRaw('查一下当前坦克的段位和最新战绩', []);
-document.getElementById('btnSave').onclick=()=>{
-  const sel=document.getElementById('sessionSel');
-  const name=sel.value==='__new__'?null:sel.value;
-  ws.send(JSON.stringify({action:'save_session', name}));
-};
-document.getElementById('btnHelp').onclick=()=>sendRaw('/help', []);
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{
@@ -303,9 +305,40 @@ document.getElementById('sessionSel').addEventListener('change',e=>{
 document.getElementById('btnAuto').onclick=()=>{
   // 切换自主模式：发送命令
   sendRaw('/autonomous', []);
-};
-document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); };
+document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); loadModelList(); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
+let _modelData={};
+
+async function loadModelList(){
+  try{const r=await fetch('/api/models');_modelData=await r.json();renderModelList();}catch(e){}
+}
+function renderModelList(){
+  const box=document.getElementById('modelList');
+  const models=_modelData.models||{};
+  const def=_modelData.default||'';
+  box.innerHTML=Object.entries(models).map(([name,m])=>`<div style="margin:2px 0;padding:4px;background:#0f3460;border-radius:4px;font-size:11px">
+    <b>${name}</b> <input value="${m.model||''}" placeholder="model id" onchange="_modelData.models['${name}'].model=this.value" style="width:140px">
+    <input value="${m.base_url||''}" placeholder="base_url" onchange="_modelData.models['${name}'].base_url=this.value" style="width:180px"><br>
+    <input value="${m.api_token||''}" placeholder="api_token" type="password" onchange="_modelData.models['${name}'].api_token=this.value" style="width:330px">
+    <button class="del" onclick="delete _modelData.models['${name}'];renderModelList()">×</button>
+    ${name===def?'<span style="color:#98c379">✓默认</span>':`<button onclick="_modelData.default='${name}';renderModelList()">设默认</button>`}
+  </div>`).join('')||'<div style="color:#8a9099">暂无模型</div>';
+}
+function addModel(){
+  const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;
+  _modelData.models=_modelData.models||{};
+  _modelData.models[name]={base_url:'https://api.openai.com/v1',api_token:'',model:'gpt-4',desc:'',thinking:false};
+  if(!_modelData.default)_modelData.default=name;
+  renderModelList();
+}
+async function saveModels(){
+  try{
+    const r=await fetch('/api/models',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(_modelData)});
+    const d=await r.json();
+    if(d.error){alert(d.error);}else{settingsModal.style.display='none';toast('✅ 模型已保存');}
+  }catch(e){alert(e);}
+}
+function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
 document.getElementById('cfgSave').onclick=()=>{
   const values={
     max_steps: parseInt(document.getElementById('cfg_max_steps').value),
@@ -317,7 +350,6 @@ document.getElementById('cfgSave').onclick=()=>{
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
-};
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });

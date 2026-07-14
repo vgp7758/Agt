@@ -800,6 +800,12 @@ function renderIOFields(arr,kind){
       <td style="width:70px"><select onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td><button class="del" onclick="delField('${kind}',${i})">×</button></td></tr>`;
     h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
+
+  // 复合节点：编辑按钮
+  if([21,28].includes(n.type)){
+    h+='<div style="margin:6px 0"><button onclick="openComposite(\''+n.id+'\')" style="width:100%;padding:8px;font-size:14px;background:#1a6b6b;color:#fff;border:2px solid #7b2ff7;border-radius:6px;cursor:pointer">✏ 编辑子画布 ('+((n.blocks||[]).length)+' 个内部节点)</button></div>';
+    h+='<div style="font-size:10px;color:#8a9099;margin-bottom:4px">点按钮进入子画布编辑内部节点，编辑完点顶栏「◀ 退出子画布」返回。</div>';
+  }
     // 输入字段：若节点开启批处理，加"源"选择（节点输出/item/item.字段/index）
     if(kind==='in'){
       const n=findN(selNode);

@@ -74,6 +74,8 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
+  <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
+  <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
 </div>
 <div id="main">
   <div id="palette">
@@ -130,6 +132,8 @@ let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, co
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
 let expandedFields=new Set();      // 展开的 object 字段键: "nodeId::fieldName::in|out"
 let _pendingHandles=[];            // 连线断开 handle（延后到节点之上绘制）
+let _compositeStack=[];            // 子画布栈 [{parentId, name, nodes, edges}]
+let _currentParent=null;           // 当前所在复合节点 id（null=顶层）
 
 // ============ 工具 ============
 function elm(tag,attrs={},text){
@@ -557,12 +561,6 @@ svg.addEventListener('mousedown',(e)=>{
 });
 svg.addEventListener('click',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
-    // 收起展开的复合子节点
-    const hadExpanded=WF.nodes.some(nn=>nn.id.includes('__'));
-    if(hadExpanded){
-      WF.nodes=WF.nodes.filter(nn=>!nn.id.includes('__'));
-      WF.edges=WF.edges.filter(e=>!e.sourceNodeID.includes('__')&&!e.targetNodeID.includes('__'));
-    }
     selNode=null;selEdge=null;edgeFrom=null;showProps();renderAll();
   }
 });
@@ -860,27 +858,42 @@ function setField(kind,i,field,v){
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 
-// 复合节点双击：展开 blocks 到画布
+// 复合节点双击：进入子画布
 function openComposite(nodeId){
   const n=findN(nodeId);if(!n)return;
-  const blocks=n.blocks||[], innerEdges=n.edges||[];
   const label=TYPE_LABEL[n.type];
-  if(!blocks.length){toast('该'+label+'节点内无子节点。先在属性面板的 blocks 里添加。');return;}
-  const prefix=nodeId+'__';
-  // 移除旧的展开子节点
-  WF.nodes=WF.nodes.filter(nn=>!nn.id.startsWith(prefix));
-  WF.edges=WF.edges.filter(e=>!e.sourceNodeID.startsWith(prefix)&&!e.targetNodeID.startsWith(prefix));
-  // 添加
-  blocks.forEach((b,i)=>{
-    const bn={...JSON.parse(JSON.stringify(b)),id:prefix+b.id,
-      x:n.x+40+i*30,y:n.y+60+i*30,w:b.w||160,h:70};
-    WF.nodes.push(bn);
-  });
-  innerEdges.forEach(e=>{
-    WF.edges.push({sourceNodeID:prefix+e.sourceNodeID,targetNodeID:prefix+e.targetNodeID,sourcePortID:e.sourcePortID||''});
-  });
-  toast('已展开 '+label+' 的 '+blocks.length+' 个子节点（点击空白处收起）');
-  renderAll();
+  // 保存当前画布
+  _compositeStack.push({parentId:_currentParent, name:WF.name||'', nodes:WF.nodes, edges:WF.edges});
+  _currentParent=nodeId;
+  n.blocks=n.blocks||[]; n.edges=n.edges||[];
+  // 给 blocks 里每个节点补位置
+  n.blocks.forEach((b,i)=>{if(!b.x)b.x=120+i*30;if(!b.y)b.y=80+i*30;b.w=b.w||200;});
+  WF.nodes=n.blocks; WF.edges=n.edges;
+  selNode=null; selEdge=null;
+  document.getElementById('breadcrumb').textContent='▸ '+label+' ('+nodeId+')';
+  document.getElementById('breadcrumb').style.display='';
+  document.getElementById('btnExitComp').style.display='';
+  showProps(); renderAll();
+  toast('已进入 '+label+' 子画布——可添加节点和连线；编辑完点「◀ 退出子画布」');
+}
+function exitComposite(){
+  if(!_currentParent||!_compositeStack.length)return;
+  // 把当前编辑写回复合节点
+  const n=findN(_currentParent);
+  if(n){n.blocks=WF.nodes.map(m=>{const{id,type,data}=m;return{id,type,data};});n.edges=WF.edges.map(e=>({sourceNodeID:e.sourceNodeID,targetNodeID:e.targetNodeID,sourcePortID:e.sourcePortID||''}));}
+  // 恢复上层画布
+  const prev=_compositeStack.pop();
+  _currentParent=prev.parentId;
+  WF.nodes=prev.nodes; WF.edges=prev.edges;
+  WF.name=prev.name||WF.name;
+  if(_currentParent){
+    const pn=findN(_currentParent);
+    document.getElementById('breadcrumb').textContent='▸ '+(TYPE_LABEL[pn?.type]||'')+' ('+_currentParent+')';
+  }else{
+    document.getElementById('breadcrumb').style.display='none';
+    document.getElementById('btnExitComp').style.display='none';
+  }
+  selNode=null; showProps(); renderAll();
 }
 
 // 代码节点画布预览
@@ -925,6 +938,9 @@ async function loadFileList(){
 }
 async function openWf(name){
   const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}
+  _compositeStack=[]; _currentParent=null;
+  document.getElementById('breadcrumb').style.display='none';
+  document.getElementById('btnExitComp').style.display='none';
   WF.name=r.name;WF.meta=r.meta||{};
   WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
@@ -935,6 +951,8 @@ async function openWf(name){
   selNode=null;showProps();renderAll();toast('已打开 '+name);
 }
 async function saveWf(){
+  // 子画布中：先退出所有层级
+  while(_currentParent)exitComposite();
   let name=WF.name;if(!name){const n=prompt('工作流名称：');if(!n)return;name=n;}
   document.getElementById('fstatus').textContent='保存中…';
   WF.meta.description=document.getElementById('fdesc').value;

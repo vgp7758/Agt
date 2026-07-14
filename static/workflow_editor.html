@@ -186,7 +186,8 @@ function nodeH(n){
   const inRows=rows.filter(r=>r.side==='in').length;
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
-  if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：加大文本框高度
+  if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
+  if(n.type==='5') h+=40;            // 代码节点：预览行
   return h;
 }
 const TEXTAREA_H=120;
@@ -399,6 +400,9 @@ function renderNode(n){
   }
 
   // 交互
+  g.ondblclick=(e)=>{
+    if([21,28].includes(n.type)){e.stopPropagation();openComposite(n.id);}
+  };
   g.onmousedown=(e)=>{
     if(e.button!==0)return;
     if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
@@ -406,6 +410,16 @@ function renderNode(n){
     dragNode=n.id; dragDX=n.x-e.clientX; dragDY=n.y-e.clientY;
     selNode=n.id; selEdge=null; showProps(); renderAll();
   };
+  // 代码节点：画布上显示前几行代码预览
+  if(n.type==='5'){
+    const codePreview=makeCodePreview(n);
+    if(codePreview){
+      const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+      codePreview.setAttribute('x',6);codePreview.setAttribute('y',yBase);
+      codePreview.setAttribute('width',n.w-12);codePreview.setAttribute('height',36);
+      g.appendChild(codePreview);
+    }
+  }
   return g;
 }
 
@@ -543,6 +557,12 @@ svg.addEventListener('mousedown',(e)=>{
 });
 svg.addEventListener('click',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
+    // 收起展开的复合子节点
+    const hadExpanded=WF.nodes.some(nn=>nn.id.includes('__'));
+    if(hadExpanded){
+      WF.nodes=WF.nodes.filter(nn=>!nn.id.includes('__'));
+      WF.edges=WF.edges.filter(e=>!e.sourceNodeID.includes('__')&&!e.targetNodeID.includes('__'));
+    }
     selNode=null;selEdge=null;edgeFrom=null;showProps();renderAll();
   }
 });
@@ -839,6 +859,42 @@ function setField(kind,i,field,v){
   showProps();renderAll();}
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
+
+// 复合节点双击：展开 blocks 到画布
+function openComposite(nodeId){
+  const n=findN(nodeId);if(!n)return;
+  const blocks=n.blocks||[], innerEdges=n.edges||[];
+  const label=TYPE_LABEL[n.type];
+  if(!blocks.length){toast('该'+label+'节点内无子节点。先在属性面板的 blocks 里添加。');return;}
+  const prefix=nodeId+'__';
+  // 移除旧的展开子节点
+  WF.nodes=WF.nodes.filter(nn=>!nn.id.startsWith(prefix));
+  WF.edges=WF.edges.filter(e=>!e.sourceNodeID.startsWith(prefix)&&!e.targetNodeID.startsWith(prefix));
+  // 添加
+  blocks.forEach((b,i)=>{
+    const bn={...JSON.parse(JSON.stringify(b)),id:prefix+b.id,
+      x:n.x+40+i*30,y:n.y+60+i*30,w:b.w||160,h:70};
+    WF.nodes.push(bn);
+  });
+  innerEdges.forEach(e=>{
+    WF.edges.push({sourceNodeID:prefix+e.sourceNodeID,targetNodeID:prefix+e.targetNodeID,sourcePortID:e.sourcePortID||''});
+  });
+  toast('已展开 '+label+' 的 '+blocks.length+' 个子节点（点击空白处收起）');
+  renderAll();
+}
+
+// 代码节点画布预览
+function makeCodePreview(n){
+  const code=(n.data.inputs?.code||'').replace(/#[^\n]*/g,'').replace(/\n{2,}/g,'\n').trim();
+  const lines=code.split('\n').slice(0,3);
+  if(!lines.join('').trim())return null;
+  const fo=document.createElementNS(NS,'foreignObject');
+  const div=document.createElement('div');
+  div.style.cssText='width:100%;height:100%;font-size:9px;font-family:monospace;color:#8a9099;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:2px 4px';
+  div.textContent=lines.join(' · ');
+  fo.appendChild(div);fo.style.pointerEvents='none';
+  return fo;
+}
 function setLoop(field,v){const n=findN(selNode);if(field==='loopType')n.data.inputs.loopType=v;if(field==='loopCount')n.data.inputs.loopCount={type:'integer',value:{type:'literal',content:v}};}
 
 // object 子字段 / list item

@@ -192,6 +192,7 @@ function nodeH(n){
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
   if(n.type==='5') h+=40;            // 代码节点：预览行
+  if([21,28].includes(n.type)) h+=30; // 复合节点：编辑按钮
   return h;
 }
 const TEXTAREA_H=120;
@@ -386,6 +387,20 @@ function renderNode(n){
         g.appendChild(elm('text',{x:n.w-10,y,class:'sub-row','text-anchor':'end',fill:col},or.field.split('.').pop()));
       }
     }
+  }
+
+  // 复合节点：画布上「✏ 编辑子画布」按钮
+  if([21,28].includes(n.type)){
+    const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+    const fo=document.createElementNS(NS,'foreignObject');
+    fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',24);
+    const btn=document.createElement('button');
+    btn.textContent='✏ 编辑子画布 ('+((n.blocks||[]).length)+' 个内部节点)';
+    btn.style.cssText='width:100%;height:100%;font-size:11px;background:#1a6b6b;color:#fff;border:1px solid #7b2ff7;border-radius:4px;cursor:pointer';
+    btn.onclick=(e)=>{e.stopPropagation();openComposite(n.id);};
+    btn.onmousedown=(e)=>e.stopPropagation();
+    fo.appendChild(btn);fo.style.pointerEvents='auto';
+    g.appendChild(fo);
   }
 
   // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）

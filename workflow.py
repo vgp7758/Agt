@@ -138,7 +138,8 @@ def _resolve_input_params(params_list: list, ctx) -> dict:
 # ========== 节点处理器（S1：LLM；其余后续阶段补）==========
 
 def _handle_llm(node: dict, ctx) -> dict:
-    """type 3：渲染 prompt/systemPrompt，调用 ctx.llm，输出 {output: 文本}。"""
+    """type 3：渲染 prompt/systemPrompt，调用 ctx.llm，输出 {output: 文本}。
+    本节点声明的 outputs 结构会作为 JSON Schema 自动并入 systemPrompt，约束模型输出格式。"""
     inputs = node.get("data", {}).get("inputs", {})
     params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
 
@@ -148,6 +149,14 @@ def _handle_llm(node: dict, ctx) -> dict:
 
     prompt = render_template(str(cfg.get("prompt", "")), params)
     system = render_template(str(cfg.get("systemPrompt", "")), params).strip()
+
+    # 把节点声明的输出结构转成 JSON Schema，并入系统提示词
+    outputs = node.get("data", {}).get("outputs", []) or []
+    if outputs:
+        schema = _outputs_to_json_schema(outputs)
+        schema_hint = ("\n\n【输出要求】请严格按照以下 JSON Schema 输出（纯 JSON，不要 markdown 代码块，不要多余解释）：\n"
+                       + json.dumps(schema, ensure_ascii=False, indent=2))
+        system = (system + schema_hint) if system else schema_hint.strip()
 
     msgs = []
     if system:
@@ -162,6 +171,45 @@ def _handle_llm(node: dict, ctx) -> dict:
             pass
     resp = ctx.llm.chat(msgs, **overrides)
     return {"outputs": {"output": getattr(resp, "content", "") or ""}, "port": None}
+
+
+def _outputs_to_json_schema(outputs: list) -> dict:
+    """把 Coze 节点 outputs 字段定义转成 JSON Schema（object）。
+    object 字段展开 properties；list 字段按 schema 取 items。"""
+    def _var_to_schema(var: dict) -> dict:
+        t = var.get("type", "string")
+        sch = var.get("input", {}).get("schema") if isinstance(var.get("input"), dict) else None
+        if sch is None:
+            sch = var.get("schema")
+        if t in ("object",) or (isinstance(sch, list)):
+            props, req = {}, []
+            for sub in (sch if isinstance(sch, list) else []):
+                props[sub.get("name", "")] = _var_to_schema(sub)
+                if sub.get("required"):
+                    req.append(sub.get("name", ""))
+            s = {"type": "object", "properties": props}
+            if req:
+                s["required"] = req
+            return s
+        if t in ("list", "array"):
+            if isinstance(sch, dict):
+                return {"type": "array", "items": _type_to_schema(sch.get("type", "string"), sch)}
+            if isinstance(sch, list):
+                return {"type": "array", "items": {"type": "object", "properties": {s.get("name", ""): _var_to_schema(s) for s in sch}}}
+            return {"type": "array", "items": {}}
+        return {"type": t}
+
+    def _type_to_schema(t, sch=None):
+        if t in ("object",) and isinstance(sch, list):
+            return _var_to_schema({"type": "object", "schema": sch})
+        return {"type": t}
+
+    # outputs 是多字段 → 包装成 object
+    props, req = {}, []
+    for o in outputs:
+        nm = o.get("name", "")
+        props[nm] = _var_to_schema(o)
+    return {"type": "object", "properties": props, "required": list(props.keys())}
 
 
 def _handle_code(node: dict, ctx) -> dict:

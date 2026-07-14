@@ -4,61 +4,62 @@
 <title>工作流编辑器 — Agt</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font:14px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-/* 顶栏 */
-#topbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#16213e;border-bottom:1px solid #0f3460}
-#topbar select,#topbar input,#topbar button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:4px;padding:4px 10px;font-size:13px}
+body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#topbar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#16213e;border-bottom:1px solid #0f3460;flex-wrap:wrap}
+#topbar select,#topbar input,#topbar button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:4px;padding:4px 8px;font-size:12px}
 #topbar button{cursor:pointer;background:#533483;border-color:#7b2ff7}
 #topbar button:hover{background:#7b2ff7}
 #topbar button.danger{background:#6b2020;border-color:#a33}
 #topbar button.danger:hover{background:#a33}
-#fname{width:160px}
-/* 主布局 */
 #main{display:flex;flex:1;overflow:hidden}
-/* 左栏：节点调色板 */
-#palette{width:180px;background:#16213e;border-right:1px solid #0f3460;padding:8px;overflow-y:auto}
-#palette h3{font-size:12px;color:#8a9099;margin:8px 0 4px;text-transform:uppercase}
-.pal-item{display:block;width:100%;text-align:left;padding:6px 8px;margin:2px 0;border:none;border-radius:4px;cursor:grab;font-size:12px;color:#fff}
+/* 左：调色板 */
+#palette{width:170px;background:#16213e;border-right:1px solid #0f3460;padding:6px;overflow-y:auto}
+#palette h3{font-size:11px;color:#8a9099;margin:6px 0 3px;text-transform:uppercase}
+.pal-item{display:block;width:100%;text-align:left;padding:5px 7px;margin:2px 0;border:none;border-radius:4px;cursor:pointer;font-size:11px;color:#fff}
 .pal-item.flow{background:#1a5c2a}.pal-item.llm{background:#1a3a6b}.pal-item.code{background:#3a1a6b}
 .pal-item.branch{background:#6b3a1a}.pal-item.composite{background:#1a6b6b}
 .pal-item.data{background:#4a4a1a}.pal-item.ext{background:#4a1a4a}
-/* 中栏：SVG 画布 */
+/* 中：画布 */
 #canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative}
-#svgCanvas{width:100%;height:100%;min-width:2000px;min-height:1500px}
-#svgCanvas .grid-line{stroke:#ffffff08}
-#svgCanvas .node-body{fill:#16213e;stroke:#533483;stroke-width:1.5;rx:6}
-#svgCanvas .node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
-#svgCanvas .node-header{fill:#533483}
-#svgCanvas .node-title{fill:#fff;font-size:12px;font-weight:600}
-#svgCanvas .node-field{fill:#a0a0b0;font-size:10px}
-#svgCanvas .node-io{fill:#8a9099;font-size:9px}
-#svgCanvas .port{fill:#0f3460;stroke:#533483;stroke-width:1.5;cursor:crosshair}
-#svgCanvas .port:hover{fill:#7b2ff7;stroke:#fff}
-#svgCanvas .edge{stroke:#533483;stroke-width:1.5;fill:none}
-#svgCanvas .edge.sel{stroke:#7b2ff7;stroke-width:2.5}
-#svgCanvas .edge-label{fill:#8a9099;font-size:9px}
-/* 临时连线（拖拽中） */
-#svgCanvas .edge-ghost{stroke:#7b2ff7;stroke-width:1.5;stroke-dasharray:5 4;fill:none}
-/* 右栏：属性面板 */
-#props{width:320px;background:#16213e;border-left:1px solid #0f3460;overflow-y:auto;padding:12px}
-#props h3{font-size:13px;color:#8a9099;margin:12px 0 4px;border-bottom:1px solid #0f3460;padding-bottom:4px}
-#props label{display:block;font-size:11px;color:#8a9099;margin-top:6px}
-#props input,#props select,#props textarea{width:100%;background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 6px;font-size:12px;margin-top:2px}
-#props textarea{resize:vertical;font-family:monospace;min-height:60px}
-#props button{background:#533483;color:#fff;border:none;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;margin:4px 2px}
+#svgCanvas{width:3000px;height:2200px;display:block}
+.grid-line{stroke:#ffffff08}
+.node-body{fill:#16213e;stroke:#533483;stroke-width:1.5}
+.node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
+.node-header-rect{rx:4}
+.node-title{fill:#fff;font-size:12px;font-weight:600;pointer-events:none}
+.node-type-tag{fill:#8a9099;font-size:9px;pointer-events:none}
+.node-field-name{font-size:10px;dominant-baseline:middle;pointer-events:none}
+/* 流程端口（标题栏左右） */
+.port-flow{fill:#fff;stroke:#533483;stroke-width:1.5;cursor:crosshair}
+.port-flow:hover{fill:#7b2ff7;stroke:#fff;r:7}
+/* 变量端口 */
+.port-var{stroke-width:1.5;cursor:crosshair}
+.port-var:hover{stroke:#fff}
+/* 流程线（白实线） */
+.edge-flow{stroke:#fff;stroke-width:2;fill:none;marker-end:url(#arrowFlow)}
+.edge-flow.sel{stroke:#7b2ff7;stroke-width:3}
+/* 变量线（彩色虚线） */
+.edge-var{stroke-width:1.8;fill:none;stroke-dasharray:6 4;marker-end:url(#arrowVar)}
+.edge-var.sel{stroke-width:2.8}
+.edge-ghost{stroke:#7b2ff7;stroke-width:1.5;stroke-dasharray:5 4;fill:none;pointer-events:none}
+.edge-label{fill:#bbb;font-size:9px;pointer-events:none}
+/* 右：属性面板 */
+#props{width:330px;background:#16213e;border-left:1px solid #0f3460;overflow-y:auto;padding:10px}
+#props h3{font-size:12px;color:#8a9099;margin:10px 0 3px;border-bottom:1px solid #0f3460;padding-bottom:3px}
+#props label{display:block;font-size:11px;color:#8a9099;margin-top:5px}
+#props input,#props select,#props textarea{width:100%;background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 5px;font-size:12px;margin-top:1px}
+#props textarea{resize:vertical;font-family:monospace;min-height:50px}
+#props button{background:#533483;color:#fff;border:none;border-radius:3px;padding:3px 7px;font-size:11px;cursor:pointer;margin:3px 2px}
 #props button:hover{background:#7b2ff7}
-#props button.del{background:#6b2020}
+#props button.del{background:#6b2020;padding:2px 6px}
 #props button.del:hover{background:#a33}
 .io-table{width:100%;border-collapse:collapse;font-size:11px}
-.io-table th{text-align:left;color:#8a9099;font-weight:400;padding:2px 4px}
-.io-table td{padding:2px 2px}
+.io-table td{padding:1px;vertical-align:top}
 .io-table input,.io-table select{width:100%;font-size:11px;padding:2px 3px;margin:0}
-.io-table .td-name{width:70px}.io-table .td-type{width:70px}.io-table .td-req{width:30px;text-align:center}.io-table .td-act{width:28px}
-.edge-row{display:flex;align-items:center;gap:4px;margin:2px 0;font-size:11px}
-.edge-row span{color:#8a9099;min-width:60px}
-.edge-row input{flex:1}
-/* toast */
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s}
+.sub-fields{margin-left:10px;border-left:2px solid #0f3460;padding-left:6px;margin-top:2px}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s;pointer-events:none}
+.legend{font-size:10px;color:#8a9099;line-height:1.7}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:3px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -67,494 +68,568 @@ body{font:14px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button onclick="WE.createWf()">➕ 新建</button>
   <button onclick="WE.saveWf()">💾 保存</button>
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
-  <input id="fdesc" placeholder="描述（meta.description）" style="flex:1">
-  <input id="fcoze" placeholder="Coze URL（可选）" style="width:250px">
-  <span style="color:#8a9099;font-size:12px" id="fstatus"></span>
+  <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
+  <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
+  <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
 </div>
-
 <div id="main">
-  <!-- 左：节点调色板 -->
   <div id="palette">
     <h3>基本</h3>
-    <button class="pal-item flow" data-type="1">▶ 开始 (Entry)</button>
-    <button class="pal-item flow" data-type="2">◼ 结束 (Exit)</button>
+    <button class="pal-item flow" data-type="1">▶ 开始</button>
+    <button class="pal-item flow" data-type="2">◼ 结束</button>
     <h3>AI</h3>
     <button class="pal-item llm" data-type="3">🤖 LLM</button>
     <button class="pal-item llm" data-type="22">🎯 意图识别</button>
     <h3>逻辑</h3>
-    <button class="pal-item branch" data-type="8">🔀 选择器 (If)</button>
-    <button class="pal-item composite" data-type="21">🔄 循环 (Loop)</button>
-    <button class="pal-item composite" data-type="28">📦 批处理 (Batch)</button>
+    <button class="pal-item branch" data-type="8">🔀 选择器</button>
+    <button class="pal-item composite" data-type="21">🔄 循环</button>
+    <button class="pal-item composite" data-type="28">📦 批处理</button>
     <h3>处理</h3>
     <button class="pal-item code" data-type="5">📝 代码</button>
-    <button class="pal-item data" data-type="15">📄 文本处理</button>
+    <button class="pal-item data" data-type="15">📄 文本</button>
     <button class="pal-item data" data-type="58">{→} ToJSON</button>
     <button class="pal-item data" data-type="59">{←} FromJSON</button>
     <h3>变量</h3>
-    <button class="pal-item data" data-type="32">🧲 变量聚合</button>
-    <button class="pal-item data" data-type="40">✏ 变量赋值</button>
+    <button class="pal-item data" data-type="32">🧲 聚合</button>
+    <button class="pal-item data" data-type="40">✏ 赋值</button>
     <h3>外部</h3>
-    <button class="pal-item ext" data-type="45">🌐 HTTP请求</button>
+    <button class="pal-item ext" data-type="45">🌐 HTTP</button>
     <button class="pal-item ext" data-type="9">🔗 子工作流</button>
     <button class="pal-item ext" data-type="4">🔌 插件</button>
-    <button class="pal-item ext" data-type="13">💬 输出消息</button>
+    <button class="pal-item ext" data-type="13">💬 输出</button>
+    <h3>图例</h3>
+    <div class="legend" id="legend"></div>
   </div>
-
-  <!-- 中：SVG 画布 -->
-  <div id="canvasWrap">
-    <svg id="svgCanvas"></svg>
-  </div>
-
-  <!-- 右：属性面板 -->
-  <div id="props">
-    <div id="propsContent" style="color:#8a9099">← 点击画布上的节点编辑其属性</div>
-  </div>
+  <div id="canvasWrap"><svg id="svgCanvas"></svg></div>
+  <div id="props"><div id="propsContent" style="color:#8a9099">← 点击节点编辑属性</div></div>
 </div>
 <div id="toast" style="opacity:0"></div>
 
 <script>
-// ============ 数据与工具 ============
-const TYPE_LABEL = {1:'Entry',2:'Exit',3:'LLM',5:'Code',8:'Selector',9:'SubWorkflow',4:'Plugin',
-  13:'Output',15:'Text',21:'Loop',22:'Intent',28:'Batch',32:'Aggregator',40:'Assigner',
-  45:'HTTP',58:'ToJSON',59:'FromJSON'};
-const TYPE_CATEGORY = {1:'flow',2:'flow',3:'llm',5:'code',8:'branch',9:'ext',4:'ext',
-  13:'ext',15:'data',21:'composite',22:'llm',28:'composite',32:'data',40:'data',
-  45:'ext',58:'data',59:'data'};
-const IO_TYPES = ['string','integer','float','number','boolean','object','list','file','time'];
+// ============ 常量 ============
+const TYPE_LABEL={1:'Entry',2:'Exit',3:'LLM',5:'Code',8:'Selector',9:'SubWorkflow',4:'Plugin',13:'Output',15:'Text',21:'Loop',22:'Intent',28:'Batch',32:'Aggregator',40:'Assigner',45:'HTTP',58:'ToJSON',59:'FromJSON'};
+const TYPE_CATEGORY={1:'flow',2:'flow',3:'llm',5:'code',8:'branch',9:'ext',4:'ext',13:'ext',15:'data',21:'composite',22:'llm',28:'composite',32:'data',40:'data',45:'ext',58:'data',59:'data'};
+const HDR_COLOR={flow:'#1a5c2a',llm:'#1a3a6b',code:'#3a1a6b',branch:'#6b3a1a',composite:'#1a6b6b',data:'#4a4a1a',ext:'#4a1a4a'};
+const IO_TYPES=['string','integer','float','number','boolean','object','list','file','time'];
+// 变量类型颜色
+const TYPE_COLOR={string:'#e6c07b',integer:'#56b6c2',float:'#56b6c2',number:'#56b6c2',boolean:'#c678dd',object:'#61afef',list:'#98c379',file:'#e06c75',time:'#d19a66'};
+const OPERATORS=[{v:1,t:'='},{v:2,t:'≠'},{v:7,t:'包含'},{v:8,t:'不含'},{v:9,t:'为空'},{v:10,t:'非空'},{v:13,t:'>'},{v:14,t:'≥'},{v:15,t:'<'},{v:16,t:'≤'}];
 
-let WF = {name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
-let selNode = null, selEdge = null;        // 当前选中
-let dragNode = null, dragDX=0,dragDY=0;    // 节点拖动
-let edgeFrom = null;                       // 正在连线的源端口 {nodeId, port, x, y}
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svgCanvas');
 
-function genId(){return ''+(Date.now()%1000000+Math.floor(Math.random()*900000));}
-function ext(str,def=''){return str!=null?str:def;}
+let WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
+let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
+let dragNode=null,dragDX=0,dragDY=0;
+let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
 
-// ============ 画布渲染 ============
-const svg = document.getElementById('svgCanvas');
-const NS = 'http://www.w3.org/2000/svg';
-
-function elm(tag,attrs={}){
+// ============ 工具 ============
+function elm(tag,attrs={},text){
   const e=document.createElementNS(NS,tag);
-  for(const[k,v] of Object.entries(attrs)) e.setAttribute(k,v);
+  for(const[k,v]of Object.entries(attrs))e.setAttribute(k,v);
+  if(text!=null)e.textContent=text;
   return e;
 }
-
-function nodeCenter(n){return{x:n.x+n.w/2, y:n.y+n.h/2};}
-function portPos(n,isOut,name){
-  // 输入口在左边竖排，输出口在右边竖排
-  const cx=isOut?n.x+n.w:n.x;
-  const ios=isOut?(n.data.outputs||[]):(n.data.inputs?.inputParameters||[]);
-  const idx=ios.findIndex(f=>f.name===name);
-  const total=ios.length||1;
-  const cy=n.y+28+(n.h-28)*(idx+1)/(total+1);
-  return{x:cx, y:cy};
+function ext(s,d=''){return s!=null?s:d;}
+function genId(){return ''+(Date.now()%1000000+Math.floor(Math.random()*900000));}
+function findN(id){return WF.nodes.find(n=>n.id===id);}
+function nodeTitle(n){return n.data.nodeMeta?.title||TYPE_LABEL[n.type]||('节点'+n.type);}
+function nodeInputs(n){return n.data.inputs?.inputParameters||[];}
+function nodeOutputs(n){return n.data.outputs||[];}
+// 输入字段是否已连变量线（ref 且 block-output）
+function inputIsLinked(p){
+  const v=p.input?.value; return v&&v.type==='ref'&&v.content?.source==='block-output'&&v.content?.blockID;
 }
+function inputRefSource(p){const v=p.input?.value;return v?.content;}
+// 类型颜色（list 取 item 颜色？统一用字段本身 type 颜色）
+function fieldColor(type){return TYPE_COLOR[type]||'#aaa';}
 
+// ============ 端口位置 ============
+const HDR_H=26, ROW_H=18, PAD=8;
+function nodeH(n){
+  const ins=nodeInputs(n).length, outs=nodeOutputs(n).length;
+  return HDR_H+Math.max(ins,outs)*ROW_H+PAD;
+}
+// 变量输入端口（左侧）
+function inPortPos(n,i){return{x:n.x, y:n.y+HDR_H+i*ROW_H+ROW_H/2};}
+// 变量输出端口（右侧）
+function outPortPos(n,i){return{x:n.x+n.w, y:n.y+HDR_H+i*ROW_H+ROW_H/2};}
+// 流程端口（标题栏左右）
+function flowOutPos(n){return{x:n.x+n.w, y:n.y+HDR_H/2};}
+function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
+
+// ============ 渲染 ============
 function renderAll(){
   svg.innerHTML='';
+  // defs（箭头）
+  const defs=elm('defs');
+  defs.innerHTML=`<marker id="arrowFlow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#fff"/></marker>
+    <marker id="arrowVar" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="context-stroke"/></marker>`;
+  svg.appendChild(defs);
   // 网格
-  for(let x=0;x<2000;x+=40) svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:1500,'class':'grid-line'}));
-  for(let y=0;y<1500;y+=40) svg.appendChild(elm('line',{x1:0,y1:y,x2:2000,y2:y,'class':'grid-line'}));
-  // 边
+  for(let x=0;x<3000;x+=40)svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:2200,'class':'grid-line'}));
+  for(let y=0;y<2200;y+=40)svg.appendChild(elm('line',{x1:0,y1:y,x2:3000,y2:y,'class':'grid-line'}));
+
+  // ---- 变量线（先画，在节点下层）----
+  WF.nodes.forEach(tn=>{
+    nodeInputs(tn).forEach((p,fi)=>{
+      if(!inputIsLinked(p))return;
+      const src=inputRefSource(p);
+      const sn=findN(src.blockID); if(!sn)return;
+      const oi=nodeOutputs(sn).findIndex(o=>o.name===src.name); if(oi<0)return;
+      const sp=outPortPos(sn,oi), tp=inPortPos(tn,fi);
+      const key=tn.id+'::'+p.name;
+      const sel=selEdge&&selEdge.kind==='var'&&selEdge.key===key;
+      const col=fieldColor(p.input?.type||'string');
+      const path=elm('path',{d:bezier(sp,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
+      path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
+      svg.appendChild(path);
+    });
+  });
+
+  // ---- 流程线 ----
   WF.edges.forEach((ed,i)=>{
-    const sn=WF.nodes.find(n=>n.id===ed.sourceNodeID);
-    const tn=WF.nodes.find(n=>n.id===ed.targetNodeID);
-    if(!sn||!tn) return;
-    const sp=portPos(sn,true,ed.sourcePortID||'');
-    const tp=portPos(tn,false,'');
-    const cx1=sp.x+60,cx2=tp.x-60;
-    const p=elm('path',{d:`M${sp.x},${sp.y} C${cx1},${sp.y} ${cx2},${tp.y} ${tp.x},${tp.y}`,
-      class:'edge'+(selEdge===i?' sel':''),'data-ei':i});
-    p.onclick=(e)=>{e.stopPropagation();selEdge=i;selNode=null;showProps();renderAll();};
-    svg.appendChild(p);
-    // 标签
+    const sn=findN(ed.sourceNodeID),tn=findN(ed.targetNodeID); if(!sn||!tn)return;
+    const sp=flowOutPos(sn), tp=flowInPos(tn);
+    const sel=selEdge&&selEdge.kind==='flow'&&selEdge.i===i;
+    const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i});
+    path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'flow',i};selNode=null;showProps();renderAll();};
+    svg.appendChild(path);
     if(ed.sourcePortID){
-      const mx=(sp.x+tp.x)/2,my=(sp.y+tp.y)/2-6;
-      svg.appendChild(elm('text',{x:mx,y:my,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
+      svg.appendChild(elm('text',{x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2-8,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
     }
   });
-  // 节点
-  WF.nodes.forEach(n=>{
-    const g=elm('g',{transform:`translate(${n.x},${n.y})`,class:'node','data-id':n.id});
-    const cat=TYPE_CATEGORY[n.type]||'llm';
-    const colors={flow:'#1a5c2a',llm:'#1a3a6b',code:'#3a1a6b',branch:'#6b3a1a',composite:'#1a6b6b',data:'#4a4a1a',ext:'#4a1a4a'};
-    const hdrC=colors[cat]||'#533483';
-    g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
-    g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:24,fill:hdrC,rx:3}));
-    // header text after rect so it's on top
-    // Actually SVG z-order is document order, rects then texts
-    const title=elm('text',{x:n.w/2,y:16,class:'node-title','text-anchor':'middle'},`${TYPE_LABEL[n.type]||'?'} (${n.type})`);
-    g.appendChild(title);
-    // io summary
-    const ins=(n.data.inputs?.inputParameters||[]).map(f=>f.name).join(', ');
-    const outs=(n.data.outputs||[]).map(f=>f.name).join(', ');
-    g.appendChild(elm('text',{x:8,y:40,class:'node-io'},ins?`in: ${ins}`:''));
-    g.appendChild(elm('text',{x:8,y:56,class:'node-io'},outs?`out: ${outs}`:''));
-    // ports
-    const ios=n.data.outputs||[];
-    ios.forEach((o,i)=>{
-      const cy=28+(n.h-28)*(i+1)/(ios.length+1);
-      const c=elm('circle',{cx:n.w,cy, r:5, class:'port out','data-port':o.name,'data-node':n.id});
-      c.onmousedown=(e)=>{e.stopPropagation();startEdge(n.id,o.name,n.x+n.w,n.y+cy);};
-      g.appendChild(c);
-    });
-    // input ports
-    const inputParams=n.data.inputs?.inputParameters||[];
-    inputParams.forEach((p,i)=>{
-      const cy=28+(n.h-28)*(i+1)/(inputParams.length+1);
-      const c=elm('circle',{cx:0,cy, r:5, class:'port in','data-port':p.name,'data-node':n.id});
-      c.onmouseup=(e)=>{e.stopPropagation();finishEdge(n.id,p.name);};
-      g.appendChild(c);
-    });
-    // click & drag
-    g.onmousedown=(e)=>{if(e.button!==0)return; e.stopPropagation();
-      if(e.shiftKey){startEdgeFromNode(n.id);return;}
-      dragNode=n.id; dragDX=n.x-e.clientX; dragDY=n.y-e.clientY;
-      selNode=n.id; selEdge=null; showProps(); renderAll();};
-    g.ondblclick=(e)=>{e.stopPropagation(); if([21,28].includes(n.type)) openComposite(n.id);};
-    svg.appendChild(g);
+
+  // ---- 节点 ----
+  WF.nodes.forEach(n=>svg.appendChild(renderNode(n)));
+
+  // ---- 拖拽临时线 ----
+  if(edgeFrom){
+    svg.appendChild(elm('path',{d:`M${edgeFrom.x},${edgeFrom.y} L${edgeFrom.mx},${edgeFrom.my}`,class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
+  }
+}
+
+function bezier(sp,tp,isVar){
+  const dx=Math.abs(tp.x-sp.x);
+  const c1x=sp.x+dx*0.5, c2x=tp.x-dx*0.5;
+  return `M${sp.x},${sp.y} C${c1x},${sp.y} ${c2x},${tp.y} ${tp.x},${tp.y}`;
+}
+
+function renderNode(n){
+  const g=elm('g',{transform:`translate(${n.x},${n.y})`,'data-id':n.id});
+  n.h=nodeH(n);
+  const cat=TYPE_CATEGORY[n.type]||'llm';
+  // 体
+  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
+  // 标题栏
+  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
+  g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
+  g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},TYPE_LABEL[n.type]+' · '+n.type));
+  // 流程端口（标题栏左右）
+  const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
+  fIn.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
+  g.appendChild(fIn);
+  const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
+  fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
+  g.appendChild(fOut);
+
+  // 变量输入端口（左侧）+ 字段名 + 控件
+  nodeInputs(n).forEach((p,i)=>{
+    const y=HDR_H+i*ROW_H+ROW_H/2;
+    const col=fieldColor(p.input?.type||'string');
+    const linked=inputIsLinked(p);
+    const port=elm('circle',{cx:0,cy:y,r:5,class:'port-var',fill:col,stroke:col,'data-innode':n.id,'data-infield':p.name});
+    port.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,p.name,col);};
+    port.onmousedown=(e)=>{e.stopPropagation();}; // 不启动节点拖动
+    g.appendChild(port);
+    // 字段名
+    g.appendChild(elm('text',{x:10,y,class:'node-field-name',fill:col},p.name+(p.required?'*':'')));
+    // 未连线控件（用 foreignObject）
+    if(!linked){
+      const fo=makeInputControl(n,p,i);
+      if(fo){fo.setAttribute('x',n.w-90);fo.setAttribute('y',y-8);fo.setAttribute('width',80);fo.setAttribute('height',16);g.appendChild(fo);}
+    }
   });
-  // 拖拽中的临时线
-  if(edgeFrom){
-    svg.appendChild(elm('path',{d:`M${edgeFrom.x},${edgeFrom.y} L${edgeFrom.mx},${edgeFrom.my}`,
-      class:'edge-ghost'}));
+  // 变量输出端口（右侧）+ 字段名
+  nodeOutputs(n).forEach((o,i)=>{
+    const y=HDR_H+i*ROW_H+ROW_H/2;
+    const col=fieldColor(o.type);
+    const port=elm('circle',{cx:n.w,cy:y,r:5,class:'port-var',fill:col,stroke:col,'data-outnode':n.id,'data-outfield':o.name});
+    port.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,o.name,col,n.x+n.w,y);};
+    g.appendChild(port);
+    g.appendChild(elm('text',{x:n.w-10,y,class:'node-field-name','text-anchor':'end',fill:col},o.name));
+  });
+
+  // 选择器：分支行 + 每分支流程出口（foreignObject）
+  if(n.type==='8'){
+    renderSelectorBranches(g,n);
   }
+
+  // 交互
+  g.onmousedown=(e)=>{
+    if(e.button!==0)return;
+    if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
+    e.stopPropagation();
+    dragNode=n.id; dragDX=n.x-e.clientX; dragDY=n.y-e.clientY;
+    selNode=n.id; selEdge=null; showProps(); renderAll();
+  };
+  return g;
 }
 
-function startEdge(nodeId,port,x,y){
-  edgeFrom={nodeId,port,x,y,mx:x,my:y};
+// 未连线输入控件
+function makeInputControl(n,p,i){
+  const t=p.input?.type||'string';
+  const v=p.input?.value;
+  const fo=document.createElementNS(NS,'foreignObject');
+  fo.setAttribute('width',80);fo.setAttribute('height',16);
+  const div=document.createElement('div');
+  div.style.cssText='width:80px;height:16px;display:flex;align-items:center';
+  const cur=(v?.type==='literal')?v.content:'';
+  if(t==='boolean'){
+    const cb=document.createElement('input');cb.type='checkbox';cb.checked=!!cur||cur===true||cur==='true';
+    cb.style.cssText='margin:0;transform:scale(0.8)';
+    cb.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:cb.checked});};
+    cb.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(cb);
+  }else if(['integer','number','float'].includes(t)){
+    const inp=document.createElement('input');inp.type='number';inp.value=cur;
+    inp.style.cssText='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+    inp.onchange=()=>{const num=parseFloat(inp.value);setInputLiteral(n.id,i,{type:'literal',content:isNaN(num)?inp.value:num});};
+    inp.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(inp);
+  }else{
+    const inp=document.createElement('input');inp.type='text';inp.value=cur;
+    inp.style.cssText='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+    inp.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:inp.value});};
+    inp.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(inp);
+  }
+  fo.appendChild(div);
+  fo.style.pointerEvents='auto';
+  return fo;
+}
+function setInputLiteral(nodeId,i,value){
+  const n=findN(nodeId);if(!n)return;
+  n.data.inputs.inputParameters[i].input.value=value;
   renderAll();
 }
 
-function startEdgeFromNode(nodeId){
-  // shift-click node: connect from its first output port
-  const n=WF.nodes.find(n=>n.id===nodeId);
-  if(!n||!(n.data.outputs||[]).length) return;
-  edgeFrom={nodeId,port:'',x:n.x+n.w,y:n.y+n.h/2,mx:n.x+n.w,my:n.y+n.h/2};
-  renderAll();
+// ============ 连线交互 ============
+function startFlow(nodeId){const n=findN(nodeId);const p=flowOutPos(n);edgeFrom={kind:'flow',nodeId,x:p.x,y:p.y,mx:p.x,my:p.y,color:'#fff'};renderAll();}
+function startVar(nodeId,field,color,x,y){edgeFrom={kind:'var',nodeId,field,x,y,mx:x,my:y,color};renderAll();}
+function finishFlow(tgtId){
+  if(!edgeFrom||edgeFrom.kind!=='flow'){edgeFrom=null;renderAll();return;}
+  if(edgeFrom.nodeId===tgtId){edgeFrom=null;renderAll();return;}
+  // 同源同目标（默认端口）只保留一条；分支端口可多条
+  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.targetNodeID===tgtId&&(!e.sourcePortID)));
+  WF.edges.push({sourceNodeID:edgeFrom.nodeId,targetNodeID:tgtId,sourcePortID:''});
+  edgeFrom=null;renderAll();
 }
-
-function finishEdge(targetNodeId,portName){
-  if(!edgeFrom) return;
-  // don't connect to self
-  if(edgeFrom.nodeId===targetNodeId){edgeFrom=null;renderAll();return;}
-  // remove existing edge with same source+port
-  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.sourcePortID===edgeFrom.port&&e.targetNodeID===targetNodeId));
-  WF.edges.push({sourceNodeID:edgeFrom.nodeId,targetNodeID:targetNodeId,sourcePortID:edgeFrom.port||''});
-  edgeFrom=null;
-  renderAll();
+function finishVar(tgtId,field,color){
+  if(!edgeFrom||edgeFrom.kind!=='var'){edgeFrom=null;renderAll();return;}
+  if(edgeFrom.color!==color){edgeFrom=null;toast('类型不匹配：只能连相同颜色的端口');renderAll();return;}
+  if(edgeFrom.nodeId===tgtId){edgeFrom=null;renderAll();return;}
+  // 写入目标输入字段的 ref
+  const tn=findN(tgtId);if(!tn){edgeFrom=null;renderAll();return;}
+  const p=tn.data.inputs.inputParameters.find(x=>x.name===field);
+  if(!p){edgeFrom=null;renderAll();return;}
+  p.input.value={type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}};
+  edgeFrom=null;selNode=tgtId;showProps();renderAll();
+  toast('已连接变量：'+edgeFrom?.field||'');
 }
-
-// ============ 画布交互 ============
 svg.addEventListener('mousemove',(e)=>{
-  if(dragNode){
-    const n=WF.nodes.find(n=>n.id===dragNode);
-    if(n){n.x=e.clientX+dragDX; n.y=e.clientY+dragDY; renderAll();}
-  }
-  if(edgeFrom){
-    edgeFrom.mx=e.clientX; edgeFrom.my=e.clientY; renderAll();
-  }
+  if(dragNode){const n=findN(dragNode);if(n){n.x=e.clientX+dragDX;n.y=e.clientY+dragDY;renderAll();}}
+  if(edgeFrom){edgeFrom.mx=e.clientX;edgeFrom.my=e.clientY;renderAll();}
 });
 svg.addEventListener('mouseup',()=>{dragNode=null;});
+svg.addEventListener('mouseup',(e)=>{
+  // 点空白取消连线/选择
+  if(edgeFrom&&e.target===svg){edgeFrom=null;renderAll();}
+});
 svg.addEventListener('click',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
-    selNode=null; selEdge=null; showProps(); renderAll();
-    edgeFrom=null; renderAll();
+    selNode=null;selEdge=null;edgeFrom=null;showProps();renderAll();
   }
 });
 svg.addEventListener('contextmenu',(e)=>{
   e.preventDefault();
   if(selNode&&selNode!=='100001'&&selNode!=='900001'){
     WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
-    WF.edges=WF.edges.filter(e=>e.sourceNodeID!==selNode&&e.targetNodeID!==selNode);
-    selNode=null; showProps(); renderAll();
+    WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
+    // 清掉指向它的 ref
+    WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
+    selNode=null;showProps();renderAll();
   }
-  if(selEdge!=null){
-    WF.edges.splice(selEdge,1); selEdge=null; renderAll();
+  if(selEdge&&selEdge.kind==='flow'){WF.edges.splice(selEdge.i,1);selEdge=null;renderAll();}
+  if(selEdge&&selEdge.kind==='var'){
+    const[tid,fname]=selEdge.key.split('::');const tn=findN(tid);
+    const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname);
+    if(p)p.input.value={type:'literal',content:''};
+    selEdge=null;renderAll();
   }
 });
 
-// 节点高度估算
-function estH(n){
-  const ic=(n.data.inputs?.inputParameters||[]).length;
-  const oc=(n.data.outputs||[]).length;
-  return Math.max(70, 28+Math.max(ic,oc)*16);
+// ============ Selector 分支（画布内 foreignObject）============
+function renderSelectorBranches(g,n){
+  const branches=n.data.inputs?.branches||[];
+  // else 分支
+  const branchesAll=[...branches.map((b,i)=>({port:i===0?'true':`true_${i}`,cond:b.condition,label:'分支'+(i+1)})),{port:'false',cond:null,label:'else'}];
+  let yOff=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+  branchesAll.forEach(br=>{
+    const fo=document.createElementNS(NS,'foreignObject');
+    fo.setAttribute('x',4);fo.setAttribute('y',yOff);fo.setAttribute('width',n.w-8);fo.setAttribute('height',20);
+    const div=document.createElement('div');div.style.cssText='display:flex;gap:2px;align-items:center;font-size:10px';
+    if(br.cond){
+      const opS=document.createElement('select');opS.style.cssText='font-size:9px;padding:0;background:#0f3460;color:#fff;border:1px solid #533483';
+      OPERATORS.forEach(o=>{const op=document.createElement('option');op.value=o.v;op.textContent=o.t;if(br.cond.conditions?.[0]?.operator===o.v)op.selected=true;opS.appendChild(op);});
+      opS.onchange=()=>{br.cond.conditions[0].operator=parseInt(opS.value);saveBranchCond(n,br);};
+      const lI=document.createElement('input');lI.style.cssText='width:45px;font-size:9px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483';
+      lI.value=ext(br.cond.conditions?.[0]?.left?.input?.value?.content?.name||br.cond.conditions?.[0]?.left?.input?.value?.content,'');
+      lI.onchange=()=>{ensureCond(br);br.cond.conditions[0].left={input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:lI.value}}}};saveBranchCond(n,br);};
+      const rI=document.createElement('input');rI.style.cssText='width:45px;font-size:9px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483';
+      rI.value=ext(br.cond.conditions?.[0]?.right?.input?.value?.content,'');
+      rI.onchange=()=>{ensureCond(br);br.cond.conditions[0].right={input:{type:'string',value:{type:'literal',content:rI.value}}};saveBranchCond(n,br);};
+      const del=document.createElement('button');del.textContent='×';del.style.cssText='font-size:9px;padding:0 4px;background:#6b2020;color:#fff;border:none;border-radius:2px;cursor:pointer';
+      del.onclick=()=>{n.data.inputs.branches.splice(branchesAll.indexOf(br),1);renderAll();};
+      [opS,lI,rI,del].forEach(c=>{c.onmousedown=(e)=>e.stopPropagation();div.appendChild(c);});
+    }else{
+      const lab=document.createElement('span');lab.textContent='否则';lab.style.cssText='color:#8a9099;font-size:9px';div.appendChild(lab);
+    }
+    fo.appendChild(div);fo.style.pointerEvents='auto';g.appendChild(fo);
+    yOff+=22;
+  });
+  n.h=yOff+4;
+  // 每分支的流程出口（标题栏下右侧）—— 重新画端口在节点右侧对应行
+  branchesAll.forEach((br,i)=>{
+    const yy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4+i*22+10;
+    const port=elm('circle',{cx:n.w,cy:yy,r:5,class:'port-flow',fill:'#fff',title:br.port});
+    port.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+yy};edgeFrom={kind:'flow',nodeId:n.id,port:br.port,x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
+    g.appendChild(port);
+    g.appendChild(elm('text',{x:n.w-10,y:yy+3,class:'node-type-tag','text-anchor':'end'},br.label));
+  });
 }
+function ensureCond(br){if(!br.cond)br.cond={logic:2,conditions:[]};if(!br.cond.conditions.length)br.cond.conditions.push({operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}});}
+function saveBranchCond(n,br){/* 已就地改 */}
 
-// ============ 节点调色板 ============
+// ============ 调色板添加节点 ============
 document.querySelectorAll('.pal-item').forEach(btn=>{
-  btn.addEventListener('click',()=>{
-    const type=parseInt(btn.dataset.type);
-    const templates={
-      1:{outputs:[],trigger_parameters:[]},
-      2:{inputs:{terminatePlan:'returnVariables',inputParameters:[]}},
-      3:{inputs:{inputParameters:[],llmParam:[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string'}]},
-      5:{inputs:{inputParameters:[],code:'',language:3},outputs:[]},
-      8:{inputs:{branches:[{condition:{logic:2,conditions:[]}}]}},
-      15:{inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string'}]},
-      21:{inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[],variableParameters:[]},outputs:[],blocks:[],edges:[]},
-      28:{inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[]},outputs:[],blocks:[],edges:[]},
-      22:{inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[],mode:'all'},outputs:[{name:'classificationId',type:'integer'},{name:'reason',type:'string'}]},
-      32:{inputs:{mergeGroups:[]},outputs:[]},
-      40:{inputs:{inputParameters:[],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean'}]},
-      45:{inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string'},{name:'statusCode',type:'integer'},{name:'headers',type:'string'}]},
-      9:{inputs:{workflowId:'',inputParameters:[]},outputs:[]},
-      4:{inputs:{apiParam:[{name:'apiName',input:{type:'string',value:{type:'literal',content:''}}}],inputParameters:[]},outputs:[]},
-      13:{inputs:{inputParameters:[],content:{type:'string',value:{type:'literal',content:''}}},outputs:[{name:'output',type:'string'}]},
-      58:{inputs:{inputParameters:[{name:'input',input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'string'}]},
-      59:{inputs:{inputParameters:[{name:'input',input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'object'}]},
+  btn.onclick=()=>{
+    const type=''+btn.dataset.type;
+    const T={
+      '1':{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]},
+      '2':{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}},
+      '3':{nodeMeta:{title:'LLM'},inputs:{inputParameters:[],llmParam:[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
+      '5':{nodeMeta:{title:'代码'},inputs:{inputParameters:[],code:'',language:3},outputs:[]},
+      '8':{nodeMeta:{title:'选择器'},inputs:{branches:[{condition:{logic:2,conditions:[]}}]}},
+      '15':{nodeMeta:{title:'文本'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
+      '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[],variableParameters:[]},outputs:[],blocks:[],edges:[]},
+      '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[]},outputs:[],blocks:[],edges:[]},
+      '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[],mode:'all'},outputs:[{name:'classificationId',type:'integer',description:''},{name:'reason',type:'string',description:''}]},
+      '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[]},outputs:[]},
+      '40':{nodeMeta:{title:'变量赋值'},inputs:{inputParameters:[],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
+      '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},
+      '9':{nodeMeta:{title:'子工作流'},inputs:{workflowId:'',inputParameters:[]},outputs:[]},
+      '4':{nodeMeta:{title:'插件'},inputs:{apiParam:[{name:'apiName',input:{type:'string',value:{type:'literal',content:''}}}],inputParameters:[]},outputs:[]},
+      '13':{nodeMeta:{title:'输出消息'},inputs:{inputParameters:[],content:{type:'string',value:{type:'literal',content:''}}},outputs:[{name:'output',type:'string',description:''}]},
+      '58':{nodeMeta:{title:'ToJSON'},inputs:{inputParameters:[{name:'input',input:{type:'object',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'string',description:''}]},
+      '59':{nodeMeta:{title:'FromJSON'},inputs:{inputParameters:[{name:'input',input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'object',description:''}]},
     };
-    const tpl=templates[type]||{};
-    const id=genId();
-    const n={id,type:''+type,x:200+WF.nodes.length*20,y:150+WF.nodes.length*20,w:200,h:80,data:JSON.parse(JSON.stringify(tpl))};
-    WF.nodes.push(n); n.h=estH(n);
-    selNode=id; showProps(); renderAll();
-  });
+    const n={id:genId(),type,x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:210,h:80,data:JSON.parse(JSON.stringify(T[type]||{}))};
+    WF.nodes.push(n);selNode=n.id;showProps();renderAll();
+  };
 });
-
-// ============ 复合节点子画布 ============
-function openComposite(nodeId){
-  const n=WF.nodes.find(n=>n.id===nodeId);
-  if(!n) return;
-  // 切换：点复合节点→展开内部 blocks 到顶层编辑？
-  // 简化实现：把 blocks 里的节点提升到 nodes 列表，用复合节点 id 前缀标识
-  const blocks=n.blocks||[];
-  const innerEdges=n.edges||[];
-  if(!blocks.length){
-    toast('该复合节点内无子节点。从调色板添加节点后，可手动把它们的 id 写到 data.blocks 中。');
-    return;
-  }
-  // 将内部节点前缀化加入顶层
-  blocks.forEach(b=>{
-    const bn={...b, id:nodeId+'__'+b.id, x:n.x+40+(blocks.indexOf(b)*20), y:n.y+40+(blocks.indexOf(b)*20), w:160, h:70};
-    bn.h=estH(bn);
-    WF.nodes.push(bn);
-  });
-  innerEdges.forEach(e=>{
-    WF.edges.push({sourceNodeID:nodeId+'__'+e.sourceNodeID, targetNodeID:nodeId+'__'+e.targetNodeID, sourcePortID:e.sourcePortID||''});
-  });
-  toast(`已展开复合节点 ${TYPE_LABEL[n.type]} 的 ${blocks.length} 个子节点`);
-  renderAll();
-}
 
 // ============ 属性面板 ============
 function showProps(){
   const p=document.getElementById('propsContent');
-  if(!selNode){p.innerHTML='<span style="color:#8a9099">← 点击画布上的节点编辑其属性</span>';return;}
-  const n=WF.nodes.find(n=>n.id===selNode);
-  if(!n){p.innerHTML='';return;}
-  let h=`<h3>节点属性</h3>
-    <label>ID <input value="${n.id}" onchange="setProp('id',this.value)" ${n.id==='100001'||n.id==='900001'?'readonly':''}></label>
+  if(!selNode){p.innerHTML='<span style="color:#8a9099">← 点击节点编辑属性</span>';return;}
+  const n=findN(selNode);if(!n){p.innerHTML='';return;}
+  let h=`<h3>节点</h3>
+    <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
+    <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
     <label>类型 <select onchange="setProp('type',this.value)">${Object.entries(TYPE_LABEL).map(([k,v])=>`<option value="${k}" ${n.type===k?'selected':''}>${v} (${k})</option>`).join('')}</select></label>
-    <label>X <input type="number" value="${n.x}" onchange="setProp('x',parseInt(this.value))"></label>
-    <label>Y <input type="number" value="${n.y}" onchange="setProp('y',parseInt(this.value))"></label>
-    <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',parseInt(this.value))"></label>
-  `;
-  // 输入参数
-  h+=`<h3>输入 (inputParameters) <button onclick="addInput()">+</button></h3>`;
-  const ips=n.data.inputs?.inputParameters||[];
-  if(ips.length){
-    h+=`<table class="io-table"><tr><th>名称</th><th>类型</th><th>必填</th><th></th></tr>`;
-    ips.forEach((p,i)=>{
-      const v=p.input?.value||{};
-      const isRef=v.type==='ref';
-      const ref=v.content||{};
-      h+=`<tr>
-        <td class="td-name"><input value="${ext(p.name)}" onchange="setIO('in','name',${i},this.value)"></td>
-        <td class="td-type"><select onchange="setIO('in','type',${i},this.value)">${IO_TYPES.map(t=>`<option value="${t}" ${(p.input?.type||'string')===t?'selected':''}>${t}</option>`)}</select></td>
-        <td class="td-req"><input type="checkbox" disabled></td>
-        <td class="td-act"><button class="del" onclick="delInput(${i})">×</button></td></tr>`;
-      h+=`<tr><td colspan="4" style="font-size:10px;color:#8a9099">
-        <select style="width:auto;font-size:10px" onchange="setIORef(${i},this.value)"><option value="ref" ${isRef?'selected':''}>ref</option><option value="literal" ${!isRef?'selected':''}>literal</option></select>
-        ${isRef?`blockID <input style="width:80px;font-size:10px" value="${ext(ref.blockID)}" onchange="setIORef(${i},undefined,{blockID:this.value})"> name <input style="width:80px;font-size:10px" value="${ext(ref.name)}" onchange="setIORef(${i},undefined,{name:this.value})">`
-        :`内容 <input style="width:120px;font-size:10px" value="${ext(v.content)}" onchange="setIORef(${i},undefined,{content:this.value})">`}
-      </td></tr>`;
-    });
-    h+=`</table>`;
-  }
-  // 输出
-  h+=`<h3>输出 (outputs) <button onclick="addOutput()">+</button></h3>`;
-  const outs=n.data.outputs||[];
-  if(outs.length){
-    h+=`<table class="io-table"><tr><th>名称</th><th>类型</th><th></th></tr>`;
-    outs.forEach((o,i)=>{
-      h+=`<tr><td class="td-name"><input value="${ext(o.name)}" onchange="setOut(${i},'name',this.value)"></td>
-        <td class="td-type"><select onchange="setOut(${i},'type',this.value)">${IO_TYPES.map(t=>`<option value="${t}" ${o.type===t?'selected':''}>${t}</option>`)}</select></td>
-        <td class="td-act"><button class="del" onclick="delOutput(${i})">×</button></td></tr>`;
-    });
-    h+=`</table>`;
-  }
-  // LLM 专属
+    <label>位置 X/Y <input type="number" value="${n.x}" onchange="setProp('x',+this.value)" style="width:45%;display:inline-block"> <input type="number" value="${n.y}" onchange="setProp('y',+this.value)" style="width:45%;display:inline-block;float:right"></label>
+    <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
+
+  // 输入字段（含 object 子字段 / list item）
+  h+=`<h3>输入字段 <button onclick="addIO('in')">+ 添加</button></h3>`;
+  h+=renderIOFields(nodeInputs(n),'in');
+
+  // 输出字段
+  h+=`<h3>输出字段 <button onclick="addIO('out')">+ 添加</button></h3>`;
+  h+=renderIOFields(nodeOutputs(n),'out');
+
+  // LLM
   if(n.type==='3'){
-    h+=`<h3>LLM 参数</h3>`;
+    h+='<h3>LLM 提示词</h3>';
     const lp=n.data.inputs?.llmParam||[];
-    lp.forEach((p,i)=>{
-      if(['prompt','systemPrompt'].includes(p.name)){
-        h+=`<label>${p.name} <textarea onchange="setLLMParam(${i},'content',this.value)">${ext(p.input?.value?.content)}</textarea></label>`;
-      }
-    });
+    const prompt=lp.find(x=>x.name==='prompt'), sys=lp.find(x=>x.name==='systemPrompt');
+    h+=`<label>systemPrompt <textarea onchange="setLLM('systemPrompt',this.value)">${ext(sys?.input?.value?.content)}</textarea></label>`;
+    h+=`<label>prompt <textarea onchange="setLLM('prompt',this.value)">${ext(prompt?.input?.value?.content)}</textarea></label>`;
+    h+='<div style="font-size:10px;color:#8a9099">输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。</div>';
   }
-  // 选择器专属
-  if(n.type==='8'){
-    h+=`<h3>分支条件 (branches)</h3>`;
-    const brs=n.data.inputs?.branches||[];
-    brs.forEach((br,i)=>{
-      h+=`<div style="margin:4px 0;padding:4px;background:#0f3460;border-radius:4px">分支 ${i}: <button class="del" onclick="delBranch(${i})">×</button>`;
-      const conds=br.condition?.conditions||[];
-      h+=`<label>逻辑 <select onchange="setBranchLogic(${i},parseInt(this.value))"><option value="2" ${br.condition?.logic!==1?'selected':''}>AND</option><option value="1" ${br.condition?.logic===1?'selected':''}>OR</option></select></label>`;
-      conds.forEach((c,j)=>{
-        h+=`<div class="edge-row"><span>op</span><select style="width:60px" onchange="setCond(${i},${j},'operator',parseInt(this.value))">
-          ${[1,2,7,8,9,10,13,14,15,16,3].map(o=>`<option value="${o}" ${c.operator===o?'selected':''}>${['','=','≠','','','','','in','∉','空','非空','','','>','≥','<','≤'][o]||o}</option>`).join('')}</select>
-          <span>左</span><input onchange="setCond(${i},${j},'left',this.value)" value="${ext(c.left?.input?.value?.content?.name||c.left?.input?.value?.content,'')}" style="width:60px">
-          <span>右</span><input onchange="setCond(${i},${j},'right',this.value)" value="${ext(c.right?.input?.value?.content||c.right?.input?.value?.content,'')}" style="width:60px"></div>`;
-      });
-      h+=`<button onclick="addCond(${i})">+条件</button></div>`;
-    });
-    h+=`<button onclick="addBranch()">+分支</button>`;
-  }
-  // 循环专属
+  // 循环
   if(n.type==='21'){
-    h+=`<h3>循环设置</h3>
-      <label>类型 <select onchange="setLoop('loopType',this.value)"><option value="array" ${n.data.inputs?.loopType==='array'?'selected':''}>array</option><option value="count" ${n.data.inputs?.loopType==='count'?'selected':''}>count</option></select></label>
-      <label>次数/数组 <input value="${ext(n.data.inputs?.loopCount?.value?.content)}" onchange="setLoop('loopCount',this.value)"></label>`;
+    h+=`<h3>循环</h3><label>类型 <select onchange="setLoop('loopType',this.value)"><option value="array" ${n.data.inputs?.loopType==='array'?'selected':''}>array</option><option value="count" ${n.data.inputs?.loopType==='count'?'selected':''}>count</option><option value="infinite" ${n.data.inputs?.loopType==='infinite'?'selected':''}>infinite</option></select></label>`;
+    h+=`<label>次数 <input value="${ext(n.data.inputs?.loopCount?.value?.content)}" onchange="setLoop('loopCount',this.value)"></label>`;
+    h+='<div style="font-size:10px;color:#8a9099">分支条件在画布节点上直接编辑。</div>';
+  }
+  // 选择器
+  if(n.type==='8'){
+    h+='<h3>选择器分支</h3><button onclick="addBranchCanvas()">+ 分支</button><div style="font-size:10px;color:#8a9099">分支条件与每分支的流程出口在画布节点上编辑。</div>';
   }
   p.innerHTML=h;
 }
 
-// ============ 属性修改 ============
-function findN(){return WF.nodes.find(n=>n.id===selNode);}
-function setProp(k,v){const n=findN();if(!n)return;n[k]=v;if(k==='w')n.h=estH(n);renderAll();}
-function addInput(){const n=findN();if(!n)return;n.data.inputs=n.data.inputs||{};n.data.inputs.inputParameters=n.data.inputs.inputParameters||[];n.data.inputs.inputParameters.push({name:'newField',input:{type:'string',value:{type:'literal',content:''}}});n.h=estH(n);showProps();renderAll();}
-function delInput(i){const n=findN();if(!n)return;n.data.inputs.inputParameters.splice(i,1);n.h=estH(n);showProps();renderAll();}
-function setIO(io,name,i,v){const n=findN();if(!n)return;
-  if(io==='in'){const p=n.data.inputs.inputParameters[i];if(name==='name')p.name=v;if(name==='type')p.input.type=v;}
+// 渲染输入/输出字段表（含 object 子字段 / list item 类型）
+function renderIOFields(arr,kind){
+  if(!arr.length)return '<div style="color:#8a9099;font-size:11px">（无）</div>';
+  let h='<table class="io-table">';
+  arr.forEach((f,i)=>{
+    const t=f.input?.type||f.type||'string';
+    h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" onchange="setField('${kind}',${i},'name',this.value)"></td>
+      <td style="width:70px"><select onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
+      <td><button class="del" onclick="delField('${kind}',${i})">×</button></td></tr>`;
+    h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
+    // list：选 item 类型
+    if(t==='list'){
+      const itemT=getListItemType(f);
+      h+=`<tr><td colspan="3" class="sub-fields"><span style="font-size:10px;color:#8a9099">list item 类型: </span><select style="width:auto;font-size:10px" onchange="setListItemType('${kind}',${i},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
+      if(itemT==='object') h+=renderObjectSubFields(f,kind,i,'list-item');
+    }
+    // object：子字段
+    if(t==='object') h+=renderObjectSubFields(f,kind,i,'object');
+  });
+  h+='</table>';
+  return h;
+}
+function renderObjectSubFields(f,kind,fi,ctx){
+  let schema;
+  if(ctx==='list-item'){schema=f.input?.schema||f.schema; if(Array.isArray(schema)){} else {schema=[];}}
+  else {schema=f.schema||f.input?.schema||[];}
+  if(!Array.isArray(schema))schema=[];
+  let h=`<tr><td colspan="3" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段:</div>`;
+  schema.forEach((s,si)=>{
+    const st=s.type||'string';
+    h+=`<div style="display:flex;gap:2px;margin:1px 0">
+      <input value="${ext(s.name)}" placeholder="名" style="width:50px;font-size:10px" onchange="setSubField('${kind}',${fi},${si},'name',this.value,${ctx==='list-item'})">
+      <select style="width:55px;font-size:10px" onchange="setSubField('${kind}',${fi},${si},'type',this.value,${ctx==='list-item'})">${IO_TYPES.map(x=>`<option value="${x}" ${st===x?'selected':''}>${x}</option>`).join('')}</select>
+      <button class="del" onclick="delSubField('${kind}',${fi},${si},${ctx==='list-item'})">×</button></div>`;
+    h+=`<input value="${ext(s.description)}" placeholder="描述" style="width:100%;font-size:10px;color:#8a9099;margin-bottom:1px" onchange="setSubField('${kind}',${fi},${si},'description',this.value,${ctx==='list-item'})">`;
+    h+=`<label style="font-size:9px;color:#8a9099"><input type="checkbox" ${s.required?'checked':''} onchange="setSubField('${kind}',${fi},${si},'required',this.checked,${ctx==='list-item'})"> required</label>`;
+  });
+  h+=`<button onclick="addSubField('${kind}',${fi},${ctx==='list-item'})" style="font-size:10px">+ 子字段</button></td></tr>`;
+  return h;
+}
+function getListItemType(f){
+  const sch=f.input?.schema||f.schema;
+  if(Array.isArray(sch))return 'object';
+  if(sch&&sch.type)return sch.type;
+  return 'string';
+}
+
+// ============ 字段编辑 ============
+function findArr(kind){const n=findN(selNode);return kind==='in'?nodeInputs(n):nodeOutputs(n);}
+function setProp(k,v){const n=findN(selNode);n[k]=v;renderAll();}
+function setTitle(v){const n=findN(selNode);n.data.nodeMeta=n.data.nodeMeta||{};n.data.nodeMeta.title=v;renderAll();}
+function addIO(kind){const n=findN(selNode);const item={name:'field'+Date.now()%1000,description:''};
+  if(kind==='in'){n.data.inputs=n.data.inputs||{};n.data.inputs.inputParameters=n.data.inputs.inputParameters||[];item.input={type:'string',value:{type:'literal',content:''}};n.data.inputs.inputParameters.push(item);}
+  else{n.data.outputs=n.data.outputs||[];item.type='string';n.data.outputs.push(item);}
   showProps();renderAll();}
-function setIORef(i,mode,fields){
-  const n=findN();if(!n)return; const p=n.data.inputs.inputParameters[i];
-  if(mode){p.input.value=p.input.value||{};p.input.value.type=mode;
-    if(mode==='ref')p.input.value.content={source:'block-output',blockID:'',name:''};
-    else p.input.value.content='';}
-  else if(fields){
-    if('blockID' in fields)p.input.value.content.blockID=fields.blockID;
-    if('name' in fields)p.input.value.content.name=fields.name;
-    if('content' in fields)p.input.value.content=fields.content;
-  }
+function delField(kind,i){findArr(kind).splice(i,1);showProps();renderAll();}
+function setField(kind,i,field,v){
+  const arr=findArr(kind);const f=arr[i];
+  if(field==='name')f.name=v;
+  if(field==='description')f.description=v;
+  if(field==='type'){if(kind==='in'){f.input.type=v;if(v!=='list'&&v!=='object')delete f.input.schema;}else{f.type=v;if(v!=='list'&&v!=='object')delete f.schema;}}
   showProps();renderAll();}
-function addOutput(){const n=findN();if(!n)return;n.data.outputs=n.data.outputs||[];n.data.outputs.push({name:'newOut',type:'string'});n.h=estH(n);showProps();renderAll();}
-function delOutput(i){const n=findN();if(!n)return;n.data.outputs.splice(i,1);n.h=estH(n);showProps();renderAll();}
-function setOut(i,field,v){const n=findN();if(!n)return;n.data.outputs[i][field]=v;showProps();renderAll();}
-function setLLMParam(i,field,v){const n=findN();if(!n)return;n.data.inputs.llmParam[i].input.value.content=v;showProps();}
-function addBranch(){const n=findN();if(!n)return;n.data.inputs.branches.push({condition:{logic:2,conditions:[]}});showProps();}
-function delBranch(i){const n=findN();if(!n)return;n.data.inputs.branches.splice(i,1);showProps();}
-function setBranchLogic(i,v){const n=findN();if(!n)return;n.data.inputs.branches[i].condition.logic=v;showProps();}
-function addCond(bi){const n=findN();if(!n)return;n.data.inputs.branches[bi].condition.conditions.push({operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}});showProps();}
-function setCond(bi,ci,field,v){const n=findN();if(!n)return;
-  const c=n.data.inputs.branches[bi].condition.conditions[ci];
-  if(field==='operator')c.operator=v;
-  if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.type='ref';}
-  if(field==='right'){c.right.input.value.content=v;c.right.input.value.type='literal';}
+function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
+function setLoop(field,v){const n=findN(selNode);if(field==='loopType')n.data.inputs.loopType=v;if(field==='loopCount')n.data.inputs.loopCount={type:'integer',value:{type:'literal',content:v}};}
+
+// object 子字段 / list item
+function getSchemaHolder(kind,fi,isListItem){
+  const f=findArr(kind)[fi];
+  if(isListItem){return {get:()=>{let s=f.input?.schema||f.schema;if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.input=f.input||{};f.input.schema=arr;}};}
+  return {get:()=>{let s=f.schema||(f.input?.schema)||[];if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.schema=arr;}};
+}
+function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);showProps();}
+function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);showProps();}
+function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(field==='type')showProps();}
+function setListItemType(kind,fi,itemType){
+  const f=findArr(kind)[fi];
+  if(itemType==='object'){const a=[];(f.input||f).schema=a;if(f.input)f.input.schema=a;}
+  else{const sch={type:itemType};if(f.input)f.input.schema=sch;else f.schema=sch;}
   showProps();}
-function setLoop(field,v){const n=findN();if(!n)return;
-  if(field==='loopType')n.data.inputs.loopType=v;
-  if(field==='loopCount')n.data.inputs.loopCount={type:'integer',value:{type:'literal',content:v}};
-  showProps();}
+function addBranchCanvas(){const n=findN(selNode);n.data.inputs.branches.push({condition:{logic:2,conditions:[]}});renderAll();}
 
 // ============ 文件操作 ============
 async function api(method,path,body){
-  try{
-    const opts={method,headers:{'Content-Type':'application/json'}};
-    if(body) opts.body=JSON.stringify(body);
-    const r=await fetch(path,opts);
-    return await r.json();
-  }catch(e){return{error:e+''};}
+  try{const opts={method,headers:{'Content-Type':'application/json'}};if(body)opts.body=JSON.stringify(body);
+    const r=await fetch(path,opts);return await r.json();}catch(e){return{error:e+''};}
 }
 async function loadFileList(){
-  const r=await api('GET','/api/wf/list');
-  const sel=document.getElementById('fileSel');
+  const r=await api('GET','/api/wf/list');const sel=document.getElementById('fileSel');
   sel.innerHTML='<option value="">选择工作流…</option>';
-  (r.items||[]).forEach(it=>{
-    const o=document.createElement('option'); o.value=it.name; o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');
-    sel.appendChild(o);
-  });
+  (r.items||[]).forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
 }
 async function openWf(name){
-  const r=await api('GET','/api/wf/'+name);
-  if(r.error){toast(r.error);return;}
-  WF.name=r.name; WF.meta=r.meta||{};
-  // 给每个节点补充位置(如果 JSON 里没有)
-  WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{
-    if(n.x==null) n.x=100+i*30;
-    if(n.y==null) n.y=100+i*30;
-    n.w=n.w||200; n.h=estH(n);
-    return n;
-  });
+  const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}
+  WF.name=r.name;WF.meta=r.meta||{};
+  WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
   document.getElementById('fileSel').value=name;
   document.getElementById('fdesc').value=WF.meta.description||'';
   document.getElementById('fcoze').value=WF.meta.coze_url||'';
   document.getElementById('fstatus').textContent='';
-  selNode=null; showProps(); renderAll();
-  toast(`已打开 ${name}`);
+  selNode=null;showProps();renderAll();toast('已打开 '+name);
 }
 async function saveWf(){
-  let name=WF.name;
-  if(!name){const n=prompt('工作流名称（不含扩展名）：');if(!n)return;name=n;}
+  let name=WF.name;if(!name){const n=prompt('工作流名称：');if(!n)return;name=n;}
   document.getElementById('fstatus').textContent='保存中…';
   WF.meta.description=document.getElementById('fdesc').value;
   WF.meta.coze_url=document.getElementById('fcoze').value;
-  const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,data:n.data})),edges:WF.edges,versions:{}};
+  // 保存时剥离 x/y/w/h（这些是编辑器视图状态）
+  const canvas={nodes:WF.nodes.map(n=>{const c={id:n.id,type:n.type,data:JSON.parse(JSON.stringify(n.data))};return c;}),edges:WF.edges,versions:{}};
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}
-  WF.name=r.name||name;
-  document.getElementById('fileSel').value=WF.name;
+  WF.name=r.name||name;document.getElementById('fileSel').value=WF.name;
   document.getElementById('fstatus').textContent='✅ 已保存';
   setTimeout(()=>document.getElementById('fstatus').textContent='',3000);
   await loadFileList();
 }
 async function createWf(){
-  const n=prompt('新工作流名称（英文，不含扩展名）：');
-  if(!n)return;
-  const r=await api('POST','/api/wf/create',{name:n});
-  if(r.error){toast(r.error);return;}
-  await loadFileList();
-  document.getElementById('fileSel').value=r.name;
-  openWf(r.name);
+  const n=prompt('新工作流名称（英文）：');if(!n)return;
+  const r=await api('POST','/api/wf/create',{name:n});if(r.error){toast(r.error);return;}
+  await loadFileList();openWf(r.name);
 }
 async function deleteWf(){
-  const name=WF.name||document.getElementById('fileSel').value;
-  if(!name){toast('请先选择/打开一个工作流');return;}
-  if(!confirm(`确定删除工作流 "${name}"？此操作不可恢复。`))return;
-  const r=await api('DELETE','/api/wf/'+name);
-  if(r.error){toast(r.error);return;}
+  const name=WF.name||document.getElementById('fileSel').value;if(!name){toast('请先选择工作流');return;}
+  if(!confirm(`确定删除 "${name}"？`))return;
+  const r=await api('DELETE','/api/wf/'+name);if(r.error){toast(r.error);return;}
   WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
-  selNode=null; showProps(); renderAll();
-  document.getElementById('fileSel').value='';
-  document.getElementById('fdesc').value='';
-  document.getElementById('fcoze').value='';
-  await loadFileList();
-  toast(`已删除 ${name}`);
+  selNode=null;showProps();renderAll();document.getElementById('fileSel').value='';
+  document.getElementById('fdesc').value='';document.getElementById('fcoze').value='';await loadFileList();toast('已删除 '+name);
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
 
-// ============ 入口 ============
-document.getElementById('fileSel').addEventListener('change',function(){
-  if(this.value) openWf(this.value);
-});
-// 键盘快捷键
+// ============ 图例 ============
+function renderLegend(){
+  const d=document.getElementById('legend');
+  d.innerHTML='<div style="margin-bottom:3px"><span class="swatch" style="background:#fff"></span>流程线（白实线）</div>'+
+    Object.entries(TYPE_COLOR).map(([t,c])=>`<div><span class="swatch" style="background:${c}"></span>${t}</div>`).join('')+
+    '<div style="margin-top:3px;font-size:9px">变量线=彩色虚线<br>同色端口才可互连</div>';
+}
+
+document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
 document.addEventListener('keydown',(e)=>{
   if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveWf();}
-  if(e.key==='Delete'&&selNode&&selNode!=='100001'&&selNode!=='900001'){
-    WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
-    WF.edges=WF.edges.filter(e=>e.sourceNodeID!==selNode&&e.targetNodeID!==selNode);
-    selNode=null; showProps(); renderAll();
+  if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'){
+    WF.nodes=WF.nodes.filter(n=>n.id!==selNode);WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
+    WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
+    selNode=null;showProps();renderAll();
   }
 });
-
-// 暴露方法到全局
-window.WE = {openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
-
-loadFileList();
-renderAll();
+window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
+renderLegend();loadFileList();renderAll();
 </script>
 </body></html>

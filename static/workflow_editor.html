@@ -237,6 +237,10 @@ function renderAll(){
       const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
       path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
       svg.appendChild(path);
+      // 目标端断开 handle：从这里拽出，松手空白即断开
+      const handle=elm('circle',{cx:tp.x,cy:tp.y,r:4,fill:col,stroke:'#fff','stroke-width':1,class:'edge-handle',style:'cursor:grab'});
+      handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect({kind:'var',key,tgtNode:tn.id,tgtField:p.name},sx,col);};
+      svg.appendChild(handle);
     });
   });
 
@@ -251,6 +255,10 @@ function renderAll(){
     if(ed.sourcePortID){
       svg.appendChild(elm('text',{x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2-8,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
     }
+    // 目标端断开 handle
+    const handle=elm('circle',{cx:tp.x,cy:tp.y,r:5,fill:'#fff',stroke:'#533483','stroke-width':1.5,class:'edge-handle',style:'cursor:grab'});
+    handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect({kind:'flow',i,sp},sp,'#fff');};
+    svg.appendChild(handle);
   });
 
   // ---- 节点 ----
@@ -258,7 +266,8 @@ function renderAll(){
 
   // ---- 拖拽临时线 ----
   if(edgeFrom){
-    svg.appendChild(elm('path',{d:`M${edgeFrom.x},${edgeFrom.y} L${edgeFrom.mx},${edgeFrom.my}`,class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
+    const sx=edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x, sy=edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y;
+    svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:edgeFrom.mx,y:edgeFrom.my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
   }
 }
 
@@ -409,6 +418,22 @@ function setInputLiteral(nodeId,i,value){
 
 // ============ 连线交互 ============
 function toggleExpand(key){if(expandedFields.has(key))expandedFields.delete(key);else expandedFields.add(key);renderAll();}
+// 从目标端点拽出：松手若不在端口上则断开该线
+function startDisconnect(info, sp, color){
+  edgeFrom={kind:'disconnect',info,sp,mx:sp.x,my:sp.y,color};
+  renderAll();
+}
+function doDisconnect(info){
+  if(info.kind==='flow'){
+    WF.edges.splice(info.i,1);
+    toast('已断开流程线');
+  }else if(info.kind==='var'){
+    const tn=findN(info.tgtNode);
+    const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField);
+    if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+  }
+  showProps();renderAll();
+}
 function startFlow(nodeId){const n=findN(nodeId);const p=flowOutPos(n);edgeFrom={kind:'flow',nodeId,x:p.x,y:p.y,mx:p.x,my:p.y,color:'#fff'};renderAll();}
 function startVar(nodeId,field,color,x,y){edgeFrom={kind:'var',nodeId,field,x,y,mx:x,my:y,color};renderAll();}
 function finishFlow(tgtId){
@@ -441,7 +466,18 @@ svg.addEventListener('mousemove',(e)=>{
   if(edgeFrom){edgeFrom.mx=e.clientX;edgeFrom.my=e.clientY;renderAll();}
   if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
-svg.addEventListener('mouseup',()=>{dragNode=null;panning=false;});
+svg.addEventListener('mouseup',(e)=>{
+  dragNode=null;panning=false;
+  // 断开拖拽：松手时若不在端口上 → 断开；落在同色端口上 → 重连到新目标
+  if(edgeFrom&&edgeFrom.kind==='disconnect'){
+    const onPort=e.target.classList&&(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'));
+    if(!onPort){
+      doDisconnect(edgeFrom.info);
+    }
+    // 落在端口上：保持原线（不处理重连，避免复杂；要换目标先断再连）
+    edgeFrom=null;renderAll();
+  }
+});
 svg.addEventListener('mousedown',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
     panning=true;panX=e.clientX;panY=e.clientY;

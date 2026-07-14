@@ -324,12 +324,19 @@ function renderNode(n){
           g.appendChild(tg);
           g.appendChild(elm('text',{x:22,y,class:'node-field-name',fill:col},ir.field));
         }else{
-          g.appendChild(elm('text',{x:10,y,class:'node-field-name',fill:col},ir.field));
-          // 未连线控件
+          // 未连线：显示输入控件（占左 2/3，placeholder=字段名）；已连线：显示字段名
           const p=nodeInputs(n).find(x=>x.name===ir.field);
-          if(p&&!inputIsLinked(p)){
-            const fo=makeInputControl(n,p,nodeInputs(n).indexOf(p));
-            if(fo){fo.setAttribute('x',n.w-90);fo.setAttribute('y',y-8);fo.setAttribute('width',80);fo.setAttribute('height',16);g.appendChild(fo);}
+          const linked=p&&inputIsLinked(p);
+          if(p&&!linked){
+            const fo=makeInputControl(n,p,nodeInputs(n).indexOf(p),ir.field);
+            if(fo){
+              const cw=Math.floor(n.w*2/3)-14;   // 左 2/3 区域
+              fo.setAttribute('x',12);fo.setAttribute('y',y-8);fo.setAttribute('width',cw);fo.setAttribute('height',16);
+              fo.querySelector('div').style.width=cw+'px';
+              g.appendChild(fo);
+            }
+          }else{
+            g.appendChild(elm('text',{x:10,y,class:'node-field-name',fill:col},ir.field+(ir.required?'*':'')));
           }
         }
       }else{
@@ -383,8 +390,8 @@ function renderNode(n){
   return g;
 }
 
-// 未连线输入控件
-function makeInputControl(n,p,i){
+// 未连线输入控件（placeholder=字段名，宽度由调用方设置）
+function makeInputControl(n,p,i,ph){
   const t=p.input?.type||'string';
   const v=p.input?.value;
   const fo=document.createElementNS(NS,'foreignObject');
@@ -392,21 +399,25 @@ function makeInputControl(n,p,i){
   const div=document.createElement('div');
   div.style.cssText='width:80px;height:16px;display:flex;align-items:center';
   const cur=(v?.type==='literal')?v.content:'';
+  const baseStyle='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
   if(t==='boolean'){
+    const lab=document.createElement('label');
+    lab.style.cssText='font-size:10px;display:flex;align-items:center;gap:2px;color:'+fieldColor(t);
     const cb=document.createElement('input');cb.type='checkbox';cb.checked=!!cur||cur===true||cur==='true';
     cb.style.cssText='margin:0;transform:scale(0.8)';
+    const span=document.createElement('span');span.textContent=ph||p.name;
     cb.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:cb.checked});};
     cb.onmousedown=(e)=>e.stopPropagation();
-    div.appendChild(cb);
+    lab.appendChild(cb);lab.appendChild(span);div.appendChild(lab);
   }else if(['integer','number','float'].includes(t)){
-    const inp=document.createElement('input');inp.type='number';inp.value=cur;
-    inp.style.cssText='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+    const inp=document.createElement('input');inp.type='number';inp.value=cur;inp.placeholder=ph||p.name;
+    inp.style.cssText=baseStyle;
     inp.onchange=()=>{const num=parseFloat(inp.value);setInputLiteral(n.id,i,{type:'literal',content:isNaN(num)?inp.value:num});};
     inp.onmousedown=(e)=>e.stopPropagation();
     div.appendChild(inp);
   }else{
-    const inp=document.createElement('input');inp.type='text';inp.value=cur;
-    inp.style.cssText='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+    const inp=document.createElement('input');inp.type='text';inp.value=cur;inp.placeholder=ph||p.name;
+    inp.style.cssText=baseStyle;
     inp.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:inp.value});};
     inp.onmousedown=(e)=>e.stopPropagation();
     div.appendChild(inp);

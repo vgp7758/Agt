@@ -614,7 +614,26 @@ document.querySelectorAll('.pal-item').forEach(btn=>{
       '1':{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]},
       '2':{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}},
       '3':{nodeMeta:{title:'LLM'},inputs:{inputParameters:[],llmParam:[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
-      '5':{nodeMeta:{title:'代码'},inputs:{inputParameters:[],code:'',language:3},outputs:[]},
+      '5':{nodeMeta:{title:'代码'},inputs:{inputParameters:[],code:`# 在这里，您可以通过 'args' 获取节点中的输入变量，并通过 'ret' 输出结果
+# 'args' 已经被正确地注入到环境中
+# 下面是一个示例，首先获取节点的全部输入参数params，其次获取其中参数名为'input'的值：
+# params = args.params;
+# input = params['input'];
+# 下面是一个示例，输出一个包含多种数据类型的 'ret' 对象：
+# ret: Output = { "name": '小明', "hobbies": ["看书", "旅游"] };
+
+async def main(args: Args) -> Output:
+    params = args.params
+    # 构建输出对象
+    ret: Output = {
+        "key0": params['input'] + params['input'], # 拼接两次入参 input 的值
+        "key1": ["hello", "world"],  # 输出一个数组
+        "key2": { # 输出一个Object
+            "key21": "hi"
+        },
+    }
+    return ret`,language:3},outputs:
+        [{name:'key0',type:'string',description:'拼接结果'},{name:'key1',type:'list',description:'数组示例'},{name:'key2',type:'object',description:'对象示例'}]},
       '8':{nodeMeta:{title:'选择器'},inputs:{branches:[{condition:{logic:2,conditions:[]}}]}},
       '15':{nodeMeta:{title:'文本'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
       '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[],variableParameters:[]},outputs:[],blocks:[],edges:[]},
@@ -672,6 +691,11 @@ function showProps(){
     h+=`<label>systemPrompt <textarea onchange="setLLM('systemPrompt',this.value)">${ext(sys?.input?.value?.content)}</textarea></label>`;
     h+=`<label>prompt <textarea onchange="setLLM('prompt',this.value)">${ext(prompt?.input?.value?.content)}</textarea></label>`;
     h+='<div style="font-size:10px;color:#8a9099">输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。</div>';
+  }
+  // 代码节点
+  if(n.type==='5'){
+    h+=`<h3>Python 代码</h3><label><textarea style="min-height:200px" onchange="setCode(this.value)">${ext(n.data.inputs?.code)}</textarea></label>`;
+    h+='<div style="font-size:10px;color:#8a9099">通过 args.params 取输入，ret: Output = {...} 返回输出；输出字段需与返回结构匹配。</div>';
   }
   // 循环
   if(n.type==='21'){
@@ -814,6 +838,7 @@ function setField(kind,i,field,v){
   if(field==='type'){if(kind==='in'){f.input.type=v;if(v!=='list'&&v!=='object')delete f.input.schema;}else{f.type=v;if(v!=='list'&&v!=='object')delete f.schema;}}
   showProps();renderAll();}
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
+function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setLoop(field,v){const n=findN(selNode);if(field==='loopType')n.data.inputs.loopType=v;if(field==='loopCount')n.data.inputs.loopCount={type:'integer',value:{type:'literal',content:v}};}
 
 // object 子字段 / list item

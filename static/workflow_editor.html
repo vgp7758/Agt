@@ -181,7 +181,8 @@ function fieldRows(nodeId, f, side){
   return rows;
 }
 function nodeH(n){
-  const rows=nodeRows(n);
+  const rows=nodeRows(n).filter(r=>
+    (n.type==='1'?r.side==='out':n.type==='2'?r.side==='in':true));
   const inRows=rows.filter(r=>r.side==='in').length;
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
@@ -295,16 +296,21 @@ function renderNode(n){
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
   g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},TYPE_LABEL[n.type]+' · '+n.type));
-  // 流程端口（标题栏左右）
-  const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
-  fIn.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
-  g.appendChild(fIn);
-  const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
-  fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
-  g.appendChild(fOut);
+  // 流程端口（入口只有出口，出口只有入口）
+  if(n.type!=='1'){
+    const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
+    fIn.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
+    g.appendChild(fIn);
+  }
+  if(n.type!=='2'){
+    const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
+    fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
+    g.appendChild(fOut);
+  }
 
-  // 变量端口（按 nodeRows 行渲染；object 字段可展开成子端口）
-  const rows=nodeRows(n);
+  // 变量端口（按 nodeRows 行渲染；入口只渲染输出侧，出口只渲染输入侧）
+  const rows0=nodeRows(n);
+  const rows=n.type==='1'?rows0.filter(r=>r.side==='out'):n.type==='2'?rows0.filter(r=>r.side==='in'):rows0;
   const inRows=rows.filter(r=>r.side==='in'), outRows=rows.filter(r=>r.side==='out');
   const maxRows=Math.max(inRows.length,outRows.length);
   for(let ri=0;ri<maxRows;ri++){
@@ -640,13 +646,18 @@ function showProps(){
     <label>位置 X/Y <input type="number" value="${n.x}" onchange="setProp('x',+this.value)" style="width:45%;display:inline-block"> <input type="number" value="${n.y}" onchange="setProp('y',+this.value)" style="width:45%;display:inline-block;float:right"></label>
     <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
 
-  // 输入字段（含 object 子字段 / list item）
-  h+=`<h3>输入字段 <button onclick="addIO('in')">+ 添加</button></h3>`;
-  h+=renderIOFields(nodeInputs(n),'in');
-
-  // 输出字段
-  h+=`<h3>输出字段 <button onclick="addIO('out')">+ 添加</button></h3>`;
-  h+=renderIOFields(nodeOutputs(n),'out');
+  // 输入字段
+  if(n.type!=='1'){
+    const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
+    h+=`<h3>${label} <button onclick="addIO('in')">+ 添加</button></h3>`;
+    h+=renderIOFields(nodeInputs(n),'in');
+  }
+  // 输出字段（入口：改称"输入"，即工作流入参 schema）
+  if(n.type!=='2'){
+    const label=n.type==='1'?'输入（工作流入参）':'输出字段';
+    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button></h3>`;
+    h+=renderIOFields(nodeOutputs(n),'out');
+  }
 
   // 批处理（所有非 entry/exit 节点）
   if(!['1','2'].includes(n.type)){

@@ -393,7 +393,7 @@ function renderNode(n){
   }
 
   // 复合节点：画布上「✏ 编辑子画布」按钮
-  if([21,28].includes(n.type)){
+  if(['21','28'].includes(n.type)){
     const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
     const fo=document.createElementNS(NS,'foreignObject');
     fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',24);
@@ -423,7 +423,7 @@ function renderNode(n){
 
   // 交互
   g.ondblclick=(e)=>{
-    if([21,28].includes(n.type)){e.stopPropagation();openComposite(n.id);}
+    if(['21','28'].includes(n.type)){e.stopPropagation();openComposite(n.id);}
   };
   g.onmousedown=(e)=>{
     if(e.button!==0)return;
@@ -704,7 +704,7 @@ function showProps(){
     <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
 
   // 复合节点：编辑按钮
-  if([21,28].includes(n.type)){
+  if(['21','28'].includes(n.type)){
     h+='<div style="margin:6px 0"><button onclick="openComposite(\''+n.id+'\')" style="width:100%;padding:8px;font-size:14px;background:#1a6b6b;color:#fff;border:2px solid #7b2ff7;border-radius:6px;cursor:pointer">✏ 编辑子画布 ('+((n.blocks||[]).length)+' 个内部节点)</button></div>';
     h+='<div style="font-size:10px;color:#8a9099;margin-bottom:4px">点按钮进入子画布编辑内部节点，完点顶栏「◀ 退出子画布」返回。</div>';
   }

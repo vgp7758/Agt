@@ -96,7 +96,8 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
     <button class="pal-item data" data-type="59">{←} FromJSON</button>
     <h3>变量</h3>
     <button class="pal-item data" data-type="32">🧲 聚合</button>
-    <button class="pal-item data" data-type="40">✏ 赋值</button>
+    <button class="pal-item data" data-type="40">✏ 赋值(全局)</button>
+    <button class="pal-item data" data-type="20">🔄 置变量(循环)</button>
     <h3>外部</h3>
     <button class="pal-item ext" data-type="45">🌐 HTTP</button>
     <button class="pal-item ext" data-type="9">🔗 子工作流</button>
@@ -150,9 +151,10 @@ function nodeInputs(n){return n.data.inputs?.inputParameters||[];}
 function nodeOutputs(n){return n.data.outputs||[];}
 // 输入字段是否已连变量线（ref 且 block-output）
 function inputIsLinked(p){
-  const v=p.input?.value; return v&&v.type==='ref'&&v.content?.source==='block-output'&&v.content?.blockID;
+  const eff=p.input||p.left||{}; const v=eff.value;
+  return v&&v.type==='ref'&&v.content?.source==='block-output'&&v.content?.blockID;
 }
-function inputRefSource(p){const v=p.input?.value;return v?.content;}
+function inputRefSource(p){const eff=p.input||p.left||{};const v=eff.value;return v?.content;}
 // 类型颜色（list 取 item 颜色？统一用字段本身 type 颜色）
 function fieldColor(type){return TYPE_COLOR[type]||'#aaa';}
 
@@ -172,7 +174,9 @@ function nodeRows(n){
   return rows;
 }
 function fieldRows(nodeId, f, side){
-  const type=side==='in'?(f.input?.type||'string'):(f.type||'string');
+  // type20/40 用 left 代替 input 作为类型来源
+  const effInput=f.input||f.left||{};
+  const type=side==='in'?(effInput.type||'string'):(f.type||'string');
   const name=f.name;
   const key=nodeId+'::'+name+'::'+side;
   const rows=[{side,field:name,type,parent:null,sub:false,key}];
@@ -677,7 +681,8 @@ async def main(args: Args) -> Output:
       '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
       '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[],mode:'all'},outputs:[{name:'classificationId',type:'integer',description:''},{name:'reason',type:'string',description:''}]},
       '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[]},outputs:[]},
-      '40':{nodeMeta:{title:'变量赋值'},inputs:{inputParameters:[],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
+      '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
+      '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
       '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},
       '9':{nodeMeta:{title:'子工作流'},inputs:{workflowId:'',inputParameters:[]},outputs:[]},
       '4':{nodeMeta:{title:'插件'},inputs:{apiParam:[{name:'apiName',input:{type:'string',value:{type:'literal',content:''}}}],inputParameters:[]},outputs:[]},
@@ -777,6 +782,28 @@ function showProps(){
     h+=`<h3>Python 代码</h3><label><textarea style="min-height:200px" onchange="setCode(this.value)">${ext(n.data.inputs?.code)}</textarea></label>`;
     h+='<div style="font-size:10px;color:#8a9099">通过 args.params 取输入，ret: Output = {...} 返回输出；输出字段需与返回结构匹配。</div>';
   }
+  // 置变量(循环) type20 / 赋值(全局) type40 — left/right 专用编辑
+  if(n.type==='20'||n.type==='40'){
+    const label=n.type==='20'?'置变量 (循环内修改本地变量)':'赋值 (修改全局变量)';
+    h+='<h3>'+label+'</h3>';
+    const ips=n.data.inputs?.inputParameters||[];
+    ips.forEach((p,i)=>{
+      const isLoop=n.type==='20';
+      const lContent=p.left?.value?.content||{};
+      const rContent=(isLoop?p.right:p.input)?.value?.content||{};
+      const varName=isLoop?(lContent.name||''):((lContent.path||[])[0]||'');
+      const newVal=rContent||'';
+      h+='<div style="display:flex;gap:3px;margin:3px 0;align-items:center">';
+      h+='<span style="font-size:10px;color:#8a9099">变量:</span>';
+      h+='<input value="'+varName+'" placeholder="变量名" onchange="setVarName('+i+',this.value)" style="flex:1;font-size:11px">';
+      h+='<span style="font-size:10px;color:#8a9099">=</span>';
+      h+='<input value="'+newVal+'" placeholder="新值" onchange="setVarVal('+i+',this.value)" style="flex:1;font-size:11px">';
+      h+='<button class="del" onclick="delIO(\'in\','+i+')">×</button></div>';
+    });
+    h+='<button onclick="addIO(\'in\')">+ 变量</button>';
+    h+='<div style="font-size:10px;color:#8a9099">'+(n.type==='20'?'在循环体内修改本地变量，left指向复合节点的变量名。':'修改全局变量(global_variable_app)，left为变量名路径。')+'</div>';
+  }
+
   // 选择器
   if(n.type==='8'){
     h+='<h3>选择器分支</h3><button onclick="addBranchCanvas()">+ 分支</button><div style="font-size:10px;color:#8a9099">分支条件与每分支的流程出口在画布节点上编辑。</div>';
@@ -903,10 +930,18 @@ function getListItemType(f){
 function findArr(kind){const n=findN(selNode);return kind==='in'?nodeInputs(n):nodeOutputs(n);}
 function setProp(k,v){const n=findN(selNode);n[k]=v;renderAll();}
 function setTitle(v){const n=findN(selNode);n.data.nodeMeta=n.data.nodeMeta||{};n.data.nodeMeta.title=v;renderAll();}
-function addIO(kind){const n=findN(selNode);const item={name:'field'+Date.now()%1000,description:''};
-  if(kind==='in'){n.data.inputs=n.data.inputs||{};n.data.inputs.inputParameters=n.data.inputs.inputParameters||[];item.input={type:'string',value:{type:'literal',content:''}};n.data.inputs.inputParameters.push(item);}
+function addIO(kind){const n=findN(selNode);const item={name:'var'+Date.now()%1000,description:''};
+  if(kind==='in'){
+    n.data.inputs=n.data.inputs||{};n.data.inputs.inputParameters=n.data.inputs.inputParameters||[];
+    if(n.type==='20'){item.left={type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}};item.right={type:'string',value:{type:'literal',content:''}};}
+    else if(n.type==='40'){item.left={type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}};item.input={type:'string',value:{type:'literal',content:''}};}
+    else{item.input={type:'string',value:{type:'literal',content:''}};}
+    n.data.inputs.inputParameters.push(item);
+  }
   else{n.data.outputs=n.data.outputs||[];item.type='string';n.data.outputs.push(item);}
   showProps();renderAll();}
+function setVarName(i,v){const n=findN(selNode);const p=n.data.inputs.inputParameters[i];const isLoop=n.type==='20';const l=p.left.value.content;if(isLoop)l.name=v;else{l.path[0]=v;}}
+function setVarVal(i,v){const n=findN(selNode);const p=n.data.inputs.inputParameters[i];const target=n.type==='20'?p.right:p.input;target.value.content=v;}
 function delField(kind,i){findArr(kind).splice(i,1);showProps();renderAll();}
 function setField(kind,i,field,v){
   const arr=findArr(kind);const f=arr[i];

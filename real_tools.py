@@ -150,10 +150,14 @@ def run_python(code: str) -> str:
 
 
 def read_file(path: str) -> str:
-    """读取 workspace 内某个文本文件的内容。"""
+    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取）。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
+    if target.suffix.lower() in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
+        text = _extract_text(target)
+        if text:
+            return text
     return target.read_text(encoding="utf-8")
 
 
@@ -177,6 +181,46 @@ def list_dir(path: str = ".") -> str:
     return "\n".join(entries) if entries else "(空目录)"
 
 
+def _extract_text(target: Path) -> str | None:
+    """对 Word/Excel/PDF 提取纯文本；不支持则返回 None。"""
+    suffix = target.suffix.lower()
+    try:
+        if suffix == ".docx":
+            import docx
+            doc = docx.Document(str(target))
+            return "\n".join(p.text for p in doc.paragraphs)
+        if suffix in (".xlsx", ".xlsm", ".xltx"):
+            import openpyxl
+            wb = openpyxl.load_workbook(str(target), read_only=True, data_only=True)
+            parts = []
+            for name in wb.sheetnames:
+                ws = wb[name]
+                parts.append(f"=== Sheet: {name} ===")
+                for row in ws.iter_rows(values_only=True):
+                    parts.append("\t".join(str(c) if c is not None else "" for c in row))
+            wb.close()
+            return "\n".join(parts)
+        if suffix == ".pdf":
+            text = ""
+            try:
+                import fitz
+                doc = fitz.open(str(target))
+                for page in doc:
+                    text += page.get_text()
+                doc.close()
+            except Exception:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(str(target))
+                for page in reader.pages:
+                    t = page.extract_text()
+                    if t:
+                        text += t + "\n"
+            return text.strip()
+        return None
+    except Exception as e:
+        return f"[文档解析失败: {type(e).__name__}: {e}]"
+
+
 def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, max_results: int = 50) -> str:
     """在 workspace 内搜索文件内容，返回 "相对路径:行号:匹配行"。
     pattern: 搜索文本；regex=True 时按正则。path: 起始目录(默认 workspace 根)。
@@ -190,13 +234,22 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, m
         rx = re.compile(pattern if regex else re.escape(pattern))
     except re.error as e:
         return f"[正则错误] {e}"
+    DOC_EXT = {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}
     matches, scanned = [], 0
     for fp in sorted(root.rglob("*")):
         if not fp.is_file() or (glob and not fnmatch.fnmatch(fp.name, glob)):
             continue
-        try:
-            text = fp.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
+        text = None
+        if fp.suffix.lower() in DOC_EXT:
+            extracted = _extract_text(fp)
+            if extracted and not extracted.startswith("[文档解析失败"):
+                text = extracted
+        else:
+            try:
+                text = fp.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+        if text is None:
             continue
         scanned += 1
         rel = fp.relative_to(WORKSPACE).as_posix()

@@ -787,6 +787,7 @@ function showProps(){
 
 // 批处理配置区
 function renderBatchConfig(n){
+  if(!n.data.inputs)n.data.inputs={};
   const b=n.data.inputs.batch||(n.data.inputs.batch={});
   if(b.enabled===undefined)b.enabled=false;
   let h='<h3>批处理（逐元素执行）</h3>';

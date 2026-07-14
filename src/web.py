@@ -90,6 +90,10 @@ def _get_or_create_agent() -> Agent:
     for t in make_workflow_mgmt_tools(WORKSPACE):
         agent.tools.register(t)
     refresh_workflow_tools(agent.tools, WORKSPACE, agent)
+    # 加载持久化运行时设置
+    saved = config.load_runtime_settings()
+    if saved:
+        apply_config(agent, saved)
     _agent = agent
     return agent
 
@@ -377,7 +381,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "config", "values": read_config(agent)})
         return
     if isinstance(_d, dict) and _d.get("action") == "set_config":
-        lines = apply_config(agent, _d.get("values") or {})
+        values = _d.get("values") or {}
+        lines = apply_config(agent, values)
+        config.save_runtime_settings(values)
         await _send(ws, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
         return
     if isinstance(_d, dict) and _d.get("action") == "stop":

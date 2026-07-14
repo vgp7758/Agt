@@ -76,6 +76,23 @@ MODELSCOPE_API_KEY = LLM_API_KEY = _active["api_token"]
 MODEL_NAME = LLM_MODEL = _active["model"]
 LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 
+# === 运行时设置持久化 ===
+_AGT_SETTINGS = _AGT_DIR / "settings.json"
+
+def load_runtime_settings() -> dict:
+    """从 ~/.agt/settings.json 加载运行时设置。"""
+    if _AGT_SETTINGS.exists():
+        try:
+            return json.loads(_AGT_SETTINGS.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def save_runtime_settings(settings: dict):
+    """写入运行时设置到 ~/.agt/settings.json。"""
+    _AGT_DIR.mkdir(parents=True, exist_ok=True)
+    _AGT_SETTINGS.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
 # === AgenTank 比赛配置 ===
 AGT_BASE_URL = os.getenv("AGT_BASE_URL", "https://agentank.ai")
 AGT_TANK_KEY = os.getenv("AGT_TANK_KEY") or os.getenv("AGT_AGENT_KEY")

@@ -641,6 +641,23 @@ function finishVar(tgtId,field,color){
   if(!target){p.input={type:'string',value:{}};target=p.input;}
   target.value={type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}};
   if(field.includes('.')) target.type=color2type(color);
+  // 复合节点 input 被连线→自动解析源 item schema→初始化 item 类型
+  if(['21','28'].includes(tn.type)&&parent==='input'){
+    const sn=findN(edgeFrom.nodeId);
+    const srcOut=sn?.data?.outputs?.find(o=>o.name===edgeFrom.field);
+    if(srcOut&&srcOut.type==='list'){
+      const itemSch=srcOut.schema;
+      if(itemSch){tn.data.inputs.inputParameters.find(x=>x.name==='input').input.schema=itemSch;}
+      // 同步 nth_output 类型
+      const nth=nodeOutputs(tn).find(o=>o.name==='nth_output');
+      if(nth){
+        if(Array.isArray(itemSch)){nth.type='object';nth.schema=[...itemSch];}
+        else if(itemSch&&itemSch.type){nth.type=itemSch.type;delete nth.schema;}
+        _syncListSchema();
+      }
+      toast('已解析 item schema: '+(Array.isArray(itemSch)?itemSch.map(s=>s.name).join(','):(itemSch?.type||'?')));
+    }
+  }
   edgeFrom=null;selNode=tgtId;showProps();renderAll();
   toast('已连接：'+edgeFrom?.field||field);
 }

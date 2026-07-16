@@ -419,6 +419,27 @@ function renderNode(n){
   }
 
   // 聚合节点(type32)：左侧渲染 mergeGroups 变量输入端口 + 分组标签
+  // 意图识别(type22)：每个意图一个流程分支出口
+  if(n.type==='22'){
+    const intents=n.data.inputs?.intents||[];
+    let iy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+8;
+    intents.forEach((it,i)=>{
+      const iname=it.name||('?'+i);
+      const port=elm('circle',{cx:n.w,cy:iy,r:5,class:'port-flow',fill:'#fff',title:iname});
+      port.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+iy};edgeFrom={kind:'flow',nodeId:n.id,port:'branch_'+i,x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
+      g.appendChild(port);
+      g.appendChild(elm('text',{x:n.w-10,y:iy+3,class:'node-type-tag','text-anchor':'end',fill:'#e6c07b'},iname));
+      iy+=22;
+    });
+    // default 出口
+    const dport=elm('circle',{cx:n.w,cy:iy,r:5,class:'port-flow',fill:'#888',title:'default'});
+    dport.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+iy};edgeFrom={kind:'flow',nodeId:n.id,port:'default',x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
+    g.appendChild(dport);
+    g.appendChild(elm('text',{x:n.w-10,y:iy+3,class:'node-type-tag','text-anchor':'end',fill:'#8a9099'},'默认'));
+    const bodyRect=g.querySelector('.node-body');
+    if(bodyRect) bodyRect.setAttribute('height', iy+10);
+  }
+
   // 赋值节点(type20/40)：显示目标变量名+新值
   if(n.type==='20'||n.type==='40'){
     const ips=n.data.inputs?.inputParameters||[];
@@ -741,7 +762,7 @@ async def main(args: Args) -> Output:
       '15':{nodeMeta:{title:'文本'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
       '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],variableParameters:[],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
       '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
-      '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[],mode:'all'},outputs:[{name:'classificationId',type:'integer',description:''},{name:'reason',type:'string',description:''}]},
+      '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[{name:'闲聊'},{name:'查询证券资讯'},{name:'编写研报'}],mode:'all'},outputs:[]},
       '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'}]},
       '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
       '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
@@ -889,6 +910,17 @@ function showProps(){
       h+='<button class="del" onclick="delIO(\'in\','+i+')" style="margin-top:3px">× 删除此行</button></div>';
     });
     h+='<button onclick="addIO(\'in\')">+ 添加赋值</button>';
+  }
+
+  // 意图识别：选项增删改
+  if(n.type==='22'){
+    h+='<h3>意图选项（每项一个分支出口）</h3>';
+    const intents=n.data.inputs?.intents||[];
+    intents.forEach((it,i)=>{
+      h+='<div style="display:flex;gap:3px;margin:2px 0;align-items:center"><span style="font-size:10px;color:#8a9099">'+(i+1)+'.</span><input value="'+ext(it.name)+'" placeholder="意图名" onchange="setIntent('+i+',this.value)" style="flex:1;font-size:11px"><button class="del" onclick="delIntent('+i+')">×</button></div>';
+    });
+    h+='<button onclick="addIntent()">+ 意图</button>';
+    h+='<div style="font-size:10px;color:#8a9099;margin-top:4px">LLM 分类后路由到对应分支(branch_N)，未命中走默认。每意图在画布右侧有一个流程出口。</div>';
   }
 
   // 子工作流: workflowId 下拉选择
@@ -1146,6 +1178,9 @@ function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
 function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables=g.variables||[];g.variables.push({type:'string',value:{type:'literal',content:''}});showProps();renderAll();}
 function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].variables.splice(vi,1);showProps();renderAll();}
+function setIntent(i,v){const n=findN(selNode);n.data.inputs.intents[i].name=v;renderAll();}
+function addIntent(){const n=findN(selNode);n.data.inputs.intents=n.data.inputs.intents||[];n.data.inputs.intents.push({name:'新意图'});showProps();renderAll();}
+function delIntent(i){const n=findN(selNode);n.data.inputs.intents.splice(i,1);showProps();renderAll();}
 async function setSubWf(v){
   const n=findN(selNode);n.data.inputs.workflowId=v;
   if(!v){showProps();return;}

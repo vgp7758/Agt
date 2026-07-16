@@ -1366,8 +1366,13 @@ function openComposite(nodeId){
   const ENTRY_ID='__entry__', CONT_ID='__continue__', BREAK_ID='__break__';
   // 移除非控制点的旧 blocks 中的 entry/continue/break（若从旧模板升级）
   n.blocks=(n.blocks||[]).filter(b=>!['__entry__','__continue__','__break__'].includes(b.id));
-  // 入口节点：展示可用变量（item/index/本地变量）
-  let ctxOuts=[{name:itemName,type:'string',description:'当前元素'},{name:'index',type:'integer',description:'当前索引(0起)'}];
+  // 入口节点：展示可用变量，item 类型从 input schema 读取
+  const inSchema=inList?.input?.schema;
+  let itemType='string', itemObjSchema=null;
+  if(Array.isArray(inSchema)){itemType='object';itemObjSchema=inSchema;}
+  else if(inSchema&&inSchema.type){itemType=inSchema.type;if(inSchema.type==='object'&&inSchema.fields)itemObjSchema=inSchema.fields;}
+  let ctxOuts=[{name:itemName,type:itemType,description:'当前元素',schema:itemObjSchema||undefined},
+    {name:'index',type:'integer',description:'当前索引(0起)'}];
   varNames.forEach(vn=>{ctxOuts.push({name:vn,type:'string',description:'本地变量(可被 LoopSetVariable 修改)'});});
   const entryNode={id:ENTRY_ID,type:'1',x:60,y:80,w:200,
     data:{nodeMeta:{title:'迭代入口'},outputs:ctxOuts,trigger_parameters:[]}};

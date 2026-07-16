@@ -168,13 +168,9 @@ const HDR_H=26, ROW_H=18, PAD=8;
 // 行: {side:'in'|'out', field:字段名(子字段用 父.子), type, parent:父字段名|null, sub:boolean}
 function nodeRows(n){
   const rows=[];
-  let ins=nodeInputs(n), outs=nodeOutputs(n);
-  // type 32：mergeGroups 变量作为输入端口
-  if(n.type==='32'){
-    const groups=n.data.inputs?.mergeGroups||[];
-    ins=[...ins];
-    groups.forEach(g=>{(g.variables||[]).forEach(v=>{ins.push({name:g.name, input:v, _ref:v})});});
-  }
+  // 聚合节点用自定义渲染，跳过常规端口
+  if(n.type==='32') return rows;
+  const ins=nodeInputs(n), outs=nodeOutputs(n);
   for(let i=0;i<Math.max(ins.length,outs.length);i++){
     if(ins[i]) rows.push(...fieldRows(n.id, ins[i],'in'));
     if(outs[i]) rows.push(...fieldRows(n.id, outs[i],'out'));
@@ -419,36 +415,33 @@ function renderNode(n){
   }
 
   // 聚合节点(type32)：左侧渲染 mergeGroups 变量输入端口 + 分组标签
+  // 聚合节点(type32)：垂直排列分组，每行左输入右输出
   if(n.type==='32'){
     const groups=n.data.inputs?.mergeGroups||[];
-    let gy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+6;
+    let gy=HDR_H+8;
     groups.forEach(grp=>{
       const gname=grp.name||'?';
       const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
       const col=fieldColor(gtype);
-      // 分组标签(左侧)
-      g.appendChild(elm('text',{x:6,y:gy+10,class:'node-field-name',fill:col},'▾ '+gname));
-      // 分组变量输入端口
+      const y=gy;
+      // 左侧：分组名 + 变量输入端口
+      g.appendChild(elm('text',{x:6,y:y+12,class:'node-field-name',fill:col},gname));
       const vars=grp.variables||[];
-      let vx=80;
+      let vx=n.w*0.25;
       vars.forEach((v,i)=>{
-        const cy=gy+10;
-        const port=elm('circle',{cx:vx,cy:cy,r:4,class:'port-var',fill:col,stroke:col});
+        const port=elm('circle',{cx:vx,cy:y+12,r:4,class:'port-var',fill:col,stroke:col});
         port.onmouseup=(e)=>{e.stopPropagation();finishAggrVar(n.id,gname,i,col);};
         port.onmousedown=(e)=>{e.stopPropagation();};
         g.appendChild(port);
-        g.appendChild(elm('text',{x:vx+7,y:cy+3,class:'sub-row',fill:col},'in'+(i+1)));
-        vx+=30;
+        vx+=22;
       });
-      // 分组输出端口(右侧)
-      const outY=gy+10;
-      const outPort=elm('circle',{cx:n.w,cy:outY,r:5,class:'port-var',fill:col,stroke:col});
-      outPort.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+outY);};
+      // 右侧：输出端口
+      const outPort=elm('circle',{cx:n.w,cy:y+12,r:5,class:'port-var',fill:col,stroke:col});
+      outPort.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+y+12);};
       g.appendChild(outPort);
-      g.appendChild(elm('text',{x:n.w-10,y:outY+3,class:'node-field-name','text-anchor':'end',fill:col},gname));
-      gy+=24;
+      gy+=28;
     });
-    n.h=gy+10;
+    n.h=gy+8;
   }
 
   // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）

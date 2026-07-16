@@ -531,6 +531,10 @@ def _handle_loop(node: dict, ctx) -> dict:
     other_inputs, elements, elem_name = {}, None, None
     for p in inputs.get("inputParameters", []):
         val = resolve_value(p.get("input"), ctx)
+        # 字面量JSON字符串→尝试解析为list
+        if isinstance(val, str) and isinstance(p.get("input", {}).get("schema"), dict):
+            try: val = json.loads(val)
+            except (json.JSONDecodeError, TypeError): pass
         if loop_type == "array" and isinstance(val, list) and elements is None:
             elements, elem_name = val, p.get("name")
         else:
@@ -594,6 +598,10 @@ def _handle_batch(node: dict, ctx) -> dict:
     elements, elem_name, other_inputs = [], None, {}
     for p in inputs.get("inputParameters", []):
         val = resolve_value(p.get("input"), ctx)
+        # 字面量JSON字符串→尝试解析为list
+        if isinstance(val, str) and isinstance(p.get("input", {}).get("schema"), dict):
+            try: val = json.loads(val)
+            except (json.JSONDecodeError, TypeError): pass
         if isinstance(val, list) and elements == []:
             elements, elem_name = val, p.get("name")
         else:

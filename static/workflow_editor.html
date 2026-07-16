@@ -544,7 +544,13 @@ function makeInputControl(n,p,i,ph){
   div.style.cssText='width:80px;height:16px;display:flex;align-items:center';
   const cur=(v?.type==='literal')?v.content:'';
   const baseStyle='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
-  if(t==='boolean'){
+  if(t==='list'||t==='array'){
+    const inp=document.createElement('input');inp.type='text';inp.value=cur;inp.placeholder='[1,2,3] 或 [\"a\",\"b\"]';
+    inp.style.cssText=baseStyle;
+    inp.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:inp.value});};
+    inp.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(inp);
+  }else if(t==='boolean'){
     const lab=document.createElement('label');
     lab.style.cssText='font-size:10px;display:flex;align-items:center;gap:2px;color:'+fieldColor(t);
     const cb=document.createElement('input');cb.type='checkbox';cb.checked=!!cur||cur===true||cur==='true';

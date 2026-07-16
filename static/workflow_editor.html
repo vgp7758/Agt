@@ -1383,9 +1383,18 @@ function openComposite(nodeId){
   // Break 控制点
   const breakNode={id:BREAK_ID,type:'19',x:700,y:80,w:120,
     data:{nodeMeta:{title:'中断(Break)'}}};
-  // Continue 控制点（正常结束本轮→下一轮）
+  // Continue 控制点——inputParameters 从 nth_output schema 初始化
+  const nth=nodeOutputs(n).find(o=>o.name==='nth_output');
+  let contParams=[];
+  if(nth){
+    if(Array.isArray(nth.schema)){  // object 有子字段
+      contParams=nth.schema.map(sf=>({name:sf.name,input:{type:sf.type||'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}));
+    }else if(nth.type&&nth.type!=='object'){
+      contParams=[{name:'result',input:{type:nth.type||'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}];
+    }
+  }
   const contNode={id:CONT_ID,type:'2',x:700,y:200,w:140,
-    data:{nodeMeta:{title:'继续(Continue)'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}}};
+    data:{nodeMeta:{title:'继续(Continue)'},inputs:{terminatePlan:'returnVariables',inputParameters:contParams}}};
   // 组装：入口放最前，出口放最后；保理用户已有的中间节点
   const userBlocks=n.blocks.filter(b=>!['__entry__','__continue__','__break__'].includes(b.id));
   n.blocks=[entryNode,...userBlocks,breakNode,contNode];

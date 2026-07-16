@@ -1177,13 +1177,11 @@ function renderIOFields(arr,kind,lockedAll){
       if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
       else if(src==='loop-index')srcType='index';
       else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
-      else if(src==='block-output'&&!f.input?.value?.content?.blockID)srcType='local';
       else if(src==='literal'||(f.input?.value?.type==='literal'))srcType='literal';
       h+='<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource('+i+',this.value)">';
       h+='<option value="node" '+(srcType==='node'?'selected':'')+'>节点输出</option>';
       h+='<option value="literal" '+(srcType==='literal'?'selected':'')+'>字面量</option>';
       h+='<option value="global" '+(srcType==='global'?'selected':'')+'>全局变量</option>';
-      h+='<option value="local" '+(srcType==='local'?'selected':'')+'>本地变量</option>';
       h+='<option value="item" '+(srcType==='item'?'selected':'')+'>item(整个)</option>';
       h+='<option value="index" '+(srcType==='index'?'selected':'')+'>index</option></select>';
       // 节点输出→下拉选兼容节点
@@ -1206,10 +1204,6 @@ function renderIOFields(arr,kind,lockedAll){
       if(srcType==='global'){
         const pth=(f.input?.value?.content?.path||[])[0]||'';
         h+=' <input value="'+pth+'" placeholder="全局变量名" style="width:90px;font-size:10px" onchange="setRefPath('+i+',this.value)">';
-      }
-      if(srcType==='local'){
-        const ln=f.input?.value?.content?.name||'';
-        h+=' <input value="'+ln+'" placeholder="本地变量名" style="width:90px;font-size:10px" onchange="setRefName('+i+',this.value)">';
       }
       if(srcType==='literal'){
         h+=' <input value="'+ext(f.input?.value?.content)+'" placeholder="字面量" style="width:80px;font-size:10px" onchange="setInputLitVal('+i+',this.value)">';

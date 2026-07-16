@@ -876,7 +876,7 @@ function showProps(){
       const isRef=rVal.type==='ref';
       const lContent=p.left?.value?.content||{};
       const varName=isLoop?(lContent.name||''):((lContent.path||[])[0]||'');
-      const newVal=isRef?'':'→ '+ext(rVal.content?.blockID)+'.'+ext(rVal.content?.name);
+      const newVal=isRef?('→ '+ext(rVal.content?.blockID)+'.'+ext(rVal.content?.name)):ext(rVal.content);
       h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">';
       h+='<div style="font-size:11px;color:#8a9099;margin-bottom:2px">'+(isLoop?'本地变量名（在复合节点 variableParameters 中声明）':'全局变量名（如 app_var1）')+'</div>';
       h+='<input value="'+varName+'" placeholder="'+(isLoop?'如 acc, greeting(复合节点variableParameters中的名字)':'如 app_var1(全局变量名)')+'" onchange="setVarName('+i+',this.value)" style="width:100%;font-size:11px;margin-bottom:4px">';
@@ -885,7 +885,7 @@ function showProps(){
       }else{
         h+='<div style="font-size:11px;color:#8a9099;margin-bottom:2px">⇩ 新值（填字面量，或从上游拖变量线连本行左侧端口）</div>';
         h+='<input value="'+ext(rVal.content)+'" placeholder="新值" onchange="setVarVal('+i+',this.value)" style="width:100%;font-size:11px">';
-      }'
+      }
       h+='<button class="del" onclick="delIO(\'in\','+i+')" style="margin-top:3px">× 删除此行</button></div>';
     });
     h+='<button onclick="addIO(\'in\')">+ 添加赋值</button>';

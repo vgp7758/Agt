@@ -836,7 +836,8 @@ function showProps(){
   // 输入字段（聚合节点用 mergeGroups，跳过常规输入）
   if(n.type!=='1'&&n.type!=='32'){
     const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
-    h+=`<h3>${label} <button onclick="addIO('in')">+ 添加</button></h3>`;
+    const lockedInputs=['4','9'].includes(n.type);  // 工具/子工作流输入来自schema，锁定
+    h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button>'}</h3>`;
     h+=renderIOFields(nodeInputs(n),'in');
   }
   // 输出字段（入口=工作流入参；意图/聚合无输出字段编辑）
@@ -1025,7 +1026,7 @@ function renderIOFields(arr,kind){
   let h='<table class="io-table">';
   arr.forEach((f,i)=>{
     const t=f.input?.type||f.type||'string';
-    const locked=(n&&n.type==='22'&&kind==='in'&&f.name==='query');
+    const locked=(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||['4','9'].includes(n.type)));
     h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
       <td style="width:70px"><select onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;

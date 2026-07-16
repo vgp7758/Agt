@@ -415,31 +415,34 @@ function renderNode(n){
   }
 
   // 聚合节点(type32)：左侧渲染 mergeGroups 变量输入端口 + 分组标签
-  // 聚合节点(type32)：垂直排列分组，每行左输入右输出
+  // 聚合节点(type32)：先算高度→画rect→再渲染端口(垂直排列)
   if(n.type==='32'){
     const groups=n.data.inputs?.mergeGroups||[];
+    let hh=HDR_H+8+groups.length*28+8;
+    n.h=Math.max(n.h, hh);
+    // 重画体rect(已附在 g 上)
+    g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,fill:'#16213e',stroke:'#533483','stroke-width':1.5,rx:6}));
     let gy=HDR_H+8;
     groups.forEach(grp=>{
       const gname=grp.name||'?';
       const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
       const col=fieldColor(gtype);
-      const y=gy;
-      // 左侧：分组名 + 变量输入端口
-      g.appendChild(elm('text',{x:6,y:y+12,class:'node-field-name',fill:col},gname));
+      // 左侧：分组名 + 变量输入端口（垂直排列）
+      g.appendChild(elm('text',{x:6,y:gy+12,class:'node-field-name',fill:col},gname));
       const vars=grp.variables||[];
-      let vx=n.w*0.25;
       vars.forEach((v,i)=>{
-        const port=elm('circle',{cx:vx,cy:y+12,r:4,class:'port-var',fill:col,stroke:col});
+        const vy=gy+12+(i+1)*18;  // 每个变量竖排
+        const port=elm('circle',{cx:10,cy:vy,r:4,class:'port-var',fill:col,stroke:col});
         port.onmouseup=(e)=>{e.stopPropagation();finishAggrVar(n.id,gname,i,col);};
         port.onmousedown=(e)=>{e.stopPropagation();};
         g.appendChild(port);
-        vx+=22;
+        g.appendChild(elm('text',{x:20,y:vy+3,class:'sub-row',fill:col},'var'+(i+1)));
       });
       // 右侧：输出端口
-      const outPort=elm('circle',{cx:n.w,cy:y+12,r:5,class:'port-var',fill:col,stroke:col});
-      outPort.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+y+12);};
-      g.appendChild(outPort);
-      gy+=28;
+      const outP=elm('circle',{cx:n.w,cy:gy+12,r:5,class:'port-var',fill:col,stroke:col});
+      outP.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+gy+12);};
+      g.appendChild(outP);
+      gy+=28+Math.max((vars.length-1)*18,0);
     });
     n.h=gy+8;
   }

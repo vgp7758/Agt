@@ -71,6 +71,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button onclick="WE.createWf()">➕ 新建</button>
   <button onclick="WE.saveWf()">💾 保存</button>
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
+  <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
@@ -133,6 +134,7 @@ let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',t
 let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
+let dz=1;  // zoom level
 let collapsedFields=new Set();     // 折叠的 object 字段（默认全部展开）
 let _pendingHandles=[];            // 连线断开 handle（延后到节点之上绘制）
 let _compositeStack=[];            // 子画布栈 [{parentId, name, nodes, edges}]
@@ -232,6 +234,8 @@ function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 // ============ 渲染 ============
 function renderAll(){
   svg.innerHTML='';
+  svg.style.transform='scale('+dz+')';
+  svg.style.transformOrigin='0 0';
   _pendingHandles=[];
   // defs（箭头）
   const defs=elm('defs');
@@ -1603,6 +1607,21 @@ window.onerror=function(msg,url,line,col,err){
   return false;
 };
 window.onerror=function(m,u,l,c,e){if(m&&typeof m==='string'&&!m.includes('Script error'))toast('JS: '+(m+'').slice(0,150)+' L'+l);return false;};
+// 滚轮缩放
+document.getElementById('canvasWrap').addEventListener('wheel',function(e){
+  e.preventDefault();
+  dz=Math.max(0.2,Math.min(2,dz*(e.deltaY>0?0.92:1.08)));
+  renderAll();
+},{passive:false});
+function focusEntry(){
+  const en=WF.nodes.find(function(n){return n.id==='100001';});
+  if(!en){toast('无开始节点');return;}
+  dz=1;renderAll();
+  var wrap=document.getElementById('canvasWrap');
+  wrap.scrollLeft=Math.max(0,en.x-200);
+  wrap.scrollTop=Math.max(0,en.y-100);
+  selNode='100001';showProps();
+}
 renderLegend();loadFileList();loadTools();renderAll();
 </script>
 </body></html>

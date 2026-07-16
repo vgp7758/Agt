@@ -421,7 +421,7 @@ function renderNode(n){
     let gy=HDR_H+8;
     groups.forEach(grp=>{
       const vars=grp.variables||[];
-      gy+=28+Math.max((vars.length-1)*18,0);
+      gy+=28+Math.max((vars.length-1)*18,0)+10;
     });
     n.h=gy+20;
     // 更新已画的 rect height
@@ -446,7 +446,7 @@ function renderNode(n){
       outP.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+gy+12);};
       g.appendChild(outP);
       const vars2=grp.variables||[];
-      gy+=28+Math.max((vars2.length-1)*18,0);
+      gy+=28+Math.max((vars2.length-1)*18,0)+10;
     });
   }
 

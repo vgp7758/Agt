@@ -305,6 +305,7 @@ document.getElementById('sessionSel').addEventListener('change',e=>{
 document.getElementById('btnAuto').onclick=()=>{
   // 切换自主模式：发送命令
   sendRaw('/autonomous', []);
+};
 document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); loadModelList(); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 let _modelData={};
@@ -350,6 +351,7 @@ document.getElementById('cfgSave').onclick=()=>{
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
+};
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });

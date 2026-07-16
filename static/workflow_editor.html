@@ -133,7 +133,7 @@ let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',t
 let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
-let expandedFields=new Set();      // 展开的 object 字段键: "nodeId::fieldName::in|out"
+let collapsedFields=new Set();     // 折叠的 object 字段（默认全部展开）
 let _pendingHandles=[];            // 连线断开 handle（延后到节点之上绘制）
 let _compositeStack=[];            // 子画布栈 [{parentId, name, nodes, edges}]
 let _currentParent=null;           // 当前所在复合节点 id（null=顶层）
@@ -188,7 +188,7 @@ function fieldRows(nodeId, f, side){
   const name=f.name;
   const key=nodeId+'::'+name+'::'+side;
   const rows=[{side,field:name,type,parent:null,sub:false,key}];
-  if(type==='object' && expandedFields.has(key)){
+  if(type==='object' && !collapsedFields.has(key)){
     const schema=side==='in'?(f.input?.schema):(f.schema);
     (Array.isArray(schema)?schema:[]).forEach(s=>{
       rows.push({side,field:name+'.'+s.name,type:s.type||'string',parent:name,sub:true,key:key+'::'+s.name});
@@ -352,7 +352,7 @@ function renderNode(n){
         g.appendChild(port);
         // object 展开标记
         if(ir.type==='object'){
-          const exp=expandedFields.has(ir.key);
+          const exp=!collapsedFields.has(ir.key);
           const tg=elm('text',{x:8,y,class:'expand-toggle',fill:col},exp?'▾':'▸');
           tg.onclick=(e)=>{e.stopPropagation();toggleExpand(ir.key);};
           g.appendChild(tg);
@@ -391,7 +391,7 @@ function renderNode(n){
         port.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,or.field,col,n.x+n.w,n.y+y);};
         g.appendChild(port);
         if(or.type==='object'){
-          const exp=expandedFields.has(or.key);
+          const exp=!collapsedFields.has(or.key);
           const tg=elm('text',{x:n.w-22,y,class:'expand-toggle',fill:col},exp?'▾':'▸');
           tg.onclick=(e)=>{e.stopPropagation();toggleExpand(or.key);};
           g.appendChild(tg);
@@ -599,7 +599,7 @@ function makeTextArea(n){
 }
 
 // ============ 连线交互 ============
-function toggleExpand(key){if(expandedFields.has(key))expandedFields.delete(key);else expandedFields.add(key);renderAll();}
+function toggleExpand(key){if(collapsedFields.has(key))collapsedFields.delete(key);else collapsedFields.add(key);renderAll();}
 // 从目标端点拽出：松手若不在端口上则断开该线
 function startDisconnect(info, sp, color){
   edgeFrom={kind:'disconnect',info,sp,mx:sp.x,my:sp.y,color};

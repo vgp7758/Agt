@@ -1134,14 +1134,25 @@ function setBatchCond(side,v){
   if(side==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}
   if(side==='right')c.right.input.value.content=v;
 }
+function setInputRef(i,val){
+  if(!val){setInputSource(i,'literal');return;}
+  const[bid,name]=val.split('.');
+  const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
+  const on=findN(bid);const o=nodeOutputs(on).find(o=>o.name===name);
+  p.input.value={type:'ref',content:{source:'block-output',blockID:bid,name}};
+  if(o)p.input.type=o.type||'string';
+  showProps();renderAll();
+}
+function setInputLitVal(i,v){const n=findN(selNode);setInputLiteral(n.id,i,{type:'literal',content:v});}
 function setInputSource(i,src){
   const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
-  if(src==='item')p.input.value={type:'ref',content:{source:'loop-item',name:''}};
+  if(src==='node')p.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
+  else if(src==='item')p.input.value={type:'ref',content:{source:'loop-item',name:''}};
   else if(src==='index')p.input.value={type:'ref',content:{source:'loop-index'}};
   else if(src.startsWith('item.'))p.input.value={type:'ref',content:{source:'loop-item',name:src.slice(5)}};
   else if(src==='global')p.input.value={type:'ref',content:{source:'global_variable_app',path:['']}};
   else if(src==='local')p.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
-  else p.input.value={type:'literal',content:''};  // node: 回到连线模式
+  else if(src==='literal')p.input.value={type:'literal',content:''};
   showProps();renderAll();
 }
 
@@ -1158,35 +1169,52 @@ function renderIOFields(arr,kind,lockedAll){
       <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;
     h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
 
-    // 输入字段：若节点开启批处理，加"源"选择（节点输出/item/item.字段/index）
-    if(kind==='in'){
+    // 输入字段：源类型下拉（始终显示）
+    if(kind==='in'&&!locked){
       const n=findN(selNode);
-      if(n&&n.data.inputs.batch?.enabled){
-        const src=f.input?.value?.content?.source;
-        let srcType='node';
-        if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
-        else if(src==='loop-index')srcType='index';
-        else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
-        else if(src==='block-output'&&!f.input?.value?.content?.blockID)srcType='local';
-        h+=`<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource(${i},this.value)">
-          <option value="node" ${srcType==='node'?'selected':''}>节点输出(连线)</option>
-          <option value="global" ${srcType==='global'?'selected':''}>全局变量</option>
-          <option value="local" ${srcType==='local'?'selected':''}>本地变量</option>
-          <option value="item" ${srcType==='item'?'selected':''}>item(整个)</option>
-          <option value="index" ${srcType==='index'?'selected':''}>index</option></select>`;
-        if(srcType.startsWith('item.')){
-          h+=` <input value="${srcType.slice(5)}" placeholder="item字段" style="width:60px;font-size:10px" onchange="setInputSource(${i},'item.'+this.value)">`;
-        }
-        if(srcType==='global'){
-          const pth=(f.input?.value?.content?.path||[])[0]||'';
-          h+=` <input value="${pth}" placeholder="全局变量名" style="width:90px;font-size:10px" onchange="setRefPath(${i},this.value)">`;
-        }
-        if(srcType==='local'){
-          const ln=f.input?.value?.content?.name||'';
-          h+=` <input value="${ln}" placeholder="本地变量名" style="width:90px;font-size:10px" onchange="setRefName(${i},this.value)">`;
-        }
-        h+=`</td></tr>`;
+      const src=f.input?.value?.content?.source;
+      let srcType='node';
+      if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
+      else if(src==='loop-index')srcType='index';
+      else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
+      else if(src==='block-output'&&!f.input?.value?.content?.blockID)srcType='local';
+      else if(src==='literal'||(f.input?.value?.type==='literal'))srcType='literal';
+      h+='<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource('+i+',this.value)">';
+      h+='<option value="node" '+(srcType==='node'?'selected':'')+'>节点输出</option>';
+      h+='<option value="literal" '+(srcType==='literal'?'selected':'')+'>字面量</option>';
+      h+='<option value="global" '+(srcType==='global'?'selected':'')+'>全局变量</option>';
+      h+='<option value="local" '+(srcType==='local'?'selected':'')+'>本地变量</option>';
+      h+='<option value="item" '+(srcType==='item'?'selected':'')+'>item(整个)</option>';
+      h+='<option value="index" '+(srcType==='index'?'selected':'')+'>index</option></select>';
+      // 节点输出→下拉选兼容节点
+      if(srcType==='node'){
+        const inType=f.input?.type||'string';
+        h+='<select onchange="setInputRef('+i+',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点--</option>';
+        WF.nodes.forEach(on=>{
+          if(on.id===n.id)return;
+          (nodeOutputs(on)||[]).forEach(o=>{
+            if(o.type===inType||inType==='string'){
+              h+='<option value="'+on.id+'.'+o.name+'"'+(f.input?.value?.content?.blockID===on.id&&f.input?.value?.content?.name===o.name?' selected':'')+'>'+nodeTitle(on)+' - '+o.name+'</option>';
+            }
+          });
+        });
+        h+='</select>';
       }
+      if(srcType.startsWith('item.')){
+        h+=' <input value="'+srcType.slice(5)+'" placeholder="item字段" style="width:60px;font-size:10px" onchange="setInputSource('+i+',\'item.\'+this.value)">';
+      }
+      if(srcType==='global'){
+        const pth=(f.input?.value?.content?.path||[])[0]||'';
+        h+=' <input value="'+pth+'" placeholder="全局变量名" style="width:90px;font-size:10px" onchange="setRefPath('+i+',this.value)">';
+      }
+      if(srcType==='local'){
+        const ln=f.input?.value?.content?.name||'';
+        h+=' <input value="'+ln+'" placeholder="本地变量名" style="width:90px;font-size:10px" onchange="setRefName('+i+',this.value)">';
+      }
+      if(srcType==='literal'){
+        h+=' <input value="'+ext(f.input?.value?.content)+'" placeholder="字面量" style="width:80px;font-size:10px" onchange="setInputLitVal('+i+',this.value)">';
+      }
+      h+='</td></tr>';
     }
     // list：选 item 类型
     if(t==='list'){

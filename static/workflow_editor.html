@@ -823,8 +823,26 @@ function showProps(){
     if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});
     h+='<h3>筛选条件 (filtered_outputs) <select onchange="setCompLogic(parseInt(this.value))" style="width:auto;font-size:10px"><option value="2"'+(filt.logic!==1?' selected':'')+'>AND</option><option value="1"'+(filt.logic===1?' selected':'')+'>OR</option></select></h3>';
     // 收集可用输出字段（含 object 子字段）
+    // 收集可用筛选字段：从输出的 item schema 取字段
     const outFields=[];
-    nodeOutputs(n).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'||o.name==='nth_output'){const sch=o.schema;if(sch&&sch.type==='object'){(o.schema.fields||[]).forEach(sf=>outFields.push(sf.name));}else if(sch&&typeof sch.type==='string'&&sch.type!=='object'){/* item 是基础类型，无字段 */}}else{outFields.push(o.name);if(o.type==='object'&&(o.schema||[]).length){(o.schema||[]).forEach(sf=>outFields.push(o.name+'.'+sf.name));}}});
+    nodeOutputs(n).forEach(o=>{
+      if(o.name==='all_outputs'||o.name==='filtered_outputs'||o.name==='nth_output'){
+        // list 输出，schema 是 item 类型：{type:'string'} 或 [{name,type}](object字段数组)
+        const sch=o.schema;
+        if(Array.isArray(sch)){
+          // item 是 object，有字段
+          sch.forEach(sf=>outFields.push(sf.name));
+        }else if(sch&&sch.type==='object'){
+          // item 是 object，schema 可能在 schema.fields
+          (sch.fields||[]).forEach(sf=>outFields.push(sf.name));
+        }
+        // item 是基础类型(string/int)时无字段，不加入
+      }else{
+        // 普通输出字段
+        outFields.push(o.name);
+        if(o.type==='object'&&Array.isArray(o.schema)){o.schema.forEach(sf=>outFields.push(o.name+'.'+sf.name));}
+      }
+    });
     filt.conditions.forEach((c,ci)=>{
       const isUnary=[9,10,11,12].includes(c.operator);
       const rv=c.right?.input?.value||{};

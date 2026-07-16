@@ -914,7 +914,7 @@ function showProps(){
   // 输出字段（入口=工作流入参；选择器/意图/聚合/复合无输出字段编辑）
   if(n.type!=='2' && !['8','21','22','28','32'].includes(n.type)){
     const label=n.type==='1'?'输入（工作流入参）':'输出字段';
-    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button></h3>`;
+    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema()" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
     h+=renderIOFields(nodeOutputs(n),'out');
   }
   // 复合节点输出：nth_output 可编辑字段（定义 item 结构），all/filtered 自动跟随
@@ -1374,6 +1374,50 @@ function setCondType(bi,ci,side,v){
 function setCondOp(bi,ci,op){
   const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
   br.condition.conditions[ci].operator=op;showProps();
+}
+function importJSONSchema(){
+  const json=prompt('粘贴JSON数据，自动解析结构并创建输出字段：');
+  if(!json)return;
+  let obj;
+  try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
+  if(!obj||typeof obj!=='object'){toast('需要JSON对象或数组');return;}
+  // 如果是数组，取第一个元素分析
+  const sample=Array.isArray(obj)?(obj[0]||{}):obj;
+  const fields=[];
+  for(const[k,v] of Object.entries(sample)){
+    let type='string';
+    if(typeof v==='number')type=Number.isInteger(v)?'integer':'number';
+    else if(typeof v==='boolean')type='boolean';
+    else if(v===null)type='string';
+    else if(Array.isArray(v)){
+      type='list';
+      const item=v[0];
+      if(item&&typeof item==='object'&&!Array.isArray(item)){
+        const subFields=Object.entries(item).map(([sk,sv])=>({name:sk,type:typeof sv==='number'?(Number.isInteger(sv)?'integer':'number'):typeof sv==='boolean'?'boolean':'string',description:'',required:false}));
+        fields.push({name:k,type:'list',description:'',schema:{type:'object'},'_sub':subFields});
+        continue;
+      }else if(item!==undefined){
+        const it=typeof item==='number'?(Number.isInteger(item)?'integer':'number'):typeof item==='boolean'?'boolean':'string';
+        fields.push({name:k,type:'list',description:'',schema:{type:it}});
+        continue;
+      }
+    }else if(typeof v==='object'){
+      const subFields=Object.entries(v).map(([sk,sv])=>({name:sk,type:typeof sv==='number'?(Number.isInteger(sv)?'integer':'number'):typeof sv==='boolean'?'boolean':'string',description:'',required:false}));
+      fields.push({name:k,type:'object',description:'',schema:subFields});
+      continue;
+    }
+    fields.push({name:k,type,description:''});
+  }
+  const n=findN(selNode);
+  // 清除旧输出字段，用解析结果替换
+  if(n.data.outputs!==undefined)n.data.outputs=fields.map(f=>{
+    const o={name:f.name,type:f.type,description:f.description||''};
+    if(f.schema)o.schema=f.schema;
+    if(f._sub)o.schema=f._sub;
+    return o;
+  });
+  showProps();renderAll();
+  toast('已导入 '+fields.length+' 个字段');
 }
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}

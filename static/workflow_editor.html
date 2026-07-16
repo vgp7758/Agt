@@ -305,11 +305,10 @@ function renderAll(){
     svg.appendChild(handle);
   });
 
-  // ---- 拖拽临时线（坐标除 zoom 修正）----
+  // ---- 拖拽临时线 ----
   if(edgeFrom){
-    const sx=(edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x)/dz, sy=(edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y)/dz;
-    const mx=edgeFrom.mx/dz, my=edgeFrom.my/dz;
-    svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:mx,y:my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
+    const sx=edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x, sy=edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y;
+    svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:edgeFrom.mx,y:edgeFrom.my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
   }
 }
 
@@ -526,7 +525,7 @@ function renderNode(n){
     if(e.button!==0)return;
     if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
     e.stopPropagation();
-    dragNode=n.id; dragDX=n.x-e.clientX/dz; dragDY=n.y-e.clientY/dz;
+    const sp=svgPos(e); dragNode=n.id; dragDX=n.x-sp.x; dragDY=n.y-sp.y;
     selNode=n.id; selEdge=null; showProps(); renderAll();
   };
   // 代码节点：画布上显示前几行代码预览
@@ -676,9 +675,10 @@ function finishVar(tgtId,field,color){
   toast('已连接：'+edgeFrom?.field||field);
 }
 function color2type(col){return Object.entries(TYPE_COLOR).find(([k,v])=>v===col)?.[0]||'string';}
+function svgPos(e){const r=svg.getBoundingClientRect();return{x:(e.clientX-r.left)/dz,y:(e.clientY-r.top)/dz};}
 svg.addEventListener('mousemove',(e)=>{
-  if(dragNode){const n=findN(dragNode);if(n){n.x=e.clientX/dz+dragDX;n.y=e.clientY/dz+dragDY;renderAll();}}
-  if(edgeFrom){edgeFrom.mx=e.clientX/dz;edgeFrom.my=e.clientY/dz;renderAll();}
+  if(dragNode){const p=svgPos(e);const n=findN(dragNode);if(n){n.x=p.x+dragDX;n.y=p.y+dragDY;renderAll();}}
+  if(edgeFrom){const p=svgPos(e);edgeFrom.mx=p.x;edgeFrom.my=p.y;renderAll();}
   if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
 svg.addEventListener('mouseup',(e)=>{

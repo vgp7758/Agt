@@ -390,8 +390,10 @@ function renderPlan(plan){
 ws.onopen=()=>setOnline(true);
 ws.onclose=()=>{ setOnline(false); inp.placeholder='连接已断开，请刷新页面'; };
 ws.onerror=()=>setOnline(false);
+window.onerror=function(msg,url,line,col,err){console.error(msg,err);try{addRow('err','JS错误: '+(msg+'').slice(0,100));}catch(e){}};
 ws.onmessage=(ev)=>{
   let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
+  try{
   switch(m.type){
     case 'system':
       if(m.models){
@@ -515,6 +517,7 @@ ws.onmessage=(ev)=>{
       if(!autonomousMode) setBusy(false);
       break;
   }
+  }catch(e){console.error('WS event error:',e);}
 };
 function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }
 

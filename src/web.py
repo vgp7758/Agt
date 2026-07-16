@@ -276,12 +276,20 @@ async def api_wf_delete(name: str):
 async def ws_endpoint(websocket: WebSocket):
     global _agent_busy
     await websocket.accept()
+    print("[WS] connected", flush=True)
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     registry = build_default_registry()
 
     # 获取/创建 Agent（断线重连/多客户端复用）
-    agent = _get_or_create_agent()
+    try:
+        agent = _get_or_create_agent()
+        print("[WS] agent ready", flush=True)
+    except Exception as e:
+        print(f"[WS] agent failed: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        await websocket.close()
+        return
 
     # 注册到客户端列表（广播目标）
     client = {"ws": websocket, "queue": queue}

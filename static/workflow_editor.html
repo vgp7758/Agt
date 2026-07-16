@@ -422,14 +422,14 @@ function renderNode(n){
   if(n.type==='32'){
     const groups=n.data.inputs?.mergeGroups||[];
     let gy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+6;
-    groups.forEach(g=>{
-      const gname=g.name||'?';
+    groups.forEach(grp=>{
+      const gname=grp.name||'?';
       const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
       const col=fieldColor(gtype);
       // 分组标签(左侧)
       g.appendChild(elm('text',{x:6,y:gy+10,class:'node-field-name',fill:col},'▾ '+gname));
       // 分组变量输入端口
-      const vars=g.variables||[];
+      const vars=grp.variables||[];
       let vx=80;
       vars.forEach((v,i)=>{
         const cy=gy+10;

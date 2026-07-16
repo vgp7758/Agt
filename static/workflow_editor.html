@@ -317,13 +317,13 @@ function renderNode(n){
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
   g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},TYPE_LABEL[n.type]+' · '+n.type));
-  // 流程端口（入口只有出口，出口只有入口）
+  // 流程端口（入口仅出口，出口仅入口；选择器/意图用分支端口不用标题栏出口）
   if(n.type!=='1'){
     const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
     fIn.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
     g.appendChild(fIn);
   }
-  if(n.type!=='2'){
+  if(!['2','8','22'].includes(n.type)){
     const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
     fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
     g.appendChild(fOut);
@@ -818,7 +818,16 @@ function showProps(){
     const b=n.data.inputs?.batch||{};
     const filt=b.filter||{logic:2,conditions:[{operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}}]};
     filt.conditions.forEach((c,ci)=>{
-      h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(c.left?.input?.value?.content?.name||'')+'" placeholder="输出字段" onchange="setCompFilt('+ci+',\'left\',this.value)" style="flex:1"><select onchange="setCompFilt('+ci+',\"op\",parseInt(this.value))" style="width:50px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select><input value="'+ext(c.right?.input?.value?.content)+'" placeholder="值" onchange="setCompFilt('+ci+',\'right\',this.value)" style="flex:1"><button class="del" onclick="delCompFilt('+ci+')">×</button></div>';
+      const rt=c.right?.input?.value;
+      const rIsRef2=rt?.type==='ref';
+      const rSrc2=rIsRef2?(rt?.content?.source||'literal'):'literal';
+      h+='<div style="display:flex;gap:2px;margin:2px 0;flex-wrap:wrap">';
+      h+='<input value="'+ext(c.left?.input?.value?.content?.name||'')+'" placeholder="输出字段名" onchange="setCompFilt('+ci+',\'left\',this.value)" style="width:80px">';
+      h+='<select onchange="setCompFilt('+ci+',\"op\",parseInt(this.value))" style="width:50px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select>';
+      h+='<select onchange="setCompFiltSrc('+ci+',this.value)" style="width:auto;font-size:10px"><option value="literal"'+(rSrc2==='literal'?' selected':'')+'>literal</option><option value="block-output"'+(rSrc2==='block-output'?' selected':'')+'>ref</option></select>';
+      if(rIsRef2)h+='<input value="'+ext(rt?.content?.name||'')+'" placeholder="字段名" onchange="setCompFilt('+ci+',\'refName\',this.value)" style="width:60px">';
+      else h+='<input value="'+ext(rt?.content)+'" placeholder="值" onchange="setCompFilt('+ci+',\'right\',this.value)" style="width:60px"><select onchange="setCompFilt('+ci+',\'type\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(c.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      h+='<button class="del" onclick="delCompFilt('+ci+')">×</button></div>';
     });
     h+='<button onclick="addCompFilt()">+ 条件</button>';
     // nth
@@ -840,8 +849,16 @@ function showProps(){
     h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button>'}</h3>`;
     h+=renderIOFields(nodeInputs(n),'in');
   }
-  // 输出字段（入口=工作流入参；意图/聚合无输出字段编辑）
-  if(n.type!=='2' && !['22','32'].includes(n.type)){
+  // 输出字段（入口=工作流入参；选择器/意图/聚合/复合无输出字段编辑）
+  if(n.type!=='2' && !['8','21','22','28','32'].includes(n.type)){
+    h+=`<h3>输出字段 <button onclick="addIO('out')">+ 添加</button></h3>`;
+    h+=renderIOFields(nodeOutputs(n),'out');
+  }
+  // 复合节点输出只读（仅可看/改item类型）
+  if(['21','28'].includes(n.type)){
+    h+='<h3>输出字段 🔒（自动管理）</h3>';
+    h+=renderIOFields(nodeOutputs(n),'out',true);
+  }
     const label=n.type==='1'?'输入（工作流入参）':'输出字段';
     h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button></h3>`;
     h+=renderIOFields(nodeOutputs(n),'out');
@@ -1040,13 +1057,13 @@ function setInputSource(i,src){
 }
 
 // 渲染输入/输出字段表（含 object 子字段 / list item 类型）
-function renderIOFields(arr,kind){
+function renderIOFields(arr,kind,lockedAll){
   if(!arr.length)return '<div style="color:#8a9099;font-size:11px">（无）</div>';
   const n=findN(selNode);
   let h='<table class="io-table">';
   arr.forEach((f,i)=>{
     const t=f.input?.type||f.type||'string';
-    const locked=(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||['4','9'].includes(n.type)));
+    const locked=lockedAll||(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||['4','9'].includes(n.type)));
     h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
       <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;
@@ -1237,7 +1254,8 @@ function addLocalVar(){const n=findN(selNode);n.data.inputs.variableParameters=n
 function setLocalVar(i,field,v){const n=findN(selNode);const vp=n.data.inputs.variableParameters[i];if(field==='name')vp.name=v;if(field==='init')vp.input.value.content=v;if(field==='type')vp.input.type=v;showProps();}
 function delLocalVar(i){const n=findN(selNode);n.data.inputs.variableParameters.splice(i,1);showProps();}
 function setCompArraySrc(v){/* 标记哪个 list 字段是数组源 — 已由第一个 list 型输入自动确定 */showProps();}
-function setCompFilt(ci,field,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;}
+function setCompFilt(ci,field,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value.type='ref';c.right.input.value.content={source:'block-output',blockID:'',name:v};}}
+function setCompFiltSrc(ci,src){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(src==='literal')c.right.input.value={type:'literal',content:''};else c.right.input.value={type:'ref',content:{source:src,blockID:'',name:''}};showProps();}
 function delCompFilt(ci){const n=findN(selNode);const f=n.data.inputs.batch?.filter||{};if(f.conditions)f.conditions.splice(ci,1);showProps();}
 function addCompFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});f.conditions.push({operator:1,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});showProps();}
 

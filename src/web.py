@@ -49,18 +49,20 @@ _agent_busy: bool = False
 _event_log: list[tuple[int, dict]] = []
 _seq: int = 0
 _clients: list[dict] = []     # [{ws, queue}]  所有活跃连接
+_main_loop = None             # 主 event loop（_broadcast 在线程里用到）
 
 
 def _broadcast(ev: dict):
     """记录事件到日志缓冲 + 广播给所有活跃客户端。"""
-    global _seq
+    global _seq, _main_loop
     _seq += 1
     _event_log.append((_seq, ev))
     if len(_event_log) > 500:
         _event_log.pop(0)
+    loop = _main_loop or asyncio.get_event_loop()
     for c in _clients:
         try:
-            asyncio.get_event_loop().call_soon_threadsafe(c["queue"].put_nowait, ev)
+            loop.call_soon_threadsafe(c["queue"].put_nowait, ev)
         except Exception:
             pass
 
@@ -275,9 +277,10 @@ async def api_wf_delete(name: str):
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     global _agent_busy
+    global _main_loop
     await websocket.accept()
-    print("[WS] connected", flush=True)
-    loop = asyncio.get_running_loop()
+    _main_loop = asyncio.get_running_loop()  # 保存主循环供 _broadcast 线程用
+    loop = _main_loop
     queue: asyncio.Queue = asyncio.Queue()
     registry = build_default_registry()
 

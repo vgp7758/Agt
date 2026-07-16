@@ -168,7 +168,13 @@ const HDR_H=26, ROW_H=18, PAD=8;
 // 行: {side:'in'|'out', field:字段名(子字段用 父.子), type, parent:父字段名|null, sub:boolean}
 function nodeRows(n){
   const rows=[];
-  const ins=nodeInputs(n), outs=nodeOutputs(n);
+  let ins=nodeInputs(n), outs=nodeOutputs(n);
+  // type 32：mergeGroups 变量作为输入端口
+  if(n.type==='32'){
+    const groups=n.data.inputs?.mergeGroups||[];
+    ins=[...ins];
+    groups.forEach(g=>{(g.variables||[]).forEach(v=>{ins.push({name:g.name, input:v, _ref:v})});});
+  }
   for(let i=0;i<Math.max(ins.length,outs.length);i++){
     if(ins[i]) rows.push(...fieldRows(n.id, ins[i],'in'));
     if(outs[i]) rows.push(...fieldRows(n.id, outs[i],'out'));
@@ -410,6 +416,39 @@ function renderNode(n){
     btn.onmousedown=(e)=>e.stopPropagation();
     fo.appendChild(btn);fo.style.pointerEvents='auto';
     g.appendChild(fo);
+  }
+
+  // 聚合节点(type32)：左侧渲染 mergeGroups 变量输入端口 + 分组标签
+  if(n.type==='32'){
+    const groups=n.data.inputs?.mergeGroups||[];
+    let gy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+6;
+    groups.forEach(g=>{
+      const gname=g.name||'?';
+      const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
+      const col=fieldColor(gtype);
+      // 分组标签(左侧)
+      g.appendChild(elm('text',{x:6,y:gy+10,class:'node-field-name',fill:col},'▾ '+gname));
+      // 分组变量输入端口
+      const vars=g.variables||[];
+      let vx=80;
+      vars.forEach((v,i)=>{
+        const cy=gy+10;
+        const port=elm('circle',{cx:vx,cy:cy,r:4,class:'port-var',fill:col,stroke:col});
+        port.onmouseup=(e)=>{e.stopPropagation();finishAggrVar(n.id,gname,i,col);};
+        port.onmousedown=(e)=>{e.stopPropagation();};
+        g.appendChild(port);
+        g.appendChild(elm('text',{x:vx+7,y:cy+3,class:'sub-row',fill:col},'in'+(i+1)));
+        vx+=30;
+      });
+      // 分组输出端口(右侧)
+      const outY=gy+10;
+      const outPort=elm('circle',{cx:n.w,cy:outY,r:5,class:'port-var',fill:col,stroke:col});
+      outPort.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+outY);};
+      g.appendChild(outPort);
+      g.appendChild(elm('text',{x:n.w-10,y:outY+3,class:'node-field-name','text-anchor':'end',fill:col},gname));
+      gy+=24;
+    });
+    n.h=gy+10;
   }
 
   // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）
@@ -682,7 +721,7 @@ async def main(args: Args) -> Output:
       '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],variableParameters:[],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
       '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
       '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[],mode:'all'},outputs:[{name:'classificationId',type:'integer',description:''},{name:'reason',type:'string',description:''}]},
-      '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[]},outputs:[]},
+      '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'}]},
       '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
       '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
       '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},
@@ -784,6 +823,27 @@ function showProps(){
     h+=`<h3>Python 代码</h3><label><textarea style="min-height:200px" onchange="setCode(this.value)">${ext(n.data.inputs?.code)}</textarea></label>`;
     h+='<div style="font-size:10px;color:#8a9099">通过 args.params 取输入，ret: Output = {...} 返回输出；输出字段需与返回结构匹配。</div>';
   }
+  // 聚合节点(type32)：mergeGroups 编辑器
+  if(n.type==='32'){
+    h+='<h3>聚合分组 <button onclick="addAggrGroup()">+分组</button></h3>';
+    const groups=n.data.inputs?.mergeGroups||[];
+    groups.forEach((g,i)=>{
+      h+='<div style="margin:4px 0;padding:4px;background:#0f3460;border-radius:4px">';
+      h+='<span>分组名:</span><input value="'+ext(g.name)+'" onchange="setAggrGroupName('+i+',this.value)" style="width:80px">';
+      h+='<span> 变量('+(g.variables||[]).length+') </span>';
+      h+='<button onclick="addAggrVar('+i+')">+变量</button>';
+      h+='<button class="del" onclick="delAggrGroup('+i+')">×删分组</button>';
+      (g.variables||[]).forEach((v,vi)=>{
+        const isRef=v.value?.type==='ref';
+        h+='<div style="font-size:10px;margin:2px 0"> 变量'+(vi+1)+': ';
+        if(isRef)h+='ref→'+ext(v.value?.content?.blockID)+'.'+ext(v.value?.content?.name);
+        else h+='literal:'+ext(v.value?.content);
+        h+=' <button class="del" onclick="delAggrVar('+i+','+vi+')">×</button></div>';
+      });
+      h+='</div>';
+    });
+  }
+
   // 置变量(循环) type20 / 赋值(全局) type40 — left/right 专用编辑
   if(n.type==='20'||n.type==='40'){
     const label=n.type==='20'?'置变量 (循环内修改本地变量)':'赋值 (修改全局变量)';
@@ -960,7 +1020,25 @@ function setField(kind,i,field,v){
   if(field==='type'){if(kind==='in'){f.input.type=v;if(v!=='list'&&v!=='object')delete f.input.schema;}else{f.type=v;if(v!=='list'&&v!=='object')delete f.schema;}}
   showProps();renderAll();}
 function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
+function finishAggrVar(nodeId,gname,idx,col){
+  if(!edgeFrom||edgeFrom.kind!=='var'){edgeFrom=null;renderAll();return;}
+  const n=findN(nodeId);if(!n){edgeFrom=null;renderAll();return;}
+  const group=(n.data.inputs?.mergeGroups||[]).find(g=>g.name===gname);
+  if(!group){edgeFrom=null;renderAll();return;}
+  group.variables=group.variables||[];
+  group.variables[idx]={type:color2type(col),value:{type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}}};
+  edgeFrom=null;renderAll();
+}
+function addAggrGroup(){
+  const n=findN(selNode);n.data.inputs.mergeGroups=n.data.inputs.mergeGroups||[];
+  const nm='Group'+(n.data.inputs.mergeGroups.length+1);
+  n.data.inputs.mergeGroups.push({name:nm,variables:[{type:'string',value:{type:'literal',content:''}}]});
+  n.data.outputs=n.data.outputs||[]; n.data.outputs.push({name:nm,type:'string'});
+  showProps();renderAll();
+}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
+function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
+function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].variables.splice(vi,1);showProps();renderAll();}
 async function setSubWf(v){
   const n=findN(selNode);n.data.inputs.workflowId=v;
   if(!v){showProps();return;}

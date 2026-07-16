@@ -143,16 +143,17 @@ async def api_wf_list():
 
 @app.get("/api/tools")
 async def api_tools():
-    """返回当前 Agent 已注册的所有工具（名+描述+参数schema），供编辑器生成工具节点。"""
-    agent = _get_or_create_agent()
+    """返回全部内置工具（名+描述+参数/输出schema），供编辑器生成工具节点。"""
+    from real_tools import ALL_BUILTIN_TOOLS, infer_tool_outputs
     out = []
-    for t in agent.tools:
+    for t in ALL_BUILTIN_TOOLS:
         s = t.schema["function"]
         props = s.get("parameters", {}).get("properties", {}) or {}
         params = []
         for pname, psch in props.items():
             params.append({"name": pname, "type": (psch.get("type") if isinstance(psch, dict) else "string") or "string"})
-        out.append({"name": s["name"], "description": s.get("description", ""), "params": params})
+        outputs = infer_tool_outputs(t)
+        out.append({"name": s["name"], "description": s.get("description", ""), "params": params, "outputs": outputs})
     return {"tools": out}
 
 

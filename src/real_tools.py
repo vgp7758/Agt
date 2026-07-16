@@ -410,7 +410,10 @@ REAL_TOOLS = Toolbox(
     Tool(run_shell),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
-    # 内置轻量工具
+)
+
+# 轻量工具（仅工作流编排用，不注册给 Agent）
+LIGHT_TOOLS = Toolbox(
     Tool(add),
     Tool(subtract),
     Tool(multiply),
@@ -422,6 +425,33 @@ REAL_TOOLS = Toolbox(
     Tool(to_lowercase),
     Tool(contains),
 )
+
+# 全部内置工具（编辑器 /api/tools 返回这个）
+ALL_BUILTIN_TOOLS = Toolbox(*(list(REAL_TOOLS) + list(LIGHT_TOOLS)))
+
+
+def infer_tool_outputs(tool) -> list[dict]:
+    """从工具的返回值类型注解推断输出 schema。
+    str→[{name:'result',type:'string'}], float→number, int→integer, bool→boolean,
+    list→list, dict→object, 无注解或无返回值→[{name:'raw',type:'string'}]。"""
+    try:
+        hints = getattr(tool.func, "__annotations__", {})
+    except Exception:
+        hints = {}
+    ret = hints.get("return")
+    mapping = {"str": "string", "int": "integer", "float": "number", "number": "number",
+               "bool": "boolean", "list": "list", "dict": "object",
+               str: "string", int: "integer", float: "number", bool: "boolean",
+               list: "list", dict: "object"}
+    if ret is None or ret is type(None):
+        return [{"name": "raw", "type": "string", "description": "工具返回"}]
+    # ret 可能是字符串（from __future__）或类型
+    key = ret if isinstance(ret, str) else (ret.__name__ if hasattr(ret, "__name__") else str(ret))
+    if ret in mapping:
+        return [{"name": "result", "type": mapping[ret], "description": "工具返回值"}]
+    if key in mapping:
+        return [{"name": "result", "type": mapping[key], "description": "工具返回值"}]
+    return [{"name": "raw", "type": "string", "description": "工具返回"}]
 
 
 def make_autonomous_tools(agent) -> list:

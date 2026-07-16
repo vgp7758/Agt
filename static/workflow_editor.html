@@ -1402,10 +1402,10 @@ function renderToolPalette(filter){
 function addToolNode(toolName){
   const t=AGENT_TOOLS.find(x=>x.name===toolName);if(!t)return;
   const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
+  // 用 API 返回的 outputs schema 初始化（内置工具已知返回类型）
+  const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
   const n={id:genId(),type:'4',x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:230,h:80,
-    data:{nodeMeta:{title:toolName},toolName,
-      inputs:{inputParameters},
-      outputs:[{name:'raw',type:'string',description:'工具原始返回'}]}};
+    data:{nodeMeta:{title:toolName},toolName, inputs:{inputParameters}, outputs}};
   WF.nodes.push(n);selNode=n.id;showProps();renderAll();
 }
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}

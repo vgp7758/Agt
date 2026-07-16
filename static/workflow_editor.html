@@ -899,9 +899,38 @@ function showProps(){
     h+='</select></label>';
   }
 
-  // 选择器
+  // 选择器：分支条件编辑器
   if(n.type==='8'){
-    h+='<h3>选择器分支</h3><button onclick="addBranchCanvas()">+ 分支</button><div style="font-size:10px;color:#8a9099">分支条件与每分支的流程出口在画布节点上编辑。</div>';
+    h+='<h3>选择器分支</h3>';
+    const branches=n.data.inputs?.branches||[];
+    branches.forEach((br,bi)=>{
+      const cond=br.condition||{logic:2,conditions:[]};
+      const lc=cond.conditions?.[0]||{operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}};
+      const lv=lc.left?.input?.value||{};
+      const rv=lc.right?.input?.value||{};
+      const lIsRef=lv.type==='ref', rIsRef=rv.type==='ref';
+      const lSrc=lIsRef?(lv.content?.source||'block-output'):'literal';
+      const rSrc=rIsRef?(rv.content?.source||'block-output'):'literal';
+      h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">分支'+(bi+1)+' <button class="del" onclick="delBranch('+bi+')">×</button><br>';
+      // left
+      h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\"left\",this.value)" style="width:auto;font-size:10px">';
+      ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
+      h+='</select>';
+      if(lIsRef)h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\"left\",this.value)" style="width:80px;font-size:10px">';
+      else h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\"left\",this.value)" style="width:80px;font-size:10px">';
+      // op
+      h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
+      OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
+      h+='</select> ';
+      // right
+      h+='<select onchange="setCondSrc('+bi+',0,\"right\",this.value)" style="width:auto;font-size:10px">';
+      ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
+      h+='</select>';
+      if(rIsRef)h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\"right\",this.value)" style="width:80px;font-size:10px">';
+      else h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\"right\",this.value)" style="width:80px;font-size:10px">';
+      h+='</div>';
+    });
+    h+='<button onclick="addBranch()">+ 分支</button>';
   }
   p.innerHTML=h;
   }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
@@ -1087,6 +1116,32 @@ function addAggrGroup(){
 }
 function setRefPath(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.path=[v];showProps();}
 function setRefName(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.name=v;showProps();}
+function _ensureCond(br,ci){
+  if(!br.condition)br.condition={logic:2,conditions:[]};
+  if(!br.condition.conditions[ci])br.condition.conditions[ci]={operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}};
+}
+function setCondSrc(bi,ci,side,src){
+  const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
+  const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
+  if(src==='literal')target.input.value={type:'literal',content:''};
+  else target.input.value={type:'ref',content:{source:src,blockID:'',name:''}};
+  showProps();
+}
+function setCondRef(bi,ci,side,v){
+  const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
+  const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
+  const content=target.input.value.content;content.name=v;if(content.path)content.path=[v];
+  showProps();
+}
+function setCondLit(bi,ci,side,v){
+  const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
+  const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
+  target.input.value.content=v;showProps();
+}
+function setCondOp(bi,ci,op){
+  const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
+  br.condition.conditions[ci].operator=op;showProps();
+}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
 function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables=g.variables||[];g.variables.push({type:'string',value:{type:'literal',content:''}});showProps();renderAll();}

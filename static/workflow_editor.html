@@ -1028,7 +1028,7 @@ function renderIOFields(arr,kind){
     const t=f.input?.type||f.type||'string';
     const locked=(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||['4','9'].includes(n.type)));
     h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
-      <td style="width:70px"><select onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
+      <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;
     h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
 
@@ -1127,6 +1127,10 @@ function delField(kind,i){
   findArr(kind).splice(i,1);showProps();renderAll();
 }
 function setField(kind,i,field,v){
+  const n=findN(selNode);
+  // 工具/子工作流/意图query 字段锁定，不可改 name/type
+  if(kind==='in'&&['4','9'].includes(n.type)) return;
+  if(kind==='in'&&n.type==='22'&&nodeInputs(n)[i]?.name==='query'&&field!=='description') return;
   const arr=findArr(kind);const f=arr[i];
   if(field==='name')f.name=v;
   if(field==='description')f.description=v;

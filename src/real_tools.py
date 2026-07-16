@@ -351,6 +351,54 @@ def get_tool_timeout() -> str:
     return f"当前工具超时：{TOOL_TIMEOUT}s"
 
 
+# ===== 内置轻量工具（工作流编排可用）=====
+
+def add(a: float, b: float) -> float:
+    """两个数相加，返回和。"""
+    return a + b
+
+def subtract(a: float, b: float) -> float:
+    """a 减 b，返回差。"""
+    return a - b
+
+def multiply(a: float, b: float) -> float:
+    """两个数相乘，返回积。"""
+    return a * b
+
+def divide(a: float, b: float) -> float:
+    """a 除以 b，返回商。b 为 0 返回错误提示。"""
+    if b == 0:
+        return "[错误] 除数不能为 0"
+    return a / b
+
+def join(items: list, separator: str = ",") -> str:
+    """用分隔符把字符串列表拼接成一个字符串（类似 string.join）。items: 字符串列表；separator: 分隔符。"""
+    return separator.join(str(x) for x in (items or []))
+
+def split(text: str, separator: str = ",") -> list:
+    """按分隔符把字符串切成列表（类似 string.split）。text: 原文；separator: 分隔符。"""
+    return text.split(separator) if text else []
+
+def length(obj) -> int:
+    """返回字符串/列表/字典的长度。"""
+    try:
+        return len(obj)
+    except TypeError:
+        return len(str(obj))
+
+def to_uppercase(text: str) -> str:
+    """字符串转大写。"""
+    return (text or "").upper()
+
+def to_lowercase(text: str) -> str:
+    """字符串转小写。"""
+    return (text or "").lower()
+
+def contains(text: str, keyword: str) -> bool:
+    """判断 text 是否包含 keyword，返回 true/false。"""
+    return keyword in (text or "")
+
+
 REAL_TOOLS = Toolbox(
     Tool(run_python),
     Tool(read_file),
@@ -362,6 +410,17 @@ REAL_TOOLS = Toolbox(
     Tool(run_shell),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
+    # 内置轻量工具
+    Tool(add),
+    Tool(subtract),
+    Tool(multiply),
+    Tool(divide),
+    Tool(join),
+    Tool(split),
+    Tool(length),
+    Tool(to_uppercase),
+    Tool(to_lowercase),
+    Tool(contains),
 )
 
 

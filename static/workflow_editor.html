@@ -1011,6 +1011,33 @@ function showProps(){
     h+='<div style="font-size:10px;color:#8a9099;margin-top:4px">LLM 分类后路由到对应分支(branch_N)，未命中走默认。每意图在画布右侧有一个流程出口。</div>';
   }
 
+  // HTTP 节点编辑
+  if(n.type==='45'){
+    const api=n.data.inputs?.apiInfo||{};
+    h+='<h3>HTTP 请求</h3>';
+    h+='<label>方法 <select onchange="setHttp(\'method\',this.value)"><option value="GET"'+(api.method==='GET'?' selected':'')+'>GET</option><option value="POST"'+(api.method==='POST'?' selected':'')+'>POST</option><option value="PUT"'+(api.method==='PUT'?' selected':'')+'>PUT</option><option value="DELETE"'+(api.method==='DELETE'?' selected':'')+'>DELETE</option></select></label>';
+    h+='<label>URL <input value="'+ext(api.url)+'" onchange="setHttp(\'url\',this.value)" placeholder="https://... 支持 {{字段名}} 占位符"></label>';
+    // POST 请求体
+    if(api.method==='POST'||api.method==='PUT'){
+      const bd=n.data.inputs?.body||{};
+      h+='<label>请求体类型 <select onchange="setHttp(\'bodyType\',this.value)"><option value="EMPTY"'+(!bd.bodyType||bd.bodyType==='EMPTY'?' selected':'')+'>无</option><option value="JSON"'+(bd.bodyType==='JSON'?' selected':'')+'>JSON</option><option value="FORM_URLENCODED"'+(bd.bodyType==='FORM_URLENCODED'?' selected':'')+'>表单(URL编码)</option><option value="RAW_TEXT"'+(bd.bodyType==='RAW_TEXT'?' selected':'')+'>纯文本</option></select></label>';
+      if(bd.bodyType==='JSON'){
+        h+='<label>JSON 体 <textarea onchange="setHttp(\'bodyJson\',this.value)" style="min-height:80px">'+ext((bd.bodyData||{}).json)+'</textarea></label>';
+        h+='<div style="font-size:10px;color:#8a9099">支持 {{输入字段名}} 占位符引用上游数据</div>';
+      }
+      if(bd.bodyType==='RAW_TEXT'){
+        h+='<label>文本体 <textarea onchange="setHttp(\'bodyText\',this.value)" style="min-height:60px">'+ext((bd.bodyData||{}).rawText)+'</textarea></label>';
+      }
+      if(bd.bodyType==='FORM_URLENCODED'){
+        h+='<label>表单字段</label>';
+        const fields=(bd.bodyData||{}).formURLEncoded||[];
+        fields.forEach((p,pi)=>{h+='<div style="display:flex;gap:3px;margin:2px 0"><input value="'+ext(p.name)+'" placeholder="键" onchange="setHttpForm('+pi+',\'name\',this.value)" style="flex:1;font-size:10px"><input value="'+ext(p.input?.value?.content)+'" placeholder="值" onchange="setHttpForm('+pi+',\'val\',this.value)" style="flex:2;font-size:10px"><button class="del" onclick="delHttpForm('+pi+')">×</button></div>';});
+        h+='<button onclick="addHttpForm()" style="font-size:10px">+ 字段</button>';
+      }
+    }
+    h+='<label>超时(秒) <input type="number" value="'+ext((n.data.inputs?.setting||{}).timeout,15)+'" onchange="setHttp(\'timeout\',parseInt(this.value)||15)"></label>';
+  }
+
   // 子工作流: workflowId 下拉选择
   if(n.type==='9'){
     h+='<h3>子工作流</h3><label>调用 <select onchange="setSubWf(this.value)"><option value="">选择工作流…</option>';
@@ -1355,6 +1382,10 @@ function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].
 function setIntent(i,v){const n=findN(selNode);n.data.inputs.intents[i].name=v;renderAll();}
 function addIntent(){const n=findN(selNode);n.data.inputs.intents=n.data.inputs.intents||[];n.data.inputs.intents.push({name:'新意图'});showProps();renderAll();}
 function delIntent(i){const n=findN(selNode);n.data.inputs.intents.splice(i,1);showProps();renderAll();}
+function setHttp(field,v){const n=findN(selNode);const d=n.data.inputs;if(field==='method'){d.apiInfo.method=v;if(v==='GET')d.body.bodyType='EMPTY';}if(field==='url')d.apiInfo.url=v;if(field==='timeout'){(d.setting=d.setting||{}).timeout=v;}if(field==='bodyType'){d.body=d.body||{};d.body.bodyType=v;d.body.bodyData={};}if(field==='bodyJson'){d.body=d.body||{};d.body.bodyData=d.body.bodyData||{};d.body.bodyData.json=v;}if(field==='bodyText'){d.body=d.body||{};d.body.bodyData=d.body.bodyData||{};d.body.bodyData.rawText=v;}showProps();}
+function setHttpForm(pi,field,v){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];const p=bd.bodyData.formURLEncoded[pi];if(field==='name')p.name=v;if(field==='val'){p.input=p.input||{};p.input.value={type:'literal',content:v};}showProps();}
+function addHttpForm(){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.push({name:'key',input:{type:'string',value:{type:'literal',content:''}}});showProps();}
+function delHttpForm(pi){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.splice(pi,1);showProps();}
 async function setSubWf(v){
   const n=findN(selNode);n.data.inputs.workflowId=v;
   if(!v){showProps();return;}

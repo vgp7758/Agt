@@ -797,7 +797,7 @@ function showProps(){
     const b=n.data.inputs?.batch||{};
     const filt=b.filter||{logic:2,conditions:[{operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}}]};
     filt.conditions.forEach((c,ci)=>{
-      h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(c.left?.input?.value?.content?.name||'')+'" placeholder="输出字段" onchange="setCompFilt('+ci+',\"left\",this.value)" style="flex:1"><select onchange="setCompFilt('+ci+',\"op\",parseInt(this.value))" style="width:50px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select><input value="'+ext(c.right?.input?.value?.content)+'" placeholder="值" onchange="setCompFilt('+ci+',\"right\",this.value)" style="flex:1"><button class="del" onclick="delCompFilt('+ci+')">×</button></div>';
+      h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(c.left?.input?.value?.content?.name||'')+'" placeholder="输出字段" onchange="setCompFilt('+ci+',\'left\',this.value)" style="flex:1"><select onchange="setCompFilt('+ci+',\"op\",parseInt(this.value))" style="width:50px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select><input value="'+ext(c.right?.input?.value?.content)+'" placeholder="值" onchange="setCompFilt('+ci+',\'right\',this.value)" style="flex:1"><button class="del" onclick="delCompFilt('+ci+')">×</button></div>';
     });
     h+='<button onclick="addCompFilt()">+ 条件</button>';
     // nth
@@ -913,21 +913,21 @@ function showProps(){
       const rSrc=rIsRef?(rv.content?.source||'block-output'):'literal';
       h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">分支'+(bi+1)+' <button class="del" onclick="delBranch('+bi+')">×</button><br>';
       // left
-      h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\"left\",this.value)" style="width:auto;font-size:10px">';
+      h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">';
       ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
-      if(lIsRef)h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\"left\",this.value)" style="width:80px;font-size:10px">';
-      else h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\"left\",this.value)" style="width:80px;font-size:10px">';
+      if(lIsRef)h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+      else h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
       // op
       h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
       OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
       h+='</select> ';
       // right
-      h+='<select onchange="setCondSrc('+bi+',0,\"right\",this.value)" style="width:auto;font-size:10px">';
+      h+='<select onchange="setCondSrc('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">';
       ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
-      if(rIsRef)h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\"right\",this.value)" style="width:80px;font-size:10px">';
-      else h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\"right\",this.value)" style="width:80px;font-size:10px">';
+      if(rIsRef)h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+      else h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
       h+='</div>';
     });
     h+='<button onclick="addBranch()">+ 分支</button>';

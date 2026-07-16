@@ -1213,7 +1213,7 @@ function renderObjectSubFields(f,kind,fi,ctx){
       <select style="width:55px;font-size:10px" onchange="setSubField('${kind}',${fi},${si},'type',this.value,${ctx==='list-item'})">${IO_TYPES.map(x=>`<option value="${x}" ${st===x?'selected':''}>${x}</option>`).join('')}</select>
       <button class="del" onclick="delSubField('${kind}',${fi},${si},${ctx==='list-item'})">×</button></div>`;
     h+=`<input value="${ext(s.description)}" placeholder="描述" style="width:100%;font-size:10px;color:#8a9099;margin-bottom:1px" onchange="setSubField('${kind}',${fi},${si},'description',this.value,${ctx==='list-item'})">`;
-    h+=`<label style="font-size:9px;color:#8a9099"><input type="checkbox" ${s.required?'checked':''} onchange="setSubField('${kind}',${fi},${si},'required',this.checked,${ctx==='list-item'})"> required</label>`;
+    h+=`<label style="font-size:9px;color:#8a9099;display:inline-flex;align-items:center;gap:2px"><input type="checkbox" ${s.required?'checked':''} onchange="setSubField('${kind}',${fi},${si},'required',this.checked,${ctx==='list-item'})"> required</label>`;
   });
   h+=`<button onclick="addSubField('${kind}',${fi},${ctx==='list-item'})" style="font-size:10px">+ 子字段</button></td></tr>`;
   return h;

@@ -1446,9 +1446,9 @@ function getSchemaHolder(kind,fi,isListItem){
   if(isListItem){return {get:()=>{let s=f.input?.schema||f.schema;if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.input=f.input||{};f.input.schema=arr;}};}
   return {get:()=>{let s=f.schema||(f.input?.schema)||[];if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.schema=arr;}};
 }
-function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();}
-function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();}
-function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();if(field==='type')showProps();}
+function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();renderAll();}
+function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();renderAll();}
+function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();if(field==='type'){showProps();renderAll();}else showProps();}
 function setListItemType(kind,fi,itemType){
   const f=findArr(kind)[fi];
   if(itemType==='object'){const a=[];(f.input||f).schema=a;if(f.input)f.input.schema=a;}

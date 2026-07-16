@@ -791,8 +791,8 @@ function showProps(){
     }
   }
 
-  // 输入字段
-  if(n.type!=='1'){
+  // 输入字段（聚合节点用 mergeGroups，跳过常规输入）
+  if(n.type!=='1'&&n.type!=='32'){
     const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
     h+=`<h3>${label} <button onclick="addIO('in')">+ 添加</button></h3>`;
     h+=renderIOFields(nodeInputs(n),'in');

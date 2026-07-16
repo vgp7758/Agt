@@ -961,10 +961,12 @@ function showProps(){
         h+='<select onchange="setCondType('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.left?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
       }
       // op
+      const isUnary=[9,10,11,12].includes(lc.operator);  // 为空/非空/True/False 不需要右值
       h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
       OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
       h+='</select> ';
-      // right
+      // right（一元运算符不显示）
+      if(!isUnary){
       h+='<select onchange="setCondSrc('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">';
       ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
@@ -977,6 +979,7 @@ function showProps(){
       }else{
         h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
         h+='<select onchange="setCondType('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      }
       }
       h+='</div>';
     });

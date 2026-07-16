@@ -783,7 +783,6 @@ function showProps(){
   const p=document.getElementById('propsContent');
   if(!selNode){p.innerHTML='<span style="color:#8a9099">← 点击节点编辑属性</span>';return;}
   const n=findN(selNode);if(!n){p.innerHTML='';return;}
-  try{
   let h=`<h3>节点</h3>
     <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
     <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
@@ -1003,7 +1002,6 @@ function showProps(){
     h+='<button onclick="addBranch()">+ 分支</button>';
   }
   p.innerHTML=h;
-  }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
 }
 
 // 批处理配置区

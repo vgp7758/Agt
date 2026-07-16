@@ -129,7 +129,10 @@ const OPERATORS=[{v:1,t:'='},{v:2,t:'≠'},{v:7,t:'包含'},{v:8,t:'不含'},{v:
 const NS='http://www.w3.org/2000/svg';
 const svg=document.getElementById('svgCanvas');
 
-let WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
+let WF={name:'',nodes:[
+  {id:'100001',type:'1',x:80,y:100,w:200,data:{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]}},
+  {id:'900001',type:'2',x:500,y:100,w:200,data:{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}}}
+],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
 let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
 let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
@@ -302,10 +305,11 @@ function renderAll(){
     svg.appendChild(handle);
   });
 
-  // ---- 拖拽临时线 ----
+  // ---- 拖拽临时线（坐标除 zoom 修正）----
   if(edgeFrom){
-    const sx=edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x, sy=edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y;
-    svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:edgeFrom.mx,y:edgeFrom.my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
+    const sx=(edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x)/dz, sy=(edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y)/dz;
+    const mx=edgeFrom.mx/dz, my=edgeFrom.my/dz;
+    svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:mx,y:my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
   }
 }
 
@@ -522,7 +526,7 @@ function renderNode(n){
     if(e.button!==0)return;
     if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
     e.stopPropagation();
-    dragNode=n.id; dragDX=n.x-e.clientX; dragDY=n.y-e.clientY;
+    dragNode=n.id; dragDX=n.x-e.clientX/dz; dragDY=n.y-e.clientY/dz;
     selNode=n.id; selEdge=null; showProps(); renderAll();
   };
   // 代码节点：画布上显示前几行代码预览
@@ -673,8 +677,8 @@ function finishVar(tgtId,field,color){
 }
 function color2type(col){return Object.entries(TYPE_COLOR).find(([k,v])=>v===col)?.[0]||'string';}
 svg.addEventListener('mousemove',(e)=>{
-  if(dragNode){const n=findN(dragNode);if(n){n.x=e.clientX+dragDX;n.y=e.clientY+dragDY;renderAll();}}
-  if(edgeFrom){edgeFrom.mx=e.clientX;edgeFrom.my=e.clientY;renderAll();}
+  if(dragNode){const n=findN(dragNode);if(n){n.x=e.clientX/dz+dragDX;n.y=e.clientY/dz+dragDY;renderAll();}}
+  if(edgeFrom){edgeFrom.mx=e.clientX/dz;edgeFrom.my=e.clientY/dz;renderAll();}
   if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
 svg.addEventListener('mouseup',(e)=>{

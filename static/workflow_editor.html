@@ -410,7 +410,7 @@ function renderNode(n){
 
   // 复合节点：画布上「✏ 编辑子画布」按钮
   if(['21','28'].includes(n.type)){
-    const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+    const rows_=nodeRows(n); const yBase=HDR_H+Math.max(rows_.filter(r=>r.side==='in').length,rows_.filter(r=>r.side==='out').length)*ROW_H+4;
     const fo=document.createElementNS(NS,'foreignObject');
     fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',24);
     const btn=document.createElement('button');

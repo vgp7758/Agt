@@ -919,7 +919,6 @@ function showProps(){
       if(outs[nthIdx].type==='object'||Array.isArray(outs[nthIdx].schema)){
         h+='<div style="font-size:10px;color:#8a9099;margin:4px 0">字段（每轮输出的 item 结构）:</div>';
         h+=renderObjectSubFields(outs[nthIdx],'out',nthIdx,'object');
-        h+='<button onclick="addNthSubField()" style="font-size:11px">+ 字段</button>';
       }else{
         h+='<div style="font-size:10px;color:#8a9099">item 类型为 '+outs[nthIdx].type+'（基础类型，无子字段）</div>';
       }
@@ -1117,7 +1116,6 @@ function setBatch(k,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.
 function _nthOut(){const n=findN(selNode);return nodeOutputs(n).find(o=>o.name==='nth_output');}
 function _syncListSchema(){const n=findN(selNode);const nth=_nthOut();if(!nth)return;(nodeOutputs(n)||[]).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.type='list';o.schema=nth.schema?[...nth.schema]:{type:nth.type};}});}
 function setNthType(v){const nth=_nthOut();if(!nth)return;nth.type=v;if(v==='object'&&!Array.isArray(nth.schema))nth.schema=[];else if(v!=='object')delete nth.schema;_syncListSchema();showProps();renderAll();}
-function addNthSubField(){const nth=_nthOut();if(!nth)return;nth.schema=nth.schema||[];nth.schema.push({name:'field'+nth.schema.length,type:'string',description:'',required:false});_syncListSchema();showProps();}
 function delNthSubField(si){const nth=_nthOut();if(!nth)return;nth.schema.splice(si,1);_syncListSchema();showProps();}
 function setNthSubField(si,field,v){const nth=_nthOut();if(!nth)return;nth.schema[si][field]=v;_syncListSchema();showProps();}
 function _batchFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};if(!n.data.inputs.batch.filter)n.data.inputs.batch.filter={logic:2,conditions:[]};return n.data.inputs.batch.filter;}

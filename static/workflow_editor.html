@@ -1008,11 +1008,21 @@ function addIO(kind){const n=findN(selNode);const item={name:'var'+Date.now()%10
     else{item.input={type:'string',value:{type:'literal',content:''}};}
     n.data.inputs.inputParameters.push(item);
   }
-  else{n.data.outputs=n.data.outputs||[];item.type='string';n.data.outputs.push(item);}
+  else{
+    n.data.outputs=n.data.outputs||[];item.type='string';n.data.outputs.push(item);
+    if(n.type==='32'){n.data.inputs.mergeGroups=n.data.inputs.mergeGroups||[];n.data.inputs.mergeGroups.push({name:item.name,variables:[{type:'string',value:{type:'literal',content:''}}]});}
+  }
   showProps();renderAll();}
 function setVarName(i,v){const n=findN(selNode);const p=n.data.inputs.inputParameters[i];const isLoop=n.type==='20';const l=p.left.value.content;if(isLoop)l.name=v;else{l.path[0]=v;}}
 function setVarVal(i,v){const n=findN(selNode);const p=n.data.inputs.inputParameters[i];const target=n.type==='20'?p.right:p.input;target.value.content=v;}
-function delField(kind,i){findArr(kind).splice(i,1);showProps();renderAll();}
+function delField(kind,i){
+  const n=findN(selNode);
+  if(kind==='out'&&n.type==='32'){
+    const o=n.data.outputs[i];
+    n.data.inputs.mergeGroups=(n.data.inputs.mergeGroups||[]).filter(g=>g.name!==o.name);
+  }
+  findArr(kind).splice(i,1);showProps();renderAll();
+}
 function setField(kind,i,field,v){
   const arr=findArr(kind);const f=arr[i];
   if(field==='name')f.name=v;
@@ -1038,6 +1048,7 @@ function addAggrGroup(){
 }
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
+function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables=g.variables||[];g.variables.push({type:'string',value:{type:'literal',content:''}});showProps();renderAll();}
 function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].variables.splice(vi,1);showProps();renderAll();}
 async function setSubWf(v){
   const n=findN(selNode);n.data.inputs.workflowId=v;

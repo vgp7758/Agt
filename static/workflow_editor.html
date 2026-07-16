@@ -886,10 +886,22 @@ function showProps(){
     h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button></h3>`;
     h+=renderIOFields(nodeOutputs(n),'out');
   }
-  // 复合节点输出只读（自动管理：all/filtered/nth）
+  // 复合节点输出：nth_output 可编辑字段（定义 item 结构），all/filtered 自动跟随
   if(['21','28'].includes(n.type)){
-    h+='<h3>输出字段 🔒（自动管理，仅可改 item 类型）</h3>';
-    h+=renderIOFields(nodeOutputs(n),'out',true);
+    const outs=nodeOutputs(n);
+    const nthIdx=outs.findIndex(o=>o.name==='nth_output');
+    h+='<h3>输出结构（nth_output，all/filtered 自动跟随）</h3>';
+    if(nthIdx>=0){
+      h+='<div style="font-size:10px;color:#8a9099;margin-bottom:2px">类型: <select onchange="setNthType(this.value)">'+IO_TYPES.map(t=>'<option value='+t+(outs[nthIdx].type===t?' selected':'')+'>'+t+'</option>').join('')+'</select></div>';
+      if(outs[nthIdx].type==='object'||Array.isArray(outs[nthIdx].schema)){
+        h+='<div style="font-size:10px;color:#8a9099;margin:4px 0">字段（每轮输出的 item 结构）:</div>';
+        h+=renderObjectSubFields(outs[nthIdx],'out',nthIdx,'object');
+        h+='<button onclick="addNthSubField()" style="font-size:11px">+ 字段</button>';
+      }else{
+        h+='<div style="font-size:10px;color:#8a9099">item 类型为 '+outs[nthIdx].type+'（基础类型，无子字段）</div>';
+      }
+    }
+    h+='<div style="font-size:10px;color:#56b6c2;margin-top:4px">all_outputs / filtered_outputs 的 item 类型 = nth_output，自动同步。</div>';
   }
 
   // 批处理（排除 entry/exit/复合/选择器/意图/聚合/赋值）
@@ -1078,6 +1090,13 @@ function renderBatchConfig(n){
   return h;
 }
 function setBatch(k,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};n.data.inputs.batch[k]=v;showProps();}
+// 复合节点 nth_output 字段管理（all/filtered 自动同步 schema）
+function _nthOut(){const n=findN(selNode);return nodeOutputs(n).find(o=>o.name==='nth_output');}
+function _syncListSchema(){const n=findN(selNode);const nth=_nthOut();if(!nth)return;(nodeOutputs(n)||[]).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.type='list';o.schema=nth.schema?[...nth.schema]:{type:nth.type};}});}
+function setNthType(v){const nth=_nthOut();if(!nth)return;nth.type=v;if(v==='object'&&!Array.isArray(nth.schema))nth.schema=[];else if(v!=='object')delete nth.schema;_syncListSchema();showProps();renderAll();}
+function addNthSubField(){const nth=_nthOut();if(!nth)return;nth.schema=nth.schema||[];nth.schema.push({name:'field'+nth.schema.length,type:'string',description:'',required:false});_syncListSchema();showProps();}
+function delNthSubField(si){const nth=_nthOut();if(!nth)return;nth.schema.splice(si,1);_syncListSchema();showProps();}
+function setNthSubField(si,field,v){const nth=_nthOut();if(!nth)return;nth.schema[si][field]=v;_syncListSchema();showProps();}
 function _batchFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};if(!n.data.inputs.batch.filter)n.data.inputs.batch.filter={logic:2,conditions:[]};return n.data.inputs.batch.filter;}
 function setBatchLogic(v){_batchFilt().logic=v;showProps();}
 function setBatchCondIdx(ci,field,v){const f=_batchFilt();const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:v}};}}
@@ -1405,9 +1424,9 @@ function getSchemaHolder(kind,fi,isListItem){
   if(isListItem){return {get:()=>{let s=f.input?.schema||f.schema;if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.input=f.input||{};f.input.schema=arr;}};}
   return {get:()=>{let s=f.schema||(f.input?.schema)||[];if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.schema=arr;}};
 }
-function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);showProps();}
-function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);showProps();}
-function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(field==='type')showProps();}
+function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();}
+function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();}
+function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();if(field==='type')showProps();}
 function setListItemType(kind,fi,itemType){
   const f=findArr(kind)[fi];
   if(itemType==='object'){const a=[];(f.input||f).schema=a;if(f.input)f.input.schema=a;}

@@ -947,20 +947,37 @@ function showProps(){
       h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">分支'+(bi+1)+' <button class="del" onclick="delBranch('+bi+')">×</button><br>';
       // left
       h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">';
-      ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
+      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
-      if(lIsRef)h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
-      else h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+      if(lSrc==='block-output'){
+        // 下拉选本节点输入字段
+        h+='<select onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px"><option value="">--字段--</option>';
+        nodeInputs(n).forEach(ip=>{h+='<option value="'+ip.name+'"'+(lv.content?.name===ip.name?' selected':'')+'>'+ip.name+'</option>';});
+        h+='</select>';
+      }else if(lIsRef){
+        h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+      }else{
+        h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+        h+='<select onchange="setCondType('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.left?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      }
       // op
       h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
       OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
       h+='</select> ';
       // right
       h+='<select onchange="setCondSrc('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">';
-      ['literal','block-output','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
+      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
-      if(rIsRef)h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
-      else h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+      if(rSrc==='block-output'){
+        h+='<select onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px"><option value="">--字段--</option>';
+        nodeInputs(n).forEach(ip=>{h+='<option value="'+ip.name+'"'+(rv.content?.name===ip.name?' selected':'')+'>'+ip.name+'</option>';});
+        h+='</select>';
+      }else if(rIsRef){
+        h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+      }else{
+        h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+        h+='<select onchange="setCondType('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      }
       h+='</div>';
     });
     h+='<button onclick="addBranch()">+ 分支</button>';
@@ -1176,6 +1193,11 @@ function setCondLit(bi,ci,side,v){
   const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
   const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
   target.input.value.content=v;showProps();
+}
+function setCondType(bi,ci,side,v){
+  const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
+  const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
+  target.input.type=v;showProps();
 }
 function setCondOp(bi,ci,op){
   const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);

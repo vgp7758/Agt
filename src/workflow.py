@@ -379,8 +379,18 @@ def _is_empty(x):
 
 def _cmp(op: int, l, r) -> bool:
     """Coze OperatorType：1=Equal 2=NotEqual 3-6=Length 系列 7=Contain 8=NotContain
-    9=Empty 10=NotEmpty 11=True 12=False 13-16=数值 大于/大于等于/小于/小于等于。"""
+    9=Empty 10=NotEmpty 11=True 12=False 13-16=数值 大于/大于等于/小于/小于等于。
+    比较前按类型宽化：integer→int, number/float→float, boolean→bool。"""
     try:
+        # 类型宽化（左右同时转）
+        def _coerce(v, to_type):
+            if v is None: return None
+            try:
+                if to_type in ("integer", "int"): return int(v)
+                if to_type in ("number", "float"): return float(v)
+                if to_type in ("boolean", "bool"): return str(v).lower() in ("1","true","yes")
+                return v
+            except (ValueError, TypeError): return v
         if op == 1:
             return l == r
         if op == 2:
@@ -420,8 +430,25 @@ def _eval_condition(condition: dict, ctx) -> bool:
     logic = condition.get("logic", 2)
     results = []
     for c in conds:
-        l = resolve_value((c.get("left") or {}).get("input"), ctx)
-        r = resolve_value((c.get("right") or {}).get("input"), ctx) if "right" in c else None
+        left_input = (c.get("left") or {}).get("input") or {}
+        right_input = (c.get("right") or {}).get("input") or {}
+        l = resolve_value(left_input, ctx)
+        r = resolve_value(right_input, ctx) if "right" in c else None
+        # 按输入声明的类型做值转换
+        lt = left_input.get("type")
+        rt = right_input.get("type") if "right" in c else None
+        if lt in ("integer", "int"):
+            try: l = int(l) if l is not None else 0
+            except (ValueError, TypeError): pass
+        elif lt in ("number", "float"):
+            try: l = float(l) if l is not None else 0
+            except (ValueError, TypeError): pass
+        if rt in ("integer", "int"):
+            try: r = int(r) if r is not None else 0
+            except (ValueError, TypeError): pass
+        elif rt in ("number", "float"):
+            try: r = float(r) if r is not None else 0
+            except (ValueError, TypeError): pass
         results.append(_cmp(c.get("operator"), l, r))
     if not results:
         return False

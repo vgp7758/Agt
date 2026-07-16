@@ -847,8 +847,8 @@ function showProps(){
     h+=renderIOFields(nodeOutputs(n),'out');
   }
 
-  // 批处理（非 entry/exit、非复合节点）
-  if(!['1','2','21','28'].includes(n.type)){
+  // 批处理（排除 entry/exit/复合/选择器/意图/聚合/赋值）
+  if(!['1','2','8','21','22','28','32','40'].includes(n.type)){
     h+=renderBatchConfig(n);
   }
 

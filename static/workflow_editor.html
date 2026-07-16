@@ -951,6 +951,8 @@ function setInputSource(i,src){
   if(src==='item')p.input.value={type:'ref',content:{source:'loop-item',name:''}};
   else if(src==='index')p.input.value={type:'ref',content:{source:'loop-index'}};
   else if(src.startsWith('item.'))p.input.value={type:'ref',content:{source:'loop-item',name:src.slice(5)}};
+  else if(src==='global')p.input.value={type:'ref',content:{source:'global_variable_app',path:['']}};
+  else if(src==='local')p.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
   else p.input.value={type:'literal',content:''};  // node: 回到连线模式
   showProps();renderAll();
 }
@@ -974,12 +976,24 @@ function renderIOFields(arr,kind){
         let srcType='node';
         if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
         else if(src==='loop-index')srcType='index';
+        else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
+        else if(src==='block-output'&&!f.input?.value?.content?.blockID)srcType='local';
         h+=`<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource(${i},this.value)">
           <option value="node" ${srcType==='node'?'selected':''}>节点输出(连线)</option>
+          <option value="global" ${srcType==='global'?'selected':''}>全局变量</option>
+          <option value="local" ${srcType==='local'?'selected':''}>本地变量</option>
           <option value="item" ${srcType==='item'?'selected':''}>item(整个)</option>
           <option value="index" ${srcType==='index'?'selected':''}>index</option></select>`;
         if(srcType.startsWith('item.')){
           h+=` <input value="${srcType.slice(5)}" placeholder="item字段" style="width:60px;font-size:10px" onchange="setInputSource(${i},'item.'+this.value)">`;
+        }
+        if(srcType==='global'){
+          const pth=(f.input?.value?.content?.path||[])[0]||'';
+          h+=` <input value="${pth}" placeholder="全局变量名" style="width:90px;font-size:10px" onchange="setRefPath(${i},this.value)">`;
+        }
+        if(srcType==='local'){
+          const ln=f.input?.value?.content?.name||'';
+          h+=` <input value="${ln}" placeholder="本地变量名" style="width:90px;font-size:10px" onchange="setRefName(${i},this.value)">`;
         }
         h+=`</td></tr>`;
       }
@@ -1071,6 +1085,8 @@ function addAggrGroup(){
   n.data.outputs=n.data.outputs||[]; n.data.outputs.push({name:nm,type:'string'});
   showProps();renderAll();
 }
+function setRefPath(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.path=[v];showProps();}
+function setRefName(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.name=v;showProps();}
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
 function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables=g.variables||[];g.variables.push({type:'string',value:{type:'literal',content:''}});showProps();renderAll();}

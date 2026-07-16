@@ -423,7 +423,7 @@ function renderNode(n){
       const vars=grp.variables||[];
       gy+=28+Math.max((vars.length-1)*18,0);
     });
-    n.h=gy+8;
+    n.h=gy+20;
     // 更新已画的 rect height
     const bodyRect=g.querySelector('.node-body');
     if(bodyRect) bodyRect.setAttribute('height', n.h);

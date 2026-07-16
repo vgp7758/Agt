@@ -817,16 +817,22 @@ function showProps(){
       h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(vp.name)+'" onchange="setLocalVar('+i+',\"name\",this.value)" style="flex:1"><input value="'+ext(vp.input?.value?.content)+'" placeholder="初值" onchange="setLocalVar('+i+',\"init\",this.value)" style="width:60px"><select onchange="setLocalVar('+i+',\"type\",this.value)" style="width:65px">'+IO_TYPES.map(t=>'<option value='+t+(vp.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select><button class="del" onclick="delLocalVar('+i+')">×</button></div>';
     });
     h+='<div style="font-size:10px;color:#8a9099">本地变量在进入复合节点时初始化，子画布内可用 LoopSetVariable(赋值节点) 修改。</div>';
-    // 筛选 (filtered_outputs)
-    h+='<h3>筛选条件 (filtered_outputs)</h3>';
+    // 筛选 (filtered_outputs)——多条件 + AND/OR
+    h+='<h3>筛选条件 (filtered_outputs) <select onchange="setCompLogic(parseInt(this.value))" style="width:auto;font-size:10px"><option value="2"'+(filt.logic!==1?' selected':'')+'>AND</option><option value="1"'+(filt.logic===1?' selected':'')+'>OR</option></select></h3>';
     const b=n.data.inputs?.batch||{};
-    const filt=b.filter||{logic:2,conditions:[{operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}}]};
+    const filt=b.filter||{logic:2,conditions:[]};
+    if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});
+    // 收集可用输出字段（含 object 子字段）
+    const outFields=[];
+    nodeOutputs(n).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'||o.name==='nth_output'){const sch=o.schema;if(sch&&sch.type==='object'){(o.schema.fields||[]).forEach(sf=>outFields.push(sf.name));}else if(sch&&typeof sch.type==='string'&&sch.type!=='object'){/* item 是基础类型，无字段 */}}else{outFields.push(o.name);if(o.type==='object'&&(o.schema||[]).length){(o.schema||[]).forEach(sf=>outFields.push(o.name+'.'+sf.name));}}});
     filt.conditions.forEach((c,ci)=>{
       const isUnary=[9,10,11,12].includes(c.operator);
       const rv=c.right?.input?.value||{};
       const rIsRef=rv.type==='ref';
+      const lName=c.left?.input?.value?.content?.name||'';
       h+='<div style="display:flex;gap:2px;margin:2px 0;flex-wrap:wrap;align-items:center">';
-      h+='<input value="'+ext(c.left?.input?.value?.content?.name||'')+'" placeholder="输出字段" onchange="setCompFilt('+ci+',\'left\',this.value)" style="width:70px;font-size:10px">';
+      // 左值：下拉选输出字段
+      h+='<select onchange="setCompFilt('+ci+',\'left\',this.value)" style="width:90px;font-size:10px"><option value="">--字段--</option>'+outFields.map(fn=>'<option value="'+fn+'"'+(lName===fn?' selected':'')+'>'+fn+'</option>').join('')+'</select>';
       h+='<select onchange="setCompFilt('+ci+',\'op\',parseInt(this.value))" style="width:45px;font-size:10px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select>';
       if(!isUnary){
         h+='<select onchange="setCompFiltSrc('+ci+',this.value)" style="width:auto;font-size:10px"><option value="literal"'+(!rIsRef?' selected':'')+'>literal</option><option value="ref"'+(rIsRef?' selected':'')+'>ref</option></select>';
@@ -835,7 +841,7 @@ function showProps(){
       }
       h+='<button class="del" onclick="delCompFilt('+ci+')">×</button></div>';
     });
-    h+='<button onclick="addCompFilt()">+ 条件</button>';
+    h+='<button onclick="addCompFilt()">+ 条件</button> ';
     // nth
     h+='<label>nth_output 取第几个 <input type="number" value="'+ext(b.nth,0)+'" onchange="setBatch(\"nth\",parseInt(this.value)||0)" style="width:60px">（负/越界=最后, 空=null）</label>';
 
@@ -1025,20 +1031,41 @@ function renderBatchConfig(n){
   if(b.itemType==='object'){
     h+='<div style="font-size:10px;color:#8a9099">item 为 object 时，输入字段可引用 item.字段（在下方输入字段"源"选 item）。</div>';
   }
-  // 筛选条件
-  h+='<h3 style="margin-top:8px">筛选条件 (filtered_outputs)</h3>';
+  // 筛选条件（多条件 + AND/OR）
   const filt=b.filter||(b.filter={logic:2,conditions:[]});
   if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});
-  const c=filt.conditions[0];
-  h+=`<div style="display:flex;gap:2px"><input value="${ext(c.left?.input?.value?.content?.name)}" placeholder="输出字段" onchange="setBatchCond('left',this.value)" style="flex:1">
-    <select onchange="setBatchCond('op',parseInt(this.value))" style="width:50px">${OPERATORS.map(o=>`<option value="${o.v}" ${c.operator===o.v?'selected':''}>${o.t}</option>`).join('')}</select>
-    <input value="${ext(c.right?.input?.value?.content)}" placeholder="值" onchange="setBatchCond('right',this.value)" style="flex:1"></div>`;
+  const n0=findN(selNode);
+  const outFields0=[];
+  (n0?.data?.outputs||[]).forEach(o=>{outFields0.push(o.name);if(o.type==='object'&&(o.schema||[]).length){(o.schema||[]).forEach(sf=>outFields0.push(o.name+'.'+sf.name));}});
+  h+='<h3 style="margin-top:8px">筛选条件 (filtered_outputs) <select onchange="setBatchLogic(parseInt(this.value))" style="width:auto;font-size:10px"><option value="2"'+(filt.logic!==1?' selected':'')+'>AND</option><option value="1"'+(filt.logic===1?' selected':'')+'>OR</option></select></h3>';
+  filt.conditions.forEach((c,ci)=>{
+    const isUnary=[9,10,11,12].includes(c.operator);
+    const rv=c.right?.input?.value||{};
+    const rIsRef=rv.type==='ref';
+    const lName=c.left?.input?.value?.content?.name||'';
+    h+='<div style="display:flex;gap:2px;margin:2px 0;flex-wrap:wrap;align-items:center">';
+    h+='<select onchange="setBatchCondIdx('+ci+',\'left\',this.value)" style="width:90px;font-size:10px"><option value="">--字段--</option>'+outFields0.map(fn=>'<option value="'+fn+'"'+(lName===fn?' selected':'')+'>'+fn+'</option>').join('')+'</select>';
+    h+='<select onchange="setBatchCondIdx('+ci+',\'op\',parseInt(this.value))" style="width:45px;font-size:10px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select>';
+    if(!isUnary){
+      h+='<select onchange="setBatchCondSrc('+ci+',this.value)" style="width:auto;font-size:10px"><option value="literal"'+(!rIsRef?' selected':'')+'>literal</option><option value="ref"'+(rIsRef?' selected':'')+'>ref</option></select>';
+      if(rIsRef)h+='<input value="'+ext(rv.content?.name||'')+'" placeholder="字段名" onchange="setBatchCondIdx('+ci+',\'refName\',this.value)" style="width:60px;font-size:10px">';
+      else{h+='<input value="'+ext(rv.content)+'" placeholder="值" onchange="setBatchCondIdx('+ci+',\'right\',this.value)" style="width:60px;font-size:10px">';h+='<select onchange="setBatchCondIdx('+ci+',\'type\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(c.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';}
+    }
+    h+='<button class="del" onclick="delBatchCond('+ci+')">×</button></div>';
+  });
+  h+='<button onclick="addBatchCond()">+ 条件</button> ';
   // nth
-  h+=`<label>nth（取 filtered 第几个；负/越界取最后）<input type="number" value="${ext(b.nth,0)}" onchange="setBatch('nth',parseInt(this.value)||0)"></label>`;
+  h+='<label>nth（取 filtered 第几个；负/越界取最后）<input type="number" value="'+ext(b.nth,0)+'" onchange="setBatch(\'nth\',parseInt(this.value)||0)"></label>';
   h+='<div style="font-size:10px;color:#8a9099">输入字段"源"可选：节点输出 / item(整个) / item.字段 / index。</div>';
   return h;
 }
 function setBatch(k,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};n.data.inputs.batch[k]=v;showProps();}
+function _batchFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};if(!n.data.inputs.batch.filter)n.data.inputs.batch.filter={logic:2,conditions:[]};return n.data.inputs.batch.filter;}
+function setBatchLogic(v){_batchFilt().logic=v;showProps();}
+function setBatchCondIdx(ci,field,v){const f=_batchFilt();const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:v}};}}
+function setBatchCondSrc(ci,src){const f=_batchFilt();const c=f.conditions[ci];if(src==='literal')c.right.input.value={type:'literal',content:''};else c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};showProps();}
+function addBatchCond(){const f=_batchFilt();f.conditions.push({operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}});showProps();}
+function delBatchCond(ci){const f=_batchFilt();f.conditions.splice(ci,1);showProps();}
 function setBatchSource(s){
   const n=findN(selNode);const b=n.data.inputs.batch;
   const[bid,name]=(s||'.').split('.');b.input={type:'list',value:{type:'ref',content:{source:'block-output',blockID:bid||'',name:name||''}}};showProps();
@@ -1266,6 +1293,7 @@ function delLocalVar(i){const n=findN(selNode);n.data.inputs.variableParameters.
 function setCompArraySrc(v){/* 标记哪个 list 字段是数组源 — 已由第一个 list 型输入自动确定 */showProps();}
 function setCompFilt(ci,field,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:v}};}}
 function setCompFiltSrc(ci,src){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(src==='literal')c.right.input.value={type:'literal',content:''};else c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};showProps();}
+function setCompLogic(v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});f.logic=v;showProps();}
 function delCompFilt(ci){const n=findN(selNode);const f=n.data.inputs.batch?.filter||{};if(f.conditions)f.conditions.splice(ci,1);showProps();}
 function addCompFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});f.conditions.push({operator:1,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});showProps();}
 

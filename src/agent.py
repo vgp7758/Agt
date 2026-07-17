@@ -347,6 +347,9 @@ class Agent:
                                                                  arguments=tc["arguments"], result=result))
                         _rt._tool_emit = None  # 清理
                         self.session.add_step(step)
+                        # 本轮新写/改的工作流或工具脚本立即注册，下一步即可调用（不必等下一轮）
+                        if self._refresh_tools_if_written(step):
+                            tool_schemas = self.tools.schemas()
                         # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
                         if self.autonomous_mode and self.pending_messages:
                             inject = "；".join(self.pending_messages)
@@ -387,3 +390,20 @@ class Agent:
         self.session.finish_turn(answer)
         self._emit({"type": "wrap_answer", "text": answer})
         return answer
+
+    def _refresh_tools_if_written(self, step) -> bool:
+        """若本步用 write_file/edit 写了 .agent/workflows/ 下的文件（工具脚本 *.py 或工作流 *.json），
+        立即重新扫描注册，让本轮后续步骤即可调用新工具/工作流——不必等到下一轮 run() 开头。
+        返回是否执行了刷新（调用方据此重算 tool_schemas）。"""
+        for tc in step.tool_calls:
+            if tc.name in ("write_file", "edit"):
+                p = str(tc.arguments.get("path", "")).replace("\\", "/")
+                if "/workflows/" in p or "/workflows" in p:
+                    try:
+                        from real_tools import WORKSPACE
+                        from workflow import refresh_workflow_tools
+                        refresh_workflow_tools(self.tools, WORKSPACE, self)
+                        return True
+                    except Exception:
+                        return False
+        return False

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -21,8 +22,12 @@ from typing import Optional
 
 from llm_client import LLMClient
 
-SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
-SESSIONS_DIR.mkdir(exist_ok=True)
+# 会话存档统一放用户主目录：~/.agt/sessions/<repo-hash>/。
+# 放包目录下会在 pip 安装后写进 site-packages（不可写/难找），改到 ~/.agt 与
+# models.json/settings.json 同一惯例，每个 repo 互相隔离。
+SESSIONS_DIR = Path.home() / ".agt" / "sessions"
+# 旧位置（开发期在项目根 sessions/；pip 装后此路径不存在）——用于一次性自动迁移。
+_LEGACY_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
 
 
 def _repo_hash(workspace) -> str:
@@ -31,10 +36,53 @@ def _repo_hash(workspace) -> str:
 
 
 def _repo_sessions_dir(workspace) -> Path:
-    """该工作区的会话子目录：sessions/<hash>/。每个 repo 的存档互相隔离。"""
-    d = SESSIONS_DIR / _repo_hash(workspace)
+    """该工作区的会话子目录：sessions/<hash>/。每个 repo 的存档互相隔离。
+    首次访问时把旧位置(项目根 sessions/<各 hash>/)的存档一次性整体迁移过来。"""
+    h = _repo_hash(workspace)
+    d = SESSIONS_DIR / h
     d.mkdir(parents=True, exist_ok=True)
+    _migrate_all_legacy()
     return d
+
+
+_ALL_MIGRATED = False   # 进程级标志：全量迁移只跑一次
+
+
+def _migrate_all_legacy() -> None:
+    """一次性把旧目录 sessions/<所有 hash 子目录>/ 的存档搬到 ~/.agt/sessions/ 对应位置。
+    只在首次访问时跑一次；每个 hash 目标为空才迁，避免覆盖新存档。"""
+    global _ALL_MIGRATED
+    if _ALL_MIGRATED:
+        return
+    _ALL_MIGRATED = True
+    try:
+        if not _LEGACY_SESSIONS_DIR.exists():
+            return
+        for legacy_hash_dir in _LEGACY_SESSIONS_DIR.iterdir():
+            if not legacy_hash_dir.is_dir():
+                continue
+            target = SESSIONS_DIR / legacy_hash_dir.name
+            _migrate_one(legacy_hash_dir, target)
+    except Exception:
+        pass  # 迁移失败绝不影响正常读写
+
+
+def _migrate_one(legacy_dir: Path, target: Path) -> None:
+    """把 legacy_dir 的 *.json + _origin.txt 搬到 target（目标为空才迁）。"""
+    try:
+        if any(target.glob("*.json")):
+            return  # 目标已有存档，不动
+        old_files = list(legacy_dir.glob("*.json"))
+        if not old_files:
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        for f in old_files:
+            shutil.copy2(f, target / f.name)
+        origin = legacy_dir / "_origin.txt"
+        if origin.exists():
+            shutil.copy2(origin, target / "_origin.txt")
+    except Exception:
+        pass
 
 GLOBAL_SUMMARY_CAP = 2000  # global_summary 超过这么多字就再压缩一次
 

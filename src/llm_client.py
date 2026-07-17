@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -17,6 +18,77 @@ from typing import Callable, Optional
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 
 import config
+
+# DeepSeek/ModelScope 等在并行多工具调用时，偶尔不通过标准 tool_calls 字段返回，
+# 而是把工具调用以内部 DSML 文本塞进 content：
+#   <｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="工具名">..参数..<／｜｜DSML｜｜invoke>
+# （｜是全角竖线 U+FF5C）。此时标准解析会误判"无工具调用"→把整段 DSML 当最终答案。
+# 下面的兜底解析把这种文本还原成标准 tool_calls，并从 content 剥除 DSML 文本。
+_DSML = "｜｜DSML｜｜"   # ｜｜DSML｜｜
+_INVOKE_RE = re.compile(
+    re.escape(_DSML) + r'invoke name="([^"]+)">(.*?)</' + re.escape(_DSML) + r'invoke>',
+    re.DOTALL,
+)
+_PARAM_RE = re.compile(
+    re.escape(_DSML) + r'parameter name="([^"]+)"\s+string="(true|false)">(.*?)</'
+    + re.escape(_DSML) + r'parameter>',
+    re.DOTALL,
+)
+_BARE_TAG_RE = re.compile(r'</?' + re.escape(_DSML) + r'[a-z_]*>')
+
+
+def _parse_dsml_calls(content: str) -> Optional[tuple[str, list[dict]]]:
+    """若 content 含 DSML 工具调用文本，解析成 (剥除 DSML 后的 content, [tool_calls])。
+    无 DSML 标记返回 None（调用方据此判断是否兜底）。"""
+    if not content or _DSML not in content:
+        return None
+    calls = []
+    for m in _INVOKE_RE.finditer(content):
+        name, body = m.group(1), m.group(2)
+        args = {}
+        for pm in _PARAM_RE.finditer(body):
+            pname, is_str, pval = pm.group(1), pm.group(2), pm.group(3).strip()
+            if is_str == "false":
+                # 非 string：尝试 JSON，再退到数字，最后原样
+                try:
+                    args[pname] = json.loads(pval)
+                except Exception:
+                    try:
+                        args[pname] = int(pval)
+                    except Exception:
+                        try:
+                            args[pname] = float(pval)
+                        except Exception:
+                            args[pname] = pval
+            else:
+                args[pname] = pval
+        calls.append({"id": f"dsml_{len(calls)}", "name": name, "arguments": args})
+
+    # 剥除 DSML 文本：有 <｜｜DSML｜｜tool_calls> 头则从头截断(保留前面真实思考)，
+    # 否则逐块移除 invoke 块，再清残留裸标签。
+    head = "<" + _DSML + "tool_calls>"
+    if head in content:
+        cleaned = content.split(head, 1)[0]
+    else:
+        cleaned = _INVOKE_RE.sub("", content)
+    cleaned = _BARE_TAG_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, calls
+
+
+def _postprocess_response(resp: "LLMResponse") -> "LLMResponse":
+    """兜底：标准 tool_calls 为空时，尝试从 content 里解析 DSML 工具调用。
+    解析出调用 → 覆盖 tool_calls 并用剥除后的 content；解析不到则原样返回。"""
+    if resp.tool_calls:
+        return resp  # API 已给标准 tool_calls，优先信它
+    parsed = _parse_dsml_calls(resp.content or "")
+    if parsed is None:
+        return resp
+    cleaned, calls = parsed
+    resp.content = cleaned
+    if calls:
+        resp.tool_calls = calls
+    return resp
 
 
 @dataclass
@@ -163,13 +235,13 @@ class LLMClient:
             usage = resp.usage.model_dump() if resp.usage else None
             if choices:
                 msg = choices[0].message.model_dump()
-                return LLMResponse(
+                return _postprocess_response(LLMResponse(
                     content=msg.get("content") or "",
                     reasoning=msg.get("reasoning_content") or "",
                     tool_calls=_parse_tool_calls(msg),
                     usage=usage,
                     raw_message=msg,
-                )
+                ))
             last_info = (usage, str(resp.model_dump())[:300])
             time.sleep(self._backoff(attempt))
 
@@ -230,12 +302,12 @@ class LLMClient:
                     except json.JSONDecodeError:
                         args = {"_raw_arguments": f["arguments"]}
                     tool_calls.append({"id": f["id"], "name": f["name"], "arguments": args})
-                return LLMResponse(
+                return _postprocess_response(LLMResponse(
                     content="".join(content_parts),
                     reasoning="".join(reasoning_parts),
                     tool_calls=tool_calls,
                     usage=usage,
-                )
+                ))
             last_usage = usage
             time.sleep(self._backoff(attempt))
 

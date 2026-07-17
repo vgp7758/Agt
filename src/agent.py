@@ -275,6 +275,20 @@ class Agent:
                         self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens,
                                     "model": self.llm.model_name})
                         resp = self.llm.chat(self.session.messages_for_llm(), tools=tool_schemas)
+                        # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
+                        # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
+                        # function calling 重试一次（重试结果不再二次检查，避免无限循环）。
+                        if (not resp.tool_calls and resp.content and "DSML" in resp.content
+                                and "invoke" in resp.content):
+                            self._emit({"type": "warn",
+                                        "text": "⚠️ 工具调用格式泄漏(DSML)，已提示模型改用标准 function calling 重试"})
+                            retry_msgs = self.session.messages_for_llm() + [{
+                                "role": "system",
+                                "content": "你上一轮的工具调用以文本(DSML 标记)泄漏进了回复正文，系统没能解析执行。"
+                                          "请重新发起这些工具调用，务必使用标准的 function calling（tool_calls 字段），"
+                                          "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
+                            }]
+                            resp = self.llm.chat(retry_msgs, tools=tool_schemas)
                         if resp.usage:
                             self.cumulative_tokens += resp.usage.get("total_tokens", 0)
 

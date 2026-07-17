@@ -278,24 +278,43 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, m
     return f"扫描 {scanned} 个文件，匹配 {len(matches)} 处：\n" + "\n".join(matches)
 
 
-def edit(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
-    """精确替换文件中的一段文本（比 write_file 整体覆盖更安全，保留其余内容）。
-    path: workspace 内文件；old_string: 要替换的原文(须唯一，否则用 replace_all 或加更多上下文)；
-    new_string: 替换为；replace_all=True 替换全部匹配。"""
+def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
+         start_line: int = None, end_line: int = None) -> str:
+    """精确替换文件中的一段文本。
+    path: workspace 内文件；old_string: 要替换的原文；new_string: 替换为；
+    replace_all=True 替换全部匹配。
+    start_line/end_line: 只在该行范围内搜索替换（1-based，含两端）。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
     content = target.read_text(encoding="utf-8")
-    count = content.count(old_string)
+    lines = content.splitlines()
+    total = len(lines)
+    # 行范围限定
+    if start_line is not None or end_line is not None:
+        s = max(0, (start_line or 1) - 1)
+        e = min(total, end_line or total)
+        if s >= total:
+            return f"[行号越界] 文件共 {total} 行，start_line={start_line}"
+        scope = "\n".join(lines[s:e])
+        prefix = "\n".join(lines[:s])
+        suffix = "\n".join(lines[e:])
+    else:
+        scope = content
+        prefix, suffix = "", ""
+        s = 0
+    count = scope.count(old_string)
     if count == 0:
-        return "[未找到] 文件中没有该 old_string（注意首尾空白/缩进需完全一致）"
+        where = f" L{s+1}-L{min(e,total) if (start_line or end_line) else total}" if (start_line or end_line) else ""
+        return f"[未找到]{where} 文件中没有该 old_string"
     if count > 1 and not replace_all:
         return f"[不唯一] 共匹配 {count} 处，请加更多上下文让 old_string 唯一，或设 replace_all=True"
     if old_string == new_string:
         return "[无变化] old_string 与 new_string 相同"
-    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+    new_scope = scope.replace(old_string, new_string) if replace_all else scope.replace(old_string, new_string, 1)
+    new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
     target.write_text(new_content, encoding="utf-8")
-    msg = f"✅ 已替换 {count if replace_all else 1} 处（{path}）"
+    msg = f"✅ 已替换 {count if replace_all else 1} 处（{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
     if path.endswith(".py") or path.endswith(".pyw"):
         msg += _py_check(target)
     return msg

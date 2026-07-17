@@ -64,6 +64,10 @@ SYSTEM = build_system(
         "复杂任务可拆分派给不同角色/模型的子 Agent 再综合。"
         "【并行】可同时进行的子任务，请在【同一步】里发起多个 agent_prompt 调用，并行更快；只有存在依赖关系时才分步。"
         "创建子 Agent 时从下列可用模型里选合适的：" + _MODELS_DESC + "。"
+        + "\n\n【工作流编排】你可以通过 write/edit 工具在 .agent/workflows/ 创建 Coze 画布 JSON 工作流文件。"
+        "工作流规范与节点说明见 https://github.com/vgp7758/Agt/blob/main/docs/workflow-spec.md 。"
+        "Agent 已有工具对应工作流中的节点类型 4（插件/toolName=工具名），输入字段来自工具 schema，输出字段可自定义。"
+        "每轮对话结束时 .agent/workflows/ 下的工作流会被自动扫描注册为 wf_* 工具。\n"
         + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
         + _load_agent_md()
         + _rules_and_skills_section()

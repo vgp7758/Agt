@@ -62,10 +62,19 @@ if not MODELS:
 
 
 def get_profile(name: str) -> dict:
-    """按名字取模型 profile；未知名字抛 KeyError。"""
+    """按名字取模型 profile；未知名字抛 KeyError。
+    api_token 统一为 list（支持多账号轮流）。"""
     if name not in MODELS:
         raise KeyError(f"未知模型 '{name}'，可用：{list(MODELS)}")
-    return MODELS[name]
+    p = dict(MODELS[name])
+    tok = p.get("api_token", "")
+    if isinstance(tok, str):
+        p["api_tokens"] = [tok] if tok else []
+    elif isinstance(tok, list):
+        p["api_tokens"] = tok
+    else:
+        p["api_tokens"] = [str(tok)]
+    return p
 
 
 _active = get_profile(DEFAULT_MODEL)

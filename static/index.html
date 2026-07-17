@@ -320,7 +320,7 @@ function renderModelList(){
   box.innerHTML=Object.entries(models).map(([name,m])=>`<div style="margin:2px 0;padding:4px;background:#0f3460;border-radius:4px;font-size:11px">
     <b>${name}</b> <input value="${m.model||''}" placeholder="model id" onchange="_modelData.models['${name}'].model=this.value" style="width:140px">
     <input value="${m.base_url||''}" placeholder="base_url" onchange="_modelData.models['${name}'].base_url=this.value" style="width:180px"><br>
-    <input value="${m.api_token||''}" placeholder="api_token" type="password" onchange="_modelData.models['${name}'].api_token=this.value" style="width:330px">
+    <input value="${Array.isArray(m.api_token)?m.api_token.join(', '):(m.api_token||'')}" placeholder="api_token（多个用逗号分隔）" type="password" onchange="_modelData.models['${name}'].api_token=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="width:330px">
     <button class="del" onclick="delete _modelData.models['${name}'];renderModelList()">×</button>
     ${name===def?'<span style="color:#98c379">✓默认</span>':`<button onclick="_modelData.default='${name}';renderModelList()">设默认</button>`}
   </div>`).join('')||'<div style="color:#8a9099">暂无模型</div>';

@@ -71,12 +71,24 @@ class LLMClient:
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: dict):
-        """按 profile 配置 base_url/api_key/model/thinking，并重建底层 client。"""
+        """按 profile 配置 base_url/api_key/model/thinking，并重建底层 client。
+        支持多 api_token 轮流使用。"""
         self.base_url = profile["base_url"]
-        self.api_key = profile["api_token"]
+        self.api_tokens = profile.get("api_tokens") or [profile.get("api_token", "")]
+        self._token_idx = 0
+        self.api_key = self.api_tokens[0]
         self.model = profile["model"]
         self.thinking_supported = profile.get("thinking", False)
         self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+
+    def _rotate_token(self):
+        """轮流切换到下一个 api_token，返回是否成功切换。"""
+        if len(self.api_tokens) <= 1:
+            return False
+        self._token_idx = (self._token_idx + 1) % len(self.api_tokens)
+        self.api_key = self.api_tokens[self._token_idx]
+        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        return True
 
     def switch_model(self, name: str) -> "LLMClient":
         """运行时热切换模型。Agent 与 Session 共用同一个 LLMClient 对象，切换即全生效。"""
@@ -108,25 +120,37 @@ class LLMClient:
         return float(a)
 
     def chat(self, messages, **overrides) -> LLMResponse:
-        """普通（非流式）调用。空响应退避重试；耗完后若设了回退链则沿链切换模型再试。"""
+        """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。"""
+        tried_tokens = 0
         tried = [self.model_name]
         while True:
             try:
-                return self._chat_inner(messages, **overrides)
+                resp = self._chat_inner(messages, **overrides)
+                # 成功后预旋转到下一个 token（下次调用自动用不同账号）
+                if len(self.api_tokens) > 1:
+                    self._rotate_token()
+                return resp
             except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError) as e:
+                # 先试下一个 api_token（同模型多账号）
+                if isinstance(e, RateLimitError) and tried_tokens < len(self.api_tokens) - 1:
+                    tried_tokens += 1
+                    self._rotate_token()
+                    continue
+                # 再走模型回退链
                 if not self.fallback_chain:
                     raise
                 try:
                     idx = self.fallback_chain.index(self.model_name)
                 except ValueError:
-                    raise  # 当前模型不在回退链，不处理
+                    raise
                 next_m = self.fallback_chain[idx + 1] if idx + 1 < len(self.fallback_chain) else None
                 if not next_m or next_m in tried:
                     raise RuntimeError(
                         f"回退链中所有模型均已尝试({', '.join(tried)})：{e}") from e
                 tried.append(next_m)
+                tried_tokens = 0
                 self.switch_model(next_m)
-                time.sleep(self._backoff(len(tried) - 1))  # 切换前小退避
+                time.sleep(self._backoff(len(tried) - 1))
 
     def _chat_inner(self, messages, **overrides) -> LLMResponse:
         """单模型调用 + 空响应重试（被 chat() 的回退循环包裹）。"""

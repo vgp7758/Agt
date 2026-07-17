@@ -69,7 +69,8 @@ def get_profile(name: str) -> dict:
     p = dict(MODELS[name])
     tok = p.get("api_token", "")
     if isinstance(tok, str):
-        p["api_tokens"] = [tok] if tok else []
+        # 支持逗号分隔的多 token 字符串（直接编辑 models.json 时的写法）
+        p["api_tokens"] = [t.strip() for t in tok.split(",") if t.strip()]
     elif isinstance(tok, list):
         p["api_tokens"] = tok
     else:
@@ -81,7 +82,7 @@ _active = get_profile(DEFAULT_MODEL)
 
 # 向后兼容别名（step0_hello.py 等旧代码引用）—— 指向当前默认 profile
 MODELSCOPE_BASE_URL = LLM_BASE_URL = _active["base_url"]
-MODELSCOPE_API_KEY = LLM_API_KEY = _active["api_token"]
+MODELSCOPE_API_KEY = LLM_API_KEY = (_active["api_tokens"] or [""])[0]
 MODEL_NAME = LLM_MODEL = _active["model"]
 LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 
@@ -107,5 +108,5 @@ AGT_BASE_URL = os.getenv("AGT_BASE_URL", "https://agentank.ai")
 AGT_TANK_KEY = os.getenv("AGT_TANK_KEY") or os.getenv("AGT_AGENT_KEY")
 AGT_NAME = os.getenv("AGT_NAME", "Qwen")  # 发布代码时的 submittedBy 徽章名
 
-if not _active.get("api_token"):
+if not _active["api_tokens"]:
     print("⚠️ 默认模型缺 api_token。请在 WebUI 设置中完善模型配置。")

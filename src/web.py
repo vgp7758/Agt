@@ -394,8 +394,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         return
     if isinstance(_d, dict) and _d.get("action") == "set_config":
         values = _d.get("values") or {}
+        config.save_runtime_settings(values)  # 先存（apply_config 会 pop fallback_chain）
         lines = apply_config(agent, values)
-        config.save_runtime_settings(values)
         await _send(ws, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
         return
     if isinstance(_d, dict) and _d.get("action") == "stop":

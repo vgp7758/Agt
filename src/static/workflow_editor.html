@@ -57,10 +57,11 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 #propsFloat button.del{background:#6b2020;padding:2px 6px}
 #propsFloat button.del:hover{background:#a33}
 /* 节点选择浮框（拖线到空白/双击空白弹出） */
-#nodePicker{position:absolute;width:210px;max-height:360px;overflow-y:auto;background:#16213e;border:1px solid #7b2ff7;border-radius:6px;padding:6px;z-index:60;box-shadow:0 4px 24px #000c}
-#nodePicker .np-filter{width:100%;margin-bottom:4px;font-size:11px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:3px}
-#nodePicker .np-group{color:#7b2ff7;font-size:10px;font-weight:bold;margin:5px 0 2px;padding-bottom:1px;border-bottom:1px solid #2a2f3a}
-#nodePicker .np-item{display:block;width:100%;text-align:left;padding:5px 7px;margin:2px 0;border:none;border-radius:4px;cursor:pointer;font-size:11px;color:#fff;background:#0f3460}
+#nodePicker{position:absolute;width:440px;max-height:560px;overflow-y:auto;background:#16213e;border:1px solid #7b2ff7;border-radius:6px;padding:8px;z-index:60;box-shadow:0 4px 24px #000c}
+#nodePicker .np-filter{width:100%;margin-bottom:6px;font-size:11px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px}
+#nodePicker .np-group{color:#7b2ff7;font-size:10px;font-weight:bold;margin:6px 0 3px;padding-bottom:1px;border-bottom:1px solid #2a2f3a}
+#nodePicker .np-row{display:flex;flex-wrap:wrap;gap:4px}
+#nodePicker .np-item{flex:1 1 calc(33.333% - 4px);min-width:0;text-align:center;padding:6px 4px;border:none;border-radius:4px;cursor:pointer;font-size:11px;color:#fff;background:#0f3460;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nodePicker .np-item:hover{background:#7b2ff7}
 /* 图例浮标（画布右下角，半透明，hover 展开） */
 #legendFloat{position:absolute;bottom:10px;right:10px;background:#16213eee;border:1px solid #0f3460;border-radius:5px;padding:5px 8px;font-size:9px;z-index:30;max-width:170px;opacity:.5;transition:opacity .2s;pointer-events:auto}
@@ -865,17 +866,19 @@ function createBasicNode(type,x,y){
 
 // ============ 节点选择浮窗（拖线到空白/双击空白弹出）============
 let pickerCtx=null;   // {sx,sy, src:{nodeId,port}|null}；src 非空 → 创建后自动连线
-const NODE_BASIC=[['1','▶ 开始'],['2','◼ 结束'],['3','🤖 LLM'],['22','🎯 意图识别'],
-  ['8','🔀 选择器'],['21','🔄 循环'],['28','📦 批处理'],
-  ['5','📝 代码'],['15','📄 文本'],['58','{→} ToJSON'],['59','{←} FromJSON'],
-  ['32','🧲 聚合'],['40','✏ 赋值(全局)'],['20','🔄 置变量(循环)'],
-  ['45','🌐 HTTP'],['9','🔗 子工作流'],['13','💬 输出']];
+const NODE_GROUPS=[
+  {title:'AI',items:[['3','🤖 LLM'],['22','🎯 意图识别']]},
+  {title:'逻辑',items:[['8','🔀 选择器'],['21','🔄 循环'],['28','📦 批处理']]},
+  {title:'处理',items:[['5','📝 代码'],['15','📄 文本'],['58','{→} ToJSON'],['59','{←} FromJSON']]},
+  {title:'变量',items:[['32','🧲 聚合'],['40','✏ 赋值'],['20','🔄 置变量']]},
+  {title:'外部',items:[['45','🌐 HTTP'],['9','🔗 子工作流'],['13','💬 输出']]}
+];
 function openNodePicker(cx,cy,sx,sy,src){
   pickerCtx={sx,sy,src};
   const d=document.getElementById('nodePicker');
   d.style.display='block';
-  d.style.left=Math.min(cx,window.innerWidth-220)+'px';
-  d.style.top=Math.min(cy,window.innerHeight-360)+'px';
+  d.style.left=Math.max(8,Math.min(cx,window.innerWidth-460))+'px';
+  d.style.top=Math.max(48,Math.min(cy,window.innerHeight-580))+'px';
   renderNodePicker('');
   setTimeout(()=>{const f=document.getElementById('npFilter');if(f)f.focus();},0);
 }
@@ -887,14 +890,26 @@ function renderNodePicker(filter){
   const old=document.getElementById('npFilter');
   const hadFocus=old&&document.activeElement===old;
   const caret=old?old.selectionStart:0;
-  const bf=NODE_BASIC.filter(b=>!f||b[1].toLowerCase().includes(f));
-  const tg={};
-  (AGENT_TOOLS||[]).forEach(t=>{const g=t.group||'工具';(tg[g]=tg[g]||[]).push(t);});
   let html=`<input id="npFilter" class="np-filter" placeholder="🔍 过滤节点/工具…" value="${ext(fv)}" oninput="renderNodePicker(this.value)">`;
-  if(bf.length) html+='<div class="np-group">节点</div>'+bf.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')">${ext(b[1])}</button>`).join('');
+  // 节点按类别分组（开始/结束无需手动创建，新建工作流自带）
+  NODE_GROUPS.forEach(g=>{
+    const items=g.items.filter(b=>!f||b[1].toLowerCase().includes(f));
+    if(items.length){
+      html+=`<div class="np-group">${ext(g.title)}</div><div class="np-row">`;
+      html+=items.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')">${ext(b[1])}</button>`).join('');
+      html+='</div>';
+    }
+  });
+  // Agent 工具按来源分组，全部列出
+  const tg={};
+  (AGENT_TOOLS||[]).forEach(t=>{const gr=t.group||'工具';(tg[gr]=tg[gr]||[]).push(t);});
   Object.keys(tg).sort().forEach(g=>{
     const items=tg[g].filter(t=>!f||(t.name||'').toLowerCase().includes(f)||(t.display||'').toLowerCase().includes(f));
-    if(items.length) html+=`<div class="np-group">${ext(g)}</div>`+items.map(t=>`<button class="np-item" onclick="pickNode('${t.name}',true)" title="${ext((t.description||'').slice(0,70))}">🔧 ${ext(t.display||t.name)}</button>`).join('');
+    if(items.length){
+      html+=`<div class="np-group">${ext(g)} <span style="color:#5a6068;font-weight:normal">${items.length}</span></div><div class="np-row">`;
+      html+=items.map(t=>`<button class="np-item" onclick="pickNode('${t.name}',true)" title="${ext(t.display||t.name)+' — '+(t.description||'')}">🔧 ${ext(t.display||t.name)}</button>`).join('');
+      html+='</div>';
+    }
   });
   d.innerHTML=html;
   if(hadFocus){const nf=document.getElementById('npFilter');if(nf){nf.focus();try{nf.setSelectionRange(caret,caret);}catch(e){}}}

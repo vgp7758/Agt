@@ -488,22 +488,23 @@ function renderNode(n){
   // 意图识别(type22)：每个意图一个流程分支出口
   if(n.type==='22'){
     const intents=n.data.inputs?.intents||[];
-    let iy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+8;
+    const baseYy=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+8;
     intents.forEach((it,i)=>{
+      const yy=baseYy+i*22;   // 每端口独立 const，避免闭包共享累加变量导致起点都落在 default
       const iname=it.name||('?'+i);
-      const port=elm('circle',{cx:n.w,cy:iy,r:5,class:'port-flow',fill:'#fff',title:iname});
-      port.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+iy};edgeFrom={kind:'flow',nodeId:n.id,port:'branch_'+i,x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
+      const port=elm('circle',{cx:n.w,cy:yy,r:5,class:'port-flow',fill:'#fff',title:iname});
+      port.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+yy};edgeFrom={kind:'flow',nodeId:n.id,port:'branch_'+i,x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
       g.appendChild(port);
-      g.appendChild(elm('text',{x:n.w-10,y:iy+3,class:'node-type-tag','text-anchor':'end',fill:'#e6c07b'},iname));
-      iy+=22;
+      g.appendChild(elm('text',{x:n.w-10,y:yy+3,class:'node-type-tag','text-anchor':'end',fill:'#e6c07b'},iname));
     });
     // default 出口
-    const dport=elm('circle',{cx:n.w,cy:iy,r:5,class:'port-flow',fill:'#888',title:'default'});
-    dport.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+iy};edgeFrom={kind:'flow',nodeId:n.id,port:'default',x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
+    const dyy=baseYy+intents.length*22;
+    const dport=elm('circle',{cx:n.w,cy:dyy,r:5,class:'port-flow',fill:'#888',title:'default'});
+    dport.onmousedown=(e)=>{e.stopPropagation();const pp={x:n.x+n.w,y:n.y+dyy};edgeFrom={kind:'flow',nodeId:n.id,port:'default',x:pp.x,y:pp.y,mx:pp.x,my:pp.y,color:'#fff'};renderAll();};
     g.appendChild(dport);
-    g.appendChild(elm('text',{x:n.w-10,y:iy+3,class:'node-type-tag','text-anchor':'end',fill:'#8a9099'},'默认'));
+    g.appendChild(elm('text',{x:n.w-10,y:dyy+3,class:'node-type-tag','text-anchor':'end',fill:'#8a9099'},'默认'));
     const bodyRect=g.querySelector('.node-body');
-    if(bodyRect) bodyRect.setAttribute('height', iy+10);
+    if(bodyRect) bodyRect.setAttribute('height', dyy+10);
   }
 
   // 赋值节点(type20/40)：显示目标变量名+新值
@@ -762,13 +763,7 @@ svg.addEventListener('click',(e)=>{
 });
 svg.addEventListener('contextmenu',(e)=>{
   e.preventDefault();
-  if(selNode&&selNode!=='100001'&&selNode!=='900001'){
-    WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
-    WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
-    // 清掉指向它的 ref
-    WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
-    selNode=null;showProps();renderAll();
-  }
+  // 右键删除节点已移除（易误删）。保留：删除选中的连线。
   if(selEdge&&selEdge.kind==='flow'){WF.edges.splice(selEdge.i,1);selEdge=null;renderAll();}
   if(selEdge&&selEdge.kind==='var'){
     const[tid,fname]=selEdge.key.split('::');const tn=findN(tid);

@@ -46,16 +46,22 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 .edge-var.sel{stroke-width:2.8}
 .edge-ghost{stroke:#7b2ff7;stroke-width:1.5;stroke-dasharray:5 4;fill:none;pointer-events:none}
 .edge-label{fill:#bbb;font-size:9px;pointer-events:none}
-/* 右：属性面板 */
-#props{width:330px;background:#16213e;border-left:1px solid #0f3460;overflow-y:auto;padding:10px}
-#props h3{font-size:12px;color:#8a9099;margin:10px 0 3px;border-bottom:1px solid #0f3460;padding-bottom:3px}
-#props label{display:block;font-size:11px;color:#8a9099;margin-top:5px}
-#props input,#props select,#props textarea{width:100%;background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 5px;font-size:12px;margin-top:1px}
-#props textarea{resize:vertical;font-family:monospace;min-height:50px}
-#props button{background:#533483;color:#fff;border:none;border-radius:3px;padding:3px 7px;font-size:11px;cursor:pointer;margin:3px 2px}
-#props button:hover{background:#7b2ff7}
-#props button.del{background:#6b2020;padding:2px 6px}
-#props button.del:hover{background:#a33}
+/* 右：属性浮框（选中节点时显示） */
+#propsFloat{position:absolute;top:48px;right:10px;width:330px;max-height:calc(100vh - 60px);overflow-y:auto;background:#16213e;border:1px solid #533483;border-radius:6px;padding:10px;z-index:50;box-shadow:0 4px 20px #0008}
+#propsFloat h3{font-size:12px;color:#8a9099;margin:10px 0 3px;border-bottom:1px solid #0f3460;padding-bottom:3px}
+#propsFloat label{display:block;font-size:11px;color:#8a9099;margin-top:5px}
+#propsFloat input,#propsFloat select,#propsFloat textarea{width:100%;background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 5px;font-size:12px;margin-top:1px}
+#propsFloat textarea{resize:vertical;font-family:monospace;min-height:50px}
+#propsFloat button{background:#533483;color:#fff;border:none;border-radius:3px;padding:3px 7px;font-size:11px;cursor:pointer;margin:3px 2px}
+#propsFloat button:hover{background:#7b2ff7}
+#propsFloat button.del{background:#6b2020;padding:2px 6px}
+#propsFloat button.del:hover{background:#a33}
+/* 节点选择浮框（拖线到空白/双击空白弹出） */
+#nodePicker{position:absolute;width:210px;max-height:360px;overflow-y:auto;background:#16213e;border:1px solid #7b2ff7;border-radius:6px;padding:6px;z-index:60;box-shadow:0 4px 24px #000c}
+#nodePicker .np-filter{width:100%;margin-bottom:4px;font-size:11px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:3px}
+#nodePicker .np-group{color:#7b2ff7;font-size:10px;font-weight:bold;margin:5px 0 2px;padding-bottom:1px;border-bottom:1px solid #2a2f3a}
+#nodePicker .np-item{display:block;width:100%;text-align:left;padding:5px 7px;margin:2px 0;border:none;border-radius:4px;cursor:pointer;font-size:11px;color:#fff;background:#0f3460}
+#nodePicker .np-item:hover{background:#7b2ff7}
 .io-table{width:100%;border-collapse:collapse;font-size:11px}
 .io-table td{padding:1px;vertical-align:top}
 .io-table input,.io-table select{width:100%;font-size:11px;padding:2px 3px;margin:0}
@@ -82,39 +88,12 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
 </div>
 <div id="main">
-  <div id="palette">
-    <h3>基本</h3>
-    <button class="pal-item flow" data-type="1">▶ 开始</button>
-    <button class="pal-item flow" data-type="2">◼ 结束</button>
-    <h3>AI</h3>
-    <button class="pal-item llm" data-type="3">🤖 LLM</button>
-    <button class="pal-item llm" data-type="22">🎯 意图识别</button>
-    <h3>逻辑</h3>
-    <button class="pal-item branch" data-type="8">🔀 选择器</button>
-    <button class="pal-item composite" data-type="21">🔄 循环</button>
-    <button class="pal-item composite" data-type="28">📦 批处理</button>
-    <h3>处理</h3>
-    <button class="pal-item code" data-type="5">📝 代码</button>
-    <button class="pal-item data" data-type="15">📄 文本</button>
-    <button class="pal-item data" data-type="58">{→} ToJSON</button>
-    <button class="pal-item data" data-type="59">{←} FromJSON</button>
-    <h3>变量</h3>
-    <button class="pal-item data" data-type="32">🧲 聚合</button>
-    <button class="pal-item data" data-type="40">✏ 赋值(全局)</button>
-    <button class="pal-item data" data-type="20">🔄 置变量(循环)</button>
-    <h3>外部</h3>
-    <button class="pal-item ext" data-type="45">🌐 HTTP</button>
-    <button class="pal-item ext" data-type="9">🔗 子工作流</button>
-    <button class="pal-item ext" data-type="13">💬 输出</button>
-    <h3>Agent 工具</h3>
-    <div id="toolPalette" style="font-size:10px;color:#8a9099">加载中…</div>
-    <input id="toolFilter" placeholder="🔍 过滤工具…" style="width:100%;margin-top:4px;font-size:11px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:3px">
-    <h3>图例</h3>
-    <div class="legend" id="legend"></div>
-  </div>
   <div id="canvasWrap"><svg id="svgCanvas"></svg></div>
-  <div id="props"><div id="propsContent" style="color:#8a9099">← 点击节点编辑属性</div></div>
 </div>
+<!-- 属性浮框：选中节点时显示，点画布空白隐藏 -->
+<div id="propsFloat" style="display:none"><div id="propsContent"></div></div>
+<!-- 节点选择浮框：从节点拖流程线到空白 / 双击空白时在该位置弹出；拖线时选节点后自动连线 -->
+<div id="nodePicker" style="display:none"></div>
 <div id="toast" style="opacity:0"></div>
 
 <script>
@@ -137,6 +116,7 @@ let WF={name:'',nodes:[
 let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
 let dragNode=null,dragDX=0,dragDY=0;
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
+let _suppressClick=false;          // 拖线弹窗后抑制一次 click（避免立即被“点空白”关闭）
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
 let dz=1;  // zoom level
 let collapsedFields=new Set();     // 折叠的 object 字段（默认全部展开）
@@ -750,6 +730,13 @@ svg.addEventListener('mouseup',(e)=>{
     // 落在端口上：保持原线（不处理重连，避免复杂；要换目标先断再连）
     edgeFrom=null;renderAll();
   }
+  // 拖流程线到空白：弹节点选择浮窗，选了节点创建并自动连线（端口 onmouseup 已 stopPropagation，到这里必是空白）
+  if(edgeFrom&&edgeFrom.kind==='flow'){
+    const sp=svgPos(e);
+    openNodePicker(e.clientX,e.clientY,sp.x,sp.y,{nodeId:edgeFrom.nodeId,port:edgeFrom.port||''});
+    edgeFrom=null;
+    _suppressClick=true;   // 抑制紧随的 click（否则会立即关闭刚弹出的浮窗）
+  }
 });
 svg.addEventListener('mousedown',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
@@ -757,9 +744,17 @@ svg.addEventListener('mousedown',(e)=>{
     const wrap=document.getElementById('canvasWrap');panStartX=wrap.scrollLeft;panStartY=wrap.scrollTop;
   }
 });
-svg.addEventListener('click',(e)=>{
+svg.addEventListener('dblclick',(e)=>{
+  // 双击画布空白：在该位置弹节点选择浮窗，选了独立创建（不连线）
   if(e.target===svg||e.target.classList.contains('grid-line')){
-    selNode=null;selEdge=null;edgeFrom=null;showProps();renderAll();
+    const sp=svgPos(e);
+    openNodePicker(e.clientX,e.clientY,sp.x,sp.y,null);
+  }
+});
+svg.addEventListener('click',(e)=>{
+  if(_suppressClick){_suppressClick=false;return;}   // 拖线弹窗刚开，跳过本次点击
+  if(e.target===svg||e.target.classList.contains('grid-line')){
+    selNode=null;selEdge=null;edgeFrom=null;closeNodePicker();showProps();renderAll();
   }
 });
 svg.addEventListener('contextmenu',(e)=>{
@@ -817,15 +812,12 @@ function renderSelectorBranches(g,n){
 function ensureCond(br){if(!br.cond)br.cond={logic:2,conditions:[]};if(!br.cond.conditions.length)br.cond.conditions.push({operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}});}
 function saveBranchCond(n,br){/* 已就地改 */}
 
-// ============ 调色板添加节点 ============
-document.querySelectorAll('.pal-item').forEach(btn=>{
-  btn.onclick=()=>{
-    const type=''+btn.dataset.type;
-    const T={
-      '1':{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]},
-      '2':{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}},
-      '3':{nodeMeta:{title:'LLM'},inputs:{inputParameters:[],llmParam:[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
-      '5':{nodeMeta:{title:'代码'},inputs:{inputParameters:[],code:`# 在这里，您可以通过 'args' 获取节点中的输入变量，并通过 'ret' 输出结果
+// ============ 节点模板 + 创建 ============
+const NODE_TEMPLATES={
+  '1':{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]},
+  '2':{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}},
+  '3':{nodeMeta:{title:'LLM'},inputs:{inputParameters:[],llmParam:[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
+  '5':{nodeMeta:{title:'代码'},inputs:{inputParameters:[],code:`# 在这里，您可以通过 'args' 获取节点中的输入变量，并通过 'ret' 输出结果
 # 'args' 已经被正确地注入到环境中
 # 下面是一个示例，首先获取节点的全部输入参数params，其次获取其中参数名为'input'的值：
 # params = args.params;
@@ -844,32 +836,93 @@ async def main(args: Args) -> Output:
         },
     }
     return ret`,language:3},outputs:
-        [{name:'key0',type:'string',description:'拼接结果'},{name:'key1',type:'list',description:'数组示例'},{name:'key2',type:'object',description:'对象示例'}]},
-      '8':{nodeMeta:{title:'选择器'},inputs:{branches:[{condition:{logic:2,conditions:[]}}]}},
-      '15':{nodeMeta:{title:'文本'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
-      '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],variableParameters:[],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
-      '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
-      '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[{name:'闲聊'},{name:'查询证券资讯'},{name:'编写研报'}],mode:'all'},outputs:[]},
-      '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'}]},
-      '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
-      '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
-      '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},
-      '9':{nodeMeta:{title:'子工作流'},inputs:{workflowId:'',inputParameters:[]},outputs:[]},
-      '4':{nodeMeta:{title:'插件'},inputs:{apiParam:[{name:'apiName',input:{type:'string',value:{type:'literal',content:''}}}],inputParameters:[]},outputs:[]},
-      '13':{nodeMeta:{title:'输出消息'},inputs:{inputParameters:[],content:{type:'string',value:{type:'literal',content:''}}},outputs:[{name:'output',type:'string',description:''}]},
-      '58':{nodeMeta:{title:'ToJSON'},inputs:{inputParameters:[{name:'input',input:{type:'object',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'string',description:''}]},
-      '59':{nodeMeta:{title:'FromJSON'},inputs:{inputParameters:[{name:'input',input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'object',description:''}]},
-    };
-    const n={id:genId(),type,x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:210,h:80,data:JSON.parse(JSON.stringify(T[type]||{}))};
-    WF.nodes.push(n);selNode=n.id;showProps();renderAll();
-  };
-});
+      [{name:'key0',type:'string',description:'拼接结果'},{name:'key1',type:'list',description:'数组示例'},{name:'key2',type:'object',description:'对象示例'}]},
+  '8':{nodeMeta:{title:'选择器'},inputs:{branches:[{condition:{logic:2,conditions:[]}}]}},
+  '15':{nodeMeta:{title:'文本'},inputs:{method:'concat',inputParameters:[],concatParams:[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}]},outputs:[{name:'output',type:'string',description:''}]},
+  '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],variableParameters:[],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
+  '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
+  '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[{name:'闲聊'},{name:'查询证券资讯'},{name:'编写研报'}],mode:'all'},outputs:[]},
+  '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'}]},
+  '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
+  '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
+  '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},
+  '9':{nodeMeta:{title:'子工作流'},inputs:{workflowId:'',inputParameters:[]},outputs:[]},
+  '4':{nodeMeta:{title:'插件'},inputs:{apiParam:[{name:'apiName',input:{type:'string',value:{type:'literal',content:''}}}],inputParameters:[]},outputs:[]},
+  '13':{nodeMeta:{title:'输出消息'},inputs:{inputParameters:[],content:{type:'string',value:{type:'literal',content:''}}},outputs:[{name:'output',type:'string',description:''}]},
+  '58':{nodeMeta:{title:'ToJSON'},inputs:{inputParameters:[{name:'input',input:{type:'object',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'string',description:''}]},
+  '59':{nodeMeta:{title:'FromJSON'},inputs:{inputParameters:[{name:'input',input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}]},outputs:[{name:'output',type:'object',description:''}]},
+};
+// 在 (x,y) 创建基本节点；x/y 为空时按序排
+function createBasicNode(type,x,y){
+  const n={id:genId(),type,x:(x!=null?x:150+WF.nodes.length*25),y:(y!=null?y:120+WF.nodes.length*25),w:210,h:80,data:JSON.parse(JSON.stringify(NODE_TEMPLATES[type]||{}))};
+  WF.nodes.push(n);return n;
+}
 
-// ============ 属性面板 ============
+// ============ 节点选择浮窗（拖线到空白/双击空白弹出）============
+let pickerCtx=null;   // {sx,sy, src:{nodeId,port}|null}；src 非空 → 创建后自动连线
+const NODE_BASIC=[['1','▶ 开始'],['2','◼ 结束'],['3','🤖 LLM'],['22','🎯 意图识别'],
+  ['8','🔀 选择器'],['21','🔄 循环'],['28','📦 批处理'],
+  ['5','📝 代码'],['15','📄 文本'],['58','{→} ToJSON'],['59','{←} FromJSON'],
+  ['32','🧲 聚合'],['40','✏ 赋值(全局)'],['20','🔄 置变量(循环)'],
+  ['45','🌐 HTTP'],['9','🔗 子工作流'],['13','💬 输出']];
+function openNodePicker(cx,cy,sx,sy,src){
+  pickerCtx={sx,sy,src};
+  const d=document.getElementById('nodePicker');
+  d.style.display='block';
+  d.style.left=Math.min(cx,window.innerWidth-220)+'px';
+  d.style.top=Math.min(cy,window.innerHeight-360)+'px';
+  renderNodePicker('');
+  setTimeout(()=>{const f=document.getElementById('npFilter');if(f)f.focus();},0);
+}
+function closeNodePicker(){document.getElementById('nodePicker').style.display='none';pickerCtx=null;}
+function renderNodePicker(filter){
+  const d=document.getElementById('nodePicker');
+  const fv=filter||'';
+  const f=fv.toLowerCase();
+  const old=document.getElementById('npFilter');
+  const hadFocus=old&&document.activeElement===old;
+  const caret=old?old.selectionStart:0;
+  const bf=NODE_BASIC.filter(b=>!f||b[1].toLowerCase().includes(f));
+  const tg={};
+  (AGENT_TOOLS||[]).forEach(t=>{const g=t.group||'工具';(tg[g]=tg[g]||[]).push(t);});
+  let html=`<input id="npFilter" class="np-filter" placeholder="🔍 过滤节点/工具…" value="${ext(fv)}" oninput="renderNodePicker(this.value)">`;
+  if(bf.length) html+='<div class="np-group">节点</div>'+bf.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')">${ext(b[1])}</button>`).join('');
+  Object.keys(tg).sort().forEach(g=>{
+    const items=tg[g].filter(t=>!f||(t.name||'').toLowerCase().includes(f)||(t.display||'').toLowerCase().includes(f));
+    if(items.length) html+=`<div class="np-group">${ext(g)}</div>`+items.map(t=>`<button class="np-item" onclick="pickNode('${t.name}',true)" title="${ext((t.description||'').slice(0,70))}">🔧 ${ext(t.display||t.name)}</button>`).join('');
+  });
+  d.innerHTML=html;
+  if(hadFocus){const nf=document.getElementById('npFilter');if(nf){nf.focus();try{nf.setSelectionRange(caret,caret);}catch(e){}}}
+}
+function pickNode(typeOrName,isTool){
+  if(!pickerCtx){closeNodePicker();return;}
+  let n;
+  if(isTool){
+    const t=(AGENT_TOOLS||[]).find(z=>z.name===typeOrName);
+    if(!t){closeNodePicker();return;}
+    const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
+    const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
+    n={id:genId(),type:'4',x:pickerCtx.sx,y:pickerCtx.sy,w:230,h:80,data:{nodeMeta:{title:t.display||typeOrName},toolName:typeOrName,inputs:{inputParameters},outputs}};
+    WF.nodes.push(n);
+  }else{
+    n=createBasicNode(typeOrName,pickerCtx.sx,pickerCtx.sy);
+  }
+  if(pickerCtx.src){   // 拖线触发：连源节点该端口 → 新节点
+    const port=pickerCtx.src.port||'';
+    WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===pickerCtx.src.nodeId&&e.sourcePortID===port));
+    WF.edges.push({sourceNodeID:pickerCtx.src.nodeId,targetNodeID:n.id,sourcePortID:port});
+  }
+  closeNodePicker();
+  selNode=n.id;showProps();renderAll();
+}
+
+// ============ 属性面板（浮框：选中节点显示，空白隐藏）============
 function showProps(){
+  const wrap=document.getElementById('propsFloat');
   const p=document.getElementById('propsContent');
-  if(!selNode){p.innerHTML='<span style="color:#8a9099">← 点击节点编辑属性</span>';return;}
-  const n=findN(selNode);if(!n){p.innerHTML='';return;}
+  if(!selNode){wrap.style.display='none';p.innerHTML='';return;}
+  const n=findN(selNode);if(!n){wrap.style.display='none';p.innerHTML='';return;}
+  wrap.style.display='block';
   try{
   let h=`<h3>节点</h3>
     <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
@@ -1701,41 +1754,9 @@ let AGENT_TOOLS=[];
 let WFLIST=[];  // 工作流文件列表(供子工作流下拉选择)
 async function loadTools(){
   const r=await api('GET','/api/tools');
-  AGENT_TOOLS=r.tools||[];
-  renderToolPalette('');
-}
-function renderToolPalette(filter){
-  const d=document.getElementById('toolPalette');
-  const f=filter.toLowerCase();
-  const list=AGENT_TOOLS.filter(t=>!f||(t.name||'').toLowerCase().includes(f)||(t.display||'').toLowerCase().includes(f)||(t.description||'').toLowerCase().includes(f));
-  if(!list.length){d.innerHTML='<span style="color:#8a9099">无匹配</span>';return;}
-  // 按来源分组：内置优先，MCP 居中，用户工具在后
-  const groups={};
-  list.forEach(t=>{const g=t.group||'其它';(groups[g]=groups[g]||[]).push(t);});
-  const gkeys=Object.keys(groups).sort((a,b)=>{
-    if(a===b)return 0;
-    if(a==='内置')return -1; if(b==='内置')return 1;
-    if(a.startsWith('MCP')&&!b.startsWith('MCP')&&b!=='内置')return -1;
-    if(b.startsWith('MCP')&&!a.startsWith('MCP')&&a!=='内置')return 1;
-    if(a==='用户工具')return 1; if(b==='用户工具')return -1;
-    return a.localeCompare(b);
-  });
-  d.innerHTML=gkeys.map(g=>{
-    const items=groups[g].map(t=>`<button class="pal-item ext" onclick="addToolNode('${t.name}')" title="${ext((t.display||t.name)+' — '+(t.description||'')).slice(0,90)}">🔧 ${ext(t.display||t.name)}</button>`).join('');
-    return `<div style="color:#7b2ff7;font-size:10px;font-weight:bold;margin:4px 0 2px;padding-bottom:1px;border-bottom:1px solid #2a2f3a">${ext(g)} <span style="color:#5a6068;font-weight:normal">${groups[g].length}</span></div><div>${items}</div>`;
-  }).join('');
-}
-function addToolNode(toolName){
-  const t=AGENT_TOOLS.find(x=>x.name===toolName);if(!t)return;
-  const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
-  // 用 API 返回的 outputs schema 初始化（内置工具已知返回类型）
-  const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
-  const n={id:genId(),type:'4',x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:230,h:80,
-    data:{nodeMeta:{title:t.display||toolName},toolName, inputs:{inputParameters}, outputs}};
-  WF.nodes.push(n);selNode=n.id;showProps();renderAll();
+  AGENT_TOOLS=r.tools||[];   // 工具列表按需在节点选择浮窗(nodePicker)渲染
 }
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}
-document.getElementById('toolFilter').oninput=function(){renderToolPalette(this.value);};
 
 document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
 document.addEventListener('keydown',(e)=>{

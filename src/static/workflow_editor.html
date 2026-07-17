@@ -234,6 +234,46 @@ function flowOutPos(n){return{x:n.x+n.w, y:n.y+HDR_H/2};}
 function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 
+// 带 sourcePortID 的流程出口位置：selector(8)/intent(22) 的分支端口在节点右侧分行，
+// 不在标题栏中点。复刻 renderSelectorBranches / 意图分支端口的 y 计算，保证连线起点对齐端口。
+function flowOutPosFor(n, portID){
+  if(!portID || !['8','22'].includes(n.type)) return flowOutPos(n);
+  const baseY = HDR_H + Math.max(nodeInputs(n).length, nodeOutputs(n).length)*ROW_H;
+  if(n.type==='8'){
+    const branches = n.data.inputs?.branches||[];
+    const ports=[...branches.map((b,i)=>i===0?'true':`true_${i}`), 'false'];   // 与 renderSelectorBranches 一致
+    const idx=ports.indexOf(portID);
+    if(idx>=0) return {x:n.x+n.w, y:n.y + baseY + 4 + 10 + idx*22};
+  }
+  if(n.type==='22'){
+    const intents=n.data.inputs?.intents||[];
+    const startIy=baseY+8;
+    if(portID==='default') return {x:n.x+n.w, y:n.y + startIy + intents.length*22};
+    const m=String(portID).match(/^branch_(\d+)$/);
+    if(m){const i=parseInt(m[1]); if(i>=0&&i<intents.length) return {x:n.x+n.w, y:n.y + startIy + i*22};}
+  }
+  return flowOutPos(n);
+}
+
+// 插件节点(type4)：若 inputParameters/outputs 为空，按 AGENT_TOOLS 中该工具的 schema 补全。
+// 解决模型只写 toolName 没写输入字段、或用 MCP 工具时编辑器显示空的问题。保留已有字段（含连线）。
+function syncToolNode(n){
+  if(n.type!=='4' || !n.data.toolName) return;
+  const t=AGENT_TOOLS.find(x=>x.name===n.data.toolName);
+  if(!t) return;
+  n.data.inputs=n.data.inputs||{};
+  const params=n.data.inputs.inputParameters||(n.data.inputs.inputParameters=[]);
+  const existing=new Set(params.map(p=>p.name));
+  t.params.forEach(p=>{
+    if(!existing.has(p.name))
+      params.push({name:p.name, input:{type:_mapToolType(p.type), value:{type:'literal',content:''}}});
+  });
+  if(!n.data.outputs || !n.data.outputs.length){
+    n.data.outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}])
+      .map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
+  }
+}
+
 // ============ 渲染 ============
 function renderAll(){
   svg.innerHTML='';
@@ -283,7 +323,7 @@ function renderAll(){
   // ---- 流程线 ----
   WF.edges.forEach((ed,i)=>{
     const sn=findN(ed.sourceNodeID),tn=findN(ed.targetNodeID); if(!sn||!tn)return;
-    const sp=flowOutPos(sn), tp=flowInPos(tn);
+    const sp=ed.sourcePortID?flowOutPosFor(sn,ed.sourcePortID):flowOutPos(sn), tp=flowInPos(tn);
     const sel=selEdge&&selEdge.kind==='flow'&&selEdge.i===i;
     const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i});
     path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'flow',i};selNode=null;showProps();renderAll();};
@@ -1587,12 +1627,14 @@ async function loadFileList(){
 }
 async function openWf(name){
   const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}
+  if(!AGENT_TOOLS.length) await loadTools();   // syncToolNode 依赖工具 schema，确保已加载
   _compositeStack=[]; _currentParent=null;
   document.getElementById('breadcrumb').style.display='none';
   document.getElementById('btnExitComp').style.display='none';
   WF.name=r.name;WF.meta=r.meta||{};
   WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
+  WF.nodes.forEach(syncToolNode);   // 插件节点按 toolName schema 补全空输入/输出字段
   document.getElementById('fileSel').value=name;
   document.getElementById('fdesc').value=WF.meta.description||'';
   document.getElementById('fcoze').value=WF.meta.coze_url||'';

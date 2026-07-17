@@ -143,15 +143,23 @@ async def api_wf_list():
 
 @app.get("/api/tools")
 async def api_tools():
-    """返回全部内置工具（名+描述+参数/输出schema），供编辑器生成工具节点。"""
+    """返回工作流可调用的全部工具（内置 + MCP + 用户 py 工具），供编辑器生成工具节点。
+    含 name/description/params/outputs，让插件节点能按 toolName 显示输入字段、可添加节点。"""
     from real_tools import ALL_BUILTIN_TOOLS, infer_tool_outputs
-    out = []
-    for t in ALL_BUILTIN_TOOLS:
+    from workflow import load_user_tools
+    # 聚合三类来源：内置（含 open_url/sleep/web_search 等）+ MCP（__mcp__*）+ 用户 .agent/workflows/tools/*.py
+    tools = list(ALL_BUILTIN_TOOLS) + list(_MCP_TOOLS)
+    user_tools, _ = load_user_tools(WORKSPACE)
+    tools += user_tools
+    out, seen = [], set()
+    for t in tools:
+        if t.name in seen:
+            continue   # 去重（内置/用户同名时内置优先）
+        seen.add(t.name)
         s = t.schema["function"]
         props = s.get("parameters", {}).get("properties", {}) or {}
-        params = []
-        for pname, psch in props.items():
-            params.append({"name": pname, "type": (psch.get("type") if isinstance(psch, dict) else "string") or "string"})
+        params = [{"name": pname, "type": (psch.get("type") if isinstance(psch, dict) else "string") or "string"}
+                  for pname, psch in props.items()]
         outputs = infer_tool_outputs(t)
         out.append({"name": s["name"], "description": s.get("description", ""), "params": params, "outputs": outputs})
     return {"tools": out}

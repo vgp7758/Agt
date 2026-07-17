@@ -77,6 +77,10 @@ SYSTEM = build_system(
         "③ 变量引用用 ref：{type:ref, content:{source:'block-output', blockID:'节点id', name:'输出字段名'}}。\n"
         "【自定义工具】你可以在 .agent/workflows/tools/*.py 里写顶层函数（带中文 docstring），"
         "它会自动注册成工具，工作流插件节点 toolName=函数名 即可调用。这比在代码节点里重复实现更可复用。\n"
+        "  工具参数类型：有类型注解就用注解（dict→object/list→array）；无注解时在 py 顶部声明模块级变量：\n"
+        "    INPUT_SCHEMA = {'参数名':'object|array|integer|number|boolean|string', ...}\n"
+        "    OUTPUT_SCHEMA = [{'name':'字段','type':'object','description':'...'}, ...]\n"
+        "  （否则无注解参数会被当成 string）。main 函数会被跳过不注册。\n"
         "每轮对话结束时 .agent/workflows/ 下的工作流会被自动扫描注册为 wf_* 工具，tools/*.py 的函数也会自动注册。\n"
         + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
         + _load_agent_md()

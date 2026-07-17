@@ -1137,32 +1137,58 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
 _LOADED_USER_TOOLS: set[str] = set()   # 记录已注册的用户工具名（每轮刷新前清理）
 
 
-def _make_tool_from_func(func) -> Tool | None:
-    """把一个普通函数包成 Tool。无类型注解的参数补 str（Tool 要求每参数有可识别类型）。
+# schema 类型字符串 → Python 类型（INPUT_SCHEMA 里 "object"/"array" 等映射）
+_SCHEMA_TYPE_MAP = {
+    "string": str, "str": str, "integer": int, "int": int, "long": int,
+    "number": float, "float": float, "double": float,
+    "boolean": bool, "bool": bool, "object": dict, "dict": dict,
+    "array": list, "list": list, "file": str, "time": str,
+}
+
+
+def _make_tool_from_func(func, input_schema: dict = None, output_schema: list = None) -> Tool | None:
+    """把一个普通函数包成 Tool。参数类型来源优先级：模块 INPUT_SCHEMA > 函数注解 > str 兜底。
+    output_schema（模块 OUTPUT_SCHEMA）若有，挂到 Tool.user_outputs 供编辑器/前端覆盖推断。
     无 docstring 或类型不可识别则返回 None（跳过）。"""
     try:
         hints = dict(getattr(func, "__annotations__", {}) or {})
         sig = inspect.signature(func)
     except (TypeError, ValueError):
         return None
+    # INPUT_SCHEMA 覆盖：参数名 → 类型（object/array 等得以正确识别，不再误判 string）
+    if isinstance(input_schema, dict):
+        for p in sig.parameters:
+            if p in input_schema:
+                t = _SCHEMA_TYPE_MAP.get(str(input_schema[p]).strip().lower())
+                if t is not None:
+                    hints[p] = t
     need_fix = [p for p in sig.parameters if p not in hints]
     if need_fix:
-        # 无注解参数补 str（Tool 要求每参数有可识别类型）。直接赋给运行时函数对象，
-        # 这些是每次刷新重新 import 的临时模块，赋值不影响磁盘上的 py 文件。
+        # 仍无类型的参数补 str。
         hints = {**hints, **{p: str for p in need_fix}}
-        try:
-            func.__annotations__ = hints
-        except Exception:
-            return None
+    # 无条件写回 func.__annotations__（INPUT_SCHEMA 覆盖 / 补 str 都要让 Tool 看到）。
+    # 直接赋给运行时函数对象（每次刷新重新 import，不影响磁盘 py）。
     try:
-        return Tool(func)
+        func.__annotations__ = hints
     except Exception:
         return None
+    try:
+        t = Tool(func)
+    except Exception:
+        return None
+    if isinstance(output_schema, list) and output_schema:
+        t.user_outputs = output_schema   # 编辑器/api 优先用它作为 outputs
+    return t
 
 
 def load_user_tools(workspace: Path = None) -> tuple[list[Tool], list[tuple[str, str]]]:
     """扫描 .agent/workflows/tools/*.py，把每个文件里【本模块定义】的顶层函数注册成工具。
-    跳过私有(_开头)、main、以及 import 进来的函数。返回 (tools, [(文件, 载入错误)])。"""
+    跳过私有(_开头)、main、以及 import 进来的函数。
+
+    支持模块级类型声明（解决 object/array 参数被误判 string）：
+      INPUT_SCHEMA  = {"参数名": "object|array|integer|...", ...}   # 参数名→类型
+      OUTPUT_SCHEMA = [{"name":"字段","type":"object","description":"..."}, ...]
+    有则优先于注解；都没有的参数回退 str。返回 (tools, [(文件, 载入错误)])。"""
     d = (workspace or WORKSPACE) / ".agent" / "workflows" / "tools"
     if not d.exists():
         return [], []
@@ -1178,12 +1204,14 @@ def load_user_tools(workspace: Path = None) -> tuple[list[Tool], list[tuple[str,
         except Exception as e:
             errors.append((py.name, f"{type(e).__name__}: {e}"))
             continue
+        input_schema = getattr(mod, "INPUT_SCHEMA", None)
+        output_schema = getattr(mod, "OUTPUT_SCHEMA", None)
         for nm, obj in inspect.getmembers(mod, inspect.isfunction):
             if nm.startswith("_") or nm == "main":
                 continue
             if getattr(obj, "__module__", "") != mod_name:
                 continue  # 只收本模块定义的（过滤 import 进来的 json.loads 等）
-            t = _make_tool_from_func(obj)
+            t = _make_tool_from_func(obj, input_schema, output_schema)
             if t is not None:
                 out.append(t)
     return out, errors

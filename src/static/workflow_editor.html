@@ -236,23 +236,29 @@ function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 
 // 带 sourcePortID 的流程出口位置：selector(8)/intent(22) 的分支端口在节点右侧分行，
 // 不在标题栏中点。复刻 renderSelectorBranches / 意图分支端口的 y 计算，保证连线起点对齐端口。
-function flowOutPosFor(n, portID){
-  if(!portID || !['8','22'].includes(n.type)) return flowOutPos(n);
+// fallbackIdx：当 portID 非标准（如模型手写的 'stats_phase'，执行器/本编辑器都不认）时，
+// 按该边在源节点出边中的顺序兜底定位到对应分支端口，保证至少视觉对齐。
+function flowOutPosFor(n, portID, fallbackIdx){
+  if(!['8','22'].includes(n.type)) return flowOutPos(n);
   const baseY = HDR_H + Math.max(nodeInputs(n).length, nodeOutputs(n).length)*ROW_H;
+  let idx=-1, total=0, yForIdx=null;
   if(n.type==='8'){
     const branches = n.data.inputs?.branches||[];
     const ports=[...branches.map((b,i)=>i===0?'true':`true_${i}`), 'false'];   // 与 renderSelectorBranches 一致
-    const idx=ports.indexOf(portID);
-    if(idx>=0) return {x:n.x+n.w, y:n.y + baseY + 4 + 10 + idx*22};
-  }
-  if(n.type==='22'){
+    total=ports.length;
+    if(portID) idx=ports.indexOf(portID);
+    yForIdx=(i)=>n.y + baseY + 4 + 10 + i*22;
+  } else { // '22'
     const intents=n.data.inputs?.intents||[];
+    const ports=[...intents.map((_,i)=>`branch_${i}`), 'default'];
     const startIy=baseY+8;
-    if(portID==='default') return {x:n.x+n.w, y:n.y + startIy + intents.length*22};
-    const m=String(portID).match(/^branch_(\d+)$/);
-    if(m){const i=parseInt(m[1]); if(i>=0&&i<intents.length) return {x:n.x+n.w, y:n.y + startIy + i*22};}
+    total=ports.length;
+    if(portID) idx=ports.indexOf(portID);
+    yForIdx=(i)=>n.y + startIy + (i<intents.length? i*22 : intents.length*22);
   }
-  return flowOutPos(n);
+  if(idx<0) idx = (fallbackIdx!=null)? Math.min(fallbackIdx, total-1) : 0;   // 兜底
+  if(idx<0||idx>=total) return flowOutPos(n);
+  return {x:n.x+n.w, y:yForIdx(idx)};
 }
 
 // 插件节点(type4)：若 inputParameters/outputs 为空，按 AGENT_TOOLS 中该工具的 schema 补全。
@@ -323,7 +329,16 @@ function renderAll(){
   // ---- 流程线 ----
   WF.edges.forEach((ed,i)=>{
     const sn=findN(ed.sourceNodeID),tn=findN(ed.targetNodeID); if(!sn||!tn)return;
-    const sp=ed.sourcePortID?flowOutPosFor(sn,ed.sourcePortID):flowOutPos(sn), tp=flowInPos(tn);
+    let sp;
+    if(['8','22'].includes(sn.type)){
+      // 该边在源节点出边中的顺序（兜底定位非标准 portID 的分支线）
+      const outEs=WF.edges.filter(e=>e.sourceNodeID===ed.sourceNodeID);
+      const fIdx=outEs.findIndex(e=>e===ed);
+      sp=flowOutPosFor(sn, ed.sourcePortID, fIdx);
+    }else{
+      sp=flowOutPos(sn);
+    }
+    const tp=flowInPos(tn);
     const sel=selEdge&&selEdge.kind==='flow'&&selEdge.i===i;
     const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i});
     path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'flow',i};selNode=null;showProps();renderAll();};
@@ -674,9 +689,10 @@ function startVar(nodeId,field,color,x,y){edgeFrom={kind:'var',nodeId,field,x,y,
 function finishFlow(tgtId){
   if(!edgeFrom||edgeFrom.kind!=='flow'){edgeFrom=null;renderAll();return;}
   if(edgeFrom.nodeId===tgtId){edgeFrom=null;renderAll();return;}
-  // 同源同目标（默认端口）只保留一条；分支端口可多条
-  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.targetNodeID===tgtId&&(!e.sourcePortID)));
-  WF.edges.push({sourceNodeID:edgeFrom.nodeId,targetNodeID:tgtId,sourcePortID:''});
+  const port=edgeFrom.port||'';   // 分支端口(branch_N/true/default)或空(普通出口)
+  // 同一出端口只保留一条（普通节点出口线性；selector/intent 每分支一个下游）
+  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.sourcePortID===port));
+  WF.edges.push({sourceNodeID:edgeFrom.nodeId,targetNodeID:tgtId,sourcePortID:port});
   edgeFrom=null;renderAll();
 }
 function finishVar(tgtId,field,color){
@@ -1695,9 +1711,23 @@ async function loadTools(){
 function renderToolPalette(filter){
   const d=document.getElementById('toolPalette');
   const f=filter.toLowerCase();
-  const list=AGENT_TOOLS.filter(t=>!f||t.name.toLowerCase().includes(f)||(t.description||'').toLowerCase().includes(f));
+  const list=AGENT_TOOLS.filter(t=>!f||(t.name||'').toLowerCase().includes(f)||(t.display||'').toLowerCase().includes(f)||(t.description||'').toLowerCase().includes(f));
   if(!list.length){d.innerHTML='<span style="color:#8a9099">无匹配</span>';return;}
-  d.innerHTML=list.map(t=>`<button class="pal-item ext" onclick="addToolNode('${t.name}')" title="${ext(t.description).slice(0,60)}">🔧 ${t.name}</button>`).join('');
+  // 按来源分组：内置优先，MCP 居中，用户工具在后
+  const groups={};
+  list.forEach(t=>{const g=t.group||'其它';(groups[g]=groups[g]||[]).push(t);});
+  const gkeys=Object.keys(groups).sort((a,b)=>{
+    if(a===b)return 0;
+    if(a==='内置')return -1; if(b==='内置')return 1;
+    if(a.startsWith('MCP')&&!b.startsWith('MCP')&&b!=='内置')return -1;
+    if(b.startsWith('MCP')&&!a.startsWith('MCP')&&a!=='内置')return 1;
+    if(a==='用户工具')return 1; if(b==='用户工具')return -1;
+    return a.localeCompare(b);
+  });
+  d.innerHTML=gkeys.map(g=>{
+    const items=groups[g].map(t=>`<button class="pal-item ext" onclick="addToolNode('${t.name}')" title="${ext((t.display||t.name)+' — '+(t.description||'')).slice(0,90)}">🔧 ${ext(t.display||t.name)}</button>`).join('');
+    return `<div style="color:#7b2ff7;font-size:10px;font-weight:bold;margin:4px 0 2px;padding-bottom:1px;border-bottom:1px solid #2a2f3a">${ext(g)} <span style="color:#5a6068;font-weight:normal">${groups[g].length}</span></div><div>${items}</div>`;
+  }).join('');
 }
 function addToolNode(toolName){
   const t=AGENT_TOOLS.find(x=>x.name===toolName);if(!t)return;
@@ -1705,7 +1735,7 @@ function addToolNode(toolName){
   // 用 API 返回的 outputs schema 初始化（内置工具已知返回类型）
   const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
   const n={id:genId(),type:'4',x:150+WF.nodes.length*25,y:120+WF.nodes.length*25,w:230,h:80,
-    data:{nodeMeta:{title:toolName},toolName, inputs:{inputParameters}, outputs}};
+    data:{nodeMeta:{title:t.display||toolName},toolName, inputs:{inputParameters}, outputs}};
   WF.nodes.push(n);selNode=n.id;showProps();renderAll();
 }
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}

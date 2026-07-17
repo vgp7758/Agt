@@ -1,0 +1,62 @@
+{
+  "nodes": [
+    {
+      "id": "100001",
+      "type": "1",
+      "data": {
+        "outputs": [
+          {"name": "seconds", "type": "number", "required": false, "defaultValue": 2}
+        ],
+        "trigger_parameters": []
+      }
+    },
+    {
+      "id": "200001",
+      "type": "4",
+      "data": {
+        "nodeMeta": {"title": "sleep"},
+        "toolName": "sleep",
+        "inputs": {
+          "inputParameters": [
+            {"name": "seconds", "input": {"type": "float", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "seconds"}}}}
+          ]
+        },
+        "outputs": [{"name": "raw", "type": "string"}]
+      }
+    },
+    {
+      "id": "300001",
+      "type": "15",
+      "data": {
+        "inputs": {
+          "method": "concat",
+          "inputParameters": [
+            {"name": "r", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "200001", "name": "raw"}}}}
+          ],
+          "concatParams": [
+            {"name": "concatResult", "input": {"type": "string", "value": {"type": "literal", "content": "⏰ wait 节点演示：{{r}}，继续后续流程"}}}
+          ]
+        },
+        "outputs": [{"name": "output", "type": "string"}]
+      }
+    },
+    {
+      "id": "900001",
+      "type": "2",
+      "data": {
+        "inputs": {
+          "terminatePlan": "returnVariables",
+          "inputParameters": [
+            {"name": "result", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "300001", "name": "output"}}}}
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "200001", "sourcePortID": ""},
+    {"sourceNodeID": "200001", "targetNodeID": "300001", "sourcePortID": ""},
+    {"sourceNodeID": "300001", "targetNodeID": "900001", "sourcePortID": ""}
+  ],
+  "versions": {}
+}

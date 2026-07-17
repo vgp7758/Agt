@@ -825,9 +825,15 @@ def _handle_plugin(node: dict, ctx) -> dict:
         raise WorkflowError("工具节点缺少 toolName")
     if ctx.tools is None:
         raise WorkflowError("工具节点需要工具上下文(tools)")
-    if tool_name not in ctx.tools:
-        raise WorkflowError(f"工具 {tool_name!r} 未在工具箱中找到")
-    raw = ctx.tools.call(tool_name, args)
+    # 优先 agent.tools，找不到再查内置轻量工具（workflow.py 内延迟导入防循环）
+    actual_tools = ctx.tools
+    if tool_name not in actual_tools:
+        from real_tools import LIGHT_TOOLS
+        if tool_name in LIGHT_TOOLS:
+            actual_tools = LIGHT_TOOLS
+        else:
+            raise WorkflowError(f"工具 {tool_name!r} 未在工具箱中找到")
+    raw = actual_tools.call(tool_name, args)
     outputs = {"raw": raw}
     # 尝试解析 raw 为结构化，按用户声明的 outputs 字段填充
     parsed = _try_parse(raw)

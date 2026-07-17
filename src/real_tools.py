@@ -4,6 +4,7 @@
   run_python              : 执行模型写的 Python（独立子进程 + 超时）。
   read_file/write_file/list_dir : 读写文件，限定在 workspace/ 内（控制爆炸半径）。
   web_search              : 联网搜索（DuckDuckGo，无需 key；国内可能需代理）。
+  open_url                : 抓取网页提取正文文本（start/max_chars 分页续读）。
   run_shell               : 执行系统命令（最强大也最危险，超时 + 日志）。
 
 安全策略：
@@ -348,6 +349,93 @@ def web_search(query: str) -> str:
     return "\n\n".join(lines)
 
 
+def _html_to_text(html: str) -> tuple[str, str]:
+    """HTML → (title, 正文文本)。剥 script/style，块级标签换行，压缩空白。标准库实现，零依赖。"""
+    import re
+    from html.parser import HTMLParser
+
+    class _Extractor(HTMLParser):
+        SKIP = {"script", "style", "noscript", "template", "svg", "iframe"}
+        BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
+                 "section", "article", "header", "footer", "ul", "ol", "table",
+                 "blockquote", "pre", "hr", "form", "nav", "aside"}
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+            self.title_parts: list[str] = []
+            self._skip_depth = 0
+            self._in_title = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in self.SKIP:
+                self._skip_depth += 1
+            elif tag == "title":
+                self._in_title = True
+            elif tag in self.BLOCK:
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag):
+            if tag in self.SKIP:
+                self._skip_depth = max(0, self._skip_depth - 1)
+            elif tag == "title":
+                self._in_title = False
+            elif tag in self.BLOCK:
+                self.parts.append("\n")
+
+        def handle_data(self, data):
+            if self._skip_depth:
+                return
+            if self._in_title:
+                self.title_parts.append(data)
+            elif data.strip():
+                self.parts.append(data)
+
+    p = _Extractor()
+    try:
+        p.feed(html)
+        p.close()
+    except Exception:
+        pass  # 残缺 HTML 也尽量用已解析的部分
+    lines = [re.sub(r"[ \t　]+", " ", ln).strip() for ln in "".join(p.parts).splitlines()]
+    return "".join(p.title_parts).strip(), "\n".join(ln for ln in lines if ln)
+
+
+def open_url(url: str, start: int = 0, max_chars: int = 8000) -> str:
+    """抓取网页并提取正文文本（HTML 剥标签；JSON/纯文本原样），支持分页续读。
+    url: 网页地址（http/https）；start: 从第几个字符开始读（0-based，默认 0）；
+    max_chars: 本次最多返回字符数（默认 8000）。返回头部含总字数，未读完时按提示传 start 续读。"""
+    import requests
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+    except Exception as e:
+        return f"[抓取失败] {type(e).__name__}: {e}\n（网络不通或国内需代理）"
+    # header 未声明 charset 时 requests 默认 ISO-8859-1，中文页会乱码 → 用探测编码
+    if not resp.encoding or resp.encoding.lower() == "iso-8859-1":
+        resp.encoding = resp.apparent_encoding
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    body = resp.text or ""
+    if "html" in ctype or (not ctype and body.lstrip()[:1] == "<"):
+        title, text = _html_to_text(body)
+    else:
+        title, text = "", body  # JSON / 纯文本等直接原样
+    total = len(text)
+    if total == 0:
+        return f"[{url} HTTP {resp.status_code}] （提取不到正文，可能是纯 JS 渲染页面）"
+    start = max(0, int(start))
+    if start >= total:
+        return f"[越界] 正文共 {total} 字符，start={start} 超出范围"
+    end = min(start + max(1, int(max_chars)), total)
+    status = "" if resp.status_code == 200 else f" HTTP {resp.status_code} |"
+    title_part = f" 标题:{title} |" if title else ""
+    more = f"，续读传 start={end}" if end < total else "，已读完"
+    return f"[{url}{status}{title_part} 第 {start}-{end-1} 字 / 共 {total} 字{more}]\n" + text[start:end]
+
+
 def run_shell(command: str) -> str:
     """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
     return _run_subprocess_streaming(command, "run_shell", shell=True)
@@ -418,6 +506,18 @@ def contains(text: str, keyword: str) -> bool:
     return keyword in (text or "")
 
 
+def sleep(seconds: float) -> str:
+    """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return f"[错误] seconds 需为数字，收到 {seconds!r}"
+    if not (0 <= s <= 300):
+        return f"[错误] seconds 需在 0~300 之间，收到 {s:g}"
+    time.sleep(s)
+    return f"已等待 {s:g} 秒"
+
+
 REAL_TOOLS = Toolbox(
     Tool(run_python),
     Tool(read_file),
@@ -426,6 +526,7 @@ REAL_TOOLS = Toolbox(
     Tool(list_dir),
     Tool(grep),
     Tool(web_search),
+    Tool(open_url),
     Tool(run_shell),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
@@ -443,6 +544,7 @@ LIGHT_TOOLS = Toolbox(
     Tool(to_uppercase),
     Tool(to_lowercase),
     Tool(contains),
+    Tool(sleep),
 )
 
 # 全部内置工具（编辑器 /api/tools 返回这个）

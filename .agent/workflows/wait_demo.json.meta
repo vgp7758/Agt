@@ -1,0 +1,6 @@
+{
+  "name": "wait_demo",
+  "description": "演示 wait 节点：等待 seconds 秒后拼接输出（sleep 工具节点，开始→sleep→文本→结束）",
+  "enabled": true,
+  "coze_url": ""
+}

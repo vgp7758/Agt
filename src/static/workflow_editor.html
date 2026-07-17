@@ -1664,8 +1664,8 @@ async function saveWf(){
   WF.meta.coze_url=document.getElementById('fcoze').value;
   WF.meta.auto=document.getElementById('fauto').checked;
   WF.meta.auto_param=document.getElementById('fautoparam').value||'query';
-  // 保存时剥离 x/y/w/h（这些是编辑器视图状态）
-  const canvas={nodes:WF.nodes.map(n=>{const c={id:n.id,type:n.type,data:JSON.parse(JSON.stringify(n.data))};return c;}),edges:WF.edges,versions:{}};
+  // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
+  const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}
   WF.name=r.name||name;document.getElementById('fileSel').value=WF.name;

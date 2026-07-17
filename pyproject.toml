@@ -57,5 +57,8 @@ Issues = "https://github.com/vgp7758/Agt/issues"
 [tool.setuptools]
 packages = ["src"]
 
+[tool.setuptools.package-data]
+src = ["static/*.html"]
+
 [tool.setuptools.dynamic]
 version = {attr = "src.__version__"}

@@ -41,7 +41,7 @@ _mcp.connect_from_config(str(WORKSPACE / ".mcp.json"))
 _MCP_TOOLS = _mcp.get_tools()
 _snap = SnapshotManager(WORKSPACE)
 
-_INDEX_HTML = (Path(__file__).resolve().parent.parent / "static" / "index.html").read_text(encoding="utf-8")
+_INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
 
 # ===== 全局 Agent 单例 + 事件缓冲 + 多客户端广播 =====
 _agent: Agent | None = None
@@ -105,7 +105,7 @@ async def _send(ws: WebSocket, obj: dict):
 
 
 _WF_DIR = WORKSPACE / ".agent" / "workflows"
-_EDITOR_HTML = (Path(__file__).resolve().parent.parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
+_EDITOR_HTML = (Path(__file__).resolve().parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
 
 
 def _safe_wf_path(name: str) -> Path:

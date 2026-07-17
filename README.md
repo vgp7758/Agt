@@ -84,7 +84,7 @@ agt-web      # WebUI（浏览器打开 http://localhost:8000）
 │   ├── mcp_client.py    # MCP 协议
 │   ├── multiagent.py    # 多 Agent
 │   └── ...
-├── static/              # WebUI 前端
+├── src/static/          # WebUI 前端
 │   ├── index.html       # 聊天界面
 │   └── workflow_editor.html  # 工作流编辑器
 ├── .agent/              # 工作区（workflows/rules/skills/wiki）

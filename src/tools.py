@@ -108,6 +108,13 @@ class Toolbox:
             del self._tools[k]
         return len(gone)
 
+    def unregister(self, name: str) -> bool:
+        """按名字删一个工具，返回是否删除（用于每轮清理上次注册的用户工具）。"""
+        if name in self._tools:
+            del self._tools[name]
+            return True
+        return False
+
     def schemas(self) -> list[dict]:
         """产出传给 API 的 tools 列表。"""
         return [t.schema for t in self._tools.values()]

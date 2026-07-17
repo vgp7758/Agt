@@ -436,6 +436,45 @@ def open_url(url: str, start: int = 0, max_chars: int = 8000) -> str:
     return f"[{url}{status}{title_part} 第 {start}-{end-1} 字 / 共 {total} 字{more}]\n" + text[start:end]
 
 
+def _paginate_text(text: str, label: str, start: int, max_chars: int) -> str:
+    """对纯文本分页：返回带头部（第 X-Y 字 / 共 N 字）的切片。越界报错。"""
+    total = len(text)
+    start = max(0, int(start))
+    if start >= total:
+        return f"[越界] 共 {total} 字符，start={start} 超出范围"
+    end = min(start + max(1, int(max_chars)), total)
+    more = f"，续读传 start={end}" if end < total else "，已读完"
+    return f"[{label} | 第 {start}-{end-1} 字 / 共 {total} 字{more}]\n" + text[start:end]
+
+
+_WORKFLOW_SPEC_URL = "https://raw.githubusercontent.com/vgp7758/Agt/main/docs/workflow-spec.md"
+_WORKFLOW_SPEC_LOCAL = Path(__file__).resolve().parent.parent / "docs" / "workflow-spec.md"
+
+
+def read_workflow_spec(start: int = 0, max_chars: int = 6000) -> str:
+    """读取工作流规范全文（docs/workflow-spec.md）。【写工作流前务必先读】了解节点类型/字段/变量引用。
+    从线上 git raw 读取（与本地 docs/ 同源），网络不通时回退本地 docs/。
+    start: 从第几个字符开始读(0-based)；max_chars: 本次最多返回字符数(默认 6000)。"""
+    text = None
+    # 1) 优先线上 git raw（保证拿到最新版）
+    try:
+        import requests
+        r = requests.get(_WORKFLOW_SPEC_URL, headers={"User-Agent": "agt-agent"}, timeout=15)
+        if r.status_code == 200 and r.text:
+            text = r.text
+    except Exception:
+        pass
+    # 2) 兜底本地 docs/（pip 安装后随包附带；开发期在仓库根）
+    if text is None and _WORKFLOW_SPEC_LOCAL.exists():
+        try:
+            text = _WORKFLOW_SPEC_LOCAL.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    if not text:
+        return f"[读取失败] git raw 与本地 {_WORKFLOW_SPEC_LOCAL} 均无法获取 workflow-spec.md"
+    return _paginate_text(text, "workflow-spec.md", start, max_chars)
+
+
 def run_shell(command: str) -> str:
     """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
     return _run_subprocess_streaming(command, "run_shell", shell=True)
@@ -527,6 +566,7 @@ REAL_TOOLS = Toolbox(
     Tool(grep),
     Tool(web_search),
     Tool(open_url),
+    Tool(read_workflow_spec),
     Tool(run_shell),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),

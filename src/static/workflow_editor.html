@@ -72,6 +72,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button onclick="WE.saveWf()">💾 保存</button>
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
+  <button onclick="autoLayout()" title="按流程方向分层自动布局，孤立节点纵向罗列">📐 自动布局</button>
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
@@ -1767,6 +1768,51 @@ function focusEntry(){
   wrap.scrollLeft=Math.max(0,en.x-200);
   wrap.scrollTop=Math.max(0,en.y-100);
   selNode='100001';showProps();
+}
+// 自动布局：从开始节点沿流程线分层（层=最长前驱路径），同层纵向排，层间水平拉开；
+// 连不到开始节点的孤立节点纵向罗列在最右侧。
+function autoLayout(){
+  if(!WF.nodes.length){toast('无节点');return;}
+  const byId={}; WF.nodes.forEach(n=>byId[n.id]=n);
+  const pred={}, succ={};
+  WF.nodes.forEach(n=>{pred[n.id]=[];succ[n.id]=[];});
+  WF.edges.forEach(e=>{
+    if(byId[e.sourceNodeID]&&byId[e.targetNodeID]){
+      succ[e.sourceNodeID].push(e.targetNodeID);
+      pred[e.targetNodeID].push(e.sourceNodeID);
+    }
+  });
+  const ENTRY='100001';
+  // 多轮松弛分层：layer = max(已分层前驱)+1。可达 entry 的节点最终都有层。
+  const layer={};
+  if(byId[ENTRY]) layer[ENTRY]=0;
+  for(let k=0;k<WF.nodes.length+2;k++){
+    let changed=false;
+    WF.nodes.forEach(n=>{
+      if(n.id===ENTRY){ if(layer[n.id]!==0){layer[n.id]=0;changed=true;} return; }
+      let mx=-1;
+      pred[n.id].forEach(p=>{ if(layer[p]!=null && layer[p]>mx) mx=layer[p]; });
+      if(mx>=0){ const nl=mx+1; if(layer[n.id]!==nl){layer[n.id]=nl;changed=true;} }
+    });
+    if(!changed) break;
+  }
+  const byLayer={};
+  WF.nodes.forEach(n=>{ if(layer[n.id]!=null){ (byLayer[layer[n.id]]=byLayer[layer[n.id]]||[]).push(n);} });
+  const orphan=WF.nodes.filter(n=>layer[n.id]==null);
+  // 节点宽 ~210、高 ~80-120；层间水平 300，同层纵向 150
+  const X0=120, Y0=80, XSTEP=300, YSTEP=150;
+  const layers=Object.keys(byLayer).map(Number).sort((a,b)=>a-b);
+  layers.forEach(L=>{
+    byLayer[L].forEach((n,i)=>{ n.x=X0+L*XSTEP; n.y=Y0+i*YSTEP; });
+  });
+  if(orphan.length){
+    const maxL=layers.length?layers[layers.length-1]:0;
+    const ox=X0+(maxL+1)*XSTEP;
+    orphan.forEach((n,i)=>{ n.x=ox; n.y=Y0+i*YSTEP; });
+  }
+  selNode=null;showProps();renderAll();
+  const nl=layers.length, no=orphan.length;
+  toast('已自动布局：'+nl+' 层'+(no?('，孤立 '+no+' 个'):''));
 }
 renderLegend();loadFileList();loadTools();renderAll();
 </script>

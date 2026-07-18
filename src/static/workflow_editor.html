@@ -1545,45 +1545,40 @@ function setCondOp(bi,ci,op){
   const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
   br.condition.conditions[ci].operator=op;showProps();
 }
+function _inferType(v){
+  if(v===null||v===undefined) return 'string';
+  if(typeof v==='number') return Number.isInteger(v)?'integer':'number';
+  if(typeof v==='boolean') return 'boolean';
+  if(Array.isArray(v)) return 'list';
+  if(typeof v==='object') return 'object';
+  return 'string';
+}
+// 递归推断 object 的子字段 schema（嵌套 object/list 正确识别，不再一律 string）
+function _inferFields(obj){
+  return Object.entries(obj).map(([k,v])=>{
+    const f={name:k,type:_inferType(v),description:'',required:false};
+    if(Array.isArray(v)){
+      const item=v[0];
+      if(item&&typeof item==='object'&&!Array.isArray(item)) f.schema=_inferFields(item);
+      else if(item!==undefined) f.schema={type:_inferType(item)};
+    }else if(v!==null&&typeof v==='object'){
+      f.schema=_inferFields(v);
+    }
+    return f;
+  });
+}
 function importJSONSchema(){
   const json=prompt('粘贴JSON数据，自动解析结构并创建输出字段：');
   if(!json)return;
   let obj;
   try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
   if(!obj||typeof obj!=='object'){toast('需要JSON对象或数组');return;}
-  // 如果是数组，取第一个元素分析
   const sample=Array.isArray(obj)?(obj[0]||{}):obj;
-  const fields=[];
-  for(const[k,v] of Object.entries(sample)){
-    let type='string';
-    if(typeof v==='number')type=Number.isInteger(v)?'integer':'number';
-    else if(typeof v==='boolean')type='boolean';
-    else if(v===null)type='string';
-    else if(Array.isArray(v)){
-      type='list';
-      const item=v[0];
-      if(item&&typeof item==='object'&&!Array.isArray(item)){
-        const subFields=Object.entries(item).map(([sk,sv])=>({name:sk,type:typeof sv==='number'?(Number.isInteger(sv)?'integer':'number'):typeof sv==='boolean'?'boolean':'string',description:'',required:false}));
-        fields.push({name:k,type:'list',description:'',schema:{type:'object'},'_sub':subFields});
-        continue;
-      }else if(item!==undefined){
-        const it=typeof item==='number'?(Number.isInteger(item)?'integer':'number'):typeof item==='boolean'?'boolean':'string';
-        fields.push({name:k,type:'list',description:'',schema:{type:it}});
-        continue;
-      }
-    }else if(typeof v==='object'){
-      const subFields=Object.entries(v).map(([sk,sv])=>({name:sk,type:typeof sv==='number'?(Number.isInteger(sv)?'integer':'number'):typeof sv==='boolean'?'boolean':'string',description:'',required:false}));
-      fields.push({name:k,type:'object',description:'',schema:subFields});
-      continue;
-    }
-    fields.push({name:k,type,description:''});
-  }
+  const fields=_inferFields(sample);
   const n=findN(selNode);
-  // 清除旧输出字段，用解析结果替换
   if(n.data.outputs!==undefined)n.data.outputs=fields.map(f=>{
     const o={name:f.name,type:f.type,description:f.description||''};
     if(f.schema)o.schema=f.schema;
-    if(f._sub)o.schema=f._sub;
     return o;
   });
   showProps();renderAll();

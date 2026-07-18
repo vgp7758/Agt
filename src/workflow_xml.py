@@ -130,6 +130,32 @@ def _validate(canvas: dict) -> None:
         raise WorkflowXmlError("缺少开始节点（id=100001, type=start）")
 
 
+def _field_to_schema(f):
+    """<field name type>[<field.../] → schema 项 {name, type, schema?}（递归嵌套 object）"""
+    res = {"name": f.get("name", ""), "type": f.get("type", "string")}
+    if f.get("description"):
+        res["description"] = f.get("description")
+    sub = f.findall("field")
+    if sub:
+        res["schema"] = [_field_to_schema(s) for s in sub]
+    return res
+
+
+def _out_to_json(o):
+    """<out name type required default>[<field.../] → outputs 项（含 object 子字段 schema）"""
+    res = {"name": o.get("name"), "type": o.get("type", "string")}
+    if o.get("description"):
+        res["description"] = o.get("description")
+    if o.get("required") == "true":
+        res["required"] = True
+    if o.get("default") is not None:
+        res["defaultValue"] = _parse_val(o.get("default"), res["type"])
+    fields = o.findall("field")
+    if fields:
+        res["schema"] = [_field_to_schema(f) for f in fields]
+    return res
+
+
 def _node_to_json(nd) -> dict:
     nid = nd.get("id")
     if not nid:
@@ -147,13 +173,7 @@ def _node_to_json(nd) -> dict:
 
     if ntype == "1":        # start：data.outputs = 工作流入参
         node["data"]["trigger_parameters"] = []
-        for o in nd.findall("out"):
-            v = {"name": o.get("name"), "type": o.get("type", "string")}
-            if o.get("required") == "true":
-                v["required"] = True
-            if o.get("default") is not None:
-                v["defaultValue"] = _parse_val(o.get("default"), v["type"])
-            out.append(v)
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "2":      # end：<out ref> = 返回变量
         inp["terminatePlan"] = "returnVariables"
         inp["inputParameters"] = [
@@ -169,17 +189,17 @@ def _node_to_json(nd) -> dict:
                             "input": {"type": p.get("type", "string"),
                                       "value": {"type": "literal", "content": _text_block(p)}}}
                            for p in nd.findall("param")]
-        out.extend({"name": o.get("name"), "type": o.get("type", "string")} for o in nd.findall("out"))
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "5":      # code：inputParameters + code(CDATA) + outputs
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         code_el = nd.find("code")
         inp["code"] = _text_block(code_el)
         inp["language"] = int(code_el.get("language", "3")) if code_el is not None else 3
-        out.extend({"name": o.get("name"), "type": o.get("type", "string")} for o in nd.findall("out"))
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "4":      # plugin：toolName + inputParameters + outputs
         node["data"]["toolName"] = nd.get("toolName")
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
-        out.extend({"name": o.get("name"), "type": o.get("type", "string")} for o in nd.findall("out"))
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "15":     # text：method + inputParameters + concatParams(<result>)
         inp["method"] = nd.get("method", "concat")
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
@@ -210,7 +230,7 @@ def _node_to_json(nd) -> dict:
     elif ntype == "9":      # subworkflow
         inp["workflowId"] = nd.get("workflowId", "")
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
-        out.extend({"name": o.get("name", "output"), "type": o.get("type", "string")} for o in nd.findall("out"))
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
         if not out:
             out.append({"name": "output", "type": "string"})   # 默认 output（执行返回 {output}）
     elif ntype == "45":     # http
@@ -228,9 +248,12 @@ def _node_to_json(nd) -> dict:
             inp["body"] = {"bodyType": "EMPTY", "bodyData": {}}
         inp["setting"] = {"timeout": 15}
         out.extend([{"name": "body", "type": "string"}, {"name": "statusCode", "type": "integer"}])
-    elif ntype in ("58", "59"):  # tojson / fromjson：单 input
+    elif ntype in ("58", "59"):  # tojson / fromjson：单 input + output（可带 object schema）
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
-        out.append({"name": "output", "type": "object" if ntype == "59" else "string"})
+        outs = [_out_to_json(o) for o in nd.findall("out")]
+        if not outs:
+            outs = [{"name": "output", "type": "object" if ntype == "59" else "string"}]
+        out.extend(outs)
     elif ntype == "13":     # output emitter
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         c = nd.find("content")
@@ -270,6 +293,21 @@ def _qa(s):
 def _cdata(text):
     # CDATA 内若含 ]]> 需拆分（极罕见），这里简单处理
     return "<![CDATA[" + ("" if text is None else str(text)) + "]]>"
+
+
+def _schema_to_xml(schema):
+    """object 输出字段的 schema → <field name type>[<field.../]（递归嵌套 object）"""
+    parts = []
+    for s in schema or []:
+        if not isinstance(s, dict):
+            continue
+        sa = f'name={_qa(s.get("name", ""))} type={_qa(s.get("type", "string"))}'
+        sub = s.get("schema")
+        if s.get("type") == "object" and isinstance(sub, list) and sub:
+            parts.append(f'<field {sa}>{_schema_to_xml(sub)}</field>')
+        else:
+            parts.append(f'<field {sa}/>')
+    return "".join(parts)
 
 
 def _ref_of(block_input):
@@ -329,16 +367,18 @@ def _node_to_xml(n):
     inner = []
 
     def out_el(o):
-        return f'<out name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}/>'
+        attrs = f'name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}'
+        if o.get("required"):
+            attrs += ' required="true"'
+        if "defaultValue" in o:
+            attrs += f' default={_qa(o["defaultValue"])}'
+        sch = o.get("schema")
+        if o.get("type") == "object" and isinstance(sch, list) and sch:
+            return f'<out {attrs}>{_schema_to_xml(sch)}</out>'
+        return f'<out {attrs}/>'
 
     if ntype == "1":
-        for o in out:
-            a = f'name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}'
-            if o.get("required"):
-                a += ' required="true"'
-            if "defaultValue" in o:
-                a += f' default={_qa(o["defaultValue"])}'
-            inner.append(f"<out {a}/>")
+        inner.extend(out_el(o) for o in out)
     elif ntype == "2":
         for p in inp.get("inputParameters", []):
             pi = p.get("input", {}) or {}
@@ -393,6 +433,7 @@ def _node_to_xml(n):
             inner.append(f'<body type={_qa(body.get("bodyType","JSON"))}>{_cdata((body.get("bodyData") or {}).get("json",""))}</body>')
     elif ntype in ("58", "59"):
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
     elif ntype == "13":
         c = inp.get("content")
         if c:

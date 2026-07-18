@@ -207,8 +207,25 @@ function nodeH(n){
   return h;
 }
 const TEXTAREA_H=120;
+// 聚合节点(type32) 分组布局：复刻 renderNode 的 y 公式（gy 动态累加，非 ROW_H 网格），
+// 供 portY/变量线定位，保证端口与连线对齐。
+function aggrLayout(n){
+  const groups=n.data.inputs?.mergeGroups||[];
+  const res=[]; let gy=HDR_H+8;
+  groups.forEach(grp=>{
+    const vars=grp.variables||[];
+    res.push({gname:grp.name||'?', outY:gy+12, varsY:vars.map((v,i)=>gy+12+(i+1)*18)});
+    gy+=28+Math.max((vars.length-1)*18,0)+10;
+  });
+  return res;
+}
 // 取某端口的 y（按它在所在侧的行序）
 function portY(n, side, field){
+  if(n.type==='32'){   // 聚合节点端口在分组行，不按 ROW_H 网格
+    const L=aggrLayout(n);
+    if(side==='out'){const g=L.find(x=>x.gname===field); return g? n.y+g.outY : n.y+HDR_H+ROW_H/2;}
+    return n.y+HDR_H+ROW_H/2;
+  }
   const rows=nodeRows(n).filter(r=>r.side===side);
   const i=rows.findIndex(r=>r.field===field);
   if(i<0) return n.y+HDR_H+ROW_H/2;
@@ -310,6 +327,27 @@ function renderAll(){
       svg.appendChild(path);
       // 目标端断开 handle：延后到节点之上绘制（避免被节点遮挡）
       _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:p.name},sp:sx,color:col});
+    });
+  });
+  // 聚合节点(type32)：mergeGroups 变量不在 inputParameters，单独画变量线
+  WF.nodes.forEach(tn=>{
+    if(tn.type!=='32')return;
+    const L=aggrLayout(tn);
+    (tn.data.inputs?.mergeGroups||[]).forEach((grp,gi)=>{
+      (grp.variables||[]).forEach((v,vi)=>{
+        const val=v.value; if(!val||val.type!=='ref')return;
+        const ct=val.content||{}; if(ct.source!=='block-output'||!ct.blockID)return;
+        const sn=findN(ct.blockID); if(!sn)return;
+        const sx=outPortPos(sn, ct.name||'');
+        const tp={x:tn.x+10, y:tn.y+L[gi].varsY[vi]};
+        const key=tn.id+'::aggr::'+gi+'::'+vi;
+        const col=fieldColor(v.type||'string');
+        const sel=selEdge&&selEdge.kind==='var'&&selEdge.key===key;
+        const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
+        path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
+        svg.appendChild(path);
+        _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:'__aggr__',aggrGi:gi,aggrVi:vi},sp:sx,color:col});
+      });
     });
   });
 
@@ -667,8 +705,14 @@ function doDisconnect(info){
     toast('已断开流程线');
   }else if(info.kind==='var'){
     const tn=findN(info.tgtNode);
-    const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField);
-    if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+    if(info.aggrGi!=null && tn?.type==='32'){
+      // 聚合节点变量：清 mergeGroups[gi].variables[vi]
+      const grp=tn.data.inputs?.mergeGroups?.[info.aggrGi];
+      if(grp){grp.variables=grp.variables||[];grp.variables[info.aggrVi]={type:'string',value:{type:'literal',content:''}};toast('已断开变量线');}
+    }else{
+      const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField);
+      if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+    }
   }
   showProps();renderAll();
 }

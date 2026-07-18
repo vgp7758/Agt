@@ -840,9 +840,10 @@ def _handle_subworkflow(node: dict, ctx) -> dict:
     canvas = _find_local_workflow(ctx, wf_id)
     if canvas is None:
         raise WorkflowError(f"子工作流未找到：{wf_id!r}（本地按 .agent/workflows/<名>.json 的 name/文件名匹配）")
-    result = execute(canvas, params, tools=ctx.tools, llm=ctx.llm, emit=ctx.emit, workspace=ctx.workspace)
-    parsed = _try_parse(result)
-    outputs = {"output": result, **parsed}
+    result = execute(canvas, params, tools=ctx.tools, llm=ctx.llm, emit=ctx.emit,
+                     workspace=ctx.workspace, return_exit_dict=True)
+    # 子工作流输出保留 end 字段结构：output=整个 end dict（可 .field 引用），字段同时平铺
+    outputs = {"output": result, **(result if isinstance(result, dict) else {})}
     return {"outputs": outputs, "port": None}
 
 
@@ -976,19 +977,23 @@ def _bind_entry(entry: dict, inputs: dict) -> dict:
     return bound
 
 
-def _handle_exit(node: dict, ctx) -> str:
-    """结束节点：按 terminatePlan 返回。
-    returnVariables → 把 inputParameters 求值成 dict；useAnswerContent → 渲染 content 模板。"""
+def _exit_result(node: dict, ctx) -> dict:
+    """结束节点的结果 dict（结构化，不 stringify）。
+    returnVariables → {字段名: 值}；useAnswerContent → {output: 渲染文本}。
+    子工作流用此拿结构化输出（保持 end 字段结构）。"""
     inputs = node.get("data", {}).get("inputs", {})
     plan = inputs.get("terminatePlan", "returnVariables")
     if plan == "useAnswerContent":
         params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
         text = resolve_value(inputs.get("content"), ctx)
-        return render_template(str(text), params)
-    result = {}
-    for p in inputs.get("inputParameters", []):
-        result[p.get("name")] = resolve_value(p.get("input"), ctx)
-    return _stringify_result(result)
+        return {"output": render_template(str(text), params)}
+    return {p.get("name"): resolve_value(p.get("input"), ctx)
+            for p in inputs.get("inputParameters", [])}
+
+
+def _handle_exit(node: dict, ctx) -> str:
+    """结束节点：返回 _stringify_result（工具/wf_* 用，单键取值保持简洁）。"""
+    return _stringify_result(_exit_result(node, ctx))
 
 
 def _stringify_result(result) -> str:
@@ -1131,7 +1136,7 @@ def _resolve_filter_value(block_input, output):
     return _redirect_ref(block_input, output)
 
 
-def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000) -> str:
+def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False):
     """执行一个 Coze 画布，返回结束节点的输出（字符串）。"""
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
@@ -1148,7 +1153,8 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
 
     for _ in range(max_steps):
         if current == EXIT_ID:
-            return _handle_exit(nodes[EXIT_ID], ctx)
+            raw = _exit_result(nodes[EXIT_ID], ctx)
+            return raw if return_exit_dict else _stringify_result(raw)
         node = nodes.get(current)
         if node is None:
             raise WorkflowError(f"节点 {current} 不存在（边指向了不存在的节点）")

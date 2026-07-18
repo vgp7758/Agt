@@ -1423,24 +1423,10 @@ def get_auto_workflows(workspace: Path = None) -> list[dict]:
 
 
 def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple[list, list]:
-    """每轮调用：清掉旧 wf_* 工具 + 旧用户工具，按当前 .agent/workflows/ 重新注册。
-    返回 (ok_names, broken)。用户工具(.agent/workflows/tools/*.py)也在此注册。"""
+    """每轮调用：清掉旧 wf_* 工具，按当前 .agent/workflows/ 重新注册。返回 (ok_names, broken)。
+    本地脚本不再自动注册为工具——改用内置 run_script(script, payload) 工具执行（见 real_tools）。"""
     workspace = workspace or WORKSPACE
     toolbox.drop(WF_PREFIX)
-    # 清理上次注册的用户工具（来自 tools/*.py）
-    for nm in _LOADED_USER_TOOLS:
-        toolbox.unregister(nm)
-    _LOADED_USER_TOOLS.clear()
-    # 加载用户 py 工具：不覆盖同名内置工具（内置优先）
-    user_tools, tool_errs = load_user_tools(workspace)
-    for t in user_tools:
-        if t.name in toolbox:
-            continue
-        try:
-            toolbox.register(t)
-            _LOADED_USER_TOOLS.add(t.name)
-        except Exception:
-            pass
     ok, broken = [], []
     for item in scan_workflows(workspace):
         meta = item["meta"] or {}

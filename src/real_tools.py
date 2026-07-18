@@ -480,6 +480,37 @@ def run_shell(command: str) -> str:
     return _run_subprocess_streaming(command, "run_shell", shell=True)
 
 
+def run_script(script: str, payload: str = "") -> str:
+    """运行本地 Python 脚本并返回其 stdout——用于在工作流中执行自己写的处理脚本。
+    script: 脚本路径（相对 workspace，如 'tools/analyze.py' 或 '.agent/workflows/tools/x.py'）；
+    payload: 传给脚本的 JSON 负载，脚本通过环境变量 PAYLOAD 读取（json.loads 后使用）。
+    【工作流用法】前置一个 ToJSON 节点把若干输入组装成 JSON，output 接本节点 payload；
+    脚本约定：读 os.environ['PAYLOAD'] 取参数、print 输出结果（后续可接 FromJSON 解析）。"""
+    import subprocess
+    import sys
+    import os
+    target = _resolve(script)
+    if not target.exists():
+        return f"[脚本不存在] {script}（相对 workspace，如 tools/xxx.py）"
+    if target.suffix.lower() not in (".py", ".pyw"):
+        return f"[仅支持 .py 脚本] {script}"
+    env = dict(os.environ)
+    env["PAYLOAD"] = payload or ""
+    try:
+        proc = subprocess.run([sys.executable, str(target)], capture_output=True, text=True,
+                              timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
+                              encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return f"[脚本执行超时（>{TOOL_TIMEOUT}s），可用 set_tool_timeout 调大]"
+    except Exception as e:
+        return f"[执行失败] {type(e).__name__}: {e}"
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        return f"[脚本出错 rc={proc.returncode}]\nstderr: {err[-500:]}\nstdout: {out[-500:]}"
+    return out or "(无输出)"
+
+
 def set_tool_timeout(seconds: int) -> str:
     """设置 run_python / run_shell 的超时秒数（默认 10）。
     某些工具调用可能很长（如模拟、训练），可调大到 600（10分钟）甚至 1800（30分钟）。
@@ -568,6 +599,7 @@ REAL_TOOLS = Toolbox(
     Tool(open_url),
     Tool(read_workflow_spec),
     Tool(run_shell),
+    Tool(run_script),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
 )

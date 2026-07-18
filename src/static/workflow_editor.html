@@ -80,6 +80,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <select id="fileSel"><option value="">选择工作流…</option></select>
   <button onclick="WE.createWf()">➕ 新建</button>
   <button onclick="WE.saveWf()">💾 保存</button>
+  <select id="saveFormat" title="保存格式（XML：代码/提示词 CDATA 免转义，适合手写）"><option value="json">存为 JSON</option><option value="xml">存为 XML</option></select>
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
   <button onclick="autoLayout()" title="按流程方向分层自动布局，孤立节点纵向罗列">📐 自动布局</button>
@@ -1769,8 +1770,9 @@ async function openWf(name){
   document.getElementById('fcoze').value=WF.meta.coze_url||'';
   document.getElementById('fauto').checked=!!WF.meta.auto;
   document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
+  const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
-  selNode=null;showProps();renderAll();toast('已打开 '+name);
+  selNode=null;showProps();renderAll();toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
 }
 async function saveWf(){
   // 子画布中：先退出所有层级
@@ -1783,10 +1785,11 @@ async function saveWf(){
   WF.meta.auto_param=document.getElementById('fautoparam').value||'query';
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};
-  const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta});
+  const fmt=(document.getElementById('saveFormat')||{}).value||'json';
+  const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}
   WF.name=r.name||name;document.getElementById('fileSel').value=WF.name;
-  document.getElementById('fstatus').textContent='✅ 已保存';
+  document.getElementById('fstatus').textContent='✅ 已保存 ('+(r.format||fmt).toUpperCase()+')';
   setTimeout(()=>document.getElementById('fstatus').textContent='',3000);
   await loadFileList();
 }

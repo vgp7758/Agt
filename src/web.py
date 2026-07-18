@@ -183,45 +183,92 @@ async def api_tools():
 
 @app.get("/api/wf/{name}")
 async def api_wf_get(name: str):
-    """获取单个工作流的画布 JSON + meta。"""
-    try:
-        jf = _safe_wf_path(name)
-        mp = jf.with_name(jf.name + ".meta")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not jf.exists():
-        return {"error": f"工作流 {name!r} 不存在"}
+    """获取单个工作流画布 JSON + meta。优先 .json，否则 .xml（转 JSON）。"""
     import json as _j
-    canvas = _j.loads(jf.read_text(encoding="utf-8"))
-    meta = {}
-    if mp.exists():
+    import re
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
+    jf = _WF_DIR / f"{safe}.json"
+    xf = _WF_DIR / f"{safe}.xml"
+    if jf.exists():
+        canvas = _j.loads(jf.read_text(encoding="utf-8"))
+        meta = {}
+        mp = jf.with_name(jf.name + ".meta")
+        if mp.exists():
+            try:
+                meta = _j.loads(mp.read_text(encoding="utf-8")) or {}
+            except Exception:
+                meta = {}
+        meta.setdefault("name", safe)
+        return {"name": safe, "canvas": canvas, "meta": meta, "format": "json"}
+    if xf.exists():
+        # XML：转 canvas，meta 从根属性（复用 scan 的解析）
+        from workflow_xml import xml_to_canvas, WorkflowXmlError
+        import xml.etree.ElementTree as ET
         try:
-            meta = _j.loads(mp.read_text(encoding="utf-8")) or {}
-        except Exception:
-            meta = {}
-    meta.setdefault("name", jf.stem)
-    return {"name": jf.stem, "canvas": canvas, "meta": meta}
+            xml_text = xf.read_text(encoding="utf-8")
+            root = ET.fromstring(xml_text)
+            meta = {"name": root.get("name") or safe,
+                    "description": root.get("description", ""),
+                    "coze_url": root.get("coze_url", "")}
+            xmp = xf.with_name(xf.name + ".meta")
+            if xmp.exists():
+                try:
+                    meta = {**meta, **(_j.loads(xmp.read_text(encoding="utf-8")) or {})}
+                except Exception:
+                    pass
+            canvas = xml_to_canvas(xml_text)
+        except (WorkflowXmlError, ET.ParseError) as e:
+            return {"error": f"XML 解析失败：{e}"}
+        meta.setdefault("name", safe)
+        return {"name": safe, "canvas": canvas, "meta": meta, "format": "xml"}
+    return {"error": f"工作流 {name!r} 不存在"}
 
 
 @app.put("/api/wf/{name}")
 async def api_wf_save(name: str, request: Request):
-    """保存工作流画布 + meta。请求体: {canvas, meta}。"""
+    """保存工作流画布 + meta。请求体: {canvas, meta, format?}。
+    format='xml' 时转成 XML 写 .xml（meta 入根属性）；否则写 Coze JSON .json + .meta。
+    切换格式时删除另一扩展名的旧文件，避免同名重复。"""
     import json as _j
-    try:
-        jf = _safe_wf_path(name)
-        mp = jf.with_name(jf.name + ".meta")
-    except ValueError as e:
-        return {"error": str(e)}
+    import re
     try:
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
     canvas = body.get("canvas") or {}
     meta = body.get("meta") or {}
-    meta.setdefault("name", name.replace(".json", ""))
+    fmt = (body.get("format") or "json").lower()
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_") or "workflow"
+    meta.setdefault("name", safe)
     _WF_DIR.mkdir(parents=True, exist_ok=True)
-    jf.write_text(_j.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
-    mp.write_text(_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    if fmt == "xml":
+        from workflow_xml import canvas_to_xml
+        xf = _WF_DIR / f"{safe}.xml"
+        try:
+            xf.write_text(canvas_to_xml(canvas, meta), encoding="utf-8")
+        except Exception as e:
+            return {"error": f"转 XML 失败：{type(e).__name__}: {e}"}
+        # 切换格式：删除同名 .json / .json.meta（meta 已入 XML 根属性）
+        for old in (_WF_DIR / f"{safe}.json", _WF_DIR / f"{safe}.json.meta", _WF_DIR / f"{safe}.xml.meta"):
+            if old.exists():
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        saved_name = safe
+    else:
+        jf = _WF_DIR / f"{safe}.json"
+        mp = jf.with_name(jf.name + ".meta")
+        jf.write_text(_j.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
+        mp.write_text(_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 切换格式：删除同名 .xml
+        xo = _WF_DIR / f"{safe}.xml"
+        if xo.exists():
+            try:
+                xo.unlink()
+            except OSError:
+                pass
+        saved_name = safe
     # 如果 Agent存在，刷新工作流工具
     global _agent
     if _agent is not None:
@@ -229,7 +276,7 @@ async def api_wf_save(name: str, request: Request):
             refresh_workflow_tools(_agent.tools, WORKSPACE, _agent)
         except Exception:
             pass
-    return {"ok": True, "name": jf.stem}
+    return {"ok": True, "name": saved_name, "format": fmt}
 
 
 @app.post("/api/wf/create")

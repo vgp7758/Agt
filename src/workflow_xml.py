@@ -90,17 +90,19 @@ def _text_block(el) -> str:
 
 
 def _cond(el) -> dict:
-    """<cond op="13" left="NODE.field" right="60"/> → selector 条件项"""
+    """<cond op="13" left="NODE.field" right="60" left_type="integer"/> → selector 条件项"""
     op = int(el.get("op", "1"))
     left_ref = el.get("left", "")
-    left_input = {"type": "string", "value": _ref_input(left_ref)} if left_ref \
-        else {"type": "string", "value": {"type": "literal", "content": ""}}
+    lt = el.get("left_type", "string")
+    left_input = {"type": lt, "value": _ref_input(left_ref)} if left_ref \
+        else {"type": lt, "value": {"type": "literal", "content": ""}}
     rv = el.get("right", "")
+    rt = el.get("right_type", "string")
     if rv.startswith("ref:"):
-        right_input = {"type": "string", "value": _ref_input(rv[4:])}
+        right_input = {"type": rt, "value": _ref_input(rv[4:])}
     else:
         val = rv[8:] if rv.startswith("literal:") else rv
-        right_input = {"type": "string", "value": {"type": "literal", "content": val}}
+        right_input = {"type": rt, "value": {"type": "literal", "content": _parse_val(val, rt)}}
     return {"operator": op, "left": {"input": left_input}, "right": {"input": right_input}}
 
 
@@ -248,3 +250,174 @@ def _node_to_json(nd) -> dict:
         for p in nd.findall("param"):
             inp[p.get("name")] = _text_block(p)
     return node
+
+
+# ========== 反向：Coze JSON → XML（保存时用）==========
+from xml.sax.saxutils import quoteattr, escape as _xml_escape
+
+
+def _qa(s):
+    return quoteattr("" if s is None else str(s))
+
+
+def _cdata(text):
+    # CDATA 内若含 ]]> 需拆分（极罕见），这里简单处理
+    return "<![CDATA[" + ("" if text is None else str(text)) + "]]>"
+
+
+def _ref_of(block_input):
+    """BlockInput → 'NODEID.field'（若是 ref），否则空串"""
+    v = block_input.get("value", block_input) if isinstance(block_input, dict) else {}
+    if isinstance(v, dict) and v.get("type") == "ref":
+        c = v.get("content", {}) or {}
+        return f'{c.get("blockID", "")}.{c.get("name", "")}'.strip(".")
+    return ""
+
+
+def _lit_of(block_input):
+    v = block_input.get("value", block_input) if isinstance(block_input, dict) else {}
+    return v.get("content", "") if isinstance(v, dict) else ""
+
+
+def _in_to_xml(p):
+    name = p.get("name", "")
+    inp = p.get("input", {}) or {}
+    typ = inp.get("type", "string")
+    ref = _ref_of(inp)
+    if ref:
+        return f'<in name={_qa(name)} ref={_qa(ref)} type={_qa(typ)}/>'
+    return f'<in name={_qa(name)} literal={_qa(_lit_of(inp))} type={_qa(typ)}/>'
+
+
+def _cond_to_xml(c):
+    op = c.get("operator", "")
+    left = (c.get("left") or {}).get("input", {}) or {}
+    right = (c.get("right") or {}).get("input", {}) or {}
+    lref = _ref_of(left)
+    rref = _ref_of(right)
+    lt = left.get("type") or "string"
+    rt = right.get("type") or "string"
+    r = f"ref:{rref}" if rref else str(_lit_of(right))
+    a = f'op={_qa(op)} left={_qa(lref)} right={_qa(r)}'
+    if lt != "string":
+        a += f' left_type={_qa(lt)}'
+    if rt != "string":
+        a += f' right_type={_qa(rt)}'
+    return f'<cond {a}/>'
+
+
+def _node_to_xml(n):
+    nid = str(n.get("id", ""))
+    ntype = str(n.get("type", ""))
+    name = TYPE_NUM_TO_NAME.get(ntype, ntype)
+    data = n.get("data", {}) or {}
+    inp = data.get("inputs", {}) or {}
+    out = data.get("outputs", []) or []
+    title = (data.get("nodeMeta") or {}).get("title", name)
+    attrs = f'id={_qa(nid)} type={_qa(name)} title={_qa(title)}'
+    inner = []
+
+    def out_el(o):
+        return f'<out name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}/>'
+
+    if ntype == "1":
+        for o in out:
+            a = f'name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}'
+            if o.get("required"):
+                a += ' required="true"'
+            if "defaultValue" in o:
+                a += f' default={_qa(o["defaultValue"])}'
+            inner.append(f"<out {a}/>")
+    elif ntype == "2":
+        for p in inp.get("inputParameters", []):
+            pi = p.get("input", {}) or {}
+            ref = _ref_of(pi)
+            typ = pi.get("type", "string")
+            if ref:
+                inner.append(f'<out name={_qa(p.get("name",""))} ref={_qa(ref)} type={_qa(typ)}/>')
+            else:
+                inner.append(f'<out name={_qa(p.get("name",""))} literal={_qa(_lit_of(pi))} type={_qa(typ)}/>')
+    elif ntype == "3":
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        for p in inp.get("llmParam", []):
+            pi = p.get("input", {}) or {}
+            inner.append(f'<param name={_qa(p.get("name",""))} type={_qa(pi.get("type","string"))}>{_cdata(_lit_of(pi))}</param>')
+        inner.extend(out_el(o) for o in out)
+    elif ntype == "5":
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.append(f'<code language="{inp.get("language", 3)}">{_cdata(inp.get("code", ""))}</code>')
+        inner.extend(out_el(o) for o in out)
+    elif ntype == "4":
+        attrs += f' toolName={_qa(data.get("toolName", ""))}'
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
+    elif ntype == "15":
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        cr = next((p for p in inp.get("concatParams", []) if p.get("name") == "concatResult"), None)
+        if cr:
+            inner.append(f'<result>{_cdata(_lit_of(cr.get("input", {})))}</result>')
+    elif ntype == "8":
+        for br in inp.get("branches", []):
+            cs = (br.get("condition") or {}).get("conditions", [])
+            inner.append("<branch>" + "".join(_cond_to_xml(c) for c in cs) + "</branch>" if cs else "<branch/>")
+    elif ntype == "32":
+        for g in inp.get("mergeGroups", []):
+            vs = "".join(f'<var ref={_qa(_ref_of(v.get("value", v)))}/>' for v in g.get("variables", []))
+            inner.append(f'<group name={_qa(g.get("name",""))}>{vs}</group>')
+    elif ntype == "22":
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(f'<intent name={_qa(it.get("name",""))}/>' for it in inp.get("intents", []))
+    elif ntype == "9":
+        attrs += f' workflowId={_qa(inp.get("workflowId", ""))}'
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+    elif ntype == "45":
+        api = inp.get("apiInfo", {}) or {}
+        inner.append(f'<method>{_xml_escape(api.get("method", "GET"))}</method>')
+        inner.append(f'<url>{_cdata(api.get("url", ""))}</url>')
+        for h in inp.get("headers", []):
+            inner.append(f'<header name={_qa(h.get("name",""))} value={_qa(_lit_of(h.get("input", {})))}/>')
+        body = inp.get("body", {}) or {}
+        if body.get("bodyType") and body.get("bodyType") != "EMPTY":
+            inner.append(f'<body type={_qa(body.get("bodyType","JSON"))}>{_cdata((body.get("bodyData") or {}).get("json",""))}</body>')
+    elif ntype in ("58", "59"):
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+    elif ntype == "13":
+        c = inp.get("content")
+        if c:
+            inner.append(f'<content>{_cdata(_lit_of(c))}</content>')
+    elif ntype == "40":
+        for p in inp.get("inputParameters", []):
+            path = ((p.get("left") or {}).get("value", {}).get("content", {}).get("path") or [""])[0]
+            inner.append(f'<in name={_qa(p.get("name","var"))} path={_qa(path)} literal={_qa(_lit_of(p.get("input", {})))}/>')
+    else:
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
+
+    if not inner:
+        return f"  <node {attrs}/>"
+    body = "\n    ".join(inner)
+    return f"  <node {attrs}>\n    {body}\n  </node>"
+
+
+def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
+    """Coze 画布 JSON → XML 字符串。meta 放 <workflow> 根属性。"""
+    meta = meta or {}
+    attrs = f'name={_qa(meta.get("name", ""))} description={_qa(meta.get("description", ""))}'
+    if meta.get("coze_url"):
+        attrs += f' coze_url={_qa(meta["coze_url"])}'
+    if meta.get("auto"):
+        attrs += ' auto="true"'
+        if meta.get("auto_param"):
+            attrs += f' auto_param={_qa(meta["auto_param"])}'
+    lines = [f"<workflow {attrs}>"]
+    for n in canvas.get("nodes", []):
+        lines.append(_node_to_xml(n))
+    for e in canvas.get("edges", []):
+        port = e.get("sourcePortID", "") or ""
+        ea = f'from={_qa(str(e.get("sourceNodeID","")))} to={_qa(str(e.get("targetNodeID","")))}'
+        if port:
+            ea += f' port={_qa(port)}'
+        lines.append(f"  <edge {ea}/>")
+    lines.append("</workflow>")
+    return "\n".join(lines) + "\n"
+

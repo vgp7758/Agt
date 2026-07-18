@@ -138,6 +138,10 @@ def _node_to_json(nd) -> dict:
     title = nd.get("title") or TYPE_NUM_TO_NAME.get(ntype, ntype)
     node = {"id": nid, "type": ntype,
             "data": {"nodeMeta": {"title": title}, "inputs": {}, "outputs": []}}
+    if nd.get("x") is not None:
+        node["x"] = _parse_val(nd.get("x"), "number")
+    if nd.get("y") is not None:
+        node["y"] = _parse_val(nd.get("y"), "number")
     inp = node["data"]["inputs"]
     out = node["data"]["outputs"]
 
@@ -315,6 +319,10 @@ def _node_to_xml(n):
     out = data.get("outputs", []) or []
     title = (data.get("nodeMeta") or {}).get("title", name)
     attrs = f'id={_qa(nid)} type={_qa(name)} title={_qa(title)}'
+    if n.get("x") is not None:
+        attrs += f' x={_qa(n["x"])}'
+    if n.get("y") is not None:
+        attrs += f' y={_qa(n["y"])}'
     inner = []
 
     def out_el(o):

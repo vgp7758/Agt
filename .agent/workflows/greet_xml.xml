@@ -1,0 +1,17 @@
+<workflow name="greet_xml" description="热情打招呼（XML 格式示例）">
+  <node id="100001" type="start">
+    <out name="name" type="string" required="true"/>
+  </node>
+  <node id="130001" type="llm">
+    <in name="name" ref="100001.name"/>
+    <param name="prompt"><![CDATA[用一句话热情地打招呼，对方名字是 {{name}}。只输出问候语本身。]]></param>
+    <param name="systemPrompt"><![CDATA[你是友好的助手。]]></param>
+    <param name="temperature" type="float" literal="0.9"/>
+    <out name="output" type="string"/>
+  </node>
+  <node id="900001" type="end">
+    <out name="greeting" ref="130001.output"/>
+  </node>
+  <edge from="100001" to="130001"/>
+  <edge from="130001" to="900001"/>
+</workflow>

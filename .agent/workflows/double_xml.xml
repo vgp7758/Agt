@@ -1,0 +1,19 @@
+<workflow name="double_xml" description="翻倍（XML：代码块用 CDATA，内部引号/花括号免转义）">
+  <node id="100001" type="start">
+    <out name="x" type="number" required="true"/>
+  </node>
+  <node id="500001" type="code">
+    <in name="x" ref="100001.x"/>
+    <code><![CDATA[
+async def main(args):
+    x = args.params["x"]
+    return {"y": x * 2, "info": f"double of {x}"}
+]]></code>
+    <out name="y" type="number"/>
+  </node>
+  <node id="900001" type="end">
+    <out name="result" ref="500001.y"/>
+  </node>
+  <edge from="100001" to="500001"/>
+  <edge from="500001" to="900001"/>
+</workflow>

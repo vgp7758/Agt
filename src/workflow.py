@@ -1286,11 +1286,13 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
 
 
 def scan_workflows(workspace: Path = None) -> list[dict]:
-    """扫描 .agent/workflows/*.json，返回 [{name, path, meta_path, meta, canvas, error}]。"""
+    """扫描 .agent/workflows/ 下 *.json 与 *.xml，返回 [{name, path, meta_path, meta, canvas, error}]。
+    .xml（模型友好格式，代码块用 CDATA 免转义）在扫描时转成 Coze JSON canvas。"""
     d = (workspace or WORKSPACE) / ".agent" / "workflows"
     if not d.exists():
         return []
     out = []
+    # JSON 工作流
     for jf in sorted(d.glob("*.json")):
         if jf.name.endswith(".meta"):
             continue
@@ -1316,6 +1318,46 @@ def scan_workflows(workspace: Path = None) -> list[dict]:
             item["warnings"] = validate_canvas_detailed(item["canvas"])
         except WorkflowError as e:
             item["error"] = str(e)
+        out.append(item)
+    # XML 工作流（转 JSON；meta 从根属性读，可被 .xml.meta 覆盖）
+    out.extend(_scan_xml_workflows(d))
+    return out
+
+
+def _scan_xml_workflows(d: Path) -> list[dict]:
+    """扫描 *.xml（排除 .meta），转成 Coze JSON canvas。meta 优先根属性，.xml.meta 可覆盖。"""
+    import xml.etree.ElementTree as ET
+    from workflow_xml import xml_to_canvas, WorkflowXmlError
+    out = []
+    for xf in sorted(d.glob("*.xml")):
+        if xf.name.endswith(".meta"):
+            continue
+        meta_path = xf.with_name(xf.name + ".meta")
+        item = {"name": xf.stem, "path": xf, "meta_path": meta_path,
+                "meta": None, "canvas": None, "error": None, "warnings": []}
+        try:
+            xml_text = xf.read_text(encoding="utf-8")
+            root = ET.fromstring(xml_text)
+            meta = {"name": root.get("name") or xf.stem,
+                    "description": root.get("description", ""),
+                    "coze_url": root.get("coze_url", ""),
+                    "enabled": root.get("enabled", "true") != "false"}
+            if root.get("auto"):
+                meta["auto"] = root.get("auto") == "true"
+            if root.get("auto_param"):
+                meta["auto_param"] = root.get("auto_param")
+            if meta_path.exists():
+                try:
+                    meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}
+                except Exception:
+                    pass
+            item["meta"] = meta
+            item["canvas"] = xml_to_canvas(xml_text)
+            item["warnings"] = validate_canvas_detailed(item["canvas"])
+        except (WorkflowXmlError, ET.ParseError) as e:
+            item["error"] = f"XML 解析失败：{e}"
+        except Exception as e:
+            item["error"] = f"{type(e).__name__}: {e}"
         out.append(item)
     return out
 

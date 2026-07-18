@@ -496,6 +496,11 @@ def run_script(script: str, payload: str = "") -> str:
         return f"[仅支持 .py 脚本] {script}"
     env = dict(os.environ)
     env["PAYLOAD"] = payload or ""
+    # 把 workspace 加入 PYTHONPATH，让脚本能 import workspace 内其它模块（如 tools/ 下的辅助模块）
+    pp = str(WORKSPACE)
+    if env.get("PYTHONPATH"):
+        pp = pp + os.pathsep + env["PYTHONPATH"]
+    env["PYTHONPATH"] = pp
     try:
         proc = subprocess.run([sys.executable, str(target)], capture_output=True, text=True,
                               timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),

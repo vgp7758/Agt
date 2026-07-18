@@ -123,7 +123,8 @@ def _resolve_object_ref(block_input: dict, ctx) -> dict:
 
 
 def render_template(text: str, params: dict) -> str:
-    """把 {{name}} / {{a.b}} 替换为 params 中的值；dict/list 转 JSON，None 转空串。"""
+    """把 {{name}} / ${name} / {{a.b}} / ${a.b} 替换为 params 中的值；
+    dict/list 转 JSON，None 转空串。同时支持 {{}} 与 ${} 两种占位语法。"""
     def _repl(m):
         val = _dotted_get(params, m.group(1).strip())
         if val is None:
@@ -131,7 +132,9 @@ def render_template(text: str, params: dict) -> str:
         if isinstance(val, (dict, list)):
             return json.dumps(val, ensure_ascii=False)
         return str(val)
-    return re.sub(r"\{\{([^}]+)\}\}", _repl, text or "")
+    # 先 ${...}，再 {{...}}（两种风格都支持）
+    out = re.sub(r"\$\{([^}]+)\}", _repl, text or "")
+    return re.sub(r"\{\{([^}]+)\}\}", _repl, out)
 
 
 def _resolve_input_params(params_list: list, ctx) -> dict:
@@ -674,26 +677,58 @@ def _render_http_template(text: str, ctx) -> str:
 
 
 def _find_local_workflow(ctx, wf_id: str):
-    """按 workflowId 在 .agent/workflows/ 找本地工作流（匹配 meta.name 或文件名）。"""
+    """按 workflowId 在 .agent/workflows/ 找本地工作流（匹配 meta.name 或文件名）。
+    支持 .json 与 .xml（XML 读入时转 JSON）。"""
     d = ctx.workspace / ".agent" / "workflows"
     if not d.exists():
         return None
+    # 收集候选：{path, stem, name}
+    cands = []
     for jf in sorted(d.glob("*.json")):
         if jf.name.endswith(".meta"):
             continue
-        name = jf.stem
-        meta_p = jf.with_name(jf.name + ".meta")
-        if meta_p.exists():
-            try:
-                name = (json.loads(meta_p.read_text(encoding="utf-8")) or {}).get("name", jf.stem)
-            except Exception:
-                pass
-        if wf_id in (jf.stem, name):
-            try:
-                return json.loads(jf.read_text(encoding="utf-8"))
-            except Exception:
-                return None
+        name = _read_meta_name(jf, jf.stem)
+        cands.append((jf, jf.stem, name))
+    for xf in sorted(d.glob("*.xml")):
+        if xf.name.endswith(".meta"):
+            continue
+        name = _read_meta_name(xf, xf.stem)
+        cands.append((xf, xf.stem, name))
+    for path, stem, name in cands:
+        if wf_id in (stem, name):
+            return _load_canvas(path)
     return None
+
+
+def _read_meta_name(path: Path, default: str) -> str:
+    """从 path.meta 或 XML 根属性读 name；失败返回 default。"""
+    meta_p = path.with_name(path.name + ".meta")
+    if meta_p.exists():
+        try:
+            return (json.loads(meta_p.read_text(encoding="utf-8")) or {}).get("name", default)
+        except Exception:
+            pass
+    if path.suffix.lower() == ".xml":
+        try:
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(path.read_text(encoding="utf-8"))
+            return root.get("name") or default
+        except Exception:
+            pass
+    return default
+
+
+def _load_canvas(path: Path):
+    """读 .json（直接）或 .xml（转 JSON）。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() == ".xml":
+            from workflow_xml import xml_to_canvas
+            return xml_to_canvas(text)
+        return json.loads(text)
+    except Exception:
+        return None
+
 
 
 def _handle_intent(node: dict, ctx) -> dict:

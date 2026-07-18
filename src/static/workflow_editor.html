@@ -1581,8 +1581,26 @@ function importJSONSchema(){
     if(f.schema)o.schema=f.schema;
     return o;
   });
+  // 自动展开导入产生的 object 字段（默认折叠看不到子字段）
+  _uncollapseOutputs(n);
   showProps();renderAll();
   toast('已导入 '+fields.length+' 个字段');
+}
+// 递归清除 outputs 中 object 字段的折叠状态，导入后子字段立即可见
+function _uncollapseOutputs(n){
+  const key = (field) => n.id + '::' + field + '::out';
+  const walk = (fields, prefix) => {
+    (fields||[]).forEach(f => {
+      const k = key(prefix ? prefix + '.' + f.name : f.name);
+      collapsedFields.delete(k);
+      if (f.type === 'object' && f.schema) walk(f.schema, prefix ? prefix + '.' + f.name : f.name);
+      else if (f.type === 'list' && f.schema) {
+        if (Array.isArray(f.schema)) walk(f.schema, prefix ? prefix + '.' + f.name : f.name);
+        else collapsedFields.delete(key(prefix ? prefix + '.' + f.name : f.name));
+      }
+    });
+  };
+  walk(n.data.outputs, '');
 }
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}

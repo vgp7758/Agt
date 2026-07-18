@@ -156,6 +156,121 @@ async def main(args):
 </workflow>
 ```
 
+### 完整 XML 示例（覆盖 15 种节点类型）
+
+以下 `full_demo.xml` 用 XML 写了一个"用户问题处理"工作流，把能自然串联的节点类型全部覆盖 —— 意图分流 → 各分支（代码计算、plugin 调工具转大写、fromjson 解析、text 格式化 → HTTP 查询 → fromjson 解析 → selector 条件分流 → output / llm）→ subworkflow 闲聊 → aggregator 汇合 → assigner 赋值 → tojson 序列化 → 结束：
+
+```xml
+<workflow name="full_demo" description="全节点类型演示：意图分流→各分支处理→聚合→序列化">
+  <!-- 开始 -->
+  <node id="100001" type="start">
+    <out name="question" type="string" required="true"/>
+  </node>
+
+  <!-- 意图识别：计算/查询/闲聊 -->
+  <node id="200001" type="intent">
+    <in name="query" ref="100001.question"/>
+    <intent name="计算"/>
+    <intent name="查询"/>
+  </node>
+
+  <!-- 分支0(计算)：code 算 → plugin 转大写 → fromjson 解析字段 → text 格式化 -->
+  <node id="300001" type="code">
+    <in name="question" ref="100001.question"/>
+    <code><![CDATA[
+async def main(args):
+    q = args.params.get("question", "")
+    return {"calc_result": f"输入长度={len(q)}"}
+]]></code>
+    <out name="calc_result" type="string"/>
+  </node>
+  <node id="310001" type="plugin" toolName="to_uppercase">
+    <in name="text" ref="300001.calc_result"/>
+    <out name="raw" type="string"/>
+  </node>
+  <node id="315001" type="fromjson">
+    <in name="input" ref="310001.raw"/>
+  </node>
+  <node id="320001" type="text">
+    <in name="r" ref="315001.output"/>
+    <result><![CDATA[🧮 计算分支：{{r}}]]></result>
+  </node>
+
+  <!-- 分支1(查询)：http 查 → fromjson 解析 → selector 按字段分流 → output / llm -->
+  <node id="400001" type="http">
+    <method>GET</method>
+    <url><![CDATA[https://httpbin.org/json]]></url>
+  </node>
+  <node id="410001" type="fromjson">
+    <in name="input" ref="400001.body"/>
+  </node>
+  <node id="420001" type="selector">
+    <branch><cond op="7" left="410001.output.slideshow.author" right="Yours"/></branch>
+    <branch/>
+  </node>
+  <node id="430001" type="output">
+    <content><![CDATA[✅ 查询命中]]></content>
+  </node>
+  <node id="440001" type="llm">
+    <in name="question" ref="100001.question"/>
+    <param name="prompt"><![CDATA[查询未命中。用一句话说明，问题：{{question}}]]></param>
+    <out name="output" type="string"/>
+  </node>
+
+  <!-- default(闲聊)：子工作流 greet_xml -->
+  <node id="500001" type="subworkflow" workflowId="greet_xml">
+    <in name="name" ref="100001.question"/>
+  </node>
+
+  <!-- 聚合：汇合四条路径（实际只一条执行，aggregator 取已执行者） -->
+  <node id="600001" type="aggregator">
+    <group name="answer">
+      <var ref="320001.output"/>
+      <var ref="430001.output"/>
+      <var ref="440001.output"/>
+      <var ref="500001.output"/>
+    </group>
+  </node>
+
+  <!-- 赋值：设全局 processed=true -->
+  <node id="610001" type="assigner">
+    <in name="status" path="processed" literal="true"/>
+  </node>
+
+  <!-- 序列化 -->
+  <node id="620001" type="tojson">
+    <in name="input" ref="600001.answer"/>
+  </node>
+
+  <!-- 结束 -->
+  <node id="900001" type="end">
+    <out name="result" ref="620001.output"/>
+  </node>
+
+  <!-- 流程边 -->
+  <edge from="100001" to="200001"/>
+  <edge from="200001" to="300001" port="branch_0"/>
+  <edge from="200001" to="400001" port="branch_1"/>
+  <edge from="200001" to="500001" port="default"/>
+  <edge from="300001" to="310001"/>
+  <edge from="310001" to="315001"/>
+  <edge from="315001" to="320001"/>
+  <edge from="400001" to="410001"/>
+  <edge from="410001" to="420001"/>
+  <edge from="420001" to="430001" port="true"/>
+  <edge from="420001" to="440001" port="false"/>
+  <edge from="320001" to="600001"/>
+  <edge from="430001" to="600001"/>
+  <edge from="440001" to="600001"/>
+  <edge from="500001" to="600001"/>
+  <edge from="600001" to="610001"/>
+  <edge from="610001" to="620001"/>
+  <edge from="620001" to="900001"/>
+</workflow>
+```
+
+覆盖：start / intent / code / plugin / fromjson / text / http / selector / output / llm / subworkflow / aggregator / assigner / tojson / end（15 种）。插件节点输出 `raw` 后接 fromjson 解析成字段是常用模式（工具返回 JSON 字符串 → 解析出结构化字段供下游引用）。
+
 > XML 只在读入时转 JSON；复合节点（loop/batch 的内部子画布）目前仍建议用 JSON 编辑器编辑。loop/batch 暂不支持 XML 描述内部 blocks。
 
 ---

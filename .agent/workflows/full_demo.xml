@@ -1,0 +1,106 @@
+<workflow name="full_demo" description="全节点类型演示：意图分流→各分支处理→聚合→序列化（格式演示；http/plugin/subworkflow 依赖外部资源）">
+  <!-- 开始：工作流入参 -->
+  <node id="100001" type="start">
+    <out name="question" type="string" required="true"/>
+  </node>
+
+  <!-- 意图识别：把 question 分到 计算(branch_0)/查询(branch_1)/闲聊(default) -->
+  <node id="200001" type="intent">
+    <in name="query" ref="100001.question"/>
+    <intent name="计算"/>
+    <intent name="查询"/>
+  </node>
+
+  <!-- 分支0(计算)：code 算一下 → plugin 转大写 → text 格式化 -->
+  <node id="300001" type="code">
+    <in name="question" ref="100001.question"/>
+    <code><![CDATA[
+async def main(args):
+    q = args.params.get("question", "")
+    return {"calc_result": f"输入长度={len(q)}"}
+]]></code>
+    <out name="calc_result" type="string"/>
+  </node>
+  <node id="310001" type="plugin" toolName="to_uppercase">
+    <in name="text" ref="300001.calc_result"/>
+    <out name="raw" type="string"/>
+  </node>
+  <node id="315001" type="fromjson">
+    <in name="input" ref="310001.raw"/>
+  </node>
+  <node id="320001" type="text">
+    <in name="r" ref="315001.output"/>
+    <result><![CDATA[🧮 计算分支：{{r}}]]></result>
+  </node>
+
+  <!-- 分支1(查询)：http 查询 → fromjson 解析 → selector 按字段分流 -->
+  <node id="400001" type="http">
+    <method>GET</method>
+    <url><![CDATA[https://httpbin.org/json]]></url>
+  </node>
+  <node id="410001" type="fromjson">
+    <in name="input" ref="400001.body"/>
+  </node>
+  <node id="420001" type="selector">
+    <branch><cond op="7" left="410001.output.slideshow.author" right="Yours"/></branch>
+    <branch/>
+  </node>
+  <node id="430001" type="output">
+    <content><![CDATA[✅ 查询命中演示作者]]></content>
+  </node>
+  <node id="440001" type="llm">
+    <in name="question" ref="100001.question"/>
+    <param name="prompt"><![CDATA[查询未命中。用一句话向用户说明，问题：{{question}}]]></param>
+    <out name="output" type="string"/>
+  </node>
+
+  <!-- default(闲聊)：子工作流（引用已有的 greet_xml）打招呼 -->
+  <node id="500001" type="subworkflow" workflowId="greet_xml">
+    <in name="name" ref="100001.question"/>
+  </node>
+
+  <!-- 聚合：汇合四条路径（实际只执行一条，aggregator 取已执行者） -->
+  <node id="600001" type="aggregator">
+    <group name="answer">
+      <var ref="320001.output"/>
+      <var ref="430001.output"/>
+      <var ref="440001.output"/>
+      <var ref="500001.output"/>
+    </group>
+  </node>
+
+  <!-- 赋值：记录处理状态到全局变量 processed -->
+  <node id="610001" type="assigner">
+    <in name="status" path="processed" literal="true"/>
+  </node>
+
+  <!-- 序列化为 JSON 字符串 -->
+  <node id="620001" type="tojson">
+    <in name="input" ref="600001.answer"/>
+  </node>
+
+  <!-- 结束 -->
+  <node id="900001" type="end">
+    <out name="result" ref="620001.output"/>
+  </node>
+
+  <!-- 流程边（intent 分支端口：branch_0/branch_1/default；selector：true/false） -->
+  <edge from="100001" to="200001"/>
+  <edge from="200001" to="300001" port="branch_0"/>
+  <edge from="200001" to="400001" port="branch_1"/>
+  <edge from="200001" to="500001" port="default"/>
+  <edge from="300001" to="310001"/>
+  <edge from="310001" to="315001"/>
+  <edge from="315001" to="320001"/>
+  <edge from="400001" to="410001"/>
+  <edge from="410001" to="420001"/>
+  <edge from="420001" to="430001" port="true"/>
+  <edge from="420001" to="440001" port="false"/>
+  <edge from="320001" to="600001"/>
+  <edge from="430001" to="600001"/>
+  <edge from="440001" to="600001"/>
+  <edge from="500001" to="600001"/>
+  <edge from="600001" to="610001"/>
+  <edge from="610001" to="620001"/>
+  <edge from="620001" to="900001"/>
+</workflow>

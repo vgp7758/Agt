@@ -463,11 +463,11 @@ function renderNode(n){
         }
       }else{
         // 子字段端口（缩进）
-        const port=elm('circle',{cx:0,cy:y,r:4,class:'port-var',fill:col,stroke:col});
+        const port=elm('circle',{cx:8,cy:y,r:4,class:'port-var',fill:col,stroke:col});
         port.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
         port.onmousedown=(e)=>{e.stopPropagation();};
         g.appendChild(port);
-        g.appendChild(elm('text',{x:10,y,class:'sub-row',fill:col},ir.field.split('.').pop()));
+        g.appendChild(elm('text',{x:22,y,class:'sub-row',fill:col},ir.field.split('.').pop()));
       }
     }
     // ---- 输出侧 ----
@@ -488,10 +488,10 @@ function renderNode(n){
           g.appendChild(elm('text',{x:n.w-10,y,class:'node-field-name','text-anchor':'end',fill:col},or.field));
         }
       }else{
-        const port=elm('circle',{cx:n.w,cy:y,r:4,class:'port-var',fill:col,stroke:col});
+        const port=elm('circle',{cx:n.w-8,cy:y,r:4,class:'port-var',fill:col,stroke:col});
         port.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,or.field,col,n.x+n.w,n.y+y);};
         g.appendChild(port);
-        g.appendChild(elm('text',{x:n.w-10,y,class:'sub-row','text-anchor':'end',fill:col},or.field.split('.').pop()));
+        g.appendChild(elm('text',{x:n.w-22,y,class:'sub-row','text-anchor':'end',fill:col},or.field.split('.').pop()));
       }
     }
   }
@@ -1787,6 +1787,7 @@ async function openWf(name){
   document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
+  WF.nodes.forEach(_uncollapseOutputs);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
   selNode=null;showProps();renderAll();toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
 }
 async function saveWf(){

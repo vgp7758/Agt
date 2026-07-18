@@ -289,6 +289,19 @@ class Agent:
                                           "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
                             }]
                             resp = self.llm.chat(retry_msgs, tools=tool_schemas)
+                        # 空回答保险丝：无工具调用且 content 为空（ModelScope 等偶发空响应）→ 提示重试一次
+                        if not resp.tool_calls and not (resp.content or "").strip():
+                            self._emit({"type": "warn", "text": "⚠️ 模型返回空回答，已提示重试"})
+                            try:
+                                r2 = self.llm.chat(
+                                    self.session.messages_for_llm() + [{
+                                        "role": "system",
+                                        "content": "你上一轮返回了空内容。请给出明确的最终回答，或调用工具继续完成任务，不要返回空内容。"
+                                    }], tools=tool_schemas)
+                                if r2.tool_calls or (r2.content or "").strip():
+                                    resp = r2
+                            except Exception:
+                                pass
                         if resp.usage:
                             self.cumulative_tokens += resp.usage.get("total_tokens", 0)
 

@@ -304,9 +304,9 @@ document.getElementById('btnSave').onclick=()=>{
 };
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{
-  const v=e.target.value; e.target.value='';
-  if(v==='__new__') ws.send(JSON.stringify({action:'new_session'}));
-  else sendRaw('/resume '+v, []);
+  const v=e.target.value;
+  if(v==='__new__'){ ws.send(JSON.stringify({action:'new_session'})); }
+  else { sendRaw('/resume '+v, []); window._lastSaved=v; ws.send(JSON.stringify({action:'list_sessions'})); }
 });
 document.getElementById('btnAuto').onclick=()=>{
   // 切换自主模式：发送命令

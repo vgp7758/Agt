@@ -174,20 +174,32 @@ function nodeRows(n){
   }
   return rows;
 }
+// 折叠 key 统一格式：nodeId::首段::side::后续段...（与 fieldRows 行 key 一致）
+function _rowKey(nodeId,side,path){
+  const segs=path.split('.');
+  return nodeId+'::'+segs[0]+'::'+side+(segs.length>1?'::'+segs.slice(1).join('::'):'');
+}
 function fieldRows(nodeId, f, side){
   // type20/40 用 left 代替 input 作为类型来源
   const effInput=_effInput(f)||{};
   const type=side==='in'?(effInput.type||'string'):(f.type||'string');
   const name=f.name;
-  const key=nodeId+'::'+name+'::'+side;
-  const rows=[{side,field:name,type,parent:null,sub:false,key}];
+  const key=_rowKey(nodeId,side,name);
+  const rows=[{side,field:name,type,parent:null,sub:false,key,depth:0}];
   if(type==='object' && !collapsedFields.has(key)){
-    const schema=side==='in'?(f.input?.schema):(f.schema);
-    (Array.isArray(schema)?schema:[]).forEach(s=>{
-      rows.push({side,field:name+'.'+s.name,type:s.type||'string',parent:name,sub:true,key:key+'::'+s.name});
-    });
+    _pushSubRows(rows,nodeId,side,name,(f.schema||f.input?.schema),key,1);
   }
   return rows;
+}
+// 递归铺开 object 子字段行（任意深度；depth 用于缩进；list 不展开，整体连线）
+function _pushSubRows(rows,nodeId,side,prefix,schema,parentKey,depth){
+  (Array.isArray(schema)?schema:[]).forEach(s=>{
+    const key=parentKey+'::'+s.name;
+    const path=prefix+'.'+s.name;
+    const st=s.type||'string';
+    rows.push({side,field:path,type:st,parent:prefix,sub:true,key,depth});
+    if(st==='object'&&!collapsedFields.has(key))_pushSubRows(rows,nodeId,side,path,s.schema,key,depth+1);
+  });
 }
 function nodeH(n){
   const rows=nodeRows(n).filter(r=>
@@ -462,12 +474,22 @@ function renderNode(n){
           }
         }
       }else{
-        // 子字段端口（缩进）
-        const port=elm('circle',{cx:8,cy:y,r:4,class:'port-var',fill:col,stroke:col});
+        // 子字段端口（按层级缩进；object 子字段可继续展开）
+        const cx=8*(ir.depth||1);
+        const port=elm('circle',{cx,cy:y,r:4,class:'port-var',fill:col,stroke:col});
         port.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
         port.onmousedown=(e)=>{e.stopPropagation();};
         g.appendChild(port);
-        g.appendChild(elm('text',{x:22,y,class:'sub-row',fill:col},ir.field.split('.').pop()));
+        const label=ir.field.split('.').pop();
+        if(ir.type==='object'){
+          const exp=!collapsedFields.has(ir.key);
+          const tg=elm('text',{x:cx+6,y,class:'expand-toggle',fill:col},exp?'▾':'▸');
+          tg.onclick=(e)=>{e.stopPropagation();toggleExpand(ir.key);};
+          g.appendChild(tg);
+          g.appendChild(elm('text',{x:cx+18,y,class:'sub-row',fill:col},label));
+        }else{
+          g.appendChild(elm('text',{x:cx+14,y,class:'sub-row',fill:col},label));
+        }
       }
     }
     // ---- 输出侧 ----
@@ -488,10 +510,20 @@ function renderNode(n){
           g.appendChild(elm('text',{x:n.w-10,y,class:'node-field-name','text-anchor':'end',fill:col},or.field));
         }
       }else{
-        const port=elm('circle',{cx:n.w-8,cy:y,r:4,class:'port-var',fill:col,stroke:col});
+        const cx=n.w-8*(or.depth||1);
+        const port=elm('circle',{cx,cy:y,r:4,class:'port-var',fill:col,stroke:col});
         port.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,or.field,col,n.x+n.w,n.y+y);};
         g.appendChild(port);
-        g.appendChild(elm('text',{x:n.w-22,y,class:'sub-row','text-anchor':'end',fill:col},or.field.split('.').pop()));
+        const label=or.field.split('.').pop();
+        if(or.type==='object'){
+          const exp=!collapsedFields.has(or.key);
+          const tg=elm('text',{x:cx-16,y,class:'expand-toggle',fill:col},exp?'▾':'▸');
+          tg.onclick=(e)=>{e.stopPropagation();toggleExpand(or.key);};
+          g.appendChild(tg);
+          g.appendChild(elm('text',{x:cx-26,y,class:'sub-row','text-anchor':'end',fill:col},label));
+        }else{
+          g.appendChild(elm('text',{x:cx-14,y,class:'sub-row','text-anchor':'end',fill:col},label));
+        }
       }
     }
   }
@@ -1077,14 +1109,14 @@ function showProps(){
   if(n.type!=='1'&&n.type!=='32'){
     const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
     const lockedInputs=['4','9'].includes(n.type);  // 工具/子工作流输入来自schema，锁定
-    h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button>'}</h3>`;
+    h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button> <button onclick=\"importJSONSchema(\'in\')\" title=\"粘贴JSON自动分析结构并初始化输入字段\">📋 从JSON导入</button>'}</h3>`;
     h+=renderIOFields(nodeInputs(n),'in');
   }
   // 输出字段（入口=工作流入参；意图/聚合无输出字段编辑）
   // 输出字段（入口=工作流入参；选择器/意图/聚合/复合无输出字段编辑）
   if(n.type!=='2' && !['8','21','22','28','32'].includes(n.type)){
     const label=n.type==='1'?'输入（工作流入参）':'输出字段';
-    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema()" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
+    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema('out')" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
     h+=renderIOFields(nodeOutputs(n),'out');
   }
   // 复合节点输出：nth_output 可编辑字段（定义 item 结构），all/filtered 自动跟随
@@ -1234,9 +1266,9 @@ function showProps(){
       ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
       if(lSrc==='block-output'){
-        // 下拉选本节点输入字段
-        h+='<select onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px"><option value="">--字段--</option>';
-        nodeInputs(n).forEach(ip=>{h+='<option value="'+ip.name+'"'+(lv.content?.name===ip.name?' selected':'')+'>'+ip.name+'</option>';});
+        // 跨节点选上游输出字段（含 object 子字段点号路径）
+        h+='<select onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
+        h+=_condRefOptions(n,lv.content);
         h+='</select>';
       }else if(lIsRef){
         h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
@@ -1255,8 +1287,8 @@ function showProps(){
       ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
       h+='</select>';
       if(rSrc==='block-output'){
-        h+='<select onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px"><option value="">--字段--</option>';
-        nodeInputs(n).forEach(ip=>{h+='<option value="'+ip.name+'"'+(rv.content?.name===ip.name?' selected':'')+'>'+ip.name+'</option>';});
+        h+='<select onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
+        h+=_condRefOptions(n,rv.content);
         h+='</select>';
       }else if(rIsRef){
         h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
@@ -1341,11 +1373,14 @@ function setBatchCond(side,v){
 }
 function setInputRef(i,val){
   if(!val){setInputSource(i,'literal');return;}
-  const[bid,name]=val.split('.');
+  // val = "节点id.字段路径"，字段路径可含点号（output.slideshow.author）→ 只按第一个点切
+  const dot=val.indexOf('.');
+  const bid=val.slice(0,dot), name=val.slice(dot+1);
   const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
-  const on=findN(bid);const o=nodeOutputs(on).find(o=>o.name===name);
+  const on=findN(bid);
+  const of=(on?_outFieldOptions(on):[]).find(x=>x.path===name);
   p.input.value={type:'ref',content:{source:'block-output',blockID:bid,name}};
-  if(o)p.input.type=o.type||'string';
+  if(of)p.input.type=of.type||'string';
   showProps();renderAll();
 }
 function setInputLitVal(i,v){const n=findN(selNode);setInputLiteral(n.id,i,{type:'literal',content:v});}
@@ -1395,9 +1430,9 @@ function renderIOFields(arr,kind,lockedAll){
         h+='<select onchange="setInputRef('+i+',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点--</option>';
         WF.nodes.forEach(on=>{
           if(on.id===n.id)return;
-          (nodeOutputs(on)||[]).forEach(o=>{
+          _outFieldOptions(on).forEach(o=>{
             if(o.type===inType||inType==='string'){
-              h+='<option value="'+on.id+'.'+o.name+'"'+(f.input?.value?.content?.blockID===on.id&&f.input?.value?.content?.name===o.name?' selected':'')+'>'+nodeTitle(on)+' - '+o.name+'</option>';
+              h+='<option value="'+on.id+'.'+o.path+'"'+(f.input?.value?.content?.blockID===on.id&&f.input?.value?.content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
             }
           });
         });
@@ -1432,17 +1467,41 @@ function renderObjectSubFields(f,kind,fi,ctx){
   if(ctx==='list-item'){schema=f.input?.schema||f.schema; if(Array.isArray(schema)){} else {schema=[];}}
   else {schema=f.schema||f.input?.schema||[];}
   if(!Array.isArray(schema))schema=[];
-  let h=`<tr><td colspan="3" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段:</div>`;
+  const path=(ctx==='list-item'?'i':'f')+fi;
+  let h=`<tr><td colspan="3" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段: <button onclick="importFieldSchema('${kind}','${path}')" title="粘贴JSON对象，自动推断子字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+  h+=renderSchemaFields(schema,kind,path,0);
+  h+='</td></tr>';
+  return h;
+}
+// 递归渲染 schema 字段数组（支持 object 套 object / list 的 item 为 object，任意深度）
+// path 定位当前 schema 数组：首段 f<idx>=object字段 / i<idx>=list的item；后续 o<idx>=object子字段 / l<idx>=list子字段的item
+function renderSchemaFields(schema,kind,path,depth){
+  if(depth>10)return '';
+  let h=depth?'<div style="margin-left:8px;border-left:1px solid #0f3460;padding-left:4px">':'<div>';
   schema.forEach((s,si)=>{
     const st=s.type||'string';
     h+=`<div style="display:flex;gap:2px;margin:1px 0">
-      <input value="${ext(s.name)}" placeholder="名" style="width:50px;font-size:10px" onchange="setSubField('${kind}',${fi},${si},'name',this.value,${ctx==='list-item'})">
-      <select style="width:55px;font-size:10px" onchange="setSubField('${kind}',${fi},${si},'type',this.value,${ctx==='list-item'})">${IO_TYPES.map(x=>`<option value="${x}" ${st===x?'selected':''}>${x}</option>`).join('')}</select>
-      <button class="del" onclick="delSubField('${kind}',${fi},${si},${ctx==='list-item'})">×</button></div>`;
-    h+=`<input value="${ext(s.description)}" placeholder="描述" style="width:100%;font-size:10px;color:#8a9099;margin-bottom:1px" onchange="setSubField('${kind}',${fi},${si},'description',this.value,${ctx==='list-item'})">`;
-    h+=`<label style="font-size:9px;color:#8a9099;display:inline-flex;align-items:center;gap:2px"><input type="checkbox" ${s.required?'checked':''} onchange="setSubField('${kind}',${fi},${si},'required',this.checked,${ctx==='list-item'})"> required</label>`;
+      <input value="${ext(s.name)}" placeholder="名" style="width:50px;font-size:10px" onchange="setSubFieldP('${kind}','${path}',${si},'name',this.value)">
+      <select style="width:55px;font-size:10px" onchange="setSubFieldP('${kind}','${path}',${si},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${st===x?'selected':''}>${x}</option>`).join('')}</select>
+      <button class="del" onclick="delSubFieldP('${kind}','${path}',${si})">×</button></div>`;
+    h+=`<input value="${ext(s.description)}" placeholder="描述" style="width:100%;font-size:10px;color:#8a9099;margin-bottom:1px" onchange="setSubFieldP('${kind}','${path}',${si},'description',this.value)">`;
+    h+=`<label style="font-size:9px;color:#8a9099;display:inline-flex;align-items:center;gap:2px"><input type="checkbox" ${s.required?'checked':''} onchange="setSubFieldP('${kind}','${path}',${si},'required',this.checked)"> required</label>`;
+    // 子字段还是 object → 递归渲染其子字段
+    if(st==='object'){
+      h+=`<div style="font-size:9px;color:#61afef;margin-left:8px">└ object 子字段: <button onclick="importFieldSchema('${kind}','${path}/o${si}')" title="粘贴JSON对象，自动推断该字段的子字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+      h+=renderSchemaFields(Array.isArray(s.schema)?s.schema:[],kind,path+'/o'+si,depth+1);
+    }
+    // 子字段是 list → item 类型；item 为 object → 递归渲染 item 字段
+    if(st==='list'){
+      const itemT=getListItemType(s);
+      h+=`<div style="margin-left:8px;font-size:9px;color:#98c379">└ item 类型: <select style="width:auto;font-size:10px" onchange="setSubItemTypeP('${kind}','${path}',${si},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></div>`;
+      if(itemT==='object'){
+        h+=`<div style="font-size:9px;color:#61afef;margin-left:16px">└ item 字段: <button onclick="importFieldSchema('${kind}','${path}/l${si}')" title="粘贴JSON对象，自动推断 item 字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+        h+=renderSchemaFields(Array.isArray(s.schema)?s.schema:[],kind,path+'/l'+si,depth+1);
+      }
+    }
   });
-  h+=`<button onclick="addSubField('${kind}',${fi},${ctx==='list-item'})" style="font-size:10px">+ 子字段</button></td></tr>`;
+  h+=`<button onclick="addSubFieldP('${kind}','${path}')" style="font-size:10px">+ 子字段</button></div>`;
   return h;
 }
 function getListItemType(f){
@@ -1450,6 +1509,30 @@ function getListItemType(f){
   if(Array.isArray(sch))return 'object';
   if(sch&&sch.type)return sch.type;
   return 'string';
+}
+// 节点输出字段（含 object 子字段点号路径，任意深度；list 不展开），供"源=节点输出"下拉
+function _outFieldOptions(on){
+  const res=[];
+  const walk=(fields,prefix)=>{
+    (fields||[]).forEach(o=>{
+      const path=prefix?prefix+'.'+o.name:o.name;
+      res.push({path,type:o.type||'string'});
+      if(o.type==='object'&&Array.isArray(o.schema))walk(o.schema,path);
+    });
+  };
+  walk(nodeOutputs(on),'');
+  return res;
+}
+// 条件左/右值"源=block-output"时的节点字段下拉选项（跨节点，含 object 子字段点号路径）
+function _condRefOptions(n,content){
+  let h='';
+  WF.nodes.forEach(on=>{
+    if(on.id===n.id)return;
+    _outFieldOptions(on).forEach(o=>{
+      h+='<option value="'+on.id+'.'+o.path+'"'+(content?.blockID===on.id&&content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
+    });
+  });
+  return h;
 }
 
 // ============ 字段编辑 ============
@@ -1528,7 +1611,20 @@ function setCondSrc(bi,ci,side,src){
 function setCondRef(bi,ci,side,v){
   const n=findN(selNode);const br=n.data.inputs.branches[bi];_ensureCond(br,ci);
   const c=br.condition.conditions[ci];const target=side==='left'?c.left:c.right;
-  const content=target.input.value.content;content.name=v;if(content.path)content.path=[v];
+  const content=target.input.value.content;
+  if(!content||typeof content!=='object')return;  // 字面量等其他形态不写（UI 上不会出现，防御）
+  if(content.source==='block-output'){
+    // v="节点id.字段路径"（路径可含点号）→ 切出 blockID+name，并按字段类型校正 input.type（影响执行器数值比较）
+    const dot=v.indexOf('.');
+    if(dot>0){
+      content.blockID=v.slice(0,dot);content.name=v.slice(dot+1);
+      const on=findN(content.blockID);
+      const of=(on?_outFieldOptions(on):[]).find(x=>x.path===content.name);
+      if(of)target.input.type=of.type||'string';
+    }else{content.blockID='';content.name=v;}
+  }else{
+    content.name=v;if(content.path)content.path=[v];
+  }
   showProps();
 }
 function setCondLit(bi,ci,side,v){
@@ -1554,21 +1650,27 @@ function _inferType(v){
   return 'string';
 }
 // 递归推断 object 的子字段 schema（嵌套 object/list 正确识别，不再一律 string）
+// 数组取所有 object 元素的字段并集（如 slides[1] 才有的 items 也能推断出来），同名字段以先出现的值定类型
 function _inferFields(obj){
   return Object.entries(obj).map(([k,v])=>{
     const f={name:k,type:_inferType(v),description:'',required:false};
     if(Array.isArray(v)){
-      const item=v[0];
-      if(item&&typeof item==='object'&&!Array.isArray(item)) f.schema=_inferFields(item);
-      else if(item!==undefined) f.schema={type:_inferType(item)};
+      const objs=v.filter(e=>e&&typeof e==='object'&&!Array.isArray(e));
+      if(objs.length){
+        const merged={};
+        objs.forEach(o=>Object.entries(o).forEach(([kk,vv])=>{if(!(kk in merged))merged[kk]=vv;}));
+        f.schema=_inferFields(merged);
+      }
+      else if(v.length&&v[0]!==undefined) f.schema={type:_inferType(v[0])};
     }else if(v!==null&&typeof v==='object'){
       f.schema=_inferFields(v);
     }
     return f;
   });
 }
-function importJSONSchema(){
-  const json=prompt('粘贴JSON数据，自动解析结构并创建输出字段：');
+function importJSONSchema(kind){
+  kind=kind||'out';
+  const json=prompt('粘贴JSON数据，自动解析结构并创建'+(kind==='in'?'输入':'输出')+'字段：');
   if(!json)return;
   let obj;
   try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
@@ -1576,31 +1678,54 @@ function importJSONSchema(){
   const sample=Array.isArray(obj)?(obj[0]||{}):obj;
   const fields=_inferFields(sample);
   const n=findN(selNode);
-  if(n.data.outputs!==undefined)n.data.outputs=fields.map(f=>{
-    const o={name:f.name,type:f.type,description:f.description||''};
-    if(f.schema)o.schema=f.schema;
-    return o;
-  });
+  if(kind==='out'&&n.type==='59'){
+    // FromJSON：输出固定是单个 output 对象（执行器把整棵解析树塞进 output），导入的是它的内部结构
+    if(!n.data.outputs||!n.data.outputs.length)n.data.outputs=[{name:'output',type:'object',description:''}];
+    const o=n.data.outputs[0];o.name='output';o.type='object';o.schema=fields;
+  }else if(kind==='in'){
+    n.data.inputs=n.data.inputs||{};
+    n.data.inputs.inputParameters=fields.map(f=>{
+      const p={name:f.name,description:f.description||'',input:{type:f.type,value:{type:'literal',content:''}}};
+      if(f.schema)p.input.schema=f.schema;
+      return p;
+    });
+  }else{
+    n.data.outputs=fields.map(f=>{
+      const o={name:f.name,type:f.type,description:f.description||''};
+      if(f.schema)o.schema=f.schema;
+      return o;
+    });
+  }
   // 自动展开导入产生的 object 字段（默认折叠看不到子字段）
-  _uncollapseOutputs(n);
+  _uncollapseNode(n);
   showProps();renderAll();
   toast('已导入 '+fields.length+' 个字段');
 }
-// 递归清除 outputs 中 object 字段的折叠状态，导入后子字段立即可见
-function _uncollapseOutputs(n){
-  const key = (field) => n.id + '::' + field + '::out';
-  const walk = (fields, prefix) => {
-    (fields||[]).forEach(f => {
-      const k = key(prefix ? prefix + '.' + f.name : f.name);
-      collapsedFields.delete(k);
-      if (f.type === 'object' && f.schema) walk(f.schema, prefix ? prefix + '.' + f.name : f.name);
-      else if (f.type === 'list' && f.schema) {
-        if (Array.isArray(f.schema)) walk(f.schema, prefix ? prefix + '.' + f.name : f.name);
-        else collapsedFields.delete(key(prefix ? prefix + '.' + f.name : f.name));
-      }
-    });
-  };
-  walk(n.data.outputs, '');
+// 给某个 object 字段 / list<object> 的 item 导入子字段结构（path 定位其 schema 数组，见 resolveSchemaHolder）
+function importFieldSchema(kind,path){
+  const json=prompt('粘贴JSON对象，自动推断子字段结构（覆盖现有子字段）：');
+  if(!json)return;
+  let obj;
+  try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
+  if(!obj||typeof obj!=='object'||Array.isArray(obj)){toast('需要JSON对象 {...}');return;}
+  resolveSchemaHolder(kind,path).set(_inferFields(obj));
+  const n=findN(selNode);
+  _uncollapseNode(n);
+  if(['21','28'].includes(n?.type))_syncListSchema();
+  showProps();renderAll();
+  toast('已导入 '+Object.keys(obj).length+' 个子字段');
+}
+// 展开节点所有 object 字段（含嵌套），导入后子字段端口在画布立即可见
+function _uncollapseNode(n){
+  _uncollapseFields(n,'in',nodeInputs(n).map(p=>({name:p.name,type:p.input?.type||p.type,schema:p.schema||p.input?.schema})));
+  _uncollapseFields(n,'out',nodeOutputs(n));
+}
+function _uncollapseFields(n,side,fields,prefix=''){
+  (fields||[]).forEach(f=>{
+    const path=prefix?prefix+'.'+f.name:f.name;
+    collapsedFields.delete(_rowKey(n.id,side,path));
+    if(Array.isArray(f.schema))_uncollapseFields(n,side,f.schema,path);
+  });
 }
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
@@ -1741,15 +1866,44 @@ function makeCodePreview(n){
 }
 function setLoop(field,v){const n=findN(selNode);if(field==='loopType')n.data.inputs.loopType=v;if(field==='loopCount')n.data.inputs.loopCount={type:'integer',value:{type:'literal',content:v}};}
 
-// object 子字段 / list item
-function getSchemaHolder(kind,fi,isListItem){
-  const f=findArr(kind)[fi];
-  if(isListItem){return {get:()=>{let s=f.input?.schema||f.schema;if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.input=f.input||{};f.input.schema=arr;}};}
-  return {get:()=>{let s=f.schema||(f.input?.schema)||[];if(!Array.isArray(s))s=[];return s;},set:(arr)=>{f.schema=arr;}};
+// object 子字段 / list item（路径版，支持多层嵌套）
+// 按路径定位 schema 数组的 holder；首段 f<idx>=object字段(写f.schema) / i<idx>=list的item(写f.input.schema)，后续 o/l<idx> 下钻子字段的 schema
+function resolveSchemaHolder(kind,path){
+  const segs=path.split('/');
+  const f=findArr(kind)[parseInt(segs[0].slice(1))];
+  if(!f)return{get:()=>[],set:()=>{}};
+  let holder;
+  if(segs[0][0]==='i'){
+    holder={get:()=>{let s=f.input?.schema||f.schema;return Array.isArray(s)?s:[];},set:(arr)=>{f.input=f.input||{};f.input.schema=arr;}};
+  }else{
+    holder={get:()=>{let s=f.schema||(f.input?.schema)||[];return Array.isArray(s)?s:[];},set:(arr)=>{f.schema=arr;}};
+  }
+  for(let k=1;k<segs.length;k++){
+    const sub=holder.get()[parseInt(segs[k].slice(1))];
+    if(!sub)return{get:()=>[],set:()=>{}};
+    holder={get:()=>Array.isArray(sub.schema)?sub.schema:[],set:(arr)=>{sub.schema=arr;}};
+  }
+  return holder;
 }
-function addSubField(kind,fi,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();renderAll();}
-function delSubField(kind,fi,si,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a.splice(si,1);h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();renderAll();}
-function setSubField(kind,fi,si,field,v,isListItem){const h=getSchemaHolder(kind,fi,isListItem);let a=h.get();a[si][field]=v;h.set(a);if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();if(field==='type'){showProps();renderAll();}else showProps();}
+function _afterSchemaEdit(rerender){if(['21','28'].includes(findN(selNode)?.type))_syncListSchema();showProps();if(rerender)renderAll();}
+function addSubFieldP(kind,path){const h=resolveSchemaHolder(kind,path);const a=h.get();a.push({name:'sub'+a.length,type:'string',description:'',required:false});h.set(a);_afterSchemaEdit(true);}
+function delSubFieldP(kind,path,si){const h=resolveSchemaHolder(kind,path);const a=h.get();a.splice(si,1);h.set(a);_afterSchemaEdit(true);}
+function setSubFieldP(kind,path,si,field,v){
+  const h=resolveSchemaHolder(kind,path);const a=h.get();const s=a[si];if(!s)return;
+  if(field==='type'){
+    s.type=v;
+    if(v==='object'){if(!Array.isArray(s.schema))s.schema=[];}
+    else if(v!=='list')delete s.schema;
+    // v==='list' 时保留现有 schema（若是字段数组则 item 直接为 object），否则 getListItemType 兜底 'string'
+  }else s[field]=v;
+  _afterSchemaEdit(field==='type');
+}
+function setSubItemTypeP(kind,path,si,itemType){
+  const h=resolveSchemaHolder(kind,path);const a=h.get();const s=a[si];if(!s)return;
+  if(itemType==='object'){if(!Array.isArray(s.schema))s.schema=[];}
+  else s.schema={type:itemType};
+  _afterSchemaEdit(true);
+}
 function setListItemType(kind,fi,itemType){
   const f=findArr(kind)[fi];
   if(itemType==='object'){const a=[];(f.input||f).schema=a;if(f.input)f.input.schema=a;}
@@ -1787,7 +1941,7 @@ async function openWf(name){
   document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
-  WF.nodes.forEach(_uncollapseOutputs);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
+  WF.nodes.forEach(_uncollapseNode);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
   selNode=null;showProps();renderAll();toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
 }
 async function saveWf(){

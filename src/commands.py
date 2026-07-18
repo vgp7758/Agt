@@ -162,12 +162,25 @@ def read_config(agent) -> dict:
            for k, (tgt, _) in CONFIGURABLE.items()}
     chain = getattr(agent.llm, "fallback_chain", [])
     cfg["fallback_chain"] = ",".join(chain) if chain else ""
+    try:
+        import real_tools
+        cfg["tool_timeout"] = real_tools.TOOL_TIMEOUT
+    except Exception:
+        cfg["tool_timeout"] = 10
     return cfg
 
 
 def apply_config(agent, values: dict) -> list:
     """应用一组配置（key->value），返回每项的结果文案列表。"""
     results = []
+    # tool_timeout 特殊处理（real_tools 全局，不在 agent/llm）
+    if "tool_timeout" in values:
+        v = values.pop("tool_timeout")
+        try:
+            import real_tools
+            results.append(real_tools.set_tool_timeout(int(v)))
+        except Exception as e:
+            results.append(f"❌ tool_timeout 值非法：{v}（{e}）")
     # fallback_chain 特殊处理（逗号分隔 → list）
     if "fallback_chain" in values:
         v = values.pop("fallback_chain")

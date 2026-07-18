@@ -1738,23 +1738,30 @@ function setHttp(field,v){const n=findN(selNode);const d=n.data.inputs;if(field=
 function setHttpForm(pi,field,v){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];const p=bd.bodyData.formURLEncoded[pi];if(field==='name')p.name=v;if(field==='val'){p.input=p.input||{};p.input.value={type:'literal',content:v};}showProps();}
 function addHttpForm(){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.push({name:'key',input:{type:'string',value:{type:'literal',content:''}}});showProps();}
 function delHttpForm(pi){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.splice(pi,1);showProps();}
-async function setSubWf(v){
-  const n=findN(selNode);n.data.inputs.workflowId=v;
-  if(!v){showProps();return;}
-  // 拉取目标工作流的 entry/exit 定义
+// 子工作流节点 schema 由目标工作流决定（输入=start outputs，输出=exit inputParameters）
+// setSubWf 和 openWf 都调此：读目标 canvas 填字段，字段名/类型只读不可改。
+async function syncSubworkflowNode(n){
+  const wid=n.data.inputs?.workflowId;
+  if(!wid) return;
   try{
-    const r=await api('GET','/api/wf/'+v);
-    if(r.error){toast(r.error);showProps();return;}
+    const r=await api('GET','/api/wf/'+wid);
+    if(r.error) return;
     const canvas=r.canvas;
     const entry=(canvas.nodes||[]).find(nn=>nn.id==='100001');
     const exit=(canvas.nodes||[]).find(nn=>nn.id==='900001');
-    // 输入 = entry 的 outputs（ref 格式）
-    n.data.inputs.inputParameters=(entry?.data?.outputs||[]).map(o=>({name:o.name,input:{type:o.type||'string',schema:o.schema,value:{type:'ref',content:{source:'block-output',blockID:'',name:o.name}}}}));
-    // 输出 = exit 的 inputParameters（子工作流返回的字段）
+    // 输入 = 目标 start 的 outputs（入参），保留已有连线（blockID）覆盖默认空
+    const prev={}; (n.data.inputs.inputParameters||[]).forEach(p=>{if(p.input?.value?.content?.blockID)prev[p.name]=p.input.value.content.blockID;});
+    n.data.inputs.inputParameters=(entry?.data?.outputs||[]).map(o=>({name:o.name,input:{type:o.type||'string',schema:o.schema,value:{type:'ref',content:{source:'block-output',blockID:prev[o.name]||'',name:o.name}}}}));
+    // 输出 = 目标 exit 的 inputParameters（返回字段）
     n.data.outputs=(exit?.data?.inputs?.inputParameters||[]).map(p=>({name:p.name,type:p.input?.type||'string',description:''}));
     n.data.inputs.spaceId=''; n.data.inputs.type=0;
-    toast('已同步 '+v+' 的入参('+n.data.inputs.inputParameters.length+')和出参('+n.data.outputs.length+')');
-  }catch(e){toast('同步失败: '+e);}
+  }catch(e){}
+}
+async function setSubWf(v){
+  const n=findN(selNode);n.data.inputs.workflowId=v;
+  if(!v){n.data.inputs.inputParameters=[];n.data.outputs=[];showProps();renderAll();return;}
+  await syncSubworkflowNode(n);
+  toast('已同步 '+v+' 的入参('+n.data.inputs.inputParameters.length+')和出参('+n.data.outputs.length+')');
   showProps();renderAll();
 }
 // 复合节点配置
@@ -1934,6 +1941,8 @@ async function openWf(name){
   WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
   WF.nodes.forEach(syncToolNode);   // 插件节点按 toolName schema 补全空输入/输出字段
+  // 子工作流节点按目标工作流 schema 同步输入/输出字段（保留已连的线）
+  Promise.all(WF.nodes.filter(n=>n.type==='9'&&n.data.inputs?.workflowId).map(syncSubworkflowNode)).then(()=>{renderAll();if(selNode)showProps();});
   document.getElementById('fileSel').value=name;
   document.getElementById('fdesc').value=WF.meta.description||'';
   document.getElementById('fcoze').value=WF.meta.coze_url||'';

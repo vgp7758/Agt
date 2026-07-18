@@ -408,7 +408,7 @@ function renderNode(n){
   // 标题栏
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
-  g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},TYPE_LABEL[n.type]+' · '+n.type));
+  g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},n.type==='4'?('🔧 '+(n.data.toolName||'plugin')):(TYPE_LABEL[n.type]+' · '+n.type)));
   // 流程端口（入口只有出口，出口只有入口）
   if(n.type!=='1'){
     const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
@@ -1751,9 +1751,11 @@ async function api(method,path,body){
 }
 async function loadFileList(){
   const r=await api('GET','/api/wf/list');const sel=document.getElementById('fileSel');
+  const cur=sel.value;   // 保留当前选中（保存后不丢失）
   WFLIST=r.items||[];
   sel.innerHTML='<option value="">选择工作流…</option>';
   WFLIST.forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
+  if(cur && Array.from(sel.options).some(o=>o.value===cur)) sel.value=cur;
 }
 async function openWf(name){
   const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}

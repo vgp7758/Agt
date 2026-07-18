@@ -210,6 +210,9 @@ def _node_to_json(nd) -> dict:
     elif ntype == "9":      # subworkflow
         inp["workflowId"] = nd.get("workflowId", "")
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
+        out.extend({"name": o.get("name", "output"), "type": o.get("type", "string")} for o in nd.findall("out"))
+        if not out:
+            out.append({"name": "output", "type": "string"})   # 默认 output（执行返回 {output}）
     elif ntype == "45":     # http
         inp["apiInfo"] = {"method": (nd.findtext("method") or "GET").upper(),
                           "url": nd.findtext("url") or ""}
@@ -378,6 +381,7 @@ def _node_to_xml(n):
     elif ntype == "9":
         attrs += f' workflowId={_qa(inp.get("workflowId", ""))}'
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
     elif ntype == "45":
         api = inp.get("apiInfo", {}) or {}
         inner.append(f'<method>{_xml_escape(api.get("method", "GET"))}</method>')

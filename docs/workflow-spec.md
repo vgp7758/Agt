@@ -1,6 +1,162 @@
 # 工作流 JSON 规范 & 节点说明
 
 > Agt 工作流采用 **Coze 原生画布 JSON 格式**。本文档详细说明画布结构、节点类型、变量引用、连线规则及执行语义。
+>
+> **推荐用 XML 写工作流**（见第 0 章）：代码块/提示词用 CDATA 包裹，内部双引号/花括号/换行/JSON 块无需转义，系统读入时自动转成下文的 Coze JSON 执行。
+
+---
+
+## 0. XML 格式（推荐写作格式）
+
+模型/用户手写 Coze 画布 JSON 时，代码节点的 `code`、LLM 的 `prompt` 是 JSON 字符串里的字符串，内部双引号/花括号/换行/JSON 块要层层转义（JSON 套 JSON），极易出错。Agt 支持 **XML 写作 + JSON 执行**：写 `.xml`，扫描时自动转成上文的 Coze JSON，执行器/编辑器/Coze 互导能力全部保留。
+
+### 0.1 顶层结构
+
+```xml
+<workflow name="工作流名" description="描述" coze_url="..." auto="true" auto_param="query">
+  <node id="..." type="..."> ... </node>
+  ...
+  <edge from="源id" to="目标id" port="分支端口(可选)"/>
+  ...
+</workflow>
+```
+
+`<workflow>` 根属性即 meta（`name`/`description`/`coze_url`/`auto`/`auto_param`/`enabled`），无需单独 `.meta` 文件（也可用 `.xml.meta` 覆盖）。固定节点 ID 同 JSON：开始 `100001`、结束 `900001`。
+
+### 0.2 节点 type 名字 ↔ 数字
+
+XML 中 type 用可读名字（也兼容数字）：
+
+| 名字 | 数字 | 名字 | 数字 |
+|------|------|------|------|
+| start | 1 | intent | 22 |
+| end | 2 | aggregator | 32 |
+| llm | 3 | assigner | 40 |
+| code | 5 | http | 45 |
+| selector | 8 | subworkflow | 9 |
+| text | 15 | plugin | 4 |
+| loop | 21 | tojson/fromjson | 58/59 |
+| batch | 28 | output | 13 |
+
+### 0.3 通用子元素
+
+- `<in name="x" ref="源id.字段名"/>` — 输入引用上游节点输出
+- `<in name="x" literal="5" type="number"/>` — 输入字面量（integer/number 自动转数字，boolean 转 bool）
+- `<out name="y" type="number" required="true" default="10"/>` — 声明输出/入参
+- `<param name="prompt"><![CDATA[ ... ]]></param>` — LLM 的 prompt/systemPrompt 等（**CDATA 内免转义**）
+- `<code><![CDATA[ ... ]]></code>` — 代码节点的 Python（**CDATA 内免转义**）
+- `<edge from="A" to="B" port="true"/>` — 流程边；selector/intent 的分支边用 port（`true`/`true_1`/`false` 或 `branch_0`/`default`）
+
+### 0.4 各节点 XML 写法
+
+**start**（入参 = `<out>`）：
+```xml
+<node id="100001" type="start">
+  <out name="name" type="string" required="true"/>
+</node>
+```
+
+**end**（返回变量 = `<out ref>`）：
+```xml
+<node id="900001" type="end">
+  <out name="greeting" ref="130001.output"/>
+</node>
+```
+
+**llm**（`<in>` 供 `{{}}` 模板，`<param>` 是 prompt/systemPrompt/temperature）：
+```xml
+<node id="130001" type="llm">
+  <in name="name" ref="100001.name"/>
+  <param name="prompt"><![CDATA[用一句话招呼 {{name}}]]></param>
+  <param name="systemPrompt"><![CDATA[你是友好助手]]></param>
+  <param name="temperature" type="float" literal="0.9"/>
+  <out name="output" type="string"/>
+</node>
+```
+
+**code**（代码用 CDATA，引号/花括号随便写）：
+```xml
+<node id="500001" type="code">
+  <in name="x" ref="100001.x"/>
+  <code><![CDATA[
+async def main(args):
+    return {"y": args.params["x"] * 2, "info": f"double of {x}"}
+  ]]></code>
+  <out name="y" type="number"/>
+</node>
+```
+
+**plugin**（调工具箱里已注册的工具，toolName=工具名）：
+```xml
+<node id="200001" type="plugin" toolName="analyze_skill_stats">
+  <in name="match_limit" literal="100" type="integer"/>
+  <out name="raw" type="string"/>
+</node>
+```
+
+**selector**（分支：`<branch>` 内 `<cond>`；最后无 cond 的 branch 是 else）：
+```xml
+<node id="800001" type="selector">
+  <branch><cond op="13" left="100001.score" right="60"/></branch>      <!-- score > 60 → true -->
+  <branch><cond op="15" left="100001.score" right="30"/></branch>      <!-- score < 30 → true_1 -->
+  <branch/>                                                            <!-- else → false -->
+</node>
+```
+`op` 同 JSON 运算符（13=大于 14=≥ 15=小于 16=≤ 1=等于 7=包含 9=空…）；`left` 是 `节点id.字段`，`right` 是字面量（或 `ref:节点id.字段`）。
+
+**aggregator**（多分支汇合：`<group>` 内 `<var ref>`）：
+```xml
+<node id="320001" type="aggregator">
+  <group name="result">
+    <var ref="130001.output"/>
+    <var ref="130002.output"/>
+  </group>
+</node>
+```
+
+**intent**（`<intent name>` 每个意图一个分支端口 branch_0/branch_1…，default 兜底）：
+```xml
+<node id="220001" type="intent">
+  <in name="query" ref="100001.query"/>
+  <intent name="闲聊"/>
+  <intent name="查询"/>
+</node>
+```
+
+**text**（`<result>` 是 concat 模板，CDATA）：
+```xml
+<node id="150001" type="text">
+  <in name="r" ref="200001.raw"/>
+  <result><![CDATA[结果：{{r}}]]></result>
+</node>
+```
+
+**http / subworkflow / tojson / fromjson / assigner / output**：见对应 JSON 章节，XML 子元素一一映射（http 用 `<method>/<url>/<header name value>/<body type>`；subworkflow 用 `workflowId` 属性 + `<in>`）。
+
+### 0.5 完整范例
+
+```xml
+<workflow name="double_xml" description="翻倍">
+  <node id="100001" type="start">
+    <out name="x" type="number" required="true"/>
+  </node>
+  <node id="500001" type="code">
+    <in name="x" ref="100001.x"/>
+    <code><![CDATA[
+async def main(args):
+    return {"y": args.params["x"] * 2}
+    ]]></code>
+    <out name="y" type="number"/>
+  </node>
+  <node id="900001" type="end">
+    <out name="result" ref="500001.y"/>
+  </node>
+  <edge from="100001" to="500001"/>
+  <edge from="500001" to="900001"/>
+</workflow>
+```
+
+> XML 只在读入时转 JSON；复合节点（loop/batch 的内部子画布）目前仍建议用 JSON 编辑器编辑。loop/batch 暂不支持 XML 描述内部 blocks。
 
 ---
 

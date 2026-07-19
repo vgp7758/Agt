@@ -18,6 +18,7 @@ from plan_tools import make_plan_tools
 from wiki import make_wiki_tools
 from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager, make_mcp_tools
+from lsp_manager import make_lsp_tools
 from multiagent import make_subagent_tools
 from prompts import build_system
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
@@ -95,6 +96,10 @@ SYSTEM = build_system(
         "脚本约定 `import os,json; data=json.loads(os.environ['PAYLOAD'])` 取参、print 输出（可再接 FromJSON 解析）。\n"
         "  脚本不必注册成工具——run_script 节点直接按文件名执行，适合复用较重的处理逻辑（比代码节点内联更清晰）。\n"
         "每轮对话结束时 .agent/workflows/ 下的工作流会被自动扫描注册为 wf_* 工具。\n"
+        + "\n\n【语义代码导航 / LSP】处理 Python(.py)、C#(.cs) 等代码工程时，grep 找引用/定义在重载/泛型/分部类/扩展方法前会失效。"
+          "处理某语言代码前先调 ensure_lsp('python') 或 ensure_lsp('csharp') 装上对应语义工具"
+          "（首次自动 copy 脚本+装依赖到 ~/.agt/lsp/，当轮即可用；装一次后重启也会自动连），"
+          "再用 py_def/py_ref/py_syms（Python）或 cs_def/cs_ref/cs_wsym/cs_hover（C#）替代 grep 做定义跳转/引用查找/符号搜索。grep 只用于纯文本/字面量；C# 编译诊断请用 dotnet build。\n"
         + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
         + _load_agent_md()
         + _rules_and_skills_section()
@@ -117,6 +122,7 @@ def main():
     # 连接 MCP server（读 workspace/.mcp.json），发现并注册 AgenTank 等工具
     mcp_mgr = MCPManager()
     mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
+    mcp_mgr.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))   # 全局已装 LSP（ensure_lsp 装配的）
     for t in mcp_mgr.get_tools():
         agent.tools.register(t)
     print(f"已注册工具 {len(list(agent.tools))} 个（含 MCP 发现的）")
@@ -141,6 +147,9 @@ def main():
         agent.tools.register(t)
     ok, broken = refresh_workflow_tools(agent.tools, WORKSPACE, agent)
     for t in make_mcp_tools(mcp_mgr, str(WORKSPACE / ".mcp.json")):
+        agent.tools.register(t)
+    # 注册按需装配语言 LSP 的工具（ensure_lsp：处理某语言代码前调用，当轮即可用）
+    for t in make_lsp_tools(agent, mcp_mgr):
         agent.tools.register(t)
     if ok:
         print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")

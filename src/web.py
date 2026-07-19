@@ -32,12 +32,14 @@ from wiki import make_wiki_tools
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
+from lsp_manager import make_lsp_tools
 
 app = FastAPI(title="Agt Agent WebUI")
 
 # 全局 MCP（启动时连接一次）
 _mcp = MCPManager()
 _mcp.connect_from_config(str(WORKSPACE / ".mcp.json"))
+_mcp.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))   # 全局已装 LSP（ensure_lsp 装配的）
 _MCP_TOOLS = _mcp.get_tools()
 _snap = SnapshotManager(WORKSPACE)
 
@@ -90,6 +92,8 @@ def _get_or_create_agent() -> Agent:
     for t in make_autonomous_tools(agent):
         agent.tools.register(t)
     for t in make_workflow_mgmt_tools(WORKSPACE):
+        agent.tools.register(t)
+    for t in make_lsp_tools(agent, _mcp):
         agent.tools.register(t)
     refresh_workflow_tools(agent.tools, WORKSPACE, agent)
     # 加载持久化运行时设置

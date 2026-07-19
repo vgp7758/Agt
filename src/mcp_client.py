@@ -124,6 +124,28 @@ class MCPManager:
         self._run_coro(self._connect_one(name, cfg))
         print(f"[MCP] 已重连 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
 
+    # —— 运行时直接连新 server（不依赖 .mcp.json，供 ensure_lsp 动态装配用）——
+    def connect_one(self, name: str, cfg: dict) -> None:
+        """运行时连一个新 MCP server（直接吃 cfg dict：command/args/env/cwd）。
+        同名已存在则先断开旧会话再连。供 ensure_lsp 等按需装配，无需重启 Agent。"""
+        self.sessions.pop(name, None)
+        self._run_coro(self._connect_one(name, cfg))
+        print(f"[MCP] 已动态连接 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
+
+    def sync_to_toolbox(self, toolbox) -> list:
+        """把当前所有 server 的 MCPTool 同步注册进 toolbox（register_or_replace 幂等）。
+        返回【本次新加入】的工具全名列表，供调用方提示 Agent。"""
+        try:
+            existing = set((getattr(toolbox, "_tools", {}) or {}).keys())
+        except Exception:
+            existing = set()
+        added = []
+        for t in self.get_tools():
+            if t.name not in existing:
+                added.append(t.name)
+            toolbox.register_or_replace(t)
+        return added
+
     # —— 调用 ——
     def call_tool_sync(self, server: str, name: str, args: dict) -> str:
         if server not in self.sessions:

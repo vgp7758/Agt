@@ -367,9 +367,11 @@ class Agent:
                                                                  arguments=tc["arguments"], result=result))
                         _rt._tool_emit = None  # 清理
                         self.session.add_step(step)
-                        # 本轮新写/改的工作流或工具脚本立即注册，下一步即可调用（不必等下一轮）
-                        if self._refresh_tools_if_written(step):
-                            tool_schemas = self.tools.schemas()
+                        # 动态注册的工具（新写的工作流、ensure_lsp 装的 LSP 等）当轮即可见：
+                        # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas
+                        # （schemas 无缓存，只是 dict 遍历，成本低）
+                        self._refresh_tools_if_written(step)
+                        tool_schemas = self.tools.schemas()
                         # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
                         if self.autonomous_mode and self.pending_messages:
                             inject = "；".join(self.pending_messages)

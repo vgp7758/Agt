@@ -21,3 +21,6 @@ build/
 .vscode/
 .idea/
 .DS_Store
+
+# === 工具缓存 ===
+.playwright-mcp/

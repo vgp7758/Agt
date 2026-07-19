@@ -99,7 +99,7 @@ SYSTEM = build_system(
         + "\n\n【语义代码导航 / LSP】处理 Python(.py)、C#(.cs) 等代码工程时，grep 找引用/定义在重载/泛型/分部类/扩展方法前会失效。"
           "处理某语言代码前先调 ensure_lsp('python') 或 ensure_lsp('csharp') 装上对应语义工具"
           "（首次自动 copy 脚本+装依赖到 ~/.agt/lsp/，当轮即可用；装一次后重启也会自动连），"
-          "再用 py_def/py_ref/py_syms（Python）或 cs_def/cs_ref/cs_wsym/cs_hover（C#）替代 grep 做定义跳转/引用查找/符号搜索。grep 只用于纯文本/字面量；C# 编译诊断请用 dotnet build。\n"
+          "再用 py_def/py_ref/py_syms（Python）或 cs_def/cs_ref/cs_wsym/cs_hover/cs_diag（C#）替代 grep 做定义跳转/引用查找/符号搜索。改完 .cs 用 cs_diag 看 OmniSharp 的红线报错（改→查→改闭环，比 dotnet build 快）。grep 只用于纯文本/字面量。\n"
         + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
         + _load_agent_md()
         + _rules_and_skills_section()

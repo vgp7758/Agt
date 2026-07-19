@@ -1,0 +1,220 @@
+<workflow name="composite_demo" description="循环+批处理+单节点批处理三合一演示（迭代入口+continue模型）">
+  <!-- ===== Entry: 数组入参 ===== -->
+  <node id="100001" type="start" title="开始">
+    <out name="items" type="list" required="true">
+      <field name="name" type="string"/>
+      <field name="score" type="integer"/>
+    </out>
+    <out name="nums" type="list" required="true"/>
+  </node>
+
+  <!-- ================================================================
+       1. LOOP（循环）—— 原生模型：输出引用本地变量
+       迭代入口(__entry__)暴露 item(带schema)/index/report → body链 → setvar累加 → continue
+       ================================================================ -->
+  <node id="200001" type="loop" title="1.循环处理">
+    <param name="loopType"><![CDATA[array]]></param>
+    <var name="report" type="string" literal=""/>
+    <in name="input" ref="100001.items" type="list">
+      <field name="name" type="string"/>
+      <field name="score" type="integer"/>
+    </in>
+    <out name="result" type="string" ref="200001.report"/>
+    <out name="all_outputs" type="list"/>
+    <out name="filtered_outputs" type="list"/>
+    <out name="nth_output" type="object">
+      <field name="name" type="string"/>
+      <field name="score" type="number"/>
+      <field name="round" type="integer"/>
+    </out>
+    <batch nth="0"/>
+    <blocks>
+      <!-- 迭代入口：item 带 schema（子字段可连线），index，report（本地变量） -->
+      <node id="__entry__" type="start" title="迭代入口">
+        <out name="item" type="object">
+          <field name="name" type="string"/>
+          <field name="score" type="integer"/>
+        </out>
+        <out name="index" type="integer"/>
+        <out name="report" type="string"/>
+      </node>
+
+      <!-- c1: 从迭代入口取 item.name / item.score / index，算 boosted = score * 2 -->
+      <node id="200011" type="code" title="提取item字段与index">
+        <in name="name"  ref="__entry__.item.name"  type="string"/>
+        <in name="score" ref="__entry__.item.score" type="integer"/>
+        <in name="round" ref="__entry__.index"      type="integer"/>
+        <code language="3"><![CDATA[
+async def main(args):
+    name = args.params.get('name', '?')
+    score = args.params.get('score', 0)
+    round_num = args.params.get('round', 0)
+    return {'name': name, 'boosted': score * 2, 'round': round_num}
+]]></code>
+        <out name="name" type="string"/>
+        <out name="boosted" type="integer"/>
+        <out name="round" type="integer"/>
+      </node>
+
+      <!-- p1: multiply boosted * 3 = 最终得分 (算数工具) -->
+      <node id="200012" type="plugin" toolName="multiply" title="乘3运算">
+        <in name="a" ref="200011.boosted" type="number"/>
+        <in name="b" type="number" literal="3"/>
+        <out name="raw" type="number"/>
+      </node>
+
+      <!-- p2: to_uppercase(name) (字符串处理工具) -->
+      <node id="200013" type="plugin" toolName="to_uppercase" title="名字转大写">
+        <in name="text" ref="200011.name" type="string"/>
+        <out name="raw" type="string"/>
+      </node>
+
+      <!-- t1: 从迭代入口取累加变量 report，格式化本轮结果并追加 -->
+      <node id="200014" type="text" title="格式化追加结果">
+        <in name="acc"   ref="__entry__.report" type="string"/>
+        <in name="round" ref="200011.round"      type="integer"/>
+        <in name="upper" ref="200013.raw"        type="string"/>
+        <in name="score" ref="200012.raw"        type="number"/>
+        <result><![CDATA[{{acc}}#{{round}} {{upper}}:{{score}};]]></result>
+      </node>
+
+      <!-- s1: setvar 把 text 输出写回本地变量 report（跨轮累加） -->
+      <node id="200015" type="setvar" title="写回report变量">
+        <in name="report" left="__entry__.report" left_type="string" right="ref:200014.output" right_type="string"/>
+      </node>
+
+      <!-- continue：本轮结束 + 捕获本轮输出（name/final_score）→ all/filtered/nth -->
+      <node id="__continue__" type="continue" title="继续(本轮输出)">
+        <in name="name"  ref="200013.raw"    type="string"/>
+        <in name="score" ref="200012.raw"    type="number"/>
+        <in name="round" ref="200011.round"  type="integer"/>
+      </node>
+    </blocks>
+    <edges>
+      <edge source="200001" target="__entry__" sourcePort="loop-function-inline-output"/>
+      <edge source="__entry__" target="200011"/>
+      <edge source="200011" target="200012"/>
+      <edge source="200012" target="200013"/>
+      <edge source="200013" target="200014"/>
+      <edge source="200014" target="200015"/>
+      <edge source="200015" target="__continue__"/>
+    </edges>
+  </node>
+
+  <!-- ================================================================
+       2. BATCH（批处理）—— 编辑器约定模型：continue 捕获本轮输出驱动 all/filtered/nth
+       迭代入口(__entry__)暴露 item(带schema)/index → body链 → continue(输入=本轮输出)
+       ================================================================ -->
+  <node id="300001" type="batch" title="2.批处理AI评分">
+    <param name="batchSize"><![CDATA[10]]></param>
+    <param name="concurrentSize"><![CDATA[1]]></param>
+    <in name="input" ref="100001.items" type="list">
+      <field name="name" type="string"/>
+      <field name="score" type="integer"/>
+    </in>
+    <out name="all_outputs" type="list"/>
+    <out name="filtered_outputs" type="list"/>
+    <out name="nth_output" type="object">
+      <field name="name" type="string"/>
+      <field name="comment" type="string"/>
+    </out>
+    <batch nth="0"/>
+    <blocks>
+      <!-- 迭代入口：item 带 schema，index -->
+      <node id="__entry__" type="start" title="迭代入口">
+        <out name="item" type="object">
+          <field name="name" type="string"/>
+          <field name="score" type="integer"/>
+        </out>
+        <out name="index" type="integer"/>
+      </node>
+
+      <!-- c1: 从迭代入口取 item.name / item.score / index，分析分数等级 -->
+      <node id="300011" type="code" title="分析分数与index">
+        <in name="name"  ref="__entry__.item.name"  type="string"/>
+        <in name="score" ref="__entry__.item.score" type="integer"/>
+        <in name="round" ref="__entry__.index"      type="integer"/>
+        <code language="3"><![CDATA[
+async def main(args):
+    name = args.params.get('name', '?')
+    score = args.params.get('score', 0)
+    idx = args.params.get('round', 0)
+    grade = 'A' if score >= 85 else ('B' if score >= 70 else 'C')
+    return {'name': name, 'grade': grade, 'idx': idx, 'note': f'#{idx} {name}({score}分)'}
+]]></code>
+        <out name="name" type="string"/>
+        <out name="grade" type="string"/>
+        <out name="idx" type="integer"/>
+        <out name="note" type="string"/>
+      </node>
+
+      <!-- c2: 模拟 LLM 根据分析结果生成结构化评语对象 -->
+      <node id="300012" type="code" title="AI生成评语对象">
+        <in name="name"  ref="300011.name"  type="string"/>
+        <in name="grade" ref="300011.grade" type="string"/>
+        <in name="note"  ref="300011.note"  type="string"/>
+        <code language="3"><![CDATA[
+async def main(args):
+    name = args.params.get('name', '?')
+    grade = args.params.get('grade', '?')
+    note = args.params.get('note', '')
+    # 模拟 LLM：输入 → 结构化输出 {name, comment}
+    return {'name': name, 'comment': f'[{grade}] {note} → 表现良好'}
+]]></code>
+        <out name="name" type="string"/>
+        <out name="comment" type="string"/>
+      </node>
+
+      <!-- continue：捕获本轮输出（name+comment），驱动 all/filtered/nth -->
+      <node id="__continue__" type="continue" title="继续(本轮输出)">
+        <in name="name"    ref="300012.name"    type="string"/>
+        <in name="comment" ref="300012.comment" type="string"/>
+      </node>
+    </blocks>
+    <edges>
+      <edge source="300001" target="__entry__" sourcePort="batch-function-inline-output"/>
+      <edge source="__entry__" target="300011"/>
+      <edge source="300011" target="300012"/>
+      <edge source="300012" target="__continue__"/>
+    </edges>
+  </node>
+
+  <!-- ================================================================
+       3. 单节点批处理: plugin multiply 对每个元素 ×2，筛选 >50，取第二个
+       ================================================================ -->
+  <node id="400001" type="plugin" toolName="multiply" title="3.单节点批处理×2">
+    <in name="a" ref="loop-item" type="number"/>
+    <in name="b" type="number" literal="2"/>
+    <out name="all_outputs" type="list">
+      <field name="raw" type="number"/>
+    </out>
+    <out name="filtered_outputs" type="list">
+      <field name="raw" type="number"/>
+    </out>
+    <out name="nth_output" type="object">
+      <field name="raw" type="number"/>
+    </out>
+    <batch enabled="true" nth="1" itemType="number">
+      <input ref="100001.nums" type="list"/>
+      <filter logic="2">
+        <cond op="13" left="__batch_output__.raw" right="50" left_type="number" right_type="number"/>
+      </filter>
+    </batch>
+  </node>
+
+  <!-- ===== Exit：收集三路输出 ===== -->
+  <node id="900001" type="end" title="结束">
+    <out name="loop_report"    ref="200001.result"           type="string"/>
+    <out name="loop_all"       ref="200001.all_outputs"      type="list"/>
+    <out name="loop_nth"       ref="200001.nth_output"       type="object"/>
+    <out name="batch_all"      ref="300001.all_outputs"      type="list"/>
+    <out name="batch_nth"      ref="300001.nth_output"       type="object"/>
+    <out name="single_nth"     ref="400001.nth_output"       type="object"/>
+  </node>
+
+  <!-- ===== Canvas 级流程线: Entry → Loop → Batch → 单节点Batch → Exit ===== -->
+  <edge from="100001" to="200001"/>
+  <edge from="200001" to="300001" port="loop-output"/>
+  <edge from="300001" to="400001" port="batch-output"/>
+  <edge from="400001" to="900001"/>
+</workflow>

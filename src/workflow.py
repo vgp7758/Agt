@@ -475,10 +475,20 @@ _INLINE_OUT_SUFFIX = "-function-inline-output"
 _MAX_LOOP_ITERS = 10000   # 单次循环迭代上限（防失控；infinite 靠 Break 退出）
 
 
+def _find_body_entry(edges: list, composite_id: str) -> str | None:
+    """找子画布迭代入口节点 id（-function-inline-output 边的目标）。无则 None（旧格式）。"""
+    for e in edges:
+        if str(e.get("sourceNodeID")) == composite_id and \
+           str(e.get("sourcePortID", "")).endswith(_INLINE_OUT_SUFFIX):
+            return str(e.get("targetNodeID"))
+    return None
+
+
 def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
-                        body_outputs: dict, ctx, max_steps: int = 5000) -> str:
-    """执行复合节点内部子图一轮：从 <prefix>-function-inline-output 入口跑到回到 composite
-    （或死路）。返回信号 'done' / 'break' / 'continue'。Break(19)/Continue(29) 直接判类型。"""
+                        body_outputs: dict, ctx, max_steps: int = 5000):
+    """执行复合节点内部子图一轮。返回 (信号, 本轮输出dict)。
+    信号 'done'/'break'/'continue'。本轮输出：Continue节点(2/29)解析的 inputParameters，
+    或最后产出值节点的 outputs（旧格式无 continue 时）。Break(19) 判类型；入口(1) 跳过。"""
     start = None
     for e in edges:
         if str(e.get("sourceNodeID")) == composite_id and str(e.get("sourcePortID", "")).endswith(_INLINE_OUT_SUFFIX):
@@ -486,28 +496,70 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             break
     saved = ctx.node_outputs
     ctx.node_outputs = body_outputs
+    last_data = None   # 最近一个"产出值"的节点（排除控制节点），用于无 continue 时的兜底
+
+    def _round_out():
+        return dict(body_outputs.get(last_data, {}) or {}) if last_data else {}
+
     try:
         current = start
         for _ in range(max_steps):
             if current is None or current == composite_id:
-                return "done"
+                return "done", _round_out()
             node = blocks_by_id.get(current)
             if node is None:
-                return "done"
+                return "done", _round_out()
             ntype = str(node.get("type"))
             if ntype == "19":
-                return "break"
-            if ntype == "29":
-                return "continue"
+                return "break", _round_out()
+            if ntype in ("29", "2"):
+                # Continue 节点：解析其 inputParameters 作为本轮输出（编辑器 type2 / 标准 type29）
+                round_out = {}
+                for p in node.get("data", {}).get("inputs", {}).get("inputParameters", []):
+                    round_out[p.get("name")] = resolve_value(p.get("input"), ctx)
+                return "continue", round_out
+            if ntype == "1":
+                # 迭代入口标记：跳过（保留预置的迭代上下文输出）
+                current = _next_node(edges, current, None)
+                continue
             handler = NODE_HANDLERS.get(ntype)
             if handler is None:
                 raise WorkflowError(f"复合节点体内未支持的节点类型 {ntype}（节点 {current}）")
             result = handler(node, ctx)
             ctx.node_outputs[current] = result.get("outputs") or {}
+            if ntype not in ("19", "29", "20"):
+                last_data = current
             current = _next_node(edges, current, result.get("port"))
-        return "done"
+        return "done", _round_out()
     finally:
         ctx.node_outputs = saved
+
+
+def _collect_composite_outputs(decl: list, round_items: list, batch: dict):
+    """编辑器约定的复合节点输出收集（all_outputs/filtered_outputs/nth_output）：
+    逐轮收集 round_items（continue 捕获的本轮输出），套用 inputs.batch.filter + nth，产出三组。
+    decl 只传无 input 引用的输出定义（调用方已拆分原生/约定两组）。"""
+    all_outputs = list(round_items or [])
+    filt = (batch or {}).get("filter")
+    filtered = []
+    for o in all_outputs:
+        if not o or _is_null_output(o):
+            continue
+        if filt and not _eval_batch_filter(filt, o):
+            continue
+        filtered.append(o)
+    nth = (batch or {}).get("nth", 0)
+    try:
+        nth = int(nth)
+    except (TypeError, ValueError):
+        nth = 0
+    if not filtered:
+        nth_output = None
+    elif nth < 0 or nth >= len(filtered):
+        nth_output = filtered[-1]
+    else:
+        nth_output = filtered[nth]
+    return {"all_outputs": all_outputs, "filtered_outputs": filtered, "nth_output": nth_output}
 
 
 def _handle_loop_setvar(node: dict, ctx) -> dict:
@@ -561,6 +613,8 @@ def _handle_loop(node: dict, ctx) -> dict:
     outer = ctx.node_outputs
     saved_item, saved_idx = ctx.batch_item, ctx.batch_index
     last_exposed, last_body = {}, {}
+    entry_id = _find_body_entry(edges, composite_id)   # 迭代入口节点（新模型）；None=旧格式
+    round_items = []   # 编辑器约定：每轮最后一个产出值节点的输出 dict
     for idx, elem in enumerate(items[:_MAX_LOOP_ITERS]):
         ctx.batch_item = elem
         ctx.batch_index = idx
@@ -571,21 +625,37 @@ def _handle_loop(node: dict, ctx) -> dict:
         exposed.update(loop_vars)
         body_outputs = dict(outer)
         body_outputs[composite_id] = exposed
-        signal = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        if entry_id:
+            # 迭代入口节点：array 模式暴露 item+index+loopvars；count/infinite 只有 index+loopvars
+            entry_exp = {"index": idx}
+            if elem_name is not None:
+                entry_exp["item"] = elem
+            entry_exp.update(loop_vars)
+            body_outputs[entry_id] = entry_exp
+        signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_exposed, last_body = exposed, body_outputs
+        round_items.append(round_out)
         if signal == "break":
             break
 
-    # 解析输出：用最后一轮 body_outputs，且把复合节点映射更新为最新 loop_vars（取累加终值）
-    merged = dict(last_body) if last_body else dict(outer)
-    merged[composite_id] = {**(last_exposed or {}), **loop_vars}
-    saved = ctx.node_outputs
-    ctx.node_outputs = merged
-    try:
-        outputs = {o.get("name"): resolve_value(o.get("input"), ctx)
-                   for o in node.get("data", {}).get("outputs", [])}
-    finally:
-        ctx.node_outputs = saved
+    decl = node.get("data", {}).get("outputs", [])
+    conv_outs = [o for o in decl if not o.get("input")]   # 编辑器约定（all/filtered/nth）
+    native_outs = [o for o in decl if o.get("input")]      # 原生（带 input 引用）
+    outputs = {}
+    # 编辑器约定输出：continue 捕获本轮输出 → all/filtered/nth
+    if conv_outs:
+        outputs.update(_collect_composite_outputs(conv_outs, round_items, inputs.get("batch")))
+    # 原生输出：用最后一轮 body + 累加终值解析
+    if native_outs:
+        merged = dict(last_body) if last_body else dict(outer)
+        merged[composite_id] = {**(last_exposed or {}), **loop_vars}
+        saved = ctx.node_outputs
+        ctx.node_outputs = merged
+        try:
+            for o in native_outs:
+                outputs[o.get("name")] = resolve_value(o.get("input"), ctx)
+        finally:
+            ctx.node_outputs = saved
     ctx.loop_vars = None
     ctx.batch_item, ctx.batch_index = saved_item, saved_idx
     return {"outputs": outputs, "port": None}
@@ -614,8 +684,11 @@ def _handle_batch(node: dict, ctx) -> dict:
     outer = ctx.node_outputs
     saved_item, saved_idx = ctx.batch_item, ctx.batch_index
     decl = node.get("data", {}).get("outputs", [])
+    native = any(o.get("input") for o in decl)
     collected = {o.get("name"): [] for o in decl}
     last_body = {}
+    entry_id = _find_body_entry(edges, composite_id)   # 迭代入口节点（新模型）；None=旧格式
+    round_items = []   # 编辑器约定：每轮最后一个产出值节点的输出 dict
     for idx, elem in enumerate(elements[:_MAX_LOOP_ITERS]):
         ctx.batch_item = elem
         ctx.batch_index = idx
@@ -625,19 +698,32 @@ def _handle_batch(node: dict, ctx) -> dict:
         exposed["index"] = idx
         body_outputs = dict(outer)
         body_outputs[composite_id] = exposed
-        _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        if entry_id:
+            # 迭代入口节点：暴露 item/index/other_inputs（batch 总是 array 模式）
+            entry_exp = {"item": elem, "index": idx}
+            entry_exp.update(other_inputs)
+            body_outputs[entry_id] = entry_exp
+        _, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_body = body_outputs
-        saved = ctx.node_outputs
-        ctx.node_outputs = body_outputs
-        try:
-            for o in decl:
-                if o.get("type") == "list" or (o.get("name") or "").endswith("_list"):
-                    collected[o.get("name")].append(resolve_value(o.get("input"), ctx))
-        finally:
-            ctx.node_outputs = saved
+        round_items.append(round_out)
+        if native:
+            saved = ctx.node_outputs
+            ctx.node_outputs = body_outputs
+            try:
+                for o in decl:
+                    if o.get("type") == "list" or (o.get("name") or "").endswith("_list"):
+                        collected[o.get("name")].append(resolve_value(o.get("input"), ctx))
+            finally:
+                ctx.node_outputs = saved
 
+    conv_outs = [o for o in decl if not o.get("input")]   # 编辑器约定（all/filtered/nth）
     outputs = {}
+    if conv_outs:
+        outputs.update(_collect_composite_outputs(conv_outs, round_items, inputs.get("batch")))
+    # 原生输出（带 input 引用）：list/xxx_list 逐轮收集，其余从最后一轮解析
     for o in decl:
+        if not o.get("input"):
+            continue
         nm = o.get("name")
         if o.get("type") == "list" or (nm or "").endswith("_list"):
             outputs[nm] = collected.get(nm, [])
@@ -1039,6 +1125,12 @@ def _run_node_with_batch(node: dict, handler, ctx):
         arr = [arr] if arr is not None else []
 
     # 逐元素执行：注入 batch_item/batch_index，调用 handler
+    # handler 应看到原始输出声明（all/filtered/nth 是批处理包装层产物，不能让 handler 去提取）
+    _BATCH_OUT_NAMES = ("all_outputs", "filtered_outputs", "nth_output")
+    data = node.get("data", {})
+    saved_outputs = data.get("outputs")
+    if saved_outputs:
+        data["outputs"] = [o for o in saved_outputs if o.get("name") not in _BATCH_OUT_NAMES]
     all_outputs = []
     saved_item, saved_idx = ctx.batch_item, ctx.batch_index
     try:
@@ -1053,6 +1145,8 @@ def _run_node_with_batch(node: dict, handler, ctx):
             except Exception as e:
                 all_outputs.append({"_error": f"{type(e).__name__}: {e}"})
     finally:
+        if saved_outputs is not None:
+            data["outputs"] = saved_outputs
         ctx.batch_item, ctx.batch_index = saved_item, saved_idx
 
     # 组2：非 null/空 且满足 filter 条件

@@ -1,0 +1,5 @@
+{
+  "name": "composite_demo",
+  "description": "循环+批处理+单节点批处理三合一演示：子画布多工具+本地变量/子画布AI逐元素/单节点批处理",
+  "enabled": true
+}

@@ -29,6 +29,7 @@ TYPE_NAME_TO_NUM = {
     "text": "15", "loop": "21", "batch": "28", "intent": "22",
     "aggregator": "32", "assigner": "40", "http": "45", "subworkflow": "9",
     "plugin": "4", "tojson": "58", "fromjson": "59", "output": "13",
+    "break": "19", "continue": "29", "setvar": "20",
 }
 TYPE_NUM_TO_NAME = {v: k for k, v in TYPE_NAME_TO_NUM.items()}
 
@@ -44,8 +45,18 @@ def _type_num(t: str) -> str:
 
 
 def _ref_input(ref: str) -> dict:
-    """'NODEID.field' → BlockInput 的 value（ref）"""
-    node, _, name = (ref or "").partition(".")
+    """ref 字符串 → BlockInput 的 value（ref）。
+    编码：'NODEID.field'=block-output / 'loop-item'[.field] / 'loop-index' / 'global:path'"""
+    ref = ref or ""
+    if ref == "loop-index":
+        return {"type": "ref", "content": {"source": "loop-index"}}
+    if ref == "loop-item" or ref.startswith("loop-item."):
+        name = ref[10:] if ref.startswith("loop-item.") else ""   # 取 . 后的字段名
+        return {"type": "ref", "content": {"source": "loop-item", "name": name}}
+    if ref.startswith("global:"):
+        path = [p for p in ref[7:].split(".") if p != ""]
+        return {"type": "ref", "content": {"source": "global_variable_app", "path": path or [""]}}
+    node, _, name = ref.partition(".")
     return {"type": "ref", "content": {"source": "block-output", "blockID": node, "name": name}}
 
 
@@ -77,8 +88,14 @@ def _val_of_in(el) -> dict:
 
 
 def _in_param(el) -> dict:
-    """<in> → inputParameters 项 {name, input:{type, value}}"""
-    return {"name": el.get("name"), "input": {"type": el.get("type", "string"), "value": _val_of_in(el)}}
+    """<in> → inputParameters 项 {name, input:{type, schema?, value}}（list 可带 item schema）"""
+    res = {"name": el.get("name"), "input": {"type": el.get("type", "string"), "value": _val_of_in(el)}}
+    fields = el.findall("field")
+    if fields:
+        res["input"]["schema"] = [_field_to_schema(f) for f in fields]
+    elif el.get("itemType"):
+        res["input"]["schema"] = {"type": el.get("itemType")}
+    return res
 
 
 def _text_block(el) -> str:
@@ -104,6 +121,51 @@ def _cond(el) -> dict:
         val = rv[8:] if rv.startswith("literal:") else rv
         right_input = {"type": rt, "value": {"type": "literal", "content": _parse_val(val, rt)}}
     return {"operator": op, "left": {"input": left_input}, "right": {"input": right_input}}
+
+
+# ----- 复合节点(21/28) 子画布 blocks/edges 与 节点级 batch 的 XML 往返 -----
+
+def _read_composite_body(nd, node):
+    """从 <blocks><node.../></blocks> 与 <edges><edge.../></edges> 读回子图（节点级 blocks/edges）。"""
+    blocks = []
+    bel = nd.find("blocks")
+    if bel is not None:
+        for b in bel.findall("node"):
+            blocks.append(_node_to_json(b))
+    node["blocks"] = blocks
+    edges = []
+    eel = nd.find("edges")
+    if eel is not None:
+        for e in eel.findall("edge"):
+            ed = {"sourceNodeID": e.get("source", ""), "targetNodeID": e.get("target", "")}
+            if e.get("sourcePort"):
+                ed["sourcePortID"] = e.get("sourcePort")
+            if e.get("targetPort"):
+                ed["targetPortID"] = e.get("targetPort")
+            edges.append(ed)
+    node["edges"] = edges
+
+
+def _read_batch_el(nd):
+    """读 <batch enabled nth itemType><input ref/><filter><cond/></filter></batch>。无则 None。"""
+    bel = nd.find("batch")
+    if bel is None:
+        return None
+    b = {"enabled": bel.get("enabled", "false") == "true"}
+    if bel.get("nth") is not None:
+        b["nth"] = _parse_val(bel.get("nth"), "integer")
+    if bel.get("itemType"):
+        b["itemType"] = bel.get("itemType")
+    ie = bel.find("input")
+    if ie is not None:
+        b["input"] = {"type": ie.get("type", "list"),
+                      "value": _ref_input(ie.get("ref")) if ie.get("ref")
+                               else {"type": "literal", "content": _parse_val(ie.get("literal", ""), ie.get("type", "string"))}}
+    fel = bel.find("filter")
+    if fel is not None:
+        b["filter"] = {"logic": int(fel.get("logic", "2")),
+                       "conditions": [_cond(c) for c in fel.findall("cond")]}
+    return b
 
 
 def xml_to_canvas(xml_str: str) -> dict:
@@ -153,6 +215,10 @@ def _out_to_json(o):
     fields = o.findall("field")
     if fields:
         res["schema"] = [_field_to_schema(f) for f in fields]
+    ref = o.get("ref")
+    if ref:
+        # 复合节点(21/28) 输出可带 input 引用（指向循环变量/body 节点字段）
+        res["input"] = {"type": res.get("type", "string"), "value": _ref_input(ref)}
     return res
 
 
@@ -260,6 +326,21 @@ def _node_to_json(nd) -> dict:
         if c is not None:
             inp["content"] = {"type": "string", "value": {"type": "literal", "content": _text_block(c)}}
         out.append({"name": "output", "type": "string"})
+    elif ntype == "20":     # LoopSetVariable：inputParameters[{name,left(ref循环变量),right(ref|literal)}]
+        ips = []
+        for i in nd.findall("in"):
+            lt = i.get("left_type", "string")
+            rt = i.get("right_type", "string")
+            lv = i.get("left", "")
+            rv = i.get("right", "")
+            if rv.startswith("ref:"):
+                rval = {"type": rt, "value": _ref_input(rv[4:])}
+            else:
+                rval = {"type": rt, "value": {"type": "literal", "content": _parse_val(rv, rt)}}
+            ips.append({"name": i.get("name", "var"),
+                        "left": {"type": lt, "value": _ref_input(lv)},
+                        "right": rval})
+        inp["inputParameters"] = ips
     elif ntype == "40":     # assigner：inputParameters[{name,left,input}]
         ips = []
         for i in nd.findall("in"):
@@ -273,12 +354,39 @@ def _node_to_json(nd) -> dict:
         inp["inputParameters"] = ips
         inp["variableTypeMap"] = {}
         out.append({"name": "isSuccess", "type": "boolean"})
+    elif ntype == "21":     # loop：loopType/loopCount/variableParameters/子图/batch(nth/filter)
+        inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
+        for p in nd.findall("param"):
+            nm = p.get("name")
+            if nm == "loopType":
+                inp["loopType"] = _text_block(p) or "array"
+            elif nm == "loopCount":
+                inp["loopCount"] = {"type": "integer", "value": {"type": "literal",
+                                    "content": _parse_val(_text_block(p), "integer")}}
+        inp["variableParameters"] = [
+            {"name": v.get("name", ""), "input": {"type": v.get("type", "string"),
+                "value": _val_of_in(v)}} for v in nd.findall("var")]
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
+        _read_composite_body(nd, node)
+    elif ntype == "28":     # batch：batchSize/concurrentSize/子图/batch(nth/filter)
+        inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
+        for p in nd.findall("param"):
+            nm = p.get("name")
+            if nm in ("batchSize", "concurrentSize"):
+                inp[nm] = {"type": "integer", "value": {"type": "literal",
+                           "content": _parse_val(_text_block(p), "integer")}}
+        out.extend(_out_to_json(o) for o in nd.findall("out"))
+        _read_composite_body(nd, node)
     else:
         # 通用兜底：in→inputParameters, out→outputs, param→inputs[name]
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         out.extend({"name": o.get("name"), "type": o.get("type", "string")} for o in nd.findall("out"))
         for p in nd.findall("param"):
             inp[p.get("name")] = _text_block(p)
+    # 节点级批处理配置（任意节点都可能带 batch）
+    b = _read_batch_el(nd)
+    if b:
+        inp["batch"] = b
     return node
 
 
@@ -311,10 +419,18 @@ def _schema_to_xml(schema):
 
 
 def _ref_of(block_input):
-    """BlockInput → 'NODEID.field'（若是 ref），否则空串"""
+    """BlockInput → ref 字符串（block-output/loop-item/loop-index/global），否则空串"""
     v = block_input.get("value", block_input) if isinstance(block_input, dict) else {}
     if isinstance(v, dict) and v.get("type") == "ref":
         c = v.get("content", {}) or {}
+        src = c.get("source")
+        if src == "loop-item":
+            return "loop-item" + (("." + c.get("name", "")) if c.get("name") else "")
+        if src == "loop-index":
+            return "loop-index"
+        if src in ("global_variable_app", "global_variable_system", "global_variable_user"):
+            path = c.get("path") or []
+            return "global:" + ".".join(str(p) for p in path)
         return f'{c.get("blockID", "")}.{c.get("name", "")}'.strip(".")
     return ""
 
@@ -329,9 +445,17 @@ def _in_to_xml(p):
     inp = p.get("input", {}) or {}
     typ = inp.get("type", "string")
     ref = _ref_of(inp)
+    sch = inp.get("schema")
+    attrs = f'name={_qa(name)} type={_qa(typ)}'
     if ref:
-        return f'<in name={_qa(name)} ref={_qa(ref)} type={_qa(typ)}/>'
-    return f'<in name={_qa(name)} literal={_qa(_lit_of(inp))} type={_qa(typ)}/>'
+        attrs += f' ref={_qa(ref)}'
+    else:
+        attrs += f' literal={_qa(_lit_of(inp))}'
+    if isinstance(sch, list) and sch:
+        return f'<in {attrs}>{_schema_to_xml(sch)}</in>'
+    if isinstance(sch, dict) and sch.get("type"):
+        return f'<in {attrs} itemType={_qa(sch["type"])}/>'
+    return f'<in {attrs}/>'
 
 
 def _cond_to_xml(c):
@@ -349,6 +473,52 @@ def _cond_to_xml(c):
     if rt != "string":
         a += f' right_type={_qa(rt)}'
     return f'<cond {a}/>'
+
+
+def _composite_body_xml(n):
+    """复合节点(21/28) 的子图 → ['<blocks>...</blocks>', '<edges>...</edges>']（递归 _node_to_xml）。"""
+    parts = []
+    blocks = n.get("blocks") or []
+    edges = n.get("edges") or []
+    if blocks:
+        parts.append("<blocks>")
+        for b in blocks:
+            parts.append(_node_to_xml(b))
+        parts.append("</blocks>")
+    if edges:
+        parts.append("<edges>")
+        for e in edges:
+            attrs = f"source={_qa(str(e.get('sourceNodeID', '')))} target={_qa(str(e.get('targetNodeID', '')))}"
+            if e.get("sourcePortID"):
+                attrs += f" sourcePort={_qa(str(e['sourcePortID']))}"
+            if e.get("targetPortID"):
+                attrs += f" targetPort={_qa(str(e['targetPortID']))}"
+            parts.append(f"<edge {attrs}/>")
+        parts.append("</edges>")
+    return parts
+
+
+def _batch_to_xml(b):
+    """节点级/复合节点 batch 配置 → <batch enabled nth itemType><input/><filter/></batch>。"""
+    if not isinstance(b, dict):
+        return ""
+    head = f'<batch enabled={_qa("true" if b.get("enabled") else "false")}'
+    if "nth" in b:
+        head += f" nth={_qa(str(b.get('nth')))}"
+    if b.get("itemType"):
+        head += f" itemType={_qa(b['itemType'])}"
+    inner = []
+    bi = b.get("input")
+    if bi:
+        inner.append(f'<input ref={_qa(_ref_of(bi))} type={_qa((bi or {}).get("type", "list"))}/>')
+    f = b.get("filter")
+    if f:
+        inner.append(f'<filter logic="{int(f.get("logic", 2))}">')
+        inner.extend(_cond_to_xml(c) for c in f.get("conditions", []))
+        inner.append("</filter>")
+    if inner:
+        return head + ">" + "".join(inner) + "</batch>"
+    return head + "/>"
 
 
 def _node_to_xml(n):
@@ -372,6 +542,10 @@ def _node_to_xml(n):
             attrs += ' required="true"'
         if "defaultValue" in o:
             attrs += f' default={_qa(o["defaultValue"])}'
+        if isinstance(o.get("input"), dict):
+            r = _ref_of(o["input"])
+            if r:
+                attrs += f' ref={_qa(r)}'
         sch = o.get("schema")
         if o.get("type") == "object" and isinstance(sch, list) and sch:
             return f'<out {attrs}>{_schema_to_xml(sch)}</out>'
@@ -442,9 +616,44 @@ def _node_to_xml(n):
         for p in inp.get("inputParameters", []):
             path = ((p.get("left") or {}).get("value", {}).get("content", {}).get("path") or [""])[0]
             inner.append(f'<in name={_qa(p.get("name","var"))} path={_qa(path)} literal={_qa(_lit_of(p.get("input", {})))}/>')
+    elif ntype == "20":   # LoopSetVariable：<in name left left_type right right_type/>
+        for p in inp.get("inputParameters", []):
+            l_in = p.get("left", {}) or {}
+            r_in = p.get("right", {}) or {}
+            lref = _ref_of(l_in)
+            rref = _ref_of(r_in)
+            r = ("ref:" + rref) if rref else _lit_of(r_in)
+            inner.append(f'<in name={_qa(p.get("name","var"))} left={_qa(lref)} left_type={_qa(l_in.get("type","string"))} right={_qa(r)} right_type={_qa(r_in.get("type","string"))}/>')
+    elif ntype == "21":   # loop
+        if inp.get("loopType") is not None:
+            inner.append(f'<param name="loopType">{_cdata(str(inp.get("loopType", "array")))}</param>')
+        if "loopCount" in inp:
+            inner.append(f'<param name="loopCount" type="integer">{_cdata(_lit_of(inp["loopCount"]))}</param>')
+        for vp in inp.get("variableParameters", []):
+            pi = vp.get("input", {}) or {}
+            inner.append(f'<var name={_qa(vp.get("name", ""))} type={_qa(pi.get("type", "string"))} literal={_qa(_lit_of(pi))}/>')
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
+        inner.extend(_composite_body_xml(n))
+        if isinstance(inp.get("batch"), dict):
+            inner.append(_batch_to_xml(inp["batch"]))
+    elif ntype == "28":   # batch
+        if "batchSize" in inp:
+            inner.append(f'<param name="batchSize" type="integer">{_cdata(_lit_of(inp["batchSize"]))}</param>')
+        if "concurrentSize" in inp:
+            inner.append(f'<param name="concurrentSize" type="integer">{_cdata(_lit_of(inp["concurrentSize"]))}</param>')
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        inner.extend(out_el(o) for o in out)
+        inner.extend(_composite_body_xml(n))
+        if isinstance(inp.get("batch"), dict):
+            inner.append(_batch_to_xml(inp["batch"]))
     else:
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         inner.extend(out_el(o) for o in out)
+
+    # 节点级批处理（任意普通节点）：即使 inner 为空也输出 batch
+    if ntype not in ("21", "28") and isinstance(inp.get("batch"), dict):
+        inner.append(_batch_to_xml(inp["batch"]))
 
     if not inner:
         return f"  <node {attrs}/>"

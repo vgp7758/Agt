@@ -140,6 +140,7 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.fallback_chain: list[str] = []   # 回退优先级链(如 glm,deepseek,qwen)
+        self.fallback_policy: str = "sticky"  # 回退后下一轮：sticky=永久降级 / reset=每轮回退链首
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: dict):
@@ -168,6 +169,15 @@ class LLMClient:
         self.model_name = name
         return self
 
+    def _maybe_reset_to_head(self):
+        """reset 策略：每次调用前若已偏离回退链首模型，先切回去。
+        限流常是临时波动，首选模型可能已恢复，故下一轮重新从链首尝试。
+        sticky 策略或空回退链时不动作（不干扰手动 /model 选模型）。"""
+        if (self.fallback_policy == "reset"
+                and self.fallback_chain
+                and self.model_name != self.fallback_chain[0]):
+            self.switch_model(self.fallback_chain[0])
+
     def _build_kwargs(self, messages, stream: bool, **overrides) -> dict:
         """组装请求参数。tools / tool_choice 等可通过 overrides 透传。"""
         kwargs = {
@@ -193,6 +203,7 @@ class LLMClient:
 
     def chat(self, messages, **overrides) -> LLMResponse:
         """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。"""
+        self._maybe_reset_to_head()
         tried_tokens = 0
         tried = [self.model_name]
         while True:
@@ -261,6 +272,7 @@ class LLMClient:
 
         整条流一个 token 都没产出时退避重试。
         """
+        self._maybe_reset_to_head()
         last_usage = None
         for attempt in range(self.max_retries):
             stream = self._client.chat.completions.create(

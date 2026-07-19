@@ -146,6 +146,14 @@ def _to_bool(v):
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _policy_cast(v):
+    """fallback_policy 取值校验：只接受 sticky / reset。非法值抛异常由 apply_config 兜底报错。"""
+    s = str(v).strip().lower()
+    if s not in ("sticky", "reset"):
+        raise ValueError(f"fallback_policy 只能是 sticky/reset，收到 {v}")
+    return s
+
+
 # 可配置项：名字 -> (设在 agent 还是 agent.llm 上，类型转换)
 CONFIGURABLE = {
     "max_steps": ("agent", int),
@@ -153,6 +161,7 @@ CONFIGURABLE = {
     "max_retries": ("llm", int),
     "temperature": ("llm", float),
     "enable_thinking": ("llm", _to_bool),
+    "fallback_policy": ("llm", _policy_cast),
 }
 
 

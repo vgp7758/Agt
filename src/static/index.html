@@ -39,6 +39,10 @@
   .ev.step { color:var(--muted); font-size:11.5px; margin-top:6px; }
   .ev.warn { color:#b45309; }
   .ev.auto { color:#7c3aed; font-weight:600; }
+  .ev.auto.running { animation: pulse 1.5s ease-in-out infinite; }
+  .ev.auto.done { color:#059669; }
+  .ev.auto.failed { color:#dc2626; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
   /* 控件栏 */
   #controls { display:flex; gap:8px; padding:8px 12px; background:#fff; border-top:1px solid var(--line); flex-wrap:wrap; align-items:center; }
   #modelSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; max-width:240px; }
@@ -136,6 +140,10 @@
     <label>max_retries <input id="cfg_max_retries" type="number"></label>
     <label>temperature <input id="cfg_temperature" type="number" step="0.1"></label>
     <label>回退链 <input id="cfg_fallback_chain" type="text" placeholder="glm,deepseek,qwen"></label>
+    <label>回退策略 <select id="cfg_fallback_policy" title="回退后下一轮怎么处理：sticky=永久降级；reset=每轮重新从链首尝试">
+      <option value="sticky">永久降级（sticky）</option>
+      <option value="reset">每轮重试首模型（reset）</option>
+    </select></label>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
     </div>
@@ -169,6 +177,7 @@ const attachments = []; // data URL 数组
 let lastUserBubble = null;      // 最近一条用户气泡（挂检查点按钮用）
 let restoreTargetBubble = null; // 回溯目标气泡
 let messageQueueSize = 0;
+	let runningAutoWf = null;       // 当前正在执行的自动工作流 trace 元素
 
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
 function setBusy(b){
@@ -355,6 +364,7 @@ document.getElementById('cfgSave').onclick=()=>{
     temperature: parseFloat(document.getElementById('cfg_temperature').value),
     enable_thinking: document.getElementById('cfg_enable_thinking').checked,
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
+    fallback_policy: document.getElementById('cfg_fallback_policy').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
   };
   ws.send(JSON.stringify({action:'set_config', values}));
@@ -435,6 +445,7 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_temperature').value = m.values.temperature;
         document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
+        document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
       }
       break;
@@ -509,9 +520,36 @@ ws.onmessage=(ev)=>{
       if(m.url){ window.open(m.url, '_blank'); }
       else addRow('sys', '⚠️ 该工作流未配置 coze_url');
       break;
-    case 'auto_wf':
-      addTrace('auto', '🔍 自动工作流['+m.name+']: '+m.text);
-      break;
+    case 'auto_wf_start':
+	      // 自动工作流开始执行：显示带脉冲动画的"执行中"提示
+	      if(!curTurn) newTurn();
+	      runningAutoWf = document.createElement('div');
+	      runningAutoWf.className = 'ev auto running';
+	      runningAutoWf.textContent = '⏳ 自动工作流「'+m.name+'」执行中…';
+	      curTurn.traceBox.appendChild(runningAutoWf); scrollBottom();
+	      break;
+	    case 'auto_wf':
+	      // 自动工作流执行完成：更新 running 行为
+	      if(runningAutoWf){
+	        runningAutoWf.classList.remove('running');
+	        runningAutoWf.classList.add('done');
+	        runningAutoWf.textContent = '✅ 自动工作流「'+m.name+'」完成：'+m.text;
+	        runningAutoWf = null;
+	      } else {
+	        addTrace('auto done', '✅ 自动工作流「'+m.name+'」：'+m.text);
+	      }
+	      break;
+	    case 'auto_wf_error':
+	      // 自动工作流执行失败：更新 running 行为
+	      if(runningAutoWf){
+	        runningAutoWf.classList.remove('running');
+	        runningAutoWf.classList.add('failed');
+	        runningAutoWf.textContent = '❌ 自动工作流「'+m.name+'」失败：'+m.text;
+	        runningAutoWf = null;
+	      } else {
+	        addTrace('auto failed', '❌ 自动工作流「'+m.name+'」失败：'+m.text);
+	      }
+	      break;
     case 'workflow_message':
       addRow('sys', '💬 '+m.text);
       break;

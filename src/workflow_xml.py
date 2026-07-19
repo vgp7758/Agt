@@ -80,11 +80,16 @@ def _parse_val(s, type_hint="string"):
 
 
 def _val_of_in(el) -> dict:
-    """<in ref="..."/> 或 <in literal="..." type="..."/> → BlockInput 的 value 部分 {type, content}"""
+    """<in ref="..."/> 或 <in literal="..." type="..."/> 或 <in>inner text</in> → BlockInput 的 value 部分 {type, content}"""
     ref = el.get("ref")
     if ref:
         return _ref_input(ref)
-    return {"type": "literal", "content": _parse_val(el.get("literal", ""), el.get("type", "string"))}
+    lit = el.get("literal")
+    if lit is not None:
+        return {"type": "literal", "content": _parse_val(lit, el.get("type", "string"))}
+    # 兜底：标签内文本作为字面量（如 <in name="x" type="string">hello</in>）
+    text = (el.text or "").strip()
+    return {"type": "literal", "content": _parse_val(text, el.get("type", "string"))}
 
 
 def _in_param(el) -> dict:
@@ -204,14 +209,18 @@ def _field_to_schema(f):
 
 
 def _out_to_json(o):
-    """<out name type required default>[<field.../] → outputs 项（含 object 子字段 schema）"""
+    """<out name type required default>[<field.../] → outputs 项（含 object 子字段 schema）
+    default 值可从 default= 属性或标签内文本读取（如 <out name="x" type="integer">10</out>）"""
     res = {"name": o.get("name"), "type": o.get("type", "string")}
     if o.get("description"):
         res["description"] = o.get("description")
     if o.get("required") == "true":
         res["required"] = True
-    if o.get("default") is not None:
-        res["defaultValue"] = _parse_val(o.get("default"), res["type"])
+    default_attr = o.get("default")
+    if default_attr is not None:
+        res["defaultValue"] = _parse_val(default_attr, res["type"])
+    elif o.text and o.text.strip():
+        res["defaultValue"] = _parse_val((o.text or "").strip(), res["type"])
     fields = o.findall("field")
     if fields:
         res["schema"] = [_field_to_schema(f) for f in fields]
@@ -246,7 +255,9 @@ def _node_to_json(nd) -> dict:
             {"name": o.get("name"),
              "input": {"type": o.get("type", "string"),
                        "value": _ref_input(o.get("ref")) if o.get("ref")
-                                else {"type": "literal", "content": _parse_val(o.get("literal", ""))}}}
+                                else {"type": "literal",
+                                      "content": _parse_val(o.get("literal") if o.get("literal") is not None
+                                                            else (o.text or "").strip(), o.get("type", "string"))}}}
             for o in nd.findall("out")
         ]
     elif ntype == "3":      # llm：inputParameters + llmParam(prompt/systemPrompt/...)
@@ -449,13 +460,18 @@ def _in_to_xml(p):
     attrs = f'name={_qa(name)} type={_qa(typ)}'
     if ref:
         attrs += f' ref={_qa(ref)}'
-    else:
-        attrs += f' literal={_qa(_lit_of(inp))}'
+        if isinstance(sch, list) and sch:
+            return f'<in {attrs}>{_schema_to_xml(sch)}</in>'
+        if isinstance(sch, dict) and sch.get("type"):
+            return f'<in {attrs} itemType={_qa(sch["type"])}/>'
+        return f'<in {attrs}/>'
+    # 字面量：有 schema 子元素时仍用 literal= 属性；简单值用标签内文本（更干净）
+    lit_val = _lit_of(inp)
     if isinstance(sch, list) and sch:
-        return f'<in {attrs}>{_schema_to_xml(sch)}</in>'
+        return f'<in {attrs} literal={_qa(lit_val)}>{_schema_to_xml(sch)}</in>'
     if isinstance(sch, dict) and sch.get("type"):
-        return f'<in {attrs} itemType={_qa(sch["type"])}/>'
-    return f'<in {attrs}/>'
+        return f'<in {attrs} literal={_qa(lit_val)} itemType={_qa(sch["type"])}/>'
+    return f'<in {attrs}>{_xml_escape(str(lit_val))}</in>'
 
 
 def _cond_to_xml(c):
@@ -540,15 +556,19 @@ def _node_to_xml(n):
         attrs = f'name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}'
         if o.get("required"):
             attrs += ' required="true"'
-        if "defaultValue" in o:
-            attrs += f' default={_qa(o["defaultValue"])}'
         if isinstance(o.get("input"), dict):
             r = _ref_of(o["input"])
             if r:
                 attrs += f' ref={_qa(r)}'
         sch = o.get("schema")
+        has_default = "defaultValue" in o
         if o.get("type") == "object" and isinstance(sch, list) and sch:
-            return f'<out {attrs}>{_schema_to_xml(sch)}</out>'
+            inner = _schema_to_xml(sch)
+            if has_default:
+                return f'<out {attrs} default={_qa(o["defaultValue"])}>{inner}</out>'
+            return f'<out {attrs}>{inner}</out>'
+        if has_default:
+            return f'<out {attrs}>{_xml_escape(str(o["defaultValue"]))}</out>'
         return f'<out {attrs}/>'
 
     if ntype == "1":
@@ -561,7 +581,8 @@ def _node_to_xml(n):
             if ref:
                 inner.append(f'<out name={_qa(p.get("name",""))} ref={_qa(ref)} type={_qa(typ)}/>')
             else:
-                inner.append(f'<out name={_qa(p.get("name",""))} literal={_qa(_lit_of(pi))} type={_qa(typ)}/>')
+                lit = _lit_of(pi)
+                inner.append(f'<out name={_qa(p.get("name",""))} type={_qa(typ)}>{_xml_escape(str(lit))}</out>')
     elif ntype == "3":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         for p in inp.get("llmParam", []):

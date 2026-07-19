@@ -123,8 +123,12 @@ class Agent:
             pass  # _print_only_emit 已在流式回调中处理
         elif t == "tool_progress":
             print(f"{GRAY}⏳ {e['name']} 运行中 {e['elapsed']}s，{e.get('lines',0)} 行输出{RESET}")
+        elif t == "auto_wf_start":
+            print(f"{GRAY}🔍 自动工作流[{e['name']}] 执行中…（参数 {e.get('param','?')}={e.get('input','')[:60]}）{RESET}")
         elif t == "auto_wf":
-            print(f"{GRAY}🔍 自动工作流[{e['name']}]: {e['text'][:120]}{RESET}")
+            print(f"{GRAY}🔍 自动工作流[{e['name']}] 完成: {e['text'][:120]}{RESET}")
+        elif t == "auto_wf_error":
+            print(f"{GRAY}❌ 自动工作流[{e['name']}] 失败: {e['text'][:120]}{RESET}")
         elif t == "message_queued":
             print(f"{GRAY}📨 消息已入队（队列大小：{e['queue_size']}）{RESET}")
 
@@ -232,11 +236,14 @@ class Agent:
                 from workflow import get_auto_workflows, execute as _wf_execute
                 for aw in get_auto_workflows(_ws2):
                     try:
+                        self._emit({"type": "auto_wf_start", "name": aw["name"],
+                                     "param": aw["auto_param"], "input": msg[:120]})
                         result = _wf_execute(aw["canvas"], {aw["auto_param"]: msg},
                                              tools=self.tools, llm=self.llm, workspace=_ws2)
                         auto_ctx += f"\n\n[自动工作流「{aw['name']}」的预取结果]（参数 {aw['auto_param']}={msg[:80]}）：\n{result}"
                         self._emit({"type": "auto_wf", "name": aw["name"], "text": str(result)[:300]})
                     except Exception as e2:
+                        self._emit({"type": "auto_wf_error", "name": aw["name"], "text": str(e2)[:200]})
                         auto_ctx += f"\n\n[自动工作流「{aw['name']}」执行失败：{e2}]"
             except Exception:
                 pass  # 自动工作流不影响主循环

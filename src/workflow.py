@@ -318,7 +318,7 @@ def _handle_tojson(node: dict, ctx) -> dict:
 
 
 def _handle_fromjson(node: dict, ctx) -> dict:
-    """type 59：把 JSON 字符串解析成对象。"""
+    """type 59：把 JSON 字符串解析成对象。解析失败时降级返回原文（不崩溃工作流）。"""
     inputs = node.get("data", {}).get("inputs", {})
     raw = None
     for p in inputs.get("inputParameters", []):
@@ -327,7 +327,13 @@ def _handle_fromjson(node: dict, ctx) -> dict:
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError) as e:
-        raise WorkflowError(f"FromJSON 解析失败：{e}（原文：{str(raw)[:120]}）")
+        # 降级：返回原文，避免单次解析失败（如 LLM 返回轻微畸形 JSON / HTTP 错误体）整条工作流崩溃
+        try:
+            ctx.emit({"type": "workflow_message",
+                      "text": f"⚠️ FromJSON 解析失败，已降级返回原文：{str(raw)[:80]}"})
+        except Exception:
+            pass
+        parsed = raw
     return {"outputs": {"output": parsed}, "port": None}
 
 

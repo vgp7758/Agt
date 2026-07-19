@@ -1047,7 +1047,7 @@ function showProps(){
     const vps=n.data.inputs?.variableParameters||[];
     h+='<h3>本地变量 <button onclick="addLocalVar()">+</button></h3>';
     vps.forEach((vp,i)=>{
-      h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(vp.name)+'" onchange="setLocalVar('+i+',\"name\",this.value)" style="flex:1"><input value="'+ext(vp.input?.value?.content)+'" placeholder="初值" onchange="setLocalVar('+i+',\"init\",this.value)" style="width:60px"><select onchange="setLocalVar('+i+',\"type\",this.value)" style="width:65px">'+IO_TYPES.map(t=>'<option value='+t+(vp.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select><button class="del" onclick="delLocalVar('+i+')">×</button></div>';
+      h+='<div style="display:flex;gap:2px;margin:2px 0"><input value="'+ext(vp.name)+'" onchange="setLocalVar('+i+',\'name\',this.value)" style="flex:1"><input value="'+ext(vp.input?.value?.content)+'" placeholder="初值" onchange="setLocalVar('+i+',\'init\',this.value)" style="width:60px"><select onchange="setLocalVar('+i+',\'type\',this.value)" style="width:65px">'+IO_TYPES.map(t=>'<option value='+t+(vp.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select><button class="del" onclick="delLocalVar('+i+')">×</button></div>';
     });
     h+='<div style="font-size:10px;color:#8a9099">本地变量在进入复合节点时初始化，子画布内可用 LoopSetVariable(赋值节点) 修改。</div>';
     // 筛选 (filtered_outputs)——多条件 + AND/OR
@@ -1094,14 +1094,14 @@ function showProps(){
     });
     h+='<button onclick="addCompFilt()">+ 条件</button> ';
     // nth
-    h+='<label>nth_output 取第几个 <input type="number" value="'+ext(b.nth,0)+'" onchange="setBatch(\"nth\",parseInt(this.value)||0)" style="width:60px">（负/越界=最后, 空=null）</label>';
+    h+='<label>nth_output 取第几个 <input type="number" value="'+ext(b.nth,0)+'" onchange="setBatch(\'nth\',parseInt(this.value)||0)" style="width:60px">（负/越界=最后, 空=null）</label>';
 
     // 循环专属
     if(n.type==='21'){
       h+='<h3>循环设置</h3>';
-      h+='<label>类型 <select onchange="setLoop(\"loopType\",this.value)"><option value="array" '+(n.data.inputs?.loopType==='array'?'selected':'')+'>array</option><option value="count" '+(n.data.inputs?.loopType==='count'?'selected':'')+'>count</option><option value="infinite" '+(n.data.inputs?.loopType==='infinite'?'selected':'')+'>infinite</option></select></label>';
+      h+='<label>类型 <select onchange="setLoop(\'loopType\',this.value)"><option value="array" '+(n.data.inputs?.loopType==='array'?'selected':'')+'>array</option><option value="count" '+(n.data.inputs?.loopType==='count'?'selected':'')+'>count</option><option value="infinite" '+(n.data.inputs?.loopType==='infinite'?'selected':'')+'>infinite</option></select></label>';
       if(n.data.inputs?.loopType!=='array')
-        h+='<label>次数 <input value="'+ext(n.data.inputs?.loopCount?.value?.content)+'" onchange="setLoop(\"loopCount\",this.value)"></label>';
+        h+='<label>次数 <input value="'+ext(n.data.inputs?.loopCount?.value?.content)+'" onchange="setLoop(\'loopCount\',this.value)"></label>';
     }
   }
 

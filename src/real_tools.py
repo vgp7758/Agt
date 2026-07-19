@@ -475,6 +475,82 @@ def read_workflow_spec(start: int = 0, max_chars: int = 6000) -> str:
     return _paginate_text(text, "workflow-spec.md", start, max_chars)
 
 
+# 工作流 demo 读取（git raw，本地兜底）
+_DEMO_BASE_URL = "https://raw.githubusercontent.com/vgp7758/Agt/main/.agent/workflows/"
+_DEMO_LOCAL_DIR = Path(__file__).resolve().parent.parent / ".agent" / "workflows"
+_DEMOS = {
+    "composite_demo": "循环+批处理+单节点批处理三合一（迭代入口/continue/break 模型，多工具组合+本地变量+筛选 nth）",
+    "full_demo": "全节点类型演示（意图分流→各分支处理→聚合→序列化，覆盖 15 种节点）",
+}
+
+
+def _fetch_demo_text(name: str) -> str:
+    """从 git raw 读 demo XML，失败回退本地。"""
+    text = None
+    try:
+        import requests
+        r = requests.get(_DEMO_BASE_URL + name + ".xml", headers={"User-Agent": "agt-agent"}, timeout=15)
+        if r.status_code == 200 and r.text:
+            text = r.text
+    except Exception:
+        pass
+    if text is None:
+        local = _DEMO_LOCAL_DIR / (name + ".xml")
+        if local.exists():
+            try:
+                text = local.read_text(encoding="utf-8")
+            except Exception:
+                pass
+    return text
+
+
+def _builtin_tools_reference() -> str:
+    """列出工作流可用的内置工具（LIGHT_TOOLS）及示例 plugin 节点 XML。"""
+    lines = ["=== 工作流内置工具（未注册给 Agent，只能在工作流 plugin 节点用）===",
+             "这些轻量工具（add/split/sleep 等）Agent 不能直接调用，仅工作流编排可用。",
+             "调用：<node type=\"plugin\" toolName=\"工具名\">，输出 raw（工具返回值）。",
+             "入参 <in> 接上游输出 ref=\"节点ID.字段\"，或字面量 literal=\"值\"。",
+             ""]
+    _TS = {int: "integer", float: "number", bool: "boolean", list: "list", dict: "object"}
+    for t in LIGHT_TOOLS:
+        lines.append(f"【{t.name}】{t.description}")
+        ins = []
+        for pname, param in t._sig.parameters.items():
+            ptype = t._hints.get(pname, str)
+            ts = _TS.get(ptype, "string")
+            ins.append(f'    <in name="{pname}" type="{ts}"/>')
+        lines.append(f'  示例：<node id="N" type="plugin" toolName="{t.name}">')
+        lines.extend(ins)
+        lines.append(f'    <out name="raw" type="string"/>')
+        lines.append('  </node>')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def read_workflow_demo(demo: str = "", start: int = 0, max_chars: int = 8000) -> str:
+    """读取工作流 demo XML 示例，或列出 demo 清单 + 内置工具说明。
+    【写工作流前参考】了解循环/批处理/各节点的 XML 写法和可用的内置工具。
+    demo: 空则返回 demo 清单 + 内置工具（含示例节点 XML）；
+          'composite_demo' 读循环+批处理三合一；'full_demo' 读全节点类型演示。
+    start/max_chars: 读取指定 demo 时的分页（XML 较长可续读）。"""
+    if demo:
+        if demo not in _DEMOS:
+            return f"[未知 demo] {demo}，可选：{', '.join(_DEMOS)}"
+        text = _fetch_demo_text(demo)
+        if not text:
+            return f"[读取失败] {demo}.xml（git raw 与本地均不可用）"
+        header = f"=== {demo}.xml —— {_DEMOS[demo]} ===\n"
+        return header + _paginate_text(text, demo + ".xml", start, max_chars)
+    # 无 demo：返回清单 + 内置工具说明
+    parts = ["=== 工作流 demo 清单（传 demo=名称 读取完整 XML）==="]
+    for name, desc in _DEMOS.items():
+        parts.append(f"  - {name}: {desc}")
+    parts.append("")
+    parts.append(_builtin_tools_reference())
+    parts.append("提示：先 read_workflow_spec 了解节点类型/字段规范，再看 demo 学写法。")
+    return "\n".join(parts)
+
+
 def run_shell(command: str) -> str:
     """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
     return _run_subprocess_streaming(command, "run_shell", shell=True)
@@ -603,6 +679,7 @@ REAL_TOOLS = Toolbox(
     Tool(web_search),
     Tool(open_url),
     Tool(read_workflow_spec),
+    Tool(read_workflow_demo),
     Tool(run_shell),
     Tool(run_script),
     Tool(set_tool_timeout),

@@ -95,7 +95,7 @@
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="wfPanel" class="plan-panel" style="display:none"><details open>
-    <summary>🧩 工作流（点 <b>Coze</b> 在编辑器打开 · <a href="#" id="wfReload">🔄 重载</a>）</summary>
+    <summary>🧩 工作流（点 <b>调试</b> 运行工作流 · <a href="#" id="wfReload">🔄 重载</a>）</summary>
     <div id="wfList"></div>
   </details></div>
 
@@ -106,7 +106,7 @@
   <div id="controls">
     <select id="modelSel" title="切换模型"></select>
     <button class="btn" id="btnImg">📁 加图</button>
-    <button class="btn" id="btnWf" title="工作流：查看/重载/在 Coze 中编辑">🧩 工作流</button>
+    <button class="btn" id="btnWf" title="工作流：查看/重载/调试运行">🧩 工作流</button>
     <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">✏ 编辑器</button>
     <button class="btn" id="btnSave" title="保存当前会话（下拉框选中已有存档则覆盖）">💾 /save</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
@@ -576,10 +576,8 @@ function renderWorkflows(items){
     const desc=it.description?` <span style="color:#8a9099">${it.description}</span>`:'';
     const detail=it.detail?` <span style="color:#e6a23c">— ${it.detail}</span>`:'';
     return `<div class="ev">${mark[it.status]||'•'} <b>${it.tool}</b>${desc}${detail}`+
-           ` <a href="#" data-wf="${it.name}" class="wfCoze" style="margin-left:8px">Coze ↗</a></div>`;
+           ` <a href="/wfdebug?wf=${encodeURIComponent(it.name)}" target="_blank" class="wfDebug" style="margin-left:8px">调试 ↗</a></div>`;
   }).join('');
-  box.querySelectorAll('.wfCoze').forEach(a=>a.onclick=(e)=>{ e.preventDefault(); e.stopPropagation();
-    ws.send(JSON.stringify({action:'open_coze', name:a.dataset.wf})); });
 }
 document.getElementById('btnWf').onclick=()=>{
   const p=document.getElementById('wfPanel');

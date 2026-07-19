@@ -1271,6 +1271,86 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     raise WorkflowError(f"执行步数超限({max_steps})，疑似死循环")
 
 
+def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
+                  emit=None, workspace=None, max_steps: int = 1000):
+    """调试执行：和 execute() 一样同步单路径跑完，但每个节点执行【前后】回调 on_node(event)，
+    供调试页实时点亮节点、查看每步输出。
+
+    event 形如：
+      {"phase":"start","id":"100001","title":"开始","ntype":"1"}
+      {"phase":"end",  "id":"100001","outputs":{...}}
+    entry(100001)/exit(900001) 在调度器里特判（不走 NODE_HANDLERS），这里手动补发事件。
+    复合节点(loop/batch/子工作流)只在【外层节点】触发 start/end——内部每轮细节不展开（v1 边界）。
+
+    返回 (exit_dict, order, trace)：
+      exit_dict = exit 节点的结构化结果（_exit_result 原始 dict）
+      order     = 实际执行过的节点 id 顺序（含 entry/exit）
+      trace     = {节点id: outputs} 全量输出快照
+    on_node 抛异常会被吞掉（前端断了不应中断工作流）。
+    """
+    def _title(n: dict) -> str:
+        return ((n.get("data", {}).get("nodeMeta", {}) or {}).get("title")
+                or f"节点{n.get('id')}")
+
+    def _safe_emit(ev: dict):
+        try:
+            on_node(ev)
+        except Exception:
+            pass
+
+    ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
+    nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
+    edges = canvas.get("edges", [])
+    order: list[str] = []
+    trace: dict[str, dict] = {}
+
+    entry = nodes.get(ENTRY_ID)
+    if entry is None:
+        raise WorkflowError("画布缺少开始节点（id=100001, type=1）")
+
+    # —— 开始节点：手动补发事件，outputs = 绑定后的入参值 ——
+    _safe_emit({"phase": "start", "id": ENTRY_ID, "title": _title(entry), "ntype": str(entry.get("type"))})
+    bound = _bind_entry(entry, inputs or {})
+    ctx.node_outputs[ENTRY_ID] = bound
+    order.append(ENTRY_ID)
+    trace[ENTRY_ID] = bound
+    _safe_emit({"phase": "end", "id": ENTRY_ID, "outputs": bound})
+
+    current = _next_node(edges, ENTRY_ID, None)
+    if current is None:
+        return ({}, order, trace)   # 空工作流（entry 无后继）
+
+    for _ in range(max_steps):
+        # —— 结束节点：手动补发事件，outputs = 结构化最终结果 ——
+        if current == EXIT_ID:
+            exit_node = nodes[EXIT_ID]
+            exit_dict = _exit_result(exit_node, ctx)
+            _safe_emit({"phase": "start", "id": EXIT_ID, "title": _title(exit_node), "ntype": str(exit_node.get("type"))})
+            order.append(EXIT_ID)
+            trace[EXIT_ID] = exit_dict
+            _safe_emit({"phase": "end", "id": EXIT_ID, "outputs": exit_dict})
+            return (exit_dict, order, trace)
+        node = nodes.get(current)
+        if node is None:
+            raise WorkflowError(f"节点 {current} 不存在（边指向了不存在的节点）")
+        ntype = str(node.get("type"))
+        handler = NODE_HANDLERS.get(ntype)
+        if handler is None:
+            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）——该节点类型将在后续阶段支持")
+        _safe_emit({"phase": "start", "id": current, "title": _title(node), "ntype": ntype})
+        result = _run_node_with_batch(node, handler, ctx)
+        outs = result.get("outputs") or {}
+        ctx.node_outputs[current] = outs
+        order.append(current)
+        trace[current] = outs
+        _safe_emit({"phase": "end", "id": current, "outputs": outs})
+        nxt = _next_node(edges, current, result.get("port"))
+        if nxt is None:
+            return (ctx.node_outputs.get(current, {}), order, trace)   # 隐式结束（无 exit）
+        current = nxt
+    raise WorkflowError(f"执行步数超限({max_steps})，疑似死循环")
+
+
 # ========== 用户工具：.agent/workflows/tools/*.py 自动注册 ==========
 # 把用户写在 tools/ 下的 Python 脚本里的【顶层函数】注册成工具，
 # 供工作流插件节点(toolName=函数名)调用，也可被主 Agent 直接调用。

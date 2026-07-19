@@ -128,6 +128,13 @@ async def workflow_editor():
     return HTMLResponse(_EDITOR_HTML)
 
 
+@app.get("/wfdebug")
+async def workflow_debug():
+    """工作流调试页：只读渲染画布 + 流式执行 + 逐节点查看输出。"""
+    html = (Path(__file__).resolve().parent / "static" / "workflow_debug.html").read_text(encoding="utf-8")
+    return HTMLResponse(html)
+
+
 # ===== 工作流编辑器 REST API =====
 
 @app.get("/api/wf/list")
@@ -516,6 +523,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                     if it["name"] == name or it["tool"] == name), "") or "https://www.coze.com"
         await _send(ws, {"type": "coze_url", "url": url, "name": name})
         return
+    if isinstance(_d, dict) and _d.get("action") == "debug_run":
+        await _start_debug_run(ws, agent, _d.get("name", ""), _d.get("inputs") or {})
+        return
 
     # 文本消息
     text, images = _parse_client_msg(raw)
@@ -587,6 +597,59 @@ async def _run_streaming(ws, agent, msg, images, queue, loop):
                 break
     finally:
         _agent_busy = False
+
+
+async def _start_debug_run(ws, agent, name, inputs):
+    """启动工作流调试执行（后台线程跑 execute_debug），每个节点事件经 _broadcast 实时推流。
+    占用 _agent_busy 锁（共用 agent.llm/tools，不能和聊天并发）。"""
+    global _agent_busy
+    # 读画布（复用 /api/wf/{name} 的 json/xml 读取逻辑）
+    import re
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
+    jf = _WF_DIR / f"{safe}.json"
+    xf = _WF_DIR / f"{safe}.xml"
+    canvas = None
+    if jf.exists():
+        canvas = json.loads(jf.read_text(encoding="utf-8"))
+    elif xf.exists():
+        try:
+            from workflow_xml import xml_to_canvas
+            canvas = xml_to_canvas(xf.read_text(encoding="utf-8"))
+        except Exception as e:
+            await _send(ws, {"type": "wf_debug_error", "text": f"XML 解析失败：{type(e).__name__}: {e}"})
+            return
+    else:
+        await _send(ws, {"type": "wf_debug_error", "text": f"工作流 {name!r} 不存在"})
+        return
+    if _agent_busy:
+        await _send(ws, {"type": "wf_debug_error", "text": "⏳ Agent 正忙，请稍候再试"})
+        return
+    _agent_busy = True
+    await _send(ws, {"type": "wf_debug_start", "name": name})
+
+    def run_it():
+        global _agent_busy
+        try:
+            from workflow import execute_debug
+
+            def on_node(ev: dict):
+                phase = ev.get("phase")
+                _broadcast({
+                    "type": "wf_debug_node_start" if phase == "start" else "wf_debug_node_end",
+                    "id": ev.get("id"), "title": ev.get("title"),
+                    "ntype": ev.get("ntype"), "outputs": ev.get("outputs"),
+                })
+            exit_dict, order, trace = execute_debug(
+                canvas, inputs or {}, tools=agent.tools, llm=agent.llm, on_node=on_node)
+            _broadcast({"type": "wf_debug_done", "exit": exit_dict, "order": order, "trace": trace})
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            _broadcast({"type": "wf_debug_error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _agent_busy = False
+
+    threading.Thread(target=run_it, daemon=True).start()
 
 
 def main():

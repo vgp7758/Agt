@@ -75,26 +75,47 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s;pointer-events:none}
 .legend{font-size:10px;color:#8a9099;line-height:1.7}
 .swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:3px;vertical-align:middle}
+/* ===== 调试页专属 ===== */
+.node-body.done{stroke:#3ad07a;stroke-width:2.5;filter:drop-shadow(0 0 5px #3ad07a55)}
+.node-body.running{stroke:#f0c040;stroke-width:2.5;animation:pulse 1s infinite}
+.node-body.err{stroke:#e0504a;stroke-width:2.5;filter:drop-shadow(0 0 6px #e0504a66)}
+@keyframes pulse{0%,100%{filter:drop-shadow(0 0 4px #f0c04066)}50%{filter:drop-shadow(0 0 11px #f0c040cc)}}
+#dbgStatus{color:#f0c040;font-size:12px;font-weight:600;margin-left:6px}
+#dbgStatus.done{color:#3ad07a}#dbgStatus.err{color:#e0504a}
+#entryBar{background:#131b35;border-bottom:1px solid #0f3460;padding:6px 12px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;max-height:130px;overflow-y:auto}
+#entryBar .ef{display:flex;flex-direction:column;gap:2px}
+#entryBar .ef label{font-size:10px;color:#8a9099}
+#entryBar .ef input,#entryBar .ef textarea,#entryBar .ef select{background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 6px;font-size:12px;width:170px}
+#entryBar .ef textarea{width:200px;height:42px;font-family:monospace;resize:vertical}
+#entryBarHint{color:#8a9099;font-size:11px;align-self:center}
+button.play{background:#1a5c2a !important;border-color:#3ad07a !important;font-weight:600}
+button.play:hover{background:#3ad07a !important;color:#16213e !important}
+button.play:disabled{opacity:.5;cursor:not-allowed}
+.dbg-result{background:#0f1530;border:1px solid #1a3a5c;border-radius:4px;padding:6px;margin-top:4px;font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
+.dbg-result.empty{color:#8a9099;font-style:italic;font-family:inherit}
+.dbg-field{margin-bottom:6px;white-space:pre-wrap;word-break:break-all}
+.dbg-field b{color:#61afef}
 </style>
 </head>
 <body>
 <div id="topbar">
   <select id="fileSel"><option value="">选择工作流…</option></select>
-  <button onclick="WE.createWf()">➕ 新建</button>
-  <button onclick="WE.saveWf()">💾 保存</button>
-  <select id="saveFormat" title="保存格式（XML：代码/提示词 CDATA 免转义，适合手写）"><option value="json">存为 JSON</option><option value="xml">存为 XML</option></select>
-  <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
-  <button onclick="autoLayout()" title="按流程方向分层自动布局，孤立节点纵向罗列">📐 自动布局</button>
-  <button onclick="location.href=(WF.name?('/wfdebug?wf='+encodeURIComponent(WF.name)):'/wfdebug')" title="跳转到调试页运行此工作流">▶ 调试</button>
-  <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
-  <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
-  <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
-  <input id="fautoparam" placeholder="自动参数名(默认query)" style="width:130px" onchange="WF.meta.auto_param=this.value">
+  <button onclick="autoLayout()" title="按流程方向分层自动布局">📐 自动布局</button>
+  <button onclick="location.href=(WF.name?('/editor?wf='+encodeURIComponent(WF.name)):'/editor')" title="跳转到编辑器修改此工作流">✏ 编辑器</button>
+  <button onclick="openCoze()" title="在 Coze 打开此工作流">🔗 Coze</button>
+  <button class="play" id="btnPlay" onclick="runDebug()">▶ 播放</button>
+  <span id="dbgStatus"></span>
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
   <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
   <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
+  <select id="saveFormat" style="display:none"></select>
+  <input id="fdesc" style="display:none">
+  <input id="fcoze" style="display:none">
+  <input type="checkbox" id="fauto" style="display:none">
+  <input id="fautoparam" style="display:none">
 </div>
+<div id="entryBar"><span id="entryBarHint">选择工作流后，在此填写开始节点的入参默认值</span></div>
 <div id="main">
   <div id="canvasWrap"><svg id="svgCanvas"></svg></div>
 </div>
@@ -419,7 +440,7 @@ function renderNode(n){
   n.h=nodeH(n);
   const cat=TYPE_CATEGORY[n.type]||'llm';
   // 体
-  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
+  const _st=nodeStatus[n.id]; g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')+(_st?(' '+_st):'')}));
   // 标题栏
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
@@ -1305,6 +1326,7 @@ function showProps(){
     });
     h+='<button onclick="addBranch()">+ 分支</button>';
   }
+  h+=_dbgResultHtml();
   p.innerHTML=h;
   }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
 }
@@ -2201,6 +2223,171 @@ function autoLayout(silent){
     toast('已自动布局：'+nl+' 层'+(no?('，孤立 '+no+' 个'):''));
   }
 }
+// ============ 调试页专属逻辑 ============
+let nodeStatus={};        // id -> 'running' | 'done' | 'err'
+let dbgOut={};            // id -> 该节点执行输出 dict
+let entryValues={};       // 开始节点字段名 -> 用户填的值（副本，runDebug 以 DOM 为准）
+let dbgOrder=[];          // 已执行节点 id 顺序
+let dbgRunning=false;
+let _dbgWs=null;
+
+// —— 切断所有编辑操作（只读画布）：把编辑动作函数全部置为空 ——
+['setProp','setTitle','setField','addIO','delField','importJSONSchema','importFieldSchema',
+ 'setInputLiteral','setInputLitVal','setInputSource','setInputRef','setRefPath','setRefName',
+ 'setLLM','setCode','setLoop','addLocalVar','setLocalVar','delLocalVar',
+ 'setCompArraySrc','setCompFiltField','setCompFiltOp','setCompFiltVal','setCompLogic','addCompFilt','delCompFilt',
+ 'setBatchEnabled','setBatchSize','setBatchInput','setBatchFilter','setBatchNth','setNthType','setNthSubField','delNthSubField',
+ 'addAggrGroup','setAggrGroupName','addAggrVar','delAggrVar',
+ 'addBranch','delBranch','addBranchCanvas','setCondSrc','setCondRef','setCondLit','setCondType','setCondOp','saveBranchCond',
+ 'addIntent','delIntent','setIntent','setHttp','setHttpForm','addHttpForm','delHttpForm','setSubWf',
+ 'setVarName','setVarVal','addSubFieldP','delSubFieldP','setSubFieldP','setSubItemType','setListItemType',
+ 'startFlow','startVar','finishFlow','finishVar','finishAggrVar','doDisconnect',
+ 'openNodePicker','pickNode','createBasicNode','openComposite','saveWf','createWf','deleteWf'
+].forEach(function(fn){try{window[fn]=function(){/* read-only */};}catch(e){}});
+window.WE={openWf:openWf,saveWf:function(){},createWf:function(){},deleteWf:function(){},renderAll:renderAll,loadFileList:loadFileList};
+
+// capture 阶段拦截 Delete/Backspace/Ctrl+S（editor 的 keydown 在 bubble 阶段，截不掉就阻止默认）
+document.addEventListener('keydown',function(e){
+  if(e.key==='Delete'||e.key==='Backspace'||(e.ctrlKey&&(e.key==='s'||e.key==='S'))){e.preventDefault();e.stopPropagation();}
+},true);
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _coerceIn(v,tp){if(tp==='integer'){const n=parseInt(v,10);return isNaN(n)?v:n;}if(tp==='number'||tp==='float'){const n=Number(v);return isNaN(n)?v:n;}return v;}
+function onEntryJson(el,nm){try{entryValues[nm]=JSON.parse(el.value);}catch(e){entryValues[nm]=el.value;}}
+
+// —— 渲染开始节点的入参表单（按 data.outputs schema 生成）——
+function renderEntryBar(){
+  const bar=document.getElementById('entryBar');
+  const entry=WF.nodes.find(function(n){return n.type==='1';});
+  if(!entry){bar.innerHTML='<span id="entryBarHint">该工作流没有开始节点</span>';return;}
+  const outs=(entry.data&&entry.data.outputs)||[];
+  entryValues={};
+  if(!outs.length){bar.innerHTML='<span id="entryBarHint">开始节点无入参字段，可直接点 ▶ 播放</span>';return;}
+  let h='';
+  outs.forEach(function(f){
+    const nm=f.name||'?';const tp=(f.type||'string');
+    const fid='ef_'+String(nm).replace(/[^A-Za-z0-9_]/g,'_');
+    const dv=(f.defaultValue!==undefined&&f.defaultValue!==null&&f.defaultValue!=='')?f.defaultValue:'';
+    entryValues[nm]=dv;
+    const lab='<label data-nm="'+esc(nm)+'">'+esc(nm)+' ('+tp+')</label>';
+    if(tp==='boolean'){
+      const chk=(dv===true||dv==='true')?'checked':'';
+      h+='<div class="ef">'+lab+'<label style="flex-direction:row;align-items:center;gap:4px"><input type="checkbox" id="'+fid+'" '+chk+' style="width:auto"><span style="font-size:11px">勾选=true</span></label></div>';
+    }else if(tp==='object'||tp==='list'){
+      const txt=(dv!==''&&dv!==null)?(typeof dv==='string'?dv:JSON.stringify(dv,null,1)):'';
+      h+='<div class="ef">'+lab+'<textarea id="'+fid+'" oninput="onEntryJson(this,\''+esc(nm)+'\')" placeholder="[] 或 {}">'+esc(txt)+'</textarea></div>';
+    }else if(tp==='integer'||tp==='number'||tp==='float'){
+      h+='<div class="ef">'+lab+'<input id="'+fid+'" type="number" step="any" value="'+esc(dv)+'" oninput="entryValues[\''+esc(nm)+'\']=_coerceIn(this.value,\''+tp+'\')"></div>';
+    }else{
+      h+='<div class="ef">'+lab+'<input id="'+fid+'" value="'+esc(dv)+'" oninput="entryValues[\''+esc(nm)+'\']=this.value"></div>';
+    }
+  });
+  bar.innerHTML=h;
+}
+
+// —— 播放：从 DOM 收集入参 → 发 debug_run ——
+function runDebug(){
+  if(dbgRunning)return;
+  if(!WF.name){toast('请先选择工作流');return;}
+  const inputs={};
+  document.querySelectorAll('#entryBar .ef').forEach(function(div){
+    const lab=div.querySelector('label[data-nm]');if(!lab)return;
+    const nm=lab.dataset.nm;
+    const tpM=lab.textContent.match(/\(([^)]+)\)/);const tp=tpM?tpM[1]:'';
+    const ta=div.querySelector('textarea'),cb=div.querySelector('input[type=checkbox]'),inp=div.querySelector('input:not([type=checkbox])');
+    if(cb){inputs[nm]=cb.checked;}
+    else if(ta){try{inputs[nm]=JSON.parse(ta.value);}catch(e){inputs[nm]=ta.value;}}
+    else if(inp){inputs[nm]=_coerceIn(inp.value,tp);}
+  });
+  document.getElementById('btnPlay').disabled=true;
+  setDbgStatus('启动中…','');nodeStatus={};dbgOut={};dbgOrder=[];renderAll();
+  dbgRunning=true;
+  try{_dbgWs.send(JSON.stringify({action:'debug_run',name:WF.name,inputs:inputs}));}
+  catch(e){dbgRunning=false;document.getElementById('btnPlay').disabled=false;setDbgStatus('连接异常：'+e.message,'err');}
+}
+window.runDebug=runDebug;
+
+function openCoze(){
+  const url=(WF.meta&&WF.meta.coze_url)||'https://www.coze.com';
+  window.open(url,'_blank');
+}
+window.openCoze=openCoze;
+
+// —— 属性面板末尾的执行结果区 ——
+function _dbgResultHtml(){
+  if(!selNode)return '';
+  const out=dbgOut[selNode];
+  const n=WF.nodes.find(function(x){return x.id===selNode;});
+  let label='执行结果';
+  if(n&&n.type==='1')label='入参值（开始节点输出）';
+  else if(n&&n.type==='2')label='最终结果（结束节点输出）';
+  if(out===undefined){
+    return '<h3>'+label+'</h3><div class="dbg-result empty">（尚未执行到此节点）</div>';
+  }
+  let fields=((n&&n.data&&n.data.outputs)||[]);
+  if(n&&n.type==='2'){fields=((n.data&&n.data.inputs&&n.data.inputs.inputParameters)||[]).map(function(p){return {name:p.name,type:''};});}
+  let body='';
+  if(fields&&fields.length){
+    fields.forEach(function(f){
+      const v=(out&&out[f.name]!==undefined)?out[f.name]:undefined;
+      body+='<div class="dbg-field"><b>'+esc(f.name)+'</b>'+(f.type?('<span style="color:#8a9099"> ('+esc(f.type)+')</span>'):'')+'\n'+_fmtVal(v)+'</div>';
+    });
+  }else{
+    body=_fmtVal(out);
+  }
+  return '<h3>'+label+'</h3><div class="dbg-result">'+body+'</div>';
+}
+function _fmtVal(v){
+  if(v===undefined)return '<span style="color:#8a9099">（无）</span>';
+  if(v===null)return '<span style="color:#8a9099">null</span>';
+  if(typeof v==='string')return esc(v);
+  if(typeof v==='number'||typeof v==='boolean')return String(v);
+  try{return esc(JSON.stringify(v,null,1));}catch(e){return esc(String(v));}
+}
+
+// —— WebSocket：连 /ws，监听 wf_debug_* 事件实时点亮 ——
+function setDbgStatus(txt,cls){const el=document.getElementById('dbgStatus');el.textContent=txt;el.className=cls||'';}
+function _dbgConnect(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  try{_dbgWs=new WebSocket(proto+'://'+location.host+'/ws');}catch(e){setDbgStatus('WS 连接失败','err');return;}
+  _dbgWs.onmessage=function(ev){
+    let m;try{m=JSON.parse(ev.data);}catch(e){return;}
+    if(m.type==='wf_debug_start'){nodeStatus={};dbgOut={};dbgOrder=[];setDbgStatus('执行中…','');renderAll();}
+    else if(m.type==='wf_debug_node_start'){nodeStatus[m.id]='running';setDbgStatus('执行中：'+(m.title||m.id)+'（第 '+(dbgOrder.length+1)+' 步）','');renderAll();if(selNode===m.id)showProps();}
+    else if(m.type==='wf_debug_node_end'){nodeStatus[m.id]='done';dbgOut[m.id]=m.outputs;dbgOrder.push(m.id);setDbgStatus('已执行：'+(m.title||m.id)+' ✓','');renderAll();if(selNode===m.id)showProps();}
+    else if(m.type==='wf_debug_done'){
+      dbgRunning=false;dbgOrder=m.order||[];
+      if(m.trace){dbgOut=m.trace;Object.keys(m.trace).forEach(function(id){nodeStatus[id]='done';});}
+      setDbgStatus('执行完成 ✓（共 '+(m.order||[]).length+' 个节点）','done');renderAll();if(selNode)showProps();
+      document.getElementById('btnPlay').disabled=false;
+    }
+    else if(m.type==='wf_debug_error'){
+      dbgRunning=false;
+      Object.keys(nodeStatus).forEach(function(id){if(nodeStatus[id]==='running')nodeStatus[id]='err';});
+      setDbgStatus('出错：'+m.text,'err');renderAll();
+      document.getElementById('btnPlay').disabled=false;
+      toast('⚠️ '+m.text);
+    }
+  };
+  _dbgWs.onclose=function(){setTimeout(_dbgConnect,2000);};
+}
+
+// ============ 初始化（替换原 editor 的裸初始化）============
 renderLegend();loadFileList();loadTools();renderAll();
+_dbgConnect();
+document.getElementById('fileSel').onchange=function(){
+  const p=openWf(fileSel.value);
+  if(p&&p.then)p.then(renderEntryBar);
+  setTimeout(renderEntryBar,400);
+};
+const _wfParam=new URLSearchParams(location.search).get('wf');
+if(_wfParam){
+  const _tryLoad=function(){
+    const opt=[].slice.call(fileSel.options).find(function(o){return o.value===_wfParam;});
+    if(opt){fileSel.value=_wfParam;const p=openWf(_wfParam);if(p&&p.then)p.then(renderEntryBar);setTimeout(renderEntryBar,400);}
+    else{setTimeout(_tryLoad,100);}
+  };
+  _tryLoad();
+}
 </script>
 </body></html>

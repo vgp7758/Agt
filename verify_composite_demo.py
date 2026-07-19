@@ -55,21 +55,20 @@ print(f"完成。返回: {list(result.keys())}")
 # ---- 校验 ----
 errors = []
 
-# 1. LOOP 输出：每轮含 #index + 大写名 + 最终得分，累加到本地变量 report
+# 1. LOOP 输出：setvar 累加 report + 自增 count；selector 在 score<70 时 break
 report = result.get("loop_report", "")
-print(f"\n[1] 循环 report: '{report}'")
-# 预期: "#0 ALICE:540.0;#1 BOB:360.0;#2 CHARLIE:450.0;"
-#   Alice(90): boosted=180, *3=540.0 → "#0 ALICE:540.0;"
-#   Bob(60):   boosted=120, *3=360.0 → "#1 BOB:360.0;"
-#   Charlie(75): boosted=150, *3=450.0 → "#2 CHARLIE:450.0;"
+total = result.get("loop_total")
+print(f"\n[1] 循环 report: '{report}'  count={total}")
+# 预期: "#0 ALICE:540.0;#1 BOB:360.0;"  count=2
+#   Alice(90): boosted=180*3=540 → continue (90>=70)
+#   Bob(60):   boosted=120*3=360 → break (60<70，selector 命中→中断)
+#   Charlie(75): 未处理（break 提前结束）
 checks = [
-    ("report 含 #0 (第0轮)", "#0" in report),
-    ("report 含 #1 (第1轮)", "#1" in report),
-    ("report 含 #2 (第2轮)", "#2" in report),
-    ("report 含 ALICE:540", "ALICE:540" in report),
-    ("report 含 BOB:360", "BOB:360" in report),
-    ("report 含 CHARLIE:450", "CHARLIE:450" in report),
-    ("三轮以分号分隔", report.count(";") >= 3),
+    ("report 含 #0 ALICE:540", "#0 ALICE:540" in report),
+    ("report 含 #1 BOB:360", "#1 BOB:360" in report),
+    ("break 生效：Charlie 未处理", "CHARLIE" not in report and "#2" not in report),
+    ("count 自增到 2", total == 2),
+    ("report 两轮以分号分隔", report.count(";") == 2),
 ]
 for label, ok in checks:
     s = "  ✅" if ok else "  ❌"

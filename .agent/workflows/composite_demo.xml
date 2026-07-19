@@ -9,17 +9,20 @@
   </node>
 
   <!-- ================================================================
-       1. LOOP（循环）—— 原生模型：输出引用本地变量
-       迭代入口(__entry__)暴露 item(带schema)/index/report → body链 → setvar累加 → continue
+       1. LOOP（循环）—— 多工具链 + 双本地变量赋值 + selector 条件 break/continue
+       演示：算数+字符串工具组合、setvar 同时累加 report 和自增 count、
+             selector 判断 score<70 走 break（提前结束），否则 continue
        ================================================================ -->
   <node id="200001" type="loop" title="1.循环处理">
     <param name="loopType"><![CDATA[array]]></param>
     <var name="report" type="string" literal=""/>
+    <var name="count" type="integer" literal="0"/>
     <in name="input" ref="100001.items" type="list">
       <field name="name" type="string"/>
       <field name="score" type="integer"/>
     </in>
     <out name="result" type="string" ref="200001.report"/>
+    <out name="total" type="integer" ref="200001.count"/>
     <out name="all_outputs" type="list"/>
     <out name="filtered_outputs" type="list"/>
     <out name="nth_output" type="object">
@@ -29,7 +32,7 @@
     </out>
     <batch nth="0"/>
     <blocks>
-      <!-- 迭代入口：item 带 schema（子字段可连线），index，report（本地变量） -->
+      <!-- 迭代入口：item(带schema) / index / report / count（本地变量） -->
       <node id="__entry__" type="start" title="迭代入口">
         <out name="item" type="object">
           <field name="name" type="string"/>
@@ -37,23 +40,27 @@
         </out>
         <out name="index" type="integer"/>
         <out name="report" type="string"/>
+        <out name="count" type="integer"/>
       </node>
 
-      <!-- c1: 从迭代入口取 item.name / item.score / index，算 boosted = score * 2 -->
-      <node id="200011" type="code" title="提取item字段与index">
+      <!-- c1: 取 item 字段 + count，算 boosted=score*2 和 next_count=count+1 -->
+      <node id="200011" type="code" title="提取字段+算boosted和计数">
         <in name="name"  ref="__entry__.item.name"  type="string"/>
         <in name="score" ref="__entry__.item.score" type="integer"/>
         <in name="round" ref="__entry__.index"      type="integer"/>
+        <in name="count" ref="__entry__.count"      type="integer"/>
         <code language="3"><![CDATA[
 async def main(args):
     name = args.params.get('name', '?')
     score = args.params.get('score', 0)
     round_num = args.params.get('round', 0)
-    return {'name': name, 'boosted': score * 2, 'round': round_num}
+    count = args.params.get('count', 0)
+    return {'name': name, 'boosted': score * 2, 'round': round_num, 'next_count': count + 1}
 ]]></code>
         <out name="name" type="string"/>
         <out name="boosted" type="integer"/>
         <out name="round" type="integer"/>
+        <out name="next_count" type="integer"/>
       </node>
 
       <!-- p1: multiply boosted * 3 = 最终得分 (算数工具) -->
@@ -78,12 +85,21 @@ async def main(args):
         <result><![CDATA[{{acc}}#{{round}} {{upper}}:{{score}};]]></result>
       </node>
 
-      <!-- s1: setvar 把 text 输出写回本地变量 report（跨轮累加） -->
-      <node id="200015" type="setvar" title="写回report变量">
-        <in name="report" left="__entry__.report" left_type="string" right="ref:200014.output" right_type="string"/>
+      <!-- s1: setvar 同时写回两个本地变量——report(累加) + count(自增) -->
+      <node id="200015" type="setvar" title="写回report和count">
+        <in name="report" left="__entry__.report" left_type="string"  right="ref:200014.output"    right_type="string"/>
+        <in name="count"  left="__entry__.count"  left_type="integer" right="ref:200011.next_count" right_type="integer"/>
       </node>
 
-      <!-- continue：本轮结束 + 捕获本轮输出（name/final_score）→ all/filtered/nth -->
+      <!-- selector：判断当前 item.score < 70 → break（提前结束循环），否则 continue -->
+      <node id="200016" type="selector" title="低分则中断">
+        <branch><cond op="15" left="__entry__.item.score" right="70" left_type="integer" right_type="integer"/></branch>
+      </node>
+
+      <!-- break 控制点：selector 命中低分时走到这里，提前结束循环 -->
+      <node id="__break__" type="break" title="中断(Break)"/>
+
+      <!-- continue：捕获本轮输出（name/score/round）→ all/filtered/nth -->
       <node id="__continue__" type="continue" title="继续(本轮输出)">
         <in name="name"  ref="200013.raw"    type="string"/>
         <in name="score" ref="200012.raw"    type="number"/>
@@ -97,7 +113,10 @@ async def main(args):
       <edge source="200012" target="200013"/>
       <edge source="200013" target="200014"/>
       <edge source="200014" target="200015"/>
-      <edge source="200015" target="__continue__"/>
+      <edge source="200015" target="200016"/>
+      <!-- selector 分支：true(score<70) → break；false → continue -->
+      <edge source="200016" target="__break__" sourcePort="true"/>
+      <edge source="200016" target="__continue__" sourcePort="false"/>
     </edges>
   </node>
 
@@ -205,6 +224,7 @@ async def main(args):
   <!-- ===== Exit：收集三路输出 ===== -->
   <node id="900001" type="end" title="结束">
     <out name="loop_report"    ref="200001.result"           type="string"/>
+    <out name="loop_total"     ref="200001.total"            type="integer"/>
     <out name="loop_all"       ref="200001.all_outputs"      type="list"/>
     <out name="loop_nth"       ref="200001.nth_output"       type="object"/>
     <out name="batch_all"      ref="300001.all_outputs"      type="list"/>

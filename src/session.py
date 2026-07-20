@@ -420,7 +420,7 @@ class Session:
             name += ".json"
         self._capture_state()  # 落盘前收集 Agent 附加状态（plan/自主模式等），无论谁触发 save
         d = _repo_sessions_dir(self.workspace)
-        (d / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")  # 便于人眼追溯
+        (d.parent / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")  # repo 级：repos/<hash>/_origin.txt
         path = d / name
         # 锁保护「快照 turns + 序列化 + 写文件」整段：与 _autosave 的 daemon 线程、
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。

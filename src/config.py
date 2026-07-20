@@ -108,6 +108,11 @@ def save_runtime_settings(settings: dict):
 DEFAULT_RAG_CONFIG = {
     "enabled": False,
     "embed_model_path": "",
+    "embed_provider": "local",   # local | api（api 走 OpenAI 兼容 /v1/embeddings）
+    "embed_api_url": "",
+    "embed_api_token": "",
+    "embed_api_model": "",
+    "embed_api_dim": 0,          # API 返回维度；0 = 首次 encode 自动探测
     "docs_dir": "",
     "exts": [".md", ".txt", ".json"],
     "exclude_globs": ["*_Audit.*"],

@@ -48,8 +48,23 @@
   <div class="card">
     <h2>配置</h2>
     <label><input type="checkbox" id="cfg_enabled"> 启用 RAG（勾选后 rag_query 工具才会真正建库/召回）</label>
+    <label>embedding 来源</label>
+    <select id="cfg_provider" onchange="RAG.toggleProvider()">
+      <option value="local">本地模型（sentence-transformers）</option>
+      <option value="api">API（OpenAI 兼容 /v1/embeddings）</option>
+    </select>
     <label>embedding 模型路径（本地 sentence-transformers 目录）</label>
     <input id="cfg_embed" type="text" placeholder="D:/models/bge-small-zh-v1.5">
+    <div id="api_fields" style="display:none">
+      <label>API base_url（如 https://api.siliconflow.cn/v1）</label>
+      <input id="cfg_apiurl" type="text" placeholder="https://api.siliconflow.cn/v1">
+      <div class="row">
+        <div><label>API token（key）</label><input id="cfg_apitoken" type="password" placeholder="sk-..."></div>
+        <div><label>维度（0=自动探测）</label><input id="cfg_apidim" type="number" value="0"></div>
+      </div>
+      <label>API model（如 BAAI/bge-m3）</label>
+      <input id="cfg_apimodel" type="text" placeholder="BAAI/bge-m3">
+    </div>
     <label>建库文档目录 docs_dir</label>
     <input id="cfg_docs" type="text" placeholder="D:/Projects/BunkerProject/Docs/Liskarm">
     <div class="row">
@@ -120,6 +135,11 @@ const RAG = {
     const $ = id => document.getElementById(id);
     $('cfg_enabled').checked = !!c.enabled;
     $('cfg_embed').value = c.embed_model_path||'';
+    $('cfg_provider').value = c.embed_provider||'local';
+    $('cfg_apiurl').value = c.embed_api_url||'';
+    $('cfg_apitoken').value = c.embed_api_token||'';
+    $('cfg_apimodel').value = c.embed_api_model||'';
+    $('cfg_apidim').value = c.embed_api_dim??0;
     $('cfg_docs').value = c.docs_dir||'';
     $('cfg_exts').value = (c.exts||[]).join(',');
     $('cfg_exclude').value = (c.exclude_globs||[]).join(',');
@@ -130,6 +150,7 @@ const RAG = {
     $('cfg_lp').value = c.lines_per??60;
     $('cfg_ov').value = c.overlap??15;
     $('cfg_batch').value = c.batch??32;
+    this.toggleProvider();
     this.refreshStats();
     wsConnect();
   },
@@ -139,6 +160,11 @@ const RAG = {
     return {
       enabled: document.getElementById('cfg_enabled').checked,
       embed_model_path: document.getElementById('cfg_embed').value.trim(),
+      embed_provider: document.getElementById('cfg_provider').value,
+      embed_api_url: document.getElementById('cfg_apiurl').value.trim(),
+      embed_api_token: document.getElementById('cfg_apitoken').value.trim(),
+      embed_api_model: document.getElementById('cfg_apimodel').value.trim(),
+      embed_api_dim: num('cfg_apidim'),
       docs_dir: document.getElementById('cfg_docs').value.trim(),
       exts: list('cfg_exts'),
       exclude_globs: list('cfg_exclude'),
@@ -152,6 +178,10 @@ const RAG = {
       overlap: num('cfg_ov'),
       batch: num('cfg_batch'),
     };
+  },
+  toggleProvider(){
+    document.getElementById('api_fields').style.display =
+      document.getElementById('cfg_provider').value === 'api' ? 'block' : 'none';
   },
   async save(){
     const r = await api('PUT','/api/rag/config', this.readForm());

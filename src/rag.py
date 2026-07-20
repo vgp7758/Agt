@@ -19,12 +19,42 @@ import numpy as np
 from sentence_transformers import SentenceTransformer, CrossEncoder
 
 
+class APIEmbedder:
+    """OpenAI 兼容的 /v1/embeddings API embedder（硅基流动/智谱/OpenAI 等大多兼容）。
+    对齐 SentenceTransformer 接口：encode(texts,...)→np.ndarray；get_sentence_embedding_dimension()。"""
+    def __init__(self, base_url, api_token, model, dim=0):
+        self.url = base_url.rstrip("/") + "/embeddings"
+        self.headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+        self.model = model
+        self.dim = dim   # 0 = 第一次 encode 时自动探测
+
+    def get_sentence_embedding_dimension(self):
+        return self.dim
+
+    def encode(self, texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False):
+        import httpx
+        out = []
+        for i in range(0, len(texts), batch_size):
+            batch = list(texts[i:i + batch_size])
+            r = httpx.post(self.url, json={"model": self.model, "input": batch},
+                           headers=self.headers, timeout=300)
+            r.raise_for_status()
+            data = r.json().get("data", [])
+            out.extend(d["embedding"] for d in sorted(data, key=lambda x: x.get("index", 0)))
+        vecs = np.asarray(out, dtype="float32")
+        if self.dim == 0 and vecs.size:
+            self.dim = vecs.shape[1]
+        if normalize_embeddings and vecs.size:
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            vecs = vecs / np.maximum(norms, 1e-12)
+        return vecs
+
+
 class LocalRAG:
-    def __init__(self, embed_model_path, index_dir, reranker_path=None, config=None):
-        print(f"[rag] 加载 embedding 模型 {embed_model_path} ...")
-        self.embedder = SentenceTransformer(embed_model_path)
-        self.dim = self.embedder.get_sentence_embedding_dimension()
-        print(f"[rag] 向量维度 dim={self.dim}")
+    def __init__(self, embedder, index_dir, reranker_path=None, config=None):
+        self.embedder = embedder
+        self.dim = embedder.get_sentence_embedding_dimension()
+        print(f"[rag] embedder={type(embedder).__name__} dim={self.dim}")
         self.store_dir = Path(index_dir)
         self.store_dir.mkdir(parents=True, exist_ok=True)
         self.faiss_path = self.store_dir / "vecs.index"
@@ -39,17 +69,45 @@ class LocalRAG:
         self._init_db()
         self.index = self._new_index()
         self._next_id = 0
+        # 加载已有索引（维度匹配则复用，重启后查询不丢）
+        if self.faiss_path.exists():
+            try:
+                loaded = faiss.read_index(str(self.faiss_path))
+                if loaded.d == self.dim:
+                    self.index = loaded
+                    self._next_id = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                    print(f"[rag] 已加载现有索引：{self.index.ntotal} 向量")
+            except Exception as e:
+                print(f"[rag] 加载现有索引失败（将用空索引）：{e}")
 
     @classmethod
     def from_config(cls, workspace, cfg=None):
-        """按 <workspace>/.agent/rag.json 构建实例；enabled 关或没填模型路径 → 返回 None（不抛）。"""
+        """按 rag.json 构建实例；enabled 关或 embedder 配置不全 → 返回 None（不抛）。"""
         if cfg is None:
             from config import load_rag_config
             cfg = load_rag_config(workspace)
-        if not cfg.get("enabled") or not cfg.get("embed_model_path"):
+        if not cfg.get("enabled"):
             return None
+        # embedder：local（SentenceTransformer）或 api（APIEmbedder，OpenAI 兼容）
+        provider = cfg.get("embed_provider", "local")
+        try:
+            if provider == "api":
+                if not cfg.get("embed_api_url") or not cfg.get("embed_api_model"):
+                    print("[rag] API embedding 缺 embed_api_url/embed_api_model")
+                    return None
+                embedder = APIEmbedder(cfg["embed_api_url"], cfg.get("embed_api_token", ""),
+                                        cfg["embed_api_model"], cfg.get("embed_api_dim", 0))
+            else:
+                if not cfg.get("embed_model_path"):
+                    return None
+                print(f"[rag] 加载本地 embedding 模型 {cfg['embed_model_path']} ...")
+                embedder = SentenceTransformer(cfg["embed_model_path"])
+        except Exception as e:
+            print(f"[rag] embedder 初始化失败：{e}")
+            return None
+        # index_dir：空/旧默认 → per-repo 用户目录
         index_dir_cfg = cfg.get("index_dir", "")
-        if not index_dir_cfg or index_dir_cfg == ".agent/rag":   # 空/旧默认 → per-repo 用户目录
+        if not index_dir_cfg or index_dir_cfg == ".agent/rag":
             from session import REPOS_DIR, _repo_hash
             index_dir = REPOS_DIR / _repo_hash(workspace) / "rag"
         elif not Path(index_dir_cfg).is_absolute():
@@ -58,7 +116,7 @@ class LocalRAG:
             index_dir = Path(index_dir_cfg)
         reranker_path = cfg.get("reranker_path") if cfg.get("reranker_enabled") else None
         try:
-            return cls(cfg["embed_model_path"], index_dir, reranker_path=reranker_path, config=cfg)
+            return cls(embedder, index_dir, reranker_path=reranker_path, config=cfg)
         except Exception as e:
             print(f"[rag] 实例化失败：{e}")
             return None

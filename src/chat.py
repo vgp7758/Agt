@@ -34,11 +34,12 @@ _MODELS_DESC = "；".join(f"{n}（{m.get('desc', '').strip()}）" for n, m in co
 
 
 def _load_agent_md() -> str:
-    """读取启动目录 (cwd) 中用户自编辑的 AGENT.md，作为领域任务指引拼进 SYSTEM。"""
-    p = WORKSPACE / "AGENT.md"
-    if not p.exists():
-        return "(未找到 AGENT.md，可在当前目录创建后重启生效)"
-    return p.read_text(encoding="utf-8").strip()
+    """读取启动目录 (cwd) 中用户自编辑的 AGENTS.md（向后兼容 AGENT.md），作为领域任务指引拼进 SYSTEM。"""
+    for name in ("AGENTS.md", "AGENT.md"):   # 优先 AGENTS.md（OpenAI 跨工具标准），兼容旧 AGENT.md
+        p = WORKSPACE / name
+        if p.exists():
+            return p.read_text(encoding="utf-8").strip()
+    return "(未找到 AGENTS.md，可在当前目录创建后重启生效)"
 
 
 def _rules_and_skills_section() -> str:
@@ -55,7 +56,7 @@ def _rules_and_skills_section() -> str:
     return ("\n\n" + "\n\n".join(parts)) if parts else ""
 
 
-# SYSTEM = 默认角色 + 内置工具 + 框架能力（代码拥有）+ 工作区 AGENT.md（用户自编辑）
+# SYSTEM = 默认角色 + 内置工具 + 框架能力（代码拥有）+ 工作区 AGENTS.md（用户自编辑）
 SYSTEM = build_system(
     persona="默认助手",
     extra=(
@@ -109,7 +110,7 @@ SYSTEM = build_system(
         + "\n\n【后台服务 + 定时调度】start_service(name, command) 后台启动长服务（如你写的后端 `python app.py` 或 `python -m http.server 8000`）做前后端联调——其状态会自动显示在每轮系统提示里，无需自己查；service_logs 看输出、stop_service 停止、list_services 总览。"
           "add_schedule(name, every_seconds=N, message='...') 每 N 秒自动推送一条消息触发你跑一轮（repeat 控制循环）；add_schedule(name, at='2026-07-20T17:30:00', tool='web_search', tool_args={...}) 到点执行工具拿结果触发（动态消息）；cancel_schedule/list_schedules 管理。"
           "适合：长联调时定时自检、到点搜集信息并处理、周期性监控与续作。被后台触发的那一轮，你能从上下文里看到 [后台触发·任务名] 标记。"
-        + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
+        + "\n\n=== 任务指引（当前目录 AGENTS.md，用户可自行编辑）===\n"
         + _load_agent_md()
         + _rules_and_skills_section()
     ),

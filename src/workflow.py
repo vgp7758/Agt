@@ -1642,6 +1642,8 @@ def get_hook_workflows(workspace: Path = None, hook: str = "") -> list[dict]:
         meta = it.get("meta") or {}
         if not it.get("canvas") or it.get("error"):
             continue
+        if meta.get("enabled") is False:         # 显式禁用的钩子不触发（开关机制）
+            continue
         h = meta.get("hook")
         if h is None and meta.get("auto"):       # 旧式 auto:true ≡ before_turn
             h = "before_turn"
@@ -1662,13 +1664,17 @@ def get_auto_workflows(workspace: Path = None) -> list[dict]:
 
 
 def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tuple:
-    """执行一个钩子工作流，返回 (inject: bool, result: str)。
+    """执行一个钩子工作流，返回 (inject: bool, result: str, message: str)。
 
-    约定：结束节点返回 {inject: bool, result: str}。解析规则——
-      - 显式 end 返回 dict 且含 inject 键 → 用其 inject/result（output 作 result 兜底）；
-      - dict 无 inject（如旧式 {output:x}）→ inject=True，取唯一值；
+    结束节点约定返回 {inject: bool, result: str, message: str}：
+      - inject=true + result → 作 system 旁注喂主 LLM（注入语义）；
+      - message（无论 inject）→ 发 workflow_message 事件到 UI，【不进主 LLM】
+        （用于"静默执行+系统通知"类钩子，如 wiki 自动维护）。
+    解析规则——
+      - 显式 end 返回 dict：inject 缺省按 result 非空推断；result 兜底 output；
+      - dict 无 inject（旧式 {output:x} / 引用未解析 {result:None}）：取唯一值，None/空 → 不注入；
       - 隐式 end/纯文本 → 尝试 JSON 解析；失败则整体当 result，inject=True（非空即注入）。
-    inject 可能以字符串 'false'/'true' 形式传来（节点字段类型为 string 时），按布尔语义归一化。
+    inject 可能以字符串 'false'/'true' 形式传来，按布尔语义归一化；message 始终为字符串。
     """
     def _to_bool(v):
         if v is None:
@@ -1678,23 +1684,30 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tupl
         if isinstance(v, (int, float)):
             return v != 0
         return str(v).strip().lower() not in ("false", "0", "no", "off", "none", "")
+    def _msg(d):
+        m = d.get("message")
+        return "" if m is None else str(m)
+
     ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace, return_exit_dict=True)
     if isinstance(ret, dict):
+        msg = _msg(ret)
         if "inject" in ret:
-            return _to_bool(ret.get("inject")), str(ret.get("result") or ret.get("output") or "")
+            return _to_bool(ret.get("inject")), str(ret.get("result") or ret.get("output") or ""), msg
         # 无 inject 键（旧式 {output:x} / 引用未解析的 {result:None}）：取唯一值，None/空 → 不注入
-        v = next(iter(ret.values()), None) if ret else None
+        v = next((ret.get(k) for k in ("result", "output") if k in ret), None)
+        if v is None and ret:
+            v = next(iter(ret.values()))
         vs = "" if v is None else str(v)
-        return (bool(vs), vs)
+        return (bool(vs), vs, msg)
     s = str(ret).strip()
     if s.startswith("{"):
         try:
             d = json.loads(s)
             if isinstance(d, dict) and "inject" in d:
-                return _to_bool(d.get("inject")), str(d.get("result") or d.get("output") or "")
+                return _to_bool(d.get("inject")), str(d.get("result") or d.get("output") or ""), _msg(d)
         except Exception:
             pass
-    return (bool(s), s)
+    return (bool(s), s, "")
 
 
 def seed_default_workflows(workspace: Path = None) -> int:

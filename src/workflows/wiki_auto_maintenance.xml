@@ -1,0 +1,82 @@
+<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→调 update_wiki 子 Agent 维护→报告发系统消息（不喂主 LLM，before_answer 钩子，默认关）" hook="before_answer" enabled="false">
+  <!-- before_answer 钩子注入的上下文 -->
+  <node id="100001" type="start">
+    <out name="user_message" type="string"/>
+    <out name="draft_answer" type="string"/>
+    <out name="turn_context" type="string"/>
+  </node>
+
+  <!-- LLM1：判断本轮是否值得写入 wiki + 生成维护摘要（严格 JSON） -->
+  <node id="110001" type="llm">
+    <in name="user_message" ref="100001.user_message"/>
+    <in name="draft_answer" ref="100001.draft_answer"/>
+    <in name="turn_context" ref="100001.turn_context"/>
+    <param name="systemPrompt"><![CDATA[你是 repo-wiki 维护判官。判断本轮对话是否值得记录进项目知识库（.agent/wiki/）。
+值得记录：实现了新功能、修复了 bug、做出架构/设计决策、摸清了某模块的工作原理、解决了值得备忘的问题。
+不值得记录：纯闲聊、简单问答、查询信息、未产生可复用知识。
+只输出一个 JSON 对象，不要 markdown：
+{"needs_maintenance": true, "summary": "本轮做了什么、影响哪些模块、关键结论"}
+needs_maintenance=false 时 summary 给空串。summary 要聚焦改动，简洁（交由后续子 Agent 据此 wiki_tree/wiki_read 后 wiki_write）。]]></param>
+    <param name="prompt"><![CDATA[用户任务：
+{{user_message}}
+
+本轮工具调用（做了什么）：
+{{turn_context}}
+
+主 Agent 最终回答：
+{{draft_answer}}]]></param>
+    <param name="temperature" type="float">0.2</param>
+    <out name="output" type="string"/>
+  </node>
+
+  <!-- code1：解析 JSON → needs_maintenance + summary -->
+  <node id="120001" type="code">
+    <in name="llm_out" ref="110001.output"/>
+    <code language="3"><![CDATA[
+import json
+async def main(args) -> dict:
+    raw = args.params.get("llm_out") or ""
+    needs, summary = False, ""
+    s = raw.strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i >= 0 and j > i:
+        try:
+            d = json.loads(s[i:j+1])
+            needs = bool(d.get("needs_maintenance"))
+            summary = str(d.get("summary") or "")
+        except Exception:
+            pass
+    return {"needs_maintenance": needs, "summary": summary}
+]]></code>
+    <out name="needs_maintenance" type="boolean"/>
+    <out name="summary" type="string"/>
+  </node>
+
+  <!-- selector：仅 needs_maintenance=true 才维护 -->
+  <node id="130001" type="selector">
+    <branch>
+      <cond op="1" left="120001.needs_maintenance" right="true" left_type="boolean" right_type="boolean"/>
+    </branch>
+  </node>
+
+  <!-- update_wiki：现有 wiki 维护子 Agent（带 wiki CRUD 工具，静默 ReAct），返回维护报告 -->
+  <node id="140001" type="plugin" toolName="update_wiki">
+    <in name="summary" type="string" ref="120001.summary"/>
+    <out name="raw" type="string"/>
+  </node>
+
+  <!-- 单 end：维护分支返回 {inject:false, message:报告}（发 UI 系统消息，不喂主 LLM）；
+       跳过分支（不值得维护）140001 未执行 → message=None→'' 静默，inject=false。
+       inject 始终 false：维护绝不重跑/改写主 Agent 的回答。 -->
+  <node id="900001" type="end">
+    <out name="inject" type="boolean">false</out>
+    <out name="message" type="string" ref="140001.raw"/>
+  </node>
+
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120001"/>
+  <edge from="120001" to="130001"/>
+  <edge from="130001" to="140001" port="true"/>
+  <edge from="140001" to="900001"/>
+  <edge from="130001" to="900001" port="false"/>
+</workflow>

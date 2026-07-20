@@ -312,7 +312,9 @@ class Agent:
     def _run_hooks(self, hook: str, context: dict) -> list[str]:
         """运行所有声明在 hook 位置触发的工作流，返回需注入的 result 列表（已带【...】前缀）。
         context: 该钩子位置的上下文（key 对应工作流开始节点 <out> 声明）。
-        工作流约定返回 {inject, result}：inject=True 才把 result 加入返回列表。
+        工作流约定返回 {inject, result, message}：
+          - inject=True 且 result 非空 → 加入返回列表（作 system 旁注喂主 LLM）；
+          - message 非空 → 发 workflow_message 事件到 UI（不进主 LLM，用于静默通知类钩子）。
         失败仅发 auto_wf_error 事件，绝不炸主循环。"""
         notes = []
         try:
@@ -322,10 +324,14 @@ class Agent:
                 try:
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "text": str(context)[:80]})
-                    inject, result = run_hook(hw["canvas"], context,
+                    inject, result, message = run_hook(hw["canvas"], context,
                                               tools=self.tools, llm=self.llm, workspace=_ws)
                     self._emit({"type": "auto_wf", "name": hw["name"], "hook": hook,
-                                "text": result[:300]})
+                                "text": result[:300] or message[:300]})
+                    if message.strip():
+                        # 系统消息：仅 UI 可见，不进主 LLM（如 wiki 自动维护报告）
+                        self._emit({"type": "workflow_message", "name": hw["name"], "hook": hook,
+                                    "text": message})
                     if inject and result.strip():
                         notes.append(f"【{hook} 钩子「{hw['name']}」补充】{result}")
                 except Exception as e2:
@@ -334,6 +340,24 @@ class Agent:
         except Exception:
             pass  # 钩子机制本身绝不影响主循环
         return notes
+
+    def _turn_context_str(self) -> str:
+        """本轮（进行中）的工具调用摘要，供 before_answer 钩子（如 wiki 自动维护）判断
+        '本轮做了什么值得记录'。格式：每步每调用一行 `name(args)→result[:150]`。"""
+        cur = self.session._current
+        if not cur or not cur.steps:
+            return ""
+        lines = []
+        for step in cur.steps:
+            for tc in step.tool_calls:
+                args_s = json.dumps(tc.arguments, ensure_ascii=False)
+                if len(args_s) > 120:
+                    args_s = args_s[:117] + "..."
+                res = (tc.result or "")
+                if len(res) > 150:
+                    res = res[:147] + "..."
+                lines.append(f"- {tc.name}({args_s}) → {res}")
+        return "\n".join(lines)
 
     def _chat_msgs(self) -> list:
         """构造喂给 LLM 的消息：session 上下文 + 排空 hook 旁注 + before_answer 重做草稿（临时 assistant 续接）。
@@ -470,8 +494,10 @@ class Agent:
                             # （回答可能被修正/补充）；草稿不变即收敛，另设上限 5 防死循环。
                             draft = resp.content or ""
                             cur_user_msg = self.session._current.user_message if self.session._current else ""
+                            turn_context = self._turn_context_str()
                             ba_notes = self._run_hooks("before_answer",
-                                                       {"user_message": cur_user_msg, "draft_answer": draft})
+                                                       {"user_message": cur_user_msg, "draft_answer": draft,
+                                                        "turn_context": turn_context})
                             if ba_notes and draft != self._last_answer_draft \
                                     and self._answer_inject_count < 5:
                                 self._last_answer_draft = draft

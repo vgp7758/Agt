@@ -576,7 +576,7 @@ ws.onmessage=(ev)=>{
 	      }
 	      break;
     case 'workflow_message':
-      addRow('sys', '💬 '+m.text);
+      addRow('sys', '💬 '+(m.name?('【'+m.name+'】'):'')+m.text);
       break;
     case '_ping':
       break;  // 心跳，不渲染

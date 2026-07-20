@@ -124,11 +124,13 @@ DEFAULT_RAG_CONFIG = {
 
 
 def _rag_config_path(workspace) -> Path:
-    return Path(workspace) / ".agent" / "rag.json"
+    """RAG 配置 per-repo 存用户目录：~/.agt/repos/<hash>/rag.json（与 sessions 同根，不污染项目仓库）。"""
+    from session import REPOS_DIR, _repo_hash   # 局部 import 避免循环
+    return REPOS_DIR / _repo_hash(workspace) / "rag.json"
 
 
 def load_rag_config(workspace) -> dict:
-    """从 <workspace>/.agent/rag.json 加载 RAG 配置；不存在返回默认（合并补全新字段）。"""
+    """从 ~/.agt/repos/<hash>/rag.json 加载 RAG 配置；不存在返回默认（合并补全新字段）。"""
     p = _rag_config_path(workspace)
     if p.exists():
         try:
@@ -141,18 +143,24 @@ def load_rag_config(workspace) -> dict:
 
 
 def save_rag_config(workspace, cfg: dict):
-    """写入 RAG 配置到 <workspace>/.agent/rag.json。"""
+    """写入 RAG 配置到 ~/.agt/repos/<hash>/rag.json。"""
     p = _rag_config_path(workspace)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def seed_rag_config(workspace) -> bool:
-    """首次播种默认 RAG 配置；已存在不覆盖。返回是否新播种。"""
+    """首次播种：新位置不存在时优先迁移旧 <workspace>/.agent/rag.json，否则写默认。返回是否新建。"""
     p = _rag_config_path(workspace)
     if p.exists():
         return False
-    save_rag_config(workspace, DEFAULT_RAG_CONFIG)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    legacy = Path(workspace) / ".agent" / "rag.json"
+    if legacy.exists():
+        import shutil
+        shutil.copy2(legacy, p)   # 迁移旧配置（含用户已填的 docs_dir/模型路径）
+        return True
+    p.write_text(json.dumps(DEFAULT_RAG_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
 
 

@@ -6,7 +6,7 @@
     <out name="turn_context" type="string"/>
   </node>
 
-  <!-- LLM1：判断本轮是否值得写入 wiki + 生成维护摘要（严格 JSON） -->
+  <!-- LLM1：判断本轮是否值得写入 wiki + 生成维护摘要（严格 JSON；结构化输出 needs_maintenance/summary） -->
   <node id="110001" type="llm">
     <in name="user_message" ref="100001.user_message"/>
     <in name="draft_answer" ref="100001.draft_answer"/>
@@ -26,42 +26,21 @@ needs_maintenance=false 时 summary 给空串。summary 要聚焦改动，简洁
 主 Agent 最终回答：
 {{draft_answer}}]]></param>
     <param name="temperature" type="float">0.2</param>
-    <out name="output" type="string"/>
-  </node>
-
-  <!-- code1：解析 JSON → needs_maintenance + summary -->
-  <node id="120001" type="code">
-    <in name="llm_out" ref="110001.output"/>
-    <code language="3"><![CDATA[
-import json
-async def main(args) -> dict:
-    raw = args.params.get("llm_out") or ""
-    needs, summary = False, ""
-    s = raw.strip()
-    i, j = s.find("{"), s.rfind("}")
-    if i >= 0 and j > i:
-        try:
-            d = json.loads(s[i:j+1])
-            needs = bool(d.get("needs_maintenance"))
-            summary = str(d.get("summary") or "")
-        except Exception:
-            pass
-    return {"needs_maintenance": needs, "summary": summary}
-]]></code>
     <out name="needs_maintenance" type="boolean"/>
     <out name="summary" type="string"/>
+    <out name="output" type="string"/>
   </node>
 
   <!-- selector：仅 needs_maintenance=true 才维护 -->
   <node id="130001" type="selector">
     <branch>
-      <cond op="1" left="120001.needs_maintenance" right="true" left_type="boolean" right_type="boolean"/>
+      <cond op="1" left="110001.needs_maintenance" right="true" left_type="boolean" right_type="boolean"/>
     </branch>
   </node>
 
   <!-- update_wiki：现有 wiki 维护子 Agent（带 wiki CRUD 工具，静默 ReAct），返回维护报告 -->
   <node id="140001" type="plugin" toolName="update_wiki">
-    <in name="summary" type="string" ref="120001.summary"/>
+    <in name="summary" type="string" ref="110001.summary"/>
     <out name="raw" type="string"/>
   </node>
 
@@ -74,8 +53,7 @@ async def main(args) -> dict:
   </node>
 
   <edge from="100001" to="110001"/>
-  <edge from="110001" to="120001"/>
-  <edge from="120001" to="130001"/>
+  <edge from="110001" to="130001"/>
   <edge from="130001" to="140001" port="true"/>
   <edge from="140001" to="900001"/>
   <edge from="130001" to="900001" port="false"/>

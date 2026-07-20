@@ -151,8 +151,10 @@ def _resolve_input_params(params_list: list, ctx) -> dict:
 # ========== 节点处理器（S1：LLM；其余后续阶段补）==========
 
 def _handle_llm(node: dict, ctx) -> dict:
-    """type 3：渲染 prompt/systemPrompt，调用 ctx.llm，输出 {output: 文本}。
-    本节点声明的 outputs 结构会作为 JSON Schema 自动并入 systemPrompt，约束模型输出格式。"""
+    """type 3：渲染 prompt/systemPrompt，调用 ctx.llm。
+    本节点声明的 outputs 结构会作为 JSON Schema 自动并入 systemPrompt，约束模型输出格式；
+    若声明了多字段/结构化输出（非单个 output:string），还会把模型返回的 JSON 按字段名解析
+    （按声明 type 强转）展开成具名输出，解析失败则降级回 {output: 原文}。"""
     inputs = node.get("data", {}).get("inputs", {})
     params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
 
@@ -183,7 +185,14 @@ def _handle_llm(node: dict, ctx) -> dict:
         except (TypeError, ValueError):
             pass
     resp = ctx.llm.chat(msgs, **overrides)
-    return {"outputs": {"output": getattr(resp, "content", "") or ""}, "port": None}
+    content = getattr(resp, "content", "") or ""
+    outs = {"output": content}
+    if outputs and _needs_structured_parse(outputs):
+        parsed = _parse_structured_output(content, outputs)
+        if parsed is not None:
+            parsed["output"] = content   # 保留原文：调试 + 向后兼容引用 .output
+            outs = parsed
+    return {"outputs": outs, "port": None}
 
 
 def _outputs_to_json_schema(outputs: list) -> dict:
@@ -223,6 +232,52 @@ def _outputs_to_json_schema(outputs: list) -> dict:
         nm = o.get("name", "")
         props[nm] = _var_to_schema(o)
     return {"type": "object", "properties": props, "required": list(props.keys())}
+
+
+def _needs_structured_parse(outputs: list) -> bool:
+    """outputs 里只要有一个字段不是 (name=="output" 且 type==string)，就视为结构化输出需解析。
+    单个 output:string（最常见、纯文本 LLM 节点）→ 不解析，保持 {output: 文本} 旧行为。"""
+    for o in outputs:
+        if o.get("name") != "output" or o.get("type", "string") not in ("string", None):
+            return True
+    return False
+
+
+def _coerce_field(v, t: str):
+    """按声明的 output type 强转 LLM 解析出的 JSON 值，保证下游 selector/引用按强类型消费
+    （_cmp 的 Equal 不做宽化，全靠上游给对类型；boolean 尤其要转成 Python bool）。"""
+    try:
+        if t in ("boolean", "bool"):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.strip().lower() in ("1", "true", "yes")
+            return bool(v)
+        if t in ("integer", "int"):
+            return int(v)
+        if t in ("number", "float"):
+            return float(v)
+    except (ValueError, TypeError):
+        return v
+    return v
+
+
+def _parse_structured_output(content: str, outputs: list):
+    """LLM 声明了结构化 outputs 时，尝试把模型输出的 JSON 解析成具名字段（按声明 type 强转）。
+    容错：截取首个 '{' 到末个 '}' 之间的子串（抗 markdown 围栏/多余解释）。
+    返回 {字段名: 值}；失败（非对象 / 截取不到 / JSON 解析失败）→ None，由调用方降级。"""
+    s = (content or "").strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        d = json.loads(s[i:j + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    return {o.get("name"): _coerce_field(d.get(o.get("name")), o.get("type", "string"))
+            for o in outputs if o.get("name")}
 
 
 def _handle_code(node: dict, ctx) -> dict:

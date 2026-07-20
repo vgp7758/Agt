@@ -74,6 +74,19 @@ XML 中 type 用可读名字（也兼容数字）：
 </node>
 ```
 
+声明**多字段 outputs** 即得结构化输出：模型按 schema 输出 JSON，执行器按字段名解析（按 type 强转）成具名输出，下游直接引用，无需 code 节点 `json.loads`：
+```xml
+<node id="130001" type="llm">
+  <in name="q" ref="100001.q"/>
+  <param name="systemPrompt"><![CDATA[只输出 JSON：{"related": true, "keywords": ["..."]}]]></param>
+  <param name="prompt"><![CDATA[{{q}}]]></param>
+  <out name="related" type="boolean"/>   <!-- 下游 selector 可直接 left="130001.related" -->
+  <out name="keywords" type="list"/>
+  <out name="output" type="string"/>     <!-- 始终保留=原文，调试/降级兜底 -->
+</node>
+```
+模型输出非 JSON 时自动降级为 `{output: 原文}`，具名字段缺失（下游引用得 None）。
+
 **code**（代码用 CDATA，引号/花括号随便写）：
 ```xml
 <node id="500001" type="code">
@@ -441,7 +454,9 @@ async def main(args):
 - `data.inputs.llmParam`：数组，每项 `{name, input}`，name 含 `prompt`/`systemPrompt`/`temperature`/`maxTokens`
 - `data.inputs.inputParameters`：供 prompt 模板 `{{}}` 引用的变量
 - `data.outputs`：**自动转为 JSON Schema 并并入 systemPrompt**，约束模型按结构输出
-- 输出：`{output: 文本}`（推理模型额外有 `reasoning_content`）
+- 输出：
+  - 单个 `output:string`（默认 / 纯文本 LLM 节点）→ `{output: 文本}`（推理模型额外有 `reasoning_content`）
+  - 多字段 / 结构化 outputs（任一字段非 `output:string`）→ 模型返回的 JSON **按字段名解析（按声明 type 强转）**展开成具名输出，并保留 `output`=原文；**解析失败降级回 `{output: 文本}`**。下游可直接 `ref="节点id.字段名"` 引用，selector 也可按强类型字段分流，无需再挂 code 节点 `json.loads`
 
 ### Code（代码）— type `"5"`
 - `data.inputs.code`：Python 代码，`async def main(args) -> Output: ... return ret`

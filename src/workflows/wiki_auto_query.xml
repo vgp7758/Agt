@@ -1,10 +1,10 @@
 <workflow name="wiki_auto_query" description="每轮开始前自动查 wiki：意图识别→提关键字→wiki 全文搜索→相关性评估→top-K 注入（before_turn 钩子，默认关）" hook="before_turn" enabled="false">
-  <!-- after_turn 钩子注入的用户消息 -->
+  <!-- before_turn 钩子注入的用户消息 -->
   <node id="100001" type="start">
     <out name="user_message" type="string"/>
   </node>
 
-  <!-- LLM1：意图识别 + 关键字提取（严格 JSON） -->
+  <!-- LLM1：意图识别 + 关键字提取（严格 JSON；结构化输出 related/keywords） -->
   <node id="110001" type="llm">
     <in name="user_message" ref="100001.user_message"/>
     <param name="systemPrompt"><![CDATA[你是一个意图识别器。判断用户消息是否与代码仓库/repo 的内容相关（如询问代码、功能、架构、bug、如何实现某事、某个模块怎么用）。
@@ -15,41 +15,31 @@
 - keywords：若 related=true，提取 1-4 个适合在 wiki 里搜索的关键字（中英文均可，去掉标点停用词）；related=false 时给空数组 []。]]></param>
     <param name="prompt"><![CDATA[{{user_message}}]]></param>
     <param name="temperature" type="float">0.1</param>
+    <out name="related" type="boolean"/>
+    <out name="keywords" type="list"/>
     <out name="output" type="string"/>
   </node>
 
-  <!-- code1：解析 JSON → related + 把关键字 re.escape 拼成 regex 交替式（一次搜全部） -->
+  <!-- code1：关键字 re.escape 拼成 regex 交替式（一次搜全部；related 由 selector 直接判，无需在此解析） -->
   <node id="120001" type="code">
-    <in name="llm_out" ref="110001.output"/>
+    <in name="keywords" ref="110001.keywords"/>
     <code language="3"><![CDATA[
-import json, re
+import re
 async def main(args) -> dict:
-    raw = args.params.get("llm_out") or ""
-    related = False
-    kws = []
-    s = raw.strip()
-    i, j = s.find("{"), s.rfind("}")
-    if i >= 0 and j > i:
-        try:
-            d = json.loads(s[i:j+1])
-            related = bool(d.get("related"))
-            kws = d.get("keywords") or []
-        except Exception:
-            pass
+    kws = args.params.get("keywords") or []
     if not isinstance(kws, list):
         kws = [kws] if kws else []
     kws = [str(k).strip() for k in kws if str(k).strip()]
     regex_query = "|".join(re.escape(k) for k in kws)
-    return {"related": related, "regex_query": regex_query}
+    return {"regex_query": regex_query}
 ]]></code>
-    <out name="related" type="boolean"/>
     <out name="regex_query" type="string"/>
   </node>
 
   <!-- selector1：仅 related=true 才搜索 -->
   <node id="130001" type="selector">
     <branch>
-      <cond op="1" left="120001.related" right="true" left_type="boolean" right_type="boolean"/>
+      <cond op="1" left="110001.related" right="true" left_type="boolean" right_type="boolean"/>
     </branch>
   </node>
 
@@ -80,7 +70,7 @@ async def main(args) -> dict:
     </branch>
   </node>
 
-  <!-- LLM2：相关性评估，挑 top-K -->
+  <!-- LLM2：相关性评估，挑 top-K（结构化输出 has_relevant/topk） -->
   <node id="170001" type="llm">
     <in name="user_message" ref="100001.user_message"/>
     <in name="hits" ref="150001.hits_text"/>
@@ -96,36 +86,15 @@ async def main(args) -> dict:
 wiki 搜索命中：
 {{hits}}]]></param>
     <param name="temperature" type="float">0.2</param>
+    <out name="has_relevant" type="boolean"/>
+    <out name="topk" type="string"/>
     <out name="output" type="string"/>
   </node>
 
-  <!-- code3：解析 → inject=has_relevant, result=topk -->
-  <node id="180001" type="code">
-    <in name="llm_out" ref="170001.output"/>
-    <code language="3"><![CDATA[
-import json
-async def main(args) -> dict:
-    raw = args.params.get("llm_out") or ""
-    has, topk = False, ""
-    s = raw.strip()
-    i, j = s.find("{"), s.rfind("}")
-    if i >= 0 and j > i:
-        try:
-            d = json.loads(s[i:j+1])
-            has = bool(d.get("has_relevant"))
-            topk = str(d.get("topk") or "")
-        except Exception:
-            pass
-    return {"inject": has, "result": topk}
-]]></code>
-    <out name="inject" type="boolean"/>
-    <out name="result" type="string"/>
-  </node>
-
-  <!-- 单 end：跳过分支（不相关/无命中）时 code3 未执行 → inject=None→False，不注入 -->
+  <!-- 单 end：跳过分支（不相关/无命中）时 170001 未执行 → inject=None→False，不注入 -->
   <node id="900001" type="end">
-    <out name="inject" type="boolean" ref="180001.inject"/>
-    <out name="result" type="string" ref="180001.result"/>
+    <out name="inject" type="boolean" ref="170001.has_relevant"/>
+    <out name="result" type="string" ref="170001.topk"/>
   </node>
 
   <edge from="100001" to="110001"/>
@@ -135,8 +104,7 @@ async def main(args) -> dict:
   <edge from="140001" to="150001"/>
   <edge from="150001" to="160001"/>
   <edge from="160001" to="170001" port="true"/>
-  <edge from="170001" to="180001"/>
-  <edge from="180001" to="900001"/>
+  <edge from="170001" to="900001"/>
   <edge from="130001" to="900001" port="false"/>
   <edge from="160001" to="900001" port="false"/>
 </workflow>

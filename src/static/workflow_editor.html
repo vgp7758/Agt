@@ -91,6 +91,13 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
   <input id="fautoparam" placeholder="自动参数名(默认query)" style="width:130px" onchange="WF.meta.auto_param=this.value">
+  <select id="fhook" title="触发钩子位置：在 ReAct 循环的该位置自动执行本工作流（留空=不自动触发）。选中后会按该钩子约定初始化输入/输出 schema" onchange="onHookChange(this.value)" style="width:120px;font-size:11px">
+    <option value="">钩子:无</option>
+    <option value="before_turn">钩子:每轮开始前</option>
+    <option value="before_tool">钩子:工具调用前</option>
+    <option value="after_tool">钩子:工具调用后</option>
+    <option value="before_answer">钩子:最终回答前</option>
+  </select>
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
   <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
   <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
@@ -2042,10 +2049,39 @@ async function openWf(name){
   document.getElementById('fcoze').value=WF.meta.coze_url||'';
   document.getElementById('fauto').checked=!!WF.meta.auto;
   document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
+  document.getElementById('fhook').value=WF.meta.hook||'';
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
   WF.nodes.forEach(_uncollapseNode);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
   selNode=null;autoLayout(true);toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
+}
+// 各钩子位置 Agent 注入的上下文 key（= 工作流开始节点的输入）；结束节点统一返回 {inject,result}
+const HOOK_INPUTS={
+  before_turn:[['user_message','string','用户本轮消息']],
+  before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)']],
+  after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果']],
+  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答']],
+};
+const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前'};
+function onHookChange(v){
+  WF.meta.hook=v||undefined;
+  if(!v) return;                       // 清空钩子不动 schema
+  const start=WF.nodes.find(n=>n.type==='1'), end=WF.nodes.find(n=>n.type==='2');
+  if(!start){toast('缺少开始节点，无法初始化输入');return;}
+  // 已有自定义输入则确认，避免覆盖现成工作流
+  const hasCustom=(start.data.outputs&&start.data.outputs.length)>0;
+  if(hasCustom && !confirm('将按「'+(HOOK_LABELS[v]||v)+'」钩子约定重置开始节点输入与结束节点输出(inject/result)，覆盖现有定义。继续？')) return;
+  start.data.outputs=HOOK_INPUTS[v].map(([nm,t,d])=>({name:nm,type:t,description:d}));
+  if(end){
+    end.data.inputs=end.data.inputs||{};
+    end.data.inputs.terminatePlan='returnVariables';
+    end.data.inputs.inputParameters=[
+      {name:'inject',input:{type:'boolean',value:{type:'literal',content:true}}},
+      {name:'result',input:{type:'string',value:{type:'literal',content:''}}},
+    ];
+  }
+  autoLayout(true); if(selNode) showProps();
+  toast('已按 '+(HOOK_LABELS[v]||v)+' 钩子初始化输入/输出 schema');
 }
 async function saveWf(){
   // 子画布中：先退出所有层级
@@ -2056,6 +2092,7 @@ async function saveWf(){
   WF.meta.coze_url=document.getElementById('fcoze').value;
   WF.meta.auto=document.getElementById('fauto').checked;
   WF.meta.auto_param=document.getElementById('fautoparam').value||'query';
+  const _hook=document.getElementById('fhook').value; WF.meta.hook=_hook||undefined;
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};
   const fmt=(document.getElementById('saveFormat')||{}).value||'json';

@@ -1567,6 +1567,8 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
                 meta["auto"] = root.get("auto") == "true"
             if root.get("auto_param"):
                 meta["auto_param"] = root.get("auto_param")
+            if root.get("hook"):
+                meta["hook"] = root.get("hook")
             if meta_path.exists():
                 try:
                     meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}
@@ -1628,19 +1630,67 @@ def workflows_info(workspace=None) -> list[dict]:
     return out
 
 
-def get_auto_workflows(workspace: Path = None) -> list[dict]:
-    """返回所有 auto:true 的工作流 [{name, canvas, meta, auto_param}]。agent.run() 调用。"""
+def get_hook_workflows(workspace: Path = None, hook: str = "") -> list[dict]:
+    """返回所有声明在某 hook 位置触发的工作流 [{name, canvas, meta}]。
+
+    hook 取值：before_turn / before_tool / after_tool / before_answer。
+    向后兼容：meta.auto:true 且未显式设 hook 的工作流，视为 before_turn。
+    未传 hook（空串）则返回所有带 hook（或 auto）的工作流，每项带解析后的 hook 字段。
+    """
     out = []
     for it in scan_workflows(workspace):
         meta = it.get("meta") or {}
-        if meta.get("auto") and it.get("canvas") and not it.get("error"):
-            out.append({
-                "name": it["name"],
-                "canvas": it["canvas"],
-                "meta": meta,
-                "auto_param": meta.get("auto_param", "query"),  # 默认参数名
-            })
+        if not it.get("canvas") or it.get("error"):
+            continue
+        h = meta.get("hook")
+        if h is None and meta.get("auto"):       # 旧式 auto:true ≡ before_turn
+            h = "before_turn"
+        if not h:
+            continue
+        if hook and h != hook:
+            continue
+        item = {"name": it["name"], "canvas": it["canvas"], "meta": meta, "hook": h}
+        if h == "before_turn":
+            item["auto_param"] = meta.get("auto_param", "query")   # 兼容旧 auto_param 名
+        out.append(item)
     return out
+
+
+def get_auto_workflows(workspace: Path = None) -> list[dict]:
+    """[兼容] 返回所有 before_turn 钩子工作流（含旧 auto:true）。等价 get_hook_workflows(hook='before_turn')。"""
+    return get_hook_workflows(workspace, "before_turn")
+
+
+def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tuple:
+    """执行一个钩子工作流，返回 (inject: bool, result: str)。
+
+    约定：结束节点返回 {inject: bool, result: str}。解析规则——
+      - 显式 end 返回 dict 且含 inject 键 → 用其 inject/result（output 作 result 兜底）；
+      - dict 无 inject（如旧式 {output:x}）→ inject=True，取唯一值；
+      - 隐式 end/纯文本 → 尝试 JSON 解析；失败则整体当 result，inject=True（非空即注入）。
+    inject 可能以字符串 'false'/'true' 形式传来（节点字段类型为 string 时），按布尔语义归一化。
+    """
+    def _to_bool(v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return v != 0
+        return str(v).strip().lower() not in ("false", "0", "no", "off", "")
+    ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace, return_exit_dict=True)
+    if isinstance(ret, dict):
+        if "inject" in ret:
+            return _to_bool(ret.get("inject")), str(ret.get("result") or ret.get("output") or "")
+        v = next(iter(ret.values()), "") if ret else ""
+        return True, str(v)
+    s = str(ret).strip()
+    if s.startswith("{"):
+        try:
+            d = json.loads(s)
+            if isinstance(d, dict) and "inject" in d:
+                return _to_bool(d.get("inject")), str(d.get("result") or d.get("output") or "")
+        except Exception:
+            pass
+    return (bool(s), s)
 
 
 def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple[list, list]:

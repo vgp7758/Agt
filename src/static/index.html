@@ -550,7 +550,7 @@ ws.onmessage=(ev)=>{
 	      if(!curTurn) newTurn();
 	      runningAutoWf = document.createElement('div');
 	      runningAutoWf.className = 'ev auto running';
-	      runningAutoWf.textContent = '⏳ 自动工作流「'+m.name+'」执行中…';
+	      runningAutoWf.textContent = '⏳ '+wfHookTag(m)+'工作流「'+m.name+'」执行中…';
 	      curTurn.traceBox.appendChild(runningAutoWf); scrollBottom();
 	      break;
 	    case 'auto_wf':
@@ -558,10 +558,10 @@ ws.onmessage=(ev)=>{
 	      if(runningAutoWf){
 	        runningAutoWf.classList.remove('running');
 	        runningAutoWf.classList.add('done');
-	        runningAutoWf.textContent = '✅ 自动工作流「'+m.name+'」完成：'+m.text;
+	        runningAutoWf.textContent = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成：'+m.text;
 	        runningAutoWf = null;
 	      } else {
-	        addTrace('auto done', '✅ 自动工作流「'+m.name+'」：'+m.text);
+	        addTrace('auto done', '✅ '+wfHookTag(m)+'工作流「'+m.name+'」：'+m.text);
 	      }
 	      break;
 	    case 'auto_wf_error':
@@ -569,10 +569,10 @@ ws.onmessage=(ev)=>{
 	      if(runningAutoWf){
 	        runningAutoWf.classList.remove('running');
 	        runningAutoWf.classList.add('failed');
-	        runningAutoWf.textContent = '❌ 自动工作流「'+m.name+'」失败：'+m.text;
+	        runningAutoWf.textContent = '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text;
 	        runningAutoWf = null;
 	      } else {
-	        addTrace('auto failed', '❌ 自动工作流「'+m.name+'」失败：'+m.text);
+	        addTrace('auto failed', '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text);
 	      }
 	      break;
     case 'workflow_message':
@@ -592,6 +592,11 @@ ws.onmessage=(ev)=>{
   }catch(e){console.error('WS event error:',e);}
 };
 function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }
+// 自动工作流/钩子事件的前缀标签：有 hook 时显示 [位置]，否则显示"自动"
+function wfHookTag(m){
+  const labels={'before_turn':'每轮开始前','before_tool':'工具调用前','after_tool':'工具调用后','before_answer':'最终回答前'};
+  return m && m.hook ? ('['+labels[m.hook]+']钩子') : '自动';
+}
 
 function renderWorkflows(items){
   const box=document.getElementById('wfList');

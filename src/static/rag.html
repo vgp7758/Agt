@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>RAG 文档库管理 · Agt</title>
+<style>
+  body { background:#1a1a2e; color:#e0e0e0; font-family:system-ui,"Segoe UI",Roboto,sans-serif; margin:0; }
+  #topbar { background:#16213e; border-bottom:1px solid #0f3460; padding:10px 16px; display:flex; gap:12px; align-items:center; }
+  #topbar strong { font-size:16px; }
+  #topbar button { background:#533483; border:1px solid #7b2ff7; color:#fff; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:13px; }
+  #topbar button:hover { background:#7b2ff7; }
+  #main { max-width:980px; margin:20px auto; padding:0 16px 60px; }
+  .card { background:#16213e; border:1px solid #0f3460; border-radius:8px; padding:16px 18px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; color:#7b2ff7; }
+  label { display:block; margin:10px 0 4px; font-size:12px; color:#8a9099; }
+  input[type=text], input[type=number], select { width:100%; background:#0f3460; border:1px solid #533483; color:#e0e0e0; padding:7px 9px; border-radius:4px; box-sizing:border-box; font-size:13px; }
+  input[type=checkbox] { transform:scale(1.1); margin-right:5px; vertical-align:middle; }
+  .row { display:flex; gap:12px; }
+  .row > div { flex:1; }
+  button.primary { background:#533483; border:1px solid #7b2ff7; color:#fff; padding:8px 18px; border-radius:4px; cursor:pointer; font-size:13px; }
+  button.primary:hover { background:#7b2ff7; }
+  .progress { height:10px; background:#0f3460; border-radius:5px; overflow:hidden; margin:10px 0 4px; }
+  .progress > div { height:100%; background:linear-gradient(90deg,#533483,#7b2ff7); width:0; transition:width .25s; }
+  .hit { background:#0f3460; border-left:3px solid #533483; padding:8px 12px; margin:6px 0; border-radius:0 4px 4px 0; font-size:13px; }
+  .hit .loc { color:#7b2ff7; font-family:ui-monospace,Consolas,monospace; }
+  .hit .txt { color:#b0b0b0; margin-top:4px; line-height:1.5; }
+  .stat { display:inline-block; margin-right:18px; font-size:13px; color:#8a9099; }
+  .stat b { color:#7b2ff7; font-size:15px; }
+  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#533483; color:#fff; padding:10px 22px; border-radius:6px; display:none; font-size:13px; box-shadow:0 4px 12px rgba(0,0,0,.4); z-index:99; }
+  details summary { color:#8a9099; cursor:pointer; font-size:12px; margin-top:10px; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <strong>📚 RAG 文档库管理</strong>
+  <span style="flex:1"></span>
+  <button onclick="window.open('/','_self')">← 返回聊天</button>
+</div>
+<div id="main">
+  <div class="card">
+    <h2>索引状态</h2>
+    <span class="stat">就绪：<b id="st_ready">—</b></span>
+    <span class="stat">片段数：<b id="st_docs">—</b></span>
+    <span class="stat">向量维度：<b id="st_dim">—</b></span>
+    <button class="primary" style="padding:5px 12px" onclick="RAG.refreshStats()">🔄 刷新</button>
+  </div>
+
+  <div class="card">
+    <h2>配置</h2>
+    <label><input type="checkbox" id="cfg_enabled"> 启用 RAG（勾选后 rag_query 工具才会真正建库/召回）</label>
+    <label>embedding 模型路径（本地 sentence-transformers 目录）</label>
+    <input id="cfg_embed" type="text" placeholder="D:/models/bge-small-zh-v1.5">
+    <label>建库文档目录 docs_dir</label>
+    <input id="cfg_docs" type="text" placeholder="D:/Projects/BunkerProject/Docs/Liskarm">
+    <div class="row">
+      <div><label>扩展名白名单（逗号分隔）</label><input id="cfg_exts" type="text" placeholder=".md,.txt,.json"></div>
+      <div><label>排除文件名（fnmatch，逗号分隔，如 *_Audit.*）</label><input id="cfg_exclude" type="text" placeholder="*_Audit.*"></div>
+    </div>
+    <div class="row">
+      <div><label>top_k（召回条数）</label><input id="cfg_topk" type="number" value="5"></div>
+      <div><label>向量库类型</label><select id="cfg_vstore"><option>faiss_hnsw</option></select></div>
+    </div>
+    <label><input type="checkbox" id="cfg_rerank_en"> 启用 reranker 精排（CPU 上较慢，默认关）</label>
+    <input id="cfg_rerank" type="text" placeholder="D:/models/bge-reranker-base">
+    <details>
+      <summary>进阶：切片参数</summary>
+      <div class="row">
+        <div><label>lines_per（每片行数）</label><input id="cfg_lp" type="number" value="60"></div>
+        <div><label>overlap（重叠行）</label><input id="cfg_ov" type="number" value="15"></div>
+        <div><label>batch（编码批大小）</label><input id="cfg_batch" type="number" value="32"></div>
+      </div>
+    </details>
+    <div style="margin-top:14px"><button class="primary" onclick="RAG.save()">💾 保存配置</button></div>
+  </div>
+
+  <div class="card">
+    <h2>建库</h2>
+    <button class="primary" onclick="RAG.build()">🔨 开始建库</button>
+    <div class="progress"><div id="prog_bar"></div></div>
+    <div id="prog_txt" style="font-size:12px;color:#8a9099;word-break:break-all"></div>
+  </div>
+
+  <div class="card">
+    <h2>查询测试</h2>
+    <div style="display:flex;gap:8px">
+      <input id="q_input" type="text" placeholder="输入查询，如：配置表如何加载到运行时" style="flex:1">
+      <button class="primary" onclick="RAG.query()">🔍 查询</button>
+    </div>
+    <div id="q_results" style="margin-top:12px"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const api = async (method, path, body) => {
+  try {
+    const opts = {method, headers:{'Content-Type':'application/json'}};
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch(e) { return {error: e+''}; }
+};
+function toast(msg, ms=2500){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display='none', ms); }
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+let ws = null;
+function wsSend(obj){ if(ws && ws.readyState===1) ws.send(JSON.stringify(obj)); }
+function wsConnect(){
+  try { ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws'); } catch(e){ return; }
+  ws.onmessage = (e) => { let ev; try{ ev=JSON.parse(e.data); }catch(_){return;} RAG.onWs(ev); };
+  ws.onclose = () => { setTimeout(wsConnect, 2500); };
+}
+
+const RAG = {
+  cfg: null,
+  async init(){
+    const c = await api('GET','/api/rag/config');
+    if (c.error) { toast('加载配置失败：'+c.error); return; }
+    this.cfg = c;
+    const $ = id => document.getElementById(id);
+    $('cfg_enabled').checked = !!c.enabled;
+    $('cfg_embed').value = c.embed_model_path||'';
+    $('cfg_docs').value = c.docs_dir||'';
+    $('cfg_exts').value = (c.exts||[]).join(',');
+    $('cfg_exclude').value = (c.exclude_globs||[]).join(',');
+    $('cfg_topk').value = c.top_k??5;
+    $('cfg_vstore').value = c.vector_store_type||'faiss_hnsw';
+    $('cfg_rerank_en').checked = !!c.reranker_enabled;
+    $('cfg_rerank').value = c.reranker_path||'';
+    $('cfg_lp').value = c.lines_per??60;
+    $('cfg_ov').value = c.overlap??15;
+    $('cfg_batch').value = c.batch??32;
+    this.refreshStats();
+    wsConnect();
+  },
+  readForm(){
+    const num = id => parseInt(document.getElementById(id).value)||0;
+    const list = id => document.getElementById(id).value.split(',').map(s=>s.trim()).filter(Boolean);
+    return {
+      enabled: document.getElementById('cfg_enabled').checked,
+      embed_model_path: document.getElementById('cfg_embed').value.trim(),
+      docs_dir: document.getElementById('cfg_docs').value.trim(),
+      exts: list('cfg_exts'),
+      exclude_globs: list('cfg_exclude'),
+      index_dir: this.cfg?.index_dir || '.agent/rag',
+      vector_store_type: document.getElementById('cfg_vstore').value,
+      top_k: num('cfg_topk'),
+      reranker_enabled: document.getElementById('cfg_rerank_en').checked,
+      reranker_path: document.getElementById('cfg_rerank').value.trim(),
+      rerank_pool: this.cfg?.rerank_pool ?? 0,
+      lines_per: num('cfg_lp'),
+      overlap: num('cfg_ov'),
+      batch: num('cfg_batch'),
+    };
+  },
+  async save(){
+    const r = await api('PUT','/api/rag/config', this.readForm());
+    if (r.error) toast('保存失败：'+r.error);
+    else { toast('✅ 已保存，实例已重建'); this.refreshStats(); }
+  },
+  build(){
+    wsSend({action:'rag_build'});
+    document.getElementById('prog_bar').style.width='0%';
+    document.getElementById('prog_txt').textContent='提交建库请求…';
+  },
+  onWs(ev){
+    switch(ev.type){
+      case 'rag_index_start':
+        document.getElementById('prog_txt').textContent='开始建库…'; break;
+      case 'rag_index_progress': {
+        const pct = ev.total ? Math.round(ev.done*100/ev.total) : 0;
+        document.getElementById('prog_bar').style.width = pct+'%';
+        document.getElementById('prog_txt').textContent = `${ev.done}/${ev.total}  ${ev.file||''}`;
+        break;
+      }
+      case 'rag_index_done':
+        document.getElementById('prog_bar').style.width='100%';
+        document.getElementById('prog_txt').textContent = `✅ 完成：${ev.files} 文件 → ${ev.chunks} 片段（${(ev.elapsed||0).toFixed(1)}s）`;
+        toast('✅ 建库完成');
+        this.refreshStats();
+        break;
+      case 'rag_index_error':
+        document.getElementById('prog_txt').textContent = '❌ '+ev.text;
+        toast('❌ '+ev.text, 4000);
+        break;
+    }
+  },
+  async refreshStats(){
+    const s = await api('GET','/api/rag/stats');
+    document.getElementById('st_ready').textContent = s.ready ? '✅' : '❌';
+    document.getElementById('st_docs').textContent = s.total_docs ?? 0;
+    document.getElementById('st_dim').textContent = s.dim ?? 0;
+  },
+  async query(){
+    const q = document.getElementById('q_input').value.trim();
+    if (!q) return;
+    const box = document.getElementById('q_results');
+    box.innerHTML = '<div style="color:#8a9099">查询中…</div>';
+    const r = await api('GET', '/api/rag/query?q='+encodeURIComponent(q)+'&top_k=5');
+    if (r.error) { box.innerHTML = '<div style="color:#e06c75">'+esc(r.error)+'</div>'; return; }
+    if (!r.results || !r.results.length) { box.innerHTML = '<div style="color:#8a9099">无结果</div>'; return; }
+    box.innerHTML = r.results.map(h => {
+      const name = (h.file_path||'').split(/[\\/]/).pop();
+      return `<div class="hit"><div class="loc">${esc(name)}:${h.start_line}-${h.end_line}</div>`
+           + `<div class="txt">${esc((h.text||'').replace(/\n/g,' ').slice(0,240))}</div></div>`;
+    }).join('');
+  }
+};
+window.RAG = RAG;
+RAG.init();
+</script>
+</body>
+</html>

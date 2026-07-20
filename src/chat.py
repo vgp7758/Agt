@@ -21,6 +21,7 @@ from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
 from wiki import make_wiki_tools
+from rag import make_rag_tools
 from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
@@ -152,6 +153,9 @@ def main():
         agent.tools.register(t)
     # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
     for t in make_wiki_tools(agent):
+        agent.tools.register(t)
+    # 注册 RAG 文档库工具（rag_query：语义召回本地文档片段，需先在 /rag 页面建库）
+    for t in make_rag_tools():
         agent.tools.register(t)
     # 注册纯自主模式工具
     for t in make_autonomous_tools(agent):

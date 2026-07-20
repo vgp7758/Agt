@@ -4,6 +4,9 @@ models.py
 workspace/
 sessions/
 .agt/
+.agent/rag.json
+.agent/rag/
+indexes/
 
 # === Python ===
 __pycache__/

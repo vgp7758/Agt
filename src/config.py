@@ -103,6 +103,59 @@ def save_runtime_settings(settings: dict):
     _AGT_DIR.mkdir(parents=True, exist_ok=True)
     _AGT_SETTINGS.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
+# === RAG 配置持久化（项目级 <workspace>/.agent/rag.json）===
+DEFAULT_RAG_CONFIG = {
+    "enabled": False,
+    "embed_model_path": "",
+    "docs_dir": "",
+    "exts": [".md", ".txt", ".json"],
+    "exclude_globs": ["*_Audit.*"],
+    "index_dir": ".agent/rag",
+    "vector_store_type": "faiss_hnsw",
+    "top_k": 5,
+    "reranker_enabled": False,
+    "reranker_path": "",
+    "rerank_pool": 0,
+    "lines_per": 60,
+    "overlap": 15,
+    "batch": 32,
+}
+
+
+def _rag_config_path(workspace) -> Path:
+    return Path(workspace) / ".agent" / "rag.json"
+
+
+def load_rag_config(workspace) -> dict:
+    """从 <workspace>/.agent/rag.json 加载 RAG 配置；不存在返回默认（合并补全新字段）。"""
+    p = _rag_config_path(workspace)
+    if p.exists():
+        try:
+            cfg = dict(DEFAULT_RAG_CONFIG)
+            cfg.update(json.loads(p.read_text(encoding="utf-8")))
+            return cfg
+        except Exception:
+            pass
+    return dict(DEFAULT_RAG_CONFIG)
+
+
+def save_rag_config(workspace, cfg: dict):
+    """写入 RAG 配置到 <workspace>/.agent/rag.json。"""
+    p = _rag_config_path(workspace)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def seed_rag_config(workspace) -> bool:
+    """首次播种默认 RAG 配置；已存在不覆盖。返回是否新播种。"""
+    p = _rag_config_path(workspace)
+    if p.exists():
+        return False
+    save_rag_config(workspace, DEFAULT_RAG_CONFIG)
+    return True
+
+
 # === AgenTank 比赛配置 ===
 AGT_BASE_URL = os.getenv("AGT_BASE_URL", "https://agentank.ai")
 AGT_TANK_KEY = os.getenv("AGT_TANK_KEY") or os.getenv("AGT_AGENT_KEY")

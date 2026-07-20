@@ -35,9 +35,17 @@ from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 from lsp_manager import make_lsp_tools
+from rag import LocalRAG, set_rag as _rag_set, get_rag, make_rag_tools
 from session import session_meta
 
 app = FastAPI(title="Agt Agent WebUI")
+
+
+@app.on_event("startup")
+def _on_startup():
+    """启动时播种默认 RAG 配置 + 按 config 建全局 RAG 实例（enabled 且模型路径有效时才真正建）。"""
+    config.seed_rag_config(WORKSPACE)
+    _rebuild_rag()
 
 
 @app.on_event("shutdown")
@@ -66,6 +74,7 @@ _seq: int = 0
 _clients: list[dict] = []     # [{ws, queue}]  所有活跃连接
 _main_loop = None             # 主 event loop（_broadcast 在线程里用到）
 _bg_drain_started = False     # 全局后台 drain 协程仅启动一次的标志
+_rag_busy: bool = False          # RAG 建库锁（独立于 _agent_busy，建库不阻塞聊天）
 
 
 def _broadcast(ev: dict):
@@ -81,6 +90,17 @@ def _broadcast(ev: dict):
             loop.call_soon_threadsafe(c["queue"].put_nowait, ev)
         except Exception:
             pass
+
+
+def _rebuild_rag():
+    """按当前 .agent/rag.json 重建全局 LocalRAG 实例（配置保存/服务启动时调）。
+    enabled 关或模型路径无效 → 实例为 None（rag_query 返回未建库提示）。"""
+    try:
+        inst = LocalRAG.from_config(WORKSPACE)
+    except Exception as e:
+        print(f"[rag] 加载失败：{e}")
+        inst = None
+    _rag_set(inst, str(WORKSPACE))
 
 
 def _get_or_create_agent() -> Agent:
@@ -113,6 +133,8 @@ def _get_or_create_agent() -> Agent:
         agent.tools.register(t)
     for t in make_lsp_tools(agent, _mcp):
         agent.tools.register(t)
+    for t in make_rag_tools():
+        agent.tools.register(t)
     refresh_workflow_tools(agent.tools, WORKSPACE, agent)
     # 加载持久化运行时设置
     saved = config.load_runtime_settings()
@@ -128,6 +150,7 @@ async def _send(ws: WebSocket, obj: dict):
 
 _WF_DIR = WORKSPACE / ".agent" / "workflows"
 _EDITOR_HTML = (Path(__file__).resolve().parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
+_RAG_HTML = (Path(__file__).resolve().parent / "static" / "rag.html").read_text(encoding="utf-8")
 
 
 def _safe_wf_path(name: str) -> Path:
@@ -155,6 +178,12 @@ async def workflow_debug():
     """工作流调试页：只读渲染画布 + 流式执行 + 逐节点查看输出。"""
     html = (Path(__file__).resolve().parent / "static" / "workflow_debug.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
+
+
+@app.get("/rag")
+async def rag_page():
+    """RAG 文档库管理页：配置 + 建库 + 查询测试。"""
+    return HTMLResponse(_RAG_HTML)
 
 
 # ===== 工作流编辑器 REST API =====
@@ -364,6 +393,49 @@ async def api_models_save(request: Request):
     config.MODELS.clear(); config.MODELS.update(m)
     config.DEFAULT_MODEL = d or config.DEFAULT_MODEL
     return {"ok": True, "default": config.DEFAULT_MODEL}
+
+
+# ===== RAG 文档库 API =====
+
+@app.get("/api/rag/config")
+async def api_rag_config():
+    """返回当前 RAG 配置（.agent/rag.json）。"""
+    return config.load_rag_config(WORKSPACE)
+
+
+@app.put("/api/rag/config")
+async def api_rag_config_save(request: Request):
+    """保存 RAG 配置并热重建实例。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    if not isinstance(body, dict):
+        return {"error": "配置需为对象"}
+    config.save_rag_config(WORKSPACE, body)
+    _rebuild_rag()
+    return {"ok": True}
+
+
+@app.get("/api/rag/stats")
+async def api_rag_stats():
+    inst = get_rag()
+    if inst is None:
+        return {"ready": False, "total_docs": 0, "dim": 0}
+    return inst.stats()
+
+
+@app.get("/api/rag/query")
+async def api_rag_query(q: str = "", top_k: int = 5):
+    """页内查询测试。"""
+    inst = get_rag()
+    if inst is None or inst.index.ntotal == 0:
+        return {"results": [], "error": "索引未建立，请先建库"}
+    try:
+        hits = inst.query(q, top_k=top_k)
+    except Exception as e:
+        return {"results": [], "error": f"{type(e).__name__}: {e}"}
+    return {"results": hits}
 
 
 @app.delete("/api/wf/{name}")
@@ -578,6 +650,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if isinstance(_d, dict) and _d.get("action") == "debug_run":
         await _start_debug_run(ws, agent, _d.get("name", ""), _d.get("inputs") or {})
         return
+    if isinstance(_d, dict) and _d.get("action") == "rag_build":
+        await _start_rag_build(ws)
+        return
 
     # 文本消息
     text, images = _parse_client_msg(raw)
@@ -729,6 +804,49 @@ async def _start_debug_run(ws, agent, name, inputs):
             _broadcast({"type": "wf_debug_error", "text": f"{type(e).__name__}: {e}"})
         finally:
             _agent_busy = False
+
+    threading.Thread(target=run_it, daemon=True).start()
+
+
+async def _start_rag_build(ws):
+    """后台建库：threading.Thread 跑 index_dir，on_progress 经 _broadcast 推 rag_index_progress，
+    末尾推 rag_index_done / rag_index_error。独立 _rag_busy 锁（建库不阻塞聊天）。"""
+    global _rag_busy
+    inst = get_rag()
+    cfg = config.load_rag_config(WORKSPACE)
+    if inst is None:
+        await _send(ws, {"type": "rag_index_error", "text": "RAG 未启用或模型路径无效，请先保存有效配置"})
+        return
+    docs_dir = cfg.get("docs_dir", "")
+    if not docs_dir or not Path(docs_dir).exists():
+        await _send(ws, {"type": "rag_index_error", "text": f"docs_dir 不存在：{docs_dir}"})
+        return
+    if _rag_busy:
+        await _send(ws, {"type": "rag_index_error", "text": "⏳ 正在建库，请稍候"})
+        return
+    _rag_busy = True
+    await _send(ws, {"type": "rag_index_start"})
+
+    def run_it():
+        global _rag_busy
+        try:
+            def on_progress(done, total, f):
+                _broadcast({"type": "rag_index_progress", "done": done, "total": total, "file": f})
+            res = inst.index_dir(
+                docs_dir,
+                exts=tuple(cfg.get("exts") or [".md", ".txt", ".json"]),
+                exclude_globs=cfg.get("exclude_globs") or [],
+                lines_per=cfg.get("lines_per", 60),
+                overlap=cfg.get("overlap", 15),
+                batch=cfg.get("batch", 32),
+                on_progress=on_progress,
+            )
+            _broadcast({"type": "rag_index_done", **res})
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            _broadcast({"type": "rag_index_error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _rag_busy = False
 
     threading.Thread(target=run_it, daemon=True).start()
 

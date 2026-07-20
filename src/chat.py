@@ -9,11 +9,15 @@
 跑法：python chat.py
 退出：quit / Ctrl+C / Ctrl+D ；运行中 Ctrl+C 可打断当前任务但保留会话。
 """
+import queue
+import threading
+import time
 from pathlib import Path
 
 import config
 from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, skills_summary
+from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
 from wiki import make_wiki_tools
@@ -101,6 +105,9 @@ SYSTEM = build_system(
           "处理某语言代码前先调 ensure_lsp('python') 或 ensure_lsp('csharp') 装上对应语义工具"
           "（首次自动 copy 脚本+装依赖到 ~/.agt/lsp/，当轮即可用；装一次后重启也会自动连），"
           "再用 py_def/py_ref/py_syms（Python）或 cs_def/cs_ref/cs_wsym/cs_hover/cs_diag（C#）替代 grep 做定义跳转/引用查找/符号搜索。改完 .cs 用 cs_diag 看 OmniSharp 的红线报错（改→查→改闭环，比 dotnet build 快）。grep 只用于纯文本/字面量。\n"
+        + "\n\n【后台服务 + 定时调度】start_service(name, command) 后台启动长服务（如你写的后端 `python app.py` 或 `python -m http.server 8000`）做前后端联调——其状态会自动显示在每轮系统提示里，无需自己查；service_logs 看输出、stop_service 停止、list_services 总览。"
+          "add_schedule(name, every_seconds=N, message='...') 每 N 秒自动推送一条消息触发你跑一轮（repeat 控制循环）；add_schedule(name, at='2026-07-20T17:30:00', tool='web_search', tool_args={...}) 到点执行工具拿结果触发（动态消息）；cancel_schedule/list_schedules 管理。"
+          "适合：长联调时定时自检、到点搜集信息并处理、周期性监控与续作。被后台触发的那一轮，你能从上下文里看到 [后台触发·任务名] 标记。"
         + "\n\n=== 任务指引（当前目录 AGENT.md，用户可自行编辑）===\n"
         + _load_agent_md()
         + _rules_and_skills_section()
@@ -140,6 +147,9 @@ def main():
     # 注册记忆召回工具（recall_turn：按需召回窗口外历史轮的完整上下文）
     for t in make_recall_tools(agent):
         agent.tools.register(t)
+    # 注册后台服务/调度工具（start_service / add_schedule 等）
+    for t in make_background_tools(agent):
+        agent.tools.register(t)
     # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
     for t in make_wiki_tools(agent):
         agent.tools.register(t)
@@ -161,13 +171,47 @@ def main():
         print(f"⚠️ {len(broken)} 个工作流加载失败：{broken}")
     registry = build_default_registry()
 
-    try:
+    # REPL 单消费者队列驱动：input 线程 + inbox 轮询线程 都往 work_q 喂，
+    # 主线程串行消费——保证任何时候只有一个 agent.run 在跑（run 非线程安全）。
+    work_q: "queue.Queue" = queue.Queue()
+
+    def _input_thread():
         while True:
             try:
                 user = input("\n🧑 你：").strip()
             except (EOFError, KeyboardInterrupt):
+                work_q.put(None)   # 哨兵：通知主线程退出
+                return
+            work_q.put(("user", user))
+
+    def _inbox_thread():
+        while True:
+            item = agent.pop_inbox()
+            if item:
+                work_q.put(("background", item))
+            else:
+                time.sleep(0.2)
+
+    threading.Thread(target=_input_thread, daemon=True).start()
+    threading.Thread(target=_inbox_thread, daemon=True).start()
+
+    try:
+        while True:
+            item = work_q.get()
+            if item is None:
                 print("\n再见！")
                 break
+            kind, payload = item
+            if kind == "background":
+                src, msg = payload
+                print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
+                try:
+                    agent.run(msg)
+                except Exception as e:
+                    print(f"\n⚠️ 后台触发执行出错：{e}")
+                continue
+            # kind == "user"
+            user = payload
             if not user:
                 continue
             if user.lower() in {"quit", "exit", "q", "退出"}:
@@ -184,6 +228,7 @@ def main():
             except Exception as e:
                 print(f"\n⚠️ 执行出错：{e}")
     finally:
+        agent.shutdown()    # 停后台服务（防孤儿进程）+ 停调度器
         mcp_mgr.shutdown()
 
 

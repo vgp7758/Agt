@@ -29,6 +29,7 @@ from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
+from background_tools import make_background_tools
 from wiki import make_wiki_tools
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
@@ -37,6 +38,16 @@ from lsp_manager import make_lsp_tools
 from session import session_meta
 
 app = FastAPI(title="Agt Agent WebUI")
+
+
+@app.on_event("shutdown")
+def _on_shutdown():
+    """进程退出时停后台服务（防孤儿进程）+ 停调度器。"""
+    if _agent is not None:
+        try:
+            _agent.shutdown()
+        except Exception:
+            pass
 
 # 全局 MCP（启动时连接一次）
 _mcp = MCPManager()
@@ -54,6 +65,7 @@ _event_log: list[tuple[int, dict]] = []
 _seq: int = 0
 _clients: list[dict] = []     # [{ws, queue}]  所有活跃连接
 _main_loop = None             # 主 event loop（_broadcast 在线程里用到）
+_bg_drain_started = False     # 全局后台 drain 协程仅启动一次的标志
 
 
 def _broadcast(ev: dict):
@@ -88,6 +100,8 @@ def _get_or_create_agent() -> Agent:
     for t in make_plan_tools(agent):
         agent.tools.register(t)
     for t in make_recall_tools(agent):
+        agent.tools.register(t)
+    for t in make_background_tools(agent):
         agent.tools.register(t)
     for t in make_wiki_tools(agent):
         agent.tools.register(t)
@@ -368,6 +382,10 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     _main_loop = asyncio.get_running_loop()  # 保存主循环供 _broadcast 线程用
     loop = _main_loop
+    global _bg_drain_started
+    if not _bg_drain_started:
+        _bg_drain_started = True
+        asyncio.create_task(_bg_drain())   # 全局后台 drain：inbox→触发 run（仅启动一次）
     queue: asyncio.Queue = asyncio.Queue()
     registry = build_default_registry()
 
@@ -624,6 +642,35 @@ async def _run_streaming(ws, agent, msg, images, queue, loop):
                 break
     finally:
         _agent_busy = False
+
+
+async def _bg_drain():
+    """全局后台 drain：轮询 agent.inbox，Agent 空闲时触发一轮 run，事件 _broadcast 给所有客户端。
+    占 _agent_busy 锁，与聊天/调试串行（run 非线程安全）。仅启动一次（_bg_drain_started）。"""
+    global _agent_busy
+    while True:
+        await asyncio.sleep(0.5)
+        agent = _agent
+        if agent is None or _agent_busy:
+            continue
+        item = agent.pop_inbox()
+        if not item:
+            continue
+        src, msg = item
+        _agent_busy = True
+
+        def run_it():
+            global _agent_busy
+            try:
+                _broadcast({"type": "background_trigger", "source": src, "text": msg[:100]})
+                agent.run(msg)
+            except Exception as e:
+                _broadcast({"type": "error", "text": f"后台触发失败：{type(e).__name__}: {e}"})
+            finally:
+                _broadcast({"type": "_done"})
+                _agent_busy = False
+
+        threading.Thread(target=run_it, daemon=True).start()
 
 
 async def _start_debug_run(ws, agent, name, inputs):

@@ -138,6 +138,7 @@ class Session:
         self._summary_sig: tuple = ()                 # 窗口外 summary 缓存的失效签名
         self.extra_state: dict = {}                   # 附加运行时状态（Agent 经 _state_provider 收集：plan/自主模式等）
         self._state_provider: Optional[Callable[[], dict]] = None  # Agent 注册的附加状态收集回调
+        self._system_extra_provider: Optional[Callable[[], str]] = None  # Agent 注册：返回动态 system 段（后台服务状态等）
 
     # ========== 构建 ==========
     def start_turn(self, user_message: str, images: Optional[list] = None):
@@ -201,6 +202,13 @@ class Session:
         需要早期轮的细节时，模型可用 recall_turn 工具按需召回完整原文。
         """
         msgs = [{"role": "system", "content": self.system}]
+        if self._system_extra_provider:
+            try:
+                extra = self._system_extra_provider()
+                if extra:
+                    msgs.append({"role": "system", "content": extra})
+            except Exception:
+                pass
         if self.global_summary:
             msgs.append({"role": "system", "content": "【历史会话摘要】\n" + self.global_summary})
 

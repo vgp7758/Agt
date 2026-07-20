@@ -431,6 +431,8 @@ ws.onmessage=(ev)=>{
   let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
   try{
   switch(m.type){
+    case 'background_trigger':
+      addRow('sys', `⏰ [后台触发·${m.source||''}] ${m.text||''}`); scrollBottom(); break;
     case 'system':
       if(m.models){
         modelSel.innerHTML='';

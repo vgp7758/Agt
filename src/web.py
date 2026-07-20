@@ -238,7 +238,14 @@ async def api_wf_get(name: str):
             root = ET.fromstring(xml_text)
             meta = {"name": root.get("name") or safe,
                     "description": root.get("description", ""),
-                    "coze_url": root.get("coze_url", "")}
+                    "coze_url": root.get("coze_url", ""),
+                    "enabled": root.get("enabled", "true") != "false"}
+            if root.get("auto"):
+                meta["auto"] = root.get("auto") == "true"
+            if root.get("auto_param"):
+                meta["auto_param"] = root.get("auto_param")
+            if root.get("hook"):
+                meta["hook"] = root.get("hook")
             xmp = xf.with_name(xf.name + ".meta")
             if xmp.exists():
                 try:

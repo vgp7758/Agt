@@ -12,7 +12,7 @@ import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from session import Session, SESSIONS_DIR, list_sessions
+from session import Session, SESSIONS_DIR, list_sessions, session_meta
 
 if TYPE_CHECKING:
     from agent import Agent
@@ -85,7 +85,8 @@ def _parse_args(args: list[str]) -> tuple[list[str], dict]:
 def _cmd_save(ctx: CommandContext, args):
     name = _parse_args(args)[0][0] if args else None
     path = ctx.session.save(name)
-    print(f"✅ 会话已保存：{path.name}  (共 {len(ctx.session.turns)} 轮)")
+    note = "（日常已自动落盘，本次手动改名另存）" if name else "（日常已自动落盘，本次强制再存一次）"
+    print(f"✅ 已保存：{path.name}  (共 {len(ctx.session.turns)} 轮) {note}")
 
 
 def _cmd_resume(ctx: CommandContext, args):
@@ -98,7 +99,7 @@ def _cmd_resume(ctx: CommandContext, args):
     except FileNotFoundError as e:
         print(f"❌ {e}")
         return
-    ctx.agent.session = new_session
+    ctx.agent.set_session(new_session)
     print(f"✅ 已恢复会话：{positional[0]}")
     print(new_session.summary_str())
 
@@ -106,19 +107,24 @@ def _cmd_resume(ctx: CommandContext, args):
 def _cmd_list(ctx: CommandContext, args):
     files = list_sessions()
     if not files:
-        print("📁 暂无保存的会话（用 /save <name> 保存当前会话）")
+        print("📁 暂无保存的会话（每轮会自动落盘；/save <name> 可改名另存）")
         return
-    print(f"📁 已保存的会话（{len(files)} 个）：")
-    print("-" * 64)
+    print(f"📁 已保存的会话（{len(files)} 个，按最近修改倒序）：")
+    print("-" * 72)
     for f in files:
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            turns = len(data.get("turns", []))
-            first = data.get("turns", [{}])[0].get("user_message", "")[:30] if turns else "(空)"
-            print(f"  {f.stem:<28} | {turns}轮 | 首轮：「{first}」")
-        except Exception as e:
-            print(f"  {f.name:<28} | 读取错误：{e}")
-    print("-" * 64)
+        meta = session_meta(f)
+        print(f"  {meta['name'][:26]:<26} | {meta['turns']:>3}轮 | /resume {meta['id']}")
+        if meta["first"] and meta["first"] != "(读取失败)":
+            print(f"  {'':<26} | 首轮：「{meta['first']}」")
+    print("-" * 72)
+
+
+def _cmd_recall(ctx: CommandContext, args):
+    positional = _parse_args(args)[0]
+    if not positional:
+        print("用法：/recall <关键词>  在全部历史轮次里搜索，召回匹配轮的完整内容（不含思考过程）")
+        return
+    print(ctx.session.recall(" ".join(positional)))
 
 
 def _cmd_show(ctx: CommandContext, args):
@@ -136,10 +142,13 @@ def _cmd_show(ctx: CommandContext, args):
 
 def _cmd_reset(ctx: CommandContext, args):
     from session import Session  # 局部 import 避免循环
-    ctx.agent.session = Session(
+    ctx.agent.set_session(Session(
         system=ctx.agent.base_system, llm=ctx.agent.llm,
-        recent_window_turns=ctx.agent.session.recent_window_turns)
-    print("🔄 已重置会话（历史清空，system 保留）。")
+        recent_window_turns=ctx.agent.session.recent_window_turns))
+    ctx.agent.plan = []                # 重置：连计划、自主模式一起清空
+    ctx.agent.exit_autonomous_mode()
+    ctx.agent.goal_check_script = ""
+    print("🔄 已重置会话（历史、计划、自主模式均清空，system 保留）。")
 
 
 def _to_bool(v):
@@ -401,6 +410,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("resume", _cmd_resume, "<name>  恢复指定会话")
     reg.register("list", _cmd_list, "列出所有已保存会话")
     reg.register("show", _cmd_show, "[name]  查看会话详情（不传=当前）")
+    reg.register("recall", _cmd_recall, "<关键词>  召回包含该词的历史轮次完整内容")
     reg.register("reset", _cmd_reset, "重置会话（清空历史）")
     reg.register("config", _cmd_config, "<key> <value>  改运行时配置 (max_steps/token_budget)")
     reg.register("budget", _cmd_budget, "查看本次 token 消耗")

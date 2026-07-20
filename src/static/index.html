@@ -234,6 +234,24 @@ function finishAnswer(text){
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }
+function renderHistory(turns){
+  // 把一个 session 的完整历史原样渲染成对话：每轮 = 用户气泡 + 过程trace + 回答气泡
+  msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
+  if(!turns || !turns.length) return;
+  turns.forEach(t=>{
+    addUserBubble(t.user||'', null);
+    newTurn();
+    (t.steps||[]).forEach(s=>{
+      (s.tool_calls||[]).forEach(tc=>{
+        addTrace('tool', `🔧 ${tc.name}(${fmtArgs(tc.arguments)})`);
+        if(tc.result) addTrace('res', '→ '+tc.result);
+      });
+    });
+    if(curTurn.traceBox.children.length===0 && curTurn.det) curTurn.det.style.display='none';
+    finishAnswer(t.answer||'(无回答)');
+  });
+  scrollBottom();
+}
 
 // —— 图片附件 ——
 function renderThumbs(){
@@ -315,8 +333,8 @@ document.getElementById('btnSave').onclick=()=>{
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{
   const v=e.target.value;
-  if(v==='__new__'){ ws.send(JSON.stringify({action:'new_session'})); }
-  else { sendRaw('/resume '+v, []); window._lastSaved=v; ws.send(JSON.stringify({action:'list_sessions'})); }
+  if(v==='__new__'){ ws.send(JSON.stringify({action:'new_session'})); msgArea.innerHTML=''; curTurn=null; lastUserBubble=null; }
+  else { ws.send(JSON.stringify({action:'load_session', name:v})); window._lastSaved=v; }
 });
 document.getElementById('btnAuto').onclick=()=>{
   // 切换自主模式：发送命令
@@ -461,11 +479,16 @@ ws.onmessage=(ev)=>{
         const sel=document.getElementById('sessionSel');
         const curVal=sel.value;
         sel.innerHTML='<option value="__new__">➕ 新会话</option>';
-        m.names.forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); });
+        m.names.forEach(it=>{ const o=document.createElement('option'); o.value=it.id;
+          o.textContent=it.name+(it.turns?` (${it.turns}轮)`:''); sel.appendChild(o); });
         if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
         else if(curVal && curVal!=='__new__' && sel.querySelector(`option[value="${curVal}"]`)) sel.value=curVal;
         window._lastSaved=null;
       }
+      break;
+    case 'session_history':
+      renderHistory(m.turns);
+      addRow('sys', `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;

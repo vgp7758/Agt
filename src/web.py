@@ -28,11 +28,13 @@ from commands import CommandContext, build_default_registry, apply_config, read_
 from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from plan_tools import make_plan_tools
+from memory_tools import make_recall_tools
 from wiki import make_wiki_tools
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from snapshots import SnapshotManager
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 from lsp_manager import make_lsp_tools
+from session import session_meta
 
 app = FastAPI(title="Agt Agent WebUI")
 
@@ -84,6 +86,8 @@ def _get_or_create_agent() -> Agent:
     for t in SKILL_TOOLS:
         agent.tools.register(t)
     for t in make_plan_tools(agent):
+        agent.tools.register(t)
+    for t in make_recall_tools(agent):
         agent.tools.register(t)
     for t in make_wiki_tools(agent):
         agent.tools.register(t)
@@ -403,7 +407,7 @@ async def ws_endpoint(websocket: WebSocket):
         })
     # 发送会话列表
     from session import list_sessions
-    await _send(websocket, {"type": "sessions", "names": [p.stem for p in list_sessions(workspace=WORKSPACE)]})
+    await _send(websocket, {"type": "sessions", "names": [session_meta(p) for p in list_sessions(workspace=WORKSPACE)]})
     # 发送工作流列表
     from workflow import workflows_info
     await _send(websocket, {"type": "workflows", "items": workflows_info(WORKSPACE)})
@@ -486,12 +490,15 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         return
     if isinstance(_d, dict) and _d.get("action") == "list_sessions":
         from session import list_sessions
-        await _send(ws, {"type": "sessions", "names": [p.stem for p in list_sessions(workspace=WORKSPACE)]})
+        await _send(ws, {"type": "sessions", "names": [session_meta(p) for p in list_sessions(workspace=WORKSPACE)]})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         from session import Session
-        agent.session = Session(agent.base_system, llm=agent.llm,
-                                recent_window_turns=agent.session.recent_window_turns)
+        agent.set_session(Session(agent.base_system, llm=agent.llm,
+                                  recent_window_turns=agent.session.recent_window_turns))
+        agent.plan = []                  # 新会话：清空计划与自主模式
+        agent.exit_autonomous_mode()
+        agent.goal_check_script = ""
         await _send(ws, {"type": "system", "text": "🔄 已创建新会话。"})
         return
     if isinstance(_d, dict) and _d.get("action") == "save_session":
@@ -499,7 +506,23 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         p = agent.session.save(name)
         await _send(ws, {"type": "saved", "name": p.stem})
         from session import list_sessions
-        await _send(ws, {"type": "sessions", "names": [s.stem for s in list_sessions(workspace=WORKSPACE)]})
+        await _send(ws, {"type": "sessions", "names": [session_meta(s) for s in list_sessions(workspace=WORKSPACE)]})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "load_session":
+        from session import Session
+        _ls_name = (_d.get("name") or "").strip()
+        if not _ls_name:
+            await _send(ws, {"type": "system", "text": "⚠️ 未指定要恢复的会话"})
+            return
+        try:
+            new_session = Session.load(_ls_name, llm=agent.llm, workspace=WORKSPACE)
+        except Exception as e:
+            await _send(ws, {"type": "system", "text": f"❌ 恢复失败：{type(e).__name__}: {e}"})
+            return
+        agent.set_session(new_session)   # 切换 + 恢复 plan/自主模式状态
+        # 把该 session 的完整历史原样推给前端渲染（user/工具调用/回答，不含思考过程）
+        await _send(ws, {"type": "session_history", "name": agent.session.name or _ls_name,
+                         "turns": agent.session.to_history()})
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()

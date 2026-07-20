@@ -15,6 +15,7 @@ import config
 from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, skills_summary
 from plan_tools import make_plan_tools
+from memory_tools import make_recall_tools
 from wiki import make_wiki_tools
 from commands import CommandContext, build_default_registry
 from mcp_client import MCPManager, make_mcp_tools
@@ -135,6 +136,9 @@ def main():
         agent.tools.register(t)
     # 注册计划工具（create_plan / update_plan）
     for t in make_plan_tools(agent):
+        agent.tools.register(t)
+    # 注册记忆召回工具（recall_turn：按需召回窗口外历史轮的完整上下文）
+    for t in make_recall_tools(agent):
         agent.tools.register(t)
     # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
     for t in make_wiki_tools(agent):

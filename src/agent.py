@@ -51,6 +51,7 @@ class Agent:
                              temperature=temperature, enable_thinking=enable_thinking)
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
                                max_steps_per_turn=max_steps_per_turn)
+        self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.cumulative_tokens = 0
         self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
         self.plan: list = []        # 计划清单（create_plan/update_plan 维护）
@@ -155,6 +156,45 @@ class Agent:
         """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。"""
         self.llm.switch_model(name)
         self.model_name = name
+
+    # ========== 运行时状态的存取（随 session 落盘/恢复）==========
+    def capture_runtime_state(self) -> dict:
+        """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
+        return {
+            "plan": [dict(s) for s in self.plan],
+            "autonomous_mode": self.autonomous_mode,
+            "autonomous_end_time": self.autonomous_end_time.isoformat() if self.autonomous_end_time else None,
+            "autonomous_prompt": self.autonomous_prompt,
+            "goal_check_script": self.goal_check_script,
+        }
+
+    def restore_runtime_state(self, state: dict):
+        """从存档恢复运行时状态（resume / 切换 session 后调用）。"""
+        if state:
+            self.plan = [dict(s) for s in state.get("plan", [])]
+            self.autonomous_mode = bool(state.get("autonomous_mode", False))
+            end = state.get("autonomous_end_time")
+            self.autonomous_end_time = datetime.fromisoformat(end) if end else None
+            if "autonomous_prompt" in state:
+                self.autonomous_prompt = state["autonomous_prompt"]
+            if "goal_check_script" in state:
+                self.goal_check_script = state["goal_check_script"]
+        self._emit_plan_if_any()
+
+    def set_session(self, session):
+        """切换到指定 session：换引用 + 重新挂状态收集回调 + 恢复附加状态 + 同步 UI。
+        所有 resume / reset / new_session 都应走这里，保证 provider 与附加状态一致。"""
+        self.session = session
+        session._state_provider = self.capture_runtime_state
+        self.restore_runtime_state(session.extra_state)
+
+    def _emit_plan_if_any(self):
+        """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""
+        if getattr(self, "on_event", None):
+            try:
+                self.on_event({"type": "plan", "plan": [dict(s) for s in self.plan]})
+            except Exception:
+                pass
 
     def set_autonomous_mode(self, end_time: datetime, prompt: str = None):
         """设置纯自主模式：到 end_time 之前，任务完成后自动继续。

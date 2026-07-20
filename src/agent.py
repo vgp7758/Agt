@@ -560,7 +560,6 @@ class Agent:
                         # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas
                         # （schemas 无缓存，只是 dict 遍历，成本低）
                         self._refresh_tools_if_written(step)
-                        self._diag_if_cs_written(step)   # 写 .cs 后自动注入 cs_diag 诊断
                         tool_schemas = self.tools.schemas()
                         # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
                         if self.autonomous_mode and self.pending_messages:
@@ -621,31 +620,7 @@ class Agent:
         return False
 
     def _diag_if_cs_written(self, step):
-        """若本步 write_file/edit 了 .cs 文件，自动调 cs_diag 把 OmniSharp 编译诊断
-        附加到该工具的结果里——Agent 改完立刻看到红线报错（改→查→改闭环），无需额外调用。
-        需先 ensure_lsp('csharp') 装配 csharp-lsp；未装配则跳过。"""
-        diag_name = "__mcp__csharp-lsp__cs_diag"
-        if diag_name not in getattr(self.tools, "_tools", {}):
-            return   # csharp-lsp 未装配，跳过
-        from pathlib import Path as _P
-        try:
-            from real_tools import WORKSPACE
-            ws = _P(WORKSPACE).resolve()
-        except Exception:
-            ws = None
-        for tc in step.tool_calls:
-            if tc.name not in ("write_file", "edit"):
-                continue
-            p = str(tc.arguments.get("path", ""))
-            if not p.lower().endswith(".cs"):
-                continue
-            try:
-                rel = (str(_P(p).resolve().relative_to(ws)).replace("\\", "/")
-                       if ws else _P(p).name)
-            except Exception:
-                rel = _P(p).name
-            try:
-                diag = self.tools.call(diag_name, {"file": rel})
-                tc.result = (tc.result or "") + f"\n\n🔍 [cs_diag 自动诊断]\n{diag}"
-            except Exception as e:
-                tc.result = (tc.result or "") + f"\n\n🔍 [cs_diag 自动诊断出错] {type(e).__name__}: {e}"
+        """[已迁移] 写 .cs 后自动诊断改由 .agent/workflows/cs_auto_diag.xml
+        (after_tool 钩子工作流) 承担。空壳保留仅为兼容旧引用/子类覆写。"""
+        return
+

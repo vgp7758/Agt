@@ -1680,8 +1680,10 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tupl
     if isinstance(ret, dict):
         if "inject" in ret:
             return _to_bool(ret.get("inject")), str(ret.get("result") or ret.get("output") or "")
-        v = next(iter(ret.values()), "") if ret else ""
-        return True, str(v)
+        # 无 inject 键（旧式 {output:x} / 引用未解析的 {result:None}）：取唯一值，None/空 → 不注入
+        v = next(iter(ret.values()), None) if ret else None
+        vs = "" if v is None else str(v)
+        return (bool(vs), vs)
     s = str(ret).strip()
     if s.startswith("{"):
         try:

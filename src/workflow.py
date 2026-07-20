@@ -1695,10 +1695,36 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tupl
     return (bool(s), s)
 
 
+def seed_default_workflows(workspace: Path = None) -> int:
+    """把随包附带的默认工作流（src/workflows/*.xml）播种到 workspace/.agent/workflows/。
+    仅在目标不存在时拷贝（用户改动过的同名文件不会被覆盖）。返回播种数量。
+    用于让"默认行为类"工作流（如 cs_auto_diag 自动诊断）对 pip 安装的用户也开箱即用。"""
+    workspace = workspace or WORKSPACE
+    try:
+        bundled_dir = Path(__file__).resolve().parent / "workflows"
+        if not bundled_dir.is_dir():
+            return 0
+        target_dir = workspace / ".agent" / "workflows"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for src in sorted(bundled_dir.glob("*.xml")):
+            dst = target_dir / src.name
+            if not dst.exists():
+                try:
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                    n += 1
+                except Exception:
+                    pass
+        return n
+    except Exception:
+        return 0
+
+
 def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple[list, list]:
     """每轮调用：清掉旧 wf_* 工具，按当前 .agent/workflows/ 重新注册。返回 (ok_names, broken)。
     本地脚本不再自动注册为工具——改用内置 run_script(script, payload) 工具执行（见 real_tools）。"""
     workspace = workspace or WORKSPACE
+    seed_default_workflows(workspace)   # 确保默认工作流存在（存在则不覆盖），再扫描
     toolbox.drop(WF_PREFIX)
     ok, broken = [], []
     for item in scan_workflows(workspace):

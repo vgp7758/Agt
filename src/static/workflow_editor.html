@@ -131,7 +131,7 @@ let WF={name:'',nodes:[
   {id:'900001',type:'2',x:500,y:100,w:200,data:{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}}}
 ],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
 let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
-let dragNode=null,dragDX=0,dragDY=0;
+let dragNode=null,dragDX=0,dragDY=0,dragStartX=0,dragStartY=0;   // dragStart：mousedown 起点，mouseup 判定点击 vs 拖拽
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
 let _suppressClick=false;          // 拖线弹窗后抑制一次 click（避免立即被“点空白”关闭）
 let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
@@ -651,7 +651,8 @@ function renderNode(n){
     if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
     e.stopPropagation();
     const sp=svgPos(e); dragNode=n.id; dragDX=n.x-sp.x; dragDY=n.y-sp.y;
-    selNode=n.id; selEdge=null; showProps(); renderAll();
+    dragStartX=sp.x; dragStartY=sp.y;   // 记录起点：mouseup 判定点击 vs 拖拽
+    selNode=n.id; selEdge=null; renderAll();   // 仅选中高亮，弹面板延后到 mouseup（拖动不弹）
   };
   // 代码节点：画布上显示前几行代码预览
   if(n.type==='5'){
@@ -814,6 +815,9 @@ svg.addEventListener('mousemove',(e)=>{
   if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
 svg.addEventListener('mouseup',(e)=>{
+  const _sp=svgPos(e);
+  const wasDrag=!!dragNode;                                                 // 本次松手前是否在拖节点
+  const moved=wasDrag && Math.hypot(_sp.x-dragStartX, _sp.y-dragStartY)>3;  // 移动>3px=拖拽，否则视为点击
   dragNode=null;panning=false;
   // 断开拖拽：松手时若不在端口上 → 断开；落在同色端口上 → 重连到新目标
   if(edgeFrom&&edgeFrom.kind==='disconnect'){
@@ -831,6 +835,8 @@ svg.addEventListener('mouseup',(e)=>{
     edgeFrom=null;
     _suppressClick=true;   // 抑制紧随的 click（否则会立即关闭刚弹出的浮窗）
   }
+  // 节点松手：纯点击（未拖动）→ 弹属性面板；拖动了则不弹（避免面板挡住拖拽）
+  if(wasDrag && !moved){ showProps(); renderAll(); }
 });
 svg.addEventListener('mousedown',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
@@ -2060,7 +2066,7 @@ const HOOK_INPUTS={
   before_turn:[['user_message','string','用户本轮消息']],
   before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)']],
   after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果']],
-  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答']],
+  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答'],['turn_context','string','本轮工具调用摘要(name(args)→result 每行一条)']],
 };
 const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前'};
 function onHookChange(v){

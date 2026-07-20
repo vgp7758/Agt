@@ -1,4 +1,4 @@
-<workflow name="cs_auto_diag" description="写 .cs 后自动跑 cs_diag 编译诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool">
+<workflow name="cs_auto_diag" description="写 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool">
   <!-- after_tool 钩子注入的上下文 -->
   <node id="100001" type="start">
     <out name="tool_name" type="string"/>
@@ -26,7 +26,7 @@ async def main(args) -> dict:
     <out name="file" type="string"/>
   </node>
 
-  <!-- 仅 .cs 写入走诊断分支（true）；否则 false 直接到结束（result 引用未执行的 cs_diag → 空 → 不注入） -->
+  <!-- 仅 .cs 写入走诊断分支（true）；否则 false 直接到结束（inject/result 引用未执行的节点 → None → 不注入） -->
   <node id="120001" type="selector">
     <branch>
       <cond op="1" left="110001.is_cs" right="true" left_type="boolean" right_type="boolean"/>
@@ -39,14 +39,29 @@ async def main(args) -> dict:
     <out name="raw" type="string"/>
   </node>
 
-  <!-- 结束：返回 result（diag 文本 / 或跳过时为空）。空 result → run_hook 注入但不生效（_run_hooks 过滤空） -->
+  <!-- 检查诊断输出：仅含 [ERROR] 才 inject=True（无诊断/仅 WARN/INFO 不注入，避免噪音） -->
+  <node id="140001" type="code">
+    <in name="diag" ref="130001.raw"/>
+    <code language="3"><![CDATA[
+async def main(args) -> dict:
+    diag = args.params.get("diag") or ""
+    has_error = "[ERROR]" in diag
+    return {"inject": has_error, "result": diag}
+]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+  </node>
+
+  <!-- 结束：inject/result 取自 140001（诊断分支）；跳过分支 140001 未执行 → None → 不注入 -->
   <node id="900001" type="end">
-    <out name="result" ref="130001.raw"/>
+    <out name="inject" type="boolean" ref="140001.inject"/>
+    <out name="result" type="string" ref="140001.result"/>
   </node>
 
   <edge from="100001" to="110001"/>
   <edge from="110001" to="120001"/>
   <edge from="120001" to="130001" port="true"/>
-  <edge from="130001" to="900001"/>
+  <edge from="130001" to="140001"/>
+  <edge from="140001" to="900001"/>
   <edge from="120001" to="900001" port="false"/>
 </workflow>

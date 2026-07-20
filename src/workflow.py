@@ -1671,11 +1671,13 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tupl
     inject 可能以字符串 'false'/'true' 形式传来（节点字段类型为 string 时），按布尔语义归一化。
     """
     def _to_bool(v):
+        if v is None:
+            return False
         if isinstance(v, bool):
             return v
         if isinstance(v, (int, float)):
             return v != 0
-        return str(v).strip().lower() not in ("false", "0", "no", "off", "")
+        return str(v).strip().lower() not in ("false", "0", "no", "off", "none", "")
     ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace, return_exit_dict=True)
     if isinstance(ret, dict):
         if "inject" in ret:

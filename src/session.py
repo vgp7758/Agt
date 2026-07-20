@@ -28,12 +28,13 @@ from typing import Optional, Callable
 
 from llm_client import LLMClient
 
-# 会话存档统一放用户主目录：~/.agt/sessions/<repo-hash>/。
-# 放包目录下会在 pip 安装后写进 site-packages（不可写/难找），改到 ~/.agt 与
-# models.json/settings.json 同一惯例，每个 repo 互相隔离。
-SESSIONS_DIR = Path.home() / ".agt" / "sessions"
-# 旧位置（开发期在项目根 sessions/；pip 装后此路径不存在）——用于一次性自动迁移。
-_LEGACY_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
+# 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
+# （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
+# site-packages（不可写/难找），故统一到 ~/.agt，与 models.json/settings.json 同惯例。
+REPOS_DIR = Path.home() / ".agt" / "repos"
+# 旧位置（用于一次性自动迁移；SESSIONS_DIR 同时保留作 legacy 别名供 commands.py 等 import）：
+SESSIONS_DIR = Path.home() / ".agt" / "sessions"                              # 上一版 ~/.agt/sessions/<hash>/
+_LEGACY_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"   # 开发期项目根（pip 装后不存在）
 
 
 def _repo_hash(workspace) -> str:
@@ -42,10 +43,10 @@ def _repo_hash(workspace) -> str:
 
 
 def _repo_sessions_dir(workspace) -> Path:
-    """该工作区的会话子目录：sessions/<hash>/。每个 repo 的存档互相隔离。
-    首次访问时把旧位置(项目根 sessions/<各 hash>/)的存档一次性整体迁移过来。"""
+    """该工作区的会话子目录：~/.agt/repos/<hash>/sessions/。每个 repo 互相隔离。
+    首次访问时把两处旧位置的存档一次性整体迁移过来。"""
     h = _repo_hash(workspace)
-    d = SESSIONS_DIR / h
+    d = REPOS_DIR / h / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     _migrate_all_legacy()
     return d
@@ -55,20 +56,22 @@ _ALL_MIGRATED = False   # 进程级标志：全量迁移只跑一次
 
 
 def _migrate_all_legacy() -> None:
-    """一次性把旧目录 sessions/<所有 hash 子目录>/ 的存档搬到 ~/.agt/sessions/ 对应位置。
-    只在首次访问时跑一次；每个 hash 目标为空才迁，避免覆盖新存档。"""
+    """一次性把旧位置的存档搬到 ~/.agt/repos/<hash>/sessions/。
+    两处旧源：项目根 sessions/<hash>/（开发期）、~/.agt/sessions/<hash>/（上一版结构）。
+    每个 hash 目标为空才迁（copy 不删源），避免覆盖新存档；旧目录可手动清理。"""
     global _ALL_MIGRATED
     if _ALL_MIGRATED:
         return
     _ALL_MIGRATED = True
     try:
-        if not _LEGACY_SESSIONS_DIR.exists():
-            return
-        for legacy_hash_dir in _LEGACY_SESSIONS_DIR.iterdir():
-            if not legacy_hash_dir.is_dir():
+        for legacy_root in (_LEGACY_SESSIONS_DIR, SESSIONS_DIR):
+            if not legacy_root.exists():
                 continue
-            target = SESSIONS_DIR / legacy_hash_dir.name
-            _migrate_one(legacy_hash_dir, target)
+            for legacy_hash_dir in legacy_root.iterdir():
+                if not legacy_hash_dir.is_dir():
+                    continue
+                target = REPOS_DIR / legacy_hash_dir.name / "sessions"
+                _migrate_one(legacy_hash_dir, target)
     except Exception:
         pass  # 迁移失败绝不影响正常读写
 
@@ -490,9 +493,12 @@ def _turn_from_dict(d: dict) -> Turn:
 
 
 def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
-    """查找会话文件：优先该工作区的 hash 子目录，再回退到扁平根目录(兼容旧存档)。"""
-    repo_dir = _repo_sessions_dir(workspace or Path.cwd())
-    for base in (repo_dir, SESSIONS_DIR):
+    """查找会话文件：优先新目录 ~/.agt/repos/<hash>/sessions/，
+    再回退旧 ~/.agt/sessions/<hash>/（迁移前的兼容读取）。"""
+    ws = workspace or Path.cwd()
+    repo_dir = _repo_sessions_dir(ws)
+    legacy_dir = SESSIONS_DIR / _repo_hash(ws)
+    for base in (repo_dir, legacy_dir):
         for cand in (Path(path_or_name), base / path_or_name, base / (path_or_name + ".json")):
             if cand.exists():
                 return cand

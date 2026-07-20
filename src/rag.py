@@ -48,9 +48,14 @@ class LocalRAG:
             cfg = load_rag_config(workspace)
         if not cfg.get("enabled") or not cfg.get("embed_model_path"):
             return None
-        index_dir = cfg.get("index_dir", ".agent/rag")
-        if not Path(index_dir).is_absolute():
-            index_dir = Path(workspace) / index_dir
+        index_dir_cfg = cfg.get("index_dir", "")
+        if not index_dir_cfg or index_dir_cfg == ".agent/rag":   # 空/旧默认 → per-repo 用户目录
+            from session import REPOS_DIR, _repo_hash
+            index_dir = REPOS_DIR / _repo_hash(workspace) / "rag"
+        elif not Path(index_dir_cfg).is_absolute():
+            index_dir = Path(workspace) / index_dir_cfg
+        else:
+            index_dir = Path(index_dir_cfg)
         reranker_path = cfg.get("reranker_path") if cfg.get("reranker_enabled") else None
         try:
             return cls(cfg["embed_model_path"], index_dir, reranker_path=reranker_path, config=cfg)

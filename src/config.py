@@ -111,7 +111,7 @@ DEFAULT_RAG_CONFIG = {
     "docs_dir": "",
     "exts": [".md", ".txt", ".json"],
     "exclude_globs": ["*_Audit.*"],
-    "index_dir": ".agent/rag",
+    "index_dir": "",   # 空 = 默认 ~/.agt/repos/<hash>/rag（per-repo 用户目录）；可填绝对路径自定义
     "vector_store_type": "faiss_hnsw",
     "top_k": 5,
     "reranker_enabled": False,

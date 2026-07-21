@@ -27,6 +27,8 @@ agt-web      # WebUI → http://localhost:8000
 | **技能** | `.agent/skills/` YAML 渐进式披露 |
 | **Agentic RAG** | 工作流设 `auto:true`，消息自动预取注入 |
 | **批处理** | 任意节点对数组逐元素执行，输出 all/filtered/nth |
+| **随包资产** | `/download` 按需取用内置工作流 / MCP / 脚本 |
+| **反馈通道** | `/feedback` 一键提交，直达作者（飞书实时推送） |
 
 ---
 
@@ -102,6 +104,33 @@ pip install -e .
 ```
 
 运行测试：`python examples/step*.py`
+
+---
+
+## 反馈与联系
+
+用着顺手、遇到 bug、或有想法，都欢迎反馈 —— **提交即直达作者手机**：
+
+- **WebUI**：顶栏「💬 反馈」按钮 → 类型 / 内容 / 联系方式 → 提交
+- **CLI**：`/feedback [类型] <内容>`（类型 `bug` / `建议` / `问题` / `赞美`，省略默认「建议」）
+
+  ```
+  /feedback bug 工作流调试页白屏
+  /feedback 希望支持 Mermaid 图渲染
+  ```
+
+反馈本地保存并实时推送到作者，可勾选附上环境信息（版本 / 模型 / 系统）便于定位问题。
+
+**联系作者**：微信 `mrbrick123` · 邮箱 `vgp123@foxmail.com` · GitHub [@vgp7758](https://github.com/vgp7758) · [Issues](https://github.com/vgp7758/Agt/issues)
+
+### 随包资产
+
+内置工作流 / MCP / 脚本可按需取用到本地工作区：
+
+```
+/download            # 列出随包资产
+/download <名>       # 下载某项到默认目录
+```
 
 ---
 

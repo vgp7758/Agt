@@ -514,6 +514,27 @@ def _cmd_logs(ctx: CommandContext, args):
         print(line)
 
 
+def _cmd_download(ctx: CommandContext, args):
+    """/download [list|<name> [dir] [--force]]  下载随包资产（工作流/mcp/脚本）。"""
+    from download import list_assets, download_asset
+    positional, flags = _parse_args(args)
+    force = bool(flags.get("force"))
+    if not positional or positional[0] == "list":
+        items = list_assets(workspace=ctx.session.workspace)
+        if not items:
+            print("(无随包资产)")
+            return
+        print(f"📦 随包资产（{len(items)} 项）：")
+        for a in items:
+            mark = "✅已在本机" if a.get("exists") else "⬇可下载"
+            print(f"  [{mark}] {a['name']} ({a['type']}) — {a['desc']}")
+        print("用法：/download <name> [dir] [--force]  （name 来自上面清单）")
+        return
+    name = positional[0]
+    target = positional[1] if len(positional) > 1 else None
+    print(download_asset(name, target_dir=target, force=force, workspace=ctx.session.workspace))
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -530,6 +551,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("workflows", _cmd_workflows, "[reload]  列出/重载 .agent/workflows/ 工作流")
     reg.register("memory", _cmd_memory, "[list|show|add|delete|search|semantic]  长期记忆管理")
     reg.register("logs", _cmd_logs, "[N]  查看当前 session 日志尾部（默认30行）")
+    reg.register("download", _cmd_download, "[name|list] [dir] [--force]  下载随包资产（工作流/mcp/脚本）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

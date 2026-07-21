@@ -21,6 +21,7 @@ from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
 from longterm_memory import make_ltm_tools
+from download import make_download_tools
 from wiki import make_wiki_tools
 from rag import make_rag_tools
 from commands import CommandContext, build_default_registry
@@ -75,6 +76,8 @@ SYSTEM = build_system(
         "当你判断本轮出现【值得跨 session 记住】的经验，主动调 add_memory(type,title,content,tags) 记一笔——"
         "典型场景：踩坑及解法、用户偏好/背景、重要决策及原因、可复用流程。"
         "需要时用 search_memory 检索；同 type+title 会自动更新而非重复。用户可用 /memory 命令查看管理。\n"
+        + "\n\n【随包资产】随包附带的工作流等资产可用 list_downloadable 查看（名称/类型/描述/是否已在本地），"
+        "需要时 download_asset(name) 下载（用户也可用 /download 命令）。默认工作流已自动播种，这里用于显式取用或下载到指定目录。\n"
         + "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
         "tools 留空=继承你的全部工具 (自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
         "agent_prompt(name, prompt) 派任务，子 Agent 自主用工具完成再回复；kill_agent(name) 销毁；list_agents() 查看。"
@@ -129,7 +132,7 @@ def main():
     print("🤖 交互式 Agent · AgenTank 比赛版")
     print("=" * 64)
     print("工具：get_tank/simulate/publish_code/challenge/... + run_python/文件/搜索/shell")
-    print("命令：/save /resume /list /show /reset /config /budget /tank /model /autonomous /memory /logs /help")
+    print("命令：/save /resume /list /show /reset /config /budget /tank /model /autonomous /memory /logs /download /help")
     print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
     print("=" * 64)
 
@@ -159,6 +162,9 @@ def main():
         agent.tools.register(t)
     # 注册长期记忆工具（add_memory/search_memory/...：主 Agent 自主沉淀跨 session 经验）
     for t in make_ltm_tools(agent):
+        agent.tools.register(t)
+    # 注册随包资产下载工具（list_downloadable/download_asset）
+    for t in make_download_tools(agent):
         agent.tools.register(t)
     # 注册后台服务/调度工具（start_service / add_schedule 等）
     for t in make_background_tools(agent):

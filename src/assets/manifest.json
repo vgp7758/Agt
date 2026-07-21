@@ -1,0 +1,23 @@
+[
+  {
+    "name": "cs_auto_diag",
+    "type": "workflow",
+    "desc": "写 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）",
+    "src": "workflows/cs_auto_diag.xml",
+    "default_dir": ".agent/workflows"
+  },
+  {
+    "name": "wiki_auto_query",
+    "type": "workflow",
+    "desc": "每轮开始前自动查 wiki 注入相关页面（before_turn 钩子，默认关，需 .agent/wiki/ 有内容）",
+    "src": "workflows/wiki_auto_query.xml",
+    "default_dir": ".agent/workflows"
+  },
+  {
+    "name": "wiki_auto_maintenance",
+    "type": "workflow",
+    "desc": "最终回答前自动判断并调 update_wiki 维护知识库（before_answer 钩子，默认关，报告不喂主 LLM）",
+    "src": "workflows/wiki_auto_maintenance.xml",
+    "default_dir": ".agent/workflows"
+  }
+]

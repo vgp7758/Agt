@@ -493,6 +493,27 @@ def _cmd_memory(ctx: CommandContext, args):
         print(f"❌ 未知子命令 {sub}；可用：list / show / add / delete / search / semantic")
 
 
+def _cmd_logs(ctx: CommandContext, args):
+    """/logs [N]  打印当前 session 日志文件（<name>.log）的尾部 N 行，默认 30。"""
+    from log import session_log_path
+    n = 30
+    if args and args[0].isdigit():
+        n = int(args[0])
+    name = ctx.session.name
+    if not name:
+        print("(当前 session 还没命名，首轮完成后才生成 <name>.log)")
+        return
+    p = session_log_path(ctx.session.workspace, name)
+    if not p.exists():
+        print(f"(日志文件不存在：{p.name}；本轮可能还在内存缓冲，首轮完成后落盘)")
+        return
+    lines = p.read_text(encoding="utf-8").splitlines()
+    tail = lines[-n:] if len(lines) > n else lines
+    print(f"📜 {p.name}（共 {len(lines)} 行，显示尾 {len(tail)} 行）：")
+    for line in tail:
+        print(line)
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -508,6 +529,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")
     reg.register("workflows", _cmd_workflows, "[reload]  列出/重载 .agent/workflows/ 工作流")
     reg.register("memory", _cmd_memory, "[list|show|add|delete|search|semantic]  长期记忆管理")
+    reg.register("logs", _cmd_logs, "[N]  查看当前 session 日志尾部（默认30行）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

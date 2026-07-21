@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Optional, Callable
 
 from llm_client import LLMClient
+
+_LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
@@ -153,6 +156,7 @@ class Session:
         # —— 长期记忆注入 provider（Agent 注册；两类机制不同，见 longterm_memory.py）——
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
+        self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
 
     # ========== 构建 ==========
     def start_turn(self, user_message: str, images: Optional[list] = None):
@@ -338,6 +342,7 @@ class Session:
         try:
             return self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
         except Exception as e:
+            _LOG.warning("轮次摘要失败: %s", e)
             return f"[摘要失败 {e}] 用户: {turn.user_message[:60]}；回答: {turn.answer[:60]}"
 
     def _compress_summary(self) -> str:
@@ -367,10 +372,16 @@ class Session:
         safe = _NAME_SAFE_RE.sub("_", title)[:30].strip("_") if title else ""
         if safe:
             self.name = safe
-            return
-        # fallback：用首轮 user_message 片段，再不行用时间戳
-        seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
-        self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
+        else:
+            # fallback：用首轮 user_message 片段，再不行用时间戳
+            seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
+            self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
+        # name 刚就绪：通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
+        if self._log_handler is not None:
+            try:
+                self._log_handler.set_session(self.workspace, self.name)
+            except Exception as e:
+                _LOG.warning("日志 handler 切换失败: %s", e)
 
     # ========== 异步自动落盘 ==========
     def _capture_state(self):
@@ -393,8 +404,8 @@ class Session:
         def _write():
             try:
                 self.save(name)
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.error("会话自动落盘失败 %s: %s", name, e)
         threading.Thread(target=_write, daemon=True).start()
 
     # ========== 召回（Agent / 用户按需查完整原文）==========

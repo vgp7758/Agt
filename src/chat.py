@@ -129,7 +129,7 @@ def main():
     print("🤖 交互式 Agent · AgenTank 比赛版")
     print("=" * 64)
     print("工具：get_tank/simulate/publish_code/challenge/... + run_python/文件/搜索/shell")
-    print("命令：/save /resume /list /show /reset /config /budget /tank /model /autonomous /help")
+    print("命令：/save /resume /list /show /reset /config /budget /tank /model /autonomous /memory /logs /help")
     print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
     print("=" * 64)
 

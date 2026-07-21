@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from typing import Callable, Optional
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 
 import config
+
+_LOG = logging.getLogger("agt.llm")  # 直接用标准 logging（不 import log.py）；handler 由 agent 配置时挂到 agt root
 
 # DeepSeek/ModelScope 等在并行多工具调用时，偶尔不通过标准 tool_calls 字段返回，
 # 而是把工具调用以内部 DSML 文本塞进 content：
@@ -218,9 +221,12 @@ class LLMClient:
                 if isinstance(e, RateLimitError) and tried_tokens < len(self.api_tokens) - 1:
                     tried_tokens += 1
                     self._rotate_token()
+                    _LOG.warning("限流，换 token 重试 (%d/%d) 原因=%s",
+                                 tried_tokens + 1, len(self.api_tokens), type(e).__name__)
                     continue
                 # 再走模型回退链
                 if not self.fallback_chain:
+                    _LOG.error("调用失败且无回退链: %s: %s", type(e).__name__, e)
                     raise
                 try:
                     idx = self.fallback_chain.index(self.model_name)
@@ -228,10 +234,13 @@ class LLMClient:
                     raise
                 next_m = self.fallback_chain[idx + 1] if idx + 1 < len(self.fallback_chain) else None
                 if not next_m or next_m in tried:
+                    _LOG.error("回退链耗尽 tried=%s 原因=%s", tried, type(e).__name__)
                     raise RuntimeError(
                         f"回退链中所有模型均已尝试({', '.join(tried)})：{e}") from e
                 tried.append(next_m)
                 tried_tokens = 0
+                _LOG.warning("回退 %s→%s 原因=%s 退避%.0fs",
+                             self.model_name, next_m, type(e).__name__, self._backoff(len(tried) - 1))
                 self.switch_model(next_m)
                 time.sleep(self._backoff(len(tried) - 1))
 
@@ -239,12 +248,18 @@ class LLMClient:
         """单模型调用 + 空响应重试（被 chat() 的回退循环包裹）。"""
         last_info = None
         for attempt in range(self.max_retries):
+            _t0 = time.time()
+            _LOG.debug("尝试 %d/%d model=%s", attempt + 1, self.max_retries, self.model_name)
             resp = self._client.chat.completions.create(
                 **self._build_kwargs(messages, stream=False, **overrides)
             )
+            _elapsed = time.time() - _t0
             choices = resp.choices or []
             usage = resp.usage.model_dump() if resp.usage else None
             if choices:
+                _toks = usage.get("total_tokens") if usage else None
+                _LOG.info("成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
+                          _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")
                 msg = choices[0].message.model_dump()
                 return _postprocess_response(LLMResponse(
                     content=msg.get("content") or "",
@@ -254,8 +269,11 @@ class LLMClient:
                     raw_message=msg,
                 ))
             last_info = (usage, str(resp.model_dump())[:300])
+            _LOG.warning("空响应(疑似限流) 重试 %d/%d 退避%.0fs 耗时%.1fs usage=%s",
+                         attempt + 1, self.max_retries, self._backoff(attempt), _elapsed, usage)
             time.sleep(self._backoff(attempt))
 
+        _LOG.error("连续 %d 次空响应，放弃 model=%s", self.max_retries, self.model_name)
         raise RuntimeError(
             f"连续 {self.max_retries} 次得到空 choices（疑似限流/服务波动）。"
             f" 最后 usage={last_info[0]} raw={last_info[1]}"
@@ -275,6 +293,8 @@ class LLMClient:
         self._maybe_reset_to_head()
         last_usage = None
         for attempt in range(self.max_retries):
+            _t0 = time.time()
+            _LOG.debug("流式尝试 %d/%d model=%s", attempt + 1, self.max_retries, self.model_name)
             stream = self._client.chat.completions.create(
                 **self._build_kwargs(messages, stream=True, **overrides)
             )
@@ -314,6 +334,9 @@ class LLMClient:
                     except json.JSONDecodeError:
                         args = {"_raw_arguments": f["arguments"]}
                     tool_calls.append({"id": f["id"], "name": f["name"], "arguments": args})
+                _toks = usage.get("total_tokens") if usage else None
+                _LOG.info("流式成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
+                          _toks, time.time() - _t0, f" (重试{attempt}次)" if attempt else "")
                 return _postprocess_response(LLMResponse(
                     content="".join(content_parts),
                     reasoning="".join(reasoning_parts),
@@ -321,8 +344,11 @@ class LLMClient:
                     usage=usage,
                 ))
             last_usage = usage
+            _LOG.warning("流式空 重试 %d/%d 退避%.0fs usage=%s",
+                         attempt + 1, self.max_retries, self._backoff(attempt), usage)
             time.sleep(self._backoff(attempt))
 
+        _LOG.error("连续 %d 次流式空响应，放弃 model=%s", self.max_retries, self.model_name)
         raise RuntimeError(
             f"连续 {self.max_retries} 次流式调用都返回空（疑似限流/服务波动）。"
             f" 最后 usage={last_usage}"

@@ -29,6 +29,7 @@ from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
+from longterm_memory import make_ltm_tools
 from background_tools import make_background_tools
 from wiki import make_wiki_tools
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
@@ -120,6 +121,8 @@ def _get_or_create_agent() -> Agent:
     for t in make_plan_tools(agent):
         agent.tools.register(t)
     for t in make_recall_tools(agent):
+        agent.tools.register(t)
+    for t in make_ltm_tools(agent):
         agent.tools.register(t)
     for t in make_background_tools(agent):
         agent.tools.register(t)

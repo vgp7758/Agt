@@ -404,6 +404,95 @@ def _cmd_workflows(ctx: CommandContext, args):
     print("用法：/workflows reload  重新扫描注册")
 
 
+def _cmd_memory(ctx: CommandContext, args):
+    """/memory 长期记忆管理（跨 session，~/.agt/repos/<hash>/memories/）。
+    子命令：overview(默认) / list / show / add / delete / search / semantic"""
+    from longterm_memory import TYPES
+    ltm = ctx.agent.ltm
+    positional, flags = _parse_args(args)
+    sub = positional[0].lower() if positional else "overview"
+
+    if sub == "overview":
+        print(ltm.overview())
+        print("\n用法：/memory list [--type T] [--query Q] | show <id> | "
+              "add --type T --title .. --content .. [--tags a,b] | delete <id> | search <词> | semantic")
+
+    elif sub == "list":
+        t = flags.get("type") or None
+        q = flags.get("query") or None
+        if isinstance(t, bool):
+            t = None
+        if isinstance(q, bool):
+            q = None
+        if t and t not in TYPES:
+            print(f"❌ --type 只能是 {list(TYPES)}")
+            return
+        items = ltm.list(type_=t, query=q)
+        if not items:
+            print("(空；用 /memory add 记一笔，或让 Agent 自主 add_memory)")
+            return
+        for r in items:
+            preview = r["content"][:60] + ("…" if len(r["content"]) > 60 else "")
+            print(f"  [{r['id']}]({r['type']}) {r['title']}：{preview}")
+
+    elif sub == "show":
+        if len(positional) < 2:
+            print("用法：/memory show <id>")
+            return
+        rec = ltm.get(positional[1])
+        if not rec:
+            print(f"❌ 找不到 {positional[1]}")
+            return
+        print(json.dumps(rec, ensure_ascii=False, indent=2))
+
+    elif sub == "add":
+        t, title, content = flags.get("type"), flags.get("title"), flags.get("content")
+        # _parse_args 对裸 --flag 返回 True；缺值/未传都视为非法
+        if not t or isinstance(t, bool) or not title or isinstance(title, bool) \
+                or not content or isinstance(content, bool):
+            print("用法：/memory add --type <semantic|episodic|procedural> --title <标题> --content <内容> [--tags a,b]")
+            print('  多词参数请用引号包裹，如 --title "用户背景" --content "Unity 背景，转型 AI"')
+            return
+        if t not in TYPES:
+            print(f"❌ --type 只能是 {list(TYPES)}")
+            return
+        tags_val = flags.get("tags", "")
+        if isinstance(tags_val, bool):
+            tags_val = ""
+        tag_list = [x.strip() for x in str(tags_val).split(",") if x.strip()]
+        res = ltm.add(t, title, content, tag_list, origin_session=ctx.session.name)
+        verb = "更新" if res["action"] == "updated" else "记录"
+        print(f"✅ 已{verb} [{res['id']}]「{title}」")
+
+    elif sub == "delete":
+        if len(positional) < 2:
+            print("用法：/memory delete <id>")
+            return
+        ok = ltm.delete(positional[1])
+        print(f"🗑️ 已删除 {positional[1]}" if ok else f"❌ 找不到 {positional[1]}")
+
+    elif sub == "search":
+        rest = positional[1:]
+        if not rest:
+            print("用法：/memory search <关键词>")
+            return
+        hits = ltm.search(" ".join(rest), limit=15)
+        if not hits:
+            print("(无匹配)")
+            return
+        print(f"找到 {len(hits)} 条：")
+        for r in hits:
+            preview = r["content"][:60] + ("…" if len(r["content"]) > 60 else "")
+            print(f"  [{r['id']}]({r['type']}) {r['title']}：{preview}")
+
+    elif sub == "semantic":
+        block = ltm.static_block()
+        print(block or "(semantic 与 procedural 均为空，暂无始终注入内容)")
+
+    else:
+        print(f"❌ 未知子命令 {sub}；可用：list / show / add / delete / search / semantic")
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -418,6 +507,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
     reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")
     reg.register("workflows", _cmd_workflows, "[reload]  列出/重载 .agent/workflows/ 工作流")
+    reg.register("memory", _cmd_memory, "[list|show|add|delete|search|semantic]  长期记忆管理")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

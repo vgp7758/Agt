@@ -20,6 +20,7 @@ from typing import Callable, Optional, List
 
 from background import ServiceManager, Scheduler
 from llm_client import LLMClient
+from longterm_memory import LongTermMemory
 from session import Session, Step, ToolCall
 from tools import Toolbox
 
@@ -58,6 +59,12 @@ class Agent:
                                max_steps_per_turn=max_steps_per_turn)
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
+        # 长期记忆（per-repo，跨 session）：建库 + 挂两个注入 provider 到 session
+        #   - 静态层（semantic 事实 + procedural 标题）每轮始终注入
+        #   - 情境层（episodic）按当前 user_message 每轮召回注入
+        self.ltm = LongTermMemory(self.session.workspace)
+        self.session._ltm_static_provider = self._ltm_static_block
+        self.session._ltm_episodic_provider = self._ltm_episodic_block
         # 后台服务 + 定时调度（producer）→ inbox → run()内循环 / chat/web 消费者 串行触发
         self.inbox: collections.deque = collections.deque()
         self._inbox_lock = threading.Lock()
@@ -203,6 +210,8 @@ class Agent:
         self.session = session
         session._state_provider = self.capture_runtime_state
         session._system_extra_provider = self._runtime_system_extra
+        session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
+        session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         self.restore_runtime_state(session.extra_state)
 
     def _emit_plan_if_any(self):
@@ -235,6 +244,20 @@ class Agent:
         if not lines:
             return ""
         return "【后台服务状态】当前服务：\n" + "\n".join(lines)
+
+    def _ltm_static_block(self) -> str:
+        """长期记忆·静态层注入：semantic 事实 + procedural 标题（每轮始终注入）。失败静默不炸主循环。"""
+        try:
+            return self.ltm.static_block()
+        except Exception:
+            return ""
+
+    def _ltm_episodic_block(self, query: str) -> str:
+        """长期记忆·情境层注入：按当前 user_message 召回 episodic（每轮按需）。失败静默。"""
+        try:
+            return self.ltm.episodic_block(query)
+        except Exception:
+            return ""
 
     def shutdown(self):
         """退出时清理：停所有后台服务（防孤儿进程）+ 停调度器。供 chat/web 退出时调。"""

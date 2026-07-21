@@ -20,6 +20,7 @@ from agent_config import SKILL_TOOLS, load_rules, skills_summary
 from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
+from longterm_memory import make_ltm_tools
 from wiki import make_wiki_tools
 from rag import make_rag_tools
 from commands import CommandContext, build_default_registry
@@ -67,7 +68,14 @@ SYSTEM = build_system(
         "复杂任务建议先 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"
         "接手不熟悉的任务前可用 wiki_search/wiki_read 查 .agent/wiki/ 里的仓库知识；"
         "完成重要功能或修改后调用 update_wiki(改动摘要)，由子 Agent 自动更新 repo-wiki。\n"
-        "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
+        + "\n\n【长期记忆·跨 session】你有一个 per-repo 长期记忆库（~/.agt/repos/<hash>/memories/，semantic/episodic/procedural 三类）：\n"
+        "- semantic（事实/偏好，如用户背景、项目约定）每轮【始终注入】——少而稳定，像背景知识。\n"
+        "- procedural（流程经验/how-to）system 里只列标题，需要时调 read_procedure(id) 取详情。\n"
+        "- episodic（过往情境经历）按本轮问题【自动召回】注入，不相关则自动忽略。\n"
+        "当你判断本轮出现【值得跨 session 记住】的经验，主动调 add_memory(type,title,content,tags) 记一笔——"
+        "典型场景：踩坑及解法、用户偏好/背景、重要决策及原因、可复用流程。"
+        "需要时用 search_memory 检索；同 type+title 会自动更新而非重复。用户可用 /memory 命令查看管理。\n"
+        + "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
         "tools 留空=继承你的全部工具 (自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
         "agent_prompt(name, prompt) 派任务，子 Agent 自主用工具完成再回复；kill_agent(name) 销毁；list_agents() 查看。"
         "复杂任务可拆分派给不同角色/模型的子 Agent 再综合。"
@@ -148,6 +156,9 @@ def main():
         agent.tools.register(t)
     # 注册记忆召回工具（recall_turn：按需召回窗口外历史轮的完整上下文）
     for t in make_recall_tools(agent):
+        agent.tools.register(t)
+    # 注册长期记忆工具（add_memory/search_memory/...：主 Agent 自主沉淀跨 session 经验）
+    for t in make_ltm_tools(agent):
         agent.tools.register(t)
     # 注册后台服务/调度工具（start_service / add_schedule 等）
     for t in make_background_tools(agent):

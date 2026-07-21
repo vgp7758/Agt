@@ -52,6 +52,14 @@ def _repo_sessions_dir(workspace) -> Path:
     return d
 
 
+def repo_memories_dir(workspace) -> Path:
+    """该工作区的【长期记忆】目录：~/.agt/repos/<hash>/memories/。与 sessions/ 同根，互相隔离。
+    供 longterm_memory.LongTermMemory 使用；不触发 sessions 的 legacy 迁移。"""
+    d = REPOS_DIR / _repo_hash(workspace) / "memories"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 _ALL_MIGRATED = False   # 进程级标志：全量迁移只跑一次
 
 
@@ -142,6 +150,9 @@ class Session:
         self.extra_state: dict = {}                   # 附加运行时状态（Agent 经 _state_provider 收集：plan/自主模式等）
         self._state_provider: Optional[Callable[[], dict]] = None  # Agent 注册的附加状态收集回调
         self._system_extra_provider: Optional[Callable[[], str]] = None  # Agent 注册：返回动态 system 段（后台服务状态等）
+        # —— 长期记忆注入 provider（Agent 注册；两类机制不同，见 longterm_memory.py）——
+        self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
+        self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
 
     # ========== 构建 ==========
     def start_turn(self, user_message: str, images: Optional[list] = None):
@@ -215,6 +226,16 @@ class Session:
         if self.global_summary:
             msgs.append({"role": "system", "content": "【历史会话摘要】\n" + self.global_summary})
 
+        # —— 长期记忆·静态层（semantic 事实始终注入 + procedural 标题清单）——
+        # 放在历史摘要之后、近期窗口之前：基础事实层，靠前，作为常驻背景知识。
+        if self._ltm_static_provider:
+            try:
+                block = self._ltm_static_provider()
+                if block:
+                    msgs.append({"role": "system", "content": block})
+            except Exception:
+                pass
+
         recent = self.turns[-self.recent_window_turns:]
         for t in recent:
             msgs.append({"role": "user", "content": self._user_content(t)})
@@ -224,6 +245,16 @@ class Session:
                 if t.answer_reasoning:
                     a_msg["reasoning_content"] = t.answer_reasoning
                 msgs.append(a_msg)
+
+        # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
+        # 放在近期窗口之后、当前轮之前：与本轮问题最相关，靠后更显眼（无命中则不注入）。
+        if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+            try:
+                block = self._ltm_episodic_provider(self._current.user_message)
+                if block:
+                    msgs.append({"role": "system", "content": block})
+            except Exception:
+                pass
 
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:

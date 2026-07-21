@@ -24,9 +24,9 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 #canvasWrap:active{cursor:grabbing}
 #svgCanvas{width:3000px;height:2200px;display:block}
 .grid-line{stroke:#ffffff08}
-.node-body{fill:#16213e;stroke:#533483;stroke-width:1.5}
+.node-body{fill:#16213e;stroke:#533483;stroke-width:1.5;rx:6}
 .node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
-.node-header-rect{rx:4}
+.node-header-rect{rx:6}
 .node-title{fill:#fff;font-size:12px;font-weight:600;pointer-events:none}
 .node-type-tag{fill:#8a9099;font-size:9px;pointer-events:none}
 .node-field-name{font-size:10px;dominant-baseline:middle;pointer-events:none}
@@ -428,7 +428,7 @@ function renderNode(n){
   // 体
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
   // 标题栏
-  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
+  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:6,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
   g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},n.type==='4'?('🔧 '+(n.data.toolName||'plugin')):(TYPE_LABEL[n.type]+' · '+n.type)));
   // 流程端口（入口只有出口，出口只有入口）

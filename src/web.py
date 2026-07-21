@@ -659,6 +659,23 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if isinstance(_d, dict) and _d.get("action") == "rag_build":
         await _start_rag_build(ws)
         return
+    if isinstance(_d, dict) and _d.get("action") == "feedback_meta":
+        # 拉反馈弹框需要的元信息：可选类型 + 作者联系方式 + 将附上的环境信息
+        from feedback import VALID_KINDS, author_contact_str, _gather_env
+        await _send(ws, {"type": "feedback_meta",
+                         "kinds": VALID_KINDS,
+                         "contact": author_contact_str(),
+                         "env": _gather_env(None, agent=agent)})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "feedback":
+        from feedback import submit_feedback
+        kind = (_d.get("kind") or "建议").strip()
+        content = (_d.get("content") or "").strip()
+        contact = (_d.get("contact") or "").strip()
+        env_info = None if _d.get("include_env", True) else {}  # 不勾「附环境」则不带
+        msg = submit_feedback(kind, content, contact, env_info=env_info, agent=agent)
+        await _send(ws, {"type": "feedback_result", "ok": msg.startswith("✅"), "text": msg})
+        return
 
     # 文本消息
     text, images = _parse_client_msg(raw)

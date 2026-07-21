@@ -120,6 +120,7 @@
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <button class="btn auto" id="btnAuto" title="开启/关闭纯自主模式">🔁 自主</button>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
+    <button class="btn" id="btnFeedback">💬 反馈</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
@@ -159,6 +160,28 @@
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
       <button class="btn primary" id="cfgSave">保存运行时</button>
+    </div>
+  </div>
+</div>
+
+<div id="feedbackModal" class="modal-overlay">
+  <div class="modal" style="max-width:460px;width:92%">
+    <h3>💬 提交反馈</h3>
+    <label>类型
+      <select id="fbKind" style="padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px"></select>
+    </label>
+    <textarea id="fbContent" rows="4" placeholder="说说你遇到的问题、建议或感受…"
+      style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;outline:none"></textarea>
+    <label>联系方式（可选，方便作者回你）
+      <input id="fbContact" type="text" placeholder="微信/邮箱"
+        style="width:160px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+    </label>
+    <label style="justify-content:flex-start;gap:6px"><input id="fbEnv" type="checkbox" checked> 附上环境信息（便于定位问题）</label>
+    <div id="fbEnvPreview" style="font-size:11px;color:#8a9099;padding:0 2px"></div>
+    <div id="fbContactLine" style="font-size:12px;color:#5b6470;padding:2px;white-space:pre-wrap;display:none"></div>
+    <div class="modal-btns">
+      <button class="btn" id="fbCancel">取消</button>
+      <button class="btn primary" id="fbSubmit">提交反馈</button>
     </div>
   </div>
 </div>
@@ -375,6 +398,26 @@ document.getElementById('btnAuto').onclick=()=>{
 };
 document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); loadModelList(); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
+// —— 反馈 ——
+const feedbackModal = document.getElementById('feedbackModal');
+document.getElementById('btnFeedback').onclick=()=>{
+  feedbackModal.style.display='flex';
+  ws.send(JSON.stringify({action:'feedback_meta'}));
+  document.getElementById('fbContent').value='';
+  document.getElementById('fbContact').value='';
+  setTimeout(()=>document.getElementById('fbContent').focus(), 50);
+};
+document.getElementById('fbCancel').onclick=()=>{ feedbackModal.style.display='none'; };
+document.getElementById('fbSubmit').onclick=()=>{
+  const content=document.getElementById('fbContent').value.trim();
+  if(!content){ toast('⚠️ 请先写点内容'); return; }
+  ws.send(JSON.stringify({
+    action:'feedback', kind:document.getElementById('fbKind').value, content,
+    contact:document.getElementById('fbContact').value.trim(),
+    include_env:document.getElementById('fbEnv').checked,
+  }));
+  feedbackModal.style.display='none';
+};
 let _modelData={};
 
 async function loadModelList(){
@@ -505,6 +548,23 @@ ws.onmessage=(ev)=>{
     case 'saved':
       ws.send(JSON.stringify({action:'list_sessions'}));
       if(m.name) window._lastSaved=m.name;
+      break;
+    case 'feedback_meta':
+      if(m.kinds){
+        const sel=document.getElementById('fbKind'); sel.innerHTML='';
+        m.kinds.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o); });
+      }
+      if(m.env){
+        document.getElementById('fbEnvPreview').textContent =
+          '将附上：' + Object.entries(m.env).map(([k,v])=>k+'='+v).join(' · ');
+      }
+      if(m.contact){
+        const cl=document.getElementById('fbContactLine');
+        cl.textContent='直接联系作者：'+m.contact; cl.style.display='block';
+      }
+      break;
+    case 'feedback_result':
+      toast(m.text || (m.ok ? '✅ 已提交' : '❌ 提交失败'));
       break;
     case 'plan':
       renderPlan(m.plan);

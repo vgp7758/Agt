@@ -535,6 +535,27 @@ def _cmd_download(ctx: CommandContext, args):
     print(download_asset(name, target_dir=target, force=force, workspace=ctx.session.workspace))
 
 
+def _cmd_feedback(ctx: CommandContext, args):
+    """/feedback [类型] <内容>  提交反馈给作者（bug/建议/问题/赞美），类型可选默认「建议」。
+    不带参数显示用法 + 作者联系方式。反馈本地保存，作者配了 webhook 则同时推送到飞书。"""
+    from feedback import submit_feedback, VALID_KINDS, author_contact_str
+    if not args:
+        print("用法：/feedback [类型] <反馈内容>")
+        print("  类型可选（默认「建议」）：" + " / ".join(VALID_KINDS))
+        print('  示例：/feedback bug 工作流调试页白屏')
+        print('        /feedback 希望支持 Mermaid 图渲染')
+        contact = author_contact_str()
+        if contact:
+            print(f"  直接联系作者：{contact}")
+        return
+    # 首词若是合法类型，吃掉作类型；否则整体当内容、类型默认「建议」
+    if args[0] in VALID_KINDS:
+        kind, content = args[0], " ".join(args[1:])
+    else:
+        kind, content = "建议", " ".join(args)
+    print(submit_feedback(kind, content, agent=ctx.agent))
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -552,6 +573,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("memory", _cmd_memory, "[list|show|add|delete|search|semantic]  长期记忆管理")
     reg.register("logs", _cmd_logs, "[N]  查看当前 session 日志尾部（默认30行）")
     reg.register("download", _cmd_download, "[name|list] [dir] [--force]  下载随包资产（工作流/mcp/脚本）")
+    reg.register("feedback", _cmd_feedback, "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

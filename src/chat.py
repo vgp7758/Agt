@@ -22,6 +22,7 @@ from plan_tools import make_plan_tools
 from memory_tools import make_recall_tools
 from longterm_memory import make_ltm_tools
 from download import make_download_tools
+from toollog import make_tool_log_tools
 from wiki import make_wiki_tools
 from rag import make_rag_tools
 from commands import CommandContext, build_default_registry
@@ -78,6 +79,10 @@ SYSTEM = build_system(
         "需要时用 search_memory 检索；同 type+title 会自动更新而非重复。用户可用 /memory 命令查看管理。\n"
         + "\n\n【随包资产】随包附带的工作流等资产可用 list_downloadable 查看（名称/类型/描述/是否已在本地），"
         "需要时 download_asset(name) 下载（用户也可用 /download 命令）。默认工作流已自动播种，这里用于显式取用或下载到指定目录。\n"
+        + "\n\n【工具结果·按步距衰减】为省上下文，历史工具调用的入参/结果按【距当前步的距离】差异化摘要："
+        "当前步最多 1500 字、每远一步 −15 字、最远也保 20 字；被截断的结果末尾会标注一个 id（如 c7）。"
+        "需要完整内容（如完整 traceback、run_python 全部输出、edit 的完整 old/new）时调 get_tool_detail(\"c7\") 拉取；"
+        "不确定有哪些 id 时先 list_tool_logs 看清单。近期调用本就较完整，不必频繁拉取。\n"
         + "多 Agent 协作：create_agent(name, model, system, tools) 创建【带工具的自主子 Agent】——"
         "tools 留空=继承你的全部工具 (自动排除子 Agent 管理工具防递归)，或传逗号分隔工具名只注册这些；"
         "agent_prompt(name, prompt) 派任务，子 Agent 自主用工具完成再回复；kill_agent(name) 销毁；list_agents() 查看。"
@@ -165,6 +170,9 @@ def main():
         agent.tools.register(t)
     # 注册随包资产下载工具（list_downloadable/download_asset）
     for t in make_download_tools(agent):
+        agent.tools.register(t)
+    # 注册工具详情拉取工具（get_tool_detail/list_tool_logs：按 call_id 拉被距离衰减截断的完整工具结果）
+    for t in make_tool_log_tools(agent):
         agent.tools.register(t)
     # 注册后台服务/调度工具（start_service / add_schedule 等）
     for t in make_background_tools(agent):

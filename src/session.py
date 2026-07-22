@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional, Callable
 
 from llm_client import LLMClient
+from toollog import ToolLog, detail_limit
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
@@ -112,10 +113,7 @@ _NAME_SAFE_RE = re.compile(r"[^\w一-鿿]")
 
 @dataclass
 class ToolCall:
-    id: str = ""
-    name: str = ""
-    arguments: dict = field(default_factory=dict)
-    result: str = ""
+    call_id: str = ""   # 在 session.toollog 的 id（c1/c2/…）；完整 name/arguments/result 存 toollog，组装上下文时按 id 召回
 
 
 @dataclass
@@ -157,6 +155,7 @@ class Session:
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
+        self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
 
     # ========== 构建 ==========
     def start_turn(self, user_message: str, images: Optional[list] = None):
@@ -279,33 +278,63 @@ class Session:
         blocks.extend({"type": "image_url", "image_url": {"url": img}} for img in turn.images)
         return blocks
 
-    @staticmethod
-    def _steps_to_messages(steps: list[Step], max_steps: int = 0) -> list[dict]:
+    def _summarize_text(self, text: str, limit: int, call_id: str) -> str:
+        """按 limit 摘要工具结果文本；超限截断并在末尾标注 call_id，提示模型用 get_tool_detail 拉完整。"""
+        text = text or ""
+        if len(text) <= limit:
+            return text
+        return (text[:limit] + f"\n…(共{len(text)}字，按步距衰减已截断；完整见 id={call_id}，"
+                f"调 get_tool_detail(\"{call_id}\") 拉取)")
+
+    def _summarize_args(self, args, limit: int, call_id: str) -> str:
+        """摘要工具入参，保持 JSON 合法：只截断超 limit 的字符串值（如 run_python 的 code、edit 的 old_string）。"""
+        def _trunc(v):
+            if isinstance(v, str):
+                return v if len(v) <= limit else (v[:limit] + f"…(共{len(v)}字，截断，get_tool_detail(\"{call_id}\") 取完整)")
+            if isinstance(v, dict):
+                return {k: _trunc(val) for k, val in v.items()}
+            if isinstance(v, list):
+                return [_trunc(x) for x in v]
+            return v
+        return json.dumps(_trunc(args or {}), ensure_ascii=False)
+
+    def _steps_to_messages(self, steps: list[Step], max_steps: int = 0) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
-        max_steps>0 时只保留最近 max_steps 步，超过的在开头加省略提示。"""
+        工具名/入参/结果从 toollog 按 call_id 召回，并按【距当前步的距离】差异化摘要：
+        越近越完整（当前步最多 DETAIL_BASE 字）、越远越简略（每步 -DETAIL_STEP、下限 DETAIL_FLOOR），
+        被截断处标注 call_id，模型可 get_tool_detail(id) 拉完整。max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
             steps = steps[-max_steps:]
             msgs.append({"role": "system", "content": f"（本轮的 {skipped} 个早期步骤已省略，仅保留最近 {max_steps} 步）"})
-        for step in steps:
+        total = len(steps)
+        for idx, step in enumerate(steps):
             if not step.tool_calls:
                 continue
-            a_msg = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": tc.id or str(i), "type": "function",
-                     "function": {"name": tc.name,
-                                  "arguments": json.dumps(tc.arguments, ensure_ascii=False)}}
-                    for i, tc in enumerate(step.tool_calls)
-                ],
-            }
+            distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
+            limit = detail_limit(distance)
+            a_tool_calls = []
+            for i, tc in enumerate(step.tool_calls):
+                name, args, _r = self.toollog.view(tc.call_id)
+                a_tool_calls.append({
+                    "id": tc.call_id or str(i), "type": "function",
+                    "function": {"name": name,
+                                 "arguments": self._summarize_args(args, limit, tc.call_id)},
+                })
+            a_msg = {"role": "assistant", "content": None, "tool_calls": a_tool_calls}
             if step.reasoning:
                 a_msg["reasoning_content"] = step.reasoning
             msgs.append(a_msg)
             for i, tc in enumerate(step.tool_calls):
-                msgs.append({"role": "tool", "tool_call_id": tc.id or str(i), "content": tc.result})
+                tc_name, _a, result = self.toollog.view(tc.call_id)
+                # get_tool_detail 是"主动拉完整"的调用：所在步为当前步(distance=0)时不摘要，
+                # 否则拉完又被截断、失去意义；历史步的则照常按距离衰减摘要。
+                if distance == 0 and tc_name == "get_tool_detail":
+                    content = result or ""
+                else:
+                    content = self._summarize_text(result, limit, tc.call_id)
+                msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 
     # ========== 窗口外摘要缓存（不再截断 turns）==========
@@ -329,10 +358,12 @@ class Session:
 
     def _summarize_turn(self, turn: Turn) -> str:
         """用一次短 LLM 调用把一轮压成 2-3 句中文摘要。"""
-        tools = "; ".join(
-            f"{tc.name}({tc.arguments})→{tc.result[:80]}"
-            for step in turn.steps for tc in step.tool_calls
-        )[:600]
+        parts = []
+        for step in turn.steps:
+            for tc in step.tool_calls:
+                n, a, r = self.toollog.view(tc.call_id)
+                parts.append(f"{n}({a})→{r[:80]}")
+        tools = "; ".join(parts)[:600]
         prompt = (
             "把下面这一轮对话压成 2-3 句中文摘要，保留：用户意图、用了什么工具/做了什么、关键结果。\n"
             f"用户: {turn.user_message}\n"
@@ -436,8 +467,9 @@ class Session:
         lines = [f"━━━ 【第{n}轮】{t.summary or '(无摘要)'}", f"用户: {t.user_message}"]
         for step in t.steps:
             for tc in step.tool_calls:
-                args_s = json.dumps(tc.arguments, ensure_ascii=False)
-                lines.append(f"  🔧 {tc.name}({args_s}) → {(tc.result or '')[:300]}")
+                n, a, r = self.toollog.view(tc.call_id)
+                args_s = json.dumps(a, ensure_ascii=False)
+                lines.append(f"  🔧 {n}({args_s}) → {(r or '')[:300]}")
         lines.append(f"回答: {t.answer}")
         return "\n".join(lines)
 
@@ -447,8 +479,10 @@ class Session:
         for i, t in enumerate(self.turns):
             steps = []
             for s in t.steps:
-                tcs = [{"name": tc.name, "arguments": tc.arguments, "result": (tc.result or "")[:500]}
-                       for tc in s.tool_calls]
+                tcs = []
+                for tc in s.tool_calls:
+                    n, a, r = self.toollog.view(tc.call_id)
+                    tcs.append({"name": n, "arguments": a, "result": (r or "")[:500]})
                 if tcs:
                     steps.append({"tool_calls": tcs})
             out.append({"turn": i + 1, "user": t.user_message, "answer": t.answer,
@@ -468,13 +502,15 @@ class Session:
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。
         with self._save_lock:
             snapshot = list(self.turns)
+            toollog_snapshot = self.toollog.to_list()
             data = {
                 "name": self.name or Path(name).stem,
                 "system": self.system,
                 "global_summary": self.global_summary,
                 "recent_window_turns": self.recent_window_turns,
                 "max_steps_per_turn": self.max_steps_per_turn,
-                "turns": [asdict(t) for t in snapshot],   # 全量，不再截断；每个 turn 含 summary 字段
+                "turns": [asdict(t) for t in snapshot],   # 全量；ToolCall 只含 call_id，详情在 toollog 字段
+                "toollog": toollog_snapshot,              # 工具调用完整详情库（call_id -> name/arguments/result）
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
                 "saved_at": int(time.time()),
             }
@@ -494,7 +530,8 @@ class Session:
                 max_steps_per_turn=data.get("max_steps_per_turn", 80), workspace=ws)
         s.name = data.get("name") or path.stem   # 旧存档无 name → 用文件名，保证继续对话时覆盖同一文件
         s.global_summary = data.get("global_summary", "")
-        s.turns = [_turn_from_dict(d) for d in data.get("turns", [])]
+        s.toollog.load_list(data.get("toollog", []))   # 先恢复新格式详情，再让 _turn_from_dict 迁移旧 ToolCall
+        s.turns = [_turn_from_dict(d, s.toollog) for d in data.get("turns", [])]
         s.extra_state = data.get("extra_state", {})  # 附加运行时状态（plan/自主模式等）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
         return s
@@ -518,7 +555,7 @@ class Session:
         return f"Session(name={self.name!r}, turns={len(self.turns)}, summary={'yes' if self.global_summary else 'no'})"
 
 
-def _turn_from_dict(d: dict) -> Turn:
+def _turn_from_dict(d: dict, toollog) -> Turn:
     t = Turn(user_message=d.get("user_message", ""),
              images=d.get("images", []),
              snapshot_sha=d.get("snapshot_sha", ""),
@@ -527,9 +564,15 @@ def _turn_from_dict(d: dict) -> Turn:
     for s in d.get("steps", []):
         step = Step(reasoning=s.get("reasoning", ""))
         for tc in s.get("tool_calls", []):
-            step.tool_calls.append(ToolCall(
-                id=tc.get("id", ""), name=tc.get("name", ""),
-                arguments=tc.get("arguments", {}), result=tc.get("result", "")))
+            cid = tc.get("call_id")
+            if cid and toollog.get(cid) is not None:
+                # 新格式：详情已在 toollog（load_list 已恢复），ToolCall 只存 id
+                step.tool_calls.append(ToolCall(call_id=cid))
+            else:
+                # 旧格式（有 name/arguments/result、无 call_id/toollog）或孤儿：迁移进 toollog
+                cid = toollog.next_id()
+                toollog.record(cid, tc.get("name", ""), tc.get("arguments", {}), tc.get("result", ""))
+                step.tool_calls.append(ToolCall(call_id=cid))
         t.steps.append(step)
     return t
 

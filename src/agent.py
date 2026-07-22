@@ -416,13 +416,14 @@ class Agent:
         lines = []
         for step in cur.steps:
             for tc in step.tool_calls:
-                args_s = json.dumps(tc.arguments, ensure_ascii=False)
+                name, args, result = self.session.toollog.view(tc.call_id)
+                args_s = json.dumps(args, ensure_ascii=False)
                 if len(args_s) > 120:
                     args_s = args_s[:117] + "..."
-                res = (tc.result or "")
+                res = result or ""
                 if len(res) > 150:
                     res = res[:147] + "..."
-                lines.append(f"- {tc.name}({args_s}) → {res}")
+                lines.append(f"- {name}({args_s}) → {res}")
         return "\n".join(lines)
 
     def _chat_msgs(self) -> list:
@@ -633,8 +634,9 @@ class Agent:
                                         "tool_args": tc_args_json, "tool_result": result})
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": len(calls) > 1})
-                                step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
-                                                                 arguments=tc["arguments"], result=result))
+                                cid = self.session.toollog.next_id()
+                                self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
+                                step.tool_calls.append(ToolCall(call_id=cid))
                         elif len(calls) == 1:
                             tc = calls[0]
                             self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
@@ -643,8 +645,9 @@ class Agent:
                             _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"], time.time() - _t0, len(result or ""))
                             self._emit({"type": "tool_result", "name": tc["name"],
                                         "result": self._truncate(result), "parallel": False})
-                            step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
-                                                             arguments=tc["arguments"], result=result))
+                            cid = self.session.toollog.next_id()
+                            self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
+                            step.tool_calls.append(ToolCall(call_id=cid))
                         else:
                             self._emit({"type": "parallel", "count": len(calls)})
                             for tc in calls:
@@ -656,8 +659,9 @@ class Agent:
                                 _LOG.debug("  └ %s 结果%d字", tc["name"], len(result or ""))
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": True})
-                                step.tool_calls.append(ToolCall(id=tc.get("id", ""), name=tc["name"],
-                                                                 arguments=tc["arguments"], result=result))
+                                cid = self.session.toollog.next_id()
+                                self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
+                                step.tool_calls.append(ToolCall(call_id=cid))
                         _rt._tool_emit = None  # 清理
                         self.session.add_step(step)
                         # 动态注册的工具（新写的工作流、ensure_lsp 装的 LSP 等）当轮即可见：
@@ -711,8 +715,9 @@ class Agent:
         立即重新扫描注册，让本轮后续步骤即可调用新工具/工作流——不必等到下一轮 run() 开头。
         返回是否执行了刷新（调用方据此重算 tool_schemas）。"""
         for tc in step.tool_calls:
-            if tc.name in ("write_file", "edit"):
-                p = str(tc.arguments.get("path", "")).replace("\\", "/")
+            name, args, _r = self.session.toollog.view(tc.call_id)
+            if name in ("write_file", "edit"):
+                p = str(args.get("path", "")).replace("\\", "/")
                 if "/workflows/" in p or "/workflows" in p:
                     try:
                         from real_tools import WORKSPACE

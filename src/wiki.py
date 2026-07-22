@@ -143,7 +143,8 @@ def make_wiki_tools(agent) -> list:
                 blocks.append(f"用户任务：{last.user_message}")
                 for step in last.steps:
                     for tc in step.tool_calls:
-                        blocks.append(f"- {tc.name}({tc.arguments}) → {tc.result[:200]}")
+                        n, a, r = agent.session.toollog.view(tc.call_id)
+                        blocks.append(f"- {n}({a}) → {r[:200]}")
                 if last.answer:
                     blocks.append(f"最终结果：{last.answer[:300]}")
             if agent.plan:

@@ -387,6 +387,13 @@ async def api_models():
     return {"models": config.MODELS, "default": config.DEFAULT_MODEL}
 
 
+@app.get("/api/model-list")
+async def api_model_list():
+    """返回模型名→显示名映射（不含 token/base_url 等敏感信息），供工作流编辑器选模型用。"""
+    return {"models": {name: p.get("display", name) for name, p in config.MODELS.items()},
+            "default": config.DEFAULT_MODEL}
+
+
 @app.put("/api/models")
 async def api_models_save(request: Request):
     """保存模型配置到 ~/.agt/models.json。"""

@@ -20,9 +20,10 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 .pal-item.branch{background:#6b3a1a}.pal-item.composite{background:#1a6b6b}
 .pal-item.data{background:#4a4a1a}.pal-item.ext{background:#4a1a4a}
 /* 中：画布 */
-#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab}
+#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab;scrollbar-width:none}
+#canvasWrap::-webkit-scrollbar{display:none}
 #canvasWrap:active{cursor:grabbing}
-#svgCanvas{width:3000px;height:2200px;display:block}
+#svgCanvas{display:block}
 .grid-line{stroke:#ffffff08}
 .node-body{fill:#16213e;stroke:#533483;stroke-width:1.5;rx:6}
 .node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
@@ -313,14 +314,20 @@ function renderAll(){
   svg.style.transform='scale('+dz+')';
   svg.style.transformOrigin='0 0';
   _pendingHandles=[];
+  // 画布尺寸跟随节点动态扩展（无固定边界，节点不被裁剪）+ 至少覆盖可视区
+  let maxX=1000,maxY=800;
+  WF.nodes.forEach(n=>{maxX=Math.max(maxX,(n.x||0)+(n.w||200)+240);maxY=Math.max(maxY,(n.y||0)+(n.h||140)+240);});
+  const wrap=document.getElementById('canvasWrap');
+  if(wrap){maxX=Math.max(maxX,wrap.clientWidth/dz+200);maxY=Math.max(maxY,wrap.clientHeight/dz+200);}
+  svg.style.width=maxX+'px';svg.style.height=maxY+'px';
   // defs（箭头）
   const defs=elm('defs');
   defs.innerHTML=`<marker id="arrowFlow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#fff"/></marker>
     <marker id="arrowVar" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="context-stroke"/></marker>`;
   svg.appendChild(defs);
-  // 网格
-  for(let x=0;x<3000;x+=40)svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:2200,'class':'grid-line'}));
-  for(let y=0;y<2200;y+=40)svg.appendChild(elm('line',{x1:0,y1:y,x2:3000,y2:y,'class':'grid-line'}));
+  // 网格（按动态画布范围）
+  for(let x=0;x<maxX;x+=40)svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:maxY,'class':'grid-line'}));
+  for(let y=0;y<maxY;y+=40)svg.appendChild(elm('line',{x1:0,y1:y,x2:maxX,y2:y,'class':'grid-line'}));
 
   // ---- 变量线（先画，在节点下层）----
   WF.nodes.forEach(tn=>{
@@ -1046,11 +1053,9 @@ function showProps(){
   const n=findN(selNode);if(!n){wrap.style.display='none';p.innerHTML='';return;}
   wrap.style.display='block';
   try{
-  let h=`<h3>节点</h3>
+  let h=`<h3>${TYPE_LABEL[n.type]||'节点'} <span style="color:#8a9099;font-size:10px;font-weight:normal">· ${n.type}</span></h3>
     <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
     <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
-    <label>类型 <select onchange="setProp('type',this.value)">${Object.entries(TYPE_LABEL).map(([k,v])=>`<option value="${k}" ${n.type===k?'selected':''}>${v} (${k})</option>`).join('')}</select></label>
-    <label>位置 X/Y <input type="number" value="${n.x}" onchange="setProp('x',+this.value)" style="width:45%;display:inline-block"> <input type="number" value="${n.y}" onchange="setProp('y',+this.value)" style="width:45%;display:inline-block;float:right"></label>
     <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
 
   // 复合节点：编辑按钮 + 专属配置
@@ -1171,6 +1176,11 @@ function showProps(){
     h+='<h3>LLM 提示词</h3>';
     const lp=n.data.inputs?.llmParam||[];
     const prompt=lp.find(x=>x.name==='prompt'), sys=lp.find(x=>x.name==='systemPrompt');
+    const curModel=lp.find(x=>x.name==='model')?.input?.value?.content||'';
+    h+='<label>模型 <select onchange="setLLM(\'model\',this.value)" style="font-size:11px">';
+    h+='<option value="">（跟随主Agent）</option>';
+    Object.entries(AVAILABLE_MODELS).forEach(([k,v])=>{h+='<option value="'+k+'"'+(curModel===k?' selected':'')+'>'+ext(v)+'</option>';});
+    h+='</select></label>';
     h+=`<label>systemPrompt <textarea onchange="setLLM('systemPrompt',this.value)">${ext(sys?.input?.value?.content)}</textarea></label>`;
     h+=`<label>prompt <textarea onchange="setLLM('prompt',this.value)">${ext(prompt?.input?.value?.content)}</textarea></label>`;
     h+='<div style="font-size:10px;color:#8a9099">输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。</div>';
@@ -1230,6 +1240,12 @@ function showProps(){
   // 意图识别：选项增删改
   if(n.type==='22'){
     h+='<h3>意图选项（每项一个分支出口）</h3>';
+    const ilp=n.data.inputs?.llmParam||[];
+    const curIModel=ilp.find(x=>x.name==='model')?.input?.value?.content||'';
+    h+='<label>模型 <select onchange="setLLM(\'model\',this.value)" style="font-size:11px">';
+    h+='<option value="">（跟随主Agent）</option>';
+    Object.entries(AVAILABLE_MODELS).forEach(([k,v])=>{h+='<option value="'+k+'"'+(curIModel===k?' selected':'')+'>'+ext(v)+'</option>';});
+    h+='</select></label>';
     const intents=n.data.inputs?.intents||[];
     intents.forEach((it,i)=>{
       h+='<div style="display:flex;gap:3px;margin:2px 0;align-items:center"><span style="font-size:10px;color:#8a9099">'+(i+1)+'.</span><input value="'+ext(it.name)+'" placeholder="意图名" onchange="setIntent('+i+',this.value)" style="flex:1;font-size:11px"><button class="del" onclick="delIntent('+i+')">×</button></div>';
@@ -2152,6 +2168,11 @@ function renderLegend(){
 
 // ============ Agent 工具节点 ============
 let AGENT_TOOLS=[];
+let AVAILABLE_MODELS={};   // {name: displayName, ...} 从 /api/model-list 加载
+let DEFAULT_MODEL='';
+async function loadModels(){
+  try{const r=await fetch('/api/model-list');const d=await r.json();AVAILABLE_MODELS=d.models||{};DEFAULT_MODEL=d.default||'';}catch(e){}
+}
 let WFLIST=[];  // 工作流文件列表(供子工作流下拉选择)
 async function loadTools(){
   const r=await api('GET','/api/tools');
@@ -2261,6 +2282,6 @@ function autoLayout(silent){
     toast('已自动布局：'+nl+' 层'+(no?('，孤立 '+no+' 个'):''));
   }
 }
-renderLegend();loadFileList();loadTools();renderAll();
+renderLegend();loadFileList();loadTools();loadModels();renderAll();
 </script>
 </body></html>

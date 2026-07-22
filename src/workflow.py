@@ -20,6 +20,8 @@ import json
 import re
 from pathlib import Path
 
+import config as _config
+from llm_client import LLMClient
 from real_tools import WORKSPACE
 from tools import Tool
 
@@ -150,6 +152,22 @@ def _resolve_input_params(params_list: list, ctx) -> dict:
 
 # ========== 节点处理器（S1：LLM；其余后续阶段补）==========
 
+def _get_llm(ctx, model_name: str = ""):
+    """按模型名获取 LLMClient；空名返回 ctx.llm。per-model 客户端缓存在 ctx 上复用。"""
+    if not model_name or model_name == ctx.llm.model_name:
+        return ctx.llm
+    cache = getattr(ctx, "_llm_cache", None)
+    if cache is None:
+        ctx._llm_cache = cache = {}
+    if model_name not in cache:
+        try:
+            profile = _config.get_profile(model_name)
+            cache[model_name] = LLMClient(profile=profile, model_name=model_name)
+        except KeyError:
+            return ctx.llm
+    return cache[model_name]
+
+
 def _handle_llm(node: dict, ctx) -> dict:
     """type 3：渲染 prompt/systemPrompt，调用 ctx.llm。
     本节点声明的 outputs 结构会作为 JSON Schema 自动并入 systemPrompt，约束模型输出格式；
@@ -184,13 +202,24 @@ def _handle_llm(node: dict, ctx) -> dict:
             overrides["temperature"] = float(cfg["temperature"])
         except (TypeError, ValueError):
             pass
-    resp = ctx.llm.chat(msgs, **overrides)
+    llm = _get_llm(ctx, str(cfg.get("model", "") or ""))
+    resp = llm.chat(msgs, **overrides)
     content = getattr(resp, "content", "") or ""
+    reasoning = getattr(resp, "reasoning", "") or ""
     outs = {"output": content}
+    if reasoning:
+        outs["reasoning"] = reasoning   # 推理模型的思考过程默认带上，供下游引用/调试查看
     if outputs and _needs_structured_parse(outputs):
         parsed = _parse_structured_output(content, outputs)
         if parsed is not None:
-            parsed["output"] = content   # 保留原文：调试 + 向后兼容引用 .output
+            # 保留原文便于调试；但勿覆盖用户声明的 output 字段——声明为 object 时它是结构化结果，
+            # 下游 .output.found 要能取到（被原文覆盖成字符串会让 selector 子字段引用失效）
+            if "output" in parsed:
+                parsed["_raw"] = content
+            else:
+                parsed["output"] = content
+            if reasoning:
+                parsed["reasoning"] = reasoning
             outs = parsed
     return {"outputs": outs, "port": None}
 
@@ -276,8 +305,20 @@ def _parse_structured_output(content: str, outputs: list):
         return None
     if not isinstance(d, dict):
         return None
-    return {o.get("name"): _coerce_field(d.get(o.get("name")), o.get("type", "string"))
-            for o in outputs if o.get("name")}
+    out = {}
+    for o in outputs:
+        nm = o.get("name")
+        if not nm:
+            continue
+        t = o.get("type", "string")
+        val = d.get(nm)
+        if t == "object" and isinstance(val, dict) and isinstance(o.get("schema"), list):
+            # 递归强转 object 子字段（如 found:"true"→True），保证下游 selector 按强类型判断
+            out[nm] = {sf.get("name"): _coerce_field(val.get(sf.get("name")), sf.get("type", "string"))
+                       for sf in o["schema"] if sf.get("name")}
+        else:
+            out[nm] = _coerce_field(val, t)
+    return out
 
 
 def _handle_code(node: dict, ctx) -> dict:
@@ -888,7 +929,11 @@ def _handle_intent(node: dict, ctx) -> dict:
     if sys_text:
         msgs.append({"role": "system", "content": str(sys_text)})
     msgs.append({"role": "user", "content": prompt})
-    resp = ctx.llm.chat(msgs)
+    # 支持节点级选模型
+    model_name = str(resolve_value(
+        next((p.get("input") for p in inputs.get("llmParam", []) if p.get("name") == "model"), {}),
+        ctx) or "")
+    resp = _get_llm(ctx, model_name).chat(msgs)
     answer = (getattr(resp, "content", "") or "").strip()
 
     # 优先按编号解析，其次按意图名匹配
@@ -1032,7 +1077,12 @@ def _handle_plugin(node: dict, ctx) -> dict:
         nm = o.get("name")
         if not nm or nm == "raw":
             continue
-        outputs[nm] = _extract_field(parsed if parsed else raw, nm, o)
+        val = _extract_field(parsed if parsed else raw, nm, o)
+        # 纯文本返回的工具（如 web_search），JSON 解析失败拿不到字段名，
+        # 若声明类型为 string 则直接兜底透传全文
+        if val is None and o.get("type", "string") == "string":
+            val = raw
+        outputs[nm] = val
     return {"outputs": outputs, "port": None}
 
 

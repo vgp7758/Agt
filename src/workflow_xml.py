@@ -312,12 +312,17 @@ def _node_to_json(nd) -> dict:
         # <in> 在前、<out> 在后：同名时 <out>（推荐写法）覆盖 <in>
         inp["inputParameters"] = [_end_param(i) for i in nd.findall("in")] + \
                                  [_end_param(o) for o in nd.findall("out")]
-    elif ntype == "3":      # llm：inputParameters + llmParam(prompt/systemPrompt/...)
+    elif ntype == "3":      # llm：inputParameters + llmParam(prompt/systemPrompt/…) + model
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         inp["llmParam"] = [{"name": p.get("name"),
                             "input": {"type": p.get("type", "string"),
                                       "value": {"type": "literal", "content": _text_block(p)}}}
                            for p in nd.findall("param")]
+        model_el = nd.find("model")
+        if model_el is not None and model_el.text and model_el.text.strip():
+            inp["llmParam"].append({"name": "model",
+                                    "input": {"type": "string",
+                                              "value": {"type": "literal", "content": model_el.text.strip()}}})
         out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "5":      # code：inputParameters + code(CDATA) + outputs
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
@@ -354,10 +359,21 @@ def _node_to_json(nd) -> dict:
                        "variables": [{"value": _ref_input(v.get("ref"))} for v in g.findall("var")]})
             out.append({"name": gname, "type": g.get("type", "string")})
         inp["mergeGroups"] = mg
-    elif ntype == "22":     # intent：<in query/> + <intent name/>
+    elif ntype == "22":     # intent：<in query/> + <intent name/> + <param/>（systemPrompt等）+ <model/>
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         inp["intents"] = [{"name": it.get("name")} for it in nd.findall("intent")]
         inp["mode"] = "all"
+        llm_param = [{"name": p.get("name"),
+                      "input": {"type": p.get("type", "string"),
+                                "value": {"type": "literal", "content": _text_block(p)}}}
+                     for p in nd.findall("param")]
+        model_el = nd.find("model")
+        if model_el is not None and model_el.text and model_el.text.strip():
+            llm_param.append({"name": "model",
+                              "input": {"type": "string",
+                                        "value": {"type": "literal", "content": model_el.text.strip()}}})
+        if llm_param:
+            inp["llmParam"] = llm_param
     elif ntype == "9":      # subworkflow
         inp["workflowId"] = nd.get("workflowId", "")
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
@@ -476,6 +492,8 @@ def _schema_to_xml(schema):
         if not isinstance(s, dict):
             continue
         sa = f'name={_qa(s.get("name", ""))} type={_qa(s.get("type", "string"))}'
+        if s.get("description"):
+            sa += f' description={_qa(s.get("description"))}'
         sub = s.get("schema")
         if s.get("type") == "object" and isinstance(sub, list) and sub:
             parts.append(f'<field {sa}>{_schema_to_xml(sub)}</field>')
@@ -609,6 +627,8 @@ def _node_to_xml(n):
 
     def out_el(o):
         attrs = f'name={_qa(o.get("name",""))} type={_qa(o.get("type","string"))}'
+        if o.get("description"):
+            attrs += f' description={_qa(o.get("description"))}'
         if o.get("required"):
             attrs += ' required="true"'
         if isinstance(o.get("input"), dict):
@@ -641,8 +661,11 @@ def _node_to_xml(n):
     elif ntype == "3":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         for p in inp.get("llmParam", []):
-            pi = p.get("input", {}) or {}
-            inner.append(f'<param name={_qa(p.get("name",""))} type={_qa(pi.get("type","string"))}>{_cdata(_lit_of(pi))}</param>')
+            if p.get("name") == "model":
+                inner.append(f'<model>{_xml_escape(_lit_of(p.get("input", {})))}</model>')
+            else:
+                pi = p.get("input", {}) or {}
+                inner.append(f'<param name={_qa(p.get("name",""))} type={_qa(pi.get("type","string"))}>{_cdata(_lit_of(pi))}</param>')
         inner.extend(out_el(o) for o in out)
     elif ntype == "5":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
@@ -667,6 +690,12 @@ def _node_to_xml(n):
             inner.append(f'<group name={_qa(g.get("name",""))}>{vs}</group>')
     elif ntype == "22":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        for p in inp.get("llmParam", []):
+            if p.get("name") == "model":
+                inner.append(f'<model>{_xml_escape(_lit_of(p.get("input", {})))}</model>')
+            else:
+                pi = p.get("input", {}) or {}
+                inner.append(f'<param name={_qa(p.get("name",""))} type={_qa(pi.get("type","string"))}>{_cdata(_lit_of(pi))}</param>')
         inner.extend(f'<intent name={_qa(it.get("name",""))}/>' for it in inp.get("intents", []))
     elif ntype == "9":
         attrs += f' workflowId={_qa(inp.get("workflowId", ""))}'

@@ -254,14 +254,18 @@ def _outputs_to_json_schema(outputs: list) -> dict:
             s = {"type": "object", "properties": props}
             if req:
                 s["required"] = req
-            return s
-        if t in ("list", "array"):
+        elif t in ("list", "array"):
             if isinstance(sch, dict):
-                return {"type": "array", "items": _type_to_schema(sch.get("type", "string"), sch)}
-            if isinstance(sch, list):
-                return {"type": "array", "items": {"type": "object", "properties": {s.get("name", ""): _var_to_schema(s) for s in sch}}}
-            return {"type": "array", "items": {}}
-        return {"type": t}
+                s = {"type": "array", "items": _type_to_schema(sch.get("type", "string"), sch)}
+            elif isinstance(sch, list):
+                s = {"type": "array", "items": {"type": "object", "properties": {sub.get("name", ""): _var_to_schema(sub) for sub in sch}}}
+            else:
+                s = {"type": "array", "items": {}}
+        else:
+            s = {"type": t}
+        if var.get("description"):   # 字段描述并入 schema，让模型理解字段含义
+            s["description"] = var.get("description")
+        return s
 
     def _type_to_schema(t, sch=None):
         if t in ("object",) and isinstance(sch, list):

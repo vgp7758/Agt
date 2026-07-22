@@ -1183,6 +1183,12 @@ function showProps(){
     h+='</select></label>';
     h+=`<label>systemPrompt <textarea onchange="setLLM('systemPrompt',this.value)">${ext(sys?.input?.value?.content)}</textarea></label>`;
     h+=`<label>prompt <textarea onchange="setLLM('prompt',this.value)">${ext(prompt?.input?.value?.content)}</textarea></label>`;
+    const curThink=lp.find(x=>x.name==='thinking')?.input?.value?.content;
+    const curTimeout=lp.find(x=>x.name==='timeout')?.input?.value?.content||'';
+    const curOnErr=lp.find(x=>x.name==='onError')?.input?.value?.content||'';
+    h+=`<label>thinking <select onchange="setLLM('thinking',this.value)"><option value="">（跟随默认）</option><option value="true"${curThink==='true'?' selected':''}>true（开）</option><option value="false"${curThink==='false'?' selected':''}>false（关）</option></select> <span style="color:#8a9099;font-size:10px">推理模型开/关</span></label>`;
+    h+=`<label>timeout <input type="number" value="${ext(curTimeout)}" placeholder="秒" onchange="setLLM('timeout',this.value)" style="width:70px"> <span style="color:#8a9099;font-size:10px">单次调用超时</span></label>`;
+    h+=`<label>onError <input value="${ext(curOnErr)}" placeholder="失败时输出此文本（留空=中断工作流）" onchange="setLLM('onError',this.value)"></label>`;
     h+='<div style="font-size:10px;color:#8a9099">输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。</div>';
   }
   // 代码节点

@@ -20,9 +20,10 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 .pal-item.branch{background:#6b3a1a}.pal-item.composite{background:#1a6b6b}
 .pal-item.data{background:#4a4a1a}.pal-item.ext{background:#4a1a4a}
 /* 中：画布 */
-#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab}
+#canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab;scrollbar-width:none}
+#canvasWrap::-webkit-scrollbar{display:none}
 #canvasWrap:active{cursor:grabbing}
-#svgCanvas{width:3000px;height:2200px;display:block}
+#svgCanvas{display:block}
 .grid-line{stroke:#ffffff08}
 .node-body{fill:#16213e;stroke:#533483;stroke-width:1.5}
 .node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
@@ -327,14 +328,20 @@ function renderAll(){
   svg.style.transform='scale('+dz+')';
   svg.style.transformOrigin='0 0';
   _pendingHandles=[];
+  // 画布尺寸跟随节点动态扩展（无固定边界，节点不被裁剪）+ 至少覆盖可视区
+  let maxX=1000,maxY=800;
+  WF.nodes.forEach(n=>{maxX=Math.max(maxX,(n.x||0)+(n.w||200)+240);maxY=Math.max(maxY,(n.y||0)+(n.h||140)+240);});
+  const wrap=document.getElementById('canvasWrap');
+  if(wrap){maxX=Math.max(maxX,wrap.clientWidth/dz+200);maxY=Math.max(maxY,wrap.clientHeight/dz+200);}
+  svg.style.width=maxX+'px';svg.style.height=maxY+'px';
   // defs（箭头）
   const defs=elm('defs');
   defs.innerHTML=`<marker id="arrowFlow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#fff"/></marker>
     <marker id="arrowVar" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="context-stroke"/></marker>`;
   svg.appendChild(defs);
-  // 网格
-  for(let x=0;x<3000;x+=40)svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:2200,'class':'grid-line'}));
-  for(let y=0;y<2200;y+=40)svg.appendChild(elm('line',{x1:0,y1:y,x2:3000,y2:y,'class':'grid-line'}));
+  // 网格（按动态画布范围）
+  for(let x=0;x<maxX;x+=40)svg.appendChild(elm('line',{x1:x,y1:0,x2:x,y2:maxY,'class':'grid-line'}));
+  for(let y=0;y<maxY;y+=40)svg.appendChild(elm('line',{x1:0,y1:y,x2:maxX,y2:y,'class':'grid-line'}));
 
   // ---- 变量线（先画，在节点下层）----
   WF.nodes.forEach(tn=>{
@@ -2361,10 +2368,18 @@ function _dbgResultHtml(){
   if(n&&n.type==='2'){fields=((n.data&&n.data.inputs&&n.data.inputs.inputParameters)||[]).map(function(p){return {name:p.name,type:''};});}
   let body='';
   if(fields&&fields.length){
+    const declared={};
     fields.forEach(function(f){
+      declared[f.name]=true;
       const v=(out&&out[f.name]!==undefined)?out[f.name]:undefined;
       body+='<div class="dbg-field"><b>'+esc(f.name)+'</b>'+(f.type?('<span style="color:#8a9099"> ('+esc(f.type)+')</span>'):'')+'\n'+_fmtVal(v)+'</div>';
     });
+    // 额外显示 out 中未声明的键（如 LLM 的 reasoning/_raw）
+    if(out&&typeof out==='object'){
+      Object.keys(out).forEach(function(k){
+        if(!declared[k]){body+='<div class="dbg-field"><b style="color:#7b9ff7">'+esc(k)+'</b> <span style="color:#8a9099">(附加)</span>\n'+_fmtVal(out[k])+'</div>';}
+      });
+    }
   }else{
     body=_fmtVal(out);
   }

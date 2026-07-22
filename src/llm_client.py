@@ -182,7 +182,10 @@ class LLMClient:
             self.switch_model(self.fallback_chain[0])
 
     def _build_kwargs(self, messages, stream: bool, **overrides) -> dict:
-        """组装请求参数。tools / tool_choice 等可通过 overrides 透传。"""
+        """组装请求参数。tools / tool_choice 等可通过 overrides 透传。
+        enable_thinking / timeout 可经 overrides 按 call 覆盖实例默认值（工作流 LLM 节点 per-node 设置）。"""
+        enable_thinking = overrides.pop("enable_thinking", self.enable_thinking)
+        timeout = overrides.pop("timeout", None)
         kwargs = {
             "model": self.model,
             "messages": messages,
@@ -193,7 +196,9 @@ class LLMClient:
             kwargs["max_tokens"] = self.max_tokens
         # enable_thinking 是 Qwen/ModelScope 专有透传参数；对不支持的 provider 不发，避免 400。
         if self.thinking_supported:
-            kwargs["extra_body"] = {"enable_thinking": self.enable_thinking}
+            kwargs["extra_body"] = {"enable_thinking": enable_thinking}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         kwargs.update(overrides)
         return kwargs
 

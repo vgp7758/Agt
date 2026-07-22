@@ -18,6 +18,14 @@ from typing import Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+try:
+    from mcp.client.streamable_http import streamable_http_client
+except ImportError:
+    streamable_http_client = None
+try:
+    from mcp.client.sse import sse_client
+except ImportError:
+    sse_client = None
 
 # mcp_client.py 自身目录（保留备查）。注意：server 子进程的默认 cwd 现在跟随 chat.py
 # 的启动目录(cwd)，而不再锚定在这里——这样 .mcp.json 的查找目录(WORKSPACE=cwd)与 server
@@ -97,18 +105,37 @@ class MCPManager:
                 print(f"[MCP] 连接 server '{name}' 失败：{type(e).__name__}: {e}")
 
     async def _connect_one(self, name: str, cfg: dict):
-        params = StdioServerParameters(
-            command=cfg["command"],
-            args=cfg.get("args", []),
-            env=cfg.get("env"),
-            cwd=cfg.get("cwd", str(Path.cwd())),
-        )
-        read, write = await self._stack.enter_async_context(stdio_client(params))
+        if cfg.get("url"):
+            # HTTP/SSE 传输（远程 server）：transport 默认 http，可显式 sse
+            url = cfg["url"]
+            transport = (cfg.get("transport") or ("http" if streamable_http_client else "sse")).lower()
+            headers = cfg.get("headers")
+            if transport == "sse":
+                if sse_client is None:
+                    raise RuntimeError("当前 mcp SDK 不支持 sse 传输")
+                ctx = sse_client(url, headers=headers) if headers else sse_client(url)
+            else:
+                if streamable_http_client is None:
+                    raise RuntimeError("当前 mcp SDK 不支持 streamable_http 传输")
+                ctx = streamable_http_client(url, headers=headers) if headers else streamable_http_client(url)
+            transport_label = transport
+        else:
+            # stdio 传输（本地进程）
+            params = StdioServerParameters(
+                command=cfg["command"],
+                args=cfg.get("args", []),
+                env=cfg.get("env"),
+                cwd=cfg.get("cwd", str(Path.cwd())),
+            )
+            ctx = stdio_client(params)
+            transport_label = "stdio"
+        res = await self._stack.enter_async_context(ctx)
+        read, write = res[0], res[1]   # http/sse 可能返回 (read, write, resp)，取前两个兼容
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         tools_resp = await session.list_tools()
         self.sessions[name] = {"session": session, "tools": tools_resp.tools}
-        print(f"[MCP] 已连接 '{name}'，发现 {len(tools_resp.tools)} 个工具")
+        print(f"[MCP] 已连接 '{name}'（{transport_label}），发现 {len(tools_resp.tools)} 个工具")
 
     # —— 重连 ——
     def reconnect_from_config_one(self, path: str, name: str) -> None:

@@ -202,8 +202,21 @@ def _handle_llm(node: dict, ctx) -> dict:
             overrides["temperature"] = float(cfg["temperature"])
         except (TypeError, ValueError):
             pass
+    if cfg.get("thinking") is not None:   # per-node 开关覆盖实例默认（推理模型）
+        overrides["enable_thinking"] = str(cfg.get("thinking")).strip().lower() in ("true", "1", "yes", "on")
+    if cfg.get("timeout") is not None:
+        try:
+            overrides["timeout"] = float(cfg["timeout"])
+        except (TypeError, ValueError):
+            pass
     llm = _get_llm(ctx, str(cfg.get("model", "") or ""))
-    resp = llm.chat(msgs, **overrides)
+    on_error = cfg.get("onError")
+    try:
+        resp = llm.chat(msgs, **overrides)
+    except Exception:
+        if on_error:   # 配了 onError：不中断工作流，输出反馈文本
+            return {"outputs": {"output": str(on_error)}, "port": None}
+        raise
     content = getattr(resp, "content", "") or ""
     reasoning = getattr(resp, "reasoning", "") or ""
     outs = {"output": content}

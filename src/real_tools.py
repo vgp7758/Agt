@@ -1242,6 +1242,11 @@ def contains(text: str, keyword: str) -> bool:
     """判断 text 是否包含 keyword，返回 true/false。"""
     return keyword in (text or "")
 
+def to_ascii(text: str) -> str:
+    r"""把字符串里的非 ASCII 字符（中文等）转成 \uXXXX 转义，ASCII 字符保留。
+    用于生成 ASCII 安全文本（JSON 传输/存储），如 "贵州茅台" → 贵州茅台。"""
+    return "".join(ch if ord(ch) < 128 else "\\u%04x" % ord(ch) for ch in (text or ""))
+
 
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
@@ -1286,6 +1291,7 @@ LIGHT_TOOLS = Toolbox(
     Tool(to_uppercase),
     Tool(to_lowercase),
     Tool(contains),
+    Tool(to_ascii),
     Tool(sleep),
 )
 

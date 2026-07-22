@@ -74,6 +74,7 @@ XML 中 type 用可读名字（也兼容数字）：
   <out name="output" type="string"/>
 </node>
 ```
+> LLM `<param>` 还支持：`thinking`（true/false，per-node 覆盖实例默认，推理模型）、`timeout`（秒，单次调用超时）、`onError`（失败时输出的文本，配了则 LLM 异常不中断工作流、返回该文本）、`model`（覆盖默认模型）。推理模型的思考过程默认带在 `reasoning` 输出字段（下游可引用/调试可见）。
 
 声明**多字段 outputs** 即得结构化输出：模型按 schema 输出 JSON，执行器按字段名解析（按 type 强转）成具名输出，下游直接引用，无需 code 节点 `json.loads`：
 ```xml

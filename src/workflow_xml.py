@@ -702,6 +702,7 @@ def _node_to_xml(n):
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         inner.extend(out_el(o) for o in out)
     elif ntype == "45":
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))   # <in> 输入变量（URL/body 的 {{变量名}} 引用）
         api = inp.get("apiInfo", {}) or {}
         inner.append(f'<method>{_xml_escape(api.get("method", "GET"))}</method>')
         inner.append(f'<url>{_cdata(api.get("url", ""))}</url>')

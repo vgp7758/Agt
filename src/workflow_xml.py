@@ -20,8 +20,11 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from xml.etree import ElementTree as ET
+
+_LOG = logging.getLogger("agt.workflow")
 
 # 节点 type 可读名 ↔ Coze 数字
 TYPE_NAME_TO_NUM = {
@@ -112,19 +115,38 @@ def _text_block(el) -> str:
 
 
 def _cond(el) -> dict:
-    """<cond op="13" left="NODE.field" right="60" left_type="integer"/> → selector 条件项"""
+    """selector 条件项。两种写法都支持：
+    属性：<cond op="13" left="NODE.field" right="60" left_type="integer"/>
+    子元素：<cond op="13"><left ref="NODE.field"/><right type="integer">60</right></cond>
+    <branch> 直接带 op/left/right 子元素时，把 branch 自身作为单条件传入同样适用。"""
     op = int(el.get("op", "1"))
-    left_ref = el.get("left", "")
-    lt = el.get("left_type", "string")
+    # left：<left ref="..."/> 子元素优先，否则 left="..." 属性
+    left_el = el.find("left")
+    if left_el is not None:
+        left_ref = left_el.get("ref") or (left_el.text or "").strip()
+        lt = left_el.get("type", "string")
+    else:
+        left_ref = el.get("left", "")
+        lt = el.get("left_type", "string")
     left_input = {"type": lt, "value": _ref_input(left_ref)} if left_ref \
         else {"type": lt, "value": {"type": "literal", "content": ""}}
-    rv = el.get("right", "")
-    rt = el.get("right_type", "string")
-    if rv.startswith("ref:"):
-        right_input = {"type": rt, "value": _ref_input(rv[4:])}
+    # right：<right ref="..."/> 或 <right>值</right> 子元素优先，否则 right="..." 属性
+    right_el = el.find("right")
+    if right_el is not None:
+        rt = right_el.get("type", el.get("right_type", "string"))
+        if right_el.get("ref"):
+            right_input = {"type": rt, "value": _ref_input(right_el.get("ref"))}
+        else:
+            rv = (right_el.text or "").strip()
+            right_input = {"type": rt, "value": {"type": "literal", "content": _parse_val(rv, rt)}}
     else:
-        val = rv[8:] if rv.startswith("literal:") else rv
-        right_input = {"type": rt, "value": {"type": "literal", "content": _parse_val(val, rt)}}
+        rv = el.get("right", "")
+        rt = el.get("right_type", "string")
+        if rv.startswith("ref:"):
+            right_input = {"type": rt, "value": _ref_input(rv[4:])}
+        else:
+            val = rv[8:] if rv.startswith("literal:") else rv
+            right_input = {"type": rt, "value": {"type": "literal", "content": _parse_val(val, rt)}}
     return {"operator": op, "left": {"input": left_input}, "right": {"input": right_input}}
 
 
@@ -231,11 +253,40 @@ def _out_to_json(o):
     return res
 
 
+def _lint_node(nd, ntype: str) -> None:
+    """检测常见"静默吞错"写法并 log warning（不阻断解析）。
+    这些写法解析器找不到对应标签/属性会默默丢弃——工作流能跑但结果错，最难排查。"""
+    nid = nd.get("id", "?")
+    w = []
+    if ntype == "8":    # selector（left/right 子元素形式合法；只拦 <condition> 错标签）
+        for br in nd.findall("branch"):
+            if br.findall("condition"):
+                w.append("分支条件应用 <cond>（或 branch 直接带 op/left/right），检测到 <condition>（被忽略）")
+    elif ntype == "45":  # http（<in> 合法：声明输入变量；只拦 <param name=method/url> 这类误写）
+        for p in nd.findall("param"):
+            if p.get("name") in ("method", "url", "timeout", "headers", "body"):
+                w.append(f'<param name="{p.get("name")}"> 应改为 <{p.get("name")}> 子元素（被忽略）')
+    elif ntype == "32":  # aggregator
+        for g in nd.findall("group"):
+            if g.findall("variable"):
+                w.append("group 内变量应用 <var>，检测到 <variable>（被忽略，分组变量空）")
+    elif ntype == "5":   # code
+        for p in nd.findall("param"):
+            if p.get("name") == "code":
+                w.append('代码必须用 <code> 子元素，检测到 <param name="code">（代码会为空！）')
+    elif ntype == "2":   # end
+        for p in nd.findall("param"):
+            w.append(f'<param name="{p.get("name")}"> 无效——end 返回绑定用 <out ref>/<in ref>，terminatePlan 自动（被忽略）')
+    for msg in w:
+        _LOG.warning("⚠️ 工作流节点 %s：%s", nid, msg)
+
+
 def _node_to_json(nd) -> dict:
     nid = nd.get("id")
     if not nid:
         raise WorkflowXmlError("节点缺少 id")
     ntype = _type_num(nd.get("type"))
+    _lint_node(nd, ntype)
     title = nd.get("title") or TYPE_NUM_TO_NAME.get(ntype, ntype)
     node = {"id": nid, "type": ntype,
             "data": {"nodeMeta": {"title": title}, "inputs": {}, "outputs": []}}
@@ -249,17 +300,18 @@ def _node_to_json(nd) -> dict:
     if ntype == "1":        # start：data.outputs = 工作流入参
         node["data"]["trigger_parameters"] = []
         out.extend(_out_to_json(o) for o in nd.findall("out"))
-    elif ntype == "2":      # end：<out ref> = 返回变量
+    elif ntype == "2":      # end：返回变量绑定（<out ref> 或 <in ref> 都认——Coze JSON 里本就是 inputs.inputParameters；同名 <out> 优先）
         inp["terminatePlan"] = "returnVariables"
-        inp["inputParameters"] = [
-            {"name": o.get("name"),
-             "input": {"type": o.get("type", "string"),
-                       "value": _ref_input(o.get("ref")) if o.get("ref")
-                                else {"type": "literal",
-                                      "content": _parse_val(o.get("literal") if o.get("literal") is not None
-                                                            else (o.text or "").strip(), o.get("type", "string"))}}}
-            for o in nd.findall("out")
-        ]
+        def _end_param(el):
+            return {"name": el.get("name"),
+                    "input": {"type": el.get("type", "string"),
+                              "value": _ref_input(el.get("ref")) if el.get("ref")
+                                       else {"type": "literal",
+                                             "content": _parse_val(el.get("literal") if el.get("literal") is not None
+                                                                   else (el.text or "").strip(), el.get("type", "string"))}}}
+        # <in> 在前、<out> 在后：同名时 <out>（推荐写法）覆盖 <in>
+        inp["inputParameters"] = [_end_param(i) for i in nd.findall("in")] + \
+                                 [_end_param(o) for o in nd.findall("out")]
     elif ntype == "3":      # llm：inputParameters + llmParam(prompt/systemPrompt/...)
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         inp["llmParam"] = [{"name": p.get("name"),
@@ -286,10 +338,12 @@ def _node_to_json(nd) -> dict:
                                     "input": {"type": "string",
                                               "value": {"type": "literal", "content": _text_block(res)}}}]
         out.append({"name": "output", "type": "string"})
-    elif ntype == "8":      # selector：<branch><cond/>
+    elif ntype == "8":      # selector：<branch><cond/></branch>；或 <branch op><left/><right/></branch>（单条件简写）
         branches = []
         for br in nd.findall("branch"):
             conds = [_cond(c) for c in br.findall("cond")]
+            if br.get("op") is not None or br.find("left") is not None:
+                conds.append(_cond(br))   # branch 直接带条件（单条件简写）
             branches.append({"condition": {"logic": int(br.get("logic", "2")), "conditions": conds}})
         inp["branches"] = branches
     elif ntype == "32":     # aggregator：<group><var ref/>
@@ -310,7 +364,8 @@ def _node_to_json(nd) -> dict:
         out.extend(_out_to_json(o) for o in nd.findall("out"))
         if not out:
             out.append({"name": "output", "type": "string"})   # 默认 output（执行返回 {output}）
-    elif ntype == "45":     # http
+    elif ntype == "45":     # http：<in> 声明输入变量，URL/body 用 {{变量名}} 引用（同 text/llm）
+        inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         inp["apiInfo"] = {"method": (nd.findtext("method") or "GET").upper(),
                           "url": nd.findtext("url") or ""}
         inp["headers"] = [{"name": h.get("name"),

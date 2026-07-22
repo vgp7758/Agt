@@ -135,7 +135,7 @@ const HDR_COLOR={flow:'#1a5c2a',llm:'#1a3a6b',code:'#3a1a6b',branch:'#6b3a1a',co
 const IO_TYPES=['string','integer','float','number','boolean','object','list','file','time'];
 // 变量类型颜色
 const TYPE_COLOR={string:'#e6c07b',integer:'#56b6c2',float:'#56b6c2',number:'#56b6c2',boolean:'#c678dd',object:'#61afef',list:'#98c379',file:'#e06c75',time:'#d19a66'};
-const OPERATORS=[{v:1,t:'='},{v:2,t:'≠'},{v:7,t:'包含'},{v:8,t:'不含'},{v:9,t:'为空'},{v:10,t:'非空'},{v:13,t:'>'},{v:14,t:'≥'},{v:15,t:'<'},{v:16,t:'≤'}];
+const OPERATORS=[{v:1,t:'='},{v:2,t:'≠'},{v:7,t:'包含'},{v:8,t:'不含'},{v:9,t:'为空'},{v:10,t:'非空'},{v:11,t:'为真'},{v:12,t:'为假'},{v:13,t:'>'},{v:14,t:'≥'},{v:15,t:'<'},{v:16,t:'≤'}];
 
 const NS='http://www.w3.org/2000/svg';
 const svg=document.getElementById('svgCanvas');
@@ -889,18 +889,26 @@ function renderSelectorBranches(g,n){
     fo.setAttribute('x',4);fo.setAttribute('y',yOff);fo.setAttribute('width',n.w-8);fo.setAttribute('height',20);
     const div=document.createElement('div');div.style.cssText='display:flex;gap:2px;align-items:center;font-size:10px';
     if(br.cond){
+      if(!br.cond.conditions?.length)br.cond.conditions=[{operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}}];
+      const cc=br.cond.conditions[0];
+      const lSel=document.createElement('select');lSel.style.cssText='font-size:9px;padding:0;background:#0f3460;color:#fff;border:1px solid #533483;max-width:95px';
+      const lc=cc.left?.input?.value?.content;
+      lSel.innerHTML='<option value="">左值…</option>'+_condRefOptions(n,lc);
+      lSel.value=(lc&&typeof lc==='object'&&lc.blockID)?lc.blockID+'.'+(lc.name||''):'';
+      lSel.onchange=()=>{ensureCond(br);const ps=lSel.value.split('.');const bid=ps.length>1?ps[0]:'';const nm=ps.length>1?ps.slice(1).join('.'):ps[0];br.cond.conditions[0].left={input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:bid,name:nm}}}};saveBranchCond(n,br);};
       const opS=document.createElement('select');opS.style.cssText='font-size:9px;padding:0;background:#0f3460;color:#fff;border:1px solid #533483';
-      OPERATORS.forEach(o=>{const op=document.createElement('option');op.value=o.v;op.textContent=o.t;if(br.cond.conditions?.[0]?.operator===o.v)op.selected=true;opS.appendChild(op);});
-      opS.onchange=()=>{br.cond.conditions[0].operator=parseInt(opS.value);saveBranchCond(n,br);};
-      const lI=document.createElement('input');lI.style.cssText='width:45px;font-size:9px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483';
-      lI.value=ext(br.cond.conditions?.[0]?.left?.input?.value?.content?.name||br.cond.conditions?.[0]?.left?.input?.value?.content,'');
-      lI.onchange=()=>{ensureCond(br);br.cond.conditions[0].left={input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:lI.value}}}};saveBranchCond(n,br);};
-      const rI=document.createElement('input');rI.style.cssText='width:45px;font-size:9px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483';
-      rI.value=ext(br.cond.conditions?.[0]?.right?.input?.value?.content,'');
-      rI.onchange=()=>{ensureCond(br);br.cond.conditions[0].right={input:{type:'string',value:{type:'literal',content:rI.value}}};saveBranchCond(n,br);};
+      OPERATORS.forEach(o=>{const op=document.createElement('option');op.value=o.v;op.textContent=o.t;if(cc.operator===o.v)op.selected=true;opS.appendChild(op);});
+      opS.onchange=()=>{br.cond.conditions[0].operator=parseInt(opS.value);saveBranchCond(n,br);renderAll();};
+      div.appendChild(lSel);div.appendChild(opS);
+      if(![9,10,11,12].includes(cc.operator)){
+        const rI=document.createElement('input');rI.style.cssText='width:40px;font-size:9px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483';
+        rI.value=ext(cc.right?.input?.value?.content,'');
+        rI.onchange=()=>{ensureCond(br);br.cond.conditions[0].right={input:{type:'string',value:{type:'literal',content:rI.value}}};saveBranchCond(n,br);};
+        rI.onmousedown=(e)=>e.stopPropagation();div.appendChild(rI);
+      }
       const del=document.createElement('button');del.textContent='×';del.style.cssText='font-size:9px;padding:0 4px;background:#6b2020;color:#fff;border:none;border-radius:2px;cursor:pointer';
       del.onclick=()=>{n.data.inputs.branches.splice(branchesAll.indexOf(br),1);renderAll();};
-      [lI,opS,rI,del].forEach(c=>{c.onmousedown=(e)=>e.stopPropagation();div.appendChild(c);});
+      [lSel,opS,del].forEach(el=>{el.onmousedown=(e)=>e.stopPropagation();});
     }else{
       const lab=document.createElement('span');lab.textContent='否则';lab.style.cssText='color:#8a9099;font-size:9px';div.appendChild(lab);
     }
@@ -1593,11 +1601,20 @@ function _outFieldOptions(on){
 // 条件左/右值"源=block-output"时的节点字段下拉选项（跨节点，含 object 子字段点号路径）
 function _condRefOptions(n,content){
   let h='';
+  // 其它节点的 output 字段
   WF.nodes.forEach(on=>{
     if(on.id===n.id)return;
     _outFieldOptions(on).forEach(o=>{
       h+='<option value="'+on.id+'.'+o.path+'"'+(content?.blockID===on.id&&content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
     });
+  });
+  // 当前节点声明的输入字段（若 ref 了上游 output，作为别名列出——选中即保存为该上游引用，语义等价）
+  nodeInputs(n).forEach(p=>{
+    const v=p.input?.value, ct=v?.content;
+    if(v?.type==='ref'&&ct?.source==='block-output'&&ct.blockID){
+      const val=ct.blockID+'.'+(ct.name||'');
+      h+='<option value="'+val+'"'+(content?.blockID===ct.blockID&&content?.name===ct.name?' selected':'')+'>'+nodeTitle(n)+'(输入 '+p.name+')</option>';
+    }
   });
   return h;
 }

@@ -56,12 +56,13 @@ XML 中 type 用可读名字（也兼容数字）：
 </node>
 ```
 
-**end**（返回变量 = `<out ref>`）：
+**end**（返回变量绑定：`<out ref>` 或 `<in ref>` 都认——Coze JSON 里本就是 inputs.inputParameters）：
 ```xml
 <node id="900001" type="end">
   <out name="greeting" ref="130001.output"/>
 </node>
 ```
+> ⚠️ end 易错：返回绑定写在 `<out ref>`（或 `<in ref>`）的 **ref 属性**里，**不是** `<in ref>` 配一个空的 `<out>`（空 out → 返回值为空）。`terminatePlan` 自动为 `returnVariables`，**不要**写 `<param name="terminatePlan">`。
 
 **llm**（`<in>` 供 `{{}}` 模板，`<param>` 是 prompt/systemPrompt/temperature）：
 ```xml
@@ -87,7 +88,7 @@ XML 中 type 用可读名字（也兼容数字）：
 ```
 模型输出非 JSON 时自动降级为 `{output: 原文}`，具名字段缺失（下游引用得 None）。
 
-**code**（代码用 CDATA，引号/花括号随便写）：
+**code**（代码用 `<code>` 子元素 + CDATA，引号/花括号随便写）：
 ```xml
 <node id="500001" type="code">
   <in name="x" ref="100001.x"/>
@@ -98,16 +99,17 @@ async def main(args):
   <out name="y" type="number"/>
 </node>
 ```
+> ⚠️ code 易错：代码**必须**用 `<code>` 子元素，**不是** `<param name="code">`（用 param 代码会为空，节点静默返回空——工作流能跑但 code 不执行，最难查）。
 
-**plugin**（调工具箱里已注册的工具，toolName=工具名）：
+**plugin**（调工具箱里已注册的工具，toolName=工具名；工具原始返回固定存 `raw`）：
 ```xml
-<node id="200001" type="plugin" toolName="analyze_skill_stats">
-  <in name="match_limit" literal="100" type="integer"/>
-  <out name="raw" type="string"/>
+<node id="200001" type="plugin" toolName="web_search">
+  <in name="query" ref="100001.q"/>
 </node>
 ```
+工具返回固定存 `raw`。若工具返回 **JSON 字符串**，可声明额外 `<out name="字段"/>` 自动从 raw 解析抽取；返回**纯文本**（如 web_search）则下游直接 `ref="节点id.raw"`，**不要**声明同名 out 试图抽取（抽不到 → null，下游拿到空）。
 
-**selector**（分支：`<branch>` 内 `<cond>`；最后无 cond 的 branch 是 else）：
+**selector**（条件分支）。两种写法都支持——属性紧凑、子元素直观（单条件还可直接写在 branch 上）：
 ```xml
 <node id="800001" type="selector">
   <branch><cond op="13" left="100001.score" right="60"/></branch>      <!-- score > 60 → true -->
@@ -115,9 +117,12 @@ async def main(args):
   <branch/>                                                            <!-- else → false -->
 </node>
 ```
-`op` 同 JSON 运算符（13=大于 14=≥ 15=小于 16=≤ 1=等于 7=包含 9=空…）；`left` 是 `节点id.字段`，`right` 是字面量（或 `ref:节点id.字段`）。
+`op`（数字）运算符完整表：`1`=等 `2`≠ `7`包含 `8`不含 `9`空 `10`非空 **`11`=布尔为真 `12`=布尔为假**（这两个**只看 left、不写 right**）`13`> `14`≥ `15`< `16`≤（3-6=长度比较）。`left`/`right` 是**属性**（`left="节点id.字段"`），`right` 为字面量或 `ref:节点id.字段`。
 
-**aggregator**（多分支汇合：`<group>` 内 `<var ref>`）：
+> 写法二选一：属性 `<cond op="13" left="NODE.field" right="60"/>`，或子元素 `<cond op="13"><left ref="NODE.field"/><right>60</right></cond>`（单条件还可直接写在 branch 上：`<branch op="11"><left ref="NODE.found"/></branch>`）。
+> ⚠️ 易错（写错会被静默忽略，条件恒空）：① 标签是 `<cond>`（**不是** `<condition>`）；② `op` 是**数字**（**不是** `operator="True"` 文本）。端口：第 i 个 branch 成立 → `true`(i=0)/`true_{i}`(i>0)，都不成立 → `false`。
+
+**aggregator**（多分支汇合：`<group>` 内 `<var ref>`；每个 group 自动产生同名输出，无需 `<out>`）：
 ```xml
 <node id="320001" type="aggregator">
   <group name="result">
@@ -126,6 +131,7 @@ async def main(args):
   </group>
 </node>
 ```
+> ⚠️ aggregator 易错：① group 内变量标签是 `<var>`（**不是** `<variable>`，写错则分组变量为空）；② 每个 group 自动产生同名输出，**不要**再写 `<out>`；③ `<var ref>` 的**字段名要对**——text 节点输出固定叫 `output`（引用写作 `节点id.output`，不是 `.result`）。
 
 **intent**（`<intent name>` 每个意图一个分支端口 branch_0/branch_1…，default 兜底）：
 ```xml
@@ -144,7 +150,21 @@ async def main(args):
 </node>
 ```
 
-**http / subworkflow / tojson / fromjson / assigner / output**：见对应 JSON 章节，XML 子元素一一映射（http 用 `<method>/<url>/<header name value>/<body type>`；subworkflow 用 `workflowId` 属性 + `<in>`）。
+**http**（`<in>` 声明输入变量，URL/body 用 `{{变量名}}` 引用——同 text/llm；配置用 `<method>`/`<url>`/`<header>`/`<body>` 子元素）：
+```xml
+<node id="500001" type="http">
+  <in name="stock_code" ref="300001.stock_code"/>
+  <method>GET</method>
+  <url><![CDATA[http://qt.gtimg.cn/q={{stock_code}}]]></url>
+  <header name="Authorization" value="Bearer xxx"/>
+  <body type="JSON"><![CDATA[{"q": "{{stock_code}}"}]]></body>
+</node>
+```
+输出 `body`(string)/`statusCode`(integer) **自动生成**，无需 `<out>`。响应按 Content-Type 的 charset 解码，utf-8 失败自动回退 gbk（中文站点）。
+
+> ⚠️ http 易错：① 配置用 `<method>`/`<url>`/`<header>`/`<body>` 子元素（**不是** `<param name="url">`）；② URL 引用上游值：先 `<in name="x" ref="上游.字段"/>` 桥接成变量 x，URL 写 `{{x}}`（**不是** `{{上游.字段}}` 直引）；③ 不要写 `<out>`（输出固定自动有）。
+
+**subworkflow / tojson / fromjson / assigner / output**：见对应 JSON 章节，XML 子元素一一映射（subworkflow 用 `workflowId` 属性 + `<in>`）。
 
 ### 0.5 完整范例
 

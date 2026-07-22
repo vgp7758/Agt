@@ -7,6 +7,7 @@ sessions/
 .agent/rag.json
 .agent/rag/
 indexes/
+captures/
 
 # === Python ===
 __pycache__/

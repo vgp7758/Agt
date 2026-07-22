@@ -810,17 +810,8 @@ def _try_parse(s) -> dict:
         return {}
 
 
-def _render_http_template(text: str, ctx) -> str:
-    """HTTP 节点的 {{block_output_<id>.<field>}} 模板（区别于普通 {{inputParam}}）。"""
-    def _repl(m):
-        parts = m.group(1).split(".", 1)
-        val = _dotted_get(ctx.node_outputs.get(parts[0], {}), parts[1] if len(parts) > 1 else "")
-        if val is None:
-            return ""
-        if isinstance(val, (dict, list)):
-            return json.dumps(val, ensure_ascii=False)
-        return str(val)
-    return re.sub(r"\{\{block_output_([^}]+)\}\}", _repl, text or "")
+# http 节点 url/body 模板统一用 render_template 引用 inputParameters 变量（{{变量名}}）：
+# 上游值通过 <in name="x" ref="节点.字段"> 桥接为变量 x，URL 写 {{x}}（与 text/llm 一致）。
 
 
 def _find_local_workflow(ctx, wf_id: str):
@@ -924,9 +915,10 @@ def _handle_http(node: dict, ctx) -> dict:
     import urllib.error
 
     inputs = node.get("data", {}).get("inputs", {})
+    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)   # URL/body 的 {{变量名}} 引用这些输入
     api = inputs.get("apiInfo", {}) or {}
     method = (api.get("method") or "GET").upper()
-    url = _render_http_template(api.get("url", ""), ctx)
+    url = render_template(api.get("url", ""), params)
 
     kv = {}
     for p in inputs.get("params", []) or []:
@@ -949,10 +941,10 @@ def _handle_http(node: dict, ctx) -> dict:
     bd = body.get("bodyData") or {}
     data = None
     if bt == "JSON":
-        data = _render_http_template(bd.get("json", ""), ctx).encode("utf-8")
+        data = render_template(bd.get("json", ""), params).encode("utf-8")
         headers.setdefault("Content-Type", "application/json")
     elif bt == "RAW_TEXT":
-        data = _render_http_template(bd.get("rawText", ""), ctx).encode("utf-8")
+        data = render_template(bd.get("rawText", ""), params).encode("utf-8")
         headers.setdefault("Content-Type", "text/plain")
     elif bt in ("FORM_DATA", "FORM_URLENCODED"):
         fields = bd.get("formURLEncoded") or (bd.get("formData", {}) or {}).get("data") or []
@@ -965,13 +957,27 @@ def _handle_http(node: dict, ctx) -> dict:
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+            raw_bytes = resp.read()
             code = resp.getcode()
+            ctype = resp.headers.get("Content-Type", "")
             hdrs = json.dumps(dict(resp.headers.items()), ensure_ascii=False)
     except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else str(e)
+        raw_bytes = e.read() if hasattr(e, "read") else str(e).encode()
         code = e.code
+        ctype = ""
         hdrs = "{}"
+    # 解码：优先 Content-Type 的 charset；utf-8 失败则回退 gbk（中文站点常见）
+    charset = "utf-8"
+    for _tok in ctype.split(";"):
+        if _tok.strip().lower().startswith("charset="):
+            charset = _tok.split("=", 1)[1].strip().strip('"')
+    try:
+        raw = raw_bytes.decode(charset) if isinstance(raw_bytes, (bytes, bytearray)) else str(raw_bytes)
+    except (LookupError, UnicodeDecodeError):
+        try:
+            raw = raw_bytes.decode("gbk", errors="replace")
+        except Exception:
+            raw = str(raw_bytes)
     except Exception as e:
         return {"outputs": {"body": f"[HTTP 失败] {type(e).__name__}: {e}", "statusCode": 0, "headers": "{}"},
                 "port": None}

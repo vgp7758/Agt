@@ -198,8 +198,9 @@ class LLMClient:
         return kwargs
 
     def _backoff(self, attempt: int) -> float:
-        """斐波那契退避（从 1 开始）：1, 1, 2, 3, 5, 8……比指数更平缓。"""
-        a, b = 1, 1
+        """退避序列：5, 6, 11, 17, 28……（5/6 起的斐波那契式增长）。
+        初始间隔稍长，避免短间隔连撞限流被反复拒绝。"""
+        a, b = 5, 6
         for _ in range(attempt):
             a, b = b, a + b
         return float(a)

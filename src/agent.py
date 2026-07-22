@@ -480,7 +480,7 @@ class Agent:
             if self.snapshot_manager is not None:
                 try:
                     sha = self.snapshot_manager.snapshot()
-                    self.session._current.snapshot_sha = sha
+                    self.session.record_snapshot(sha)   # 设 _current.snapshot_sha + 记 snapshot 事件
                     self._emit({"type": "checkpoint", "sha": sha})
                 except Exception as e:
                     self._emit({"type": "warn", "text": f"快照失败：{type(e).__name__}: {e}"})

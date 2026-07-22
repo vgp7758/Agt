@@ -44,86 +44,49 @@ def main():
     try:
         s = Session(system="sys", llm=_FakeLLM(), workspace=tmp)
         s.start_turn("跑几个工具")
-        long_result = "X" * 3000       # 超 limit，必被摘要
+        long_result = "X" * 3000       # 超 limit
         long_args = {"code": "Y" * 3000}
 
-        c0 = _add_call(s, "run_python", long_args, long_result)   # distance 2
-        c1 = _add_call(s, "run_python", long_args, long_result)   # distance 1
-        c2 = _add_call(s, "run_python", long_args, long_result)   # distance 0
+        c0 = _add_call(s, "run_python", long_args, long_result)   # distance 2（历史）
+        c1 = _add_call(s, "run_python", long_args, long_result)   # distance 1（历史）
+        c2 = _add_call(s, "run_python", long_args, long_result)   # distance 0（当前步）
         msgs = s._steps_to_messages(s._current.steps)
 
-        # —— 结果按距离衰减 ——
+        # —— 当前步(distance0)完整披露 / 历史步按距离衰减 ——
         tool_msgs = [m for m in msgs if m["role"] == "tool"]
         assert len(tool_msgs) == 3, f"应有3条tool消息，实际{len(tool_msgs)}"
         for m, cid, d in zip(tool_msgs, [c0, c1, c2], [2, 1, 0]):
-            lim = detail_limit(d)
             content = m["content"]
-            assert content.startswith("X" * 50), f"distance{d} 结果前缀不符"
-            assert f"id={cid}" in content and "get_tool_detail" in content, f"distance{d} 缺 id 提示"
-            assert len(content) < 3000, f"distance{d} 结果不该完整3000字"
-            print(f"[结果·距离{d}] limit={lim} → 截断到{len(content)}字，含 id={cid} ✓")
+            if d == 0:
+                assert content == "X" * 3000, f"当前步所有工具结果应完整3000，实际{len(content)}"
+                print(f"[结果·当前步完整] distance0 完整 {len(content)} 字（不限工具）✓")
+            else:
+                lim = detail_limit(d)
+                assert f"id={cid}" in content and "get_tool_detail" in content, f"distance{d} 缺 id 提示"
+                assert len(content) < 3000, f"distance{d} 历史步应截断"
+                print(f"[结果·距离{d}] limit={lim} → 截断到{len(content)}字 ✓")
 
-        # —— 入参摘要（保 JSON 合法，截断长字符串值）——
+        # —— 入参：当前步完整 / 历史步摘要（保 JSON 合法）——
         a_msgs = [m for m in msgs if m["role"] == "assistant" and m.get("tool_calls")]
-        last_args = json.loads(a_msgs[-1]["tool_calls"][0]["function"]["arguments"])  # distance0 limit1500
-        assert len(last_args["code"]) < 3000 and last_args["code"].startswith("Y" * 50), "入参 code 该被截断"
-        assert "get_tool_detail" in last_args["code"], "入参截断应有 id 提示"
-        print(f"[入参摘要] distance0 的 code: 3000 → {len(last_args['code'])}，JSON 仍合法 ✓")
+        cur_args = json.loads(a_msgs[-1]["tool_calls"][0]["function"]["arguments"])    # distance0 完整
+        assert len(cur_args["code"]) == 3000, f"当前步入参应完整3000，实际{len(cur_args['code'])}"
+        hist_args = json.loads(a_msgs[0]["tool_calls"][0]["function"]["arguments"])    # distance2 摘要
+        assert len(hist_args["code"]) < 3000 and "get_tool_detail" in hist_args["code"], "历史步入参应截断"
+        print(f"[入参] 当前步完整 {len(cur_args['code'])} / 历史 distance2 截断到 {len(hist_args['code'])} ✓")
 
-        # —— get_tool_detail 当前步不摘要 ——
-        s2 = Session(system="sys", llm=_FakeLLM(), workspace=tmp)
-        s2.start_turn("拉详情")
-        _add_call(s2, "get_tool_detail", {"call_id": "c0"}, "Z" * 3000)   # distance0
-        g_content = [m for m in s2._steps_to_messages(s2._current.steps) if m["role"] == "tool"][0]["content"]
-        assert g_content == "Z" * 3000, f"get_tool_detail 当前步应完整3000，实际{len(g_content)}"
-        print(f"[get_tool_detail 当前步不摘要] 完整 {len(g_content)} 字 ✓")
-
-        # —— get_tool_detail 工具拉完整 ——
+        # —— get_tool_detail 工具：多 id（逗号/空格）+ 单 id 兼容 ——
         tools = make_tool_log_tools(FakeAgent(s))
         gtd = next(t for t in tools if t.name == "get_tool_detail")
-        out = gtd.run(call_id=c0)
-        assert "X" * 3000 in out and "完整详情" in out, "应拉回完整 3000 字详情"
+        out = gtd.run(call_id=f"{c1},{c2}")                 # 逗号分隔多 id
+        assert f"完整详情·{c1}" in out and f"完整详情·{c2}" in out and "X" * 3000 in out, "多 id 应都返回完整"
+        out_sp = gtd.run(call_id=f"{c0} {c1}")              # 空格分隔也行
+        assert f"完整详情·{c0}" in out_sp and f"完整详情·{c1}" in out_sp
+        assert "完整详情" in gtd.run(call_id=c0)             # 单 id 兼容
         assert "无此 id" in gtd.run(call_id="zzz")
-        print(f"[get_tool_detail 工具] 拉回 c0 完整详情 / 未知名报错 ✓")
+        print(f"[get_tool_detail 多id] 逗号/空格分隔批量返回 / 单id兼容 / 未知名报错 ✓")
 
-        # —— save/load 持久化（先把进行中的轮收尾进 turns，save 才会落盘）——
-        s._current.answer = "done"
-        s._current.summary = "测试摘要"
-        s.turns.append(s._current)
-        s._current = None
-        s.save("tl_test")
-        s_loaded = Session.load("tl_test", llm=_FakeLLM(), workspace=tmp)
-        assert len(s_loaded.toollog) == 3, f"load 后 toollog 应3条，实际{len(s_loaded.toollog)}"
-        n, a, r = s_loaded.toollog.view(c0)
-        assert n == "run_python" and r == "X" * 3000, "load 后详情应完整"
-        # load 后仍能按距离衰减组装
-        lm = s_loaded._steps_to_messages(s_loaded.turns[0].steps)
-        assert len([x for x in lm if x["role"] == "tool"]) == 3
-        print(f"[save/load] toollog {len(s_loaded.toollog)} 条完整恢复，组装正常 ✓")
-
-        # —— 旧格式存档迁移（ToolCall 有 name/args/result，无 call_id/toollog）——
-        old_data = {
-            "name": "old_session", "system": "sys", "global_summary": "",
-            "recent_window_turns": 4, "max_steps_per_turn": 80,
-            "turns": [{"user_message": "hi", "answer": "yo", "summary": "", "steps": [
-                {"reasoning": "", "tool_calls": [
-                    {"id": "call_x", "name": "run_python", "arguments": {"code": "old"}, "result": "old_result"}
-                ]}
-            ]}],
-            "extra_state": {},
-        }
-        from session import _repo_sessions_dir
-        sd = _repo_sessions_dir(tmp)
-        sd.mkdir(parents=True, exist_ok=True)
-        (sd / "old_session.json").write_text(json.dumps(old_data, ensure_ascii=False), encoding="utf-8")
-        s_old = Session.load("old_session", llm=_FakeLLM(), workspace=tmp)
-        assert len(s_old.toollog) == 1, f"旧存档应迁移出1条详情，实际{len(s_old.toollog)}"
-        tc = s_old.turns[0].steps[0].tool_calls[0]
-        assert tc.call_id, "旧 ToolCall 应迁移成 call_id"
-        assert s_old.toollog.view(tc.call_id) == ("run_python", {"code": "old"}, "old_result")
-        om = s_old._steps_to_messages(s_old.turns[0].steps)
-        assert any(x["role"] == "tool" for x in om), "旧存档迁移后能组装 tool 消息"
-        print(f"[旧格式迁移] 旧 ToolCall → call_id={tc.call_id}，详情入 toollog，组装 OK ✓")
+        # 注：save/load 持久化 + 旧格式迁移在 verify_events.py 覆盖（event-sourcing 模型）；
+        # 本脚本聚焦【距离衰减摘要 + get_tool_detail】的内存逻辑，不重复测持久化。
 
         print("\n🎉 验证全通过")
     finally:

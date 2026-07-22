@@ -156,15 +156,51 @@ class Session:
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
+        self._event_path = None   # 事件日志路径 <name>.events.jsonl；None 时事件 buffer 在内存（name 未就绪）
+        self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
 
     # ========== 构建 ==========
+    def _emit_event(self, event: dict):
+        """append 一个事件到 events.jsonl；name 未就绪(_event_path=None)时 buffer 在内存。
+        落盘失败不阻塞主循环（内存里 turns 仍是真相，事件只是持久化投影）。"""
+        if self._event_path is None:
+            self._event_buffer.append(event)
+        else:
+            try:
+                with open(self._event_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
+    def _bind_event_path(self, path):
+        """name 就绪后绑定 events.jsonl，把缓冲的事件 flush 进文件（append 模式，不覆盖已有）。"""
+        self._event_path = Path(path)
+        self._event_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._event_buffer:
+            try:
+                with open(self._event_path, "a", encoding="utf-8") as f:
+                    for e in self._event_buffer:
+                        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                self._event_buffer = []
+            except Exception:
+                pass
+
+    def record_snapshot(self, sha: str):
+        """记录工作区快照 sha 到当前 turn（检查点回溯用）。agent 打快照后调用。"""
+        if self._current is not None:
+            self._current.snapshot_sha = sha
+            self._emit_event({"event": "snapshot", "sha": sha})
+
     def start_turn(self, user_message: str, images: Optional[list] = None):
         self._current = Turn(user_message=user_message, images=images or [])
+        self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
 
     def add_step(self, step: Step):
         if self._current is None:
             raise RuntimeError("没有进行中的 Turn，请先 start_turn()")
         self._current.steps.append(step)
+        self._emit_event({"event": "step", "reasoning": step.reasoning or "",
+                          "call_ids": [tc.call_id for tc in step.tool_calls]})
 
     def finish_turn(self, answer: str, answer_reasoning: str = ""):
         if self._current is None:
@@ -177,8 +213,12 @@ class Session:
         except Exception:
             self._current.summary = ""
         self.turns.append(self._current)
+        finished = self._current
         self._current = None
-        self._ensure_name()            # 首轮自动命名（落盘前确保 name 就绪）
+        self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
+        self._emit_event({"event": "turn_end", "answer": finished.answer,
+                          "answer_reasoning": finished.answer_reasoning,
+                          "summary": finished.summary})
         self._refresh_summary_cache()  # 维护窗口外 summary 拼接（不截断 turns）
         self._autosave()               # 异步落盘
 
@@ -192,8 +232,12 @@ class Session:
         except Exception:
             self._current.summary = ""
         self.turns.append(self._current)
+        finished = self._current
         self._current = None
-        self._ensure_name()
+        self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
+        self._emit_event({"event": "turn_end", "answer": finished.answer,
+                          "answer_reasoning": finished.answer_reasoning,
+                          "summary": finished.summary})
         self._refresh_summary_cache()
         self._autosave()
 
@@ -205,6 +249,7 @@ class Session:
                 target_msg = t.user_message
                 self.turns = self.turns[:i]
                 self._current = None
+                self._emit_event({"event": "restore", "keep": i})   # 保留前 i 轮（append 历史，重放时截断）
                 self._refresh_summary_cache()
                 self._autosave()  # 回溯后也落盘
                 return target_msg
@@ -314,26 +359,23 @@ class Session:
                 continue
             distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
             limit = detail_limit(distance)
+            full = (distance == 0)   # 当前步：所有工具的入参+结果完整披露（模型刚调用、需完整反馈），不摘要
             a_tool_calls = []
             for i, tc in enumerate(step.tool_calls):
                 name, args, _r = self.toollog.view(tc.call_id)
+                args_str = (json.dumps(args, ensure_ascii=False) if full
+                            else self._summarize_args(args, limit, tc.call_id))
                 a_tool_calls.append({
                     "id": tc.call_id or str(i), "type": "function",
-                    "function": {"name": name,
-                                 "arguments": self._summarize_args(args, limit, tc.call_id)},
+                    "function": {"name": name, "arguments": args_str},
                 })
             a_msg = {"role": "assistant", "content": None, "tool_calls": a_tool_calls}
             if step.reasoning:
                 a_msg["reasoning_content"] = step.reasoning
             msgs.append(a_msg)
             for i, tc in enumerate(step.tool_calls):
-                tc_name, _a, result = self.toollog.view(tc.call_id)
-                # get_tool_detail 是"主动拉完整"的调用：所在步为当前步(distance=0)时不摘要，
-                # 否则拉完又被截断、失去意义；历史步的则照常按距离衰减摘要。
-                if distance == 0 and tc_name == "get_tool_detail":
-                    content = result or ""
-                else:
-                    content = self._summarize_text(result, limit, tc.call_id)
+                _n, _a, result = self.toollog.view(tc.call_id)
+                content = (result or "") if full else self._summarize_text(result, limit, tc.call_id)
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 
@@ -407,7 +449,11 @@ class Session:
             # fallback：用首轮 user_message 片段，再不行用时间戳
             seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
             self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-        # name 刚就绪：通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
+        # name 刚就绪：绑定 events/toollog 路径，把首轮缓冲的事件/详情 flush 落盘
+        sd = _repo_sessions_dir(self.workspace)
+        self._bind_event_path(sd / f"{self.name}.events.jsonl")
+        self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
+        # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
         if self._log_handler is not None:
             try:
                 self._log_handler.set_session(self.workspace, self.name)
@@ -501,16 +547,14 @@ class Session:
         # 锁保护「快照 turns + 序列化 + 写文件」整段：与 _autosave 的 daemon 线程、
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。
         with self._save_lock:
-            snapshot = list(self.turns)
-            toollog_snapshot = self.toollog.to_list()
+            # turns/toollog 不再存这里——turns 走 <name>.events.jsonl（append-only 事件流），
+            # toollog 走 <name>.toollog.jsonl。本文件只存小体量元信息+状态，全量写无压力。
             data = {
                 "name": self.name or Path(name).stem,
                 "system": self.system,
                 "global_summary": self.global_summary,
                 "recent_window_turns": self.recent_window_turns,
                 "max_steps_per_turn": self.max_steps_per_turn,
-                "turns": [asdict(t) for t in snapshot],   # 全量；ToolCall 只含 call_id，详情在 toollog 字段
-                "toollog": toollog_snapshot,              # 工具调用完整详情库（call_id -> name/arguments/result）
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
                 "saved_at": int(time.time()),
             }
@@ -530,9 +574,35 @@ class Session:
                 max_steps_per_turn=data.get("max_steps_per_turn", 80), workspace=ws)
         s.name = data.get("name") or path.stem   # 旧存档无 name → 用文件名，保证继续对话时覆盖同一文件
         s.global_summary = data.get("global_summary", "")
-        s.toollog.load_list(data.get("toollog", []))   # 先恢复新格式详情，再让 _turn_from_dict 迁移旧 ToolCall
-        s.turns = [_turn_from_dict(d, s.toollog) for d in data.get("turns", [])]
-        s.extra_state = data.get("extra_state", {})  # 附加运行时状态（plan/自主模式等）
+        s.extra_state = data.get("extra_state", {})
+        stem = path.stem
+        events_path = path.parent / f"{stem}.events.jsonl"
+        toollog_path = path.parent / f"{stem}.toollog.jsonl"
+        if events_path.exists():
+            # —— 新格式：重放事件流重建 turns（未完成 turn 进 turns，不丢弃）——
+            s.turns = _replay_events(_read_events(events_path))
+            if toollog_path.exists():
+                s.toollog.load_from_jsonl(toollog_path)
+            s.toollog.set_path(toollog_path)
+            s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
+        elif "turns" in data:
+            # —— 旧格式迁移：session.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
+            s.toollog.load_list(data.get("toollog", []))            # 0.7.4 嵌入字段进内存
+            old_turns = [_turn_from_dict(t, s.toollog) for t in data["turns"]]  # 更老的 ToolCall 在此迁移 record(buffer)
+            s.toollog.set_path(toollog_path)                         # flush toollog 内存（含迁移项）建 jsonl
+            s._bind_event_path(events_path)                          # 建 events.jsonl
+            for t in old_turns:                                      # 旧 turns → 事件 append
+                s._emit_event({"event": "turn_start", "user": t.user_message, "images": t.images})
+                if t.snapshot_sha:
+                    s._emit_event({"event": "snapshot", "sha": t.snapshot_sha})
+                for step in t.steps:
+                    s._emit_event({"event": "step", "reasoning": step.reasoning or "",
+                                   "call_ids": [tc.call_id for tc in step.tool_calls]})
+                s._emit_event({"event": "turn_end", "answer": t.answer,
+                               "answer_reasoning": t.answer_reasoning, "summary": t.summary})
+            s.turns = old_turns
+        else:
+            s.turns = []
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
         return s
 
@@ -575,6 +645,58 @@ def _turn_from_dict(d: dict, toollog) -> Turn:
                 step.tool_calls.append(ToolCall(call_id=cid))
         t.steps.append(step)
     return t
+
+
+def _read_events(path) -> list:
+    """流式读 events.jsonl 全部事件（每行一个 JSON）。"""
+    events = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return events
+
+
+def _replay_events(events: list) -> list:
+    """重放事件流重建 turns。
+    - turn_start/snapshot/step/turn_end 还原 Turn>Step>ToolCall 树；
+    - restore 事件截断（保留前 keep 轮）；
+    - 未完成 turn（有 turn_start 无 turn_end）→ 进 turns（无 answer，不丢弃，作历史保留）。"""
+    turns = []
+    cur = None
+    for e in events:
+        et = e.get("event")
+        if et == "turn_start":
+            if cur is not None:
+                turns.append(cur)   # 防御：上个 turn 未等到 turn_end
+            cur = Turn(user_message=e.get("user", ""), images=e.get("images", []),
+                       snapshot_sha="", steps=[])
+        elif et == "snapshot" and cur is not None:
+            cur.snapshot_sha = e.get("sha", "")
+        elif et == "step" and cur is not None:
+            cur.steps.append(Step(reasoning=e.get("reasoning", ""),
+                                  tool_calls=[ToolCall(call_id=c) for c in e.get("call_ids", [])]))
+        elif et == "turn_end":
+            if cur is not None:
+                cur.answer = e.get("answer", "")
+                cur.answer_reasoning = e.get("answer_reasoning", "")
+                cur.summary = e.get("summary", "")
+                turns.append(cur)
+                cur = None
+        elif et == "restore":
+            turns = turns[:e.get("keep", 0)]
+            cur = None   # 回溯丢弃进行中的 turn
+    if cur is not None:
+        turns.append(cur)   # 未完成 turn：不丢弃，作为无 answer 的历史 turn
+    return turns
 
 
 def _resolve_session_path(path_or_name: str, workspace=None) -> Path:

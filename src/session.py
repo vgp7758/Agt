@@ -6,11 +6,11 @@
   - 完整原文永不丢：self.turns 不再被截断，超出近期窗口的旧 Turn 只把它的 summary
     拼进 global_summary 喂给模型，原文仍完整留在内存 + 存档里，可按需召回。
   - 每轮 finish 时生成该轮 summary（贴在该轮最后，作语义索引 + 窗口外摘要源）。
-  - recall(query)：用关键词在全部历史里搜，召回匹配轮的完整上下文（不含 reasoning）。
+  - recall(query)：用关键词在全部历史里搜，召回匹配轮的完整上下文（默认不含 reasoning，contains_reasoning=True 时带上）。
   - 首轮自动命名（一句话总结）；每轮异步自动落盘；save/load 结构化持久化。
 
 设计要点（延续前面的教训）：
-  - reasoning 不进历史，只存 content/工具调用；召回时也丢弃 reasoning。
+  - reasoning 随每步存入 Step 并在近期窗口/当前轮回传（维持推理链连贯）；窗口外摘要、recall(默认)、单轮超 max_steps 截断时不带 reasoning。
   - 摘要源是该轮自带的 summary 字段，窗口外拼接便宜（纯字符串 join），超长才压缩并缓存。
 """
 from __future__ import annotations
@@ -156,6 +156,7 @@ class Session:
         self.name: str = ""                           # session 自动命名（首轮一句话总结）
         self._current: Optional[Turn] = None          # 进行中的轮（run 期间）
         self._save_lock = threading.Lock()            # 异步落盘的并发保护
+        self._name_lock = threading.Lock()            # _ensure_name / _ensure_name_early 并发保护
         self._summary_sig: tuple = ()                 # 窗口外 summary 缓存的失效签名
         self.extra_state: dict = {}                   # 附加运行时状态（Agent 经 _state_provider 收集：plan/自主模式等）
         self._state_provider: Optional[Callable[[], dict]] = None  # Agent 注册的附加状态收集回调
@@ -448,9 +449,12 @@ class Session:
     # ========== 自动命名 ==========
     def _ensure_name(self):
         """首轮完成后自动给 session 命名（一句话总结首轮）。name 一旦设定不再变。
-        在落盘前调用，确保 _autosave 有稳定文件名。"""
-        if self.name or not self.turns:
+        在落盘前调用，确保 _autosave 有稳定文件名。
+        若 _ensure_name_early 已在工具调用前异步拿到 name，则此处直接跳过。"""
+        if self.name:
             return
+        if not self.turns:
+            return  # 还没有完成的轮次，等早期命名或下一轮
         first = self.turns[0]
         prompt = ("用一句话（≤20个中文字）总结下面这轮对话的主题，作为会话标题。"
                   "只输出标题文字本身，不要引号、不要任何解释、不要句末标点：\n"
@@ -462,22 +466,71 @@ class Session:
         except Exception:
             title = ""
         safe = _NAME_SAFE_RE.sub("_", title)[:30].strip("_") if title else ""
-        if safe:
-            self.name = safe
-        else:
-            # fallback：用首轮 user_message 片段，再不行用时间戳
-            seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
-            self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-        # name 刚就绪：绑定 events/toollog 路径，把首轮缓冲的事件/详情 flush 落盘
-        sd = _repo_sessions_dir(self.workspace)
-        self._bind_event_path(sd / f"{self.name}.events.jsonl")
-        self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
-        # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
-        if self._log_handler is not None:
+        with self._name_lock:
+            if self.name:   # 双重检查：_ensure_name_early 可能已抢先拿到 name
+                return
+            if safe:
+                self.name = safe
+            else:
+                # fallback：用首轮 user_message 片段，再不行用时间戳
+                seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
+                self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
+            # name 刚就绪：绑定 events/toollog 路径，把首轮缓冲的事件/详情 flush 落盘
+            sd = _repo_sessions_dir(self.workspace)
+            self._bind_event_path(sd / f"{self.name}.events.jsonl")
+            self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
+            # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
+            if self._log_handler is not None:
+                try:
+                    self._log_handler.set_session(self.workspace, self.name)
+                except Exception as e:
+                    _LOG.warning("日志 handler 切换失败: %s", e)
+
+    def _ensure_name_early(self, user_message: str, reasoning: str = "", tool_names: list = None):
+        """第一次工具调用前异步为 session 命名 + 落盘（daemon 线程，不阻塞工具执行）。
+        用 LLM 的首轮思考 + 计划调用的工具名替代最终回答，提前推断对话主题。
+        与 _ensure_name 通过 _name_lock 互斥：先拿到锁的胜出，另一个在双重检查后跳过。"""
+        if self.name:
+            return
+
+        def _do_name():
+            # 快速检查（无锁）：大概率 _ensure_name 还没跑
+            if self.name:
+                return
+            tools_hint = f" 计划使用工具: {', '.join(tool_names[:5])}" if tool_names else ""
+            prompt = ("用一句话（≤20个中文字）总结下面这段对话的主题，作为会话标题。"
+                      "只输出标题文字本身，不要引号、不要任何解释、不要句末标点：\n"
+                      f"用户: {user_message[:200]}\n"
+                      f"思考: {reasoning[:200] or '(无)'}{tools_hint}")
+            title = ""
             try:
-                self._log_handler.set_session(self.workspace, self.name)
-            except Exception as e:
-                _LOG.warning("日志 handler 切换失败: %s", e)
+                title = self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
+                title = title.split("\n")[0].strip().strip("。.！!？?\"'""''")
+            except Exception:
+                title = ""
+            safe = _NAME_SAFE_RE.sub("_", title)[:30].strip("_") if title else ""
+            with self._name_lock:
+                if self.name:   # 双重检查：_ensure_name 可能已抢先拿到 name
+                    return
+                if safe:
+                    self.name = safe
+                else:
+                    seed = _NAME_SAFE_RE.sub("", user_message[:12]).strip()
+                    self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
+                # name 刚就绪：绑定 events/toollog 路径，把缓冲的事件/详情 flush 落盘
+                sd = _repo_sessions_dir(self.workspace)
+                self._bind_event_path(sd / f"{self.name}.events.jsonl")
+                self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
+                # 通知日志 handler flush 缓冲并切到 <name>.log
+                if self._log_handler is not None:
+                    try:
+                        self._log_handler.set_session(self.workspace, self.name)
+                    except Exception as e:
+                        _LOG.warning("日志 handler 切换失败: %s", e)
+            # 落盘放锁外：_autosave 内部用 _save_lock（不同锁），避免死锁且不阻塞命名线程
+            self._autosave()
+
+        threading.Thread(target=_do_name, daemon=True).start()
 
     # ========== 异步自动落盘 ==========
     def _capture_state(self):
@@ -505,8 +558,9 @@ class Session:
         threading.Thread(target=_write, daemon=True).start()
 
     # ========== 召回（Agent / 用户按需查完整原文）==========
-    def recall(self, query: str) -> str:
-        """按关键词在【全部】历史轮次里搜索，返回匹配轮的完整上下文（不含 reasoning）。
+    def recall(self, query: str, contains_reasoning: bool = False) -> str:
+        """按关键词在【全部】历史轮次里搜索，返回匹配轮的完整上下文。
+        contains_reasoning=False（默认）不含思考过程；True 则带上每步 reasoning 与回答的 reasoning。
         匹配域：summary + user_message + answer（大小写不敏感子串，中文直接子串）。"""
         if not self.turns:
             return "（当前会话还没有历史轮次）"
@@ -519,7 +573,7 @@ class Session:
             return f"未找到包含「{query}」的历史轮次。可用 /recall 换个关键词，或 /show 看概览。"
         out, total, CAP = [f"找到 {len(hits)} 轮匹配「{query}」的历史："], 0, 4000
         for i, t in hits:
-            block = self._format_turn_full(i + 1, t)
+            block = self._format_turn_full(i + 1, t, contains_reasoning)
             if total + len(block) > CAP:
                 out.append(f"\n…（还有 {len(hits) - len(out) + 1} 轮命中已省略）")
                 break
@@ -527,19 +581,23 @@ class Session:
             total += len(block)
         return "\n".join(out)
 
-    def _format_turn_full(self, n: int, t: Turn) -> str:
-        """把一轮格式化成可读文本（召回展示用）。不含 reasoning。"""
+    def _format_turn_full(self, n: int, t: Turn, contains_reasoning: bool = False) -> str:
+        """把一轮格式化成可读文本（召回展示用）。contains_reasoning=True 时带上每步与回答的 reasoning。"""
         lines = [f"━━━ 【第{n}轮】{t.summary or '(无摘要)'}", f"用户: {t.user_message}"]
         for step in t.steps:
+            if contains_reasoning and step.reasoning:
+                lines.append(f"  💭 {step.reasoning}")
             for tc in step.tool_calls:
-                n, a, r = self.toollog.view(tc.call_id)
+                name, a, r = self.toollog.view(tc.call_id)
                 args_s = json.dumps(a, ensure_ascii=False)
-                lines.append(f"  🔧 {n}({args_s}) → {(r or '')[:300]}")
+                lines.append(f"  🔧 {name}({args_s}) → {(r or '')[:300]}")
         lines.append(f"回答: {t.answer}")
+        if contains_reasoning and t.answer_reasoning:
+            lines.append(f"  💭(回答推理) {t.answer_reasoning}")
         return "\n".join(lines)
 
     def to_history(self) -> list:
-        """导出全量历史（结构化），供 webui resume 后原样渲染。不含 reasoning。"""
+        """导出全量历史（结构化），供 webui resume 后原样渲染。含每步 reasoning 与回答的 reasoning。"""
         out = []
         for i, t in enumerate(self.turns):
             steps = []
@@ -549,9 +607,10 @@ class Session:
                     n, a, r = self.toollog.view(tc.call_id)
                     tcs.append({"name": n, "arguments": a, "result": (r or "")[:500]})
                 if tcs:
-                    steps.append({"tool_calls": tcs})
+                    steps.append({"tool_calls": tcs, "reasoning": s.reasoning or ""})
             out.append({"turn": i + 1, "user": t.user_message, "answer": t.answer,
-                        "summary": t.summary, "steps": steps})
+                        "summary": t.summary, "steps": steps,
+                        "answer_reasoning": t.answer_reasoning or ""})
         return out
 
     # ========== 持久化 ==========

@@ -624,6 +624,15 @@ class Agent:
 
                         # 执行工具
                         calls = resp.tool_calls
+                        # 首轮首次工具调用前：提前为 session 命名并异步落盘（不阻塞工具执行）
+                        if not self.session.name:
+                            tool_names = [tc["name"] for tc in calls]
+                            self.session._ensure_name_early(
+                                user_message=(self.session._current.user_message
+                                             if self.session._current else msg),
+                                reasoning=resp.reasoning or "",
+                                tool_names=tool_names
+                            )
                         step = Step(reasoning=resp.reasoning)
                         # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
                         import real_tools as _rt

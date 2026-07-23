@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
+from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError, BadRequestError
 
 import config
 
@@ -222,7 +222,10 @@ class LLMClient:
                 if len(self.api_tokens) > 1:
                     self._rotate_token()
                 return resp
-            except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError) as e:
+            except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError, BadRequestError) as e:
+                # BadRequestError 也触发回退：某些模型会因请求格式拒绝整个请求（典型如 DeepSeek 思考模式
+                # 要求工具调用轮回传 reasoning_content；跨模型混用、历史缺 reasoning 时会 400）。
+                # 换下一个模型即可，不该让单模型的可恢复拒绝把整轮/整条链崩掉。
                 # 先试下一个 api_token（同模型多账号）
                 if isinstance(e, RateLimitError) and tried_tokens < len(self.api_tokens) - 1:
                     tried_tokens += 1

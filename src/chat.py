@@ -25,7 +25,7 @@ from download import make_download_tools
 from toollog import make_tool_log_tools
 from wiki import make_wiki_tools
 from rag import make_rag_tools
-from commands import CommandContext, build_default_registry
+from commands import CommandContext, build_default_registry, apply_config
 from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
 from multiagent import make_subagent_tools
@@ -199,6 +199,13 @@ def main():
     if broken:
         print(f"⚠️ {len(broken)} 个工作流加载失败：{broken}")
     registry = build_default_registry()
+
+    # 加载持久化运行时设置（回退链/策略/max_steps/temperature/enable_thinking 等；存在 ~/.agt/settings.json）。
+    # CLI 之前漏了这步 → webui 配的 provider 回退链在命令行不生效（glm 失败无回退）。与 web.py 保持一致。
+    saved = config.load_runtime_settings()
+    if saved:
+        for line in apply_config(agent, saved):
+            print(line)
 
     # REPL 单消费者队列驱动：input 线程 + inbox 轮询线程 都往 work_q 喂，
     # 主线程串行消费——保证任何时候只有一个 agent.run 在跑（run 非线程安全）。

@@ -298,11 +298,13 @@ function renderHistory(turns){
     addUserBubble(t.user||'', null);
     newTurn();
     (t.steps||[]).forEach(s=>{
+      if(s.reasoning) addTrace('think','💭 '+s.reasoning);
       (s.tool_calls||[]).forEach(tc=>{
         renderToolCall(tc.name, tc.arguments);
         if(tc.result) addTrace('res', '→ '+tc.result);
       });
     });
+    if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
     if(curTurn.traceBox.children.length===0 && curTurn.det) curTurn.det.style.display='none';
     finishAnswer(t.answer||'(无回答)');
   });

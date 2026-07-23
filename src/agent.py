@@ -25,6 +25,7 @@ from background import ServiceManager, Scheduler
 from llm_client import LLMClient
 from log import configure_logging
 from longterm_memory import LongTermMemory
+from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block
 from session import Session, Step, ToolCall
 from tools import Toolbox
 
@@ -96,6 +97,8 @@ class Agent:
         self.ltm = LongTermMemory(self.session.workspace)
         self.session._ltm_static_provider = self._ltm_static_block
         self.session._ltm_episodic_provider = self._ltm_episodic_block
+        # 计划注入：加入计划后每轮把【当前计划】块注入 SYSTEM（id/title/design/进度），退出后为空
+        self.session._plan_provider = self._plan_system_block
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
         self._log_handler = configure_logging()
         self._log_handler.set_session(self.session.workspace, self.session.name)
@@ -107,7 +110,9 @@ class Agent:
         self.scheduler = Scheduler(self)
         self.cumulative_tokens = 0
         self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
-        self.plan: list = []        # 计划清单（create_plan/update_plan 维护）
+        self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
+        self.active_plan_id: Optional[str] = None  # 当前活动计划 id（= 文件名 stem）；None=无活动计划
+        self.active_plan: Optional[dict] = None     # 当前活动计划完整 dict（单一事实源：id/title/design/steps/...）
         # 纯自主模式状态
         self.autonomous_mode: bool = False
         self.autonomous_end_time: Optional[datetime] = None
@@ -225,7 +230,7 @@ class Agent:
     def capture_runtime_state(self) -> dict:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
         return {
-            "plan": [dict(s) for s in self.plan],
+            "plan_id": self.active_plan_id,   # 只存活动计划文件名；计划本体在 plans/<plan_id>.json
             "autonomous_mode": self.autonomous_mode,
             "autonomous_end_time": self.autonomous_end_time.isoformat() if self.autonomous_end_time else None,
             "autonomous_prompt": self.autonomous_prompt,
@@ -234,8 +239,8 @@ class Agent:
 
     def restore_runtime_state(self, state: dict):
         """从存档恢复运行时状态（resume / 切换 session 后调用）。"""
+        restore_active_plan(self, state or {})   # 活动计划：按 plan_id 从文件读回；空存档→清空；旧格式自动迁移
         if state:
-            self.plan = [dict(s) for s in state.get("plan", [])]
             self.autonomous_mode = bool(state.get("autonomous_mode", False))
             end = state.get("autonomous_end_time")
             self.autonomous_end_time = datetime.fromisoformat(end) if end else None
@@ -253,6 +258,7 @@ class Agent:
         session._system_extra_provider = self._runtime_system_extra
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
+        session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
         session._log_handler = self._log_handler                   # 日志 handler 跟到新 session
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)
@@ -261,9 +267,19 @@ class Agent:
         """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""
         if getattr(self, "on_event", None):
             try:
-                self.on_event({"type": "plan", "plan": [dict(s) for s in self.plan]})
+                self.on_event({"type": "plan", "plan": [dict(s) for s in self.plan],
+                               "plan_id": self.active_plan_id,
+                               "plan_title": (self.active_plan or {}).get("title", "")})
             except Exception:
                 pass
+
+    def _plan_system_block(self) -> str:
+        """当前活动计划的 SYSTEM 注入块（加入计划后每轮注入；退出/无计划返回 ''，session 不注入）。
+        格式化逻辑在 plan_tools._format_plan_block，这里只做转发 + 异常兜底。"""
+        try:
+            return _format_plan_block(self)
+        except Exception:
+            return ""
 
     # ========== 后台消息 inbox（producer → inbox → 串行消费者 → run） ==========
     def push_message(self, msg: str, source: str = "background"):

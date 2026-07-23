@@ -323,30 +323,36 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
 
 def web_search(query: str) -> str:
     """用 DuckDuckGo 搜索，返回前几条结果的标题/链接/摘要。无需 API key。
-    注意：搜索引擎可能临时限流；国内网络下可能需要代理。"""
+    注意：搜索引擎可能临时限流；国内网络下可能需要代理。
+    返回 JSON 字符串 {success, count, result, error}——success 为结构化输出字段，
+    工作流 plugin 节点可直接引用 web_search_node.success 判断成功与否。"""
+    import json as _json
     import warnings
+    out = {"success": False, "count": 0, "result": "", "error": ""}
     try:
         try:
             from ddgs import DDGS               # 新包名
         except ImportError:
             from duckduckgo_search import DDGS  # 旧包名（会触发重命名警告）
     except ImportError:
-        return "[web_search 不可用] 未安装搜索库（pip install ddgs）"
+        out["error"] = "未安装搜索库（pip install ddgs）"
+        return _json.dumps(out, ensure_ascii=False)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")      # 屏蔽旧包的重命名警告
             results = list(DDGS().text(query, max_results=5))
     except Exception as e:
-        return f"[搜索失败] {type(e).__name__}: {e}\n（搜索引擎可能限流，或国内需代理）"
-    if not results:
-        return f"(没有搜到关于 '{query}' 的结果)"
-    lines = []
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "")
-        url = r.get("href") or r.get("link") or ""
-        body = r.get("body") or r.get("snippet") or ""
-        lines.append(f"{i}. {title}\n   {url}\n   {body}")
-    return "\n\n".join(lines)
+        out["error"] = f"{type(e).__name__}: {e}（搜索引擎可能限流，或国内需代理）"
+        return _json.dumps(out, ensure_ascii=False)
+    out["success"] = True
+    out["count"] = len(results)
+    if results:
+        lines = [f"{i}. {r.get('title','')}\n   {(r.get('href') or r.get('link') or '')}\n   {(r.get('body') or r.get('snippet') or '')}"
+                 for i, r in enumerate(results, 1)]
+        out["result"] = "\n\n".join(lines)
+    else:
+        out["result"] = f"没有搜到关于 '{query}' 的结果"
+    return _json.dumps(out, ensure_ascii=False)
 
 
 def _html_to_text(html: str) -> tuple[str, str]:
@@ -1260,6 +1266,14 @@ def sleep(seconds: float) -> str:
     return f"已等待 {s:g} 秒"
 
 
+# web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
+WEB_SEARCH_OUTPUTS = [
+    {"name": "success", "type": "boolean", "description": "搜索是否成功"},
+    {"name": "count", "type": "integer", "description": "结果条数"},
+    {"name": "result", "type": "string", "description": "格式化的结果文本（标题/链接/摘要）"},
+    {"name": "error", "type": "string", "description": "失败原因（成功时为空）"},
+]
+
 REAL_TOOLS = Toolbox(
     Tool(run_python),
     Tool(read_file),
@@ -1267,7 +1281,7 @@ REAL_TOOLS = Toolbox(
     Tool(edit),
     Tool(list_dir),
     Tool(grep),
-    Tool(web_search),
+    Tool(web_search, outputs=WEB_SEARCH_OUTPUTS),
     Tool(open_url),
     Tool(read_workflow_spec),
     Tool(read_workflow_demo),

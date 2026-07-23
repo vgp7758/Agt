@@ -34,9 +34,10 @@ def _type_to_schema(ptype):
 
 
 class Tool:
-    def __init__(self, func: Callable):
+    def __init__(self, func: Callable, outputs: list = None):
         self.func = func
         self.name = func.__name__
+        self.user_outputs = outputs   # 显式输出 schema（优先于返回注解推断；供 plugin 节点 outputs / 编辑器补全）
         # docstring 第一行作为工具描述（模型靠它判断"该不该调这个工具"）
         first_line = (func.__doc__ or "").strip().split("\n", 1)[0].strip()
         if not first_line:

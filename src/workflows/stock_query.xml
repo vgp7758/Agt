@@ -1,21 +1,16 @@
-<workflow name="stock_query" description="股票实时查询工作流范例（selector/http/aggregator/end 等节点正确写法演示）" auto="false">
-
-  <!-- 1. Start: 输入股票名称 -->
-  <node id="100001" type="start">
+<workflow name="stock_query" description="股票实时查询工作流范例（selector/http/aggregator/end 等节点正确写法演示）">
+  <node id="100001" type="start" title="start" x="120" y="80">
     <out name="stock_name" type="string" required="true"/>
   </node>
-
-  <!-- 2. Plugin: web_search 搜索股票代码（返回纯文本在 raw；纯文本工具不声明额外 out，下游直接 ref=节点.raw） -->
-  <node id="200001" type="plugin" toolName="web_search">
-    <in name="query" ref="100001.stock_name"/>
+  <node id="200001" type="plugin" title="plugin" x="420" y="80" toolName="web_search">
+    <in name="query" type="string" ref="100001.stock_name"/>
+    <out name="result" type="string"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- 3. Code: 解析搜索结果，提取股票代码，构造 API URL -->
-  <node id="300001" type="code">
-    <in name="search_result" ref="200001.raw"/>
-    <in name="stock_name" ref="100001.stock_name"/>
-    <code><![CDATA[
-import re
+  <node id="300001" type="code" title="code" x="720" y="80">
+    <in name="search_result" type="string" ref="200001.result"/>
+    <in name="stock_name" type="string" ref="100001.stock_name"/>
+    <code language="3"><![CDATA[import re
 
 async def main(args):
     search_result = args.params.get("search_result", "")
@@ -49,6 +44,7 @@ async def main(args):
             "stock_code": stock_code,
             "display_code": code,
             "api_url": api_url,
+            "codes": codes,
             "error": ""
         }
     else:
@@ -65,26 +61,23 @@ async def main(args):
     <out name="display_code" type="string"/>
     <out name="api_url" type="string"/>
     <out name="error" type="string"/>
+    <out name="codes" type="list"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- 4. Selector: 判断是否找到代码 -->
-  <node id="400001" type="selector">
-    <branch op="11"><left ref="300001.found"/></branch>   <!-- found 为真 → true 端口；不成立自动走 false（无需空 branch） -->
+  <node id="400001" type="selector" title="selector" x="1320" y="80">
+    <branch><cond op="11" left="695903.output.found" right="" left_type="boolean"/></branch>
   </node>
-
-  <!-- 5. HTTP: 查询行情数据（<in> 声明输入变量，URL 用 {{变量名}} 引用，同 text/llm） -->
-  <node id="500001" type="http">
-    <in name="stock_code" ref="300001.stock_code"/>
+  <node id="500001" type="http" title="http" x="1620" y="80">
+    <in name="stock_code" type="string" ref="695903.output.stockCode"/>
     <method>GET</method>
     <url><![CDATA[http://qt.gtimg.cn/q={{stock_code}}]]></url>
+    <batch enabled="false"/>
   </node>
-
-  <!-- 6. Code: 解析返回的行情数据 -->
-  <node id="600001" type="code">
-    <in name="response" ref="500001.body"/>
-    <in name="stock_code" ref="300001.stock_code"/>
-    <in name="display_code" ref="300001.display_code"/>
-    <code><![CDATA[
+  <node id="600001" type="code" title="code" x="1920" y="80">
+    <in name="response" type="string" ref="500001.body"/>
+    <in name="stock_code" type="string" ref="695903.output.stockCode"/>
+    <in name="display_code" type="string" ref="695903.output.displayCode"/>
+    <code language="3"><![CDATA[
 import re
 
 async def main(args):
@@ -162,21 +155,20 @@ async def main(args):
     <out name="amount" type="string"/>
     <out name="change_amount" type="string"/>
     <out name="change_percent" type="string"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- 7. Text: 成功时输出格式化的行情信息 -->
-  <node id="700001" type="text">
-    <in name="name" ref="600001.name"/>
-    <in name="stock_code" ref="600001.stock_code"/>
-    <in name="price" ref="600001.price"/>
-    <in name="change_amount" ref="600001.change_amount"/>
-    <in name="change_percent" ref="600001.change_percent"/>
-    <in name="open_price" ref="600001.open_price"/>
-    <in name="high" ref="600001.high"/>
-    <in name="low" ref="600001.low"/>
-    <in name="yesterday_close" ref="600001.yesterday_close"/>
-    <in name="volume" ref="600001.volume"/>
-    <in name="amount" ref="600001.amount"/>
+  <node id="700001" type="text" title="text" x="2220" y="80">
+    <in name="name" type="string" ref="600001.name"/>
+    <in name="stock_code" type="string" ref="600001.stock_code"/>
+    <in name="price" type="string" ref="600001.price"/>
+    <in name="change_amount" type="string" ref="600001.change_amount"/>
+    <in name="change_percent" type="string" ref="600001.change_percent"/>
+    <in name="open_price" type="string" ref="600001.open_price"/>
+    <in name="high" type="string" ref="600001.high"/>
+    <in name="low" type="string" ref="600001.low"/>
+    <in name="yesterday_close" type="string" ref="600001.yesterday_close"/>
+    <in name="volume" type="string" ref="600001.volume"/>
+    <in name="amount" type="string" ref="600001.amount"/>
     <result><![CDATA[📊 股票实时行情
 ━━━━━━━━━━━━━━━━━━━━
 🏷️ 名称：{{name}}（{{stock_code}}）
@@ -188,24 +180,18 @@ async def main(args):
 📊 成交量：{{volume}} 手
 💵 成交额：{{amount}} 万元]]></result>
   </node>
-
-  <!-- 8. Text: 失败时输出错误信息 -->
-  <node id="800001" type="text">
-    <in name="error" ref="300001.error"/>
+  <node id="800001" type="text" title="text" x="1620" y="190">
+    <in name="error" type="string" ref="300001.error"/>
     <result><![CDATA[❌ 查询失败：{{error}}]]></result>
   </node>
-
-  <!-- 9. Aggregator: 合并两个分支（text 节点输出字段名固定为 output） -->
-  <node id="850001" type="aggregator">
-    <group name="success"><var ref="700001.output"/></group>   <!-- group 内用 <var>（非 variable）；每个 group 自动同名输出 -->
+  <node id="850001" type="aggregator" title="aggregator" x="2520" y="80">
+    <group name="success"><var ref="700001.output"/></group>
     <group name="error"><var ref="800001.output"/></group>
   </node>
-
-  <!-- 10. Code: 取实际有值的结果输出 -->
-  <node id="860001" type="code">
-    <in name="success_val" ref="850001.success"/>
-    <in name="error_val" ref="850001.error"/>
-    <code><![CDATA[
+  <node id="860001" type="code" title="code" x="2820" y="80">
+    <in name="success_val" type="string" ref="850001.success"/>
+    <in name="error_val" type="string" ref="850001.error"/>
+    <code language="3"><![CDATA[
 async def main(args):
     success = args.params.get("success_val")
     error = args.params.get("error_val")
@@ -215,16 +201,24 @@ async def main(args):
 ]]></code>
     <out name="result" type="string"/>
   </node>
-
-  <!-- 11. End -->
-  <node id="900001" type="end">
-    <out name="result" ref="860001.result"/>   <!-- 返回绑定写在 <out ref>；end 不读 <in>；terminatePlan 自动为 returnVariables -->
+  <node id="900001" type="end" title="end" x="3120" y="80">
+    <out name="result" ref="860001.result" type="string"/>
   </node>
+  <node id="695903" type="llm" title="LLM" x="1020" y="80">
+    <in name="codes" type="list" ref="300001.codes"/>
+    <in name="stock_name" type="string" ref="100001.stock_name"/>
+    <param name="prompt" type="string"><![CDATA[股票名称：
+{{stock_name}}
 
-  <!-- Edges -->
-  <edge from="100001" to="200001"/>
+疑似股票代码的字符:
+{{codes}}]]></param>
+    <param name="systemPrompt" type="string"><![CDATA[你是一个投资帮手，从提供的股票名称和很多字符串中找出该股票的股票代码]]></param>
+    <param name="thinking" type="string"><![CDATA[false]]></param>
+    <param name="timeout" type="string"><![CDATA[30]]></param>
+    <out name="output" type="object"><field name="found" type="boolean" description="是否存在股票代码"/><field name="displayCode" type="string" description="显示的6位股票代码"/><field name="stockCode" type="string" description="完整8位股票代码，如sh600XXX / sz000XXX"/></out>
+    <batch enabled="false"/>
+  </node>
   <edge from="200001" to="300001"/>
-  <edge from="300001" to="400001"/>
   <edge from="400001" to="500001" port="true"/>
   <edge from="400001" to="800001" port="false"/>
   <edge from="500001" to="600001"/>
@@ -233,4 +227,7 @@ async def main(args):
   <edge from="800001" to="850001"/>
   <edge from="850001" to="860001"/>
   <edge from="860001" to="900001"/>
+  <edge from="300001" to="695903"/>
+  <edge from="695903" to="400001"/>
+  <edge from="100001" to="200001"/>
 </workflow>

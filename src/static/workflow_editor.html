@@ -302,9 +302,13 @@ function syncToolNode(n){
     if(!existing.has(p.name))
       params.push({name:p.name, input:{type:_mapToolType(p.type), value:{type:'literal',content:''}}});
   });
+  // outputs：空则用工具默认；已有则补缺失字段（工具 schema 更新后已有节点自动补新字段，不覆盖用户已声明）
+  const touts=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
   if(!n.data.outputs || !n.data.outputs.length){
-    n.data.outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}])
-      .map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
+    n.data.outputs=touts;
+  }else{
+    const have=new Set(n.data.outputs.map(o=>o.name));
+    touts.forEach(o=>{if(!have.has(o.name))n.data.outputs.push(o);});
   }
 }
 

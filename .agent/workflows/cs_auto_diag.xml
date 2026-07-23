@@ -1,0 +1,67 @@
+<workflow name="cs_auto_diag" description="写 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool">
+  <!-- after_tool 钩子注入的上下文 -->
+  <node id="100001" type="start">
+    <out name="tool_name" type="string"/>
+    <out name="tool_args" type="string"/>
+  </node>
+
+  <!-- 判断是否为 .cs 写入，并提取路径 -->
+  <node id="110001" type="code">
+    <in name="tool_name" ref="100001.tool_name"/>
+    <in name="tool_args" ref="100001.tool_args"/>
+    <code language="3"><![CDATA[
+import json
+async def main(args) -> dict:
+    name = (args.params.get("tool_name") or "").strip()
+    raw = (args.params.get("tool_args") or "").strip()
+    try:
+        a = json.loads(raw) if raw else {}
+    except Exception:
+        a = {}
+    path = str(a.get("path") or "")
+    is_cs = name in ("write_file", "edit") and path.lower().endswith(".cs")
+    return {"is_cs": is_cs, "file": path}
+]]></code>
+    <out name="is_cs" type="boolean"/>
+    <out name="file" type="string"/>
+  </node>
+
+  <!-- 仅 .cs 写入走诊断分支（true）；否则 false 直接到结束（inject/result 引用未执行的节点 → None → 不注入） -->
+  <node id="120001" type="selector">
+    <branch>
+      <cond op="1" left="110001.is_cs" right="true" left_type="boolean" right_type="boolean"/>
+    </branch>
+  </node>
+
+  <!-- 调 cs_diag 编译诊断（MCP 工具，csharp-lsp 未装配时此处报错→run_hook 捕获，不注入） -->
+  <node id="130001" type="plugin" toolName="__mcp__csharp-lsp__cs_diag">
+    <in name="file" type="string" ref="110001.file"/>
+    <out name="raw" type="string"/>
+  </node>
+
+  <!-- 检查诊断输出：仅含 [ERROR] 才 inject=True（无诊断/仅 WARN/INFO 不注入，避免噪音） -->
+  <node id="140001" type="code">
+    <in name="diag" ref="130001.raw"/>
+    <code language="3"><![CDATA[
+async def main(args) -> dict:
+    diag = args.params.get("diag") or ""
+    has_error = "[ERROR]" in diag
+    return {"inject": has_error, "result": diag}
+]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+  </node>
+
+  <!-- 结束：inject/result 取自 140001（诊断分支）；跳过分支 140001 未执行 → None → 不注入 -->
+  <node id="900001" type="end">
+    <out name="inject" type="boolean" ref="140001.inject"/>
+    <out name="result" type="string" ref="140001.result"/>
+  </node>
+
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120001"/>
+  <edge from="120001" to="130001" port="true"/>
+  <edge from="130001" to="140001"/>
+  <edge from="140001" to="900001"/>
+  <edge from="120001" to="900001" port="false"/>
+</workflow>

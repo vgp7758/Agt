@@ -142,10 +142,11 @@ def _cmd_show(ctx: CommandContext, args):
 
 def _cmd_reset(ctx: CommandContext, args):
     from session import Session  # 局部 import 避免循环
+    from plan_tools import clear_active_plan
     ctx.agent.set_session(Session(
         system=ctx.agent.base_system, llm=ctx.agent.llm,
         recent_window_turns=ctx.agent.session.recent_window_turns))
-    ctx.agent.plan = []                # 重置：连计划、自主模式一起清空
+    clear_active_plan(ctx.agent)       # 重置：连计划（id/active_plan 一并清）、自主模式一起清空
     ctx.agent.exit_autonomous_mode()
     ctx.agent.goal_check_script = ""
     print("🔄 已重置会话（历史、计划、自主模式均清空，system 保留）。")
@@ -259,7 +260,7 @@ def _cmd_reload_mcp(ctx: CommandContext, args):
 
 def _cmd_model(ctx: CommandContext, args):
     import config
-    from models import MODELS
+    MODELS = config.MODELS   # 用 config.MODELS（含 WebUI 热更新的用户模型），而非静态 models.py 兜底文件
     positional = _parse_args(args)[0]
     if not positional:
         print("可用模型（← 当前）:")

@@ -27,7 +27,7 @@ from agent_config import SKILL_TOOLS
 from commands import CommandContext, build_default_registry, apply_config, read_config
 from mcp_client import MCPManager, make_mcp_tools
 from multiagent import make_subagent_tools
-from plan_tools import make_plan_tools
+from plan_tools import make_plan_tools, clear_active_plan
 from memory_tools import make_recall_tools
 from longterm_memory import make_ltm_tools
 from download import make_download_tools
@@ -609,7 +609,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         from session import Session
         agent.set_session(Session(agent.base_system, llm=agent.llm,
                                   recent_window_turns=agent.session.recent_window_turns))
-        agent.plan = []                  # 新会话：清空计划与自主模式
+        clear_active_plan(agent)         # 新会话：清空计划（id/active_plan 一并清）与自主模式
         agent.exit_autonomous_mode()
         agent.goal_check_script = ""
         await _send(ws, {"type": "system", "text": "🔄 已创建新会话。"})

@@ -98,7 +98,7 @@
     <span class="auto-badge hidden" id="autoBadge">🔁 自主模式</span>
   </header>
 
-  <div id="planPanel" class="plan-panel" style="display:none"><details open><summary>📋 计划清单</summary><div id="planList"></div></details></div>
+  <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="wfPanel" class="plan-panel" style="display:none"><details open>
@@ -481,12 +481,27 @@ function attachRestoreButton(bubble, sha){
   bubble.insertBefore(btn, bubble.firstChild);
 }
 
-function renderPlan(plan){
+function renderPlan(plan, planId, planTitle){
   const panel=document.getElementById('planPanel');
   const list=document.getElementById('planList');
+  const sum=document.getElementById('planSummary');
   list.innerHTML='';
-  if(!plan || !plan.length){ panel.style.display='none'; return; }
+  if(!plan || !plan.length){
+    panel.style.display='none';
+    if(sum) sum.textContent='📋 计划清单';
+    return;
+  }
   panel.style.display='block';
+  if(sum){
+    sum.textContent='';
+    const t=document.createElement('span'); t.textContent='📋 '+(planTitle||'计划清单');
+    sum.appendChild(t);
+    if(planId){
+      const id=document.createElement('span'); id.textContent=planId;
+      id.style.cssText='color:#8a9099;font-weight:400;font-size:12px;margin-left:6px';
+      sum.appendChild(id);
+    }
+  }
   const icon={'pending':'☐','in_progress':'▶','completed':'✅'};
   plan.forEach((s,i)=>{
     const row=document.createElement('div'); row.className='plan-item';
@@ -567,7 +582,7 @@ ws.onmessage=(ev)=>{
       toast(m.text || (m.ok ? '✅ 已提交' : '❌ 提交失败'));
       break;
     case 'plan':
-      renderPlan(m.plan);
+      renderPlan(m.plan, m.plan_id, m.plan_title);
       break;
     case 'sessions':
       if(m.names){

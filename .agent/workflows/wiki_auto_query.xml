@@ -1,0 +1,110 @@
+<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki：意图识别→提关键字→wiki 全文搜索→相关性评估→top-K 注入（before_turn 钩子，默认关）" hook="before_turn" enabled="false">
+  <!-- before_turn 钩子注入的用户消息 -->
+  <node id="100001" type="start">
+    <out name="user_message" type="string"/>
+  </node>
+
+  <!-- LLM1：意图识别 + 关键字提取（严格 JSON；结构化输出 related/keywords） -->
+  <node id="110001" type="llm">
+    <in name="user_message" ref="100001.user_message"/>
+    <param name="systemPrompt"><![CDATA[你是一个意图识别器。判断用户消息是否与代码仓库/repo 的内容相关（如询问代码、功能、架构、bug、如何实现某事、某个模块怎么用）。
+只输出一个 JSON 对象，不要任何解释或 markdown 代码块：
+{"related": true, "keywords": ["关键字1","关键字2"]}
+规则：
+- related：是否与 repo 内容相关。纯闲聊/打招呼/与代码仓库无关 → false。
+- keywords：若 related=true，提取 1-4 个适合在 wiki 里搜索的关键字（中英文均可，去掉标点停用词）；related=false 时给空数组 []。]]></param>
+    <param name="prompt"><![CDATA[{{user_message}}]]></param>
+    <param name="temperature" type="float">0.1</param>
+    <out name="related" type="boolean"/>
+    <out name="keywords" type="list"/>
+    <out name="output" type="string"/>
+  </node>
+
+  <!-- code1：关键字 re.escape 拼成 regex 交替式（一次搜全部；related 由 selector 直接判，无需在此解析） -->
+  <node id="120001" type="code">
+    <in name="keywords" ref="110001.keywords"/>
+    <code language="3"><![CDATA[
+import re
+async def main(args) -> dict:
+    kws = args.params.get("keywords") or []
+    if not isinstance(kws, list):
+        kws = [kws] if kws else []
+    kws = [str(k).strip() for k in kws if str(k).strip()]
+    regex_query = "|".join(re.escape(k) for k in kws)
+    return {"regex_query": regex_query}
+]]></code>
+    <out name="regex_query" type="string"/>
+  </node>
+
+  <!-- selector1：仅 related=true 才搜索 -->
+  <node id="130001" type="selector">
+    <branch>
+      <cond op="1" left="110001.related" right="true" left_type="boolean" right_type="boolean"/>
+    </branch>
+  </node>
+
+  <!-- wiki_search：regex=True，一次匹配所有关键字 -->
+  <node id="140001" type="plugin" toolName="wiki_search">
+    <in name="query" type="string" ref="120001.regex_query"/>
+    <in name="regex" type="boolean">true</in>
+    <out name="raw" type="string"/>
+  </node>
+
+  <!-- code2：判断命中是否有意义（wiki_search 无结果返回 "(未找到)"/"(wiki 为空)"） -->
+  <node id="150001" type="code">
+    <in name="hits" ref="140001.raw"/>
+    <code language="3"><![CDATA[
+async def main(args) -> dict:
+    h = (args.params.get("hits") or "").strip()
+    has = bool(h) and not h.startswith("(未找到") and not h.startswith("(wiki 为空")
+    return {"has_hits": has, "hits_text": h}
+]]></code>
+    <out name="has_hits" type="boolean"/>
+    <out name="hits_text" type="string"/>
+  </node>
+
+  <!-- selector2：仅 has_hits=true 才评估 -->
+  <node id="160001" type="selector">
+    <branch>
+      <cond op="1" left="150001.has_hits" right="true" left_type="boolean" right_type="boolean"/>
+    </branch>
+  </node>
+
+  <!-- LLM2：相关性评估，挑 top-K（结构化输出 has_relevant/topk） -->
+  <node id="170001" type="llm">
+    <in name="user_message" ref="100001.user_message"/>
+    <in name="hits" ref="150001.hits_text"/>
+    <param name="systemPrompt"><![CDATA[你是相关性评估器。根据用户消息，从下面的 wiki 搜索命中里挑出最相关的片段（最多 5 条），整理成参考资料。
+只输出一个 JSON 对象，不要 markdown：
+{"has_relevant": true, "topk": "整理后的文本"}
+规则：
+- has_relevant：是否存在与用户消息实质相关的命中（全部无关 → false）。
+- topk：相关片段整理文本，每条一行 `文件名:行号: 内容`，可在前补一句为何相关；has_relevant=false 时给空串。]]></param>
+    <param name="prompt"><![CDATA[用户消息：
+{{user_message}}
+
+wiki 搜索命中：
+{{hits}}]]></param>
+    <param name="temperature" type="float">0.2</param>
+    <out name="has_relevant" type="boolean"/>
+    <out name="topk" type="string"/>
+    <out name="output" type="string"/>
+  </node>
+
+  <!-- 单 end：跳过分支（不相关/无命中）时 170001 未执行 → inject=None→False，不注入 -->
+  <node id="900001" type="end">
+    <out name="inject" type="boolean" ref="170001.has_relevant"/>
+    <out name="result" type="string" ref="170001.topk"/>
+  </node>
+
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120001"/>
+  <edge from="120001" to="130001"/>
+  <edge from="130001" to="140001" port="true"/>
+  <edge from="140001" to="150001"/>
+  <edge from="150001" to="160001"/>
+  <edge from="160001" to="170001" port="true"/>
+  <edge from="170001" to="900001"/>
+  <edge from="130001" to="900001" port="false"/>
+  <edge from="160001" to="900001" port="false"/>
+</workflow>

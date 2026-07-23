@@ -64,6 +64,15 @@ def repo_memories_dir(workspace) -> Path:
     return d
 
 
+def repo_plans_dir(workspace) -> Path:
+    """该工作区的【计划】目录：~/.agt/repos/<hash>/plans/。与 sessions/memories 同根、互相隔离。
+    每个计划一个 <plan_id>.json 文件，跨 session 共享（plan_id 存在 session 的 extra_state 里）。
+    供 plan_tools 使用；不触发 sessions 的 legacy 迁移。"""
+    d = REPOS_DIR / _repo_hash(workspace) / "plans"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 _ALL_MIGRATED = False   # 进程级标志：全量迁移只跑一次
 
 
@@ -154,6 +163,7 @@ class Session:
         # —— 长期记忆注入 provider（Agent 注册；两类机制不同，见 longterm_memory.py）——
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
+        self._plan_provider: Optional[Callable[[], str]] = None  # 当前活动计划块（Agent 注册；加入计划后每轮注入 SYSTEM，退出后返回空）
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
         self._event_path = None   # 事件日志路径 <name>.events.jsonl；None 时事件 buffer 在内存（name 未就绪）
@@ -279,6 +289,15 @@ class Session:
         if self._ltm_static_provider:
             try:
                 block = self._ltm_static_provider()
+                if block:
+                    msgs.append({"role": "system", "content": block})
+            except Exception:
+                pass
+
+        # —— 当前活动计划（加入计划后每轮注入，让 Agent 始终清楚在干哪一步；退出后为空不注入）——
+        if self._plan_provider:
+            try:
+                block = self._plan_provider()
                 if block:
                     msgs.append({"role": "system", "content": block})
             except Exception:

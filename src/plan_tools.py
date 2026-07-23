@@ -143,6 +143,33 @@ def clear_active_plan(agent) -> None:
 
 # ========== 渲染 ==========
 
+def _step_desc(s) -> str:
+    """从 create_plan/add_step 的一个 step 项里取出描述纯文本。
+    模型可能传：纯字符串 / dict(含 description|text|title|content 等) / JSON 字符串。
+    无论哪种，都抽成干净的描述文本，避免 UI 把整坨结构当描述渲染。"""
+    if isinstance(s, str):
+        st = s.strip()
+        if st[:1] in ("{", "["):
+            try:
+                parsed = json.loads(st)
+                d = _step_desc(parsed)
+                if d and d != st:
+                    return d
+            except Exception:
+                pass
+        return st
+    if isinstance(s, dict):
+        for k in ("description", "desc", "text", "title", "content", "task", "name"):
+            v = s.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for v in s.values():            # 兜底：第一个非空字符串值
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return json.dumps(s, ensure_ascii=False)
+    return str(s).strip()
+
+
 def _plan_text(agent) -> str:
     """计划 steps 的纯文本视图（工具返回值用）。"""
     if not agent.plan:
@@ -196,7 +223,7 @@ def make_plan_tools(agent) -> list:
             "id": _gen_plan_id(),
             "title": (title or "未命名计划").strip() or "未命名计划",
             "design": design or "",
-            "steps": [{"description": str(s), "status": "pending"} for s in steps],
+            "steps": [{"description": _step_desc(s), "status": "pending"} for s in steps],
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
             "created_session": getattr(agent.session, "name", None),
@@ -265,7 +292,7 @@ def make_plan_tools(agent) -> list:
         """给当前活动计划追加一步（状态 pending）。"""
         if not getattr(agent, "active_plan", None):
             return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
-        desc = (description or "").strip()
+        desc = _step_desc(description)
         if not desc:
             return "[错误] description 不能为空"
         agent.active_plan["steps"].append({"description": desc, "status": "pending"})

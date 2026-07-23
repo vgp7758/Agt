@@ -49,7 +49,8 @@ def _resolve(path: str) -> Path:
 
 def _py_check(target: Path) -> str:
     """对刚写入的 Python 文件做即时语法检查（compile，不解引用，不跑代码，零开销）。
-    有语法错误则返回可操作的报错行（Agent 看到后可自行修正）。"""
+    有语法错误返回可操作的报错行；通过则返回 ✅ 提示，让 Agent 知道语法已校验、
+    无需再用 run_python/ast.parse 重复查语法（import/运行验证仍需另测）。"""
     if target.suffix not in (".py", ".pyw"):
         return ""
     try:
@@ -57,7 +58,7 @@ def _py_check(target: Path) -> str:
         compile(code, str(target), "exec")
     except SyntaxError as e:
         return f"\n⚠️ 语法错误 {e.filename or target.name}:{e.lineno}:{e.offset} — {e.msg}"
-    return ""
+    return f"\n✅ {target.name} 语法检查通过（write_file 已自动校验语法，无需再 run_python/ast.parse 复查语法；import/运行仍需另测）"
 def _run_subprocess_streaming(args, name, shell=False):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。"""

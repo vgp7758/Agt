@@ -21,7 +21,7 @@ agt-web      # WebUI → http://localhost:8000
 | **可视化编辑器** | SVG 画布 + 节点拖拽 + 流程线/变量线(彩色) + 属性面板，零依赖 |
 | **多 Agent** | SubAgent 并行调度，工具继承，防递归 |
 | **WebUI** | FastAPI + WebSocket，多客户端广播，断线续连 |
-| **会话** | 分层上下文（全局摘要 + 最近窗口融合）+ 存档/恢复 |
+| **会话** | 分档上下文投影（毕业压缩 + 折叠召回）+ 全局摘要 + recall 召回 + 存档/恢复 |
 | **自主模式** | 定时/目标驱动，消息队列 |
 | **Wiki** | `.agent/wiki/` 知识库 CRUD + 子 Agent 自动维护 |
 | **技能** | `.agent/skills/` YAML 渐进式披露 |
@@ -52,6 +52,23 @@ pip install agt-agent
 agt          # CLI
 agt-web      # WebUI（浏览器打开 http://localhost:8000）
 ```
+
+---
+
+## 上下文管理
+
+长对话不爆上下文、细节也不丢（`session.py`）：
+
+- **分档投影**：给模型设 `max_effective_context_window`（token 估算的软上限），超出即「毕业」——老轮按档位递进压缩（每档摘要上限减半），近期轮保持全量。冻结渲染 byte-stable，利于前缀缓存命中。
+- **折叠召回**：压到头仍超窗口，最老的整档退化为摘要，逐字原文用 `/recall` 召回。
+- **默认（不设该字段）**：走原策略——最近窗口全量 + 窗口外一句话摘要。
+
+| 参数 | 作用 | 在哪设 |
+|---|---|---|
+| `max_effective_context_window` | 每模型：何时开始压缩（空=关闭分档） | 模型编辑器 / `/config max_effective_context_window N` |
+| `max_level` | 全局：最高压缩档位（默认 4） | 设置表单 / `/config max_level N` |
+
+> 该值按**成本/延迟耐受度**定，不是模型的硬上下文上限。无缓存折扣的 route（如 ModelScope）建议 3.2 万~6.4 万；有缓存折扣的（Z.ai 直连 / DeepSeek）可更大。
 
 ---
 

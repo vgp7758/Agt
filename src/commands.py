@@ -193,6 +193,8 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = real_tools.TOOL_TIMEOUT
     except Exception:
         cfg["tool_timeout"] = 10
+    cfg["max_level"] = agent.session.max_level
+    cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
     return cfg
 
 
@@ -213,6 +215,45 @@ def apply_config(agent, values: dict) -> list:
         chain = [m.strip() for m in str(v).split(",") if m.strip()]
         agent.llm.fallback_chain = chain
         results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}")
+    # max_level：分档最高级别（设 session + 存 settings.json；改了清冻结缓存让其按新上限重算）
+    if "max_level" in values:
+        v = values.pop("max_level")
+        try:
+            ml = int(str(v).strip()) if str(v).strip() else 4
+            if ml < 1:
+                ml = 4
+            agent.session.max_level = ml
+            agent.session._frozen_renders.clear()
+            try:
+                import config
+                saved = config.load_runtime_settings(); saved["max_level"] = ml; config.save_runtime_settings(saved)
+            except Exception as e:
+                results.append(f"⚠️ max_level 已设为 {ml}，但持久化失败：{e}")
+            results.append(f"✅ max_level = {ml}（分档最高级别；已存 settings.json）")
+        except Exception:
+            results.append(f"❌ max_level 值非法：{v}")
+    # max_effective_context_window：分档投影窗口（当前模型 llm+session + 存 models.json；0/空=关闭分档）
+    if "max_effective_context_window" in values:
+        v = values.pop("max_effective_context_window")
+        try:
+            win = int(str(v).strip()) if str(v).strip() else 0
+            agent.llm.max_effective_context_window = win or None
+            agent.session.max_effective_context_window = win or None
+            agent.session._frozen_renders.clear()
+            try:
+                import config
+                name = agent.llm.model_name
+                if name in config.MODELS:
+                    if win:
+                        config.MODELS[name]["max_effective_context_window"] = win
+                    else:
+                        config.MODELS[name].pop("max_effective_context_window", None)
+                    config.save_user_models(config.MODELS, config.DEFAULT_MODEL)
+            except Exception as e:
+                results.append(f"⚠️ max_effective_context_window 已设为 {win or '关闭'}，但持久化失败：{e}")
+            results.append(f"✅ max_effective_context_window = {win or 'None（关闭分档→原窗口+摘要）'}（已存 models.json[{agent.llm.model_name}]）")
+        except Exception:
+            results.append(f"❌ max_effective_context_window 值非法：{v}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")
@@ -234,7 +275,8 @@ def _cmd_config(ctx: CommandContext, args):
         print("当前配置：")
         for k, v in read_config(ctx.agent).items():
             print(f"  {k} = {v}")
-        print("用法：/config <key> <value> [<key> <value> ...]；可配置：" + " / ".join(CONFIGURABLE))
+        print("用法：/config <key> <value> [<key> <value> ...]；可配置：" + " / ".join(CONFIGURABLE)
+              + " / max_level / max_effective_context_window")
         return
     if len(positional) % 2 != 0:
         print("❌ 参数须成对，如：/config max_steps 100 token_budget 100000")

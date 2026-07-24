@@ -173,6 +173,8 @@ class LLMClient:
         # max_tokens：profile 可显式指定；否则推理模型(thinking)用宽裕默认（防长 reasoning 被 provider
         # 默认小值截断 → content 空/半截），非推理模型用 None（交 provider 默认）。
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)
+        # 分档上下文投影的最大有效窗口（token 估算）。None=不启用分档，走 Session 原 recent_window+summary。
+        self.max_effective_context_window = profile.get("max_effective_context_window")
         self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
 
     def _rotate_token(self):

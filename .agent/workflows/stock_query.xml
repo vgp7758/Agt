@@ -1,0 +1,233 @@
+<workflow name="stock_query" description="股票实时查询工作流范例（selector/http/aggregator/end 等节点正确写法演示）">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="stock_name" type="string" required="true"/>
+  </node>
+  <node id="200001" type="plugin" title="plugin" x="420" y="80" toolName="web_search">
+    <in name="query" type="string" ref="100001.stock_name"/>
+    <out name="result" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="300001" type="code" title="code" x="720" y="80">
+    <in name="search_result" type="string" ref="200001.result"/>
+    <in name="stock_name" type="string" ref="100001.stock_name"/>
+    <code language="3"><![CDATA[import re
+
+async def main(args):
+    search_result = args.params.get("search_result", "")
+    stock_name = args.params.get("stock_name", "")
+
+    # 从搜索结果中提取6位数字股票代码
+    # 常见格式：600888、sh600888、SZ159981、SH600888 等
+    codes = re.findall(r'(?:sh|sz|SH|SZ)?(\d{6})', search_result)
+
+    # 去重，保持顺序
+    seen = set()
+    unique_codes = []
+    for c in codes:
+        if c not in seen:
+            seen.add(c)
+            unique_codes.append(c)
+
+    if unique_codes:
+        code = unique_codes[0]
+        # 判断市场：6/9 开头上交所，0/3/15/16/18 开头深交所
+        if code.startswith(('6', '9')):
+            market = 'sh'
+        else:
+            market = 'sz'
+
+        stock_code = f"{market}{code}"
+        api_url = f"http://qt.gtimg.cn/q={stock_code}"
+
+        return {
+            "found": True,
+            "stock_code": stock_code,
+            "display_code": code,
+            "api_url": api_url,
+            "codes": codes,
+            "error": ""
+        }
+    else:
+        return {
+            "found": False,
+            "stock_code": "",
+            "display_code": "",
+            "api_url": "",
+            "error": f"未找到股票「{stock_name}」的代码，请检查股票名称是否正确"
+        }
+]]></code>
+    <out name="found" type="boolean"/>
+    <out name="stock_code" type="string"/>
+    <out name="display_code" type="string"/>
+    <out name="api_url" type="string"/>
+    <out name="error" type="string"/>
+    <out name="codes" type="list"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="400001" type="selector" title="selector" x="1320" y="80">
+    <branch><cond op="11" left="695903.output.found" right="" left_type="boolean"/></branch>
+  </node>
+  <node id="500001" type="http" title="http" x="1620" y="80">
+    <in name="stock_code" type="string" ref="695903.output.stockCode"/>
+    <method>GET</method>
+    <url><![CDATA[http://qt.gtimg.cn/q={{stock_code}}]]></url>
+    <batch enabled="false"/>
+  </node>
+  <node id="600001" type="code" title="code" x="1920" y="80">
+    <in name="response" type="string" ref="500001.body"/>
+    <in name="stock_code" type="string" ref="695903.output.stockCode"/>
+    <in name="display_code" type="string" ref="695903.output.displayCode"/>
+    <code language="3"><![CDATA[
+import re
+
+async def main(args):
+    response = args.params.get("response", "")
+    stock_code = args.params.get("stock_code", "")
+    display_code = args.params.get("display_code", "")
+
+    # qt.gtimg.cn 返回格式: v_sh600888="...字段用~分隔...";
+    # 字段说明(常见): 0=市场, 1=名称, 2=代码, 3=当前价, 4=昨收, 5=开盘,
+    # 6=最高, 7=最低, 10=成交量(手), 11=成交额(万)
+    match = re.search(r'"([^"]+)"', response)
+    if not match:
+        return {"parsed": False, "raw": response[:200]}
+
+    fields = match.group(1).split('~')
+
+    name = fields[1] if len(fields) > 1 else ""
+    price = fields[3] if len(fields) > 3 else "0"
+    yesterday_close = fields[4] if len(fields) > 4 else "0"
+    open_price = fields[5] if len(fields) > 5 else "0"
+    volume = fields[6] if len(fields) > 6 else "0"              # 成交量(手)
+    high = fields[33] if len(fields) > 33 else "0"              # 最高
+    low = fields[34] if len(fields) > 34 else "0"               # 最低
+    amount = fields[37] if len(fields) > 37 else "0"            # 成交额(万元)
+
+    # 计算涨跌幅
+    change_amount = "0.00"
+    change_percent = "0.00%"
+    try:
+        p = float(price)
+        lc = float(yesterday_close)
+        if lc > 0:
+            change = p - lc
+            c_pct = (change / lc) * 100
+            change_amount = f"{change:+.2f}"
+            change_percent = f"{c_pct:+.2f}%"
+    except:
+        pass
+
+    # 格式化数字
+    try:
+        volume_formatted = f"{int(float(volume)):,}" if volume else "0"
+    except:
+        volume_formatted = volume
+
+    try:
+        amount_formatted = f"{float(amount):,.2f}" if amount else "0"
+    except:
+        amount_formatted = amount
+
+    return {
+        "parsed": True,
+        "name": name,
+        "stock_code": f"{stock_code} ({display_code})",
+        "price": price,
+        "yesterday_close": yesterday_close,
+        "open_price": open_price,
+        "high": high,
+        "low": low,
+        "volume": volume_formatted,
+        "amount": amount_formatted,
+        "change_amount": change_amount,
+        "change_percent": change_percent,
+    }
+]]></code>
+    <out name="parsed" type="boolean"/>
+    <out name="name" type="string"/>
+    <out name="stock_code" type="string"/>
+    <out name="price" type="string"/>
+    <out name="yesterday_close" type="string"/>
+    <out name="open_price" type="string"/>
+    <out name="high" type="string"/>
+    <out name="low" type="string"/>
+    <out name="volume" type="string"/>
+    <out name="amount" type="string"/>
+    <out name="change_amount" type="string"/>
+    <out name="change_percent" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="700001" type="text" title="text" x="2220" y="80">
+    <in name="name" type="string" ref="600001.name"/>
+    <in name="stock_code" type="string" ref="600001.stock_code"/>
+    <in name="price" type="string" ref="600001.price"/>
+    <in name="change_amount" type="string" ref="600001.change_amount"/>
+    <in name="change_percent" type="string" ref="600001.change_percent"/>
+    <in name="open_price" type="string" ref="600001.open_price"/>
+    <in name="high" type="string" ref="600001.high"/>
+    <in name="low" type="string" ref="600001.low"/>
+    <in name="yesterday_close" type="string" ref="600001.yesterday_close"/>
+    <in name="volume" type="string" ref="600001.volume"/>
+    <in name="amount" type="string" ref="600001.amount"/>
+    <result><![CDATA[📊 股票实时行情
+━━━━━━━━━━━━━━━━━━━━
+🏷️ 名称：{{name}}（{{stock_code}}）
+💰 当前价：{{price}} 元
+📈 涨跌：{{change_amount}}（{{change_percent}}）
+━━━━━━━━━━━━━━━━━━━━
+📌 开盘：{{open_price}}   🔺最高：{{high}}   🔻最低：{{low}}
+📅 昨收：{{yesterday_close}}
+📊 成交量：{{volume}} 手
+💵 成交额：{{amount}} 万元]]></result>
+  </node>
+  <node id="800001" type="text" title="text" x="1620" y="190">
+    <in name="error" type="string" ref="300001.error"/>
+    <result><![CDATA[❌ 查询失败：{{error}}]]></result>
+  </node>
+  <node id="850001" type="aggregator" title="aggregator" x="2520" y="80">
+    <group name="success"><var ref="700001.output"/></group>
+    <group name="error"><var ref="800001.output"/></group>
+  </node>
+  <node id="860001" type="code" title="code" x="2820" y="80">
+    <in name="success_val" type="string" ref="850001.success"/>
+    <in name="error_val" type="string" ref="850001.error"/>
+    <code language="3"><![CDATA[
+async def main(args):
+    success = args.params.get("success_val")
+    error = args.params.get("error_val")
+    # 聚合结果：哪个有值用哪个
+    result = success if success else error
+    return {"result": result}
+]]></code>
+    <out name="result" type="string"/>
+  </node>
+  <node id="900001" type="end" title="end" x="3120" y="80">
+    <out name="result" ref="860001.result" type="string"/>
+  </node>
+  <node id="695903" type="llm" title="LLM" x="1020" y="80">
+    <in name="codes" type="list" ref="300001.codes"/>
+    <in name="stock_name" type="string" ref="100001.stock_name"/>
+    <param name="prompt" type="string"><![CDATA[股票名称：
+{{stock_name}}
+
+疑似股票代码的字符:
+{{codes}}]]></param>
+    <param name="systemPrompt" type="string"><![CDATA[你是一个投资帮手，从提供的股票名称和很多字符串中找出该股票的股票代码]]></param>
+    <param name="thinking" type="string"><![CDATA[false]]></param>
+    <param name="timeout" type="string"><![CDATA[30]]></param>
+    <out name="output" type="object"><field name="found" type="boolean" description="是否存在股票代码"/><field name="displayCode" type="string" description="显示的6位股票代码"/><field name="stockCode" type="string" description="完整8位股票代码，如sh600XXX / sz000XXX"/></out>
+    <batch enabled="false"/>
+  </node>
+  <edge from="200001" to="300001"/>
+  <edge from="400001" to="500001" port="true"/>
+  <edge from="400001" to="800001" port="false"/>
+  <edge from="500001" to="600001"/>
+  <edge from="600001" to="700001"/>
+  <edge from="700001" to="850001"/>
+  <edge from="800001" to="850001"/>
+  <edge from="850001" to="860001"/>
+  <edge from="860001" to="900001"/>
+  <edge from="300001" to="695903"/>
+  <edge from="695903" to="400001"/>
+  <edge from="100001" to="200001"/>
+</workflow>

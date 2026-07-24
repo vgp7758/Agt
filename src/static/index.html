@@ -172,6 +172,7 @@
     </select></label>
     <label>reasoning补全模型 <input id="cfg_reasoning_completer" type="text" placeholder="deepseek-chat / minimax（留空=关闭）" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"></label>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
+    <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
     <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
     </div>
     </div>
@@ -514,6 +515,9 @@ function renderModelList(){
         <input value="${Array.isArray(m.api_token)?m.api_token.join(', '):(m.api_token||'')}" placeholder="api_token（多个用逗号分隔）" type="password" onchange="_modelData.models['${escName}'].api_token=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="flex:1">
         ${isDefault ? '' : `<button class="mi-btn set-default" onclick="_modelData.default=\'${escName}\';renderModelList()">⭐ 设默认</button>`}
       </div>
+      <div class="mi-row">
+        <input value="${m.max_effective_context_window||''}" placeholder="分档窗口 max_effective_context_window（空=关闭分档）" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="启用分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="flex:1">
+      </div>
     </div>`;
   }).join('')||'<div style="color:#8a9099;padding:8px">暂无模型，点击下方"添加模型"</div>';
 }
@@ -543,6 +547,7 @@ document.getElementById('cfgSave').onclick=()=>{
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
     reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
+    max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
@@ -642,6 +647,7 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
         document.getElementById('cfg_reasoning_completer').value = m.values.reasoning_completer || '';
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
+        document.getElementById('cfg_max_level').value = m.values.max_level || '';
       }
       break;
     case 'saved':

@@ -27,8 +27,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional, Callable
 
+import config
 from llm_client import LLMClient
-from toollog import ToolLog, detail_limit
+from toollog import ToolLog, detail_limit, DETAIL_BASE, DETAIL_FLOOR
 from llm_call_log import LLMCallLog
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
@@ -171,6 +172,11 @@ class Session:
         self.llm_calls = LLMCallLog()  # LLM 调用流水（可观测性）：每次调用追加一条，供 /stats 聚合
         self._event_path = None   # 事件日志路径 <name>.events.jsonl；None 时事件 buffer 在内存（name 未就绪）
         self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
+        # —— 分档上下文投影（provider 设 max_effective_context_window 才启用，否则走原 recent_window+summary）——
+        self.max_effective_context_window = getattr(self.llm, "max_effective_context_window", None)
+        self.max_level = config.load_max_level()
+        self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
+        self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
 
     # ========== 构建 ==========
     def _emit_event(self, event: dict):
@@ -261,6 +267,8 @@ class Session:
             if t.snapshot_sha == sha:
                 target_msg = t.user_message
                 self.turns = self.turns[:i]
+                self._tier_boundaries = [b for b in self._tier_boundaries if b < i]
+                self._frozen_renders.clear()
                 self._current = None
                 self._emit_event({"event": "restore", "keep": i})   # 保留前 i 轮（append 历史，重放时截断）
                 self._refresh_summary_cache()
@@ -276,16 +284,21 @@ class Session:
         self.global_summary（窗口外各轮 summary 的拼接/压缩）以一条 system 摘要喂给模型。
         需要早期轮的细节时，模型可用 recall_turn 工具按需召回完整原文。
         """
+        # 核心 system（人设+今日+用户名）—— 真正的指令，不包裹。
         msgs = [{"role": "system", "content": self.system}]
+        # 分档投影：provider 设了 max_effective_context_window 才启用（已完成 turn 按档冻结渲染，
+        # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
+        if self.max_effective_context_window:
+            return self._build_tiered_messages(msgs)
         if self._system_extra_provider:
             try:
                 extra = self._system_extra_provider()
                 if extra:
-                    msgs.append({"role": "system", "content": extra})
+                    msgs.append({"role": "system", "content": self._ambient(extra)})
             except Exception:
                 pass
         if self.global_summary:
-            msgs.append({"role": "system", "content": "【历史会话摘要】\n" + self.global_summary})
+            msgs.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
 
         # —— 长期记忆·静态层（semantic 事实始终注入 + procedural 标题清单）——
         # 放在历史摘要之后、近期窗口之前：基础事实层，靠前，作为常驻背景知识。
@@ -293,7 +306,7 @@ class Session:
             try:
                 block = self._ltm_static_provider()
                 if block:
-                    msgs.append({"role": "system", "content": block})
+                    msgs.append({"role": "system", "content": self._ambient(block)})
             except Exception:
                 pass
 
@@ -302,7 +315,7 @@ class Session:
             try:
                 block = self._plan_provider()
                 if block:
-                    msgs.append({"role": "system", "content": block})
+                    msgs.append({"role": "system", "content": self._ambient(block)})
             except Exception:
                 pass
 
@@ -316,16 +329,6 @@ class Session:
                     a_msg["reasoning_content"] = t.answer_reasoning
                 msgs.append(a_msg)
 
-        # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
-        # 放在近期窗口之后、当前轮之前：与本轮问题最相关，靠后更显眼（无命中则不注入）。
-        if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-            try:
-                block = self._ltm_episodic_provider(self._current.user_message)
-                if block:
-                    msgs.append({"role": "system", "content": block})
-            except Exception:
-                pass
-
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
@@ -334,7 +337,156 @@ class Session:
             hint = getattr(self._current, "_user_hint", None)
             if hint:
                 msgs.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
+
+        # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
+        # 放在【当前轮之后】收尾：这是每轮按问题重新召回的【易变块】，归入 tail——
+        # 不污染稳定前缀，留给前缀缓存最大命中面（对照 Claude Code 滚动断点：稳定靠前、易变靠后）。
+        if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+            try:
+                block = self._ltm_episodic_provider(self._current.user_message)
+                if block:
+                    msgs.append({"role": "system", "content": self._ambient(block)})
+            except Exception:
+                pass
         return msgs
+
+    # ========== 分档上下文投影（max_effective_context_window 启用）==========
+    def _append_ambient(self, msgs: list, provider, *args):
+        """把一个背景 provider 的返回包成 <system-reminder> 追加（无返回/异常则跳过）。"""
+        if not provider:
+            return
+        try:
+            block = provider(*args)
+            if block:
+                msgs.append({"role": "system", "content": self._ambient(block)})
+        except Exception:
+            pass
+
+    def _tier_level(self, turn_idx: int) -> int:
+        """turn 所在档位级别：当前段(最后边界之后)=1，往前每跨一个边界 +1，封顶 max_level。
+        算式 level = 1 + count(boundaries 中 >= turn_idx)；验过 [5,10]→turn5=3/turn10=2/turn11=1，
+        加 15 后→turn5=4/turn10=3/turn15=2/turn16=1（全档顺移）。"""
+        level = 1 + sum(1 for b in self._tier_boundaries if b >= turn_idx)
+        return min(level, self.max_level)
+
+    def _render_turn_frozen(self, turn_idx: int) -> list[dict]:
+        """渲染一个【已完成】turn，按其档位级别冻结：同 level 直接复用缓存 → byte-stable（利于前缀缓存）。
+        档位 base = DETAIL_BASE >> (level-1)：level1=1500 / 2=750 / 3=375… 不低于 DETAIL_FLOOR。
+        level 变了（毕业顺移）才重算。"""
+        level = self._tier_level(turn_idx)
+        cached = self._frozen_renders.get(turn_idx)
+        if cached and cached[0] == level:
+            return cached[1]
+        turn = self.turns[turn_idx]
+        base = max(DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
+        msgs = [{"role": "user", "content": self._user_content(turn)}]
+        msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
+                                             base=base, full_last=(level == 1)))
+        if turn.answer:
+            a_msg = {"role": "assistant", "content": turn.answer}
+            if turn.answer_reasoning:
+                a_msg["reasoning_content"] = turn.answer_reasoning
+            msgs.append(a_msg)
+        self._frozen_renders[turn_idx] = (level, msgs)
+        return msgs
+
+    def _render_tiered_body(self, fold_count: int = 0) -> list[dict]:
+        """渲染分档 body：[已折叠早期轮次摘要] + 未折叠的已完成 turn（按档冻结）
+        + 当前进行中 turn（动态，全量）+ 情境 tail。fold_count 个最早的 turn 折叠成摘要不逐条渲染
+        （细节靠 recall 召回）。"""
+        body = []
+        if fold_count > 0:
+            body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
+        for i in range(fold_count, len(self.turns)):
+            body.extend(self._render_turn_frozen(i))
+        if self._current is not None:
+            body.append({"role": "user", "content": self._user_content(self._current)})
+            body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn))
+            hint = getattr(self._current, "_user_hint", None)
+            if hint:
+                body.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
+        if self._ltm_episodic_provider and self._current and self._current.user_message:
+            self._append_ambient(body, self._ltm_episodic_provider, self._current.user_message)
+        return body
+
+    def _build_tiered_messages(self, msgs: list[dict]) -> list[dict]:
+        """分档投影主入口：稳定前缀(system+静态背景) + 分档 body；超 max_effective_context_window 时
+        先毕业顺移（压缩老档），压不动了再把最前档折叠进摘要（靠 recall 召回细节），直到进窗口。
+        fold_count 本次 build 派生、不持久化——窗口变大/对话变短时会自动回退（折叠的轮重回渲染）。"""
+        self._append_ambient(msgs, self._system_extra_provider)
+        self._append_ambient(msgs, self._ltm_static_provider)
+        self._append_ambient(msgs, self._plan_provider)
+        prefix_len = len(msgs)
+        win = self.max_effective_context_window
+
+        fold_count = 0
+        for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
+            body = self._render_tiered_body(fold_count)
+            if self._estimate_tokens(msgs[:prefix_len] + body) <= win:
+                break
+            if self._graduate_once():          # 先压缩：升一档（全档顺移）
+                continue
+            nxt = self._next_fold_target(fold_count)
+            if nxt is not None:                 # 压不动了：折叠最前档进摘要
+                fold_count = nxt
+                continue
+            break   # 既压不动也折不动，放弃
+        return msgs[:prefix_len] + self._render_tiered_body(fold_count)
+
+    def _graduate_once(self) -> bool:
+        """把最后完成 turn 升档：append 其索引到 _tier_boundaries（其后所有档 level+1=顺移），
+        并清掉 level 变了的冻结缓存让其按新级别重渲染。当前段无已完成 turn → 返回 False。"""
+        last_completed = len(self.turns) - 1
+        if last_completed < 0:
+            return False
+        if self._tier_boundaries and self._tier_boundaries[-1] >= last_completed:
+            return False   # 最后完成 turn 已是边界 → 当前段只剩进行中 turn，无东西可升
+        self._tier_boundaries.append(last_completed)
+        for i in range(len(self.turns)):
+            fr = self._frozen_renders.get(i)
+            if fr and fr[0] != self._tier_level(i):
+                self._frozen_renders.pop(i, None)
+        return True
+
+    def _next_fold_target(self, fold_count: int):
+        """下一个折叠点 = 超过 fold_count 的最小 boundary +1（折掉一整档最早的 turn）。
+        所有 boundary 都已折叠则返回 None（无可再折）。"""
+        for b in sorted(self._tier_boundaries):
+            if b + 1 > fold_count:
+                return b + 1
+        return None
+
+    def _folded_summary(self, fold_count: int) -> str:
+        """被折叠的早期轮次的一句话摘要拼接（逐字原文靠 recall 召回）。"""
+        lines = [f"[第{i + 1}轮] {(t.summary or t.user_message[:40]).strip()}"
+                 for i, t in enumerate(self.turns[:fold_count])]
+        return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + "\n".join(lines)
+
+    @staticmethod
+    def _estimate_tokens(msgs: list[dict]) -> int:
+        """粗估 token ≈ chars/4（够阈值判断，不必精确；tool_calls 的 function 也计入）。"""
+        n = 0
+        for m in msgs:
+            c = m.get("content")
+            if isinstance(c, str):
+                n += len(c)
+            elif isinstance(c, list):
+                for b in c:
+                    n += len(b.get("text", "")) if isinstance(b, dict) else 0
+            for tc in (m.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                n += len(str(fn.get("name", ""))) + len(str(fn.get("arguments", "")))
+        return n // 4
+
+    @staticmethod
+    def _ambient(content: str) -> str:
+        """把"环境/背景上下文"包进 <system-reminder> 语义分隔。
+
+        这类块（历史摘要 / 长期记忆 / 计划 / 后台状态）是给模型的【背景信息】，不是用户在发指令——
+        用 XML 标签与核心 system 人设、以及控制流消息（打断/模式切换）区分开，避免模型把它们当指令。
+        对照 Claude Code 线上协议：动态上下文(claudeMd/memory/env)正是用 <system-reminder> 包裹注入。
+        """
+        return f"<system-reminder>\n{content}\n</system-reminder>"
 
     @staticmethod
     def _user_content(turn: "Turn"):
@@ -365,7 +517,8 @@ class Session:
             return v
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
-    def _steps_to_messages(self, steps: list[Step], max_steps: int = 0) -> list[dict]:
+    def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
+                           base: int = DETAIL_BASE, full_last: bool = True) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
         工具名/入参/结果从 toollog 按 call_id 召回，并按【距当前步的距离】差异化摘要：
         越近越完整（当前步最多 DETAIL_BASE 字）、越远越简略（每步 -DETAIL_STEP、下限 DETAIL_FLOOR），
@@ -380,8 +533,10 @@ class Session:
             if not step.tool_calls:
                 continue
             distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
-            limit = detail_limit(distance)
-            full = (distance == 0)   # 当前步：所有工具的入参+结果完整披露（模型刚调用、需完整反馈），不摘要
+            limit = detail_limit(distance, base=base)
+            # 当前步(distance==0)完整披露入参+结果——但仅当 full_last（进行中轮 / level1 近期轮）。
+            # 老 turn(level≥2)冻结渲染时 full_last=False，连最后一步也按 base 摘要，否则单步轮永不压缩。
+            full = (distance == 0) and full_last
             a_tool_calls = []
             for i, tc in enumerate(step.tool_calls):
                 name, args, _r = self.toollog.view(tc.call_id)
@@ -638,6 +793,7 @@ class Session:
                 "recent_window_turns": self.recent_window_turns,
                 "max_steps_per_turn": self.max_steps_per_turn,
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
+                "tier_boundaries": self._tier_boundaries,  # 分档毕业边界（持久化；_frozen_renders 内存重算）
                 "saved_at": int(time.time()),
             }
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件
@@ -657,6 +813,7 @@ class Session:
         s.name = data.get("name") or path.stem   # 旧存档无 name → 用文件名，保证继续对话时覆盖同一文件
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
+        s._tier_boundaries = data.get("tier_boundaries", []) or []
         stem = path.stem
         events_path = path.parent / f"{stem}.events.jsonl"
         toollog_path = path.parent / f"{stem}.toollog.jsonl"

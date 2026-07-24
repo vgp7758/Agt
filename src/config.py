@@ -104,6 +104,16 @@ def save_runtime_settings(settings: dict):
     _AGT_SETTINGS.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_max_level() -> int:
+    """全局最大分档级别（~/.agt/settings.json 的 max_level；默认 4，<1 视为 4）。
+    分档投影里超过此级别的老档不再顺移压缩（保住前缀缓存 + 防远古信息被压没）。"""
+    try:
+        ml = int(load_runtime_settings().get("max_level", 4))
+    except Exception:
+        ml = 4
+    return ml if ml >= 1 else 4
+
+
 # === RAG 配置持久化（项目级 <workspace>/.agent/rag.json）===
 DEFAULT_RAG_CONFIG = {
     "enabled": False,

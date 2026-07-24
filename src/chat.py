@@ -136,7 +136,7 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /resume /list /show /reset /config /budget /model /autonomous /memory /logs /download /help")
+    print("命令：/save /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /help")
     print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
     print("=" * 64)
 

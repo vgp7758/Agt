@@ -29,6 +29,7 @@ from typing import Optional, Callable
 
 from llm_client import LLMClient
 from toollog import ToolLog, detail_limit
+from llm_call_log import LLMCallLog
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
@@ -167,6 +168,7 @@ class Session:
         self._plan_provider: Optional[Callable[[], str]] = None  # 当前活动计划块（Agent 注册；加入计划后每轮注入 SYSTEM，退出后返回空）
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
+        self.llm_calls = LLMCallLog()  # LLM 调用流水（可观测性）：每次调用追加一条，供 /stats 聚合
         self._event_path = None   # 事件日志路径 <name>.events.jsonl；None 时事件 buffer 在内存（name 未就绪）
         self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
 
@@ -479,6 +481,7 @@ class Session:
             sd = _repo_sessions_dir(self.workspace)
             self._bind_event_path(sd / f"{self.name}.events.jsonl")
             self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
+            self.llm_calls.set_path(sd / f"{self.name}.llm_calls.jsonl")
             # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
             if self._log_handler is not None:
                 try:
@@ -521,6 +524,7 @@ class Session:
                 sd = _repo_sessions_dir(self.workspace)
                 self._bind_event_path(sd / f"{self.name}.events.jsonl")
                 self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
+                self.llm_calls.set_path(sd / f"{self.name}.llm_calls.jsonl")
                 # 通知日志 handler flush 缓冲并切到 <name>.log
                 if self._log_handler is not None:
                     try:
@@ -656,12 +660,15 @@ class Session:
         stem = path.stem
         events_path = path.parent / f"{stem}.events.jsonl"
         toollog_path = path.parent / f"{stem}.toollog.jsonl"
+        llm_calls_path = path.parent / f"{stem}.llm_calls.jsonl"
         if events_path.exists():
             # —— 新格式：重放事件流重建 turns（未完成 turn 进 turns，不丢弃）——
             s.turns = _replay_events(_read_events(events_path))
             if toollog_path.exists():
                 s.toollog.load_from_jsonl(toollog_path)
             s.toollog.set_path(toollog_path)
+            if llm_calls_path.exists():
+                s.llm_calls.load_from_jsonl(llm_calls_path)
             s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
         elif "turns" in data:
             # —— 旧格式迁移：session.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
@@ -681,6 +688,7 @@ class Session:
             s.turns = old_turns
         else:
             s.turns = []
+        s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
         return s
 

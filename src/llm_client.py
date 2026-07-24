@@ -158,6 +158,7 @@ class LLMClient:
         self.fallback_chain: list[str] = []   # 回退优先级链(如 glm,deepseek,qwen)
         self.fallback_policy: str = "sticky"  # 回退后下一轮：sticky=永久降级 / reset=每轮回退链首
         self.reasoning_completer: Optional[str] = None  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关）
+        self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: dict):
@@ -237,10 +238,20 @@ class LLMClient:
             primed = list(messages) + [{"role": "system", "content":
                 "下面是推理模型刚才的完整思考过程。请直接据此输出最终回答正文（结论/答案），"
                 "不要复述思考过程：\n\n" + reasoning}]
+            _t0 = time.time()
             r = tmp.chat.completions.create(model=p["model"], messages=primed, temperature=self.temperature)
             ch = r.choices or []
-            return ((ch[0].message.model_dump().get("content") if ch else "") or "").strip()
+            content = ((ch[0].message.model_dump().get("content") if ch else "") or "").strip()
+            self._record_call(messages=primed, attempt=1, max_tokens=None,
+                              finish_reason=(ch[0].finish_reason if ch else None),
+                              usage=(r.usage.model_dump() if r.usage else None),
+                              elapsed=time.time() - _t0, outcome=("success" if content else "empty"),
+                              content=content, completer=True, model=p["model"])
+            return content
         except Exception as e:
+            self._record_call(messages=messages, attempt=1, max_tokens=None, finish_reason=None, usage=None,
+                              elapsed=0.0, outcome="error", error=f"{type(e).__name__}: {str(e)[:200]}",
+                              completer=True, model=self.reasoning_completer)
             _LOG.warning("reasoning_completer(%s) 补全失败：%s，回退原处理", self.reasoning_completer, e)
             return ""
 
@@ -294,6 +305,28 @@ class LLMClient:
                 self.switch_model(next_m)
                 time.sleep(self._backoff(len(tried) - 1))
 
+    def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,
+                     elapsed, outcome, content="", reasoning="", tool_calls=0,
+                     error=None, completer=False, model=None):
+        """把一次 LLM 调用记到 llm_calls 流水（供 /stats 聚合）。recorder 未注入则跳过。"""
+        rec = self.call_recorder
+        if rec is None:
+            return
+        try:
+            rec({
+                "ts": time.time(),
+                "model": model or self.model_name,
+                "attempt": attempt, "max_tokens": max_tokens,
+                "finish_reason": finish_reason, "usage": usage,
+                "elapsed": round(elapsed, 2), "outcome": outcome,
+                "content_len": len(content or ""), "reasoning_len": len(reasoning or ""),
+                "tool_calls": tool_calls, "error": error, "completer": completer,
+                "msgs_count": len(messages or []),
+                "msgs_chars": sum(len(str((m or {}).get("content", "") or "")) for m in (messages or [])),
+            })
+        except Exception:
+            pass
+
     def _chat_inner(self, messages, **overrides) -> LLMResponse:
         """单模型调用 + 重试（空响应 / max_tokens 截断）。被 chat() 的回退循环包裹。"""
         last_info = None
@@ -307,9 +340,15 @@ class LLMClient:
             kw = dict(overrides)
             if cur_max_tokens is not None:
                 kw["max_tokens"] = cur_max_tokens
-            resp = self._client.chat.completions.create(
-                **self._build_kwargs(messages, stream=False, **kw)
-            )
+            try:
+                resp = self._client.chat.completions.create(
+                    **self._build_kwargs(messages, stream=False, **kw)
+                )
+            except Exception as _e:
+                self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
+                                  finish_reason=None, usage=None, elapsed=time.time() - _t0,
+                                  outcome="error", error=f"{type(_e).__name__}: {str(_e)[:200]}")
+                raise
             _elapsed = time.time() - _t0
             choices = resp.choices or []
             usage = resp.usage.model_dump() if resp.usage else None
@@ -317,6 +356,8 @@ class LLMClient:
                 fr = choices[0].finish_reason
                 if fr == "length":
                     # 被 max_tokens 截断（典型：长 reasoning 吃光预算 → content 空/半截）→ 加大上限重试
+                    self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
+                                      finish_reason="length", usage=usage, elapsed=_elapsed, outcome="truncated")
                     bumped = _bump_max_tokens(cur_max_tokens)
                     _LOG.warning("⚠️ 响应被 max_tokens 截断(finish_reason=length, %s→%s) 重试 %d/%d model=%s",
                                  cur_max_tokens, bumped, attempt + 1, self.max_retries, self.model_name)
@@ -328,6 +369,10 @@ class LLMClient:
                 _LOG.info("成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
                           _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")
                 msg = choices[0].message.model_dump()
+                self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
+                                  finish_reason=fr, usage=usage, elapsed=_elapsed, outcome="success",
+                                  content=msg.get("content") or "", reasoning=msg.get("reasoning_content") or "",
+                                  tool_calls=len(_parse_tool_calls(msg)))
                 return _postprocess_response(LLMResponse(
                     content=msg.get("content") or "",
                     reasoning=msg.get("reasoning_content") or "",
@@ -336,6 +381,8 @@ class LLMClient:
                     raw_message=msg,
                 ))
             last_info = (usage, str(resp.model_dump())[:300])
+            self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
+                              finish_reason=None, usage=usage, elapsed=_elapsed, outcome="empty")
             _LOG.warning("空响应(疑似限流) 重试 %d/%d 退避%.0fs 耗时%.1fs usage=%s",
                          attempt + 1, self.max_retries, self._backoff(attempt), _elapsed, usage)
             time.sleep(self._backoff(attempt))

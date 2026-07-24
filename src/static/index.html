@@ -138,6 +138,7 @@
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnFeedback">💬 反馈</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
+    <button class="btn" id="btnStats" title="LLM 调用可靠性统计（per-model 成功/空/截断/错误/耗时）">📊 统计</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
@@ -199,6 +200,21 @@
     <div class="modal-btns">
       <button class="btn" id="fbCancel">取消</button>
       <button class="btn primary" id="fbSubmit">提交反馈</button>
+    </div>
+  </div>
+</div>
+
+<div id="statsModal" class="modal-overlay">
+  <div class="modal" style="max-width:720px;width:92%">
+    <h3>📊 LLM 调用可靠性统计</h3>
+    <div style="margin:6px 0;display:flex;gap:6px">
+      <button class="btn" id="statsScopeCur">当前 session</button>
+      <button class="btn" id="statsScopeAll">本仓库全部 session</button>
+      <button class="btn" id="statsRefresh">🔄 刷新</button>
+    </div>
+    <pre id="statsBody" style="white-space:pre-wrap;font-size:12.5px;line-height:1.6;max-height:58vh;overflow:auto;background:#f6f6f8;padding:10px 12px;border-radius:8px;margin:0"></pre>
+    <div class="modal-btns">
+      <button class="btn primary" id="statsClose">关闭</button>
     </div>
   </div>
 </div>
@@ -427,6 +443,33 @@ document.getElementById('btnFeedback').onclick=()=>{
   setTimeout(()=>document.getElementById('fbContent').focus(), 50);
 };
 document.getElementById('fbCancel').onclick=()=>{ feedbackModal.style.display='none'; };
+
+// —— LLM 调用可靠性统计弹窗 ——
+const statsModal=document.getElementById('statsModal');
+let _statsScope='current';
+async function loadStats(scope){
+  _statsScope=scope;
+  const body=document.getElementById('statsBody');
+  body.textContent='加载中…';
+  try{
+    const r=await fetch('/api/stats?scope='+scope); const d=await r.json();
+    const s=d.stats||{}; const models=Object.keys(s);
+    if(!models.length){ body.textContent='（暂无 LLM 调用记录——发几条消息后刷新看看）'; return; }
+    const lines=[`范围：${d.scope==='all'?'本仓库全部 session':'当前 session'}（${d.calls} 条调用记录）`,'',
+      '模型 | 调用 | 成功(率) | 空 | 截断 | 错误 | completer | tokens | 均耗时'];
+    for(const m of models){
+      const x=s[m]; const rate=x.calls?(x.success*100/x.calls).toFixed(0)+'%':'—';
+      const err=Object.entries(x.errors||{}).map(([k,v])=>k+':'+v).join(' ')||'-';
+      lines.push(`${m} | ${x.calls} | ${x.success}(${rate}) | ${x.empty} | ${x.truncated} | ${err} | ${x.completer} | ${x.tokens} | ${x.avg_latency}s`);
+    }
+    body.textContent=lines.join('\n');
+  }catch(e){ body.textContent='加载失败：'+e; }
+}
+document.getElementById('btnStats').onclick=()=>{ statsModal.style.display='flex'; loadStats('current'); };
+document.getElementById('statsScopeCur').onclick=()=>loadStats('current');
+document.getElementById('statsScopeAll').onclick=()=>loadStats('all');
+document.getElementById('statsRefresh').onclick=()=>loadStats(_statsScope);
+document.getElementById('statsClose').onclick=()=>{ statsModal.style.display='none'; };
 document.getElementById('fbSubmit').onclick=()=>{
   const content=document.getElementById('fbContent').value.trim();
   if(!content){ toast('⚠️ 请先写点内容'); return; }

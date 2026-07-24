@@ -99,6 +99,7 @@ class Agent:
         self.session._ltm_episodic_provider = self._ltm_episodic_block
         # 计划注入：加入计划后每轮把【当前计划】块注入 SYSTEM（id/title/design/进度），退出后为空
         self.session._plan_provider = self._plan_system_block
+        self.llm.call_recorder = self.session.llm_calls.record   # LLM 调用流水落 llm_calls.jsonl（可观测性）
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
         self._log_handler = configure_logging()
         self._log_handler.set_session(self.session.workspace, self.session.name)
@@ -259,6 +260,7 @@ class Agent:
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
+        self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
         session._log_handler = self._log_handler                   # 日志 handler 跟到新 session
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)

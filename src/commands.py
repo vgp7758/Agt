@@ -251,6 +251,21 @@ def _cmd_budget(ctx: CommandContext, args):
     print(f"💰 本次运行 token：已用 {used} / 预算 {budget} ({pct:.0f}%)")
 
 
+def _cmd_stats(ctx: CommandContext, args):
+    """LLM 调用可靠性统计（per-model：调用/成功/空/截断/错误/completer/tokens/均耗时）。
+    默认看当前 session；`/stats all` 看本仓库全部 session 聚合。"""
+    from llm_call_log import format_stats, load_all_calls
+    from session import _repo_sessions_dir
+    arg = (args or "").strip().lower()
+    if arg == "all":
+        records = load_all_calls(_repo_sessions_dir(ctx.agent.session.workspace))
+        title = "LLM 调用统计（本仓库全部 session）"
+    else:
+        records = ctx.agent.session.llm_calls.all_records()
+        title = f"LLM 调用统计（当前 session：{ctx.agent.session.name or '(未命名)'}）"
+    print(format_stats(records, title))
+
+
 def _cmd_reload_mcp(ctx: CommandContext, args):
     """断开并重连指定 MCP server，使代码修改后生效。"""
     positional = _parse_args(args)[0]
@@ -574,6 +589,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("reset", _cmd_reset, "重置会话（清空历史）")
     reg.register("config", _cmd_config, "<key> <value>  改运行时配置 (max_steps/token_budget)")
     reg.register("budget", _cmd_budget, "查看本次 token 消耗")
+    reg.register("stats", _cmd_stats, "[all]  LLM 调用可靠性统计（per-model 成功/空/截断/错误/耗时）")
     reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
     reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
     reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")

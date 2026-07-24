@@ -394,6 +394,20 @@ async def api_model_list():
             "default": config.DEFAULT_MODEL}
 
 
+@app.get("/api/stats")
+async def api_stats(scope: str = "current"):
+    """LLM 调用可靠性统计（per-model 聚合）。scope=current(默认，当前 session)/all(本仓库全部)。"""
+    from llm_call_log import aggregate_calls, load_all_calls
+    from session import _repo_sessions_dir
+    if _agent is None:
+        return {"scope": scope, "calls": 0, "stats": {}}
+    if scope == "all":
+        records = load_all_calls(_repo_sessions_dir(WORKSPACE))
+    else:
+        records = _agent.session.llm_calls.all_records()
+    return {"scope": scope, "calls": len(records), "stats": aggregate_calls(records)}
+
+
 @app.put("/api/models")
 async def api_models_save(request: Request):
     """保存模型配置到 ~/.agt/models.json。"""

@@ -164,6 +164,12 @@ def _policy_cast(v):
     return s
 
 
+def _str_or_none(v):
+    """非空字符串原样（去空白），空串→None。用于 reasoning_completer 等可空配置。"""
+    s = str(v).strip()
+    return s or None
+
+
 # 可配置项：名字 -> (设在 agent 还是 agent.llm 上，类型转换)
 CONFIGURABLE = {
     "max_steps": ("agent", int),
@@ -172,6 +178,7 @@ CONFIGURABLE = {
     "temperature": ("llm", float),
     "enable_thinking": ("llm", _to_bool),
     "fallback_policy": ("llm", _policy_cast),
+    "reasoning_completer": ("llm", _str_or_none),
 }
 
 

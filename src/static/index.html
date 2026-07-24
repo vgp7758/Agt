@@ -74,6 +74,22 @@
   .modal label { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:10px; }
   .modal input[type=number]{ width:130px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
   .modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+  /* 模型列表项 */
+  .model-item { margin:6px 0; padding:10px 12px; background:#f9fafb; border:1px solid var(--line); border-radius:10px; font-size:12px; display:flex; flex-direction:column; gap:5px; }
+  .model-item .mi-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .model-item .mi-name { font-weight:600; font-size:13px; color:#1f2329; min-width:70px; }
+  .model-item .mi-badge { font-size:10px; padding:1px 6px; border-radius:8px; font-weight:500; }
+  .model-item .mi-badge.default { background:#dcfce7; color:#166534; }
+  .model-item .mi-badge.thinking { background:#ede9fe; color:#6d28d9; }
+  .model-item input[type="text"], .model-item input[type="password"] { padding:4px 7px; border:1px solid var(--line); border-radius:6px; font-size:12px; flex:1; min-width:110px; outline:none; }
+  .model-item input[type="text"]:focus, .model-item input[type="password"]:focus { border-color:var(--me); }
+  .model-item label.mi-check { display:flex; align-items:center; gap:3px; font-size:11px; color:#5b6470; cursor:pointer; white-space:nowrap; }
+  .model-item .mi-del { width:20px; height:20px; border-radius:50%; border:1px solid var(--line); background:#fff; color:#ef4444; font-size:14px; line-height:18px; cursor:pointer; padding:0; flex-shrink:0; }
+  .model-item .mi-del:hover { background:#fef2f2; }
+  .model-item .mi-btn { font-size:11px; padding:3px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; white-space:nowrap; color:#374151; }
+  .model-item .mi-btn:hover { background:#f3f4f6; }
+  .model-item .mi-btn.set-default { color:#059669; border-color:#a7f3d0; }
+  .model-item .mi-btn.set-default:hover { background:#ecfdf5; }
   .plan-panel { background:#fff; border-bottom:1px solid var(--line); padding:6px 14px; font-size:13px; max-height:200px; overflow-y:auto; }
   .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
   .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
@@ -153,6 +169,7 @@
       <option value="sticky">永久降级（sticky）</option>
       <option value="reset">每轮重试首模型（reset）</option>
     </select></label>
+    <label>reasoning补全模型 <input id="cfg_reasoning_completer" type="text" placeholder="deepseek-chat / minimax（留空=关闭）" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"></label>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
     </div>
@@ -429,13 +446,33 @@ function renderModelList(){
   const box=document.getElementById('modelList');
   const models=_modelData.models||{};
   const def=_modelData.default||'';
-  box.innerHTML=Object.entries(models).map(([name,m])=>`<div style="margin:2px 0;padding:4px;background:#0f3460;border-radius:4px;font-size:11px">
-    <b>${name}</b> <input value="${m.model||''}" placeholder="model id" onchange="_modelData.models['${name}'].model=this.value" style="width:140px">
-    <input value="${m.base_url||''}" placeholder="base_url" onchange="_modelData.models['${name}'].base_url=this.value" style="width:180px"><br>
-    <input value="${Array.isArray(m.api_token)?m.api_token.join(', '):(m.api_token||'')}" placeholder="api_token（多个用逗号分隔）" type="password" onchange="_modelData.models['${name}'].api_token=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="width:330px">
-    <button class="del" onclick="delete _modelData.models['${name}'];renderModelList()">×</button>
-    ${name===def?'<span style="color:#98c379">✓默认</span>':`<button onclick="_modelData.default='${name}';renderModelList()">设默认</button>`}
-  </div>`).join('')||'<div style="color:#8a9099">暂无模型</div>';
+  box.innerHTML=Object.entries(models).map(([name,m])=>{
+    const escName = name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const isDefault = name===def;
+    const thinking = !!m.thinking;
+    return `<div class="model-item">
+      <div class="mi-row">
+        <span class="mi-name">${escName}</span>
+        ${isDefault ? '<span class="mi-badge default">✓ 默认</span>' : ''}
+        ${thinking ? '<span class="mi-badge thinking">🧠 thinking</span>' : ''}
+        <button class="mi-del" onclick="delete _modelData.models[\'${escName}\'];renderModelList()" title="删除">×</button>
+      </div>
+      <div class="mi-row">
+        <input value="${esc(m.model||'')}" placeholder="model id" onchange="_modelData.models['${escName}'].model=this.value" style="flex:2">
+        <input value="${esc(m.desc||'')}" placeholder="描述（显示用）" onchange="_modelData.models['${escName}'].desc=this.value" style="flex:1;min-width:80px">
+      </div>
+      <div class="mi-row">
+        <input value="${esc(m.base_url||'')}" placeholder="base_url" onchange="_modelData.models['${escName}'].base_url=this.value" style="flex:2">
+        <label class="mi-check" title="该模型是否支持 enable_thinking（Qwen/ModelScope 推理模型）">
+          <input type="checkbox" ${thinking?'checked':''} onchange="_modelData.models['${escName}'].thinking=this.checked;renderModelList()"> thinking
+        </label>
+      </div>
+      <div class="mi-row">
+        <input value="${Array.isArray(m.api_token)?m.api_token.join(', '):(m.api_token||'')}" placeholder="api_token（多个用逗号分隔）" type="password" onchange="_modelData.models['${escName}'].api_token=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="flex:1">
+        ${isDefault ? '' : `<button class="mi-btn set-default" onclick="_modelData.default=\'${escName}\';renderModelList()">⭐ 设默认</button>`}
+      </div>
+    </div>`;
+  }).join('')||'<div style="color:#8a9099;padding:8px">暂无模型，点击下方"添加模型"</div>';
 }
 function addModel(){
   const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;
@@ -461,6 +498,7 @@ document.getElementById('cfgSave').onclick=()=>{
     enable_thinking: document.getElementById('cfg_enable_thinking').checked,
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
+    reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
   };
   ws.send(JSON.stringify({action:'set_config', values}));
@@ -559,6 +597,7 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
         document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
+        document.getElementById('cfg_reasoning_completer').value = m.values.reasoning_completer || '';
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
       }
       break;

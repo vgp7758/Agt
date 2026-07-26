@@ -114,6 +114,16 @@ def load_max_level() -> int:
     return ml if ml >= 1 else 4
 
 
+def get_retrieval_model() -> str:
+    """Agentic RAG 检索用的便宜模型（settings.json 的 retrieval_model；默认 DEFAULT_MODEL）。
+    抽关键字/精排两次 LLM 调用用它（短 prompt + 便宜模型省 token）。"""
+    try:
+        m = (load_runtime_settings().get("retrieval_model", "") or "").strip()
+    except Exception:
+        m = ""
+    return m or DEFAULT_MODEL
+
+
 # === RAG 配置持久化（项目级 <workspace>/.agent/rag.json）===
 DEFAULT_RAG_CONFIG = {
     "enabled": False,

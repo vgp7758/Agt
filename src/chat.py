@@ -214,6 +214,12 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         for line in apply_config(agent, saved):
             if verbose:
                 print(line)
+    # Agentic RAG 检索模型（便宜模型，抽关键字/精排；失败回退主模型 self.llm）
+    try:
+        from llm_client import LLMClient
+        agent.retrieval_llm = LLMClient(model_name=config.get_retrieval_model(), enable_thinking=False)
+    except Exception:
+        pass
     return agent
 
 
@@ -279,30 +285,62 @@ def _worker(agent, work_q, registry, state):
         state["started"] = time.time()
         state["busy"] = True
         try:
-            if kind == "background":
-                src, msg = payload
-                state["desc"] = f"后台·{src}"
-                print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
-                agent.run(msg)
-            elif kind == "task":
-                # Web 端发起的、占用 agent 的任务（工作流调试 / RAG 建库），与聊天同流串行
+            if kind == "task":
+                # task（工作流调试/RAG 建库）单独跑，不合并
                 state["desc"] = "工作流调试/RAG 建库"
                 payload()
-            else:  # kind == "user"（CLI input 线程 或 Web 客户端喂入；quit 已在入口拦截）
-                user = payload
-                if not user:
+            elif kind == "user" and payload.startswith("/"):
+                # 斜杠命令：即时分发，不合并、不进 agent.run
+                state["desc"] = payload[:40]
+                registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q))
+            else:
+                # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
+                batch = [(kind, payload)]
+                while True:
+                    try:
+                        nxt = work_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    if nxt is None:
+                        work_q.put(None)   # 退出哨兵放回，本轮处理后退出
+                        break
+                    nk, np_ = nxt
+                    # task / 斜杠命令不能合并进 agent.run：放回队尾停止 drain
+                    if nk == "task" or (nk == "user" and np_.startswith("/")):
+                        work_q.put(nxt)
+                        break
+                    batch.append(nxt)
+                user_msg = _merge_batch(batch)
+                if not user_msg:
                     continue
-                state["desc"] = user[:40]
-                if registry.dispatch(user, CommandContext(agent=agent, work_q=work_q)):
-                    continue
-                agent.run(user)
+                state["desc"] = user_msg[:40]
+                agent.run(user_msg)
         except Exception as e:
             print(f"\n⚠️ 执行出错：{e}")
         finally:
             state["busy"] = False
+            try:
+                agent.on_event({"type": "_done"})   # 通知前端 agent 空闲（解除 busy）；CLI _render_loop 收到打印输入提示
+            except Exception:
+                pass
 
 
-def _render_loop(agent, event_q, worker, state, work_q, threshold=20.0, interval=20.0):
+def _merge_batch(batch):
+    """把 drain 出的一批 (kind, payload) 合并成一条 user_message，一次 agent.run 处理。
+    background 标注来源（[后台通知·<source>]），让 agent 识别是哪个调度任务/进程发的；
+    user 原样。多条用 --- 分隔。"""
+    parts = []
+    for k, p in batch:
+        if k == "background":
+            src, msg = p
+            print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
+            parts.append(f"[后台通知·{src}] {msg}")
+        else:  # user
+            parts.append(p)
+    return parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
+
+
+def _render_loop(agent, event_q, worker, state, work_q, threshold=20.0, interval=20.0, interactive=True):
     """主线程：消费 event_q 调 agent._print_event 渲染 agent 事件 + 长任务心跳 + 检测 worker 退出。
     所有 print 都在本线程 → 与 worker 的命令/提示 print 基本不并发（worker 串行 + 心跳仅长任务）。
     长任务（agent.run 超过 threshold 秒）才开始报心跳，每 interval 秒一行，短任务无打扰。"""
@@ -323,10 +361,14 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=20.0, interval
                     last_report = time.time()
             continue
         try:
-            if e.get("type") == "system":
+            etype = e.get("type")
+            if etype == "system":
                 print(e.get("text", ""))   # 子 Agent 边界 / agent system 提示（_print_event 不处理 system）
             else:
                 agent._print_event(e)      # 复用 agent 的事件格式化渲染（主线程单线程 print）
+            # _done = 一个 work_q 项处理完（agent 回答 / task / background）→ 打印输入提示（仅 CLI）
+            if interactive and etype == "_done":
+                print("\n🧑 你：", end="", flush=True)
         except Exception:
             pass
     print("\n再见！")
@@ -381,7 +423,7 @@ def web_main(port=None):
 
     print("（Web 模式：浏览器交互；Ctrl+C 退出）")
     try:
-        _render_loop(agent, event_q, worker, state, work_q)
+        _render_loop(agent, event_q, worker, state, work_q, interactive=False)
     except KeyboardInterrupt:
         print("\n⏹ 已请求停止，等当前步完成…")
         agent._stop_flag = True
@@ -431,7 +473,7 @@ def main():
     def _input_thread():
         while True:
             try:
-                user = input("\n🧑 你：").strip()
+                user = input("").strip()   # 提示由主线程 _render_loop 在 agent 完成后打印
             except (EOFError, KeyboardInterrupt):
                 work_q.put(None)   # 哨兵：通知主线程退出
                 return
@@ -455,9 +497,10 @@ def main():
     # worker 线程：串行消费 work_q 跑 agent.run（长任务后台化，不卡主线程）
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
     worker.start()
+    print("\n🧑 你：", end="", flush=True)   # 首次输入提示（之后 _render_loop 在 agent 完成后打印）
 
     try:
-        _render_loop(agent, event_q, worker, state, work_q)
+        _render_loop(agent, event_q, worker, state, work_q, interactive=True)
     except KeyboardInterrupt:
         # Ctrl+C：SIGINT 只到主线程；请求 worker 停止（等当前 LLM 步返回后在 _stop_flag 检查点中断）
         print("\n⏹ 已请求停止，等当前步完成…")

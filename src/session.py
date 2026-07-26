@@ -336,6 +336,9 @@ class Session:
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
+            _rh = getattr(self._current, "_retrieval_hint", None)
+            if _rh:
+                msgs.append({"role": "system", "content": _rh})
             msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             # 自主模式下用户插入的消息：在工具结果后以 system 消息注入，Agent 下一步就能看到
             hint = getattr(self._current, "_user_hint", None)
@@ -405,6 +408,9 @@ class Session:
             body.extend(self._render_turn_frozen(i))
         if self._current is not None:
             body.append({"role": "user", "content": self._user_content(self._current)})
+            _rh = getattr(self._current, "_retrieval_hint", None)
+            if _rh:
+                body.append({"role": "system", "content": _rh})
             body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             hint = getattr(self._current, "_user_hint", None)
             if hint:

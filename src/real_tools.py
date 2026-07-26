@@ -63,7 +63,7 @@ def _run_subprocess_streaming(args, name, shell=False):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。"""
     proc = subprocess.Popen(
-        args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, cwd=str(WORKSPACE), shell=shell,
         bufsize=1, encoding="utf-8", errors="replace",
     )

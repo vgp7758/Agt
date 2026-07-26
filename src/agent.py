@@ -458,6 +458,65 @@ class Agent:
             msgs.append({"role": "system", "content": n})
         return msgs
 
+    # ========== Agentic RAG：自动检索历史工具调用（注入 user 后 system）==========
+    def _extract_keywords(self, msg: str) -> list:
+        """便宜模型从 user msg 抽 3-5 个检索关键字。"""
+        llm = getattr(self, "retrieval_llm", None) or self.llm
+        prompt = ("从以下用户请求提取 3-5 个用于检索历史工具调用的关键字，"
+                  "逗号分隔，只要词、不要解释：\n" + msg)
+        resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=80, enable_thinking=False)
+        return [w.strip() for w in resp.content.replace("，", ",").replace("、", ",").split(",")
+                if w.strip()][:8]
+
+    def _rerank_toolcalls(self, msg: str, hits: list) -> list:
+        """便宜模型从初筛 hits 精选 1-3 条，返回 [entry]。"""
+        if not hits:
+            return []
+        llm = getattr(self, "retrieval_llm", None) or self.llm
+        lines = []
+        for e, _kws in hits:
+            args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)[:200]
+            result_s = (e.get("result", "") or "")[:200]
+            lines.append(f"[{e['call_id']}] {e['name']}({args_s}) 结果:{result_s}")
+        prompt = ("用户请求：" + msg + "\n\n以下是历史工具调用候选，按相关性选出最相关的 1-3 条：\n"
+                  + "\n".join(lines)
+                  + "\n\n只返回选中的 call_id，逗号分隔（如 c7,c8），不要其它内容。")
+        resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=50, enable_thinking=False)
+        ids = [w.strip() for w in resp.content.replace("，", ",").split(",") if w.strip()]
+        tl = self.session.toollog
+        return [tl.get(i) for i in ids if tl.get(i)][:3]
+
+    def _format_retrieval(self, ranked: list) -> str:
+        """格式化注入文本（系统提示，投影时放 user 后）。"""
+        if not ranked:
+            return ""
+        lines = ["以下是历史工具调用中可能与本次要求相关的记录："]
+        for e in ranked:
+            args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)
+            if len(args_s) > 300:
+                args_s = args_s[:300] + "…"
+            lines.append(f"{e['name']}({args_s}) tool_call_id: {e['call_id']}")
+        return "\n".join(lines)
+
+    def _agentic_retrieve(self, msg: str) -> str:
+        """Agentic RAG：抽关键字 → toollog 初筛 → 精排 → 格式化。返回注入文本（空则不注入）。
+        全程兜底，失败返回 ''（不影响主流程）。"""
+        try:
+            tl = self.session.toollog
+            if len(tl) == 0:
+                return ""
+            kws = self._extract_keywords(msg)
+            if not kws:
+                return ""
+            hits = tl.search(kws)
+            if not hits:
+                return ""
+            ranked = self._rerank_toolcalls(msg, hits)
+            return self._format_retrieval(ranked)
+        except Exception as e:
+            _LOG.debug("Agentic RAG 检索失败: %s", e)
+            return ""
+
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None, _autonomous_continue: bool = False) -> str:
         """
@@ -470,6 +529,10 @@ class Agent:
         while True:
             self._stop_flag = False
             self.session.start_turn(msg, imgs)
+            # —— Agentic RAG：检索相关历史工具调用，挂 _retrieval_hint（投影时在 user 后插 system）——
+            _rh = self._agentic_retrieve(msg)
+            if _rh:
+                self.session._current._retrieval_hint = _rh
             # —— 重置本轮钩子状态 ——
             self._hook_notes = []
             self._answer_redo_draft = None

@@ -72,6 +72,21 @@ class ToolLog:
             return ("(详情已失效)", {}, "")
         return (e["name"], e.get("arguments", {}), e.get("result", ""))
 
+    def search(self, keywords, max_hits=20) -> list:
+        """按关键字在 name/arguments/result 里子串匹配初筛（Agentic RAG 第一阶段，无 LLM）。
+        返回 [(entry, [命中的关键字])]，最多 max_hits 条。"""
+        kws = [k for k in (keywords or []) if k]
+        if not kws:
+            return []
+        hits = []
+        for e in self._data.values():
+            text = (e["name"] + " " + json.dumps(e.get("arguments", {}), ensure_ascii=False)
+                    + " " + (e.get("result", "") or ""))
+            matched = [k for k in kws if k in text]
+            if matched:
+                hits.append((e, matched))
+        return hits[:max_hits]
+
     def __len__(self):
         return len(self._data)
 

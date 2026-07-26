@@ -256,6 +256,16 @@ def apply_config(agent, values: dict) -> list:
             results.append(f"✅ max_effective_context_window = {win or 'None（关闭分档→原窗口+摘要）'}（已存 models.json[{agent.llm.model_name}]）")
         except Exception:
             results.append(f"❌ max_effective_context_window 值非法：{v}")
+    if "retrieval_model" in values:
+        v = values.pop("retrieval_model")
+        try:
+            import config
+            saved = config.load_runtime_settings(); saved["retrieval_model"] = str(v).strip(); config.save_runtime_settings(saved)
+            from llm_client import LLMClient
+            agent.retrieval_llm = LLMClient(model_name=str(v).strip() or config.DEFAULT_MODEL, enable_thinking=False)
+            results.append(f"✅ retrieval_model = {v}（Agentic RAG 检索用；已存 settings.json + 即时生效）")
+        except Exception as e:
+            results.append(f"⚠️ retrieval_model 设置失败：{e}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")

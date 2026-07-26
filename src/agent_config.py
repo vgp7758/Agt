@@ -76,6 +76,56 @@ def skills_summary(workspace: Path) -> str:
     return "\n".join(lines)
 
 
+# ===== 子 Agent 声明（.agent/agents/*.md，声明式 + 按需实例化 + 一次性）=====
+
+def load_agents_index(workspace: Path) -> list[dict]:
+    """扫 .agent/agents/*.md，返回 [{name, description, tools, model, path}, ...]。
+    与 load_skills_index 同构，但 agents 是 <name>.md 单文件（非 */SKILL.md）。"""
+    d = workspace / _AGENT_DIR / "agents"
+    out = []
+    if not d.exists():
+        return out
+    for md in sorted(d.glob("*.md")):
+        try:
+            meta, _ = _split_frontmatter(md.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        out.append({
+            "name": meta.get("name", md.stem),
+            "description": meta.get("description", ""),
+            "tools": meta.get("tools", ""),
+            "model": meta.get("model", ""),
+            "path": str(md.relative_to(workspace)).replace("\\", "/"),
+        })
+    return out
+
+
+def agents_summary(workspace: Path) -> str:
+    """拼成 SYSTEM 里一行一个子 agent 的摘要（name + description/何时调用）。无则空串。"""
+    idx = load_agents_index(workspace)
+    if not idx:
+        return ""
+    return "\n".join(f"- {a['name']}: {a['description']}" for a in idx)
+
+
+def seed_default_agents(workspace: Path) -> int:
+    """首次启动把随包默认子 agent 模板（src/agents/*.md）播种到 .agent/agents/。
+    目标已存在则跳过（不覆盖用户修改）。返回播种数量。照搬 workflow.seed_default_workflows。"""
+    bundled = Path(__file__).resolve().parent / "agents"
+    dst = workspace / _AGENT_DIR / "agents"
+    if not bundled.exists():
+        return 0
+    dst.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for src in sorted(bundled.glob("*.md")):
+        target = dst / src.name
+        if target.exists():
+            continue
+        target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        n += 1
+    return n
+
+
 # ===== 技能工具（注册进 Agent，子 Agent 继承）=====
 
 def read_skill(name: str) -> str:

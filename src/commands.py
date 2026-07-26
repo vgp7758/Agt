@@ -864,6 +864,35 @@ def _cmd_rag(ctx: CommandContext, args):
     print(f"❌ 未知子命令 {sub}；可用：build / config / stats / query")
 
 
+def _cmd_tools(ctx: CommandContext, args):
+    """/tools [关键词] —— 列出当前注册的全部工具（按来源前缀分组）。
+    无关键词（或 /tools list）列全部；给关键词则按名字/描述过滤。
+    Toolbox 按名字去重，总数即唯一工具数（无重复）。"""
+    args_clean = [a for a in args if a.lower() != "list"]
+    kw = " ".join(args_clean).strip().lower()
+    tools = sorted(ctx.agent.tools, key=lambda t: t.name)
+    if kw:
+        tools = [t for t in tools if kw in t.name.lower() or kw in (t.description or "").lower()]
+    if not tools:
+        print(f"(无匹配 '{kw}' 的工具)")
+        return
+    groups = {"MCP": [], "工作流(wf_)": [], "LSP(cs_/py_)": [], "内置/其它": []}
+    for t in tools:
+        n = t.name
+        if n.startswith("__mcp__"):
+            groups["MCP"].append(n)
+        elif n.startswith("wf_"):
+            groups["工作流(wf_)"].append(n)
+        elif n.startswith(("cs_", "py_")):
+            groups["LSP(cs_/py_)"].append(n)
+        else:
+            groups["内置/其它"].append(n)
+    print(f"🔧 工具 {len(tools)} 个（按名字去重，无重复）：")
+    for g, names in groups.items():
+        if names:
+            print(f"  [{g}] {len(names)} 个：{', '.join(names)}")
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -887,6 +916,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("snapshot", _cmd_snapshot, "list | restore <序号|sha>  工作区快照回溯")
     reg.register("rewind", _cmd_rewind, "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）")
     reg.register("rag", _cmd_rag, "build | config [k v] | stats | query <词>  RAG 文档库")
+    reg.register("tools", _cmd_tools, "[关键词]  列出所有工具（按来源分组）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

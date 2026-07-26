@@ -136,40 +136,44 @@ async def api_wf_list():
     return {"items": items}
 
 
+def _infer_tool_group(name: str) -> str:
+    """工具名 → 模块分组（前缀推断；build_agent 标注优先）。"""
+    if name.startswith("wf_"):
+        return "工作流"
+    if name.startswith(("cs_", "py_")):
+        return "LSP"
+    return "其它"
+
+
 @app.get("/api/tools")
 async def api_tools():
-    """返回工作流可调用的全部工具（内置 + MCP + 用户 py 工具），供编辑器生成工具节点。"""
-    from real_tools import ALL_BUILTIN_TOOLS, infer_tool_outputs
-    from workflow import load_user_tools
-    user_tools, _ = load_user_tools(_workspace)
-    mcp_tools = list(_mcp_mgr.get_tools()) if _mcp_mgr is not None else []
-    sources = [
-        (list(ALL_BUILTIN_TOOLS), "内置"),
-        (mcp_tools, None),               # MCP 的 group 按 server 动态生成
-        (user_tools, "用户工具"),
-    ]
+    """返回 agent 已注册的全部工具（按模块分组），供工作流编辑器生成工具节点。
+    每个含 name/display/group/description/params/outputs。group 来自 build_agent 标注或前缀推断。"""
+    from real_tools import infer_tool_outputs
+    if _agent is None:
+        return {"tools": []}
+    groups_map = getattr(_agent, "tool_groups", {})
     out, seen = [], set()
-    for tools, default_group in sources:
-        for t in tools:
-            if t.name in seen:
-                continue
-            seen.add(t.name)
-            s = t.schema["function"]
-            props = s.get("parameters", {}).get("properties", {}) or {}
-            params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else "string") or "string"}
-                      for pn, ps in props.items()]
-            outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
-            name = s["name"]
-            if name.startswith("__mcp__"):
-                server = getattr(t, "server", "") or ""
-                orig = getattr(t, "orig_name", "") or name
-                group = f"MCP · {server}" if server else "MCP"
-                display = f"{server}.{orig}" if server else orig
-            else:
-                group = default_group or "其它"
-                display = name
-            out.append({"name": name, "display": display, "group": group,
-                        "description": s.get("description", ""), "params": params, "outputs": outputs})
+    for t in _agent.tools:
+        if t.name in seen:
+            continue
+        seen.add(t.name)
+        s = t.schema["function"]
+        props = s.get("parameters", {}).get("properties", {}) or {}
+        params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else "string") or "string"}
+                  for pn, ps in props.items()]
+        outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
+        name = s["name"]
+        if name.startswith("__mcp__"):
+            server = getattr(t, "server", "") or ""
+            orig = getattr(t, "orig_name", "") or name
+            group = f"MCP · {server}" if server else "MCP"
+            display = f"{server}.{orig}" if server else orig
+        else:
+            group = groups_map.get(name) or _infer_tool_group(name)
+            display = name
+        out.append({"name": name, "display": display, "group": group,
+                    "description": s.get("description", ""), "params": params, "outputs": outputs})
     return {"tools": out}
 
 

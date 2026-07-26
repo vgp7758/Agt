@@ -1294,7 +1294,7 @@ REAL_TOOLS = Toolbox(
     Tool(get_tool_timeout),
 )
 
-# 轻量工具（仅工作流编排用，不注册给 Agent）
+# 轻量工具（基础函数：plugin 节点 / 代码节点 / Agent 均可调；build_agent 注册进 agent.tools）
 LIGHT_TOOLS = Toolbox(
     Tool(add),
     Tool(subtract),
@@ -1308,6 +1308,7 @@ LIGHT_TOOLS = Toolbox(
     Tool(contains),
     Tool(to_ascii),
     Tool(sleep),
+    hidden=True,
 )
 
 # 全部内置工具（编辑器 /api/tools 返回这个）

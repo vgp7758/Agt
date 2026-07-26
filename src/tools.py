@@ -34,9 +34,10 @@ def _type_to_schema(ptype):
 
 
 class Tool:
-    def __init__(self, func: Callable, outputs: list = None):
+    def __init__(self, func: Callable, outputs: list = None, hidden: bool = False):
         self.func = func
         self.name = func.__name__
+        self.hidden = hidden   # True=注册在工具箱（plugin/编辑器可用）但不投影给 LLM（schemas 跳过）
         self.user_outputs = outputs   # 显式输出 schema（优先于返回注解推断；供 plugin 节点 outputs / 编辑器补全）
         # docstring 第一行作为工具描述（模型靠它判断"该不该调这个工具"）
         first_line = (func.__doc__ or "").strip().split("\n", 1)[0].strip()
@@ -86,10 +87,13 @@ class Tool:
 
 
 class Toolbox:
-    def __init__(self, *tools: Tool):
+    def __init__(self, *tools: Tool, hidden: bool = False):
         self._tools: dict[str, Tool] = {}
         for t in tools:
             self.register(t)
+        if hidden:   # 整箱标 hidden（如 LIGHT_TOOLS：注册可用但不投影给 LLM）
+            for t in tools:
+                t.hidden = True
 
     def register(self, tool: Tool) -> "Toolbox":
         if tool.name in self._tools:
@@ -117,8 +121,8 @@ class Toolbox:
         return False
 
     def schemas(self) -> list[dict]:
-        """产出传给 API 的 tools 列表。"""
-        return [t.schema for t in self._tools.values()]
+        """产出传给 API 的 tools 列表（跳过 hidden：它们注册在箱但不投影给 LLM）。"""
+        return [t.schema for t in self._tools.values() if not getattr(t, "hidden", False)]
 
     def call(self, name: str, arguments: dict) -> str:
         """按名字派发执行。未知工具也返回文本提示，不抛异常。"""

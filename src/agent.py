@@ -78,6 +78,7 @@ class Agent:
     ):
         self.base_system = system
         self.tools = tools
+        self.tool_groups: dict = {}   # 工具名 -> 来源模块（build_agent 注册时标注，供 /api/tools 分组）
         self.max_steps = max_steps
         self.token_budget = token_budget
         self.verbose = verbose
@@ -110,7 +111,6 @@ class Agent:
         self.services = ServiceManager()
         self.scheduler = Scheduler(self)
         self.cumulative_tokens = 0
-        self.sub_agents: dict = {}  # 多 Agent 协作：name -> SubAgent
         self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
         self.active_plan_id: Optional[str] = None  # 当前活动计划 id（= 文件名 stem）；None=无活动计划
         self.active_plan: Optional[dict] = None     # 当前活动计划完整 dict（单一事实源：id/title/design/steps/...）

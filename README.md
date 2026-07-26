@@ -92,8 +92,8 @@ agt-web      # WebUI（浏览器打开 http://localhost:8000）
 ```
 ├── pyproject.toml       # pip install 配置（entry: agt, agt-web）
 ├── src/                 # 源代码
-│   ├── chat.py          # CLI
-│   ├── web.py           # WebUI + API
+│   ├── chat.py          # CLI(REPL) + 装配层 + agt-web 入口(web_main)
+│   ├── server.py        # Web 视图（FastAPI/WS，由 chat 内嵌，/web 启停）
 │   ├── agent.py         # ReAct 引擎
 │   ├── workflow.py      # Coze 工作流执行器
 │   ├── tools.py         # Tool/Toolbox

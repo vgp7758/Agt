@@ -24,7 +24,7 @@ from longterm_memory import make_ltm_tools
 from download import make_download_tools
 from toollog import make_tool_log_tools
 from wiki import make_wiki_tools
-from rag import make_rag_tools
+from rag import make_rag_tools, LocalRAG, set_rag
 from commands import CommandContext, build_default_registry, apply_config
 from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
@@ -32,6 +32,7 @@ from multiagent import make_subagent_tools
 from prompts import build_system
 from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
+from snapshots import SnapshotManager
 
 _MODELS_DESC = "；".join(f"{n}（{m.get('desc', '').strip()}）" for n, m in config.MODELS.items())
 
@@ -132,84 +133,218 @@ SYSTEM = build_system(
     ),
 )
 
+
+# ===== 可复用装配层（web/CLI 共用，消除两边装配漂移） =====
+
+def init_rag(workspace):
+    """装配全局 RAG 实例：seed 默认配置 + from_config 建实例并 set_rag。
+    enabled 关或模型路径无效 → 实例为 None（rag_query 返回未建库提示）。幂等。
+    之前 chat 漏了这步 → CLI 的 rag_query 恒空（连已建好的库都读不到）。"""
+    config.seed_rag_config(workspace)
+    try:
+        inst = LocalRAG.from_config(workspace)
+    except Exception as e:
+        print(f"[rag] 加载失败：{e}")
+        inst = None
+    set_rag(inst, str(workspace))
+
+
+def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, workspace=WORKSPACE):
+    """装配一个完整 Agent（web 与 CLI 共用）。
+    mcp_mgr 须已连接（web 传模块级单例 / chat main 自建并连接后传入）；
+    on_event/snapshot_manager 可注入；verbose 控制装配期打印。返回装配好的 agent。"""
+    # RAG 全局实例（之前 chat 漏装配）
+    init_rag(workspace)
+    # 快照管理器（默认装；web 可传自己的）
+    snap = snapshot_manager or SnapshotManager(workspace)
+
+    agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
+                  enable_thinking=True, max_steps=50, token_budget=80000,
+                  verbose=verbose, on_event=on_event, snapshot_manager=snap)
+    # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
+    agent.mcp_mgr = mcp_mgr
+    agent.workspace = workspace
+
+    for t in mcp_mgr.get_tools():
+        agent.tools.register(t)
+    for t in make_subagent_tools(agent):          # 多 Agent 协作
+        agent.tools.register(t)
+    for t in SKILL_TOOLS:                         # .agent/skills 渐进式披露 + 自动沉淀
+        agent.tools.register(t)
+    for t in make_plan_tools(agent):              # create_plan / update_plan
+        agent.tools.register(t)
+    for t in make_recall_tools(agent):            # recall_turn：召回窗口外历史轮完整上下文
+        agent.tools.register(t)
+    for t in make_ltm_tools(agent):               # add_memory/search_memory：跨 session 经验沉淀
+        agent.tools.register(t)
+    for t in make_download_tools(agent):          # list_downloadable/download_asset
+        agent.tools.register(t)
+    for t in make_tool_log_tools(agent):          # get_tool_detail/list_tool_logs
+        agent.tools.register(t)
+    for t in make_background_tools(agent):        # start_service / add_schedule
+        agent.tools.register(t)
+    for t in make_wiki_tools(agent):              # .agent/wiki 知识库 CRUD
+        agent.tools.register(t)
+    for t in make_rag_tools():                    # rag_query：语义召回本地文档片段
+        agent.tools.register(t)
+    for t in make_autonomous_tools(agent):        # 纯自主模式
+        agent.tools.register(t)
+    for t in make_workflow_mgmt_tools(workspace): # 工作流管理 + 首次扫描注册
+        agent.tools.register(t)
+    ok, broken = refresh_workflow_tools(agent.tools, workspace, agent)
+    for t in make_mcp_tools(mcp_mgr, str(workspace / ".mcp.json")):
+        agent.tools.register(t)
+    for t in make_lsp_tools(agent, mcp_mgr):      # ensure_lsp：按需装语言 LSP
+        agent.tools.register(t)
+    if verbose:
+        if ok:
+            print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")
+        if broken:
+            print(f"⚠️ {len(broken)} 个工作流加载失败：{broken}")
+
+    # 加载持久化运行时设置（回退链/策略/max_steps/temperature/enable_thinking 等；~/.agt/settings.json）
+    saved = config.load_runtime_settings()
+    if saved:
+        for line in apply_config(agent, saved):
+            if verbose:
+                print(line)
+    return agent
+
+
+def get_snapshot_list(session):
+    """收集 session 里所有快照点（供 /snapshot list 与未来 web UI）。
+    同 sha 去重（留首次出现），返回 [{idx, sha, user_message}]。"""
+    seen = set()
+    items = []
+    for i, t in enumerate(session.turns):
+        sha = getattr(t, "snapshot_sha", "") or ""
+        if not sha or sha in seen:
+            continue
+        seen.add(sha)
+        items.append({"idx": i, "sha": sha, "user_message": getattr(t, "user_message", "")})
+    return items
+
+
+def restore_snapshot(agent, sha):
+    """检查点回溯：还原工作区文件树 + 截断对话。
+    返回被截那轮的 user_message；snapshot_manager 未装或 sha 不存在返回 None。"""
+    if agent.snapshot_manager is None:
+        return None
+    agent.snapshot_manager.restore(sha)
+    return agent.session.restore_to_snapshot(sha)
+
+
+def _run_loop(agent, work_q, registry):
+    """主消费循环：串行处理 work_q 的 background / task / user 项。
+    CLI(main) 与 agt-web(web_main) 共用，保证任何时候只有一个 agent.run 在跑。"""
+    while True:
+        item = work_q.get()
+        if item is None:
+            print("\n再见！")
+            break
+        kind, payload = item
+        if kind == "background":
+            src, msg = payload
+            print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
+            try:
+                agent.run(msg)
+            except Exception as e:
+                print(f"\n⚠️ 后台触发执行出错：{e}")
+            continue
+        if kind == "task":
+            # Web 端发起的、占用 agent 的任务（工作流调试 / RAG 建库），与聊天同流串行
+            fn = payload
+            try:
+                fn()
+            except Exception as e:
+                print(f"\n⚠️ 任务执行出错：{e}")
+            continue
+        # kind == "user"（CLI input 线程 或 Web 客户端喂入）
+        user = payload
+        if not user:
+            continue
+        if registry.dispatch(user, CommandContext(agent=agent, work_q=work_q)):
+            continue
+        try:
+            agent.run(user)
+        except Exception as e:
+            print(f"\n⚠️ 执行出错：{e}")
+
+
+def web_main(port=None):
+    """agt-web 入口：装配 Agent + 自动起 Web 服务 + 开浏览器，跑主循环服务 WS/后台（非交互 REPL）。
+    端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
+    import sys
+    if port is None:
+        for a in sys.argv[1:]:
+            if a.isdigit():
+                port = int(a)
+                break
+    port = port or 8000
+    from server import broadcast, start_server, open_browser, lan_urls, stop_server_if_running
+    mcp_mgr = MCPManager()
+    mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
+    mcp_mgr.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))
+    agent = build_agent(mcp_mgr, on_event=broadcast, verbose=True, workspace=WORKSPACE)
+    print(f"当前模型：{agent.model_name}  (工具 {len(list(agent.tools))} 个)")
+    work_q: "queue.Queue" = queue.Queue()
+    registry = build_default_registry()
+
+    ok, msg = start_server(agent=agent, work_q=work_q, mcp_mgr=mcp_mgr, workspace=WORKSPACE, port=port)
+    if not ok:
+        print(f"❌ {msg}")
+        return
+    print(f"✅ {msg}")
+    print(f"  本机:   http://127.0.0.1:{port}/")
+    print(f"  局域网: {', '.join(lan_urls(port))}")
+    print("  （局域网内任何设备可连并驱动 Agent，仅在可信网络使用；Ctrl+C 退出）")
+    open_browser(port)
+
+    def _inbox_thread():
+        while True:
+            item = agent.pop_inbox()
+            if item:
+                work_q.put(("background", item))
+            else:
+                time.sleep(0.2)
+    threading.Thread(target=_inbox_thread, daemon=True).start()
+
+    print("（Web 模式：浏览器交互；Ctrl+C 退出）")
+    try:
+        _run_loop(agent, work_q, registry)
+    except KeyboardInterrupt:
+        print("\n再见！")
+    finally:
+        stop_server_if_running()
+        agent.shutdown()
+        mcp_mgr.shutdown()
+
+
 def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /help")
+    print("命令：/save /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /help")
     print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 打断但保留会话)")
     print("=" * 64)
 
-    agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
-                  enable_thinking=True, max_steps=50, token_budget=80000)
-    print(f"当前模型：{agent.model_name}  (输入 /model 切换)")
-
-    # 连接 MCP server（读 workspace/.mcp.json），发现并注册 AgenTank 等工具
+    # 连接 MCP server（workspace/.mcp.json + 全局 ~/.agt/mcp.json）
     mcp_mgr = MCPManager()
     mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
     mcp_mgr.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))   # 全局已装 LSP（ensure_lsp 装配的）
-    for t in mcp_mgr.get_tools():
-        agent.tools.register(t)
+
+    # 装配 Agent（web 与 CLI 共用 build_agent，消除装配漂移）。
+    # on_event=broadcast：无 Web 客户端时 no-op，纯 CLI 零开销；/web 起服务、有客户端连上后才推送。
+    from server import broadcast, stop_server_if_running
+    agent = build_agent(mcp_mgr, on_event=broadcast, verbose=True, workspace=WORKSPACE)
+    print(f"当前模型：{agent.model_name}  (输入 /model 切换)")
     print(f"已注册工具 {len(list(agent.tools))} 个（含 MCP 发现的）")
-
-    # 注册绑定到本 Agent 的子 Agent 管理工具（多 Agent 协作）
-    for t in make_subagent_tools(agent):
-        agent.tools.register(t)
-    # 注册技能工具（.agent/skills 渐进式披露 + 自动沉淀）
-    for t in SKILL_TOOLS:
-        agent.tools.register(t)
-    # 注册计划工具（create_plan / update_plan）
-    for t in make_plan_tools(agent):
-        agent.tools.register(t)
-    # 注册记忆召回工具（recall_turn：按需召回窗口外历史轮的完整上下文）
-    for t in make_recall_tools(agent):
-        agent.tools.register(t)
-    # 注册长期记忆工具（add_memory/search_memory/...：主 Agent 自主沉淀跨 session 经验）
-    for t in make_ltm_tools(agent):
-        agent.tools.register(t)
-    # 注册随包资产下载工具（list_downloadable/download_asset）
-    for t in make_download_tools(agent):
-        agent.tools.register(t)
-    # 注册工具详情拉取工具（get_tool_detail/list_tool_logs：按 call_id 拉被距离衰减截断的完整工具结果）
-    for t in make_tool_log_tools(agent):
-        agent.tools.register(t)
-    # 注册后台服务/调度工具（start_service / add_schedule 等）
-    for t in make_background_tools(agent):
-        agent.tools.register(t)
-    # 注册 wiki 工具（.agent/wiki 知识库 CRUD + update_wiki 子 Agent 维护）
-    for t in make_wiki_tools(agent):
-        agent.tools.register(t)
-    # 注册 RAG 文档库工具（rag_query：语义召回本地文档片段，需先在 /rag 页面建库）
-    for t in make_rag_tools():
-        agent.tools.register(t)
-    # 注册纯自主模式工具
-    for t in make_autonomous_tools(agent):
-        agent.tools.register(t)
-    # 注册工作流管理工具 + 首次扫描 .agent/workflows/ 注册工作流（之后每轮自动刷新）
-    for t in make_workflow_mgmt_tools(WORKSPACE):
-        agent.tools.register(t)
-    ok, broken = refresh_workflow_tools(agent.tools, WORKSPACE, agent)
-    for t in make_mcp_tools(mcp_mgr, str(WORKSPACE / ".mcp.json")):
-        agent.tools.register(t)
-    # 注册按需装配语言 LSP 的工具（ensure_lsp：处理某语言代码前调用，当轮即可用）
-    for t in make_lsp_tools(agent, mcp_mgr):
-        agent.tools.register(t)
-    if ok:
-        print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")
-    if broken:
-        print(f"⚠️ {len(broken)} 个工作流加载失败：{broken}")
-    registry = build_default_registry()
-
-    # 加载持久化运行时设置（回退链/策略/max_steps/temperature/enable_thinking 等；存在 ~/.agt/settings.json）。
-    # CLI 之前漏了这步 → webui 配的 provider 回退链在命令行不生效（glm 失败无回退）。与 web.py 保持一致。
-    saved = config.load_runtime_settings()
-    if saved:
-        for line in apply_config(agent, saved):
-            print(line)
 
     # REPL 单消费者队列驱动：input 线程 + inbox 轮询线程 都往 work_q 喂，
     # 主线程串行消费——保证任何时候只有一个 agent.run 在跑（run 非线程安全）。
+    # Web 客户端（/web 起的服务）的文本消息也喂进这个 work_q，与 CLI 输入同流串行。
     work_q: "queue.Queue" = queue.Queue()
+    registry = build_default_registry()   # work_q 通过 dispatch 时的 CommandContext 注入
 
     def _input_thread():
         while True:
@@ -217,6 +352,10 @@ def main():
                 user = input("\n🧑 你：").strip()
             except (EOFError, KeyboardInterrupt):
                 work_q.put(None)   # 哨兵：通知主线程退出
+                return
+            # quit 仅在 CLI 输入触发退出；Web 客户端发的 "quit" 只当普通消息（不会关掉服务）
+            if user.lower() in {"quit", "exit", "q", "退出"}:
+                work_q.put(None)
                 return
             work_q.put(("user", user))
 
@@ -232,38 +371,9 @@ def main():
     threading.Thread(target=_inbox_thread, daemon=True).start()
 
     try:
-        while True:
-            item = work_q.get()
-            if item is None:
-                print("\n再见！")
-                break
-            kind, payload = item
-            if kind == "background":
-                src, msg = payload
-                print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
-                try:
-                    agent.run(msg)
-                except Exception as e:
-                    print(f"\n⚠️ 后台触发执行出错：{e}")
-                continue
-            # kind == "user"
-            user = payload
-            if not user:
-                continue
-            if user.lower() in {"quit", "exit", "q", "退出"}:
-                print("再见！")
-                break
-
-            # 斜杠命令优先分发
-            if registry.dispatch(user, CommandContext(agent=agent)):
-                continue
-
-            # 普通对话交给 Agent
-            try:
-                agent.run(user)
-            except Exception as e:
-                print(f"\n⚠️ 执行出错：{e}")
+        _run_loop(agent, work_q, registry)
     finally:
+        stop_server_if_running()   # 若 /web 起过服务，退出时一并停掉释放端口
         agent.shutdown()    # 停后台服务（防孤儿进程）+ 停调度器
         mcp_mgr.shutdown()
 

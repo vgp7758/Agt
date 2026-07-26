@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from session import Session, SESSIONS_DIR, list_sessions, session_meta
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 @dataclass
 class CommandContext:
     agent: "Agent"  # 提供 session / llm / base_system / max_steps / token_budget / cumulative_tokens
+    work_q: object = None  # chat 主循环的 work_q（/web 启动服务时注入，让 WS 文本消息回流主循环）
 
     @property
     def session(self) -> Session:
@@ -95,7 +97,7 @@ def _cmd_resume(ctx: CommandContext, args):
         print("用法：/resume <name>  （先用 /list 查看可用会话）")
         return
     try:
-        new_session = Session.load(positional[0], llm=ctx.agent.llm)
+        new_session = Session.load(positional[0], llm=ctx.agent.llm, workspace=ctx.session.workspace)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         return
@@ -133,7 +135,7 @@ def _cmd_show(ctx: CommandContext, args):
         print(ctx.session.summary_str())
         return
     try:
-        s = Session.load(positional[0], llm=ctx.agent.llm)
+        s = Session.load(positional[0], llm=ctx.agent.llm, workspace=ctx.session.workspace)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         return
@@ -621,6 +623,247 @@ def _cmd_feedback(ctx: CommandContext, args):
     print(submit_feedback(kind, content, agent=ctx.agent))
 
 
+def _coerce(v):
+    """把命令行字符串粗略转成配置值：bool / int / 逗号 list / 其余字符串。"""
+    s = str(v).strip()
+    low = s.lower()
+    if low in ("true", "yes", "on"):
+        return True
+    if low in ("false", "no", "off"):
+        return False
+    if "," in s:
+        return [x.strip() for x in s.split(",") if x.strip()]
+    if s.lstrip("-").isdigit():
+        return int(s)
+    return s
+
+
+# ========== 内嵌 Web 服务（/web） ==========
+
+def _cmd_web(ctx: CommandContext, args):
+    """/web [start] [port] | stop | status —— 按需启停内嵌 Web 服务。
+    无参或 start：启动（默认 8000）+ 自动开浏览器 + 打印本机/局域网地址。
+    /web 9000 或 /web start 9000：指定端口；/web stop：释放端口；/web status：查状态。"""
+    from server import start_server, stop_server, server_status, open_browser, lan_urls
+    ws = ctx.session.workspace
+    sub = args[0].lower() if args else "start"
+
+    if sub == "stop":
+        ok, msg = stop_server()
+        print(("🛑 " if ok else "⚠️ ") + msg)
+        return
+    if sub == "status":
+        st = server_status()
+        if not st["running"]:
+            print("服务未运行")
+        else:
+            print(f"服务运行中 @ 0.0.0.0:{st['port']}")
+            print(f"  本机:   {st['local_url']}")
+            print(f"  局域网: {', '.join(st['lan_urls'])}")
+            if st.get("error"):
+                print(f"  错误: {st['error']}")
+        return
+
+    if ctx.work_q is None:
+        print("⚠️ 此命令需在 CLI（chat 主循环）启动；Web 端无需再启动服务。")
+        return
+    # 启动（默认端口）
+    port = 8000
+    if sub.isdigit():
+        port = int(sub)
+    if len(args) >= 2 and args[1].isdigit():
+        port = int(args[1])
+    ok, msg = start_server(agent=ctx.agent, work_q=ctx.work_q,
+                           mcp_mgr=getattr(ctx.agent, "mcp_mgr", None),
+                           workspace=ws, port=port)
+    if not ok:
+        print(f"❌ {msg}")
+        return
+    print(f"✅ {msg}")
+    print(f"  本机:   http://127.0.0.1:{port}/")
+    print(f"  局域网: {', '.join(lan_urls(port))}")
+    print("  （局域网内任何设备可连并驱动 Agent，仅在可信网络使用；/web stop 释放端口）")
+    open_browser(port)
+
+
+# ========== 快照回溯（/snapshot） ==========
+
+def _cmd_snapshot(ctx: CommandContext, args):
+    """/snapshot list | restore <序号|sha> —— 工作区文件快照回溯（检查点）。
+    每轮对话开始前自动打一个快照；restore 回到该快照之前（截断对话 + 还原文件树）。"""
+    from chat import get_snapshot_list, restore_snapshot
+    positional = _parse_args(args)[0]
+    sub = positional[0].lower() if positional else "list"
+    if ctx.agent.snapshot_manager is None:
+        print("（快照未启用）")
+        return
+    items = get_snapshot_list(ctx.session)   # 按时间正序（旧→新）
+
+    if sub in ("list", "ls"):
+        if not items:
+            print("（暂无快照点；每轮对话开始时会自动打一个快照）")
+            return
+        print(f"📸 快照点（{len(items)} 个，序号大的=最近）：")
+        for n, it in enumerate(items, 1):
+            msg = (it["user_message"] or "").replace("\n", " ")[:40]
+            print(f"  #{n}  {it['sha'][:10]}  「{msg}」")
+        print("用法：/snapshot restore <序号|sha>")
+        return
+
+    if sub == "restore":
+        if len(positional) < 2:
+            print("用法：/snapshot restore <序号|sha>")
+            return
+        key = positional[1]
+        sha = None
+        if key.isdigit():
+            n = int(key)
+            if 1 <= n <= len(items):
+                sha = items[n - 1]["sha"]
+        if sha is None:
+            matches = [it["sha"] for it in items if it["sha"].startswith(key)]
+            if len(matches) == 1:
+                sha = matches[0]
+            elif not matches:
+                print(f"❌ 找不到快照 {key}")
+                return
+            else:
+                print(f"❌ 前缀 {key} 匹配多个快照，请用更长的前缀或序号")
+                return
+        try:
+            target = restore_snapshot(ctx.agent, sha)
+        except Exception as e:
+            print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+            return
+        if target is None:
+            print("❌ 回溯未生效（对话中找不到该快照点）")
+        else:
+            print(f"✅ 已回溯到该快照之前（截掉的轮：「{target[:60]}」）")
+        return
+
+    print(f"❌ 未知子命令 {sub}；可用：list / restore")
+
+
+def _cmd_rewind(ctx: CommandContext, args):
+    """/rewind [count] —— 回溯到 count 个 turn 之前：撤销最近 count 轮（对话 + 文件改动），count 默认 1。
+    依赖每轮自动打的工作区快照；回到指定轮【发送前】的状态。"""
+    from chat import restore_snapshot
+    if ctx.agent.snapshot_manager is None:
+        print("（快照未启用，无法回溯）")
+        return
+    turns = ctx.session.turns
+    if not turns:
+        print("（暂无对话轮，无可回溯）")
+        return
+    count = 1
+    if args and args[0].isdigit():
+        count = max(1, int(args[0]))
+    n = len(turns)
+    if count > n:
+        print(f"⚠️ 共 {n} 轮，回溯全部（回到最初）")
+        count = n
+    target = turns[n - count]               # 倒数第 count 轮 = 撤销起点
+    sha = getattr(target, "snapshot_sha", "") or ""
+    if not sha:
+        print(f"❌ 倒数第 {count} 轮没有快照点，无法回溯")
+        return
+    try:
+        restore_snapshot(ctx.agent, sha)
+    except Exception as e:
+        print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+        return
+    remain = len(ctx.session.turns)
+    print(f"✅ 已回溯（撤销最近 {count} 轮的对话 + 文件改动），剩余 {remain} 轮")
+
+
+# ========== RAG 文档库（/rag） ==========
+
+def _cmd_rag(ctx: CommandContext, args):
+    """/rag build | config [key val...] | stats | query <词> —— RAG 文档库管理。"""
+    from rag import get_rag
+    from config import load_rag_config, save_rag_config
+    import chat as chatmod
+    ws = ctx.session.workspace
+    positional, _flags = _parse_args(args)
+    sub = positional[0].lower() if positional else "stats"
+
+    if sub == "config":
+        rest = positional[1:]
+        if not rest:
+            cfg = load_rag_config(ws)
+            for k, v in cfg.items():
+                print(f"  {k} = {v}")
+            print("用法：/rag config <key> <value> [<key> <value> ...]")
+            return
+        if len(rest) % 2 != 0:
+            print("❌ 参数须成对 key value")
+            return
+        cfg = load_rag_config(ws)
+        for i in range(0, len(rest), 2):
+            cfg[rest[i]] = _coerce(rest[i + 1])
+        save_rag_config(ws, cfg)
+        chatmod.init_rag(ws)
+        print(f"✅ 已保存 {len(rest) // 2} 项并重建 RAG 实例")
+        return
+
+    if sub == "build":
+        inst = get_rag()
+        cfg = load_rag_config(ws)
+        if inst is None:
+            print("❌ RAG 未启用或 embed_model_path 无效，先 /rag config 配置")
+            return
+        docs_dir = cfg.get("docs_dir", "")
+        if not docs_dir or not Path(docs_dir).exists():
+            print(f"❌ docs_dir 不存在：{docs_dir}（/rag config docs_dir <路径>）")
+            return
+        print(f"📦 建库中：{docs_dir}（同步执行，按文件打印进度）…")
+
+        def on_progress(done, total, f):
+            print(f"  [{done}/{total}] {f}")
+        res = inst.index_dir(
+            docs_dir,
+            exts=tuple(cfg.get("exts") or [".md", ".txt", ".json"]),
+            exclude_globs=cfg.get("exclude_globs") or [],
+            lines_per=cfg.get("lines_per", 60),
+            overlap=cfg.get("overlap", 15),
+            batch=cfg.get("batch", 32),
+            on_progress=on_progress,
+        )
+        print(f"✅ 完成：{res.get('files')} 文件 / {res.get('chunks')} 片段 / {res.get('elapsed', 0):.1f}s")
+        return
+
+    if sub == "stats":
+        inst = get_rag()
+        if inst is None:
+            print("（RAG 未启用，/rag config 配置后 /rag build 建库）")
+            return
+        st = inst.stats()
+        print(f"ready={st['ready']}  docs={st['total_docs']}  dim={st['dim']}")
+        return
+
+    if sub == "query":
+        rest = positional[1:]
+        if not rest:
+            print("用法：/rag query <关键词>")
+            return
+        inst = get_rag()
+        if inst is None or inst.index.ntotal == 0:
+            print("（索引未建立，先 /rag build）")
+            return
+        hits = inst.query(" ".join(rest))
+        if not hits:
+            print("(无匹配)")
+            return
+        print(f"找到 {len(hits)} 条：")
+        for h in hits:
+            fp = Path(h["file_path"]).name
+            text = h["text"][:80].replace("\n", " ")
+            print(f"  {fp}:{h['start_line']}-{h['end_line']}  {text}")
+        return
+
+    print(f"❌ 未知子命令 {sub}；可用：build / config / stats / query")
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -640,6 +883,10 @@ def build_default_registry() -> CommandRegistry:
     reg.register("logs", _cmd_logs, "[N]  查看当前 session 日志尾部（默认30行）")
     reg.register("download", _cmd_download, "[name|list] [dir] [--force]  下载随包资产（工作流/mcp/脚本）")
     reg.register("feedback", _cmd_feedback, "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）")
+    reg.register("web", _cmd_web, "[start] [port] | stop | status  按需启停内嵌 Web 服务")
+    reg.register("snapshot", _cmd_snapshot, "list | restore <序号|sha>  工作区快照回溯")
+    reg.register("rewind", _cmd_rewind, "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）")
+    reg.register("rag", _cmd_rag, "build | config [k v] | stats | query <词>  RAG 文档库")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

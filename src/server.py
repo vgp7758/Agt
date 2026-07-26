@@ -1,93 +1,79 @@
-"""web.py —— Agent WebUI 后端（FastAPI + WebSocket）。
+"""server.py —— Agent Web 视图（FastAPI + WebSocket），由 chat.py 内嵌启动。
 
-关键设计：
-  - Agent 全局单例（断线重连不丢会话/状态/自主模式）
-  - 事件缓冲（断线期间的事件保留，重连后回放最近 N 条）
-  - WebSocket 心跳（防休眠断连）
-
-跑法：python web.py  →  浏览器打开 http://127.0.0.1:8000
+设计要点（与旧 web.py 的区别）：
+  - 不再独立装配 Agent：agent / work_q / mcp_mgr 由 chat.main 经 start_server() 注入，
+    与 CLI 共享同一个 Agent、同一个 work_q、同一个事件流 → 天然串行一致，无装配漂移。
+  - 按需启停：/web [start] [port] 调 start_server 起后台 uvicorn 线程并监听 0.0.0.0:port；
+    /web stop 调 stop_server 释放端口。默认纯 CLI 不占端口。
+  - WS 普通文本消息 → 喂进 chat 主循环的 work_q（("user", text)），由主循环跑 agent.run；
+    工作流调试 / RAG 建库这类占用 agent 的任务 → 进 work_q 的 ("task", fn)，与聊天同流串行。
+    Agent 事件经 on_event=broadcast 推给所有 WS 客户端。
+  - broadcast 加守卫：无 WS 客户端（服务未起 / 无连接）时直接 return，纯 CLI 零开销。
 """
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 import contextlib
 import io
 import json
+import re
+import socket
 import threading
 import time
+import webbrowser
+from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-import chat as chatmod
 import config
-from agent import Agent
-from agent_config import SKILL_TOOLS
-from commands import CommandContext, build_default_registry, apply_config, read_config
-from mcp_client import MCPManager, make_mcp_tools
-from multiagent import make_subagent_tools
-from plan_tools import make_plan_tools, clear_active_plan
-from memory_tools import make_recall_tools
-from longterm_memory import make_ltm_tools
-from download import make_download_tools
-from toollog import make_tool_log_tools
-from background_tools import make_background_tools
-from wiki import make_wiki_tools
-from real_tools import REAL_TOOLS, WORKSPACE, make_autonomous_tools
-from snapshots import SnapshotManager
-from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
-from lsp_manager import make_lsp_tools
-from rag import LocalRAG, set_rag as _rag_set, get_rag, make_rag_tools
-from session import session_meta
+from commands import CommandContext, apply_config, build_default_registry, read_config
+from rag import get_rag
+from real_tools import WORKSPACE
 
 app = FastAPI(title="Agt Agent WebUI")
 
+# ===== 注入态（start_server 时由 chat.main 填入；服务未起时为 None） =====
+_agent = None          # chat.build_agent 装配好的全局 Agent 单例
+_work_q = None         # chat 主循环的 work_q（WS 文本 / task 喂入它）
+_mcp_mgr = None        # MCPManager（/api/tools 用其 get_tools）
+_workspace = WORKSPACE
 
-@app.on_event("startup")
-def _on_startup():
-    """启动时播种默认 RAG 配置 + 按 config 建全局 RAG 实例（enabled 且模型路径有效时才真正建）。"""
-    config.seed_rag_config(WORKSPACE)
-    _rebuild_rag()
+# ===== 服务实例 =====
+_server = None         # uvicorn.Server
+_port = None
+_server_thread = None
+_server_error = None
 
-
-@app.on_event("shutdown")
-def _on_shutdown():
-    """进程退出时停后台服务（防孤儿进程）+ 停调度器。"""
-    if _agent is not None:
-        try:
-            _agent.shutdown()
-        except Exception:
-            pass
-
-# 全局 MCP（启动时连接一次）
-_mcp = MCPManager()
-_mcp.connect_from_config(str(WORKSPACE / ".mcp.json"))
-_mcp.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))   # 全局已装 LSP（ensure_lsp 装配的）
-_MCP_TOOLS = _mcp.get_tools()
-_snap = SnapshotManager(WORKSPACE)
-
-_INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
-
-# ===== 全局 Agent 单例 + 事件缓冲 + 多客户端广播 =====
-_agent: Agent | None = None
-_agent_busy: bool = False
+# ===== 事件缓冲 + 多客户端广播 =====
+_clients: list[dict] = []       # [{ws, queue}]  所有活跃连接
 _event_log: list[tuple[int, dict]] = []
 _seq: int = 0
-_clients: list[dict] = []     # [{ws, queue}]  所有活跃连接
-_main_loop = None             # 主 event loop（_broadcast 在线程里用到）
-_bg_drain_started = False     # 全局后台 drain 协程仅启动一次的标志
-_rag_busy: bool = False          # RAG 建库锁（独立于 _agent_busy，建库不阻塞聊天）
+_main_loop = None               # uvicorn 线程的 asyncio loop（broadcast 跨线程推送用）
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_WF_DIR = WORKSPACE / ".agent" / "workflows"
+_INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+_EDITOR_HTML = (_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8")
+_RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
+_WF_DEBUG_HTML = (_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8")
 
 
 def _broadcast(ev: dict):
-    """记录事件到日志缓冲 + 广播给所有活跃客户端。"""
-    global _seq, _main_loop
+    """记录事件到日志缓冲 + 广播给所有活跃客户端。
+    无 WS 客户端（服务未起 / 无连接）时直接 return —— 纯 CLI 模式零开销，
+    且 _main_loop 未就绪时也不会因 call_soon_threadsafe 报错。"""
+    if not _clients:
+        return
+    global _seq
     _seq += 1
     _event_log.append((_seq, ev))
     if len(_event_log) > 500:
         _event_log.pop(0)
-    loop = _main_loop or asyncio.get_event_loop()
+    loop = _main_loop
+    if loop is None:
+        return
     for c in _clients:
         try:
             loop.call_soon_threadsafe(c["queue"].put_nowait, ev)
@@ -95,71 +81,12 @@ def _broadcast(ev: dict):
             pass
 
 
-def _rebuild_rag():
-    """按当前 .agent/rag.json 重建全局 LocalRAG 实例（配置保存/服务启动时调）。
-    enabled 关或模型路径无效 → 实例为 None（rag_query 返回未建库提示）。"""
-    try:
-        inst = LocalRAG.from_config(WORKSPACE)
-    except Exception as e:
-        print(f"[rag] 加载失败：{e}")
-        inst = None
-    _rag_set(inst, str(WORKSPACE))
-
-
-def _get_or_create_agent() -> Agent:
-    """获取全局 Agent（首次创建，之后复用）。on_event 广播给所有客户端。"""
-    global _agent
-    if _agent is not None:
-        return _agent
-    agent = Agent(chatmod.SYSTEM, REAL_TOOLS, enable_thinking=True,
-                  max_steps=50, token_budget=80000, verbose=False, on_event=_broadcast,
-                  snapshot_manager=_snap)
-    for t in _MCP_TOOLS:
-        agent.tools.register(t)
-    for t in make_subagent_tools(agent):
-        agent.tools.register(t)
-    for t in SKILL_TOOLS:
-        agent.tools.register(t)
-    for t in make_plan_tools(agent):
-        agent.tools.register(t)
-    for t in make_recall_tools(agent):
-        agent.tools.register(t)
-    for t in make_ltm_tools(agent):
-        agent.tools.register(t)
-    for t in make_download_tools(agent):
-        agent.tools.register(t)
-    for t in make_tool_log_tools(agent):
-        agent.tools.register(t)
-    for t in make_background_tools(agent):
-        agent.tools.register(t)
-    for t in make_wiki_tools(agent):
-        agent.tools.register(t)
-    for t in make_mcp_tools(_mcp, str(WORKSPACE / ".mcp.json")):
-        agent.tools.register(t)
-    for t in make_autonomous_tools(agent):
-        agent.tools.register(t)
-    for t in make_workflow_mgmt_tools(WORKSPACE):
-        agent.tools.register(t)
-    for t in make_lsp_tools(agent, _mcp):
-        agent.tools.register(t)
-    for t in make_rag_tools():
-        agent.tools.register(t)
-    refresh_workflow_tools(agent.tools, WORKSPACE, agent)
-    # 加载持久化运行时设置
-    saved = config.load_runtime_settings()
-    if saved:
-        apply_config(agent, saved)
-    _agent = agent
-    return agent
+# 公开接口别名：chat.build_agent 用它作 Agent.on_event（无 WS 客户端时 no-op，纯 CLI 零开销）
+broadcast = _broadcast
 
 
 async def _send(ws: WebSocket, obj: dict):
     await ws.send_text(json.dumps(obj, ensure_ascii=False))
-
-
-_WF_DIR = WORKSPACE / ".agent" / "workflows"
-_EDITOR_HTML = (Path(__file__).resolve().parent / "static" / "workflow_editor.html").read_text(encoding="utf-8")
-_RAG_HTML = (Path(__file__).resolve().parent / "static" / "rag.html").read_text(encoding="utf-8")
 
 
 def _safe_wf_path(name: str) -> Path:
@@ -171,6 +98,8 @@ def _safe_wf_path(name: str) -> Path:
         safe = safe + ".json"
     return _WF_DIR / safe
 
+
+# ===================== 静态页 =====================
 
 @app.get("/")
 async def index():
@@ -185,8 +114,7 @@ async def workflow_editor():
 @app.get("/wfdebug")
 async def workflow_debug():
     """工作流调试页：只读渲染画布 + 流式执行 + 逐节点查看输出。"""
-    html = (Path(__file__).resolve().parent / "static" / "workflow_debug.html").read_text(encoding="utf-8")
-    return HTMLResponse(html)
+    return HTMLResponse(_WF_DEBUG_HTML)
 
 
 @app.get("/rag")
@@ -195,14 +123,14 @@ async def rag_page():
     return HTMLResponse(_RAG_HTML)
 
 
-# ===== 工作流编辑器 REST API =====
+# ===================== 工作流编辑器 REST API =====================
 
 @app.get("/api/wf/list")
 async def api_wf_list():
     """列出所有工作流（名称+状态摘要）。"""
     from workflow import workflows_info
     items = []
-    for it in workflows_info(WORKSPACE):
+    for it in workflows_info(_workspace):
         items.append({"name": it["name"], "tool": it["tool"], "status": it["status"],
                        "detail": it["detail"], "description": it["description"], "coze_url": it["coze_url"]})
     return {"items": items}
@@ -210,16 +138,14 @@ async def api_wf_list():
 
 @app.get("/api/tools")
 async def api_tools():
-    """返回工作流可调用的全部工具（内置 + MCP + 用户 py 工具），供编辑器生成工具节点。
-    每个含 name/display/group/description/params/outputs，让插件节点能按 toolName 显示输入字段、
-    工具面板按来源分组。outputs 优先用用户声明的 OUTPUT_SCHEMA。"""
+    """返回工作流可调用的全部工具（内置 + MCP + 用户 py 工具），供编辑器生成工具节点。"""
     from real_tools import ALL_BUILTIN_TOOLS, infer_tool_outputs
     from workflow import load_user_tools
-    user_tools, _ = load_user_tools(WORKSPACE)
-    # 三类来源（顺序即优先级：内置 > MCP > 用户，同名去重保留前者）
+    user_tools, _ = load_user_tools(_workspace)
+    mcp_tools = list(_mcp_mgr.get_tools()) if _mcp_mgr is not None else []
     sources = [
         (list(ALL_BUILTIN_TOOLS), "内置"),
-        (list(_MCP_TOOLS), None),         # MCP 的 group 按 server 动态生成
+        (mcp_tools, None),               # MCP 的 group 按 server 动态生成
         (user_tools, "用户工具"),
     ]
     out, seen = [], set()
@@ -233,7 +159,6 @@ async def api_tools():
             params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else "string") or "string"}
                       for pn, ps in props.items()]
             outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
-            # 分组与显示名：MCP 工具名长（__mcp__server__tool），美化成 server.tool
             name = s["name"]
             if name.startswith("__mcp__"):
                 server = getattr(t, "server", "") or ""
@@ -252,7 +177,7 @@ async def api_tools():
 async def api_wf_get(name: str):
     """获取单个工作流画布 JSON + meta。优先 .json，否则 .xml（转 JSON）。"""
     import json as _j
-    import re
+    import xml.etree.ElementTree as ET
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
     jf = _WF_DIR / f"{safe}.json"
     xf = _WF_DIR / f"{safe}.xml"
@@ -268,9 +193,7 @@ async def api_wf_get(name: str):
         meta.setdefault("name", safe)
         return {"name": safe, "canvas": canvas, "meta": meta, "format": "json"}
     if xf.exists():
-        # XML：转 canvas，meta 从根属性（复用 scan 的解析）
         from workflow_xml import xml_to_canvas, WorkflowXmlError
-        import xml.etree.ElementTree as ET
         try:
             xml_text = xf.read_text(encoding="utf-8")
             root = ET.fromstring(xml_text)
@@ -300,11 +223,8 @@ async def api_wf_get(name: str):
 
 @app.put("/api/wf/{name}")
 async def api_wf_save(name: str, request: Request):
-    """保存工作流画布 + meta。请求体: {canvas, meta, format?}。
-    format='xml' 时转成 XML 写 .xml（meta 入根属性）；否则写 Coze JSON .json + .meta。
-    切换格式时删除另一扩展名的旧文件，避免同名重复。"""
+    """保存工作流画布 + meta。format='xml' 转 XML；否则 Coze JSON + .meta。"""
     import json as _j
-    import re
     try:
         body = await request.json()
     except Exception:
@@ -322,7 +242,6 @@ async def api_wf_save(name: str, request: Request):
             xf.write_text(canvas_to_xml(canvas, meta), encoding="utf-8")
         except Exception as e:
             return {"error": f"转 XML 失败：{type(e).__name__}: {e}"}
-        # 切换格式：删除同名 .json / .json.meta（meta 已入 XML 根属性）
         for old in (_WF_DIR / f"{safe}.json", _WF_DIR / f"{safe}.json.meta", _WF_DIR / f"{safe}.xml.meta"):
             if old.exists():
                 try:
@@ -335,7 +254,6 @@ async def api_wf_save(name: str, request: Request):
         mp = jf.with_name(jf.name + ".meta")
         jf.write_text(_j.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
         mp.write_text(_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        # 切换格式：删除同名 .xml
         xo = _WF_DIR / f"{safe}.xml"
         if xo.exists():
             try:
@@ -343,11 +261,10 @@ async def api_wf_save(name: str, request: Request):
             except OSError:
                 pass
         saved_name = safe
-    # 如果 Agent存在，刷新工作流工具
-    global _agent
     if _agent is not None:
         try:
-            refresh_workflow_tools(_agent.tools, WORKSPACE, _agent)
+            from workflow import refresh_workflow_tools
+            refresh_workflow_tools(_agent.tools, _workspace, _agent)
         except Exception:
             pass
     return {"ok": True, "name": saved_name, "format": fmt}
@@ -364,7 +281,6 @@ async def api_wf_create(request: Request):
     wname = (body.get("name") or "").strip()
     if not wname:
         return {"error": "name 不能为空"}
-    import re
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", wname).strip("_") or "new_workflow"
     jf = _WF_DIR / f"{safe}.json"
     mp = jf.with_name(jf.name + ".meta")
@@ -379,7 +295,23 @@ async def api_wf_create(request: Request):
     return {"ok": True, "name": safe}
 
 
-# ===== 模型配置 API =====
+@app.delete("/api/wf/{name}")
+async def api_wf_delete(name: str):
+    """删除工作流文件 + meta。"""
+    try:
+        jf = _safe_wf_path(name)
+        mp = jf.with_name(jf.name + ".meta")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not jf.exists():
+        return {"error": f"工作流 {name!r} 不存在"}
+    jf.unlink()
+    if mp.exists():
+        mp.unlink()
+    return {"ok": True}
+
+
+# ===================== 模型配置 API =====================
 
 @app.get("/api/models")
 async def api_models():
@@ -389,23 +321,9 @@ async def api_models():
 
 @app.get("/api/model-list")
 async def api_model_list():
-    """返回模型名→显示名映射（不含 token/base_url 等敏感信息），供工作流编辑器选模型用。"""
+    """返回模型名→显示名映射（不含敏感信息），供工作流编辑器选模型用。"""
     return {"models": {name: p.get("display", name) for name, p in config.MODELS.items()},
             "default": config.DEFAULT_MODEL}
-
-
-@app.get("/api/stats")
-async def api_stats(scope: str = "current"):
-    """LLM 调用可靠性统计（per-model 聚合）。scope=current(默认，当前 session)/all(本仓库全部)。"""
-    from llm_call_log import aggregate_calls, load_all_calls
-    from session import _repo_sessions_dir
-    if _agent is None:
-        return {"scope": scope, "calls": 0, "stats": {}}
-    if scope == "all":
-        records = load_all_calls(_repo_sessions_dir(WORKSPACE))
-    else:
-        records = _agent.session.llm_calls.all_records()
-    return {"scope": scope, "calls": len(records), "stats": aggregate_calls(records)}
 
 
 @app.put("/api/models")
@@ -418,32 +336,46 @@ async def api_models_save(request: Request):
     models = body.get("models") or {}
     default = body.get("default") or ""
     config.save_user_models(models, default)
-    # 热更新：重新加载 MODELS/DEFAULT_MODEL
     m, d = config._load_models()
     config.MODELS.clear(); config.MODELS.update(m)
     config.DEFAULT_MODEL = d or config.DEFAULT_MODEL
     return {"ok": True, "default": config.DEFAULT_MODEL}
 
 
-# ===== RAG 文档库 API =====
+@app.get("/api/stats")
+async def api_stats(scope: str = "current"):
+    """LLM 调用可靠性统计（per-model 聚合）。scope=current/all。"""
+    from llm_call_log import aggregate_calls, load_all_calls
+    from session import _repo_sessions_dir
+    if _agent is None:
+        return {"scope": scope, "calls": 0, "stats": {}}
+    if scope == "all":
+        records = load_all_calls(_repo_sessions_dir(_workspace))
+    else:
+        records = _agent.session.llm_calls.all_records()
+    return {"scope": scope, "calls": len(records), "stats": aggregate_calls(records)}
+
+
+# ===================== RAG 文档库 API =====================
 
 @app.get("/api/rag/config")
 async def api_rag_config():
-    """返回当前 RAG 配置（.agent/rag.json）。"""
-    return config.load_rag_config(WORKSPACE)
+    """返回当前 RAG 配置。"""
+    return config.load_rag_config(_workspace)
 
 
 @app.put("/api/rag/config")
 async def api_rag_config_save(request: Request):
-    """保存 RAG 配置并热重建实例。"""
+    """保存 RAG 配置并热重建实例（复用 chat.init_rag，保持两端一致）。"""
     try:
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
     if not isinstance(body, dict):
         return {"error": "配置需为对象"}
-    config.save_rag_config(WORKSPACE, body)
-    _rebuild_rag()
+    config.save_rag_config(_workspace, body)
+    import chat as chatmod
+    chatmod.init_rag(_workspace)
     return {"ok": True}
 
 
@@ -468,54 +400,29 @@ async def api_rag_query(q: str = "", top_k: int = 5):
     return {"results": hits}
 
 
-@app.delete("/api/wf/{name}")
-async def api_wf_delete(name: str):
-    """删除工作流文件 + meta。"""
-    try:
-        jf = _safe_wf_path(name)
-        mp = jf.with_name(jf.name + ".meta")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not jf.exists():
-        return {"error": f"工作流 {name!r} 不存在"}
-    jf.unlink()
-    if mp.exists():
-        mp.unlink()
-    return {"ok": True}
-
+# ===================== WebSocket 端点 =====================
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    global _agent_busy
     global _main_loop
     await websocket.accept()
-    _main_loop = asyncio.get_running_loop()  # 保存主循环供 _broadcast 线程用
+    _main_loop = asyncio.get_running_loop()   # 保存 loop 供 broadcast 跨线程推送
     loop = _main_loop
-    global _bg_drain_started
-    if not _bg_drain_started:
-        _bg_drain_started = True
-        asyncio.create_task(_bg_drain())   # 全局后台 drain：inbox→触发 run（仅启动一次）
-    queue: asyncio.Queue = asyncio.Queue()
-    registry = build_default_registry()
 
-    # 获取/创建 Agent（断线重连/多客户端复用）
-    try:
-        agent = _get_or_create_agent()
-        print("[WS] agent ready", flush=True)
-    except Exception as e:
-        print(f"[WS] agent failed: {e}", flush=True)
-        import traceback; traceback.print_exc()
+    agent = _agent
+    if agent is None:
+        # 服务未正确注入 agent（理论上不会发生，start_server 已注入）
+        await _send(websocket, {"type": "system", "text": "⚠️ Agent 未就绪，服务异常"})
         await websocket.close()
         return
 
-    # 注册到客户端列表（广播目标）
+    queue: asyncio.Queue = asyncio.Queue()
+    registry = build_default_registry()
     client = {"ws": websocket, "queue": queue}
     _clients.append(client)
 
-    # 判断是首次连接还是重连
     is_reconnect = len(_event_log) > 0
     if is_reconnect:
-        # 回放最近 40 条事件（断线期间错过的）
         replay = _event_log[-40:]
         await _send(websocket, {"type": "system",
                                 "text": f"✅ 已重连到现有会话（回放最近 {len(replay)} 条事件）",
@@ -523,8 +430,6 @@ async def ws_endpoint(websocket: WebSocket):
                                 "current_model": agent.model_name})
         for _seq_num, ev in replay:
             await _send(websocket, ev)
-        if _agent_busy:
-            await _send(websocket, {"type": "system", "text": "⏳ Agent 正在执行任务，事件继续推送中…"})
     else:
         await _send(websocket, {
             "type": "system",
@@ -532,50 +437,37 @@ async def ws_endpoint(websocket: WebSocket):
             "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
             "current_model": agent.model_name,
         })
-    # 发送会话列表
-    from session import list_sessions
-    await _send(websocket, {"type": "sessions", "names": [session_meta(p) for p in list_sessions(workspace=WORKSPACE)]})
-    # 发送工作流列表
+    from session import list_sessions, session_meta
+    await _send(websocket, {"type": "sessions",
+                           "names": [session_meta(p) for p in list_sessions(workspace=_workspace)]})
     from workflow import workflows_info
-    await _send(websocket, {"type": "workflows", "items": workflows_info(WORKSPACE)})
+    await _send(websocket, {"type": "workflows", "items": workflows_info(_workspace)})
 
-    # ===== 主循环：同时监听 WS 输入 + 队列事件 + 心跳 =====
     try:
         while True:
-            # 用 select 模式：等 WS 输入 或 队列事件 或 心跳超时
             ws_task = asyncio.create_task(websocket.receive_text())
             queue_task = asyncio.create_task(queue.get())
             ping_task = asyncio.create_task(asyncio.sleep(30))
-
-            done, pending = await asyncio.wait(
-                [ws_task, queue_task, ping_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait([ws_task, queue_task, ping_task],
+                                               return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
-
-            # ---- 心跳 ----
             if ping_task in done:
                 try:
                     await websocket.send_json({"type": "_ping"})
                 except Exception:
-                    break  # WS 已断
+                    break
                 continue
-
-            # ---- Agent 事件 ----
             if queue_task in done:
                 ev = queue_task.result()
                 try:
                     await _send(websocket, ev)
                 except Exception:
-                    pass  # WS 断了，事件留在 _event_log 里
+                    pass
                 continue
-
-            # ---- 用户输入 ----
             if ws_task in done:
                 raw = ws_task.result()
                 await _handle_user_input(websocket, agent, raw, queue, loop, registry)
-
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -587,8 +479,6 @@ async def ws_endpoint(websocket: WebSocket):
 
 async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     """处理一条用户输入（文本/命令/action）。"""
-    global _agent_busy
-
     # JSON action?
     try:
         _d = json.loads(raw) if raw.lstrip().startswith("{") else None
@@ -596,8 +486,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         _d = None
     if isinstance(_d, dict) and _d.get("action") == "restore":
         try:
-            _snap.restore(_d.get("sha", ""))
-            target = agent.session.restore_to_snapshot(_d.get("sha", ""))
+            import chat as chatmod
+            target = chatmod.restore_snapshot(agent, _d.get("sha", ""))
             await _send(ws, {"type": "restored", "target": target or ""})
         except Exception as e:
             await _send(ws, {"type": "system", "text": f"⚠️ 回溯失败：{type(e).__name__}: {e}"})
@@ -607,7 +497,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         return
     if isinstance(_d, dict) and _d.get("action") == "set_config":
         values = _d.get("values") or {}
-        config.save_runtime_settings(values)  # 先存（apply_config 会 pop fallback_chain）
+        config.save_runtime_settings(values)
         lines = apply_config(agent, values)
         await _send(ws, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
         return
@@ -616,14 +506,16 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text": "⏹ 已请求停止…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "list_sessions":
-        from session import list_sessions
-        await _send(ws, {"type": "sessions", "names": [session_meta(p) for p in list_sessions(workspace=WORKSPACE)]})
+        from session import list_sessions, session_meta
+        await _send(ws, {"type": "sessions",
+                         "names": [session_meta(p) for p in list_sessions(workspace=_workspace)]})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         from session import Session
+        from plan_tools import clear_active_plan
         agent.set_session(Session(agent.base_system, llm=agent.llm,
                                   recent_window_turns=agent.session.recent_window_turns))
-        clear_active_plan(agent)         # 新会话：清空计划（id/active_plan 一并清）与自主模式
+        clear_active_plan(agent)
         agent.exit_autonomous_mode()
         agent.goal_check_script = ""
         await _send(ws, {"type": "system", "text": "🔄 已创建新会话。"})
@@ -632,8 +524,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         name = (_d.get("name") or "").strip() or None
         p = agent.session.save(name)
         await _send(ws, {"type": "saved", "name": p.stem})
-        from session import list_sessions
-        await _send(ws, {"type": "sessions", "names": [session_meta(s) for s in list_sessions(workspace=WORKSPACE)]})
+        from session import list_sessions, session_meta
+        await _send(ws, {"type": "sessions",
+                         "names": [session_meta(s) for s in list_sessions(workspace=_workspace)]})
         return
     if isinstance(_d, dict) and _d.get("action") == "load_session":
         from session import Session
@@ -642,12 +535,11 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             await _send(ws, {"type": "system", "text": "⚠️ 未指定要恢复的会话"})
             return
         try:
-            new_session = Session.load(_ls_name, llm=agent.llm, workspace=WORKSPACE)
+            new_session = Session.load(_ls_name, llm=agent.llm, workspace=_workspace)
         except Exception as e:
             await _send(ws, {"type": "system", "text": f"❌ 恢复失败：{type(e).__name__}: {e}"})
             return
-        agent.set_session(new_session)   # 切换 + 恢复 plan/自主模式状态
-        # 把该 session 的完整历史原样推给前端渲染（user/工具调用/回答，不含思考过程）
+        agent.set_session(new_session)
         await _send(ws, {"type": "session_history", "name": agent.session.name or _ls_name,
                          "turns": agent.session.to_history()})
         return
@@ -661,19 +553,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         return
     if isinstance(_d, dict) and _d.get("action") == "list_workflows":
         from workflow import workflows_info
-        await _send(ws, {"type": "workflows", "items": workflows_info(WORKSPACE)})
+        await _send(ws, {"type": "workflows", "items": workflows_info(_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "reload_workflows":
-        from workflow import workflows_info
-        ok, broken = refresh_workflow_tools(agent.tools, WORKSPACE, agent)
-        await _send(ws, {"type": "workflows", "items": workflows_info(WORKSPACE)})
+        from workflow import workflows_info, refresh_workflow_tools
+        ok, broken = refresh_workflow_tools(agent.tools, _workspace, agent)
+        await _send(ws, {"type": "workflows", "items": workflows_info(_workspace)})
         await _send(ws, {"type": "system", "text":
                          f"🔄 已重载工作流：{len(ok)} 可用" + (f"，{len(broken)} 个失败" if broken else "")})
         return
     if isinstance(_d, dict) and _d.get("action") == "open_coze":
         from workflow import workflows_info
         name = _d.get("name")
-        url = next((it["coze_url"] for it in workflows_info(WORKSPACE)
+        url = next((it["coze_url"] for it in workflows_info(_workspace)
                     if it["name"] == name or it["tool"] == name), "") or "https://www.coze.com"
         await _send(ws, {"type": "coze_url", "url": url, "name": name})
         return
@@ -684,7 +576,6 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _start_rag_build(ws)
         return
     if isinstance(_d, dict) and _d.get("action") == "feedback_meta":
-        # 拉反馈弹框需要的元信息：可选类型 + 作者联系方式 + 将附上的环境信息
         from feedback import VALID_KINDS, author_contact_str, _gather_env
         await _send(ws, {"type": "feedback_meta",
                          "kinds": VALID_KINDS,
@@ -696,7 +587,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         kind = (_d.get("kind") or "建议").strip()
         content = (_d.get("content") or "").strip()
         contact = (_d.get("contact") or "").strip()
-        env_info = None if _d.get("include_env", True) else {}  # 不勾「附环境」则不带
+        env_info = None if _d.get("include_env", True) else {}
         msg = submit_feedback(kind, content, contact, env_info=env_info, agent=agent)
         await _send(ws, {"type": "feedback_result", "ok": msg.startswith("✅"), "text": msg})
         return
@@ -707,7 +598,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if not text and not images:
         return
 
-    # 斜杠命令
+    # 斜杠命令（即时处理，不进 work_q）
     if text.startswith("/"):
         buf = io.StringIO()
         try:
@@ -720,18 +611,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             await _send(ws, {"type": "system", "text": out})
         return
 
-    # 普通对话（或自主模式下插消息）
+    # 自主模式下插消息（即时入队，不进 work_q）
     if agent.autonomous_mode and agent.is_autonomous_active():
         agent.queue_user_message(text)
-        await _send(ws, {"type": "system", "text": f"✅ 消息已入队"})
+        await _send(ws, {"type": "system", "text": "✅ 消息已入队"})
         return
 
-    # 跑 Agent
-    if _agent_busy:
-        await _send(ws, {"type": "system", "text": "⏳ Agent 正忙，请稍候或用停止按钮。"})
+    # 普通对话 → 进 chat 主循环的 work_q，与 CLI 输入同流串行消费；
+    # 事件经 broadcast 自动推回（agent.run 在主线程跑时触发）。
+    if _work_q is None:
+        await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环（work_q 缺失）"})
         return
-
-    await _run_streaming(ws, agent, text, images, queue, loop)
+    _work_q.put(("user", text))
+    await _send(ws, {"type": "system", "text": "✅ 已接收，处理中…"})
 
 
 def _parse_client_msg(raw: str):
@@ -744,70 +636,8 @@ def _parse_client_msg(raw: str):
     return raw, []
 
 
-async def _run_streaming(ws, agent, msg, images, queue, loop):
-    """跑 Agent，事件通过 _broadcast 广播到所有客户端；
-    本连接从自己的 queue 消费，直到 _done。"""
-    global _agent_busy
-    _agent_busy = True
-    try:
-        def run_it():
-            try:
-                agent.run(msg, images=images)
-            except Exception as e:
-                _broadcast({"type": "error", "text": f"{type(e).__name__}: {e}"})
-            finally:
-                _broadcast({"type": "_done"})
-
-        threading.Thread(target=run_it, daemon=True).start()
-
-        # 本连接从自己的 queue 消费事件
-        while True:
-            ev = await queue.get()
-            try:
-                await _send(ws, ev)
-            except Exception:
-                pass  # WS 断了；事件留在 _event_log 里，重连时回放
-            if ev.get("type") == "_done":
-                break
-    finally:
-        _agent_busy = False
-
-
-async def _bg_drain():
-    """全局后台 drain：轮询 agent.inbox，Agent 空闲时触发一轮 run，事件 _broadcast 给所有客户端。
-    占 _agent_busy 锁，与聊天/调试串行（run 非线程安全）。仅启动一次（_bg_drain_started）。"""
-    global _agent_busy
-    while True:
-        await asyncio.sleep(0.5)
-        agent = _agent
-        if agent is None or _agent_busy:
-            continue
-        item = agent.pop_inbox()
-        if not item:
-            continue
-        src, msg = item
-        _agent_busy = True
-
-        def run_it():
-            global _agent_busy
-            try:
-                _broadcast({"type": "background_trigger", "source": src, "text": msg[:100]})
-                agent.run(msg)
-            except Exception as e:
-                _broadcast({"type": "error", "text": f"后台触发失败：{type(e).__name__}: {e}"})
-            finally:
-                _broadcast({"type": "_done"})
-                _agent_busy = False
-
-        threading.Thread(target=run_it, daemon=True).start()
-
-
 async def _start_debug_run(ws, agent, name, inputs):
-    """启动工作流调试执行（后台线程跑 execute_debug），每个节点事件经 _broadcast 实时推流。
-    占用 _agent_busy 锁（共用 agent.llm/tools，不能和聊天并发）。"""
-    global _agent_busy
-    # 读画布（复用 /api/wf/{name} 的 json/xml 读取逻辑）
-    import re
+    """工作流调试执行：读画布 → 包成 task 进 work_q（与聊天串行）→ 逐节点事件经 broadcast 推流。"""
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
     jf = _WF_DIR / f"{safe}.json"
     xf = _WF_DIR / f"{safe}.xml"
@@ -824,14 +654,12 @@ async def _start_debug_run(ws, agent, name, inputs):
     else:
         await _send(ws, {"type": "wf_debug_error", "text": f"工作流 {name!r} 不存在"})
         return
-    if _agent_busy:
-        await _send(ws, {"type": "wf_debug_error", "text": "⏳ Agent 正忙，请稍候再试"})
+    if _work_q is None:
+        await _send(ws, {"type": "wf_debug_error", "text": "服务未接入主循环（work_q 缺失）"})
         return
-    _agent_busy = True
     await _send(ws, {"type": "wf_debug_start", "name": name})
 
     def run_it():
-        global _agent_busy
         try:
             from workflow import execute_debug
 
@@ -846,21 +674,15 @@ async def _start_debug_run(ws, agent, name, inputs):
                 canvas, inputs or {}, tools=agent.tools, llm=agent.llm, on_node=on_node)
             _broadcast({"type": "wf_debug_done", "exit": exit_dict, "order": order, "trace": trace})
         except Exception as e:
-            import traceback
-            traceback.print_exc()
             _broadcast({"type": "wf_debug_error", "text": f"{type(e).__name__}: {e}"})
-        finally:
-            _agent_busy = False
 
-    threading.Thread(target=run_it, daemon=True).start()
+    _work_q.put(("task", run_it))
 
 
 async def _start_rag_build(ws):
-    """后台建库：threading.Thread 跑 index_dir，on_progress 经 _broadcast 推 rag_index_progress，
-    末尾推 rag_index_done / rag_index_error。独立 _rag_busy 锁（建库不阻塞聊天）。"""
-    global _rag_busy
+    """RAG 建库：校验 → 包成 task 进 work_q（与聊天串行）→ 进度/完成事件经 broadcast 推流。"""
     inst = get_rag()
-    cfg = config.load_rag_config(WORKSPACE)
+    cfg = config.load_rag_config(_workspace)
     if inst is None:
         await _send(ws, {"type": "rag_index_error", "text": "RAG 未启用或模型路径无效，请先保存有效配置"})
         return
@@ -868,14 +690,12 @@ async def _start_rag_build(ws):
     if not docs_dir or not Path(docs_dir).exists():
         await _send(ws, {"type": "rag_index_error", "text": f"docs_dir 不存在：{docs_dir}"})
         return
-    if _rag_busy:
-        await _send(ws, {"type": "rag_index_error", "text": "⏳ 正在建库，请稍候"})
+    if _work_q is None:
+        await _send(ws, {"type": "rag_index_error", "text": "服务未接入主循环（work_q 缺失）"})
         return
-    _rag_busy = True
     await _send(ws, {"type": "rag_index_start"})
 
     def run_it():
-        global _rag_busy
         try:
             def on_progress(done, total, f):
                 _broadcast({"type": "rag_index_progress", "done": done, "total": total, "file": f})
@@ -890,17 +710,111 @@ async def _start_rag_build(ws):
             )
             _broadcast({"type": "rag_index_done", **res})
         except Exception as e:
-            import traceback; traceback.print_exc()
             _broadcast({"type": "rag_index_error", "text": f"{type(e).__name__}: {e}"})
+
+    _work_q.put(("task", run_it))
+
+
+# ===================== 服务启停（供 chat.py / commands.py 调用） =====================
+
+def lan_urls(port) -> list:
+    """枚举本机网卡 IPv4，返回 [http://<ip>:<port>/ ...]（供局域网设备连接提示）。"""
+    urls = []
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None):
+            ip = info[4][0]
+            if ":" in ip or ip.startswith("127."):
+                continue
+            u = f"http://{ip}:{port}/"
+            if u not in urls:
+                urls.append(u)
+    except Exception:
+        pass
+    return urls or [f"http://<本机IP>:{port}/"]
+
+
+def open_browser(port):
+    """在本机默认浏览器打开 WebUI。"""
+    try:
+        webbrowser.open(f"http://127.0.0.1:{port}/")
+    except Exception:
+        pass
+
+
+def server_status() -> dict:
+    running = _server is not None and getattr(_server, "started", False)
+    return {
+        "running": running,
+        "port": _port,
+        "local_url": f"http://127.0.0.1:{_port}/" if _port else "",
+        "lan_urls": lan_urls(_port) if _port else [],
+        "error": _server_error,
+    }
+
+
+def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000):
+    """启动内嵌 Web 服务（后台 daemon 线程跑 uvicorn），注入 agent/work_q。
+    返回 (ok, msg)。端口被占 / 已在运行 → (False, 原因)。"""
+    global _agent, _work_q, _mcp_mgr, _workspace, _server, _port, _server_thread, _server_error
+    if _server is not None:
+        return (False, f"服务已在运行（端口 {_port}），先用 /web stop 再启动")
+    # 端口探测（占用则立即失败，不进 uvicorn）
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("0.0.0.0", port))
+    except OSError:
+        return (False, f"端口 {port} 已占用或无权限")
+    _agent, _work_q, _mcp_mgr, _workspace = agent, work_q, mcp_mgr, workspace
+    _port, _server_error = port, None
+    config_obj = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    srv = uvicorn.Server(config_obj)
+    _server = srv
+
+    def _run():
+        global _main_loop, _server_error
+        loop = asyncio.new_event_loop()
+        _main_loop = loop
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(srv.serve())
+        except Exception as e:
+            _server_error = f"{type(e).__name__}: {e}"
         finally:
-            _rag_busy = False
+            _main_loop = None
 
-    threading.Thread(target=run_it, daemon=True).start()
+    _server_thread = threading.Thread(target=_run, daemon=True)
+    _server_thread.start()
+    # 等 uvicorn 起来（serve() 内部置 started=True）
+    for _ in range(40):
+        if srv.started:
+            break
+        if _server_error:
+            break
+        time.sleep(0.1)
+    if not srv.started:
+        _server = None
+        return (False, f"启动失败：{_server_error or '未知原因'}")
+    return (True, f"服务已启动 @ 0.0.0.0:{port}")
 
 
-def main():
-    import uvicorn
-    uvicorn.run("src.web:app", host="0.0.0.0", port=8000, reload=False)
+def stop_server():
+    """停止服务并释放端口。返回 (ok, msg)。"""
+    global _server, _main_loop, _clients
+    if _server is None:
+        return (False, "服务未运行")
+    port = _port
+    try:
+        _server.should_exit = True
+    except Exception:
+        pass
+    _server = None
+    _main_loop = None
+    _clients = []          # 断开所有 WS 客户端
+    return (True, f"服务已停止（端口 {port} 已释放）")
 
-if __name__ == "__main__":
-    main()
+
+def stop_server_if_running():
+    """chat 退出兜底：若 /web 起过服务，停掉释放端口（无服务时 no-op）。"""
+    if _server is not None:
+        stop_server()

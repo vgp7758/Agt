@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import collections
+import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -37,12 +40,17 @@ class ServiceManager:
         with self._lock:
             if name in self._services:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
+        popen_kwargs = dict(shell=True, cwd=cwd or None,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, encoding="utf-8", errors="replace")
+        # 绑独立进程组/会话：stop 时能整树杀，避免 shell=True 下 terminate 只杀 shell、
+        # 漏掉 shell 启的实际命令（孙进程）变孤儿；父进程异常退出也便于外部按组清理。
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
         try:
-            proc = subprocess.Popen(
-                command, shell=True, cwd=cwd or None,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, encoding="utf-8", errors="replace",
-            )
+            proc = subprocess.Popen(command, **popen_kwargs)
         except Exception as e:
             return f"[启动失败] {type(e).__name__}: {e}"
         logs: collections.deque = collections.deque(maxlen=_LOG_CAP)
@@ -105,15 +113,35 @@ class ServiceManager:
         proc = e["proc"]
         if proc.poll() is not None:
             return f"「{name}」本就已退出"
-        proc.terminate()
+        self._kill_tree(proc)   # 杀整棵树（shell + 其孙进程），而非只 terminate shell
         try:
             proc.wait(timeout=3)
         except Exception:
+            pass   # _kill_tree 已强制杀，wait 只是确认
+        return f"🛑 已停止「{name}」"
+
+    @staticmethod
+    def _kill_tree(proc) -> None:
+        """跨平台杀整棵进程树。start 时已绑新进程组/会话，故按组杀能覆盖孙进程。"""
+        pid = proc.pid
+        if sys.platform == "win32":
             try:
-                proc.kill()
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, timeout=5)
             except Exception:
                 pass
-        return f"🛑 已停止「{name}」"
+        else:
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                return
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def stop_all(self):
         """退出时清理所有服务，防孤儿进程。"""

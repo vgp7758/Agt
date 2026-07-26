@@ -34,6 +34,10 @@ from llm_call_log import LLMCallLog
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
+# —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
+RECENT_FULL_STEPS = 10        # 当前轮最近 N 步全量（distance 0..N-1），其后的步才按距离衰减
+FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
+
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
 # site-packages（不可写/难找），故统一到 ~/.agt，与 models.json/settings.json 同惯例。
@@ -332,7 +336,7 @@ class Session:
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
-            msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn))
+            msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             # 自主模式下用户插入的消息：在工具结果后以 system 消息注入，Agent 下一步就能看到
             hint = getattr(self._current, "_user_hint", None)
             if hint:
@@ -381,7 +385,7 @@ class Session:
         base = max(DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
         msgs = [{"role": "user", "content": self._user_content(turn)}]
         msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
-                                             base=base, full_last=(level == 1)))
+                                             base=base, full_window=(1 if level == 1 else 0)))
         if turn.answer:
             a_msg = {"role": "assistant", "content": turn.answer}
             if turn.answer_reasoning:
@@ -401,7 +405,7 @@ class Session:
             body.extend(self._render_turn_frozen(i))
         if self._current is not None:
             body.append({"role": "user", "content": self._user_content(self._current)})
-            body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn))
+            body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             hint = getattr(self._current, "_user_hint", None)
             if hint:
                 body.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
@@ -518,11 +522,14 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = DETAIL_BASE, full_last: bool = True) -> list[dict]:
+                           base: int = DETAIL_BASE, full_window: int = 1) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
-        工具名/入参/结果从 toollog 按 call_id 召回，并按【距当前步的距离】差异化摘要：
-        越近越完整（当前步最多 DETAIL_BASE 字）、越远越简略（每步 -DETAIL_STEP、下限 DETAIL_FLOOR），
-        被截断处标注 call_id，模型可 get_tool_detail(id) 拉完整。max_steps>0 只保留最近 max_steps 步。"""
+        工具名/入参/结果从 toollog 按 call_id 召回。step 级策略：
+        - 最近 full_window 步（distance 0..full_window-1）【全量】披露入参+结果，但单步超
+          FULL_STEP_CAP_CHARS(≈8000token) 则截断标注 call_id——当前轮传 RECENT_FULL_STEPS 保思维链连贯；
+        - 其后按【距当前步距离】衰减：detail_limit(distance, base)，越远越简略，截断处标注 call_id；
+        - reasoning 永远原样挂 reasoning_content（不压缩，含 step0 的核心设计思考）。
+        max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
@@ -534,9 +541,7 @@ class Session:
                 continue
             distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
             limit = detail_limit(distance, base=base)
-            # 当前步(distance==0)完整披露入参+结果——但仅当 full_last（进行中轮 / level1 近期轮）。
-            # 老 turn(level≥2)冻结渲染时 full_last=False，连最后一步也按 base 摘要，否则单步轮永不压缩。
-            full = (distance == 0) and full_last
+            full = distance < full_window   # 最近 full_window 步全量（含 step0）；老 turn 传 0/1
             a_tool_calls = []
             for i, tc in enumerate(step.tool_calls):
                 name, args, _r = self.toollog.view(tc.call_id)
@@ -548,13 +553,23 @@ class Session:
                 })
             a_msg = {"role": "assistant", "content": None, "tool_calls": a_tool_calls}
             if step.reasoning:
-                a_msg["reasoning_content"] = step.reasoning
+                a_msg["reasoning_content"] = step.reasoning   # 思考原样，不压缩
             msgs.append(a_msg)
             for i, tc in enumerate(step.tool_calls):
                 _n, _a, result = self.toollog.view(tc.call_id)
-                content = (result or "") if full else self._summarize_text(result, limit, tc.call_id)
+                content = (self._cap_full_result(result, tc.call_id) if full
+                           else self._summarize_text(result, limit, tc.call_id))
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
+
+    def _cap_full_result(self, result: str, call_id: str) -> str:
+        """全量步的结果披露：原样保留，但单步超 FULL_STEP_CAP_CHARS(≈8000token) 时截断并标注 call_id。"""
+        result = result or ""
+        if len(result) <= FULL_STEP_CAP_CHARS:
+            return result
+        return (result[:FULL_STEP_CAP_CHARS] +
+                f"\n…(本步过长，共{len(result)}字，已截断至约8000token；完整见 id={call_id}，"
+                f"调 get_tool_detail(\"{call_id}\") 拉取)")
 
     # ========== 窗口外摘要缓存（不再截断 turns）==========
     def _refresh_summary_cache(self):

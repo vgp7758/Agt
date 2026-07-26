@@ -234,6 +234,31 @@ def restore_snapshot(agent, sha):
     return agent.session.restore_to_snapshot(sha)
 
 
+def _install_signal_handlers(agent, work_q):
+    """注册信号兜底：收到 SIGTERM/SIGHUP/SIGBREAK（kill / 关终端）时，让正在跑的
+    agent.run 中断 + work_q 喂 None，把异常退出也导流到 finally，从而清理 start_service
+    启的后台子进程，防孤儿。SIGINT(Ctrl+C) 保持默认 KeyboardInterrupt（本身就走 finally）。"""
+    import signal
+
+    def _on_sig(signum, frame):
+        try:
+            agent._stop_flag = True    # 让正在跑的 agent.run 尽快中断
+        except Exception:
+            pass
+        work_q.put(None)               # 让 _run_loop 退出 → finally 清理
+
+    sigs = [signal.SIGTERM]
+    for name in ("SIGHUP", "SIGBREAK"):
+        s = getattr(signal, name, None)
+        if s is not None:
+            sigs.append(s)
+    for s in sigs:
+        try:
+            signal.signal(s, _on_sig)
+        except (ValueError, OSError):
+            pass   # 必须主线程注册；非主线程/不支持则跳过
+
+
 def _run_loop(agent, work_q, registry):
     """主消费循环：串行处理 work_q 的 background / task / user 项。
     CLI(main) 与 agt-web(web_main) 共用，保证任何时候只有一个 agent.run 在跑。"""
@@ -289,6 +314,7 @@ def web_main(port=None):
     print(f"当前模型：{agent.model_name}  (工具 {len(list(agent.tools))} 个)")
     work_q: "queue.Queue" = queue.Queue()
     registry = build_default_registry()
+    _install_signal_handlers(agent, work_q)   # 关终端/kill 兜底清理，防后台服务孤儿
 
     ok, msg = start_server(agent=agent, work_q=work_q, mcp_mgr=mcp_mgr, workspace=WORKSPACE, port=port)
     if not ok:
@@ -345,6 +371,7 @@ def main():
     # Web 客户端（/web 起的服务）的文本消息也喂进这个 work_q，与 CLI 输入同流串行。
     work_q: "queue.Queue" = queue.Queue()
     registry = build_default_registry()   # work_q 通过 dispatch 时的 CommandContext 注入
+    _install_signal_handlers(agent, work_q)   # 关终端/kill 兜底清理，防后台服务孤儿
 
     def _input_thread():
         while True:

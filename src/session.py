@@ -454,10 +454,35 @@ class Session:
                 return b + 1
         return None
 
+    @staticmethod
+    def _summarize_answer(answer: str) -> str:
+        """代码摘要 answer（非 LLM）：第一行(总结句) + 以 ## / ** 开头的标题行；
+        无 markdown 结构则回退前 100 字；总长封顶 150 字。"""
+        answer = (answer or "").strip()
+        if not answer:
+            return ""
+        lines = [ln.strip() for ln in answer.splitlines() if ln.strip()]
+        headings = [ln for ln in lines if ln.startswith("##") or ln.startswith("**")]
+        if headings:
+            parts, seen = [], set()
+            for ln in [lines[0]] + headings:   # 第一行 + 标题行（去重保序）
+                if ln not in seen:
+                    seen.add(ln); parts.append(ln)
+            s = " / ".join(parts)
+        else:
+            s = answer[:100]                    # 无 markdown → 回退字符截断
+        return s[:150]
+
     def _folded_summary(self, fold_count: int) -> str:
-        """被折叠的早期轮次的一句话摘要拼接（逐字原文靠 recall 召回）。"""
-        lines = [f"[第{i + 1}轮] {(t.summary or t.user_message[:40]).strip()}"
-                 for i, t in enumerate(self.turns[:fold_count])]
+        """被折叠的早期轮次概览：每轮 user + (已折叠N次工具调用) + answer摘要/中断(未回答)。
+        纯结构信息、无需 LLM（answer 用代码摘要：首行+标题行）；逐字原文用 recall 召回。"""
+        lines = []
+        for i, t in enumerate(self.turns[:fold_count]):
+            n = sum(len(s.tool_calls) for s in t.steps)
+            u = (t.user_message or "").strip().replace("\n", " ")[:80]
+            mid = f" (已折叠{n}次工具调用) " if n else " "
+            tail = self._summarize_answer(t.answer) or "中断(未回答)"
+            lines.append(f"[第{i + 1}轮] {u}{mid}→ {tail}")
         return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + "\n".join(lines)
 
     @staticmethod
@@ -568,7 +593,10 @@ class Session:
     # ========== 窗口外摘要缓存（不再截断 turns）==========
     def _refresh_summary_cache(self):
         """维护 global_summary = 窗口外各轮 summary 的拼接（超长则压缩，按签名缓存）。
-        关键：不再截断 self.turns——完整原文永久保留，这里只决定「窗口外的轮喂给模型时的摘要形态」。"""
+        关键：不再截断 self.turns——完整原文永久保留，这里只决定「窗口外的轮喂给模型时的摘要形态」。
+        分档模式不走 global_summary（用 _folded_summary），直接跳过——省掉拼接 + 超长时的 LLM 压缩。"""
+        if self.max_effective_context_window:
+            return
         if len(self.turns) <= self.recent_window_turns:
             self.global_summary = ""
             self._summary_sig = ()
@@ -585,7 +613,10 @@ class Session:
         self._summary_sig = sig
 
     def _summarize_turn(self, turn: Turn) -> str:
-        """用一次短 LLM 调用把一轮压成 2-3 句中文摘要。"""
+        """用一次短 LLM 调用把一轮压成 2-3 句中文摘要。
+        分档模式跳过（recall/_folded_summary 都改用 user+answer，不再需要 LLM 摘要）。"""
+        if self.max_effective_context_window:
+            return ""
         parts = []
         for step in turn.steps:
             for tc in step.tool_calls:

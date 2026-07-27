@@ -28,3 +28,8 @@ build/
 
 # === 工具缓存 ===
 .playwright-mcp/
+
+# === 开发分析脚本（本地用，不打包发布） ===
+src/cache_sim.py
+/demo_tiered_projection.py
+/verify_prefix_cache.py

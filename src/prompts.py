@@ -49,6 +49,7 @@ def build_system(
     user_name: Optional[str] = None,
     today: Optional[datetime.date] = None,
     extra: Optional[str] = None,
+    with_date: bool = True,
 ) -> str:
     """构造系统提示词 = 人设 + 动态环境上下文。
 
@@ -56,19 +57,24 @@ def build_system(
     :param user_name: 用户名（注入后模型能"认识"对方）。
     :param today:     今天日期（注入后模型能回答"今天几号"）。None 时运行时自动获取。
     :param extra:     额外的任意上下文文本。
+    :param with_date: 是否把日期拼进 persona。生产 Agent 关掉（改由 tail 每步注入实时时间，
+                     persona 保持纯净稳定、利于前缀缓存）；examples/教学保留默认 True。
     """
     if persona not in PERSONAS:
         raise KeyError(f"未知人设 '{persona}'，可选：{list_personas()}")
 
     parts = [PERSONAS[persona]]
 
-    # —— 动态环境上下文段 ——
-    date = today if today is not None else datetime.date.today()
-    ctx = [f"当前日期：{date.isoformat()}（{date.strftime('%Y年%m月%d日 %A')}）"]
+    # —— 动态环境上下文段（日期可选；关掉时由 tail 实时时间块代替）——
+    ctx = []
+    if with_date:
+        date = today if today is not None else datetime.date.today()
+        ctx.append(f"当前日期：{date.isoformat()}（{date.strftime('%Y年%m月%d日 %A')}）")
     if user_name:
         ctx.append(f"你正在对话的用户叫：{user_name}")
     if extra:
         ctx.append(extra)
-    parts.append("\n【环境上下文】\n" + "\n".join(ctx))
+    if ctx:
+        parts.append("\n【环境上下文】\n" + "\n".join(ctx))
 
     return "\n".join(parts)

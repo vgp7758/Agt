@@ -92,6 +92,7 @@ class Agent:
                                max_steps_per_turn=max_steps_per_turn)
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
+        self.session._time_provider = self._runtime_time_block  # tail 每步注入实时时间（感知时段）
         # 长期记忆（per-repo，跨 session）：建库 + 挂两个注入 provider 到 session
         #   - 静态层（semantic 事实 + procedural 标题）每轮始终注入
         #   - 情境层（episodic）按当前 user_message 每轮召回注入
@@ -257,6 +258,7 @@ class Agent:
         self.session = session
         session._state_provider = self.capture_runtime_state
         session._system_extra_provider = self._runtime_system_extra
+        session._time_provider = self._runtime_time_block
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
@@ -305,6 +307,15 @@ class Agent:
         if not lines:
             return ""
         return "【后台服务状态】当前服务：\n" + "\n".join(lines)
+
+    def _runtime_time_block(self) -> str:
+        """tail 每步注入实时时间（秒级），让 Agent 感知真实时段（深夜/工作日等）。
+        persona 不再含日期（保前缀缓存稳定），现实时间统一由这里每步刷新进 tail。"""
+        try:
+            from datetime import datetime
+            return "当前时间：" + datetime.now().strftime("%Y-%m-%d %H:%M:%S %A")
+        except Exception:
+            return ""
 
     def _ltm_static_block(self) -> str:
         """长期记忆·静态层注入：semantic 事实 + procedural 标题（每轮始终注入）。失败静默不炸主循环。"""

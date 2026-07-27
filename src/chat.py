@@ -68,9 +68,10 @@ def _rules_and_skills_section() -> str:
 # SYSTEM = 默认角色 + 内置工具 + 框架能力（代码拥有）+ 工作区 AGENTS.md（用户自编辑）
 SYSTEM = build_system(
     persona="默认助手",
+    with_date=False,   # 日期/时间改由 tail 每步注入（实时、利于 Agent 感知时段）；persona 保持纯净稳定
     extra=(
         "你是一个强大的自主 Agent。用户用自然语言布置任务，你自主决定用哪些工具、分几步完成。\n"
-        "内置工具：run_python(写并运行 Python) / read_file / write_file / edit(精确替换) / grep(内容搜索) / "
+        "内置工具：run_python(运行 Python：内联 code 或 .py 文件；跑已保存的脚本传 file=) / read_file / write_file / edit(精确替换) / grep(内容搜索) / "
         "list_dir(workspace 内) / web_search / open_url(抓网页提取正文) / run_shell(慎用)。"
         "其它工具由 MCP server 动态提供，名字带 __mcp__ 前缀（按描述选用）。\n"
         "复杂任务建议先 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"

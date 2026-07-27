@@ -137,8 +137,18 @@ def _run_subprocess_streaming(args, name, shell=False):
     return "".join(output_lines).strip() or "(无输出)"
 
 
-def run_python(code: str) -> str:
-    """运行一段 Python 代码，实时流式输出（支持长任务进度）。独立子进程执行。"""
+def run_python(code: str = "", file: str = "") -> str:
+    """运行 Python，实时流式输出（支持长任务进度）。独立子进程执行。二选一：
+    - code：一段内联 Python 代码（写临时文件再跑）；
+    - file：运行一个已存在的 .py 文件（跑已保存的脚本用这个，别再用 subprocess 包壳）。
+    """
+    if file:
+        target = _resolve(file)
+        if not target.exists():
+            return f"[文件不存在] {file}"
+        return _run_subprocess_streaming([sys.executable, str(target)], f"run_python {file}")
+    if not code:
+        return "[参数缺失] run_python 需传 code（内联代码）或 file（.py 文件路径）"
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmp = f.name

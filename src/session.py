@@ -167,6 +167,7 @@ class Session:
         self.extra_state: dict = {}                   # 附加运行时状态（Agent 经 _state_provider 收集：plan/自主模式等）
         self._state_provider: Optional[Callable[[], dict]] = None  # Agent 注册的附加状态收集回调
         self._system_extra_provider: Optional[Callable[[], str]] = None  # Agent 注册：返回动态 system 段（后台服务状态等）
+        self._time_provider: Optional[Callable[[], str]] = None  # Agent 注册：返回实时时间串（tail 每步注入，感知时段）
         # —— 长期记忆注入 provider（Agent 注册；两类机制不同，见 longterm_memory.py）——
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
@@ -266,6 +267,7 @@ class Session:
 
     def restore_to_snapshot(self, sha: str) -> Optional[str]:
         """检查点回溯：找到 snapshot_sha==sha 的那轮，截断它及之后的轮，回到它【之前】。
+        重写 events/toollog 落盘文件（仅留前 i 轮 + restore 标记），避免 reload 时旧事件复活。
         返回那轮的用户消息（供 UI 提示）；找不到返回 None。"""
         for i, t in enumerate(self.turns):
             if t.snapshot_sha == sha:
@@ -274,11 +276,62 @@ class Session:
                 self._tier_boundaries = [b for b in self._tier_boundaries if b < i]
                 self._frozen_renders.clear()
                 self._current = None
-                self._emit_event({"event": "restore", "keep": i})   # 保留前 i 轮（append 历史，重放时截断）
+                self._rewrite_persistence(i)   # 重写 events/toollog 文件（含 restore 标记）
                 self._refresh_summary_cache()
-                self._autosave()  # 回溯后也落盘
+                self._autosave()  # 回溯后也落盘（写 metadata json）
                 return target_msg
         return None
+
+    def _rewrite_persistence(self, keep: int):
+        """rewind 后以 self.turns[:keep] 为真相重写 events/toollog 落盘文件（原子写）。
+        解决 events.jsonl append-only 导致 reload 时旧事件复活的问题。
+        name 未就绪（事件还在内存 buffer）时只重置 buffer + 裁剪 toollog 内存。"""
+        # 重新生成前 keep 轮的标准事件序列 + restore 审计标记
+        events = []
+        for t in self.turns[:keep]:
+            events.append({"event": "turn_start", "user": t.user_message, "images": t.images or []})
+            if t.snapshot_sha:
+                events.append({"event": "snapshot", "sha": t.snapshot_sha})
+            for s in t.steps:
+                events.append({"event": "step", "reasoning": s.reasoning or "",
+                               "call_ids": [tc.call_id for tc in s.tool_calls]})
+            events.append({"event": "turn_end", "answer": t.answer or "",
+                           "answer_reasoning": t.answer_reasoning or "", "summary": t.summary or ""})
+        events.append({"event": "restore", "keep": keep})
+
+        if self._event_path is None:
+            self._event_buffer = events
+            kept = {tc.call_id for t in self.turns[:keep] for s in t.steps for tc in s.tool_calls}
+            self.toollog._data = {k: v for k, v in self.toollog._data.items() if k in kept}
+            return
+
+        sd = self._event_path.parent
+        name = self.name
+        self._atomic_write_lines(self._event_path, events)
+        # toollog.jsonl：仅留 kept turns 用到的 call_id，重写后重载（恢复 counter，新 id 不撞旧）
+        tl_path = sd / f"{name}.toollog.jsonl"
+        kept_ids, seen = [], set()
+        for t in self.turns[:keep]:
+            for s in t.steps:
+                for tc in s.tool_calls:
+                    if tc.call_id and tc.call_id not in seen:
+                        seen.add(tc.call_id); kept_ids.append(tc.call_id)
+        kept_entries = [e for e in (self.toollog.get(c) for c in kept_ids) if e]
+        self._atomic_write_lines(tl_path, kept_entries)
+        self.toollog = ToolLog()
+        if tl_path.exists():
+            self.toollog.load_from_jsonl(tl_path)   # 加载 clean 数据 + 绑 path + 恢复 counter
+        # 注：llm_calls.jsonl 是可观测流水（无 turn 索引），保留不动——不影响 replay/render
+
+    @staticmethod
+    def _atomic_write_lines(path: Path, rows: list):
+        """原子写 jsonl：先 .tmp 再 os.replace，防并发/崩溃读到半个文件。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
 
     # ========== 融合上下文（关键）==========
     def messages_for_llm(self) -> list[dict]:
@@ -329,7 +382,8 @@ class Session:
             if hint:
                 msgs.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
 
-        # —— tail ambient（易变块：后台服务状态 + 活动计划，放 user 后保稳定前缀缓存）——
+        # —— tail ambient（易变块：实时时间 + 后台服务状态 + 活动计划，放 user 后保稳定前缀缓存）——
+        self._append_ambient(msgs, self._time_provider)
         self._append_ambient(msgs, self._system_extra_provider)
         self._append_ambient(msgs, self._plan_provider)
         # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
@@ -402,7 +456,8 @@ class Session:
             hint = getattr(self._current, "_user_hint", None)
             if hint:
                 body.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
-        # tail ambient（易变：后台状态 + 活动计划，放 user 后保前缀缓存）
+        # tail ambient（易变：实时时间 + 后台状态 + 活动计划，放 user 后保前缀缓存）
+        self._append_ambient(body, self._time_provider)
         self._append_ambient(body, self._system_extra_provider)
         self._append_ambient(body, self._plan_provider)
         if self._ltm_episodic_provider and self._current and self._current.user_message:

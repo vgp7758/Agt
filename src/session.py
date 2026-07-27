@@ -757,6 +757,20 @@ class Session:
         threading.Thread(target=_write, daemon=True).start()
 
     # ========== 召回（Agent / 用户按需查完整原文）==========
+    def search_turns(self, keywords, max_hits: int = 20) -> list:
+        """按关键字在各轮 user_message+answer+summary 里子串匹配初筛（Agentic RAG 第一阶段，无 LLM）。
+        返回 [(turn_idx, turn, [命中的关键字])]，最多 max_hits 条。镜像 toollog.search。"""
+        kws = [k for k in (keywords or []) if k]
+        if not kws:
+            return []
+        hits = []
+        for i, t in enumerate(self.turns):
+            text = ((t.user_message or "") + " " + (t.answer or "") + " " + (t.summary or ""))
+            matched = [k for k in kws if k in text]
+            if matched:
+                hits.append((i, t, matched))
+        return hits[:max_hits]
+
     def recall(self, query: str, contains_reasoning: bool = False) -> str:
         """按关键词在【全部】历史轮次里搜索，返回匹配轮的完整上下文。
         contains_reasoning=False（默认）不含思考过程；True 则带上每步 reasoning 与回答的 reasoning。

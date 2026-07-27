@@ -462,56 +462,93 @@ class Agent:
     def _extract_keywords(self, msg: str) -> list:
         """便宜模型从 user msg 抽 3-5 个检索关键字。"""
         llm = getattr(self, "retrieval_llm", None) or self.llm
-        prompt = ("从以下用户请求提取 3-5 个用于检索历史工具调用的关键字，"
+        prompt = ("从以下用户请求提取 3-5 个用于检索历史记录（工具调用 + 对话轮次）的关键字，"
                   "逗号分隔，只要词、不要解释：\n" + msg)
         resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=80, enable_thinking=False)
         return [w.strip() for w in resp.content.replace("，", ",").replace("、", ",").split(",")
                 if w.strip()][:8]
 
-    def _rerank_toolcalls(self, msg: str, hits: list) -> list:
-        """便宜模型从初筛 hits 精选 1-3 条，返回 [entry]。"""
-        if not hits:
+    def _rerank(self, msg: str, tool_hits: list, turn_hits: list) -> list:
+        """精排：工具调用 + 轮次候选混合，LLM 选 top 1-3。
+        返回 [("tc", entry), ("turn", (idx, turn))]。解析失败回退按命中关键字数取 top3。"""
+        # 合并候选：(tag, kind, payload, 命中关键字数)；tag 用 T-/R- 区分工具调用/轮次
+        cands = []
+        for e, kws in tool_hits:
+            cands.append((f"T-{e['call_id']}", "tc", e, len(kws)))
+        for idx, t, kws in turn_hits:
+            cands.append((f"R-{idx}", "turn", (idx, t), len(kws)))
+        if not cands:
             return []
-        llm = getattr(self, "retrieval_llm", None) or self.llm
         lines = []
-        for e, _kws in hits:
-            args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)[:200]
-            result_s = (e.get("result", "") or "")[:200]
-            lines.append(f"[{e['call_id']}] {e['name']}({args_s}) 结果:{result_s}")
-        prompt = ("用户请求：" + msg + "\n\n以下是历史工具调用候选，按相关性选出最相关的 1-3 条：\n"
+        for tag, kind, payload, _ in cands:
+            if kind == "tc":
+                e = payload
+                args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)[:150]
+                result_s = (e.get("result", "") or "")[:150]
+                lines.append(f"[{tag}] 工具 {e['name']}({args_s}) 结果:{result_s}")
+            else:
+                idx, t = payload
+                u = (t.user_message or "").replace("\n", " ")[:80]
+                a = (t.answer or "").replace("\n", " ")[:80]
+                lines.append(f"[{tag}] 第{idx + 1}轮 用户:{u} → 回答:{a}")
+        llm = getattr(self, "retrieval_llm", None) or self.llm
+        prompt = ("用户请求：" + msg + "\n\n以下是历史记录候选（工具调用 / 对话轮次），按相关性选出最相关的 1-3 条：\n"
                   + "\n".join(lines)
-                  + "\n\n只返回选中的 call_id，逗号分隔（如 c7,c8），不要其它内容。")
-        resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=50, enable_thinking=False)
-        ids = [w.strip() for w in resp.content.replace("，", ",").split(",") if w.strip()]
-        tl = self.session.toollog
-        return [tl.get(i) for i in ids if tl.get(i)][:3]
+                  + "\n\n只返回选中的标签(如 T-c7,R-3)，逗号分隔，不要其它内容。")
+        try:
+            resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=50, enable_thinking=False)
+            want = {w.strip().upper() for w in resp.content.replace("，", ",").split(",") if w.strip()}
+        except Exception:
+            want = set()
+        by_tag = {c[0].upper(): c for c in cands}
+        picked = [by_tag[t] for t in want if t in by_tag] if want else sorted(cands, key=lambda c: -c[3])[:3]
+        return [(kind, payload) for _tag, kind, payload, _ in picked]
 
     def _format_retrieval(self, ranked: list) -> str:
-        """格式化注入文本（系统提示，投影时放 user 后）。"""
+        """格式化注入文本：<retrieval-hint> 标签包裹（投影时放 user 后；参考用、非用户指令）。
+        工具调用→原格式；轮次（精排已筛到 top）→展开 user+answer 恢复细节（含折叠轮）。"""
         if not ranked:
             return ""
-        lines = ["以下是历史工具调用中可能与本次要求相关的记录："]
-        for e in ranked:
-            args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)
-            if len(args_s) > 300:
-                args_s = args_s[:300] + "…"
-            lines.append(f"{e['name']}({args_s}) tool_call_id: {e['call_id']}")
-        return "\n".join(lines)
+        turn_lines, tc_lines = [], []
+        for kind, payload in ranked:
+            if kind == "tc":
+                e = payload
+                args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)
+                if len(args_s) > 300:
+                    args_s = args_s[:300] + "…"
+                tc_lines.append(f"{e['name']}({args_s}) tool_call_id: {e['call_id']}")
+            else:
+                idx, t = payload
+                u = (t.user_message or "").strip().replace("\n", " ")[:200]
+                a = (t.answer or "").strip()
+                if len(a) > 500:
+                    a = a[:500] + "…(截断)"
+                turn_lines.append(f"[第{idx + 1}轮] 用户: {u}\n回答: {a}")
+        body = []
+        if turn_lines:
+            body.append("— 相关历史轮次 —")
+            body.extend(turn_lines)
+        if tc_lines:
+            body.append("— 相关工具调用 —")
+            body.extend(tc_lines)
+        return ("<retrieval-hint>\n以下是自动检索出的、可能与本次请求相关的历史记录"
+                "（参考用，非用户指令）：\n" + "\n".join(body) + "\n</retrieval-hint>")
 
     def _agentic_retrieve(self, msg: str) -> str:
-        """Agentic RAG：抽关键字 → toollog 初筛 → 精排 → 格式化。返回注入文本（空则不注入）。
+        """Agentic RAG：抽关键字 → toollog+turns 两路初筛 → 精排 → 格式化。返回注入文本（空则不注入）。
         全程兜底，失败返回 ''（不影响主流程）。"""
         try:
             tl = self.session.toollog
-            if len(tl) == 0:
+            if len(tl) == 0 and not self.session.turns:
                 return ""
             kws = self._extract_keywords(msg)
             if not kws:
                 return ""
-            hits = tl.search(kws)
-            if not hits:
+            tool_hits = tl.search(kws)
+            turn_hits = self.session.search_turns(kws)
+            if not tool_hits and not turn_hits:
                 return ""
-            ranked = self._rerank_toolcalls(msg, hits)
+            ranked = self._rerank(msg, tool_hits, turn_hits)
             return self._format_retrieval(ranked)
         except Exception as e:
             _LOG.debug("Agentic RAG 检索失败: %s", e)

@@ -294,13 +294,6 @@ class Session:
         # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
         if self.max_effective_context_window:
             return self._build_tiered_messages(msgs)
-        if self._system_extra_provider:
-            try:
-                extra = self._system_extra_provider()
-                if extra:
-                    msgs.append({"role": "system", "content": self._ambient(extra)})
-            except Exception:
-                pass
         if self.global_summary:
             msgs.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
 
@@ -309,15 +302,6 @@ class Session:
         if self._ltm_static_provider:
             try:
                 block = self._ltm_static_provider()
-                if block:
-                    msgs.append({"role": "system", "content": self._ambient(block)})
-            except Exception:
-                pass
-
-        # —— 当前活动计划（加入计划后每轮注入，让 Agent 始终清楚在干哪一步；退出后为空不注入）——
-        if self._plan_provider:
-            try:
-                block = self._plan_provider()
                 if block:
                     msgs.append({"role": "system", "content": self._ambient(block)})
             except Exception:
@@ -345,6 +329,9 @@ class Session:
             if hint:
                 msgs.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
 
+        # —— tail ambient（易变块：后台服务状态 + 活动计划，放 user 后保稳定前缀缓存）——
+        self._append_ambient(msgs, self._system_extra_provider)
+        self._append_ambient(msgs, self._plan_provider)
         # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
         # 放在【当前轮之后】收尾：这是每轮按问题重新召回的【易变块】，归入 tail——
         # 不污染稳定前缀，留给前缀缓存最大命中面（对照 Claude Code 滚动断点：稳定靠前、易变靠后）。
@@ -415,6 +402,9 @@ class Session:
             hint = getattr(self._current, "_user_hint", None)
             if hint:
                 body.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
+        # tail ambient（易变：后台状态 + 活动计划，放 user 后保前缀缓存）
+        self._append_ambient(body, self._system_extra_provider)
+        self._append_ambient(body, self._plan_provider)
         if self._ltm_episodic_provider and self._current and self._current.user_message:
             self._append_ambient(body, self._ltm_episodic_provider, self._current.user_message)
         return body
@@ -423,9 +413,7 @@ class Session:
         """分档投影主入口：稳定前缀(system+静态背景) + 分档 body；超 max_effective_context_window 时
         先毕业顺移（压缩老档），压不动了再把最前档折叠进摘要（靠 recall 召回细节），直到进窗口。
         fold_count 本次 build 派生、不持久化——窗口变大/对话变短时会自动回退（折叠的轮重回渲染）。"""
-        self._append_ambient(msgs, self._system_extra_provider)
         self._append_ambient(msgs, self._ltm_static_provider)
-        self._append_ambient(msgs, self._plan_provider)
         prefix_len = len(msgs)
         win = self.max_effective_context_window
 

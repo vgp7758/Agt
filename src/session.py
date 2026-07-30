@@ -911,6 +911,39 @@ class Session:
             os.replace(tmp_path, path)
         return path
 
+    def rename(self, new_name: str) -> str:
+        """重命名当前会话：改 self.name + 原子重命名 .json/.events.jsonl/.toollog.jsonl/.llm_calls.jsonl
+        + 重绑路径 + 落盘刷新 metadata（"name" 字段）。新名冲突或非法抛 ValueError。
+        未命名（还没存档）时只设 name，下次 save 用新名建文件。"""
+        new_name = self._sanitize_session_name(new_name)
+        if not new_name:
+            raise ValueError("新会话名不能为空")
+        if new_name == self.name:
+            return self.name
+        d = _repo_sessions_dir(self.workspace)
+        if (d / f"{new_name}.json").exists():
+            raise ValueError(f"已存在同名会话「{new_name}」，换个名字")
+        old_name = self.name
+        if old_name:   # 已存档：原子重命名 4 个文件（存在的才动）
+            for suffix in (".json", ".events.jsonl", ".toollog.jsonl", ".llm_calls.jsonl"):
+                old_p = d / f"{old_name}{suffix}"
+                if old_p.exists():
+                    old_p.replace(d / f"{new_name}{suffix}")
+        self.name = new_name
+        if old_name and self._event_path is not None:
+            self._bind_event_path(d / f"{new_name}.events.jsonl")
+            self.toollog.set_path(d / f"{new_name}.toollog.jsonl")
+            self.llm_calls.set_path(d / f"{new_name}.llm_calls.jsonl")
+            self.save()   # 覆盖刚 rename 的旧内容，把 metadata 的 "name" 刷成新的
+        return new_name
+
+    @staticmethod
+    def _sanitize_session_name(name: str) -> str:
+        """清洗会话名（作文件名）：去首尾空白，非法字符（/ \\ : * ? " < > |）替成 _。"""
+        s = (name or "").strip()
+        s = re.sub(r'[/\\:*?"<>|]', "_", s)
+        return s.strip()
+
     @classmethod
     def load(cls, path_or_name: str, llm: Optional[LLMClient] = None, workspace=None) -> "Session":
         ws = workspace or Path.cwd()

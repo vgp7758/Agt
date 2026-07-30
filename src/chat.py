@@ -443,7 +443,7 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /help")
+    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /help")
     print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 请求停止，等当前步完成)")
     print("=" * 64)
 

@@ -91,6 +91,20 @@ def _cmd_save(ctx: CommandContext, args):
     print(f"✅ 已保存：{path.name}  (共 {len(ctx.session.turns)} 轮) {note}")
 
 
+def _cmd_rename(ctx: CommandContext, args):
+    new = _parse_args(args)[0]
+    new = new[0] if new else ""
+    if not new:
+        print("用法：/rename <新会话名>（改名 + 改存档文件名）")
+        return
+    try:
+        old = ctx.session.name or "(未命名)"
+        ctx.session.rename(new)
+        print(f"✅ 会话已重命名：{old} → {ctx.session.name}")
+    except ValueError as e:
+        print(f"❌ {e}")
+
+
 def _cmd_resume(ctx: CommandContext, args):
     positional = _parse_args(args)[0]
     if not positional:
@@ -906,6 +920,7 @@ def _cmd_tools(ctx: CommandContext, args):
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
+    reg.register("rename", _cmd_rename, "<新名>  重命名当前会话（改名+改存档文件）")
     reg.register("resume", _cmd_resume, "<name>  恢复指定会话")
     reg.register("list", _cmd_list, "列出所有已保存会话")
     reg.register("show", _cmd_show, "[name]  查看会话详情（不传=当前）")

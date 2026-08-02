@@ -64,6 +64,30 @@ def _render_write_cli(path, content, max_lines: int = 15) -> str:
     return "\n".join(lines)
 
 
+def _render_insert_cli(path: str, entries: list) -> str:
+    """insert 的行级预览：→行号\n[文本块]，紧凑不刷屏。每块最多 6 行预览。"""
+    lines = [f"✏️ insert {path}"]
+    for ent in entries or []:
+        ln = ent.get("line", "?")
+        ct = (ent.get("content") or "").splitlines()
+        preview = ct[:6]
+        lines.append(f"  →{ln}")
+        for c in preview:
+            lines.append(f"     {c}")
+        if len(ct) > 6:
+            lines.append("     ...")
+    return "\n".join(lines)
+
+
+def _render_run_python_cli(code: str) -> str:
+    """run_python 代码块预览（前 12 行），避免一行巨长。"""
+    code = code or ""
+    lines = code.splitlines()
+    preview = lines[:12]
+    more = f"\n   ... ({len(lines)} 行)" if len(lines) > 12 else ""
+    return "🔧 run_python:\n   " + "\n   ".join(preview) + more
+
+
 class Agent:
     def __init__(
         self,
@@ -173,6 +197,10 @@ class Agent:
                 print(_render_edit_cli(_a.get("path", ""), _a.get("old_string", ""), _a.get("new_string", "")))
             elif _n == "write_file":
                 print(_render_write_cli(_a.get("path", ""), _a.get("content", "")))
+            elif _n == "insert":
+                print(_render_insert_cli(_a.get("path", ""), _a.get("entries", [])))
+            elif _n == "run_python" and _a.get("code"):
+                print(_render_run_python_cli(_a.get("code")))
             else:
                 print(f"🔧 调用 {_n}({_a})")
         elif t == "tool_result":

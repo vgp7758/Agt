@@ -72,25 +72,25 @@ def main():
     gfile = rt.grep("foo", path="other.py")
     check("grep 文件路径能搜到", "other.py:1:" in gfile and "other.py:4:" in gfile, gfile)
 
-    # ---- insert：line=2 在 b 前插 X → a,X,b,c,d,e ----
-    r = rt.insert(f, 2, "X", v0)
+    # ---- insert：单点 entries=[{line,content}] ----
+    r = rt.insert(f, [{"line": 2, "content": "X"}], v0)
     check("insert 成功", r.startswith("✅") and "file_version=" in r)
     check("insert 内容正确", _raw(f) == "a\nX\nb\nc\nd\ne\n", _raw(f))
     v1 = _ver(r)
     check("insert 后 version 变了", v1 != v0)
 
-    # ---- insert 多点原子插入（倒序应用，传原始行号即可，替代 run_python 拼字符串）----
+    # ---- insert 多点原子插入（先按 line 排序再降序应用，传原始行号即可，替代 run_python 拼字符串）----
     (TMP / "multi.txt").write_text("L1\nL2\nL3\nL4\nL5\n", encoding="utf-8")
     vm = _ver(rt.read_file("multi.txt"))
-    rm = rt.insert("multi.txt", [1, 3, 5], ["A", "C", "E"], vm)   # 原始行号，内部倒序
+    rm = rt.insert("multi.txt", [{"line": 1, "content": "A"}, {"line": 3, "content": "C"}, {"line": 5, "content": "E"}], vm)
     check("insert 多点成功", rm.startswith("✅"), rm)
     check("insert 多点倒序不串位", _raw("multi.txt") == "A\nL1\nL2\nC\nL3\nL4\nE\nL5\n", _raw("multi.txt"))
     vm2 = _ver(rm)
-    rb = rt.insert("multi.txt", [1, 2], ["only one"], vm2)   # 长度不一致
-    check("insert 长度不一致大声报错", "长度不一致" in rb, rb)
+    rb = rt.insert("multi.txt", [{"line": 1, "content": "only one"}], vm2)  # 单元素也合法
+    check("insert 单元素也工作", rb.startswith("✅"), rb)
 
     # ---- 用旧版本 v0 再编辑 → 必须被拒 ----
-    r_stale = rt.insert(f, 1, "Y", v0)
+    r_stale = rt.insert(f, [{"line": 1, "content": "Y"}], v0)
     check("stale version 被拒", "版本过期" in r_stale, r_stale)
     check("文件未被 stale 写入", "Y" not in _raw(f))
 
@@ -111,12 +111,12 @@ def main():
     check("move 自身范围无操作", "无操作" in r_noop)
 
     # ---- 缺 version（经 Tool.run，模拟真实调用；version 必填，省略 → 报缺参）----
-    missing = Tool(rt.insert).run(path=f, lines=[1], contents=["Z"])
+    missing = Tool(rt.insert).run(path=f, entries=[{"line": 1, "content": "Z"}])
     check("缺 version 报错(点名需传 version)",
           "version" in missing and ("缺 version" in missing or "missing" in missing), missing)
 
     # ---- 跨 workspace 被拒（经 Tool.run 兜底 PermissionError）----
-    cross = Tool(rt.insert).run(path="../../etc/evil", lines=[1], contents=["x"], version=v3)
+    cross = Tool(rt.insert).run(path="../../etc/evil", entries=[{"line": 1, "content": "x"}], version=v3)
     check("跨 workspace 被拒", "拒绝访问" in cross, cross)
 
     # ---- 行号越界（start 超出文件长度，不该被误报成"参数错误"）----
@@ -125,8 +125,8 @@ def main():
 
     # ---- param_descriptions 注入 schema（取 REAL_TOOLS 里注册好的工具）----
     reg = {t.name: t for t in rt.REAL_TOOLS}
-    lines_desc = reg["insert"].schema["function"]["parameters"]["properties"]["lines"].get("description", "")
-    check("param_descriptions 注入 schema", "行号" in lines_desc, lines_desc)
+    entries_desc = reg["insert"].schema["function"]["parameters"]["properties"]["entries"].get("description", "")
+    check("param_descriptions 注入 schema", "插入点数组" in entries_desc or "line" in entries_desc, entries_desc)
     old_desc = reg["edit"].schema["function"]["parameters"]["properties"]["old_string"].get("description")
     check("现有工具 schema 不受影响", old_desc is None)
 

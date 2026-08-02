@@ -101,6 +101,8 @@
   .diff-head { font-weight:600; color:#3b82f6; margin-bottom:4px; }
   .diff-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   .diff-col-h { font-size:11px; color:#8a9099; margin-bottom:2px; }
+  .diff-ins { margin-bottom:6px; border-left:3px solid #3b82f6; padding-left:6px; }
+  .diff-ins-h { font-size:12px; color:#3b82f6; font-weight:600; margin-bottom:2px; }
   .ev pre.diff-old, .ev pre.diff-new { margin:0; max-height:260px; overflow:auto; font-size:12px; line-height:1.45; padding:6px 8px; border-radius:4px; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,Menlo,Consolas,monospace; }
   pre.diff-old { background:#3a1410; color:#f8b4b4; }
   pre.diff-new { background:#102a16; color:#a8f0a8; }
@@ -310,6 +312,21 @@ function toolCallHTML(name, a){
     return `<div class="diff-head">✏️ edit ${esc(a.path||'')}</div>`+
       `<div class="diff-grid"><div class="diff-col"><div class="diff-col-h">old_string</div><pre class="diff-old">${esc(a.old_string||'')}</pre></div>`+
       `<div class="diff-col"><div class="diff-col-h">new_string</div><pre class="diff-new">${esc(a.new_string||'')}</pre></div></div>`;
+  }
+  if(name==='insert' && a && a.entries){
+    let parts=`<div class="diff-head">✏️ insert ${esc(a.path||'')}（${a.entries.length} 处）</div>`;
+    a.entries.forEach(e=>{
+      const c=(e.content||''), lines=c.split('\n'), max=8;
+      const prev=lines.length>max?lines.slice(0,max).join('\n')+`\n…(${lines.length}行)`:c;
+      parts+=`<div class="diff-ins"><div class="diff-ins-h">→ ${esc(e.line)}</div><pre class="diff-new">${esc(prev)}</pre></div>`;
+    });
+    return parts;
+  }
+  if(name==='run_python' && a && a.code){
+    const c=a.code||'', lines=c.split('\n'), max=15;
+    const prev=lines.length>max?lines.slice(0,max).join('\n')+`\n…(${lines.length}行)`:c;
+    return `<div class="diff-head">🔧 run_python ${a.file?esc(a.file):'(inline)'}（${lines.length} 行）</div>`+
+      `<pre class="diff-new">${esc(prev)}</pre>`;
   }
   if(name==='write_file' && a){
     const c=a.content||'', lines=c.split('\n');

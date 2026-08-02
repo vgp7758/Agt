@@ -409,44 +409,47 @@ def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> 
     return msg
 
 
-def insert(path: str, lines, contents, version: str) -> str:
+def insert(path: str, entries, version: str) -> str:
     """按行号在文件中【一处或多处】插入文本，单次原子写入——一次插多段用它，别在 run_python 里拼字符串。
-    lines: 一组 1-based 行号（在该行之前插入；<=0 或超过总行数则追加末尾）；
-    contents: 对应的文本片段（每个可多行），与 lines 等长、一一对应。
-    内部按 lines 降序应用（先插高位不扰动低位行号），故直接传【grep/read_file 查到的原始行号】即可，无需自己算位移。
+    entries: 插入点数组，每项 {"line": 1-based 行号, "content": 文本(可多行)}；在该行之前插入；
+             line <=0 或超过总行数则追加末尾。
+    内部先按 line 排序、再【降序】应用（先插高位不扰动低位行号），故直接传 grep/read_file 查到的原始行号即可，无需自己算位移。
     需传 read_file/grep 返回的 file_version 校验（不匹配=文件已改、拒绝要求重读）；成功返回新 file_version。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
-    # 容错：标量单点调用 insert(path, N, "x", v) → 归一化为列表
-    if isinstance(lines, int) and isinstance(contents, str):
-        lines, contents = [lines], [contents]
-    try:
-        n = len(lines)
-    except TypeError:
-        return f"[参数错误] lines 需为行号列表，收到 {lines!r}"
-    if n == 0:
-        return "[参数错误] lines 为空"
-    if len(contents) != n:
-        return f"[参数错误] lines({n}) 与 contents({len(contents)}) 长度不一致"
+    # 校验 entries
+    if not isinstance(entries, list) or not entries:
+        return f"[参数错误] entries 需为非空数组，收到 {type(entries).__name__}"
+    norm = []
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict):
+            return f"[参数错误] entries[{i}] 需为对象 {{line, content}}，收到 {type(e).__name__}"
+        ln = e.get("line")
+        ct = e.get("content")
+        if not isinstance(ln, int) or isinstance(ln, bool):
+            return f"[参数错误] entries[{i}].line 需为整数，收到 {ln!r}"
+        if not isinstance(ct, str):
+            return f"[参数错误] entries[{i}].content 需为字符串，收到 {type(ct).__name__}"
+        norm.append((ln, ct))
     ok, _cur, err = _check_version(target, version)
     if not ok:
         return err
     out = target.read_text(encoding="utf-8").splitlines()
     total = len(out)
-    # 降序应用：先插大行号，不影响小行号位置；同行按输入顺序（stable sort）
+    # 先按 line 排序（升序），再降序应用：先插大行号，不影响小行号位置
+    norm.sort(key=lambda ec: ec[0], reverse=True)
     appended = 0
-    for k in sorted(range(n), key=lambda i: lines[i], reverse=True):
-        ln = lines[k]
-        block = (contents[k] or "").splitlines()
-        if ln is None or ln <= 0 or ln > total:
+    for ln, ct in norm:
+        block = (ct or "").splitlines()
+        if ln <= 0 or ln > total:
             out.extend(block)             # 追加到末尾
             appended += 1
         else:
             out[ln - 1:ln - 1] = block    # 在第 ln 行之前插入
-    ins_n = n - appended
+    ins_n = len(norm) - appended
     where = f"{ins_n} 处定点" + (f"+ {appended} 处追加" if appended else "")
-    total_new_lines = sum(len((c or "").splitlines()) for c in contents)
+    total_new_lines = sum(len((c or "").splitlines()) for _, c in norm)
     return "✅ " + _apply_lines(target, out, path,
                                 f"已在 {path} 插入 {where}（共 {total_new_lines} 行）")
 
@@ -1665,8 +1668,7 @@ REAL_TOOLS = Toolbox(
     Tool(write_file),
     Tool(edit),
     Tool(insert, param_descriptions={
-        "lines": "一组 1-based 行号（在该行之前插入；<=0 或超过总行数=追加末尾）。单点也可传一个行号",
-        "contents": "对应的文本片段列表（每个可多行），与 lines 等长一一对应。单点也可传一个字符串",
+        "entries": "插入点数组，每项 {line: 1-based行号, content: 文本(可多行)}；在该行之前插入；line<=0或超过总行数=追加末尾",
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(delete, param_descriptions={

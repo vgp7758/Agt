@@ -135,6 +135,11 @@ class ToolCall:
 class Step:
     reasoning: str = ""
     tool_calls: list = field(default_factory=list)  # list[ToolCall]
+    preceding_hint: str = ""     # 该步之前插入的"用户中途补充"(user 消息，带标签)，随本步滚入历史、不每步复读
+
+
+# 中途插话的标签：明确标注"非新一轮"，避免被模型/未来逻辑当成新 turn 的 user 输入
+_MIDTURN_TAG = "📨〔用户中途补充，非新一轮〕\n"
 
 
 @dataclass
@@ -387,10 +392,11 @@ class Session:
             if _rh:
                 msgs.append({"role": "system", "content": _rh})
             msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
-            # 自主模式下用户插入的消息：在工具结果后以 system 消息注入，Agent 下一步就能看到
-            hint = getattr(self._current, "_user_hint", None)
-            if hint:
-                msgs.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
+            # 本步 pending 的"用户中途补充"（user 角色，带标签）：跟在已完成的 tool 结果后一起发出；
+            # 该步一生成便锚到其 preceding_hint，后续步它滚入历史中部、不再每步尾部复读
+            _psh = getattr(self._current, "_pending_step_hint", None)
+            if _psh:
+                msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
 
         # —— tail ambient（易变块：实时时间 + 后台服务状态 + 活动计划，放 user 后保稳定前缀缓存）——
         self._append_ambient(msgs, self._time_provider)
@@ -463,9 +469,9 @@ class Session:
             if _rh:
                 body.append({"role": "system", "content": _rh})
             body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
-            hint = getattr(self._current, "_user_hint", None)
-            if hint:
-                body.append({"role": "system", "content": f"📨 用户在自主模式运行期间发来消息：\n{hint}"})
+            _psh = getattr(self._current, "_pending_step_hint", None)
+            if _psh:
+                body.append({"role": "user", "content": _MIDTURN_TAG + _psh})
         # tail ambient（易变：实时时间 + 后台状态 + 活动计划，放 user 后保前缀缓存）
         self._append_ambient(body, self._time_provider)
         self._append_ambient(body, self._system_extra_provider)
@@ -623,6 +629,9 @@ class Session:
         for idx, step in enumerate(steps):
             if not step.tool_calls:
                 continue
+            # 本步之前的"用户中途补充"（user 角色，带标签）：插在上一组 tool 结果之后、本步 assistant 之前
+            if step.preceding_hint:
+                msgs.append({"role": "user", "content": _MIDTURN_TAG + step.preceding_hint})
             distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
             limit = detail_limit(distance, base=base)
             full = distance < full_window   # 最近 full_window 步全量（含 step0）；老 turn 传 0/1

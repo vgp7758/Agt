@@ -672,13 +672,16 @@ class Agent:
                             self._emit({"type": "interrupted"})
                             self.session.abort_current_turn("（被用户停止）")
                             return ""
-                        # 中途插话注入（任何模式）：忙时排队的用户消息作为本步 user_hint，
-                        # 模型当步即可见、可改向（不止自主模式；web/CLI 忙时发送都走这里）
+                        # 中途插话注入（任何模式）：忙时排队的用户消息挂到"本步将生成"的 pending 位，
+                        # 渲染为 user 消息(带标签)跟在上一组 tool 结果后；该步一生成就锚到其 preceding_hint、
+                        # 后续步它滚入历史中部、不再每步尾部复读
                         if self.pending_messages:
                             inject = "；".join(self.pending_messages)
                             self.pending_messages.clear()
                             self._emit({"type": "message_injected", "text": inject})
-                            self.session._current._user_hint = inject
+                            self.session._current._pending_step_hint = inject
+                        else:
+                            self.session._current._pending_step_hint = None
                         if self.cumulative_tokens >= self.token_budget:
                             self._emit({"type": "budget_hit"})
                             return self._wrap_up()
@@ -791,6 +794,9 @@ class Agent:
                                 tool_names=tool_names
                             )
                         step = Step(reasoning=resp.reasoning)
+                        # 锚定本步 pending 的中途插话 → 渲染在 assistant 前(随本步滚入历史)；清 pending 防 wrap_up 重复
+                        step.preceding_hint = getattr(self.session._current, "_pending_step_hint", "") or ""
+                        self.session._current._pending_step_hint = None
                         # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
                         import real_tools as _rt
                         _rt._tool_emit = self.on_event if self.on_event else (self._print_only_emit if self.verbose else None)

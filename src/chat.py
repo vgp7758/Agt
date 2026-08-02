@@ -31,6 +31,7 @@ from lsp_manager import make_lsp_tools
 from multiagent import make_subagent_tools
 from prompts import build_system
 from real_tools import REAL_TOOLS, LIGHT_TOOLS, WORKSPACE, make_autonomous_tools
+from updater import start_background_check
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 from snapshots import SnapshotManager
 
@@ -406,6 +407,7 @@ def web_main(port=None):
                 port = int(a)
                 break
     port = port or 8000
+    start_background_check()   # 后台查 PyPI 新版（24h 节流；editable 跳过；失败静默）
     from server import broadcast, start_server, open_browser, lan_urls, stop_server_if_running
     mcp_mgr = MCPManager()
     mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
@@ -465,9 +467,11 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /help")
+    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /update /help")
     print("退出：quit / Ctrl+D  (运行中 Ctrl+C 第一次=停当前任务回到输入，第二次=退出)")
     print("=" * 64)
+
+    start_background_check()   # 后台查 PyPI 新版（24h 节流；editable 跳过；失败静默）
 
     # 连接 MCP server（workspace/.mcp.json + 全局 ~/.agt/mcp.json）
     mcp_mgr = MCPManager()

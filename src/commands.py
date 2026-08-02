@@ -918,6 +918,13 @@ def _cmd_tools(ctx: CommandContext, args):
             print(f"  [{g}] {len(names)} 个：{', '.join(names)}")
 
 
+def _cmd_update(ctx: CommandContext, args):
+    """/update —— 检查 PyPI 是否有新版 agt-agent，有则升级（绕过 24h 节流）。
+    editable / 本地 / 源码安装会跳过；auto_update 关时只提示不升级。"""
+    from updater import check_and_update
+    check_and_update(force=True, announce=print)
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -943,6 +950,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("rewind", _cmd_rewind, "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）")
     reg.register("rag", _cmd_rag, "build | config [k v] | stats | query <词>  RAG 文档库")
     reg.register("tools", _cmd_tools, "[关键词]  列出所有工具（按来源分组）")
+    reg.register("update", _cmd_update, "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

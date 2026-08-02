@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import subprocess
@@ -45,6 +46,32 @@ def _resolve(path: str) -> Path:
     except ValueError:
         raise PermissionError(f"拒绝访问 workspace 外的路径: {path}")
     return target
+
+
+# ===== 文件版本（乐观锁）=====
+# 行号类编辑工具（insert/delete/move）没有 old_string 自校验，靠 version 防止
+# "模型脑子里的行号已过期 → 静默写错位置"。模型 read_file/grep 时拿到当前 version，
+# 编辑时原样回传；服务端重新算一次当前 version 比对：相等→安全应用，不等→拒绝要求重读。
+# 服务端无需持久化 file→version 映射——version 令牌由模型持有，进程重启后旧令牌自然
+# 失配→触发重读，正是我们要的安全行为。
+
+def _file_version(target: Path) -> str:
+    """文件内容的版本号 = sha256(raw bytes) 前 12 位 hex。对任意字节变换都鲁棒。"""
+    return hashlib.sha256(target.read_bytes()).hexdigest()[:12]
+
+
+def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
+    """校验文件是否仍是模型读取时的版本。
+    返回 (ok, current_version, err_msg)：ok=False 时 err_msg 是给模型的提示。"""
+    if not version:
+        return False, "", ("[缺 version] 行号类编辑必须传 version——即你上次 "
+                           "read_file/grep 返回的 file_version。先读文件拿到它。")
+    current = _file_version(target)
+    if current != version:
+        return False, current, (
+            f"[版本过期] 文件已改动（你的 version={version}，当前={current}），"
+            f"行号可能已位移。请重新 read_file/grep 取最新行号与 file_version 后再编辑。")
+    return True, current, ""
 
 
 def _py_check(target: Path) -> str:
@@ -161,9 +188,13 @@ def run_python(code: str = "", file: str = "") -> str:
             pass
 
 
-def read_file(path: str, start_line: int = None, end_line: int = None) -> str:
-    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取）。
-    start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。"""
+def read_file(path: str, start_line: int = None, end_line: int = None,
+              line_numbers: bool = False) -> str:
+    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取），末尾附 file_version。
+    start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
+    line_numbers=True: 每行前加行号（cat -n 样式），用于接下来要用 insert/delete/move 按行号编辑的场景。
+    返回末尾的 file_version 是该文件当前的内容版本号——传给 insert/delete/move 的 version 参数；
+    若编辑时版本对不上，说明文件已被改动、需重读。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
@@ -176,15 +207,23 @@ def read_file(path: str, start_line: int = None, end_line: int = None) -> str:
         text = target.read_text(encoding="utf-8")
         lines = text.splitlines()
     total = len(lines)
+    ver_footer = f"\n[file_version={_file_version(target)}]"
     if start_line is None and end_line is None:
-        return text
+        if line_numbers:
+            body = "\n".join(f"{i+1:>5}│ {ln}" for i, ln in enumerate(lines))
+            return f"[{path} 共 {total} 行]\n{body}{ver_footer}"
+        return text + ver_footer
     start = max(1, start_line or 1) - 1
     end = min(total, end_line or total)
     if start >= total:
         return f"[行号越界] 文件共 {total} 行，请求 start_line={start_line}"
     selected = lines[start:end]
-    header = f"[{path} L{start+1}-L{end}/{total}]\n"
-    return header + "\n".join(selected)
+    header = f"[{path} L{start+1}-L{end}/{total}]"
+    if line_numbers:
+        body = "\n".join(f"{start+i+1:>5}│ {ln}" for i, ln in enumerate(selected))
+    else:
+        body = "\n".join(selected)
+    return header + "\n" + body + ver_footer
 
 
 def write_file(path: str, content: str) -> str:
@@ -247,10 +286,13 @@ def _extract_text(target: Path) -> str | None:
         return f"[文档解析失败: {type(e).__name__}: {e}]"
 
 
-def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, max_results: int = 50) -> str:
-    """在 workspace 内搜索文件内容，返回 "相对路径:行号:匹配行"。
-    pattern: 搜索文本；regex=True 时按正则。path: 起始目录(默认 workspace 根)。
-    glob: 文件名过滤如 '*.js'；max_results: 最多返回匹配数。"""
+def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
+         context: int = 0, max_results: int = 50) -> str:
+    """在 workspace 内搜索文件内容，返回带行号的匹配（可带上下文），并附每个文件的 file_version。
+    pattern: 搜索模式，**默认按正则**（支持 a|b 多选一、. * 等元字符，与 ripgrep 一致）；
+    要按字面匹配（把 pattern 当普通字符串）传 regex=False。path: 文件或目录(默认 workspace 根)。
+    glob: 文件名过滤如 '*.js'；context: 每条命中前后各显示几行（默认 0=只显示匹配行）；
+    max_results: 最多返回匹配数。每个文件头部的 file_version 传给 insert/delete/move 的 version 参数。"""
     import fnmatch
     import re
     root = _resolve(path)
@@ -259,10 +301,14 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, m
     try:
         rx = re.compile(pattern if regex else re.escape(pattern))
     except re.error as e:
-        return f"[正则错误] {e}"
+        return f"[正则错误] {e}\n（pattern 含特殊字符？可传 regex=False 按字面匹配）"
     DOC_EXT = {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}
-    matches, scanned = [], 0
-    for fp in sorted(root.rglob("*")):
+    # path 是文件 → 只搜该文件；是目录 → 递归其下（rglob 在文件上返回空，故需分支）
+    candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+    # 按文件聚合：rel -> (version, lines, [命中行号])
+    files, scanned, total = {}, 0, 0
+    capped = False
+    for fp in candidates:
         if not fp.is_file() or (glob and not fnmatch.fnmatch(fp.name, glob)):
             continue
         text = None
@@ -278,16 +324,38 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = False, m
         if text is None:
             continue
         scanned += 1
-        rel = fp.relative_to(WORKSPACE).as_posix()
-        for i, line in enumerate(text.splitlines(), 1):
+        lines = text.splitlines()
+        hits = []
+        for i, line in enumerate(lines, 1):
             if rx.search(line):
-                matches.append(f"{rel}:{i}: {line.strip()[:200]}")
-                if len(matches) >= max_results:
-                    matches.append(f"...（已达 max_results={max_results}，截断）")
-                    return f"扫描 {scanned} 个文件，匹配 {max_results}+ 处：\n" + "\n".join(matches)
-    if not matches:
+                hits.append(i)
+                total += 1
+                if total >= max_results:
+                    capped = True
+                    break
+        if hits:
+            rel = fp.relative_to(WORKSPACE).as_posix()
+            files[rel] = (_file_version(fp), lines, hits)
+        if capped:
+            break
+    if not files:
         return f"(扫描 {scanned} 个文件，未找到 '{pattern}')"
-    return f"扫描 {scanned} 个文件，匹配 {len(matches)} 处：\n" + "\n".join(matches)
+    c = max(0, int(context))
+    parts = [f"扫描 {scanned} 个文件，匹配 {total} 处："]
+    for rel, (ver, lines, hits) in files.items():
+        n = len(lines)
+        parts.append(f"── {rel}  (file_version={ver}) ──")
+        for lineno in hits:
+            if c:
+                lo, hi = max(1, lineno - c), min(n, lineno + c)
+                for j in range(lo, hi + 1):
+                    mark = ">" if j == lineno else " "
+                    parts.append(f"{mark} {rel}:{j}: {lines[j-1].rstrip()[:200]}")
+            else:
+                parts.append(f"> {rel}:{lineno}: {lines[lineno-1].rstrip()[:200]}")
+    if capped:
+        parts.append(f"...（已达 max_results={max_results}，截断；收紧 pattern 或调大 max_results）")
+    return "\n".join(parts)
 
 
 def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
@@ -330,6 +398,310 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
     if path.endswith(".py") or path.endswith(".pyw"):
         msg += _py_check(target)
     return msg
+
+
+def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> str:
+    """把 new_lines 写回文件（统一 \n 换行 + 末尾换行），返回带新 file_version 的确认串。"""
+    target.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
+    msg = f"{action_desc}（现共 {len(new_lines)} 行）file_version={_file_version(target)}"
+    if path.endswith(".py") or path.endswith(".pyw"):
+        msg += _py_check(target)
+    return msg
+
+
+def insert(path: str, lines, contents, version: str) -> str:
+    """按行号在文件中【一处或多处】插入文本，单次原子写入——一次插多段用它，别在 run_python 里拼字符串。
+    lines: 一组 1-based 行号（在该行之前插入；<=0 或超过总行数则追加末尾）；
+    contents: 对应的文本片段（每个可多行），与 lines 等长、一一对应。
+    内部按 lines 降序应用（先插高位不扰动低位行号），故直接传【grep/read_file 查到的原始行号】即可，无需自己算位移。
+    需传 read_file/grep 返回的 file_version 校验（不匹配=文件已改、拒绝要求重读）；成功返回新 file_version。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[文件不存在] {path}"
+    # 容错：标量单点调用 insert(path, N, "x", v) → 归一化为列表
+    if isinstance(lines, int) and isinstance(contents, str):
+        lines, contents = [lines], [contents]
+    try:
+        n = len(lines)
+    except TypeError:
+        return f"[参数错误] lines 需为行号列表，收到 {lines!r}"
+    if n == 0:
+        return "[参数错误] lines 为空"
+    if len(contents) != n:
+        return f"[参数错误] lines({n}) 与 contents({len(contents)}) 长度不一致"
+    ok, _cur, err = _check_version(target, version)
+    if not ok:
+        return err
+    out = target.read_text(encoding="utf-8").splitlines()
+    total = len(out)
+    # 降序应用：先插大行号，不影响小行号位置；同行按输入顺序（stable sort）
+    appended = 0
+    for k in sorted(range(n), key=lambda i: lines[i], reverse=True):
+        ln = lines[k]
+        block = (contents[k] or "").splitlines()
+        if ln is None or ln <= 0 or ln > total:
+            out.extend(block)             # 追加到末尾
+            appended += 1
+        else:
+            out[ln - 1:ln - 1] = block    # 在第 ln 行之前插入
+    ins_n = n - appended
+    where = f"{ins_n} 处定点" + (f"+ {appended} 处追加" if appended else "")
+    total_new_lines = sum(len((c or "").splitlines()) for c in contents)
+    return "✅ " + _apply_lines(target, out, path,
+                                f"已在 {path} 插入 {where}（共 {total_new_lines} 行）")
+
+
+def delete(path: str, start_line: int, end_line: int, version: str) -> str:
+    """按行号删除文件中一段连续的行（start_line~end_line，含两端，1-based）。删的是行不是文件。
+    需传 read_file/grep 返回的 file_version 做版本校验：不匹配则文件已改动、会被拒绝要求重读。
+    成功后返回新的 file_version，同轮后续编辑可直接用它当 version。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[文件不存在] {path}"
+    ok, _cur, err = _check_version(target, version)
+    if not ok:
+        return err
+    lines = target.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    s = int(start_line)
+    e = int(end_line)
+    if s < 1 or s > total:
+        return f"[行号越界] 文件共 {total} 行，start_line={start_line}（须 1~{total}）"
+    if e < s:
+        return f"[参数错误] end_line({end_line}) 不能小于 start_line({start_line})"
+    e = min(total, e)   # 超出末尾则截到文件尾（友善：删到末尾）
+    del lines[s - 1:e]
+    return "✅ " + _apply_lines(target, lines, path,
+                                f"已删除 {path} 第 {s}-{e} 行（共 {e - s + 1} 行）")
+
+
+def move(path: str, start_line: int, end_line: int, dst_line: int, version: str) -> str:
+    """按行号把一段行（start_line~end_line，含两端）原子搬到 dst_line 行之前——重构搬代码块用。
+    需传 read_file/grep 返回的 file_version 做版本校验：不匹配则文件已改动、会被拒绝要求重读。
+    dst_line 按原始行号理解（搬到自身范围内视为无操作）。成功后返回新的 file_version。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[文件不存在] {path}"
+    ok, _cur, err = _check_version(target, version)
+    if not ok:
+        return err
+    lines = target.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    s = int(start_line)
+    e = int(end_line)
+    if s < 1 or s > total:
+        return f"[行号越界] 文件共 {total} 行，start_line={start_line}（须 1~{total}）"
+    if e < s:
+        return f"[参数错误] end_line({end_line}) 不能小于 start_line({start_line})"
+    e = min(total, e)
+    block = lines[s - 1:e]
+    nblock = len(block)
+    d = int(dst_line)
+    # 目标落在源块自身范围内 → 无操作（否则行号语义自相矛盾）
+    if s <= d <= e + 1:
+        return f"[无操作] dst_line={d} 落在源块 {s}-{e} 内，无需移动。file_version={_file_version(target)}"
+    remaining = lines[:s - 1] + lines[e:]
+    # 把原始行号语义映射到 remaining 的插入下标
+    if d <= s:
+        ins = max(0, d - 1)
+    else:  # d > e：源块已在 dst 之前被整体移除，dst 在 remaining 中下标前移 nblock
+        ins = max(0, d - 1 - nblock)
+    ins = min(ins, len(remaining))
+    remaining[ins:ins] = block
+    return "✅ " + _apply_lines(target, remaining, path,
+                                f"已把 {path} 第 {s}-{e} 行（{nblock} 行）搬到原第 {d} 行前")
+
+
+# ===== 函数定位（find_function）=====
+# 比 grep 更适合"看某个函数的完整实现"：定位签名起始行后，按缩进(Python)或大括号配对
+# (其它语言)找到函数结束行，整段带行号返回。大括号配对用字符级状态机，跳过字符串/注释，
+# 避免把 "}" 或 // } 里的括号算进去。
+
+_LANG_FAMILY = {
+    ".py": "python",
+    ".js": "brace", ".jsx": "brace", ".mjs": "brace", ".cjs": "brace",
+    ".ts": "brace", ".tsx": "brace",
+    ".cs": "brace", ".java": "brace", ".kt": "brace",
+    ".c": "brace", ".h": "brace", ".cpp": "brace", ".cc": "brace",
+    ".cxx": "brace", ".hpp": "brace", ".hxx": "brace", ".ino": "brace",
+    ".go": "brace", ".rs": "brace", ".swift": "brace", ".php": "brace", ".scala": "brace",
+}
+
+
+def _lang_family(target: Path, lang: str = None) -> str:
+    """返回 'python' / 'brace' / None。lang 显式指定时优先；否则按扩展名识别。"""
+    if lang:
+        return "python" if lang.lower() in ("py", "python") else "brace"
+    return _LANG_FAMILY.get(target.suffix.lower())
+
+
+def _indent(line: str) -> int:
+    """行首空白（空格/Tab）的字符数。"""
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _extend_decorators(lines: list, idx: int) -> int:
+    """Python：把 def 上方连续的、同缩进的 @装饰器 行并入起始。"""
+    sig = _indent(lines[idx])
+    j = idx - 1
+    while j >= 0 and _indent(lines[j]) == sig and lines[j].lstrip().startswith("@"):
+        j -= 1
+    return j + 1
+
+
+def _find_def_starts(lines: list, name: str, family: str) -> list:
+    """返回所有疑似 NAME 定义的起始行 index（未确认是否有体）。"""
+    import re
+    nm = re.escape(name)
+    starts = []
+    if family == "python":
+        rx = re.compile(rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{nm}\b")
+        starts = [i for i, ln in enumerate(lines) if rx.match(ln)]
+    else:  # 大括号家族
+        form_call = re.compile(rf"\b{nm}\s*(?:<[^>]*>)?\s*\(")   # 含简单泛型 <T>
+        for i, ln in enumerate(lines):
+            hit = False
+            m = form_call.search(ln)
+            if m:
+                pre = ln[:m.start()].rstrip()
+                if not (pre and pre[-1] == "."):   # 排除 obj.method( 这类调用
+                    hit = True
+            if not hit and re.search(rf"\b{nm}\s*=", ln) and \
+                    ("=>" in ln or re.search(r"=\s*(?:async\s*)?function\b", ln)):
+                hit = True   # const NAME = (...) =>  /  NAME = function
+            if hit:
+                starts.append(i)
+    return starts
+
+
+def _find_block_end_brace(lines: list, start_idx: int):
+    """大括号家族：从 start_idx 扫，首个 { 开体、配对到其闭合 } 为止，返回结束行 index。
+    扫描跳过字符串/注释；若开体前先撞到 ;（声明/调用，无体）返回 None。"""
+    depth = 0
+    opened = False
+    in_str = None        # 当前字符串引号，或 None
+    in_line = False      # // 行注释
+    in_block = False     # /* */ 块注释
+    i = start_idx
+    while i < len(lines):
+        line = lines[i]
+        j, n = 0, len(line)
+        while j < n:
+            c = line[j]
+            nxt = line[j + 1] if j + 1 < n else ""
+            if in_line:
+                break
+            if in_block:
+                if c == "*" and nxt == "/":
+                    in_block = False
+                    j += 2
+                    continue
+                j += 1
+                continue
+            if in_str is not None:
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == in_str:
+                    in_str = None
+                j += 1
+                continue
+            if c == "/" and nxt == "/":
+                in_line = True
+                break
+            if c == "/" and nxt == "*":
+                in_block = True
+                j += 2
+                continue
+            if c in ('"', "'", "`"):
+                in_str = c
+                j += 1
+                continue
+            if c == "{":
+                depth += 1
+                opened = True
+            elif c == "}":
+                if opened:
+                    depth -= 1
+                    if depth == 0:
+                        return i
+            elif c == ";":
+                if not opened:
+                    return None   # 开体前遇 ; → 声明/调用，无函数体
+            j += 1
+        in_line = False
+        i += 1
+    return None
+
+
+def _find_block_end_indent(lines: list, start_idx: int) -> int:
+    """Python：def 行缩进为基准；体 = 缩进更深的行(空行暂属体)，遇到缩进 ≤ 基准的非空行结束。
+    末尾去掉所属的空行。返回结束行 index。"""
+    sig = _indent(lines[start_idx])
+    end = start_idx
+    for i in range(start_idx + 1, len(lines)):
+        ln = lines[i]
+        if ln.strip() == "" or _indent(ln) > sig:
+            end = i
+        else:
+            break
+    while end > start_idx and lines[end].strip() == "":
+        end -= 1
+    return end
+
+
+def find_function(name: str, path: str, lang: str = None, context: int = 0) -> str:
+    """查找某个函数/方法的完整定义，返回带行号的函数体 + 行范围 + file_version（比 grep 更适合"看某函数完整实现"）。
+    name: 函数/方法名（精确，非正则）；path: 文件或目录（目录则按语言扩展名扫描各文件，跨文件找定义）；
+    lang: python/js/ts/cs/java/cpp/go...，不传则按扩展名识别；context: 函数体前后额外显示几行（默认0）。
+    按 缩进(Python) / 大括号配对(其它) 自动定位起止行；返回的 [path L起-L止/总] 与 file_version 可直接喂给 insert/delete/move。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[路径不存在] {path}"
+    if target.is_dir():
+        exts = set(_LANG_FAMILY.keys())
+        files = [p for p in sorted(target.rglob("*")) if p.is_file() and p.suffix.lower() in exts]
+    else:
+        files = [target]
+    c = max(0, int(context))
+    parts = []
+    total_matches = 0
+    for fp in files:
+        family = _lang_family(fp, lang)
+        if not family:
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        total = len(lines)
+        blocks = []
+        for s in _find_def_starts(lines, name, family):
+            if family == "python":
+                real_s = _extend_decorators(lines, s)
+                e = _find_block_end_indent(lines, s)
+            else:
+                e = _find_block_end_brace(lines, s)
+                if e is None:
+                    continue   # 声明/调用，无体 → 跳过
+                real_s = s
+            blocks.append((real_s, e))
+        if not blocks:
+            continue
+        rel = path if fp == target else fp.relative_to(WORKSPACE).as_posix()
+        ver = _file_version(fp)
+        for s, e in blocks:
+            total_matches += 1
+            lo, hi = max(0, s - c), min(total - 1, e + c)
+            parts.append(f"[{rel} L{s + 1}-L{e + 1}/{total}]  file_version={ver}")
+            for j in range(lo, hi + 1):
+                parts.append(f"{j + 1:>5}│ {lines[j]}")
+    if not parts:
+        where = f"{path} 下" if target.is_dir() else f"{path} 中"
+        return (f"(在{where}未找到 '{name}' 的函数定义)\n"
+                f"可能：名字拼错 / 是无{{}}的表达式体箭头函数 / 仅声明无体 / 不支持的语言。可用 grep 按名字搜。")
+    return f"找到 {total_matches} 处 '{name}' 的定义：\n" + "\n".join(parts)
 
 
 def web_search(query: str) -> str:
@@ -1287,11 +1659,39 @@ WEB_SEARCH_OUTPUTS = [
 
 REAL_TOOLS = Toolbox(
     Tool(run_python),
-    Tool(read_file),
+    Tool(read_file, param_descriptions={
+        "line_numbers": "True=每行前加行号(cat -n 样式)，便于接下来用 insert/delete/move 按行号编辑",
+    }),
     Tool(write_file),
     Tool(edit),
+    Tool(insert, param_descriptions={
+        "lines": "一组 1-based 行号（在该行之前插入；<=0 或超过总行数=追加末尾）。单点也可传一个行号",
+        "contents": "对应的文本片段列表（每个可多行），与 lines 等长一一对应。单点也可传一个字符串",
+        "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
+    }),
+    Tool(delete, param_descriptions={
+        "start_line": "要删除的起始行号（1-based，含）",
+        "end_line": "要删除的结束行号（1-based，含）",
+        "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
+    }),
+    Tool(move, param_descriptions={
+        "start_line": "要搬移的起始行号（1-based，含）",
+        "end_line": "要搬移的结束行号（1-based，含）",
+        "dst_line": "搬到这里之前（按原始行号理解）",
+        "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
+    }),
     Tool(list_dir),
-    Tool(grep),
+    Tool(grep, param_descriptions={
+        "pattern": "搜索模式，默认按正则（支持 a|b 多选一、. * 等元字符，与 ripgrep 一致）",
+        "regex": "True=按正则(默认)；False=按字面匹配（把 pattern 当普通字符串，不解释元字符）",
+        "context": "每条命中前后各显示几行（默认 0=只显示匹配行）",
+    }),
+    Tool(find_function, param_descriptions={
+        "name": "函数/方法名（精确匹配，非正则）",
+        "path": "文件路径；也可传目录则扫描其下同语言文件（跨文件找定义）",
+        "lang": "语言提示(python/js/ts/cs/java/cpp/go...)，不传按扩展名识别",
+        "context": "函数体前后额外显示几行（默认 0）",
+    }),
     Tool(web_search, outputs=WEB_SEARCH_OUTPUTS),
     Tool(open_url),
     Tool(read_workflow_spec),

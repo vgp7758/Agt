@@ -7,7 +7,7 @@
   - AgenTank 原生工具（替代 curl 现写）
 
 跑法：python chat.py
-退出：quit / Ctrl+C / Ctrl+D ；运行中 Ctrl+C 可打断当前任务但保留会话。
+退出：quit / Ctrl+D ；运行中 Ctrl+C 第一次停当前任务（保留会话回到输入），第二次才退出。
 """
 import queue
 import threading
@@ -46,18 +46,18 @@ def _load_agent_md() -> str:
     return "(未找到 AGENTS.md，可在当前目录创建后重启生效)"
 
 
-def _rules_and_skills_section() -> str:
+def _rules_and_skills_section(workspace=WORKSPACE) -> str:
     """读取 .agent/ 下的 rules(始终生效) 和 skills 摘要 (渐进式披露)。"""
     parts = []
-    rules = load_rules(WORKSPACE)
+    rules = load_rules(workspace)
     if rules:
         parts.append("=== 规则（.agent/rules/，始终生效）===\n" + rules)
-    skills = skills_summary(WORKSPACE)
+    skills = skills_summary(workspace)
     if skills:
         parts.append("=== 可用技能（.agent/skills/）===\n"
                      "任务匹配某技能时，先 read_skill(name) 取详细 SOP 再按它执行：\n"
                      + skills + "\n（完成可复用任务后可用 save_skill 沉淀新技能）")
-    agents = agents_summary(WORKSPACE)
+    agents = agents_summary(workspace)
     if agents:
         parts.append("=== 可用子 Agent（.agent/agents/，一次性）===\n"
                      "用 agent_prompt(name, 任务) 派给独立子 Agent 执行（实例即弃；过程回流本对话）：\n"
@@ -135,9 +135,6 @@ SYSTEM = build_system(
         + "\n\n【后台服务 + 定时调度】start_service(name, command) 后台启动长服务（如你写的后端 `python app.py` 或 `python -m http.server 8000`）做前后端联调——其状态会自动显示在每轮系统提示里，无需自己查；service_logs 看输出、stop_service 停止、list_services 总览。"
           "add_schedule(name, every_seconds=N, message='...') 每 N 秒自动推送一条消息触发你跑一轮（repeat 控制循环）；add_schedule(name, at='2026-07-20T17:30:00', tool='web_search', tool_args={...}) 到点执行工具拿结果触发（动态消息）；cancel_schedule/list_schedules 管理。"
           "适合：长联调时定时自检、到点搜集信息并处理、周期性监控与续作。被后台触发的那一轮，你能从上下文里看到 [后台触发·任务名] 标记。"
-        + "\n\n=== 任务指引（当前目录 AGENTS.md，用户可自行编辑）===\n"
-        + _load_agent_md()
-        + _rules_and_skills_section()
     ),
 )
 
@@ -174,6 +171,24 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace
+
+    # 任务指引 provider：每轮从磁盘重读 AGENTS.md/rules/skills/子Agent（不再创建时烤进 SYSTEM）。
+    # 用户改这些文件 → 任意 session、当轮即生效；SYSTEM 只留稳定框架，task-guidance 紧随其后由 provider 注入。
+    def _task_guidance():
+        sections = []
+        rs = _rules_and_skills_section(workspace)
+        if rs:
+            sections.append(rs)
+        for _name in ("AGENTS.md", "AGENT.md"):
+            p = workspace / _name
+            if p.exists():
+                sections.append("=== 任务指引（当前目录 AGENTS.md，用户可自行编辑）===\n"
+                                + p.read_text(encoding="utf-8").strip())
+                break
+        return "\n\n".join(sections) if sections else None
+    agent._task_guidance_provider_fn = _task_guidance
+    agent.session._task_guidance_provider = _task_guidance
+
     agent.tool_groups = {t.name: "内置" for t in REAL_TOOLS}  # 内置工具(real+light)标注来源
 
     def _reg(tools, group):
@@ -293,7 +308,7 @@ def _worker(agent, work_q, registry, state):
             elif kind == "user" and payload.startswith("/"):
                 # 斜杠命令：即时分发，不合并、不进 agent.run
                 state["desc"] = payload[:40]
-                registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q))
+                registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q, state=state))
             else:
                 # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
                 batch = [(kind, payload)]
@@ -341,16 +356,20 @@ def _merge_batch(batch):
     return parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
 
 
-def _render_loop(agent, event_q, worker, state, work_q, threshold=20.0, interval=20.0, interactive=True):
+def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=20.0,
+                 interactive=True, quit_check=None):
     """主线程：消费 event_q 调 agent._print_event 渲染 agent 事件 + 长任务心跳 + 检测 worker 退出。
     所有 print 都在本线程 → 与 worker 的命令/提示 print 基本不并发（worker 串行 + 心跳仅长任务）。
-    长任务（agent.run 超过 threshold 秒）才开始报心跳，每 interval 秒一行，短任务无打扰。"""
+    长任务（agent.run 超过 threshold 秒）才开始报心跳，每 interval 秒一行，短任务无打扰。
+    quit_check：可选回调，返回真时主循环退出（CLI 两段式 Ctrl+C 的"第二次=退出"用）。"""
     last_report = 0.0
     while True:
         try:
             e = event_q.get(timeout=5)
         except queue.Empty:
-            # 无事件：检查 worker 是否退出 + 是否该报心跳
+            # 无事件：检查 worker 是否退出 / 是否请求退出 / 是否该报心跳
+            if quit_check and quit_check():
+                break
             if not worker.is_alive() and event_q.empty():
                 break   # worker 已退出且事件排空 → 主线程退出
             if state.get("busy") and state.get("started"):
@@ -358,11 +377,13 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=20.0, interval
                 if elapsed > threshold and time.time() - last_report > interval:
                     qsize = work_q.qsize()
                     print(f"\n⏳ 仍在处理「{state.get('desc', '')}」… 已 {int(elapsed)}s"
-                          f"（队列 {qsize} 条；Ctrl+C 请求停止）")
+                          f"（队列 {qsize} 条；你输入的文字会排队。Ctrl+C 停当前任务，再按一次退出）")
                     last_report = time.time()
             continue
         try:
             etype = e.get("type")
+            if etype == "_quit":
+                break   # CLI 第二次 Ctrl+C：SIGINT 处理器塞入的退出事件 → 立即退出
             if etype == "system":
                 print(e.get("text", ""))   # 子 Agent 边界 / agent system 提示（_print_event 不处理 system）
             else:
@@ -399,7 +420,8 @@ def web_main(port=None):
     state: dict = {"busy": False, "started": 0.0, "desc": "", "kind": None}
     _install_signal_handlers(agent, work_q)   # 关终端/kill 兜底清理，防后台服务孤儿
 
-    ok, msg = start_server(agent=agent, work_q=work_q, mcp_mgr=mcp_mgr, workspace=WORKSPACE, port=port)
+    ok, msg = start_server(agent=agent, work_q=work_q, mcp_mgr=mcp_mgr, workspace=WORKSPACE,
+                           port=port, state=state)
     if not ok:
         print(f"❌ {msg}")
         return
@@ -444,7 +466,7 @@ def main():
     print("🤖 交互式 Agent")
     print("=" * 64)
     print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /help")
-    print("退出：quit / Ctrl+C / Ctrl+D  (运行中 Ctrl+C 请求停止，等当前步完成)")
+    print("退出：quit / Ctrl+D  (运行中 Ctrl+C 第一次=停当前任务回到输入，第二次=退出)")
     print("=" * 64)
 
     # 连接 MCP server（workspace/.mcp.json + 全局 ~/.agt/mcp.json）
@@ -471,6 +493,23 @@ def main():
     state: dict = {"busy": False, "started": 0.0, "desc": "", "kind": None}
     _install_signal_handlers(agent, work_q)   # 关终端/kill 兜底清理，防后台服务孤儿
 
+    # CLI 两段式 Ctrl+C：第 1 次 = 停当前任务、保留 REPL；第 2 次 = 退出。
+    # 默认 SIGINT→KeyboardInterrupt 会直接走 finally 退出整个程序，与"打断但保留会话"的承诺不符。
+    import signal
+    _quit_state = {"count": 0, "quit": False}
+    def _on_sigint(signum, frame):
+        _quit_state["count"] += 1
+        if _quit_state["count"] == 1:
+            agent._stop_flag = True
+            print("\n⏹ 已请求停止当前任务（等当前步返回后回到输入）。再按一次 Ctrl+C 退出。", flush=True)
+        else:
+            _quit_state["quit"] = True
+            event_q.put({"type": "_quit"})   # 立即唤醒 _render_loop 退出
+    try:
+        signal.signal(signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):
+        pass   # 非主线程注册失败 → 退回默认 KeyboardInterrupt 行为（兜底退出）
+
     def _input_thread():
         while True:
             try:
@@ -483,6 +522,9 @@ def main():
                 work_q.put(None)
                 return
             work_q.put(("user", user))
+            # 忙时给即时回执，让用户知道没丢、会排队（agent 空闲则正常处理、无需提示）
+            if state.get("busy"):
+                print(f"\n📥 已排队（当前任务结束后处理）：{user[:40]!r}", flush=True)
 
     def _inbox_thread():
         while True:
@@ -501,9 +543,10 @@ def main():
     print("\n🧑 你：", end="", flush=True)   # 首次输入提示（之后 _render_loop 在 agent 完成后打印）
 
     try:
-        _render_loop(agent, event_q, worker, state, work_q, interactive=True)
+        _render_loop(agent, event_q, worker, state, work_q, interactive=True,
+                     quit_check=lambda: _quit_state["quit"])
     except KeyboardInterrupt:
-        # Ctrl+C：SIGINT 只到主线程；请求 worker 停止（等当前 LLM 步返回后在 _stop_flag 检查点中断）
+        # 兜底：SIGINT 处理器注册失败时才走到这（默认 KeyboardInterrupt 行为）→ 退出
         print("\n⏹ 已请求停止，等当前步完成…")
         agent._stop_flag = True
         work_q.put(None)

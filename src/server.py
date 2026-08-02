@@ -38,6 +38,7 @@ app = FastAPI(title="Agt Agent WebUI")
 _agent = None          # chat.build_agent 装配好的全局 Agent 单例
 _work_q = None         # chat 主循环的 work_q（WS 文本 / task 喂入它）
 _mcp_mgr = None        # MCPManager（/api/tools 用其 get_tools）
+_state = None          # chat 主循环的 state dict（含 busy 标志，供 WS 文本按忙/闲路由）
 _workspace = WORKSPACE
 
 # ===== 服务实例 =====
@@ -621,13 +622,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text": "✅ 消息已入队"})
         return
 
-    # 普通对话 → 进 chat 主循环的 work_q，与 CLI 输入同流串行消费；
-    # 事件经 broadcast 自动推回（agent.run 在主线程跑时触发）。
+    # 普通对话：忙时走"中途注入"（下一步边界模型即可见、可改向），闲时正常入队下一轮。
+    # 事件经 broadcast 自动推回（agent.run 在 worker 线程跑时触发）。
     if _work_q is None:
         await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环（work_q 缺失）"})
         return
-    _work_q.put(("user", text))
-    await _send(ws, {"type": "system", "text": "✅ 已接收，处理中…"})
+    if _state is not None and _state.get("busy"):
+        # Agent 正在跑：入 pending_messages，本步边界注入，不另起下一轮
+        agent.queue_user_message(text)
+        await _send(ws, {"type": "system",
+                         "text": f"📥 已排队并将在下一步注入当前任务（队列 {len(agent.pending_messages)} 条）"})
+    else:
+        _work_q.put(("user", text))
+        await _send(ws, {"type": "system", "text": "✅ 已接收，处理中…"})
 
 
 def _parse_client_msg(raw: str):
@@ -757,10 +764,11 @@ def server_status() -> dict:
     }
 
 
-def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000):
-    """启动内嵌 Web 服务（后台 daemon 线程跑 uvicorn），注入 agent/work_q。
+def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000, state=None):
+    """启动内嵌 Web 服务（后台 daemon 线程跑 uvicorn），注入 agent/work_q/state。
+    state 为 chat 主循环的 state dict（含 busy），供 WS 文本按忙/闲路由。
     返回 (ok, msg)。端口被占 / 已在运行 → (False, 原因)。"""
-    global _agent, _work_q, _mcp_mgr, _workspace, _server, _port, _server_thread, _server_error
+    global _agent, _work_q, _mcp_mgr, _workspace, _server, _port, _server_thread, _server_error, _state
     if _server is not None:
         return (False, f"服务已在运行（端口 {_port}），先用 /web stop 再启动")
     # 端口探测（占用则立即失败，不进 uvicorn）
@@ -769,7 +777,7 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000)
             s.bind(("0.0.0.0", port))
     except OSError:
         return (False, f"端口 {port} 已占用或无权限")
-    _agent, _work_q, _mcp_mgr, _workspace = agent, work_q, mcp_mgr, workspace
+    _agent, _work_q, _mcp_mgr, _workspace, _state = agent, work_q, mcp_mgr, workspace, state
     _port, _server_error = port, None
     config_obj = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
     srv = uvicorn.Server(config_obj)

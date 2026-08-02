@@ -31,6 +31,11 @@ from tools import Toolbox
 
 _LOG = logging.getLogger("agt.agent")
 
+# 以 path 为入参、对文件做 read-modify-write 的工具：同文件的多个调用必须串行，
+# 否则并行线程会读同一快照→各自改写→后写覆盖先写（静默丢更新）。
+_FILE_TOOLS = frozenset({"read_file", "write_file", "edit", "insert", "delete", "move",
+                         "grep", "find_function"})
+
 GRAY, RESET = "\033[90m", "\033[0m"
 GREEN, RED = "\033[32m", "\033[31m"
 
@@ -101,6 +106,7 @@ class Agent:
         self.session._ltm_episodic_provider = self._ltm_episodic_block
         # 计划注入：加入计划后每轮把【当前计划】块注入 SYSTEM（id/title/design/进度），退出后为空
         self.session._plan_provider = self._plan_system_block
+        self._task_guidance_provider_fn: Optional[Callable[[], str]] = None  # 由 chat.build_agent 注入（读 AGENTS.md/rules/skills）；set_session 转挂到新 session
         self.llm.call_recorder = self.session.llm_calls.record   # LLM 调用流水落 llm_calls.jsonl（可观测性）
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
         self._log_handler = configure_logging()
@@ -209,18 +215,48 @@ class Agent:
         s = str(s)
         return s if len(s) <= n else s[:n] + f"...(+{len(s) - n}字)"
 
+    def _file_key(self, tc):
+        """返回该调用锁定的文件 key：同 key 的调用必须串行（防 read-modify-write 竞态丢更新）。
+        非文件工具 / 无 path → None（可任意并行）。"""
+        if tc.get("name") not in _FILE_TOOLS:
+            return None
+        p = (tc.get("arguments") or {}).get("path")
+        if not p:
+            return None
+        try:
+            from real_tools import WORKSPACE
+            return str((WORKSPACE / p).resolve())   # 归一化绝对路径作 key
+        except Exception:
+            return None
+
     def _run_tools_parallel(self, calls: list) -> list:
-        """并行执行一组工具调用，按原顺序返回结果。"""
+        """并行执行一组工具调用，按原顺序返回结果。
+        以【目标文件】为锁：同文件的多个调用按原顺序【串行】（避免 read-modify-write 竞态丢更新），
+        不同文件 / 无文件工具【并行】。等价于"跨文件并行、文件内串行"。"""
         results = [None] * len(calls)
-        with ThreadPoolExecutor(max_workers=len(calls)) as ex:
-            fut_to_idx = {ex.submit(self.tools.call, tc["name"], tc["arguments"]): i
-                          for i, tc in enumerate(calls)}
-            for fut in as_completed(fut_to_idx):
-                i = fut_to_idx[fut]
+        groups: dict = {}   # file_key -> [orig_idx,...]（保持原顺序）
+        free: list = []     # 不锁定文件的调用（各自独立并行）
+        for i, tc in enumerate(calls):
+            k = self._file_key(tc)
+            (free.append(i) if k is None else groups.setdefault(k, []).append(i))
+        # 每个 task = 一组同文件下标(组内串行) 或 一个 free 下标；tasks 之间并行
+        tasks = [idxs for idxs in groups.values()] + [[i] for i in free]
+
+        def _run_seq(idxs):
+            out = []
+            for i in idxs:
+                tc = calls[i]
                 try:
-                    results[i] = fut.result()
+                    out.append((i, self.tools.call(tc["name"], tc["arguments"])))
                 except Exception as e:
-                    results[i] = f"[执行出错] {type(e).__name__}: {e}"
+                    out.append((i, f"[执行出错] {type(e).__name__}: {e}"))
+            return out
+
+        with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as ex:
+            futs = {ex.submit(_run_seq, idxs): idxs for idxs in tasks}
+            for fut in as_completed(futs):
+                for i, r in fut.result():
+                    results[i] = r
         return results
 
     def switch_model(self, name: str):
@@ -262,6 +298,8 @@ class Agent:
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
+        session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
+        session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
         self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
         session._log_handler = self._log_handler                   # 日志 handler 跟到新 session
         self._log_handler.set_session(session.workspace, session.name)
@@ -368,12 +406,11 @@ class Agent:
         return True
 
     def queue_user_message(self, text: str):
-        """在自主模式下，将用户消息加入队列（等当前任务完成后注入）。"""
-        if self.autonomous_mode:
-            self.pending_messages.append(text)
-            self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
-            return True
-        return False
+        """将用户消息加入队列（等下一步边界注入当前任务上下文；任何模式均可用）。
+        供 web/CLI 忙时插话：消息会在当前轮的下一步作为 user_hint 注入，模型当步可见、可改向。"""
+        self.pending_messages.append(text)
+        self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
+        return True
 
     def get_next_message(self) -> Optional[str]:
         """获取下一条要处理的消息（优先队列中的用户消息，否则用自主提示）。"""
@@ -635,6 +672,13 @@ class Agent:
                             self._emit({"type": "interrupted"})
                             self.session.abort_current_turn("（被用户停止）")
                             return ""
+                        # 中途插话注入（任何模式）：忙时排队的用户消息作为本步 user_hint，
+                        # 模型当步即可见、可改向（不止自主模式；web/CLI 忙时发送都走这里）
+                        if self.pending_messages:
+                            inject = "；".join(self.pending_messages)
+                            self.pending_messages.clear()
+                            self._emit({"type": "message_injected", "text": inject})
+                            self.session._current._user_hint = inject
                         if self.cumulative_tokens >= self.token_budget:
                             self._emit({"type": "budget_hit"})
                             return self._wrap_up()
@@ -807,13 +851,6 @@ class Agent:
                         # （schemas 无缓存，只是 dict 遍历，成本低）
                         self._refresh_tools_if_written(step)
                         tool_schemas = self.tools.schemas()
-                        # 自主模式下：工具执行完后检查是否有用户插入消息，附加到结果里让 Agent 立刻看到
-                        if self.autonomous_mode and self.pending_messages:
-                            inject = "；".join(self.pending_messages)
-                            self.pending_messages.clear()
-                            self._emit({"type": "message_injected", "text": inject})
-                            # 在下一步发给 LLM 的上下文里，通过 system 消息注入用户提示
-                            self.session._current._user_hint = inject
 
                     if continue_loop:
                         continue

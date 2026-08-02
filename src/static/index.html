@@ -247,11 +247,16 @@ let messageQueueSize = 0;
 function scrollBottom(){ msgArea.scrollTop = msgArea.scrollHeight; }
 function setBusy(b){
   busy = b;
-  // 自主模式下即使 busy 也可以发送
-  sendBtn.disabled = b && !autonomousMode;
+  // 输入框/发送键常驻可用：忙时发送走"中途注入"（后端按 busy 路由），不再禁用
+  sendBtn.disabled = false;
   sendBtn.classList.toggle('auto-active', autonomousMode && b);
   document.getElementById('btnStop').style.display = b ? 'inline-block' : 'none';
-  if(!b) inp.focus();
+  if(b && !autonomousMode){
+    inp.placeholder = "处理中… 输入将排队并在下一步注入当前任务（Enter 发送，或点中断）";
+  } else if(!b) {
+    inp.placeholder = "输入消息，Enter 发送（Shift+Enter 换行）";
+    inp.focus();
+  }
 }
 function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on ? '已连接' : '已断开'; }
 function setAutonomousMode(on){
@@ -403,14 +408,13 @@ function send(){
     attachments.length=0; renderThumbs();
     return;
   }
-  // 普通模式或自主模式但不 busy 时，正常发送
-  if(busy) return;
+  // 普通模式（含忙时）：照常发送——后端按 busy 路由（忙→中途注入下一步，闲→下一轮），不再丢弃
   const imgs=attachments.slice();
   sendRaw(t, imgs);
   lastUserBubble = addUserBubble(t, imgs);
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
-  if(!t.startsWith('/')){ setBusy(true); curTurn=null; }  // 斜杠命令不走 _done 流
+  if(!t.startsWith('/') && !busy){ setBusy(true); curTurn=null; }  // 仅空闲新轮才置 busy；忙时是插话不切轮
 }
 
 // —— 按钮 ——

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 class CommandContext:
     agent: "Agent"  # 提供 session / llm / base_system / max_steps / token_budget / cumulative_tokens
     work_q: object = None  # chat 主循环的 work_q（/web 启动服务时注入，让 WS 文本消息回流主循环）
+    state: object = None  # chat 主循环的 state dict（含 busy）；/web 注入给 server，供 WS 文本按忙/闲路由
 
     @property
     def session(self) -> Session:
@@ -699,7 +700,7 @@ def _cmd_web(ctx: CommandContext, args):
         port = int(args[1])
     ok, msg = start_server(agent=ctx.agent, work_q=ctx.work_q,
                            mcp_mgr=getattr(ctx.agent, "mcp_mgr", None),
-                           workspace=ws, port=port)
+                           workspace=ws, port=port, state=getattr(ctx, "state", None))
     if not ok:
         print(f"❌ {msg}")
         return

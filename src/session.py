@@ -172,6 +172,7 @@ class Session:
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
         self._plan_provider: Optional[Callable[[], str]] = None  # 当前活动计划块（Agent 注册；加入计划后每轮注入 SYSTEM，退出后返回空）
+        self._task_guidance_provider: Optional[Callable[[], str]] = None  # 任务指引(AGENTS.md/rules/skills/子Agent)：每轮重读，紧跟 system 之后
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
         self.llm_calls = LLMCallLog()  # LLM 调用流水（可观测性）：每次调用追加一条，供 /stats 聚合
@@ -343,6 +344,15 @@ class Session:
         """
         # 核心 system（人设+今日+用户名）—— 真正的指令，不包裹。
         msgs = [{"role": "system", "content": self.system}]
+        # 任务指引（AGENTS.md/rules/skills/子Agent）：每轮从磁盘重读，紧跟核心 system 之后，
+        # 使"用户改了 AGENTS.md/规则/技能 → 任意 session 当轮即生效"（不再创建时烤死进 system）。
+        if self._task_guidance_provider:
+            try:
+                _tg = self._task_guidance_provider()
+                if _tg:
+                    msgs.append({"role": "system", "content": _tg})
+            except Exception:
+                pass
         # 分档投影：provider 设了 max_effective_context_window 才启用（已完成 turn 按档冻结渲染，
         # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
         if self.max_effective_context_window:

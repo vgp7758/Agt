@@ -34,11 +34,15 @@ def _type_to_schema(ptype):
 
 
 class Tool:
-    def __init__(self, func: Callable, outputs: list = None, hidden: bool = False):
+    def __init__(self, func: Callable, outputs: list = None, hidden: bool = False,
+                 param_descriptions: dict = None):
         self.func = func
         self.name = func.__name__
         self.hidden = hidden   # True=注册在工具箱（plugin/编辑器可用）但不投影给 LLM（schemas 跳过）
         self.user_outputs = outputs   # 显式输出 schema（优先于返回注解推断；供 plugin 节点 outputs / 编辑器补全）
+        # 各参数的描述（注入 schema 的 properties[name].description）；不传则仅靠参数名+首行描述。
+        # 用于 version/行号语义等光靠名字说不清的参数。现有工具不传→schema 完全不变。
+        self.param_descriptions = param_descriptions or {}
         # docstring 第一行作为工具描述（模型靠它判断"该不该调这个工具"）
         first_line = (func.__doc__ or "").strip().split("\n", 1)[0].strip()
         if not first_line:
@@ -57,6 +61,8 @@ class Tool:
             sch = _type_to_schema(ptype)
             if sch is None:
                 raise TypeError(f"工具 {self.name} 参数 {pname} 类型 {ptype} 暂不支持")
+            if pname in self.param_descriptions:
+                sch = {**sch, "description": self.param_descriptions[pname]}
             properties[pname] = sch
             # 有默认值的参数不算必填
             if param.default is inspect.Parameter.empty:

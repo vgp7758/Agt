@@ -90,8 +90,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button onclick="location.href=(WF.name?('/wfdebug?wf='+encodeURIComponent(WF.name)):'/wfdebug')" title="跳转到调试页运行此工作流">▶ 调试</button>
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
-  <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fauto" onchange="WF.meta.auto=this.checked"> 自动</label>
-  <input id="fautoparam" placeholder="自动参数名(默认query)" style="width:130px" onchange="WF.meta.auto_param=this.value">
+  <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fenabled" onchange="WF.meta.enabled=this.checked"> 启用</label>
   <select id="fhook" title="触发钩子位置：在 ReAct 循环的该位置自动执行本工作流（留空=不自动触发）。选中后会按该钩子约定初始化输入/输出 schema" onchange="onHookChange(this.value)" style="width:120px;font-size:11px">
     <option value="">钩子:无</option>
     <option value="before_turn">钩子:每轮开始前</option>
@@ -2096,8 +2095,10 @@ async function openWf(name){
   document.getElementById('fileSel').value=name;
   document.getElementById('fdesc').value=WF.meta.description||'';
   document.getElementById('fcoze').value=WF.meta.coze_url||'';
-  document.getElementById('fauto').checked=!!WF.meta.auto;
-  document.getElementById('fautoparam').value=WF.meta.auto_param||'query';
+  // 向后兼容：旧 auto:true → 迁移为 enabled+钩子
+  if(WF.meta.auto && !WF.meta.enabled) WF.meta.enabled=true;
+  if(WF.meta.auto && !WF.meta.hook) WF.meta.hook='before_turn';
+  document.getElementById('fenabled').checked=WF.meta.enabled!==false;   // 默认 true
   document.getElementById('fhook').value=WF.meta.hook||'';
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
@@ -2139,8 +2140,7 @@ async function saveWf(){
   document.getElementById('fstatus').textContent='保存中…';
   WF.meta.description=document.getElementById('fdesc').value;
   WF.meta.coze_url=document.getElementById('fcoze').value;
-  WF.meta.auto=document.getElementById('fauto').checked;
-  WF.meta.auto_param=document.getElementById('fautoparam').value||'query';
+  WF.meta.enabled=document.getElementById('fenabled').checked;   // 默认 true，取消则 enabled=false
   const _hook=document.getElementById('fhook').value; WF.meta.hook=_hook||undefined;
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};

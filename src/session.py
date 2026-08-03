@@ -136,6 +136,7 @@ class Step:
     reasoning: str = ""
     tool_calls: list = field(default_factory=list)  # list[ToolCall]
     preceding_hint: str = ""     # 该步之前插入的"用户中途补充"(user 消息，带标签)，随本步滚入历史、不每步复读
+    file_snapshots: dict = field(default_factory=dict)  # {call_id: {path,version,text}} 运行时填充、不持久化
 
 
 # 中途插话的标签：明确标注"非新一轮"，避免被模型/未来逻辑当成新 turn 的 user 输入
@@ -653,6 +654,11 @@ class Session:
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
+                # 跟屁虫：该工具调用若改了文件，其 snapshot 挂在这个 tool result 尾巴上
+                snap = step.file_snapshots.get(tc.call_id)
+                if snap and full:   # 仅全量步注入（压缩步省略，防膨胀）
+                    msgs.append({"role": "system", "content":
+                        f"<recent-file file='{snap['path']}' version='{snap['version']}'>\n{snap['text']}\n</recent-file>"})
         return msgs
 
     def _cap_full_result(self, result: str, call_id: str) -> str:

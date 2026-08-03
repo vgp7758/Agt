@@ -36,6 +36,12 @@ _LOG = logging.getLogger("agt.agent")
 _FILE_TOOLS = frozenset({"read_file", "write_file", "edit", "insert", "delete", "move",
                          "grep", "find_function"})
 
+# Recent-file 快照跟屁虫：这些工具的参数里有明确的文件 path/file/script，step 完成后收集其全文速照
+_FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file",
+                              "read_file", "grep", "find_function",
+                              "run_python", "run_script"})
+_FILE_SNAP_MAX = 3         # 每步最多快照几个不同文件（防膨胀；同文件后面覆盖前面）
+
 GRAY, RESET = "\033[90m", "\033[0m"
 GREEN, RED = "\033[32m", "\033[31m"
 
@@ -630,6 +636,49 @@ class Agent:
             _LOG.debug("Agentic RAG 检索失败: %s", e)
             return ""
 
+    # ========== Recent-file 快照采集 ==========
+    def _collect_file_snapshots(self, step) -> dict:
+        """扫本步所有 tool_calls，收集涉及的文件路径（最多 3 个；同路径后面覆盖前面）。
+        对每个文件读当前快照（>4000 行首尾截断），返回 {call_id: {path,version,text}}。
+        run_python/run_script 的处理：run_python 有 file= 时捕获该路径（但 code= 内打开文件是黑盒，漏过可接受）"""
+        from real_tools import _resolve, _file_version, WORKSPACE
+        seen = {}      # resolved_key -> call_id
+        order = []     # ordered resolved_key list (most recent first)
+        for tc in reversed(step.tool_calls):
+            name, args, _result = self.session.toollog.view(tc.call_id)
+            if name not in _FILE_SNAP_TOOLS:
+                continue
+            path = args.get("path") or args.get("file") or args.get("script")
+            if not path:
+                continue
+            try:
+                target = _resolve(path)
+            except Exception:
+                continue
+            if not target.is_file():
+                continue   # 目录 / 不存在 → 不拍
+            key = str(target.resolve())
+            if key not in seen:
+                if len(order) >= _FILE_SNAP_MAX:
+                    break    # 最多 3 个文件
+                order.append(key)
+                seen[key] = tc.call_id   # 逆序第一个（原序最后）锁定，忽略同文件旧者
+        # 倒回成正序（先发生的 tool 在前），逐文件拍快照
+        snapshots = {}
+        for key in reversed(order):
+            cid = seen[key]
+            real = __import__("pathlib").Path(key)
+            ver = _file_version(real)
+            text = real.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            if len(lines) > 4000:
+                head = "\n".join(lines[:2000])
+                trail = "\n".join(lines[-2000:])
+                text = head + "\n... (共{}行，需全文调 read_file)".format(len(lines)) + "\n" + trail
+            rel = real.relative_to(WORKSPACE).as_posix()
+            snapshots[cid] = {"path": rel, "version": ver, "text": text}
+        return snapshots
+
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None, _autonomous_continue: bool = False) -> str:
         """
@@ -879,6 +928,7 @@ class Agent:
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
                                 step.tool_calls.append(ToolCall(call_id=cid))
                         _rt._tool_emit = None  # 清理
+                        step.file_snapshots = self._collect_file_snapshots(step)   # recent-file 快照
                         self.session.add_step(step)
                         # 动态注册的工具（新写的工作流、ensure_lsp 装的 LSP 等）当轮即可见：
                         # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas

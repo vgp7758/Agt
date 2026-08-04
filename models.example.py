@@ -12,13 +12,15 @@ MODELS = {
         "model": "deepseek-v4-flash",
         "desc": "DeepSeek（备用）",
         "thinking": False,
+        "vision": False,
     },
     "qwen": {
         "base_url": "https://api-inference.modelscope.cn/v1",
         "api_token": "ms-你的-modelscope-token",
         "model": "Qwen/Qwen3.5-397B-A17B",
-        "desc": "ModelScope Qwen3.5-397B 推理模型",
+        "desc": "ModelScope Qwen3.5-397B 推理模型（视觉）",
         "thinking": True,
+        "vision": True,
     },
 }
 

@@ -9,10 +9,12 @@ verbose=True）输出与之前完全一致；`web.py` 设 on_event 把事件推�
 """
 from __future__ import annotations
 
+import base64
 import collections
 import difflib
 import json
 import logging
+import re
 import threading
 import time
 
@@ -26,8 +28,9 @@ from llm_client import LLMClient
 from log import configure_logging
 from longterm_memory import LongTermMemory
 from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block
-from session import Session, Step, ToolCall
+from session import Session, Step, ToolCall, repo_images_dir
 from tools import Toolbox
+from mdrender import render_cli   # LLM 回答的 CLI 渲染（表格→框线表，代码块→带边框）
 
 _LOG = logging.getLogger("agt.agent")
 
@@ -41,6 +44,10 @@ _FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file",
                               "read_file", "grep", "find_function",
                               "run_python", "run_script"})
 _FILE_SNAP_MAX = 3         # 每步最多快照几个不同文件（防膨胀；同文件后面覆盖前面）
+
+# 工具结果里的 data-URL 图片段（MCP ImageContent 经 mcp_client._extract_text 转来 / 普通工具返回）：
+# _materialize_tool_result 把它落盘到 repo images/ 并替换成 <img>name</img> 标签（base64 不进存档）。
+_DATA_URL_RE = re.compile(r"data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)", re.I)
 
 GRAY, RESET = "\033[90m", "\033[0m"
 GREEN, RED = "\033[32m", "\033[31m"
@@ -182,6 +189,28 @@ class Agent:
         if self.verbose:
             self._print_event(event)
 
+    def _materialize_tool_result(self, result, tool_name, args, cid) -> str:
+        """工具结果里的 data-URL 图片段落盘到 repo images/，用 <img>name</img> 占位替换。
+        base64 不进 toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。"""
+        result = result or ""
+        matches = list(_DATA_URL_RE.finditer(result))
+        if not matches:
+            return result
+        out_dir = repo_images_dir(self.session.workspace)
+        out, last = [], 0
+        for idx, m in enumerate(matches):
+            out.append(result[last:m.start()])
+            try:
+                ext = m.group(1).replace("jpg", "jpeg")
+                fn = f"{cid}_{idx}.{ext}"
+                (out_dir / fn).write_bytes(base64.b64decode(m.group(2)))
+                out.append(f"<img>{fn}</img>")
+            except Exception:
+                out.append(m.group(0))   # 落盘失败保留原 data URL（不丢信息）
+            last = m.end()
+        out.append(result[last:])
+        return "".join(out)
+
     def _print_event(self, e: dict):
         """复刻原控制台输出格式（保证 CLI 行为不变）。"""
         t = e.get("type")
@@ -213,12 +242,14 @@ class Agent:
             prefix = f"   → [{e['name']}]" if e.get("parallel") else "   →"
             print(f"{prefix} {e['result']}")
         elif t == "answer":
-            print(f"\n🤖 最终回答：{e['text'].strip()}")
+            print("\n🤖 最终回答：")
+            print(render_cli(e['text'].strip()))
             print(f"{GRAY}[本次累计 token: {e.get('tokens', self.cumulative_tokens)}]{RESET}")
         elif t == "wrap_up":
             print(f"\n⚠️ 达到最大步数 {self.max_steps}，强制收尾。")
         elif t == "wrap_answer":
-            print(f"\n🤖 收尾回答：{e['text'].strip()}")
+            print("\n🤖 收尾回答：")
+            print(render_cli(e['text'].strip()))
         elif t == "interrupted":
             print("\n\n⏹ 已中断（已完成的轮次保留在会话中，可用 /save 保存）。")
         elif t == "autonomous_status":
@@ -893,13 +924,14 @@ class Agent:
                                 result = self.tools.call(tc["name"], tc["arguments"])
                                 _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"],
                                           time.time() - _t0, len(result or ""))
+                                cid = self.session.toollog.next_id()
+                                result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
                                 if "after_tool" in self._active_hooks:
                                     self._hook_notes += self._run_hooks("after_tool", {
                                         "user_message": cur_user_msg, "tool_name": tc["name"],
                                         "tool_args": tc_args_json, "tool_result": result})
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": len(calls) > 1})
-                                cid = self.session.toollog.next_id()
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
                                 step.tool_calls.append(ToolCall(call_id=cid))
                         elif len(calls) == 1:
@@ -908,9 +940,10 @@ class Agent:
                             _t0 = time.time()
                             result = self.tools.call(tc["name"], tc["arguments"])
                             _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"], time.time() - _t0, len(result or ""))
+                            cid = self.session.toollog.next_id()
+                            result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
                             self._emit({"type": "tool_result", "name": tc["name"],
                                         "result": self._truncate(result), "parallel": False})
-                            cid = self.session.toollog.next_id()
                             self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
                             step.tool_calls.append(ToolCall(call_id=cid))
                         else:
@@ -922,9 +955,10 @@ class Agent:
                             _LOG.info("并行 %d 工具 耗时%.1fs", len(calls), time.time() - _t0)
                             for tc, result in zip(calls, results):
                                 _LOG.debug("  └ %s 结果%d字", tc["name"], len(result or ""))
+                                cid = self.session.toollog.next_id()
+                                result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": True})
-                                cid = self.session.toollog.next_id()
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
                                 step.tool_calls.append(ToolCall(call_id=cid))
                         _rt._tool_emit = None  # 清理

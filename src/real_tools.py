@@ -14,7 +14,9 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import mimetypes
 import os
 import queue
 import subprocess
@@ -224,6 +226,41 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     else:
         body = "\n".join(selected)
     return header + "\n" + body + ver_footer
+
+
+def read_image(file: str) -> str:
+    """读取一张图片文件，返回 data URL（系统会自动渲染成图片供视觉模型查看）。
+    file 可以是裸文件名（如 c7_0.png：先在 cwd 找，再在 repo images/ 目录找），
+    或相对/绝对路径（在 cwd 下解析，沙箱限定）。支持 png/jpg/gif/webp。
+    仅视觉模型能查看返回的图；非视觉模型调用了也只会得到 <img> 占位。"""
+    name = (file or "").strip().strip('"').strip("'")
+    if not name:
+        return "[未传文件名]"
+    cands = []
+    if os.sep in name or "/" in name or "\\" in name:   # 带路径：workspace 沙箱解析
+        try:
+            cands.append(_resolve(name))
+        except Exception:
+            pass
+        cands.append(WORKSPACE / name)
+    else:                                                # 裸文件名：cwd + repo images/
+        cands.append(WORKSPACE / name)
+        try:
+            from session import repo_images_dir
+            cands.append(repo_images_dir(WORKSPACE) / name)
+        except Exception:
+            pass
+    for p in cands:
+        try:
+            if p.exists() and p.is_file():
+                ext = (p.suffix.lstrip(".") or "png").lower()
+                ext = "jpeg" if ext == "jpg" else ext
+                mime = mimetypes.guess_type(str(p))[0] or f"image/{ext}"
+                b64 = base64.b64encode(p.read_bytes()).decode()
+                return f"data:{mime};base64,{b64}"
+        except Exception:
+            continue
+    return f"[未找到图片] {file}（cwd 和 repo images/ 都没找到）"
 
 
 def write_file(path: str, content: str) -> str:
@@ -1704,6 +1741,7 @@ REAL_TOOLS = Toolbox(
     Tool(run_script),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
+    Tool(read_image),
 )
 
 # 轻量工具（基础函数：plugin 节点 / 代码节点 / Agent 均可调；build_agent 注册进 agent.tools）

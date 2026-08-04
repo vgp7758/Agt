@@ -170,6 +170,7 @@ class LLMClient:
         self.api_key = self.api_tokens[0]
         self.model = profile["model"]
         self.thinking_supported = profile.get("thinking", False)
+        self.vision_supported = profile.get("vision", False)   # 多模态能力：视觉模型投影时把 <img> 转成 image_url
         # max_tokens：profile 可显式指定；否则推理模型(thinking)用宽裕默认（防长 reasoning 被 provider
         # 默认小值截断 → content 空/半截），非推理模型用 None（交 provider 默认）。
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)

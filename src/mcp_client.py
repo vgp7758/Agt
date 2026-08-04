@@ -34,9 +34,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _extract_text(result) -> str:
-    """从 CallToolResult.content（一组内容块）拼出文本；isError 时加前缀。"""
+    """从 CallToolResult.content（一组内容块）拼出文本；isError 时加前缀。
+    图片块(ImageContent)转成标准 data URL 文本（而非 str(block) 乱码），
+    交由 agent._materialize_tool_result 统一落盘成 <img> 标签。"""
     parts = []
     for block in (getattr(result, "content", None) or []):
+        if getattr(block, "type", None) == "image":
+            mt = getattr(block, "mimeType", None) or "image/png"
+            data = getattr(block, "data", "")
+            parts.append(f"data:{mt};base64,{data}")
+            continue
         text = getattr(block, "text", None)
         parts.append(text if text is not None else str(block))
     out = "\n".join(parts).strip() or "(空结果)"

@@ -102,9 +102,12 @@ def make_subagent_tools(agent) -> list:
         p.unlink()
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str) -> str:
+    def agent_prompt(name: str, prompt: str, tools: str = "") -> str:
         """向子 Agent <name> 派任务：读它的声明 md 建临时实例，自主用工具完成后回复，实例即弃。
-        多次派同名 = 多个独立实例（无共享状态）。"""
+        多次派同名 = 多个独立实例（无共享状态）。
+        tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
+               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）——主 agent 可借此
+               临时出借部分工具给子 agent 操作，覆盖其默认工具集。"""
         p = _agent_md_path(name)
         if p is None or not p.exists():
             return f"[不存在] 没有名为 '{name}' 的子 Agent，先 create_agent"
@@ -113,7 +116,7 @@ def make_subagent_tools(agent) -> list:
         except Exception as e:
             return f"[读取失败] {type(e).__name__}: {e}"
         system = (system or "").strip() or "你是一个自主子 Agent，用工具完成任务。"
-        toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
+        toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
         model_name = meta.get("model") or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name

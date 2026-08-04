@@ -15,9 +15,11 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -31,12 +33,15 @@ import config
 from llm_client import LLMClient
 from toollog import ToolLog, detail_limit, DETAIL_BASE, DETAIL_FLOOR
 from llm_call_log import LLMCallLog
+from mdrender import render_cli   # /recall 回显 answer 时渲染表格/代码块（独立模块，避免循环依赖）
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
 RECENT_FULL_STEPS = 10        # 当前轮最近 N 步全量（distance 0..N-1），其后的步才按距离衰减
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
+# <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
+_IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
 
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
@@ -75,6 +80,15 @@ def repo_plans_dir(workspace) -> Path:
     每个计划一个 <plan_id>.json 文件，跨 session 共享（plan_id 存在 session 的 extra_state 里）。
     供 plan_tools 使用；不触发 sessions 的 legacy 迁移。"""
     d = REPOS_DIR / _repo_hash(workspace) / "plans"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def repo_images_dir(workspace) -> Path:
+    """该工作区的【工具图片】目录：~/.agt/repos/<hash>/images/。工具返回的图片落盘于此，
+    消息里用 <img>name</img> 标签引用（base64 不进存档）。repo 级（不绑 session），
+    供视觉子 agent 跨 session 引用同一张图。"""
+    d = REPOS_DIR / _repo_hash(workspace) / "images"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -583,12 +597,44 @@ class Session:
         """
         return f"<system-reminder>\n{content}\n</system-reminder>"
 
-    @staticmethod
-    def _user_content(turn: "Turn"):
-        """构造 user 消息内容：纯文本→str；带图片→多模态 [text + image_url] 块。"""
+    def _project_imgs(self, text):
+        """text 里的 <img>name</img> 占位：当前模型视觉→[text块 + image_url块]（读 repo images/ 转data URL）；
+        非视觉→文字占位 str（并提示委托视觉子 agent）。无标签或空文本原样返回。"""
+        if not text or "<img>" not in text:
+            return text
+        matches = list(_IMG_TAG_RE.finditer(text))
+        if not matches:
+            return text
+        vision = getattr(getattr(self, "llm", None), "vision_supported", False)
+        if not vision:
+            def _sub(m):
+                n = m.group(1)
+                return (f'[图片 {n}，你无法直接查看；如需理解其内容请委托视觉子 agent：'
+                        f'agent_prompt("vision", "请描述 <img>{n}</img> 的内容")]')
+            return _IMG_TAG_RE.sub(_sub, text)
+        out, last = [], 0
+        for m in matches:
+            if m.start() > last:
+                out.append({"type": "text", "text": text[last:m.start()]})
+            try:
+                p = repo_images_dir(self.workspace) / m.group(1)
+                mime = mimetypes.guess_type(str(p))[0] or "image/png"
+                b64 = base64.b64encode(p.read_bytes()).decode()
+                out.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            except Exception:
+                out.append({"type": "text", "text": f"[图片 {m.group(1)} 读取失败]"})
+            last = m.end()
+        if text[last:]:
+            out.append({"type": "text", "text": text[last:]})
+        return out
+
+    def _user_content(self, turn: "Turn"):
+        """构造 user 消息内容。turn.images(用户贴图 data URL)→image_url 块(现状)；
+        user_message 里的 <img>name</img>(工具图/子agent委托)按当前模型 vision 投影。"""
+        text = self._project_imgs(turn.user_message)
         if not turn.images:
-            return turn.user_message
-        blocks = [{"type": "text", "text": turn.user_message}]
+            return text
+        blocks = list(text) if isinstance(text, list) else [{"type": "text", "text": text}]
         blocks.extend({"type": "image_url", "image_url": {"url": img}} for img in turn.images)
         return blocks
 
@@ -653,6 +699,7 @@ class Session:
                 _n, _a, result = self.toollog.view(tc.call_id)
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
+                content = self._project_imgs(content)
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
                 # 跟屁虫：该工具调用若改了文件，其 snapshot 挂在这个 tool result 尾巴上
                 snap = step.file_snapshots.get(tc.call_id)
@@ -884,7 +931,8 @@ class Session:
                 name, a, r = self.toollog.view(tc.call_id)
                 args_s = json.dumps(a, ensure_ascii=False)
                 lines.append(f"  🔧 {name}({args_s}) → {(r or '')[:300]}")
-        lines.append(f"回答: {t.answer}")
+        lines.append("回答:")
+        lines.append(render_cli(t.answer))
         if contains_reasoning and t.answer_reasoning:
             lines.append(f"  💭(回答推理) {t.answer_reasoning}")
         return "\n".join(lines)

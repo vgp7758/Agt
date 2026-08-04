@@ -106,6 +106,18 @@
   .ev pre.diff-old, .ev pre.diff-new { margin:0; max-height:420px; overflow:auto; font-size:12px; line-height:1.45; padding:6px 8px; border-radius:4px; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,Menlo,Consolas,monospace; }
   pre.diff-old { background:#3a1410; color:#f8b4b4; }
   pre.diff-new { background:#102a16; color:#a8f0a8; }
+  /* —— LLM 回答里的 markdown 表格 / 代码块渲染（renderAnswer 注入）—— */
+  .bubble .md-p { margin:0; white-space:pre-wrap; word-break:break-word; }
+  .bubble table { border-collapse:collapse; margin:8px 0; font-size:13px; max-width:100%; }
+  .bubble th,.bubble td { border:1px solid var(--line); padding:4px 8px; text-align:left; white-space:normal; }
+  .bubble thead th { background:#f0f2f5; }
+  .bubble pre.code { margin:8px 0; padding:10px 12px; background:#f6f8fa; color:#1f2329;
+    border:1px solid var(--line); border-radius:8px; overflow:auto; white-space:pre;
+    word-break:normal; overflow-wrap:normal; font:12.5px ui-monospace,Menlo,Consolas,monospace; }
+  .bubble pre.code code { background:transparent; padding:0; font:inherit; color:inherit; }
+  .bubble code { background:#f0f2f5; padding:1px 5px; border-radius:4px;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.92em; }
+  .row.me .bubble code { background:rgba(255,255,255,.22); }
 </style>
 </head>
 <body>
@@ -301,6 +313,60 @@ function addTrace(cls, text){
   curTurn.traceBox.appendChild(e); scrollBottom();
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// 行内 `code` → <code>（在已 esc 的 html 上做；反引号不受 esc 影响）
+function inlineCode(h){ return String(h==null?'':h).replace(/`([^`]+)`/g, function(_,c){ return '<code>'+c+'</code>'; }); }
+// 表格行 cell 拆分：保护反引号段（code span 内的 | 不切）+ \| 转义还原 + 去首尾 |
+function splitCells(row){
+  var hold=[];
+  row=row.replace(/`[^`]*`/g, function(m){ hold.push(m); return '\x00'+(hold.length-1)+'\x00'; });
+  row=row.replace(/\\\|/g,'\x01');                        // \| 转义竖线 → 占位
+  row=row.replace(/^\s*\|/,'').replace(/\|\s*$/,'');     // 去首尾 |
+  return row.split('|').map(function(c){
+    return c.replace(/\x01/g,'|')                         // \| → 字面 |
+            .replace(/\x00(\d+)\x00/g, function(_,i){ return hold[+i]; })   // 还原反引号段
+            .trim();
+  });
+}
+// 连续表格行 → <table>（合法返回 html 字符串，非法返回 null 交回普通文本）
+function tryTable(tbl){
+  if(tbl.length<2) return null;
+  var header=splitCells(tbl[0]), sep=splitCells(tbl[1]);
+  var isSep=sep.length>0 && sep.every(function(c){ return /^:?-+:?$/.test(c.replace(/ /g,'')); });
+  if(!isSep) return null;
+  var aligns=sep.map(function(c){ c=c.replace(/ /g,''); var L=c.charAt(0)===':', R=c.slice(-1)===':'; return (L&&R)?'center':(R?'right':'left'); });
+  var rows=tbl.slice(2).map(splitCells), ncol=header.length;
+  function norm(r){ r=r.slice(); while(r.length<ncol) r.push(''); if(r.length>ncol) r=r.slice(0,ncol-1).concat([r.slice(ncol-1).join(' ')]); return r; }
+  header=norm(header); rows=rows.map(norm);
+  function cell(c,tag,align){ return '<'+tag+(align&&align!=='left'?' style="text-align:'+align+'"':'')+'>'+inlineCode(esc(c))+'</'+tag+'>'; }
+  var html='<table><thead><tr>'+header.map(function(c,i){ return cell(c,'th',aligns[i]); }).join('')+'</tr></thead>';
+  if(rows.length) html+='<tbody>'+rows.map(function(r){ return '<tr>'+r.map(function(c){ return cell(c,'td','left'); }).join('')+'</tr>'; }).join('')+'</tbody>';
+  return html+'</table>';
+}
+// LLM 回答 → HTML：表格→<table>，```代码块```→<pre>，其余→<div class="md-p">（保留换行）。逐行先判围栏再判表格，代码块内的 | 不会被表吞。
+function renderAnswer(text){
+  var lines=String(text==null?'':text).split('\n'), out=[], buf=[], i=0, n=lines.length;
+  function flush(){ if(buf.length){ out.push('<div class="md-p">'+inlineCode(esc(buf.join('\n')))+'</div>'); buf=[]; } }
+  while(i<n){
+    var line=lines[i], s=line.trim();
+    if(/^```/.test(s)){                                  // fenced code（围栏优先）
+      flush(); i++; var code=[];
+      while(i<n && !/^```/.test(lines[i].trim())){ code.push(lines[i]); i++; }
+      i++;                                               // 跳闭合围栏
+      out.push('<pre class="code"><code>'+esc(code.join('\n'))+'</code></pre>');
+      continue;
+    }
+    if(/^\s*\|.*\|\s*$/.test(line)){                     // table
+      var tbl=[];
+      while(i<n && /^\s*\|.*\|\s*$/.test(lines[i])){ tbl.push(lines[i]); i++; }
+      var h=tryTable(tbl);
+      if(h!==null){ flush(); out.push(h); } else { buf=buf.concat(tbl); }   // 非法表→普通文本
+      continue;
+    }
+    buf.push(line); i++;
+  }
+  flush();
+  return out.join('');
+}
 function addTraceHTML(cls, html){
   if(!curTurn) newTurn();
   const e=document.createElement('div'); e.className='ev '+cls; e.innerHTML=html;
@@ -338,7 +404,7 @@ function renderToolCall(name, args){
 }
 function finishAnswer(text){
   if(!curTurn) newTurn();
-  curTurn.answerEl.textContent=text;
+  curTurn.answerEl.innerHTML=renderAnswer(text);
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }

@@ -397,10 +397,23 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
     print("\n再见！")
 
 
+def _ensure_utf8_stdout():
+    """把 stdout/stderr 切到 UTF-8 + errors=replace：防 LLM 回答含当前 codepage 编不出的
+    码点时 print 抛 UnicodeEncodeError（会把一整次回答崩在最后一行）。box-drawing 在
+    cp936 本就有映射不会炸，真正风险是 LLM 文本里任意 Unicode 码点。"""
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def web_main(port=None):
     """agt-web 入口：装配 Agent + 自动起 Web 服务 + 开浏览器，跑主循环服务 WS/后台（非交互 REPL）。
     端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
     import sys
+    _ensure_utf8_stdout()
     if port is None:
         for a in sys.argv[1:]:
             if a.isdigit():
@@ -464,6 +477,7 @@ def web_main(port=None):
 
 
 def main():
+    _ensure_utf8_stdout()
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)

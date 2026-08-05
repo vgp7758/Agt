@@ -44,6 +44,7 @@ _FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file",
                               "read_file", "grep", "find_function",
                               "run_python", "run_script"})
 _FILE_SNAP_MAX = 3         # 每步最多快照几个不同文件（防膨胀；同文件后面覆盖前面）
+_SERVICE_EXIT_LOG_LINES = 50   # 后台服务退出时，tool 结果里附带的尾部日志行数
 
 # 工具结果里的 data-URL 图片段（MCP ImageContent 经 mcp_client._extract_text 转来 / 普通工具返回）：
 # _materialize_tool_result 把它落盘到 repo images/ 并替换成 <img>name</img> 标签（base64 不进存档）。
@@ -152,7 +153,7 @@ class Agent:
         # 后台服务 + 定时调度（producer）→ inbox → run()内循环 / chat/web 消费者 串行触发
         self.inbox: collections.deque = collections.deque()
         self._inbox_lock = threading.Lock()
-        self.services = ServiceManager()
+        self.services = ServiceManager(on_exit=self._on_service_exit)
         self.scheduler = Scheduler(self)
         self.cumulative_tokens = 0
         self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
@@ -389,19 +390,84 @@ class Agent:
             return ""
 
     # ========== 后台消息 inbox（producer → inbox → 串行消费者 → run） ==========
-    def push_message(self, msg: str, source: str = "background"):
+    def push_message(self, msg: str, source: str = "background", seed: Optional[dict] = None):
         """后台/调度器推一条消息进 inbox，等 Agent 空闲时触发一轮 run。线程安全。
-        被 background.Scheduler / ServiceManager 等后台线程调用。"""
+        被 background.Scheduler / ServiceManager 等后台线程调用。
+
+        seed（可选）= 一条合成工具记录 {tool, args, result, reasoning}，消费侧开新 turn 时
+        会预置成一个 Step（渲染为 assistant(tool_use)→tool(结果)）。用于后台服务退出等异步事件：
+        把退出结果+启动参数以 stop_service 工具结果的形式回传，Agent 醒来即在上下文里看到。"""
         with self._inbox_lock:
-            self.inbox.append((source, msg))
+            self.inbox.append((source, msg, seed))
         self._emit({"type": "background_trigger", "source": source,
-                    "text": (msg or "")[:80], "queue_size": len(self.inbox)})
+                    "text": (msg or "")[:80], "queue_size": len(self.inbox),
+                    "seed": bool(seed)})
 
     def pop_inbox(self):
-        """取一条 inbox 消息 (source, msg)，空则 None。线程安全。
+        """取一条 inbox 消息 (source, msg, seed)，空则 None。线程安全。
         两处消费点（run() 内循环 / chat/web 主循环 drain）都调它，锁保证不重复消费。"""
         with self._inbox_lock:
             return self.inbox.popleft() if self.inbox else None
+
+    def _seed_steps(self, seeds: list):
+        """把一批合成工具记录预置成本轮 Step：每条 {tool, args, result, reasoning} 落 toollog +
+        建一个 Step（单 ToolCall）add_step。使本轮首轮 _chat_msgs 就把它们渲染成
+        assistant(tool_use)→tool(结果)——用于后台服务退出等异步事件，让模型在上下文里直接看到
+        事件结果（含启动参数）而非一段纯文本通知。"""
+        for sd in seeds:
+            cid = self.session.toollog.next_id()
+            self.session.toollog.record(cid, sd.get("tool", ""), sd.get("args", {}),
+                                        sd.get("result", ""))
+            step = Step(reasoning=sd.get("reasoning", ""))
+            step.tool_calls.append(ToolCall(call_id=cid))
+            self.session.add_step(step)
+
+    def _on_service_exit(self, name: str, entry: dict, rc: int):
+        """ServiceManager 进程自行退出回调（读线程在 stdout 关闭后调）：
+        把退出事件包成一条 stop_service 的合成工具记录推 inbox——args 带启动参数，
+        result 带退出码+尾部日志+复盘。Agent 醒来时上下文里即是一条完整的工具调用记录，
+        模型可直接据其决定是否重启/善后。手动 stop_service 不走这里（stop 时已置 manual_stop）。"""
+        try:
+            logs = list(entry.get("logs", []))[-_SERVICE_EXIT_LOG_LINES:]
+        except Exception:
+            logs = []
+        startup = {
+            "name": name,
+            "command": entry.get("command", ""),
+            "cwd": entry.get("cwd", ""),
+            "started_at": (datetime.fromtimestamp(entry["started_at"]).strftime("%Y-%m-%d %H:%M:%S")
+                           if entry.get("started_at") else ""),
+            "pid": entry.get("pid"),
+        }
+        brief = f"rc={rc}" + ("（正常退出）" if rc == 0 else "（异常退出/崩溃）")
+        seed = {
+            "tool": "stop_service",
+            "args": startup,
+            "result": self._format_service_exit(name, startup, rc, logs),
+            "reasoning": (f"(后台服务「{name}」已自行退出（{brief}），系统将其退出结果作为 "
+                          "stop_service 工具结果注入供你查阅；注意这是服务自行退出，并非你主动 stop)"),
+        }
+        header = f"📨〔后台服务退出〕「{name}」已自行退出（{brief}）"
+        self.push_message(header, source=f"service_exit:{name}", seed=seed)
+
+    @staticmethod
+    def _format_service_exit(name: str, startup: dict, rc: int, logs: list) -> str:
+        """组装后台服务退出时塞进 tool 结果 content 的文本：退出判读 + 启动参数复盘 + 尾部日志。"""
+        ok = "✅ 正常退出" if rc == 0 else f"⚠️ 异常退出/崩溃（rc={rc}）"
+        lines = [
+            f"【后台服务「{name}」自行退出】{ok}",
+            "⚠️ 本服务系【自行退出】，并非你主动 stop_service。如需继续可重新 start_service。",
+            "—— 启动参数（复盘）——",
+            f"  command: {startup.get('command', '')}",
+            f"  cwd: {startup.get('cwd', '') or '(默认)'}",
+            f"  pid: {startup.get('pid')}  启动于: {startup.get('started_at', '')}",
+        ]
+        if logs:
+            lines.append(f"—— 退出前最近 {len(logs)} 行输出 ——")
+            lines.extend(logs)
+        else:
+            lines.append("—— 退出前无输出 ——")
+        return "\n".join(lines)
 
     def _runtime_system_extra(self) -> str:
         """动态注入 system prompt 的运行时段：当前后台服务清单 + 状态。
@@ -711,17 +777,24 @@ class Agent:
         return snapshots
 
     # ========== ReAct 主循环 ==========
-    def run(self, user_message: str, images: Optional[list] = None, _autonomous_continue: bool = False) -> str:
+    def run(self, user_message: str, images: Optional[list] = None,
+            _autonomous_continue: bool = False, _seeds: Optional[list] = None) -> str:
         """
         :param user_message: 用户消息（自主继续时为自动生成的提示）
         :param images: 图片列表
         :param _autonomous_continue: 内部标记，表示这是自主继续的一轮（用于事件区分）
+        :param _seeds: 内部用——预置的合成工具记录列表（后台服务退出等异步事件）；开轮后各自落成
+                       一个 Step（assistant(tool_use)→tool(结果)），让首轮上下文就带上这些事件。
         """
         # 用循环替代递归：自主继续时走下一轮迭代而不是 self.run() 递归
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
+        seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
         while True:
             self._stop_flag = False
             self.session.start_turn(msg, imgs)
+            if seeds:
+                self._seed_steps(seeds)   # 预置合成 Step → 首轮 _chat_msgs 即渲染 tool_use→tool
+                seeds = []
             # —— Agentic RAG：检索相关历史工具调用，挂 _retrieval_hint（投影时在 user 后插 system）——
             _rh = self._agentic_retrieve(msg)
             if _rh:
@@ -883,10 +956,11 @@ class Agent:
                             # 后台推送（调度器/服务）：消费 inbox 触发下一轮
                             item = self.pop_inbox()
                             if item:
-                                src, next_msg = item
+                                src, next_msg, seed = item
                                 self._emit({"type": "background_trigger", "source": src,
-                                            "text": next_msg[:100]})
+                                            "text": next_msg[:100], "seed": bool(seed)})
                                 msg, auto_flag, imgs, continue_loop = next_msg, False, None, True
+                                seeds = [seed] if seed else []   # 下一轮迭代预置该合成 Step
                                 break
                             return resp.content
 

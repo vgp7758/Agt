@@ -327,11 +327,11 @@ def _worker(agent, work_q, registry, state):
                         work_q.put(nxt)
                         break
                     batch.append(nxt)
-                user_msg = _merge_batch(batch)
-                if not user_msg:
+                user_msg, seeds = _merge_batch(batch)
+                if not user_msg and not seeds:
                     continue
-                state["desc"] = user_msg[:40]
-                agent.run(user_msg)
+                state["desc"] = user_msg[:40] or "(后台事件)"
+                agent.run(user_msg, _seeds=seeds or None)
         except Exception as e:
             print(f"\n⚠️ 执行出错：{e}")
         finally:
@@ -343,18 +343,23 @@ def _worker(agent, work_q, registry, state):
 
 
 def _merge_batch(batch):
-    """把 drain 出的一批 (kind, payload) 合并成一条 user_message，一次 agent.run 处理。
+    """把 drain 出的一批 (kind, payload) 合并成 (user_message, seeds)，一次 agent.run 处理。
     background 标注来源（[后台通知·<source>]），让 agent 识别是哪个调度任务/进程发的；
-    user 原样。多条用 --- 分隔。"""
+    user 原样。多条用 --- 分隔。background 携带的 seed（后台服务退出等合成工具记录）收集进
+    seeds，由 agent.run 经 _seeds 预置成 Step。"""
     parts = []
+    seeds = []
     for k, p in batch:
         if k == "background":
-            src, msg = p
+            src, msg, seed = p
             print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
             parts.append(f"[后台通知·{src}] {msg}")
+            if seed:
+                seeds.append(seed)
         else:  # user
             parts.append(p)
-    return parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
+    user_msg = parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
+    return user_msg, seeds
 
 
 def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=20.0,

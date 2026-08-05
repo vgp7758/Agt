@@ -5,11 +5,13 @@
 非线程安全，多 run 并发会踩 session._current 等共享状态）。
 
 - `ServiceManager`：Popen 长进程（Agent 写的后端服务等），后台读日志线程 + 滚动 deque 缓冲，
-  start/stop/list/logs/status_lines。不依赖 agent（纯进程管理）。
+  start/stop/list/logs/status_lines。进程【自行退出】时（stdout 关闭）由读线程抓 rc，经 on_exit
+  回调（Agent 注入）把退出事件推 inbox 唤醒 Agent；手动 stop_service 不重复通知。
 - `Scheduler`：interval（每 N 秒）/ at（到某时刻），静态 message 或动态（到点执行某工具拿结果）；
   后台线程到点 produce → `agent.push_message`。持 agent 引用。
 
-`status_lines()` 供 Agent 把"当前有哪些服务在跑/已断"实时注入 system prompt。
+两类 producer 都把消息推进 `agent.inbox`（带锁 deque）。`status_lines()` 供 Agent 把
+"当前有哪些服务在跑/已断"实时注入 system prompt。
 """
 from __future__ import annotations
 
@@ -32,9 +34,10 @@ _POLL = 0.5      # 调度器轮询间隔（秒）
 class ServiceManager:
     """后台长进程管理：Popen 不等待，后台线程收日志，可查状态/停止。"""
 
-    def __init__(self):
-        self._services: dict = {}  # name -> {proc, command, started_at, logs}
+    def __init__(self, on_exit=None):
+        self._services: dict = {}  # name -> {proc, command, cwd, started_at, pid, logs, manual_stop}
         self._lock = threading.Lock()
+        self._on_exit = on_exit   # 进程自行退出回调 on_exit(name, entry, rc)，由 Agent 注入（可 None）
 
     def start(self, name: str, command: str, cwd: str = "") -> str:
         with self._lock:
@@ -54,9 +57,11 @@ class ServiceManager:
         except Exception as e:
             return f"[启动失败] {type(e).__name__}: {e}"
         logs: collections.deque = collections.deque(maxlen=_LOG_CAP)
+        entry = {"proc": proc, "command": command, "cwd": cwd,
+                 "started_at": time.time(), "pid": proc.pid,
+                 "logs": logs, "manual_stop": False}
         with self._lock:
-            self._services[name] = {"proc": proc, "command": command,
-                                    "started_at": time.time(), "logs": logs}
+            self._services[name] = entry
 
         def _reader():
             try:
@@ -64,6 +69,24 @@ class ServiceManager:
                     logs.append(line.rstrip("\n"))
             except Exception:
                 pass
+            # stdout 关闭 ≈ 进程已退出。手动 stop_service 时 stop() 已先置 manual_stop=True，
+            # 这里直接跳过（那次是 Agent 主动调的工具、它已知，不再被动通知，避免双重处理）。
+            if entry.get("manual_stop"):
+                return
+            try:
+                rc = proc.wait()
+            except Exception:
+                rc = proc.poll()
+                if rc is None:
+                    rc = -1
+            with self._lock:
+                if name not in self._services:   # 退出期间被移除 → 不通知
+                    return
+            if self._on_exit is not None:
+                try:
+                    self._on_exit(name, entry, rc)
+                except Exception:
+                    pass
 
         threading.Thread(target=_reader, daemon=True).start()
         return f"✅ 后台服务「{name}」已启动 (pid={proc.pid})：{command}"
@@ -113,6 +136,7 @@ class ServiceManager:
         proc = e["proc"]
         if proc.poll() is not None:
             return f"「{name}」本就已退出"
+        e["manual_stop"] = True   # 标记手动停：reader 跳过被动退出通知（Agent 这次是自己 stop 的）
         self._kill_tree(proc)   # 杀整棵树（shell + 其孙进程），而非只 terminate shell
         try:
             proc.wait(timeout=3)

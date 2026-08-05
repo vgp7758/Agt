@@ -25,7 +25,9 @@ def make_background_tools(agent) -> list:
         return svc.start(name, command, cwd)
 
     def stop_service(name: str) -> str:
-        """停止指定的后台服务（先 terminate，3 秒不退则 kill）。"""
+        """停止指定的后台服务（先 terminate，3 秒不退则 kill）。
+        注意：服务【自行退出】时（非你主动 stop），系统也会以同名 stop_service 工具结果的形式，
+        把退出码+尾部日志+启动参数回传唤醒你——那条记录是系统注入的、会标注"自行退出"。"""
         return svc.stop(name)
 
     def list_services() -> str:

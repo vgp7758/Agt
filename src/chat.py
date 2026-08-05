@@ -19,6 +19,7 @@ from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, skills_summary, agents_summary, seed_default_agents
 from background_tools import make_background_tools
 from plan_tools import make_plan_tools
+from spec_tools import make_spec_tools
 from memory_tools import make_recall_tools
 from longterm_memory import make_ltm_tools
 from download import make_download_tools
@@ -75,7 +76,10 @@ SYSTEM = build_system(
         "内置工具：run_python(运行 Python：内联 code 或 .py 文件；跑已保存的脚本传 file=) / read_file / write_file / edit(精确替换) / grep(内容搜索) / "
         "list_dir(workspace 内) / web_search / open_url(抓网页提取正文) / run_shell(慎用)。"
         "其它工具由 MCP server 动态提供，名字带 __mcp__ 前缀（按描述选用）。\n"
-        "复杂任务建议先 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"
+        "复杂任务（涉及多处修改/跨文件/需要先探索）建议先用 explore_subagent 派探索子 Agent 摸清相关模块，"
+        "再用 create_spec(title, steps, design) 制定施工方案（每步含 file/action/anchor/content/rationale），"
+        "然后用 commit_spec 提交供用户批阅；用户「通过」则自动建 plan 开始施工，「返工」则据反馈 regenerate_spec 重新生成。\n"
+        "简单任务直接用 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"
         "接手不熟悉的任务前可用 wiki_search/wiki_read 查 .agent/wiki/ 里的仓库知识；"
         "完成重要功能或修改后调用 update_wiki(改动摘要)，由子 Agent 自动更新 repo-wiki。\n"
         + "\n\n【长期记忆·跨 session】你有一个 per-repo 长期记忆库（~/.agt/repos/<hash>/memories/，semantic/episodic/procedural 三类）：\n"
@@ -204,6 +208,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_subagent_tools(agent), "子Agent")
     _reg(SKILL_TOOLS, "技能")
     _reg(make_plan_tools(agent), "计划")
+    _reg(make_spec_tools(agent), "施工方案")
     _reg(make_recall_tools(agent), "记忆召回")
     _reg(make_ltm_tools(agent), "长期记忆")
     _reg(make_download_tools(agent), "资产下载")

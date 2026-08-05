@@ -74,6 +74,19 @@
   .modal label { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:10px; }
   .modal input[type=number]{ width:130px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
   .modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+  /* 设置弹窗 tab 分页 */
+  .settings-tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); }
+  .settings-tabs .tab-btn { padding:8px 16px; border:none; background:none; cursor:pointer; font-size:13px;
+    color:#8a9099; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .settings-tabs .tab-btn:hover { color:#5b6470; }
+  .settings-tabs .tab-btn.active { color:var(--me); border-bottom-color:var(--me); font-weight:600; }
+  .settings-panel { display:none; flex:1; min-height:0; }
+  .settings-panel.active { display:flex; flex-direction:column; }
+  /* 运行时参数：分组标题 + 行间距，避免拥挤 */
+  #panel-runtime { overflow-y:auto; padding-right:4px; }
+  #panel-runtime label { padding:8px 0; border-bottom:1px solid #f1f3f5; }
+  .rt-group { font-size:12px; color:#8a9099; font-weight:600; margin:14px 0 2px; letter-spacing:.5px; }
+  .rt-group:first-child { margin-top:2px; }
   /* 模型列表项 */
   .model-item { margin:6px 0; padding:10px 12px; background:#f9fafb; border:1px solid var(--line); border-radius:10px; font-size:12px; display:flex; flex-direction:column; gap:5px; }
   .model-item .mi-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
@@ -81,6 +94,7 @@
   .model-item .mi-badge { font-size:10px; padding:1px 6px; border-radius:8px; font-weight:500; }
   .model-item .mi-badge.default { background:#dcfce7; color:#166534; }
   .model-item .mi-badge.thinking { background:#ede9fe; color:#6d28d9; }
+  .model-item .mi-badge.vision { background:#dcfce7; color:#166534; }
   .model-item input[type="text"], .model-item input[type="password"] { padding:4px 7px; border:1px solid var(--line); border-radius:6px; font-size:12px; flex:1; min-width:110px; outline:none; }
   .model-item input[type="text"]:focus, .model-item input[type="password"]:focus { border-color:var(--me); }
   .model-item label.mi-check { display:flex; align-items:center; gap:3px; font-size:11px; color:#5b6470; cursor:pointer; white-space:nowrap; }
@@ -94,6 +108,34 @@
   .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
   .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
   .plan-item .pi { width:20px; text-align:center; }
+  /* spec 面板（施工方案） */
+  #specPanel { max-height:320px; background:#fafbff; }
+  #specPanel summary { color:#4338ca; }
+  .spec-item { padding:4px 0; border-left:3px solid #c7d2fe; padding-left:8px; margin:2px 0; }
+  .spec-item .spec-head { font-weight:600; color:#4338ca; }
+  .spec-item .spec-file { color:#7c3aed; font-size:12px; }
+  .spec-item .spec-anc { color:#8a9099; font-size:11px; }
+  .spec-item .spec-content { font-size:12px; color:#374151; white-space:pre-wrap; background:#f0f4ff; padding:2px 6px; border-radius:3px; margin-top:2px; max-height:120px; overflow:auto; }
+  .spec-item .spec-rat { font-size:11px; color:#6b7280; margin-top:2px; }
+  .spec-review-bar { margin:6px 0; padding:6px 10px; background:#eef2ff; border-radius:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .spec-btn { font-size:12px; padding:3px 12px; border-radius:4px; cursor:pointer; border:1px solid; }
+  .spec-btn.approve { color:#059669; border-color:#a7f3d0; background:#ecfdf5; }
+  .spec-btn.approve:hover { background:#d1fae5; }
+  .spec-btn.reject { color:#dc2626; border-color:#fca5a5; background:#fef2f2; }
+  .spec-btn.reject:hover { background:#fee2e2; }
+  .spec-state { font-size:11px; padding:1px 8px; border-radius:8px; font-weight:600; }
+  .spec-state.draft { background:#e0e7ff; color:#4338ca; }
+  .spec-state.committed { background:#fde68a; color:#92400e; }
+  .spec-state.approved { background:#d1fae5; color:#065f46; }
+  .spec-state.rejected { background:#fee2e2; color:#991b1b; }
+  .spec-fb { width:100%; font-size:12px; padding:4px 6px; border:1px solid #fca5a5; border-radius:4px; margin-top:4px; }
+  /* 统计弹窗表格 */
+  .stats-scope { font-size:12px; color:#8a9099; margin-bottom:8px; }
+  .stats-empty { font-size:13px; color:#8a9099; padding:24px 8px; text-align:center; line-height:1.8; }
+  .stats-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  .stats-table th,.stats-table td { border:1px solid var(--line); padding:5px 8px; text-align:left; }
+  .stats-table thead th { background:#f0f2f5; font-weight:600; position:sticky; top:0; z-index:1; white-space:nowrap; }
+  .stats-table td.num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
   /* 队列消息提示 */
   #queueStatus { font-size:12px; color:#7c3aed; padding:4px 12px; background:#f3e8ff; display:none; }
   #queueStatus.show { display:block; }
@@ -123,12 +165,13 @@
 <body>
   <header>
     <span class="dot" id="dot"></span>
-    <h1>Agt Agent</h1>
+    <h1 id="sessionTitle">Agt Agent</h1>
     <span class="sub" id="status">连接中…</span>
     <span class="auto-badge hidden" id="autoBadge">🔁 自主模式</span>
   </header>
 
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
+  <div id="specPanel" class="plan-panel" style="display:none"><details open><summary id="specSummary">📐 施工方案</summary><div id="specList"></div></details></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="wfPanel" class="plan-panel" style="display:none"><details open>
@@ -163,36 +206,41 @@
   </div>
 
 <div id="settingsModal" class="modal-overlay">
-  <div class="modal" style="max-width:700px;width:90%">
+  <div class="modal" style="width:90vw;height:90vh;max-width:760px">
     <h3>⚙ 设置</h3>
-    <div style="display:flex;gap:16px">
-    <div style="flex:1;min-width:0">
-    <h4>模型管理</h4>
-    <div id="modelList" style="max-height:300px;overflow-y:auto;margin:4px 0"></div>
-    <button onclick="addModel()" style="font-size:12px">+ 添加模型</button>
-    <button onclick="saveModels()" style="font-size:12px">💾 保存模型配置</button>
-    <div style="font-size:10px;color:#8a9099;margin-top:4px">保存到 ~/.agt/models.json</div>
+    <div class="settings-tabs">
+      <button class="tab-btn active" onclick="switchSettingsTab('models',this)">模型管理</button>
+      <button class="tab-btn" onclick="switchSettingsTab('runtime',this)">运行时</button>
     </div>
-    <div style="flex:1;min-width:0">
-    <h4>运行时</h4>
+    <div id="panel-models" class="settings-panel active">
+    <div id="modelList" style="flex:1;overflow-y:auto;margin:4px 0"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <button onclick="addModel()" style="font-size:12px">+ 添加模型</button>
+      <span style="font-size:10px;color:#8a9099">改完点底部「保存模型配置」写回 ~/.agt/models.json</span>
+    </div>
+    </div>
+    <div id="panel-runtime" class="settings-panel">
+    <div class="rt-group">基础参数</div>
     <label>max_steps <input id="cfg_max_steps" type="number"></label>
     <label>token_budget <input id="cfg_token_budget" type="number"></label>
     <label>max_retries <input id="cfg_max_retries" type="number"></label>
     <label>temperature <input id="cfg_temperature" type="number" step="0.1"></label>
+    <div class="rt-group">模型与回退</div>
     <label>回退链 <input id="cfg_fallback_chain" type="text" placeholder="glm,deepseek,qwen"></label>
     <label>回退策略 <select id="cfg_fallback_policy" title="回退后下一轮怎么处理：sticky=永久降级；reset=每轮重新从链首尝试">
       <option value="sticky">永久降级（sticky）</option>
       <option value="reset">每轮重试首模型（reset）</option>
     </select></label>
-    <label>reasoning补全模型 <input id="cfg_reasoning_completer" type="text" placeholder="deepseek-chat / minimax（留空=关闭）" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"></label>
+    <label>reasoning补全模型 <select id="cfg_reasoning_completer" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"><option value="">（关闭）</option></select></label>
+    <label>检索模型 retrieval_model <select id="cfg_retrieval_model" title="Agentic RAG 检索（抽关键字+精排）用的便宜模型；留空=用默认模型"><option value="">（用默认模型）</option></select></label>
+    <div class="rt-group">执行与上下文</div>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
-    <label><input id="cfg_enable_thinking" type="checkbox"> enable_thinking</label>
-    </div>
+    <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     </div>
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
-      <button class="btn primary" id="cfgSave">保存运行时</button>
+      <button class="btn primary" id="cfgSave">💾 保存模型配置</button>
     </div>
   </div>
 </div>
@@ -227,7 +275,7 @@
       <button class="btn" id="statsScopeAll">本仓库全部 session</button>
       <button class="btn" id="statsRefresh">🔄 刷新</button>
     </div>
-    <pre id="statsBody" style="white-space:pre-wrap;font-size:12.5px;line-height:1.6;max-height:58vh;overflow:auto;background:#f6f6f8;padding:10px 12px;border-radius:8px;margin:0"></pre>
+    <div id="statsBody" style="max-height:58vh;overflow:auto;padding:2px"></div>
     <div class="modal-btns">
       <button class="btn primary" id="statsClose">关闭</button>
     </div>
@@ -287,6 +335,12 @@ function updateQueueStatus(size){
   messageQueueSize = size;
   queueCount.textContent = size;
   queueStatus.classList.toggle('show', size > 0);
+}
+
+// —— 更新会话标题 ——
+function setSessionTitle(title){
+  const el = document.getElementById('sessionTitle');
+  if(el) el.textContent = title || '新会话';
 }
 
 function addRow(cls, text){
@@ -508,8 +562,16 @@ document.getElementById('btnSave').onclick=()=>{
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{
   const v=e.target.value;
-  if(v==='__new__'){ ws.send(JSON.stringify({action:'new_session'})); msgArea.innerHTML=''; curTurn=null; lastUserBubble=null; }
-  else { ws.send(JSON.stringify({action:'load_session', name:v})); window._lastSaved=v; }
+  if(v==='__new__'){
+    ws.send(JSON.stringify({action:'new_session'})); msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
+    setSessionTitle('新会话');
+  }
+  else {
+    ws.send(JSON.stringify({action:'load_session', name:v})); window._lastSaved=v;
+    // 标题在 session_history 事件回来时更新（name 来自后端，更可靠）
+    const opt=e.target.selectedOptions[0];
+    if(opt) setSessionTitle(opt.textContent);
+  }
 });
 document.getElementById('btnAuto').onclick=()=>{
   // 切换自主模式：发送命令
@@ -534,20 +596,33 @@ let _statsScope='current';
 async function loadStats(scope){
   _statsScope=scope;
   const body=document.getElementById('statsBody');
-  body.textContent='加载中…';
+  body.innerHTML='<div class="stats-empty">加载中…</div>';
   try{
     const r=await fetch('/api/stats?scope='+scope); const d=await r.json();
     const s=d.stats||{}; const models=Object.keys(s);
-    if(!models.length){ body.textContent='（暂无 LLM 调用记录——发几条消息后刷新看看）'; return; }
-    const lines=[`范围：${d.scope==='all'?'本仓库全部 session':'当前 session'}（${d.calls} 条调用记录）`,'',
-      '模型 | 调用 | 成功(率) | 空 | 截断 | 错误 | completer | tokens | 均耗时'];
-    for(const m of models){
-      const x=s[m]; const rate=x.calls?(x.success*100/x.calls).toFixed(0)+'%':'—';
-      const err=Object.entries(x.errors||{}).map(([k,v])=>k+':'+v).join(' ')||'-';
-      lines.push(`${m} | ${x.calls} | ${x.success}(${rate}) | ${x.empty} | ${x.truncated} | ${err} | ${x.completer} | ${x.tokens} | ${x.avg_latency}s`);
+    const scopeText=`范围：${d.scope==='all'?'本仓库全部 session':'当前 session'}（${d.calls} 条调用记录）`;
+    if(!models.length){
+      body.innerHTML=`<div class="stats-empty">${scopeText}<br>（暂无 LLM 调用记录——发几条消息后刷新看看）</div>`;
+      return;
     }
-    body.textContent=lines.join('\n');
-  }catch(e){ body.textContent='加载失败：'+e; }
+    const cols=['模型','调用','成功(率)','空','截断','错误','completer','tokens','均耗时'];
+    let html=`<div class="stats-scope">${scopeText}</div>`;
+    html+='<table class="stats-table"><thead><tr>';
+    cols.forEach(c=>html+=`<th>${c}</th>`);
+    html+='</tr></thead><tbody>';
+    models.forEach(m=>{
+      const x=s[m];
+      const rate=x.calls?(x.success*100/x.calls).toFixed(0)+'%':'—';
+      const err=Object.entries(x.errors||{}).map(([k,v])=>`${k}:${v}`).join(' ')||'-';
+      // [值, 是否数字列]；模型名+错误列走文字（左对齐/换行），其余右对齐等宽
+      const cells=[[esc(m),false],[x.calls,true],[`${x.success}(${rate})`,true],
+        [x.empty,true],[x.truncated,true],[err,false],[x.completer,true],
+        [x.tokens,true],[x.avg_latency+'s',true]];
+      html+='<tr>'+cells.map(c=>`<td${c[1]?' class="num"':''}>${c[0]}</td>`).join('')+'</tr>';
+    });
+    html+='</tbody></table>';
+    body.innerHTML=html;
+  }catch(e){ body.innerHTML='<div class="stats-empty">加载失败：'+esc(String(e))+'</div>'; }
 }
 document.getElementById('btnStats').onclick=()=>{ statsModal.style.display='flex'; loadStats('current'); };
 document.getElementById('statsScopeCur').onclick=()=>loadStats('current');
@@ -565,9 +640,38 @@ document.getElementById('fbSubmit').onclick=()=>{
   feedbackModal.style.display='none';
 };
 let _modelData={};
+// 两个模型下拉框（reasoning_completer / retrieval_model）想要选中的值；
+// 用对象存是因为 config 回填与模型列表加载是并行的——谁先到都要能正确选中
+let _cfgWanted={cfg_reasoning_completer:'', cfg_retrieval_model:''};
+// 设置弹窗 tab 切换
+function switchSettingsTab(name, btn){
+  document.querySelectorAll('.settings-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.settings-panel').forEach(p=>p.classList.remove('active'));
+  const panel=document.getElementById('panel-'+name);
+  if(panel) panel.classList.add('active');
+  // 底部保存按钮语义随 tab 切换：模型 tab=保存模型配置，运行时 tab=保存运行时
+  const saveBtn=document.getElementById('cfgSave');
+  if(saveBtn) saveBtn.textContent = name==='models' ? '💾 保存模型配置' : '💾 保存运行时';
+}
+function fillModelSelect(id, emptyLabel){
+  const sel=document.getElementById(id); if(!sel) return;
+  const val=_cfgWanted[id]!==undefined?_cfgWanted[id]:(sel.value||'');
+  const models=Object.keys(_modelData.models||{});
+  let opts=`<option value="">${emptyLabel}</option>`;
+  for(const n of models){
+    const e=String(n).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    opts+=`<option value="${e}">${e}</option>`;
+  }
+  sel.innerHTML=opts; sel.value=val||'';
+}
 
 async function loadModelList(){
-  try{const r=await fetch('/api/models');_modelData=await r.json();renderModelList();}catch(e){}
+  try{
+    const r=await fetch('/api/models');_modelData=await r.json();renderModelList();
+    fillModelSelect('cfg_reasoning_completer','（关闭）');
+    fillModelSelect('cfg_retrieval_model','（用默认模型）');
+  }catch(e){}
 }
 function renderModelList(){
   const box=document.getElementById('modelList');
@@ -577,21 +681,26 @@ function renderModelList(){
     const escName = name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const isDefault = name===def;
     const thinking = !!m.thinking;
+    const vision = !!m.vision;
     return `<div class="model-item">
       <div class="mi-row">
         <span class="mi-name">${escName}</span>
         ${isDefault ? '<span class="mi-badge default">✓ 默认</span>' : ''}
         ${thinking ? '<span class="mi-badge thinking">🧠 thinking</span>' : ''}
+        ${vision ? '<span class="mi-badge vision">👁 vision</span>' : ''}
         <button class="mi-del" onclick="delete _modelData.models[\'${escName}\'];renderModelList()" title="删除">×</button>
       </div>
       <div class="mi-row">
         <input value="${esc(m.model||'')}" placeholder="model id" onchange="_modelData.models['${escName}'].model=this.value" style="flex:2">
-        <input value="${esc(m.desc||'')}" placeholder="描述（显示用）" onchange="_modelData.models['${escName}'].desc=this.value" style="flex:1;min-width:80px">
+        <input value="${m.max_effective_context_window||''}" placeholder="窗口（空=关闭分档）" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="flex:1;min-width:130px">
       </div>
       <div class="mi-row">
         <input value="${esc(m.base_url||'')}" placeholder="base_url" onchange="_modelData.models['${escName}'].base_url=this.value" style="flex:2">
-        <label class="mi-check" title="该模型是否支持 enable_thinking（Qwen/ModelScope 推理模型）">
+        <label class="mi-check" title="该模型是否支持深度思考（推理模型，如 Qwen/ModelScope 的 enable_thinking）。是能力声明：勾了才会在请求里带 enable_thinking；运行时是否真开由「运行时」区的 enable_thinking 控制">
           <input type="checkbox" ${thinking?'checked':''} onchange="_modelData.models['${escName}'].thinking=this.checked;renderModelList()"> thinking
+        </label>
+        <label class="mi-check" title="该模型是否支持多模态视觉（能看图）。勾了后工具返回的图片会以 image_url 形式喂给该模型，否则降级为文字占位并提示委托视觉子 agent">
+          <input type="checkbox" ${vision?'checked':''} onchange="_modelData.models['${escName}'].vision=this.checked;renderModelList()"> vision
         </label>
       </div>
       <div class="mi-row">
@@ -599,7 +708,7 @@ function renderModelList(){
         ${isDefault ? '' : `<button class="mi-btn set-default" onclick="_modelData.default=\'${escName}\';renderModelList()">⭐ 设默认</button>`}
       </div>
       <div class="mi-row">
-        <input value="${m.max_effective_context_window||''}" placeholder="分档窗口 max_effective_context_window（空=关闭分档）" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="启用分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="flex:1">
+        <input value="${esc(m.desc||'')}" placeholder="描述（显示用，会拼进模型下拉框）" onchange="_modelData.models['${escName}'].desc=this.value" style="flex:1;min-width:0">
       </div>
     </div>`;
   }).join('')||'<div style="color:#8a9099;padding:8px">暂无模型，点击下方"添加模型"</div>';
@@ -619,7 +728,7 @@ async function saveModels(){
   }catch(e){alert(e);}
 }
 function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
-document.getElementById('cfgSave').onclick=()=>{
+function saveRuntime(){
   const values={
     max_steps: parseInt(document.getElementById('cfg_max_steps').value),
     token_budget: parseInt(document.getElementById('cfg_token_budget').value),
@@ -629,12 +738,20 @@ document.getElementById('cfgSave').onclick=()=>{
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
     reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
+    retrieval_model: document.getElementById('cfg_retrieval_model').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
-};
+}
+// 底部保存按钮：按当前 tab 分流——模型管理→保存模型配置，运行时→保存运行时
+function saveCurrentTab(){
+  const active=document.querySelector('.settings-panel.active');
+  if(active && active.id==='panel-models'){ saveModels(); }
+  else { saveRuntime(); }
+}
+document.getElementById('cfgSave').onclick=saveCurrentTab;
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });
@@ -652,6 +769,17 @@ function attachRestoreButton(bubble, sha){
   bubble.insertBefore(btn, bubble.firstChild);
 }
 
+// step 描述兜底：模型有时把整坨 {"step":1,"description":"...","status":"pending"} 塞进 description，
+// 渲染前检查——是 JSON/字面量串就抽出里面的 description 字段，救历史脏数据（新数据后端已清洗）
+function unwrapStepDesc(desc){
+  if(desc==null) return '';
+  if(typeof desc!=='string') return String(desc);
+  const s=desc.trim();
+  if(!(s.startsWith('{')||s.startsWith('['))) return desc;
+  try{ const p=JSON.parse(s); if(p&&typeof p==='object'&&p.description!=null) return String(p.description); }catch(e){}
+  try{ const p=JSON.parse(s.replace(/'/g,'"')); if(p&&typeof p==='object'&&p.description!=null) return String(p.description); }catch(e){}
+  return desc;
+}
 function renderPlan(plan, planId, planTitle){
   const panel=document.getElementById('planPanel');
   const list=document.getElementById('planList');
@@ -677,10 +805,105 @@ function renderPlan(plan, planId, planTitle){
   plan.forEach((s,i)=>{
     const row=document.createElement('div'); row.className='plan-item';
     const ic=document.createElement('span'); ic.className='pi'; ic.textContent=icon[s.status]||'?';
-    const tx=document.createElement('span'); tx.textContent=(i+1)+'. '+s.description;
+    const tx=document.createElement('span'); tx.textContent=(i+1)+'. '+unwrapStepDesc(s.description);
     if(s.status==='completed'){ tx.style.textDecoration='line-through'; tx.style.color='#8a9099'; }
     if(s.status==='in_progress'){ tx.style.fontWeight='600'; }
     row.appendChild(ic); row.appendChild(tx); list.appendChild(row);
+  });
+}
+
+// ========== 施工方案 spec 渲染 ==========
+let _specActions = { approve: null, reject: null };  // 批阅按钮回调（由 spec_review 事件绑定）
+
+function renderSpec(spec, specId, reviewState, specTitle){
+  const panel = document.getElementById('specPanel');
+  const list = document.getElementById('specList');
+  const sum = document.getElementById('specSummary');
+  const barId = 'specReviewBar';
+  let oldBar = document.getElementById(barId);
+  if (oldBar) oldBar.remove();
+  list.innerHTML = '';
+  if (!spec || !spec.length) {
+    panel.style.display = 'none';
+    if (sum) sum.textContent = '📐 施工方案';
+    return;
+  }
+  panel.style.display = 'block';
+  if (sum) {
+    sum.textContent = '';
+    const t = document.createElement('span');
+    t.textContent = '📐 ' + (specTitle || '施工方案');
+    sum.appendChild(t);
+    if (specId) {
+      const id = document.createElement('span');
+      id.textContent = specId;
+      id.style.cssText = 'color:#8a9099;font-weight:400;font-size:12px;margin-left:6px';
+      sum.appendChild(id);
+    }
+    // 批阅态标签
+    const stateLabel = {'draft':'草稿','committed':'待批阅','approved':'已通过','rejected':'已返工'};
+    const stateBadge = document.createElement('span');
+    stateBadge.className = 'spec-state ' + (reviewState || 'draft');
+    stateBadge.textContent = ' · ' + stateLabel[reviewState || 'draft'];
+    sum.appendChild(stateBadge);
+  }
+  // committed/rejected 态：显示批阅栏
+  if (reviewState === 'committed' || reviewState === 'rejected') {
+    const bar = document.createElement('div');
+    bar.id = barId;
+    bar.className = 'spec-review-bar';
+    const info = document.createElement('span');
+    info.textContent = reviewState === 'committed' ? '🔍 等待批阅：' : '❌ 已返工：';
+    bar.appendChild(info);
+    if (reviewState === 'committed') {
+      const approveBtn = document.createElement('button');
+      approveBtn.className = 'spec-btn approve';
+      approveBtn.textContent = '✅ 通过并开始施工';
+      approveBtn.onclick = () => { if (_specActions.approve) _specActions.approve(specId); };
+      bar.appendChild(approveBtn);
+      const rejectBtn = document.createElement('button');
+      rejectBtn.className = 'spec-btn reject';
+      rejectBtn.textContent = '❌ 返工（附反馈）';
+      rejectBtn.onclick = () => {
+        const fb = prompt('请输入返工反馈意见（告诉 Agent 哪里需要改）：');
+        if (fb && _specActions.reject) _specActions.reject(specId, fb);
+      };
+      bar.appendChild(rejectBtn);
+    } else if (reviewState === 'rejected') {
+      const waiting = document.createElement('span');
+      waiting.textContent = '等待 Agent 据反馈重新生成 spec…';
+      waiting.style.color = '#991b1b';
+      bar.appendChild(waiting);
+    }
+    panel.insertBefore(bar, list);
+  }
+  // 步骤列表
+  spec.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'spec-item';
+    const head = document.createElement('div');
+    head.className = 'spec-head';
+    head.textContent = (i + 1) + '. [' + (s.action || 'review') + ']';
+    row.appendChild(head);
+    if (s.file) {
+      const file = document.createElement('div');
+      file.className = 'spec-file';
+      file.textContent = '文件：' + s.file;
+      row.appendChild(file);
+    }
+    if (s.anchor) {
+      const anc = document.createElement('div');
+      anc.className = 'spec-anc';
+      anc.textContent = '定位：' + s.anchor;
+      row.appendChild(anc);
+    }
+    if (s.content) {
+      const content = document.createElement('div');
+      content.className = 'spec-content';
+      content.textContent = s.content;
+      row.appendChild(content);
+    }
+    list.appendChild(row);
   });
 }
 
@@ -728,14 +951,20 @@ ws.onmessage=(ev)=>{
         document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
         document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
-        document.getElementById('cfg_reasoning_completer').value = m.values.reasoning_completer || '';
+        _cfgWanted.cfg_reasoning_completer=m.values.reasoning_completer || '';
+        _cfgWanted.cfg_retrieval_model=m.values.retrieval_model || '';
+        fillModelSelect('cfg_reasoning_completer','（关闭）');
+        fillModelSelect('cfg_retrieval_model','（用默认模型）');
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
         document.getElementById('cfg_max_level').value = m.values.max_level || '';
       }
       break;
     case 'saved':
       ws.send(JSON.stringify({action:'list_sessions'}));
-      if(m.name) window._lastSaved=m.name;
+      if(m.name){
+        window._lastSaved=m.name;
+        setSessionTitle(m.name);
+      }
       break;
     case 'feedback_meta':
       if(m.kinds){
@@ -757,21 +986,58 @@ ws.onmessage=(ev)=>{
     case 'plan':
       renderPlan(m.plan, m.plan_id, m.plan_title);
       break;
+    case 'spec':
+    case 'spec_review':
+      renderSpec(m.spec, m.spec_id, m.review_state, m.spec_title);
+      // spec_review 态：把批阅动作绑定成「通过/返工」工具调用（发自然语言指令给 Agent）
+      if (m.type === 'spec_review' && m.spec_id) {
+        _specActions.approve = (sid) => {
+          // 通过：让 Agent 调 approve_spec 工具
+          sendRaw('请用 approve_spec 工具批准 spec ' + sid + ' 并开始施工', []);
+          toast('✅ 已批准，开始施工');
+        };
+        _specActions.reject = (sid, fb) => {
+          // 返工：让 Agent 调 reject_spec 工具并附反馈
+          sendRaw('请用 reject_spec 工具返工 spec ' + sid + '，反馈：' + fb, []);
+          toast('❌ 已返工，等 Agent 重新生成');
+        };
+      } else {
+        _specActions.approve = null;
+        _specActions.reject = null;
+      }
+      break;
     case 'sessions':
-      if(m.names){
+      if(m.names && m.names.length){
         const sel=document.getElementById('sessionSel');
         const curVal=sel.value;
         sel.innerHTML='<option value="__new__">➕ 新会话</option>';
-        m.names.forEach(it=>{ const o=document.createElement('option'); o.value=it.id;
-          o.textContent=it.name+(it.turns?` (${it.turns}轮)`:''); sel.appendChild(o); });
+        // m.names 现在是 [{id, name, created_at, turns, first}]
+        m.names.forEach(it=>{
+          const o=document.createElement('option');
+          o.value=it.id;
+          // 显示：名字（轮数）+ 创建时间
+          const ts = it.created_at ? new Date(it.created_at * 1000).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+          const turnsText = it.turns ? `(${it.turns}轮)` : '';
+          o.textContent = `${it.name} ${turnsText}${ts?` · ${ts}`:''}`;
+          sel.appendChild(o);
+        });
         if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
         else if(curVal && curVal!=='__new__' && sel.querySelector(`option[value="${curVal}"]`)) sel.value=curVal;
+        // 初始化标题：如果有上次的存档或当前选中的值，用其 name 字段
+        if(window._lastSaved){
+          const opt=sel.querySelector(`option[value="${window._lastSaved}"]`);
+          if(opt && opt.textContent) setSessionTitle(opt.textContent.split(' ')[0]); // 取名字部分
+        } else if(curVal && curVal!=='__new__'){
+          const opt=sel.querySelector(`option[value="${curVal}"]`);
+          if(opt && opt.textContent) setSessionTitle(opt.textContent.split(' ')[0]);
+        }
         window._lastSaved=null;
       }
       break;
     case 'session_history':
       renderHistory(m.turns);
       addRow('sys', `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);
+      setSessionTitle(m.name);  // 加载会话后更新标题
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;

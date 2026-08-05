@@ -442,9 +442,9 @@ async def ws_endpoint(websocket: WebSocket):
             "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
             "current_model": agent.model_name,
         })
-    from session import list_sessions, session_meta
+    from session import list_sessions
     await _send(websocket, {"type": "sessions",
-                           "names": [session_meta(p) for p in list_sessions(workspace=_workspace)]})
+                           "names": list_sessions(workspace=_workspace)})
     from workflow import workflows_info
     await _send(websocket, {"type": "workflows", "items": workflows_info(_workspace)})
 
@@ -511,9 +511,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text": "⏹ 已请求停止…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "list_sessions":
-        from session import list_sessions, session_meta
+        from session import list_sessions
         await _send(ws, {"type": "sessions",
-                         "names": [session_meta(p) for p in list_sessions(workspace=_workspace)]})
+                         "names": list_sessions(workspace=_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         from session import Session
@@ -528,10 +528,10 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if isinstance(_d, dict) and _d.get("action") == "save_session":
         name = (_d.get("name") or "").strip() or None
         p = agent.session.save(name)
-        await _send(ws, {"type": "saved", "name": p.stem})
-        from session import list_sessions, session_meta
+        await _send(ws, {"type": "saved", "name": agent.session.name or name})
+        from session import list_sessions
         await _send(ws, {"type": "sessions",
-                         "names": [session_meta(s) for s in list_sessions(workspace=_workspace)]})
+                         "names": list_sessions(workspace=_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "load_session":
         from session import Session

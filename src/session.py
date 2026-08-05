@@ -58,13 +58,48 @@ def _repo_hash(workspace) -> str:
 
 
 def _repo_sessions_dir(workspace) -> Path:
-    """该工作区的会话子目录：~/.agt/repos/<hash>/sessions/。每个 repo 互相隔离。
-    首次访问时把两处旧位置的存档一次性整体迁移过来。"""
+    """该工作区的会话根目录：~/.agt/repos/<hash>/sessions/。每个 repo 互相隔离。
+    首次访问时把旧位置的扁平存档一次性整体迁移成新文件夹结构。"""
     h = _repo_hash(workspace)
     d = REPOS_DIR / h / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     _migrate_all_legacy()
+    _migrate_flat_to_folder(d)  # 扁平→文件夹迁移
     return d
+
+
+def _timestamp_dir_name(ts: float) -> str:
+    """把创建时间戳格式化成文件夹名 YYYYMMDD_HHMMSS（文件系统安全、可排序、可读）。"""
+    return time.strftime("%Y%m%d_%H%M%S", time.localtime(ts))
+
+
+def _ts_from_dirname(name: str) -> Optional[float]:
+    """从文件夹名 YYYYMMDD_HHMMSS 或 YYYYMMDD_HHMMSS_N 解析回时间戳。失败返回 None。"""
+    try:
+        # 先尝试完整格式（带冲突后缀 _N）
+        m = re.match(r"^(\d{8}_\d{6})(?:_\d+)?$", name)
+        if not m:
+            return None
+        t = time.strptime(m.group(1), "%Y%m%d_%H%M%S")
+        return time.mktime(t)
+    except Exception:
+        return None
+
+
+def _new_session_dir(workspace, created_ts: float) -> Path:
+    """为一个新 session 创建以时间戳命名的专属文件夹并返回路径。
+    同秒并发冲突时尾部追加 _2/__3（极少见，进程内串行 + 秒级粒度足够）。"""
+    base = _repo_sessions_dir(workspace) / _timestamp_dir_name(created_ts)
+    if not base.exists():
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    # 同秒冲突：追加 _2/_3… 直到不撞
+    for i in range(2, 999):
+        cand = base.with_name(f"{base.name}_{i}")
+        if not cand.exists():
+            cand.mkdir(parents=True, exist_ok=True)
+            return cand
+    return base  # 兜底（999 个同名几乎不可能）
 
 
 def repo_memories_dir(workspace) -> Path:
@@ -94,6 +129,87 @@ def repo_images_dir(workspace) -> Path:
 
 
 _ALL_MIGRATED = False   # 进程级标志：全量迁移只跑一次
+_MIGRATED_FLAT_TO_FOLDER = False  # 进程级标志：扁平→文件夹迁移只跑一次
+
+
+def _migrate_flat_to_folder(sessions_dir: Path) -> None:
+    """把扁平结构的 sessions（<name>.json + <name>.events.jsonl + ...）迁移到文件夹结构（<timestamp>/meta.json + ...）。
+    每个 session 的 timestamp 从 meta.json 的 created_at 或 saved_at 字段来；无则用文件 mtime。
+    增量迁移：只处理还没有对应文件夹的扁平文件，已迁移的跳过。"""
+    global _MIGRATED_FLAT_TO_FOLDER
+    if _MIGRATED_FLAT_TO_FOLDER:
+        return
+    _MIGRATED_FLAT_TO_FOLDER = True
+    
+    if not sessions_dir.exists():
+        return
+    
+    # 扫描所有 *.json 文件（session 元信息）——增量迁移，不因已有文件夹就跳过
+    json_files = [f for f in sessions_dir.glob("*.json") if f.stem != "_origin"]
+    if not json_files:
+        return
+    
+    for jf in json_files:
+        try:
+            name = jf.stem
+            if name == "_origin":
+                continue
+            
+            # 收集相关文件
+            events_old = sessions_dir / f"{name}.events.jsonl"
+            toollog_old = sessions_dir / f"{name}.toollog.jsonl"
+            llm_calls_old = sessions_dir / f"{name}.llm_calls.jsonl"
+            log_old = sessions_dir / f"{name}.log"
+            
+            # 读 meta.json 获取 created_at 或 saved_at
+            data = json.loads(jf.read_text(encoding="utf-8"))
+            ts = data.get("created_at") or data.get("saved_at")
+            if not ts:
+                # 用文件 mtime 兜底
+                ts = jf.stat().st_mtime
+            
+            # 创建新文件夹
+            new_dir = sessions_dir / _timestamp_dir_name(ts)
+            if new_dir.exists():
+                # 同秒冲突：追加 _2/_3...
+                for i in range(2, 99):
+                    cand = sessions_dir / f"{_timestamp_dir_name(ts)}_{i}"
+                    if not cand.exists():
+                        new_dir = cand
+                        break
+            
+            new_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 移动文件
+            shutil.copy2(jf, new_dir / "meta.json")
+            if events_old.exists():
+                shutil.copy2(events_old, new_dir / "events.jsonl")
+            if toollog_old.exists():
+                shutil.copy2(toollog_old, new_dir / "toollog.jsonl")
+            if llm_calls_old.exists():
+                shutil.copy2(llm_calls_old, new_dir / "llm_calls.jsonl")
+            if log_old.exists():
+                shutil.copy2(log_old, new_dir / "log.log")
+            
+            # 补全 meta.json 的 created_at 字段（旧格式缺失）
+            meta_path = new_dir / "meta.json"
+            if "created_at" not in data:
+                data["created_at"] = ts
+            if "name" not in data:
+                data["name"] = name
+            data["saved_at"] = int(time.time())
+            meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            
+        except Exception as e:
+            pass  # 单 session 迁移失败不影响其他
+    
+    # 清理旧扁平文件（迁移成功后）
+    for ext in [".json", ".events.jsonl", ".toollog.jsonl", ".llm_calls.jsonl", ".log"]:
+        for f in sessions_dir.glob(f"*{ext}"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
 
 def _migrate_all_legacy() -> None:
@@ -180,6 +296,8 @@ class Session:
         self.turns: list[Turn] = []
         self.global_summary = ""
         self.name: str = ""                           # session 自动命名（首轮一句话总结）
+        self.created_at: float = time.time()          # session 创建时间戳（文件夹名 + meta.json 记录）
+        self.session_dir: Optional[Path] = None       # 专属文件夹路径（<sessions>/<timestamp>/）；未就绪时为 None
         self._current: Optional[Turn] = None          # 进行中的轮（run 期间）
         self._save_lock = threading.Lock()            # 异步落盘的并发保护
         self._name_lock = threading.Lock()            # _ensure_name / _ensure_name_early 并发保护
@@ -192,6 +310,7 @@ class Session:
         self._ltm_static_provider: Optional[Callable[[], str]] = None    # 静态层：semantic 事实 + procedural 标题（每轮始终注入）
         self._ltm_episodic_provider: Optional[Callable[[str], str]] = None  # 情境层：按当前问题召回 episodic（每轮按需注入）
         self._plan_provider: Optional[Callable[[], str]] = None  # 当前活动计划块（Agent 注册；加入计划后每轮注入 SYSTEM，退出后返回空）
+        self._spec_provider: Optional[Callable[[], str]] = None  # 当前活动 spec 块（Agent 注册；draft/committed/rejected 态注入，approved/无返回空）
         self._task_guidance_provider: Optional[Callable[[], str]] = None  # 任务指引(AGENTS.md/rules/skills/子Agent)：每轮重读，紧跟 system 之后
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
@@ -417,6 +536,7 @@ class Session:
         self._append_ambient(msgs, self._time_provider)
         self._append_ambient(msgs, self._system_extra_provider)
         self._append_ambient(msgs, self._plan_provider)
+        self._append_ambient(msgs, self._spec_provider)
         # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
         # 放在【当前轮之后】收尾：这是每轮按问题重新召回的【易变块】，归入 tail——
         # 不污染稳定前缀，留给前缀缓存最大命中面（对照 Claude Code 滚动断点：稳定靠前、易变靠后）。
@@ -487,10 +607,11 @@ class Session:
             _psh = getattr(self._current, "_pending_step_hint", None)
             if _psh:
                 body.append({"role": "user", "content": _MIDTURN_TAG + _psh})
-        # tail ambient（易变：实时时间 + 后台状态 + 活动计划，放 user 后保前缀缓存）
+        # tail ambient（易变：实时时间 + 后台状态 + 活动计划 + 活动 spec，放 user 后保前缀缓存）
         self._append_ambient(body, self._time_provider)
         self._append_ambient(body, self._system_extra_provider)
         self._append_ambient(body, self._plan_provider)
+        self._append_ambient(body, self._spec_provider)
         if self._ltm_episodic_provider and self._current and self._current.user_message:
             self._append_ambient(body, self._ltm_episodic_provider, self._current.user_message)
         return body
@@ -770,6 +891,14 @@ class Session:
         except Exception:
             return self.global_summary[-GLOBAL_SUMMARY_CAP:]  # 兜底：截断保留最近部分
 
+    # ========== 会话文件夹 ==========
+    def _ensure_session_dir(self):
+        """创建 session 专属的时间戳文件夹并返回路径。首次调用时创建，之后复用。"""
+        if self.session_dir is not None:
+            return self.session_dir
+        self.session_dir = _new_session_dir(self.workspace, self.created_at)
+        return self.session_dir
+
     # ========== 自动命名 ==========
     def _ensure_name(self):
         """首轮完成后自动给 session 命名（一句话总结首轮）。name 一旦设定不再变。
@@ -799,11 +928,11 @@ class Session:
                 # fallback：用首轮 user_message 片段，再不行用时间戳
                 seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
                 self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-            # name 刚就绪：绑定 events/toollog 路径，把首轮缓冲的事件/详情 flush 落盘
-            sd = _repo_sessions_dir(self.workspace)
-            self._bind_event_path(sd / f"{self.name}.events.jsonl")
-            self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
-            self.llm_calls.set_path(sd / f"{self.name}.llm_calls.jsonl")
+            # name 刚就绪：创建专属文件夹，绑定所有文件路径
+            sdir = self._ensure_session_dir()
+            self._bind_event_path(sdir / "events.jsonl")
+            self.toollog.set_path(sdir / "toollog.jsonl")
+            self.llm_calls.set_path(sdir / "llm_calls.jsonl")
             # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
             if self._log_handler is not None:
                 try:
@@ -842,11 +971,11 @@ class Session:
                 else:
                     seed = _NAME_SAFE_RE.sub("", user_message[:12]).strip()
                     self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-                # name 刚就绪：绑定 events/toollog 路径，把缓冲的事件/详情 flush 落盘
-                sd = _repo_sessions_dir(self.workspace)
-                self._bind_event_path(sd / f"{self.name}.events.jsonl")
-                self.toollog.set_path(sd / f"{self.name}.toollog.jsonl")
-                self.llm_calls.set_path(sd / f"{self.name}.llm_calls.jsonl")
+                # name 刚就绪：创建专属文件夹，绑定所有文件路径
+                sdir = self._ensure_session_dir()
+                self._bind_event_path(sdir / "events.jsonl")
+                self.toollog.set_path(sdir / "toollog.jsonl")
+                self.llm_calls.set_path(sdir / "llm_calls.jsonl")
                 # 通知日志 handler flush 缓冲并切到 <name>.log
                 if self._log_handler is not None:
                     try:
@@ -956,20 +1085,24 @@ class Session:
 
     # ========== 持久化 ==========
     def save(self, name: Optional[str] = None) -> Path:
-        name = name or self.name or f"session_{int(time.time())}"
-        if not name.endswith(".json"):
-            name += ".json"
+        """落盘 meta.json 到 session 专属文件夹。name 参数（可选）用于 /save <name> 改名另存——
+        只改 meta.json 里的 name 字段，不挪文件夹（文件夹名始终是创建时间戳）。
+        文件夹未就绪（session_dir 为 None，新 session 还没 _ensure_name）时先创建。"""
+        if name:
+            self.name = name  # /save <name> 改名：只改 self.name，meta.json 会写入新名
         self._capture_state()  # 落盘前收集 Agent 附加状态（plan/自主模式等），无论谁触发 save
-        d = _repo_sessions_dir(self.workspace)
-        (d.parent / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")  # repo 级：repos/<hash>/_origin.txt
-        path = d / name
+        sdir = self._ensure_session_dir()  # 确保文件夹存在（新 session 首次 save）
+        # repo 级 _origin.txt（记录工作区路径，便于排查）
+        (sdir.parent.parent / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")
+        path = sdir / "meta.json"
         # 锁保护「快照 turns + 序列化 + 写文件」整段：与 _autosave 的 daemon 线程、
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。
         with self._save_lock:
-            # turns/toollog 不再存这里——turns 走 <name>.events.jsonl（append-only 事件流），
-            # toollog 走 <name>.toollog.jsonl。本文件只存小体量元信息+状态，全量写无压力。
+            # turns/toollog 不存这里——turns 走 events.jsonl（append-only 事件流），
+            # toollog 走 toollog.jsonl。meta.json 只存小体量元信息+状态，全量写无压力。
             data = {
-                "name": self.name or Path(name).stem,
+                "name": self.name or f"session_{int(self.created_at)}",
+                "created_at": self.created_at,           # 创建时间戳（文件夹名来源 + 排序依据）
                 "system": self.system,
                 "global_summary": self.global_summary,
                 "recent_window_turns": self.recent_window_turns,
@@ -985,29 +1118,32 @@ class Session:
         return path
 
     def rename(self, new_name: str) -> str:
-        """重命名当前会话：改 self.name + 原子重命名 .json/.events.jsonl/.toollog.jsonl/.llm_calls.jsonl
-        + 重绑路径 + 落盘刷新 metadata（"name" 字段）。新名冲突或非法抛 ValueError。
-        未命名（还没存档）时只设 name，下次 save 用新名建文件。"""
+        """重命名当前会话：只改 meta.json 里的 name 字段 + 更新 self.name。
+        文件夹名是创建时间戳，不随 rename 改变。新名冲突或非法抛 ValueError。
+        未命名（还没存档）时只设 name，下次 save 落盘时会写入新名。"""
         new_name = self._sanitize_session_name(new_name)
         if not new_name:
             raise ValueError("新会话名不能为空")
         if new_name == self.name:
             return self.name
-        d = _repo_sessions_dir(self.workspace)
-        if (d / f"{new_name}.json").exists():
-            raise ValueError(f"已存在同名会话「{new_name}」，换个名字")
+        # 检查名字冲突：遍历所有 session 的 meta.json
+        sdir = self._ensure_session_dir()
+        for other_dir in sdir.parent.iterdir():
+            if not other_dir.is_dir() or other_dir == sdir:
+                continue
+            meta = other_dir / "meta.json"
+            if meta.exists():
+                try:
+                    data = json.loads(meta.read_text(encoding="utf-8"))
+                    if data.get("name") == new_name:
+                        raise ValueError(f"已存在同名会话「{new_name}」，换个名字")
+                except Exception:
+                    pass
         old_name = self.name
-        if old_name:   # 已存档：原子重命名 4 个文件（存在的才动）
-            for suffix in (".json", ".events.jsonl", ".toollog.jsonl", ".llm_calls.jsonl"):
-                old_p = d / f"{old_name}{suffix}"
-                if old_p.exists():
-                    old_p.replace(d / f"{new_name}{suffix}")
         self.name = new_name
-        if old_name and self._event_path is not None:
-            self._bind_event_path(d / f"{new_name}.events.jsonl")
-            self.toollog.set_path(d / f"{new_name}.toollog.jsonl")
-            self.llm_calls.set_path(d / f"{new_name}.llm_calls.jsonl")
-            self.save()   # 覆盖刚 rename 的旧内容，把 metadata 的 "name" 刷成新的
+        # 如果已有 session_dir，说明已经落盘过 → 需要重写 meta.json 更新 name
+        if self.session_dir is not None:
+            self.save()  # 覆盖写 meta.json，把 "name" 字段刷成新的
         return new_name
 
     @staticmethod
@@ -1025,14 +1161,38 @@ class Session:
         s = cls(system=data["system"], llm=llm,
                 recent_window_turns=data.get("recent_window_turns", 4),
                 max_steps_per_turn=data.get("max_steps_per_turn", 80), workspace=ws)
-        s.name = data.get("name") or path.stem   # 旧存档无 name → 用文件名，保证继续对话时覆盖同一文件
+        s.name = data.get("name") or path.parent.name  # 旧存档/无 name → 用文件夹名或文件名
+        s.created_at = data.get("created_at") or _ts_from_dirname(path.parent) or time.time()
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
         s._tier_boundaries = data.get("tier_boundaries", []) or []
-        stem = path.stem
-        events_path = path.parent / f"{stem}.events.jsonl"
-        toollog_path = path.parent / f"{stem}.toollog.jsonl"
-        llm_calls_path = path.parent / f"{stem}.llm_calls.jsonl"
+        # 判断是新文件夹结构还是旧扁平结构
+        is_new_structure = path.name == "meta.json"
+        if is_new_structure:
+            # —— 新文件夹结构：<timestamp>/meta.json + events.jsonl + toollog.jsonl + llm_calls.jsonl ——
+            sdir = path.parent
+            s.session_dir = sdir
+            events_path = sdir / "events.jsonl"
+            toollog_path = sdir / "toollog.jsonl"
+            llm_calls_path = sdir / "llm_calls.jsonl"
+        else:
+            # —— 旧扁平结构：<name>.json + <name>.events.jsonl + ...（一次性迁移成新结构）——
+            stem = path.stem
+            sdir = _new_session_dir(ws, s.created_at)
+            s.session_dir = sdir
+            events_path = sdir / "events.jsonl"
+            toollog_path = sdir / "toollog.jsonl"
+            llm_calls_path = sdir / "llm_calls.jsonl"
+            old_events = path.parent / f"{stem}.events.jsonl"
+            old_toollog = path.parent / f"{stem}.toollog.jsonl"
+            old_llm_calls = path.parent / f"{stem}.llm_calls.jsonl"
+            # 旧文件存在则复制到新文件夹（后续按新路径读写）
+            if old_events.exists():
+                shutil.copy2(old_events, events_path)
+            if old_toollog.exists():
+                shutil.copy2(old_toollog, toollog_path)
+            if old_llm_calls.exists():
+                shutil.copy2(old_llm_calls, llm_calls_path)
         if events_path.exists():
             # —— 新格式：重放事件流重建 turns（未完成 turn 进 turns，不丢弃）——
             s.turns = _replay_events(_read_events(events_path))
@@ -1043,7 +1203,7 @@ class Session:
                 s.llm_calls.load_from_jsonl(llm_calls_path)
             s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
         elif "turns" in data:
-            # —— 旧格式迁移：session.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
+            # —— 旧格式迁移：meta.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
             s.toollog.load_list(data.get("toollog", []))            # 0.7.4 嵌入字段进内存
             old_turns = [_turn_from_dict(t, s.toollog) for t in data["turns"]]  # 更老的 ToolCall 在此迁移 record(buffer)
             s.toollog.set_path(toollog_path)                         # flush toollog 内存（含迁移项）建 jsonl
@@ -1157,32 +1317,138 @@ def _replay_events(events: list) -> list:
     return turns
 
 
+def _find_session_dir_by_name(workspace, name: str) -> Optional[Path]:
+    """按 session name 查找对应的文件夹（遍历 sessions/ 下各时间戳文件夹的 meta.json）。
+    找不到返回 None。"""
+    repo_dir = _repo_sessions_dir(workspace)
+    for ts_dir in repo_dir.iterdir():
+        if not ts_dir.is_dir():
+            continue
+        meta_path = ts_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            if data.get("name") == name:
+                return ts_dir
+        except Exception:
+            continue
+    return None
+
+
 def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
-    """查找会话文件：优先新目录 ~/.agt/repos/<hash>/sessions/，
-    再回退旧 ~/.agt/sessions/<hash>/（迁移前的兼容读取）。"""
+    """查找会话 meta.json 文件：
+    1. 如果 path_or_name 是绝对路径且存在，直接返回其 meta.json
+    2. 如果是时间戳文件夹名（YYYYMMDD_HHMMSS 或带 _N 后缀），直接构造路径
+    3. 否则按 name 搜索所有 session 的 meta.json
+    4. 回退旧扁平结构 ~/.agt/sessions/<hash>/*.json
+    返回的都是 meta.json 文件路径。"""
     ws = workspace or Path.cwd()
     repo_dir = _repo_sessions_dir(ws)
     legacy_dir = SESSIONS_DIR / _repo_hash(ws)
-    for base in (repo_dir, legacy_dir):
-        for cand in (Path(path_or_name), base / path_or_name, base / (path_or_name + ".json")):
-            if cand.exists():
-                return cand
-    raise FileNotFoundError(f"找不到会话文件: {path_or_name}（可在 /list 查看）")
+
+    # 1. 绝对路径
+    abs_cand = Path(path_or_name)
+    if abs_cand.is_absolute() and abs_cand.exists():
+        if abs_cand.name.endswith(".json"):
+            return abs_cand
+        # 假设是时间戳文件夹，返回其 meta.json
+        meta_cand = abs_cand / "meta.json"
+        if meta_cand.exists():
+            return meta_cand
+
+    # 2. 时间戳文件夹名（纯数字 + 下划线）
+    if re.match(r"^\d{8}_\d{6}(_\d+)?$", path_or_name):
+        ts_dir = repo_dir / path_or_name
+        meta_cand = ts_dir / "meta.json"
+        if meta_cand.exists():
+            return meta_cand
+
+    # 3. 按 name 搜索
+    found = _find_session_dir_by_name(ws, path_or_name)
+    if found:
+        return found / "meta.json"
+
+    # 4. 回退旧扁平结构
+    for cand in (Path(path_or_name), legacy_dir / path_or_name, legacy_dir / (path_or_name + ".json")):
+        if cand.exists():
+            return cand
+
+    raise FileNotFoundError(f"找不到会话: {path_or_name}（可在 /list 查看）")
 
 
-def list_sessions(workspace=None) -> list[Path]:
-    """列出该工作区 hash 子目录下的会话（按修改时间倒序）。"""
-    return sorted(_repo_sessions_dir(workspace or Path.cwd()).glob("*.json"),
-                  key=lambda p: p.stat().st_mtime, reverse=True)
+def list_sessions(workspace=None) -> list[dict]:
+    """列出该工作区所有 session，返回 [{id, name, created_at, turns, first}] 列表。
+    id = 时间戳文件夹名（用于 load 时定位）；按 created_at 倒序（新的在前）。
+    自动扫描 sessions/ 下各时间戳文件夹的 meta.json；兼容旧扁平结构。"""
+    ws = workspace or Path.cwd()
+    repo_dir = _repo_sessions_dir(ws)
+    legacy_dir = SESSIONS_DIR / _repo_hash(ws)
+    results = []
+
+    # 新结构：扫描时间戳文件夹
+    for ts_dir in repo_dir.iterdir():
+        if not ts_dir.is_dir():
+            continue
+        meta_path = ts_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            turns_count = len(data.get("turns", []))  # 旧格式兼容
+            first = ""
+            if turns_count > 0 and "turns" in data:
+                first = (data["turns"][0].get("user_message", "") or "")[:30]
+            results.append({
+                "id": ts_dir.name,
+                "name": data.get("name") or ts_dir.name,
+                "created_at": data.get("created_at"),
+                "turns": turns_count,
+                "first": first,
+            })
+        except Exception:
+            continue
+
+    # 旧扁平结构兼容：*.json
+    if legacy_dir.exists():
+        for f in legacy_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                turns = data.get("turns", [])
+                first = (turns[0].get("user_message", "") if turns else "")[:30]
+                results.append({
+                    "id": f.stem,
+                    "name": data.get("name") or f.stem,
+                    "created_at": data.get("created_at"),  # 旧格式可能无
+                    "turns": len(turns),
+                    "first": first,
+                })
+            except Exception:
+                continue
+
+    # 按 created_at 倒序（无 created_at 的排最后）
+    results.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return results
 
 
 def session_meta(p: Path) -> dict:
-    """轻量读一个会话文件的展示元信息：{id, name, turns, first}。读取出错返回兜底。"""
+    """轻量读一个会话的展示元信息：{id, name, created_at, turns, first}。
+    p 可以是 meta.json 路径或时间戳文件夹路径。读取出错返回兜底。"""
+    # 标准化为 meta.json 路径
+    if p.is_dir():
+        p = p / "meta.json"
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         turns = data.get("turns", [])
         first = (turns[0].get("user_message", "") if turns else "")[:30]
-        return {"id": p.stem, "name": data.get("name") or p.stem,
-                "turns": len(turns), "first": first}
+        parent = p.parent
+        return {
+            "id": parent.name if parent.name != "sessions" else p.stem,
+            "name": data.get("name") or p.stem,
+            "created_at": data.get("created_at"),
+            "turns": len(turns),
+            "first": first,
+        }
     except Exception:
-        return {"id": p.stem, "name": p.stem, "turns": 0, "first": "(读取失败)"}
+        parent = p.parent if p.is_file() else p
+        return {"id": parent.name, "name": p.stem, "created_at": None, "turns": 0, "first": "(读取失败)"}

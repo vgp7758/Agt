@@ -72,9 +72,12 @@ class LLMCallLog:
 
 
 def load_all_calls(sessions_dir) -> list:
-    """聚合某 repo 下所有 session 的 llm_calls（供 /stats all 跨 session 看整体可靠性）。"""
+    """聚合某 repo 下所有 session 的 llm_calls（供 /stats all 跨 session 看整体可靠性）。
+    新结构：sessions/<timestamp>/llm_calls.jsonl；兼容旧扁平 sessions/*.llm_calls.jsonl。"""
     out = []
-    for p in Path(sessions_dir).glob("*.llm_calls.jsonl"):
+    base = Path(sessions_dir)
+    # 新结构：递归扫描各时间戳文件夹
+    for p in base.rglob("llm_calls.jsonl"):
         try:
             with open(p, encoding="utf-8") as f:
                 for line in f:

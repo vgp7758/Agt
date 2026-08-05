@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from session import Session, SESSIONS_DIR, list_sessions, session_meta
+from session import Session, SESSIONS_DIR, list_sessions
 
 if TYPE_CHECKING:
     from agent import Agent
@@ -86,17 +87,16 @@ def _parse_args(args: list[str]) -> tuple[list[str], dict]:
 # ========== 命令实现 ==========
 
 def _cmd_save(ctx: CommandContext, args):
-    name = _parse_args(args)[0][0] if args else None
-    path = ctx.session.save(name)
+    name = " ".join(_parse_args(args)[0]).strip() or None
+    ctx.session.save(name)
     note = "（日常已自动落盘，本次手动改名另存）" if name else "（日常已自动落盘，本次强制再存一次）"
-    print(f"✅ 已保存：{path.name}  (共 {len(ctx.session.turns)} 轮) {note}")
+    print(f"✅ 已保存：{ctx.session.name}  (共 {len(ctx.session.turns)} 轮) {note}")
 
 
 def _cmd_rename(ctx: CommandContext, args):
-    new = _parse_args(args)[0]
-    new = new[0] if new else ""
+    new = " ".join(_parse_args(args)[0]).strip()
     if not new:
-        print("用法：/rename <新会话名>（改名 + 改存档文件名）")
+        print("用法：/rename <新会话名>（可含空格，如 /rename 我的 项目 笔记）")
         return
     try:
         old = ctx.session.name or "(未命名)"
@@ -107,32 +107,37 @@ def _cmd_rename(ctx: CommandContext, args):
 
 
 def _cmd_resume(ctx: CommandContext, args):
-    positional = _parse_args(args)[0]
-    if not positional:
-        print("用法：/resume <name>  （先用 /list 查看可用会话）")
+    name = " ".join(_parse_args(args)[0]).strip()
+    if not name:
+        print("用法：/resume <name>  （先用 /list 查看可用会话；名称可含空格）")
         return
     try:
-        new_session = Session.load(positional[0], llm=ctx.agent.llm, workspace=ctx.session.workspace)
+        new_session = Session.load(name, llm=ctx.agent.llm, workspace=ctx.session.workspace)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         return
     ctx.agent.set_session(new_session)
-    print(f"✅ 已恢复会话：{positional[0]}")
+    print(f"✅ 已恢复会话：{name}")
     print(new_session.summary_str())
 
 
 def _cmd_list(ctx: CommandContext, args):
-    files = list_sessions()
-    if not files:
+    sessions = list_sessions()
+    if not sessions:
         print("📁 暂无保存的会话（每轮会自动落盘；/save <name> 可改名另存）")
         return
-    print(f"📁 已保存的会话（{len(files)} 个，按最近修改倒序）：")
+    print(f"📁 已保存的会话（{len(sessions)} 个，按创建时间倒序）：")
     print("-" * 72)
-    for f in files:
-        meta = session_meta(f)
-        print(f"  {meta['name'][:26]:<26} | {meta['turns']:>3}轮 | /resume {meta['id']}")
-        if meta["first"] and meta["first"] != "(读取失败)":
-            print(f"  {'':<26} | 首轮：「{meta['first']}」")
+    for s in sessions:
+        name_display = s.get("name") or s.get("id")
+        turns = s.get("turns", 0)
+        sid = s.get("id")
+        first = s.get("first")
+        created = s.get("created_at")
+        ts_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(created)) if created else ""
+        print(f"  {name_display[:26]:<26} | {ts_str:<12} | {turns:>3}轮 | /resume {sid}")
+        if first:
+            print(f"  {'':<26} | 首轮：「{first}」")
     print("-" * 72)
 
 
@@ -145,12 +150,12 @@ def _cmd_recall(ctx: CommandContext, args):
 
 
 def _cmd_show(ctx: CommandContext, args):
-    positional = _parse_args(args)[0]
-    if not positional:
+    name = " ".join(_parse_args(args)[0]).strip()
+    if not name:
         print(ctx.session.summary_str())
         return
     try:
-        s = Session.load(positional[0], llm=ctx.agent.llm, workspace=ctx.session.workspace)
+        s = Session.load(name, llm=ctx.agent.llm, workspace=ctx.session.workspace)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         return
@@ -212,6 +217,14 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
     cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
+    # retrieval_model：Agentic RAG 检索用的便宜模型（存 settings.json，不在 agent/llm 上）
+    try:
+        import config as _cfg
+        cfg["retrieval_model"] = _cfg.get_retrieval_model()
+        if cfg["retrieval_model"] == _cfg.DEFAULT_MODEL:
+            cfg["retrieval_model"] = ""  # 等于默认模型时显示空，避免误导
+    except Exception:
+        cfg["retrieval_model"] = ""
     return cfg
 
 

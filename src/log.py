@@ -35,8 +35,27 @@ class _Fmt(logging.Formatter):
 
 
 def session_log_path(workspace, name: str) -> Path:
-    """某 session 的日志文件路径：~/.agt/repos/<hash>/sessions/<name>.log。"""
-    return REPOS_DIR / _repo_hash(workspace) / "sessions" / f"{name}.log"
+    """某 session 的日志文件路径：~/.agt/repos/<hash>/sessions/<timestamp>/log.log。
+    name 用于显示和搜索，但文件按时间戳文件夹组织。
+    注意：这里只返回路径；实际 session 对象有 session_dir 字段，应该优先用它。
+    本函数用于 session name 已就绪但 session_dir 未建的中间状态（罕见）。"""
+    # 旧兼容：如果还没有按时间戳分文件夹，先查到对应文件夹
+    sessions_dir = REPOS_DIR / _repo_hash(workspace) / "sessions"
+    if sessions_dir.exists():
+        for ts_dir in sessions_dir.iterdir():
+            if not ts_dir.is_dir():
+                continue
+            meta = ts_dir / "meta.json"
+            if meta.exists():
+                try:
+                    import json
+                    data = json.loads(meta.read_text(encoding="utf-8"))
+                    if data.get("name") == name:
+                        return ts_dir / "log.log"
+                except Exception:
+                    pass
+    # 兜底：找不到就返回旧扁平路径（兼容未迁移的旧数据）
+    return sessions_dir / f"{name}.log"
 
 
 class SessionLogHandler(logging.Handler):

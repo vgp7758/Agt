@@ -28,6 +28,8 @@ from llm_client import LLMClient
 from log import configure_logging
 from longterm_memory import LongTermMemory
 from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block
+from spec_tools import (restore_active_spec, clear_active_spec, _format_spec_block,
+                        _clear_active_spec, _set_active_spec, _emit_spec)
 from session import Session, Step, ToolCall, repo_images_dir
 from tools import Toolbox
 from mdrender import render_cli   # LLM 回答的 CLI 渲染（表格→框线表，代码块→带边框）
@@ -144,6 +146,9 @@ class Agent:
         self.session._ltm_episodic_provider = self._ltm_episodic_block
         # 计划注入：加入计划后每轮把【当前计划】块注入 SYSTEM（id/title/design/进度），退出后为空
         self.session._plan_provider = self._plan_system_block
+        # 施工方案（spec）注入：draft/committed/rejected 态 spec 每轮注入 SYSTEM（让 Agent 清楚在等批阅）；
+        # approved 态由生成的 plan 接管注入（避免双重注入）。无活动 spec 返回 ''。
+        self.session._spec_provider = self._spec_system_block
         self._task_guidance_provider_fn: Optional[Callable[[], str]] = None  # 由 chat.build_agent 注入（读 AGENTS.md/rules/skills）；set_session 转挂到新 session
         self.llm.call_recorder = self.session.llm_calls.record   # LLM 调用流水落 llm_calls.jsonl（可观测性）
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
@@ -159,6 +164,9 @@ class Agent:
         self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
         self.active_plan_id: Optional[str] = None  # 当前活动计划 id（= 文件名 stem）；None=无活动计划
         self.active_plan: Optional[dict] = None     # 当前活动计划完整 dict（单一事实源：id/title/design/steps/...）
+        # —— 施工方案（spec）状态 ——
+        self.active_spec_id: Optional[str] = None    # 当前活动 spec id（= 文件名 stem）；None=无活动 spec
+        self.active_spec: Optional[dict] = None      # 当前活动 spec 完整 dict（单一事实源）
         # 纯自主模式状态
         self.autonomous_mode: bool = False
         self.autonomous_end_time: Optional[datetime] = None
@@ -335,6 +343,7 @@ class Agent:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
         return {
             "plan_id": self.active_plan_id,   # 只存活动计划文件名；计划本体在 plans/<plan_id>.json
+            "spec_id": self.active_spec_id,   # 只存活动 spec 文件名；spec 本体在 specs/<spec_id>.json
             "autonomous_mode": self.autonomous_mode,
             "autonomous_end_time": self.autonomous_end_time.isoformat() if self.autonomous_end_time else None,
             "autonomous_prompt": self.autonomous_prompt,
@@ -344,6 +353,7 @@ class Agent:
     def restore_runtime_state(self, state: dict):
         """从存档恢复运行时状态（resume / 切换 session 后调用）。"""
         restore_active_plan(self, state or {})   # 活动计划：按 plan_id 从文件读回；空存档→清空；旧格式自动迁移
+        restore_active_spec(self, state or {})   # 活动 spec：按 spec_id 从文件读回；空存档→清空
         if state:
             self.autonomous_mode = bool(state.get("autonomous_mode", False))
             end = state.get("autonomous_end_time")
@@ -353,6 +363,7 @@ class Agent:
             if "goal_check_script" in state:
                 self.goal_check_script = state["goal_check_script"]
         self._emit_plan_if_any()
+        self._emit_spec_if_any()
 
     def set_session(self, session):
         """切换到指定 session：换引用 + 重新挂状态收集回调 + 恢复附加状态 + 同步 UI。
@@ -364,6 +375,7 @@ class Agent:
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
+        session._spec_provider = self._spec_system_block            # 当前活动 spec·每轮注入
         session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
         session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
         self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
@@ -388,6 +400,18 @@ class Agent:
             return _format_plan_block(self)
         except Exception:
             return ""
+
+    def _spec_system_block(self) -> str:
+        """当前活动 spec 的 SYSTEM 注入块（draft/committed/rejected 态每轮注入；approved/无 spec 返回 ''）。
+        格式化逻辑在 spec_tools._format_spec_block，这里只做转发 + 异常兜底。"""
+        try:
+            return _format_spec_block(self)
+        except Exception:
+            return ""
+
+    def _emit_spec_if_any(self):
+        """把当前 spec 推给 UI（resume 后让前端 spec 面板同步）。"""
+        _emit_spec(self)
 
     # ========== 后台消息 inbox（producer → inbox → 串行消费者 → run） ==========
     def push_message(self, msg: str, source: str = "background", seed: Optional[dict] = None):

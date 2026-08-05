@@ -143,20 +143,32 @@ def clear_active_plan(agent) -> None:
 
 # ========== 渲染 ==========
 
+def _parse_maybe_json(s: str):
+    """尝试把字符串解析成对象：先标准 JSON，再 Python 字面量（单引号 dict，模型常误输出这种）。
+    成功返回解析后的对象，失败返回 None。"""
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    try:
+        import ast
+        return ast.literal_eval(s)
+    except Exception:
+        return None
+
+
 def _step_desc(s) -> str:
     """从 create_plan/add_step 的一个 step 项里取出描述纯文本。
-    模型可能传：纯字符串 / dict(含 description|text|title|content 等) / JSON 字符串。
-    无论哪种，都抽成干净的描述文本，避免 UI 把整坨结构当描述渲染。"""
+    模型可能传：纯字符串 / dict(含 description|text|title|content 等) / JSON 或 Python-literal 字符串
+    （后者如 "{'step':1,'description':'...','status':'pending'}"——模型把整坨结构塞进了 description）。"""
     if isinstance(s, str):
         st = s.strip()
         if st[:1] in ("{", "["):
-            try:
-                parsed = json.loads(st)
+            parsed = _parse_maybe_json(st)
+            if parsed is not None:
                 d = _step_desc(parsed)
                 if d and d != st:
                     return d
-            except Exception:
-                pass
         return st
     if isinstance(s, dict):
         for k in ("description", "desc", "text", "title", "content", "task", "name"):
@@ -283,7 +295,7 @@ def make_plan_tools(agent) -> list:
         if status:
             steps[step - 1]["status"] = status
         if description:
-            steps[step - 1]["description"] = str(description)
+            steps[step - 1]["description"] = _step_desc(description) or str(description)
         _flush(agent)
         _emit_plan(agent)
         return _plan_text(agent)

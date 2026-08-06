@@ -190,11 +190,26 @@ def run_python(code: str = "", file: str = "") -> str:
             pass
 
 
+def _number_lines(text: str) -> str:
+    """给一段文本的每行加行号（宽度按总行数自适应），格式 `N│ 内容`，与 read_file/find_function 同款。
+    recent-file 快照用它：模型看到带行号的最新全文 + 标签里的 version，即可直接按行号 insert/delete/move。
+    超 4000 行首尾各留 2000 行；尾部用【真实行号】编号，模型能看到尾段真实位置。"""
+    lines = text.splitlines()
+    n = len(lines)
+    w = len(str(n))
+    if n <= 4000:
+        return "\n".join(f"{i:>{w}}│ {ln}" for i, ln in enumerate(lines, 1))
+    head = "\n".join(f"{i:>{w}}│ {ln}" for i, ln in enumerate(lines[:2000], 1))
+    trail = "\n".join(f"{i:>{w}}│ {ln}" for i, ln in enumerate(lines[-2000:], n - 1999))
+    return head + "\n... (共{}行，需全文调 read_file)".format(n) + "\n" + trail
+
+
 def read_file(path: str, start_line: int = None, end_line: int = None,
-              line_numbers: bool = False) -> str:
+              line_numbers: bool = True) -> str:
     """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取），末尾附 file_version。
     start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
-    line_numbers=True: 每行前加行号（cat -n 样式），用于接下来要用 insert/delete/move 按行号编辑的场景。
+    line_numbers: 默认 True，每行前加行号（宽度按本段最大行号自适应对齐），用于接下来要用
+    insert/delete/move 按行号编辑的场景；传 False 得不含行号的纯文本。
     返回末尾的 file_version 是该文件当前的内容版本号——传给 insert/delete/move 的 version 参数；
     若编辑时版本对不上，说明文件已被改动、需重读。"""
     target = _resolve(path)
@@ -212,7 +227,8 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     ver_footer = f"\n[file_version={_file_version(target)}]"
     if start_line is None and end_line is None:
         if line_numbers:
-            body = "\n".join(f"{i+1:>5}│ {ln}" for i, ln in enumerate(lines))
+            w = len(str(total))
+            body = "\n".join(f"{i+1:>{w}}│ {ln}" for i, ln in enumerate(lines))
             return f"[{path} 共 {total} 行]\n{body}{ver_footer}"
         return text + ver_footer
     start = max(1, start_line or 1) - 1
@@ -222,7 +238,8 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     selected = lines[start:end]
     header = f"[{path} L{start+1}-L{end}/{total}]"
     if line_numbers:
-        body = "\n".join(f"{start+i+1:>5}│ {ln}" for i, ln in enumerate(selected))
+        w = len(str(end))
+        body = "\n".join(f"{start+i+1:>{w}}│ {ln}" for i, ln in enumerate(selected))
     else:
         body = "\n".join(selected)
     return header + "\n" + body + ver_footer
@@ -422,8 +439,33 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
         s = 0
     count = scope.count(old_string)
     if count == 0:
-        where = f" L{s+1}-L{min(e,total) if (start_line or end_line) else total}" if (start_line or end_line) else ""
-        return f"[未找到]{where} 文件中没有该 old_string"
+        # 精确匹配失败 → 回退：去每行【行尾】空白后做行级比对（唯一则接受；多处则不唯一）。
+        # 只去行尾、不碰行首（缩进是 Python 语义）；tab↔空格不自动规整（tabstop 未知、易跨层级误配）。
+        scope_lines = lines[s:e] if (start_line or end_line) else lines
+        old_lines = old_string.splitlines()
+        m = len(old_lines)
+        fp = [ln.rstrip() for ln in scope_lines]
+        ofp = [ln.rstrip() for ln in old_lines]
+        starts = [i for i in range(len(fp) - m + 1) if fp[i:i + m] == ofp] if (m and m <= len(fp)) else []
+        if not starts:
+            where = f" L{s+1}-L{min(e,total) if (start_line or end_line) else total}" if (start_line or end_line) else ""
+            return (f"[未找到]{where} 精确与去行尾空白后均未命中 old_string；"
+                    f"常见原因：行尾空格、缩进 tab↔空格、或内容已改——重新 read_file 取准确文本")
+        if len(starts) > 1 and not replace_all:
+            return f"[不唯一] 去行尾空白后共匹配 {len(starts)} 处，请加更多上下文让 old_string 唯一，或设 replace_all=True"
+        hits = starts if replace_all else starts[:1]
+        repl = new_string.splitlines()
+        for i in sorted(hits, reverse=True):
+            scope_lines[i:i + m] = repl
+        new_scope = "\n".join(scope_lines)
+        if not (start_line or end_line) and content.endswith("\n") and not new_scope.endswith("\n"):
+            new_scope += "\n"   # splitlines+join 吃掉了文末换行，补回（精确路径本就保留）
+        new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
+        target.write_text(new_content, encoding="utf-8")
+        msg = f"✅ 已替换 {len(hits)} 处（行尾空白容忍匹配，{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
+        if path.endswith(".py") or path.endswith(".pyw"):
+            msg += _py_check(target)
+        return msg
     if count > 1 and not replace_all:
         return f"[不唯一] 共匹配 {count} 处，请加更多上下文让 old_string 唯一，或设 replace_all=True"
     if old_string == new_string:
@@ -550,6 +592,53 @@ def move(path: str, start_line: int, end_line: int, dst_line: int, version: str)
     remaining[ins:ins] = block
     return "✅ " + _apply_lines(target, remaining, path,
                                 f"已把 {path} 第 {s}-{e} 行（{nblock} 行）搬到原第 {d} 行前")
+
+
+def replace_lines(path: str, entries, version: str) -> str:
+    """按行号【一处或多处】整段替换文件内容，单次原子写入——重写整个函数/大段代码用它（比 edit 省 token，不必重吐旧文本）。
+    entries: 替换段数组，每项 {"range": [起, 止], "content": 新文本(可多行)}；range 1-based 含两端；
+             [n,n] 替换第 n 行；content="" 删除该范围（等价 delete）。多处直接传 read_file/grep 查到的原始行号即可——
+             内部按 range 起点降序应用（先改高位不扰动低位行号），各段 range 不许重叠。
+    需传 read_file/grep 返回的 file_version 校验（不匹配=文件已改、拒绝要求重读）；成功返回新 file_version。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[文件不存在] {path}"
+    if not isinstance(entries, list) or not entries:
+        return f"[参数错误] entries 需为非空数组，收到 {type(entries).__name__}"
+    norm = []
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict):
+            return f"[参数错误] entries[{i}] 需为对象 {{range, content}}，收到 {type(e).__name__}"
+        rng = e.get("range")
+        ct = e.get("content")
+        if not (isinstance(rng, list) and len(rng) == 2
+                and all(isinstance(x, int) and not isinstance(x, bool) for x in rng)):
+            return f"[参数错误] entries[{i}].range 需为两个整数 [起, 止]，收到 {rng!r}"
+        if not isinstance(ct, str):
+            return f"[参数错误] entries[{i}].content 需为字符串，收到 {type(ct).__name__}"
+        a, b = rng
+        if a < 1 or a > b:
+            return f"[参数错误] entries[{i}].range={rng} 非法：须 1≤起≤止"
+        norm.append([a, b, ct])
+    ok, _cur, err = _check_version(target, version)
+    if not ok:
+        return err
+    lines = target.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    for a, _b, _ in norm:
+        if a > total:
+            return f"[行号越界] 文件共 {total} 行，range 起={a}（须 ≤{total}）"
+    for seg in norm:                 # 止点截到文件尾（友善，同 delete）
+        seg[1] = min(total, seg[1])
+    asc = sorted(norm, key=lambda x: x[0])   # 非重叠校验：升序看相邻段是否相交
+    for (a1, b1, _), (a2, _b2, _) in zip(asc, asc[1:]):
+        if a2 <= b1:
+            return f"[参数错误] range 重叠：[{a1},{b1}] 与起点 {a2} 的段相交，请合并或调整行号"
+    for a, b, ct in sorted(norm, key=lambda x: x[0], reverse=True):   # 降序：先改高位
+        lines[a - 1:b] = (ct or "").splitlines()
+    new_lines = sum(len((ct or "").splitlines()) for _a, _b, ct in norm)
+    return "✅ " + _apply_lines(target, lines, path,
+                                f"已在 {path} 整段替换 {len(norm)} 处（新内容共 {new_lines} 行）")
 
 
 # ===== 函数定位（find_function）=====
@@ -735,8 +824,9 @@ def find_function(name: str, path: str, lang: str = None, context: int = 0) -> s
             total_matches += 1
             lo, hi = max(0, s - c), min(total - 1, e + c)
             parts.append(f"[{rel} L{s + 1}-L{e + 1}/{total}]  file_version={ver}")
+            w = len(str(hi + 1))
             for j in range(lo, hi + 1):
-                parts.append(f"{j + 1:>5}│ {lines[j]}")
+                parts.append(f"{j + 1:>{w}}│ {lines[j]}")
     if not parts:
         where = f"{path} 下" if target.is_dir() else f"{path} 中"
         return (f"(在{where}未找到 '{name}' 的函数定义)\n"
@@ -1700,7 +1790,7 @@ WEB_SEARCH_OUTPUTS = [
 REAL_TOOLS = Toolbox(
     Tool(run_python),
     Tool(read_file, param_descriptions={
-        "line_numbers": "True=每行前加行号(cat -n 样式)，便于接下来用 insert/delete/move 按行号编辑",
+        "line_numbers": "默认 True=每行前加行号(宽度按本段最大行号自适应对齐)，便于接下来用 insert/delete/move 按行号编辑；False=纯文本",
     }),
     Tool(write_file),
     Tool(edit),
@@ -1717,6 +1807,10 @@ REAL_TOOLS = Toolbox(
         "start_line": "要搬移的起始行号（1-based，含）",
         "end_line": "要搬移的结束行号（1-based，含）",
         "dst_line": "搬到这里之前（按原始行号理解）",
+        "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
+    }),
+    Tool(replace_lines, param_descriptions={
+        "entries": "替换段数组，每项 {range:[起,止](1-based含两端), content:新文本(可多行)}；[n,n]替换单行；content=\"\"删该范围；多处传原始行号即可(内部降序应用)",
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(list_dir),

@@ -73,7 +73,9 @@ SYSTEM = build_system(
     with_date=False,   # 日期/时间改由 tail 每步注入（实时、利于 Agent 感知时段）；persona 保持纯净稳定
     extra=(
         "你是一个强大的自主 Agent。用户用自然语言布置任务，你自主决定用哪些工具、分几步完成。\n"
-        "内置工具：run_python(运行 Python：内联 code 或 .py 文件；跑已保存的脚本传 file=) / read_file / write_file / edit(精确替换) / grep(内容搜索) / "
+        "内置工具：run_python(运行 Python：内联 code 或 .py 文件；跑已保存的脚本传 file=) / read_file / write_file / "
+        "edit(精确替换 old_string→new_string，外科手术式小改、自带位置校验) / replace_lines(按行号整段替换，重写整个函数/大段代码用它，比 edit 省 token) / "
+        "insert(按行号插入) / delete(按行号删行) / move(搬代码块) / grep(内容搜索) / "
         "list_dir(workspace 内) / web_search / open_url(抓网页提取正文) / run_shell(慎用)。"
         "其它工具由 MCP server 动态提供，名字带 __mcp__ 前缀（按描述选用）。\n"
         "复杂任务（涉及多处修改/跨文件/需要先探索）建议先用 explore_subagent 派探索子 Agent 摸清相关模块，"

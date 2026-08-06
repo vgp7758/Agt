@@ -762,7 +762,7 @@ class Agent:
         """扫本步所有 tool_calls，收集涉及的文件路径（最多 3 个；同路径后面覆盖前面）。
         对每个文件读当前快照（>4000 行首尾截断），返回 {call_id: {path,version,text}}。
         run_python/run_script 的处理：run_python 有 file= 时捕获该路径（但 code= 内打开文件是黑盒，漏过可接受）"""
-        from real_tools import _resolve, _file_version, WORKSPACE
+        from real_tools import _resolve, _file_version, WORKSPACE, _number_lines
         seen = {}      # resolved_key -> call_id
         order = []     # ordered resolved_key list (most recent first)
         for tc in reversed(step.tool_calls):
@@ -790,12 +790,7 @@ class Agent:
             cid = seen[key]
             real = __import__("pathlib").Path(key)
             ver = _file_version(real)
-            text = real.read_text(encoding="utf-8")
-            lines = text.splitlines()
-            if len(lines) > 4000:
-                head = "\n".join(lines[:2000])
-                trail = "\n".join(lines[-2000:])
-                text = head + "\n... (共{}行，需全文调 read_file)".format(len(lines)) + "\n" + trail
+            text = _number_lines(real.read_text(encoding="utf-8"))
             rel = real.relative_to(WORKSPACE).as_posix()
             snapshots[cid] = {"path": rel, "version": ver, "text": text}
         return snapshots

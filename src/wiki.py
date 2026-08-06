@@ -17,10 +17,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from real_tools import WORKSPACE
+from real_tools import WORKSPACE, _md_headings
 from tools import Tool, Toolbox
 
 WIKI_ROOT = lambda: WORKSPACE / ".agent" / "wiki"
+
+
+def _md_outline_lines(fp: Path) -> list:
+    """读 md 文件，返回其标题大纲行（按层级缩进 + ·L行号）；非 md / 读失败 → []。
+    模型看到 'auth/flow.md' 下的 '# 认证流程 ·L10'，即可 read_file(...,start_line=10) 跳到该节。"""
+    if fp.suffix.lower() not in {".md", ".markdown"}:
+        return []
+    try:
+        text = fp.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+    return [f"{'  ' * lv}{'#' * lv} {title} ·L{ln}" for (ln, lv, title) in _md_headings(text)]
 
 WIKI_UPDATER_SYSTEM = (
     "你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，维护 `.agent/wiki/` 下的知识库页面。\n"
@@ -56,21 +68,34 @@ def wiki_read(path: str) -> str:
 
 
 def wiki_list(path: str = ".") -> str:
-    """列出 .agent/wiki/ 下某子目录的 wiki 页面。"""
+    """列出 .agent/wiki/ 下某子目录的 wiki 页面；每个 .md 文件下附其标题大纲（各层级标题 + 行号）。"""
     p = _wiki_resolve(path)
     if not p.exists():
         return f"[目录不存在] {path}"
-    entries = sorted(x.relative_to(WIKI_ROOT()).as_posix() + ("/" if x.is_dir() else "") for x in p.iterdir())
-    return "\n".join(entries) if entries else "(空)"
+    children = sorted(p.iterdir(), key=lambda x: x.relative_to(WIKI_ROOT()).as_posix())
+    if not children:
+        return "(空)"
+    out = []
+    for x in children:
+        out.append(x.relative_to(WIKI_ROOT()).as_posix() + ("/" if x.is_dir() else ""))
+        out.extend(_md_outline_lines(x))
+    return "\n".join(out)
 
 
 def wiki_tree() -> str:
-    """显示整个 .agent/wiki/ 的页面树（相对路径）。"""
+    """显示整个 .agent/wiki/ 的页面树（相对路径）；每个 .md 文件下附其标题大纲（层级 + 行号）。"""
     root = WIKI_ROOT()
     if not root.exists():
         return "(wiki 还没有任何页面)"
-    files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
-    return "\n".join(files) if files else "(空)"
+    files = sorted((p for p in root.rglob("*") if p.is_file()),
+                   key=lambda x: x.relative_to(root).as_posix())
+    if not files:
+        return "(空)"
+    out = []
+    for fp in files:
+        out.append(fp.relative_to(root).as_posix())
+        out.extend(_md_outline_lines(fp))
+    return "\n".join(out)
 
 
 def wiki_search(query: str, regex: bool = False, max_results: int = 30) -> str:

@@ -274,6 +274,60 @@ def main():
     # n=4001：尾段 = 第 2002..4001 行（enumerate start = n-1999 = 2002）
     check("_number_lines 尾段用真实行号", "2002│ line 2002" in nlb and "4001│ line 4001" in nlb, nlb)
 
+    # ---- _md_snapshot：.md 结构目录 + 干净正文（frontmatter/标题→行范围，跳过代码围栏 #）----
+    md = ("---\nname: explore-codebase\ndescription: 摸清代码库\n---\n\n"
+          "# 探索代码库 SOP\n\n1. list_dir\n2. 读 README\n\n"
+          "## 进阶\n\n用 grep\n\n# 结束\n")
+    snap = rt._md_snapshot(md)
+    check("_md_snapshot 含 structure/content", "<structure>" in snap and "<content>" in snap, snap)
+    check("_md_snapshot frontmatter 范围", "[L1-L4] frontmatter" in snap, snap)
+    check("_md_snapshot 一级标题范围", "[L6-L14] 探索代码库 SOP" in snap, snap)
+    check("_md_snapshot 嵌套二级缩进+范围", "  [L11-L14] 进阶" in snap, snap)
+    check("_md_snapshot 末尾单行标题", "[L15] 结束" in snap, snap)
+    check("_md_snapshot 正文干净无行号", "│" not in snap and "name: explore-codebase" in snap, snap)
+    # 代码围栏里的 # 不当标题（看 structure 段，content 段仍含原文）
+    md2 = "# Title\n\n```python\n# 注释不是标题\nx=1\n```\n\n## Real\n"
+    struct2 = rt._md_snapshot(md2).split("</structure>")[0]
+    check("_md_snapshot 跳过围栏内 #", "注释不是标题" not in struct2 and "[L1-L8] Title" in struct2, struct2)
+    # read_file(.md) 默认 → 结构目录 + 干净正文 + file_version
+    (TMP / "doc.md").write_text(md, encoding="utf-8")
+    rmd = rt.read_file("doc.md")
+    check("read_file(.md) 默认出结构目录", "<structure>" in rmd and "<content>" in rmd, rmd)
+    check("read_file(.md) 正文无行号", "│" not in rmd, rmd)
+    check("read_file(.md) 仍带 file_version", "file_version=" in rmd, rmd)
+    # read_file(.md) line_numbers=False → 纯文本、无 structure
+    rmd2 = rt.read_file("doc.md", line_numbers=False)
+    check("read_file(.md) line_numbers=False 无结构", "<structure>" not in rmd2 and "name: explore-codebase" in rmd2, rmd2)
+    # <recent-file> 对 .md 也走结构目录（最小假 step/session 调真实采集）
+    import agent as _ag
+    (TMP / "note.md").write_text("# Hi\nbody\n", encoding="utf-8")
+    class _C:
+        def __init__(s, cid): s.call_id = cid
+    class _TL:
+        def view(s, cid): return ("write_file", {"path": "note.md"}, "ok")
+    class _Sess: toollog = _TL()
+    class _Step: tool_calls = [_C("c1")]
+    class _Dummy: pass
+    _du = _Dummy(); _du.session = _Sess()
+    _snaps = _ag.Agent._collect_file_snapshots(_du, _Step())
+    check("recent-file(.md) 走结构目录", "<structure>" in _snaps["c1"]["text"] and "<content>" in _snaps["c1"]["text"], _snaps["c1"]["text"])
+
+    # ---- wiki_list / wiki_tree：.md 文件附标题大纲（层级缩进 + ·L行号）----
+    import wiki
+    wiki.WORKSPACE = TMP
+    wroot = TMP / ".agent" / "wiki"
+    (wroot / "auth").mkdir(parents=True)
+    (wroot / "auth" / "flow.md").write_text("# 认证流程\n\n## JWT 签发\n\n## Token 刷新\n", encoding="utf-8")
+    (wroot / "auth" / "notes.txt").write_text("# 不是 md 大纲\n", encoding="utf-8")
+    (wroot / "arch.md").write_text("# 架构\n\n```python\n# 围栏内不算\n```\n\n## 数据流\n", encoding="utf-8")
+    wt = wiki.wiki_tree()
+    check("wiki_tree 含文件路径", "auth/flow.md" in wt and "arch.md" in wt, wt)
+    check("wiki_tree 附 md 标题大纲", "# 认证流程 ·L1" in wt and "## JWT 签发 ·L3" in wt and "## Token 刷新 ·L5" in wt, wt)
+    check("wiki_tree 非 md 不附大纲", "# 不是 md 大纲" not in wt, wt)
+    check("wiki_tree 跳过围栏内 #", "围栏内不算" not in wt and "## 数据流 ·L7" in wt, wt)
+    wl = wiki.wiki_list("auth")
+    check("wiki_list 单层+大纲", "flow.md" in wl and "# 认证流程 ·L1" in wl and "arch.md" not in wl, wl)
+
     # 清理临时
     shutil.rmtree(TMP, ignore_errors=True)
     shutil.rmtree(TMP, ignore_errors=True)

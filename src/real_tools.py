@@ -19,6 +19,7 @@ import hashlib
 import mimetypes
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -204,12 +205,70 @@ def _number_lines(text: str) -> str:
     return head + "\n... (共{}行，需全文调 read_file)".format(n) + "\n" + trail
 
 
+def _md_headings(text: str) -> list:
+    """提取 Markdown 的 ATX 标题（#~######），返回 [(行号1based, 层级, 标题), ...]。
+    跳过 ``` / ~~~ 代码围栏里的 #。供 _md_snapshot 结构目录、wiki_list/wiki_tree 大纲复用。"""
+    in_fence, fence = False, ""
+    out = []
+    for idx, raw in enumerate(text.splitlines()):
+        s = raw.strip()
+        if s[:3] in ("```", "~~~"):
+            if not in_fence:
+                in_fence, fence = True, s[:3]
+            elif s == fence:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*?)\s*#*$", raw)
+        if m:
+            out.append((idx + 1, len(m.group(1)), m.group(2).strip()))
+    return out
+
+
+def _md_snapshot(text: str) -> str:
+    """Markdown 快照：<structure> 结构目录（frontmatter + ATX 标题 → 行范围，缩进表层级，跳过代码
+    围栏里的 #）+ <content> 干净正文（不带 N│ 行号——结构目录取代行号做 .md 的导航）。
+    recent-file 和 read_file(.md) 都用它。超 4000 行时正文首尾截断、结构目录保持完整。"""
+    lines = text.splitlines()
+    n = len(lines)
+    entries = []  # (start_1based, end_1based, label, level)  level=0 给 frontmatter
+    frontmatter_end = 0   # 1-based：闭合 --- 所在行（0 = 无 frontmatter）
+    if n >= 2 and lines[0].strip() == "---":
+        close = next((j for j in range(1, n) if lines[j].strip() == "---"), None)
+        if close is not None:
+            entries.append((1, close + 1, "frontmatter", 0))
+            frontmatter_end = close + 1
+    # 标题（排除 frontmatter 区域，避免把 YAML 注释 # 当标题）
+    headings = [(ln, lv, t) for (ln, lv, t) in _md_headings(text) if ln > frontmatter_end]
+    for k, (ln, level, title) in enumerate(headings):
+        nxt = next((ln2 for (ln2, lv2, _) in headings[k + 1:] if lv2 <= level), None)
+        end = (nxt - 1) if nxt is not None else n   # 到下一个同级/更高级标题前
+        entries.append((ln, end, title, level))
+    # 结构目录文本（按层级缩进）
+    struct_lines = []
+    for a, b, label, level in entries:
+        indent = "  " * (level - 1)
+        rng = f"[L{a}-L{b}]" if a != b else f"[L{a}]"
+        struct_lines.append(f"{indent}{rng} {label}")
+    struct = "\n".join(struct_lines) or "(无 frontmatter / 标题)"
+    # 正文（超长首尾截断，结构目录保持完整）
+    if n <= 4000:
+        body = text.rstrip("\n")
+    else:
+        body = ("\n".join(lines[:2000]) + f"\n... (共{n}行，需全文调 read_file)\n"
+                + "\n".join(lines[-2000:])).rstrip("\n")
+    return f"<structure>\n{struct}\n</structure>\n<content>\n{body}\n</content>"
+
+
 def read_file(path: str, start_line: int = None, end_line: int = None,
               line_numbers: bool = True) -> str:
     """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取），末尾附 file_version。
     start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
     line_numbers: 默认 True，每行前加行号（宽度按本段最大行号自适应对齐），用于接下来要用
     insert/delete/move 按行号编辑的场景；传 False 得不含行号的纯文本。
+    对 .md 文件特例：line_numbers=True 时返回 <structure> 结构目录 + <content> 干净正文
+    （frontmatter/标题→行范围，结构取代行号做导航）；line_numbers=False 仍是纯文本。
     返回末尾的 file_version 是该文件当前的内容版本号——传给 insert/delete/move 的 version 参数；
     若编辑时版本对不上，说明文件已被改动、需重读。"""
     target = _resolve(path)
@@ -226,6 +285,8 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     total = len(lines)
     ver_footer = f"\n[file_version={_file_version(target)}]"
     if start_line is None and end_line is None:
+        if line_numbers and target.suffix.lower() in {".md", ".markdown"}:
+            return _md_snapshot(text) + ver_footer
         if line_numbers:
             w = len(str(total))
             body = "\n".join(f"{i+1:>{w}}│ {ln}" for i, ln in enumerate(lines))

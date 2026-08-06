@@ -120,6 +120,7 @@ class Agent:
         model_name: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         snapshot_manager=None,
+        session_dir=None,
     ):
         self.base_system = system
         self.tools = tools
@@ -129,12 +130,14 @@ class Agent:
         self.verbose = verbose
         self.on_event = on_event
         self.snapshot_manager = snapshot_manager
+        self.background_tasks: dict = {}   # 后台异步任务登记表 {id:{id,kind,name,task,status,session_dir,result,...}}；子 agent 异步化后供投影/wait
+        self._bg_threads: dict = {}        # 异步子 agent 的后台线程 {agent_id: Thread}（仅内存，不持久化；wait_subagents 用它 join）
         self.model_name = model_name or config.DEFAULT_MODEL
 
         self.llm = LLMClient(model_name=self.model_name,
                              temperature=temperature, enable_thinking=enable_thinking)
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
-                               max_steps_per_turn=max_steps_per_turn)
+                               max_steps_per_turn=max_steps_per_turn, session_dir=session_dir)
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
         self.session._time_provider = self._runtime_time_block  # tail 每步注入实时时间（感知时段）
@@ -348,12 +351,14 @@ class Agent:
             "autonomous_end_time": self.autonomous_end_time.isoformat() if self.autonomous_end_time else None,
             "autonomous_prompt": self.autonomous_prompt,
             "goal_check_script": self.goal_check_script,
+            "background_tasks": self.background_tasks,
         }
 
     def restore_runtime_state(self, state: dict):
         """从存档恢复运行时状态（resume / 切换 session 后调用）。"""
         restore_active_plan(self, state or {})   # 活动计划：按 plan_id 从文件读回；空存档→清空；旧格式自动迁移
         restore_active_spec(self, state or {})   # 活动 spec：按 spec_id 从文件读回；空存档→清空
+        self.background_tasks = (state or {}).get("background_tasks") or {}  # 后台任务登记表
         if state:
             self.autonomous_mode = bool(state.get("autonomous_mode", False))
             end = state.get("autonomous_end_time")
@@ -494,12 +499,30 @@ class Agent:
         return "\n".join(lines)
 
     def _runtime_system_extra(self) -> str:
-        """动态注入 system prompt 的运行时段：当前后台服务清单 + 状态。
-        无服务返回空串（不注入），有则 Agent 每步都能看到哪些在跑/已断，不必自己查。"""
-        lines = self.services.status_lines()
-        if not lines:
+        """动态注入 system prompt 的运行时段：后台服务清单 + 子 Agent 任务看板。
+        两者皆空返回空串（不注入）；有则 Agent 每步都能看到哪些在跑/已完成，不必自己查。"""
+        parts = []
+        svc = self.services.status_lines()
+        if svc:
+            parts.append("【后台服务状态】当前服务：\n" + "\n".join(svc))
+        board = self._format_subagent_board()
+        if board:
+            parts.append(board)
+        return "\n\n".join(parts)
+
+    def _format_subagent_board(self) -> str:
+        """后台子 Agent / 异步任务看板：每项「名称 [agent_id] 任务 — 状态」。
+        每轮注入主 agent 上下文，让它知道本 session 派过哪些子 agent、哪些还在跑
+        （Step 3 异步化后才有 running；当前 sync 形态下都是 done/failed 的历史）。"""
+        if not self.background_tasks:
             return ""
-        return "【后台服务状态】当前服务：\n" + "\n".join(lines)
+        icon = {"running": "⏳进行中", "done": "✅已完成", "failed": "❌失败"}
+        rows = []
+        for t in self.background_tasks.values():
+            st = icon.get(t.get("status"), t.get("status"))
+            task = (t.get("task") or "").strip().replace("\n", " ")[:40]
+            rows.append(f"- {t.get('name')} [agent_id={t.get('id')}] {task} — {st}")
+        return "【后台子 Agent 任务】\n" + "\n".join(rows)
 
     def _runtime_time_block(self) -> str:
         """tail 每步注入实时时间（秒级），让 Agent 感知真实时段（深夜/工作日等）。

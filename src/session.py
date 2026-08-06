@@ -287,7 +287,7 @@ class Turn:
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
                  recent_window_turns: int = 4, max_steps_per_turn: int = 80,
-                 workspace=None):
+                 workspace=None, session_dir=None):
         self.system = system
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         self.recent_window_turns = recent_window_turns
@@ -297,7 +297,8 @@ class Session:
         self.global_summary = ""
         self.name: str = ""                           # session 自动命名（首轮一句话总结）
         self.created_at: float = time.time()          # session 创建时间戳（文件夹名 + meta.json 记录）
-        self.session_dir: Optional[Path] = None       # 专属文件夹路径（<sessions>/<timestamp>/）；未就绪时为 None
+        # 预设 session_dir（子 agent 用：主 session/agents/<agent_id>/）；None=按时间戳现算
+        self.session_dir: Optional[Path] = (Path(session_dir) if session_dir else None)
         self._current: Optional[Turn] = None          # 进行中的轮（run 期间）
         self._save_lock = threading.Lock()            # 异步落盘的并发保护
         self._name_lock = threading.Lock()            # _ensure_name / _ensure_name_early 并发保护
@@ -893,8 +894,9 @@ class Session:
 
     # ========== 会话文件夹 ==========
     def _ensure_session_dir(self):
-        """创建 session 专属的时间戳文件夹并返回路径。首次调用时创建，之后复用。"""
+        """创建 session 专属文件夹并返回路径。预设了 session_dir（子 agent）直接建它；否则按时间戳现算。"""
         if self.session_dir is not None:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
             return self.session_dir
         self.session_dir = _new_session_dir(self.workspace, self.created_at)
         return self.session_dir

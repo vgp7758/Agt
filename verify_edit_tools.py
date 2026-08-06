@@ -328,6 +328,62 @@ def main():
     wl = wiki.wiki_list("auth")
     check("wiki_list 单层+大纲", "flow.md" in wl and "# 认证流程 ·L1" in wl and "arch.md" not in wl, wl)
 
+    # ---- _resolve_agent_id：子 agent id 唯一化（显式优先 / 同名避让）----
+    from multiagent import _resolve_agent_id as _raid
+    check("agent_id 显式优先", _raid({}, "x", "myid") == "myid")
+    check("agent_id 默认=name", _raid({}, "x", "") == "x")
+    check("agent_id 同名避让", _raid({"x": 1}, "x", "") == "x_2")
+    check("agent_id 连号避让", _raid({"x": 1, "x_2": 1, "x_3": 1}, "x", "") == "x_4")
+    check("agent_id 显式不避让(调用方负责)", _raid({"myid": 1}, "x", "myid") == "myid")
+
+    # ---- Session 预设 session_dir：子 agent 嵌套存储的地基 ----
+    from session import Session as _Session
+    preset = TMP / "nested_sess"
+    s = _Session("test sys", session_dir=preset)
+    check("Session 预设 session_dir 生效", s._ensure_session_dir() == preset and preset.is_dir())
+    check("Session 预设 dir 不退回时间戳", s.session_dir == preset)
+    s.name = "test_sub"
+    try:
+        s.save("test_sub")
+        ok_save = (preset / "meta.json").exists()
+    except Exception as _e:
+        ok_save = False
+    check("Session 预设 dir 写出 meta.json", ok_save)
+
+    # ---- _format_subagent_board：后台子 agent 任务看板投影 ----
+    import agent as _agm
+    class _BD: pass
+    _bd = _BD(); _bd.background_tasks = {}
+    check("看板空时不输出", _agm.Agent._format_subagent_board(_bd) == "")
+    _bd.background_tasks = {
+        "explorer": {"id": "explorer", "name": "explorer", "task": "搜索认证模块", "status": "done"},
+        "rev": {"id": "rev", "name": "reviewer", "task": "复审登录流程", "status": "running"},
+        "bad": {"id": "bad", "name": "x", "task": "失败的那个", "status": "failed"},
+    }
+    _board = _agm.Agent._format_subagent_board(_bd)
+    check("看板含标题", "【后台子 Agent 任务】" in _board, _board)
+    check("看板 done 项格式", "explorer [agent_id=explorer] 搜索认证模块 — ✅已完成" in _board, _board)
+    check("看板 running 项格式", "reviewer [agent_id=rev] 复审登录流程 — ⏳进行中" in _board, _board)
+    check("看板 failed 项格式", "x [agent_id=bad] 失败的那个 — ❌失败" in _board, _board)
+
+    # ---- wait_subagents：等后台子 agent 完成、收集结果（假线程模拟，不跑 LLM）----
+    import threading as _th
+    import time as _t
+    import multiagent as _ma
+    class _FA: pass
+    _fa = _FA(); _fa._bg_threads = {}; _fa.background_tasks = {}
+    def _work1():
+        _t.sleep(0.2)   # 模拟子 agent 在跑
+        _fa.background_tasks["s1"].update(status="done", result="搜索结果A", finished_at=_t.time())
+    _fa.background_tasks["s1"] = {"id": "s1", "name": "explorer", "task": "搜A", "status": "running", "result": None}
+    _th1 = _th.Thread(target=_work1, daemon=True); _fa._bg_threads["s1"] = _th1; _th1.start()
+    _fa.background_tasks["s2"] = {"id": "s2", "name": "explorer", "task": "搜B", "status": "done", "result": "结果B"}
+    _wait = {t.name: t for t in _ma.make_subagent_tools(_fa)}["wait_subagents"]
+    _wr = _wait.run(agent_ids="s1,s2", timeout=5)
+    check("wait 等到刚完成的任务", "s1" in _wr and "done" in _wr and "搜索结果A" in _wr, _wr)
+    check("wait 已完成的也返回", "s2" in _wr and "结果B" in _wr, _wr)
+    check("wait 无任务时给提示", "没有正在跑" in _wait.run(agent_ids="", timeout=1), "(应提示无任务)")
+
     # 清理临时
     shutil.rmtree(TMP, ignore_errors=True)
     shutil.rmtree(TMP, ignore_errors=True)

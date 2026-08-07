@@ -839,10 +839,15 @@ function finishVar(tgtId,field,color){
   if(!target){p.input={type:'string',value:{}};target=p.input;}
   target.value={type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}};
   if(field.includes('.')) target.type=color2type(color);
+  // list→list 连线：同步输入端口的 type + item schema 与源输出一致（普通节点 + 复合节点统一处理）
+  const sn=findN(edgeFrom.nodeId);
+  const srcOut=sn?.data?.outputs?.find(o=>o.name===edgeFrom.field);
+  if(srcOut && (srcOut.type==='list'||srcOut.type==='array') && (target.type==='list'||target.type==='array')){
+    if(srcOut.schema){ target.schema=JSON.parse(JSON.stringify(srcOut.schema)); }
+    else { delete target.schema; }
+  }
   // 复合节点 input 被连线→自动解析源 item schema→初始化 item 类型
   if(['21','28'].includes(tn.type)&&parent==='input'){
-    const sn=findN(edgeFrom.nodeId);
-    const srcOut=sn?.data?.outputs?.find(o=>o.name===edgeFrom.field);
     if(srcOut&&srcOut.type==='list'){
       const itemSch=srcOut.schema;
       if(itemSch){tn.data.inputs.inputParameters.find(x=>x.name==='input').input.schema=itemSch;}

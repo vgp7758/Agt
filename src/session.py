@@ -526,9 +526,6 @@ class Session:
             _bt = getattr(self._current, "_before_turn_hint", None)
             if _bt:
                 msgs.append({"role": "system", "content": _bt})
-            _rh = getattr(self._current, "_retrieval_hint", None)
-            if _rh:
-                msgs.append({"role": "system", "content": _rh})
             msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             # 本步 pending 的"用户中途补充"（user 角色，带标签）：跟在已完成的 tool 结果后一起发出；
             # 该步一生成便锚到其 preceding_hint，后续步它滚入历史中部、不再每步尾部复读
@@ -628,9 +625,6 @@ class Session:
             _bt = getattr(self._current, "_before_turn_hint", None)
             if _bt:
                 body.append({"role": "system", "content": _bt})
-            _rh = getattr(self._current, "_retrieval_hint", None)
-            if _rh:
-                body.append({"role": "system", "content": _rh})
             body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
             _psh = getattr(self._current, "_pending_step_hint", None)
             if _psh:

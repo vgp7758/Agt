@@ -523,6 +523,9 @@ class Session:
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
             msgs.append({"role": "user", "content": self._user_content(self._current)})
+            _bt = getattr(self._current, "_before_turn_hint", None)
+            if _bt:
+                msgs.append({"role": "system", "content": _bt})
             _rh = getattr(self._current, "_retrieval_hint", None)
             if _rh:
                 msgs.append({"role": "system", "content": _rh})
@@ -533,21 +536,23 @@ class Session:
             if _psh:
                 msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
 
-        # —— tail ambient（易变块：实时时间 + 后台服务状态 + 活动计划，放 user 后保稳定前缀缓存）——
-        self._append_ambient(msgs, self._time_provider)
-        self._append_ambient(msgs, self._system_extra_provider)
-        self._append_ambient(msgs, self._plan_provider)
-        self._append_ambient(msgs, self._spec_provider)
-        # —— 长期记忆·情境层（按当前 user_message 召回 episodic）——
-        # 放在【当前轮之后】收尾：这是每轮按问题重新召回的【易变块】，归入 tail——
-        # 不污染稳定前缀，留给前缀缓存最大命中面（对照 Claude Code 滚动断点：稳定靠前、易变靠后）。
+        # —— tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆，放 user 后保前缀缓存）——
+        tail_blocks = []
+        self._collect_ambient(tail_blocks, self._time_provider)
+        self._collect_ambient(tail_blocks, self._system_extra_provider)
+        self._collect_ambient(tail_blocks, self._plan_provider)
+        self._collect_ambient(tail_blocks, self._spec_provider)
+        # 情境层（episodic）按问题召回，放 tail 最后
         if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
             try:
                 block = self._ltm_episodic_provider(self._current.user_message)
-                if block:
-                    msgs.append({"role": "system", "content": self._ambient(block)})
+                if block and block.strip():
+                    tail_blocks.append(block.strip())
             except Exception:
                 pass
+        grouped_tail = self._ambient_group(tail_blocks)
+        if grouped_tail:
+            msgs.append({"role": "system", "content": grouped_tail})
         return msgs
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
@@ -561,6 +566,25 @@ class Session:
                 msgs.append({"role": "system", "content": self._ambient(block)})
         except Exception:
             pass
+
+    def _collect_ambient(self, blocks: list, provider, *args):
+        """收集一个背景 provider 的返回（不包标签），追加到 blocks 列表。用于 tail 合并。"""
+        if not provider:
+            return
+        try:
+            block = provider(*args)
+            if block and block.strip():
+                blocks.append(block.strip())
+        except Exception:
+            pass
+
+    @staticmethod
+    def _ambient_group(blocks: list[str]) -> str:
+        """把多个背景块合并进一组 <system-reminder>（子块之间空行分隔）。全空返回空串。"""
+        parts = [b for b in blocks if b and b.strip()]
+        if not parts:
+            return ""
+        return "<system-reminder>\n" + "\n\n".join(parts) + "\n</system-reminder>"
 
     def _tier_level(self, turn_idx: int) -> int:
         """turn 所在档位级别：当前段(最后边界之后)=1，往前每跨一个边界 +1，封顶 max_level。
@@ -601,6 +625,9 @@ class Session:
             body.extend(self._render_turn_frozen(i))
         if self._current is not None:
             body.append({"role": "user", "content": self._user_content(self._current)})
+            _bt = getattr(self._current, "_before_turn_hint", None)
+            if _bt:
+                body.append({"role": "system", "content": _bt})
             _rh = getattr(self._current, "_retrieval_hint", None)
             if _rh:
                 body.append({"role": "system", "content": _rh})
@@ -608,13 +635,22 @@ class Session:
             _psh = getattr(self._current, "_pending_step_hint", None)
             if _psh:
                 body.append({"role": "user", "content": _MIDTURN_TAG + _psh})
-        # tail ambient（易变：实时时间 + 后台状态 + 活动计划 + 活动 spec，放 user 后保前缀缓存）
-        self._append_ambient(body, self._time_provider)
-        self._append_ambient(body, self._system_extra_provider)
-        self._append_ambient(body, self._plan_provider)
-        self._append_ambient(body, self._spec_provider)
+        # tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆）
+        tail_blocks = []
+        self._collect_ambient(tail_blocks, self._time_provider)
+        self._collect_ambient(tail_blocks, self._system_extra_provider)
+        self._collect_ambient(tail_blocks, self._plan_provider)
+        self._collect_ambient(tail_blocks, self._spec_provider)
         if self._ltm_episodic_provider and self._current and self._current.user_message:
-            self._append_ambient(body, self._ltm_episodic_provider, self._current.user_message)
+            try:
+                block = self._ltm_episodic_provider(self._current.user_message)
+                if block and block.strip():
+                    tail_blocks.append(block.strip())
+            except Exception:
+                pass
+        grouped_tail = self._ambient_group(tail_blocks)
+        if grouped_tail:
+            body.append({"role": "system", "content": grouped_tail})
         return body
 
     def _build_tiered_messages(self, msgs: list[dict]) -> list[dict]:
@@ -901,6 +937,21 @@ class Session:
         self.session_dir = _new_session_dir(self.workspace, self.created_at)
         return self.session_dir
 
+    def _bind_persistence_paths(self):
+        """name 就绪后：建专属文件夹 + 绑定 events/toollog/llm_calls 路径 + 切日志 handler。
+        幂等——session_dir 已建则不重建，_bind_event_path 缓冲为空不覆盖已有文件。
+        把「绑定路径」从 _ensure_name 命名逻辑里解耦，供 rename_session 工具抢先命名时补绑
+        （否则 _ensure_name 因 self.name 已设而跳过 → events 不落盘）。"""
+        sdir = self._ensure_session_dir()
+        self._bind_event_path(sdir / "events.jsonl")
+        self.toollog.set_path(sdir / "toollog.jsonl")
+        self.llm_calls.set_path(sdir / "llm_calls.jsonl")
+        if self._log_handler is not None:
+            try:
+                self._log_handler.set_session(self.workspace, self.name)
+            except Exception as e:
+                _LOG.warning("日志 handler 切换失败: %s", e)
+
     # ========== 自动命名 ==========
     def _ensure_name(self):
         """首轮完成后自动给 session 命名（一句话总结首轮）。name 一旦设定不再变。
@@ -930,17 +981,8 @@ class Session:
                 # fallback：用首轮 user_message 片段，再不行用时间戳
                 seed = _NAME_SAFE_RE.sub("", first.user_message[:12]).strip()
                 self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-            # name 刚就绪：创建专属文件夹，绑定所有文件路径
-            sdir = self._ensure_session_dir()
-            self._bind_event_path(sdir / "events.jsonl")
-            self.toollog.set_path(sdir / "toollog.jsonl")
-            self.llm_calls.set_path(sdir / "llm_calls.jsonl")
-            # 通知日志 handler 把首轮缓冲 flush 到 <name>.log 并切到直写
-            if self._log_handler is not None:
-                try:
-                    self._log_handler.set_session(self.workspace, self.name)
-                except Exception as e:
-                    _LOG.warning("日志 handler 切换失败: %s", e)
+            # name 刚就绪：绑定所有持久化路径（建文件夹 + events/toollog/llm_calls + 日志）
+            self._bind_persistence_paths()
 
     def _ensure_name_early(self, user_message: str, reasoning: str = "", tool_names: list = None):
         """第一次工具调用前异步为 session 命名 + 落盘（daemon 线程，不阻塞工具执行）。
@@ -973,17 +1015,8 @@ class Session:
                 else:
                     seed = _NAME_SAFE_RE.sub("", user_message[:12]).strip()
                     self.name = ("session_" + seed) if seed else f"session_{int(time.time())}"
-                # name 刚就绪：创建专属文件夹，绑定所有文件路径
-                sdir = self._ensure_session_dir()
-                self._bind_event_path(sdir / "events.jsonl")
-                self.toollog.set_path(sdir / "toollog.jsonl")
-                self.llm_calls.set_path(sdir / "llm_calls.jsonl")
-                # 通知日志 handler flush 缓冲并切到 <name>.log
-                if self._log_handler is not None:
-                    try:
-                        self._log_handler.set_session(self.workspace, self.name)
-                    except Exception as e:
-                        _LOG.warning("日志 handler 切换失败: %s", e)
+                # name 刚就绪：绑定所有持久化路径（建文件夹 + events/toollog/llm_calls + 日志）
+                self._bind_persistence_paths()
             # 落盘放锁外：_autosave 内部用 _save_lock（不同锁），避免死锁且不阻塞命名线程
             self._autosave()
 
@@ -1143,9 +1176,11 @@ class Session:
                     pass
         old_name = self.name
         self.name = new_name
-        # 如果已有 session_dir，说明已经落盘过 → 需要重写 meta.json 更新 name
-        if self.session_dir is not None:
-            self.save()  # 覆盖写 meta.json，把 "name" 字段刷成新的
+        # 抢先命名（rename_session 工具在首轮 _ensure_name 前调用）时补绑 events/toollog
+        # 路径——否则 _ensure_name 因 self.name 已设而跳过，events 不落盘。
+        if self._event_path is None:
+            self._bind_persistence_paths()
+        self.save()  # 总是 save：session_dir 已建，覆盖写 meta.json 把 name 刷成新的
         return new_name
 
     @staticmethod

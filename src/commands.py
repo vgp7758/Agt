@@ -102,6 +102,12 @@ def _cmd_rename(ctx: CommandContext, args):
         old = ctx.session.name or "(未命名)"
         ctx.session.rename(new)
         print(f"✅ 会话已重命名：{old} → {ctx.session.name}")
+        # 通知 WebUI 同步标题（CLI 无 on_event 时跳过）
+        if getattr(ctx.agent, "on_event", None):
+            try:
+                ctx.agent.on_event({"type": "session_renamed", "name": ctx.session.name})
+            except Exception:
+                pass
     except ValueError as e:
         print(f"❌ {e}")
 

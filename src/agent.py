@@ -177,7 +177,7 @@ class Agent:
         self.pending_messages: List[str] = []  # 用户插入的消息队列
         self.goal_check_script: str = ""       # 目标达成验证脚本(Python，输出 PASS=达成)
         # —— 工作流生命周期钩子（每轮 run 开头重置）——
-        self._hook_notes: list[str] = []        # 待注入的 system 旁注（before_tool/after_tool/before_answer）
+        self._hook_notes: list[dict] = []       # 待注入的 system 旁注（before_tool/after_tool/before_answer），每项 {hook, name, result}
         self._answer_redo_draft: Optional[str] = None   # before_answer 重跑时上一次草稿（临时 assistant 续接）
         self._last_answer_draft: Optional[str] = None   # 收敛判据：上次注入所针对的草稿
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
@@ -525,11 +525,14 @@ class Agent:
         return "【后台子 Agent 任务】\n" + "\n".join(rows)
 
     def _runtime_time_block(self) -> str:
-        """tail 每步注入实时时间（秒级），让 Agent 感知真实时段（深夜/工作日等）。
-        persona 不再含日期（保前缀缓存稳定），现实时间统一由这里每步刷新进 tail。"""
+        """tail 每步注入实时时间（秒级）+ 当前会话名，让 Agent 感知真实时段（深夜/工作日）
+        并知道自己所在的会话（从而判断自动命名是否合适、是否该 rename_session）。
+        persona 不再含日期（保前缀缓存稳定），现实时间与会话名统一由这里每步刷新进 tail。"""
         try:
             from datetime import datetime
-            return "当前时间：" + datetime.now().strftime("%Y-%m-%d %H:%M:%S %A")
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S %A")
+            name = getattr(self.session, "name", "") or "(未命名)"
+            return f"当前时间：{now}\n当前会话：{name}"
         except Exception:
             return ""
 
@@ -619,11 +622,11 @@ class Agent:
                 pass
 
     # ========== 工作流生命周期钩子 ==========
-    def _run_hooks(self, hook: str, context: dict) -> list[str]:
-        """运行所有声明在 hook 位置触发的工作流，返回需注入的 result 列表（已带【...】前缀）。
+    def _run_hooks(self, hook: str, context: dict) -> list[dict]:
+        """运行所有声明在 hook 位置触发的工作流，返回需注入的旁注列表（结构化）。
         context: 该钩子位置的上下文（key 对应工作流开始节点 <out> 声明）。
         工作流约定返回 {inject, result, message}：
-          - inject=True 且 result 非空 → 加入返回列表（作 system 旁注喂主 LLM）；
+          - inject=True 且 result 非空 → 加入返回列表 {hook, name, result}（作 system 旁注喂主 LLM）；
           - message 非空 → 发 workflow_message 事件到 UI（不进主 LLM，用于静默通知类钩子）。
         失败仅发 auto_wf_error 事件，绝不炸主循环。"""
         notes = []
@@ -643,12 +646,12 @@ class Agent:
                         self._emit({"type": "workflow_message", "name": hw["name"], "hook": hook,
                                     "text": message})
                     if inject and result.strip():
-                        notes.append(f"【{hook} 钩子「{hw['name']}」补充】{result}")
+                        notes.append({"hook": hook, "name": hw["name"], "result": result.strip()})
                 except Exception as e2:
                     self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
                                 "text": str(e2)[:200]})
         except Exception as e:
-            _LOG.error("钩子机制异常(%s): %s", hook, e)  # 钩子机制本身绝不影响主循环
+            _LOG.error("钩子机制异常 (%s): %s", hook, e)
         return notes
 
     def _turn_context_str(self) -> str:
@@ -680,8 +683,18 @@ class Agent:
             # before_answer 重跑：让模型看到它上一版草稿，再据旁注修正
             msgs.append({"role": "assistant", "content": self._answer_redo_draft})
             self._answer_redo_draft = None
-        for n in notes:
-            msgs.append({"role": "system", "content": n})
+        # 钩子旁注【按位置分组】：同一位置（before_tool/after_tool/before_answer）多个触发合并成
+        # 一组 <system-reminder pos="...">，用 <hook> 子标签区分各工作流；不同位置各自独立一条，
+        # 保持各钩子结果在消息队列里的位置归属（而非混并成一坨）。
+        if notes:
+            from collections import OrderedDict
+            groups = OrderedDict()
+            for n in notes:
+                groups.setdefault(n["hook"], []).append(n)
+            for hook_pos, items in groups.items():
+                parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in items]
+                inner = "\n".join(parts)
+                msgs.append({"role": "system", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
         return msgs
 
     # ========== Agentic RAG：自动检索历史工具调用（注入 user 后 system）==========
@@ -861,7 +874,11 @@ class Agent:
                 pass
             bt_notes = self._run_hooks("before_turn", bt_ctx)
             if bt_notes and not auto_flag:
-                msg = "\n\n".join(bt_notes) + "\n\n---\n用户消息：" + msg
+                # before_turn 对 user_message 做意图识别/预检索等预处理，结果作为【user 之后的补充】注入
+                # （不拼进 user 文本）：多个钩子合并成一组挂到当前 turn，session 投影时在 user 消息后渲染
+                parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in bt_notes]
+                self.session._current._before_turn_hint = (
+                    '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>')
             if not auto_flag:
                 self._emit({"type": "user", "text": msg, "image_count": len(imgs or [])})
             else:

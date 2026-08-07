@@ -1039,6 +1039,10 @@ ws.onmessage=(ev)=>{
       addRow('sys', `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);
       setSessionTitle(m.name);  // 加载会话后更新标题
       break;
+    case 'session_renamed':
+      // Agent 调用 rename_session 工具 / /rename 后，标题即时同步
+      if(m.name) setSessionTitle(m.name);
+      break;
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking': addTrace('think', '💭 '+m.text); break;

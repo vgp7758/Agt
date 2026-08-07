@@ -21,6 +21,7 @@ from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from spec_tools import make_spec_tools
 from memory_tools import make_recall_tools
+from session_tools import make_session_tools
 from longterm_memory import make_ltm_tools
 from download import make_download_tools
 from toollog import make_tool_log_tools
@@ -213,6 +214,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")
     _reg(make_recall_tools(agent), "记忆召回")
+    _reg(make_session_tools(agent), "会话")
     _reg(make_ltm_tools(agent), "长期记忆")
     _reg(make_download_tools(agent), "资产下载")
     _reg(make_tool_log_tools(agent), "工具日志")

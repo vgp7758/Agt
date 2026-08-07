@@ -33,3 +33,4 @@ build/
 src/cache_sim.py
 /demo_tiered_projection.py
 /verify_prefix_cache.py
+blog/

@@ -47,13 +47,27 @@ class WorkflowError(Exception):
 # ========== 变量解析（Coze 的 literal / ref / object_ref）==========
 
 def _dotted_get(obj, name: str):
-    """按点号取子字段：'obj.field1' → obj['field1']['field1']...；支持 list 下标。"""
+    """按点号取子字段：'obj.field1' → obj['field1']['field1']...；支持 list 下标 + .length/.is_empty。
+    .length 适用 list/str/dict（返回 len()）；.is_empty 适用 list/str（返回 bool）。"""
     if not name:
         return obj
     cur = obj
     for part in name.split("."):
         if cur is None:
             return None
+        # .length / .is_empty 特殊属性（适用 list/str/dict）
+        if part == "length":
+            try:
+                cur = len(cur)
+            except TypeError:
+                return None
+            continue
+        if part == "is_empty":
+            try:
+                cur = len(cur) == 0
+            except TypeError:
+                return None
+            continue
         if isinstance(cur, dict):
             cur = cur.get(part)
         elif isinstance(cur, list):
@@ -859,13 +873,23 @@ def _handle_batch(node: dict, ctx) -> dict:
 
 # ----- 意图识别(22) / HTTP(45) / 子工作流(9) / 插件(4) -----
 
-def _try_parse(s) -> dict:
-    """尝试把字符串解析成 dict；失败返回 {}（用于把工具/子工作流的文本结果当结构化用）。"""
-    try:
-        v = json.loads(s) if isinstance(s, str) else s
-        return v if isinstance(v, dict) else {}
-    except Exception:
-        return {}
+def _try_parse(s):
+    """尝试把字符串解析成 Python 对象（dict/list/标量）；失败返回 None。
+    先标准 JSON，再 Python 字面量（单引号 dict 风格，模型/工具常误输出这种）。
+    返回 None 让调用方回退到原始字符串。"""
+    if isinstance(s, str):
+        # 标准 JSON
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+        # Python repr 风格（单引号 dict/list）
+        try:
+            import ast
+            return ast.literal_eval(s)
+        except Exception:
+            return None
+    return s if isinstance(s, (dict, list)) else None
 
 
 # http 节点 url/body 模板统一用 render_template 引用 inputParameters 变量（{{变量名}}）：
@@ -1085,16 +1109,18 @@ def _handle_plugin(node: dict, ctx) -> dict:
             actual_tools = LIGHT_TOOLS
         else:
             raise WorkflowError(f"工具 {tool_name!r} 未在工具箱中找到")
-    raw = actual_tools.call(tool_name, args)
-    outputs = {"raw": raw}
-    # 尝试解析 raw 为结构化，按用户声明的 outputs 字段填充
+    raw = actual_tools.call(tool_name, args)          # Tool.run 统一返回 str
+    # raw 可能是 JSON/Python-repr 字符串（list/dict 等），尝试解析回 Python 对象；
+    # 解析成功则 outputs 里存解析后的对象（下游代码节点引用时直接拿 list/dict）
     parsed = _try_parse(raw)
+    outputs = {"raw": parsed if parsed is not None else raw}
+    # 按用户声明的 outputs 字段填充
     declared = node.get("data", {}).get("outputs", []) or []
     for o in declared:
         nm = o.get("name")
         if not nm or nm == "raw":
             continue
-        val = _extract_field(parsed if parsed else raw, nm, o)
+        val = _extract_field(parsed if parsed is not None else raw, nm, o)
         # 纯文本返回的工具（如 web_search），JSON 解析失败拿不到字段名，
         # 若声明类型为 string 则直接兜底透传全文
         if val is None and o.get("type", "string") == "string":
@@ -1227,7 +1253,8 @@ def _stringify_result(result) -> str:
 
 
 def _next_node(edges: list, node_id: str, port) -> str | None:
-    """找 node_id 的后继：有 port 时匹配 sourcePortID，否则优先空端口、再取第一个。"""
+    """找 node_id 的后继：有 port 时匹配 sourcePortID，否则优先空端口、再取第一个。
+    保留给复合节点（loop/batch）内部的线性子图调度用——主流程已改 DAG 拓扑调度。"""
     outs = [e for e in edges if str(e.get("sourceNodeID")) == node_id]
     if not outs:
         return None
@@ -1239,6 +1266,38 @@ def _next_node(edges: list, node_id: str, port) -> str | None:
         if not e.get("sourcePortID"):
             return str(e["targetNodeID"])
     return str(outs[0]["targetNodeID"])
+
+
+# 聚合节点（OR 汇聚）：任一前驱完成即可继续，不等所有前驱
+_AGGREGATOR_TYPES = {"32"}
+
+
+def _build_dag(nodes: dict, edges: list) -> tuple[dict, dict]:
+    """构建 DAG 调度所需的拓扑索引：
+    - out_edges: sourceNodeID → [(targetNodeID, sourcePortID)] 扇出索引
+    - pending_in: node_id → 未完成前驱数（aggregator 节点 OR 语义初值=1）
+    entry 节点不算前驱（它由 _bind_entry 处理，视为已完成）。"""
+    out_edges: dict[str, list] = {}
+    in_count: dict[str, int] = {}
+    for e in edges:
+        src = str(e.get("sourceNodeID"))
+        tid = str(e.get("targetNodeID"))
+        out_edges.setdefault(src, []).append((tid, e.get("sourcePortID", "")))
+        in_count[tid] = in_count.get(tid, 0) + 1
+    pending_in: dict[str, int] = {}
+    for nid, node in nodes.items():
+        ntype = str(node.get("type"))
+        ic = in_count.get(nid, 0)
+        # aggregator（type 32）OR 语义：任一前驱完成即可，初值=1
+        # exit（type 2）终点：任一路径到达即结束，初值=1（多分支汇聚到 exit）
+        if ntype in _AGGREGATOR_TYPES or ntype == "2":
+            pending_in[nid] = 1 if ic > 0 else ic
+        else:
+            pending_in[nid] = ic
+    # entry 视为已完成：其所有后继 pending_in -1
+    for tid, _ in out_edges.get(ENTRY_ID, []):
+        pending_in[tid] = pending_in.get(tid, 0) - 1
+    return out_edges, pending_in
 
 
 def _run_node_with_batch(node: dict, handler, ctx):
@@ -1375,28 +1434,56 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
         raise WorkflowError("画布缺少开始节点（id=100001, type=1）")
     ctx.node_outputs[ENTRY_ID] = _bind_entry(entry, inputs or {})
 
-    current = _next_node(edges, ENTRY_ID, None)
-    if current is None:
-        return _stringify_result({})     # 空工作流
+    # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支）——
+    from collections import deque
+    out_edges, pending_in = _build_dag(nodes, edges)
+    # 初始就绪：所有 pending_in<=0 的节点（entry 后继 + 无入边孤立节点，ComfyUI 风格）
+    ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0)
+    executed: set[str] = set()
 
     for _ in range(max_steps):
+        if not ready:
+            break   # 所有路径走完
+        current = ready.popleft()
+        if current in executed:
+            continue   # 防重复
+        executed.add(current)
         if current == EXIT_ID:
             raw = _exit_result(nodes[EXIT_ID], ctx)
             return raw if return_exit_dict else _stringify_result(raw)
         node = nodes.get(current)
         if node is None:
-            raise WorkflowError(f"节点 {current} 不存在（边指向了不存在的节点）")
+            raise WorkflowError(f"节点 {current} 不存在")
         ntype = str(node.get("type"))
         handler = NODE_HANDLERS.get(ntype)
         if handler is None:
-            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）——该节点类型将在后续阶段支持")
-        result = _run_node_with_batch(node, handler, ctx)
-        ctx.node_outputs[current] = result.get("outputs") or {}
-        nxt = _next_node(edges, current, result.get("port"))
-        if nxt is None:
-            return _stringify_result(ctx.node_outputs.get(current, {}))  # 隐式结束
-        current = nxt
-    raise WorkflowError(f"执行步数超限({max_steps})，疑似死循环")
+            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）")
+        try:
+            result = _run_node_with_batch(node, handler, ctx)
+            ctx.node_outputs[current] = result.get("outputs") or {}
+            port = result.get("port")   # selector/intent 分支端口
+        except Exception as e:
+            # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
+            # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
+            ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
+            port = f"{current}_error"   # 每个节点默认 error 端口名
+
+        # 扇出 + port 匹配：遍历当前节点的所有出边
+        for tid, src_port in out_edges.get(current, []):
+            # 有 port 时严格匹配：只激活 src_port==port 的边（error/"true"/"false"/"branch_0"）
+            # error 端口兼容两种写法：{node_id}_error 或统一 "error"
+            if port:
+                if src_port != port and not (port.endswith("_error") and src_port == "error"):
+                    continue
+            pending_in[tid] -= 1
+            if pending_in[tid] <= 0 and tid not in executed:
+                ready.append(tid)
+    # 循环结束：走完所有路径但无 exit（隐式结束）→ 返回最后一个执行的节点输出
+    if executed:
+        last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
+        if last and last in ctx.node_outputs:
+            return _stringify_result(ctx.node_outputs[last])
+    return _stringify_result({})
 
 
 def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
@@ -1444,11 +1531,19 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
     trace[ENTRY_ID] = bound
     _safe_emit({"phase": "end", "id": ENTRY_ID, "outputs": bound})
 
-    current = _next_node(edges, ENTRY_ID, None)
-    if current is None:
-        return ({}, order, trace)   # 空工作流（entry 无后继）
+    # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支），和 execute() 一致但带 on_node 回调 ——
+    from collections import deque
+    out_edges, pending_in = _build_dag(nodes, edges)
+    ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0)
+    executed: set[str] = set()
 
     for _ in range(max_steps):
+        if not ready:
+            break
+        current = ready.popleft()
+        if current in executed:
+            continue
+        executed.add(current)
         # —— 结束节点：手动补发事件，outputs = 结构化最终结果 ——
         if current == EXIT_ID:
             exit_node = nodes[EXIT_ID]
@@ -1460,23 +1555,37 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
             return (exit_dict, order, trace)
         node = nodes.get(current)
         if node is None:
-            raise WorkflowError(f"节点 {current} 不存在（边指向了不存在的节点）")
+            raise WorkflowError(f"节点 {current} 不存在")
         ntype = str(node.get("type"))
         handler = NODE_HANDLERS.get(ntype)
         if handler is None:
-            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）——该节点类型将在后续阶段支持")
+            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）")
         _safe_emit({"phase": "start", "id": current, "title": _title(node), "ntype": ntype})
-        result = _run_node_with_batch(node, handler, ctx)
-        outs = result.get("outputs") or {}
+        try:
+            result = _run_node_with_batch(node, handler, ctx)
+            outs = result.get("outputs") or {}
+        except Exception as e:
+            # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
+            outs = {"_error": f"{type(e).__name__}: {e}"}
+            result = {"outputs": outs, "port": f"{current}_error"}
         ctx.node_outputs[current] = outs
         order.append(current)
         trace[current] = outs
         _safe_emit({"phase": "end", "id": current, "outputs": outs})
-        nxt = _next_node(edges, current, result.get("port"))
-        if nxt is None:
-            return (ctx.node_outputs.get(current, {}), order, trace)   # 隐式结束（无 exit）
-        current = nxt
-    raise WorkflowError(f"执行步数超限({max_steps})，疑似死循环")
+        port = result.get("port")
+
+        for tid, src_port in out_edges.get(current, []):
+            # 有 port 时严格匹配；error 端口兼容 {node_id}_error 和统一 "error" 两种写法
+            if port:
+                if src_port != port and not (port.endswith("_error") and src_port == "error"):
+                    continue
+            pending_in[tid] -= 1
+            if pending_in[tid] <= 0 and tid not in executed:
+                ready.append(tid)
+    # 走完所有路径但无 exit（隐式结束）
+    last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
+    last_outs = ctx.node_outputs.get(last, {}) if last else {}
+    return (last_outs, order, trace)
 
 
 # ========== 用户工具：.agent/workflows/tools/*.py 自动注册 ==========

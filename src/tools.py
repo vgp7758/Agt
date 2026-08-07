@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Callable, get_origin, get_type_hints
 
 # Python 类型 → JSON Schema 类型
@@ -81,11 +82,14 @@ class Tool:
         }
 
     def run(self, **kwargs) -> str:
-        """执行工具，返回字符串结果。出错也返回错误文本，不抛异常。"""
+        """执行工具，返回字符串结果。出错也返回错误文本，不抛异常。
+        list/dict 结果用 JSON 序列化（而非 str() 的单引号 repr），便于工作流节点解析回结构化对象。"""
         try:
             result = self.func(**kwargs)
         except Exception as e:
             result = f"[工具执行出错] {type(e).__name__}: {e}"
+        if isinstance(result, (dict, list)):
+            return json.dumps(result, ensure_ascii=False, default=str)
         return str(result)
 
     def __repr__(self):

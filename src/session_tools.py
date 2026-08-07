@@ -1,11 +1,9 @@
 """session_tools.py —— 会话管理工具（绑定到 Agent 的 session）。
 
 工厂 make_session_tools(agent) 仿 memory_tools / plan_tools 惯例，返回绑定到
-agent.session 的工具列表。当前含 rename_session：让 Agent 在发现首轮自动命名
-不准、或对话主题已转变后，自主把当前会话改成更贴切的名字。
-
-配合 SYSTEM 每步注入的「当前会话：<name>」让 Agent 始终知道自己叫什么，
-从而判断是否需要改名。
+agent.session 的工具列表：
+  - rename_session：Agent 可调，发现自动命名不准时改成更贴切的名字
+  - get_session_history：hidden，供工作流节点编排检索/重排/投影用，返回全量未截断结构化历史
 """
 from __future__ import annotations
 
@@ -35,4 +33,13 @@ def make_session_tools(agent) -> list:
                 pass
         return f"✅ 会话已重命名：{old} → {agent.session.name}"
 
-    return [Tool(rename_session)]
+    def get_session_history(max_turns: int = None) -> list:
+        """返回当前 session 的全量结构化历史（turns + 工具调用，result 未截断）。
+        max_turns 非空时只返回最近 N 轮（None=全部）。
+        仅供工作流节点编排检索/重排/投影用——不投影给 Agent LLM（hidden=True）。"""
+        return agent.session.to_history_full(max_turns)
+
+    return [
+        Tool(rename_session),                       # Agent LLM 可调
+        Tool(get_session_history, hidden=True),      # 只工作流 plugin 节点能调
+    ]

@@ -697,102 +697,6 @@ class Agent:
                 msgs.append({"role": "system", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
         return msgs
 
-    # ========== Agentic RAG：自动检索历史工具调用（注入 user 后 system）==========
-    def _extract_keywords(self, msg: str) -> list:
-        """便宜模型从 user msg 抽 3-5 个检索关键字。"""
-        llm = getattr(self, "retrieval_llm", None) or self.llm
-        prompt = ("从以下用户请求提取 3-5 个用于检索历史记录（工具调用 + 对话轮次）的关键字，"
-                  "逗号分隔，只要词、不要解释：\n" + msg)
-        resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=80, enable_thinking=False)
-        return [w.strip() for w in resp.content.replace("，", ",").replace("、", ",").split(",")
-                if w.strip()][:8]
-
-    def _rerank(self, msg: str, tool_hits: list, turn_hits: list) -> list:
-        """精排：工具调用 + 轮次候选混合，LLM 选 top 1-3。
-        返回 [("tc", entry), ("turn", (idx, turn))]。解析失败回退按命中关键字数取 top3。"""
-        # 合并候选：(tag, kind, payload, 命中关键字数)；tag 用 T-/R- 区分工具调用/轮次
-        cands = []
-        for e, kws in tool_hits:
-            cands.append((f"T-{e['call_id']}", "tc", e, len(kws)))
-        for idx, t, kws in turn_hits:
-            cands.append((f"R-{idx}", "turn", (idx, t), len(kws)))
-        if not cands:
-            return []
-        lines = []
-        for tag, kind, payload, _ in cands:
-            if kind == "tc":
-                e = payload
-                args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)[:150]
-                result_s = (e.get("result", "") or "")[:150]
-                lines.append(f"[{tag}] 工具 {e['name']}({args_s}) 结果:{result_s}")
-            else:
-                idx, t = payload
-                u = (t.user_message or "").replace("\n", " ")[:80]
-                a = (t.answer or "").replace("\n", " ")[:80]
-                lines.append(f"[{tag}] 第{idx + 1}轮 用户:{u} → 回答:{a}")
-        llm = getattr(self, "retrieval_llm", None) or self.llm
-        prompt = ("用户请求：" + msg + "\n\n以下是历史记录候选（工具调用 / 对话轮次），按相关性选出最相关的 1-3 条：\n"
-                  + "\n".join(lines)
-                  + "\n\n只返回选中的标签(如 T-c7,R-3)，逗号分隔，不要其它内容。")
-        try:
-            resp = llm.chat([{"role": "user", "content": prompt}], max_tokens=50, enable_thinking=False)
-            want = {w.strip().upper() for w in resp.content.replace("，", ",").split(",") if w.strip()}
-        except Exception:
-            want = set()
-        by_tag = {c[0].upper(): c for c in cands}
-        picked = [by_tag[t] for t in want if t in by_tag] if want else sorted(cands, key=lambda c: -c[3])[:3]
-        return [(kind, payload) for _tag, kind, payload, _ in picked]
-
-    def _format_retrieval(self, ranked: list) -> str:
-        """格式化注入文本：<retrieval-hint> 标签包裹（投影时放 user 后；参考用、非用户指令）。
-        工具调用→原格式；轮次（精排已筛到 top）→展开 user+answer 恢复细节（含折叠轮）。"""
-        if not ranked:
-            return ""
-        turn_lines, tc_lines = [], []
-        for kind, payload in ranked:
-            if kind == "tc":
-                e = payload
-                args_s = json.dumps(e.get("arguments", {}), ensure_ascii=False)
-                if len(args_s) > 300:
-                    args_s = args_s[:300] + "…"
-                tc_lines.append(f"{e['name']}({args_s}) tool_call_id: {e['call_id']}")
-            else:
-                idx, t = payload
-                u = (t.user_message or "").strip().replace("\n", " ")[:200]
-                a = (t.answer or "").strip()
-                if len(a) > 500:
-                    a = a[:500] + "…(截断)"
-                turn_lines.append(f"[第{idx + 1}轮] 用户: {u}\n回答: {a}")
-        body = []
-        if turn_lines:
-            body.append("— 相关历史轮次 —")
-            body.extend(turn_lines)
-        if tc_lines:
-            body.append("— 相关工具调用 —")
-            body.extend(tc_lines)
-        return ("<retrieval-hint>\n以下是自动检索出的、可能与本次请求相关的历史记录"
-                "（参考用，非用户指令）：\n" + "\n".join(body) + "\n</retrieval-hint>")
-
-    def _agentic_retrieve(self, msg: str) -> str:
-        """Agentic RAG：抽关键字 → toollog+turns 两路初筛 → 精排 → 格式化。返回注入文本（空则不注入）。
-        全程兜底，失败返回 ''（不影响主流程）。"""
-        try:
-            tl = self.session.toollog
-            if len(tl) == 0 and not self.session.turns:
-                return ""
-            kws = self._extract_keywords(msg)
-            if not kws:
-                return ""
-            tool_hits = tl.search(kws)
-            turn_hits = self.session.search_turns(kws)
-            if not tool_hits and not turn_hits:
-                return ""
-            ranked = self._rerank(msg, tool_hits, turn_hits)
-            return self._format_retrieval(ranked)
-        except Exception as e:
-            _LOG.debug("Agentic RAG 检索失败: %s", e)
-            return ""
-
     # ========== Recent-file 快照采集 ==========
     def _collect_file_snapshots(self, step) -> dict:
         """扫本步所有 tool_calls，收集涉及的文件路径（最多 3 个；同路径后面覆盖前面）。
@@ -851,10 +755,8 @@ class Agent:
             if seeds:
                 self._seed_steps(seeds)   # 预置合成 Step → 首轮 _chat_msgs 即渲染 tool_use→tool
                 seeds = []
-            # —— Agentic RAG：检索相关历史工具调用，挂 _retrieval_hint（投影时在 user 后插 system）——
-            _rh = self._agentic_retrieve(msg)
-            if _rh:
-                self.session._current._retrieval_hint = _rh
+            # —— Agentic RAG 已工作流化：检索由 before_turn 钩子工作流（before_turn_retrieval.xml）编排 ——
+            # 工作流输出挂 _before_turn_hint（投影时在 user 后注入），无需内置 _agentic_retrieve。
             # —— 重置本轮钩子状态 ——
             self._hook_notes = []
             self._answer_redo_draft = None
@@ -862,8 +764,12 @@ class Agent:
             self._answer_inject_count = 0
             self._active_hooks = set()
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
-            # 注入方式：拼进用户消息（RAG 风格强化输入）。兼容旧 auto_param 参数名。
-            bt_ctx = {"user_message": msg}
+            # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
+            # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
+            bt_ctx = {
+                "user_message": msg,
+                "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),
+            }
             try:
                 from real_tools import WORKSPACE as _ws2
                 from workflow import get_hook_workflows

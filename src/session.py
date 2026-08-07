@@ -1102,7 +1102,8 @@ class Session:
         return "\n".join(lines)
 
     def to_history(self) -> list:
-        """导出全量历史（结构化），供 webui resume 后原样渲染。含每步 reasoning 与回答的 reasoning。"""
+        """导出全量历史（结构化），供 webui resume 后原样渲染。含每步 reasoning 与回答的 reasoning。
+        tool_calls 的 result 截断到 500 字（渲染够用）。"""
         out = []
         for i, t in enumerate(self.turns):
             steps = []
@@ -1110,10 +1111,33 @@ class Session:
                 tcs = []
                 for tc in s.tool_calls:
                     n, a, r = self.toollog.view(tc.call_id)
-                    tcs.append({"name": n, "arguments": a, "result": (r or "")[:500]})
+                    tcs.append({"name": n, "arguments": a, "result": (r or "")[:500],
+                                "call_id": tc.call_id})
                 if tcs:
                     steps.append({"tool_calls": tcs, "reasoning": s.reasoning or ""})
             out.append({"turn": i + 1, "user": t.user_message, "answer": t.answer,
+                        "summary": t.summary, "steps": steps,
+                        "answer_reasoning": t.answer_reasoning or ""})
+        return out
+
+    def to_history_full(self, max_turns: int = None) -> list:
+        """导出全量历史的【未截断】版：结构与 to_history 相同，但 tool_calls 的 result 不截断
+        （从 toollog.view 取完整原文）。供 get_session_history 工具给工作流节点编排检索/重排/投影用——
+        工作流节点拿全量后自行决定怎么过滤、投影、截断。max_turns 非空只返回最近 N 轮。"""
+        turns = self.turns[-max_turns:] if max_turns else self.turns
+        offset = len(self.turns) - len(turns)
+        out = []
+        for i, t in enumerate(turns):
+            steps = []
+            for s in t.steps:
+                tcs = []
+                for tc in s.tool_calls:
+                    n, a, r = self.toollog.view(tc.call_id)
+                    tcs.append({"name": n, "arguments": a, "result": r or "",
+                                "call_id": tc.call_id})
+                if tcs:
+                    steps.append({"tool_calls": tcs, "reasoning": s.reasoning or ""})
+            out.append({"turn": offset + i + 1, "user": t.user_message, "answer": t.answer,
                         "summary": t.summary, "steps": steps,
                         "answer_reasoning": t.answer_reasoning or ""})
         return out

@@ -138,6 +138,7 @@ let panning=false,panX=0,panY=0,panStartX=0,panStartY=0;
 let dz=1;  // zoom level
 let collapsedFields=new Set();     // 折叠的 object 字段（默认全部展开）
 let _pendingHandles=[];            // 连线断开 handle（延后到节点之上绘制）
+let _scissors=[];                  // Ctrl 按下时每条线中点的剪刀：{x,y,info}
 let _compositeStack=[];            // 子画布栈 [{parentId, name, nodes, edges}]
 let _currentParent=null;           // 当前所在复合节点 id（null=顶层）
 
@@ -266,6 +267,10 @@ function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 // fallbackIdx：当 portID 非标准（如模型手写的 'stats_phase'，执行器/本编辑器都不认）时，
 // 按该边在源节点出边中的顺序兜底定位到对应分支端口，保证至少视觉对齐。
 function flowOutPosFor(n, portID, fallbackIdx){
+  // error 端口（{nodeId}_error 或统一 error）：普通节点在右下角（nodeH-6）
+  if(portID && (portID===n.id+'_error' || portID==='error') && !['8','22'].includes(n.type)){
+    return {x:n.x+n.w, y:n.y+nodeH(n)-6};
+  }
   if(!['8','22'].includes(n.type)) return flowOutPos(n);
   const baseY = HDR_H + Math.max(nodeInputs(n).length, nodeOutputs(n).length)*ROW_H;
   let idx=-1, total=0, yForIdx=null;
@@ -317,6 +322,7 @@ function renderAll(){
   svg.style.transform='scale('+dz+')';
   svg.style.transformOrigin='0 0';
   _pendingHandles=[];
+  _scissors=[];
   // 画布尺寸跟随节点动态扩展（无固定边界，节点不被裁剪）+ 至少覆盖可视区
   let maxX=1000,maxY=800;
   WF.nodes.forEach(n=>{maxX=Math.max(maxX,(n.x||0)+(n.w||200)+240);maxY=Math.max(maxY,(n.y||0)+(n.h||140)+240);});
@@ -358,6 +364,7 @@ function renderAll(){
       const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
       path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
       svg.appendChild(path);
+      _scissors.push({x:(sx.x+tp.x)/2,y:(sx.y+tp.y)/2,info:{kind:'var',key,tgtNode:tn.id,tgtField:p.name}});
       // 目标端断开 handle：延后到节点之上绘制（避免被节点遮挡）
       _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:p.name},sp:sx,color:col});
     });
@@ -379,6 +386,7 @@ function renderAll(){
         const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
         path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
         svg.appendChild(path);
+        _scissors.push({x:(sx.x+tp.x)/2,y:(sx.y+tp.y)/2,info:{kind:'var',key,tgtNode:tn.id,tgtField:'__aggr__',aggrGi:gi,aggrVi:vi}});
         _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:'__aggr__',aggrGi:gi,aggrVi:vi},sp:sx,color:col});
       });
     });
@@ -387,15 +395,11 @@ function renderAll(){
   // ---- 流程线 ----
   WF.edges.forEach((ed,i)=>{
     const sn=findN(ed.sourceNodeID),tn=findN(ed.targetNodeID); if(!sn||!tn)return;
-    let sp;
-    if(['8','22'].includes(sn.type)){
-      // 该边在源节点出边中的顺序（兜底定位非标准 portID 的分支线）
-      const outEs=WF.edges.filter(e=>e.sourceNodeID===ed.sourceNodeID);
-      const fIdx=outEs.findIndex(e=>e===ed);
-      sp=flowOutPosFor(sn, ed.sourcePortID, fIdx);
-    }else{
-      sp=flowOutPos(sn);
-    }
+    // 该边在源节点出边中的顺序（兜底定位非标准 portID 的分支线）
+    const outEs=WF.edges.filter(e=>e.sourceNodeID===ed.sourceNodeID);
+    const fIdx=outEs.findIndex(e=>e===ed);
+    // 统一走 flowOutPosFor：它内部处理 selector/intent 分支端口 + error 端口 + 普通默认端口
+    const sp=flowOutPosFor(sn, ed.sourcePortID, fIdx);
     const tp=flowInPos(tn);
     const sel=selEdge&&selEdge.kind==='flow'&&selEdge.i===i;
     const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i});
@@ -404,6 +408,7 @@ function renderAll(){
     if(ed.sourcePortID){
       svg.appendChild(elm('text',{x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2-8,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
     }
+    _scissors.push({x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2,info:{kind:'flow',i}});
     // 目标端断开 handle：延后绘制
     _pendingHandles.push({x:tp.x,y:tp.y,r:5,fill:'#fff',stroke:'#533483',info:{kind:'flow',i},sp:sp,color:'#fff'});
   });
@@ -417,6 +422,16 @@ function renderAll(){
     handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect(h.info,h.sp,h.color);};
     svg.appendChild(handle);
   });
+
+  // ---- Ctrl 按下：每条线中点显示剪刀图标，点击剪断 ----
+  if(ctrlDown){
+    _scissors.forEach(s=>{
+      const bg=elm('circle',{cx:s.x,cy:s.y,r:10,fill:'#ef4444',stroke:'#fff','stroke-width':1.5,style:'cursor:pointer'});
+      bg.onclick=(e)=>{e.stopPropagation();doDisconnect(s.info);};
+      svg.appendChild(bg);
+      svg.appendChild(elm('text',{x:s.x,y:s.y+4,'text-anchor':'middle','font-size':12,'pointer-events':'none'},'✂'));
+    });
+  }
 
   // ---- 拖拽临时线 ----
   if(edgeFrom){
@@ -443,8 +458,10 @@ function renderNode(n){
   g.appendChild(elm('text',{x:n.w/2,y:21,class:'node-type-tag','text-anchor':'middle'},n.type==='4'?('🔧 '+(n.data.toolName||'plugin')):(TYPE_LABEL[n.type]+' · '+n.type)));
   // 流程端口（入口只有出口，出口只有入口）
   if(n.type!=='1'){
-    const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow',title:'流程入口'});
-    fIn.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
+    const fInHit=elm('circle',{cx:0,cy:HDR_H/2,r:12,fill:'transparent','pointer-events':'all',cursor:'crosshair',title:'流程入口'});
+    fInHit.onmouseup=(e)=>{e.stopPropagation();finishFlow(n.id);};
+    g.appendChild(fInHit);
+    const fIn=elm('circle',{cx:0,cy:HDR_H/2,r:6,class:'port-flow','pointer-events':'none'});
     g.appendChild(fIn);
   }
   // 流程出口（2=exit、8/22=分支各自出端口、19/29=循环控制节点 均无流程出口）
@@ -452,6 +469,12 @@ function renderNode(n){
     const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
     fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
     g.appendChild(fOut);
+    // 默认 error 输出端口（节点报错时走此端口，port 名 = {nodeId}_error）
+    // 放在节点右下角，红色小圆点区分
+    const eY=nodeH(n)-6;
+    const eOut=elm('circle',{cx:n.w,cy:eY,r:4,fill:'#ef4444',stroke:'#ef4444','stroke-width':1.5,cursor:'crosshair',title:'错误出口（节点报错时走此端口）'});
+    eOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id,n.id+'_error');};
+    g.appendChild(eOut);
   }
 
   // 变量端口（按 nodeRows 行渲染；入口只渲染输出侧，出口只渲染输入侧）
@@ -466,10 +489,13 @@ function renderNode(n){
       const y=HDR_H+ri*ROW_H+ROW_H/2;
       const col=fieldColor(ir.type);
       if(!ir.sub){
+        // 透明命中区（扩大点击区域，难点中端口的问题）+ 可见小圆点
+        const hit=elm('circle',{cx:0,cy:y,r:11,fill:'transparent','pointer-events':'all',cursor:'crosshair'});
+        hit.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
+        hit.onmousedown=(e)=>{e.stopPropagation();};
+        g.appendChild(hit);
         // 顶层字段端口
-        const port=elm('circle',{cx:0,cy:y,r:5,class:'port-var',fill:col,stroke:col});
-        port.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
-        port.onmousedown=(e)=>{e.stopPropagation();};
+        const port=elm('circle',{cx:0,cy:y,r:5,class:'port-var',fill:col,stroke:col,'pointer-events':'none'});
         g.appendChild(port);
         // object 展开标记
         if(ir.type==='object'){
@@ -497,9 +523,11 @@ function renderNode(n){
       }else{
         // 子字段端口（按层级缩进；object 子字段可继续展开）
         const cx=8*(ir.depth||1);
-        const port=elm('circle',{cx,cy:y,r:4,class:'port-var',fill:col,stroke:col});
-        port.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
-        port.onmousedown=(e)=>{e.stopPropagation();};
+        const hit=elm('circle',{cx,cy:y,r:10,fill:'transparent','pointer-events':'all',cursor:'crosshair'});
+        hit.onmouseup=(e)=>{e.stopPropagation();finishVar(n.id,ir.field,col);};
+        hit.onmousedown=(e)=>{e.stopPropagation();};
+        g.appendChild(hit);
+        const port=elm('circle',{cx,cy:y,r:4,class:'port-var',fill:col,stroke:col,'pointer-events':'none'});
         g.appendChild(port);
         const label=ir.field.split('.').pop();
         if(ir.type==='object'){
@@ -623,9 +651,11 @@ function renderNode(n){
       const vars=grp.variables||[];
       vars.forEach((v,i)=>{
         const vy=gy+12+(i+1)*18;
-        const port=elm('circle',{cx:10,cy:vy,r:4,class:'port-var',fill:col,stroke:col});
-        port.onmouseup=(e)=>{e.stopPropagation();finishAggrVar(n.id,gname,i,col);};
-        port.onmousedown=(e)=>{e.stopPropagation();};
+        const hit=elm('circle',{cx:10,cy:vy,r:10,fill:'transparent','pointer-events':'all',cursor:'crosshair'});
+        hit.onmouseup=(e)=>{e.stopPropagation();finishAggrVar(n.id,gname,i,col);};
+        hit.onmousedown=(e)=>{e.stopPropagation();};
+        g.appendChild(hit);
+        const port=elm('circle',{cx:10,cy:vy,r:4,class:'port-var',fill:col,stroke:col,'pointer-events':'none'});
         g.appendChild(port);
         g.appendChild(elm('text',{x:20,y:vy+3,class:'sub-row',fill:col},'var'+(i+1)));
       });
@@ -771,7 +801,7 @@ function doDisconnect(info){
   }
   showProps();renderAll();
 }
-function startFlow(nodeId){const n=findN(nodeId);const p=flowOutPos(n);edgeFrom={kind:'flow',nodeId,x:p.x,y:p.y,mx:p.x,my:p.y,color:'#fff'};renderAll();}
+function startFlow(nodeId,port){const n=findN(nodeId);const p=port?{x:n.x+n.w,y:n.y+nodeH(n)-6}:flowOutPos(n);edgeFrom={kind:'flow',nodeId,port:port||'',x:p.x,y:p.y,mx:p.x,my:p.y,color:port?'#ef4444':'#fff'};renderAll();}
 function startVar(nodeId,field,color,x,y){edgeFrom={kind:'var',nodeId,field,x,y,mx:x,my:y,color};renderAll();}
 function finishFlow(tgtId){
   if(!edgeFrom||edgeFrom.kind!=='flow'){edgeFrom=null;renderAll();return;}
@@ -897,7 +927,7 @@ function renderSelectorBranches(g,n){
       const lc=cc.left?.input?.value?.content;
       lSel.innerHTML='<option value="">左值…</option>'+_condRefOptions(n,lc);
       lSel.value=(lc&&typeof lc==='object'&&lc.blockID)?lc.blockID+'.'+(lc.name||''):'';
-      lSel.onchange=()=>{ensureCond(br);const ps=lSel.value.split('.');const bid=ps.length>1?ps[0]:'';const nm=ps.length>1?ps.slice(1).join('.'):ps[0];br.cond.conditions[0].left={input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:bid,name:nm}}}};saveBranchCond(n,br);};
+      lSel.onchange=()=>{ensureCond(br);const ps=lSel.value.split('.');const bid=ps.length>1?ps[0]:'';const nm=ps.length>1?ps.slice(1).join('.'):ps[0];const tp=nm.endsWith('.length')?'integer':nm.endsWith('.is_empty')?'boolean':'string';br.cond.conditions[0].left={input:{type:tp,value:{type:'ref',content:{source:'block-output',blockID:bid,name:nm}}}};saveBranchCond(n,br);};
       const opS=document.createElement('select');opS.style.cssText='font-size:9px;padding:0;background:#0f3460;color:#fff;border:1px solid #533483';
       OPERATORS.forEach(o=>{const op=document.createElement('option');op.value=o.v;op.textContent=o.t;if(cc.operator===o.v)op.selected=true;opS.appendChild(op);});
       opS.onchange=()=>{br.cond.conditions[0].operator=parseInt(opS.value);saveBranchCond(n,br);renderAll();};
@@ -1622,6 +1652,11 @@ function _condRefOptions(n,content){
     if(on.id===n.id)return;
     _outFieldOptions(on).forEach(o=>{
       h+='<option value="'+on.id+'.'+o.path+'"'+(content?.blockID===on.id&&content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
+      // list 类型输出：额外提供 .length / .is_empty 作为可选的左值
+      if(o.type==='list'||o.type==='array'){
+        h+='<option value="'+on.id+'.'+o.path+'.length"'+(content?.blockID===on.id&&content?.name===o.path+'.length'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.length</option>';
+        h+='<option value="'+on.id+'.'+o.path+'.is_empty"'+(content?.blockID===on.id&&content?.name===o.path+'.is_empty'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.is_empty</option>';
+      }
     });
   });
   // 当前节点声明的输入字段（若 ref 了上游 output，作为别名列出——选中即保存为该上游引用，语义等价）
@@ -1718,9 +1753,14 @@ function setCondRef(bi,ci,side,v){
     const dot=v.indexOf('.');
     if(dot>0){
       content.blockID=v.slice(0,dot);content.name=v.slice(dot+1);
-      const on=findN(content.blockID);
-      const of=(on?_outFieldOptions(on):[]).find(x=>x.path===content.name);
-      if(of)target.input.type=of.type||'string';
+      // .length/.is_empty 衍生属性：直接推断类型（list/str→length=integer, is_empty=boolean）
+      if(content.name.endsWith('.length'))target.input.type='integer';
+      else if(content.name.endsWith('.is_empty'))target.input.type='boolean';
+      else{
+        const on=findN(content.blockID);
+        const of=(on?_outFieldOptions(on):[]).find(x=>x.path===content.name);
+        if(of)target.input.type=of.type||'string';
+      }
     }else{content.blockID='';content.name=v;}
   }else{
     content.name=v;if(content.path)content.path=[v];
@@ -2191,14 +2231,17 @@ async function loadTools(){
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}
 
 document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
+let ctrlDown=false;   // Ctrl 按下时显示每条线中点的剪刀图标
 document.addEventListener('keydown',(e)=>{
   if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveWf();}
+  if(e.key==='Control'&&!ctrlDown){ctrlDown=true;renderAll();}
   if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'){
     WF.nodes=WF.nodes.filter(n=>n.id!==selNode);WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
     WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
     selNode=null;showProps();renderAll();
   }
 });
+document.addEventListener('keyup',(e)=>{if(e.key==='Control'){ctrlDown=false;renderAll();}});
 window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
 // 全局错误捕获——JS 报错弹出 toast 便于定位
 window.onerror=function(msg,url,line,col,err){
@@ -2249,6 +2292,8 @@ function autoLayout(silent){
       if(isComp&&(n.id===BREAK_ID||n.id===CONT_ID)) return;
       let mx=-1;
       pred[n.id].forEach(p=>{ if(layer[p]!=null && layer[p]>mx) mx=layer[p]; });
+      // 无入边节点与 entry 同级（layer=0，ComfyUI 风格起始节点），不再孤立到画布最右
+      if(pred[n.id].length===0){ mx=0; }
       if(mx>=0){ const nl=mx+1; if(layer[n.id]!==nl){layer[n.id]=nl;changed=true;} }
     });
     if(!changed) break;

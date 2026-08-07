@@ -214,7 +214,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")
     _reg(make_recall_tools(agent), "记忆召回")
-    _reg(make_session_tools(agent), "会话")
+    _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
     _reg(make_ltm_tools(agent), "长期记忆")
     _reg(make_download_tools(agent), "资产下载")
     _reg(make_tool_log_tools(agent), "工具日志")

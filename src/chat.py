@@ -229,6 +229,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
             agent.tool_groups[t.name] = "工作流"
     _reg(make_mcp_tools(mcp_mgr, str(workspace / ".mcp.json")), "MCP管理")
     _reg(make_lsp_tools(agent, mcp_mgr), "LSP")
+    from workflow_debug_tools import make_workflow_debug_tools
+    _reg(make_workflow_debug_tools(agent), "工作流调试")
     if verbose:
         if ok:
             print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")

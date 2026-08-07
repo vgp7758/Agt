@@ -1033,8 +1033,10 @@ _WORKFLOW_SPEC_LOCAL = Path(__file__).resolve().parent.parent / "docs" / "workfl
 
 def read_workflow_spec(start: int = 0, max_chars: int = 6000) -> str:
     """读取工作流规范全文（docs/workflow-spec.md）。【写工作流前务必先读】了解节点类型/字段/变量引用。
+    返回格式：<structure> 标题大纲（层级 + 行号）+ <content> 正文。
     从线上 git raw 读取（与本地 docs/ 同源），网络不通时回退本地 docs/。
-    start: 从第几个字符开始读(0-based)；max_chars: 本次最多返回字符数(默认 6000)。"""
+    start: 在此标题目录中从第 start 个字符开始读正文(0-based)；
+    max_chars: 本次最多返回字符数(默认 6000)。"""
     text = None
     # 1) 优先线上 git raw（保证拿到最新版）
     try:
@@ -1052,7 +1054,8 @@ def read_workflow_spec(start: int = 0, max_chars: int = 6000) -> str:
             pass
     if not text:
         return f"[读取失败] git raw 与本地 {_WORKFLOW_SPEC_LOCAL} 均无法获取 workflow-spec.md"
-    return _paginate_text(text, "workflow-spec.md", start, max_chars)
+    # .md 文件用 _md_snapshot：先输出 <structure> 标题大纲 + 行号，再 <content> 正文
+    return _md_snapshot(text)
 
 
 # 工作流 demo 读取（git raw，本地兜底）

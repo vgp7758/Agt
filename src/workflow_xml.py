@@ -791,3 +791,51 @@ def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
     lines.append("</workflow>")
     return "\n".join(lines) + "\n"
 
+
+def parse_xml_fragment(root, ntype: str) -> dict:
+    """从 XML Element 解析节点的 data 字段（inputParameters/outputs/code/toolName 等）。
+    供 server._hotswap_node / workflow_debug_tools.hotswap_workflow_node 共用。"""
+    data = {"inputs": {"inputParameters": []}, "outputs": []}
+    for child in root:
+        tag = child.tag
+        if tag == "in":
+            nm = child.get("name", ""); tp = child.get("type", "string"); ref = child.get("ref", "")
+            inp = {"name": nm, "input": {"type": tp, "value": {"type": "literal", "content": ""}}}
+            if ref:
+                parts = ref.split(".")
+                inp["input"]["value"] = {"type": "ref", "content": {"source": "block-output", "blockID": parts[0], "name": ".".join(parts[1:]) or ""}}
+            data["inputs"].setdefault("inputParameters", []).append(inp)
+        elif tag == "out":
+            nm = child.get("name", ""); tp = child.get("type", "string"); ref = child.get("ref", "")
+            desc = child.get("description", "")
+            o = {"name": nm, "type": tp}
+            if desc: o["description"] = desc
+            if ref: o["ref"] = ref
+            data["outputs"].append(o)
+        elif tag == "code":
+            data["inputs"]["code"] = child.text or ""
+        elif tag == "param":
+            nm = child.get("name", ""); tp = child.get("type", "string")
+            val = child.text or ""
+            data["inputs"].setdefault("llmParam", [])
+            data["inputs"]["llmParam"].append({"name": nm, "input": {"type": tp, "value": {"type": "literal", "content": val}}})
+        elif tag == "model":
+            data["inputs"].setdefault("llmParam", [])
+            data["inputs"]["llmParam"].append({"name": "model", "input": {"type": "string", "value": {"type": "literal", "content": child.text or ""}}})
+        elif tag == "toolName":
+            data["toolName"] = child.text or ""
+        elif tag == "branch":
+            conds = child.findall("cond")
+            data["inputs"].setdefault("branches", [])
+            br = {"condition": {"logic": 2, "conditions": []}}
+            for c in conds:
+                br["condition"]["conditions"].append({
+                    "operator": int(c.get("op", "1")),
+                    "left": {"input": {"type": c.get("left_type", "string"), "value": {"type": "ref", "content": {"source": "block-output", "blockID": c.get("left", "").split(".")[0], "name": ".".join(c.get("left", "").split(".")[1:]) or ""}}}},
+                    "right": {"input": {"type": c.get("right_type", "string"), "value": {"type": "literal", "content": c.get("right", "")}}}
+                })
+            data["inputs"]["branches"].append(br)
+        elif tag == "intent":
+            data["inputs"].setdefault("intents", []).append({"name": child.get("name", "")})
+    return data
+

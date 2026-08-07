@@ -183,6 +183,7 @@ async def api_wf_get(name: str):
     """获取单个工作流画布 JSON + meta。优先 .json，否则 .xml（转 JSON）。"""
     import json as _j
     import xml.etree.ElementTree as ET
+    from workflow_xml import parse_xml_fragment
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
     jf = _WF_DIR / f"{safe}.json"
     xf = _WF_DIR / f"{safe}.xml"
@@ -577,6 +578,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if isinstance(_d, dict) and _d.get("action") == "debug_run":
         await _start_debug_run(ws, agent, _d.get("name", ""), _d.get("inputs") or {})
         return
+    # —— 工作流热调试：替换节点配置 / 单节点重跑（保持上次 debug 的上下文）——
+    if isinstance(_d, dict) and _d.get("action") == "hotswap_node":
+        await _hotswap_node(ws, agent, _d)
+        return
+    if isinstance(_d, dict) and _d.get("action") == "rerun_node":
+        await _rerun_node(ws, agent, _d)
+        return
+    if isinstance(_d, dict) and _d.get("action") == "list_node_outputs":
+        await _list_node_outputs(ws, _d)
+        return
+    if isinstance(_d, dict) and _d.get("action") == "eval_node_output":
+        await _eval_node_output(ws, _d)
+        return
     if isinstance(_d, dict) and _d.get("action") == "rag_build":
         await _start_rag_build(ws)
         return
@@ -690,7 +704,120 @@ async def _start_debug_run(ws, agent, name, inputs):
     _work_q.put(("task", run_it))
 
 
-async def _start_rag_build(ws):
+async def _hotswap_node(ws, agent, msg: dict):
+    """WS action: hotswap_node — 接收一段 XML 节点定义（或完整的替换节点 JSON），替换画布中对应节点。
+    不改 edges、不动 ctx.node_outputs，下次 rerun_node 用新配置执行。"""
+    import xml.etree.ElementTree as ET
+    from workflow_xml import parse_xml_fragment
+    from workflow import _debug_ctx as _dc
+    if not _dc.get("ctx"):
+        await _send(ws, {"type": "wf_debug_error", "text": "没有缓存的调试上下文——请先跑一次 debug_run"})
+        return
+    nid = str(msg.get("id", ""))
+    xml_frag = (msg.get("xml") or "").strip()
+    if not nid or not xml_frag:
+        await _send(ws, {"type": "wf_debug_error", "text": "需要 id + xml"})
+        return
+    try:
+        # 解析 XML 片段为节点 dict
+        root = ET.fromstring(f"<node id=\"{nid}\">{xml_frag}</node>")
+    except ET.ParseError as e:
+        await _send(ws, {"type": "wf_debug_error", "text": f"XML 解析失败: {e}"})
+        return
+    # 在 nodes 里找到并替换
+    from workflow import _debug_ctx as _dc
+    nodes = _dc.get("nodes", {})
+    old = nodes.get(nid)
+    if old is None:
+        await _send(ws, {"type": "wf_debug_error", "text": f"节点 {nid!r} 不在画布中"})
+        return
+    # 保留 id/type，覆盖 data（新 XML 片段只提供 data 层的增量）
+    ntype = old["type"]
+    new_data = parse_xml_fragment(root, ntype)
+    old["data"] = {**old["data"], **new_data}  # 增量 merge
+    await _send(ws, {"type": "wf_debug_hotswap", "id": nid, "text": f"节点 {nid} 配置已热替换"})
+
+
+async def _rerun_node(ws, agent, msg: dict):
+    """WS action: rerun_node — 用缓存 ctx 单跑指定节点，返回新的 outputs。
+    不跑扇出/后续节点，只跑这一个。"""
+    from workflow import _debug_ctx as _dc, _run_node_with_batch, NODE_HANDLERS
+    ctx = _dc.get("ctx")
+    nodes = _dc.get("nodes", {})
+    if not ctx or not nodes:
+        await _send(ws, {"type": "wf_debug_error", "text": "没有缓存的调试上下文——请先跑一次 debug_run"})
+        return
+    nid = str(msg.get("id", ""))
+    node = nodes.get(nid)
+    if not node:
+        await _send(ws, {"type": "wf_debug_error", "text": f"节点 {nid!r} 不在画布中"})
+        return
+    handler = NODE_HANDLERS.get(str(node.get("type")))
+    if not handler:
+        await _send(ws, {"type": "wf_debug_error", "text": f"节点 {nid} 类型不支持"})
+        return
+    try:
+        result = _run_node_with_batch(node, handler, ctx)
+        outs = result.get("outputs") or {}
+        ctx.node_outputs[nid] = outs   # 更新缓存
+        await _send(ws, {"type": "wf_debug_rerun", "id": nid, "outputs": outs, "port": result.get("port", "")})
+    except Exception as e:
+        import traceback
+        await _send(ws, {"type": "wf_debug_error", "text": f"重跑 {nid} 失败: {type(e).__name__}: {e}\n{traceback.format_exc()}"})
+
+
+async def _list_node_outputs(ws, msg: dict):
+    from workflow import _debug_ctx as _dc
+    ctx = _dc.get("ctx")
+    if not ctx:
+        await _send(ws, {"type": "wf_debug_error", "text": "没有缓存——请先跑一次 debug_run"})
+        return
+    nodes = _dc.get("nodes", {})
+    raw_ids = str(msg.get("node_ids", "") or "")
+    ids = [x.strip() for x in raw_ids.replace("，", ",").split(",") if x.strip()] if raw_ids else []
+    items = []
+    targets = ids if ids else list(ctx.node_outputs.keys())
+    for nid in targets:
+        outs = ctx.node_outputs.get(nid)
+        if outs is None: continue
+        n = nodes.get(nid, {})
+        items.append({"id": nid, "type": n.get("type","?"),
+                      "title": (n.get("data",{}).get("nodeMeta",{}).get("title","")),
+                      "ntype": str(n.get("type","")), "outputs": outs})
+    await _send(ws, {"type": "wf_debug_outputs", "items": items})
+
+
+async def _eval_node_output(ws, msg: dict):
+    from workflow import _debug_ctx as _dc
+    ctx = _dc.get("ctx")
+    if not ctx:
+        await _send(ws, {"type": "wf_debug_error", "text": "请先 debug_run"})
+        return
+    nid = str(msg.get("id", ""))
+    script = (msg.get("script") or "").strip()
+    outs = ctx.node_outputs.get(nid)
+    if outs is None:
+        await _send(ws, {"type": "wf_debug_error", "text": f"节点 {nid} 无输出"})
+        return
+    if not script:
+        await _send(ws, {"type": "wf_debug_error", "text": "请提供 script"})
+        return
+    try:
+        code = compile(script, f"<eval:{nid}>", "eval")
+        local_vars = {"output": outs}
+        result = eval(code, {"__builtins__": __builtins__}, local_vars)
+        await _send(ws, {"type": "wf_debug_eval", "id": nid, "result": str(result) if result is not None else "(空)"})
+    except SyntaxError:
+        try:
+            code = compile(script, f"<eval:{nid}>", "exec")
+            local_vars = {"output": outs}
+            exec(code, {"__builtins__": __builtins__}, local_vars)
+            val = local_vars.get("_", None)
+            await _send(ws, {"type": "wf_debug_eval", "id": nid, "result": str(val) if val is not None else "(空)"})
+        except Exception as e2:
+            await _send(ws, {"type": "wf_debug_error", "text": f"[脚本错误] {type(e2).__name__}: {e2}"})
+    except Exception as e:
+        await _send(ws, {"type": "wf_debug_error", "text": f"[脚本错误] {type(e).__name__}: {e}"})
     """RAG 建库：校验 → 包成 task 进 work_q（与聊天串行）→ 进度/完成事件经 broadcast 推流。"""
     inst = get_rag()
     cfg = config.load_rag_config(_workspace)

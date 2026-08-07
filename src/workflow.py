@@ -30,6 +30,9 @@ ENTRY_ID = "100001"   # type "1" 开始
 EXIT_ID = "900001"    # type "2" 结束
 WF_PREFIX = "wf_"
 
+# debug_run 后缓存 ctx + 画布（供 server hotswap/rerun/list_node_outputs）
+_debug_ctx: dict = {}   # {canvas, nodes, edges, ctx}
+
 # Coze 变量类型 → Python 类型（生成工具参数签名用）
 _TYPE_MAP = {
     "string": str, "str": str, "integer": int, "int": int, "long": int,
@@ -1516,6 +1519,8 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
     edges = canvas.get("edges", [])
+    # 缓存 ctx + 画布到模块级（供 server hotswap/rerun/list_outputs）
+    _debug_ctx.update({"canvas": canvas, "nodes": nodes, "edges": edges, "ctx": ctx})
     order: list[str] = []
     trace: dict[str, dict] = {}
 

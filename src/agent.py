@@ -112,7 +112,7 @@ class Agent:
         *,
         enable_thinking: bool = True,
         max_steps: int = 50,
-        token_budget: int = 80000,
+        token_budget: int = 0,
         temperature: float = 0.7,
         verbose: bool = True,
         recent_window_turns: int = 4,
@@ -233,7 +233,7 @@ class Agent:
         elif t == "warn":
             print(f"{GRAY}{e['text']}{RESET}")
         elif t == "budget_hit":
-            print(f"\n⚠️ token 预算 ({self.token_budget}) 已用尽，强制收尾。")
+            print(f"\n⚠️ token 预算 ({self.token_budget}) 已用尽，强制收尾。" if self.token_budget else "")
         elif t == "thinking":
             print(f"{GRAY}[思考] {e['text']}{RESET}")
         elif t == "parallel":
@@ -829,7 +829,7 @@ class Agent:
                             self.session._current._pending_step_hint = inject
                         else:
                             self.session._current._pending_step_hint = None
-                        if self.cumulative_tokens >= self.token_budget:
+                        if self.token_budget and self.cumulative_tokens >= self.token_budget:
                             self._emit({"type": "budget_hit"})
                             return self._wrap_up()
 
@@ -871,7 +871,7 @@ class Agent:
                         if resp.usage:
                             self.cumulative_tokens += resp.usage.get("total_tokens", 0)
 
-                        if self.cumulative_tokens >= self.token_budget * 0.8:
+                        if self.token_budget and self.cumulative_tokens >= self.token_budget * 0.8:
                             self._emit({"type": "warn", "text": "⚠️ 预算已用 80%+，即将触顶收尾"})
 
                         if resp.reasoning:

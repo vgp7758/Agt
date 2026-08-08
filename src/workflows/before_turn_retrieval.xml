@@ -1,4 +1,4 @@
-<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：取全量历史→代码节点按关键词筛→LLM 精排 top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn">
+<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：取全量历史→代码节点按关键词筛→LLM 精排 top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn" hidden="true">
   <node id="100001" type="start" title="start" x="120.0" y="80.0">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>

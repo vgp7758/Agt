@@ -124,6 +124,22 @@ def get_retrieval_model() -> str:
     return m or DEFAULT_MODEL
 
 
+def load_detail_base() -> int:
+    """步距衰减的初始摘要字数（settings.json 的 detail_base；默认 1500）。"""
+    try:
+        return int(load_runtime_settings().get("detail_base", 1500))
+    except Exception:
+        return 1500
+
+
+def load_detail_step() -> int:
+    """步距衰减的每步减少字数（settings.json 的 detail_step；默认 15）。"""
+    try:
+        return int(load_runtime_settings().get("detail_step", 15))
+    except Exception:
+        return 15
+
+
 # === RAG 配置持久化（项目级 <workspace>/.agent/rag.json）===
 DEFAULT_RAG_CONFIG = {
     "enabled": False,

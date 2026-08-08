@@ -18,18 +18,31 @@ from typing import Optional
 
 from tools import Tool
 
-# —— 距离衰减参数 ——
+# —— 距离衰减参数（模块级变量，运行时可 set_detail_params 改）——
 DETAIL_BASE = 1500   # 当前步（d=0）的最大摘要字数
 DETAIL_STEP = 15     # 每远一步减少的字数
 DETAIL_FLOOR = 20    # 最远也至少保留的字数
 
 
-def detail_limit(distance: int, base: int = DETAIL_BASE,
-                 step: int = DETAIL_STEP, floor: int = DETAIL_FLOOR) -> int:
-    """按步距算本次工具调用的摘要上限字数。"""
+def detail_limit(distance: int, base: int = None,
+                 step: int = None, floor: int = DETAIL_FLOOR) -> int:
+    """按步距算本次工具调用的摘要上限字数。base/step 留空时动态读模块变量（运行时可改）。"""
+    if base is None:
+        base = DETAIL_BASE
+    if step is None:
+        step = DETAIL_STEP
     if distance <= 0:
         return base
     return max(floor, base - distance * step)
+
+
+def set_detail_params(base: int = None, step: int = None):
+    """运行时设置步距衰减参数（base=当前步最大摘要字数, step=每远一步减少字数）。"""
+    global DETAIL_BASE, DETAIL_STEP
+    if base is not None:
+        DETAIL_BASE = base
+    if step is not None:
+        DETAIL_STEP = step
 
 
 class ToolLog:

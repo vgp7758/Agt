@@ -599,7 +599,7 @@ class Session:
         if cached and cached[0] == level:
             return cached[1]
         turn = self.turns[turn_idx]
-        base = max(DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
+        base = max(__import__("toollog").DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
         msgs = [{"role": "user", "content": self._user_content(turn)}]
         msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
                                              base=base, full_window=(1 if level == 1 else 0)))
@@ -811,7 +811,7 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = DETAIL_BASE, full_window: int = 1) -> list[dict]:
+                           base: int = None, full_window: int = 1) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
         工具名/入参/结果从 toollog 按 call_id 召回。step 级策略：
         - 最近 full_window 步（distance 0..full_window-1）【全量】披露入参+结果，但单步超

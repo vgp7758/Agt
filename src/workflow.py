@@ -1811,6 +1811,8 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
                 meta["auto_param"] = root.get("auto_param")
             if root.get("hook"):
                 meta["hook"] = root.get("hook")
+            if root.get("hidden"):
+                meta["hidden"] = root.get("hidden") == "true"
             if meta_path.exists():
                 try:
                     meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}
@@ -1988,6 +1990,8 @@ def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple
         meta = item["meta"] or {}
         if meta.get("enabled") is False:
             continue
+        if meta.get("hidden") is True:
+            continue   # hidden 工作流：不注册成 Agent 工具（钩子/子工作流专用）
         if item["error"] or item["canvas"] is None:
             broken.append((item["name"], item["error"]))
             continue

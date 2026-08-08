@@ -779,6 +779,10 @@ def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
             attrs += f' auto_param={_qa(meta["auto_param"])}'
     if meta.get("hook"):
         attrs += f' hook={_qa(meta["hook"])}'
+    if meta.get("enabled") is False:
+        attrs += ' enabled="false"'
+    if meta.get("hidden") is True:
+        attrs += ' hidden="true"'
     lines = [f"<workflow {attrs}>"]
     for n in canvas.get("nodes", []):
         lines.append(_node_to_xml(n))

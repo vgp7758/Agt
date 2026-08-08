@@ -91,6 +91,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fenabled" onchange="WF.meta.enabled=this.checked"> 启用</label>
+  <label style="font-size:11px;color:#8a9099" title="hidden=不注册成 Agent 工具（钩子/子工作流专用，Agent 看不到也不会调用）"><input type="checkbox" id="fhidden" onchange="WF.meta.hidden=this.checked"> hidden</label>
   <select id="fhook" title="触发钩子位置：在 ReAct 循环的该位置自动执行本工作流（留空=不自动触发）。选中后会按该钩子约定初始化输入/输出 schema" onchange="onHookChange(this.value)" style="width:120px;font-size:11px">
     <option value="">钩子:无</option>
     <option value="before_turn">钩子:每轮开始前</option>
@@ -2145,6 +2146,7 @@ async function openWf(name){
   if(WF.meta.auto && !WF.meta.enabled) WF.meta.enabled=true;
   if(WF.meta.auto && !WF.meta.hook) WF.meta.hook='before_turn';
   document.getElementById('fenabled').checked=WF.meta.enabled!==false;   // 默认 true
+  document.getElementById('fhidden').checked=WF.meta.hidden===true;
   document.getElementById('fhook').value=WF.meta.hook||'';
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
   document.getElementById('fstatus').textContent='';
@@ -2187,6 +2189,7 @@ async function saveWf(){
   WF.meta.description=document.getElementById('fdesc').value;
   WF.meta.coze_url=document.getElementById('fcoze').value;
   WF.meta.enabled=document.getElementById('fenabled').checked;   // 默认 true，取消则 enabled=false
+  WF.meta.hidden=document.getElementById('fhidden').checked;
   const _hook=document.getElementById('fhook').value; WF.meta.hook=_hook||undefined;
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};

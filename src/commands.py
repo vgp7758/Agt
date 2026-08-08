@@ -223,6 +223,14 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
     cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
+    # 步距衰减参数（存 settings.json，运行时设在 toollog 模块变量上）
+    try:
+        import config as _cfg2
+        cfg["detail_base"] = _cfg2.load_detail_base()
+        cfg["detail_step"] = _cfg2.load_detail_step()
+    except Exception:
+        cfg["detail_base"] = 1500
+        cfg["detail_step"] = 15
     # retrieval_model：Agentic RAG 检索用的便宜模型（存 settings.json，不在 agent/llm 上）
     try:
         import config as _cfg
@@ -300,6 +308,21 @@ def apply_config(agent, values: dict) -> list:
             results.append(f"✅ retrieval_model = {v}（Agentic RAG 检索用；已存 settings.json + 即时生效）")
         except Exception as e:
             results.append(f"⚠️ retrieval_model 设置失败：{e}")
+    # detail_base / detail_step：步距衰减参数（存 settings.json + 改 toollog 模块变量即时生效）
+    for _dk in ("detail_base", "detail_step"):
+        if _dk in values:
+            v = values.pop(_dk)
+            try:
+                val = int(str(v).strip()) if str(v).strip() else (1500 if _dk == "detail_base" else 15)
+                import config, toollog
+                saved = config.load_runtime_settings(); saved[_dk] = val; config.save_runtime_settings(saved)
+                if _dk == "detail_base":
+                    toollog.set_detail_params(base=val)
+                else:
+                    toollog.set_detail_params(step=val)
+                results.append(f"✅ {_dk} = {val}（已存 settings.json + 即时生效）")
+            except Exception as e:
+                results.append(f"⚠️ {_dk} 设置失败：{e}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")

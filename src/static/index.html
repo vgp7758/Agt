@@ -236,6 +236,8 @@
     <div class="rt-group">执行与上下文</div>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
+    <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" title="工具结果摘要的初始字数上限（当前步 d=0，默认1500）；越大披露越详细"></label>
+    <label>步距衰减 step <input id="cfg_detail_step" type="number" min="1" title="每远一步减少的摘要字数（默认15）；越大老步压缩越快"></label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     </div>
     <div class="modal-btns">
@@ -741,6 +743,8 @@ function saveRuntime(){
     retrieval_model: document.getElementById('cfg_retrieval_model').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
+    detail_base: parseInt(document.getElementById('cfg_detail_base').value)||1500,
+    detail_step: parseInt(document.getElementById('cfg_detail_step').value)||15,
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
@@ -957,6 +961,8 @@ ws.onmessage=(ev)=>{
         fillModelSelect('cfg_retrieval_model','（用默认模型）');
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
         document.getElementById('cfg_max_level').value = m.values.max_level || '';
+        document.getElementById('cfg_detail_base').value = m.values.detail_base || '';
+        document.getElementById('cfg_detail_step').value = m.values.detail_step || '';
       }
       break;
     case 'saved':

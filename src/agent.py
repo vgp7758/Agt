@@ -181,6 +181,7 @@ class Agent:
         self._answer_redo_draft: Optional[str] = None   # before_answer 重跑时上一次草稿（临时 assistant 续接）
         self._last_answer_draft: Optional[str] = None   # 收敛判据：上次注入所针对的草稿
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
+        self._turn_end_inject_count: int = 0    # 本轮 turn_end 注入次数（封顶 3 防死循环）
 
     # ========== 事件输出 ==========
     def _print_only_emit(self, event: dict):
@@ -762,6 +763,7 @@ class Agent:
             self._answer_redo_draft = None
             self._last_answer_draft = None
             self._answer_inject_count = 0
+            self._turn_end_inject_count = 0
             self._active_hooks = set()
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
             # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
@@ -902,6 +904,23 @@ class Agent:
                                     and draft != self._last_answer_draft:
                                 self._emit({"type": "warn",
                                             "text": "⚠️ before_answer 钩子注入达上限(5)，结束本轮"})
+                            # turn_end 钩子：answer 确定后、finish 前——工作检查
+                            # inject=true 则打回重做：注入检查结果让模型修正
+                            te_notes = self._run_hooks("turn_end", {
+                                "user_message": (self.session._current.user_message
+                                                  if self.session._current else msg),
+                                "draft_answer": resp.content,
+                                "turn_context": self._turn_context_str(),
+                            })
+                            if te_notes and self._turn_end_inject_count < 3:
+                                self._turn_end_inject_count += 1
+                                self._hook_notes.extend(te_notes)
+                                self._emit({"type": "warn",
+                                            "text": "⚠️ turn_end 钩子检查未通过，要求模型修正"})
+                                continue   # 回 step 循环：模型带检查结果继续
+                            if te_notes and self._turn_end_inject_count >= 3:
+                                self._emit({"type": "warn",
+                                            "text": "⚠️ turn_end 钩子注入达上限(3)，强制结束本轮"})
                             self.session.finish_turn(resp.content, resp.reasoning)
                             self._emit({"type": "answer", "text": resp.content,
                                         "tokens": self.cumulative_tokens})

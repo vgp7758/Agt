@@ -175,7 +175,7 @@ async def api_tools():
             display = name
         out.append({"name": name, "display": display, "group": group,
                     "description": s.get("description", ""), "params": params, "outputs": outputs})
-    return {"tools": out}
+    return {"tools": out, "schema": True}   # schema=True 告诉前端带完整参数信息
 
 
 @app.get("/api/wf/{name}")
@@ -348,6 +348,46 @@ async def api_models_save(request: Request):
     return {"ok": True, "default": config.DEFAULT_MODEL}
 
 
+# ===================== MCP 配置 API =====================
+
+@app.get("/api/mcp")
+async def api_mcp_get():
+    """读取 workspace/.mcp.json。"""
+    p = _workspace / ".mcp.json"
+    if not p.exists():
+        return {"mcpServers": {}}
+    try:
+        import json as _j
+        return _j.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"mcpServers": {}}
+
+
+@app.put("/api/mcp")
+async def api_mcp_save(request: Request):
+    """保存 workspace/.mcp.json。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    p = _workspace / ".mcp.json"
+    import json as _j
+    p.write_text(_j.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 热重载：重连所有 MCP server（断开旧的，按新配置重新连）
+    if _mcp_mgr:
+        try:
+            # 先全部断开
+            for name in list(_mcp_mgr.sessions.keys()):
+                _mcp_mgr.sessions.pop(name, None)
+            # 重新连
+            _mcp_mgr.connect_from_config(str(_workspace / ".mcp.json"))
+            return {"ok": True, "reloaded": True,
+                    "servers": list(_mcp_mgr.sessions.keys())}
+        except Exception as e:
+            return {"ok": True, "reloaded": False, "error": f"热重载失败: {e}"}
+    return {"ok": True}
+
+
 @app.get("/api/stats")
 async def api_stats(scope: str = "current"):
     """LLM 调用可靠性统计（per-model 聚合）。scope=current/all。"""
@@ -429,13 +469,10 @@ async def ws_endpoint(websocket: WebSocket):
 
     is_reconnect = len(_event_log) > 0
     if is_reconnect:
-        replay = _event_log[-40:]
         await _send(websocket, {"type": "system",
-                                "text": f"✅ 已重连到现有会话（回放最近 {len(replay)} 条事件）",
+                                "text": "✅ 已重连（前端会自动请求当前对话历史）",
                                 "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
                                 "current_model": agent.model_name})
-        for _seq_num, ev in replay:
-            await _send(websocket, ev)
     else:
         await _send(websocket, {
             "type": "system",
@@ -515,6 +552,12 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         from session import list_sessions
         await _send(ws, {"type": "sessions",
                          "names": list_sessions(workspace=_workspace)})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "current_history":
+        # 重连后前端请求：返回当前内存中 session 的完整历史（不从磁盘重载）
+        await _send(ws, {"type": "session_history",
+                         "name": agent.session.name or "(当前会话)",
+                         "turns": agent.session.to_history()})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         from session import Session

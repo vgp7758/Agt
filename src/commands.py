@@ -48,10 +48,16 @@ class CommandRegistry:
             parts = line[1:].split()
         if not parts:
             return False
-        name, args = parts[0], parts[1:]
+        name = parts[0]
         if name not in self._cmds:
             print(f"❌ 未知命令 /{name}，输入 /help 查看可用命令")
             return True
+        # /call 参数含 JSON（双引号/括号），shlex 会破坏引号 → 传原始字符串
+        if name == "call":
+            rest = line[1:].split(None, 1)
+            args = rest[1] if len(rest) > 1 else ""
+        else:
+            args = parts[1:]
         self._cmds[name][0](ctx, args)
         return True
 
@@ -960,6 +966,58 @@ def _cmd_tools(ctx: CommandContext, args):
             print(f"  [{g}] {len(names)} 个：{', '.join(names)}")
 
 
+def _cmd_call(ctx: CommandContext, args):
+    """/call [yes] tool_name({"arg":"val"})  手动调用工具。
+    yes = 结果以 user 消息注入 Agent 上下文（进投影，模型下一步能看到）；
+    不加 yes = 纯调用，结果仅显示，不进投影。"""
+    import re as _re
+    import json as _json
+    raw = (args or "").strip()
+    if not raw:
+        print('用法：/call [yes] tool_name({"arg":"val"})')
+        print('  yes = 工具调用结果注入 Agent 上下文（模型能看到）')
+        print('  不加 yes = 纯调用，结果仅显示，不影响 Agent')
+        print('示例：/call read_file({"path":"package.json"})')
+        print('      /call yes grep({"pattern":"TODO","path":"."})')
+        return
+    # 解析 yes 标志
+    inject = False
+    if raw.startswith("yes ") or raw == "yes":
+        inject = True
+        raw = raw[3:].strip()
+    if not raw:
+        print("❌ /call yes 后面要跟工具调用")
+        return
+    # 解析 tool_name(args_json)
+    m = _re.match(r'([\w_]+)\s*\((.*)\)\s*$', raw, _re.DOTALL)
+    if not m:
+        print(f'❌ 格式错误：应为 tool_name({{"arg":"val"}})，收到：{raw[:80]}')
+        return
+    tool_name, args_str = m.group(1), m.group(2).strip()
+    try:
+        tool_args = _json.loads(args_str) if args_str else {}
+    except _json.JSONDecodeError as e:
+        print(f'❌ 参数 JSON 解析失败: {e}')
+        return
+    # 检查工具存在
+    if tool_name not in ctx.agent.tools:
+        print(f'❌ 工具 {tool_name!r} 不存在，/tools 查看可用工具')
+        return
+    # 调用
+    result = ctx.agent.tools.call(tool_name, tool_args)
+    record = f"用户手动调用了工具：\n{tool_name}({args_str})\nresult:\n{result}"
+    if inject:
+        # 注入 Agent 上下文：作为 user 消息进 work_q（模型下一步能看到）
+        if ctx.work_q:
+            ctx.work_q.put(("user", record))
+            print(f"✅ {tool_name} 已调用，结果已注入 Agent 上下文")
+        else:
+            print(record)
+    else:
+        # 纯调用：不进投影（CLI 直接打印；WS 端 redirect_stdout 自动捕获成 system 事件）
+        print(record)
+
+
 def _cmd_update(ctx: CommandContext, args):
     """/update —— 检查 PyPI 是否有新版 agt-agent，有则升级（绕过 24h 节流）。
     editable / 本地 / 源码安装会跳过；auto_update 关时只提示不升级。"""
@@ -992,6 +1050,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("rewind", _cmd_rewind, "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）")
     reg.register("rag", _cmd_rag, "build | config [k v] | stats | query <词>  RAG 文档库")
     reg.register("tools", _cmd_tools, "[关键词]  列出所有工具（按来源分组）")
+    reg.register("call", _cmd_call, "[yes] tool_name({\"arg\":\"val\"})  手动调用工具（yes=结果注入Agent上下文）")
     reg.register("update", _cmd_update, "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")

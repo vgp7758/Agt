@@ -98,6 +98,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
     <option value="before_tool">钩子:工具调用前</option>
     <option value="after_tool">钩子:工具调用后</option>
     <option value="before_answer">钩子:最终回答前</option>
+    <option value="turn_end">钩子:回答后检查</option>
   </select>
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
   <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
@@ -2159,8 +2160,9 @@ const HOOK_INPUTS={
   before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)']],
   after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果']],
   before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答'],['turn_context','string','本轮工具调用摘要(name(args)→result 每行一条)']],
+  turn_end:[['user_message','string','用户本轮消息'],['draft_answer','string','模型已确定的回答'],['turn_context','string','本轮工具调用摘要(name(args)→result 每行一条)']],
 };
-const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前'};
+const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前',turn_end:'回答后检查'};
 function onHookChange(v){
   WF.meta.hook=v||undefined;
   if(!v) return;                       // 清空钩子不动 schema

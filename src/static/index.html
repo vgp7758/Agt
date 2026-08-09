@@ -157,6 +157,12 @@
     border:1px solid var(--line); border-radius:8px; overflow:auto; white-space:pre;
     word-break:normal; overflow-wrap:normal; font:12.5px ui-monospace,Menlo,Consolas,monospace; }
   .bubble pre.code code { background:transparent; padding:0; font:inherit; color:inherit; }
+  .run-btn { display:inline-block; margin:4px 0 8px; padding:3px 12px; background:#2563eb; color:#fff;
+    border:none; border-radius:6px; font-size:12px; cursor:pointer; }
+  .run-btn:hover { background:#1d4ed8; }
+  .run-btn:disabled { background:#9aa0a6; cursor:not-allowed; }
+  .run-btn.terminal { background:#059669; }
+  .run-btn.terminal:hover { background:#047857; }
   .bubble code { background:#f0f2f5; padding:1px 5px; border-radius:4px;
     font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.92em; }
   .row.me .bubble code { background:rgba(255,255,255,.22); }
@@ -453,7 +459,18 @@ function renderAnswer(text){
       flush(); i++; var code=[];
       while(i<n && !/^```/.test(lines[i].trim())){ code.push(lines[i]); i++; }
       i++;                                               // 跳闭合围栏
-      out.push('<pre class="code"><code>'+esc(code.join('\n'))+'</code></pre>');
+      var lang = s.replace(/^```/, '').trim();           // 语言标识（如 bash/python）
+      var codeText = code.join('\n');
+      var html = '<pre class="code"><code>'+esc(codeText)+'</code></pre>';
+      // bash/sh 代码块：加执行按钮（一点击发 /call run_shell）
+      if(lang === 'bash' || lang === 'sh' || lang === 'shell' || lang === 'shellscript'){
+        var cmd = esc(codeText).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        html += '<div style="margin:4px 0 8px;display:flex;gap:6px">';
+        html += '<button class="run-btn" onclick="runShellCode(this)" data-code="'+cmd+'" title="通过 Agent 执行（结果在聊天窗口显示）">▶ Agent执行</button>';
+        html += '<button class="run-btn terminal" onclick="openTerminal(this)" data-code="'+cmd+'" title="在独立终端窗口执行">💻 终端执行</button>';
+        html += '</div>';
+      }
+      out.push(html);
       continue;
     }
     if(/^\s*\|.*\|\s*$/.test(line)){                     // table
@@ -600,6 +617,22 @@ function send(){
 // —— 按钮 ——
 sendBtn.onclick=send;
 document.getElementById('btnImg').onclick=()=>fileInput.click();
+// ===== bash 代码块执行按钮 =====
+function runShellCode(btn){
+  var code = btn.dataset.code;
+  // 发送 /call run_shell({"command":"..."})，结果在聊天窗口显示
+  var cmd = '/call run_shell({"command":' + JSON.stringify(code) + '})';
+  ws.send(JSON.stringify({text: cmd, images: []}));
+  btn.disabled = true; btn.textContent = '✓ 已发送';
+  setTimeout(function(){ btn.disabled = false; btn.textContent = '▶ Agent执行'; }, 2000);
+}
+function openTerminal(btn){
+  var code = btn.dataset.code;
+  // 在 cwd 弹出 cmd 窗口执行
+  ws.send(JSON.stringify({action: 'open_terminal', command: code}));
+  btn.disabled = true; btn.textContent = '✓ 已打开';
+  setTimeout(function(){ btn.disabled = false; btn.textContent = '💻 终端执行'; }, 2000);
+}
 // ===== 工具调用表单模式 =====
 let _toolList = [];   // [{name, display, group, params, description}]
 let _toolFormMode = false;

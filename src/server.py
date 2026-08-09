@@ -548,6 +548,18 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         agent._stop_flag = True
         await _send(ws, {"type": "system", "text": "⏹ 已请求停止…"})
         return
+    if isinstance(_d, dict) and _d.get("action") == "open_terminal":
+        import subprocess
+        cmd = (_d.get("command") or "").strip()
+        if not cmd:
+            await _send(ws, {"type": "system", "text": "⚠ 未提供命令"})
+            return
+        try:
+            subprocess.Popen(["cmd", "/c", f"start cmd /k {cmd}"], cwd=_workspace, shell=False)
+            await _send(ws, {"type": "system", "text": f"✅ 已在终端中执行：{cmd[:80]}"})
+        except Exception as e:
+            await _send(ws, {"type": "system", "text": f"❌ 打开终端失败：{e}"})
+        return
     if isinstance(_d, dict) and _d.get("action") == "list_sessions":
         from session import list_sessions
         await _send(ws, {"type": "sessions",

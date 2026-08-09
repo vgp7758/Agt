@@ -495,7 +495,7 @@ def _schema_to_xml(schema):
         if s.get("description"):
             sa += f' description={_qa(s.get("description"))}'
         sub = s.get("schema")
-        if s.get("type") == "object" and isinstance(sub, list) and sub:
+        if isinstance(sub, list) and sub and s.get("type") in ("object", "list"):
             parts.append(f'<field {sa}>{_schema_to_xml(sub)}</field>')
         else:
             parts.append(f'<field {sa}/>')

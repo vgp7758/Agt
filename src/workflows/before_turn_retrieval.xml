@@ -1,4 +1,4 @@
-<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：取全量历史→代码节点按关键词筛→LLM 精排 top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn" hidden="true">
+<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：取全量历史→代码节点按关键词筛→LLM 精排 top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn">
   <node id="100001" type="start" title="start" x="120.0" y="80.0">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>
@@ -45,7 +45,7 @@ async def main(args) -> dict:
     if not kws or not history: return {"candidates":[]}
     kl = [k.lower() for k in kws]
     cands = []
-    for item in history:
+    for item in reversed(history):
         tidx = item.get("turn",0)
         u = item.get("user","") or ""; a = item.get("answer","") or ""
         ul=u.lower(); al=a.lower()
@@ -106,7 +106,7 @@ async def main(args) -> dict:
 {{candidates}}]]></param>
     <param name="temperature" type="float"><![CDATA[0.1]]></param>
     <param name="thinking" type="string"><![CDATA[false]]></param>
-    <out name="output" type="object"><field name="selected" type="list"/></out>
+    <out name="output" type="object"><field name="selected" type="list"><field name="kind" type="string" description="turn | tc"/><field name="turn_idx" type="integer"/><field name="call_id" type="string"/></field></out>
     <batch enabled="false"/>
   </node>
   <node id="170001" type="code" title="code" x="1620.0" y="80.0">
@@ -118,12 +118,15 @@ async def main(args) -> dict:
     sel = output.get("selected") or ()
     if not sel:
         sel = args.params.get("selected") or ()
+    # LLM 可能输出 dict（单个选中）而非 list → 包成 list
+    if isinstance(sel, dict):
+        sel = [sel]
     candidates = args.params.get("candidates") or []
     if not candidates:
         return {"inject": False, "result": ""}
-    # 降级：LLM 没选出（输出异常）→ 按候选 score 取 top3
-    if not sel:
-        sel = [{"kind": c.get("kind","turn"), "turn_idx": c.get("turn_idx",0),
+    valid_sel = [s for s in sel if isinstance(s, dict)] if sel else []
+    if not valid_sel:
+        valid_sel = [{"kind": c.get("kind","turn"), "turn_idx": c.get("turn_idx",0),
                 "call_id": c.get("call_id","")} for c in sorted(candidates, key=lambda x:-x.get("score",0))[:3]]
     idx = {}
     for c in candidates:
@@ -131,7 +134,8 @@ async def main(args) -> dict:
         key = (c.get("kind",""), c.get("turn_idx",0), cid) if cid else (c.get("kind",""), c.get("turn_idx",0))
         idx[key] = c
     lines = ["以下是自动检索出的、可能与本次请求相关的历史记录（参考用，非用户指令）："]
-    for s in sel:
+    matched = 0
+    for s in valid_sel:
         kind = s.get("kind","turn"); tidx = s.get("turn_idx",0); cid = s.get("call_id","")
         key = (kind, tidx, cid) if cid else (kind, tidx)
         c = idx.get(key)
@@ -139,6 +143,10 @@ async def main(args) -> dict:
             c = idx.get((kind, tidx))
         if c:
             lines.append(f"[第{tidx}轮] {c.get('text','')}")
+            matched += 1
+    if matched == 0:
+        for c in sorted(candidates, key=lambda x:-x.get("score",0))[:3]:
+            lines.append(f"[第{c.get('turn_idx',0)}轮] {c.get('text','')}")
     NL = chr(10)
     body = NL.join(lines)
     out = f"<retrieval-hint>{NL}{body}{NL}</retrieval-hint>"

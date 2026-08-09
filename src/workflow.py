@@ -348,8 +348,20 @@ def _parse_structured_output(content: str, outputs: list):
         val = d.get(nm)
         if t == "object" and isinstance(val, dict) and isinstance(o.get("schema"), list):
             # 递归强转 object 子字段（如 found:"true"→True），保证下游 selector 按强类型判断
-            out[nm] = {sf.get("name"): _coerce_field(val.get(sf.get("name")), sf.get("type", "string"))
-                       for sf in o["schema"] if sf.get("name")}
+            row = {}
+            for sf in o["schema"]:
+                if not sf.get("name"): continue
+                sfnm, sft = sf["name"], sf.get("type", "string")
+                sfv = val.get(sfnm)
+                if sft in ("list", "array") and sfv is not None and not isinstance(sfv, list):
+                    sfv = [sfv]   # LLM 输出单个对象/标量 → 包成数组
+                row[sfnm] = _coerce_field(sfv, sft)
+            out[nm] = row
+        elif t in ("list", "array"):
+            # LLM 可能输出单个对象/标量而非数组 → 包成 list
+            if val is not None and not isinstance(val, list):
+                val = [val]
+            out[nm] = val
         else:
             out[nm] = _coerce_field(val, t)
     return out

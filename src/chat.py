@@ -437,6 +437,13 @@ def web_main(port=None):
                 port = int(a)
                 break
     port = port or 8000
+    # 首次安装引导：无模型配置时，提示用户在 WebUI 设置页添加第一个模型
+    if not config.MODELS:
+        print("=" * 64)
+        print("⚠️  尚未配置任何模型，Agent 可以启动但无法执行 LLM 任务。")
+        print("    浏览器打开后 → 右上角「设置」→ 添加第一个模型（base_url / api_token / model）")
+        print("    或编辑 ~/.agt/models.json 手动添加，然后刷新页面即可使用。")
+        print("=" * 64)
     start_background_check()   # 后台查 PyPI 新版（24h 节流；editable 跳过；失败静默）
     from server import broadcast, start_server, open_browser, lan_urls, stop_server_if_running
     mcp_mgr = MCPManager()
@@ -517,7 +524,10 @@ def main():
         broadcast(e)          # 推 WS（无客户端 no-op）
         event_q.put(e)        # 喂主线程渲染（CLI）
     agent = build_agent(mcp_mgr, on_event=_on_event, verbose=False, workspace=WORKSPACE)
-    print(f"当前模型：{agent.model_name}  (输入 /model 切换)")
+    if agent.model_name:
+        print(f"当前模型：{agent.model_name}  (输入 /model 切换)")
+    else:
+        print("⚠️  当前无模型配置。输入 /web 启动 WebUI，在设置页添加第一个模型后即可使用。")
     print(f"已注册工具 {len(list(agent.tools))} 个（含 MCP 发现的）")
 
     # REPL 单消费者队列驱动：input 线程 + inbox 轮询线程 都往 work_q 喂，

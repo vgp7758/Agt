@@ -149,7 +149,12 @@ class LLMClient:
     ):
         if profile is None:
             model_name = model_name or config.DEFAULT_MODEL
-            profile = config.get_profile(model_name)
+            # 无模型配置（首次安装）时不崩——给空 profile 兜底，推迟到真正发请求时报友好错误。
+            # 这样 Agent 能构造出来、WebUI 能起来，用户进设置页加第一个模型。
+            if model_name and model_name in config.MODELS:
+                profile = config.get_profile(model_name)
+            else:
+                profile = {}
         self.model_name = model_name or config.DEFAULT_MODEL
         self.enable_thinking = enable_thinking
         self.temperature = temperature
@@ -163,12 +168,12 @@ class LLMClient:
 
     def _apply_profile(self, profile: dict):
         """按 profile 配置 base_url/api_key/model/thinking，并重建底层 client。
-        支持多 api_token 轮流使用。"""
-        self.base_url = profile["base_url"]
+        支持多 api_token 轮流使用。空 profile（无模型配置兜底）给空值，真正发请求时由 _ensure_config 拦截。"""
+        self.base_url = profile.get("base_url", "")
         self.api_tokens = profile.get("api_tokens") or [profile.get("api_token", "")]
         self._token_idx = 0
         self.api_key = self.api_tokens[0]
-        self.model = profile["model"]
+        self.model = profile.get("model", "")
         self.thinking_supported = profile.get("thinking", False)
         self.vision_supported = profile.get("vision", False)   # 多模态能力：视觉模型投影时把 <img> 转成 image_url
         # max_tokens：profile 可显式指定；否则推理模型(thinking)用宽裕默认（防长 reasoning 被 provider
@@ -176,7 +181,16 @@ class LLMClient:
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)
         # 分档上下文投影的最大有效窗口（token 估算）。None=不启用分档，走 Session 原 recent_window+summary。
         self.max_effective_context_window = profile.get("max_effective_context_window")
-        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self._client = OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured")
+
+    def _ensure_config(self):
+        """发请求前校验：无模型配置时给友好错误，指引用户去设置。"""
+        if not (self.base_url and self.model):
+            raise RuntimeError(
+                "尚未配置任何模型。请运行 agt-web，在浏览器「设置」页添加第一个模型"
+                "（填 base_url / api_token / model），或在 site-packages/src/ 下复制 "
+                "models.example.py 为 models.py 并填入 token 后重启。"
+            )
 
     def _rotate_token(self):
         """轮流切换到下一个 api_token，返回是否成功切换。"""
@@ -332,6 +346,7 @@ class LLMClient:
 
     def _chat_inner(self, messages, **overrides) -> LLMResponse:
         """单模型调用 + 重试（空响应 / max_tokens 截断）。被 chat() 的回退循环包裹。"""
+        self._ensure_config()
         last_info = None
         # 本轮可动态上调的 max_tokens（截断时加倍重试）；overrides 显式传的优先于 profile 默认
         cur_max_tokens = overrides.get("max_tokens", self.max_tokens)

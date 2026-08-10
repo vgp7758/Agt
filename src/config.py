@@ -53,12 +53,13 @@ def save_user_models(models: dict, default_model: str = ""):
 
 
 # === 加载模型 ===
+# 允许空启动：首次安装时用户尚无任何模型配置，此时不报错——让 WebUI 能起来，
+# 由用户在设置页添加第一个模型。真正发 LLM 请求时若仍无模型，LLMClient 会给友好提示。
 MODELS, DEFAULT_MODEL = _load_models()
-if not MODELS:
-    raise RuntimeError(
-        "没有可用的模型配置。请在 WebUI 设置中添加模型，"
-        "或复制 models.example.py 为 models.py 并填入 token。"
-    )
+_NO_MODELS = not MODELS
+if _NO_MODELS:
+    print("⚠️ 尚未配置任何模型。请运行 agt-web，在浏览器「设置」页添加第一个模型，"
+          "或在 site-packages/src/ 下复制 models.example.py 为 models.py 并填入 token。")
 
 
 def get_profile(name: str) -> dict:
@@ -78,12 +79,14 @@ def get_profile(name: str) -> dict:
     return p
 
 
-_active = get_profile(DEFAULT_MODEL)
+# 空配置兜底：无模型时不调 get_profile（会 KeyError），给空 profile 让兼容别名有值。
+_active = get_profile(DEFAULT_MODEL) if not _NO_MODELS else {}
 
-# 向后兼容别名（step0_hello.py 等旧代码引用）—— 指向当前默认 profile
-MODELSCOPE_BASE_URL = LLM_BASE_URL = _active["base_url"]
-MODELSCOPE_API_KEY = LLM_API_KEY = (_active["api_tokens"] or [""])[0]
-MODEL_NAME = LLM_MODEL = _active["model"]
+
+# 向后兼容别名（step0_hello.py 等旧代码引用）—— 指向当前默认 profile；无模型时空值
+MODELSCOPE_BASE_URL = LLM_BASE_URL = _active.get("base_url", "")
+MODELSCOPE_API_KEY = LLM_API_KEY = (_active.get("api_tokens") or [""])[0]
+MODEL_NAME = LLM_MODEL = _active.get("model", "")
 LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 
 # === 运行时设置持久化 ===
@@ -210,5 +213,6 @@ AGT_BASE_URL = os.getenv("AGT_BASE_URL", "https://agentank.ai")
 AGT_TANK_KEY = os.getenv("AGT_TANK_KEY") or os.getenv("AGT_AGENT_KEY")
 AGT_NAME = os.getenv("AGT_NAME", "Qwen")  # 发布代码时的 submittedBy 徽章名
 
-if not _active["api_tokens"]:
-    print("⚠️ 默认模型缺 api_token。请在 WebUI 设置中完善模型配置。")
+if not _active.get("api_tokens"):
+    if not _NO_MODELS:
+        print("⚠️ 默认模型缺 api_token。请在 WebUI 设置中完善模型配置。")

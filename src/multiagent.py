@@ -49,7 +49,7 @@ class SubAgent:
     on_event 接主 Agent 的事件流，输出经主线程 _render_loop 渲染（CLI）/ broadcast（Web）。"""
 
     def __init__(self, name: str, model_name: str, system: str, tools: Toolbox,
-                 on_event=None, max_steps: int = 15, token_budget: int = 30000, session_dir=None):
+                 on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None):
         self.name = name
         self.model_name = model_name
         self.agent = Agent(system, tools, model_name=model_name,

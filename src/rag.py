@@ -14,9 +14,12 @@ import threading
 import time
 from pathlib import Path
 
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer, CrossEncoder
+# 重依赖（faiss / numpy / sentence_transformers[→torch]）不在顶层 import——
+# 没配 embedding 的用户根本用不到，却会被 torch 在 Windows 上的页面文件问题
+# (WinError 1455) 拖垮整个 agt 启动。改为用到时局部 import：
+#   - numpy: APIEmbedder.encode / LocalRAG 各方法
+#   - faiss: LocalRAG.__init__ / _new_index / index_dir / query
+#   - sentence_transformers: from_config 的 local 分支 / reranker 加载
 
 
 class APIEmbedder:
@@ -33,6 +36,7 @@ class APIEmbedder:
 
     def encode(self, texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False):
         import httpx
+        import numpy as np
         out = []
         for i in range(0, len(texts), batch_size):
             batch = list(texts[i:i + batch_size])
@@ -63,6 +67,7 @@ class LocalRAG:
         self.reranker = None
         if reranker_path and Path(reranker_path).exists():
             print(f"[rag] 加载 reranker {reranker_path} ...")
+            from sentence_transformers import CrossEncoder
             self.reranker = CrossEncoder(reranker_path)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._lock = threading.Lock()
@@ -72,6 +77,7 @@ class LocalRAG:
         # 加载已有索引（维度匹配则复用，重启后查询不丢）
         if self.faiss_path.exists():
             try:
+                import faiss
                 loaded = faiss.read_index(str(self.faiss_path))
                 if loaded.d == self.dim:
                     self.index = loaded
@@ -101,6 +107,7 @@ class LocalRAG:
                 if not cfg.get("embed_model_path"):
                     return None
                 print(f"[rag] 加载本地 embedding 模型 {cfg['embed_model_path']} ...")
+                from sentence_transformers import SentenceTransformer
                 embedder = SentenceTransformer(cfg["embed_model_path"])
         except Exception as e:
             print(f"[rag] embedder 初始化失败：{e}")
@@ -127,6 +134,7 @@ class LocalRAG:
         self.conn.commit()
 
     def _new_index(self):
+        import faiss
         idx = faiss.IndexHNSWFlat(self.dim, 32, faiss.METRIC_INNER_PRODUCT)
         idx.hnsw.efConstruction = 200
         idx.hnsw.efSearch = 64
@@ -177,6 +185,7 @@ class LocalRAG:
                         pass
             if buf:
                 self._flush(buf)
+            import faiss
             faiss.write_index(self.index, str(self.faiss_path))
             self.conn.commit()
             n = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -185,6 +194,7 @@ class LocalRAG:
             return {"files": len(files), "chunks": n, "elapsed": elapsed}
 
     def _flush(self, chunks):
+        import numpy as np
         texts = [c[3] for c in chunks]
         vecs = self.embedder.encode(texts, batch_size=len(texts),
                                     normalize_embeddings=True, show_progress_bar=False)
@@ -204,6 +214,7 @@ class LocalRAG:
         if rerank_pool is None:
             rerank_pool = self.config.get("rerank_pool", 0)
         with self._lock:   # 与 index_dir 互斥
+            import numpy as np
             qv = self.embedder.encode([question], normalize_embeddings=True, show_progress_bar=False)
             qv = np.ascontiguousarray(qv, dtype="float32")
 

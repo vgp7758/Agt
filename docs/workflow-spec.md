@@ -716,3 +716,37 @@ Agent 所有内置工具可作为工作流节点使用：属性面板点「🔧 
 - 类型映射：string→string, integer→integer, float→number, bool→boolean, list→list
 - 值可选 **ref**（引用上游节点输出）或 **literal**（直接填值）
 - 工具原始返回存 `raw` 字段；用户可声明额外输出字段，执行器从 raw JSON 解析抽取。
+
+---
+
+## 13. 工作流调试与热替换
+
+Agt Agent 内置了一套**热调试工具**，可以在**不重跑全流程**的情况下迭代工作流节点：跑一次 → 查看各节点输出 → 修改某个节点配置 → 只重跑那个节点看新结果 → 反复。
+
+### 13.1 四个内置工具
+
+| 工具 | 用途 | 示例 |
+|------|------|------|
+| `debug_workflow(name, inputs)` | 调试执行一个工作流，返回各节点输出摘要 | `debug_workflow("before_turn_retrieval", '{"user_message":"三种消息类型"}')` |
+| `list_workflow_outputs(node_ids)` | 按节点 id 查看输出（逗号分隔，每节点截断 300 字防爆上下文） | `list_workflow_outputs("130001,160001")` — 只看候选和精排的输出 |
+| `eval_node_output(node_id, script)` | 对一个节点的**完整输出**执行 Python 片段，只取需要的数据。`output` 变量即该节点输出 dict | `eval_node_output("130001", "[c['text'][:60] for c in output.get('candidates',[])]")` — 只看候选摘要 |
+| `hotswap_workflow_node(node_id, xml)` | 热替换某节点的配置（只改配置不改文件），立即重跑该节点返回新输出 | `hotswap_workflow_node("130001", '<code language="3">async def main(args): ...</code>')` |
+
+### 13.2 典型迭代流程
+
+```
+① debug_workflow("my_wf", '{"user":"测试"}')     → 跑一次看整体
+② eval_node_output("130001", "list(output.keys())")  → 看 130001 输出有啥字段
+③ eval_node_output("130001", "output.get('text','')[:200]") → 看具体内容
+④ hotswap_workflow_node("130001", '<code language="3">修改版代码</code>') → 改代码，秒看新输出
+⑤ 重复 ②~④ 直到满意
+⑥ 手动把改好的 XML 写回 `before_turn_retrieval.xml` 文件生效
+```
+
+### 13.3 注意事项
+
+- `debug_workflow` 使用 agent 当前的全部工具和 LLM（`agent.tools` + `agent.llm`），调用代价和正常对话一样
+- `hotswap_workflow_node` **只替换内存中的节点配置**，不写回文件——适合快速试错，满意后记得手动保存
+- `eval_node_output` 的 script 是真正 Python 代码（`eval/exec`），可以 pip 内函数做过滤/投影
+- 热替换支持所有节点类型，但只有代码/LLM/plugin 等有 handler 的节点能重跑；入口/出口/selector 等控制节点替换后需全流程重跑验证
+- 热替换的 XML 片段语法同第 0 章的 `<node>` 内子元素（`<in>/<out>/<code>/<param>/<toolName>/<branch>/<intent>`）

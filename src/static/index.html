@@ -45,6 +45,14 @@
   @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
   /* 控件栏 */
   #controls { display:flex; gap:8px; padding:8px 12px; background:#fff; border-top:1px solid var(--line); flex-wrap:wrap; align-items:center; }
+  /* 手机端：控件区默认隐藏，点 + 按钮从输入框下方滑出 */
+  @media (max-width:768px){
+    #controls{ display:none; }
+    #controls.mobile-show{ display:flex; position:fixed; bottom:120px; left:0; right:0; z-index:50;
+      max-height:40vh; overflow-y:auto; box-shadow:0 -4px 12px rgba(0,0,0,.1); border-radius:12px 12px 0 0; }
+    #sendBtn.mobile-plus{ width:46px; height:46px; min-width:46px; padding:0; border-radius:50%;
+      font-size:22px; line-height:1; display:flex; align-items:center; justify-content:center; }
+  }
   #modelSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; max-width:240px; }
   .btn { padding:5px 10px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:12.5px; cursor:pointer; color:#374151; }
   .btn:hover { background:#f3f4f6; }
@@ -174,6 +182,7 @@
     <h1 id="sessionTitle">Agt Agent</h1>
     <span class="sub" id="status">连接中…</span>
     <span class="auto-badge hidden" id="autoBadge">🔁 自主模式</span>
+    <button id="reconnectBtn" class="btn primary" style="display:none;margin-left:auto" onclick="manualReconnect()">🔄 重连</button>
   </header>
 
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
@@ -373,7 +382,16 @@ function setBusy(b){
     inp.focus();
   }
 }
-function setOnline(on){ dot.classList.toggle('off', !on); statusEl.textContent = on ? '已连接' : '已断开'; }
+function setOnline(on){
+  dot.classList.toggle('off', !on);
+  statusEl.textContent = on ? '已连接' : '已断开';
+  document.getElementById('reconnectBtn').style.display = on ? 'none' : 'inline-block';
+}
+function manualReconnect(){
+  // 清除自动重连的定时器（避免重复连）
+  if(reconnectTimer){ clearTimeout(reconnectTimer); reconnectTimer=null; }
+  connectWS();
+}
 function setAutonomousMode(on){
   autonomousMode = on;
   autoBadge.classList.toggle('hidden', !on);
@@ -979,7 +997,35 @@ async function saveMcpConfig(){
 document.getElementById('cfgSave').onclick=saveCurrentTab;
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
-inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; });
+inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; updateSendBtn(); });
+
+// ===== 手机端：输入框空=+按钮(展开控件)，有内容=发送按钮 =====
+function updateSendBtn(){
+  if(window.innerWidth > 768) return;   // 仅手机端
+  const empty = !inp.value.trim();
+  if(empty){
+    sendBtn.textContent = '+';
+    sendBtn.classList.add('mobile-plus');
+  } else {
+    sendBtn.textContent = '发送';
+    sendBtn.classList.remove('mobile-plus');
+  }
+}
+sendBtn.onclick = (e)=>{
+  if(window.innerWidth <= 768 && !inp.value.trim() && !attachments.length){
+    // 手机端空输入：展开/收起控件区
+    const c = document.getElementById('controls');
+    c.classList.toggle('mobile-show');
+    return;
+  }
+  send();
+};
+// 点击聊天区域或输入框时收起控件区
+msgArea.addEventListener('click', ()=>{ document.getElementById('controls').classList.remove('mobile-show'); });
+inp.addEventListener('focus', ()=>{ document.getElementById('controls').classList.remove('mobile-show'); });
+// 初始化
+updateSendBtn();
+window.addEventListener('resize', updateSendBtn);
 
 function attachRestoreButton(bubble, sha){
   if(!bubble || bubble.querySelector('.restore-btn')) return;

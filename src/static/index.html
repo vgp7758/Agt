@@ -220,6 +220,7 @@
     <select id="toolSel" style="padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px;max-width:200px" onchange="onToolSelChange()"><option value="">选择工具…</option></select>
     <span id="toolParams" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"></span>
     <button class="btn primary" id="toolSend" onclick="sendToolCall()">发送</button>
+    <button class="btn" id="toolClose" onclick="exitToolForm()" style="font-size:16px;padding:4px 10px" title="返回普通输入">✕</button>
   </div>
   <div id="inputBar">
     <textarea id="inp" placeholder="输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片"></textarea>
@@ -327,10 +328,9 @@ function connectWS(){
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = ()=>{
     setOnline(true);
-    if(!firstConnect){
-      // 重连后请求当前 session 完整历史（后端不重载，用内存 session）
-      ws.send(JSON.stringify({action:'current_history'}));
-    }
+    // 无论首次连接还是断线重连，都请求当前内存中的 session 历史——
+    // 新设备/新浏览器连上来时也能看到正在进行的会话
+    ws.send(JSON.stringify({action:'current_history'}));
     firstConnect = false;
   };
   ws.onclose = ()=>{
@@ -690,6 +690,15 @@ function onToolSelChange(){
   });
   if(!t.params || !t.params.length) h = '<span style="font-size:11px;color:#8a9099">（无参数）</span>';
   box.innerHTML = h;
+}
+function exitToolForm(){
+  _toolFormMode = false;
+  document.getElementById('toolForm').style.display = 'none';
+  document.getElementById('inputBar').style.display = 'flex';
+  const btn = document.getElementById('btnToolCall');
+  btn.textContent = '🔧 工具';
+  btn.title = '工具调用表单：选工具→填参数→生成 /call 命令发送';
+  inp.focus();
 }
 function sendToolCall(){
   const sel = document.getElementById('toolSel');

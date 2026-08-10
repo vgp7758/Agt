@@ -393,34 +393,61 @@ def _merge_batch(batch):
     return user_msg, seeds
 
 
-def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=20.0,
+def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=3.0,
                  interactive=True, quit_check=None):
     """主线程：消费 event_q 调 agent._print_event 渲染 agent 事件 + 长任务心跳 + 检测 worker 退出。
     所有 print 都在本线程 → 与 worker 的命令/提示 print 基本不并发（worker 串行 + 心跳仅长任务）。
-    长任务（agent.run 超过 threshold 秒）才开始报心跳，每 interval 秒一行，短任务无打扰。
-    quit_check：可选回调，返回真时主循环退出（CLI 两段式 Ctrl+C 的"第二次=退出"用）。"""
+    长任务（agent.run 超过 threshold 秒）才开始报心跳——心跳用 ANSI escape 原地刷新（不刷屏），
+    有实际事件输出时自动隐去、下个 tick 再现。quit_check：CLI 两段式 Ctrl+C 退出用。"""
+    import sys, shutil, itertools
+    _status_active = False
+    spinner = itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
     last_report = 0.0
+
+    def _clear_status():
+        nonlocal _status_active
+        if _status_active:
+            sys.stdout.write("\033[A\033[2K\r")   # 光标上移一行 + 清行 + 回行首
+            sys.stdout.flush()
+            _status_active = False
+
+    def _show_status(text):
+        nonlocal _status_active
+        cols = shutil.get_terminal_size().columns or 80
+        if len(text) >= cols:
+            text = text[:cols - 4] + "…"          # 截断防换行（CJK 宽度近似，够用）
+        if _status_active:
+            sys.stdout.write("\033[A\033[2K\r")   # 已有状态行：上移覆盖
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+        _status_active = True
+
     while True:
         try:
-            e = event_q.get(timeout=5)
+            e = event_q.get(timeout=min(interval, 5))
         except queue.Empty:
             # 无事件：检查 worker 是否退出 / 是否请求退出 / 是否该报心跳
             if quit_check and quit_check():
+                _clear_status()
                 break
             if not worker.is_alive() and event_q.empty():
+                _clear_status()
                 break   # worker 已退出且事件排空 → 主线程退出
             if state.get("busy") and state.get("started"):
                 elapsed = time.time() - state["started"]
                 if elapsed > threshold and time.time() - last_report > interval:
                     qsize = work_q.qsize()
-                    print(f"\n⏳ 仍在处理「{state.get('desc', '')}」… 已 {int(elapsed)}s"
-                          f"（队列 {qsize} 条；你输入的文字会排队。Ctrl+C 停当前任务，再按一次退出）")
+                    spin = next(spinner)
+                    _show_status(f"{spin} 处理中「{state.get('desc', '')}」· {int(elapsed)}s"
+                                 f" · 队列 {qsize}（Ctrl+C 停止）")
                     last_report = time.time()
             continue
         try:
             etype = e.get("type")
             if etype == "_quit":
+                _clear_status()
                 break   # CLI 第二次 Ctrl+C：SIGINT 处理器塞入的退出事件 → 立即退出
+            _clear_status()   # 有实际输出：先隐去状态行，避免穿插
             if etype == "system":
                 print(e.get("text", ""))   # 子 Agent 边界 / agent system 提示（_print_event 不处理 system）
             else:
@@ -430,6 +457,7 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
                 print("\n🧑 你：", end="", flush=True)
         except Exception:
             pass
+    _clear_status()
     print("\n再见！")
 
 

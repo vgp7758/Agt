@@ -549,7 +549,7 @@ def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> 
     return msg
 
 
-def insert(path: str, entries, version: str) -> str:
+def insert(path: str, entries: list, version: str) -> str:
     """按行号在文件中【一处或多处】插入文本，单次原子写入——一次插多段用它，别在 run_python 里拼字符串。
     entries: 插入点数组，每项 {"line": 1-based 行号, "content": 文本(可多行)}；在该行之前插入；
              line <=0 或超过总行数则追加末尾。
@@ -655,7 +655,7 @@ def move(path: str, start_line: int, end_line: int, dst_line: int, version: str)
                                 f"已把 {path} 第 {s}-{e} 行（{nblock} 行）搬到原第 {d} 行前")
 
 
-def replace_lines(path: str, entries, version: str) -> str:
+def replace_lines(path: str, entries: list, version: str) -> str:
     """按行号【一处或多处】整段替换文件内容，单次原子写入——重写整个函数/大段代码用它（比 edit 省 token，不必重吐旧文本）。
     entries: 替换段数组，每项 {"range": [起, 止], "content": 新文本(可多行)}；range 1-based 含两端；
              [n,n] 替换第 n 行；content="" 删除该范围（等价 delete）。多处直接传 read_file/grep 查到的原始行号即可——

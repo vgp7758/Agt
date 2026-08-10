@@ -530,12 +530,25 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     except Exception:
         _d = None
     if isinstance(_d, dict) and _d.get("action") == "restore":
-        try:
+        # 走 work_q → worker 线程执行：print 到 CLI + 广播 session_history 给所有 WS 客户端
+        _sha = _d.get("sha", "")
+        if _work_q is None:
+            await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环"})
+            return
+        def _do_restore():
             import chat as chatmod
-            target = chatmod.restore_snapshot(agent, _d.get("sha", ""))
-            await _send(ws, {"type": "restored", "target": target or ""})
-        except Exception as e:
-            await _send(ws, {"type": "system", "text": f"⚠️ 回溯失败：{type(e).__name__}: {e}"})
+            try:
+                target = chatmod.restore_snapshot(agent, _sha)
+                print(f"⏮ 已回溯到检查点（截掉的轮：「{(target or '')[:60]}」）")
+            except Exception as e:
+                print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+                return
+            _broadcast({"type": "restored", "target": target or ""})
+            _broadcast({"type": "session_history",
+                        "name": agent.session.name or "(当前会话)",
+                        "turns": agent.session.to_history()})
+        _work_q.put(("task", _do_restore))
+        await _send(ws, {"type": "system", "text": "⏮ 回溯中…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "get_config":
         await _send(ws, {"type": "config", "values": read_config(agent)})
@@ -574,37 +587,42 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                          "turns": agent.session.to_history()})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
-        from session import Session
-        from plan_tools import clear_active_plan
-        agent.set_session(Session(agent.base_system, llm=agent.llm,
-                                  recent_window_turns=agent.session.recent_window_turns))
-        clear_active_plan(agent)
-        agent.exit_autonomous_mode()
-        agent.goal_check_script = ""
-        await _send(ws, {"type": "system", "text": "🔄 已创建新会话。"})
+        # 走 work_q：/reset 命令走和 CLI 完全相同的路径（worker dispatch → print 到 CLI）
+        if _work_q is None:
+            await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环"})
+            return
+        _work_q.put(("user", "/reset"))
+        def _sync_new():
+            _broadcast({"type": "session_history",
+                        "name": "(新会话)", "turns": agent.session.to_history()})
+        _work_q.put(("task", _sync_new))
+        await _send(ws, {"type": "system", "text": "🔄 新建中…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "save_session":
         name = (_d.get("name") or "").strip() or None
         p = agent.session.save(name)
         await _send(ws, {"type": "saved", "name": agent.session.name or name})
         from session import list_sessions
-        await _send(ws, {"type": "sessions",
-                         "names": list_sessions(workspace=_workspace)})
+        _broadcast({"type": "sessions",
+                    "names": list_sessions(workspace=_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "load_session":
-        from session import Session
+        # 走 work_q：/resume 命令走和 CLI 完全相同的路径（worker dispatch → _cmd_resume → print 到 CLI）
         _ls_name = (_d.get("name") or "").strip()
         if not _ls_name:
             await _send(ws, {"type": "system", "text": "⚠️ 未指定要恢复的会话"})
             return
-        try:
-            new_session = Session.load(_ls_name, llm=agent.llm, workspace=_workspace)
-        except Exception as e:
-            await _send(ws, {"type": "system", "text": f"❌ 恢复失败：{type(e).__name__}: {e}"})
+        if _work_q is None:
+            await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环"})
             return
-        agent.set_session(new_session)
-        await _send(ws, {"type": "session_history", "name": agent.session.name or _ls_name,
-                         "turns": agent.session.to_history()})
+        _work_q.put(("user", f"/resume {_ls_name}"))
+        # 紧随其后：广播 session_history 给所有 WS 客户端（/resume 完成后串行执行）
+        def _sync_loaded():
+            _broadcast({"type": "session_history",
+                        "name": agent.session.name or _ls_name,
+                        "turns": agent.session.to_history()})
+        _work_q.put(("task", _sync_loaded))
+        await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()

@@ -406,8 +406,10 @@ async def api_stats(scope: str = "current"):
 
 @app.get("/api/rag/config")
 async def api_rag_config():
-    """返回当前 RAG 配置。"""
-    return config.load_rag_config(_workspace)
+    """返回当前 RAG 配置（repo 字段 merge 全局 embed）。额外返回 global_embed_keys 供 UI 标注。"""
+    result = dict(config.load_rag_config(_workspace))
+    result["_global_embed_keys"] = list(config._GLOBAL_EMBED_KEYS)
+    return result
 
 
 @app.put("/api/rag/config")

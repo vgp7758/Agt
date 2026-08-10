@@ -181,6 +181,25 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace
 
+    # session 语义召回层：配了 embed 模型就建 SessionVectorStore 并注入 session；
+    # 没配（from_config 返回 None）→ session.vec_store 保持 None，recall 自动退回子串。
+    # 和 init_rag 共享同一份 rag.json 的 embed 配置（不另开一套）。
+    try:
+        from session_vec import SessionVectorStore
+        from config import load_rag_config
+        cfg = load_rag_config(workspace)
+        if cfg.get("session_index_enabled") or cfg.get("enabled"):
+            # session_index_enabled 显式开，或文档 RAG 已 enabled（隐含配了 embed）都尝试建
+            sv = SessionVectorStore.from_config(workspace, cfg)
+            if sv is not None:
+                agent.session.vec_store = sv
+                if verbose:
+                    st = sv.stats()
+                    print(f"[session_vec] 已启用语义召回：{st['turns']} 轮 / {st['sessions']} 会话已索引")
+    except Exception as e:
+        if verbose:
+            print(f"[session_vec] 未启用（{e}）— recall 将用子串匹配")
+
     # 任务指引 provider：每轮从磁盘重读 AGENTS.md/rules/skills/子Agent（不再创建时烤进 SYSTEM）。
     # 用户改这些文件 → 任意 session、当轮即生效；SYSTEM 只留稳定框架，task-guidance 紧随其后由 provider 注入。
     def _task_guidance():

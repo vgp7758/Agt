@@ -48,11 +48,15 @@
   <div class="card">
     <h2>配置</h2>
     <label><input type="checkbox" id="cfg_enabled"> 启用 RAG（勾选后 rag_query 工具才会真正建库/召回）</label>
+    <h3 style="margin-top:18px;border-bottom:1px solid #303338;padding-bottom:6px">🌐 全局 embedding 模型（所有工作区共用）</h3>
+    <div class="hint" style="color:#8a9099;font-size:11px;margin-bottom:10px">切换项目后无需重复配置，Session 语义检索也共享此模型。</div>
     <label>embedding 来源</label>
     <select id="cfg_provider" onchange="RAG.toggleProvider()">
       <option value="local">本地模型（sentence-transformers）</option>
       <option value="api">API（OpenAI 兼容 /v1/embeddings）</option>
     </select>
+    <h3 style="margin-top:18px;border-bottom:1px solid #303338;padding-bottom:6px">🌐 全局 embedding 模型（所有工作区共用）</h3>
+    <div class="hint" style="color:#8a9099;font-size:11px;margin-bottom:10px">切换项目后无需重复配置，Session 语义检索也共享此模型。</div>
     <label>embedding 模型路径（本地 sentence-transformers 目录）</label>
     <input id="cfg_embed" type="text" placeholder="D:/models/bge-small-zh-v1.5">
     <div id="api_fields" style="display:none">
@@ -65,6 +69,7 @@
       <label>API model（如 BAAI/bge-m3）</label>
       <input id="cfg_apimodel" type="text" placeholder="BAAI/bge-m3">
     </div>
+    <h3 style="margin-top:18px;border-bottom:1px solid #303338;padding-bottom:6px">📁 项目设置（仅当前工作区）</h3>
     <label>建库文档目录 docs_dir</label>
     <input id="cfg_docs" type="text" placeholder="D:/Projects/BunkerProject/Docs/Liskarm">
     <div class="row">

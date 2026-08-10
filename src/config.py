@@ -143,19 +143,38 @@ def load_detail_step() -> int:
         return 15
 
 
-# === RAG 配置持久化（项目级 <workspace>/.agent/rag.json）===
+# === RAG 配置持久化（全局 embed + per-repo 索引策略） ===
+# 全局：~/.agt/rag.json 只存 embed 相关（provider/model_path/api_*），供所有 repo 共用。
+# Per-repo：~/.agt/repos/<hash>/rag.json 存 enabled/docs_dir/exts/top_k 等索引策略 +
+#   session_vec 开关等 per-repo 字段。embed 字段在 load 时从全局 merge 补全，
+#   在 save 时自动提升到全局——WebUI 侧只需一张表单。
+#   旧存量 repo 级 embed 字段首次 load 时自动迁移到全局。
+
+_GLOBAL_EMBED_KEYS = frozenset({
+    "embed_provider", "embed_model_path",
+    "embed_api_url", "embed_api_token", "embed_api_model", "embed_api_dim",
+})
+
+# 拼 DEFAULT_RAG_CONFIG 时仅保 per-repo 字段；embed 由 merge 补
+_REPO_RAG_KEYS = frozenset({
+    "enabled", "docs_dir", "exts", "exclude_globs", "index_dir",
+    "vector_store_type", "top_k", "reranker_enabled", "reranker_path",
+    "rerank_pool", "lines_per", "overlap", "batch",
+    "session_index_enabled", "session_search_top_k",
+})
+
 DEFAULT_RAG_CONFIG = {
+    "embed_provider": "local",      # global
+    "embed_model_path": "",         # global
+    "embed_api_url": "",            # global
+    "embed_api_token": "",          # global
+    "embed_api_model": "",          # global
+    "embed_api_dim": 0,             # global
     "enabled": False,
-    "embed_model_path": "",
-    "embed_provider": "local",   # local | api（api 走 OpenAI 兼容 /v1/embeddings）
-    "embed_api_url": "",
-    "embed_api_token": "",
-    "embed_api_model": "",
-    "embed_api_dim": 0,          # API 返回维度；0 = 首次 encode 自动探测
     "docs_dir": "",
     "exts": [".md", ".txt", ".json"],
     "exclude_globs": ["*_Audit.*"],
-    "index_dir": "",   # 空 = 默认 ~/.agt/repos/<hash>/rag（per-repo 用户目录）；可填绝对路径自定义
+    "index_dir": "",
     "vector_store_type": "faiss_hnsw",
     "top_k": 5,
     "reranker_enabled": False,
@@ -164,7 +183,12 @@ DEFAULT_RAG_CONFIG = {
     "lines_per": 60,
     "overlap": 15,
     "batch": 32,
+    "session_index_enabled": False,
+    "session_search_top_k": 5,
 }
+
+# 全局 embed 配置路径
+_GLOBAL_RAG_PATH = _AGT_DIR / "rag.json"
 
 
 def _rag_config_path(workspace) -> Path:
@@ -173,28 +197,134 @@ def _rag_config_path(workspace) -> Path:
     return REPOS_DIR / _repo_hash(workspace) / "rag.json"
 
 
+def load_global_rag_config() -> dict:
+    """加载全局 embed 配置 (~/.agt/rag.json)。不存在返回默认（只含 embed 字段）。"""
+    if _GLOBAL_RAG_PATH.exists():
+        try:
+            data = json.loads(_GLOBAL_RAG_PATH.read_text(encoding="utf-8"))
+            out = {}
+            for k in _GLOBAL_EMBED_KEYS:
+                out[k] = data.get(k, DEFAULT_RAG_CONFIG[k])
+            return out
+        except Exception:
+            pass
+    return {k: DEFAULT_RAG_CONFIG[k] for k in _GLOBAL_EMBED_KEYS}
+
+
+def save_global_rag_config(cfg: dict):
+    """写入全局 embed 配置到 ~/.agt/rag.json（只写 embed 字段）。"""
+    _AGT_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    # 先读已有（保留非 embed 的杂项字段，虽然正常情况下只有 embed）
+    if _GLOBAL_RAG_PATH.exists():
+        try:
+            data = json.loads(_GLOBAL_RAG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    for k in _GLOBAL_EMBED_KEYS:
+        if k in cfg:
+            data[k] = cfg[k]
+    _GLOBAL_RAG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _maybe_migrate_embed_to_global(workspace: Path | str):
+    """如果全局尚无 embed 配置，但从 repo 或任意存量里能挖到，自动迁移。
+
+    逻辑：遍历 ~/.agt/repos/*/rag.json，找到第一个有 embed 字段的 → 提到全局。
+    只做一次（全局已有则跳过）。此函数在每次 load_rag_config 时调用，开销 = 全局文件
+    存在性检查（几乎零成本）。"""
+    try:
+        if _GLOBAL_RAG_PATH.exists():
+            return   # 已迁移过
+        from session import REPOS_DIR, _repo_hash
+        ws = Path(workspace) if isinstance(workspace, str) else workspace
+        # 先试当前 workspace 的 repo config
+        repo_p = _rag_config_path(ws)
+        for candidate in (repo_p,):
+            if not candidate.exists():
+                continue
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            embed_section = {k: data[k] for k in _GLOBAL_EMBED_KEYS & data.keys()
+                             if data.get(k)}
+            if embed_section:
+                _AGT_DIR.mkdir(parents=True, exist_ok=True)
+                _GLOBAL_RAG_PATH.write_text(
+                    json.dumps(embed_section, ensure_ascii=False, indent=2), encoding="utf-8")
+                # 从 repo 里剥掉 embed 字段并重写
+                stripped = {k: v for k, v in data.items() if k not in _GLOBAL_EMBED_KEYS}
+                candidate.write_text(json.dumps(stripped, ensure_ascii=False, indent=2),
+                                     encoding="utf-8")
+                return
+        # 兜底：扫描所有 repo 目录找 embed（仅当前 candidate 为空时）
+        if REPOS_DIR.exists():
+            for repo_dir in REPOS_DIR.iterdir():
+                rcf = repo_dir / "rag.json"
+                if not rcf.exists() or rcf == repo_p:
+                    continue
+                try:
+                    data = json.loads(rcf.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                embed_section = {k: data[k] for k in _GLOBAL_EMBED_KEYS & data.keys()
+                                 if data.get(k)}
+                if embed_section:
+                    _AGT_DIR.mkdir(parents=True, exist_ok=True)
+                    _GLOBAL_RAG_PATH.write_text(
+                        json.dumps(embed_section, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+                    stripped = {k: v for k, v in data.items() if k not in _GLOBAL_EMBED_KEYS}
+                    rcf.write_text(json.dumps(stripped, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+                    return
+    except Exception:
+        pass   # 迁移失败不阻断主流程
+
+
 def load_rag_config(workspace) -> dict:
-    """从 ~/.agt/repos/<hash>/rag.json 加载 RAG 配置；不存在返回默认（合并补全新字段）。"""
+    """加载 RAG 配置（repo 级 merge 全局 embed）。repo 字段优先，空的 embed 字段从全局补全。
+
+    首次调用时自动迁移旧 repo 级 embed → 全局（_maybe_migrate_embed_to_global）。"""
+    _maybe_migrate_embed_to_global(workspace)
+    cfg = dict(DEFAULT_RAG_CONFIG)              # 全字段默认
+    # 合并全局 embed
+    gcfg = load_global_rag_config()
+    for k in _GLOBAL_EMBED_KEYS:
+        cfg[k] = gcfg.get(k, cfg[k])
+    # 合并 repo 字段
     p = _rag_config_path(workspace)
     if p.exists():
         try:
-            cfg = dict(DEFAULT_RAG_CONFIG)
-            cfg.update(json.loads(p.read_text(encoding="utf-8")))
-            return cfg
+            repo = json.loads(p.read_text(encoding="utf-8"))
+            cfg.update(repo)   # repo 字段优先（覆盖默认，也覆盖全局 embed——若 repo 里碰巧有旧 embed 残留）
         except Exception:
             pass
-    return dict(DEFAULT_RAG_CONFIG)
+    return cfg
 
 
 def save_rag_config(workspace, cfg: dict):
-    """写入 RAG 配置到 ~/.agt/repos/<hash>/rag.json。"""
+    """保存 RAG 配置：embed 字段自动提升到全局 (~/.agt/rag.json)，
+    其余存入 repo (~/.agt/repos/<hash>/rag.json)。WebUI 无需感知分层。"""
+    # 1) 全局：只写 embed 字段
+    embed_section = {k: cfg[k] for k in _GLOBAL_EMBED_KEYS if k in cfg}
+    save_global_rag_config(embed_section)
+    # 2) Repo：只写 per-repo 字段（不写 embed）
+    repo_section = {k: v for k, v in cfg.items()
+                    if k in _REPO_RAG_KEYS}
     p = _rag_config_path(workspace)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    p.write_text(json.dumps(repo_section, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def seed_rag_config(workspace) -> bool:
-    """首次播种：新位置不存在时优先迁移旧 <workspace>/.agent/rag.json，否则写默认。返回是否新建。"""
+    """首次播种：seed 全局 embed + repo 配置。返回是否新建 repo 配置。"""
+    # seed 全局 embed（如果不存在）
+    _AGT_DIR.mkdir(parents=True, exist_ok=True)
+    if not _GLOBAL_RAG_PATH.exists():
+        save_global_rag_config({k: DEFAULT_RAG_CONFIG[k] for k in _GLOBAL_EMBED_KEYS})
+    # seed repo 配置
     p = _rag_config_path(workspace)
     if p.exists():
         return False
@@ -202,9 +332,12 @@ def seed_rag_config(workspace) -> bool:
     legacy = Path(workspace) / ".agent" / "rag.json"
     if legacy.exists():
         import shutil
-        shutil.copy2(legacy, p)   # 迁移旧配置（含用户已填的 docs_dir/模型路径）
+        shutil.copy2(legacy, p)
+        # 旧项目里的 embed 字段提到全局
+        _maybe_migrate_embed_to_global(workspace)
         return True
-    p.write_text(json.dumps(DEFAULT_RAG_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+    repo_default = {k: v for k, v in DEFAULT_RAG_CONFIG.items() if k in _REPO_RAG_KEYS}
+    p.write_text(json.dumps(repo_default, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
 
 

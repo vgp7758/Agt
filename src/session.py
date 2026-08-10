@@ -323,6 +323,8 @@ class Session:
         self.max_level = config.load_max_level()
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
         self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
+        # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
+        self.vec_store = None
 
     # ========== 构建 ==========
     def _emit_event(self, event: dict):
@@ -386,6 +388,26 @@ class Session:
                           "summary": finished.summary})
         self._refresh_summary_cache()  # 维护窗口外 summary 拼接（不截断 turns）
         self._autosave()               # 异步落盘
+        self._index_turn(finished)     # 向量库增量索引（vec_store 为 None 时 no-op）
+
+    def _index_turn(self, turn: "Turn"):
+        """每轮完成后增量索引进向量库。空 store 或 summary 未生成时跳过。"""
+        store = getattr(self, "vec_store", None)
+        if store is None:
+            return
+        # 至少需要 user_message 或 answer 才能生成检索文本
+        if not turn.user_message and not turn.answer:
+            return
+        sid = self.name or (self.session_dir.name if self.session_dir else "")
+        rsn = "\n".join(s.reasoning for s in turn.steps if s.reasoning)
+        cids = [tc.call_id for s in turn.steps for tc in s.tool_calls]
+        try:
+            store.build_one(sid, len(self.turns),   # turn_no = 1-based (len after append)
+                            user=turn.user_message, answer=turn.answer,
+                            summary=turn.summary, reasoning=rsn,
+                            call_ids=cids)
+        except Exception:
+            pass   # 向量索引失败不影响主流程
 
     def abort_current_turn(self, note: str = "（被中断）"):
         """中断时把进行中的轮收尾，避免丢失已完成的步骤。"""
@@ -1057,16 +1079,42 @@ class Session:
         return hits[:max_hits]
 
     def recall(self, query: str, contains_reasoning: bool = False) -> str:
-        """按关键词在【全部】历史轮次里搜索，返回匹配轮的完整上下文。
+        """按关键词/语义在【全部】历史轮次里搜索，返回匹配轮的完整上下文。
         contains_reasoning=False（默认）不含思考过程；True 则带上每步 reasoning 与回答的 reasoning。
-        匹配域：summary + user_message + answer（大小写不敏感子串，中文直接子串）。"""
+
+        检索策略（自动降级）：
+          1. 配了 embed 模型(self.vec_store 非 None) → 语义召回 top-K 轮（换说法也能搜到）
+          2. 否则 → summary+user+answer 子串匹配（大小写不敏感，中文直接子串）
+        两条都跨当前会话全部 turns；语义路径还覆盖 reasoning 内容（密度更高）。
+        """
         if not self.turns:
             return "（当前会话还没有历史轮次）"
-        q = (query or "").strip().lower()
+        q = (query or "").strip()
         if not q:
             return "（请提供要搜索的关键词）"
+        # —— 1) 语义召回（配了 embed 才走）——
+        if self.vec_store is not None:
+            try:
+                hits = self._semantic_hits(q, top_k=5)
+            except Exception:
+                hits = []   # 向量库异常 → 不阻断，退子串
+            if hits:
+                out, total, CAP = [f"语义召回 {len(hits)} 轮匹配「{query}」的历史："], 0, 4000
+                for i, t, score in hits:
+                    block = self._format_turn_full(i + 1, t, contains_reasoning)
+                    tag = f" (相似度 {score:.2f})" if score else ""
+                    block = f"━━━ 【第{i + 1}轮】{t.summary or '(无摘要)'}{tag}\n" + block.split("\n", 1)[1] \
+                        if "\n" in block else block
+                    if total + len(block) > CAP:
+                        out.append(f"\n…（还有 {len(hits) - len(out) + 1} 轮命中已省略）")
+                        break
+                    out.append(block)
+                    total += len(block)
+                return "\n".join(out)
+        # —— 2) 子串兜底（没配 embed，或语义无结果）——
+        ql = q.lower()
         hits = [(i, t) for i, t in enumerate(self.turns)
-                if q in (t.summary + "\n" + t.user_message + "\n" + t.answer).lower()]
+                if ql in (t.summary + "\n" + t.user_message + "\n" + t.answer).lower()]
         if not hits:
             return f"未找到包含「{query}」的历史轮次。可用 /recall 换个关键词，或 /show 看概览。"
         out, total, CAP = [f"找到 {len(hits)} 轮匹配「{query}」的历史："], 0, 4000
@@ -1078,6 +1126,21 @@ class Session:
             out.append(block)
             total += len(block)
         return "\n".join(out)
+
+    def _semantic_hits(self, query: str, top_k: int = 5) -> list:
+        """语义召回 → 映射到当前 session 的 turns。返回 [(turn_idx, Turn, score)]。
+
+        只取当前 session 的 turn（vec_store 跨 session 索引，但 recall 限本会话；
+        跨 session 由 before_turn_retrieval 工作流的 semantic_search_history 负责）。"""
+        sid = self.name or (self.session_dir.name if self.session_dir else "")
+        results = self.vec_store.search(query, top_k=top_k, session_id=sid)
+        # vec_store 的 turn_no 是 1-based（与 _format_turn_full 的 n 对齐）
+        hits = []
+        for r in results:
+            tno = r["turn_no"] - 1     # → 0-based turns 索引
+            if 0 <= tno < len(self.turns):
+                hits.append((tno, self.turns[tno], r.get("score", 0)))
+        return hits
 
     def _format_turn_full(self, n: int, t: Turn, contains_reasoning: bool = False) -> str:
         """把一轮格式化成可读文本（召回展示用）。contains_reasoning=True 时带上每步与回答的 reasoning。"""

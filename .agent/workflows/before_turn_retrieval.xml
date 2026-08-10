@@ -1,4 +1,4 @@
-<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：取全量历史→代码节点按关键词筛→LLM 精排 top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn">
+<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：语义检索+关键词筛→代码节点合并→LLM精排top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn">
   <node id="100001" type="start" title="start" x="120.0" y="80.0">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>
@@ -8,9 +8,16 @@
     <out name="raw" type="list"/>
     <out name="result" type="list" description="工具返回值"/>
   </node>
+  <!-- 语义检索：用 embedding 召回 top-10（配了 embed 才有结果；没配返回空列表→keyword 单路不动） -->
+  <node id="120001" type="plugin" title="semantic_search" x="420.0" y="220.0" toolName="semantic_search_history">
+    <in name="query" type="string" ref="100001.user_message"/>
+    <in name="top_k" type="integer">10</in>
+    <out name="result" type="list"/>
+  </node>
   <node id="130001" type="code" title="collect_candidates" x="720.0" y="80.0">
     <in name="history" type="list" ref="110001.raw"/>
     <in name="keywords" type="list" ref="802605.output.keywards"/>
+    <in name="semantic_hits" type="list" ref="120001.result"/>
     <code language="3"><![CDATA[import json,re
 def _first_s(text):
     t=(text or "").strip(); m=re.search(r'[。！？\n]', t)
@@ -33,8 +40,8 @@ def _snips(text,kws,ctx=40):
         seen.add(pos)
         s=max(0,pos-ctx); e=min(len(text),pos+len(k)+ctx)
         frag=text[s:e]
-        if s>0: frag="\u2026"+frag
-        if e<len(text): frag+="\u2026"
+        if s>0: frag="…"+frag
+        if e<len(text): frag+="…"
         parts.append(frag)
         if len(parts)>=3: break
     return " | ".join(parts) if parts else ""
@@ -42,9 +49,16 @@ def _snips(text,kws,ctx=40):
 async def main(args) -> dict:
     history = args.params.get("history") or []
     kws = args.params.get("keywords") or []
-    if not kws or not history: return {"candidates":[]}
-    kl = [k.lower() for k in kws]
+    sem = args.params.get("semantic_hits") or []
     cands = []
+    # 语义结果直接作为候选（score乘3拉平与keyword分尺度）
+    for s in sem:
+        tidx = s.get("turn_idx",0)
+        score = float(s.get("score",0)) * 3
+        text = s.get("text","") or f"(语义命中 第{tidx}轮)"
+        cands.append({"kind":"semantic","turn_idx":tidx,"text":text,"score":score})
+    if not kws and not history: return {"candidates":cands}
+    kl = [k.lower() for k in kws]
     for item in reversed(history):
         tidx = item.get("turn",0)
         u = item.get("user","") or ""; a = item.get("answer","") or ""
@@ -92,13 +106,14 @@ async def main(args) -> dict:
   <node id="160001" type="llm" title="llm" x="1320.0" y="80.0">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="candidates" type="string" ref="130001.candidates"/>
-    <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的 1-3 条（多了冗余）。
-只输出一个 JSON 对象，不要 markdown：
-{"selected":[{"kind":"turn|tc","turn_idx":1,"call_id":""}]}
+    <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的1-3条（多了冗余），语义候选(kind=semantic，换说法搜到的)优先保留。
+只输出一个JSON对象，不要markdown：
+{"selected":[{"kind":"turn|tc|semantic","turn_idx":1,"call_id":""}]}
 规则：
-- kind="turn"：选中整轮对话；kind="tc"：选中某个工具调用（需 call_id）。
+- kind="semantic"：语义召回的整轮对话（覆盖面更广，优先选）。
+- kind="turn"：关键词匹配的整轮对话；kind="tc"：关键词匹配的某个工具调用（需call_id）。
 - 优先选：直接回应问题、包含关键信息、有可复用结论的。
-- 没把握时少选（1 条也好），不要凑数。]]></param>
+- 没把握时少选（1条也好），不要凑数。]]></param>
     <param name="prompt" type="string"><![CDATA[用户消息：
 {{user_message}}
 
@@ -106,7 +121,7 @@ async def main(args) -> dict:
 {{candidates}}]]></param>
     <param name="temperature" type="float"><![CDATA[0.1]]></param>
     <param name="thinking" type="string"><![CDATA[false]]></param>
-    <out name="output" type="object"><field name="selected" type="list"><field name="kind" type="string" description="turn | tc"/><field name="turn_idx" type="integer"/><field name="call_id" type="string"/></field></out>
+    <out name="output" type="object"><field name="selected" type="list"><field name="kind" type="string" description="turn | tc | semantic"/><field name="turn_idx" type="integer"/><field name="call_id" type="string"/></field></out>
     <batch enabled="false"/>
   </node>
   <node id="170001" type="code" title="code" x="1620.0" y="80.0">
@@ -118,7 +133,6 @@ async def main(args) -> dict:
     sel = output.get("selected") or ()
     if not sel:
         sel = args.params.get("selected") or ()
-    # LLM 可能输出 dict（单个选中）而非 list → 包成 list
     if isinstance(sel, dict):
         sel = [sel]
     candidates = args.params.get("candidates") or []
@@ -142,7 +156,7 @@ async def main(args) -> dict:
         if not c and cid:
             c = idx.get((kind, tidx))
         if c:
-            lines.append(f"[第{tidx}轮] {c.get('text','')}")
+            lines.append(f"[第{tidx}轮] [{kind}] {c.get('text','')}")
             matched += 1
     if matched == 0:
         for c in sorted(candidates, key=lambda x:-x.get("score",0))[:3]:
@@ -158,7 +172,7 @@ async def main(args) -> dict:
     <out name="inject" ref="170001.inject" type="boolean"/>
     <out name="result" ref="170001.result" type="string"/>
   </node>
-  <node id="802605" type="llm" title="LLM" x="420.0" y="190.0">
+  <node id="802605" type="llm" title="LLM" x="420.0" y="320.0">
     <in name="query" type="string" ref="100001.user_message"/>
     <param name="prompt" type="string"><![CDATA[用户查询：
 {{query}}]]></param>
@@ -168,6 +182,7 @@ async def main(args) -> dict:
     <batch enabled="false"/>
   </node>
   <edge from="110001" to="130001"/>
+  <edge from="120001" to="130001"/>
   <edge from="150001" to="160001" port="true"/>
   <edge from="160001" to="170001"/>
   <edge from="170001" to="900001"/>
@@ -175,4 +190,5 @@ async def main(args) -> dict:
   <edge from="130001" to="150001"/>
   <edge from="100001" to="802605"/>
   <edge from="802605" to="130001"/>
+  <edge from="100001" to="120001"/>
 </workflow>

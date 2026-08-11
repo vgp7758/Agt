@@ -124,18 +124,15 @@ def make_subagent_tools(agent) -> list:
         p.unlink()
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "",
-                     background: bool = False) -> str:
-        """向子 Agent <name> 派任务：读它的声明 md 建临时实例，自主用工具完成后回复，实例即弃。
+    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "") -> str:
+        """向子 Agent <name> 派任务（全异步）：读声明 md 建临时实例，后台自主跑，立即返回。
+        完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名 = 多个独立实例（无共享状态）。
         tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
-               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）——主 agent 可借此
-               临时出借部分工具给子 agent 操作，覆盖其默认工具集。
-        agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。子 agent 的 session 存到
-               主 session 文件夹下 agents/<agent_id>/，并登记进主 agent 的后台任务表（投影可见、供将来 wait）。
-        background: True=后台异步跑（不阻塞你，看板出现⏳进行中，完成后转✅，用 wait_subagents 取结果）；
-               False=同步阻塞等结果（默认）。异步适合并行【读/探索/搜索】——并发【写文件】无跨 agent 锁、
-               有覆盖风险，改代码类任务请用 sync 或主 agent 自己做。"""
+               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。
+        agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。
+        如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
+        caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
         p = _agent_md_path(name)
         if p is None or not p.exists():
             return f"[不存在] 没有名为 '{name}' 的子 Agent，先 create_agent"
@@ -163,52 +160,70 @@ def make_subagent_tools(agent) -> list:
         }
         try:
             sub = SubAgent(name, model_name, system, toolbox,
-                           on_event=(None if background else agent.on_event), session_dir=sub_dir,
+                           on_event=None, session_dir=sub_dir,
                            registry=getattr(agent, "registry", None), agent_id=aid)
             if getattr(agent, "registry", None):
                 agent.registry.register(aid, name, "subagent", model_name,
-                                        agent=sub.agent, task=prompt, status="running")
+                                        agent=sub.agent, task=prompt, status="running",
+                                        caller_id=caller_id)
+                # 把子 Agent 元信息写进 session.extra_state → 随 _autosave 存到 meta.json
+                # 读档后 format_team 扫描 agents/ 目录时能恢复（registry 是内存的，不持久化）
+                sub.agent.session.extra_state["_agent_meta"] = {
+                    "agent_id": aid, "name": name, "model": model_name,
+                    "task": prompt, "caller_id": caller_id,
+                }
         except Exception as e:
             agent.background_tasks[aid].update(status="failed", result=f"构造失败: {type(e).__name__}: {e}",
                                                finished_at=time.time())
             if getattr(agent, "registry", None):
                 agent.registry.update_status(aid, "failed")
             return f"[子 Agent 构造出错] {type(e).__name__}: {e}"
-        if background:
-            def _bg(_sub=sub, _aid=aid, _prompt=prompt):
-                try:
-                    res = _sub.prompt(_prompt)
-                    agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
-                    if getattr(agent, "registry", None):
-                        agent.registry.update_status(_aid, "done")
-                except Exception as ex:
-                    agent.background_tasks[_aid].update(status="failed", result=f"{type(ex).__name__}: {ex}",
-                                                        finished_at=time.time())
-                    if getattr(agent, "registry", None):
-                        agent.registry.update_status(_aid, "failed")
-            th = threading.Thread(target=_bg, daemon=True)
-            agent._bg_threads[aid] = th
-            th.start()
-            return (f"🚀 已在后台启动子 Agent '{name}' [agent_id={aid}]（不阻塞你）。完成后【后台子 Agent 任务】"
-                    f"看板自动更新；调 wait_subagents(agent_ids=\"{aid}\") 等结果。")
-        try:
-            result = sub.prompt(prompt)
-            agent.background_tasks[aid].update(status="done", result=result, finished_at=time.time())
-            if getattr(agent, "registry", None):
-                agent.registry.update_status(aid, "done")
-            return result
-        except Exception as e:
-            agent.background_tasks[aid].update(status="failed", result=f"{type(e).__name__}: {e}",
-                                               finished_at=time.time())
-            if getattr(agent, "registry", None):
-                agent.registry.update_status(aid, "failed")
-            return f"[子 Agent 调用出错] {type(e).__name__}: {e}"
+        # 全异步：始终走 _bg 线程，完成后按 caller_id 路由 answer
+        def _bg(_sub=sub, _aid=aid, _prompt=prompt, _caller_id=caller_id, _sub_dir=sub_dir):
+            try:
+                res = _sub.prompt(_prompt)
+                # 等待 recap 生成（异步 daemon 线程，最多等 3 秒）
+                for _ in range(30):
+                    if getattr(_sub.agent, '_recap', ''):
+                        break
+                    time.sleep(0.1)
+                # 把 recap 写入 extra_state._agent_meta.recap，并直接落盘到 meta.json
+                recap = getattr(_sub.agent, '_recap', '')
+                if recap and _sub_dir:
+                    meta_path = _sub_dir / "meta.json"
+                    if meta_path.exists():
+                        import json
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        meta.setdefault("extra_state", {}).setdefault("_agent_meta", {})["recap"] = recap
+                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
+                if getattr(agent, "registry", None):
+                    agent.registry.update_status(_aid, "done")
+            except Exception as ex:
+                res = f"[失败] {type(ex).__name__}: {ex}"
+                agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
+                if getattr(agent, "registry", None):
+                    agent.registry.update_status(_aid, "failed")
+            # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
+            if _caller_id and _caller_id != "user":
+                reg = getattr(agent, "registry", None)
+                if reg:
+                    caller_entry = reg.lookup(_caller_id)
+                    if caller_entry and caller_entry.agent:
+                        caller_entry.agent.push_message(
+                            f"📨〔子 Agent '{name}' [{_aid}] 完成〕{res[:200]}",
+                            source=f"subagent:{_aid}")
+        th = threading.Thread(target=_bg, daemon=True)
+        agent._bg_threads[aid] = th
+        th.start()
+        return (f"🚀 已启动子 Agent '{name}' [agent_id={aid}]（异步，不阻塞）。"
+                f"完成后结果自动入队通知你。需要立即要结果可 wait_subagents(agent_ids=\"{aid}\")。")
 
     def wait_subagents(agent_ids: str = "", timeout: int = 120) -> str:
-        """等待后台（agent_prompt background=True 启动的）子 Agent 完成，返回它们的结果。
+        """等待异步子 Agent 完成，返回它们的结果。
         agent_ids: 逗号分隔的 agent_id（留空=等所有还在跑的）；timeout: 秒（超时返回仍 running 的项，不杀线程）。
         本工具会【阻塞】直到指定任务结束或超时——适合"并行起 N 个探索后等齐再综合"。
-        sync 派的或已完成的任务会立即返回其结果摘要。"""
+        已完成的任务会立即返回其结果摘要。"""
         ids = [s.strip() for s in (agent_ids or "").split(",") if s.strip()]
         if not ids:
             ids = [aid for aid, th in agent._bg_threads.items() if th.is_alive()]

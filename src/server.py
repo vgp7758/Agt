@@ -657,6 +657,46 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text":
                          f"🔄 已重载工作流：{len(ok)} 可用" + (f"，{len(broken)} 个失败" if broken else "")})
         return
+    # /agent 命令的 WebUI 支持：列出团队 / 切换交互目标
+    if isinstance(_d, dict) and _d.get("action") == "list_team":
+        reg = getattr(agent, "registry", None)
+        if not reg:
+            await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
+        else:
+            sdir = getattr(agent.session, "session_dir", None)
+            team = reg.format_team(exclude_id="", session_dir=sdir)
+            cur = getattr(agent, "_active_target", "_main_")
+            await _send(ws, {"type": "team_list", "team": team, "current_target": cur})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "switch_agent":
+        target_id = (_d.get("target_id") or "").strip()
+        reg = getattr(agent, "registry", None)
+        if not reg:
+            await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
+            return
+        if target_id in ("_main_", "main", "back"):
+            agent._active_target = "_main_"
+            await _send(ws, {"type": "system", "text": "✅ 已切回主 Agent"})
+            # 广播主 Agent 的 session 历史
+            _broadcast({"type": "session_history",
+                        "name": agent.session.name or "(当前会话)",
+                        "turns": agent.session.to_history()})
+            return
+        entry = reg.lookup(target_id)
+        if entry is None:
+            await _send(ws, {"type": "system", "text": f"❌ agent_id='{target_id}' 不在注册表中"})
+            return
+        if entry.status == "running":
+            await _send(ws, {"type": "system", "text": f"⏳ '{target_id}' 正在执行任务，完成后才能切换直接交互"})
+            return
+        agent._active_target = target_id
+        await _send(ws, {"type": "system", "text": f"✅ 已切换到与 '{entry.name}' [{target_id}] 直接交互"})
+        # 广播目标 Agent 的 session 历史
+        if entry.agent:
+            _broadcast({"type": "session_history",
+                        "name": f"{entry.name} [{target_id}]",
+                        "turns": entry.agent.session.to_history()})
+        return
     if isinstance(_d, dict) and _d.get("action") == "open_coze":
         from workflow import workflows_info
         name = _d.get("name")

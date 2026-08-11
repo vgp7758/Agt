@@ -1025,6 +1025,64 @@ def _cmd_update(ctx: CommandContext, args):
     check_and_update(force=True, announce=print)
 
 
+def _cmd_agent(ctx: CommandContext, args):
+    """/agent [agent_id] —— 切换直接交互的 Agent 目标。
+    无参数：列出所有团队成员（含 agent_id、名称、状态）。
+    /agent <id>：切换到与该 Agent 直接交互（仅允许 done/idle 状态的 Agent）。
+    /agent _main_：切回主 Agent。"""
+    reg = getattr(ctx.agent, "registry", None)
+    if not reg:
+        print("(多 Agent 通信未启用：无 registry)")
+        return
+    positional = _parse_args(args)[0]
+    if not positional:
+        # 列出所有团队成员
+        team = reg.format_team(exclude_id="")
+        if not team:
+            print("(暂无其他活跃 Agent)")
+        else:
+            print(team)
+        cur = getattr(ctx.agent, "_active_target", "_main_")
+        print(f"\n当前交互目标：{cur}")
+        print("用法：/agent <agent_id>  切换到与该 Agent 直接交互")
+        print("      /agent _main_      切回主 Agent")
+        return
+    target_id = positional[0]
+    # 切回主 Agent
+    if target_id in ("_main_", "main", "back"):
+        ctx.agent._active_target = "_main_"
+        print("✅ 已切回主 Agent")
+        # 通知 WebUI 刷新
+        if ctx.agent.on_event:
+            try:
+                ctx.agent.on_event({"type": "session_history",
+                                    "name": ctx.agent.session.name or "(当前会话)",
+                                    "turns": ctx.agent.session.to_history()})
+            except Exception:
+                pass
+        return
+    # 切换到子 Agent
+    entry = reg.lookup(target_id)
+    if entry is None:
+        print(f"❌ agent_id='{target_id}' 不在注册表中。用 /agent 查看可用成员。")
+        return
+    if entry.status == "running":
+        print(f"⏳ '{target_id}' 正在执行任务，完成后才能切换直接交互。")
+        print("  （可用 wait_subagents 等它完成，或用 agent_ask / agent_notify 与它通信）")
+        return
+    ctx.agent._active_target = target_id
+    print(f"✅ 已切换到与 '{entry.name}' [{target_id}] 直接交互")
+    print(f"  模型：{entry.model}，任务：{(entry.task or '(无)')[:60]}")
+    # 通知 WebUI 刷新到该 Agent 的 session 历史
+    if ctx.agent.on_event and entry.agent:
+        try:
+            ctx.agent.on_event({"type": "session_history",
+                                "name": f"{entry.name} [{target_id}]",
+                                "turns": entry.agent.session.to_history()})
+        except Exception:
+            pass
+
+
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
     reg.register("save", _cmd_save, "[name]  保存当前会话")
@@ -1052,6 +1110,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register("tools", _cmd_tools, "[关键词]  列出所有工具（按来源分组）")
     reg.register("call", _cmd_call, "[yes] tool_name({\"arg\":\"val\"})  手动调用工具（yes=结果注入Agent上下文）")
     reg.register("update", _cmd_update, "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
+    reg.register("agent", _cmd_agent, "[agent_id]  列出/切换直接交互的 Agent 目标（/agent _main_ 切回主 Agent）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

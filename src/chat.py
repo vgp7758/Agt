@@ -99,14 +99,15 @@ SYSTEM = build_system(
         "历史工具调用按【距当前步的距离】差异化摘要(每远一步 −15 字、下限 20 字)，被截断的结果末尾标注 id(如 c7)。"
         "需要历史步骤的完整内容(完整 traceback、run_python 全部输出、edit 的完整 old/new)时调 get_tool_detail 拉取——"
         "可传单个 id 或多个(逗号分隔，如 get_tool_detail(\"c7,c8\"))一次取回多条；不确定有哪些 id 时先 list_tool_logs。\n"
-        + "多 Agent 协作（声明式 + 一次性）：子 Agent 声明在 .agent/agents/<name>.md，下方【可用子 Agent】清单已为你投影——"
-        "匹配某子 Agent 时直接 agent_prompt(name, 任务) 派活：它读声明建临时实例自主用工具完成后回复，实例即弃"
+        + "多 Agent 协作（全异步 + 自动 caller 绑定）：子 Agent 声明在 .agent/agents/<name>.md，下方【可用子 Agent】清单已为你投影——"
+        "匹配某子 Agent 时直接 agent_prompt(name, 任务) 派活：它读声明建临时实例在后台自主跑，立即返回（不阻塞你）。"
+        "完成后结果自动入队到你的 inbox——你下一步边界就能看到（跟用户插话效果一样），你也可以结束本轮等它汇报回来时自动激活下一轮。"
+        "需要立即要结果才能继续时，调 wait_subagents(agent_ids) 显式阻塞等待。"
         "（多次 prompt 同名 = 独立实例，不共享状态；过程输出会回流到本对话）。"
         "需要新角色时 create_agent(name, description, system, tools, model) 写一条声明"
         "（description=一句话作用+何时调用，会投影进你的 SYSTEM；system=角色定义；tools 留空=继承全部(除管理工具)，或逗号分隔工具名；model 留空=用你当前模型）；"
         "不再需要时 kill_agent(name) 删声明；list_agents() 查看全部。"
-        "复杂任务可拆分派给不同角色/模型的子 Agent 再综合。派活两种姿势：①同步 agent_prompt(name,任务) 阻塞等结果（可并行的在【同一步】里发起多个）；"
-        "②异步 agent_prompt(name,任务,background=True) 后台跑、不阻塞，看板出现⏳进行中，完成后用 wait_subagents(agent_ids) 等齐取结果——异步适合并行【读/探索/搜索】，并发改文件有覆盖风险、用 sync。"
+        "复杂任务可拆分派给不同角色/模型的子 Agent 再综合——全异步并行，互不阻塞。"
         "可用模型：" + _MODELS_DESC + "。"
         + "\n\n【工作流编排】【推荐用 XML 写工作流】在 .agent/workflows/ 创建 .xml 文件（系统自动转 Coze JSON 执行）。"
         "XML 用标签+CDATA 包裹代码/提示词，内部双引号/花括号/换行/JSON 块都【无需转义】，远比手写 JSON 不易出错：\n"
@@ -452,6 +453,8 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
                 _clear_status()
                 break   # CLI 第二次 Ctrl+C：SIGINT 处理器塞入的退出事件 → 立即退出
             _clear_status()   # 有实际输出：先隐去状态行，避免穿插
+            if etype == "user":
+                continue   # CLI 模式下 input() 已回显，不重复渲染（WebUI 走 broadcast 不受影响）
             if etype == "system":
                 print(e.get("text", ""))   # 子 Agent 边界 / agent system 提示（_print_event 不处理 system）
             else:
@@ -617,6 +620,25 @@ def main():
             if user.lower() in {"quit", "exit", "q", "退出"}:
                 work_q.put(None)
                 return
+            # /agent 命令切换了交互目标 → 用户输入直接路由到目标 agent
+            target = getattr(agent, "_active_target", "_main_")
+            if target != "_main_":
+                # 用户在与子 Agent 直接交互：直接调目标 agent.run，结果经 on_event 渲染
+                entry = agent.registry.lookup(target) if agent.registry else None
+                if entry and entry.agent:
+                    try:
+                        entry.agent.run(user)
+                        print("\n🧑 你：", end="", flush=True)
+                        continue
+                    except Exception as e:
+                        print(f"\n❌ 与 '{target}' 交互失败：{type(e).__name__}: {e}")
+                        agent._active_target = "_main_"
+                        print("（已切回主 Agent）")
+                        print("\n🧑 你：", end="", flush=True)
+                        continue
+                else:
+                    print(f"\n⚠️ 找不到目标 '{target}'，已切回主 Agent")
+                    agent._active_target = "_main_"
             work_q.put(("user", user))
             # 忙时给即时回执，让用户知道没丢、会排队（agent 空闲则正常处理、无需提示）
             if state.get("busy"):

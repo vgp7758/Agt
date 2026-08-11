@@ -185,7 +185,9 @@ class Agent:
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
         self._turn_end_inject_count: int = 0    # 本轮 turn_end 注入次数（封顶 3 防死循环）
         # —— Agent 注册表（多 Agent 协作通信）——
-        self.agent_id: str = "main"   # 本 Agent 在 registry 中的 id（子 Agent 创建时覆盖）
+        self.agent_id: str = "_main_"   # 本 Agent 在 registry 中的 id（子 Agent 创建时覆盖）
+        self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
+        self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         if self.registry is not None:
             self.registry.register(self.agent_id, "main", "main", self.model_name,
                                    agent=self, task="", status="running")
@@ -561,14 +563,38 @@ class Agent:
             return ""
 
     def _teammates_block(self) -> str:
-        """团队感知注入：列出 registry 中其他活跃 Agent，让本 Agent 知道队友的存在。
+        """团队感知注入：列出 registry 中其他活跃 Agent + 历史子 Agent，让本 Agent 知道队友的存在。
         无 registry 或无其他 Agent 时返回 ''（不注入）。"""
         if not self.registry:
             return ""
         try:
-            return self.registry.format_team(exclude_id=self.agent_id)
+            sdir = getattr(self.session, "session_dir", None)
+            return self.registry.format_team(exclude_id=self.agent_id, session_dir=sdir)
         except Exception:
             return ""
+
+    def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None):
+        """异步用 LLM 生成一句话 recap（最近在干嘛），不阻塞主循环。
+        recap 不进入自己的上下文，但队友在 teammates_block 中能看到。
+        失败静默（recap 保持上一轮的值或空）。"""
+        def _bg():
+            try:
+                prompt = (
+                    f"用一句话（不超过30字）总结你刚才这轮做了什么。\n"
+                    f"用户请求：{(user_msg or '')[:100]}\n"
+                    f"你的回答：{(answer or '')[:200]}\n"
+                    f"工具调用：{', '.join(tool_names) if tool_names else '无'}\n"
+                    f"只输出这一句话，不要任何额外内容。"
+                )
+                resp = self.llm.chat([{"role": "user", "content": prompt}])
+                recap = (resp.content or "").strip().split("\n")[0].strip()[:60]
+                if recap:
+                    self._recap = recap
+                    if self.registry:
+                        self.registry.update_recap(self.agent_id, recap)
+            except Exception:
+                pass   # 静默失败，recap 保持上一轮的值
+        threading.Thread(target=_bg, daemon=True).start()
 
     def shutdown(self):
         """退出时清理：停所有后台服务（防孤儿进程）+ 停调度器。供 chat/web 退出时调。"""
@@ -944,6 +970,11 @@ class Agent:
                             self._emit({"type": "answer", "text": resp.content,
                                         "tokens": self.cumulative_tokens})
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
+                            # 异步生成一句话 recap（队友可见，不进入自己上下文）
+                            self._generate_recap(
+                                (self.session._current.user_message if self.session._current else msg),
+                                resp.content,
+                                [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None)
                             # 目标检查：跑验证脚本，PASS 则结束自主模式
                             if self.goal_check_script:
                                 result = self.run_goal_check()

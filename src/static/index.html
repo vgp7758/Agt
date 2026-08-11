@@ -208,6 +208,10 @@
     <button class="btn" id="btnSave" title="保存当前会话（下拉框选中已有存档则覆盖）">💾 /save</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <button class="btn auto" id="btnAuto" title="开启/关闭纯自主模式">🔁 自主</button>
+    <!-- Agent 团队切换下拉框 -->
+    <select id="agentSel" title="切换直接交互的 Agent（点击时自动刷新列表）">
+      <option value="_main_">🤖 主 Agent</option>
+    </select>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnFeedback">💬 反馈</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
@@ -1005,6 +1009,21 @@ async function saveMcpConfig(){
 
 document.getElementById('cfgSave').onclick=saveCurrentTab;
 modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
+
+// ===== Agent 团队切换下拉框 =====
+const agentSel = document.getElementById('agentSel');
+let _agentListLoading = false;
+// 点击下拉框时重新获取最新团队成员列表
+agentSel.addEventListener('mousedown', ()=>{
+  if(_agentListLoading) return;
+  _agentListLoading = true;
+  ws.send(JSON.stringify({action:'list_team'}));
+});
+agentSel.addEventListener('change', ()=>{
+  const targetId = agentSel.value;
+  if(targetId === agentSel.dataset.curTarget) return;  // 没变化
+  ws.send(JSON.stringify({action:'switch_agent', target_id: targetId}));
+});
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; updateSendBtn(); });
 
@@ -1374,6 +1393,27 @@ function onWSMessage(ev){
     case 'coze_url':
       if(m.url){ window.open(m.url, '_blank'); }
       else addRow('sys', '⚠️ 该工作流未配置 coze_url');
+      break;
+    case 'team_list':
+      // 更新 Agent 团队下拉框
+      const team = m.team || '';
+      const cur = m.current_target || '_main_';
+      const sel = document.getElementById('agentSel');
+      // 解析 team 文本，提取 agent_id 和 name
+      const lines = team.split('\n').filter(l => l.startsWith('- '));
+      let opts = '<option value="_main_">🤖 主 Agent</option>';
+      lines.forEach(line => {
+        // 格式：- main [_main_] (glm-5.2) 🏃 — 任务
+        const match = line.match(/- ([^\[]+) \[([^\]]+)\]/);
+        if(match){
+          const name = match[1].trim();
+          const id = match[2].trim();
+          const isSelected = id === cur ? ' selected' : '';
+          opts += `<option value="${id}"${isSelected}>${name} [${id}]</option>`;
+        }
+      });
+      sel.innerHTML = opts;
+      sel.dataset.curTarget = cur;
       break;
     case 'auto_wf_start':
 	      // 自动工作流开始执行：显示带脉冲动画的"执行中"提示

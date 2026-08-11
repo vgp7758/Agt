@@ -121,6 +121,7 @@ class Agent:
         on_event: Optional[Callable[[dict], None]] = None,
         snapshot_manager=None,
         session_dir=None,
+        registry=None,
     ):
         self.base_system = system
         self.tools = tools
@@ -130,6 +131,7 @@ class Agent:
         self.verbose = verbose
         self.on_event = on_event
         self.snapshot_manager = snapshot_manager
+        self.registry = registry
         self.background_tasks: dict = {}   # 后台异步任务登记表 {id:{id,kind,name,task,status,session_dir,result,...}}；子 agent 异步化后供投影/wait
         self._bg_threads: dict = {}        # 异步子 agent 的后台线程 {agent_id: Thread}（仅内存，不持久化；wait_subagents 用它 join）
         self.model_name = model_name or config.DEFAULT_MODEL
@@ -182,6 +184,12 @@ class Agent:
         self._last_answer_draft: Optional[str] = None   # 收敛判据：上次注入所针对的草稿
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
         self._turn_end_inject_count: int = 0    # 本轮 turn_end 注入次数（封顶 3 防死循环）
+        # —— Agent 注册表（多 Agent 协作通信）——
+        self.agent_id: str = "main"   # 本 Agent 在 registry 中的 id（子 Agent 创建时覆盖）
+        if self.registry is not None:
+            self.registry.register(self.agent_id, "main", "main", self.model_name,
+                                   agent=self, task="", status="running")
+        self.session._teammates_provider = self._teammates_block
 
     # ========== 事件输出 ==========
     def _print_only_emit(self, event: dict):
@@ -382,6 +390,7 @@ class Agent:
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
         session._spec_provider = self._spec_system_block            # 当前活动 spec·每轮注入
+        session._teammates_provider = self._teammates_block         # 团队感知·每轮注入
         session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
         session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
         self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
@@ -548,6 +557,16 @@ class Agent:
         """长期记忆·情境层注入：按当前 user_message 召回 episodic（每轮按需）。失败静默。"""
         try:
             return self.ltm.episodic_block(query)
+        except Exception:
+            return ""
+
+    def _teammates_block(self) -> str:
+        """团队感知注入：列出 registry 中其他活跃 Agent，让本 Agent 知道队友的存在。
+        无 registry 或无其他 Agent 时返回 ''（不注入）。"""
+        if not self.registry:
+            return ""
+        try:
+            return self.registry.format_team(exclude_id=self.agent_id)
         except Exception:
             return ""
 

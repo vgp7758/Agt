@@ -31,6 +31,7 @@ from commands import CommandContext, build_default_registry, apply_config
 from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
 from multiagent import make_subagent_tools
+from registry import AgentRegistry
 from prompts import build_system
 from real_tools import REAL_TOOLS, LIGHT_TOOLS, WORKSPACE, make_autonomous_tools
 from updater import start_background_check
@@ -173,10 +174,13 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     seed_default_agents(workspace)
     # 快照管理器（默认装；web 可传自己的）
     snap = snapshot_manager or SnapshotManager(workspace)
+    # Agent 注册表（多 Agent 协作通信的寻址基础）
+    agent_registry = AgentRegistry()
 
     agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
                   enable_thinking=True, max_steps=50, token_budget=80000,
-                  verbose=verbose, on_event=on_event, snapshot_manager=snap)
+                  verbose=verbose, on_event=on_event, snapshot_manager=snap,
+                  registry=agent_registry)
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace

@@ -1155,7 +1155,7 @@ function renderSpec(spec, specId, reviewState, specTitle){
       waiting.style.color = '#991b1b';
       bar.appendChild(waiting);
     }
-    panel.insertBefore(bar, list);
+    list.parentNode.insertBefore(bar, list);  // specList 嵌套在 <details> 内，需相对其真实父节点插入
   }
   // 步骤列表
   spec.forEach((s, i) => {

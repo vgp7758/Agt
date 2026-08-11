@@ -139,18 +139,24 @@ def _clear_active_spec(agent):
     agent.active_spec_id = None
 
 
+def _spec_event_payload(agent, event_type: str = "spec") -> dict:
+    """构造 spec 的 UI 事件 payload。_emit_spec（广播）与 WS 重连/切会话补发共用，
+    保证字段一致；committed/rejected 态由调用方传 event_type='spec_review'。"""
+    spec = getattr(agent, "active_spec", None)
+    return {
+        "type": event_type,
+        "spec": _spec_view(spec) if spec else None,
+        "spec_id": getattr(agent, "active_spec_id", None),
+        "review_state": (spec or {}).get("review_state", ""),
+        "spec_title": (spec or {}).get("title", ""),
+    }
+
+
 def _emit_spec(agent, event_type: str = "spec"):
     """把当前 spec 推给 UI（spec 面板同步 + 批阅态）。"""
     if getattr(agent, "on_event", None):
         try:
-            spec = agent.active_spec
-            agent.on_event({
-                "type": event_type,
-                "spec": _spec_view(spec) if spec else None,
-                "spec_id": agent.active_spec_id,
-                "review_state": (spec or {}).get("review_state", ""),
-                "spec_title": (spec or {}).get("title", ""),
-            })
+            agent.on_event(_spec_event_payload(agent, event_type))
         except Exception:
             pass
 

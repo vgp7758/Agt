@@ -49,13 +49,16 @@ class SubAgent:
     on_event 接主 Agent 的事件流，输出经主线程 _render_loop 渲染（CLI）/ broadcast（Web）。"""
 
     def __init__(self, name: str, model_name: str, system: str, tools: Toolbox,
-                 on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None):
+                 on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None,
+                 registry=None, agent_id=None):
         self.name = name
         self.model_name = model_name
         self.agent = Agent(system, tools, model_name=model_name,
                            enable_thinking=True, max_steps=max_steps,
                            token_budget=token_budget, verbose=False, on_event=on_event,
-                           session_dir=session_dir)
+                           session_dir=session_dir, registry=registry)
+        if agent_id:
+            self.agent.agent_id = agent_id
 
     def prompt(self, text: str) -> str:
         """派一个任务，子 Agent 自主用工具完成，返回最终回复。过程事件经 on_event 回流。"""
@@ -160,19 +163,29 @@ def make_subagent_tools(agent) -> list:
         }
         try:
             sub = SubAgent(name, model_name, system, toolbox,
-                           on_event=(None if background else agent.on_event), session_dir=sub_dir)
+                           on_event=(None if background else agent.on_event), session_dir=sub_dir,
+                           registry=getattr(agent, "registry", None), agent_id=aid)
+            if getattr(agent, "registry", None):
+                agent.registry.register(aid, name, "subagent", model_name,
+                                        agent=sub.agent, task=prompt, status="running")
         except Exception as e:
             agent.background_tasks[aid].update(status="failed", result=f"构造失败: {type(e).__name__}: {e}",
                                                finished_at=time.time())
+            if getattr(agent, "registry", None):
+                agent.registry.update_status(aid, "failed")
             return f"[子 Agent 构造出错] {type(e).__name__}: {e}"
         if background:
             def _bg(_sub=sub, _aid=aid, _prompt=prompt):
                 try:
                     res = _sub.prompt(_prompt)
                     agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
+                    if getattr(agent, "registry", None):
+                        agent.registry.update_status(_aid, "done")
                 except Exception as ex:
                     agent.background_tasks[_aid].update(status="failed", result=f"{type(ex).__name__}: {ex}",
                                                         finished_at=time.time())
+                    if getattr(agent, "registry", None):
+                        agent.registry.update_status(_aid, "failed")
             th = threading.Thread(target=_bg, daemon=True)
             agent._bg_threads[aid] = th
             th.start()
@@ -181,10 +194,14 @@ def make_subagent_tools(agent) -> list:
         try:
             result = sub.prompt(prompt)
             agent.background_tasks[aid].update(status="done", result=result, finished_at=time.time())
+            if getattr(agent, "registry", None):
+                agent.registry.update_status(aid, "done")
             return result
         except Exception as e:
             agent.background_tasks[aid].update(status="failed", result=f"{type(e).__name__}: {e}",
                                                finished_at=time.time())
+            if getattr(agent, "registry", None):
+                agent.registry.update_status(aid, "failed")
             return f"[子 Agent 调用出错] {type(e).__name__}: {e}"
 
     def wait_subagents(agent_ids: str = "", timeout: int = 120) -> str:
@@ -221,4 +238,113 @@ def make_subagent_tools(agent) -> list:
             for a in idx
         )
 
-    return [Tool(create_agent), Tool(kill_agent), Tool(agent_prompt), Tool(list_agents), Tool(wait_subagents)]
+    # ===== 多 Agent 通信工具（agent_ask / agent_notify / agent_query / list_team）=====
+    reg = getattr(agent, "registry", None)
+
+    def list_team() -> str:
+        """列出当前所有活跃的 Agent（主 Agent + 运行中的子 Agent），含它们的 agent_id、名称、模型、任务和状态。
+        用于了解当前团队构成，与队友通信时需要知道对方的 agent_id。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        return reg.format_team()
+
+    def agent_ask(target_id: str, question: str) -> str:
+        """向另一个活跃 Agent 发起无状态询问：用对方的上下文 + 你的问题调用其 LLM，返回回答。
+        被询问的 Agent 不会记录这次询问（其 session 不变），适合快速获取信息而不打扰对方。
+        target_id: 目标 Agent 的 agent_id（用 list_team 查看）；question: 要问的问题。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        entry = reg.lookup(target_id)
+        if entry is None:
+            return f"[未找到] agent_id='{target_id}' 不在注册表中（可能已退出）。用 list_team 查看当前活跃 Agent。"
+        target_agent = entry.agent
+        if target_agent is None:
+            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+        try:
+            # 取目标 Agent 的上下文快照（copy，不 mutate），追加问题调 LLM
+            msgs = list(target_agent.session.messages_for_llm())
+            msgs.append({"role": "user", "content": f"[来自队友 '{agent.agent_id}' 的询问] {question}"})
+            resp = target_agent.llm.chat(msgs)
+            answer = resp.content or "(对方返回空回答)"
+            return f"[{target_id} 回答] {answer}"
+        except Exception as e:
+            return f"[询问失败] {type(e).__name__}: {e}"
+
+    def agent_notify(target_id: str, message: str) -> str:
+        """向另一个活跃 Agent 发送有状态提示：等效于用户插话，消息插入对方的待处理队列。
+        对方会在下一步边界看到这条提示（与用户插话机制完全相同），且会被记录到其 session 中并落盘。
+        适合需要对方记住的信息（如"我改了 xxx 文件"）。target_id: 目标 agent_id；message: 提示内容。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        entry = reg.lookup(target_id)
+        if entry is None:
+            return f"[未找到] agent_id='{target_id}' 不在注册表中。用 list_team 查看当前活跃 Agent。"
+        target_agent = entry.agent
+        if target_agent is None:
+            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+        try:
+            target_agent.queue_user_message(f"[来自队友 '{agent.agent_id}' 的提示] {message}")
+            return f"✅ 已向 '{target_id}' 发送提示，对方下一步边界会看到。"
+        except Exception as e:
+            return f"[发送失败] {type(e).__name__}: {e}"
+
+    def agent_query_events(target_id: str, count: int = 5) -> str:
+        """查询另一个活跃 Agent 的最近 N 条对话事件（只读）：每轮的用户消息摘要 + 工具调用名 + 回答摘要。
+        用于了解队友的进展。target_id: 目标 agent_id；count: 查最近几轮（默认 5）。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        entry = reg.lookup(target_id)
+        if entry is None:
+            return f"[未找到] agent_id='{target_id}' 不在注册表中。"
+        target_agent = entry.agent
+        if target_agent is None:
+            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+        try:
+            turns = target_agent.session.turns
+            if not turns:
+                return f"[{target_id}] 暂无对话历史"
+            recent = turns[-max(1, min(count, 20)):]
+            lines = [f"[{target_id}] 最近 {len(recent)} 轮："]
+            for t in recent:
+                user = (t.user_message or "")[:60].replace("\n", " ")
+                answer = (t.answer or "")[:100].replace("\n", " ")
+                tools = []
+                for s in t.steps:
+                    for tc in s.tool_calls:
+                        name, _, _ = target_agent.session.toollog.view(tc.call_id)
+                        tools.append(f"{tc.call_id}: {name}")
+                tool_str = ", ".join(tools[:8]) if tools else "(无工具)"
+                lines.append(f"  用户: {user}")
+                lines.append(f"  工具: {tool_str}")
+                lines.append(f"  回答: {answer}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[查询失败] {type(e).__name__}: {e}"
+
+    def agent_query_tool_detail(target_id: str, call_id: str) -> str:
+        """查询另一个活跃 Agent 的某次工具调用完整详情（只读）：工具名、入参、完整结果。
+        target_id: 目标 agent_id；call_id: 工具调用 id（如 'c7'，从 agent_query_events 的工具列表或对方上下文中获取）。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        entry = reg.lookup(target_id)
+        if entry is None:
+            return f"[未找到] agent_id='{target_id}' 不在注册表中。"
+        target_agent = entry.agent
+        if target_agent is None:
+            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+        try:
+            name, args, result = target_agent.session.toollog.view(call_id)
+            import json as _j
+            args_s = _j.dumps(args, ensure_ascii=False, indent=2)
+            result = result or "(空)"
+            if len(result) > 2000:
+                result = result[:2000] + f"...(+{len(result) - 2000}字)"
+            return f"[{target_id} · {call_id}] 工具: {name}\n入参:\n{args_s}\n结果:\n{result}"
+        except Exception as e:
+            return f"[查询失败] {type(e).__name__}: {e}"
+
+    tools_list = [Tool(create_agent), Tool(kill_agent), Tool(agent_prompt), Tool(list_agents), Tool(wait_subagents)]
+    if reg:
+        tools_list += [Tool(list_team), Tool(agent_ask), Tool(agent_notify),
+                       Tool(agent_query_events), Tool(agent_query_tool_detail)]
+    return tools_list

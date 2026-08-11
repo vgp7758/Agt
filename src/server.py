@@ -585,6 +585,14 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "session_history",
                          "name": agent.session.name or "(当前会话)",
                          "turns": agent.session.to_history()})
+        # 补发活动 spec：spec 面板靠 spec/spec_review 事件驱动，重连不会自动重放，
+        # 否则刷新/断线后批阅栏与详情会丢失。committed/rejected 必须用 spec_review，
+        # 前端才会绑定批准/返工回调。
+        if getattr(agent, "active_spec", None):
+            from spec_tools import _spec_event_payload
+            _rs = agent.active_spec.get("review_state", "")
+            await _send(ws, _spec_event_payload(
+                agent, "spec_review" if _rs in ("committed", "rejected") else "spec"))
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         # 走 work_q：/reset 命令走和 CLI 完全相同的路径（worker dispatch → print 到 CLI）
@@ -621,6 +629,12 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             _broadcast({"type": "session_history",
                         "name": agent.session.name or _ls_name,
                         "turns": agent.session.to_history()})
+            # 切会话是全局状态变化：广播当前活动 spec，让所有客户端刷新 spec 面板
+            if getattr(agent, "active_spec", None):
+                from spec_tools import _spec_event_payload
+                _rs = agent.active_spec.get("review_state", "")
+                _broadcast(_spec_event_payload(
+                    agent, "spec_review" if _rs in ("committed", "rejected") else "spec"))
         _work_q.put(("task", _sync_loaded))
         await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
         return

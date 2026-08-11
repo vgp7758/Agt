@@ -8,7 +8,7 @@
 
 | 模块 | 文件 | 职责一句话 |
 |------|------|-----------|
-| 多 Agent 协作 | `src/multiagent.py` | 主 Agent 声明并按需派活给一次性子 Agent |
+| 多 Agent 协作 | `src/multiagent.py` + `src/registry.py` | 全异步子 Agent 派活 + 团队注册表 + Agent 间通信 |
 | 后台服务 + 调度器 | `src/background.py` | 长进程管理与定时/到点消息推送 |
 | 计划工具 | `src/plan_tools.py` | 跨 session 持久化的 TodoList + SYSTEM 注入 |
 | 施工方案 | `src/spec_tools.py` | 结构化 spec 生命周期（草稿→批阅→施工） |
@@ -23,25 +23,117 @@
 
 ---
 
-## 1. 多 Agent 协作 — `multiagent.py`
+## 1. 多 Agent 协作 — `multiagent.py` + `registry.py`
 
-### 设计理念：声明式 + 一次性实例
+### 设计理念：全异步 + 团队感知 + Agent 间通信
 
-子 Agent 采用 **声明式 + 按需实例化 + 一次性** 模式：
+子 Agent 采用 **声明式 + 按需实例化 + 全异步** 模式：
 
-- **声明式**：子 Agent 声明存为 `.agent/agents/<name>.md`（frontmatter: `name`/`description`/`tools`/`model` + body: systemPrompt）。harness 每轮把可用子 Agent 清单投影进主 Agent 的 SYSTEM，让主 Agent 自主决定何时派活。
-- **一次性**：`agent_prompt` 读 md 建临时实例，跑完返回报告后销毁。多次 `agent_prompt` 同名 = 多个独立实例，**无共享状态**。
-- **不建实例**：`create_agent` 只写声明文件，不建实例——声明后下一轮 SYSTEM 自动可见。
+- **声明式**：子 Agent 声明存为 `.agent/agents/<name>.md`（frontmatter: `name`/`description`/`tools`/`model` + body: systemPrompt）。harness 每轮把可用子 Agent 清单投影进主 Agent 的 SYSTEM。
+- **全异步**：`agent_prompt` 永远在后台 daemon 线程跑，立即返回"已启动"。调用者不被阻塞，可继续派更多子 Agent 或做其他事。
+- **自动 caller 绑定**：派活时自动捕获 `caller_id = agent.agent_id`，子 Agent 完成后按 caller_id 路由 answer——如果 caller 是 agent，answer 入 caller 的 inbox（caller 下一步边界自动看到）；如果 caller 是 user（用户直接交互），answer 不入队。
 
-### 工具集（5 个）
+### AgentRegistry — 团队注册表（`registry.py`）
+
+所有活跃 Agent（主+子）注册在全局共享的 `AgentRegistry` 中，通过 `agent_id` 寻址。线程安全（RLock）。
+
+```python
+@dataclass
+class AgentEntry:
+    agent_id: str            # "_main_" / "coder_3" / 自定义
+    name: str                # 声明名
+    role: str                # "main" | "subagent"
+    model: str               # 模型名
+    task: str = ""           # 初始任务摘要
+    agent: object = None     # Agent 实例引用
+    status: str = "running"  # running | idle | done | failed
+    caller_id: str = ""      # 谁派的任务 → 完成后按此路由 answer
+    recap: str = ""          # 最近一轮的一句话总结（队友可见，不进入自己上下文）
+```
+
+**主 Agent 注册**：`agent_id = "_main_"`，在 `Agent.__init__` 时自动注册。
+
+**子 Agent 注册**：`agent_prompt` 创建 SubAgent 时注册，完成/失败时更新 status（不 unregister，保留可查询）。
+
+**历史恢复**：`format_team(session_dir=...)` 扫描 `session_dir/agents/` 目录，从各子 Agent session 的 `meta.json` 里的 `extra_state._agent_meta` 恢复已完成子 Agent 的信息——即使 registry 是内存的（读档后重建），历史子 Agent 仍能在团队列表中显示。
+
+### 工具集
+
+**派活与管理（5 个）：**
 
 | 工具 | 作用 |
 |------|------|
 | `create_agent(name, description, system, tools, model)` | 写声明 md，不建实例 |
-| `agent_prompt(name, prompt, tools, agent_id, background)` | 读 md 建临时实例跑完即弃 |
+| `agent_prompt(name, prompt, tools, agent_id)` | 全异步派活，自动绑定 caller_id |
 | `kill_agent(name)` | 删声明 md |
 | `list_agents()` | 扫 `.agent/agents/` 列出 |
-| `wait_subagents(agent_ids, timeout)` | 等后台子 Agent 完成，阻塞取结果 |
+| `wait_subagents(agent_ids, timeout)` | 阻塞等子 Agent 完成，取结果 |
+
+**Agent 间通信（5 个）：**
+
+| 工具 | 作用 | 是否落盘 |
+|------|------|----------|
+| `list_team()` | 列出所有活跃 Agent（id/名称/模型/recap/状态） | — |
+| `agent_ask(target_id, question)` | 无状态询问：用对方上下文+你的问题调对方 LLM，返回回答 | ❌ |
+| `agent_notify(target_id, message)` | 有状态提示：等效用户插话，入对方 inbox | ✅ |
+| `agent_query_events(target_id, count)` | 查对方最近 N 轮对话摘要（含 call_id） | — |
+| `agent_query_tool_detail(target_id, call_id)` | 查对方某次工具调用完整详情 | — |
+
+### 三种通信方式详解
+
+```
+方式1：agent_ask（无状态询问）
+  A → registry.lookup(target_id) → 取 target.session.messages_for_llm() 快照(copy)
+    → target.llm.chat(snapshot + question) → 返回 answer
+    → target 的 session 不变（不记录这次询问）
+
+方式2：agent_notify（有状态提示）
+  A → target.queue_user_message(msg) → 复用现有插话队列
+    → target 下一步边界自动看到（和用户插话效果一样）
+    → 会锚定到某个 step → 滚入历史 → 落盘
+
+方式3：agent_query（只读索引）
+  A → 读 target.session.turns[-N:] → 格式化每轮 user + 工具调用(c7: read_file) + answer
+  A → 读 target.session.toollog.view("c7") → 完整 (name, args, result)
+```
+
+### 团队感知注入（`_teammates_provider`）
+
+每个 Agent 的 session 挂一个 `_teammates_provider` 回调（和 plan/spec/ltm provider 同模式），每轮注入 SYSTEM：
+
+```
+【当前 Agent 团队】
+- coder [coder_1] (glm-5.2) 🏃 — 刚完成了 server.py 的重构 → _main_
+- explorer [explorer] (glm-5.2) ✅ — 搜索认证模块完成
+  ↳ 可用 agent_ask / agent_notify / agent_query_events / agent_query_tool_detail 与队友通信
+```
+
+每个 Agent 看到的都是**除自己外的所有队友**（`format_team(exclude_id=self.agent_id)`）。主 Agent 和子 Agent 的投影格式完全对称——主 Agent 没有特权。
+
+### recap：每轮一句话总结
+
+每个 Agent 每轮结束后，用 daemon 线程异步调 LLM 生成一句话 recap（"最近在干嘛"）：
+
+```python
+def _generate_recap(self, user_msg, answer, tool_names):
+    # daemon 线程：用 user_msg + answer + tool_names 生成 ≤30 字总结
+    # 成功 → self._recap = recap + registry.update_recap(agent_id, recap)
+    # 失败 → 静默，recap 保持上一轮的值
+```
+
+recap **不进入自己的上下文**（省 token），但队友在 `teammates_block` 中能看到。子 Agent 完成后 recap 写入 `meta.json` 的 `extra_state._agent_meta.recap`，读档后可恢复。
+
+### /agent 命令：用户直接与子 Agent 交互
+
+```
+/agent            → 列出所有可交互的团队成员
+/agent coder_1    → 切换到与 coder_1 直接交互（仅允许 done/idle 状态）
+/agent _main_     → 切回主 Agent
+```
+
+切换后用户输入直接路由到目标 Agent 的 `run()`。WebUI 通过下拉框实现（点击时自动刷新最新团队列表）。
+
+**线程安全保证**：用户的直接交互和主 Agent 的任务走同一个 `work_q`、同一个 worker 线程→ 天然串行。子 Agent 的后台 `_bg` 线程只操作自己的 session → 不与其他 Agent 冲突。
 
 ### 关键设计
 
@@ -52,30 +144,19 @@ _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"
                      "create_plan", "update_plan", "update_wiki"}
 ```
 
-子 Agent 绝不能继承这组管理工具，防止递归生子 Agent、互相操控，以及计划工具绑定主 Agent 的语义被破坏。`_resolve_tools` 在继承主 Agent 全部工具时自动排除这些；显式指定工具列表时也排除。
+子 Agent 绝不能继承这组管理工具（防递归生子 Agent、互相操控）。通信工具（agent_ask/notify/query/list_team）不在黑名单里——它们不是"创建子 Agent"，无递归风险。
 
-**同步 vs 异步**
-
-`agent_prompt` 的 `background` 参数：
-- `False`（默认）：同步阻塞，子 Agent 的过程事件经 `on_event` 回流到主 Agent 的渲染流。
-- `True`：后台 daemon 线程异步跑，不阻塞主 Agent。完成后看板自动更新（`background_tasks` dict），用 `wait_subagents` 取结果。适合并行读/探索/搜索；并发写文件有覆盖风险，改代码类任务建议同步或主 Agent 自己做。
-
-**agent_id 唯一性**
-
-`_resolve_agent_id` 确保每个子 Agent 实例有唯一 id（显式 `agent_id` 优先，否则 `name` / `name_2`… 避让已有键）。子 Agent 的 session 目录嵌套到主 session 的 `agents/<agent_id>/` 下。
-
-### SubAgent 类
+**SubAgent 类**
 
 ```python
 class SubAgent:
     def __init__(self, name, model_name, system, tools, on_event=None,
-                 max_steps=15, token_budget=30000, session_dir=None)
+                 max_steps=50, token_budget=0, session_dir=None,
+                 registry=None, agent_id=None)
     def prompt(self, text: str) -> str  # 派任务，自主用工具完成，返回最终回复
 ```
 
-内部持有 `Agent` 实例，`enable_thinking=True`、`verbose=False`。过程事件经 `on_event` 回流。
-
----
+max_steps 和 token_budget 与主 Agent 对齐（50 步 / 无限制），不再人为限制子 Agent 的能力。
 
 ## 2. 后台服务 + 调度器 — `background.py`
 
@@ -566,4 +647,6 @@ tool_calls / msgs_count / msgs_chars / error / completer
 
 6. **globals() 避免闭包遮蔽**：`feedback.py` 和 `download.py` 的工具闭包内用 `globals()["submit_feedback"]` / `globals()["download_asset"]` 显式取模块级函数，避免闭包同名函数遮蔽。
 
-7. **跨平台进程树清理**：`background.py` 的 `_kill_tree` 在 Win 用 `taskkill /T /F`，Unix 用 `killpg`（SIGTERM→SIGKILL），配合启动时的独立进程组/会话绑定，确保杀整棵树不漏孙进程。
+8. **provider 槽位注入**：`session._teammates_provider`、`_plan_provider`、`_spec_provider`、`_ltm_static_provider`、`_ltm_episodic_provider`、`_time_provider`、`_system_extra_provider`、`_state_provider`——所有运行时上下文都通过 provider 回调注入，Agent 与 Session 深度绑定但解耦：Session 组装上下文时调 provider 要运行时信息，Agent 切换 Session 时重挂所有 provider。
+
+9. **全异步 Agent 协作**：`agent_prompt` 永远异步 + 自动 `caller_id` 绑定。子 Agent 完成后按 caller_id 路由 answer 入 inbox（复用现有 inbox → work_q → run 链路），不需要任何新基础设施。recap（每轮一句话总结）用 daemon 线程异步生成，不阻塞主循环，不进入自己上下文但队友可见。

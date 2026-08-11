@@ -220,8 +220,10 @@ def read_config(agent) -> dict:
     """读取所有可配置项的当前值。fallback_chain 以逗号分隔字符串展示。"""
     cfg = {k: getattr(agent if tgt == "agent" else agent.llm, k)
            for k, (tgt, _) in CONFIGURABLE.items()}
-    chain = getattr(agent.llm, "fallback_chain", [])
-    cfg["fallback_chain"] = ",".join(chain) if chain else ""
+    base_chain = getattr(agent.llm, "_base_fallback_chain", [])
+    eff_chain = getattr(agent.llm, "fallback_chain", [])
+    cfg["fallback_chain"] = ",".join(base_chain) if base_chain else ""
+    cfg["_effective_chain"] = " → ".join(eff_chain) if eff_chain else ""
     try:
         import real_tools
         cfg["tool_timeout"] = real_tools.TOOL_TIMEOUT
@@ -259,12 +261,20 @@ def apply_config(agent, values: dict) -> list:
             results.append(real_tools.set_tool_timeout(int(v)))
         except Exception as e:
             results.append(f"❌ tool_timeout 值非法：{v}（{e}）")
-    # fallback_chain 特殊处理（逗号分隔 → list）
+    # fallback_chain 特殊处理（逗号分隔 → 存为 _base_fallback_chain + 重建有效链）
     if "fallback_chain" in values:
         v = values.pop("fallback_chain")
         chain = [m.strip() for m in str(v).split(",") if m.strip()]
-        agent.llm.fallback_chain = chain
-        results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}")
+        agent.llm._base_fallback_chain = chain
+        agent.llm._rebuild_chain()
+        try:
+            import config
+            saved = config.load_runtime_settings(); saved["fallback_chain"] = ",".join(chain); config.save_runtime_settings(saved)
+        except Exception:
+            pass
+        eff = agent.llm.fallback_chain
+        results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}"
+                       + (f"\n  有效链（{agent.llm._user_model} 在首）：{' → '.join(eff)}" if eff else ""))
     # max_level：分档最高级别（设 session + 存 settings.json；改了清冻结缓存让其按新上限重算）
     if "max_level" in values:
         v = values.pop("max_level")
@@ -411,9 +421,12 @@ def _cmd_model(ctx: CommandContext, args):
     if name not in MODELS:
         print(f"❌ 未知模型 {name}，可用：{list(MODELS)}")
         return
-    ctx.agent.switch_model(name)
+    ctx.agent.switch_model(name, _user_initiated=True)
     m = MODELS[name]
     print(f"✅ 已切换到 {name}: {m['model']} @ {m['base_url']}")
+    chain = getattr(ctx.agent.llm, "fallback_chain", [])
+    if chain:
+        print(f"  有效回退链：{' → '.join(chain)}")
 
 
 def _cmd_autonomous(ctx: CommandContext, args):

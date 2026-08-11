@@ -16,7 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError, BadRequestError
+from openai import (OpenAI, RateLimitError, APITimeoutError, APIConnectionError,
+                    BadRequestError, InternalServerError)
 
 import config
 
@@ -156,12 +157,25 @@ class LLMClient:
             else:
                 profile = {}
         self.model_name = model_name or config.DEFAULT_MODEL
+        self._user_model = self.model_name   # 用户选的模型（/model 或默认），不受 fallback 影响
         self.enable_thinking = enable_thinking
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
-        self.fallback_chain: list[str] = []   # 回退优先级链(如 glm,deepseek,qwen)
-        self.fallback_policy: str = "sticky"  # 回退后下一轮：sticky=永久降级 / reset=每轮回退链首
+        self._base_fallback_chain: list[str] = []  # settings.json 配置的原回退链（不变）
+        self.fallback_chain: list[str] = []   # 运行时有效回退链（= _user_model 提前 + base 其余）
+        self.fallback_policy: str = "sticky"  # reset=每轮回 _user_model / sticky=回退后不动
+        # 从 settings.json 加载回退配置（fallback_chain 逗号分隔 / fallback_policy）
+        try:
+            _rt = config.load_runtime_settings()
+            _bc = (_rt.get("fallback_chain") or "").strip()
+            if _bc:
+                self._base_fallback_chain = [m.strip() for m in _bc.split(",") if m.strip()]
+            _fp = (_rt.get("fallback_policy") or "").strip().lower()
+            if _fp in ("sticky", "reset"):
+                self.fallback_policy = _fp
+        except Exception:
+            pass
         self.reasoning_completer: Optional[str] = None  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
         self._apply_profile(profile)
@@ -201,20 +215,33 @@ class LLMClient:
         self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
         return True
 
-    def switch_model(self, name: str) -> "LLMClient":
-        """运行时热切换模型。Agent 与 Session 共用同一个 LLMClient 对象，切换即全生效。"""
+    def switch_model(self, name: str, _user_initiated: bool = False) -> "LLMClient":
+        """运行时热切换模型。Agent 与 Session 共用同一个 LLMClient 对象，切换即全生效。
+        _user_initiated=True 时（/model 或 WebUI 切换）：记为 _user_model 并重建有效回退链
+        （user_model 提前到链首）；False 时（回退路径自动调用）：只换 profile，不动链。"""
         self._apply_profile(config.get_profile(name))
         self.model_name = name
+        if _user_initiated:
+            self._user_model = name
+            self._rebuild_chain()
         return self
 
+    def _rebuild_chain(self):
+        """重建有效回退链：_user_model 始终在链首 + base_chain 其余按原序（去重）。
+        base_chain 为空时 effective chain 也为空（无回退）。"""
+        if self._base_fallback_chain:
+            self.fallback_chain = ([self._user_model]
+                                 + [m for m in self._base_fallback_chain if m != self._user_model])
+        else:
+            self.fallback_chain = []
+
     def _maybe_reset_to_head(self):
-        """reset 策略：每次调用前若已偏离回退链首模型，先切回去。
-        限流常是临时波动，首选模型可能已恢复，故下一轮重新从链首尝试。
-        sticky 策略或空回退链时不动作（不干扰手动 /model 选模型）。"""
+        """reset 策略：每次调用前若已偏离用户选的模型（_user_model），先切回去。
+        限流常是临时波动，首选模型可能已恢复，故下一轮重新从用户选的模型尝试。
+        sticky 策略时不动作（回退后保持在回退到的模型，不自动切回）。"""
         if (self.fallback_policy == "reset"
-                and self.fallback_chain
-                and self.model_name != self.fallback_chain[0]):
-            self.switch_model(self.fallback_chain[0])
+                and self.model_name != self._user_model):
+            self.switch_model(self._user_model)
 
     def _build_kwargs(self, messages, stream: bool, **overrides) -> dict:
         """组装请求参数。tools / tool_choice 等可通过 overrides 透传。
@@ -291,7 +318,8 @@ class LLMClient:
                     if content:
                         resp.content = content   # 保留原 reasoning
                 return resp
-            except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError, BadRequestError) as e:
+            except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError,
+                    BadRequestError, InternalServerError) as e:
                 # BadRequestError 也触发回退：某些模型会因请求格式拒绝整个请求（典型如 DeepSeek 思考模式
                 # 要求工具调用轮回传 reasoning_content；跨模型混用、历史缺 reasoning 时会 400）。
                 # 换下一个模型即可，不该让单模型的可恢复拒绝把整轮/整条链崩掉。

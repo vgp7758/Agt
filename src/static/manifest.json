@@ -1,0 +1,16 @@
+{
+  "name": "Agt Agent",
+  "short_name": "Agt",
+  "description": "手写的 AI Agent 框架 —— 多 Agent 协作 / 工作流 / WebUI",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#08070f",
+  "theme_color": "#1e1846",
+  "icons": [
+    {"src": "icons/icon_prompt_192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon_prompt_512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon_prompt_192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+    {"src": "icons/icon_prompt_512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

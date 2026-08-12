@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Agt prompt icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1e1846"/>
+      <stop offset="1" stop-color="#08070f"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7ef0dd"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- terminal chevron > -->
+  <path d="M 84 90 L 134 128 L 84 166" fill="none" stroke="url(#cyan)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- pulsing cursor block (the "thinking" agent) -->
+  <rect x="154" y="108" width="18" height="40" rx="5" fill="#7ef0dd" filter="url(#glow)" opacity="0.85"/>
+  <rect x="154" y="108" width="18" height="40" rx="5" fill="#7ef0dd"/>
+  <!-- faint input baseline -->
+  <rect x="70" y="190" width="116" height="6" rx="3" fill="#ffffff" opacity="0.07"/>
+</svg>

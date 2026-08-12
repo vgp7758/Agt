@@ -1,20 +1,22 @@
-<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：语义检索+关键词筛→代码节点合并→LLM精排top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn">
-  <node id="100001" type="start" title="start" x="120.0" y="80.0">
+<workflow name="before_turn_retrieval" description="每轮开始前自动检索历史会话：短消息(≤4字)只看最近3轮；长消息走语义检索+关键词筛→LLM精排top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn" hidden="true">
+  <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>
   </node>
-  <node id="110001" type="plugin" title="plugin" x="420.0" y="80.0" toolName="get_session_history">
+  <node id="105001" type="selector" title="short_msg?" x="420" y="80">
+    <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
+  </node>
+  <node id="110001" type="plugin" title="plugin" x="720" y="190" toolName="get_session_history">
     <in name="max_turns" type="integer"></in>
     <out name="raw" type="list"/>
     <out name="result" type="list" description="工具返回值"/>
   </node>
-  <!-- 语义检索：用 embedding 召回 top-10（配了 embed 才有结果；没配返回空列表→keyword 单路不动） -->
-  <node id="120001" type="plugin" title="semantic_search" x="420.0" y="220.0" toolName="semantic_search_history">
+  <node id="120001" type="plugin" title="semantic_search" x="720" y="300" toolName="semantic_search_history">
     <in name="query" type="string" ref="100001.user_message"/>
     <in name="top_k" type="integer">10</in>
     <out name="result" type="list"/>
   </node>
-  <node id="130001" type="code" title="collect_candidates" x="720.0" y="80.0">
+  <node id="130001" type="code" title="collect_candidates" x="1020" y="230">
     <in name="history" type="list" ref="110001.raw"/>
     <in name="keywords" type="list" ref="802605.output.keywards"/>
     <in name="semantic_hits" type="list" ref="120001.result"/>
@@ -100,10 +102,10 @@ async def main(args) -> dict:
     <out name="candidates" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="150001" type="selector" title="selector" x="1020.0" y="80.0">
+  <node id="150001" type="selector" title="selector" x="1293" y="123">
     <branch><cond op="13" left="130001.candidates.length" right="0" left_type="integer"/></branch>
   </node>
-  <node id="160001" type="llm" title="llm" x="1320.0" y="80.0">
+  <node id="160001" type="llm" title="llm" x="1620" y="80">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="candidates" type="string" ref="130001.candidates"/>
     <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的1-3条（多了冗余），语义候选(kind=semantic，换说法搜到的)优先保留。
@@ -124,7 +126,7 @@ async def main(args) -> dict:
     <out name="output" type="object"><field name="selected" type="list"><field name="kind" type="string" description="turn | tc | semantic"/><field name="turn_idx" type="integer"/><field name="call_id" type="string"/></field></out>
     <batch enabled="false"/>
   </node>
-  <node id="170001" type="code" title="code" x="1620.0" y="80.0">
+  <node id="170001" type="code" title="code" x="1920" y="80">
     <in name="output" type="object" ref="160001.output"/>
     <in name="candidates" type="list" ref="130001.candidates"/>
     <code language="3"><![CDATA[import json
@@ -168,11 +170,11 @@ async def main(args) -> dict:
     <out name="inject" type="boolean"/>
     <out name="result" type="string"/>
   </node>
-  <node id="900001" type="end" title="end" x="1920.0" y="80.0">
+  <node id="900001" type="end" title="end" x="1201.2222290039062" y="23">
     <out name="inject" ref="170001.inject" type="boolean"/>
     <out name="result" ref="170001.result" type="string"/>
   </node>
-  <node id="802605" type="llm" title="LLM" x="420.0" y="320.0">
+  <node id="802605" type="llm" title="LLM" x="720" y="410">
     <in name="query" type="string" ref="100001.user_message"/>
     <param name="prompt" type="string"><![CDATA[用户查询：
 {{query}}]]></param>
@@ -181,14 +183,17 @@ async def main(args) -> dict:
     <out name="output" type="object"><field name="keywards" type="list"/></out>
     <batch enabled="false"/>
   </node>
+  <edge from="100001" to="105001"/>
+  <edge from="105001" to="110001" port="false"/>
+  <edge from="105001" to="120001" port="false"/>
+  <edge from="105001" to="802605" port="false"/>
   <edge from="110001" to="130001"/>
   <edge from="120001" to="130001"/>
+  <edge from="802605" to="130001"/>
+  <edge from="130001" to="150001"/>
   <edge from="150001" to="160001" port="true"/>
   <edge from="160001" to="170001"/>
   <edge from="170001" to="900001"/>
   <edge from="150001" to="900001" port="false"/>
-  <edge from="130001" to="150001"/>
-  <edge from="100001" to="802605"/>
-  <edge from="802605" to="130001"/>
-  <edge from="100001" to="120001"/>
+  <edge from="105001" to="900001" port="true"/>
 </workflow>

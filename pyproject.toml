@@ -58,7 +58,7 @@ Issues = "https://github.com/vgp7758/Agt/issues"
 packages = ["src"]
 
 [tool.setuptools.package-data]
-src = ["static/*.html", "lsp_scripts/*.py", "workflows/*.xml", "assets/*", "agents/*.md", "*.example.py"]
+src = ["static/*.html", "static/icons/*", "static/manifest.json", "lsp_scripts/*.py", "workflows/*.xml", "assets/*", "agents/*.md", "*.example.py"]
 
 [tool.setuptools.dynamic]
 version = {attr = "src.__version__"}

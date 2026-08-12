@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Agt mini icon">
+  <defs>
+    <linearGradient id="nbg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1e1846"/><stop offset="1" stop-color="#08070f"/>
+    </linearGradient>
+    <linearGradient id="ncy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7ef0dd"/><stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#nbg)"/>
+  <path d="M 80 86 L 148 128 L 80 170" fill="none" stroke="url(#ncy)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

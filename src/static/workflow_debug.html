@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>工作流调试</title>
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon_mini_32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/icon_mini_16.png">
+<link rel="apple-touch-icon" sizes="128x128" href="icons/icon_prompt_128.png">
+<link rel="icon" href="icons/favicon.ico" sizes="any">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1e1846">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -1666,7 +1672,7 @@ function _condRefOptions(n,content){
     _outFieldOptions(on).forEach(o=>{
       h+='<option value="'+on.id+'.'+o.path+'"'+(content?.blockID===on.id&&content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
       // list 类型输出：额外提供 .length / .is_empty 作为可选的左值
-      if(o.type==='list'||o.type==='array'){
+      if(o.type==='list'||o.type==='array'||o.type==='string'){
         h+='<option value="'+on.id+'.'+o.path+'.length"'+(content?.blockID===on.id&&content?.name===o.path+'.length'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.length</option>';
         h+='<option value="'+on.id+'.'+o.path+'.is_empty"'+(content?.blockID===on.id&&content?.name===o.path+'.is_empty'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.is_empty</option>';
       }

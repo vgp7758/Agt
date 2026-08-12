@@ -25,7 +25,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 import config
 from commands import CommandContext, apply_config, build_default_registry, read_config
@@ -122,6 +122,26 @@ async def workflow_debug():
 async def rag_page():
     """RAG 文档库管理页：配置 + 建库 + 查询测试。"""
     return HTMLResponse(_RAG_HTML)
+
+
+@app.get("/icons/{name}")
+async def serve_icon(name: str):
+    """站点图标（favicon / logo）—— 仅允许 static/icons/ 下的文件。"""
+    icons_dir = (_STATIC_DIR / "icons").resolve()
+    try:
+        p = (_STATIC_DIR / "icons" / name).resolve()
+        p.relative_to(icons_dir)  # 越界抛 ValueError
+    except ValueError:
+        return HTMLResponse("not found", status_code=404)
+    if not p.is_file():
+        return HTMLResponse("not found", status_code=404)
+    return FileResponse(p, media_type="image/png")
+
+
+@app.get("/manifest.json")
+async def manifest():
+    """PWA manifest。"""
+    return FileResponse(_STATIC_DIR / "manifest.json", media_type="application/manifest+json")
 
 
 # ===================== 工作流编辑器 REST API =====================

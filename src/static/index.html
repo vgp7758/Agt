@@ -4,6 +4,12 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Agt Agent</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon_mini_32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/icon_mini_16.png">
+  <link rel="apple-touch-icon" sizes="128x128" href="icons/icon_prompt_128.png">
+  <link rel="icon" href="icons/favicon.ico" sizes="any">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1e1846">
 <style>
   :root { --bg:#f5f6f8; --me:#2563eb; --bot:#ffffff; --line:#e2e5ea; --muted:#8a9099; }
   * { box-sizing:border-box; }
@@ -178,6 +184,7 @@
 </head>
 <body>
   <header>
+    <img src="icons/icon_prompt_128.png" alt="Agt" width="22" height="22" style="border-radius:5px;box-shadow:0 0 0 1px rgba(255,255,255,.1)">
     <span class="dot" id="dot"></span>
     <h1 id="sessionTitle">Agt Agent</h1>
     <span class="sub" id="status">连接中…</span>
@@ -414,8 +421,10 @@ function updateQueueStatus(size){
 
 // —— 更新会话标题 ——
 function setSessionTitle(title){
+  const t = title || '新会话';
   const el = document.getElementById('sessionTitle');
-  if(el) el.textContent = title || '新会话';
+  if(el) el.textContent = t;
+  document.title = t + ' · Agt';   // 浏览器标签也跟随会话名
 }
 
 function addRow(cls, text){

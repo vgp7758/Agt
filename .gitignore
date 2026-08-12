@@ -35,3 +35,6 @@ src/cache_sim.py
 /verify_prefix_cache.py
 blog/
 resume/
+
+# === 设计草稿 / 临时验证（不入版本） ===
+design/

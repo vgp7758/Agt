@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>工作流编辑器 — Agt</title>
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon_mini_32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/icon_mini_16.png">
+<link rel="apple-touch-icon" sizes="128x128" href="icons/icon_prompt_128.png">
+<link rel="icon" href="icons/favicon.ico" sizes="any">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1e1846">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -363,8 +369,9 @@ function renderAll(){
       }else{
         sx=outPortPos(sn,src.name);
       }
-      const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
-      path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
+      const pe=edgeFrom?{'pointer-events':'none'}:{};
+      const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key,...pe});
+      if(!edgeFrom)path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
       svg.appendChild(path);
       _scissors.push({x:(sx.x+tp.x)/2,y:(sx.y+tp.y)/2,info:{kind:'var',key,tgtNode:tn.id,tgtField:p.name}});
       // 目标端断开 handle：延后到节点之上绘制（避免被节点遮挡）
@@ -385,8 +392,9 @@ function renderAll(){
         const key=tn.id+'::aggr::'+gi+'::'+vi;
         const col=fieldColor(v.type||'string');
         const sel=selEdge&&selEdge.kind==='var'&&selEdge.key===key;
-        const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key});
-        path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
+        const pe2=edgeFrom?{'pointer-events':'none'}:{};
+        const path=elm('path',{d:bezier(sx,tp,true),class:'edge-var'+(sel?' sel':''),stroke:col,'marker-end':'url(#arrowVar)','data-varkey':key,...pe2});
+        if(!edgeFrom)path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'var',key};selNode=null;showProps();renderAll();};
         svg.appendChild(path);
         _scissors.push({x:(sx.x+tp.x)/2,y:(sx.y+tp.y)/2,info:{kind:'var',key,tgtNode:tn.id,tgtField:'__aggr__',aggrGi:gi,aggrVi:vi}});
         _pendingHandles.push({x:tp.x,y:tp.y,r:4,fill:col,stroke:'#fff',info:{kind:'var',key,tgtNode:tn.id,tgtField:'__aggr__',aggrGi:gi,aggrVi:vi},sp:sx,color:col});
@@ -404,8 +412,9 @@ function renderAll(){
     const sp=flowOutPosFor(sn, ed.sourcePortID, fIdx);
     const tp=flowInPos(tn);
     const sel=selEdge&&selEdge.kind==='flow'&&selEdge.i===i;
-    const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i});
-    path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'flow',i};selNode=null;showProps();renderAll();};
+    const pe3=edgeFrom?{'pointer-events':'none'}:{};
+    const path=elm('path',{d:bezier(sp,tp,false),class:'edge-flow'+(sel?' sel':''),'data-flowi':i,...pe3});
+    if(!edgeFrom)path.onclick=(e)=>{e.stopPropagation();selEdge={kind:'flow',i};selNode=null;showProps();renderAll();};
     svg.appendChild(path);
     if(ed.sourcePortID){
       svg.appendChild(elm('text',{x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2-8,class:'edge-label','text-anchor':'middle'},ed.sourcePortID));
@@ -418,10 +427,11 @@ function renderAll(){
   // ---- 节点 ----
   WF.nodes.forEach(n=>svg.appendChild(renderNode(n)));
 
-  // ---- 连线断开 handle（最上层，避免被节点遮挡）----
+  // ---- 连线断开 handle（最上层，避免被节点遮挡；拖线时禁用 pointer-events 让出端口）----
   _pendingHandles.forEach(h=>{
-    const handle=elm('circle',{cx:h.x,cy:h.y,r:h.r,fill:h.fill,stroke:h.stroke,'stroke-width':1.5,class:'edge-handle',style:'cursor:grab'});
-    handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect(h.info,h.sp,h.color);};
+    const pe4=edgeFrom?{'pointer-events':'none'}:{};
+    const handle=elm('circle',{cx:h.x,cy:h.y,r:h.r,fill:h.fill,stroke:h.stroke,'stroke-width':1.5,class:'edge-handle',style:'cursor:grab',...pe4});
+    if(!edgeFrom)handle.onmousedown=(e)=>{e.stopPropagation();startDisconnect(h.info,h.sp,h.color);};
     svg.appendChild(handle);
   });
 
@@ -1660,8 +1670,8 @@ function _condRefOptions(n,content){
     if(on.id===n.id)return;
     _outFieldOptions(on).forEach(o=>{
       h+='<option value="'+on.id+'.'+o.path+'"'+(content?.blockID===on.id&&content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
-      // list 类型输出：额外提供 .length / .is_empty 作为可选的左值
-      if(o.type==='list'||o.type==='array'){
+      // list/string 类型输出：额外提供 .length / .is_empty 作为可选的左值
+      if(o.type==='list'||o.type==='array'||o.type==='string'){
         h+='<option value="'+on.id+'.'+o.path+'.length"'+(content?.blockID===on.id&&content?.name===o.path+'.length'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.length</option>';
         h+='<option value="'+on.id+'.'+o.path+'.is_empty"'+(content?.blockID===on.id&&content?.name===o.path+'.is_empty'?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'.is_empty</option>';
       }

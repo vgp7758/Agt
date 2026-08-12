@@ -20,6 +20,7 @@ from agent_config import SKILL_TOOLS, load_rules, skills_summary, agents_summary
 from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from spec_tools import make_spec_tools
+from survey_tools import make_survey_tools
 from memory_tools import make_recall_tools
 from session_tools import make_session_tools
 from longterm_memory import make_ltm_tools
@@ -237,6 +238,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(SKILL_TOOLS, "技能")
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")
+    _reg(make_survey_tools(agent), "用户交互")
     _reg(make_recall_tools(agent), "记忆召回")
     _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
     _reg(make_ltm_tools(agent), "长期记忆")
@@ -455,6 +457,42 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
             _clear_status()   # 有实际输出：先隐去状态行，避免穿插
             if etype == "user":
                 continue   # CLI 模式下 input() 已回显，不重复渲染（WebUI 走 broadcast 不受影响）
+            if etype == "spec_pending":
+                # commit_spec 阻塞等待用户裁定：CLI 打印 spec 详情 + 提示
+                spec = e.get("spec", [])
+                title = e.get("spec_title", "")
+                design = e.get("spec_design", "")
+                sid = e.get("spec_id", "")
+                print(f"\n📐 施工方案待批阅：{title}（{sid}）")
+                if design:
+                    print(f"   设计：{design[:300]}")
+                for i, s in enumerate(spec):
+                    act = s.get("action", "review")
+                    f = s.get("file", "") or ""
+                    print(f"   {i+1}. [{act}] {f}")
+                print(f"\n   输入 /approve 通过，或 /reject <反馈> 返工")
+                continue
+            if etype == "survey_pending":
+                # ask_user 阻塞等待用户回答：CLI 打印题目 + 选项
+                questions = e.get("questions", [])
+                print(f"\n📋 用户问卷（共 {len(questions)} 题）：")
+                for qi, q in enumerate(questions):
+                    qid = q.get("id", f"q{qi+1}")
+                    title = q.get("title", "")
+                    opts = q.get("options", [])
+                    multi = q.get("multi_select", False)
+                    custom = q.get("allow_custom", False)
+                    tag = "多选" if multi else "单选"
+                    print(f"\n  {qi+1}. [{tag}] {title}")
+                    for oi, opt in enumerate(opts):
+                        print(f"     {oi+1}) {opt}")
+                    if custom:
+                        print(f"     自定义：直接输入文字")
+                    print(f"     → 回答格式：{'逗号分隔序号' if multi else '序号'}"
+                          f"{'+自定义文字' if custom else ''}，如：{('1,3') if multi else '2'}"
+                          f"{(' 链路追踪') if custom else ''}")
+                print(f"\n   输入 /survey <第1题答案> | <第2题答案> | ... 提交（| 分隔各题）")
+                continue
             if etype == "system":
                 print(e.get("text", ""))   # 子 Agent 边界 / agent system 提示（_print_event 不处理 system）
             else:
@@ -620,6 +658,49 @@ def main():
             if user.lower() in {"quit", "exit", "q", "退出"}:
                 work_q.put(None)
                 return
+            # spec 批阅：commit_spec 阻塞等待时，直接解除（不进 work_q，因为 worker 被阻塞）
+            if getattr(agent, "_spec_decision_event", None):
+                if user == "/approve" or user.startswith("/approve"):
+                    from spec_tools import resolve_spec_decision
+                    resolve_spec_decision(agent, "approve")
+                    print("✅ 已批准 spec，继续...", flush=True)
+                    continue
+                if user == "/reject" or user.startswith("/reject"):
+                    from spec_tools import resolve_spec_decision
+                    fb = user[7:].strip()  # remove "/reject"
+                    resolve_spec_decision(agent, "reject", fb)
+                    print(f"❌ 已返工" + (f"：{fb}" if fb else ""), flush=True)
+                    continue
+            # survey 回答：ask_user 阻塞等待时，直接解除
+            if getattr(agent, "_survey_decision_event", None):
+                if user.startswith("/survey"):
+                    from survey_tools import resolve_survey
+                    raw_answers = user[7:].strip()  # remove "/survey"
+                    # 解析答案：| 分隔各题，每题是序号或文字
+                    questions = agent.session.extra_state.get("_pending_survey", [])
+                    parts = [p.strip() for p in raw_answers.split("|")]
+                    answers = {}
+                    for qi, q in enumerate(questions):
+                        qid = q.get("id", f"q{qi+1}")
+                        ans_text = parts[qi] if qi < len(parts) else ""
+                        opts = q.get("options", [])
+                        multi = q.get("multi_select", False)
+                        # 尝试解析序号
+                        if "," in ans_text or ans_text.isdigit():
+                            indices = [int(x.strip()) - 1 for x in ans_text.split(",") if x.strip().isdigit()]
+                            selected = [opts[i] for i in indices if 0 <= i < len(opts)]
+                            # 检查是否有附加文字（如 "1,3 链路追踪"）
+                            text_parts = [x.strip() for x in ans_text.split() if not x.strip().isdigit() and x.strip() != ","]
+                            if text_parts:
+                                selected.append(" ".join(text_parts))
+                            answers[qid] = selected if (multi or len(selected) > 1) else (selected[0] if selected else "")
+                        elif ans_text:
+                            answers[qid] = ans_text
+                        else:
+                            answers[qid] = "(未答)"
+                    resolve_survey(agent, answers)
+                    print("✅ 已提交问卷答案，继续...", flush=True)
+                    continue
             # /agent 命令切换了交互目标 → 用户输入直接路由到目标 agent
             target = getattr(agent, "_active_target", "_main_")
             if target != "_main_":

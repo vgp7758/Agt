@@ -59,6 +59,7 @@ _INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 _EDITOR_HTML = (_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8")
 _RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
 _WF_DEBUG_HTML = (_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8")
+_MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
 
 
 def _broadcast(ev: dict):
@@ -122,6 +123,12 @@ async def workflow_debug():
 async def rag_page():
     """RAG 文档库管理页：配置 + 建库 + 查询测试。"""
     return HTMLResponse(_RAG_HTML)
+
+
+@app.get("/memory")
+async def memory_page():
+    """长期记忆管理页：查看/编辑/删除三类记忆。"""
+    return HTMLResponse(_MEMORY_HTML)
 
 
 @app.get("/icons/{name}")
@@ -468,6 +475,90 @@ async def api_rag_query(q: str = "", top_k: int = 5):
     return {"results": hits}
 
 
+# ===================== 长期记忆 API =====================
+
+def _get_ltm():
+    """获取当前 Agent 的 LongTermMemory 实例。"""
+    if _agent is None:
+        return None
+    return getattr(_agent, "ltm", None)
+
+
+@app.get("/api/memory/list")
+async def api_memory_list(type: str = "", q: str = ""):
+    """列出记忆（可按类型+关键词过滤）。"""
+    ltm = _get_ltm()
+    if ltm is None:
+        return {"items": [], "error": "Agent 未就绪"}
+    t = type.strip() or None
+    items = ltm.list(type_=t, query=q.strip() or None)
+    return {"items": items}
+
+
+@app.get("/api/memory/{memory_id}")
+async def api_memory_get(memory_id: str):
+    """获取单条记忆详情。"""
+    ltm = _get_ltm()
+    if ltm is None:
+        return {"error": "Agent 未就绪"}
+    rec = ltm.get(memory_id)
+    if rec is None:
+        return {"error": f"未找到 id={memory_id}"}
+    return rec
+
+
+@app.post("/api/memory")
+async def api_memory_add(request: Request):
+    """新增记忆。"""
+    ltm = _get_ltm()
+    if ltm is None:
+        return {"error": "Agent 未就绪"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    try:
+        tags = [t.strip() for t in (body.get("tags") or "").split(",") if t.strip()]
+        res = ltm.add(body.get("type", "semantic"), body.get("title", ""),
+                      body.get("content", ""), tags)
+        return {"ok": True, **res}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.put("/api/memory/{memory_id}")
+async def api_memory_update(memory_id: str, request: Request):
+    """更新记忆（title/content/tags 至少传一个）。"""
+    ltm = _get_ltm()
+    if ltm is None:
+        return {"error": "Agent 未就绪"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    fields = {}
+    if body.get("title"):
+        fields["title"] = body["title"]
+    if body.get("content"):
+        fields["content"] = body["content"]
+    if "tags" in body:
+        fields["tags"] = [t.strip() for t in (body["tags"] or "").split(",") if t.strip()]
+    if not fields:
+        return {"error": "至少传 title/content/tags 之一"}
+    ok = ltm.update(memory_id, **fields)
+    return {"ok": ok} if ok else {"error": f"未找到 id={memory_id}"}
+
+
+@app.delete("/api/memory/{memory_id}")
+async def api_memory_delete(memory_id: str):
+    """删除记忆。"""
+    ltm = _get_ltm()
+    if ltm is None:
+        return {"error": "Agent 未就绪"}
+    ok = ltm.delete(memory_id)
+    return {"ok": ok} if ok else {"error": f"未找到 id={memory_id}"}
+
+
 # ===================== WebSocket 端点 =====================
 
 @app.websocket("/ws")
@@ -605,14 +696,13 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "session_history",
                          "name": agent.session.name or "(当前会话)",
                          "turns": agent.session.to_history()})
-        # 补发活动 spec：spec 面板靠 spec/spec_review 事件驱动，重连不会自动重放，
-        # 否则刷新/断线后批阅栏与详情会丢失。committed/rejected 必须用 spec_review，
-        # 前端才会绑定批准/返工回调。
-        if getattr(agent, "active_spec", None):
-            from spec_tools import _spec_event_payload
-            _rs = agent.active_spec.get("review_state", "")
-            await _send(ws, _spec_event_payload(
-                agent, "spec_review" if _rs in ("committed", "rejected") else "spec"))
+        # 补发活动 spec：spec 面板靠 spec 事件驱动，重连不会自动重放。
+        # 如果有 pending spec（committed 态），用 spec_pending 让前端渲染交互气泡。
+        from spec_tools import check_pending_spec, _spec_event_payload
+        from survey_tools import check_pending_survey
+        if not check_pending_spec(agent) and not check_pending_survey(agent):
+            if getattr(agent, "active_spec", None):
+                await _send(ws, _spec_event_payload(agent))
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         # 走 work_q：/reset 命令走和 CLI 完全相同的路径（worker dispatch → print 到 CLI）
@@ -649,12 +739,11 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             _broadcast({"type": "session_history",
                         "name": agent.session.name or _ls_name,
                         "turns": agent.session.to_history()})
-            # 切会话是全局状态变化：广播当前活动 spec，让所有客户端刷新 spec 面板
-            if getattr(agent, "active_spec", None):
-                from spec_tools import _spec_event_payload
-                _rs = agent.active_spec.get("review_state", "")
-                _broadcast(_spec_event_payload(
-                    agent, "spec_review" if _rs in ("committed", "rejected") else "spec"))
+            # 切会话后检查是否有 pending spec（committed 态→恢复等待裁定状态）
+            from spec_tools import check_pending_spec, _spec_event_payload
+            if not check_pending_spec(agent):
+                if getattr(agent, "active_spec", None):
+                    _broadcast(_spec_event_payload(agent))
         _work_q.put(("task", _sync_loaded))
         await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
         return
@@ -676,6 +765,16 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "workflows", "items": workflows_info(_workspace)})
         await _send(ws, {"type": "system", "text":
                          f"🔄 已重载工作流：{len(ok)} 可用" + (f"，{len(broken)} 个失败" if broken else "")})
+        return
+    # spec 批阅：用户在 WebUI 点击通过/返工后，解除 commit_spec 的阻塞
+    if isinstance(_d, dict) and _d.get("action") == "spec_decision":
+        from spec_tools import resolve_spec_decision
+        resolve_spec_decision(agent, _d.get("decision", ""), _d.get("feedback", ""))
+        return
+    # survey 回答：用户在 WebUI 提交问卷答案后，解除 ask_user 的阻塞
+    if isinstance(_d, dict) and _d.get("action") == "survey_decision":
+        from survey_tools import resolve_survey
+        resolve_survey(agent, _d.get("answers", {}))
         return
     # /agent 命令的 WebUI 支持：列出团队 / 切换交互目标
     if isinstance(_d, dict) and _d.get("action") == "list_team":

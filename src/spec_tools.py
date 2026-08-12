@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -149,6 +150,7 @@ def _spec_event_payload(agent, event_type: str = "spec") -> dict:
         "spec_id": getattr(agent, "active_spec_id", None),
         "review_state": (spec or {}).get("review_state", ""),
         "spec_title": (spec or {}).get("title", ""),
+        "spec_design": (spec or {}).get("design", ""),
     }
 
 
@@ -331,8 +333,9 @@ def make_spec_tools(agent) -> list:
 
     def commit_spec(spec_id: str = "") -> str:
         """提交一个 spec 供用户批阅（draft → committed）。spec_id 留空=提交当前活动 spec。
-        触发 UI「请批阅施工方案」事件，等用户裁定：通过 → build_plan_from_spec 自动建 plan 开始施工；
-        返工 → regenerate_spec 据反馈重新生成。committed 态 spec 每轮注入 SYSTEM 让你清楚在等批阅。"""
+        提交后【阻塞等待用户裁定】——你在 WebUI/CLI 看到 spec 详情后点「通过」或「返工」。
+        通过 → 自动建 plan 开始施工；返工 → 返回反馈，你用 regenerate_spec 重新生成。"""
+        import threading
         sid = (spec_id or agent.active_spec_id or "").strip()
         if not sid:
             return "[错误] 没有活动 spec 可提交；先 create_spec 或 commit_spec(<spec_id>)"
@@ -344,53 +347,39 @@ def make_spec_tools(agent) -> list:
         spec["review_state"] = "committed"
         _save_spec(agent.session.workspace, spec)
         _set_active_spec(agent, spec)
-        _emit_spec(agent, event_type="spec_review")
-        return (f"已提交 spec {sid} 供用户批阅（committed 态）。\n"
-                + _spec_text(spec)
-                + "\n\n⚠️ 等待用户裁定：通过则自动建 plan 施工，返工则据反馈 regenerate_spec。")
-
-    def approve_spec(spec_id: str = "") -> str:
-        """【用户裁定·通过】把 spec 标记 approved 并自动生成对应 plan、设为活动计划、开始施工。
-        通常由 UI「通过」按钮触发；spec_id 留空=批准当前活动 spec。approved 后 spec 不再注入 SYSTEM
-        （由生成的 plan 接管注入）。"""
-        sid = (spec_id or agent.active_spec_id or "").strip()
-        if not sid:
-            return "[错误] 没有活动 spec"
-        spec = _load_spec(agent.session.workspace, sid)
-        if not spec:
-            return f"[错误] 找不到 spec {sid}"
-        if spec.get("review_state") == "approved":
-            return f"spec {sid} 已通过"
-        spec["review_state"] = "approved"
-        _save_spec(agent.session.workspace, spec)
-        # 生成 plan 并设为活动计划
-        from plan_tools import _set_active as _plan_set_active, _save_plan, _emit_plan
-        plan = _build_plan_from_spec(agent.session.workspace, spec)
-        _save_plan(agent.session.workspace, plan)
-        _plan_set_active(agent, plan)
-        _emit_plan(agent)
-        _set_active_spec(agent, spec)
-        _emit_spec(agent)
-        return (f"✅ spec {sid} 已通过，已生成 plan {plan['id']}（{len(plan['steps'])} 步）并设为活动计划，开始施工。\n"
-                + f"用 update_plan(step, status) 推进进度。")
-
-    def reject_spec(spec_id: str = "", feedback: str = "") -> str:
-        """【用户裁定·返工】把 spec 标记 rejected + 记录反馈，提示 Agent 重新生成。
-        通常由 UI「返工」按钮触发（附反馈意见）；spec_id 留空=返工当前活动 spec。
-        rejected 态 spec 每轮注入 SYSTEM 时会带上反馈，让 Agent 据此 regenerate_spec。"""
-        sid = (spec_id or agent.active_spec_id or "").strip()
-        if not sid:
-            return "[错误] 没有活动 spec"
-        spec = _load_spec(agent.session.workspace, sid)
-        if not spec:
-            return f"[错误] 找不到 spec {sid}"
-        spec["review_state"] = "rejected"
-        spec["feedback"] = (feedback or "").strip()
-        _save_spec(agent.session.workspace, spec)
-        _set_active_spec(agent, spec)
-        _emit_spec(agent, event_type="spec_review")
-        return (f"❌ spec {sid} 已返工。" + (f"反馈：{spec['feedback']}" if spec["feedback"] else "")
-                + "\n请据反馈用 regenerate_spec(spec_id, feedback) 重新生成一版 spec。")
+        # 记录 pending spec 到 extra_state（持久化：程序关了读档后能恢复等待状态）
+        agent.session.extra_state["_pending_spec"] = sid
+        # 阻塞等待用户裁定（无超时——一直等到用户回应或程序关闭）
+        agent._spec_decision_event = threading.Event()
+        agent._spec_decision_result = None
+        _emit_spec(agent, event_type="spec_pending")
+        agent._spec_decision_event.wait()   # 无限等待
+        result = agent._spec_decision_result
+        agent._spec_decision_event = None
+        # 清除 pending 标记
+        agent.session.extra_state.pop("_pending_spec", None)
+        decision = result.get("decision", "")
+        feedback = result.get("feedback", "")
+        if decision == "approve":
+            spec["review_state"] = "approved"
+            _save_spec(agent.session.workspace, spec)
+            from plan_tools import _set_active as _plan_set_active, _save_plan, _emit_plan
+            plan = _build_plan_from_spec(agent.session.workspace, spec)
+            _save_plan(agent.session.workspace, plan)
+            _plan_set_active(agent, plan)
+            _emit_plan(agent)
+            _set_active_spec(agent, spec)
+            _emit_spec(agent)
+            return (f"✅ 用户已批准 spec {sid}！已生成 plan {plan['id']}（{len(plan['steps'])} 步）并设为活动计划，开始施工。\n"
+                    + f"用 update_plan(step, status) 推进进度。")
+        else:
+            spec["review_state"] = "rejected"
+            spec["feedback"] = feedback
+            _save_spec(agent.session.workspace, spec)
+            _set_active_spec(agent, spec)
+            _emit_spec(agent)
+            return (f"❌ 用户返工了 spec {sid}." + (f" 反馈：{feedback}" if feedback else "")
+                    + "\n请据反馈用 regenerate_spec(spec_id, feedback) 重新生成一版 spec。")
 
     def regenerate_spec(spec_id: str, feedback: str, title: str = "", steps: list = None,
                         design: str = "") -> str:
@@ -406,12 +395,10 @@ def make_spec_tools(agent) -> list:
         old = _load_spec(agent.session.workspace, sid)
         if not old:
             return f"[错误] 找不到旧 spec {sid}"
-        # 旧 spec 标记 rejected + 记反馈（若还没标）
         if old.get("review_state") != "rejected":
             old["review_state"] = "rejected"
             old["feedback"] = feedback.strip()
             _save_spec(agent.session.workspace, old)
-        # 新 spec
         new_spec = {
             "id": _gen_spec_id(),
             "title": (title or old.get("title", "未命名方案")).strip() or "未命名方案",
@@ -473,14 +460,12 @@ def make_spec_tools(agent) -> list:
         model: 指定模型，留空=用当前模型。本质是 agent_prompt 的语义化包装（探索专用）。"""
         from multiagent import SubAgent
         import config
-        # 探索子 Agent 不需要 .agent/agents/ 声明文件——直接建临时实例
         system = (f"你是探索子 Agent「{name}」，专注【只读探索】。目标：{goal}\n"
                   "用 read_file/grep/list_dir/find_function 等只读工具摸清代码结构，"
                   "返回结构化发现报告：关键文件、关键函数/类、注入点/集成点、潜在坑。不要改任何文件。")
         model_name = model or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name
-        # 探索用最小只读工具集，继承主 Agent 但排除管理/写工具
         _READONLY = {"read_file", "grep", "list_dir", "find_function", "get_tool_detail",
                      "list_tool_logs", "recall", "web_search", "open_url"}
         from tools import Toolbox
@@ -492,5 +477,81 @@ def make_spec_tools(agent) -> list:
         except Exception as e:
             return f"[探索子 Agent 调用出错] {type(e).__name__}: {e}"
 
-    return [Tool(create_spec), Tool(commit_spec), Tool(approve_spec), Tool(reject_spec),
+    return [Tool(create_spec), Tool(commit_spec),
             Tool(regenerate_spec), Tool(list_specs), Tool(recall_spec), Tool(explore_subagent)]
+
+def resolve_spec_decision(agent, decision: str, feedback: str = ""):
+    """用户对 commit_spec 的阻塞等待做出裁定。由 server.py（WS action）或 chat.py（CLI 命令）调用。
+    
+    两种场景：
+    1. 正常阻塞中：commit_spec 在 worker 线程里 Event.wait() 阻塞 → set event 解除阻塞，
+       commit_spec 自己处理 approve（建 plan）/ reject（返回反馈给 Agent）。
+    2. 读档恢复：程序重启后从 meta.json 发现 _pending_spec → 直接执行 approve/reject + 喂 agent 新消息
+       （因为原始的 agent.run() 已随程序退出而消失）。"""
+    ev = getattr(agent, "_spec_decision_event", None)
+    if ev:
+        # 场景1：正常阻塞中——set event 解除 commit_spec 的阻塞
+        agent._spec_decision_result = {"decision": decision, "feedback": (feedback or "").strip()}
+        ev.set()
+        return
+    # 场景2：读档恢复——没有阻塞线程，直接处理
+    sid = agent.session.extra_state.pop("_pending_spec", "")
+    if not sid:
+        sid = getattr(agent, "active_spec_id", "") or ""
+    if not sid:
+        return
+    spec = _load_spec(agent.session.workspace, sid)
+    if not spec:
+        return
+    if decision == "approve":
+        spec["review_state"] = "approved"
+        _save_spec(agent.session.workspace, spec)
+        _set_active_spec(agent, spec)
+        from plan_tools import _set_active as _plan_set_active, _save_plan, _emit_plan
+        plan = _build_plan_from_spec(agent.session.workspace, spec)
+        _save_plan(agent.session.workspace, plan)
+        _plan_set_active(agent, plan)
+        _emit_plan(agent)
+        _emit_spec(agent)
+        # 喂 agent 一条消息让它知道 spec 已通过、开始施工
+        try:
+            from plan_tools import _emit_plan
+            msg = (f"[系统] 用户已批准 spec {sid}（读档恢复）。已生成 plan {plan['id']}（{len(plan['steps'])} 步）。"
+                   f"请用 update_plan 推进施工。")
+            if getattr(agent, "on_event", None):
+                agent.on_event({"type": "system", "text": msg})
+        except Exception:
+            pass
+    else:
+        spec["review_state"] = "rejected"
+        spec["feedback"] = (feedback or "").strip()
+        _save_spec(agent.session.workspace, spec)
+        _set_active_spec(agent, spec)
+        _emit_spec(agent)
+        try:
+            msg = (f"[系统] 用户返工了 spec {sid}（读档恢复）。" +
+                   (f"反馈：{feedback}" if feedback else "") +
+                   " 请用 regenerate_spec 重新生成。")
+            if getattr(agent, "on_event", None):
+                agent.on_event({"type": "system", "text": msg})
+        except Exception:
+            pass
+
+
+def check_pending_spec(agent):
+    """检查是否有未决的 pending spec（程序重启/读档后恢复等待状态）。
+    如果有，重新 emit spec_pending 事件让用户看到待批阅的 spec。
+    由 server.py（WS 连接）和 chat.py（session 恢复）调用。"""
+    sid = agent.session.extra_state.get("_pending_spec", "")
+    if not sid:
+        # 也检查活动 spec 是否处于 committed 态（兼容旧数据）
+        spec = getattr(agent, "active_spec", None)
+        if spec and spec.get("review_state") == "committed":
+            sid = spec.get("id", "")
+    if sid:
+        spec = _load_spec(agent.session.workspace, sid)
+        if spec and spec.get("review_state") == "committed":
+            _set_active_spec(agent, spec)
+            _emit_spec(agent, event_type="spec_pending")
+            return True
+    return False

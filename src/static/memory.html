@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>长期记忆 — Agt</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;background:#0d1117;color:#e6edf3;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:12px}
+header h1{font-size:16px;font-weight:600}
+header .sub{color:#8b949e;font-size:12px}
+header a{margin-left:auto;color:#58a6ff;text-decoration:none;font-size:13px}
+header a:hover{text-decoration:underline}
+.toolbar{display:flex;align-items:center;gap:8px;padding:8px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-wrap:wrap}
+.toolbar input[type=text]{flex:1;min-width:200px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px 12px;color:#e6edf3;font-size:13px}
+.toolbar input[type=text]:focus{outline:none;border-color:#58a6ff}
+.tabs{display:flex;gap:4px}
+.tab{padding:5px 14px;border-radius:6px;cursor:pointer;font-size:13px;color:#8b949e;transition:all .15s}
+.tab:hover{background:#21262d;color:#e6edf3}
+.tab.active{background:#238636;color:#fff}
+.btn{padding:5px 12px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#e6edf3;cursor:pointer;font-size:13px}
+.btn:hover{border-color:#8b949e}
+.btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.btn.danger{background:#da3633;border-color:#da3633;color:#fff}
+.btn.small{padding:3px 8px;font-size:12px}
+#list{flex:1;overflow-y:auto;padding:12px 16px}
+.mem-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:10px;transition:border-color .15s}
+.mem-card:hover{border-color:#484f58}
+.mem-card .mem-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.mem-card .mem-id{font-family:monospace;font-size:11px;color:#8b949e}
+.mem-card .mem-type{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
+.mem-card .mem-type.semantic{background:#1f6feb33;color:#58a6ff}
+.mem-card .mem-type.episodic{background:#23863633;color:#3fb950}
+.mem-card .mem-type.procedural{background:#bc8cff33;color:#bc8cff}
+.mem-card .mem-title{font-weight:600;font-size:14px;flex:1}
+.mem-card .mem-actions{margin-left:auto;display:flex;gap:4px}
+.mem-card .mem-content{color:#c9d1d9;font-size:13px;white-space:pre-wrap;word-break:break-word}
+.mem-card .mem-tags{margin-top:6px;display:flex;gap:4px;flex-wrap:wrap}
+.mem-card .tag{background:#21262d;color:#8b949e;padding:2px 8px;border-radius:8px;font-size:11px}
+.mem-card .mem-meta{margin-top:6px;color:#484f58;font-size:11px}
+.mem-card.editing{border-color:#58a6ff}
+.mem-card textarea{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;color:#e6edf3;font:13px/1.5 system-ui,sans-serif;resize:vertical;margin:4px 0}
+.mem-card textarea:focus{outline:none;border-color:#58a6ff}
+.mem-card input[type=text].edit-title{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px 10px;color:#e6edf3;font-weight:600;font-size:14px}
+.empty{text-align:center;color:#484f58;padding:60px 20px}
+/* 新增弹窗 */
+#addModal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#0008;z-index:100;align-items:center;justify-content:center}
+#addModal.show{display:flex}
+.modal-box{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;width:500px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.modal-box h3{margin-bottom:14px}
+.modal-box label{display:block;margin:8px 0 4px;color:#8b949e;font-size:12px}
+.modal-box select,.modal-box textarea,.modal-box input[type=text]{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;color:#e6edf3;font:13px/1.5 system-ui,sans-serif}
+.modal-box textarea{min-height:80px;resize:vertical}
+.modal-box textarea:focus,.modal-box input:focus,.modal-box select:focus{outline:none;border-color:#58a6ff}
+.modal-btns{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#238636;color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;z-index:200;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 长期记忆</h1>
+  <span class="sub" id="counts"></span>
+  <a href="/">← 返回主界面</a>
+</header>
+<div class="toolbar">
+  <div class="tabs">
+    <div class="tab active" data-type="">全部</div>
+    <div class="tab" data-type="semantic">事实/偏好</div>
+    <div class="tab" data-type="episodic">情境</div>
+    <div class="tab" data-type="procedural">程序经验</div>
+  </div>
+  <input type="text" id="search" placeholder="搜索标题/内容/标签…" oninput="doSearch()">
+  <button class="btn primary" onclick="showAdd()">➕ 新增</button>
+</div>
+<div id="list"></div>
+
+<div id="addModal">
+  <div class="modal-box">
+    <h3>新增记忆</h3>
+    <label>类型</label>
+    <select id="addType">
+      <option value="semantic">semantic（事实/偏好 — 每轮始终注入）</option>
+      <option value="episodic">episodic（情境 — 按问题召回）</option>
+      <option value="procedural">procedural（程序经验 — 渐进披露）</option>
+    </select>
+    <label>标题（≤30字，精炼达意）</label>
+    <input type="text" id="addTitle" placeholder="一句话标题">
+    <label>内容</label>
+    <textarea id="addContent" placeholder="具体内容…"></textarea>
+    <label>标签（逗号分隔）</label>
+    <input type="text" id="addTags" placeholder="标签1,标签2">
+    <div class="modal-btns">
+      <button class="btn" onclick="hideAdd()">取消</button>
+      <button class="btn primary" onclick="submitAdd()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let curType='', curQuery='', allItems=[];
+const TYPE_LABELS={semantic:'事实/偏好',episodic:'情境',procedural:'程序经验'};
+
+async function load(){
+  const params=new URLSearchParams();
+  if(curType)params.set('type',curType);
+  if(curQuery)params.set('q',curQuery);
+  try{
+    const res=await fetch('/api/memory/list?'+params);
+    const data=await res.json();
+    allItems=data.items||[];
+    document.getElementById('counts').textContent=typeof data.count==='number'?`${data.count} 条`:`${allItems.length} 条`;
+  }catch(e){allItems=[];}
+  render();
+}
+
+function render(){
+  const el=document.getElementById('list');
+  if(!allItems.length){el.innerHTML='<div class="empty">暂无记忆</div>';return;}
+  el.innerHTML=allItems.map(m=>memCard(m)).join('');
+}
+
+function memCard(m){
+  const tags=(m.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('');
+  const dt=m.created_at?new Date(m.created_at*1000).toLocaleString('zh-CN'):'';
+  return `<div class="mem-card" id="card-${esc(m.id)}">
+    <div class="mem-head">
+      <span class="mem-type ${m.type}">${TYPE_LABELS[m.type]||m.type}</span>
+      <span class="mem-id">${esc(m.id)}</span>
+      <span class="mem-title" id="title-${esc(m.id)}">${esc(m.title)}</span>
+      <span class="mem-actions">
+        <button class="btn small" onclick="editMode('${esc(m.id)}')">编辑</button>
+        <button class="btn small danger" onclick="delMem('${esc(m.id)}','${esc(m.title).replace(/'/g,"\\'")}')">删除</button>
+      </span>
+    </div>
+    <div class="mem-content" id="content-${esc(m.id)}">${esc(m.content)}</div>
+    ${tags?`<div class="mem-tags">${tags}</div>`:''}
+    <div class="mem-meta">${dt}${m.origin_session?` · 会话: ${esc(m.origin_session)}`:''}</div>
+  </div>`;
+}
+
+function editMode(id){
+  const card=document.getElementById('card-'+id);
+  if(!card)return;
+  const m=allItems.find(x=>x.id===id);
+  if(!m)return;
+  card.classList.add('editing');
+  const tagsStr=(m.tags||[]).join(', ');
+  card.innerHTML=`
+    <div class="mem-head">
+      <span class="mem-type ${m.type}">${TYPE_LABELS[m.type]||m.type}</span>
+      <span class="mem-id">${esc(m.id)}</span>
+    </div>
+    <input type="text" class="edit-title" id="edit-title-${id}" value="${esc(m.title)}">
+    <label style="color:#8b949e;font-size:12px;margin:6px 0 2px;display:block">内容</label>
+    <textarea id="edit-content-${id}" rows="5">${esc(m.content)}</textarea>
+    <label style="color:#8b949e;font-size:12px;margin:6px 0 2px;display:block">标签（逗号分隔）</label>
+    <input type="text" id="edit-tags-${id}" value="${esc(tagsStr)}" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;color:#e6edf3">
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn primary small" onclick="saveEdit('${id}')">保存</button>
+      <button class="btn small" onclick="render()">取消</button>
+    </div>`;
+}
+
+async function saveEdit(id){
+  const title=document.getElementById('edit-title-'+id).value.trim();
+  const content=document.getElementById('edit-content-'+id).value.trim();
+  const tags=document.getElementById('edit-tags-'+id).value.trim();
+  if(!title){toast('标题不能为空');return;}
+  try{
+    const res=await fetch('/api/memory/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,content,tags})});
+    const data=await res.json();
+    if(data.ok){toast('✅ 已更新');load();}
+    else{toast('❌ '+(data.error||'更新失败'));}
+  }catch(e){toast('❌ '+e.message);}
+}
+
+async function delMem(id,title){
+  if(!confirm(`确定删除「${title}」？此操作不可撤销。`))return;
+  try{
+    const res=await fetch('/api/memory/'+encodeURIComponent(id),{method:'DELETE'});
+    const data=await res.json();
+    if(data.ok){toast('🗑️ 已删除');load();}
+    else{toast('❌ '+(data.error||'删除失败'));}
+  }catch(e){toast('❌ '+e.message);}
+}
+
+// Tab 切换
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    curType=t.dataset.type;
+    load();
+  };
+});
+
+// 搜索（防抖）
+let searchTimer=null;
+function doSearch(){
+  clearTimeout(searchTimer);
+  searchTimer=setTimeout(()=>{
+    curQuery=document.getElementById('search').value.trim();
+    load();
+  },300);
+}
+
+// 新增弹窗
+function showAdd(){document.getElementById('addModal').classList.add('show');document.getElementById('addTitle').focus();}
+function hideAdd(){document.getElementById('addModal').classList.remove('show');}
+async function submitAdd(){
+  const type=document.getElementById('addType').value;
+  const title=document.getElementById('addTitle').value.trim();
+  const content=document.getElementById('addContent').value.trim();
+  const tags=document.getElementById('addTags').value.trim();
+  if(!title){toast('标题不能为空');return;}
+  try{
+    const res=await fetch('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,title,content,tags})});
+    const data=await res.json();
+    if(data.ok){toast('✅ 已添加');hideAdd();document.getElementById('addTitle').value='';document.getElementById('addContent').value='';document.getElementById('addTags').value='';load();}
+    else{toast('❌ '+(data.error||'添加失败'));}
+  }catch(e){toast('❌ '+e.message);}
+}
+
+// 点击遮罩关闭
+document.getElementById('addModal').onclick=e=>{if(e.target.id==='addModal')hideAdd();};
+
+function toast(msg){
+  const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2500);
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+load();
+</script>
+</body>
+</html>

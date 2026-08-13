@@ -36,12 +36,13 @@ class AgentRegistry:
 
     def register(self, agent_id: str, name: str, role: str, model: str,
                  agent: object, task: str = "", status: str = "running",
-                 caller_id: str = "") -> AgentEntry:
+                 caller_id: str = "", recap: str = "") -> AgentEntry:
         """注册一个 Agent。同 agent_id 覆盖（重新派活时复用 id）。"""
         with self._lock:
             entry = AgentEntry(
                 agent_id=agent_id, name=name, role=role, model=model,
                 agent=agent, task=task, status=status, caller_id=caller_id,
+                recap=recap,
             )
             self._agents[agent_id] = entry
             return entry
@@ -87,44 +88,13 @@ class AgentRegistry:
             if entry:
                 entry.recap = recap
 
-    def format_team(self, exclude_id: str = "", session_dir=None) -> str:
+    def format_team(self, exclude_id: str = "") -> str:
         """格式化团队清单，供 SYSTEM 注入。exclude_id 的 Agent 不列自己。
-        同时扫描 session_dir/agents/ 目录，列出已完成的子 Agent（即使不在内存 registry 中）。"""
+        子 Agent 由 Agent._restore_subagents() 在 set_session 时扫描 session_dir/agents/ 注册到 registry，
+        所以这里只需读 registry——不再扫磁盘。"""
         with self._lock:
             entries = [e for e in sorted(self._agents.values(),
                                          key=lambda x: x.registered_at) if e.agent_id != exclude_id]
-        
-        # 扫描已完成的子 Agent session（即使 registry 里没有）
-        if session_dir:
-            agents_dir = session_dir / "agents"
-            if agents_dir.exists():
-                for d in agents_dir.iterdir():
-                    if d.is_dir():
-                        aid = d.name
-                        # 跳过已在 registry 里的
-                        if any(e.agent_id == aid for e in entries):
-                            continue
-                        # 读 meta.json 拿信息
-                        meta_path = d / "meta.json"
-                        if meta_path.exists():
-                            try:
-                                import json
-                                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                                # 子 Agent 元信息存在 extra_state._agent_meta 里（agent_prompt 创建时写入）
-                                am = (meta.get("extra_state") or {}).get("_agent_meta") or {}
-                                if am:   # 有 _agent_meta 才是子 Agent 的 session
-                                    entries.append(AgentEntry(
-                                        agent_id=am.get("agent_id", aid),
-                                        name=am.get("name", aid),
-                                        role="subagent",
-                                        model=am.get("model", "?"),
-                                        task=am.get("task", "(历史任务)"),
-                                        status="done",
-                                        caller_id=am.get("caller_id", ""),
-                                    ))
-                            except Exception:
-                                pass
-        
         if not entries:
             return ""
         lines = ["【当前 Agent 团队】"]

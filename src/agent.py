@@ -399,6 +399,7 @@ class Agent:
         session._log_handler = self._log_handler                   # 日志 handler 跟到新 session
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)
+        self._restore_subagents()   # 扫描 session_dir/agents/ 恢复子 Agent 列表到 registry
 
     def _emit_plan_if_any(self):
         """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""
@@ -563,15 +564,66 @@ class Agent:
             return ""
 
     def _teammates_block(self) -> str:
-        """团队感知注入：列出 registry 中其他活跃 Agent + 历史子 Agent，让本 Agent 知道队友的存在。
+        """团队感知注入：列出 registry 中其他活跃 Agent，让本 Agent 知道队友的存在。
         无 registry 或无其他 Agent 时返回 ''（不注入）。"""
         if not self.registry:
             return ""
         try:
-            sdir = getattr(self.session, "session_dir", None)
-            return self.registry.format_team(exclude_id=self.agent_id, session_dir=sdir)
+            return self.registry.format_team(exclude_id=self.agent_id)
         except Exception:
             return ""
+
+    def _restore_subagents(self):
+        """读档后恢复子 Agent 列表：扫描 session_dir/agents/，注册到 registry（status=done）。
+        子 Agent 的 meta.json 里存了 _agent_meta（agent_id/name/model/task/caller_id/recap）；
+        老数据没有则用目录名兜底。agent=None（历史子 Agent，不创建实例——/agent 切换时按需 lazy load）。"""
+        if not self.registry:
+            return
+        # 先清除 registry 中非 _main_ 的旧条目（上个 session 的子 Agent）
+        with self.registry._lock:
+            old_ids = [k for k in self.registry._agents if k != self.agent_id]
+            for k in old_ids:
+                del self.registry._agents[k]
+        sdir = getattr(self.session, "session_dir", None)
+        if not sdir:
+            _LOG.warning("_restore_subagents: session_dir 为空，跳过")
+            return
+        from pathlib import Path
+        import json
+        agents_dir = Path(sdir) / "agents"
+        if not agents_dir.exists():
+            _LOG.debug("_restore_subagents: agents/ 目录不存在: %s", agents_dir)
+            return
+        count = 0
+        for ad in sorted(agents_dir.iterdir()):
+            if not ad.is_dir():
+                continue
+            aid = ad.name
+            if self.registry.lookup(aid):
+                continue  # 已注册（当前运行中的）
+            # 读 meta.json
+            meta_path = ad / "meta.json"
+            am = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    am = (meta.get("extra_state") or {}).get("_agent_meta") or {}
+                except Exception:
+                    pass
+            self.registry.register(
+                am.get("agent_id", aid),
+                am.get("name", aid),
+                "subagent",
+                am.get("model", "?"),
+                agent=None,
+                task=am.get("task", "(历史任务)"),
+                status=am.get("status", "done"),
+                caller_id=am.get("caller_id", ""),
+                recap=am.get("recap", ""),
+            )
+            count += 1
+        if count:
+            _LOG.info("_restore_subagents: 从 %s 恢复了 %d 个子 Agent", agents_dir, count)
 
     def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None):
         """异步用 LLM 生成一句话 recap（最近在干嘛），不阻塞主循环。

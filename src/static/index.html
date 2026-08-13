@@ -169,8 +169,15 @@
   .bubble thead th { background:#f0f2f5; }
   .bubble pre.code { margin:8px 0; padding:10px 12px; background:#f6f8fa; color:#1f2329;
     border:1px solid var(--line); border-radius:8px; overflow:auto; white-space:pre;
-    word-break:normal; overflow-wrap:normal; font:12.5px ui-monospace,Menlo,Consolas,monospace; }
+    word-break:normal; overflow-wrap:normal; font:12.5px ui-monospace,Menlo,Consolas,monospace;
+    max-width:min(78vw,900px); }
   .bubble pre.code code { background:transparent; padding:0; font:inherit; color:inherit; }
+  .code-wrap { position: relative; }
+  .code-wrap .copy-btn { position:absolute; top:6px; right:6px; padding:2px 8px; font-size:11px;
+    background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
+    opacity:0; transition:opacity .15s; }
+  .code-wrap:hover .copy-btn { opacity:1; }
+  .code-wrap .copy-btn:hover { background:#f3f4f6; color:#1f2329; }
   .run-btn { display:inline-block; margin:4px 0 8px; padding:3px 12px; background:#2563eb; color:#fff;
     border:none; border-radius:6px; font-size:12px; cursor:pointer; }
   .run-btn:hover { background:#1d4ed8; }
@@ -493,7 +500,7 @@ function renderAnswer(text){
       i++;                                               // 跳闭合围栏
       var lang = s.replace(/^```/, '').trim();           // 语言标识（如 bash/python）
       var codeText = code.join('\n');
-      var html = '<pre class="code"><code>'+esc(codeText)+'</code></pre>';
+      var html = '<div class="code-wrap"><button class="copy-btn" onclick="copyCodeBtn(this)">复制</button><pre class="code"><code>'+esc(codeText)+'</code></pre></div>';
       // bash/sh 代码块：加执行按钮（一点击发 /call run_shell）
       if(lang === 'bash' || lang === 'sh' || lang === 'shell' || lang === 'shellscript'){
         var cmd = esc(codeText).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -536,10 +543,14 @@ function toolCallHTML(name, a){
     });
     return parts;
   }
-  if(name==='run_python' && a && a.code){
+  if(name==='run_python' && a && (a.code||a.file)){
     const lines=(a.code||'').split('\n');
     return `<div class="diff-head">🔧 run_python ${a.file?esc(a.file):'(inline)'}（${lines.length} 行）</div>`+
       `<pre class="diff-new">${esc(a.code||'')}</pre>`;
+  }
+  if(name==='run_shell' && a && a.command){
+    return `<div class="diff-head">🖥 run_shell</div>`+
+      `<pre class="diff-new">${esc(a.command||'')}</pre>`;
   }
   if(name==='write_file' && a){
     const c=a.content||'', lines=c.split('\n');
@@ -650,6 +661,22 @@ function send(){
 sendBtn.onclick=send;
 document.getElementById('btnImg').onclick=()=>fileInput.click();
 // ===== bash 代码块执行按钮 =====
+function copyCodeBtn(btn){
+  var code = btn.parentElement.querySelector('code');
+  if(!code) return;
+  var text = code.textContent;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(()=>{
+      btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='复制',1500);
+    }).catch(()=>{ fallbackCopy(text,btn); });
+  } else { fallbackCopy(text,btn); }
+}
+function fallbackCopy(text,btn){
+  var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='复制',1500); }catch(e){}
+  document.body.removeChild(ta);
+}
 function runShellCode(btn){
   var code = btn.dataset.code;
   // 发送 /call run_shell({"command":"..."})，结果在聊天窗口显示
@@ -1184,7 +1211,7 @@ function renderSurveyBubble(questions){
     const custom = q.allow_custom;
     const opts = q.options||[];
     h += '<div style="margin:10px 0;padding:8px;border:1px solid #cffafe;border-radius:6px;background:#fff">';
-    h += '<div style="font-weight:600;font-size:13px;color:#164e63;margin-bottom:6px">'+(i+1)+'. '+esc(q.title||'');
+    h += '<div style="font-weight:600;font-size:14px;color:#164e63;margin-bottom:6px">'+(i+1)+'. '+esc(q.title||q.question||q.prompt||q.label||'');
     h += ' <span style="font-size:11px;color:#8a9099">'+(multi?'多选':'单选')+(custom?' · 可自定义':'')+'</span></div>';
     const inputType = multi ? 'checkbox' : 'radio';
     const inputName = 'survey_'+qid;
@@ -1532,6 +1559,7 @@ function onWSMessage(ev){
       else addRow('sys', '⚠️ 该工作流未配置 coze_url');
       break;
     case 'team_list':
+      _agentListLoading = false;   // 复位加载标记，允许下次点击重新获取
       // 更新 Agent 团队下拉框
       const team = m.team || '';
       const cur = m.current_target || '_main_';

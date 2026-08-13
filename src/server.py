@@ -739,7 +739,13 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             _broadcast({"type": "session_history",
                         "name": agent.session.name or _ls_name,
                         "turns": agent.session.to_history()})
-            # 切会话后检查是否有 pending spec（committed 态→恢复等待裁定状态）
+            # 广播 team_list 让 agent 下拉框自动刷新
+            reg = getattr(agent, "registry", None)
+            if reg:
+                _broadcast({"type": "team_list",
+                            "team": reg.format_team(exclude_id=""),
+                            "current_target": getattr(agent, "_active_target", "_main_")})
+            # 切会话后检查是否有 pending spec
             from spec_tools import check_pending_spec, _spec_event_payload
             if not check_pending_spec(agent):
                 if getattr(agent, "active_spec", None):
@@ -782,8 +788,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         if not reg:
             await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
         else:
-            sdir = getattr(agent.session, "session_dir", None)
-            team = reg.format_team(exclude_id="", session_dir=sdir)
+            team = reg.format_team(exclude_id="")
             cur = getattr(agent, "_active_target", "_main_")
             await _send(ws, {"type": "team_list", "team": team, "current_target": cur})
         return
@@ -812,9 +817,29 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text": f"✅ 已切换到与 '{entry.name}' [{target_id}] 直接交互"})
         # 广播目标 Agent 的 session 历史
         if entry.agent:
+            # Agent 实例在内存中（运行中的子 Agent）：直接取 session 历史
             _broadcast({"type": "session_history",
                         "name": f"{entry.name} [{target_id}]",
                         "turns": entry.agent.session.to_history()})
+        else:
+            # 历史子 Agent（从磁盘恢复，agent=None）：用 Session.load 从磁盘加载历史
+            try:
+                sdir = getattr(agent.session, "session_dir", None)
+                if sdir:
+                    sub_meta = Path(sdir) / "agents" / target_id / "meta.json"
+                    if sub_meta.exists():
+                        from session import Session
+                        sub_session = Session.load(str(sub_meta), llm=agent.llm,
+                                                   workspace=agent.session.workspace)
+                        _broadcast({"type": "session_history",
+                                    "name": f"{entry.name} [{target_id}]",
+                                    "turns": sub_session.to_history()})
+                    else:
+                        await _send(ws, {"type": "system", "text": f"⚠️ 子 Agent '{target_id}' 的存档不存在"})
+                else:
+                    await _send(ws, {"type": "system", "text": f"⚠️ 无法定位子 Agent '{target_id}' 的存档"})
+            except Exception as e:
+                await _send(ws, {"type": "system", "text": f"⚠️ 加载子 Agent 历史失败：{type(e).__name__}: {e}"})
         return
     if isinstance(_d, dict) and _d.get("action") == "open_coze":
         from workflow import workflows_info

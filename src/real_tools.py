@@ -39,6 +39,9 @@ TOOL_TIMEOUT = 10
 # 工具执行进度回调（由 agent 在执行工具前设置；流式输出/心跳通过它推给 UI）
 _tool_emit = None
 
+# 后台任务表：超时未完成的 run_python/run_shell 子进程转后台后注册在此
+_bg_tasks: dict = {}
+
 
 def _resolve(path: str) -> Path:
     """把路径解析到 workspace 内；越界则抛 PermissionError（会被 Tool.run 转成文本）。"""
@@ -149,15 +152,39 @@ def _run_subprocess_streaming(args, name, shell=False):
                             "preview": preview})
             last_hb = now
 
-        # 超时
+        # 超时 → 转后台（不杀进程，daemon 线程继续读输出）
         if elapsed > TOOL_TIMEOUT:
-            proc.kill()
-            proc.wait()
+            # flush 最后的流式输出
             if stream_buf and _tool_emit:
                 _tool_emit({"type": "tool_stream", "name": name, "text": "".join(stream_buf)})
-            return (f"[执行超时（>{TOOL_TIMEOUT}s），已终止。"
-                    f"如任务确实需要更长时间，先调用 set_tool_timeout(seconds) "
-                    f"调大超时（最大 7200s=2小时），再重试。]")
+                stream_buf = []
+            # 注册后台任务，daemon 线程继续读输出
+            bg_id = f"bg_{int(time.time()*1000)}"
+            _bg_tasks[bg_id] = {
+                "name": name, "proc": proc, "output": output_lines[:],
+                "started_at": start, "finished": False, "returncode": None,
+            }
+            def _bg_reader(_bg_id=bg_id, _line_q=line_q, _task=_bg_tasks[bg_id]):
+                while True:
+                    try:
+                        ln = _line_q.get(timeout=1.0)
+                    except queue.Empty:
+                        if _task["proc"].poll() is not None:
+                            break
+                        continue
+                    if ln is None:
+                        break
+                    _task["output"].append(ln)
+                _task["proc"].wait()
+                _task["returncode"] = _task["proc"].returncode
+                _task["finished"] = True
+                if _tool_emit:
+                    _tool_emit({"type": "tool_stream", "name": name,
+                                "text": f"\n[后台任务 {_bg_id} 已完成，返回码={_task['returncode']}]"})
+            threading.Thread(target=_bg_reader, daemon=True).start()
+            return (f"[执行超过 {TOOL_TIMEOUT}s，已转后台运行（任务ID: {bg_id}）。\n"
+                    f"进程继续运行，不阻塞当前工作。用 check_bg_task(\"{bg_id}\") 查看进度和结果。"
+                    f"已捕获 {len(output_lines)} 行输出。]")
 
     proc.wait()
     # 最终 flush
@@ -1852,7 +1879,10 @@ WEB_SEARCH_OUTPUTS = [
 ]
 
 REAL_TOOLS = Toolbox(
-    Tool(run_python),
+    Tool(run_python, param_descriptions={
+        "code": "内联 Python 代码（多行，写临时文件再跑）。和 file 二选一。",
+        "file": "已存在的 .py 文件路径（跑已保存的脚本传这个，别再用 subprocess 包壳）。和 code 二选一。",
+    }),
     Tool(read_file, param_descriptions={
         "line_numbers": "默认 True=每行前加行号(宽度按本段最大行号自适应对齐)，便于接下来用 insert/delete/move 按行号编辑；False=纯文本",
     }),

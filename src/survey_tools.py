@@ -109,4 +109,20 @@ def make_survey_tools(agent):
 ]
 ```"""
     
-    return [Tool(ask_user)]
+    return [Tool(ask_user, param_schemas={
+        "questions": {
+            "type": "array",
+            "description": "问卷题目数组",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "题目唯一标识（用于返回 answers 的 key）"},
+                    "title": {"type": "string", "description": "题面/问题描述"},
+                    "options": {"type": "array", "items": {"type": "string"}, "description": "选项数组"},
+                    "multi_select": {"type": "boolean", "description": "是否多选（false=单选 radio, true=多选 checkbox）"},
+                    "allow_custom": {"type": "boolean", "description": "是否允许用户自定义输入"},
+                },
+                "required": ["id", "title", "options"],
+            },
+        }
+    })]

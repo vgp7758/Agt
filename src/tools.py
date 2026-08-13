@@ -36,7 +36,7 @@ def _type_to_schema(ptype):
 
 class Tool:
     def __init__(self, func: Callable, outputs: list = None, hidden: bool = False,
-                 param_descriptions: dict = None):
+                 param_descriptions: dict = None, param_schemas: dict = None):
         self.func = func
         self.name = func.__name__
         self.hidden = hidden   # True=注册在工具箱（plugin/编辑器可用）但不投影给 LLM（schemas 跳过）
@@ -44,6 +44,9 @@ class Tool:
         # 各参数的描述（注入 schema 的 properties[name].description）；不传则仅靠参数名+首行描述。
         # 用于 version/行号语义等光靠名字说不清的参数。现有工具不传→schema 完全不变。
         self.param_descriptions = param_descriptions or {}
+        # 显式参数 schema（完整 JSON Schema 片段，优先于类型注解自动推断）。
+        # 用于复杂嵌套结构（如 ask_user 的 questions: 数组套对象），类型注解表达不了的。
+        self.param_schemas = param_schemas or {}
         # docstring 第一行作为工具描述（模型靠它判断"该不该调这个工具"）
         first_line = (func.__doc__ or "").strip().split("\n", 1)[0].strip()
         if not first_line:
@@ -59,9 +62,13 @@ class Tool:
         properties, required = {}, []
         for pname, param in self._sig.parameters.items():
             ptype = self._hints.get(pname, str)
-            sch = _type_to_schema(ptype)
-            if sch is None:
-                raise TypeError(f"工具 {self.name} 参数 {pname} 类型 {ptype} 暂不支持")
+            # 显式 schema 优先于类型注解自动推断（用于复杂嵌套结构）
+            if pname in self.param_schemas:
+                sch = self.param_schemas[pname]
+            else:
+                sch = _type_to_schema(ptype)
+                if sch is None:
+                    raise TypeError(f"工具 {self.name} 参数 {pname} 类型 {ptype} 暂不支持")
             if pname in self.param_descriptions:
                 sch = {**sch, "description": self.param_descriptions[pname]}
             properties[pname] = sch

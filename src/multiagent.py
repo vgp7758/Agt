@@ -13,11 +13,14 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
 
 import yaml
+
+_LOG = logging.getLogger("agt.multiagent")
 
 import config
 from agent import Agent
@@ -187,15 +190,23 @@ def make_subagent_tools(agent) -> list:
                     if getattr(_sub.agent, '_recap', ''):
                         break
                     time.sleep(0.1)
-                # 把 recap 写入 extra_state._agent_meta.recap，并直接落盘到 meta.json
                 recap = getattr(_sub.agent, '_recap', '')
-                if recap and _sub_dir:
+                # 无条件写完整 _agent_meta 到子 Agent 的 meta.json
+                if _sub_dir:
                     meta_path = _sub_dir / "meta.json"
-                    if meta_path.exists():
+                    try:
                         import json
-                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                        meta.setdefault("extra_state", {}).setdefault("_agent_meta", {})["recap"] = recap
+                        meta = {}
+                        if meta_path.exists():
+                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        meta.setdefault("extra_state", {})["_agent_meta"] = {
+                            "agent_id": _aid, "name": name, "model": model_name,
+                            "task": _prompt, "caller_id": _caller_id,
+                            "recap": recap, "status": "done",
+                        }
                         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception as meta_err:
+                        _LOG.warning("子 Agent %s 写 _agent_meta 到 meta.json 失败: %s", _aid, meta_err)
                 agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
                 if getattr(agent, "registry", None):
                     agent.registry.update_status(_aid, "done")
@@ -204,15 +215,36 @@ def make_subagent_tools(agent) -> list:
                 agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
                 if getattr(agent, "registry", None):
                     agent.registry.update_status(_aid, "failed")
+                # 失败也要写 _agent_meta
+                if _sub_dir:
+                    meta_path = _sub_dir / "meta.json"
+                    try:
+                        import json
+                        meta = {}
+                        if meta_path.exists():
+                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        meta.setdefault("extra_state", {})["_agent_meta"] = {
+                            "agent_id": _aid, "name": name, "model": model_name,
+                            "task": _prompt, "caller_id": _caller_id,
+                            "recap": "", "status": "failed",
+                        }
+                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
             # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
             if _caller_id and _caller_id != "user":
-                reg = getattr(agent, "registry", None)
-                if reg:
-                    caller_entry = reg.lookup(_caller_id)
-                    if caller_entry and caller_entry.agent:
-                        caller_entry.agent.push_message(
-                            f"📨〔子 Agent '{name}' [{_aid}] 完成〕{res[:200]}",
-                            source=f"subagent:{_aid}")
+                try:
+                    reg = getattr(agent, "registry", None)
+                    if reg:
+                        caller_entry = reg.lookup(_caller_id)
+                        if caller_entry and caller_entry.agent:
+                            caller_entry.agent.push_message(
+                                f"📨〔子 Agent '{name}' [{_aid}] 完成〕{res[:200]}",
+                                source=f"subagent:{_aid}")
+                        else:
+                            _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, _caller_id)
+                except Exception as route_err:
+                    _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
         th = threading.Thread(target=_bg, daemon=True)
         agent._bg_threads[aid] = th
         th.start()

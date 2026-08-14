@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from session import REPOS_DIR, _repo_hash
+from session import REPOS_DIR, _repo_key as _repo_hash
 
 _ROOT = "agt"
 _FORMAT = "[%(asctime)s] [%(levelname)-5s] [%(shortname)-6s] %(message)s"

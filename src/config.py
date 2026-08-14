@@ -192,9 +192,9 @@ _GLOBAL_RAG_PATH = _AGT_DIR / "rag.json"
 
 
 def _rag_config_path(workspace) -> Path:
-    """RAG 配置 per-repo 存用户目录：~/.agt/repos/<hash>/rag.json（与 sessions 同根，不污染项目仓库）。"""
-    from session import REPOS_DIR, _repo_hash   # 局部 import 避免循环
-    return REPOS_DIR / _repo_hash(workspace) / "rag.json"
+    """RAG 配置 per-repo 存用户目录：~/.agt/repos/<fixed-cwd>/rag.json（与 sessions 同根，不污染项目仓库）。"""
+    from session import REPOS_DIR, _repo_key   # 局部 import 避免循环
+    return REPOS_DIR / _repo_key(workspace) / "rag.json"
 
 
 def load_global_rag_config() -> dict:
@@ -236,7 +236,7 @@ def _maybe_migrate_embed_to_global(workspace: Path | str):
     try:
         if _GLOBAL_RAG_PATH.exists():
             return   # 已迁移过
-        from session import REPOS_DIR, _repo_hash
+        from session import REPOS_DIR   # _repo_hash 不再需要——_rag_config_path 已用 _repo_key
         ws = Path(workspace) if isinstance(workspace, str) else workspace
         # 先试当前 workspace 的 repo config
         repo_p = _rag_config_path(ws)

@@ -13,6 +13,10 @@ MODELS = {
         "desc": "DeepSeek（备用）",
         "thinking": False,
         "vision": False,
+        # DeepSeek【思考模型】(如 deepseek-reasoner/v4-pro thinking 模式)要求历史中带
+        # tool_calls 的 assistant 消息必须有 reasoning_content 字段；跨模型混用历史缺该字段时 400。
+        # 设 true 后发请求前自动给缺字段的消息补空串占位。非思考模型保持 False 即可。
+        "requires_reasoning_in_history": False,
     },
     "qwen": {
         "base_url": "https://api-inference.modelscope.cn/v1",

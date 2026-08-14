@@ -92,13 +92,23 @@ def load_all_calls(sessions_dir) -> list:
     return out
 
 
+def endpoint_of(r: dict) -> str:
+    """一条记录的端点标识：provider/回包实际模型（如 proxy/glm-5.2）。
+    旧记录无 resp_model 时退化为纯 provider 名；回包模型与 provider 名相同则不重复显示。"""
+    p = r.get("model") or "?"
+    rm = (r.get("resp_model") or "").strip()
+    if not rm or rm == p:
+        return p
+    return f"{p}/{rm}"
+
+
 def aggregate_calls(records: list) -> dict:
-    """聚合 per-model 可靠性统计。
-    返回 {model: {calls, success, empty, truncated, errors{type:cnt}, completer,
-                  tokens, avg_latency}}（success_rate/empty_rate 等比率由展示层算）。"""
+    """聚合 per-endpoint 可靠性统计（provider/回包实际模型 相同 = 同一端点）。
+    返回 {endpoint: {calls, success, empty, truncated, errors{type:cnt}, completer,
+                   tokens, avg_latency}}（success_rate/empty_rate 等比率由展示层算）。"""
     stats: dict = {}
     for r in records or []:
-        m = r.get("model") or "?"
+        m = endpoint_of(r)
         s = stats.setdefault(m, {
             "calls": 0, "success": 0, "empty": 0, "truncated": 0, "errors": {},
             "completer": 0, "tokens": 0, "latency_sum": 0.0, "latency_n": 0,

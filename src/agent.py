@@ -188,6 +188,7 @@ class Agent:
         self.agent_id: str = "_main_"   # 本 Agent 在 registry 中的 id（子 Agent 创建时覆盖）
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
+        self.dump_projections: bool = False  # 投影转储开关（运行时设置）
         if self.registry is not None:
             self.registry.register(self.agent_id, "main", "main", self.model_name,
                                    agent=self, task="", status="running")
@@ -347,9 +348,11 @@ class Agent:
                     results[i] = r
         return results
 
-    def switch_model(self, name: str):
-        """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。"""
-        self.llm.switch_model(name)
+    def switch_model(self, name: str, _user_initiated: bool = False):
+        """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。
+        _user_initiated=True 时（用户 /model 或 WebUI 下拉框），llm 会重建有效回退链
+        （把新模型提前到链首）；回退路径切换不传此参数，不动链。"""
+        self.llm.switch_model(name, _user_initiated=_user_initiated)
         self.model_name = name
 
     # ========== 运行时状态的存取（随 session 落盘/恢复）==========
@@ -525,17 +528,17 @@ class Agent:
 
     def _format_subagent_board(self) -> str:
         """后台子 Agent / 异步任务看板：每项「名称 [agent_id] 任务 — 状态」。
-        每轮注入主 agent 上下文，让它知道本 session 派过哪些子 agent、哪些还在跑
-        （Step 3 异步化后才有 running；当前 sync 形态下都是 done/failed 的历史）。"""
-        if not self.background_tasks:
+        以 registry 为准（子 Agent 完成/失败时 registry 与 _agent_meta 已同步），
+        不再用 background_tasks（主 Agent 不维护它）。"""
+        if not self.registry:
             return ""
-        icon = {"running": "⏳进行中", "done": "✅已完成", "failed": "❌失败"}
-        rows = []
-        for t in self.background_tasks.values():
-            st = icon.get(t.get("status"), t.get("status"))
-            task = (t.get("task") or "").strip().replace("\n", " ")[:40]
-            rows.append(f"- {t.get('name')} [agent_id={t.get('id')}] {task} — {st}")
-        return "【后台子 Agent 任务】\n" + "\n".join(rows)
+        try:
+            team = self.registry.format_team(exclude_id=self.agent_id)
+            if not team:
+                return ""
+            return team
+        except Exception:
+            return ""
 
     def _runtime_time_block(self) -> str:
         """tail 每步注入实时时间（秒级）+ 当前会话名，让 Agent 感知真实时段（深夜/工作日）
@@ -793,7 +796,38 @@ class Agent:
                 parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in items]
                 inner = "\n".join(parts)
                 msgs.append({"role": "system", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
+        # 投影转储（调试用）：把完整 messages 以纯文本写到 projections/ 目录
+        if getattr(self, "dump_projections", False):
+            self._dump_projection(msgs)
         return msgs
+
+    def _dump_projection(self, msgs: list):
+        """把完整投影（messages）以纯文本写到 session_dir/projections/ 目录。"""
+        try:
+            sdir = getattr(self.session, "session_dir", None)
+            if not sdir:
+                return
+            from pathlib import Path
+            from datetime import datetime
+            proj_dir = Path(sdir) / "projections"
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%H%M%S")
+            turn_num = len(self.session.turns)
+            step_num = len(self.session._current.steps) if self.session._current else 0
+            fname = f"t{turn_num}_s{step_num}_{ts}.txt"
+            lines = [f"=== 投影转储 turn={turn_num} step={step_num} model={self.llm.model_name} time={datetime.now().isoformat()} ===\n"]
+            for i, m in enumerate(msgs):
+                role = m.get("role", "?")
+                content = m.get("content", "") or ""   # 可能是 None（带 tool_calls 的 assistant 消息）
+                # 截断超长 tool_call 相关内容（保持可读性）
+                if len(content) > 8000:
+                    content = content[:8000] + f"\n... (+{len(content) - 8000} chars)"
+                lines.append(f"--- [{i}] role={role} ({len(content)} chars) ---")
+                lines.append(content)
+                lines.append("")
+            (proj_dir / fname).write_text("\n".join(lines), encoding="utf-8")
+        except Exception as e:
+            _LOG.warning("投影转储失败: %s", e)
 
     # ========== Recent-file 快照采集 ==========
     def _collect_file_snapshots(self, step) -> dict:

@@ -195,6 +195,9 @@ class LLMClient:
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)
         # 分档上下文投影的最大有效窗口（token 估算）。None=不启用分档，走 Session 原 recent_window+summary。
         self.max_effective_context_window = profile.get("max_effective_context_window")
+        # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
+        # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。配此标志后发请求前自动补占位。
+        self.requires_reasoning_in_history = profile.get("requires_reasoning_in_history", False)
         self._client = OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured")
 
     def _ensure_config(self):
@@ -248,9 +251,21 @@ class LLMClient:
         enable_thinking / timeout 可经 overrides 按 call 覆盖实例默认值（工作流 LLM 节点 per-node 设置）。"""
         enable_thinking = overrides.pop("enable_thinking", self.enable_thinking)
         timeout = overrides.pop("timeout", None)
+        # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
+        # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。
+        # 这里给缺字段的补空串占位（DeepSeek 只校验字段存在性，空串即可）。
+        msgs = messages
+        if self.requires_reasoning_in_history:
+            msgs = []
+            for m in messages:
+                if (m.get("role") == "assistant" and m.get("tool_calls")
+                        and "reasoning_content" not in m):
+                    m = dict(m)  # 浅拷贝，不修改原始
+                    m["reasoning_content"] = ""
+                msgs.append(m)
         kwargs = {
             "model": self.model,
-            "messages": messages,
+            "messages": msgs,
             "temperature": self.temperature,
             "stream": stream,
         }
@@ -290,7 +305,8 @@ class LLMClient:
                               finish_reason=(ch[0].finish_reason if ch else None),
                               usage=(r.usage.model_dump() if r.usage else None),
                               elapsed=time.time() - _t0, outcome=("success" if content else "empty"),
-                              content=content, completer=True, model=p["model"])
+                              content=content, completer=True, model=p["model"],
+                              resp_model=getattr(r, "model", None))
             return content
         except Exception as e:
             self._record_call(messages=messages, attempt=1, max_tokens=None, finish_reason=None, usage=None,
@@ -352,8 +368,9 @@ class LLMClient:
 
     def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,
                      elapsed, outcome, content="", reasoning="", tool_calls=0,
-                     error=None, completer=False, model=None):
-        """把一次 LLM 调用记到 llm_calls 流水（供 /stats 聚合）。recorder 未注入则跳过。"""
+                     error=None, completer=False, model=None, resp_model=None):
+        """把一次 LLM 调用记到 llm_calls 流水（供 /stats 聚合）。recorder 未注入则跳过。
+        model=provider 名（如 proxy）；resp_model=API 回包里的实际模型字段（如 glm-5.2）。"""
         rec = self.call_recorder
         if rec is None:
             return
@@ -361,6 +378,7 @@ class LLMClient:
             rec({
                 "ts": time.time(),
                 "model": model or self.model_name,
+                "resp_model": resp_model or "",
                 "attempt": attempt, "max_tokens": max_tokens,
                 "finish_reason": finish_reason, "usage": usage,
                 "elapsed": round(elapsed, 2), "outcome": outcome,
@@ -403,7 +421,8 @@ class LLMClient:
                 if fr == "length":
                     # 被 max_tokens 截断（典型：长 reasoning 吃光预算 → content 空/半截）→ 加大上限重试
                     self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
-                                      finish_reason="length", usage=usage, elapsed=_elapsed, outcome="truncated")
+                                      finish_reason="length", usage=usage, elapsed=_elapsed, outcome="truncated",
+                                      resp_model=getattr(resp, "model", None))
                     bumped = _bump_max_tokens(cur_max_tokens)
                     _LOG.warning("⚠️ 响应被 max_tokens 截断(finish_reason=length, %s→%s) 重试 %d/%d model=%s",
                                  cur_max_tokens, bumped, attempt + 1, self.max_retries, self.model_name)
@@ -418,7 +437,8 @@ class LLMClient:
                 self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
                                   finish_reason=fr, usage=usage, elapsed=_elapsed, outcome="success",
                                   content=msg.get("content") or "", reasoning=msg.get("reasoning_content") or "",
-                                  tool_calls=len(_parse_tool_calls(msg)))
+                                  tool_calls=len(_parse_tool_calls(msg)),
+                                  resp_model=getattr(resp, "model", None))
                 return _postprocess_response(LLMResponse(
                     content=msg.get("content") or "",
                     reasoning=msg.get("reasoning_content") or "",
@@ -428,7 +448,8 @@ class LLMClient:
                 ))
             last_info = (usage, str(resp.model_dump())[:300])
             self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
-                              finish_reason=None, usage=usage, elapsed=_elapsed, outcome="empty")
+                              finish_reason=None, usage=usage, elapsed=_elapsed, outcome="empty",
+                              resp_model=getattr(resp, "model", None))
             _LOG.warning("空响应(疑似限流) 重试 %d/%d 退避%.0fs 耗时%.1fs usage=%s",
                          attempt + 1, self.max_retries, self._backoff(attempt), _elapsed, usage)
             time.sleep(self._backoff(attempt))

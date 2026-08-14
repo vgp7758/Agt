@@ -37,17 +37,12 @@ _VALID_ACTION = ("create", "insert", "edit", "replace", "delete", "move", "revie
 # ========== 目录 ==========
 
 def _specs_dir(workspace) -> Path:
-    """该工作区的【施工方案】目录：~/.agt/repos/<hash>/specs/。与 plans/ 同根、互相隔离。
+    """该工作区的【施工方案】目录：~/.agt/repos/<fixed-cwd>/specs/。与 plans/ 同根、互相隔离。
     每个 spec 一个 <spec_id>.json 文件，跨 session 共享。"""
-    d = Path.home() / ".agt" / "repos" / _repo_hash(workspace) / "specs"
+    from session import _repo_key
+    d = Path.home() / ".agt" / "repos" / _repo_key(workspace) / "specs"
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def _repo_hash(workspace) -> str:
-    """与 session.repo_plans_dir / repo_memories_dir 同算法：sha1(绝对路径)[:12]。"""
-    import hashlib
-    return hashlib.sha1(str(Path(workspace).resolve()).encode("utf-8")).hexdigest()[:12]
 
 
 def _now_iso() -> str:

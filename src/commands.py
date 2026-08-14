@@ -33,10 +33,10 @@ class CommandContext:
 
 class CommandRegistry:
     def __init__(self):
-        self._cmds: dict[str, tuple[Callable, str]] = {}
+        self._cmds: dict[str, tuple[Callable, str, str]] = {}
 
-    def register(self, name: str, handler: Callable, help_text: str = ""):
-        self._cmds[name] = (handler, help_text)
+    def register(self, name: str, handler: Callable, help_text: str = "", detail: str = ""):
+        self._cmds[name] = (handler, help_text, detail)
 
     def dispatch(self, line: str, ctx: CommandContext) -> bool:
         """处理一行输入。返回 True=是命令 (已处理)，False=不是命令 (交给 Agent)。"""
@@ -62,9 +62,19 @@ class CommandRegistry:
         return True
 
     def print_help(self):
-        print("\n可用命令：")
-        for name, (_, help_text) in self._cmds.items():
-            print(f"  /{name:<8} {help_text}")
+        """打印详细帮助：每条命令一行摘要 + 多行详细用法（有 detail 的展开）。"""
+        print("\n" + "=" * 64)
+        print("📋 可用命令（详细用法）")
+        print("=" * 64)
+        for name, (_, help_text, detail) in self._cmds.items():
+            print(f"\n  /{name}")
+            if help_text:
+                print(f"    {help_text}")
+            if detail:
+                for line in detail.strip().split("\n"):
+                    print(f"    {line}")
+        print("\n" + "=" * 64)
+        print("💡 提示：直接输入自然语言即可与 Agent 对话；斜杠命令用于会话管理/调试/配置。")
         print()
 
 
@@ -213,6 +223,7 @@ CONFIGURABLE = {
     "enable_thinking": ("llm", _to_bool),
     "fallback_policy": ("llm", _policy_cast),
     "reasoning_completer": ("llm", _str_or_none),
+    "dump_projections": ("agent", _to_bool),
 }
 
 
@@ -436,22 +447,13 @@ def _cmd_autonomous(ctx: CommandContext, args):
     if not args:
         # 显示状态
         if not ctx.agent.autonomous_mode:
-            print("纯自主模式：未开启")
+            print("纯自主模式：未开启（输入 /autonomous on <时间> 开启；详细用法见 /help）")
         elif ctx.agent.is_autonomous_active():
             print(f"纯自主模式：已开启，持续到 {ctx.agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}")
             print(f"自动提示词：{ctx.agent.autonomous_prompt}")
             print(f"待处理消息队列：{len(ctx.agent.pending_messages)} 条")
         else:
             print("纯自主模式：已超时（自动关闭）")
-        print("\n用法：")
-        print("  /autonomous on 17:30           # 到今天 17:30")
-        print("  /autonomous on 2026-07-09 10:00  # 到指定时间")
-        print("  /autonomous duration 30        # 持续 30 分钟")
-        print("  /autonomous off                # 手动关闭")
-        print("  /autonomous status             # 查看状态")
-        print("  /autonomous prompt <文字>       # 修改自动继续提示词")
-        print("  /autonomous goal <Python脚本>    # 设目标验证脚本(PASS=达成)")
-        print("  /autonomous check               # 手动运行目标验证脚本")
         return
 
     cmd = args[0].lower()
@@ -1098,32 +1100,137 @@ def _cmd_agent(ctx: CommandContext, args):
 
 def build_default_registry() -> CommandRegistry:
     reg = CommandRegistry()
-    reg.register("save", _cmd_save, "[name]  保存当前会话")
-    reg.register("rename", _cmd_rename, "<新名>  重命名当前会话（改名+改存档文件）")
-    reg.register("resume", _cmd_resume, "<name>  恢复指定会话")
-    reg.register("list", _cmd_list, "列出所有已保存会话")
-    reg.register("show", _cmd_show, "[name]  查看会话详情（不传=当前）")
-    reg.register("recall", _cmd_recall, "<关键词>  召回包含该词的历史轮次完整内容")
-    reg.register("reset", _cmd_reset, "重置会话（清空历史）")
-    reg.register("config", _cmd_config, "<key> <value>  改运行时配置 (max_steps/token_budget)")
-    reg.register("budget", _cmd_budget, "查看本次 token 消耗")
-    reg.register("stats", _cmd_stats, "[all]  LLM 调用可靠性统计（per-model 成功/空/截断/错误/耗时）")
-    reg.register("model", _cmd_model, "[name]  列出/切换 LLM 模型")
-    reg.register("reload_mcp", _cmd_reload_mcp, "<name>  重连指定 MCP server")
-    reg.register("autonomous", _cmd_autonomous, "纯自主模式控制 (on/off/status/duration/prompt)")
-    reg.register("workflows", _cmd_workflows, "[reload]  列出/重载 .agent/workflows/ 工作流")
-    reg.register("memory", _cmd_memory, "[list|show|add|delete|search|semantic]  长期记忆管理")
-    reg.register("logs", _cmd_logs, "[N]  查看当前 session 日志尾部（默认30行）")
-    reg.register("download", _cmd_download, "[name|list] [dir] [--force]  下载随包资产（工作流/mcp/脚本）")
-    reg.register("feedback", _cmd_feedback, "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）")
-    reg.register("web", _cmd_web, "[start] [port] | stop | status  按需启停内嵌 Web 服务")
-    reg.register("snapshot", _cmd_snapshot, "list | restore <序号|sha>  工作区快照回溯")
-    reg.register("rewind", _cmd_rewind, "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）")
-    reg.register("rag", _cmd_rag, "build | config [k v] | stats | query <词>  RAG 文档库")
-    reg.register("tools", _cmd_tools, "[关键词]  列出所有工具（按来源分组）")
-    reg.register("call", _cmd_call, "[yes] tool_name({\"arg\":\"val\"})  手动调用工具（yes=结果注入Agent上下文）")
-    reg.register("update", _cmd_update, "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
-    reg.register("agent", _cmd_agent, "[agent_id]  列出/切换直接交互的 Agent 目标（/agent _main_ 切回主 Agent）")
+    reg.register("save", _cmd_save,
+        "[name]  保存当前会话（日常已自动落盘，此命令用于改名另存或强制再存一次）",
+        "/save              强制再存一次（不改名）\n"
+        "/save 我的项目     改名另存为新会话")
+    reg.register("rename", _cmd_rename,
+        "<新名>  重命名当前会话（改名+改存档文件）",
+        "/rename 调试工作流\n"
+        "/rename 我的 项目 笔记     （可含空格）")
+    reg.register("resume", _cmd_resume,
+        "<name>  恢复指定会话到内存（历史/计划/自主模式/子Agent 全部恢复）",
+        "/resume 我的项目\n"
+        "/resume 20260811_013200   （用 /list 查看可用会话 ID）")
+    reg.register("list", _cmd_list,
+        "列出所有已保存会话（按创建时间倒序）")
+    reg.register("show", _cmd_show,
+        "[name]  查看会话详情摘要（不传=当前会话）",
+        "/show               查看当前会话摘要\n"
+        "/show 我的项目      查看指定会话摘要")
+    reg.register("recall", _cmd_recall,
+        "<关键词>  在全部历史轮次里搜索，召回匹配轮的完整内容（不含思考过程）",
+        "/recall server.py\n"
+        "/recall 回退链")
+    reg.register("reset", _cmd_reset,
+        "重置会话（清空历史、计划、自主模式，system 保留）",
+        "⚠️ 不可逆！当前对话历史和计划会被全部清除。")
+    reg.register("config", _cmd_config,
+        "<key> <value> [key value...]  改运行时配置（可同时改多个）",
+        "/config                        查看当前所有配置\n"
+        "/config max_steps 100          最大步数\n"
+        "/config token_budget 100000    token 预算\n"
+        "/config temperature 0.5        温度\n"
+        "/config enable_thinking true   思考模式开关\n"
+        "/config max_level 4            分档最高级别\n"
+        "/config detail_base 1500       步距衰减初始字数\n"
+        "/config fallback_chain glm,deepseek,qwen   回退链\n"
+        "/config dump_projections true  投影转储（调试用）")
+    reg.register("budget", _cmd_budget,
+        "查看本次运行 token 消耗（已用 / 预算）")
+    reg.register("stats", _cmd_stats,
+        "[all]  LLM 调用可靠性统计（per-model 成功/空/截断/错误/completer/tokens/均耗时）",
+        "/stats           当前 session 统计\n"
+        "/stats all       本仓库全部 session 聚合统计")
+    reg.register("model", _cmd_model,
+        "[name]  列出/切换 LLM 模型",
+        "/model           列出所有可用模型（← 标记当前）\n"
+        "/model glm       切换到 glm\n"
+        "/model deepseek  切换到 deepseek")
+    reg.register("reload_mcp", _cmd_reload_mcp,
+        "<name>  重连指定 MCP server（代码修改后生效）",
+        "/reload_mcp python-lsp     （.mcp.json 中 mcpServers 的键名）")
+    reg.register("autonomous", _cmd_autonomous,
+        "纯自主模式：任务完成后自动继续工作，直到时间到或目标达成",
+        "/autonomous                    查看状态\n"
+        "/autonomous on 17:30           到今天 17:30 自动停\n"
+        "/autonomous on 2026-08-14 10:00  到指定日期时间停\n"
+        "/autonomous duration 30        持续 30 分钟\n"
+        "/autonomous off                手动关闭\n"
+        "/autonomous status             查看状态\n"
+        "/autonomous prompt <文字>       修改自动继续时的提示词\n"
+        "/autonomous goal <Python脚本>    设目标验证脚本（print('PASS')=达成→自动停）\n"
+        "/autonomous check              手动运行一次目标验证脚本")
+    reg.register("workflows", _cmd_workflows,
+        "[reload]  列出/重载 .agent/workflows/ 工作流",
+        "/workflows          列出所有工作流（含状态/描述/Coze链接）\n"
+        "/workflows reload   重新扫描注册（新增/修改的工作流即时生效）")
+    reg.register("memory", _cmd_memory,
+        "长期记忆管理（跨 session，~/.agt/repos/<hash>/memories/）",
+        "/memory                                    概览（三类记忆统计）\n"
+        "/memory list [--type T] [--query Q]        列出记忆（可按类型/关键词过滤）\n"
+        "/memory show <id>                          查看单条记忆详情\n"
+        "/memory add --type T --title .. --content .. [--tags a,b]  新增记忆\n"
+        "/memory delete <id>                        删除记忆\n"
+        "/memory search <关键词>                     搜索记忆\n"
+        "/memory semantic                           查看当前注入的静态层内容\n"
+        "  类型 T：semantic(事实偏好) / episodic(情境经历) / procedural(程序经验)")
+    reg.register("logs", _cmd_logs,
+        "[N]  查看当前 session 日志尾部（默认30行）",
+        "/logs           最近 30 行\n"
+        "/logs 100       最近 100 行")
+    reg.register("download", _cmd_download,
+        "[name|list] [dir] [--force]  下载随包资产（工作流/mcp/脚本）",
+        "/download list              查看可下载资产\n"
+        "/download before_turn_retrieval     下载指定资产到默认目录\n"
+        "/download my_workflow .agent/workflows/   下载到指定目录\n"
+        "/download my_wf --force     覆盖已有同名文件")
+    reg.register("feedback", _cmd_feedback,
+        "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）",
+        "/feedback 工作流编辑器连线不太灵敏        （默认类型=建议）\n"
+        "/feedback bug WebUI 切换会话后白屏        （指定类型=bug）")
+    reg.register("web", _cmd_web,
+        "[start] [port] | stop | status  按需启停内嵌 Web 服务",
+        "/web              启动（默认 8000 端口）+ 自动开浏览器\n"
+        "/web 9000         指定端口\n"
+        "/web stop         停止服务、释放端口\n"
+        "/web status       查看服务状态")
+    reg.register("snapshot", _cmd_snapshot,
+        "list | restore <序号|sha>  工作区快照回溯（检查点）",
+        "/snapshot list          列出所有快照点\n"
+        "/snapshot restore 3     回溯到第 3 个快照之前（撤销该轮及之后的文件改动+对话）\n"
+        "/snapshot restore a1b2  用 sha 前缀回溯")
+    reg.register("rewind", _cmd_rewind,
+        "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）",
+        "/rewind            撤销最近 1 轮（对话+文件改动）\n"
+        "/rewind 3          撤销最近 3 轮")
+    reg.register("rag", _cmd_rag,
+        "build | config [k v] | stats | query <词>  RAG 文档库管理",
+        "/rag stats                         查看索引状态\n"
+        "/rag config                        查看当前配置\n"
+        "/rag config docs_dir ./docs        设置文档目录\n"
+        "/rag config embed_model_path ./m3e 设置 embedding 模型路径\n"
+        "/rag build                         建库（同步执行，打印进度）\n"
+        "/rag query 认证模块                 查询测试")
+    reg.register("tools", _cmd_tools,
+        "[关键词]  列出所有工具（按来源分组：内置/MCP/工作流/LSP）",
+        "/tools              列出全部\n"
+        "/tools edit         过滤含 'edit' 的工具\n"
+        "/tools mcp          过滤 MCP 工具")
+    reg.register("call", _cmd_call,
+        '[yes] tool_name({"arg":"val"})  手动调用工具',
+        '/call read_file({"path":"README.md"})             纯调用（仅显示结果）\n'
+        '/call yes grep({"pattern":"TODO","path":"."})      结果注入 Agent 上下文\n'
+        '  yes = 工具结果以 user 消息注入（模型下一步能看到）\n'
+        '  不加 yes = 结果仅显示，不影响 Agent')
+    reg.register("update", _cmd_update,
+        "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
+    reg.register("agent", _cmd_agent,
+        "[agent_id]  列出/切换直接交互的 Agent 目标",
+        "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"
+        "/agent coder        切换到与 coder 直接交互\n"
+        "/agent _main_       切回主 Agent\n"
+        "  仅允许 done/idle 状态的子 Agent；running 的需等完成后才能切换")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

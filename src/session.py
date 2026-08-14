@@ -52,16 +52,91 @@ SESSIONS_DIR = Path.home() / ".agt" / "sessions"                              # 
 _LEGACY_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"   # 开发期项目根（pip 装后不存在）
 
 
+def _repo_key(workspace) -> str:
+    """把工作区路径转成可读目录名：斜杠 / 和 \\ 替换为 '-'。
+    例：C:\\Users\\vgp77\\Projects\\Agt → C:-Users-vgp77-Projects-Agt
+    可读性好（一眼看出是哪个 repo），且文件系统安全（无斜杠/冒号）。"""
+    p = str(Path(workspace).resolve())
+    return p.replace("\\", "-").replace("/", "-").replace(":", "-")
+
+
 def _repo_hash(workspace) -> str:
-    """把工作区路径稳定地哈希成 12 位十六进制（固定位、文件系统安全、跨运行稳定）。"""
+    """兼容旧引用：仍返回 hash（_repo_key 迁移后不再使用，保留给旧代码 import）。"""
     return hashlib.sha1(str(Path(workspace).resolve()).encode("utf-8")).hexdigest()[:12]
 
 
+def _write_origin(workspace) -> None:
+    """在 repo 目录写 _origin.txt（记录原始 cwd），供后续 hash→fixed-cwd 迁移用。"""
+    try:
+        d = REPOS_DIR / _repo_key(workspace)
+        d.mkdir(parents=True, exist_ok=True)
+        origin = d / "_origin.txt"
+        if not origin.exists():
+            origin.write_text(str(Path(workspace).resolve()), encoding="utf-8")
+    except Exception:
+        pass
+
+
+_MIGRATED_HASH = False   # 进程级标志：hash→fixed-cwd 批量迁移只跑一次
+
+
+def _migrate_all_hash_dirs() -> None:
+    """启动时扫描 ~/.agt/repos/ 下所有文件夹：
+    文件夹名不含 '-' 的（hash 名）→ 读 _origin.txt 获取 cwd → 改名为 <fixed-cwd>。
+    目标已存在则合并内容（把旧目录的子目录移过去）。只跑一次（进程级标志）。"""
+    global _MIGRATED_HASH
+    if _MIGRATED_HASH:
+        return
+    _MIGRATED_HASH = True
+    try:
+        if not REPOS_DIR.exists():
+            return
+        for d in REPOS_DIR.iterdir():
+            if not d.is_dir():
+                continue
+            name = d.name
+            # hash 名是 12 位十六进制，不含 '-'
+            if "-" in name:
+                continue   # 已经是 fixed-cwd 命名，跳过
+            # 读 _origin.txt 获取原始 cwd
+            origin = d / "_origin.txt"
+            if not origin.exists():
+                continue   # 没有 _origin.txt，无法迁移
+            cwd = origin.read_text(encoding="utf-8").strip()
+            if not cwd:
+                continue
+            new_name = _repo_key(cwd)
+            if new_name == name:
+                continue   # 名字没变（不应该，但兜底）
+            target = REPOS_DIR / new_name
+            if not target.exists():
+                d.rename(target)
+                _LOG.info("repo 迁移：%s → %s", name, new_name)
+            else:
+                # 目标已存在：合并内容
+                import shutil
+                for item in d.iterdir():
+                    dst = target / item.name
+                    if dst.exists():
+                        if item.is_dir():
+                            shutil.copytree(item, dst, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, dst)
+                    else:
+                        item.rename(dst)
+                shutil.rmtree(d, ignore_errors=True)
+                _LOG.info("repo 合并迁移：%s → %s（内容已合并）", name, new_name)
+    except Exception as e:
+        _LOG.warning("repo 目录批量迁移失败：%s", e)
+
+
 def _repo_sessions_dir(workspace) -> Path:
-    """该工作区的会话根目录：~/.agt/repos/<hash>/sessions/。每个 repo 互相隔离。
+    """该工作区的会话根目录：~/.agt/repos/<fixed-cwd>/sessions/。每个 repo 互相隔离。
     首次访问时把旧位置的扁平存档一次性整体迁移成新文件夹结构。"""
-    h = _repo_hash(workspace)
-    d = REPOS_DIR / h / "sessions"
+    _migrate_all_hash_dirs()   # 扫描所有 hash 目录→fixed-cwd（一次性，进程级标志）
+    _write_origin(workspace)   # 写 _origin.txt（供未来迁移用）
+    k = _repo_key(workspace)
+    d = REPOS_DIR / k / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     _migrate_all_legacy()
     _migrate_flat_to_folder(d)  # 扁平→文件夹迁移
@@ -101,29 +176,34 @@ def _new_session_dir(workspace, created_ts: float) -> Path:
             return cand
     return base  # 兜底（999 个同名几乎不可能）
 
-
 def repo_memories_dir(workspace) -> Path:
-    """该工作区的【长期记忆】目录：~/.agt/repos/<hash>/memories/。与 sessions/ 同根，互相隔离。
+    """该工作区的【长期记忆】目录：~/.agt/repos/<fixed-cwd>/memories/。与 sessions/ 同根，互相隔离。
     供 longterm_memory.LongTermMemory 使用；不触发 sessions 的 legacy 迁移。"""
-    d = REPOS_DIR / _repo_hash(workspace) / "memories"
+    _migrate_all_hash_dirs()
+    _write_origin(workspace)
+    d = REPOS_DIR / _repo_key(workspace) / "memories"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def repo_plans_dir(workspace) -> Path:
-    """该工作区的【计划】目录：~/.agt/repos/<hash>/plans/。与 sessions/memories 同根、互相隔离。
+    """该工作区的【计划】目录：~/.agt/repos/<fixed-cwd>/plans/。与 sessions/memories 同根、互相隔离。
     每个计划一个 <plan_id>.json 文件，跨 session 共享（plan_id 存在 session 的 extra_state 里）。
     供 plan_tools 使用；不触发 sessions 的 legacy 迁移。"""
-    d = REPOS_DIR / _repo_hash(workspace) / "plans"
+    _migrate_all_hash_dirs()
+    _write_origin(workspace)
+    d = REPOS_DIR / _repo_key(workspace) / "plans"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def repo_images_dir(workspace) -> Path:
-    """该工作区的【工具图片】目录：~/.agt/repos/<hash>/images/。工具返回的图片落盘于此，
+    """该工作区的【工具图片】目录：~/.agt/repos/<fixed-cwd>/images/。工具返回的图片落盘于此，
     消息里用 <img>name</img> 标签引用（base64 不进存档）。repo 级（不绑 session），
     供视觉子 agent 跨 session 引用同一张图。"""
-    d = REPOS_DIR / _repo_hash(workspace) / "images"
+    _migrate_all_hash_dirs()
+    _write_origin(workspace)
+    d = REPOS_DIR / _repo_key(workspace) / "images"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

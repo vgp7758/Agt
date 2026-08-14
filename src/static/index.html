@@ -59,7 +59,7 @@
     #sendBtn.mobile-plus{ width:46px; height:46px; min-width:46px; padding:0; border-radius:50%;
       font-size:22px; line-height:1; display:flex; align-items:center; justify-content:center; }
   }
-  #modelSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; max-width:240px; }
+  #modelSel, #sessionSel, #agentSel { padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; width:150px; }
   .btn { padding:5px 10px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:12.5px; cursor:pointer; color:#374151; }
   .btn:hover { background:#f3f4f6; }
   .btn.primary { background:var(--me); color:#fff; border-color:var(--me); }
@@ -220,9 +220,8 @@
     <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">✏ 编辑器</button>
     <button class="btn" id="btnRag" onclick="window.open('/rag','_blank')" title="RAG 文档库管理">📚 RAG</button>
     <button class="btn" id="btnMemory" onclick="window.open('/memory','_blank')" title="长期记忆管理">🧠 记忆</button>
-    <button class="btn" id="btnSave" title="保存当前会话（下拉框选中已有存档则覆盖）">💾 /save</button>
+    <button class="btn" id="btnStats" onclick="window.open('/stats','_blank')" title="LLM 调用统计：缓存命中率折线图 + 各模型概览">📊 统计</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
-    <button class="btn auto" id="btnAuto" title="开启/关闭纯自主模式">🔁 自主</button>
     <!-- Agent 团队切换下拉框 -->
     <select id="agentSel" title="切换直接交互的 Agent（点击时自动刷新列表）">
       <option value="_main_">🤖 主 Agent</option>
@@ -230,7 +229,6 @@
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <button class="btn" id="btnFeedback">💬 反馈</button>
     <button class="btn" id="btnSettings">⚙ 设置</button>
-    <button class="btn" id="btnStats" title="LLM 调用可靠性统计（per-model 成功/空/截断/错误/耗时）">📊 统计</button>
     <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
@@ -289,7 +287,8 @@
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" title="工具结果摘要的初始字数上限（当前步 d=0，默认1500）；越大披露越详细"></label>
     <label>步距衰减 step <input id="cfg_detail_step" type="number" min="1" title="每远一步减少的摘要字数（默认15）；越大老步压缩越快"></label>
-    <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
+    <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
+    <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
     </div>
     <div class="modal-btns">
@@ -317,21 +316,6 @@
     <div class="modal-btns">
       <button class="btn" id="fbCancel">取消</button>
       <button class="btn primary" id="fbSubmit">提交反馈</button>
-    </div>
-  </div>
-</div>
-
-<div id="statsModal" class="modal-overlay">
-  <div class="modal" style="max-width:720px;width:92%">
-    <h3>📊 LLM 调用可靠性统计</h3>
-    <div style="margin:6px 0;display:flex;gap:6px">
-      <button class="btn" id="statsScopeCur">当前 session</button>
-      <button class="btn" id="statsScopeAll">本仓库全部 session</button>
-      <button class="btn" id="statsRefresh">🔄 刷新</button>
-    </div>
-    <div id="statsBody" style="max-height:58vh;overflow:auto;padding:2px"></div>
-    <div class="modal-btns">
-      <button class="btn primary" id="statsClose">关闭</button>
     </div>
   </div>
 </div>
@@ -787,11 +771,6 @@ document.getElementById('btnToolCall').onclick = async ()=>{
   }
 };
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
-document.getElementById('btnSave').onclick=()=>{
-  const sel=document.getElementById('sessionSel');
-  const name=sel.value==='__new__'?null:sel.value;
-  ws.send(JSON.stringify({action:'save_session', name}));
-};
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{
   const v=e.target.value;
@@ -806,10 +785,6 @@ document.getElementById('sessionSel').addEventListener('change',e=>{
     if(opt) setSessionTitle(opt.textContent);
   }
 });
-document.getElementById('btnAuto').onclick=()=>{
-  // 切换自主模式：发送命令
-  sendRaw('/autonomous', []);
-};
 document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); loadModelList(); };
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 // —— 反馈 ——
@@ -823,45 +798,7 @@ document.getElementById('btnFeedback').onclick=()=>{
 };
 document.getElementById('fbCancel').onclick=()=>{ feedbackModal.style.display='none'; };
 
-// —— LLM 调用可靠性统计弹窗 ——
-const statsModal=document.getElementById('statsModal');
-let _statsScope='current';
-async function loadStats(scope){
-  _statsScope=scope;
-  const body=document.getElementById('statsBody');
-  body.innerHTML='<div class="stats-empty">加载中…</div>';
-  try{
-    const r=await fetch('/api/stats?scope='+scope); const d=await r.json();
-    const s=d.stats||{}; const models=Object.keys(s);
-    const scopeText=`范围：${d.scope==='all'?'本仓库全部 session':'当前 session'}（${d.calls} 条调用记录）`;
-    if(!models.length){
-      body.innerHTML=`<div class="stats-empty">${scopeText}<br>（暂无 LLM 调用记录——发几条消息后刷新看看）</div>`;
-      return;
-    }
-    const cols=['模型','调用','成功(率)','空','截断','错误','completer','tokens','均耗时'];
-    let html=`<div class="stats-scope">${scopeText}</div>`;
-    html+='<table class="stats-table"><thead><tr>';
-    cols.forEach(c=>html+=`<th>${c}</th>`);
-    html+='</tr></thead><tbody>';
-    models.forEach(m=>{
-      const x=s[m];
-      const rate=x.calls?(x.success*100/x.calls).toFixed(0)+'%':'—';
-      const err=Object.entries(x.errors||{}).map(([k,v])=>`${k}:${v}`).join(' ')||'-';
-      // [值, 是否数字列]；模型名+错误列走文字（左对齐/换行），其余右对齐等宽
-      const cells=[[esc(m),false],[x.calls,true],[`${x.success}(${rate})`,true],
-        [x.empty,true],[x.truncated,true],[err,false],[x.completer,true],
-        [x.tokens,true],[x.avg_latency+'s',true]];
-      html+='<tr>'+cells.map(c=>`<td${c[1]?' class="num"':''}>${c[0]}</td>`).join('')+'</tr>';
-    });
-    html+='</tbody></table>';
-    body.innerHTML=html;
-  }catch(e){ body.innerHTML='<div class="stats-empty">加载失败：'+esc(String(e))+'</div>'; }
-}
-document.getElementById('btnStats').onclick=()=>{ statsModal.style.display='flex'; loadStats('current'); };
-document.getElementById('statsScopeCur').onclick=()=>loadStats('current');
-document.getElementById('statsScopeAll').onclick=()=>loadStats('all');
-document.getElementById('statsRefresh').onclick=()=>loadStats(_statsScope);
-document.getElementById('statsClose').onclick=()=>{ statsModal.style.display='none'; };
+// —— 统计已迁移到独立页面 /stats（btnStats 用 inline onclick 打开新标签）——
 document.getElementById('fbSubmit').onclick=()=>{
   const content=document.getElementById('fbContent').value.trim();
   if(!content){ toast('⚠️ 请先写点内容'); return; }
@@ -968,6 +905,7 @@ function saveRuntime(){
     max_retries: parseInt(document.getElementById('cfg_max_retries').value),
     temperature: parseFloat(document.getElementById('cfg_temperature').value),
     enable_thinking: document.getElementById('cfg_enable_thinking').checked,
+    dump_projections: document.getElementById('cfg_dump_projections').checked,
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
     reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
@@ -1418,6 +1356,7 @@ function onWSMessage(ev){
         document.getElementById('cfg_token_budget').value = m.values.token_budget;
         document.getElementById('cfg_max_retries').value = m.values.max_retries;
         document.getElementById('cfg_temperature').value = m.values.temperature;
+        document.getElementById('cfg_dump_projections').checked = !!m.values.dump_projections;
         document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
         document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';

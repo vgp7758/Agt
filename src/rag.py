@@ -115,8 +115,8 @@ class LocalRAG:
         # index_dir：空/旧默认 → per-repo 用户目录
         index_dir_cfg = cfg.get("index_dir", "")
         if not index_dir_cfg or index_dir_cfg == ".agent/rag":
-            from session import REPOS_DIR, _repo_hash
-            index_dir = REPOS_DIR / _repo_hash(workspace) / "rag"
+            from session import REPOS_DIR, _repo_key
+            index_dir = REPOS_DIR / _repo_key(workspace) / "rag"
         elif not Path(index_dir_cfg).is_absolute():
             index_dir = Path(workspace) / index_dir_cfg
         else:

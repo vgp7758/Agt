@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LLM 调用统计 — Agt</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;background:#0d1117;color:#e6edf3;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:16px;font-weight:600}
+header .sub{color:#8b949e;font-size:12px}
+header .spacer{flex:1}
+header a{color:#58a6ff;text-decoration:none;font-size:13px}
+header a:hover{text-decoration:underline}
+.toolbar{display:flex;align-items:center;gap:8px}
+.toolbar select,.toolbar button{padding:4px 10px;border:1px solid #30363d;border-radius:6px;background:#21262d;color:#e6edf3;font-size:13px;cursor:pointer}
+.toolbar button:hover{background:#30363d}
+main{flex:1;overflow-y:auto;padding:16px}
+.chart-card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:16px}
+.chart-card h2{font-size:14px;font-weight:600;margin-bottom:10px;color:#e6edf3}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px}
+.legend .item{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#8b949e;user-select:none}
+.legend .item.off{opacity:.35;text-decoration:line-through}
+.legend .swatch{width:14px;height:3px;border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid #21262d;white-space:nowrap}
+th{color:#8b949e;font-weight:600;font-size:12px}
+th:first-child,td:first-child{text-align:left}
+td:first-child{font-weight:600}
+tr:hover td{background:#161b22}
+.good{color:#3fb950}.mid{color:#d29922}.bad{color:#f85149}.dim{color:#8b949e}
+svg{display:block;width:100%}
+.empty{color:#8b949e;text-align:center;padding:40px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 LLM 调用统计</h1>
+  <span class="sub" id="subtitle">加载中…</span>
+  <div class="spacer"></div>
+  <div class="toolbar">
+    <select id="scopeSel" title="统计范围">
+      <option value="current">当前 session</option>
+      <option value="all">全部 session</option>
+    </select>
+    <button id="btnRefresh">↻ 刷新</button>
+  </div>
+  <a href="/">← 返回对话</a>
+</header>
+<main>
+  <div class="chart-card">
+    <h2>缓存命中率 · 调用序列（等间距）</h2>
+    <div class="legend" id="legend"></div>
+    <div id="chartBox"><div class="empty">暂无数据</div></div>
+  </div>
+  <div class="chart-card">
+    <h2>各端点调用概览</h2>
+    <div id="tableBox"><div class="empty">暂无数据</div></div>
+  </div>
+</main>
+<script>
+const PALETTE = ['#58a6ff','#3fb950','#f78166','#bc8cff','#f7b731','#ff6b9d','#4dd0e1','#aed581','#e05297','#7dd3fc'];
+let _data = null;
+let _hidden = new Set();   // 隐藏的模型名
+
+function fmtTime(ts){ return new Date(ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}); }
+function fmtTs(ts){
+  const d = new Date(ts*1000);
+  return d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}) + ' ' + d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+}
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function load(){
+  const scope = document.getElementById('scopeSel').value;
+  document.getElementById('subtitle').textContent = '加载中…';
+  try{
+    const r = await fetch('/api/stats?scope='+scope);
+    _data = await r.json();
+    render();
+  }catch(e){
+    document.getElementById('subtitle').textContent = '加载失败：'+e;
+  }
+}
+
+function modelColor(models, m){ return PALETTE[models.indexOf(m) % PALETTE.length]; }
+
+function render(){
+  if(!_data){ return; }
+  const stats = _data.stats || {};
+  const models = Object.keys(stats);
+  const scopeName = _data.scope === 'all' ? '全部 session' : '当前 session';
+  document.getElementById('subtitle').textContent =
+    `${scopeName} · 共 ${_data.calls} 次调用 · ${models.length} 个端点`;
+  if(!models.length){
+    document.getElementById('legend').innerHTML = '';
+    document.getElementById('chartBox').innerHTML = '<div class="empty">暂无 LLM 调用记录</div>';
+    document.getElementById('tableBox').innerHTML = '<div class="empty">暂无数据</div>';
+    return;
+  }
+  renderLegend(models);
+  renderChart(models);
+  renderTable(stats, models);
+}
+
+function renderLegend(models){
+  const el = document.getElementById('legend');
+  el.innerHTML = models.map(m=>{
+    const off = _hidden.has(m) ? ' off' : '';
+    return `<span class="item${off}" onclick="toggleModel('${esc(m)}')">`
+      + `<span class="swatch" style="background:${modelColor(models,m)}"></span>${esc(m)}`
+      + (statsCache[m]?.cache_rate != null ? ` <span class="dim">(${statsCache[m].cache_rate}%)</span>` : '')
+      + `</span>`;
+  }).join('');
+}
+
+let statsCache = {};
+function toggleModel(m){
+  if(_hidden.has(m)) _hidden.delete(m); else _hidden.add(m);
+  render();
+}
+
+function renderChart(models){
+  const box = document.getElementById('chartBox');
+  const series = _data.series || {};
+  const visible = models.filter(m=>!_hidden.has(m) && (series[m]||[]).length);
+  if(!visible.length){
+    box.innerHTML = '<div class="empty">无可绘制的缓存命中数据（模型未返回 cached_tokens？）</div>';
+    return;
+  }
+  // —— 横轴 = 调用时序等间距：所有可见点的时间戳排序成全局序列，x = 序列索引 ——
+  // 避免真实时间轴因调用间隔不均导致点挤在一端、大片空白跳跃。
+  const allTs = [];
+  for(const m of visible) for(const p of series[m]) allTs.push(p.ts);
+  allTs.sort((a,b)=>a-b);
+  const N = allTs.length;
+  // SVG 尺寸（viewBox 坐标；width:100% 自适应）
+  const W = 900, H = 320, padL = 44, padR = 16, padT = 14, padB = 30;
+  // 二分查 ts 在全局序列中的索引（同一时间戳落同一位）
+  const idxOf = ts => {
+    let lo = 0, hi = N - 1;
+    while(lo < hi){ const mid = (lo + hi) >> 1; if(allTs[mid] < ts) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  const x = ts => padL + idxOf(ts) / ((N - 1) || 1) * (W - padL - padR);
+  const y = rate => H - padB - rate / 100 * (H - padT - padB);
+  let g = '';
+  // 网格 + y 轴标签
+  for(let p=0;p<=100;p+=20){
+    const yy = y(p);
+    g += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="#21262d" stroke-width="1"/>`;
+    g += `<text x="${padL-6}" y="${yy+4}" fill="#8b949e" font-size="11" text-anchor="end">${p}%</text>`;
+  }
+  // x 轴刻度：调用序号 #1 ~ #N（等距 5 档，去重）；具体时间看点的 tooltip
+  const tickIdx = [...new Set([0, .25, .5, .75, 1].map(f=>Math.round(f*(N-1))))];
+  for(const t of tickIdx){
+    const xx = padL + t / ((N-1)||1) * (W-padL-padR);
+    g += `<text x="${xx.toFixed(1)}" y="${H-8}" fill="#8b949e" font-size="11" `
+      + (t===0?'':'text-anchor="middle"') + `>#${t+1}</text>`;
+  }
+  // 每个模型一条折线 + 数据点
+  for(const m of visible){
+    const pts = series[m];
+    const col = modelColor(models, m);
+    const line = pts.map(p=>`${x(p.ts).toFixed(1)},${y(p.rate).toFixed(1)}`).join(' ');
+    g += `<polyline points="${line}" fill="none" stroke="${col}" stroke-width="1.8" opacity="0.9"/>`;
+    // 点很多时缩小半径避免糊
+    const r = pts.length > 300 ? 1.2 : (pts.length > 120 ? 1.8 : 2.5);
+    for(const p of pts){
+      g += `<circle cx="${x(p.ts).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
+        + `<title>${esc(m)} ${fmtTs(p.ts)}\n命中率 ${p.rate}%</title></circle>`;
+    }
+  }
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+
+function rateCls(v){ return v>=80?'good':(v>=40?'mid':'bad'); }
+
+function renderTable(stats, models){
+  statsCache = stats;
+  let h = `<table><thead><tr>
+    <th>端点</th><th>调用</th><th>成功</th><th>成功率</th><th>空</th><th>截断</th>
+    <th>错误</th><th>缓存命中率</th><th>cached/prompt</th><th>tokens</th><th>均耗时</th>
+  </tr></thead><tbody>`;
+  for(const m of models){
+    const s = stats[m];
+    const sr = s.calls ? Math.round(s.success/s.calls*100) : 0;
+    const errStr = Object.entries(s.errors||{}).map(([k,v])=>`${k}:${v}`).join(', ') || '—';
+    const cr = s.cache_rate != null ? `<span class="${rateCls(s.cache_rate)}">${s.cache_rate}%</span>` : '<span class="dim">—</span>';
+    const cp = s.prompt_tokens ? `${fmtK(s.cached_tokens)}/${fmtK(s.prompt_tokens)}` : '<span class="dim">—</span>';
+    h += `<tr>
+      <td><span style="color:${modelColor(models,m)}">●</span> ${esc(m)}</td>
+      <td>${s.calls}</td><td>${s.success}</td>
+      <td><span class="${rateCls(sr)}">${sr}%</span></td>
+      <td>${s.empty||'—'}</td><td>${s.truncated||'—'}</td>
+      <td>${errStr}</td>
+      <td>${cr}</td><td class="dim">${cp}</td>
+      <td>${fmtK(s.tokens)}</td><td>${s.avg_latency}s</td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  document.getElementById('tableBox').innerHTML = h;
+}
+
+function fmtK(n){
+  n = n||0;
+  if(n >= 1000000) return (n/1000000).toFixed(1)+'M';
+  if(n >= 1000) return (n/1000).toFixed(1)+'k';
+  return String(n);
+}
+
+document.getElementById('scopeSel').onchange = load;
+document.getElementById('btnRefresh').onclick = load;
+load();
+setInterval(load, 30000);   // 30s 自动刷新
+</script>
+</body>
+</html>

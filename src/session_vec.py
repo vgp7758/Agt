@@ -111,8 +111,8 @@ class SessionVectorStore:
         embedder = _build_embedder(cfg)
         if embedder is None:
             return None
-        from session import REPOS_DIR, _repo_hash
-        index_dir = REPOS_DIR / _repo_hash(workspace) / "sessions_vec"
+        from session import REPOS_DIR, _repo_key
+        index_dir = REPOS_DIR / _repo_key(workspace) / "sessions_vec"
         try:
             return cls(embedder, index_dir)
         except Exception:

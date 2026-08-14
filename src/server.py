@@ -60,6 +60,7 @@ _EDITOR_HTML = (_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8"
 _RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
 _WF_DEBUG_HTML = (_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8")
 _MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
+_STATS_HTML = (_STATIC_DIR / "stats.html").read_text(encoding="utf-8")
 
 
 def _broadcast(ev: dict):
@@ -129,6 +130,12 @@ async def rag_page():
 async def memory_page():
     """长期记忆管理页：查看/编辑/删除三类记忆。"""
     return HTMLResponse(_MEMORY_HTML)
+
+
+@app.get("/stats")
+async def stats_page():
+    """LLM 调用统计页：缓存命中率折线图 + 各模型调用概览表。"""
+    return HTMLResponse(_STATS_HTML)
 
 
 @app.get("/icons/{name}")
@@ -417,16 +424,45 @@ async def api_mcp_save(request: Request):
 
 @app.get("/api/stats")
 async def api_stats(scope: str = "current"):
-    """LLM 调用可靠性统计（per-model 聚合）。scope=current/all。"""
-    from llm_call_log import aggregate_calls, load_all_calls
+    """LLM 调用统计（per-model 聚合 + 缓存命中率 + 时间序列）。scope=current/all。
+    - stats[m].cache_rate: 该模型 token 加权平均缓存命中率 = sum(cached)/sum(prompt)*100
+    - series[m]: [{ts, rate}] 每次调用的缓存命中率（cached/prompt），供折线图
+    - ts_min/ts_max: 时间轴范围"""
+    from llm_call_log import aggregate_calls, endpoint_of, load_all_calls
     from session import _repo_sessions_dir
     if _agent is None:
-        return {"scope": scope, "calls": 0, "stats": {}}
+        return {"scope": scope, "calls": 0, "stats": {}, "series": {},
+                "ts_min": None, "ts_max": None}
     if scope == "all":
         records = load_all_calls(_repo_sessions_dir(_workspace))
     else:
         records = _agent.session.llm_calls.all_records()
-    return {"scope": scope, "calls": len(records), "stats": aggregate_calls(records)}
+    stats = aggregate_calls(records)
+    series: dict = {m: [] for m in stats}
+    for m in stats:
+        stats[m]["cached_tokens"] = 0
+        stats[m]["prompt_tokens"] = 0
+    for r in records or []:
+        m = endpoint_of(r)   # 端点 = provider/回包实际模型（与 aggregate_calls 同 key）
+        if m not in stats:
+            continue
+        u = r.get("usage") or {}
+        ptd = u.get("prompt_tokens_details") or {}
+        cached = ptd.get("cached_tokens") or 0
+        prompt = u.get("prompt_tokens") or 0
+        if isinstance(cached, int):
+            stats[m]["cached_tokens"] += cached
+        if isinstance(prompt, int) and prompt > 0:
+            stats[m]["prompt_tokens"] += prompt
+            if isinstance(cached, int):
+                series[m].append({"ts": r.get("ts"), "rate": round(cached / prompt * 100, 1)})
+    for m, s in stats.items():
+        s["cache_rate"] = (round(s["cached_tokens"] / s["prompt_tokens"] * 100, 1)
+                           if s["prompt_tokens"] else None)
+    all_ts = [r.get("ts") for r in records or [] if isinstance(r.get("ts"), (int, float))]
+    return {"scope": scope, "calls": len(records), "stats": stats, "series": series,
+            "ts_min": min(all_ts) if all_ts else None,
+            "ts_max": max(all_ts) if all_ts else None}
 
 
 # ===================== RAG 文档库 API =====================

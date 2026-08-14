@@ -92,6 +92,56 @@ def load_all_calls(sessions_dir) -> list:
     return out
 
 
+def normalize_usage(u) -> dict:
+    """usage 归一化：把各家 provider 的非标缓存/reasoning 字段映射进 OpenAI 标准结构。
+    - DeepSeek 原生: prompt_cache_hit_tokens / prompt_cache_miss_tokens
+        → prompt_tokens_details.cached_tokens（有 hit 直接用；只有 miss 时按 prompt-miss 推算）
+    - 部分兼容端点: 顶层 reasoning_tokens → completion_tokens_details.reasoning_tokens
+    返回浅拷贝（不修改原 dict）；已是标准格式则无变化。"""
+    if not isinstance(u, dict):
+        return u
+    out = dict(u)
+    ptd = dict(out.get("prompt_tokens_details") or {})
+    if ptd.get("cached_tokens") is None:
+        hit = out.get("prompt_cache_hit_tokens")
+        if isinstance(hit, int):
+            ptd["cached_tokens"] = hit
+        else:
+            miss = out.get("prompt_cache_miss_tokens")
+            prompt = out.get("prompt_tokens")
+            if isinstance(miss, int) and isinstance(prompt, int):
+                ptd["cached_tokens"] = max(prompt - miss, 0)
+    if ptd:
+        out["prompt_tokens_details"] = ptd
+    ctd = dict(out.get("completion_tokens_details") or {})
+    if ctd.get("reasoning_tokens") is None:
+        rt = out.get("reasoning_tokens")
+        if isinstance(rt, int):
+            ctd["reasoning_tokens"] = rt
+    if ctd:
+        out["completion_tokens_details"] = ctd
+    return out
+
+
+def cached_tokens_of(rec: dict) -> int:
+    """从一条 llm_calls 记录取缓存命中 tokens（兼容 OpenAI 标准 / DeepSeek 原生 / 已归一化格式）。
+    读历史记录（归一化上线前写入的）也能取到。"""
+    u = rec.get("usage")
+    if not isinstance(u, dict):
+        return 0
+    v = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
+    if isinstance(v, int):
+        return v
+    v = u.get("prompt_cache_hit_tokens")
+    if isinstance(v, int):
+        return v
+    miss = u.get("prompt_cache_miss_tokens")
+    prompt = u.get("prompt_tokens")
+    if isinstance(miss, int) and isinstance(prompt, int):
+        return max(prompt - miss, 0)
+    return 0
+
+
 def endpoint_of(r: dict) -> str:
     """一条记录的端点标识：provider/回包实际模型（如 proxy/glm-5.2）。
     旧记录无 resp_model 时退化为纯 provider 名；回包模型与 provider 名相同则不重复显示。"""

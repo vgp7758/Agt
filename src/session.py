@@ -31,14 +31,15 @@ from typing import Optional, Callable
 
 import config
 from llm_client import LLMClient
-from toollog import ToolLog, detail_limit, DETAIL_BASE, DETAIL_FLOOR
+from toollog import ToolLog, DETAIL_BASE, DETAIL_FLOOR
 from llm_call_log import LLMCallLog
 from mdrender import render_cli   # /recall 回显 answer 时渲染表格/代码块（独立模块，避免循环依赖）
 
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
-RECENT_FULL_STEPS = 10        # 当前轮最近 N 步全量（distance 0..N-1），其后的步才按距离衰减
+GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
+RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
 _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
@@ -913,12 +914,14 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = None, full_window: int = 1) -> list[dict]:
+                           base: int = None, full_window: int = None) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
-        工具名/入参/结果从 toollog 按 call_id 召回。step 级策略：
-        - 最近 full_window 步（distance 0..full_window-1）【全量】披露入参+结果，但单步超
-          FULL_STEP_CAP_CHARS(≈8000token) 则截断标注 call_id——当前轮传 RECENT_FULL_STEPS 保思维链连贯；
-        - 其后按【距当前步距离】衰减：detail_limit(distance, base)，越远越简略，截断处标注 call_id；
+        工具名/入参/结果从 toollog 按 call_id 召回。step 级策略（分组投影，缓存友好）：
+        - 每 GROUP_STEPS 步一组，组内所有步 limit 一致 → byte-stable（利于前缀缓存）；
+        - 组号差 = 当前步所在组 - 本步所在组：
+            · 差 ≤ 1（当前组 + 上一组）→ 【全量】披露（当前轮 FULL_STEP_CAP_CHARS 上限；
+              老轮则用 base=该档最大字数，不额外衰减）；
+            · 差 ≥ 2 → limit = eff_base - GROUP_STEPS * detail_step * 组号差（≥DETAIL_FLOOR）；
         - reasoning 永远原样挂 reasoning_content（不压缩，含 step0 的核心设计思考）。
         max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
@@ -927,15 +930,25 @@ class Session:
             steps = steps[-max_steps:]
             msgs.append({"role": "system", "content": f"（本轮的 {skipped} 个早期步骤已省略，仅保留最近 {max_steps} 步）"})
         total = len(steps)
+        cur_group = (total - 1) // GROUP_STEPS if total else 0   # 当前步所在组（0-based）
+        eff_base = base if base is not None else DETAIL_BASE     # 当前轮 base=None → 用 DETAIL_BASE
         for idx, step in enumerate(steps):
             if not step.tool_calls:
                 continue
             # 本步之前的"用户中途补充"（user 角色，带标签）：插在上一组 tool 结果之后、本步 assistant 之前
             if step.preceding_hint:
                 msgs.append({"role": "user", "content": _MIDTURN_TAG + step.preceding_hint})
-            distance = (total - 1) - idx   # 最近一步 distance=0，越早越大
-            limit = detail_limit(distance, base=base)
-            full = distance < full_window   # 最近 full_window 步全量（含 step0）；老 turn 传 0/1
+            group_diff = cur_group - (idx // GROUP_STEPS)   # 本步组与当前组的组号差（0=同组）
+            if group_diff <= 1 and base is None:
+                full = True        # 当前轮：当前组 + 上一组全量
+                limit = 0          # full 分支不使用 limit
+            elif group_diff <= 1:
+                full = False       # 老轮：当前组 + 上一组用该档最大字数，不额外衰减
+                limit = base
+            else:
+                full = False       # 更早组：按组号差线性衰减
+                limit = max(eff_base - GROUP_STEPS * config.load_detail_step() * group_diff,
+                            DETAIL_FLOOR)
             a_tool_calls = []
             for i, tc in enumerate(step.tool_calls):
                 name, args, _r = self.toollog.view(tc.call_id)

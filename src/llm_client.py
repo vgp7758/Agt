@@ -375,12 +375,13 @@ class LLMClient:
         if rec is None:
             return
         try:
+            from llm_call_log import normalize_usage
             rec({
                 "ts": time.time(),
                 "model": model or self.model_name,
                 "resp_model": resp_model or "",
                 "attempt": attempt, "max_tokens": max_tokens,
-                "finish_reason": finish_reason, "usage": usage,
+                "finish_reason": finish_reason, "usage": normalize_usage(usage),
                 "elapsed": round(elapsed, 2), "outcome": outcome,
                 "content_len": len(content or ""), "reasoning_len": len(reasoning or ""),
                 "tool_calls": tool_calls, "error": error, "completer": completer,

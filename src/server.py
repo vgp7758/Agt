@@ -428,7 +428,7 @@ async def api_stats(scope: str = "current"):
     - stats[m].cache_rate: 该模型 token 加权平均缓存命中率 = sum(cached)/sum(prompt)*100
     - series[m]: [{ts, rate}] 每次调用的缓存命中率（cached/prompt），供折线图
     - ts_min/ts_max: 时间轴范围"""
-    from llm_call_log import aggregate_calls, endpoint_of, load_all_calls
+    from llm_call_log import aggregate_calls, cached_tokens_of, endpoint_of, load_all_calls
     from session import _repo_sessions_dir
     if _agent is None:
         return {"scope": scope, "calls": 0, "stats": {}, "series": {},
@@ -447,8 +447,7 @@ async def api_stats(scope: str = "current"):
         if m not in stats:
             continue
         u = r.get("usage") or {}
-        ptd = u.get("prompt_tokens_details") or {}
-        cached = ptd.get("cached_tokens") or 0
+        cached = cached_tokens_of(r)   # 兼容 OpenAI 标准 / DeepSeek 原生 / 已归一化格式
         prompt = u.get("prompt_tokens") or 0
         if isinstance(cached, int):
             stats[m]["cached_tokens"] += cached

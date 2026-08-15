@@ -195,9 +195,13 @@ def make_communication_tools(agent) -> list:
                 return f"[{target_id}] 暂无对话历史"
             recent = turns[-max(1, min(count, 20)):]
             lines = [f"[{target_id}] 最近 {len(recent)} 轮："]
+            # count=1 视为"查完整回复"模式：answer 放宽到 4000 字（正常浏览模式仍 100 字摘要）
+            full_mode = (count == 1)
             for t in recent:
                 user = (t.user_message or "")[:60].replace("\n", " ")
-                answer = (t.answer or "")[:100].replace("\n", " ")
+                answer = (t.answer or "")[(0 if full_mode else slice(0, 100))].replace("\n", " ") if full_mode else (t.answer or "")[:100].replace("\n", " ")
+                if full_mode and len(t.answer or "") > 4000:
+                    answer = (t.answer or "")[:4000] + f"…(+{len(t.answer) - 4000}字)"
                 tools = []
                 for s in t.steps:
                     for tc in s.tool_calls:
@@ -384,14 +388,19 @@ def make_subagent_tools(agent) -> list:
                     except Exception:
                         pass
             # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
+            # 子 Agent 的最终回复就是交付物，不应粗暴截断；仅超长（>4000字）时截断并
+            # 指引 caller 用 agent_query_events 查完整版（子 Agent session 已落盘，answer 可查）。
             if _caller_id and _caller_id != "user":
                 try:
                     reg = getattr(agent, "registry", None)
                     if reg:
                         caller_entry = reg.lookup(_caller_id)
                         if caller_entry and caller_entry.agent:
+                            body = res if len(res) <= 4000 else (
+                                res[:4000] + f"\n…（已截断 {len(res) - 4000} 字，"
+                                             f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
                             caller_entry.agent.push_message(
-                                f"📨〔子 Agent '{name}' [{_aid}] 完成〕{res[:200]}",
+                                f"📨〔子 Agent '{name}' [{_aid}] 完成〕{body}",
                                 source=f"subagent:{_aid}")
                         else:
                             _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, _caller_id)
@@ -422,7 +431,7 @@ def make_subagent_tools(agent) -> list:
             entry = agent.background_tasks.get(aid, {})
             st = entry.get("status", "?")
             res = (entry.get("result") or "").strip().replace("\n", " ")
-            res = (res[:300] + "…") if len(res) > 300 else res
+            res = (res[:800] + f"…（截断，完整回复 agent_query_events(\"{aid}\", 1)）") if len(res) > 800 else res
             still = th is not None and th.is_alive()
             out.append(f"[{aid}] {'⏳仍在跑（超时，稍后再 wait）' if still else f'{st}：{res}'}")
         return "\n\n".join(out)

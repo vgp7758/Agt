@@ -572,7 +572,18 @@ class Agent:
             return ""
 
     def _ltm_episodic_block(self, query: str) -> str:
-        """长期记忆·情境层注入：按当前 user_message 召回 episodic（每轮按需）。失败静默。"""
+        """长期记忆·情境层注入：按当前 user_message 召回 episodic（每轮按需）。失败静默。
+        检索工作流接管：当 before_turn_retrieval 工作流（hook=before_turn）存在时，
+        episodic 已由工作流统一召回（search_memory → collect → LLM 精排，kind=epi 候选），
+        provider 不再注入，避免双重。工作流被删/重命名则自动回退到本 provider。"""
+        try:
+            from real_tools import WORKSPACE as _ws
+            from workflow import get_hook_workflows
+            if any(hw.get("name") == "before_turn_retrieval"
+                   for hw in get_hook_workflows(_ws, "before_turn")):
+                return ""
+        except Exception:
+            pass
         try:
             return self.ltm.episodic_block(query)
         except Exception:

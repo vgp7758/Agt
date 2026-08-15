@@ -281,7 +281,7 @@
       <option value="reset">每轮重试首模型（reset）</option>
     </select></label>
     <label>reasoning补全模型 <select id="cfg_reasoning_completer" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"><option value="">（关闭）</option></select></label>
-    <label>检索模型 retrieval_model <select id="cfg_retrieval_model" title="Agentic RAG 检索（抽关键字+精排）用的便宜模型；留空=用默认模型"><option value="">（用默认模型）</option></select></label>
+    <label>辅助模型 utility_model <select id="cfg_utility_model" title="所有 LLM 短调用共用的便宜模型：recap总结/RAG检索抽关键字精排/reasoning补全默认/工作流LLM与意图节点默认；留空=跟随主模型，建议配便宜非思考模型"><option value="">（跟随主模型）</option></select></label>
     <div class="rt-group">执行与上下文</div>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
@@ -520,12 +520,47 @@ function toolCallHTML(name, a){
       `<div class="diff-grid"><div class="diff-col"><div class="diff-col-h">old_string</div><pre class="diff-old">${esc(a.old_string||'')}</pre></div>`+
       `<div class="diff-col"><div class="diff-col-h">new_string</div><pre class="diff-new">${esc(a.new_string||'')}</pre></div></div>`;
   }
-  if(name==='insert' && a && a.entries){
-    let parts=`<div class="diff-head">✏️ insert ${esc(a.path||'')}（${a.entries.length} 处）</div>`;
-    a.entries.forEach(e=>{
-      parts+=`<div class="diff-ins"><div class="diff-ins-h">→ ${esc(e.line)}</div><pre class="diff-new">${esc(e.content||'')}</pre></div>`;
+  // —— 编辑工具组（insert/replace_lines/delete/move）diff 渲染 ——
+  // entries 可能是数组，也可能被 LLM 序列化成 JSON 字符串——统一解析成数组（解析失败返回 null 走默认文本）
+  const _entries = (a && a.entries != null)
+    ? (Array.isArray(a.entries) ? a.entries
+      : (typeof a.entries === 'string' ? (()=>{ try{ const p=JSON.parse(a.entries); return Array.isArray(p)?p:null; }catch(e){ return null; } })() : null))
+    : null;
+  if(name==='insert' && _entries){
+    let parts=`<div class="diff-head">➕ insert ${esc(a.path||'')}（${_entries.length} 处）</div>`;
+    _entries.forEach(e=>{
+      const cl=(e.content||'').split('\n').length;
+      parts+=`<div class="diff-ins"><div class="diff-ins-h">→ 第 ${esc(e.line)} 行前 · 插入 ${cl} 行</div><pre class="diff-new">${esc(e.content||'')}</pre></div>`;
     });
     return parts;
+  }
+  if(name==='replace_lines' && a && a.entries){
+    let parts=`<div class="diff-head">♻️ replace_lines ${esc(a.path||'')}${_entries?`（${_entries.length} 处）`:''}</div>`;
+    (_entries||[]).forEach(e=>{
+      const r=Array.isArray(e.range)?e.range:['?','?'];
+      const oldN=(typeof r[0]==='number'&&typeof r[1]==='number')?(r[1]-r[0]+1):'?';
+      const cc=(e.content==null)?'':String(e.content);
+      const isDel=!cc.trim();
+      if(isDel){
+        parts+=`<div class="diff-ins"><div class="diff-ins-h">↻ 第 ${esc(r[0])}-${esc(r[1])} 行（旧 ${oldN} 行）→ 清空</div>`+
+          `<pre class="diff-old">− 第 ${esc(r[0])}-${esc(r[1])} 行内容已删除</pre></div>`;
+      }else{
+        const newN=cc.split('\n').length;
+        parts+=`<div class="diff-ins"><div class="diff-ins-h">↻ 第 ${esc(r[0])}-${esc(r[1])} 行（旧 ${oldN} 行 → 新 ${newN} 行）</div>`+
+          `<pre class="diff-new">${esc(cc)}</pre></div>`;
+      }
+    });
+    return parts;
+  }
+  if(name==='delete' && a){
+    const s=a.start_line, e=a.end_line;
+    const n=(typeof s==='number'&&typeof e==='number')?(e-s+1):null;
+    return `<div class="diff-head">🗑 delete ${esc(a.path||'')}</div>`+
+      `<pre class="diff-old">− 第 ${esc(s)}-${esc(e)} 行（${n!=null?n+' 行':''}已删除）</pre>`;
+  }
+  if(name==='move' && a){
+    return `<div class="diff-head">↔️ move ${esc(a.path||'')}</div>`+
+      `<div class="diff-ins"><div class="diff-ins-h">第 ${esc(a.start_line)}-${esc(a.end_line)} 行 → 移到原第 ${esc(a.dst_line)} 行前</div></div>`;
   }
   if(name==='run_python' && a && (a.code||a.file)){
     const lines=(a.code||'').split('\n');
@@ -812,7 +847,7 @@ document.getElementById('fbSubmit').onclick=()=>{
 let _modelData={};
 // 两个模型下拉框（reasoning_completer / retrieval_model）想要选中的值；
 // 用对象存是因为 config 回填与模型列表加载是并行的——谁先到都要能正确选中
-let _cfgWanted={cfg_reasoning_completer:'', cfg_retrieval_model:''};
+let _cfgWanted={cfg_reasoning_completer:'', cfg_utility_model:''};
 // 设置弹窗 tab 切换
 function switchSettingsTab(name, btn){
   document.querySelectorAll('.settings-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
@@ -840,7 +875,7 @@ async function loadModelList(){
   try{
     const r=await fetch('/api/models');_modelData=await r.json();renderModelList();
     fillModelSelect('cfg_reasoning_completer','（关闭）');
-    fillModelSelect('cfg_retrieval_model','（用默认模型）');
+    fillModelSelect('cfg_utility_model','（跟随主模型）');
   }catch(e){}
 }
 function renderModelList(){
@@ -909,7 +944,7 @@ function saveRuntime(){
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
     reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
-    retrieval_model: document.getElementById('cfg_retrieval_model').value,
+    utility_model: document.getElementById('cfg_utility_model').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
     detail_base: parseInt(document.getElementById('cfg_detail_base').value)||1500,
@@ -1361,9 +1396,9 @@ function onWSMessage(ev){
         document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
         document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
         _cfgWanted.cfg_reasoning_completer=m.values.reasoning_completer || '';
-        _cfgWanted.cfg_retrieval_model=m.values.retrieval_model || '';
+        _cfgWanted.cfg_utility_model=m.values.utility_model || '';
         fillModelSelect('cfg_reasoning_completer','（关闭）');
-        fillModelSelect('cfg_retrieval_model','（用默认模型）');
+        fillModelSelect('cfg_utility_model','（跟随主模型）');
         document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
         document.getElementById('cfg_max_level').value = m.values.max_level || '';
         document.getElementById('cfg_detail_base').value = m.values.detail_base || '';

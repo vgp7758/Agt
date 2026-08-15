@@ -250,14 +250,8 @@ def read_config(agent) -> dict:
     except Exception:
         cfg["detail_base"] = 1500
         cfg["detail_step"] = 15
-    # retrieval_model：Agentic RAG 检索用的便宜模型（存 settings.json，不在 agent/llm 上）
-    try:
-        import config as _cfg
-        cfg["retrieval_model"] = _cfg.get_retrieval_model()
-        if cfg["retrieval_model"] == _cfg.DEFAULT_MODEL:
-            cfg["retrieval_model"] = ""  # 等于默认模型时显示空，避免误导
-    except Exception:
-        cfg["retrieval_model"] = ""
+    # 统一辅助模型（存 settings.json；空=跟随主模型）：recap/RAG检索/工作流LLM默认共用
+    cfg["utility_model"] = getattr(agent, "utility_model", "") or ""
     return cfg
 
 
@@ -325,16 +319,26 @@ def apply_config(agent, values: dict) -> list:
             results.append(f"✅ max_effective_context_window = {win or 'None（关闭分档→原窗口+摘要）'}（已存 models.json[{agent.llm.model_name}]）")
         except Exception:
             results.append(f"❌ max_effective_context_window 值非法：{v}")
-    if "retrieval_model" in values:
-        v = values.pop("retrieval_model")
+    # 统一辅助模型（存 settings.json + 即时生效；空=跟随主模型）：
+    # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认 全走它
+    if "utility_model" in values:
+        v = values.pop("utility_model")
         try:
             import config
-            saved = config.load_runtime_settings(); saved["retrieval_model"] = str(v).strip(); config.save_runtime_settings(saved)
-            from llm_client import LLMClient
-            agent.retrieval_llm = LLMClient(model_name=str(v).strip() or config.DEFAULT_MODEL, enable_thinking=False)
-            results.append(f"✅ retrieval_model = {v}（Agentic RAG 检索用；已存 settings.json + 即时生效）")
+            um = str(v).strip()
+            saved = config.load_runtime_settings()
+            saved["utility_model"] = um
+            # 旧字段并入后清掉（retrieval_model / recap_model 已废弃）
+            saved.pop("retrieval_model", None)
+            saved.pop("recap_model", None)
+            config.save_runtime_settings(saved)
+            agent.utility_model = um
+            agent._utility_llm = None   # 清缓存，下次 utility_client 按新值惰性重建
+            agent.retrieval_llm = agent.utility_client()
+            results.append(f"✅ utility_model = {um or '（跟随主模型）'}"
+                           "（recap/RAG检索/工作流LLM默认共用；已存 settings.json + 即时生效）")
         except Exception as e:
-            results.append(f"⚠️ retrieval_model 设置失败：{e}")
+            results.append(f"⚠️ utility_model 设置失败：{e}")
     # detail_base / detail_step：步距衰减参数（存 settings.json + 改 toollog 模块变量即时生效）
     for _dk in ("detail_base", "detail_step"):
         if _dk in values:

@@ -176,7 +176,17 @@ class LLMClient:
                 self.fallback_policy = _fp
         except Exception:
             pass
-        self.reasoning_completer: Optional[str] = None  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关）
+        # reasoning 补全模型：settings.json 显式配置优先；未配时回退统一辅助模型（utility_model）
+        try:
+            _rc = (_rt.get("reasoning_completer") or "").strip()
+        except Exception:
+            _rc = ""
+        if not _rc:
+            try:
+                _rc = (_rt.get("utility_model") or "").strip()
+            except Exception:
+                _rc = ""
+        self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=utility_model）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
         self._apply_profile(profile)
 

@@ -424,44 +424,37 @@ async def api_mcp_save(request: Request):
 
 @app.get("/api/stats")
 async def api_stats(scope: str = "current"):
-    """LLM 调用统计（per-model 聚合 + 缓存命中率 + 时间序列）。scope=current/all。
-    - stats[m].cache_rate: 该模型 token 加权平均缓存命中率 = sum(cached)/sum(prompt)*100
-    - series[m]: [{ts, rate}] 每次调用的缓存命中率（cached/prompt），供折线图
-    - ts_min/ts_max: 时间轴范围"""
-    from llm_call_log import aggregate_calls, cached_tokens_of, endpoint_of, load_all_calls
+    """LLM 调用统计·原始流水（按 ts 升序），前端按选中的调用序号窗口本地聚合。scope=current/all。
+    records 每条：{ts, model(provider名), resp_model(回包实际模型), outcome, elapsed,
+                  cached(归一化缓存命中tokens), prompt, tokens, completer, err}。
+    端点 = model/resp_model（resp_model 空或与 model 同则不拼），由前端计算。"""
+    from llm_call_log import cached_tokens_of, load_all_calls
     from session import _repo_sessions_dir
     if _agent is None:
-        return {"scope": scope, "calls": 0, "stats": {}, "series": {},
-                "ts_min": None, "ts_max": None}
+        return {"scope": scope, "calls": 0, "records": []}
     if scope == "all":
         records = load_all_calls(_repo_sessions_dir(_workspace))
     else:
         records = _agent.session.llm_calls.all_records()
-    stats = aggregate_calls(records)
-    series: dict = {m: [] for m in stats}
-    for m in stats:
-        stats[m]["cached_tokens"] = 0
-        stats[m]["prompt_tokens"] = 0
+    recs = []
     for r in records or []:
-        m = endpoint_of(r)   # 端点 = provider/回包实际模型（与 aggregate_calls 同 key）
-        if m not in stats:
-            continue
         u = r.get("usage") or {}
-        cached = cached_tokens_of(r)   # 兼容 OpenAI 标准 / DeepSeek 原生 / 已归一化格式
-        prompt = u.get("prompt_tokens") or 0
-        if isinstance(cached, int):
-            stats[m]["cached_tokens"] += cached
-        if isinstance(prompt, int) and prompt > 0:
-            stats[m]["prompt_tokens"] += prompt
-            if isinstance(cached, int):
-                series[m].append({"ts": r.get("ts"), "rate": round(cached / prompt * 100, 1)})
-    for m, s in stats.items():
-        s["cache_rate"] = (round(s["cached_tokens"] / s["prompt_tokens"] * 100, 1)
-                           if s["prompt_tokens"] else None)
-    all_ts = [r.get("ts") for r in records or [] if isinstance(r.get("ts"), (int, float))]
-    return {"scope": scope, "calls": len(records), "stats": stats, "series": series,
-            "ts_min": min(all_ts) if all_ts else None,
-            "ts_max": max(all_ts) if all_ts else None}
+        err_raw = r.get("error") or ""
+        recs.append({
+            "ts": r.get("ts") or 0,
+            "model": r.get("model") or "?",
+            "resp_model": (r.get("resp_model") or "").strip(),
+            "outcome": r.get("outcome") or "",
+            "elapsed": r.get("elapsed") or 0,
+            "cached": cached_tokens_of(r),
+            "prompt": u.get("prompt_tokens") or 0,
+            "tokens": u.get("total_tokens")
+                     or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0)),
+            "completer": bool(r.get("completer")),
+            "err": (err_raw.split(":")[0][:32] if err_raw else ""),
+        })
+    recs.sort(key=lambda x: x["ts"])
+    return {"scope": scope, "calls": len(recs), "records": recs}
 
 
 # ===================== RAG 文档库 API =====================

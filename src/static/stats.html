@@ -30,6 +30,24 @@ tr:hover td{background:#161b22}
 .good{color:#3fb950}.mid{color:#d29922}.bad{color:#f85149}.dim{color:#8b949e}
 svg{display:block;width:100%}
 .empty{color:#8b949e;text-align:center;padding:40px 0}
+/* ===== 起止范围滑块（双 range 叠加） ===== */
+.range-row{display:flex;align-items:center;gap:12px;margin-bottom:6px;padding:2px 2px 10px}
+.range-label{font-size:12px;color:#8b949e;white-space:nowrap;min-width:150px}
+.range-label b{color:#e6edf3;font-weight:600}
+.range-wrap{position:relative;flex:1;height:22px}
+.range-track{position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:#30363d}
+.range-fill{position:absolute;top:9px;height:4px;border-radius:2px;background:#58a6ff;opacity:.55}
+.range-wrap input[type=range]{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;
+  -webkit-appearance:none;appearance:none;background:transparent;pointer-events:none;outline:none}
+.range-wrap input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;pointer-events:auto;
+  width:14px;height:14px;border-radius:50%;background:#58a6ff;border:2px solid #0d1117;cursor:ew-resize;
+  box-shadow:0 0 0 1px #58a6ff}
+.range-wrap input[type=range]::-moz-range-thumb{pointer-events:auto;width:12px;height:12px;border-radius:50%;
+  background:#58a6ff;border:2px solid #0d1117;cursor:ew-resize}
+.range-wrap input[type=range]:disabled::-webkit-slider-thumb{background:#4b5563;box-shadow:0 0 0 1px #4b5563;cursor:default}
+.range-reset{padding:2px 8px;font-size:12px;border:1px solid #30363d;border-radius:6px;background:#21262d;
+  color:#8b949e;cursor:pointer;white-space:nowrap}
+.range-reset:hover{background:#30363d;color:#e6edf3}
 </style>
 </head>
 <body>
@@ -49,133 +67,180 @@ svg{display:block;width:100%}
 <main>
   <div class="chart-card">
     <h2>缓存命中率 · 调用序列（等间距）</h2>
+    <div class="range-row">
+      <span class="range-label" id="rangeLabel">#1 ~ #1</span>
+      <div class="range-wrap">
+        <div class="range-track"></div>
+        <div class="range-fill" id="rangeFill"></div>
+        <input type="range" id="rLo" min="0" max="0" value="0" disabled>
+        <input type="range" id="rHi" min="0" max="0" value="0" disabled>
+      </div>
+      <button class="range-reset" id="btnResetRange" title="重置为全范围">⟲ 全部</button>
+    </div>
     <div class="legend" id="legend"></div>
     <div id="chartBox"><div class="empty">暂无数据</div></div>
   </div>
   <div class="chart-card">
-    <h2>各端点调用概览</h2>
+    <h2>各端点调用概览 <span class="dim" style="font-weight:400;font-size:12px" id="tableScope"></span></h2>
     <div id="tableBox"><div class="empty">暂无数据</div></div>
   </div>
 </main>
 <script>
 const PALETTE = ['#58a6ff','#3fb950','#f78166','#bc8cff','#f7b731','#ff6b9d','#4dd0e1','#aed581','#e05297','#7dd3fc'];
-let _data = null;
-let _hidden = new Set();   // 隐藏的模型名
+let _all = [];            // 全部调用记录（ts 升序），每条预计算 ep(端点)/gi(全局下标)
+let _range = {lo: 0, hi: 0};   // 选中的窗口（0-based 下标，含端点）
+let _rangeTouched = false;     // 用户拖过滑块（刷新后保留窗口）
+let _hidden = new Set();  // 隐藏的端点名
+let _lastScope = '';
 
-function fmtTime(ts){ return new Date(ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}); }
 function fmtTs(ts){
   const d = new Date(ts*1000);
   return d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}) + ' ' + d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
 }
 function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function epOf(r){ const rm=(r.resp_model||'').trim(); return (!rm||rm===r.model)?r.model:(r.model+'/'+rm); }
+function fmtK(n){ n=n||0; if(n>=1000000) return (n/1000000).toFixed(1)+'M'; if(n>=1000) return (n/1000).toFixed(1)+'k'; return String(n); }
+function rateCls(v){ return v>=80?'good':(v>=40?'mid':'bad'); }
 
 async function load(){
   const scope = document.getElementById('scopeSel').value;
+  const keep = _rangeTouched && scope === _lastScope;   // 同范围刷新保留窗口
+  const prev = {..._range};
   document.getElementById('subtitle').textContent = '加载中…';
   try{
     const r = await fetch('/api/stats?scope='+scope);
-    _data = await r.json();
+    const d = await r.json();
+    _all = (d.records||[]).map((r,i)=>({...r, ep: epOf(r), gi: i}));
+    // 滑块范围
+    const N = _all.length;
+    if(keep){ _range.lo = Math.min(prev.lo, N-1); _range.hi = Math.min(Math.max(prev.hi, _range.lo), N-1); }
+    else{ _range = {lo:0, hi:Math.max(N-1,0)}; _rangeTouched = false; }
+    _lastScope = scope;
+    setupSlider(N);
     render();
   }catch(e){
     document.getElementById('subtitle').textContent = '加载失败：'+e;
   }
 }
 
+// ===== 范围内本地聚合 =====
+function aggregate(slice){
+  const stats = {};
+  for(const c of slice){
+    const s = stats[c.ep] ||= {calls:0,success:0,empty:0,truncated:0,errors:{},completer:0,
+                               tokens:0,lat_sum:0,cached:0,prompt:0,pts:[]};
+    s.calls++;
+    if(c.outcome==='success') s.success++;
+    else if(c.outcome==='empty') s.empty++;
+    else if(c.outcome==='truncated') s.truncated++;
+    else if(c.outcome==='error' && c.err) s.errors[c.err]=(s.errors[c.err]||0)+1;
+    if(c.completer) s.completer++;
+    s.tokens += c.tokens||0;
+    s.lat_sum += c.elapsed||0;
+    if((c.prompt||0) > 0){
+      s.cached += c.cached||0;
+      s.prompt += c.prompt;
+      s.pts.push({gi:c.gi, ts:c.ts, rate: Math.round(c.cached/c.prompt*1000)/10});
+    }
+  }
+  for(const ep in stats){
+    const s = stats[ep];
+    s.avg_latency = s.calls ? (s.lat_sum/s.calls).toFixed(1) : '0';
+    s.cache_rate = s.prompt ? Math.round(s.cached/s.prompt*1000)/10 : null;
+  }
+  return stats;
+}
+
 function modelColor(models, m){ return PALETTE[models.indexOf(m) % PALETTE.length]; }
 
 function render(){
-  if(!_data){ return; }
-  const stats = _data.stats || {};
-  const models = Object.keys(stats);
-  const scopeName = _data.scope === 'all' ? '全部 session' : '当前 session';
-  document.getElementById('subtitle').textContent =
-    `${scopeName} · 共 ${_data.calls} 次调用 · ${models.length} 个端点`;
-  if(!models.length){
+  const N = _all.length;
+  const scopeName = _lastScope === 'all' ? '全部 session' : '当前 session';
+  if(!N){
+    document.getElementById('subtitle').textContent = scopeName + ' · 暂无 LLM 调用记录';
     document.getElementById('legend').innerHTML = '';
     document.getElementById('chartBox').innerHTML = '<div class="empty">暂无 LLM 调用记录</div>';
     document.getElementById('tableBox').innerHTML = '<div class="empty">暂无数据</div>';
     return;
   }
-  renderLegend(models);
-  renderChart(models);
-  renderTable(stats, models);
+  const {lo, hi} = _range;
+  const slice = _all.slice(lo, hi+1);
+  const stats = aggregate(slice);
+  const models = Object.keys(stats);
+  const sel = hi - lo + 1;
+  document.getElementById('subtitle').textContent =
+    `${scopeName} · 选中 #${lo+1}~#${hi+1}（${sel}/${N} 次）· ${models.length} 个端点`;
+  document.getElementById('tableScope').textContent = `（#${lo+1} ~ #${hi+1}）`;
+  if(!models.length){
+    document.getElementById('legend').innerHTML = '';
+    document.getElementById('chartBox').innerHTML = '<div class="empty">该范围内无调用记录</div>';
+    document.getElementById('tableBox').innerHTML = '<div class="empty">暂无数据</div>';
+    return;
+  }
+  renderLegend(models, stats);
+  renderChart(models, stats);
+  renderTable(models, stats);
 }
 
-function renderLegend(models){
+function renderLegend(models, stats){
   const el = document.getElementById('legend');
-  el.innerHTML = models.map(m=>{
+  el.innerHTML = models.map((m,i)=>{
     const off = _hidden.has(m) ? ' off' : '';
-    return `<span class="item${off}" onclick="toggleModel('${esc(m)}')">`
+    const cr = stats[m].cache_rate;
+    return `<span class="item${off}" data-i="${i}" onclick="toggleModel(${i}, this)">`
       + `<span class="swatch" style="background:${modelColor(models,m)}"></span>${esc(m)}`
-      + (statsCache[m]?.cache_rate != null ? ` <span class="dim">(${statsCache[m].cache_rate}%)</span>` : '')
+      + (cr != null ? ` <span class="dim">(${cr}%)</span>` : '')
       + `</span>`;
   }).join('');
 }
-
-let statsCache = {};
-function toggleModel(m){
-  if(_hidden.has(m)) _hidden.delete(m); else _hidden.add(m);
+function toggleModel(i, el){
+  const models = Object.keys(aggregate(_all.slice(_range.lo, _range.hi+1)));
+  const m = models[i];
+  if(m){ if(_hidden.has(m)) _hidden.delete(m); else _hidden.add(m); }
   render();
 }
 
-function renderChart(models){
+function renderChart(models, stats){
   const box = document.getElementById('chartBox');
-  const series = _data.series || {};
-  const visible = models.filter(m=>!_hidden.has(m) && (series[m]||[]).length);
+  const visible = models.filter(m=>!_hidden.has(m) && (stats[m].pts||[]).length);
   if(!visible.length){
     box.innerHTML = '<div class="empty">无可绘制的缓存命中数据（模型未返回 cached_tokens？）</div>';
     return;
   }
-  // —— 横轴 = 调用时序等间距：所有可见点的时间戳排序成全局序列，x = 序列索引 ——
-  // 避免真实时间轴因调用间隔不均导致点挤在一端、大片空白跳跃。
-  const allTs = [];
-  for(const m of visible) for(const p of series[m]) allTs.push(p.ts);
-  allTs.sort((a,b)=>a-b);
-  const N = allTs.length;
-  // SVG 尺寸（viewBox 坐标；width:100% 自适应）
+  const N = _all.length, {lo, hi} = _range;
+  // —— x 轴 = 窗口 [lo,hi] 铺满绘图区：拖滑块即缩放，选中段数据占满整个图宽 ——
   const W = 900, H = 320, padL = 44, padR = 16, padT = 14, padB = 30;
-  // 二分查 ts 在全局序列中的索引（同一时间戳落同一位）
-  const idxOf = ts => {
-    let lo = 0, hi = N - 1;
-    while(lo < hi){ const mid = (lo + hi) >> 1; if(allTs[mid] < ts) lo = mid + 1; else hi = mid; }
-    return lo;
-  };
-  const x = ts => padL + idxOf(ts) / ((N - 1) || 1) * (W - padL - padR);
+  const span = hi - lo;
+  const x = gi => padL + (gi - lo) / (span || 1) * (W - padL - padR);
   const y = rate => H - padB - rate / 100 * (H - padT - padB);
   let g = '';
-  // 网格 + y 轴标签
   for(let p=0;p<=100;p+=20){
     const yy = y(p);
     g += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="#21262d" stroke-width="1"/>`;
     g += `<text x="${padL-6}" y="${yy+4}" fill="#8b949e" font-size="11" text-anchor="end">${p}%</text>`;
   }
-  // x 轴刻度：调用序号 #1 ~ #N（等距 5 档，去重）；具体时间看点的 tooltip
-  const tickIdx = [...new Set([0, .25, .5, .75, 1].map(f=>Math.round(f*(N-1))))];
+  // x 轴刻度：窗口 [lo,hi] 内 5 档等距，显示全局序号；具体时间看点的 tooltip
+  const tickIdx = [...new Set([0,.25,.5,.75,1].map(f=>Math.round(f*span)+lo))];
   for(const t of tickIdx){
-    const xx = padL + t / ((N-1)||1) * (W-padL-padR);
+    const xx = x(t);
     g += `<text x="${xx.toFixed(1)}" y="${H-8}" fill="#8b949e" font-size="11" `
-      + (t===0?'':'text-anchor="middle"') + `>#${t+1}</text>`;
+      + (t===lo?'':'text-anchor="middle"') + `>#${t+1}</text>`;
   }
-  // 每个模型一条折线 + 数据点
   for(const m of visible){
-    const pts = series[m];
+    const pts = stats[m].pts;
     const col = modelColor(models, m);
-    const line = pts.map(p=>`${x(p.ts).toFixed(1)},${y(p.rate).toFixed(1)}`).join(' ');
+    const line = pts.map(p=>`${x(p.gi).toFixed(1)},${y(p.rate).toFixed(1)}`).join(' ');
     g += `<polyline points="${line}" fill="none" stroke="${col}" stroke-width="1.8" opacity="0.9"/>`;
-    // 点很多时缩小半径避免糊
     const r = pts.length > 300 ? 1.2 : (pts.length > 120 ? 1.8 : 2.5);
     for(const p of pts){
-      g += `<circle cx="${x(p.ts).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
-        + `<title>${esc(m)} ${fmtTs(p.ts)}\n命中率 ${p.rate}%</title></circle>`;
+      g += `<circle cx="${x(p.gi).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
+        + `<title>${esc(m)} #${p.gi+1} ${fmtTs(p.ts)}\n命中率 ${p.rate}%</title></circle>`;
     }
   }
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
 }
 
-function rateCls(v){ return v>=80?'good':(v>=40?'mid':'bad'); }
-
-function renderTable(stats, models){
-  statsCache = stats;
+function renderTable(models, stats){
   let h = `<table><thead><tr>
     <th>端点</th><th>调用</th><th>成功</th><th>成功率</th><th>空</th><th>截断</th>
     <th>错误</th><th>缓存命中率</th><th>cached/prompt</th><th>tokens</th><th>均耗时</th>
@@ -185,7 +250,7 @@ function renderTable(stats, models){
     const sr = s.calls ? Math.round(s.success/s.calls*100) : 0;
     const errStr = Object.entries(s.errors||{}).map(([k,v])=>`${k}:${v}`).join(', ') || '—';
     const cr = s.cache_rate != null ? `<span class="${rateCls(s.cache_rate)}">${s.cache_rate}%</span>` : '<span class="dim">—</span>';
-    const cp = s.prompt_tokens ? `${fmtK(s.cached_tokens)}/${fmtK(s.prompt_tokens)}` : '<span class="dim">—</span>';
+    const cp = s.prompt ? `${fmtK(s.cached)}/${fmtK(s.prompt)}` : '<span class="dim">—</span>';
     h += `<tr>
       <td><span style="color:${modelColor(models,m)}">●</span> ${esc(m)}</td>
       <td>${s.calls}</td><td>${s.success}</td>
@@ -200,17 +265,48 @@ function renderTable(stats, models){
   document.getElementById('tableBox').innerHTML = h;
 }
 
-function fmtK(n){
-  n = n||0;
-  if(n >= 1000000) return (n/1000000).toFixed(1)+'M';
-  if(n >= 1000) return (n/1000).toFixed(1)+'k';
-  return String(n);
+// ===== 双滑块 =====
+function setupSlider(N){
+  const rLo = document.getElementById('rLo'), rHi = document.getElementById('rHi');
+  const last = Math.max(N-1, 0);
+  rLo.disabled = rHi.disabled = N < 2;
+  rLo.max = rHi.max = last;
+  rLo.value = _range.lo; rHi.value = _range.hi;
+  updateSliderUI();
 }
+function updateSliderUI(){
+  const N = _all.length, last = Math.max(N-1,0);
+  const lo = +document.getElementById('rLo').value, hi = +document.getElementById('rHi').value;
+  _range = {lo, hi};
+  const fill = document.getElementById('rangeFill');
+  fill.style.left = (lo/(last||1)*100).toFixed(2)+'%';
+  fill.style.width = (((hi-lo)/(last||1))*100).toFixed(2)+'%';
+  document.getElementById('rangeLabel').innerHTML =
+    `<b>#${lo+1}</b> ~ <b>#${hi+1}</b> <span style="opacity:.7">/ ${N}</span>`;
+}
+function onSlide(){
+  const rLo = document.getElementById('rLo'), rHi = document.getElementById('rHi');
+  // clamp：lo 不得超过 hi
+  if(+rLo.value > +rHi.value){
+    if(document.activeElement === rLo) rHi.value = rLo.value; else rLo.value = rHi.value;
+  }
+  _rangeTouched = true;
+  updateSliderUI();
+  render();
+}
+document.getElementById('rLo').addEventListener('input', onSlide);
+document.getElementById('rHi').addEventListener('input', onSlide);
+document.getElementById('btnResetRange').onclick = ()=>{
+  _range = {lo:0, hi:Math.max(_all.length-1,0)};
+  document.getElementById('rLo').value = _range.lo;
+  document.getElementById('rHi').value = _range.hi;
+  updateSliderUI(); render();
+};
 
 document.getElementById('scopeSel').onchange = load;
 document.getElementById('btnRefresh').onclick = load;
 load();
-setInterval(load, 30000);   // 30s 自动刷新
+setInterval(load, 30000);   // 30s 自动刷新（拖过滑块则保留窗口）
 </script>
 </body>
 </html>

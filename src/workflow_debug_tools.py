@@ -41,8 +41,9 @@ def make_workflow_debug_tools(agent) -> list:
         except json.JSONDecodeError:
             inp = {"user_message": inputs or ""}
         try:
+            _llm = agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm
             exit_dict, order, trace = execute_debug(
-                canvas, inp, tools=agent.tools, llm=agent.llm, on_node=lambda e: None)
+                canvas, inp, tools=agent.tools, llm=_llm, on_node=lambda e: None)
         except Exception as e:
             return f"[执行失败] {type(e).__name__}: {e}"
         lines = [f"工作流 {_name!r} 执行完成（{len(order)} 个节点）："]

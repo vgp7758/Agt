@@ -1746,7 +1746,9 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
 
     def _run(**kwargs):
         try:
-            return execute(canvas, kwargs, tools=agent.tools, llm=agent.llm,
+            # 工作流 LLM/意图节点默认走统一辅助模型（utility_model 未配=主模型）
+            _llm = agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm
+            return execute(canvas, kwargs, tools=agent.tools, llm=_llm,
                            workspace=WORKSPACE, emit=getattr(agent, "_emit", None))
         except WorkflowError as e:
             return f"[工作流 {name} 执行失败] {e}"

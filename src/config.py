@@ -117,14 +117,26 @@ def load_max_level() -> int:
     return ml if ml >= 1 else 4
 
 
-def get_retrieval_model() -> str:
-    """Agentic RAG 检索用的便宜模型（settings.json 的 retrieval_model；默认 DEFAULT_MODEL）。
-    抽关键字/精排两次 LLM 调用用它（短 prompt + 便宜模型省 token）。"""
+def get_utility_model() -> str:
+    """统一的辅助模型（settings.json 的 utility_model；空 = 跟随主模型）。
+    所有 LLM 短调用场景共用：recap 总结 / RAG 检索抽关键字精排 / reasoning 补全默认 /
+    工作流 LLM 节点与意图识别节点的默认模型。建议配便宜非思考模型。
+    兼容旧字段：retrieval_model / recap_model（已弃用，读取时作 fallback）。"""
     try:
-        m = (load_runtime_settings().get("retrieval_model", "") or "").strip()
+        rt = load_runtime_settings()
+        m = (rt.get("utility_model", "") or "").strip()
+        if not m:
+            m = (rt.get("retrieval_model", "") or "").strip()   # 旧字段兼容
+        if not m:
+            m = (rt.get("recap_model", "") or "").strip()       # 旧字段兼容
     except Exception:
         m = ""
-    return m or DEFAULT_MODEL
+    return m
+
+
+def get_retrieval_model() -> str:
+    """[兼容别名] = get_utility_model()，兜底 DEFAULT_MODEL。旧调用点用。"""
+    return get_utility_model() or DEFAULT_MODEL
 
 
 def load_detail_base() -> int:

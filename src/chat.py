@@ -269,12 +269,12 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         for line in apply_config(agent, saved):
             if verbose:
                 print(line)
-    # Agentic RAG 检索模型（便宜模型，抽关键字/精排；失败回退主模型 self.llm）
+    # 统一辅助模型（utility_model 未配=主模型）：retrieval_llm 指向 utility_client
+    # （RAG 检索抽关键字/精排用；recap/工作流 LLM 默认也走同一个 utility_client）
     try:
-        from llm_client import LLMClient
-        agent.retrieval_llm = LLMClient(model_name=config.get_retrieval_model(), enable_thinking=False)
+        agent.retrieval_llm = agent.utility_client()
     except Exception:
-        pass
+        agent.retrieval_llm = agent.llm
     return agent
 
 

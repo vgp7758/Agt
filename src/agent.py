@@ -189,6 +189,15 @@ class Agent:
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         self.dump_projections: bool = False  # 投影转储开关（运行时设置）
+        # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——
+        # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认。
+        # 兼容旧字段 retrieval_model / recap_model（config.get_utility_model 内部处理）。
+        try:
+            import config as _cfg
+            self.utility_model: str = _cfg.get_utility_model()
+        except Exception:
+            self.utility_model = ""
+        self._utility_llm = None   # 惰性创建的辅助 client（None=未建；=self.llm 表示回退主模型）
         if self.registry is not None:
             self.registry.register(self.agent_id, "main", "main", self.model_name,
                                    agent=self, task="", status="running")
@@ -399,6 +408,9 @@ class Agent:
         session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
         session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
         self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
+        # 辅助 client 的流水记录也跟到新 session（若有独立实例）
+        if getattr(self, "_utility_llm", None) is not None and self._utility_llm is not self.llm:
+            self._utility_llm.call_recorder = session.llm_calls.record
         session._log_handler = self._log_handler                   # 日志 handler 跟到新 session
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)
@@ -628,10 +640,26 @@ class Agent:
         if count:
             _LOG.info("_restore_subagents: 从 %s 恢复了 %d 个子 Agent", agents_dir, count)
 
+    def utility_client(self):
+        """统一辅助模型 client：所有 LLM 短调用共用（recap / RAG 检索 / 工作流 LLM/意图节点默认）。
+        utility_model 配置了且≠主模型 → 独立实例（enable_thinking=False + 挂 llm_calls 流水）；
+        空/无效/等于主模型 → 主 llm（跟随主模型）。惰性创建、进程内复用。"""
+        um = getattr(self, "utility_model", "")
+        if not um or um == self.llm.model_name:
+            return self.llm
+        if getattr(self, "_utility_llm", None) is None:
+            try:
+                cli = LLMClient(model_name=um, enable_thinking=False, max_retries=2)
+                cli.call_recorder = self.session.llm_calls.record
+                self._utility_llm = cli
+            except Exception:
+                self._utility_llm = self.llm   # 配置无效退回主模型
+        return self._utility_llm
+
     def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None):
         """异步用 LLM 生成一句话 recap（最近在干嘛），不阻塞主循环。
         recap 不进入自己的上下文，但队友在 teammates_block 中能看到。
-        失败静默（recap 保持上一轮的值或空）。"""
+        用统一辅助模型（utility_model 未配=主模型）。失败静默（recap 保持上一轮的值或空）。"""
         def _bg():
             try:
                 prompt = (
@@ -641,7 +669,7 @@ class Agent:
                     f"工具调用：{', '.join(tool_names) if tool_names else '无'}\n"
                     f"只输出这一句话，不要任何额外内容。"
                 )
-                resp = self.llm.chat([{"role": "user", "content": prompt}])
+                resp = self.utility_client().chat([{"role": "user", "content": prompt}])
                 recap = (resp.content or "").strip().split("\n")[0].strip()[:60]
                 if recap:
                     self._recap = recap
@@ -739,7 +767,7 @@ class Agent:
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "text": str(context)[:80]})
                     inject, result, message = run_hook(hw["canvas"], context,
-                                              tools=self.tools, llm=self.llm, workspace=_ws)
+                                              tools=self.tools, llm=self.utility_client(), workspace=_ws)
                     self._emit({"type": "auto_wf", "name": hw["name"], "hook": hook,
                                 "text": result[:300] or message[:300]})
                     if message.strip():

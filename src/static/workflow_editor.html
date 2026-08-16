@@ -2103,10 +2103,14 @@ function openComposite(nodeId){
 }
 function exitComposite(){
   if(!_currentParent||!_compositeStack.length)return;
-  // 把当前编辑写回复合节点（保留迭代入口/continue/break 标记节点，执行器需要它们）
-  const n=findN(_currentParent);
+  // ⚠️ 复合节点在【父层】的 nodes 里（进入子画布后 WF.nodes=子画布 blocks，findN 找不到它）——
+  // 必须从栈顶帧（父层）找，否则写回静默跳过 → 子画布编辑全丢（"保存后清空"的根因）。
+  const prev=_compositeStack[_compositeStack.length-1];
+  const n=(prev.nodes||[]).find(x=>x.id===_currentParent);
   if(n){
-    n.blocks=WF.nodes.map(m=>({id:m.id,type:m.type,x:m.x,y:m.y,data:m.data}));   // 保留 x/y（重进子画布不乱位）
+    // 写回子画布（保留 x/y；data 引用透传）。嵌套复合节点（子画布里还有循环/批处理）的
+    // blocks/edges 是节点级属性，必须显式带上——否则丢嵌套子画布（同一个坑的递归版）。
+    n.blocks=WF.nodes.map(m=>{const c={id:m.id,type:m.type,x:m.x,y:m.y,data:m.data};if(m.blocks&&m.blocks.length)c.blocks=m.blocks;if(m.edges&&m.edges.length)c.edges=m.edges;return c;});
     n.edges=WF.edges.map(e=>({sourceNodeID:e.sourceNodeID,targetNodeID:e.targetNodeID,sourcePortID:e.sourcePortID||'',...(e.targetPortID?{targetPortID:e.targetPortID}:{})}));
     // 补充 composite→迭代入口 的入口边（若不存在）
     const port=(n.type==='21'?'loop':'batch')+'-function-inline-output';
@@ -2115,7 +2119,7 @@ function exitComposite(){
     }
   }
   // 恢复上层画布
-  const prev=_compositeStack.pop();
+  _compositeStack.pop();
   _currentParent=prev.parentId;
   WF.nodes=prev.nodes; WF.edges=prev.edges;
   WF.name=prev.name||WF.name;

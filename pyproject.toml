@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agt-agent"
 dynamic = ["version"]
-description = "AI Agent 框架——多模型 ReAct 引擎 + MCP 集成 + Coze 工作流 + WebUI + 可视化编辑器"
+description = "An AI agent framework that builds itself — multi-model ReAct + tiered context engine + multi-agent + XML workflows, zero LangChain"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [

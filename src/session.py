@@ -368,8 +368,12 @@ class Turn:
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
                  recent_window_turns: int = 4, max_steps_per_turn: int = 80,
-                 workspace=None, session_dir=None):
+                 workspace=None, session_dir=None, current_turn_only: bool = False):
         self.system = system
+        # 复用模式投影开关（子 Agent agent_prompt(reuse=True)）：True 时历史轮一律不投影，
+        # 只投影 system + 任务指引 + 当前进行中的轮 + tail ambient。历史轮仍完整归档在
+        # turns/落盘（可 agent_query_events / recall 查）——session 积累、投影隔离。
+        self.current_turn_only = current_turn_only
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         self.recent_window_turns = recent_window_turns
         self.max_steps_per_turn = max_steps_per_turn  # 0/None = 不限
@@ -596,6 +600,36 @@ class Session:
                     msgs.append({"role": "system", "content": _tg})
             except Exception:
                 pass
+        # —— 复用模式（子 Agent reuse）投影开关：历史轮一律不投影 ——
+        # 只投影 system + 任务指引 + 当前进行中的轮 + tail ambient。每次任务上下文干净、
+        # token 不随复用次数增长；历史轮仍完整归档（可 agent_query_events / recall 查）。
+        if self.current_turn_only:
+            if self._current is not None:
+                msgs.append({"role": "user", "content": self._user_content(self._current)})
+                _bt = getattr(self._current, "_before_turn_hint", None)
+                if _bt:
+                    msgs.append({"role": "system", "content": _bt})
+                msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
+                                                    full_window=RECENT_FULL_STEPS))
+                _psh = getattr(self._current, "_pending_step_hint", None)
+                if _psh:
+                    msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
+            tail_blocks = []
+            self._collect_ambient(tail_blocks, self._time_provider)
+            self._collect_ambient(tail_blocks, self._system_extra_provider)
+            self._collect_ambient(tail_blocks, self._plan_provider)
+            self._collect_ambient(tail_blocks, self._spec_provider)
+            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+                try:
+                    block = self._ltm_episodic_provider(self._current.user_message)
+                    if block and block.strip():
+                        tail_blocks.append(block.strip())
+                except Exception:
+                    pass
+            grouped_tail = self._ambient_group(tail_blocks)
+            if grouped_tail:
+                msgs.append({"role": "system", "content": grouped_tail})
+            return msgs
         # 分档投影：provider 设了 max_effective_context_window 才启用（已完成 turn 按档冻结渲染，
         # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
         if self.max_effective_context_window:

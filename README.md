@@ -1,5 +1,7 @@
 # Agt — AI Agent 框架
 
+> **An agent framework that builds itself.** —— 本仓库的绝大多数迭代由 Agt 自身完成（dogfooding：用它开发它）。
+>
 > 多模型 ReAct 引擎 + MCP 工具 + Coze 工作流 + WebUI + 可视化编辑器。不依赖 LangChain / LlamaIndex / AutoGen，每个模块手写。
 
 ```bash

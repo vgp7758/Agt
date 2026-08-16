@@ -333,10 +333,35 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     return header + "\n" + body + ver_footer
 
 
+# 视觉模型图片输入边长上限（qwen/GLM 等多为 2048，取保守值；超限会被 API 400 拒绝）
+_MAX_IMG_EDGE = 2048
+
+
+def _shrink_image_bytes(raw: bytes) -> tuple[bytes, str]:
+    """图片任一边超过 _MAX_IMG_EDGE 时等比缩小到限内（需 Pillow；不可用/失败则原样返回）。
+    返回 (bytes, mime)：mime 非空表示已转码（统一存 PNG，无损保文字清晰度；GIF 取首帧）。"""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(raw))
+        w, h = img.size
+        if w <= _MAX_IMG_EDGE and h <= _MAX_IMG_EDGE:
+            return raw, ""
+        ratio = min(_MAX_IMG_EDGE / w, _MAX_IMG_EDGE / h)
+        img = img.convert("RGBA" if img.mode in ("P", "LA") else img.mode) \
+            .resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue(), "image/png"
+    except Exception:
+        return raw, ""
+
+
 def read_image(file: str) -> str:
     """读取一张图片文件，返回 data URL（系统会自动渲染成图片供视觉模型查看）。
     file 可以是裸文件名（如 c7_0.png：先在 cwd 找，再在 repo images/ 目录找），
     或相对/绝对路径（在 cwd 下解析，沙箱限定）。支持 png/jpg/gif/webp。
+    超过 2048×2048 的图自动等比压缩到限内（视觉模型 API 的尺寸上限，超限会被拒）。
     仅视觉模型能查看返回的图；非视觉模型调用了也只会得到 <img> 占位。"""
     name = (file or "").strip().strip('"').strip("'")
     if not name:
@@ -360,8 +385,10 @@ def read_image(file: str) -> str:
             if p.exists() and p.is_file():
                 ext = (p.suffix.lstrip(".") or "png").lower()
                 ext = "jpeg" if ext == "jpg" else ext
-                mime = mimetypes.guess_type(str(p))[0] or f"image/{ext}"
-                b64 = base64.b64encode(p.read_bytes()).decode()
+                raw = p.read_bytes()
+                raw, forced_mime = _shrink_image_bytes(raw)   # 超限自动压缩
+                mime = forced_mime or mimetypes.guess_type(str(p))[0] or f"image/{ext}"
+                b64 = base64.b64encode(raw).decode()
                 return f"data:{mime};base64,{b64}"
         except Exception:
             continue

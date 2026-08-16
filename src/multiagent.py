@@ -56,7 +56,7 @@ class SubAgent:
 
     def __init__(self, name: str, model_name: str, system: str, tools: Toolbox,
                  on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None,
-                 registry=None, agent_id=None, caller_id=None):
+                 registry=None, agent_id=None, caller_id=None, current_turn_only: bool = False):
         self.name = name
         self.model_name = model_name
         self.agent = Agent(system, tools, model_name=model_name,
@@ -65,6 +65,9 @@ class SubAgent:
                            session_dir=session_dir, registry=registry)
         if agent_id:
             self.agent.agent_id = agent_id
+        # 复用模式：session 投影只含当前轮（历史轮不投影但完整归档）——多次派活不膨胀上下文
+        if current_turn_only:
+            self.agent.session.current_turn_only = True
         # 注册绑定到子 Agent 自身的通信工具（替换从主 Agent 继承的、绑定到主 Agent 闭包的版本）
         comm_tools = make_communication_tools(self.agent)
         for t in comm_tools:
@@ -241,6 +244,45 @@ def make_communication_tools(agent) -> list:
             Tool(agent_query_events), Tool(agent_query_tool_detail)]
 
 
+def _revive_subagent(agent, reg, entry, caller_id: str):
+    """复活一个历史子 Agent（registry 中 agent=None、磁盘上有 session）：
+    读声明 md 重建实例 + Session.load 恢复完整历史 + 回填 registry。
+    返回 (Agent, model_name, sub_dir) 或 None（声明/磁盘 session 丢失时，调用方落回新建路径）。
+    复活后投影 current_turn_only=True（reuse 语义）：历史轮完整归档可查，但不进上下文。"""
+    try:
+        p = _agent_md_path(entry.name)
+        if p is None or not p.exists():
+            return None
+        meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
+        system = (system or "").strip() or "你是一个自主子 Agent，用工具完成任务。"
+        toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
+        model_name = meta.get("model") or entry.model or agent.model_name
+        if model_name not in config.MODELS:
+            model_name = agent.model_name
+        # 磁盘 session lazy load（历史轮完整恢复，后续落盘仍写原目录）
+        from session import Session
+        sdir = getattr(agent.session, "session_dir", None)
+        if not sdir:
+            return None
+        sub_dir = Path(sdir) / "agents" / entry.agent_id
+        sub_meta = sub_dir / "meta.json"
+        if not sub_meta.exists():
+            return None
+        loaded = Session.load(str(sub_meta), llm=agent.llm,
+                              workspace=agent.session.workspace)
+        sub = SubAgent(entry.name, model_name, system, toolbox,
+                       session_dir=loaded.session_dir or sub_dir,
+                       registry=reg, agent_id=entry.agent_id,
+                       caller_id=caller_id, current_turn_only=True)
+        sub.agent.set_session(loaded)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
+        # set_session 会换掉 __init__ 里设过开关的那个 session，这里在 loaded session 上重设
+        sub.agent.session.current_turn_only = True
+        return sub.agent, model_name, (loaded.session_dir or sub_dir)
+    except Exception as e:
+        _LOG.warning("复活子 Agent %s(%s) 失败: %s", entry.name, entry.agent_id, e)
+        return None
+
+
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
 
@@ -271,15 +313,152 @@ def make_subagent_tools(agent) -> list:
         p.unlink()
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "") -> str:
-        """向子 Agent <name> 派任务（全异步）：读声明 md 建临时实例，后台自主跑，立即返回。
+    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False) -> str:
+        """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
-        多次派同名 = 多个独立实例（无共享状态）。
+        多次派同名 = 多个独立实例（无共享状态）；reuse=True 则复用同名活实例（见下）。
         tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
-               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。
-        agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。
+               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。复用模式下忽略（实例工具已定）。
+        agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。复用模式下忽略（沿用原 id）。
+        reuse: 复用模式——registry 中有同名且空闲(done/failed)的活实例则直接派新任务给它（不新建实例）；
+               没有则新建（之后的同名 reuse 调用会复用它）。复用实例的上下文投影【只含当前轮】
+               （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
+               复用次数增长，适合高频派活避免实例越建越多。同名实例全在跑时返回提示。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
         caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
+        reg = getattr(agent, "registry", None)
+
+        def _launch(_target, _aid, _name, _model, _sub_dir, _prompt, _reused):
+            """通用启动：登记 background_tasks + 起 _bg 线程跑 _target.run()。新建/复用两条路径共用。"""
+            agent.background_tasks[_aid] = {
+                "id": _aid, "kind": "subagent", "name": _name, "task": _prompt,
+                "status": "running", "session_dir": str(_sub_dir) if _sub_dir else None,
+                "result": None, "started_at": time.time(), "finished_at": None,
+            }
+
+            def _bg():
+                # 增强 prompt：告知子 Agent 谁派的任务 + 如何反查派发者上下文
+                enriched = _prompt
+                if caller_id and caller_id != "user":
+                    enriched = (
+                        f"{_prompt}\n\n---\n〔任务派发信息〕\n"
+                        f"本任务由 Agent '{caller_id}' 派发。"
+                        f"如需了解派发者的更多上下文（它之前的工具调用结果、对话历史），"
+                        f"可用 agent_query_events(\"{caller_id}\", 5) 查看其最近对话，"
+                        f"或用 agent_query_tool_detail(\"{caller_id}\", \"call_id\") 查看某次工具调用的完整详情，"
+                        f"或用 agent_ask(\"{caller_id}\", \"你的问题\") 直接向派发者提问。"
+                    )
+                try:
+                    _target.cumulative_tokens = 0
+                    res = _target.run(enriched) or "(空回复)"
+                    # 等待 recap 生成（异步 daemon 线程，最多等 3 秒）
+                    for _ in range(30):
+                        if getattr(_target, '_recap', ''):
+                            break
+                        time.sleep(0.1)
+                    recap = getattr(_target, '_recap', '')
+                    # 无条件写完整 _agent_meta 到子 Agent 的 meta.json
+                    if _sub_dir:
+                        meta_path = _sub_dir / "meta.json"
+                        try:
+                            import json
+                            meta = {}
+                            if meta_path.exists():
+                                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                            meta.setdefault("extra_state", {})["_agent_meta"] = {
+                                "agent_id": _aid, "name": _name, "model": _model,
+                                "task": _prompt, "caller_id": caller_id,
+                                "recap": recap, "status": "done",
+                            }
+                            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception as meta_err:
+                            _LOG.warning("子 Agent %s 写 _agent_meta 到 meta.json 失败: %s", _aid, meta_err)
+                    agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
+                    if reg:
+                        reg.update_status(_aid, "done")
+                except Exception as ex:
+                    res = f"[失败] {type(ex).__name__}: {ex}"
+                    agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
+                    if reg:
+                        reg.update_status(_aid, "failed")
+                    # 失败也要写 _agent_meta
+                    if _sub_dir:
+                        meta_path = _sub_dir / "meta.json"
+                        try:
+                            import json
+                            meta = {}
+                            if meta_path.exists():
+                                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                            meta.setdefault("extra_state", {})["_agent_meta"] = {
+                                "agent_id": _aid, "name": _name, "model": _model,
+                                "task": _prompt, "caller_id": caller_id,
+                                "recap": "", "status": "failed",
+                            }
+                            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception:
+                            pass
+                # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
+                # 子 Agent 的最终回复就是交付物，不应粗暴截断；仅超长（>4000字）时截断并
+                # 指引 caller 用 agent_query_events 查完整版（子 Agent session 已落盘，answer 可查）。
+                if caller_id and caller_id != "user":
+                    try:
+                        if reg:
+                            caller_entry = reg.lookup(caller_id)
+                            if caller_entry and caller_entry.agent:
+                                body = res if len(res) <= 4000 else (
+                                    res[:4000] + f"\n…（已截断 {len(res) - 4000} 字，"
+                                                 f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
+                                caller_entry.agent.push_message(
+                                    f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
+                                    source=f"subagent:{_aid}")
+                            else:
+                                _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, caller_id)
+                    except Exception as route_err:
+                        _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
+
+            th = threading.Thread(target=_bg, daemon=True)
+            agent._bg_threads[_aid] = th
+            th.start()
+            tag = "♻️ 已复用" if _reused else "🚀 已启动"
+            return (f"{tag}子 Agent '{_name}' [agent_id={_aid}]（异步，不阻塞）。"
+                    f"完成后结果自动入队通知你。需要立即要结果可 wait_subagents(agent_ids=\"{_aid}\")。")
+
+        # —— reuse 复用模式：registry 中找同名实例直接派任务（不新建） ——
+        if reuse and reg:
+            with reg._lock:
+                same = [e for e in reg._agents.values()
+                        if e.name == name and e.role == "subagent"]
+            live = [e for e in same if e.agent is not None]
+            hist = [e for e in same if e.agent is None]
+            if live:
+                idle = [e for e in live if e.status != "running"]
+                if not idle:
+                    busy = ", ".join(e.agent_id for e in live)
+                    return (f"[忙] '{name}' 的实例都在跑（{busy}）。"
+                            f"先 wait_subagents 等它完成再 reuse，或去掉 reuse 新建独立实例。")
+                entry = max(idle, key=lambda e: e.registered_at)
+                entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
+                with reg._lock:
+                    entry.task = prompt
+                    entry.caller_id = caller_id
+                reg.update_status(entry.agent_id, "running")
+                return _launch(entry.agent, entry.agent_id, name, entry.model,
+                               getattr(entry.agent.session, "session_dir", None), prompt, _reused=True)
+            if hist:
+                # 复活：同名历史实例（磁盘上有 session）→ lazy load 后继续派活
+                # （历史轮完整归档接续，投影仍 current_turn_only 隔离；复活失败落回新建路径）
+                entry = max(hist, key=lambda e: e.registered_at)
+                revived = _revive_subagent(agent, reg, entry, caller_id)
+                if revived is not None:
+                    sub_agent, model_name, sub_dir = revived
+                    reg.register(entry.agent_id, name, "subagent", model_name,
+                                 agent=sub_agent, task=prompt, status="running",
+                                 caller_id=caller_id)
+                    return _launch(sub_agent, entry.agent_id, name, model_name,
+                                   sub_dir, prompt, _reused=True)
+            # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=reuse）
+
+        # —— 新建路径：读声明 md 建临时实例 ——
         p = _agent_md_path(name)
         if p is None or not p.exists():
             return f"[不存在] 没有名为 '{name}' 的子 Agent，先 create_agent"
@@ -300,22 +479,15 @@ def make_subagent_tools(agent) -> list:
             sub_dir = Path(main_dir) / "agents" / aid
         except Exception:
             pass   # 主目录暂不可用 → 子 agent 退回默认时间戳目录，不阻断派活
-        agent.background_tasks[aid] = {
-            "id": aid, "kind": "subagent", "name": name, "task": prompt,
-            "status": "running", "session_dir": str(sub_dir) if sub_dir else None,
-            "result": None, "started_at": time.time(), "finished_at": None,
-        }
         try:
             sub = SubAgent(name, model_name, system, toolbox,
                            on_event=None, session_dir=sub_dir,
-                           registry=getattr(agent, "registry", None), agent_id=aid,
-                           caller_id=caller_id)
-            if getattr(agent, "registry", None):
-                agent.registry.register(aid, name, "subagent", model_name,
-                                        agent=sub.agent, task=prompt, status="running",
-                                        caller_id=caller_id)
-                # 把子 Agent 元信息写进 session.extra_state → 随 _autosave 存到 meta.json
-                # 读档后 format_team 扫描 agents/ 目录时能恢复（registry 是内存的，不持久化）
+                           registry=reg, agent_id=aid,
+                           caller_id=caller_id, current_turn_only=reuse)
+            if reg:
+                reg.register(aid, name, "subagent", model_name,
+                             agent=sub.agent, task=prompt, status="running",
+                             caller_id=caller_id)
                 sub.agent.session.extra_state["_agent_meta"] = {
                     "agent_id": aid, "name": name, "model": model_name,
                     "task": prompt, "caller_id": caller_id,
@@ -323,94 +495,10 @@ def make_subagent_tools(agent) -> list:
         except Exception as e:
             agent.background_tasks[aid].update(status="failed", result=f"构造失败: {type(e).__name__}: {e}",
                                                finished_at=time.time())
-            if getattr(agent, "registry", None):
-                agent.registry.update_status(aid, "failed")
+            if reg:
+                reg.update_status(aid, "failed")
             return f"[子 Agent 构造出错] {type(e).__name__}: {e}"
-        # 全异步：始终走 _bg 线程，完成后按 caller_id 路由 answer
-        def _bg(_sub=sub, _aid=aid, _prompt=prompt, _caller_id=caller_id, _sub_dir=sub_dir):
-            # 增强 prompt：告知子 Agent 谁派的任务 + 如何反查派发者上下文
-            enriched = _prompt
-            if _caller_id and _caller_id != "user":
-                enriched = (
-                    f"{_prompt}\n\n---\n〔任务派发信息〕\n"
-                    f"本任务由 Agent '{_caller_id}' 派发。"
-                    f"如需了解派发者的更多上下文（它之前的工具调用结果、对话历史），"
-                    f"可用 agent_query_events(\"{_caller_id}\", 5) 查看其最近对话，"
-                    f"或用 agent_query_tool_detail(\"{_caller_id}\", \"call_id\") 查看某次工具调用的完整详情，"
-                    f"或用 agent_ask(\"{_caller_id}\", \"你的问题\") 直接向派发者提问。"
-                )
-            try:
-                res = _sub.prompt(enriched)
-                # 等待 recap 生成（异步 daemon 线程，最多等 3 秒）
-                for _ in range(30):
-                    if getattr(_sub.agent, '_recap', ''):
-                        break
-                    time.sleep(0.1)
-                recap = getattr(_sub.agent, '_recap', '')
-                # 无条件写完整 _agent_meta 到子 Agent 的 meta.json
-                if _sub_dir:
-                    meta_path = _sub_dir / "meta.json"
-                    try:
-                        import json
-                        meta = {}
-                        if meta_path.exists():
-                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                        meta.setdefault("extra_state", {})["_agent_meta"] = {
-                            "agent_id": _aid, "name": name, "model": model_name,
-                            "task": _prompt, "caller_id": _caller_id,
-                            "recap": recap, "status": "done",
-                        }
-                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-                    except Exception as meta_err:
-                        _LOG.warning("子 Agent %s 写 _agent_meta 到 meta.json 失败: %s", _aid, meta_err)
-                agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
-                if getattr(agent, "registry", None):
-                    agent.registry.update_status(_aid, "done")
-            except Exception as ex:
-                res = f"[失败] {type(ex).__name__}: {ex}"
-                agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
-                if getattr(agent, "registry", None):
-                    agent.registry.update_status(_aid, "failed")
-                # 失败也要写 _agent_meta
-                if _sub_dir:
-                    meta_path = _sub_dir / "meta.json"
-                    try:
-                        import json
-                        meta = {}
-                        if meta_path.exists():
-                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                        meta.setdefault("extra_state", {})["_agent_meta"] = {
-                            "agent_id": _aid, "name": name, "model": model_name,
-                            "task": _prompt, "caller_id": _caller_id,
-                            "recap": "", "status": "failed",
-                        }
-                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-                    except Exception:
-                        pass
-            # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
-            # 子 Agent 的最终回复就是交付物，不应粗暴截断；仅超长（>4000字）时截断并
-            # 指引 caller 用 agent_query_events 查完整版（子 Agent session 已落盘，answer 可查）。
-            if _caller_id and _caller_id != "user":
-                try:
-                    reg = getattr(agent, "registry", None)
-                    if reg:
-                        caller_entry = reg.lookup(_caller_id)
-                        if caller_entry and caller_entry.agent:
-                            body = res if len(res) <= 4000 else (
-                                res[:4000] + f"\n…（已截断 {len(res) - 4000} 字，"
-                                             f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
-                            caller_entry.agent.push_message(
-                                f"📨〔子 Agent '{name}' [{_aid}] 完成〕{body}",
-                                source=f"subagent:{_aid}")
-                        else:
-                            _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, _caller_id)
-                except Exception as route_err:
-                    _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
-        th = threading.Thread(target=_bg, daemon=True)
-        agent._bg_threads[aid] = th
-        th.start()
-        return (f"🚀 已启动子 Agent '{name}' [agent_id={aid}]（异步，不阻塞）。"
-                f"完成后结果自动入队通知你。需要立即要结果可 wait_subagents(agent_ids=\"{aid}\")。")
+        return _launch(sub.agent, aid, name, model_name, sub_dir, prompt, _reused=False)
 
     def wait_subagents(agent_ids: str = "", timeout: int = 120) -> str:
         """等待异步子 Agent 完成，返回它们的结果。

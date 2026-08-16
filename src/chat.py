@@ -109,6 +109,8 @@ SYSTEM = build_system(
         "（description=一句话作用+何时调用，会投影进你的 SYSTEM；system=角色定义；tools 留空=继承全部(除管理工具)，或逗号分隔工具名；model 留空=用你当前模型）；"
         "不再需要时 kill_agent(name) 删声明；list_agents() 查看全部。"
         "复杂任务可拆分派给不同角色/模型的子 Agent 再综合——全异步并行，互不阻塞。"
+        "高频反复派活（如反复看图/检查）时用 agent_prompt(name, 任务, reuse=true)：复用同名活实例，"
+        "其上下文投影只含当前轮（token 不随复用次数增长），避免实例越建越多。"
         "可用模型：" + _MODELS_DESC + "。"
         + "\n\n【工作流编排】【推荐用 XML 写工作流】在 .agent/workflows/ 创建 .xml 文件（系统自动转 Coze JSON 执行）。"
         "XML 用标签+CDATA 包裹代码/提示词，内部双引号/花括号/换行/JSON 块都【无需转义】，远比手写 JSON 不易出错：\n"

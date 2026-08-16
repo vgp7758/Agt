@@ -259,6 +259,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_lsp_tools(agent, mcp_mgr), "LSP")
     from workflow_debug_tools import make_workflow_debug_tools
     _reg(make_workflow_debug_tools(agent), "工作流调试")
+    from restart_tools import make_restart_tools
+    _reg(make_restart_tools(agent), "生命周期")
     if verbose:
         if ok:
             print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")
@@ -520,6 +522,26 @@ def _ensure_utf8_stdout():
         pass
 
 
+def _recover_restart_env(agent, work_q, registry, state):
+    """/restart 或 restart_agent 看门狗重启后的自动恢复：消费 AGT_RESTART_* 环境变量。
+    AGT_RESTART_SESSION → /resume 恢复会话；AGT_RESTART_MESSAGE → 作为第一条消息进 work_q。
+    pop 掉避免污染后续 spawn 的子进程环境。"""
+    import os
+    sess = os.environ.pop("AGT_RESTART_SESSION", "")
+    msg = os.environ.pop("AGT_RESTART_MESSAGE", "")
+    if not sess and not msg:
+        return
+    print("🔁 检测到重启恢复指令…")
+    if sess:
+        try:
+            registry.dispatch(f"/resume {sess}", CommandContext(agent=agent, work_q=work_q, state=state))
+        except Exception as e:
+            print(f"⚠️ 恢复会话「{sess}」失败：{e}（可用 /resume 手动恢复）")
+    if msg:
+        print(f"📨 重启后首条消息：{msg[:80]}")
+        work_q.put(("user", msg))
+
+
 def web_main(port=None):
     """agt-web 入口：装配 Agent + 自动起 Web 服务 + 开浏览器，跑主循环服务 WS/后台（非交互 REPL）。
     端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
@@ -576,6 +598,8 @@ def web_main(port=None):
     # worker 线程：串行消费 work_q 跑 agent.run（长任务后台化）
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
     worker.start()
+    agent._work_q = work_q   # restart_agent 工具需要（触发优雅退出）
+    _recover_restart_env(agent, work_q, registry, state)   # 看门狗重启恢复：/resume + 首条消息
 
     print("（Web 模式：浏览器交互；Ctrl+C 退出）")
     try:
@@ -599,7 +623,7 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /update /help")
+    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /update /restart /help")
     print("退出：quit / Ctrl+D  (运行中 Ctrl+C 第一次=停当前任务回到输入，第二次=退出)")
     print("=" * 64)
 
@@ -741,6 +765,8 @@ def main():
     # worker 线程：串行消费 work_q 跑 agent.run（长任务后台化，不卡主线程）
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
     worker.start()
+    agent._work_q = work_q   # restart_agent 工具需要（触发优雅退出）
+    _recover_restart_env(agent, work_q, registry, state)   # 看门狗重启恢复：/resume + 首条消息
     print("\n🧑 你：", end="", flush=True)   # 首次输入提示（之后 _render_loop 在 agent 完成后打印）
 
     try:

@@ -1044,6 +1044,32 @@ def _cmd_update(ctx: CommandContext, args):
     check_and_update(force=True, announce=print)
 
 
+def _cmd_restart(ctx: CommandContext, args):
+    """/restart [消息] —— 看门狗式重启：本进程优雅退出 → 看门狗拉起新进程（新代码生效）
+    → 自动恢复当前 session 与 Web 服务端口 → （可选）把剩余参数作为重启后第一条消息发送。
+    适用：改了 agt 源码（src/）或依赖后让修改生效，无需手动 quit/agt/再 /resume。"""
+    import os
+    from restart_watchdog import spawn_watchdog
+    from real_tools import WORKSPACE
+    message = " ".join(args).strip() if isinstance(args, list) else str(args or "").strip()
+    port = 0
+    try:
+        import server as _srv
+        if getattr(_srv, "_server", None) is not None:
+            port = _srv._port or 0
+    except Exception:
+        pass
+    mode = "web" if port else "cli"
+    ok, info = spawn_watchdog(parent_pid=os.getpid(), mode=mode,
+                              session=ctx.session.name or "", port=port,
+                              message=message, cwd=str(WORKSPACE))
+    print(info)
+    if not ok:
+        return
+    print("（日志：~/.agt/restart.log）")
+    ctx.work_q.put(None)   # 优雅退出哨兵：worker/渲染循环按正常 quit 路径清理（停服务/杀后台进程）
+
+
 def _cmd_agent(ctx: CommandContext, args):
     """/agent [agent_id] —— 切换直接交互的 Agent 目标。
     无参数：列出所有团队成员（含 agent_id、名称、状态）。
@@ -1229,6 +1255,11 @@ def build_default_registry() -> CommandRegistry:
         '  不加 yes = 结果仅显示，不影响 Agent')
     reg.register("update", _cmd_update,
         "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
+    reg.register("restart", _cmd_restart,
+        "[消息]  看门狗式重启：退出→自动重启→恢复session/端口→推送消息（改完源码生效用）",
+        "/restart                     重启并恢复当前会话\n"
+        "/restart 继续刚才的任务       重启恢复后自动发送该消息\n"
+        "  改了 agt 源码(src/)后用它让新代码生效；日志 ~/.agt/restart.log")
     reg.register("agent", _cmd_agent,
         "[agent_id]  列出/切换直接交互的 Agent 目标",
         "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"

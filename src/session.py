@@ -444,6 +444,19 @@ class Session:
             self._emit_event({"event": "snapshot", "sha": sha})
 
     def start_turn(self, user_message: str, images: Optional[list] = None):
+        # 防御：上一轮未正常 finish/abort（run 中途异常逃出，如 LLM 502 抛穿循环）→
+        # 先收尾归档，否则 _current 被下面直接覆盖，中断轮（user+steps）从内存丢失、
+        # 本进程内投影（recent window/分档都从 self.turns 渲染）完全看不到。
+        # 不调 LLM 生成 summary（省一次短调用；折叠摘要对空 answer 有"中断(未回答)"兜底）。
+        if self._current is not None:
+            prev = self._current
+            prev.answer = prev.answer or "（中断，本轮未完成）"
+            self.turns.append(prev)
+            self._emit_event({"event": "turn_end", "answer": prev.answer,
+                              "answer_reasoning": prev.answer_reasoning or "",
+                              "summary": prev.summary or ""})
+            self._refresh_summary_cache()
+            self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
         self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
 

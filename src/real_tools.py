@@ -1879,6 +1879,14 @@ def contains(text: str, keyword: str) -> bool:
     """判断 text 是否包含 keyword，返回 true/false。"""
     return keyword in (text or "")
 
+def starts_with(text: str, prefix: str) -> bool:
+    """判断 text 是否以 prefix 开头，返回 true/false（如按扩展名/协议前缀分流）。"""
+    return (text or "").startswith(prefix)
+
+def ends_with(text: str, suffix: str) -> bool:
+    """判断 text 是否以 suffix 结尾，返回 true/false（如按扩展名分流 .cs/.py）。"""
+    return (text or "").endswith(suffix)
+
 def to_ascii(text: str) -> str:
     r"""把字符串里的非 ASCII 字符（中文等）转成 \uXXXX 转义，ASCII 字符保留。
     用于生成 ASCII 安全文本（JSON 传输/存储），如 "贵州茅台" → 贵州茅台。"""
@@ -1971,6 +1979,8 @@ LIGHT_TOOLS = Toolbox(
     Tool(to_uppercase),
     Tool(to_lowercase),
     Tool(contains),
+    Tool(starts_with),
+    Tool(ends_with),
     Tool(to_ascii),
     Tool(sleep),
     hidden=True,

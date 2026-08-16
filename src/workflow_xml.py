@@ -246,6 +246,8 @@ def _out_to_json(o):
     fields = o.findall("field")
     if fields:
         res["schema"] = [_field_to_schema(f) for f in fields]
+    elif o.get("itemType"):
+        res["schema"] = {"type": o.get("itemType")}   # list 的 item 基础类型（与 <in itemType> 同约定）
     ref = o.get("ref")
     if ref:
         # 复合节点(21/28) 输出可带 input 引用（指向循环变量/body 节点字段）
@@ -620,9 +622,13 @@ def _node_to_xml(n):
     title = (data.get("nodeMeta") or {}).get("title", name)
     attrs = f'id={_qa(nid)} type={_qa(name)} title={_qa(title)}'
     if n.get("x") is not None:
-        attrs += f' x={_qa(n["x"])}'
+        _x = n["x"]
+        _x = int(_x) if isinstance(_x, float) and _x.is_integer() else _x   # 整数坐标去 .0（保往返幂等）
+        attrs += f' x={_qa(_x)}'
     if n.get("y") is not None:
-        attrs += f' y={_qa(n["y"])}'
+        _y = n["y"]
+        _y = int(_y) if isinstance(_y, float) and _y.is_integer() else _y
+        attrs += f' y={_qa(_y)}'
     inner = []
 
     def out_el(o):
@@ -637,7 +643,11 @@ def _node_to_xml(n):
                 attrs += f' ref={_qa(r)}'
         sch = o.get("schema")
         has_default = "defaultValue" in o
-        if o.get("type") == "object" and isinstance(sch, list) and sch:
+        # list 的 item 为基础类型：schema={type:X} → itemType 属性（item 为 object 走下面的 field 子元素）
+        if o.get("type") == "list" and isinstance(sch, dict) and sch.get("type"):
+            attrs += f' itemType={_qa(sch["type"])}'
+        # object 的子字段 / list<object> 的 item 字段：schema=[{name,type},...] → <field> 子元素
+        if isinstance(sch, list) and sch and o.get("type") in ("object", "list"):
             inner = _schema_to_xml(sch)
             if has_default:
                 return f'<out {attrs} default={_qa(o["defaultValue"])}>{inner}</out>'

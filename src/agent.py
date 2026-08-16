@@ -52,6 +52,121 @@ _SERVICE_EXIT_LOG_LINES = 50   # 后台服务退出时，tool 结果里附带的
 # _materialize_tool_result 把它落盘到 repo images/ 并替换成 <img>name</img> 标签（base64 不进存档）。
 _DATA_URL_RE = re.compile(r"data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)", re.I)
 
+# —— 工作流生命周期钩子 —— 工具调用前后 workspace mtime 快照（真实副作用检测）——
+# 排除两层：① 框架硬排除（_SNAP_EXCLUDE_DIRS：.git/.agent 等运行时目录，gitignore 没写也要排）
+#          ② workspace/.gitignore 里的全部模式（目录剪枝 + 通配匹配；跳过注释/空行/! 否定模式）
+_SNAP_EXCLUDE_DIRS = frozenset({
+    ".git", ".agent", ".agt",
+})
+
+
+def _load_gitignore_patterns(workspace) -> list:
+    """读 workspace/.gitignore → fnmatch 模式列表（去注释/空行；! 否定模式跳过——重新包含语义简化不支持）。
+    返回 (patterns, anchored)：anchored 为根锚定（以 / 开头）的子集，单独匹配。"""
+    gi = workspace / ".gitignore"
+    pats, anchored = [], []
+    try:
+        for ln in gi.read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#") or ln.startswith("!"):
+                continue
+            if ln.startswith("/"):
+                anchored.append(ln.lstrip("/").rstrip("/"))
+            else:
+                pats.append(ln.rstrip("/"))
+    except Exception:
+        pass
+    return pats, anchored
+
+
+def _make_gitignore_filter(workspace):
+    """构造 (keep_dir, keep_file) 两个谓词：gitignore 模式未命中才保留。
+    - 锚定模式（/dist）：只匹配根层路径
+    - 目录模式（dist/ 或与某目录名全等的模式）：路径中任一段命中即剪枝/排除
+    - 通配模式（*.pyc / *.egg-info）：fnmatch 匹配任意层级 basename 或全路径"""
+    import fnmatch as _fm
+    pats, anchored = _load_gitignore_patterns(workspace)
+    # egg-info 这类 dist 产物即使没写 gitignore 也按惯例排除
+    pats = pats + ["*.egg-info"]
+
+    def _seg_or_fnmatch(name: str, pat: str) -> bool:
+        return name == pat or _fm.fnmatch(name, pat)
+
+    def keep_dir(rel: str) -> bool:
+        """rel 为目录相对路径（无尾斜杠）。目录被剪枝 → 整棵子树不进快照。"""
+        name = rel.rsplit("/", 1)[-1]
+        if any(_seg_or_fnmatch(name, p) for p in pats):
+            return False
+        if any(rel == p or _fm.fnmatch(rel, p) for p in anchored):
+            return False
+        return True
+
+    def keep_file(rel: str) -> bool:
+        name = rel.rsplit("/", 1)[-1]
+        # 任意目录段命中（目录模式作用到文件路径）或文件名/全路径通配
+        segs = rel.split("/")
+        if any(_seg_or_fnmatch(seg, p) for seg in segs for p in pats):
+            return False
+        if any(_fm.fnmatch(rel, p) or _fm.fnmatch(name, p) for p in pats):
+            return False
+        if any(rel == p or rel.startswith(p + "/") or _fm.fnmatch(rel, p) for p in anchored):
+            return False
+        return True
+
+    return keep_dir, keep_file
+
+
+def _workspace_snapshot() -> dict:
+    """WORKSPACE 下所有文件的 mtime 快照 {相对路径(posix): mtime_ns}。
+    排除 = 框架硬排除目录 + 嵌套 git 仓库整棵剪枝（git 同样不追踪其内部文件）
+         + .gitignore 全部模式（目录级剪枝，不深入）。
+    os.walk 全量扫描（排除后几百文件的仓库毫秒级）；OSError 单文件静默跳过。"""
+    import os
+    from real_tools import WORKSPACE
+    keep_dir, keep_file = _make_gitignore_filter(WORKSPACE)
+    snap = {}
+    for root, dirs, files in os.walk(WORKSPACE):
+        pruned = []
+        for d in dirs:
+            if d in _SNAP_EXCLUDE_DIRS:
+                continue
+            full = os.path.join(root, d)
+            if os.path.exists(os.path.join(full, ".git")):
+                continue   # 嵌套 git 仓库（clone 进来的完整仓库/.git 目录或子模块 .git 文件）→ 整棵剪枝
+            rel = os.path.relpath(full, WORKSPACE).replace("\\", "/")
+            if keep_dir(rel):
+                pruned.append(d)
+        dirs[:] = pruned
+        for f in files:
+            if f.endswith((".pyc", ".pyo", ".log", ".tmp")):
+                continue
+            p = os.path.join(root, f)
+            try:
+                rel = os.path.relpath(p, WORKSPACE).replace("\\", "/")
+                if not keep_file(rel):
+                    continue
+                snap[rel] = os.stat(p).st_mtime_ns
+            except OSError:
+                continue
+    return snap
+
+
+def _diff_snapshots(before: dict, after: dict) -> list:
+    """两份 mtime 快照对比 → 变化文件清单 [{"file","change"}]。
+    change ∈ new（after 有 before 无）/ deleted（before 有 after 无）/ modified（mtime_ns 变化）。
+    按文件名排序保证稳定。注：并行子 Agent 同刻写盘会一并计入（多报不漏报，方向安全）。"""
+    changed = []
+    for f, m in after.items():
+        if f not in before:
+            changed.append({"file": f, "change": "new"})
+        elif before[f] != m:
+            changed.append({"file": f, "change": "modified"})
+    for f in before:
+        if f not in after:
+            changed.append({"file": f, "change": "deleted"})
+    changed.sort(key=lambda x: x["file"])
+    return changed
+
 GRAY, RESET = "\033[90m", "\033[0m"
 GREEN, RED = "\033[32m", "\033[31m"
 
@@ -189,6 +304,7 @@ class Agent:
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         self.dump_projections: bool = False  # 投影转储开关（运行时设置）
+        self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——
         # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认。
         # 兼容旧字段 retrieval_model / recap_model（config.get_utility_model 内部处理）。
@@ -1154,6 +1270,10 @@ class Agent:
                                 if "before_tool" in self._active_hooks:
                                     self._hook_notes += self._run_hooks("before_tool", {
                                         "user_message": cur_user_msg, "tool_name": tc["name"], "tool_args": tc_args_json})
+                                # 工具执行前 workspace 快照（真实副作用检测；链式复用上次 after 快照省一半扫描）
+                                _snap_before = None
+                                if "after_tool" in self._active_hooks:
+                                    _snap_before = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                                 _t0 = time.time()
                                 result = self.tools.call(tc["name"], tc["arguments"])
                                 _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"],
@@ -1161,9 +1281,13 @@ class Agent:
                                 cid = self.session.toollog.next_id()
                                 result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
                                 if "after_tool" in self._active_hooks:
+                                    _snap_after = _workspace_snapshot()
+                                    self._fs_snap = _snap_after   # 下一个 call 的 before 基准
+                                    changed = _diff_snapshots(_snap_before, _snap_after)
                                     self._hook_notes += self._run_hooks("after_tool", {
                                         "user_message": cur_user_msg, "tool_name": tc["name"],
-                                        "tool_args": tc_args_json, "tool_result": result})
+                                        "tool_args": tc_args_json, "tool_result": result,
+                                        "changed_files": changed})   # 直接传数组（工作流 ref 原样透传，无需序列化往返）
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": len(calls) > 1})
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)

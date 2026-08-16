@@ -9,6 +9,7 @@
 作为 ensure_lsp 装配的语言脚本之一，由 agt-agent 的 lsp_manager 分发到 ~/.agt/lsp/。
 WORKSPACE = 启动此进程时的 cwd（连接时 cfg.cwd 传入 = agent 的 cwd）。
 """
+import ast
 import logging
 from pathlib import Path
 
@@ -93,6 +94,42 @@ def py_syms(file: str) -> str:
     if not names:
         return "(无符号)"
     return "\n".join(f"  {n.type:<14} {n.name:<32} line {n.line}" for n in names)
+
+
+@mcp.tool()
+def py_diag(file: str) -> str:
+    """获取 Python 文件的编译诊断（语法错误/告警，类似 IDE 里的红线）。无问题返回 ✅ 开头。
+    供 Agent 形成「改 → 查错 → 再改」闭环（改完 .py 调它立刻知道对不对）。"""
+    p = Path(file)
+    if not p.is_absolute():
+        p = WORKSPACE / file
+    if not p.exists():
+        return f"[文件不存在] {file}"
+    code = p.read_text(encoding="utf-8", errors="ignore")
+    lines = []
+    # 1) 语法层（ast）：语法错误是最常见、最关键的"红线"
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        lines.append(f"[ERROR] {e.lineno or 1}:{e.offset or 1} {e.msg}")
+    except (ValueError, UnicodeDecodeError) as e:
+        lines.append(f"[ERROR] 1:1 {type(e).__name__}: {e}")
+    # 2) 语义层（jedi 诊断，若有则附加）
+    try:
+        s = jedi.Script(code, path=str(p))
+        for d in s.get_diagnostics()[:30]:
+            sev = getattr(d, "severity", None)
+            tag = "[ERROR]" if sev in (1, 2) else "[WARN]"
+            ln = getattr(d, "line", None) or 1
+            col = (getattr(d, "column", None) or 0) + 1
+            msg = (getattr(d, "message", "") or "").strip()
+            if msg:
+                lines.append(f"{tag} {ln}:{col} {msg}")
+    except Exception:
+        pass
+    if not lines:
+        return "✅ 无诊断问题"
+    return "\n".join(dict.fromkeys(lines))   # 去重保序
 
 
 if __name__ == "__main__":

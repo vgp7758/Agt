@@ -1,53 +1,78 @@
-<workflow name="cs_auto_diag" description="写 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool" enabled="false" hidden="true">
+<workflow name="cs_auto_diag" description="改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff 检测——run_python/MCP 等任何方式改了 .cs 都能触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool" enabled="false">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="tool_name" type="string"/>
     <out name="tool_args" type="string"/>
+    <out name="changed_files" type="list" description='[{"file":"a.cs","change":"new|modified|deleted"}]——工具调用前后 workspace mtime 快照 diff 的真实副作用（数组直传）'><field name="file" type="string"/><field name="change" type="string"/></out>
   </node>
-  <node id="110001" type="code" title="code" x="420" y="80">
-    <in name="tool_name" type="string" ref="100001.tool_name"/>
-    <in name="tool_args" type="string" ref="100001.tool_args"/>
+  <node id="110001" type="code" title="filter_cs" x="420" y="80">
+    <in name="changed_files" type="list" ref="100001.changed_files"><field name="file" type="string"/><field name="change" type="string"/></in>
     <code language="3"><![CDATA[
-import json
 async def main(args) -> dict:
-    name = (args.params.get("tool_name") or "").strip()
-    raw = (args.params.get("tool_args") or "").strip()
-    try:
-        a = json.loads(raw) if raw else {}
-    except Exception:
-        a = {}
-    path = str(a.get("path") or "")
-    is_cs = name in ("write_file", "edit") and path.lower().endswith(".cs")
-    return {"is_cs": is_cs, "file": path}
+    ch = args.params.get("changed_files") or []
+    if isinstance(ch, str):   # 兜底：上游若传了 JSON 字符串（旧工作流）也能解析
+        import json as _j
+        try: ch = _j.loads(ch)
+        except Exception: ch = []
+    # .cs 且 new/modified（deleted 无法诊断）；取全部但 plugin 单文件——按字母序取第一个
+    cs = sorted(str(c.get("file", "")) for c in ch
+                if str(c.get("file", "")).lower().endswith(".cs")
+                and c.get("change") in ("new", "modified"))
+    has = bool(cs)
+    more = f"（另有 {len(cs)-1} 个 .cs 改动未诊断）" if len(cs) > 1 else ""
+    return {"has_cs": has, "first_file": cs[0] if cs else "", "note": more}
 ]]></code>
-    <out name="is_cs" type="boolean"/>
-    <out name="file" type="string"/>
+    <out name="has_cs" type="boolean"/>
+    <out name="first_file" type="string"/>
+    <out name="note" type="string"/>
+    <batch enabled="false"/>
   </node>
   <node id="120001" type="selector" title="selector" x="720" y="80">
-    <branch><cond op="1" left="110001.is_cs" right="True" left_type="boolean" right_type="boolean"/></branch>
+    <branch><cond op="1" left="110001.has_cs" right="True" left_type="boolean" right_type="boolean"/></branch>
   </node>
   <node id="130001" type="plugin" title="plugin" x="1020" y="80" toolName="__mcp__csharp-lsp__cs_diag">
-    <in name="file" type="string" ref="110001.file"/>
+    <in name="file" type="string" ref="110001.first_file"/>
     <out name="raw" type="string"/>
   </node>
-  <node id="140001" type="code" title="code" x="1320" y="80">
+  <node id="140001" type="code" title="check_errors" x="1320" y="80">
     <in name="diag" type="string" ref="130001.raw"/>
+    <in name="note" type="string" ref="110001.note"/>
     <code language="3"><![CDATA[
 async def main(args) -> dict:
     diag = args.params.get("diag") or ""
-    has_error = "[ERROR]" in diag
-    return {"inject": has_error, "result": diag}
+    has_err = "[ERROR]" in diag or "error" in diag.lower()[:2000]
+    return {"has_err": has_err, "diag": diag}
+]]></code>
+    <out name="has_err" type="boolean"/>
+    <out name="diag" type="string"/>
+  </node>
+  <node id="150001" type="selector" title="selector" x="1620" y="80">
+    <branch><cond op="1" left="140001.has_err" right="True" left_type="boolean" right_type="boolean"/></branch>
+  </node>
+  <node id="900001" type="end" title="end" x="2220" y="80">
+    <out name="inject" ref="160001.inject" type="boolean"/>
+    <out name="result" ref="160001.result" type="string"/>
+  </node>
+  <node id="160001" type="code" title="format_inject" x="1920" y="80">
+    <in name="diag" type="string" ref="140001.diag"/>
+    <in name="file" type="string" ref="110001.first_file"/>
+    <in name="note" type="string" ref="110001.note"/>
+    <code language="3"><![CDATA[
+async def main(args) -> dict:
+    d = (args.params.get("diag") or "")[:2000]
+    f = args.params.get("file") or ""
+    note = args.params.get("note") or ""
+    return {"inject": True, "result": f"⚠️ OmniSharp 诊断 {f} 含错误{note}：\n{d}"}
 ]]></code>
     <out name="inject" type="boolean"/>
     <out name="result" type="string"/>
   </node>
-  <node id="900001" type="end" title="end" x="1620" y="80">
-    <out name="inject" ref="140001.inject" type="boolean"/>
-    <out name="result" ref="140001.result" type="string"/>
-  </node>
   <edge from="100001" to="110001"/>
   <edge from="110001" to="120001"/>
-  <edge from="120001" to="130001" port="true"/>
+  <edge from="120001" to="130001"/>
+  <edge from="120001" to="900001"/>
   <edge from="130001" to="140001"/>
-  <edge from="140001" to="900001"/>
-  <edge from="120001" to="900001" port="false"/>
+  <edge from="140001" to="150001"/>
+  <edge from="150001" to="160001"/>
+  <edge from="150001" to="900001"/>
+  <edge from="160001" to="900001"/>
 </workflow>

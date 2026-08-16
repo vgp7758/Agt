@@ -655,7 +655,7 @@ function renderNode(n){
     const bodyRect=g.querySelector('.node-body');
     if(bodyRect) bodyRect.setAttribute('height', n.h);
     gy=HDR_H+8;
-    groups.forEach(grp=>{
+    groups.forEach((grp,gi)=>{
       const gname=grp.name||'?';
       const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
       const col=fieldColor(gtype);
@@ -669,7 +669,38 @@ function renderNode(n){
         g.appendChild(hit);
         const port=elm('circle',{cx:10,cy:vy,r:4,class:'port-var',fill:col,stroke:col,'pointer-events':'none'});
         g.appendChild(port);
-        g.appendChild(elm('text',{x:20,y:vy+3,class:'sub-row',fill:col},'var'+(i+1)));
+        if(v.value&&v.value.type==='ref'){
+          g.appendChild(elm('text',{x:20,y:vy+3,class:'sub-row',fill:col},'var'+(i+1)));
+        }else{
+          // 字面量：按分组类型内嵌输入控件（与普通输入字段一致）
+          const fo=document.createElementNS(NS,'foreignObject');
+          fo.setAttribute('x',18);fo.setAttribute('y',vy-8);
+          fo.setAttribute('width',Math.floor(n.w*0.55));fo.setAttribute('height',16);
+          const div=document.createElement('div');
+          div.style.cssText='width:100%;height:16px;display:flex;align-items:center';
+          const t=v.type||gtype||'string';
+          const cur=(v.value&&v.value.type==='literal')?v.value.content:'';
+          const baseStyle='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+          let el;
+          if(t==='boolean'){
+            el=document.createElement('input');el.type='checkbox';
+            el.checked=!!cur||cur===true||cur==='true';
+            el.style.cssText='margin:0;transform:scale(0.8)';
+            el.onchange=()=>{_setAggrLit(n,gi,i,el.checked);};
+          }else if(['integer','number','float'].includes(t)){
+            el=document.createElement('input');el.type='number';el.value=cur;el.placeholder='var'+(i+1);
+            el.style.cssText=baseStyle;
+            el.onchange=()=>{const num=parseFloat(el.value);_setAggrLit(n,gi,i,isNaN(num)?el.value:num);};
+          }else{
+            el=document.createElement('input');el.type='text';el.value=cur;
+            el.placeholder=t==='list'?'["a","b"]':'var'+(i+1);
+            el.style.cssText=baseStyle;
+            el.onchange=()=>{_setAggrLit(n,gi,i,el.value);};
+          }
+          el.onmousedown=(e)=>e.stopPropagation();   // 不触发节点拖动
+          div.appendChild(el);fo.appendChild(div);fo.style.pointerEvents='auto';
+          g.appendChild(fo);
+        }
       });
       const outP=elm('circle',{cx:n.w,cy:gy+12,r:5,class:'port-var',fill:col,stroke:col});
       outP.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,gname,col,n.x+n.w,n.y+gy+12);};
@@ -803,9 +834,9 @@ function doDisconnect(info){
   }else if(info.kind==='var'){
     const tn=findN(info.tgtNode);
     if(info.aggrGi!=null && tn?.type==='32'){
-      // 聚合节点变量：清 mergeGroups[gi].variables[vi]
+      // 聚合节点变量：断线后重置为该分组类型的字面量占位
       const grp=tn.data.inputs?.mergeGroups?.[info.aggrGi];
-      if(grp){grp.variables=grp.variables||[];grp.variables[info.aggrVi]={type:'string',value:{type:'literal',content:''}};toast('已断开变量线');}
+      if(grp){grp.variables=grp.variables||[];const gt=(nodeOutputs(tn).find(o=>o.name===grp.name)?.type)||'string';grp.variables[info.aggrVi]={type:gt,value:{type:'literal',content:''}};toast('已断开变量线');}
     }else{
       const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField);
       if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
@@ -1252,16 +1283,31 @@ function showProps(){
     h+='<h3>聚合分组 <button onclick="addAggrGroup()">+分组</button></h3>';
     const groups=n.data.inputs?.mergeGroups||[];
     groups.forEach((g,i)=>{
+      const gtype=(nodeOutputs(n).find(o=>o.name===g.name)?.type)||'string';
       h+='<div style="margin:4px 0;padding:4px;background:#0f3460;border-radius:4px">';
       h+='<span>分组名:</span><input value="'+ext(g.name)+'" onchange="setAggrGroupName('+i+',this.value)" style="width:80px">';
+      h+='<span> 类型:</span><select onchange="setAggrGroupType('+i+',this.value)" style="width:70px">'+IO_TYPES.map(t=>'<option value='+t+(gtype===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
       h+='<span> 变量('+(g.variables||[]).length+') </span>';
       h+='<button onclick="addAggrVar('+i+')">+变量</button>';
       h+='<button class="del" onclick="delAggrGroup('+i+')">×删分组</button>';
       (g.variables||[]).forEach((v,vi)=>{
         const isRef=v.value?.type==='ref';
-        h+='<div style="font-size:10px;margin:2px 0"> 变量'+(vi+1)+': ';
-        if(isRef)h+='ref→'+ext(v.value?.content?.blockID)+'.'+ext(v.value?.content?.name);
-        else h+='literal:'+ext(v.value?.content);
+        h+='<div style="font-size:10px;margin:2px 0;display:flex;gap:3px;align-items:center"> 变量'+(vi+1)+': ';
+        if(isRef)h+='<span style="color:#98c379;flex:1">ref→'+ext(v.value?.content?.blockID)+'.'+ext(v.value?.content?.name)+'</span>';
+        else{
+          const t=v.type||gtype||'string';
+          const cur=(v.value&&v.value.type==='literal')?v.value.content:'';
+          if(t==='boolean'){
+            const chk=!!cur||cur===true||cur==='true';
+            h+='<label style="display:inline-flex;align-items:center;gap:2px;margin:0"><input type="checkbox" '+(chk?'checked':'')+' onchange="setAggrVarLit('+i+','+vi+',this.checked)" style="width:auto"> <span style="color:#c678dd">boolean</span></label>';
+          }else if(['integer','number','float'].includes(t)){
+            h+='<input type="number" value="'+ext(cur)+'" placeholder="'+t+'" onchange="setAggrVarLit('+i+','+vi+',parseFloat(this.value))" style="width:90px;font-size:10px">';
+          }else if(t==='list'){
+            h+='<input value="'+ext(cur)+'" placeholder=\'["a","b"]\' onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
+          }else{
+            h+='<input value="'+ext(cur)+'" placeholder="字面量" onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
+          }
+        }
         h+=' <button class="del" onclick="delAggrVar('+i+','+vi+')">×</button></div>';
       });
       h+='</div>';
@@ -1887,7 +1933,24 @@ function _uncollapseFields(n,side,fields,prefix=''){
 }
 function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
-function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables=g.variables||[];g.variables.push({type:'string',value:{type:'literal',content:''}});showProps();renderAll();}
+// 分组类型：同步 outputs 同名输出 type（决定端口颜色/连线校验/下游类型）+ 各变量 type
+function setAggrGroupType(i,t){
+  const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];
+  const o=(n.data.outputs||[]).find(o=>o.name===g.name);
+  if(o)o.type=t;
+  (g.variables||[]).forEach(v=>{v.type=t;});
+  showProps();renderAll();
+}
+// 属性面板：设置某分组某变量的字面量值
+function setAggrVarLit(gi,vi,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];g.variables= g.variables||[];g.variables[vi]={type:g.variables[vi]?.type||'string',value:{type:'literal',content:v}};renderAll();}
+// 画布内嵌控件：直接改 WF 数据（不走 selNode），onchange 后不重绘避免丢焦点
+function _setAggrLit(node,gi,vi,val){
+  const grp=node.data.inputs?.mergeGroups?.[gi];
+  if(!grp)return;
+  grp.variables=grp.variables||[];
+  grp.variables[vi]={type:grp.variables[vi]?.type||'string',value:{type:'literal',content:val}};
+}
+function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];const gt=(nodeOutputs(n).find(o=>o.name===g.name)?.type)||'string';g.variables=g.variables||[];g.variables.push({type:gt,value:{type:'literal',content:''}});showProps();renderAll();}
 function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].variables.splice(vi,1);showProps();renderAll();}
 function setIntent(i,v){const n=findN(selNode);n.data.inputs.intents[i].name=v;renderAll();}
 function addIntent(){const n=findN(selNode);n.data.inputs.intents=n.data.inputs.intents||[];n.data.inputs.intents.push({name:'新意图'});showProps();renderAll();}
@@ -2253,16 +2316,24 @@ function _mapToolType(t){return {string:'string',integer:'integer',int:'integer'
 
 document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
 let ctrlDown=false;   // Ctrl 按下时显示每条线中点的剪刀图标
+const _editing=(e)=>e.target&&['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName);  // 焦点在表单控件内（文本节点大框/属性面板输入框）
 document.addEventListener('keydown',(e)=>{
   if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveWf();}
-  if(e.key==='Control'&&!ctrlDown){ctrlDown=true;renderAll();}
-  if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'){
+  // 编辑中按 Ctrl（Ctrl+V/Ctrl+C 的前奏）不重绘：renderAll 会销毁重建 textarea，
+  // 焦点与选区随之丢失 → 紧随的 V 键落到 body 上 → 粘贴失效。松开 Ctrl 同理（见 keyup）。
+  if(e.key==='Control'&&!ctrlDown){ctrlDown=true;if(!_editing(e))renderAll();}
+  if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&!_editing(e)){
     WF.nodes=WF.nodes.filter(n=>n.id!==selNode);WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
     WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
     selNode=null;showProps();renderAll();
   }
 });
-document.addEventListener('keyup',(e)=>{if(e.key==='Control'){ctrlDown=false;renderAll();}});
+document.addEventListener('keyup',(e)=>{
+  if(e.key==='Control'){
+    const was=ctrlDown;ctrlDown=false;
+    if(was&&!_editing(e))renderAll();   // 编辑中松开 Ctrl 不重绘（否则粘贴刚完成焦点就被打断）
+  }
+});
 window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
 // 全局错误捕获——JS 报错弹出 toast 便于定位
 window.onerror=function(msg,url,line,col,err){

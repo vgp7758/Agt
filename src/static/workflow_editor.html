@@ -2106,7 +2106,7 @@ function exitComposite(){
   // 把当前编辑写回复合节点（保留迭代入口/continue/break 标记节点，执行器需要它们）
   const n=findN(_currentParent);
   if(n){
-    n.blocks=WF.nodes.map(m=>({id:m.id,type:m.type,data:m.data}));
+    n.blocks=WF.nodes.map(m=>({id:m.id,type:m.type,x:m.x,y:m.y,data:m.data}));   // 保留 x/y（重进子画布不乱位）
     n.edges=WF.edges.map(e=>({sourceNodeID:e.sourceNodeID,targetNodeID:e.targetNodeID,sourcePortID:e.sourcePortID||'',...(e.targetPortID?{targetPortID:e.targetPortID}:{})}));
     // 补充 composite→迭代入口 的入口边（若不存在）
     const port=(n.type==='21'?'loop':'batch')+'-function-inline-output';
@@ -2267,7 +2267,14 @@ async function saveWf(){
   WF.meta.hidden=document.getElementById('fhidden').checked;
   const _hook=document.getElementById('fhook').value; WF.meta.hook=_hook||undefined;
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
-  const canvas={nodes:WF.nodes.map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))})),edges:WF.edges,versions:{}};
+  // blocks/edges 是复合节点(21/28)的【节点级】子画布属性（与 data 平级，不在 data 里）——
+  // 必须显式带上，否则保存时子画布被静默丢弃（编辑后保存"乱套"的根因）
+  const canvas={nodes:WF.nodes.map(n=>{
+    const c={id:n.id,type:n.type,x:n.x,y:n.y,data:JSON.parse(JSON.stringify(n.data))};
+    if(n.blocks&&n.blocks.length)c.blocks=n.blocks;
+    if(n.edges&&n.edges.length)c.edges=n.edges;
+    return c;
+  }),edges:WF.edges,versions:{}};
   const fmt=(document.getElementById('saveFormat')||{}).value||'json';
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}

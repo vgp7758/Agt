@@ -1,0 +1,99 @@
+<workflow name="py_auto_diag" description="改 .py 后自动跑 py_diag（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤+contains 判 ERROR，零 code 节点；需 ensure_lsp('python')）" hook="after_tool" enabled="false">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="tool_name" type="string"/>
+    <out name="tool_args" type="string"/>
+    <out name="changed_files" type="list" description="工具调用前后 workspace 快照 diff 的变化文件清单"><field name="file" type="string"/><field name="change" type="string"/></out>
+  </node>
+  <node id="890541" type="loop" title="loop_changed" x="419" y="120">
+    <param name="loopType"><![CDATA[array]]></param>
+    <in name="input" type="list" ref="100001.changed_files"><field name="file" type="string"/><field name="change" type="string"/></in>
+    <var name="diag" type="string" literal=""/>
+    <out name="diag" type="string" ref="890541.diag" description="全量诊断拼接（循环变量终值）"/>
+    <out name="all_outputs" type="list" itemType="string" description="所有结果"/>
+    <out name="filtered_outputs" type="list" itemType="string" description="筛选结果"/>
+    <out name="nth_output" type="string" description="第n个结果"/>
+    <batch enabled="false" nth="0"/>
+    <blocks>
+      <node id="__entry__" type="start" title="迭代入口">
+        <out name="item" type="object"><field name="file" type="string"/><field name="change" type="string"/></out>
+        <out name="index" type="integer"/>
+        <out name="diag" type="string"/>
+      </node>
+      <node id="130041" type="plugin" title="is_py" toolName="ends_with">
+        <in name="text" type="string" ref="loop-item.file"/>
+        <in name="suffix" type="string">.py</in>
+        <out name="raw" type="boolean"/>
+      </node>
+      <node id="130042" type="selector" title="py&amp;not_deleted?">
+        <branch>
+          <cond op="11" left="130041.raw" left_type="boolean"/>
+          <cond op="2" left="loop-item.change" right="deleted"/>
+        </branch>
+      </node>
+      <node id="130043" type="plugin" title="py_diag" toolName="__mcp__python-lsp__py_diag">
+        <in name="file" type="string" ref="loop-item.file"/>
+        <out name="raw" type="string"/>
+      </node>
+      <node id="130044" type="text" title="report" x="0" y="0">
+        <in name="old" type="string" ref="__entry__.diag"/>
+        <in name="file" type="string" ref="loop-item.file"/>
+        <in name="rep" type="string" ref="130043.raw"/>
+        <result><![CDATA[{{old}}📄 {{file}}
+{{rep}}
+]]></result>
+      </node>
+      <node id="130045" type="setvar" title="acc_diag">
+        <in name="diag" left="__entry__.diag" left_type="string" right="ref:130044.output" right_type="string"/>
+      </node>
+      <node id="__continue__" type="continue" title="继续(本轮输出)">
+        <in name="result" type="string" ref="130044.output"/>
+      </node>
+      <node id="__break__" type="break" title="中断(Break)"/>
+    </blocks>
+    <edges>
+      <edge source="890541" target="__entry__" sourcePort="loop-function-inline-output"/>
+      <edge source="__entry__" target="130041"/>
+      <edge source="130041" target="130042"/>
+      <edge source="130042" target="130043" sourcePort="true"/>
+      <edge source="130043" target="130044"/>
+      <edge source="130044" target="130045"/>
+      <edge source="130045" target="__continue__"/>
+      <edge source="130042" target="__continue__" sourcePort="false"/>
+    </edges>
+  </node>
+  <node id="1079260" type="selector" title="has_diag?" x="658" y="56">
+    <branch><cond op="13" left="890541.filtered_outputs.length" right="0" left_type="integer" right_type="integer"/></branch>
+  </node>
+  <node id="130050" type="plugin" title="has_error" x="1015" y="223" toolName="contains">
+    <in name="text" type="string" ref="890541.diag"/>
+    <in name="keyword" type="string">[ERROR]</in>
+    <out name="raw" type="boolean"/>
+  </node>
+  <node id="130060" type="selector" title="error_found?" x="1172" y="88">
+    <branch><cond op="11" left="130050.raw" left_type="boolean"/></branch>
+  </node>
+  <node id="130070" type="text" title="inject_text" x="1472" y="32">
+    <in name="diags" type="string" ref="890541.diag"/>
+    <result><![CDATA[🐍 Python 诊断发现问题（请修复后再继续）：
+{{diags}}]]></result>
+  </node>
+  <node id="929505" type="text" title="pass_text" x="1380" y="303">
+    <result><![CDATA[✅ Python 自动校验语法通过（import/运行仍需另测）]]></result>
+  </node>
+  <node id="104862" type="aggregator" title="pick" x="1741" y="211">
+    <group name="Group1"><var ref="130070.output"/><var ref="929505.output"/></group>
+  </node>
+  <node id="900001" type="end" title="Exit" x="2072" y="77">
+    <out name="inject" ref="130050.raw" type="boolean"/>
+    <out name="result" ref="104862.Group1" type="string"/>
+  </node>
+  <edge from="100001" to="890541"/>
+  <edge from="890541" to="1079260"/>
+  <edge from="1079260" to="130050" port="true"/>
+  <edge from="130050" to="130060"/>
+  <edge from="130060" to="130070" port="true"/>
+  <edge from="130060" to="929505" port="false"/>
+  <edge from="130070" to="104862"/>
+  <edge from="929505" to="104862"/>
+  <edge from="104862" to="900001"/>
+</workflow>

@@ -12,19 +12,19 @@ from __future__ import annotations
 
 import inspect
 import json
-from typing import Callable, get_origin, get_type_hints
+from typing import Any as _TypingAny, Callable, get_origin, get_type_hints
 
-# Python 类型 → JSON Schema 类型
-_PY_TO_JSON_SCHEMA = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-}
+# Python 类型 → JSON Schema 类型（str/int/float/bool/list/dict；Any 特判在 _type_to_schema）
+_PY_TO_JSON_SCHEMA = {str: "string", int: "integer", float: "number", bool: "boolean",
+                      list: "array", dict: "object"}
 
 
 def _type_to_schema(ptype):
-    """Python 类型 → JSON Schema 片段。支持 str/int/float/bool/list/dict。"""
+    """Python 类型 → JSON Schema 片段。支持 str/int/float/bool/list/dict。
+    typing.Any → {}（空 schema = 任意类型）：工具参数/返回类型不确定时的标记，
+    编辑器据此不锁死类型（用户可把它改成 object 逐字段连线组装）。"""
+    if ptype is _TypingAny:
+        return {}
     if ptype in _PY_TO_JSON_SCHEMA:
         return {"type": _PY_TO_JSON_SCHEMA[ptype]}
     if get_origin(ptype) is list or ptype is list:

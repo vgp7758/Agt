@@ -126,9 +126,9 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 const TYPE_LABEL={1:'Entry',2:'Exit',3:'LLM',5:'Code',8:'Selector',9:'SubWorkflow',4:'Plugin',13:'Output',15:'Text',19:'Break',20:'SetVar',21:'Loop',22:'Intent',28:'Batch',29:'Continue',32:'Aggregator',40:'Assigner',45:'HTTP',58:'ToJSON',59:'FromJSON'};
 const TYPE_CATEGORY={1:'flow',2:'flow',3:'llm',5:'code',8:'branch',9:'ext',4:'ext',13:'ext',15:'data',21:'composite',22:'llm',28:'composite',32:'data',40:'data',45:'ext',58:'data',59:'data'};
 const HDR_COLOR={flow:'#1a5c2a',llm:'#1a3a6b',code:'#3a1a6b',branch:'#6b3a1a',composite:'#1a6b6b',data:'#4a4a1a',ext:'#4a1a4a'};
-const IO_TYPES=['string','integer','float','number','boolean','object','list','file','time'];
+const IO_TYPES=['string','integer','float','number','boolean','object','list','any','file','time'];
 // 变量类型颜色
-const TYPE_COLOR={string:'#e6c07b',integer:'#56b6c2',float:'#56b6c2',number:'#56b6c2',boolean:'#c678dd',object:'#61afef',list:'#98c379',file:'#e06c75',time:'#d19a66'};
+const TYPE_COLOR={string:'#e6c07b',integer:'#56b6c2',float:'#56b6c2',number:'#56b6c2',boolean:'#c678dd',object:'#61afef',list:'#98c379',any:'#f48fb1',file:'#e06c75',time:'#d19a66'};
 const OPERATORS=[{v:1,t:'='},{v:2,t:'≠'},{v:7,t:'包含'},{v:8,t:'不含'},{v:9,t:'为空'},{v:10,t:'非空'},{v:11,t:'为真'},{v:12,t:'为假'},{v:13,t:'>'},{v:14,t:'≥'},{v:15,t:'<'},{v:16,t:'≤'}];
 
 const NS='http://www.w3.org/2000/svg';
@@ -1220,7 +1220,7 @@ function showProps(){
   // 输入字段（聚合节点用 mergeGroups，跳过常规输入）
   if(n.type!=='1'&&n.type!=='32'){
     const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
-    const lockedInputs=['4','9'].includes(n.type);  // 工具/子工作流输入来自schema，锁定
+    const lockedInputs=['9'].includes(n.type)||(n.type==='4'&&nodeInputs(n).every(p=>p.input?.type!=='any'));  // 子工作流全锁；plugin 全 any 时不锁
     h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button> <button onclick=\"importJSONSchema(\'in\')\" title=\"粘贴JSON自动分析结构并初始化输入字段\">📋 从JSON导入</button>'}</h3>`;
     h+=renderIOFields(nodeInputs(n),'in');
   }
@@ -1572,7 +1572,7 @@ function renderIOFields(arr,kind,lockedAll){
     const bg=i%2?'io-fbg-odd':'io-fbg-even';
     h+=`<tbody class="${bg}">`;
     const t=f.input?.type||f.type||'string';
-    const locked=lockedAll||(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||['4','9'].includes(n.type)));
+    const locked=lockedAll||(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||(['4','9'].includes(n.type)&&t!=='any')));  // any 类型不锁（透传/组装用）
     h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
       <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
       <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;
@@ -1763,8 +1763,8 @@ function delField(kind,i){
 }
 function setField(kind,i,field,v){
   const n=findN(selNode);
-  // 工具/子工作流/意图query 字段锁定，不可改 name/type
-  if(kind==='in'&&['4','9'].includes(n.type)) return;
+  // 工具/子工作流/意图query 字段锁定，不可改 name/type——但 any 类型不锁（透传/组装用）
+  if(kind==='in'&&['4','9'].includes(n.type)&&nodeInputs(n)[i]?.input?.type!=='any') return;
   if(kind==='in'&&n.type==='22'&&nodeInputs(n)[i]?.name==='query'&&field!=='description') return;
   const arr=findArr(kind);const f=arr[i];
   if(field==='name')f.name=v;
@@ -2323,7 +2323,7 @@ async function loadTools(){
   const r=await api('GET','/api/tools');
   AGENT_TOOLS=r.tools||[];   // 工具列表按需在节点选择浮窗(nodePicker)渲染
 }
-function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'string';}
+function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'any';}
 
 document.getElementById('fileSel').onchange=function(){if(this.value)openWf(this.value);};
 let ctrlDown=false;   // Ctrl 按下时显示每条线中点的剪刀图标

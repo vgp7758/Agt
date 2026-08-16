@@ -1867,6 +1867,14 @@ def ends_with(text: str, suffix: str) -> bool:
     """判断 text 是否以 suffix 结尾，返回 true/false（如按扩展名分流 .cs/.py）。"""
     return (text or "").endswith(suffix)
 
+from typing import Any as _Any
+
+def pass_through(input: _Any) -> _Any:
+    """透传/组装：input 原样返回（任意类型：字符串/数字/对象/数组）。
+    配合编辑器把 input 类型改成 object 后逐子字段连线（object_ref 组装），
+    可把多个上游节点的输出在节点处拼成结构透传输出——中转/整形/出口整形用。"""
+    return input
+
 def to_ascii(text: str) -> str:
     r"""把字符串里的非 ASCII 字符（中文等）转成 \uXXXX 转义，ASCII 字符保留。
     用于生成 ASCII 安全文本（JSON 传输/存储），如 "贵州茅台" → 贵州茅台。"""
@@ -1961,6 +1969,7 @@ LIGHT_TOOLS = Toolbox(
     Tool(contains),
     Tool(starts_with),
     Tool(ends_with),
+    Tool(pass_through, outputs=[{"name": "raw", "type": "any", "description": "透传值（结构与输入一致；类型可在编辑器改）"}]),
     Tool(to_ascii),
     Tool(sleep),
     hidden=True,

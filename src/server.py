@@ -195,7 +195,9 @@ async def api_tools():
         seen.add(t.name)
         s = t.schema["function"]
         props = s.get("parameters", {}).get("properties", {}) or {}
-        params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else "string") or "string"}
+        # schema 无 type（如 pass_through 的 Any 参数）→ "any"：类型不确定的标记，
+        # 编辑器据此不锁死该字段的类型编辑（用户可改成 object 逐字段连线组装）
+        params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else None) or "any"}
                   for pn, ps in props.items()]
         outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
         name = s["name"]

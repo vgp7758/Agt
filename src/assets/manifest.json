@@ -2,8 +2,15 @@
   {
     "name": "cs_auto_diag",
     "type": "workflow",
-    "desc": "写 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；需先 ensure_lsp('csharp') 装配 csharp-lsp）",
+    "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）",
     "src": "workflows/cs_auto_diag.xml",
+    "default_dir": ".agent/workflows"
+  },
+  {
+    "name": "py_auto_diag",
+    "type": "workflow",
+    "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；需先 ensure_lsp('python')）",
+    "src": "workflows/py_auto_diag.xml",
     "default_dir": ".agent/workflows"
   },
   {

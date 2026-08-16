@@ -29,11 +29,14 @@ from real_tools import WORKSPACE
 from tools import Tool, Toolbox
 
 # 子 Agent 绝不能继承的工具（防止递归生子 Agent、互相操控；计划工具绑定主 Agent）
-# 通信工具也排除——它们绑定到主 Agent 闭包，子 Agent 需要重新注册绑定到自身的版本
+# 通信工具排除——绑定到主 Agent 闭包，子 Agent 需要重新注册绑定到自身的版本
+# 会话工具（get_session_history/semantic_search_history/rename_session）同理：闭包绑定
+# 主 session——钩子工作流（before_turn_retrieval 等）在子 Agent 里跑时必须查子自己的历史
 _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents",
                      "create_plan", "update_plan", "update_wiki",
                      "list_team", "agent_ask", "agent_notify",
-                     "agent_query_events", "agent_query_tool_detail", "wait_subagents"}
+                     "agent_query_events", "agent_query_tool_detail", "wait_subagents",
+                     "get_session_history", "semantic_search_history", "rename_session"}
 
 
 def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:
@@ -71,6 +74,12 @@ class SubAgent:
         # 注册绑定到子 Agent 自身的通信工具（替换从主 Agent 继承的、绑定到主 Agent 闭包的版本）
         comm_tools = make_communication_tools(self.agent)
         for t in comm_tools:
+            self.agent.tools.register(t)
+        # 会话工具同样重绑：钩子工作流（before_turn_retrieval 等）在子 Agent 里跑时，
+        # get_session_history/semantic_search 必须查【子 Agent 自己的 session】，
+        # 而不是继承自主 Agent 的闭包（那会查到主 Agent 的历史）
+        from session_tools import make_session_tools
+        for t in make_session_tools(self.agent):
             self.agent.tools.register(t)
         self.caller_id = caller_id or ""
 

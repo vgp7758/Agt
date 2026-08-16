@@ -929,7 +929,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                registry.dispatch(text, CommandContext(agent=agent))
+                registry.dispatch(text, CommandContext(agent=agent, work_q=_work_q, state=_state))
             out = buf.getvalue().strip()
         except Exception as e:
             out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"

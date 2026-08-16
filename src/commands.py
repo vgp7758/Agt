@@ -1067,7 +1067,13 @@ def _cmd_restart(ctx: CommandContext, args):
     if not ok:
         return
     print("（日志：~/.agt/restart.log）")
-    ctx.work_q.put(None)   # 优雅退出哨兵：worker/渲染循环按正常 quit 路径清理（停服务/杀后台进程）
+    # 优雅退出哨兵：worker/渲染循环按正常 quit 路径清理（停服务/杀后台进程）。
+    # WebUI 路径的 ctx 可能没带 work_q（构造点历史不一致）→ 兜底 agent._work_q（main/web_main 均挂载）
+    wq = ctx.work_q or getattr(ctx.agent, "_work_q", None)
+    if wq is not None:
+        wq.put(None)
+    else:
+        print("⚠️ 找不到 work_q，无法自动退出——请手动关闭本进程（看门狗已在等）")
 
 
 def _cmd_agent(ctx: CommandContext, args):

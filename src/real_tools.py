@@ -80,18 +80,6 @@ def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
     return True, current, ""
 
 
-def _py_check(target: Path) -> str:
-    """对刚写入的 Python 文件做即时语法检查（compile，不解引用，不跑代码，零开销）。
-    有语法错误返回可操作的报错行；通过则返回 ✅ 提示，让 Agent 知道语法已校验、
-    无需再用 run_python/ast.parse 重复查语法（import/运行验证仍需另测）。"""
-    if target.suffix not in (".py", ".pyw"):
-        return ""
-    try:
-        code = target.read_text(encoding="utf-8")
-        compile(code, str(target), "exec")
-    except SyntaxError as e:
-        return f"\n⚠️ 语法错误 {e.filename or target.name}:{e.lineno}:{e.offset} — {e.msg}"
-    return f"\n✅ {target.name} 语法检查通过（write_file 已自动校验语法，无需再 run_python/ast.parse 复查语法；import/运行仍需另测）"
 def _run_subprocess_streaming(args, name, shell=False):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。"""
@@ -400,10 +388,7 @@ def write_file(path: str, content: str) -> str:
     target = _resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    msg = f"已写入 {len(content)} 字符到 {path}"
-    if path.endswith(".py") or path.endswith(".pyw"):
-        msg += _py_check(target)
-    return msg
+    return f"已写入 {len(content)} 字符到 {path}"
 
 
 def list_dir(path: str = ".") -> str:
@@ -576,31 +561,26 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
         if not (start_line or end_line) and content.endswith("\n") and not new_scope.endswith("\n"):
             new_scope += "\n"   # splitlines+join 吃掉了文末换行，补回（精确路径本就保留）
         new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
+        new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
         target.write_text(new_content, encoding="utf-8")
-        msg = f"✅ 已替换 {len(hits)} 处（行尾空白容忍匹配，{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
-        if path.endswith(".py") or path.endswith(".pyw"):
-            msg += _py_check(target)
-        return msg
+        return f"✅ 已替换 {len(hits)} 处（行尾空白容忍匹配，{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
     if count > 1 and not replace_all:
         return f"[不唯一] 共匹配 {count} 处，请加更多上下文让 old_string 唯一，或设 replace_all=True"
     if old_string == new_string:
         return "[无变化] old_string 与 new_string 相同"
     new_scope = scope.replace(old_string, new_string) if replace_all else scope.replace(old_string, new_string, 1)
     new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
+    new_content = (prefix + ("\n" if prefix else "") + new_scope + ("\n" if suffix else "") + suffix) if (start_line or end_line) else new_scope
     target.write_text(new_content, encoding="utf-8")
-    msg = f"✅ 已替换 {count if replace_all else 1} 处（{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
-    if path.endswith(".py") or path.endswith(".pyw"):
-        msg += _py_check(target)
-    return msg
+    return f"✅ 已替换 {count if replace_all else 1} 处（{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
 
 
 def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> str:
     """把 new_lines 写回文件（统一 \n 换行 + 末尾换行），返回带新 file_version 的确认串。"""
+def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> str:
+    """把 new_lines 写回文件（统一 \n 换行 + 末尾换行），返回带新 file_version 的确认串。"""
     target.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
-    msg = f"{action_desc}（现共 {len(new_lines)} 行）file_version={_file_version(target)}"
-    if path.endswith(".py") or path.endswith(".pyw"):
-        msg += _py_check(target)
-    return msg
+    return f"{action_desc}（现共 {len(new_lines)} 行）file_version={_file_version(target)}"
 
 
 def insert(path: str, entries: list, version: str) -> str:

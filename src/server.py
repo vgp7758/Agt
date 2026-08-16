@@ -249,6 +249,10 @@ async def api_wf_get(name: str):
                 meta["auto_param"] = root.get("auto_param")
             if root.get("hook"):
                 meta["hook"] = root.get("hook")
+            # hidden 在 <workflow hidden="true"> 根属性上（canvas_to_xml 写出侧早已支持）——
+            # 之前漏读导致编辑器打开 XML 工作流时 hidden 复选框总是空的
+            if root.get("hidden") is not None:
+                meta["hidden"] = root.get("hidden") == "true"
             xmp = xf.with_name(xf.name + ".meta")
             if xmp.exists():
                 try:

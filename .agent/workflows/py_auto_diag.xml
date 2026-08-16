@@ -45,7 +45,8 @@
     <in name="diag" left="__entry__.diag" left_type="string" right="ref:130044.output" right_type="string"/>
   </node>
       <node id="__continue__" type="continue" title="继续(本轮输出)" x="1920" y="154">
-    <in name="result" type="string" ref="130044.output"/>
+    <in name="result" type="string" ref="130043.raw"/>
+    <batch enabled="false"/>
   </node>
       <node id="__break__" type="break" title="中断(Break)" x="1920" y="80"/>
     </blocks>
@@ -61,8 +62,13 @@
     </edges>
     <batch enabled="false" nth="0"/>
   </node>
-  <node id="1079260" type="selector" title="has_diag?" x="720" y="80">
+  <node id="1079260" type="selector" title="has_diag?" x="712.3998896132788" y="106.60038635352458">
     <branch><cond op="13" left="890541.filtered_outputs.length" right="0" left_type="integer" right_type="integer"/></branch>
+  </node>
+  <node id="130049" type="plugin" title="has_py" x="860" y="80" toolName="contains">
+    <in name="text" type="string" ref="890541.diag"/>
+    <in name="keyword" type="string">📄</in>
+    <out name="raw" type="boolean"/>
   </node>
   <node id="130050" type="plugin" title="has_error" x="1020" y="80" toolName="contains">
     <in name="text" type="string" ref="890541.diag"/>
@@ -84,17 +90,19 @@
   <node id="104862" type="aggregator" title="pick" x="1920" y="80">
     <group name="Group1"><var ref="130070.output"/><var ref="929505.output"/></group>
   </node>
-  <node id="900001" type="end" title="Exit" x="2220" y="80">
-    <out name="inject" ref="130050.raw" type="boolean"/>
+  <node id="900001" type="end" title="Exit" x="2377.001379834016" y="120.19718513860661">
+    <out name="inject" ref="130049.raw" type="boolean" description="改了 .py = 注入（无论通过/报错）；未改 .py = 不注入（短路路径取不到值）"/>
     <out name="result" ref="104862.Group1" type="string"/>
   </node>
   <edge from="100001" to="890541"/>
   <edge from="890541" to="1079260"/>
-  <edge from="1079260" to="130050" port="true"/>
+  <edge from="1079260" to="130049" port="true"/>
+  <edge from="130049" to="130050"/>
   <edge from="130050" to="130060"/>
   <edge from="130060" to="130070" port="true"/>
   <edge from="130060" to="929505" port="false"/>
   <edge from="130070" to="104862"/>
   <edge from="929505" to="104862"/>
   <edge from="104862" to="900001"/>
+  <edge from="1079260" to="900001" port="false"/>
 </workflow>

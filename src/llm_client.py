@@ -216,6 +216,10 @@ class LLMClient:
         # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
         # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。配此标志后发请求前自动补占位。
         self.requires_reasoning_in_history = profile.get("requires_reasoning_in_history", False)
+        # 多 token 成功后预旋转开关（默认开）：ModelScope 等按号限每日额度的 provider 靠轮换分摊配额
+        # （反正不吃缓存，换了无损失）；GLM/bigmodel 等 prompt cache 按 api_token 隔离的 provider 配
+        # "token_rotate": false 保持 sticky（每次成功不换 token，缓存不被自己交错驱逐；限流轮换仍生效）。
+        self.token_rotate = profile.get("token_rotate", True)
         self._client = OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured")
 
     def _ensure_config(self):
@@ -352,9 +356,11 @@ class LLMClient:
         while True:
             try:
                 resp = self._chat_inner(messages, **overrides)
-                # 不做"成功后预旋转"：GLM 等 provider 的 prompt cache 按 api_token 隔离且容量有限，
-                # 每次调用换 token = 自己交错驱逐自己的缓存 → 命中率腰斩。限流分摊由下面的
-                # RateLimitError 轮换路径承担（sticky 到限流才换，缓存友好）。
+                # 成功后预旋转到下一个 token（下次调用自动用不同账号）：多号配额分摊（ModelScope 等
+                # 按号限每日额度的 provider 反正不吃缓存，换了无损失）。GLM 等 cache 按 token 隔离的
+                # provider 在条目里配 "token_rotate": false 保持 sticky（限流轮换路径不受此开关影响）。
+                if len(self.api_tokens) > 1 and self.token_rotate:
+                    self._rotate_token()
                 # reasoning 补全：思考模型只回 reasoning 无 content → 交非思考模型据 reasoning 补正文
                 if (self.reasoning_completer and (resp.reasoning or "").strip()
                         and not (resp.content or "").strip() and not resp.tool_calls):

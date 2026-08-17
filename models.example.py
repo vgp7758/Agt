@@ -6,11 +6,14 @@
 """
 
 MODELS = {
-    # ⚠️ prompt cache 按 api_token 隔离的 provider（GLM/bigmodel 等）：
-    # 同一 token 交错用于【react 长上下文调用】和【utility 短调用】（recap/RAG检索/工作流LLM）
-    # 会互相驱逐对方缓存 → 命中率清零。对策：utility 用独立条目 + 独立 api_token（见 glm-utility），
-    # 再 /config utility_model glm-utility。同理条目内配多 token 时请勿依赖轮换分摊——
-    # agt 已改为 sticky（限流才换 token），主动轮换=自己交错驱逐自己的缓存。
+    # 多 token 说明：条目里配多个 api_token 时默认【成功后预旋转】轮流使用——适合 ModelScope 等
+    # 按号限每日额度、且不吃 prompt cache 的 provider（轮换分摊配额，换了无损失）。
+    # ⚠️ GLM/bigmodel 等 prompt cache 按 api_token 隔离的 provider：
+    #   1. 每次成功换 token = 自己交错驱逐自己的缓存 → 该类条目配 "token_rotate": false 保持 sticky
+    #      （限流时的应急轮换不受此开关影响）。
+    #   2. 同一 token 交错用于【react 长上下文】和【utility 短调用】（recap/RAG检索/工作流LLM）也会
+    #      互相驱逐缓存 → utility 配独立条目 + 独立 api_token（见下方 glm-utility 示例），
+    #      再 /config utility_model glm-utility。
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "api_token": "sk-你的-deepseek-key",

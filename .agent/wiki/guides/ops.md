@@ -37,6 +37,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 |------|------------|
 | BadRequestError 400 "has no provider supported" | model id 写错（逐字符与 /v1/models 核对） |
 | 400 "only 1 is allowed...temperature" | kimi 类模型限制 → 换模型或 provider 侧适配 |
+| utility 通道连续 400（钩子/辅助 LLM 报错） | 进程内通道状态异常 → `/restart` 重启即恢复（调试 [wiki_auto_query](../features/wiki-auto-query.md) 时遇到） |
 | 空响应连续 3 次 | 限流/服务波动 → 自动退避重试+回退；ModelScope 空壳 200 是已知病 |
 | 回答是 XML 状 `<｜｜DSML｜｜invoke...` | 模型把工具调用泄进 content → llm_client 自动兜底解析；仍残留会提示重试 |
 | tool_calls 与 content 同现 | 思考误放 content → 自动转移 content→reasoning（投影保 CoT） |
@@ -48,7 +49,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 
 ## 生命周期命令
 
-- `/restart [消息]`：看门狗重启（恢复 session/端口/首条消息；改完源码生效）；**发出后不要再手动启动**
+- `/restart [消息]`：看门狗重启（恢复 session/端口/首条消息；改完源码生效；utility 通道 400 也靠它恢复）；**发出后不要再手动启动**
 - `restart_agent(message)`：Agent 工具版（改完自身代码后自举）
 - `/agent <id>`：切换与子 Agent 直接交互（历史 Agent lazy load 历史）
 - snapshot/rewind：每轮工作区快照，可回溯检查点

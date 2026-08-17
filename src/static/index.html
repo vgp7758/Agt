@@ -662,7 +662,7 @@ function send(){
   if(busy && autonomousMode){
     const imgs=attachments.slice();
     sendInsertMessage(t, imgs);
-    lastUserBubble = addUserBubble(t, imgs);
+    // 插话不渲染右侧 user 气泡：内容进 message_queued 队列气泡（连续插话原地更新，注入时变形）
     inp.value=''; inp.style.height='auto';
     attachments.length=0; renderThumbs();
     return;
@@ -670,7 +670,7 @@ function send(){
   // 普通模式（含忙时）：照常发送——后端按 busy 路由（忙→中途注入下一步，闲→下一轮），不再丢弃
   const imgs=attachments.slice();
   sendRaw(t, imgs);
-  lastUserBubble = addUserBubble(t, imgs);
+  if(!busy) lastUserBubble = addUserBubble(t, imgs);   // 插话（busy）不渲染 user 气泡——由 message_queued 队列气泡承载
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
   if(!t.startsWith('/') && !busy){ setBusy(true); curTurn=null; }  // 仅空闲新轮才置 busy；忙时是插话不切轮
@@ -1387,6 +1387,8 @@ function clearToolProgress(){
   }
 }
 // —— WS 事件 ——
+ let _queueBubbleRow = null;   // 插话队列气泡（message_queued 建立并原地更新，message_injected 时变形为绿色确认态）
+ let _queuedTexts = [];        // 本端积累的排队插话文本（事件广播带 text，多端各自积累一致）
 window.onerror=function(msg,url,line,col,err){console.error(msg,err);try{addRow('err','JS错误: '+(msg+'').slice(0,100));}catch(e){}};
 function onWSMessage(ev){
   let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
@@ -1552,11 +1554,30 @@ function onWSMessage(ev){
       break;
     case 'message_queued':
       updateQueueStatus(m.queue_size);
-      addRow('sys', `📨 消息已入队（当前队列：${m.queue_size} 条）`);
+      if(m.text) _queuedTexts.push(m.text);
+      if(!_queueBubbleRow || !_queueBubbleRow.isConnected){
+        _queueBubbleRow = addRow('sys', '');
+      }
+      {
+        const b = _queueBubbleRow.querySelector('.bubble');
+        const texts = _queuedTexts.slice(-Math.max(1, m.queue_size));   // 与后端队列长度对齐（丢事件兜底）
+        let h = `📨 插话已排队（${m.queue_size} 条，将在下一步注入当前任务）：`;
+        texts.forEach((t, i) => { h += `\n<span style="color:#4c1d95">${i+1}. ${esc(t)}</span>`; });
+        b.innerHTML = h;
+      }
+      scrollBottom();
       break;
     case 'message_injected':
-      addRow('sys', `📨 用户消息已注入 Agent 上下文：${m.text}`);
       updateQueueStatus(0);
+      if(_queueBubbleRow && _queueBubbleRow.isConnected){
+        // 同一气泡变形：排队态（紫）→ 已注入态（绿）——插话旅程在一个气泡里讲完
+        const b = _queueBubbleRow.querySelector('.bubble');
+        b.innerHTML = `📨 插话已注入 Agent 上下文：\n${esc(m.text)}`;
+        b.style.background = '#f0fdf4'; b.style.borderColor = '#bbf7d0'; b.style.color = '#166534';
+        _queueBubbleRow = null; _queuedTexts = [];
+      } else {
+        addRow('sys', `📨 插话已注入 Agent 上下文：${m.text}`);
+      }
       break;
     case 'workflows':
       renderWorkflows(m.items||[]);

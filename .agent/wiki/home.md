@@ -12,6 +12,7 @@
 | [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 毕业升档 + 分组衰减 + 前缀缓存三层优化 | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + 快照副作用检测（py_auto_diag 闭环） | 写工作流 / 加钩子 / async 钩子 |
+| [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：update_wiki + commit_wiki 自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠、用户气泡默认展开、点击切换 | 改前端气泡 / 调交互 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
@@ -31,5 +32,6 @@
 ## 维护约定
 
 - 重要功能落地后由 update_wiki（wiki-updater 子 Agent）增量维护
+- wiki_auto_maintenance 工作流在 update_wiki 后接 commit_wiki（run_shell），自动 git add/commit/push `.agent/wiki/`，解决主 Agent 不提交 wiki 文件的矛盾——详见 [wiki-auto-maintenance](features/wiki-auto-maintenance.md)
 - wiki 页面可自由链接 docs/ 与源码相对路径
 - 组织原则：按【业务/技术逻辑】，不镜像仓库目录

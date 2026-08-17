@@ -352,9 +352,9 @@ class LLMClient:
         while True:
             try:
                 resp = self._chat_inner(messages, **overrides)
-                # 成功后预旋转到下一个 token（下次调用自动用不同账号）
-                if len(self.api_tokens) > 1:
-                    self._rotate_token()
+                # 不做"成功后预旋转"：GLM 等 provider 的 prompt cache 按 api_token 隔离且容量有限，
+                # 每次调用换 token = 自己交错驱逐自己的缓存 → 命中率腰斩。限流分摊由下面的
+                # RateLimitError 轮换路径承担（sticky 到限流才换，缓存友好）。
                 # reasoning 补全：思考模型只回 reasoning 无 content → 交非思考模型据 reasoning 补正文
                 if (self.reasoning_completer and (resp.reasoning or "").strip()
                         and not (resp.content or "").strip() and not resp.tool_calls):

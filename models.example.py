@@ -6,6 +6,11 @@
 """
 
 MODELS = {
+    # ⚠️ prompt cache 按 api_token 隔离的 provider（GLM/bigmodel 等）：
+    # 同一 token 交错用于【react 长上下文调用】和【utility 短调用】（recap/RAG检索/工作流LLM）
+    # 会互相驱逐对方缓存 → 命中率清零。对策：utility 用独立条目 + 独立 api_token（见 glm-utility），
+    # 再 /config utility_model glm-utility。同理条目内配多 token 时请勿依赖轮换分摊——
+    # agt 已改为 sticky（限流才换 token），主动轮换=自己交错驱逐自己的缓存。
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "api_token": "sk-你的-deepseek-key",
@@ -26,6 +31,17 @@ MODELS = {
         "thinking": True,
         "vision": True,
     },
+    # utility 专用条目示例：与主模型同 provider 也【必须用不同 api_token】（缓存按 token 隔离，
+    # 同 token 长短调用交错互相驱逐缓存）。去 provider 后台再申请一个 key 填这里，
+    # 然后 /config utility_model glm-utility 生效。
+    # "glm-utility": {
+    #     "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+    #     "api_token": "另一个-key（不要与主条目共用）",
+    #     "model": "glm-5.3",
+    #     "desc": "utility 短调用专用（recap/RAG检索/工作流LLM），独立 token 保主链缓存命中",
+    #     "thinking": False,
+    #     "vision": False,
+    # },
 }
 
 DEFAULT_MODEL = "deepseek"

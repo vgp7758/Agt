@@ -14,14 +14,25 @@
 ```
 start
   → update_wiki          （wiki-updater 子 Agent / LLM 节点，增量更新 .agent/wiki/ 页面）
+  → build_commit_msg      （text 节点，将 update_wiki 报告摘要注入 commit message 模板）
   → commit_wiki           （run_shell 节点，自动 git add + commit + push）
   → end
 ```
 
 | 节点 | 类型 | 职责 |
 |------|------|------|
-| update_wiki | LLM / subworkflow | 分析本次改动，调用 wiki CRUD 工具更新/新建受影响 wiki 页面 |
-| commit_wiki | run_shell（code/工具节点） | `git add .agent/wiki/` → 检测 diff → 有变更则 `git commit -m "chore(wiki): auto-update"` + `git push`；无变更跳过 |
+| update_wiki | LLM / subworkflow | 分析本次改动，调用 wiki CRUD 工具更新/新建受影响 wiki 页面；输出报告摘要 |
+| build_commit_msg | **text（节点 ID 868393）** | 接收 update_wiki 的报告摘要，拼装为语义化 commit message，供 commit_wiki 使用 |
+| commit_wiki | run_shell（code/工具节点） | `git add .agent/wiki/` → 检测 diff → 有变更则 `git commit -m "<build_commit_msg 输出>"` + `git push`；无变更跳过 |
+
+### build_commit_msg：动态 commit message
+
+**新增背景**（2026-08-18）：此前 commit_wiki 使用固定文案 `chore(wiki): auto-update wiki after task`，git log 中无法区分每次 wiki 维护改了什么。新增 `build_commit_msg`（text 节点，ID 868393）将 update_wiki 的报告摘要注入 commit message，使每条提交都带有具体内容摘要。
+
+- **节点类型**：text（type 15），纯文本拼装，不走 LLM 调用，零额外 token 成本
+- **输入**：update_wiki 节点输出的报告摘要（本次更新了哪些页面、关键改动点）
+- **输出**：形如 `chore(wiki): update <摘要内容>` 的 commit message 字符串
+- **边连接**：update_wiki → build_commit_msg → commit_wiki；build_commit_msg 的输出变量作为 commit_wiki 中 `git commit -m` 的参数
 
 ### commit_wiki 核心逻辑
 
@@ -30,32 +41,34 @@ git add .agent/wiki/
 if git diff --cached --quiet -- .agent/wiki/; then
     echo "No wiki changes to commit."
 else
-    git commit -m "chore(wiki): auto-update wiki after task"
+    git commit -m "$BUILD_COMMIT_MSG"
     git push
 fi
 ```
 
 - **只提交 `.agent/wiki/` 目录**：不触碰代码文件，避免与主 Agent 的代码提交产生冲突
 - **有变更才提交**：`git diff --cached --quiet` 检测暂存区是否有差异，无变更不产生空 commit
+- **动态 commit message**：`$BUILD_COMMIT_MSG` 来自 build_commit_msg 节点输出，携带本次 wiki 更新的具体摘要
 - **自动 push**：commit 后立即推送，确保远程仓库 wiki 始终最新
 
 ## 与其他模块的关系
 
 | 模块 | 关系 |
 |------|------|
-| [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新；commit_wiki 负责将更新落盘到 git |
-| [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发 |
+| [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_commit_msg 消费其摘要 |
+| [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；text 节点（type 15）属 13 类节点之一 |
 | [wiki_auto_query](wiki-auto-query.md) | 读侧：before_turn 钩子自动检索 wiki；本页是写侧：自动维护并提交 wiki |
 
 ## 注意事项
 
 - **触发时机**：应在主 Agent 完成代码改动并提交代码后触发，避免 wiki 描述了尚未提交的代码
-- **commit message 约定**：`chore(wiki): auto-update wiki after task`，便于 git log 中区分 wiki 维护提交与功能提交
+- **commit message 演进**：从固定文案 `chore(wiki): auto-update wiki after task` 升级为动态摘要（build_commit_msg 注入），git log 可追溯每次 wiki 维护的具体内容
+- **text 节点零成本**：build_commit_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
 - **并发安全**：若多 Agent 并发运行，commit_wiki 的 git 操作可能冲突；建议同一仓库同一时刻只有一个 wiki_auto_maintenance 在跑
 - **run_shell 节点**：依赖工作流引擎的 shell/code 节点执行能力，工作目录须为仓库根目录
 
 ## 相关页面
 
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)：工作流节点类型、run_shell 执行机制
+- [工作流引擎与钩子](../architecture/workflow-hooks.md)：工作流节点类型（含 text type 15）、run_shell 执行机制
 - [wiki_auto_query](wiki-auto-query.md)：wiki 读侧——before_turn 自动检索注入
 - [知识库导航](../home.md)：维护约定中提及 update_wiki

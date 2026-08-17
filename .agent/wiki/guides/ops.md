@@ -31,6 +31,14 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - `/stats`（CLI）/ /logs：文本版统计与日志
 - restart.log（~/.agt/）：/restart 看门狗全程时序（含新进程 stderr）
 
+### 跨进程状态查询缺失
+
+**现状**：`AgentRegistry`（`src/registry.py`）是进程内全局对象，记录所有活 Agent 实例及其运行时状态（agent_id/status/caller_id 等）。但当前 **无跨进程 API** 从外部查询 registry 内容——即无法通过 HTTP 端点获知"当前有哪些子 Agent 在跑、各处于什么状态"。
+
+**影响**：调试子 Agent 异步唤醒问题时（如 [multi-agent registry 修复](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08) 所述场景），只能靠日志/events.jsonl 事后排查，缺少实时运行时观测手段。
+
+**建议**：在 `server.py` 添加 `/api/status` 端点，序列化 registry 中各 Agent 的 id/name/status/caller_id 等只读字段，供外部监控或调试工具消费。需注意 registry 非线程安全，读取时需加锁或快照。
+
 ## 常见错误对照
 
 | 症状 | 原因 → 处置 |
@@ -46,6 +54,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 中断轮"消失" | 已修复（start_turn 防御归档，answer=中断标注）；旧数据读档可見 |
 | 工作流编辑后保存丢子画布 | 已修复（exitComposite 从栈顶帧父层写回）→ 强刷编辑器 |
 | Windows 闪终端窗 | 已修复（子进程统一 CREATE_NO_WINDOW）→ agt ≥ 0.18.1 |
+| 子 Agent 调用后主 Agent 不响应 | 旧版 registry 为 None → push_message 跳过 → answer 未入 inbox；已修复（见 [multi-agent](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08)） |
 
 ## 生命周期命令
 

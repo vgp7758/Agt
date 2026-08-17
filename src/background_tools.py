@@ -66,5 +66,12 @@ def make_background_tools(agent) -> list:
         """列出所有定时任务（触发方式/剩余时间/推送内容）。"""
         return sch.list()
 
+    def send_to_service(name: str, message: str) -> str:
+        """向后台服务的 stdin 发送一行文本（服务须为 REPL 型——如另一个 agt 实例/交互式 CLI/REPL）。
+        用于驱动 start_service 启动的 agt：发任务 prompt、发 /restart 等命令。非 REPL 服务会忽略 stdin，无副作用。
+        name 是 start_service 时起的名字；message 是要发送的一行文本。"""
+        return svc.send(name, message)
+
     return [Tool(start_service), Tool(stop_service), Tool(list_services),
-            Tool(service_logs), Tool(add_schedule), Tool(cancel_schedule), Tool(list_schedules)]
+            Tool(service_logs), Tool(send_to_service),
+            Tool(add_schedule), Tool(cancel_schedule), Tool(list_schedules)]

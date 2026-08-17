@@ -601,6 +601,29 @@ def web_main(port=None):
     agent._work_q = work_q   # restart_agent 工具需要（触发优雅退出）
     _recover_restart_env(agent, work_q, registry, state)   # 看门狗重启恢复：/resume + 首条消息
 
+    def _stdin_thread():
+        """stdin 消费线程：仅当 stdin 非 tty（被 start_service 以管道启动 / 输入重定向）时启动。
+        每读一行作为 user 消息进 work_q（与 WS 文本同流串行）——外部 Agent 可用
+        send_to_service 驱动本实例（发任务 / 发 /restart 等命令）。tty（用户手动跑）不启动，
+        终端保持只读日志，原行为不变。"""
+        import sys as _sys
+        try:
+            if _sys.stdin is None or _sys.stdin.isatty():
+                return
+        except Exception:
+            return
+        while True:
+            try:
+                line = _sys.stdin.readline()
+            except Exception:
+                return   # stdin 关闭（父进程退出）
+            if not line:
+                return   # EOF
+            line = line.strip()
+            if line:
+                work_q.put(("user", line))
+    threading.Thread(target=_stdin_thread, daemon=True).start()
+
     print("（Web 模式：浏览器交互；Ctrl+C 退出）")
     try:
         _render_loop(agent, event_q, worker, state, work_q, interactive=False)

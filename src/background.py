@@ -44,6 +44,7 @@ class ServiceManager:
             if name in self._services:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
         popen_kwargs = dict(shell=True, cwd=cwd or None,
+                            stdin=subprocess.PIPE,    # 保留 stdin：send_to_service 可向服务写指令（REPL 型服务）
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1, encoding="utf-8", errors="replace")
         # 绑独立进程组/会话：stop 时能整树杀，避免 shell=True 下 terminate 只杀 shell、
@@ -92,6 +93,26 @@ class ServiceManager:
 
         threading.Thread(target=_reader, daemon=True).start()
         return f"✅ 后台服务「{name}」已启动 (pid={proc.pid})：{command}"
+
+    def send(self, name: str, text: str) -> str:
+        """向服务的 stdin 写一行文本（服务须是 REPL 型、会读 stdin——如 agt-web 的 stdin 模式 /
+        python REPL / 交互式 CLI）。非 REPL 服务（纯 HTTP server 等）会忽略，无副作用。"""
+        with self._lock:
+            e = self._services.get(name)
+        if not e:
+            return f"[无此服务] {name}"
+        proc = e["proc"]
+        if proc.poll() is not None:
+            return f"[已退出] {name}（rc={proc.poll()}），无法发送"
+        stdin = getattr(proc, "stdin", None)
+        if stdin is None:
+            return f"[stdin 未开] {name} 启动时未接管道（旧版本启动的实例），重启服务后可用"
+        try:
+            stdin.write((text or "") + "\n")
+            stdin.flush()
+            return f"📤 已发送到「{name}」stdin：{(text or '')[:80]}"
+        except (BrokenPipeError, OSError) as ex:
+            return f"[发送失败] {name}: {type(ex).__name__}（进程可能已关闭 stdin）"
 
     def status_lines(self) -> list:
         """供 system prompt 注入：每个服务一行 name(状态, pid, 已跑 Ns)。已退出标'需重启'。"""

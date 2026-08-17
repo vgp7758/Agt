@@ -302,9 +302,16 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
         lines = text.splitlines()
     total = len(lines)
     ver_footer = f"\n[file_version={_file_version(target)}]"
+    _EXCEL_EXTS = {".xlsx", ".xlsm", ".xltx"}
     if start_line is None and end_line is None:
         if line_numbers and target.suffix.lower() in {".md", ".markdown"}:
             return _md_snapshot(text) + ver_footer
+        if target.suffix.lower() in _EXCEL_EXTS:
+            # Excel 提取文本已内嵌【Sheet 内 1-based 行号】（=== Sheet: xxx === 分节），
+            # 不再叠全局行号（双重行号反而干扰）；分页 start/end_line 仍按全局行计
+            nsheets = text.count("=== Sheet:")
+            return (f"[{path} · Excel · {nsheets} 个 Sheet · 提取 {total} 行"
+                    f"（行号为各 Sheet 内 1-based，与 Excel UI 一致）]\n{text}{ver_footer}")
         if line_numbers:
             w = len(str(total))
             body = "\n".join(f"{i+1:>{w}}│ {ln}" for i, ln in enumerate(lines))
@@ -418,8 +425,9 @@ def _extract_text(target: Path) -> str | None:
             for name in wb.sheetnames:
                 ws = wb[name]
                 parts.append(f"=== Sheet: {name} ===")
-                for row in ws.iter_rows(values_only=True):
-                    parts.append("\t".join(str(c) if c is not None else "" for c in row))
+                w = len(str(ws.max_row or 1))
+                for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+                    parts.append(f"{i:>{w}}│ " + "\t".join(str(c) if c is not None else "" for c in row))
             wb.close()
             return "\n".join(parts)
         if suffix == ".pdf":

@@ -1881,6 +1881,39 @@ def to_ascii(text: str) -> str:
     return "".join(ch if ord(ch) < 128 else "\\u%04x" % ord(ch) for ch in (text or ""))
 
 
+def git_commit(message: str, files: str = "") -> str:
+    """git add + commit + push 一体（Agent 的标准提交通道）。
+    自动在 commit message 末尾附加 trailer：Co-authored-by: Agt <vgp123@foxmail.com>
+    （GitHub 识别为共同作者并在提交页展示——标记 AI 参与开发）。
+    message: 提交信息（首行摘要 + 可选正文）；files: 要 add 的文件（逗号分隔，留空=git add -A 全部变更）。
+    工作区无变更时跳过 commit/push 并提示；push 为联网操作，调用即视为本次授权。"""
+    import subprocess
+    if not (WORKSPACE / ".git").exists():
+        return "[非 git 仓库] 当前 workspace 没有 .git"
+    msg = ((message or "").strip() or "update") + "\n\nCo-authored-by: Agt <vgp123@foxmail.com>"
+
+    def _git(*args, timeout=180):
+        return subprocess.run(["git", *args], cwd=str(WORKSPACE), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
+
+    targets = [f.strip() for f in (files or "").split(",") if f.strip()]
+    r_add = _git("add", *(targets if targets else ["-A"]))
+    if r_add.returncode != 0:
+        return f"[git add 失败] {(r_add.stderr or '').strip()[:300]}"
+    r_ci = _git("commit", "-m", msg)
+    out = (r_ci.stdout or "") + (r_ci.stderr or "")
+    if r_ci.returncode != 0:
+        if "nothing to commit" in out or "no changes added" in out:
+            return "（无变更可提交——工作区干净，已跳过 commit/push）"
+        return f"[git commit 失败] {out.strip()[:300]}"
+    r_push = _git("push")
+    if r_push.returncode != 0:
+        return (f"✅ commit 成功但 push 失败：{(r_push.stderr or r_push.stdout).strip()[:300]}\n"
+                f"（网络/权限问题可稍后手动 git push；commit 已在本地）")
+    r_log = _git("log", "-1", "--oneline")
+    return f"✅ 已提交并推送\n{r_log.stdout.strip()}\n（trailer: Co-authored-by: Agt）"
+
+
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
     try:
@@ -1953,6 +1986,10 @@ REAL_TOOLS = Toolbox(
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
     Tool(read_image),
+    Tool(git_commit, param_descriptions={
+        "message": "提交信息（首行摘要+可选正文）；末尾自动附加 Co-authored-by: Agt trailer",
+        "files": "要 add 的文件（逗号分隔）；留空=git add -A 全部变更",
+    }),
 )
 
 # 轻量工具（基础函数：plugin 节点 / 代码节点 / Agent 均可调；build_agent 注册进 agent.tools）

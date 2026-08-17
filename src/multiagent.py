@@ -146,6 +146,61 @@ def _parse_assembly(meta: dict) -> dict:
     return {t: (t in segs) for t in _ASSEMBLY_TOGGLES}
 
 
+def _parse_system_append(meta: dict) -> list:
+    """frontmatter 的 system_append 字段 → [{type:'workflow', name} | {type:'text', content}]。
+    DSL：SYSTEM（md 正文）之后按序追加——workflow 项执行该工作流取 result（动态上下文，
+    如 wiki 树/项目架构摘要），text 项原样拼静态文本。无声明返回 []（system 保持纯 md 正文）。
+    生效时机：新建/复活实例时执行一次（实例 system 固化）；reuse 复用不重算（见 agent_prompt）。"""
+    raw = meta.get("system_append")
+    if not raw or not isinstance(raw, list):
+        return []
+    items = []
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        if it.get("workflow"):
+            items.append({"type": "workflow", "name": str(it["workflow"]).strip()})
+        elif it.get("text"):
+            items.append({"type": "text", "content": str(it["text"])})
+    return items
+
+
+def _build_subagent_system(agent, system: str, sys_append: list, prompt: str, aid: str) -> str:
+    """按 system_append DSL 展开子 Agent 的最终 SYSTEM：md 正文 + 各追加段。
+    workflow 项：.agent/workflows/ 找同名工作流执行（入参 {prompt, agent_id}，工作流 start
+    节点按需声明），result 追加；LLM 节点走 utility_client。找不到/执行失败 → 跳过该段+日志
+    （SYSTEM 保底可用，不让装饰段炸派活）。"""
+    if not sys_append:
+        return system
+    from workflow import scan_workflows, execute, WorkflowError
+    from real_tools import WORKSPACE as _ws
+    wf_index = {}
+    for it in scan_workflows(_ws):
+        if it.get("canvas") is not None and not it.get("error"):
+            wf_index[it["name"]] = it["canvas"]
+    parts = [system]
+    for item in sys_append:
+        if item["type"] == "text":
+            parts.append(item["content"])
+            continue
+        wf_name = item["name"]
+        canvas = wf_index.get(wf_name)
+        if canvas is None:
+            _LOG.warning("system_append 工作流 '%s' 未找到（.agent/workflows/），跳过", wf_name)
+            continue
+        try:
+            result = execute(canvas, {"prompt": prompt or "", "agent_id": aid},
+                             tools=getattr(agent, "tools", None),
+                             llm=agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm,
+                             emit=getattr(agent, "_emit", None), workspace=_ws)
+            result = (result or "").strip()
+            if result:
+                parts.append(result)
+        except (WorkflowError, Exception) as e:
+            _LOG.warning("system_append 工作流 '%s' 执行失败，跳过：%s", wf_name, e)
+    return "\n\n".join(p for p in parts if p and p.strip())
+
+
 def _apply_assembly_overrides(base_asm: dict, overrides_str: str) -> tuple:
     """agent_prompt 的 assembly 参数（'rules=off,history=off'）覆盖 base_asm 的可关段。
     返回 (合并后的 asm, 提示语)。off/false/0/关 = 关；on/true/1/开 = 开。"""
@@ -304,17 +359,19 @@ def make_communication_tools(agent) -> list:
             Tool(agent_query_events), Tool(agent_query_tool_detail)]
 
 
-def _revive_subagent(agent, reg, entry, caller_id: str):
+def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
     """复活一个历史子 Agent（registry 中 agent=None、磁盘上有 session）：
     读声明 md 重建实例 + Session.load 恢复完整历史 + 回填 registry。
     返回 (Agent, model_name, sub_dir) 或 None（声明/磁盘 session 丢失时，调用方落回新建路径）。
-    复活后投影 current_turn_only=True（reuse 语义）：历史轮完整归档可查，但不进上下文。"""
+    复活后投影 current_turn_only=True（reuse 语义）：历史轮完整归档可查，但不进上下文。
+    system_append DSL 同样生效（用本次新任务 prompt 展开动态段）。"""
     try:
         p = _agent_md_path(entry.name)
         if p is None or not p.exists():
             return None
         meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
         system = (system or "").strip() or "你是一个自主子 Agent，用工具完成任务。"
+        system = _build_subagent_system(agent, system, _parse_system_append(meta), prompt, entry.agent_id)
         toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
         model_name = meta.get("model") or entry.model or agent.model_name
         if model_name not in config.MODELS:
@@ -525,7 +582,7 @@ def make_subagent_tools(agent) -> list:
                 # 复活：同名历史实例（磁盘上有 session）→ lazy load 后继续派活
                 # （历史轮完整归档接续，投影仍 current_turn_only 隔离；复活失败落回新建路径）
                 entry = max(hist, key=lambda e: e.registered_at)
-                revived = _revive_subagent(agent, reg, entry, caller_id)
+                revived = _revive_subagent(agent, reg, entry, caller_id, prompt)
                 if revived is not None:
                     sub_agent, model_name, sub_dir = revived
                     sub_agent.session.assembly.update(base_asm)   # assembly：复活路径同样应用（md 基线 + 参数覆盖）
@@ -551,6 +608,8 @@ def make_subagent_tools(agent) -> list:
             model_name = agent.model_name
         # agent_id（显式优先，否则 name/name_2…）+ 子 session 嵌套到 主 session/agents/<id>/
         aid = _resolve_agent_id(agent.background_tasks, name, agent_id)
+        # system_append DSL：md 正文之后追加动态段（工作流 result / 静态文本）
+        system = _build_subagent_system(agent, system, _parse_system_append(meta), prompt, aid)
         sub_dir = None
         try:
             main_dir = agent.session._ensure_session_dir()   # 同步确保主 session 目录就绪

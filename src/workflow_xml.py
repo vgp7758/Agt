@@ -793,6 +793,8 @@ def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
         attrs += ' enabled="false"'
     if meta.get("hidden") is True:
         attrs += ' hidden="true"'
+    if meta.get("async") is True:
+        attrs += ' async="true"'
     lines = [f"<workflow {attrs}>"]
     for n in canvas.get("nodes", []):
         lines.append(_node_to_xml(n))

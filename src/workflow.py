@@ -1828,6 +1828,8 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
                 meta["hook"] = root.get("hook")
             if root.get("hidden"):
                 meta["hidden"] = root.get("hidden") == "true"
+            if root.get("async") is not None:
+                meta["async"] = root.get("async") == "true"
             if meta_path.exists():
                 try:
                     meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}

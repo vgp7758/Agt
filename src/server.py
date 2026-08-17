@@ -253,6 +253,8 @@ async def api_wf_get(name: str):
             # 之前漏读导致编辑器打开 XML 工作流时 hidden 复选框总是空的
             if root.get("hidden") is not None:
                 meta["hidden"] = root.get("hidden") == "true"
+            if root.get("async") is not None:
+                meta["async"] = root.get("async") == "true"
             xmp = xf.with_name(xf.name + ".meta")
             if xmp.exists():
                 try:

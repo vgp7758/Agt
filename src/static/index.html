@@ -419,9 +419,26 @@ function setSessionTitle(title){
   document.title = t + ' · Agt';   // 浏览器标签也跟随会话名
 }
 
-function addRow(cls, text){
+function addRow(cls, text, opts){
   const row=document.createElement('div'); row.className='row '+cls;
-  const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
+  const b=document.createElement('div'); b.className='bubble';
+  const isAuto = opts && opts.auto;
+  if(isAuto && text){
+    // 自动触发的系统消息：默认折叠（点击展开/收起）
+    b.style.cursor='pointer';
+    b.dataset.collapsed = '1';
+    b.dataset.full = text;
+    b.textContent = text.split('\n')[0].slice(0,120) + (text.length>120 || text.includes('\n') ? ' …（点击展开）' : '');
+    b.onclick = function(){
+      if(b.dataset.collapsed==='1'){
+        b.dataset.collapsed='0'; b.textContent = b.dataset.full;
+      } else {
+        b.dataset.collapsed='1'; b.textContent = b.dataset.full.split('\n')[0].slice(0,120) + ' …（点击展开）';
+      }
+    };
+  } else {
+    b.textContent=text;
+  }
   row.appendChild(b); msgArea.appendChild(row); scrollBottom(); return row;
 }
 
@@ -1639,7 +1656,7 @@ function onWSMessage(ev){
 	      }
 	      break;
     case 'workflow_message':
-      addRow('sys', '💬 '+(m.name?('【'+m.name+'】'):'')+m.text);
+      addRow('sys', '💬 '+(m.name?('【'+m.name+'】'):'')+m.text, {auto: m.auto});
       break;
     case '_ping':
       break;  // 心跳，不渲染

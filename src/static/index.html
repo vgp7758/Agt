@@ -1353,6 +1353,39 @@ function renderSpec(spec, specId, reviewState, specTitle, specDesign){
   });
 }
 
+ // —— 工具进度行：单条原地更新（秒数前端每秒递增，后端心跳仅校正基线；不刷屏）——
+let _prog = null;   // {el, name, lines, baseElapsed, lastTs, timer}
+function renderToolProgress(name, elapsed, lines){
+  if(!curTurn) newTurn();
+  const now = Date.now();
+  if(!_prog || !_prog.el || !_prog.el.isConnected || _prog.name !== name){
+    clearToolProgress();
+    const e=document.createElement('div'); e.className='ev warn';
+    curTurn.traceBox.appendChild(e);
+    _prog = {el:e, name, lines:lines||0, baseElapsed:elapsed||0, lastTs:now, timer:null};
+  }else{
+    // 同一工具的心跳：校正基线（后端 elapsed 是权威值）
+    _prog.baseElapsed = elapsed || _prog.baseElapsed;
+    _prog.lines = Math.max(_prog.lines, lines||0);
+    _prog.lastTs = now;
+  }
+  if(!_prog.timer){
+    _prog.timer = setInterval(()=>{
+      if(!_prog || !_prog.el || !_prog.el.isConnected){ if(_prog&&_prog.timer)clearInterval(_prog.timer); return; }
+      const secs = Math.round(_prog.baseElapsed + (Date.now()-_prog.lastTs)/1000);
+      _prog.el.textContent = `⏳ ${_prog.name} 运行中 ${_prog.lines} 行输出 (${secs}s)`;
+    }, 1000);
+  }
+  _prog.el.textContent = `⏳ ${name} 运行中 ${_prog.lines} 行输出 (${Math.round(_prog.baseElapsed)}s)`;
+  scrollBottom();
+}
+function clearToolProgress(){
+  if(_prog){
+    if(_prog.timer) clearInterval(_prog.timer);
+    if(_prog.el && _prog.el.isConnected) _prog.el.remove();
+    _prog = null;
+  }
+}
 // —— WS 事件 ——
 window.onerror=function(msg,url,line,col,err){console.error(msg,err);try{addRow('err','JS错误: '+(msg+'').slice(0,100));}catch(e){}};
 function onWSMessage(ev){
@@ -1483,7 +1516,7 @@ function onWSMessage(ev){
     case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking': addTrace('think', '💭 '+m.text); break;
     case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
-    case 'tool_call': renderToolCall(m.name, m.arguments); break;
+    case 'tool_call': clearToolProgress(); renderToolCall(m.name, m.arguments); break;
     case 'tool_stream':
       // 流式输出：追加到当前 trace 的最后一个 stream 行，或新建
       if(!curTurn) newTurn();
@@ -1495,9 +1528,9 @@ function onWSMessage(ev){
       }
       break;
     case 'tool_progress':
-      addTrace('warn', `⏳ ${m.name} 运行中 ${m.elapsed}s，${m.lines||0} 行输出`);
+      renderToolProgress(m.name, m.elapsed, m.lines);
       break;
-    case 'tool_result': addTrace('res', `→ ${m.result}`); break;
+    case 'tool_result': clearToolProgress(); addTrace('res', `→ ${m.result}`); break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
     case 'answer': case 'wrap_answer': finishAnswer(m.text); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;

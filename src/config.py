@@ -46,10 +46,29 @@ def _load_models() -> tuple[dict, str]:
 
 
 def save_user_models(models: dict, default_model: str = ""):
-    """保存模型配置到 ~/.agt/models.json（WebUI 用）。"""
+    """保存模型配置到 ~/.agt/models.json（WebUI 用）。写盘后自动 reload_models()——当前进程内存立即生效。"""
     _AGT_DIR.mkdir(parents=True, exist_ok=True)
     data = {"models": models, "default": default_model or (list(models.keys())[0] if models else "")}
     _AGT_MODELS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    reload_models()
+
+
+def reload_models():
+    """重读 ~/.agt/models.json → 刷新模块级 MODELS/DEFAULT_MODEL 及兼容别名。
+    WebUI 保存模型配置后自动调用；/reload models 手动触发（改 models.py 后也用它）。
+    注意：LLMClient 实例的 profile 是创建时固化的——reload 后需重建实例才用新配置
+    （主 Agent 的 self.llm 由调用方按需 switch_model；utility_client 由 /config utility_model 清缓存）。"""
+    global MODELS, DEFAULT_MODEL, _NO_MODELS, _active
+    MODELS, DEFAULT_MODEL = _load_models()
+    _NO_MODELS = not MODELS
+    _active = get_profile(DEFAULT_MODEL) if not _NO_MODELS else {}
+    # 兼容别名同步刷新
+    global MODELSCOPE_BASE_URL, LLM_BASE_URL, MODELSCOPE_API_KEY, LLM_API_KEY
+    global MODEL_NAME, LLM_MODEL, LLM_THINKING_SUPPORTED
+    MODELSCOPE_BASE_URL = LLM_BASE_URL = _active.get("base_url", "")
+    MODELSCOPE_API_KEY = LLM_API_KEY = (_active.get("api_tokens") or [""])[0]
+    MODEL_NAME = LLM_MODEL = _active.get("model", "")
+    LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 
 
 # === 加载模型 ===

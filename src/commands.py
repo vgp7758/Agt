@@ -1098,6 +1098,37 @@ def _cmd_debug(ctx: CommandContext, args):
     print("（本次调用已记入 llm_calls.jsonl，/stats 可查；session 未受影响）")
 
 
+def _cmd_reload(ctx: CommandContext, args):
+    """/reload models —— 重读 ~/.agt/models.json（或项目根 models.py）刷新内存配置，
+    并热应用到当前实例：主 llm 同名 profile 重应用（token / model id 等字段更新）、
+    utility_client 缓存重建、retrieval_llm 跟随。改 models.json / 修 model id / 换 token
+    后用它，免重启。"""
+    if not args or args[0] != "models":
+        print("用法：/reload models   —— 重读模型配置并热应用（改 models.json 后免重启生效）")
+        return
+    import config
+    config.reload_models()
+    print(f"✅ 模型配置已重载：{len(config.MODELS)} 个条目（默认 {config.DEFAULT_MODEL or '无'}）")
+    agent = ctx.agent
+    cur = agent.llm.model_name
+    try:
+        if cur in config.MODELS:
+            agent.llm._apply_profile(config.get_profile(cur))
+            print(f"  · 主模型 '{cur}' profile 已刷新（model={agent.llm.model}，tokens={len(agent.llm.api_tokens)} 个）")
+        else:
+            print(f"  ⚠️ 当前模型 '{cur}' 不在新配置中——保持旧 profile，可用 /model 切换")
+    except Exception as e:
+        print(f"  ⚠️ 主模型 profile 刷新失败：{e}")
+    # utility 通道：清缓存按新 MODELS 重建（utility_model 设置值不变）
+    agent._utility_llm = None
+    try:
+        agent.retrieval_llm = agent.utility_client()
+        um = getattr(agent, "utility_model", "")
+        print(f"  · utility 通道已重建（utility_model={um or '跟随主模型'}）")
+    except Exception as e:
+        print(f"  ⚠️ utility 通道重建失败：{e}")
+
+
 def _cmd_restart(ctx: CommandContext, args):
     """/restart [消息] —— 看门狗式重启：本进程优雅退出 → 看门狗拉起新进程（新代码生效）
     → 自动恢复当前 session 与 Web 服务端口 → （可选）把剩余参数作为重启后第一条消息发送。
@@ -1315,6 +1346,11 @@ def build_default_registry() -> CommandRegistry:
         '  不加 yes = 结果仅显示，不影响 Agent')
     reg.register("update", _cmd_update,
         "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
+    reg.register("reload", _cmd_reload,
+        "models  重读模型配置(~/.agt/models.json)并热应用到当前实例（改配置免重启）",
+        "/reload models\n"
+        "  改 models.json / 修 model id / 换 token 后执行；\n"
+        "  主 llm 同名刷新 + utility 通道重建（WebUI 保存模型配置已自动走同款路径）")
     reg.register("restart", _cmd_restart,
         "[消息]  看门狗式重启：退出→自动重启→恢复session/端口→推送消息（改完源码生效用）",
         "/restart                     重启并恢复当前会话\n"

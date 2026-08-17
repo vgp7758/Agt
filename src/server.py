@@ -382,9 +382,18 @@ async def api_models_save(request: Request):
     models = body.get("models") or {}
     default = body.get("default") or ""
     config.save_user_models(models, default)
-    m, d = config._load_models()
-    config.MODELS.clear(); config.MODELS.update(m)
-    config.DEFAULT_MODEL = d or config.DEFAULT_MODEL
+    # 实例层热应用：主 llm 同名 profile 重应用（token/model id 刷新）+ utility 通道重建
+    # （save_user_models 已自动 reload_models 刷新 config.MODELS；LLMClient 实例 profile 是
+    #  创建时固化的，这里补上实例层——否则保存后当前进程跑的还是旧配置）
+    if _agent is not None:
+        try:
+            cur = _agent.llm.model_name
+            if cur in config.MODELS:
+                _agent.llm._apply_profile(config.get_profile(cur))
+            _agent._utility_llm = None
+            _agent.retrieval_llm = _agent.utility_client()
+        except Exception:
+            pass
     return {"ok": True, "default": config.DEFAULT_MODEL}
 
 

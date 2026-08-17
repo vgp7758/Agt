@@ -450,6 +450,7 @@ async def api_stats(scope: str = "current"):
             "ts": r.get("ts") or 0,
             "model": r.get("model") or "?",
             "resp_model": (r.get("resp_model") or "").strip(),
+            "scene": r.get("scene") or "",   # 调用时机（react/hook:before_turn/recap/debug/completer；老记录空）
             "outcome": r.get("outcome") or "",
             "elapsed": r.get("elapsed") or 0,
             "cached": cached_tokens_of(r),

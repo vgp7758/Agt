@@ -324,7 +324,7 @@ class LLMClient:
                               usage=(r.usage.model_dump() if r.usage else None),
                               elapsed=time.time() - _t0, outcome=("success" if content else "empty"),
                               content=content, completer=True, model=p["model"],
-                              resp_model=getattr(r, "model", None))
+                              resp_model=getattr(r, "model", None), scene="completer")
             return content
         except Exception as e:
             self._record_call(messages=messages, attempt=1, max_tokens=None, finish_reason=None, usage=None,
@@ -333,8 +333,19 @@ class LLMClient:
             _LOG.warning("reasoning_completer(%s) 补全失败：%s，回退原处理", self.reasoning_completer, e)
             return ""
 
-    def chat(self, messages, **overrides) -> LLMResponse:
-        """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。"""
+    def chat(self, messages, scene: str = None, **overrides) -> LLMResponse:
+        """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。
+        scene：调用时机标注（react主循环/hook:before_turn/recap/debug/wrap_up/completer...），
+        记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 _scene_override（钩子上下文）
+        或默认 'llm.chat'。不进 API 请求参数。"""
+        self._scene_ctx = scene or getattr(self, "_scene_override", None) or "llm.chat"
+        try:
+            return self._chat_with_fallback(messages, **overrides)
+        finally:
+            self._scene_ctx = None
+
+    def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
+        """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。"""
         self._maybe_reset_to_head()
         tried_tokens = 0
         tried = [self.model_name]
@@ -386,9 +397,11 @@ class LLMClient:
 
     def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,
                      elapsed, outcome, content="", reasoning="", tool_calls=0,
-                     error=None, completer=False, model=None, resp_model=None):
+                     error=None, completer=False, model=None, resp_model=None, scene=None):
         """把一次 LLM 调用记到 llm_calls 流水（供 /stats 聚合）。recorder 未注入则跳过。
-        model=provider 名（如 proxy）；resp_model=API 回包里的实际模型字段（如 glm-5.2）。"""
+        model=provider 名（如 proxy）；resp_model=API 回包里的实际模型字段（如 glm-5.2）。
+        scene=调用时机（react/hook:before_turn/recap/debug/completer/llm.chat）；
+        不传时取 chat() 注入的 _scene_ctx。"""
         rec = self.call_recorder
         if rec is None:
             return
@@ -398,6 +411,8 @@ class LLMClient:
                 "ts": time.time(),
                 "model": model or self.model_name,
                 "resp_model": resp_model or "",
+                "scene": scene or getattr(self, "_scene_ctx", None)
+                         or getattr(self, "_scene_override", None) or "llm.chat",
                 "attempt": attempt, "max_tokens": max_tokens,
                 "finish_reason": finish_reason, "usage": normalize_usage(usage),
                 "elapsed": round(elapsed, 2), "outcome": outcome,

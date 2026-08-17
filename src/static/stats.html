@@ -140,7 +140,8 @@ function aggregate(slice){
     if((c.prompt||0) > 0){
       s.cached += c.cached||0;
       s.prompt += c.prompt;
-      s.pts.push({gi:c.gi, ts:c.ts, rate: Math.round(c.cached/c.prompt*1000)/10});
+      s.pts.push({gi:c.gi, ts:c.ts, rate: Math.round(c.cached/c.prompt*1000)/10,
+                  cached:c.cached||0, prompt:c.prompt, scene:c.scene||''});
     }
   }
   for(const ep in stats){
@@ -233,8 +234,9 @@ function renderChart(models, stats){
     g += `<polyline points="${line}" fill="none" stroke="${col}" stroke-width="1.8" opacity="0.9"/>`;
     const r = pts.length > 300 ? 1.2 : (pts.length > 120 ? 1.8 : 2.5);
     for(const p of pts){
+      const sc = p.scene ? ` · ${esc(p.scene)}` : '';
       g += `<circle cx="${x(p.gi).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
-        + `<title>${esc(m)} #${p.gi+1} ${fmtTs(p.ts)}\n命中率 ${p.rate}%</title></circle>`;
+        + `<title>${esc(m)} · #${p.gi+1}${sc}\n${fmtTs(p.ts)}\n命中率 ${p.rate}%（cached ${fmtK(p.cached)} / prompt ${fmtK(p.prompt)} tokens）</title></circle>`;
     }
   }
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;

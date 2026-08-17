@@ -796,7 +796,7 @@ class Agent:
                     f"工具调用：{', '.join(tool_names) if tool_names else '无'}\n"
                     f"只输出这一句话，不要任何额外内容。"
                 )
-                resp = self.utility_client().chat([{"role": "user", "content": prompt}])
+                resp = self.utility_client().chat([{"role": "user", "content": prompt}], scene="recap")
                 recap = (resp.content or "").strip().split("\n")[0].strip()[:60]
                 if recap:
                     self._recap = recap
@@ -896,8 +896,14 @@ class Agent:
                 try:
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "text": str(context)[:80]})
-                    inject, result, message = run_hook(hw["canvas"], context,
-                                              tools=self.tools, llm=self.utility_client(), workspace=_ws)
+                    hook_llm = self.utility_client()
+                    _ov = getattr(hook_llm, "_scene_override", None)
+                    hook_llm._scene_override = f"hook:{hook}"   # 钩子内 LLM 调用标注 scene（chat 自动读取）
+                    try:
+                        inject, result, message = run_hook(hw["canvas"], context,
+                                                  tools=self.tools, llm=hook_llm, workspace=_ws)
+                    finally:
+                        hook_llm._scene_override = _ov
                     self._emit({"type": "auto_wf", "name": hw["name"], "hook": hook,
                                 "text": result[:300] or message[:300]})
                     if message.strip():
@@ -1132,7 +1138,7 @@ class Agent:
                         # （_chat_msgs 内部清空 _hook_notes，故本步工具钩子产生的新旁注留给下一步；
                         #  重试复用同一 msgs 快照，旁注不丢失也不重复注入）
                         msgs = self._chat_msgs()
-                        resp = self.llm.chat(msgs, tools=tool_schemas)
+                        resp = self.llm.chat(msgs, tools=tool_schemas, scene="react")
                         # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
                         # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
                         # function calling 重试一次（重试结果不再二次检查，避免无限循环）。
@@ -1145,7 +1151,7 @@ class Agent:
                                 "content": "你上一轮的工具调用以文本(DSML 标记)泄漏进了回复正文，系统没能解析执行。"
                                           "请重新发起这些工具调用，务必使用标准的 function calling（tool_calls 字段），"
                                           "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
-                            }], tools=tool_schemas)
+                            }], tools=tool_schemas, scene="react")
                         # 空回答保险丝：无工具调用且 content 为空（ModelScope 等偶发空响应）→ 提示重试一次
                         if not resp.tool_calls and not (resp.content or "").strip():
                             self._emit({"type": "warn", "text": "⚠️ 模型返回空回答，已提示重试"})
@@ -1154,7 +1160,7 @@ class Agent:
                                     msgs + [{
                                         "role": "system",
                                         "content": "你上一轮返回了空内容。请给出明确的最终回答，或调用工具继续完成任务，不要返回空内容。"
-                                    }], tools=tool_schemas)
+                                    }], tools=tool_schemas, scene="react")
                                 if r2.tool_calls or (r2.content or "").strip():
                                     resp = r2
                             except Exception:
@@ -1354,7 +1360,7 @@ class Agent:
             "content": "token 预算或步数已达上限。请基于目前已有的工具结果，直接给出最终总结性回答，不要再调用工具。"
         }]
         try:
-            resp = self.llm.chat(msgs)
+            resp = self.llm.chat(msgs, scene="wrap_up")
             answer = resp.content
             if resp.usage:
                 self.cumulative_tokens += resp.usage.get("total_tokens", 0)

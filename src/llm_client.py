@@ -94,17 +94,24 @@ def _parse_dsml_calls(content: str) -> Optional[tuple[str, list[dict]]]:
 
 
 def _postprocess_response(resp: "LLMResponse") -> "LLMResponse":
-    """兜底：标准 tool_calls 为空时，尝试从 content 里解析 DSML 工具调用。
-    解析出调用 → 覆盖 tool_calls 并用剥除后的 content；解析不到则原样返回。"""
-    if resp.tool_calls:
-        return resp  # API 已给标准 tool_calls，优先信它
-    parsed = _parse_dsml_calls(resp.content or "")
-    if parsed is None:
-        return resp
-    cleaned, calls = parsed
-    resp.content = cleaned
-    if calls:
-        resp.tool_calls = calls
+    """响应规范化（所有构造点的统一出口）：
+    1. DSML 兜底：标准 tool_calls 为空时，尝试从 content 里解析 DSML 工具调用文本。
+    2. content 错位转移：tool_calls 非空 && content 非空 && reasoning 为空 → 有的 provider
+       偶尔把思考过程误放 content（规范上带 tool_calls 的 assistant content 应为空）。
+       转移 content→reasoning、content 置空——思考进 reasoning_content（投影/DeepSeek 兼容/
+       多步 CoT 连贯），不再被工具调用分支丢弃或误当中间答案。"""
+    if not resp.tool_calls:
+        parsed = _parse_dsml_calls(resp.content or "")
+        if parsed is not None:
+            cleaned, calls = parsed
+            resp.content = cleaned
+            if calls:
+                resp.tool_calls = calls
+    if resp.tool_calls and (resp.content or "").strip() and not (resp.reasoning or "").strip():
+        _LOG.info("tool_calls 与 content 同现且 reasoning 为空：content 疑似思考文本，转移至 reasoning（%d 字）",
+                  len(resp.content))
+        resp.reasoning = resp.content
+        resp.content = ""
     return resp
 
 

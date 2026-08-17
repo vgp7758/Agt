@@ -1,6 +1,10 @@
 ---
 name: vision
 description: 看懂图片并给出文字描述。何时调用：工具返回 <img>图片</img> 占位、或需理解/分析图片内容时。⚠️ 派活时务必在 prompt 里带上 <img>文件名</img> 标签引用，否则子 Agent 看不到图片。
+assembly:
+  - system
+  - user_message
+  - steps
 tools:
 model: qwen
 ---

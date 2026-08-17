@@ -374,6 +374,11 @@ class Session:
         # 只投影 system + 任务指引 + 当前进行中的轮 + tail ambient。历史轮仍完整归档在
         # turns/落盘（可 agent_query_events / recall 查）——session 积累、投影隔离。
         self.current_turn_only = current_turn_only
+        # 上下文装配开关（assembly DSL）：{段名: bool}，缺省=True（全装）。
+        # 段名：rules / history / hooks / tail（system/user_message/steps 恒装不可关）。
+        # 子 Agent 的 .agent/agents/<name>.md frontmatter 声明 + agent_prompt 参数覆盖，
+        # current_turn_only 时 history 强制关（交集语义）。
+        self.assembly: dict = {}
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         self.recent_window_turns = recent_window_turns
         self.max_steps_per_turn = max_steps_per_turn  # 0/None = 不限
@@ -606,7 +611,8 @@ class Session:
         msgs = [{"role": "system", "content": self.system}]
         # 任务指引（AGENTS.md/rules/skills/子Agent）：每轮从磁盘重读，紧跟核心 system 之后，
         # 使"用户改了 AGENTS.md/规则/技能 → 任意 session 当轮即生效"（不再创建时烤死进 system）。
-        if self._task_guidance_provider:
+        # assembly DSL：rules=off 时子 Agent 不装项目规则（如纯函数型工人 vision）。
+        if self._task_guidance_provider and self.assembly.get("rules", True):
             try:
                 _tg = self._task_guidance_provider()
                 if _tg:
@@ -628,17 +634,18 @@ class Session:
                 if _psh:
                     msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
             tail_blocks = []
-            self._collect_ambient(tail_blocks, self._time_provider)
-            self._collect_ambient(tail_blocks, self._system_extra_provider)
-            self._collect_ambient(tail_blocks, self._plan_provider)
-            self._collect_ambient(tail_blocks, self._spec_provider)
-            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-                try:
-                    block = self._ltm_episodic_provider(self._current.user_message)
-                    if block and block.strip():
-                        tail_blocks.append(block.strip())
-                except Exception:
-                    pass
+            if self.assembly.get("tail", True):
+                self._collect_ambient(tail_blocks, self._time_provider)
+                self._collect_ambient(tail_blocks, self._system_extra_provider)
+                self._collect_ambient(tail_blocks, self._plan_provider)
+                self._collect_ambient(tail_blocks, self._spec_provider)
+                if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+                    try:
+                        block = self._ltm_episodic_provider(self._current.user_message)
+                        if block and block.strip():
+                            tail_blocks.append(block.strip())
+                    except Exception:
+                        pass
             grouped_tail = self._ambient_group(tail_blocks)
             if grouped_tail:
                 msgs.append({"role": "system", "content": grouped_tail})
@@ -647,7 +654,7 @@ class Session:
         # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
         if self.max_effective_context_window:
             return self._build_tiered_messages(msgs)
-        if self.global_summary:
+        if self.global_summary and self.assembly.get("history", True):
             msgs.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
 
         # —— 长期记忆·静态层（semantic 事实始终注入 + procedural 标题清单）——
@@ -660,15 +667,16 @@ class Session:
             except Exception:
                 pass
 
-        recent = self.turns[-self.recent_window_turns:]
-        for t in recent:
-            msgs.append({"role": "user", "content": self._user_content(t)})
-            msgs.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
-            if t.answer:
-                a_msg = {"role": "assistant", "content": t.answer}
-                if t.answer_reasoning:
-                    a_msg["reasoning_content"] = t.answer_reasoning
-                msgs.append(a_msg)
+        if self.assembly.get("history", True):   # assembly：history=off 时不投影任何历史轮（当前轮不受影响）
+            recent = self.turns[-self.recent_window_turns:]
+            for t in recent:
+                msgs.append({"role": "user", "content": self._user_content(t)})
+                msgs.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
+                if t.answer:
+                    a_msg = {"role": "assistant", "content": t.answer}
+                    if t.answer_reasoning:
+                        a_msg["reasoning_content"] = t.answer_reasoning
+                    msgs.append(a_msg)
 
         # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
         if self._current is not None:
@@ -684,19 +692,21 @@ class Session:
                 msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
 
         # —— tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆，放 user 后保前缀缓存）——
+        # assembly：tail=off 时整个易变尾块不装（时间/后台/计划/记忆召回全跳过）
         tail_blocks = []
-        self._collect_ambient(tail_blocks, self._time_provider)
-        self._collect_ambient(tail_blocks, self._system_extra_provider)
-        self._collect_ambient(tail_blocks, self._plan_provider)
-        self._collect_ambient(tail_blocks, self._spec_provider)
-        # 情境层（episodic）按问题召回，放 tail 最后
-        if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-            try:
-                block = self._ltm_episodic_provider(self._current.user_message)
-                if block and block.strip():
-                    tail_blocks.append(block.strip())
-            except Exception:
-                pass
+        if self.assembly.get("tail", True):
+            self._collect_ambient(tail_blocks, self._time_provider)
+            self._collect_ambient(tail_blocks, self._system_extra_provider)
+            self._collect_ambient(tail_blocks, self._plan_provider)
+            self._collect_ambient(tail_blocks, self._spec_provider)
+            # 情境层（episodic）按问题召回，放 tail 最后
+            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+                try:
+                    block = self._ltm_episodic_provider(self._current.user_message)
+                    if block and block.strip():
+                        tail_blocks.append(block.strip())
+                except Exception:
+                    pass
         grouped_tail = self._ambient_group(tail_blocks)
         if grouped_tail:
             msgs.append({"role": "system", "content": grouped_tail})
@@ -766,10 +776,11 @@ class Session:
         + 当前进行中 turn（动态，全量）+ 情境 tail。fold_count 个最早的 turn 折叠成摘要不逐条渲染
         （细节靠 recall 召回）。"""
         body = []
-        if fold_count > 0:
-            body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
-        for i in range(fold_count, len(self.turns)):
-            body.extend(self._render_turn_frozen(i))
+        if self.assembly.get("history", True):   # assembly：history=off 时不投影已完成轮（含折叠摘要）
+            if fold_count > 0:
+                body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
+            for i in range(fold_count, len(self.turns)):
+                body.extend(self._render_turn_frozen(i))
         if self._current is not None:
             body.append({"role": "user", "content": self._user_content(self._current)})
             _bt = getattr(self._current, "_before_turn_hint", None)
@@ -781,17 +792,18 @@ class Session:
                 body.append({"role": "user", "content": _MIDTURN_TAG + _psh})
         # tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆）
         tail_blocks = []
-        self._collect_ambient(tail_blocks, self._time_provider)
-        self._collect_ambient(tail_blocks, self._system_extra_provider)
-        self._collect_ambient(tail_blocks, self._plan_provider)
-        self._collect_ambient(tail_blocks, self._spec_provider)
-        if self._ltm_episodic_provider and self._current and self._current.user_message:
-            try:
-                block = self._ltm_episodic_provider(self._current.user_message)
-                if block and block.strip():
-                    tail_blocks.append(block.strip())
-            except Exception:
-                pass
+        if self.assembly.get("tail", True):   # assembly：tail=off 时整个易变尾块不装
+            self._collect_ambient(tail_blocks, self._time_provider)
+            self._collect_ambient(tail_blocks, self._system_extra_provider)
+            self._collect_ambient(tail_blocks, self._plan_provider)
+            self._collect_ambient(tail_blocks, self._spec_provider)
+            if self._ltm_episodic_provider and self._current and self._current.user_message:
+                try:
+                    block = self._ltm_episodic_provider(self._current.user_message)
+                    if block and block.strip():
+                        tail_blocks.append(block.strip())
+                except Exception:
+                    pass
         grouped_tail = self._ambient_group(tail_blocks)
         if grouped_tail:
             body.append({"role": "system", "content": grouped_tail})

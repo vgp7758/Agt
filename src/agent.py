@@ -884,7 +884,10 @@ class Agent:
         工作流约定返回 {inject, result, message}：
           - inject=True 且 result 非空 → 加入返回列表 {hook, name, result}（作 system 旁注喂主 LLM）；
           - message 非空 → 发 workflow_message 事件到 UI（不进主 LLM，用于静默通知类钩子）。
-        失败仅发 auto_wf_error 事件，绝不炸主循环。"""
+        失败仅发 auto_wf_error 事件，绝不炸主循环。
+        assembly DSL：hooks=off（子 Agent 声明/agent_prompt 参数）时本 Agent 不跑任何钩子工作流。"""
+        if not getattr(self.session, "assembly", {}).get("hooks", True):
+            return []
         notes = []
         try:
             from real_tools import WORKSPACE as _ws

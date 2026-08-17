@@ -59,7 +59,8 @@ class SubAgent:
 
     def __init__(self, name: str, model_name: str, system: str, tools: Toolbox,
                  on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None,
-                 registry=None, agent_id=None, caller_id=None, current_turn_only: bool = False):
+                 registry=None, agent_id=None, caller_id=None, current_turn_only: bool = False,
+                 assembly: dict = None):
         self.name = name
         self.model_name = model_name
         self.agent = Agent(system, tools, model_name=model_name,
@@ -71,6 +72,9 @@ class SubAgent:
         # 复用模式：session 投影只含当前轮（历史轮不投影但完整归档）——多次派活不膨胀上下文
         if current_turn_only:
             self.agent.session.current_turn_only = True
+        # assembly DSL：上下文装配开关（{}=全装；来自 md 声明 + agent_prompt 参数覆盖）
+        if assembly:
+            self.agent.session.assembly.update(assembly)
         # 注册绑定到子 Agent 自身的通信工具（替换从主 Agent 继承的、绑定到主 Agent 闭包的版本）
         comm_tools = make_communication_tools(self.agent)
         for t in comm_tools:
@@ -115,6 +119,53 @@ def _agent_md_path(name: str):
     if not _NAME_RE.match(name or ""):
         return None
     return WORKSPACE / _AGENT_DIR / "agents" / f"{name}.md"
+
+
+# assembly DSL：合法段名（7 段）。必装段 system/user_message/steps 恒装（session 层不查开关）；
+# 可关段 rules/history/hooks/tail 由 session.assembly / agent._run_hooks 查开关。
+_ASSEMBLY_SEGS = {"system", "rules", "history", "user_message", "hooks", "steps", "tail"}
+_ASSEMBLY_TOGGLES = {"rules", "history", "hooks", "tail"}
+
+
+def _parse_assembly(meta: dict) -> dict:
+    """frontmatter 的 assembly 字段 → {可关段: bool}。
+    语义：【只装列出的段】——列出的可关段 True，没列的可关段 False（必装段无所谓，忽略）。
+    元素格式 'name' 或 'name|optional'（optional 是文档性标记，不参与逻辑——4 个可关段都允许
+    agent_prompt 参数关闭）。支持 YAML list 或逗号分隔串；未知段名忽略+日志；无声明返回 {}（全装）。"""
+    raw = meta.get("assembly")
+    if not raw:
+        return {}
+    items = raw if isinstance(raw, list) else [s.strip() for s in str(raw).split(",") if s.strip()]
+    segs = set()
+    for it in items:
+        seg = str(it).split("|", 1)[0].strip()
+        if seg in _ASSEMBLY_SEGS:
+            segs.add(seg)
+        elif seg:
+            _LOG.warning("assembly 含未知段名 '%s'（合法：%s），已忽略", seg, sorted(_ASSEMBLY_SEGS))
+    return {t: (t in segs) for t in _ASSEMBLY_TOGGLES}
+
+
+def _apply_assembly_overrides(base_asm: dict, overrides_str: str) -> tuple:
+    """agent_prompt 的 assembly 参数（'rules=off,history=off'）覆盖 base_asm 的可关段。
+    返回 (合并后的 asm, 提示语)。off/false/0/关 = 关；on/true/1/开 = 开。"""
+    asm = dict(base_asm)
+    notes = []
+    for part in (overrides_str or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        seg, _, val = part.partition("=")
+        seg = seg.strip()
+        val = val.strip().lower()
+        if seg not in _ASSEMBLY_TOGGLES:
+            if seg in ("system", "user_message", "steps"):
+                notes.append(f"'{seg}' 必装不可关")
+            elif seg:
+                notes.append(f"'{seg}' 未知段名")
+            continue
+        asm[seg] = val in ("on", "true", "1", "开")
+    return asm, ("；assembly 参数：" + "，".join(notes) if notes else "")
 
 
 def make_communication_tools(agent) -> list:
@@ -322,7 +373,8 @@ def make_subagent_tools(agent) -> list:
         p.unlink()
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False) -> str:
+    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False,
+                     assembly: str = "") -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名 = 多个独立实例（无共享状态）；reuse=True 则复用同名活实例（见下）。
@@ -333,9 +385,24 @@ def make_subagent_tools(agent) -> list:
                没有则新建（之后的同名 reuse 调用会复用它）。复用实例的上下文投影【只含当前轮】
                （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
                复用次数增长，适合高频派活避免实例越建越多。同名实例全在跑时返回提示。
+        assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off'，可关段
+               rules/history/hooks/tail（如 'rules=off,history=off' 给纯任务型工人瘦身）。
+               system/user_message/steps 必装不可关。.md 的 assembly 声明是基线，参数在其上覆盖。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
         caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
         reg = getattr(agent, "registry", None)
+        asm_note = ""
+        # 读声明 md 的 assembly 基线（复用/复活/新建三条路径都要；读不到为 {} 全装）
+        p_md = _agent_md_path(name)
+        base_asm = {}
+        if p_md is not None and p_md.exists():
+            try:
+                _meta, _ = _split_frontmatter(p_md.read_text(encoding="utf-8"))
+                base_asm = _parse_assembly(_meta)
+            except Exception:
+                pass
+        if assembly:
+            base_asm, asm_note = _apply_assembly_overrides(base_asm, assembly)
 
         def _launch(_target, _aid, _name, _model, _sub_dir, _prompt, _reused):
             """通用启动：登记 background_tasks + 起 _bg 线程跑 _target.run()。新建/复用两条路径共用。"""
@@ -447,12 +514,13 @@ def make_subagent_tools(agent) -> list:
                             f"先 wait_subagents 等它完成再 reuse，或去掉 reuse 新建独立实例。")
                 entry = max(idle, key=lambda e: e.registered_at)
                 entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
+                entry.agent.session.assembly.update(base_asm)  # assembly：md 基线 + 参数覆盖（本次生效）
                 with reg._lock:
                     entry.task = prompt
                     entry.caller_id = caller_id
                 reg.update_status(entry.agent_id, "running")
                 return _launch(entry.agent, entry.agent_id, name, entry.model,
-                               getattr(entry.agent.session, "session_dir", None), prompt, _reused=True)
+                               getattr(entry.agent.session, "session_dir", None), prompt, _reused=True) + asm_note
             if hist:
                 # 复活：同名历史实例（磁盘上有 session）→ lazy load 后继续派活
                 # （历史轮完整归档接续，投影仍 current_turn_only 隔离；复活失败落回新建路径）
@@ -460,11 +528,12 @@ def make_subagent_tools(agent) -> list:
                 revived = _revive_subagent(agent, reg, entry, caller_id)
                 if revived is not None:
                     sub_agent, model_name, sub_dir = revived
+                    sub_agent.session.assembly.update(base_asm)   # assembly：复活路径同样应用（md 基线 + 参数覆盖）
                     reg.register(entry.agent_id, name, "subagent", model_name,
                                  agent=sub_agent, task=prompt, status="running",
                                  caller_id=caller_id)
                     return _launch(sub_agent, entry.agent_id, name, model_name,
-                                   sub_dir, prompt, _reused=True)
+                                   sub_dir, prompt, _reused=True) + asm_note
             # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=reuse）
 
         # —— 新建路径：读声明 md 建临时实例 ——
@@ -492,7 +561,8 @@ def make_subagent_tools(agent) -> list:
             sub = SubAgent(name, model_name, system, toolbox,
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
-                           caller_id=caller_id, current_turn_only=reuse)
+                           caller_id=caller_id, current_turn_only=reuse,
+                           assembly=(base_asm or None))
             if reg:
                 reg.register(aid, name, "subagent", model_name,
                              agent=sub.agent, task=prompt, status="running",
@@ -507,7 +577,7 @@ def make_subagent_tools(agent) -> list:
             if reg:
                 reg.update_status(aid, "failed")
             return f"[子 Agent 构造出错] {type(e).__name__}: {e}"
-        return _launch(sub.agent, aid, name, model_name, sub_dir, prompt, _reused=False)
+        return _launch(sub.agent, aid, name, model_name, sub_dir, prompt, _reused=False) + asm_note
 
     def wait_subagents(agent_ids: str = "", timeout: int = 120) -> str:
         """等待异步子 Agent 完成，返回它们的结果。

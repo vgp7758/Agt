@@ -952,11 +952,12 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     if _state is not None and _state.get("busy"):
         # Agent 正在跑：入 pending_messages，本步边界注入，不另起下一轮
         agent.queue_user_message(text)
-        await _send(ws, {"type": "system",
+        await _send(ws, {"type": "system", "transient": True,
                          "text": f"📥 已排队并将在下一步注入当前任务（队列 {len(agent.pending_messages)} 条）"})
     else:
         _work_q.put(("user", text))
-        await _send(ws, {"type": "system", "text": "✅ 已接收，处理中…"})
+        # transient=True：前端走右下角 toast（2s 消失）而非永久气泡——瞬时状态不该留在消息流里
+        await _send(ws, {"type": "system", "transient": True, "text": "✅ 已接收，处理中…"})
 
 
 def _parse_client_msg(raw: str):

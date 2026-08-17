@@ -1405,7 +1405,7 @@ function onWSMessage(ev){
         });
         ws.send(JSON.stringify({action:'list_sessions'}));
       }
-      addRow('sys', m.text); scrollBottom(); break;
+      m.transient ? toast(m.text) : addRow('sys', m.text); scrollBottom(); break;
     case 'checkpoint':
       if(lastUserBubble) attachRestoreButton(lastUserBubble, m.sha);
       break;

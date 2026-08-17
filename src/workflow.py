@@ -405,7 +405,8 @@ def _handle_code(node: dict, ctx) -> dict:
     env["WF_PARAMS"] = json.dumps(params, ensure_ascii=False, default=str)
     try:
         proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
-                              timeout=30, encoding="utf-8", errors="replace", env=env)
+                              timeout=30, encoding="utf-8", errors="replace", env=env,
+                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
     finally:
         try:
             os.unlink(tmp)

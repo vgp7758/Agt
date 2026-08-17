@@ -7,6 +7,7 @@ ensure_lsp(lang) 工具：把内置的语言 LSP 脚本 copy 到 ~/.agt/lsp/ →
 内置脚本在 src/lsp_scripts/（随包发布，pyproject package-data）。
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,7 +46,8 @@ def _ensure_pkg(pkg: str):
         return
     except ImportError:
         pass
-    subprocess.run([sys.executable, "-m", "pip", "install", pkg], check=False)
+    subprocess.run([sys.executable, "-m", "pip", "install", pkg], check=False,
+                   creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
 
 
 def _persist(server: str, cfg: dict):

@@ -82,10 +82,13 @@ def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
 
 def _run_subprocess_streaming(args, name, shell=False):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
-    通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。"""
+    通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。
+    Windows 加 CREATE_NO_WINDOW：detached（/restart 看门狗拉起）进程无控制台时，
+    子进程默认各弹一个终端窗，闪退即此。"""
     proc = subprocess.Popen(
         args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, cwd=str(WORKSPACE), shell=shell,
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
         bufsize=1, encoding="utf-8", errors="replace",
     )
     start = time.time()
@@ -1783,7 +1786,8 @@ def run_script(script: str, payload: str = "") -> str:
     try:
         proc = subprocess.run([sys.executable, str(target)], capture_output=True, text=True,
                               timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
-                              encoding="utf-8", errors="replace")
+                              encoding="utf-8", errors="replace",
+                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
     except subprocess.TimeoutExpired:
         return f"[脚本执行超时（>{TOOL_TIMEOUT}s），可用 set_tool_timeout 调大]"
     except Exception as e:
@@ -1894,7 +1898,8 @@ def git_commit(message: str, files: str = "") -> str:
 
     def _git(*args, timeout=180):
         return subprocess.run(["git", *args], cwd=str(WORKSPACE), capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
 
     targets = [f.strip() for f in (files or "").split(",") if f.strip()]
     r_add = _git("add", *(targets if targets else ["-A"]))

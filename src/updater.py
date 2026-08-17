@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -156,7 +157,8 @@ def do_upgrade():
 
     def _run(c):
         return subprocess.run(c, capture_output=True, text=True, timeout=180,
-                              encoding="utf-8", errors="replace")
+                              encoding="utf-8", errors="replace",
+                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
 
     try:
         proc = _run(cmd)

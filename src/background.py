@@ -48,8 +48,10 @@ class ServiceManager:
                             text=True, bufsize=1, encoding="utf-8", errors="replace")
         # 绑独立进程组/会话：stop 时能整树杀，避免 shell=True 下 terminate 只杀 shell、
         # 漏掉 shell 启的实际命令（孙进程）变孤儿；父进程异常退出也便于外部按组清理。
+        # Windows 叠加 CREATE_NO_WINDOW：detached（看门狗重启）场景下服务子进程不弹终端窗。
         if sys.platform == "win32":
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            popen_kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                             | getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
             popen_kwargs["start_new_session"] = True
         try:
@@ -151,7 +153,8 @@ class ServiceManager:
         if sys.platform == "win32":
             try:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               capture_output=True, timeout=5)
+                               capture_output=True, timeout=5,
+                               creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
             except Exception:
                 pass
         else:

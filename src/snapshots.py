@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -25,7 +26,8 @@ class SnapshotManager:
     def _run(self, args, check=True) -> str:
         cmd = ["git", "--git-dir", str(self.git_dir),
                "--work-tree", str(self.workspace), *args]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                           creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         if check and r.returncode != 0:
             raise RuntimeError(f"git {args[0]} 失败: {r.stderr.strip() or r.stdout.strip()}")
         return r.stdout.strip()
@@ -36,7 +38,8 @@ class SnapshotManager:
             return
         self.git_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "--bare", str(self.git_dir)],
-                       check=True, capture_output=True)
+                       check=True, capture_output=True,
+                       creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         self._run(["config", "core.bare", "false"])
         self._run(["config", "core.worktree", str(self.workspace)])
         self._run(["config", "user.name", "Agt Snapshots"])          # commit-tree 需要

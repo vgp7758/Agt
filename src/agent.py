@@ -867,7 +867,8 @@ class Agent:
             tmp = f.name
         try:
             proc = subprocess.run([sys.executable, tmp], capture_output=True,
-                                  text=True, timeout=30, cwd=os.getcwd())
+                                  text=True, timeout=30, cwd=os.getcwd(),
+                                  creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
             return (proc.stdout or "").strip()
         except subprocess.TimeoutExpired:
             return "[目标检查超时]"

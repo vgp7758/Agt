@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import config
+
 from real_tools import WORKSPACE, _md_headings
 from tools import Tool, Toolbox
 
@@ -43,7 +45,22 @@ WIKI_UPDATER_SYSTEM = (
     "- 每页可引用相关代码的相对路径（如 src/auth/login.py），可关联多个文件\n"
     "- 文档间通过 Markdown 相对链接互相跳转（如 [认证流程](auth/flow.md)），形成知识网\n"
     "- 每页核心内容：模块职责、关键函数/类、与其它模块的关系、依赖、注意事项"
-)
+)   # 内置兜底；正式声明在 .agent/agents/wiki-updater.md（外置优先，见 _load_wiki_updater_decl）
+
+
+def _load_wiki_updater_decl():
+    """读 .agent/agents/wiki-updater.md 声明（与其他子 Agent 同款管理方式）。
+    返回 (meta, system)；文件不存在/解析失败 → ({}, "")，调用方回退内置 WIKI_UPDATER_SYSTEM。
+    声明里的 tools 字段被有意忽略——wiki 子 Agent 工具集固定为 wiki CRUD 六件套（防越权）。"""
+    try:
+        from multiagent import _agent_md_path, _split_frontmatter
+        p = _agent_md_path("wiki-updater")
+        if p is None or not p.exists():
+            return {}, ""
+        meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
+        return (meta or {}), (system or "").strip()
+    except Exception:
+        return {}, ""
 
 
 def _wiki_resolve(path: str) -> Path:
@@ -177,10 +194,15 @@ def make_wiki_tools(agent) -> list:
                 blocks.append(f"执行计划：\n{_plan_text(agent)}")
             prompt = "\n".join(blocks) if blocks else "(无上下文)"
         from agent import Agent
+        # 声明外置（.agent/agents/wiki-updater.md，与其他子 Agent 同款管理）；内置兜底
+        meta, system_ext = _load_wiki_updater_decl()
+        model_name = (meta.get("model") or "").strip() or agent.model_name
+        if model_name not in config.MODELS:
+            model_name = agent.model_name
         sub = Agent(
-            system=WIKI_UPDATER_SYSTEM,
+            system=system_ext or WIKI_UPDATER_SYSTEM,
             tools=Toolbox(*wiki_crud_tools()),
-            model_name=agent.model_name,
+            model_name=model_name,
             enable_thinking=False,
             verbose=False,
             on_event=None,           # 静默执行；结果以工具返回值回到主 Agent

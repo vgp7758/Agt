@@ -1044,6 +1044,60 @@ def _cmd_update(ctx: CommandContext, args):
     check_and_update(force=True, announce=print)
 
 
+def _cmd_debug(ctx: CommandContext, args):
+    """/debug prompt <提示词> —— 提示词调试：按【当前上下文投影 + 提示词】直接调 LLM，
+    不落盘（不 start_turn，session/events 零写入）、不执行（回包的 tool_calls 只展示不跑），
+    打印完整回包（耗时/finish_reason/usage含缓存命中/content/reasoning/tool_calls）。
+    用于调试 system/上下文工程/工具 schema 对模型行为的影响，零副作用。"""
+    import json as _json
+    import time as _time
+    if not args or args[0] != "prompt" or len(args) < 2:
+        print("用法：/debug prompt <提示词>   —— 按当前上下文投影直接调 LLM；不落盘、不执行工具，打印完整回包")
+        return
+    if ctx.state and ctx.state.get("busy"):
+        print("⏳ Agent 正在处理任务（busy），/debug 需在空闲时使用——避免与主循环并发调 LLM")
+        return
+    text = " ".join(args[1:]).strip()
+    agent = ctx.agent
+    # 投影快照 + 提示词（不 start_turn → 无 turn_start 事件、无落盘；llm_calls.jsonl 仍会记录本次调用，供 /stats 观测）
+    msgs = list(agent.session.messages_for_llm()) + [{"role": "user", "content": text}]
+    proj_chars = sum(len(str(m.get("content") or "")) for m in msgs)
+    n_tools = len(agent.tools.schemas())
+    print(f"🧪 [debug prompt] 不落盘 · 不执行")
+    print(f"   投影：{len(msgs)} 条消息 / {proj_chars} 字符（含本次提示词 {len(text)} 字）")
+    print(f"   模型：{agent.llm.model_name} ({agent.llm.model}) · 工具 schema {n_tools} 个")
+    print("─" * 56)
+    t0 = _time.time()
+    try:
+        resp = agent.llm.chat(msgs, tools=agent.tools.schemas())
+    except Exception as e:
+        print(f"❌ 调用失败: {type(e).__name__}: {e}")
+        return
+    dt = _time.time() - t0
+    u = resp.usage or {}
+    ptd = (u.get("prompt_tokens_details") or {}) if isinstance(u, dict) else {}
+    cached = ptd.get("cached_tokens") or 0
+    prompt_t = u.get("prompt_tokens") or 0
+    cache_pct = f"（缓存命中 {cached}/{prompt_t} = {cached * 100 // prompt_t}%）" if prompt_t else ""
+    print(f"⏱  耗时 {dt:.1f}s · finish_reason = {resp.finish_reason}")
+    print(f"📊 tokens: prompt={prompt_t} completion={u.get('completion_tokens')} total={u.get('total_tokens')} {cache_pct}")
+    if resp.reasoning:
+        print("─" * 56)
+        print(f"💭 reasoning（{len(resp.reasoning)} 字）:")
+        print(resp.reasoning)
+    if resp.tool_calls:
+        print("─" * 56)
+        print(f"🔧 tool_calls（{len(resp.tool_calls)} 个，仅展示不执行）:")
+        for i, tc in enumerate(resp.tool_calls):
+            print(f"  [{i}] {tc['name']}({tc.get('id')})")
+            print("      " + _json.dumps(tc.get("arguments"), ensure_ascii=False, indent=2).replace("\n", "\n      "))
+    print("─" * 56)
+    print(f"💬 content（{len(resp.content or '')} 字）:")
+    print(resp.content or "(空)")
+    print("─" * 56)
+    print("（本次调用已记入 llm_calls.jsonl，/stats 可查；session 未受影响）")
+
+
 def _cmd_restart(ctx: CommandContext, args):
     """/restart [消息] —— 看门狗式重启：本进程优雅退出 → 看门狗拉起新进程（新代码生效）
     → 自动恢复当前 session 与 Web 服务端口 → （可选）把剩余参数作为重启后第一条消息发送。
@@ -1266,6 +1320,11 @@ def build_default_registry() -> CommandRegistry:
         "/restart                     重启并恢复当前会话\n"
         "/restart 继续刚才的任务       重启恢复后自动发送该消息\n"
         "  改了 agt 源码(src/)后用它让新代码生效；日志 ~/.agt/restart.log")
+    reg.register("debug", _cmd_debug,
+        "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包",
+        "/debug prompt 你好，介绍下你自己\n"
+        "  投影=当前 session 状态+提示词；tool_calls 只展示不执行；\n"
+        "  session/events 零写入（llm_calls.jsonl 仍记录，/stats 可观测）")
     reg.register("agent", _cmd_agent,
         "[agent_id]  列出/切换直接交互的 Agent 目标",
         "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"

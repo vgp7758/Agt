@@ -116,6 +116,7 @@ class LLMResponse:
     reasoning: str = ""                   # 推理模型的思考过程（非推理模型为空）
     tool_calls: list = field(default_factory=list)  # 干净形式 [{id, name, arguments(dict)}]
     usage: Optional[dict] = None          # token 用量
+    finish_reason: Optional[str] = None   # stop / tool_calls / length（调试/截断判读）
     raw_message: Optional[dict] = field(default=None, repr=False)  # 原始 message，调试用
 
     @property
@@ -455,6 +456,7 @@ class LLMClient:
                     reasoning=msg.get("reasoning_content") or "",
                     tool_calls=_parse_tool_calls(msg),
                     usage=usage,
+                    finish_reason=fr,
                     raw_message=msg,
                 ))
             last_info = (usage, str(resp.model_dump())[:300])
@@ -476,6 +478,7 @@ class LLMClient:
                 reasoning=msg.get("reasoning_content") or "",
                 tool_calls=_parse_tool_calls(msg),
                 usage=usage,
+                finish_reason="length",
                 raw_message=msg,
             ))
         _LOG.error("连续 %d 次空响应，放弃 model=%s", self.max_retries, self.model_name)
@@ -553,6 +556,7 @@ class LLMClient:
                     reasoning="".join(reasoning_parts),
                     tool_calls=tool_calls,
                     usage=usage,
+                    finish_reason=finish_reason,
                 ))
             last_usage = usage
             _LOG.warning("流式空 重试 %d/%d 退避%.0fs usage=%s",

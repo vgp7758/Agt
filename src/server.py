@@ -439,6 +439,96 @@ async def api_mcp_save(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/status")
+async def api_status(request: Request):
+    """实例运行时状态快照（POST，供跨实例/外部诊断用）。
+    返回：agent 就绪/模型/工具数/session 名/turns 数/busy/work_q 深度/inbox 深度/
+    registry 团队列表（agent_id/name/role/model/status/recap/caller_id）/
+    后台任务列表/服务端口/MCP servers/钩子工作流状态。
+    无 Agent 时返回 ready=False。"""
+    if _agent is None:
+        return {"ready": False, "error": "Agent 未就绪（服务未注入或未启动）"}
+
+    agent = _agent
+    # —— 基本态 ——
+    st = {
+        "ready": True,
+        "model": agent.llm.model_name,
+        "model_id": agent.llm.model,
+        "tools_count": len(list(agent.tools)),
+        "session_name": agent.session.name or "(未命名)",
+        "session_turns": len(agent.session.turns),
+        "current_turn_active": agent.session._current is not None,
+        "busy": bool(_state and _state.get("busy")),
+        "work_q_size": _work_q.qsize() if _work_q is not None else -1,
+        "inbox_size": len(agent.inbox) if hasattr(agent, "inbox") else -1,
+        "pending_messages": len(getattr(agent, "pending_messages", [])),
+        "active_target": getattr(agent, "_active_target", "_main_"),
+        "autonomous_mode": getattr(agent, "autonomous_mode", False),
+        "utility_model": getattr(agent, "utility_model", ""),
+        "server": server_status(),
+    }
+
+    # —— registry 团队 ——
+    reg = getattr(agent, "registry", None)
+    if reg:
+        team = []
+        with reg._lock:
+            for e in reg._agents.values():
+                team.append({
+                    "agent_id": e.agent_id,
+                    "name": e.name,
+                    "role": e.role,
+                    "model": e.model,
+                    "status": e.status,
+                    "caller_id": e.caller_id,
+                    "recap": (e.recap or "")[:80],
+                    "has_agent": e.agent is not None,
+                })
+        st["registry"] = team
+    else:
+        st["registry"] = []
+
+    # —— 后台任务 ——
+    bt = getattr(agent, "background_tasks", {})
+    st["background_tasks"] = [
+        {"id": aid, "name": t.get("name", ""), "status": t.get("status", "?"),
+         "started_at": t.get("started_at"), "finished_at": t.get("finished_at"),
+         "result_preview": str(t.get("result", ""))[:80]}
+        for aid, t in bt.items()
+    ]
+
+    # —— MCP servers ——
+    if _mcp_mgr:
+        st["mcp_servers"] = [
+            {"name": name, "tools_count": len(info.get("tools", []))}
+            for name, info in _mcp_mgr.sessions.items()
+        ]
+    else:
+        st["mcp_servers"] = []
+
+    # —— 钩子工作流 ——
+    try:
+        from workflow import get_hook_workflows
+        from real_tools import WORKSPACE as _ws
+        hooks = []
+        for hook_pos in ("before_turn", "after_tool", "before_answer", "turn_end"):
+            for hw in get_hook_workflows(_ws, hook_pos):
+                m = hw.get("meta") or {}
+                hooks.append({
+                    "name": hw.get("name", ""),
+                    "hook": hook_pos,
+                    "enabled": m.get("enabled", True),
+                    "async": m.get("async", False),
+                    "hidden": m.get("hidden", False),
+                })
+        st["hooks"] = hooks
+    except Exception:
+        st["hooks"] = []
+
+    return st
+
+
 @app.get("/api/stats")
 async def api_stats(scope: str = "current"):
     """LLM 调用统计·原始流水（按 ts 升序），前端按选中的调用序号窗口本地聚合。scope=current/all。

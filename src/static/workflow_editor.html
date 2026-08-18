@@ -333,7 +333,13 @@ function syncToolNode(n){
   const existing=new Set(params.map(p=>p.name));
   t.params.forEach(p=>{
     if(!existing.has(p.name))
-      params.push({name:p.name, input:{type:_mapToolType(p.type), value:{type:'literal',content:''}}});
+      params.push({name:p.name, input:{type:_mapToolType(p.type), value:{type:'literal',content:''}},
+                   ...(Array.isArray(p.enum)&&p.enum.length?{enum:p.enum}:{})});
+    else{
+      // 已有字段：同步 enum（工具 schema 更新后选项变化——llm_call.model 加了 provider 下拉）
+      const tp=params.find(x=>x.name===p.name);
+      if(Array.isArray(p.enum)&&p.enum.length)tp.enum=p.enum; else delete tp.enum;
+    }
   });
   // outputs：空则用工具默认；已有则补缺失字段（工具 schema 更新后已有节点自动补新字段，不覆盖用户已声明）
   // type 走 _mapToolType（array→list 归一——TYPE_COLOR 无 'array'，不映射会变灰色端口连不出去）
@@ -790,6 +796,24 @@ function makeInputControl(n,p,i,ph){
   div.style.cssText='width:80px;height:16px;display:flex;align-items:center';
   const cur=(v?.type==='literal')?v.content:'';
   const baseStyle='width:100%;font-size:10px;padding:0 2px;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:2px';
+  // 带下拉选项的输入控件（enum）：select 替代 text input——选项列表来自工具 schema（如 llm_call.model 的 provider 列表）
+  if(Array.isArray(p.enum)&&p.enum.length){
+    const sel=document.createElement('select');
+    sel.style.cssText=baseStyle;
+    p.enum.forEach(ev=>{
+      const opt=document.createElement('option');
+      opt.value=String(ev);
+      opt.textContent=ev===''?'（跟随）':String(ev);
+      if(String(cur)===String(ev))opt.selected=true;
+      sel.appendChild(opt);
+    });
+    sel.onchange=()=>{setInputLiteral(n.id,i,{type:'literal',content:sel.value});};
+    sel.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(sel);
+    fo.appendChild(div);
+    fo.style.pointerEvents='auto';
+    return fo;
+  }
   if(t==='list'||t==='array'){
     const inp=document.createElement('input');inp.type='text';inp.value=cur;inp.placeholder='[1,2,3] 或 [\"a\",\"b\"]';
     inp.style.cssText=baseStyle;
@@ -1148,7 +1172,8 @@ function pickNode(typeOrName,isTool){
   if(isTool){
     const t=(AGENT_TOOLS||[]).find(z=>z.name===typeOrName);
     if(!t){closeNodePicker();return;}
-    const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
+    const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}},
+      ...(Array.isArray(p.enum)&&p.enum.length?{enum:p.enum}:{})}));
     const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:_mapToolType(o.type),description:o.description||''}));
     n={id:genId(),type:'4',x:pickerCtx.sx,y:pickerCtx.sy,w:230,h:80,data:{nodeMeta:{title:t.display||typeOrName},toolName:typeOrName,inputs:{inputParameters},outputs}};
     WF.nodes.push(n);

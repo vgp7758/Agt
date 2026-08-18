@@ -194,13 +194,19 @@ async def api_tools():
             continue
         seen.add(t.name)
         s = t.schema["function"]
+        name = s["name"]   # 提前（params 的 enum 判断要用，否则首轮 NameError/串到上个工具名）
         props = s.get("parameters", {}).get("properties", {}) or {}
         # schema 无 type（如 pass_through 的 Any 参数）→ "any"：类型不确定的标记，
         # 编辑器据此不锁死该字段的类型编辑（用户可改成 object 逐字段连线组装）
-        params = [{"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else None) or "any"}
-                  for pn, ps in props.items()]
+        params = []
+        for pn, ps in props.items():
+            pm = {"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else None) or "any"}
+            # llm_call 的 model 参数：附 enum（models.json 的 provider 列表 + 空=跟随）——
+            # 编辑器检测 enum 渲染下拉控件（而不是手填文本框）
+            if name == "llm_call" and pn == "model":
+                pm["enum"] = [""] + sorted(config.MODELS.keys())
+            params.append(pm)
         outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
-        name = s["name"]
         if name.startswith("__mcp__"):
             server = getattr(t, "server", "") or ""
             orig = getattr(t, "orig_name", "") or name

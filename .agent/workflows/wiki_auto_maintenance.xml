@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→调 update_wiki 子 Agent 维护→用报告摘要拼 commit message→检查 wiki 变更并自动提交推送→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hook="before_answer" hidden="true" async="true">
+<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→调 update_wiki 子 Agent 维护→快照 diff 出变更文件→有变更则 git_commit 工具提交推送（message=判官摘要，免 shell 引号问题+带 Co-authored-by）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hook="before_answer" hidden="true" async="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
@@ -27,33 +27,83 @@ needs_maintenance=false 时 summary 给空串。summary 要聚焦改动，简洁
     <out name="summary" type="string"/>
     <out name="output" type="string"/>
   </node>
-  <node id="130001" type="selector" title="selector" x="720" y="80">
+  <node id="130001" type="selector" title="needs_maintenance?" x="720" y="80">
     <branch><cond op="1" left="110001.needs_maintenance" right="True" left_type="boolean" right_type="boolean"/></branch>
   </node>
-  <node id="140001" type="plugin" title="update_wiki" x="1020" y="80" toolName="update_wiki">
+  <node id="145000" type="subworkflow" title="snap_before" x="920" y="80" workflowId="dir_snapshot">
+    <in name="path" literal=".agent/wiki"/>
+    <out name="snap" type="string"/>
+  </node>
+  <node id="140001" type="plugin" title="update_wiki" x="1120" y="80" toolName="update_wiki">
     <in name="summary" type="string" ref="110001.summary"/>
     <out name="raw" type="string"/>
     <out name="result" type="string" description="工具返回值"/>
   </node>
-  <node id="868393" type="text" title="build_commit_msg" x="1250" y="80">
-    <in name="info" type="string" ref="140001.raw"/>
-    <result><![CDATA[git add .agent/wiki/ && (git diff --cached --quiet || (git commit -m "docs: wiki auto-maintenance — {{info}}" && git push))]]></result>
+  <node id="146000" type="code" title="diff_wiki" x="1320" y="80">
+    <in name="before" type="string" ref="145000.snap"/>
+    <code language="3"><![CDATA[import json
+async def main(args):
+    """update_wiki 之后拍 after 快照，调 diff_snapshots 子工作流 diff。
+    after 快照必须【本节点执行时】拍（拍早了 diff 不到 update_wiki 的变更）——
+    所以 code 节点内自己 walk 一遍（与 dir_snapshot 同逻辑），再以子工作流出结构化结果。"""
+    import os
+    p = args.params
+    now = {}
+    for root, dirs, files in os.walk(".agent/wiki"):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        for f in files:
+            fp = os.path.join(root, f).replace("\\", "/")
+            try: now[fp] = os.path.getmtime(fp)
+            except OSError: pass
+    try:
+        from workflow import _find_local_workflow, execute
+        from real_tools import REAL_TOOLS
+        canvas = _find_local_workflow(type("C", (), {"workspace": __import__("pathlib").Path(".")})(), "diff_snapshots")
+        if canvas is not None:
+            ret = execute(canvas, {"before": p.get("before"), "after": json.dumps(now)},
+                          tools=REAL_TOOLS, llm=None, return_exit_dict=True)
+            if isinstance(ret, dict) and "files" in ret:
+                return {"files": ret["files"], "count": ret.get("count", 0)}
+    except Exception:
+        pass   # 子工作流不可用 → 走本地兜底，不炸主链路
+    # 本地兜底 diff（与 diff_snapshots 同语义）
+    def _load(s):
+        try:
+            d = json.loads(s or "{}"); return d if isinstance(d, dict) else {}
+        except Exception: return {}
+    before = _load(p.get("before"))
+    changed = [fp for fp, mt in now.items() if fp not in before or abs(before.get(fp, 0) - mt) > 1e-6]
+    changed += [fp for fp in before if fp not in now]
+    return {"files": ",".join(changed), "count": len(changed)}]]></code>
+    <out name="files" type="string" description="变更文件清单（逗号分隔，供 git_commit 直接用）"/>
+    <out name="count" type="integer"/>
+  </node>
+  <node id="147000" type="selector" title="has_changes?" x="1520" y="80">
+    <branch><cond op="13" left="146000.count" right="0" left_type="integer" right_type="integer"/></branch>
+  </node>
+  <node id="148000" type="text" title="build_msg" x="1720" y="40">
+    <in name="summary" type="string" ref="110001.summary"/>
+    <result><![CDATA[docs: wiki auto-maintenance — {{summary}}]]></result>
     <out name="output" type="string"/>
   </node>
-  <node id="150001" type="plugin" title="commit_wiki" x="1520" y="80" toolName="run_shell">
-    <in name="command" type="string" ref="868393.output"/>
+  <node id="150001" type="plugin" title="commit_wiki" x="1920" y="80" toolName="git_commit">
+    <in name="message" type="string" ref="148000.output"/>
+    <in name="files" type="string" ref="146000.files"/>
     <out name="raw" type="string"/>
     <out name="result" type="string"/>
   </node>
-  <node id="900001" type="end" title="end" x="1820" y="80">
+  <node id="900001" type="end" title="end" x="2120" y="80">
     <out name="inject" type="boolean">False</out>
     <out name="message" ref="140001.raw" type="string"/>
   </node>
   <edge from="100001" to="110001"/>
   <edge from="110001" to="130001"/>
-  <edge from="130001" to="140001" port="true"/>
-  <edge from="140001" to="868393"/>
-  <edge from="868393" to="150001"/>
+  <edge from="130001" to="145000" port="true"/>
+  <edge from="145000" to="140001"/>
+  <edge from="140001" to="146000"/>
+  <edge from="146000" to="147000"/>
+  <edge from="147000" to="150001" port="true"/>
   <edge from="150001" to="900001"/>
+  <edge from="147000" to="900001" port="false"/>
   <edge from="130001" to="900001" port="false"/>
 </workflow>

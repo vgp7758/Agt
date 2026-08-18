@@ -1,0 +1,50 @@
+<workflow name="diff_snapshots" description="对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → 变更文件清单。输出 files（逗号分隔，供 git_commit 的 files 参数直接使用）+ count + changed（list&lt;object&gt; 结构化）。">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="before" type="string" description="前一份快照 JSON（dir_snapshot 的 snap 输出）"/>
+    <out name="after" type="string" description="后一份快照 JSON（dir_snapshot 的 snap 输出）"/>
+  </node>
+  <node id="110001" type="code" title="diff" x="420" y="80">
+    <in name="before" type="string" ref="100001.before"/>
+    <in name="after" type="string" ref="100001.after"/>
+    <code language="3"><![CDATA[import json
+async def main(args):
+    """两份快照 diff：after 中 mtime 变化/新增 + before 中已消失（删除）。
+    changed 列表按字母序（确定性输出）；files 逗号拼接供 git_commit 直接用。"""
+    p = args.params
+    def _load(s):
+        if isinstance(s, dict):
+            return s
+        try:
+            d = json.loads(s or "{}")
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+    before, after = _load(p.get("before")), _load(p.get("after"))
+    changed = []
+    for fp, mt in after.items():
+        if fp not in before:
+            changed.append({"file": fp, "change": "new"})
+        elif abs(before[fp] - mt) > 1e-6:
+            changed.append({"file": fp, "change": "modified"})
+    for fp in before:
+        if fp not in after:
+            changed.append({"file": fp, "change": "deleted"})
+    changed.sort(key=lambda x: x["file"])
+    return {"files": ",".join(c["file"] for c in changed),
+            "count": len(changed),
+            "changed": changed}]]></code>
+    <out name="files" type="string" description="变更文件清单（逗号分隔）"/>
+    <out name="count" type="integer"/>
+    <out name="changed" type="list">
+      <field name="file" type="string"/>
+      <field name="change" type="string"/>
+    </out>
+  </node>
+  <node id="900001" type="end" title="end" x="720" y="80">
+    <out name="files" ref="110001.files" type="string"/>
+    <out name="count" ref="110001.count" type="integer"/>
+    <out name="changed" ref="110001.changed" type="list"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="900001"/>
+</workflow>

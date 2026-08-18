@@ -353,6 +353,9 @@ class Step:
 # 中途插话的标签：明确标注"非新一轮"，避免被模型/未来逻辑当成新 turn 的 user 输入
 _MIDTURN_TAG = "📨〔用户中途补充，非新一轮〕\n"
 
+# 中断轮的 answer 标注集合（abort/start_turn 防御写入；resume_interrupted/前端渲染据此识别）
+_INTERRUPT_MARKS = ("（中断，本轮未完成）", "（被中断）", "（被用户停止）")
+
 
 @dataclass
 class Turn:
@@ -1579,6 +1582,14 @@ def _replay_events(events: list) -> list:
         elif et == "step" and cur is not None:
             cur.steps.append(Step(reasoning=e.get("reasoning", ""),
                                   tool_calls=[ToolCall(call_id=c) for c in e.get("call_ids", [])]))
+        elif et == "turn_resume":
+            # 中断轮恢复事件（resume_interrupted 发）：最后一个已归档 turn 弹回进行中状态。
+            # 重放闭环：turn_end(中断) → turn_resume → step… → turn_end(最终)。
+            if cur is None and turns:
+                cur = turns.pop()
+                if (cur.answer or "").strip() in _INTERRUPT_MARKS:
+                    cur.answer = ""
+                    cur.answer_reasoning = ""
         elif et == "turn_end":
             if cur is not None:
                 cur.answer = e.get("answer", "")

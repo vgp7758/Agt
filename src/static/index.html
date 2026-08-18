@@ -625,7 +625,8 @@ function finishInterrupted(turnNo){
   scrollBottom();
 }
 function continueInterrupted(){
-  sendRaw('请继续完成上一轮被中断的工作（从断点接着做，不要重头开始）', []);
+  // 中断轮续跑：不新增 user_message——后端把中断轮弹回 _current 直接续 ReAct 循环
+  ws.send(JSON.stringify({action:'resume_interrupted'}));
   setBusy(true); curTurn=null;
 }
 // —— 历史展开（读档默认只渲染当前档位，点蓝字往回展开一档）——

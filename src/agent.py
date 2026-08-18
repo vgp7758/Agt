@@ -1142,27 +1142,69 @@ class Agent:
             snapshots[cid] = {"path": rel, "version": ver, "text": text}
         return snapshots
 
+    def resume_interrupted(self) -> str:
+        """恢复中断轮：最后 turn 的 answer 是中断标注（_INTERRUPT_MARKS）/空 → 弹出恢复为
+        _current（清中断标注），发 turn_resume 事件（重放闭环：turn_end(中断)→turn_resume→
+        step…→turn_end(最终)）。返回 "" 成功，否则错误消息。
+        已归档 steps 完整保留（工具调用+结果都在 toollog）——若上一步 tool_call 曾发起但
+        未完成（进程死在工具执行中），该 step 未归档；恢复后投影里看到的是已完成链，
+        模型从断点自然续跑（缺失的调用由它自主重新发起）。"""
+        from session import _INTERRUPT_MARKS
+        s = self.session
+        if s._current is not None:
+            return "[错误] 当前已有进行中的轮次"
+        if not s.turns:
+            return "[错误] 没有可恢复的轮次"
+        t = s.turns[-1]
+        a = (t.answer or "").strip()
+        if a and a not in _INTERRUPT_MARKS:
+            return f"[错误] 最后一轮已正常完成（answer 非中断标注），无需恢复"
+        s.turns.pop()
+        t.answer = ""
+        t.answer_reasoning = ""
+        s._current = t
+        # 分档缓存一致性：pop 掉末轮 → 清越界边界与冻结渲染（索引 >= 新长度的丢弃）
+        if s._tier_boundaries and s._tier_boundaries[-1] >= len(s.turns):
+            s._tier_boundaries = [b for b in s._tier_boundaries if b < len(s.turns)]
+        if s._frozen_renders:
+            s._frozen_renders = {k: v for k, v in s._frozen_renders.items() if k < len(s.turns)}
+        s._emit_event({"event": "turn_resume"})
+        s._refresh_summary_cache()
+        s._autosave()
+        _LOG.info("resume_interrupted: 恢复第 %d 轮（%d 步已保留，投影续接）",
+                  len(s.turns) + 1, len(t.steps))
+        return ""
+
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None,
-            _autonomous_continue: bool = False, _seeds: Optional[list] = None) -> str:
+            _autonomous_continue: bool = False, _seeds: Optional[list] = None,
+            _resume_current: bool = False) -> str:
         """
         :param user_message: 用户消息（自主继续时为自动生成的提示）
         :param images: 图片列表
         :param _autonomous_continue: 内部标记，表示这是自主继续的一轮（用于事件区分）
         :param _seeds: 内部用——预置的合成工具记录列表（后台服务退出等异步事件）；开轮后各自落成
-                       一个 Step（assistant(tool_use)→tool(结果)），让首轮上下文就带上这些事件。
+                        一个 Step（assistant(tool_use)→tool(结果)），让首轮上下文就带上这些事件。
+        :param _resume_current: 中断轮续跑——不 start_turn 新 user_message，直接以已恢复的
+                        session._current（resume_interrupted 弹回的轮）续 ReAct 循环：
+                        user/steps 原样在投影里，跳过 before_turn 钩子与 user 事件（首轮已发过），
+                        注入 resume 旁注引导模型从断点续做、不重复已完成步骤。
         """
         # 用循环替代递归：自主继续时走下一轮迭代而不是 self.run() 递归
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
         seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
         while True:
             self._stop_flag = False
-            self.session.start_turn(msg, imgs)
+            resumed = bool(_resume_current and self.session._current is not None)
+            if resumed:
+                # 中断轮续跑：_current 已由 resume_interrupted() 恢复就位，不新开 turn
+                msg = self.session._current.user_message
+                _resume_current = False
+            else:
+                self.session.start_turn(msg, imgs)
             if seeds:
                 self._seed_steps(seeds)   # 预置合成 Step → 首轮 _chat_msgs 即渲染 tool_use→tool
                 seeds = []
-            # —— Agentic RAG 已工作流化：检索由 before_turn 钩子工作流（before_turn_retrieval.xml）编排 ——
-            # 工作流输出挂 _before_turn_hint（投影时在 user 后注入），无需内置 _agentic_retrieve。
             # —— 重置本轮钩子状态 ——
             self._hook_notes = []
             self._answer_redo_draft = None
@@ -1170,9 +1212,18 @@ class Agent:
             self._answer_inject_count = 0
             self._turn_end_inject_count = 0
             self._active_hooks = set()
+            if resumed:
+                # resume 提示旁注：引导模型从断点续做（投影里 user+steps 完整，模型能看到断在哪；
+                # 若断前某工具调用已发起未完成，该 step 未归档——模型据上下文自然重新发起）
+                self._hook_notes.append({
+                    "hook": "resume", "name": "interrupted_resume",
+                    "result": ("本轮此前因进程退出/异常而中断，现在已从断点恢复继续。"
+                               "已完成的工具调用及其结果都完整保留在上下文中；"
+                               "请从中断处继续完成原任务，不要重复已完成的步骤。")})
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
             # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
+            bt_notes = [] if resumed else None   # resume 时跳过（该轮首轮已检索过，重跑浪费）
             bt_ctx = {
                 "user_message": msg,
                 "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),

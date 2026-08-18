@@ -917,6 +917,18 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "history_expand", "turns": turns,
                          "expand_from": new_start, "total_turns": len(s.turns)})
         return
+    if isinstance(_d, dict) and _d.get("action") == "resume_interrupted":
+        # 中断轮续跑：恢复 _current（不新增 user_message）→ 直接续 ReAct 循环。
+        # 走 work_q 的 task 通道——worker 串行执行，天然与 agent.run 互斥（busy 时排队）。
+        def _do_resume():
+            err = agent.resume_interrupted()
+            if err:
+                agent.on_event({"type": "system", "text": f"⚠️ 无法恢复：{err}", "transient": True})
+                return
+            agent.run("", _resume_current=True)
+        _work_q.put(("task", _do_resume))
+        await _send(ws, {"type": "system", "text": "▶ 恢复中断轮，从断点继续…", "transient": True})
+        return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()
         if text and agent.autonomous_mode and agent.is_autonomous_active():

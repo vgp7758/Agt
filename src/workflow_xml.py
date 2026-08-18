@@ -353,13 +353,15 @@ def _node_to_json(nd) -> dict:
                 conds.append(_cond(br))   # branch 直接带条件（单条件简写）
             branches.append({"condition": {"logic": int(br.get("logic", "2")), "conditions": conds}})
         inp["branches"] = branches
-    elif ntype == "32":     # aggregator：<group><var ref/>
+    elif ntype == "32":     # aggregator：<group name type><var ref type/>
         mg = []
         for g in nd.findall("group"):
             gname = g.get("name")
+            gtype = g.get("type", "string")
             mg.append({"name": gname,
-                       "variables": [{"value": _ref_input(v.get("ref"))} for v in g.findall("var")]})
-            out.append({"name": gname, "type": g.get("type", "string")})
+                       "variables": [{"type": v.get("type") or gtype,
+                                      "value": _ref_input(v.get("ref"))} for v in g.findall("var")]})
+            out.append({"name": gname, "type": gtype})
         inp["mergeGroups"] = mg
     elif ntype == "22":     # intent：<in query/> + <intent name/> + <param/>（systemPrompt等）+ <model/>
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
@@ -696,8 +698,12 @@ def _node_to_xml(n):
             inner.append("<branch>" + "".join(_cond_to_xml(c) for c in cs) + "</branch>" if cs else "<branch/>")
     elif ntype == "32":
         for g in inp.get("mergeGroups", []):
-            vs = "".join(f'<var ref={_qa(_ref_of(v.get("value", v)))}/>' for v in g.get("variables", []))
-            inner.append(f'<group name={_qa(g.get("name",""))}>{vs}</group>')
+            gname = g.get("name", "")
+            # 分组类型：从 outputs 同名输出取（编辑器 setAggrGroupType 同步到 outputs.type）
+            gtype = next((o.get("type", "string") for o in out if o.get("name") == gname), "string")
+            vs = "".join(f'<var ref={_qa(_ref_of(v.get("value", v)))} type={_qa(v.get("type") or gtype)}/>'
+                         for v in g.get("variables", []))
+            inner.append(f'<group name={_qa(gname)} type={_qa(gtype)}>{vs}</group>')
     elif ntype == "22":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         for p in inp.get("llmParam", []):

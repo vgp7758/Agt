@@ -187,6 +187,11 @@
   .bubble code { background:#f0f2f5; padding:1px 5px; border-radius:4px;
     font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.92em; }
   .row.me .bubble code { background:rgba(255,255,255,.22); }
+  /* 用户消息前的时间分隔行（居中灰字） */
+  .time-divider { text-align:center; color:var(--muted); font-size:11px; margin:2px 0; user-select:none; }
+  /* 中断轮的继续按钮区 */
+  .interrupted-bar { display:flex; align-items:center; gap:10px; color:#8a9099; font-size:13px; }
+  .interrupted-bar button { color:#059669; border-color:#a7f3d0; }
 </style>
 </head>
 <body>
@@ -605,6 +610,20 @@ function finishAnswer(text){
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }
+// 中断轮：answer 区域渲染"继续"按钮（替代"(无回答)"死文本）——点击发送继续指令接续断掉的工作
+function finishInterrupted(turnNo){
+  if(!curTurn) newTurn();
+  const n = turnNo ? `第${turnNo}轮` : '本轮';
+  curTurn.answerEl.innerHTML =
+    `<div class="interrupted-bar"><span>⏹ ${n}被中断，未完成</span>`+
+    `<button class="btn" onclick="continueInterrupted()">▶ 继续</button></div>`;
+  if(curTurn.det) curTurn.det.open=false;
+  scrollBottom();
+}
+function continueInterrupted(){
+  sendRaw('请继续完成上一轮被中断的工作（从断点接着做，不要重头开始）', []);
+  setBusy(true); curTurn=null;
+}
 function renderHistory(turns){
   // 把一个 session 的完整历史原样渲染成对话：每轮 = 用户气泡 + 过程trace + 回答气泡
   msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
@@ -621,7 +640,11 @@ function renderHistory(turns){
     });
     if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
     if(curTurn.traceBox.children.length===0 && curTurn.det) curTurn.det.style.display='none';
-    finishAnswer(t.answer||'(无回答)');
+    // 中断轮（answer 空/中断标注）→ 继续按钮；正常轮 → 渲染回答
+    const a = t.answer||'';
+    const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
+    if(isInterrupted && !t.folded) finishInterrupted(t.turn);
+    else finishAnswer(a||'(无回答)');
   });
   scrollBottom();
 }
@@ -672,6 +695,12 @@ function addUserBubble(text, imgs){
   row.appendChild(b); msgArea.appendChild(row); scrollBottom();
   return row;
 }
+// 用户消息前的时间分隔行（居中灰字）——仅实时发送时显示当前时间（历史轮无时间戳数据）
+function addTimeDivider(){
+  const d=document.createElement('div'); d.className='time-divider';
+  d.textContent=new Date().toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  msgArea.appendChild(d);
+}
 function send(){
   const t=inp.value.trim();
   if(!t && !attachments.length) return;
@@ -687,7 +716,7 @@ function send(){
   // 普通模式（含忙时）：照常发送——后端按 busy 路由（忙→中途注入下一步，闲→下一轮），不再丢弃
   const imgs=attachments.slice();
   sendRaw(t, imgs);
-  if(!busy) lastUserBubble = addUserBubble(t, imgs);   // 插话（busy）不渲染 user 气泡——由 message_queued 队列气泡承载
+  if(!busy){ addTimeDivider(); lastUserBubble = addUserBubble(t, imgs); }   // 插话（busy）不渲染 user 气泡——由 message_queued 队列气泡承载
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
   if(!t.startsWith('/') && !busy){ setBusy(true); curTurn=null; }  // 仅空闲新轮才置 busy；忙时是插话不切轮
@@ -1662,7 +1691,8 @@ function onWSMessage(ev){
       break;  // 心跳，不渲染
     case '_done':
       if(curTurn && !curTurn.answerEl.textContent){
-        curTurn.answerEl.textContent='（本轮无最终回答）'; curTurn.answerEl.style.color='#8a9099';
+        // 实时中断（无最终回答）：渲染继续按钮（与读档渲染一致）
+        finishInterrupted();
       }
       if(curTurn && curTurn.det) curTurn.det.open=false;
       // 自主模式下不解除 busy 状态（会继续下一轮）

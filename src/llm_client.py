@@ -196,6 +196,10 @@ class LLMClient:
                 _rc = ""
         self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=utility_model）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
+        # 初始建链：_user_model（构造时的 model_name）提前 + base 其余。此前只在 switch_model(_user_initiated)
+        # 时才 _rebuild_chain——新建实例（utility 通道 / llm_call 的 model 参数缓存 / 子 Agent llm）链恒为空，
+        # 限流耗尽 token 后走"无回退链"直接抛（钩子工作流里 429 冒泡的根因）。
+        self._rebuild_chain()
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: dict):

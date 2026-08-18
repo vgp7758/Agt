@@ -2018,6 +2018,12 @@ def sleep(seconds: float) -> str:
     return f"已等待 {s:g} 秒"
 
 
+def list_append(lst: list, item) -> list:
+    """把 item 追加到 lst 末尾并返回新列表（不修改原列表）。
+    工作流里循环累积结果用：var = list_append(var, 本轮值)（配合 LoopSetVariable 累加）。"""
+    return list(lst or []) + [item]
+
+
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
 WEB_SEARCH_OUTPUTS = [
     {"name": "success", "type": "boolean", "description": "搜索是否成功"},
@@ -2112,6 +2118,7 @@ LIGHT_TOOLS = Toolbox(
         "arguments": "参数 dict（接 llm_call.tool_calls.0.arguments）",
     }),
     Tool(to_ascii),
+    Tool(list_append),
     Tool(sleep),
     hidden=True,
 )

@@ -163,6 +163,8 @@ function genId(){return ''+(Date.now()%1000000+Math.floor(Math.random()*900000))
 function findN(id){return WF.nodes.find(n=>n.id===id);}
 function nodeTitle(n){return n.data.nodeMeta?.title||TYPE_LABEL[n.type]||('节点'+n.type);}
 function nodeInputs(n){return n.data.inputs?.inputParameters||[];}
+// 复合节点(21/28)的本地变量（variableParameters）也作为可连线输入端点（初值连线/填字面量）
+function nodeLocalVars(n){return n.data.inputs?.variableParameters||[];}
 function nodeOutputs(n){return n.data.outputs||[];}
 // 输入字段是否已连变量线（ref 且 block-output）
 function _effInput(p){
@@ -191,6 +193,13 @@ function nodeRows(n){
   for(let i=0;i<Math.max(ins.length,outs.length);i++){
     if(ins[i]) rows.push(...fieldRows(n.id, ins[i],'in'));
     if(outs[i]) rows.push(...fieldRows(n.id, outs[i],'out'));
+  }
+  // 复合节点本地变量（variableParameters）：作为额外输入端点排在常规输入之后
+  if(['21','28'].includes(n.type)){
+    nodeLocalVars(n).forEach(lv=>{
+      rows.push({side:'in', field:lv.name, type:lv.input?.type||'string', parent:null, sub:false,
+                 key:_rowKey(n.id,'in',lv.name), depth:0, localVar:true});
+    });
   }
   return rows;
 }
@@ -519,10 +528,13 @@ function renderNode(n){
           g.appendChild(elm('text',{x:22,y,class:'node-field-name',fill:col},ir.field));
         }else{
           // 未连线：显示输入控件（占左 2/3，placeholder=字段名）；已连线：显示字段名
-          const p=nodeInputs(n).find(x=>x.name===ir.field);
+          // 本地变量(localVar)：从 variableParameters 找（初值连线/填字面量）
+          const p = ir.localVar
+            ? nodeLocalVars(n).find(x=>x.name===ir.field)
+            : nodeInputs(n).find(x=>x.name===ir.field);
           const linked=p&&inputIsLinked(p);
           if(p&&!linked){
-            const fo=makeInputControl(n,p,nodeInputs(n).indexOf(p),ir.field);
+            const fo=makeInputControl(n,p, (ir.localVar?nodeLocalVars(n):nodeInputs(n)).indexOf(p), ir.field);
             if(fo){
               const cw=Math.floor(n.w*2/3)-14;   // 左 2/3 区域
               fo.setAttribute('x',12);fo.setAttribute('y',y-8);fo.setAttribute('width',cw);fo.setAttribute('height',16);

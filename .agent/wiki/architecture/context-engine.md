@@ -1,6 +1,6 @@
 # 上下文引擎与缓存优化
 
-> src/session.py 核心设计。详细分档机制见 [docs/architecture/02-session-memory.md](../../../docs/architecture/02-session-memory.md)，本页补充 docs 未收录的 2026-08 演进（分组衰减 / usage 归一化 / provider 缓存坑）。
+> src/session.py 核心设计。详细分档机制见 [docs/architecture/02-session-memory.md](../../../docs/architecture/02-session-memory.md)，本页补充 docs 未收录的 2026-08 演进（分组衰减 / usage 归一化 / provider 缓存坑 / 折叠实证 / 轮边界统一重排）。
 
 ## 投影总览（messages_for_llm 装配顺序）
 
@@ -18,9 +18,30 @@ assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail�
 ## 分档投影（轮间）
 
 - 每档字数上限：1500 → 750 → 375 → 187（`_tier_limit`，detail_base 减半递进）
-- 总投影超过 `max_effective_context_window` → 最老轮**毕业升档**（档位+1，之前各档全部 +1）
 - 同档位**冻结渲染**（byte-stable）：档内内容字节级不变 → 前缀缓存可命中
 - 全档满 → 折叠成结构摘要（fold），原文仍在 turns 可 recall
+
+### 升档（graduate）与折叠：轮边界统一计划（2026-08，commit 1e9af8f）
+
+**核心经济模型：轮内零调整，只在轮边界做一次全局重排（升档+折叠统一）。**
+
+升档逻辑从**轮内 `_build` 超窗触发**移到**轮边界 `_plan_fold` 统一计划**：
+
+1. **轮边界统一计划**：`_plan_fold` 在轮边界统一判断——先升档到 75%（档位+1，之前各档全部 +1），再折叠到 75%（档梯满时）。`_planned_graduates` 记录本轮计划。
+2. **轮内 `_build` 零调整**：`_build` 以 `_planned_fold` / `_planned_graduates` 为**起点**，轮内不再自行触发升档/折叠，**零调整**。
+3. **收益**：轮内字节稳定 → **前缀缓存整段命中**。升档与折叠都只在轮边界发生一次，避免轮内中途重排打断缓存。
+
+> 旧逻辑（已废弃）：升档由轮内 `_build` 超窗触发，折叠在档梯满后由轮内投影超窗随机触发——两者都在轮内中途发生，打断前缀缓存。
+
+### 折叠事件与缓存命中（t206 实证，2026-08）
+
+对 t206_s6→s7 命中率波动的定位结论：**是折叠（fold）事件，不是升档**。
+
+- **触发条件**：档梯已满（早期轮全部毕业衰减到最深档 187 字下限）后投影仍超 `max_effective_context_window` → 触发全档折叠：630 条早期消息折叠成 1 条 8020 字结构摘要（原文仍在 turns 可 recall）。在新模型下，此折叠由轮边界 `_plan_fold` 计划触发，不再轮内随机。
+- **缓存断点**：精确定位在历史段首条消息起点（投影 `[tiered history]` 段的第一条消息）——折叠重写了整个历史段，断点之后前缀全部失效
+- **代价仅一步**：s7 当步 98.4% miss（512746/521091 字符全价重算），/stats 折线呈单点深跌
+- **核心性质（已验证）**：折叠摘要 byte-stable → s7→s8 命中率恢复至 ~99.9%。**折叠是一次性成本事件，不破坏后续缓存**
+- 观测手段：/stats 缓存命中率折线 + llm_calls.jsonl 归一化 usage（见 [ops 可观测性](../guides/ops.md#可观测性)）
 
 ## 分组衰减（轮内，2026-08 新）
 
@@ -38,8 +59,8 @@ assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail�
 ## 前缀缓存三层优化（详见 blog/03）
 
 1. **布局层**：易变块（时间/计划/召回/后台）统一收尾成 tail ambient，前缀区纯稳定
-2. **轮间层**：分档冻结渲染（见上）
-3. **轮内层**：分组衰减（见上）
+2. **轮间层**：分档冻结渲染（见上）+ **轮边界统一重排**（升档+折叠统一计划，见 [轮边界统一计划](#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）；折叠为预期一次性 miss，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)
+3. **轮内层**：分组衰减 + `_build` 以 `_planned_fold`/`_planned_graduates` 为起点**零调整**（见 [轮边界统一计划](#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
 
 ## usage 归一化（llm_call_log.normalize_usage）
 
@@ -49,4 +70,4 @@ assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail�
 
 - **随机路由**：deepseek-v4-flash 等按请求随机分实例 → 每实例缓存独立 → 命中恒 0。客户端无法修，应对=回退链后置或 provider 会话粘性
 - **per-token 隔离**：GLM 缓存按 api_token 隔离且容量有限 → 同 token 交错 react 长调用与 utility 短调用互相驱逐缓存 → **utility 必须独立条目+独立 token**；该类条目配 `"token_rotate": false`（sticky）。ModelScope 不吃缓存但按号限额度 → 多 token 预旋转分摊是刚需，保持默认 true
-- 判别：/stats 折线命中率骤降且与 utility 调用交错相关=驱逐；恒 0=不支持/随机路由
+- 判别：**单步深跌后立即恢复**=折叠事件（预期一次性成本，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)）；骤降且与 utility 调用交错相关=驱逐；恒 0=不支持/随机路由

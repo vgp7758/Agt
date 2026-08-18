@@ -9,7 +9,7 @@
 | 页面 | 内容 | 什么时候看 |
 |------|------|-----------|
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
-| [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 毕业升档 + 分组衰减 + 前缀缓存三层优化 | 改投影/token 优化 |
+| [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 轮边界统一重排（升档+折叠）+ 分组衰减 + 折叠实证 + 前缀缓存三层优化 | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + 快照副作用检测（py_auto_diag 闭环） | 写工作流 / 加钩子 / async 钩子 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
@@ -31,6 +31,8 @@
 - LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
+- **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
+- 折叠（fold）设计已实证（t206）：档梯满触发全档折叠，摘要 byte-stable——单步 ~98% miss 后命中率恢复 ~99.9%，一次性成本不破坏后续缓存（见 [context-engine 折叠实证](architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）
 - **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（build_commit_msg + commit_wiki）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
 - 唤醒链路端到端验证（三阶段）：阶段一 /api/status 跨实例调用通过；阶段二 9100 反复退出根因修正为端口被旧实例占用（已清理，非代码 bug）；阶段三 stdin 通道验证通过、观测点日志已埋，等待首轮完成闭环（见 [multi-agent 端到端验证状态](architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）
 

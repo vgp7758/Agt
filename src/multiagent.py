@@ -481,9 +481,35 @@ def make_subagent_tools(agent) -> list:
                         f"或用 agent_query_tool_detail(\"{caller_id}\", \"call_id\") 查看某次工具调用的完整详情，"
                         f"或用 agent_ask(\"{caller_id}\", \"你的问题\") 直接向派发者提问。"
                     )
+
+                def _route_answer(answer_text: str):
+                    """路由 answer 到 caller 的 inbox——run() 返回后立即调用。
+                    放在 recap/meta/background_tasks 之前：即使后续步骤被 /restart 杀进程，
+                    answer 已在 inbox → inbox_thread → work_q → worker → run → 唤醒 caller。"""
+                    if not caller_id or caller_id == "user":
+                        return
+                    try:
+                        if reg:
+                            caller_entry = reg.lookup(caller_id)
+                            if caller_entry and caller_entry.agent:
+                                body = answer_text if len(answer_text) <= 4000 else (
+                                    answer_text[:4000] + f"\n…（已截断 {len(answer_text) - 4000} 字，"
+                                                 f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
+                                caller_entry.agent.push_message(
+                                    f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
+                                    source=f"subagent:{_aid}")
+                                _LOG.info("子Agent %s answer 已入队 caller %s 的 inbox（len=%d）",
+                                          _aid, caller_id, len(caller_entry.agent.inbox))
+                            else:
+                                _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, caller_id)
+                    except Exception as route_err:
+                        _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
+
                 try:
                     _target.cumulative_tokens = 0
                     res = _target.run(enriched) or "(空回复)"
+                    # 立即路由 answer（在 recap/meta 之前——即使后续被杀，answer 已在 inbox）
+                    _route_answer(res)
                     # 等待 recap 生成（异步 daemon 线程，最多等 3 秒）
                     for _ in range(30):
                         if getattr(_target, '_recap', ''):
@@ -511,9 +537,8 @@ def make_subagent_tools(agent) -> list:
                         reg.update_status(_aid, "done")
                 except Exception as ex:
                     res = f"[失败] {type(ex).__name__}: {ex}"
-                    agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
-                    if reg:
-                        reg.update_status(_aid, "failed")
+                    # 失败也立即路由（caller 需要知道子 Agent 出错了）
+                    _route_answer(res)
                     # 失败也要写 _agent_meta
                     if _sub_dir:
                         meta_path = _sub_dir / "meta.json"
@@ -530,26 +555,9 @@ def make_subagent_tools(agent) -> list:
                             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
                         except Exception:
                             pass
-                # 按 caller_id 路由 answer：入 caller 的 inbox → caller 下一步边界自动看到
-                # 子 Agent 的最终回复就是交付物，不应粗暴截断；仅超长（>4000字）时截断并
-                # 指引 caller 用 agent_query_events 查完整版（子 Agent session 已落盘，answer 可查）。
-                if caller_id and caller_id != "user":
-                    try:
-                        if reg:
-                            caller_entry = reg.lookup(caller_id)
-                            if caller_entry and caller_entry.agent:
-                                body = res if len(res) <= 4000 else (
-                                    res[:4000] + f"\n…（已截断 {len(res) - 4000} 字，"
-                                                 f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
-                                caller_entry.agent.push_message(
-                                    f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
-                                    source=f"subagent:{_aid}")
-                                _LOG.info("子Agent %s answer 已入队 caller %s 的 inbox（len=%d）",
-                                          _aid, caller_id, len(caller_entry.agent.inbox))
-                            else:
-                                _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, caller_id)
-                    except Exception as route_err:
-                        _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
+                    agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
+                    if reg:
+                        reg.update_status(_aid, "failed")
 
             th = threading.Thread(target=_bg, daemon=True)
             agent._bg_threads[_aid] = th

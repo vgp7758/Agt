@@ -674,7 +674,10 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             handler = NODE_HANDLERS.get(ntype)
             if handler is None:
                 raise WorkflowError(f"复合节点体内未支持的节点类型 {ntype}（节点 {current}）")
-            result = handler(node, ctx)
+            # 走 _run_node_with_batch：子画布内节点同样支持节点级批处理
+            # （此前直接 handler(node, ctx)——体内 batch.enabled=true 被静默忽略，
+            #   loop-item 引用解析到外层 batch_item=None → 工具参数全 None）
+            result = _run_node_with_batch(node, handler, ctx)
             ctx.node_outputs[current] = result.get("outputs") or {}
             if ntype not in ("19", "29", "20"):
                 last_data = current

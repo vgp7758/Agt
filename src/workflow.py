@@ -1507,6 +1507,11 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             if port:
                 if src_port != port and not (port.endswith("_error") and src_port == "error"):
                     continue
+            elif src_port and (src_port == "error" or str(src_port).endswith("_error")):
+                # 成功（port=None）：错误处理边不激活——
+                # 此前无条件放行所有出边，画了 error 边的节点一成功就把 end（OR 语义）拉进
+                # 就绪队列，整条工作流被提前终止（before_turn_retrieval 7 节点早退的根因）
+                continue
             pending_in[tid] -= 1
             if pending_in[tid] <= 0 and tid not in executed:
                 ready.append(tid)
@@ -1514,8 +1519,9 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     if executed:
         last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
         if last and last in ctx.node_outputs:
-            return _stringify_result(ctx.node_outputs[last])
-    return _stringify_result({})
+            return (ctx.node_outputs[last] if return_exit_dict
+                    else _stringify_result(ctx.node_outputs[last]))
+    return {} if return_exit_dict else _stringify_result({})
 
 
 def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
@@ -1613,6 +1619,9 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
             if port:
                 if src_port != port and not (port.endswith("_error") and src_port == "error"):
                     continue
+            elif src_port and (src_port == "error" or str(src_port).endswith("_error")):
+                # 成功（port=None）：错误处理边不激活（与 execute() 同款修复）
+                continue
             pending_in[tid] -= 1
             if pending_in[tid] <= 0 and tid not in executed:
                 ready.append(tid)

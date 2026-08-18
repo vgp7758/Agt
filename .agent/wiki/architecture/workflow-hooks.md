@@ -37,7 +37,9 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **pass_through 工具**（LIGHT_TOOLS）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
 - **starts_with/ends_with**：LIGHT_TOOLS 字符串前后缀判断（扩展名分流）
 - **XML schema 往返**：list\<object\> 的 field 子元素 / list 基础类型 itemType / 坐标幂等（编辑器保存不再丢结构）
-- **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 节点按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
+- **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 子工作流按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
+- **dir_snapshot / diff_snapshots 子工作流**：引擎级快照能力——`dir_snapshot(path)` 对目录取文件快照（mtime 映射 JSON，排除 .git/__pycache__，path 留空=整个 workspace）；`diff_snapshots(before, after)` 对比两份快照输出变更清单（`files` 逗号分隔 + `count` + `changed` 结构化对象），供 git_commit 或选择器/聚合节点消费。实例见 [wiki_auto_maintenance 的快照重构](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08)
+- **subworkflow 节点 literal 属性约定（2026-08）**：subworkflow(9) 节点调用子工作流传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`）。子元素形式会导致参数传递失败（子工作流收不到字面量）。实例：wiki_auto_maintenance 的 snap_before 传 `path=".agent/wiki/"`（见 [快照重构中的 literal 坑](../features/wiki-auto-maintenance.md#subworkflow-节点-literal-属性坑2026-08-修复)）
 
 ## 生命周期钩子
 
@@ -61,6 +63,8 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 排除：.git/.agent/.agt + .gitignore 全模式 + 嵌套 git 仓库整棵剪枝（性能 15012→124 文件）
 ```
 
+> 引擎内部 `_workspace_snapshot` / `_diff_snapshots` 的逻辑与对外暴露的 **dir_snapshot / diff_snapshots 子工作流**同源；后者在 [wiki_auto_maintenance](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08) 中用于提交前变更清单生成。
+
 **py_auto_diag**（随包播种，编辑器可开）：changed_files → loop 遍历 → ends_with(".py") → py_diag（ast+jedi）→ contains 判 ERROR → **改了 .py 必注入**（通过/报错都反馈，非 .py 短路零打扰）。cs_auto_diag 同构（.cs/cs_diag）。旧版 edit/write_file 内联 _py_check 已删除——职责统一由钩子接管。
 
 ## 编辑器注意
@@ -75,6 +79,6 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 
 - [系统总览](overview.md)：模块地图与一轮对话数据流
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 钩子实例
-- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：git_commit 节点实例（提交失败修复）
+- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：git_commit 节点 + dir_snapshot/diff_snapshots 子工作流 + subworkflow literal 属性坑实例
 - [气泡交互](../features/bubble-interaction.md)：编辑器系统气泡展开/折叠
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：async 元信息为本次交付项之一

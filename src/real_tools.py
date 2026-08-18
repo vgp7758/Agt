@@ -1887,6 +1887,85 @@ def pass_through(input: _Any) -> _Any:
     可把多个上游节点的输出在节点处拼成结构透传输出——中转/整形/出口整形用。"""
     return input
 
+# ===== 工作流 ReAct 原语三件套 =====
+# _WF_CTX 由 workflow._handle_plugin 在调用这三个工具时注入（llm=执行上下文的 LLMClient、
+# tools=工具箱）。它们只在工作流 plugin 节点里有意义——Agent/代码节点直接调用会拿到错误提示。
+_WF_CTX: dict = {"llm": None, "tools": None}
+
+
+def llm_call(messages: list, tools: list = None, temperature: float = None,
+             enable_thinking: bool = None) -> str:
+    """原生 LLM 调用（工作流 ReAct 原语）：完整 messages + tools schema → 完整回包。
+    messages: OpenAI 格式消息数组（system/user/assistant/tool 均可）；
+    tools: get_tool_schemas 输出的 function schema 数组（留空=纯文本对话）。
+    返回 JSON（plugin 节点自动解析成对象，下游可 .content / .tool_calls.0.name 引用）：
+      {content, reasoning, tool_calls:[{id,name,arguments}], usage, finish_reason, error}"""
+    import json as _json
+    llm = _WF_CTX.get("llm")
+    if llm is None:
+        return _json.dumps({"error": "llm_call 需在工作流 plugin 节点中执行（无 LLM 上下文）",
+                            "content": "", "reasoning": "", "tool_calls": []}, ensure_ascii=False)
+    overrides = {}
+    if temperature is not None:
+        overrides["temperature"] = float(temperature)
+    if enable_thinking is not None:
+        overrides["enable_thinking"] = bool(enable_thinking)
+    try:
+        resp = llm.chat(messages or [], tools=tools or None, scene="wf:llm_call", **overrides)
+        return _json.dumps({
+            "content": resp.content or "",
+            "reasoning": resp.reasoning or "",
+            "tool_calls": resp.tool_calls or [],
+            "usage": resp.usage,
+            "finish_reason": resp.finish_reason,
+            "model": getattr(resp, "model", ""),
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return _json.dumps({"error": f"{type(e).__name__}: {e}", "content": "",
+                            "reasoning": "", "tool_calls": []}, ensure_ascii=False)
+
+
+def get_tool_schemas(names: str = "") -> str:
+    """获取工具 schema 数组（OpenAI function 格式），直接喂给 llm_call 的 tools 入参。
+    names: 逗号分隔的工具名过滤（如 'read_file,grep'）；留空=全部工具。
+    工作流 ReAct 循环的标准装配：get_tool_schemas → llm_call(tools=...) 。"""
+    import json as _json
+    tb = _WF_CTX.get("tools")
+    if tb is None:
+        return _json.dumps({"error": "get_tool_schemas 需在工作流 plugin 节点中执行"}, ensure_ascii=False)
+    want = {n.strip() for n in (names or "").split(",") if n.strip()}
+    # include_hidden=True：LIGHT_TOOLS 整箱 hidden（算术工具/三件套对主 LLM 不投影），
+    # 但工作流 ReAct 需要它们的 schema——get_tool_schemas 的语义就是"全量工具表"
+    schemas = [s for s in tb.schemas(include_hidden=True)
+               if not want or s.get("function", {}).get("name") in want]
+    return _json.dumps(schemas, ensure_ascii=False)
+
+
+def call_tool(name: str, arguments: dict = None) -> str:
+    """按名字动态执行工具箱中的工具（工作流 ReAct 原语：执行 llm_call 返回的 tool_calls）。
+    name: 工具名（如 llm_call.tool_calls.0.name）；arguments: 参数 dict（如 ...tool_calls.0.arguments）。
+    返回工具结果文本（错误也转文本，不炸工作流）。⚠️ 不递归拦截：工具集含 wf_* 时模型可能调到
+    工作流自身造成递归——可用 get_tool_schemas(names=...) 过滤掉。"""
+    tb = _WF_CTX.get("tools")
+    if tb is None:
+        return "[call_tool 需在工作流 plugin 节点中执行]"
+    try:
+        return tb.call((name or "").strip(), arguments or {})
+    except Exception as e:
+        return f"[工具 {name} 执行失败] {type(e).__name__}: {e}"
+
+
+LLM_CALL_OUTPUTS = [
+    {"name": "content", "type": "string", "description": "最终回答正文（无工具调用时）"},
+    {"name": "reasoning", "type": "string", "description": "思考过程（推理模型）"},
+    {"name": "tool_calls", "type": "list", "description": "工具调用数组；空=模型给出最终回答",
+     "schema": [{"name": "id", "type": "string"}, {"name": "name", "type": "string"},
+                {"name": "arguments", "type": "object"}]},
+    {"name": "finish_reason", "type": "string", "description": "stop / tool_calls / length"},
+    {"name": "usage", "type": "object", "description": "token 用量"},
+    {"name": "error", "type": "string", "description": "错误信息（成功为空）"},
+]
+
 def to_ascii(text: str) -> str:
     r"""把字符串里的非 ASCII 字符（中文等）转成 \uXXXX 转义，ASCII 字符保留。
     用于生成 ASCII 安全文本（JSON 传输/存储），如 "贵州茅台" → 贵州茅台。"""
@@ -2020,6 +2099,18 @@ LIGHT_TOOLS = Toolbox(
     Tool(starts_with),
     Tool(ends_with),
     Tool(pass_through, outputs=[{"name": "raw", "type": "any", "description": "透传值（结构与输入一致；类型可在编辑器改）"}]),
+    # 工作流 ReAct 原语三件套（仅工作流 plugin 节点可用；执行时由 workflow 引擎注入 llm/tools 上下文）
+    Tool(llm_call, outputs=LLM_CALL_OUTPUTS, param_descriptions={
+        "messages": "OpenAI 格式消息数组（system/user/assistant/tool 均可；循环中用循环变量累积）",
+        "tools": "工具 schema 数组（接 get_tool_schemas 的输出）；留空=纯文本对话",
+    }),
+    Tool(get_tool_schemas, param_descriptions={
+        "names": "逗号分隔的工具名过滤（如 'read_file,grep'）；留空=全部工具（⚠️ 含 wf_* 递归风险，ReAct 建议显式列出）",
+    }),
+    Tool(call_tool, param_descriptions={
+        "name": "工具名（接 llm_call.tool_calls.0.name）",
+        "arguments": "参数 dict（接 llm_call.tool_calls.0.arguments）",
+    }),
     Tool(to_ascii),
     Tool(sleep),
     hidden=True,

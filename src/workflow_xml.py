@@ -747,7 +747,11 @@ def _node_to_xml(n):
             inner.append(f'<param name="loopCount" type="integer">{_cdata(_lit_of(inp["loopCount"]))}</param>')
         for vp in inp.get("variableParameters", []):
             pi = vp.get("input", {}) or {}
-            inner.append(f'<var name={_qa(vp.get("name", ""))} type={_qa(pi.get("type", "string"))} literal={_qa(_lit_of(pi))}/>')
+            _vr = _ref_of(pi)
+            if _vr:
+                inner.append(f'<var name={_qa(vp.get("name", ""))} type={_qa(pi.get("type", "string"))} ref={_qa(_vr)}/>')
+            else:
+                inner.append(f'<var name={_qa(vp.get("name", ""))} type={_qa(pi.get("type", "string"))} literal={_qa(_lit_of(pi))}/>')
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         inner.extend(out_el(o) for o in out)
         inner.extend(_composite_body_xml(n))

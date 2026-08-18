@@ -1125,7 +1125,18 @@ def _handle_plugin(node: dict, ctx) -> dict:
             actual_tools = LIGHT_TOOLS
         else:
             raise WorkflowError(f"工具 {tool_name!r} 未在工具箱中找到")
-    raw = actual_tools.call(tool_name, args)          # Tool.run 统一返回 str
+    # ReAct 原语三件套（llm_call/get_tool_schemas/call_tool）需要执行上下文的 llm/tools：
+    # 调用前注入 real_tools._WF_CTX（保存/恢复，嵌套子工作流安全），其余工具不受影响
+    if tool_name in ("llm_call", "get_tool_schemas", "call_tool"):
+        import real_tools as _rt
+        _saved = (_rt._WF_CTX.get("llm"), _rt._WF_CTX.get("tools"))
+        _rt._WF_CTX.update(llm=ctx.llm, tools=ctx.tools)
+        try:
+            raw = actual_tools.call(tool_name, args)
+        finally:
+            _rt._WF_CTX.update(llm=_saved[0], tools=_saved[1])
+    else:
+        raw = actual_tools.call(tool_name, args)          # Tool.run 统一返回 str
     # raw 可能是 JSON/Python-repr 字符串（list/dict 等），尝试解析回 Python 对象；
     # 解析成功则 outputs 里存解析后的对象（下游代码节点引用时直接拿 list/dict）
     parsed = _try_parse(raw)

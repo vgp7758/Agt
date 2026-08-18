@@ -137,9 +137,12 @@ class Toolbox:
             return True
         return False
 
-    def schemas(self) -> list[dict]:
-        """产出传给 API 的 tools 列表（跳过 hidden：它们注册在箱但不投影给 LLM）。"""
-        return [t.schema for t in self._tools.values() if not getattr(t, "hidden", False)]
+    def schemas(self, include_hidden: bool = False) -> list[dict]:
+        """产出传给 API 的 tools 列表（默认跳过 hidden：它们注册在箱但不投影给 LLM）。
+        include_hidden=True 连 hidden 一起返回——get_tool_schemas 用：工作流 ReAct 要拿
+        LIGHT_TOOLS（算术工具/三件套）的 schema，它们对主 LLM 是 hidden 的。"""
+        return [t.schema for t in self._tools.values()
+                if include_hidden or not getattr(t, "hidden", False)]
 
     def call(self, name: str, arguments: dict) -> str:
         """按名字派发执行。未知工具也返回文本提示，不抛异常。"""

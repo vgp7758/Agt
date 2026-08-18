@@ -531,6 +531,7 @@ class Agent:
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)
         self._restore_subagents()   # 扫描 session_dir/agents/ 恢复子 Agent 列表到 registry
+        self._inbox_restore()       # 从 inbox.jsonl 恢复未消费的后台消息（/restart 或崩溃后不丢）
 
     def _emit_plan_if_any(self):
         """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""
@@ -563,24 +564,103 @@ class Agent:
         _emit_spec(self)
 
     # ========== 后台消息 inbox（producer → inbox → 串行消费者 → run） ==========
+    # inbox 持久化：session_dir/inbox.jsonl（append-only + 消费时重写剩余）
+    # push_message 时 append 一行 JSON {ts, source, msg, seed}；pop_inbox 时 popleft + 重写文件头。
+    # 启动恢复（set_session 后）：若 inbox.jsonl 存在 → 逐行 load 回 deque。
+    # 这样 /restart 或崩溃后 inbox 里的消息不丢——新进程的 inbox_thread 会捡到并触发 run。
+    def _inbox_path(self):
+        """inbox 持久化文件路径（跟 session_dir 走）。"""
+        sdir = getattr(self.session, "session_dir", None)
+        if not sdir:
+            return None
+        from pathlib import Path
+        return Path(sdir) / "inbox.jsonl"
+
+    def _inbox_persist_append(self, source, msg, seed):
+        """append 一条到 inbox.jsonl（失败静默——内存 deque 已有，持久化是 best-effort）。"""
+        try:
+            p = self._inbox_path()
+            if not p:
+                return
+            p.parent.mkdir(parents=True, exist_ok=True)
+            import json as _j
+            rec = {"ts": time.time(), "source": source, "msg": msg, "seed": seed}
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(_j.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            pass   # 持久化失败不影响内存操作
+
+    def _inbox_persist_rewrite(self):
+        """消费后重写 inbox.jsonl（剩余条目）。失败静默。
+        inbox 通常很短（几条），直接全量重写即可——不用 append+truncate 的复杂方案。"""
+        try:
+            p = self._inbox_path()
+            if not p:
+                return
+            import json as _j
+            with self._inbox_lock:
+                items = list(self.inbox)
+            if not items:
+                # 空了：删文件（干净）
+                if p.exists():
+                    p.unlink()
+                return
+            tmp = p.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for (src, msg, seed) in items:
+                    f.write(_j.dumps({"ts": time.time(), "source": src, "msg": msg, "seed": seed},
+                                     ensure_ascii=False) + "\n")
+            os.replace(tmp, p)   # 原子替换
+        except Exception:
+            pass
+
+    def _inbox_restore(self):
+        """启动/set_session 时从 inbox.jsonl 恢复未消费的消息到 deque。"""
+        try:
+            p = self._inbox_path()
+            if not p or not p.exists():
+                return
+            import json as _j
+            count = 0
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rec = _j.loads(line)
+                    with self._inbox_lock:
+                        self.inbox.append((rec.get("source", ""), rec.get("msg", ""), rec.get("seed")))
+                    count += 1
+            if count:
+                _LOG.info("inbox 恢复了 %d 条未消费消息（从 %s）", count, p)
+        except Exception as e:
+            _LOG.warning("inbox 恢复失败: %s", e)
+
     def push_message(self, msg: str, source: str = "background", seed: Optional[dict] = None):
         """后台/调度器推一条消息进 inbox，等 Agent 空闲时触发一轮 run。线程安全。
-        被 background.Scheduler / ServiceManager 等后台线程调用。
+        被 background.Scheduler / ServiceManager / _bg 路由等后台线程调用。
+        持久化：append 到 inbox.jsonl——/restart 或崩溃后新进程可恢复。
 
         seed（可选）= 一条合成工具记录 {tool, args, result, reasoning}，消费侧开新 turn 时
         会预置成一个 Step（渲染为 assistant(tool_use)→tool(结果)）。用于后台服务退出等异步事件：
         把退出结果+启动参数以 stop_service 工具结果的形式回传，Agent 醒来即在上下文里看到。"""
         with self._inbox_lock:
             self.inbox.append((source, msg, seed))
+        self._inbox_persist_append(source, msg, seed)
         self._emit({"type": "background_trigger", "source": source,
                     "text": (msg or "")[:80], "queue_size": len(self.inbox),
                     "seed": bool(seed)})
 
     def pop_inbox(self):
         """取一条 inbox 消息 (source, msg, seed)，空则 None。线程安全。
-        两处消费点（run() 内循环 / chat/web 主循环 drain）都调它，锁保证不重复消费。"""
+        两处消费点（run() 内循环 / chat/web 主循环 drain）都调它，锁保证不重复消费。
+        消费后重写 inbox.jsonl（移除已消费的条目）。"""
         with self._inbox_lock:
-            return self.inbox.popleft() if self.inbox else None
+            if not self.inbox:
+                return None
+            item = self.inbox.popleft()
+        self._inbox_persist_rewrite()
+        return item
 
     def _seed_steps(self, seeds: list):
         """把一批合成工具记录预置成本轮 Step：每条 {tool, args, result, reasoning} 落 toollog +

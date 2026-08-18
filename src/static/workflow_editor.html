@@ -2032,9 +2032,15 @@ async function syncSubworkflowNode(n){
     const canvas=r.canvas;
     const entry=(canvas.nodes||[]).find(nn=>nn.id==='100001');
     const exit=(canvas.nodes||[]).find(nn=>nn.id==='900001');
-    // 输入 = 目标 start 的 outputs（入参），保留已有连线（blockID）覆盖默认空
-    const prev={}; (n.data.inputs.inputParameters||[]).forEach(p=>{if(p.input?.value?.content?.blockID)prev[p.name]=p.input.value.content.blockID;});
-    n.data.inputs.inputParameters=(entry?.data?.outputs||[]).map(o=>({name:o.name,input:{type:o.type||'string',schema:o.schema,value:{type:'ref',content:{source:'block-output',blockID:prev[o.name]||'',name:o.name}}}}));
+    // 输入 = 目标 start 的 outputs（入参）。保留已有连线与非空字面量（此前只留 blockID 连线——
+    // 字面量被清空，且默认值造出 blockID='' 的空 ref（既非连线也非 literal）→ 输入框恒空，用户填的字面量打开即丢）
+    const prev={}; (n.data.inputs.inputParameters||[]).forEach(p=>{
+      const v=p.input?.value;
+      if(!v) return;
+      if(v.type==='ref'&&v.content?.blockID) prev[p.name]=v;                    // 连线：完整保留
+      else if(v.type==='literal'&&String(v.content??'')!=='') prev[p.name]=v;   // 非空字面量：保留
+    });
+    n.data.inputs.inputParameters=(entry?.data?.outputs||[]).map(o=>({name:o.name,input:{type:o.type||'string',schema:o.schema,value:prev[o.name]||{type:'literal',content:''}}}));
     // 输出 = 目标 exit 的 inputParameters（返回字段）
     n.data.outputs=(exit?.data?.inputs?.inputParameters||[]).map(p=>({name:p.name,type:p.input?.type||'string',description:''}));
     n.data.inputs.spaceId=''; n.data.inputs.type=0;

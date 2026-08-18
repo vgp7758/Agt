@@ -27,6 +27,8 @@
   - `changed`：结构化对象列表（含 file / change 类型 new|modified|deleted 等），供 selector/loop/aggregator 进一步处理
 - **无变更**：清单为空 → 消费端（如 commit_wiki）静默跳过，不产生空提交
 
+> **消费端注意（dict split 坑）**：`wf_diff_snapshots` 作为**工具节点**被调用时，其输出是**原始 dict**。消费端必须引用其**具体字段**（`files` / `count` / `changed`），并**补 `out` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。详见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08)。
+
 ## 与 engine 内部快照的关系
 
 引擎内 `_workspace_snapshot` / `_diff_snapshots`（after_tool 钩子检测副作用用）与这两个子工作流**逻辑同源**。区别：
@@ -39,15 +41,32 @@
 
 ## subworkflow literal 属性坑（2026-08 修复）
 
-调用子工作流传**字面量参数**（如 `path=".agent/wiki/"`）时，**必须用属性形式 `literal=".agent/wiki"`**，不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败——子工作流收不到字面量，快照/diff 无法正确限定目录。这是本次重构踩到的关键坑，已在 wiki_auto_maintenance 的 snap_before / diff_wiki 节点修正。
+调用子工作流传**字面量参数**（如 `path=".agent/wiki/"`）时，**必须用属性形式 `literal=".agent/wiki"`**，不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败——子工作流收不到字面量，快照/diff 无法正确限定目录。**后果**：`path` 为空 → 快照拍了整个 workspace → `files` 清单超长 → **WinError 206（文件名或扩展名太长）**。这是重构时踩到的关键坑，已在 wiki_auto_maintenance 的 snap_before 节点修正。
+
+> **后端链路正常，前端缓存问题（2026-08 验证）**：path 字面量保存后，**后端链路验证正常**（保存→读取→执行均正确传递 path），问题定位为**前端缓存**——编辑器保存后浏览器未刷新导致展示旧值，并非后端参数传递缺陷。若保存后行为异常，先**硬刷新浏览器**（Ctrl+Shift+R）排除缓存再排查后端。
+
+## workflow.py 缺少 Toolbox import → NameError 修复（2026-08）
+
+**现象**：运行涉及快照/工具链的工作流时，`workflow.py` 抛 **NameError**（`Toolbox` 未定义）。
+
+**根因**：`src/workflow.py` 中使用了 `Toolbox` 类但**缺少对应的 import 语句**，运行时解析不到符号。
+
+**修复**：在 `src/workflow.py` 文件头补上 `Toolbox` 的 import（与 `src/agent.py` 中 Toolbox 的引入方式一致），使符号解析正常。
+
+**经验**：涉及跨模块符号（如 Toolbox）时，改动后**先确认 import 完整**再跑工作流；NameError 与业务逻辑无关，纯符号解析问题。
 
 ## 使用示例（wiki_auto_maintenance 中的装配）
 
 ```
-build_commit_msg → snap_before（dir_snapshot，path=.agent/wiki/，打提交前基线）
-  → diff_wiki（diff_snapshots，before=snap_before 快照 + after=当前快照，生成变更清单）
-  → commit_wiki（git_commit，files=diff_wiki.files，按清单 add+commit+push，无变更跳过）
+判官 llm → snap_before（子工作流 dir_snapshot，path=.agent/wiki/，打【更新前】基线）
+  → update_wiki（plugin，更新 wiki 页面）
+  → diff_wiki（code 节点：本节点执行时拍 after 快照 + 调 diff_snapshots 对比，生成变更清单）
+  → has_changes?（count>0）
+      ├─ true  → build_msg → commit_wiki（git_commit，files=diff_wiki.files，按清单 add+commit+push）
+      └─ false → 静默跳过
 ```
+
+**关键时序**：`snap_before` 必须在 `update_wiki` **之前**执行（打更新前基线）；`after` 快照必须在 `update_wiki` **之后**由 diff_wiki 节点执行时拍（拍早了 diff 不到变更）。所以 diff_wiki 是 **code 节点**——内部自己 walk 一遍 `.agent/wiki/`（与 dir_snapshot 同逻辑）拍 after，再调 `diff_snapshots` 子工作流对比；子工作流不可用则走本地兜底 diff。
 
 详见 [wiki_auto_maintenance 快照重构](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08)。
 
@@ -56,9 +75,11 @@ build_commit_msg → snap_before（dir_snapshot，path=.agent/wiki/，打提交�
 - 任何"改文件后要精确知道改了哪些"的场景都可复用：提交前变更检测、构建产物对比、配置漂移检测等
 - `files`（逗号分隔）与 `git_commit` 的 files 参数天然衔接；`changed` 结构化对象适合需要按变更类型分支处理的场景
 - `path` 留空扫描整个 workspace，文件量大时成本偏高；尽量传 `path` 缩小范围
+- **注意时序**：before 快照在改动前拍，after 快照在改动后拍，由调用方（code 节点或子工作流编排）保证顺序
+- **工具节点输出是 dict**：消费 `wf_diff_snapshots` 必须引用具体字段并补 `out` 声明，见上文"消费端注意"
 
 ## 相关页面
 
-- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交
+- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交；含 dict split 报错修复
 - [工作流引擎与钩子](workflow-hooks.md)：git_commit 节点 + 引擎内部快照闭环 + subworkflow literal 属性约定
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：快照子工作流重构为本次交付项之一

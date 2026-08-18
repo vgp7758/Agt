@@ -12,38 +12,51 @@
 
 ### 提交失败问题（2026-08 修复）
 
-**旧方案根因**：commit_wiki 此前用 `run_shell`（shell 命令）拼接 `git commit -m "<msg>"`。当 commit message 含**多行文本**（update_wiki 报告摘要换行）时，shell 转义会破坏引号/换行，导致 git 提交失败。
+**旧方案根因**：commit_wiki 此前用 `run_shell`（shell 命令）拼接 `git commit -m "<msg>"`。当 commit message 含**多行文本**（update_wiki 报告摘要换行）时，shell 转义会破坏引号/换行，导致 git 提交失败——**run_shell 版从未成功提交过**。
 
-**新方案**：将 commit_wiki 从 `run_shell` 改为 **`git_commit` 节点**，并通过 subprocess **列表参数**传递 commit message（不经过 shell 字符串拼接），彻底规避多行/特殊字符的转义问题。同时自动追加 `Co-authored-by` 署名。
+**新方案**：将 commit_wiki 从 `run_shell` 改为 **`git_commit` 节点**，并通过 subprocess **列表参数**传递 commit message（不经过 shell 字符串拼接），彻底规避多行/特殊字符的转义问题。同时自动追加 `Co-authored-by` 署名。**实战验证**：commit `1577693` 是新链路第一次成功提交，`0293eec` 是快照子工作流重构后的提交。
+
+### dict split 报错修复（2026-08）
+
+**现象**：commit_wiki 节点报错 `'dict' object has no attribute 'split'`。
+
+**根因**：`wf_diff_snapshots` 作为**工具节点**被调用时，其输出是**原始 dict**（结构化对象），而非字符串。commit_wiki 中直接引用该节点的整体输出（如 `diff_wiki.files`），拿到的是一个 dict 而非可 `.split(",")` 的字符串，导致 AttributeError。
+
+**修复**：改为**引用具体字段**——`1400227.files`（工具节点输出 dict 的 `files` 字段，逗号分隔字符串），并**补充 `out` 声明**（显式声明节点输出端口），使引用类型明确、链路可解析。
+
+**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 dict，消费端必须引用其**具体字段**（`files` / `count` / `changed`），不能把整个 dict 当字符串处理。
 
 ## 工作流结构
 
 ```
 start
-  → update_wiki           （wiki-updater 子 Agent / LLM 节点，增量更新 .agent/wiki/ 页面）
-  → build_commit_msg      （text 节点，将 update_wiki 报告摘要注入 commit message 模板）
-  → snap_before           （子工作流：dir_snapshot，记录提交前 .agent/wiki/ 快照）
-  → diff_wiki             （子工作流：diff_snapshots，对比快照生成变更清单）
-  → commit_wiki           （git_commit 节点，按变更清单自动 git add + commit + push）
+  → 判官 llm（needs_maintenance?）
+  → snap_before（子工作流 dir_snapshot，path=.agent/wiki/，打【更新前】基线快照）
+  → update_wiki（plugin 节点，调 update_wiki 工具增量更新 wiki 页面，输出报告摘要）
+  → diff_wiki（code 节点：本节点执行时拍【更新后】after 快照 + 调 diff_snapshots 子工作流 diff）
+  → has_changes?（selector：count>0）
+      ├─ true  → build_msg（text，拼 commit message=判官摘要）→ commit_wiki（git_commit 节点）
+      └─ false → 静默跳过（end）
   → end
 ```
 
 | 节点 | 类型 | 职责 |
 |------|------|------|
-| update_wiki | LLM / subworkflow | 分析本次改动，调用 wiki CRUD 工具更新/新建受影响 wiki 页面；输出报告摘要 |
-| build_commit_msg | **text（节点 ID 868393）** | 接收 update_wiki 的报告摘要，拼装为语义化 commit message，供 commit_wiki 使用 |
-| snap_before | **子工作流 `dir_snapshot`** | 对 `.agent/wiki/` 目录打文件快照（mtime 映射，JSON 字符串），作为提交前基线 |
-| diff_wiki | **子工作流 `diff_snapshots`** | 对比 snap_before 快照与提交前当前快照，输出变更清单（新增/修改/删除） |
-| commit_wiki | **git_commit（节点）** | 按 diff_wiki 变更清单 `git add` 相关文件 → `git commit`（列表参数传 message）→ `git push`；无变更跳过 |
+| 判官 llm | llm | 判断本轮是否值得维护；输出 `needs_maintenance` 布尔 + `summary` 摘要（供 commit message 复用） |
+| snap_before | **子工作流 `dir_snapshot`** | 对 `.agent/wiki/` 目录打文件快照（mtime 映射，JSON 字符串），作为**更新前基线** |
+| update_wiki | **plugin（update_wiki 工具）** | 调用 update_wiki 工具更新/新建受影响 wiki 页面；输出报告摘要 |
+| diff_wiki | **code 节点** | 在**本节点执行时**拍 after 快照（必须此时拍，拍早了 diff 不到 update_wiki 的变更），调 `diff_snapshots` 子工作流对比 before/after 生成变更清单；带本地兜底 |
+| build_msg | **text** | 接收判官摘要，拼装为语义化 commit message |
+| commit_wiki | **git_commit 节点** | 按 diff 变更清单 `git add` 相关文件 → `git commit`（列表参数传 message）→ `git push`；无变更跳过 |
 
 ### build_commit_msg：动态 commit message
 
-**新增背景**（2026-08-18）：此前 commit_wiki 使用固定文案 `chore(wiki): auto-update wiki after task`，git log 中无法区分每次 wiki 维护改了什么。新增 `build_commit_msg`（text 节点，ID 868393）将 update_wiki 的报告摘要注入 commit message，使每条提交都带有具体内容摘要。
+**新增背景**（2026-08-18）：此前 commit_wiki 使用固定文案，git log 中无法区分每次 wiki 维护改了什么。新增 `build_msg`（text 节点）将判官摘要注入 commit message，使每条提交都带有具体内容摘要。
 
 - **节点类型**：text（type 15），纯文本拼装，不走 LLM 调用，零额外 token 成本
-- **输入**：update_wiki 节点输出的报告摘要（本次更新了哪些页面、关键改动点）
-- **输出**：形如 `chore(wiki): update <摘要内容>` 的 commit message 字符串
-- **边连接**：update_wiki → build_commit_msg → snap_before → diff_wiki → commit_wiki
+- **输入**：判官 llm 输出的 `summary`（本次更新了哪些页面、关键改动点）
+- **输出**：形如 `docs: wiki auto-maintenance — {{summary}}` 的 commit message 字符串
+- **边连接**：has_changes?(true) → build_msg → commit_wiki
 
 ### snap_before / diff_wiki：快照与变更清单（重构为子工作流，2026-08）
 
@@ -52,15 +65,16 @@ start
 **重构**（2026-08）：快照逻辑从内联节点重构为两个**通用子工作流**，复用引擎级快照能力，供任意工作流复用：
 
 - **snap_before → 子工作流 `dir_snapshot`**：对目录（默认 workspace，可传 path 限定 `.agent/wiki/`）取文件快照，返回 JSON 字符串（mtime 映射）。排除 `.git` / `__pycache__`。
-- **diff_wiki → 子工作流 `diff_snapshots`**：接收 `before` / `after` 两份快照，对比出变更文件清单。输出：
+- **diff_wiki → code 节点**：**after 快照必须在本节点执行时拍**（拍早了 diff 不到 update_wiki 的变更），所以 diff_wiki 是 code 节点——内部自己 walk 一遍 `.agent/wiki/`（与 dir_snapshot 同逻辑）拍 after，再调 `diff_snapshots` 子工作流对比 before/after 生成变更清单。若子工作流不可用则走**本地兜底 diff**（同语义），不炸主链路。
+- **`diff_snapshots` 子工作流**输出：
   - `files`：逗号分隔的变更文件路径（可直接喂给 git_commit 的 files 参数）
   - `count`：变更文件数
-  - `changed`：结构化对象列表（含 file / change 类型等），供选择器/聚合节点使用
-  - 无变更时清单为空 → commit_wiki 静默跳过，不产生空 commit
+  - `changed`：结构化对象列表（含 file / change 类型 new|modified|deleted），供 selector/loop/aggregator 消费
+  - 无变更时清单为空 → has_changes? 为 false → commit_wiki 静默跳过，不产生空 commit
 
 > 两个子工作流是**通用能力**，不限于 wiki——详见 [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)。
 
-**subworkflow 节点 literal 属性坑（2026-08 修复）**：调用子工作流时，`snap_before` / `diff_wiki` 的 subworkflow 节点传入字面量参数（如 `path=".agent/wiki/"`）**必须使用属性形式 `literal=".agent/wiki"`**，而不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败（子工作流收不到 path 等字面量），快照与 diff 无法正确限定到 `.agent/wiki/` 目录。这是本次重构踩到的关键坑。
+**subworkflow 节点 literal 属性坑（2026-08 修复）**：调用子工作流时，`snap_before` 的 subworkflow 节点传入字面量参数（`path=".agent/wiki"`）**必须使用属性形式 `literal=".agent/wiki"`**，而不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败（子工作流收不到 path 等字面量）→ path 为空 → 快照拍整个 workspace → files 清单超长 → **WinError 206（文件名或扩展名太长）**。这是本次重构踩到的关键坑。
 
 **变更清单驱动提交**：commit_wiki 只 add 清单中的文件，避免误提交无关文件；清单为空则跳过。
 
@@ -68,26 +82,27 @@ start
 
 ```python
 # 伪代码示意：git_commit 节点内部以 subprocess 列表参数执行，不经 shell 字符串
-if not diff_wiki.changes:      # 变更清单为空
+if 1400227.count == 0:            # 变更清单为空（引用工具节点输出的 count 字段）
     log("No wiki changes to commit.")
 else:
-    subprocess.run(["git", "add", ".agent/wiki/"])
-    msg = build_commit_msg.output + "\n\nCo-authored-by: ..."   # 自动追加署名
-    subprocess.run(["git", "commit", "-m", msg])               # 列表参数，多行安全
+    subprocess.run(["git", "add", *"1400227.files".split(",")])  # 按清单 add（files 字段逗号分隔）
+    msg = build_msg.output + "\n\nCo-authored-by: ..."            # 自动追加署名
+    subprocess.run(["git", "commit", "-m", msg])                 # 列表参数，多行安全
     subprocess.run(["git", "push"])
 ```
 
 - **git_commit 节点**：替代原 run_shell，内部用 subprocess **列表参数**传参，commit message 多行/特殊字符不再被 shell 转义破坏
+- **引用具体字段（dict split 修复）**：`wf_diff_snapshots` 作为工具节点 raw 返回 **dict**，必须引用其**具体字段** `1400227.files`（逗号分隔字符串）与 `1400227.count`，不能把整个 dict 当字符串 `.split(",")`；同时**补充 `out` 声明**使节点输出端口显式化
 - **自动 Co-authored-by**：提交时自动追加 `Co-authored-by` 署名（标识 wiki 由主 Agent + wiki-updater 协作维护）
 - **只提交 `.agent/wiki/` 目录**：不触碰代码文件，避免与主 Agent 的代码提交产生冲突
-- **变更清单驱动**：diff_wiki 生成的变更清单为空则不产生空 commit；非空则按清单 add+commit+push
+- **变更清单驱动**：diff 生成的变更清单为空则不产生空 commit；非空则按清单 add+commit+push
 - **自动 push**：commit 后立即推送，确保远程仓库 wiki 始终最新
 
 ## 与其他模块的关系
 
 | 模块 | 关系 |
 |------|------|
-| [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_commit_msg 消费其摘要 |
+| [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_msg 消费判官摘要 |
 | [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；git_commit 为引擎提供的 git 专用节点 |
 | [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md) | 快照与变更检测能力，从本工作流内联节点重构拆分而来，供任意工作流复用 |
 | [wiki_auto_query](wiki-auto-query.md) | 读侧：before_turn 钩子自动检索 wiki；本页是写侧：自动维护并提交 wiki |
@@ -96,10 +111,12 @@ else:
 ## 注意事项
 
 - **触发时机**：应在主 Agent 完成代码改动并提交代码后触发，避免 wiki 描述了尚未提交的代码
-- **commit message 演进**：从固定文案 → 动态摘要（build_commit_msg 注入）→ 自动追加 Co-authored-by，git log 可追溯每次 wiki 维护的具体内容与协作方
-- **git_commit 节点 vs run_shell**：涉及多行/特殊字符的 commit message **必须走 git_commit 节点的列表参数**，不要退回 shell 字符串拼接（shell 转义是原失败根因）
-- **text 节点零成本**：build_commit_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
-- **subworkflow literal 用属性形式**：调用子工作流传字面量参数时，**必须用 `literal="值"` 属性形式**，不要用子元素形式（会导致参数传递失败）
+- **快照时序（关键）**：`snap_before` 必须在 `update_wiki` **之前**执行（打更新前基线）；`after` 快照必须在 `update_wiki` **之后**由 diff_wiki 节点执行时拍（拍早了 diff 不到变更）。这是"改前拍快照 → 改后 diff"的通用时序
+- **commit message 演进**：从固定文案 → 动态摘要（build_msg 注入判官摘要）→ 自动追加 Co-authored-by，git log 可追溯每次 wiki 维护的具体内容与协作方
+- **git_commit 节点 vs run_shell**：涉及多行/特殊字符的 commit message **必须走 git_commit 节点的列表参数**，不要退回 shell 字符串拼接（shell 转义是原失败根因，run_shell 版从未成功）
+- **text 节点零成本**：build_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
+- **工具节点输出是 dict（关键）**：`wf_diff_snapshots` 等工具节点 raw 返回 **dict**，消费端必须引用**具体字段**（`files` / `count` / `changed`），并**补 `out` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`
+- **subworkflow literal 用属性形式**：调用子工作流传字面量参数时，**必须用 `literal="值"` 属性形式**，不要用子元素形式（会导致参数传递失败 → path 空 → 快照全盘 → WinError 206）
 - **快照子工作流**：dir_snapshot / diff_snapshots 是引擎级通用能力，`path` 留空即扫描整个 workspace；本工作流传 `path=.agent/wiki/` 缩小扫描范围（文件量小，成本可忽略）
 - **diff_snapshots 输出复用**：`files`（逗号分隔）可直接作为 git_commit 的 files 参数；`changed` 结构化对象供选择器/聚合进一步处理
 - **并发安全**：若多 Agent 并发运行，commit_wiki 的 git 操作可能冲突；建议同一仓库同一时刻只有一个 wiki_auto_maintenance 在跑

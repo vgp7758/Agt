@@ -39,7 +39,8 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **XML schema 往返**：list\<object\> 的 field 子元素 / list 基础类型 itemType / 坐标幂等（编辑器保存不再丢结构）
 - **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 子工作流按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
 - **dir_snapshot / diff_snapshots 子工作流**：引擎级快照能力——`dir_snapshot(path)` 对目录取文件快照（mtime 映射 JSON，排除 .git/__pycache__，path 留空=整个 workspace）；`diff_snapshots(before, after)` 对比两份快照输出变更清单（`files` 逗号分隔 + `count` + `changed` 结构化对象），供 git_commit 或选择器/聚合节点消费。**通用复用**：详见 [dir_snapshot / diff_snapshots 通用子工作流](snapshot-diff.md)，首个消费方为 [wiki_auto_maintenance 的快照重构](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08)
-- **subworkflow 节点 literal 属性约定（2026-08）**：subworkflow(9) 节点调用子工作流传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`）。子元素形式会导致参数传递失败（子工作流收不到字面量）。实例：wiki_auto_maintenance 的 snap_before 传 `path=".agent/wiki/"`（见 [快照重构中的 literal 坑](../features/wiki-auto-maintenance.md#subworkflow-节点-literal-属性坑2026-08-修复)）
+- **subworkflow 节点 literal 属性约定（2026-08）**：subworkflow(9) 节点调用子工作流传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`）。子元素形式会导致参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206。实例：wiki_auto_maintenance 的 snap_before 传 `path=".agent/wiki/"`（见 [快照重构中的 literal 坑](../features/wiki-auto-maintenance.md#subworkflow-节点-literal-属性坑2026-08-修复)）。**后端链路正常，前端缓存问题（2026-08 验证）**：path 字面量保存后后端链路验证正常，问题定位为前端缓存（保存后未刷新浏览器看到旧值），硬刷新即可排除
+- **工具节点输出是 dict（2026-08 修复）**：`wf_diff_snapshots` 等**工具节点** raw 返回 **dict**，消费端必须引用**具体字段**（`files` / `count` / `changed`）并**补 `out` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。实例见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08)
 
 ## 生命周期钩子
 
@@ -67,6 +68,12 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 
 **py_auto_diag**（随包播种，编辑器可开）：changed_files → loop 遍历 → ends_with(".py") → py_diag（ast+jedi）→ contains 判 ERROR → **改了 .py 必注入**（通过/报错都反馈，非 .py 短路零打扰）。cs_auto_diag 同构（.cs/cs_diag）。旧版 edit/write_file 内联 _py_check 已删除——职责统一由钩子接管。
 
+## workflow.py 排障速查（2026-08）
+
+- **NameError: Toolbox 未定义**：`src/workflow.py` 使用 `Toolbox` 类但缺少 import → 在文件头补 `Toolbox` 的 import（与 `src/agent.py` 引入方式一致）即可。涉及跨模块符号时，改动后**先确认 import 完整**再跑工作流
+- **dict split 报错**：`'dict' object has no attribute 'split'` → 工具节点（如 wf_diff_snapshots）输出是 dict，消费端要引用具体字段并补 `out` 声明（见上文"工具节点输出是 dict"）
+- **path 字面量"不生效"**：先硬刷新浏览器（Ctrl+Shift+R）排除前端缓存，再排查后端（后端链路已验证正常）
+
 ## 编辑器注意
 
 - 子画布（loop/batch）编辑后保存曾丢内容：根因 exitComposite 的 findN 在子画布找不到父层节点 → 已改从栈顶帧父层查找写回；saveWd 也显式带节点级 blocks/edges
@@ -79,7 +86,7 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 
 - [系统总览](overview.md)：模块地图与一轮对话数据流
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 钩子实例
-- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：git_commit 节点 + dir_snapshot/diff_snapshots 子工作流 + subworkflow literal 属性坑实例
+- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：git_commit 节点 + dir_snapshot/diff_snapshots 子工作流 + subworkflow literal 属性 + dict split 修复实例
 - [快照与变更检测子工作流](snapshot-diff.md)：dir_snapshot / diff_snapshots 通用能力详解
 - [气泡交互](../features/bubble-interaction.md)：编辑器系统气泡展开/折叠
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：async 元信息为本次交付项之一

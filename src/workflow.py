@@ -775,10 +775,12 @@ def _handle_loop(node: dict, ctx) -> dict:
         body_outputs = dict(outer)
         body_outputs[composite_id] = exposed
         if entry_id:
-            # 迭代入口节点：array 模式暴露 item+index+loopvars；count/infinite 只有 index+loopvars
+            # 迭代入口节点：暴露 item/index/其它输入/循环变量（与 batch 对齐——
+            # other_inputs（复合节点输入如 tools）此前漏合并，ref="__entry__.xxx" 恒 None）
             entry_exp = {"index": idx}
             if elem_name is not None:
                 entry_exp["item"] = elem
+            entry_exp.update(other_inputs)
             entry_exp.update(loop_vars)
             body_outputs[entry_id] = entry_exp
         signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)

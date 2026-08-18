@@ -27,7 +27,13 @@
   - `changed`：结构化对象列表（含 file / change 类型 new|modified|deleted 等），供 selector/loop/aggregator 进一步处理
 - **无变更**：清单为空 → 消费端（如 commit_wiki）静默跳过，不产生空提交
 
-> **消费端注意（dict split 坑）**：`wf_diff_snapshots` 作为**工具节点**被调用时，其输出是**原始 dict**。消费端必须引用其**具体字段**（`files` / `count` / `changed`），并**补 `out` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。详见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08)。
+> **消费端注意（dict split 坑，commit edd9851 修复）**：`wf_diff_snapshots` 作为**工具节点**被调用时，其输出是**原始 dict**。消费端必须引用其**具体字段**（`files` / `count` / `changed`），并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。详见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08commit-edd9851)。
+
+**为什么输出是 dict 而非字符串**：`wf_diff_snapshots` 走 **Tool.run()** 执行——它把 end 的 `{files, count, changed}` json.dumps 成字符串，随后 `_handle_plugin` 的 `_try_parse` 又解析回 **Python dict**。于是 `1400227.raw` 是 `{files:"...", count:3, changed:[...]}` 这样的 dict 对象，而非逗号分隔字符串。
+
+**如何正确消费**：
+1. 引用**具体字段**：`1400227.files`（`_dotted_get` 按点路径直接取 dict 字段）——解析为逗号分隔 string，可直接喂 git_commit
+2. **补 `<out>` 声明**：`<out name="files" type="string"/>` + `count`——`_extract_field` 按声明字段填充，编辑器下拉也能选到 files 端口，避免误连到整个 raw dict
 
 ## 与 engine 内部快照的关系
 
@@ -76,10 +82,10 @@
 - `files`（逗号分隔）与 `git_commit` 的 files 参数天然衔接；`changed` 结构化对象适合需要按变更类型分支处理的场景
 - `path` 留空扫描整个 workspace，文件量大时成本偏高；尽量传 `path` 缩小范围
 - **注意时序**：before 快照在改动前拍，after 快照在改动后拍，由调用方（code 节点或子工作流编排）保证顺序
-- **工具节点输出是 dict**：消费 `wf_diff_snapshots` 必须引用具体字段并补 `out` 声明，见上文"消费端注意"
+- **工具节点输出是 dict**：消费 `wf_diff_snapshots` 必须引用具体字段（`_dotted_get`）并补 `<out>` 声明，见上文"消费端注意"
 
 ## 相关页面
 
-- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交；含 dict split 报错修复
+- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交；含 dict split 报错修复 + path 前端缓存问题
 - [工作流引擎与钩子](workflow-hooks.md)：git_commit 节点 + 引擎内部快照闭环 + subworkflow literal 属性约定
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：快照子工作流重构为本次交付项之一

@@ -16,15 +16,47 @@
 
 **新方案**：将 commit_wiki 从 `run_shell` 改为 **`git_commit` 节点**，并通过 subprocess **列表参数**传递 commit message（不经过 shell 字符串拼接），彻底规避多行/特殊字符的转义问题。同时自动追加 `Co-authored-by` 署名。**实战验证**：commit `1577693` 是新链路第一次成功提交，`0293eec` 是快照子工作流重构后的提交。
 
-### dict split 报错修复（2026-08）
+### dict split 报错修复（2026-08，commit edd9851）
 
 **现象**：commit_wiki 节点报错 `'dict' object has no attribute 'split'`。
 
-**根因**：`wf_diff_snapshots` 作为**工具节点**被调用时，其输出是**原始 dict**（结构化对象），而非字符串。commit_wiki 中直接引用该节点的整体输出（如 `diff_wiki.files`），拿到的是一个 dict 而非可 `.split(",")` 的字符串，导致 AttributeError。
+**根因链**（单元级复现确认）：
 
-**修复**：改为**引用具体字段**——`1400227.files`（工具节点输出 dict 的 `files` 字段，逗号分隔字符串），并**补充 `out` 声明**（显式声明节点输出端口），使引用类型明确、链路可解析。
+```
+wf_diff_snapshots 是【工具节点】（plugin, toolName=wf_diff_snapshots）
+  → Tool.run() 把 end 的 {files, count, changed} json.dumps 成字符串
+  → _handle_plugin 的 _try_parse 又解析回 Python dict
+  → 1400227.raw = {files: "...", count: 3, changed: [...]}   ← dict 对象！
+  → commit_wiki.files ← 1400227.raw（整个 dict）
+  → git_commit 里 files.split(",") 对 dict 调 split → AttributeError
+```
 
-**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 dict，消费端必须引用其**具体字段**（`files` / `count` / `changed`），不能把整个 dict 当字符串处理。
+**修复**（commit `edd9851`）：
+
+| 改动 | 说明 |
+|------|------|
+| `commit_wiki.files` 引用 | `1400227.raw` → **`1400227.files`**（dict 字段引用，`_dotted_get` 直接取字段） |
+| `1400227` 补 out 声明 | `<out name="files" type="string"/>` + `count`——`_extract_field` 按声明字段填充，编辑器下拉也能选到 files 端口 |
+
+**实测验证**：`raw=dict{files,count,changed}`（根因复现）→ `1400227.files` 解析为 `'.agent/wiki/a.md,.agent/wiki/new.md,.agent/wiki/old.md'` 逗号分隔 string，`git_commit` 直接消费成功。**在编辑器里重新打开此工作流，把 files 输入的连线从 raw 拖到 files 端口即可**（out 声明已在 XML 里）。
+
+**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 **dict**，消费端必须引用其**具体字段**（`files` / `count` / `changed`），不能把整个 dict 当字符串处理。同时**补 `<out>` 声明**让输出端口显式化——既可被 `_extract_field` 按字段填充，编辑器也能下拉选中具体字段，避免误连到整个 dict。
+
+### path 字面量保存后重开变空——前端缓存问题（2026-08 验证）
+
+**现象**：snap_before 的 `path` 字段手动输入字面量 `.agent/wiki/` 保存后，重新打开工作流输入框又变空。
+
+**排查结论：后端链路全程正常，问题定位为前端浏览器缓存**。逐层验证：
+
+| 环节 | 结果 |
+|------|------|
+| 磁盘 XML | ✅ `<in name="path" type="string">.agent/wiki/</in>` 有值（保存成功写入） |
+| 新代码 xml_to_canvas | ✅ 读回 `{type:'literal', content:'.agent/wiki/'}`（文本子元素有兜底解析） |
+| 当前进程 GET /api/wf | ✅ 返回的 canvas 里 path 也是 `.agent/wiki/` |
+
+**处置**：后端三层全部正确，问题只剩前端渲染层。**先硬刷新浏览器（Ctrl+Shift+R）** 排除编辑器 HTML 缓存再排查；若仍复现，需区分"画布节点内输入框"vs"右侧属性面板"及"关掉重开工作流"vs"刷新页面"的具体触发路径，再针对性查前端渲染代码（`workflow_editor.html` 的 `setInputLiteral` / `makeInputControl`）。
+
+> **非后端缺陷**：path 字面量保存→读取→执行全链路后端均正确传递，不要往"参数传递丢失"方向排查。
 
 ## 工作流结构
 
@@ -92,7 +124,7 @@ else:
 ```
 
 - **git_commit 节点**：替代原 run_shell，内部用 subprocess **列表参数**传参，commit message 多行/特殊字符不再被 shell 转义破坏
-- **引用具体字段（dict split 修复）**：`wf_diff_snapshots` 作为工具节点 raw 返回 **dict**，必须引用其**具体字段** `1400227.files`（逗号分隔字符串）与 `1400227.count`，不能把整个 dict 当字符串 `.split(",")`；同时**补充 `out` 声明**使节点输出端口显式化
+- **引用具体字段（dict split 修复）**：`wf_diff_snapshots` 作为工具节点 raw 返回 **dict**，必须引用其**具体字段** `1400227.files`（逗号分隔字符串）与 `1400227.count`（`_dotted_get` 直接取），不能把整个 dict 当字符串 `.split(",")`；同时**补 `<out>` 声明**使节点输出端口显式化（`_extract_field` 按声明填充 + 编辑器下拉可选）
 - **自动 Co-authored-by**：提交时自动追加 `Co-authored-by` 署名（标识 wiki 由主 Agent + wiki-updater 协作维护）
 - **只提交 `.agent/wiki/` 目录**：不触碰代码文件，避免与主 Agent 的代码提交产生冲突
 - **变更清单驱动**：diff 生成的变更清单为空则不产生空 commit；非空则按清单 add+commit+push
@@ -115,10 +147,11 @@ else:
 - **commit message 演进**：从固定文案 → 动态摘要（build_msg 注入判官摘要）→ 自动追加 Co-authored-by，git log 可追溯每次 wiki 维护的具体内容与协作方
 - **git_commit 节点 vs run_shell**：涉及多行/特殊字符的 commit message **必须走 git_commit 节点的列表参数**，不要退回 shell 字符串拼接（shell 转义是原失败根因，run_shell 版从未成功）
 - **text 节点零成本**：build_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
-- **工具节点输出是 dict（关键）**：`wf_diff_snapshots` 等工具节点 raw 返回 **dict**，消费端必须引用**具体字段**（`files` / `count` / `changed`），并**补 `out` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`
+- **工具节点输出是 dict（关键）**：`wf_diff_snapshots` 等工具节点 raw 返回 **dict**，消费端必须引用**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`
 - **subworkflow literal 用属性形式**：调用子工作流传字面量参数时，**必须用 `literal="值"` 属性形式**，不要用子元素形式（会导致参数传递失败 → path 空 → 快照全盘 → WinError 206）
 - **快照子工作流**：dir_snapshot / diff_snapshots 是引擎级通用能力，`path` 留空即扫描整个 workspace；本工作流传 `path=.agent/wiki/` 缩小扫描范围（文件量小，成本可忽略）
 - **diff_snapshots 输出复用**：`files`（逗号分隔）可直接作为 git_commit 的 files 参数；`changed` 结构化对象供选择器/聚合进一步处理
+- **path 字面量保存后重开变空 → 先刷浏览器**：后端保存→读取→执行链路已验证正常，问题定位为**前端浏览器缓存**；若复现先 Ctrl+Shift+R 硬刷新排除缓存，再区分输入位置/触发路径针对性查前端渲染代码
 - **并发安全**：若多 Agent 并发运行，commit_wiki 的 git 操作可能冲突；建议同一仓库同一时刻只有一个 wiki_auto_maintenance 在跑
 
 ## 相关页面

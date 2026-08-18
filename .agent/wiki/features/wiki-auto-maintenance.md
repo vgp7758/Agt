@@ -49,7 +49,7 @@ start
 
 **新增背景**（2026-08 修复）：此前 commit_wiki 靠 `git diff --cached --quiet` 判断是否有变更，无法精确知道改了哪些文件。引入**快照 + diff** 机制，先对 `.agent/wiki/` 打快照，再 diff 出精确的变更清单，供 commit_wiki 按清单提交。
 
-**重构**（2026-08）：快照逻辑从内联节点重构为两个**子工作流**，复用引擎级快照能力：
+**重构**（2026-08）：快照逻辑从内联节点重构为两个**通用子工作流**，复用引擎级快照能力，供任意工作流复用：
 
 - **snap_before → 子工作流 `dir_snapshot`**：对目录（默认 workspace，可传 path 限定 `.agent/wiki/`）取文件快照，返回 JSON 字符串（mtime 映射）。排除 `.git` / `__pycache__`。
 - **diff_wiki → 子工作流 `diff_snapshots`**：接收 `before` / `after` 两份快照，对比出变更文件清单。输出：
@@ -57,6 +57,8 @@ start
   - `count`：变更文件数
   - `changed`：结构化对象列表（含 file / change 类型等），供选择器/聚合节点使用
   - 无变更时清单为空 → commit_wiki 静默跳过，不产生空 commit
+
+> 两个子工作流是**通用能力**，不限于 wiki——详见 [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)。
 
 **subworkflow 节点 literal 属性坑（2026-08 修复）**：调用子工作流时，`snap_before` / `diff_wiki` 的 subworkflow 节点传入字面量参数（如 `path=".agent/wiki/"`）**必须使用属性形式 `literal=".agent/wiki"`**，而不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败（子工作流收不到 path 等字面量），快照与 diff 无法正确限定到 `.agent/wiki/` 目录。这是本次重构踩到的关键坑。
 
@@ -86,7 +88,8 @@ else:
 | 模块 | 关系 |
 |------|------|
 | [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_commit_msg 消费其摘要 |
-| [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；git_commit 为引擎提供的 git 专用节点；dir_snapshot / diff_snapshots 为引擎级快照子工作流 |
+| [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；git_commit 为引擎提供的 git 专用节点 |
+| [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md) | 快照与变更检测能力，从本工作流内联节点重构拆分而来，供任意工作流复用 |
 | [wiki_auto_query](wiki-auto-query.md) | 读侧：before_turn 钩子自动检索 wiki；本页是写侧：自动维护并提交 wiki |
 | [v0.18.2 发布记录](../releases/v0.18.2.md) | wiki 自动提交为本次交付项之一 |
 
@@ -97,13 +100,14 @@ else:
 - **git_commit 节点 vs run_shell**：涉及多行/特殊字符的 commit message **必须走 git_commit 节点的列表参数**，不要退回 shell 字符串拼接（shell 转义是原失败根因）
 - **text 节点零成本**：build_commit_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
 - **subworkflow literal 用属性形式**：调用子工作流传字面量参数时，**必须用 `literal="值"` 属性形式**，不要用子元素形式（会导致参数传递失败）
-- **快照子工作流**：dir_snapshot / diff_snapshots 是引擎级能力，`path` 留空即扫描整个 workspace；本工作流传 `path=.agent/wiki/` 缩小扫描范围（文件量小，成本可忽略）
+- **快照子工作流**：dir_snapshot / diff_snapshots 是引擎级通用能力，`path` 留空即扫描整个 workspace；本工作流传 `path=.agent/wiki/` 缩小扫描范围（文件量小，成本可忽略）
 - **diff_snapshots 输出复用**：`files`（逗号分隔）可直接作为 git_commit 的 files 参数；`changed` 结构化对象供选择器/聚合进一步处理
 - **并发安全**：若多 Agent 并发运行，commit_wiki 的 git 操作可能冲突；建议同一仓库同一时刻只有一个 wiki_auto_maintenance 在跑
 
 ## 相关页面
 
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：工作流节点类型（含 text type 15、git_commit 节点、subworkflow literal 属性约定）
+- [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)：快照与变更检测能力详解（本工作流为首个消费方）
 - [wiki_auto_query](wiki-auto-query.md)：wiki 读侧——before_turn 自动检索注入
 - [知识库导航](../home.md)：维护约定中提及 update_wiki
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：版本交付内容总览

@@ -413,6 +413,7 @@ class Session:
         self.max_level = config.load_max_level()
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
         self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
+        self._last_fold_count: int = 0   # 最近一次分档 build 的折叠轮数（to_history 用它折叠前端历史）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
 
@@ -829,6 +830,7 @@ class Session:
                 fold_count = nxt
                 continue
             break   # 既压不动也折不动，放弃
+        self._last_fold_count = fold_count   # 记录本次折叠轮数（to_history 用它折叠前端历史，减少长会话传输）
         return msgs[:prefix_len] + self._render_tiered_body(fold_count)
 
     def _graduate_once(self) -> bool:
@@ -1310,11 +1312,29 @@ class Session:
             lines.append(f"  💭(回答推理) {t.answer_reasoning}")
         return "\n".join(lines)
 
-    def to_history(self) -> list:
-        """导出全量历史（结构化），供 webui resume 后原样渲染。含每步 reasoning 与回答的 reasoning。
-        tool_calls 的 result 截断到 500 字（渲染够用）。"""
+    def to_history(self, fold_count: int = 0) -> list:
+        """导出历史（结构化），供 webui resume 后渲染。含每步 reasoning 与回答的 reasoning。
+        tool_calls 的 result 截断到 500 字（渲染够用）。
+        fold_count > 0 时：前 fold_count 轮折叠成一条摘要条目（steps 空、answer 用代码摘要），
+        减少长会话的传输/渲染量；前端可据 folded 字段渲染折叠卡片。"""
         out = []
-        for i, t in enumerate(self.turns):
+        if fold_count > 0 and fold_count < len(self.turns):
+            # 折叠区：一条摘要条目代表所有已折叠的早期轮次
+            folded_lines = []
+            for i, t in enumerate(self.turns[:fold_count]):
+                n = sum(len(s.tool_calls) for s in t.steps)
+                u = (t.user_message or "").strip().replace("\n", " ")[:60]
+                a = self._summarize_answer(t.answer) or "中断(未回答)"
+                folded_lines.append(f"[第{i+1}轮] {u} → {a}")
+            out.append({"turn": 0, "folded": True, "user": "",
+                        "answer": "【已折叠的早期轮次（共 {} 轮）】\n".format(fold_count) + "\n".join(folded_lines),
+                        "summary": "", "steps": [], "answer_reasoning": ""})
+            turns = self.turns[fold_count:]
+            offset = fold_count
+        else:
+            turns = self.turns
+            offset = 0
+        for i, t in enumerate(turns):
             steps = []
             for s in t.steps:
                 tcs = []
@@ -1324,7 +1344,7 @@ class Session:
                                 "call_id": tc.call_id})
                 if tcs:
                     steps.append({"tool_calls": tcs, "reasoning": s.reasoning or ""})
-            out.append({"turn": i + 1, "user": t.user_message, "answer": t.answer,
+            out.append({"turn": offset + i + 1, "user": t.user_message, "answer": t.answer,
                         "summary": t.summary, "steps": steps,
                         "answer_reasoning": t.answer_reasoning or ""})
         return out

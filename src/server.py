@@ -793,7 +793,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             _broadcast({"type": "restored", "target": target or ""})
             _broadcast({"type": "session_history",
                         "name": agent.session.name or "(当前会话)",
-                        "turns": agent.session.to_history()})
+                        "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
         _work_q.put(("task", _do_restore))
         await _send(ws, {"type": "system", "text": "⏮ 回溯中…"})
         return
@@ -831,7 +831,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         # 重连后前端请求：返回当前内存中 session 的完整历史（不从磁盘重载）
         await _send(ws, {"type": "session_history",
                          "name": agent.session.name or "(当前会话)",
-                         "turns": agent.session.to_history()})
+                         "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
         # 补发活动 spec：spec 面板靠 spec 事件驱动，重连不会自动重放。
         # 如果有 pending spec（committed 态），用 spec_pending 让前端渲染交互气泡。
         from spec_tools import check_pending_spec, _spec_event_payload
@@ -848,7 +848,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         _work_q.put(("user", "/reset"))
         def _sync_new():
             _broadcast({"type": "session_history",
-                        "name": "(新会话)", "turns": agent.session.to_history()})
+                        "name": "(新会话)", "turns": agent.session.to_history(fold_count=0)})
         _work_q.put(("task", _sync_new))
         await _send(ws, {"type": "system", "text": "🔄 新建中…"})
         return
@@ -874,7 +874,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         def _sync_loaded():
             _broadcast({"type": "session_history",
                         "name": agent.session.name or _ls_name,
-                        "turns": agent.session.to_history()})
+                        "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
             # 广播 team_list 让 agent 下拉框自动刷新
             reg = getattr(agent, "registry", None)
             if reg:

@@ -973,36 +973,42 @@ class Agent:
         try:
             from real_tools import WORKSPACE as _ws
             from workflow import get_hook_workflows, run_hook
-            for hw in get_hook_workflows(_ws, hook):
-                # async 钩子：后台线程执行，不阻塞主循环（如 wiki_auto_maintenance 推理长但无需等）
-                if (hw.get("meta") or {}).get("async"):
-                    self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
-                                "text": str(context)[:80]})
-                    _agent_ref = self
-                    _hw = hw
-                    _hook = hook
-                    _ctx = dict(context)
-                    def _async_hook():
+            hws = get_hook_workflows(_ws, hook)
+            # 同步钩子：并发执行（同 hook 多工作流并行，各线程独立 utility client/工具上下文）
+            # 但注入顺序按声明序合并（notes 顺序稳定，主 LLM 旁注不随机）。async 钩子仍后台线程。
+            sync_hws = [hw for hw in hws if not (hw.get("meta") or {}).get("async")]
+            async_hws = [hw for hw in hws if (hw.get("meta") or {}).get("async")]
+            # —— async 钩子：后台线程执行（wiki_auto_maintenance 等推理长但无需等）——
+            for hw in async_hws:
+                self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
+                            "text": str(context)[:80]})
+                _agent_ref = self
+                _hw = hw
+                _hook = hook
+                _ctx = dict(context)
+                def _async_hook():
+                    try:
+                        _llm = _agent_ref.utility_client()
+                        _ov = getattr(_llm, "_scene_override", None)
+                        _llm._scene_override = f"hook:{_hook}"
                         try:
-                            _llm = _agent_ref.utility_client()
-                            _ov = getattr(_llm, "_scene_override", None)
-                            _llm._scene_override = f"hook:{_hook}"
-                            try:
-                                inject, result, message = run_hook(_hw["canvas"], _ctx,
-                                                          tools=_agent_ref.tools, llm=_llm, workspace=_ws)
-                            finally:
-                                _llm._scene_override = _ov
-                            _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
-                                        "text": result[:300] or message[:300]})
-                            if message.strip():
-                                _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
-                                            "text": message, "auto": True})
-                        except Exception as e2:
-                            _agent_ref._emit({"type": "auto_wf_error", "name": _hw["name"], "hook": _hook,
-                                        "text": str(e2)[:200]})
-                    threading.Thread(target=_async_hook, daemon=True).start()
-                    continue   # 不阻塞主循环，不加入 notes（async 钩子无法注入当前步——时机已过）
-                try:
+                            inject, result, message = run_hook(_hw["canvas"], _ctx,
+                                                      tools=_agent_ref.tools, llm=_llm, workspace=_ws)
+                        finally:
+                            _llm._scene_override = _ov
+                        _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
+                                    "text": result[:300] or message[:300]})
+                        if message.strip():
+                            _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
+                                        "text": message, "auto": True})
+                    except Exception as e2:
+                        _agent_ref._emit({"type": "auto_wf_error", "name": _hw["name"], "hook": _hook,
+                                    "text": str(e2)[:200]})
+                threading.Thread(target=_async_hook, daemon=True).start()
+            # —— 同步钩子：并发执行 + 按声明序收集注入 ——
+            if sync_hws:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                def _run_one(hw):
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "text": str(context)[:80]})
                     hook_llm = self.utility_client()
@@ -1013,15 +1019,24 @@ class Agent:
                                                   tools=self.tools, llm=hook_llm, workspace=_ws)
                     finally:
                         hook_llm._scene_override = _ov
-                    self._emit({"type": "auto_wf", "name": hw["name"], "hook": hook,
+                    return hw["name"], inject, result, message
+                results = {}
+                with ThreadPoolExecutor(max_workers=len(sync_hws)) as ex:
+                    futs = {ex.submit(_run_one, hw): hw["name"] for hw in sync_hws}
+                    for fut in as_completed(futs):
+                        nm, inject, result, message = fut.result()
+                        results[nm] = (inject, result, message)
+                # 按声明序合并（注入顺序稳定）
+                for hw in sync_hws:
+                    nm = hw["name"]
+                    inject, result, message = results.get(nm, (False, "", ""))
+                    self._emit({"type": "auto_wf", "name": nm, "hook": hook,
                                 "text": result[:300] or message[:300], "auto": True})
                     if message.strip():
-                        # 系统消息：仅 UI 可见，不进主 LLM（如 wiki 自动维护报告）
-                        # auto=True：前端默认折叠（点击展开），避免自动触发的长报告刷屏
-                        self._emit({"type": "workflow_message", "name": hw["name"], "hook": hook,
+                        self._emit({"type": "workflow_message", "name": nm, "hook": hook,
                                     "text": message, "auto": True})
                     if inject and result.strip():
-                        notes.append({"hook": hook, "name": hw["name"], "result": result.strip()})
+                        notes.append({"hook": hook, "name": nm, "result": result.strip()})
                 except Exception as e2:
                     self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
                                 "text": str(e2)[:200]})

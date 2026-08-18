@@ -325,7 +325,8 @@ function syncToolNode(n){
       params.push({name:p.name, input:{type:_mapToolType(p.type), value:{type:'literal',content:''}}});
   });
   // outputs：空则用工具默认；已有则补缺失字段（工具 schema 更新后已有节点自动补新字段，不覆盖用户已声明）
-  const touts=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
+  // type 走 _mapToolType（array→list 归一——TYPE_COLOR 无 'array'，不映射会变灰色端口连不出去）
+  const touts=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:_mapToolType(o.type),description:o.description||''}));
   if(!n.data.outputs || !n.data.outputs.length){
     n.data.outputs=touts;
   }else{
@@ -875,7 +876,10 @@ function finishVar(tgtId,field,color){
   const tn=findN(tgtId);if(!tn){edgeFrom=null;renderAll();return;}
   // field 可能是子字段 "obj.sub" → 定位父字段 obj
   const parent=field.split('.')[0];
-  const p=tn.data.inputs.inputParameters.find(x=>x.name===parent);
+  // 复合节点(21/28)的本地变量（variableParameters）也是合法落点——与输入字段同构 {name,input:{type,value}}，
+  // 此前只查 inputParameters → 拖线到 loop 变量端口永远"目标无匹配输入字段"（顶层连不进 messages 的根因）
+  const p=tn.data.inputs.inputParameters.find(x=>x.name===parent)
+    || (['21','28'].includes(tn.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===parent):null);
   if(!p){edgeFrom=null;toast('目标无匹配输入字段');renderAll();return;}
   // 源可能是子字段(点号)或整对象；name 用完整路径，执行器按点号取值
   // type20 的值存在 right 里
@@ -1125,7 +1129,7 @@ function pickNode(typeOrName,isTool){
     const t=(AGENT_TOOLS||[]).find(z=>z.name===typeOrName);
     if(!t){closeNodePicker();return;}
     const inputParameters=t.params.map(p=>({name:p.name,input:{type:_mapToolType(p.type),value:{type:'literal',content:''}}}));
-    const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:o.type||'string',description:o.description||''}));
+    const outputs=(t.outputs||[{name:'raw',type:'string',description:'工具返回'}]).map(o=>({name:o.name,type:_mapToolType(o.type),description:o.description||''}));
     n={id:genId(),type:'4',x:pickerCtx.sx,y:pickerCtx.sy,w:230,h:80,data:{nodeMeta:{title:t.display||typeOrName},toolName:typeOrName,inputs:{inputParameters},outputs}};
     WF.nodes.push(n);
   }else{
@@ -2030,8 +2034,9 @@ function _normMarkerId(blocks,edges,node,newId){
 }
 // 同步迭代入口节点的输出：item(带schema)/index/本地变量/复合节点其它输入
 function _syncEntryOutputs(n,entryNode){
-  const inList=n.data.inputs?.inputParameters?.find(p=>p.input?.type==='list');
-  const varNames=(n.data.inputs?.variableParameters||[]).map(v=>v.name);
+  // 数组源仅 array 型循环 / 批处理 才有（infinite/count 循环无 item——list 输入不再被误当数组源）
+  const hasItem=(n.type==='28')||(n.type==='21'&&(n.data.inputs?.loopType||'array')==='array');
+  const inList=hasItem?n.data.inputs?.inputParameters?.find(p=>p.input?.type==='list'):null;
   const outs=[];
   if(inList){
     const inSchema=inList?.input?.schema;
@@ -2041,11 +2046,21 @@ function _syncEntryOutputs(n,entryNode){
     outs.push({name:'item',type:itemType,description:'当前元素(整个item)',schema:itemObjSchema||undefined});
   }
   outs.push({name:'index',type:'integer',description:'当前索引(0起)'});
-  varNames.forEach(vn=>{outs.push({name:vn,type:'string',description:'本地变量(可被置变量修改)'});});
-  // 复合节点的其它输入字段也暴露给 body
+  // 本地变量：类型/schema 跟随声明（此前硬编码 string——loop 的 messages 变量在 __entry__ 上变成 string 连不出去了）
+  (n.data.inputs?.variableParameters||[]).forEach(vp=>{
+    const o={name:vp.name,type:vp.input?.type||'string',description:'本地变量(可被置变量修改)'};
+    if((o.type==='list'||o.type==='object')&&vp.input?.schema)o.schema=vp.input.schema;
+    outs.push(o);
+  });
+  // 复合节点的其它输入字段也暴露给 body：数组源字段已生成 item（跳过）；其余原样透传
+  //（list 型输入在 infinite 循环 / 非数组源场景也是普通输入——tools 传给子画布靠这，schema 带上）
   (n.data.inputs?.inputParameters||[]).forEach(p=>{
-    if(p.input?.type!=='list'&&p.name&&!['item','index'].includes(p.name))
-      outs.push({name:p.name,type:p.input?.type||'string',description:'复合节点输入'});
+    if(p===inList)return;
+    if(p.name&&!['item','index'].includes(p.name)){
+      const o={name:p.name,type:p.input?.type||'string',description:'复合节点输入'};
+      if((o.type==='list'||o.type==='object')&&p.input?.schema)o.schema=p.input.schema;
+      outs.push(o);
+    }
   });
   entryNode.data.outputs=outs;
 }

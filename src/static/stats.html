@@ -95,7 +95,7 @@ let _lastScope = '';
 
 function fmtTs(ts){
   const d = new Date(ts*1000);
-  return d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}) + ' ' + d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+  return d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}) + ' ' + d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function epOf(r){ const rm=(r.resp_model||'').trim(); return (!rm||rm===r.model)?r.model:(r.model+'/'+rm); }
@@ -114,7 +114,11 @@ async function load(){
     // 滑块范围
     const N = _all.length;
     if(keep){ _range.lo = Math.min(prev.lo, N-1); _range.hi = Math.min(Math.max(prev.hi, _range.lo), N-1); }
-    else{ _range = {lo:0, hi:Math.max(N-1,0)}; _rangeTouched = false; }
+    else{
+      // 默认窗口 = 最近 200 条（不足则全量）——长会话打开即看近期，不用先拖滑块
+      const lo0 = Math.max(0, N - 200);
+      _range = {lo: lo0, hi: Math.max(N-1, 0)}; _rangeTouched = false;
+    }
     _lastScope = scope;
     setupSlider(N);
     render();

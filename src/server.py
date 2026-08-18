@@ -904,15 +904,15 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "expand_history":
-        # 前端点"展开更早"：往回退一个档位边界，返回新增区间 [new_start, from) 的轮次
+        # 前端点"展开更早"：往回展开一个固定批量（15 轮 ≈ 一档）。
+        # 不按 boundary 退一步——长会话滚动毕业时边界间隔常为 1（每轮毕业一次），
+        # 退一个边界 = 只展开 1 轮，不符合"点一次展开一档"的预期。
         try:
             cur = int(_d.get("from") or 0)
         except (TypeError, ValueError):
             cur = 0
         s = agent.session
-        bounds = sorted(getattr(s, "_tier_boundaries", None) or [])
-        cands = [b for b in bounds if b < cur]
-        new_start = cands[-1] if cands else 0
+        new_start = max(0, cur - 15)
         turns = s.to_history(start_turn=new_start, end_turn=cur)
         await _send(ws, {"type": "history_expand", "turns": turns,
                          "expand_from": new_start, "total_turns": len(s.turns)})

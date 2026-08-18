@@ -647,7 +647,9 @@ function expandHistory(){
   ws.send(JSON.stringify({action:'expand_history', from:_histExpandFrom}));
 }
 // 单轮历史渲染（读档 + 展开复用；追加到指定容器）
-function renderHistTurn(t, box){
+// isLast=true 且是中断轮 → 渲染继续按钮（只有最新一轮的中断才可续跑）；
+// 历史中断轮 → 灰字标注（不可恢复）
+function renderHistTurn(t, box, isLast){
   // 用户气泡（右侧）
   if(t.user){
     const urow=document.createElement('div'); urow.className='row me';
@@ -676,7 +678,10 @@ function renderHistTurn(t, box){
   if(curTurn.traceBox.children.length===0) det.style.display='none';
   const a=t.answer||'';
   const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
-  if(isInterrupted) finishInterrupted(t.turn);
+  if(isInterrupted && isLast) finishInterrupted(t.turn);   // 最新轮中断 → 可续跑
+  else if(isInterrupted){                                   // 历史中断 → 灰字标注
+    ans.textContent='⏹ 本轮被中断，未完成'; ans.style.color='#8a9099';
+  }
   else finishAnswer(a);
   curTurn=prev;
   return row;
@@ -686,7 +691,7 @@ function renderHistory(turns){
   msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
   if(_histExpandFrom>0) msgArea.appendChild(makeExpandBar());
   if(!turns || !turns.length) return;
-  turns.forEach(t=>renderHistTurn(t, msgArea));
+  turns.forEach((t,i)=>renderHistTurn(t, msgArea, i===turns.length-1));   // 只有最新轮可显示继续按钮
   scrollBottom();
 }
 // 展开返回：前置插入更早一档的轮次（不重绘已有内容）
@@ -696,7 +701,7 @@ function prependHistory(turns){
   document.querySelectorAll('.expand-bar').forEach(b=>b.remove());
   // 借助临时容器按序构建，再整体插到最前
   const frag=document.createDocumentFragment();
-  turns.forEach(t=>renderHistTurn(t, frag));
+  turns.forEach(t=>renderHistTurn(t, frag, false));   // 展开的都是更早的轮次——永不是最新（无继续按钮）
   msgArea.insertBefore(frag, msgArea.firstChild);
   if(_histExpandFrom>0) msgArea.insertBefore(makeExpandBar(), msgArea.firstChild);
 }

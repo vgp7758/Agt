@@ -1,6 +1,6 @@
 # /api/status 端点 · 实例运行时状态快照
 
-> 源码：`src/server.py`（POST `/api/status`）。commit a922121。
+> 源码：`src/server.py`（POST `/api/status`）。commit a922121。**v0.18.2 正式发布**。
 > 用于跨实例诊断——从外部 HTTP 获取当前进程的运行时状态全貌。
 
 ## 职责
@@ -16,6 +16,7 @@
 | 位置 | `src/server.py`（FastAPI 路由） |
 | 返回 | JSON 状态快照 |
 | commit | a922121 |
+| 版本 | v0.18.2 正式发布 |
 | 生效 | 需 `/restart` 重启进程 |
 
 ## 返回结构
@@ -35,7 +36,7 @@
 - **answer 路由正常**：子 Agent `_bg` 线程完成后，`push_message` 经 `AgentRegistry.get(caller_id)` 成功定位 caller，answer 入队 inbox
 - **主 Agent 唤醒正常**：三层消费机制（`run()` 内 `pop_inbox` + `inbox_thread` 轮询 + `work_q` 触发新一轮）无丢消息，主 Agent 被正确唤醒
 
-> 详见 [多 Agent 体系 · 跨实例验证](../architecture/multi-agent.md#跨实例验证2026-08-18)。
+> 详见 [多 Agent 体系 · 端到端验证状态](../architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)。
 
 ## 与其他模块的关系
 
@@ -44,6 +45,7 @@
 | [AgentRegistry](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08)（`src/registry.py`） | 数据来源之一——registry 中各 Agent 的 id/name/status/caller_id 等只读字段被序列化进快照 |
 | [server.py](../architecture/overview.md)（FastAPI 入口层） | 端点宿主，与 `/stats` `/memory` `/rag` `/wfeditor` 等页面路由并列 |
 | [运维与排障](../guides/ops.md#可观测性) | 补全了可观测性的"跨进程实时查询"拼图，与 /stats 页（统计）、llm_calls.jsonl（日志）互补 |
+| [v0.18.2 发布记录](../releases/v0.18.2.md) | 本端点为 v0.18.2 交付项之一 |
 
 ## 注意事项
 
@@ -58,3 +60,4 @@
 - [运维与排障](../guides/ops.md) — 可观测性总览、常见错误、生命周期命令
 - [多 Agent 体系](../architecture/multi-agent.md) — AgentRegistry 机制、三层消费机制与 registry 修复
 - [系统总览](../architecture/overview.md) — 模块地图与数据流
+- [v0.18.2 发布记录](../releases/v0.18.2.md) — 版本交付内容总览

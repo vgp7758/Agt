@@ -9,7 +9,7 @@
 - 每轮对话开始自动扫描注册为 `wf_*` 工具；`hidden=true` 不投影给 LLM（钩子/子工作流专用）
 - meta.hidden 的 XML 往返已修复（api_wf_get 读根属性）——历史丢 hidden 的文件已补回
 
-## async 元信息字段（2026-08 新）
+## async 元信息字段（2026-08 新，v0.18.2 正式发布）
 
 钩子工作流可标记 `async=true`，使其**异步执行不阻塞主循环**。全链路读写：
 
@@ -75,3 +75,4 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 - [系统总览](overview.md)：模块地图与一轮对话数据流
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 钩子实例
 - [气泡交互](../features/bubble-interaction.md)：编辑器系统气泡展开/折叠
+- [v0.18.2 发布记录](../releases/v0.18.2.md)：async 元信息为本次交付项之一

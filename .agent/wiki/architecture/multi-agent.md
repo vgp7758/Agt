@@ -19,7 +19,7 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
 - `_agent_meta`（agent_id/name/model/task/caller_id/recap/status）无条件写子 meta.json → 读档 `_restore_subagents` 恢复团队
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 
-## AgentRegistry 与 answer 路由修复（2026-08）
+## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 
 ### 旧版根因
 
@@ -53,7 +53,7 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
 
 **边界条件**：三层均为进程内对象/线程——若宿主进程退出（含 rc=0 正常退出），daemon 线程（②③及子 Agent `_bg`）随之死亡，inbox/work_q 中已入队消息**全部丢失**。见下节 9100 案例。
 
-### 端到端验证状态（2026-08-18，三阶段）
+### 端到端验证状态（2026-08-18，三阶段，v0.18.2 已发布）
 
 **阶段一（通过）**：POST `/api/status` 跨实例调用成功（见 [/api/status 端点](../features/api-status.md)），确认：
 - registry 在多实例环境下正确注册各 Agent
@@ -69,6 +69,8 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
 - **诊断日志已埋点（commit e0ae60b）**：两处核心观测点加日志——① `_bg` 完成路由 `push_message`（answer 入 caller inbox 处）② `inbox_thread` 搬运（inbox → work_q 触发新一轮处），均在 `src/agent.py`
 - **阻塞**：新实例首轮因 **proxy 响应极慢（单次 590+ 秒）**未跑完，子 Agent 尚未派发，两处观测点日志未出现——"链路未走完"≠"链路失败"
 - **当前策略**：已挂**定时巡检**（定期回看实例日志/状态），等待首轮完成后回收观测点日志，闭环确认整条链路
+
+> **v0.18.2 发布状态**：registry 根因修复代码已发布（PyPI `agt-agent` 0.18.2），stdin 通道验证通过，观测点日志已埋。阶段三的"等待首轮完成闭环"属运行时验证，不影响代码正确性——根因已定位并修复，三层消费机制在进程存活前提下设计上不丢消息。详见 [v0.18.2 发布记录](../releases/v0.18.2.md)。
 
 **待闭环链路（★=e0ae60b 观测点）**：
 

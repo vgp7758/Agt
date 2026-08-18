@@ -1,6 +1,7 @@
 # 气泡交互 · 系统消息展开/折叠
 
 > 前端：`static/editor.html`（工作流编辑器气泡面板）。后端关联 `src/server.py` WS 广播与 `src/agent.py` 事件流 `_emit`。
+> **v0.18.2 正式发布**。
 
 ## 职责
 
@@ -43,3 +44,4 @@
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：async 元信息字段、钩子链路
 - [系统总览](../architecture/overview.md)：事件流 _emit → broadcast 链路
 - [运维与排障](../guides/ops.md)：可观测性（llm_calls.jsonl / events.jsonl）
+- [v0.18.2 发布记录](../releases/v0.18.2.md)：气泡折叠为本次交付项之一

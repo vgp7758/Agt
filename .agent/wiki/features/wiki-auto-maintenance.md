@@ -2,6 +2,7 @@
 
 > 工作流：`.agent/workflows/wiki_auto_maintenance.xml`
 > 职责：主 Agent 完成开发任务后，自动维护 `.agent/wiki/` 知识库页面并**自动 git 提交推送**，形成"改代码 → 更新文档 → 提交"的闭环。
+> **v0.18.2 正式发布**。
 
 ## 背景：为什么需要 commit_wiki
 
@@ -58,6 +59,7 @@ fi
 | [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_commit_msg 消费其摘要 |
 | [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；text 节点（type 15）属 13 类节点之一 |
 | [wiki_auto_query](wiki-auto-query.md) | 读侧：before_turn 钩子自动检索 wiki；本页是写侧：自动维护并提交 wiki |
+| [v0.18.2 发布记录](../releases/v0.18.2.md) | wiki 自动提交为本次交付项之一 |
 
 ## 注意事项
 
@@ -72,3 +74,4 @@ fi
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：工作流节点类型（含 text type 15）、run_shell 执行机制
 - [wiki_auto_query](wiki-auto-query.md)：wiki 读侧——before_turn 自动检索注入
 - [知识库导航](../home.md)：维护约定中提及 update_wiki
+- [v0.18.2 发布记录](../releases/v0.18.2.md)：版本交付内容总览

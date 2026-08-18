@@ -16,12 +16,13 @@
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：update_wiki → build_commit_msg → commit_wiki，自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠、用户气泡默认展开、点击切换 | 改前端气泡 / 调交互 |
+| [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交 | 查版本交付内容 / 发布流程 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
 | [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
 
 ## 快速事实（2026-08 状态）
 
-- 版本 0.18.x；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
+- 版本 **0.18.2**；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
 - 38 个 Python 模块 ~17000 行，零 LangChain 依赖
 - 主 Agent id=`_main_`；子 Agent 声明在 `.agent/agents/*.md`（frontmatter DSL）
 - 工作流：`.agent/workflows/*.xml|json`，13 类节点，XML 为推荐写作格式
@@ -29,8 +30,9 @@
 - 存档：`~/.agt/repos/<fixed-cwd>/`（sessions/memories/plans/specs/images/rag）
 - LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换
-- 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断（commit a922121）
-- vision 唤醒链路端到端验证（进行中，2026-08-18）：9100 反复退出根因**修正为端口被旧实例 pid 22636 占用**（已 taskkill 清理，非代码 bug）；端口清理后 stdin 通道验证通过（send_to_service→busy=True）；链路两处观测点已埋诊断日志（commit e0ae60b：`_bg` 路由 push_message + inbox_thread 搬运）；新实例首轮因 proxy 极慢（单次 590+ 秒）未完成、观测点未触发，已挂**定时巡检等待闭环**（见 [multi-agent 端到端验证状态](architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）
+- 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
+- **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（build_commit_msg + commit_wiki）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
+- 唤醒链路端到端验证（三阶段）：阶段一 /api/status 跨实例调用通过；阶段二 9100 反复退出根因修正为端口被旧实例占用（已清理，非代码 bug）；阶段三 stdin 通道验证通过、观测点日志已埋，等待首轮完成闭环（见 [multi-agent 端到端验证状态](architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）
 
 ## 维护约定
 

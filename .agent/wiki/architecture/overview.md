@@ -6,7 +6,7 @@
 
 ```
 入口层    chat.py（CLI main / Web web_main，work_q 驱动）
-          server.py（FastAPI+WS，/memory /stats /rag /wfeditor 页面路由）
+          server.py（FastAPI+WS，/memory /stats /rag /wfeditor /api/status 路由）
 ─────────────────────────────────────────────────
 引擎层    agent.py（ReAct 循环、事件流 _emit、并行工具调度、钩子执行）
           llm_client.py（多模型回退链、token 轮换、DSML 兜底、usage 归一化）

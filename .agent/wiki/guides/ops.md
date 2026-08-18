@@ -30,14 +30,20 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - `/debug prompt <提示词>`：按当前投影直调 LLM，**不落盘不执行**，打印完整回包（耗时/finish_reason/usage/含缓存命中/tool_calls）——与投影转储配套（进什么 vs 出什么）
 - `/stats`（CLI）/ /logs：文本版统计与日志
 - restart.log（~/.agt/）：/restart 看门狗全程时序（含新进程 stderr）
+- **唤醒链路观测点日志（commit e0ae60b）**：`src/agent.py` 中 `_bg` 路由 `push_message`（answer 入 caller inbox）与 `inbox_thread` 搬运（inbox→work_q）两处已埋诊断日志——排"子 Agent 完成后主 Agent 未唤醒"时直接看实例日志定位断点（需 `/restart` 加载新代码）
 
-### 跨进程状态查询缺失
+### 跨进程状态查询（/api/status）
 
-**现状**：`AgentRegistry`（`src/registry.py`）是进程内全局对象，记录所有活 Agent 实例及其运行时状态（agent_id/status/caller_id 等）。但当前 **无跨进程 API** 从外部查询 registry 内容——即无法通过 HTTP 端点获知"当前有哪些子 Agent 在跑、各处于什么状态"。
+**已实现并验证**（commit a922121，`src/server.py` POST `/api/status`）：返回实例运行时状态快照（18 个顶层字段 + 3 个嵌套数组），用于跨实例诊断。详见 [/api/status 端点](../features/api-status.md)。
 
-**影响**：调试子 Agent 异步唤醒问题时（如 [multi-agent registry 修复](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08) 所述场景），只能靠日志/events.jsonl 事后排查，缺少实时运行时观测手段。
+**背景**：`AgentRegistry`（`src/registry.py`）是进程内全局对象，记录所有活 Agent 实例及其运行时状态。此前无跨进程 API 从外部查询 registry 内容，调试子 Agent 异步唤醒问题（如 [multi-agent registry 修复](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08) 所述场景）只能靠日志事后排查。现已补全。
 
-**建议**：在 `server.py` 添加 `/api/status` 端点，序列化 registry 中各 Agent 的 id/name/status/caller_id 等只读字段，供外部监控或调试工具消费。需注意 registry 非线程安全，读取时需加锁或快照。
+**使用**：POST `/api/status` → JSON 快照（只读，registry 读取时已加锁/快照）。多实例部署可逐个采集做横向对比。改完源码需 `/restart` 生效。
+
+**验证结论（2026-08-18，三阶段）**：
+- **阶段一（通过）**：跨实例 POST `/api/status` 调用成功。结合 [三层消费机制](../architecture/multi-agent.md#三层消费机制当前代码消息不会丢前提进程存活) 确认：registry 正确注册 → answer 正常入队 → 三层消费无丢消息 → 主 Agent 被正确唤醒。原"子 Agent 完成后主 Agent 未唤醒"根因已定位为旧版 registry 为 None 导致消息未入队（非消费端丢失），代码已修复。
+- **阶段二（根因已修正）**：9100 端口新实例反复退出（rc=0）的真正根因是**端口被旧实例（pid 22636）占用**，非此前推断的 entry point/端口探测问题——已 `taskkill` 清理，进程死亡导致 daemon 线程与 inbox 消息丢失的表象见 [三层消费机制](../architecture/multi-agent.md#三层消费机制当前代码消息不会丢前提进程存活)。
+- **阶段三（进行中）**：端口清理后新实例稳定，stdin 通道端到端验证成功（`send_to_service` → busy=True）；唤醒链路两处核心观测点已埋诊断日志（commit e0ae60b，见 [端到端验证状态](../architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）；新实例首轮因 proxy 响应极慢（单次 590+ 秒）未完成，观测点未触发，已挂定时巡检等待闭环。
 
 ## 常见错误对照
 
@@ -54,7 +60,9 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 中断轮"消失" | 已修复（start_turn 防御归档，answer=中断标注）；旧数据读档可見 |
 | 工作流编辑后保存丢子画布 | 已修复（exitComposite 从栈顶帧父层写回）→ 强刷编辑器 |
 | Windows 闪终端窗 | 已修复（子进程统一 CREATE_NO_WINDOW）→ agt ≥ 0.18.1 |
-| 子 Agent 调用后主 Agent 不响应 | 旧版 registry 为 None → push_message 跳过 → answer 未入 inbox；已修复（见 [multi-agent](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08)） |
+| 子 Agent 调用后主 Agent 不响应 | **先看下一行**：若伴随实例反复退出 rc=0 → 多为端口被旧实例占用（`netstat` 查 pid → `taskkill`，9100 案例即此）；否则查旧版 registry 为 None → push_message 跳过 → answer 未入 inbox（已修复，见 [multi-agent](../architecture/multi-agent.md#agentregistry-与-answer-路由修复2026-08)）。排障首选 POST `/api/status` 查 registry 字段 + 看观测点日志（e0ae60b） |
+| agt-web 新端口实例反复退出 rc=0（9100 案例），伴 daemon 线程死亡、inbox 消息丢失、子 Agent 完成后主 Agent 不唤醒 | **端口被旧实例占用（根因已修正，非 entry point 问题）**：9100 被旧实例 pid 22636 占用 → 新实例起不来反复自退。处置：`netstat -ano \| findstr <端口>` 定位 pid → `taskkill /PID <pid> /F` 清理（已执行，新实例随后稳定）。进程死亡时 daemon 线程/inbox 消息随之丢失，表象同链路 bug，勿据此怀疑 [multi-agent 唤醒链路代码](../architecture/multi-agent.md#端到端验证状态2026-08-18三阶段) |
+| proxy 响应极慢（单次 590+ 秒），实例看似无反应 | proxy 侧慢而非 agt 假死（2026-08-18 唤醒链路复测首轮实测）。处置：看 llm_calls.jsonl 的 elapsed 区分"慢/死"，耐心等首轮完成，勿中途重启实例丢观测点 |
 
 ## 生命周期命令
 

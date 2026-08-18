@@ -1,6 +1,6 @@
 # 多 Agent 体系
 
-> src/multiagent.py + registry.py。docs/architecture/06 有基础版，本页收录 2026-08 全部演进（全异步/reuse/复活/assembly/system_append/registry 修复）。
+> src/multiagent.py + src/registry.py + src/agent.py。docs/architecture/06 有基础版，本页收录 2026-08 全部演进（全异步/reuse/复活/assembly/system_append/registry 修复）。
 
 ## 声明与生命周期
 
@@ -25,24 +25,68 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
 
 旧版代码无 registry 机制。子 Agent 在后台 `_bg` 线程中运行，完成后调用 `push_message` 将 answer 路由回调用者 inbox。但 `push_message` 内部需要查 `agent.registry` 来定位 caller，旧版 `agent.registry` 为 `None`，导致 answer **未被入队** caller 的 inbox——主 Agent 永远收不到子 Agent 的回复，表现为"调了 vision 子 agent 后主 agent 未被唤醒"。
 
+**根因确认（2026-08-18 诊断）**：消息根本没入队，不是消费端丢失。旧版 `push_message` 路径在 registry 为 None 时直接跳过，inbox 从未收到 answer。
+
 ### 修复
 
-引入 `AgentRegistry`（`src/registry.py`）：每个 Agent 实例创建时注册到全局 registry，`push_message` 通过 registry 按 `caller_id` 查找目标 Agent 并将 answer 入其 inbox。`_bg` 线程完成时 registry 不再为 None，answer 正常路由，主 Agent 下轮自动激活。
+引入 `AgentRegistry`（`src/registry.py`）：每个 Agent 实例创建时注册到全局 registry，`push_message` 通过 registry 按 `caller_id` 查找目标 Agent 并将 answer 入其 inbox。`_bg` 线程完成时 registry 不再是 None，answer 正常路由，主 Agent 下轮自动激活。
 
 ### 关键链路
 
 ```
 子 Agent _bg 线程 finish
   → push_message(caller_id, answer)
-  → AgentRegistry.get(caller_id)   ← 旧版此处返回 None → 跳过
+  → AgentRegistry.get(caller_id)   ← 旧版此处返回 None → 跳过（消息未入队）
   → caller.inbox.put(answer)       ← 修复后正常入队
-  → 主 Agent 下轮 _worker 取出 inbox → 激活
+  → 主 Agent下轮 _worker 取出 inbox → 激活
+```
+
+### 三层消费机制（当前代码，消息不会丢——前提：进程存活）
+
+| 层 | 机制 | 源码位置 | 说明 |
+|----|------|----------|------|
+| ① | `run()` 内 `pop_inbox` | `agent.py` ReAct 循环每步前 | 每轮 ReAct 步骤开始前检查 inbox，有消息则注入当前上下文 |
+| ② | `inbox_thread` 轮询 | `agent.py` 后台线程 | 独立线程持续轮询 inbox，收到消息后触发处理 |
+| ③ | `work_q` 触发新一轮 | `agent.py` → `chat.py` | inbox 收到消息后向 work_q 投递任务，驱动 `_worker` 开启新一轮 `run()` |
+
+三层互为补充：①在 run 进行中时即时消费；②在 run 空闲时后台拾取；③确保新一轮 run 被调度。只要 answer 成功入队（registry 非 None），至少一层会消费它。
+
+**边界条件**：三层均为进程内对象/线程——若宿主进程退出（含 rc=0 正常退出），daemon 线程（②③及子 Agent `_bg`）随之死亡，inbox/work_q 中已入队消息**全部丢失**。见下节 9100 案例。
+
+### 端到端验证状态（2026-08-18，三阶段）
+
+**阶段一（通过）**：POST `/api/status` 跨实例调用成功（见 [/api/status 端点](../features/api-status.md)），确认：
+- registry 在多实例环境下正确注册各 Agent
+- 子 Agent 完成后 answer 经 `push_message` 正常路由回 caller inbox
+- 三层消费机制无丢消息
+
+**阶段二（环境问题，根因已修正）**：在 9100 端口新起 agt-web 实例复测 vision 唤醒链路，服务**反复退出（rc=0）**——daemon 线程随进程死亡，inbox 消息丢失，复现"vision 完成后主 Agent 未被唤醒"表象。
+**根因（后续排查确认）**：9100 端口被**旧实例（pid 22636）占用**，新实例起不来反复自退——非代码 bug，此前"entry point 不解析命令行参数 + 端口探测逻辑异常"的推断**不成立，已修正**。处置：`taskkill` 清理 pid 22636，端口释放后新实例稳定运行。
+**教训**：新端口实例反复退出 rc=0，第一步先 `netstat -ano | findstr <端口>` 查占用再怀疑其他（见 [ops 常见错误对照](../guides/ops.md#常见错误对照)）。
+
+**阶段三（进行中，等待闭环）**：
+- 端口清理后新实例稳定；**stdin 通道端到端验证成功**——`send_to_service` 发送后实例 busy=True，外部消息→实例处理通道打通
+- **诊断日志已埋点（commit e0ae60b）**：两处核心观测点加日志——① `_bg` 完成路由 `push_message`（answer 入 caller inbox 处）② `inbox_thread` 搬运（inbox → work_q 触发新一轮处），均在 `src/agent.py`
+- **阻塞**：新实例首轮因 **proxy 响应极慢（单次 590+ 秒）**未跑完，子 Agent 尚未派发，两处观测点日志未出现——"链路未走完"≠"链路失败"
+- **当前策略**：已挂**定时巡检**（定期回看实例日志/状态），等待首轮完成后回收观测点日志，闭环确认整条链路
+
+**待闭环链路（★=e0ae60b 观测点）**：
+
+```
+registry 注册 → push_message(caller_id, answer)★ → caller.inbox
+  → inbox_thread 搬运★ → work_q 触发 → _worker 调度 → 主 Agent run() 新一轮
 ```
 
 ### 注意事项
 
-- registry 是进程内全局，**不跨进程**——外部进程无法通过 API 查询运行时 registry 状态（见 [运维与排障](../guides/ops.md#跨进程状态查询缺失)）
+- registry 是进程内全局对象；运行时状态现可通过 POST `/api/status` 端点从外部 HTTP 查询（commit a922121，见 [/api/status 端点](../features/api-status.md)），读取时已加锁/快照
 - 子 Agent 工具闭包重绑自身时也依赖 registry 确认身份，旧版同样受影响
+- **排障速查**：若再现"子 Agent 完成后主 Agent 未唤醒"，按序排查——
+  1. **实例是否反复退出 rc=0**：先查端口占用——`netstat -ano | findstr <端口>` → `taskkill /PID <pid>`（9100 案例即旧实例 pid 22636 占用端口，清理后稳定）。进程死亡 → daemon 线程死亡 + inbox 消息丢失，表象同链路 bug 但属环境问题（见 [ops 常见错误对照](../guides/ops.md#常见错误对照)）
+  2. **registry 是否为 None**：查 `/api/status` 快照 registry 字段
+  3. **观测点日志定位断点**：commit e0ae60b 已在 push_message 入队与 inbox_thread 搬运两处埋日志，看实例日志即可判断 answer 是否入队、是否被搬运
+  4. **排除"首轮太慢"误判**：proxy 单次响应可慢至 590+ 秒，观测点未出现≠链路坏，看 llm_calls.jsonl 的 elapsed 区分"慢/死"
+  三层消费机制在进程存活前提下设计上不丢消息
 
 ## 通信（agent 间）
 
@@ -86,4 +130,4 @@ system_append:
 
 - 高频反复派活（看图/检查）→ `reuse=True`：上下文只含当前轮，token 不随复用次数增长
 - 长报告类子 Agent answer 上限 4000 字，超长指引用 `agent_query_events(id, 1)` 取全文
-- 派视觉任务务必在 prompt 带 `[图片 文件名，你无法直接查看；如需理解其内容请委托视觉子 agent：agent_prompt("vision", "请描述 <img>文件名</img> 的内容")]`（vision.md description 有提示）
+- 派视觉任务时，prompt 中带图片占位（如 `[图片 文件名]`），并按 vision.md description 的提示委托：`agent_prompt("vision", "请描述 [图片 文件名] 的内容")`——主 Agent 无法直接查看图片内容

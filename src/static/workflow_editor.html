@@ -273,8 +273,19 @@ function portY(n, side, field){
   if(i<0) return n.y+HDR_H+ROW_H/2;
   return n.y+HDR_H+i*ROW_H+ROW_H/2;
 }
+// 本地变量端口 y：variableParameters 排在常规输入之后（与 nodeRows 的 localVar 行序一致）
+function localVarPortY(n, name){
+  const lv=(n.data.inputs?.variableParameters||[]);
+  const i=lv.findIndex(v=>v.name===name);
+  if(i<0) return n.y+HDR_H+ROW_H/2;
+  // 常规输入行数（含展开的 object 子字段）+ 本地变量偏移
+  const baseRows=nodeRows(n).filter(r=>r.side==='in'&&!r.localVar).length;
+  return n.y+HDR_H+(baseRows+i)*ROW_H+ROW_H/2;
+}
 function inPortPos(n,field){return{x:n.x, y:portY(n,'in',field)};}
 function outPortPos(n,field){return{x:n.x+n.w, y:portY(n,'out',field)};}
+// 本地变量输入端口位置（variableParameters 排在常规输入之后）
+function inLocalVarPos(n,name){return{x:n.x, y:localVarPortY(n,name)};}
 // 流程端口（标题栏左右）
 function flowOutPos(n){return{x:n.x+n.w, y:n.y+HDR_H/2};}
 function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
@@ -359,7 +370,12 @@ function renderAll(){
 
   // ---- 变量线（先画，在节点下层）----
   WF.nodes.forEach(tn=>{
-    nodeInputs(tn).forEach((p)=>{
+    // 复合节点本地变量(variableParameters)与输入字段同构——连线后同样要渲染。
+    // 此前只遍历 inputParameters：finishVar 已把 ref 写进 variableParameters，但线永远画不出来，
+    // 用户看到的就是"连不上"（数据其实已连上，仅视觉缺失）。
+    const _allP=[...nodeInputs(tn)];
+    if(['21','28'].includes(tn.type)) _allP.push(...nodeLocalVars(tn));
+    _allP.forEach((p)=>{
       if(!inputIsLinked(p))return;
       const src=inputRefSource(p);
       const sn=findN(src.blockID); if(!sn)return;
@@ -852,7 +868,9 @@ function doDisconnect(info){
       const grp=tn.data.inputs?.mergeGroups?.[info.aggrGi];
       if(grp){grp.variables=grp.variables||[];const gt=(nodeOutputs(tn).find(o=>o.name===grp.name)?.type)||'string';grp.variables[info.aggrVi]={type:gt,value:{type:'literal',content:''}};toast('已断开变量线');}
     }else{
-      const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField);
+      // 本地变量(variableParameters)与输入字段同构——断线同样要能找到（此前只查 inputParameters，剪不断本地变量的线）
+      const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField)
+        || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===info.tgtField):null);
       if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
     }
   }
@@ -910,8 +928,9 @@ function finishVar(tgtId,field,color){
       toast('已解析 item schema: '+(Array.isArray(itemSch)?itemSch.map(s=>s.name).join(','):(itemSch?.type||'?')));
     }
   }
+  const _srcField=edgeFrom?.field||field;   // 先取再清——此前 edgeFrom=null 后读 ?.field 恒 undefined（"已连接：undefined"的来源）
   edgeFrom=null;selNode=tgtId;showProps();renderAll();
-  toast('已连接：'+edgeFrom?.field||field);
+  toast('已连接：'+_srcField);
 }
 function color2type(col){return Object.entries(TYPE_COLOR).find(([k,v])=>v===col)?.[0]||'string';}
 function svgPos(e){const r=svg.getBoundingClientRect();return{x:(e.clientX-r.left)/dz,y:(e.clientY-r.top)/dz};}
@@ -969,7 +988,8 @@ svg.addEventListener('contextmenu',(e)=>{
   if(selEdge&&selEdge.kind==='flow'){WF.edges.splice(selEdge.i,1);selEdge=null;renderAll();}
   if(selEdge&&selEdge.kind==='var'){
     const[tid,fname]=selEdge.key.split('::');const tn=findN(tid);
-    const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname);
+    const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname)
+      || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===fname):null);
     if(p)p.input.value={type:'literal',content:''};
     selEdge=null;renderAll();
   }

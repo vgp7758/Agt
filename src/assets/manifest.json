@@ -2,29 +2,21 @@
   {
     "name": "cs_auto_diag",
     "type": "workflow",
-    "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）",
-    "src": "workflows/cs_auto_diag.xml",
-    "default_dir": ".agent/workflows"
+    "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）"
   },
   {
     "name": "py_auto_diag",
     "type": "workflow",
-    "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；需先 ensure_lsp('python')）",
-    "src": "workflows/py_auto_diag.xml",
-    "default_dir": ".agent/workflows"
+    "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤+contains 判 ERROR，零 code 节点；需 ensure_lsp('python') 装配 python-lsp）"
   },
   {
     "name": "wiki_auto_query",
     "type": "workflow",
-    "desc": "每轮开始前自动查 wiki 注入相关页面（before_turn 钩子，默认关，需 .agent/wiki/ 有内容）",
-    "src": "workflows/wiki_auto_query.xml",
-    "default_dir": ".agent/workflows"
+    "desc": "每轮开始前自动查 wiki（Agent 化版）：wiki_tree 注入 SYSTEM + 工作流内 ReAct 循环（wiki_read/wiki_search 两件套），相关问题注入命中页面摘录、无关不注入（before_turn 钩子，默认开，需 .agent/wiki/ 有内容）"
   },
   {
     "name": "wiki_auto_maintenance",
     "type": "workflow",
-    "desc": "最终回答前自动判断并调 update_wiki 维护知识库（before_answer 钩子，默认关，报告不喂主 LLM）",
-    "src": "workflows/wiki_auto_maintenance.xml",
-    "default_dir": ".agent/workflows"
+    "desc": "最终回答前自动判断并调 update_wiki 子 Agent 维护知识库，wiki 变更自动 commit+push（before_answer 钩子，默认开，异步不阻塞）"
   }
 ]

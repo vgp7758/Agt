@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→调 update_wiki 子 Agent 维护→用报告摘要拼 commit message→检查 wiki 变更并自动提交推送→报告发系统消息（不喂主 LLM，before_answer 钩子，默认关）" hook="before_answer" hidden="true" async="true">
+<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→调 update_wiki 子 Agent 维护→用报告摘要拼 commit message→检查 wiki 变更并自动提交推送→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hook="before_answer" hidden="true" async="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>

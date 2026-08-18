@@ -2,6 +2,9 @@
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
+  <node id="100002" type="selector" title="short_msg?" x="300" y="80">
+    <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
+  </node>
   <node id="110001" type="plugin" title="wiki_tree" x="420" y="80" toolName="wiki_tree">
     <out name="raw" type="string" description="wiki 全库结构（路径+标题大纲）"/>
     <out name="result" type="string" description="工具返回值"/>
@@ -91,35 +94,35 @@
     <branch><cond op="13" left="310001.tool_calls.length" right="0" left_type="integer" right_type="integer"/></branch>
   </node>
       <node id="310003" type="plugin" title="call_tool" x="1020" y="80" toolName="call_tool">
-    <in name="name" type="string" ref="310001.tool_calls.0.name"/>
-    <in name="arguments" type="object" ref="310001.tool_calls.0.arguments"/>
+    <in name="name" type="string" ref="loop-item.name"/>
+    <in name="arguments" type="object" ref="loop-item.arguments"/>
     <out name="raw" type="string"/>
-    <batch enabled="false"/>
+    <batch enabled="true"><input ref="310001.tool_calls" type="list"/></batch>
   </node>
       <node id="310004" type="code" title="append_round" x="1320" y="80">
     <in name="messages" type="list" ref="__entry__.messages"/>
     <in name="resp" type="object" ref="310001.raw"/>
-    <in name="tool_result" type="string" ref="310003.raw"/>
+    <in name="tool_results" type="list" ref="310003.all_outputs"/>
     <code language="3"><![CDATA[import json as _j
 async def main(args):
     p = args.params
     msgs = list(p.get("messages") or [])
     resp = p.get("resp") or {}
-    tr = str(p.get("tool_result") or "")[:4000]   # 单轮工具结果上限（ReAct 上下文管理，防 wiki 长文爆上下文）
+    results = list(p.get("tool_results") or [])   # 批处理 all_outputs：[{raw:...}, ...] 与 tool_calls 按序配对
     tcs = resp.get("tool_calls") or []
     if tcs:
-        tc = tcs[0]
-        fn = tc.get("function") or {}
-        name = fn.get("name") or tc.get("name") or "tool"
-        a = fn.get("arguments") or tc.get("arguments") or {}
-        a_s = a if isinstance(a, str) else _j.dumps(a, ensure_ascii=False)
-        cid = tc.get("id") or "c0"
-        msgs = msgs + [
-            {"role": "assistant", "content": resp.get("content") or None,
-             "tool_calls": [{"id": cid, "type": "function",
-                             "function": {"name": name, "arguments": a_s}}]},
-            {"role": "tool", "tool_call_id": cid, "content": tr},
-        ]
+        calls, tools = [], []
+        for i, tc in enumerate(tcs):
+            fn = tc.get("function") or {}
+            name = fn.get("name") or tc.get("name") or "tool"
+            a = fn.get("arguments") or tc.get("arguments") or {}
+            a_s = a if isinstance(a, str) else _j.dumps(a, ensure_ascii=False)
+            cid = tc.get("id") or f"c{i}"
+            calls.append({"id": cid, "type": "function", "function": {"name": name, "arguments": a_s}})
+            r = results[i] if i < len(results) else None
+            tr = r.get("raw") if isinstance(r, dict) else r
+            tools.append({"role": "tool", "tool_call_id": cid, "content": str(tr)[:4000]})  # 单结果 4k 上限
+        msgs = msgs + [{"role": "assistant", "content": resp.get("content") or None, "tool_calls": calls}] + tools
     return {"messages": msgs}]]></code>
     <out name="messages" type="list"/>
     <batch enabled="false"/>
@@ -202,5 +205,8 @@ async def main(args):
   <edge from="110001" to="130001"/>
   <edge from="140003" to="150002"/>
   <edge from="120001" to="140001"/>
-  <edge from="100001" to="120001"/>
+  <edge from="100001" to="100002"/>
+  <edge from="100002" to="120001" port="false"/>
+  <edge from="100002" to="900001" port="true"/>
+  <edge from="120001" to="140001"/>
 </workflow>

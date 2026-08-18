@@ -17,6 +17,26 @@
   {
     "name": "wiki_auto_maintenance",
     "type": "workflow",
-    "desc": "最终回答前自动判断并调 update_wiki 子 Agent 维护知识库，wiki 变更自动 commit+push（before_answer 钩子，默认开，异步不阻塞）"
+    "desc": "最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→update_wiki→快照 diff→git_commit 提交推送（before_answer 钩子，默认开+async）"
+  },
+  {
+    "name": "dir_snapshot",
+    "type": "workflow",
+    "desc": "目录 mtime 快照（JSON 字符串），排除 .git/__pycache__/嵌套仓库；path 留空=整个 workspace。与 diff_snapshots 配对：改前拍 before、改后拍 after、diff 出变更清单"
+  },
+  {
+    "name": "diff_snapshots",
+    "type": "workflow",
+    "desc": "对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → files（逗号分隔，可直接喂 git_commit）+ count + changed（list<object>）"
+  },
+  {
+    "name": "react_agent_demo",
+    "type": "workflow",
+    "desc": "纯工作流装配的 ReAct 循环 Agent 骨架：get_tool_schemas→llm_call(messages+tools)→call_tool+append 回 messages 循环。可复制改工具集/系统提示成自定义 Agent"
+  },
+  {
+    "name": "custom_tool_demo",
+    "type": "workflow",
+    "desc": "工作流内定义工具箱没有的自定义工具：text 写 schema→code 拼进官方表→llm_call→选择器按名路由(自定义→code 实现/官方→call_tool)→append 回 messages 循环"
   }
 ]

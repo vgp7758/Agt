@@ -2,6 +2,9 @@
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
+  <node id="100002" type="selector" title="short_msg?" x="300" y="80">
+    <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
+  </node>
   <node id="110001" type="plugin" title="wiki_tree" x="420" y="80" toolName="wiki_tree">
     <out name="raw" type="string" description="wiki 全库结构（路径+标题大纲）"/>
     <out name="result" type="string" description="工具返回值"/>
@@ -202,5 +205,8 @@ async def main(args):
   <edge from="110001" to="130001"/>
   <edge from="140003" to="150002"/>
   <edge from="120001" to="140001"/>
-  <edge from="100001" to="120001"/>
+  <edge from="100001" to="100002"/>
+  <edge from="100002" to="120001" port="false"/>
+  <edge from="100002" to="900001" port="true"/>
+  <edge from="120001" to="140001"/>
 </workflow>

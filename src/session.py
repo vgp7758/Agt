@@ -1312,28 +1312,15 @@ class Session:
             lines.append(f"  💭(回答推理) {t.answer_reasoning}")
         return "\n".join(lines)
 
-    def to_history(self, fold_count: int = 0) -> list:
+    def to_history(self, fold_count: int = 0, start_turn: int = 0, end_turn: int = None) -> list:
         """导出历史（结构化），供 webui resume 后渲染。含每步 reasoning 与回答的 reasoning。
         tool_calls 的 result 截断到 500 字（渲染够用）。
-        fold_count > 0 时：前 fold_count 轮折叠成一条摘要条目（steps 空、answer 用代码摘要），
-        减少长会话的传输/渲染量；前端可据 folded 字段渲染折叠卡片。"""
+        start_turn/end_turn：只渲染 [start_turn, end_turn) 区间的轮（0-based，end 缺省=到末尾），
+        turn 字段仍是全 session 的绝对轮号（前端展开时序号正确）。读档时 server 用
+        _tier_boundaries 传 start_turn=当前档起点，前端点"展开更早"再请求更早一档。"""
         out = []
-        if fold_count > 0 and fold_count < len(self.turns):
-            # 折叠区：一条摘要条目代表所有已折叠的早期轮次
-            folded_lines = []
-            for i, t in enumerate(self.turns[:fold_count]):
-                n = sum(len(s.tool_calls) for s in t.steps)
-                u = (t.user_message or "").strip().replace("\n", " ")[:60]
-                a = self._summarize_answer(t.answer) or "中断(未回答)"
-                folded_lines.append(f"[第{i+1}轮] {u} → {a}")
-            out.append({"turn": 0, "folded": True, "user": "",
-                        "answer": "【已折叠的早期轮次（共 {} 轮）】\n".format(fold_count) + "\n".join(folded_lines),
-                        "summary": "", "steps": [], "answer_reasoning": ""})
-            turns = self.turns[fold_count:]
-            offset = fold_count
-        else:
-            turns = self.turns
-            offset = 0
+        turns = self.turns[start_turn:(end_turn if end_turn is not None else len(self.turns))]
+        offset = start_turn
         for i, t in enumerate(turns):
             steps = []
             for s in t.steps:

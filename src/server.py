@@ -769,6 +769,27 @@ async def ws_endpoint(websocket: WebSocket):
             _clients.remove(client)
 
 
+def _history_event(agent, name_override: str = "") -> dict:
+    """构造 session_history 事件：默认只渲染【当前档位】的轮次（最后边界之后），
+    并附 expand_from（当前渲染起点）/ total_turns——前端据此显示"展开更早"蓝字，
+    点击请求 expand_history 再往前展开一档。无分档（无边界）时全量（行为同旧版）。"""
+    s = agent.session
+    try:
+        bounds = sorted(getattr(s, "_tier_boundaries", None) or [])
+        start = bounds[-1] if bounds else 0
+        total = len(s.turns)
+    except Exception:
+        start, total = 0, 0
+    return {"type": "session_history",
+            "name": name_override or s.name or "(当前会话)",
+            "turns": s.to_history(start_turn=start),
+            "expand_from": start, "total_turns": total}
+
+
+def _broadcast_history(agent, name_override: str = ""):
+    _broadcast(_history_event(agent, name_override))
+
+
 async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     """处理一条用户输入（文本/命令/action）。"""
     # JSON action?
@@ -791,9 +812,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                 print(f"❌ 回溯失败：{type(e).__name__}: {e}")
                 return
             _broadcast({"type": "restored", "target": target or ""})
-            _broadcast({"type": "session_history",
-                        "name": agent.session.name or "(当前会话)",
-                        "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
+            _broadcast_history(agent)
         _work_q.put(("task", _do_restore))
         await _send(ws, {"type": "system", "text": "⏮ 回溯中…"})
         return
@@ -828,10 +847,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                          "names": list_sessions(workspace=_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "current_history":
-        # 重连后前端请求：返回当前内存中 session 的完整历史（不从磁盘重载）
-        await _send(ws, {"type": "session_history",
-                         "name": agent.session.name or "(当前会话)",
-                         "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
+        # 重连后前端请求：返回当前内存中 session 的历史（不从磁盘重载；默认当前档，可展开）
+        await _send(ws, _history_event(agent))
         # 补发活动 spec：spec 面板靠 spec 事件驱动，重连不会自动重放。
         # 如果有 pending spec（committed 态），用 spec_pending 让前端渲染交互气泡。
         from spec_tools import check_pending_spec, _spec_event_payload
@@ -847,8 +864,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             return
         _work_q.put(("user", "/reset"))
         def _sync_new():
-            _broadcast({"type": "session_history",
-                        "name": "(新会话)", "turns": agent.session.to_history(fold_count=0)})
+            _broadcast_history(agent, "(新会话)")
         _work_q.put(("task", _sync_new))
         await _send(ws, {"type": "system", "text": "🔄 新建中…"})
         return
@@ -872,9 +888,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         _work_q.put(("user", f"/resume {_ls_name}"))
         # 紧随其后：广播 session_history 给所有 WS 客户端（/resume 完成后串行执行）
         def _sync_loaded():
-            _broadcast({"type": "session_history",
-                        "name": agent.session.name or _ls_name,
-                        "turns": agent.session.to_history(fold_count=getattr(agent.session, "_last_fold_count", 0))})
+            _broadcast_history(agent)
             # 广播 team_list 让 agent 下拉框自动刷新
             reg = getattr(agent, "registry", None)
             if reg:
@@ -888,6 +902,20 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                     _broadcast(_spec_event_payload(agent))
         _work_q.put(("task", _sync_loaded))
         await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
+        return
+    if isinstance(_d, dict) and _d.get("action") == "expand_history":
+        # 前端点"展开更早"：往回退一个档位边界，返回新增区间 [new_start, from) 的轮次
+        try:
+            cur = int(_d.get("from") or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        s = agent.session
+        bounds = sorted(getattr(s, "_tier_boundaries", None) or [])
+        cands = [b for b in bounds if b < cur]
+        new_start = cands[-1] if cands else 0
+        turns = s.to_history(start_turn=new_start, end_turn=cur)
+        await _send(ws, {"type": "history_expand", "turns": turns,
+                         "expand_from": new_start, "total_turns": len(s.turns)})
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()

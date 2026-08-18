@@ -192,6 +192,10 @@
   /* 中断轮的继续按钮区 */
   .interrupted-bar { display:flex; align-items:center; gap:10px; color:#8a9099; font-size:13px; }
   .interrupted-bar button { color:#059669; border-color:#a7f3d0; }
+  /* 历史展开条（读档时默认只渲染当前档，点击往回展开一档） */
+  .expand-bar { text-align:center; color:#2563eb; cursor:pointer; padding:10px 0 4px;
+    font-size:13px; user-select:none; }
+  .expand-bar:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -624,29 +628,76 @@ function continueInterrupted(){
   sendRaw('请继续完成上一轮被中断的工作（从断点接着做，不要重头开始）', []);
   setBusy(true); curTurn=null;
 }
-function renderHistory(turns){
-  // 把一个 session 的完整历史原样渲染成对话：每轮 = 用户气泡 + 过程trace + 回答气泡
-  msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
-  if(!turns || !turns.length) return;
-  turns.forEach(t=>{
-    addUserBubble(t.user||'', null);
-    newTurn();
-    (t.steps||[]).forEach(s=>{
-      if(s.reasoning) addTrace('think','💭 '+s.reasoning);
-      (s.tool_calls||[]).forEach(tc=>{
-        renderToolCall(tc.name, tc.arguments);
-        if(tc.result) addTrace('res', '→ '+tc.result);
-      });
+// —— 历史展开（读档默认只渲染当前档位，点蓝字往回展开一档）——
+let _histExpandFrom = 0;   // 当前渲染起点（0=已全部展开；>0=还有更早的档）
+let _histTotal = 0;
+function makeExpandBar(){
+  const d=document.createElement('div'); d.className='expand-bar';
+  const remain = _histExpandFrom;
+  d.textContent = `⬆ 展开更早的对话（还有 ${remain} 轮）`;
+  d.onclick = expandHistory;
+  return d;
+}
+function expandHistory(){
+  if(_histExpandFrom<=0) return;
+  // bar 显示加载态
+  const bars=document.querySelectorAll('.expand-bar');
+  bars.forEach(b=>{ b.textContent='加载更早的对话…'; b.onclick=null; });
+  ws.send(JSON.stringify({action:'expand_history', from:_histExpandFrom}));
+}
+// 单轮历史渲染（读档 + 展开复用；追加到指定容器）
+function renderHistTurn(t, box){
+  // 用户气泡（右侧）
+  if(t.user){
+    const urow=document.createElement('div'); urow.className='row me';
+    const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
+    urow.appendChild(ub); box.appendChild(urow);
+  }
+  // bot 回复（过程 trace + answer）
+  const row=document.createElement('div'); row.className='row bot';
+  const col=document.createElement('div'); col.className='turn';
+  const det=document.createElement('details'); det.className='trace';
+  const sum=document.createElement('summary'); sum.textContent='过程'; det.appendChild(sum);
+  const traceBox=document.createElement('div'); det.appendChild(traceBox);
+  const ans=document.createElement('div'); ans.className='bubble';
+  col.appendChild(det); col.appendChild(ans); row.appendChild(col);
+  box.appendChild(row);
+  // 临时借用全局渲染函数：把 curTurn 指向本行
+  const prev=curTurn; curTurn={traceBox, answerEl:ans, det};
+  (t.steps||[]).forEach(s=>{
+    if(s.reasoning) addTrace('think','💭 '+s.reasoning);
+    (s.tool_calls||[]).forEach(tc=>{
+      renderToolCall(tc.name, tc.arguments);
+      if(tc.result) addTrace('res', '→ '+tc.result);
     });
-    if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
-    if(curTurn.traceBox.children.length===0 && curTurn.det) curTurn.det.style.display='none';
-    // 中断轮（answer 空/中断标注）→ 继续按钮；正常轮 → 渲染回答
-    const a = t.answer||'';
-    const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
-    if(isInterrupted && !t.folded) finishInterrupted(t.turn);
-    else finishAnswer(a||'(无回答)');
   });
+  if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
+  if(curTurn.traceBox.children.length===0) det.style.display='none';
+  const a=t.answer||'';
+  const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
+  if(isInterrupted) finishInterrupted(t.turn);
+  else finishAnswer(a);
+  curTurn=prev;
+  return row;
+}
+function renderHistory(turns){
+  // 读档：渲染当前档位的轮次 + 顶部"展开更早"蓝字（_histExpandFrom>0 时）
+  msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
+  if(_histExpandFrom>0) msgArea.appendChild(makeExpandBar());
+  if(!turns || !turns.length) return;
+  turns.forEach(t=>renderHistTurn(t, msgArea));
   scrollBottom();
+}
+// 展开返回：前置插入更早一档的轮次（不重绘已有内容）
+function prependHistory(turns){
+  if(!turns || !turns.length) return;
+  // 移除旧展开条
+  document.querySelectorAll('.expand-bar').forEach(b=>b.remove());
+  // 借助临时容器按序构建，再整体插到最前
+  const frag=document.createDocumentFragment();
+  turns.forEach(t=>renderHistTurn(t, frag));
+  msgArea.insertBefore(frag, msgArea.firstChild);
+  if(_histExpandFrom>0) msgArea.insertBefore(makeExpandBar(), msgArea.firstChild);
 }
 
 // —— 图片附件 ——
@@ -1552,9 +1603,18 @@ function onWSMessage(ev){
       }
       break;
     case 'session_history':
+      _histExpandFrom = m.expand_from || 0;
+      _histTotal = m.total_turns || (m.turns||[]).length;
       renderHistory(m.turns);
-      addRow('sys', `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);
+      addRow('sys', _histExpandFrom > 0
+        ? `✅ 已恢复会话：${m.name}（显示最新 ${(m.turns||[]).length} 轮 / 共 ${_histTotal} 轮，更早的点击上方蓝字展开）`
+        : `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);
       setSessionTitle(m.name);  // 加载会话后更新标题
+      break;
+    case 'history_expand':
+      _histExpandFrom = m.expand_from || 0;
+      _histTotal = m.total_turns || _histTotal;
+      prependHistory(m.turns);
       break;
     case 'session_renamed':
       // Agent 调用 rename_session 工具 / /rename 后，标题即时同步

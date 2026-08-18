@@ -23,7 +23,7 @@ from pathlib import Path
 import config as _config
 from llm_client import LLMClient
 from real_tools import WORKSPACE
-from tools import Tool
+from tools import Tool, Toolbox
 
 # Coze 固定节点 ID
 ENTRY_ID = "100001"   # type "1" 开始
@@ -1763,9 +1763,14 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
 
     def _run(**kwargs):
         try:
-            # 工作流 LLM/意图节点默认走统一辅助模型（utility_model 未配=主模型）
-            _llm = agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm
-            return execute(canvas, kwargs, tools=agent.tools, llm=_llm,
+            # 工作流 LLM/意图节点默认走统一辅助模型（utility_model 未配=主模型）；
+            # agent=None（测试/独立注册场景）时 llm 传 None——纯工具型工作流（diff_snapshots 等）可跑
+            if agent is not None and getattr(agent, "utility_client", None):
+                _llm = agent.utility_client()
+            else:
+                _llm = getattr(agent, "llm", None) if agent is not None else None
+            return execute(canvas, kwargs, tools=agent.tools if agent is not None else Toolbox(),
+                           llm=_llm,
                            workspace=WORKSPACE, emit=getattr(agent, "_emit", None))
         except WorkflowError as e:
             return f"[工作流 {name} 执行失败] {e}"

@@ -1891,17 +1891,45 @@ def pass_through(input: _Any) -> _Any:
 # _WF_CTX 由 workflow._handle_plugin 在调用这三个工具时注入（llm=执行上下文的 LLMClient、
 # tools=工具箱）。它们只在工作流 plugin 节点里有意义——Agent/代码节点直接调用会拿到错误提示。
 _WF_CTX: dict = {"llm": None, "tools": None}
+# 工作流内临时模型切换的 client 缓存：model 参数指定的 provider 名 → 独立 LLMClient。
+# 与 utility_client 同款惰性缓存模式（一次创建进程内复用）；call_recorder 继承主 llm（llm_calls.jsonl 可观测）
+_WF_ALT_LLM_CACHE: dict = {}
+
+
+def _wf_llm_for(model: str):
+    """按 model 参数取 client：空/与当前同名 → 上下文 llm；否则用缓存的独立 client（无则建）。"""
+    llm = _WF_CTX.get("llm")
+    name = (model or "").strip()
+    if llm is None or not name or name == getattr(llm, "model_name", ""):
+        return llm
+    cli = _WF_ALT_LLM_CACHE.get(name)
+    if cli is None:
+        try:
+            import config
+            if name not in config.MODELS:
+                return llm   # 未配置的 provider 名 → 回退上下文 llm（不炸工作流）
+            from llm_client import LLMClient
+            # model_name 构造（与 utility_client 同款，该路径已验证）；
+            # 注意 LLMClient 对未知名构造不抛异常（惰性校验）——须先查 config.MODELS
+            cli = LLMClient(model_name=name, max_retries=2)
+            cli.call_recorder = getattr(llm, "call_recorder", None)   # 流水继承（/stats 可观测）
+            _WF_ALT_LLM_CACHE[name] = cli
+        except Exception:
+            return llm   # 构造异常 → 回退上下文 llm（不炸工作流）
+    return cli
 
 
 def llm_call(messages: list, tools: list = None, temperature: float = None,
-             enable_thinking: bool = None) -> str:
+             enable_thinking: bool = None, model: str = "") -> str:
     """原生 LLM 调用（工作流 ReAct 原语）：完整 messages + tools schema → 完整回包。
     messages: OpenAI 格式消息数组（system/user/assistant/tool 均可）；
-    tools: get_tool_schemas 输出的 function schema 数组（留空=纯文本对话）。
+    tools: get_tool_schemas 输出的 function schema 数组（留空=纯文本对话）；
+    model: 模型选择——models.json 的 provider 名（如 glm-official-1），留空=跟随 utility/主模型；
+           独立 client 缓存复用（同 provider 多节点零开销），流水记 llm_calls.jsonl（scene=wf:llm_call）。
     返回 JSON（plugin 节点自动解析成对象，下游可 .content / .tool_calls.0.name 引用）：
       {content, reasoning, tool_calls:[{id,name,arguments}], usage, finish_reason, error}"""
     import json as _json
-    llm = _WF_CTX.get("llm")
+    llm = _wf_llm_for(model)
     if llm is None:
         return _json.dumps({"error": "llm_call 需在工作流 plugin 节点中执行（无 LLM 上下文）",
                             "content": "", "reasoning": "", "tool_calls": []}, ensure_ascii=False)

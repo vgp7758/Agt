@@ -37,6 +37,7 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **pass_through 工具**（LIGHT_TOOLS）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
 - **starts_with/ends_with**：LIGHT_TOOLS 字符串前后缀判断（扩展名分流）
 - **XML schema 往返**：list\<object\> 的 field 子元素 / list 基础类型 itemType / 坐标幂等（编辑器保存不再丢结构）
+- **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 节点按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
 
 ## 生命周期钩子
 
@@ -74,5 +75,6 @@ before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（L
 
 - [系统总览](overview.md)：模块地图与一轮对话数据流
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 钩子实例
+- [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：git_commit 节点实例（提交失败修复）
 - [气泡交互](../features/bubble-interaction.md)：编辑器系统气泡展开/折叠
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：async 元信息为本次交付项之一

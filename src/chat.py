@@ -587,9 +587,12 @@ def web_main(port=None):
     open_browser(port)
 
     def _inbox_thread():
+        import logging as _lg
+        _il = _lg.getLogger("agt.chat")
         while True:
             item = agent.pop_inbox()
             if item:
+                _il.info("inbox_thread: (%s) %s → work_q", item[0], (item[1] or "")[:60])
                 work_q.put(("background", item))
             else:
                 time.sleep(0.2)

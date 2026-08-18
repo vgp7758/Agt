@@ -544,6 +544,8 @@ def make_subagent_tools(agent) -> list:
                                 caller_entry.agent.push_message(
                                     f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
                                     source=f"subagent:{_aid}")
+                                _LOG.info("子Agent %s answer 已入队 caller %s 的 inbox（len=%d）",
+                                          _aid, caller_id, len(caller_entry.agent.inbox))
                             else:
                                 _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, caller_id)
                     except Exception as route_err:

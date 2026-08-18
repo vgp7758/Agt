@@ -2018,9 +2018,10 @@ def sleep(seconds: float) -> str:
     return f"已等待 {s:g} 秒"
 
 
-def list_append(lst: list, item) -> list:
-    """把 item 追加到 lst 末尾并返回新列表（不修改原列表）。
-    工作流里循环累积结果用：var = list_append(var, 本轮值)（配合 LoopSetVariable 累加）。"""
+def list_append(lst: list = None, item=None) -> list:
+    """把 item 追加到 lst 末尾并返回新列表（不修改原列表）。lst 省略/None → [item]。
+    工作流里循环累积结果用：var = list_append(var, 本轮值)（配合 LoopSetVariable 累加）；
+    也可首节点不连 lst（None 容错）作为数组的冷启动。"""
     return list(lst or []) + [item]
 
 

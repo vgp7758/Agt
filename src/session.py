@@ -417,6 +417,8 @@ class Session:
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
         self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
         self._last_fold_count: int = 0   # 最近一次分档 build 的折叠轮数（to_history 用它折叠前端历史）
+        self._planned_fold: int = 0      # 轮边界折叠计划（start_turn 时算好折到 75%；轮内 _build 以它为起点，不再轮内折叠）
+        self._planned_graduates: int = 0 # 轮边界毕业计划（start_turn 时算好升几档；轮内 _build 以它为起点，不再轮内升档）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
 
@@ -468,6 +470,7 @@ class Session:
             self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
         self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
+        self._plan_fold()   # 轮边界折叠计划：新轮开始瞬间算好折到 75%，轮内不再折叠（byte-stable）
 
     def add_step(self, step: Step):
         if self._current is None:
@@ -547,6 +550,7 @@ class Session:
                 self._frozen_renders.clear()
                 self._current = None
                 self._rewrite_persistence(i)   # 重写 events/toollog 文件（含 restore 标记）
+                self._plan_fold()              # turns 变短：重算折叠计划（可能回退——折多了浪费）
                 self._refresh_summary_cache()
                 self._autosave()  # 回溯后也落盘（写 metadata json）
                 return target_msg
@@ -814,27 +818,79 @@ class Session:
         return body
 
     def _build_tiered_messages(self, msgs: list[dict]) -> list[dict]:
-        """分档投影主入口：稳定前缀(system+静态背景) + 分档 body；超 max_effective_context_window 时
-        先毕业顺移（压缩老档），压不动了再把最前档折叠进摘要（靠 recall 召回细节），直到进窗口。
-        fold_count 本次 build 派生、不持久化——窗口变大/对话变短时会自动回退（折叠的轮重回渲染）。"""
+        """分档投影主入口：稳定前缀(system+静态背景) + 分档 body。
+        折叠/升档时机（缓存经济模型）：都只在轮边界计划（start_turn 的 _plan_fold 算好
+        折到 75% + 升档到 75%）；轮内本 build 以 _planned_fold/_planned_graduates 为起点
+        【零调整】（75%~100% 之间纯追加，前缀缓存最优），超 100% 才应急（保命阀，正常轮到不了）。
+        计划不持久化——窗口变大/对话变短时 _plan_fold 重算自动回退。"""
         self._append_ambient(msgs, self._ltm_static_provider)
         prefix_len = len(msgs)
         win = self.max_effective_context_window
 
-        fold_count = 0
+        fold_count = self._planned_fold
+        # 轮内零升档：直接渲染（_planned_graduates 已在轮边界应用，body 已含升档后的档位）
         for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
             body = self._render_tiered_body(fold_count)
             if self._estimate_tokens(msgs[:prefix_len] + body) <= win:
                 break
-            if self._graduate_once():          # 先压缩：升一档（全档顺移）
+            if self._graduate_once():          # 轮内应急：超 100% 才走到这（保命阀）
                 continue
             nxt = self._next_fold_target(fold_count)
-            if nxt is not None:                 # 压不动了：折叠最前档进摘要
+            if nxt is not None:
                 fold_count = nxt
                 continue
-            break   # 既压不动也折不动，放弃
+            break
         self._last_fold_count = fold_count   # 记录本次折叠轮数（to_history 用它折叠前端历史，减少长会话传输）
         return msgs[:prefix_len] + self._render_tiered_body(fold_count)
+
+    def _plan_fold(self):
+        """轮边界折叠+毕业计划（start_turn 时机）：把投影压到 max_effective_context_window 的 75% 以下。
+        【升档也在这里做】——先升档（压缩老档）再折叠（终极兜底），两步都算到 75% 目标。
+        轮内 _build 以计划结果为起点零调整（75%~100% 之间纯追加，前缀缓存最优）。
+        无窗口配置时计划为 0（现状）。估算用近似前缀（system+指引+静态记忆）+ 完整 body——
+        与 _build 的真实估算差个动态 tail，75% 余量下可忽略。"""
+        if not self.max_effective_context_window:
+            self._planned_fold = 0
+            self._planned_graduates = 0
+            return
+        target = int(self.max_effective_context_window * 0.75)
+        prefix = [{"role": "system", "content": self.system}]
+        if self._task_guidance_provider:
+            try:
+                _tg = self._task_guidance_provider()
+                if _tg:
+                    prefix.append({"role": "system", "content": _tg})
+            except Exception:
+                pass
+        if self._ltm_static_provider:
+            try:
+                _b = self._ltm_static_provider()
+                if _b:
+                    prefix.append({"role": "system", "content": _b})
+            except Exception:
+                pass
+        # 先升档：反复 graduate 直到 ≤75%（或无可升）
+        g = 0
+        while g < self.max_level:
+            if self._estimate_tokens(prefix + self._render_tiered_body(0)) <= target:
+                break
+            if not self._graduate_once():
+                break
+            g += 1
+        # 再折叠：若升档后仍 >75%，逐档折叠到 ≤75%（或无可折）
+        fc = 0
+        for _ in range(len(self.turns) + 4):
+            if self._estimate_tokens(prefix + self._render_tiered_body(fc)) <= target:
+                break
+            nxt = self._next_fold_target(fc)
+            if nxt is None:
+                break
+            fc = nxt
+        if fc != self._planned_fold or g != self._planned_graduates:
+            _LOG.info("轮边界计划：升档 %d 档 + 折叠 %d 轮（目标 ≤75%%×%d）",
+                      g, fc, self.max_effective_context_window)
+        self._planned_fold = fc
+        self._planned_graduates = g
 
     def _graduate_once(self) -> bool:
         """把最后完成 turn 升档：append 其索引到 _tier_boundaries（其后所有档 level+1=顺移），
@@ -1502,6 +1558,7 @@ class Session:
             s.turns = []
         s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
+        s._plan_fold()       # 读档即计划（首个投影前 _planned_fold 就绪；turns/boundaries 已恢复）
         return s
 
     # ========== 展示 ==========

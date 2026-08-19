@@ -1774,6 +1774,11 @@ function onWSMessage(ev){
 	        const rw = document.createElement('div');
 	        rw.className = 'ev auto running';
 	        rw.textContent = '⏳ '+wfHookTag(m)+'工作流「'+m.name+'」执行中…';
+	        if(m.run_id){   // 可点击：打开观测页实时看节点轨迹
+	          rw.style.cursor='pointer'; rw.title='点击打开实时观测页';
+	          rw.style.textDecoration='underline dotted';
+	          rw.onclick=()=>window.open('/wf/monitor?run='+encodeURIComponent(m.run_id),'_blank');
+	        }
 	        curTurn.traceBox.appendChild(rw); scrollBottom();
 	        (window._runningWf = window._runningWf || new Map()).set((m.hook||'')+'::'+m.name, rw);
 	      }

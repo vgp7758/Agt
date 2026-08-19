@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流运行观测 — Agt</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#f6f8fa;color:#1f2329;padding:20px}
+h1{font-size:18px;margin-bottom:4px} .sub{color:#8a9099;font-size:12px;margin-bottom:16px}
+.card{background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:16px;margin-bottom:14px;max-width:920px}
+.run-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.st-running{background:#fef3c7;color:#92400e;animation:pulse 1.2s infinite}
+.st-done{background:#dcfce7;color:#166534} .st-failed{background:#fee2e2;color:#991b1b}
+.st-node-running{color:#b45309} .st-node-done{color:#16a34a} .st-node-error{color:#dc2626}
+@keyframes pulse{50%{opacity:.5}}
+.meta{color:#8a9099;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#f6f8fa;text-align:left;padding:8px;border-bottom:1px solid #d8dee4;white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid #eef1f4;vertical-align:top}
+tr.clickable:hover{background:#f0f7ff;cursor:pointer}
+.prev{color:#57606a;font-size:12px;max-width:380px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:top}
+.dur{font-variant-numeric:tabular-nums;white-space:nowrap;color:#57606a}
+a{color:#0969da;text-decoration:none} a:hover{text-decoration:underline}
+.empty{color:#8a9099;padding:30px;text-align:center}
+#nodes td:first-child{white-space:nowrap}
+.gantt{height:6px;background:#eef1f4;border-radius:3px;position:relative;min-width:80px}
+.gantt>i{position:absolute;top:0;height:100%;border-radius:3px;background:#3fb950}
+.gantt>i.run{background:#f59e0b}
+</style>
+</head>
+<body>
+<h1>🔬 工作流运行观测</h1>
+<div class="sub">对话中触发的工作流实时执行轨迹（钩子 / wf_* 工具调用）。<span id="mode"></span></div>
+
+<div id="runHead" class="card" style="display:none">
+  <div class="run-head">
+    <span id="rName" style="font-size:16px;font-weight:600"></span>
+    <span id="rHook" class="meta"></span>
+    <span id="rStatus" class="badge"></span>
+    <span id="rTime" class="meta"></span>
+    <span id="rDur" class="meta"></span>
+    <a href="/wf/monitor" style="margin-left:auto">← 运行列表</a>
+  </div>
+</div>
+<div id="nodesCard" class="card" style="display:none">
+  <table id="nodes"><thead><tr>
+    <th>#</th><th>节点</th><th>类型</th><th>状态</th><th>耗时</th><th>时间线</th><th>输出预览</th>
+  </tr></thead><tbody></tbody></table>
+</div>
+<div id="listCard" class="card">
+  <table id="runsList"><thead><tr>
+    <th>run_id</th><th>工作流</th><th>hook</th><th>状态</th><th>节点数</th><th>开始时间</th><th>耗时</th>
+  </tr></thead><tbody></tbody></table>
+  <div id="emptyList" class="empty" style="display:none">暂无运行记录（对话中触发钩子 / wf_* 工具后出现在这里）</div>
+</div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const runId = qs.get("run") || "";
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtT = ts => ts ? new Date(ts*1000).toLocaleTimeString('zh-CN',{hour12:false}) : "";
+const fmtDur = ms => ms==null ? "" : (ms<1000 ? ms+"ms" : (ms/1000).toFixed(1)+"s");
+
+const NTYPES = {"1":"开始","2":"结束","3":"LLM","5":"代码","8":"选择器","15":"文本","21":"循环",
+  "22":"意图","28":"批处理","32":"聚合","40":"赋值","45":"HTTP","9":"子工作流","4":"工具","13":"输出","58":"ToJSON","59":"FromJSON"};
+
+let timer = null, lastNodes = 0;
+
+function stopPoll(){ if(timer){clearInterval(timer); timer=null;} }
+
+function renderRun(r){
+  $("runHead").style.display = "";
+  $("nodesCard").style.display = "";
+  $("listCard").style.display = "none";
+  $("rName").textContent = r.name;
+  $("rHook").textContent = (r.hook==="tool" ? "wf_* 工具调用" : "钩子 "+r.hook);
+  const st = $("rStatus");
+  st.className = "badge st-" + r.status;
+  st.textContent = r.status==="running" ? "⏳ 执行中" : (r.status==="done" ? "✅ 完成" : "❌ 失败");
+  $("rTime").textContent = "开始 " + fmtT(r.started_at);
+  $("rDur").textContent = r.finished_at ? "总耗时 " + fmtDur((r.finished_at-r.started_at)*1000) : "";
+  // 节点表
+  const tb = $("nodes").tBodies[0];
+  // 增量 append（已渲染的不重画，running 行原地更新）
+  const nodes = r.nodes || [];
+  const t0 = r.started_at, tEnd = r.finished_at || Date.now()/1000;
+  const span = Math.max(0.001, tEnd - t0);
+  for(let i=0;i<nodes.length;i++){
+    const n = nodes[i];
+    let tr = tb.rows[i];
+    if(!tr){
+      tr = tb.insertRow(-1);
+      for(let k=0;k<7;k++) tr.insertCell(-1);
+    }
+    const cells = tr.cells;
+    cells[0].textContent = i+1;
+    cells[1].innerHTML = `<b>${esc(n.title)}</b> <span class="meta">${esc(n.id)}</span>`;
+    cells[2].textContent = NTYPES[n.ntype] || n.ntype;
+    const stn = n.status==="running" ? '<span class="st-node-running">⏳ 运行中</span>'
+              : n.status==="error" ? '<span class="st-node-error">❌ 出错</span>'
+              : '<span class="st-node-done">✓ 完成</span>';
+    cells[3].innerHTML = stn;
+    cells[4].className = "dur";
+    cells[4].textContent = n.dur_ms!=null ? fmtDur(n.dur_ms) : (n.status==="running" ? "…" : "");
+    // 时间线（相对条）
+    const s = Math.min(1, Math.max(0, (n.t_start - t0) / span));
+    const e = n.t_end ? Math.min(1, (n.t_end - t0) / span) : Math.min(1, (Date.now()/1000 - t0) / span);
+    cells[5].innerHTML = `<div class="gantt"><i class="${n.status==="running"?"run":""}" style="left:${(s*100).toFixed(1)}%;width:${Math.max(1,(e-s)*100).toFixed(1)}%"></i></div>`;
+    cells[6].innerHTML = `<span class="prev" title="${esc(n.preview)}">${esc(n.preview)}</span>`;
+  }
+  // 完成后停轮询
+  if(r.status !== "running") stopPoll();
+}
+
+function renderList(runs){
+  $("listCard").style.display = "";
+  const tb = $("runsList").tBodies[0];
+  tb.innerHTML = "";
+  if(!runs.length){ $("emptyList").style.display = ""; return; }
+  for(const r of runs){
+    const tr = tb.insertRow(-1);
+    tr.className = "clickable";
+    tr.onclick = () => location.href = "/wf/monitor?run=" + encodeURIComponent(r.run_id);
+    const st = r.status==="running" ? '<span class="badge st-running">执行中</span>'
+             : r.status==="done" ? '<span class="badge st-done">完成</span>'
+             : '<span class="badge st-failed">失败</span>';
+    tr.innerHTML = `<td class="meta">${esc(r.run_id)}</td><td><b>${esc(r.name)}</b></td>
+      <td>${r.hook==="tool"?"wf_* 工具":"钩子 "+esc(r.hook)}</td><td>${st}</td>
+      <td>${r.node_count}</td><td class="meta">${fmtT(r.started_at)}</td>
+      <td class="dur">${r.finished_at?fmtDur((r.finished_at-r.started_at)*1000):"—"}</td>`;
+  }
+}
+
+async function pollRun(){
+  try{
+    const r = await (await fetch("/api/wf/runs/"+encodeURIComponent(runId))).json();
+    if(r.error){ $("nodesCard").innerHTML = '<div class="empty">'+esc(r.error)+'</div>'; $("nodesCard").style.display=""; stopPoll(); return; }
+    renderRun(r);
+  }catch(e){ /* 网络抖动继续 */ }
+}
+async function pollList(){
+  try{
+    const d = await (await fetch("/api/wf/runs")).json();
+    renderList(d.runs || []);
+  }catch(e){ /* ignore */ }
+}
+
+if(runId){
+  $("mode").textContent = "· 单次运行 · 2s 自动刷新";
+  pollRun();
+  timer = setInterval(pollRun, 2000);
+}else{
+  $("mode").textContent = "· 最近运行 · 点击行进入观测";
+  pollList();
+  timer = setInterval(pollList, 3000);
+}
+</script>
+</body>
+</html>

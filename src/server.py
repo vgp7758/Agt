@@ -61,6 +61,7 @@ _RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
 _WF_DEBUG_HTML = (_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8")
 _MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
 _STATS_HTML = (_STATIC_DIR / "stats.html").read_text(encoding="utf-8")
+_WF_MONITOR_HTML = (_STATIC_DIR / "wf_monitor.html").read_text(encoding="utf-8")
 
 
 def _broadcast(ev: dict):
@@ -533,6 +534,29 @@ async def api_status(request: Request):
         st["hooks"] = []
 
     return st
+
+
+@app.get("/wf/monitor")
+async def wf_monitor_page(run: str = ""):
+    """工作流运行观测页：?run=<run_id> 实时轮询单次运行节点轨迹；无参=最近运行列表。"""
+    return HTMLResponse(_WF_MONITOR_HTML)
+
+
+@app.get("/api/wf/runs")
+async def api_wf_runs():
+    """最近工作流运行列表（观测页首页用，倒序摘要）。"""
+    from workflow import list_wf_runs
+    return {"runs": list_wf_runs()}
+
+
+@app.get("/api/wf/runs/{run_id}")
+async def api_wf_run(run_id: str):
+    """单次工作流运行的完整轨迹（节点时间线 + 输出预览）。"""
+    from workflow import get_wf_run
+    r = get_wf_run(run_id)
+    if r is None:
+        return {"error": f"运行 {run_id} 不存在（可能已被清理，仅保留最近 50 次）"}
+    return r
 
 
 @app.get("/api/stats")

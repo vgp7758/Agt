@@ -33,6 +33,89 @@ WF_PREFIX = "wf_"
 # debug_run 后缓存 ctx + 画布（供 server hotswap/rerun/list_node_outputs）
 _debug_ctx: dict = {}   # {canvas, nodes, edges, ctx}
 
+# ========== 工作流运行观测（run registry：对话中实时观测执行情况） ==========
+# 每次 execute 可带 run_id（new_wf_run 注册）→ 节点事件写入 _WF_RUNS，观测页轮询读取。
+# 线程安全：同步钩子(线程池)/async 钩子(后台线程)/主循环 wf_* 工具可能并发执行。
+import threading as _threading
+import time as _time
+import uuid as _uuid
+
+_WF_RUNS: dict = {}                     # run_id → {name, hook, status, started_at, finished_at, nodes[]}
+_WF_RUNS_LOCK = _threading.Lock()
+_WF_RUNS_MAX = 50                       # 内存上限：最近 50 次运行（旧的清掉）
+
+
+def new_wf_run(name: str, hook: str = "") -> str:
+    """注册一次工作流运行，返回 run_id（观测页 URL 用）。"""
+    rid = _uuid.uuid4().hex[:8]
+    with _WF_RUNS_LOCK:
+        # 容量控制（保留最近 N 个）
+        while len(_WF_RUNS) >= _WF_RUNS_MAX:
+            oldest = min(_WF_RUNS.items(), key=lambda kv: kv[1].get("started_at", 0))[0]
+            _WF_RUNS.pop(oldest, None)
+        _WF_RUNS[rid] = {"run_id": rid, "name": name, "hook": hook, "status": "running",
+                         "started_at": _time.time(), "finished_at": None, "nodes": []}
+    return rid
+
+
+def _run_track(run_id: str, ev: dict):
+    """写入运行轨迹事件（节点 start/end/error、run done/failed）。未知 run 静默忽略。"""
+    if not run_id:
+        return
+    with _WF_RUNS_LOCK:
+        run = _WF_RUNS.get(run_id)
+        if not run:
+            return
+        kind = ev.get("ev")
+        t = ev.get("t", _time.time())
+        if kind == "node_start":
+            run["nodes"].append({"id": ev.get("id", ""), "title": ev.get("title", ""),
+                                 "ntype": ev.get("ntype", ""), "status": "running",
+                                 "t_start": t, "t_end": None, "dur_ms": None, "preview": ""})
+        elif kind in ("node_end", "node_error"):
+            for n in reversed(run["nodes"]):
+                if n["id"] == ev.get("id") and n["status"] == "running":
+                    n["status"] = "done" if kind == "node_end" else "error"
+                    n["t_end"] = t
+                    try:
+                        n["dur_ms"] = int((t - n["t_start"]) * 1000)
+                    except Exception:
+                        pass
+                    n["preview"] = ev.get("preview", "")
+                    break
+        elif kind == "run_done":
+            run["status"] = "done"; run["finished_at"] = t
+        elif kind == "run_failed":
+            run["status"] = "failed"; run["finished_at"] = t
+            run.setdefault("error", ev.get("error", ""))
+
+
+def get_wf_run(run_id: str) -> dict | None:
+    with _WF_RUNS_LOCK:
+        r = _WF_RUNS.get(run_id)
+        return dict(r, nodes=list(r["nodes"])) if r else None     # 浅拷贝（读时解锁，轮询安全）
+
+
+def list_wf_runs() -> list:
+    """最近运行摘要（倒序，不含 nodes 明细——列表页用）。"""
+    with _WF_RUNS_LOCK:
+        items = [{"run_id": r["run_id"], "name": r["name"], "hook": r["hook"], "status": r["status"],
+                  "started_at": r["started_at"], "finished_at": r["finished_at"],
+                  "node_count": len(r["nodes"])} for r in _WF_RUNS.values()]
+    items.sort(key=lambda x: x["started_at"], reverse=True)
+    return items
+
+
+def _preview_str(v, cap=200) -> str:
+    """输出预览：dict/list 转 JSON，截断。"""
+    try:
+        import json as _json
+        s = _json.dumps(v, ensure_ascii=False, default=str) if isinstance(v, (dict, list)) else str(v)
+    except Exception:
+        s = str(v)
+    s = s.replace("\n", " ").strip()
+    return s[:cap] + ("…" if len(s) > cap else "")
+
 # Coze 变量类型 → Python 类型（生成工具参数签名用）
 _TYPE_MAP = {
     "string": str, "str": str, "integer": int, "int": int, "long": int,
@@ -1455,8 +1538,14 @@ def _resolve_filter_value(block_input, output):
     return _redirect_ref(block_input, output)
 
 
-def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False):
-    """执行一个 Coze 画布，返回结束节点的输出（字符串）。"""
+def _node_title(n: dict) -> str:
+    """节点标题（观测页显示用）。"""
+    return ((n.get("data", {}).get("nodeMeta", {}) or {}).get("title") or f"节点{n.get('id')}")
+
+
+def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False, run_id: str = None):
+    """执行一个 Coze 画布，返回结束节点的输出（字符串）。
+    run_id：传 new_wf_run() 的 id 时，节点执行事件写入 _WF_RUNS（观测页 /wf/monitor 实时轮询）。"""
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
     edges = canvas.get("edges", [])
@@ -1465,6 +1554,10 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     if entry is None:
         raise WorkflowError("画布缺少开始节点（id=100001, type=1）")
     ctx.node_outputs[ENTRY_ID] = _bind_entry(entry, inputs or {})
+    if run_id:
+        _run_track(run_id, {"ev": "node_start", "id": ENTRY_ID, "title": _node_title(entry),
+                            "ntype": str(entry.get("type"))})
+        _run_track(run_id, {"ev": "node_end", "id": ENTRY_ID, "preview": _preview_str(ctx.node_outputs[ENTRY_ID])})
 
     # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支）——
     from collections import deque
@@ -1473,55 +1566,73 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0)
     executed: set[str] = set()
 
-    for _ in range(max_steps):
-        if not ready:
-            break   # 所有路径走完
-        current = ready.popleft()
-        if current in executed:
-            continue   # 防重复
-        executed.add(current)
-        if current == EXIT_ID:
-            raw = _exit_result(nodes[EXIT_ID], ctx)
-            return raw if return_exit_dict else _stringify_result(raw)
-        node = nodes.get(current)
-        if node is None:
-            raise WorkflowError(f"节点 {current} 不存在")
-        ntype = str(node.get("type"))
-        handler = NODE_HANDLERS.get(ntype)
-        if handler is None:
-            raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）")
-        try:
-            result = _run_node_with_batch(node, handler, ctx)
-            ctx.node_outputs[current] = result.get("outputs") or {}
-            port = result.get("port")   # selector/intent 分支端口
-        except Exception as e:
-            # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
-            # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
-            ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
-            port = f"{current}_error"   # 每个节点默认 error 端口名
+    try:
+        for _ in range(max_steps):
+            if not ready:
+                break   # 所有路径走完
+            current = ready.popleft()
+            if current in executed:
+                continue   # 防重复
+            executed.add(current)
+            if current == EXIT_ID:
+                raw = _exit_result(nodes[EXIT_ID], ctx)
+                if run_id:
+                    _run_track(run_id, {"ev": "node_start", "id": EXIT_ID,
+                                        "title": _node_title(nodes[EXIT_ID]), "ntype": "2"})
+                    _run_track(run_id, {"ev": "node_end", "id": EXIT_ID, "preview": _preview_str(raw)})
+                return raw if return_exit_dict else _stringify_result(raw)
+            node = nodes.get(current)
+            if node is None:
+                raise WorkflowError(f"节点 {current} 不存在")
+            ntype = str(node.get("type"))
+            handler = NODE_HANDLERS.get(ntype)
+            if handler is None:
+                raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）")
+            if run_id:
+                _run_track(run_id, {"ev": "node_start", "id": current,
+                                    "title": _node_title(node), "ntype": ntype})
+            try:
+                result = _run_node_with_batch(node, handler, ctx)
+                ctx.node_outputs[current] = result.get("outputs") or {}
+                port = result.get("port")   # selector/intent 分支端口
+                if run_id:
+                    _run_track(run_id, {"ev": "node_end", "id": current,
+                                        "preview": _preview_str(ctx.node_outputs[current])})
+            except Exception as e:
+                # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
+                # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
+                ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
+                port = f"{current}_error"   # 每个节点默认 error 端口名
+                if run_id:
+                    _run_track(run_id, {"ev": "node_error", "id": current,
+                                        "preview": _preview_str(ctx.node_outputs[current])})
 
-        # 扇出 + port 匹配：遍历当前节点的所有出边
-        for tid, src_port in out_edges.get(current, []):
-            # 有 port 时严格匹配：只激活 src_port==port 的边（error/"true"/"false"/"branch_0"）
-            # error 端口兼容两种写法：{node_id}_error 或统一 "error"
-            if port:
-                if src_port != port and not (port.endswith("_error") and src_port == "error"):
+            # 扇出 + port 匹配：遍历当前节点的所有出边
+            for tid, src_port in out_edges.get(current, []):
+                # 有 port 时严格匹配：只激活 src_port==port 的边（error/"true"/"false"/"branch_0"）
+                # error 端口兼容两种写法：{node_id}_error 或统一 "error"
+                if port:
+                    if src_port != port and not (port.endswith("_error") and src_port == "error"):
+                        continue
+                elif src_port and (src_port == "error" or str(src_port).endswith("_error")):
+                    # 成功（port=None）：错误处理边不激活——
+                    # 此前无条件放行所有出边，画了 error 边的节点一成功就把 end（OR 语义）拉进
+                    # 就绪队列，整条工作流被提前终止（before_turn_retrieval 7 节点早退的根因）
                     continue
-            elif src_port and (src_port == "error" or str(src_port).endswith("_error")):
-                # 成功（port=None）：错误处理边不激活——
-                # 此前无条件放行所有出边，画了 error 边的节点一成功就把 end（OR 语义）拉进
-                # 就绪队列，整条工作流被提前终止（before_turn_retrieval 7 节点早退的根因）
-                continue
-            pending_in[tid] -= 1
-            if pending_in[tid] <= 0 and tid not in executed:
-                ready.append(tid)
-    # 循环结束：走完所有路径但无 exit（隐式结束）→ 返回最后一个执行的节点输出
-    if executed:
-        last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
-        if last and last in ctx.node_outputs:
-            return (ctx.node_outputs[last] if return_exit_dict
-                    else _stringify_result(ctx.node_outputs[last]))
-    return {} if return_exit_dict else _stringify_result({})
+                pending_in[tid] -= 1
+                if pending_in[tid] <= 0 and tid not in executed:
+                    ready.append(tid)
+        # 循环结束：走完所有路径但无 exit（隐式结束）→ 返回最后一个执行的节点输出
+        if executed:
+            last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
+            if last and last in ctx.node_outputs:
+                return (ctx.node_outputs[last] if return_exit_dict
+                        else _stringify_result(ctx.node_outputs[last]))
+        return {} if return_exit_dict else _stringify_result({})
+    finally:
+        if run_id:
+            # 整体结束态：正常返回=done；异常抛出=failed（finally 里判断——except 重抛前记录）
+            _run_track(run_id, {"ev": "run_done"})
 
 
 def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
@@ -1778,9 +1889,24 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
                 _llm = agent.utility_client()
             else:
                 _llm = getattr(agent, "llm", None) if agent is not None else None
-            return execute(canvas, kwargs, tools=agent.tools if agent is not None else Toolbox(),
-                           llm=_llm,
-                           workspace=WORKSPACE, emit=getattr(agent, "_emit", None))
+            # 观测注册：Agent 场景注册 run（观测页可实时看节点轨迹）；agent=None（测试）不注册
+            rid = new_wf_run(name, "tool") if agent is not None else None
+            if rid and hasattr(agent, "_emit"):
+                try:
+                    agent._emit({"type": "auto_wf_start", "name": name, "hook": "tool",
+                                 "run_id": rid, "text": str(kwargs)[:80]})
+                except Exception:
+                    pass
+            ret = execute(canvas, kwargs, tools=agent.tools if agent is not None else Toolbox(),
+                          llm=_llm, run_id=rid,
+                          workspace=WORKSPACE, emit=getattr(agent, "_emit", None))
+            if rid and hasattr(agent, "_emit"):
+                try:
+                    agent._emit({"type": "auto_wf", "name": name, "hook": "tool",
+                                 "run_id": rid, "text": str(ret)[:120]})
+                except Exception:
+                    pass
+            return ret
         except WorkflowError as e:
             return f"[工作流 {name} 执行失败] {e}"
         except Exception as e:  # 任何意外都转文本，不炸 Agent 主循环
@@ -1954,8 +2080,9 @@ def get_auto_workflows(workspace: Path = None) -> list[dict]:
     return get_hook_workflows(workspace, "before_turn")
 
 
-def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tuple:
+def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id: str = None) -> tuple:
     """执行一个钩子工作流，返回 (inject: bool, result: str, message: str)。
+    run_id：观测注册表 id（_run_hooks 生成），透传给 execute。
 
     结束节点约定返回 {inject: bool, result: str, message: str}：
       - inject=true + result → 作 system 旁注喂主 LLM（注入语义）；
@@ -1979,7 +2106,8 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None) -> tupl
         m = d.get("message")
         return "" if m is None else str(m)
 
-    ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace, return_exit_dict=True)
+    ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace,
+                  return_exit_dict=True, run_id=run_id)
     if isinstance(ret, dict):
         msg = _msg(ret)
         if "inject" in ret:

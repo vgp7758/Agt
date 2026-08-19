@@ -270,6 +270,7 @@ class Agent:
         # 施工方案（spec）注入：draft/committed/rejected 态 spec 每轮注入 SYSTEM（让 Agent 清楚在等批阅）；
         # approved 态由生成的 plan 接管注入（避免双重注入）。无活动 spec 返回 ''。
         self.session._spec_provider = self._spec_system_block
+        self.session.utility_llm = self.utility_client()   # session 层短调用（摘要/命名）统一辅助模型
         self._task_guidance_provider_fn: Optional[Callable[[], str]] = None  # 由 chat.build_agent 注入（读 AGENTS.md/rules/skills）；set_session 转挂到新 session
         self.llm.call_recorder = self.session.llm_calls.record   # LLM 调用流水落 llm_calls.jsonl（可观测性）
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
@@ -522,6 +523,7 @@ class Agent:
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
         session._spec_provider = self._spec_system_block            # 当前活动 spec·每轮注入
+        session.utility_llm = self.utility_client()                  # session 层短调用（摘要/命名）统一辅助模型
         session._teammates_provider = self._teammates_block         # 团队感知·每轮注入
         session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
         session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
@@ -1595,7 +1597,7 @@ class Agent:
             "content": "token 预算或步数已达上限。请基于目前已有的工具结果，直接给出最终总结性回答，不要再调用工具。"
         }]
         try:
-            resp = self.llm.chat(msgs, scene="wrap_up")
+            resp = self.utility_client().chat(msgs, scene="wrap_up")   # 收尾总结走辅助模型（预算耗尽时主模型可能正是问题源）
             answer = resp.content
             if resp.usage:
                 self.cumulative_tokens += resp.usage.get("total_tokens", 0)

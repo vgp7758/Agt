@@ -458,7 +458,7 @@ def make_spec_tools(agent) -> list:
         system = (f"你是探索子 Agent「{name}」，专注【只读探索】。目标：{goal}\n"
                   "用 read_file/grep/list_dir/find_function 等只读工具摸清代码结构，"
                   "返回结构化发现报告：关键文件、关键函数/类、注入点/集成点、潜在坑。不要改任何文件。")
-        model_name = model or agent.model_name
+        model_name = model or getattr(agent, "utility_model", "") or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name
         _READONLY = {"read_file", "grep", "list_dir", "find_function", "get_tool_detail",

@@ -383,6 +383,9 @@ class Session:
         # current_turn_only 时 history 强制关（交集语义）。
         self.assembly: dict = {}
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
+        # 辅助模型引用（Agent 注入 utility_client()；None=跟随主 llm）：轮摘要/摘要压缩/会话命名等
+        # session 内的 LLM 短调用统一走它——除 react 外场景默认 utility_model 的约定覆盖到 session 层。
+        self.utility_llm: Optional[LLMClient] = None
         self.recent_window_turns = recent_window_turns
         self.max_steps_per_turn = max_steps_per_turn  # 0/None = 不限
         self.workspace = Path(workspace) if workspace else Path.cwd()
@@ -1144,7 +1147,8 @@ class Session:
             f"最终回答: {turn.answer[:300]}"
         )
         try:
-            return self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
+            return (self.utility_llm or self.llm).chat(
+                [{"role": "user", "content": prompt}], scene="summary").content.strip()
         except Exception as e:
             _LOG.warning("轮次摘要失败: %s", e)
             return f"[摘要失败 {e}] 用户: {turn.user_message[:60]}；回答: {turn.answer[:60]}"
@@ -1153,7 +1157,8 @@ class Session:
         prompt = ("把下面这段多轮会话摘要进一步压缩成一个更短的整体摘要"
                   "（保留关键决策、当前状态、重要结论），不超过 800 字:\n\n" + self.global_summary)
         try:
-            return self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
+            return (self.utility_llm or self.llm).chat(
+                [{"role": "user", "content": prompt}], scene="summary").content.strip()
         except Exception:
             return self.global_summary[-GLOBAL_SUMMARY_CAP:]  # 兜底：截断保留最近部分
 
@@ -1196,7 +1201,8 @@ class Session:
                   f"用户: {first.user_message[:200]}\n回答: {first.answer[:200]}")
         title = ""
         try:
-            title = self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
+            title = (self.utility_llm or self.llm).chat(
+                [{"role": "user", "content": prompt}], scene="title").content.strip()
             title = title.split("\n")[0].strip().strip("。.！!？?\"'“”‘’")
         except Exception:
             title = ""
@@ -1231,7 +1237,8 @@ class Session:
                       f"思考: {reasoning[:200] or '(无)'}{tools_hint}")
             title = ""
             try:
-                title = self.llm.chat([{"role": "user", "content": prompt}]).content.strip()
+                title = (self.utility_llm or self.llm).chat(
+                    [{"role": "user", "content": prompt}], scene="title").content.strip()
                 title = title.split("\n")[0].strip().strip("。.！!？?\"'""''")
             except Exception:
                 title = ""

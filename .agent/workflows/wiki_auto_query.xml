@@ -2,21 +2,21 @@
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
-  <node id="100002" type="selector" title="short_msg?" x="300" y="80">
+  <node id="100002" type="selector" title="short_msg?" x="420" y="80">
     <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
   </node>
-  <node id="110001" type="plugin" title="wiki_tree" x="420" y="80" toolName="wiki_tree">
+  <node id="110001" type="plugin" title="wiki_tree" x="420" y="206" toolName="wiki_tree">
     <out name="raw" type="string" description="wiki 全库结构（路径+标题大纲）"/>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="120001" type="plugin" title="get_wiki_schemas" x="420" y="190" toolName="get_tool_schemas">
+  <node id="120001" type="plugin" title="get_wiki_schemas" x="720" y="80" toolName="get_tool_schemas">
     <in name="names" type="string">wiki_read,wiki_search</in>
     <out name="raw" type="list" description="wiki 两件套的 function schema"/>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="130001" type="text" title="sys_content" x="720" y="80">
+  <node id="130001" type="text" title="sys_content" x="720" y="190">
     <in name="tree" type="string" ref="110001.raw"/>
     <result><![CDATA[你是代码仓库的 wiki 检索助手。判断用户问题是否与当前代码仓库（架构/模块/配置/运维/功能）相关：
 - 无关（闲聊/通用编程问题/与仓库无关）→ 只输出 NO_WIKI_RELEVANT 七个词，不要调用任何工具。
@@ -39,16 +39,16 @@
     <in name="input" type="string" ref="130003.output"/>
     <out name="output" type="object"/>
   </node>
-  <node id="140001" type="tojson" title="escape_user" x="720" y="292">
+  <node id="140001" type="tojson" title="escape_user" x="1020" y="172">
     <in name="input" type="string" ref="100001.user_message"/>
     <out name="output" type="string"/>
   </node>
-  <node id="140002" type="text" title="user_json" x="1020" y="172">
+  <node id="140002" type="text" title="user_json" x="1320" y="292">
     <in name="c" type="string" ref="140001.output"/>
     <result><![CDATA[{"role":"user","content":{{c}}}]]></result>
     <batch enabled="false"/>
   </node>
-  <node id="140003" type="fromjson" title="user_msg" x="1320" y="292">
+  <node id="140003" type="fromjson" title="user_msg" x="1620" y="172">
     <in name="input" type="string" ref="140002.output"/>
     <out name="output" type="object"/>
     <batch enabled="false"/>
@@ -60,7 +60,7 @@
     <out name="result" type="list" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="150002" type="plugin" title="append_user" x="2251" y="81" toolName="list_append">
+  <node id="150002" type="plugin" title="append_user" x="2220" y="80" toolName="list_append">
     <in name="lst" type="list" ref="150001.raw"/>
     <in name="item" type="object" ref="140003.output"/>
     <out name="raw" type="list" description="初始 messages=[system,user]"/>
@@ -84,6 +84,9 @@
       <node id="310001" type="plugin" title="llm_call" x="420" y="80" toolName="llm_call">
     <in name="messages" type="list" ref="__entry__.messages"/>
     <in name="tools" type="list" ref="__entry__.tools"/>
+    <in name="temperature" type="number">0.2</in>
+    <in name="enable_thinking" type="boolean">False</in>
+    <in name="model" type="string">utility</in>
     <out name="raw" type="object"/>
     <out name="content" type="string"/>
     <out name="tool_calls" type="list"><field name="id" type="string"/><field name="name" type="string"/><field name="arguments" type="object"/></out>
@@ -97,7 +100,7 @@
     <in name="name" type="string" ref="loop-item.name"/>
     <in name="arguments" type="object" ref="loop-item.arguments"/>
     <out name="raw" type="string"/>
-    <batch enabled="true"><input ref="310001.tool_calls" type="list"/></batch>
+    <batch enabled="true"><input ref="310001.tool_calls" type="list"/><filter logic="2"><cond op="14" left="__batch_output__" right="" left_type="integer" right_type="integer"/></filter></batch>
   </node>
       <node id="310004" type="code" title="append_round" x="1320" y="80">
     <in name="messages" type="list" ref="__entry__.messages"/>

@@ -2128,8 +2128,9 @@ def _resolve_read(path: str) -> Path:
         return p if p.is_absolute() else (WORKSPACE / path).resolve()
 
 
-def _render_unified_diff(A, B, ops, label1, label2, context):
-    """公共渲染：Myers ops → unified diff 文本（@@ hunk + 带行号 -/+ 行）。diff_files/diff_lines 共用。"""
+def _render_unified_diff(A, B, ops, label1, label2, context, a_offset=0, b_offset=0):
+    """公共渲染：Myers ops → unified diff 文本（@@ hunk + 带行号 -/+ 行）。diff_files/diff_lines 共用。
+    a_offset/b_offset：分段对比时行号还原为文件内绝对行号（range_a[0]-1）——输出行号直接可用。"""
     dels = sum(1 for a, _ in ops if a == '-')
     adds = sum(1 for a, _ in ops if a == '+')
     if not dels and not adds:
@@ -2140,8 +2141,9 @@ def _render_unified_diff(A, B, ops, label1, label2, context):
             i1 += 1
         if act in (' ', '+'):
             i2 += 1
-        annot.append((act, ln, i1 if act in (' ', '-') else None,
-                      i2 if act in (' ', '+') else None))
+        annot.append((act, ln,
+                      (i1 + a_offset) if act in (' ', '-') else None,
+                      (i2 + b_offset) if act in (' ', '+') else None))
     ctx = max(0, int(context))
     changed_idx = [i for i, (a, *_r) in enumerate(annot) if a != ' ']
     hunks, s = [], 0
@@ -2172,19 +2174,50 @@ def _render_unified_diff(A, B, ops, label1, label2, context):
     return out
 
 
-def diff_files(file1: str, file2: str, context: int = 2) -> str:
+def _parse_range(rng, total, label):
+    """[起,止] → (start_idx0, end_idx1, err)；成功时 err=None（只报错误，不夹带数据——
+    此前成功返回 (a,b) 元组被调用方当 truthy 错误误判，整个 diff 结果变成一个 tuple）。"""
+    if rng is None:
+        return 0, total, None
+    if not (isinstance(rng, list) and rng and all(isinstance(x, int) and not isinstance(x, bool) for x in rng)):
+        return None, None, f"[参数错误] {label} 需为 [起,止] 整数数组，收到 {rng!r}"
+    a = max(1, rng[0])
+    b = min(total, rng[1]) if len(rng) > 1 and rng[1] else total
+    if a > b:
+        return None, None, f"[参数错误] {label}={rng} 越界或起>止（该文件共 {total} 行）"
+    return a - 1, b, None
+
+
+def diff_files(file1: str, file2: str, context: int = 2,
+               range_a: list = None, range_b: list = None) -> str:
     """Myers Diff 对比两个文件，返回 unified diff 风格的差异（@@ hunk 头 + -/+ 行）。
     file1/file2: 路径（相对 workspace 或绝对路径；只读放行——可对比 workspace 外的备份/参照文件）。
     context: 每个 hunk 前后的上下文行数（默认 2）。
+    range_a/range_b: 分段对比——各自文件的行范围 [起, 止]（1-based 含两端；如 [100, 200]）。
+      两个文件行号错位时各传各的（file1 取 100-200 行 vs file2 取 120-220 行也行）；
+      只传 range_a 时 range_b 默认同 range_a。输出行号仍是【文件内绝对行号】（可直接喂 edit）。
     头部含两侧行数/增删统计；完全相同返回「无差异」。适合对比 改前/改后、备份/当前。"""
     t1, t2 = _resolve_read(file1), _resolve_read(file2)
     if not t1.exists():
         return f"[文件不存在] {file1}"
     if not t2.exists():
         return f"[文件不存在] {file2}"
-    A = t1.read_text(encoding="utf-8", errors="ignore").splitlines()
-    B = t2.read_text(encoding="utf-8", errors="ignore").splitlines()
-    return _render_unified_diff(A, B, _myers_diff(A, B), file1, file2, context)
+    A_all = t1.read_text(encoding="utf-8", errors="ignore").splitlines()
+    B_all = t2.read_text(encoding="utf-8", errors="ignore").splitlines()
+    if range_b is None and range_a is not None:
+        range_b = list(range_a) if isinstance(range_a, list) else range_a
+    s1, e1, err1 = _parse_range(range_a, len(A_all), "range_a")
+    if err1:
+        return err1
+    s2, e2, err2 = _parse_range(range_b, len(B_all), "range_b")
+    if err2:
+        return err2
+    A, B = A_all[s1:e1], B_all[s2:e2]
+    seg1 = f" L{s1+1}-L{e1}/{len(A_all)}" if s1 or e1 < len(A_all) else ""
+    seg2 = f" L{s2+1}-L{e2}/{len(B_all)}" if s2 or e2 < len(B_all) else ""
+    return _render_unified_diff(A, B, _myers_diff(A, B),
+                                file1 + seg1, file2 + seg2, context,
+                                a_offset=s1, b_offset=s2)
 
 
 def diff_lines(a_text: str, b_text: str, context: int = 2) -> str:
@@ -2267,6 +2300,8 @@ REAL_TOOLS = Toolbox(
     Tool(read_image),
     Tool(diff_files, param_descriptions={
         "context": "每个 hunk 前后的上下文行数（默认 2）",
+        "range_a": "file1 的行范围 [起,止]（1-based 含两端，如 [100,200]）——大文件分段对比用；不传=全文",
+        "range_b": "file2 的行范围；不传时默认同 range_a。两文件行号错位时各传各的",
     }),
     Tool(git_commit, param_descriptions={
         "message": "提交信息（首行摘要+可选正文）；末尾自动附加 Co-authored-by: Agt trailer",

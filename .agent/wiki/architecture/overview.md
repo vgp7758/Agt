@@ -9,7 +9,7 @@
           server.py（FastAPI+WS，/memory /stats /rag /wfeditor /api/status 路由）
 ─────────────────────────────────────────────────
 引擎层    agent.py（ReAct 循环、事件流 _emit、并行工具调度、钩子执行）
-          llm_client.py（多模型回退链、token 轮换、DSML 兜底、usage 归一化）
+          llm_client.py（多模型回退链、token 轮换、DSML 兜底、scene/turn/step 调用埋点、usage 归一化）
           session.py（分层上下文引擎、事件流持久化、分档投影）
 ─────────────────────────────────────────────────
 能力层    real_tools.py（130+ 内置工具）  tools.py（Tool/Toolbox schema）
@@ -31,7 +31,7 @@
       ③ before_turn 钩子（检索工作流：会话历史+episodic→精排→注入）
       ④ ReAct 循环（每步）：
            _chat_msgs() = session.messages_for_llm()（投影）+ hook 旁注
-           llm.chat()（回退链；scene=react）
+           llm.chat()（回退链；scene=react + turn/step 埋点，与投影转储文件名同源）
            tool_calls → before_tool 钩子 → 工具执行（并行/文件锁串行）
                      → after_tool 钩子（mtime 快照 diff → changed_files → py_auto_diag）
            工具结果 _materialize（图片落盘 <img> 标签）

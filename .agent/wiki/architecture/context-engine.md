@@ -1,6 +1,6 @@
 # 上下文引擎与缓存优化
 
-> src/session.py 核心设计。详细分档机制见 [docs/architecture/02-session-memory.md](../../../docs/architecture/02-session-memory.md)，本页补充 docs 未收录的 2026-08 演进（分组衰减 / usage 归一化 / provider 缓存坑 / 折叠实证 / 轮边界统一重排）。
+> src/session.py 核心设计。详细分档机制见 [docs/architecture/02-session-memory.md](../../../docs/architecture/02-session-memory.md)，本页补充 docs 未收录的 2026-08 演进（分组衰减 / usage 归一化 / provider 缓存坑 / 折叠实证 / 轮边界统一重排 / 投影转储文件名）。
 
 ## 投影总览（messages_for_llm 装配顺序）
 
@@ -14,6 +14,22 @@
 ```
 
 assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail（system/user_message/steps 恒装）；`reuse`（current_turn_only）时 history 强制关。
+
+## 投影转储文件名与 t/s 标记（commit 4aced81）
+
+当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：
+
+```
+t{轮号}_s{步号}_{微秒戳}.txt
+```
+
+- `t{轮号}`：已完成轮数（`len(turns)`，进行中的是第 turn+1 轮），与 llm_calls.jsonl 中的 `turn` 字段对应
+- `s{步号}`：当前轮已完成步数（`len(_current.steps)`），与 llm_calls.jsonl 中的 `step` 字段对应
+- `{微秒戳}`：调用时间戳（去重用）
+
+**同源保证**：react 主循环 3 处 `llm.chat` 调用点（主调用 / DSML 重试 / 空回答重试，`src/agent.py`）均传 `turn=len(turns), step=len(_current.steps)`——与 `_dump_projection` 完全同一取值；`src/llm_client.py` `chat()` 经 `_turnstep_ctx`（与 `_scene_ctx` 同构 contextvar，finally 清理，不进 API 请求）落盘 jsonl，`src/server.py` `/api/stats` 透传。**在 react 循环新增 LLM 调用点时记得带上这两个参数**，否则该点 tooltip 无轮步标记、无法映射到投影文件。
+
+**与 /stats tooltip 对齐**：从 `/stats` 折线图 hover 获取 `· t206 · s6` 标记 → 直接打开 `projections/t206_s6_*.txt` 查看当时完整投影，快速定位升档/折叠等事件断点（详见 [运维与排障](../guides/ops.md#stats-页webui-统计按钮)）。
 
 ## 分档投影（轮间）
 
@@ -41,7 +57,7 @@ assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail�
 - **缓存断点**：精确定位在历史段首条消息起点（投影 `[tiered history]` 段的第一条消息）——折叠重写了整个历史段，断点之后前缀全部失效
 - **代价仅一步**：s7 当步 98.4% miss（512746/521091 字符全价重算），/stats 折线呈单点深跌
 - **核心性质（已验证）**：折叠摘要 byte-stable → s7→s8 命中率恢复至 ~99.9%。**折叠是一次性成本事件，不破坏后续缓存**
-- 观测手段：/stats 缓存命中率折线 + llm_calls.jsonl 归一化 usage（见 [ops 可观测性](../guides/ops.md#可观测性)）
+- 观测手段：/stats 缓存命中率折线 + llm_calls.jsonl 归一化 usage + 投影转储文件名（见 [ops 可观测性](../guides/ops.md#可观测性)）
 
 ## 分组衰减（轮内，2026-08 新）
 
@@ -71,3 +87,8 @@ assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail�
 - **随机路由**：deepseek-v4-flash 等按请求随机分实例 → 每实例缓存独立 → 命中恒 0。客户端无法修，应对=回退链后置或 provider 会话粘性
 - **per-token 隔离**：GLM 缓存按 api_token 隔离且容量有限 → 同 token 交错 react 长调用与 utility 短调用互相驱逐缓存 → **utility 必须独立条目+独立 token**；该类条目配 `"token_rotate": false`（sticky）。ModelScope 不吃缓存但按号限额度 → 多 token 预旋转分摊是刚需，保持默认 true
 - 判别：**单步深跌后立即恢复**=折叠事件（预期一次性成本，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)）；骤降且与 utility 调用交错相关=驱逐；恒 0=不支持/随机路由
+
+## 相关页面
+
+- [运维与排障](../guides/ops.md) — /stats 页、投影转储、常见错误对照
+- [系统总览](../architecture/overview.md) — 模块地图、数据流

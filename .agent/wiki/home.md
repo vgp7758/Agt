@@ -29,11 +29,12 @@
 - 工作流：`.agent/workflows/*.xml|json`，13 类节点，XML 为推荐写作格式
 - 工作流 meta 字段：name/description/hook/enabled/hidden/async/auto/coze_url（全链路读写）
 - 存档：`~/.agt/repos/<fixed-cwd>/`（sessions/memories/plans/specs/images/rag）
-- LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/usage 归一化）
+- LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/turn·step 轮步标记/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换；聊天面板 user/answer 气泡 hover 浮现复制按钮（innerText 复制，clipboard→execCommand 降级，commit 3a7e9de）
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
 - **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
 - 折叠（fold）设计已实证（t206）：档梯满触发全档折叠，摘要 byte-stable——单步 ~98% miss 后命中率恢复 ~99.9%，一次性成本不破坏后续缓存（见 [context-engine 折叠实证](architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）
+- **排障闭环：t{N}·s{M} 轮步标记**（commit 4aced81）：/stats 折线 tooltip 显示 `· t206 · s6`，与 `projections/` 转储文件名同源（`t206_s6_*.txt`）——异常点 hover 即得文件名，直接打开看当时完整投影；仅 scene=react 记录携带，老记录自动省略（见 [ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)、[context-engine · t/s 标记](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)）
 - **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（commit_wiki 改 git_commit 节点）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
 - **wiki 提交失败修复并闭环**（2026-08）：commit_wiki 从 run_shell 改 **git_commit 节点**（subprocess 列表参数规避 shell 多行转义），快照逻辑重构为 **dir_snapshot / diff_snapshots 通用子工作流**（snap_before 打更新前基线 → update_wiki → diff_wiki 拍 after 并 diff 生成变更清单，无变更静默跳过），自动追加 Co-authored-by；**实战成功**（commit 1577693 / 0293eec）——详见 [wiki-auto-maintenance](features/wiki-auto-maintenance.md#提交失败问题2026-08-修复) 与 [快照子工作流](architecture/snapshot-diff.md)
 - **变更调用原文收集→before_answer 直供**（2026-08-19，commit 16d6832）：引擎把快照 diff 检出的**有文件变更的工具调用原文**（edit old/new、write content、结果预览[:800]、changed_files）存入 `_turn_changed_calls` 并透传给 before_answer 钩子；wiki_auto_maintenance 新增 fmt_calls 渲染后拼进 update_wiki 任务文本——子 Agent 无需 read_file 重读源文件，显著降低推理负担与子工作流耗时；快照触发条件扩展为 after_tool **或** before_answer 任一钩子在（见 [workflow-hooks · changed_calls](architecture/workflow-hooks.md#changed_calls-变更调用收集before_answer-透传2026-08-19)、[wiki-auto-maintenance · 推理减负](features/wiki-auto-maintenance.md#推理减负changed_calls-直供2026-08-19commit-16d6832)）

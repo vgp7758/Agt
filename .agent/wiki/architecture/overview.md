@@ -6,14 +6,14 @@
 
 ```
 入口层    chat.py（CLI main / Web web_main，work_q 驱动）
-          server.py（FastAPI+WS，/memory /stats /rag /wfeditor /api/status 路由）
+          server.py（FastAPI+WS，/memory /stats /rag /wfeditor /wf/monitor /api/status 路由）
 ─────────────────────────────────────────────────
 引擎层    agent.py（ReAct 循环、事件流 _emit、并行工具调度、钩子执行、消息队列）
           llm_client.py（多模型回退链、token 轮换、DSML 兜底、scene/turn/step 调用埋点、usage 归一化）
           session.py（分层上下文引擎、事件流持久化、分档投影）
 ─────────────────────────────────────────────────
 能力层    real_tools.py（130+ 内置工具，含 diff_files 文件级 Myers Diff，见 [features/diff-files](../features/diff-files.md)）  tools.py（Tool/Toolbox schema）
-          mcp_client.py  lsp_manager.py  workflow.py + workflow_xml.py
+          mcp_client.py  lsp_manager.py  workflow.py + workflow_xml.py（含 run registry 运行观测）
           multiagent.py（子 Agent）  registry.py（团队注册表）
 ─────────────────────────────────────────────────
 支撑层    longterm_memory.py  plan_tools.py  spec_tools.py  survey_tools.py
@@ -30,13 +30,16 @@
       ② 快照 workspace（回溯检查点）
       ③ before_turn 钩子（检索工作流：会话历史+episodic→精排→注入）
          → 同一 hook 多工作流并行执行（ThreadPoolExecutor + as_completed，等待全部完成）
+         → 每个钩子执行注册 run_id（run registry），UI「执行中」行可点击实时观测
       ④ ReAct 循环（每步）：
            _chat_msgs() = session.messages_for_llm()（投影）+ hook 旁注
            llm.chat()（回退链；scene=react + turn/step 埋点，与投影转储文件名同源）
            tool_calls → before_tool 钩子 → 工具执行（并行/文件锁串行）
+                     → wf_* 工具调用同样注册 run（可观测）
                      → after_tool 钩子（mtime 快照 diff → changed_files → py_auto_diag）
            工具结果 _materialize（图片落盘 <img> 标签）
       ⑤ answer → finish_turn（落盘+recap 异步生成）
+         → before_answer 钩子（async 后台线程，如 wiki_auto_maintenance；带 run_id 可观测）
          → 检查 inbox（后台队列）→ 非空则开新一轮（background_trigger）
          → 【新增】inbox 空 → 检查 pending_messages（插话队列）→ 非空则开新一轮（background_trigger·user_insert）
   → 事件流 _emit → event_q（CLI _render_loop）/ broadcast（WebUI 多客户端）
@@ -68,10 +71,12 @@
 | before_turn 钩子并行执行 | 同一 hook 多工作流并发跑，ThreadPoolExecutor + as_completed 确保全部完成才进入主循环，避免「一个钩子未完成就开始第1步」 |
 | 插话队列（pending_messages）+ 后台触发 | answer 完成后检查 inbox + pending_messages，确保插话不滞留，自动开新一轮处理（2026-08-19 修复） |
 | UI 并行钩子状态 Map 索引 | 避免多个并行钩子的「执行中」状态互相覆盖，按 hook::name 独立跟踪（2026-08-19 修复） |
+| 工作流执行 run registry（进程内注册表） | 钩子/wf_* 工具执行的节点级实时观测：内存 dict + 锁，最近 50 次——不落盘、零成本，观测页轮询即得（2026-08-20 新） |
 
 ## 相关页面
 
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 快照检测闭环
+- [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 运行观测 / 快照检测闭环
+- [工作流运行观测](../features/wf-monitor.md)：run registry + /wf/monitor 实时节点轨迹
 - [用户交互 · 插话机制与消息路由](../features/user-interaction.md)：插话全生命周期 / 后台触发 / 并行钩子 UI 修复
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制 / 子 Agent 唤醒
 - [上下文引擎与缓存优化](../architecture/context-engine.md)：投影装配 / 分档投影 / 前缀缓存三层优化

@@ -1,6 +1,6 @@
 # 工作流引擎与钩子
 
-> src/workflow.py + workflow_xml.py + agent.py(_run_hooks)。节点细节见 [docs/architecture/04-workflow.md](../../../docs/architecture/04-workflow.md)，本页补充钩子链路、async 元信息与快照检测闭环。
+> src/workflow.py + workflow_xml.py + agent.py(_run_hooks)。节点细节见 [docs/architecture/04-workflow.md](../../../docs/architecture/04-workflow.md)，本页补充钩子链路、async 元信息、运行观测与快照检测闭环。
 
 ## 双格式与热加载
 
@@ -47,6 +47,19 @@ with ThreadPoolExecutor() as pool:
 - async 钩子**不参与 inject 注入**——即使返回 `{inject: ...}` 也会被忽略（主循环已继续）
 - async 钩子内 LLM 仍走 `utility_client`（scene=hook:xxx），可在 llm_calls.jsonl 观测
 - 同一钩子工作流不要同时被 async 和非 async 调用——行为不确定
+
+## 运行观测（run registry，2026-08-20 新，commit 8aeb21a）
+
+工作流执行的节点级实时观测，消除「钩子在跑但不知道跑到哪」的盲盒感。**接入点**：
+
+| 调用路径 | 注册方式 |
+|----------|----------|
+| `execute(canvas, inputs, ..., run_id=...)` | 节点 start/end/error 事件写入 `_WF_RUNS`（标题/类型/耗时/输出预览 200 字） |
+| `run_hook(..., run_id=...)` | 透传给 execute（钩子工作流） |
+| `make_workflow_tool._run` | wf_* 工具调用注册 `new_wf_run(name, "tool")`；agent=None（测试）不注册 |
+| `src/agent.py` `_run_hooks` | 同步（线程池）+ async（后台线程）钩子全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件带 run_id |
+
+注册表 `_WF_RUNS`（`threading.Lock` 线程安全，最近 50 次内存上限）+ `new_wf_run / list_wf_runs / get_wf_run` API。观测入口：对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点时间线甘特图 2s 轮询。详见 **[工作流运行观测](../features/wf-monitor.md)**（主页面：实现/路由/前端/与其他可观测能力对比）。
 
 ## 13 类节点速查
 

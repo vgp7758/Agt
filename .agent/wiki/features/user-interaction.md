@@ -1,12 +1,12 @@
 # 用户交互 · 插话机制与消息路由
 
-> src/agent.py（消息队列：inbox + pending_messages 双队列）+ src/static/index.html（UI）。涵盖插话（中途打断）、后台触发、并行钩子 UI 修复（2026-08-19 实测修复，commit fb115aa）。
+> src/agent.py（消息队列：inbox + pending_messages 双队列）+ src/static/index.html（UI）。涵盖插话（中途打断）、后台触发、并行钩子 UI 修复（2026-08-19 实测修复，commit fb115aa）、执行中行可点击观测（2026-08-20，commit 8aeb21a）。
 
 ## 职责
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖
+- **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行可点击打开实时观测页
 
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 
@@ -72,6 +72,12 @@ if item:
 
 **效果**：每个钩子独立跟踪「执行中」状态，并行执行时各自独立显示、独立移除。
 
+### 执行中行可点击 → 实时观测页（2026-08-20，commit 8aeb21a）
+
+上述「执行中」行在事件携带 `run_id` 时**可点击**（虚线下划线 + pointer），`window.open('/wf/monitor?run='+encodeURIComponent(m.run_id))` 新标签打开观测页，实时查看该工作流的节点时间线甘特图（跑到哪个节点、卡了多久、输出预览）——解决"钩子在跑但完全是盲盒"的观测需求。
+
+`run_id` 由 `src/agent.py` `_run_hooks` 生成（同步线程池 + async 后台线程全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件均携带），注册表与观测页实现见 [工作流运行观测](wf-monitor.md)。旧进程的事件不带 run_id（不可点击），需 `/restart` 生效。
+
 ## before_turn 钩子并行执行保证
 
 见 [工作流引擎与钩子](../architecture/workflow-hooks.md#before_turn-钩子并行执行2026-08-新v0182-发布)：
@@ -82,5 +88,6 @@ if item:
 ## 相关页面
 
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 快照检测闭环
+- [工作流运行观测](wf-monitor.md)：执行中行点击后的观测页（run registry、节点甘特时间线）
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制（+ pending_messages 盲区补全）/ 子 Agent 唤醒
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 自动检索实例（默认关闭）

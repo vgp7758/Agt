@@ -1767,32 +1767,44 @@ function onWSMessage(ev){
       break;
     case 'auto_wf_start':
 	      // 自动工作流开始执行：显示带脉冲动画的"执行中"提示
+	      // Map 按 hook::name 索引——并行钩子（before_turn 同时挂两个工作流）时各自的
+	      // running 行独立跟踪；此前单数变量，第二个 start 覆盖第一个的引用 → 第一个永远闪烁
 	      if(!curTurn) newTurn();
-	      runningAutoWf = document.createElement('div');
-	      runningAutoWf.className = 'ev auto running';
-	      runningAutoWf.textContent = '⏳ '+wfHookTag(m)+'工作流「'+m.name+'」执行中…';
-	      curTurn.traceBox.appendChild(runningAutoWf); scrollBottom();
+	      {
+	        const rw = document.createElement('div');
+	        rw.className = 'ev auto running';
+	        rw.textContent = '⏳ '+wfHookTag(m)+'工作流「'+m.name+'」执行中…';
+	        curTurn.traceBox.appendChild(rw); scrollBottom();
+	        (window._runningWf = window._runningWf || new Map()).set((m.hook||'')+'::'+m.name, rw);
+	      }
 	      break;
 	    case 'auto_wf':
-	      // 自动工作流执行完成：更新 running 行为
-	      if(runningAutoWf){
-	        runningAutoWf.classList.remove('running');
-	        runningAutoWf.classList.add('done');
-	        runningAutoWf.textContent = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成：'+m.text;
-	        runningAutoWf = null;
-	      } else {
-	        addTrace('auto done', '✅ '+wfHookTag(m)+'工作流「'+m.name+'」：'+m.text);
+	      // 自动工作流执行完成：更新对应的 running 行（按 hook::name 取；跨 turn 的迟到完成回退 addTrace）
+	      {
+	        const key = (m.hook||'')+'::'+m.name;
+	        const rw = (window._runningWf||new Map()).get(key);
+	        if(rw && rw.isConnected){
+	          rw.classList.remove('running');
+	          rw.classList.add('done');
+	          rw.textContent = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成：'+m.text;
+	          window._runningWf.delete(key);
+	        } else {
+	          addTrace('auto done', '✅ '+wfHookTag(m)+'工作流「'+m.name+'」：'+m.text);
+	        }
 	      }
 	      break;
 	    case 'auto_wf_error':
-	      // 自动工作流执行失败：更新 running 行为
-	      if(runningAutoWf){
-	        runningAutoWf.classList.remove('running');
-	        runningAutoWf.classList.add('failed');
-	        runningAutoWf.textContent = '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text;
-	        runningAutoWf = null;
-	      } else {
-	        addTrace('auto failed', '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text);
+	      {
+	        const key = (m.hook||'')+'::'+m.name;
+	        const rw = (window._runningWf||new Map()).get(key);
+	        if(rw && rw.isConnected){
+	          rw.classList.remove('running');
+	          rw.classList.add('failed');
+	          rw.textContent = '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text;
+	          window._runningWf.delete(key);
+	        } else {
+	          addTrace('auto failed', '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败：'+m.text);
+	        }
 	      }
 	      break;
     case 'workflow_message':

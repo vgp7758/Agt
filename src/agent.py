@@ -14,6 +14,7 @@ import collections
 import difflib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -1434,6 +1435,16 @@ class Agent:
                                             "text": next_msg[:100], "seed": bool(seed)})
                                 msg, auto_flag, imgs, continue_loop = next_msg, False, None, True
                                 seeds = [seed] if seed else []   # 下一轮迭代预置该合成 Step
+                                break
+                            # 用户插话兜底：answer 前到达但没赶上步边界注入（如 answer_reasoning
+                            # 期间插话）→ pending_messages 残留。此前无消费点：消息滞留到用户
+                            # 手动发下一条消息才在新一轮第 1 步边界被注入（插话"迟到"的根因）。
+                            if self.pending_messages:
+                                next_msg = "\n".join(f"〔用户中途补充〕{x}" for x in self.pending_messages)
+                                self.pending_messages.clear()
+                                self._emit({"type": "background_trigger", "source": "user_insert",
+                                            "text": next_msg[:100], "seed": False})
+                                msg, auto_flag, imgs, continue_loop = next_msg, False, None, True
                                 break
                             return resp.content
 

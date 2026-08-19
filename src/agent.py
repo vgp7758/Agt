@@ -305,6 +305,7 @@ class Agent:
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         self.dump_projections: bool = False  # 投影转储开关（运行时设置）
         self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
+        self._turn_changed_calls: list = []   # 本轮产生文件变更的工具调用原文 [{call_id,name,arguments,result_preview,changed_files}]——before_answer 钩子（wiki 维护等）直接消费，免子 Agent read_file
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——
         # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认。
         # 兼容旧字段 retrieval_model / recap_model（config.get_utility_model 内部处理）。
@@ -1229,6 +1230,7 @@ class Agent:
                 seeds = []
             # —— 重置本轮钩子状态 ——
             self._hook_notes = []
+            self._turn_changed_calls = []   # 本轮变更调用收集（before_answer 钩子消费）
             self._answer_redo_draft = None
             self._last_answer_draft = None
             self._answer_inject_count = 0
@@ -1370,7 +1372,8 @@ class Agent:
                             turn_context = self._turn_context_str()
                             ba_notes = self._run_hooks("before_answer",
                                                        {"user_message": cur_user_msg, "draft_answer": draft,
-                                                        "turn_context": turn_context})
+                                                        "turn_context": turn_context,
+                                                        "changed_calls": self._turn_changed_calls})   # 变更调用原文数组（工作流 ref 原样透传）
                             if ba_notes and draft != self._last_answer_draft \
                                     and self._answer_inject_count < 5:
                                 self._last_answer_draft = draft
@@ -1463,8 +1466,11 @@ class Agent:
                                     self._hook_notes += self._run_hooks("before_tool", {
                                         "user_message": cur_user_msg, "tool_name": tc["name"], "tool_args": tc_args_json})
                                 # 工具执行前 workspace 快照（真实副作用检测；链式复用上次 after 快照省一半扫描）
+                                # before_answer 钩子存在时也做快照（_turn_changed_calls 收集用——wiki 维护等钩子
+                                # 直接消费变更调用原文，免子 Agent read_file 重读源文件）
                                 _snap_before = None
-                                if "after_tool" in self._active_hooks:
+                                _need_snap = ("after_tool" in self._active_hooks) or ("before_answer" in self._active_hooks)
+                                if _need_snap:
                                     _snap_before = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                                 _t0 = time.time()
                                 result = self.tools.call(tc["name"], tc["arguments"])
@@ -1472,14 +1478,24 @@ class Agent:
                                           time.time() - _t0, len(result or ""))
                                 cid = self.session.toollog.next_id()
                                 result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
-                                if "after_tool" in self._active_hooks:
+                                if _need_snap:
                                     _snap_after = _workspace_snapshot()
                                     self._fs_snap = _snap_after   # 下一个 call 的 before 基准
                                     changed = _diff_snapshots(_snap_before, _snap_after)
-                                    self._hook_notes += self._run_hooks("after_tool", {
-                                        "user_message": cur_user_msg, "tool_name": tc["name"],
-                                        "tool_args": tc_args_json, "tool_result": result,
-                                        "changed_files": changed})   # 直接传数组（工作流 ref 原样透传，无需序列化往返）
+                                    if changed:
+                                        # 变更调用收集：原文（args+result 预览）随 changed_files 存内存，
+                                        # before_answer 钩子（wiki 维护）直接消费——子 Agent 不必 read_file
+                                        self._turn_changed_calls.append({
+                                            "call_id": cid, "name": tc["name"],
+                                            "arguments": tc["arguments"],
+                                            "result_preview": (result or "")[:800],
+                                            "changed_files": changed,
+                                        })
+                                    if "after_tool" in self._active_hooks:
+                                        self._hook_notes += self._run_hooks("after_tool", {
+                                            "user_message": cur_user_msg, "tool_name": tc["name"],
+                                            "tool_args": tc_args_json, "tool_result": result,
+                                            "changed_files": changed})   # 直接传数组（工作流 ref 原样透传，无需序列化往返）
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": len(calls) > 1})
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
@@ -1487,11 +1503,23 @@ class Agent:
                         elif len(calls) == 1:
                             tc = calls[0]
                             self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
+                            _snap_b1 = None
+                            _need1 = "before_answer" in self._active_hooks
+                            if _need1:
+                                _snap_b1 = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                             _t0 = time.time()
                             result = self.tools.call(tc["name"], tc["arguments"])
                             _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"], time.time() - _t0, len(result or ""))
                             cid = self.session.toollog.next_id()
                             result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
+                            if _need1:
+                                _snap_a1 = _workspace_snapshot()
+                                self._fs_snap = _snap_a1
+                                _ch1 = _diff_snapshots(_snap_b1, _snap_a1)
+                                if _ch1:
+                                    self._turn_changed_calls.append({
+                                        "call_id": cid, "name": tc["name"], "arguments": tc["arguments"],
+                                        "result_preview": (result or "")[:800], "changed_files": _ch1})
                             self._emit({"type": "tool_result", "name": tc["name"],
                                         "result": self._truncate(result), "parallel": False})
                             self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
@@ -1500,13 +1528,24 @@ class Agent:
                             self._emit({"type": "parallel", "count": len(calls)})
                             for tc in calls:
                                 self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
+                            _snap_b2 = None
+                            _need2 = "before_answer" in self._active_hooks
+                            if _need2:
+                                _snap_b2 = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                             _t0 = time.time()
                             results = self._run_tools_parallel(calls)
                             _LOG.info("并行 %d 工具 耗时%.1fs", len(calls), time.time() - _t0)
+                            _ch2 = _diff_snapshots(_snap_b2, _workspace_snapshot()) if _need2 and _snap_b2 is not None else []
+                            if _need2:
+                                self._fs_snap = _workspace_snapshot()
                             for tc, result in zip(calls, results):
                                 _LOG.debug("  └ %s 结果%d字", tc["name"], len(result or ""))
                                 cid = self.session.toollog.next_id()
                                 result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)
+                                if _ch2:   # 整批 diff 归属到批内每个调用（多报不漏报，方向安全）
+                                    self._turn_changed_calls.append({
+                                        "call_id": cid, "name": tc["name"], "arguments": tc["arguments"],
+                                        "result_preview": (result or "")[:800], "changed_files": _ch2})
                                 self._emit({"type": "tool_result", "name": tc["name"],
                                             "result": self._truncate(result), "parallel": True})
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)

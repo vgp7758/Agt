@@ -3,6 +3,7 @@
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
     <out name="turn_context" type="string"/>
+    <out name="changed_calls" type="list" description="本轮产生文件变更的工具调用原文数组（引擎快照 diff 检出）"/>
   </node>
   <node id="145000" type="subworkflow" title="snap_before" x="1020" y="80" workflowId="dir_snapshot">
     <in name="path" type="string">.agent/wiki/</in>
@@ -112,10 +113,36 @@ assistant response:
     <out name="error" type="string"/>
     <batch enabled="false"/>
   </node>
+  <node id="135500" type="code" title="fmt_calls" x="1120" y="80">
+    <in name="changed_calls" type="list" ref="100001.changed_calls"/>
+    <code language="3"><![CDATA[import json
+async def main(args):
+    """变更调用原文 → 文本（供 update_wiki 子 Agent 直接看改动，不必 read_file 重读源文件）。"""
+    p = args.params
+    calls = p.get("changed_calls") or []
+    if isinstance(calls, str):
+        try: calls = json.loads(calls)
+        except Exception: calls = []
+    if not calls:
+        return {"calls_text": "(本轮无文件变更)"}
+    lines = []
+    for i, c in enumerate(calls, 1):
+        ch = ", ".join(f"{x.get('file')}({x.get('change')})" for x in (c.get("changed_files") or [])[:8])
+        a_s = json.dumps(c.get("arguments") or {}, ensure_ascii=False)
+        if len(a_s) > 600: a_s = a_s[:600] + "...(截断)"
+        res = str(c.get("result_preview") or "")
+        lines.append(f"{i}. {c.get('name')}({a_s})")
+        if ch: lines.append(f"   变更: {ch}")
+        if res: lines.append(f"   结果: {res[:400]}")
+    return {"calls_text": "\n".join(lines)}]]></code>
+    <out name="calls_text" type="string"/>
+    <batch enabled="false"/>
+  </node>
   <node id="336423" type="text" title="文本" x="1320" y="80">
     <in name="user_msg" type="string" ref="100001.user_message"/>
     <in name="turn_ctx" type="string" ref="100001.turn_context"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
+    <in name="calls_text" type="string" ref="135500.calls_text"/>
     <result><![CDATA[user message:
 {{user_msg}}
 
@@ -123,7 +150,10 @@ turn context:
 {{turn_ctx}}
 
 assistant answer:
-{{answer}}]]></result>
+{{answer}}
+
+changed tool calls（引擎快照 diff 检出的文件变更调用原文——更新 wiki 时以此为准，一般无需再 read_file 重读源文件）:
+{{calls_text}}]]></result>
     <batch enabled="false"/>
   </node>
   <edge from="150001" to="900001"/>
@@ -138,6 +168,7 @@ assistant answer:
   <edge from="1400227" to="148000"/>
   <edge from="682383" to="900001" port="branch_1"/>
   <edge from="682383" to="900001" port="default"/>
-  <edge from="145000" to="336423"/>
+  <edge from="145000" to="135500"/>
+  <edge from="135500" to="336423"/>
   <edge from="336423" to="140001"/>
 </workflow>

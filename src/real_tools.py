@@ -2052,6 +2052,122 @@ def list_append(lst: list = None, item=None) -> list:
     也可首节点不连 lst（None 容错）作为数组的冷启动。"""
     return list(lst or []) + [item]
 
+def _myers_diff(a_lines, b_lines):
+    """Myers Diff 算法（纯算法函数，工具入口见 diff_files）。
+    输入: 两个字符串列表（按行）。
+    输出: 差异列表 [(action, line)]，action: '-' 删除(A侧行) / '+' 插入(B侧行) / ' ' 相同。"""
+    A, B = a_lines, b_lines
+    N, M = len(A), len(B)
+    MAX = N + M
+    V = {1: 0}
+    trace = []
+    for D in range(MAX + 1):
+        trace.append(dict(V))          # trace[d] = d 轮开始前（=d-1 轮结束后）的 V 快照
+        for k in range(-D, D + 1, 2):
+            if k == -D or (k != D and V.get(k - 1, 0) < V.get(k + 1, 0)):
+                x = V.get(k + 1, 0)      # 向下（插入）
+            else:
+                x = V.get(k - 1, 0) + 1  # 向右（删除）
+            y = x - k
+            while x < N and y < M and A[x] == B[y]:
+                x += 1
+                y += 1
+            V[k] = x
+            if x >= N and y >= M:
+                return _myers_backtrack(trace, A, B, D)
+    return []
+
+
+def _myers_backtrack(trace, A, B, D):
+    """回溯生成 diff。⚠️ prev_k 判断与 prev_x 取值必须用【同一层】快照 trace[d]（=d-1 轮结束状态，
+    即第 d 步编辑的出发点）——取 trace[d-1] 会错一层，回溯偏离合法编辑链（重放错乱/B[y]越界）。"""
+    x, y = len(A), len(B)
+    result = []
+    for d in range(D, 0, -1):
+        V = trace[d]
+        k = x - y
+        if k == -d or (k != d and V.get(k - 1, 0) < V.get(k + 1, 0)):
+            prev_k = k + 1
+        else:
+            prev_k = k - 1
+        prev_x = V.get(prev_k, 0)      # ← 同一层（trace[d]）取，与 prev_k 判断一致
+        prev_y = prev_x - prev_k
+        while x > prev_x and y > prev_y:   # 对角线（相同段）从后往前收集
+            x -= 1
+            y -= 1
+            result.append((' ', A[x]))
+        if x > prev_x:                    # 水平步 = 删除 A 侧
+            x -= 1
+            result.append(('-', A[x]))
+        elif y > prev_y:                  # 垂直步 = 插入 B 侧
+            y -= 1
+            result.append(('+', B[y]))
+    while x > 0 and y > 0:                # d=0 纯对角线（起点前导相同段）
+        x -= 1
+        y -= 1
+        result.append((' ', A[x]))
+    result.reverse()
+    return result
+
+
+def diff_files(file1: str, file2: str, context: int = 2) -> str:
+    """Myers Diff 对比两个文件，返回 unified diff 风格的差异（@@ hunk 头 + -/+ 行）。
+    file1/file2: workspace 内路径（相对或绝对均可，沙箱限定）；
+    context: 每个 hunk 前后的上下文行数（默认 2）。
+    头部含两侧行数/增删统计；完全相同返回「无差异」。适合对比 改前/改后、备份/当前。"""
+    t1, t2 = _resolve(file1), _resolve(file2)
+    if not t1.exists():
+        return f"[文件不存在] {file1}"
+    if not t2.exists():
+        return f"[文件不存在] {file2}"
+    A = t1.read_text(encoding="utf-8", errors="ignore").splitlines()
+    B = t2.read_text(encoding="utf-8", errors="ignore").splitlines()
+    ops = _myers_diff(A, B)
+    dels = sum(1 for a, _ in ops if a == '-')
+    adds = sum(1 for a, _ in ops if a == '+')
+    if not dels and not adds:
+        return f"[无差异] {file1} 与 {file2} 内容相同（{len(A)} 行）"
+    # 标注行号（A 侧 1-based / B 侧 1-based；'+' 行无 A 号，'-' 行无 B 号）
+    annot, i1, i2 = [], 0, 0
+    for act, ln in ops:
+        if act in (' ', '-'):
+            i1 += 1
+        if act in (' ', '+'):
+            i2 += 1
+        annot.append((act, ln, i1 if act in (' ', '-') else None,
+                      i2 if act in (' ', '+') else None))
+    # hunk 分组：changed 行的连续段（间隔 ≤ 2*context+1 合并），各扩 context 行上下文
+    ctx = max(0, int(context))
+    changed_idx = [i for i, (a, *_r) in enumerate(annot) if a != ' ']
+    hunks = []
+    s = 0
+    for j in range(1, len(changed_idx) + 1):
+        if j == len(changed_idx) or changed_idx[j] - changed_idx[j - 1] > 2 * ctx + 1:
+            lo = max(0, changed_idx[s] - ctx)
+            hi = min(len(annot) - 1, changed_idx[j - 1] + ctx)
+            hunks.append((lo, hi))
+            s = j
+    # 渲染
+    parts = [f"[diff {file1} ({len(A)}行) vs {file2} ({len(B)}行) | -{dels} +{adds} | {len(hunks)} 处差异]"]
+    for lo, hi in hunks:
+        seg = annot[lo:hi + 1]
+        a_start = next((a2 for _a, _l, a2, _b in seg if a2 is not None), 0)
+        b_start = next((b2 for _a, _l, _a2, b2 in seg if b2 is not None), 0)
+        a_n = sum(1 for _a, _l, a2, _b in seg if a2 is not None)
+        b_n = sum(1 for _a, _l, _a2, b2 in seg if b2 is not None)
+        parts.append(f"@@ -{a_start},{a_n} +{b_start},{b_n} @@")
+        for act, ln, a2, b2 in seg:
+            if act == ' ':
+                parts.append(f"  {ln}")
+            elif act == '-':
+                parts.append(f"-{a2}│ {ln}")
+            else:
+                parts.append(f"+{b2}│ {ln}")
+    out = "\n".join(parts)
+    if len(out) > 20000:
+        out = out[:20000] + f"\n...（输出截断，全量差异 -{dels} +{adds} 行；可减小 context 或分段对比）"
+    return out
+
 
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
 WEB_SEARCH_OUTPUTS = [
@@ -2113,6 +2229,9 @@ REAL_TOOLS = Toolbox(
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
     Tool(read_image),
+    Tool(diff_files, param_descriptions={
+        "context": "每个 hunk 前后的上下文行数（默认 2）",
+    }),
     Tool(git_commit, param_descriptions={
         "message": "提交信息（首行摘要+可选正文）；末尾自动附加 Co-authored-by: Agt trailer",
         "files": "要 add 的文件（逗号分隔）；留空=git add -A 全部变更",

@@ -1,12 +1,12 @@
 # 用户交互 · 插话机制与消息路由
 
-> src/agent.py（消息队列：inbox + pending_messages 双队列）+ src/static/index.html（UI）。涵盖插话（中途打断）、后台触发、并行钩子 UI 修复（2026-08-19 实测修复，commit fb115aa）、执行中行可点击观测（2026-08-20，commit 8aeb21a）。
+> src/agent.py（消息队列：inbox + pending_messages 双队列）+ src/static/index.html（UI）。涵盖插话（中途打断）、后台触发、并行钩子 UI 修复（2026-08-19 实测修复，commit fb115aa）、执行中行可点击观测（2026-08-20，commit 8aeb21a）、执行中实时计时与总耗时（2026-08-20，commit 6aa5903）。
 
 ## 职责
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行可点击打开实时观测页
+- **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行带每秒跳动的实时秒表 `(Ns)`（commit 6aa5903）、可点击打开实时观测页，完成/失败行定格显示总耗时
 
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 
@@ -48,7 +48,7 @@ if item:
 |---|------|------|
 | ① | 两个 before_turn 钩子紫色「执行中」并行闪烁 | 设计行为（ThreadPoolExecutor 并发，见 [钩子并行执行](../architecture/workflow-hooks.md)）✓ |
 | ② | retrieval 完成后 wiki_auto_query 未完就开始第 1 步 | 旧代码行为；新代码 `as_completed` 等全部钩子完成 ✓ |
-| ②b | retrieval 的「执行中」行永远闪烁不消失 | UI bug，已修（本页下节 Map 索引） |
+| ②b | retrieval 的「执行中」行永远闪烁不消失 | UI bug，已修（本页下节 Map 索引）✓ |
 | ③ | wiki_auto_maintenance 与 answer 同时执行 | async 钩子设计行为 ✓ |
 | ④ | answer_reasoning 期间插话入队 inbox 等待 | 正常（message_queued）✓ |
 | ⑤⑥ | answer 后插话滞留队列、不触发下一轮 | 🔴 核心引擎 bug，已修（本节 pending_messages 兜底） |
@@ -60,17 +60,43 @@ if item:
 
 **根因**：前端 `runningAutoWf` 为单数变量，`auto_wf_start` 事件处理时 `window._runningWf = rw` 直接覆盖
 
-**修复**（`src/static/index.html`）：
+**修复**（`src/static/index.html`）：Map 按 `hook::name` 索引——并行钩子（before_turn 同时挂两个工作流）时各自的 running 行独立跟踪。Map 值自 commit 6aa5903 起为 `{el, timer, t0}`（见下节计时扩展）：
 
 ```javascript
-// Map 按 hook::name 索引——并行钩子独立跟踪
-(window._runningWf = window._runningWf || new Map()).set((m.hook||'')+'::'+m.name, rw);
+// auto_wf_start：Map 按 hook::name 索引，值为 {el, timer, t0}
+(window._runningWf = window._runningWf || new Map())
+  .set((m.hook||'')+'::'+m.name, {el: rw, timer: _timer, t0: _t0});
 
-// auto_wf_end 时移除对应 key
+// auto_wf_end / auto_wf_error：clearInterval 停表 + 按 t0 算总耗时 + delete 对应 key
+clearInterval(rec.timer);
 (window._runningWf || new Map()).delete((m.hook||'')+'::'+m.name);
 ```
 
-**效果**：每个钩子独立跟踪「执行中」状态，并行执行时各自独立显示、独立移除。
+**效果**：每个钩子独立跟踪「执行中」状态，并行执行时各自独立显示、独立移除（含各自独立计时）。
+
+### 执行中实时计时（Ns）+ 完成总耗时（2026-08-20，commit 6aa5903）
+
+紫色闪烁的「执行中」行现在带每秒跳动的秒表，完成/失败时停表定格显示总耗时：
+
+```
+执行中（每秒跳动）：⏳ [每轮开始前]钩子工作流「wiki_auto_maintenance」执行中… (15s)
+完成（停表定格）：✅ [最终回答前]钩子工作流「wiki_auto_maintenance」完成（共 23s）：…
+失败（带耗时）　：❌ [每轮开始前]钩子工作流「wiki_auto_query」失败（8s 后失败）：RateLimitError…
+```
+
+实现要点（全部在 `src/static/index.html` 的 `auto_wf_start` / `auto_wf_end` / `auto_wf_error` 事件处理内）：
+
+| 点 | 说明 |
+|---|---|
+| **本地计时** | `setInterval` 每秒更新 `(Ns)` 后缀——纯前端 `Date.now()-t0`，零后端开销（后端事件只有开始/结束两个时间点，没有过程心跳） |
+| **Map 值扩展** | `_runningWf` 从存 `el` 改为 `{el, timer, t0}`——完成/失败时 `clearInterval` + 按 `t0` 算总耗时 |
+| **计时器防泄漏** | 行被历史重渲染清掉时 `isConnected` 检测自动停表，孤儿 setInterval 不空转 |
+| **迟到完成兜底** | 跨 turn 的完成事件（原 running 行已不在 DOM）走 `addTrace` 路径，同样带总耗时 |
+| **并行钩子** | 各自独立计时（Map 按 `hook::name` 索引，上一节修复保证并行独立性） |
+
+**生效方式**：纯前端改动，但 index.html 是服务启动时载入内存的——**Ctrl+F5 强刷即可生效，无需 /restart**；而执行中行的可点击 run_id（下节）依赖后端事件，旧进程仍需 `/restart`。
+
+**验证**：JS 语法 + 5 断言（计时后缀 / 总耗时 / 失败耗时 / clearInterval / isConnected）全过。秒数可与[观测页](wf-monitor.md)的节点级甘特时间线实时对照，时间感完全对齐。
 
 ### 执行中行可点击 → 实时观测页（2026-08-20，commit 8aeb21a）
 
@@ -88,6 +114,6 @@ if item:
 ## 相关页面
 
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 快照检测闭环
-- [工作流运行观测](wf-monitor.md)：执行中行点击后的观测页（run registry、节点甘特时间线）
+- [工作流运行观测](wf-monitor.md)：执行中行点击后的观测页（run registry、节点甘特时间线，与本页秒表计时对照）
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制（+ pending_messages 盲区补全）/ 子 Agent 唤醒
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 自动检索实例（默认关闭）

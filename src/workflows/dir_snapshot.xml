@@ -1,0 +1,41 @@
+<workflow name="dir_snapshot" description="获取指定目录的文件快照（mtime 映射，JSON 字符串）。排除 .git/__pycache__；path 留空=整个 workspace。与 diff_snapshots 工作流配对使用。">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="path" type="string" description="目标目录（workspace 相对路径，留空=整个 workspace）"/>
+  </node>
+  <node id="110001" type="code" title="snap" x="420" y="80">
+    <in name="path" type="string" ref="100001.path"/>
+    <code language="3"><![CDATA[import os, json
+from pathlib import Path
+async def main(args):
+    """目录 mtime 快照：{相对路径(posix): mtime}。排除 .git/__pycache__/嵌套git仓库；
+    path 非空时只扫该子目录（相对 workspace），文件键也带该前缀（diff 时两份快照同源可直接比对）。"""
+    p = args.params
+    root = (p.get("path") or ".").strip() or "."
+    base = Path(".").resolve()
+    target = (base / root).resolve() if root != "." else base
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return {"snap": "{}", "error": f"路径越界: {root}"}
+    EXCLUDE = {".git", "__pycache__"}
+    snap = {}
+    for cur, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE and not (Path(cur) / d / ".git").exists()]
+        for f in files:
+            fp = Path(cur) / f
+            try:
+                rel = fp.relative_to(base).as_posix()
+                snap[rel] = fp.stat().st_mtime
+            except OSError:
+                pass
+    return {"snap": json.dumps(snap)}]]></code>
+    <out name="snap" type="string" description='快照 JSON 字符串 {"相对路径": mtime,...}'/>
+    <out name="error" type="string"/>
+  </node>
+  <node id="900001" type="end" title="end" x="720" y="80">
+    <out name="snap" ref="110001.snap" type="string"/>
+    <out name="error" ref="110001.error" type="string"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="900001"/>
+</workflow>

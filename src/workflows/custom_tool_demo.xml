@@ -1,0 +1,142 @@
+<workflow name="custom_tool_demo" description="工作流内定义工具箱没有的自定义工具：text节点写roll_dice的schema→code节点拼进官方schemas→llm_call(tools)→选择器按tool_calls.0.name路由(自定义名→code实现/官方名→call_tool)→聚合→append回messages循环">
+  <node id="100001" type="start" title="Entry">
+    <out name="user_message" type="string" required="true"/>
+  </node>
+  <node id="110001" type="plugin" title="official_schemas" toolName="get_tool_schemas" x="360" y="60">
+    <in name="names" type="string">add,multiply</in>
+    <out name="raw" type="list"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="110002" type="text" title="custom_schema" x="360" y="220">
+    <result><![CDATA[{"type":"function","function":{"name":"roll_dice","description":"掷一个六面骰子，返回1-6的随机点数","parameters":{"type":"object","properties":{"sides":{"type":"integer","description":"面数，默认6"}},"required":[]}}}]]></result>
+    <out name="output" type="string" description="自定义工具的 function schema JSON"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="110003" type="code" title="init" x="660" y="80">
+    <in name="official" type="list" ref="110001.raw"/>
+    <in name="custom_json" type="string" ref="110002.output"/>
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <code><![CDATA[import json
+async def main(args):
+    p = args.params
+    official = p.get("official") or []
+    if isinstance(official, str):
+        official = json.loads(official)
+    custom = json.loads(p.get("custom_json") or "{}")
+    return {"tools": list(official) + [custom],
+            "messages": [
+                {"role": "system", "content": "你是 ReAct Agent。工具列表里有 roll_dice（掷骰子，工具箱外自定义）。优先用工具完成任务，完成后直接给最终回答。"},
+                {"role": "user", "content": p.get("user_message") or ""},
+            ]}]]></code>
+    <out name="tools" type="list"/>
+    <out name="messages" type="list"/>
+  </node>
+  <node id="300001" type="loop" title="react_loop" x="960" y="80">
+    <param name="loopType"><![CDATA[infinite]]></param>
+    <var name="messages" type="list" ref="110003.messages"/>
+    <var name="answer" type="string" literal=""/>
+    <out name="answer" type="string" ref="300001.answer"/>
+    <out name="all_outputs" type="list" itemType="string"/>
+    <blocks>
+      <node id="__entry__" type="start" title="迭代入口">
+        <out name="messages" type="list" description="累积消息"/>
+        <out name="answer" type="string"/>
+      </node>
+      <node id="310001" type="plugin" title="llm_call" toolName="llm_call">
+        <in name="messages" type="list" ref="__entry__.messages"/>
+        <in name="tools" type="list" ref="110003.tools"/>
+        <out name="raw" type="object"/>
+        <out name="content" type="string"/>
+        <out name="tool_calls" type="list"><field name="id" type="string"/><field name="name" type="string"/><field name="arguments" type="object"/></out>
+        <batch enabled="false"/>
+      </node>
+      <node id="310002" type="selector" title="has_tool_calls?">
+        <branch><cond op="13" left="310001.tool_calls.length" right="0" left_type="integer" right_type="integer"/></branch>
+      </node>
+      <node id="330001" type="selector" title="is_custom_tool?">
+        <branch><cond op="1" left="310001.tool_calls.0.name" right="roll_dice" left_type="string" right_type="string"/></branch>
+      </node>
+      <node id="340001" type="code" title="impl_roll_dice">
+        <in name="sides" type="integer" ref="310001.tool_calls.0.arguments.sides"/>
+        <code><![CDATA[import random
+async def main(args):
+    sides = int(args.params.get("sides") or 6)
+    return {"result": str(random.randint(1, sides))}]]></code>
+        <out name="result" type="string"/>
+      </node>
+      <node id="340002" type="plugin" title="call_official" toolName="call_tool">
+        <in name="name" type="string" ref="310001.tool_calls.0.name"/>
+        <in name="arguments" type="object" ref="310001.tool_calls.0.arguments"/>
+        <out name="raw" type="string"/>
+        <batch enabled="false"/>
+      </node>
+      <node id="350001" type="aggregator" title="tool_result">
+        <group name="result"><var ref="340001.result"/><var ref="340002.raw"/></group>
+        <out name="result" type="string"/>
+      </node>
+      <node id="310004" type="code" title="append_round">
+        <in name="messages" type="list" ref="__entry__.messages"/>
+        <in name="resp" type="object" ref="310001.raw"/>
+        <in name="tool_result" type="string" ref="350001.result"/>
+        <code><![CDATA[import json as _j
+async def main(args):
+    p = args.params
+    msgs = list(p.get("messages") or [])
+    resp = p.get("resp") or {}
+    tr = str(p.get("tool_result") or "")[:4000]
+    tcs = resp.get("tool_calls") or []
+    if tcs:
+        tc = tcs[0]
+        fn = tc.get("function") or {}
+        name = fn.get("name") or tc.get("name") or "tool"
+        a = fn.get("arguments") or tc.get("arguments") or {}
+        a_s = a if isinstance(a, str) else _j.dumps(a, ensure_ascii=False)
+        cid = tc.get("id") or "c0"
+        msgs = msgs + [
+            {"role": "assistant", "content": resp.get("content") or None,
+             "tool_calls": [{"id": cid, "type": "function",
+                             "function": {"name": name, "arguments": a_s}}]},
+            {"role": "tool", "tool_call_id": cid, "content": tr},
+        ]
+    return {"messages": msgs}]]></code>
+        <out name="messages" type="list"/>
+      </node>
+      <node id="310005" type="setvar" title="upd_messages">
+        <in name="messages" left="__entry__.messages" left_type="list" right="ref:310004.messages" right_type="list"/>
+      </node>
+      <node id="__continue__" type="continue" title="继续(本轮输出)">
+        <in name="result" type="string" ref="350001.result"/>
+        <batch enabled="false"/>
+      </node>
+      <node id="310006" type="setvar" title="set_answer">
+        <in name="answer" left="__entry__.answer" left_type="string" right="ref:310001.content" right_type="string"/>
+      </node>
+      <node id="__break__" type="break" title="完成退出"/>
+    </blocks>
+    <edges>
+      <edge source="300001" target="__entry__" sourcePort="loop-function-inline-output"/>
+      <edge source="__entry__" target="310001"/>
+      <edge source="310001" target="310002"/>
+      <edge source="310002" target="330001" sourcePort="true"/>
+      <edge source="330001" target="340001" sourcePort="true"/>
+      <edge source="330001" target="340002" sourcePort="false"/>
+      <edge source="340001" target="350001"/>
+      <edge source="340002" target="350001"/>
+      <edge source="350001" target="310004"/>
+      <edge source="310004" target="310005"/>
+      <edge source="310005" target="__continue__"/>
+      <edge source="310002" target="310006" sourcePort="false"/>
+      <edge source="310006" target="__break__"/>
+    </edges>
+    <batch enabled="false" nth="0"/>
+  </node>
+  <node id="900001" type="end" title="Exit">
+    <out name="result" ref="300001.answer" type="string"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="100001" to="110002"/>
+  <edge from="110001" to="110003"/>
+  <edge from="110002" to="110003"/>
+  <edge from="110003" to="300001"/>
+  <edge from="300001" to="900001"/>
+</workflow>

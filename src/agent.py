@@ -1015,11 +1015,17 @@ class Agent:
                     _ov = getattr(hook_llm, "_scene_override", None)
                     hook_llm._scene_override = f"hook:{hook}"   # 钩子内 LLM 调用标注 scene（chat 自动读取）
                     try:
-                        inject, result, message = run_hook(hw["canvas"], context,
-                                                  tools=self.tools, llm=hook_llm, workspace=_ws)
-                    finally:
-                        hook_llm._scene_override = _ov
-                    return hw["name"], inject, result, message
+                        try:
+                            inject, result, message = run_hook(hw["canvas"], context,
+                                                      tools=self.tools, llm=hook_llm, workspace=_ws)
+                        finally:
+                            hook_llm._scene_override = _ov
+                        return hw["name"], inject, result, message
+                    except Exception as e2:
+                        # 单个钩子失败不拖垮并行组：发错误事件 + 返回空结果（不注入）
+                        self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
+                                    "text": f"{type(e2).__name__}: {str(e2)[:200]}"})
+                        return hw["name"], False, "", ""
                 results = {}
                 with ThreadPoolExecutor(max_workers=len(sync_hws)) as ex:
                     futs = {ex.submit(_run_one, hw): hw["name"] for hw in sync_hws}
@@ -1027,16 +1033,17 @@ class Agent:
                         nm, inject, result, message = fut.result()
                         results[nm] = (inject, result, message)
                 # 按声明序合并（注入顺序稳定）
-                for hw in sync_hws:
-                    nm = hw["name"]
-                    inject, result, message = results.get(nm, (False, "", ""))
-                    self._emit({"type": "auto_wf", "name": nm, "hook": hook,
+                try:
+                    for hw in sync_hws:
+                        nm = hw["name"]
+                        inject, result, message = results.get(nm, (False, "", ""))
+                        self._emit({"type": "auto_wf", "name": nm, "hook": hook,
                                 "text": result[:300] or message[:300], "auto": True})
-                    if message.strip():
-                        self._emit({"type": "workflow_message", "name": nm, "hook": hook,
+                        if message.strip():
+                            self._emit({"type": "workflow_message", "name": nm, "hook": hook,
                                     "text": message, "auto": True})
-                    if inject and result.strip():
-                        notes.append({"hook": hook, "name": nm, "result": result.strip()})
+                        if inject and result.strip():
+                            notes.append({"hook": hook, "name": nm, "result": result.strip()})
                 except Exception as e2:
                     self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
                                 "text": str(e2)[:200]})

@@ -4,7 +4,7 @@
     <out name="draft_answer" type="string"/>
     <out name="turn_context" type="string"/>
   </node>
-  <node id="145000" type="subworkflow" title="snap_before" x="1024" y="81" workflowId="dir_snapshot">
+  <node id="145000" type="subworkflow" title="snap_before" x="1020" y="80" workflowId="dir_snapshot">
     <in name="path" type="string">.agent/wiki/</in>
     <out name="snap" type="string"/>
     <out name="error" type="string"/>
@@ -106,7 +106,7 @@ assistant response:
     <out name="count" type="integer"/>
     <batch enabled="false"/>
   </node>
-  <node id="1257593" type="subworkflow" title="snap_after" x="1920" y="80" workflowId="dir_snapshot">
+  <node id="1257593" type="subworkflow" title="snap_after" x="1926" y="83" workflowId="dir_snapshot">
     <in name="path" type="string">.agent/wiki/</in>
     <out name="snap" type="string"/>
     <out name="error" type="string"/>

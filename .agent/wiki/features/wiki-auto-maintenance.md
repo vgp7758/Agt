@@ -40,23 +40,39 @@ wf_diff_snapshots 是【工具节点】（plugin, toolName=wf_diff_snapshots）
 
 **实测验证**：`raw=dict{files,count,changed}`（根因复现）→ `1400227.files` 解析为 `'.agent/wiki/a.md,.agent/wiki/new.md,.agent/wiki/old.md'` 逗号分隔 string，`git_commit` 直接消费成功。**在编辑器里重新打开此工作流，把 files 输入的连线从 raw 拖到 files 端口即可**（out 声明已在 XML 里）。
 
-**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 **dict**，消费端必须引用其**具体字段**（`files` / `count` / `changed`），不能把整个 dict 当字符串处理。同时**补 `<out>` 声明**让输出端口显式化——既可被 `_extract_field` 按字段填充，编辑器也能下拉选中具体字段，避免误连到整个 dict。
+**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 **dict**，消费端必须引用其**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。实例见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08commit-edd9851)
 
-### path 字面量保存后重开变空——前端缓存问题（2026-08 验证）
+### path 字面量保存后重开变空（2026-08 修复，commit 910fc1b）
 
 **现象**：snap_before 的 `path` 字段手动输入字面量 `.agent/wiki/` 保存后，重新打开工作流输入框又变空。
 
-**排查结论：后端链路全程正常，问题定位为前端浏览器缓存**。逐层验证：
+**误诊结论（2026-08 初期）**：后端三层验证正常（磁盘 XML 有值、xml_to_canvas 读回正确、GET /api/wf 返回正确），**初步判断为前端浏览器缓存问题**，建议硬刷新排查。
+
+**实际根因**（2026-08-18 定位）：问题在 **`syncSubworkflowNode`**（`workflow_editor.html` 中 openWf 时对 type 9 节点重跑的 schema 同步）：
+
+```javascript
+// 修复前：只保留连线，且默认值造出 blockID='' 的空 ref
+const prev={};
+(...).forEach(p=>{if(p.input?.value?.content?.blockID)prev[p.name]=...});
+n.data.inputs.inputParameters=(...).map(o=>({...value:{type:'ref',content:{blockID:prev[o.name]||'',...}}}));
+// ↑ 空 blockID 的 ref——既不是连线（blockID 空）也不是 literal → makeInputControl 的
+//   cur=(v?.type==='literal')?v.content:'' 恒空 → 输入框空白
+
+// 修复后（commit 910fc1b）：连线 ref 完整保留 + 非空字面量保留；默认值改空 literal
+```
+
+**数据链路验证**：
 
 | 环节 | 结果 |
 |------|------|
-| 磁盘 XML | ✅ `<in name="path" type="string">.agent/wiki/</in>` 有值（保存成功写入） |
-| 新代码 xml_to_canvas | ✅ 读回 `{type:'literal', content:'.agent/wiki/'}`（文本子元素有兜底解析） |
-| 当前进程 GET /api/wf | ✅ 返回的 canvas 里 path 也是 `.agent/wiki/` |
+| 磁盘 XML | ✅ `<in name="path" type="string">.agent/wiki/</in>` 有值 |
+| xml_to_canvas | ✅ 读回 `{type:'literal', content:'.agent/wiki/'}` |
+| GET /api/wf | ✅ 返回的 canvas 里 path 也是 `.agent/wiki/` |
+| **前端渲染（syncSubworkflowNode）** | ✅ **已修复——输入框正确显示** |
 
-**处置**：后端三层全部正确，问题只剩前端渲染层。**先硬刷新浏览器（Ctrl+Shift+R）** 排除编辑器 HTML 缓存再排查；若仍复现，需区分"画布节点内输入框"vs"右侧属性面板"及"关掉重开工作流"vs"刷新页面"的具体触发路径，再针对性查前端渲染代码（`workflow_editor.html` 的 `setInputLiteral` / `makeInputControl`）。
+**修复范围**：所有 type 9 节点的输入框（画布节点内，非右侧属性面板）。
 
-> **非后端缺陷**：path 字面量保存→读取→执行全链路后端均正确传递，不要往"参数传递丢失"方向排查。
+**生效方式**：改在**服务启动时载入内存的文件**（`src/static/workflow_editor.html`）——`/restart` 后 **Ctrl+F5 强刷编辑器**，重新打开 wiki_auto_maintenance → path 输入框显示 `.agent/wiki/`（不再空）。
 
 ## 工作流结构
 
@@ -85,79 +101,57 @@ start
 
 **新增背景**（2026-08-18）：此前 commit_wiki 使用固定文案，git log 中无法区分每次 wiki 维护改了什么。新增 `build_msg`（text 节点）将判官摘要注入 commit message，使每条提交都带有具体内容摘要。
 
-- **节点类型**：text（type 15），纯文本拼装，不走 LLM 调用，零额外 token 成本
-- **输入**：判官 llm 输出的 `summary`（本次更新了哪些页面、关键改动点）
-- **输出**：形如 `docs: wiki auto-maintenance — {{summary}}` 的 commit message 字符串
-- **边连接**：has_changes?(true) → build_msg → commit_wiki
+- **节点类型**：text（静态模板，引用 `{{LLM_5.summary}}`）
+- **输出格式**：`docs: wiki maintenance - {{summary}}`
+- **与 build_commit_msg 区分**：本节点的 `build_msg` 是 text 节点；`build_commit_msg` 是旧方案（已废弃）
 
 ### snap_before / diff_wiki：快照与变更清单（重构为子工作流，2026-08）
 
-**新增背景**（2026-08 修复）：此前 commit_wiki 靠 `git diff --cached --quiet` 判断是否有变更，无法精确知道改了哪些文件。引入**快照 + diff** 机制，先对 `.agent/wiki/` 打快照，再 diff 出精确的变更清单，供 commit_wiki 按清单提交。
+**重构背景**（2026-08-18）：原 diff_wiki 内嵌快照逻辑（code 节点里直接调用 `dir_snapshot` 工具 + 手动 diff），耦合度高、不易复用。拆为**通用子工作流**后：
 
-**重构**（2026-08）：快照逻辑从内联节点重构为两个**通用子工作流**，复用引擎级快照能力，供任意工作流复用：
+- `dir_snapshot`：独立子工作流，对目录打快照（可复用至其他需要快照的场景）
+- `diff_snapshots`：独立子工作流，对比两份快照输出变更清单
+- diff_wiki 简化为：先拍 after 快照 → 调 diff_snapshots 对比 before/after
 
-- **snap_before → 子工作流 `dir_snapshot`**：对目录（默认 workspace，可传 path 限定 `.agent/wiki/`）取文件快照，返回 JSON 字符串（mtime 映射）。排除 `.git` / `__pycache__`。
-- **diff_wiki → code 节点**：**after 快照必须在本节点执行时拍**（拍早了 diff 不到 update_wiki 的变更），所以 diff_wiki 是 code 节点——内部自己 walk 一遍 `.agent/wiki/`（与 dir_snapshot 同逻辑）拍 after，再调 `diff_snapshots` 子工作流对比 before/after 生成变更清单。若子工作流不可用则走**本地兜底 diff**（同语义），不炸主链路。
-- **`diff_snapshots` 子工作流**输出：
-  - `files`：逗号分隔的变更文件路径（可直接喂给 git_commit 的 files 参数）
-  - `count`：变更文件数
-  - `changed`：结构化对象列表（含 file / change 类型 new|modified|deleted），供 selector/loop/aggregator 消费
-  - 无变更时清单为空 → has_changes? 为 false → commit_wiki 静默跳过，不产生空 commit
-
-> 两个子工作流是**通用能力**，不限于 wiki——详见 [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)。
-
-**subworkflow 节点 literal 属性坑（2026-08 修复）**：调用子工作流时，`snap_before` 的 subworkflow 节点传入字面量参数（`path=".agent/wiki"`）**必须使用属性形式 `literal=".agent/wiki"`**，而不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败（子工作流收不到 path 等字面量）→ path 为空 → 快照拍整个 workspace → files 清单超长 → **WinError 206（文件名或扩展名太长）**。这是本次重构踩到的关键坑。
-
-**变更清单驱动提交**：commit_wiki 只 add 清单中的文件，避免误提交无关文件；清单为空则跳过。
+详见 [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)。
 
 ### commit_wiki 核心逻辑（git_commit 节点）
 
-```python
-# 伪代码示意：git_commit 节点内部以 subprocess 列表参数执行，不经 shell 字符串
-if 1400227.count == 0:            # 变更清单为空（引用工具节点输出的 count 字段）
-    log("No wiki changes to commit.")
-else:
-    subprocess.run(["git", "add", *"1400227.files".split(",")])  # 按清单 add（files 字段逗号分隔）
-    msg = build_msg.output + "\n\nCo-authored-by: ..."            # 自动追加署名
-    subprocess.run(["git", "commit", "-m", msg])                 # 列表参数，多行安全
-    subprocess.run(["git", "push"])
+```xml
+<node id="commit_wiki" type="git_commit" x="1800" y="300">
+  <in name="files" source="1400227.files"/>
+  <in name="message" source="build_msg"/>
+  <config>
+    <add_scope>.agent/wiki/</add_scope>
+  </config>
+</node>
 ```
 
-- **git_commit 节点**：替代原 run_shell，内部用 subprocess **列表参数**传参，commit message 多行/特殊字符不再被 shell 转义破坏
-- **引用具体字段（dict split 修复）**：`wf_diff_snapshots` 作为工具节点 raw 返回 **dict**，必须引用其**具体字段** `1400227.files`（逗号分隔字符串）与 `1400227.count`（`_dotted_get` 直接取），不能把整个 dict 当字符串 `.split(",")`；同时**补 `<out>` 声明**使节点输出端口显式化（`_extract_field` 按声明填充 + 编辑器下拉可选）
-- **自动 Co-authored-by**：提交时自动追加 `Co-authored-by` 署名（标识 wiki 由主 Agent + wiki-updater 协作维护）
-- **只提交 `.agent/wiki/` 目录**：不触碰代码文件，避免与主 Agent 的代码提交产生冲突
-- **变更清单驱动**：diff 生成的变更清单为空则不产生空 commit；非空则按清单 add+commit+push
-- **自动 push**：commit 后立即推送，确保远程仓库 wiki 始终最新
+- **files**：`1400227.files`（diff_snapshots 的输出，逗号分隔的文件路径）
+- **message**：`build_msg`（判官摘要 + Co-authored-by）
+- **add_scope**：`git add` 的范围限制（防止误提交其他文件）
+- **执行逻辑**：无变更（`files=''` 或 `count=0`）→ 静默跳过；有变更 → `git add` → `git commit` → `git push`
+
+**与子工作流的关系**：`dir_snapshot` / `diff_snapshots` 是通用子工作流（在 `.agent/workflows/`），`commit_wiki` 是主工作流内的节点。重构后主工作流更清晰，子工作流可被其他工作流复用（如代码变更检测、配置变更审计等）。
 
 ## 与其他模块的关系
 
-| 模块 | 关系 |
-|------|------|
-| [update_wiki / wiki-updater](../home.md#维护约定) | 前置节点，负责 wiki 内容更新并输出报告摘要；build_msg 消费判官摘要 |
-| [工作流引擎与钩子](../architecture/workflow-hooks.md) | 本工作流为普通工具工作流（非钩子），由主 Agent 显式调用或编排触发；git_commit 为引擎提供的 git 专用节点 |
-| [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md) | 快照与变更检测能力，从本工作流内联节点重构拆分而来，供任意工作流复用 |
-| [wiki_auto_query](wiki-auto-query.md) | 读侧：before_turn 钩子自动检索 wiki；本页是写侧：自动维护并提交 wiki |
-| [v0.18.2 发布记录](../releases/v0.18.2.md) | wiki 自动提交为本次交付项之一 |
+- **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）
+- **Git 集成**：`src/git_utils.py`，`git_commit` 节点的底层实现（subprocess 列表参数）
+- **Wiki 更新工具**：`tools/update_wiki.py`，`update_wiki` 插件节点的实现
+- **前端编辑器**：`src/static/workflow_editor.html`，输入框渲染（已修复字面量保存问题）
 
 ## 注意事项
 
-- **触发时机**：应在主 Agent 完成代码改动并提交代码后触发，避免 wiki 描述了尚未提交的代码
-- **快照时序（关键）**：`snap_before` 必须在 `update_wiki` **之前**执行（打更新前基线）；`after` 快照必须在 `update_wiki` **之后**由 diff_wiki 节点执行时拍（拍早了 diff 不到变更）。这是"改前拍快照 → 改后 diff"的通用时序
-- **commit message 演进**：从固定文案 → 动态摘要（build_msg 注入判官摘要）→ 自动追加 Co-authored-by，git log 可追溯每次 wiki 维护的具体内容与协作方
-- **git_commit 节点 vs run_shell**：涉及多行/特殊字符的 commit message **必须走 git_commit 节点的列表参数**，不要退回 shell 字符串拼接（shell 转义是原失败根因，run_shell 版从未成功）
-- **text 节点零成本**：build_msg 为 text 节点（纯文本拼装），不触发 LLM 调用，不增加 token 开销
-- **工具节点输出是 dict（关键）**：`wf_diff_snapshots` 等工具节点 raw 返回 **dict**，消费端必须引用**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`
-- **subworkflow literal 用属性形式**：调用子工作流传字面量参数时，**必须用 `literal="值"` 属性形式**，不要用子元素形式（会导致参数传递失败 → path 空 → 快照全盘 → WinError 206）
-- **快照子工作流**：dir_snapshot / diff_snapshots 是引擎级通用能力，`path` 留空即扫描整个 workspace；本工作流传 `path=.agent/wiki/` 缩小扫描范围（文件量小，成本可忽略）
-- **diff_snapshots 输出复用**：`files`（逗号分隔）可直接作为 git_commit 的 files 参数；`changed` 结构化对象供选择器/聚合进一步处理
-- **path 字面量保存后重开变空 → 先刷浏览器**：后端保存→读取→执行链路已验证正常，问题定位为**前端浏览器缓存**；若复现先 Ctrl+Shift+R 硬刷新排除缓存，再区分输入位置/触发路径针对性查前端渲染代码
-- **并发安全**：若多 Agent 并发运行，commit_wiki 的 git 操作可能冲突；建议同一仓库同一时刻只有一个 wiki_auto_maintenance 在跑
+- **工具节点输出是 dict**（2026-08 修复，commit edd9851）：消费端必须引用具体字段（`files` / `count` / `changed`），不能引用整个 dict
+- **subworkflow 节点 literal 属性约定**（2026-08）：传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`），否则参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206
+- **前端输入框字面量**（2026-08 修复，commit 910fc1b）：type 9 节点的输入框（画布节点内）字面量保存后重开变空——`syncSubworkflowNode` 只保留连线，默认值造出 `blockID=''` 的空 ref → 输入框空白。修复后连线 ref 完整保留 + 非空字面量保留；默认值改空 literal。**生效需 `/restart` + Ctrl+F5 强刷编辑器**
+- **路径字面量**：`path` 参数通常用字面量（如 `.agent/wiki/`），保存在磁盘 XML 中，后端链路正常（xml_to_canvas 读回正确、GET /api/wf 返回正确），前端渲染已修复
 
 ## 相关页面
 
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)：工作流节点类型（含 text type 15、git_commit 节点、subworkflow literal 属性约定）
-- [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)：快照与变更检测能力详解（本工作流为首个消费方）
-- [wiki_auto_query](wiki-auto-query.md)：wiki 读侧——before_turn 自动检索注入
-- [知识库导航](../home.md)：维护约定中提及 update_wiki
-- [v0.18.2 发布记录](../releases/v0.18.2.md)：版本交付内容总览
+- [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)
+- [工作流引擎与钩子](../architecture/workflow-hooks.md)
+- [配置体系与模型调优](../guides/config-and-models.md)
+- [运维、可观测性与排障](../guides/ops.md)
+- [v0.18.2 发布记录](../releases/v0.18.2.md)

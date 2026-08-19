@@ -56,6 +56,40 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 
 before_turn 实例：**wiki_auto_query**（默认关闭）——三档漏斗（LLM1 意图识别 → wiki 搜索 → LLM2 精排），related=False 短路零搜索零 LLM2；四场景全链路已验证，详见 [wiki_auto_query](../features/wiki-auto-query.md)。
 
+### 同步钩子异常边界（2026-08 修复，commit c563ca7）
+
+**背景**：同步钩子（`_run_one`）此前未包 try，`run_hook` 抛异常会从 `ThreadPoolExecutor.fut.result()` 冒泡，炸掉整个 `_run_hooks`——同 hook 其他钩子结果全丢 + 主循环报错。
+
+**修复**：在 `_run_one` 内层补 try/except，单个钩子失败只发 `auto_wf_error` 事件 + 返回 `(False, "", "")`（不注入），同 hook 其他钩子照常并行执行、结果照常合并。
+
+```python
+def _run_one(hw):
+    # src/agent.py L1020-L1040
+    ...
+    try:
+        try:
+            inject, result, message = run_hook(...)
+        finally:
+            hook_llm._scene_override = _ov
+        return hw["name"], inject, result, message
+    except Exception as e2:
+        # 单个钩子失败不拖垮并行组：发错误事件 + 返回空结果（不注入）
+        self._emit({"type": "auto_wf_error", ...})
+        return hw["name"], False, "", ""
+```
+
+**三层异常边界**（当前代码已齐）：
+
+| 位置 | 异常处理 |
+|------|----------|
+| async 钩子 `_async_hook` | ✅ 有 try（发 `auto_wf_error`） |
+| 同步钩子 `_run_one` | ✅ **本次补上**（发 `auto_wf_error` + 空结果） |
+| 外层 `_run_hooks` | ✅ 有 try（`_LOG.error` 兜底） |
+
+**设计意图**：与 async 钩子对称——单个钩子失败不影响同 hook 其他钩子并行执行，主循环稳定继续。错误通过 `auto_wf_error` 事件透出（可在 WebUI 观测），不注入主上下文。
+
+**生效**：当前进程跑旧代码，`/restart` 后生效。
+
 ## 快照副作用检测（after_tool 闭环）
 
 通过 `dir_snapshot` + `diff_snapshots` 通用子工作流，在 after_tool 钩子中检测工具执行产生的文件变更（如 wiki 更新、配置改写），并将变更清单注入上下文供后续决策使用。**不依赖工具返回值**，纯被动检测。

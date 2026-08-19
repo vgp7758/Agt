@@ -247,9 +247,11 @@ def read_config(agent) -> dict:
         import config as _cfg2
         cfg["detail_base"] = _cfg2.load_detail_base()
         cfg["detail_step"] = _cfg2.load_detail_step()
+        cfg["panic_context_window"] = _cfg2.load_panic_window()
     except Exception:
         cfg["detail_base"] = 1500
         cfg["detail_step"] = 15
+        cfg["panic_context_window"] = 0
     # 统一辅助模型（存 settings.json；空=跟随主模型）：recap/RAG检索/工作流LLM默认共用
     cfg["utility_model"] = getattr(agent, "utility_model", "") or ""
     return cfg
@@ -339,6 +341,19 @@ def apply_config(agent, values: dict) -> list:
                            "（recap/RAG检索/工作流LLM默认共用；已存 settings.json + 即时生效）")
         except Exception as e:
             results.append(f"⚠️ utility_model 设置失败：{e}")
+    # panic_context_window：轮内保命阀阈值（存 settings.json + 即时生效——_build 每次 build 实时读）
+    # 0 = 跟随 max_effective_context_window；设高（如总窗口 80%）则 75%×win~panic 之间纯追加
+    if "panic_context_window" in values:
+        v = values.pop("panic_context_window")
+        try:
+            val = max(0, int(str(v).strip() or 0))
+            import config
+            saved = config.load_runtime_settings(); saved["panic_context_window"] = val
+            config.save_runtime_settings(saved)
+            results.append(f"✅ panic_context_window = {val or '0（跟随分档窗口）'}"
+                           f"（已存 settings.json + 即时生效）")
+        except Exception as e:
+            results.append(f"⚠️ panic_context_window 设置失败：{e}")
     # detail_base / detail_step：步距衰减参数（存 settings.json + 改 toollog 模块变量即时生效）
     for _dk in ("detail_base", "detail_step"):
         if _dk in values:
@@ -1255,6 +1270,7 @@ def build_default_registry() -> CommandRegistry:
         "/config enable_thinking true   思考模式开关\n"
         "/config max_level 4            分档最高级别\n"
         "/config detail_base 1500       步距衰减初始字数\n"
+        "/config panic_context_window 160000  保命阀阈值（0=跟随分档窗口；轮内超此线才应急折叠）\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"
         "/config dump_projections true  投影转储（调试用）")
     reg.register("budget", _cmd_budget,

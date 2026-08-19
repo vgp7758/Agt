@@ -830,13 +830,27 @@ class Session:
         prefix_len = len(msgs)
         win = self.max_effective_context_window
 
+        # 保命线（独立运行时设置 panic_context_window，settings.json；0/缺省=跟随分档窗口）：
+        # 用户常把分档窗口设为模型总窗口的 ~50%，而保命线可独立设高（如总窗口 80%）——
+        # 轮内投影在 75%×win ~ panic 之间【纯追加零调整】（前缀缓存最优），超 panic 才应急止血。
+        panic_win = config.load_panic_window() or win
+        settle = int(win * 0.9)   # 应急回落目标：分档线 90%（一次折到位留余量，防同轮二次触发——t228 教训）
+
         fold_count = self._planned_fold
         # 轮内零升档：直接渲染（_planned_graduates 已在轮边界应用，body 已含升档后的档位）
+        panic_mode = False
         for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
             body = self._render_tiered_body(fold_count)
-            if self._estimate_tokens(msgs[:prefix_len] + body) <= win:
-                break
-            if self._graduate_once():          # 轮内应急：超 100% 才走到这（保命阀）
+            est = self._estimate_tokens(msgs[:prefix_len] + body)
+            if not panic_mode:
+                if est <= panic_win:
+                    break                                   # 保命线内：零调整（75%~panic 纯追加）
+                panic_mode = True                           # 首次超线 → 应急模式（此后回落目标 settle）
+                _LOG.info("保命阀触发：投影 est=%d 超 panic=%d（win=%d），回落至 ≤%d",
+                          est, panic_win, win, settle)
+            if est <= settle:
+                break                                       # 已回落到位
+            if self._graduate_once():                       # 先升档（无损压缩）止血
                 continue
             nxt = self._next_fold_target(fold_count)
             if nxt is not None:

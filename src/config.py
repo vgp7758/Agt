@@ -166,6 +166,16 @@ def load_detail_base() -> int:
         return 1500
 
 
+def load_panic_window() -> int:
+    """轮内保命阀阈值（settings.json 的 panic_context_window；0=跟随 max_effective_context_window）。
+    独立于分档窗口：分档窗口常设为总窗口 ~50%（_plan_fold 折到 75%×它），保命线可设为
+    总窗口 ~80%——轮内投影在 75%×win ~ panic 之间纯追加零调整（缓存最优），超 panic 才应急。"""
+    try:
+        return int(load_runtime_settings().get("panic_context_window", 0) or 0)
+    except Exception:
+        return 0
+
+
 def load_detail_step() -> int:
     """步距衰减的每步减少字数（settings.json 的 detail_step；默认 15）。"""
     try:

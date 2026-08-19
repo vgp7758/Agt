@@ -12,7 +12,7 @@
           llm_client.py（多模型回退链、token 轮换、DSML 兜底、scene/turn/step 调用埋点、usage 归一化）
           session.py（分层上下文引擎、事件流持久化、分档投影）
 ─────────────────────────────────────────────────
-能力层    real_tools.py（130+ 内置工具）  tools.py（Tool/Toolbox schema）
+能力层    real_tools.py（130+ 内置工具，含 diff_files 文件级 Myers Diff，见 [features/diff-files](../features/diff-files.md)）  tools.py（Tool/Toolbox schema）
           mcp_client.py  lsp_manager.py  workflow.py + workflow_xml.py
           multiagent.py（子 Agent）  registry.py（团队注册表）
 ─────────────────────────────────────────────────

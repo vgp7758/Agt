@@ -17,6 +17,7 @@
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写） | 改前端气泡 / 调交互 |
+| [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / hunk 分组 / 回溯层错位 bug 教训） | 需要行级文件对比 / 复查 diff 算法 |
 | [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交（提交成功闭环） | 查版本交付内容 / 发布流程 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
 | [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
@@ -38,6 +39,7 @@
 - **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（commit_wiki 改 git_commit 节点）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
 - **wiki 提交失败修复并闭环**（2026-08）：commit_wiki 从 run_shell 改 **git_commit 节点**（subprocess 列表参数规避 shell 多行转义），快照逻辑重构为 **dir_snapshot / diff_snapshots 通用子工作流**（snap_before 打更新前基线 → update_wiki → diff_wiki 拍 after 并 diff 生成变更清单，无变更静默跳过），自动追加 Co-authored-by；**实战成功**（commit 1577693 / 0293eec）——详见 [wiki-auto-maintenance](features/wiki-auto-maintenance.md#提交失败问题2026-08-修复) 与 [快照子工作流](architecture/snapshot-diff.md)
 - **变更调用原文收集→before_answer 直供**（2026-08-19，commit 16d6832）：引擎把快照 diff 检出的**有文件变更的工具调用原文**（edit old/new、write content、结果预览[:800]、changed_files）存入 `_turn_changed_calls` 并透传给 before_answer 钩子；wiki_auto_maintenance 新增 fmt_calls 渲染后拼进 update_wiki 任务文本——子 Agent 无需 read_file 重读源文件，显著降低推理负担与子工作流耗时；快照触发条件扩展为 after_tool **或** before_answer 任一钩子在（见 [workflow-hooks · changed_calls](architecture/workflow-hooks.md#changed_calls-变更调用收集before_answer-透传2026-08-19)、[wiki-auto-maintenance · 推理减负](features/wiki-auto-maintenance.md#推理减负changed_calls-直供2026-08-19commit-16d6832)）
+- **diff_files 文件级 diff 工具**（2026-08-19，commit b869939）：Myers Diff 对比两文件（完整/相对路径，`_resolve` 沙箱），unified 风格 hunk 输出（`-N│/+N│` 行号与 read_file 一致）；copy 版算法的回溯层错位 bug（`prev_x` 从 `trace[d-1]` 取、与 `prev_k` 判断差一层）已修，经 2000 随机重放 + 500 DP 最优性对照 + 边界全过验证——详见 [diff-files](features/diff-files.md)
 - 唤醒链路端到端验证（三阶段）：阶段一 /api/status 跨实例调用通过；阶段二 9100 反复退出根因修正为端口被旧实例占用（已清理，非代码 bug）；阶段三 stdin 通道验证通过、观测点日志已埋，等待首轮完成闭环（见 [multi-agent 端到端验证状态](architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）
 
 ## 维护约定

@@ -45,6 +45,10 @@
 | 排除范围 | 更广：`.git`/`.agent`/`.agt` + gitignore 全模式 + 嵌套 git 仓库整棵剪枝 | 基础：`.git`/`__pycache__` |
 | 输出 | `changed_files` 数组直传钩子 | `files`(逗号分隔) + `count` + `changed`(结构化) |
 
+## 与 diff_files 工具的分工（2026-08-19 新）
+
+本页两子工作流是 **目录级 · mtime 级**检测（只回答"哪些文件变了"，不看内容）；新工具 [diff_files](../features/diff-files.md)（`src/real_tools.py`）是 **单文件 · 行级内容** diff（Myers Diff + unified hunk 输出，回答"具体改了什么"）。典型组合：diff_snapshots 生成变更清单 → 对关注的文件逐个 `diff_files` 看内容差异（如快照回溯点 vs 当前、备份 vs 改后）。
+
 ## subworkflow literal 属性坑（2026-08 修复）
 
 调用子工作流传**字面量参数**（如 `path=".agent/wiki/"`）时，**必须用属性形式 `literal=".agent/wiki"`**，不能用子元素形式（`<literal>...</literal>`）。子元素形式会导致参数传递失败——子工作流收不到字面量，快照/diff 无法正确限定目录。**后果**：`path` 为空 → 快照拍了整个 workspace → `files` 清单超长 → **WinError 206（文件名或扩展名太长）**。这是重构时踩到的关键坑，已在 wiki_auto_maintenance 的 snap_before 节点修正。
@@ -83,9 +87,11 @@
 - `path` 留空扫描整个 workspace，文件量大时成本偏高；尽量传 `path` 缩小范围
 - **注意时序**：before 快照在改动前拍，after 快照在改动后拍，由调用方（code 节点或子工作流编排）保证顺序
 - **工具节点输出是 dict**：消费 `wf_diff_snapshots` 必须引用具体字段（`_dotted_get`）并补 `<out>` 声明，见上文"消费端注意"
+- 想看**文件内容行级差异**（而非仅文件清单），接 [diff_files 工具](../features/diff-files.md)
 
 ## 相关页面
 
 - [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交；含 dict split 报错修复 + path 前端缓存问题
+- [diff_files 工具](../features/diff-files.md)：行级内容 diff（Myers Diff + unified 输出），与本页 mtime 级目录快照互补
 - [工作流引擎与钩子](workflow-hooks.md)：git_commit 节点 + 引擎内部快照闭环 + subworkflow literal 属性约定
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：快照子工作流重构为本次交付项之一

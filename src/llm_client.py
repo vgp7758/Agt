@@ -341,16 +341,20 @@ class LLMClient:
             _LOG.warning("reasoning_completer(%s) 补全失败：%s，回退原处理", self.reasoning_completer, e)
             return ""
 
-    def chat(self, messages, scene: str = None, **overrides) -> LLMResponse:
+    def chat(self, messages, scene: str = None, turn: int = None, step: int = None, **overrides) -> LLMResponse:
         """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。
         scene：调用时机标注（react主循环/hook:before_turn/recap/debug/wrap_up/completer...），
         记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 _scene_override（钩子上下文）
-        或默认 'llm.chat'。不进 API 请求参数。"""
+        或默认 'llm.chat'。不进 API 请求参数。
+        turn/step：与投影转储（projections/t{turn}_s{step}_*.txt）同源的轮/步标记，记入
+        llm_calls.jsonl——/stats tooltip 可显示 'react · t220 · s0' 直接对上投影文件。"""
         self._scene_ctx = scene or getattr(self, "_scene_override", None) or "llm.chat"
+        self._turnstep_ctx = (turn, step) if turn is not None else None
         try:
             return self._chat_with_fallback(messages, **overrides)
         finally:
             self._scene_ctx = None
+            self._turnstep_ctx = None
 
     def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
         """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。"""
@@ -417,12 +421,14 @@ class LLMClient:
             return
         try:
             from llm_call_log import normalize_usage
+            _ts = getattr(self, "_turnstep_ctx", None)   # (turn, step)：react 主循环的轮/步标记（对上 projections 文件名）
             rec({
                 "ts": time.time(),
                 "model": model or self.model_name,
                 "resp_model": resp_model or "",
                 "scene": scene or getattr(self, "_scene_ctx", None)
                          or getattr(self, "_scene_override", None) or "llm.chat",
+                **({"turn": _ts[0], "step": _ts[1]} if _ts else {}),
                 "attempt": attempt, "max_tokens": max_tokens,
                 "finish_reason": finish_reason, "usage": normalize_usage(usage),
                 "elapsed": round(elapsed, 2), "outcome": outcome,

@@ -1323,7 +1323,9 @@ class Agent:
                         # （_chat_msgs 内部清空 _hook_notes，故本步工具钩子产生的新旁注留给下一步；
                         #  重试复用同一 msgs 快照，旁注不丢失也不重复注入）
                         msgs = self._chat_msgs()
-                        resp = self.llm.chat(msgs, tools=tool_schemas, scene="react")
+                        _t_num = len(self.session.turns)   # 与 _dump_projection 同源（对上 projections/t{N}_s{M} 文件名）
+                        _s_num = len(self.session._current.steps) if self.session._current else 0
+                        resp = self.llm.chat(msgs, tools=tool_schemas, scene="react", turn=_t_num, step=_s_num)
                         # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
                         # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
                         # function calling 重试一次（重试结果不再二次检查，避免无限循环）。
@@ -1345,7 +1347,7 @@ class Agent:
                                     msgs + [{
                                         "role": "system",
                                         "content": "你上一轮返回了空内容。请给出明确的最终回答，或调用工具继续完成任务，不要返回空内容。"
-                                    }], tools=tool_schemas, scene="react")
+                                    }], tools=tool_schemas, scene="react", turn=_t_num, step=_s_num)
                                 if r2.tool_calls or (r2.content or "").strip():
                                     resp = r2
                             except Exception:

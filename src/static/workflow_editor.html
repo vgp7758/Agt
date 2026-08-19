@@ -1505,7 +1505,7 @@ function showProps(){
       }
       h+='</div>';
     });
-    h+='<button onclick="addBranch()">+ 分支</button>';
+    h+='<button onclick="addBranchCanvas()">+ 分支</button>';
   }
   p.innerHTML=h;
   }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
@@ -2269,7 +2269,7 @@ function setListItemType(kind,fi,itemType){
   if(itemType==='object'){const a=[];(f.input||f).schema=a;if(f.input)f.input.schema=a;}
   else{const sch={type:itemType};if(f.input)f.input.schema=sch;else f.schema=sch;}
   showProps();}
-function addBranchCanvas(){const n=findN(selNode);n.data.inputs.branches.push({condition:{logic:2,conditions:[]}});renderAll();}
+function addBranchCanvas(){const n=findN(selNode);n.data.inputs.branches.push({condition:{logic:2,conditions:[]}});showProps();renderAll();}
 
 // ============ 文件操作 ============
 async function api(method,path,body){

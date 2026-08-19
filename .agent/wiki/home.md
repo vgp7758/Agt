@@ -18,7 +18,7 @@
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写） | 改前端气泡 / 调交互 |
-| [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / 回溯层错位 bug 教训） | 需要行级文件对比 / 复查 diff 算法 |
+| [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 / 复查 diff 算法 |
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
@@ -45,6 +45,7 @@
 - **LIGHT_TOOLS 隐藏工具增强**（2026-08，commit 9fb00de）：新增 `diff_lines`（文本级 Myers diff，与 diff_files 共享渲染）、`get_list_item`（列表元素取值，outputs=any，越界安全），配合 plugin 节点工作流节点间文本比较/列表操作无需落盘
 - **run_python 工具新增 args 参数**（2026-08，commit 9fb00de）：`run_python(code="...", file="...", args="...")`，经环境变量 `PY_ARGS` 传递（code 和 file 两模式都生效），脚本内 `import os; a = os.environ.get("PY_ARGS", "")` 读取，让已保存脚本可参数化复用（详见 [run_python 页](features/run-python.md)）
 - **diff_files 读放行（读写不对称）**（2026-08，commit 9fb00de）：新增 `_resolve_read`，越界（绝对路径 / `../` 逃逸）放行为直接路径——现在可以对比 workspace 外的备份/参照文件，写操作仍走严格沙箱
+- **diff_files 分段对比 range_a/range_b**（2026-08-20，commit 096fcbe）：大文件截断（20k）时先全文看大致范围再逐段精比；只传 range_a 时 range_b 默认同值，两文件行号错位各传各的；**输出行号仍为文件内绝对行号**（`_render_unified_diff` 加 a_offset/b_offset 还原），diff 结果可直接喂 edit/replace_lines。附教训：`_parse_range` 成功返回 (a,b) 元组被 `if err:` 当 truthy 错误——错误通道只放错误（详见 [diff-files 页](features/diff-files.md#分段对比range_arange_b2026-08-20新commit-096fcbe)）
 - **执行时序修复：插话不滞留 + 并行钩子 UI**（2026-08-19，commit fb115aa，用户实测 8 条现象闭环）：① answer 完成后旧版只查 inbox、漏 pending_messages（插话队列）→ 插话滞留至用户下次发消息；现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮（新轮 before_turn 检索的即插话内容）。② 同 hook 挂多个 before_turn 工作流时，前端「执行中」行由单变量改 Map 按 `hook::name` 索引，互不覆盖（详见 [user-interaction](features/user-interaction.md)）
 
 ## 维护约定

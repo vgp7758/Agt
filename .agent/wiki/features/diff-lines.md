@@ -41,7 +41,7 @@
 ## 实现：与 diff_files 共享渲染
 
 - **`_myers_diff(a_lines, b_lines)`**：纯算法函数（见 [diff_files 页](diff-files.md#实现纯算法--工具入口分层)）
-- **`_render_unified_diff`**：公共渲染函数——`diff_files` 和 `diff_lines` 共用，将 Myers ops 转为 unified diff 文本
+- **`_render_unified_diff`**：公共渲染函数——`diff_files` 和 `diff_lines` 共用，将 Myers ops 转为 unified diff 文本。2026-08-20 起（commit 096fcbe）带 `a_offset`/`b_offset` 参数供 diff_files 分段对比时行号还原绝对行号；diff_lines 不传（默认 0，全文对比行号本就绝对）
 - **`diff_lines`**：工具入口——收文本字符串 → 按行 split → `_myers_diff` → `_render_unified_diff`
 
 ## 与其他 diff 能力的关系
@@ -49,7 +49,7 @@
 | 能力 | 粒度 | 用途 |
 |------|------|------|
 | [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md) | 目录 · mtime | 哪些文件变了（files/count/changed） |
-| [diff_files](diff-files.md) | 单文件 · 行级内容 | 具体改了什么（需落盘） |
+| [diff_files](diff-files.md) | 单文件 · 行级内容 | 具体改了什么（需落盘；支持 range_a/range_b 分段对比） |
 | **diff_lines**（本页） | 内存文本块 · 行级内容 | 两个文本块按行 Myers diff（无需落盘） |
 | 引擎 `_workspace_snapshot` / `_diff_snapshots` | 目录 · mtime | after_tool 副作用检测 → changed_files |
 
@@ -65,10 +65,11 @@
 - 工具注册后需 `/restart` 才在当前进程工具箱可见
 - 与 diff_files 输出格式一致（同用 `_render_unified_diff`）
 - 变更行带行号（`-N│`/`+N│`），上下文行仅两空格前缀——解析输出时注意区分
+- 文本块对比无分段能力（无 range 参数）——大文本分段对比需先落盘走 [diff_files 的 range_a/range_b](diff-files.md#分段对比range_arange_b2026-08-20新commit-096fcbe)
 
 ## 相关页面
 
-- [diff_files 工具](diff-files.md)：文件级 diff（沙箱路径/读写不对称/回溯层错位 bug）
+- [diff_files 工具](diff-files.md)：文件级 diff（沙箱路径/读写不对称/range_a 分段对比/回溯层错位 bug）
 - [run_python 工具](run-python.md)：脚本参数化执行，常与 diff_lines 配合
 - [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md)：目录级 mtime 快照对比，与本工具互补
 - [系统总览](../architecture/overview.md)：能力层 real_tools.py

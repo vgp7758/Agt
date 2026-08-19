@@ -192,6 +192,17 @@
   /* 中断轮的继续按钮区 */
   .interrupted-bar { display:flex; align-items:center; gap:10px; color:#8a9099; font-size:13px; }
   .interrupted-bar button { color:#059669; border-color:#a7f3d0; }
+  /* 气泡级复制按钮（user/answer 气泡 hover 浮现；挂在 row/col 上不被 answer 的 innerHTML 重写清掉） */
+  .bubble-copy { position:absolute; top:100%; margin-top:2px; padding:2px 7px; font-size:11px;
+    background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
+    opacity:0; transition:opacity .15s; z-index:5; }
+  .bubble-copy:hover { background:#f3f4f6; color:#1f2329; }
+  .row.me { position:relative; }
+  .row.me:hover .bubble-copy { opacity:1; }
+  .row.me .bubble-copy { right:0; }
+  .turn { position:relative; }
+  .turn:hover .bubble-copy { opacity:1; }
+  .turn .bubble-copy { left:0; }
   /* 历史展开条（读档时默认只渲染当前档，点击往回展开一档） */
   .expand-bar { text-align:center; color:#2563eb; cursor:pointer; padding:10px 0 4px;
     font-size:13px; user-select:none; }
@@ -459,6 +470,7 @@ function newTurn(){
   const box=document.createElement('div'); det.appendChild(box);
   const ans=document.createElement('div'); ans.className='bubble';
   col.appendChild(det); col.appendChild(ans); wrap.appendChild(col);
+  attachCopyBtn(col, ans);   // 气泡级复制（挂在 col 上——answer 的 innerHTML 重写不影响按钮）
   msgArea.appendChild(wrap);
   curTurn={traceBox:box, answerEl:ans, det};
   scrollBottom();
@@ -654,7 +666,9 @@ function renderHistTurn(t, box, isLast){
   if(t.user){
     const urow=document.createElement('div'); urow.className='row me';
     const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
-    urow.appendChild(ub); box.appendChild(urow);
+    urow.appendChild(ub);
+    attachCopyBtn(urow, ub);   // 历史用户气泡同款复制按钮
+    box.appendChild(urow);
   }
   // bot 回复（过程 trace + answer）
   const row=document.createElement('div'); row.className='row bot';
@@ -664,6 +678,7 @@ function renderHistTurn(t, box, isLast){
   const traceBox=document.createElement('div'); det.appendChild(traceBox);
   const ans=document.createElement('div'); ans.className='bubble';
   col.appendChild(det); col.appendChild(ans); row.appendChild(col);
+  attachCopyBtn(col, ans);   // 历史 answer 气泡同款复制按钮
   box.appendChild(row);
   // 临时借用全局渲染函数：把 curTurn 指向本行
   const prev=curTurn; curTurn={traceBox, answerEl:ans, det};
@@ -749,8 +764,38 @@ function addUserBubble(text, imgs){
     imgs.forEach(s=>{ const im=document.createElement('img'); im.src=s; gal.appendChild(im); });
     b.appendChild(gal);
   }
-  row.appendChild(b); msgArea.appendChild(row); scrollBottom();
+  row.appendChild(b);
+  attachCopyBtn(row, b);   // 气泡级复制（挂在 row 上，不进 bubble 内容）
+  msgArea.appendChild(row); scrollBottom();
   return row;
+}
+// 气泡级复制按钮：host（row/col，hover 触发区+定位容器）+ bubble（取文本的目标）
+// 按钮是 host 的子节点而非 bubble 的——answer 内容会被 innerHTML 重写（finishAnswer/spec/survey），
+// 放 bubble 里会被清掉；放 host 上则与内容解耦，随时复制当前内容。
+function attachCopyBtn(host, bubble){
+  if(!host || !bubble || host.querySelector('.bubble-copy')) return;
+  const btn=document.createElement('button');
+  btn.className='bubble-copy'; btn.textContent='📋 复制';
+  btn.title='复制整个气泡内容到剪贴板';
+  btn.onclick=()=>{
+    const text=(bubble.innerText||'').replace(/\u00a0/g,' ').trimEnd();
+    if(!text.trim()){ toast('气泡无文本'); return; }
+    const done=()=>{ btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='📋 复制',1500); };
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(text).then(done).catch(()=>{
+        const ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); done(); }catch(e){ toast('复制失败'); }
+        document.body.removeChild(ta);
+      });
+    } else {
+      const ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); done(); }catch(e){ toast('复制失败'); }
+      document.body.removeChild(ta);
+    }
+  };
+  host.appendChild(btn);
 }
 // 用户消息前的时间分隔行（居中灰字）——仅实时发送时显示当前时间（历史轮无时间戳数据）
 function addTimeDivider(){

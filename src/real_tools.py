@@ -80,14 +80,15 @@ def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
     return True, current, ""
 
 
-def _run_subprocess_streaming(args, name, shell=False):
+def _run_subprocess_streaming(args, name, shell=False, env=None):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。
+    env: 附加环境变量（None=继承父进程）；run_python 用它注入 PY_ARGS。
     Windows 加 CREATE_NO_WINDOW：detached（/restart 看门狗拉起）进程无控制台时，
     子进程默认各弹一个终端窗，闪退即此。"""
     proc = subprocess.Popen(
         args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, cwd=str(WORKSPACE), shell=shell,
+        text=True, cwd=str(WORKSPACE), shell=shell, env=env,
         creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
         bufsize=1, encoding="utf-8", errors="replace",
     )
@@ -185,23 +186,29 @@ def _run_subprocess_streaming(args, name, shell=False):
     return "".join(output_lines).strip() or "(无输出)"
 
 
-def run_python(code: str = "", file: str = "") -> str:
+def run_python(code: str = "", file: str = "", args: str = "") -> str:
     """运行 Python，实时流式输出（支持长任务进度）。独立子进程执行。二选一：
     - code：一段内联 Python 代码（写临时文件再跑）；
     - file：运行一个已存在的 .py 文件（跑已保存的脚本用这个，别再用 subprocess 包壳）。
-    """
+    args: 传给脚本的参数字符串（子进程经环境变量 PY_ARGS 读取：
+      `import os; a = os.environ.get("PY_ARGS", "")`——可放 JSON/CSV 等任意格式，脚本自行解析）。
+      file 和 code 模式都生效，让已保存脚本可参数化复用（同类脚本不同参数不必改代码）。"""
+    env = None
+    if args:
+        env = dict(os.environ)
+        env["PY_ARGS"] = str(args)
     if file:
         target = _resolve(file)
         if not target.exists():
             return f"[文件不存在] {file}"
-        return _run_subprocess_streaming([sys.executable, str(target)], f"run_python {file}")
+        return _run_subprocess_streaming([sys.executable, str(target)], f"run_python {file}", env=env)
     if not code:
         return "[参数缺失] run_python 需传 code（内联代码）或 file（.py 文件路径）"
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmp = f.name
     try:
-        return _run_subprocess_streaming([sys.executable, tmp], "run_python")
+        return _run_subprocess_streaming([sys.executable, tmp], "run_python", env=env)
     finally:
         try:
             os.unlink(tmp)
@@ -2110,24 +2117,23 @@ def _myers_backtrack(trace, A, B, D):
     return result
 
 
-def diff_files(file1: str, file2: str, context: int = 2) -> str:
-    """Myers Diff 对比两个文件，返回 unified diff 风格的差异（@@ hunk 头 + -/+ 行）。
-    file1/file2: workspace 内路径（相对或绝对均可，沙箱限定）；
-    context: 每个 hunk 前后的上下文行数（默认 2）。
-    头部含两侧行数/增删统计；完全相同返回「无差异」。适合对比 改前/改后、备份/当前。"""
-    t1, t2 = _resolve(file1), _resolve(file2)
-    if not t1.exists():
-        return f"[文件不存在] {file1}"
-    if not t2.exists():
-        return f"[文件不存在] {file2}"
-    A = t1.read_text(encoding="utf-8", errors="ignore").splitlines()
-    B = t2.read_text(encoding="utf-8", errors="ignore").splitlines()
-    ops = _myers_diff(A, B)
+def _resolve_read(path: str) -> Path:
+    """只读场景的路径解析：先按 workspace 沙箱解析；越界（绝对路径或 ../ 逃逸）时放行为
+    直接路径——diff_files 等纯只读工具用（对比 workspace 外的备份/参照文件）。
+    写操作仍走 _resolve 严格沙箱（读写不对称：读放行、写拦截）。"""
+    try:
+        return _resolve(path)
+    except PermissionError:
+        p = Path(path)
+        return p if p.is_absolute() else (WORKSPACE / path).resolve()
+
+
+def _render_unified_diff(A, B, ops, label1, label2, context):
+    """公共渲染：Myers ops → unified diff 文本（@@ hunk + 带行号 -/+ 行）。diff_files/diff_lines 共用。"""
     dels = sum(1 for a, _ in ops if a == '-')
     adds = sum(1 for a, _ in ops if a == '+')
     if not dels and not adds:
-        return f"[无差异] {file1} 与 {file2} 内容相同（{len(A)} 行）"
-    # 标注行号（A 侧 1-based / B 侧 1-based；'+' 行无 A 号，'-' 行无 B 号）
+        return f"[无差异] {label1} 与 {label2} 内容相同（{len(A)} 行）"
     annot, i1, i2 = [], 0, 0
     for act, ln in ops:
         if act in (' ', '-'):
@@ -2136,19 +2142,16 @@ def diff_files(file1: str, file2: str, context: int = 2) -> str:
             i2 += 1
         annot.append((act, ln, i1 if act in (' ', '-') else None,
                       i2 if act in (' ', '+') else None))
-    # hunk 分组：changed 行的连续段（间隔 ≤ 2*context+1 合并），各扩 context 行上下文
     ctx = max(0, int(context))
     changed_idx = [i for i, (a, *_r) in enumerate(annot) if a != ' ']
-    hunks = []
-    s = 0
+    hunks, s = [], 0
     for j in range(1, len(changed_idx) + 1):
         if j == len(changed_idx) or changed_idx[j] - changed_idx[j - 1] > 2 * ctx + 1:
             lo = max(0, changed_idx[s] - ctx)
             hi = min(len(annot) - 1, changed_idx[j - 1] + ctx)
             hunks.append((lo, hi))
             s = j
-    # 渲染
-    parts = [f"[diff {file1} ({len(A)}行) vs {file2} ({len(B)}行) | -{dels} +{adds} | {len(hunks)} 处差异]"]
+    parts = [f"[diff {label1} ({len(A)}行) vs {label2} ({len(B)}行) | -{dels} +{adds} | {len(hunks)} 处差异]"]
     for lo, hi in hunks:
         seg = annot[lo:hi + 1]
         a_start = next((a2 for _a, _l, a2, _b in seg if a2 is not None), 0)
@@ -2167,6 +2170,39 @@ def diff_files(file1: str, file2: str, context: int = 2) -> str:
     if len(out) > 20000:
         out = out[:20000] + f"\n...（输出截断，全量差异 -{dels} +{adds} 行；可减小 context 或分段对比）"
     return out
+
+
+def diff_files(file1: str, file2: str, context: int = 2) -> str:
+    """Myers Diff 对比两个文件，返回 unified diff 风格的差异（@@ hunk 头 + -/+ 行）。
+    file1/file2: 路径（相对 workspace 或绝对路径；只读放行——可对比 workspace 外的备份/参照文件）。
+    context: 每个 hunk 前后的上下文行数（默认 2）。
+    头部含两侧行数/增删统计；完全相同返回「无差异」。适合对比 改前/改后、备份/当前。"""
+    t1, t2 = _resolve_read(file1), _resolve_read(file2)
+    if not t1.exists():
+        return f"[文件不存在] {file1}"
+    if not t2.exists():
+        return f"[文件不存在] {file2}"
+    A = t1.read_text(encoding="utf-8", errors="ignore").splitlines()
+    B = t2.read_text(encoding="utf-8", errors="ignore").splitlines()
+    return _render_unified_diff(A, B, _myers_diff(A, B), file1, file2, context)
+
+
+def diff_lines(a_text: str, b_text: str, context: int = 2) -> str:
+    """Myers Diff 对比两个【文本块】（按行），输出与 diff_files 同款 unified 风格。
+    工作流编排用：比较两个节点的文本输出 / 两段代码 / 改前改后草稿，无需落盘。"""
+    A = (a_text or "").splitlines()
+    B = (b_text or "").splitlines()
+    return _render_unified_diff(A, B, _myers_diff(A, B), "a_text", "b_text", context)
+
+
+def get_list_item(lst: list = None, index: int = 0):
+    """取列表第 index 个元素（0-based；负数从尾部数：-1=末元素）。
+    工作流里从 all_outputs / 上游 list 输出中取单个元素用（比 selector 运算符更直接）。"""
+    l = lst or []
+    try:
+        return l[int(index)]
+    except (IndexError, TypeError, ValueError):
+        return f"[越界] index={index}，列表长度 {len(l)}"
 
 
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
@@ -2267,6 +2303,12 @@ LIGHT_TOOLS = Toolbox(
     }),
     Tool(to_ascii),
     Tool(list_append),
+    Tool(diff_lines, param_descriptions={
+        "a_text": "改前文本（接上游节点输出）",
+        "b_text": "改后文本",
+        "context": "每个 hunk 前后的上下文行数（默认 2）",
+    }),
+    Tool(get_list_item, outputs=[{"name": "raw", "type": "any", "description": "列表元素（类型随元素；越界返回错误文本）"}]),
     Tool(sleep),
     hidden=True,
 )

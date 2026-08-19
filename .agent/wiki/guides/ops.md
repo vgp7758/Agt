@@ -17,6 +17,8 @@
 
 **实时**节点级观测（区别于 /stats 的事后统计）：对话中「⏳ 工作流『xxx』执行中…」行带 run_id 时**可点击**（虚线下划线）→ 新标签打开 `/wf/monitor?run=<id>`——节点时间线表格（标题/类型/状态/耗时/**甘特时间条**/输出预览 200 字），2s 轮询增量渲染，running 节点橙色脉冲，完成全绿停轮询。无参访问 = 最近 50 次运行列表。
 
+**节点全文查看（commit bb56a82）**：预览 200 字不够排障时，`has_full` 节点的预览单元格**可点击**（📄 标记 + 虚线下划线）→ 新标签 `GET /api/wf/runs/<id>/node/<nid>` 打开 **text/plain 纯文本页**——页面文本直接就是节点完整输出（非 HTML、无样式，浏览器原生渲染）。单节点 200K 字符内原文，超限截断并标注总长；全量总预算 20M 字符耗尽后节点只存预览（不可点击）。看 LLM 节点完整回包、检索节点全量结果用它。
+
 覆盖三类执行路径：同步钩子（线程池）、async 钩子（后台线程）、wf_* 工具调用。注意：`_WF_RUNS` 是进程内存，/restart 清空；旧进程的「执行中」行不携带 run_id（不可点击），需 /restart 后生效。实现细节见 [工作流运行观测](../features/wf-monitor.md)。
 
 ### /stats 页（WebUI 📊 统计按钮）
@@ -89,10 +91,11 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | answer 完成后插话不消费、滞留到用户发下条消息才注入 | 已修（commit fb115aa）：answer 后只查 inbox、漏 pending_messages（插话队列）→ 现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮；旧进程需 `/restart`（见 [user-interaction](../features/user-interaction.md#插话全生命周期2026-08-19-修复闭环commit-fb115aa)） |
 | 并行钩子（同 hook 挂多工作流）某行「执行中」永远闪烁不消失 | 已修（commit fb115aa）：前端单数 runningWf 被后启动的钩子覆盖引用 → 改 Map 按 hook::name 独立跟踪；`/restart` + 强刷生效（见 [user-interaction](../features/user-interaction.md#并行钩子执行中状态跟踪修复2026-08-19)） |
 | 「⏳ 工作流执行中…」行不可点击、看不到节点进度 | 旧进程代码（事件不带 run_id）→ `/restart` 后新运行即可点击打开 [/wf/monitor 实时观测](#wfmonitor-工作流运行观测页2026-08-20新commit-8aeb21a) |
+| 观测页节点预览无 📄、点不开全文 | 旧进程（无 full 存储）或**全量预算（20M 字符）耗尽**后只存预览；先 `/restart`，仍不行即预算耗尽属预期降级（见 [wf-monitor · 节点全文查看](../features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)） |
 
 ## 相关页面
 
-- [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）
+- [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）+ 节点全文纯文本路由
 - [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证
 - [系统总览](../architecture/overview.md) — 模块地图、数据流
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询

@@ -11,9 +11,9 @@
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
 | [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 轮边界统一重排（升档+折叠）+ 分组衰减 + 折叠实证 + 前缀缓存三层优化 | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 | 派子 Agent / 改协作机制 |
-| [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
+| [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
-| [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线，对话中「执行中」行可点击观测 | 看工作流跑到哪 / 调钩子卡点 |
+| [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
 | [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
@@ -25,7 +25,7 @@
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
 | [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交（提交成功闭环） | 查版本交付内容 / 发布流程 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
-| [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/**wf-monitor 实时观测**/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
+| [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/**wf-monitor 实时观测+节点全文**/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
 
 ## 快速事实（2026-08 状态）
 
@@ -39,6 +39,7 @@
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换；聊天面板 user/answer 气泡 hover 浮现复制按钮（innerText 复制，clipboard→execCommand 降级，commit 3a7e9de）
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
 - **工作流运行实时观测**（2026-08-20，commit 8aeb21a）：进程内 run registry（`_WF_RUNS`，线程安全，最近 50 次）记录每次工作流执行的节点 start/end/error 事件；对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点甘特时间线 2s 轮询；同步/async 钩子 + wf_* 工具三路径全覆盖（详见 [wf-monitor](features/wf-monitor.md)）
+- **观测页节点全文查看**（2026-08-20，commit bb56a82）：节点预览截 200 字，`has_full` 时预览可点击（📄）→ 新标签打开 `GET /api/wf/runs/<id>/node/<nid>` **text/plain 纯文本页**（页面文本即节点完整输出，非 HTML 无样式）；`_full_str` 保留换行/JSON 结构，单节点 200K 截断标注，总预算 20M 字符防爆内存（耗尽只存预览）；轮询视图剥离 full 只传 has_full（详见 [wf-monitor · 节点全文查看](features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)）
 - **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
 - 折叠（fold）设计已实证（t206）：档梯满触发全档折叠，摘要 byte-stable——单步 ~98% miss 后命中率恢复 ~99.9%，一次性成本不破坏后续缓存（见 [context-engine 折叠实证](architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）
 - **排障闭环：t{N}·s{M} 轮步标记**（commit 4aced81）：/stats 折线 tooltip 显示 `· t206 · s6`，与 `projections/` 转储文件名同源（`t206_s6_*.txt`）——异常点 hover 即得文件名，直接打开看当时完整投影；仅 scene=react 记录携带，老记录自动省略（见 [ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)、[context-engine · t/s 标记](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)）

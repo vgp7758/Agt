@@ -39,6 +39,7 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
+FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
@@ -834,7 +835,9 @@ class Session:
         # 用户常把分档窗口设为模型总窗口的 ~50%，而保命线可独立设高（如总窗口 80%）——
         # 轮内投影在 75%×win ~ panic 之间【纯追加零调整】（前缀缓存最优），超 panic 才应急止血。
         panic_win = config.load_panic_window() or win
-        settle = int(win * 0.9)   # 应急回落目标：分档线 90%（一次折到位留余量，防同轮二次触发——t228 教训）
+        # 应急回落目标 = _plan_fold 同款计划水位（FOLD_TARGET_RATIO×win，75%）：一次压到位——
+        # 与轮边界计划对齐（panic 触发等效于"就地补一次轮边界折叠"），余量最大、语义统一。
+        settle = int(win * FOLD_TARGET_RATIO)
 
         fold_count = self._planned_fold
         # 轮内零升档：直接渲染（_planned_graduates 已在轮边界应用，body 已含升档后的档位）
@@ -870,7 +873,7 @@ class Session:
             self._planned_fold = 0
             self._planned_graduates = 0
             return
-        target = int(self.max_effective_context_window * 0.75)
+        target = int(self.max_effective_context_window * FOLD_TARGET_RATIO)
         prefix = [{"role": "system", "content": self.system}]
         if self._task_guidance_provider:
             try:

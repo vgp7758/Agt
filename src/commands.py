@@ -1270,7 +1270,7 @@ def build_default_registry() -> CommandRegistry:
         "/config enable_thinking true   思考模式开关\n"
         "/config max_level 4            分档最高级别\n"
         "/config detail_base 1500       步距衰减初始字数\n"
-        "/config panic_context_window 160000  保命阀阈值（0=跟随分档窗口；轮内超此线才应急折叠）\n"
+        "/config panic_context_window 160000  保命阀阈值（0=跟随分档窗口；轮内超此线才应急折叠，一次压回75%计划水位）\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"
         "/config dump_projections true  投影转储（调试用）")
     reg.register("budget", _cmd_budget,

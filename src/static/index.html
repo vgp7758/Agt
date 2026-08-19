@@ -307,7 +307,7 @@
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" title="工具结果摘要的初始字数上限（当前步 d=0，默认1500）；越大披露越详细"></label>
     <label>步距衰减 step <input id="cfg_detail_step" type="number" min="1" title="每远一步减少的摘要字数（默认15）；越大老步压缩越快"></label>
-    <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠回落到分档线90%"></label>
+    <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠并一次压回计划水位（分档窗口的75%，与轮边界计划对齐）"></label>
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>

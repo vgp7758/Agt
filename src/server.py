@@ -559,6 +559,20 @@ async def api_wf_run(run_id: str):
     return r
 
 
+@app.get("/api/wf/runs/{run_id}/node/{node_id}")
+async def api_wf_run_node(run_id: str, node_id: str):
+    """某节点全量输出（text/plain 纯文本页——观测页点击节点打开，浏览器原生渲染无样式）。"""
+    from fastapi.responses import PlainTextResponse
+    from workflow import get_wf_node_full
+    full = get_wf_node_full(run_id, node_id)
+    if full is None:
+        return PlainTextResponse(f"[不存在] 运行 {run_id} 或节点 {node_id} 未找到（运行仅保留最近 50 次）",
+                                 status_code=404)
+    if not full:
+        return PlainTextResponse(f"[无全文] 节点 {node_id} 未记录全量输出（执行中 / 全量预算耗尽只存预览）")
+    return PlainTextResponse(full, media_type="text/plain; charset=utf-8")
+
+
 @app.get("/api/stats")
 async def api_stats(scope: str = "current"):
     """LLM 调用统计·原始流水（按 ts 升序），前端按选中的调用序号窗口本地聚合。scope=current/all。

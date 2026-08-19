@@ -107,7 +107,13 @@ function renderRun(r){
     const s = Math.min(1, Math.max(0, (n.t_start - t0) / span));
     const e = n.t_end ? Math.min(1, (n.t_end - t0) / span) : Math.min(1, (Date.now()/1000 - t0) / span);
     cells[5].innerHTML = `<div class="gantt"><i class="${n.status==="running"?"run":""}" style="left:${(s*100).toFixed(1)}%;width:${Math.max(1,(e-s)*100).toFixed(1)}%"></i></div>`;
+    // 预览单元格：has_full 时点击打开 text/plain 全文页（浏览器原生渲染，无样式）
+  if(n.has_full){
+    cells[6].innerHTML = `<span class="prev" style="cursor:pointer;text-decoration:underline dotted"
+      title="点击查看完整输出（纯文本页）" onclick="window.open('/api/wf/runs/${runId}/node/${encodeURIComponent(n.id)}','_blank')">${esc(n.preview)} 📄</span>`;
+  } else {
     cells[6].innerHTML = `<span class="prev" title="${esc(n.preview)}">${esc(n.preview)}</span>`;
+  }
   }
   // 完成后停轮询
   if(r.status !== "running") stopPoll();

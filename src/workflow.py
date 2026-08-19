@@ -47,12 +47,15 @@ _WF_RUNS_MAX = 50                       # 内存上限：最近 50 次运行（�
 
 def new_wf_run(name: str, hook: str = "") -> str:
     """注册一次工作流运行，返回 run_id（观测页 URL 用）。"""
+    global _full_total
     rid = _uuid.uuid4().hex[:8]
     with _WF_RUNS_LOCK:
-        # 容量控制（保留最近 N 个）
+        # 容量控制（保留最近 N 个；全量输出预算相应扣减）
         while len(_WF_RUNS) >= _WF_RUNS_MAX:
             oldest = min(_WF_RUNS.items(), key=lambda kv: kv[1].get("started_at", 0))[0]
-            _WF_RUNS.pop(oldest, None)
+            old = _WF_RUNS.pop(oldest, None)
+            if old:
+                _full_total -= sum(len(n.get("full") or "") for n in old.get("nodes", []))
         _WF_RUNS[rid] = {"run_id": rid, "name": name, "hook": hook, "status": "running",
                          "started_at": _time.time(), "finished_at": None, "nodes": []}
     return rid
@@ -60,6 +63,7 @@ def new_wf_run(name: str, hook: str = "") -> str:
 
 def _run_track(run_id: str, ev: dict):
     """写入运行轨迹事件（节点 start/end/error、run done/failed）。未知 run 静默忽略。"""
+    global _full_total
     if not run_id:
         return
     with _WF_RUNS_LOCK:
@@ -82,6 +86,11 @@ def _run_track(run_id: str, ev: dict):
                     except Exception:
                         pass
                     n["preview"] = ev.get("preview", "")
+                    # 全量输出（预算内才存；观测页点击节点 text/plain 全文路由消费）
+                    full = ev.get("full")
+                    if isinstance(full, str) and full and _full_total < _FULL_BUDGET:
+                        n["full"] = full
+                        _full_total += len(full)
                     break
         elif kind == "run_done":
             run["status"] = "done"; run["finished_at"] = t
@@ -93,7 +102,28 @@ def _run_track(run_id: str, ev: dict):
 def get_wf_run(run_id: str) -> dict | None:
     with _WF_RUNS_LOCK:
         r = _WF_RUNS.get(run_id)
-        return dict(r, nodes=list(r["nodes"])) if r else None     # 浅拷贝（读时解锁，轮询安全）
+        if not r:
+            return None
+        # 剥离 full（观测页 2s 轮询不能每次传几十万字符；全文走 /api/wf/runs/<id>/node/<nid>）
+        nodes = []
+        for n in r["nodes"]:
+            n2 = {k: v for k, v in n.items() if k != "full"}
+            n2["has_full"] = ("full" in n)
+            nodes.append(n2)
+        return dict(r, nodes=nodes)
+
+
+def get_wf_node_full(run_id: str, node_id: str) -> str | None:
+    """取某节点全量输出（观测页 text/plain 路由用）。run/node 不存在返回 None；
+    节点存在但未记录全文（预算耗尽/running 中）返回 ''。"""
+    with _WF_RUNS_LOCK:
+        r = _WF_RUNS.get(run_id)
+        if not r:
+            return None
+        for n in reversed(r["nodes"]):
+            if n["id"] == node_id:
+                return n.get("full", "")
+    return None
 
 
 def list_wf_runs() -> list:
@@ -115,6 +145,23 @@ def _preview_str(v, cap=200) -> str:
         s = str(v)
     s = s.replace("\n", " ").strip()
     return s[:cap] + ("…" if len(s) > cap else "")
+
+
+_FULL_CAP = 200_000       # 单节点全量输出上限（字符；观测页纯文本路由用，超出截断标注）
+_FULL_BUDGET = 20_000_000  # 全量输出总预算（字符；超预算后续节点只存预览，防观测功能吃爆内存）
+_full_total = 0            # 已存全量字符计数（evict 时相应扣减）
+
+
+def _full_str(v, cap=_FULL_CAP) -> str:
+    """节点全量输出（保留换行/结构；观测页 text/plain 全文用）。超 cap 截断并标注。"""
+    try:
+        import json as _json
+        s = _json.dumps(v, ensure_ascii=False, indent=None, default=str) if isinstance(v, (dict, list)) else str(v)
+    except Exception:
+        s = str(v)
+    if len(s) > cap:
+        return s[:cap] + f"\n\n…（全量输出超 {_FULL_CAP} 字符上限，已截断；完整值共 {len(s)} 字符）"
+    return s
 
 # Coze 变量类型 → Python 类型（生成工具参数签名用）
 _TYPE_MAP = {
@@ -1557,7 +1604,8 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     if run_id:
         _run_track(run_id, {"ev": "node_start", "id": ENTRY_ID, "title": _node_title(entry),
                             "ntype": str(entry.get("type"))})
-        _run_track(run_id, {"ev": "node_end", "id": ENTRY_ID, "preview": _preview_str(ctx.node_outputs[ENTRY_ID])})
+        _run_track(run_id, {"ev": "node_end", "id": ENTRY_ID, "preview": _preview_str(ctx.node_outputs[ENTRY_ID]),
+                            "full": _full_str(ctx.node_outputs[ENTRY_ID])})
 
     # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支）——
     from collections import deque
@@ -1579,7 +1627,8 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                 if run_id:
                     _run_track(run_id, {"ev": "node_start", "id": EXIT_ID,
                                         "title": _node_title(nodes[EXIT_ID]), "ntype": "2"})
-                    _run_track(run_id, {"ev": "node_end", "id": EXIT_ID, "preview": _preview_str(raw)})
+                    _run_track(run_id, {"ev": "node_end", "id": EXIT_ID, "preview": _preview_str(raw),
+                                        "full": _full_str(raw)})
                 return raw if return_exit_dict else _stringify_result(raw)
             node = nodes.get(current)
             if node is None:
@@ -1597,7 +1646,8 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                 port = result.get("port")   # selector/intent 分支端口
                 if run_id:
                     _run_track(run_id, {"ev": "node_end", "id": current,
-                                        "preview": _preview_str(ctx.node_outputs[current])})
+                                        "preview": _preview_str(ctx.node_outputs[current]),
+                                        "full": _full_str(ctx.node_outputs[current])})
             except Exception as e:
                 # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
                 # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
@@ -1605,7 +1655,8 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                 port = f"{current}_error"   # 每个节点默认 error 端口名
                 if run_id:
                     _run_track(run_id, {"ev": "node_error", "id": current,
-                                        "preview": _preview_str(ctx.node_outputs[current])})
+                                        "preview": _preview_str(ctx.node_outputs[current]),
+                                        "full": _full_str(ctx.node_outputs[current])})
 
             # 扇出 + port 匹配：遍历当前节点的所有出边
             for tid, src_port in out_edges.get(current, []):

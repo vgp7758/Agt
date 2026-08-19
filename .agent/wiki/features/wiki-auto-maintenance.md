@@ -40,7 +40,7 @@ wf_diff_snapshots 是【工具节点】（plugin, toolName=wf_diff_snapshots）
 
 **实测验证**：`raw=dict{files,count,changed}`（根因复现）→ `1400227.files` 解析为 `'.agent/wiki/a.md,.agent/wiki/new.md,.agent/wiki/old.md'` 逗号分隔 string，`git_commit` 直接消费成功。**在编辑器里重新打开此工作流，把 files 输入的连线从 raw 拖到 files 端口即可**（out 声明已在 XML 里）。
 
-**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 **dict**，消费端必须引用其**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。实例见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08commit-edd9851)
+**经验**：工具节点（如 wf_diff_snapshots）raw 返回的是 **dict**，消费端必须引用其**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。
 
 ### path 字面量保存后重开变空（2026-08 修复，commit 910fc1b）
 
@@ -74,13 +74,15 @@ n.data.inputs.inputParameters=(...).map(o=>({...value:{type:'ref',content:{block
 
 **生效方式**：改在**服务启动时载入内存的文件**（`src/static/workflow_editor.html`）——`/restart` 后 **Ctrl+F5 强刷编辑器**，重新打开 wiki_auto_maintenance → path 输入框显示 `.agent/wiki/`（不再空）。
 
-## 工作流结构
+## 工作流结构（2026-08-19 更新：新增 changed_calls 直供链）
 
 ```
-start
+start（user_message + changed_calls ← 引擎透传的本轮变更调用）
   → 判官 llm（needs_maintenance?）
   → snap_before（子工作流 dir_snapshot，path=.agent/wiki/，打【更新前】基线快照）
-  → update_wiki（plugin 节点，调 update_wiki 工具增量更新 wiki 页面，输出报告摘要）
+  → fmt_calls（code 节点：把 changed_calls 渲染为变更调用原文摘要）
+  → 拼接模板（text 节点：user_msg + turn_ctx + changed_calls 摘要 + answer 草稿 → summary）
+  → update_wiki（plugin 节点，summary 作为任务文本调 wiki-updater 子 Agent，输出报告摘要）
   → diff_wiki（code 节点：本节点执行时拍【更新后】after 快照 + 调 diff_snapshots 子工作流 diff）
   → has_changes?（selector：count>0）
       ├─ true  → build_msg（text，拼 commit message=判官摘要）→ commit_wiki（git_commit 节点）
@@ -90,12 +92,45 @@ start
 
 | 节点 | 类型 | 职责 |
 |------|------|------|
+| start.changed_calls | start 输出 | 引擎透传的本轮变更调用列表（`_turn_changed_calls`，数组原样） |
 | 判官 llm | llm | 判断本轮是否值得维护；输出 `needs_maintenance` 布尔 + `summary` 摘要（供 commit message 复用） |
 | snap_before | **子工作流 `dir_snapshot`** | 对 `.agent/wiki/` 目录打文件快照（mtime 映射，JSON 字符串），作为**更新前基线** |
+| fmt_calls | **code** | 将 `changed_calls` 渲染为可读摘要（调用参数原文 + 变更文件 + 结果预览）；空数组/JSON 字符串容错 |
+| 拼接模板 | text | 组装 update_wiki 的任务文本：user message + turn context + 变更调用原文 + answer 草稿 |
 | update_wiki | **plugin（update_wiki 工具）** | 调用 update_wiki 工具更新/新建受影响 wiki 页面；输出报告摘要 |
 | diff_wiki | **code 节点** | 在**本节点执行时**拍 after 快照（必须此时拍，拍早了 diff 不到 update_wiki 的变更），调 `diff_snapshots` 子工作流对比 before/after 生成变更清单；带本地兜底 |
 | build_msg | **text** | 接收判官摘要，拼装为语义化 commit message |
 | commit_wiki | **git_commit 节点** | 按 diff 变更清单 `git add` 相关文件 → `git commit`（列表参数传 message）→ `git push`；无变更跳过 |
+
+### 推理减负：changed_calls 直供（2026-08-19，commit 16d6832）
+
+**问题**：wiki 维护子 Agent（wiki-updater）此前只收到判官一句摘要，需要**read_file 逐个重读改过的源文件**才能理解改动——一轮改 5 个文件就是 5 次大读 + 上下文膨胀，子工作流整体耗时特别长，推理负担重。
+
+**解决方案**：引擎在工具执行前后本就有 workspace 快照 diff（检测文件变更），把**有文件变更的调用原文**保存在内存（`_turn_changed_calls`）并透传给 before_answer 钩子。工作流内 `fmt_calls` 渲染后拼进 update_wiki 的任务文本，子 Agent 的上下文变成：
+
+```
+user message + 有过文件变更的工具调用步骤原文 + answer 草稿
+```
+
+任务文本中包含（fmt_calls 渲染格式）：
+
+```
+changed tool calls（引擎快照 diff 检出的文件变更调用原文——以此为准，一般无需再 read_file）:
+1. edit({"path": "src/agent.py", "old_string": "...", "new_string": "..."})
+   变更: src/agent.py(modified)
+   结果: ✅ 已替换 1 处
+2. write_file({"path": "docs/x.md", "content": "..."})
+   变更: docs/x.md(new)
+```
+
+**效果**：edit 的 diff（old/new）、write 的内容**直接在任务描述里**——子 Agent 一步看懂改动，直接 wiki_write，省掉整个重读探索阶段。
+
+**引擎侧配套**（`src/agent.py`，同 commit）：
+- 快照条件扩展：after_tool **或** before_answer 任一钩子存在即拍快照（之前只有 after_tool 在时才拍——本场景 before_answer 钩子拿不到变更信息）
+- 三条执行路径全覆盖：逐 call（钩子模式）/ 单 call / 并行（整批 diff 归属批内每个调用，多报不漏报）
+- 详见 [changed_calls 变更调用收集（workflow-hooks）](../architecture/workflow-hooks.md#changed_calls-变更调用收集before_answer-透传2026-08-19)
+
+**验证**：链路（start.changed_calls→fmt_calls→拼接模板→update_wiki.summary）/模板/渲染（变更清单+参数+结果预览）/JSON 字符串容错/往返幂等全过。`/restart` 后生效。
 
 ### build_commit_msg：动态 commit message
 
@@ -137,12 +172,14 @@ start
 ## 与其他模块的关系
 
 - **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）
+- **引擎快照与 changed_calls**：`src/agent.py` `_fs_snap` / `_turn_changed_calls`——before_answer context 透传变更调用原文（本工作流的核心输入之一）
 - **Git 集成**：`src/git_utils.py`，`git_commit` 节点的底层实现（subprocess 列表参数）
 - **Wiki 更新工具**：`tools/update_wiki.py`，`update_wiki` 插件节点的实现
 - **前端编辑器**：`src/static/workflow_editor.html`，输入框渲染（已修复字面量保存问题）
 
 ## 注意事项
 
+- **changed_calls 空值容错**：本轮无文件变更时 `changed_calls` 为空数组，fmt_calls 输出"(本轮无文件变更)"占位——不能假设其恒非空；引擎传参也可能被序列化成 JSON 字符串，fmt_calls 需兼容两种形态
 - **工具节点输出是 dict**（2026-08 修复，commit edd9851）：消费端必须引用具体字段（`files` / `count` / `changed`），不能引用整个 dict
 - **subworkflow 节点 literal 属性约定**（2026-08）：传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`），否则参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206
 - **前端输入框字面量**（2026-08 修复，commit 910fc1b）：type 9 节点的输入框（画布节点内）字面量保存后重开变空——`syncSubworkflowNode` 只保留连线，默认值造出 `blockID=''` 的空 ref → 输入框空白。修复后连线 ref 完整保留 + 非空字面量保留；默认值改空 literal。**生效需 `/restart` + Ctrl+F5 强刷编辑器**
@@ -150,8 +187,8 @@ start
 
 ## 相关页面
 
+- [工作流引擎与钩子](../architecture/workflow-hooks.md)（[changed_calls 变更调用收集](../architecture/workflow-hooks.md#changed_calls-变更调用收集before_answer-透传2026-08-19)）
 - [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)
 - [配置体系与模型调优](../guides/config-and-models.md)
 - [运维、可观测性与排障](../guides/ops.md)
 - [v0.18.2 发布记录](../releases/v0.18.2.md)

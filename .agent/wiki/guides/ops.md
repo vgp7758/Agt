@@ -75,6 +75,8 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 工作流编辑后保存丢子画布 | 已修复（exitComposite 从栈顶帧父层写回）→ 强刷编辑器 |
 | Windows 闪终端窗 | 已修复（子进程统一 CREATE_NO_WINDOW）→ agt ≥ 0.18.1 |
 | 子 Agent 调用后主 Agent 不响应 | **先看下一行**：若伴随实例反复退出 rc=0 → 多为端口被旧实例占用（`netstat` 查 pid → `taskkill`） |
+| answer 完成后插话不消费、滞留到用户发下条消息才注入 | 已修（commit fb115aa）：answer 后只查 inbox、漏 pending_messages（插话队列）→ 现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮；旧进程需 `/restart`（见 [user-interaction](../features/user-interaction.md#插话全生命周期2026-08-19-修复闭环commit-fb115aa)） |
+| 并行钩子（同 hook 挂多工作流）某行「执行中」永远闪烁不消失 | 已修（commit fb115aa）：前端单数 runningWf 被后启动的钩子覆盖引用 → 改 Map 按 hook::name 独立跟踪；`/restart` + 强刷生效（见 [user-interaction](../features/user-interaction.md#并行钩子执行中状态跟踪修复2026-08-19)） |
 
 ## 相关页面
 
@@ -82,3 +84,4 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - [系统总览](../architecture/overview.md) — 模块地图、数据流
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询
 - [多 Agent 体系](../architecture/multi-agent.md) — 三层消费机制、唤醒链路验证
+- [用户交互 · 插话机制与消息路由](../features/user-interaction.md) — 插话全生命周期、并行钩子 UI 状态

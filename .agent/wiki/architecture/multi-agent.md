@@ -51,6 +51,8 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
 
 三层互为补充：①在 run 进行中时即时消费；②在 run 空闲时后台拾取；③确保新一轮 run 被调度。只要 answer 成功入队（registry 非 None），至少一层会消费它。
 
+**第四类消息源：用户插话队列（pending_messages）——2026-08-19 前是消费盲区（commit fb115aa 补全）**：用户在 answer 生成期间插话**不进 inbox**（走独立的 `pending_messages` 队列，步边界能赶上则当步注入），而 answer 完成后的自动触发点旧版**只查 inbox** → 插话滞留，直到用户手动发下一条消息才被注入。fb115aa 补全该兜底：inbox 空 → `pending_messages` 非空 → 立即开新一轮（`background_trigger`·`user_insert`）。两套队列至此都闭环，详见 [用户交互 · 插话机制与消息路由](../features/user-interaction.md)。
+
 **边界条件**：三层均为进程内对象/线程——若宿主进程退出（含 rc=0 正常退出），daemon 线程（②③及子 Agent `_bg`）随之死亡，inbox/work_q 中已入队消息**全部丢失**。见下节 9100 案例。
 
 ### 端到端验证状态（2026-08-18，三阶段，v0.18.2 已发布）

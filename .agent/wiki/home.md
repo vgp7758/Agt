@@ -14,6 +14,7 @@
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
+| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪 + 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写） | 改前端气泡 / 调交互 |
@@ -44,6 +45,7 @@
 - **LIGHT_TOOLS 隐藏工具增强**（2026-08，commit 9fb00de）：新增 `diff_lines`（文本级 Myers diff，与 diff_files 共享渲染）、`get_list_item`（列表元素取值，outputs=any，越界安全），配合 plugin 节点工作流节点间文本比较/列表操作无需落盘
 - **run_python 工具新增 args 参数**（2026-08，commit 9fb00de）：`run_python(code="...", file="...", args="...")`，经环境变量 `PY_ARGS` 传递（code 和 file 两模式都生效），脚本内 `import os; a = os.environ.get("PY_ARGS", "")` 读取，让已保存脚本可参数化复用（详见 [run_python 页](features/run-python.md)）
 - **diff_files 读放行（读写不对称）**（2026-08，commit 9fb00de）：新增 `_resolve_read`，越界（绝对路径 / `../` 逃逸）放行为直接路径——现在可以对比 workspace 外的备份/参照文件，写操作仍走严格沙箱
+- **执行时序修复：插话不滞留 + 并行钩子 UI**（2026-08-19，commit fb115aa，用户实测 8 条现象闭环）：① answer 完成后旧版只查 inbox、漏 pending_messages（插话队列）→ 插话滞留至用户下次发消息；现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮（新轮 before_turn 检索的即插话内容）。② 同 hook 挂多个 before_turn 工作流时，前端「执行中」行由单变量改 Map 按 `hook::name` 索引，互不覆盖（详见 [user-interaction](features/user-interaction.md)）
 
 ## 维护约定
 

@@ -262,6 +262,8 @@ async def api_wf_get(name: str):
                 meta["hidden"] = root.get("hidden") == "true"
             if root.get("async") is not None:
                 meta["async"] = root.get("async") == "true"
+            if root.get("recap") is not None:
+                meta["recap"] = root.get("recap") == "true"
             xmp = xf.with_name(xf.name + ".meta")
             if xmp.exists():
                 try:

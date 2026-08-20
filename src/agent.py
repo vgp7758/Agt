@@ -1006,6 +1006,14 @@ class Agent:
                             _llm._scene_override = _ov
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
+                        # recap 工作流回写：meta.recap=true 的异步钩子，结果写 agent._recap（队友可见，
+                        # 不进自己上下文）——recap_gen 等本地小模型总结工作流的引擎侧落点
+                        if (_hw.get("meta") or {}).get("recap") and (result or "").strip():
+                            recap = (result or "").strip().split("\n")[0].strip()[:60]
+                            if recap:
+                                _agent_ref._recap = recap
+                                if _agent_ref.registry:
+                                    _agent_ref.registry.update_recap(_agent_ref.agent_id, recap)
                         if message.strip():
                             _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
                                         "text": message, "auto": True})
@@ -1443,11 +1451,22 @@ class Agent:
                             self._emit({"type": "answer", "text": resp.content,
                                         "tokens": self.cumulative_tokens})
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
-                            # 异步生成一句话 recap（队友可见，不进入自己上下文）
-                            self._generate_recap(
-                                (self.session._current.user_message if self.session._current else msg),
-                                resp.content,
-                                [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None)
+                            # 异步生成一句话 recap（队友可见，不进入自己上下文）：
+                            # 有 recap_gen 类工作流（meta.recap=true）时由 turn_end 钩子负责（本地小模型），
+                            # 无则回退内置 _generate_recap（utility client）
+                            _has_recap_wf = False
+                            try:
+                                from real_tools import WORKSPACE as _ws3
+                                from workflow import get_hook_workflows
+                                _has_recap_wf = any((hw.get("meta") or {}).get("recap")
+                                                    for hw in get_hook_workflows(_ws3))
+                            except Exception:
+                                pass
+                            if not _has_recap_wf:
+                                self._generate_recap(
+                                    (self.session._current.user_message if self.session._current else msg),
+                                    resp.content,
+                                    [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None)
                             # 目标检查：跑验证脚本，PASS 则结束自主模式
                             if self.goal_check_script:
                                 result = self.run_goal_check()

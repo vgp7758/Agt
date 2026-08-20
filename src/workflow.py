@@ -2046,6 +2046,8 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
                 meta["hidden"] = root.get("hidden") == "true"
             if root.get("async") is not None:
                 meta["async"] = root.get("async") == "true"
+            if root.get("recap") is not None:
+                meta["recap"] = root.get("recap") == "true"   # recap 工作流：结果写回 agent._recap（队友可见）
             if meta_path.exists():
                 try:
                     meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}

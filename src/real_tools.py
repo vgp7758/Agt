@@ -1904,11 +1904,16 @@ _WF_ALT_LLM_CACHE: dict = {}
 
 
 def _wf_llm_for(model: str):
-    """按 model 参数取 client：空/与当前同名 → 上下文 llm；否则用缓存的独立 client（无则建）。"""
+    """按 model 参数取 client：空名 → 上下文 llm（None=无上下文，llm_call 自行报错）；
+    指定名字 → 独立 client 缓存（无则建）——上下文 llm 为 None 也不妨碍按名建（此前
+    `llm is None` 与 `not name` 合并判断，导致无上下文+指定名也返回 None，llm_call 直接报
+    'no LLM context'——独立测试/agent=None 场景下指定 model 完全可用）。"""
     llm = _WF_CTX.get("llm")
     name = (model or "").strip()
-    if llm is None or not name or name == getattr(llm, "model_name", ""):
+    if not name:
         return llm
+    if llm is not None and name == getattr(llm, "model_name", ""):
+        return llm   # 与上下文同名 → 复用
     cli = _WF_ALT_LLM_CACHE.get(name)
     if cli is None:
         try:

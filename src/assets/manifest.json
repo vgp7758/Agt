@@ -38,5 +38,10 @@
     "name": "custom_tool_demo",
     "type": "workflow",
     "desc": "工作流内定义工具箱没有的自定义工具：text 写 schema→code 拼进官方表→llm_call→选择器按名路由(自定义→code 实现/官方→call_tool)→append 回 messages 循环"
+  },
+  {
+    "name": "recap_gen",
+    "type": "workflow",
+    "desc": "每轮回答完成后异步生成一句话 recap（本地小模型 local-qwen）：turn_end 钩子 + async + recap 三标志，结果由引擎写回 agent._recap（队友可见）。需 models.json 配 local-qwen（llama-server 8080）"
   }
 ]

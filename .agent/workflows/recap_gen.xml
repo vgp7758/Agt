@@ -1,0 +1,36 @@
+<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型）：user_message+answer 喂 llm_call(model=local-qwen) → ≤30字总结 → 引擎写回 agent._recap（队友在团队看板可见，不进自己上下文）。turn_end 钩子 + async + recap 三标志" hook="turn_end" async="true" hidden="true" recap="true">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="user_message" type="string"/>
+    <out name="draft_answer" type="string"/>
+    <out name="turn_context" type="string"/>
+  </node>
+  <node id="110001" type="code" title="build_msgs" x="420" y="80">
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <in name="answer" type="string" ref="100001.draft_answer"/>
+    <in name="turn_ctx" type="string" ref="100001.turn_context"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    prompt = (
+        "用一句话（不超过30个中文字）总结这轮对话做了什么。"
+        "只输出这句话本身，不要任何解释、引号或前缀。\n"
+        f"用户请求：{(p.get('user_message') or '')[:100]}\n"
+        f"回答节选：{(p.get('answer') or '')[:200]}\n"
+    )
+    return {"messages": [{"role": "user", "content": prompt}]}]]></code>
+    <out name="messages" type="list"/>
+  </node>
+  <node id="120001" type="plugin" title="llm_call" x="720" y="80" toolName="llm_call">
+    <in name="messages" type="list" ref="110001.messages"/>
+    <in name="model" type="string">local-qwen</in>
+    <in name="temperature" type="float">0.3</in>
+    <in name="enable_thinking" type="boolean">false</in>
+    <out name="content" type="string"/>
+    <out name="raw" type="object"/>
+  </node>
+  <node id="900001" type="end" title="Exit" x="1020" y="80">
+    <out name="result" ref="120001.content" type="string"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120001"/>
+  <edge from="120001" to="900001"/>
+</workflow>

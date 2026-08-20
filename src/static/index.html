@@ -1660,6 +1660,17 @@ function onWSMessage(ev){
       _histExpandFrom = m.expand_from || 0;
       _histTotal = m.total_turns || (m.turns||[]).length;
       renderHistory(m.turns);
+      // 进行中轮（重连时此前完全不可见——用户只能看到上一轮完成态，误以为 UI 坏了；
+      // 实际 agent 正在跑长工具。附 user/步数/当前工具/耗时）
+      if(m.in_progress){
+        const ip = m.in_progress;
+        addUserBubble(ip.user + '', []);
+        newTurn();
+        addRow('sys', `⏳ 本轮进行中：已完成 ${ip.steps||0} 步` +
+          (ip.current_tool ? `，当前工具 ${ip.current_tool}` : '') +
+          `，已耗时 ${ip.elapsed_min} 分钟（插话将在下一步边界注入）`);
+        scrollBottom();
+      }
       addRow('sys', _histExpandFrom > 0
         ? `✅ 已恢复会话：${m.name}（显示最新 ${(m.turns||[]).length} 轮 / 共 ${_histTotal} 轮，更早的点击上方蓝字展开）`
         : `✅ 已恢复会话：${m.name}（${(m.turns||[]).length} 轮完整历史已载入）`);

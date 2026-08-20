@@ -422,7 +422,16 @@ def _node_to_json(nd) -> dict:
             if rv.startswith("ref:"):
                 rval = {"type": rt, "value": _ref_input(rv[4:])}
             else:
-                rval = {"type": rt, "value": {"type": "literal", "content": _parse_val(rv, rt)}}
+                # literal: 前缀剥除（与 _read_cond 对齐——此前漏剥导致赋值成带前缀的裸串）；
+                # object/list 字面量做 JSON 解析（_parse_val 不覆盖结构化类型）
+                val = rv[8:] if rv.startswith("literal:") else rv
+                if rt in ("object", "list", "array") and isinstance(val, str) and val.strip():
+                    try:
+                        import json as _j
+                        val = _j.loads(val)
+                    except Exception:
+                        pass
+                rval = {"type": rt, "value": {"type": "literal", "content": val}}
             ips.append({"name": i.get("name", "var"),
                         "left": {"type": lt, "value": _ref_input(lv)},
                         "right": rval})
@@ -739,12 +748,22 @@ def _node_to_xml(n):
             path = ((p.get("left") or {}).get("value", {}).get("content", {}).get("path") or [""])[0]
             inner.append(f'<in name={_qa(p.get("name","var"))} path={_qa(path)} literal={_qa(_lit_of(p.get("input", {})))}/>')
     elif ntype == "20":   # LoopSetVariable：<in name left left_type right right_type/>
+        def _setv_lit(v):
+            # object/list 字面量 → literal:{json}（读侧剥前缀 json.loads 配对；直接 str() 是
+            # Python repr 单引号，读回 JSON 解析失败会退化为裸字符串——往返破坏 dict 类型）
+            if isinstance(v, (dict, list)):
+                try:
+                    import json as _j
+                    return "literal:" + _j.dumps(v, ensure_ascii=False, default=str)
+                except Exception:
+                    pass
+            return str(v)
         for p in inp.get("inputParameters", []):
             l_in = p.get("left", {}) or {}
             r_in = p.get("right", {}) or {}
             lref = _ref_of(l_in)
             rref = _ref_of(r_in)
-            r = ("ref:" + rref) if rref else _lit_of(r_in)
+            r = ("ref:" + rref) if rref else _setv_lit(_lit_of(r_in))
             inner.append(f'<in name={_qa(p.get("name","var"))} left={_qa(lref)} left_type={_qa(l_in.get("type","string"))} right={_qa(r)} right_type={_qa(r_in.get("type","string"))}/>')
     elif ntype == "21":   # loop
         if inp.get("loopType") is not None:

@@ -1944,7 +1944,11 @@ def llm_call(messages: list, tools: list = None, temperature: float = None,
     if temperature is not None:
         overrides["temperature"] = float(temperature)
     if enable_thinking is not None:
-        overrides["enable_thinking"] = bool(enable_thinking)
+        # XML literal 可能以字符串 "False"/"true" 传来（JSON 小写才解析成 bool）——按布尔语义归一
+        _et = enable_thinking
+        if isinstance(_et, str):
+            _et = _et.strip().lower() in ("1", "true", "yes", "on")
+        overrides["enable_thinking"] = bool(_et)
     try:
         resp = llm.chat(messages or [], tools=tools or None, scene="wf:llm_call", **overrides)
         return _json.dumps({

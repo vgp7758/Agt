@@ -300,8 +300,12 @@ def _resolve_input_params(params_list: list, ctx) -> dict:
 # ========== 节点处理器（S1：LLM；其余后续阶段补）==========
 
 def _get_llm(ctx, model_name: str = ""):
-    """按模型名获取 LLMClient；空名返回 ctx.llm。per-model 客户端缓存在 ctx 上复用。"""
-    if not model_name or model_name == ctx.llm.model_name:
+    """按模型名获取 LLMClient；空名返回 ctx.llm（None=无上下文，调用方自行处理）。
+    指定名字 → per-model 独立 client 缓存——ctx.llm 为 None 也可按名建（独立测试/
+    agent=None 场景；此前 ctx.llm.model_name 在 None 时直接 AttributeError）。"""
+    if not model_name:
+        return ctx.llm
+    if ctx.llm is not None and model_name == ctx.llm.model_name:
         return ctx.llm
     cache = getattr(ctx, "_llm_cache", None)
     if cache is None:

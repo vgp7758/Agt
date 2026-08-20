@@ -11,50 +11,11 @@
     <out name="error" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="140001" type="plugin" title="update_wiki" x="1907.5702703518295" y="82.86839914957778" toolName="update_wiki">
+  <node id="140001" type="plugin" title="update_wiki" x="1920" y="80" toolName="update_wiki">
     <in name="summary" type="string" ref="336423.output"/>
     <out name="raw" type="string"/>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
-  </node>
-  <node id="146000" type="code" title="diff_wiki" x="420" y="80">
-    <in name="before" type="string"></in>
-    <code language="3"><![CDATA[import json
-async def main(args):
-    """update_wiki 之后拍 after 快照，调 diff_snapshots 子工作流 diff。
-    after 快照必须【本节点执行时】拍（拍早了 diff 不到 update_wiki 的变更）——
-    所以 code 节点内自己 walk 一遍（与 dir_snapshot 同逻辑），再以子工作流出结构化结果。"""
-    import os
-    p = args.params
-    now = {}
-    for root, dirs, files in os.walk(".agent/wiki"):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
-        for f in files:
-            fp = os.path.join(root, f).replace("\\", "/")
-            try: now[fp] = os.path.getmtime(fp)
-            except OSError: pass
-    try:
-        from workflow import _find_local_workflow, execute
-        from real_tools import REAL_TOOLS
-        canvas = _find_local_workflow(type("C", (), {"workspace": __import__("pathlib").Path(".")})(), "diff_snapshots")
-        if canvas is not None:
-            ret = execute(canvas, {"before": p.get("before"), "after": json.dumps(now)},
-                          tools=REAL_TOOLS, llm=None, return_exit_dict=True)
-            if isinstance(ret, dict) and "files" in ret:
-                return {"files": ret["files"], "count": ret.get("count", 0)}
-    except Exception:
-        pass   # 子工作流不可用 → 走本地兜底，不炸主链路
-    # 本地兜底 diff（与 diff_snapshots 同语义）
-    def _load(s):
-        try:
-            d = json.loads(s or "{}"); return d if isinstance(d, dict) else {}
-        except Exception: return {}
-    before = _load(p.get("before"))
-    changed = [fp for fp, mt in now.items() if fp not in before or abs(before.get(fp, 0) - mt) > 1e-6]
-    changed += [fp for fp in before if fp not in now]
-    return {"files": ",".join(changed), "count": len(changed)}]]></code>
-    <out name="files" type="string" description="变更文件清单（逗号分隔，供 git_commit 直接用）"/>
-    <out name="count" type="integer"/>
   </node>
   <node id="147000" type="selector" title="has_changes?" x="2520" y="80">
     <branch><cond op="2" left="1257593.snap" right="ref:145000.snap"/></branch>
@@ -77,11 +38,11 @@ async def main(args):
   </node>
   <node id="682383" type="intent" title="意图识别" x="720" y="80">
     <in name="query" type="string" ref="1030169.output"/>
-    <model>utility</model>
+    <model>local-qwen</model>
     <intent name="值得记录"/>
     <intent name="不需要"/>
   </node>
-  <node id="1030169" type="text" title="文本" x="420" y="230">
+  <node id="1030169" type="text" title="文本" x="420" y="80">
     <in name="user" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <result><![CDATA[你是 repo-wiki 维护判官。依据user message和assistant response判断本轮对话是否值得记录进项目知识库（.agent/wiki/）。
@@ -138,7 +99,7 @@ async def main(args):
     <out name="calls_text" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="336423" type="text" title="文本" x="1606.6141373019705" y="51.3160085042221">
+  <node id="336423" type="text" title="文本" x="1620" y="80">
     <in name="user_msg" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <in name="calls_text" type="string" ref="135500.calls_text"/>

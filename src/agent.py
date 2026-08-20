@@ -1007,13 +1007,18 @@ class Agent:
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
                         # recap 工作流回写：meta.recap=true 的异步钩子，结果写 agent._recap（队友可见，
-                        # 不进自己上下文）——recap_gen 等本地小模型总结工作流的引擎侧落点
+                        # 不进自己上下文）——recap_gen 等本地小模型总结工作流的引擎侧落点。
+                        # 错误过滤：LLM 端点挂掉/回退链耗尽时 run_hook 会把错误文本当 result 返回
+                        # （如 "APIStatusError: Error code: 402..."）——特征识别，不污染 recap（保持旧值）
+                        _RECAP_ERR_MARKS = ("APIStatusError", "APIConnectionError", "APITimeoutError",
+                                            "RateLimitError", "Error code:", "执行失败", "Traceback",
+                                            "[工作流", "出错]", "BadRequestError")
                         if (_hw.get("meta") or {}).get("recap") and (result or "").strip():
-                            recap = (result or "").strip().split("\n")[0].strip()[:60]
-                            if recap:
-                                _agent_ref._recap = recap
+                            _rc = (result or "").strip().split("\n")[0].strip()[:60]
+                            if _rc and not any(mk in _rc for mk in _RECAP_ERR_MARKS):
+                                _agent_ref._recap = _rc
                                 if _agent_ref.registry:
-                                    _agent_ref.registry.update_recap(_agent_ref.agent_id, recap)
+                                    _agent_ref.registry.update_recap(_agent_ref.agent_id, _rc)
                         if message.strip():
                             _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
                                         "text": message, "auto": True})

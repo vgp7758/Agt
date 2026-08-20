@@ -814,6 +814,10 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             current = _next_node(edges, current, result.get("port"))
         return "done", _round_out()
     finally:
+        # debug：记录本复合节点最后一轮迭代的子画布输出（list_workflow_outputs('comp/sub') 读）
+        if getattr(ctx, "record_sub", False):
+            ctx.sub_trace[composite_id] = {k: dict(v) if isinstance(v, dict) else v
+                                           for k, v in body_outputs.items()}
         ctx.node_outputs = saved
 
 
@@ -1364,6 +1368,10 @@ class _Ctx:
         self.llm = llm
         self.emit = emit
         self.workspace = workspace or WORKSPACE
+        # 子画布节点输出追踪（debug 用）：record_sub=True 时 _run_composite_body 把每轮迭代的
+        # body_outputs 存到 sub_trace[复合节点id]——debug 工具用 "复合id/子节点id" 语法读取。
+        self.record_sub = False
+        self.sub_trace: dict[str, dict] = {}
 
 
 def _bind_entry(entry: dict, inputs: dict) -> dict:
@@ -1714,6 +1722,7 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
             pass
 
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
+    ctx.record_sub = True   # debug 场景：记录复合节点子画布最后一轮输出（list_workflow_outputs('comp/sub') 可读）
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
     edges = canvas.get("edges", [])
     # 缓存 ctx + 画布到模块级（供 server hotswap/rerun/list_outputs）

@@ -58,7 +58,9 @@ def make_workflow_debug_tools(agent) -> list:
 
     def list_workflow_outputs(node_ids: str = "") -> str:
         """列出上一次 debug_workflow 后指定节点的输出（每节点截断 300 字，防爆上下文）。
-        node_ids 为逗号分隔的节点 id（如 '130001,160001'）；留空则列出全部节点 id 清单。"""
+        node_ids 为逗号分隔的节点 id（如 '130001,160001'）；留空则列出全部节点 id 清单。
+        支持【子画布节点】语法 '复合id/子节点id'（如 '300001/310002'——loop/batch 内部节点的
+        最后一轮迭代输出，来自 ctx.sub_trace；复合节点需在最近一次 debug 中执行过）。"""
         from workflow import _debug_ctx
         ctx = _debug_ctx.get("ctx")
         nodes = _debug_ctx.get("nodes", {})
@@ -66,12 +68,28 @@ def make_workflow_debug_tools(agent) -> list:
             return "（还没有跑过 debug_workflow——请先用 debug_workflow(name, inputs) 执行一次）"
         ids = [x.strip() for x in node_ids.replace("，", ",").split(",") if x.strip()] if node_ids else []
         if not ids:
-            return f"可用节点 id（{len(ctx.node_outputs)} 个）：{', '.join(ctx.node_outputs.keys())}\n用 list_workflow_outputs('130001,160001') 按 id 查看输出；eval_node_output(id,script) 对单个节点输出作过滤/投影。"
+            sub_ids = [f"{c}/{s}" for c, body in (getattr(ctx, "sub_trace", {}) or {}).items()
+                       for s in body if not str(s).startswith("__")]
+            return (f"可用节点 id（{len(ctx.node_outputs)} 个）：{', '.join(ctx.node_outputs.keys())}"
+                    + (f"\n子画布节点（复合/子节点）：{', '.join(sub_ids)}" if sub_ids else "")
+                    + "\n用 list_workflow_outputs('130001,160001') 按 id 查看输出；eval_node_output(id,script) 对单个节点输出作过滤/投影。")
+
+        def _resolve(nid):
+            """'comp/sub' → sub_trace[comp][sub]；普通 id → node_outputs[nid]。"""
+            if "/" in nid:
+                comp, sub = nid.split("/", 1)
+                body = (getattr(ctx, "sub_trace", {}) or {}).get(comp.strip())
+                return (body or {}).get(sub.strip()), True
+            return ctx.node_outputs.get(nid), False
+
         items = []
         for nid in ids:
-            outs = ctx.node_outputs.get(nid)
+            outs, is_sub = _resolve(nid)
             if outs is None:
-                items.append(f"  {nid}：（无输出缓存）")
+                items.append(f"  {nid}：（无输出缓存" + ("——复合节点未在最近 debug 中执行/非最后一轮可达" if is_sub else "") + "）")
+                continue
+            if is_sub:
+                items.append(f"  {nid}: {str(outs)[:300]}" + ("…" if len(str(outs)) > 300 else ""))
                 continue
             n = nodes.get(nid, {})
             title = (n.get("data", {}) or {}).get("nodeMeta", {}).get("title", "")
@@ -91,7 +109,15 @@ def make_workflow_debug_tools(agent) -> list:
         if not ctx:
             return "[错误] 请先 debug_workflow"
         nid = str(node_id).strip()
-        outs = ctx.node_outputs.get(nid)
+        # 子画布节点语法 '复合id/子节点id'（与 list_workflow_outputs 同款）
+        if "/" in nid:
+            comp, sub = nid.split("/", 1)
+            body = (getattr(ctx, "sub_trace", {}) or {}).get(comp.strip())
+            outs = (body or {}).get(sub.strip())
+            if outs is None:
+                return f"[错误] 子画布节点 {nid} 无输出缓存（复合节点未执行/非最后一轮可达）"
+        else:
+            outs = ctx.node_outputs.get(nid)
         if outs is None:
             return f"[错误] 节点 {nid} 无输出缓存"
         script = (script or "").strip()

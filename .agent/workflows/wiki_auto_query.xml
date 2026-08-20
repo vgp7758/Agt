@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（结构化提交版）：wiki_tree 注入 SYSTEM → ReAct 循环（wiki_search/wiki_read 检索）→ 模型调 report_hits 工具提交结构化结果（schema 强约束：relevant+hits[].excerpt 原文摘录）→ 投影到 answer 直接 break → 格式化注入；无关/短消息不注入（before_turn 钩子，默认开）" hook="before_turn" hidden="true">
+<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（结构化提交版）：wiki_tree 注入 SYSTEM → ReAct 循环（wiki_search/wiki_read 检索）→ 模型调 report_hits 工具提交结构化结果（schema 强约束：relevant+hits[].excerpt 原文摘录）→ 投影到 answer 直接 break → 格式化注入；无关/短消息不注入（before_turn 钩子，默认开）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
@@ -98,12 +98,15 @@ async def main(args):
     <batch enabled="false"/>
   </node>
   <node id="300001" type="loop" title="react_loop" x="2520" y="80">
-    <param name="loopType"><![CDATA[infinite]]></param>
+    <param name="loopType"><![CDATA[count]]></param>
+    <param name="loopCount" type="integer"><![CDATA[50]]></param>
     <var name="messages" type="list" ref="150002.raw"/>
     <var name="answer" type="object" literal=""/>
     <in name="tools" type="list" ref="120004.tools"/>
     <out name="answer" type="object" description="结构化结果 {relevant, hits[]}（report_hits 提交或兜底）" ref="300001.answer"/>
-    <out name="all_outputs" type="list" itemType="string"/>
+    <out name="all_outputs" type="list"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <out name="filtered_outputs" type="list" description="筛选结果"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <out name="nth_output" type="object" description="第n个结果"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
     <blocks>
       <node id="__entry__" type="start" title="迭代入口" x="120" y="80">
     <out name="index" type="integer" description="当前索引(0起)"/>
@@ -115,7 +118,7 @@ async def main(args):
     <in name="messages" type="list" ref="__entry__.messages"/>
     <in name="tools" type="list" ref="__entry__.tools"/>
     <in name="temperature" type="number">0.2</in>
-    <in name="enable_thinking" type="boolean">false</in>
+    <in name="enable_thinking" type="boolean">False</in>
     <in name="model" type="string">utility</in>
     <out name="raw" type="object"/>
     <out name="content" type="string"/>
@@ -154,8 +157,8 @@ async def main(args):
       <node id="310009" type="setvar" title="set_answer" x="1620" y="80">
     <in name="answer" left="__entry__.answer" left_type="object" right="ref:310008.answer" right_type="object"/>
   </node>
-      <node id="310010" type="setvar" title="fallback_answer" x="1314.5297415624261" y="243.6237932499409">
-    <in name="answer" left="__entry__.answer" left_type="object" right='literal:{"relevant":false,"hits":[]}' right_type="object"/>
+      <node id="310010" type="setvar" title="fallback_answer" x="1320" y="248">
+    <in name="answer" left="__entry__.answer" left_type="object" right="ref:645462.raw" right_type="object"/>
   </node>
       <node id="310003" type="plugin" title="call_tool" x="1320" y="340" toolName="call_tool">
     <in name="name" type="string" ref="loop-item.name"/>
@@ -195,7 +198,10 @@ async def main(args):
     <in name="messages" left="__entry__.messages" left_type="list" right="ref:310004.messages" right_type="list"/>
   </node>
       <node id="__continue__" type="continue" title="继续(本轮输出)" x="2220" y="154">
-    <in name="result" type="string" ref="310003.raw"/>
+    <in name="resp" type="object" ref="310001.raw"/>
+    <in name="tool" type="string" ref="310003.raw"/>
+    <in name="report" type="object" ref="310008.answer"/>
+    <in name="fallback" type="object" ref="645462.raw"/>
     <batch enabled="false"/>
   </node>
       <node id="__break__" type="break" title="完成退出" x="2220" y="80"/>
@@ -204,22 +210,26 @@ async def main(args):
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
+      <node id="645462" type="plugin" title="pass_through" x="420" y="244" toolName="pass_through">
+    <in name="input" type="object"></in>
+    <out name="raw" type="object" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <batch enabled="false"/>
+  </node>
     </blocks>
     <edges>
     <edge source="300001" target="__entry__" sourcePort="loop-function-inline-output"/>
     <edge source="__entry__" target="310001"/>
-    <edge source="310001" target="310002"/>
     <edge source="310008" target="310009"/>
     <edge source="310009" target="__break__"/>
     <edge source="310002" target="310010" sourcePort="false"/>
     <edge source="310010" target="__break__"/>
     <edge source="310003" target="310004"/>
     <edge source="310004" target="310005"/>
-    <edge source="310005" target="__continue__"/>
     <edge source="310002" target="310008" sourcePort="true"/>
     <edge source="310002" target="310003" sourcePort="true_1"/>
     <edge source="310001" target="1122665"/>
     <edge source="1122665" target="310002"/>
+    <edge source="310005" target="__continue__"/>
     </edges>
     <batch enabled="false" nth="0"/>
   </node>

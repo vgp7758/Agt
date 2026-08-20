@@ -649,7 +649,7 @@ def main():
     print("=" * 64)
     print("🤖 交互式 Agent")
     print("=" * 64)
-    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /update /reload /restart /debug /agent /help")
+    print("命令：/save /rename /resume /list /show /reset /config /budget /stats /status /model /autonomous /memory /logs /download /web /snapshot /rewind /rag /tools /update /reload /restart /debug /agent /help")
     print("退出：quit / Ctrl+D  (运行中 Ctrl+C 第一次=停当前任务回到输入，第二次=退出)")
     print("=" * 64)
 

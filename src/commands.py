@@ -1189,6 +1189,145 @@ def _cmd_restart(ctx: CommandContext, args):
         print("⚠️ 找不到 work_q，无法自动退出——请手动关闭本进程（看门狗已在等）")
 
 
+# ========== 实例状态（/status） ==========
+
+def _child_procs(pid: int) -> list:
+    """枚举 pid 的直接子进程 [(pid, name, cmdline)]。Windows wmic / POSIX ps，失败返回空。"""
+    import os as _os
+    import subprocess as _sp
+    try:
+        if _os.name == "nt":
+            r = _sp.run(
+                ["wmic", "process", "where", f"ParentProcessId={pid}",
+                 "get", "ProcessId,Name,CommandLine", "/format:csv"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+            out = []
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if not line or "," not in line:
+                    continue
+                parts = line.split(",")
+                # CSV: Node,CommandLine,Name,ProcessId —— CommandLine 可含逗号，从右解析
+                try:
+                    cpid = int(parts[-1])
+                    name = parts[-2]
+                    cmd = ",".join(parts[1:-2])
+                    out.append((cpid, name, cmd))
+                except (ValueError, IndexError):
+                    continue
+            return out
+        r = _sp.run(["ps", "-o", "pid=,comm=,args=", "--ppid", str(pid)],
+                    capture_output=True, text=True, timeout=15)
+        return [(int(p[0]), p[1], p[2]) for p in
+                (l.strip().split(None, 2) for l in r.stdout.splitlines()) if len(p) == 3]
+    except Exception:
+        return []
+
+
+def _proc_tree(max_depth: int = 3) -> list:
+    """本进程的子进程树（递归 max_depth 层）。返回 [(depth, pid, name, cmdline)]。
+    诊断 run_shell 卡死用：cmd→powershell→GUI 安装器这类孙进程链直接可见。"""
+    import os as _os
+    rows = []
+
+    def walk(pid, depth):
+        if depth > max_depth:
+            return
+        for cpid, name, cmd in _child_procs(pid):
+            rows.append((depth, cpid, name, cmd))
+            walk(cpid, depth + 1)
+
+    walk(_os.getpid(), 1)
+    return rows
+
+
+def _cmd_status(ctx: CommandContext, args):
+    """/status —— 实例状态总览：模型/队列/会话 + 子进程树(PID+命令行) + 后台服务/任务 + 团队 + 钩子。
+    诊断卡死/挂起首选：busy 但长时间无进展时看进程树——run_shell 启动的卡住进程一目了然
+    （上次 8000 实例卡 88 分钟就是 GUI 安装器挂在孙进程上，taskkill <pid> 即可解围）。"""
+    import os as _os
+    a = ctx.agent
+    st = ctx.state or {}
+    print("=" * 64)
+    print(f"🩺 实例状态（PID {_os.getpid()}）")
+    print("=" * 64)
+    # —— 基本 ——
+    try:
+        wq = ctx.work_q.qsize() if ctx.work_q is not None else "?"
+    except Exception:
+        wq = "?"
+    try:
+        import real_tools as _rt
+        timeout = _rt.TOOL_TIMEOUT
+    except Exception:
+        timeout = "?"
+    print(f"会话: {ctx.session.name or '(未命名)'}（{len(ctx.session.turns)} 轮）")
+    print(f"模型: {a.model_name}  utility={getattr(a, 'utility_model', '') or '(跟随主)'}")
+    print(f"运行: busy={st.get('busy')}  交互目标={getattr(a, '_active_target', '_main_')}")
+    print(f"队列: work_q={wq}  inbox={len(getattr(a, 'inbox', []) or [])}"
+          f"  pending={len(getattr(a, 'pending_messages', []) or [])}  tool_timeout={timeout}s")
+    # —— 子进程树（卡死诊断核心）——
+    print(f"\n🌳 子进程树（本实例之下，≤3 层；卡住的可 taskkill <pid> 解围）：")
+    tree = _proc_tree()
+    if not tree:
+        print("  (无子进程)")
+    for depth, pid, name, cmd in tree:
+        print(f"  {'  ' * depth}[{pid}] {(cmd or name).replace(chr(10), ' ')[:110]}")
+    # —— 后台服务 ——
+    svcs = getattr(a, "services", None)
+    if svcs is not None:
+        print("\n⚙️ 后台服务：")
+        try:
+            print(svcs.list())
+        except Exception as e:
+            print(f"  (读取失败: {e})")
+    # —— 定时任务 ——
+    sched = getattr(a, "scheduler", None)
+    if sched is not None:
+        print("\n⏰ 定时任务：")
+        try:
+            print(sched.list())
+        except Exception:
+            print("  (读取失败)")
+    # —— 后台子 Agent 任务 ——
+    bts = getattr(a, "background_tasks", None) or {}
+    if bts:
+        print(f"\n📋 后台任务（{len(bts)}）：")
+        for aid, t in list(bts.items())[:8]:
+            print(f"  {aid:<14} {t.get('status', '?')}")
+        if len(bts) > 8:
+            print(f"  ...（其余 {len(bts) - 8} 个略）")
+    # —— 团队（紧凑）——
+    reg = getattr(a, "registry", None)
+    if reg is not None:
+        with reg._lock:
+            entries = list(reg._agents.values())
+        subs = [e for e in entries if e.role == "subagent"]
+        running = sum(1 for e in subs if e.status == "running")
+        print(f"\n👥 团队：{len(subs)} 个子 Agent（运行中 {running}）")
+        for e in subs[:8]:
+            rc = (e.recap or e.task or "")[:36]
+            print(f"  {e.agent_id:<12} {e.status:<8} {rc}")
+        if len(subs) > 8:
+            print(f"  ...（其余 {len(subs) - 8} 个略，/agent 看全部）")
+    # —— 钩子工作流 ——
+    try:
+        from real_tools import WORKSPACE as _ws
+        from workflow import get_hook_workflows
+        hws = get_hook_workflows(_ws)
+        if hws:
+            print(f"\n🪝 钩子工作流（{len(hws)}）：")
+            for hw in hws:
+                m = hw.get("meta") or {}
+                flags = "/".join(f for f, k in (("async", "async"), ("recap", "recap")) if m.get(k))
+                fl = f"（{flags}）" if flags else ""
+                print(f"  {m.get('hook', '?'):<14} {hw['name']}{fl}")
+    except Exception:
+        pass
+    print("=" * 64)
+
+
 def _cmd_agent(ctx: CommandContext, args):
     """/agent [agent_id] —— 切换直接交互的 Agent 目标。
     无参数：列出所有团队成员（含 agent_id、名称、状态）。
@@ -1391,6 +1530,10 @@ def build_default_registry() -> CommandRegistry:
         "/debug prompt 你好，介绍下你自己\n"
         "  投影=当前 session 状态+提示词；tool_calls 只展示不执行；\n"
         "  session/events 零写入（llm_calls.jsonl 仍记录，/stats 可观测）")
+    reg.register("status", _cmd_status,
+        "实例状态总览：模型/队列/子进程树(PID+命令行)/后台服务/团队/钩子（诊断卡死首选）",
+        "/status            全量状态；busy 长时间无进展时看进程树——\n"
+        "                    run_shell 启动的卡住进程一目了然，taskkill <pid> 解围")
     reg.register("agent", _cmd_agent,
         "[agent_id]  列出/切换直接交互的 Agent 目标",
         "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"

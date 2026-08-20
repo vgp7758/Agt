@@ -1038,11 +1038,36 @@ class Agent:
                                     "run_id": rid, "text": f"{type(e2).__name__}: {str(e2)[:200]}"})
                         return hw["name"], False, "", "", rid
                 results = {}
-                with ThreadPoolExecutor(max_workers=len(sync_hws)) as ex:
-                    futs = {ex.submit(_run_one, hw): hw["name"] for hw in sync_hws}
-                    for fut in as_completed(futs):
-                        nm, inject, result, message, rid = fut.result()
-                        results[nm] = (inject, result, message, rid)
+                # 同步钩子整组超时（settings.json hook_timeout，默认 300s；0=不限）：
+                # 超时的钩子发 auto_wf_error + 结果丢弃（Python 线程不可强杀——后台自然跑完但不再等它），
+                # 已完成/后续完成的其它钩子结果照常合并注入。异步钩子（async=true）不受此限制。
+                _timeout_s = 300
+                try:
+                    import config as _cfg
+                    _timeout_s = max(0, int(_cfg.load_hook_timeout()))
+                except Exception:
+                    pass
+                ex = ThreadPoolExecutor(max_workers=max(1, len(sync_hws)))
+                try:
+                    futs = {hw["name"]: ex.submit(_run_one, hw) for hw in sync_hws}
+                    import concurrent.futures as _cf
+                    _deadline = time.time() + (_timeout_s if _timeout_s else 1e18)
+                    for hw in sync_hws:   # 按声明序等结果（注入顺序稳定；单 fut 按剩余 deadline 等待）
+                        nm = hw["name"]
+                        try:
+                            _r = futs[nm].result(timeout=max(0.05, _deadline - time.time()))
+                            # _run_one 返回五元组 (name, inject, result, message, rid)——剥掉 name 存四元组，
+                            # 与下方合并段解包对齐（此前整存五元组 → 解包错位：inject=name/result=bool）
+                            results[nm] = (_r[1], _r[2], _r[3], _r[4])
+                        except _cf.TimeoutError:
+                            futs[nm].cancel()
+                            _LOG.warning("钩子工作流 %s 超时（>%ss）结果丢弃", nm, _timeout_s)
+                            self._emit({"type": "auto_wf_error", "name": nm, "hook": hook,
+                                        "run_id": "", "text": f"⏱ 超时（>{_timeout_s}s）结果已丢弃，主循环继续"})
+                        except Exception as e3:
+                            _LOG.warning("钩子 %s 收集异常: %s", nm, e3)
+                finally:
+                    ex.shutdown(wait=False, cancel_futures=True)   # 不等超时线程（结果已丢弃）
                 # 按声明序合并（注入顺序稳定）
                 try:
                     for hw in sync_hws:

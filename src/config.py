@@ -176,6 +176,16 @@ def load_panic_window() -> int:
         return 0
 
 
+def load_hook_timeout() -> int:
+    """同步钩子工作流超时秒数（settings.json 的 hook_timeout；默认 300，0=不限）。
+    超时的钩子结果丢弃（auto_wf_error 标记），其它已完成的照常注入——主循环不被卡住。
+    async 钩子不受此限制。"""
+    try:
+        return max(0, int(load_runtime_settings().get("hook_timeout", 300)))
+    except Exception:
+        return 300
+
+
 def load_detail_step() -> int:
     """步距衰减的每步减少字数（settings.json 的 detail_step；默认 15）。"""
     try:

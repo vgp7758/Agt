@@ -1,0 +1,46 @@
+<workflow name="intent_route" description="识别用户输入意图（退款/咨询/其他）并分流到不同回复（演示：意图识别 type22 分支 branch_0/branch_1/default）">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="query" type="string" required="true"/>
+  </node>
+  <node id="130060" type="intent" title="Intent" x="420" y="80">
+    <in name="query" type="string" ref="100001.query"/>
+    <model>local-qwen</model>
+    <intent name="退款"/>
+    <intent name="咨询"/>
+  </node>
+  <node id="130061" type="llm" title="LLM" x="720" y="80">
+    <in name="query" type="string" ref="100001.query"/>
+    <param name="prompt" type="string"><![CDATA[用户想退款（原文：{{query}}）。用一句话安抚并简述退款流程。]]></param>
+    <model>local-qwen</model>
+    <out name="output" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="130062" type="llm" title="LLM" x="720" y="172">
+    <in name="query" type="string" ref="100001.query"/>
+    <param name="prompt" type="string"><![CDATA[用户在咨询（原文：{{query}}）。用一句话友善解答。]]></param>
+    <model>local-qwen</model>
+    <out name="output" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="130063" type="llm" title="LLM" x="720" y="264">
+    <in name="query" type="string" ref="100001.query"/>
+    <param name="prompt" type="string"><![CDATA[未明确识别用户意图（原文：{{query}}）。用一句话引导用户说明需求。]]></param>
+    <model>local-qwen</model>
+    <out name="output" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="130064" type="aggregator" title="Aggregator" x="1020" y="80">
+    <group name="reply" type="string"><var ref="130061.output" type="string"/><var ref="130062.output" type="string"/><var ref="130063.output" type="string"/></group>
+  </node>
+  <node id="900001" type="end" title="Exit" x="1320" y="80">
+    <out name="result" ref="130064.reply" type="string"/>
+  </node>
+  <edge from="100001" to="130060"/>
+  <edge from="130060" to="130061" port="branch_0"/>
+  <edge from="130060" to="130062" port="branch_1"/>
+  <edge from="130060" to="130063" port="default"/>
+  <edge from="130061" to="130064"/>
+  <edge from="130062" to="130064"/>
+  <edge from="130063" to="130064"/>
+  <edge from="130064" to="900001"/>
+</workflow>

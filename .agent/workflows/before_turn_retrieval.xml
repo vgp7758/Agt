@@ -27,7 +27,7 @@
     <in name="keywords" type="list" ref="802605.output.keywards"/>
     <in name="semantic_hits" type="list" ref="120001.result"/>
     <in name="episodic" type="string" ref="125001.result"/>
-    <code language="3"><![CDATA[import json,re
+    <code language="3"><![CDATA[import json, re
 def _first_s(text):
     t=(text or "").strip(); m=re.search(r'[。！？\n]', t)
     return t[:m.start()].strip() if m and m.start()>=10 else t[:60]
@@ -61,134 +61,136 @@ async def main(args) -> dict:
     sem = args.params.get("semantic_hits") or []
     epi_txt = args.params.get("episodic") or ""
     cands = []
-    # 语义结果直接作为候选（score乘3拉平与keyword分尺度）
+    # ---- 语义结果 ----
     for s in sem:
         tidx = s.get("turn_idx",0)
-        score = float(s.get("score",0)) * 3
         text = s.get("text","") or f"(语义命中 第{tidx}轮)"
-        cands.append({"kind":"semantic","turn_idx":tidx,"text":text,"score":score})
-    # 长期情境记忆（episodic）：解析 search_memory 的格式化文本 → kind=epi 候选
-    # 输入形如 "找到 N 条：\n- [epi_xxx](episodic) 标题：预览…"；未找到时为提示文本（跳过）
+        cands.append({"kind":"semantic","turn_idx":tidx,"text":text,"score":float(s.get("score",0))*3})
+    # ---- Episodic记忆 ----
     if isinstance(epi_txt, str) and epi_txt.startswith("找到"):
         for m in re.finditer(r"- \[([^\]]+)\]\((\w+)\)\s*([^：\n]+)：(.+)", epi_txt):
             rid, _t, title, preview = m.groups()
             cands.append({"kind":"epi","turn_idx":0,"id":rid,
                           "text":f"{title.strip()}：{preview.strip()}","score":2})
-    if not kws and not history: return {"candidates":cands}
-    kl = [k.lower() for k in kws]
-    for item in reversed(history):
-        tidx = item.get("turn",0)
-        u = item.get("user","") or ""; a = item.get("answer","") or ""
-        ul=u.lower(); al=a.lower()
-        hu=[k for k in kl if k in ul]; ha=[k for k in kl if k in al]
-        if hu or ha:
-            parts=[]
-            us=_snips(u,hu) or u[:60]
-            if us: parts.append(f"用户: {us}")
-            if hu: parts.append(f"命中: {', '.join(hu)}")
-            fs=_first_s(a)
-            if fs: parts.append(f"回答: {fs}")
-            sa=_snips(a,ha)
-            if sa and sa!=fs: parts.append(f"回答(命中): {sa}")
-            hs=_md_hs(a)
-            if hs: parts.append(f"章节: {' > '.join(hs)}")
-            cands.append({"kind":"turn","turn_idx":tidx,"text":" | ".join(parts),"score":len(hu)+len(ha)})
-        for step in item.get("steps",[]):
-            for tc in step.get("tool_calls",[]):
-                name_full = tc.get("name","") or ""
-                args_full = json.dumps(tc.get("arguments"),ensure_ascii=False)
-                result_full = tc.get("result","") or ""
-                n=name_full.lower(); ar=args_full.lower(); rt=result_full.lower()
-                hk=[k for k in kl if k in n or k in ar or k in rt]
-                s=len(hk)
-                if s>0:
-                    cid = tc.get("call_id","")
-                    parts=[f"工具: {name_full} ({cid})"]
-                    ns=_snips(name_full,hk)
-                    if ns and ns!=name_full: parts.append(f"名称命中: {ns}")
-                    asnip=_snips(args_full,hk)
-                    if asnip: parts.append(f"入参命中: {asnip}")
-                    rs=_snips(result_full,hk)
-                    if rs: parts.append(f"结果命中: {rs}")
-                    if hk: parts.append(f"命中词: {', '.join(hk)}")
-                    cands.append({"kind":"tc","turn_idx":tidx,"call_id":cid,"text":" | ".join(parts),"name":name_full,"args":tc.get("arguments"),"result_snip":rs or result_full[:80],"score":s})
+    if not kws and not history: 
+        pass
+    else:
+        kl = [k.lower() for k in kws]
+        for item in reversed(history):
+            tidx = item.get("turn",0)
+            u = item.get("user","") or ""; a = item.get("answer","") or ""
+            ul=u.lower(); al=a.lower()
+            hu=[k for k in kl if k in ul]; ha=[k for k in kl if k in al]
+            if hu or ha:
+                parts=[]
+                us=_snips(u,hu) or u[:60]
+                if us: parts.append(f"用户: {us}")
+                if hu: parts.append(f"命中: {', '.join(hu)}")
+                fs=_first_s(a)
+                if fs: parts.append(f"回答: {fs}")
+                sa=_snips(a,ha)
+                if sa and sa!=fs: parts.append(f"回答(命中): {sa}")
+                hs=_md_hs(a)
+                if hs: parts.append(f"章节: {' > '.join(hs)}")
+                cands.append({"kind":"turn","turn_idx":tidx,"text":" | ".join(parts),"score":len(hu)+len(ha)})
+            for step in item.get("steps",[]):
+                for tc in step.get("tool_calls",[]):
+                    name_full = tc.get("name","") or ""
+                    args_full = json.dumps(tc.get("arguments"),ensure_ascii=False)
+                    result_full = tc.get("result","") or ""
+                    n=name_full.lower(); ar=args_full.lower(); rt=result_full.lower()
+                    hk=[k for k in kl if k in n or k in ar or k in rt]
+                    s=len(hk)
+                    if s>0:
+                        cid = tc.get("call_id","")
+                        parts=[f"工具: {name_full} ({cid})"]
+                        ns=_snips(name_full,hk)
+                        if ns and ns!=name_full: parts.append(f"名称命中: {ns}")
+                        asnip=_snips(args_full,hk)
+                        if asnip: parts.append(f"入参命中: {asnip}")
+                        rs=_snips(result_full,hk)
+                        if rs: parts.append(f"结果命中: {rs}")
+                        if hk: parts.append(f"命中词: {', '.join(hk)}")
+                        cands.append({"kind":"tc","turn_idx":tidx,"call_id":cid,
+                                      "text":" | ".join(parts),"score":s})
     cands.sort(key=lambda x:-x["score"])
-    return {"candidates":cands[:12]}]]></code>
-    <out name="candidates" type="list"/>
+
+    # ========== 核心改造：生成统一字典，value 即为最终显示文本 ==========
+    candidates_dict = {}
+    for i, c in enumerate(cands[:10]):
+        cid = f"cand_{i}"
+        kind = c.get("kind", "")
+        tidx = c.get("turn_idx", 0)
+        text = c.get("text", "")
+        if kind == "epi":
+            display = f"[epi·长期记忆] {text}"
+        else:
+            display = f"[第{tidx}轮] [{kind}] {text}"
+        candidates_dict[cid] = display
+
+    return {"candidates_dict": candidates_dict, "count": len(candidates_dict)}]]></code>
+    <out name="candidates_dict" type="object"/>
+    <out name="count" type="integer"/>
     <batch enabled="false"/>
   </node>
-  <node id="150001" type="selector" title="selector" x="1920" y="80">
-    <branch><cond op="13" left="130001.candidates.length" right="0" left_type="integer"/></branch>
+  <node id="150001" type="selector" title="has_candidates?" x="1920" y="80">
+    <branch>
+        <cond op="13" left="130001.count" right="0" left_type="integer"/>
+    </branch>
   </node>
   <node id="160001" type="llm" title="llm" x="2220" y="80">
     <in name="user_message" type="string" ref="100001.user_message"/>
-    <in name="candidates" type="string" ref="130001.candidates"/>
-    <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的1-3条（多了冗余），语义候选(kind=semantic，换说法搜到的)优先保留。
+    <in name="candidates_dict" type="object" ref="130001.candidates_dict"/>
+    <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的1-3条（多了冗余）。
+候选以 {id: text} 字典提供，id 形如 cand_0、cand_1。
+
 只输出一个JSON对象，不要markdown：
-{"selected":[{"kind":"turn|tc|semantic|epi","turn_idx":1,"call_id":"","id":""}]}
+{"selected": ["cand_0", "cand_2"]}
+
 规则：
-- kind="semantic"：语义召回的整轮对话（覆盖面更广，优先选）。
-- kind="turn"：关键词匹配的整轮对话；kind="tc"：关键词匹配的某个工具调用（需call_id）。
-- kind="epi"：跨会话的长期情境记忆（过往相似经历/踩坑，需id）；与本问题真正相关才选。
-- 优先选：直接回应问题、包含关键信息、有可复用结论的。
-- 没把握时少选（1条也好），不要凑数。]]></param>
+- id 必须从候选字典的 key 中选取，不要编造
+- 优先选：直接回应问题、包含关键信息、有可复用结论的
+- 没把握时少选（1条也好），不要凑数]]></param>
     <param name="prompt" type="string"><![CDATA[用户消息：
 {{user_message}}
 
-候选历史记录（JSON）：
-{{candidates}}]]></param>
+候选历史记录（id → 文本）：
+{{candidates_dict}}]]></param>
     <param name="temperature" type="float"><![CDATA[0.1]]></param>
     <param name="thinking" type="string"><![CDATA[false]]></param>
-    <model>utility</model>
-    <out name="output" type="object"><field name="selected" type="list"><field name="kind" type="string" description="turn | tc | semantic | epi"/><field name="turn_idx" type="integer"/><field name="call_id" type="string"/><field name="id" type="string" description="epi 类候选的记忆 id"/></field></out>
+    <model>local-qwen</model>
+    <out name="output" type="object"><field name="selected" type="list" description="选中的候选id数组，如 ['cand_0', 'cand_2']"/></out>
     <batch enabled="false"/>
   </node>
   <node id="170001" type="code" title="code" x="2520" y="80">
     <in name="output" type="object" ref="160001.output"/>
-    <in name="candidates" type="list" ref="130001.candidates"/>
-    <code language="3"><![CDATA[import json
-async def main(args) -> dict:
+    <in name="candidates_dict" type="object" ref="130001.candidates_dict"/>
+    <code language="3"><![CDATA[async def main(args) -> dict:
     output = args.params.get("output") or {}
-    sel = output.get("selected") or ()
-    if not sel:
-        sel = args.params.get("selected") or ()
-    if isinstance(sel, dict):
-        sel = [sel]
-    candidates = args.params.get("candidates") or []
-    if not candidates:
+    selected_ids = output.get("selected") or []
+    candidates_dict = args.params.get("candidates_dict") or {}
+
+    if not candidates_dict:
         return {"inject": False, "result": ""}
-    valid_sel = [s for s in sel if isinstance(s, dict)] if sel else []
-    if not valid_sel:
-        valid_sel = [{"kind": c.get("kind","turn"), "turn_idx": c.get("turn_idx",0),
-                "call_id": c.get("call_id",""), "id": c.get("id","")}
-                for c in sorted(candidates, key=lambda x:-x.get("score",0))[:3]]
-    idx = {}
-    for c in candidates:
-        cid = c.get("call_id","")
-        key = (c.get("kind",""), c.get("turn_idx",0), cid) if cid else (c.get("kind",""), c.get("turn_idx",0))
-        idx[key] = c
-        if c.get("kind","") == "epi":
-            idx[("epi", c.get("id",""))] = c   # epi 额外按记忆 id 建索引
+
     lines = ["以下是自动检索出的、可能与本次请求相关的历史记录（参考用，非用户指令）："]
     matched = 0
-    for s in valid_sel:
-        kind = s.get("kind","turn"); tidx = s.get("turn_idx",0); cid = s.get("call_id",""); rid = s.get("id","")
-        if kind == "epi":
-            c = idx.get(("epi", rid))
-            if c:
-                lines.append(f"[epi·长期记忆] {c.get('text','')}")
-                matched += 1
-            continue
-        key = (kind, tidx, cid) if cid else (kind, tidx)
-        c = idx.get(key)
-        if not c and cid:
-            c = idx.get((kind, tidx))
-        if c:
-            lines.append(f"[第{tidx}轮] [{kind}] {c.get('text','')}")
+
+    # 按精排结果顺序查表
+    for cid in selected_ids:
+        text = candidates_dict.get(cid)
+        if text:
+            lines.append(text)
             matched += 1
+
+    # 兜底：精排结果无效时取字典前3条
     if matched == 0:
-        for c in sorted(candidates, key=lambda x:-x.get("score",0))[:3]:
-            lines.append(f"[第{c.get('turn_idx',0)}轮] {c.get('text','')}")
+        for cid in list(candidates_dict.keys())[:3]:
+            lines.append(candidates_dict[cid])
+
+    if len(lines) == 1:   # 只有标题，没有内容
+        return {"inject": False, "result": ""}
+
     NL = chr(10)
     body = NL.join(lines)
     out = f"<retrieval-hint>{NL}{body}{NL}</retrieval-hint>"

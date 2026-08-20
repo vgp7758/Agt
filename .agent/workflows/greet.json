@@ -3,46 +3,144 @@
     {
       "id": "100001",
       "type": "1",
+      "x": 120,
+      "y": 80,
       "data": {
         "outputs": [
-          {"name": "name", "type": "string", "required": true}
+          {
+            "name": "name",
+            "type": "string",
+            "required": true
+          }
         ],
-        "trigger_parameters": []
+        "trigger_parameters": [],
+        "nodeMeta": {
+          "title": "Entry"
+        }
       }
     },
     {
       "id": "130001",
       "type": "3",
+      "x": 420,
+      "y": 80,
       "data": {
         "inputs": {
           "inputParameters": [
-            {"name": "name", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "name"}}}}
+            {
+              "name": "name",
+              "input": {
+                "type": "string",
+                "value": {
+                  "type": "ref",
+                  "content": {
+                    "source": "block-output",
+                    "blockID": "100001",
+                    "name": "name"
+                  }
+                }
+              }
+            }
           ],
           "llmParam": [
-            {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "用一句话热情地打招呼，对方名字是 {{name}}。只输出问候语本身。"}}},
-            {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": "你是友好的助手。"}}},
-            {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": 0.9}}}
-          ]
+            {
+              "name": "prompt",
+              "input": {
+                "type": "string",
+                "value": {
+                  "type": "literal",
+                  "content": "用一句话热情地打招呼，对方名字是 {{name}}。只输出问候语本身。"
+                }
+              }
+            },
+            {
+              "name": "systemPrompt",
+              "input": {
+                "type": "string",
+                "value": {
+                  "type": "literal",
+                  "content": "你是友好的助手。"
+                }
+              }
+            },
+            {
+              "name": "temperature",
+              "input": {
+                "type": "float",
+                "value": {
+                  "type": "literal",
+                  "content": 0.9
+                }
+              }
+            },
+            {
+              "name": "model",
+              "input": {
+                "type": "string",
+                "value": {
+                  "type": "literal",
+                  "content": "kimi"
+                }
+              }
+            }
+          ],
+          "batch": {
+            "enabled": false
+          }
         },
-        "outputs": [{"name": "output", "type": "string"}]
+        "outputs": [
+          {
+            "name": "output",
+            "type": "string"
+          }
+        ],
+        "nodeMeta": {
+          "title": "LLM"
+        }
       }
     },
     {
       "id": "900001",
       "type": "2",
+      "x": 720,
+      "y": 80,
       "data": {
         "inputs": {
           "terminatePlan": "returnVariables",
           "inputParameters": [
-            {"name": "greeting", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "130001", "name": "output"}}}}
+            {
+              "name": "greeting",
+              "input": {
+                "type": "string",
+                "value": {
+                  "type": "ref",
+                  "content": {
+                    "source": "block-output",
+                    "blockID": "130001",
+                    "name": "output"
+                  }
+                }
+              }
+            }
           ]
+        },
+        "nodeMeta": {
+          "title": "Exit"
         }
       }
     }
   ],
   "edges": [
-    {"sourceNodeID": "100001", "targetNodeID": "130001", "sourcePortID": ""},
-    {"sourceNodeID": "130001", "targetNodeID": "900001", "sourcePortID": ""}
+    {
+      "sourceNodeID": "100001",
+      "targetNodeID": "130001",
+      "sourcePortID": ""
+    },
+    {
+      "sourceNodeID": "130001",
+      "targetNodeID": "900001",
+      "sourcePortID": ""
+    }
   ],
   "versions": {}
 }

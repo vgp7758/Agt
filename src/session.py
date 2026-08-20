@@ -426,6 +426,77 @@ class Session:
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
 
+    # ========== 投影分段估算（/context 诊断用，只读） ==========
+    def projection_breakdown(self) -> dict:
+        """按投影装配顺序分段估算各段 msgs/chars/tokens（/context 命令用）。
+        复用冻结渲染缓存，开销小；只读不改动任何状态。返回
+        {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars}。"""
+        out = {"sections": [], "total_tokens": 0, "total_chars": 0}
+
+        def _add(name: str, msgs: list, meta: str = ""):
+            chars = sum(len(m.get("content") or "") if isinstance(m.get("content"), str)
+                        else sum(len(b.get("text", "")) for b in m["content"] if isinstance(b, dict))
+                        for m in msgs if m.get("content"))
+            t = self._estimate_tokens(msgs)
+            out["sections"].append({"name": name, "msgs": len(msgs), "chars": chars,
+                                    "tokens": t, "meta": meta})
+            out["total_tokens"] += t
+            out["total_chars"] += chars
+
+        _add("system(人设+环境)", [{"role": "system", "content": self.system}])
+        if self._task_guidance_provider:
+            try:
+                _tg = self._task_guidance_provider()
+                if _tg:
+                    _add("rules(AGENTS+规则+技能)", [{"role": "system", "content": _tg}])
+            except Exception:
+                pass
+        if self._ltm_static_provider:
+            try:
+                _b = self._ltm_static_provider()
+                if _b:
+                    _add("长期记忆·静态", [{"role": "system", "content": _b}])
+            except Exception:
+                pass
+        fc = self._last_fold_count
+        if fc > 0 and self.assembly.get("history", True):
+            _add(f"折叠摘要({fc}轮)", [{"role": "system", "content": self._folded_summary(fc)}],
+                 meta=f"最早{fc}轮折叠为结构摘要，原文可recall")
+        if self.assembly.get("history", True):
+            lv_msgs: dict[int, list] = {}
+            lv_turns: dict[int, int] = {}
+            for i in range(fc, len(self.turns)):
+                lv = self._tier_level(i)
+                lv_msgs.setdefault(lv, []).extend(self._render_turn_frozen(i))
+                lv_turns[lv] = lv_turns.get(lv, 0) + 1
+            for lv in sorted(lv_msgs):
+                _add(f"档{lv}历史({lv_turns[lv]}轮)", lv_msgs[lv],
+                     meta=f"工具结果上限{max(__import__('toollog').DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步")
+        if self._current is not None:
+            cur = [{"role": "user", "content": self._user_content(self._current)}]
+            _bt = getattr(self._current, "_before_turn_hint", None)
+            if _bt:
+                cur.append({"role": "system", "content": _bt})
+            cur.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
+                                               full_window=RECENT_FULL_STEPS))
+            _add(f"当前轮(第{len(self.turns)+1}轮·{len(self._current.steps)}步)", cur)
+        tail_blocks = []
+        if self.assembly.get("tail", True):
+            self._collect_ambient(tail_blocks, self._time_provider)
+            self._collect_ambient(tail_blocks, self._system_extra_provider)
+            self._collect_ambient(tail_blocks, self._plan_provider)
+            self._collect_ambient(tail_blocks, self._spec_provider)
+            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+                try:
+                    _b = self._ltm_episodic_provider(self._current.user_message)
+                    if _b and _b.strip():
+                        tail_blocks.append(_b.strip())
+                except Exception:
+                    pass
+        if tail_blocks:
+            _add("tail(时间/计划/团队/召回)", [{"role": "system", "content": self._ambient_group(tail_blocks)}])
+        return out
+
     # ========== 构建 ==========
     def _emit_event(self, event: dict):
         """append 一个事件到 events.jsonl；name 未就绪(_event_path=None)时 buffer 在内存。

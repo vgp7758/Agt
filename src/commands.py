@@ -1328,6 +1328,76 @@ def _cmd_status(ctx: CommandContext, args):
     print("=" * 64)
 
 
+def _cmd_context(ctx: CommandContext, args):
+    """/context —— 上下文堆积情况：最近 react 的实际 prompt tokens + 投影各段估算占比。
+    段落：system / rules / 长期记忆·静态 / 折叠摘要 / 各档历史 / global_summary / 当前轮 / tail。"""
+    import time as _time
+    s = ctx.agent.session
+
+    # ① 最近一次 react 调用（实际 token，来自 llm_calls）
+    last_react = None
+    try:
+        for r in reversed(s.llm_calls.all_records()):
+            if r.get("scene") == "react" and r.get("outcome") == "success":
+                last_react = r
+                break
+    except Exception:
+        pass
+
+    print(f"📊 上下文堆积「{s.name or '(未命名)'}」（{len(s.turns)} 轮完成"
+          + (f" + 进行中第{len(s.turns)+1}轮" if s._current is not None else "") + "）")
+    if last_react:
+        u = last_react.get("usage") or {}
+        pt, ct = u.get("prompt_tokens") or 0, u.get("completion_tokens") or 0
+        cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        age_min = (_time.time() - (last_react.get("ts") or 0)) / 60
+        age_s = f"{age_min:.0f}分钟前" if age_min < 90 else f"{age_min/60:.1f}小时前"
+        cache_pct = f"，缓存命中 {cached*100//max(pt,1)}%" if cached else ""
+        print(f"最近 react 调用（{age_s}，{last_react.get('model','?')}）: "
+              f"prompt {pt:,} tok{cache_pct} | completion {ct:,}")
+    else:
+        print("（本 session 尚无成功的 react 调用记录）")
+
+    # ② 分段估算
+    bd = s.projection_breakdown()
+    total = max(bd["total_tokens"], 1)
+    win = s.max_effective_context_window
+    panic = 0
+    try:
+        import config as _cfg
+        panic = _cfg.load_panic_window()
+    except Exception:
+        pass
+    if win:
+        pct = bd["total_tokens"] * 100 / win
+        bar = "▓" * min(int(pct // 5), 30)
+        print(f"\n投影估算: ~{bd['total_tokens']:,} tok / 分档窗口 {win:,} ({pct:.1f}%) {bar}")
+        if panic:
+            print(f"保命线: {panic:,}（轮内超此线才应急折叠；当前余量 {max(panic - bd['total_tokens'], 0):,}）")
+        print(f"折叠计划: _planned_fold={s._planned_fold} 轮 | 已毕业边界 {len(s._tier_boundaries)} 个 | max_level={s.max_level}")
+    else:
+        print(f"\n投影估算: ~{bd['total_tokens']:,} tok（未配 max_effective_context_window，走 recent_window 路径）")
+        if s.global_summary:
+            print(f"global_summary: {len(s.global_summary)} 字（窗口外轮次摘要）")
+
+    # 段落表
+    print("\n段落构成（估算 tok / 占比）：")
+    for sec in bd["sections"]:
+        p = sec["tokens"] * 100 / total
+        bar = "█" * min(int(p * 2), 40)
+        meta = f"   ← {sec['meta']}" if sec["meta"] else ""
+        print(f"  {sec['name']:<28} {sec['tokens']:>9,}  {p:5.1f}% {bar}{meta}")
+    print(f"  {'合计':<28} {bd['total_tokens']:>9,}  100.0%  ({bd['total_chars']:,} 字符 / "
+          f"{sum(x['msgs'] for x in bd['sections']):,} 条消息)")
+    # 标定系数：估算(chars/4)对中文偏低；有实际 react 值时给出换算比，各段占比不受影响
+    if last_react:
+        pt = (last_react.get("usage") or {}).get("prompt_tokens") or 0
+        if pt and bd["total_tokens"]:
+            k = pt / bd["total_tokens"]
+            print(f"  （标定：chars/4 低估中文 token，实际/估算 ≈ {k:.2f}×；"
+                  f"各段按 {k:.1f}× 折算即实际量级，占比不变）")
+
+
 def _cmd_agent(ctx: CommandContext, args):
     """/agent [agent_id] —— 切换直接交互的 Agent 目标。
     无参数：列出所有团队成员（含 agent_id、名称、状态）。
@@ -1534,6 +1604,11 @@ def build_default_registry() -> CommandRegistry:
         "实例状态总览：模型/队列/子进程树(PID+命令行)/后台服务/团队/钩子（诊断卡死首选）",
         "/status            全量状态；busy 长时间无进展时看进程树——\n"
         "                    run_shell 启动的卡住进程一目了然，taskkill <pid> 解围")
+    reg.register("context", _cmd_context,
+        "上下文堆积情况：最近react实际tokens + 投影各段(system/折叠/各档/当前/tail)估算占比",
+        "/context\n"
+        "  长会话想知道「上下文都被什么吃了」时用；段落占比直接对应\n"
+        "  messages_for_llm 装配顺序，配合 /stats 折线看缓存命中。")
     reg.register("agent", _cmd_agent,
         "[agent_id]  列出/切换直接交互的 Agent 目标",
         "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"

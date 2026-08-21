@@ -92,6 +92,32 @@ registry 注册 → push_message(caller_id, answer)★ → caller.inbox
   4. **排除"首轮太慢"误判**：proxy 单次响应可慢至 590+ 秒，观测点未出现≠链路坏，看 llm_calls.jsonl 的 elapsed 区分"慢/死"
   三层消费机制在进程存活前提下设计上不丢消息
 
+## 事件流 agent_id 打标与 WebUI 串台修复（2026-08-21，commit ba0940b）
+
+### 现象与根因
+
+WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气泡里混入子 Agent 回应和主 Agent answer，互相覆盖。
+
+```
+根因链（spec_tools.py L482）
+  explore_subagent 构造 SubAgent 时传 on_event=agent.on_event
+  → 同步子 Agent 的 answer 事件直接流入主事件流
+  → 前端 finishAnswer 写当前轮 answerEl → 与主 answer 覆盖混排
+```
+
+**范围**：仅**同步调用**的子 Agent（explore_subagent / update_wiki / 早期 wait 场景）——主 Agent 等它工具结果期间其 answer 先到。异步 `agent_prompt` 路径 on_event=None 本就不串——answer 走 inbox → 主 Agent 新一轮（消费机制见上节）。
+
+### 修复
+
+- **后端一处全覆盖**（`agent.py` `_emit`）：`event.setdefault("agent_id", self.agent_id)`——所有 Agent 的所有事件（answer/thinking/step/tool_*）统一打标，主=`_main_`，子 Agent=各自 id。在 `_emit` 收口而非各发射点补标，天然全覆盖（含漏网事件类型）
+- **前端**：answer 事件按 agent_id 分页渲染（气泡顶部小 tag 按钮点击翻页，仅该轮有效，最新到达页自动激活）；thinking/step 事件子 Agent 的带 `[agent_id]` 前缀进 trace——详见 [气泡交互 · answer 多 Agent 分页](../features/bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)
+
+### 注意事项
+
+- `setdefault` 而非直接赋值：若上游已显式带 agent_id 的事件不被覆盖
+- 前端 `finishAnswer(text, agentId)` 中缺省 agent_id 一律归 `_main_` 页；历史渲染路径（renderHistTurn 临时 curTurn）靠 `pages || {}` 兜底
+- 派生需求：凡走 `on_event=agent.on_event` 的新同步子 Agent 创建点，都会受益于此打标——无需再单独处理
+
 ## 通信（agent 间）
 
 | 工具 | 语义 | 落盘 |

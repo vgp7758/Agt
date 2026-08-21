@@ -10,7 +10,7 @@
 |------|------|-----------|
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
 | [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 轮边界统一重排（升档+折叠）+ 分组衰减 + 折叠实证 + 前缀缓存三层优化 | 改投影/token 优化 |
-| [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 | 派子 Agent / 改协作机制 |
+| [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
@@ -19,7 +19,7 @@
 | [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，v4 流水线（3B 提词 + cosine 精排 + 阈值裁决）+ related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
-| [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写） | 改前端气泡 / 调交互 |
+| [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写）；**answer 多 Agent 分页（事件 agent_id 打标，同轮主/子回答 tag 翻页）** | 改前端气泡 / 调交互 |
 | [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 / 复查 diff 算法 |
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
@@ -52,6 +52,7 @@
 - **diff_files 读放行（读写不对称）**（2026-08，commit 9fb00de）：新增 `_resolve_read`，越界（绝对路径 / `../` 逃逸）放行为直接路径——现在可以对比 workspace 外的备份/参照文件，写操作仍走严格沙箱
 - **diff_files 分段对比 range_a/range_b**（2026-08-20，commit 096fcbe）：大文件截断（20k）时先全文看大致范围再逐段精比；只传 range_a 时 range_b 默认同值，两文件行号错位各传各的；**输出行号仍为文件内绝对行号**（`_render_unified_diff` 加 a_offset/b_offset 还原），diff 结果可直接喂 edit/replace_lines。附教训：`_parse_range` 成功返回 (a,b) 元组被 `if err:` 当 truthy 错误——错误通道只放错误（详见 [diff-files 页](features/diff-files.md#分段对比range_arange_b2026-08-20新commit-096fcbe)）
 - **执行时序修复：插话不滞留 + 并行钩子 UI**（2026-08-19，commit fb115aa，用户实测 8 条现象闭环）：① answer 完成后旧版只查 inbox、漏 pending_messages（插话队列）→ 插话滞留至用户下次发消息；现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮（新轮 before_turn 检索的即插话内容）。② 同 hook 挂多个 before_turn 工作流时，前端「执行中」行由单变量改 Map 按 `hook::name` 索引，互不覆盖（详见 [user-interaction](features/user-interaction.md)）
+- **子 Agent 输出串台修复：事件统一打 agent_id**（2026-08-21，commit ba0940b）：同步子 Agent（explore_subagent 等，on_event=agent.on_event）的 answer 与主 Agent answer 在同一气泡互相覆盖——根因是事件流入主事件流无身份标记。修复：`agent.py` `_emit` 一处 `event.setdefault("agent_id", self.agent_id)` 全事件覆盖（主=`_main_`）；前端 answer 气泡多 agent 分页（顶部小 tag 按钮点击翻页，仅该轮有效，最新到达页自动激活），thinking/step 加 `[agent_id]` 前缀，复制按钮克隆排除 UI 元素。异步 agent_prompt 路径（on_event=None，answer 走 inbox）本就不串（详见 [bubble-interaction](features/bubble-interaction.md)、[multi-agent](architecture/multi-agent.md#事件流-agent_id-打标与-webui-串台修复2026-08-21commit-ba0940b)）
 
 ## 维护约定
 

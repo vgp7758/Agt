@@ -20,6 +20,8 @@
           background.py（后台服务）  restart_watchdog.py  updater.py
 ```
 
+longterm_memory.py（长期记忆三类 + episodic 召回流水线）详见 [长期记忆](../features/longterm-memory.md)。
+
 ## 一轮对话的数据流
 
 ```
@@ -75,6 +77,7 @@
 
 ## 相关页面
 
+- [长期记忆](../features/longterm-memory.md) — 三类记忆注入 / episodic 召回流水线（before_turn 检索工作流）/ `/memory` 管理页
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 运行观测 / 快照检测闭环
 - [工作流运行观测](../features/wf-monitor.md)：run registry + /wf/monitor 实时节点轨迹
 - [用户交互 · 插话机制与消息路由](../features/user-interaction.md)：插话全生命周期 / 后台触发 / 并行钩子 UI 修复

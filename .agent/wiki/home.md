@@ -15,9 +15,10 @@
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
+| [features/long-term-memory](features/long-term-memory.md) | 长期记忆：三类记忆（事实/程序经验 pro_*/episodic）× **episodic 召回三代演进**（标点分词→3B 提词量力分工→并入统一检索流水线）+ 写入侧两设计（幂等写入 + /memory 双主权）+ 存储 hash→可读转写 | 改记忆系统 / 理解 episodic 检索 / 博客第 4 篇技术底稿 |
 | [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
-| [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，三档漏斗 + related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
+| [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，v4 流水线（3B 提词 + cosine 精排 + 阈值裁决）+ related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写） | 改前端气泡 / 调交互 |
 | [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 / 复查 diff 算法 |
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
@@ -34,10 +35,11 @@
 - 主 Agent id=`_main_`；子 Agent 声明在 `.agent/agents/*.md`（frontmatter DSL）
 - 工作流：`.agent/workflows/*.xml|json`，13 类节点，XML 为推荐写作格式
 - 工作流 meta 字段：name/description/hook/enabled/hidden/async/auto/coze_url（全链路读写）
-- 存档：`~/.agt/repos/<fixed-cwd>/`（sessions/memories/plans/specs/images/rag）
+- 存档：`~/.agt/repos/<repo 目录名>/`（sessions/memories/plans/specs/images/rag；路径由 workspace hash 改为可读转写）
 - LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/turn·step 轮步标记/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换；聊天面板 user/answer 气泡 hover 浮现复制按钮（innerText 复制，clipboard→execCommand 降级，commit 3a7e9de）
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
+- **长期记忆（博客第 4 篇，2026-08-21 扩写完成 ~4000 字）**：三类记忆——事实（常驻）+ 程序经验 pro_*（仅标题常驻，详情 `read_procedure(id)` 按需读）+ episodic（检索命中才注入）；episodic 召回三代演进：标点分词子串匹配 → 本地 3B 提关键词（量力分工）→ 并入统一检索流水线（「该不该注入」从检索层上移到精排层）；写入侧：幂等写入防重复沉淀（replace_lines 记两次糗事）+ `/memory` 页面双主权管理（详见 [long-term-memory](features/long-term-memory.md)）
 - **工作流运行实时观测**（2026-08-20，commit 8aeb21a）：进程内 run registry（`_WF_RUNS`，线程安全，最近 50 次）记录每次工作流执行的节点 start/end/error 事件；对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点甘特时间线 2s 轮询；同步/async 钩子 + wf_* 工具三路径全覆盖（详见 [wf-monitor](features/wf-monitor.md)）
 - **观测页节点全文查看**（2026-08-20，commit bb56a82）：节点预览截 200 字，`has_full` 时预览可点击（📄）→ 新标签打开 `GET /api/wf/runs/<id>/node/<nid>` **text/plain 纯文本页**（页面文本即节点完整输出，非 HTML 无样式）；`_full_str` 保留换行/JSON 结构，单节点 200K 截断标注，总预算 20M 字符防爆内存（耗尽只存预览）；轮询视图剥离 full 只传 has_full（详见 [wf-monitor · 节点全文查看](features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)）
 - **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）

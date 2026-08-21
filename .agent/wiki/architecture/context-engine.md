@@ -15,6 +15,8 @@
 
 assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail（system/user_message/steps 恒装）；`reuse`（current_turn_only）时 history 强制关。
 
+episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产出、注入 tail ambient——演进史与中文命中率坑见 [长期记忆](../features/longterm-memory.md)。
+
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 
 当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：
@@ -133,5 +135,6 @@ t{轮号}_s{步号}_{微秒戳}.txt
 
 ## 相关页面
 
+- [长期记忆](../features/longterm-memory.md) — episodic 召回（tail ambient `[epi·长期记忆]` 行来源）的检索流水线与演进
 - [运维与排障](../guides/ops.md) — /stats 页、投影转储、常见错误对照
 - [系统总览](../architecture/overview.md) — 模块地图、数据流

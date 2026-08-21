@@ -11,6 +11,8 @@
   plans/  specs/  images/  rag/
 ```
 
+memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长期记忆](../features/longterm-memory.md)。
+
 ## 可观测性
 
 ### /wf/monitor 工作流运行观测页（2026-08-20 新，commit 8aeb21a）
@@ -95,6 +97,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 
 ## 相关页面
 
+- [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页
 - [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）+ 节点全文纯文本路由
 - [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证
 - [系统总览](../architecture/overview.md) — 模块地图、数据流

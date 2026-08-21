@@ -397,14 +397,23 @@ def _eval_assembly_workflow(name: str, session) -> str:
     return ""
 
 
-def _interp_funcs(text: str) -> str:
+def _interp_funcs(text: str, cache: dict = None) -> str:
     """把文本里的 {func:name()} 占位替换成模板函数结果（白名单 load_models/load_workflows）。
-    未知名/异常 → 保留原占位（不炸装配）。"""
+    未知名/异常 → 保留原占位（不炸装配）。
+    cache：轮内冻结缓存（start_turn 清空）——load_agents/load_skills 等声明投影
+    轮内字节稳定（声明文件编辑下一轮生效），不破前缀缓存。"""
     import re as _re
     def _rep(m):
+        name = m.group(1).strip().rstrip("()").strip()
+        if cache is not None and name in cache:
+            return cache[name]
         from agent_config import resolve_assembly_func
-        r = resolve_assembly_func(m.group(1).strip().rstrip("()").strip())
-        return r if r else m.group(0)
+        r = resolve_assembly_func(name)
+        if not r:
+            return m.group(0)
+        if cache is not None:
+            cache[name] = r
+        return r
     return _re.sub(r"\{func:([^}]+)\}", _rep, text)
 
 
@@ -475,6 +484,11 @@ class Session:
         # assembly workflow 项求值用的工具引用（Agent 构造后注入；None=该工作流内 plugin 节点不可用）
         self._asm_workflow_tools = None
         self._asm_agent_id: str = ""
+        # 轮内冻结缓存（缓存经济模型：轮内零调整、轮边界统一刷新）：
+        # {func:...} 求值 / rules 段 / turn 时机动作项——声明文件(agents/skills/AGENTS.md)轮内
+        # 被 Agent 编辑（dogfooding 常态）不再当步破坏前缀缓存，下一轮生效。
+        # 实证：t264 s9→s10 编辑 wiki-updater.yml 的 description → 投影消息[11]字节分叉 → 51万 token 全价重算（2.5% 命中）。
+        self._asm_turn_cache: dict = {}
         # hooks 默认开关：主 Agent 默认开（before_turn 检索等）；子 Agent 未显式声明装配时
         # 子 Agent 构造代码置 False（避免每次派活重跑 before_turn 检索）。_run_hooks 读它。
         self.hooks_default_on: bool = True
@@ -640,6 +654,7 @@ class Session:
             self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
         self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
+        self._asm_turn_cache = {}   # 轮边界刷新：声明/规则/动作项的轮内冻结缓存清空（编辑下一轮生效）
         self._plan_fold()   # 轮边界折叠计划：新轮开始瞬间算好折到 75%，轮内不再折叠（byte-stable）
 
     def add_step(self, step: Step):
@@ -816,15 +831,19 @@ class Session:
         return [{"role": "system", "content": self.system}]
 
     def _seg_msgs_rules(self) -> list[dict]:
-        """任务指引（AGENTS.md/rules/skills/子Agent）：每轮从磁盘重读——
-        用户改了规则文件任意 session 当轮即生效（不烤死进 system）。"""
+        """任务指引（AGENTS.md/rules/skills/子Agent）：轮首从磁盘读一次、轮内冻结——
+        用户/Agent 改了规则或声明文件下一轮生效（不烤死进 system、也不轮内破前缀缓存）。"""
         if self._task_guidance_provider:
-            try:
-                _tg = self._task_guidance_provider()
-                if _tg:
-                    return [{"role": "system", "content": _tg}]
-            except Exception:
-                pass
+            if "rules" in self._asm_turn_cache:
+                _tg = self._asm_turn_cache["rules"]
+            else:
+                try:
+                    _tg = self._task_guidance_provider() or ""
+                except Exception:
+                    _tg = ""
+                self._asm_turn_cache["rules"] = _tg
+            if _tg:
+                return [{"role": "system", "content": _tg}]
         return []
 
     def _seg_msgs_history(self, mode: str = None, prefix_msgs: list = None) -> list[dict]:
@@ -980,7 +999,7 @@ class Session:
         kind = item.get("kind")
         try:
             if kind == "text":
-                return _interp_funcs(str(item.get("text") or ""))
+                return _interp_funcs(str(item.get("text") or ""), self._asm_turn_cache)
             if kind == "func":
                 from agent_config import resolve_assembly_func
                 return resolve_assembly_func(str(item.get("func") or ""))

@@ -207,6 +207,12 @@
   .expand-bar { text-align:center; color:#2563eb; cursor:pointer; padding:10px 0 4px;
     font-size:13px; user-select:none; }
   .expand-bar:hover { text-decoration:underline; }
+  /* answer 多 agent 分页（子 Agent 回应与主 answer 同轮时的小 tag 按钮 + 翻页） */
+  .ans-tabs { display:flex; gap:4px; margin-bottom:6px; flex-wrap:wrap; }
+  .ans-tab { font-size:11px; padding:2px 9px; border-radius:10px; border:1px solid var(--line);
+    background:#fff; cursor:pointer; color:#5b6470; user-select:none; }
+  .ans-tab:hover { background:#f3f4f6; }
+  .ans-tab.active { background:var(--me); color:#fff; border-color:var(--me); }
 </style>
 </head>
 <body>
@@ -473,7 +479,7 @@ function newTurn(){
   col.appendChild(det); col.appendChild(ans); wrap.appendChild(col);
   attachCopyBtn(col, ans);   // 气泡级复制（挂在 col 上——answer 的 innerHTML 重写不影响按钮）
   msgArea.appendChild(wrap);
-  curTurn={traceBox:box, answerEl:ans, det};
+  curTurn={traceBox:box, answerEl:ans, det, pages:{}, activePage:null};   // pages: {agent_id: text}（answer 分页用，仅本轮有效）
   scrollBottom();
 }
 function addTrace(cls, text){
@@ -621,11 +627,39 @@ function renderToolCall(name, args){
   const html=toolCallHTML(name, args);
   if(html) addTraceHTML('tool', html); else addTrace('tool', `🔧 ${name}(${fmtArgs(args)})`);
 }
-function finishAnswer(text){
+// finishAnswer 带 agent_id：主（_main_/缺省）= 正常最终回答；子 Agent 回应进同轮 answer 的分页
+// （一轮内多个 agent 各有文本时，answer 顶部渲染小 tag 按钮，点击翻页——仅对该轮有效）
+function finishAnswer(text, agentId){
   if(!curTurn) newTurn();
-  curTurn.answerEl.innerHTML=renderAnswer(text);
+  const id = agentId || '_main_';
+  curTurn.pages = curTurn.pages || {};
+  curTurn.pages[id] = text;
+  curTurn.activePage = id;   // 最新到达的页激活（子 Agent 回应到达时自动切过去看）
+  renderAnswerPages();
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
+}
+function renderAnswerPages(){
+  const t = curTurn; if(!t) return;
+  const ids = Object.keys(t.pages);
+  const cur = t.activePage && t.pages[t.activePage]!==undefined ? t.activePage : ids[ids.length-1];
+  t.activePage = cur;
+  if(ids.length <= 1){   // 单页：无 tabs（保持原视觉）
+    t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '');
+    return;
+  }
+  let tabs = '<div class="ans-tabs">';
+  ids.forEach(id=>{
+    const label = id==='_main_' ? '🤖 主' : esc(id);
+    tabs += `<button class="ans-tab${id===cur?' active':''}" onclick="switchAnswerPage('${esc(id)}')">${label}</button>`;
+  });
+  tabs += '</div>';
+  t.answerEl.innerHTML = tabs + renderAnswer(t.pages[cur] || '');
+}
+function switchAnswerPage(id){
+  if(!curTurn || !curTurn.pages || curTurn.pages[id]===undefined) return;
+  curTurn.activePage = id;
+  renderAnswerPages();
 }
 // 中断轮：answer 区域渲染"继续"按钮（替代"(无回答)"死文本）——点击发送继续指令接续断掉的工作
 function finishInterrupted(turnNo){
@@ -779,7 +813,10 @@ function attachCopyBtn(host, bubble){
   btn.className='bubble-copy'; btn.textContent='📋 复制';
   btn.title='复制整个气泡内容到剪贴板';
   btn.onclick=()=>{
-    const text=(bubble.innerText||'').replace(/\u00a0/g,' ').trimEnd();
+    // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容）
+    const clone=bubble.cloneNode(true);
+    clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn').forEach(n=>n.remove());
+    const text=(clone.innerText||'').replace(/\u00a0/g,' ').trimEnd();
     if(!text.trim()){ toast('气泡无文本'); return; }
     const done=()=>{ btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='📋 复制',1500); };
     if(navigator.clipboard){
@@ -1694,8 +1731,8 @@ function onWSMessage(ev){
       if(m.name) setSessionTitle(m.name);
       break;
     case 'error': addRow('err', m.text); setBusy(false); break;
-    case 'step': addTrace('step', `— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
-    case 'thinking': addTrace('think', '💭 '+m.text); break;
+    case 'step': addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
+    case 'thinking': addTrace('think', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+'💭 '+m.text); break;
     case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
     case 'tool_call': clearToolProgress(); renderToolCall(m.name, m.arguments); break;
     case 'tool_stream':
@@ -1713,7 +1750,7 @@ function onWSMessage(ev){
       break;
     case 'tool_result': clearToolProgress(); addTrace('res', `→ ${m.result}`); break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
-    case 'answer': case 'wrap_answer': finishAnswer(m.text); break;
+    case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
     case 'interrupted': addRow('sys','⏹ 已中断'); setBusy(false); break;

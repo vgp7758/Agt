@@ -334,7 +334,10 @@ class Agent:
             print(f"{GRAY}⏳ {event['name']} 已运行 {event['elapsed']}s，{event.get('lines', 0)} 行输出{RESET}")
 
     def _emit(self, event: dict):
-        """发一个事件：回调 on_event（Web）；verbose 时打印（CLI）。"""
+        """发一个事件：回调 on_event（Web）；verbose 时打印（CLI）。
+        事件统一打 agent_id 标（主=_main_，子 Agent=各自 id）——前端据此分流渲染
+        （子 Agent 的 answer 分页显示，thinking/step 加 [id] 前缀），不再与主输出串台。"""
+        event.setdefault("agent_id", self.agent_id)
         if self.on_event:
             try:
                 self.on_event(event)

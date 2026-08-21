@@ -40,6 +40,7 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
+GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
 RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
@@ -1142,7 +1143,10 @@ class Session:
         # 先升档：反复 graduate 直到 ≤75%（或无可升）。估算 = prefix + 历史 + 当前轮近似
         cur_est = self._seg_msgs_user_message() + self._seg_msgs_steps()   # 当前轮（tail 量小不计）
         g = 0
-        while g < self.max_level:
+        # 上限宽松化：分批毕业后一次 _plan_fold 可能连切数刀（90 轮大档=3 刀），
+        # max_level 封顶的是【档位级别】而非【边界数】——按轮数/批宽 + max_level 算足够上限
+        g_cap = len(self.turns) // GRADUATE_BATCH_TURNS + self.max_level + 2
+        while g < g_cap:
             if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= target:
                 break
             if not self._graduate_once():
@@ -1164,14 +1168,22 @@ class Session:
         self._planned_graduates = g
 
     def _graduate_once(self) -> bool:
-        """把最后完成 turn 升档：append 其索引到 _tier_boundaries（其后所有档 level+1=顺移），
-        并清掉 level 变了的冻结缓存让其按新级别重渲染。当前段无已完成 turn → 返回 False。"""
+        """毕业一批 turn：append 新边界到 _tier_boundaries（边界之前的轮 level+1=顺移），
+        并清掉 level 变了的冻结缓存让其按新级别重渲染。
+        批量语义（GRADUATE_BATCH_TURNS）：当前段（最后边界之后）≤30 轮 → 整段一次升（旧行为）；
+        >30 轮 → 只升【前 30 轮】（新边界=段起点+29），近期轮保持 level1 不动——
+        大档分批毕业，升档粒度可控（压缩需要多少升多少，近的保真）。
+        当前段无已完成 turn → 返回 False（_plan_fold/保命阀循环据此停止）。"""
         last_completed = len(self.turns) - 1
         if last_completed < 0:
             return False
-        if self._tier_boundaries and self._tier_boundaries[-1] >= last_completed:
-            return False   # 最后完成 turn 已是边界 → 当前段只剩进行中 turn，无东西可升
-        self._tier_boundaries.append(last_completed)
+        seg_start = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+        if seg_start > last_completed:
+            return False   # 当前段只剩进行中 turn，无东西可升
+        seg_len = last_completed - seg_start + 1
+        new_b = last_completed if seg_len <= GRADUATE_BATCH_TURNS \
+            else seg_start + GRADUATE_BATCH_TURNS - 1
+        self._tier_boundaries.append(new_b)
         for i in range(len(self.turns)):
             fr = self._frozen_renders.get(i)
             if fr and fr[0] != self._tier_level(i):

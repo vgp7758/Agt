@@ -1,0 +1,43 @@
+<workflow name="rerank_topk" description="通用重排子工作流：输入 items(数组)+scores(number数组)+k → zip 降序排序取 topk。输出 topk(数组)/indices(原下标数组)。供检索/精排类工作流复用（subworkflow 节点调用）" hidden="true">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="items" type="list"/>
+    <out name="scores" type="list" itemType="number"/>
+    <out name="k" type="integer"/>
+  </node>
+  <node id="110001" type="code" title="rerank" x="420" y="80">
+    <in name="items" type="list" ref="100001.items"/>
+    <in name="scores" type="list" ref="100001.scores"/>
+    <in name="k" type="integer" ref="100001.k"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    items = p.get("items") or []
+    scores = p.get("scores") or []
+    try:
+        k = max(0, int(p.get("k") or 3))
+    except (TypeError, ValueError):
+        k = 3
+    # 对齐长度（防御：LLM 批处理可能丢一两个分数）
+    n = min(len(items), len(scores))
+    pairs = []
+    for i in range(n):
+        try:
+            s = float(scores[i])
+        except (TypeError, ValueError):
+            s = 0.0
+        pairs.append((s, i, items[i]))
+    pairs.sort(key=lambda x: -x[0])
+    topk = [it for _, _, it in pairs[:k]]
+    idx = [i for _, i, _ in pairs[:k]]
+    return {"topk": topk, "indices": idx, "scores_topk": [s for s, _, _ in pairs[:k]]}]]></code>
+    <out name="topk" type="list"/>
+    <out name="indices" type="list" itemType="integer"/>
+    <out name="scores_topk" type="list" itemType="number"/>
+  </node>
+  <node id="900001" type="end" title="Exit" x="720" y="80">
+    <out name="topk" ref="110001.topk" type="list"/>
+    <out name="indices" ref="110001.indices" type="list" itemType="integer"/>
+    <out name="scores_topk" ref="110001.scores_topk" type="list" itemType="number"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="900001"/>
+</workflow>

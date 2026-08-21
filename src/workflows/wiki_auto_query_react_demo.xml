@@ -1,0 +1,308 @@
+<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（结构化提交版）：wiki_tree 注入 SYSTEM → ReAct 循环（wiki_search/wiki_read 检索）→ 模型调 report_hits 工具提交结构化结果（schema 强约束：relevant+hits[].excerpt 原文摘录）→ 投影到 answer 直接 break → 格式化注入；无关/短消息不注入（before_turn 钩子，默认开）" hidden="true">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="user_message" type="string" required="true"/>
+  </node>
+  <node id="100002" type="selector" title="short_msg?" x="420" y="80">
+    <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
+  </node>
+  <node id="110001" type="plugin" title="wiki_tree" x="420" y="206" toolName="wiki_tree">
+    <out name="raw" type="string" description="wiki 全库结构（路径+标题大纲）"/>
+    <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="120001" type="plugin" title="get_wiki_schemas" x="720" y="80" toolName="get_tool_schemas">
+    <in name="names" type="string">wiki_read,wiki_search</in>
+    <out name="raw" type="list" description="wiki 两件套的 function schema"/>
+    <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="120003" type="text" title="report_schema" x="420" y="316">
+    <result><![CDATA[{"type":"function","function":{"name":"report_hits","description":"提交最终检索结果并结束任务。这是唯一合法的收尾方式——不要用自由文本作答，检索完成后必须调用本工具。","parameters":{"type":"object","properties":{"relevant":{"type":"boolean","description":"用户问题是否与当前代码仓库的 wiki 知识相关"},"hits":{"type":"array","maxItems":3,"description":"命中清单（最多3条；无关时为空数组）","items":{"type":"object","properties":{"page":{"type":"string","description":"wiki 页面路径（如 architecture/overview.md）"},"excerpt":{"type":"string","description":"该页面【原文】的逐字/近逐字摘录，≤160字。可截断不可改写；严禁生成原文之外的内容（分析/建议/推测一律禁止）"}},"required":["page","excerpt"]}}},"required":["relevant","hits"]}}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="120004" type="code" title="merge_tools" x="1020" y="80">
+    <in name="official" type="list" ref="120001.raw"/>
+    <in name="report" type="string" ref="120003.output"/>
+    <code language="3"><![CDATA[import json as _j
+async def main(args):
+    p = args.params
+    schemas = list(p.get("official") or [])
+    rep = p.get("report")
+    try:
+        schemas.append(_j.loads(rep) if isinstance(rep, str) else rep)
+    except Exception as e:
+        return {"tools": schemas, "err": str(e)[:120]}
+    return {"tools": schemas}]]></code>
+    <out name="tools" type="list" description="官方两件套 + report_hits（结构化提交工具）"/>
+    <out name="err" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="130001" type="text" title="sys_content" x="720" y="190">
+    <in name="tree" type="string" ref="110001.raw"/>
+    <result><![CDATA[你是代码仓库的 wiki 检索助手。任务：判断用户问题是否与当前仓库（架构/模块/配置/运维/功能）相关，相关则检索并摘录命中内容。
+
+工作流程：
+1. 判断相关性：无关（闲聊/通用编程问题/与仓库无关）→ 直接调 report_hits(relevant=false, hits=[]) 提交，不要做任何检索。
+2. 相关 → 先 wiki_search 搜关键词（可多次、换关键词试）；对最相关的 1~2 个页面调 wiki_read 读原文。
+3. 检索完成 → 调 report_hits 提交结构化结果（relevant=true, hits 最多 3 条）。
+
+【硬性纪律】
+- 必须以调用 report_hits 结束任务——不要输出自由文本作为回答；
+- hits[].excerpt 必须是 wiki 页面【原文】的逐字/近逐字摘录（≤160 字，可截断不可改写语义）；
+- 严禁在 excerpt 里生成原文之外的内容——分析、建议、推测一律禁止；主 Agent 有完整上下文，判断是它的职责；
+- 宁缺毋滥：没有把握的命中不要填，wiki 里没写的就让它不存在。
+
+【当前 wiki 知识库完整结构】
+{{tree}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="130002" type="tojson" title="escape_sys" x="1020" y="230">
+    <in name="input" type="string" ref="130001.output"/>
+    <out name="output" type="string" description="json.dumps 转义后的合法 JSON 字符串字面量"/>
+  </node>
+  <node id="130003" type="text" title="sys_json" x="1320" y="80">
+    <in name="c" type="string" ref="130002.output"/>
+    <result><![CDATA[{"role":"system","content":{{c}}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="130004" type="fromjson" title="sys_msg" x="1620" y="80">
+    <in name="input" type="string" ref="130003.output"/>
+    <out name="output" type="object"/>
+  </node>
+  <node id="140001" type="tojson" title="escape_user" x="420" y="528">
+    <in name="input" type="string" ref="100001.user_message"/>
+    <out name="output" type="string"/>
+  </node>
+  <node id="140002" type="text" title="user_json" x="720" y="402">
+    <in name="c" type="string" ref="140001.output"/>
+    <result><![CDATA[{"role":"user","content":{{c}}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="140003" type="fromjson" title="user_msg" x="1020" y="322">
+    <in name="input" type="string" ref="140002.output"/>
+    <out name="output" type="object"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="150001" type="plugin" title="append_sys" x="1920" y="80" toolName="list_append">
+    <in name="item" type="object" ref="130004.output"/>
+    <in name="lst" type="list"></in>
+    <out name="raw" type="list"/>
+    <out name="result" type="list" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="150002" type="plugin" title="append_user" x="2220" y="80" toolName="list_append">
+    <in name="lst" type="list" ref="150001.raw"/>
+    <in name="item" type="object" ref="140003.output"/>
+    <out name="raw" type="list" description="初始 messages=[system,user]"/>
+    <out name="result" type="list" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="300001" type="loop" title="react_loop" x="2520" y="80">
+    <param name="loopType"><![CDATA[count]]></param>
+    <param name="loopCount" type="integer"><![CDATA[50]]></param>
+    <var name="messages" type="list" ref="150002.raw"/>
+    <var name="answer" type="object" literal=""/>
+    <in name="tools" type="list" ref="120004.tools"/>
+    <out name="answer" type="object" description="结构化结果 {relevant, hits[]}（report_hits 提交或兜底）" ref="300001.answer"/>
+    <out name="all_outputs" type="list"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <out name="filtered_outputs" type="list" description="筛选结果"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <out name="nth_output" type="object" description="第n个结果"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <blocks>
+      <node id="__entry__" type="start" title="迭代入口" x="120" y="80">
+    <out name="index" type="integer" description="当前索引(0起)"/>
+    <out name="messages" type="list" description="本地变量(可被置变量修改)"/>
+    <out name="answer" type="object" description="本地变量(可被置变量修改)"/>
+    <out name="tools" type="list" description="复合节点输入"/>
+  </node>
+      <node id="310001" type="plugin" title="llm_call" x="420" y="80" toolName="llm_call">
+    <in name="messages" type="list" ref="__entry__.messages"/>
+    <in name="tools" type="list" ref="__entry__.tools"/>
+    <in name="temperature" type="number">0.2</in>
+    <in name="enable_thinking" type="boolean">False</in>
+    <in name="model" type="string">utility</in>
+    <out name="raw" type="object"/>
+    <out name="content" type="string"/>
+    <out name="tool_calls" type="list"><field name="id" type="string"/><field name="name" type="string"/><field name="arguments" type="object"/></out>
+    <out name="error" type="string"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="310002" type="selector" title="has_tool_calls?" x="1020" y="80">
+    <branch><cond op="7" left="1122665.output" right="report_hits"/></branch>
+    <branch><cond op="13" left="310001.tool_calls.length" right="0" left_type="integer" right_type="integer"/></branch>
+  </node>
+      <node id="310008" type="code" title="parse_report" x="1320" y="80">
+    <in name="tool_calls" type="list" ref="310001.tool_calls"/>
+    <code language="3"><![CDATA[import json as _j
+async def main(args):
+    """report_hits 调用 → 结构化 answer。schema 强约束下 arguments 即最终结果：
+    {relevant: bool, hits: [{page, excerpt}]}。截到 3 条防御。"""
+    tc = ((args.params.get("tool_calls") or [{}]) or [{}])[0]
+    a = (tc.get("function") or {}).get("arguments") or tc.get("arguments") or {}
+    if isinstance(a, str):
+        try:
+            a = _j.loads(a)
+        except Exception:
+            a = {}
+    if not isinstance(a, dict):
+        a = {}
+    hits = []
+    for h in (a.get("hits") or [])[:3]:
+        if isinstance(h, dict) and str(h.get("page") or "").strip():
+            hits.append({"page": str(h["page"]).strip(),
+                         "excerpt": str(h.get("excerpt") or "").strip()[:160]})
+    return {"answer": {"relevant": bool(a.get("relevant")), "hits": hits}}]]></code>
+    <out name="answer" type="object"><field name="relevant" type="boolean"/><field name="hits" type="list"/></out>
+    <batch enabled="false"/>
+  </node>
+      <node id="310009" type="setvar" title="set_answer" x="1620" y="80">
+    <in name="answer" left="__entry__.answer" left_type="object" right="ref:310008.answer" right_type="object"/>
+  </node>
+      <node id="310010" type="setvar" title="fallback_answer" x="1320" y="248">
+    <in name="answer" left="__entry__.answer" left_type="object" right="ref:645462.raw" right_type="object"/>
+  </node>
+      <node id="310003" type="plugin" title="call_tool" x="1320" y="340" toolName="call_tool">
+    <in name="name" type="string" ref="loop-item.name"/>
+    <in name="arguments" type="object" ref="loop-item.arguments"/>
+    <out name="raw" type="string"/>
+    <batch enabled="true"><input ref="310001.tool_calls" type="list"/><filter logic="2"><cond op="14" left="__batch_output__" right="" left_type="integer" right_type="integer"/></filter></batch>
+  </node>
+      <node id="310004" type="code" title="append_round" x="1620" y="172">
+    <in name="messages" type="list" ref="__entry__.messages"/>
+    <in name="resp" type="object" ref="310001.raw"/>
+    <in name="tool_results" type="list" ref="310003.all_outputs"/>
+    <code language="3"><![CDATA[import json as _j
+async def main(args):
+    p = args.params
+    msgs = list(p.get("messages") or [])
+    resp = p.get("resp") or {}
+    results = list(p.get("tool_results") or [])   # 批处理 all_outputs：[{raw:...}, ...] 与 tool_calls 按序配对
+    tcs = resp.get("tool_calls") or []
+    if tcs:
+        calls, tools = [], []
+        for i, tc in enumerate(tcs):
+            fn = tc.get("function") or {}
+            name = fn.get("name") or tc.get("name") or "tool"
+            a = fn.get("arguments") or tc.get("arguments") or {}
+            a_s = a if isinstance(a, str) else _j.dumps(a, ensure_ascii=False)
+            cid = tc.get("id") or f"c{i}"
+            calls.append({"id": cid, "type": "function", "function": {"name": name, "arguments": a_s}})
+            r = results[i] if i < len(results) else None
+            tr = r.get("raw") if isinstance(r, dict) else r
+            tools.append({"role": "tool", "tool_call_id": cid, "content": str(tr)[:4000]})  # 单结果 4k 上限
+        msgs = msgs + [{"role": "assistant", "content": resp.get("content") or None, "tool_calls": calls}] + tools
+    return {"messages": msgs}]]></code>
+    <out name="messages" type="list"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="310005" type="setvar" title="upd_messages" x="1920" y="80">
+    <in name="messages" left="__entry__.messages" left_type="list" right="ref:310004.messages" right_type="list"/>
+  </node>
+      <node id="__continue__" type="continue" title="继续(本轮输出)" x="2220" y="154">
+    <in name="resp" type="object" ref="310001.raw"/>
+    <in name="tool" type="string" ref="310003.raw"/>
+    <in name="report" type="object" ref="310008.answer"/>
+    <in name="fallback" type="object" ref="645462.raw"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="__break__" type="break" title="完成退出" x="2220" y="80"/>
+      <node id="1122665" type="tojson" title="ToJSON" x="720" y="80">
+    <in name="input" type="list" ref="310001.tool_calls"><field name="id" type="string"/><field name="name" type="string"/><field name="arguments" type="object"/></in>
+    <out name="output" type="string"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="645462" type="plugin" title="pass_through" x="420" y="244" toolName="pass_through">
+    <in name="input" type="object"></in>
+    <out name="raw" type="object" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <batch enabled="false"/>
+  </node>
+    </blocks>
+    <edges>
+    <edge source="300001" target="__entry__" sourcePort="loop-function-inline-output"/>
+    <edge source="__entry__" target="310001"/>
+    <edge source="310008" target="310009"/>
+    <edge source="310009" target="__break__"/>
+    <edge source="310002" target="310010" sourcePort="false"/>
+    <edge source="310010" target="__break__"/>
+    <edge source="310003" target="310004"/>
+    <edge source="310004" target="310005"/>
+    <edge source="310002" target="310008" sourcePort="true"/>
+    <edge source="310002" target="310003" sourcePort="true_1"/>
+    <edge source="310001" target="1122665"/>
+    <edge source="1122665" target="310002"/>
+    <edge source="310005" target="__continue__"/>
+    </edges>
+    <batch enabled="false" nth="0"/>
+  </node>
+  <node id="410001" type="code" title="fmt_result" x="2820" y="80">
+    <in name="answer" type="object" ref="300001.answer"/>
+    <code language="3"><![CDATA[async def main(args):
+    """结构化 answer → 注入文本。relevant=false / hits空 → NO_WIKI_RELEVANT（下游 contains 判官短路）；
+    true → 「页面路径：原文摘录」行拼接（≤500字）。"""
+    a = args.params.get("answer") or {}
+    if isinstance(a, str):                     # 兜底：旧格式字符串直接透传
+        return {"text": a}
+    hits = a.get("hits") or []
+    if not a.get("relevant") or not hits:
+        return {"text": "NO_WIKI_RELEVANT"}
+    lines = []
+    for h in hits[:3]:
+        p = str(h.get("page") or "?").strip()
+        e = str(h.get("excerpt") or "").strip()[:160]
+        if p and e:
+            lines.append(f"{p}：{e}")
+    return {"text": ("\n".join(lines) or "NO_WIKI_RELEVANT")[:500]}]]></code>
+    <out name="text" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="500001" type="selector" title="inject?" x="3120" y="80">
+    <branch><cond op="1" left="410001.text" right="NO_WIKI_RELEVANT"/></branch>
+  </node>
+  <node id="500005" type="text" title="yes_result" x="3732" y="177">
+    <in name="ans" type="string" ref="410001.text"/>
+    <result><![CDATA[📖 相关 wiki（按本轮问题自动检索命中）：
+{{ans}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="600001" type="aggregator" title="pick" x="4020" y="80">
+    <group name="Group_inject" type="boolean"><var ref="1378610.raw" type="boolean"/><var ref="813874.raw" type="boolean"/></group>
+    <group name="Group_result" type="string"><var ref="500005.output" type="string"/><var ref="410001.text" type="string"/></group>
+  </node>
+  <node id="900001" type="end" title="Exit" x="4320" y="80">
+    <out name="inject" ref="600001.Group_inject" type="boolean"/>
+    <out name="result" ref="600001.Group_result" type="string"/>
+  </node>
+  <node id="1378610" type="plugin" title="pass_false" x="3420" y="80" toolName="pass_through">
+    <in name="input" type="boolean">False</in>
+    <out name="raw" type="boolean"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="813874" type="plugin" title="pass_true" x="3420" y="172" toolName="pass_through">
+    <in name="input" type="boolean">True</in>
+    <out name="raw" type="boolean"/>
+    <batch enabled="false"/>
+  </node>
+  <edge from="110001" to="130001"/>
+  <edge from="130001" to="130002"/>
+  <edge from="130002" to="130003"/>
+  <edge from="130003" to="130004"/>
+  <edge from="130004" to="150001"/>
+  <edge from="140001" to="140002"/>
+  <edge from="140002" to="140003"/>
+  <edge from="140003" to="150002"/>
+  <edge from="150001" to="150002"/>
+  <edge from="150002" to="300001"/>
+  <edge from="120001" to="120004"/>
+  <edge from="120003" to="120004"/>
+  <edge from="120004" to="150002"/>
+  <edge from="300001" to="410001"/>
+  <edge from="500001" to="1378610" port="true"/>
+  <edge from="500001" to="813874" port="false"/>
+  <edge from="813874" to="500005"/>
+  <edge from="500005" to="600001"/>
+  <edge from="1378610" to="600001"/>
+  <edge from="600001" to="900001"/>
+  <edge from="100001" to="100002"/>
+  <edge from="100002" to="120001" port="false"/>
+  <edge from="100002" to="900001" port="true"/>
+  <edge from="410001" to="500001"/>
+</workflow>

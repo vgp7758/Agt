@@ -206,7 +206,17 @@ def _dotted_get(obj, name: str):
         elif isinstance(cur, list):
             try:
                 cur = cur[int(part)]
-            except (ValueError, IndexError):
+            except ValueError:
+                # 非数字下标 = 字段名：逐项提取该字段组成数组（list of dict → list of values）——
+                # 批处理节点的 all_outputs.score 这类"批内字段提取"引用场景
+                out = []
+                for it in cur:
+                    if isinstance(it, dict):
+                        out.append(it.get(part))
+                    else:
+                        out.append(None)
+                cur = out
+            except IndexError:
                 return None
         else:
             return None

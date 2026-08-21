@@ -2050,6 +2050,20 @@ def git_commit(message: str, files: str = "") -> str:
     return f"✅ 已提交并推送\n{r_log.stdout.strip()}\n（trailer: Co-authored-by: Agt）"
 
 
+def cosine_sim(text1: str, text2: str) -> float:
+    """计算两段文本的语义余弦相似度（-1~1，越大越相关）。
+    复用 /rag 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后计算。
+    用于工作流批处理重排：query 与每个候选切片的相似度（需先配置 RAG 的 embedding）。"""
+    from rag import get_rag
+    rag = get_rag()
+    if rag is None:
+        raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
+    import numpy as np
+    vecs = rag.embedder.encode([str(text1 or ""), str(text2 or "")],
+                               normalize_embeddings=True, show_progress_bar=False)
+    return round(float(np.dot(vecs[0], vecs[1])), 4)
+
+
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
     try:
@@ -2347,6 +2361,10 @@ LIGHT_TOOLS = Toolbox(
     }),
     Tool(to_ascii),
     Tool(list_append),
+    Tool(cosine_sim, outputs=[{"name": "raw", "type": "number", "description": "余弦相似度（-1~1，越大越相关）"}], param_descriptions={
+        "text1": "第一段文本（批处理时接 loop-item=候选切片）",
+        "text2": "第二段文本（通常接 query 原文）",
+    }),
     Tool(diff_lines, param_descriptions={
         "a_text": "改前文本（接上游节点输出）",
         "b_text": "改后文本",

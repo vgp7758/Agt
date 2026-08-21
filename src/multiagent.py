@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -69,12 +70,16 @@ class SubAgent:
                            session_dir=session_dir, registry=registry)
         if agent_id:
             self.agent.agent_id = agent_id
+            self.agent.session._asm_agent_id = agent_id   # assembly workflow 项的入参 agent_id
         # 复用模式：session 投影只含当前轮（历史轮不投影但完整归档）——多次派活不膨胀上下文
         if current_turn_only:
             self.agent.session.current_turn_only = True
-        # assembly DSL：上下文装配开关（{}=全装；来自 md 声明 + agent_prompt 参数覆盖）
+        # assembly DSL v2：上下文装配清单（None=默认清单；来自 md 声明 + agent_prompt 参数覆盖）
         if assembly:
-            self.agent.session.assembly.update(assembly)
+            self.agent.session.set_assembly_plan(assembly)
+        # 子 Agent 默认不跑 before_turn 钩子（除非 .md assembly 显式列了 hooks）——
+        # 纯函数型工人每轮跑历史/wiki 检索是重复浪费；主 Agent 保持默认开。
+        self.agent.session.hooks_default_on = False
         # 注册绑定到子 Agent 自身的通信工具（替换从主 Agent 继承的、绑定到主 Agent 闭包的版本）
         comm_tools = make_communication_tools(self.agent)
         for t in comm_tools:
@@ -115,112 +120,266 @@ def _resolve_tools(agent, tools_str: str):
 
 
 def _agent_md_path(name: str):
-    """.agent/agents/<name>.md 路径；名字非法返回 None。"""
+    """[兼容别名] .agent/agents/<name> 定义文件路径（.yml 优先，无则 .md）。"""
+    return _agent_def_path(name)
+
+
+def _agent_def_path(name: str):
+    """子 Agent 定义文件路径：.agent/agents/<name>.yml（v2）优先，不存在回退 <name>.md（旧格式）。
+    名字非法返回 None。返回值不保证存在（调用方自行判 exists）。"""
     if not _NAME_RE.match(name or ""):
         return None
-    return WORKSPACE / _AGENT_DIR / "agents" / f"{name}.md"
+    d = WORKSPACE / _AGENT_DIR / "agents"
+    yml = d / f"{name}.yml"
+    if yml.exists():
+        return yml
+    return d / f"{name}.md"
 
 
-# assembly DSL：合法段名（7 段）。必装段 system/user_message/steps 恒装（session 层不查开关）；
-# 可关段 rules/history/hooks/tail 由 session.assembly / agent._run_hooks 查开关。
-_ASSEMBLY_SEGS = {"system", "rules", "history", "user_message", "hooks", "steps", "tail"}
-_ASSEMBLY_TOGGLES = {"rules", "history", "hooks", "tail"}
+# assembly DSL v2：有序装配清单。合法段名（8 段）：必装段 system/user_message/steps 恒装
+# （未列出时按默认顺序相对位置自动补插）；可关段 rules/history/ltm/tail 未列出即不装；
+# hooks 不占投影位置（产出绑在当前轮内），仅作开关——子 Agent 未列出时默认 off。
+# 动作项：file/dir/cmd/text 默认每轮求值（mtime 热改生效），workflow 默认 once 实例固化。
+_ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "tail"}
+_ASSEMBLY_TOGGLES = {"rules", "history", "ltm", "hooks", "tail"}
+_ASSEMBLY_ACTIONS = ("file", "dir", "cmd", "workflow", "text", "func", "tool")
+_ASSEMBLY_MUST = ("system", "user_message", "steps")
+# 段的默认相对顺序（必装段自动补插的位置基准；= session._DEFAULT_ASSEMBLY_PLAN 的段序）
+_ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps", "tail")
+_ASSEMBLY_HISTORY_MODES = ("tiered", "window", "full")
+_HOOK_POSITIONS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
 
 
-def _parse_assembly(meta: dict) -> dict:
-    """frontmatter 的 assembly 字段 → {可关段: bool}。
-    语义：【只装列出的段】——列出的可关段 True，没列的可关段 False（必装段无所谓，忽略）。
-    元素格式 'name' 或 'name|optional'（optional 是文档性标记，不参与逻辑——4 个可关段都允许
-    agent_prompt 参数关闭）。支持 YAML list 或逗号分隔串；未知段名忽略+日志；无声明返回 {}（全装）。"""
+def _hook_item_from_str(s: str) -> dict:
+    """'workflow: name | async' / 'cmd: ...' / 'emit: ...' → 项 dict。
+    尾随 '| async' / '| optional' 等标志解析成 flag 键。"""
+    flags = {}
+    segs = [p.strip() for p in str(s).split("|")]
+    main = segs[0]
+    for f in segs[1:]:
+        fk = f.strip().lower()
+        if fk:
+            flags[fk] = True
+    if ":" in main:
+        kind, _, val = main.partition(":")
+        kind, val = kind.strip().lower(), val.strip()
+        return {"kind": kind, "value": val, **flags}
+    # 无冒号：裸工作流名
+    return {"kind": "workflow", "value": main.strip(), **flags}
+
+
+def _parse_hooks(meta: dict) -> dict:
+    """frontmatter/yml 的 hooks 字段 → {hook位置: [{kind, value, async...}]}。
+    项格式：'workflow: x' / 'x'（裸名=workflow）/ 'cmd: ...' / 'emit: ...'，
+    尾随 '| async' 等标志。未知位置忽略+日志。无声明返回 {}。"""
+    raw = meta.get("hooks")
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out = {}
+    for hook, items in raw.items():
+        if hook not in _HOOK_POSITIONS:
+            _LOG.warning("hooks 未知位置 '%s'（合法：%s），已忽略", hook, list(_HOOK_POSITIONS))
+            continue
+        lst = out.setdefault(hook, [])
+        if items is None:
+            continue
+        src = items if isinstance(items, list) else [items]
+        for it in src:
+            if isinstance(it, dict):
+                # {workflow: x | async} 或 {cmd: ...} 或 {emit: ...}
+                for k, v in it.items():
+                    if k in ("workflow", "cmd", "emit"):
+                        item = _hook_item_from_str(f"{k}: {v}")
+                        break
+                else:
+                    item = _hook_item_from_str(next(iter(it.values())) if it else "")
+            else:
+                item = _hook_item_from_str(it)
+            if item.get("value"):
+                lst.append(item)
+    return out
+
+
+def _parse_tool_expr(val: str):
+    """tool 项的值 'read_file(AGENTS.md)' / 'concat_files(.agent/rules/*.md)' → (工具名, 参数字符串)。
+    无括号（裸工具名单参）：参数为空。解析失败返回 None。"""
+    val = str(val).strip()
+    m = re.match(r"^([A-Za-z_]\w*)\s*\((.*)\)$", val)
+    if m:
+        return m.group(1), m.group(2).strip()
+    # 裸工具名（无参）
+    if re.match(r"^[A-Za-z_]\w*$", val):
+        return val, ""
+    return None
+
+
+def _asm_item_from_str(s: str):
+    """'seg' / 'seg|optional' / 'history=window' / 'tool: read_file(x)' → 项 dict 或 None。"""
+    raw = str(s).strip()
+    # tool: 形式（动作项）
+    if raw.startswith("tool:"):
+        val = raw[len("tool:"):].strip()
+        parsed = _parse_tool_expr(val)
+        if parsed:
+            tname, targs = parsed
+            return {"kind": "tool", "tool": f"{tname}({targs})", "tool_name": tname, "tool_args": targs,
+                    "timing": "turn"}
+        return None
+    seg = raw.split("|", 1)[0].strip()
+    mode = None
+    if "=" in seg:
+        seg, _, mode = seg.partition("=")
+        seg, mode = seg.strip(), mode.strip().lower()
+        if seg == "history" and mode in ("on", "true", "1", "开"):
+            mode = None
+    if seg in _ASSEMBLY_SEGS:
+        if seg == "history" and mode and mode not in _ASSEMBLY_HISTORY_MODES:
+            _LOG.warning("assembly history 模式 '%s' 未知（合法：%s），按默认处理", mode, list(_ASSEMBLY_HISTORY_MODES))
+            mode = None
+        item = {"kind": "seg", "name": seg}
+        if mode:
+            item["mode"] = mode
+        return item
+    if seg:
+        _LOG.warning("assembly 含未知段名 '%s'（合法：%s + 动作 file/dir/cmd/workflow/text），已忽略",
+                     seg, sorted(_ASSEMBLY_SEGS))
+    return None
+
+
+def _asm_timing(kind: str, d: dict) -> str:
+    """动作项求值时机：every: turn|once / once: true 显式覆盖；默认 file/dir/cmd/text=turn、workflow=once。"""
+    ev = str(d.get("every") or "").strip().lower()
+    if ev in ("turn", "once"):
+        return ev
+    if str(d.get("once", "")).strip().lower() in ("true", "1", "yes"):
+        return "once"
+    return "once" if kind == "workflow" else "turn"
+
+
+def _asm_item_from_dict(d: dict):
+    """{file: path} / {dir: path} / {cmd: str} / {workflow: name} / {text: str} / {func: name()}
+    / {tool: read_file(x)} [+ every/once] 或 {history: window} 简写 → 项 dict 或 None。"""
+    for k in _ASSEMBLY_ACTIONS:
+        if k in d and d[k]:
+            val = str(d[k]).strip()
+            if k == "func":
+                # {func: load_models()} → 剥掉尾随 ()
+                val = val.rstrip("()").strip()
+            item = {"kind": k, k: val, "timing": _asm_timing(k, d)}
+            if k == "tool":
+                parsed = _parse_tool_expr(val)
+                if parsed:
+                    item["tool_name"], item["tool_args"] = parsed
+                    item["tool"] = val
+            return item
+    for seg in _ASSEMBLY_SEGS:
+        if seg in d and d[seg]:
+            val = str(d[seg]).strip().lower()
+            item = {"kind": "seg", "name": seg}
+            if seg == "history" and val in _ASSEMBLY_HISTORY_MODES:
+                item["mode"] = val
+            return item
+    return None
+
+
+def _normalize_assembly_plan(items: list) -> list:
+    """归一化：必装段（system/user_message/steps）未列出时按 _ASSEMBLY_SEG_ORDER 的相对位置
+    自动补插（保持与默认投影顺序一致的插入点）。hooks 移除（不占位置，仅开关派生）。"""
+    plan = [it for it in items if not (it.get("kind") == "seg" and it.get("name") == "hooks")]
+    present = {it["name"] for it in plan if it.get("kind") == "seg"}
+    for seg in _ASSEMBLY_MUST:
+        if seg in present:
+            continue
+        # 插入点：清单里最后一段的默认序 < 本段的默认序 → 插其后；无 → 插最前
+        pos = 0
+        for i, it in enumerate(plan):
+            if it.get("kind") == "seg" and it.get("name") in _ASSEMBLY_SEG_ORDER \
+                    and _ASSEMBLY_SEG_ORDER.index(it["name"]) < _ASSEMBLY_SEG_ORDER.index(seg):
+                pos = i + 1
+        plan.insert(pos, {"kind": "seg", "name": seg})
+        present.add(seg)
+    return plan
+
+
+def _parse_assembly(meta: dict) -> list:
+    """frontmatter 的 assembly 字段 → 有序装配清单（v2）。
+    元素：段名 'name' / 'name|optional' / 'history=window|tiered|full'；
+    动作 {file: path} / {dir: path} / {cmd: 命令} / {workflow: 名} / {text: 文本}
+    [+ every: turn|once / once: true]；YAML list 或逗号分隔串（仅段名场景）。
+    语义：【清单即装配顺序，只装列出的段】；必装段自动补插。无声明返回 None（默认清单全装）。"""
     raw = meta.get("assembly")
     if not raw:
-        return {}
-    items = raw if isinstance(raw, list) else [s.strip() for s in str(raw).split(",") if s.strip()]
-    segs = set()
-    for it in items:
-        seg = str(it).split("|", 1)[0].strip()
-        if seg in _ASSEMBLY_SEGS:
-            segs.add(seg)
-        elif seg:
-            _LOG.warning("assembly 含未知段名 '%s'（合法：%s），已忽略", seg, sorted(_ASSEMBLY_SEGS))
-    return {t: (t in segs) for t in _ASSEMBLY_TOGGLES}
-
-
-def _parse_system_append(meta: dict) -> list:
-    """frontmatter 的 system_append 字段 → [{type:'workflow', name} | {type:'text', content}]。
-    DSL：SYSTEM（md 正文）之后按序追加——workflow 项执行该工作流取 result（动态上下文，
-    如 wiki 树/项目架构摘要），text 项原样拼静态文本。无声明返回 []（system 保持纯 md 正文）。
-    生效时机：新建/复活实例时执行一次（实例 system 固化）；reuse 复用不重算（见 agent_prompt）。"""
-    raw = meta.get("system_append")
-    if not raw or not isinstance(raw, list):
-        return []
+        return None
     items = []
-    for it in raw:
-        if not isinstance(it, dict):
-            continue
-        if it.get("workflow"):
-            items.append({"type": "workflow", "name": str(it["workflow"]).strip()})
-        elif it.get("text"):
-            items.append({"type": "text", "content": str(it["text"])})
-    return items
+    if isinstance(raw, list):
+        for it in raw:
+            if isinstance(it, dict):
+                x = _asm_item_from_dict(it)
+                if x:
+                    items.append(x)
+            else:
+                x = _asm_item_from_str(it)
+                if x:
+                    items.append(x)
+    else:
+        for s in str(raw).split(","):
+            x = _asm_item_from_str(s)
+            if x:
+                items.append(x)
+    if not items:
+        return None
+    return _normalize_assembly_plan(items)
 
 
-def _build_subagent_system(agent, system: str, sys_append: list, prompt: str, aid: str) -> str:
-    """按 system_append DSL 展开子 Agent 的最终 SYSTEM：md 正文 + 各追加段。
-    workflow 项：.agent/workflows/ 找同名工作流执行（入参 {prompt, agent_id}，工作流 start
-    节点按需声明），result 追加；LLM 节点走 utility_client。找不到/执行失败 → 跳过该段+日志
-    （SYSTEM 保底可用，不让装饰段炸派活）。"""
-    if not sys_append:
-        return system
-    from workflow import scan_workflows, execute, WorkflowError
-    from real_tools import WORKSPACE as _ws
-    wf_index = {}
-    for it in scan_workflows(_ws):
-        if it.get("canvas") is not None and not it.get("error"):
-            wf_index[it["name"]] = it["canvas"]
-    parts = [system]
-    for item in sys_append:
-        if item["type"] == "text":
-            parts.append(item["content"])
-            continue
-        wf_name = item["name"]
-        canvas = wf_index.get(wf_name)
-        if canvas is None:
-            _LOG.warning("system_append 工作流 '%s' 未找到（.agent/workflows/），跳过", wf_name)
-            continue
-        try:
-            result = execute(canvas, {"prompt": prompt or "", "agent_id": aid},
-                             tools=getattr(agent, "tools", None),
-                             llm=agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm,
-                             emit=getattr(agent, "_emit", None), workspace=_ws)
-            result = (result or "").strip()
-            if result:
-                parts.append(result)
-        except (WorkflowError, Exception) as e:
-            _LOG.warning("system_append 工作流 '%s' 执行失败，跳过：%s", wf_name, e)
-    return "\n\n".join(p for p in parts if p and p.strip())
-
-
-def _apply_assembly_overrides(base_asm: dict, overrides_str: str) -> tuple:
-    """agent_prompt 的 assembly 参数（'rules=off,history=off'）覆盖 base_asm 的可关段。
-    返回 (合并后的 asm, 提示语)。off/false/0/关 = 关；on/true/1/开 = 开。"""
-    asm = dict(base_asm)
-    notes = []
+def _apply_assembly_overrides(base_plan: list, overrides_str: str) -> tuple:
+    """agent_prompt 的 assembly 参数覆盖 base_plan（.md 声明的清单）。返回 (plan, 提示语)。
+    语义（白名单）：显式列段名/动作名 = 打开（补插到清单，保持默认序）；seg=off = 关闭（移除）。
+    支持 'history=window' 改历史投影方式。段开关优先级：列段名 on > 已有 > off。"""
+    plan = list(base_plan) if base_plan else []
+    notes, add, offs = [], {}, set()
     for part in (overrides_str or "").split(","):
         part = part.strip()
         if not part or "=" not in part:
             continue
         seg, _, val = part.partition("=")
-        seg = seg.strip()
-        val = val.strip().lower()
-        if seg not in _ASSEMBLY_TOGGLES:
-            if seg in ("system", "user_message", "steps"):
-                notes.append(f"'{seg}' 必装不可关")
-            elif seg:
-                notes.append(f"'{seg}' 未知段名")
+        seg, val = seg.strip(), val.strip().lower()
+        cleaned = seg.split("|", 1)[0]
+        if cleaned in ("system", "user_message", "steps"):
+            notes.append(f"'{cleaned}' 必装不可关")
             continue
-        asm[seg] = val in ("on", "true", "1", "开")
-    return asm, ("；assembly 参数：" + "，".join(notes) if notes else "")
+        if cleaned in ("file", "dir", "cmd", "workflow", "text") and cleaned in _ASSEMBLY_ACTIONS:
+            notes.append(f"动作项不能在参数里新增（仅段开关/模式可覆盖），'{cleaned}' 忽略")
+            continue
+        if cleaned == "history" and val in _ASSEMBLY_HISTORY_MODES:
+            add["history"] = val   # 模式覆盖（同时视为打开）
+            continue
+        if seg not in _ASSEMBLY_TOGGLES:
+            notes.append(f"'{seg}' 未知段名" if seg else "")
+            continue
+        if val in ("off", "false", "0", "关"):
+            offs.add(seg)
+        elif val in ("on", "true", "1", "开"):
+            add[seg] = None
+    # off 剔除（参数显式 off 覆盖 md 声明/已有同名段）
+    plan = [it for it in plan if not (it.get("kind") == "seg" and it.get("name") in offs)]
+    # add 打开：history 带模式 → 已有段改模式；其余可关段补插（保持默认序）；hooks 只派生开关不进清单
+    for seg, mode in add.items():
+        if seg == "hooks":
+            continue
+        existing = next((it for it in plan if it.get("kind") == "seg" and it.get("name") == seg), None)
+        if existing is not None:
+            if mode:
+                existing["mode"] = mode
+            continue
+        if seg in _ASSEMBLY_MUST:
+            continue
+        pos = 0
+        for i, it in enumerate(plan):
+            if it.get("kind") == "seg" and it.get("name") in _ASSEMBLY_SEG_ORDER \
+                    and _ASSEMBLY_SEG_ORDER.index(it["name"]) < _ASSEMBLY_SEG_ORDER.index(seg):
+                pos = i + 1
+        plan.insert(pos, {"kind": "seg", "name": seg, **({"mode": mode} if mode else {})})
+    return plan, ("；assembly 参数：" + "，".join(notes) if notes else "")
 
 
 def make_communication_tools(agent) -> list:
@@ -404,30 +563,41 @@ def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
 
     def create_agent(name: str, description: str, system: str, tools: str = "", model: str = "") -> str:
-        """声明一个子 Agent（写 .agent/agents/<name>.md，不建实例）。
+        """声明一个子 Agent（写 .agent/agents/<name>.yml，不建实例）。
         name: 唯一名；description: 一句话作用 + 何时调用（投影给主 Agent 决定何时派活）；
-        system: 子 Agent 的角色/任务定义（systemPrompt）；tools: 留空/all=继承主 Agent 全部
+        system: 子 Agent 的角色/任务定义（存为 assembly 的首个 text: 项，即 persona）；tools: 留空/all=继承主 Agent 全部
                (除管理工具)，或逗号分隔工具名只注册这些；model: 指定模型，留空=主 Agent 当前模型。
         声明后下一轮主 Agent SYSTEM 就会列出它，可用 agent_prompt 派活。"""
-        p = _agent_md_path(name)
-        if p is None:
+        d = WORKSPACE / _AGENT_DIR / "agents"
+        if not _NAME_RE.match(name or ""):
             return f"[非法名称] '{name}'，只能含字母数字、下划线、连字符"
         if model and model not in config.MODELS:
             return f"[未知模型] '{model}'，可用：{list(config.MODELS)}"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        meta = yaml.safe_dump(
-            {"name": name, "description": description, "tools": tools, "model": model},
-            allow_unicode=True, sort_keys=False,
-        ).strip()
-        p.write_text(f"---\n{meta}\n---\n\n{system.strip()}\n", encoding="utf-8")
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{name}.yml"
+        data = {
+            "name": name,
+            "description": description,
+            "tools": tools,
+            "model": model,
+            "assembly": [{"text": system.strip()}],
+        }
+        p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return f"✅ 已声明子 Agent '{name}' -> {p.relative_to(WORKSPACE)}（下一轮 SYSTEM 可见）"
 
     def kill_agent(name: str) -> str:
-        """删除子 Agent 声明（.agent/agents/<name>.md）。"""
-        p = _agent_md_path(name)
-        if p is None or not p.exists():
+        """删除子 Agent 声明（.agent/agents/<name>.yml；同名 .md 一并清理）。"""
+        if not _NAME_RE.match(name or ""):
+            return f"[非法名称] '{name}'，只能含字母数字、下划线、连字符"
+        d = WORKSPACE / _AGENT_DIR / "agents"
+        gone = False
+        for ext in (".yml", ".md"):
+            p = d / f"{name}{ext}"
+            if p.exists():
+                p.unlink()
+                gone = True
+        if not gone:
             return f"[不存在] 没有名为 '{name}' 的子 Agent"
-        p.unlink()
         return f"✅ 已删除子 Agent '{name}'"
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False,
@@ -442,20 +612,25 @@ def make_subagent_tools(agent) -> list:
                没有则新建（之后的同名 reuse 调用会复用它）。复用实例的上下文投影【只含当前轮】
                （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
                复用次数增长，适合高频派活避免实例越建越多。同名实例全在跑时返回提示。
-        assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off'，可关段
-               rules/history/hooks/tail（如 'rules=off,history=off' 给纯任务型工人瘦身）。
-               system/user_message/steps 必装不可关。.md 的 assembly 声明是基线，参数在其上覆盖。
+        assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off' 或
+               'history=window|tiered|full'。可关段 rules/history/ltm/hooks/tail。
+               动作项（file/dir/cmd/workflow/text）不能在参数里新增，只走 .md 声明。
+               .md 的 assembly 声明是基线，参数在其上覆盖。
+               ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
         caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
         reg = getattr(agent, "registry", None)
         asm_note = ""
-        # 读声明 md 的 assembly 基线（复用/复活/新建三条路径都要；读不到为 {} 全装）
-        p_md = _agent_md_path(name)
-        base_asm = {}
+        # 读声明文件的 assembly 基线清单 + hooks 声明（复用/复活/新建三条路径都要；读不到为 None=默认）
+        p_md = _agent_def_path(name)
+        base_asm = None
+        base_hooks = None
         if p_md is not None and p_md.exists():
             try:
-                _meta, _ = _split_frontmatter(p_md.read_text(encoding="utf-8"))
+                from agent_config import load_agent_yml
+                _meta, _ = load_agent_yml(p_md)
                 base_asm = _parse_assembly(_meta)
+                base_hooks = _parse_hooks(_meta) or None
             except Exception:
                 pass
         if assembly:
@@ -581,7 +756,9 @@ def make_subagent_tools(agent) -> list:
                             f"先 wait_subagents 等它完成再 reuse，或去掉 reuse 新建独立实例。")
                 entry = max(idle, key=lambda e: e.registered_at)
                 entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
-                entry.agent.session.assembly.update(base_asm)  # assembly：md 基线 + 参数覆盖（本次生效）
+                entry.agent.session.set_assembly_plan(base_asm)  # assembly：声明基线清单 + 参数覆盖（本次生效）
+                if base_hooks is not None:
+                    entry.agent.session.hook_specs = base_hooks
                 with reg._lock:
                     entry.task = prompt
                     entry.caller_id = caller_id
@@ -595,7 +772,9 @@ def make_subagent_tools(agent) -> list:
                 revived = _revive_subagent(agent, reg, entry, caller_id, prompt)
                 if revived is not None:
                     sub_agent, model_name, sub_dir = revived
-                    sub_agent.session.assembly.update(base_asm)   # assembly：复活路径同样应用（md 基线 + 参数覆盖）
+                    sub_agent.session.set_assembly_plan(base_asm)   # assembly：复活路径同样应用（声明基线 + 参数覆盖）
+                    if base_hooks is not None:
+                        sub_agent.session.hook_specs = base_hooks
                     reg.register(entry.agent_id, name, "subagent", model_name,
                                  agent=sub_agent, task=prompt, status="running",
                                  caller_id=caller_id)
@@ -603,23 +782,24 @@ def make_subagent_tools(agent) -> list:
                                    sub_dir, prompt, _reused=True) + asm_note
             # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=reuse）
 
-        # —— 新建路径：读声明 md 建临时实例 ——
-        p = _agent_md_path(name)
+        # —— 新建路径：读声明文件（.yml v2 / .md 旧格式）建临时实例 ——
+        p = _agent_def_path(name)
         if p is None or not p.exists():
             return f"[不存在] 没有名为 '{name}' 的子 Agent，先 create_agent"
         try:
-            meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
+            from agent_config import load_agent_yml
+            meta, system = load_agent_yml(p)
         except Exception as e:
             return f"[读取失败] {type(e).__name__}: {e}"
-        system = (system or "").strip() or "你是一个自主子 Agent，用工具完成任务。"
+        # .yml：正文为空、persona 在 assembly text: 项里 → system 传空；.md 旧格式无正文才用兜底文案
+        if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
+            system = "你是一个自主子 Agent，用工具完成任务。"
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
         model_name = meta.get("model") or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name
         # agent_id（显式优先，否则 name/name_2…）+ 子 session 嵌套到 主 session/agents/<id>/
         aid = _resolve_agent_id(agent.background_tasks, name, agent_id)
-        # system_append DSL：md 正文之后追加动态段（工作流 result / 静态文本）
-        system = _build_subagent_system(agent, system, _parse_system_append(meta), prompt, aid)
         sub_dir = None
         try:
             main_dir = agent.session._ensure_session_dir()   # 同步确保主 session 目录就绪
@@ -632,6 +812,8 @@ def make_subagent_tools(agent) -> list:
                            registry=reg, agent_id=aid,
                            caller_id=caller_id, current_turn_only=reuse,
                            assembly=(base_asm or None))
+            if base_hooks is not None:
+                sub.agent.session.hook_specs = base_hooks
             if reg:
                 reg.register(aid, name, "subagent", model_name,
                              agent=sub.agent, task=prompt, status="running",

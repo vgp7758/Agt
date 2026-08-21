@@ -1632,8 +1632,10 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支）——
     from collections import deque
     out_edges, pending_in = _build_dag(nodes, edges)
-    # 初始就绪：所有 pending_in<=0 的节点（entry 后继 + 无入边孤立节点，ComfyUI 风格）
-    ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0)
+    # 初始就绪：所有 pending_in<=0 的节点（entry 后继 + 无入边孤立节点，ComfyUI 风格）。
+    # 孤立 end（type=2 无入边）排除——手写画布里可能当视觉标记，不作为出口触发提前返回
+    ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0
+                  and str(nodes[nid].get("type")) != "2")
     executed: set[str] = set()
 
     try:
@@ -1644,15 +1646,18 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             if current in executed:
                 continue   # 防重复
             executed.add(current)
-            if current == EXIT_ID:
-                raw = _exit_result(nodes[EXIT_ID], ctx)
+            node = nodes.get(current)
+            # 到达结束节点即返回：EXIT_ID(900001) 之外的多个 Exit 同样生效（多出口画布的
+            # 常规模式：不同分支各挂一个 end，各自 ref 不同来源——单 id 特判会漏掉第二个
+            # 之后的 end，落入"隐式结束"返回上游节点输出）
+            if current == EXIT_ID or (node is not None and str(node.get("type")) == "2"):
+                raw = _exit_result(node if node is not None else nodes[EXIT_ID], ctx)
                 if run_id:
-                    _run_track(run_id, {"ev": "node_start", "id": EXIT_ID,
-                                        "title": _node_title(nodes[EXIT_ID]), "ntype": "2"})
-                    _run_track(run_id, {"ev": "node_end", "id": EXIT_ID, "preview": _preview_str(raw),
+                    _run_track(run_id, {"ev": "node_start", "id": current,
+                                        "title": _node_title(node), "ntype": "2"})
+                    _run_track(run_id, {"ev": "node_end", "id": current, "preview": _preview_str(raw),
                                         "full": _full_str(raw)})
                 return raw if return_exit_dict else _stringify_result(raw)
-            node = nodes.get(current)
             if node is None:
                 raise WorkflowError(f"节点 {current} 不存在")
             ntype = str(node.get("type"))

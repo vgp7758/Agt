@@ -1,4 +1,4 @@
-<workflow name="before_turn_retrieval" description="每轮开始前自动检索：短消息(≤4字)只看最近3轮；长消息走语义检索+episodic记忆+关键词筛→LLM精排top3→格式化注入（before_turn 钩子，默认开）" hook="before_turn" hidden="true">
+<workflow name="before_turn_retrieval" description="每轮开始前自动检索：短消息(≤4字)只看最近3轮；长消息走语义检索+episodic记忆+关键词筛→LLM精排top3→格式化注入（before_turn 钩子，默认开）" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>
@@ -24,7 +24,7 @@
   </node>
   <node id="130001" type="code" title="collect_candidates" x="1620" y="80">
     <in name="history" type="list" ref="110001.raw"/>
-    <in name="keywords" type="list" ref="802605.output.keywards"/>
+    <in name="keywords" type="list" ref="802605.keywords"/>
     <in name="semantic_hits" type="list" ref="120001.result"/>
     <in name="episodic" type="string" ref="125001.result"/>
     <code language="3"><![CDATA[import json, re
@@ -202,18 +202,12 @@ async def main(args) -> dict:
     <out name="inject" ref="170001.inject" type="boolean"/>
     <out name="result" ref="170001.result" type="string"/>
   </node>
-  <node id="802605" type="llm" title="LLM" x="720" y="300">
-    <in name="query" type="string" ref="100001.user_message"/>
-    <param name="prompt" type="string"><![CDATA[用户查询：
-{{query}}]]></param>
-    <param name="systemPrompt" type="string"><![CDATA[你是一个关键词提取器，从用户的请求中识别用户的意图，提取3-8个与用户查询相关的关键词并输出用于检索。]]></param>
-    <param name="thinking" type="string"><![CDATA[false]]></param>
-    <model>local-qwen</model>
-    <out name="output" type="object"><field name="keywards" type="list"/></out>
-    <batch enabled="false"/>
+  <node id="802605" type="subworkflow" title="extract_keywords" x="720" y="300" workflowId="extract_keywords">
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <out name="keywords" type="list"/>
   </node>
   <node id="785480" type="plugin" title="join" x="1020" y="80" toolName="join">
-    <in name="items" type="list" ref="802605.output.keywards"/>
+    <in name="items" type="list" ref="802605.keywords"/>
     <in name="separator" type="string">,</in>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>

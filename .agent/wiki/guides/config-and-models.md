@@ -39,7 +39,7 @@
 | DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
-| 视觉模型 | `vision: true`（read_image 自动压缩到 2048 边长） |
+| 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 
 ## 踩坑记录
 

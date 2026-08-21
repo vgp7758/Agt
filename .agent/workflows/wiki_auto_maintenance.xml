@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→调 update_wiki 子 Agent 维护→快照 diff 出变更文件→有变更则 git_commit 工具提交推送（message=判官摘要，免 shell 引号问题+带 Co-authored-by）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hook="before_answer" hidden="true" async="true">
+<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→调 update_wiki 子 Agent 维护→快照 diff 出变更文件→有变更则 git_commit 工具提交推送（message=判官摘要，免 shell 引号问题+带 Co-authored-by）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
@@ -45,13 +45,7 @@
   <node id="1030169" type="text" title="文本" x="420" y="80">
     <in name="user" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
-    <result><![CDATA[你是 repo-wiki 维护判官。依据user message和assistant response判断本轮对话是否值得记录进项目知识库（.agent/wiki/）。
-值得记录：实现了新功能、修复了 bug、做出架构/设计决策、摸清了某模块的工作原理、解决了值得备忘的问题。
-不值得记录：纯闲聊、简单问答、查询信息、未产生可复用知识。
-只输出一个 JSON 对象，不要 markdown：
-{"needs_maintenance": true, "summary": "本轮做了什么、影响哪些模块、关键结论"}
-needs_maintenance=false 时 summary 给空串。summary 要聚焦改动，简洁（交由后续子 Agent 据此 wiki_tree/wiki_read 后 wiki_write）。
-
+    <result><![CDATA[判断本轮对话是否值得记录进项目知识库（.agent/wiki/）
 user message:
 {{user}}
 

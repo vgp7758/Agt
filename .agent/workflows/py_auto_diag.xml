@@ -1,4 +1,4 @@
-<workflow name="py_auto_diag" description="改 .py 后自动跑 py_diag（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤+contains 判 ERROR，零 code 节点；需 ensure_lsp('python')）" hook="after_tool" hidden="true">
+<workflow name="py_auto_diag" description="改 .py 后自动跑 py_diag（after_tool 钩子；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤+contains 判 ERROR，零 code 节点；需 ensure_lsp('python')）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="tool_name" type="string"/>
     <out name="tool_args" type="string"/>

@@ -1,4 +1,4 @@
-<workflow name="cs_auto_diag" description="改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff 检测——run_python/MCP 等任何方式改了 .cs 都能触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）" hook="after_tool" enabled="false" hidden="true">
+<workflow name="cs_auto_diag" description="改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（after_tool 钩子；基于 changed_files 快照 diff 检测——run_python/MCP 等任何方式改了 .cs 都能触发；需先 ensure_lsp('csharp') 装配 csharp-lsp）" enabled="false" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="tool_name" type="string"/>
     <out name="tool_args" type="string"/>

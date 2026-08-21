@@ -256,6 +256,8 @@ class Agent:
                              temperature=temperature, enable_thinking=enable_thinking)
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
                                max_steps_per_turn=max_steps_per_turn, session_dir=session_dir)
+        # assembly DSL v2：workflow 装配项求值用的工具引用（session._asm_evaluate 消费）
+        self.session._asm_workflow_tools = self.tools
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
         self.session._time_provider = self._runtime_time_block  # tail 每步注入实时时间（感知时段）
@@ -515,7 +517,16 @@ class Agent:
     def set_session(self, session):
         """切换到指定 session：换引用 + 重新挂状态收集回调 + 恢复附加状态 + 同步 UI。
         所有 resume / reset / new_session 都应走这里，保证 provider 与附加状态一致。"""
+        _prev = self.session
         self.session = session
+        # assembly DSL v2 转挂：清单/钩子声明/hooks 默认开关跟到新 session
+        # （persona 在 assembly text: 项的场景，不转挂则切档后 persona 丢失）
+        if getattr(_prev, "assembly_plan", None) is not None:
+            session.set_assembly_plan(_prev.assembly_plan)
+        session.hook_specs = getattr(_prev, "hook_specs", None)
+        session.hooks_default_on = getattr(_prev, "hooks_default_on", True)
+        session._asm_workflow_tools = self.tools
+        session._asm_agent_id = self.agent_id
         session._state_provider = self.capture_runtime_state
         session._system_extra_provider = self._runtime_system_extra
         session._time_provider = self._runtime_time_block
@@ -963,25 +974,101 @@ class Agent:
                 pass
 
     # ========== 工作流生命周期钩子 ==========
+    def _hook_tasks(self, hook: str) -> list[dict]:
+        """解析本 agent 某 hook 位置的任务清单：yml hook_specs 优先（v2），
+        未声明时回退旧 workflow meta.hook 扫描（兼容期）。返回 [{kind, name, canvas?, async, recap, meta}]。
+        kind: workflow / cmd / emit。workflow 项经 _wf_canvas_index（每轮 run 开始时刷新）取画布。"""
+        from real_tools import WORKSPACE as _ws
+        from workflow import get_hook_workflows
+        specs = getattr(self.session, "hook_specs", None)
+        if specs is None:
+            hws = get_hook_workflows(_ws, hook)
+            return [{"kind": "workflow", "name": hw["name"], "canvas": hw["canvas"],
+                     "async": bool((hw.get("meta") or {}).get("async")),
+                     "recap": bool((hw.get("meta") or {}).get("recap")),
+                     "meta": hw.get("meta") or {}} for hw in hws]
+        tasks = []
+        for item in specs.get(hook, []):
+            kind = item.get("kind")
+            name = item.get("value") or ""
+            if not name:
+                continue
+            entry = {"kind": kind, "name": name, "value": name, "async": bool(item.get("async")),
+                     "recap": bool(item.get("recap")), "meta": {}}
+            if kind == "workflow":
+                entry["canvas"] = (self._wf_canvas_index() or {}).get(name)
+                if entry["canvas"] is None:
+                    _LOG.warning("hooks 声明的工作流 '%s' 未找到（.agent/workflows/），跳过", name)
+                    continue
+            tasks.append(entry)
+        return tasks
+
+    def _wf_canvas_index(self) -> dict:
+        """工作流名 → canvas 索引（钩子声明解析用）。带 mtime 缓存：目录没变不重扫。"""
+        import os
+        from real_tools import WORKSPACE as _ws
+        d = _ws / ".agent" / "workflows"
+        try:
+            stamp = max((p.stat().st_mtime_ns for p in d.iterdir()
+                         if not p.name.endswith(".meta")), default=0)
+        except OSError:
+            stamp = 0
+        cache = getattr(self, "_wf_idx_cache", None)
+        if cache is not None and cache[0] == stamp:
+            return cache[1]
+        from workflow import scan_workflows
+        idx = {}
+        for it in scan_workflows(_ws):
+            if it.get("canvas") is not None and not it.get("error"):
+                idx[it["name"]] = it["canvas"]
+        self._wf_idx_cache = (stamp, idx)
+        return idx
+
     def _run_hooks(self, hook: str, context: dict) -> list[dict]:
-        """运行所有声明在 hook 位置触发的工作流，返回需注入的旁注列表（结构化）。
+        """运行所有声明在 hook 位置触发的任务（工作流 / 命令 / 事件），返回需注入的旁注列表。
         context: 该钩子位置的上下文（key 对应工作流开始节点 <out> 声明）。
         工作流约定返回 {inject, result, message}：
           - inject=True 且 result 非空 → 加入返回列表 {hook, name, result}（作 system 旁注喂主 LLM）；
           - message 非空 → 发 workflow_message 事件到 UI（不进主 LLM，用于静默通知类钩子）。
+        cmd 项：执行命令，stdout 非空则注入。emit 项：发 emit 事件（不进主 LLM）。
         失败仅发 auto_wf_error 事件，绝不炸主循环。
-        assembly DSL：hooks=off（子 Agent 声明/agent_prompt 参数）时本 Agent 不跑任何钩子工作流。"""
-        if not getattr(self.session, "assembly", {}).get("hooks", True):
+        assembly DSL：hooks=off（子 Agent 声明/agent_prompt 参数）时本 Agent 不跑任何钩子工作流。
+        子 Agent 未显式声明装配时 hooks_default_on=False（Session 构造代码置位）——默认不跑钩子。"""
+        if not getattr(self.session, "assembly", {}).get("hooks",
+                                                         getattr(self.session, "hooks_default_on", True)):
             return []
+        from real_tools import WORKSPACE as _ws
+        from workflow import run_hook
+        tasks = self._hook_tasks(hook)
+        # 拆分：emit 即时执行（同步发事件）；cmd 走同步执行器；workflow 走原 sync/async 并发
+        emit_tasks = [t for t in tasks if t["kind"] == "emit"]
+        cmd_tasks = [t for t in tasks if t["kind"] == "cmd"]
+        wf_tasks = [t for t in tasks if t["kind"] == "workflow"]
         notes = []
+        # —— emit 项：同步发事件（如 confirm_tool_use，UI 消费）——
+        for t in emit_tasks:
+            try:
+                self._emit({"type": t["name"], "hook": hook, "context": dict(context)})
+            except Exception as e:
+                _LOG.warning("钩子 emit %s 失败：%s", t["name"], e)
+        # —— cmd 项：同步执行命令，stdout 非空注入（超时 10s，失败跳过不炸主循环）——
+        for t in cmd_tasks:
+            try:
+                import subprocess as _sp
+                r = _sp.run(t["value"], shell=True, capture_output=True, timeout=10,
+                            cwd=str(self.session.workspace))
+                out = (r.stdout or b"").decode("utf-8", errors="replace").strip()[:4000]
+                self._emit({"type": "auto_wf", "name": f"cmd:{t['name'][:60]}", "hook": hook,
+                            "run_id": "", "text": out[:300]})
+                if out:
+                    notes.append({"hook": hook, "name": f"cmd:{t['name']}", "result": out})
+            except Exception as e:
+                self._emit({"type": "auto_wf_error", "name": f"cmd:{t['name'][:60]}", "hook": hook,
+                            "text": str(e)[:200]})
         try:
-            from real_tools import WORKSPACE as _ws
-            from workflow import get_hook_workflows, run_hook
-            hws = get_hook_workflows(_ws, hook)
-            # 同步钩子：并发执行（同 hook 多工作流并行，各线程独立 utility client/工具上下文）
-            # 但注入顺序按声明序合并（notes 顺序稳定，主 LLM 旁注不随机）。async 钩子仍后台线程。
-            sync_hws = [hw for hw in hws if not (hw.get("meta") or {}).get("async")]
-            async_hws = [hw for hw in hws if (hw.get("meta") or {}).get("async")]
+            # 同步/异步工作流划分
+            sync_hws = [t for t in wf_tasks if not t.get("async")]
+            async_hws = [t for t in wf_tasks if t.get("async")]
             # —— async 钩子：后台线程执行（wiki_auto_maintenance 等推理长但无需等）——
             for hw in async_hws:
                 from workflow import new_wf_run
@@ -1013,7 +1100,7 @@ class Agent:
                         _RECAP_ERR_MARKS = ("APIStatusError", "APIConnectionError", "APITimeoutError",
                                             "RateLimitError", "Error code:", "执行失败", "Traceback",
                                             "[工作流", "出错]", "BadRequestError")
-                        if (_hw.get("meta") or {}).get("recap") and (result or "").strip():
+                        if (_hw.get("recap") or (_hw.get("meta") or {}).get("recap")) and (result or "").strip():
                             _rc = (result or "").strip().split("\n")[0].strip()[:60]
                             if _rc and not any(mk in _rc for mk in _RECAP_ERR_MARKS):
                                 _agent_ref._recap = _rc
@@ -1334,11 +1421,16 @@ class Agent:
                 refresh_workflow_tools(self.tools, _ws, self)
             except Exception:
                 pass  # 工作流刷新绝不影响主循环
-            # 缓存本轮启用的钩子位置集合（避免每步重复扫描工作流目录）
+            # 缓存本轮启用的钩子位置集合（避免每步重复扫描工作流目录）。
+            # yml hook_specs 声明了钩子的 agent 取其键；未声明回退扫 workflow meta.hook（兼容期）
             try:
-                from real_tools import WORKSPACE as _ws
-                from workflow import get_hook_workflows
-                self._active_hooks = {hw["hook"] for hw in get_hook_workflows(_ws)}
+                specs = getattr(self.session, "hook_specs", None)
+                if specs is not None:
+                    self._active_hooks = {h for h, lst in specs.items() if lst}
+                else:
+                    from real_tools import WORKSPACE as _ws
+                    from workflow import get_hook_workflows
+                    self._active_hooks = {hw["hook"] for hw in get_hook_workflows(_ws)}
             except Exception:
                 self._active_hooks = set()
             tool_schemas = self.tools.schemas()

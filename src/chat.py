@@ -171,20 +171,51 @@ def init_rag(workspace):
 def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, workspace=WORKSPACE):
     """装配一个完整 Agent（web 与 CLI 共用）。
     mcp_mgr 须已连接（web 传模块级单例 / chat main 自建并连接后传入）；
-    on_event/snapshot_manager 可注入；verbose 控制装配期打印。返回装配好的 agent。"""
+    on_event/snapshot_manager 可注入；verbose 控制装配期打印。返回装配好的 agent。
+    主 agent 元信息来自 ~/.agt/main.yml（assembly 清单 + hooks 声明 + model 覆盖），
+    读不到时回退内置 SYSTEM 字符串 + 默认装配清单（保底不炸）。"""
     # RAG 全局实例（之前 chat 漏装配）
     init_rag(workspace)
-    # 播种默认子 Agent 模板（.agent/agents/，照搬 seed_default_workflows：目标存在则跳过）
+    # 旧 .md 声明先迁移到 .yml（幂等；用户改过的 .md 优先成 .yml，不被随包模板覆盖）
+    from agent_config import migrate_agents_md_to_yml
+    migrate_agents_md_to_yml(workspace)
+    # 播种默认子 Agent 模板（.agent/agents/，目标存在则跳过——迁移产物即存在）
     seed_default_agents(workspace)
+    # 主 agent 元信息：~/.agt/main.yml（首次播种随包 src/assets/main.yml；用户可编辑）
+    from agent_config import seed_main_agent, load_agent_yml
+    main_yml = seed_main_agent(workspace)
+    asm_plan = None
+    hook_specs = None
+    model_name = None
+    try:
+        meta, _ = load_agent_yml(main_yml)
+        if meta:
+            from multiagent import _parse_assembly, _parse_hooks
+            asm_plan = _parse_assembly(meta)
+            hook_specs = _parse_hooks(meta)
+            model_name = (meta.get("model") or "").strip() or None
+    except Exception as e:
+        if verbose:
+            print(f"[main.yml] 读取失败（{e}），回退内置 SYSTEM + 默认装配")
     # 快照管理器（默认装；web 可传自己的）
     snap = snapshot_manager or SnapshotManager(workspace)
     # Agent 注册表（多 Agent 协作通信的寻址基础）
     agent_registry = AgentRegistry()
 
-    agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
-                  enable_thinking=True, max_steps=50, token_budget=80000,
-                  verbose=verbose, on_event=on_event, snapshot_manager=snap,
-                  registry=agent_registry)
+    if asm_plan is not None:
+        # v2：persona 在 assembly text: 项里，system 参数传空（_seg_msgs_system 空则跳过）
+        agent = Agent(system="", tools=REAL_TOOLS,
+                      model_name=model_name if model_name in (config.MODELS or {}) else None,
+                      enable_thinking=True, max_steps=50, token_budget=80000,
+                      verbose=verbose, on_event=on_event, snapshot_manager=snap,
+                      registry=agent_registry)
+        agent.session.set_assembly_plan(asm_plan)
+        agent.session.hook_specs = hook_specs if hook_specs is not None else {}
+    else:
+        agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
+                      enable_thinking=True, max_steps=50, token_budget=80000,
+                      verbose=verbose, on_event=on_event, snapshot_manager=snap,
+                      registry=agent_registry)
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace

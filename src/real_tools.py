@@ -251,10 +251,9 @@ def _md_headings(text: str) -> list:
     return out
 
 
-def _md_snapshot(text: str) -> str:
-    """Markdown 快照：<structure> 结构目录（frontmatter + ATX 标题 → 行范围，缩进表层级，跳过代码
-    围栏里的 #）+ <content> 干净正文（不带 N│ 行号——结构目录取代行号做 .md 的导航）。
-    recent-file 和 read_file(.md) 都用它。超 4000 行时正文首尾截断、结构目录保持完整。"""
+def _md_outline(text: str) -> str:
+    """Markdown 大纲：frontmatter + 各级标题 → 行范围树（缩进表层级，跳过代码围栏里的 #）。
+    _md_snapshot 的 <structure> 部分独立抽出，两处共用；dir_outline 的 .md 文件展开也用它。"""
     lines = text.splitlines()
     n = len(lines)
     entries = []  # (start_1based, end_1based, label, level)  level=0 给 frontmatter
@@ -270,17 +269,25 @@ def _md_snapshot(text: str) -> str:
         nxt = next((ln2 for (ln2, lv2, _) in headings[k + 1:] if lv2 <= level), None)
         end = (nxt - 1) if nxt is not None else n   # 到下一个同级/更高级标题前
         entries.append((ln, end, title, level))
-    # 结构目录文本（按层级缩进）
     struct_lines = []
     for a, b, label, level in entries:
         indent = "  " * (level - 1)
         rng = f"[L{a}-L{b}]" if a != b else f"[L{a}]"
         struct_lines.append(f"{indent}{rng} {label}")
-    struct = "\n".join(struct_lines) or "(无 frontmatter / 标题)"
+    return "\n".join(struct_lines) or "(无 frontmatter / 标题)"
+
+
+def _md_snapshot(text: str) -> str:
+    """Markdown 快照：<structure> 结构目录（frontmatter + ATX 标题 → 行范围，缩进表层级，跳过代码
+    围栏里的 #）+ <content> 干净正文（不带 N│ 行号——结构目录取代行号做 .md 的导航）。
+    recent-file 和 read_file(.md) 都用它。超 4000 行时正文首尾截断、结构目录保持完整。"""
+    struct = _md_outline(text)
+    n = len(text.splitlines())
     # 正文（超长首尾截断，结构目录保持完整）
     if n <= 4000:
         body = text.rstrip("\n")
     else:
+        lines = text.splitlines()
         body = ("\n".join(lines[:2000]) + f"\n... (共{n}行，需全文调 read_file)\n"
                 + "\n".join(lines[-2000:])).rstrip("\n")
     return f"<structure>\n{struct}\n</structure>\n<content>\n{body}\n</content>"
@@ -289,8 +296,8 @@ def _md_snapshot(text: str) -> str:
 def read_file(path: str, start_line: int = None, end_line: int = None,
               line_numbers: bool = True) -> str:
     """读取 workspace 内某个文件的内容（统一入口）：文本/Word/Excel/PDF 自动提取、
-    图片（png/jpg/gif/webp/bmp）自动转 data URL（视觉模型可直接查看）——不再需要记
-    "读图要用 read_image"，read_file 一把梭。末尾附 file_version（图片除外）。
+    图片（png/jpg/gif/webp/bmp）自动转 data URL（视觉模型可直接查看），任何文件都
+    只用 read_file。末尾附 file_version（图片除外）。
     start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
     line_numbers: 默认 True，每行前加行号（宽度按本段最大行号自适应对齐），用于接下来要用
     insert/delete/move 按行号编辑的场景；传 False 得不含行号的纯文本。
@@ -299,12 +306,13 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     返回末尾的 file_version 是该文件当前的内容版本号——传给 insert/delete/move 的 version 参数；
     若编辑时版本对不上，说明文件已被改动、需重读。"""
     target = _resolve(path)
+    # 图片类型 → 走读图逻辑（data URL，视觉模型可查看）。放在存在性检查之前：
+    # _read_image 自带候选查找（cwd + repo images/，供 <img> 标签裸文件名回读），
+    # 找不到时给 [未找到图片]；非视觉模型调用也只会得到 <img> 占位提示。
+    if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+        return _read_image(path)
     if not target.exists():
         return f"[文件不存在] {path}"
-    # 图片类型 → 走读图逻辑（data URL，视觉模型可查看）——与 read_file 统一入口，
-    # 免去"该用 read_file 还是 read_image"的困惑；非视觉模型调用也只会得到 <img> 占位提示。
-    if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
-        return read_image(path)
     if target.suffix.lower() in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
         text = _extract_text(target)
         if text is None:
@@ -368,8 +376,8 @@ def _shrink_image_bytes(raw: bytes) -> tuple[bytes, str]:
         return raw, ""
 
 
-def read_image(file: str) -> str:
-    """读取一张图片文件，返回 data URL（系统会自动渲染成图片供视觉模型查看）。
+def _read_image(file: str) -> str:
+    """（内部函数，由 read_file 统一入口调用，不单独注册为工具）读图返回 data URL。
     file 可以是裸文件名（如 c7_0.png：先在 cwd 找，再在 repo images/ 目录找），
     或相对/绝对路径（在 cwd 下解析，沙箱限定）。支持 png/jpg/gif/webp。
     超过 2048×2048 的图自动等比压缩到限内（视觉模型 API 的尺寸上限，超限会被拒）。
@@ -949,6 +957,203 @@ def find_function(name: str, path: str, lang: str = None, context: int = 0) -> s
         return (f"(在{where}未找到 '{name}' 的函数定义)\n"
                 f"可能：名字拼错 / 是无{{}}的表达式体箭头函数 / 仅声明无体 / 不支持的语言。可用 grep 按名字搜。")
     return f"找到 {total_matches} 处 '{name}' 的定义：\n" + "\n".join(parts)
+
+
+# ===== 目录大纲（assembly DSL 的 dir: 装配项）=====
+
+# brace 家族：显式定义关键字（class/interface/struct/enum/func/fn/function...）
+_BRACE_DEF_HEAD = re.compile(r"^\s*(?:export\s+|default\s+|public\s+|private\s+|internal\s+|"
+                             r"protected\s+|static\s+|abstract\s+|final\s+|sealed\s+|override\s+|"
+                             r"partial\s+|async\s+)*(class|interface|struct|enum|trait|record|func|fn|function)\b")
+# brace 家族：控制流/调用排除词——签名名或其前置词命中即不当作定义
+_BRACE_CTRL_KW = frozenset({"if", "for", "while", "switch", "catch", "return", "using", "lock",
+                            "foreach", "else", "do", "throw", "new", "await", "yield", "case",
+                            "when", "match", "typeof", "sizeof", "delete", "in", "of"})
+_PY_DEF_RX = re.compile(r"^(\s*)(?:async\s+)?(class|def)\s+([A-Za-z_]\w*)")
+_BRACE_SIG_RX = re.compile(r"^(\s*)(?:[\w<>\[\]:,.*&~?]+\s+)*?([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(")
+# 箭头/函数表达式赋值：const f = (x) => ... / NAME = function / let g = async x =>
+_BRACE_ARROW_RX = re.compile(r"^\s*(?:export\s+|default\s+)?(?:const|let|var)\s+"
+                             r"([A-Za-z_]\w*)\s*=\s*(?:async\s+)?"
+                             r"(?:function\b|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)")
+
+
+def _code_outline(text: str, family: str, max_defs: int = 40) -> str:
+    """代码文件大纲：类/函数定义行号清单（dir_outline 展开 .py/.js/.cs 等用）。
+    python = class / (async) def（缩进映射层级）；brace 家族 = 显式定义关键字行 +
+    启发式方法签名行（排除控制流 / obj.method( 调用 / 赋值右值调用，箭头函数保留）。
+    轻量正则不验证函数体——导航定位够用，精确边界用 find_function。"""
+    out = []
+    lines = text.splitlines()
+    if family == "python":
+        for i, ln in enumerate(lines):
+            m = _PY_DEF_RX.match(ln)
+            if m:
+                ind = "  " * min(len(m.group(1)) // 2, 6)
+                out.append(f"{ind}[L{i+1}] {m.group(2)} {m.group(3)}")
+    else:
+        for i, ln in enumerate(lines):
+            s = ln.rstrip()
+            st = s.strip()
+            if not st or st.startswith(("//", "/*", "*", "#", "*")):
+                continue
+            m = _BRACE_DEF_HEAD.match(s)
+            if m:
+                out.append(f"  [L{i+1}] {_code_outline_trunc(st)}")
+                continue
+            if _BRACE_ARROW_RX.match(s):
+                out.append(f"  [L{i+1}] {_code_outline_trunc(st)}")
+                continue
+            ms = _BRACE_SIG_RX.match(s)
+            if not ms or ms.group(2) in _BRACE_CTRL_KW:
+                continue
+            pre = s[:ms.start(2)].rstrip()
+            if pre and pre[-1] == ".":
+                continue                       # obj.method( 方法调用
+            pm = re.search(r"([A-Za-z_]\w*)\s*$", pre)
+            if pm and pm.group(1) in _BRACE_CTRL_KW:
+                continue                       # new Foo( / return Foo( / await fetch(
+            head = s.split("(", 1)[0]
+            if "=" in head and "=>" not in s:
+                continue                       # x = foo( 赋值右值调用（const f = () => 保留）
+            out.append(f"  [L{i+1}] {_code_outline_trunc(st)}")
+    if len(out) > max_defs:
+        out = out[:max_defs] + [f"  …另有 {len(out) - max_defs} 个定义（read_file 看全文）"]
+    return "\n".join(out)
+
+
+def _code_outline_trunc(s: str, w: int = 90) -> str:
+    """大纲行截断到 w 字符（签名太长时保类名/函数名头部）。"""
+    return s if len(s) <= w else s[:w - 1] + "…"
+
+
+def _file_outline(fp: Path, pad: str) -> tuple[int, list[str]]:
+    """(总行数, 大纲行)：.md → 标题行号树；代码文件 → 定义行号清单；其余只行数。
+    超 512KB 不展开大纲（防爆 token），行数按字节流数。"""
+    try:
+        if fp.stat().st_size > 512_000:
+            with fp.open("rb") as f:
+                n = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
+            return n, []
+        text = fp.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return 0, []
+    n = len(text.splitlines())
+    suf = fp.suffix.lower()
+    if suf in (".md", ".markdown"):
+        o = _md_outline(text)
+        if o and not o.startswith("(无"):
+            return n, [f"{pad}{ln}" for ln in o.splitlines()]
+    fam = _LANG_FAMILY.get(suf)
+    if fam:
+        o = _code_outline(text, fam)
+        if o:
+            return n, [f"{pad}{ln}" for ln in o.splitlines()]
+    return n, []
+
+
+# dir_outline 的固定排除（gitignore 之外的硬排除；不排 .agent——agent 定义目录本身常要列）
+_DIR_OUTLINE_HARD = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv",
+                               ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
+                               ".idea", ".vscode", ".next", ".cache"})
+
+
+def dir_outline(path: str, max_files: int = 200, max_depth: int = 6) -> str:
+    """目录大纲：树状列出目录内文件与各文件大纲（assembly DSL 的 dir: 装配项，也可直接调用）。
+    .md → path + 各级标题行号树；代码文件（py/js/ts/cs/java/go/rs...）→ 类/函数定义行号；
+    其余文件只列行数。忽略：workspace .gitignore 全部模式 + .git/__pycache__/node_modules 等
+    固定清单 + 嵌套 git 仓库整棵剪枝。上限保护：max_files 文件数 / max_depth 深度 /
+    单文件 512KB · 40 定义，超出截断并标注。"""
+    target = _resolve(path)
+    if not target.exists():
+        return f"[路径不存在] {path}"
+    if target.is_file():
+        n, outline = _file_outline(target, "    ")
+        return f"{path} [{n} 行]\n" + "\n".join(outline)
+    # gitignore 过滤谓词（延迟 import：agent 顶部 import real_tools，防循环）
+    from agent import _make_gitignore_filter
+    keep_dir, keep_file = _make_gitignore_filter(WORKSPACE)
+    out, nfiles, cut = [], 0, False
+
+    def walk(d: Path, depth: int):
+        nonlocal nfiles, cut
+        if cut or depth > max_depth:
+            return
+        try:
+            entries = sorted(d.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except OSError:
+            return
+        for p in entries:
+            if cut:
+                return
+            rel = p.relative_to(WORKSPACE).as_posix()
+            if p.is_dir():
+                if p.name in _DIR_OUTLINE_HARD or p.name.endswith(".egg-info"):
+                    continue
+                if (p / ".git").exists():
+                    continue               # 嵌套 git 仓库（coze-studio 等）整棵剪枝
+                if not keep_dir(rel):
+                    continue
+                out.append(f"{'  ' * depth}{p.name}/")
+                walk(p, depth + 1)
+            else:
+                if not keep_file(rel):
+                    continue
+                if nfiles >= max_files:
+                    cut = True
+                    return
+                nfiles += 1
+                n, outline = _file_outline(p, "  " * (depth + 2))
+                out.append(f"{'  ' * depth}{p.name} [{n} 行]")
+                out.extend(outline)
+    walk(target, 0)
+    if cut:
+        out.append(f"… 文件数超 {max_files} 截断（收窄 path 或分目录列）")
+    return "\n".join(out) or "(空目录)"
+
+
+def concat_files(pattern: str, max_files: int = 50, max_chars: int = 64000) -> str:
+    """按 glob 模式拼接多个文件内容（assembly DSL 的 tool: 项读多文件用，如 concat_files('.agent/rules/*.md')）。
+    pattern: workspace 内相对 glob（* 单层 / ** 任意层；也接受目录名=目录下所有文件）。
+    匹配结果按路径排序，每段以「=== <相对路径> ===」分隔；超 max_files 截断、单文件超 512KB 跳过。
+    返回拼接文本；无匹配返回空串（调用方按需忽略）。"""
+    import glob as _glob
+    pat = (pattern or "").strip().strip('"').strip("'")
+    if not pat:
+        return ""
+    base = WORKSPACE
+    # 目录名：展开为目录下所有文件（不含隐藏/常见排除目录）
+    if "*" not in pat and "?" not in pat and "[" not in pat:
+        d = _resolve(pat) if not pat.startswith(("..", "/", "\\")) else (base / pat)
+        if d.is_dir():
+            pat = (str(d.relative_to(base)).replace("\\", "/") or ".") + "/**/*"
+    matches = []
+    for m in _glob.glob(str(base / pat), recursive=True):
+        p = Path(m)
+        if not p.is_file():
+            continue
+        if any(seg in {".git", "__pycache__", "node_modules", ".venv", "venv",
+                       "dist", "build", ".mypy_cache"} for seg in p.parts):
+            continue
+        matches.append(p)
+    matches.sort()
+    if not matches:
+        return ""
+    out = []
+    n = 0
+    for p in matches[:max_files]:
+        if p.stat().st_size > 512_000:
+            continue
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        rel = p.relative_to(base).as_posix()
+        out.append(f"=== {rel} ===\n{txt.rstrip()}")
+        n += 1
+    body = "\n\n".join(out)
+    if len(matches) > max_files:
+        body += f"\n\n… 共 {len(matches)} 个文件，超 max_files={max_files} 截断（收窄 pattern）"
+    return body[:max_chars]
 
 
 def web_search(query: str) -> str:
@@ -2068,6 +2273,33 @@ def cosine_sim(text1: str, text2: str) -> float:
     return round(float(np.dot(vecs[0], vecs[1])), 4)
 
 
+# —— 应用级 KV 结果缓存（kv_cache_read/write 工具的进程级存储）——
+# 同输入结果确定的 LLM 调用（如关键词提取）做 memoization：同轮多个 before_turn 工作流
+# 共用一次提取。namespace 兼作版本号——改提示词/换模型时换 namespace 即整体失效。
+_KV_CACHE: dict = {}
+
+
+def _kv_key(key: str, namespace: str) -> tuple:
+    """缓存键：namespace + 内容哈希（超长消息也不占内存，value 原样存）。"""
+    h = hashlib.sha1(str(key).encode("utf-8", errors="ignore")).hexdigest()
+    return (str(namespace or ""), h)
+
+
+def kv_cache_read(key: str, namespace: str = "") -> dict:
+    """读应用级 KV 缓存：命中返回 {"hit": true, "value": ...}，未命中 {"hit": false, "value": null}。
+    key 任意字符串（通常接 user_message 原文，内部按内容哈希存储）；namespace 隔离不同用途/版本。
+    进程级存储：重启清空（结果缓存语义，丢失=下次重新计算，无正确性影响）。"""
+    v = _KV_CACHE.get(_kv_key(key, namespace))
+    return {"hit": v is not None, "value": v}
+
+
+def kv_cache_write(key: str, value: _Any, namespace: str = "") -> dict:
+    """写应用级 KV 缓存：把 value（任意 JSON 类型：list/dict/string/number...）存到 key 下，
+    与 kv_cache_read 配对（read 未命中 → 计算 → 写回）。返回 {"ok": true}。"""
+    _KV_CACHE[_kv_key(key, namespace)] = value
+    return {"ok": True}
+
+
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
     try:
@@ -2324,7 +2556,6 @@ REAL_TOOLS = Toolbox(
     Tool(run_script),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
-    Tool(read_image),
     Tool(diff_files, param_descriptions={
         "context": "每个 hunk 前后的上下文行数（默认 2）",
         "range_a": "file1 的行范围 [起,止]（1-based 含两端，如 [100,200]）——大文件分段对比用；不传=全文",
@@ -2369,12 +2600,34 @@ LIGHT_TOOLS = Toolbox(
         "text1": "第一段文本（批处理时接 loop-item=候选切片）",
         "text2": "第二段文本（通常接 query 原文）",
     }),
+    Tool(kv_cache_read, outputs=[
+        {"name": "hit", "type": "boolean", "description": "是否命中缓存"},
+        {"name": "value", "type": "any", "description": "缓存的值（未命中为 null）"},
+    ], param_descriptions={
+        "key": "缓存键（通常接 user_message 原文，内部按内容哈希）",
+        "namespace": "命名空间：隔离不同用途，兼作版本号（改提示词/换模型时换名即整体失效）",
+    }),
+    Tool(kv_cache_write, param_descriptions={
+        "key": "缓存键（与配套 read 相同的 key）",
+        "value": "要缓存的值（任意 JSON 类型：list/dict/string/number...）",
+        "namespace": "命名空间（与配套 read 相同）",
+    }),
     Tool(diff_lines, param_descriptions={
         "a_text": "改前文本（接上游节点输出）",
         "b_text": "改后文本",
         "context": "每个 hunk 前后的上下文行数（默认 2）",
     }),
     Tool(get_list_item, outputs=[{"name": "raw", "type": "any", "description": "列表元素（类型随元素；越界返回错误文本）"}]),
+    Tool(dir_outline, param_descriptions={
+        "path": "要列大纲的目录（workspace 内；也可传单个文件）",
+        "max_files": "最多展开的文件数（默认 200，超出截断标注）",
+        "max_depth": "最大下钻深度（默认 6）",
+    }),
+    Tool(concat_files, param_descriptions={
+        "pattern": "glob 模式（如 .agent/rules/*.md；目录名=该目录全部文件）",
+        "max_files": "最多拼接的文件数（默认 50）",
+        "max_chars": "拼接结果字符上限（默认 64000）",
+    }),
     Tool(sleep),
     hidden=True,
 )

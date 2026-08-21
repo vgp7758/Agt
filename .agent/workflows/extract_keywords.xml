@@ -1,0 +1,42 @@
+<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存）：kv_cache_read 按 user_message 查缓存，命中直接返回；未命中则 local-qwen 提取 3-10 个关键词（中文优先，保留专有名词）并写回缓存。同轮多个 before_turn 工作流共用，只花第一次的 LLM 调用（hidden，仅供 subworkflow 引用）" hidden="true">
+  <node id="100001" type="start" title="Entry" x="120" y="120">
+    <out name="user_message" type="string" required="true"/>
+  </node>
+  <node id="110001" type="plugin" title="cache_read" x="380" y="120" toolName="kv_cache_read">
+    <in name="key" type="string" ref="100001.user_message"/>
+    <in name="namespace" type="string">kw_extract</in>
+    <out name="hit" type="boolean"/>
+    <out name="value" type="any"/>
+  </node>
+  <node id="120001" type="selector" title="cache_hit?" x="640" y="120">
+    <branch><cond op="11" left="110001.hit" left_type="boolean"/></branch>
+  </node>
+  <node id="130001" type="llm" title="extract" x="900" y="220">
+    <in name="q" ref="100001.user_message"/>
+    <param name="model"><![CDATA[local-qwen]]></param>
+    <param name="temperature"><![CDATA[0.2]]></param>
+    <param name="systemPrompt"><![CDATA[关键词提取器。输出 JSON：{"keywords": ["词1","词2",...]}，3到10个，中文优先，保留专有名词。]]></param>
+    <param name="prompt"><![CDATA[{{q}}]]></param>
+    <out name="keywords" type="list"/>
+  </node>
+  <node id="140001" type="plugin" title="cache_write" x="1160" y="220" toolName="kv_cache_write">
+    <in name="key" type="string" ref="100001.user_message"/>
+    <in name="value" type="any" ref="130001.keywords"/>
+    <in name="namespace" type="string">kw_extract</in>
+    <out name="ok" type="boolean"/>
+  </node>
+  <node id="900001" type="end" title="Exit_hit" x="1160" y="60">
+    <out name="keywords" ref="110001.value" type="list"/>
+    <out name="cached" type="boolean">true</out>
+  </node>
+  <node id="900002" type="end" title="Exit_miss" x="1420" y="220">
+    <out name="keywords" ref="130001.keywords" type="list"/>
+    <out name="cached" type="boolean">false</out>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120001"/>
+  <edge from="120001" to="900001" port="true"/>
+  <edge from="120001" to="130001" port="false"/>
+  <edge from="130001" to="140001"/>
+  <edge from="140001" to="900002"/>
+</workflow>

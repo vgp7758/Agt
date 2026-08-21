@@ -34,6 +34,86 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return meta, parts[2].lstrip("\n")
 
 
+def load_agent_yml(path: Path) -> tuple[dict, str]:
+    """加载一个 agent 定义（新 .yml 格式优先，兼容旧 .md frontmatter）。
+    返回 (meta, system_text)。.yml：yaml.safe_load 直读整个文件，无正文（正文进 assembly）；
+    .md：旧 frontmatter + markdown 正文。失败返回 ({}, "")。"""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {}, ""
+    if path.suffix.lower() == ".yml":
+        try:
+            meta = yaml.safe_load(raw) or {}
+        except yaml.YAMLError:
+            return {}, ""
+        return meta, ""
+    return _split_frontmatter(raw)
+
+
+# ===== assembly DSL：func 模板函数注册表（{func: name()} 动作项）=====
+# 白名单受控取值函数——把框架内部动态值（模型清单/工作流清单等）注入装配项，
+# 不做任意 eval（防触达文件系统/命令执行）。
+
+def _func_load_models() -> str:
+    """可用模型清单（"名（描述）"分号分隔）。"""
+    import config as _c
+    return "；".join(f"{n}（{m.get('desc', '').strip()}）" for n, m in _c.MODELS.items())
+
+
+def _func_load_workflows() -> str:
+    """当前 .agent/workflows/ 下可调用的工作流清单（名 — 描述）。"""
+    try:
+        from workflow import scan_workflows
+        from real_tools import WORKSPACE as _ws
+        parts = []
+        for it in scan_workflows(_ws):
+            if it.get("error"):
+                continue
+            desc = (it.get("meta") or {}).get("description", "")
+            parts.append(f"- {it['name']}: {desc}".rstrip())
+        return "\n".join(parts) or "(无工作流)"
+    except Exception:
+        return ""
+
+
+def _func_load_skills() -> str:
+    """.agent/skills/ 技能摘要清单（名: 描述（使用时机））。"""
+    try:
+        s = skills_summary(WORKSPACE)
+        return s or "(无技能)"
+    except Exception:
+        return ""
+
+
+def _func_load_agents() -> str:
+    """.agent/agents/ 子 Agent 摘要清单（名: 描述）。"""
+    try:
+        s = agents_summary(WORKSPACE)
+        return s or "(无子 Agent)"
+    except Exception:
+        return ""
+
+
+FUNC_REGISTRY = {
+    "load_models": _func_load_models,
+    "load_workflows": _func_load_workflows,
+    "load_skills": _func_load_skills,
+    "load_agents": _func_load_agents,
+}
+
+
+def resolve_assembly_func(name: str) -> str:
+    """执行 assembly func: 项里的模板函数（白名单）。未知名返回空。"""
+    fn = FUNC_REGISTRY.get(name)
+    if fn is None:
+        return ""
+    try:
+        return str(fn() or "").strip()
+    except Exception:
+        return ""
+
+
 def load_rules(workspace: Path) -> str:
     """拼接 .agent/rules/ 下所有文件内容（按文件名排序）。无则空串。"""
     d = workspace / _AGENT_DIR / "rules"
@@ -76,26 +156,33 @@ def skills_summary(workspace: Path) -> str:
     return "\n".join(lines)
 
 
-# ===== 子 Agent 声明（.agent/agents/*.md，声明式 + 按需实例化 + 一次性）=====
+# ===== 子 Agent 声明（.agent/agents/*.yml，声明式 + 按需实例化 + 一次性；兼容旧 .md）=====
+
+def _agents_glob(d: Path):
+    """扫 .agent/agents/ 下的 *.yml 与 *.md（兼容旧格式），返回 file 列表。"""
+    if not d.exists():
+        return []
+    return sorted([p for p in d.glob("*.yml")] + [p for p in d.glob("*.md")])
+
 
 def load_agents_index(workspace: Path) -> list[dict]:
-    """扫 .agent/agents/*.md，返回 [{name, description, tools, model, path}, ...]。
-    与 load_skills_index 同构，但 agents 是 <name>.md 单文件（非 */SKILL.md）。"""
+    """扫 .agent/agents/*.yml（兼容 .md），返回 [{name, description, tools, model, path}, ...]。"""
     d = workspace / _AGENT_DIR / "agents"
     out = []
-    if not d.exists():
-        return out
-    for md in sorted(d.glob("*.md")):
+    for f in _agents_glob(d):
+        # 同名 .yml 与 .md 同时存在时，.yml 优先（迁移期两格式并存）
+        if f.suffix.lower() == ".md" and (f.with_suffix(".yml").exists()):
+            continue
         try:
-            meta, _ = _split_frontmatter(md.read_text(encoding="utf-8", errors="ignore"))
+            meta, _ = load_agent_yml(f)
         except Exception:
             continue
         out.append({
-            "name": meta.get("name", md.stem),
+            "name": meta.get("name", f.stem),
             "description": meta.get("description", ""),
             "tools": meta.get("tools", ""),
             "model": meta.get("model", ""),
-            "path": str(md.relative_to(workspace)).replace("\\", "/"),
+            "path": str(f.relative_to(workspace)).replace("\\", "/"),
         })
     return out
 
@@ -109,7 +196,7 @@ def agents_summary(workspace: Path) -> str:
 
 
 def seed_default_agents(workspace: Path) -> int:
-    """首次启动把随包默认子 agent 模板（src/agents/*.md）播种到 .agent/agents/。
+    """首次启动把随包默认子 agent 模板（src/agents/*.yml）播种到 .agent/agents/。
     目标已存在则跳过（不覆盖用户修改）。返回播种数量。照搬 workflow.seed_default_workflows。"""
     bundled = Path(__file__).resolve().parent / "agents"
     dst = workspace / _AGENT_DIR / "agents"
@@ -117,11 +204,54 @@ def seed_default_agents(workspace: Path) -> int:
         return 0
     dst.mkdir(parents=True, exist_ok=True)
     n = 0
-    for src in sorted(bundled.glob("*.md")):
+    for src in sorted(bundled.glob("*.yml")):
         target = dst / src.name
         if target.exists():
             continue
         target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        n += 1
+    return n
+
+
+def seed_main_agent(workspace: Path = None) -> Path:
+    """首次启动把随包默认主 agent 元信息（src/assets/main.yml）播种到 ~/.agt/main.yml。
+    目标已存在则跳过（不覆盖用户修改）。返回 main.yml 路径。"""
+    from config import _AGT_DIR
+    bundled = Path(__file__).resolve().parent / "assets" / "main.yml"
+    dst = _AGT_DIR / "main.yml"
+    if bundled.exists():
+        _AGT_DIR.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            dst.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+    return dst
+
+
+def migrate_agents_md_to_yml(workspace: Path) -> int:
+    """一次性迁移（幂等）：.agent/agents/*.md（frontmatter+正文）→ 同名 .yml。
+    正文（persona）变成 assembly 的首个 text: 项；frontmatter 的 assembly 白名单段名保留在后。
+    已有同名 .yml 跳过（不覆盖）。.md 原文件保留不删（兼容读取，yml 优先）。返回迁移数。"""
+    d = workspace / _AGENT_DIR / "agents"
+    if not d.exists():
+        return 0
+    n = 0
+    for md in sorted(d.glob("*.md")):
+        yml = md.with_suffix(".yml")
+        if yml.exists():
+            continue
+        try:
+            meta, body = _split_frontmatter(md.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        if not isinstance(meta, dict) or not meta.get("name"):
+            continue
+        asm = meta.get("assembly") or []
+        if not isinstance(asm, list):
+            asm = []
+        new_asm = ([{"text": body.strip()}] if body.strip() else []) + asm
+        data = dict(meta)
+        if new_asm:
+            data["assembly"] = new_asm
+        yml.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         n += 1
     return n
 

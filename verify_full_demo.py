@@ -35,12 +35,12 @@ class MockTools:
 def run(question):
     return workflow.execute(CANVAS, {"question": question},
                             tools=MockTools(), llm=MockLLM(),
-                            workspace=workflow.Path("."), return_exit_dict=True)
+                            return_exit_dict=True)
 
 
 print("=== full_demo.xml 三条意图路径 ===")
 ok = True
-for q, expect_substr in [("计算 3+5", "计算分支"), ("查询天气", "LLM"), ("闲聊你好", "LLM")]:
+for q, expect_substr in [("计算 3+5", "计算分支"), ("查询天气", "查询命中"), ("闲聊你好", "LLM")]:
     try:
         r = run(q)
         result = str(r.get("result", ""))

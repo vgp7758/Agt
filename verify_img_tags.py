@@ -76,17 +76,17 @@ check("profile vision=True → self.vision_supported True", llm.vision_supported
 llm._apply_profile({"base_url": "https://x", "api_tokens": ["k"], "model": "m"})
 check("profile 缺省 vision → self.vision_supported False", llm.vision_supported is False, str(llm.vision_supported))
 
-# —— 4. read_image 工具：裸文件名从 repo images/ 找 ——
-print("\n【4】read_image：裸文件名从 repo images/ 找，返回 data URL")
+# —— 4. read_file 读图片（原 read_image 已并入）：裸文件名从 repo images/ 找 ——
+print("\n【4】read_file 读图片：裸文件名从 repo images/ 找，返回 data URL")
 import real_tools
-from real_tools import read_image
+from real_tools import read_file
 ws_images = repo_images_dir(real_tools.WORKSPACE)
 _test_png = ws_images / "_verify_read.png"
 _test_png.write_bytes(base64.b64decode(RED_PNG_B64))
-_ri = read_image("_verify_read.png")
-check("read_image 找到 repo images/ 里的裸文件名", _ri.startswith("data:image/png;base64,"), _ri[:40])
-check("read_image 返回的 data URL 含原 base64", RED_PNG_B64 in _ri)
-check("read_image 找不到时给错误文本", read_image("不存在_zzz.png").startswith("[未找到图片]"))
+_ri = read_file("_verify_read.png")
+check("read_file 找到 repo images/ 里的裸文件名", _ri.startswith("data:image/png;base64,"), _ri[:40])
+check("read_file 读图返回的 data URL 含原 base64", RED_PNG_B64 in _ri)
+check("read_file 找不到图时给错误文本", read_file("不存在_zzz.png").startswith("[未找到图片]"))
 _test_png.unlink()
 
 print(f"\n{'🎉 全通过' if not failed else '⚠️ '+str(len(failed))+' 项失败'}（{len(passed)} 通过）")

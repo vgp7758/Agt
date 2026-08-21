@@ -369,6 +369,89 @@ class Turn:
     summary: str = ""                                # 该轮的一句话摘要（finish 时生成，贴在该轮最后）
 
 
+def _eval_assembly_workflow(name: str, session) -> str:
+    """assembly 清单 workflow 项求值（原 multiagent._build_subagent_system 的执行核心）：
+    .agent/workflows/ 找同名工作流执行（入参 {prompt: 当前 user_message, agent_id}），
+    返回 result 文本。找不到/执行失败返回空串（调用方跳过该段，不炸投影）。"""
+    try:
+        from workflow import scan_workflows, execute
+    except Exception:
+        return ""
+    for it in scan_workflows(session.workspace):
+        if it.get("name") == name and it.get("canvas") is not None and not it.get("error"):
+            try:
+                prompt = ""
+                if session._current is not None:
+                    prompt = session._current.user_message or ""
+                result = execute(it["canvas"], {"prompt": prompt,
+                                                "agent_id": getattr(session, "_asm_agent_id", "")},
+                                 tools=session._asm_workflow_tools,
+                                 llm=getattr(session, "utility_llm", None) or session.llm,
+                                 workspace=session.workspace)
+                return (result or "").strip()
+            except Exception as e:
+                _LOG.warning("assembly workflow 项 '%s' 执行失败，跳过：%s", name, e)
+                return ""
+    _LOG.warning("assembly workflow 项 '%s' 未找到（.agent/workflows/），跳过", name)
+    return ""
+
+
+def _interp_funcs(text: str) -> str:
+    """把文本里的 {func:name()} 占位替换成模板函数结果（白名单 load_models/load_workflows）。
+    未知名/异常 → 保留原占位（不炸装配）。"""
+    import re as _re
+    def _rep(m):
+        from agent_config import resolve_assembly_func
+        r = resolve_assembly_func(m.group(1).strip().rstrip("()").strip())
+        return r if r else m.group(0)
+    return _re.sub(r"\{func:([^}]+)\}", _rep, text)
+
+
+def _eval_assembly_tool(item: dict, session) -> str:
+    """assembly 清单 tool: 项求值（通用）：调工具箱里已注册的工具，结果注入。
+    项格式（multiagent._parse_tool_expr 解析）：tool_name + tool_args（单个字符串实参）。
+    工具查找顺序：agent 工具箱 → LIGHT_TOOLS；参数按工具签名智能分派——单参工具直接传，
+    read_file/concat_files/grep 等常用工具按名映射到其主参数。失败/空返回空串（跳过）。"""
+    tname = str(item.get("tool_name") or "").strip()
+    targs_raw = str(item.get("tool_args") or "").strip().strip('"').strip("'")
+    if not tname:
+        return ""
+    tools = session._asm_workflow_tools
+    from real_tools import LIGHT_TOOLS as _LT
+    box = tools if (tools is not None and tname in tools) else _LT
+    if tname not in box:
+        _LOG.warning("assembly tool: 项的工具 '%s' 未在工具箱中找到，跳过", tname)
+        return ""
+    # 主参数名映射：常用装配工具的接收参数（工具箱里查 schema 的第一个 required 参数最通用，
+    # 但手写映射更稳——read_file(path)/concat_files(pattern)/dir_outline(path) 等主参一目了然）
+    _PRIMARY = {"read_file": "path", "concat_files": "pattern", "dir_outline": "path",
+                "list_dir": "path", "grep": "pattern", "read_skill": "name",
+                "wiki_read": "title", "wiki_search": "query"}
+    kwargs = {}
+    if targs_raw:
+        pname = _PRIMARY.get(tname)
+        if pname:
+            kwargs[pname] = targs_raw
+        else:
+            # 未知工具：按 schema 的第一个必填参数名传（尽力而为）
+            try:
+                t = box._tools.get(tname)
+                req = (t.schema.get("function", {}).get("parameters", {}).get("required") or [])
+                if req:
+                    kwargs[req[0]] = targs_raw
+            except Exception:
+                pass
+    if not kwargs:
+        kwargs = {}
+    try:
+        out = box.call(tname, kwargs)
+        out = str(out or "").strip()
+        return out[:64_000]
+    except Exception as e:
+        _LOG.warning("assembly tool:%s(%s) 执行失败，跳过：%s", tname, targs_raw, e)
+        return ""
+
+
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
                  recent_window_turns: int = 4, max_steps_per_turn: int = 80,
@@ -379,10 +462,24 @@ class Session:
         # turns/落盘（可 agent_query_events / recall 查）——session 积累、投影隔离。
         self.current_turn_only = current_turn_only
         # 上下文装配开关（assembly DSL）：{段名: bool}，缺省=True（全装）。
-        # 段名：rules / history / hooks / tail（system/user_message/steps 恒装不可关）。
+        # 段名：rules / history / hooks / tail / ltm（system/user_message/steps 恒装不可关）。
         # 子 Agent 的 .agent/agents/<name>.md frontmatter 声明 + agent_prompt 参数覆盖，
         # current_turn_only 时 history 强制关（交集语义）。
         self.assembly: dict = {}
+        # assembly DSL v2：有序装配清单（[{kind: seg|file|dir|cmd|workflow|text, ...}]）。
+        # None = 默认清单（=历史版硬编码投影顺序，见 _DEFAULT_ASSEMBLY_PLAN）；
+        # 段顺序即装配顺序，未列出的可关段不装；动作项由 _asm_action_msgs 求值。
+        self.assembly_plan: Optional[list] = None
+        self._assembly_once_cache: dict = {}   # once 时机动作项的求值缓存 {key: str}
+        # assembly workflow 项求值用的工具引用（Agent 构造后注入；None=该工作流内 plugin 节点不可用）
+        self._asm_workflow_tools = None
+        self._asm_agent_id: str = ""
+        # hooks 默认开关：主 Agent 默认开（before_turn 检索等）；子 Agent 未显式声明装配时
+        # 子 Agent 构造代码置 False（避免每次派活重跑 before_turn 检索）。_run_hooks 读它。
+        self.hooks_default_on: bool = True
+        # 本 agent 声明的钩子清单（assembly DSL v2 的 hooks: 段）{hook位置: [{kind,value,async...}]}
+        # None = 未声明（回退旧 workflow meta.hook 扫描路径，兼容期）。Agent 构造后由装配代码 set。
+        self.hook_specs: Optional[dict] = None
         self.llm = llm or LLMClient(enable_thinking=False, temperature=0.3)
         # 辅助模型引用（Agent 注入 utility_client()；None=跟随主 llm）：轮摘要/摘要压缩/会话命名等
         # session 内的 LLM 短调用统一走它——除 react 外场景默认 utility_model 的约定覆盖到 session 层。
@@ -428,9 +525,9 @@ class Session:
 
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def projection_breakdown(self) -> dict:
-        """按投影装配顺序分段估算各段 msgs/chars/tokens（/context 命令用）。
-        复用冻结渲染缓存，开销小；只读不改动任何状态。返回
-        {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars}。"""
+        """按 assembly 清单顺序分段估算各段 msgs/chars/tokens（/context 命令用）。
+        与 messages_for_llm 同一套段产出函数（顺序一致、只读不改动状态）。
+        返回 {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars}。"""
         out = {"sections": [], "total_tokens": 0, "total_chars": 0}
 
         def _add(name: str, msgs: list, meta: str = ""):
@@ -443,58 +540,55 @@ class Session:
             out["total_tokens"] += t
             out["total_chars"] += chars
 
-        _add("system(人设+环境)", [{"role": "system", "content": self.system}])
-        if self._task_guidance_provider:
-            try:
-                _tg = self._task_guidance_provider()
-                if _tg:
-                    _add("rules(AGENTS+规则+技能)", [{"role": "system", "content": _tg}])
-            except Exception:
-                pass
-        if self._ltm_static_provider:
-            try:
-                _b = self._ltm_static_provider()
-                if _b:
-                    _add("长期记忆·静态", [{"role": "system", "content": _b}])
-            except Exception:
-                pass
-        fc = self._last_fold_count
-        if fc > 0 and self.assembly.get("history", True):
-            _add(f"折叠摘要({fc}轮)", [{"role": "system", "content": self._folded_summary(fc)}],
-                 meta=f"最早{fc}轮折叠为结构摘要，原文可recall")
-        if self.assembly.get("history", True):
-            lv_msgs: dict[int, list] = {}
-            lv_turns: dict[int, int] = {}
-            for i in range(fc, len(self.turns)):
-                lv = self._tier_level(i)
-                lv_msgs.setdefault(lv, []).extend(self._render_turn_frozen(i))
-                lv_turns[lv] = lv_turns.get(lv, 0) + 1
-            for lv in sorted(lv_msgs):
-                _add(f"档{lv}历史({lv_turns[lv]}轮)", lv_msgs[lv],
-                     meta=f"工具结果上限{max(__import__('toollog').DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步")
-        if self._current is not None:
-            cur = [{"role": "user", "content": self._user_content(self._current)}]
-            _bt = getattr(self._current, "_before_turn_hint", None)
-            if _bt:
-                cur.append({"role": "system", "content": _bt})
-            cur.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
-                                               full_window=RECENT_FULL_STEPS))
-            _add(f"当前轮(第{len(self.turns)+1}轮·{len(self._current.steps)}步)", cur)
-        tail_blocks = []
-        if self.assembly.get("tail", True):
-            self._collect_ambient(tail_blocks, self._time_provider)
-            self._collect_ambient(tail_blocks, self._system_extra_provider)
-            self._collect_ambient(tail_blocks, self._plan_provider)
-            self._collect_ambient(tail_blocks, self._spec_provider)
-            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-                try:
-                    _b = self._ltm_episodic_provider(self._current.user_message)
-                    if _b and _b.strip():
-                        tail_blocks.append(_b.strip())
-                except Exception:
-                    pass
-        if tail_blocks:
-            _add("tail(时间/计划/团队/召回)", [{"role": "system", "content": self._ambient_group(tail_blocks)}])
+        plan = self.assembly_plan or self._DEFAULT_ASSEMBLY_PLAN
+        for item in plan:
+            kind = item.get("kind")
+            if kind == "seg":
+                name = item.get("name")
+                if self.current_turn_only and name in ("history", "ltm"):
+                    continue
+                if name == "system":
+                    _add("system(人设+环境)", self._seg_msgs_system())
+                elif name == "rules":
+                    _add("rules(AGENTS+规则+技能)", self._seg_msgs_rules())
+                elif name == "history":
+                    mode = item.get("mode")
+                    if mode == "tiered" and not self.max_effective_context_window:
+                        mode = "full"
+                    if (mode or ("tiered" if self.max_effective_context_window else "window")) == "tiered":
+                        fc = self._last_fold_count
+                        if fc > 0:
+                            _add(f"折叠摘要({fc}轮)", [{"role": "system", "content": self._ambient(self._folded_summary(fc))}],
+                                 meta=f"最早{fc}轮折叠为结构摘要，原文可recall")
+                        lv_msgs: dict[int, list] = {}
+                        lv_turns: dict[int, int] = {}
+                        for i in range(fc, len(self.turns)):
+                            lv = self._tier_level(i)
+                            lv_msgs.setdefault(lv, []).extend(self._render_turn_frozen(i))
+                            lv_turns[lv] = lv_turns.get(lv, 0) + 1
+                        for lv in sorted(lv_msgs):
+                            _add(f"档{lv}历史({lv_turns[lv]}轮)", lv_msgs[lv],
+                                 meta=f"工具结果上限{max(__import__('toollog').DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步")
+                    else:
+                        if self.global_summary:
+                            _add("历史摘要(窗口外)", [{"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)}])
+                        _add(f"近窗口历史({min(len(self.turns), self.recent_window_turns)}轮)",
+                             self._history_window_msgs()[1 if self.global_summary else 0:])
+                elif name == "ltm":
+                    _add("长期记忆·静态", self._seg_msgs_ltm())
+                elif name == "user_message":
+                    if self._current is not None:
+                        _add(f"当前轮user(第{len(self.turns)+1}轮)", self._seg_msgs_user_message())
+                elif name == "steps":
+                    if self._current is not None:
+                        _add(f"当前轮steps({len(self._current.steps)}步)", self._seg_msgs_steps())
+                elif name == "tail":
+                    _add("tail(时间/计划/团队/召回)", self._seg_msgs_tail())
+            else:
+                nm = f"asm:{item.get('kind')} {item.get('path') or item.get('name') or item.get('cmd') or ''}".strip()
+                _add(nm, self._asm_action_msgs(item),
+                     meta="once" if item.get("timing") == "once" or
+                     (item.get("kind") == "workflow" and not item.get("timing")) else "turn")
         return out
 
     # ========== 构建 ==========
@@ -683,116 +777,270 @@ class Session:
         os.replace(tmp, path)
 
     # ========== 融合上下文（关键）==========
-    def messages_for_llm(self) -> list[dict]:
-        """返回 system + 【窗口外各轮 summary 拼接】+ 近期窗口(逐 step 还原) + 当前进行中的轮。
+    # ========== assembly DSL v2：清单驱动投影 ==========
+    # 默认装配清单（无声明 = 主 Agent / 未写 assembly 的路径）——与历史版硬编码投影顺序一致：
+    # system(人设) → rules(AGENTS/规则/技能，每轮重读) → history(滑动窗口+摘要 或 分档毕业)
+    # → ltm(长期记忆静态层) → user_message(当前轮) → steps(当前轮步骤) → tail(易变环境块)。
+    # ltm 统一放在 history 之后：它偶发变化（agent 写记忆），越靠后变化时的缓存爆炸半径越小。
+    _DEFAULT_ASSEMBLY_PLAN = [
+        {"kind": "seg", "name": "system"},
+        {"kind": "seg", "name": "rules"},
+        {"kind": "seg", "name": "history"},
+        {"kind": "seg", "name": "ltm"},
+        {"kind": "seg", "name": "user_message"},
+        {"kind": "seg", "name": "steps"},
+        {"kind": "seg", "name": "tail"},
+    ]
 
-        self.turns 现在是全量（永不截断）：recent 窗口外的旧 Turn 不进消息体，而是通过
-        self.global_summary（窗口外各轮 summary 的拼接/压缩）以一条 system 摘要喂给模型。
-        需要早期轮的细节时，模型可用 recall_turn 工具按需召回完整原文。
-        """
-        # 核心 system（人设+今日+用户名）—— 真正的指令，不包裹。
-        msgs = [{"role": "system", "content": self.system}]
-        # 任务指引（AGENTS.md/rules/skills/子Agent）：每轮从磁盘重读，紧跟核心 system 之后，
-        # 使"用户改了 AGENTS.md/规则/技能 → 任意 session 当轮即生效"（不再创建时烤死进 system）。
-        # assembly DSL：rules=off 时子 Agent 不装项目规则（如纯函数型工人 vision）。
-        if self._task_guidance_provider and self.assembly.get("rules", True):
+    def set_assembly_plan(self, plan: Optional[list]):
+        """设置 assembly 清单（multiagent 解析 .md frontmatter / agent_prompt 参数覆盖后调用）。
+        None = 恢复默认清单。同时派生旧版开关 dict（assembly.get("hooks") 等消费点不变）：
+        可关段在清单中出现 → True，未出现 → False（白名单语义）；hooks 不占投影位置，仅开关。"""
+        self.assembly_plan = plan
+        self._assembly_once_cache = {}
+        if plan is None:
+            self.assembly = {}
+            return
+        segs = {it.get("name") for it in plan if it.get("kind") == "seg"}
+        self.assembly = {t: (t in segs) for t in ("rules", "history", "ltm", "tail")}
+        hist = next((it for it in plan if it.get("kind") == "seg" and it.get("name") == "history"), None)
+        if hist and hist.get("mode"):
+            self.assembly["history_mode"] = hist["mode"]
+
+    def _seg_msgs_system(self) -> list[dict]:
+        """核心 system（人设+今日+用户名）——真正的指令，不包裹。
+        空则返回空列表（persona 已移到 assembly text: 项的场景）。"""
+        if not (self.system or "").strip():
+            return []
+        return [{"role": "system", "content": self.system}]
+
+    def _seg_msgs_rules(self) -> list[dict]:
+        """任务指引（AGENTS.md/rules/skills/子Agent）：每轮从磁盘重读——
+        用户改了规则文件任意 session 当轮即生效（不烤死进 system）。"""
+        if self._task_guidance_provider:
             try:
                 _tg = self._task_guidance_provider()
                 if _tg:
-                    msgs.append({"role": "system", "content": _tg})
+                    return [{"role": "system", "content": _tg}]
             except Exception:
                 pass
-        # —— 复用模式（子 Agent reuse）投影开关：历史轮一律不投影 ——
-        # 只投影 system + 任务指引 + 当前进行中的轮 + tail ambient。每次任务上下文干净、
-        # token 不随复用次数增长；历史轮仍完整归档（可 agent_query_events / recall 查）。
-        if self.current_turn_only:
-            if self._current is not None:
-                msgs.append({"role": "user", "content": self._user_content(self._current)})
-                _bt = getattr(self._current, "_before_turn_hint", None)
-                if _bt:
-                    msgs.append({"role": "system", "content": _bt})
-                msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
-                                                    full_window=RECENT_FULL_STEPS))
-                _psh = getattr(self._current, "_pending_step_hint", None)
-                if _psh:
-                    msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
-            tail_blocks = []
-            if self.assembly.get("tail", True):
-                self._collect_ambient(tail_blocks, self._time_provider)
-                self._collect_ambient(tail_blocks, self._system_extra_provider)
-                self._collect_ambient(tail_blocks, self._plan_provider)
-                self._collect_ambient(tail_blocks, self._spec_provider)
-                if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-                    try:
-                        block = self._ltm_episodic_provider(self._current.user_message)
-                        if block and block.strip():
-                            tail_blocks.append(block.strip())
-                    except Exception:
-                        pass
-            grouped_tail = self._ambient_group(tail_blocks)
-            if grouped_tail:
-                msgs.append({"role": "system", "content": grouped_tail})
-            return msgs
-        # 分档投影：provider 设了 max_effective_context_window 才启用（已完成 turn 按档冻结渲染，
-        # byte-stable 利于前缀缓存）；否则走下面原 recent_window + global_summary 路径，行为不变。
-        if self.max_effective_context_window:
-            return self._build_tiered_messages(msgs)
-        if self.global_summary and self.assembly.get("history", True):
-            msgs.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
+        return []
 
-        # —— 长期记忆·静态层（semantic 事实始终注入 + procedural 标题清单）——
-        # 放在历史摘要之后、近期窗口之前：基础事实层，靠前，作为常驻背景知识。
+    def _seg_msgs_history(self, mode: str = None, prefix_msgs: list = None) -> list[dict]:
+        """历史段：mode 分派 window（滑动窗口+全局摘要）/ tiered（分档毕业）/ full（不压缩）。
+        None = 原自动行为：配了 max_effective_context_window 走 tiered，否则 window。
+        prefix_msgs：tiered 保命阀估算用的已累积消息（量级近似即可）。"""
+        if mode == "tiered" and not self.max_effective_context_window:
+            mode = "full"   # 无预算不毕业：tiered 退化为全量
+        if mode == "full":
+            return self._history_full_msgs()
+        if mode == "window":
+            return self._history_window_msgs()
+        if self.max_effective_context_window:
+            return self._history_tiered_msgs(prefix_msgs or [])
+        return self._history_window_msgs()
+
+    def _history_window_msgs(self) -> list[dict]:
+        """滑动窗口+摘要：窗口外各轮 summary 拼成一条 system 摘要 + 近窗口逐 step 还原。
+        需要早期轮细节时模型可用 recall_turn 按需召回完整原文。"""
+        out = []
+        if self.global_summary:
+            out.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
+        recent = self.turns[-self.recent_window_turns:]
+        for t in recent:
+            out.append({"role": "user", "content": self._user_content(t)})
+            out.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
+            if t.answer:
+                a_msg = {"role": "assistant", "content": t.answer}
+                if t.answer_reasoning:
+                    a_msg["reasoning_content"] = t.answer_reasoning
+                out.append(a_msg)
+        return out
+
+    def _history_full_msgs(self) -> list[dict]:
+        """不压缩：全部已完成轮逐条投影（子 agent 短会话/需要完整上下文精度的场景）。"""
+        out = []
+        for t in self.turns:
+            out.append({"role": "user", "content": self._user_content(t)})
+            out.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
+            if t.answer:
+                a_msg = {"role": "assistant", "content": t.answer}
+                if t.answer_reasoning:
+                    a_msg["reasoning_content"] = t.answer_reasoning
+                out.append(a_msg)
+        return out
+
+    def _history_tiered_msgs(self, prefix_msgs: list) -> list[dict]:
+        """分档历史段（_build_tiered_messages 的保命阀逻辑迁移）：
+        轮内以 _planned_fold/_planned_graduates 为起点零调整（75%~panic 纯追加，前缀缓存最优），
+        超 panic 才应急：先升档（无损压缩）再折叠。"""
+        win = self.max_effective_context_window
+        panic_win = config.load_panic_window() or win
+        settle = int(win * FOLD_TARGET_RATIO)
+        fold_count = self._planned_fold
+        # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）
+        rest = (self._seg_msgs_ltm() + self._seg_msgs_user_message()
+                + self._seg_msgs_steps() + self._seg_msgs_tail())
+        panic_mode = False
+        for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
+            body = self._render_tiered_history(fold_count)
+            est = self._estimate_tokens(prefix_msgs + body + rest)
+            if not panic_mode:
+                if est <= panic_win:
+                    break                                   # 保命线内：零调整（75%~panic 纯追加）
+                panic_mode = True                           # 首次超线 → 应急模式（此后回落目标 settle）
+                _LOG.info("保命阀触发：投影 est=%d 超 panic=%d（win=%d），回落至 ≤%d",
+                          est, panic_win, win, settle)
+            if est <= settle:
+                break                                       # 已回落到位
+            if self._graduate_once():                       # 先升档（无损压缩）止血
+                continue
+            nxt = self._next_fold_target(fold_count)
+            if nxt is not None:
+                fold_count = nxt
+                continue
+            break
+        self._last_fold_count = fold_count   # 记录本次折叠轮数（to_history 用它折叠前端历史）
+        return self._render_tiered_history(fold_count)
+
+    def _seg_msgs_ltm(self) -> list[dict]:
+        """长期记忆·静态层（semantic 事实 + procedural 标题清单）：常驻背景知识块。"""
         if self._ltm_static_provider:
             try:
                 block = self._ltm_static_provider()
                 if block:
-                    msgs.append({"role": "system", "content": self._ambient(block)})
+                    return [{"role": "system", "content": self._ambient(block)}]
             except Exception:
                 pass
+        return []
 
-        if self.assembly.get("history", True):   # assembly：history=off 时不投影任何历史轮（当前轮不受影响）
-            recent = self.turns[-self.recent_window_turns:]
-            for t in recent:
-                msgs.append({"role": "user", "content": self._user_content(t)})
-                msgs.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
-                if t.answer:
-                    a_msg = {"role": "assistant", "content": t.answer}
-                    if t.answer_reasoning:
-                        a_msg["reasoning_content"] = t.answer_reasoning
-                    msgs.append(a_msg)
+    def _seg_msgs_user_message(self) -> list[dict]:
+        """当前进行中轮的 user 消息 + before_turn 钩子提示（保证工具对话连续）。"""
+        if self._current is None:
+            return []
+        out = [{"role": "user", "content": self._user_content(self._current)}]
+        _bt = getattr(self._current, "_before_turn_hint", None)
+        if _bt:
+            out.append({"role": "system", "content": _bt})
+        return out
 
-        # 当前进行中的轮：带上它的 user_message 和已完成的步骤（保证工具对话连续）
-        if self._current is not None:
-            msgs.append({"role": "user", "content": self._user_content(self._current)})
-            _bt = getattr(self._current, "_before_turn_hint", None)
-            if _bt:
-                msgs.append({"role": "system", "content": _bt})
-            msgs.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
-            # 本步 pending 的"用户中途补充"（user 角色，带标签）：跟在已完成的 tool 结果后一起发出；
-            # 该步一生成便锚到其 preceding_hint，后续步它滚入历史中部、不再每步尾部复读
-            _psh = getattr(self._current, "_pending_step_hint", None)
-            if _psh:
-                msgs.append({"role": "user", "content": _MIDTURN_TAG + _psh})
+    def _seg_msgs_steps(self) -> list[dict]:
+        """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。"""
+        if self._current is None:
+            return []
+        out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
+                                           full_window=RECENT_FULL_STEPS))
+        _psh = getattr(self._current, "_pending_step_hint", None)
+        if _psh:
+            out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
+        return out
 
-        # —— tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆，放 user 后保前缀缓存）——
-        # assembly：tail=off 时整个易变尾块不装（时间/后台/计划/记忆召回全跳过）
+    def _seg_msgs_tail(self) -> list[dict]:
+        """tail ambient（易变块合并成一组 <system-reminder>：时间+后台+计划+spec+情境记忆，
+        放 user 后保前缀缓存）。"""
         tail_blocks = []
-        if self.assembly.get("tail", True):
-            self._collect_ambient(tail_blocks, self._time_provider)
-            self._collect_ambient(tail_blocks, self._system_extra_provider)
-            self._collect_ambient(tail_blocks, self._plan_provider)
-            self._collect_ambient(tail_blocks, self._spec_provider)
-            # 情境层（episodic）按问题召回，放 tail 最后
-            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
-                try:
-                    block = self._ltm_episodic_provider(self._current.user_message)
-                    if block and block.strip():
-                        tail_blocks.append(block.strip())
-                except Exception:
-                    pass
+        self._collect_ambient(tail_blocks, self._time_provider)
+        self._collect_ambient(tail_blocks, self._system_extra_provider)
+        self._collect_ambient(tail_blocks, self._plan_provider)
+        self._collect_ambient(tail_blocks, self._spec_provider)
+        # 情境层（episodic）按问题召回，放 tail 最后
+        if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+            try:
+                block = self._ltm_episodic_provider(self._current.user_message)
+                if block and block.strip():
+                    tail_blocks.append(block.strip())
+            except Exception:
+                pass
         grouped_tail = self._ambient_group(tail_blocks)
-        if grouped_tail:
-            msgs.append({"role": "system", "content": grouped_tail})
+        return [{"role": "system", "content": grouped_tail}] if grouped_tail else []
+
+    def _asm_action_msgs(self, item: dict) -> list[dict]:
+        """assembly 清单里的动作项（file/dir/cmd/workflow/text）→ 一条 system 消息。
+        timing=once 的项求值后缓存（key 按项内容，与清单位置无关）；turn 每次重求。
+        求值失败/空结果 → 跳过该段 + 日志（不炸投影，保底可用）。"""
+        timing = item.get("timing") or ("once" if item.get("kind") == "workflow" else "turn")
+        key = None
+        if timing == "once":
+            key = ":".join(str(item.get(k) or "") for k in ("kind", "path", "cmd", "name", "text"))
+            if key in self._assembly_once_cache:
+                txt = self._assembly_once_cache[key]
+            else:
+                txt = self._asm_evaluate(item)
+                self._assembly_once_cache[key] = txt
+        else:
+            txt = self._asm_evaluate(item)
+        if not txt:
+            return []
+        label = item.get("path") or item.get("cmd") or item.get("name") or item.get("func") or ""
+        return [{"role": "system", "content": self._ambient(f"[assembly:{item['kind']}{' ' + label if label else ''}]\n{txt}")}]
+
+    def _asm_evaluate(self, item: dict) -> str:
+        """动作项求值（workspace 沙箱 / 超时 / 失败跳过）。"""
+        kind = item.get("kind")
+        try:
+            if kind == "text":
+                return _interp_funcs(str(item.get("text") or ""))
+            if kind == "func":
+                from agent_config import resolve_assembly_func
+                return resolve_assembly_func(str(item.get("func") or ""))
+            if kind in ("file", "dir"):
+                import real_tools as _rt
+                target = _rt._resolve(str(item.get("path") or ""))
+                if not target.exists():
+                    _LOG.warning("assembly %s 项不存在：%s，跳过", kind, item.get("path"))
+                    return ""
+                if kind == "file":
+                    if target.stat().st_size > 64_000:
+                        _LOG.warning("assembly file 项超 64KB：%s，跳过（过大会挤爆上下文）", item.get("path"))
+                        return ""
+                    return target.read_text(encoding="utf-8", errors="ignore")
+                return _rt.dir_outline(str(item.get("path")))
+            if kind == "cmd":
+                import subprocess as _sp
+                r = _sp.run(str(item.get("cmd") or ""), shell=True, capture_output=True,
+                            timeout=10, cwd=str(self.workspace))
+                out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+                if not out:
+                    return ""
+                return out[:32_000]
+            if kind == "workflow":
+                return _eval_assembly_workflow(str(item.get("name") or ""), self)
+            if kind == "tool":
+                return _eval_assembly_tool(item, self)
+            return ""
+        except Exception as e:
+            _LOG.warning("assembly %s 项求值失败（%s），跳过：%s", kind, item.get("name") or item.get("path") or item.get("cmd"), e)
+            return ""
+
+    def messages_for_llm(self) -> list[dict]:
+        """投影 = assembly 清单驱动：按 self.assembly_plan 的顺序装配段/动作项；
+        无声明走默认清单（与历史版硬编码顺序一致）。
+        current_turn_only（子 Agent reuse）：history/ltm 段强制跳过——每次任务上下文干净、
+        token 不随复用次数增长；历史轮仍完整归档（agent_query_events / recall 可查）。"""
+        plan = self.assembly_plan or self._DEFAULT_ASSEMBLY_PLAN
+        msgs: list[dict] = []
+        for item in plan:
+            kind = item.get("kind")
+            if kind == "seg":
+                name = item.get("name")
+                if self.current_turn_only and name in ("history", "ltm"):
+                    continue   # reuse 投影隔离：历史系段一律不投影
+                if name == "system":
+                    msgs.extend(self._seg_msgs_system())
+                elif name == "rules":
+                    msgs.extend(self._seg_msgs_rules())
+                elif name == "history":
+                    msgs.extend(self._seg_msgs_history(item.get("mode"), msgs))
+                elif name == "ltm":
+                    msgs.extend(self._seg_msgs_ltm())
+                elif name == "user_message":
+                    msgs.extend(self._seg_msgs_user_message())
+                elif name == "steps":
+                    msgs.extend(self._seg_msgs_steps())
+                elif name == "tail":
+                    msgs.extend(self._seg_msgs_tail())
+            else:
+                msgs.extend(self._asm_action_msgs(item))
         return msgs
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
@@ -854,85 +1102,16 @@ class Session:
         self._frozen_renders[turn_idx] = (level, msgs)
         return msgs
 
-    def _render_tiered_body(self, fold_count: int = 0) -> list[dict]:
-        """渲染分档 body：[已折叠早期轮次摘要] + 未折叠的已完成 turn（按档冻结）
-        + 当前进行中 turn（动态，全量）+ 情境 tail。fold_count 个最早的 turn 折叠成摘要不逐条渲染
-        （细节靠 recall 召回）。"""
+    def _render_tiered_history(self, fold_count: int = 0) -> list[dict]:
+        """渲染分档历史段：[已折叠早期轮次摘要] + 未折叠的已完成 turn（按档冻结）。
+        fold_count 个最早的 turn 折叠成摘要不逐条渲染（细节靠 recall 召回）。
+        当前轮/tail 不在此（v2 段循环按清单位置各自装配）。"""
         body = []
-        if self.assembly.get("history", True):   # assembly：history=off 时不投影已完成轮（含折叠摘要）
-            if fold_count > 0:
-                body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
-            for i in range(fold_count, len(self.turns)):
-                body.extend(self._render_turn_frozen(i))
-        if self._current is not None:
-            body.append({"role": "user", "content": self._user_content(self._current)})
-            _bt = getattr(self._current, "_before_turn_hint", None)
-            if _bt:
-                body.append({"role": "system", "content": _bt})
-            body.extend(self._steps_to_messages(self._current.steps, self.max_steps_per_turn, full_window=RECENT_FULL_STEPS))
-            _psh = getattr(self._current, "_pending_step_hint", None)
-            if _psh:
-                body.append({"role": "user", "content": _MIDTURN_TAG + _psh})
-        # tail ambient（易变块合并成一组 <system-reminder>：时间 + 后台 + 计划 + spec + 情境记忆）
-        tail_blocks = []
-        if self.assembly.get("tail", True):   # assembly：tail=off 时整个易变尾块不装
-            self._collect_ambient(tail_blocks, self._time_provider)
-            self._collect_ambient(tail_blocks, self._system_extra_provider)
-            self._collect_ambient(tail_blocks, self._plan_provider)
-            self._collect_ambient(tail_blocks, self._spec_provider)
-            if self._ltm_episodic_provider and self._current and self._current.user_message:
-                try:
-                    block = self._ltm_episodic_provider(self._current.user_message)
-                    if block and block.strip():
-                        tail_blocks.append(block.strip())
-                except Exception:
-                    pass
-        grouped_tail = self._ambient_group(tail_blocks)
-        if grouped_tail:
-            body.append({"role": "system", "content": grouped_tail})
+        if fold_count > 0:
+            body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
+        for i in range(fold_count, len(self.turns)):
+            body.extend(self._render_turn_frozen(i))
         return body
-
-    def _build_tiered_messages(self, msgs: list[dict]) -> list[dict]:
-        """分档投影主入口：稳定前缀(system+静态背景) + 分档 body。
-        折叠/升档时机（缓存经济模型）：都只在轮边界计划（start_turn 的 _plan_fold 算好
-        折到 75% + 升档到 75%）；轮内本 build 以 _planned_fold/_planned_graduates 为起点
-        【零调整】（75%~100% 之间纯追加，前缀缓存最优），超 100% 才应急（保命阀，正常轮到不了）。
-        计划不持久化——窗口变大/对话变短时 _plan_fold 重算自动回退。"""
-        self._append_ambient(msgs, self._ltm_static_provider)
-        prefix_len = len(msgs)
-        win = self.max_effective_context_window
-
-        # 保命线（独立运行时设置 panic_context_window，settings.json；0/缺省=跟随分档窗口）：
-        # 用户常把分档窗口设为模型总窗口的 ~50%，而保命线可独立设高（如总窗口 80%）——
-        # 轮内投影在 75%×win ~ panic 之间【纯追加零调整】（前缀缓存最优），超 panic 才应急止血。
-        panic_win = config.load_panic_window() or win
-        # 应急回落目标 = _plan_fold 同款计划水位（FOLD_TARGET_RATIO×win，75%）：一次压到位——
-        # 与轮边界计划对齐（panic 触发等效于"就地补一次轮边界折叠"），余量最大、语义统一。
-        settle = int(win * FOLD_TARGET_RATIO)
-
-        fold_count = self._planned_fold
-        # 轮内零升档：直接渲染（_planned_graduates 已在轮边界应用，body 已含升档后的档位）
-        panic_mode = False
-        for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
-            body = self._render_tiered_body(fold_count)
-            est = self._estimate_tokens(msgs[:prefix_len] + body)
-            if not panic_mode:
-                if est <= panic_win:
-                    break                                   # 保命线内：零调整（75%~panic 纯追加）
-                panic_mode = True                           # 首次超线 → 应急模式（此后回落目标 settle）
-                _LOG.info("保命阀触发：投影 est=%d 超 panic=%d（win=%d），回落至 ≤%d",
-                          est, panic_win, win, settle)
-            if est <= settle:
-                break                                       # 已回落到位
-            if self._graduate_once():                       # 先升档（无损压缩）止血
-                continue
-            nxt = self._next_fold_target(fold_count)
-            if nxt is not None:
-                fold_count = nxt
-                continue
-            break
-        self._last_fold_count = fold_count   # 记录本次折叠轮数（to_history 用它折叠前端历史，减少长会话传输）
-        return msgs[:prefix_len] + self._render_tiered_body(fold_count)
 
     def _plan_fold(self):
         """轮边界折叠+毕业计划（start_turn 时机）：把投影压到 max_effective_context_window 的 75% 以下。
@@ -960,10 +1139,11 @@ class Session:
                     prefix.append({"role": "system", "content": _b})
             except Exception:
                 pass
-        # 先升档：反复 graduate 直到 ≤75%（或无可升）
+        # 先升档：反复 graduate 直到 ≤75%（或无可升）。估算 = prefix + 历史 + 当前轮近似
+        cur_est = self._seg_msgs_user_message() + self._seg_msgs_steps()   # 当前轮（tail 量小不计）
         g = 0
         while g < self.max_level:
-            if self._estimate_tokens(prefix + self._render_tiered_body(0)) <= target:
+            if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= target:
                 break
             if not self._graduate_once():
                 break
@@ -971,7 +1151,7 @@ class Session:
         # 再折叠：若升档后仍 >75%，逐档折叠到 ≤75%（或无可折）
         fc = 0
         for _ in range(len(self.turns) + 4):
-            if self._estimate_tokens(prefix + self._render_tiered_body(fc)) <= target:
+            if self._estimate_tokens(prefix + self._render_tiered_history(fc) + cur_est) <= target:
                 break
             nxt = self._next_fold_target(fc)
             if nxt is None:

@@ -1,7 +1,9 @@
 """wiki.py —— repo-wiki 知识库工具（.agent/wiki/，按业务/技术逻辑自由组织）。
 
 让 Agent 给仓库积累"项目记忆"：开始不熟悉的任务前先查 wiki；完成重要功能/修改后
-调用 update_wiki(summary)，由一个【wiki 维护子 Agent】按摘要更新对应页面。
+调用 update_wiki(summary)——同步薄封装，实际派活给 wiki-updater 子 Agent
+（装配完全由 .agent/agents/wiki-updater.md 声明驱动：system 正文 / tools 白名单 /
+assembly 清单含 wiki_tree 动态注入），工具本身零特殊处理。
 
 wiki 结构不强制镜像仓库目录——按业务/技术逻辑自由组织。每篇 wiki 页可以：
   - 引用相关代码的相对路径（如 \"详见 src/auth/login.py\"）
@@ -11,7 +13,7 @@ wiki 结构不强制镜像仓库目录——按业务/技术逻辑自由组织�
 工具：
   wiki_read / wiki_list / wiki_search / wiki_tree   查（限定 .agent/wiki/）
   wiki_write / wiki_delete                          改（同上）
-  update_wiki(summary)                              绑定主 Agent：起子 Agent 自动维护
+  update_wiki(summary)                              同步派活 wiki-updater 子 Agent 维护
 """
 from __future__ import annotations
 
@@ -36,31 +38,6 @@ def _md_outline_lines(fp: Path) -> list:
         return []
     return [f"{'  ' * lv}{'#' * lv} {title} ·L{ln}" for (ln, lv, title) in _md_headings(text)]
 
-WIKI_UPDATER_SYSTEM = (
-    "你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，维护 `.agent/wiki/` 下的知识库页面。\n"
-    "wiki 按【业务 / 技术逻辑】自由组织（不必镜像仓库文件目录），如 features/auth.md、architecture/data-flow.md。\n"
-    "原则：\n"
-    "- 先用 wiki_tree/wiki_read 了解现有 wiki 结构与内容\n"
-    "- 用 wiki_write 更新/新建受影响模块的页面（聚焦改动，简洁）\n"
-    "- 每页可引用相关代码的相对路径（如 src/auth/login.py），可关联多个文件\n"
-    "- 文档间通过 Markdown 相对链接互相跳转（如 [认证流程](auth/flow.md)），形成知识网\n"
-    "- 每页核心内容：模块职责、关键函数/类、与其它模块的关系、依赖、注意事项"
-)   # 内置兜底；正式声明在 .agent/agents/wiki-updater.md（外置优先，见 _load_wiki_updater_decl）
-
-
-def _load_wiki_updater_decl():
-    """读 .agent/agents/wiki-updater.md 声明（与其他子 Agent 同款管理方式）。
-    返回 (meta, system)；文件不存在/解析失败 → ({}, "")，调用方回退内置 WIKI_UPDATER_SYSTEM。
-    声明里的 tools 字段被有意忽略——wiki 子 Agent 工具集固定为 wiki CRUD 六件套（防越权）。"""
-    try:
-        from multiagent import _agent_md_path, _split_frontmatter
-        p = _agent_md_path("wiki-updater")
-        if p is None or not p.exists():
-            return {}, ""
-        meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
-        return (meta or {}), (system or "").strip()
-    except Exception:
-        return {}, ""
 
 
 def _wiki_resolve(path: str) -> Path:
@@ -169,14 +146,15 @@ def wiki_crud_tools() -> list:
 
 
 def make_wiki_tools(agent) -> list:
-    """主 Agent 的 wiki 工具集 = CRUD + update_wiki（后者绑定主 Agent，起子 Agent 维护）。"""
+    """主 Agent 的 wiki 工具集 = CRUD + update_wiki（同步薄封装：声明驱动的子 Agent 派活）。"""
     tools = wiki_crud_tools()
 
     def update_wiki(summary: str = "") -> str:
-        """完成重要功能或修改后调用。
+        """完成重要功能或修改后调用（同步阻塞，返回维护报告）。
+        子 Agent 的装配（system/tools 白名单/assembly 清单）全部来自 .agent/agents/wiki-updater.md
+        声明——本工具只负责拼 prompt + 同步跑，不再有代码级特殊处理。
         summary 留空 → 自动把当前 Turn 的完整上下文(任务+工具调用+结果+计划)交给子 Agent 理解；
         自己填 summary → 用它（更聚焦）。"""
-        # 自动摘要：无 summary 时从最近一轮 Turn 提取上下文
         prompt = summary.strip()
         if not prompt:
             last = agent.session.turns[-1] if agent.session.turns else None
@@ -193,26 +171,32 @@ def make_wiki_tools(agent) -> list:
                 from plan_tools import _plan_text
                 blocks.append(f"执行计划：\n{_plan_text(agent)}")
             prompt = "\n".join(blocks) if blocks else "(无上下文)"
-        from agent import Agent
-        # 声明外置（.agent/agents/wiki-updater.md，与其他子 Agent 同款管理）；内置兜底
-        meta, system_ext = _load_wiki_updater_decl()
-        model_name = (meta.get("model") or "").strip() or agent.model_name
-        if model_name not in config.MODELS:
-            model_name = agent.model_name
-        sub = Agent(
-            system=system_ext or WIKI_UPDATER_SYSTEM,
-            tools=Toolbox(*wiki_crud_tools()),
-            model_name=model_name,
-            enable_thinking=False,
-            verbose=False,
-            on_event=None,           # 静默执行；结果以工具返回值回到主 Agent
-        )
-        report = sub.run(
-            f"请据此更新 repo-wiki（.agent/wiki/）：\n\n{prompt}\n\n"
-            f"先 wiki_tree/wiki_read 了解现有 wiki 结构，再 wiki_write 按业务/技术逻辑更新/新建页面"
-            f"（引用相关代码相对路径、文档间可 Markdown 相对链接互相跳转）。聚焦改动涉及的模块。"
-        )
-        return report or "(wiki 维护子 Agent 未产出报告)"
+        try:
+            from multiagent import SubAgent, _agent_def_path, _resolve_tools, _parse_assembly, _parse_hooks
+            from agent_config import load_agent_yml
+            p = _agent_def_path("wiki-updater")
+            if p is None or not p.exists():
+                return "[声明缺失] .agent/agents/wiki-updater.md 不存在，无法维护 wiki（create_agent 重建）"
+            meta, system = load_agent_yml(p)
+            toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
+            model_name = meta.get("model") or agent.model_name
+            if model_name not in config.MODELS:
+                model_name = agent.model_name
+            sub = SubAgent("wiki-updater", model_name, system or "", toolbox,
+                           registry=getattr(agent, "registry", None),
+                           agent_id="wiki-updater", caller_id=agent.agent_id,
+                           assembly=_parse_assembly(meta))
+            hooks = _parse_hooks(meta)
+            if hooks:
+                sub.agent.session.hook_specs = hooks
+            report = sub.prompt(
+                f"请据此更新 repo-wiki（.agent/wiki/）：\n\n{prompt}\n\n"
+                f"上下文已注入最新 wiki 树——按它定位相关页面（需要细节再 wiki_read），"
+                f"wiki_write 按业务/技术逻辑更新/新建页面，聚焦改动涉及的模块。"
+            )
+            return report or "(wiki 维护子 Agent 未产出报告)"
+        except Exception as e:
+            return f"[update_wiki 失败] {type(e).__name__}: {e}"
 
     tools.append(Tool(update_wiki))
     return tools

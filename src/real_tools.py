@@ -288,7 +288,9 @@ def _md_snapshot(text: str) -> str:
 
 def read_file(path: str, start_line: int = None, end_line: int = None,
               line_numbers: bool = True) -> str:
-    """读取 workspace 内某个文件的内容（文本/Word/Excel/PDF 自动提取），末尾附 file_version。
+    """读取 workspace 内某个文件的内容（统一入口）：文本/Word/Excel/PDF 自动提取、
+    图片（png/jpg/gif/webp/bmp）自动转 data URL（视觉模型可直接查看）——不再需要记
+    "读图要用 read_image"，read_file 一把梭。末尾附 file_version（图片除外）。
     start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
     line_numbers: 默认 True，每行前加行号（宽度按本段最大行号自适应对齐），用于接下来要用
     insert/delete/move 按行号编辑的场景；传 False 得不含行号的纯文本。
@@ -299,6 +301,10 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
+    # 图片类型 → 走读图逻辑（data URL，视觉模型可查看）——与 read_file 统一入口，
+    # 免去"该用 read_file 还是 read_image"的困惑；非视觉模型调用也只会得到 <img> 占位提示。
+    if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+        return read_image(path)
     if target.suffix.lower() in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
         text = _extract_text(target)
         if text is None:
@@ -593,8 +599,6 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
     return f"✅ 已替换 {count if replace_all else 1} 处（{path}" + (f" L{start_line}-L{end_line}" if start_line or end_line else "") + ")"
 
 
-def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> str:
-    """把 new_lines 写回文件（统一 \n 换行 + 末尾换行），返回带新 file_version 的确认串。"""
 def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> str:
     """把 new_lines 写回文件（统一 \n 换行 + 末尾换行），返回带新 file_version 的确认串。"""
     target.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")

@@ -37,7 +37,10 @@ _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"
                      "create_plan", "update_plan", "update_wiki",
                      "list_team", "agent_ask", "agent_notify",
                      "agent_query_events", "agent_query_tool_detail", "wait_subagents",
-                     "get_session_history", "semantic_search_history", "rename_session"}
+                     "get_session_history", "semantic_search_history", "rename_session",
+                     # spec 五件套：闭包绑定创建时的 agent（主 Agent）——被子 Agent 继承会
+                     # 跨 agent 串写状态（子 Agent 建 spec 会挂到主 Agent、气泡弹到主会话）
+                     "create_spec", "commit_spec", "regenerate_spec", "list_specs", "recall_spec"}
 
 
 def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:

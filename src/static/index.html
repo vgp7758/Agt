@@ -1276,6 +1276,7 @@ let _specActions = { approve: null, reject: null };
 
 // commit_spec 阻塞时，在 answer 区域渲染交互式 spec 气泡
 function renderSpecBubble(spec, specId, specTitle, specDesign){
+  window._specDecided = false;   // 新一轮批阅开始：重置双击防抖
   if(!curTurn) newTurn();
   let h = '<div style="border:2px solid #4338ca;border-radius:10px;padding:12px;background:#fafbff">';
   h += '<div style="font-size:15px;font-weight:600;color:#4338ca;margin-bottom:8px">📐 ' + esc(specTitle||'施工方案') + ' <span style="font-size:12px;color:#8a9099;font-weight:400">'+esc(specId||'')+'</span></div>';
@@ -1307,6 +1308,8 @@ function renderSpecBubble(spec, specId, specTitle, specDesign){
   scrollBottom();
 }
 function specApprove(){
+  if(window._specDecided) return;   // 双击防抖：裁定只发一次
+  window._specDecided = true;
   const b = document.getElementById('specBtns');
   if(b) b.innerHTML = '<span style="color:#059669">✅ 已批准，正在创建计划…</span>';
   ws.send(JSON.stringify({action:'spec_decision', decision:'approve'}));
@@ -1319,9 +1322,14 @@ function specShowReject(){
 }
 function specConfirmReject(){
   const fb = (document.getElementById('specFeedbackInput')||{}).value || '';
+  specConfirmRejectText(fb);
+}
+function specConfirmRejectText(fb){
+  if(window._specDecided) return;   // 双击防抖
+  window._specDecided = true;
   const b = document.getElementById('specBtns');
   if(b) b.innerHTML = '<span style="color:#dc2626">❌ 已返工，等待 Agent 重新生成…</span>';
-  ws.send(JSON.stringify({action:'spec_decision', decision:'reject', feedback: fb.trim()}));
+  ws.send(JSON.stringify({action:'spec_decision', decision:'reject', feedback: (fb||'').trim()}));
 }
 // ========== 问卷渲染（ask_user 阻塞等待用户回答） ==========
 function renderSurveyBubble(questions){
@@ -1455,14 +1463,14 @@ function renderSpec(spec, specId, reviewState, specTitle, specDesign){
       const approveBtn = document.createElement('button');
       approveBtn.className = 'spec-btn approve';
       approveBtn.textContent = '✅ 通过并开始施工';
-      approveBtn.onclick = () => { if (_specActions.approve) _specActions.approve(specId); };
+      approveBtn.onclick = () => { window._specDecided = false; specApprove(); };
       bar.appendChild(approveBtn);
       const rejectBtn = document.createElement('button');
       rejectBtn.className = 'spec-btn reject';
       rejectBtn.textContent = '❌ 返工（附反馈）';
       rejectBtn.onclick = () => {
         const fb = prompt('请输入返工反馈意见（告诉 Agent 哪里需要改）：');
-        if (fb && _specActions.reject) _specActions.reject(specId, fb);
+        if (fb) { window._specDecided = false; specConfirmRejectText(fb); }
       };
       bar.appendChild(rejectBtn);
     } else if (reviewState === 'rejected') {

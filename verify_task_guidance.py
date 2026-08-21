@@ -41,13 +41,17 @@ blob = "\n".join(str(m.get("content", "")) for m in s.messages_for_llm())
 check("messages_for_llm 含核心 system", "FRAMEWORK_SYSTEM" in blob)
 check("messages_for_llm 含 task-guidance(V1)", "V1任务指引" in blob, blob[:120])
 
-# 改文件 → 下一调即生效（每轮重读）
+# 改文件 → 轮边界刷新后生效（_asm_turn_cache 轮内冻结、start_turn 清缓存——防轮内破前缀缓存）
 (TMP / "AGENTS.md").write_text("这是V2任务指引", encoding="utf-8")
+blob2_same_turn = "\n".join(str(m.get("content", "")) for m in s.messages_for_llm())
+check("轮内冻结（同轮不重读）", "V1任务指引" in blob2_same_turn, blob2_same_turn[:120])
+s.start_turn("第二轮")   # 轮边界：清 _asm_turn_cache
 blob2 = "\n".join(str(m.get("content", "")) for m in s.messages_for_llm())
-check("改 AGENTS.md 后下一调生效(V2)", "V2任务指引" in blob2 and "V1任务指引" not in blob2, blob2[:120])
+check("改 AGENTS.md 后下一轮生效(V2)", "V2任务指引" in blob2 and "V1任务指引" not in blob2, blob2[:120])
 
 # provider 返回 None 时不注入（无 AGENTS.md）
 (TMP / "AGENTS.md").unlink()
+s.start_turn("第三轮")
 blob3 = "\n".join(str(m.get("content", "")) for m in s.messages_for_llm())
 check("无 task-guidance 时不注入(None)", "任务指引" not in blob3)
 

@@ -89,8 +89,8 @@ assembly:
   - tail
 hooks:
   before_turn:
-    - workflow: before_turn_retrieval
     - workflow: wiki_auto_query
+    - workflow: before_turn_retrieval
   after_tool:
     - workflow: py_auto_diag
     # - workflow: cs_auto_diag   # 默认关（需 ensure_lsp('csharp')，按需取消注释）

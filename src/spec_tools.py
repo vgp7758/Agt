@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -27,6 +28,8 @@ from pathlib import Path
 
 from session import repo_plans_dir
 from tools import Tool
+
+_LOG = logging.getLogger("agt.spec")
 
 _SPEC_ICON = {"draft": "📝", "committed": "🔍", "approved": "✅", "rejected": "❌"}
 _SPEC_LABEL = {"draft": "草稿", "committed": "待批阅", "approved": "已通过", "rejected": "已返工"}
@@ -344,6 +347,13 @@ def make_spec_tools(agent) -> list:
         _set_active_spec(agent, spec)
         # 记录 pending spec 到 extra_state（持久化：程序关了读档后能恢复等待状态）
         agent.session.extra_state["_pending_spec"] = sid
+        # 上一轮挂起的等待若还在（前次 commit 被中断未清理）：先唤醒丢弃，防止线程泄漏 +
+        # 旧 wait 拿到新 result 造成跨 spec 裁定串台
+        _stale = getattr(agent, "_spec_decision_event", None)
+        if _stale is not None:
+            _LOG.warning("commit_spec：发现上一轮未清理的等待 event（spec 竞态），已丢弃旧等待")
+            agent._spec_decision_result = {"decision": "superseded", "feedback": "被新一次提交取代"}
+            _stale.set()
         # 阻塞等待用户裁定（无超时——一直等到用户回应或程序关闭）
         agent._spec_decision_event = threading.Event()
         agent._spec_decision_result = None
@@ -355,6 +365,9 @@ def make_spec_tools(agent) -> list:
         agent.session.extra_state.pop("_pending_spec", None)
         decision = result.get("decision", "")
         feedback = result.get("feedback", "")
+        if decision == "superseded":
+            # 被新一次 commit_spec 取代的旧等待：spec 状态已由新提交接管，本等待直接退出
+            return "[已被新一次提交取代] 本次等待作废（spec 状态以最新提交为准）。"
         if decision == "approve":
             spec["review_state"] = "approved"
             _save_spec(agent.session.workspace, spec)
@@ -477,15 +490,28 @@ def make_spec_tools(agent) -> list:
 
 def resolve_spec_decision(agent, decision: str, feedback: str = ""):
     """用户对 commit_spec 的阻塞等待做出裁定。由 server.py（WS action）或 chat.py（CLI 命令）调用。
-    
+
     两种场景：
     1. 正常阻塞中：commit_spec 在 worker 线程里 Event.wait() 阻塞 → set event 解除阻塞，
        commit_spec 自己处理 approve（建 plan）/ reject（返回反馈给 Agent）。
     2. 读档恢复：程序重启后从 meta.json 发现 _pending_spec → 直接执行 approve/reject + 喂 agent 新消息
-       （因为原始的 agent.run() 已随程序退出而消失）。"""
+       （因为原始的 agent.run() 已随程序退出而消失）。
+
+    幂等保护（防重复裁定造成重复建 plan / 状态错乱）：
+    - decision 非法（空/approve、reject 之外）→ 忽略；
+    - 场景1 的重复 set（双击按钮第二击）：event 已 set 则忽略；
+    - 场景2 中 spec 已 approved → 幂等跳过（不重复建 plan）。"""
+    decision = (decision or "").strip().lower()
+    if decision not in ("approve", "reject"):
+        _LOG.warning("resolve_spec_decision：非法 decision %r，忽略", decision)
+        return
     ev = getattr(agent, "_spec_decision_event", None)
     if ev:
-        # 场景1：正常阻塞中——set event 解除 commit_spec 的阻塞
+        # 场景1：正常阻塞中——set event 解除 commit_spec 的阻塞。
+        # 双击防抖：event 已被置位（第一次点击已送达）→ 忽略后续重复点击
+        if ev.is_set():
+            _LOG.info("resolve_spec_decision：event 已置位（重复点击？），忽略")
+            return
         agent._spec_decision_result = {"decision": decision, "feedback": (feedback or "").strip()}
         ev.set()
         return
@@ -497,6 +523,10 @@ def resolve_spec_decision(agent, decision: str, feedback: str = ""):
         return
     spec = _load_spec(agent.session.workspace, sid)
     if not spec:
+        return
+    if spec.get("review_state") == "approved":
+        # 幂等：已通过（如双击第二击在 commit_spec 处理完后又走到场景2）→ 不重复建 plan
+        _LOG.info("resolve_spec_decision：spec %s 已 approved，幂等跳过", sid)
         return
     if decision == "approve":
         spec["review_state"] = "approved"

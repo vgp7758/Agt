@@ -1103,7 +1103,7 @@ class Agent:
                         _RECAP_ERR_MARKS = ("APIStatusError", "APIConnectionError", "APITimeoutError",
                                             "RateLimitError", "Error code:", "执行失败", "Traceback",
                                             "[工作流", "出错]", "BadRequestError")
-                        if (_hw.get("recap") or (_hw.get("meta") or {}).get("recap")) and (result or "").strip():
+                        if (_hw.get("recap") or (_hw.get("meta") or {}).get("recap") or _hw.get("name") == "recap_gen") and (result or "").strip():
                             _rc = (result or "").strip().split("\n")[0].strip()[:60]
                             if _rc and not any(mk in _rc for mk in _RECAP_ERR_MARKS):
                                 _agent_ref._recap = _rc
@@ -1568,16 +1568,12 @@ class Agent:
                                         "tokens": self.cumulative_tokens})
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
                             # 异步生成一句话 recap（队友可见，不进入自己上下文）：
-                            # 有 recap_gen 类工作流（meta.recap=true）时由 turn_end 钩子负责（本地小模型），
+                            # 有 recap 工作流装配在本 Agent 的 turn_end（yml hook_specs 或磁盘 meta 二者其一——
+                            # 与 _hook_tasks 同源判定，此前只查磁盘 meta：yml 装配的主 Agent 判 True 却
+                            # 跳过内置、而 yml 项无 recap 位又不回写，两边都不写 recap）时由钩子负责，
                             # 无则回退内置 _generate_recap（utility client）
-                            _has_recap_wf = False
-                            try:
-                                from real_tools import WORKSPACE as _ws3
-                                from workflow import get_hook_workflows
-                                _has_recap_wf = any((hw.get("meta") or {}).get("recap")
-                                                    for hw in get_hook_workflows(_ws3))
-                            except Exception:
-                                pass
+                            _has_recap_wf = any(t.get("recap") or t.get("name") == "recap_gen"
+                                                for t in self._hook_tasks("turn_end"))
                             if not _has_recap_wf:
                                 self._generate_recap(
                                     (self.session._current.user_message if self.session._current else msg),

@@ -669,19 +669,29 @@ function finishInterrupted(turnNo){
   const n = turnNo ? `第${turnNo}轮` : '本轮';
   curTurn.answerEl.innerHTML =
     `<div class="interrupted-bar"><span>⏹ ${n}被中断，未完成</span>`+
-    `<button class="btn" onclick="continueInterrupted()">▶ 继续</button></div>`;
+    `<button class="btn" onclick="continueInterrupted(this)">▶ 继续</button></div>`;
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }
-function continueInterrupted(){
-  // 中断轮续跑：不新增 user_message——后端把中断轮弹回 _current 直接续 ReAct 循环。
-  // 保留 curTurn 指向中断轮容器（不清空），后续 step/trace 直接续进原容器，不新建轮。
+function continueInterrupted(btn){
+  // 从按钮定位轮容器——读档渲染的历史轮 curTurn 不指向它（renderHistTurn 借用完即恢复 null），
+  // 旧实现依赖 curTurn：点继续后"恢复中"占位写不进按钮所在的轮（按钮原样残留）、
+  // 后续 step 因 curTurn=null 另建新轮（续跑过程与原轮脱节）。
+  const el = (btn && btn.closest('.bubble')) || (curTurn && curTurn.answerEl);
   ws.send(JSON.stringify({action:'resume_interrupted'}));
   setBusy(true);
-  // 把"继续"按钮换成"恢复中"占位，待 turn_resume 事件清空并展开 trace
-  if(curTurn && curTurn.answerEl){
-    curTurn.answerEl.innerHTML = '<div class="interrupted-bar"><span>⏹ 本轮恢复中…</span></div>';
-    if(curTurn.det) curTurn.det.open=true;   // 展开过程，让续跑的 trace 可见
+  if(el){
+    el.innerHTML = '<div class="interrupted-bar"><span>⏹ 本轮恢复中…</span></div>';
+    // curTurn 指向被恢复的轮：turn_resume 清空占位 / step·thinking 续进原 trace /
+    // answer 写进原轮 answerEl——全程不新建轮
+    const col = el.closest('.turn');
+    if(col){
+      const det = col.querySelector('details.trace');
+      const traceBox = det ? det.querySelector('div') : null;
+      if(det) det.open = true;   // 展开过程，让续跑的 trace 可见
+      curTurn = {traceBox: traceBox || document.createElement('div'), answerEl: el,
+                 det, pages:{}, activePage:null};
+    }
   }
 }
 // —— 历史展开（读档默认只渲染当前档位，点蓝字往回展开一档）——
@@ -1935,7 +1945,7 @@ connectWS();
 function fmtArgs(a){ if(a==null) return ''; try{ return typeof a==='object'?JSON.stringify(a):String(a); }catch{ return String(a); } }
 // 自动工作流/钩子事件的前缀标签：有 hook 时显示 [位置]，否则显示"自动"
 function wfHookTag(m){
-  const labels={'before_turn':'每轮开始前','before_tool':'工具调用前','after_tool':'工具调用后','before_answer':'最终回答前'};
+  const labels={'before_turn':'每轮开始前','before_tool':'工具调用前','after_tool':'工具调用后','before_answer':'最终回答前','turn_end':'本轮完成后'};
   return m && m.hook ? ('['+labels[m.hook]+']钩子') : '自动';
 }
 

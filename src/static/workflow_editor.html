@@ -73,7 +73,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 /* 图例浮标（画布右下角，半透明，hover 展开） */
 #legendFloat{position:absolute;bottom:10px;right:10px;background:#16213eee;border:1px solid #0f3460;border-radius:5px;padding:5px 8px;font-size:9px;z-index:30;max-width:170px;opacity:.5;transition:opacity .2s;pointer-events:auto}
 #legendFloat:hover{opacity:1}
-.io-table{width:100%;border-collapse:collapse;font-size:11px;background:#131b35;border-radius:4px}
+.io-table{width:100%;border-collapse:separate;border-spacing:0 3px;font-size:11px;background:#131b35;border-radius:4px}
 .io-table td{padding:1px;vertical-align:top}
 .io-table input,.io-table select{width:100%;font-size:11px;padding:2px 3px;margin:0}
 .io-fbg-even{background:#1c2548}
@@ -1368,7 +1368,9 @@ function showProps(){
   }
   // 代码节点
   if(n.type==='5'){
-    h+=`<h3>Python 代码</h3><label><textarea style="min-height:200px" onchange="setCode(this.value)">${ext(n.data.inputs?.code)}</textarea></label>`;
+    const code=(n.data.inputs?.code||'');
+    const nLines=Math.max(6, code.split('\n').length);   // 行高自适应：至少6行，代码多则更高
+    h+=`<h3>Python 代码</h3><label><textarea rows="${nLines}" style="min-height:120px" onchange="setCode(this.value)">${ext(code)}</textarea></label>`;
     h+='<div style="font-size:10px;color:#8a9099">通过 args.params 取输入，ret: Output = {...} 返回输出；输出字段需与返回结构匹配。</div>';
   }
   // 聚合节点(type32)：mergeGroups 编辑器

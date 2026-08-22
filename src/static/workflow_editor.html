@@ -1824,23 +1824,31 @@ function renderSchemaFields(schema,kind,path,depth){
   let h=depth?`<div style="margin-left:6px;border-left:2px solid ${ds.bd};padding:3px 4px 3px 5px;background:${ds.bg};border-radius:4px">`:'<div>';
   schema.forEach((s,si)=>{
     const st=s.type||'string';
+    const itemT=st==='list'?getListItemType(s):null;
+    // 行内按钮（与主字段行同款位置：类型下拉与 × 之间）：object→📋/+ 给其子字段；list<object>→📋/+ 给 item 字段
+    let mb='';
+    if(st==='object') mb=`<button onclick="importFieldSchema('${kind}','${path}/o${si}')" title="粘贴JSON对象，自动推断该字段的子字段结构（覆盖现有）" style="font-size:9px;padding:0 4px">📋</button><button onclick="addSubFieldP('${kind}','${path}/o${si}')" title="给该 object 添加子字段" style="font-size:9px;padding:0 4px">+</button>`;
+    else if(itemT==='object') mb=`<button onclick="importFieldSchema('${kind}','${path}/l${si}')" title="粘贴JSON对象，自动推断 item 字段结构（覆盖现有）" style="font-size:9px;padding:0 4px">📋</button><button onclick="addSubFieldP('${kind}','${path}/l${si}')" title="给 item 添加字段" style="font-size:9px;padding:0 4px">+</button>`;
     h+=`<div style="display:flex;gap:2px;margin:1px 0">
       <input value="${ext(s.name)}" placeholder="名" style="width:50px;font-size:10px" onchange="setSubFieldP('${kind}','${path}',${si},'name',this.value)">
       <select style="width:55px;font-size:10px" onchange="setSubFieldP('${kind}','${path}',${si},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${st===x?'selected':''}>${x}</option>`).join('')}</select>
+      ${mb}
       <button class="del" onclick="delSubFieldP('${kind}','${path}',${si})">×</button></div>`;
-    h+=`<input value="${ext(s.description)}" placeholder="描述" style="width:100%;font-size:10px;color:#8a9099;margin-bottom:1px" onchange="setSubFieldP('${kind}','${path}',${si},'description',this.value)">`;
-    h+=`<label style="font-size:9px;color:#8a9099;display:inline-flex;align-items:center;gap:2px"><input type="checkbox" ${s.required?'checked':''} onchange="setSubFieldP('${kind}','${path}',${si},'required',this.checked)"> required</label>`;
-    // 子字段还是 object → 递归渲染其子字段
+    // 描述 + required 同排（描述 flex:1 占满，required 不换行靠右）
+    h+=`<div style="display:flex;gap:4px;align-items:center;margin-bottom:1px">
+      <input value="${ext(s.description)}" placeholder="描述" style="flex:1;min-width:0;font-size:10px;color:#8a9099" onchange="setSubFieldP('${kind}','${path}',${si},'description',this.value)">
+      <label style="font-size:9px;color:#8a9099;white-space:nowrap;display:inline-flex;align-items:center;gap:2px"><input type="checkbox" ${s.required?'checked':''} onchange="setSubFieldP('${kind}','${path}',${si},'required',this.checked)"> req</label>
+    </div>`;
+    // 子字段还是 object → 递归渲染其子字段（📋/+ 已上移到该字段行内，标签行只做导航）
     if(st==='object'){
-      h+=`<div style="font-size:9px;color:#61afef;margin:2px 0 1px 2px">└ object 子字段: <button onclick="importFieldSchema('${kind}','${path}/o${si}')" title="粘贴JSON对象，自动推断该字段的子字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+      h+=`<div style="font-size:9px;color:#61afef;margin:2px 0 1px 2px">└ object 子字段:</div>`;
       h+=renderSchemaFields(Array.isArray(s.schema)?s.schema:[],kind,path+'/o'+si,depth+1);
     }
-    // 子字段是 list → item 类型；item 为 object → 递归渲染 item 字段
+    // 子字段是 list → item 类型；item 为 object → 递归渲染 item 字段（📋 已上移到该字段行内）
     if(st==='list'){
-      const itemT=getListItemType(s);
       h+=`<div style="margin:2px 0 1px 2px;font-size:9px;color:#98c379">└ item 类型: <select style="width:auto;font-size:10px" onchange="setSubItemTypeP('${kind}','${path}',${si},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></div>`;
       if(itemT==='object'){
-        h+=`<div style="font-size:9px;color:#61afef;margin:1px 0 1px 10px">└ item 字段: <button onclick="importFieldSchema('${kind}','${path}/l${si}')" title="粘贴JSON对象，自动推断 item 字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+        h+=`<div style="font-size:9px;color:#61afef;margin:1px 0 1px 10px">└ item 字段:</div>`;
         h+=renderSchemaFields(Array.isArray(s.schema)?s.schema:[],kind,path+'/l'+si,depth+1);
       }
     }

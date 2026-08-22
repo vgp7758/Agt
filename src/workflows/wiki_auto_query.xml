@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（本地流水线版）：local-qwen 抽3~10关键词 → wiki_search(regex) 一次搜 → LLM批处理逐片打分(score:number，默认utility可切local) → rerank_topk 子工作流重排取topk → 相关才注入。无关/短消息不注入（before_turn 钩子）" hook="before_turn" hidden="true">
+<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（本地流水线版）：extract_keywords 子工作流（KV 缓存，与 before_turn_retrieval 共用，命中不调 LLM）抽3~10关键词 → wiki_search(regex) 一次搜 → LLM批处理逐片打分(score:number，默认utility可切local) → rerank_topk 子工作流重排取topk → 相关才注入。无关/短消息不注入（before_turn 钩子）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
@@ -6,14 +6,9 @@
     <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer" right_type="integer"/></branch>
     <edge-free/>
   </node>
-  <node id="200001" type="llm" title="extract_keywords" x="640" y="180">
-    <in name="q" ref="100001.user_message"/>
-    <param name="model"><![CDATA[local-qwen]]></param>
-    <param name="temperature"><![CDATA[0.2]]></param>
-    <param name="systemPrompt"><![CDATA[关键词提取器。输出 JSON：{"keywords": ["词1","词2",...]}，3到10个，中文优先，保留专有名词。]]></param>
-    <param name="prompt"><![CDATA[{{q}}]]></param>
+  <node id="200001" type="subworkflow" title="extract_keywords" x="640" y="180" workflowId="extract_keywords">
+    <in name="user_message" type="string" ref="100001.user_message"/>
     <out name="keywords" type="list"/>
-    <out name="reasoning" type="string"/>
   </node>
   <node id="210001" type="code" title="join_kws" x="900" y="180">
     <in name="kws" type="list" ref="200001.keywords"/>
@@ -50,12 +45,14 @@
   <node id="250001" type="plugin" title="score_cos" x="1940" y="180" toolName="cosine_sim">
     <in name="text1" type="string" ref="loop-item"/>
     <in name="text2" type="string" ref="100001.user_message"/>
-    <out name="raw" type="number"/>
+    <out name="all_outputs" type="list" itemType="number"/>
+    <out name="filtered_outputs" type="list" itemType="number"/>
+    <out name="nth_output" type="number" fill="raw"/>
     <batch enabled="true"><input ref="230000.hits" type="list"/></batch>
   </node>
   <node id="260001" type="subworkflow" title="rerank" x="2200" y="180" workflowId="rerank_topk">
     <in name="items" type="list" ref="230000.hits"/>
-    <in name="scores" type="list" ref="250001.all_outputs.raw"/>
+    <in name="scores" type="list" ref="250001.all_outputs"/>
     <in name="k" type="integer" literal="3"/>
     <out name="topk" type="list"/>
     <out name="scores_topk" type="list"/>

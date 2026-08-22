@@ -930,8 +930,8 @@ function finishFlow(tgtId){
   if(!edgeFrom||edgeFrom.kind!=='flow'){edgeFrom=null;renderAll();return;}
   if(edgeFrom.nodeId===tgtId){edgeFrom=null;renderAll();return;}
   const port=edgeFrom.port||'';   // 分支端口(branch_N/true/default)或空(普通出口)
-  // 同一出端口只保留一条（普通节点出口线性；selector/intent 每分支一个下游）
-  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.sourcePortID===port));
+  // 普通出口(白色线)可同时连多个下游；分支端口每分支只保留一条
+  if(port)WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===edgeFrom.nodeId&&e.sourcePortID===port));
   WF.edges.push({sourceNodeID:edgeFrom.nodeId,targetNodeID:tgtId,sourcePortID:port});
   edgeFrom=null;renderAll();
 }
@@ -1206,7 +1206,8 @@ function pickNode(typeOrName,isTool){
   }
   if(pickerCtx.src){   // 拖线触发：连源节点该端口 → 新节点
     const port=pickerCtx.src.port||'';
-    WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===pickerCtx.src.nodeId&&e.sourcePortID===port));
+    // 普通出口(白色线)可同时连多个下游；分支端口每分支只保留一条
+    if(port)WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===pickerCtx.src.nodeId&&e.sourcePortID===port));
     WF.edges.push({sourceNodeID:pickerCtx.src.nodeId,targetNodeID:n.id,sourcePortID:port});
   }
   closeNodePicker();
@@ -1320,7 +1321,17 @@ function showProps(){
   // 批处理启用时隐藏输出字段编辑——all/filtered/nth 三字段自动管理（结构=节点原输出 schema，关闭批处理恢复）
   if(n.type!=='2' && !['8','21','22','28','32'].includes(n.type)){
     if(n.type!=='1' && n.data.inputs?.batch?.enabled){
-      h+='<h3>输出字段</h3><div style="font-size:10px;color:#8a9099">批处理已启用：all_outputs / filtered_outputs / nth_output 自动管理（item 结构=节点原输出 schema），关闭批处理恢复原输出编辑。</div>';
+      // 批处理启用：nth_output 装填定义（fill 路径 + 类型；留空=整个 output dict，all_outputs=[{raw:x},...]；
+      // fill="raw" + type=number → all_outputs=[0.63,0.68,...] 数字数组，rerank 等下游直接消费）
+      const nthO=(nodeOutputs(n)||[]).find(o=>o.name==='nth_output')||{};
+      h+='<h3>输出装填（批处理）</h3>'
+        +`<div style="display:flex;gap:4px;align-items:center;font-size:11px;margin:3px 0">`
+        +`<span style="color:#8a9099;white-space:nowrap">迭代结果取</span>`
+        +`<input value="${ext(nthO.fill)}" placeholder="留空=整个输出；如 raw → output.raw" onchange="setBatchNthFill(this.value)" style="flex:1;min-width:0">`
+        +`<span style="color:#8a9099;white-space:nowrap">类型</span>`
+        +`<select onchange="setBatchNthType(this.value)" style="width:70px">${IO_TYPES.map(t=>`<option value="${t}" ${nthO.type===t?'selected':''}>${t}</option>`).join('')}</select>`
+        +`</div>`
+        +`<div style="font-size:10px;color:#8a9099">all_outputs / filtered_outputs 元素 = 装填结果；nth_output 类型联动 all/filtered 的 item 类型。</div>`;
     }else{
       const label=n.type==='1'?'输入（工作流入参）':'输出字段';
       h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema('out')" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
@@ -1625,6 +1636,26 @@ function delBatchCond(ci){const f=_batchFilt();f.conditions.splice(ci,1);showPro
 function setBatchSource(s){
   const n=findN(selNode);const b=n.data.inputs.batch;
   const[bid,name]=(s||'.').split('.');b.input={type:'list',value:{type:'ref',content:{source:'block-output',blockID:bid||'',name:name||''}}};showProps();
+}
+// 批处理 nth_output 装填定义（fill 路径 + 类型；all/filtered 的 item 类型联动）
+function _batchNth(){const n=findN(selNode);return (nodeOutputs(n)||[]).find(o=>o.name==='nth_output');}
+function setBatchNthFill(v){
+  const nth=_batchNth();if(!nth)return;
+  v=(v||'').trim();
+  if(v)nth.fill=v; else delete nth.fill;   // 空=整个 output dict（默认）
+  showProps();
+}
+function setBatchNthType(v){
+  const n=findN(selNode);const nth=_batchNth();if(!nth)return;
+  nth.type=v;
+  // item 类型联动：基础类型 → all/filtered 的 schema={type}；object 保留字段数组
+  (nodeOutputs(n)||[]).forEach(o=>{
+    if(o.name==='all_outputs'||o.name==='filtered_outputs'){
+      o.type='list';
+      o.schema=(v==='object'?(Array.isArray(nth.schema)?nth.schema:[]):{type:v});
+    }
+  });
+  showProps();renderAll();
 }
 function setBatchCond(side,v){
   const n=findN(selNode);const c=n.data.inputs.batch.filter.conditions[0];

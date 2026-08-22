@@ -117,6 +117,7 @@ async def main(args) -> dict:
 
     # ========== 核心改造：生成统一字典，value 即为最终显示文本 ==========
     candidates_dict = {}
+    candidates = []
     for i, c in enumerate(cands[:10]):
         cid = f"cand_{i}"
         kind = c.get("kind", "")
@@ -127,18 +128,17 @@ async def main(args) -> dict:
         else:
             display = f"[第{tidx}轮] [{kind}] {text}"
         candidates_dict[cid] = display
+        candidates.append(display)
 
-    return {"candidates_dict": candidates_dict, "count": len(candidates_dict)}]]></code>
+    return {"candidates_dict": candidates_dict, "count": len(candidates_dict), "candidates":candidates}]]></code>
     <out name="candidates_dict" type="object"/>
-    <out name="count" type="integer"/>
+    <out name="candidates" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="150001" type="selector" title="has_candidates?" x="1920" y="80">
-    <branch>
-        <cond op="13" left="130001.count" right="0" left_type="integer"/>
-    </branch>
+  <node id="150001" type="selector" title="has_candidates?" x="1743" y="267">
+    <branch><cond op="13" left="130001.candidates.length" right="0" left_type="integer"/></branch>
   </node>
-  <node id="160001" type="llm" title="llm" x="2220" y="80">
+  <node id="160001" type="llm" title="llm" x="2820" y="80">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="candidates_dict" type="object" ref="130001.candidates_dict"/>
     <param name="systemPrompt" type="string"><![CDATA[你是历史检索精排器。根据用户消息，从候选历史记录里选出最相关的1-3条（多了冗余）。
@@ -162,7 +162,7 @@ async def main(args) -> dict:
     <out name="output" type="object"><field name="selected" type="list" description="选中的候选id数组，如 ['cand_0', 'cand_2']"/></out>
     <batch enabled="false"/>
   </node>
-  <node id="170001" type="code" title="code" x="2520" y="80">
+  <node id="170001" type="code" title="code" x="3120" y="80">
     <in name="output" type="object" ref="160001.output"/>
     <in name="candidates_dict" type="object" ref="130001.candidates_dict"/>
     <code language="3"><![CDATA[async def main(args) -> dict:
@@ -198,17 +198,42 @@ async def main(args) -> dict:
     <out name="inject" type="boolean"/>
     <out name="result" type="string"/>
   </node>
-  <node id="900001" type="end" title="end" x="2820" y="80">
+  <node id="900001" type="end" title="end" x="3420" y="80">
     <out name="inject" ref="170001.inject" type="boolean"/>
     <out name="result" ref="170001.result" type="string"/>
   </node>
   <node id="802605" type="subworkflow" title="extract_keywords" x="720" y="300" workflowId="extract_keywords">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <out name="keywords" type="list"/>
+    <out name="cached" type="boolean"/>
   </node>
   <node id="785480" type="plugin" title="join" x="1020" y="80" toolName="join">
     <in name="items" type="list" ref="802605.keywords"/>
     <in name="separator" type="string">,</in>
+    <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="760876" type="plugin" title="cosine_sim" x="2006.4106081390032" y="433.8572372097749" toolName="cosine_sim">
+    <in name="text1" type="string" ref="100001.user_message"/>
+    <in name="text2" type="string" ref="loop-item"/>
+    <out name="all_outputs" type="list" description="所有结果"><field name="raw" type="number"/></out>
+    <out name="filtered_outputs" type="list" description="筛选结果"><field name="raw" type="number"/></out>
+    <out name="nth_output" type="object" description="第n个结果"><field name="raw" type="number"/></out>
+    <out name="raw" type="number" description="余弦相似度（-1~1，越大越相关）"/>
+    <batch enabled="true"><input ref="130001.candidates" type="list"/><filter logic="2"><cond op="14" left="__batch_output__" right="" left_type="integer" right_type="integer"/></filter></batch>
+  </node>
+  <node id="1102929" type="subworkflow" title="rerank" x="2458.1493371257684" y="453.4598744543356" workflowId="rerank_topk">
+    <in name="items" type="list" ref="130001.candidates"/>
+    <in name="scores" type="list" ref="760876.all_outputs" itemType="number"/>
+    <in name="k" type="integer">3</in>
+    <out name="topk" type="list"/>
+    <out name="indices" type="list"/>
+    <out name="scores_topk" type="list"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="772715" type="plugin" title="join" x="2827.990434744458" y="443.3225457696734" toolName="join">
+    <in name="items" type="list" ref="1102929.topk"/>
+    <in name="separator" type="string">\n</in>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
@@ -220,7 +245,6 @@ async def main(args) -> dict:
   <edge from="120001" to="130001"/>
   <edge from="125001" to="130001"/>
   <edge from="130001" to="150001"/>
-  <edge from="150001" to="160001" port="true"/>
   <edge from="160001" to="170001"/>
   <edge from="170001" to="900001"/>
   <edge from="150001" to="900001" port="false"/>
@@ -229,4 +253,9 @@ async def main(args) -> dict:
   <edge from="785480" to="125001"/>
   <edge from="802605" to="900001" port="802605_error"/>
   <edge from="160001" to="900001" port="160001_error"/>
+  <edge from="760876" to="1102929"/>
+  <edge from="760876" to="160001"/>
+  <edge from="150001" to="760876" port="true"/>
+  <edge from="1102929" to="772715"/>
+  <edge from="772715" to="160001"/>
 </workflow>

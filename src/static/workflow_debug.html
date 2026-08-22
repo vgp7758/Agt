@@ -266,16 +266,31 @@ function _dbgBoxText(n){
   const lines=[];
   Object.entries(out).forEach(([k,v])=>{
     let s;
-    if(typeof v==='string') s=v.length>240? v.slice(0,240)+'…' : v;
-    else { try{s=JSON.stringify(v);}catch(e){s=String(v);} if(s&&s.length>240)s=s.slice(0,240)+'…'; }
+    if(typeof v==='string') s=v;
+    else { try{s=JSON.stringify(v);}catch(e){s=String(v);} }
     lines.push(k+': '+s);
   });
   return lines.join('\n')||'(空)';
 }
+const DBG_FULL_MAX=2000;   // 白框内超过该字符数的输出被截断，可点"[完整]"在新页签查看
+function _dbgBoxShowText(n){
+  const full=_dbgBoxText(n);
+  return full.length>DBG_FULL_MAX ? full.slice(0,DBG_FULL_MAX)+'\n…(输出过长，点右上角"[完整]"查看全部)' : full;
+}
+// 在新页签以纯文本打开节点完整输出（不涉及任何 html/样式）
+function openDbgFull(n){
+  const url=URL.createObjectURL(new Blob([_dbgBoxText(n)],{type:'text/plain'}));
+  window.open(url,'_blank');
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
 function _dbgBoxH(n){
   if(dbgCollapsed.has(n.id)) return 20;
-  const lines=Math.min(_dbgBoxText(n).split('\n').length, 16);
-  return lines*13+26;
+  const txt=_dbgBoxShowText(n);
+  // 10px 等宽字体大约每字符 6px，正文左右 padding(6+6)+边框(1+1) 占 14px → 每行可容纳字符数
+  const charsPerLine=Math.max(Math.floor((Math.max(n.w-14,40))/6),1);
+  let lines=0;
+  txt.split('\n').forEach(l=>{ lines+=Math.max(1,Math.ceil((l.length||1)/charsPerLine)); });
+  return Math.min(lines*13+26,800);   // 白框最大高度 800px，随文本自适应
 }
 function nodeH(n){
   return _baseH(n)+(dbgOut[n.id]!==undefined?_dbgBoxH(n):0);
@@ -770,11 +785,21 @@ function _renderDbgBox(g,n){
   head.innerHTML='<span>'+(collapsed?'▸':'▾')+'</span><span style="font-weight:600">输出</span><span style="color:#888">'+nk+' 字段</span>';
   head.onclick=(e)=>{e.stopPropagation();toggleDbgBox(n.id);};
   head.onmousedown=(e)=>e.stopPropagation();
+  // 输出过长被截断时，加"[完整]"按钮在新页签查看
+  if(_dbgBoxText(n).length>DBG_FULL_MAX){
+    const btn=document.createElement('button');
+    btn.textContent='[完整]';
+    btn.title='在新页签查看完整输出';
+    btn.style.cssText='margin-left:auto;cursor:pointer;font-size:10px;font-family:monospace;border:1px solid #999;border-radius:3px;background:#fff';
+    btn.onmousedown=(e)=>e.stopPropagation();
+    btn.onclick=(e)=>{e.stopPropagation();openDbgFull(n);};
+    head.appendChild(btn);
+  }
   div.appendChild(head);
   if(!collapsed){
     const body=document.createElement('div');
     body.style.cssText='flex:1;overflow:auto;padding:3px 6px;white-space:pre-wrap;word-break:break-all';
-    body.textContent=_dbgBoxText(n);
+    body.textContent=_dbgBoxShowText(n);
     body.onmousedown=(e)=>e.stopPropagation();
     div.appendChild(body);
   }

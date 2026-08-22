@@ -234,6 +234,8 @@ def _out_to_json(o):
     """<out name type required default>[<field.../] → outputs 项（含 object 子字段 schema）
     default 值可从 default= 属性或标签内文本读取（如 <out name="x" type="integer">10</out>）"""
     res = {"name": o.get("name"), "type": o.get("type", "string")}
+    if o.get("fill"):
+        res["fill"] = o.get("fill")   # 批处理 nth_output 装填路径（与写侧 out_el 配对）
     if o.get("description"):
         res["description"] = o.get("description")
     if o.get("required") == "true":
@@ -648,6 +650,9 @@ def _node_to_xml(n):
             attrs += f' description={_qa(o.get("description"))}'
         if o.get("required"):
             attrs += ' required="true"'
+        # 批处理 nth_output 装填路径（fill="raw" → 迭代结果取 output.raw；空=整个 output dict）
+        if str(o.get("fill") or "").strip():
+            attrs += f' fill={_qa(str(o["fill"]).strip())}'
         if isinstance(o.get("input"), dict):
             r = _ref_of(o["input"])
             if r:

@@ -1517,6 +1517,10 @@ def _run_node_with_batch(node: dict, handler, ctx):
     _BATCH_OUT_NAMES = ("all_outputs", "filtered_outputs", "nth_output")
     data = node.get("data", {})
     saved_outputs = data.get("outputs")
+    # nth_output 装填定义（fill）：迭代结果从单次输出的哪个字段提取（如 "raw" → output.raw）。
+    # 留空 = 整个 output dict（默认，all_outputs=[{raw:x},...]）；fill 后元素即该字段值（[x,y,...]）
+    _nth_decl = next((o for o in (saved_outputs or []) if o.get("name") == "nth_output"), None)
+    fill_path = str((_nth_decl or {}).get("fill") or "").strip()
     if saved_outputs:
         data["outputs"] = [o for o in saved_outputs if o.get("name") not in _BATCH_OUT_NAMES]
     all_outputs = []
@@ -1527,11 +1531,12 @@ def _run_node_with_batch(node: dict, handler, ctx):
             ctx.batch_index = idx
             try:
                 r = handler(node, ctx)
-                all_outputs.append(r.get("outputs") or {})
+                out = r.get("outputs") or {}
+                all_outputs.append(_dotted_get(out, fill_path) if fill_path else out)
             except WorkflowError as e:
-                all_outputs.append({"_error": str(e)})  # 单次失败不中断
+                all_outputs.append(None if fill_path else {"_error": str(e)})  # 单次失败不中断（fill 模式 None 会被过滤）
             except Exception as e:
-                all_outputs.append({"_error": f"{type(e).__name__}: {e}"})
+                all_outputs.append(None if fill_path else {"_error": f"{type(e).__name__}: {e}"})
     finally:
         if saved_outputs is not None:
             data["outputs"] = saved_outputs
@@ -1541,10 +1546,14 @@ def _run_node_with_batch(node: dict, handler, ctx):
     filt = batch.get("filter")
     filtered = []
     for out in all_outputs:
-        if not out or (len(out) == 1 and "_error" in out):
-            continue
-        if _is_null_output(out):
-            continue
+        if fill_path:
+            if out is None or out == "":
+                continue
+        else:
+            if not out or (len(out) == 1 and "_error" in out):
+                continue
+            if _is_null_output(out):
+                continue
         if filt and not _eval_batch_filter(filt, out):
             continue
         filtered.append(out)

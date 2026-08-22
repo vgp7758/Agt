@@ -1,6 +1,7 @@
 # 工作流调试页 · 节点输出白框（画布内联 + 可折叠）
 
 > src/static/workflow_debug.html（单文件纯前端）。2026-08-21 新，commit 6c804a2。
+> 编辑器两页分工：workflow_editor.html（编辑，见[编辑器 UX 改进](editor-ux-improvements.md)）+ 本页 workflow_debug.html（调试）。
 
 ## 职责
 
@@ -67,8 +68,10 @@ body/error 端口位置一律用 `_baseH`（**不含**输出框高度）：error
 - 纯前端单文件改动，**Ctrl+F5 强刷调试页即生效**，无需 /restart
 - 验证：JS 语法检查 + 13 项结构断言全过
 - 白框内容是截断视图，不是全文——排障要全文走观测页全文路由
+- **画布逻辑与编辑页同源**：编辑器已删除 type5 代码节点画布灰字预览摘要（见 [编辑器 UX 改进 §7](editor-ux-improvements.md#7-代码节点两处)），本页 `_baseH` 仍含「type5 代码预览 +40」分支——下次从编辑器同步画布改动时注意一并核对
 
 ## 相关页面
 
+- [工作流编辑器 UX 改进](editor-ux-improvements.md)：编辑器族另一页（workflow_editor.html，编辑画布）——画布渲染逻辑同源，含同步提醒
 - [工作流运行观测](wf-monitor.md)：/wf/monitor 实时甘特时间线 + 节点全文纯文本路由（与本页互补：旁观跑的过程 vs 画布上盯着改）
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：13 类节点类型速查（`_baseH` 的类型特有高度对应各节点形态）

@@ -284,7 +284,11 @@ function renderChart(models, stats){
       const l3 = `命中率 ${hit.p.rate}%（cached ${fmtK(hit.p.cached)} / prompt ${fmtK(hit.p.prompt)} tokens）`;
       const bw = Math.max(l1.length*7.2, l3.length*6.4)+16, bh=52;
       let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);
-      const by = padT+4;
+      // y 锁定在数据点附近：tooltip 垂直居中对准该点的命中率位置（上下缘自动收进绘图区）
+      const sy = y(hit.p.rate);
+      let by = sy - bh/2;
+      if(by + bh > H-padB) by = H-padB-bh;
+      if(by < padT) by = padT;
       tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
         + [l1,l2,l3].map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('');
     };

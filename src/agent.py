@@ -1304,16 +1304,30 @@ class Agent:
         return snapshots
 
     def resume_interrupted(self) -> str:
-        """恢复中断轮：最后 turn 的 answer 是中断标注（_INTERRUPT_MARKS）/空 → 弹出恢复为
-        _current（清中断标注），发 turn_resume 事件（重放闭环：turn_end(中断)→turn_resume→
-        step…→turn_end(最终)）。返回 "" 成功，否则错误消息。
-        已归档 steps 完整保留（工具调用+结果都在 toollog）——若上一步 tool_call 曾发起但
-        未完成（进程死在工具执行中），该 step 未归档；恢复后投影里看到的是已完成链，
-        模型从断点自然续跑（缺失的调用由它自主重新发起）。"""
+        """恢复中断轮。两种中断形态都支持：
+        ① 归档形态（用户停止）：abort_current_turn 已归档 → _current=None，turns 尾部是中断轮 → pop 回 _current；
+        ② 挂起形态（异常逃出，如 LLM 502 抛穿）：run() 异常返回但 _current 未归档——worker 已空闲，
+           它就是待恢复的轮（answer 空/中断标注即中断态），直接作为恢复目标（不必 pop）。
+        两条路径汇合后：清中断标注、发 turn_resume 事件、_autosave。返回 "" 成功，否则错误消息。
+        已归档 steps 完整保留——若上一步 tool_call 曾发起但未完成，该 step 未归档；
+        恢复后投影里看到的是已完成链，模型从断点自然续跑。"""
         from session import _INTERRUPT_MARKS
         s = self.session
         if s._current is not None:
-            return "[错误] 当前已有进行中的轮次"
+            # ② 挂起形态：直接以挂着的 _current 续跑（此前这里无条件拒绝——异常逃出后点继续
+            #    恒报"当前已有进行中的轮次"，恰是最该恢复的形态没有恢复路径）
+            t = s._current
+            a = (t.answer or "").strip()
+            if a and a not in _INTERRUPT_MARKS:
+                return "[错误] 当前轮已有回答（非中断态），无法恢复"
+            t.answer = ""
+            t.answer_reasoning = ""
+            s._emit_event({"event": "turn_resume"})
+            s._refresh_summary_cache()
+            s._autosave()
+            _LOG.info("resume_interrupted: 续跑挂起轮（异常逃出形态，%d 步已保留）", len(t.steps))
+            return ""
+        # ① 归档形态：从 turns 尾部 pop 回 _current
         if not s.turns:
             return "[错误] 没有可恢复的轮次"
         t = s.turns[-1]
@@ -1738,7 +1752,7 @@ class Agent:
 
             except KeyboardInterrupt:
                 self._emit({"type": "interrupted"})
-                self.session.abort_current_turn("（被用户中断）")
+                self.session.abort_current_turn("（被用户停止）")   # 与 stop_flag 路径统一文案（旧"（被用户中断）"不在 _INTERRUPT_MARKS，resume 会拒绝）
                 return ""
 
     def _wrap_up(self) -> str:

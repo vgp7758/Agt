@@ -356,7 +356,8 @@ class Step:
 _MIDTURN_TAG = "📨〔用户中途补充，非新一轮〕\n"
 
 # 中断轮的 answer 标注集合（abort/start_turn 防御写入；resume_interrupted/前端渲染据此识别）
-_INTERRUPT_MARKS = ("（中断，本轮未完成）", "（被中断）", "（被用户停止）")
+# 注："（被用户中断）" 是旧 KeyboardInterrupt 路径的文案（已统一为"（被用户停止）"），保留兼容历史存档
+_INTERRUPT_MARKS = ("（中断，本轮未完成）", "（被中断）", "（被用户停止）", "（被用户中断）")
 
 
 @dataclass

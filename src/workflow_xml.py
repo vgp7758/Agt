@@ -355,14 +355,22 @@ def _node_to_json(nd) -> dict:
                 conds.append(_cond(br))   # branch 直接带条件（单条件简写）
             branches.append({"condition": {"logic": int(br.get("logic", "2")), "conditions": conds}})
         inp["branches"] = branches
-    elif ntype == "32":     # aggregator：<group name type><var ref type/>
+    elif ntype == "32":     # aggregator：<group name type><var ref|literal type/>
         mg = []
         for g in nd.findall("group"):
             gname = g.get("name")
             gtype = g.get("type", "string")
+            # var 双形态：ref="节点.字段"（block-output 引用）或 literal="值"（分支标记字面量，
+            # 如降级模式的 mode 标记）——literal 此前被 _ref_input(None) 解析成空 ref，聚合恒取不到
+            def _var_val(v):
+                r = v.get("ref")
+                if r:
+                    return _ref_input(r)
+                lit = v.get("literal")
+                return {"type": "literal", "content": lit if lit is not None else ""}
             mg.append({"name": gname,
                        "variables": [{"type": v.get("type") or gtype,
-                                      "value": _ref_input(v.get("ref"))} for v in g.findall("var")]})
+                                      "value": _var_val(v)} for v in g.findall("var")]})
             out.append({"name": gname, "type": gtype})
         inp["mergeGroups"] = mg
     elif ntype == "22":     # intent：<in query/> + <intent name/> + <param/>（systemPrompt等）+ <model/>
@@ -715,8 +723,15 @@ def _node_to_xml(n):
             gname = g.get("name", "")
             # 分组类型：从 outputs 同名输出取（编辑器 setAggrGroupType 同步到 outputs.type）
             gtype = next((o.get("type", "string") for o in out if o.get("name") == gname), "string")
-            vs = "".join(f'<var ref={_qa(_ref_of(v.get("value", v)))} type={_qa(v.get("type") or gtype)}/>'
-                         for v in g.get("variables", []))
+            # var 双形态：ref → <var ref/>；literal（分支标记）→ <var literal/>（此前只写 ref，literal 丢失）
+            vs = ""
+            for v in g.get("variables", []):
+                vt = v.get("type") or gtype
+                _vr = _ref_of(v.get("value", v))
+                if _vr:
+                    vs += f'<var ref={_qa(_vr)} type={_qa(vt)}/>'
+                else:
+                    vs += f'<var literal={_qa(_lit_of(v.get("value", v)))} type={_qa(vt)}/>'
             inner.append(f'<group name={_qa(gname)} type={_qa(gtype)}>{vs}</group>')
     elif ntype == "22":
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))

@@ -1,0 +1,74 @@
+<workflow name="score_rerank" description="相似度+重排子工作流（带降级）：emb_probe 探测 embedding 可用性——可用→cosine_sim 批处理语义打分；不可用→kv_cache_read 拿 query 关键词→kw_score 批处理命中数评分（量纲对齐 0~1）；聚合两路 scores→rerank_topk 取 topk。输出 topk/indices/scores_topk/mode" hidden="true">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
+    <out name="query" type="string" description="查询原文（embedding 路径做 text2；降级路径做 kv_cache key）"/>
+    <out name="items" type="list" description="候选文本数组（逐个打分）"/>
+    <out name="k" type="integer" description="topk 数量"/>
+  </node>
+  <node id="110001" type="plugin" title="probe" x="420" y="80" toolName="emb_probe">
+    <out name="raw" type="boolean"/>
+  </node>
+  <node id="120000" type="selector" title="route" x="720" y="80">
+    <branch><cond op="11" left="110001.raw" left_type="boolean"/></branch>
+  </node>
+  <node id="130001" type="plugin" title="cos_score" x="1020" y="40" toolName="cosine_sim">
+    <in name="text1" type="string" ref="loop-item"/>
+    <in name="text2" type="string" ref="100001.query"/>
+    <out name="all_outputs" type="list" itemType="number"/>
+    <out name="filtered_outputs" type="list" itemType="number"/>
+    <out name="nth_output" type="number" fill="raw"/>
+    <batch enabled="true"><input ref="100001.items" type="list"/></batch>
+  </node>
+  <node id="140001" type="plugin" title="kv_read" x="1020" y="220" toolName="kv_cache_read">
+    <in name="key" type="string" ref="100001.query"/>
+    <in name="namespace" type="string" literal="kw_extract_v2"/>
+    <out name="hit" type="boolean"/>
+    <out name="value" type="any"/>
+  </node>
+  <node id="140002" type="plugin" title="kw_score" x="1320" y="220" toolName="kw_score">
+    <in name="keywords" type="list" ref="140001.value"/>
+    <in name="text" type="string" ref="loop-item"/>
+    <out name="all_outputs" type="list" itemType="number"/>
+    <out name="filtered_outputs" type="list" itemType="number"/>
+    <out name="nth_output" type="number" fill="raw"/>
+    <batch enabled="true"><input ref="100001.items" type="list"/></batch>
+  </node>
+  <node id="130002" type="text" title="tag_cos" x="1320" y="40" method="concat">
+    <result><![CDATA[cosine]]></result>
+    <out name="output" type="string"/>
+  </node>
+  <node id="140003" type="text" title="tag_kw" x="1620" y="300" method="concat">
+    <result><![CDATA[kw_fallback]]></result>
+    <out name="output" type="string"/>
+  </node>
+  <node id="150001" type="aggregator" title="pick_scores" x="1620" y="120">
+    <group name="scores" type="list"><var ref="130001.all_outputs" type="list"/><var ref="140002.all_outputs" type="list"/></group>
+    <group name="mode" type="string"><var ref="130002.output" type="string"/><var ref="140003.output" type="string"/></group>
+    <out name="scores" type="list" itemType="number"/>
+    <out name="mode" type="string"/>
+  </node>
+  <node id="160001" type="subworkflow" title="rerank" x="1920" y="120" workflowId="rerank_topk">
+    <in name="items" type="list" ref="100001.items"/>
+    <in name="scores" type="list" ref="150001.scores"/>
+    <in name="k" type="integer" ref="100001.k"/>
+    <out name="topk" type="list"/>
+    <out name="indices" type="list" itemType="integer"/>
+    <out name="scores_topk" type="list" itemType="number"/>
+  </node>
+  <node id="900001" type="end" title="Exit" x="2220" y="120">
+    <out name="topk" ref="160001.topk" type="list"/>
+    <out name="indices" ref="160001.indices" type="list" itemType="integer"/>
+    <out name="scores_topk" ref="160001.scores_topk" type="list" itemType="number"/>
+    <out name="mode" ref="150001.mode" type="string"/>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120000"/>
+  <edge from="120000" to="130001" port="true"/>
+  <edge from="130001" to="130002"/>
+  <edge from="120000" to="140001" port="false"/>
+  <edge from="140001" to="140002"/>
+  <edge from="140002" to="140003"/>
+  <edge from="130002" to="150001"/>
+  <edge from="140003" to="150001"/>
+  <edge from="150001" to="160001"/>
+  <edge from="160001" to="900001"/>
+</workflow>

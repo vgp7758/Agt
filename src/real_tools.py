@@ -2300,6 +2300,41 @@ def kv_cache_write(key: str, value: _Any, namespace: str = "") -> dict:
     return {"ok": True}
 
 
+# —— embedding 可用性探测（结果缓存 5 分钟：首次失败后不必每次调用都重试模型加载）——
+_EMB_PROBE: dict = {"ok": None, "ts": 0.0}
+
+
+def emb_probe() -> bool:
+    """探测 RAG embedding 模型是否可用（未配置 / 加载失败 / API 不通 → False）。
+    内部试 encode 一对短文本；结果进程内缓存 5 分钟（避免每次调用都做真实 encode）。
+    用于工作流降级路由：probe=True → cosine_sim 语义重排；False → 关键词命中数评分。"""
+    now = time.time()
+    if _EMB_PROBE["ok"] is not None and now - _EMB_PROBE["ts"] < 300:
+        return _EMB_PROBE["ok"]
+    ok = False
+    try:
+        from rag import get_rag
+        rag = get_rag()
+        if rag is not None and rag.embedder is not None:
+            v = rag.embedder.encode(["探测", "probe"], normalize_embeddings=True,
+                                    show_progress_bar=False)
+            ok = len(v) == 2 and len(getattr(v[0], "tolist", lambda: v[0])()) > 0
+    except Exception:
+        ok = False
+    _EMB_PROBE.update(ok=ok, ts=now)
+    return ok
+
+
+def kw_score(keywords: list = None, text: str = "") -> float:
+    """关键词命中数评分（embedding 不可用时的降级重排）：keywords 中出现在 text 里的比例（0~1，
+    与 cosine 量纲对齐，下游阈值/排序逻辑可复用）。keywords 空/None → 0.0（安全降级：rerank 全 0 分排后）。"""
+    kws = [str(k).strip() for k in (keywords or []) if str(k).strip()]
+    if not kws or not text:
+        return 0.0
+    hits = sum(1 for k in kws if k in text)
+    return round(hits / len(kws), 4)
+
+
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
     try:
@@ -2627,6 +2662,11 @@ LIGHT_TOOLS = Toolbox(
         "pattern": "glob 模式（如 .agent/rules/*.md；目录名=该目录全部文件）",
         "max_files": "最多拼接的文件数（默认 50）",
         "max_chars": "拼接结果字符上限（默认 64000）",
+    }),
+    Tool(emb_probe, outputs=[{"name": "raw", "type": "boolean", "description": "embedding 是否可用（探测结果缓存 5 分钟）"}]),
+    Tool(kw_score, outputs=[{"name": "raw", "type": "number", "description": "命中比例 0~1（与 cosine 量纲对齐）"}], param_descriptions={
+        "keywords": "关键词数组（通常接 kv_cache_read.value = extract_keywords 的产物）",
+        "text": "被评分文本（批处理时接 loop-item）",
     }),
     Tool(sleep),
     hidden=True,

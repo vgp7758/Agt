@@ -42,24 +42,18 @@
   <node id="240000" type="selector" title="has_hits?" x="1800" y="180">
     <branch><cond op="13" left="230000.hits.length" right="0" left_type="integer" right_type="integer"/></branch>
   </node>
-  <node id="250001" type="plugin" title="score_cos" x="1940" y="180" toolName="cosine_sim">
-    <in name="text1" type="string" ref="loop-item"/>
-    <in name="text2" type="string" ref="100001.user_message"/>
-    <out name="all_outputs" type="list" itemType="number"/>
-    <out name="filtered_outputs" type="list" itemType="number"/>
-    <out name="nth_output" type="number" fill="raw"/>
-    <batch enabled="true"><input ref="230000.hits" type="list"/></batch>
-  </node>
-  <node id="260001" type="subworkflow" title="rerank" x="2200" y="180" workflowId="rerank_topk">
+  <node id="255001" type="subworkflow" title="score_rerank" x="1940" y="180" workflowId="score_rerank">
+    <in name="query" type="string" ref="100001.user_message"/>
     <in name="items" type="list" ref="230000.hits"/>
-    <in name="scores" type="list" ref="250001.all_outputs"/>
     <in name="k" type="integer" literal="3"/>
     <out name="topk" type="list"/>
-    <out name="scores_topk" type="list"/>
+    <out name="indices" type="list" itemType="integer"/>
+    <out name="scores_topk" type="list" itemType="number"/>
+    <out name="mode" type="string"/>
   </node>
   <node id="270001" type="code" title="fmt" x="2460" y="180">
-    <in name="topk" type="list" ref="260001.topk"/>
-    <in name="scores" type="list" ref="260001.scores_topk"/>
+    <in name="topk" type="list" ref="255001.topk"/>
+    <in name="scores" type="list" ref="255001.scores_topk"/>
     <code language="3"><![CDATA[async def main(args):
     p = args.params
     topk, scores = p.get("topk") or [], p.get("scores") or []
@@ -90,9 +84,8 @@
   <edge from="210001" to="220001"/>
   <edge from="220001" to="230000"/>
   <edge from="230000" to="240000"/>
-  <edge from="240000" to="250001" port="true"/>
+  <edge from="240000" to="255001" port="true"/>
   <edge from="240000" to="900001" port="false"/>
-  <edge from="250001" to="260001"/>
-  <edge from="260001" to="270001"/>
+  <edge from="255001" to="270001"/>
   <edge from="270001" to="900001"/>
 </workflow>

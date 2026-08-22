@@ -604,6 +604,10 @@ async def api_stats(scope: str = "current"):
             "elapsed": r.get("elapsed") or 0,
             "cached": cached_tokens_of(r),
             "prompt": u.get("prompt_tokens") or 0,
+            "completion": u.get("completion_tokens") or 0,
+            # reasoning 子项（归一化后 GLM/DeepSeek 都在 completion_tokens_details.reasoning_tokens；
+            # 思考模型的"思考占产出的比例"观测用——completion 的一部分，不与上面重复计数）
+            "reasoning": (u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
             "tokens": u.get("total_tokens")
                      or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0)),
             "completer": bool(r.get("completer")),

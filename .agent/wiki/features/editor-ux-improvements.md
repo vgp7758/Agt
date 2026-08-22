@@ -1,6 +1,7 @@
-# 工作流编辑器 UX 改进（2026-08-22）
+# 工作流编辑器 UX 改进（2026-08-22，随 v0.18.7 发布）
 
 > 批次提交 `a634f83`：LLM 画布提示词框、批处理配置区上移、批处理输出自动管理、item 结构自动推断。
+> 随 **v0.18.7** 打包发布（PyPI `agt-agent`，commit `aae43b0`）——纯前端改动（`src/static/editor.html`），Ctrl+F5 刷新编辑器即见新 UI，无需 /restart。
 
 ## 1. LLM 节点画布直编 prompt
 
@@ -35,4 +36,6 @@ item 结构（自动）string                                ← 基础类型直
 
 ## 相关页面
 
-- [[workflow-editor]] 编辑器整体结构
+- [v0.18.7 发布记录](../releases/v0.18.7.md) — 本页四项随该版发布
+- [工作流调试页](workflow-debug.md) — 编辑器族：画布节点输出白框
+- [工作流引擎与钩子](../architecture/workflow-hooks.md) — 批处理/聚合节点引擎侧语义

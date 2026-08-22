@@ -38,6 +38,7 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
   - 实现：SVG 内联后立即执行 `bindScan()` IIFE——收集窗口内全部折线点（visible 各模型的 pts 中 gi∈[lo,hi]）按 gi 升序排序，拖拽时鼠标位置换算到 SVG viewBox 坐标做最近点吸附
   - 细节：tooltip 靠右缘自动左翻；拖拽中 `user-select:none` 防选中文字；SVG 外松手后回到图内自动清理；每次刷新重建 SVG 时重绑（无泄漏）
   - 原 hover 小圆点 tooltip **保留并存**（两种查看方式）；纯前端改动，Ctrl+F5 刷新即生效，不需 /restart
+  - **tooltip 锁定数据点（v0.18.7，commit aae43b0 打包发布）**：吸附后 tooltip 不驻留鼠标附近，而是**锁定到所吸附的数据点上**、y 跟随曲线起伏——横扫多条折线时 tooltip 始终贴着当前数据点，读数与曲线视觉位置一致；纯前端，Ctrl+F5 生效
 - tooltip：序号/时间（**精确到秒**，bd0d1ef 前为分钟级）/命中率/具体 cached/prompt tokens/**scene**（调用时机）/**turn/step 轮步标记**（commit 4aced81）
   - turn/step 标记格式：`· t{轮号} · s{步号}`（如 `· t206 · s6`）
   - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.txt`
@@ -113,3 +114,4 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询
 - [多 Agent 体系](../architecture/multi-agent.md) — 三层消费机制、唤醒链路验证
 - [用户交互 · 插话机制与消息路由](../features/user-interaction.md) — 插话全生命周期、并行钩子 UI 状态
+- [v0.18.7 发布记录](../releases/v0.18.7.md) — /stats tooltip 修复随该版发布

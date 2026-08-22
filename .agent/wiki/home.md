@@ -15,6 +15,7 @@
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳 | 调试工作流时在画布上看节点实际产出 |
+| [features/editor-ux-improvements](features/editor-ux-improvements.md) | 工作流编辑器 UX 改进（v0.18.7）：LLM 节点画布直编 prompt（textarea 直改不重绘）、批处理配置区上移、批处理输出自动管理（all/filtered/nth）、item 结构自动推断 | 改编辑器交互 / 批处理配置 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
 | [features/long-term-memory](features/long-term-memory.md) | 长期记忆：三类记忆（事实/程序经验 pro_*/episodic）× **episodic 召回三代演进**（标点分词→3B 提词量力分工→并入统一检索流水线）+ 写入侧两设计（幂等写入 + /memory 双主权）+ 存储 hash→可读转写 | 改记忆系统 / 理解 episodic 检索 / 博客第 4 篇技术底稿 |
 | [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
@@ -25,13 +26,14 @@
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
+| [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录（最新）：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查最新版本交付内容 |
 | [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交（提交成功闭环） | 查版本交付内容 / 发布流程 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
 | [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/**wf-monitor 实时观测+节点全文/调试页输出白框**/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
 
 ## 快速事实（2026-08 状态）
 
-- 版本 **0.18.2**；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
+- 版本 **0.18.7**；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
 - 38 个 Python 模块 ~17000 行，零 LangChain 依赖
 - 主 Agent id=`_main_`；子 Agent 声明在 `.agent/agents/*.md`（frontmatter DSL）
 - 工作流：`.agent/workflows/*.xml|json`，13 类节点，XML 为推荐写作格式
@@ -47,6 +49,7 @@
 - **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
 - 折叠（fold）设计已实证（t206）：档梯满触发全档折叠，摘要 byte-stable——单步 ~98% miss 后命中率恢复 ~99.9%，一次性成本不破坏后续缓存（见 [context-engine 折叠实证](architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）
 - **排障闭环：t{N}·s{M} 轮步标记**（commit 4aced81）：/stats 折线 tooltip 显示 `· t206 · s6`，与 `projections/` 转储文件名同源（`t206_s6_*.txt`）——异常点 hover 即得文件名，直接打开看当时完整投影；仅 scene=react 记录携带，老记录自动省略（见 [ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)、[context-engine · t/s 标记](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)）
+- **v0.18.7 发布**（2026-08-22，commit aae43b0，PyPI 已上线）：编辑器 UX 四件套——LLM 节点画布直编 prompt（+120px 大框，oninput 直改不重绘防丢焦点）、批处理配置区上移、批处理输出自动管理（all_outputs/filtered_outputs/nth_output 零手动，item 结构自动推断自节点原输出 schema，详见 [editor-ux-improvements](features/editor-ux-improvements.md)）；修复：聚合节点 var1=null 整组 null（commit 5117f41，改按声明顺序取第一个「执行过且值非空」）+ /stats 拖拽 tooltip 锁定数据点（跟随曲线起伏）——详见 [v0.18.7 发布记录](releases/v0.18.7.md)
 - **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（commit_wiki 改 git_commit 节点）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
 - **wiki 提交失败修复并闭环**（2026-08）：commit_wiki 从 run_shell 改 **git_commit 节点**（subprocess 列表参数，commit message 多行安全），配合 dir_snapshot / diff_snapshots 生成变更清单，提交成功率从 0% → 100%
 - **LIGHT_TOOLS 隐藏工具增强**（2026-08，commit 9fb00de）：新增 `diff_lines`（文本级 Myers diff，与 diff_files 共享渲染）、`get_list_item`（列表元素取值，outputs=any，越界安全），配合 plugin 节点工作流节点间文本比较/列表操作无需落盘
@@ -55,7 +58,7 @@
 - **diff_files 分段对比 range_a/range_b**（2026-08-20，commit 096fcbe）：大文件截断（20k）时先全文看大致范围再逐段精比；只传 range_a 时 range_b 默认同值，两文件行号错位各传各的；**输出行号仍为文件内绝对行号**（`_render_unified_diff` 加 a_offset/b_offset 还原），diff 结果可直接喂 edit/replace_lines。附教训：`_parse_range` 成功返回 (a,b) 元组被 `if err:` 当 truthy 错误——错误通道只放错误（详见 [diff-files 页](features/diff-files.md#分段对比range_arange_b2026-08-20新commit-096fcbe)）
 - **执行时序修复：插话不滞留 + 并行钩子 UI**（2026-08-19，commit fb115aa，用户实测 8 条现象闭环）：① answer 完成后旧版只查 inbox、漏 pending_messages（插话队列）→ 插话滞留至用户下次发消息；现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮（新轮 before_turn 检索的即插话内容）。② 同 hook 挂多个 before_turn 工作流时，前端「执行中」行由单变量改 Map 按 `hook::name` 索引，互不覆盖（详见 [user-interaction](features/user-interaction.md)）
 - **子 Agent 输出串台修复：事件统一打 agent_id**（2026-08-21，commit ba0940b）：同步子 Agent（explore_subagent 等，on_event=agent.on_event）的 answer 与主 Agent answer 在同一气泡互相覆盖——根因是事件流入主事件流无身份标记。修复：`agent.py` `_emit` 一处 `event.setdefault("agent_id", self.agent_id)` 全事件覆盖（主=`_main_`）；前端 answer 气泡多 agent 分页（顶部小 tag 按钮点击翻页，仅该轮有效，最新到达页自动激活），thinking/step 加 `[agent_id]` 前缀，复制按钮克隆排除 UI 元素。异步 agent_prompt 路径（on_event=None，answer 走 inbox）本就不串（详见 [bubble-interaction](features/bubble-interaction.md)、[multi-agent](architecture/multi-agent.md#事件流-agent_id-打标与-webui-串台修复2026-08-21commit-ba0940b)）
-- **聚合节点选值语义修复**（2026-08，commit 5117f41）：aggregator(32) 分组变量旧版只看「blockID 执行过」不看值——var1 引用的节点执行了但字段解析为 None 时整组直接 null，var2 有值也被忽略（用户报告「var1=null 直接分组返回 null」）；现改为**按声明顺序取第一个「执行过且值非空」的**（值 None/空串记兜底继续找；全部执行过但无值 → 兜底第一个执行过的值；字面量/全局变量仍「非 None 即选」）。**空列表/空 dict 是合法值不跳过**（`filtered_outputs=[]` 是批处理有意义产出），仅 None/空串触发继续找。九场景验证；引擎层修复需 `/restart` 生效（详见 [workflow-hooks · 13 类节点速查](architecture/workflow-hooks.md#13-类节点速查)）
+- **聚合节点选值语义修复**（2026-08，commit 5117f41，随 v0.18.7 发布）：aggregator(32) 分组变量旧版只看「blockID 执行过」不看值——var1 引用的节点执行了但字段解析为 None 时整组直接 null，var2 有值也被忽略（用户报告「var1=null 直接分组返回 null」）；现改为**按声明顺序取第一个「执行过且值非空」的**（值 None/空串记兜底继续找；全部执行过但无值 → 兜底第一个执行过的值；字面量/全局变量仍「非 None 即选」）。**空列表/空 dict 是合法值不跳过**（`filtered_outputs=[]` 是批处理有意义产出），仅 None/空串触发继续找。九场景验证；引擎层修复需 `/restart` 生效（详见 [workflow-hooks · 13 类节点速查](architecture/workflow-hooks.md#13-类节点速查)）
 
 ## 维护约定
 

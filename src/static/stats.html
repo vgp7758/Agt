@@ -244,7 +244,66 @@ function renderChart(models, stats){
         + `<title>${esc(m)} · #${p.gi+1}${sc}${ts}\n${fmtTs(p.ts)}\n命中率 ${p.rate}%（cached ${fmtK(p.cached)} / prompt ${fmtK(p.prompt)} tokens）</title></circle>`;
     }
   }
-  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="user-select:none">${g}</svg>`;
+
+  // —— 拖拽扫描：按住左键拖动，鼠标左侧最近折线点处显示吸附竖线 + tooltip ——
+  // （比 hover 小圆点好定位：不要求精确落在点上，横扫即可逐点查看）
+  (function bindScan(){
+    const svgEl = box.querySelector('svg');
+    if(!svgEl) return;
+    const all = [];                       // 窗口内全部折线点（gi 升序）
+    for(const m of visible)
+      for(const p of (stats[m].pts||[])) if(p.gi>=lo && p.gi<=hi) all.push({gi:p.gi, m, p});
+    all.sort((a,b)=>a.gi-b.gi);
+    if(!all.length) return;
+    const NS='http://www.w3.org/2000/svg';
+    const toSvg = e=>{ const r=svgEl.getBoundingClientRect();
+      return { x:(e.clientX-r.left)/r.width*W, y:(e.clientY-r.top)/r.height*H }; };
+    let line=null, tip=null;
+    const clear=()=>{ if(line){line.remove();line=null;} if(tip){tip.remove();tip=null;} };
+    const show = mx=>{
+      const giCur = lo + Math.floor((mx-padL)/(W-padL-padR)*(span||1));
+      let hit=null;
+      for(const it of all){ if(it.gi<=giCur) hit=it; else break; }   // 左侧最近折线点
+      if(!hit){ clear(); return; }
+      const sx = x(hit.gi);
+      if(!line){
+        line=document.createElementNS(NS,'line');
+        line.setAttribute('stroke','#e6edf3'); line.setAttribute('stroke-width','1');
+        line.setAttribute('stroke-dasharray','5 4'); line.setAttribute('pointer-events','none');
+        svgEl.appendChild(line);
+        tip=document.createElementNS(NS,'g'); tip.setAttribute('pointer-events','none');
+        svgEl.appendChild(tip);
+      }
+      line.setAttribute('x1',sx); line.setAttribute('x2',sx);
+      line.setAttribute('y1',padT); line.setAttribute('y2',H-padB);
+      const sc = hit.p.scene ? ` · ${hit.p.scene}` : '';
+      const tstr = (hit.p.turn!=null && hit.p.step!=null) ? ` · t${hit.p.turn} · s${hit.p.step}` : '';
+      const l1 = `${hit.m} · #${hit.gi+1}${sc}${tstr}`;
+      const l2 = fmtTs(hit.p.ts);
+      const l3 = `命中率 ${hit.p.rate}%（cached ${fmtK(hit.p.cached)} / prompt ${fmtK(hit.p.prompt)} tokens）`;
+      const bw = Math.max(l1.length*7.2, l3.length*6.4)+16, bh=52;
+      let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);
+      const by = padT+4;
+      tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
+        + [l1,l2,l3].map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('');
+    };
+    svgEl.addEventListener('mousedown', e=>{
+      if(e.button!==0) return;
+      const pt=toSvg(e);
+      if(pt.x<padL-2||pt.x>W-padR+2) return;
+      e.preventDefault();                 // 防拖拽选中文字
+      show(pt.x);
+    });
+    svgEl.addEventListener('mousemove', e=>{
+      if(e.buttons & 1){
+        const pt=toSvg(e);
+        if(pt.x>=padL-2 && pt.x<=W-padR+2) show(pt.x); else clear();
+      } else clear();                     // 松开（可能在 svg 外已 mouseup）回来自动清
+    });
+    svgEl.addEventListener('mouseleave', clear);
+    svgEl.addEventListener('mouseup', clear);
+  })();
 }
 
 function renderTable(models, stats){

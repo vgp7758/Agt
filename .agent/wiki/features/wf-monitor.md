@@ -91,6 +91,7 @@
 |------|--------|------|------|
 | **本页 /wf/monitor** | **实时**（2s 轮询） | **节点级** | 对话中点「执行中」行，看工作流跑到哪、卡多久、输出什么 |
 | 本页节点全文纯文本路由 | 实时（按需） | 单节点输出全文 | 点预览看 LLM 完整回包/检索全量结果（200K 内原文） |
+| [调试页节点输出白框](workflow-debug.md) | 画布内（播放后） | 节点级 | 调试页编辑工作流时节点下方直接看输出（可折叠），不切页面 |
 | 对话内执行中行秒表 | 实时（1s 本地） | 工作流级 | 不开观测页也能感知钩子跑了多久（纯前端零开销） |
 | [/stats](../guides/ops.md#stats-页webui-统计按钮) | 事后 | LLM 调用级 | 缓存命中率、token 经济 |
 | llm_calls.jsonl | 事后（持久化） | LLM 调用级 | 钩子内 LLM 走 utility_client（scene=hook:xxx）可在此观测 |
@@ -110,5 +111,6 @@
 
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：execute/run_hook/make_workflow_tool 接入点、run registry 摘要与全文预算
 - [用户交互](user-interaction.md)：并行钩子「执行中」行（可点击打开观测页 + 实时秒表/总耗时，实现主记录在此）
+- [工作流调试页 · 节点输出白框](workflow-debug.md)：画布内联节点输出——「自己调试盯着改」与本页「旁观跑的过程」互补
 - [运维可观测性](../guides/ops.md)：/stats 事后统计（与本页实时观测互补）
 - [wiki_auto_maintenance](wiki-auto-maintenance.md) / [wiki_auto_query](wiki-auto-query.md)：典型受益者——钩子推理长、LLM 节点输出大，以前完全盲盒

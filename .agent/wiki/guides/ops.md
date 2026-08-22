@@ -23,6 +23,10 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 
 覆盖三类执行路径：同步钩子（线程池）、async 钩子（后台线程）、wf_* 工具调用。注意：`_WF_RUNS` 是进程内存，/restart 清空；旧进程的「执行中」行不携带 run_id（不可点击），需 /restart 后生效。实现细节见 [工作流运行观测](../features/wf-monitor.md)。
 
+### 工作流调试页 · 节点输出白框（2026-08-21，commit 6c804a2）
+
+调试页画布「播放」工作流后，每个执行过的节点**下方直接挂白框**（foreignObject，白底黑字等宽）显示节点输出：顶部灰色头条「▾ 输出 · N 字段」点击折叠/展开，内容每字段一行截 240 字、超 16 行滚动。实现上 nodeH 拆为 `_baseH`（基础高度，含 type8 分支/type32 分组等动态高度）+ 输出框高——布局与连线避让自动生效；端口锚点一律用 `_baseH`（不含输出框），连线不随输出出现/折叠跳动。纯前端单文件（`src/static/workflow_debug.html`），Ctrl+F5 即生效。与 /wf/monitor 互补：观测页看「别人跑的过程」，画布白框适合「自己调试时盯着改」。详见 [工作流调试页](../features/workflow-debug.md)。
+
 ### /stats 页（WebUI 📊 统计按钮）
 
 前端逻辑：`src/static/stats.html`
@@ -99,6 +103,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页
 - [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）+ 节点全文纯文本路由
+- [工作流调试页 · 节点输出白框](../features/workflow-debug.md) — 调试画布内联节点输出（与 /wf/monitor 互补：盯着改 vs 旁观跑的过程）
 - [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证
 - [系统总览](../architecture/overview.md) — 模块地图、数据流
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询

@@ -1671,13 +1671,22 @@ function renderIOFields(arr,kind,lockedAll){
     h+=`<tbody class="${bg}">`;
     const t=f.input?.type||f.type||'string';
     const locked=lockedAll||(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||(['4','9'].includes(n.type)&&t!=='any')));  // any 类型不锁（透传/组装用）
-    h+=`<tr><td style="width:60px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
-      <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td>
-      <td>${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td></tr>`;
-    h+=`<tr><td colspan="3"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
+    // 行内操作按钮（仅 object / list<object> 显示）：📋=该字段粘贴JSON导入子字段结构；+=添加子字段
+    // ——插在 ×/🔒 与类型下拉之间（用户布局偏好），子字段块内的同名按钮上移消重
+    let midBtns='';
+    if(t==='object'||(t==='list'&&getListItemType(f)==='object')){
+      const _p=(t==='list'?'i':'f')+i;   // importFieldSchema/addSubFieldP 的 schema 定位路径（与 renderObjectSubFields 一致）
+      midBtns=`<button onclick="importFieldSchema('${kind}','${_p}')" title="粘贴JSON对象，自动推断子字段结构（覆盖现有）" style="font-size:10px;padding:0 4px">📋</button>`
+             +`<button onclick="addSubFieldP('${kind}','${_p}')" title="添加一个子字段" style="font-size:10px;padding:0 4px">+</button>`;
+    }
+    h+=`<tr><td style="width:56px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
+      <td style="width:26px;text-align:center">${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td>
+      <td style="text-align:left;white-space:nowrap">${midBtns}</td>
+      <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
+    h+=`<tr><td colspan="4"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
 
-    // 输入字段：源类型下拉（始终显示）
-    if(kind==='in'&&!locked){
+    // 输入字段：源类型下拉（始终显示，含锁定字段——锁只禁止改字段名/类型/删除，值仍可绑定）
+    if(kind==='in'){
       const n=findN(selNode);
       const src=f.input?.value?.content?.source;
       let srcType='node';
@@ -1685,7 +1694,7 @@ function renderIOFields(arr,kind,lockedAll){
       else if(src==='loop-index')srcType='index';
       else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
       else if(src==='literal'||(f.input?.value?.type==='literal'))srcType='literal';
-      h+='<tr><td colspan="3" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource('+i+',this.value)">';
+      h+='<tr><td colspan="4" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource('+i+',this.value)">';
       h+='<option value="node" '+(srcType==='node'?'selected':'')+'>节点输出</option>';
       h+='<option value="literal" '+(srcType==='literal'?'selected':'')+'>字面量</option>';
       h+='<option value="global" '+(srcType==='global'?'selected':'')+'>全局变量</option>';
@@ -1720,7 +1729,7 @@ function renderIOFields(arr,kind,lockedAll){
     // list：选 item 类型
     if(t==='list'){
       const itemT=getListItemType(f);
-      h+=`<tr><td colspan="3" class="sub-fields"><span style="font-size:10px;color:#8a9099">list item 类型: </span><select style="width:auto;font-size:10px" onchange="setListItemType('${kind}',${i},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
+      h+=`<tr><td colspan="4" class="sub-fields"><span style="font-size:10px;color:#8a9099">list item 类型: </span><select style="width:auto;font-size:10px" onchange="setListItemType('${kind}',${i},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
       if(itemT==='object') h+=renderObjectSubFields(f,kind,i,'list-item');
     }
     // object：子字段
@@ -1736,7 +1745,8 @@ function renderObjectSubFields(f,kind,fi,ctx){
   else {schema=f.schema||f.input?.schema||[];}
   if(!Array.isArray(schema))schema=[];
   const path=(ctx==='list-item'?'i':'f')+fi;
-  let h=`<tr><td colspan="3" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段: <button onclick="importFieldSchema('${kind}','${path}')" title="粘贴JSON对象，自动推断子字段结构（覆盖现有）" style="font-size:9px">📋 导入</button></div>`;
+  // 📋导入/+子字段 已上移到主字段行（×/🔒 与类型下拉之间），此处只留"子字段:"标签
+  let h=`<tr><td colspan="4" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段:</div>`;
   h+=renderSchemaFields(schema,kind,path,0);
   h+='</td></tr>';
   return h;
@@ -1784,7 +1794,9 @@ function renderSchemaFields(schema,kind,path,depth){
       }
     }
   });
-  h+=`<button onclick="addSubFieldP('${kind}','${path}')" style="font-size:10px">+ 子字段</button></div>`;
+  // 顶层（depth=0）的"+ 子字段"已上移到主字段行；嵌套层（depth>0）保留各自的 + 按钮
+  if(depth) h+=`<button onclick="addSubFieldP('${kind}','${path}')" style="font-size:10px">+ 子字段</button>`;
+  h+='</div>';
   return h;
 }
 function getListItemType(f){

@@ -237,6 +237,7 @@ function nodeH(n){
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
+  if(n.type==='3') h+=TEXTAREA_H;    // LLM 节点：提示词框（与文本节点同款，画布直接编辑 prompt）
   if(n.type==='5') h+=40;            // 代码节点：预览行
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
@@ -756,6 +757,16 @@ function renderNode(n){
     }
   }
 
+  // LLM 节点：提示词大文本框（编辑 llmParam.prompt，支持 {{输入字段}} 占位符；systemPrompt/模型等在右侧面板）
+  if(n.type==='3'){
+    const fo=makeLLMPromptArea(n);
+    if(fo){
+      const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+      g.appendChild(fo);
+    }
+  }
+
   // 选择器：分支行 + 每分支流程出口（foreignObject）
   if(n.type==='8'){
     renderSelectorBranches(g,n);
@@ -870,6 +881,25 @@ function makeTextArea(n){
     n.data.inputs.concatParams[0].input.value.content=ta.value;
   };
   ta.onmousedown=(e)=>e.stopPropagation();  // 不触发节点拖动
+  fo.appendChild(ta);fo.style.pointerEvents='auto';
+  return fo;
+}
+
+// LLM 节点提示词大文本框（编辑 llmParam.prompt；oninput 直改数据不重绘，不丢焦点）
+function makeLLMPromptArea(n){
+  const fo=document.createElementNS(NS,'foreignObject');
+  fo.setAttribute('width',200);fo.setAttribute('height',100);
+  const ta=document.createElement('textarea');
+  n.data.inputs=n.data.inputs||{};
+  let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]);
+  let promptP=lp.find(x=>x.name==='prompt');
+  if(!promptP){promptP={name:'prompt',input:{type:'string',value:{type:'literal',content:''}}};lp.push(promptP);}
+  ta.value=promptP.input.value.content||'';
+  const vars=nodeInputs(n).map(p=>p.name).filter(Boolean);
+  ta.placeholder=vars.length?('可用占位符: '+vars.map(v=>'{{'+v+'}}').join('  ')+'；systemPrompt/模型在右侧面板'):'prompt（{{输入字段}} 引用上游；systemPrompt/模型在右侧面板）';
+  ta.style.cssText='width:100%;height:100%;font-size:11px;font-family:monospace;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px;resize:none;box-sizing:border-box';
+  ta.oninput=()=>{promptP.input.value.content=ta.value;};   // 直改数据不重绘（重绘会销毁 textarea 丢焦点）
+  ta.onmousedown=(e)=>e.stopPropagation();
   fo.appendChild(ta);fo.style.pointerEvents='auto';
   return fo;
 }
@@ -1279,6 +1309,11 @@ function showProps(){
     }
   }
 
+  // 批处理（排除 entry/exit/复合/选择器/意图/聚合/赋值）——置于输入字段之前（配置影响输入字段的"源"选项与输出结构，先看到开关再编辑字段）
+  if(!['1','2','8','20','21','22','28','32','40'].includes(n.type)){
+    h+=renderBatchConfig(n);
+  }
+
   // 输入字段（聚合节点用 mergeGroups，跳过常规输入）
   if(n.type!=='1'&&n.type!=='32'){
     const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
@@ -1288,10 +1323,15 @@ function showProps(){
   }
   // 输出字段（入口=工作流入参；意图/聚合无输出字段编辑）
   // 输出字段（入口=工作流入参；选择器/意图/聚合/复合无输出字段编辑）
+  // 批处理启用时隐藏输出字段编辑——all/filtered/nth 三字段自动管理（结构=节点原输出 schema，关闭批处理恢复）
   if(n.type!=='2' && !['8','21','22','28','32'].includes(n.type)){
-    const label=n.type==='1'?'输入（工作流入参）':'输出字段';
-    h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema('out')" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
-    h+=renderIOFields(nodeOutputs(n),'out');
+    if(n.type!=='1' && n.data.inputs?.batch?.enabled){
+      h+='<h3>输出字段</h3><div style="font-size:10px;color:#8a9099">批处理已启用：all_outputs / filtered_outputs / nth_output 自动管理（item 结构=节点原输出 schema），关闭批处理恢复原输出编辑。</div>';
+    }else{
+      const label=n.type==='1'?'输入（工作流入参）':'输出字段';
+      h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema('out')" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
+      h+=renderIOFields(nodeOutputs(n),'out');
+    }
   }
   // 复合节点输出：nth_output 可编辑字段（定义 item 结构），all/filtered 自动跟随
   if(['21','28'].includes(n.type)){
@@ -1310,10 +1350,7 @@ function showProps(){
     h+='<div style="font-size:10px;color:#56b6c2;margin-top:4px">all_outputs / filtered_outputs 的 item 类型 = nth_output，自动同步。</div>';
   }
 
-  // 批处理（排除 entry/exit/复合/选择器/意图/聚合/赋值）
-  if(!['1','2','8','20','21','22','28','32','40'].includes(n.type)){
-    h+=renderBatchConfig(n);
-  }
+  // 批处理（LLM 提示词之后，原有第二处调用已移除——配置区上移到输入字段前）
 
   // LLM
   if(n.type==='3'){
@@ -1521,11 +1558,10 @@ function renderBatchConfig(n){
   if(!b.enabled)return h+'<div style="font-size:10px;color:#8a9099">启用后，节点对数组逐元素执行，输出 all_outputs / filtered_outputs / nth_output。</div>';
   // array 源
   h+='<label>数组源 (blockID.name) <input value="'+ext(b.input?.value?.content?.blockID)+'.'+ext(b.input?.value?.content?.name)+'" onchange="setBatchSource(this.value)" placeholder="节点ID.字段名"></label>';
-  // item 类型
-  h+=`<label>item 类型 <select onchange="setBatch('itemType',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${b.itemType===x?'selected':''}>${x}</option>`).join('')}</select></label>`;
-  if(b.itemType==='object'){
-    h+='<div style="font-size:10px;color:#8a9099">item 为 object 时，输入字段可引用 item.字段（在下方输入字段"源"选 item）。</div>';
-  }
+  // item 结构 = 节点原输出 schema（自动推断，无需手动选择——nth_output 类型沿用工具/节点自身输出的 schema）
+  const nthInfo=(nodeOutputs(n).find(o=>o.name==='nth_output')||{}).schema;
+  const itemDesc=Array.isArray(nthInfo)?('object（'+nthInfo.map(s=>s.name).join(', ')+'）'):(nthInfo&&nthInfo.type)||'string';
+  h+='<label>item 结构（自动） <span style="color:#56b6c2">'+itemDesc+'</span>（= 节点原输出 schema；输入字段"源"可选 item.字段 引用）</label>';
   // 筛选条件（多条件 + AND/OR）
   const filt=b.filter||(b.filter={logic:2,conditions:[]});
   if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});

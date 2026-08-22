@@ -625,25 +625,36 @@ def _handle_fromjson(node: dict, ctx) -> dict:
 
 
 def _handle_aggregator(node: dict, ctx) -> dict:
-    """type 32 变量聚合：多个分支汇合，取"实际执行到的那个"上游输出。"""
+    """type 32 变量聚合：多个分支汇合，取"实际执行到的那个"上游输出。
+    变量按声明顺序取第一个【执行过且值非空】的——此前只要 blockID 执行过就直接选定：
+    字段解析为 None（分支没走到该字段/输出为空）时整组返回 null，不再看后续变量
+    （用户报告：var1=null 直接分组 null，var2 有值也被忽略）。
+    全部执行过但都无值 → 兜底第一个执行过的值；字面量/全局变量分支保持"非 None 即选"。"""
     groups = node.get("data", {}).get("inputs", {}).get("mergeGroups", [])
     out = {}
     for g in groups:
         gname = g.get("name")
         chosen = None
+        fallback = None
+        has_fallback = False
         for bi in g.get("variables", []):
             val = bi.get("value", bi) if isinstance(bi, dict) else {}
             content = val.get("content") if isinstance(val, dict) else None
             if isinstance(content, dict) and content.get("source") == "block-output":
-                if str(content.get("blockID", "")) in ctx.node_outputs:  # 该分支执行过
-                    chosen = resolve_value(bi, ctx)
+                if str(content.get("blockID", "")) not in ctx.node_outputs:
+                    continue   # 该分支未执行过：跳过（继续看后续变量）
+                v = resolve_value(bi, ctx)
+                if v is not None and v != "":
+                    chosen = v          # 执行过且有值：选定
                     break
+                if not has_fallback:    # 执行过但无值：记兜底，继续找后面的
+                    fallback, has_fallback = v, True
             else:
                 v = resolve_value(bi, ctx)  # 字面量/全局变量：取非空者
                 if v is not None:
                     chosen = v
                     break
-        out[gname] = chosen
+        out[gname] = chosen if chosen is not None else fallback
     return {"outputs": out, "port": None}
 
 

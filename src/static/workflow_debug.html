@@ -290,7 +290,7 @@ function _dbgBoxH(n){
   const charsPerLine=Math.max(Math.floor((Math.max(n.w-14,40))/6),1);
   let lines=0;
   txt.split('\n').forEach(l=>{ lines+=Math.max(1,Math.ceil((l.length||1)/charsPerLine)); });
-  return Math.min(lines*13+26,800);   // 白框最大高度 800px，随文本自适应
+  return Math.min(lines*13+26,700);   // 白框最大高度 700px，随文本自适应
 }
 function nodeH(n){
   return _baseH(n)+(dbgOut[n.id]!==undefined?_dbgBoxH(n):0);

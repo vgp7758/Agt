@@ -78,6 +78,11 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 .io-table input,.io-table select{width:100%;font-size:11px;padding:2px 3px;margin:0}
 .io-fbg-even{background:#1c2548}
 .io-fbg-odd{background:transparent}
+.val-btn{max-width:100%;min-width:36px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;padding:1px 5px;text-align:left;border-radius:3px}
+.val-btn.src{color:#58a6ff;font-weight:600}
+.val-btn.ph{color:#6e7681;font-style:italic}
+.src-btn{padding:0 2px;font-size:11px;color:#58a6ff;cursor:pointer;border:none;background:none}
+.src-btn:hover{background:#1c2548;border-radius:3px}
 .sub-fields{margin-left:10px;border-left:2px solid #0f3460;padding-left:6px;margin-top:2px}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s;pointer-events:none}
 .legend{font-size:10px;color:#8a9099;line-height:1.7}
@@ -1674,62 +1679,71 @@ function renderIOFields(arr,kind,lockedAll){
     // 行内操作按钮（仅 object / list<object> 显示）：📋=该字段粘贴JSON导入子字段结构；+=添加子字段
     // ——插在 ×/🔒 与类型下拉之间（用户布局偏好），子字段块内的同名按钮上移消重
     let midBtns='';
-    if(t==='object'||(t==='list'&&getListItemType(f)==='object')){
-      const _p=(t==='list'?'i':'f')+i;   // importFieldSchema/addSubFieldP 的 schema 定位路径（与 renderObjectSubFields 一致）
-      midBtns=`<button onclick="importFieldSchema('${kind}','${_p}')" title="粘贴JSON对象，自动推断子字段结构（覆盖现有）" style="font-size:10px;padding:0 4px">📋</button>`
-             +`<button onclick="addSubFieldP('${kind}','${_p}')" title="添加一个子字段" style="font-size:10px;padding:0 4px">+</button>`;
+    if(kind==='in'&&t==='object'){
+      midBtns=`<button onclick="importFieldSchema('${kind}','f${i}')" title="粘贴JSON对象，自动推断子字段结构（覆盖现有）" style="font-size:10px;padding:0 3px">📋</button>`
+             +`<button onclick="addSubFieldP('${kind}','f${i}')" title="添加一个子字段" style="font-size:10px;padding:0 3px">+</button>`;
     }
-    h+=`<tr><td style="width:56px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>
-      <td style="width:26px;text-align:center">${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td>
-      <td style="text-align:left;white-space:nowrap">${midBtns}</td>
-      <td style="width:70px"><select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
-    h+=`<tr><td colspan="4"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
-
-    // 输入字段：源类型下拉（始终显示，含锁定字段——锁只禁止改字段名/类型/删除，值仍可绑定）
+    const _typeSel=`<select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select>`;
+    const _delTd=`<td style="width:24px;text-align:center">${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td>`;
     if(kind==='in'){
-      const n=findN(selNode);
-      const src=f.input?.value?.content?.source;
-      let srcType='node';
-      if(src==='loop-item')srcType=f.input?.value?.content?.name?('item.'+f.input.value.content.name):'item';
-      else if(src==='loop-index')srcType='index';
-      else if(src==='global_variable_app'||src==='global_variable_system'||src==='global_variable_user')srcType='global';
-      else if(src==='literal'||(f.input?.value?.type==='literal'))srcType='literal';
-      h+='<tr><td colspan="4" style="font-size:10px">源: <select style="width:auto;font-size:10px" onchange="setInputSource('+i+',this.value)">';
-      h+='<option value="node" '+(srcType==='node'?'selected':'')+'>节点输出</option>';
-      h+='<option value="literal" '+(srcType==='literal'?'selected':'')+'>字面量</option>';
-      h+='<option value="global" '+(srcType==='global'?'selected':'')+'>全局变量</option>';
-      h+='<option value="item" '+(srcType==='item'?'selected':'')+'>item(整个)</option>';
-      h+='<option value="index" '+(srcType==='index'?'selected':'')+'>index</option></select>';
-      // 节点输出→下拉选兼容节点
-      if(srcType==='node'){
-        const inType=f.input?.type||'string';
-        h+='<select onchange="setInputRef('+i+',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点--</option>';
-        WF.nodes.forEach(on=>{
-          if(on.id===n.id)return;
-          _outFieldOptions(on).forEach(o=>{
-            if(o.type===inType||inType==='string'){
-              h+='<option value="'+on.id+'.'+o.path+'"'+(f.input?.value?.content?.blockID===on.id&&f.input?.value?.content?.name===o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
-            }
-          });
-        });
-        h+='</select>';
-      }
-      if(srcType.startsWith('item.')){
-        h+=' <input value="'+srcType.slice(5)+'" placeholder="item字段" style="width:60px;font-size:10px" onchange="setInputSource('+i+',\'item.\'+this.value)">';
-      }
-      if(srcType==='global'){
-        const pth=(f.input?.value?.content?.path||[])[0]||'';
-        h+=' <input value="'+pth+'" placeholder="全局变量名" style="width:90px;font-size:10px" onchange="setRefPath('+i+',this.value)">';
-      }
-      if(srcType==='literal'){
-        h+=' <input value="'+ext(f.input?.value?.content)+'" placeholder="字面量" style="width:80px;font-size:10px" onchange="setInputLitVal('+i+',this.value)">';
-      }
-      h+='</td></tr>';
+      // 值按钮：ref 绑定优先显示 displayName（节点.字段/item/index/global），未绑定显示字面量值；
+      // 点击展开当前类型的字面量输入控件（输入即覆盖为 literal）；▾ 弹出引用选择
+      const sm=_srcMeta(f);
+      const lit=String(f.input?.value?.content ?? '');
+      const _trunc=s=>s.length>22?s.slice(0,21)+'…':s;
+      const btnTxt=sm?('🔗 '+sm.name):(lit?_trunc(lit):'（字面量）');
+      h+=`<tr style="display:flex;width:100%;gap:2px;align-items:center">`
+        +`<td style="flex:1 1 56px;min-width:40px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>`
+        +`<td style="flex:0 0 74px">${_typeSel}</td>`
+        +`<td style="flex:1 1 48px;min-width:32px"><button class="val-btn${sm?' src':(lit?'':' ph')}" style="width:100%" title="${sm?('当前引用：'+sm.name+'。点击改为输入字面量（将覆盖引用）'):'点击输入/编辑字面量'}" onclick="toggleValEditor(${i})">${ext(btnTxt)}</button></td>`
+        +`<td style="flex:0 0 16px;text-align:center"><button class="src-btn" title="选择输入源（节点输出 / item / index / 全局变量；选（字面量）=清除引用）" onclick="toggleRefPicker(${i})">▾</button></td>`
+        +`<td style="flex:0 0 auto;white-space:nowrap">${midBtns}</td>`
+        +_delTd+`</tr>`;
+    }else{
+      h+=`<tr style="display:flex;width:100%;gap:2px;align-items:center">`
+        +`<td style="flex:1 1 56px;min-width:40px"><input value="${ext(f.name)}" onchange="setField('${kind}',${i},'name',this.value)"></td>`
+        +`<td style="flex:0 0 74px">${_typeSel}</td>`
+        +`<td style="flex:1"></td>`+_delTd+`</tr>`;
     }
-    // list：选 item 类型
+    h+=`<tr><td colspan="6"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
+
+    // 展开行（输入字段）：值编辑（点值按钮展开字面量控件）/ 引用选择（点▾展开下拉）
+    if(kind==='in'&&_valEditing===('in:'+i)){
+      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px;white-space:nowrap">${_litControlHTML(f,i)} `
+        +`<button onclick="_valEditing=null;showProps()" style="font-size:10px" title="收起">✓</button></td></tr>`;
+    }
+    if(kind==='in'&&_refPicking===('in:'+i)){
+      const c=f.input?.value?.content;
+      let curRef='';
+      if(c?.source==='block-output'&&c.blockID)curRef=c.blockID+'.'+(c.name||'');
+      else if(c?.source==='loop-item')curRef='__item';
+      else if(c?.source==='loop-index')curRef='__index';
+      const inType=f.input?.type||'string';
+      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px;white-space:nowrap">`
+        +`<select style="width:auto;max-width:60%" onchange="quickSetRef(${i},this.value)">`
+        +`<option value=""${curRef?'':' selected'}>（字面量/未选）</option>`;
+      WF.nodes.forEach(on=>{
+        if(on.id===n.id)return;
+        _outFieldOptions(on).forEach(o=>{
+          if(o.type===inType||inType==='string'){
+            h+='<option value="'+on.id+'.'+o.path+'"'+(curRef===on.id+'.'+o.path?' selected':'')+'>'+nodeTitle(on)+' - '+o.path+'</option>';
+          }
+        });
+      });
+      h+=`<option value="__item"${curRef==='__item'?' selected':''}>item(整个)</option>`
+        +`<option value="__index"${curRef==='__index'?' selected':''}>index</option></select>`
+        +` <input placeholder="item字段" style="width:56px" value="${ext(c?.source==='loop-item'?(c.name||''):'')}" onchange="quickSetItemField(${i},this.value)">`
+        +` <input placeholder="global名" style="width:70px" value="${ext(String(c?.source||'').startsWith('global_variable')?((c.path||[])[0]||''):'')}" onchange="quickSetGlobal(${i},this.value)">`
+        +`</td></tr>`;
+    }
+    // list：item 行（item: [类型下拉]（object 时加 📋 导入/+子字段））
     if(t==='list'){
       const itemT=getListItemType(f);
-      h+=`<tr><td colspan="4" class="sub-fields"><span style="font-size:10px;color:#8a9099">list item 类型: </span><select style="width:auto;font-size:10px" onchange="setListItemType('${kind}',${i},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select></td></tr>`;
+      h+=`<tr><td colspan="6" class="sub-fields" style="font-size:10px;color:#8a9099">item: <select style="width:auto" onchange="setListItemType('${kind}',${i},this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${itemT===x?'selected':''}>${x}</option>`).join('')}</select>`
+        +(itemT==='object'
+          ?` <button onclick="importFieldSchema('${kind}','i${i}')" title="粘贴JSON，自动推断 item 字段结构（覆盖现有）" style="font-size:10px;padding:0 3px">📋</button>`
+           +` <button onclick="addSubFieldP('${kind}','i${i}')" title="添加 item 字段" style="font-size:10px;padding:0 3px">+</button>`:'')
+        +`</td></tr>`;
       if(itemT==='object') h+=renderObjectSubFields(f,kind,i,'list-item');
     }
     // object：子字段
@@ -1739,14 +1753,51 @@ function renderIOFields(arr,kind,lockedAll){
   h+='</table>';
   return h;
 }
+// ===== 输入字段值/引用的紧凑编辑（值按钮 + ▾ 引用选择展开）=====
+let _valEditing=null, _refPicking=null;   // 展开态：'in:<i>'（同一时刻只展开其一，互斥）
+// 值来源元信息：ref 绑定返回 {name: displayName}，literal/未绑定返回 null
+function _srcMeta(f){
+  const v=f.input?.value, c=v?.content;
+  if(v?.type==='literal'||!c||!c.source)return null;
+  if(c.source==='block-output'&&c.blockID){
+    const on=findN(c.blockID);
+    return {name:(on?nodeTitle(on):c.blockID)+'.'+(c.name||'')};
+  }
+  if(c.source==='loop-item')return {name:c.name?('item.'+c.name):'item'};
+  if(c.source==='loop-index')return {name:'index'};
+  if(String(c.source).startsWith('global_variable'))return {name:'global:'+((c.path||[])[0]||'')};
+  return null;
+}
+// 当前类型的字面量输入控件（展开行用）
+function _litControlHTML(f,i){
+  const t=f.input?.type||'string';
+  const cur=String(f.input?.value?.content ?? '');
+  if(t==='boolean')return `<input type="checkbox"${(cur==='true'||cur===true)?' checked':''} onchange="updateLitValB(${i},this.checked)" style="width:auto"> <span style="color:#8a9099">true / false</span>`;
+  if(['integer','number','float'].includes(t))return `<input type="number" value="${ext(cur)}" placeholder="数值字面量" style="width:90px" onchange="updateLitVal(${i},this.value)">`;
+  return `<input value="${ext(cur)}" placeholder="字面量值" style="width:140px" onchange="updateLitVal(${i},this.value)">`;
+}
+function toggleValEditor(i){_refPicking=null;_valEditing=(_valEditing===('in:'+i))?null:('in:'+i);showProps();}
+function toggleRefPicker(i){_valEditing=null;_refPicking=(_refPicking===('in:'+i))?null:('in:'+i);showProps();}
+function updateLitVal(i,v){setInputLitVal(i,v);showProps();}
+function updateLitValB(i,v){setInputLitVal(i,String(v));showProps();}
+function quickSetRef(i,val){
+  _refPicking=null;
+  if(val===''){setInputSource(i,'literal');showProps();return;}
+  if(val==='__item'){setInputSource(i,'item');showProps();return;}
+  if(val==='__index'){setInputSource(i,'index');showProps();return;}
+  setInputRef(i,val);   // 节点输出（含类型跟随），内部已 showProps
+}
+function quickSetItemField(i,name){setInputSource(i,name?('item.'+name):'item');}
+function quickSetGlobal(i,name){setInputSource(i,'global');if(name)setRefPath(i,name);}
+
 function renderObjectSubFields(f,kind,fi,ctx){
   let schema;
   if(ctx==='list-item'){schema=f.input?.schema||f.schema; if(Array.isArray(schema)){} else {schema=[];}}
   else {schema=f.schema||f.input?.schema||[];}
   if(!Array.isArray(schema))schema=[];
   const path=(ctx==='list-item'?'i':'f')+fi;
-  // 📋导入/+子字段 已上移到主字段行（×/🔒 与类型下拉之间），此处只留"子字段:"标签
-  let h=`<tr><td colspan="4" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段:</div>`;
+  // 📋导入/+子字段 已上移到主字段行（object）或 item 行（list<object>），此处只留"子字段:"标签
+  let h=`<tr><td colspan="6" class="sub-fields"><div style="font-size:10px;color:#8a9099">子字段:</div>`;
   h+=renderSchemaFields(schema,kind,path,0);
   h+='</td></tr>';
   return h;

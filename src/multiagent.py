@@ -662,6 +662,16 @@ def make_subagent_tools(agent) -> list:
                 base_fb = _parse_agent_fallback(_meta)
             except Exception:
                 pass
+        # 子 Agent 默认装 recap_gen（turn_end·async）：队友看板里的 recap 由本地小模型生成（零 token）。
+        # yml 未声明 hooks → 注入默认；已声明 turn_end 但缺 recap_gen → 追加；显式关（assembly 参数 hooks=off）→ 不注入。
+        if base_hooks is None:
+            base_hooks = {"turn_end": [{"kind": "workflow", "value": "recap_gen", "async": True}]}
+        else:
+            te = base_hooks.setdefault("turn_end", [])
+            if not any(it.get("value") == "recap_gen" for it in te):
+                te.append({"kind": "workflow", "value": "recap_gen", "async": True})
+        if base_asm and not any(it.get("kind") == "seg" and it.get("name") == "hooks" for it in base_asm):
+            base_asm.append({"kind": "seg", "name": "hooks"})   # hooks 段开关打开（hook_specs 才会被 _run_hooks 消费）
         if assembly:
             base_asm, asm_note = _apply_assembly_overrides(base_asm, assembly)
 

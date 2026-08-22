@@ -11,21 +11,22 @@
   <node id="120001" type="selector" title="cache_hit?" x="720" y="80">
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
   </node>
-  <node id="130001" type="llm" title="extract" x="723" y="267">
+  <node id="130001" type="llm" title="extract" x="1020" y="80">
     <in name="q" type="string" ref="100001.user_message"/>
-    <model>local-qwen</model>
     <param name="temperature" type="string"><![CDATA[0.2]]></param>
-    <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个关键词，中文优先，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
+    <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
     <param name="prompt" type="string"><![CDATA[{{q}}]]></param>
+    <model>local-qwen</model>
     <out name="output" type="string"/>
+    <batch enabled="false"/>
   </node>
-  <node id="130002" type="plugin" title="split" x="1009" y="263" toolName="split">
+  <node id="130002" type="plugin" title="split" x="1320" y="80" toolName="split">
     <in name="text" type="string" ref="130001.output"/>
     <in name="separator" type="string">|</in>
     <out name="raw" type="list"/>
     <out name="result" type="any" description="工具返回值"/>
   </node>
-  <node id="130003" type="code" title="clean" x="1317" y="253">
+  <node id="130003" type="code" title="clean" x="1620" y="80">
     <in name="items" type="list" ref="130002.raw"/>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 清洗：strip（模型可能在 | 两侧带空格/换行）、去空、去重（保序）、剔超长项
@@ -39,18 +40,18 @@
     <out name="keywords" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="140001" type="plugin" title="cache_write" x="1636" y="247" toolName="kv_cache_write">
+  <node id="140001" type="plugin" title="cache_write" x="1920" y="80" toolName="kv_cache_write">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="value" type="any" ref="130003.keywords"/>
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2243" y="98">
+  <node id="900001" type="end" title="Exit_hit" x="2520" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
   </node>
-  <node id="933950" type="aggregator" title="变量聚合" x="1947" y="95">
+  <node id="933950" type="aggregator" title="变量聚合" x="2220" y="80">
     <group name="Group1" type="list"><var ref="110001.value" type="list"/><var ref="130003.keywords" type="list"/></group>
   </node>
   <edge from="100001" to="110001"/>

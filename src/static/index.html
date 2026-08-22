@@ -54,7 +54,7 @@
   /* 手机端：控件区默认隐藏，点 + 按钮从输入框下方滑出 */
   @media (max-width:768px){
     #controls{ display:none; }
-    #controls.mobile-show{ display:flex; position:fixed; bottom:120px; left:0; right:0; z-index:50;
+    #controls.mobile-show{ display:flex; position:fixed; bottom:var(--ctl-bottom, 120px); left:0; right:0; z-index:50;
       max-height:40vh; overflow-y:auto; box-shadow:0 -4px 12px rgba(0,0,0,.1); border-radius:12px 12px 0 0; }
     #sendBtn.mobile-plus{ width:46px; height:46px; min-width:46px; padding:0; border-radius:50%;
       font-size:22px; line-height:1; display:flex; align-items:center; justify-content:center; }
@@ -195,7 +195,9 @@
   /* 气泡级复制按钮（user/answer 气泡 hover 浮现；挂在 row/col 上不被 answer 的 innerHTML 重写清掉） */
   .bubble-copy { position:absolute; top:100%; margin-top:2px; padding:2px 7px; font-size:11px;
     background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
-    opacity:0; transition:opacity .15s; z-index:5; }
+    opacity:0; transition:opacity .15s; z-index:5; pointer-events:none; }
+  /* 仅在气泡 hover 时恢复可点击，避免透明按钮溢出到输入框上方吞掉点击 */
+  .turn:hover .bubble-copy, .row.me:hover .bubble-copy { pointer-events:auto; }
   .bubble-copy:hover { background:#f3f4f6; color:#1f2329; }
   .row.me { position:relative; }
   .row.me:hover .bubble-copy { opacity:1; }
@@ -877,7 +879,7 @@ function copyCodeBtn(btn){
   } else { fallbackCopy(text,btn); }
 }
 function fallbackCopy(text,btn){
-  var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  var ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';
   document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='复制',1500); }catch(e){}
   document.body.removeChild(ta);
@@ -1222,7 +1224,7 @@ agentSel.addEventListener('change', ()=>{
   ws.send(JSON.stringify({action:'switch_agent', target_id: targetId}));
 });
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
-inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; updateSendBtn(); });
+inp.addEventListener('input', ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,140)+'px'; updateSendBtn(); syncMobileControlsPos(); });
 
 // ===== 手机端：输入框空=+按钮(展开控件)，有内容=发送按钮 =====
 function updateSendBtn(){
@@ -1240,6 +1242,12 @@ sendBtn.onclick = (e)=>{
   if(window.innerWidth <= 768 && !inp.value.trim() && !attachments.length){
     // 手机端空输入：展开/收起控件区
     const c = document.getElementById('controls');
+    const willShow = !c.classList.contains('mobile-show');
+    if(willShow){
+      // 面板 fixed 定位到 inputBar 顶边之上（textarea 可能被撑高，写死 120px 会压住输入框）
+      const barH = document.getElementById('inputBar').getBoundingClientRect().height;
+      c.style.setProperty('--ctl-bottom', (barH + 8) + 'px');
+    }
     c.classList.toggle('mobile-show');
     return;
   }
@@ -1251,6 +1259,13 @@ inp.addEventListener('focus', ()=>{ document.getElementById('controls').classLis
 // 初始化
 updateSendBtn();
 window.addEventListener('resize', updateSendBtn);
+// 手机端控件面板可见时，跟随 inputBar 实际高度调整 fixed 定位，避免压住被撑高的输入框
+function syncMobileControlsPos(){
+  const c = document.getElementById('controls');
+  if(!c.classList.contains('mobile-show')) return;
+  const barH = document.getElementById('inputBar').getBoundingClientRect().height;
+  c.style.setProperty('--ctl-bottom', (barH + 8) + 'px');
+}
 
 function attachRestoreButton(bubble, sha){
   if(!bubble || bubble.querySelector('.restore-btn')) return;

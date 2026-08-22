@@ -973,6 +973,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             if err:
                 agent.on_event({"type": "system", "text": f"⚠️ 无法恢复：{err}", "transient": True})
                 return
+            # 广播 turn_resume：前端据此清掉中断轮"继续"按钮、复用原容器继续（不新建轮）
+            _broadcast({"type": "turn_resume"})
             agent.run("", _resume_current=True)
         _work_q.put(("task", _do_resume))
         await _send(ws, {"type": "system", "text": "▶ 恢复中断轮，从断点继续…", "transient": True})

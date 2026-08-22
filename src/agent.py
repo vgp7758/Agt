@@ -1399,30 +1399,32 @@ class Agent:
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
             # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
-            bt_notes = [] if resumed else None   # resume 时跳过（该轮首轮已检索过，重跑浪费）
-            bt_ctx = {
-                "user_message": msg,
-                "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),
-            }
-            try:
-                from real_tools import WORKSPACE as _ws2
-                from workflow import get_hook_workflows
-                for aw in get_hook_workflows(_ws2, "before_turn"):
-                    if aw.get("auto_param"):
-                        bt_ctx[aw["auto_param"]] = msg
-            except Exception:
-                pass
-            bt_notes = self._run_hooks("before_turn", bt_ctx)
+            bt_notes = []   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走 _run_hooks
+            if not resumed:
+                bt_ctx = {
+                    "user_message": msg,
+                    "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),
+                }
+                try:
+                    from real_tools import WORKSPACE as _ws2
+                    from workflow import get_hook_workflows
+                    for aw in get_hook_workflows(_ws2, "before_turn"):
+                        if aw.get("auto_param"):
+                            bt_ctx[aw["auto_param"]] = msg
+                except Exception:
+                    pass
+                bt_notes = self._run_hooks("before_turn", bt_ctx)
             if bt_notes and not auto_flag:
                 # before_turn 对 user_message 做意图识别/预检索等预处理，结果作为【user 之后的补充】注入
                 # （不拼进 user 文本）：多个钩子合并成一组挂到当前 turn，session 投影时在 user 消息后渲染
                 parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in bt_notes]
                 self.session._current._before_turn_hint = (
                     '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>')
-            if not auto_flag:
-                self._emit({"type": "user", "text": msg, "image_count": len(imgs or [])})
-            else:
-                self._emit({"type": "autonomous_continue", "text": msg})
+            if not resumed:   # 中断轮续跑：首轮已发过 user/autonomous_continue 事件，不重发（否则前端误判为新轮）
+                if not auto_flag:
+                    self._emit({"type": "user", "text": msg, "image_count": len(imgs or [])})
+                else:
+                    self._emit({"type": "autonomous_continue", "text": msg})
             _LOG.info("run 开始 session=%s: %s", self.session.name or "(未命名)", (msg or "")[:60])
             if self.snapshot_manager is not None:
                 try:

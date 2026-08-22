@@ -674,9 +674,15 @@ function finishInterrupted(turnNo){
   scrollBottom();
 }
 function continueInterrupted(){
-  // 中断轮续跑：不新增 user_message——后端把中断轮弹回 _current 直接续 ReAct 循环
+  // 中断轮续跑：不新增 user_message——后端把中断轮弹回 _current 直接续 ReAct 循环。
+  // 保留 curTurn 指向中断轮容器（不清空），后续 step/trace 直接续进原容器，不新建轮。
   ws.send(JSON.stringify({action:'resume_interrupted'}));
-  setBusy(true); curTurn=null;
+  setBusy(true);
+  // 把"继续"按钮换成"恢复中"占位，待 turn_resume 事件清空并展开 trace
+  if(curTurn && curTurn.answerEl){
+    curTurn.answerEl.innerHTML = '<div class="interrupted-bar"><span>⏹ 本轮恢复中…</span></div>';
+    if(curTurn.det) curTurn.det.open=true;   // 展开过程，让续跑的 trace 可见
+  }
 }
 // —— 历史展开（读档默认只渲染当前档位，点蓝字往回展开一档）——
 let _histExpandFrom = 0;   // 当前渲染起点（0=已全部展开；>0=还有更早的档）
@@ -1768,6 +1774,11 @@ function onWSMessage(ev){
     case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
+    case 'turn_resume':
+      // 中断轮已从断点恢复：清掉"恢复中"占位，保持 curTurn 指向原容器续跑（不新建轮）。
+      // curTurn 可能因读档重渲染被置空——此时无需操作，后续 step 会自然建轮。
+      if(curTurn && curTurn.answerEl) curTurn.answerEl.innerHTML = '';
+      break;
     case 'interrupted': addRow('sys','⏹ 已中断'); setBusy(false); break;
     case 'autonomous_status':
       setAutonomousMode(!!m.active);

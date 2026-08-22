@@ -5,11 +5,35 @@
     <out name="turn_context" type="string"/>
     <out name="changed_calls" type="list" description="本轮产生文件变更的工具调用原文数组（引擎快照 diff 检出）"/>
   </node>
-  <node id="145000" type="subworkflow" title="snap_before" x="1020" y="80" workflowId="dir_snapshot">
-    <in name="path" type="string">.agent/wiki/</in>
-    <out name="snap" type="string"/>
-    <out name="error" type="string"/>
+  <node id="990001" type="code" title="check_changes" x="270" y="80">
+    <in name="changed_calls" type="list" ref="100001.changed_calls"/>
+    <code language="3"><![CDATA[import json
+async def main(args):
+    """短路检查：无文件变更 或 变更全部在 wiki 目录下（主 Agent 已维护）→ 跳过整个维护流程。
+    纯代码零 LLM 调用——比意图识别更前置，省 local-qwen 一次调用。"""
+    calls = args.params.get("changed_calls") or []
+    if isinstance(calls, str):
+        try: calls = json.loads(calls)
+        except Exception: calls = []
+    if not calls:
+        return {"has_code_changes": False, "wiki_touched": False, "reason": "本轮无文件变更"}
+    files = []
+    for c in calls:
+        files.extend((c.get("changed_files") or []))
+    def _norm(p):
+        return str(p).replace("\\", "/").lstrip("./")
+    code_files = [f.get("file", "") for f in files if not _norm(f.get("file", "")).startswith("agent/wiki/")]
+    wiki_touched = any(_norm(f.get("file", "")).startswith("agent/wiki/") for f in files)
+    return {"has_code_changes": bool(code_files),
+            "wiki_touched": wiki_touched,
+            "reason": "" if code_files else "本轮无代码文件变更"}]]></code>
+    <out name="has_code_changes" type="boolean"/>
+    <out name="wiki_touched" type="boolean"/>
+    <out name="reason" type="string"/>
     <batch enabled="false"/>
+  </node>
+  <node id="990002" type="selector" title="worth_running?" x="560" y="80">
+    <branch><cond op="1" left="990001.has_code_changes" right="True" left_type="boolean" right_type="boolean"/></branch>
   </node>
   <node id="140001" type="plugin" title="update_wiki" x="1920" y="80" toolName="update_wiki">
     <in name="summary" type="string" ref="336423.output"/>
@@ -113,7 +137,10 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="150001" to="900001"/>
   <edge from="147000" to="900001" port="false"/>
   <edge from="1030169" to="682383"/>
-  <edge from="100001" to="1030169"/>
+  <edge from="100001" to="990001"/>
+  <edge from="990001" to="990002"/>
+  <edge from="990002" to="1030169" port="true"/>
+  <edge from="990002" to="900001" port="false"/>
   <edge from="682383" to="145000" port="branch_0"/>
   <edge from="140001" to="1257593"/>
   <edge from="148000" to="150001"/>

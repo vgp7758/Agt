@@ -171,6 +171,30 @@ def _hook_item_from_str(s: str) -> dict:
     return {"kind": "workflow", "value": main.strip(), **flags}
 
 
+def _parse_agent_fallback(meta: dict):
+    """frontmatter/yml 的 fallback 字段 → (chain: list[str], policy: str|None) 或 None（未声明）。
+    形态：'a, b'（串=只有链）/ [a, b]（list）/ {chain: ..., policy: sticky|reset}（完整声明）。
+    显式空串/空 list = 关回退（与全局 settings 隔离）；未声明（None）= 继承全局 settings
+    （/model、WebUI 配的——语义上是主 Agent 的用户配置）。"""
+    raw = meta.get("fallback")
+    if raw is None:
+        return None
+    policy = None
+    if isinstance(raw, dict):
+        chain = raw.get("chain", [])
+        policy = str(raw.get("policy") or "").strip().lower() or None
+    else:
+        chain = raw
+    if isinstance(chain, str):
+        chain = [m.strip() for m in chain.split(",") if m.strip()]
+    else:
+        chain = [str(m).strip() for m in (chain or []) if str(m).strip()]
+    if policy not in ("sticky", "reset", None):
+        _LOG.warning("fallback policy '%s' 未知（sticky|reset），按默认", policy)
+        policy = None
+    return chain, policy
+
+
 def _parse_hooks(meta: dict) -> dict:
     """frontmatter/yml 的 hooks 字段 → {hook位置: [{kind, value, async...}]}。
     项格式：'workflow: x' / 'x'（裸名=workflow）/ 'cmd: ...' / 'emit: ...'，
@@ -624,16 +648,18 @@ def make_subagent_tools(agent) -> list:
         caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
         reg = getattr(agent, "registry", None)
         asm_note = ""
-        # 读声明文件的 assembly 基线清单 + hooks 声明（复用/复活/新建三条路径都要；读不到为 None=默认）
+        # 读声明文件的 assembly 基线清单 + hooks 声明 + fallback 模型链（复用/复活/新建三条路径都要）
         p_md = _agent_def_path(name)
         base_asm = None
         base_hooks = None
+        base_fb = None
         if p_md is not None and p_md.exists():
             try:
                 from agent_config import load_agent_yml
                 _meta, _ = load_agent_yml(p_md)
                 base_asm = _parse_assembly(_meta)
                 base_hooks = _parse_hooks(_meta) or None
+                base_fb = _parse_agent_fallback(_meta)
             except Exception:
                 pass
         if assembly:
@@ -762,6 +788,8 @@ def make_subagent_tools(agent) -> list:
                 entry.agent.session.set_assembly_plan(base_asm)  # assembly：声明基线清单 + 参数覆盖（本次生效）
                 if base_hooks is not None:
                     entry.agent.session.hook_specs = base_hooks
+                if base_fb is not None:   # fallback：yml 声明（改链后复用实例下一任务即生效）
+                    entry.agent.llm.set_fallback(base_fb[0], base_fb[1])
                 with reg._lock:
                     entry.task = prompt
                     entry.caller_id = caller_id
@@ -778,6 +806,8 @@ def make_subagent_tools(agent) -> list:
                     sub_agent.session.set_assembly_plan(base_asm)   # assembly：复活路径同样应用（声明基线 + 参数覆盖）
                     if base_hooks is not None:
                         sub_agent.session.hook_specs = base_hooks
+                    if base_fb is not None:
+                        sub_agent.llm.set_fallback(base_fb[0], base_fb[1])
                     reg.register(entry.agent_id, name, "subagent", model_name,
                                  agent=sub_agent, task=prompt, status="running",
                                  caller_id=caller_id)
@@ -817,6 +847,8 @@ def make_subagent_tools(agent) -> list:
                            assembly=(base_asm or None))
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks
+            if base_fb is not None:
+                sub.agent.llm.set_fallback(base_fb[0], base_fb[1])
             if reg:
                 reg.register(aid, name, "subagent", model_name,
                              agent=sub.agent, task=prompt, status="running",

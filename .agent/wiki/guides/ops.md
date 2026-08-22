@@ -34,11 +34,15 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 - **缓存命中率折线**：横轴=调用序列等间距（真实时间看 tooltip）；双端滑块选窗口（如 #650~#850），窗口内统计+图形缩放
 - **默认显示范围**：最近 **200 条**调用记录（不足 200 则全量）——滑块初始窗口不再是全量，长会话打开即聚焦近期，拖双端滑块可回看更早（commit bd0d1ef）
 - **端点聚合**：`provider/resp_model`（回包实际模型）相同=同端点——proxy 内部路由可见
+- **拖拽扫描交互（commit af66c0f）**：按住左键在图形区域内拖动 → 鼠标位置出现一条沿 y 轴的**虚线吸附竖线**，x 锁定到鼠标当前位置**左侧最近折线点**的 x 坐标，竖线旁同步显示该点 tooltip；松开 / 移出图区即消失。解决 hover 小圆点需精确移到点附近才出 tooltip 的定位不便——横扫即可逐点查看
+  - 实现：SVG 内联后立即执行 `bindScan()` IIFE——收集窗口内全部折线点（visible 各模型的 pts 中 gi∈[lo,hi]）按 gi 升序排序，拖拽时鼠标位置换算到 SVG viewBox 坐标做最近点吸附
+  - 细节：tooltip 靠右缘自动左翻；拖拽中 `user-select:none` 防选中文字；SVG 外松手后回到图内自动清理；每次刷新重建 SVG 时重绑（无泄漏）
+  - 原 hover 小圆点 tooltip **保留并存**（两种查看方式）；纯前端改动，Ctrl+F5 刷新即生效，不需 /restart
 - tooltip：序号/时间（**精确到秒**，bd0d1ef 前为分钟级）/命中率/具体 cached/prompt tokens/**scene**（调用时机）/**turn/step 轮步标记**（commit 4aced81）
   - turn/step 标记格式：`· t{轮号} · s{步号}`（如 `· t206 · s6`）
   - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.txt`
   - 老记录（/restart 前生成的）无 turn/step 字段，tooltip 自动省略该段
-  - 使用场景：从 /stats 折线图发现异常点（如缓存单步深跌）→ hover tooltip 获取 t{N}·s{M} → 直接打开 `projections/t{N}_s{M}_*.txt` 查看当时完整投影，快速定位升档/折叠等事件断点
+  - 使用场景：从 /stats 折线图发现异常点（如缓存单步深跌）→ 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 直接打开 `projections/t{N}_s{M}_*.txt` 查看当时完整投影，快速定位升档/折叠等事件断点
 
 ### llm_calls.jsonl 每条记录
 
@@ -87,7 +91,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 空响应连续 3 次 | 限流/服务波动 → 自动退避重试+回退；ModelScope 空壳 200 是已知病 |
 | 回答是 XML 状 `<｜｜DSML｜｜invoke...` | 模型把工具调用泄进 content → llm_client 自动兜底解析；仍残留会提示重试 |
 | tool_calls 与 content 同现 | 思考误放 content → 自动转移 content→reasoning（投影保 CoT） |
-| /stats 命中率**单步深跌**（如 98%+ miss），下一步即恢复 ~99.9% | **折叠（fold）事件，预期一次性成本，无需处置**：轮边界 `_plan_fold` 计划触发全档折叠，历史段整段全价重算（t206_s7 实证，见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）。新模型下折叠只在**轮边界**统一计划（先升档到 75% 再折叠到 75%），不再轮内随机触发——单步深跌即轮边界重排的代价，之后轮内零调整、缓存整段命中。区别于：持续骤降且与 utility 交错=驱逐；恒 0=随机路由（见下行两条）。**排障速查**：/stats 折线图看到异常点 → hover tooltip 获取 t{N}·s{M} → 打开 `projections/t{N}_s_{M}*.txt` 直接看当时完整投影（见 [turn/step 轮步标记](#stats-页webui-统计按钮)） |
+| /stats 命中率**单步深跌**（如 98%+ miss），下一步即恢复 ~99.9% | **折叠（fold）事件，预期一次性成本，无需处置**：轮边界 `_plan_fold` 计划触发全档折叠，历史段整段全价重算（t206_s7 实证，见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）。新模型下折叠只在**轮边界**统一计划（先升档到 75% 再折叠到 75%），不再轮内随机触发——单步深跌即轮边界重排的代价，之后轮内零调整、缓存整段命中。区别于：持续骤降且与 utility 交错=驱逐；恒 0=随机路由（见下行两条）。**排障速查**：/stats 折线图看到异常点 → 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 打开 `projections/t{N}_s_{M}*.txt` 直接看当时完整投影（见 [turn/step 轮步标记](#stats-页webui-统计按钮)） |
 | 某端点缓存命中骤降 | per-token 驱逐：utility 与 react 共用 token → 分条目分 token |
 | 某端点命中率恒 0 | 随机路由或 provider 不支持缓存 → 链路后置 |
 | 中断轮"消失" | 已修复（start_turn 防御归档，answer=中断标注）；旧数据读档可見 |

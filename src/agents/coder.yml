@@ -2,6 +2,10 @@ name: coder
 description: 写代码实现功能。何时调用：需要实现/修改代码（写函数、修 bug、加功能）时。
 tools: run_python, write_file, edit, read_file, grep
 model:
+# 本 agent 专属回退链（声明后与全局 settings 隔离；未声明则继承全局——/model、WebUI 配的）
+# fallback:
+#   chain: deepseek, kimi
+#   policy: sticky
 assembly:
   - text: |
       你是 coder，一个**写代码**子 Agent。规则：

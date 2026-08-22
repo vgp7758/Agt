@@ -187,13 +187,15 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     asm_plan = None
     hook_specs = None
     model_name = None
+    main_fb = None
     try:
         meta, _ = load_agent_yml(main_yml)
         if meta:
-            from multiagent import _parse_assembly, _parse_hooks
+            from multiagent import _parse_assembly, _parse_hooks, _parse_agent_fallback
             asm_plan = _parse_assembly(meta)
             hook_specs = _parse_hooks(meta)
             model_name = (meta.get("model") or "").strip() or None
+            main_fb = _parse_agent_fallback(meta)
     except Exception as e:
         if verbose:
             print(f"[main.yml] 读取失败（{e}），回退内置 SYSTEM + 默认装配")
@@ -216,6 +218,9 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
                       enable_thinking=True, max_steps=50, token_budget=80000,
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
                       registry=agent_registry)
+    # main.yml 声明了 fallback 时覆盖全局 settings（未声明=走 /model、WebUI 配的全局链）
+    if main_fb is not None:
+        agent.llm.set_fallback(main_fb[0], main_fb[1])
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace

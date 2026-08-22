@@ -155,6 +155,8 @@ class LLMClient:
         enable_thinking: bool = True,
         max_tokens: Optional[int] = None,
         max_retries: int = 3,
+        fallback_chain: Optional[list] = None,
+        fallback_policy: Optional[str] = None,
     ):
         if profile is None:
             model_name = model_name or config.DEFAULT_MODEL
@@ -170,30 +172,36 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
-        self._base_fallback_chain: list[str] = []  # settings.json 配置的原回退链（不变）
+        self._base_fallback_chain: list[str] = []  # 原回退链（构造参数显式传入 或 settings.json 配置；不变）
         self.fallback_chain: list[str] = []   # 运行时有效回退链（= _user_model 提前 + base 其余）
         self.fallback_policy: str = "sticky"  # reset=每轮回 _user_model / sticky=回退后不动
-        # 从 settings.json 加载回退配置（fallback_chain 逗号分隔 / fallback_policy）
-        try:
-            _rt = config.load_runtime_settings()
-            _bc = (_rt.get("fallback_chain") or "").strip()
-            if _bc:
-                self._base_fallback_chain = [m.strip() for m in _bc.split(",") if m.strip()]
-            _fp = (_rt.get("fallback_policy") or "").strip().lower()
-            if _fp in ("sticky", "reset"):
-                self.fallback_policy = _fp
-        except Exception:
-            pass
+        self._fallback_owned = False          # 本实例的回退链来自 agent .yml 显式声明（而非全局 settings）
+        # 回退配置来源：构造参数显式传入（agent .yml 声明）优先；否则读全局 settings.json
+        # （/model、WebUI 配置的——语义上是主 Agent 的用户配置，未声明的子 Agent 继承它）
+        if fallback_chain is not None:
+            self._base_fallback_chain = [str(m).strip() for m in fallback_chain if str(m).strip()]
+            self._fallback_owned = True
+            if fallback_policy in ("sticky", "reset"):
+                self.fallback_policy = fallback_policy
+        else:
+            try:
+                _rt = config.load_runtime_settings()
+                _bc = (_rt.get("fallback_chain") or "").strip()
+                if _bc:
+                    self._base_fallback_chain = [m.strip() for m in _bc.split(",") if m.strip()]
+                _fp = (_rt.get("fallback_policy") or "").strip().lower()
+                if _fp in ("sticky", "reset"):
+                    self.fallback_policy = _fp
+            except Exception:
+                pass
         # reasoning 补全模型：settings.json 显式配置优先；未配时回退统一辅助模型（utility_model）
         try:
-            _rc = (_rt.get("reasoning_completer") or "").strip()
+            _rt2 = config.load_runtime_settings()
+            _rc = (_rt2.get("reasoning_completer") or "").strip()
+            if not _rc:
+                _rc = (_rt2.get("utility_model") or "").strip()
         except Exception:
             _rc = ""
-        if not _rc:
-            try:
-                _rc = (_rt.get("utility_model") or "").strip()
-            except Exception:
-                _rc = ""
         self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=utility_model）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
         # 初始建链：_user_model（构造时的 model_name）提前 + base 其余。此前只在 switch_model(_user_initiated)
@@ -253,6 +261,21 @@ class LLMClient:
         if _user_initiated:
             self._user_model = name
             self._rebuild_chain()
+        return self
+
+    def set_fallback(self, chain, policy: Optional[str] = None) -> "LLMClient":
+        """设置本实例的回退链/策略（agent .yml 声明的 fallback 注入用，SubAgent 三路径调用）。
+        chain: list[str] 或逗号分隔串（空 = 关回退——显式声明空即与全局 settings 隔离）；
+        policy: sticky | reset，None = 不改。标记 _fallback_owned 后，WebUI/全局配置不再覆盖。"""
+        if isinstance(chain, str):
+            chain = [m.strip() for m in chain.split(",") if m.strip()]
+        else:
+            chain = [str(m).strip() for m in (chain or []) if str(m).strip()]
+        self._base_fallback_chain = list(chain)
+        self._fallback_owned = True
+        if policy in ("sticky", "reset"):
+            self.fallback_policy = policy
+        self._rebuild_chain()
         return self
 
     def _rebuild_chain(self):

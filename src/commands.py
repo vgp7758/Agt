@@ -284,6 +284,9 @@ def apply_config(agent, values: dict) -> list:
         eff = agent.llm.fallback_chain
         results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}"
                        + (f"\n  有效链（{agent.llm._user_model} 在首）：{' → '.join(eff)}" if eff else ""))
+        if getattr(agent.llm, "_fallback_owned", False):
+            results.append("  ⚠️ 本 agent 的回退链由 .yml 声明锁定（fallback:），此次为运行时临时覆盖，重启后恢复 yml 声明；"
+                           "子 Agent 若在 .yml 声明了 fallback 则不受此全局设置影响")
     # max_level：分档最高级别（设 session + 存 settings.json；改了清冻结缓存让其按新上限重算）
     if "max_level" in values:
         v = values.pop("max_level")

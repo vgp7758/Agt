@@ -233,7 +233,7 @@ function _pushSubRows(rows,nodeId,side,prefix,schema,parentKey,depth){
     if(st==='object'&&!collapsedFields.has(key))_pushSubRows(rows,nodeId,side,path,s.schema,key,depth+1);
   });
 }
-function nodeH(n){
+function _baseH(n){
   const rows=nodeRows(n).filter(r=>
     (n.type==='1'?r.side==='out':n.type==='2'?r.side==='in':true));
   const inRows=rows.filter(r=>r.side==='in').length;
@@ -249,7 +249,36 @@ function nodeH(n){
   if(n.type==='22'){                 // 意图识别：分支出口行高度
     h+=((n.data.inputs?.intents||[]).length+1)*22+10;
   }
+  if(n.type==='32'){                 // 聚合节点：分组行动态高度（与 renderNode 的 gy 累加一致）
+    const groups=n.data.inputs?.mergeGroups||[];
+    let gy=HDR_H+8;
+    groups.forEach(grp=>{const vars=grp.variables||[];gy+=28+Math.max((vars.length-1)*18,0)+10;});
+    h=gy+20;
+  }
   return h;
+}
+// ===== 调试输出框：节点有执行输出时在节点下方挂白框（点击头条折叠/展开）=====
+let dbgCollapsed=new Set();   // 折叠输出框的节点 id（跨 renderAll 保持）
+function _dbgBoxText(n){
+  const out=dbgOut[n.id];
+  if(out===null||out===undefined) return '(无输出)';
+  if(typeof out!=='object') return String(out);
+  const lines=[];
+  Object.entries(out).forEach(([k,v])=>{
+    let s;
+    if(typeof v==='string') s=v.length>240? v.slice(0,240)+'…' : v;
+    else { try{s=JSON.stringify(v);}catch(e){s=String(v);} if(s&&s.length>240)s=s.slice(0,240)+'…'; }
+    lines.push(k+': '+s);
+  });
+  return lines.join('\n')||'(空)';
+}
+function _dbgBoxH(n){
+  if(dbgCollapsed.has(n.id)) return 20;
+  const lines=Math.min(_dbgBoxText(n).split('\n').length, 16);
+  return lines*13+26;
+}
+function nodeH(n){
+  return _baseH(n)+(dbgOut[n.id]!==undefined?_dbgBoxH(n):0);
 }
 const TEXTAREA_H=120;
 // 聚合节点(type32) 分组布局：复刻 renderNode 的 y 公式（gy 动态累加，非 ROW_H 网格），
@@ -288,9 +317,9 @@ function flowInPos(n){return{x:n.x, y:n.y+HDR_H/2};}
 // fallbackIdx：当 portID 非标准（如模型手写的 'stats_phase'，执行器/本编辑器都不认）时，
 // 按该边在源节点出边中的顺序兜底定位到对应分支端口，保证至少视觉对齐。
 function flowOutPosFor(n, portID, fallbackIdx){
-  // error 端口（{nodeId}_error 或统一 error）：普通节点在右下角（nodeH-6）
+  // error 端口（{nodeId}_error 或统一 error）：普通节点在右下角（baseH-6，不含调试输出框高度）
   if(portID && (portID===n.id+'_error' || portID==='error') && !['8','22'].includes(n.type)){
-    return {x:n.x+n.w, y:n.y+nodeH(n)-6};
+    return {x:n.x+n.w, y:n.y+_baseH(n)-6};
   }
   if(!['8','22'].includes(n.type)) return flowOutPos(n);
   const baseY = HDR_H + Math.max(nodeInputs(n).length, nodeOutputs(n).length)*ROW_H;
@@ -471,8 +500,8 @@ function renderNode(n){
   const g=elm('g',{transform:`translate(${n.x},${n.y})`,'data-id':n.id});
   n.h=nodeH(n);
   const cat=TYPE_CATEGORY[n.type]||'llm';
-  // 体
-  const _st=nodeStatus[n.id]; g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')+(_st?(' '+_st):'')}));
+  // 体（高度=基础高度；调试输出框在基础高度之下单独渲染，不计入 body）
+  const _st=nodeStatus[n.id]; g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:_baseH(n),class:'node-body'+(selNode===n.id?' sel':'')+(_st?(' '+_st):'')}));
   // 标题栏
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:4,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
@@ -491,7 +520,7 @@ function renderNode(n){
     fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
     g.appendChild(fOut);
     // 默认 error 输出端口（节点报错时走此端口，port 名 = {nodeId}_error），节点右下角
-    const eOut=elm('circle',{cx:n.w,cy:nodeH(n)-6,r:4,fill:'#ef4444',stroke:'#ef4444','stroke-width':1.5,cursor:'crosshair',title:'错误出口（节点报错时走此端口）'});
+    const eOut=elm('circle',{cx:n.w,cy:_baseH(n)-6,r:4,fill:'#ef4444',stroke:'#ef4444','stroke-width':1.5,cursor:'crosshair',title:'错误出口（节点报错时走此端口）'});
     eOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id,n.id+'_error');};
     g.appendChild(eOut);
   }
@@ -651,17 +680,11 @@ function renderNode(n){
 
   // 聚合节点(type32)：先算高度，不重画rect只更新height
   if(n.type==='32'){
+    // bodyRect 高度 = 基础高度（_baseH 已含 32 的分组动态高度；调试输出框在其下）
+    const bodyRect=g.querySelector('.node-body');
+    if(bodyRect) bodyRect.setAttribute('height', _baseH(n));
     const groups=n.data.inputs?.mergeGroups||[];
     let gy=HDR_H+8;
-    groups.forEach(grp=>{
-      const vars=grp.variables||[];
-      gy+=28+Math.max((vars.length-1)*18,0)+10;
-    });
-    n.h=gy+20;
-    // 更新已画的 rect height
-    const bodyRect=g.querySelector('.node-body');
-    if(bodyRect) bodyRect.setAttribute('height', n.h);
-    gy=HDR_H+8;
     groups.forEach(grp=>{
       const gname=grp.name||'?';
       const gtype=nodeOutputs(n).find(o=>o.name===gname)?.type||'string';
@@ -722,8 +745,43 @@ function renderNode(n){
       g.appendChild(codePreview);
     }
   }
+  // 调试输出框：节点有执行输出时在节点下方挂白框（foreignObject，白底黑字 + 可折叠头条）
+  _renderDbgBox(g,n);
   return g;
 }
+
+// 调试输出框渲染（白框：顶部折叠条 + 内容区；y = bodyRect 实际高度之下——
+// type22/32 的 body 高度在校正后被改过，从 rect 读取最准）
+function _renderDbgBox(g,n){
+  if(dbgOut[n.id]===undefined)return;
+  const br=g.querySelector('.node-body');
+  const baseH=br?parseFloat(br.getAttribute('height'))||_baseH(n):_baseH(n);
+  const collapsed=dbgCollapsed.has(n.id);
+  const h=_dbgBoxH(n);
+  const fo=document.createElementNS(NS,'foreignObject');
+  fo.setAttribute('x',0);fo.setAttribute('y',baseH+2);
+  fo.setAttribute('width',n.w);fo.setAttribute('height',h);
+  const div=document.createElement('div');
+  div.style.cssText='width:100%;height:100%;background:#fff;color:#111;border:1px solid #999;border-radius:3px;font-size:10px;font-family:monospace;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box';
+  // 顶部折叠条（点击折叠/展开）
+  const head=document.createElement('div');
+  head.style.cssText='flex:0 0 18px;display:flex;align-items:center;gap:5px;padding:0 6px;background:#e8e8e8;border-bottom:1px solid #ccc;cursor:pointer;user-select:none';
+  const nk=Object.keys(dbgOut[n.id]||{}).length;
+  head.innerHTML='<span>'+(collapsed?'▸':'▾')+'</span><span style="font-weight:600">输出</span><span style="color:#888">'+nk+' 字段</span>';
+  head.onclick=(e)=>{e.stopPropagation();toggleDbgBox(n.id);};
+  head.onmousedown=(e)=>e.stopPropagation();
+  div.appendChild(head);
+  if(!collapsed){
+    const body=document.createElement('div');
+    body.style.cssText='flex:1;overflow:auto;padding:3px 6px;white-space:pre-wrap;word-break:break-all';
+    body.textContent=_dbgBoxText(n);
+    body.onmousedown=(e)=>e.stopPropagation();
+    div.appendChild(body);
+  }
+  fo.appendChild(div);fo.style.pointerEvents='auto';
+  g.appendChild(fo);
+}
+function toggleDbgBox(id){if(dbgCollapsed.has(id))dbgCollapsed.delete(id);else dbgCollapsed.add(id);renderAll();}
 
 // 未连线输入控件（placeholder=字段名，宽度由调用方设置）
 function makeInputControl(n,p,i,ph){

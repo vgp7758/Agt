@@ -92,3 +92,14 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **subworkflow 节点 literal 属性约定（2026-08）**：subworkflow(9) 节点调用子工作流传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`）。子元素形式会导致参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206。实例：wiki_auto_maintenance 的 snap_before 传 `path=".agent/wiki/"`（见 [快照重构中的 literal 坑](../features/wiki-auto-maintenance.md#subworkflow-节点-literal-属性坑2026-08-修复)）
 - **工具节点输出是 dict（2026-08 修复，commit edd9851）**：`wf_diff_snapshots` 等**工具节点** raw 返回 **dict**（Tool.run() 把 end 的 dict json.dumps 成字符串 → `_handle_plugin._try_parse` 又解析回 Python dict），消费端必须引用**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。实例见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08commit-edd9851)
 - **subworkflow 节点输入框字面量保存后重开变空（2026-08 修复，commit 910fc1b）**：type 9 节点的输入框（画布节点内，非右侧属性面板）手动输入字面量保存后，重新打开工作流输入框变空——**根因在前端 `syncSubworkflowNode`**（openWf 时对 type 9 节点重跑 schema 同步：只保留连线、丢字面量，默认值造出 `blockID=''` 的空 ref → 输入框空白）。修复：连线 ref 完整保留 + 非空字面量保留，默认值改空 literal。生效需 `/restart` + Ctrl+F5。详见 [wiki-auto-maintenance · path 字面量坑](../features/wiki-auto-maintenance.md#path-字面量保存后重开变空2026-08-修复commit-910fc1b)
+- **aggregator(32) 选值语义修复：第一个「执行过且值非空」（2026-08，commit 5117f41）**：`_handle_aggregator` 的 block-output 分支旧版**只判断「blockID 执行过」不判断值有没有**——var1 引用的上游节点执行了（在 `node_outputs` 里）、但它引用的**字段**解析为 None（分支没走到该字段 / 输出为空）→ `chosen=None` + `break`，整组直接 null，后续 var2 有值也被跳过（用户报告「var1=null 直接分组返回 null」）。修复后的选值语义：
+
+  | 变量情形 | 行为 |
+  |---|---|
+  | block-output 执行过 + 值非 None/非空串 | 选定 ✓ |
+  | 执行过但值为 None/空串 | 记为兜底，**继续找后面的变量** |
+  | 未执行 | 跳过，继续找后面的变量 |
+  | 全部执行过但都无值 | 兜底第一个执行过的值（执行过优先） |
+  | 字面量 / 全局变量 | 非 None 即选（原行为不变） |
+
+  **关键取舍**：空列表/空 dict 是合法值**不**触发跳过——`filtered_outputs=[]` 是批处理节点的合法产出（0 条命中也是有意义的信息）；只有 None 和空串（解析不到 / 渲染为空）才继续往后找。九场景验证通过（含 var1 未执行取 var2、空列表不误判、多分组互不影响）；引擎层修复需 `/restart` 生效。

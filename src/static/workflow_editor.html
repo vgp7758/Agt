@@ -243,7 +243,6 @@ function nodeH(n){
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
   if(n.type==='3') h+=TEXTAREA_H;    // LLM 节点：提示词框（与文本节点同款，画布直接编辑 prompt）
-  if(n.type==='5') h+=40;            // 代码节点：预览行
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
     h+=(brs+1)*22+8;
@@ -789,16 +788,6 @@ function renderNode(n){
     dragStartX=sp.x; dragStartY=sp.y;   // 记录起点：mouseup 判定点击 vs 拖拽
     selNode=n.id; selEdge=null; renderAll();   // 仅选中高亮，弹面板延后到 mouseup（拖动不弹）
   };
-  // 代码节点：画布上显示前几行代码预览
-  if(n.type==='5'){
-    const codePreview=makeCodePreview(n);
-    if(codePreview){
-      const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-      codePreview.setAttribute('x',6);codePreview.setAttribute('y',yBase);
-      codePreview.setAttribute('width',n.w-12);codePreview.setAttribute('height',36);
-      g.appendChild(codePreview);
-    }
-  }
   return g;
 }
 
@@ -1700,9 +1689,17 @@ function renderIOFields(arr,kind,lockedAll){
         +`<td style="flex:0 0 auto;white-space:nowrap">${midBtns}</td>`
         +_delTd+`</tr>`;
     }else{
+      // 输出字段：object（或 list<object>）同样给 📋/+ 编辑结构（resolveSchemaHolder 的 'f' 路径对 outputs 同样生效——f.schema）
+      let _omb='';
+      if(t==='object'||(t==='list'&&getListItemType(f)==='object')){
+        const _op=(t==='list'?'i':'f')+i;
+        _omb=`<button onclick="importFieldSchema('out','${_op}')" title="粘贴JSON对象，自动推断结构（覆盖现有）" style="font-size:9px;padding:0 4px">📋</button>`
+           +`<button onclick="addSubFieldP('out','${_op}')" title="添加子字段" style="font-size:9px;padding:0 4px">+</button>`;
+      }
       h+=`<tr style="display:flex;width:100%;gap:2px;align-items:center">`
         +`<td style="flex:1 1 56px;min-width:40px"><input value="${ext(f.name)}" onchange="setField('${kind}',${i},'name',this.value)"></td>`
         +`<td style="flex:0 0 74px">${_typeSel}</td>`
+        +`<td style="flex:0 0 auto;display:flex;gap:1px">${_omb}</td>`
         +`<td style="flex:1"></td>`+_delTd+`</tr>`;
     }
     h+=`<tr><td colspan="6"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
@@ -1853,8 +1850,7 @@ function renderSchemaFields(schema,kind,path,depth){
       }
     }
   });
-  // 顶层（depth=0）的"+ 子字段"已上移到主字段行；嵌套层（depth>0）保留各自的 + 按钮
-  if(depth) h+=`<button onclick="addSubFieldP('${kind}','${path}')" style="font-size:10px">+ 子字段</button>`;
+  // 顶层（depth=0）与嵌套层的"+ 子字段"都已上移到各字段行内（object 行的 [+]）——块底不再重复
   h+='</div>';
   return h;
 }

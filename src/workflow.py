@@ -1290,9 +1290,34 @@ def _is_null_output(out: dict) -> bool:
     return all(v is None or v == "" or v == [] or v == {} for v in vals)
 
 
+# 不需要右值的运算符（为空/非空/True/False）——右侧残留的未设置值不应影响判断
+_RIGHTLESS_OPS = {9, 10, 11, 12}
+
+
+def _filter_input_unset(block_input) -> bool:
+    """筛选条件的左/右值是否处于「未设置」状态：input 缺失 / 空 ref（blockID 与 name 均空，
+    即编辑器下拉的「左值…」「右值…」占位未选）/ 空 literal。
+    半成品条件不拦截数据——_eval_batch_filter 对未设置侧按恒真处理。"""
+    if not isinstance(block_input, dict):
+        return True
+    val = block_input.get("value")
+    if not isinstance(val, dict):
+        return True
+    vt = val.get("type")
+    if vt == "ref":
+        c = val.get("content") or {}
+        if c.get("source") in ("loop-item", "loop-index"):
+            return False                      # loop 引用恒有意义
+        return not (str(c.get("blockID", "")).strip() or str(c.get("name", "")).strip())
+    if vt == "literal":
+        return val.get("content") in (None, "")
+    return False
+
+
 def _eval_batch_filter(condition: dict, output: dict) -> bool:
     """批处理筛选：复用 Selector 的 condition 结构，left 引用本次输出字段。
-    left 的 ref 用特殊 blockID='__batch_output__' 指向本次 output。"""
+    left 的 ref 用特殊 blockID='__batch_output__' 指向本次 output。
+    左/右值未设置（编辑器占位未选）→ 该条件恒真——半成品条件不拦截数据。"""
     class _Proxy:
         node_outputs = {"__batch_output__": output}
         global_vars = {}
@@ -1302,11 +1327,18 @@ def _eval_batch_filter(condition: dict, output: dict) -> bool:
     results = []
     for c in conds:
         left_input = (c.get("left") or {}).get("input")
-        right_input = (c.get("right") or {}).get("input") if "right" in c else None
+        op = c.get("operator")
+        # 右值仅在"用到右值的运算符"（1-8/13-16）下参与未设置判定——9-12（为空/非空/True/False）
+        # 不需要右值，编辑器隐藏右值控件后残留的空值不应让条件恒真跳过左值检查
+        has_right = "right" in c and op not in _RIGHTLESS_OPS
+        right_input = (c.get("right") or {}).get("input") if has_right else None
+        if _filter_input_unset(left_input) or (has_right and _filter_input_unset(right_input)):
+            results.append(True)
+            continue
         # 把 left 的 ref blockID 重定向到本次 output
         l = _redirect_ref(left_input, output)
         r = _resolve_filter_value(right_input, output)
-        results.append(_cmp(c.get("operator"), l, r))
+        results.append(_cmp(op, l, r))
     if not results:
         return True
     return any(results) if logic == 1 else all(results)

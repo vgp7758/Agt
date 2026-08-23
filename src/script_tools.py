@@ -68,13 +68,19 @@ def _tool_from_desc(desc: dict, path: Path) -> Tool:
     name = str(desc.get("name") or "").strip()
     if not name:
         raise ValueError("描述符缺 name")
-    description = str(desc.get("description") or "").strip() or name
+    mode = str(desc.get("mode") or "inline").strip().lower()
+    # 描述回退链：描述符 description → inline 函数 docstring → 工具名。
+    # （此前缺 description 直接落到 name——Tool(func) 从 docstring 正确读到的描述被裸名覆盖）
+    description = str(desc.get("description") or "").strip()
+    if not description and mode != "subprocess" and callable(desc.get("func")):
+        description = (getattr(desc["func"], "__doc__", "") or "").strip()
+    if not description:
+        description = name
     outputs = desc.get("outputs")
     hidden = bool(desc.get("hidden"))
     # params 简单形态：{参数名: "描述"}；subprocess 也接受完整 schema dict（{"type":..., "description":...}）
     pd = {k: v for k, v in (desc.get("params") or {}).items() if isinstance(v, str)}
 
-    mode = str(desc.get("mode") or "inline").strip().lower()
     if mode == "subprocess":
         script_path = str(path)
 

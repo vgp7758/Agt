@@ -53,6 +53,10 @@ for t in stb:
 check("① schema 参数表完整（以 contains 为例）",
       stb and {p for p in next(t for t in stb if t.name == "contains")
                .schema["function"]["parameters"]["properties"]} == {"text", "keyword"})
+_desc = {t.name: t.description for t in stb}
+check("① docstring→description（描述符缺字段时回退，不再裸名）",
+      _desc["contains"] == "判断 text 是否包含 keyword，返回 true/false。"
+      and _desc["list_append"].startswith("把 item 追加到"))
 
 # ========== ② inline 对拍 ==========
 def norm(v):

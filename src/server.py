@@ -1219,6 +1219,11 @@ async def _start_debug_run(ws, agent, name, inputs):
 
             def on_node(ev: dict):
                 phase = ev.get("phase")
+                if phase == "round":
+                    # 逐轮事件：批处理/循环节点每轮迭代完成（调试页白框实时增长 + 轮次下拉）
+                    _broadcast({"type": "wf_debug_round", "id": ev.get("id"),
+                                "round": ev.get("round"), "outputs": ev.get("outputs")})
+                    return
                 _broadcast({
                     "type": "wf_debug_node_start" if phase == "start" else "wf_debug_node_end",
                     "id": ev.get("id"), "title": ev.get("title"),

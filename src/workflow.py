@@ -728,6 +728,11 @@ def _handle_loop(node: dict, ctx) -> dict:
         signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_exposed, last_body = exposed, body_outputs
         round_items.append(round_out)
+        if ctx.on_round:   # 调试页逐轮刷新：每轮迭代完成即回调（不等整个循环跑完）
+            try:
+                ctx.on_round(composite_id, idx, round_out)
+            except Exception:
+                pass
         if signal == "break":
             break
 
@@ -799,6 +804,11 @@ def _handle_batch(node: dict, ctx) -> dict:
         _, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_body = body_outputs
         round_items.append(round_out)
+        if ctx.on_round:   # 调试页逐轮刷新
+            try:
+                ctx.on_round(composite_id, idx, round_out)
+            except Exception:
+                pass
         if native:
             saved = ctx.node_outputs
             ctx.node_outputs = body_outputs
@@ -1050,6 +1060,7 @@ class _Ctx:
     """运行时上下文：各节点输出、全局变量、循环变量、workspace、以及 tools/llm 引用。"""
     def __init__(self, *, tools, llm, emit=None, workspace=None):
         self.node_outputs: dict[str, dict] = {}
+        self.on_round = None   # 每轮迭代完成回调（调试页逐轮刷新）：fn(node_id, round_idx, outputs_snapshot)。None=无观察者
         self.global_vars: dict = {}
         self.loop_vars: dict | None = None   # 当前循环的累加变量（LoopSetVariable 读写）
         self.batch_item = None               # 当前批处理的 item（loop-item source 用）
@@ -1243,6 +1254,7 @@ def _run_node_with_batch(node: dict, handler, ctx):
         data["outputs"] = [o for o in saved_outputs if o.get("name") not in _BATCH_OUT_NAMES]
     all_outputs = []
     saved_item, saved_idx = ctx.batch_item, ctx.batch_index
+    _nid = str(node.get("id", ""))
     try:
         for idx, item in enumerate(arr[:_MAX_LOOP_ITERS]):
             ctx.batch_item = item
@@ -1255,6 +1267,11 @@ def _run_node_with_batch(node: dict, handler, ctx):
                 all_outputs.append(None if (fill_path or _assemble) else {"_error": str(e)})  # 单次失败不中断（装填模式 None 会被过滤）
             except Exception as e:
                 all_outputs.append(None if (fill_path or _assemble) else {"_error": f"{type(e).__name__}: {e}"})
+            if ctx.on_round:   # 调试页逐轮刷新：节点级批处理每轮迭代完成即回调
+                try:
+                    ctx.on_round(_nid, idx, all_outputs[-1])
+                except Exception:
+                    pass
     finally:
         if saved_outputs is not None:
             data["outputs"] = saved_outputs
@@ -1512,6 +1529,10 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
 
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
     ctx.record_sub = True   # debug 场景：记录复合节点子画布最后一轮输出（list_workflow_outputs('comp/sub') 可读）
+    # 逐轮刷新：loop/batch 复合节点与节点级批处理每轮迭代完成即发 round 事件（调试页白框实时增长）
+    ctx.on_round = lambda nid, ridx, outs: _safe_emit(
+        {"phase": "round", "id": nid, "round": ridx, "outputs": json.loads(json.dumps(outs, ensure_ascii=False, default=str))
+         if isinstance(outs, (dict, list)) else outs})
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
     edges = canvas.get("edges", [])
     # 缓存 ctx + 画布到模块级（供 server hotswap/rerun/list_outputs）

@@ -22,7 +22,7 @@
     <out name="result" type="string" description="格式化文本：找到 N 条：- [id](episodic) 标题：预览"/>
     <batch enabled="false"/>
   </node>
-  <node id="130001" type="code" title="collect_candidates" x="1620" y="80">
+  <node id="130001" type="code" title="collect_candidates" x="1619" y="80">
     <in name="history" type="list" ref="110001.raw"/>
     <in name="keywords" type="list" ref="802605.keywords"/>
     <in name="semantic_hits" type="list" ref="120001.result"/>
@@ -116,8 +116,8 @@ async def main(args) -> dict:
     cands.sort(key=lambda x:-x["score"])
 
     # ========== 核心改造：生成统一字典，value 即为最终显示文本 ==========
-    candidates_dict = {}
     candidates = []
+    candidates_display = []
     for i, c in enumerate(cands[:10]):
         cid = f"cand_{i}"
         kind = c.get("kind", "")
@@ -127,11 +127,11 @@ async def main(args) -> dict:
             display = f"[epi·长期记忆] {text}"
         else:
             display = f"[第{tidx}轮] [{kind}] {text}"
-        candidates_dict[cid] = display
-        candidates.append(display)
+        candidates_display.append(display)
+        candidates.append(text)
 
-    return {"candidates_dict": candidates_dict, "count": len(candidates_dict), "candidates":candidates}]]></code>
-    <out name="candidates_dict" type="object"/>
+    return {"candidates_display": candidates_display,  "candidates":candidates}]]></code>
+    <out name="candidates_display" type="list"/>
     <out name="candidates" type="list"/>
     <batch enabled="false"/>
   </node>
@@ -158,12 +158,13 @@ async def main(args) -> dict:
     <in name="items" type="list" ref="130001.candidates"/>
     <in name="k" type="integer">3</in>
     <out name="topk" type="list"/>
-    <out name="indices" type="list" itemType="integer"/>
-    <out name="scores_topk" type="list" itemType="number"/>
+    <out name="indices" type="list"/>
+    <out name="scores_topk" type="list"/>
     <out name="mode" type="string"/>
+    <batch enabled="false"/>
   </node>
   <node id="772715" type="plugin" title="join" x="2820" y="80" toolName="join">
-    <in name="items" type="list" ref="760876.topk"/>
+    <in name="items" type="list" ref="1031138.raw"/>
     <in name="separator" type="string" ref="1385233.output"/>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
@@ -190,6 +191,12 @@ async def main(args) -> dict:
 </retrieval-hint>]]></result>
     <batch enabled="false"/>
   </node>
+  <node id="1031138" type="plugin" title="get_list_items" x="2520" y="80" toolName="get_list_items">
+    <in name="lst" type="list" ref="130001.candidates_display" itemType="string"/>
+    <in name="indices" type="list" ref="760876.indices" itemType="integer"/>
+    <out name="raw" type="list" description="按 indices 顺序提取的元素列表（越界位置为错误文本）"/>
+    <batch enabled="false"/>
+  </node>
   <edge from="100001" to="105001"/>
   <edge from="105001" to="802605" port="false"/>
   <edge from="105001" to="110001" port="false"/>
@@ -203,7 +210,6 @@ async def main(args) -> dict:
   <edge from="802605" to="785480"/>
   <edge from="785480" to="125001"/>
   <edge from="802605" to="900001" port="802605_error"/>
-  <edge from="760876" to="772715"/>
   <edge from="150001" to="760876" port="true"/>
   <edge from="1385233" to="772715"/>
   <edge from="772715" to="311293"/>
@@ -211,4 +217,6 @@ async def main(args) -> dict:
   <edge from="311293" to="900001" port="false"/>
   <edge from="413316" to="1657367"/>
   <edge from="1657367" to="900001"/>
+  <edge from="760876" to="1031138"/>
+  <edge from="1031138" to="772715"/>
 </workflow>

@@ -259,8 +259,20 @@ function _baseH(n){
 }
 // ===== 调试输出框：节点有执行输出时在节点下方挂白框（点击头条折叠/展开）=====
 let dbgCollapsed=new Set();   // 折叠输出框的节点 id（跨 renderAll 保持）
-function _dbgBoxText(n){
+// 当前应显示的输出对象：选中某轮时显示该轮输出，否则显示节点最终输出（_rounds 计数字段跳过）
+function _dbgBoxView(n){
+  const sel=dbgRoundSel[n.id];
+  if(sel!=null && dbgRounds[n.id] && dbgRounds[n.id][sel]!==undefined)
+    return dbgRounds[n.id][sel];
   const out=dbgOut[n.id];
+  if(out&&typeof out==='object'&&!Array.isArray(out)){
+    const cp={};Object.entries(out).forEach(([k,v])=>{if(k!=='_rounds')cp[k]=v;});
+    return cp;
+  }
+  return out;
+}
+function _dbgBoxText(n){
+  const out=_dbgBoxView(n);
   if(out===null||out===undefined) return '(无输出)';
   if(typeof out!=='object') return String(out);
   const lines=[];
@@ -782,10 +794,25 @@ function _renderDbgBox(g,n){
   // 顶部折叠条（点击折叠/展开）
   const head=document.createElement('div');
   head.style.cssText='flex:0 0 18px;display:flex;align-items:center;gap:5px;padding:0 6px;background:#e8e8e8;border-bottom:1px solid #ccc;cursor:pointer;user-select:none';
-  const nk=Object.keys(dbgOut[n.id]||{}).length;
+  const view=_dbgBoxView(n);
+  const nk=(view&&typeof view==='object')?Object.keys(view).length:0;
   head.innerHTML='<span>'+(collapsed?'▸':'▾')+'</span><span style="font-weight:600">输出</span><span style="color:#888">'+nk+' 字段</span>';
   head.onclick=(e)=>{e.stopPropagation();toggleDbgBox(n.id);};
   head.onmousedown=(e)=>e.stopPropagation();
+  // 轮次下拉（批处理/循环节点收到过逐轮事件时显示；选某轮查看该轮输出，"汇总"=节点最终输出）
+  const rounds=dbgRounds[n.id];
+  if(rounds&&rounds.length&&rounds.some(r=>r!==undefined)){
+    const sel=document.createElement('select');
+    sel.style.cssText='margin-left:auto;max-width:80px;font-size:10px;font-family:monospace;border:1px solid #999;border-radius:3px;background:#fff;cursor:pointer';
+    let opts='<option value="">汇总</option>';
+    rounds.forEach((r,i)=>{if(r!==undefined)opts+='<option value="'+i+'"'+(dbgRoundSel[n.id]===i?' selected':'')+'">#'+i+'</option>';});
+    sel.innerHTML=opts;
+    sel.title='查看某轮迭代的输出（汇总=节点最终输出）';
+    sel.onmousedown=(e)=>e.stopPropagation();
+    sel.onclick=(e)=>e.stopPropagation();
+    sel.onchange=()=>{const v=parseInt(sel.value);dbgRoundSel[n.id]=isNaN(v)?undefined:v;renderAll();};
+    head.appendChild(sel);
+  }
   // 输出过长被截断时，加"[完整]"按钮在新页签查看
   if(_dbgBoxText(n).length>DBG_FULL_MAX){
     const btn=document.createElement('button');
@@ -800,7 +827,31 @@ function _renderDbgBox(g,n){
   if(!collapsed){
     const body=document.createElement('div');
     body.style.cssText='flex:1;overflow:auto;padding:3px 6px;white-space:pre-wrap;word-break:break-all';
-    body.textContent=_dbgBoxShowText(n);
+    // 字段化渲染：字段名加粗靛蓝 + 冒号灰，值黑色等宽——字段名一眼可辨（此前纯文本混排）
+    const view=_dbgBoxView(n);
+    if(view&&typeof view==='object'){
+      Object.entries(view).forEach(([k,v])=>{
+        let s;
+        if(typeof v==='string') s=v;
+        else { try{s=JSON.stringify(v);}catch(e){s=String(v);} }
+        const row=document.createElement('div');
+        row.style.margin='1px 0';
+        const kb=document.createElement('b');
+        kb.style.cssText='color:#4338ca;font-weight:600';
+        kb.textContent=k;
+        const sep=document.createElement('span');
+        sep.style.color='#9aa0a6';
+        sep.textContent=': ';
+        const val=document.createElement('span');
+        val.style.color='#111';
+        val.textContent=s;
+        row.appendChild(kb);row.appendChild(sep);row.appendChild(val);
+        body.appendChild(row);
+      });
+      if(!Object.keys(view).length)body.textContent='(空)';
+    }else{
+      body.textContent=_dbgBoxShowText(n);
+    }
     body.onmousedown=(e)=>e.stopPropagation();
     div.appendChild(body);
   }
@@ -2110,6 +2161,8 @@ function autoLayout(silent){
 // ============ 调试页专属逻辑 ============
 let nodeStatus={};        // id -> 'running' | 'done' | 'err'
 let dbgOut={};            // id -> 该节点执行输出 dict
+let dbgRounds={};         // id -> [轮次输出数组]（批处理/循环节点逐轮事件累积；复合节点=每轮迭代结果，节点级批处理=每轮装填后 item）
+let dbgRoundSel={};       // id -> 选中的轮次下标（undefined=汇总视图）
 let entryValues={};       // 开始节点字段名 -> 用户填的值（副本，runDebug 以 DOM 为准）
 let dbgOrder=[];          // 已执行节点 id 顺序
 let dbgRunning=false;
@@ -2246,9 +2299,19 @@ function _dbgConnect(){
   try{_dbgWs=new WebSocket(proto+'://'+location.host+'/ws');}catch(e){setDbgStatus('WS 连接失败','err');return;}
   _dbgWs.onmessage=function(ev){
     let m;try{m=JSON.parse(ev.data);}catch(e){return;}
-    if(m.type==='wf_debug_start'){nodeStatus={};dbgOut={};dbgOrder=[];setDbgStatus('执行中…','');renderAll();}
+    if(m.type==='wf_debug_start'){nodeStatus={};dbgOut={};dbgOrder=[];dbgRounds={};dbgRoundSel={};setDbgStatus('执行中…','');renderAll();}
     else if(m.type==='wf_debug_node_start'){nodeStatus[m.id]='running';setDbgStatus('执行中：'+(m.title||m.id)+'（第 '+(dbgOrder.length+1)+' 步）','');renderAll();if(selNode===m.id)showProps();}
     else if(m.type==='wf_debug_node_end'){nodeStatus[m.id]='done';dbgOut[m.id]=m.outputs;dbgOrder.push(m.id);setDbgStatus('已执行：'+(m.title||m.id)+' ✓','');renderAll();if(selNode===m.id)showProps();}
+    else if(m.type==='wf_debug_round'){
+      // 逐轮事件：批处理/循环节点每轮迭代完成——记录该轮输出 + 实时刷新白框
+      if(!dbgRounds[m.id])dbgRounds[m.id]=[];
+      const rv=(m.outputs!==null&&m.outputs!==undefined&&typeof m.outputs==='object')?m.outputs:{value:m.outputs};
+      dbgRounds[m.id][m.round]=rv;
+      // 节点还在 running（复合/批处理节点未结束），白框立即挂上（轮次可增长）
+      if(dbgOut[m.id]===undefined)dbgOut[m.id]={_rounds:dbgRounds[m.id].length};
+      dbgOut[m.id]._rounds=dbgRounds[m.id].length;
+      renderAll();
+    }
     else if(m.type==='wf_debug_done'){
       dbgRunning=false;dbgOrder=m.order||[];
       if(m.trace){dbgOut=m.trace;Object.keys(m.trace).forEach(function(id){nodeStatus[id]='done';});}

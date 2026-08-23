@@ -232,6 +232,9 @@ class LLMClient:
         # （反正不吃缓存，换了无损失）；GLM/bigmodel 等 prompt cache 按 api_token 隔离的 provider 配
         # "token_rotate": false 保持 sticky（每次成功不换 token，缓存不被自己交错驱逐；限流轮换仍生效）。
         self.token_rotate = profile.get("token_rotate", True)
+        # 按模型温度（profile.temperature）：不同 provider 对温度要求不同（如推荐 0.6 vs 1.0）。
+        # None=未配置——回退实例默认（运行时全局 temperature）。优先级：请求 overrides > per-profile > 全局。
+        self.profile_temperature = profile.get("temperature")
         self._client = OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured")
 
     def _ensure_config(self):
@@ -300,6 +303,8 @@ class LLMClient:
         enable_thinking / timeout 可经 overrides 按 call 覆盖实例默认值（工作流 LLM 节点 per-node 设置）。"""
         enable_thinking = overrides.pop("enable_thinking", self.enable_thinking)
         timeout = overrides.pop("timeout", None)
+        temperature = overrides.pop("temperature",
+                                    self.profile_temperature if self.profile_temperature is not None else self.temperature)
         # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
         # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。
         # 这里给缺字段的补空串占位（DeepSeek 只校验字段存在性，空串即可）。
@@ -315,7 +320,7 @@ class LLMClient:
         kwargs = {
             "model": self.model,
             "messages": msgs,
-            "temperature": self.temperature,
+            "temperature": temperature,
             "stream": stream,
         }
         if self.max_tokens is not None:
@@ -347,7 +352,8 @@ class LLMClient:
                 "下面是推理模型刚才的完整思考过程。请直接据此输出最终回答正文（结论/答案），"
                 "不要复述思考过程：\n\n" + reasoning}]
             _t0 = time.time()
-            r = tmp.chat.completions.create(model=p["model"], messages=primed, temperature=self.temperature)
+            r = tmp.chat.completions.create(model=p["model"], messages=primed,
+                                            temperature=p.get("temperature", self.temperature))
             ch = r.choices or []
             content = ((ch[0].message.model_dump().get("content") if ch else "") or "").strip()
             self._record_call(messages=primed, attempt=1, max_tokens=None,

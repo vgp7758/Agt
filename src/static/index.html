@@ -1100,11 +1100,12 @@ function renderModelList(){
         <button class="mi-del" onclick="delete _modelData.models[\'${escName}\'];renderModelList()" title="删除">×</button>
       </div>
       <div class="mi-row">
+        <input value="${esc(m.base_url||'')}" placeholder="base_url" onchange="_modelData.models['${escName}'].base_url=this.value" style="flex:2">
         <input value="${esc(m.model||'')}" placeholder="model id" onchange="_modelData.models['${escName}'].model=this.value" style="flex:2">
-        <input value="${m.max_effective_context_window||''}" placeholder="窗口（空=关闭分档）" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="flex:1;min-width:130px">
       </div>
       <div class="mi-row">
-        <input value="${esc(m.base_url||'')}" placeholder="base_url" onchange="_modelData.models['${escName}'].base_url=this.value" style="flex:2">
+        <input value="${m.temperature??''}" placeholder="温度(空=全局)" type="number" step="0.1" min="0" max="2" onchange="_modelData.models['${escName}'].temperature=this.value===''?undefined:parseFloat(this.value)" title="该模型专用温度（不同 provider 推荐值不同）；空=用运行时全局 temperature" style="width:110px">
+        <input value="${m.max_effective_context_window||''}" placeholder="窗口(空=关分档)" type="number" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="width:140px">
         <label class="mi-check" title="该模型是否支持深度思考（推理模型，如 Qwen/ModelScope 的 enable_thinking）。是能力声明：勾了才会在请求里带 enable_thinking；运行时是否真开由「运行时」区的 enable_thinking 控制">
           <input type="checkbox" ${thinking?'checked':''} onchange="_modelData.models['${escName}'].thinking=this.checked;renderModelList()"> thinking
         </label>
@@ -1115,6 +1116,15 @@ function renderModelList(){
       <div class="mi-row">
         <input value="${Array.isArray(m.api_token)?m.api_token.join(', '):(m.api_token||'')}" placeholder="api_token（多个用逗号分隔）" type="password" onchange="_modelData.models['${escName}'].api_token=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="flex:1">
         ${isDefault ? '' : `<button class="mi-btn set-default" onclick="_modelData.default=\'${escName}\';renderModelList()">⭐ 设默认</button>`}
+      </div>
+      <div class="mi-row">
+        <input value="${m.max_tokens||''}" placeholder="max_tokens(空=默认)" type="number" onchange="_modelData.models['${escName}'].max_tokens=this.value?parseInt(this.value):undefined" title="单次回复上限；空=默认（thinking 模型 8192，其他交 provider）；截断时引擎自动加倍重试" style="width:150px">
+        <label class="mi-check" title="DeepSeek 思考模式：历史 tool_calls 消息必须带 reasoning_content。勾了自动给缺失的历史消息补占位，跨模型混用不再 400">
+          <input type="checkbox" ${m.requires_reasoning_in_history?'checked':''} onchange="_modelData.models['${escName}'].requires_reasoning_in_history=this.checked"> 补reasoning占位
+        </label>
+        <label class="mi-check" title="多 token 成功后是否轮换到下一个（默认开：ModelScope 多号分摊配额）。GLM 等 prompt cache 按 token 隔离的 provider 取消勾选保持 sticky（缓存不被自己交错驱逐）">
+          <input type="checkbox" ${m.token_rotate!==false?'checked':''} onchange="_modelData.models['${escName}'].token_rotate=this.checked"> token轮换
+        </label>
       </div>
       <div class="mi-row">
         <input value="${esc(m.desc||'')}" placeholder="描述（显示用，会拼进模型下拉框）" onchange="_modelData.models['${escName}'].desc=this.value" style="flex:1;min-width:0">

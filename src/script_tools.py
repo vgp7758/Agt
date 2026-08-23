@@ -169,9 +169,11 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
 
 
 def default_dirs() -> list:
-    """约定扫描目录：tools/ → .agent/tools/。"""
+    """约定扫描目录（优先级从低到高，同名后扫覆盖先扫）：
+    随包 tools_builtin（pip 安装也有这批迁移件）→ tools/ → .agent/tools/（私有覆盖）。"""
     from real_tools import WORKSPACE
-    return [WORKSPACE / "tools", WORKSPACE / ".agent" / "tools"]
+    pkg = Path(__file__).parent / "assets" / "tools_builtin"
+    return [pkg, WORKSPACE / "tools", WORKSPACE / ".agent" / "tools"]
 
 
 def scan_script_tools(dirs=None) -> Toolbox:

@@ -764,16 +764,19 @@ function renderNode(n){
     }
   }
 
-  // 节点插件 canvas 参数（.js 里声明 canvas:true 的 param → 节点下方大文本框，如 LLM 的 prompt）
+  // 节点插件 canvas 参数（.js 里声明 canvas:true 的 param → 节点下方大文本框，如 LLM 的 SYSTEM/PROMPT）
+  // 多个 canvas 参数按序纵向偏移（各自一框 TEXTAREA_H，nodeH 已按 pluginCanvasCount 计数）
   {const _plg=NODE_PLUGINS[n.type];
    if(_plg&&_plg.params){
+     let _ci=0;
      for(const _cp of _plg.params){
        if(!_cp.canvas)continue;
        const fo=makeCanvasParamArea(n,_cp);
        if(fo){
          const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-         fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+         fo.setAttribute('x',6);fo.setAttribute('y',yBase+_ci*TEXTAREA_H);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
          g.appendChild(fo);
+         _ci++;
        }
      }
    }}
@@ -886,24 +889,6 @@ function makeTextArea(n){
   return fo;
 }
 
-// LLM 节点提示词大文本框（编辑 llmParam.prompt；oninput 直改数据不重绘，不丢焦点）
-function makeLLMPromptArea(n){
-  const fo=document.createElementNS(NS,'foreignObject');
-  fo.setAttribute('width',200);fo.setAttribute('height',100);
-  const ta=document.createElement('textarea');
-  n.data.inputs=n.data.inputs||{};
-  let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[{name:'prompt',input:{type:'string',value:{type:'literal',content:''}}},{name:'systemPrompt',input:{type:'string',value:{type:'literal',content:''}}}]);
-  let promptP=lp.find(x=>x.name==='prompt');
-  if(!promptP){promptP={name:'prompt',input:{type:'string',value:{type:'literal',content:''}}};lp.push(promptP);}
-  ta.value=promptP.input.value.content||'';
-  const vars=nodeInputs(n).map(p=>p.name).filter(Boolean);
-  ta.placeholder=vars.length?('可用占位符: '+vars.map(v=>'{{'+v+'}}').join('  ')+'；systemPrompt/模型在右侧面板'):'prompt（{{输入字段}} 引用上游；systemPrompt/模型在右侧面板）';
-  ta.style.cssText='width:100%;height:100%;font-size:11px;font-family:monospace;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px;resize:none;box-sizing:border-box';
-  ta.oninput=()=>{promptP.input.value.content=ta.value;};   // 直改数据不重绘（重绘会销毁 textarea 丢焦点）
-  ta.onmousedown=(e)=>e.stopPropagation();
-  fo.appendChild(ta);fo.style.pointerEvents='auto';
-  return fo;
-}
 
 // ============ 连线交互 ============
 function toggleExpand(key){if(collapsedFields.has(key))collapsedFields.delete(key);else collapsedFields.add(key);renderAll();}
@@ -1294,16 +1279,26 @@ function pluginParamsHTML(n){
   return h;
 }
 // canvas:true 的 param → 节点下方大文本框（oninput 直改数据不重绘保焦点）
+// p.label 存在时框顶渲染小徽章标签（多框场景区分用途，如 LLM 的 SYSTEM/PROMPT）
 function makeCanvasParamArea(n,p){
   const fo=document.createElementNS(NS,'foreignObject');
+  const wrap=document.createElement('div');
+  wrap.style.cssText='width:100%;height:100%;display:flex;flex-direction:column;box-sizing:border-box';
+  if(p.label){
+    const lb=document.createElement('div');
+    lb.textContent=p.label;
+    lb.style.cssText='font-size:9px;color:#8fa3c8;padding:1px 5px;background:#0a1428;border:1px solid #3b4a7a;border-bottom:none;border-radius:2px 2px 0 0;letter-spacing:1.5px;flex:none';
+    wrap.appendChild(lb);
+  }
   const ta=document.createElement('textarea');
   ta.value=p.get?p.get(n)??'':'';
   ta.placeholder=p.tip||'';
-  ta.style.width='100%';ta.style.height='100%';ta.style.fontSize='10px';
-  ta.style.background='#0d1b3e';ta.style.color='#dbe4ff';ta.style.border='1px solid #3b4a7a';
-  ta.style.resize='none';ta.style.fontFamily='Consolas,monospace';
+  ta.style.cssText='flex:1;width:100%;font-size:10px;background:#0d1b3e;color:#dbe4ff;border:1px solid #3b4a7a;resize:none;font-family:Consolas,monospace;box-sizing:border-box';
   ta.oninput=()=>{const t=findN(n.id); if(t&&p.set)p.set(t,ta.value);};   // 只改数据不重绘
-  fo.appendChild(ta);
+  ta.onmousedown=(e)=>e.stopPropagation();
+  wrap.appendChild(ta);
+  fo.appendChild(wrap);
+  fo.style.pointerEvents='auto';
   return fo;
 }
 function pluginCanvasCount(n){

@@ -1,42 +1,54 @@
 // LLM 节点插件（type 3）：prompt/systemPrompt/结构化输出。
-// params 协议：每个 param 声明画布/props 渲染样式（widget）与读写（get/set）；
-// canvas:true 的 param（prompt）在画布节点下方渲染大文本框直编。
-// 注意：param 的 get/set 里不能引用 this._lpXxx（this=param 对象，无该方法）——
-// 用文件级闭包函数 lpGet/lpSet。
-function lpGet(n, k) {
-  const lp = n.data.inputs.llmParam || [];
-  return lp.find(x => x.name === k)?.input?.value?.content ?? "";
-}
-function lpSet(n, k, v) {
-  let lp = n.data.inputs.llmParam || (n.data.inputs.llmParam = []);
-  let p = lp.find(x => x.name === k);
-  if (!p) { p = { name: k, input: { type: 'string', value: { type: 'literal', content: '' } } }; lp.push(p); }
-  p.input.value.content = v;
-}
+// params 协议：systemPrompt 与 prompt 都声明 canvas:true——画布节点下方渲染两个带徽章的大文本框
+// （SYSTEM 在上 / PROMPT 在下，makeCanvasParamArea 自动按序偏移），props 面板同字段可编辑。
 EdFW.register({
   type: "3",  label: "LLM",      icon: "🤖", category: "llm",
   section: "LLM 提示词",
   params: [
-    { key: "model", label: "模型", widget: "select",
-      options: () => [["", "（跟随主Agent）"], ...Object.entries(AVAILABLE_MODELS).map(([k, v]) => [k, v || k])],
-      tip: "空=跟随 ctx.llm（utility/主模型）",
-      get: n => lpGet(n, 'model'), set: (n, v) => lpSet(n, 'model', v) },
-    { key: "output_format", label: "输出格式", widget: "select",
-      options: [["json", "JSON（结构化解析）"], ["text", "TEXT（原文透传）"]],
-      hint: n => (lpGet(n, 'output_format') || "json") === "text"
-        ? "TEXT：不并入 schema 约束、不做结构化解析，output=content 原文"
-        : "JSON：outputs 结构并入 systemPrompt 约束并按字段解析展开",
-      get: n => lpGet(n, 'output_format') || "json", set: (n, v) => lpSet(n, 'output_format', v) },
-    { key: "thinking", label: "思考", widget: "select",
-      options: [["", "（跟随默认）"], ["true", "开"], ["false", "关"]],
-      get: n => lpGet(n, 'thinking'), set: (n, v) => lpSet(n, 'thinking', v) },
-    { key: "temperature", label: "温度", widget: "number", tip: "0~2，空=跟随默认",
-      get: n => lpGet(n, 'temperature'), set: (n, v) => lpSet(n, 'temperature', v) },
-    { key: "systemPrompt", label: "systemPrompt", widget: "textarea", canvas: false,
-      tip: "角色/格式约束；{{输入字段}} 占位符可用",
-      get: n => lpGet(n, 'systemPrompt'), set: (n, v) => lpSet(n, 'systemPrompt', v) },
-    { key: "prompt", label: "prompt", widget: "textarea", canvas: true,
+    { key: "systemPrompt", label: "SYSTEM", widget: "textarea", canvas: true,
+      tip: "系统提示词（可 {{输入字段}} 引用上游输出）",
+      get: lpGet("systemPrompt"), set: lpSet("systemPrompt") },
+    { key: "prompt", label: "PROMPT", widget: "textarea", canvas: true,
       tip: "用户提示词，{{输入字段名}} 引用上游输出",
-      get: n => lpGet(n, 'prompt'), set: (n, v) => lpSet(n, 'prompt', v) },
+      get: lpGet("prompt"), set: lpSet("prompt") },
+    { key: "model", widget: "select",
+      options: () => Object.keys(AVAILABLE_MODELS || {}).sort(),
+      hint: n => {
+        const m = lpGet("model")(n);
+        return m ? ("已选 " + m) : "（跟随 ctx.llm / utility）";
+      },
+      get: lpGet("model"), set: lpSet("model") },
+    { key: "temperature", widget: "number",
+      hint: n => { const t = lpGet("temperature")(n); return (t === "" || t == null) ? "（默认/全局）" : ""; },
+      get: lpGet("temperature"), set: lpSet("temperature") },
+    { key: "thinking", widget: "checkbox", label: "thinking",
+      get: n => { const v = lpFind(n, "thinking"); return v == null ? "" : v; },
+      set: (n, v) => lpSet("thinking")(n, v === true || v === "true" ? "true" : "false") },
+    { key: "output_format", widget: "select", label: "输出格式",
+      options: [["json", "json（按 schema 约束+解析字段）"], ["text", "text（纯文本，不解析）"]],
+      hint: n => (lpGet("output_format")(n) === "text")
+        ? "TEXT：不并入 schema 约束、不做结构化解析，content 原文从 output 端口输出"
+        : "JSON：outputs 声明的结构并入 systemPrompt 约束，回包按字段强转解析",
+      get: lpGet("output_format"), set: lpSet("output_format") },
+    { key: "on_error", widget: "select", label: "出错时",
+      options: [["fail", "中断（走 error 端口）"], ["empty", "输出空继续"]],
+      get: lpGet("on_error"), set: lpSet("on_error") },
   ],
 });
+// llmParam 项读写辅助（文件级闭包——this 在 param.get/set 里指向 param 对象而非 register def，此前 this._lpGet 报 TypeError）
+function lpFind(n, name){
+  n.data.inputs = n.data.inputs || {};
+  let lp = n.data.inputs.llmParam;
+  if (!lp) lp = n.data.inputs.llmParam = [
+    { name: "prompt", input: { type: "string", value: { type: "literal", content: "" } } },
+    { name: "systemPrompt", input: { type: "string", value: { type: "literal", content: "" } } } ];
+  let p = lp.find(x => x.name === name);
+  if (!p && name === "systemPrompt") { p = { name, input: { type: "string", value: { type: "literal", content: "" } } }; lp.push(p); }
+  return p;
+}
+function lpGet(name){
+  return n => { const p = lpFind(n, name); return p?.input?.value?.content ?? ""; };
+}
+function lpSet(name){
+  return (n, v) => { const p = lpFind(n, name); if (p) p.input.value.content = v; };
+}

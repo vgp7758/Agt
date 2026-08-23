@@ -541,6 +541,9 @@ def _eval_condition(condition: dict, ctx) -> bool:
 
 # （_handle_selector 已外置为节点插件：src/assets/nodes_builtin/）
 
+_INLINE_OUT_SUFFIX = "-function-inline-output"   # 复合节点体内迭代入口边的源端口后缀
+
+
 def _find_body_entry(edges: list, composite_id: str) -> str | None:
     """找子画布迭代入口节点 id（-function-inline-output 边的目标）。无则 None（旧格式）。"""
     for e in edges:

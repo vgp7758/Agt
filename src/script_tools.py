@@ -229,6 +229,27 @@ def attach_script_tools(tb: Toolbox, dirs=None) -> Toolbox:
     return stb
 
 
+def make_hot_reload_tools(agent):
+    """热重载工具（闭包绑 agent）：改了节点插件/工具脚本后免重启生效。
+    钩子工作流（reload_hot.xml，after_tool）与 Agent 对话均可调用。"""
+    from tools import Tool
+
+    def reload_hot(scope: str = "all") -> str:
+        """热重载脚本工具与节点插件（免 /restart）。改了 tools//.agent/tools/ 的工具脚本或
+        nodes//.agent/nodes/ 的节点插件后调用。scope: all(默认)/tools(仅工具)/nodes(仅节点)。"""
+        parts = []
+        sc = (scope or "all").strip().lower()
+        if sc in ("all", "tools"):
+            parts.append(reload_script_tools(agent))
+        if sc in ("all", "nodes"):
+            import workflow as _W
+            import node_plugins as _NP
+            parts.append(_NP.reload_node_plugins(_W.NODE_HANDLERS))
+        return "\n".join(parts)
+
+    return [Tool(reload_hot)]
+
+
 def reload_script_tools(agent, dirs=None) -> str:
     """热加载（/reload tools）：mtime 失效重扫 + 摘除旧注册 + 重挂新工具。返回摘要文本。
     dirs：默认 None=约定目录（tools/ + .agent/tools/）；测试/自定义场景可传目录列表。"""

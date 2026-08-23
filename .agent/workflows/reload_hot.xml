@@ -1,0 +1,73 @@
+<workflow name="reload_hot" description="工具调用后自动热重载：changed_files 命中节点插件目录(nodes_builtin/nodes/.agent/nodes)或工具目录(tools/.agent/tools)时调 reload_hot 工具免重启生效；引擎源码(src/)命中则提示需 /restart（after_tool 钩子，零 LLM）" hook="after_tool" hidden="true">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="changed_files" type="list"/>
+    <out name="tool_name" type="string"/>
+  </node>
+  <node id="110001" type="code" title="check" x="420" y="80">
+    <in name="changed_files" type="list" ref="100001.changed_files"/>
+    <code language="3"><![CDATA[async def main(args):
+    files = args.params.get("changed_files") or []
+    paths = []
+    for f in files:
+        paths.append(str(f.get("file") if isinstance(f, dict) else f))
+    NODE_DIRS = {"nodes", "nodes_builtin"}          # 目录段名（.agent/nodes/x.py 的 parts 含 "nodes"）
+    TOOL_DIRS = {"tools", "tools_builtin"}
+    hits_node, hits_tool, hits_engine = [], [], []
+    for p in paths:
+        parts = [s for s in p.replace("\\", "/").split("/") if s]
+        if not parts:
+            continue
+        segs = set(parts)
+        if parts[-1].endswith((".py", ".js")):
+            if segs & NODE_DIRS:
+                hits_node.append(p)
+            elif segs & TOOL_DIRS:
+                hits_tool.append(p)
+        if parts[0] == "src" and not (segs & (NODE_DIRS | TOOL_DIRS)) and parts[-1].endswith(".py"):
+            hits_engine.append(p)   # 引擎源码（非插件目录）：reload 不够，需重启
+    scope = "none"
+    if hits_node and hits_tool:
+        scope = "all"
+    elif hits_node:
+        scope = "nodes"
+    elif hits_tool:
+        scope = "tools"
+    note = ""
+    if hits_engine:
+        note = "；⚠️ 引擎源码改动（" + ", ".join(hits_engine[:3]) + "）需 /restart 生效"
+    return {"need": scope != "none", "scope": scope,
+            "summary": f"改动命中：节点 {[f.split('/')[-1] for f in hits_node]} / 工具 {[f.split('/')[-1] for f in hits_tool]}{note}"}]]></code>
+    <out name="need" type="boolean"/>
+    <out name="scope" type="string"/>
+    <out name="summary" type="string"/>
+  </node>
+  <node id="120000" type="selector" title="need?" x="760" y="80">
+    <branch><cond op="11" left="110001.need" left_type="boolean"/></branch>
+  </node>
+  <node id="130001" type="plugin" title="reload_hot" x="1020" y="40" toolName="reload_hot">
+    <in name="scope" type="string" ref="110001.scope"/>
+    <out name="raw" type="string"/>
+  </node>
+  <node id="140000" type="code" title="fmt" x="1320" y="40">
+    <in name="result" type="string" ref="130001.raw"/>
+    <in name="summary" type="string" ref="110001.summary"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    r = str(p.get("result") or "").strip()
+    return {"inject": True, "result": f"🔄 {r}\n（{p.get('summary')}）"}]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+  </node>
+  <node id="900001" type="end" title="end" x="1620" y="80">
+    <in name="inject" type="boolean" ref="140000.inject"/>
+    <in name="result" type="string" ref="140000.result"/>
+    <in name="inject_d" type="boolean"><literal>false</literal></in>
+    <in name="result_d" type="string"><literal></literal></in>
+  </node>
+  <edge from="100001" to="110001"/>
+  <edge from="110001" to="120000"/>
+  <edge from="120000" to="130001" port="true"/>
+  <edge from="130001" to="140000"/>
+  <edge from="140000" to="900001"/>
+  <edge from="120000" to="900001" port="false"/>
+</workflow>

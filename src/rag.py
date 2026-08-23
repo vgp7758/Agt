@@ -32,6 +32,49 @@ def _hf_local_offline():
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
+class _CachedEmbedder:
+    """LRU 缓存包装：对同一文本的 encode 只调底层一次（归一化向量与文本 1:1，可安全缓存）。
+    包装 SentenceTransformer 和 APIEmbedder——cosine_sim 批处理中 query 重复 encode、
+    RAG query 同句重复检索、emb_probe 探测词等场景全部受益。"""
+    def __init__(self, inner, max_entries=512):
+        self._inner = inner
+        self._cache = {}          # text → np.ndarray（归一化向量）
+        self._order = []          # LRU 顺序（最旧在头）
+        self._max = max_entries
+        self._dim = inner.get_sentence_embedding_dimension()
+
+    def get_sentence_embedding_dimension(self):
+        return self._dim
+
+    def encode(self, texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False):
+        import numpy as np
+        texts = [str(t) for t in texts]
+        results = [None] * len(texts)
+        miss_idx = []
+        miss_texts = []
+        for i, t in enumerate(texts):
+            v = self._cache.get(t)
+            if v is not None:
+                results[i] = v
+            else:
+                miss_idx.append(i)
+                miss_texts.append(t)
+        if miss_texts:
+            vecs = self._inner.encode(miss_texts, batch_size=batch_size,
+                                       normalize_embeddings=normalize_embeddings,
+                                       show_progress_bar=show_progress_bar)
+            for j, idx in enumerate(miss_idx):
+                v = vecs[j]
+                results[idx] = v
+                # LRU 淘汰
+                if len(self._cache) >= self._max and self._order:
+                    old = self._order.pop(0)
+                    self._cache.pop(old, None)
+                self._cache[miss_texts[j]] = v
+                self._order.append(miss_texts[j])
+        return np.asarray(results, dtype="float32")
+
+
 class APIEmbedder:
     """OpenAI 兼容的 /v1/embeddings API embedder（硅基流动/智谱/OpenAI 等大多兼容）。
     对齐 SentenceTransformer 接口：encode(texts,...)→np.ndarray；get_sentence_embedding_dimension()。"""
@@ -121,6 +164,8 @@ class LocalRAG:
                 _hf_local_offline()
                 from sentence_transformers import SentenceTransformer
                 embedder = SentenceTransformer(cfg["embed_model_path"])
+            # LRU 缓存包装：cosine_sim 批处理中 query 重复 encode、RAG 同句重复检索等场景受益
+            embedder = _CachedEmbedder(embedder)
         except Exception as e:
             print(f"[rag] embedder 初始化失败：{e}")
             return None

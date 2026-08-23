@@ -2225,24 +2225,15 @@ def cosine_sim(text1: str, text2: str) -> float:
     """计算两段文本的语义余弦相似度（-1~1，越大越相关）。
     复用 /rag 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后计算。
     用于工作流批处理重排：query 与每个候选切片的相似度（需先配置 RAG 的 embedding）。
-    text2 的向量缓存进 kv_cache（同轮批处理中 query 重复 encode 只花第一次）。"""
+    text2 的向量缓存由 _CachedEmbedder 包装层自动处理（LRU），本函数无需自己管缓存。"""
     from rag import get_rag
     rag = get_rag()
     if rag is None:
         raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
     import numpy as np
-    t1 = str(text1 or "")
-    t2 = str(text2 or "")
-    # text2 向量缓存：批处理中 text2=query 重复出现，encode 一次即可
-    ck = _kv_key(t2, "emb_vec")
-    v2 = _KV_CACHE.get(ck)
-    if v2 is None:
-        vecs = rag.embedder.encode([t1, t2], normalize_embeddings=True, show_progress_bar=False)
-        _KV_CACHE[ck] = vecs[1]   # 缓存 text2 的归一化向量
-        return round(float(np.dot(vecs[0], vecs[1])), 4)
-    # text2 已缓存 → 只 encode text1
-    v1 = rag.embedder.encode([t1], normalize_embeddings=True, show_progress_bar=False)[0]
-    return round(float(np.dot(v1, v2)), 4)
+    vecs = rag.embedder.encode([str(text1 or ""), str(text2 or "")],
+                               normalize_embeddings=True, show_progress_bar=False)
+    return round(float(np.dot(vecs[0], vecs[1])), 4)
 
 
 # —— 应用级 KV 结果缓存（kv_cache_read/write 工具的进程级存储）——

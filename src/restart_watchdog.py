@@ -109,13 +109,17 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
         kwargs["start_new_session"] = True
     with open(log_file, "a", encoding="utf-8") as lf:
         lf.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} restart (mode={mode}) =====\n")
-        proc = subprocess.Popen([sys.executable, "-c", code], cwd=cwd, env=env,
+        # -u：新进程 unbuffered——装配日志实时落盘（块缓冲会把输出困住几十分钟，
+        # 事后无法判断新进程卡在哪个阶段）
+        proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=cwd, env=env,
                                 stdout=lf, stderr=subprocess.STDOUT, **kwargs)
     log(f"新进程已拉起 pid={proc.pid}")
 
-    # 4) 确认就绪：web 轮询 HTTP 200（装配 MCP/RAG 可能慢，容忍 90s）；cli 确认 3s 内没秒退
+    # 4) 确认就绪：web 轮询 HTTP 200（装配 MCP/RAG 冷启动可超 90s——曾见 HF 联网探测挂起
+    #    装配数分钟，故容忍 300s 且每 20s 报进度）；cli 确认 3s 内没秒退
     if mode == "web" and port:
-        deadline = time.time() + 90
+        deadline = time.time() + 300
+        last_note = time.time()
         while time.time() < deadline:
             if proc.poll() is not None:
                 log(f"❌ 新进程提前退出 (code={proc.returncode})，详见 {log_file}")
@@ -123,8 +127,15 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
             if _http_up(port):
                 log(f"✅ 新进程就绪 http://127.0.0.1:{port}/ ，看门狗退出")
                 return
+            if time.time() - last_note >= 20:
+                log(f"… 新进程仍在装配（pid={proc.pid} 活着），继续等待")
+                last_note = time.time()
             time.sleep(1.0)
-        log(f"⚠️ 新进程 90s 未就绪（可能仍在装配），pid={proc.pid}，看门狗退出（详见 {log_file}）")
+        if proc.poll() is None:
+            log(f"⚠️ 新进程 300s 未就绪但没死（pid={proc.pid}，仍在装配），看门狗退出——"
+                f"服务稍后应自行就绪，装配日志见 {log_file}")
+        else:
+            log(f"❌ 新进程已退出 (code={proc.returncode})，详见 {log_file}")
     else:
         time.sleep(3)
         if proc.poll() is None:

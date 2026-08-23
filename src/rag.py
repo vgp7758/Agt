@@ -9,6 +9,7 @@ HNSW 图索引让检索 O(logN)，毫秒出 top-K，不是串行遍历——海�
   rag_query 工具供智能体调用，/rag 页面供用户管理（配置/建库/查询）。
 """
 import fnmatch
+import os
 import sqlite3
 import threading
 import time
@@ -20,6 +21,15 @@ from pathlib import Path
 #   - numpy: APIEmbedder.encode / LocalRAG 各方法
 #   - faiss: LocalRAG.__init__ / _new_index / index_dir / query
 #   - sentence_transformers: from_config 的 local 分支 / reranker 加载
+
+
+def _hf_local_offline():
+    """本地模型强制离线加载：HF 库（sentence-transformers/transformers）即使给本地路径，
+    默认仍联网探测 huggingface.co 检查组件更新——国内网络对该域名是 DNS 黑洞，请求
+    无限挂起（不是快速失败），装配卡死几十分钟，/restart 看门狗 90s 等不到就绪的根因。
+    本地路径加载不需要网，设环境变量让 HF 跳过探测；setdefault 不覆盖用户显式配置。"""
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 class APIEmbedder:
@@ -67,6 +77,7 @@ class LocalRAG:
         self.reranker = None
         if reranker_path and Path(reranker_path).exists():
             print(f"[rag] 加载 reranker {reranker_path} ...")
+            _hf_local_offline()
             from sentence_transformers import CrossEncoder
             self.reranker = CrossEncoder(reranker_path)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -107,6 +118,7 @@ class LocalRAG:
                 if not cfg.get("embed_model_path"):
                     return None
                 print(f"[rag] 加载本地 embedding 模型 {cfg['embed_model_path']} ...")
+                _hf_local_offline()
                 from sentence_transformers import SentenceTransformer
                 embedder = SentenceTransformer(cfg["embed_model_path"])
         except Exception as e:

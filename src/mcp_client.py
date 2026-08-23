@@ -92,9 +92,16 @@ class MCPManager:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    def _run_coro(self, coro):
-        """把协程提交到后台 loop 执行，阻塞等待结果。"""
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result()
+    def _run_coro(self, coro, timeout=None):
+        """把协程提交到后台 loop 执行，阻塞等待结果。
+        timeout：仅连接握手场景传（防单个 server 挂起无限拖死装配）；
+        工具调用不传——长任务工具可能跑很久，不能误杀。超时取消协程并抛 TimeoutError。"""
+        fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            return fut.result(timeout)
+        except TimeoutError:
+            fut.cancel()
+            raise
 
     # —— 连接 ——
     def connect_from_config(self, path: str) -> None:
@@ -107,7 +114,7 @@ class MCPManager:
         servers = config.get("mcpServers", {})
         for name, cfg in servers.items():
             try:
-                self._run_coro(self._connect_one(name, cfg))
+                self._run_coro(self._connect_one(name, cfg), timeout=60)
             except Exception as e:
                 print(f"[MCP] 连接 server '{name}' 失败：{type(e).__name__}: {e}")
 
@@ -155,7 +162,7 @@ class MCPManager:
         if not cfg:
             raise RuntimeError(f"在 .mcp.json 中未找到 server '{name}'")
         self.sessions.pop(name, None)   # 断开旧会话（旧进程不主动杀，等 stack 一起清理）
-        self._run_coro(self._connect_one(name, cfg))
+        self._run_coro(self._connect_one(name, cfg), timeout=60)
         print(f"[MCP] 已重连 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
 
     # —— 运行时直接连新 server（不依赖 .mcp.json，供 ensure_lsp 动态装配用）——
@@ -163,7 +170,7 @@ class MCPManager:
         """运行时连一个新 MCP server（直接吃 cfg dict：command/args/env/cwd）。
         同名已存在则先断开旧会话再连。供 ensure_lsp 等按需装配，无需重启 Agent。"""
         self.sessions.pop(name, None)
-        self._run_coro(self._connect_one(name, cfg))
+        self._run_coro(self._connect_one(name, cfg), timeout=60)
         print(f"[MCP] 已动态连接 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
 
     def sync_to_toolbox(self, toolbox) -> list:

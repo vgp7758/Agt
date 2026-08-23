@@ -279,7 +279,8 @@ function _dbgBoxShowText(n){
 }
 // 在新页签以纯文本打开节点完整输出（不涉及任何 html/样式）
 function openDbgFull(n){
-  const url=URL.createObjectURL(new Blob([_dbgBoxText(n)],{type:'text/plain'}));
+  // charset=utf-8 必须显式声明：否则浏览器（中文 Windows 下退回 GBK）会把 UTF-8 中文显示成乱码
+  const url=URL.createObjectURL(new Blob(['\ufeff'+_dbgBoxText(n)],{type:'text/plain;charset=utf-8'}));
   window.open(url,'_blank');
   setTimeout(()=>URL.revokeObjectURL(url),60000);
 }

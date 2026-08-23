@@ -220,10 +220,14 @@ def _validate(canvas: dict) -> None:
 
 
 def _field_to_schema(f):
-    """<field name type>[<field.../] → schema 项 {name, type, schema?}（递归嵌套 object）"""
+    """<field name type fill default>[<field.../] → schema 项 {name, type, fill?, defaultValue?, schema?}（递归）。"""
     res = {"name": f.get("name", ""), "type": f.get("type", "string")}
     if f.get("description"):
         res["description"] = f.get("description")
+    if f.get("fill"):
+        res["fill"] = f.get("fill")   # 批处理 nth_output 子字段值来源（与写侧 _schema_to_xml 配对）
+    if f.get("default"):
+        res["defaultValue"] = f.get("default")
     sub = f.findall("field")
     if sub:
         res["schema"] = [_field_to_schema(s) for s in sub]
@@ -509,7 +513,8 @@ def _cdata(text):
 
 
 def _schema_to_xml(schema):
-    """object 输出字段的 schema → <field name type>[<field.../]（递归嵌套 object）"""
+    """object 输出字段的 schema → <field name type fill default>[<field.../]（递归嵌套 object）。
+    fill：批处理 nth_output 子字段的值来源（output.xxx / input.xxx / loop.index / loop.item）。"""
     parts = []
     for s in schema or []:
         if not isinstance(s, dict):
@@ -517,6 +522,10 @@ def _schema_to_xml(schema):
         sa = f'name={_qa(s.get("name", ""))} type={_qa(s.get("type", "string"))}'
         if s.get("description"):
             sa += f' description={_qa(s.get("description"))}'
+        if str(s.get("fill") or "").strip():
+            sa += f' fill={_qa(str(s["fill"]).strip())}'
+        if s.get("defaultValue") is not None:
+            sa += f' default={_qa(str(s["defaultValue"]))}'
         sub = s.get("schema")
         if isinstance(sub, list) and sub and s.get("type") in ("object", "list"):
             parts.append(f'<field {sa}>{_schema_to_xml(sub)}</field>')

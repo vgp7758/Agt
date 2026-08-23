@@ -1519,6 +1519,25 @@ function showProps(){
         +`<select onchange="setBatchNthType(this.value)" style="width:70px">${IO_TYPES.map(t=>`<option value="${t}" ${nthO.type===t?'selected':''}>${t}</option>`).join('')}</select>`
         +`</div>`
         +`<div style="font-size:10px;color:#8a9099">all_outputs / filtered_outputs 元素 = 装填结果；nth_output 类型联动 all/filtered 的 item 类型。</div>`;
+      // 对象组装模式：类型=object 且声明了子字段时，每个子字段选值来源
+      // （output.*=本轮输出字段 / input.*=节点输入 / loop.index|item / 留空=字面量 defaultValue）
+      if(nthO.type==='object'){
+        h+='<div style="margin-top:6px"><span style="font-size:11px;color:#8a9099">组装字段（每轮迭代结果的对象结构）</span> '
+          +'<button onclick="addNthField()" style="font-size:10px;padding:0 5px">+ 字段</button>'
+          +'<button onclick="importNthSchema()" title="粘贴 JSON 对象按结构推断组装字段" style="font-size:10px;padding:0 5px">📋 JSON导入</button></div>';
+        const fillOpts=_nthFillOptions(n);
+        (Array.isArray(nthO.schema)?nthO.schema:[]).forEach((sf,si)=>{
+          h+=`<div style="display:flex;gap:2px;align-items:center;margin:2px 0">`
+            +`<input value="${ext(sf.name)}" placeholder="字段名" onchange="setNthField(${si},'name',this.value)" style="flex:1 1 64px;min-width:48px;font-size:11px">`
+            +`<select onchange="setNthField(${si},'type',this.value)" style="flex:0 0 66px">${IO_TYPES.map(t=>`<option value="${t}" ${sf.type===t?'selected':''}>${t}</option>`).join('')}</select>`
+            +`<select onchange="setNthFieldFill(${si},this.value)" title="值来源：output.*=本轮输出字段 / input.*=节点输入 / loop.index|item / (字面量)=defaultValue" style="flex:1 1 100px;min-width:70px;font-size:10px">`
+            +fillOpts.map(([v,t])=>`<option value="${ext(v)}" ${String(sf.fill||'')===String(v)?'selected':''}>${ext(t)}</option>`).join('')
+            +`</select>`
+            +(!sf.fill?`<input value="${ext(sf.defaultValue)}" placeholder="字面量值" onchange="setNthFieldDefault(${si},this.value)" style="flex:0 0 70px;font-size:10px">`:'')
+            +`<button class="del" onclick="delNthField(${si})">×</button></div>`;
+        });
+        h+='<div style="font-size:10px;color:#8a9099">至少一个字段选了来源 → 每轮迭代结果=按声明组装的对象（如 {name: output.raw, class: input.class, no: loop.index}）；全部留空=整个输出。</div>';
+      }
     }else{
       const label=n.type==='1'?'输入（工作流入参）':'输出字段';
       h+=`<h3>${label} <button onclick="addIO('out')">+ 添加</button> <button onclick="importJSONSchema('out')" title="粘贴JSON自动分析结构并初始化字段">📋 从JSON导入</button></h3>`;
@@ -1698,6 +1717,65 @@ function setBatchNthType(v){
     }
   });
   showProps();renderAll();
+}
+// ===== nth_output 对象组装（子字段值来源：output.* / input.* / loop.index / loop.item / 字面量）=====
+function _nthFillOptions(n){
+  const opts=[['','(字面量)'],['loop.index','loop.index'],['loop.item','loop.item']];
+  const nthO=(nodeOutputs(n)||[]).find(o=>o.name==='nth_output');
+  const orig=n?.data?.inputs?.batch?._origOutputs||(Array.isArray(nthO?.schema)?nthO.schema:[])||[];
+  orig.forEach(o=>{
+    if(!o.name)return;
+    opts.push(['output.'+o.name,'output.'+o.name]);
+    if(o.type==='object'&&Array.isArray(o.schema))o.schema.forEach(sf=>opts.push(['output.'+o.name+'.'+sf.name,'output.'+o.name+'.'+sf.name]));
+  });
+  nodeInputs(n).forEach(p=>{if(p.name)opts.push(['input.'+p.name,'input.'+p.name]);});
+  return opts;
+}
+function setNthFieldFill(i,v){
+  const nth=_batchNth();if(!nth||!Array.isArray(nth.schema))return;
+  const f=nth.schema[i];if(!f)return;
+  v=(v||'').trim();
+  if(v)f.fill=v; else delete f.fill;   // 空=字面量（defaultValue 承载）
+  showProps();
+}
+function setNthFieldDefault(i,v){
+  const nth=_batchNth();if(!nth||!Array.isArray(nth.schema))return;
+  const f=nth.schema[i];if(!f)return;
+  if(v==='')delete f.defaultValue; else f.defaultValue=v;
+  showProps();
+}
+function addNthField(){
+  const nth=_batchNth();if(!nth)return;
+  if(!Array.isArray(nth.schema))nth.schema=[];
+  nth.schema.push({name:'field'+nth.schema.length,type:'string'});
+  _syncNthToAggr(nth);
+  showProps();
+}
+function delNthField(i){
+  const nth=_batchNth();if(!nth||!Array.isArray(nth.schema))return;
+  nth.schema.splice(i,1);
+  _syncNthToAggr(nth);
+  showProps();
+}
+function importNthSchema(){
+  const s=prompt('粘贴 JSON 对象（按结构推断组装字段，如 {"name":"张三","no":1}）：');
+  if(!s)return;
+  try{
+    const o=JSON.parse(s);
+    const nth=_batchNth();if(!nth)return;
+    const infer=v=>v===null?'string':Array.isArray(v)?'list':typeof v==='object'?'object':typeof v==='number'?(Number.isInteger(v)?'integer':'number'):typeof v==='boolean'?'boolean':'string';
+    nth.schema=Object.entries(o).map(([k,v])=>({name:k,type:infer(v)}));
+    nth.type='object';
+    _syncNthToAggr(nth);
+    showProps();renderAll();
+  }catch(e){alert('JSON 解析失败：'+e.message);}
+}
+function _syncNthToAggr(nth){
+  // nth schema 变更联动 all/filtered 的 item schema（list<object>）
+  const n=findN(selNode);if(!n)return;
+  (nodeOutputs(n)||[]).forEach(o=>{
+    if(o.name==='all_outputs'||o.name==='filtered_outputs')o.schema=Array.isArray(nth.schema)?[...nth.schema]:{type:nth.type||'string'};
+  });
 }
 function setBatchCond(side,v){
   const n=findN(selNode);const c=n.data.inputs.batch.filter.conditions[0];

@@ -1172,6 +1172,59 @@ def _run_node_with_batch(node: dict, handler, ctx):
     # 留空 = 整个 output dict（默认，all_outputs=[{raw:x},...]）；fill 后元素即该字段值（[x,y,...]）
     _nth_decl = next((o for o in (saved_outputs or []) if o.get("name") == "nth_output"), None)
     fill_path = str((_nth_decl or {}).get("fill") or "").strip()
+    # 对象组装模式：nth_output 的 schema 子字段带 fill 声明（如 name=output.raw / class=input.class /
+    # no=loop.index）→ 每轮迭代结果为按声明组装的 object（至少一个子字段有 fill 才激活；字面量字段取 defaultValue）
+    _assemble = None
+    _nth_schema = (_nth_decl or {}).get("schema")
+    if not fill_path and isinstance(_nth_schema, list):
+        _fmap = [(s.get("name"), str(s.get("fill") or "").strip(), s.get("defaultValue"))
+                 for s in _nth_schema if isinstance(s, dict) and s.get("name")]
+        if any(src for _, src, _ in _fmap):
+            _assemble = _fmap
+    # 组装来源 input.xxx 需要【节点级输入的已解析值】（循环外一次；批处理数组源字段解析为整个数组——
+    # 引用它没意义但也不炸）。标量 fill 用 input. 前缀时同样需要。
+    _inputs_resolved = None
+    _need_inputs = bool(_assemble) or (fill_path.startswith("input.") if fill_path else False)
+    if _need_inputs:
+        _inputs_resolved = {}
+        for p in (node.get("data", {}).get("inputs", {}) or {}).get("inputParameters", []) or []:
+            _pn = p.get("name")
+            if _pn:
+                try:
+                    _inputs_resolved[_pn] = resolve_value(p.get("input"), ctx)
+                except Exception:
+                    _inputs_resolved[_pn] = None
+
+    def _fill_one(out, idx, item):
+        """单轮迭代结果的装填：标量 fill 路径 > 对象组装 > 整个 output dict。
+        标量 fill 的路径前缀与对象组装统一：output.xxx（或裸路径=output 相对）/ input.xxx /
+        loop.index / loop.item（裸路径保持旧语义——"raw" ≡ "output.raw"，向后兼容）。"""
+        if fill_path:
+            if fill_path == "loop.index":
+                return idx
+            if fill_path == "loop.item":
+                return item
+            if fill_path.startswith("input."):
+                return (_inputs_resolved or {}).get(fill_path[6:])
+            return _dotted_get(out, fill_path[7:] if fill_path.startswith("output.") else fill_path)
+        if _assemble:
+            obj = {}
+            for fname, src, dv in _assemble:
+                if not src:
+                    obj[fname] = dv            # 字面量（defaultValue；未设为 None）
+                elif src.startswith("output."):
+                    obj[fname] = _dotted_get(out, src[7:])
+                elif src.startswith("input."):
+                    obj[fname] = (_inputs_resolved or {}).get(src[6:])
+                elif src == "loop.index":
+                    obj[fname] = idx
+                elif src == "loop.item":
+                    obj[fname] = item
+                else:
+                    obj[fname] = _dotted_get(out, src)   # 兼容裸路径（视作 output 相对）
+            return obj
+        return out
+
     if saved_outputs:
         data["outputs"] = [o for o in saved_outputs if o.get("name") not in _BATCH_OUT_NAMES]
     all_outputs = []
@@ -1183,11 +1236,11 @@ def _run_node_with_batch(node: dict, handler, ctx):
             try:
                 r = handler(node, ctx)
                 out = r.get("outputs") or {}
-                all_outputs.append(_dotted_get(out, fill_path) if fill_path else out)
+                all_outputs.append(_fill_one(out, idx, item))
             except WorkflowError as e:
-                all_outputs.append(None if fill_path else {"_error": str(e)})  # 单次失败不中断（fill 模式 None 会被过滤）
+                all_outputs.append(None if (fill_path or _assemble) else {"_error": str(e)})  # 单次失败不中断（装填模式 None 会被过滤）
             except Exception as e:
-                all_outputs.append(None if fill_path else {"_error": f"{type(e).__name__}: {e}"})
+                all_outputs.append(None if (fill_path or _assemble) else {"_error": f"{type(e).__name__}: {e}"})
     finally:
         if saved_outputs is not None:
             data["outputs"] = saved_outputs

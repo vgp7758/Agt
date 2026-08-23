@@ -1276,7 +1276,7 @@ function nodepWidget(n,p){
   const ph=p.tip?` placeholder="${ext(p.tip)}"`:'';
   switch(p.widget){
     case 'custom': return p.html?p.html(n):'';
-    case 'branches': return renderSelectorBranches(n);
+    case 'branches': return renderSelectorBranchesEditor(n);
     case 'groups': return renderAggrGroups(n);
     case 'textarea': return `<label>${p.label||p.key} <textarea ${on}${ph}>${ext(val)}</textarea></label>`+hint;
     case 'code': {const L=Math.max(p.rows||8,String(val).split('\n').length);
@@ -1311,7 +1311,8 @@ function pluginCanvasCount(n){
   return plg&&plg.params?plg.params.filter(x=>x.canvas).length:0;
 }
 // ===== 结构化编辑器组件（框架级：插件 js 经 widget:'branches'/'groups' 复用）=====
-function renderSelectorBranches(n){let h='';
+// 注意：与画布版 renderSelectorBranches(g,n)（分支行 foreignObject）不同名——同名会被提升覆盖
+function renderSelectorBranchesEditor(n){let h='';
 
     h+='<h3>选择器分支</h3>';
     const branches=n.data.inputs?.branches||[];
@@ -1586,6 +1587,9 @@ function showProps(){
   }
 
   // 选择器：分支条件编辑器
+  // 节点插件 params 段（统一入口：selector 分支/aggregator 分组/LLM 提示词/code 等节点专属配置；
+  // 全部内置段之后、prop() 扩展段之前）
+  h+=pluginParamsHTML(n);
   // 节点插件属性面板扩展段（插件 js 的 prop(n) 时机在全部内置段之后——通用输入/输出段已渲染）
   const _plugP=NODE_PLUGINS[n.type];
   if(_plugP&&_plugP.prop){ try{ h+=_plugP.prop(n); }catch(e){ h+='<div style="color:#e06c75;font-size:10px">插件属性段出错: '+e.message+'</div>'; } }

@@ -329,74 +329,7 @@ def _get_llm(ctx, model_name: str = ""):
     return cache[model_name]
 
 
-def _handle_llm(node: dict, ctx) -> dict:
-    """type 3：渲染 prompt/systemPrompt，调用 ctx.llm。
-    本节点声明的 outputs 结构会作为 JSON Schema 自动并入 systemPrompt，约束模型输出格式；
-    若声明了多字段/结构化输出（非单个 output:string），还会把模型返回的 JSON 按字段名解析
-    （按声明 type 强转）展开成具名输出，解析失败则降级回 {output: 原文}。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
-
-    cfg = {}
-    for p in inputs.get("llmParam", []):
-        cfg[p.get("name")] = resolve_value(p.get("input"), ctx)
-
-    prompt = render_template(str(cfg.get("prompt", "")), params)
-    system = render_template(str(cfg.get("systemPrompt", "")), params).strip()
-
-    # 把节点声明的输出结构转成 JSON Schema，并入系统提示词
-    outputs = node.get("data", {}).get("outputs", []) or []
-    if outputs:
-        schema = _outputs_to_json_schema(outputs)
-        schema_hint = ("\n\n【输出要求】请严格按照以下 JSON Schema 输出（纯 JSON，不要 markdown 代码块，不要多余解释）：\n"
-                       + json.dumps(schema, ensure_ascii=False, indent=2))
-        system = (system + schema_hint) if system else schema_hint.strip()
-
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt or "（空提示）"})
-
-    overrides = {}
-    if cfg.get("temperature") is not None:
-        try:
-            overrides["temperature"] = float(cfg["temperature"])
-        except (TypeError, ValueError):
-            pass
-    if cfg.get("thinking") is not None:   # per-node 开关覆盖实例默认（推理模型）
-        overrides["enable_thinking"] = str(cfg.get("thinking")).strip().lower() in ("true", "1", "yes", "on")
-    if cfg.get("timeout") is not None:
-        try:
-            overrides["timeout"] = float(cfg["timeout"])
-        except (TypeError, ValueError):
-            pass
-    llm = _get_llm(ctx, str(cfg.get("model", "") or ""))
-    on_error = cfg.get("onError")
-    try:
-        resp = llm.chat(msgs, **overrides)
-    except Exception:
-        if on_error:   # 配了 onError：不中断工作流，输出反馈文本
-            return {"outputs": {"output": str(on_error)}, "port": None}
-        raise
-    content = getattr(resp, "content", "") or ""
-    reasoning = getattr(resp, "reasoning", "") or ""
-    outs = {"output": content}
-    if reasoning:
-        outs["reasoning"] = reasoning   # 推理模型的思考过程默认带上，供下游引用/调试查看
-    if outputs and _needs_structured_parse(outputs):
-        parsed = _parse_structured_output(content, outputs)
-        if parsed is not None:
-            # 保留原文便于调试；但勿覆盖用户声明的 output 字段——声明为 object 时它是结构化结果，
-            # 下游 .output.found 要能取到（被原文覆盖成字符串会让 selector 子字段引用失效）
-            if "output" in parsed:
-                parsed["_raw"] = content
-            else:
-                parsed["output"] = content
-            if reasoning:
-                parsed["reasoning"] = reasoning
-            outs = parsed
-    return {"outputs": outs, "port": None}
-
+# （_handle_llm 已外置为节点插件：src/assets/nodes_builtin/）
 
 def _outputs_to_json_schema(outputs: list) -> dict:
     """把 Coze 节点 outputs 字段定义转成 JSON Schema（object）。
@@ -511,121 +444,11 @@ def _parse_structured_output(content: str, outputs: list):
     return out
 
 
-def _handle_code(node: dict, ctx) -> dict:
-    """type 5：沙箱执行 Python（Coze language=3）。code 形如 `async def main(args)->Output`，
-    args.params 取 inputParameters；return 的 dict 作为节点输出。"""
-    import os
-    import subprocess
-    import sys
-    import tempfile
+# （_handle_code 已外置为节点插件：src/assets/nodes_builtin/）
 
-    inputs = node.get("data", {}).get("inputs", {})
-    language = inputs.get("language", 3)
-    if language != 3:
-        raise WorkflowError(f"代码节点仅支持 Python3(language=3)，收到 language={language}")
-    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
-    code = inputs.get("code", "") or ""
+# （_handle_aggregator 已外置为节点插件：src/assets/nodes_builtin/）
 
-    runner = (
-        "import json, os, asyncio, inspect\n"
-        "class _Args:\n"
-        "    def __init__(self, p): self.params = p\n"
-        "Output = dict\n"
-        "args = _Args(json.loads(os.environ['WF_PARAMS']))\n"
-        + code +
-        "\n_r = None\n"
-        "if 'main' in dir():\n"
-        "    _m = main\n"
-        "    if inspect.iscoroutinefunction(_m):\n"
-        "        _r = asyncio.get_event_loop().run_until_complete(_m(args))\n"
-        "    else:\n"
-        "        _r = _m(args)\n"
-        "print('__WF_RESULT__', json.dumps(_r, ensure_ascii=False, default=str))\n"
-    )
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
-        f.write(runner)
-        tmp = f.name
-    env = dict(os.environ)
-    env["WF_PARAMS"] = json.dumps(params, ensure_ascii=False, default=str)
-    try:
-        proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
-                              timeout=30, encoding="utf-8", errors="replace", env=env,
-                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-    marker = None
-    for line in (proc.stdout or "").splitlines():
-        if line.startswith("__WF_RESULT__ "):
-            marker = line[len("__WF_RESULT__ "):]
-    if marker is None:
-        tail = (proc.stderr or proc.stdout or "")[-500:]
-        raise WorkflowError(f"代码节点未产出结果（可能抛错）：{tail}")
-    try:
-        ret = json.loads(marker)
-    except json.JSONDecodeError:
-        ret = {"output": marker}
-    if not isinstance(ret, dict):
-        ret = {"output": ret}
-    return {"outputs": ret, "port": None}
-
-
-# （_handle_text/_handle_tojson/_handle_fromjson 已外置为节点插件：src/assets/nodes_builtin/）
-
-
-
-def _handle_aggregator(node: dict, ctx) -> dict:
-    """type 32 变量聚合：多个分支汇合，取"实际执行到的那个"上游输出。
-    变量按声明顺序取第一个【执行过且值非空】的——此前只要 blockID 执行过就直接选定：
-    字段解析为 None（分支没走到该字段/输出为空）时整组返回 null，不再看后续变量
-    （用户报告：var1=null 直接分组 null，var2 有值也被忽略）。
-    全部执行过但都无值 → 兜底第一个执行过的值；字面量/全局变量分支保持"非 None 即选"。"""
-    groups = node.get("data", {}).get("inputs", {}).get("mergeGroups", [])
-    out = {}
-    for g in groups:
-        gname = g.get("name")
-        chosen = None
-        fallback = None
-        has_fallback = False
-        for bi in g.get("variables", []):
-            val = bi.get("value", bi) if isinstance(bi, dict) else {}
-            content = val.get("content") if isinstance(val, dict) else None
-            if isinstance(content, dict) and content.get("source") == "block-output":
-                if str(content.get("blockID", "")) not in ctx.node_outputs:
-                    continue   # 该分支未执行过：跳过（继续看后续变量）
-                v = resolve_value(bi, ctx)
-                if v is not None and v != "":
-                    chosen = v          # 执行过且有值：选定
-                    break
-                if not has_fallback:    # 执行过但无值：记兜底，继续找后面的
-                    fallback, has_fallback = v, True
-            else:
-                v = resolve_value(bi, ctx)  # 字面量/全局变量：取非空者
-                if v is not None:
-                    chosen = v
-                    break
-        out[gname] = chosen if chosen is not None else fallback
-    return {"outputs": out, "port": None}
-
-
-def _handle_assigner(node: dict, ctx) -> dict:
-    """type 40 变量赋值：把 input 值写入 left 指向的全局变量。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    for p in inputs.get("inputParameters", []):
-        val = resolve_value(p.get("input"), ctx)
-        left = p.get("left", {})
-        lv = left.get("value", left) if isinstance(left, dict) else {}
-        content = lv.get("content") if isinstance(lv, dict) else None
-        path = (content or {}).get("path") if isinstance(content, dict) else None
-        if path:
-            ctx.global_vars[str(path[0])] = val
-    return {"outputs": {"isSuccess": True}, "port": None}
-
-
-# ----- Selector(8) 条件分支 -----
+# （_handle_assigner 已外置为节点插件：src/assets/nodes_builtin/）
 
 def _to_num(x):
     try:
@@ -716,21 +539,7 @@ def _eval_condition(condition: dict, ctx) -> bool:
     return any(results) if logic == 1 else all(results)
 
 
-def _handle_selector(node: dict, ctx) -> dict:
-    """type 8 选择器：按分支顺序求值，第 i 个(0起)成立的分支 → 端口 'true'(i=0) / 'true_{i}'(i>0)；
-    都不成立 → 'false'。"""
-    branches = node.get("data", {}).get("inputs", {}).get("branches", [])
-    for i, br in enumerate(branches):
-        if _eval_condition(br.get("condition", {}), ctx):
-            return {"outputs": {}, "port": "true" if i == 0 else f"true_{i}"}
-    return {"outputs": {}, "port": "false"}
-
-
-# ----- 复合节点：Loop(21) / Batch(28) + LoopSetVariable(20) + Break(19)/Continue(29) -----
-
-_INLINE_OUT_SUFFIX = "-function-inline-output"
-_MAX_LOOP_ITERS = 10000   # 单次循环迭代上限（防失控；infinite 靠 Break 退出）
-
+# （_handle_selector 已外置为节点插件：src/assets/nodes_builtin/）
 
 def _find_body_entry(edges: list, composite_id: str) -> str | None:
     """找子画布迭代入口节点 id（-function-inline-output 边的目标）。无则 None（旧格式）。"""
@@ -1084,124 +893,9 @@ def _load_canvas(path: Path):
 
 
 
-def _handle_intent(node: dict, ctx) -> dict:
-    """type 22 意图识别：LLM 把 query 分到预设意图之一。命中第 i 个 → 端口 branch_{i}，否则 default。
-    意图选项自动并入提示词；若节点声明了 systemPrompt 则一并送入。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
-    intents = [i.get("name", "") for i in inputs.get("intents", [])]
-    query = params.get("query") or next((v for v in params.values() if v), "")
+# （_handle_intent 已外置为节点插件：src/assets/nodes_builtin/）
 
-    # 意图列表自动并入提示词（带编号，便于模型返回）
-    list_str = "\n".join(f"{i+1}. {n}" for i, n in enumerate(intents) if n) or "(无意图)"
-    prompt = (f"判断用户输入属于下列哪个意图，只回复对应编号（数字），不要任何解释。\n"
-              f"可选意图：\n{list_str}\n\n用户输入：{query}\n\n"
-              f"若无任何匹配，回复 0。")
-    msgs = []
-    sys_input = next((p for p in inputs.get("llmParam", []) if p.get("name") == "systemPrompt"), None)
-    sys_text = resolve_value(sys_input.get("input"), ctx) if sys_input else ""
-    if sys_text:
-        msgs.append({"role": "system", "content": str(sys_text)})
-    msgs.append({"role": "user", "content": prompt})
-    # 支持节点级选模型
-    model_name = str(resolve_value(
-        next((p.get("input") for p in inputs.get("llmParam", []) if p.get("name") == "model"), {}),
-        ctx) or "")
-    resp = _get_llm(ctx, model_name).chat(msgs)
-    answer = (getattr(resp, "content", "") or "").strip()
-
-    # 优先按编号解析，其次按意图名匹配
-    idx = None
-    digits = "".join(ch for ch in answer if ch.isdigit())
-    if digits:
-        n = int(digits)
-        if 1 <= n <= len(intents):
-            idx = n - 1
-    if idx is None:
-        for i, name in enumerate(intents):
-            if name and (name == answer or name in answer):
-                idx = i
-                break
-    if idx is None:
-        return {"outputs": {}, "port": "default"}
-    return {"outputs": {}, "port": f"branch_{idx}"}
-
-
-def _handle_http(node: dict, ctx) -> dict:
-    """type 45 HTTP 请求：method/url/headers/params/body/auth。URL/JSON 体支持 {{block_output_*}} 模板。"""
-    import urllib.parse
-    import urllib.request
-    import urllib.error
-
-    inputs = node.get("data", {}).get("inputs", {})
-    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)   # URL/body 的 {{变量名}} 引用这些输入
-    api = inputs.get("apiInfo", {}) or {}
-    method = (api.get("method") or "GET").upper()
-    url = render_template(api.get("url", ""), params)
-
-    kv = {}
-    for p in inputs.get("params", []) or []:
-        kv[p.get("name")] = resolve_value(p.get("input"), ctx)
-    if kv:
-        url += ("&" if "?" in url else "?") + urllib.parse.urlencode(kv, doseq=True)
-
-    headers = {}
-    for p in inputs.get("headers", []) or []:
-        headers[p.get("name")] = str(resolve_value(p.get("input"), ctx))
-
-    auth = inputs.get("auth") or {}
-    if auth.get("authOpen") and auth.get("authType") == "bearer":
-        for p in ((auth.get("authData") or {}).get("bearerTokenData") or []):
-            if p.get("name") == "token":
-                headers["Authorization"] = "Bearer " + str(resolve_value(p.get("input"), ctx))
-
-    body = inputs.get("body") or {}
-    bt = body.get("bodyType")
-    bd = body.get("bodyData") or {}
-    data = None
-    if bt == "JSON":
-        data = render_template(bd.get("json", ""), params).encode("utf-8")
-        headers.setdefault("Content-Type", "application/json")
-    elif bt == "RAW_TEXT":
-        data = render_template(bd.get("rawText", ""), params).encode("utf-8")
-        headers.setdefault("Content-Type", "text/plain")
-    elif bt in ("FORM_DATA", "FORM_URLENCODED"):
-        fields = bd.get("formURLEncoded") or (bd.get("formData", {}) or {}).get("data") or []
-        form = {p.get("name"): str(resolve_value(p.get("input"), ctx)) for p in fields}
-        data = urllib.parse.urlencode(form).encode("utf-8")
-        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
-
-    setting = inputs.get("setting") or {}
-    timeout = int(setting.get("timeout") or 15)
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw_bytes = resp.read()
-            code = resp.getcode()
-            ctype = resp.headers.get("Content-Type", "")
-            hdrs = json.dumps(dict(resp.headers.items()), ensure_ascii=False)
-    except urllib.error.HTTPError as e:
-        raw_bytes = e.read() if hasattr(e, "read") else str(e).encode()
-        code = e.code
-        ctype = ""
-        hdrs = "{}"
-    # 解码：优先 Content-Type 的 charset；utf-8 失败则回退 gbk（中文站点常见）
-    charset = "utf-8"
-    for _tok in ctype.split(";"):
-        if _tok.strip().lower().startswith("charset="):
-            charset = _tok.split("=", 1)[1].strip().strip('"')
-    try:
-        raw = raw_bytes.decode(charset) if isinstance(raw_bytes, (bytes, bytearray)) else str(raw_bytes)
-    except (LookupError, UnicodeDecodeError):
-        try:
-            raw = raw_bytes.decode("gbk", errors="replace")
-        except Exception:
-            raw = str(raw_bytes)
-    except Exception as e:
-        return {"outputs": {"body": f"[HTTP 失败] {type(e).__name__}: {e}", "statusCode": 0, "headers": "{}"},
-                "port": None}
-    return {"outputs": {"body": raw, "statusCode": code, "headers": hdrs}, "port": None}
-
+# （_handle_http 已外置为节点插件：src/assets/nodes_builtin/）
 
 def _handle_subworkflow(node: dict, ctx) -> dict:
     """type 9 子工作流：workflowId 按本地 .agent/workflows/<名> 匹配并执行（我们的约定：
@@ -1311,21 +1005,16 @@ def _handle_input_receiver(node: dict, ctx) -> dict:
 # 子画布内可能有 type 1/2 作为视觉标记——通过处理（不报错）。
 def _passthrough(node, ctx): return {"outputs": {}, "port": None}
 NODE_HANDLERS = {
+    # 核心（调度器协议，不容插件覆写）：start/end/loop/batch/loop-setvar/subworkflow/plugin/output
     "1": _passthrough,
     "2": _passthrough,
-    "3": _handle_llm,
-    "5": _handle_code,
-    "32": _handle_aggregator,
-    "40": _handle_assigner,
-    "8": _handle_selector,
     "20": _handle_loop_setvar,
     "21": _handle_loop,
     "28": _handle_batch,
-    "22": _handle_intent,
-    "45": _handle_http,
     "9": _handle_subworkflow,
     "4": _handle_plugin,
     "13": _handle_output_emitter,
+    # 3/5/8/22/32/40/45/15/58/59 由节点插件注入（node_plugins.attach——三级目录同名 type 可覆盖）
 }
 # 节点插件装配（assets/nodes_builtin → nodes/ → .agent/nodes/；同 type 覆盖=定制机制）：
 # 15/58/59（text/tojson/fromjson）已迁 src/assets/nodes_builtin/——首批插件化节点

@@ -58,3 +58,33 @@ def workflow_error(msg: str):
     """构造 WorkflowError（引擎会走 error 边/记录节点错误）。"""
     from workflow import WorkflowError
     return WorkflowError(msg)
+
+
+def eval_condition(cond: dict, ctx) -> bool:
+    """selector 条件组求值（logic 1=AND 2=OR；operator 1-16）。"""
+    from workflow import _eval_condition as _f
+    return _f(cond, ctx)
+
+
+def get_llm(ctx, model_name: str = ""):
+    """按模型名取 LLMClient（空名=ctx.llm；指定名=per-model 独立缓存 client）。llm/intent 节点用。"""
+    from workflow import _get_llm as _f
+    return _f(ctx, model_name)
+
+
+def outputs_to_json_schema(outputs: list) -> dict:
+    """节点声明的 outputs → JSON Schema（并入 systemPrompt 约束模型输出格式）。"""
+    from workflow import _outputs_to_json_schema as _f
+    return _f(outputs)
+
+
+def needs_structured_parse(outputs: list) -> bool:
+    """outputs 声明是否需要结构化解析（非单个 output:string）。"""
+    from workflow import _needs_structured_parse as _f
+    return _f(outputs)
+
+
+def parse_structured_output(content: str, outputs: list):
+    """模型回包 JSON → 按声明字段强转展开；解析失败返回 None（降级 {output: 原文}）。"""
+    from workflow import _parse_structured_output as _f
+    return _f(content, outputs)

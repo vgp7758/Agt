@@ -13,6 +13,11 @@
 
 同名 type 后扫覆盖先扫——用户在 `.agent/nodes/` 放同名文件即定制覆写内置节点。
 
+**已迁移清单**（src/assets/nodes_builtin/，两批共 10 类）：
+- 第一批：text(15) / tojson(58) / fromjson(59)
+- 第二批：llm(3) / code(5) / selector(8) / intent(22) / aggregator(32) / assigner(40) / http(45)
+- **核心内置（不可覆写）**：start(1) / end(2) / loop(21) / batch(28) / loop-setvar(20) / subworkflow(9) / plugin(4) / output(13)——调度器协议层
+
 ## 后端约定（.py）
 
 ```python

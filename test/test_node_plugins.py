@@ -37,10 +37,13 @@ import node_plugins as NP
 
 res = NP.scan_node_plugins()
 hs = res["handlers"]
-check("① 注册 4 类（15/58/59/N1）", set(hs) >= {"15", "58", "59", "N1"}, str(sorted(hs)))
+SECOND = {"3", "5", "8", "15", "22", "32", "40", "45", "58", "59"}   # 第二批迁移
+check("① 注册 11 类（第一批 3 + 第二批 7 + N1）", set(hs) >= (SECOND | {"N1"}), str(sorted(hs)))
 check("① py/js 配对齐全（无警告）",
       not [w for w in res["warnings"] if "无配对" in w], str(res["warnings"]))
 check("① N1 handler 可调用", callable(hs["N1"]["handler"]))
+check("① 第二批全部 py+js", SECOND <= {i["type"] for i in res["js"]},
+      str(sorted({i["type"] for i in res["js"]})))
 
 # ===== ② 对拍执行（三迁移节点 + N1）=====
 import workflow as W
@@ -82,6 +85,81 @@ tjf = {"nodes": [
 ]}
 out2 = W.execute(tjf, {"x": {"k": [1, None]}}, tools=None, llm=None, return_exit_dict=True)
 check("② tojson→fromjson 往返", out2 == {"o": {"k": [1, None]}}, str(out2))
+
+# ===== ②b 第二批七节点 mock 回归（串联：code→selector→aggregator→assigner；intent/llm 单测）=====
+class _MockResp:
+    content = '{"ok": 1}'; reasoning = ""
+
+class _MockLLM:
+    model_name = "mock"
+    def chat(self, msgs, **kw):
+        return _MockResp()
+
+
+def _cond(op, lref, rlit, rtype="number"):
+    return {"logic": 2, "conditions": [{"operator": op,
+        "left": {"input": lref},
+        "right": {"input": {"type": rtype, "value": {"type": "literal", "content": rlit}}}}]}
+
+
+chain = {"nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [{"name": "x", "type": "number"}]}},
+    {"id": "500001", "type": "5", "data": {
+        "inputs": {"language": 3, "inputParameters": [
+            {"name": "x", "input": {"type": "number", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "x"}}}}],
+            "code": "async def main(args):\n    return {'y': args.params['x'] * 2}"},
+        "outputs": [{"name": "y", "type": "number"}]}},
+    {"id": "800001", "type": "8", "data": {"inputs": {"branches": [
+        {"condition": _cond(13, {"type": "number", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "500001", "name": "y"}}}, 5)}]}}},
+    {"id": "320001", "type": "32", "data": {"inputs": {"mergeGroups": [
+        {"name": "pick", "variables": [
+            {"value": {"type": "ref", "content": {"source": "block-output", "blockID": "500001", "name": "y"}}},
+            {"value": {"type": "literal", "content": -1}}]}]},
+        "outputs": [{"name": "pick", "type": "number"}]}},
+    {"id": "400001", "type": "40", "data": {"inputs": {"inputParameters": [
+        {"name": "input", "input": {"type": "number", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "320001", "name": "pick"}}},
+         "left": {"value": {"content": {"path": ["g_pick"]}}}}]}}},
+    {"id": "900001", "type": "2", "data": {"inputs": {"inputParameters": [
+        {"name": "out", "input": {"type": "number", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "320001", "name": "pick"}}}}]}}},
+], "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "500001"},
+    {"sourceNodeID": "500001", "targetNodeID": "800001"},
+    {"sourceNodeID": "800001", "targetNodeID": "320001", "sourcePortID": "true"},
+    {"sourceNodeID": "320001", "targetNodeID": "400001"},
+    {"sourceNodeID": "400001", "targetNodeID": "900001"},
+]}
+o3 = W.execute(chain, {"x": 4}, tools=None, llm=_MockLLM(), return_exit_dict=True)
+check("②b 串联 code→selector→aggregator→assigner", o3 == {"out": 8}, str(o3))
+
+intnt = {"nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [{"name": "q", "type": "string"}]}},
+    {"id": "220001", "type": "22", "data": {"inputs": {
+        "inputParameters": [{"name": "query", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "q"}}}}],
+        "intents": [{"name": "退款"}, {"name": "咨询"}]}}},
+    {"id": "900001", "type": "2", "data": {"inputs": {"inputParameters": [
+        {"name": "r", "input": {"type": "string", "value": {"type": "literal", "content": "is-refund"}}}]}}},
+], "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "220001"},
+    {"sourceNodeID": "220001", "targetNodeID": "900001", "sourcePortID": "branch_0"},
+]}
+o4 = W.execute(intnt, {"q": "退款"}, tools=None, llm=_MockLLM(), return_exit_dict=True)
+check("②b intent branch_0 路由", o4 == {"r": "is-refund"}, str(o4))
+
+llmn = {"nodes": [
+    {"id": "100001", "type": "1", "data": {"outputs": [{"name": "q", "type": "string"}]}},
+    {"id": "300001", "type": "3", "data": {
+        "inputs": {
+            "inputParameters": [{"name": "q", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "q"}}}}],
+            "llmParam": [{"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "问题：{{q}}"}}}]},
+        "outputs": [{"name": "output", "type": "string"}]}},
+    {"id": "900001", "type": "2", "data": {"inputs": {"inputParameters": [
+        {"name": "out", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "300001", "name": "output"}}}}]}}},
+], "edges": [
+    {"sourceNodeID": "100001", "targetNodeID": "300001"},
+    {"sourceNodeID": "300001", "targetNodeID": "900001"},
+]}
+o5 = W.execute(llmn, {"q": "hi"}, tools=None, llm=_MockLLM(), return_exit_dict=True)
+check("②b llm prompt 渲染+透传", o5 == {"out": '{"ok": 1}'}, str(o5))
 
 # ===== ③ XML 往返（未知类型 N1 通用序列化）=====
 from workflow_xml import canvas_to_xml, xml_to_canvas

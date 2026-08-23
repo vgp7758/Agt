@@ -1453,6 +1453,12 @@ class Agent:
             except Exception:
                 self._active_hooks = set()
             tool_schemas = self.tools.schemas()
+            # tools schema 随请求计费进 prompt_tokens 但不在投影 msgs 里：每轮算一次其字符数，
+            # observe_llm_usage 拿它修正 chars/token 校准分子（否则比率系统性估高 → 过早压缩）
+            try:
+                tool_schema_chars = len(json.dumps(tool_schemas, ensure_ascii=False))
+            except Exception:
+                tool_schema_chars = 0
             continue_loop = False
             try:
                     for step_num in range(1, self.max_steps + 1):
@@ -1513,6 +1519,10 @@ class Agent:
                                 pass
                         if resp.usage:
                             self.cumulative_tokens += resp.usage.get("total_tokens", 0)
+                            # 实测 token 喂给 session：校准 chars/token 比率 + 超窗/panic 判阈
+                            # （超 panic 立即紧急压缩；走到这里即本次调用成功——失败走 raise 不返回 resp）
+                            self.session.observe_llm_usage(msgs, resp.usage,
+                                                           extra_chars=tool_schema_chars)
 
                         if self.token_budget and self.cumulative_tokens >= self.token_budget * 0.8:
                             self._emit({"type": "warn", "text": "⚠️ 预算已用 80%+，即将触顶收尾"})
@@ -1736,6 +1746,10 @@ class Agent:
                         # （schemas 无缓存，只是 dict 遍历，成本低）
                         self._refresh_tools_if_written(step)
                         tool_schemas = self.tools.schemas()
+                        try:   # 工具重注册后 schema 变了：校准分子同步刷新（与轮初同式）
+                            tool_schema_chars = len(json.dumps(tool_schemas, ensure_ascii=False))
+                        except Exception:
+                            tool_schema_chars = 0
 
                     if continue_loop:
                         continue

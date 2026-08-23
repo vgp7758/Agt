@@ -12,6 +12,9 @@
 设计要点（延续前面的教训）：
   - reasoning 随每步存入 Step 并在近期窗口/当前轮回传（维持推理链连贯）；窗口外摘要、recall(默认)、单轮超 max_steps 截断时不带 reasoning。
   - 摘要源是该轮自带的 summary 字段，窗口外拼接便宜（纯字符串 join），超长才压缩并缓存。
+  - 压缩阈值判定的 token 估算用【实测校准比率】而非写死的 chars/4：react 每次成功回包
+    observe_llm_usage 喂入 usage，chars÷prompt_tokens 持续校准 _chars_per_token（跨 session
+    落盘 ~/.agt/token_usage.jsonl）；实测 total 超 panic 立即紧急压缩、超 win 标记下轮重规划。
 """
 from __future__ import annotations
 
@@ -50,6 +53,9 @@ _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
 # site-packages（不可写/难找），故统一到 ~/.agt，与 models.json/settings.json 同惯例。
 REPOS_DIR = Path.home() / ".agt" / "repos"
+# 实测 token 用量流水（react 每次成功回包 observe_llm_usage 追加一条）：既是超窗观察日志，
+# 也是 chars/token 校准比率的持久化源——新 session init 回读末尾同模型记录作比率初值。
+TOKEN_USAGE_FILE = Path.home() / ".agt" / "token_usage.jsonl"
 # 旧位置（用于一次性自动迁移；SESSIONS_DIR 同时保留作 legacy 别名供 commands.py 等 import）：
 SESSIONS_DIR = Path.home() / ".agt" / "sessions"                              # 上一版 ~/.agt/sessions/<hash>/
 _LEGACY_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"   # 开发期项目根（pip 装后不存在）
@@ -523,6 +529,11 @@ class Session:
         self._last_fold_count: int = 0   # 最近一次分档 build 的折叠轮数（to_history 用它折叠前端历史）
         self._planned_fold: int = 0      # 轮边界折叠计划（start_turn 时算好折到 75%；轮内 _build 以它为起点，不再轮内折叠）
         self._planned_graduates: int = 0 # 轮边界毕业计划（start_turn 时算好升几档；轮内 _build 以它为起点，不再轮内升档）
+        # —— 实测 token 校准（react 每次成功回包 observe_llm_usage 喂入）——
+        # _estimate_tokens 的除数由此取代写死的 chars/4（中文 ≈1.5 字/token，chars/4 可低估 2~3 倍）
+        self._chars_per_token: float = 4.0    # 实测字符/token 比率（EMA 平滑；初值 4=旧行为）
+        self._over_window_mark: bool = False  # 实测 total 超 win（未超 panic）标记，下轮 start_turn 消费记日志
+        self._load_calibration()              # 回读 ~/.agt/token_usage.jsonl 末尾同模型记录作初值（跨 session 校准）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
 
@@ -642,6 +653,10 @@ class Session:
             self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
         self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
+        if self._over_window_mark:   # 上轮实测 total 超 win（observe_llm_usage 置位）：本轮重规划并留痕
+            _LOG.info("上轮实测 token 超窗（win=%d）：以校准比率 %.2f 字/token 重规划折叠",
+                      self.max_effective_context_window, self._chars_per_token)
+            self._over_window_mark = False
         self._plan_fold()   # 轮边界折叠计划：新轮开始瞬间算好折到 75%，轮内不再折叠（byte-stable）
 
     def add_step(self, step: Step):
@@ -1232,8 +1247,10 @@ class Session:
         return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + "\n".join(lines)
 
     @staticmethod
-    def _estimate_tokens(msgs: list[dict]) -> int:
-        """粗估 token ≈ chars/4（够阈值判断，不必精确；tool_calls 的 function 也计入）。"""
+    def _count_chars(msgs: list[dict]) -> int:
+        """投影字符数（分子）：content（str 或多模态块）+ tool_calls 的 name/arguments。
+        与历史 _estimate_tokens 内联的分子公式完全同口径——校准（observe）与估算（estimate）
+        必须共用同一分子，chars/token 比率才闭环。"""
         n = 0
         for m in msgs:
             c = m.get("content")
@@ -1245,7 +1262,96 @@ class Session:
             for tc in (m.get("tool_calls") or []):
                 fn = tc.get("function") or {}
                 n += len(str(fn.get("name", ""))) + len(str(fn.get("arguments", "")))
-        return n // 4
+        return n
+
+    def _estimate_tokens(self, msgs: list[dict]) -> int:
+        """估算 token = chars / _chars_per_token（初值 4=旧行为；observe_llm_usage 用回包实测
+        持续校准该比率，中文场景不再 chars/4 低估 2~3 倍。够阈值判断，不必精确）。"""
+        return int(self._count_chars(msgs) / self._chars_per_token)
+
+    # ========== 实测 token 校准 + 超窗/panic 判阈（react 回包喂入） ==========
+    def _load_calibration(self) -> None:
+        """启动种子校准：读 ~/.agt/token_usage.jsonl 末尾（限 64KB），取最近一条【同模型】记录的
+        chars_per_token 作初值——比率跨 session 复用，首个投影就按真实口径估算。
+        无记录/不同模型/失败一律静默（保持初值 4.0）。"""
+        try:
+            if not TOKEN_USAGE_FILE.exists():
+                return
+            model = getattr(self.llm, "model_name", "") or ""
+            with open(TOKEN_USAGE_FILE, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 65536))
+                tail = f.read().decode("utf-8", errors="ignore")
+            for line in reversed(tail.splitlines()):   # 从末尾往回找最近一条同模型记录
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue   # 截断的半行（64KB 窗口边界）跳过
+                if rec.get("model") == model and rec.get("chars_per_token"):
+                    r = float(rec["chars_per_token"])
+                    if 1.0 <= r <= 8.0:
+                        self._chars_per_token = r
+                    break
+        except Exception:
+            pass
+
+    @staticmethod
+    def _append_token_usage(rec: dict) -> None:
+        """追加一条实测记录到 ~/.agt/token_usage.jsonl（超窗观察日志 + 校准数据源）。
+        超 1MB 重写保留末尾 2000 行（防无界增长）。失败静默，绝不影响主循环。"""
+        try:
+            TOKEN_USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            if TOKEN_USAGE_FILE.exists() and TOKEN_USAGE_FILE.stat().st_size > 1_048_576:
+                lines = TOKEN_USAGE_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+                Session._atomic_write_lines(TOKEN_USAGE_FILE, lines[-2000:])
+            with open(TOKEN_USAGE_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def observe_llm_usage(self, msgs: list[dict], usage: dict, extra_chars: int = 0) -> None:
+        """react 每次成功 LLM 调用后由 agent 喂入回包 usage（拿到 resp 即成功——失败走 raise）：
+        1. 校准：投影字符数 ÷ prompt_tokens → 实测 chars/token，EMA(0.5) 平滑进 _chars_per_token，
+           _estimate_tokens / _plan_fold / 保命阀随即按真实口径工作；
+        2. 落盘：记录追加 ~/.agt/token_usage.jsonl（含 over/panic 标志）；
+        3. 判阈（按实测 total_tokens，含本步输出——它将成为下一步输入，前瞻且保守）：
+           超 panic → 立即 _plan_fold() 紧急压缩（升档+折叠即刻改投影，下一步请求即压缩后形态）；
+           超 win 未超 panic → 置 _over_window_mark，下轮 start_turn 的 _plan_fold 以校准比率重规划。
+        extra_chars：随请求计费但不在 msgs 里的字符（tools schema）——prompt_tokens 含它，
+        分子补上才不把比率系统性估高（否则会过早压缩）。win 未配置（窗口模式）完全 no-op。"""
+        win = self.max_effective_context_window
+        if not win or not usage:
+            return
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        total = int(usage.get("total_tokens") or (prompt + completion))
+        if prompt <= 0 and total <= 0:
+            return
+        chars = self._count_chars(msgs) + int(extra_chars or 0)
+        if prompt > 0 and chars > 0:   # 校准用 prompt：chars 对应的正是输入侧
+            ratio = min(max(chars / prompt, 1.0), 8.0)
+            self._chars_per_token = round(0.5 * self._chars_per_token + 0.5 * ratio, 3)
+        panic = config.load_panic_window() or win
+        over = total > win
+        hit_panic = total > panic
+        self._append_token_usage({
+            "ts": int(time.time()), "model": getattr(self.llm, "model_name", "") or "",
+            "chars": chars, "prompt_tokens": prompt, "completion_tokens": completion,
+            "total_tokens": total, "chars_per_token": self._chars_per_token,
+            "over": over, "panic": hit_panic,
+        })
+        if hit_panic:
+            _LOG.warning("实测 token=%d 超 panic=%d：立即紧急压缩（升档+折叠，下一步投影生效）",
+                         total, panic)
+            self._plan_fold()
+        elif over:
+            _LOG.info("实测 token=%d 超 win=%d（未超 panic=%d）：标记下轮边界重规划",
+                      total, win, panic)
+            self._over_window_mark = True
 
     @staticmethod
     def _ambient(content: str) -> str:

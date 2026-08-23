@@ -1,6 +1,13 @@
 """Selector 选择器节点插件（type 8）：按分支顺序求值，第 i 个(0起)成立的分支 →
 端口 'true'(i=0) / 'true_{i}'(i>0)；都不成立 → 'false'。
 """
+
+PARAMS = [
+    {"key": "branches", "type": "list", "required": True,
+     "desc": "条件分支列表；每项 {condition:{logic, conditions:[{operator,left,right}]}}，"
+             "按序求值第一个真值分支（branch_N），全假走 default"},
+]
+
 from workflow_node_api import eval_condition
 
 

@@ -3,6 +3,12 @@
 独立子进程跑（隔离 + 30s 超时），args.params 取 inputParameters；
 return 的 dict 作为节点输出。
 """
+
+PARAMS = [
+    {"key": "code", "type": "string", "required": True,
+     "desc": "沙箱 Python 代码；须定义 `async def main(args)`，args.params 取输入，返回 dict"},
+]
+
 import json
 
 from workflow_node_api import resolve_input_params, workflow_error

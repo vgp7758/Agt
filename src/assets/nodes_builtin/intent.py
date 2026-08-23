@@ -3,6 +3,16 @@
 命中第 i 个 → 端口 branch_{i}，否则 default。意图选项自动并入提示词；
 可声明 systemPrompt 与 model（节点级选模型）。
 """
+
+PARAMS = [
+    {"key": "query",   "type": "string", "required": True,
+     "desc": "待分类文本；{{输入字段名}} 占位符"},
+    {"key": "intents", "type": "list", "required": True,
+     "desc": "意图名列表（画布每个意图一个 branch_N 出口，未命中走默认）"},
+    {"key": "model",   "type": "string", "required": False, "default": "",
+     "desc": "分类模型；空=跟随 ctx.llm"},
+]
+
 from workflow_node_api import resolve_value, resolve_input_params, get_llm
 
 

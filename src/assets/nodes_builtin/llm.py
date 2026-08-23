@@ -3,6 +3,25 @@
 声明的 outputs 结构自动并入 systemPrompt 约束输出格式；多字段/结构化声明
 （非单个 output:string）时按字段名强转解析展开，失败降级 {output: 原文}。
 """
+
+# 节点参数声明（前端 .js 同款 params 的后端镜像：文档/校验/工具化用）
+PARAMS = [
+    {"key": "prompt",       "type": "string", "required": True,
+     "desc": "用户提示词模板，支持 {{输入字段名}} 占位符引用上游输出"},
+    {"key": "systemPrompt", "type": "string", "required": False,
+     "desc": "系统提示词（角色/格式约束）；outputs 声明会自动并入 JSON Schema 约束"},
+    {"key": "model",        "type": "string", "required": False, "default": "",
+     "desc": "models.json provider 名；空=跟随 ctx.llm（utility/主模型）"},
+    {"key": "thinking",     "type": "string", "required": False, "enum": ["", "true", "false"],
+     "desc": "思考开关；空=跟随默认"},
+    {"key": "timeout",      "type": "number", "required": False,
+     "desc": "请求超时秒数；空=全局默认"},
+    {"key": "onError",      "type": "string", "required": False,
+     "desc": "失败时输出的替代文本；空=中断工作流"},
+    {"key": "output_format","type": "string", "required": False, "enum": ["json", "text"], "default": "json",
+     "desc": "json=声明 outputs 结构化解析；text=不约束不解析，content 原文走 output 端口"},
+]
+
 import json
 
 from workflow_node_api import (resolve_value, resolve_input_params, render_template, get_llm,

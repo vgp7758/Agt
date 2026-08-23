@@ -542,6 +542,7 @@ def _eval_condition(condition: dict, ctx) -> bool:
 # （_handle_selector 已外置为节点插件：src/assets/nodes_builtin/）
 
 _INLINE_OUT_SUFFIX = "-function-inline-output"   # 复合节点体内迭代入口边的源端口后缀
+_MAX_LOOP_ITERS = 10000   # 单次循环迭代上限（防失控；infinite 靠 Break 退出）
 
 
 def _find_body_entry(edges: list, composite_id: str) -> str | None:

@@ -6,6 +6,13 @@
 - 全部执行过但都无值 → 兜底第一个执行过的值；
 - 字面量/全局变量分支保持"非 None 即选"。
 """
+
+PARAMS = [
+    {"key": "mergeGroups", "type": "list", "required": True,
+     "desc": "分组列表；每项 {name, variables:[{type, value(ref|literal)}]}——"
+             "取第一个【执行过且值非空】的变量作为分组输出"},
+]
+
 from workflow_node_api import resolve_value
 
 

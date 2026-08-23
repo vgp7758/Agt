@@ -243,7 +243,7 @@ function nodeH(n){
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(NODE_PLUGINS[n.type]?.nodeH) h+=NODE_PLUGINS[n.type].nodeH(n);   // 插件高度贡献（text 大框等）
   else if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框（插件未注入时兜底）
-  if(n.type==='3') h+=TEXTAREA_H;    // LLM 节点：提示词框（与文本节点同款，画布直接编辑 prompt）
+  h+=TEXTAREA_H*pluginCanvasCount(n);   // 插件 canvas:true 参数（如 LLM prompt）：每个一框
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
     h+=(brs+1)*22+8;
@@ -764,15 +764,19 @@ function renderNode(n){
     }
   }
 
-  // LLM 节点：提示词大文本框（编辑 llmParam.prompt，支持 {{输入字段}} 占位符；systemPrompt/模型等在右侧面板）
-  if(n.type==='3'){
-    const fo=makeLLMPromptArea(n);
-    if(fo){
-      const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
-      g.appendChild(fo);
-    }
-  }
+  // 节点插件 canvas 参数（.js 里声明 canvas:true 的 param → 节点下方大文本框，如 LLM 的 prompt）
+  {const _plg=NODE_PLUGINS[n.type];
+   if(_plg&&_plg.params){
+     for(const _cp of _plg.params){
+       if(!_cp.canvas)continue;
+       const fo=makeCanvasParamArea(n,_cp);
+       if(fo){
+         const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
+         fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+         g.appendChild(fo);
+       }
+     }
+   }}
 
   // 选择器：分支行 + 每分支流程出口（foreignObject）
   if(n.type==='8'){
@@ -1250,6 +1254,152 @@ function pickNode(typeOrName,isTool){
 }
 
 // ============ 属性面板（浮框：选中节点显示，空白隐藏）============
+
+// ===== 节点插件 params 协议（.js 声明节点每个 param 的渲染样式与读写；.html 只留通用控件/结构化组件）=====
+// param 项：{key, label, widget: input|textarea|code|number|select|checkbox|custom|branches|groups,
+//           options?: [[v,label]..]|fn, canvas?: true(节点下方大文本框), tip?, hint?:(n)=>string,
+//           get:(n)=>v, set:(n,v), html?:(n)=>string(custom 用)}
+window.NODEP_apply=function(t,k,v){
+  const n=findN(selNode); if(!n)return;
+  const p=((NODE_PLUGINS[t]||{}).params||[]).find(x=>x.key===k);
+  if(p&&p.set){ try{p.set(n,v);}catch(e){} showProps(); renderAll(); }
+};
+function _nodepSelect(opts,cur){
+  const list=typeof opts==='function'?opts():(opts||[]);
+  return list.map(o=>{const[v,t]=Array.isArray(o)?o:[o,o];
+    return `<option value="${ext(v)}"${String(cur)===String(v)?' selected':''}>${ext(t)}</option>`;}).join('');
+}
+function nodepWidget(n,p){
+  const val=(p.get?p.get(n):'')??'';
+  const on=`onchange="NODEP_apply('${n.type}','${p.key}',${p.widget==='checkbox'?'this.checked':'this.value'})"`;
+  const hint=p.hint?` <span style="color:#8a9099;font-size:10px">${p.hint(n)}</span>`:'';
+  const ph=p.tip?` placeholder="${ext(p.tip)}"`:'';
+  switch(p.widget){
+    case 'custom': return p.html?p.html(n):'';
+    case 'branches': return renderSelectorBranches(n);
+    case 'groups': return renderAggrGroups(n);
+    case 'textarea': return `<label>${p.label||p.key} <textarea ${on}${ph}>${ext(val)}</textarea></label>`+hint;
+    case 'code': {const L=Math.max(p.rows||8,String(val).split('\n').length);
+      return `<label>${p.label||p.key} <textarea rows="${L}" style="min-height:120px;font-family:Consolas,monospace" ${on}>${ext(val)}</textarea></label>`+hint;}
+    case 'number': return `<label>${p.label||p.key} <input type="number" value="${ext(val)}" ${on} style="width:70px"></label>`+hint;
+    case 'checkbox': return `<label>${p.label||p.key} <input type="checkbox" ${val?'checked':''} ${on}></label>`+hint;
+    case 'select': return `<label>${p.label||p.key} <select ${on}>${_nodepSelect(p.options,val)}</select></label>`+hint;
+    default: return `<label>${p.label||p.key} <input value="${ext(val)}" ${on}${ph}></label>`+hint;
+  }
+}
+function pluginParamsHTML(n){
+  const plg=NODE_PLUGINS[n.type]; if(!plg||!plg.params)return '';
+  let h=plg.section?`<h3>${plg.section}</h3>`:'';
+  for(const p of plg.params)h+=nodepWidget(n,p);
+  return h;
+}
+// canvas:true 的 param → 节点下方大文本框（oninput 直改数据不重绘保焦点）
+function makeCanvasParamArea(n,p){
+  const fo=document.createElementNS(NS,'foreignObject');
+  const ta=document.createElement('textarea');
+  ta.value=p.get?p.get(n)??'':'';
+  ta.placeholder=p.tip||'';
+  ta.style.width='100%';ta.style.height='100%';ta.style.fontSize='10px';
+  ta.style.background='#0d1b3e';ta.style.color='#dbe4ff';ta.style.border='1px solid #3b4a7a';
+  ta.style.resize='none';ta.style.fontFamily='Consolas,monospace';
+  ta.oninput=()=>{const t=findN(n.id); if(t&&p.set)p.set(t,ta.value);};   // 只改数据不重绘
+  fo.appendChild(ta);
+  return fo;
+}
+function pluginCanvasCount(n){
+  const plg=NODE_PLUGINS[n.type];
+  return plg&&plg.params?plg.params.filter(x=>x.canvas).length:0;
+}
+// ===== 结构化编辑器组件（框架级：插件 js 经 widget:'branches'/'groups' 复用）=====
+function renderSelectorBranches(n){let h='';
+
+    h+='<h3>选择器分支</h3>';
+    const branches=n.data.inputs?.branches||[];
+    branches.forEach((br,bi)=>{
+      const cond=br.condition||{logic:2,conditions:[]};
+      const lc=cond.conditions?.[0]||{operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}};
+      const lv=lc.left?.input?.value||{};
+      const rv=lc.right?.input?.value||{};
+      const lIsRef=lv.type==='ref', rIsRef=rv.type==='ref';
+      const lSrc=lIsRef?(lv.content?.source||'block-output'):'literal';
+      const rSrc=rIsRef?(rv.content?.source||'block-output'):'literal';
+      h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">分支'+(bi+1)+' <button class="del" onclick="delBranch('+bi+')">×</button><br>';
+      // left
+      h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">';
+      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
+      h+='</select>';
+      if(lSrc==='block-output'){
+        // 跨节点选上游输出字段（含 object 子字段点号路径）
+        h+='<select onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
+        h+=_condRefOptions(n,lv.content);
+        h+='</select>';
+      }else if(lIsRef){
+        h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+      }else{
+        h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
+        h+='<select onchange="setCondType('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.left?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      }
+      // op
+      const isUnary=[9,10,11,12].includes(lc.operator);  // 为空/非空/True/False 不需要右值
+      h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
+      OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
+      h+='</select> ';
+      // right（一元运算符不显示）
+      if(!isUnary){
+      h+='<select onchange="setCondSrc('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">';
+      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
+      h+='</select>';
+      if(rSrc==='block-output'){
+        h+='<select onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
+        h+=_condRefOptions(n,rv.content);
+        h+='</select>';
+      }else if(rIsRef){
+        h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+      }else{
+        h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
+        h+='<select onchange="setCondType('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      }
+      }
+      h+='</div>';
+    });
+    h+='<button onclick="addBranchCanvas()">+ 分支</button>';
+return h;}
+function renderAggrGroups(n){let h='';
+
+    h+='<h3>聚合分组 <button onclick="addAggrGroup()">+分组</button></h3>';
+    const groups=n.data.inputs?.mergeGroups||[];
+    groups.forEach((g,i)=>{
+      const gtype=(nodeOutputs(n).find(o=>o.name===g.name)?.type)||'string';
+      h+='<div style="margin:4px 0;padding:4px;background:#0f3460;border-radius:4px">';
+      h+='<span>分组名:</span><input value="'+ext(g.name)+'" onchange="setAggrGroupName('+i+',this.value)" style="width:80px">';
+      h+='<span> 类型:</span><select onchange="setAggrGroupType('+i+',this.value)" style="width:70px">'+IO_TYPES.map(t=>'<option value='+t+(gtype===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
+      h+='<span> 变量('+(g.variables||[]).length+') </span>';
+      h+='<button onclick="addAggrVar('+i+')">+变量</button>';
+      h+='<button class="del" onclick="delAggrGroup('+i+')">×删分组</button>';
+      (g.variables||[]).forEach((v,vi)=>{
+        const isRef=v.value?.type==='ref';
+        h+='<div style="font-size:10px;margin:2px 0;display:flex;gap:3px;align-items:center"> 变量'+(vi+1)+': ';
+        if(isRef)h+='<span style="color:#98c379;flex:1">ref→'+ext(v.value?.content?.blockID)+'.'+ext(v.value?.content?.name)+'</span>';
+        else{
+          const t=v.type||gtype||'string';
+          const cur=(v.value&&v.value.type==='literal')?v.value.content:'';
+          if(t==='boolean'){
+            const chk=!!cur||cur===true||cur==='true';
+            h+='<label style="display:inline-flex;align-items:center;gap:2px;margin:0"><input type="checkbox" '+(chk?'checked':'')+' onchange="setAggrVarLit('+i+','+vi+',this.checked)" style="width:auto"> <span style="color:#c678dd">boolean</span></label>';
+          }else if(['integer','number','float'].includes(t)){
+            h+='<input type="number" value="'+ext(cur)+'" placeholder="'+t+'" onchange="setAggrVarLit('+i+','+vi+',parseFloat(this.value))" style="width:90px;font-size:10px">';
+          }else if(t==='list'){
+            h+='<input value="'+ext(cur)+'" placeholder=\'["a","b"]\' onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
+          }else{
+            h+='<input value="'+ext(cur)+'" placeholder="字面量" onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
+          }
+        }
+        h+=' <button class="del" onclick="delAggrVar('+i+','+vi+')">×</button></div>';
+      });
+      h+='</div>';
+    });
+return h;}
+
 function showProps(){
   const wrap=document.getElementById('propsFloat');
   const p=document.getElementById('propsContent');
@@ -1270,7 +1420,8 @@ function showProps(){
     const arrName=arrSrc?.name||'(未设置)';
     const itemSchema=arrSrc?.input?.schema;
     const itemType=itemSchema?.type||(Array.isArray(itemSchema)?'object':'string');
-    h+='<h3>复合配置</h3>';
+    h+=pluginParamsHTML(n);
+  h+='<h3>复合配置</h3>';
     h+='<label>数组源 <span style="color:#98c379">'+arrName+'</span>（'+(nodeInputs(n).filter(p=>p.input?.type==='list').length)+' 个 list 型输入）';
     if(nodeInputs(n).filter(p=>p.input?.type==='list').length>1)
       h+=' <select onchange="setCompArraySrc(this.value)">'+nodeInputs(n).filter(p=>p.input?.type==='list').map(p=>'<option value='+p.name+(arrName===p.name?' selected':'')+'>'+p.name+'</option>').join('')+'</select>';
@@ -1393,72 +1544,8 @@ function showProps(){
   // 批处理（LLM 提示词之后，原有第二处调用已移除——配置区上移到输入字段前）
 
   // LLM
-  if(n.type==='3'){
-    h+='<h3>LLM 提示词</h3>';
-    const lp=n.data.inputs?.llmParam||[];
-    const prompt=lp.find(x=>x.name==='prompt'), sys=lp.find(x=>x.name==='systemPrompt');
-    const curModel=lp.find(x=>x.name==='model')?.input?.value?.content||'';
-    h+='<label>模型 <select onchange="setLLM(\'model\',this.value)" style="font-size:11px">';
-    h+='<option value="">（跟随主Agent）</option>';
-    Object.entries(AVAILABLE_MODELS).forEach(([k,v])=>{h+='<option value="'+k+'"'+(curModel===k?' selected':'')+'>'+ext(v)+'</option>';});
-    h+='</select></label>';
-    h+=`<label>systemPrompt <textarea onchange="setLLM('systemPrompt',this.value)">${ext(sys?.input?.value?.content)}</textarea></label>`;
-    h+=`<label>prompt <textarea onchange="setLLM('prompt',this.value)">${ext(prompt?.input?.value?.content)}</textarea></label>`;
-    const curThink=lp.find(x=>x.name==='thinking')?.input?.value?.content;
-    const curTimeout=lp.find(x=>x.name==='timeout')?.input?.value?.content||'';
-    const curOnErr=lp.find(x=>x.name==='onError')?.input?.value?.content||'';
-    const curFmt=lp.find(x=>x.name==='output_format')?.input?.value?.content||'json';
-    h+=`<label>输出格式 <select onchange="setLLM('output_format',this.value)">`
-      +`<option value="json"${curFmt!=='text'?' selected':''}>JSON（按声明字段解析）</option>`
-      +`<option value="text"${curFmt==='text'?' selected':''}>TEXT（output 输出原文）</option>`
-      +`</select> <span style="color:#8a9099;font-size:10px">${curFmt==='text'?'纯文本回答，不做结构化解析，不并入 schema 约束':'输出字段的结构作为 JSON Schema 并入 systemPrompt'}</span></label>`;
-    h+=`<label>thinking <select onchange="setLLM('thinking',this.value)"><option value="">（跟随默认）</option><option value="true"${curThink==='true'?' selected':''}>true（开）</option><option value="false"${curThink==='false'?' selected':''}>false（关）</option></select> <span style="color:#8a9099;font-size:10px">推理模型开/关</span></label>`;
-    h+=`<label>timeout <input type="number" value="${ext(curTimeout)}" placeholder="秒" onchange="setLLM('timeout',this.value)" style="width:70px"> <span style="color:#8a9099;font-size:10px">单次调用超时</span></label>`;
-    h+=`<label>onError <input value="${ext(curOnErr)}" placeholder="失败时输出此文本（留空=中断工作流）" onchange="setLLM('onError',this.value)"></label>`;
-    h+=`<div style="font-size:10px;color:#8a9099">${curFmt==='text'?'TEXT：模型自由文本 → output 端口原样输出。':'输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。'}</div>`;
-  }
   // 代码节点
-  if(n.type==='5'){
-    const code=(n.data.inputs?.code||'');
-    const nLines=Math.max(6, code.split('\n').length);   // 行高自适应：至少6行，代码多则更高
-    h+=`<h3>Python 代码</h3><label><textarea rows="${nLines}" style="min-height:120px" onchange="setCode(this.value)">${ext(code)}</textarea></label>`;
-    h+='<div style="font-size:10px;color:#8a9099">通过 args.params 取输入，ret: Output = {...} 返回输出；输出字段需与返回结构匹配。</div>';
-  }
   // 聚合节点(type32)：mergeGroups 编辑器
-  if(n.type==='32'){
-    h+='<h3>聚合分组 <button onclick="addAggrGroup()">+分组</button></h3>';
-    const groups=n.data.inputs?.mergeGroups||[];
-    groups.forEach((g,i)=>{
-      const gtype=(nodeOutputs(n).find(o=>o.name===g.name)?.type)||'string';
-      h+='<div style="margin:4px 0;padding:4px;background:#0f3460;border-radius:4px">';
-      h+='<span>分组名:</span><input value="'+ext(g.name)+'" onchange="setAggrGroupName('+i+',this.value)" style="width:80px">';
-      h+='<span> 类型:</span><select onchange="setAggrGroupType('+i+',this.value)" style="width:70px">'+IO_TYPES.map(t=>'<option value='+t+(gtype===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
-      h+='<span> 变量('+(g.variables||[]).length+') </span>';
-      h+='<button onclick="addAggrVar('+i+')">+变量</button>';
-      h+='<button class="del" onclick="delAggrGroup('+i+')">×删分组</button>';
-      (g.variables||[]).forEach((v,vi)=>{
-        const isRef=v.value?.type==='ref';
-        h+='<div style="font-size:10px;margin:2px 0;display:flex;gap:3px;align-items:center"> 变量'+(vi+1)+': ';
-        if(isRef)h+='<span style="color:#98c379;flex:1">ref→'+ext(v.value?.content?.blockID)+'.'+ext(v.value?.content?.name)+'</span>';
-        else{
-          const t=v.type||gtype||'string';
-          const cur=(v.value&&v.value.type==='literal')?v.value.content:'';
-          if(t==='boolean'){
-            const chk=!!cur||cur===true||cur==='true';
-            h+='<label style="display:inline-flex;align-items:center;gap:2px;margin:0"><input type="checkbox" '+(chk?'checked':'')+' onchange="setAggrVarLit('+i+','+vi+',this.checked)" style="width:auto"> <span style="color:#c678dd">boolean</span></label>';
-          }else if(['integer','number','float'].includes(t)){
-            h+='<input type="number" value="'+ext(cur)+'" placeholder="'+t+'" onchange="setAggrVarLit('+i+','+vi+',parseFloat(this.value))" style="width:90px;font-size:10px">';
-          }else if(t==='list'){
-            h+='<input value="'+ext(cur)+'" placeholder=\'["a","b"]\' onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
-          }else{
-            h+='<input value="'+ext(cur)+'" placeholder="字面量" onchange="setAggrVarLit('+i+','+vi+',this.value)" style="width:90px;font-size:10px">';
-          }
-        }
-        h+=' <button class="del" onclick="delAggrVar('+i+','+vi+')">×</button></div>';
-      });
-      h+='</div>';
-    });
-  }
 
   // 置变量(循环) type20 / 赋值(全局) type40 — left/right 专用编辑
   if(n.type==='20'||n.type==='40'){
@@ -1487,48 +1574,8 @@ function showProps(){
   }
 
   // 意图识别：选项增删改
-  if(n.type==='22'){
-    h+='<h3>意图选项（每项一个分支出口）</h3>';
-    const ilp=n.data.inputs?.llmParam||[];
-    const curIModel=ilp.find(x=>x.name==='model')?.input?.value?.content||'';
-    h+='<label>模型 <select onchange="setLLM(\'model\',this.value)" style="font-size:11px">';
-    h+='<option value="">（跟随主Agent）</option>';
-    Object.entries(AVAILABLE_MODELS).forEach(([k,v])=>{h+='<option value="'+k+'"'+(curIModel===k?' selected':'')+'>'+ext(v)+'</option>';});
-    h+='</select></label>';
-    const intents=n.data.inputs?.intents||[];
-    intents.forEach((it,i)=>{
-      h+='<div style="display:flex;gap:3px;margin:2px 0;align-items:center"><span style="font-size:10px;color:#8a9099">'+(i+1)+'.</span><input value="'+ext(it.name)+'" placeholder="意图名" onchange="setIntent('+i+',this.value)" style="flex:1;font-size:11px"><button class="del" onclick="delIntent('+i+')">×</button></div>';
-    });
-    h+='<button onclick="addIntent()">+ 意图</button>';
-    h+='<div style="font-size:10px;color:#8a9099;margin-top:4px">LLM 分类后路由到对应分支(branch_N)，未命中走默认。每意图在画布右侧有一个流程出口。</div>';
-  }
 
   // HTTP 节点编辑
-  if(n.type==='45'){
-    const api=n.data.inputs?.apiInfo||{};
-    h+='<h3>HTTP 请求</h3>';
-    h+='<label>方法 <select onchange="setHttp(\'method\',this.value)"><option value="GET"'+(api.method==='GET'?' selected':'')+'>GET</option><option value="POST"'+(api.method==='POST'?' selected':'')+'>POST</option><option value="PUT"'+(api.method==='PUT'?' selected':'')+'>PUT</option><option value="DELETE"'+(api.method==='DELETE'?' selected':'')+'>DELETE</option></select></label>';
-    h+='<label>URL <input value="'+ext(api.url)+'" onchange="setHttp(\'url\',this.value)" placeholder="https://... 支持 {{字段名}} 占位符"></label>';
-    // POST 请求体
-    if(api.method==='POST'||api.method==='PUT'){
-      const bd=n.data.inputs?.body||{};
-      h+='<label>请求体类型 <select onchange="setHttp(\'bodyType\',this.value)"><option value="EMPTY"'+(!bd.bodyType||bd.bodyType==='EMPTY'?' selected':'')+'>无</option><option value="JSON"'+(bd.bodyType==='JSON'?' selected':'')+'>JSON</option><option value="FORM_URLENCODED"'+(bd.bodyType==='FORM_URLENCODED'?' selected':'')+'>表单(URL编码)</option><option value="RAW_TEXT"'+(bd.bodyType==='RAW_TEXT'?' selected':'')+'>纯文本</option></select></label>';
-      if(bd.bodyType==='JSON'){
-        h+='<label>JSON 体 <textarea onchange="setHttp(\'bodyJson\',this.value)" style="min-height:80px">'+ext((bd.bodyData||{}).json)+'</textarea></label>';
-        h+='<div style="font-size:10px;color:#8a9099">支持 {{输入字段名}} 占位符引用上游数据</div>';
-      }
-      if(bd.bodyType==='RAW_TEXT'){
-        h+='<label>文本体 <textarea onchange="setHttp(\'bodyText\',this.value)" style="min-height:60px">'+ext((bd.bodyData||{}).rawText)+'</textarea></label>';
-      }
-      if(bd.bodyType==='FORM_URLENCODED'){
-        h+='<label>表单字段</label>';
-        const fields=(bd.bodyData||{}).formURLEncoded||[];
-        fields.forEach((p,pi)=>{h+='<div style="display:flex;gap:3px;margin:2px 0"><input value="'+ext(p.name)+'" placeholder="键" onchange="setHttpForm('+pi+',\'name\',this.value)" style="flex:1;font-size:10px"><input value="'+ext(p.input?.value?.content)+'" placeholder="值" onchange="setHttpForm('+pi+',\'val\',this.value)" style="flex:2;font-size:10px"><button class="del" onclick="delHttpForm('+pi+')">×</button></div>';});
-        h+='<button onclick="addHttpForm()" style="font-size:10px">+ 字段</button>';
-      }
-    }
-    h+='<label>超时(秒) <input type="number" value="'+ext((n.data.inputs?.setting||{}).timeout,15)+'" onchange="setHttp(\'timeout\',parseInt(this.value)||15)"></label>';
-  }
 
   // 子工作流: workflowId 下拉选择
   if(n.type==='9'){
@@ -1539,58 +1586,6 @@ function showProps(){
   }
 
   // 选择器：分支条件编辑器
-  if(n.type==='8'){
-    h+='<h3>选择器分支</h3>';
-    const branches=n.data.inputs?.branches||[];
-    branches.forEach((br,bi)=>{
-      const cond=br.condition||{logic:2,conditions:[]};
-      const lc=cond.conditions?.[0]||{operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}};
-      const lv=lc.left?.input?.value||{};
-      const rv=lc.right?.input?.value||{};
-      const lIsRef=lv.type==='ref', rIsRef=rv.type==='ref';
-      const lSrc=lIsRef?(lv.content?.source||'block-output'):'literal';
-      const rSrc=rIsRef?(rv.content?.source||'block-output'):'literal';
-      h+='<div style="margin:4px 0;padding:6px;background:#0f3460;border-radius:4px">分支'+(bi+1)+' <button class="del" onclick="delBranch('+bi+')">×</button><br>';
-      // left
-      h+='<span style="font-size:10px">左:</span> <select onchange="setCondSrc('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">';
-      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(lSrc===s?' selected':'')+'>'+s+'</option>';});
-      h+='</select>';
-      if(lSrc==='block-output'){
-        // 跨节点选上游输出字段（含 object 子字段点号路径）
-        h+='<select onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
-        h+=_condRefOptions(n,lv.content);
-        h+='</select>';
-      }else if(lIsRef){
-        h+='<input value="'+ext(lv.content?.name||(lv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
-      }else{
-        h+='<input value="'+ext(lv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'left\',this.value)" style="width:80px;font-size:10px">';
-        h+='<select onchange="setCondType('+bi+',0,\'left\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.left?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
-      }
-      // op
-      const isUnary=[9,10,11,12].includes(lc.operator);  // 为空/非空/True/False 不需要右值
-      h+=' <select onchange="setCondOp('+bi+',0,parseInt(this.value))" style="width:auto;font-size:10px">';
-      OPERATORS.forEach(o=>{h+='<option value='+o.v+(lc.operator===o.v?' selected':'')+'>'+o.t+'</option>';});
-      h+='</select> ';
-      // right（一元运算符不显示）
-      if(!isUnary){
-      h+='<select onchange="setCondSrc('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">';
-      ['block-output','literal','loop-item','loop-index','global_variable_app'].forEach(s=>{h+='<option value='+s+(rSrc===s?' selected':'')+'>'+s+'</option>';});
-      h+='</select>';
-      if(rSrc==='block-output'){
-        h+='<select onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px"><option value="">--选择节点字段--</option>';
-        h+=_condRefOptions(n,rv.content);
-        h+='</select>';
-      }else if(rIsRef){
-        h+='<input value="'+ext(rv.content?.name||(rv.content?.path||[])[0]||'')+'" placeholder="字段/变量名" onchange="setCondRef('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
-      }else{
-        h+='<input value="'+ext(rv.content)+'" placeholder="字面量" onchange="setCondLit('+bi+',0,\'right\',this.value)" style="width:80px;font-size:10px">';
-        h+='<select onchange="setCondType('+bi+',0,\'right\',this.value)" style="width:auto;font-size:10px">'+IO_TYPES.map(t=>'<option value='+t+(lc.right?.input?.type===t?' selected':'')+'>'+t+'</option>').join('')+'</select>';
-      }
-      }
-      h+='</div>';
-    });
-    h+='<button onclick="addBranchCanvas()">+ 分支</button>';
-  }
   // 节点插件属性面板扩展段（插件 js 的 prop(n) 时机在全部内置段之后——通用输入/输出段已渲染）
   const _plugP=NODE_PLUGINS[n.type];
   if(_plugP&&_plugP.prop){ try{ h+=_plugP.prop(n); }catch(e){ h+='<div style="color:#e06c75;font-size:10px">插件属性段出错: '+e.message+'</div>'; } }
@@ -2018,7 +2013,6 @@ function setField(kind,i,field,v){
     }
   }
   showProps();renderAll();}
-function setLLM(name,v){const n=findN(selNode);let lp=n.data.inputs.llmParam||(n.data.inputs.llmParam=[]);let p=lp.find(x=>x.name===name);if(!p){p={name,input:{type:'string',value:{type:'literal',content:''}}};lp.push(p);}p.input.value.content=v;}
 function finishAggrVar(nodeId,gname,idx,col){
   if(!edgeFrom||edgeFrom.kind!=='var'){edgeFrom=null;renderAll();return;}
   const n=findN(nodeId);if(!n){edgeFrom=null;renderAll();return;}
@@ -2172,7 +2166,6 @@ function _uncollapseFields(n,side,fields,prefix=''){
     if(Array.isArray(f.schema))_uncollapseFields(n,side,f.schema,path);
   });
 }
-function setCode(v){const n=findN(selNode);n.data.inputs.code=v;}
 function setAggrGroupName(i,v){const n=findN(selNode);const g=n.data.inputs.mergeGroups[i];const old=g.name;g.name=v;const o=(n.data.outputs||[]).find(o=>o.name===old);if(o)o.name=v;}
 // 分组类型：同步 outputs 同名输出 type（决定端口颜色/连线校验/下游类型）+ 各变量 type
 function setAggrGroupType(i,t){
@@ -2193,13 +2186,6 @@ function _setAggrLit(node,gi,vi,val){
 }
 function addAggrVar(gi){const n=findN(selNode);const g=n.data.inputs.mergeGroups[gi];const gt=(nodeOutputs(n).find(o=>o.name===g.name)?.type)||'string';g.variables=g.variables||[];g.variables.push({type:gt,value:{type:'literal',content:''}});showProps();renderAll();}
 function delAggrVar(gi,vi){const n=findN(selNode);n.data.inputs.mergeGroups[gi].variables.splice(vi,1);showProps();renderAll();}
-function setIntent(i,v){const n=findN(selNode);n.data.inputs.intents[i].name=v;renderAll();}
-function addIntent(){const n=findN(selNode);n.data.inputs.intents=n.data.inputs.intents||[];n.data.inputs.intents.push({name:'新意图'});showProps();renderAll();}
-function delIntent(i){const n=findN(selNode);n.data.inputs.intents.splice(i,1);showProps();renderAll();}
-function setHttp(field,v){const n=findN(selNode);const d=n.data.inputs;if(field==='method'){d.apiInfo.method=v;if(v==='GET')d.body.bodyType='EMPTY';}if(field==='url')d.apiInfo.url=v;if(field==='timeout'){(d.setting=d.setting||{}).timeout=v;}if(field==='bodyType'){d.body=d.body||{};d.body.bodyType=v;d.body.bodyData={};}if(field==='bodyJson'){d.body=d.body||{};d.body.bodyData=d.body.bodyData||{};d.body.bodyData.json=v;}if(field==='bodyText'){d.body=d.body||{};d.body.bodyData=d.body.bodyData||{};d.body.bodyData.rawText=v;}showProps();}
-function setHttpForm(pi,field,v){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];const p=bd.bodyData.formURLEncoded[pi];if(field==='name')p.name=v;if(field==='val'){p.input=p.input||{};p.input.value={type:'literal',content:v};}showProps();}
-function addHttpForm(){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.push({name:'key',input:{type:'string',value:{type:'literal',content:''}}});showProps();}
-function delHttpForm(pi){const n=findN(selNode);const bd=n.data.inputs.body||(n.data.inputs.body={});bd.bodyData=bd.bodyData||{};bd.bodyData.formURLEncoded=bd.bodyData.formURLEncoded||[];bd.bodyData.formURLEncoded.splice(pi,1);showProps();}
 // 子工作流节点 schema 由目标工作流决定（输入=start outputs，输出=exit inputParameters）
 // setSubWf 和 openWf 都调此：读目标 canvas 填字段，字段名/类型只读不可改。
 async function syncSubworkflowNode(n){

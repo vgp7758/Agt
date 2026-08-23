@@ -1,6 +1,18 @@
 """HTTP 请求节点插件（type 45）：method/url/headers/params/body/auth。
 URL/JSON 体支持 {{变量名}} 模板（输入参数引用）。
 """
+
+PARAMS = [
+    {"key": "method",   "type": "string", "required": True, "enum": ["GET", "POST", "PUT", "DELETE"],
+     "desc": "HTTP 方法"},
+    {"key": "url",      "type": "string", "required": True,
+     "desc": "目标 URL；{{输入字段名}} 占位符"},
+    {"key": "body",     "type": "object", "required": False,
+     "desc": "POST/PUT 请求体：{bodyType: EMPTY|JSON|FORM_URLENCODED|RAW_TEXT, bodyData:{...}}"},
+    {"key": "timeout",  "type": "number", "required": False, "default": 15,
+     "desc": "超时秒数"},
+]
+
 import json
 
 from workflow_node_api import resolve_input_params, resolve_value, render_template

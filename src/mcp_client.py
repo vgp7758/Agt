@@ -139,7 +139,7 @@ class MCPManager:
                 command=cfg["command"],
                 args=cfg.get("args", []),
                 env=cfg.get("env"),
-                cwd=cfg.get("cwd", str(Path.cwd())),
+                cwd=cfg.get("cwd") or str(Path.cwd()),   # 空串/None 回退当前目录（Win 上 cwd="" 会 WinError 123）
             )
             ctx = stdio_client(params)
             transport_label = "stdio"

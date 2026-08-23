@@ -573,55 +573,8 @@ def _handle_code(node: dict, ctx) -> dict:
     return {"outputs": ret, "port": None}
 
 
-def _handle_text(node: dict, ctx) -> dict:
-    """type 15 文本处理：concat（渲染 concatResult 模板）/ split（按分隔符切分）。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    method = inputs.get("method", "concat")
-    params = _resolve_input_params(inputs.get("inputParameters", []), ctx)
-    if method == "split":
-        sep = ","
-        for p in inputs.get("splitParams", []):
-            if "char" in (p.get("name") or "").lower() or "sep" in (p.get("name") or "").lower():
-                sep = str(resolve_value(p.get("input"), ctx))
-        val = next((v for v in params.values() if v is not None), "")
-        return {"outputs": {"output": str(val).split(sep)}, "port": None}
-    # concat
-    result = ""
-    for p in inputs.get("concatParams", []):
-        if p.get("name") == "concatResult":
-            tmpl = resolve_value(p.get("input"), ctx)
-            result = render_template(str(tmpl), params)
-    return {"outputs": {"output": result}, "port": None}
+# （_handle_text/_handle_tojson/_handle_fromjson 已外置为节点插件：src/assets/nodes_builtin/）
 
-
-def _handle_tojson(node: dict, ctx) -> dict:
-    """type 58：把 input 变量序列化成 JSON 字符串。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    val = None
-    for p in inputs.get("inputParameters", []):
-        if p.get("name") == "input":
-            val = resolve_value(p.get("input"), ctx)
-    return {"outputs": {"output": json.dumps(val, ensure_ascii=False, default=str)}, "port": None}
-
-
-def _handle_fromjson(node: dict, ctx) -> dict:
-    """type 59：把 JSON 字符串解析成对象。解析失败时降级返回原文（不崩溃工作流）。"""
-    inputs = node.get("data", {}).get("inputs", {})
-    raw = None
-    for p in inputs.get("inputParameters", []):
-        if p.get("name") == "input":
-            raw = resolve_value(p.get("input"), ctx)
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError) as e:
-        # 降级：返回原文，避免单次解析失败（如 LLM 返回轻微畸形 JSON / HTTP 错误体）整条工作流崩溃
-        try:
-            ctx.emit({"type": "workflow_message",
-                      "text": f"⚠️ FromJSON 解析失败，已降级返回原文：{str(raw)[:80]}"})
-        except Exception:
-            pass
-        parsed = raw
-    return {"outputs": {"output": parsed}, "port": None}
 
 
 def _handle_aggregator(node: dict, ctx) -> dict:
@@ -1362,9 +1315,6 @@ NODE_HANDLERS = {
     "2": _passthrough,
     "3": _handle_llm,
     "5": _handle_code,
-    "15": _handle_text,
-    "58": _handle_tojson,
-    "59": _handle_fromjson,
     "32": _handle_aggregator,
     "40": _handle_assigner,
     "8": _handle_selector,
@@ -1377,6 +1327,14 @@ NODE_HANDLERS = {
     "4": _handle_plugin,
     "13": _handle_output_emitter,
 }
+# 节点插件装配（assets/nodes_builtin → nodes/ → .agent/nodes/；同 type 覆盖=定制机制）：
+# 15/58/59（text/tojson/fromjson）已迁 src/assets/nodes_builtin/——首批插件化节点
+try:
+    from node_plugins import attach_node_plugins
+    attach_node_plugins(NODE_HANDLERS)
+except Exception as _np_e:   # 插件层故障不阻断引擎（内置 handler 缺失才会在执行时报节点类型未支持）
+    import logging as _np_log
+    _np_log.getLogger("agt.workflow").warning("节点插件装配失败：%s", _np_e)
 
 
 # ========== 调度器 ==========

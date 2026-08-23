@@ -55,10 +55,30 @@ _main_loop = None               # uvicorn 线程的 asyncio loop（broadcast 跨
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _WF_DIR = WORKSPACE / ".agent" / "workflows"
+
+
+def _inject_node_plugins(html: str) -> str:
+    """把节点插件的 .js 注入页面（</body> 前，带 sourceURL 保 devtools 定位）。
+    页面无 EdFW（如 debug 页）时先注入最小 shim——仅登记 TYPE_LABEL（画布渲染走各页内置逻辑）。
+    注入失败/无插件 → 原样返回（编辑器离线可用性不受影响）。"""
+    try:
+        from node_plugins import node_js_payload
+        payload = node_js_payload()
+    except Exception:
+        return html
+    if not payload:
+        return html
+    blocks = ['<script>/* 节点插件注入 shim */if(!window.EdFW){window.EdFW={register:function(d){'
+              'if(window.TYPE_LABEL&&d&&d.label)TYPE_LABEL[d.type]=d.label;}};}</script>']
+    for item in payload:
+        blocks.append(f'<script>\n{item["source"]}\n//# sourceURL=nodes/{item["name"]}.js\n</script>')
+    return html.replace("</body>", "\n".join(blocks) + "\n</body>", 1)
+
+
 _INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-_EDITOR_HTML = (_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8")
+_EDITOR_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8"))
 _RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
-_WF_DEBUG_HTML = (_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8")
+_WF_DEBUG_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8"))
 _MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
 _STATS_HTML = (_STATIC_DIR / "stats.html").read_text(encoding="utf-8")
 _WF_MONITOR_HTML = (_STATIC_DIR / "wf_monitor.html").read_text(encoding="utf-8")

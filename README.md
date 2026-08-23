@@ -84,9 +84,19 @@ agt-web      # WebUI（浏览器打开 http://localhost:8000）
 
 **自动工作流（Agentic RAG）**：编辑器勾选 ✅ 自动 + 填写参数名，保存后 `meta` 写入 `{"auto":true,"auto_param":"query"}`。之后每次发消息，Agent 先跑该工作流取上下文再处理。
 
-### 节点类型（13 类）
+### 节点类型（13 类 + 外置插件）
 
-开始/结束 · LLM · 代码 · 选择器(分支) · 循环 · 批处理 · 意图识别 · JSON 解析/构造 · 文本处理 · HTTP 请求 · 子工作流 · 插件 · 变量聚合/赋值
+**内置核心**（13 类）：开始/结束 · LLM · 代码 · 选择器(分支) · 循环 · 批处理 · 意图识别 · JSON 解析/构造 · 文本处理 · HTTP 请求 · 子工作流 · 插件 · 变量聚合/赋值
+
+**外置插件**（扩展面）：节点类型可从内置代码外置为「同目录同名 `.py` + `.js` 配对」脚本——写两个文件即得全新节点类型，零框架改动。目录约定（三级，同名 type 后扫覆盖先扫）：
+
+| 目录 | 用途 |
+|---|---|
+| `src/assets/nodes_builtin/` | 随包核心插件（pip 安装即有：text/tojson/fromjson） |
+| `nodes/` | workspace 级 |
+| `.agent/nodes/` | 用户/Agent 私有（扩展面：timestamp 验收节点） |
+
+后端 `.py` 用 `workflow_node_api` SDK（稳定依赖面），前端 `.js` 用 `EdFW` 组件（ioTable/textArea/propShell）。`/reload nodes` 热加载后端 handler，前端改 `.js` 需 Ctrl+F5。详见 `.agent/wiki/architecture/node-plugins.md`。
 
 ---
 

@@ -241,7 +241,8 @@ function nodeH(n){
   const inRows=rows.filter(r=>r.side==='in').length;
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
-  if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
+  if(NODE_PLUGINS[n.type]?.nodeH) h+=NODE_PLUGINS[n.type].nodeH(n);   // 插件高度贡献（text 大框等）
+  else if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框（插件未注入时兜底）
   if(n.type==='3') h+=TEXTAREA_H;    // LLM 节点：提示词框（与文本节点同款，画布直接编辑 prompt）
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
@@ -751,8 +752,10 @@ function renderNode(n){
     });
   }
 
-  // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）
-  if(n.type==='15'){
+  // 节点插件画布体扩展（text 大框等；插件未注入时走内置 '15' 兜底）
+  const _plg=NODE_PLUGINS[n.type];
+  if(_plg&&_plg.body){_plg.body(n,g);}
+  else if(n.type==='15'){
     const fo=makeTextArea(n);
     if(fo){
       const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
@@ -1149,6 +1152,28 @@ const NODE_GROUPS=[
   {title:'变量',items:[['32','🧲 聚合'],['40','✏ 赋值'],['20','🔄 置变量']]},
   {title:'外部',items:[['45','🌐 HTTP'],['9','🔗 子工作流'],['13','💬 输出']]}
 ];
+
+// ===== 节点插件框架（EdFW：组件化——插件 .js 只写节点业务，复用 .html 里的框架组件）=====
+// 插件由 server 注入（node_plugins.py 扫描 assets/nodes_builtin → nodes → .agent/nodes，带 sourceURL）。
+// register 咨询点：nodeH（高度贡献）/ body(n,g)（画布体扩展）/ prop(n)（属性面板扩展段）。
+const NODE_PLUGINS={};
+const NODE_PLUGIN_ITEMS=[];   // 浮窗「节点插件」组条目 [type, icon+label]（静态组未覆盖的类型）
+const EdFW={
+  register(def){
+    if(!def||!def.type)return;
+    NODE_PLUGINS[def.type]=def;
+    if(def.label)TYPE_LABEL[def.type]=def.label;            // 插件标签优先（覆盖=定制）
+    if(def.category)TYPE_CATEGORY[def.type]=def.category;
+    if(def.defaults&&!NODE_TEMPLATES[def.type])NODE_TEMPLATES[def.type]=def.defaults;   // 新类型建节点模板
+    if(def.icon&&def.label)NODE_PLUGIN_ITEMS.push([def.type,def.icon+' '+def.label]);
+    try{renderAll();}catch(e){}   // 注入完成刷新画布（首帧可能在注入前渲染过）
+  },
+  // —— 框架组件（插件可直接组合）——
+  ioTable:(n,kind,lockedAll)=>renderIOFields(kind==='in'?nodeInputs(n):nodeOutputs(n),kind,lockedAll),
+  batchConfig:n=>renderBatchConfig(n),
+  textArea:n=>makeTextArea(n),
+  set:(k,v)=>setProp(k,v),
+};
 function openNodePicker(cx,cy,sx,sy,src){
   pickerCtx={sx,sy,src};
   const d=document.getElementById('nodePicker');
@@ -1176,6 +1201,16 @@ function renderNodePicker(filter){
       html+='</div>';
     }
   });
+  // 节点插件组（外置 .js 注册的类型；静态组已覆盖的不重复出现——15/58/59 在"处理"组）
+  {
+    const covered=new Set();NODE_GROUPS.forEach(g=>g.items.forEach(b=>covered.add(b[0])));
+    const items=NODE_PLUGIN_ITEMS.filter(b=>!covered.has(b[0])&&(!f||b[1].toLowerCase().includes(f)));
+    if(items.length){
+      html+=`<div class="np-group">🧩 节点插件</div><div class="np-row">`;
+      html+=items.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')" title="外置节点插件（.agent/nodes/ 等目录扫描注册）">${ext(b[1])}</button>`).join('');
+      html+='</div>';
+    }
+  }
   // Agent 工具按来源分组，全部列出
   const tg={};
   (AGENT_TOOLS||[]).forEach(t=>{const gr=t.group||'工具';(tg[gr]=tg[gr]||[]).push(t);});
@@ -1551,6 +1586,9 @@ function showProps(){
     });
     h+='<button onclick="addBranchCanvas()">+ 分支</button>';
   }
+  // 节点插件属性面板扩展段（插件 js 的 prop(n) 时机在全部内置段之后——通用输入/输出段已渲染）
+  const _plugP=NODE_PLUGINS[n.type];
+  if(_plugP&&_plugP.prop){ try{ h+=_plugP.prop(n); }catch(e){ h+='<div style="color:#e06c75;font-size:10px">插件属性段出错: '+e.message+'</div>'; } }
   p.innerHTML=h;
   }catch(e){p.innerHTML='<span style="color:#e06c75">⚠️ 属性面板出错: '+e.message+'</span>';console.error(e);}
 }

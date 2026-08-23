@@ -45,8 +45,9 @@ _WF_RUNS_LOCK = _threading.Lock()
 _WF_RUNS_MAX = 50                       # 内存上限：最近 50 次运行（旧的清掉）
 
 
-def new_wf_run(name: str, hook: str = "") -> str:
-    """注册一次工作流运行，返回 run_id（观测页 URL 用）。"""
+def new_wf_run(name: str, hook: str = "", canvas: dict = None) -> str:
+    """注册一次工作流运行，返回 run_id（观测页 URL 用）。
+    canvas：可选，存入 run 供观测页"在调试页查看"按钮导入调试页。"""
     global _full_total
     rid = _uuid.uuid4().hex[:8]
     with _WF_RUNS_LOCK:
@@ -57,7 +58,9 @@ def new_wf_run(name: str, hook: str = "") -> str:
             if old:
                 _full_total -= sum(len(n.get("full") or "") for n in old.get("nodes", []))
         _WF_RUNS[rid] = {"run_id": rid, "name": name, "hook": hook, "status": "running",
-                         "started_at": _time.time(), "finished_at": None, "nodes": []}
+                         "started_at": _time.time(), "finished_at": None, "nodes": [],
+                         "canvas": (json.loads(json.dumps(canvas, ensure_ascii=False, default=str))
+                                    if isinstance(canvas, dict) else None)}
     return rid
 
 
@@ -105,12 +108,23 @@ def get_wf_run(run_id: str) -> dict | None:
         if not r:
             return None
         # 剥离 full（观测页 2s 轮询不能每次传几十万字符；全文走 /api/wf/runs/<id>/node/<nid>）
+        # 与 canvas（"在调试页查看"按钮按需 ?canvas=1 单次拉取，不进轮询）
         nodes = []
         for n in r["nodes"]:
             n2 = {k: v for k, v in n.items() if k != "full"}
             n2["has_full"] = ("full" in n)
             nodes.append(n2)
-        return dict(r, nodes=nodes)
+        out = {k: v for k, v in r.items() if k not in ("full", "canvas")}
+        out["has_canvas"] = r.get("canvas") is not None
+        out["nodes"] = nodes
+        return out
+
+
+def get_wf_run_canvas(run_id: str) -> dict | None:
+    """取 run 注册时快照的画布（观测页"在调试页查看"按钮用；未存返回 None）。"""
+    with _WF_RUNS_LOCK:
+        r = _WF_RUNS.get(run_id)
+        return r.get("canvas") if r else None
 
 
 def get_wf_node_full(run_id: str, node_id: str) -> str | None:
@@ -1725,7 +1739,7 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
             else:
                 _llm = getattr(agent, "llm", None) if agent is not None else None
             # 观测注册：Agent 场景注册 run（观测页可实时看节点轨迹）；agent=None（测试）不注册
-            rid = new_wf_run(name, "tool") if agent is not None else None
+            rid = new_wf_run(name, "tool", canvas=canvas) if agent is not None else None
             if rid and hasattr(agent, "_emit"):
                 try:
                     agent._emit({"type": "auto_wf_start", "name": name, "hook": "tool",

@@ -2267,21 +2267,52 @@ function _dbgConnect(){
 }
 
 // ============ 初始化（替换原 editor 的裸初始化）============
-renderLegend();loadFileList();loadTools();loadModels();renderAll();
-_dbgConnect();
-document.getElementById('fileSel').onchange=function(){
-  const p=openWf(fileSel.value);
-  if(p&&p.then)p.then(renderEntryBar);
-  setTimeout(renderEntryBar,400);
-};
-const _wfParam=new URLSearchParams(location.search).get('wf');
-if(_wfParam){
-  const _tryLoad=function(){
-    const opt=[].slice.call(fileSel.options).find(function(o){return o.value===_wfParam;});
-    if(opt){fileSel.value=_wfParam;const p=openWf(_wfParam);if(p&&p.then)p.then(renderEntryBar);setTimeout(renderEntryBar,400);}
-    else{setTimeout(_tryLoad,100);}
+// 观测页跳转来的上下文：sessionStorage 带 canvas + node_outputs + order
+const _fromMonitor = new URLSearchParams(location.search).get('from') === 'monitor';
+if(_fromMonitor){
+  try{
+    const _mCanvas = JSON.parse(sessionStorage.getItem('_wf_debug_canvas') || '{}');
+    const _mOutputs = JSON.parse(sessionStorage.getItem('_wf_debug_outputs') || '{}');
+    const _mOrder = JSON.parse(sessionStorage.getItem('_wf_debug_order') || '[]');
+    const _mName = sessionStorage.getItem('_wf_debug_name') || '(观测导入)';
+    if(_mCanvas && _mCanvas.nodes){
+      WF.name=_mName; WF.meta={name:_mName,description:'从观测页导入的执行上下文',enabled:true,coze_url:''};
+      WF.nodes=(_mCanvas.nodes||[]).map((n,i)=>{
+        n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]||n.type};
+        if(n.x==null)n.x=120+i*30; if(n.y==null)n.y=100+i*30; n.w=n.w||210; n.h=80; return n;
+      });
+      WF.edges=_mCanvas.edges||[];
+      WF.nodes.forEach(syncToolNode);
+      // 填充执行结果
+      dbgOut=_mOutputs||{};
+      dbgOrder=_mOrder||[];
+      Object.keys(dbgOut).forEach(function(id){nodeStatus[id]='done';});
+      setDbgStatus('观测导入：'+dbgOrder.length+' 个节点已执行','done');
+      selNode=null;autoLayout(true);
+      renderLegend();loadFileList();loadTools();loadModels();renderAll();
+      _dbgConnect();
+      // 不自动加载文件下拉的 onchange（观测导入模式不需要选文件）
+      document.getElementById('fileSel').onchange=function(){};
+      toast('已从观测页导入执行上下文（'+dbgOrder.length+' 节点）');
+    }
+  }catch(e){toast('观测导入失败：'+e.message);}
+}else{
+  renderLegend();loadFileList();loadTools();loadModels();renderAll();
+  _dbgConnect();
+  document.getElementById('fileSel').onchange=function(){
+    const p=openWf(fileSel.value);
+    if(p&&p.then)p.then(renderEntryBar);
+    setTimeout(renderEntryBar,400);
   };
-  _tryLoad();
+  const _wfParam=new URLSearchParams(location.search).get('wf');
+  if(_wfParam){
+    const _tryLoad=function(){
+      const opt=[].slice.call(fileSel.options).find(function(o){return o.value===_wfParam;});
+      if(opt){fileSel.value=_wfParam;const p=openWf(_wfParam);if(p&&p.then)p.then(renderEntryBar);setTimeout(renderEntryBar,400);}
+      else{setTimeout(_tryLoad,100);}
+    };
+    _tryLoad();
+  }
 }
 </script>
 </body></html>

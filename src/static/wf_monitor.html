@@ -40,6 +40,7 @@ a{color:#0969da;text-decoration:none} a:hover{text-decoration:underline}
     <span id="rTime" class="meta"></span>
     <span id="rDur" class="meta"></span>
     <a href="/wf/monitor" style="margin-left:auto">← 运行列表</a>
+    <button id="btnDebug" style="display:none;margin-left:8px;padding:2px 8px;font-size:12px;border:1px solid #d8dee4;border-radius:6px;background:#fff;cursor:pointer" title="把此次执行的画布+上下文载入调试页查看">🔬 在调试页查看</button>
   </div>
 </div>
 <div id="nodesCard" class="card" style="display:none">
@@ -117,6 +118,44 @@ function renderRun(r){
   }
   // 完成后停轮询
   if(r.status !== "running") stopPoll();
+  // 显示"在调试页查看"按钮（run 完成且注册时存了画布快照）
+  const btn = $("btnDebug");
+  if(btn){
+    btn.style.display = (r.has_canvas && r.status !== "running") ? "" : "none";
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = "导入中…";
+      try{
+        // 单次拉取画布快照（?canvas=1；轮询不含 canvas，避免 2s 重复传输）
+        const r2 = await (await fetch("/api/wf/runs/"+encodeURIComponent(runId)+"?canvas=1")).json();
+        if(!r2.canvas){ alert("该运行未存画布快照（旧版本注册的运行）"); return; }
+        // 节点输出：优先全量（has_full 逐节点拉取），失败/无全文回退 preview
+        const outs = {};
+        await Promise.all((r2.nodes||[]).map(async n => {
+          outs[n.id] = {output: n.preview || ""};
+          if(n.has_full){
+            try{
+              const t = await (await fetch("/api/wf/runs/"+encodeURIComponent(runId)+"/node/"+encodeURIComponent(n.id))).text();
+              if(t && !t.startsWith("[无全文]") && !t.startsWith("[不存在]")) outs[n.id] = {output: t};
+            }catch(e){}
+          }
+        }));
+        try{
+          sessionStorage.setItem("_wf_debug_canvas", JSON.stringify(r2.canvas));
+          sessionStorage.setItem("_wf_debug_outputs", JSON.stringify(outs));
+          sessionStorage.setItem("_wf_debug_order", JSON.stringify((r2.nodes||[]).map(n => n.id)));
+          sessionStorage.setItem("_wf_debug_name", r2.name || "");
+        }catch(e){
+          // 全量超 sessionStorage 配额：降级为 preview 再存一次
+          const lite = {};
+          (r2.nodes||[]).forEach(n => lite[n.id] = {output: n.preview || ""});
+          sessionStorage.setItem("_wf_debug_outputs", JSON.stringify(lite));
+        }
+        location.href = "/wfdebug?from=monitor&run=" + encodeURIComponent(runId);
+      } finally {
+        btn.disabled = false; btn.textContent = "🔬 在调试页查看";
+      }
+    };
+  }
 }
 
 function renderList(runs){

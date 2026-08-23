@@ -1075,7 +1075,7 @@ class Agent:
             # —— async 钩子：后台线程执行（wiki_auto_maintenance 等推理长但无需等）——
             for hw in async_hws:
                 from workflow import new_wf_run
-                _rid = new_wf_run(hw["name"], hook)   # 观测注册（run registry）
+                _rid = new_wf_run(hw["name"], hook, canvas=hw.get("canvas"))   # 观测注册（run registry）
                 self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                             "run_id": _rid, "text": str(context)[:80]})
                 _agent_ref = self
@@ -1121,7 +1121,7 @@ class Agent:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 from workflow import new_wf_run
                 def _run_one(hw):
-                    rid = new_wf_run(hw["name"], hook)   # 观测注册
+                    rid = new_wf_run(hw["name"], hook, canvas=hw.get("canvas"))   # 观测注册
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "run_id": rid, "text": str(context)[:80]})
                     hook_llm = self.utility_client()

@@ -23,6 +23,31 @@ def get_list_item(lst: list = None, index: int = 0):
         return f"[越界] index={index}，列表长度 {len(l)}"
 
 
+def get_list_items(lst: list = None, indices: list = None) -> list:
+    """按 indices 批量取 lst 中的元素，返回新列表。
+    indices 支持：int、list[int]、或逗号/空格分隔的字符串（如 "0,2,-1"）。
+    越界索引对应位置返回错误提示字符串，其余正常元素照常返回。"""
+    l = lst or []
+    if indices is None:
+        return []
+
+    # 统一归一化为 int 列表
+    if isinstance(indices, int):
+        idxs = [indices]
+    elif isinstance(indices, str):
+        idxs = [int(x.strip()) for x in indices.replace(" ", ",").split(",") if x.strip() != ""]
+    else:
+        idxs = [int(x) for x in indices]
+
+    result = []
+    for i in idxs:
+        try:
+            result.append(l[i])
+        except (IndexError, TypeError, ValueError):
+            result.append(f"[越界] index={i}，列表长度 {len(l)}")
+    return result
+
+
 def pass_through(input: Any) -> Any:
     """透传/组装：input 原样返回（任意类型：字符串/数字/对象/数组）。
     配合编辑器把 input 类型改成 object 后逐子字段连线（object_ref 组装），
@@ -35,6 +60,9 @@ def agt_register():
         {"name": "list_append", "func": list_append, "hidden": True, "group": "light", "version": 1},
         {"name": "get_list_item", "func": get_list_item,
          "outputs": [{"name": "raw", "type": "any", "description": "列表元素（类型随元素；越界返回错误文本）"}],
+         "hidden": True, "group": "light", "version": 1},
+        {"name": "get_list_items", "func": get_list_items,
+         "outputs": [{"name": "items", "type": "list", "description": "按 indices 顺序提取的元素列表（越界位置为错误文本）"}],
          "hidden": True, "group": "light", "version": 1},
         {"name": "pass_through", "func": pass_through,
          "outputs": [{"name": "raw", "type": "any", "description": "透传值（结构与输入一致；类型可在编辑器改）"}],

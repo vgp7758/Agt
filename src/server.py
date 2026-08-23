@@ -572,12 +572,17 @@ async def api_wf_runs():
 
 
 @app.get("/api/wf/runs/{run_id}")
-async def api_wf_run(run_id: str):
-    """单次工作流运行的完整轨迹（节点时间线 + 输出预览）。"""
-    from workflow import get_wf_run
+async def api_wf_run(run_id: str, canvas: str = ""):
+    """单次工作流运行的完整轨迹（节点时间线 + 输出预览）。
+    ?canvas=1 时附带 run 注册时快照的画布（观测页"在调试页查看"按钮单次拉取）。"""
+    from workflow import get_wf_run, get_wf_run_canvas
     r = get_wf_run(run_id)
     if r is None:
         return {"error": f"运行 {run_id} 不存在（可能已被清理，仅保留最近 50 次）"}
+    if canvas in ("1", "true"):
+        c = get_wf_run_canvas(run_id)
+        if c is not None:
+            r["canvas"] = c
     return r
 
 

@@ -1407,10 +1407,15 @@ function showProps(){
     const curThink=lp.find(x=>x.name==='thinking')?.input?.value?.content;
     const curTimeout=lp.find(x=>x.name==='timeout')?.input?.value?.content||'';
     const curOnErr=lp.find(x=>x.name==='onError')?.input?.value?.content||'';
+    const curFmt=lp.find(x=>x.name==='output_format')?.input?.value?.content||'json';
+    h+=`<label>输出格式 <select onchange="setLLM('output_format',this.value)">`
+      +`<option value="json"${curFmt!=='text'?' selected':''}>JSON（按声明字段解析）</option>`
+      +`<option value="text"${curFmt==='text'?' selected':''}>TEXT（output 输出原文）</option>`
+      +`</select> <span style="color:#8a9099;font-size:10px">${curFmt==='text'?'纯文本回答，不做结构化解析，不并入 schema 约束':'输出字段的结构作为 JSON Schema 并入 systemPrompt'}</span></label>`;
     h+=`<label>thinking <select onchange="setLLM('thinking',this.value)"><option value="">（跟随默认）</option><option value="true"${curThink==='true'?' selected':''}>true（开）</option><option value="false"${curThink==='false'?' selected':''}>false（关）</option></select> <span style="color:#8a9099;font-size:10px">推理模型开/关</span></label>`;
     h+=`<label>timeout <input type="number" value="${ext(curTimeout)}" placeholder="秒" onchange="setLLM('timeout',this.value)" style="width:70px"> <span style="color:#8a9099;font-size:10px">单次调用超时</span></label>`;
     h+=`<label>onError <input value="${ext(curOnErr)}" placeholder="失败时输出此文本（留空=中断工作流）" onchange="setLLM('onError',this.value)"></label>`;
-    h+='<div style="font-size:10px;color:#8a9099">输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。</div>';
+    h+=`<div style="font-size:10px;color:#8a9099">${curFmt==='text'?'TEXT：模型自由文本 → output 端口原样输出。':'输出字段的结构会作为 JSON Schema 自动并入 systemPrompt。'}</div>`;
   }
   // 代码节点
   if(n.type==='5'){

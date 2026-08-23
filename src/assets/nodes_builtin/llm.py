@@ -20,9 +20,13 @@ def _handle_llm(node: dict, ctx) -> dict:
     prompt = render_template(str(cfg.get("prompt", "")), params)
     system = render_template(str(cfg.get("systemPrompt", "")), params).strip()
 
+    # 输出格式：json（默认）= 声明的 outputs 结构并入 systemPrompt 约束 + 按 JSON Schema 解析展开字段；
+    # text = 纯文本——不并入 schema 约束、不做结构化解析，content 原文直接从 output 端口输出
+    output_format = str(cfg.get("output_format") or "json").strip().lower() or "json"
+
     # 把节点声明的输出结构转成 JSON Schema，并入系统提示词
     outputs = node.get("data", {}).get("outputs", []) or []
-    if outputs:
+    if outputs and output_format == "json":
         schema = outputs_to_json_schema(outputs)
         schema_hint = ("\n\n【输出要求】请严格按照以下 JSON Schema 输出（纯 JSON，不要 markdown 代码块，不要多余解释）：\n"
                        + json.dumps(schema, ensure_ascii=False, indent=2))
@@ -59,7 +63,7 @@ def _handle_llm(node: dict, ctx) -> dict:
     outs = {"output": content}
     if reasoning:
         outs["reasoning"] = reasoning   # 推理模型的思考过程默认带上，供下游引用/调试查看
-    if outputs and needs_structured_parse(outputs):
+    if output_format != "text" and outputs and needs_structured_parse(outputs):
         parsed = parse_structured_output(content, outputs)
         if parsed is not None:
             # 保留原文便于调试；但勿覆盖用户声明的 output 字段——声明为 object 时它是结构化结果，

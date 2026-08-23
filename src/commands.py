@@ -1130,12 +1130,19 @@ def _cmd_debug(ctx: CommandContext, args):
 
 
 def _cmd_reload(ctx: CommandContext, args):
-    """/reload models —— 重读 ~/.agt/models.json（或项目根 models.py）刷新内存配置，
-    并热应用到当前实例：主 llm 同名 profile 重应用（token / model id 等字段更新）、
-    utility_client 缓存重建、retrieval_llm 跟随。改 models.json / 修 model id / 换 token
-    后用它，免重启。"""
-    if not args or args[0] != "models":
+    """/reload models|tools —— 热重载。
+    models：重读 ~/.agt/models.json 并热应用（主 llm 同名 profile / utility 通道重建）；
+    tools：重扫 tools/ 与 .agent/tools/ 的脚本工具（改 agt_register 脚本后秒级生效，免重启）。"""
+    sub = args[0].lower() if args else ""
+    if sub == "tools":
+        from script_tools import reload_script_tools, _LAST
+        print(reload_script_tools(ctx.agent))
+        for nm in _LAST["names"]:
+            ctx.agent.tool_groups[nm] = "脚本"
+        return
+    if sub != "models":
         print("用法：/reload models   —— 重读模型配置并热应用（改 models.json 后免重启生效）")
+        print("      /reload tools    —— 重扫脚本工具目录并热应用（改 tools/*.py 后免重启生效）")
         return
     import config
     config.reload_models()
@@ -1589,10 +1596,11 @@ def build_default_registry() -> CommandRegistry:
     reg.register("update", _cmd_update,
         "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
     reg.register("reload", _cmd_reload,
-        "models  重读模型配置(~/.agt/models.json)并热应用到当前实例（改配置免重启）",
+        "models|tools  热重载：模型配置(models.json) / 脚本工具(tools/*.py)改后免重启生效",
         "/reload models\n"
-        "  改 models.json / 修 model id / 换 token 后执行；\n"
-        "  主 llm 同名刷新 + utility 通道重建（WebUI 保存模型配置已自动走同款路径）")
+        "  改 models.json / 修 model id / 换 token 后执行；主 llm 同名刷新 + utility 通道重建\n"
+        "/reload tools\n"
+        "  改 tools/ 或 .agent/tools/ 的 agt_register 脚本后执行；重扫 + 摘旧挂新，秒级生效")
     reg.register("restart", _cmd_restart,
         "[消息]  看门狗式重启：退出→自动重启→恢复session/端口→推送消息（改完源码生效用）",
         "/restart                     重启并恢复当前会话\n"

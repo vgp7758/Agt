@@ -1349,14 +1349,20 @@ def _fetch_demo_text(name: str) -> str:
 
 
 def _builtin_tools_reference() -> str:
-    """列出工作流可用的内置工具（LIGHT_TOOLS）及示例 plugin 节点 XML。"""
+    """列出工作流可用的内置工具（LIGHT_TOOLS + 外置脚本工具）及示例 plugin 节点 XML。"""
     lines = ["=== 工作流内置工具（未注册给 Agent，只能在工作流 plugin 节点用）===",
              "这些轻量工具（add/split/sleep 等）Agent 不能直接调用，仅工作流编排可用。",
              "调用：<node type=\"plugin\" toolName=\"工具名\">，输出 raw（工具返回值）。",
              "入参 <in> 接上游输出 ref=\"节点ID.字段\"，或字面量 literal=\"值\"。",
              ""]
     _TS = {int: "integer", float: "number", bool: "boolean", list: "list", dict: "object"}
-    for t in LIGHT_TOOLS:
+    _all = list(LIGHT_TOOLS)
+    try:   # 外置脚本工具一并列入（纯函数型已迁 tools/builtin/）
+        from script_tools import scan_script_tools
+        _all += list(scan_script_tools())
+    except Exception:
+        pass
+    for t in _all:
         lines.append(f"【{t.name}】{t.description}")
         ins = []
         for pname, param in t._sig.parameters.items():
@@ -2041,32 +2047,10 @@ def get_tool_timeout() -> str:
 
 
 # ===== 内置轻量工具（工作流编排可用）=====
-
-def add(a: float, b: float) -> float:
-    """两个数相加，返回和。"""
-    return a + b
-
-def subtract(a: float, b: float) -> float:
-    """a 减 b，返回差。"""
-    return a - b
-
-def multiply(a: float, b: float) -> float:
-    """两个数相乘，返回积。"""
-    return a * b
-
-def divide(a: float, b: float) -> float:
-    """a 除以 b，返回商。b 为 0 返回错误提示。"""
-    if b == 0:
-        return "[错误] 除数不能为 0"
-    return a / b
-
-def join(items: list, separator: str = ",") -> str:
-    """用分隔符把字符串列表拼接成一个字符串（类似 string.join）。items: 字符串列表；separator: 分隔符。"""
-    return separator.join(str(x) for x in (items or []))
-
-def split(text: str, separator: str = ",") -> list:
-    """按分隔符把字符串切成列表（类似 string.split）。text: 原文；separator: 分隔符。"""
-    return text.split(separator) if text else []
+# 纯函数型（add/subtract/multiply/divide/join/split/contains/starts_with/ends_with/
+# to_ascii/pass_through/list_append/get_list_item/sleep/kw_score 共 15 个）已外置到
+# tools/builtin/*.py（script_tools.py 扫描注册、/reload tools 热加载；外置同名覆盖内置）。
+# 此处保留：有框架依赖的（llm_call 三件套/cosine_sim/kv_cache）与暂缓迁移的（diff 等）。
 
 def length(obj) -> int:
     """返回字符串/列表/字典的长度。"""
@@ -2083,25 +2067,7 @@ def to_lowercase(text: str) -> str:
     """字符串转小写。"""
     return (text or "").lower()
 
-def contains(text: str, keyword: str) -> bool:
-    """判断 text 是否包含 keyword，返回 true/false。"""
-    return keyword in (text or "")
-
-def starts_with(text: str, prefix: str) -> bool:
-    """判断 text 是否以 prefix 开头，返回 true/false（如按扩展名/协议前缀分流）。"""
-    return (text or "").startswith(prefix)
-
-def ends_with(text: str, suffix: str) -> bool:
-    """判断 text 是否以 suffix 结尾，返回 true/false（如按扩展名分流 .cs/.py）。"""
-    return (text or "").endswith(suffix)
-
-from typing import Any as _Any
-
-def pass_through(input: _Any) -> _Any:
-    """透传/组装：input 原样返回（任意类型：字符串/数字/对象/数组）。
-    配合编辑器把 input 类型改成 object 后逐子字段连线（object_ref 组装），
-    可把多个上游节点的输出在节点处拼成结构透传输出——中转/整形/出口整形用。"""
-    return input
+from typing import Any as _Any   # kv_cache_write 注解用（pass_through 已外置 tools/builtin）
 
 # ===== 工作流 ReAct 原语三件套 =====
 # _WF_CTX 由 workflow._handle_plugin 在调用这三个工具时注入（llm=执行上下文的 LLMClient、
@@ -2219,10 +2185,6 @@ LLM_CALL_OUTPUTS = [
     {"name": "error", "type": "string", "description": "错误信息（成功为空）"},
 ]
 
-def to_ascii(text: str) -> str:
-    r"""把字符串里的非 ASCII 字符（中文等）转成 \uXXXX 转义，ASCII 字符保留。
-    用于生成 ASCII 安全文本（JSON 传输/存储），如 "贵州茅台" → 贵州茅台。"""
-    return "".join(ch if ord(ch) < 128 else "\\u%04x" % ord(ch) for ch in (text or ""))
 
 
 def git_commit(message: str, files: str = "") -> str:
@@ -2324,34 +2286,6 @@ def emb_probe() -> bool:
     _EMB_PROBE.update(ok=ok, ts=now)
     return ok
 
-
-def kw_score(keywords: list = None, text: str = "") -> float:
-    """关键词命中数评分（embedding 不可用时的降级重排）：keywords 中出现在 text 里的比例（0~1，
-    与 cosine 量纲对齐，下游阈值/排序逻辑可复用）。keywords 空/None → 0.0（安全降级：rerank 全 0 分排后）。"""
-    kws = [str(k).strip() for k in (keywords or []) if str(k).strip()]
-    if not kws or not text:
-        return 0.0
-    hits = sum(1 for k in kws if k in text)
-    return round(hits / len(kws), 4)
-
-
-def sleep(seconds: float) -> str:
-    """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
-    try:
-        s = float(seconds)
-    except (TypeError, ValueError):
-        return f"[错误] seconds 需为数字，收到 {seconds!r}"
-    if not (0 <= s <= 300):
-        return f"[错误] seconds 需在 0~300 之间，收到 {s:g}"
-    time.sleep(s)
-    return f"已等待 {s:g} 秒"
-
-
-def list_append(lst: list = None, item=None) -> list:
-    """把 item 追加到 lst 末尾并返回新列表（不修改原列表）。lst 省略/None → [item]。
-    工作流里循环累积结果用：var = list_append(var, 本轮值)（配合 LoopSetVariable 累加）；
-    也可首节点不连 lst（None 容错）作为数组的冷启动。"""
-    return list(lst or []) + [item]
 
 def _myers_diff(a_lines, b_lines):
     """Myers Diff 算法（纯算法函数，工具入口见 diff_files）。
@@ -2522,15 +2456,6 @@ def diff_lines(a_text: str, b_text: str, context: int = 2) -> str:
     return _render_unified_diff(A, B, _myers_diff(A, B), "a_text", "b_text", context)
 
 
-def get_list_item(lst: list = None, index: int = 0):
-    """取列表第 index 个元素（0-based；负数从尾部数：-1=末元素）。
-    工作流里从 all_outputs / 上游 list 输出中取单个元素用（比 selector 运算符更直接）。"""
-    l = lst or []
-    try:
-        return l[int(index)]
-    except (IndexError, TypeError, ValueError):
-        return f"[越界] index={index}，列表长度 {len(l)}"
-
 
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
 WEB_SEARCH_OUTPUTS = [
@@ -2603,20 +2528,11 @@ REAL_TOOLS = Toolbox(
 )
 
 # 轻量工具（基础函数：plugin 节点 / 代码节点 / Agent 均可调；build_agent 注册进 agent.tools）
+# 纯函数型 15 个已外置 tools/builtin/（script_tools.py 扫描注册，hidden 语义由描述符携带）
 LIGHT_TOOLS = Toolbox(
-    Tool(add),
-    Tool(subtract),
-    Tool(multiply),
-    Tool(divide),
-    Tool(join),
-    Tool(split),
     Tool(length),
     Tool(to_uppercase),
     Tool(to_lowercase),
-    Tool(contains),
-    Tool(starts_with),
-    Tool(ends_with),
-    Tool(pass_through, outputs=[{"name": "raw", "type": "any", "description": "透传值（结构与输入一致；类型可在编辑器改）"}]),
     # 工作流 ReAct 原语三件套（仅工作流 plugin 节点可用；执行时由 workflow 引擎注入 llm/tools 上下文）
     Tool(llm_call, outputs=LLM_CALL_OUTPUTS, param_descriptions={
         "messages": "OpenAI 格式消息数组（system/user/assistant/tool 均可；循环中用循环变量累积）",
@@ -2629,8 +2545,6 @@ LIGHT_TOOLS = Toolbox(
         "name": "工具名（接 llm_call.tool_calls.0.name）",
         "arguments": "参数 dict（接 llm_call.tool_calls.0.arguments）",
     }),
-    Tool(to_ascii),
-    Tool(list_append),
     Tool(cosine_sim, outputs=[{"name": "raw", "type": "number", "description": "余弦相似度（-1~1，越大越相关）"}], param_descriptions={
         "text1": "第一段文本（批处理时接 loop-item=候选切片）",
         "text2": "第二段文本（通常接 query 原文）",
@@ -2652,7 +2566,6 @@ LIGHT_TOOLS = Toolbox(
         "b_text": "改后文本",
         "context": "每个 hunk 前后的上下文行数（默认 2）",
     }),
-    Tool(get_list_item, outputs=[{"name": "raw", "type": "any", "description": "列表元素（类型随元素；越界返回错误文本）"}]),
     Tool(dir_outline, param_descriptions={
         "path": "要列大纲的目录（workspace 内；也可传单个文件）",
         "max_files": "最多展开的文件数（默认 200，超出截断标注）",
@@ -2664,11 +2577,6 @@ LIGHT_TOOLS = Toolbox(
         "max_chars": "拼接结果字符上限（默认 64000）",
     }),
     Tool(emb_probe, outputs=[{"name": "raw", "type": "boolean", "description": "embedding 是否可用（探测结果缓存 5 分钟）"}]),
-    Tool(kw_score, outputs=[{"name": "raw", "type": "number", "description": "命中比例 0~1（与 cosine 量纲对齐）"}], param_descriptions={
-        "keywords": "关键词数组（通常接 kv_cache_read.value = extract_keywords 的产物）",
-        "text": "被评分文本（批处理时接 loop-item）",
-    }),
-    Tool(sleep),
     hidden=True,
 )
 

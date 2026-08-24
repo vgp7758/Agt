@@ -1662,7 +1662,14 @@ function onWSMessage(ev){
   try{
   switch(m.type){
     case 'background_trigger':
-      addRow('sys', `⏰ [后台触发·${m.source||''}] ${m.text||''}`); scrollBottom(); break;
+      // wake=false（通知登记）：不触发新一轮——service_exit 等"告知即可"的系统事件，
+      // 下次自然轮开始时以 seed 并入；显示为灰色备注（区别于唤醒型触发的蓝色）
+      if(m.wake === false){
+        addRow('sys', `📭 [通知登记·${m.source||''}] ${m.text||''}（下次交互时并入，不单独触发处理）`);
+      } else {
+        addRow('sys', `⏰ [后台触发·${m.source||''}] ${m.text||''}`);
+      }
+      scrollBottom(); break;
     case 'system':
       if(m.models){
         modelSel.innerHTML='';

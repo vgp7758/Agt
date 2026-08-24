@@ -1392,12 +1392,13 @@ def _cmd_context(ctx: CommandContext, args):
     if last_react:
         u = last_react.get("usage") or {}
         pt, ct = u.get("prompt_tokens") or 0, u.get("completion_tokens") or 0
-        cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
         age_min = (_time.time() - (last_react.get("ts") or 0)) / 60
         age_s = f"{age_min:.0f}分钟前" if age_min < 90 else f"{age_min/60:.1f}小时前"
-        cache_pct = f"，缓存命中 {cached*100//max(pt,1)}%" if cached else ""
-        print(f"最近 react 调用（{age_s}，{last_react.get('model','?')}）: "
-              f"prompt {pt:,} tok{cache_pct} | completion {ct:,}")
+        endpoint = last_react.get("resp_model") or last_react.get("model") or "?"
+        hit_pct = cached * 100 // max(pt, 1)
+        print(f"最近 react 调用（{age_s}，{endpoint}）: "
+              f"prompt {pt:,} tok | cached {cached:,} ({hit_pct}%) | completion {ct:,}")
     else:
         print("（本 session 尚无成功的 react 调用记录）")
 

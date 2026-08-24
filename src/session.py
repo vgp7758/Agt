@@ -534,14 +534,20 @@ class Session:
         self._chars_per_token: float = 4.0    # 实测字符/token 比率（EMA 平滑；初值 4=旧行为）
         self._over_window_mark: bool = False  # 实测 total 超 win（未超 panic）标记，下轮 start_turn 消费记日志
         self._load_calibration()              # 回读 ~/.agt/token_usage.jsonl 末尾同模型记录作初值（跨 session 校准）
+        # —— 投影分段统计（真实装配时顺手记录，/context 直接读——见 messages_for_llm 尾部）——
+        # None=本进程还没跑过投影（projection_breakdown 回退现算）；否则 {"sections":[...], ts, turn, step, ...}
+        self._proj_stats: Optional[dict] = None
+        self._hist_marks: Optional[list] = None   # 装配进行中的 history 子段标记 [(name, 段内偏移, meta)]（临时态）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
 
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def projection_breakdown(self) -> dict:
-        """按 assembly 清单顺序分段估算各段 msgs/chars/tokens（/context 命令用）。
-        与 messages_for_llm 同一套段产出函数（顺序一致、只读不改动状态）。
-        返回 {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars}。"""
+        """分段统计：优先返回【真实装配时顺手记录】的 _proj_stats（live——真实发给模型的口径，
+        含 ts/turn/step 元信息）；无缓存（本进程还没跑过投影）才现算兜底（重算一遍段函数）。
+        返回 {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars, source?}。"""
+        if self._proj_stats and self._proj_stats.get("sections"):
+            return dict(self._proj_stats)   # 浅拷贝：调用方改动不污染缓存
         out = {"sections": [], "total_tokens": 0, "total_chars": 0}
 
         def _add(name: str, msgs: list, meta: str = ""):
@@ -871,11 +877,16 @@ class Session:
 
     def _history_window_msgs(self) -> list[dict]:
         """滑动窗口+摘要：窗口外各轮 summary 拼成一条 system 摘要 + 近窗口逐 step 还原。
-        需要早期轮细节时模型可用 recall_turn 按需召回完整原文。"""
+        需要早期轮细节时模型可用 recall_turn 按需召回完整原文。
+        装配进行中（self._hist_marks 非 None）时记录子段标记供 /context 统计。"""
         out = []
+        marks = self._hist_marks
         if self.global_summary:
+            if marks is not None:
+                marks.append(("历史摘要(窗口外)", 0, ""))
             out.append({"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)})
         recent = self.turns[-self.recent_window_turns:]
+        _rw_start = len(out)   # 近窗口段起点（有摘要=1，无=0）
         for t in recent:
             out.append({"role": "user", "content": self._user_content(t)})
             out.extend(self._steps_to_messages(t.steps, self.max_steps_per_turn))
@@ -884,6 +895,8 @@ class Session:
                 if t.answer_reasoning:
                     a_msg["reasoning_content"] = t.answer_reasoning
                 out.append(a_msg)
+        if marks is not None and recent:
+            marks.append((f"近窗口历史({len(recent)}轮)", _rw_start, ""))
         return out
 
     def _history_full_msgs(self) -> list[dict]:
@@ -930,6 +943,9 @@ class Session:
                 continue
             break
         self._last_fold_count = fold_count   # 记录本次折叠轮数（to_history 用它折叠前端历史）
+        if self._hist_marks is not None:
+            self._hist_marks.clear()   # 保命阀循环里调过多次 _render_tiered_history（各自塞了标记）——
+                                       # 清空让下面最终渲染的标记成为唯一真相
         return self._render_tiered_history(fold_count)
 
     def _seg_msgs_ltm(self) -> list[dict]:
@@ -1045,31 +1061,76 @@ class Session:
         """投影 = assembly 清单驱动：按 self.assembly_plan 的顺序装配段/动作项；
         无声明走默认清单（与历史版硬编码顺序一致）。
         current_turn_only（子 Agent reuse）：history/ltm 段强制跳过——每次任务上下文干净、
-        token 不随复用次数增长；历史轮仍完整归档（agent_query_events / recall 可查）。"""
+        token 不随复用次数增长；历史轮仍完整归档（agent_query_events / recall 可查）。
+        装配时顺手记录分段统计到 _proj_stats（/context 直接读——真实投影口径，
+        比事后重算的 projection_breakdown 更可信；后者退化为无缓存时的兜底）。"""
         plan = self.assembly_plan or self._DEFAULT_ASSEMBLY_PLAN
         msgs: list[dict] = []
-        for item in plan:
-            kind = item.get("kind")
-            if kind == "seg":
-                name = item.get("name")
-                if self.current_turn_only and name in ("history", "ltm"):
-                    continue   # reuse 投影隔离：历史系段一律不投影
-                if name == "system":
-                    msgs.extend(self._seg_msgs_system())
-                elif name == "rules":
-                    msgs.extend(self._seg_msgs_rules())
-                elif name == "history":
-                    msgs.extend(self._seg_msgs_history(item.get("mode"), msgs))
-                elif name == "ltm":
-                    msgs.extend(self._seg_msgs_ltm())
-                elif name == "user_message":
-                    msgs.extend(self._seg_msgs_user_message())
-                elif name == "steps":
-                    msgs.extend(self._seg_msgs_steps())
-                elif name == "tail":
-                    msgs.extend(self._seg_msgs_tail())
-            else:
-                msgs.extend(self._asm_action_msgs(item))
+        marks: list[tuple[str, int]] = []   # (段名, 全局起始 idx)；history 段用占位名，装完后用子标记展开
+        self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
+        try:
+            for item in plan:
+                kind = item.get("kind")
+                if kind == "seg":
+                    name = item.get("name")
+                    if self.current_turn_only and name in ("history", "ltm"):
+                        continue   # reuse 投影隔离：历史系段一律不投影
+                    if name == "system":
+                        marks.append(("system(人设+环境)", len(msgs)))
+                        msgs.extend(self._seg_msgs_system())
+                    elif name == "rules":
+                        marks.append(("rules(AGENTS+规则+技能)", len(msgs)))
+                        msgs.extend(self._seg_msgs_rules())
+                    elif name == "history":
+                        marks.append(("\x00HIST\x00", len(msgs)))   # 占位：下方展开为 hist 子标记
+                        msgs.extend(self._seg_msgs_history(item.get("mode"), msgs))
+                    elif name == "ltm":
+                        marks.append(("长期记忆·静态", len(msgs)))
+                        msgs.extend(self._seg_msgs_ltm())
+                    elif name == "user_message":
+                        marks.append((f"当前轮user(第{len(self.turns)+1}轮)", len(msgs)))
+                        msgs.extend(self._seg_msgs_user_message())
+                    elif name == "steps":
+                        marks.append((f"当前轮steps({len(self._current.steps) if self._current else 0}步)", len(msgs)))
+                        msgs.extend(self._seg_msgs_steps())
+                    elif name == "tail":
+                        marks.append(("tail(时间/计划/团队/召回)", len(msgs)))
+                        msgs.extend(self._seg_msgs_tail())
+                else:
+                    nm = f"asm:{item.get('kind')} {item.get('path') or item.get('name') or item.get('cmd') or ''}".strip()
+                    marks.append((nm, len(msgs)))
+                    msgs.extend(self._asm_action_msgs(item))
+            # —— 分段统计（真实装配口径）：history 占位展开为子标记，再统一切段计算 ——
+            final: list[tuple[str, int, str]] = []
+            for mn, st in marks:
+                if mn == "\x00HIST\x00":
+                    if self._hist_marks:
+                        for (sub, off, meta) in self._hist_marks:
+                            final.append((sub, st + off, meta))
+                    else:
+                        final.append(("history段", st, ""))
+                else:
+                    final.append((mn, st, ""))
+            sections = []
+            for i, (mn, st, meta) in enumerate(final):
+                end = final[i + 1][1] if i + 1 < len(final) else len(msgs)
+                if end <= st:
+                    continue   # 空段
+                seg = msgs[st:end]
+                sections.append({"name": mn, "msgs": end - st, "chars": self._count_chars(seg),
+                                 "tokens": self._estimate_tokens(seg), "meta": meta})
+            self._proj_stats = {"sections": sections,
+                                "total_msgs": len(msgs),
+                                "total_chars": self._count_chars(msgs),
+                                "total_tokens": self._estimate_tokens(msgs),
+                                "ts": time.time(),
+                                "turn": len(self.turns),
+                                "step": len(self._current.steps) if self._current else 0,
+                                "source": "live"}
+        except Exception as e:
+            _LOG.warning("投影分段统计失败（不影响投影）：%s", e)
+        finally:
+            self._hist_marks = None
         return msgs
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
@@ -1153,12 +1214,43 @@ class Session:
     def _render_tiered_history(self, fold_count: int = 0) -> list[dict]:
         """渲染分档历史段：[已折叠早期轮次摘要] + 未折叠的已完成 turn（按档冻结）。
         fold_count 个最早的 turn 折叠成摘要不逐条渲染（细节靠 recall 召回）。
-        当前轮/tail 不在此（v2 段循环按清单位置各自装配）。"""
+        当前轮/tail 不在此（v2 段循环按清单位置各自装配）。
+        装配进行中（self._hist_marks 非 None）时按档分组标记（/context 统计用）——
+        分组拼接顺序与逐轮顺序完全一致（档位随 turn 索引单调不增），byte-stable 不变。"""
+        marks = self._hist_marks
         body = []
         if fold_count > 0:
+            marks.append((f"折叠摘要({fold_count}轮)", 0, f"最早{fold_count}轮折叠为结构摘要，原文可recall"))
             body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
+        if marks is None:
+            for i in range(fold_count, len(self.turns)):
+                body.extend(self._render_turn_frozen(i))
+            return body
+        # 按档分组渲染 + 标记（与 projection_breakdown 同款分组；顺序不变）
+        fold_on = config.load_fold_deep_tools()
+        groups: dict[str, list] = {}
+        turns_n: dict[str, int] = {}
+        metas: dict[str, str] = {}
+        order: list[str] = []
         for i in range(fold_count, len(self.turns)):
-            body.extend(self._render_turn_frozen(i))
+            if fold_on and self._raw_tier_level(i) > self.max_level:
+                gname = "已折叠超深档"
+                gmeta = "工具调用折叠成一行标注，保留回复+reasoning原文"
+            else:
+                lv = self._tier_level(i)
+                gname = f"档{lv}"
+                gmeta = f"工具结果上限{max(DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步"
+            if gname not in groups:
+                groups[gname] = []
+                turns_n[gname] = 0
+                metas[gname] = gmeta
+                order.append(gname)
+            groups[gname].extend(self._render_turn_frozen(i))
+            turns_n[gname] += 1
+        for gname in order:
+            _start = len(body)   # 段开始位置（与顶层 marks 的 len(msgs) 语义一致——都是 extend 前快照）
+            body.extend(groups[gname])
+            marks.append((f"{gname}历史({turns_n[gname]}轮)", _start, metas[gname]))
         return body
 
     def _plan_fold(self):

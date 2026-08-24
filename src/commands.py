@@ -1401,8 +1401,14 @@ def _cmd_context(ctx: CommandContext, args):
     else:
         print("（本 session 尚无成功的 react 调用记录）")
 
-    # ② 分段估算
+    # ② 分段估算（优先 live：真实装配时顺手记录的 _proj_stats；无则现算兜底）
     bd = s.projection_breakdown()
+    if bd.get("source") == "live":
+        age2 = _time.time() - bd.get("ts", 0)
+        age2s = f"{age2:.0f}秒前" if age2 < 90 else (f"{age2/60:.0f}分钟前" if age2 < 5400 else f"{age2/3600:.1f}小时前")
+        print(f"段落统计（采自上次真实投影 t{bd.get('turn')}·s{bd.get('step')}，{age2s}）")
+    else:
+        print("段落统计（现算估算——本进程尚未跑过投影）")
     total = max(bd["total_tokens"], 1)
     win = s.max_effective_context_window
     panic = 0

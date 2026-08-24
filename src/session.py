@@ -1012,7 +1012,7 @@ class Session:
         timing = item.get("timing") or ("once" if item.get("kind") == "workflow" else "turn")
         key = None
         if timing == "once":
-            key = ":".join(str(item.get(k) or "") for k in ("kind", "path", "cmd", "name", "text"))
+            key = ":".join(str(item.get(k) or "") for k in ("kind", "path", "file", "dir", "cmd", "name", "text"))
             if key in self._assembly_once_cache:
                 txt = self._assembly_once_cache[key]
             else:
@@ -1022,7 +1022,8 @@ class Session:
             txt = self._asm_evaluate(item)
         if not txt:
             return []
-        label = item.get("path") or item.get("cmd") or item.get("name") or item.get("func") or ""
+        label = (item.get("path") or item.get("file") or item.get("dir")
+                 or item.get("cmd") or item.get("name") or item.get("func") or "")
         return [{"role": "system", "content": self._ambient(f"[assembly:{item['kind']}{' ' + label if label else ''}]\n{txt}")}]
 
     def _asm_evaluate(self, item: dict) -> str:
@@ -1035,17 +1036,29 @@ class Session:
                 from agent_config import resolve_assembly_func
                 return resolve_assembly_func(str(item.get("func") or ""))
             if kind in ("file", "dir"):
-                import real_tools as _rt
-                target = _rt._resolve(str(item.get("path") or ""))
+                # 路径基准 = session.workspace（子 Agent 复活/临时目录场景与 real_tools.WORKSPACE 可能不同）；
+                # 解析产物把值存在同名键下（{file: path} → item["file"]）；path 键兼容手写清单
+                _val = str(item.get("path") or item.get("file") or item.get("dir") or "")
+                cand = Path(_val)
+                if not cand.is_absolute():
+                    cand = Path(self.workspace) / _val
+                try:   # 沙箱：解析后不许逃出 workspace
+                    cand = cand.resolve()
+                    cand.relative_to(Path(self.workspace).resolve())
+                except ValueError:
+                    _LOG.warning("assembly %s 项越界（workspace 外）：%s，跳过", kind, _val)
+                    return ""
+                target = cand
                 if not target.exists():
-                    _LOG.warning("assembly %s 项不存在：%s，跳过", kind, item.get("path"))
+                    _LOG.warning("assembly %s 项不存在：%s，跳过", kind, _val)
                     return ""
                 if kind == "file":
                     if target.stat().st_size > 64_000:
-                        _LOG.warning("assembly file 项超 64KB：%s，跳过（过大会挤爆上下文）", item.get("path"))
+                        _LOG.warning("assembly file 项超 64KB：%s，跳过（过大会挤爆上下文）", _val)
                         return ""
                     return target.read_text(encoding="utf-8", errors="ignore")
-                return _rt.dir_outline(str(item.get("path")))
+                import real_tools as _rt
+                return _rt.dir_outline(str(target))
             if kind == "cmd":
                 import subprocess as _sp
                 r = _sp.run(str(item.get("cmd") or ""), shell=True, capture_output=True,

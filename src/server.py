@@ -80,6 +80,7 @@ _EDITOR_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_editor.html").read_
 _RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
 _WF_DEBUG_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8"))
 _MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
+_AGENTS_HTML = (_STATIC_DIR / "agents.html").read_text(encoding="utf-8")
 _STATS_HTML = (_STATIC_DIR / "stats.html").read_text(encoding="utf-8")
 _WF_MONITOR_HTML = (_STATIC_DIR / "wf_monitor.html").read_text(encoding="utf-8")
 
@@ -770,6 +771,199 @@ async def api_memory_delete(memory_id: str):
         return {"error": "Agent 未就绪"}
     ok = ltm.delete(memory_id)
     return {"ok": ok} if ok else {"error": f"未找到 id={memory_id}"}
+
+
+# ===================== 子 Agent 声明管理 API =====================
+
+@app.get("/agents")
+async def agents_page():
+    """子 Agent 声明管理页：列表 + 参数编辑（名称/描述/模型/工具/assembly/hooks）。"""
+    return HTMLResponse(_AGENTS_HTML)
+
+
+def _agent_safe_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_")
+
+
+@app.get("/api/agents")
+async def api_agents_list():
+    """列出全部子 Agent 声明（.agent/agents/，.yml 优先）。"""
+    from agent_config import load_agents_index
+    out = []
+    for it in load_agents_index(_workspace):
+        meta = {}
+        try:
+            from agent_config import load_agent_yml
+            meta, _ = load_agent_yml(it["path"])
+        except Exception:
+            pass
+        asm = meta.get("assembly")
+        hooks = meta.get("hooks")
+        out.append({
+            "name": it.get("name", ""),
+            "description": it.get("description", ""),
+            "model": it.get("model") or "",
+            "tools": it.get("tools") or "",
+            "assembly_count": len(asm) if isinstance(asm, list) else 0,
+            "hooks_positions": sorted(hooks.keys()) if isinstance(hooks, dict) else [],
+            "file": str(it.get("path", "")),
+        })
+    return {"items": out}
+
+
+def _read_persona_md(rel_path: str) -> str:
+    """读 persona md（file: 首项指向的文件）。剥 frontmatter——存量旧格式声明 md 带
+    frontmatter（yml 存在时 md 已不再是声明，作纯 persona 载体）；新写的本来就是纯正文。
+    路径基于 server._workspace（与 _dump_agent_yml 写盘同源，读写对称）。"""
+    from multiagent import _split_frontmatter
+    try:
+        p = (_workspace / rel_path).resolve()
+        p.relative_to(_workspace.resolve())   # 沙箱：不许越界
+        if not p.exists():
+            return ""
+        _, body = _split_frontmatter(p.read_text(encoding="utf-8", errors="ignore"))
+        return (body or "").strip()
+    except Exception:
+        return ""
+
+
+def _persona_from_decl(meta: dict, system: str) -> str:
+    """声明 → persona 文本，双形态兼容：
+    ① assembly 首项 file:（v2.1，persona 独立 md）→ 读文件；
+    ② 首项 text:（v2 迁移产物，内嵌）→ text 内容；
+    ③ 兜底 load_agent_yml 的 system。"""
+    asm = meta.get("assembly")
+    if isinstance(asm, list) and asm and isinstance(asm[0], dict):
+        if asm[0].get("file"):
+            p = _read_persona_md(str(asm[0]["file"]))
+            if p:
+                return p
+        if asm[0].get("text"):
+            return str(asm[0]["text"])
+    return system or ""
+
+
+@app.get("/api/agents/{name}")
+async def api_agents_get(name: str):
+    """单个子 Agent 完整声明（含 persona/assembly 原始清单/hooks）。"""
+    from agent_config import load_agent_yml
+    from multiagent import _agent_def_path
+    safe = _agent_safe_name(name)
+    p = _agent_def_path(safe)
+    if p is None or not p.exists():
+        return {"error": f"子 Agent {name!r} 不存在"}
+    try:
+        meta, system = load_agent_yml(p)
+    except Exception as e:
+        return {"error": f"解析失败：{type(e).__name__}: {e}"}
+    asm_raw = meta.get("assembly")
+    persona = _persona_from_decl(meta, system)
+    persona_file = ""
+    if isinstance(asm_raw, list) and asm_raw and isinstance(asm_raw[0], dict) and asm_raw[0].get("file"):
+        persona_file = str(asm_raw[0]["file"])
+    return {
+        "name": meta.get("name") or safe,
+        "description": meta.get("description", ""),
+        "model": meta.get("model") or "",
+        "tools": meta.get("tools") or "",
+        "persona": persona,
+        "persona_file": persona_file,   # 非空=persona 走独立 md（file: 引用形态）
+        "assembly": asm_raw if isinstance(asm_raw, list) else None,
+        "hooks": meta.get("hooks") if isinstance(meta.get("hooks"), dict) else {},
+        "file": str(p),
+    }
+
+
+def _dump_agent_yml(body: dict, safe: str) -> Path:
+    """把编辑器提交的声明写成 .agent/agents/<safe>.yml（v2.1 格式）。
+    persona 走独立 md（用户设计）：assembly 首项 {file: .agent/agents/<safe>.md}
+    引用同名 .md（每次投影重读——编辑 md 即时生效；yml 保持纯配置不臃肿），
+    persona 正文写该 md。同名 .md 与旧格式声明不冲突（yml 存在时 .md 被声明扫描跳过）。"""
+    import yaml
+    d = _workspace / ".agent" / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    asm = body.get("assembly")
+    if not (isinstance(asm, list) and asm):
+        asm = []
+    persona = (body.get("persona") or "").strip()
+    # 首项统一为 file: 引用（读侧对 text: 内嵌兼容，写侧统一新形态）
+    rel = f".agent/agents/{safe}.md"
+    if asm and isinstance(asm[0], dict) and ("text" in asm[0] or "file" in asm[0]):
+        asm[0] = {"file": rel}
+    else:
+        asm.insert(0, {"file": rel})
+    data = {
+        "name": safe,
+        "description": body.get("description", ""),
+        "tools": body.get("tools", ""),
+        "model": body.get("model") or None,
+        "assembly": asm,
+    }
+    hooks = body.get("hooks")
+    if isinstance(hooks, dict) and hooks:
+        data["hooks"] = hooks
+    p = d / f"{safe}.yml"
+    p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    (d / f"{safe}.md").write_text(persona + ("\n" if persona else ""), encoding="utf-8")
+    return p
+
+
+@app.put("/api/agents/{name}")
+async def api_agents_save(name: str, request: Request):
+    """保存子 Agent 声明（写 .yml + 删同名 .md 避免 yml 优先遮蔽）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    safe = _agent_safe_name(name)
+    if not safe:
+        return {"error": "name 非法"}
+    # persona 由 _dump_agent_yml 写独立 md（assembly 首项统一转 file: 引用），
+    # 这里不再做 text: 同步——双形态读取在 api_agents_get 的 _persona_from_decl。
+    # 注意：不删同名 .md（旧逻辑防旧格式声明遮蔽；现在它是 persona 载体，删了就丢内容）
+    asm = body.get("assembly")
+    p = _dump_agent_yml(body, safe)
+    return {"ok": True, "name": safe, "file": str(p),
+            "persona_file": f".agent/agents/{safe}.md"}
+
+
+@app.post("/api/agents")
+async def api_agents_create(request: Request):
+    """新建子 Agent 声明（模板）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    safe = _agent_safe_name(body.get("name") or "")
+    if not safe:
+        return {"error": "name 不能为空"}
+    d = _workspace / ".agent" / "agents"
+    if (d / f"{safe}.yml").exists() or (d / f"{safe}.md").exists():
+        return {"error": f"已存在同名声明 '{safe}'"}
+    p = _dump_agent_yml({
+        "description": "（新子 Agent：一句话作用 + 何时调用）",
+        "tools": "", "model": "", "persona": "你是 xxx，一个……的子 Agent。规则：\n- …",
+        "assembly": [{"text": "你是 xxx，一个……的子 Agent。规则：\n- …"}],
+        "hooks": {},
+    }, safe)
+    return {"ok": True, "name": safe}
+
+
+@app.delete("/api/agents/{name}")
+async def api_agents_delete(name: str):
+    """删除子 Agent 声明（.yml 与 .md 一并清理）。"""
+    safe = _agent_safe_name(name)
+    d = _workspace / ".agent" / "agents"
+    gone = False
+    for suf in (".yml", ".md"):
+        p = d / f"{safe}{suf}"
+        if p.exists():
+            try:
+                p.unlink()
+                gone = True
+            except OSError:
+                pass
+    return {"ok": gone} if gone else {"error": f"没有名为 '{safe}' 的子 Agent"}
 
 
 # ===================== WebSocket 端点 =====================

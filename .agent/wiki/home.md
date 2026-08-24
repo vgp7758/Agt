@@ -14,6 +14,7 @@
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** + **aggregator(32) 选值语义修复（第一个执行过且值非空）** + **AND/OR 逻辑节点 + 批处理性能项（nth_output 对象组装 / 筛选未设置恒真）** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/node-plugins](architecture/node-plugins.md) | 节点插件化：三级目录同名覆盖（12 组 py+js 配对，v0.19.2 wheel 24 文件）+ SDK/EdFW 前后端约定 + 热加载 + .pyc 坑 + 打包核对 | 加新节点类型 / 定制覆写内置节点 |
 | [architecture/tool-externalization-criteria](architecture/tool-externalization-criteria.md) | 工具外置判别标准：**数据写者决定归属**——自写自读（wiki/ltm/download/rag=真限界上下文，**四组已全部外置 ✅**）vs 引擎写工具读（recall/toollog=可观测性出口，永远内置）；重放拿到数据 ≠ 独立（格式契约耦合更危险）；**rag/ltm 边界裁剪：注册外置+实现留框架（共享单例）** | 判断某组工具能否外置 / 理解外置边界 |
+architecture/adr-stateful-externalization.md — 有状态系统外置评估（否决）：五触点分析、MCP 三矛盾、认知归属 vs 数据归属
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳；**字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新（v0.19.2）** | 调试工作流时在画布上看节点实际产出 |

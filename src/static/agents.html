@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>子 Agent 管理 · Agt</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--muted:#94a3b8;--acc:#6366f1;--ok:#10b981;--warn:#f59e0b;--err:#ef4444}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+.rowbar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.btn{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px}
+.btn:hover{border-color:var(--acc)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.danger{color:var(--err);border-color:#7f1d1d}
+.btn.sm{padding:2px 8px;font-size:12px;border-radius:6px}
+input,textarea,select{background:#0b1220;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;font-family:inherit}
+input[type=text]{width:100%}
+textarea{width:100%;resize:vertical}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.acard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;transition:border-color .15s}
+.acard:hover{border-color:var(--acc)}
+.acard .nm{font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+.acard .ds{color:var(--muted);font-size:12px;margin:6px 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tagrow{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.tag{font-size:11px;padding:1px 8px;border-radius:99px;background:#0b1220;border:1px solid var(--line);color:var(--muted)}
+.tag.m{color:#a5b4fc;border-color:#4338ca}
+.tag.h{color:#6ee7b7;border-color:#065f46}
+/* 编辑视图 */
+#edit{display:none}
+.fgroup{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.fgroup>h3{margin:0 0 10px;font-size:14px;color:#a5b4fc}
+.frow{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
+.frow label{min-width:88px;color:var(--muted);font-size:12px}
+.asmrow,.hkrow{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;flex-wrap:wrap}
+.asmrow select.tsel{width:118px}
+.asmrow .val{flex:1;min-width:140px}
+.asmrow textarea.val{min-height:64px;font-family:Consolas,monospace;font-size:12px}
+.opt{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--muted);white-space:nowrap}
+.hint{color:var(--muted);font-size:11px;margin-top:4px}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;max-height:150px;overflow:auto}
+.chip{font-size:11px;padding:1px 8px;border-radius:99px;background:#0b1220;border:1px solid var(--line);cursor:pointer}
+.chip:hover{border-color:var(--acc);color:#c7d2fe}
+.chip.on{border-color:var(--ok);color:#6ee7b7}
+#toast{position:fixed;bottom:20px;right:20px;background:#312e81;color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:70vw;z-index:99}
+#toast.show{opacity:1}
+.back{cursor:pointer;color:#a5b4fc;font-size:13px;margin-bottom:10px;display:inline-block}
+.filename{color:var(--muted);font-size:11px;font-family:Consolas,monospace}
+@media(max-width:600px){.frow label{min-width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- 列表视图 -->
+  <div id="list">
+    <h1>🤖 子 Agent 管理</h1>
+    <div class="sub">声明在 .agent/agents/*.yml —— 编辑名称/描述/模型/工具/上下文装配(assembly)/钩子(hooks)。保存后新派活即生效（reuse 实例下一任务生效）。</div>
+    <div class="rowbar">
+      <button class="btn pri" onclick="createAgent()">＋ 新建子 Agent</button>
+      <button class="btn" onclick="loadList()">⟲ 刷新</button>
+      <span id="cnt" class="sub" style="margin:0"></span>
+    </div>
+    <div class="grid" id="cards"></div>
+  </div>
+
+  <!-- 编辑视图 -->
+  <div id="edit">
+    <span class="back" onclick="location.hash=''">← 返回列表</span>
+    <h1 id="eTitle">编辑子 Agent</h1>
+    <div class="sub filename" id="eFile"></div>
+
+    <div class="fgroup">
+      <h3>基本信息</h3>
+      <div class="frow"><label>名称</label><input type="text" id="fName" readonly style="background:#1a2332"></div>
+      <div class="frow"><label>描述</label><textarea id="fDesc" rows="2" placeholder="一句话作用 + 何时调用（投影给主 Agent 决定何时派活）"></textarea></div>
+      <div class="frow"><label>模型</label><select id="fModel"></select>
+        <label style="min-width:auto">工具</label><input type="text" id="fTools" style="flex:1;min-width:180px" placeholder="逗号分隔；留空=继承主 Agent 全部"></div>
+      <div class="chips" id="toolChips"></div>
+      <div class="hint">点工具 chip 快速增删；留空=继承全部（除管理工具）。</div>
+    </div>
+
+    <div class="fgroup">
+      <h3>SYSTEM 正文（persona）</h3>
+      <textarea id="fPersona" rows="8" placeholder="你是 xxx，一个……的子 Agent。规则：…"></textarea>
+      <div class="hint">保存时写回 assembly 首个 text: 项。</div>
+    </div>
+
+    <div class="fgroup">
+      <h3>上下文装配 assembly（顺序即装配顺序，只装列出的段）</h3>
+      <div id="asmList"></div>
+      <button class="btn sm" onclick="asmAdd()">＋ 添加段</button>
+      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤 / tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。</div>
+    </div>
+
+    <div class="fgroup">
+      <h3>钩子 hooks</h3>
+      <div id="hkList"></div>
+      <button class="btn sm" onclick="hkAdd()">＋ 添加钩子</button>
+      <div class="hint">位置：before_turn / after_tool / before_answer / turn_end。类型：workflow=工作流名 / cmd=命令 / emit=事件。async=后台执行不阻塞。</div>
+    </div>
+
+    <div class="rowbar">
+      <button class="btn pri" onclick="saveAgent()">💾 保存</button>
+      <button class="btn" onclick="loadEdit(curName)">⟲ 放弃修改</button>
+      <button class="btn danger" onclick="delAgent()">🗑 删除此声明</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+let curName='', models=[], allTools=[], asmData=[], hkData=[];
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg,ok=true){const t=$('toast');t.textContent=msg;t.style.background=ok?'#312e81':'#7f1d1d';t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+async function api(u,opt){const r=await fetch(u,opt);return r.json();}
+
+/* ---------- 列表 ---------- */
+async function loadList(){
+  const d=await api('/api/agents');
+  $('cnt').textContent=d.items?`${d.items.length} 个声明`:(d.error||'');
+  $('cards').innerHTML=(d.items||[]).map(a=>`
+    <div class="acard" onclick="location.hash='edit='+encodeURIComponent('${a.name}')">
+      <div class="nm"><span>${esc(a.name)}</span>
+        <span class="tag ${a.model?'m':''}">${a.model?esc(a.model):'跟随主模型'}</span></div>
+      <div class="ds">${esc(a.description)}</div>
+      <div class="tagrow">
+        <span class="tag">装配 ${a.assembly_count} 段</span>
+        <span class="tag">${a.tools?'工具 '+a.tools.split(',').filter(x=>x.trim()).length+' 个':'继承全部工具'}</span>
+        ${(a.hooks_positions||[]).map(h=>`<span class="tag h">🪝 ${esc(h)}</span>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+async function createAgent(){
+  const name=prompt('新子 Agent 名称（字母数字_-）：','');
+  if(!name)return;
+  const d=await api('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  if(d.ok){toast('✅ 已创建 '+d.name);location.hash='edit='+encodeURIComponent(d.name);}
+  else toast(d.error||'创建失败',false);
+}
+
+/* ---------- 编辑 ---------- */
+const SEG_TYPES=['system','rules','history','user_message','steps','tail','hooks'];
+const ACT_TYPES=['text','file','dir','cmd','workflow','tool'];
+
+function asmToRow(it){
+  // {kind:'seg'|act, name?, opt?, value?}
+  if(it===null||it===undefined)return {kind:'seg',name:'user_message',opt:false};
+  if(typeof it==='string'){
+    const [n,...rest]=it.split('|');
+    const base=n.trim();
+    if(SEG_TYPES.includes(base))return {kind:'seg',name:base,opt:rest.some(x=>x.trim()==='optional')};
+    // 字符串动作（老格式 'file: x' 等）
+    const m=base.match(/^(text|file|dir|cmd|workflow|tool):\s*(.*)$/);
+    if(m)return {kind:m[1],value:m[2]};
+    return {kind:'seg',name:base,opt:rest.some(x=>x.trim()==='optional')};
+  }
+  if(typeof it==='object'){
+    for(const k of [...ACT_TYPES,'once','every']){
+      if(k in it&&k!=='once'&&k!=='every')return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every};
+    }
+  }
+  return {kind:'seg',name:'user_message',opt:false};
+}
+function rowToItem(r){
+  if(r.kind==='seg')return r.opt?`${r.name}|optional`:r.name;
+  if(r.kind==='text'){const o={text:r.value||''};if(r.once)o.once=true;if(r.every)o.every=r.every;return o;}
+  const o={};o[r.kind]=r.value||'';if(r.once)o.once=true;if(r.every)o.every=r.every;return o;
+}
+
+function renderAsm(){
+  $('asmList').innerHTML=asmData.map((r,i)=>{
+    const isSeg=r.kind==='seg';
+    const opts=[...SEG_TYPES,...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('');
+    const valHtml=r.kind==='text'
+      ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
+      :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;
+    const extra=isSeg
+      ?`<span class="opt"><input type="checkbox" ${r.opt?'checked':''} onchange="asmData[${i}].opt=this.checked"> optional</span>`
+      :(r.kind==='file'||r.kind==='dir'||r.kind==='cmd'||r.kind==='workflow'||r.kind==='tool'
+        ?`<span class="opt"><input type="checkbox" ${r.once?'checked':''} onchange="asmData[${i}].once=this.checked"> once</span>`:'');
+    return `<div class="asmrow">
+      <select class="tsel" onchange="asmKind(${i},this.value)">${opts}</select>
+      ${valHtml}${extra}
+      <button class="btn sm" onclick="asmMove(${i},-1)">↑</button>
+      <button class="btn sm" onclick="asmMove(${i},1)">↓</button>
+      <button class="btn sm danger" onclick="asmData.splice(${i},1);renderAsm()">×</button>
+    </div>`;
+  }).join('')||'<div class="hint">（空 = 未声明 assembly，使用默认全装清单）</div>';
+}
+function asmKind(i,t){asmData[i]={kind:t,name:t==='seg'?'user_message':undefined,value:t==='seg'?undefined:'',opt:false};renderAsm();}
+function asmMove(i,d){const j=i+d;if(j<0||j>=asmData.length)return;[asmData[i],asmData[j]]=[asmData[j],asmData[i]];renderAsm();}
+function asmAdd(){asmData.push({kind:'seg',name:'user_message',opt:false});renderAsm();}
+
+function hkToRows(hooks){
+  const rows=[];
+  for(const[pos,arr]of Object.entries(hooks||{})){
+    for(const it of (Array.isArray(arr)?arr:[arr])){
+      if(it&&typeof it==='object'){
+        let kind='workflow',val='',async_=false;
+        for(const k of['workflow','cmd','emit'])if(k in it){kind=k;val=String(it[k]??'');break;}
+        async_=it.async===true;
+        rows.push({pos,kind,value:val,async:async_});
+      }else if(typeof it==='string'){
+        const m=it.match(/^(workflow|cmd|emit):\s*(.*)$/);
+        const asy=/\|\s*async/.test(it);
+        rows.push({pos,kind:m?m[1]:'workflow',value:(m?m[2]:it).replace(/\|.*$/,'').trim(),async:asy});
+      }
+    }
+  }
+  return rows;
+}
+function rowsToHooks(rows){
+  const out={};
+  rows.filter(r=>r.value&&r.value.trim()).forEach(r=>{
+    (out[r.pos]=out[r.pos]||[]).push({[r.kind]:r.value.trim(),...(r.async?{async:true}:{})});
+  });
+  return out;
+}
+function renderHk(){
+  const poss=['before_turn','after_tool','before_answer','turn_end'],kinds=['workflow','cmd','emit'];
+  $('hkList').innerHTML=hkData.map((r,i)=>`
+    <div class="hkrow">
+      <select onchange="hkData[${i}].pos=this.value">${poss.map(p=>`<option ${r.pos===p?'selected':''}>${p}</option>`).join('')}</select>
+      <select onchange="hkData[${i}].kind=this.value">${kinds.map(k=>`<option ${r.kind===k?'selected':''}>${k}</option>`).join('')}</select>
+      <input class="val" type="text" placeholder="工作流名 / 命令 / 事件" value="${esc(r.value)}" oninput="hkData[${i}].value=this.value">
+      <span class="opt"><input type="checkbox" ${r.async?'checked':''} onchange="hkData[${i}].async=this.checked"> async</span>
+      <button class="btn sm danger" onclick="hkData.splice(${i},1);renderHk()">×</button>
+    </div>`).join('')||'<div class="hint">（无钩子）</div>';
+}
+function hkAdd(){hkData.push({pos:'turn_end',kind:'workflow',value:'',async:false});renderHk();}
+
+function renderChips(){
+  const cur=new Set(($('fTools').value||'').split(',').map(x=>x.trim()).filter(Boolean));
+  $('toolChips').innerHTML=allTools.map(t=>`<span class="chip ${cur.has(t)?'on':''}" onclick="toggleTool('${t}')">${esc(t)}</span>`).join('');
+}
+function toggleTool(t){
+  const cur=($('fTools').value||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const i=cur.indexOf(t);i>=0?cur.splice(i,1):cur.push(t);
+  $('fTools').value=cur.join(',');renderChips();
+}
+
+async function loadEdit(name){
+  const d=await api('/api/agents/'+encodeURIComponent(name));
+  if(d.error){toast(d.error,false);return;}
+  curName=d.name;
+  $('eTitle').textContent='编辑：'+d.name;
+  $('eFile').textContent=d.file||'';
+  $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
+  $('fPersona').value=d.persona||'';
+  asmData=(d.assembly||[]).map(asmToRow);
+  if(!asmData.length)asmData=[{kind:'seg',name:'system',opt:false}];
+  hkData=hkToRows(d.hooks);
+  renderAsm();renderHk();renderChips();
+  location.hash='edit='+encodeURIComponent(d.name);
+}
+
+async function saveAgent(){
+  const body={
+    description:$('fDesc').value,tools:$('fTools').value.trim(),model:$('fModel').value,
+    persona:$('fPersona').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
+  };
+  const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(d.ok)toast('✅ 已保存（新派活生效；reuse 实例下一任务生效）');
+  else toast(d.error||'保存失败',false);
+}
+async function delAgent(){
+  if(!confirm(`删除子 Agent 声明「${curName}」？此操作不可恢复。`))return;
+  const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'DELETE'});
+  if(d.ok){toast('🗑 已删除');location.hash='';}
+  else toast(d.error||'删除失败',false);
+}
+
+/* ---------- 路由/初始化 ---------- */
+function route(){
+  const m=location.hash.match(/^#edit=(.+)$/);
+  if(m){$('list').style.display='none';$('edit').style.display='block';
+    const nm=decodeURIComponent(m[1]);if(nm!==curName)loadEdit(nm);}
+  else{$('list').style.display='block';$('edit').style.display='none';curName='';loadList();}
+}
+window.addEventListener('hashchange',route);
+
+(async function init(){
+  try{
+    const m=await api('/api/model-list');
+    models=Object.keys(m.models||{});
+    $('fModel').innerHTML=`<option value="">（跟随主 Agent 当前模型）</option>`+models.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+  }catch(e){}
+  try{
+    const t=await api('/api/tools');
+    allTools=(t.tools||[]).map(x=>x.name);
+  }catch(e){allTools=[];}
+  route();
+})();
+</script>
+</body>
+</html>

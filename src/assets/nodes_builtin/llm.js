@@ -22,7 +22,7 @@ EdFW.register({
       hint: n => { const t = lpGet("temperature")(n); return (t === "" || t == null) ? "（默认/全局）" : ""; },
       get: lpGet("temperature"), set: lpSet("temperature") },
     { key: "thinking", widget: "checkbox", label: "thinking",
-      get: n => { const v = lpFind(n, "thinking"); return v == null ? "" : v; },
+      get: n => { const v = lpFind(n, "thinking")?.input?.value?.content; return v == null ? "" : v; },
       set: (n, v) => lpSet("thinking")(n, v === true || v === "true" ? "true" : "false") },
     { key: "output_format", widget: "select", label: "输出格式",
       options: [["json", "json（按 schema 约束+解析字段）"], ["text", "text（纯文本，不解析）"]],
@@ -42,13 +42,20 @@ function lpFind(n, name){
   if (!lp) lp = n.data.inputs.llmParam = [
     { name: "prompt", input: { type: "string", value: { type: "literal", content: "" } } },
     { name: "systemPrompt", input: { type: "string", value: { type: "literal", content: "" } } } ];
-  let p = lp.find(x => x.name === name);
-  if (!p && name === "systemPrompt") { p = { name, input: { type: "string", value: { type: "literal", content: "" } } }; lp.push(p); }
-  return p;
+  return lp.find(x => x.name === name);   // 纯读：找不到返回 undefined（不建项——get 无副作用）
 }
 function lpGet(name){
   return n => { const p = lpFind(n, name); return p?.input?.value?.content ?? ""; };
 }
 function lpSet(name){
-  return (n, v) => { const p = lpFind(n, name); if (p) p.input.value.content = v; };
+  // 通用补建：任意 param 首次写入时创建 llmParam 项（此前仅 systemPrompt 特判补建——
+  // output_format 选 text 后 set 找不到项【静默丢弃】，下拉切不动；真实编辑器"从无到有"路径暴露）
+  return (n, v) => {
+    let p = lpFind(n, name);
+    if (!p) {
+      p = { name, input: { type: "string", value: { type: "literal", content: "" } } };
+      n.data.inputs.llmParam.push(p);
+    }
+    p.input.value.content = v;
+  };
 }

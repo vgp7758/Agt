@@ -29,9 +29,17 @@ from rag import APIEmbedder
 def _build_embedder(cfg: dict):
     """按 rag.json 的 embed 配置建 embedder；任一关键字段缺 → 返回 None（由调用方降级）。
 
-    和 LocalRAG.from_config 里 embedder 装配逻辑同源，但不依赖 LocalRAG 实例——
-    session 向量库可以独立于文档 RAG 启用（用户可能只想给会话历史加语义检索，
-    不一定建文档库）。"""
+    和 LocalRAG.from_config 里 embedder 装配逻辑同源，但优先【共享 RAG 单例的 embedder】——
+    同一份 rag.json 配置，RAG 已加载时直接复用（省一份模型内存 + 共享 _CachedEmbedder LRU）；
+    RAG 未启用（enabled=false 但 session_index_enabled=true）或未预热完成时才自建——
+    session 向量库可以独立于文档 RAG 启用。"""
+    try:
+        from rag import get_rag
+        inst = get_rag()
+        if inst is not None and inst.embedder is not None:
+            return inst.embedder
+    except Exception:
+        pass
     provider = cfg.get("embed_provider", "local")
     try:
         if provider == "api":

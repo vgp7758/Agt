@@ -27,7 +27,7 @@ from longterm_memory import make_ltm_tools
 from download import make_download_tools
 from toollog import make_tool_log_tools
 from wiki import make_wiki_tools
-from rag import make_rag_tools, LocalRAG, set_rag
+from rag import LocalRAG, set_rag, ensure_rag, preload_async
 from commands import CommandContext, build_default_registry, apply_config
 from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
@@ -156,16 +156,10 @@ SYSTEM = build_system(
 # ===== 可复用装配层（web/CLI 共用，消除两边装配漂移） =====
 
 def init_rag(workspace):
-    """装配全局 RAG 实例：seed 默认配置 + from_config 建实例并 set_rag。
-    enabled 关或模型路径无效 → 实例为 None（rag_query 返回未建库提示）。幂等。
-    之前 chat 漏了这步 → CLI 的 rag_query 恒空（连已建好的库都读不到）。"""
-    config.seed_rag_config(workspace)
-    try:
-        inst = LocalRAG.from_config(workspace)
-    except Exception as e:
-        print(f"[rag] 加载失败：{e}")
-        inst = None
-    set_rag(inst, str(workspace))
+    """同步强制重建 RAG 实例（/rag 页面保存配置后的热重建路径——server.py 调用）。
+    启动期装载已改为【后台预热】（build_agent → rag.preload_async，模型加载秒级~十秒级
+    不再阻塞启动）；本函数仅配置变更时同步用（force=True 无视 attempted 标志）。"""
+    return ensure_rag(workspace, force=True)
 
 
 def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, workspace=WORKSPACE):
@@ -174,8 +168,10 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     on_event/snapshot_manager 可注入；verbose 控制装配期打印。返回装配好的 agent。
     主 agent 元信息来自 ~/.agt/main.yml（assembly 清单 + hooks 声明 + model 覆盖），
     读不到时回退内置 SYSTEM 字符串 + 默认装配清单（保底不炸）。"""
-    # RAG 全局实例（之前 chat 漏装配）
-    init_rag(workspace)
+    # RAG 后台预热（替代原同步 init_rag：模型加载秒级~十秒级不再阻塞启动）。
+    # 外置件 tools/builtin/rag_tools.py 的 agt_register 也会触发 preload（幂等——
+    # ensure 内部锁 + attempted 标志，双触发不重复加载）；这里显式调一次兜底外置件缺失的场景。
+    preload_async(workspace)
     # 旧 .md 声明先迁移到 .yml（幂等；用户改过的 .md 优先成 .yml，不被随包模板覆盖）
     from agent_config import migrate_agents_md_to_yml
     migrate_agents_md_to_yml(workspace)
@@ -227,22 +223,26 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
 
     # session 语义召回层：配了 embed 模型就建 SessionVectorStore 并注入 session；
     # 没配（from_config 返回 None）→ session.vec_store 保持 None，recall 自动退回子串。
-    # 和 init_rag 共享同一份 rag.json 的 embed 配置（不另开一套）。
-    try:
-        from session_vec import SessionVectorStore
-        from config import load_rag_config
-        cfg = load_rag_config(workspace)
-        if cfg.get("session_index_enabled") or cfg.get("enabled"):
-            # session_index_enabled 显式开，或文档 RAG 已 enabled（隐含配了 embed）都尝试建
+    # 【后台线程装载】：先 ensure_rag 等 RAG 预热完成（_build_embedder 共享其 embedder，
+    # 省一份模型内存——此前 LocalRAG 与 session_vec 各建一份 bge 双倍内存）；启动不阻塞。
+    # 预热完成前的最初几轮 recall 走子串匹配（vec_store=None 的既有降级路径），随后自动就绪。
+    def _init_session_vec():
+        try:
+            from config import load_rag_config
+            cfg = load_rag_config(workspace)
+            if not (cfg.get("session_index_enabled") or cfg.get("enabled")):
+                return   # session_index_enabled 显式开，或文档 RAG 已 enabled（隐含配了 embed）才建
+            ensure_rag(workspace)   # 等预热（幂等；RAG 未启用时快速返回 None → 下方自建）
+            from session_vec import SessionVectorStore
             sv = SessionVectorStore.from_config(workspace, cfg)
             if sv is not None:
                 agent.session.vec_store = sv
-                if verbose:
-                    st = sv.stats()
-                    print(f"[session_vec] 已启用语义召回：{st['turns']} 轮 / {st['sessions']} 会话已索引")
-    except Exception as e:
-        if verbose:
+                st = sv.stats()
+                print(f"[session_vec] 已启用语义召回：{st['turns']} 轮 / {st['sessions']} 会话已索引"
+                      f"（embedder {'共享自 RAG' if getattr(sv.embedder, '__class__', None).__name__ == '_CachedEmbedder' else '独立'}）")
+        except Exception as e:
             print(f"[session_vec] 未启用（{e}）— recall 将用子串匹配")
+    threading.Thread(target=_init_session_vec, daemon=True, name="session-vec-init").start()
 
     # 任务指引 provider：每轮从磁盘重读 AGENTS.md/rules/skills/子Agent（不再创建时烤进 SYSTEM）。
     # 用户改这些文件 → 任意 session、当轮即生效；SYSTEM 只留稳定框架，task-guidance 紧随其后由 provider 注入。
@@ -291,7 +291,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_tool_log_tools(agent), "工具日志")
     _reg(make_background_tools(agent), "后台/调度")
     _reg(make_wiki_tools(agent), "Wiki")
-    _reg(make_rag_tools(), "RAG")
+    # rag_query 由外置件 tools/builtin/rag_tools.py 提供（attach_script_tools 已注册，
+    # group=rag）；其 agt_register 触发模型后台预热
     _reg(make_autonomous_tools(agent), "自主模式")
     _reg(make_workflow_mgmt_tools(workspace), "工作流管理")
     ok, broken = refresh_workflow_tools(agent.tools, workspace, agent)

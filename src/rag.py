@@ -5,8 +5,10 @@ HNSW 图索引让检索 O(logN)，毫秒出 top-K，不是串行遍历——海�
 
 配置驱动：<workspace>/.agent/rag.json（见 config.load_rag_config / DEFAULT_RAG_CONFIG）。
 - 命令行 demo：python src/rag.py
-- agt 集成：web.py 启动时 LocalRAG.from_config(ws) 建全局单例，set_rag() 注入；
-  rag_query 工具供智能体调用，/rag 页面供用户管理（配置/建库/查询）。
+- agt 集成：启动时 preload_async 后台预热单例（模型加载不阻塞启动；外置件
+  tools/builtin/rag_tools.py 的 agt_register 也触发，幂等）；rag_query 工具供
+  智能体调用（惰性 ensure_rag——预热中调用会等锁拿结果），/rag 页面供用户管理。
+  session_vec/cosine_sim/emb_probe 与本单例共享同一个 embedder（省一份模型内存）。
 """
 import fnmatch
 import os
@@ -297,9 +299,45 @@ class LocalRAG:
         return {"ready": self.index.ntotal > 0, "total_docs": self.index.ntotal, "dim": self.dim}
 
 
-# ---------- 全局单例（web.py 启动注入，rag_query 工具读取）----------
+# ---------- 全局单例（惰性构建：ensure_rag/preload_async；get_rag 只读）----------
 _rag_instance = None
 _rag_workspace = None
+_init_lock = threading.Lock()
+_init_attempted = False   # 首次尝试后置 True：配置缺失场景 rag_query 不必每次重试加载
+                          # （配置变更走 init_rag → ensure_rag(force=True) 强制重建）
+
+
+def ensure_rag(workspace=None, force=False) -> "LocalRAG | None":
+    """线程安全惰性构建单例：未构建且未尝试过（或 force）→ seed + from_config + set_rag。
+    返回实例（配置缺失/加载失败 → None）。幂等：已有实例直接返回；预热中的并发调用等锁后
+    拿到已完成的结果（不重复加载）。rag_query/cosine_sim/session_vec 共用这一入口。"""
+    global _init_attempted
+    if workspace is None:
+        workspace = _rag_workspace or Path.cwd()
+    with _init_lock:
+        if _rag_instance is not None or (_init_attempted and not force):
+            return _rag_instance
+        _init_attempted = True
+        import config
+        config.seed_rag_config(workspace)
+        try:
+            inst = LocalRAG.from_config(workspace)
+        except Exception as e:
+            print(f"[rag] 加载失败：{e}")
+            inst = None
+        set_rag(inst, str(workspace))
+        return inst
+
+
+def preload_async(workspace=None):
+    """后台预热（外置件 agt_register / build_agent 启动时调）：模型加载秒级~十秒级，
+    不阻塞启动/装配线程。幂等（ensure 内部锁 + attempted 标志）；配置缺失时快速结束。"""
+    def _go():
+        try:
+            ensure_rag(workspace)
+        except Exception as e:
+            print(f"[rag] 预热失败：{e}")
+    threading.Thread(target=_go, daemon=True, name="rag-preload").start()
 
 
 def set_rag(instance, workspace=None):
@@ -315,8 +353,9 @@ def get_rag():
 
 def rag_query(query: str, top_k: int = 5) -> str:
     """在本地文档库做语义搜索（RAG）。返回多行，每行 `相对路径:起行-止行: 片段预览`，共 top_k 条。
-    用于回答涉及本地项目文档/设计/代码的问题。未建库或无匹配时返回提示文本。"""
-    rag = _rag_instance
+    用于回答涉及本地项目文档/设计/代码的问题。未建库或无匹配时返回提示文本。
+    惰性构建：单例未就绪时 ensure_rag 同步等待（后台预热大概率已完成）。"""
+    rag = ensure_rag()
     if rag is None or rag.index.ntotal == 0:
         return "(RAG 索引未建立，请先在 /rag 页面配置并建库)"
     try:
@@ -338,11 +377,6 @@ def rag_query(query: str, top_k: int = 5) -> str:
         out.append(f"{rel}:{h['start_line']}-{h['end_line']}: "
                    f"{h['text'].strip().replace(chr(10), ' ')[:200]}")
     return "\n".join(out)
-
-
-def make_rag_tools():
-    from tools import Tool
-    return [Tool(rag_query)]
 
 
 if __name__ == "__main__":

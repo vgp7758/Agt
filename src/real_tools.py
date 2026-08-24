@@ -2225,9 +2225,10 @@ def cosine_sim(text1: str, text2: str) -> float:
     """计算两段文本的语义余弦相似度（-1~1，越大越相关）。
     复用 /rag 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后计算。
     用于工作流批处理重排：query 与每个候选切片的相似度（需先配置 RAG 的 embedding）。
-    text2 的向量缓存由 _CachedEmbedder 包装层自动处理（LRU），本函数无需自己管缓存。"""
-    from rag import get_rag
-    rag = get_rag()
+    text2 的向量缓存由 _CachedEmbedder 包装层自动处理（LRU），本函数无需自己管缓存。
+    惰性构建：单例未就绪时 ensure_rag 等待后台预热完成（启动初期首次调用可能等几秒）。"""
+    from rag import ensure_rag
+    rag = ensure_rag()
     if rag is None:
         raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
     import numpy as np
@@ -2276,8 +2277,8 @@ def emb_probe() -> bool:
         return _EMB_PROBE["ok"]
     ok = False
     try:
-        from rag import get_rag
-        rag = get_rag()
+        from rag import ensure_rag
+        rag = ensure_rag()   # 预热中等待完成再判定（避免预热期误降级 + 5 分钟缓存粘住）
         if rag is not None and rag.embedder is not None:
             v = rag.embedder.encode(["探测", "probe"], normalize_embeddings=True,
                                     show_progress_bar=False)

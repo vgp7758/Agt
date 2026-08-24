@@ -17,6 +17,7 @@
     <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
     <param name="prompt" type="string"><![CDATA[{{q}}]]></param>
     <model>local-qwen</model>
+    <param name="output_format" type="string"><![CDATA[text]]></param>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

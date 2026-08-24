@@ -66,6 +66,36 @@ def eval_condition(cond: dict, ctx) -> bool:
     return _f(cond, ctx)
 
 
+def eval_condition_lenient(group: dict, ctx) -> bool:
+    """条件组求值（未设置条件恒真版）——AND/OR 逻辑节点语义。
+    左值未设置 / 需右值的运算符(1-8,13-16)遇未设置右值 → 该条件恒 True
+    （与批处理 filter 的"半成品条件不拦数据"裁定一致）：
+      AND 组：剔除恒真条件后对剩余求 AND（结果不变）；全未设置 → True
+      OR 组：含任一恒真条件 → True；否则对剩余求 OR
+    空组恒真。"""
+    conds = group.get("conditions") or []
+    if not conds:
+        return True
+    from workflow import _filter_input_unset
+
+    def _unset(c) -> bool:
+        l_in = (c.get("left") or {}).get("input")
+        r_in = (c.get("right") or {}).get("input")
+        r_need = c.get("operator") not in (9, 10, 11, 12)   # 9-12 不需要右值
+        return _filter_input_unset(l_in) or (r_need and _filter_input_unset(r_in))
+
+    real = [c for c in conds if not _unset(c)]
+    has_unset = len(real) < len(conds)
+    logic = int(group.get("logic", 2) or 2)
+    if logic == 1:                       # AND：恒真条件可剔除
+        if not real:
+            return True
+        return bool(eval_condition({"logic": 1, "conditions": real}, ctx))
+    if has_unset:                        # OR：含恒真条件即恒真
+        return True
+    return bool(eval_condition({"logic": 2, "conditions": real}, ctx))
+
+
 def get_llm(ctx, model_name: str = ""):
     """按模型名取 LLMClient（空名=ctx.llm；指定名=per-model 独立缓存 client）。llm/intent 节点用。"""
     from workflow import _get_llm as _f

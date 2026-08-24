@@ -266,7 +266,7 @@ def _lint_node(nd, ntype: str) -> None:
     这些写法解析器找不到对应标签/属性会默默丢弃——工作流能跑但结果错，最难排查。"""
     nid = nd.get("id", "?")
     w = []
-    if ntype == "8":    # selector（left/right 子元素形式合法；只拦 <condition> 错标签）
+    if ntype in ("8", "AND", "OR"):    # selector 及 AND/OR 逻辑节点（left/right 子元素形式合法；只拦 <condition> 错标签）
         for br in nd.findall("branch"):
             if br.findall("condition"):
                 w.append("分支条件应用 <cond>（或 branch 直接带 op/left/right），检测到 <condition>（被忽略）")
@@ -351,7 +351,7 @@ def _node_to_json(nd) -> dict:
                                     "input": {"type": "string",
                                               "value": {"type": "literal", "content": _text_block(res)}}}]
         out.append({"name": "output", "type": "string"})
-    elif ntype == "8":      # selector：<branch><cond/></branch>；或 <branch op><left/><right/></branch>（单条件简写）
+    elif ntype in ("8", "AND", "OR"):   # selector / AND / OR：<branch><cond/></branch>；或 <branch op><left/><right/></branch>（单条件简写）
         branches = []
         for br in nd.findall("branch"):
             conds = [_cond(c) for c in br.findall("cond")]
@@ -723,7 +723,7 @@ def _node_to_xml(n):
         cr = next((p for p in inp.get("concatParams", []) if p.get("name") == "concatResult"), None)
         if cr:
             inner.append(f'<result>{_cdata(_lit_of(cr.get("input", {})))}</result>')
-    elif ntype == "8":
+    elif ntype in ("8", "AND", "OR"):   # selector / AND / OR 的条件组
         for br in inp.get("branches", []):
             cs = (br.get("condition") or {}).get("conditions", [])
             inner.append("<branch>" + "".join(_cond_to_xml(c) for c in cs) + "</branch>" if cs else "<branch/>")

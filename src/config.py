@@ -186,6 +186,17 @@ def load_hook_timeout() -> int:
         return 300
 
 
+def load_fold_deep_tools() -> bool:
+    """超深档工具调用折叠（settings.json 的 fold_deep_tools；默认 False）。
+    开启后：真实档位（未封顶 level）超过 max_level 的早期轮，工具调用过程整体折叠成
+    一行标注（"---- 已折叠共N次工具调用 ----"）+ 保留最终回复原文与 reasoning 原文——
+    不再按 max_level(187字/步) 逐调用残缺摘要（该信息密度下残缺参数/结果意义有限）。"""
+    try:
+        return bool(load_runtime_settings().get("fold_deep_tools", False))
+    except Exception:
+        return False
+
+
 def load_detail_step() -> int:
     """步距衰减的每步减少字数（settings.json 的 detail_step；默认 15）。"""
     try:

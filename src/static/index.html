@@ -331,6 +331,7 @@
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" title="工具结果摘要的初始字数上限（当前步 d=0，默认1500）；越大披露越详细"></label>
     <label>步距衰减 step <input id="cfg_detail_step" type="number" min="1" title="每远一步减少的摘要字数（默认15）；越大老步压缩越快"></label>
     <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠并一次压回计划水位（分档窗口的75%，与轮边界计划对齐）"></label>
+    <label title="超深档（真实档位超过 max_level）的早期轮：工具调用过程整体折叠成一行「---- 已折叠共N次工具调用 ----」，保留最终回复原文与 reasoning 原文——替代按 max_level(187字/步) 的逐调用残缺摘要。完整过程仍在存档可 recall。"><input id="cfg_fold_deep_tools" type="checkbox"> 折叠早期工具调用（超深档轮只留结论）</label>
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
@@ -1179,6 +1180,7 @@ function saveRuntime(){
     detail_base: parseInt(document.getElementById('cfg_detail_base').value)||1500,
     detail_step: parseInt(document.getElementById('cfg_detail_step').value)||15,
     panic_context_window: parseInt(document.getElementById('cfg_panic_window').value)||0,
+    fold_deep_tools: document.getElementById('cfg_fold_deep_tools').checked,
   };
   ws.send(JSON.stringify({action:'set_config', values}));
   settingsModal.style.display='none';
@@ -1713,6 +1715,7 @@ function onWSMessage(ev){
         document.getElementById('cfg_detail_base').value = m.values.detail_base || '';
         document.getElementById('cfg_detail_step').value = m.values.detail_step || '';
         document.getElementById('cfg_panic_window').value = m.values.panic_context_window ?? 0;
+        document.getElementById('cfg_fold_deep_tools').checked = !!m.values.fold_deep_tools;
       }
       break;
     case 'saved':

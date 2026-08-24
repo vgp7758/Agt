@@ -1093,31 +1093,50 @@ class Session:
         return "<system-reminder>\n" + "\n\n".join(parts) + "\n</system-reminder>"
 
     def _tier_level(self, turn_idx: int) -> int:
-        """turn 所在档位级别：当前段(最后边界之后)=1，往前每跨一个边界 +1，封顶 max_level。
+        """turn 所在档位级别（封顶 max_level，渲染 base 用）。
         算式 level = 1 + count(boundaries 中 >= turn_idx)；验过 [5,10]→turn5=3/turn10=2/turn11=1，
         加 15 后→turn5=4/turn10=3/turn15=2/turn16=1（全档顺移）。"""
-        level = 1 + sum(1 for b in self._tier_boundaries if b >= turn_idx)
-        return min(level, self.max_level)
+        return min(self._raw_tier_level(turn_idx), self.max_level)
+
+    def _raw_tier_level(self, turn_idx: int) -> int:
+        """未封顶的真实档位（滚动毕业后早期轮可持续 >max_level）。
+        超深档折叠（fold_deep_tools 开）以它判定：raw > max_level 的轮走工具调用整体折叠。"""
+        return 1 + sum(1 for b in self._tier_boundaries if b >= turn_idx)
 
     def _render_turn_frozen(self, turn_idx: int) -> list[dict]:
-        """渲染一个【已完成】turn，按其档位级别冻结：同 level 直接复用缓存 → byte-stable（利于前缀缓存）。
+        """渲染一个【已完成】turn，按其档位级别冻结：同 (level, fold) 直接复用缓存 → byte-stable。
         档位 base = DETAIL_BASE >> (level-1)：level1=1500 / 2=750 / 3=375… 不低于 DETAIL_FLOOR。
-        level 变了（毕业顺移）才重算。"""
+        level 变了（毕业顺移）才重算；fold 开关变化也失效重算（key 含 fold 位）。
+        超深档折叠（fold_deep_tools 开 且 raw level > max_level）：工具调用整体折叠成
+        一行标注 + 保留最终回复原文与 reasoning 原文（用户设计——超深档残缺摘要信息密度低，
+        不如结论原文 + 可 recall 的完整存档）。"""
         level = self._tier_level(turn_idx)
+        fold = config.load_fold_deep_tools() and self._raw_tier_level(turn_idx) > self.max_level
+        key = (level, fold)
         cached = self._frozen_renders.get(turn_idx)
-        if cached and cached[0] == level:
+        if cached and cached[0] == key:
             return cached[1]
         turn = self.turns[turn_idx]
-        base = max(__import__("toollog").DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
         msgs = [{"role": "user", "content": self._user_content(turn)}]
-        msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
-                                             base=base, full_window=(1 if level == 1 else 0)))
-        if turn.answer:
-            a_msg = {"role": "assistant", "content": turn.answer}
+        if fold:
+            n_calls = sum(len(s.tool_calls) for s in turn.steps)
+            content = f"---- 已折叠共{n_calls}次工具调用 ----"
+            if turn.answer:
+                content += f"\n\n{turn.answer}"
+            a_msg = {"role": "assistant", "content": content}
             if turn.answer_reasoning:
                 a_msg["reasoning_content"] = turn.answer_reasoning
             msgs.append(a_msg)
-        self._frozen_renders[turn_idx] = (level, msgs)
+        else:
+            base = max(__import__("toollog").DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
+            msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
+                                                 base=base, full_window=(1 if level == 1 else 0)))
+            if turn.answer:
+                a_msg = {"role": "assistant", "content": turn.answer}
+                if turn.answer_reasoning:
+                    a_msg["reasoning_content"] = turn.answer_reasoning
+                msgs.append(a_msg)
+        self._frozen_renders[turn_idx] = (key, msgs)
         return msgs
 
     def _render_tiered_history(self, fold_count: int = 0) -> list[dict]:
@@ -1201,9 +1220,13 @@ class Session:
         new_b = last_completed if seg_len <= GRADUATE_BATCH_TURNS \
             else seg_start + GRADUATE_BATCH_TURNS - 1
         self._tier_boundaries.append(new_b)
+        # 冻结缓存失效判定用完整 key (level, fold)——毕业顺移可能只改 raw 不改封顶 level
+        # （raw 4→5 时 tier 仍 4 但 fold 位 False→True），也要失效重渲染
+        _fold_on = config.load_fold_deep_tools()
         for i in range(len(self.turns)):
             fr = self._frozen_renders.get(i)
-            if fr and fr[0] != self._tier_level(i):
+            if fr and fr[0] != (self._tier_level(i),
+                                _fold_on and self._raw_tier_level(i) > self.max_level):
                 self._frozen_renders.pop(i, None)
         return True
 

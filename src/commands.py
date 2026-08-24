@@ -249,11 +249,13 @@ def read_config(agent) -> dict:
         cfg["detail_step"] = _cfg2.load_detail_step()
         cfg["panic_context_window"] = _cfg2.load_panic_window()
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
+        cfg["fold_deep_tools"] = _cfg2.load_fold_deep_tools()
     except Exception:
         cfg["detail_base"] = 1500
         cfg["detail_step"] = 15
         cfg["panic_context_window"] = 0
         cfg["hook_timeout"] = 300
+        cfg["fold_deep_tools"] = False
     # 统一辅助模型（存 settings.json；空=跟随主模型）：recap/RAG检索/工作流LLM默认共用
     cfg["utility_model"] = getattr(agent, "utility_model", "") or ""
     return cfg
@@ -370,6 +372,22 @@ def apply_config(agent, values: dict) -> list:
                            f"（已存 settings.json + 即时生效）")
         except Exception as e:
             results.append(f"⚠️ panic_context_window 设置失败：{e}")
+    # fold_deep_tools：超深档工具调用整体折叠（存 settings.json + 即时生效——冻结缓存 key 含 fold 位，
+    # 切换时清缓存让全部轮按新形态重渲染）
+    if "fold_deep_tools" in values:
+        v = values.pop("fold_deep_tools")
+        try:
+            val = _to_bool(v)
+            import config
+            saved = config.load_runtime_settings(); saved["fold_deep_tools"] = val
+            config.save_runtime_settings(saved)
+            agent.session._frozen_renders.clear()
+            results.append(f"✅ fold_deep_tools = {val}"
+                           + ("（超深档轮的工具调用折叠成一行标注，保留回复+reasoning 原文）" if val
+                              else "（超深档轮按 max_level 逐调用残缺摘要）")
+                           + "（已存 settings.json + 即时生效）")
+        except Exception as e:
+            results.append(f"⚠️ fold_deep_tools 设置失败：{e}")
     # detail_base / detail_step：步距衰减参数（存 settings.json + 改 toollog 模块变量即时生效）
     for _dk in ("detail_base", "detail_step"):
         if _dk in values:
@@ -1519,6 +1537,7 @@ def build_default_registry() -> CommandRegistry:
         "/config detail_base 1500       步距衰减初始字数\n"
         "/config panic_context_window 160000  保命阀阈值（0=跟随分档窗口；轮内超此线才应急折叠，一次压回75%计划水位）\n"
         "/config hook_timeout 300    同步钩子工作流超时秒数（超时结果丢弃不卡主循环；0=不限；async钩子不受限）\n"
+        "/config fold_deep_tools true  超深档(超过max_level)轮的工具调用整体折叠成一行标注，保留回复+reasoning原文\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"
         "/config dump_projections true  投影转储（调试用）")
     reg.register("budget", _cmd_budget,

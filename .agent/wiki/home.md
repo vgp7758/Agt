@@ -13,7 +13,7 @@
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** + **aggregator(32) 选值语义修复（第一个执行过且值非空）** + **AND/OR 逻辑节点 + 批处理性能项（nth_output 对象组装 / 筛选未设置恒真）** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/node-plugins](architecture/node-plugins.md) | 节点插件化：三级目录同名覆盖（12 组 py+js 配对，v0.19.2 wheel 24 文件）+ SDK/EdFW 前后端约定 + 热加载 + .pyc 坑 + 打包核对 | 加新节点类型 / 定制覆写内置节点 |
-| [architecture/tool-externalization-criteria](architecture/tool-externalization-criteria.md) | 工具外置判别标准：**数据写者决定归属**——自写自读（wiki/ltm/download/rag=真限界上下文，可外置）vs 引擎写工具读（recall/toollog=可观测性出口，永远内置）；重放拿到数据 ≠ 独立（格式契约耦合更危险） | 判断某组工具能否外置 / 规划迁移 |
+| [architecture/tool-externalization-criteria](architecture/tool-externalization-criteria.md) | 工具外置判别标准：**数据写者决定归属**——自写自读（wiki/ltm/download/rag=真限界上下文，可外置）vs 引擎写工具读（recall/toollog=可观测性出口，永远内置）；重放拿到数据 ≠ 独立（格式契约耦合更危险）；**rag 边界裁剪：注册外置+实现留框架** | 判断某组工具能否外置 / 规划迁移 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳；**字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新（v0.19.2）** | 调试工作流时在画布上看节点实际产出 |
@@ -27,10 +27,11 @@
 | [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 / 复查 diff 算法 |
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
-| [features/glob-files](features/glob-files.md) | glob_files 工具（外置首例）：文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__ 等，500 条上限） | 按名字找文件 / 学外置工具写法 |
-| [features/tool-externalization](features/tool-externalization.md) | 工具外置体系：tools/builtin/*.py + `agt_register()` 描述符 + `/reload tools` 热加载 + src/assets/tools_builtin 随包副本 | 加新内置工具（零框架改动） |
+| [features/glob-files](features/glob-files.md) | glob_files 工具（外置首例·纯函数形态）：文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__ 等，500 条上限） | 按名字找文件 / 学外置工具写法 |
+| [features/tool-externalization](features/tool-externalization.md) | 工具外置体系：tools/builtin/*.py + `agt_register()` 描述符 + `/reload tools` 热加载 + src/assets/tools_builtin 随包副本 + **两实例两种形态（fs_tools 纯函数 / rag_tools 注册外置）** | 加新内置工具（零框架改动） |
 | [features/spec-tools](features/spec-tools.md) | spec 工具集：explore_subagent 同步前置探索（**≠ explorer 声明式子 Agent**，不注册 registry、只读白名单；token_budget 残留已对齐 0） | 理解 spec 流程 / 区分两个 explorer |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
+| [features/rag](features/rag.md) | RAG 文档语义检索：ensure_rag 线程安全惰性单例（锁+attempted 幂等）+ preload_async 后台预热（注册即异步加载，启动不阻塞）+ **cosine_sim/session_vec/emb_probe 共享同一 embedder（修双份内存）** + rag_tools.py 外置件 | 改 RAG / 理解 embedder 共享 / 外置工具写法 |
 | [releases/v0.19.2](releases/v0.19.2.md) | v0.19.2 发布记录（最新）：后台通知 wake 语义修复 + AND/OR 逻辑节点 + 编辑器批次三 + 调试页白框增强 + 性能三件套 | 查最新版本交付内容 |
 | [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查版本交付内容 / 发布流程 |
 | [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交（提交成功闭环） | 查版本交付内容 / 发布流程 |
@@ -48,6 +49,7 @@
 - LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/turn·step 轮步标记/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换；聊天面板 user/answer 气泡 hover 浮现复制按钮（innerText 复制，clipboard→execCommand 降级，commit 3a7e9de）
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
+- **RAG 异步预热 + 共享 embedder 单例**（2026-08，commit 71e0b90）：`ensure_rag`（线程安全惰性构建：锁 + attempted 幂等 + force 强制重建）+ `preload_async`（daemon 线程后台加载，bge-small-zh 实测 22.8s——`/restart` 后立即可对话，模型后台跑）；外置件 `tools/builtin/rag_tools.py` 的 `agt_register` **注册即触发预热**（build_agent 显式兜底，幂等）；session_vec `_build_embedder` 优先共享 `rag.get_rag().embedder`——修掉 LocalRAG 与 session_vec 各建一份 bge 的双倍内存旧疾；cosine_sim/emb_probe 改走 ensure_rag（emb_probe 等预热再判定，防误降级 + 5 分钟缓存粘住）；外置第二批进度 wiki ✅ + rag ✅（2/4，剩 ltm 五件套和 download）（详见 [rag](features/rag.md)）
 - **长期记忆（博客第 4 篇，2026-08-21 扩写完成 ~4000 字）**：三类记忆——事实（常驻）+ 程序经验 pro_*（仅标题常驻，详情 `read_procedure(id)` 按需读）+ episodic（检索命中才注入）；episodic 召回三代演进：标点分词子串匹配 → 本地 3B 提关键词（量力分工）→ 并入统一检索流水线（「该不该注入」从检索层上移到精排层）；写入侧：幂等写入防重复沉淀（replace_lines 记两次糗事）+ `/memory` 页面双主权管理；embedder 带 LRU 缓存包装（v0.19.2，92x 全命中）（详见 [long-term-memory](features/long-term-memory.md)）
 - **工作流运行实时观测**（2026-08-20，commit 8aeb21a）：进程内 run registry（`_WF_RUNS`，线程安全，最近 50 次）记录每次工作流执行的节点 start/end/error 事件；对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点甘特时间线 2s 轮询；同步/async 钩子 + wf_* 工具三路径全覆盖（详见 [wf-monitor](features/wf-monitor.md)）
 - **观测页节点全文查看**（2026-08-20，commit bb56a82）：节点预览截 200 字，`has_full` 时预览可点击（📄）→ 新标签打开 `GET /api/wf/runs/<id>/node/<nid>` **text/plain 纯文本页**（页面文本即节点完整输出，非 HTML 无样式）；`_full_str` 保留换行/JSON 结构，单节点 200K 截断标注，总预算 20M 字符防爆内存（耗尽只存预览）；轮询视图剥离 full 只传 has_full（详见 [wf-monitor · 节点全文查看](features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)）

@@ -27,8 +27,8 @@ cosine_sim(text1: str, text2: str) -> float
 
 ```python
 def cosine_sim(text1: str, text2: str) -> float:
-    from rag import get_rag
-    rag = get_rag()
+    from rag import ensure_rag
+    rag = ensure_rag()   # 惰性构建：预热中同步等锁拿结果（2026-08，commit 71e0b90）
     if rag is None:
         raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
     import numpy as np
@@ -37,6 +37,7 @@ def cosine_sim(text1: str, text2: str) -> float:
     return round(float(np.dot(vecs[0], vecs[1])), 4)
 ```
 
+- `ensure_rag()`（旧版 `get_rag()`）：与 rag_query / session_vec 同一惰性入口——RAG 后台预热中时等锁拿已完成结果，见 [rag](rag.md)
 - `normalize_embeddings=True`：encode 时即归一化，`np.dot` 直接得余弦值
 - `round(..., 4)`：保留 4 位小数，便于阈值比较和展示
 
@@ -64,11 +65,12 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 ## 与其他模块的关系
 
 - **[wiki_auto_query v4](../features/wiki-auto-query.md#v4-流水线2026-08-21)**：核心消费者——关键词检索后用 cosine_sim 做语义重排 + 阈值裁决
-- **RAG 模块（`src/rag.py`）**：通过 `get_rag()` 获取已配置的 embedder，复用 `/rag` 页面的 embedding 配置，无需独立维护模型
+- **RAG 模块（`src/rag.py`）**：通过 `ensure_rag()` 惰性获取共享单例 embedder（详见 [rag](rag.md)），复用 `/rag` 页面的 embedding 配置，无需独立维护模型
 - **`src/real_tools.py`**：工具注册入口，`Tool(cosine_sim, outputs=[...], param_descriptions={...})`
 
 ## 注意事项
 
+- **启动初期等待**：RAG 后台预热未完成时首次调用会同步等锁（bge-small-zh 实测 22.8s 量级）——正常运行中预热早已完成，瞬时
 - **依赖 RAG 配置**：未配置 embedding 时直接报错，不会静默返回 0
 - **空文本安全**：`str(text1 or "")` 处理 None/空值，不会崩溃
 - **非对称语义**：余弦相似度衡量语义方向而非内容长度，短 query 与长 wiki 行可正常比较
@@ -76,6 +78,7 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 
 ## 相关页面
 
+- [rag](rag.md)：embedder 单例与 ensure_rag 惰性构建入口的宿主
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：v4 流水线的核心消费者
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：批处理节点 + 子工作流调用机制
 - [系统总览](../architecture/overview.md)：real_tools.py 在能力层的位置

@@ -37,7 +37,7 @@ glob_files("**/*.pyc")                    → 无匹配（__pycache__ 已排除�
 
 ## 外置工具体系首例
 
-fs_tools.py 是[工具外置](tool-externalization.md)体系的第一个实例：一个 .py 文件 + `agt_register()` 返回描述符列表，零框架改动；`/reload tools` 热加载即生效，随包副本同步进 `src/assets/tools_builtin/`。
+fs_tools.py 是[工具外置](tool-externalization.md)体系的第一个实例（**纯函数整体外置**：实现与注册都在外置件里）：一个 .py 文件 + `agt_register()` 返回描述符列表，零框架改动；`/reload tools` 热加载即生效，随包副本同步进 `src/assets/tools_builtin/`。第二例 [rag_tools.py](rag.md)（rag_query）是另一种形态——注册外置、实现留框架（共享单例 embedder），见 [判别标准 · rag 边界裁剪](../architecture/tool-externalization-criteria.md#rag-外置的边界裁剪混合形态2026-08-commit-71e0b90)。
 
 ## 注意事项
 
@@ -46,5 +46,6 @@ fs_tools.py 是[工具外置](tool-externalization.md)体系的第一个实例�
 
 ## 相关页面
 
-- [工具外置](tool-externalization.md) —— tools/builtin 体系（本工具的载体）
-- [diff_lines](diff-lines.md) / [get_list_item](get-list-item.md) —— 同期新增工具（LIGHT_TOOLS 隐藏；本工具相反，hidden=False 主 Agent 可见）
+- [工具外置](tool-externalization.md) —— tools/builtin 体系（本工具的载体，两实例两种形态）
+- [rag](rag.md) —— 外置第二例（注册外置 + 实现留框架）
+- [diff_lines](diff-lines.md) / [get_list-item](get-list-item.md) —— 同期新增工具（LIGHT_TOOLS 隐藏；本工具相反，hidden=False 主 Agent 可见）

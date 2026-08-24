@@ -19,10 +19,10 @@
 
 | 工具组 | 数据文件 | 说明 |
 |---|---|---|
-| **wiki 六件套** | `.agent/wiki/*.md` | wiki_write 自己写、wiki_read 自己读——引擎从头到尾没碰过 |
+| **wiki 六件套** | `.agent/wiki/*.md` | wiki_write 自己写、wiki_read 自己读——引擎从头到尾没碰过。**已外置 ✅** |
 | **ltm 五件套** | `repos/<key>/memories/*.jsonl` | add/update/delete_memory 自己写 |
 | **download** | `sessions/<name>/images/` | download_asset 自己写 |
-| **rag**（大部分） | 向量 `.db` | 索引构建自己写（配置读 config，属轻依赖） |
+| **rag**（大部分） | 向量 `.db` | 索引构建自己写（配置读 config，属轻依赖）。**已外置 ✅——rag_tools.py 混合形态，见下节** |
 
 性质：**文件格式契约归工具组自己**——外置后想改存储结构（wiki 加 frontmatter、ltm 换分段键），工具组自己说了算，引擎升级永远不破坏它。
 
@@ -52,6 +52,10 @@ restart（work_q 退出哨兵+看门狗协议）/ spec+survey（threading.Event 
 
 feedback（纯 HTTP 上报）、agent_config（settings.json 约定读写）、rag 大部分。
 
+## rag 外置的边界裁剪（混合形态，2026-08 commit 71e0b90）
+
+rag 组数据主权（向量 `.db` 自写自读）达标可外置，但 **embedder 是被 cosine_sim/session_vec/emb_probe 共享的进程内单例**——按本标准属 🔒"纯进程内状态"。落地取折中：**外置注册与预热触发（`tools/builtin/rag_tools.py` 的 `agt_register` 触发 `preload_async` + 注册 rag_query），函数本体留在框架 `src/rag.py`**——外置件里 `import rag` 主进程零成本，复制实现反而破坏共享。标准在边界情况下的正确裁剪：数据主权侧外置、共享态留框架。详见 [rag](../features/rag.md)。
+
 ## 运行时管理器的替代边界（background/lsp/mcp/reload_hot）
 
 - **查询**有替代：`/api/status` HTTP 快照（仅 WebUI 模式可用）
@@ -61,15 +65,16 @@ feedback（纯 HTTP 上报）、agent_config（settings.json 约定读写）、r
 
 `format_team(session_dir=...)` 磁盘兜底、`agent_query_events` lazy-load `Session.load`、`_restore_subagents` 扫 `agents/` 目录——**有 agent 走活视图，没有走磁盘约定**。外置工具可继承此模式（描述符 make / make_standalone 双工厂）。
 
-## 迁移优先级（按本标准修正后）
+## 迁移优先级（按本标准修正后；第二批进度 2/4）
 
-1. wiki 六件套 + ltm + download + rag——数据主权本来就在工具组（真外置）
+1. wiki 六件套 ✅ + rag ✅ + ltm 五件套 ⬜ + download ⬜——数据主权本来就在工具组（真外置）；**第二批 2/4 完成，剩 ltm 五件套和 download**
 2. factory kind 机制（D 类描述热改收益仍在：工具 docstring 就是 LLM 看的 schema 描述）
 3. plan/spec CRUD 半边
 4. memory_tools/toollog **不迁**（判别标准下从旧名单划掉）
 
 ## 相关页面
 
-- features/tool-externalization.md（外置体系：目录/装配/热加载）
-- features/glob-files.md（外置首例演示）
+- features/tool-externalization.md（外置体系：目录/装配/热加载/两个实例）
+- features/rag.md（rag 外置混合形态：注册外置 + 实现留框架）
+- features/glob-files.md（外置首例演示：纯函数整体外置）
 - architecture/node-plugins.md（节点插件化——同一哲学）

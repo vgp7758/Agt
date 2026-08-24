@@ -53,8 +53,8 @@ def _handle_intent(node: dict, ctx) -> dict:
                 idx = i
                 break
     if idx is None:
-        return {"outputs": {}, "port": "default"}
-    return {"outputs": {}, "port": f"branch_{idx}"}
+        return {"outputs": answer, "port": "default"}
+    return {"outputs": answer, "port": f"branch_{idx}"}
 
 
 def agt_node():

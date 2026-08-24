@@ -1153,6 +1153,10 @@ def _build_dag(nodes: dict, edges: list) -> tuple[dict, dict]:
     for e in edges:
         src = str(e.get("sourceNodeID"))
         tid = str(e.get("targetNodeID"))
+        # 悬空边（端点节点不存在，手写画布/编辑器删节点漏清理残留）跳过：
+        # 照常计入度会让目标节点的 pending_in 永远减不到 0——分支静默卡死且无任何报错
+        if src not in nodes or tid not in nodes:
+            continue
         out_edges.setdefault(src, []).append((tid, e.get("sourcePortID", "")))
         in_count[tid] = in_count.get(tid, 0) + 1
     pending_in: dict[str, int] = {}

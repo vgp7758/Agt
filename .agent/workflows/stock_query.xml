@@ -1,4 +1,4 @@
-<workflow name="stock_query" description="股票实时查询工作流范例（selector/http/aggregator/end 等节点正确写法演示）">
+<workflow name="stock_query" description="股票实时查询工作流范例（selector/http/aggregator/end 等节点正确写法演示）" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="stock_name" type="string" required="true"/>
   </node>

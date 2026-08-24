@@ -1,4 +1,4 @@
-<workflow name="greet_xml" description="热情打招呼（XML 格式示例）">
+<workflow name="greet_xml" description="热情打招呼（XML 格式示例）" hidden="true">
   <node id="100001" type="start">
     <out name="name" type="string" required="true"/>
   </node>

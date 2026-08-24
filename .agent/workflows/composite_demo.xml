@@ -1,4 +1,4 @@
-<workflow name="composite_demo" description="循环+批处理+单节点批处理三合一演示（迭代入口+continue模型）">
+<workflow name="composite_demo" description="循环+批处理+单节点批处理三合一演示（迭代入口+continue模型）" hidden="true">
   <!-- ===== Entry: 数组入参 ===== -->
   <node id="100001" type="start" title="开始">
     <out name="items" type="list" required="true">

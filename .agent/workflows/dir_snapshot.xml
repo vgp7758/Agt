@@ -1,4 +1,4 @@
-<workflow name="dir_snapshot" description="获取指定目录的文件快照（mtime 映射，JSON 字符串）。排除 .git/__pycache__；path 留空=整个 workspace。与 diff_snapshots 工作流配对使用。">
+<workflow name="dir_snapshot" description="获取指定目录的文件快照（mtime 映射，JSON 字符串）。排除 .git/__pycache__；path 留空=整个 workspace。与 diff_snapshots 工作流配对使用。" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="path" type="string" description="目标目录（workspace 相对路径，留空=整个 workspace）"/>
   </node>

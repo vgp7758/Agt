@@ -1,4 +1,4 @@
-<workflow name="double_xml" description="翻倍（XML：代码块用 CDATA，内部引号/花括号免转义）">
+<workflow name="double_xml" description="翻倍（XML：代码块用 CDATA，内部引号/花括号免转义）" hidden="true">
   <node id="100001" type="start">
     <out name="x" type="number" required="true"/>
   </node>

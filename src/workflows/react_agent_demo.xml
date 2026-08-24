@@ -1,4 +1,4 @@
-<workflow name="react_agent_demo" description="纯工作流装配的 ReAct 循环 Agent：get_tool_schemas 取工具表 → llm_call(messages+tools) → 有 tool_calls 则 call_tool 执行+append 回 messages 继续，无则 break 输出最终回答。展示工作流的图灵完备 Agent 能力（demo 用小算术工具集）">
+<workflow name="react_agent_demo" description="纯工作流装配的 ReAct 循环 Agent：get_tool_schemas 取工具表 → llm_call(messages+tools) → 有 tool_calls 则 call_tool 执行+append 回 messages 继续，无则 break 输出最终回答。展示工作流的图灵完备 Agent 能力（demo 用小算术工具集）" hidden="true">
   <node id="100001" type="start" title="Entry">
     <out name="user_message" type="string" required="true"/>
   </node>

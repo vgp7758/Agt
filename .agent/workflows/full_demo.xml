@@ -1,4 +1,4 @@
-<workflow name="workflow_demo" description="全节点类型演示：意图分流→各分支处理→聚合→序列化（格式演示；http/plugin/subworkflow 依赖外部资源）">
+<workflow name="workflow_demo" description="全节点类型演示：意图分流→各分支处理→聚合→序列化（格式演示；http/plugin/subworkflow 依赖外部资源）" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="question" type="string" required="true"/>
   </node>

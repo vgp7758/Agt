@@ -1,4 +1,4 @@
-<workflow name="diff_snapshots" description="对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → 变更文件清单。输出 files（逗号分隔，供 git_commit 的 files 参数直接使用）+ count + changed（list&lt;object&gt; 结构化）。">
+<workflow name="diff_snapshots" description="对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → 变更文件清单。输出 files（逗号分隔，供 git_commit 的 files 参数直接使用）+ count + changed（list&lt;object&gt; 结构化）。" hidden="true">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="before" type="string" description="前一份快照 JSON（dir_snapshot 的 snap 输出）"/>
     <out name="after" type="string" description="后一份快照 JSON（dir_snapshot 的 snap 输出）"/>

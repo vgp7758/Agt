@@ -1,4 +1,4 @@
-<workflow name="custom_tool_demo" description="工作流内定义工具箱没有的自定义工具：text节点写roll_dice的schema→code节点拼进官方schemas→llm_call(tools)→选择器按tool_calls.0.name路由(自定义名→code实现/官方名→call_tool)→聚合→append回messages循环">
+<workflow name="custom_tool_demo" description="工作流内定义工具箱没有的自定义工具：text节点写roll_dice的schema→code节点拼进官方schemas→llm_call(tools)→选择器按tool_calls.0.name路由(自定义名→code实现/官方名→call_tool)→聚合→append回messages循环" hidden="true">
   <node id="100001" type="start" title="Entry">
     <out name="user_message" type="string" required="true"/>
   </node>

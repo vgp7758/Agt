@@ -206,6 +206,12 @@ function nodeRows(n){
                  key:_rowKey(n.id,'in',lv.name), depth:0, localVar:true});
     });
   }
+  // 批处理数组源虚拟端口（左侧 list 端口）：连线即写 batch.input（免属性面板手填 blockID.name）。
+  // 复合节点(21/28)自身用 input 字段做数组源，不适用；渲染循环对 batchPort 行 p 查不到 → 自然降级显示端口名。
+  if(n.data.inputs?.batch?.enabled && !['21','28'].includes(n.type)){
+    rows.push({side:'in', field:'数组源', type:'list', parent:null, sub:false,
+               key:_rowKey(n.id,'in','数组源'), depth:0, batchPort:true});
+  }
   return rows;
 }
 // 折叠 key 统一格式：nodeId::首段::side::后续段...（与 fieldRows 行 key 一致）
@@ -397,6 +403,11 @@ function renderAll(){
     // 用户看到的就是"连不上"（数据其实已连上，仅视觉缺失）。
     const _allP=[...nodeInputs(tn)];
     if(['21','28'].includes(tn.type)) _allP.push(...nodeLocalVars(tn));
+    // 批处理数组源虚拟端口连线（batch.input 的 ref 不在 inputParameters——伪参数挂进来画线，
+    // 与 localVar 同款处理：数据已连但线不画="连不上"的视觉缺失）
+    const _bp=tn.data.inputs?.batch?.input;
+    if(_bp?.value?.type==='ref'&&_bp.value.content?.source==='block-output'&&_bp.value.content.blockID)
+      _allP.push({input:_bp, name:'数组源'});
     _allP.forEach((p)=>{
       if(!inputIsLinked(p))return;
       const src=inputRefSource(p);
@@ -928,10 +939,18 @@ function doDisconnect(info){
       const grp=tn.data.inputs?.mergeGroups?.[info.aggrGi];
       if(grp){grp.variables=grp.variables||[];const gt=(nodeOutputs(tn).find(o=>o.name===grp.name)?.type)||'string';grp.variables[info.aggrVi]={type:gt,value:{type:'literal',content:''}};toast('已断开变量线');}
     }else{
+      // 批处理数组源虚拟端口的线：清 batch.input（不在 inputParameters，此前查不到 → 剪不断）
+      if(info.tgtField==='数组源'){
+        const tn2=findN(info.tgtNode);
+        if(tn2?.data.inputs?.batch) delete tn2.data.inputs.batch.input;
+        toast('已断开数组源连线');
+      }
       // 本地变量(variableParameters)与输入字段同构——断线同样要能找到（此前只查 inputParameters，剪不断本地变量的线）
-      const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField)
-        || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===info.tgtField):null);
-      if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+      else{
+        const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField)
+          || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===info.tgtField):null);
+        if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+      }
     }
   }
   showProps();renderAll();
@@ -952,6 +971,28 @@ function finishVar(tgtId,field,color){
   if(edgeFrom.color!==color){edgeFrom=null;toast('类型不匹配：只能连相同颜色的端口');renderAll();return;}
   if(edgeFrom.nodeId===tgtId){edgeFrom=null;renderAll();return;}
   const tn=findN(tgtId);if(!tn){edgeFrom=null;renderAll();return;}
+  // 批处理数组源虚拟端口（field='数组源'）：连线即写 batch.input——等价 setBatchSource(blockID.name)，
+  // 并按源 list 输出的 item schema 联动 nth_output 类型与 all/filtered 的 item 类型
+  if(field==='数组源'){
+    if(!tn.data.inputs.batch)tn.data.inputs.batch={enabled:true};
+    tn.data.inputs.batch.input={type:'list',value:{type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}}};
+    const sn0=findN(edgeFrom.nodeId);
+    const so=sn0?.data?.outputs?.find(o=>o.name===edgeFrom.field);
+    const itemSch=(so&&(so.type==='list'||so.type==='array'))?so.schema:null;
+    const nth0=(nodeOutputs(tn)||[]).find(o=>o.name==='nth_output');
+    if(nth0){
+      if(Array.isArray(itemSch)){nth0.type='object';nth0.schema=JSON.parse(JSON.stringify(itemSch));}
+      else if(itemSch&&itemSch.type){nth0.type=itemSch.type;delete nth0.schema;}
+      else{nth0.type='string';delete nth0.schema;}
+      (nodeOutputs(tn)||[]).forEach(o=>{
+        if(o.name==='all_outputs'||o.name==='filtered_outputs')
+          o.schema=Array.isArray(nth0.schema)?[...nth0.schema]:{type:nth0.type};
+      });
+    }
+    const _sf=edgeFrom.field; edgeFrom=null; selNode=tgtId; showProps(); renderAll();
+    toast('数组源已连接：'+_sf);
+    return;
+  }
   // field 可能是子字段 "obj.sub" → 定位父字段 obj
   const parent=field.split('.')[0];
   // 复合节点(21/28)的本地变量（variableParameters）也是合法落点——与输入字段同构 {name,input:{type,value}}，
@@ -1048,9 +1089,13 @@ svg.addEventListener('contextmenu',(e)=>{
   if(selEdge&&selEdge.kind==='flow'){WF.edges.splice(selEdge.i,1);selEdge=null;renderAll();}
   if(selEdge&&selEdge.kind==='var'){
     const[tid,fname]=selEdge.key.split('::');const tn=findN(tid);
-    const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname)
-      || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===fname):null);
-    if(p)p.input.value={type:'literal',content:''};
+    // 批处理数组源虚拟端口：清 batch.input
+    if(fname==='数组源'){ if(tn?.data.inputs?.batch) delete tn.data.inputs.batch.input; }
+    else{
+      const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname)
+        || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===fname):null);
+      if(p)p.input.value={type:'literal',content:''};
+    }
     selEdge=null;renderAll();
   }
 });

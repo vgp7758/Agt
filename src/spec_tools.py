@@ -480,7 +480,7 @@ def make_spec_tools(agent) -> list:
         chosen = [t for t in agent.tools if t.name in _READONLY]
         try:
             sub = SubAgent(name, model_name, system, Toolbox(*chosen), on_event=agent.on_event,
-                           max_steps=12, token_budget=20000)
+                           max_steps=12, token_budget=0)   # 预算解除（与 agent_prompt 路径对齐；步数 12 保留——探索是有界任务）
             return sub.prompt(f"探索目标：{goal}\n返回结构化发现报告。")
         except Exception as e:
             return f"[探索子 Agent 调用出错] {type(e).__name__}: {e}"

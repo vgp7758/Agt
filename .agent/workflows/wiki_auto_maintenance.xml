@@ -5,7 +5,7 @@
     <out name="turn_context" type="string"/>
     <out name="changed_calls" type="list" description="本轮产生文件变更的工具调用原文数组（引擎快照 diff 检出）"/>
   </node>
-  <node id="990001" type="code" title="check_changes" x="270" y="80">
+  <node id="990001" type="code" title="check_changes" x="420" y="80">
     <in name="changed_calls" type="list" ref="100001.changed_calls"/>
     <code language="3"><![CDATA[import json
 async def main(args):
@@ -32,41 +32,41 @@ async def main(args):
     <out name="reason" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="990002" type="selector" title="worth_running?" x="560" y="80">
+  <node id="990002" type="selector" title="worth_running?" x="720" y="80">
     <branch><cond op="1" left="990001.has_code_changes" right="True" left_type="boolean" right_type="boolean"/></branch>
   </node>
-  <node id="140001" type="plugin" title="update_wiki" x="1920" y="80" toolName="update_wiki">
+  <node id="140001" type="plugin" title="update_wiki" x="2520" y="80" toolName="update_wiki">
     <in name="summary" type="string" ref="336423.output"/>
     <out name="raw" type="string"/>
     <out name="result" type="string" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="147000" type="selector" title="has_changes?" x="2520" y="80">
-    <branch><cond op="2" left="1257593.snap" right="ref:145000.snap"/></branch>
+  <node id="147000" type="selector" title="has_changes?" x="3120" y="80">
+    <branch><cond op="2" left="1257593.snap" right="ref:484798.snap"/></branch>
   </node>
-  <node id="148000" type="text" title="build_msg" x="3120" y="80">
+  <node id="148000" type="text" title="build_msg" x="3720" y="80">
     <in name="summary" type="string" ref="140001.raw"/>
     <result><![CDATA[docs: wiki auto-maintenance — {{summary}}]]></result>
     <batch enabled="false"/>
   </node>
-  <node id="150001" type="plugin" title="commit_wiki" x="3420" y="80" toolName="git_commit">
+  <node id="150001" type="plugin" title="commit_wiki" x="4020" y="80" toolName="git_commit">
     <in name="message" type="string" ref="148000.output"/>
     <in name="files" type="string" ref="1400227.files"/>
     <out name="raw" type="string"/>
     <out name="result" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="900001" type="end" title="end" x="3720" y="80">
+  <node id="900001" type="end" title="end" x="4320" y="80">
     <out name="inject" type="boolean">False</out>
     <out name="message" ref="140001.raw" type="string"/>
   </node>
-  <node id="682383" type="intent" title="意图识别" x="720" y="80">
+  <node id="682383" type="intent" title="意图识别" x="1320" y="80">
     <in name="query" type="string" ref="1030169.output"/>
     <model>local-qwen</model>
     <intent name="值得记录"/>
     <intent name="不需要"/>
   </node>
-  <node id="1030169" type="text" title="文本" x="420" y="80">
+  <node id="1030169" type="text" title="文本" x="1020" y="80">
     <in name="user" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <result><![CDATA[判断本轮对话是否值得记录进项目知识库（.agent/wiki/）
@@ -78,21 +78,21 @@ assistant response:
 ]]></result>
     <batch enabled="false"/>
   </node>
-  <node id="1400227" type="plugin" title="wf_diff_snapshots" x="2820" y="80" toolName="wf_diff_snapshots">
-    <in name="before" type="string" ref="145000.snap"/>
+  <node id="1400227" type="plugin" title="wf_diff_snapshots" x="3420" y="80" toolName="wf_diff_snapshots">
+    <in name="before" type="string" ref="484798.snap"/>
     <in name="after" type="string" ref="1257593.snap"/>
     <out name="raw" type="string" description="工具返回（解析后为对象：.files/.count/.changed）"/>
     <out name="files" type="string" description="变更文件清单（逗号分隔，git_commit 直接用）"/>
     <out name="count" type="integer"/>
     <batch enabled="false"/>
   </node>
-  <node id="1257593" type="subworkflow" title="snap_after" x="2220" y="80" workflowId="dir_snapshot">
+  <node id="1257593" type="subworkflow" title="snap_after" x="2820" y="80" workflowId="dir_snapshot">
     <in name="path" type="string">.agent/wiki/</in>
     <out name="snap" type="string"/>
     <out name="error" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="135500" type="code" title="fmt_calls" x="1320" y="80">
+  <node id="135500" type="code" title="fmt_calls" x="1628.695652173913" y="34.34782608695653">
     <in name="changed_calls" type="list" ref="100001.changed_calls"/>
     <code language="3"><![CDATA[import json
 async def main(args):
@@ -117,21 +117,24 @@ async def main(args):
     <out name="calls_text" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="336423" type="text" title="文本" x="1620" y="80">
+  <node id="336423" type="text" title="文本" x="1934.1304347826087" y="83.26086956521739">
     <in name="user_msg" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <in name="calls_text" type="string" ref="135500.calls_text"/>
     <result><![CDATA[user message:
 {{user_msg}}
 
-turn context:
-{{calls_text}}
-
 assistant answer:
 {{answer}}
 
 changed tool calls（引擎快照 diff 检出的文件变更调用原文——更新 wiki 时以此为准，一般无需再 read_file 重读源文件）:
 {{calls_text}}]]></result>
+    <batch enabled="false"/>
+  </node>
+  <node id="484798" type="subworkflow" title="snap_befor" x="2220" y="80" workflowId="dir_snapshot">
+    <in name="path" type="string">.agent/wiki/</in>
+    <out name="snap" type="string"/>
+    <out name="error" type="string"/>
     <batch enabled="false"/>
   </node>
   <edge from="150001" to="900001"/>
@@ -141,7 +144,6 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="990001" to="990002"/>
   <edge from="990002" to="1030169" port="true"/>
   <edge from="990002" to="900001" port="false"/>
-  <edge from="682383" to="145000" port="branch_0"/>
   <edge from="140001" to="1257593"/>
   <edge from="148000" to="150001"/>
   <edge from="1257593" to="147000"/>
@@ -151,5 +153,7 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="682383" to="900001" port="default"/>
   <edge from="145000" to="135500"/>
   <edge from="135500" to="336423"/>
-  <edge from="336423" to="140001"/>
+  <edge from="682383" to="135500" port="branch_0"/>
+  <edge from="336423" to="484798"/>
+  <edge from="484798" to="140001"/>
 </workflow>

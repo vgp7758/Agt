@@ -239,7 +239,7 @@ function _baseH(n){
   const inRows=rows.filter(r=>r.side==='in').length;
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
-  if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框
+  if(n.type==='15') h+=_taH(n.data.inputs?.concatParams?.[0]?.input?.value?.content);   // 文本节点：大文本框（自适应）
   if(n.type==='5') h+=40;            // 代码节点：预览行
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
@@ -309,6 +309,10 @@ function nodeH(n){
   return _baseH(n)+(dbgOut[n.id]!==undefined?_dbgBoxH(n):0);
 }
 const TEXTAREA_H=120;
+// 画布大文本框高度自适应（与 editor 页同款公式）：按内容行数 3~16 行，免框内滚动
+const TA_LINE_H=15;
+function _taLines(v){return Math.max(3,Math.min(16,String(v??'').split('\n').length));}
+function _taH(v){return _taLines(v)*TA_LINE_H+10;}
 // 聚合节点(type32) 分组布局：复刻 renderNode 的 y 公式（gy 动态累加，非 ROW_H 网格），
 // 供 portY/变量线定位，保证端口与连线对齐。
 function aggrLayout(n){
@@ -737,12 +741,13 @@ function renderNode(n){
     });
   }
 
-  // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符）
+  // 文本节点：大文本框（编辑 concatResult，支持 {{输入字段}} 占位符；高度随内容自适应）
   if(n.type==='15'){
     const fo=makeTextArea(n);
     if(fo){
       const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);
+      fo.setAttribute('height',_taH(n.data.inputs?.concatParams?.[0]?.input?.value?.content)-2);
       g.appendChild(fo);
     }
   }
@@ -791,6 +796,9 @@ function _renderDbgBox(g,n){
   fo.setAttribute('width',n.w);fo.setAttribute('height',h);
   const div=document.createElement('div');
   div.style.cssText='width:100%;height:100%;background:#fff;color:#111;border:1px solid #999;border-radius:3px;font-size:10px;font-family:monospace;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box';
+  // 滚轮事件不再冒泡到画布：白框内容可滚动时滚轮滚内容（body overflow:auto），
+  // 而不是触发画布缩放（此前 wheel 冒泡到 canvasWrap 的缩放 handler——"想滚白框却缩放了画布"的根因）
+  div.addEventListener('wheel',e=>e.stopPropagation(),{passive:true});
   // 顶部折叠条（点击折叠/展开）
   const head=document.createElement('div');
   head.style.cssText='flex:0 0 18px;display:flex;align-items:center;gap:5px;padding:0 6px;background:#e8e8e8;border-bottom:1px solid #ccc;cursor:pointer;user-select:none';

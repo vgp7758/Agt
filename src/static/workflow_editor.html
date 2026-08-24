@@ -242,8 +242,8 @@ function nodeH(n){
   const outRows=rows.filter(r=>r.side==='out').length;
   let h=HDR_H+Math.max(inRows,outRows)*ROW_H+PAD;
   if(NODE_PLUGINS[n.type]?.nodeH) h+=NODE_PLUGINS[n.type].nodeH(n);   // 插件高度贡献（text 大框等）
-  else if(n.type==='15') h+=TEXTAREA_H;   // 文本节点：大文本框（插件未注入时兜底）
-  h+=TEXTAREA_H*pluginCanvasCount(n);   // 插件 canvas:true 参数（如 LLM prompt）：每个一框
+  else if(n.type==='15') h+=_taH(n.data.inputs?.concatParams?.[0]?.input?.value?.content);   // 文本节点兜底（自适应）
+  h+=pluginCanvasH(n);   // 插件 canvas:true 参数（如 LLM SYSTEM/PROMPT）：各按内容自适应
   if(n.type==='8'){                  // 选择器：分支行高度
     const brs=(n.data.inputs?.branches||[]).length;
     h+=(brs+1)*22+8;
@@ -255,6 +255,16 @@ function nodeH(n){
   return h;
 }
 const TEXTAREA_H=120;
+// 画布大文本框高度自适应：按内容行数 3~16 行（免"大滚动区里套小滚动区"——框长到装下全部内容）
+const TA_LINE_H=15, TA_LBL_H=16;
+function _taLines(v){return Math.max(3,Math.min(16,String(v??'').split('\n').length));}
+function _taH(v,withLabel){return (withLabel?TA_LBL_H:0)+_taLines(v)*TA_LINE_H+10;}
+// 插件 canvas:true 参数的总高度贡献（各 param 按自身内容自适应）
+function pluginCanvasH(n){
+  const plg=NODE_PLUGINS[n.type]; if(!plg||!plg.params)return 0;
+  let h=0; for(const p of plg.params){ if(p.canvas) h+=_taH(p.get?p.get(n)??'':'', !!p.label); }
+  return h;
+}
 // 聚合节点(type32) 分组布局：复刻 renderNode 的 y 公式（gy 动态累加，非 ROW_H 网格），
 // 供 portY/变量线定位，保证端口与连线对齐。
 function aggrLayout(n){
@@ -759,25 +769,27 @@ function renderNode(n){
     const fo=makeTextArea(n);
     if(fo){
       const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+      fo.setAttribute('x',6);fo.setAttribute('y',yBase);fo.setAttribute('width',n.w-12);
+      fo.setAttribute('height',_taH(n.data.inputs?.concatParams?.[0]?.input?.value?.content)-2);
       g.appendChild(fo);
     }
   }
 
   // 节点插件 canvas 参数（.js 里声明 canvas:true 的 param → 节点下方大文本框，如 LLM 的 SYSTEM/PROMPT）
-  // 多个 canvas 参数按序纵向偏移（各自一框 TEXTAREA_H，nodeH 已按 pluginCanvasCount 计数）
+  // 多个 canvas 参数按序纵向偏移（各按内容自适应高度，nodeH 的 pluginCanvasH 同公式——两处必须一致）
   {const _plg=NODE_PLUGINS[n.type];
    if(_plg&&_plg.params){
-     let _ci=0;
+     let _cy=0;
+     const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
      for(const _cp of _plg.params){
        if(!_cp.canvas)continue;
+       const _h=_taH(_cp.get?_cp.get(n)??'':'', !!_cp.label);
        const fo=makeCanvasParamArea(n,_cp);
        if(fo){
-         const yBase=HDR_H+Math.max(nodeInputs(n).length,nodeOutputs(n).length)*ROW_H+4;
-         fo.setAttribute('x',6);fo.setAttribute('y',yBase+_ci*TEXTAREA_H);fo.setAttribute('width',n.w-12);fo.setAttribute('height',TEXTAREA_H-8);
+         fo.setAttribute('x',6);fo.setAttribute('y',yBase+_cy);fo.setAttribute('width',n.w-12);fo.setAttribute('height',_h-2);
          g.appendChild(fo);
-         _ci++;
        }
+       _cy+=_h;
      }
    }}
 
@@ -867,7 +879,7 @@ function setInputLiteral(nodeId,i,value){
   renderAll();
 }
 
-// 文本节点大文本框
+// 文本节点大文本框（高度随内容自适应：oninput 就地增长 fo 与节点 body 高度，blur 时 renderAll 对齐连线）
 function makeTextArea(n){
   const fo=document.createElementNS(NS,'foreignObject');
   fo.setAttribute('width',200);fo.setAttribute('height',100);
@@ -878,12 +890,20 @@ function makeTextArea(n){
   // 列出可用占位符（输入字段名）作提示
   const vars=nodeInputs(n).map(p=>p.name).filter(Boolean);
   ta.placeholder=vars.length?('可用占位符: '+vars.map(v=>'{{'+v+'}}').join('  ')):'先添加输入字段，再用 {{字段名}} 引用';
-  ta.style.cssText='width:100%;height:100%;font-size:11px;font-family:monospace;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px;resize:none;box-sizing:border-box';
+  ta.style.cssText='width:100%;height:100%;font-size:11px;font-family:monospace;background:#0f3460;color:#fff;border:1px solid #533483;border-radius:3px;padding:4px;resize:none;box-sizing:border-box;overflow:hidden';
+  const _grow=()=>{
+    fo.setAttribute('height', _taH(ta.value)-2);
+    n.h=nodeH(n);
+    const rect=fo.closest('g')?.querySelector('.node-body');
+    if(rect)rect.setAttribute('height', n.h);
+  };
   ta.oninput=()=>{
     if(!n.data.inputs.concatParams||!n.data.inputs.concatParams.length)
       n.data.inputs.concatParams=[{name:'concatResult',input:{type:'string',value:{type:'literal',content:''}}}];
     n.data.inputs.concatParams[0].input.value.content=ta.value;
+    _grow();
   };
+  ta.onblur=()=>renderAll();
   ta.onmousedown=(e)=>e.stopPropagation();  // 不触发节点拖动
   fo.appendChild(ta);fo.style.pointerEvents='auto';
   return fo;
@@ -1293,8 +1313,19 @@ function makeCanvasParamArea(n,p){
   const ta=document.createElement('textarea');
   ta.value=p.get?p.get(n)??'':'';
   ta.placeholder=p.tip||'';
-  ta.style.cssText='flex:1;width:100%;font-size:10px;background:#0d1b3e;color:#dbe4ff;border:1px solid #3b4a7a;resize:none;font-family:Consolas,monospace;box-sizing:border-box';
-  ta.oninput=()=>{const t=findN(n.id); if(t&&p.set)p.set(t,ta.value);};   // 只改数据不重绘
+  ta.style.cssText='flex:1;width:100%;font-size:10px;background:#0d1b3e;color:#dbe4ff;border:1px solid #3b4a7a;resize:none;font-family:Consolas,monospace;box-sizing:border-box;overflow:hidden';
+  // 只改数据不重绘（保焦点）；同时就地增长 fo 高度与节点 body 高度（免框内滚动），
+  // 连线对齐等完整重绘延迟到 blur（renderAll 会销毁 textarea 丢焦点）
+  const _grow=()=>{
+    const t2=findN(n.id); if(!t2)return;
+    const nh=_taH(ta.value, !!p.label);
+    fo.setAttribute('height', nh-2);
+    t2.h=nodeH(t2);
+    const rect=fo.closest('g')?.querySelector('.node-body');
+    if(rect)rect.setAttribute('height', t2.h);
+  };
+  ta.oninput=()=>{const t=findN(n.id); if(t&&p.set)p.set(t,ta.value); _grow();};
+  ta.onblur=()=>renderAll();
   ta.onmousedown=(e)=>e.stopPropagation();
   wrap.appendChild(ta);
   fo.appendChild(wrap);

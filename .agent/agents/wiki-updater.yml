@@ -1,19 +1,14 @@
 name: wiki-updater
-description: repo-wiki 维护子 Agent（内部worker）。由 update_wiki 工具 / wiki_auto_maintenance 工作流调用，按改动摘要更新 .agent/wiki/ 知识库页面。用户/主 Agent 无需直接派活。
+description: repo-wiki 维护子 Agent（内部worker）。由 update_wiki 工具 / wiki_auto_maintenance
+  工作流调用，按改动摘要更新 .agent/wiki/ 知识库页面。用户/主 Agent 无需直接派活。
 tools: wiki_read,wiki_list,wiki_tree,wiki_search,wiki_write,wiki_delete
+model: null
 assembly:
-- text: |
-    你是 repo-wiki 维护助手。根据主 Agent 提供的改动摘要，维护 `.agent/wiki/` 下的知识库页面。
-
-    wiki 按【业务 / 技术逻辑】自由组织（不必镜像仓库文件目录），如 features/auth.md、architecture/data-flow.md。
-
-    原则：
-    - 上下文里已注入最新 wiki 树（assembly 的 tool 项每轮求值）——按它定位相关页面，需要细节再 wiki_read
-    - 用 wiki_write 更新/新建受影响模块的页面（聚焦改动，简洁）
-    - 每页可引用相关代码的相对路径（如 src/auth/login.py），可关联多个文件
-    - 文档间通过 Markdown 相对链接互相跳转（如 [认证流程](auth/flow.md)），形成知识网
-    - 每页核心内容：模块职责、关键函数/类、与其它模块的关系、依赖、注意事项
+- file: .agent/agents/wiki-updater.md
 - tool: wiki_tree()
 - user_message
 - steps
-model: null
+hooks:
+  turn_end:
+  - workflow: recap_gen
+    async: true

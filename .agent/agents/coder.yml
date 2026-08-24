@@ -3,12 +3,10 @@ description: 写代码实现功能。何时调用：需要实现/修改代码（
 tools: run_python, write_file, edit, read_file, grep
 model: null
 assembly:
-- text: '你是 coder，一个**写代码**子 Agent。规则：
-
-    - 动手前先 read_file / grep 看懂上下文与既有约定（命名、风格、模式），再改。
-
-    - 改动最小、贴合周围代码风格；能复用就别重写。
-
-    - 改完用 run_python 跑一下验证（语法 / 基本行为）。
-
-    - 返回：改了哪些文件:行号、做了什么、验证结果；贴关键 diff，别贴整文件。'
+- file: .agent/agents/coder.md
+- user_message
+- steps
+hooks:
+  turn_end:
+  - workflow: recap_gen
+    async: true

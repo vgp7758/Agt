@@ -814,7 +814,7 @@ async def api_agents_list():
         meta = {}
         try:
             from agent_config import load_agent_yml
-            meta, _ = load_agent_yml(it["path"])
+            meta, _ = load_agent_yml(Path(it["path"]))   # path 是 str——必须转 Path（load_agent_yml 调 read_text，str 抛 AttributeError 被吞 → 恒空 meta）
         except Exception:
             pass
         asm = meta.get("assembly")

@@ -787,9 +787,29 @@ def _agent_safe_name(name: str) -> str:
 
 @app.get("/api/agents")
 async def api_agents_list():
-    """列出全部子 Agent 声明（.agent/agents/，.yml 优先）。"""
+    """列出全部 Agent 声明：_main_（~/.agt/main.yml）置顶 + 子 Agent（.agent/agents/）。"""
     from agent_config import load_agents_index
     out = []
+    # —— 主 Agent（全局声明，非 .agent/agents/ 成员）——
+    try:
+        from agent_config import seed_main_agent, load_agent_yml
+        mp = seed_main_agent(_workspace)
+        mmeta, _ = load_agent_yml(mp)
+        masm = mmeta.get("assembly")
+        mhooks = mmeta.get("hooks")
+        out.append({
+            "name": "_main_",
+            "description": mmeta.get("description") or "主 Agent 全局声明（assembly 装配清单 + hooks + model 覆盖）",
+            "model": mmeta.get("model") or "",
+            "tools": "",
+            "assembly_count": len(masm) if isinstance(masm, list) else 0,
+            "hooks_positions": sorted(mhooks.keys()) if isinstance(mhooks, dict) else [],
+            "file": str(mp),
+            "is_main": True,
+        })
+    except Exception:
+        out.append({"name": "_main_", "description": "主 Agent（main.yml 读取失败）", "model": "",
+                    "tools": "", "assembly_count": 0, "hooks_positions": [], "file": "", "is_main": True})
     for it in load_agents_index(_workspace):
         meta = {}
         try:
@@ -845,9 +865,28 @@ def _persona_from_decl(meta: dict, system: str) -> str:
 
 @app.get("/api/agents/{name}")
 async def api_agents_get(name: str):
-    """单个子 Agent 完整声明（含 persona/assembly 原始清单/hooks）。"""
+    """单个 Agent 完整声明。_main_ 特判（~/.agt/main.yml，is_main=True）。"""
     from agent_config import load_agent_yml
     from multiagent import _agent_def_path
+    if name == "_main_":
+        # 主 Agent：persona 不是单块正文（人设分多个 text 项与动作交错——正是 assembly DSL 的完整配方），
+        # 编辑走原始 assembly 清单；不提供 persona/tools 字段
+        from agent_config import seed_main_agent
+        p = seed_main_agent(_workspace)
+        try:
+            meta, _ = load_agent_yml(p)
+        except Exception as e:
+            return {"error": f"main.yml 解析失败：{type(e).__name__}: {e}"}
+        asm_raw = meta.get("assembly")
+        return {
+            "name": "_main_", "is_main": True,
+            "description": meta.get("description", ""),
+            "model": meta.get("model") or "",
+            "tools": "", "persona": "",
+            "assembly": asm_raw if isinstance(asm_raw, list) else None,
+            "hooks": meta.get("hooks") if isinstance(meta.get("hooks"), dict) else {},
+            "file": str(p),
+        }
     safe = _agent_safe_name(name)
     p = _agent_def_path(safe)
     if p is None or not p.exists():
@@ -915,10 +954,35 @@ async def api_agents_save(name: str, request: Request):
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
+    if name == "_main_":
+        # 主 Agent 保存：直接写 ~/.agt/main.yml——assembly 原样保留（多 text 段与动作交错是
+        # 完整配方，不做 persona 拆分），保留未识别字段；不写 .md。生效需 /restart（启动时装配）。
+        import yaml
+        from agent_config import seed_main_agent
+        p = seed_main_agent(_workspace)
+        try:
+            base = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            base = {}
+        if "description" in body:
+            base["description"] = body.get("description", "")
+        if "model" in body:
+            base["model"] = (body.get("model") or "").strip() or None
+        asm = body.get("assembly")
+        if isinstance(asm, list) and asm:
+            base["assembly"] = asm
+        hooks = body.get("hooks")
+        if isinstance(hooks, dict):
+            if hooks:
+                base["hooks"] = hooks
+            else:
+                base.pop("hooks", None)
+        p.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return {"ok": True, "name": "_main_", "file": str(p),
+                "note": "已写 ~/.agt/main.yml；/restart 后生效（主 Agent 装配在启动时读取）"}
     safe = _agent_safe_name(name)
     if not safe:
         return {"error": "name 非法"}
-    # persona 由 _dump_agent_yml 写独立 md（assembly 首项统一转 file: 引用），
     # 这里不再做 text: 同步——双形态读取在 api_agents_get 的 _persona_from_decl。
     # 注意：不删同名 .md（旧逻辑防旧格式声明遮蔽；现在它是 persona 载体，删了就丢内容）
     asm = body.get("assembly")
@@ -937,6 +1001,8 @@ async def api_agents_create(request: Request):
     safe = _agent_safe_name(body.get("name") or "")
     if not safe:
         return {"error": "name 不能为空"}
+    if (body.get("name") or "").strip() in ("_main_", "main"):
+        return {"error": "'_main_' 是主 Agent 保留名，不能用作子 Agent"}
     d = _workspace / ".agent" / "agents"
     if (d / f"{safe}.yml").exists() or (d / f"{safe}.md").exists():
         return {"error": f"已存在同名声明 '{safe}'"}
@@ -952,6 +1018,8 @@ async def api_agents_create(request: Request):
 @app.delete("/api/agents/{name}")
 async def api_agents_delete(name: str):
     """删除子 Agent 声明（.yml 与 .md 一并清理）。"""
+    if name == "_main_":
+        return {"error": "主 Agent 声明（~/.agt/main.yml）不可删除"}
     safe = _agent_safe_name(name)
     d = _workspace / ".agent" / "agents"
     gone = False

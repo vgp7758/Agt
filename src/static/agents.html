@@ -78,13 +78,13 @@ textarea{width:100%;resize:vertical}
       <div class="frow"><label>模型</label><select id="fModel"></select>
         <label style="min-width:auto">工具</label><input type="text" id="fTools" style="flex:1;min-width:180px" placeholder="逗号分隔；留空=继承主 Agent 全部"></div>
       <div class="chips" id="toolChips"></div>
-      <div class="hint">点工具 chip 快速增删；留空=继承全部（除管理工具）。</div>
+      <div class="hint" id="toolsHint">点工具 chip 快速增删；留空=继承全部（除管理工具）。</div>
     </div>
 
-    <div class="fgroup">
+    <div class="fgroup" id="gPersona">
       <h3>SYSTEM 正文（persona）</h3>
       <textarea id="fPersona" rows="8" placeholder="你是 xxx，一个……的子 Agent。规则：…"></textarea>
-      <div class="hint">保存时写回 assembly 首个 text: 项。</div>
+      <div class="hint">保存时写回 assembly 首个 text: 项（v2.1 起存为独立 .md，每轮投影重读）。</div>
     </div>
 
     <div class="fgroup">
@@ -144,30 +144,34 @@ async function createAgent(){
 }
 
 /* ---------- 编辑 ---------- */
-const SEG_TYPES=['system','rules','history','user_message','steps','tail','hooks'];
-const ACT_TYPES=['text','file','dir','cmd','workflow','tool'];
+const SEG_TYPES=['system','rules','history','ltm','user_message','steps','tail','hooks'];
+const ACT_TYPES=['text','file','dir','cmd','workflow','tool','func'];
 
 function asmToRow(it){
-  // {kind:'seg'|act, name?, opt?, value?}
+  // {kind:'seg'|act, name?, opt?, mode?, value?}
   if(it===null||it===undefined)return {kind:'seg',name:'user_message',opt:false};
   if(typeof it==='string'){
     const [n,...rest]=it.split('|');
     const base=n.trim();
-    if(SEG_TYPES.includes(base))return {kind:'seg',name:base,opt:rest.some(x=>x.trim()==='optional')};
+    const opt=rest.some(x=>x.trim()==='optional');
+    if(SEG_TYPES.includes(base))return {kind:'seg',name:base,opt};
+    // 带模式段名（'history=tiered'）→ 拆 name+mode
+    const mm=base.match(/^(\w+)\s*=\s*(\w+)$/);
+    if(mm&&SEG_TYPES.includes(mm[1]))return {kind:'seg',name:mm[1],mode:mm[2],opt};
     // 字符串动作（老格式 'file: x' 等）
-    const m=base.match(/^(text|file|dir|cmd|workflow|tool):\s*(.*)$/);
+    const m=base.match(/^(text|file|dir|cmd|workflow|tool|func):\s*(.*)$/);
     if(m)return {kind:m[1],value:m[2]};
-    return {kind:'seg',name:base,opt:rest.some(x=>x.trim()==='optional')};
+    return {kind:'seg',name:base,opt};   // 未知段名：文本框兜底（保往返不丢）
   }
   if(typeof it==='object'){
-    for(const k of [...ACT_TYPES,'once','every']){
-      if(k in it&&k!=='once'&&k!=='every')return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every};
+    for(const k of ACT_TYPES){
+      if(k in it)return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every};
     }
   }
   return {kind:'seg',name:'user_message',opt:false};
 }
 function rowToItem(r){
-  if(r.kind==='seg')return r.opt?`${r.name}|optional`:r.name;
+  if(r.kind==='seg'){const nm=r.mode?`${r.name}=${r.mode}`:r.name;return r.opt?`${nm}|optional`:nm;}
   if(r.kind==='text'){const o={text:r.value||''};if(r.once)o.once=true;if(r.every)o.every=r.every;return o;}
   const o={};o[r.kind]=r.value||'';if(r.once)o.once=true;if(r.every)o.every=r.every;return o;
 }
@@ -175,16 +179,22 @@ function rowToItem(r){
 function renderAsm(){
   $('asmList').innerHTML=asmData.map((r,i)=>{
     const isSeg=r.kind==='seg';
-    const opts=[...SEG_TYPES,...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('');
+    // 已知段名→下拉；未知段名/带模式→文本框（保往返不丢）
+    const segSel=isSeg&&SEG_TYPES.includes(r.name)
+      ?`<select class="tsel" onchange="asmSegName(${i},this.value)">${SEG_TYPES.map(t=>`<option value="${t}" ${r.name===t?'selected':''}>${t}</option>`).join('')}</select>`
+      :isSeg?`<input class="tsel" type="text" value="${esc(r.name)}" oninput="asmData[${i}].name=this.value">`:'';
+    const modeHtml=(isSeg&&r.name==='history')
+      ?`<input style="width:76px" type="text" placeholder="tiered" value="${esc(r.mode||'')}" oninput="asmData[${i}].mode=this.value">`:'';
+    const typeSel=isSeg?'':`<select class="tsel" onchange="asmKind(${i},this.value)">${[...SEG_TYPES,...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
     const valHtml=r.kind==='text'
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
       :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;
     const extra=isSeg
       ?`<span class="opt"><input type="checkbox" ${r.opt?'checked':''} onchange="asmData[${i}].opt=this.checked"> optional</span>`
-      :(r.kind==='file'||r.kind==='dir'||r.kind==='cmd'||r.kind==='workflow'||r.kind==='tool'
+      :(r.kind==='file'||r.kind==='dir'||r.kind==='cmd'||r.kind==='workflow'||r.kind==='tool'||r.kind==='func'
         ?`<span class="opt"><input type="checkbox" ${r.once?'checked':''} onchange="asmData[${i}].once=this.checked"> once</span>`:'');
     return `<div class="asmrow">
-      <select class="tsel" onchange="asmKind(${i},this.value)">${opts}</select>
+      ${typeSel}${segSel}${modeHtml}
       ${valHtml}${extra}
       <button class="btn sm" onclick="asmMove(${i},-1)">↑</button>
       <button class="btn sm" onclick="asmMove(${i},1)">↓</button>
@@ -192,7 +202,8 @@ function renderAsm(){
     </div>`;
   }).join('')||'<div class="hint">（空 = 未声明 assembly，使用默认全装清单）</div>';
 }
-function asmKind(i,t){asmData[i]={kind:t,name:t==='seg'?'user_message':undefined,value:t==='seg'?undefined:'',opt:false};renderAsm();}
+function asmKind(i,t){const old=asmData[i];asmData[i]={kind:t,name:t==='seg'?(old.kind==='seg'?(old.name||'user_message'):'user_message'):(old.name||undefined),value:t==='seg'?(old.value??undefined):(old.value||''),opt:old.opt||false,mode:old.mode};renderAsm();}
+function asmSegName(i,v){asmData[i].name=v;renderAsm();}
 function asmMove(i,d){const j=i+d;if(j<0||j>=asmData.length)return;[asmData[i],asmData[j]]=[asmData[j],asmData[i]];renderAsm();}
 function asmAdd(){asmData.push({kind:'seg',name:'user_message',opt:false});renderAsm();}
 
@@ -248,8 +259,15 @@ async function loadEdit(name){
   const d=await api('/api/agents/'+encodeURIComponent(name));
   if(d.error){toast(d.error,false);return;}
   curName=d.name;
-  $('eTitle').textContent='编辑：'+d.name;
+  const isMain=!!d.is_main;
+  $('eTitle').textContent=(isMain?'编辑主 Agent：':'编辑：')+d.name;
   $('eFile').textContent=d.file||'';
+  // 主 Agent：persona 多 text 段交错（单框模型不适用）+ 工具面不走声明 → 隐藏两组；删除禁止
+  $('gPersona').style.display=isMain?'none':'';
+  $('fTools').style.display=isMain?'none':'';
+  $('toolChips').style.display=isMain?'none':'';
+  $('toolsHint').style.display=isMain?'none':'';
+  document.querySelector('button.btn.danger').style.display=isMain?'none':'';
   $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
   $('fPersona').value=d.persona||'';
   asmData=(d.assembly||[]).map(asmToRow);
@@ -265,7 +283,7 @@ async function saveAgent(){
     persona:$('fPersona').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
   };
   const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(d.ok)toast('✅ 已保存（新派活生效；reuse 实例下一任务生效）');
+  if(d.ok)toast(d.note||'✅ 已保存（新派活生效；reuse 实例下一任务生效）');
   else toast(d.error||'保存失败',false);
 }
 async function delAgent(){

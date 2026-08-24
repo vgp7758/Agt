@@ -26,6 +26,9 @@
 | [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / hunk 分组 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 / 复查 diff 算法 |
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
+| [features/glob-files](features/glob-files.md) | glob_files 工具（外置首例）：文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__ 等，500 条上限） | 按名字找文件 / 学外置工具写法 |
+| [features/tool-externalization](features/tool-externalization.md) | 工具外置体系：tools/builtin/*.py + `agt_register()` 描述符 + `/reload tools` 热加载 + src/assets/tools_builtin 随包副本 | 加新内置工具（零框架改动） |
+| [features/spec-tools](features/spec-tools.md) | spec 工具集：explore_subagent 同步前置探索（**≠ explorer 声明式子 Agent**，不注册 registry、只读白名单；token_budget 残留已对齐 0） | 理解 spec 流程 / 区分两个 explorer |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
 | [releases/v0.19.2](releases/v0.19.2.md) | v0.19.2 发布记录（最新）：后台通知 wake 语义修复 + AND/OR 逻辑节点 + 编辑器批次三 + 调试页白框增强 + 性能三件套 | 查最新版本交付内容 |
 | [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查版本交付内容 / 发布流程 |
@@ -63,6 +66,8 @@
 - **执行时序修复：插话不滞留 + 并行钩子 UI**（2026-08-19，commit fb115aa，用户实测 8 条现象闭环）：① answer 完成后旧版只查 inbox、漏 pending_messages（插话队列）→ 插话滞留至用户下次发消息；现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮（新轮 before_turn 检索的即插话内容）。② 同 hook 挂多个 before_turn 工作流时，前端「执行中」行由单变量改 Map 按 `hook::name` 索引，互不覆盖（详见 [user-interaction](features/user-interaction.md)）
 - **子 Agent 输出串台修复：事件统一打 agent_id**（2026-08-21，commit ba0940b）：同步子 Agent（explore_subagent 等，on_event=agent.on_event）的 answer 与主 Agent answer 在同一气泡互相覆盖——根因是事件流入主事件流无身份标记。修复：`agent.py` `_emit` 一处 `event.setdefault("agent_id", self.agent_id)` 全事件覆盖（主=`_main_`）；前端 answer 气泡多 agent 分页（顶部小 tag 按钮点击翻页，仅该轮有效，最新到达页自动激活），thinking/step 加 `[agent_id]` 前缀，复制按钮克隆排除 UI 元素。异步 agent_prompt 路径（on_event=None，answer 走 inbox）本就不串（详见 [bubble-interaction](features/bubble-interaction.md)、[multi-agent](architecture/multi-agent.md#事件流-agent_id-打标与-webui-串台修复2026-08-21commit-ba0940b)）
 - **聚合节点选值语义修复**（2026-08，commit 5117f41，随 v0.18.7 发布）：aggregator(32) 分组变量旧版只看「blockID 执行过」不看值——var1 引用的节点执行了但字段解析为 None 时整组直接 null，var2 有值也被忽略（用户报告「var1=null 直接分组返回 null」）；现改为**按声明顺序取第一个「执行过且值非空」的**（值 None/空串记兜底继续找；全部执行过但无值 → 兜底第一个执行过的值；字面量/全局变量仍「非 None 即选」）。**空列表/空 dict 是合法值不跳过**（`filtered_outputs=[]` 是批处理有意义产出），仅 None/空串触发继续找。九场景验证；引擎层修复需 `/restart` 生效（详见 [workflow-hooks · 13 类节点速查](architecture/workflow-hooks.md#13-类节点速查)）
+- **glob_files 新工具 + 外置工具体系首例**（2026-08，commit eafed25）：`glob_files(pattern, path)` 文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__/node_modules 等；500 条上限），补齐「list_dir 只列单层、grep 只搜内容」之间的文件名查找缺口；载体 `tools/builtin/fs_tools.py`——一个 .py + `agt_register()` 零框架改动，`/reload tools` 热加载即生效（详见 [glob-files](features/glob-files.md)、[tool-externalization](features/tool-externalization.md)）
+- **explore_subagent 身份澄清 + 预算残留修复**（2026-08，commit eafed25）：explore_subagent 是 `src/spec_tools.py` 的**同步工具**（spec 前置探索：制定方案前并行派 N 个摸不同模块，产出喂 create_spec；不注册 registry、硬编码只读白名单 9 工具）——与 `.agent/agents/explorer.md` 的 explorer 声明式子 Agent 是两回事；其残留 `token_budget=20000`（早期「解除子 Agent 预算」改造漏掉的独立构造路径）已对齐为 0，`max_steps=12` 保留（详见 [spec-tools](features/spec-tools.md)）
 
 ## 维护约定
 

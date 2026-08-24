@@ -107,6 +107,8 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 
 **范围**：仅**同步调用**的子 Agent（explore_subagent / update_wiki / 早期 wait 场景）——主 Agent 等它工具结果期间其 answer 先到。异步 `agent_prompt` 路径 on_event=None 本就不串——answer 走 inbox → 主 Agent 新一轮（消费机制见上节）。
 
+> **身份澄清（2026-08，commit eafed25）**：explore_subagent 是 `src/spec_tools.py` 里的**同步工具**（spec 前置探索：制定施工方案前并行派 N 个摸不同模块，产出喂 create_spec；不注册 registry、硬编码只读白名单），与 `.agent/agents/explorer.md` 的 explorer 声明式子 Agent 是**两回事**——对照表见 [spec 工具集](../features/spec-tools.md)。同 commit 顺带修复其残留的 `token_budget=20000`（早期「解除子 Agent 预算」改造漏掉的独立构造路径）→ 对齐为 0，`max_steps=12` 保留。
+
 ### 修复
 
 - **后端一处全覆盖**（`agent.py` `_emit`）：`event.setdefault("agent_id", self.agent_id)`——所有 Agent 的所有事件（answer/thinking/step/tool_*）统一打标，主=`_main_`，子 Agent=各自 id。在 `_emit` 收口而非各发射点补标，天然全覆盖（含漏网事件类型）

@@ -27,7 +27,16 @@
 | 注册入口 | SDK（`workflow_node_api.py`）+ 节点目录三级扫描 | `agt_register()` 描述符列表 + script_tools.py 扫描 |
 | 生效方式 | 节点热加载 | `/reload tools` |
 
+## 迁移优先级（按判别标准，2026-08-25 定稿）
+
+哪些工具能外置、哪些不能——**判别标准见 [tool-externalization-criteria](../architecture/tool-externalization-criteria.md)**（一句话：外置的是"拥有自己数据的工具"，不是"读得到数据的工具"）：
+
+1. **真限界上下文优先**：wiki 六件套 / ltm 五件套 / download / rag——文件由工具组自己写自己读，数据主权在本组
+2. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
+3. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
+
 ## 相关页面
 
 - [glob_files](glob-files.md) —— 首个外置工具
+- [工具外置判别标准](../architecture/tool-externalization-criteria.md) —— 哪些能迁哪些不能（四象限盘点）
 - [节点插件化](../architecture/node-plugins.md) —— 同构模式（节点侧，更完整的三级目录/覆盖机制）

@@ -95,6 +95,14 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 #entryBar .ef input,#entryBar .ef textarea,#entryBar .ef select{background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:3px 6px;font-size:12px;width:170px}
 #entryBar .ef textarea{width:200px;height:42px;font-family:monospace;resize:vertical}
 #entryBarHint{color:#8a9099;font-size:11px;align-self:center}
+#entryBar button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:3px;padding:4px 10px;font-size:12px;cursor:pointer;height:26px}
+#entryBar button:hover{background:#533483}
+/* JSON 一键填充弹窗 */
+#jsonFillBox{position:fixed;inset:0;background:#000a;z-index:200;display:flex;align-items:center;justify-content:center}
+#jsonFillBox .jf-panel{width:540px;max-width:92vw;background:#16213e;border:1px solid #7b2ff7;border-radius:8px;padding:14px;box-shadow:0 8px 40px #000c}
+#jsonFillBox textarea{width:100%;height:220px;background:#0f3460;color:#e0e0e0;border:1px solid #533483;border-radius:4px;padding:6px;font-family:monospace;font-size:12px;resize:vertical;box-sizing:border-box}
+#jsonFillBox button{background:#533483;color:#fff;border:none;border-radius:3px;padding:4px 12px;font-size:12px;cursor:pointer;margin-left:6px}
+#jsonFillBox button:hover{background:#7b2ff7}
 button.play{background:#1a5c2a !important;border-color:#3ad07a !important;font-weight:600}
 button.play:hover{background:#3ad07a !important;color:#16213e !important}
 button.play:disabled{opacity:.5;cursor:not-allowed}
@@ -132,6 +140,19 @@ button.play:disabled{opacity:.5;cursor:not-allowed}
 <div id="nodePicker" style="display:none"></div>
 <!-- 图例浮标（画布右下角） -->
 <div id="legendFloat"></div>
+<!-- JSON 一键填充入参弹窗 -->
+<div id="jsonFillBox" style="display:none" onclick="if(event.target===this)closeJsonFill()" onkeydown="if(event.key==='Escape')closeJsonFill()">
+  <div class="jf-panel">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px">📋 JSON 一键填充</div>
+    <div style="font-size:11px;color:#8a9099;margin-bottom:8px">粘贴一个 JSON 对象，按字段名匹配入参并覆盖（string 字段收到对象/数组会自动序列化，未匹配到的字段忽略）</div>
+    <textarea id="jsonFillTa" placeholder='{"query":"你好","top_k":5,"tags":["a","b"]}'></textarea>
+    <div id="jsonFillErr" style="color:#e0504a;font-size:11px;min-height:16px;margin-top:4px"></div>
+    <div style="text-align:right;margin-top:6px">
+      <button onclick="closeJsonFill()">取消</button>
+      <button onclick="applyJsonFill()">填充</button>
+    </div>
+  </div>
+</div>
 <div id="toast" style="opacity:0"></div>
 
 <script>
@@ -2229,8 +2250,68 @@ function renderEntryBar(){
       h+='<div class="ef">'+lab+'<input id="'+fid+'" value="'+esc(dv)+'" oninput="entryValues[\''+esc(nm)+'\']=this.value"></div>';
     }
   });
+  h+='<button onclick="openJsonFill()" title="粘贴一段 JSON，按字段名一键填充多个入参">📋 JSON填充</button>';
   bar.innerHTML=h;
 }
+
+// —— JSON 一键填充入参 ——
+function openJsonFill(){
+  const errEl=document.getElementById('jsonFillErr');if(errEl)errEl.textContent='';
+  // 预填当前已填的值，方便增量改
+  const cur={};let has=false;
+  document.querySelectorAll('#entryBar .ef').forEach(function(div){
+    const lab=div.querySelector('label[data-nm]');if(!lab)return;
+    const nm=lab.dataset.nm;const v=entryValues[nm];
+    if(v!==undefined&&v!==null&&v!==''){cur[nm]=v;has=true;}
+  });
+  const ta=document.getElementById('jsonFillTa');
+  if(has)ta.value=JSON.stringify(cur,null,2);
+  document.getElementById('jsonFillBox').style.display='flex';
+  setTimeout(function(){ta.focus();},0);
+}
+function closeJsonFill(){document.getElementById('jsonFillBox').style.display='none';}
+function applyJsonFill(){
+  const errEl=document.getElementById('jsonFillErr');
+  const ta=document.getElementById('jsonFillTa');
+  errEl.textContent='';
+  let obj;
+  try{obj=JSON.parse(ta.value);}
+  catch(e){errEl.textContent='JSON 解析失败：'+e.message;return;}
+  if(!obj||typeof obj!=='object'||Array.isArray(obj)){errEl.textContent='需要一个 JSON 对象 {…}，而不是数组或标量';return;}
+  let hit=0;
+  document.querySelectorAll('#entryBar .ef').forEach(function(div){
+    const lab=div.querySelector('label[data-nm]');if(!lab)return;
+    const nm=lab.dataset.nm;
+    if(!(nm in obj))return;
+    const v=obj[nm];
+    const tpM=lab.textContent.match(/\(([^)]+)\)/);const tp=tpM?tpM[1]:'';
+    const fid='ef_'+String(nm).replace(/[^A-Za-z0-9_]/g,'_');
+    const el=document.getElementById(fid);if(!el)return;
+    hit++;
+    if(tp==='boolean'){
+      el.checked=(v===true||v==='true');
+      entryValues[nm]=el.checked;
+    }else if(tp==='object'||tp==='list'){
+      const s=(typeof v==='string')?v:JSON.stringify(v,null,1);
+      el.value=s;
+      try{entryValues[nm]=JSON.parse(s);}catch(e){entryValues[nm]=s;}
+    }else if(tp==='integer'||tp==='number'||tp==='float'){
+      el.value=v;
+      entryValues[nm]=_coerceIn(v,tp);
+    }else{
+      const s=(v===null||v===undefined)?'':(typeof v==='string'?v:JSON.stringify(v));
+      el.value=s;
+      entryValues[nm]=s;
+    }
+  });
+  // 未匹配到的键点名出来，避免用户以为填进去了
+  const known=new Set();
+  document.querySelectorAll('#entryBar .ef label[data-nm]').forEach(function(l){known.add(l.dataset.nm);});
+  const unknown=Object.keys(obj).filter(function(k){return !known.has(k);});
+  closeJsonFill();
+  toast('已填充 '+hit+' 个字段'+(unknown.length?('，忽略未定义: '+unknown.join(', ')):''));
+}
+window.openJsonFill=openJsonFill;window.closeJsonFill=closeJsonFill;window.applyJsonFill=applyJsonFill;
 
 // —— 播放：从 DOM 收集入参 → 发 debug_run ——
 function runDebug(){

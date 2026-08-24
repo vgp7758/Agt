@@ -533,6 +533,12 @@ class Session:
         # _estimate_tokens 的除数由此取代写死的 chars/4（中文 ≈1.5 字/token，chars/4 可低估 2~3 倍）
         self._chars_per_token: float = 4.0    # 实测字符/token 比率（EMA 平滑；初值 4=旧行为）
         self._over_window_mark: bool = False  # 实测 total 超 win（未超 panic）标记，下轮 start_turn 消费记日志
+        self._tools_schema_chars: int = 0     # 当前请求的 tools schema 字符数（agent.run 每步更新）
+                                              # ——校准分子含它（observe_llm_usage 的 extra_chars），
+                                              #   估算分子必须同口径（否则系统性少算 schema token，
+                                              #   折叠计划"以为达标"实超窗；本次排查实证：目标
+                                              #   400K×0.75 正确，但估算漏 schema 压到 297K 就停、
+                                              #   实际发出去 412K）
         self._load_calibration()              # 回读 ~/.agt/token_usage.jsonl 末尾同模型记录作初值（跨 session 校准）
         # —— 投影分段统计（真实装配时顺手记录，/context 直接读——见 messages_for_llm 尾部）——
         # None=本进程还没跑过投影（projection_breakdown 回退现算）；否则 {"sections":[...], ts, turn, step, ...}
@@ -1392,9 +1398,11 @@ class Session:
         return n
 
     def _estimate_tokens(self, msgs: list[dict]) -> int:
-        """估算 token = chars / _chars_per_token（初值 4=旧行为；observe_llm_usage 用回包实测
-        持续校准该比率，中文场景不再 chars/4 低估 2~3 倍。够阈值判断，不必精确）。"""
-        return int(self._count_chars(msgs) / self._chars_per_token)
+        """估算 token = (chars + tools schema 字符) / _chars_per_token。
+        分子与 observe_llm_usage 校准【同口径】（校准 = (chars+extra_chars)÷prompt）——
+        补齐 schema 后折叠计划/保命阀按"真实将发出的 token"判阈，不再系统性少算。
+        初值 4=旧行为；observe_llm_usage 用回包实测持续校准该比率。够阈值判断，不必精确。"""
+        return int((self._count_chars(msgs) + self._tools_schema_chars) / self._chars_per_token)
 
     # ========== 实测 token 校准 + 超窗/panic 判阈（react 回包喂入） ==========
     def _load_calibration(self) -> None:

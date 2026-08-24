@@ -1498,6 +1498,7 @@ class Agent:
                 tool_schema_chars = len(json.dumps(tool_schemas, ensure_ascii=False))
             except Exception:
                 tool_schema_chars = 0
+            self.session._tools_schema_chars = tool_schema_chars   # 估算分子同源（start_turn 的 _plan_fold 用它）
             continue_loop = False
             try:
                     for step_num in range(1, self.max_steps + 1):
@@ -1789,6 +1790,7 @@ class Agent:
                             tool_schema_chars = len(json.dumps(tool_schemas, ensure_ascii=False))
                         except Exception:
                             tool_schema_chars = 0
+                        self.session._tools_schema_chars = tool_schema_chars
 
                     if continue_loop:
                         continue

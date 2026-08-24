@@ -276,7 +276,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     from script_tools import attach_script_tools, make_hot_reload_tools
     _stb = attach_script_tools(agent.tools)
     for t in _stb:
-        agent.tool_groups[t.name] = "脚本"
+        agent.tool_groups[t.name] = getattr(t, "group", "") or "脚本"   # 描述符 group 优先（如 wiki）
     _reg(make_hot_reload_tools(agent), "脚本")   # reload_hot：钩子工作流/Agent 改插件后热生效
     _reg(mcp_mgr.get_tools(), "MCP")
     _reg(make_subagent_tools(agent), "子Agent")

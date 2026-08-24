@@ -574,13 +574,24 @@ class Session:
                         if fc > 0:
                             _add(f"折叠摘要({fc}轮)", [{"role": "system", "content": self._ambient(self._folded_summary(fc))}],
                                  meta=f"最早{fc}轮折叠为结构摘要，原文可recall")
+                        # 分组按投影顺序（老→新）：已折叠超深档（raw>max_level，最老）→ 档4→…→档1。
+                        # 段序与 messages 里的实际出现顺序一致（最老的最靠前），读表即读投影。
+                        fold_on = config.load_fold_deep_tools()
+                        fold_msgs, fold_turns = [], 0
                         lv_msgs: dict[int, list] = {}
                         lv_turns: dict[int, int] = {}
                         for i in range(fc, len(self.turns)):
-                            lv = self._tier_level(i)
-                            lv_msgs.setdefault(lv, []).extend(self._render_turn_frozen(i))
-                            lv_turns[lv] = lv_turns.get(lv, 0) + 1
-                        for lv in sorted(lv_msgs):
+                            if fold_on and self._raw_tier_level(i) > self.max_level:
+                                fold_msgs.extend(self._render_turn_frozen(i))
+                                fold_turns += 1
+                            else:
+                                lv = self._tier_level(i)
+                                lv_msgs.setdefault(lv, []).extend(self._render_turn_frozen(i))
+                                lv_turns[lv] = lv_turns.get(lv, 0) + 1
+                        if fold_turns:
+                            _add(f"已折叠超深档({fold_turns}轮)", fold_msgs,
+                                 meta="工具调用折叠成一行标注，保留回复+reasoning原文")
+                        for lv in sorted(lv_msgs, reverse=True):   # 档4(老)→档1(新)，与投影顺序一致
                             _add(f"档{lv}历史({lv_turns[lv]}轮)", lv_msgs[lv],
                                  meta=f"工具结果上限{max(__import__('toollog').DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步")
                     else:

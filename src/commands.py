@@ -1406,9 +1406,11 @@ def _cmd_context(ctx: CommandContext, args):
     total = max(bd["total_tokens"], 1)
     win = s.max_effective_context_window
     panic = 0
+    fold_on = False
     try:
         import config as _cfg
         panic = _cfg.load_panic_window()
+        fold_on = _cfg.load_fold_deep_tools()
     except Exception:
         pass
     if win:
@@ -1417,7 +1419,8 @@ def _cmd_context(ctx: CommandContext, args):
         print(f"\n投影估算: ~{bd['total_tokens']:,} tok / 分档窗口 {win:,} ({pct:.1f}%) {bar}")
         if panic:
             print(f"保命线: {panic:,}（轮内超此线才应急折叠；当前余量 {max(panic - bd['total_tokens'], 0):,}）")
-        print(f"折叠计划: _planned_fold={s._planned_fold} 轮 | 已毕业边界 {len(s._tier_boundaries)} 个 | max_level={s.max_level}")
+        print(f"折叠计划: _planned_fold={s._planned_fold} 轮 | 已毕业边界 {len(s._tier_boundaries)} 个"
+              f" | max_level={s.max_level} | fold_deep_tools={'开' if fold_on else '关'}")
     else:
         print(f"\n投影估算: ~{bd['total_tokens']:,} tok（未配 max_effective_context_window，走 recent_window 路径）")
         if s.global_summary:

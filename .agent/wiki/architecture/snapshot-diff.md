@@ -1,12 +1,16 @@
 # dir_snapshot / diff_snapshots · 通用快照与变更检测子工作流
 
-> 工作流：`.agent/workflows/dir_snapshot.xml`、`.agent/workflows/diff_snapshots.xml`
+> 工作流：`.agent/workflows/dir_snapshot.xml`、`.agent/workflows/diff_snapshots.xml`（均标 **`hidden="true"`**，2026-08，commit d59dcbd）
 > 职责：对目录打文件快照、对比两份快照生成精确变更清单。**通用引擎级能力**，供任意工作流复用，最早在 [wiki_auto_maintenance](../features/wiki-auto-maintenance.md) 中用于提交前变更检测。
 > **v0.18.2 正式发布**（2026-08，从 wiki_auto_maintenance 内联节点重构拆分而来）。
 
 ## 为什么拆成通用子工作流
 
 早期 wiki_auto_maintenance 的提交前变更检测是**内联节点**，仅服务 wiki 提交这一个场景。重构为两个**通用子工作流**后，任何需要"检测某目录变更"的工作流都能直接复用，不必重复实现快照/diff 逻辑。与引擎内部 `_workspace_snapshot` / `_diff_snapshots`（after_tool 钩子用）逻辑**同源**，两者共用同一套快照-diff 语义。
+
+## hidden 归类（2026-08，commit d59dcbd）
+
+两子工作流标 `hidden="true"`——**主 Agent 不应直接调用**它们（不投影 `wf_dir_snapshot` / `wf_diff_snapshots` 工具），仅供其他工作流以 subworkflow(9) 子工作流方式复用。**hidden 不影响调用**：`_find_local_workflow` 按名字取子工作流不看 hidden，wiki_auto_maintenance 的快照装配照常工作。收益：主 LLM 工具表少 2 个 wf_* 工具、schema 更小、折叠估算更准（详见 [workflow-hooks · hidden 归类](../architecture/workflow-hooks.md#demo--子工作流-hidden-归类2026-08commit-d59dcbd)）。
 
 ## 两个子工作流
 
@@ -93,5 +97,5 @@
 
 - [wiki_auto_maintenance](../features/wiki-auto-maintenance.md)：首个消费方——git_commit 按变更清单提交；含 dict split 报错修复 + path 前端缓存问题
 - [diff_files 工具](../features/diff-files.md)：行级内容 diff（Myers Diff + unified 输出），与本页 mtime 级目录快照互补
-- [工作流引擎与钩子](workflow-hooks.md)：git_commit 节点 + 引擎内部快照闭环 + subworkflow literal 属性约定
+- [工作流引擎与钩子](workflow-hooks.md)：git_commit 节点 + 引擎内部快照闭环 + subworkflow literal 属性约定 + hidden 归类
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：快照子工作流重构为本次交付项之一

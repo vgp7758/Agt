@@ -6,8 +6,26 @@
 
 - `.agent/workflows/<名>.xml`（推荐，CDATA 免转义）或 `.json`（Coze 原生画布）
 - `.meta` 旁车 / XML 根属性：name/description/**hook**/enabled/**hidden**/**async**/auto/coze_url
-- 每轮对话开始自动扫描注册为 `wf_*` 工具；`hidden=true` 不投影给 LLM（钩子/子工作流专用）
+- 每轮对话开始自动扫描注册为 `wf_*` 工具；`hidden=true` 不投影给 LLM（钩子/子工作流/演示工作流专用）
 - meta.hidden 的 XML 往返已修复（api_wf_get 读根属性）——历史丢 hidden 的文件已补回
+
+## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
+
+**背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。
+
+**改动**：
+- 全部 demo 与引擎级子工作流标 `hidden="true"`：10 个 XML（含 `dir_snapshot.xml` / `diff_snapshots.xml` / `react_agent_demo.xml` / `custom_tool_demo.xml` / `stock_query.xml` 等）+ 7 个 JSON demo meta（`"hidden": true`，greet 原已有）
+- **播种源同步**：`src/workflows/` 下 5 个 XML 副本一并写 hidden（播种/重建时保持一致）
+- scan 验证 18/18 hidden=True
+
+**关键保证——hidden 只挡主 Agent 视野**：
+- 钩子触发**不看 hidden**（`get_hook_workflows` 按 hook 字段取，继续正常工作）
+- 子工作流调用**不看 hidden**（`_find_local_workflow` 按名字取，subworkflow 节点的子工作流照常可调）
+- 编辑器里仍可见可编辑，仅 LLM 工具投影移除
+
+**收益**：`/restart` 后工具表少 17 个无用的 `wf_*` 工具——工具箱更干净、schema 更小、**折叠估算更准**（工具 schema 是折叠估算分子的最大头，见 [上下文引擎](context-engine.md)）。
+
+**配套事实**：LIGHT_TOOLS 的 13 个内部工具（`cosine_sim` / `diff_lines` / `get_list_item` / `starts_with` / `ends_with` / `pass_through` 等）本就整箱 `hidden=True`，对主 LLM 不投影、仅工作流节点可用——无需再改。
 
 ## before_turn 钩子并行执行（2026-08 新，v0.18.2 发布）
 
@@ -85,14 +103,15 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **批处理 nth_output 对象组装模式（2026-08，v0.19.2 性能）**：批处理 nth_output 输出改为对象组装模式——按对象字段直接组装产出，省去整列表级的序列化/扫描开销
 - **筛选条件未设置恒真（2026-08，v0.19.2 性能）**：批处理 filtered_outputs 的筛选条件**未设置时直接恒真放行**（全部命中），不再走逐条条件求值路径——与 `eval_condition_lenient` 同一「未设置恒真」语义，AND/OR 与批处理筛选共用
 - **selector 左值**：`NODE.field.length`（string 也有）；条件值支持 `changed_files` 数组直传（零序列化）
-- **pass_through 工具**（LIGHT_TOOLS）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
-- **starts_with/ends_with**：LIGHT_TOOLS 字符串前后缀判断（扩展名分流）
+- **pass_through 工具**（LIGHT_TOOLS，hidden）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
+- **starts_with/ends_with**：LIGHT_TOOLS（hidden）字符串前后缀判断（扩展名分流）
 - **diff_lines 工具**（LIGHT_TOOLS，hidden）：两个文本块按行 Myers diff（无需落盘），与 diff_files 共用 `_render_unified_diff` 渲染（详见 [diff_lines 页](../features/diff-lines.md)）
-- **get_list_item 工具**（LIGHT_TOOLS，outputs=any）：从列表取单个元素，支持正/负索引、越界安全返回错误提示（详见 [get_list_item 页](../features/get-list-item.md)）
+- **get_list_item 工具**（LIGHT_TOOLS，hidden，outputs=any）：从列表取单个元素，支持正/负索引、越界安全返回错误提示（详见 [get_list_item 页](../features/get-list-item.md)）
+- **cosine_sim 工具**（LIGHT_TOOLS，hidden）：语义余弦相似度，供工作流批处理节点做重排打分（详见 [cosine_sim 页](../features/cosine-sim.md)）
 - **run_python 工具新增 args 参数**：`run_python(code="...", file="...", args="...")`，经环境变量 `PY_ARGS` 传递（code 和 file 两模式都生效），脚本内 `import os; a = os.environ.get("PY_ARGS", "")` 读取（详见 [run_python 页](../features/run-python.md)）
 - **XML schema 往返**：list\<object> 的 field 子元素 / list 基础类型 itemType / 坐标幂等（编辑器保存不再丢结构）
 - **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 子工作流按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
-- **dir_snapshot / diff_snapshots 子工作流**：引擎级快照能力——`dir_snapshot(path)` 对目录取文件快照（mtime 映射 JSON，排除 .git/__pycache__，path 留空=整个 workspace）；`diff_snapshots(before, after)` 对比两份快照输出变更清单（`files` 逗号分隔 + `count` + `changed` 结构化对象），供 git_commit 或选择器/聚合节点消费。**通用复用**：详见 [dir_snapshot / diff_snapshots 通用子工作流](snapshot-diff.md)，首个消费方为 [wiki_auto_maintenance 的快照重构](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08)
+- **dir_snapshot / diff_snapshots 子工作流**：引擎级快照能力（**hidden=true**，主 Agent 不直接调用，仅子工作流/钩子复用）——`dir_snapshot(path)` 对目录取文件快照（mtime 映射 JSON，排除 .git/__pycache__，path 留空=整个 workspace）；`diff_snapshots(before, after)` 对比两份快照输出变更清单（`files` 逗号分隔 + `count` + `changed` 结构化对象），供 git_commit 或选择器/聚合节点消费。**通用复用**：详见 [dir_snapshot / diff_snapshots 通用子工作流](snapshot-diff.md)，首个消费方为 [wiki_auto_maintenance 的快照重构](../features/wiki-auto-maintenance.md#snap_before--diff_wiki快照与变更清单重构为子工作流2026-08)
 - **subworkflow 节点 literal 属性约定（2026-08）**：subworkflow(9) 节点调用子工作流传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`）。子元素形式会导致参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206。实例：wiki_auto_maintenance 的 snap_before 传 `path=".agent/wiki/"`（见 [快照重构中的 literal 坑](../features/wiki-auto-maintenance.md#subworkflow-节点-literal-属性坑2026-08-修复)）
 - **工具节点输出是 dict（2026-08 修复，commit edd9851）**：`wf_diff_snapshots` 等**工具节点** raw 返回 **dict**（Tool.run() 把 end 的 dict json.dumps 成字符串 → `_handle_plugin._try_parse` 又解析回 Python dict），消费端必须引用**具体字段**（`files` / `count` / `changed`，`_dotted_get` 直接取）并**补 `<out>` 声明**；把整个 dict 当字符串 `.split(",")` 会报 `'dict' object has no attribute 'split'`。实例见 [wiki_auto_maintenance 的 dict split 修复](../features/wiki-auto-maintenance.md#dict-split-报错修复2026-08commit-edd9851)
 - **subworkflow 节点输入框字面量保存后重开变空（2026-08 修复，commit 910fc1b）**：type 9 节点的输入框（画布节点内，非右侧属性面板）手动输入字面量保存后，重新打开工作流输入框变空——**根因在前端 `syncSubworkflowNode`**（openWf 时对 type 9 节点重跑 schema 同步：只保留连线、丢字面量，默认值造出 `blockID=''` 的空 ref → 输入框空白）。修复：连线 ref 完整保留 + 非空字面量保留，默认值改空 literal。生效需 `/restart` + Ctrl+F5。详见 [wiki-auto-maintenance · path 字面量坑](../features/wiki-auto-maintenance.md#path-字面量保存后重开变空2026-08-修复commit-910fc1b)

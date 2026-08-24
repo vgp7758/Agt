@@ -1,6 +1,6 @@
-# cosine_sim · 语义余弦相似度工具
+# cosine_sim · 语义余弦相似度工具（LIGHT_TOOLS，hidden）
 
-> 源码：`src/real_tools.py`（`cosine_sim` 函数 + `Tool` 注册）
+> 源码：`src/real_tools.py`（`cosine_sim` 函数 + `Tool` 注册，注册于 **LIGHT_TOOLS**，`hidden=True`——对主 LLM 不投影，仅工作流节点可用）
 
 ## 职责
 
@@ -66,10 +66,11 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 
 - **[wiki_auto_query v4](../features/wiki-auto-query.md#v4-流水线2026-08-21)**：核心消费者——关键词检索后用 cosine_sim 做语义重排 + 阈值裁决
 - **RAG 模块（`src/rag.py`）**：通过 `ensure_rag()` 惰性获取共享单例 embedder（详见 [rag](rag.md)），复用 `/rag` 页面的 embedding 配置，无需独立维护模型
-- **`src/real_tools.py`**：工具注册入口，`Tool(cosine_sim, outputs=[...], param_descriptions={...})`
+- **`src/real_tools.py`**：工具注册入口——注册于 **LIGHT_TOOLS**（与 diff_lines / get_list_item / pass_through 等内部工具同箱），`hidden=True` 不投影给主 LLM，仅工作流 plugin 节点按需调用，主 Agent 工具箱零占用
 
 ## 注意事项
 
+- **hidden 归属**：LLM 基本不会直接调用本工具（相似度裁决是工作流内部步骤），故注册于 LIGHT_TOOLS 并 hidden——2026-08 用户确认此归类（与 demo/子工作流隐藏同批，commit d59dcbd）
 - **启动初期等待**：RAG 后台预热未完成时首次调用会同步等锁（bge-small-zh 实测 22.8s 量级）——正常运行中预热早已完成，瞬时
 - **依赖 RAG 配置**：未配置 embedding 时直接报错，不会静默返回 0
 - **空文本安全**：`str(text1 or "")` 处理 None/空值，不会崩溃
@@ -80,5 +81,6 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 
 - [rag](rag.md)：embedder 单例与 ensure_rag 惰性构建入口的宿主
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：v4 流水线的核心消费者
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)：批处理节点 + 子工作流调用机制
+- [工作流引擎与钩子](../architecture/workflow-hooks.md)：LIGHT_TOOLS / hidden 工具机制 + 批处理节点 + 子工作流调用
+- [diff_lines](diff-lines.md) / [get_list_item](get-list-item.md)：同箱（LIGHT_TOOLS hidden）工具
 - [系统总览](../architecture/overview.md)：real_tools.py 在能力层的位置

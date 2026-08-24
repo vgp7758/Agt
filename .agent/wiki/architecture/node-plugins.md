@@ -1,7 +1,8 @@
 # 节点插件化（Node Plugins）
 
 > 节点类型从内置代码外置为「同目录同名 `.py` + `.js` 配对」脚本——写两个文件即得全新节点类型，零框架改动。
-> 首批迁移：text(15)/tojson(58)/fromjson(59)；验收节点：timestamp(N1)。
+> 首批迁移：text(15)/tojson(58)/fromjson(59)；验收节点：timestamp(N1)；新节点示范：AND / OR 逻辑节点（v0.19.2）。
+> 打包现状（v0.19.2 wheel 实测）：节点插件共 **12 组（24 个文件：12 py + 12 js）**，pip 安装即有。
 
 ## 目录约定（三级，同名 type 后扫覆盖先扫）
 
@@ -13,9 +14,10 @@
 
 同名 type 后扫覆盖先扫——用户在 `.agent/nodes/` 放同名文件即定制覆写内置节点。
 
-**已迁移清单**（src/assets/nodes_builtin/，两批共 10 类）：
+**已迁移清单**（src/assets/nodes_builtin/，共 12 组）：
 - 第一批：text(15) / tojson(58) / fromjson(59)
 - 第二批：llm(3) / code(5) / selector(8) / intent(22) / aggregator(32) / assigner(40) / http(45)
+- 第三批（v0.19.2）：**AND / OR 逻辑节点**——selector 同构条件组（条件组 × operator），输出聚合 bool + 每组结果，`eval_condition_lenient` 未设置恒真语义（详见 [workflow-hooks · 13 类节点速查](workflow-hooks.md#13-类节点速查)）；以纯插件形态交付，是「写两个文件即得新节点」路线的最新示范
 - **核心内置（不可覆写）**：start(1) / end(2) / loop(21) / batch(28) / loop-setvar(20) / subworkflow(9) / plugin(4) / output(13)——调度器协议层
 
 ## 后端约定（.py）
@@ -89,8 +91,14 @@ EdFW.register({
 
 Windows 上 `importlib.util.spec_from_file_location` + `exec_module` 偶发不失效 `.pyc`（SourceFileLoader 的 mtime 比较在 NTFS 上不可靠）。解法：改用 `exec(compile(source, path, "exec"))` 直读源码——绕过所有 .pyc 缓存，mtime 变了必生效。模块名含 `mtime_ns`：同 mtime → 同名 → `sys.modules` 命中（零开销）；mtime 变了 → 不同名 → 新模块 → 强制重执行。
 
+## 打包确认（v0.19.2）
+
+发布时 wheel 内节点插件 **24 个文件（12 组 py+js 配对，含新的 AND/OR）** 已确认打包齐全——新加插件节点后建议在发布前核对 wheel 文件清单（`unzip -l`），避免「本地可用、装包缺文件」的发布事故。
+
 ## 相关
 
 - [工作流引擎](workflow-engine.md) — 节点调度器 / `_Ctx` / `NODE_HANDLERS`
+- [工作流引擎与钩子 · 13 类节点速查](workflow-hooks.md#13-类节点速查) — AND/OR 节点语义
 - [工作流编辑器 UX](../features/editor-ux-improvements.md) — EdFW 咨询点的渲染细节
+- [v0.19.2 发布记录](../releases/v0.19.2.md) — AND/OR 随该版发布
 - [工具外置](../features/tool-externalization.md) — 同构的扫描/装配模式

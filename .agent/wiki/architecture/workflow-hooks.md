@@ -47,6 +47,7 @@ with ThreadPoolExecutor() as pool:
 - async 钩子**不参与 inject 注入**——即使返回 `{inject: ...}` 也会被忽略（主循环已继续）
 - async 钩子内 LLM 仍走 `utility_client`（scene=hook:xxx），可在 llm_calls.jsonl 观测
 - 同一钩子工作流不要同时被 async 和非 async 调用——行为不确定
+- 后台事件（含 async 钩子完成）的唤醒语义：v0.19.2 起通知**不独立触发轮**（见 [user-interaction · wake 语义](../features/user-interaction.md#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192)）
 
 ## 检索型钩子的输出纪律：选择+摘录，禁止生成（2026-08-20）
 
@@ -80,6 +81,9 @@ with ThreadPoolExecutor() as pool:
 start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loop(21)/intent(22)/batch(28)/aggregator(32)/assigner(40) + tojson/fromjson/http/break/continue/setvar/output。
 
 新能力（2026-08）：
+- **AND / OR 逻辑节点（2026-08，v0.19.2 新节点）**：条件组节点，与 selector(8) 的条件结构**同构**（条件组 × operator）——AND 全组真才真、OR 一真即真；输出**聚合 bool + 每组各自结果**（总开关与逐组定位一次拿到）；求值走 `eval_condition_lenient`，**未设置的条件恒真**（未设置 = 不参与否决，不报错不拦截）。以节点插件实现（py+js 配对，见 [node-plugins](node-plugins.md)），v0.19.2 wheel 共 12 组 24 文件
+- **批处理 nth_output 对象组装模式（2026-08，v0.19.2 性能）**：批处理 nth_output 输出改为对象组装模式——按对象字段直接组装产出，省去整列表级的序列化/扫描开销
+- **筛选条件未设置恒真（2026-08，v0.19.2 性能）**：批处理 filtered_outputs 的筛选条件**未设置时直接恒真放行**（全部命中），不再走逐条条件求值路径——与 `eval_condition_lenient` 同一「未设置恒真」语义，AND/OR 与批处理筛选共用
 - **selector 左值**：`NODE.field.length`（string 也有）；条件值支持 `changed_files` 数组直传（零序列化）
 - **pass_through 工具**（LIGHT_TOOLS）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
 - **starts_with/ends_with**：LIGHT_TOOLS 字符串前后缀判断（扩展名分流）

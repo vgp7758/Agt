@@ -11,14 +11,15 @@
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
 | [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：分档投影 + 轮边界统一重排（升档+折叠）+ 分组衰减 + 折叠实证 + 前缀缓存三层优化 | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** | 派子 Agent / 改协作机制 |
-| [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** + **aggregator(32) 选值语义修复（第一个执行过且值非空）** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
+| [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **运行观测（run registry 接入点 + 节点全文预算）** + 快照副作用检测 + **changed_calls 变更调用收集（before_answer 透传）** + git_commit 节点 + subworkflow literal 属性约定 + **LIGHT_TOOLS 隐藏工具（diff_lines/get_list_item/pass_through）** + **run_python args 参数** + **aggregator(32) 选值语义修复（第一个执行过且值非空）** + **AND/OR 逻辑节点 + 批处理性能项（nth_output 对象组装 / 筛选未设置恒真）** | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
+| [architecture/node-plugins](architecture/node-plugins.md) | 节点插件化：三级目录同名覆盖（12 组 py+js 配对，v0.19.2 wheel 24 文件）+ SDK/EdFW 前后端约定 + 热加载 + .pyc 坑 + 打包核对 | 加新节点类型 / 定制覆写内置节点 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
-| [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳 | 调试工作流时在画布上看节点实际产出 |
-| [features/editor-ux-improvements](features/editor-ux-improvements.md) | 工作流编辑器 UX 多轮打磨（v0.18.7 批次一 + 批次二）：LLM 节点画布直编 prompt、批处理配置区上移/输出自动管理/item 结构自动推断；字段行 flex+紧凑编辑、子字段行内按钮统一 [名][类型][📋][+][×]（📋 JSON 导入/+子字段上移行内，in/out、嵌套全覆盖）、代码框 rows 自适应+画布灰字预览删除、面板 330→440px；编辑器两页 workflow_editor/workflow_debug 分层 | 改编辑器交互 / 批处理配置 |
+| [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳；**字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新（v0.19.2）** | 调试工作流时在画布上看节点实际产出 |
+| [features/editor-ux-improvements](features/editor-ux-improvements.md) | 工作流编辑器 UX 多轮打磨（v0.18.7 批次一 + 批次二 + v0.19.2 批次三）：LLM 画布直编 prompt（SYSTEM/PROMPT 双框 + 高度自适应）、批处理配置区上移/输出自动管理/item 自动推断/**数组源可连线端口**、字段行 flex+紧凑编辑、子字段行内按钮统一、spec 浮层抽屉 | 改编辑器交互 / 批处理配置 |
 | [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
 | [features/long-term-memory](features/long-term-memory.md) | 长期记忆：三类记忆（事实/程序经验 pro_*/episodic）× **episodic 召回三代演进**（标点分词→3B 提词量力分工→并入统一检索流水线）+ 写入侧两设计（幂等写入 + /memory 双主权）+ 存储 hash→可读转写 | 改记忆系统 / 理解 episodic 检索 / 博客第 4 篇技术底稿 |
-| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 钩子 UI 状态 |
+| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由（步边界注入 / answer 后 inbox+pending_messages 双队列兜底自动开轮）+ **后台通知 wake 语义（service_exit 不再独立触发轮，v0.19.2）** + 并行钩子「执行中」UI Map 跟踪（行可点击观测）+ 实测 8 条现象对照 | 改插话 / 消息队列 / 后台触发 / 钩子 UI 状态 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before（dir_snapshot）→ **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki（code 拍 after + diff_snapshots）→ commit_wiki（git_commit 节点），自动维护并 git 提交推送 wiki | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，v4 流水线（3B 提词 + cosine 精排 + 阈值裁决）+ related=False 短路 + 四场景验证 | 开自动检索 / 调钩子工作流 |
 | [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮（挂宿主防 innerHTML 重写）；**answer 多 Agent 分页（事件 agent_id 打标，同轮主/子回答 tag 翻页）** | 改前端气泡 / 调交互 |
@@ -26,14 +27,15 @@
 | [features/diff-lines](features/diff-lines.md) | diff_lines 工具（LIGHT_TOOLS，hidden）：Myers Diff 对比两个文本块，unified 风格 hunk 输出（无需落盘，与 diff_files 共享渲染） | 工作流节点间文本比较 |
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入，与 run_script PAYLOAD 同机制），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
-| [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录（最新）：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查最新版本交付内容 |
+| [releases/v0.19.2](releases/v0.19.2.md) | v0.19.2 发布记录（最新）：后台通知 wake 语义修复 + AND/OR 逻辑节点 + 编辑器批次三 + 调试页白框增强 + 性能三件套 | 查最新版本交付内容 |
+| [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查版本交付内容 / 发布流程 |
 | [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交（提交成功闭环） | 查版本交付内容 / 发布流程 |
 | [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
 | [guides/ops](guides/ops.md) | 运维与排障：可观测性(/stats/scene/api-status/**wf-monitor 实时观测+节点全文/调试页输出白框**/观测点日志) / 常见错误 / 存档布局 | 查问题 / 看统计 |
 
 ## 快速事实（2026-08 状态）
 
-- 版本 **0.18.7**；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
+- 版本 **0.19.2**；`pip install agt-agent`；CLI=`agt`，WebUI=`agt-web`
 - 38 个 Python 模块 ~17000 行，零 LangChain 依赖
 - 主 Agent id=`_main_`；子 Agent 声明在 `.agent/agents/*.md`（frontmatter DSL）
 - 工作流：`.agent/workflows/*.xml|json`，13 类节点，XML 为推荐写作格式
@@ -42,15 +44,16 @@
 - LLM 调用流水：每 session `llm_calls.jsonl`（含 resp_model/scene/turn·step 轮步标记/usage 归一化）
 - 前端气泡：系统自动触发默认折叠，用户指令默认展开，点击切换；聊天面板 user/answer 气泡 hover 浮现复制按钮（innerText 复制，clipboard→execCommand 降级，commit 3a7e9de）
 - 运行时状态：POST `/api/status` 返回实例快照（18 顶层字段 + 3 嵌套数组），用于跨实例诊断
-- **长期记忆（博客第 4 篇，2026-08-21 扩写完成 ~4000 字）**：三类记忆——事实（常驻）+ 程序经验 pro_*（仅标题常驻，详情 `read_procedure(id)` 按需读）+ episodic（检索命中才注入）；episodic 召回三代演进：标点分词子串匹配 → 本地 3B 提关键词（量力分工）→ 并入统一检索流水线（「该不该注入」从检索层上移到精排层）；写入侧：幂等写入防重复沉淀（replace_lines 记两次糗事）+ `/memory` 页面双主权管理（详见 [long-term-memory](features/long-term-memory.md)）
+- **长期记忆（博客第 4 篇，2026-08-21 扩写完成 ~4000 字）**：三类记忆——事实（常驻）+ 程序经验 pro_*（仅标题常驻，详情 `read_procedure(id)` 按需读）+ episodic（检索命中才注入）；episodic 召回三代演进：标点分词子串匹配 → 本地 3B 提关键词（量力分工）→ 并入统一检索流水线（「该不该注入」从检索层上移到精排层）；写入侧：幂等写入防重复沉淀（replace_lines 记两次糗事）+ `/memory` 页面双主权管理；embedder 带 LRU 缓存包装（v0.19.2，92x 全命中）（详见 [long-term-memory](features/long-term-memory.md)）
 - **工作流运行实时观测**（2026-08-20，commit 8aeb21a）：进程内 run registry（`_WF_RUNS`，线程安全，最近 50 次）记录每次工作流执行的节点 start/end/error 事件；对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点甘特时间线 2s 轮询；同步/async 钩子 + wf_* 工具三路径全覆盖（详见 [wf-monitor](features/wf-monitor.md)）
 - **观测页节点全文查看**（2026-08-20，commit bb56a82）：节点预览截 200 字，`has_full` 时预览可点击（📄）→ 新标签打开 `GET /api/wf/runs/<id>/node/<nid>` **text/plain 纯文本页**（页面文本即节点完整输出，非 HTML 无样式）；`_full_str` 保留换行/JSON 结构，单节点 200K 截断标注，总预算 20M 字符防爆内存（耗尽只存预览）；轮询视图剥离 full 只传 has_full（详见 [wf-monitor · 节点全文查看](features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)）
-- **调试页节点输出白框**（2026-08-21，commit 6c804a2）：workflow_debug.html 播放后每个执行过的节点下挂白框（foreignObject，灰头条「▾ 输出 · N 字段」点击折叠、字段行截 240 字/16 行滚动）；`nodeH` 拆 `_baseH`+输出框高（布局避让自动生效），端口锚点全用 `_baseH` 不随输出跳动；`dbgCollapsed` 跨重画保持；顺手修 type32 `n.h` 二次覆盖与重复 `const bodyRect` 声明（详见 [workflow-debug](features/workflow-debug.md)）
+- **调试页节点输出白框**（2026-08-21，commit 6c804a2；v0.19.2 增强）：workflow_debug.html 播放后每个执行过的节点下挂白框（foreignObject，灰头条「▾ 输出 · N 字段」点击折叠、字段行截 240 字/16 行滚动）；`nodeH` 拆 `_baseH`+输出框高（布局避让自动生效），端口锚点全用 `_baseH` 不随输出跳动；`dbgCollapsed` 跨重画保持；v0.19.2：字段名靛蓝加粗字段化渲染、批处理轮次下拉回看、复合节点/批处理逐轮实时刷新、白框滚轮缩放画布修复（详见 [workflow-debug](features/workflow-debug.md)）
 - **缓存经济模型（commit 1e9af8f）**：轮内零调整，只在轮边界做一次全局重排——先升档到 75% 再折叠到 75%，`_planned_graduates` 记录计划，轮内 `_build` 以 `_planned_fold`/`_planned_graduates` 为起点零调整，保证轮内字节稳定、前缀缓存整段命中（见 [context-engine 轮边界统一计划](architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
 - 折叠（fold）设计已实证（t206）：档梯满触发全档折叠，摘要 byte-stable——单步 ~98% miss 后命中率恢复 ~99.9%，一次性成本不破坏后续缓存（见 [context-engine 折叠实证](architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）
 - **排障闭环：t{N}·s{M} 轮步标记**（commit 4aced81）：/stats 折线 tooltip 显示 `· t206 · s6`，与 `projections/` 转储文件名同源（`t206_s6_*.txt`）——异常点 hover 即得文件名，直接打开看当时完整投影；仅 scene=react 记录携带，老记录自动省略（见 [ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)、[context-engine · t/s 标记](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)）
+- **v0.19.2 发布**（2026-08，commit 477f138，PyPI 已上线）：①🛡 后台通知 wake 语义——service_exit 不再独立触发轮，通知并入自然轮、before_turn 钩子不再空转（套娃循环根治）；②🧩 AND/OR 逻辑节点（selector 同构条件组，聚合 bool + 每组结果，`eval_condition_lenient` 未设置恒真；节点插件实现，wheel 12 组 24 文件）；③🎛 编辑器批次三——批处理数组源可连线端口（免手填 blockID.name）、LLM 画布 SYSTEM/PROMPT 双框 + 高度自适应、spec 浮层抽屉；④🐛 修复 LLM 输出格式下拉切换不生效（lpSet 静默丢弃 + 通用补建）与调试白框滚轮缩放；⑤🔍 调试页白框字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新；⑥⚡ 性能三件套——embedder LRU 缓存（92x 全命中）、nth_output 对象组装模式、筛选条件未设置恒真（详见 [v0.19.2 发布记录](releases/v0.19.2.md)）
 - **v0.18.7 发布**（2026-08-22，commit aae43b0，PyPI 已上线）：编辑器 UX 四件套——LLM 节点画布直编 prompt（+120px 大框，oninput 直改不重绘防丢焦点）、批处理配置区上移、批处理输出自动管理（all_outputs/filtered_outputs/nth_output 零手动，item 结构自动推断自节点原输出 schema，详见 [editor-ux-improvements](features/editor-ux-improvements.md)）；修复：聚合节点 var1=null 整组 null（commit 5117f41，改按声明顺序取第一个「执行过且值非空」）+ /stats 拖拽 tooltip 锁定数据点（跟随曲线起伏）——详见 [v0.18.7 发布记录](releases/v0.18.7.md)
-- **编辑器多轮 UI 打磨（批次二，本轮）**：字段行 flex 布局（值按钮/引用选择行内紧凑、border-spacing 3px、required 复选框与描述同排）；子字段按钮行内统一 [名][类型][📋][+][×]——📋 JSON 导入/+子字段上移至字段行内（in/out 两侧、object 与 list\<object\>、嵌套层全覆盖），删除子字段块底遗留与旧子字段按钮，输出字段 object 也可 📋/+ 编辑结构；代码框 rows=max(6,行数) 自适应 + type5 画布灰字预览摘要删除；属性面板加宽 330→440px + 引用下拉 max-width:60%。编辑器两页分层：workflow_editor.html（编辑）/ workflow_debug.html（调试）（详见 [editor-ux-improvements](features/editor-ux-improvements.md)）
+- **编辑器多轮 UI 打磨（批次二）**：字段行 flex 布局（值按钮/引用选择行内紧凑、border-spacing 3px、required 复选框与描述同排）；子字段按钮行内统一 [名][类型][📋][+][×]——📋 JSON 导入/+子字段上移至字段行内（in/out 两侧、object 与 list\<object\>、嵌套层全覆盖），删除子字段块底遗留与旧子字段按钮，输出字段 object 也可 📋/+ 编辑结构；代码框 rows=max(6,行数) 自适应 + type5 画布灰字预览摘要删除；属性面板加宽 330→440px + 引用下拉 max-width:60%。编辑器两页分层：workflow_editor.html（编辑）/ workflow_debug.html（调试）（详见 [editor-ux-improvements](features/editor-ux-improvements.md)）
 - **v0.18.2 发布**（2026-08-18）：子 Agent 唤醒链路根因修复（registry 为 None → answer 未入队）、stdin 通道验证通过、/api/status 端点、async 元信息字段、气泡折叠、wiki 自动提交（commit_wiki 改 git_commit 节点）、唤醒链路诊断日志埋点（commit e0ae60b）——详见 [v0.18.2 发布记录](releases/v0.18.2.md)
 - **wiki 提交失败修复并闭环**（2026-08）：commit_wiki 从 run_shell 改 **git_commit 节点**（subprocess 列表参数，commit message 多行安全），配合 dir_snapshot / diff_snapshots 生成变更清单，提交成功率从 0% → 100%
 - **LIGHT_TOOLS 隐藏工具增强**（2026-08，commit 9fb00de）：新增 `diff_lines`（文本级 Myers diff，与 diff_files 共享渲染）、`get_list_item`（列表元素取值，outputs=any，越界安全），配合 plugin 节点工作流节点间文本比较/列表操作无需落盘

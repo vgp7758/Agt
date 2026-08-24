@@ -49,6 +49,14 @@ episodic 召回并入统一检索流水线后，与 blog 03 的检索工作流�
 
 误注入率显著下降——旧版 top-3 检索到什么就注入什么，没有相关性裁决。
 
+## embedder LRU 缓存包装层（2026-08，v0.19.2）
+
+`src/rag.py` 的 `rag.embedder.encode` 加 **LRU 缓存包装**——同文本重复 embed 直接命中缓存，不再重跑模型：
+
+- **收益场景**：检索流水线每轮对相同文本（标题、固定关键词、wiki 条目名）反复 encode；[cosine_sim](cosine-sim.md) 工具复用同一 embedder，同文本比对也直接命中
+- **实测**：92 次调用**全命中**（92x）——缓存层加上后重复 embed 成本归零
+- 对调用方完全透明（包装层不变签名），检索延迟与 token/算力开销同步下降
+
 ## 写入幂等：add() 同 type+title 自动更新
 
 `add()` 遇同 type+title **更新而非新增**。Agent 判断"值得记"的标准会漂移，同一条经验可能被记两三次（实测：本 session 中 replace_lines 参数那条记忆被沉淀了两次）。该去重语义让 `add_memory` 工具描述敢写"放心重复调用同主题"——**写入路径的幂等设计**。
@@ -78,7 +86,9 @@ Agent 自主沉淀的记忆会有错（如对用户偏好的误判），记忆�
 ## 相关页面
 
 - [wiki_auto_query](wiki-auto-query.md)：同族 before_turn 检索流水线（wiki 检索版：本地提词 + 余弦阈值裁决，零云端 token）
+- [cosine_sim](cosine-sim.md)：复用同一 embedder 的余弦相似度工具（同样受益于 LRU 缓存）
 - [上下文引擎](../architecture/context-engine.md)：`[epi·长期记忆]` 行注入 tail ambient `<system-reminder>` 段
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 多工作流并行执行、检索型钩子输出纪律
 - [系统总览](../architecture/overview.md)：longterm_memory.py 归支撑层、`/memory` 路由
 - [guides/ops](../guides/ops.md)：存档布局（memories/ 目录）
+- [v0.19.2 发布记录](../releases/v0.19.2.md)：embedder LRU 缓存随该版发布

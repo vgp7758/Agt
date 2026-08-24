@@ -44,7 +44,7 @@ rag_query / cosine_sim / emb_probe 被调用时
 - `cosine_sim` 改走 `ensure_rag()`——启动初期首次调用可能等几秒（等预热）
 - `emb_probe` 同改：**等预热完成再判定**——避免预热期误降级到关键词路径，且 5 分钟探测缓存把误判粘住
 
-## 外置件：rag_tools.py（外置第二例，混合形态）
+## 外置件：rag_tools.py（混合形态：注册外置 + 实现留框架）
 
 ```
 外置的是【注册】与【预热触发】，不是复制实现：
@@ -53,7 +53,7 @@ rag_query / cosine_sim / emb_probe 被调用时
 - agt_register()：触发 preload_async + 注册 rag_query（group=rag，desc 从 docstring 正确回退）
 ```
 
-与首例 [fs_tools.py](glob-files.md)（纯函数整体外置）对照：rag 是「注册外置 + 实现留框架」——数据主权（向量库）在 rag 组可外置，但 embedder 是被多组共享的进程内单例（按判别标准属"纯进程内状态"），复制实现反而破坏共享。chat.py 不再 `_reg(make_rag_tools())`，rag_query 由外置件提供。
+与首例 [fs_tools.py](glob-files.md)（纯函数整体外置）对照：rag 是「注册外置 + 实现留框架」——数据主权（向量库）在 rag 组可外置，但 embedder 是被多组共享的进程内单例（按判别标准属"纯进程内状态"），复制实现反而破坏共享。chat.py 不再 `_reg(make_rag_tools())`，rag_query 由外置件提供。外置体系全貌（五件两形态）见 [工具外置](tool-externalization.md)。
 
 ## 注意事项
 
@@ -65,6 +65,6 @@ rag_query / cosine_sim / emb_probe 被调用时
 ## 相关页面
 
 - [cosine_sim](cosine-sim.md) —— 共享同一 embedder 的余弦相似度工具（同样走 ensure_rag）
-- [长期记忆](longterm-memory.md) —— session_vec / episodic 语义召回共享 embedder，LRU 缓存层
-- [工具外置](tool-externalization.md) / [判别标准](../architecture/tool-externalization-criteria.md) —— rag_tools.py 外置第二例（混合形态）
+- [长期记忆](longterm-memory.md) —— session_vec / episodic 语义召回共享 embedder，LRU 缓存层；ltm 外置同款单例哲学（ensure_ltm）
+- [工具外置](tool-externalization.md) / [判别标准](../architecture/tool-externalization-criteria.md) —— 外置体系全貌与「注册外置 + 实现留框架」边界裁剪
 - [glob_files](glob-files.md) —— 外置首例（纯函数整体外置模式）

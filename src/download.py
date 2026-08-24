@@ -83,25 +83,6 @@ def download_asset(name: str, target_dir: Optional[str] = None,
     return f"✅ 已下载 {a['type']}「{name}」→ {where}"
 
 
-def make_download_tools(agent) -> list:
-    """Agent 自主用的下载工具（与用户命令 /download 同源）。"""
-
-    def list_downloadable() -> str:
-        """列出随包可下载资产（工作流/mcp/脚本），含名称/类型/描述/是否已在本地。
-        需要某个随包能力时先看这个清单，再 download_asset(name) 取用。"""
-        items = list_assets(workspace=agent.session.workspace)
-        if not items:
-            return "(无随包资产)"
-        lines = [f"共 {len(items)} 项随包资产："]
-        for a in items:
-            mark = "✅已在本机" if a.get("exists") else "⬇可下载"
-            lines.append(f"  [{mark}] {a['name']} ({a['type']}) — {a['desc']}")
-        return "\n".join(lines)
-
-    def download_asset(name: str, dir: str = "", force: bool = False) -> str:
-        """下载某个随包资产到本地。name 见 list_downloadable；dir 留空=该资产默认目录；force=True 覆盖已有同名文件。"""
-        # globals() 显式取模块级 download_asset，避免本闭包同名导致的局部化遮蔽。
-        return globals()["download_asset"](name, target_dir=dir or None, force=force,
-                                           workspace=agent.session.workspace)
-
-    return [Tool(list_downloadable), Tool(download_asset)]
+# Agent 工具（list_downloadable / download_asset）已外置到 tools/builtin/download_tools.py
+# （真限界上下文：资产目录由 download 自己写自己读，workspace 用 Path.cwd() 约定）。
+# 本模块保留 list_assets / download_asset 供 /download 命令（commands.py）使用。

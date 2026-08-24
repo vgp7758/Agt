@@ -27,7 +27,7 @@ from typing import Callable, Optional, List
 from background import ServiceManager, Scheduler
 from llm_client import LLMClient
 from log import configure_logging
-from longterm_memory import LongTermMemory
+from longterm_memory import ensure_ltm
 from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block
 from spec_tools import (restore_active_spec, clear_active_spec, _format_spec_block,
                         _clear_active_spec, _set_active_spec, _emit_spec)
@@ -261,10 +261,9 @@ class Agent:
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
         self.session._time_provider = self._runtime_time_block  # tail 每步注入实时时间（感知时段）
-        # 长期记忆（per-repo，跨 session）：建库 + 挂两个注入 provider 到 session
-        #   - 静态层（semantic 事实 + procedural 标题）每轮始终注入
-        #   - 情境层（episodic）按当前 user_message 每轮召回注入
-        self.ltm = LongTermMemory(self.session.workspace)
+        # 长期记忆（per-repo，跨 session）：ensure_ltm 模块级单例（主/子 Agent 共享同一实例——
+        # 外置工具 tools/builtin/ltm_tools.py 也走它，内存缓存不分裂）+ 挂两个注入 provider
+        self.ltm = ensure_ltm(self.session.workspace)
         self.session._ltm_static_provider = self._ltm_static_block
         self.session._ltm_episodic_provider = self._ltm_episodic_block
         # 计划注入：加入计划后每轮把【当前计划】块注入 SYSTEM（id/title/design/进度），退出后为空
@@ -811,8 +810,11 @@ class Agent:
             return ""
 
     def _ltm_static_block(self) -> str:
-        """长期记忆·静态层注入：semantic 事实 + procedural 标题（每轮始终注入）。失败静默不炸主循环。"""
+        """长期记忆·静态层注入：semantic 事实 + procedural 标题（每轮始终注入）。失败静默不炸主循环。
+        顺带刷新单例上的 _origin_session（外置 add_memory 工具读它记来源会话——provider 每轮
+        必被调，add_memory 发生在轮内，一定已更新）。"""
         try:
+            self.ltm._origin_session = self.session.name or ""
             return self.ltm.static_block()
         except Exception:
             return ""

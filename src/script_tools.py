@@ -60,6 +60,20 @@ def _import_fresh(path: Path):
     return mod
 
 
+def _invoke_agt_register(mod, ctx: dict):
+    """调用模块的 agt_register，按签名兼容传参：
+    接受 ctx / **kwargs / 第一个位置参数 → 传通用上下文（cwd 等）；无参 → 原样调用（向后兼容）。"""
+    import inspect
+    try:
+        sig = inspect.signature(mod.agt_register)
+        for p in sig.parameters.values():
+            if p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) or p.name in ("ctx", "context", "args"):
+                return mod.agt_register(ctx)
+    except (ValueError, TypeError):
+        pass
+    return mod.agt_register()
+
+
 def _tool_from_desc(desc: dict, path: Path) -> Tool:
     """描述符 → Tool。inline：包装真实函数（类型注解自动推断 schema + 描述符覆盖
     name/description/参数描述）；subprocess：shim 函数 + 描述符手搓 schema。"""
@@ -186,6 +200,8 @@ def scan_script_tools(dirs=None) -> Toolbox:
     """扫描目录 → Toolbox（同名后扫覆盖先扫；坏脚本跳过并记 _scan_failed，不炸主程序）。"""
     if dirs is None:
         dirs = default_dirs()
+    from real_tools import WORKSPACE as _WS
+    ctx = {"cwd": str(_WS), "version": 1}   # 通用上下文：workspace 绝对路径等（签名兼容传入）
     tb = Toolbox()
     failed = []
     for d in dirs:
@@ -207,7 +223,7 @@ def scan_script_tools(dirs=None) -> Toolbox:
                     if reg is None:
                         _CACHE[abs_p] = {"mtime": mtime, "tools": []}
                         continue    # 普通脚本（无 agt_register）静默跳过
-                    tools = [_tool_from_desc(dd, py) for dd in (reg() or [])]
+                    tools = [_tool_from_desc(dd, py) for dd in (_invoke_agt_register(mod, ctx) or [])]
                     _CACHE[abs_p] = {"mtime": mtime, "tools": tools}
                 for t in tools:
                     tb.register_or_replace(t)

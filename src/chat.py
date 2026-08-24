@@ -23,8 +23,6 @@ from spec_tools import make_spec_tools
 from survey_tools import make_survey_tools
 from memory_tools import make_recall_tools
 from session_tools import make_session_tools
-from longterm_memory import make_ltm_tools
-from download import make_download_tools
 from toollog import make_tool_log_tools
 from wiki import make_wiki_tools
 from rag import LocalRAG, set_rag, ensure_rag, preload_async
@@ -286,8 +284,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_survey_tools(agent), "用户交互")
     _reg(make_recall_tools(agent), "记忆召回")
     _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
-    _reg(make_ltm_tools(agent), "长期记忆")
-    _reg(make_download_tools(agent), "资产下载")
+    # ltm 五件套与 download 两件套由外置件提供（tools/builtin/ltm_tools.py / download_tools.py，
+    # attach_script_tools 注册；ltm 工具经 ensure_ltm 单例与注入 provider 共享实例）
     _reg(make_tool_log_tools(agent), "工具日志")
     _reg(make_background_tools(agent), "后台/调度")
     _reg(make_wiki_tools(agent), "Wiki")

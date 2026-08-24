@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# import 时捕获（与 real_tools.WORKSPACE 同款语义；扫描器在主进程 import，cwd=workspace）
+# workspace：默认 import 时捕获（兼容直接 import），agt_register(ctx) 时用引擎传入的覆盖
+# （ctx["cwd"] 是引擎视角的真实 workspace——比 Path.cwd() 稳，测试 os.chdir 等场景不受影响）
 _WORKSPACE = Path.cwd()
 WIKI_ROOT = lambda: _WORKSPACE / ".agent" / "wiki"
 
@@ -147,7 +148,12 @@ def wiki_delete(path: str) -> str:
     return f"✅ 已删除 wiki 页面 {path}"
 
 
-def agt_register():
+def agt_register(ctx=None):
+    """ctx: {"cwd": "<workspace 绝对路径>", ...}——引擎扫描时按位置传入（签名兼容：无 ctx 也工作，
+    回退 import 时的 Path.cwd()）。模块级 _WORKSPACE 用 ctx 覆盖（global）。"""
+    global _WORKSPACE
+    if ctx and ctx.get("cwd"):
+        _WORKSPACE = Path(ctx["cwd"])
     return [
         {"name": n, "func": f, "hidden": False, "group": "wiki", "version": 1}
         for n, f in [("wiki_read", wiki_read), ("wiki_list", wiki_list),

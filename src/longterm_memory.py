@@ -247,75 +247,94 @@ class LongTermMemory:
         return "\n".join(lines)
 
 
-# ========== Agent 工具（主 Agent 自主沉淀 / 检索 / 管理）==========
-def make_ltm_tools(agent) -> list:
-    """生成绑定到指定 Agent 的长期记忆工具。
-    agent.ltm 由 Agent.__init__ 创建（per-workspace）；这里只做闭包绑定。"""
+# ========== 模块级单例（per-workspace；Agent.__init__ / 外置工具共用）==========
+_ltm_instance: Optional["LongTermMemory"] = None
+_ltm_lock = Lock()
 
-    def _ltm():
-        return agent.ltm
 
-    def add_memory(type: str, title: str, content: str, tags: str = "") -> str:
-        """当你判断本轮出现了【值得跨 session 记住】的经验时，把它记一笔到长期记忆库。
-        type：semantic=事实/偏好（始终注入，少而稳定）/ episodic=情境经历（按问题召回）/ procedural=流程经验（渐进披露，需要时调 read_procedure）。
-        title：一句话标题（≤30字，便于检索与列表展示，务必精炼达意）。
-        content：具体内容（事实本身 / 那次经历 / 操作步骤）。
-        tags：可选，逗号分隔标签便于检索（如 '踩坑,publish'）。
-        值得记的典型场景：踩坑及解法、用户偏好/背景、重要决策与原因、可复用流程。
-        同 type+title 会自动【更新】而非重复记录——所以放心重复调用同主题。"""
-        if type not in TYPES:
-            return f"[错误] type 只能是 {list(TYPES)}，收到 {type}"
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-        try:
-            origin = getattr(agent.session, "name", "") or ""
-            res = _ltm().add(type, title, content, tag_list, origin_session=origin)
-            verb = "更新" if res["action"] == "updated" else "记录"
-            return f"✅ 已{verb} {type} 记忆 [{res['id']}]「{title}」"
-        except Exception as e:
-            return f"[记录失败] {type(e).__name__}: {e}"
+def ensure_ltm(workspace=None) -> "LongTermMemory":
+    """线程安全惰性单例：同 workspace 全进程共享一个实例（主 Agent 的注入 provider 与
+    外置工具（tools/builtin/ltm_tools.py 注册）必须同一实例——否则内存缓存分裂：
+    工具写了一条 provider 看不到）。workspace 变化时重建（双 checked locking）。"""
+    global _ltm_instance
+    from pathlib import Path
+    if workspace is None:
+        workspace = _ltm_instance.workspace if _ltm_instance else Path.cwd()
+    workspace = Path(workspace)
+    if _ltm_instance is None or _ltm_instance.workspace != workspace:
+        with _ltm_lock:
+            if _ltm_instance is None or _ltm_instance.workspace != workspace:
+                _ltm_instance = LongTermMemory(workspace)
+    return _ltm_instance
 
-    def search_memory(query: str, type: str = "") -> str:
-        """在长期记忆库里检索（关键词，标题命中优先）。type 留空=搜全部三类。返回 id/类型/标题/内容预览。"""
-        t = type.strip() or None
-        if t and t not in TYPES:
-            return f"[错误] type 只能是 {list(TYPES)} 或留空"
-        hits = _ltm().search(query, type_=t, limit=10)
-        if not hits:
-            return f"未找到与「{query}」相关的长期记忆"
-        lines = [f"找到 {len(hits)} 条："]
-        for r in hits:
-            preview = r["content"][:LIST_PREVIEW] + ("…" if len(r["content"]) > LIST_PREVIEW else "")
-            lines.append(f"- [{r['id']}]({r['type']}) {r['title']}：{preview}")
-        return "\n".join(lines)
 
-    def read_procedure(id: str) -> str:
-        """取出某条记忆的完整内容。procedural 在 system 里只列了标题，需要详情时用这个；
-        也支持传 semantic/episodic 的 id（等价取详情）。"""
-        rec = _ltm().get(id)
-        if not rec:
-            return f"[未找到] 没有 id 为 {id} 的记忆"
-        tags = ", ".join(rec.get("tags", [])) or "无"
-        return (f"[{rec['id']}]({rec['type']}) {rec['title']}\n"
-                f"标签: {tags}\n内容:\n{rec['content']}")
+# ========== Agent 工具（模块级：经外置件 tools/builtin/ltm_tools.py 注册）==========
+# 外置判别标准：memories/*.jsonl 由本组工具自写自读——真限界上下文。工具函数本体留框架
+# （与注入 provider 共享 ensure_ltm 单例），外置的是注册（rag 模式）。
 
-    def update_memory(id: str, content: str = "", title: str = "", tags: str = "") -> str:
-        """更新某条长期记忆（至少传 content/title/tags 之一）。tags 为逗号分隔，整体替换。"""
-        fields = {}
-        if title:
-            fields["title"] = title
-        if content:
-            fields["content"] = content
-        if tags:
-            fields["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
-        if not fields:
-            return "[错误] 至少传 content / title / tags 之一"
-        ok = _ltm().update(id, **fields)
-        return f"✅ 已更新 {id}" if ok else f"[未找到] 没有 id 为 {id} 的记忆"
+def add_memory(type: str, title: str, content: str, tags: str = "") -> str:
+    """当你判断本轮出现了【值得跨 session 记住】的经验时，把它记一笔到长期记忆库。
+    type：semantic=事实/偏好（始终注入，少而稳定）/ episodic=情境经历（按问题召回）/ procedural=流程经验（渐进披露，需要时调 read_procedure）。
+    title：一句话标题（≤30字，便于检索与列表展示，务必精炼达意）。
+    content：具体内容（事实本身 / 那次经历 / 操作步骤）。
+    tags：可选，逗号分隔标签便于检索（如 '踩坑,publish'）。
+    值得记的典型场景：踩坑及解法、用户偏好/背景、重要决策与原因、可复用流程。
+    同 type+title 会自动【更新】而非重复记录——所以放心重复调用同主题。"""
+    if type not in TYPES:
+        return f"[错误] type 只能是 {list(TYPES)}，收到 {type}"
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    try:
+        ltm = ensure_ltm()
+        origin = getattr(ltm, "_origin_session", "") or ""
+        res = ltm.add(type, title, content, tag_list, origin_session=origin)
+        verb = "更新" if res["action"] == "updated" else "记录"
+        return f"✅ 已{verb} {type} 记忆 [{res['id']}]「{title}」"
+    except Exception as e:
+        return f"[记录失败] {type(e).__name__}: {e}"
 
-    def delete_memory(id: str) -> str:
-        """按 id 删除一条长期记忆（删除前可用 /memory show <id> 确认）。"""
-        ok = _ltm().delete(id)
-        return f"🗑️ 已删除 {id}" if ok else f"[未找到] 没有 id 为 {id} 的记忆"
 
-    return [Tool(add_memory), Tool(search_memory), Tool(read_procedure),
-            Tool(update_memory), Tool(delete_memory)]
+def search_memory(query: str, type: str = "") -> str:
+    """在长期记忆库里检索（关键词，标题命中优先）。type 留空=搜全部三类。返回 id/类型/标题/内容预览。"""
+    t = type.strip() or None
+    if t and t not in TYPES:
+        return f"[错误] type 只能是 {list(TYPES)} 或留空"
+    hits = ensure_ltm().search(query, type_=t, limit=10)
+    if not hits:
+        return f"未找到与「{query}」相关的长期记忆"
+    lines = [f"找到 {len(hits)} 条："]
+    for r in hits:
+        preview = r["content"][:LIST_PREVIEW] + ("…" if len(r["content"]) > LIST_PREVIEW else "")
+        lines.append(f"- [{r['id']}]({r['type']}) {r['title']}：{preview}")
+    return "\n".join(lines)
+
+
+def read_procedure(id: str) -> str:
+    """取出某条记忆的完整内容。procedural 在 system 里只列了标题，需要详情时用这个；
+    也支持传 semantic/episodic 的 id（等价取详情）。"""
+    rec = ensure_ltm().get(id)
+    if not rec:
+        return f"[未找到] 没有 id 为 {id} 的记忆"
+    tags = ", ".join(rec.get("tags", [])) or "无"
+    return (f"[{rec['id']}]({rec['type']}) {rec['title']}\n"
+            f"标签: {tags}\n内容:\n{rec['content']}")
+
+
+def update_memory(id: str, content: str = "", title: str = "", tags: str = "") -> str:
+    """更新某条长期记忆（至少传 content/title/tags 之一）。tags 为逗号分隔，整体替换。"""
+    fields = {}
+    if title:
+        fields["title"] = title
+    if content:
+        fields["content"] = content
+    if tags:
+        fields["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+    if not fields:
+        return "[错误] 至少传 content / title / tags 之一"
+    ok = ensure_ltm().update(id, **fields)
+    return f"✅ 已更新 {id}" if ok else f"[未找到] 没有 id 为 {id} 的记忆"
+
+
+def delete_memory(id: str) -> str:
+    """按 id 删除一条长期记忆（删除前可用 /memory show <id> 确认）。"""
+    ok = ensure_ltm().delete(id)
+    return f"🗑️ 已删除 {id}" if ok else f"[未找到] 没有 id 为 {id} 的记忆"

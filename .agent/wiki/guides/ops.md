@@ -82,6 +82,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 
 - **折叠事件（t206）**：/stats 单步深跌（98%+ miss），下一步即恢复 ~99.9% → 预期一次性成本，无需处置（折叠摘要 byte-stable）。见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)
 - **正常轮边界（t224）**：/stats 显示 98%+ 命中，仅 1~2% 结构性重算 → 验证轮边界平滑路径已生效（未超 75% 阈值）。见 [context-engine 正常轮边界路径](../architecture/context-engine.md#正常轮边界路径t224-实证2026-08)
+- **折叠判阈口径修复（2026-08）**：`_estimate_tokens` 估算分子补齐 tools schema——修前估算「以为达标」（271,623 判 ≤300K → 折叠 0 轮）而实际 419,284 超 win=400K（估算 vs 实际系统性差 ~147K/请求）。**症状**：新一轮初始 prompt_tokens 远超 400K×0.75 目标却折叠 0 轮 / 未见升档折叠日志。需升级代码 + `/restart` 生效。见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)
 
 ## 常见错误对照
 
@@ -94,6 +95,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 回答是 XML 状 `<｜｜DSML｜｜invoke...` | 模型把工具调用泄进 content → llm_client 自动兜底解析；仍残留会提示重试 |
 | tool_calls 与 content 同现 | 思考误放 content → 自动转移 content→reasoning（投影保 CoT） |
 | /stats 命中率**单步深跌**（如 98%+ miss），下一步即恢复 ~99.9% | **折叠（fold）事件，预期一次性成本，无需处置**：轮边界 `_plan_fold` 计划触发全档折叠，历史段整段全价重算（t206_s7 实证，见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）。新模型下折叠只在**轮边界**统一计划（先升档到 75% 再折叠到 75%），不再轮内随机触发——单步深跌即轮边界重排的代价，之后轮内零调整、缓存整段命中。区别于：持续骤降且与 utility 交错=驱逐；恒 0=随机路由（见下行两条）。**排障速查**：/stats 折线图看到异常点 → 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 打开 `projections/t{N}_s_{M}*.txt` 直接看当时完整投影（见 [turn/step 轮步标记](#stats-页webui-统计按钮)） |
+| 新一轮初始 prompt_tokens 远超 win×0.75（如 win=400K 时 >300K）却**折叠 0 轮**、无升档/折叠日志 | **`_estimate_tokens` 漏算 tools schema（旧代码）**：估算≠实际（实际含 130+ 工具 schema 的 ~264K 字符），计划「以为达标」实超窗 → 升级 session.py/agent.py 修复 + `/restart`（见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)）。排障佐证：llm_calls.jsonl 实际 prompt_tokens 与 /stats 或估算口径相差一个量级（十万级） |
 | 某端点缓存命中骤降 | per-token 驱逐：utility 与 react 共用 token → 分条目分 token |
 | 某端点命中率恒 0 | 随机路由或 provider 不支持缓存 → 链路后置 |
 | 中断轮"消失" | 已修复（start_turn 防御归档，answer=中断标注）；旧数据读档可見 |
@@ -110,7 +112,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页
 - [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）+ 节点全文纯文本路由
 - [工作流调试页 · 节点输出白框](../features/workflow-debug.md) — 调试画布内联节点输出（与 /wf/monitor 互补：盯着改 vs 旁观跑的过程）
-- [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证、/context live 分段统计
+- [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证、估算与校准口径闭环、/context live 分段统计
 - [系统总览](../architecture/overview.md) — 模块地图、数据流
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询
 - [多 Agent 体系](../architecture/multi-agent.md) — 三层消费机制、唤醒链路验证

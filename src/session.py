@@ -1220,7 +1220,8 @@ class Session:
         marks = self._hist_marks
         body = []
         if fold_count > 0:
-            marks.append((f"折叠摘要({fold_count}轮)", 0, f"最早{fold_count}轮折叠为结构摘要，原文可recall"))
+            if marks is not None:   # 装配外调用（_plan_fold/load/start_turn）无标记表，只渲染不记标记
+                marks.append((f"折叠摘要({fold_count}轮)", 0, f"最早{fold_count}轮折叠为结构摘要，原文可recall"))
             body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
         if marks is None:
             for i in range(fold_count, len(self.turns)):

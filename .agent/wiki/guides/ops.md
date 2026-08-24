@@ -60,6 +60,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 ### 其他
 
 - `/debug prompt <提示词>`：按当前投影直调 LLM，**不落盘不执行**，打印完整回包（耗时/finish_reason/usage/含缓存命中/tool_calls）——与投影转储配套（进什么 vs 出什么）
+- `/context`：投影分段统计 + 缓存概况——分段数据现读 **live 缓存 `_proj_stats`**（真实投影装配时顺手记录，commit 4212f65）：零重算、口径=真实发给模型的那份，输出带来源标注（「采自上次真实投影 t336·s2，4分钟前」；本进程未跑过投影才现算兜底）；另结合 llm_calls 最近 react 回包实测 prompt_tokens 校准。见 [context-engine · 投影分段统计](../architecture/context-engine.md#投影分段统计-context-改读真实投影缓存commit-4212f65)
 - `/stats`（CLI）/ /logs：文本版统计与日志
 - restart.log（~/.agt/）：/restart 看门狗全程时序（含新进程 stderr）
 - **唤醒链路观测点日志（commit e0ae60b）**：`src/agent.py` 中 `_bg` 路由 `push_message`（answer 入 caller inbox）与 `inbox_thread` 搬运（inbox→work_q）两处已埋诊断日志——排"子 Agent 完成后主 Agent 未唤醒"时直接看实例日志定位断点（需 `/restart` 加载新代码）
@@ -109,7 +110,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页
 - [工作流运行观测](../features/wf-monitor.md) — /wf/monitor 实时节点轨迹（run registry）+ 节点全文纯文本路由
 - [工作流调试页 · 节点输出白框](../features/workflow-debug.md) — 调试画布内联节点输出（与 /wf/monitor 互补：盯着改 vs 旁观跑的过程）
-- [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证
+- [上下文引擎与缓存优化](../architecture/context-engine.md) — 投影转储、分档折叠、折叠实证、/context live 分段统计
 - [系统总览](../architecture/overview.md) — 模块地图、数据流
 - [/api/status 端点](../features/api-status.md) — 跨进程状态查询
 - [多 Agent 体系](../architecture/multi-agent.md) — 三层消费机制、唤醒链路验证

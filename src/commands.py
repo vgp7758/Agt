@@ -1194,6 +1194,21 @@ def _cmd_restart(ctx: CommandContext, args):
     # WebUI 路径的 ctx 可能没带 work_q（构造点历史不一致）→ 兜底 agent._work_q（main/web_main 均挂载）
     wq = ctx.work_q or getattr(ctx.agent, "_work_q", None)
     if wq is not None:
+        # 丢弃排队未处理的消息：哨兵排队尾等排空的话，一条后台通知+轮末自动工作流
+        # 就能把退出拖过看门狗等父进程的窗口（重启失败服务下线）。正在跑的当前轮
+        # 仍会完成（回答用户能看到）。drain 后到 put 之间新入队的项会在哨兵前被处理，
+        # 毫秒级竞态窗口，/restart 场景可忽略。
+        import queue as _q
+        dropped = 0
+        while True:
+            try:
+                _item = wq.get_nowait()
+            except _q.Empty:
+                break
+            if _item is not None:
+                dropped += 1
+        if dropped:
+            print(f"🗑️ 已丢弃 {dropped} 条排队消息（重启不等排空，只等当前轮完成）")
         wq.put(None)
     else:
         print("⚠️ 找不到 work_q，无法自动退出——请手动关闭本进程（看门狗已在等）")

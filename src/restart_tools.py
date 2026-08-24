@@ -39,7 +39,19 @@ def make_restart_tools(agent) -> list:
             session=getattr(agent.session, "name", "") or "",
             port=port, message=(message or "").strip(),
             cwd=str(WORKSPACE))
+        # 丢弃排队未处理的消息（哨兵排队尾等排空会把退出拖过看门狗等待窗口），
+        # 只等当前轮（本工具所在轮的回答）完成。与 _cmd_restart 同款逻辑。
+        import queue as _q
+        dropped = 0
+        while True:
+            try:
+                item = wq.get_nowait()
+            except _q.Empty:
+                break
+            if item is not None:
+                dropped += 1
         wq.put(None)   # 优雅退出哨兵：worker 处理完当前项（本工具所在轮的回答）后退出
-        return f"⏳ {info}。本回答后进程将退出，新进程自动接管。"
+        return f"⏳ {info}。本回答后进程将退出，新进程自动接管。" \
+               + (f"（已丢弃 {dropped} 条排队消息）" if dropped else "")
 
     return [Tool(restart_agent)]

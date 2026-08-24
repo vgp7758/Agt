@@ -281,6 +281,7 @@ class Agent:
         self.session._log_handler = self._log_handler
         # 后台服务 + 定时调度（producer）→ inbox → run()内循环 / chat/web 消费者 串行触发
         self.inbox: collections.deque = collections.deque()
+        self._notices: collections.deque = collections.deque()   # 非唤醒通知登记（service_exit 等）：不独立触发轮，下次自然轮以 seed 并入
         self._inbox_lock = threading.Lock()
         self.services = ServiceManager(on_exit=self._on_service_exit)
         self.scheduler = Scheduler(self)
@@ -654,14 +655,27 @@ class Agent:
         except Exception as e:
             _LOG.warning("inbox 恢复失败: %s", e)
 
-    def push_message(self, msg: str, source: str = "background", seed: Optional[dict] = None):
+    def push_message(self, msg: str, source: str = "background", seed: Optional[dict] = None,
+                     wake: bool = True):
         """后台/调度器推一条消息进 inbox，等 Agent 空闲时触发一轮 run。线程安全。
         被 background.Scheduler / ServiceManager / _bg 路由等后台线程调用。
         持久化：append 到 inbox.jsonl——/restart 或崩溃后新进程可恢复。
 
         seed（可选）= 一条合成工具记录 {tool, args, result, reasoning}，消费侧开新 turn 时
         会预置成一个 Step（渲染为 assistant(tool_use)→tool(结果)）。用于后台服务退出等异步事件：
-        把退出结果+启动参数以 stop_service 工具结果的形式回传，Agent 醒来即在上下文里看到。"""
+        把退出结果+启动参数以 stop_service 工具结果的形式回传，Agent 醒来即在上下文里看到。
+
+        wake=False（通知登记）：不进 inbox、不独立触发轮——防"通知→处理→又起服务→又退出→又通知"
+        的套娃循环。通知暂存 _notices（不持久化，瞬时语义），下次自然轮开始时以 seed 并入该轮
+        （run() 顶部 _drain_notices）。适合 service_exit 这类"告知即可、无需立即行动"的系统事件；
+        子 Agent 反馈 / schedule 提醒 / 插话等"任务输入"语义的消息必须 wake=True。"""
+        if not wake:
+            with self._inbox_lock:
+                self._notices.append((source, msg, seed))
+            self._emit({"type": "background_trigger", "source": source,
+                        "text": (msg or "")[:80], "queue_size": len(self._notices),
+                        "seed": bool(seed), "wake": False})
+            return
         with self._inbox_lock:
             self.inbox.append((source, msg, seed))
         self._inbox_persist_append(source, msg, seed)
@@ -679,6 +693,22 @@ class Agent:
             item = self.inbox.popleft()
         self._inbox_persist_rewrite()
         return item
+
+    def _drain_notices(self) -> list:
+        """取出全部积压的非唤醒通知（wake=False 登记），返回 seeds 列表。
+        run() 每轮迭代开始时调用——通知以合成 Step 并入【自然轮】（用户消息/子 Agent 反馈/
+        schedule 提醒触发的轮），而非独立成轮。无 seed 的通知包成通用 notice seed。
+        通知类轮不再触发 before_turn 钩子的无意义检索（自然轮的检索针对真实 user_message，语义正确）。"""
+        with self._inbox_lock:
+            items = list(self._notices)
+            self._notices.clear()
+        seeds = []
+        for (src, msg, seed) in items:
+            if not seed:
+                seed = {"tool": "notice", "args": {"source": src}, "result": msg or "",
+                        "reasoning": f"(系统通知（{src}），供你知悉；无需专门处理)"}
+            seeds.append(seed)
+        return seeds
 
     def _seed_steps(self, seeds: list):
         """把一批合成工具记录预置成本轮 Step：每条 {tool, args, result, reasoning} 落 toollog +
@@ -719,7 +749,9 @@ class Agent:
                           "stop_service 工具结果注入供你查阅；注意这是服务自行退出，并非你主动 stop)"),
         }
         header = f"📨〔后台服务退出〕「{name}」已自行退出（{brief}）"
-        self.push_message(header, source=f"service_exit:{name}", seed=seed)
+        # wake=False：通知登记不唤醒——service_exit 是"告知即可"的系统事件，不该独立触发一轮
+        # （防套娃：通知→Agent 重启服务→又退出→又通知→…）。下次自然轮开始时以 seed 并入。
+        self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=False)
 
     @staticmethod
     def _format_service_exit(name: str, startup: dict, rc: int, logs: list) -> str:
@@ -1377,6 +1409,11 @@ class Agent:
                 _resume_current = False
             else:
                 self.session.start_turn(msg, imgs)
+            # 吸收积压的非唤醒通知（wake=False 登记，如 service_exit）：以合成 Step 并入【本轮】
+            # ——通知不独立成轮（防套娃），自然轮的 user_message 语义保持纯净（before_turn 检索不跑偏）
+            _nts = self._drain_notices()
+            if _nts:
+                seeds = (seeds or []) + _nts
             if seeds:
                 self._seed_steps(seeds)   # 预置合成 Step → 首轮 _chat_msgs 即渲染 tool_use→tool
                 seeds = []

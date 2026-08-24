@@ -1,7 +1,7 @@
 """restart_watchdog.py —— /restart 看门狗：父进程退出后拉起新 agt 进程（恢复 session/端口/消息）。
 
 被 spawn_watchdog() 以独立进程启动（参数走 argv），与主程序解耦：
-  1. 轮询等待父进程退出（pid 探测，跨平台；超时 90s 放弃）
+  1. 轮询等待父进程退出（pid 探测，跨平台；优雅退出=当前轮跑完才退，超时 300s 放弃）
   2. 若有 web 端口：轮询端口释放（最多 30s）
   3. 拉起新进程（cwd=原 workspace；AGT_RESTART_SESSION / AGT_RESTART_MESSAGE 环境变量
      传递恢复指令，由 chat.main/web_main 开头的 _recover_restart_env 消费）
@@ -66,15 +66,20 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
     log = lambda *a: print(time.strftime("[%H:%M:%S]"), *a, flush=True)
     log(f"watchdog 启动：parent={parent_pid} mode={mode} session={session!r} port={port} msg={message[:40]!r}")
 
-    # 1) 等父进程退出（给 finally 清理留时间；先 sleep 1 再轮询）
+    # 1) 等父进程退出（优雅退出=当前轮跑完才退，长轮/自动工作流可超 90s，容忍 300s）
     time.sleep(1.0)
-    deadline = time.time() + 90
+    deadline = time.time() + 300
+    last_note = time.time()
     while time.time() < deadline:
         if not _pid_alive(parent_pid):
             break
+        if time.time() - last_note >= 20:
+            log(f"… 父进程 {parent_pid} 仍在收尾（当前轮未完），继续等待")
+            last_note = time.time()
         time.sleep(0.5)
     else:
-        log(f"❌ 等父进程 {parent_pid} 退出超时（90s），放弃重启")
+        log(f"❌ 等父进程 {parent_pid} 退出超时（300s，可能卡死），放弃重启——"
+            f"服务已下线，需手动启动")
         return
     log(f"父进程 {parent_pid} 已退出")
 

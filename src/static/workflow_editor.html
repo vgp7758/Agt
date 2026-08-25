@@ -2152,13 +2152,17 @@ function renderFlowLinks(n){
       const cur=e.sourceNodeID+'@@'+String(e.sourcePortID||'');
       h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
         +`<select onchange="setFlowInLink(${i},this.value)" style="flex:1;font-size:10px">`
+        +`<option value=""${!e.sourceNodeID?' selected':''}>${e.sourceNodeID?'（断开此连线）':'（选择上游出口…）'}</option>`
         +_flowInOptions(n,cur)
-        +`</select></div>`;
+        +`</select>`
+        +`<button onclick="delFlowInLink(${i})" title="删除此入边" style="flex:none;font-size:10px;padding:1px 5px">✕</button></div>`;
     });
     h+=`<button onclick="addFlowInLink()" style="font-size:10px;padding:1px 6px">＋ 入口</button>`;
   }
   return h+`</div></details>`;
 }
+// ✕ 删入边（显式删除入口——占位边的 select 停在首选项，onchange 不会触发，必须独立删除按钮）
+function delFlowInLink(i){WF.edges.splice(i,1);renderAll();showProps();toast('已删除入边');}
 function setFlowLink(port,tgt){
   const n=findN(selNode);if(!n)return;
   // 下拉是单选语义：先清空该出口的全部边，再按需 push。

@@ -222,6 +222,39 @@ onchange 只在值**变化**时触发——占位边的当前值与「断开」�
 
 复选框默认勾选（勾=hidden 不进工具箱）；取消勾选并保存 = 显式 `hidden="false"` → 注册进 Agent 工具箱 schema。写侧（workflow_xml.py）显式写 true/false 两值保往返幂等；引擎侧三态解析与注册判断同步改（`!= "false"` / `is not False`）——详见 [workflow-hooks · hidden 默认翻转](../architecture/workflow-hooks.md)。存量 22 XML 全部已显式 true → 行为零变化，只影响未来新建的工作流。
 
+## 批次八（`cf53aa0`）：子工作流快捷创建（浮窗一键按钮）
+
+主线索：**免两步**——原先“建空节点 → 属性面板下拉选目标工作流”，改为节点选择浮窗里每个工作流一个按钮，点击直接建好并同步 schema。用户提案。
+
+### 18. 子工作流快捷创建按钮（节点浮窗新分组）
+
+节点选择浮窗（双击空白 / 拖线到空白弹出）新增「🔗 子工作流」分组（节点插件组之后、Agent 工具组之前），**每个工作流一个快捷按钮**：
+
+```
+┌─ 节点选择浮窗 ──────────────┐
+│ 🔍 过滤节点/工具/工作流…      │
+│ 🧩 节点插件                 │
+│ 🔗 子工作流 (22)             │
+│ [🔗 score_rerank] [🔗 rerank_topk] ...
+│ 🔧 工具组 …                 │
+└─────────────────────────────┘
+```
+
+点击按钮 = `pickSubWf(name)` 一步完成：
+
+1. `createBasicNode('9', …)` 直接建 type9 子工作流节点，`workflowId` 直设目标名
+2. 节点标题 `nodeMeta.title = name`（不再“猜这是调谁的节点”）
+3. `syncSubworkflowNode` 同步入参/出参 schema——与属性面板 `setSubWf` **完全同一路径**：输入 = 目标 start outputs、输出 = 目标 exit inputParameters，**端口立即可连线**
+4. 拖线触发浮窗时同样自动连线源端口（与 pickNode 连线逻辑一致）
+
+防护与细节（全在 `src/static/workflow_editor.html`）：
+
+- **排除当前编辑的工作流自身**（防自递归）：分组列表 `w.name !== WF.name` 过滤；`pickSubWf` 内再拦一道 `name===WF.name` → toast『不能在自身工作流内调用自身』
+- 过滤框同时匹配工作流名与描述
+- toast 报告同步结果（如 `已创建子工作流节点：score_rerank（入参2 出参3）`）
+
+验证：JS 语法 + 10 项结构断言全过。Ctrl+F5 强刷编辑器即见新分组。
+
 ## 附：enum 参数渲染为下拉框（通用机制）
 
 工具 schema 里带 `enum` 的参数，编辑器自动渲染为 **select 下拉框**（替代 text input），空值选项显示「（跟随）」。三层链路：

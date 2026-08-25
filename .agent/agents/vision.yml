@@ -5,7 +5,7 @@ tools: ''
 model: qwen
 assembly:
 - file: .agent/agents/vision.md
-- history|optional
+- history|optional // 连续看图任务或需要对比之前看过的图片时打开
 - user_message
 - steps
 hooks:

@@ -241,16 +241,24 @@ def _parse_tool_expr(val: str):
 
 
 def _asm_item_from_str(s: str):
-    """'seg' / 'seg|optional' / 'history=window' / 'tool: read_file(x)' → 项 dict 或 None。"""
+    """'seg' / 'seg|optional' / 'history=window' / 'tool: read_file(x)' → 项 dict 或 None。
+    行内描述 '// 说明文字'：不参与装配语义，随 item 携带（agents_summary 优先展示，无则回退内置文案）。"""
     raw = str(s).strip()
+    desc = ""
+    if "//" in raw:
+        raw, _, d = raw.partition("//")
+        raw, desc = raw.strip(), d.strip()
     # tool: 形式（动作项）
     if raw.startswith("tool:"):
         val = raw[len("tool:"):].strip()
         parsed = _parse_tool_expr(val)
         if parsed:
             tname, targs = parsed
-            return {"kind": "tool", "tool": f"{tname}({targs})", "tool_name": tname, "tool_args": targs,
+            item = {"kind": "tool", "tool": f"{tname}({targs})", "tool_name": tname, "tool_args": targs,
                     "timing": "turn"}
+            if desc:
+                item["desc"] = desc
+            return item
         return None
     seg_raw, _, tail = raw.partition("|")          # 尾随 '|optional' 等标志（optional=真语义：默认不装，=on 打开）
     opt = tail.strip().lower() == "optional"
@@ -270,6 +278,8 @@ def _asm_item_from_str(s: str):
             item["opt"] = True   # 默认不装配：messages_for_llm 跳过；agent_prompt assembly="seg=on" 清此标记打开
         if mode:
             item["mode"] = mode
+        if desc:
+            item["desc"] = desc
         return item
     if seg:
         _LOG.warning("assembly 含未知段名 '%s'（合法：%s + 动作 file/dir/cmd/workflow/text），已忽略",

@@ -4,7 +4,7 @@ tools: run_python, write_file, edit, read_file, grep
 model: null
 assembly:
 - file: .agent/agents/coder.md
-- history|optional
+- history|optional // 接续上次未完成的重构或修复任务时打开
 - user_message
 - steps
 hooks:

@@ -189,30 +189,49 @@ def load_agents_index(workspace: Path) -> list[dict]:
 
 def agents_summary(workspace: Path) -> str:
     """拼成 SYSTEM 里一行一个子 agent 的摘要（name + description/何时调用）。
-    声明了 optional 装配段的附一行提示——主 Agent 派活时才知道可用 assembly 参数按需打开。"""
+    声明了 optional 装配段的附一行提示——主 Agent 派活时才知道可用 assembly 参数按需打开。
+    行内描述 'history|optional // 说明' 优先于内置默认文案。"""
     idx = load_agents_index(workspace)
     if not idx:
         return ""
-    _HINT = {"history": "history=on 可带本 agent 历轮对话记忆",
-             "ltm": "ltm=on 可带跨会话长期记忆",
-             "rules": "rules=on 可带项目规则",
-             "tail": "tail=on 可带动态尾块",
-             "hooks": "hooks=on 可跑钩子工作流"}
+    _HINT = {"history": "可带本 agent 历轮对话记忆",
+             "ltm": "可带跨会话长期记忆",
+             "rules": "可带项目规则",
+             "tail": "可带动态尾块",
+             "hooks": "可跑钩子工作流"}
+
+    def _opt_of(it):
+        """assembly 项 → (段名, 自定义描述) 或 None。字符串/单键 dict 两形态。
+        dict 形态是 YAML 把 'history|optional: 描述' 解析成 {"history|optional": "描述"} 的兜底。"""
+        if isinstance(it, str):
+            body, _, desc = it.partition("//")
+            desc = desc.strip()
+        elif isinstance(it, dict) and len(it) == 1:
+            k, v = next(iter(it.items()))
+            if isinstance(v, str) and "|" in str(k):
+                body, desc = str(k), v.strip()
+            else:
+                return None
+        else:
+            return None
+        base = body.split("|", 1)[0].split("=")[0].strip()
+        return (base, desc) if base in _HINT and "|" in body else None
+
     lines = []
     for a in idx:
-        opt_segs = []
+        opt: dict[str, str] = {}
         try:
             meta, _ = load_agent_yml(workspace / a["path"])
             for it in (meta.get("assembly") or []):
-                if isinstance(it, str) and "|" in it:
-                    base = it.split("|", 1)[0].split("=")[0].strip()
-                    if base in _HINT and base not in opt_segs:
-                        opt_segs.append(base)
+                r = _opt_of(it)
+                if r and r[0] not in opt:
+                    opt[r[0]] = r[1]
         except Exception:
             pass
         tail = ""
-        if opt_segs:
-            tail = " [可选装配: " + "；".join(_HINT[s] for s in opt_segs) + "（默认关）]"
+        if opt:
+            tips = [f"{s}=on {(desc or _HINT[s])}" for s, desc in opt.items()]
+            tail = " [可选装配: " + "；".join(tips) + "（默认关）]"
         lines.append(f"- {a['name']}: {a['description']}{tail}")
     return "\n".join(lines)
 

@@ -4,7 +4,7 @@ tools: read_file, grep, list_dir, glob
 model: null
 assembly:
 - file: .agent/agents/explorer.md
-- history|optional
+- history|optional // 需要结合此前搜索发现继续排查时打开
 - user_message
 - steps
 hooks:

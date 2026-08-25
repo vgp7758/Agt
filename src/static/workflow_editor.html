@@ -2211,7 +2211,7 @@ function deleteSelectedNode(){
   toast('已删除节点');
 }
 // 关闭属性面板（不清选中态数据也可以，但清掉最干净——画布高亮随 renderAll 保留更好）
-function closeProps(){selEdge=null;showProps();renderAll();}
+function closeProps(){selNode=null;selEdge=null;showProps();renderAll();}   // 关闭=清选中态（selNode 不清则 showProps 立即重渲染面板，按钮看似无反应）
 function setProp(k,v){const n=findN(selNode);n[k]=v;renderAll();}
 function setTitle(v){const n=findN(selNode);n.data.nodeMeta=n.data.nodeMeta||{};n.data.nodeMeta.title=v;renderAll();}
 function addIO(kind){const n=findN(selNode);const item={name:'var'+Date.now()%1000,description:''};

@@ -514,6 +514,8 @@ function bezier(sp,tp,isVar){
 function renderNode(n){
   const g=elm('g',{transform:`translate(${n.x},${n.y})`,'data-id':n.id});
   n.h=nodeH(n);
+  // SVG 原生 hover tooltip（<title> 须为首个子元素才能可靠显示）：节点目录/工具 schema 的描述
+  {const d=nodeDesc(n); if(d)g.appendChild(elm('title',{},d));}
   const cat=TYPE_CATEGORY[n.type]||'llm';
   // 体
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
@@ -1315,7 +1317,7 @@ function renderNodePicker(filter){
     const items=g.items.filter(b=>!f||b[1].toLowerCase().includes(f));
     if(items.length){
       html+=`<div class="np-group">${ext(g.title)}</div><div class="np-row">`;
-      html+=items.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')">${ext(b[1])}</button>`).join('');
+      html+=items.map(b=>`<button class="np-item" onclick="pickNode('${b[0]}')" title="${ext(NODE_DESC[b[0]]||'')}">${ext(b[1])}</button>`).join('');
       html+='</div>';
     }
   });
@@ -1581,8 +1583,10 @@ function showProps(){
     <span style="white-space:nowrap;flex:none">
       ${_canDel?'<button class="del" onclick="deleteSelectedNode()" title="删除此节点（含关联连线）">🗑 删除</button>':''}
       <button onclick="closeProps()" title="关闭面板">✕</button>
-    </span></div>
-    <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
+    </span></div>`;
+  // 节点描述段（节点目录/工具 schema——画布 hover tooltip 同源）：一眼知道这节点是干嘛的
+  {const _d=nodeDesc(n); if(_d)h+=`<div style="font-size:10px;color:#8fa3c8;background:#0f1a33;border:1px solid #2a3a5e;border-radius:3px;padding:4px 6px;margin:2px 0 6px">${ext(_d)}</div>`;}
+  h+=`<label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
     <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
     <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
 
@@ -2940,9 +2944,22 @@ async function loadModels(){
   try{const r=await fetch('/api/model-list');const d=await r.json();AVAILABLE_MODELS=d.models||{};DEFAULT_MODEL=d.default||'';}catch(e){}
 }
 let WFLIST=[];  // 工作流文件列表(供子工作流下拉选择)
+let NODE_DESC={};   // 节点类型描述（/api/wf/nodes：核心+插件目录聚合——画布 tooltip / props 描述段用）
 async function loadTools(){
   const r=await api('GET','/api/tools');
   AGENT_TOOLS=r.tools||[];   // 工具列表按需在节点选择浮窗(nodePicker)渲染
+}
+async function loadNodeDesc(){
+  try{const r=await fetch('/api/wf/nodes');const d=await r.json();NODE_DESC=d.nodes||{};}catch(e){}   // 失败静默：离线/旧后端 → 无 tooltip 但不炸
+}
+// 节点描述（画布 tooltip / props 面板）：type4 工具节点用工具 schema 的 description（更准——
+// 含参数语义），其余类型用节点目录（NODE_DESC）
+function nodeDesc(n){
+  if(n.type==='4'&&n.data.toolName){
+    const t=AGENT_TOOLS.find(x=>x.name===n.data.toolName);
+    if(t&&t.description)return t.description;
+  }
+  return NODE_DESC[n.type]||'';
 }
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'any';}
 
@@ -3067,6 +3084,6 @@ function autoLayout(silent){
     toast('已自动布局：'+nl+' 层'+(no?('，孤立 '+no+' 个'):''));
   }
 }
-renderLegend();loadFileList();loadTools();loadModels();renderAll();
+renderLegend();loadFileList();loadTools();loadModels();loadNodeDesc().then(()=>renderAll());renderAll();
 </script>
 </body></html>

@@ -192,6 +192,18 @@ async def manifest():
 
 # ===================== 工作流编辑器 REST API =====================
 
+@app.get("/api/wf/nodes")
+async def api_wf_nodes():
+    """节点类型目录（type → 描述）——编辑器画布 hover tooltip / props 面板描述段用。
+    来自 real_tools._node_catalog()（核心节点 + node_plugins.catalog_entries 动态聚合的
+    插件目录声明——改插件 desc 跟实现走，此处自动跟上）。"""
+    try:
+        from real_tools import _node_catalog
+        return {"nodes": {n["type"]: n["desc"] for n in _node_catalog() if n.get("desc")}}
+    except Exception as e:
+        return {"nodes": {}, "error": str(e)[:200]}
+
+
 @app.get("/api/wf/list")
 async def api_wf_list():
     """列出所有工作流（名称+状态摘要）。"""

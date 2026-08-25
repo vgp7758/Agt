@@ -604,6 +604,35 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         return None
 
 
+def _inject_agent_enums(agent, tools_list):
+    """给多 Agent 工具的参数注入动态 enum（合法值提示 + LLM schema 约束 + 编辑器下拉框）：
+    - agent_prompt / kill_agent 的 name：已声明子 Agent 名（.agent/agents/ 扫描）
+    - agent_prompt 的 caller：['', 'user']（空=自动捕获 / user=fire-and-forget；显式 agent_id 仍可手填）
+    - 通信工具的 target_id：registry 当前全部 agent_id（动态性强，作为提示性候选）
+    enum 是提示性的（不在列表内的值仍可传），过期无害——create/kill 声明变化后重注入刷新。"""
+    try:
+        names = sorted(a["name"] for a in load_agents_index(WORKSPACE))
+    except Exception:
+        names = []
+    reg_ids = []
+    reg = getattr(agent, "registry", None)
+    if reg:
+        try:
+            with reg._lock:
+                reg_ids = sorted(e.agent_id for e in reg._agents.values())
+        except Exception:
+            reg_ids = []
+    for t in tools_list:
+        props = (t.schema.get("function", {}).get("parameters", {}) or {}).get("properties", {})
+        if t.name in ("agent_prompt", "kill_agent") and "name" in props and names:
+            props["name"]["enum"] = names
+        if t.name in ("agent_ask", "agent_notify", "agent_query_events",
+                      "agent_query_tool_detail") and "target_id" in props and reg_ids:
+            props["target_id"]["enum"] = reg_ids
+        if t.name == "agent_prompt" and "caller" in props:
+            props["caller"]["enum"] = ["", "user"]   # 空=自动捕获 / user=fire-and-forget（显式 agent_id 也可手填）
+
+
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
 
@@ -628,6 +657,7 @@ def make_subagent_tools(agent) -> list:
             "assembly": [{"text": system.strip()}],
         }
         p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 name 的 enum（编辑器下拉/LLM schema 同步）
         return f"✅ 已声明子 Agent '{name}' -> {p.relative_to(WORKSPACE)}（下一轮 SYSTEM 可见）"
 
     def kill_agent(name: str) -> str:
@@ -643,13 +673,18 @@ def make_subagent_tools(agent) -> list:
                 gone = True
         if not gone:
             return f"[不存在] 没有名为 '{name}' 的子 Agent"
+        _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 enum
         return f"✅ 已删除子 Agent '{name}'"
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False,
-                     assembly: str = "") -> str:
+                     assembly: str = "", caller: str = "") -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名 = 多个独立实例（无共享状态）；reuse=True 则复用同名活实例（见下）。
+        caller: 汇报对象（answer 完成后路由给谁）。留空=自动捕获调用者（你）；
+                'user'/'system'=不路由给任何 Agent（fire-and-forget——工作流节点里派活配合
+                wait_subagents 取结果的场景用它，避免每次完成都唤醒主 Agent 烧一轮 token）；
+                也可显式传某个 agent_id（跨 Agent 委托）。
         tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
                管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。复用模式下忽略（实例工具已定）。
         agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。复用模式下忽略（沿用原 id）。
@@ -663,8 +698,15 @@ def make_subagent_tools(agent) -> list:
                .md 的 assembly 声明是基线，参数在其上覆盖。
                ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
-        caller_id = agent.agent_id   # 自动捕获调用者 id，完成后按此路由 answer
+        caller_id = (caller or "").strip().lower() or agent.agent_id   # 汇报对象：显式指定 > 自动捕获
+        # 'user'/'system' = fire-and-forget：answer 不路由（现有 caller_id == "user" 判断天然处理），
+        # 派发信息段同样跳过（子 Agent 无法反查 user 的上下文）；其它显式 id 校验存在性
+        if caller_id in ("user", "system"):
+            caller_id = "user"
         reg = getattr(agent, "registry", None)
+        if caller_id not in ("user", agent.agent_id) and reg:
+            if reg.lookup(caller_id) is None:
+                return f"[未知 caller] agent_id='{caller_id}' 不在注册表（list_team 查看）"
         asm_note = ""
         # 读声明文件的 assembly 基线清单 + hooks 声明 + fallback 模型链（复用/复活/新建三条路径都要）
         p_md = _agent_def_path(name)
@@ -932,4 +974,5 @@ def make_subagent_tools(agent) -> list:
     tools_list = [Tool(create_agent), Tool(kill_agent), Tool(agent_prompt), Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)
+    _inject_agent_enums(agent, tools_list)   # name/caller/target_id 动态 enum（编辑器下拉 + LLM schema）
     return tools_list

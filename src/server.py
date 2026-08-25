@@ -223,8 +223,12 @@ async def api_tools():
         params = []
         for pn, ps in props.items():
             pm = {"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else None) or "any"}
-            # llm_call 的 model 参数：附 enum（models.json 的 provider 列表 + 空=跟随）——
-            # 编辑器检测 enum 渲染下拉控件（而不是手填文本框）
+            # enum 透传（通用）：工具 schema 自带 enum 的参数（如 agent_prompt.name 的子 Agent 名单、
+            # agent_prompt.caller、llm_call.model）——编辑器检测 enum 渲染下拉控件 + LLM 调用时的合法值约束
+            if isinstance(ps, dict) and isinstance(ps.get("enum"), list) and ps["enum"]:
+                pm["enum"] = ps["enum"]
+            # llm_call 的 model 参数：API 侧附加（models.json 的 provider 列表 + 空=跟随）
+            # ——schema 不自带（llm_call 在 LIGHT_TOOLS 构造时 enum 无法静态声明），保持原有路径
             if name == "llm_call" and pn == "model":
                 pm["enum"] = [""] + sorted(config.MODELS.keys())
             params.append(pm)

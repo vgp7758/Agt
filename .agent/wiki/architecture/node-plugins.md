@@ -58,21 +58,41 @@ def agt_node():
 ```
 各插件 agt_node() 声明 catalog 字段（模块级 _CATALOG：name/desc/xml 示例）
   → node_plugins.catalog_entries()（_LAST 为空时自举扫描一次，node_js_payload 同款模式）
-  → real_tools._node_catalog() = 核心 12 条 + 插件条目 = 25 种
+  → real_tools._node_catalog() = 核心 11 条 + 插件条目 = 24 种
 ```
 
-- **核心 12 条**留在 real_tools（start/end/loop/batch/subworkflow/plugin/output 等调度器协议层节点）
+- **核心 11 条**留在 real_tools（start/end/loop/batch/subworkflow/plugin/output 等调度器协议层节点 + Break/Continue/Comment 循环体协议节点）
 - **10 个已迁移节点**（llm/code/selector/intent/aggregator/assigner/http/text/tojson/fromjson）的目录条目从 real_tools 搬进各自 .py——改插件 handler 与目录示例同文件维护
 - **AND/OR/timestamp** 目录条目新写（此前正是进不了目录的三类）
 - **用户级 `.agent/nodes/`** 的 catalog 声明同样生效（三级目录扫描天然支持——用户定制节点也能被 list_workflow_nodes 看到）
 
-**验证**：聚合 13 条（10 搬运 + 3 新增）全覆盖；`query_workflow_node("AND")` / `("N1")` / `("3")` 实测命中；xml 示例完整性检查通过。
+**验证**：聚合 13 条插件条目（10 搬运 + 3 新增）全覆盖；`query_workflow_node("AND")` / `("N1")` / `("3")` 实测命中；xml 示例完整性检查通过。
 
 **效果**：以后写新节点插件，目录自动跟着进——不再有「节点能用但目录查无此类」的暗区。
 
 ### 第三个消费端：编辑器描述段（/api/wf/nodes，2026-08）
 
 `_node_catalog()` 此前两个消费端：`list_workflow_nodes`、`query_workflow_node`。2026-08 增第三个——**`GET /api/wf/nodes`**（server.py）：把 `{type: desc}` 喂给工作流编辑器画布的 hover tooltip / props 面板描述段（前端 `NODE_DESC` 全局）。效果：插件节点（AND/OR/timestamp 等）的 desc 在编辑器 UI 同步可见，改插件 `.py` 的 desc 自动跟上，不用手工回填前端。详见 [工作流编辑器 UX · 批次九](../features/editor-ux-improvements.md)。
+
+## 全景对账：所有节点都插件化了吗（2026-08）
+
+针对「所有节点都是插件了吗？有没有漏网的」做全量对账。结论：**目录 24 类 = 插件 13 + 引擎内置 11**——能外置的业务节点已全部插件化，剩下 11 类内置是调度器本体或其协议节点，不是遗漏。
+
+| 层 | type | 数量 | 为何 |
+|---|---|---|---|
+| **✅ 插件**（nodes_builtin 扫描，`.agent/nodes/` 同名 type 可覆盖） | 3/5/8/22/32/40/45/15/58/59 + AND + OR + N1(timestamp) | 13 | 业务节点，写两个文件即得 |
+| **🔒 调度器核心**（`NODE_HANDLERS` 内置 handler） | 1(start)/2(end)/21(loop)/28(batch)/20(loop-setvar)/9(subworkflow)/4(plugin)/13(output) | 8 | 引擎本体：walker 递归、ENTRY/EXIT 协议、pending_in 计数、`_WF_CTX` 注入，外置=拆调度器 |
+| **⚙️ 循环体协议节点**（无独立 handler，walker 特判） | 19(Break)/29(Continue)/31(Comment) | 3 | 只存在于 loop/batch 子画布内部，逻辑内嵌 `_handle_loop`/`_handle_batch` |
+
+**唯一真漏网：InputReceiver(30)——已清（commit 5b23bbc）**
+
+核心目录曾挂一条「输入接收 (InputReceiver)」条目（`_CORE_NODE_CATALOG` 里 type 30），声称「暂停工作流等待外部输入」，但引擎侧 0 处实际引用：
+
+- `NODE_HANDLERS` 无 `"30"`（`_handle_input_receiver` 是未注册的死代码，从不被调用）
+- `_SUPPORTED_TYPES = set(NODE_HANDLERS.keys()) | {"1","2","19","29","31"}` 不含 30
+- walker 不特判 30
+
+用户照目录示例写出 type 30 只会得到「未支持的节点类型 30」，永远报错——纯误导。已从 `_CORE_NODE_CATALOG` 删除该条目：核心目录 12 → 11，全量目录 25 → 24。重启后 `query_workflow_node` 查不到 InputReceiver。
 
 ## 前端约定（.js）
 

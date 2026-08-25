@@ -96,7 +96,7 @@ with ThreadPoolExecutor() as pool:
 
 ## 13 类节点速查
 
-start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loop(21)/intent(22)/batch(28)/aggregator(32)/assigner(40) + tojson/fromjson/http/break/continue/setvar/output + AND/OR/timestamp(N1)——**节点目录共 25 种**（插件节点目录条目 2026-08 起动态聚合，见 [node-plugins · catalog_entries](node-plugins.md)）。
+start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loop(21)/intent(22)/batch(28)/aggregator(32)/assigner(40) + tojson/fromjson/http/break/continue/setvar/output + AND/OR/timestamp(N1)——**节点目录共 24 种**（插件节点目录条目 2026-08 起动态聚合，见 [node-plugins · catalog_entries](node-plugins.md)）。
 
 新能力（2026-08）：
 - **AND / OR 逻辑节点（2026-08，v0.19.2 新节点）**：条件组节点，与 selector(8) 的条件结构**同构**（条件组 × operator）——AND 全组真才真、OR 一真即真；输出**聚合 bool + 每组各自结果**（总开关与逐组定位一次拿到）；求值走 `eval_condition_lenient`，**未设置的条件恒真**（未设置 = 不参与否决，不报错不拦截）。以节点插件实现（py+js 配对，见 [node-plugins](node-plugins.md)），v0.19.2 wheel 共 12 组 24 文件

@@ -1,4 +1,4 @@
- <workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→agent_prompt 派 wiki-updater 子 Agent 维护（reuse 复用+caller=user 不唤醒主 Agent）→wait_subagents 等完成→快照 diff 出变更文件→有变更则 git_commit 提交推送（message=维护报告摘要）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开，async）" hidden="true" async="true" hook="before_answer">
+ <workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki（攒批队列模式）：值得记录→list_team 查 wiki-updater 忙闲——忙则本轮摘录入 .agent/wiki_queue/pending.jsonl 短路（攒批）；空闲则 pending 全量转 context_messages（结构化历史，投影展开在 wiki-updater 的 user 前一次性消费）派活（reuse+caller=user）→wait(900s)→队列轮转（pending→events 留档）→快照 diff→git_commit。批间上下文即焚不滚雪球" hidden="true" async="true" hook="before_answer">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
@@ -37,7 +37,8 @@ async def main(args):
   </node>
   <node id="140001" type="plugin" title="agent_prompt" x="2520" y="80" toolName="agent_prompt">
     <in name="name" type="string">wiki-updater</in>
-    <in name="prompt" type="string" ref="336423.output"/>
+    <in name="prompt" type="string" ref="147140.prompt_text"/>
+    <in name="context_messages" type="string" ref="147140.ctx_json"/>
     <in name="reuse" type="boolean">true</in>
     <in name="caller" type="string">user</in>
     <out name="raw" type="string"/>
@@ -56,7 +57,7 @@ async def main(args):
   </node>
   <node id="140200" type="plugin" title="wait_subagents" x="2820" y="80" toolName="wait_subagents">
     <in name="agent_ids" type="string" ref="140100.agent_id"/>
-    <in name="timeout" type="integer">300</in>
+    <in name="timeout" type="integer">900</in>
     <out name="raw" type="string"/>
     <out name="result" type="string"/>
     <batch enabled="false"/>
@@ -168,7 +169,8 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="990002" to="900001" port="false"/>
   <edge from="140001" to="140100"/>
   <edge from="140100" to="140200"/>
-  <edge from="140200" to="1257593"/>
+  <edge from="140200" to="147150"/>
+  <edge from="147150" to="1257593"/>
   <edge from="148000" to="150001"/>
   <edge from="1257593" to="147000"/>
   <edge from="147000" to="1400227" port="true"/>
@@ -177,6 +179,111 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="682383" to="900001" port="default"/>
   <edge from="135500" to="336423"/>
   <edge from="682383" to="135500" port="branch_0"/>
-  <edge from="336423" to="484798"/>
-  <edge from="484798" to="140001"/>
+  <edge from="336423" to="147100"/>
+  <edge from="484798" to="147140"/>
+
+  <node id="147100" type="plugin" title="team_status" x="2170" y="80" toolName="list_team">
+    <out name="raw" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="147110" type="code" title="busy_parse" x="2300" y="80">
+    <in name="team_text" type="string" ref="147100.raw"/>
+    <code language="3"><![CDATA[async def main(args):
+    """解析 list_team 看板：wiki-updater 行存在且非 ✅(空闲) → 忙（本轮摘录入 pending 队列，下批一起消费）。
+    无 wiki-updater 行（从未跑过）= 空闲。"""
+    txt = str(args.params.get("team_text") or "")
+    line = next((l for l in txt.splitlines() if "wiki-updater" in l), "")
+    is_busy = bool(line) and ("✅" not in line)
+    return {"is_busy": is_busy, "status_line": line.strip()[:120]}]]></code>
+    <out name="is_busy" type="boolean"/>
+    <out name="status_line" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="147120" type="selector" title="is_busy?" x="2420" y="80">
+    <branch><cond op="1" left="147110.is_busy" right="True" left_type="boolean" right_type="boolean"/></branch>
+  </node>
+  <node id="147130" type="code" title="append_pending" x="2560" y="240">
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <in name="draft_answer" type="string" ref="100001.draft_answer"/>
+    <in name="calls_text" type="string" ref="135500.calls_text"/>
+    <code language="3"><![CDATA[import json, time
+from pathlib import Path
+async def main(args):
+    """wiki-updater 忙：本轮摘录入 pending 队列后短路退出——下批空闲时一起消费（攒批，免重复派活）。"""
+    qd = Path(".agent/wiki_queue"); qd.mkdir(parents=True, exist_ok=True)
+    rec = {"ts": int(time.time()),
+           "user": str(args.params.get("user_message") or "")[:4000],
+           "answer": str(args.params.get("draft_answer") or "")[:3000],
+           "calls": str(args.params.get("calls_text") or "")[:6000]}
+    with open(qd / "pending.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    n = len(qd.joinpath("pending.jsonl").read_text(encoding="utf-8").splitlines())
+    return {"note": f"wiki-updater 忙，本轮摘录已入队（pending 共 {n} 轮，下批一起消费）"}]]></code>
+    <out name="note" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="147140" type="code" title="build_context" x="2560" y="80">
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <in name="draft_answer" type="string" ref="100001.draft_answer"/>
+    <in name="calls_text" type="string" ref="135500.calls_text"/>
+    <code language="3"><![CDATA[import json, time
+from pathlib import Path
+async def main(args):
+    """本轮摘录 append 到 pending → 全量读队列 → 转结构化 messages（每轮 user(请求+变更调用)/assistant(回答)）。
+    context_messages 由 agent_prompt 直通给 wiki-updater（投影展开在其 user 前，轮结束即焚）。"""
+    qd = Path(".agent/wiki_queue"); qd.mkdir(parents=True, exist_ok=True)
+    rec = {"ts": int(time.time()),
+           "user": str(args.params.get("user_message") or "")[:4000],
+           "answer": str(args.params.get("draft_answer") or "")[:3000],
+           "calls": str(args.params.get("calls_text") or "")[:6000]}
+    with open(qd / "pending.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    records = []
+    pf = qd / "pending.jsonl"
+    if pf.exists():
+        for line in pf.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try: records.append(json.loads(line))
+            except Exception: pass
+    msgs = []
+    for i, r in enumerate(records, 1):
+        msgs.append({"role": "user",
+                     "content": f"[主Agent交互轮次{i}] 用户请求：\n{r.get('user','')}\n\n文件变更工具调用（更新 wiki 以此为准）：\n{r.get('calls','')}"})
+        msgs.append({"role": "assistant", "content": r.get("answer", "") or "(无回答)"})
+    prompt = ("以上是主 Agent 自上次 wiki 维护以来完成的交互轮次（含用户请求、回答与文件变更调用原文，"
+              "按时间顺序）。请基于这些工作记录更新 .agent/wiki/：优先用章节级工具增量维护"
+              "（wiki_add_chapter/wiki_update_chapter/wiki_remove_chapter/wiki_move_chapter），"
+              "仅新页面用 wiki_write；聚焦实质变更，不重写未受影响内容。")
+    return {"ctx_json": json.dumps(msgs, ensure_ascii=False), "prompt_text": prompt,
+            "n_turns": len(records)}]]></code>
+    <out name="ctx_json" type="string"/>
+    <out name="prompt_text" type="string"/>
+    <out name="n_turns" type="integer"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="147150" type="code" title="cleanup_queue" x="2960" y="80">
+    <code language="3"><![CDATA[from pathlib import Path
+import os
+async def main(args):
+    """维护完成：删上批留档 events.jsonl；pending.jsonl（刚消费的批次）改名 events.jsonl 留档。
+    下批消费源 = 新 pending（本轮起重新攒）；events.jsonl 只作最近已消费批的审计，不参与下次消费。"""
+    qd = Path(".agent/wiki_queue")
+    try:
+        (qd / "events.jsonl").unlink(missing_ok=True)
+        if (qd / "pending.jsonl").exists():
+            os.replace(qd / "pending.jsonl", qd / "events.jsonl")
+        return {"note": "队列已轮转：pending → events（留档），下批从空 pending 重新攒"}
+    except Exception as e:
+        return {"note": f"队列轮转失败（不影响已完成的维护）: {e}"}]]></code>
+    <out name="note" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <edge from="147100" to="147110"/>
+  <edge from="147110" to="147120"/>
+  <edge from="147120" to="484798" port="false"/>
+  <edge from="147120" to="147130" port="true"/>
+  <edge from="147130" to="900001"/>
+  <edge from="147140" to="140001"/>
 </workflow>

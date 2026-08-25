@@ -169,6 +169,14 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
 
 **与子工作流的关系**：`dir_snapshot` / `diff_snapshots` 是通用子工作流（在 `.agent/workflows/`），`commit_wiki` 是主工作流内的节点。重构后主工作流更清晰，子工作流可被其他工作流复用（如代码变更检测、配置变更审计等）。
 
+## 模板措辞中性化（2026-08，commit 17312eb）
+
+**问题**：拼接模板（`336423` text 节点）此前把判官输入以 `user message: ... assistant answer: ...` 的**判官口吻裸转储**拼进任务文本——wiki-updater 收到的 update_wiki 任务 prompt 也是这个开头（团队看板里 wiki-updater 的 recap 复述出 `user message:` 开头而暴露）。
+
+**修复**：模板措辞中性化——改为「**本轮交互与文件改动（维护 wiki 的依据）**」标题引导；同一份 summary 既喂判官 LLM 判断、又喂 wiki-updater 干活，双用都自然。
+
+**播种同步**：`.agent/workflows/wiki_auto_maintenance.xml` → `src/workflows/wiki_auto_maintenance.xml`（随包种子副本，随本修复一并同步）。
+
 ## 与其他模块的关系
 
 - **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）

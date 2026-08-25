@@ -112,7 +112,7 @@ prev_x = trace[d - 1].get(prev_k, 0)   # ❌ 取了 d-1 层快照
 |------|------|------|
 | [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md) | 目录 · mtime | 哪些文件变了（files/count/changed） |
 | **diff_files**（本页） | 单文件 · 行级内容（可分段） | 具体改了什么 |
-| **diff_lines**（LIGHT_TOOLS，2026-08） | 内存文本块 · 行级内容 | 两个文本块按行 Myers diff（无需落盘） |
+| **diff_lines**（外置件 diff_tools.py，2026-08 起） | 内存文本块 · 行级内容 | 两个文本块按行 Myers diff（无需落盘；算法为本页实现的同源副本） |
 | 引擎 `_workspace_snapshot` / `_diff_snapshots` | 目录 · mtime | after_tool 副作用检测 → changed_files |
 
 典型组合：diff_snapshots 定位变更清单 → diff_files 逐个看内容；或工作流节点间文本对比直接用 diff_lines。
@@ -133,7 +133,8 @@ prev_x = trace[d - 1].get(prev_k, 0)   # ❌ 取了 d-1 层快照
 
 ## 相关页面
 
-- [diff_lines 工具](diff-lines.md)：文本级 Myers Diff（LIGHT_TOOLS，共享渲染，无需落盘）
+- [diff_lines 工具](diff-lines.md)：文本级 Myers Diff（2026-08 起外置 diff_tools.py，同源算法副本，无需落盘）——本页算法是原件
 - [run_python 工具](run-python.md)：file 模式严格沙箱 vs 本工具读放行
 - [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md)：目录级 mtime 快照对比，与本工具互补
 - [系统总览](../architecture/overview.md)：能力层 real_tools.py
+

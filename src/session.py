@@ -692,6 +692,7 @@ class Session:
     def finish_turn(self, answer: str, answer_reasoning: str = ""):
         if self._current is None:
             return
+        self._pinned_ctx = None   # context_messages 用完即焚（本轮投影期间已展开；复用实例下一轮不带）
         self._current.answer = answer
         self._current.answer_reasoning = answer_reasoning
         # 生成该轮 summary（贴在该轮最后：作语义索引 + 窗口外摘要源 + 召回匹配文本）
@@ -1110,6 +1111,13 @@ class Session:
                         msgs.extend(self._seg_msgs_ltm())
                     elif name == "user_message":
                         marks.append((f"当前轮user(第{len(self.turns)+1}轮)", len(msgs)))
+                        # context_messages 直通（agent_prompt 注入的一次性前置上下文）：
+                        # 展开在 user 之前——还原的历史对话/工作记录；finish_turn 即焚（不落 turns）
+                        _pinned = getattr(self, "_pinned_ctx", None)
+                        if _pinned:
+                            marks.append((f"前置上下文({len(_pinned)}条)", len(msgs)))
+                            msgs.extend({"role": str(m.get("role")), "content": m.get("content")}
+                                        for m in _pinned if isinstance(m, dict))
                         msgs.extend(self._seg_msgs_user_message())
                     elif name == "steps":
                         marks.append((f"当前轮steps({len(self._current.steps) if self._current else 0}步)", len(msgs)))

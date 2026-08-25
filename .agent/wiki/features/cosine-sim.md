@@ -1,6 +1,6 @@
-# cosine_sim · 语义余弦相似度工具（LIGHT_TOOLS，hidden）
+# cosine_sim · 语义余弦相似度工具（本体 rag.py · 注册外置 rag_tools.py，hidden）
 
-> 源码：`src/real_tools.py`（`cosine_sim` 函数 + `Tool` 注册，注册于 **LIGHT_TOOLS**，`hidden=True`——对主 LLM 不投影，仅工作流节点可用）
+> 源码：本体 `src/rag.py`（2026-08 纯函数批从 real_tools 迁入，commit 17312eb——语义归属 RAG 组，与 embedder 单例共生）；注册在外置件 `tools/builtin/rag_tools.py`（`hidden=True`，group light，outputs 声明 `raw:number`）——与 rag_query 同款「本体在框架、注册在外置」混合形态。对主 LLM 不投影，仅工作流节点可用。
 
 ## 职责
 
@@ -26,8 +26,8 @@ cosine_sim(text1: str, text2: str) -> float
 ## 关键实现
 
 ```python
+# src/rag.py —— 本体与 ensure_rag 同模块（2026-08 从 real_tools 迁入，无需跨模块 import）
 def cosine_sim(text1: str, text2: str) -> float:
-    from rag import ensure_rag
     rag = ensure_rag()   # 惰性构建：预热中同步等锁拿结果（2026-08，commit 71e0b90）
     if rag is None:
         raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
@@ -40,6 +40,7 @@ def cosine_sim(text1: str, text2: str) -> float:
 - `ensure_rag()`（旧版 `get_rag()`）：与 rag_query / session_vec 同一惰性入口——RAG 后台预热中时等锁拿已完成结果，见 [rag](rag.md)
 - `normalize_embeddings=True`：encode 时即归一化，`np.dot` 直接得余弦值
 - `round(..., 4)`：保留 4 位小数，便于阈值比较和展示
+- 注册（`tools/builtin/rag_tools.py`）：`hidden=True`、group light、outputs 声明 `raw:number`——工作流按字段名 `raw` 取分数
 
 ## 工作流批处理用法
 
@@ -65,12 +66,12 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 ## 与其他模块的关系
 
 - **[wiki_auto_query v4](../features/wiki-auto-query.md#v4-流水线2026-08-21)**：核心消费者——关键词检索后用 cosine_sim 做语义重排 + 阈值裁决
-- **RAG 模块（`src/rag.py`）**：通过 `ensure_rag()` 惰性获取共享单例 embedder（详见 [rag](rag.md)），复用 `/rag` 页面的 embedding 配置，无需独立维护模型
-- **`src/real_tools.py`**：工具注册入口——注册于 **LIGHT_TOOLS**（与 diff_lines / get_list_item / pass_through 等内部工具同箱），`hidden=True` 不投影给主 LLM，仅工作流 plugin 节点按需调用，主 Agent 工具箱零占用
+- **RAG 模块（`src/rag.py`）**：本体所在（2026-08 迁入）——`ensure_rag()` 惰性获取共享单例 embedder，复用 `/rag` 页面的 embedding 配置，无需独立维护模型
+- **外置件 `tools/builtin/rag_tools.py`**：注册入口——与 rag_query / emb_probe 同件注册（「本体在框架、注册在外置」），`hidden=True` 不投影给主 LLM，仅工作流 plugin 节点按需调用，主 Agent 工具箱零占用
 
 ## 注意事项
 
-- **hidden 归属**：LLM 基本不会直接调用本工具（相似度裁决是工作流内部步骤），故注册于 LIGHT_TOOLS 并 hidden——2026-08 用户确认此归类（与 demo/子工作流隐藏同批，commit d59dcbd）
+- **hidden 归属**：LLM 基本不会直接调用本工具（相似度裁决是工作流内部步骤），保持 hidden——2026-08 用户确认此归类（与 demo/子工作流隐藏同批，commit d59dcbd）；commit 17312eb 本体迁 `src/rag.py`、注册迁外置件 rag_tools.py（group light，hidden 不变）
 - **启动初期等待**：RAG 后台预热未完成时首次调用会同步等锁（bge-small-zh 实测 22.8s 量级）——正常运行中预热早已完成，瞬时
 - **依赖 RAG 配置**：未配置 embedding 时直接报错，不会静默返回 0
 - **空文本安全**：`str(text1 or "")` 处理 None/空值，不会崩溃
@@ -79,8 +80,8 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 
 ## 相关页面
 
-- [rag](rag.md)：embedder 单例与 ensure_rag 惰性构建入口的宿主
+- [rag](rag.md)：本体宿主与 embedder 单例、ensure_rag 惰性构建入口；注册同件 rag_tools.py
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：v4 流水线的核心消费者
-- [工作流引擎与钩子](../architecture/workflow-hooks.md)：LIGHT_TOOLS / hidden 工具机制 + 批处理节点 + 子工作流调用
-- [diff_lines](diff-lines.md) / [get_list_item](get-list-item.md)：同箱（LIGHT_TOOLS hidden）工具
-- [系统总览](../architecture/overview.md)：real_tools.py 在能力层的位置
+- [工具外置](tool-externalization.md)：rag_tools.py 混合形态注册清单
+- [get_list_item](get-list-item.md)：同族工作流内部工具（LIGHT_TOOLS）
+- [系统总览](../architecture/overview.md)：能力层

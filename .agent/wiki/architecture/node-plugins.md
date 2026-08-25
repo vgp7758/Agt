@@ -49,6 +49,27 @@ def agt_node():
 
 `CORE_TYPES = {"1", "2", "21", "28", "19", "29", "13"}`——这些 type 的调度器协议不容覆写，插件覆盖会被拒绝并告警。
 
+## 目录条目动态聚合：catalog_entries()（2026-08，commit 17312eb）
+
+**缺口**：`_NODE_CATALOG` 此前是 real_tools 里手维护的静态数组——插件节点的新类型（AND/OR/timestamp）**进不了目录**：`list_workflow_nodes` 看不到、`query_workflow_node` 查不到，只能手工回补 real_tools。
+
+**方案：元信息跟实现走**（目录条目与 handler 同文件维护）：
+
+```
+各插件 agt_node() 声明 catalog 字段（模块级 _CATALOG：name/desc/xml 示例）
+  → node_plugins.catalog_entries()（_LAST 为空时自举扫描一次，node_js_payload 同款模式）
+  → real_tools._node_catalog() = 核心 12 条 + 插件条目 = 25 种
+```
+
+- **核心 12 条**留在 real_tools（start/end/loop/batch/subworkflow/plugin/output 等调度器协议层节点）
+- **10 个已迁移节点**（llm/code/selector/intent/aggregator/assigner/http/text/tojson/fromjson）的目录条目从 real_tools 搬进各自 .py——改插件 handler 与目录示例同文件维护
+- **AND/OR/timestamp** 目录条目新写（此前正是进不了目录的三类）
+- **用户级 `.agent/nodes/`** 的 catalog 声明同样生效（三级目录扫描天然支持——用户定制节点也能被 list_workflow_nodes 看到）
+
+**验证**：聚合 13 条（10 搬运 + 3 新增）全覆盖；`query_workflow_node("AND")` / `("N1")` / `("3")` 实测命中；xml 示例完整性检查通过。
+
+**效果**：以后写新节点插件，目录自动跟着进——不再有「节点能用但目录查无此类」的暗区。
+
 ## 前端约定（.js）
 
 ```javascript

@@ -25,7 +25,7 @@ user_message
 
 | 组件 | 位置 | 职责 |
 |------|------|------|
-| [cosine_sim](../features/cosine-sim.md) | `src/real_tools.py` | 语义余弦相似度，复用 RAG embedding 模型 |
+| [cosine_sim](../features/cosine-sim.md) | `src/rag.py`（注册外置 rag_tools.py，2026-08 迁入） | 语义余弦相似度，复用 RAG embedding 模型 |
 | `rerank_topk.xml` | `src/workflows/` | 子工作流：按分数降序取 top-k |
 | `extract_keywords` | 工作流内 LLM 节点 | local-qwen@8080 提取关键词，免云端 token |
 

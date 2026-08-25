@@ -62,6 +62,19 @@ ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemo
 
 外置的通用配套：**ctx 通用上下文注入**——引擎扫描时把 `{"cwd": workspace 绝对路径, "version": 1}` 签名兼容传给 `agt_register`（外置件不再依赖 import 时 `Path.cwd()` 猜 workspace，os.chdir 等场景不漂移；无参存量外置件原样兼容），见 [tool-externalization · ctx](../features/tool-externalization.md#ctx-通用上下文注入2026-08commit-fd06c48)。
 
+## 纯函数批：real_tools 再外置 8 工具（2026-08，commit 17312eb）
+
+判别标准的第二次全量应用（用户提议：real_tools 里蛮多工具是纯函数，似乎可以外置）——这次过筛的不是"数据主权"，而是**把 LIGHT_TOOLS 里所有非框架状态的工具清出去**，13→5：
+
+| 工具 | 去向 | 判定 |
+|---|---|---|
+| length / to_uppercase / to_lowercase | `str_tools.py` 追加 | 零状态纯函数 |
+| kv_cache_read / kv_cache_write | `kv_tools.py` 新建 | **`_KV_CACHE` 状态随外置件走**——进程级 dict 自写自读（"自写自读的文件"退化为内存态）；用途是同输入结果确定的 LLM 调用 memoization（同轮多个 before_turn 工作流共用一次提取），namespace 兼作版本号；重启清空=结果缓存语义（丢失=下次重算，无正确性影响） |
+| diff_lines | `diff_tools.py` 新建 | **算法副本**形态：Myers 三件套复制实现而非 import 框架（外置件零框架依赖约定）——Myers 是稳定经典算法，双份各自带回归（随机重放 200/200），注释互指路、改动两处同步 |
+| cosine_sim / emb_probe | 本体迁 `src/rag.py` + 注册 `rag_tools.py` | 语义归属 RAG 组：与 embedder 单例共生，rag_query 同款「本体在框架、注册在外置」 |
+
+**LIGHT_TOOLS 剩余 5 件全是框架状态型**（判别标准下不可外置）：ReAct 原语三件套（`_WF_CTX` 注入型，执行时由 workflow 引擎注入 llm/tools 上下文）+ dir_outline/concat_files（`_resolve` 沙箱型）。验证：外置扫描全量 43 工具、kv 读写往返、diff 输出对拍、outputs 声明（kv `hit:boolean` / cosine `raw:number`）全过。详见 [tool-externalization · 外置件清单](../features/tool-externalization.md)。
+
 ## 运行时管理器的替代边界（background/lsp/mcp/reload_hot）
 
 - **查询**有替代：`/api/status` HTTP 快照（仅 WebUI 模式可用）
@@ -71,17 +84,20 @@ ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemo
 
 `format_team(session_dir=...)` 磁盘兜底、`agent_query_events` lazy-load `Session.load`、`_restore_subagents` 扫 `agents/` 目录——**有 agent 走活视图，没有走磁盘约定**。外置工具可继承此模式（描述符 make / make_standalone 双工厂）。
 
-## 迁移进度（判别标准驱动；四组真限界上下文全部外置，2026-08 收官）
+## 迁移进度（判别标准驱动；真限界上下文四组 + 纯函数批双收官）
 
 1. wiki 六件套 ✅ + rag ✅ + ltm 五件套 ✅ + download ✅（第四批 commit fd06c48 收官）——数据主权本来就在工具组；**此后这四组的改动走 `/reload tools` 秒级热加载**
-2. factory kind 机制（D 类描述热改收益仍在：工具 docstring 就是 LLM 看的 schema 描述）
-3. plan/spec CRUD 半边
-4. memory_tools/toollog **不迁**（判别标准下从旧名单划掉）
+2. **纯函数批 ✅（第五批，2026-08 commit 17312eb）**：real_tools LIGHT_TOOLS 再外置 8 工具（见上节）——**LIGHT_TOOLS 13→5，剩余全是框架状态型**，判别标准对 real_tools 全量过筛收官
+3. factory kind 机制（D 类描述热改收益仍在：工具 docstring 就是 LLM 看的 schema 描述）
+4. plan/spec CRUD 半边
+5. memory_tools/toollog **不迁**（判别标准下从旧名单划掉）
 
 ## 相关页面
 
-- features/tool-externalization.md（外置体系：目录/装配/ctx 注入/热加载/五外置件清单）
+- features/tool-externalization.md（外置体系：目录/装配/ctx 注入/热加载/**外置件 10 文件清单**）
 - features/rag.md（rag 外置混合形态：注册外置 + 实现留框架）
 - features/longterm-memory.md（ltm 外置 + ensure_ltm 共享单例）
 - features/glob-files.md（外置首例演示：纯函数整体外置）
-- architecture/node-plugins.md（节点插件化——同一哲学）
+- features/diff-lines.md（算法副本形态：diff_tools.py）
+- architecture/node-plugins.md（节点插件化——同一哲学 + catalog_entries 动态聚合同款"元信息跟实现走"）
+

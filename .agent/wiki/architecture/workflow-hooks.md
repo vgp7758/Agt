@@ -25,7 +25,7 @@
 
 **收益**：`/restart` 后工具表少 17 个无用的 `wf_*` 工具——工具箱更干净、schema 更小、**折叠估算更准**（工具 schema 是折叠估算分子的最大头，见 [上下文引擎](context-engine.md)）。
 
-**配套事实**：LIGHT_TOOLS 的 13 个内部工具（`cosine_sim` / `diff_lines` / `get_list_item` / `starts_with` / `ends_with` / `pass_through` 等）本就整箱 `hidden=True`，对主 LLM 不投影、仅工作流节点可用——无需再改。
+**配套事实**：LIGHT_TOOLS 内部工具本就整箱 `hidden=True`，对主 LLM 不投影、仅工作流节点可用——无需再改（当时 13 个：cosine_sim / diff_lines / get_list_item / starts_with / ends_with / pass_through 等）。2026-08 纯函数批（commit 17312eb）后其中 8 个已外置，**LIGHT_TOOLS 只剩 5 件框架状态型**（ReAct 原语三件套 `_WF_CTX` 注入 + dir_outline/concat_files `_resolve` 沙箱），见 [工具外置](../features/tool-externalization.md)、[判别标准 · 纯函数批](tool-externalization-criteria.md)。
 
 ## before_turn 钩子并行执行（2026-08 新，v0.18.2 发布）
 
@@ -96,7 +96,7 @@ with ThreadPoolExecutor() as pool:
 
 ## 13 类节点速查
 
-start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loop(21)/intent(22)/batch(28)/aggregator(32)/assigner(40) + tojson/fromjson/http/break/continue/setvar/output。
+start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loop(21)/intent(22)/batch(28)/aggregator(32)/assigner(40) + tojson/fromjson/http/break/continue/setvar/output + AND/OR/timestamp(N1)——**节点目录共 25 种**（插件节点目录条目 2026-08 起动态聚合，见 [node-plugins · catalog_entries](node-plugins.md)）。
 
 新能力（2026-08）：
 - **AND / OR 逻辑节点（2026-08，v0.19.2 新节点）**：条件组节点，与 selector(8) 的条件结构**同构**（条件组 × operator）——AND 全组真才真、OR 一真即真；输出**聚合 bool + 每组各自结果**（总开关与逐组定位一次拿到）；求值走 `eval_condition_lenient`，**未设置的条件恒真**（未设置 = 不参与否决，不报错不拦截）。以节点插件实现（py+js 配对，见 [node-plugins](node-plugins.md)），v0.19.2 wheel 共 12 组 24 文件
@@ -104,10 +104,11 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **筛选条件未设置恒真（2026-08，v0.19.2 性能）**：批处理 filtered_outputs 的筛选条件**未设置时直接恒真放行**（全部命中），不再走逐条条件求值路径——与 `eval_condition_lenient` 同一「未设置恒真」语义，AND/OR 与批处理筛选共用
 - **selector 左值**：`NODE.field.length`（string 也有）；条件值支持 `changed_files` 数组直传（零序列化）
 - **pass_through 工具**（LIGHT_TOOLS，hidden）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
-- **starts_with/ends_with**：LIGHT_TOOLS（hidden）字符串前后缀判断（扩展名分流）
-- **diff_lines 工具**（LIGHT_TOOLS，hidden）：两个文本块按行 Myers diff（无需落盘），与 diff_files 共用 `_render_unified_diff` 渲染（详见 [diff_lines 页](../features/diff-lines.md)）
+- **starts_with/ends_with**：字符串前后缀判断（扩展名分流；隐藏工具，仅工作流可用）
+- **diff_lines 工具**（2026-08 纯函数批起外置 `tools/builtin/diff_tools.py`）：两个文本块按行 Myers diff（无需落盘），算法与 diff_files 同源副本（详见 [diff_lines 页](../features/diff-lines.md)）
+- **kv_cache_read/write 工具**（2026-08 新，外置 `tools/builtin/kv_tools.py`）：应用级 KV 结果缓存——同输入结果确定的 LLM 调用（如关键词提取）做 memoization，同轮多 before_turn 工作流共用一次提取；namespace 兼作版本号，重启清空（结果缓存语义，丢失=重算）
 - **get_list_item 工具**（LIGHT_TOOLS，hidden，outputs=any）：从列表取单个元素，支持正/负索引、越界安全返回错误提示（详见 [get_list_item 页](../features/get-list-item.md)）
-- **cosine_sim 工具**（LIGHT_TOOLS，hidden）：语义余弦相似度，供工作流批处理节点做重排打分（详见 [cosine_sim 页](../features/cosine-sim.md)）
+- **cosine_sim 工具**（本体 `src/rag.py`、注册外置 `rag_tools.py`，hidden）：语义余弦相似度，供工作流批处理节点做重排打分（详见 [cosine_sim 页](../features/cosine-sim.md)）
 - **run_python 工具新增 args 参数**：`run_python(code="...", file="...", args="...")`，经环境变量 `PY_ARGS` 传递（code 和 file 两模式都生效），脚本内 `import os; a = os.environ.get("PY_ARGS", "")` 读取（详见 [run_python 页](../features/run-python.md)）
 - **XML schema 往返**：list\<object> 的 field 子元素 / list 基础类型 itemType / 坐标幂等（编辑器保存不再丢结构）
 - **git_commit 节点**：git 专用提交节点，内部以 **subprocess 列表参数**传参（不经 shell 字符串拼接），多行/特殊字符 commit message 安全；配合快照/diff 子工作流按变更清单提交。实例见 [wiki_auto_maintenance 的 commit_wiki](../features/wiki-auto-maintenance.md#commit_wiki-核心逻辑git_commit-节点)
@@ -125,15 +126,5 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
   | 全部执行过但都无值 | 兜底第一个执行过的值（执行过优先） |
   | 字面量 / 全局变量 | 非 None 即选（原行为不变） |
 
-  **关键取舍**：空列表/空 dict 是合法值**不**触发跳过——`filtered_outputs=[]` 是批处理节点的合法产出（0 条命中也是有意义的信息）；只有 None 和空串（解析不到 / 渲染为空）才继续往后找。九场景验证通过（含 var1 未执行取 var2、空列表不误判、多分组互不影响）；引擎层修复需 `/restart` 生效。：type 9 节点的输入框（画布节点内，非右侧属性面板）手动输入字面量保存后，重新打开工作流输入框变空——**根因在前端 `syncSubworkflowNode`**（openWf 时对 type 9 节点重跑 schema 同步：只保留连线、丢字面量，默认值造出 `blockID=''` 的空 ref → 输入框空白）。修复：连线 ref 完整保留 + 非空字面量保留，默认值改空 literal。生效需 `/restart` + Ctrl+F5。详见 [wiki-auto-maintenance · path 字面量坑](../features/wiki-auto-maintenance.md#path-字面量保存后重开变空2026-08-修复commit-910fc1b)
-- **aggregator(32) 选值语义修复：第一个「执行过且值非空」（2026-08，commit 5117f41）**：`_handle_aggregator` 的 block-output 分支旧版**只判断「blockID 执行过」不判断值有没有**——var1 引用的上游节点执行了（在 `node_outputs` 里）、但它引用的**字段**解析为 None（分支没走到该字段 / 输出为空）→ `chosen=None` + `break`，整组直接 null，后续 var2 有值也被跳过（用户报告「var1=null 直接分组返回 null」）。修复后的选值语义：
-
-  | 变量情形 | 行为 |
-  |---|---|
-  | block-output 执行过 + 值非 None/非空串 | 选定 ✓ |
-  | 执行过但值为 None/空串 | 记为兜底，**继续找后面的变量** |
-  | 未执行 | 跳过，继续找后面的变量 |
-  | 全部执行过但都无值 | 兜底第一个执行过的值（执行过优先） |
-  | 字面量 / 全局变量 | 非 None 即选（原行为不变） |
-
   **关键取舍**：空列表/空 dict 是合法值**不**触发跳过——`filtered_outputs=[]` 是批处理节点的合法产出（0 条命中也是有意义的信息）；只有 None 和空串（解析不到 / 渲染为空）才继续往后找。九场景验证通过（含 var1 未执行取 var2、空列表不误判、多分组互不影响）；引擎层修复需 `/restart` 生效。
+

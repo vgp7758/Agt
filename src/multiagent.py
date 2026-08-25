@@ -677,10 +677,14 @@ def make_subagent_tools(agent) -> list:
         return f"✅ 已删除子 Agent '{name}'"
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = False,
-                     assembly: str = "", caller: str = "") -> str:
+                     assembly: str = "", caller: str = "", context_messages: str = "") -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名 = 多个独立实例（无共享状态）；reuse=True 则复用同名活实例（见下）。
+        context_messages: 【一次性前置上下文】JSON 数组 [{"role","content"},...]——投影时展开在
+                本轮 user_message 之前（结构化角色消息：还原的历史对话/工作记录），轮结束即焚
+                （不落 turns、复用实例下一轮不带）——适合"把一批历史记录交给子 Agent 消费"的场景
+                （如 wiki 维护：主 Agent 近几轮的事件序列还原成 messages 传入，避免它 read_file 重探索）。
         caller: 汇报对象（answer 完成后路由给谁）。留空=自动捕获调用者（你）；
                 'user'/'system'=不路由给任何 Agent（fire-and-forget——工作流节点里派活配合
                 wait_subagents 取结果的场景用它，避免每次完成都唤醒主 Agent 烧一轮 token）；
@@ -699,6 +703,19 @@ def make_subagent_tools(agent) -> list:
                ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
         caller_id = (caller or "").strip().lower() or agent.agent_id   # 汇报对象：显式指定 > 自动捕获
+        # context_messages 直通：JSON 串 → list（plugin 节点传参恒为字符串）；非法输入静默忽略
+        import json as _json
+        _ctx_msgs = None
+        if context_messages and isinstance(context_messages, str) and context_messages.strip().startswith("["):
+            try:
+                _cm = _json.loads(context_messages)
+                if isinstance(_cm, list) and _cm and all(
+                        isinstance(m, dict) and m.get("role") and "content" in m for m in _cm):
+                    _ctx_msgs = _cm
+            except Exception:
+                _ctx_msgs = None
+        elif isinstance(context_messages, list) and context_messages:
+            _ctx_msgs = context_messages
         # 'user'/'system' = fire-and-forget：answer 不路由（现有 caller_id == "user" 判断天然处理），
         # 派发信息段同样跳过（子 Agent 无法反查 user 的上下文）；其它显式 id 校验存在性
         if caller_id in ("user", "system"):
@@ -737,6 +754,10 @@ def make_subagent_tools(agent) -> list:
 
         def _launch(_target, _aid, _name, _model, _sub_dir, _prompt, _reused):
             """通用启动：登记 background_tasks + 起 _bg 线程跑 _target.run()。新建/复用两条路径共用。"""
+            # context_messages 直通：投影时展开在 user 前（一次性——finish_turn 即焚，复用实例下一轮不带）
+            if _ctx_msgs:
+                _ag = getattr(_target, "agent", _target)   # SubAgent 包装 or 裸 Agent（复用路径）
+                _ag.session._pinned_ctx = list(_ctx_msgs)
             agent.background_tasks[_aid] = {
                 "id": _aid, "kind": "subagent", "name": _name, "task": _prompt,
                 "status": "running", "session_dir": str(_sub_dir) if _sub_dir else None,

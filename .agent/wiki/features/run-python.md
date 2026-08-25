@@ -45,7 +45,7 @@ run_python(file="tools/analyze.py", args='{"src": "main.py", "dst": "backup.py"}
 
 - 工具箱真实工具（LLM 可直接调用），也可在工作流 plugin 节点（type 4）中使用
 - 引擎副作用检测：run_python 在子进程里改文件绕过工具级跟踪，靠 mtime 快照 diff 兜底（见 [系统总览 · 关键设计决策](../architecture/overview.md)）
-- 与 [diff_files](diff-files.md) / [diff_lines](diff-lines.md) 同属 real_tools.py 工具层，常配合使用（脚本产两份产物 → diff 对比）
+- 与 [diff_files](diff-files.md)（real_tools）/ [diff_lines](diff-lines.md)（外置件 diff_tools.py，2026-08 起）常配合使用（脚本产两份产物 → diff 对比）
 
 ## 注意事项
 

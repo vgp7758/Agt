@@ -39,21 +39,19 @@ rag_query / cosine_sim / emb_probe 被调用时
 - **现在**：同一对象（`is` 判定验证过）；RAG 未启用（enabled=false 但 session_index_enabled=true）或未预热完成时 session_vec 才自建——session 向量库可独立于文档 RAG 启用
 - `chat.py` `_init_session_vec` 同改后台线程：先 ensure_rag 等 RAG 预热完成再建 SessionVectorStore
 
-`src/real_tools.py`：
+`cosine_sim` / `emb_probe`（2026-08 commit 17312eb 起本体在 `src/rag.py`——从 real_tools 迁入，注册随外置件 rag_tools.py）：
 
-- `cosine_sim` 改走 `ensure_rag()`——启动初期首次调用可能等几秒（等预热）
-- `emb_probe` 同改：**等预热完成再判定**——避免预热期误降级到关键词路径，且 5 分钟探测缓存把误判粘住
+- `cosine_sim` 走 `ensure_rag()`——启动初期首次调用可能等几秒（等预热）
+- `emb_probe`：**等预热完成再判定**——避免预热期误降级到关键词路径，且 5 分钟探测缓存把误判粘住
 
 ## 外置件：rag_tools.py（混合形态：注册外置 + 实现留框架）
 
-```
 外置的是【注册】与【预热触发】，不是复制实现：
 - import rag 在主进程零成本（chat.py 已 import，sys.modules 直接命中）
-- rag_query 函数本体留在框架 src/rag.py——与 cosine_sim/session_vec 共享单例 embedder
-- agt_register()：触发 preload_async + 注册 rag_query（group=rag，desc 从 docstring 正确回退）
-```
+- rag_query / **cosine_sim / emb_probe** 函数本体留在框架 src/rag.py——共享单例 embedder（cosine_sim/emb_probe 2026-08 commit 17312eb 从 real_tools 迁入：语义归属 RAG 组、与 embedder 单例共生；cosine hidden、group light、outputs 声明 raw:number）
+- agt_register()：触发 preload_async + 注册 rag_query（group=rag）+ cosine_sim / emb_probe
 
-与首例 [fs_tools.py](glob-files.md)（纯函数整体外置）对照：rag 是「注册外置 + 实现留框架」——数据主权（向量库）在 rag 组可外置，但 embedder 是被多组共享的进程内单例（按判别标准属"纯进程内状态"），复制实现反而破坏共享。chat.py 不再 `_reg(make_rag_tools())`，rag_query 由外置件提供。外置体系全貌（五件两形态）见 [工具外置](tool-externalization.md)。
+与首例 [fs_tools.py](glob-files.md)（纯函数整体外置）对照：rag 是「注册外置 + 实现留框架」——数据主权（向量库）在 rag 组可外置，但 embedder 是被多组共享的进程内单例（按判别标准属"纯进程内状态"），复制实现反而破坏共享。chat.py 不再 `_reg(make_rag_tools())`，rag_query 由外置件提供。外置体系全貌（10 文件）见 [工具外置](tool-externalization.md)。
 
 ## 注意事项
 

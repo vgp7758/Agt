@@ -7,7 +7,7 @@
 | 位置 | 角色 |
 |------|------|
 | `tools/builtin/*.py` | 工具源文件（开发处） |
-| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 8 个：fs/str/list/misc/wiki/rag/ltm/download） |
+| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 10 个：fs/str/list/misc/**kv/diff**/wiki/rag/ltm/download——kv/diff 为 2026-08 纯函数批新增，commit 17312eb） |
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**。
 
@@ -41,13 +41,17 @@ def agt_register(ctx=None):
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。
 
-## 外置件清单（五件两形态；判别标准四组真限界上下文已全部外置）
+## 外置件清单（10 文件；真限界上下文四组 + 纯函数批，commit 17312eb 扩容）
 
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
 | `fs_tools.py` | glob_files | 纯函数整体外置 | 首例（commit eafed25），实现+注册都在外置件，见 [glob-files](glob-files.md) |
+| `str_tools.py` | split 等 + **length / to_uppercase / to_lowercase**（2026-08 追加） | 纯函数零状态 | 纯函数批（commit 17312eb）——LIGHT_TOOLS 纯函数迁出 |
+| `list_tools.py` / `misc_tools.py` | 早期纯函数批（v0.19.0，15 个纯函数的一部分） | 纯函数零状态 | |
+| `kv_tools.py`（新） | kv_cache_read / kv_cache_write | 纯函数整体外置（**状态随外置件走**） | **`_KV_CACHE` 进程级自写自读 dict**——同轮多 before_turn 工作流对同输入 LLM 调用（如关键词提取）做 memoization；缓存键 = namespace + 内容 sha1，namespace 兼作版本号（改提示词/换模型换 namespace 即整体失效）；重启清空 = 结果缓存语义（丢失=重算，无正确性影响）；outputs 声明 `hit:boolean` |
+| `diff_tools.py`（新） | diff_lines | **算法副本**（复制实现而非 import 框架） | Myers 三件套与框架 diff_files 同源副本，随机重放 200/200 回归；双份注释互指路、改动两处同步，见 [diff-lines](diff-lines.md) |
 | `wiki_tools.py` | wiki 十件套 | 纯函数整体外置 | `.agent/wiki/*.md` 自写自读；`agt_register(ctx)` 覆盖 `_WORKSPACE`；**2026-08（commit fe590a3）六件套扩十件套——章节级维护四件套（add/update/remove/move_chapter，章节=标题+全部子树），支撑 wiki-updater 增量维护**，见 [wiki-tools](wiki-tools.md) |
-| `rag_tools.py` | rag_query | 注册外置 + 实现留框架 | agt_register 触发 `preload_async` 预热 + 注册；本体留 `src/rag.py` 共享 embedder，见 [rag](rag.md) |
+| `rag_tools.py` | rag_query + **cosine_sim / emb_probe**（2026-08 迁入注册） | 注册外置 + 实现留框架 | agt_register 触发 `preload_async` 预热；本体留 `src/rag.py` 共享 embedder 单例——cosine_sim/emb_probe 本体 2026-08 从 real_tools 迁入 rag.py（语义归属 RAG 组），见 [rag](rag.md)、[cosine-sim](cosine-sim.md) |
 | `ltm_tools.py` | ltm 五件套 | 注册外置 + 实现留框架 | 本体留 `src/longterm_memory.py`，经 **ensure_ltm 模块级单例**与 Agent 注入 provider 共享同一实例（内存缓存不分裂）；origin_session 由 provider 每轮刷新，见 [longterm-memory](longterm-memory.md) |
 | `download_tools.py` | list_downloadable / download_asset | 纯函数（调框架实现） | 资产目录自写自读；框架 `src/download.py` 保留 `list_assets`/`download_asset` 供 `/download` 命令（commands.py）；`agt_register(ctx)` 覆盖 `_WORKSPACE` |
 
@@ -65,13 +69,14 @@ def agt_register(ctx=None):
 | 注册入口 | SDK（`workflow_node_api.py`）+ 节点目录三级扫描 | `agt_register(ctx)` 描述符列表 + script_tools.py 扫描 |
 | 生效方式 | 节点热加载 | `/reload tools` |
 
-## 迁移收官（判别标准驱动）
+## 迁移收官（判别标准驱动；真限界上下文四组 + 纯函数批双收官）
 
 哪些工具能外置、哪些不能——判别标准见 [tool-externalization-criteria](../architecture/tool-externalization-criteria.md)（一句话：外置的是"拥有自己数据的工具"，不是"读得到数据的工具"）：
 
 1. **真限界上下文 4/4 全部外置 ✅**：wiki（第二批）/ rag（第三批）/ ltm + download（第四批，commit fd06c48）——文件由工具组自己写自己读，数据主权在本组；此后这批外置件的改动都走 `/reload tools` 秒级热加载
-2. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
-3. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
+2. **纯函数批 ✅（第五批，2026-08 commit 17312eb）**：real_tools 再外置 8 工具（length/to_uppercase/to_lowercase → str_tools；kv_cache_read/write → kv_tools，`_KV_CACHE` 状态随外置件走；diff_lines → diff_tools 算法副本；cosine_sim/emb_probe 本体迁 rag.py、注册并入 rag_tools）——**LIGHT_TOOLS 13→5，剩余全是框架状态型**（ReAct 原语三件套 `_WF_CTX` 注入 + dir_outline/concat_files `_resolve` 沙箱），判别标准全量过筛收官
+3. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
+4. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
 
 ## 相关页面
 

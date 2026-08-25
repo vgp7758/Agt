@@ -312,6 +312,9 @@ def _asm_item_from_dict(d: dict):
                 if parsed:
                     item["tool_name"], item["tool_args"] = parsed
                     item["tool"] = val
+            _d = str(d.get("desc") or "").strip()
+            if _d:
+                item["desc"] = _d   # 管理页/手写声明的动作项行内描述（与段名项 '// 说明' 同语义）
             return item
     for seg in _ASSEMBLY_SEGS:
         if seg in d and d[seg]:

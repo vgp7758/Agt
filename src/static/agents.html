@@ -148,32 +148,39 @@ const SEG_TYPES=['system','rules','history','ltm','user_message','steps','tail',
 const ACT_TYPES=['text','file','dir','cmd','workflow','tool','func'];
 
 function asmToRow(it){
-  // {kind:'seg'|act, name?, opt?, mode?, value?}
+  // {kind:'seg'|act, name?, opt?, mode?, desc?, value?}
   if(it===null||it===undefined)return {kind:'seg',name:'user_message',opt:false};
   if(typeof it==='string'){
-    const [n,...rest]=it.split('|');
+    // 先剥行内描述 '// 说明'（与引擎 _asm_item_from_str 同序：描述优先剥，防止
+    // 'optional // x' 被精确匹配判 false → optional 标记静默丢失）
+    let body=it,desc='';
+    const dp=body.indexOf('//');
+    if(dp>=0){desc=body.slice(dp+2).trim();body=body.slice(0,dp);}
+    const [n,...rest]=body.split('|');
     const base=n.trim();
-    const opt=rest.some(x=>x.trim()==='optional');
-    if(SEG_TYPES.includes(base))return {kind:'seg',name:base,opt};
+    const opt=rest.some(x=>x.trim().startsWith('optional'));
+    if(SEG_TYPES.includes(base))return {kind:'seg',name:base,opt,desc};
     // 带模式段名（'history=tiered'）→ 拆 name+mode
     const mm=base.match(/^(\w+)\s*=\s*(\w+)$/);
-    if(mm&&SEG_TYPES.includes(mm[1]))return {kind:'seg',name:mm[1],mode:mm[2],opt};
-    // 字符串动作（老格式 'file: x' 等）
+    if(mm&&SEG_TYPES.includes(mm[1]))return {kind:'seg',name:mm[1],mode:mm[2],opt,desc};
+    // 字符串动作（老格式 'file: x' 等）——动作描述也保留
     const m=base.match(/^(text|file|dir|cmd|workflow|tool|func):\s*(.*)$/);
-    if(m)return {kind:m[1],value:m[2]};
-    return {kind:'seg',name:base,opt};   // 未知段名：文本框兜底（保往返不丢）
+    if(m)return {kind:m[1],value:m[2],desc};
+    return {kind:'seg',name:base,opt,desc};   // 未知段名：文本框兜底（保往返不丢）
   }
   if(typeof it==='object'){
     for(const k of ACT_TYPES){
-      if(k in it)return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every};
+      if(k in it)return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every,desc:String(it.desc??'')};
     }
   }
   return {kind:'seg',name:'user_message',opt:false};
 }
 function rowToItem(r){
-  if(r.kind==='seg'){const nm=r.mode?`${r.name}=${r.mode}`:r.name;return r.opt?`${nm}|optional`:nm;}
-  if(r.kind==='text'){const o={text:r.value||''};if(r.once)o.once=true;if(r.every)o.every=r.every;return o;}
-  const o={};o[r.kind]=r.value||'';if(r.once)o.once=true;if(r.every)o.every=r.every;return o;
+  // 描述组装回行尾 ' // 说明'（单行：清换行防 YAML 多行语义）；desc 仅在非空时携带
+  const d=r.desc&&String(r.desc).trim()?` // ${String(r.desc).replace(/[\r\n]+/g,' ').trim()}`:'';
+  if(r.kind==='seg'){const nm=r.mode?`${r.name}=${r.mode}`:r.name;return `${r.opt?`${nm}|optional`:nm}${d}`;}
+  if(r.kind==='text'){const o={text:r.value||''};if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;}
+  const o={};o[r.kind]=r.value||'';if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;   // 动作项描述走 dict 元字段 desc（引擎 _asm_item_from_dict 读）——字符串 'file: x' 形态引擎不解析，不能输出
 }
 
 function renderAsm(){
@@ -193,9 +200,11 @@ function renderAsm(){
       ?`<span class="opt"><input type="checkbox" ${r.opt?'checked':''} onchange="asmData[${i}].opt=this.checked"> optional</span>`
       :(r.kind==='file'||r.kind==='dir'||r.kind==='cmd'||r.kind==='workflow'||r.kind==='tool'||r.kind==='func'
         ?`<span class="opt"><input type="checkbox" ${r.once?'checked':''} onchange="asmData[${i}].once=this.checked"> once</span>`:'');
+    // 行内描述 '// 说明'（optional 段的提示文案，投影给主 Agent SYSTEM 的可选装配行）
+    const descHtml=`<input class="val" style="flex:1;min-width:110px" type="text" placeholder="说明(//)——optional 段的提示文案" value="${esc(r.desc||'')}" oninput="asmData[${i}].desc=this.value">`;
     return `<div class="asmrow">
       ${typeSel}${segSel}${modeHtml}
-      ${valHtml}${extra}
+      ${valHtml}${extra}${descHtml}
       <button class="btn sm" onclick="asmMove(${i},-1)">↑</button>
       <button class="btn sm" onclick="asmMove(${i},1)">↓</button>
       <button class="btn sm danger" onclick="asmData.splice(${i},1);renderAsm()">×</button>

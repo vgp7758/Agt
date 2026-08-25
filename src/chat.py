@@ -24,7 +24,10 @@ from survey_tools import make_survey_tools
 from memory_tools import make_recall_tools
 from session_tools import make_session_tools
 from toollog import make_tool_log_tools
-from wiki import make_wiki_tools
+# wiki CRUD 十件套 + update_wiki 均不再内置：
+#   - CRUD/章节四件套 → tools/builtin/wiki_tools.py（外置，真限界上下文）
+#   - update_wiki 已删 → wiki_auto_maintenance 工作流直接 agent_prompt 派 wiki-updater
+#     （reuse 复用 + caller=user 不唤醒主 Agent + wait_subagents 取报告）
 from rag import LocalRAG, set_rag, ensure_rag, preload_async
 from commands import CommandContext, build_default_registry, apply_config
 from mcp_client import MCPManager, make_mcp_tools
@@ -83,8 +86,8 @@ SYSTEM = build_system(
         "再用 create_spec(title, steps, design) 制定施工方案（每步含 file/action/anchor/content/rationale），"
         "然后用 commit_spec 提交供用户批阅；用户「通过」则自动建 plan 开始施工，「返工」则据反馈 regenerate_spec 重新生成。\n"
         "简单任务直接用 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"
-        "接手不熟悉的任务前可用 wiki_search/wiki_read 查 .agent/wiki/ 里的仓库知识；"
-        "完成重要功能或修改后调用 update_wiki(改动摘要)，由子 Agent 自动更新 repo-wiki。\n"
+         "接手不熟悉的任务前可用 wiki_search/wiki_read 查 .agent/wiki/ 里的仓库知识；"
+         "wiki 由 before_answer 钩子（wiki_auto_maintenance）在你回答后自动维护——值得记录时自动派 wiki-updater 子 Agent 更新，无需手动调用。\n"
         + "\n\n【长期记忆·跨 session】你有一个 per-repo 长期记忆库（~/.agt/repos/<hash>/memories/，semantic/episodic/procedural 三类）：\n"
         "- semantic（事实/偏好，如用户背景、项目约定）每轮【始终注入】——少而稳定，像背景知识。\n"
         "- procedural（流程经验/how-to）system 里只列标题，需要时调 read_procedure(id) 取详情。\n"
@@ -288,7 +291,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # attach_script_tools 注册；ltm 工具经 ensure_ltm 单例与注入 provider 共享实例）
     _reg(make_tool_log_tools(agent), "工具日志")
     _reg(make_background_tools(agent), "后台/调度")
-    _reg(make_wiki_tools(agent), "Wiki")
+    # wiki CRUD/章节四件套由外置件提供（attach_script_tools 已注册，group=wiki）；
+    # update_wiki 已删除——wiki_auto_maintenance 工作流用 agent_prompt 直接派 wiki-updater
     # rag_query 由外置件 tools/builtin/rag_tools.py 提供（attach_script_tools 已注册，
     # group=rag）；其 agt_register 触发模型后台预热
     _reg(make_autonomous_tools(agent), "自主模式")

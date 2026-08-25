@@ -174,7 +174,7 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
 - **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）
 - **引擎快照与 changed_calls**：`src/agent.py` `_fs_snap` / `_turn_changed_calls`——before_answer context 透传变更调用原文（本工作流的核心输入之一）
 - **Git 集成**：`src/git_utils.py`，`git_commit` 节点的底层实现（subprocess 列表参数）
-- **Wiki 更新工具**：`tools/update_wiki.py`，`update_wiki` 插件节点的实现
+- **Wiki 更新工具**：`tools/update_wiki.py`，`update_wiki` 插件节点的实现；wiki-updater 子 Agent 用 wiki 十件套写页面（2026-08 起含章节级四件套，【增量维护优先】，见 [wiki-tools](wiki-tools.md)）
 - **前端编辑器**：`src/static/workflow_editor.html`，输入框渲染（已修复字面量保存问题）
 
 ## 注意事项
@@ -184,9 +184,11 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
 - **subworkflow 节点 literal 属性约定**（2026-08）：传字面量参数时，**literal 必须用属性形式 `literal="值"`**，不能用于子元素形式（`<literal>值</literal>`），否则参数传递失败（子工作流收不到字面量）→ path 空 → 快照全盘 → WinError 206
 - **前端输入框字面量**（2026-08 修复，commit 910fc1b）：type 9 节点的输入框（画布节点内）字面量保存后重开变空——`syncSubworkflowNode` 只保留连线，默认值造出 `blockID=''` 的空 ref → 输入框空白。修复后连线 ref 完整保留 + 非空字面量保留；默认值改空 literal。**生效需 `/restart` + Ctrl+F5 强刷编辑器**
 - **路径字面量**：`path` 参数通常用字面量（如 `.agent/wiki/`），保存在磁盘 XML 中，后端链路正常（xml_to_canvas 读回正确、GET /api/wf 返回正确），前端渲染已修复
+- **async 钩子并发写**（2026-08，wiki 四件套调试时实证）：本工作流是 async 钩子，可能与别的任务**并发写同一批 wiki 文件**（wiki-tools 往返测试的一次假阳性即源于此）——对 wiki 文件做测试/断言前先确认无并发写入者
 
 ## 相关页面
 
+- [wiki 工具集](wiki-tools.md) —— wiki-updater 消费的 wiki 十件套（页面级六件套 + 章节级四件套，增量维护优先）
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)（[changed_calls 变更调用收集](../architecture/workflow-hooks.md#changed_calls-变更调用收集before_answer-透传2026-08-19)）
 - [dir_snapshot / diff_snapshots 通用子工作流](../architecture/snapshot-diff.md)
 - [配置体系与模型调优](../guides/config-and-models.md)

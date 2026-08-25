@@ -205,6 +205,19 @@ onchange 只在值**变化**时触发——占位边的当前值与「断开」�
 
 > 教训：**把"选回空值"当唯一删除路径的 UI 存在空值死区**——当前值已等于空目标时 onchange 不触发；删除操作必须给显式按钮/入口。
 
+## 附：enum 参数渲染为下拉框（通用机制）
+
+工具 schema 里带 `enum` 的参数，编辑器自动渲染为 **select 下拉框**（替代 text input），空值选项显示「（跟随）」。三层链路：
+
+```
+工具 schema（parameters.properties.<param>.enum）
+  → GET /api/tools 通用透传（server.py api_tools——此前只硬编码 llm_call.model 一条路，
+     现 schema 自带 enum 一律透传；llm_call.model 仍走 API 侧附加，因 LIGHT_TOOLS 构造时无法静态声明）
+  → 前端 syncToolNode（打开工作流时同步已有节点的选项）+ makeInputControl（检测 enum 渲染 select）
+```
+
+首个受益场景：`llm_call.model`（models.json provider 列表 + 空=跟随）。2026-08 多 Agent 工具跟进：`agent_prompt`/`kill_agent` 的 `name`（.agent/agents/ 声明扫描）、`agent_prompt.caller`（['', 'user']）、通信工具 `target_id`（registry 当前 agent_id）——enum 由 `_inject_agent_enums` 动态注入，create/kill 声明变化后自动刷新，详见 [多 Agent · caller 汇报对象与动态 enum 注入](../architecture/multi-agent.md#caller-汇报对象与动态-enum-注入2026-08)。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

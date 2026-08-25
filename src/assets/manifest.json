@@ -1,11 +1,65 @@
 [
-  {"name": "cs_auto_diag", "type": "workflow", "src": "workflows/cs_auto_diag.xml", "default_dir": ".agent/workflows", "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（默认关；如需启用，在 ~/.agt/main.yml 的 hooks.after_tool 里声明。基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp')）"},
-  {"name": "py_auto_diag", "type": "workflow", "src": "workflows/py_auto_diag.xml", "default_dir": ".agent/workflows", "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（经 ~/.agt/main.yml hooks.after_tool 声明后触发；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤）"},
-  {"name": "wiki_auto_query", "type": "workflow", "src": "workflows/wiki_auto_query.xml", "default_dir": ".agent/workflows", "desc": "每轮开始前自动查 wiki（本地流水线版）：LLM 提关键词→wiki_search→embedding 余弦打分（降级关键词评分）→top3 注入命中页面摘录、无关不注入（经 ~/.agt/main.yml hooks.before_turn 声明后触发）"},
-  {"name": "wiki_auto_maintenance", "type": "workflow", "src": "workflows/wiki_auto_maintenance.xml", "default_dir": ".agent/workflows", "desc": "最终回答前自动维护 wiki：有代码变更才跑（wiki 文件变更短路）→判断→拍 wiki 快照→update_wiki→diff→git_commit 提交推送（经 ~/.agt/main.yml hooks.before_answer 声明后触发+async）"},
-  {"name": "dir_snapshot", "type": "workflow", "src": "workflows/dir_snapshot.xml", "default_dir": ".agent/workflows", "desc": "目录 mtime 快照（JSON 字符串），排除 .git/__pycache__/嵌套仓库；path 留空=整个 workspace。与 diff_snapshots 配对：改前拍 before、改后拍 after、diff 出变更清单"},
-  {"name": "diff_snapshots", "type": "workflow", "src": "workflows/diff_snapshots.xml", "default_dir": ".agent/workflows", "desc": "对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → files（逗号分隔，可直接喂 git_commit）+ count + changed（list<object>）"},
-  {"name": "react_agent_demo", "type": "workflow", "src": "workflows/react_agent_demo.xml", "default_dir": ".agent/workflows", "desc": "纯工作流装配的 ReAct 循环 Agent 骨架：get_tool_schemas→llm_call(messages+tools)→call_tool+append 回 messages 循环。可复制改工具集/系统提示成自定义 Agent"},
-  {"name": "custom_tool_demo", "type": "workflow", "src": "workflows/custom_tool_demo.xml", "default_dir": ".agent/workflows", "desc": "工作流内定义工具箱没有的自定义工具：text 写 schema→code 拼进官方表→llm_call→选择器按名路由(自定义→code 实现/官方→call_tool)→append 回 messages 循环"},
-  {"name": "recap_gen", "type": "workflow", "src": "workflows/recap_gen.xml", "default_dir": ".agent/workflows", "desc": "每轮回答完成后异步生成一句话 recap（本地小模型 local-qwen）：经 ~/.agt/main.yml hooks.turn_end 声明（| async 标志）+ recap 标志，结果由引擎写回 agent._recap（队友可见）。需 models.json 配 local-qwen 条目（8080 llama-server）"}
+ {
+  "name": "cs_auto_diag",
+  "type": "workflow",
+  "src": "workflows/cs_auto_diag.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（默认关；如需启用，在 ~/.agt/main.yml 的 hooks.after_tool 里声明。基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp')）"
+ },
+ {
+  "name": "py_auto_diag",
+  "type": "workflow",
+  "src": "workflows/py_auto_diag.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（经 ~/.agt/main.yml hooks.after_tool 声明后触发；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤）"
+ },
+ {
+  "name": "wiki_auto_query",
+  "type": "workflow",
+  "src": "workflows/wiki_auto_query.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "每轮开始前自动查 wiki（本地流水线版）：LLM 提关键词→wiki_search→embedding 余弦打分（降级关键词评分）→top3 注入命中页面摘录、无关不注入（经 ~/.agt/main.yml hooks.before_turn 声明后触发）"
+ },
+ {
+  "name": "wiki_auto_maintenance",
+  "type": "workflow",
+  "src": "workflows/wiki_auto_maintenance.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "最终回答前自动维护 wiki：短路检查→意图识别→agent_prompt 派 wiki-updater（reuse+caller=user 不唤醒主Agent）→wait_subagents→快照 diff→git_commit 提交推送（before_answer，async）"
+ },
+ {
+  "name": "dir_snapshot",
+  "type": "workflow",
+  "src": "workflows/dir_snapshot.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "目录 mtime 快照（JSON 字符串），排除 .git/__pycache__/嵌套仓库；path 留空=整个 workspace。与 diff_snapshots 配对：改前拍 before、改后拍 after、diff 出变更清单"
+ },
+ {
+  "name": "diff_snapshots",
+  "type": "workflow",
+  "src": "workflows/diff_snapshots.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → files（逗号分隔，可直接喂 git_commit）+ count + changed（list<object>）"
+ },
+ {
+  "name": "react_agent_demo",
+  "type": "workflow",
+  "src": "workflows/react_agent_demo.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "纯工作流装配的 ReAct 循环 Agent 骨架：get_tool_schemas→llm_call(messages+tools)→call_tool+append 回 messages 循环。可复制改工具集/系统提示成自定义 Agent"
+ },
+ {
+  "name": "custom_tool_demo",
+  "type": "workflow",
+  "src": "workflows/custom_tool_demo.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "工作流内定义工具箱没有的自定义工具：text 写 schema→code 拼进官方表→llm_call→选择器按名路由(自定义→code 实现/官方→call_tool)→append 回 messages 循环"
+ },
+ {
+  "name": "recap_gen",
+  "type": "workflow",
+  "src": "workflows/recap_gen.xml",
+  "default_dir": ".agent/workflows",
+  "desc": "每轮回答完成后异步生成一句话 recap（本地小模型 local-qwen）：经 ~/.agt/main.yml hooks.turn_end 声明（| async 标志）+ recap 标志，结果由引擎写回 agent._recap（队友可见）。需 models.json 配 local-qwen 条目（8080 llama-server）"
+ }
 ]

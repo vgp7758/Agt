@@ -46,7 +46,7 @@ def agt_register(ctx=None):
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
 | `fs_tools.py` | glob_files | 纯函数整体外置 | 首例（commit eafed25），实现+注册都在外置件，见 [glob-files](glob-files.md) |
-| `wiki_tools.py` | wiki 六件套 | 纯函数整体外置 | `.agent/wiki/*.md` 自写自读；`agt_register(ctx)` 覆盖 `_WORKSPACE` |
+| `wiki_tools.py` | wiki 十件套 | 纯函数整体外置 | `.agent/wiki/*.md` 自写自读；`agt_register(ctx)` 覆盖 `_WORKSPACE`；**2026-08（commit fe590a3）六件套扩十件套——章节级维护四件套（add/update/remove/move_chapter，章节=标题+全部子树），支撑 wiki-updater 增量维护**，见 [wiki-tools](wiki-tools.md) |
 | `rag_tools.py` | rag_query | 注册外置 + 实现留框架 | agt_register 触发 `preload_async` 预热 + 注册；本体留 `src/rag.py` 共享 embedder，见 [rag](rag.md) |
 | `ltm_tools.py` | ltm 五件套 | 注册外置 + 实现留框架 | 本体留 `src/longterm_memory.py`，经 **ensure_ltm 模块级单例**与 Agent 注入 provider 共享同一实例（内存缓存不分裂）；origin_session 由 provider 每轮刷新，见 [longterm-memory](longterm-memory.md) |
 | `download_tools.py` | list_downloadable / download_asset | 纯函数（调框架实现） | 资产目录自写自读；框架 `src/download.py` 保留 `list_assets`/`download_asset` 供 `/download` 命令（commands.py）；`agt_register(ctx)` 覆盖 `_WORKSPACE` |
@@ -76,6 +76,7 @@ def agt_register(ctx=None):
 ## 相关页面
 
 - [glob_files](glob-files.md) —— 首个外置工具（纯函数整体外置）
+- [wiki 工具集](wiki-tools.md) —— 十件套（页面级六件套 + 章节级四件套）与增量维护优先约定
 - [rag](rag.md) —— 混合形态首例（注册外置 + 实现留框架）
 - [longterm-memory](longterm-memory.md) —— ltm 五件套外置 + ensure_ltm 共享单例
 - [工具外置判别标准](../architecture/tool-externalization-criteria.md) —— 哪些能迁哪些不能（四象限盘点 + rag/ltm 边界裁剪）

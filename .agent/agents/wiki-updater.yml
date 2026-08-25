@@ -1,6 +1,6 @@
 name: wiki-updater
-description: repo-wiki 维护子 Agent（内部worker）。由 update_wiki 工具 / wiki_auto_maintenance
-  工作流调用，按改动摘要更新 .agent/wiki/ 知识库页面。用户/主 Agent 无需直接派活。
+description: repo-wiki 维护子 Agent（内部worker）。由 wiki_auto_maintenance 钩子工作流以 agent_prompt(caller=user,
+  reuse=true) 自动派活，按改动摘要更新 .agent/wiki/ 知识库页面。用户/主 Agent 无需直接派活。
 tools: wiki_read,wiki_list,wiki_tree,wiki_search,wiki_write,wiki_delete,read_file,list_dir,grep,wiki_add_chapter,wiki_update_chapter,wiki_remove_chapter,wiki_move_chapter
 model: null
 assembly:

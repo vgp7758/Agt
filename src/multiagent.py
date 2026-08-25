@@ -34,7 +34,7 @@ from tools import Tool, Toolbox
 # 会话工具（get_session_history/semantic_search_history/rename_session）同理：闭包绑定
 # 主 session——钩子工作流（before_turn_retrieval 等）在子 Agent 里跑时必须查子自己的历史
 _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents",
-                     "create_plan", "update_plan", "update_wiki",
+                     "create_plan", "update_plan",
                      "list_team", "agent_ask", "agent_notify",
                      "agent_query_events", "agent_query_tool_detail", "wait_subagents",
                      "get_session_history", "semantic_search_history", "rename_session",

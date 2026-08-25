@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→调 update_wiki 子 Agent 维护→快照 diff 出变更文件→有变更则 git_commit 工具提交推送（message=判官摘要，免 shell 引号问题+带 Co-authored-by）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开）" hidden="true">
+ <workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki：判断是否值得记录→拍 wiki 快照→agent_prompt 派 wiki-updater 子 Agent 维护（reuse 复用+caller=user 不唤醒主 Agent）→wait_subagents 等完成→快照 diff 出变更文件→有变更则 git_commit 提交推送（message=维护报告摘要）→报告发系统消息（不喂主 LLM，before_answer 钩子，默认开，async）" hidden="true" async="true" hook="before_answer">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
@@ -35,17 +35,37 @@ async def main(args):
   <node id="990002" type="selector" title="worth_running?" x="720" y="80">
     <branch><cond op="1" left="990001.has_code_changes" right="True" left_type="boolean" right_type="boolean"/></branch>
   </node>
-  <node id="140001" type="plugin" title="update_wiki" x="2520" y="80" toolName="update_wiki">
-    <in name="summary" type="string" ref="336423.output"/>
+  <node id="140001" type="plugin" title="agent_prompt" x="2520" y="80" toolName="agent_prompt">
+    <in name="name" type="string">wiki-updater</in>
+    <in name="prompt" type="string" ref="336423.output"/>
+    <in name="reuse" type="boolean">true</in>
+    <in name="caller" type="string">user</in>
     <out name="raw" type="string"/>
     <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="140100" type="code" title="extract_id" x="2670" y="80">
+    <in name="text" type="string" ref="140001.raw"/>
+    <code language="3"><![CDATA[import re
+async def main(args):
+    """从 agent_prompt 返回文本提取 agent_id（wait_subagents 精确等待用，不误等并行的其它子 Agent）。"""
+    m = re.search(r"\[agent_id=([^\]]+)\]", str(args.params.get("text") or ""))
+    return {"agent_id": m.group(1) if m else ""}]]></code>
+    <out name="agent_id" type="string"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="140200" type="plugin" title="wait_subagents" x="2820" y="80" toolName="wait_subagents">
+    <in name="agent_ids" type="string" ref="140100.agent_id"/>
+    <in name="timeout" type="integer">300</in>
+    <out name="raw" type="string"/>
+    <out name="result" type="string"/>
     <batch enabled="false"/>
   </node>
   <node id="147000" type="selector" title="has_changes?" x="3120" y="80">
     <branch><cond op="2" left="1257593.snap" right="ref:484798.snap"/></branch>
   </node>
   <node id="148000" type="text" title="build_msg" x="3720" y="80">
-    <in name="summary" type="string" ref="140001.raw"/>
+    <in name="summary" type="string" ref="140200.raw"/>
     <result><![CDATA[docs: wiki auto-maintenance — {{summary}}]]></result>
     <batch enabled="false"/>
   </node>
@@ -58,7 +78,7 @@ async def main(args):
   </node>
   <node id="900001" type="end" title="end" x="4320" y="80">
     <out name="inject" type="boolean">False</out>
-    <out name="message" ref="140001.raw" type="string"/>
+    <out name="message" ref="140200.raw" type="string"/>
   </node>
   <node id="682383" type="intent" title="意图识别" x="1320" y="80">
     <in name="query" type="string" ref="1030169.output"/>
@@ -86,7 +106,7 @@ assistant response:
     <out name="count" type="integer"/>
     <batch enabled="false"/>
   </node>
-  <node id="1257593" type="subworkflow" title="snap_after" x="2820" y="80" workflowId="dir_snapshot">
+  <node id="1257593" type="subworkflow" title="snap_after" x="3120" y="80" workflowId="dir_snapshot">
     <in name="path" type="string">.agent/wiki/</in>
     <out name="snap" type="string"/>
     <out name="error" type="string"/>
@@ -144,7 +164,9 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <edge from="990001" to="990002"/>
   <edge from="990002" to="1030169" port="true"/>
   <edge from="990002" to="900001" port="false"/>
-  <edge from="140001" to="1257593"/>
+  <edge from="140001" to="140100"/>
+  <edge from="140100" to="140200"/>
+  <edge from="140200" to="1257593"/>
   <edge from="148000" to="150001"/>
   <edge from="1257593" to="147000"/>
   <edge from="147000" to="1400227" port="true"/>

@@ -7,17 +7,20 @@
 子 Agent 声明：`.agent/agents/<name>.yml`（v2.1：纯配置，persona 拆独立同名 .md，.yml 优先加载）或旧版单 `.md`（frontmatter：name/description/model/tools + assembly/system_append DSL）。**2026-08（commit f177674）存量 5 个子 Agent（coder/explorer/reviewer/vision/wiki-updater）已全部规范化为 v2.1**——必装段显式入 assembly（所见即所装）、recap_gen 显式入 hooks（详见 [/agents 管理页 · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。**主 Agent 声明：`~/.agt/main.yml`**（全局，非 .agent/agents/ 成员；assembly 是完整配方，见下）。可视化管理走 [/agents 管理页](../features/agents-admin.md)。
 
 ```
-agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?)
+agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?, caller?)
   ├─ reuse=true 且有同名空闲活实例 → 直接派活（沿用 agent_id/session）
   ├─ reuse=true 无活实例但有同名历史条目 → 复活（读 md + Session.load 磁盘历史）
   └─ 否则新建（session 嵌套 主session/agents/<id>/，meta.json 记 _agent_meta）
 全异步：立即返回；完成后按 caller_id 路由 answer 入调用者 inbox（下轮自动激活）
 要结果才继续 → wait_subagents(agent_ids)
+caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获调用者；'user'=fire-and-forget
+        不路由任何 Agent；显式 agent_id=跨 Agent 委托（见下节 caller 章节）
 ```
 
 - 主 Agent id=`_main_`；registry 是唯一事实源（团队看板/recap/路由都读它）
 - `_agent_meta`（agent_id/name/model/task/caller_id/recap/status）无条件写子 meta.json → 读档 `_restore_subagents` 恢复团队
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
+- `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 
@@ -120,6 +123,51 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 - 前端 `finishAnswer(text, agentId)` 中缺省 agent_id 一律归 `_main_` 页；历史渲染路径（renderHistTurn 临时 curTurn）靠 `pages || {}` 兜底
 - 派生需求：凡走 `on_event=agent.on_event` 的新同步子 Agent 创建点，都会受益于此打标——无需再单独处理
 
+## caller 汇报对象与动态 enum 注入（2026-08）
+
+## caller 汇报对象与动态 enum 注入（2026-08）
+
+两个用户提案同 commit 落地（src/multiagent.py + src/server.py）：① `agent_prompt` 增 `caller` 参数——汇报对象可显式指定；② 多 Agent 工具参数动态注入 enum → 工作流编辑器渲染成下拉框。
+
+### caller：answer 完成后路由给谁
+
+`agent_prompt(name, prompt, ..., caller="user")`——汇报对象三态：
+
+| caller 值 | 语义 |
+|---|---|
+| `''`（默认） | 自动捕获调用者（`agent.agent_id`）——现有行为不变 |
+| `'user'` / `'system'` | **fire-and-forget**：answer 不路由任何 Agent（`'system'` 归一为 `'user'`） |
+| 显式 agent_id | 跨 Agent 委托：registry 校验存在性，不在表内返回 `[未知 caller]` |
+
+实现上**零新增路由分支**——`_route_answer` 现有 `caller_id == "user"` 判断天然接住 fire-and-forget；派发信息段（〔任务派发信息〕，告知子 Agent 如何反查派发者上下文）同样跳过——子 Agent 无法反查 user 的上下文，语义自洽。
+
+**典型场景（工作流节点里派活）**：`agent_prompt(caller="user")` + `wait_subagents(agent_ids)` 取结果——子 Agent 完成不再唤醒主 Agent 烧一轮 token。这是 [后台通知 wake 语义（service_exit 不再独立触发轮）](../features/user-interaction.md#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192) 同款语义在**派活侧**的补全：钩子工作流派子 Agent 干活、结果由工作流自身消费的场景用它。
+
+### _inject_agent_enums：动态 enum 注入
+
+给多 Agent 工具的参数注入动态 enum（合法值提示 + LLM schema 约束 + 编辑器下拉框三合一）：
+
+| 参数 | enum 来源 |
+|---|---|
+| `agent_prompt` / `kill_agent` 的 `name` | `.agent/agents/` 声明扫描（`load_agents_index`）——coder/explorer/reviewer/vision/wiki-updater |
+| `agent_prompt` 的 `caller` | `['', 'user']`（显式 agent_id 仍可手填） |
+| 通信工具（agent_ask/notify/query_*）的 `target_id` | registry 当前全部 agent_id（动态性强，提示性候选） |
+
+**刷新时机**：`make_subagent_tools` 装配时注入一次；**create_agent / kill_agent 声明变化后重注入**——新建一个子 Agent，agent_prompt 节点的 name 下拉里立刻出现它。enum 是**提示性的**（不在列表内的值仍可传），过期无害。
+
+### 三层全通：LLM schema → /api/tools → 编辑器下拉框
+
+`/api/tools`（server.py `api_tools`）此前只硬编码 `llm_call.model` 一条 enum 透传路；现改为**通用透传**——工具 schema 自带 enum 的参数一律原样带给编辑器（`llm_call.model` 保留 API 侧附加路径——它在 LIGHT_TOOLS 构造时无法静态声明 enum）。前端基建早已就位：`syncToolNode` 同步 enum（工具 schema 更新后已有节点选项跟着变）、`makeInputControl` 检测 enum 渲染 select 下拉（空值选项显示「（跟随）」）。
+
+```
+_inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
+  → Tool.schema.parameters.properties.<param>.enum   ← LLM 调用时的合法值约束
+  → /api/tools 通用 enum 透传（server.py）
+  → syncToolNode + makeInputControl（workflow_editor.html）→ 下拉框
+```
+
+`/restart` 后在编辑器拖一个 agent_prompt 工具节点即可看到 name/caller 均为下拉框（enum 机制详见 [编辑器 UX · enum 参数渲染为下拉框](../features/editor-ux-improvements.md#附enum-参数渲染为下拉框通用机制)）。
+
 ## 通信（agent 间）
 
 | 工具 | 语义 | 落盘 |
@@ -128,6 +176,8 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 | agent_notify | 有状态提示（入对方 inbox，等效用户插话） | 是 |
 | agent_query_events / _tool_detail | 只读查对方轮次/工具调用详情（历史 Agent lazy load） | — |
 | list_team | 团队清单（exclude 自己） | — |
+
+通信工具的 `target_id` 动态注入 enum（registry 当前全部 agent_id，作提示性候选）——见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)。
 
 ## recap（每轮一句话总结）
 
@@ -196,5 +246,7 @@ system_append:
 
 - 高频反复派活（看图/检查）→ `reuse=True`：上下文只含当前轮，token 不随复用次数增长
 - 需要子 Agent 带历轮记忆的派活（「继续上次那个重构」类）→ 传 `assembly="history=on"`；普通任务默认无记忆态省 token（见上节 optional 真语义）
+- **工作流节点里派活、结果由工作流自身消费**（`wait_subagents` 取）→ `agent_prompt(..., caller="user")`：fire-and-forget，子 Agent 完成不唤醒主 Agent 烧一轮 token（见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)）
 - 长报告类子 Agent answer 上限 4000 字，超长指引用 `agent_query_events(id, 1)` 取全文
 - 派视觉任务时，prompt 中带图片占位（如 `[图片 文件名]`），并按 vision.md description 的提示委托：`agent_prompt("vision", "请描述 [图片 文件名] 的内容")`——主 Agent 无法直接查看图片内容
+

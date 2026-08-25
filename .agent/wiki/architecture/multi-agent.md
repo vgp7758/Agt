@@ -201,11 +201,24 @@ _inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
 
 ## recap（每轮一句话总结）
 
-finish_turn 后 daemon 线程异步生成（utility_client，scene=recap）——不进自己上下文，但显示在队友的 teammates_block。子 Agent 完成后 recap 写入 `_agent_meta` 随 meta.json 持久化。
+finish_turn 后异步生成（utility_client，scene=recap）——不进自己上下文，但显示在队友的 teammates_block；子 Agent 完成后 recap 写入 `_agent_meta` 随 meta.json 持久化。
+
+**两条生成路径（都回写 `Turn.recap` + recaps.jsonl，2026-08 新）**：
+
+| 路径 | 触发时点 | `turn_idx` 捕获 |
+|------|----------|-----------------|
+| recap_gen 工作流（`turn_end: recap_gen\|async` 钩子） | turn_end 钩子在 **finish_turn 之前**触发 | `len(session.turns)`（轮尚未归档，落点即 len(turns)） |
+| 内置 `_generate_recap`（无工作流声明时） | finish **之后** daemon 线程 | `len(session.turns) - 1` |
+
+两条路径都带 `turn_idx` 调 `session.set_turn_recap(idx, recap)` → 写内存 `Turn.recap` + 追加 `recaps.jsonl` 一行（sidecar 持久化——recap 是事后异步产物，**不进事件流**，events 重放不含它，load 侧 `_load_recaps` 按 idx 恢复）。turns 只追加不移动，异步结果到达时写回，idx 永远对得上。
+
+**rewind 一致性**：`_rewrite_persistence` 同步裁剪 recaps.jsonl（只留 idx < keep）——否则回溯后新轮「长到」旧 idx 会被旧 recap 张冠李戴（load 侧按 idx 盲配）。
 
 **recap_gen 挂钩来源两代**：此前是 `agent_prompt` 派活时的**运行时注入默认**（yml 未声明 hooks → 注入 recap_gen）——行为正确但管理页看不见（yml 里没有）；2026-08（commit f177674）起 5 个子 Agent 的 `turn_end: recap_gen|async` 全部**显式写进声明**——注入逻辑幂等（已有即跳过），不会双跑，/agents 管理页所见即真实运行配置。
 
 **运行观察（2026-08-21，团队看板）**：recap 全面工作——新条目（vision_4/6/7/9 等）各自带完整检查任务描述（配图逐张检查、分享卡胶囊区域检查）、caller 指向 `_main_`；`_agent_meta` 持久化上线**之前**的历史条目（coder_*/vision_3/5/8）无 meta → 列表显示「(历史任务)」兜底——两代数据的分界线在存档里清晰可见，验证了 meta 持久化前后行为符合预期。
+
+**第二消费端（2026-08 新）**：recap 同时填进 fc 折叠摘要行的 tail——`_folded_summary` 每轮 tail 优先级改为 **recap → answer 代码摘要 → 中断标注**（recap 语义密度高于 answer 代码摘要的「首行+标题」，后者常是「完成并推送 ✅」类横幅文案）。详见 [context-engine · 折叠摘要 tail 优先级](context-engine.md#折叠摘要-tail-优先级recap--answer-代码摘要--中断标注2026-08)。
 
 ## assembly DSL（上下文装配配方）
 

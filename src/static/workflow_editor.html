@@ -1152,7 +1152,12 @@ svg.addEventListener('contextmenu',(e)=>{
     const t=e.changedTouches[0];
     if(Math.hypot(t.clientX-_tap.x,t.clientY-_tap.y)>8)_tap.moved=true;
     if(_tap.moved)e.preventDefault();   // 拖节点/连线/平移时阻止页面滚动（tap 静止不拦，保留轻扫退出等系统手势）
-    _synth('mousemove',t,_tap.target);
+    // ⚠️ mousemove 必须派发到 svg 而非 _tap.target：mousedown 里 g.onmousedown 会
+    // renderAll()（选中高亮）→ svg.innerHTML='' 销毁重建全部 DOM——_tap.target 指向的
+    // 旧元素已脱离文档，向死元素派发的事件冒泡只到分离树，永远到不了 svg 的 mousemove
+    // 监听器 → dragNode 设了但拖不动（真实 mouse 无此问题：target 是实时命中的新 DOM）。
+    // svg 的 mousemove handler 只读 clientX/clientY（svgPos），不依赖 target——派发到 svg 等价。
+    _synth('mousemove',t,svg);
   },{passive:false});
   document.addEventListener('touchend',function(e){
     if(e.touches.length<2)_pinch=null;
@@ -1636,6 +1641,10 @@ function showProps(){
     }
   }
 
+  // ===== 连线编辑折叠组（手机无拖拽连线的替代入口；PC 默认折叠不碍事）=====
+  h+=renderFlowLinks(n);
+  h+=renderVarLinks(n);
+
   // 批处理（排除 entry/exit/复合/选择器/意图/聚合/赋值）——置于输入字段之前（配置影响输入字段的"源"选项与输出结构，先看到开关再编辑字段）
   if(!['1','2','8','20','21','22','28','32','40'].includes(n.type)){
     h+=renderBatchConfig(n);
@@ -2085,6 +2094,80 @@ function quickSetRef(i,val){
 }
 function quickSetItemField(i,name){setInputSource(i,name?('item.'+name):'item');}
 function quickSetGlobal(i,name){setInputSource(i,'global');if(name)setRefPath(i,name);}
+
+// ===== 连线编辑折叠组（手机无拖拽连线的替代入口；PC 默认折叠不碍事）=====
+// 流程连线：本节点每个出口（主出口/错误出口/selector分支/intent分支）→ 下游节点下拉。
+// 语义对齐拖线：分支端口每分支一条（换目标覆盖），选（无）删边。数据直接改 WF.edges，与拖线完全等价。
+function renderFlowLinks(n){
+  let ports=[];
+  if(n.type!=='2'&&!['8','19','22','29'].includes(n.type))ports.push({port:'',label:'主出口'});
+  if(n.type!=='2'&&!['8','19','22','29'].includes(n.type))ports.push({port:n.id+'_error',label:'错误出口'});
+  if(n.type==='8'){
+    const brs=n.data.inputs?.branches||[];
+    brs.forEach((b,i)=>ports.push({port:i===0?'true':'true_'+i,label:'分支'+(i+1)}));
+    ports.push({port:'false',label:'else'});
+  }
+  if(n.type==='22'){
+    (n.data.inputs?.intents||[]).forEach((it,i)=>ports.push({port:'branch_'+i,label:it.name||('意图'+(i+1))}));
+    ports.push({port:'default',label:'默认'});
+  }
+  if(!ports.length)return '';
+  const tgts=WF.nodes.filter(t=>t.id!==n.id&&String(t.type)!=='1');   // 下游不可是开始节点（对齐拖线目标约束）
+  let h=`<details style="margin:4px 0"><summary style="cursor:pointer;color:#fff;font-size:11px;padding:2px 0">🔗 流程连线（出口 → 下游节点）</summary><div style="padding:2px 0 2px 6px">`;
+  ports.forEach(pt=>{
+    const edge=WF.edges.find(e=>e.sourceNodeID===n.id&&String(e.sourcePortID||'')===pt.port);
+    const cur=edge?edge.targetNodeID:'';
+    h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
+      +`<span style="flex:0 0 58px;font-size:10px;color:#8a9099">${pt.label}</span>`
+      +`<select onchange="setFlowLink('${pt.port}',this.value)" style="flex:1;font-size:10px">`
+      +`<option value="">（无）</option>`
+      +tgts.map(t=>`<option value="${t.id}" ${cur===t.id?'selected':''}>${nodeTitle(t)}</option>`).join('')
+      +`</select></div>`;
+  });
+  return h+`</div></details>`;
+}
+function setFlowLink(port,tgt){
+  const n=findN(selNode);if(!n)return;
+  // 下拉是单选语义：先清空该出口的全部边，再按需 push。
+  // 分支端口对齐拖线（本来就单条）；主出口牺牲多下游表达（多下游仍可用拖线/浮窗实现），换 UI 一致性
+  WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===n.id&&String(e.sourcePortID||'')===port));
+  if(tgt)WF.edges.push({sourceNodeID:n.id,targetNodeID:tgt,sourcePortID:port});
+  renderAll();showProps();
+  toast(tgt?'已连接流程线':'已断开流程线');
+}
+// 变量连线：本节点每个输入字段 ← 上游节点输出字段下拉（同类型过滤，含 object 子字段点号路径）。
+// 选中即 setInputRef（含类型跟随），选（字面量）清引用——与拖线/▾ 引用选择完全同路径。
+function renderVarLinks(n){
+  const ps=nodeInputs(n);
+  if(!ps.length||n.type==='32')return '';
+  let h=`<details style="margin:4px 0"><summary style="cursor:pointer;color:#61afef;font-size:11px;padding:2px 0">🔗 变量连线（输入字段 ← 上游输出）</summary><div style="padding:2px 0 2px 6px">`;
+  ps.forEach((p,i)=>{
+    const c=p.input?.value?.content;
+    let cur='';
+    if(p.input?.value?.type==='ref'){
+      if(c?.source==='block-output'&&c.blockID)cur=c.blockID+'.'+(c.name||'');
+      else if(c?.source==='loop-item')cur='__item';
+      else if(c?.source==='loop-index')cur='__index';
+    }
+    const inType=p.input?.type||'string';
+    h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
+      +`<span style="flex:0 0 58px;font-size:10px;color:${fieldColor(inType)}" title="${inType}">${ext(p.name)}</span>`
+      +`<select onchange="setVarLink(${i},this.value)" style="flex:1;font-size:10px">`
+      +`<option value="">（字面量）</option>`;
+    WF.nodes.forEach(on=>{
+      if(on.id===n.id)return;
+      _outFieldOptions(on).forEach(o=>{
+        if(o.type===inType||inType==='string')
+          h+=`<option value="${on.id}.${o.path}" ${cur===on.id+'.'+o.path?'selected':''}>${nodeTitle(on)}.${o.path}</option>`;
+      });
+    });
+    h+=`<option value="__item" ${cur==='__item'?'selected':''}>item(整个)</option>`
+      +`<option value="__index" ${cur==='__index'?'selected':''}>index</option>`
+      +`</select></div>`;
+  });
+  return h+`</div></details>`;
+}
+function setVarLink(i,val){quickSetRef(i,val);}   // 复用引用选择的全套语义（类型跟随/item/index/清引用）
 
 function renderObjectSubFields(f,kind,fi,ctx){
   let schema;

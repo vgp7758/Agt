@@ -9,6 +9,31 @@
 - **后台通知 wake 语义**：后台事件通知**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复，见下节）
 - **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行带每秒跳动的实时秒表 `(Ns)`（commit 6aa5903）、可点击打开实时观测页，完成/失败行定格显示总耗时
 
+## 多客户端 target 路由 · 页签级 Agent 隔离（2026-08，commit 30ac45b）
+
+> src/server.py。此前事件广播是**全端广播**——每个 WS 客户端都收到所有事件，多页签同时与不同 Agent 交互会互相串台。本改动引入**客户端级交互目标 `target`**：每个客户端只收自己正在交互的 Agent 的事件、只把自己的文本路由给该 Agent。
+
+**数据模型**：`_clients` 每项从 `{ws, queue}` 扩为 `{ws, queue, target}`——`target`=该客户端正在交互的 agent_id（默认 `_main_`）。`_event_log` 事件缓冲不变（500 条上限）。
+
+**广播过滤**（`_broadcast`）：事件带 `agent_id`（`Agent._emit` 自动打标：主=`_main_`、子 Agent=各自 id，见 [多 Agent 体系 · 事件流打标](../architecture/multi-agent.md)）→ 只发给 `target` 匹配的客户端；无 `agent_id`（系统级：sessions/workflows/config/wf_debug/命令回显）→ 广播全部。无 WS 客户端（纯 CLI / 服务未起）时直接 return——零开销且 `_main_loop` 未就绪时不因 `call_soon_threadsafe` 报错。
+
+**文本路由**（`_handle_user_input`）：客户端切换到子 Agent（target ≠ `_main_`）后，非 `/` 开头的文本**直达该子 Agent**（对齐 CLI `/agent` 切换后的直连语义）；多页签互不影响——其它页签仍走主 Agent work_q。目标失效（进程重启后 registry 重建）→ 自动复位 `_main_` + 提示，消息转主 Agent 不丢。
+
+**会话视图隔离**：
+- `current_history` / `expand_history`：按客户端 `target` 取对应 session——页签 A 在子 Agent 视图展开历史时不会拿到主 session 的轮次；重连/刷新后前端 sessionStorage 记住的 target 先校验存在性，`running` 中的目标退回 `_main_` 防卡在忙实例上
+- `load_session` 广播历史：带 `agent_id="_main_"`（`_broadcast_history`）——其它页签正与子 Agent 交互时不被主 session 历史冲掉视图
+
+**answer 特例**：同步工具型子 Agent（explore_subagent / update_wiki）的回应**额外放行给主视图**——主 Agent 正在等其工具结果（保住 answer 分页，见 [气泡交互](../features/bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）；反向：子 Agent 视图不收主 Agent 的 answer。
+
+| 场景 | 行为 |
+|---|---|
+| 页签 A（主）+ 页签 B（coder_1）同时在线 | 主 Agent 事件只到 A，coder_1 事件只到 B，互不串台 |
+| B 切换 Agent | 只改 B 的 target + 响应单发（A 视图不动）；sessionStorage 记住，刷新/重连自动恢复 |
+| B 向 coder_1 发消息 | 忙时走 coder_1 插话队列；空闲时 task 进 work_q 与主 Agent run 串行，交互期临时接通事件流 |
+| B 的目标失效 | 复位主 Agent + 提示，消息转主 Agent |
+
+**调试插曲**：① 前端 JS 误用 Python 风格 `#` 注释会炸掉整个 script 块——node --check 抓出改 `//`（py_auto_diag 只查 .py 看不到）；② 测试 stub 用 `[]` 冒充 queue → `.put_nowait` 抛 AttributeError 被 `_broadcast` 的 `except` 吞 → 事件全丢、测试假失败，换真 `queue.Queue` 后 6 场景全绿。
+
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 
 **修复前问题（用户实测报告）**：answer 完成后的自动触发点只查 `inbox`（后台队列），不查 `pending_messages`（插话队列）——**两套队列漏了一半** → answer 期间发的插话滞留在队列里，直到用户手动发下一条消息才被注入消费。

@@ -1329,6 +1329,16 @@ function renderNodePicker(filter){
       html+='</div>';
     }
   }
+  // 子工作流快捷创建（用户提案）：每个工作流一个按钮——点击直接创建以该名称为目标的
+  // 子工作流节点（免"先建节点→属性面板下拉选"两步）。排除当前编辑的工作流自身（防自递归）。
+  {
+    const items=(WFLIST||[]).filter(w=>w.name && w.name!==WF.name && (!f||w.name.toLowerCase().includes(f)||(w.description||'').toLowerCase().includes(f)));
+    if(items.length){
+      html+=`<div class="np-group">🔗 子工作流 <span style="color:#5a6068;font-weight:normal">${items.length}</span></div><div class="np-row">`;
+      html+=items.map(w=>`<button class="np-item" onclick="pickSubWf('${ext(w.name)}')" title="${ext(w.description||'')} — 点击直接创建调用此工作流的子工作流节点">🔗 ${ext(w.name)}</button>`).join('');
+      html+='</div>';
+    }
+  }
   // Agent 工具按来源分组，全部列出
   const tg={};
   (AGENT_TOOLS||[]).forEach(t=>{const gr=t.group||'工具';(tg[gr]=tg[gr]||[]).push(t);});
@@ -1342,6 +1352,27 @@ function renderNodePicker(filter){
   });
   d.innerHTML=html;
   if(hadFocus){const nf=document.getElementById('npFilter');if(nf){nf.focus();try{nf.setSelectionRange(caret,caret);}catch(e){}}}
+}
+// 子工作流快捷创建：点击浮窗里的工作流按钮 → 直接建 type9 节点 + 设 workflowId +
+// syncSubworkflowNode 同步入参/出参 schema（与属性面板 setSubWf 完全同路径——
+// 输入=目标 start outputs、输出=目标 exit inputParameters，端口立即可连线）。
+// 拖线触发时同样自动连线（与 pickNode 的连线逻辑一致）。
+async function pickSubWf(name){
+  if(!pickerCtx){closeNodePicker();return;}
+  if(!name){closeNodePicker();return;}
+  if(name===WF.name){toast('不能在自身工作流内调用自身');closeNodePicker();return;}
+  const n=createBasicNode('9',pickerCtx.sx,pickerCtx.sy);
+  n.data.nodeMeta.title=name;   // 标题直接用目标名（免再猜这是调谁的节点）
+  n.data.inputs.workflowId=name;
+  await syncSubworkflowNode(n);
+  if(pickerCtx.src){   // 拖线触发：连源节点该端口 → 新节点
+    const port=pickerCtx.src.port||'';
+    if(port)WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===pickerCtx.src.nodeId&&e.sourcePortID===port));
+    WF.edges.push({sourceNodeID:pickerCtx.src.nodeId,targetNodeID:n.id,sourcePortID:port});
+  }
+  closeNodePicker();
+  selNode=n.id;showProps();renderAll();
+  toast('已创建子工作流节点：'+name+'（入参'+(n.data.inputs.inputParameters||[]).length+' 出参'+(n.data.outputs||[]).length+'）');
 }
 function pickNode(typeOrName,isTool){
   if(!pickerCtx){closeNodePicker();return;}

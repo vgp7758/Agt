@@ -5,16 +5,21 @@
     <out name="turn_context" type="string"/>
   </node>
   <node id="120001" type="llm" title="summarize" x="420" y="80">
-    <in name="user_message" ref="100001.user_message"/>
-    <in name="answer" ref="100001.draft_answer"/>
-    <in name="turn_ctx" ref="100001.turn_context"/>
-    <param name="model"><![CDATA[local-qwen]]></param>
-    <param name="temperature"><![CDATA[0.3]]></param>
-    <param name="thinking"><![CDATA[false]]></param>
-    <param name="prompt"><![CDATA[用一句话（不超过30个中文字）总结这轮对话做了什么。只输出这句话本身，不要任何解释、引号或前缀。
-用户请求：{{user_message}}
-回答节选：{{answer}}]]></param>
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <in name="answer" type="string" ref="100001.draft_answer"/>
+    <in name="turn_ctx" type="string" ref="100001.turn_context"/>
+    <param name="temperature" type="string"><![CDATA[0.3]]></param>
+    <param name="thinking" type="string"><![CDATA[false]]></param>
+    <param name="prompt" type="string"><![CDATA[user message：
+{{user_message}}
+
+assistant answer：
+{{answer}}]]></param>
+    <param name="systemPrompt" type="string"><![CDATA[You are a summarizer. Summarize in one sentence what the assistant did in this round of conversation (no more than 30 tokens). Only output the sentence itself, without any explanation, quotation marks, prefixes, or special symbols]]></param>
+    <model>local-qwen</model>
+    <param name="output_format" type="string"><![CDATA[text]]></param>
     <out name="output" type="string"/>
+    <batch enabled="false"/>
   </node>
   <node id="900001" type="end" title="Exit" x="720" y="80">
     <out name="result" ref="120001.output" type="string"/>

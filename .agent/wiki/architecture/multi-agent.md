@@ -137,6 +137,12 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 - 前端 `finishAnswer(text, agentId)` 中缺省 agent_id 一律归 `_main_` 页；历史渲染路径（renderHistTurn 临时 curTurn）靠 `pages || {}` 兜底
 - 派生需求：凡走 `on_event=agent.on_event` 的新同步子 Agent 创建点，都会受益于此打标——无需再单独处理
 
+## 事件广播 target 过滤 · agent_id 的第二个消费端（2026-08，commit 30ac45b）
+
+`_emit` 给事件打的 `agent_id` 除了驱动前端 answer 分页 / trace 前缀（上节），现在被 **`src/server.py` 的 `_broadcast` 消费**做多客户端过滤：每个 WS 客户端记录正在交互的 `target`（agent_id，默认 `_main_`），带 `agent_id` 的事件只发给 target 匹配的客户端——多页签各与不同 Agent 交互时互不串台；无 `agent_id` 的系统级事件仍全端广播。
+
+配套：客户端切 Agent 改自身 target + 响应单发；文本直达 target 子 Agent（对齐 CLI `/agent` 切换语义）；`load_session` 历史广播带 `agent_id="_main_"`；`current_history`/`expand_history` 按客户端 target 取对应 session。完整行为表与 answer 特例见 [用户交互 · 多客户端 target 路由](../features/user-interaction.md)。
+
 ## caller 汇报对象与动态 enum 注入（2026-08）
 
 ## caller 汇报对象与动态 enum 注入（2026-08）

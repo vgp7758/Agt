@@ -74,6 +74,7 @@ longterm_memory.py（长期记忆三类 + episodic 召回流水线）详见 [长
 | 插话队列（pending_messages）+ 后台触发 | answer 完成后检查 inbox + pending_messages，确保插话不滞留，自动开新一轮处理（2026-08-19 修复） |
 | UI 并行钩子状态 Map 索引 | 避免多个并行钩子的「执行中」状态互相覆盖，按 hook::name 独立跟踪（2026-08-19 修复） |
 | 工作流执行 run registry（进程内注册表） | 钩子/wf_* 工具执行的节点级实时观测：内存 dict + 锁，最近 50 次——不落盘、零成本，观测页轮询即得（2026-08-20 新） |
+| 多客户端 target 路由 | 每客户端记录正在交互的 agent_id，事件按 agent_id 过滤分发——多页签各与不同 Agent 交互互不串台、同 Agent 的多客户端仍组播（2026-08，commit 30ac45b） |
 
 ## 相关页面
 

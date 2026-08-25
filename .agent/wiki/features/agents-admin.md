@@ -127,12 +127,49 @@ load_agents_index 返回的 path 是 str（".agent/agents/coder.yml"）
 
 **后续追加：`history|optional`（2026-08，commit 1e3b206）**——`|optional` 尾标从纯文档性注释变为**真语义**（默认不装配，`agent_prompt assembly="history=on"` 按需打开；主 Agent SYSTEM 有 `[可选装配: …]` 提示行）。coder / explorer / reviewer / vision 四个的 assembly 在 file 与 user_message 之间插入 `history|optional`（列表 asm=3 → 4）；wiki-updater 不加（一次性摘要任务无记忆需求）。四处改动（解析/投影/覆盖/agents_summary 提示）见 [multi-agent · assembly DSL](../architecture/multi-agent.md#assembly-dsl上下文装配配方)。
 
+## 回退链表单 + 钩子行布局修复（2026-08，commit a667da4）
+
+### 回退链表单：声明级 fallback 此前只能手写 yml
+
+引擎侧 `_parse_agent_fallback`（src/multiagent.py）早已支持**三形态声明**——`"a,b"` 逗号串 / list / `{chain, policy}`——并在 agent_prompt 的**新建/复活/reuse 三条路径**消费；但管理页一直没有入口（"回退链怎么设置的？"此前答案：手写 yml）。本次补齐，与工具选择同款 chips 交互（用户提案）：
+
+```
+基本信息组新增：
+  回退链 [glm, deepseek-chat, qwen    ] [策略:跟随全局 ▾]
+  ○glm ○glm-official-1 ○deepseek ○qwen …   ← 模型 chips（点击顺序=链序）
+```
+
+- **chips 交互**（`renderFbChips` / `toggleFb`，agents.html）：点模型 chip 增删，点击顺序即链序；手填逗号串同样有效
+- **留空 = 继承全局 settings**（fallback_chain / fallback_policy）——保存不写 `fallback` 键；「显式关回退」（区别于继承全局）仍走手写 yml 空串，管理页不做这个语义（表单留空表达"跟随"更自然）
+- **`_main_` 主 Agent 同样支持**（编辑视图同款回退链区；留空保存 = 删 fallback 键继承全局）
+- 生效语义与其它声明字段一致：**改链后 reuse 实例下一任务即生效**；页面本身 `/restart` 后可见（HTML 启动时载入内存）
+
+读写两侧（server.py）：
+
+| 函数 | 职责 |
+|---|---|
+| `_fb_of(meta)` | 读侧归一：三形态 → `(chain 逗号串, policy)`；未声明 → `('', '')` |
+| `_fb_yaml_value(body)` | 写侧：非空才产出 yml 值（list / `{chain,policy}`，与 `_parse_agent_fallback` 读形态对齐）；空 → None 不写键 |
+
+引擎侧解析与消费详见 [multi-agent · 声明级回退链](../architecture/multi-agent.md)；全局链配置见 [配置体系](config-and-models.md)。
+
+### 钩子行布局：async/× 不再被挤下一行
+
+用户观察："async 复选框和 ✕ 可以和位置选择/类型选择两个下拉框放在一排"——本该如此，根因是全局 `input[type=text]{width:100%}` 把值输入框撑满整行。一行 CSS 修复（agents.html）：
+
+```css
+.hkrow .val{flex:1 1 120px;width:auto;min-width:110px}
+```
+
+现在 `位置下拉 | 类型下拉 | 值输入(flex 自适应) | async | ×` 同一排。
+
 ## 验证
 
 - v2.1 round-trip 6/6（list/get/save/create/delete 全通）；端到端：persona md 真实读进投影（`[assembly:file ...]` 标签 / `/context` 出现 `asm:file` 段）；越界路径拒绝（沙箱生效）
 - `_main_` 纳入后 6/6：含 PUT 保留 custom_field（未识别字段不丢）、不误写 .md、子 Agent round-trip 不受影响
 - f177674：列表 `_main_ asm=17 | coder/explorer/reviewer/vision asm=3 | wiki-updater asm=4`，hooks 全部 `[turn_end]`；GET 逐项核对（file 首项 / persona 读回 / hooks / wiki-updater 的 tool 项）全部正确（1e3b206 后 coder 系 asm=4）
 - 1e3b206：optional 语义端到端 5/5（opt 解析 / 默认投影跳过历史 / `history=on` 历史进投影 / `=off` 移除 / summary 提示注入）
+- a667da4：回退链写读往返三态（声明链 → 表单回显+chips 选中 / 留空保存不写键=继承全局 / `_main_` 留空=删键）；hidden 三态往返见 [workflow-hooks](../architecture/workflow-hooks.md)
 
 ## 注意事项
 

@@ -13,10 +13,13 @@ def _handle_or(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "OR", "label": "OR", "handler": _handle_or}
+    return {"type": "OR", "label": "OR", "handler": _handle_or, "catalog": _CATALOG}
 
 
 PARAMS = [
     {"key": "branches", "type": "object", "required": True,
      "desc": "条件组列表（与 selector 同构），任一满足 → true"},
 ]
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "OR 逻辑或", "desc": "多组条件任一满足 → true。条件组与 selector 同构，输出 result:boolean 与逐组结果列表——与 AND 配合可做多层组合门控", "xml": "<!-- OR：任一条件满足即 true -->\n<node id=\"160002\" type=\"OR\" title=\"任一满足?\">\n  <branch>\n    <cond op=\"15\" left=\"100001.user_message.length\" right=\"200\"/>\n    <cond op=\"7\" left=\"100001.user_message\" right=\"继续\"/>\n  </branch>\n  <out name=\"result\" type=\"boolean\"/>\n  <out name=\"results\" type=\"list<boolean>\"/>\n</node>"}

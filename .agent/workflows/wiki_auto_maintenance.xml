@@ -141,10 +141,12 @@ async def main(args):
     <in name="user_msg" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <in name="calls_text" type="string" ref="135500.calls_text"/>
-    <result><![CDATA[user message:
+    <result><![CDATA[本轮交互与文件改动（维护 wiki 的依据）：
+
+用户请求：
 {{user_msg}}
 
-assistant answer:
+Agent 回答：
 {{answer}}
 
 changed tool calls（引擎快照 diff 检出的文件变更调用原文——更新 wiki 时以此为准，一般无需再 read_file 重读源文件）:

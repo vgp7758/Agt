@@ -31,6 +31,8 @@
 | detail_base / detail_step | 分档基准字数(1500)/步距衰减步长(15) |
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试） |
 
+> **回退链分层（2026-08，commit a667da4 起）**：settings 是**全局默认**；Agent 声明级 `fallback` 键（逗号串 / list / {chain,policy} 三形态）覆盖全局——[/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=继承全局），`_main_` 主 Agent 同样支持；引擎侧解析见 [multi-agent · 声明级回退链](../architecture/multi-agent.md)。
+
 ## 模型能力标志速查
 
 | 场景 | 配置 |

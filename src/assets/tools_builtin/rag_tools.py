@@ -17,5 +17,13 @@ faiss 向量索引 + chunks.db 由 RAG 自己建自己查——数据主权在 r
 def agt_register():
     import rag
     rag.preload_async()   # 注册即异步预热（幂等：ensure 内部锁 + attempted 标志）
-    return [{"name": "rag_query", "func": rag.rag_query,
-             "group": "rag", "version": 1}]
+    return [{"name": "rag_query", "func": rag.rag_query, "group": "rag", "version": 1},
+            {"name": "cosine_sim", "func": rag.cosine_sim, "hidden": True, "group": "light",
+             "version": 1, "outputs": [
+                 {"name": "raw", "type": "number", "description": "余弦相似度（-1~1，越大越相关）"}],
+             "params": {
+                 "text1": "第一段文本（批处理时接 loop-item=候选切片）",
+                 "text2": "第二段文本（通常接 query 原文）"}},
+            {"name": "emb_probe", "func": rag.emb_probe, "hidden": True, "group": "light",
+             "version": 1, "outputs": [
+                 {"name": "raw", "type": "boolean", "description": "embedding 是否可用（探测结果缓存 5 分钟）"}]}]

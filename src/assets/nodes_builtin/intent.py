@@ -58,4 +58,7 @@ def _handle_intent(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "22", "label": "Intent", "handler": _handle_intent}
+    return {"type": "22", "label": "Intent", "handler": _handle_intent, "catalog": _CATALOG}
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "意图识别 (Intent)", "desc": "用 LLM 对输入做意图分类，每个意图对应一个分支出口端口（branch_0/branch_1…），未匹配走 default", "xml": "<!-- 意图识别节点：LLM 分类 + 分支路由 -->\n<node id=\"160001\" type=\"intent\">\n  <!-- 输入：query 是要分类的文本 -->\n  <in name=\"query\" ref=\"130001.output\"/>\n\n  <!-- 意图列表：每个 intent 对应一个出口端口 -->\n  <intent name=\"提问\">用户想了解某个知识点或问\"是什么/为什么/怎么\"</intent>\n  <intent name=\"指令\">用户要求 AI 执行某个操作，如\"帮我写/帮我查/翻译\"</intent>\n  <intent name=\"闲聊\">用户只是聊天、打招呼、或表达情绪</intent>\n\n  <!-- LLM 参数（可选，不写则用默认） -->\n  <param name=\"systemPrompt\"><![CDATA[你是一个意图分类器。根据用户输入判断意图。]]></param>\n  <param name=\"temperature\" type=\"float\">0.1</param>\n\n  <!-- 输出 -->\n  <out name=\"classificationId\" type=\"string\"/>\n  <out name=\"reason\" type=\"string\"/>\n</node>\n<!--\n  出口端口：branch_0(第1个意图匹配), branch_1(第2个匹配), ... , default(都不匹配)\n  输出字段：classificationId(匹配到的意图名), reason(LLM 给出的分类理由)\n-->"}

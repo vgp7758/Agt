@@ -94,4 +94,7 @@ def _handle_http(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "45", "label": "HTTP", "handler": _handle_http}
+    return {"type": "45", "label": "HTTP", "handler": _handle_http, "catalog": _CATALOG}
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "HTTP 请求 (HTTP)", "desc": "发起 HTTP 请求（GET/POST/PUT/DELETE），支持 headers/params/body/auth 配置，URL 和 body 中可用 {{}} 模板引用上游输出", "xml": "<!-- HTTP 请求节点 -->\n<node id=\"250001\" type=\"http\">\n  <!-- API 信息：method 和 url（url 中可用 {{变量}} 模板） -->\n  <param name=\"method\" literal=\"POST\">POST</param>\n  <param name=\"url\"><![CDATA[https://api.example.com/v1/chat/completions]]></param>\n\n  <!-- 请求头 -->\n  <param name=\"Content-Type\" literal=\"application/json\" header=\"true\">application/json</param>\n  <param name=\"Authorization\" header=\"true\"><![CDATA[Bearer {{api_key}}]]></param>\n\n  <!-- URL 查询参数 -->\n  <param name=\"version\" literal=\"v1\" query=\"true\">v1</param>\n\n  <!-- 模板入参 -->\n  <in name=\"api_key\" ref=\"190001.api_key\"/>\n  <in name=\"body_data\" ref=\"230001.output\"/>\n\n  <!-- 请求体（JSON body） -->\n  <param name=\"bodyType\" literal=\"json\">json</param>\n  <body><![CDATA[{{body_data}}]]></body>\n\n  <!-- 超时和重试 -->\n  <param name=\"timeout\" type=\"integer\">30</param>\n  <param name=\"retryTimes\" type=\"integer\">2</param>\n\n  <out name=\"body\" type=\"string\"/>\n  <out name=\"statusCode\" type=\"integer\"/>\n  <out name=\"headers\" type=\"object\"/>\n</node>\n<!--\n  header=\"true\" 的 param 作为请求头；query=\"true\" 的 param 作为 URL 查询参数\n  body 元素内的 CDATA 为请求体，支持 {{变量}} 模板\n  输出：body（响应体字符串）, statusCode（HTTP 状态码）, headers（响应头JSON对象）\n-->"}

@@ -22,6 +22,20 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
+## 声明级回退链（fallback 键，2026-08 起管理页表单化）
+
+声明里的 `fallback` 键决定该 Agent 的 LLM 回退链，**覆盖全局 settings.fallback_chain**。三形态（`_parse_agent_fallback`，src/multiagent.py）：
+
+```yaml
+fallback: "glm, deepseek-chat"            # ① 逗号串
+fallback: [glm, deepseek-chat]            # ② list
+fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
+```
+
+- **agent_prompt 新建/复活/reuse 三条路径都消费**——改链后 reuse 实例下一任务即生效
+- 未声明 = 继承全局 `fallback_chain / fallback_policy`（见 [配置体系](../guides/config-and-models.md)）
+- 2026-08（commit a667da4）起 [/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（此前只能手写 yml）：模型 chips 点选（顺序=链序）+ 策略下拉；**留空 = 继承全局**（保存不写键）；「显式关回退」（区别于继承）手写 yml 空串；`_main_` 主 Agent 同样支持声明级回退链（main.yml，留空=删键）
+
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 
 ### 旧版根因

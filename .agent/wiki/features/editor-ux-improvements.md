@@ -205,6 +205,23 @@ onchange 只在值**变化**时触发——占位边的当前值与「断开」�
 
 > 教训：**把"选回空值"当唯一删除路径的 UI 存在空值死区**——当前值已等于空目标时 onchange 不触发；删除操作必须给显式按钮/入口。
 
+## 批次七（`a667da4`）：减法两件——钩子入口移除 + hidden 默认翻转
+
+主线索：**减法**——同一件事不留两个入口；默认值按多数真实用途取。两项均为用户提案。
+
+### 16. 钩子配置入口移除（迁 /agents 管理页）
+
+顶栏钩子下拉（fhook）+ onHookChange + HOOK_INPUTS（约 30 行）删除。钩子挂载点（before_turn/turn_end/…）描述的是 **Agent 声明的行为**而非工作流自身结构——它住在 Agent 声明的 hooks 里（/agents 管理页的 hooks 编辑），编辑器里那份是重复入口。存量钩子工作流的 `meta.hook` 原值透传（保存不丢字段），`get_hook_workflows` 读侧不受影响。
+
+### 17. hidden 复选框语义翻转（默认勾选 = hidden）
+
+| 状态 | 之前 | 现在 |
+|---|---|---|
+| 未写 hidden（新建工作流） | 注册为 wf_* 工具 | **hidden（不注册）** |
+| 显式 hidden="false" | 注册 | 注册（取消勾选 + 保存） |
+
+复选框默认勾选（勾=hidden 不进工具箱）；取消勾选并保存 = 显式 `hidden="false"` → 注册进 Agent 工具箱 schema。写侧（workflow_xml.py）显式写 true/false 两值保往返幂等；引擎侧三态解析与注册判断同步改（`!= "false"` / `is not False`）——详见 [workflow-hooks · hidden 默认翻转](../architecture/workflow-hooks.md)。存量 22 XML 全部已显式 true → 行为零变化，只影响未来新建的工作流。
+
 ## 附：enum 参数渲染为下拉框（通用机制）
 
 工具 schema 里带 `enum` 的参数，编辑器自动渲染为 **select 下拉框**（替代 text input），空值选项显示「（跟随）」。三层链路：

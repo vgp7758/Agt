@@ -75,4 +75,7 @@ def _handle_code(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "5", "label": "Code", "handler": _handle_code}
+    return {"type": "5", "label": "Code", "handler": _handle_code, "catalog": _CATALOG}
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "代码 (Code)", "desc": "在沙箱中执行 Python 3 代码（async def main(args) -> Output），通过 args.params 取输入，return dict 作为输出", "xml": "<!-- 代码节点：Python3 沙箱执行 -->\n<node id=\"150001\" type=\"code\">\n  <!-- 模板入参：在 code 中用 {{变量名}} 引用；也可在 main() 内通过 args.params 访问 -->\n  <in name=\"x\" ref=\"140001.result\"/>\n  <in name=\"y\" ref=\"140002.result\"/>\n\n  <!-- Python3 代码（language=3）。约定：async def main(args) -> Output，return 的 dict 字段对应 out -->\n  <param name=\"code\" language=\"python3\"><![CDATA[\nimport json\n\nasync def main(args) -> dict:\n    x = float(args.params.get(\"x\", 0))\n    y = float(args.params.get(\"y\", 0))\n    result = {\n        \"sum\": x + y,\n        \"product\": x * y,\n        \"ratio\": x / y if y != 0 else None,\n    }\n    return result\n]]></param>\n\n  <!-- 输出字段：必须与 main() 返回 dict 的 key 一致 -->\n  <out name=\"sum\" type=\"number\"/>\n  <out name=\"product\" type=\"number\"/>\n  <out name=\"ratio\" type=\"number\"/>\n</node>\n<!--\n  参数类型映射：string→str, integer→int, number→float, boolean→bool, list→list, object→dict\n  args.params 是所有 in 的 dict；args.inputs 是原始 Coze InputParam 列表\n-->"}

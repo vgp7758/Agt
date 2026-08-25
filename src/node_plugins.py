@@ -169,3 +169,24 @@ def node_js_payload() -> list:
     if not _LAST.get("js"):
         _LAST["js"] = scan_node_plugins()["js"]
     return list(_LAST["js"])
+
+
+def catalog_entries() -> list:
+    """插件节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合用）。
+    每项 {"type", "name", "desc", "xml"}——来自各插件 agt_node() 声明的 catalog 字段
+    （元信息跟实现走：改插件 handler/示例同文件维护；用户级 .agent/nodes/ 的目录同样生效）。
+    _LAST 为空时自举扫描一次（与 node_js_payload 同模式）。"""
+    if not _LAST.get("handlers"):
+        _LAST["handlers"] = scan_node_plugins()["handlers"]
+    out = []
+    for t, desc in _LAST["handlers"].items():
+        cat = (desc or {}).get("catalog") if isinstance(desc, dict) else None
+        if not isinstance(cat, dict):
+            continue   # 未声明 catalog 的插件不进目录（如实验节点）——按需声明
+        out.append({
+            "type": t,
+            "name": str(cat.get("name") or desc.get("label") or t),
+            "desc": str(cat.get("desc") or ""),
+            "xml": str(cat.get("xml") or ""),
+        })
+    return out

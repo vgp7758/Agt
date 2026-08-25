@@ -1402,548 +1402,90 @@ def read_workflow_demo(demo: str = "", start: int = 0, max_chars: int = 8000) ->
 
 # ===== 工作流节点目录 ====
 
-_NODE_CATALOG = [
-    # ===== 基础节点 =====
+# ===== 核心节点目录（插件节点的目录条目在各自 .py 的 _CATALOG 声明，动态聚合）=====
+_CORE_NODE_CATALOG = [
     {
         "type": "1", "name": "开始 (Start)",
         "desc": "工作流入口，定义外部调用时需传入的参数（即工作流工具的函数签名）",
-        "xml": """<!-- 开始节点：定义工作流入参。每个工作流有且仅有一个开始节点(id=100001) -->
-<node id="100001" type="start">
-  <out name="query" type="string" required="true"/>
-  <out name="max_results" type="integer" required="false">10</out>
-</node>
-<!--
-  输入schema（外部->工作流）：
-  | 字段        | 类型    | 必填 | 说明         |
-  | query       | string  | ✓    | 查询关键词   |
-  | max_results | integer |      | 最大结果数，默认 10 |
--->"""
+        "xml": "<!-- 开始节点：定义工作流入参。每个工作流有且仅有一个开始节点(id=100001) -->\n<node id=\"100001\" type=\"start\">\n  <out name=\"query\" type=\"string\" required=\"true\"/>\n  <out name=\"max_results\" type=\"integer\" required=\"false\">10</out>\n</node>\n<!--\n  输入schema（外部->工作流）：\n  | 字段        | 类型    | 必填 | 说明         |\n  | query       | string  | ✓    | 查询关键词   |\n  | max_results | integer |      | 最大结果数，默认 10 |\n-->",
     },
     {
         "type": "2", "name": "结束 (End)",
         "desc": "工作流出口，收集上游节点输出作为工作流返回值。支持两种模式：returnVariables（取指定字段）和 useAnswerContent（渲染模板文本）",
-        "xml": """<!-- 结束节点(id=900001)：定义工作流返回值 -->
-<!-- 模式1：returnVariables —— 取上游节点输出字段，组装成结构化返回值 -->
-<node id="900001" type="end">
-  <out name="answer" ref="130001.output"/>
-  <out name="confidence" ref="140001.score"/>
-</node>
-
-<!-- 模式2：useAnswerContent —— 渲染一段模板文本作为单一返回值 -->
-<node id="900001" type="end" useAnswerContent="true">
-  <content><![CDATA[回答：{{answer}}（置信度：{{confidence}}）]]></content>
-</node>
-<!--
-  输出schema（工作流->外部）：
-  returnVariables 模式下输出各 out 字段；useAnswerContent 模式下输出 {"output": "渲染文本"}
--->"""
-    },
-    # ===== AI 节点 =====
-    {
-        "type": "3", "name": "LLM",
-        "desc": "调用大语言模型，支持模板渲染 {{变量}}、systemPrompt、temperature/maxTokens 等参数配置，可声明结构化输出 schema",
-        "xml": """<!-- LLM 节点：调用大模型 -->
-<node id="130001" type="llm">
-  <!-- 模板入参：声明后在 prompt/systemPrompt 中用 {{变量名}} 引用 -->
-  <in name="query" ref="100001.query"/>
-  <in name="context" ref="120001.result"/>
-
-  <!-- LLM 参数（param）：在 Coze 中等同于 llmParam -->
-  <param name="prompt"><![CDATA[根据以下上下文回答问题：{{query}}
-
-上下文：
-{{context}}]]></param>
-  <param name="systemPrompt"><![CDATA[你是专业的问答助手。回答简洁准确，不超过 200 字。]]></param>
-  <param name="temperature" type="float">0.7</param>
-  <param name="maxTokens" type="integer">1024</param>
-  <param name="modelName"><![CDATA[deepseek-chat]]></param>
-
-  <!-- 结构化输出（可选）：声明 output 字段及其 schema，LLM 将按 JSON Schema 输出 -->
-  <out name="output" type="string"/>
-  <out name="answer" type="string"/>
-  <out name="confidence" type="integer"/>
-</node>
-<!--
-  llmParam 可用参数：prompt, systemPrompt, temperature, maxTokens, modelName, topP
-  输入：in 声明的模板变量（在 prompt 中用 {{变量名}} 引用）
-  输出：output（LLM 原始输出）；若声明了多个 out 字段，LLM 将输出符合 schema 的 JSON
--->"""
+        "xml": "<!-- 结束节点(id=900001)：定义工作流返回值 -->\n<!-- 模式1：returnVariables —— 取上游节点输出字段，组装成结构化返回值 -->\n<node id=\"900001\" type=\"end\">\n  <out name=\"answer\" ref=\"130001.output\"/>\n  <out name=\"confidence\" ref=\"140001.score\"/>\n</node>\n\n<!-- 模式2：useAnswerContent —— 渲染一段模板文本作为单一返回值 -->\n<node id=\"900001\" type=\"end\" useAnswerContent=\"true\">\n  <content><![CDATA[回答：{{answer}}（置信度：{{confidence}}）]]></content>\n</node>\n<!--\n  输出schema（工作流->外部）：\n  returnVariables 模式下输出各 out 字段；useAnswerContent 模式下输出 {\"output\": \"渲染文本\"}\n-->",
     },
     {
         "type": "4", "name": "插件 (Plugin)",
         "desc": "调用内置轻量工具（add/split/sleep 等）或用户自定义 Python 工具，输入输出通过 in/out 声明",
-        "xml": """<!-- 插件节点：调用内置工具或用户工具 -->
-<!-- 示例1：调用内置加法工具 -->
-<node id="140001" type="plugin" toolName="add">
-  <in name="a" type="number" ref="130001.x"/>
-  <in name="b" type="number" literal="5"/>
-  <out name="raw" type="string"/>
-</node>
-
-<!-- 示例2：调用内置分割工具 -->
-<node id="140002" type="plugin" toolName="split">
-  <in name="text" type="string" ref="130001.output"/>
-  <in name="separator" type="string" literal=","/>
-  <out name="raw" type="string"/>
-</node>
-
-<!-- 示例3：调用用户自定义工具（.agent/workflows/tools/xxx.py） -->
-<node id="140003" type="plugin" toolName="my_custom_tool">
-  <in name="param1" type="string" ref="130001.output"/>
-  <in name="param2" type="integer" literal="42"/>
-  <out name="raw" type="string"/>
-</node>
-<!--
-  内置工具列表见末尾 _builtin_tools_reference() 输出。
-  自定义工具放 .agent/workflows/tools/*.py，顶层函数自动注册。
-  输出固定为 raw（工具返回值字符串）。
--->"""
+        "xml": "<!-- 插件节点：调用内置工具或用户工具 -->\n<!-- 示例1：调用内置加法工具 -->\n<node id=\"140001\" type=\"plugin\" toolName=\"add\">\n  <in name=\"a\" type=\"number\" ref=\"130001.x\"/>\n  <in name=\"b\" type=\"number\" literal=\"5\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n\n<!-- 示例2：调用内置分割工具 -->\n<node id=\"140002\" type=\"plugin\" toolName=\"split\">\n  <in name=\"text\" type=\"string\" ref=\"130001.output\"/>\n  <in name=\"separator\" type=\"string\" literal=\",\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n\n<!-- 示例3：调用用户自定义工具（.agent/workflows/tools/xxx.py） -->\n<node id=\"140003\" type=\"plugin\" toolName=\"my_custom_tool\">\n  <in name=\"param1\" type=\"string\" ref=\"130001.output\"/>\n  <in name=\"param2\" type=\"integer\" literal=\"42\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n<!--\n  内置工具列表见末尾 _builtin_tools_reference() 输出。\n  自定义工具放 .agent/workflows/tools/*.py，顶层函数自动注册。\n  输出固定为 raw（工具返回值字符串）。\n-->",
     },
-    {
-        "type": "5", "name": "代码 (Code)",
-        "desc": "在沙箱中执行 Python 3 代码（async def main(args) -> Output），通过 args.params 取输入，return dict 作为输出",
-        "xml": """<!-- 代码节点：Python3 沙箱执行 -->
-<node id="150001" type="code">
-  <!-- 模板入参：在 code 中用 {{变量名}} 引用；也可在 main() 内通过 args.params 访问 -->
-  <in name="x" ref="140001.result"/>
-  <in name="y" ref="140002.result"/>
-
-  <!-- Python3 代码（language=3）。约定：async def main(args) -> Output，return 的 dict 字段对应 out -->
-  <param name="code" language="python3"><![CDATA[
-import json
-
-async def main(args) -> dict:
-    x = float(args.params.get("x", 0))
-    y = float(args.params.get("y", 0))
-    result = {
-        "sum": x + y,
-        "product": x * y,
-        "ratio": x / y if y != 0 else None,
-    }
-    return result
-]]></param>
-
-  <!-- 输出字段：必须与 main() 返回 dict 的 key 一致 -->
-  <out name="sum" type="number"/>
-  <out name="product" type="number"/>
-  <out name="ratio" type="number"/>
-</node>
-<!--
-  参数类型映射：string→str, integer→int, number→float, boolean→bool, list→list, object→dict
-  args.params 是所有 in 的 dict；args.inputs 是原始 Coze InputParam 列表
--->"""
-    },
-    {
-        "type": "22", "name": "意图识别 (Intent)",
-        "desc": "用 LLM 对输入做意图分类，每个意图对应一个分支出口端口（branch_0/branch_1…），未匹配走 default",
-        "xml": """<!-- 意图识别节点：LLM 分类 + 分支路由 -->
-<node id="160001" type="intent">
-  <!-- 输入：query 是要分类的文本 -->
-  <in name="query" ref="130001.output"/>
-
-  <!-- 意图列表：每个 intent 对应一个出口端口 -->
-  <intent name="提问">用户想了解某个知识点或问"是什么/为什么/怎么"</intent>
-  <intent name="指令">用户要求 AI 执行某个操作，如"帮我写/帮我查/翻译"</intent>
-  <intent name="闲聊">用户只是聊天、打招呼、或表达情绪</intent>
-
-  <!-- LLM 参数（可选，不写则用默认） -->
-  <param name="systemPrompt"><![CDATA[你是一个意图分类器。根据用户输入判断意图。]]></param>
-  <param name="temperature" type="float">0.1</param>
-
-  <!-- 输出 -->
-  <out name="classificationId" type="string"/>
-  <out name="reason" type="string"/>
-</node>
-<!--
-  出口端口：branch_0(第1个意图匹配), branch_1(第2个匹配), ... , default(都不匹配)
-  输出字段：classificationId(匹配到的意图名), reason(LLM 给出的分类理由)
--->"""
-    },
-    # ===== 流程控制 =====
-    {
-        "type": "8", "name": "选择器 (Selector)",
-        "desc": "条件分支：根据配置的 conditions 判断走哪个出口端口（true/true_1…/false），支持 Equal/Contain/Greater/Empty 等运算符",
-        "xml": """<!-- 选择器节点：条件分支 -->
-<node id="170001" type="selector">
-  <!-- 输入供条件左值引用 -->
-  <in name="score" ref="150001.score"/>
-
-  <!-- 分支条件组：branches 数组，按顺序匹配 -->
-  <branch>
-    <!-- conditions: [{operator, left, right}]（可多条件，logic=1=OR, 2=AND） -->
-    <condition operator="GreaterEqual" logic="2">
-      <!-- left 引用上游输出字段（ref=节点ID.字段名） -->
-      <left ref="150001.score"/>
-      <!-- right 可以是 literal 或 ref -->
-      <right literal="90">90</right>
-    </condition>
-    <!-- 出口端口：true（第1个分支匹配） -->
-  </branch>
-
-  <branch>
-    <condition operator="GreaterEqual" logic="2">
-      <left ref="150001.score"/>
-      <right literal="60">60</right>
-    </condition>
-    <!-- 出口端口：true_1（第2个分支匹配） -->
-  </branch>
-
-  <!-- 都不匹配走 false 端口 -->
-</node>
-<!--
-  支持运算符：Equal(=), NotEqual(!=), Contain(包含), NotContain, Empty, NotEmpty,
-            Greater(>), GreaterEqual(>=), Less(<), LessEqual(<=),
-            True, False, LengthGreater, LengthGreaterEqual, LengthLess, LengthLessEqual
-  出口端口：true(分支1匹配), true_1(分支2匹配), ..., false(全不匹配)
-  logic: 1=OR(任一满足), 2=AND(全部满足)
--->"""
-    },
-    {
-        "type": "32", "name": "聚合 (Aggregator)",
-        "desc": "多分支汇合：将多个分支的输出汇总到一个节点，运行时只取实际执行到的那个分支的值",
-        "xml": """<!-- 聚合节点：多分支汇合 -->
-<node id="180001" type="aggregator">
-  <!-- 每个 mergeGroup 收集一条分支的输出 -->
-  <group name="branch_0">
-    <variable ref="160001.output"/>   <!-- 意图分支0 的输出 -->
-  </group>
-  <group name="branch_1">
-    <variable ref="160002.output"/>   <!-- 意图分支1 的输出 -->
-  </group>
-  <group name="branch_default">
-    <variable ref="160003.output"/>   <!-- default 分支的输出 -->
-  </group>
-
-  <out name="branch_0" type="string"/>
-  <out name="branch_1" type="string"/>
-  <out name="branch_default" type="string"/>
-</node>
-<!--
-  用途：Selector/Intent 分支后汇合，下游节点统一引用 aggregator 的输出，避免空引用
-  运行时只填充实际走到的分支，其他分支字段为 null
--->"""
-    },
-    {
-        "type": "40", "name": "赋值 (Assigner)",
-        "desc": "修改全局变量或工作流变量的值，left 指向变量路径，input 是新值",
-        "xml": """<!-- 赋值节点：修改变量值 -->
-<node id="190001" type="assigner">
-  <!-- inputParameters 声明左值（变量路径）和右值（新值） -->
-  <in name="counter" left="global_variable_app.counter">
-    <!-- input 是新值：可 ref 上游或 literal 字面量 -->
-    <value ref="150001.sum"/>
-  </in>
-  <in name="username" left="global_variable_app.username">
-    <value literal="Alice"/>
-  </in>
-
-  <out name="isSuccess" type="boolean"/>
-</node>
-<!--
-  left 路径：global_variable_app.<变量名>（全局变量）
-  输出：isSuccess（赋值是否成功）
--->"""
-    },
-    # ===== 循环 =====
     {
         "type": "21", "name": "循环 (Loop)",
         "desc": "复合节点(blocks)，对数组迭代或按次数循环。体内可用 Break(19)/Continue(29)/LoopSetVariable(20)。三种模式：array(遍历数组)、count(固定次数)、infinite(无限循环)",
-        "xml": """<!-- 循环节点(composite)：迭代执行体内 blocks -->
-<node id="200001" type="loop">
-  <!-- loopType: array(遍历数组) | count(固定次数) | infinite(无限) -->
-  <param name="loopType" literal="array">array</param>
-  <!-- loopCount: count 模式下的循环次数 -->
-  <param name="loopCount" type="integer">10</param>
-
-  <!-- array 模式：声明要遍历的数组 -->
-  <in name="items" ref="170001.filtered_outputs"/>
-
-  <!-- 循环变量（可选）：初始值，体内 LoopSetVariable 节点可读写 -->
-  <param name="accumulator" type="integer" initialValue="0"/>
-
-  <!-- 体内子节点 blocks（inline canvas） -->
-  <blocks>
-    <!-- 体内可用的特殊节点：LoopSetVariable(20) 读写循环变量 -->
-    <node id="200010" type="setvar">
-      <left>accumulator</left>                             <!-- 循环变量名 -->
-      <right ref="200011.output"/>                         <!-- 新值 -->
-    </node>
-
-    <!-- 体内 LLM 节点：通过 loop-item / loop-index 引用当前迭代元素和索引 -->
-    <node id="200011" type="llm">
-      <in name="item" loop-item="true"/>                   <!-- 当前迭代元素 -->
-      <in name="index" loop-index="true"/>                 <!-- 当前索引(0-based) -->
-      <param name="prompt"><![CDATA[处理第 {{index}} 项：{{item}}]]></param>
-      <out name="output" type="string"/>
-    </node>
-
-    <!-- 条件退出：选择器判断后走 Break 端口 -->
-    <node id="200012" type="selector">
-      <in name="output" ref="200011.output"/>
-      <branch>
-        <condition operator="Contain" logic="2">
-          <left ref="200011.output"/>
-          <right literal="STOP"/>
-        </condition>
-        <!-- true 端口 → Break -->
-      </branch>
-    </node>
-
-    <!-- Break(19): 强制退出循环 -->
-    <node id="200013" type="break"/>
-    <!-- Continue(29): 跳过本次迭代，进入下一次 -->
-    <node id="200014" type="continue"/>
-
-    <node id="200015" type="llm">
-      <in name="item" loop-item="true"/>
-      <param name="prompt"><![CDATA[正常处理：{{item}}]]></param>
-      <out name="output" type="string"/>
-    </node>
-  </blocks>
-
-  <out name="all_outputs" type="list"/>
-</node>
-<!--
-  体内子节点引用迭代元素：<in name="x" loop-item="true"/>，取当前 item
-  体内子节点引用迭代索引：<in name="i" loop-index="true"/>，取当前 index
-  Break(19): 放在 Selector 的 true/false 出口后，满足条件时退出循环
-  Continue(29): 放在 Selector 出口后，满足条件时跳过本次
-  LoopSetVariable(20): left=变量名, right=新值（可 ref 上游），读写循环累加变量
-  输出：all_outputs（每轮迭代的末端输出 list）、final_变量名（循环变量最终值）
--->"""
+        "xml": "<!-- 循环节点(composite)：迭代执行体内 blocks -->\n<node id=\"200001\" type=\"loop\">\n  <!-- loopType: array(遍历数组) | count(固定次数) | infinite(无限) -->\n  <param name=\"loopType\" literal=\"array\">array</param>\n  <!-- loopCount: count 模式下的循环次数 -->\n  <param name=\"loopCount\" type=\"integer\">10</param>\n\n  <!-- array 模式：声明要遍历的数组 -->\n  <in name=\"items\" ref=\"170001.filtered_outputs\"/>\n\n  <!-- 循环变量（可选）：初始值，体内 LoopSetVariable 节点可读写 -->\n  <param name=\"accumulator\" type=\"integer\" initialValue=\"0\"/>\n\n  <!-- 体内子节点 blocks（inline canvas） -->\n  <blocks>\n    <!-- 体内可用的特殊节点：LoopSetVariable(20) 读写循环变量 -->\n    <node id=\"200010\" type=\"setvar\">\n      <left>accumulator</left>                             <!-- 循环变量名 -->\n      <right ref=\"200011.output\"/>                         <!-- 新值 -->\n    </node>\n\n    <!-- 体内 LLM 节点：通过 loop-item / loop-index 引用当前迭代元素和索引 -->\n    <node id=\"200011\" type=\"llm\">\n      <in name=\"item\" loop-item=\"true\"/>                   <!-- 当前迭代元素 -->\n      <in name=\"index\" loop-index=\"true\"/>                 <!-- 当前索引(0-based) -->\n      <param name=\"prompt\"><![CDATA[处理第 {{index}} 项：{{item}}]]></param>\n      <out name=\"output\" type=\"string\"/>\n    </node>\n\n    <!-- 条件退出：选择器判断后走 Break 端口 -->\n    <node id=\"200012\" type=\"selector\">\n      <in name=\"output\" ref=\"200011.output\"/>\n      <branch>\n        <condition operator=\"Contain\" logic=\"2\">\n          <left ref=\"200011.output\"/>\n          <right literal=\"STOP\"/>\n        </condition>\n        <!-- true 端口 → Break -->\n      </branch>\n    </node>\n\n    <!-- Break(19): 强制退出循环 -->\n    <node id=\"200013\" type=\"break\"/>\n    <!-- Continue(29): 跳过本次迭代，进入下一次 -->\n    <node id=\"200014\" type=\"continue\"/>\n\n    <node id=\"200015\" type=\"llm\">\n      <in name=\"item\" loop-item=\"true\"/>\n      <param name=\"prompt\"><![CDATA[正常处理：{{item}}]]></param>\n      <out name=\"output\" type=\"string\"/>\n    </node>\n  </blocks>\n\n  <out name=\"all_outputs\" type=\"list\"/>\n</node>\n<!--\n  体内子节点引用迭代元素：<in name=\"x\" loop-item=\"true\"/>，取当前 item\n  体内子节点引用迭代索引：<in name=\"i\" loop-index=\"true\"/>，取当前 index\n  Break(19): 放在 Selector 的 true/false 出口后，满足条件时退出循环\n  Continue(29): 放在 Selector 出口后，满足条件时跳过本次\n  LoopSetVariable(20): left=变量名, right=新值（可 ref 上游），读写循环累加变量\n  输出：all_outputs（每轮迭代的末端输出 list）、final_变量名（循环变量最终值）\n-->",
     },
     {
         "type": "20", "name": "循环变量 (LoopSetVariable)",
         "desc": "在循环体内读写循环累加变量（仅 Loop/Batch 体内有效），left=变量名，right=新值",
-        "xml": """<!-- 循环变量设置节点(type=20)：仅 Loop 或 Batch 体内使用 -->
-<node id="200010" type="setvar">
-  <left>counter</left>              <!-- 变量名（在循环节点的 variableParameters 中声明） -->
-  <right ref="200009.output"/>      <!-- 新值：ref 引用体内节点输出，或 literal 写死 -->
-</node>
-<!--
-  left: 变量名字符串（不是 ref）
-  right: 新值，ref=体内节点ID.字段 或 literal="值"
-  变量的最终值会出现在循环节点的输出中（final_counter 等）
--->"""
+        "xml": "<!-- 循环变量设置节点(type=20)：仅 Loop 或 Batch 体内使用 -->\n<node id=\"200010\" type=\"setvar\">\n  <left>counter</left>              <!-- 变量名（在循环节点的 variableParameters 中声明） -->\n  <right ref=\"200009.output\"/>      <!-- 新值：ref 引用体内节点输出，或 literal 写死 -->\n</node>\n<!--\n  left: 变量名字符串（不是 ref）\n  right: 新值，ref=体内节点ID.字段 或 literal=\"值\"\n  变量的最终值会出现在循环节点的输出中（final_counter 等）\n-->",
     },
     {
         "type": "19", "name": "循环中断 (Break)",
         "desc": "在循环体内强制退出整个循环（仅 Loop/Batch 体内有效），通常放在 Selector 的某个条件出口后",
-        "xml": """<!-- Break 节点(type=19)：仅 Loop 或 Batch 体内使用，无条件退出循环 -->
-<node id="200013" type="break"/>
-<!--
-  通常用法：Selector 判断某条件→true 端口→连到 Break
-  注意：Break 和 Continue 没有 in/out，只需声明节点本身
--->"""
+        "xml": "<!-- Break 节点(type=19)：仅 Loop 或 Batch 体内使用，无条件退出循环 -->\n<node id=\"200013\" type=\"break\"/>\n<!--\n  通常用法：Selector 判断某条件→true 端口→连到 Break\n  注意：Break 和 Continue 没有 in/out，只需声明节点本身\n-->",
     },
     {
         "type": "29", "name": "循环继续 (Continue)",
         "desc": "在循环体内跳过当前迭代进入下一轮（仅 Loop/Batch 体内有效），通常放在 Selector 出口后",
-        "xml": """<!-- Continue 节点(type=29)：仅 Loop 或 Batch 体内使用，跳过本轮迭代 -->
-<node id="200014" type="continue"/>
-<!--
-  通常用法：Selector 判断某条件→true 端口→连到 Continue
-  注意：Break 和 Continue 没有 in/out，只需声明节点本身
--->"""
+        "xml": "<!-- Continue 节点(type=29)：仅 Loop 或 Batch 体内使用，跳过本轮迭代 -->\n<node id=\"200014\" type=\"continue\"/>\n<!--\n  通常用法：Selector 判断某条件→true 端口→连到 Continue\n  注意：Break 和 Continue 没有 in/out，只需声明节点本身\n-->",
     },
-    # ===== 批处理 =====
     {
         "type": "28", "name": "批处理 (Batch)",
         "desc": "复合节点(blocks)，对数组逐元素并发执行体内逻辑，支持 batchSize/concurrentSize 控制并发度，输出聚合结果列表",
-        "xml": """<!-- 批处理节点(composite)：逐元素并发执行体内 blocks -->
-<node id="210001" type="batch">
-  <!-- batchSize: 每批处理条数；concurrentSize: 并发数 -->
-  <param name="batchSize" type="integer">5</param>
-  <param name="concurrentSize" type="integer">3</param>
-
-  <!-- 输入：要批处理的数组 -->
-  <in name="items" ref="170001.filtered_outputs"/>
-
-  <blocks>
-    <!-- 体内节点：通过 loop-item / loop-index 引用当前元素和索引 -->
-    <node id="210010" type="llm">
-      <in name="item" loop-item="true"/>
-      <in name="index" loop-index="true"/>
-      <param name="prompt"><![CDATA[处理第 {{index}} 项：{{item}}]]></param>
-      <out name="output" type="string"/>
-    </node>
-  </blocks>
-
-  <out name="all_outputs" type="list"/>
-  <out name="filtered_outputs" type="list"/>
-</node>
-<!--
-  体内引用：loop-item="true" 取当前元素，loop-index="true" 取当前索引
-  输出：all_outputs(所有结果list), filtered_outputs(过滤null后的结果), nth_output(第n个结果)
-  体内也支持 Break(19) 和 Continue(29)
--->"""
-    },
-    # ===== 数据处理 =====
-    {
-        "type": "15", "name": "文本处理 (Text)",
-        "desc": "文本拼接(concat)或分割(split)，concat 多输入拼成一个字符串，split 按分隔符切分成列表",
-        "xml": """<!-- 文本处理节点 -->
-<!-- 模式1：concat —— 拼接多个输入 -->
-<node id="220001" type="text" method="concat">
-  <in name="part1" ref="130001.output"/>
-  <in name="part2" literal=" — "/>
-  <in name="part3" ref="140001.result"/>
-  <out name="string" type="string"/>
-</node>
-
-<!-- 模式2：split —— 按分隔符切割 -->
-<node id="220002" type="text" method="split">
-  <in name="text" ref="130001.output"/>
-  <param name="separator" literal=",">,</param>
-  <out name="list" type="list"/>
-</node>
-<!--
-  concat 输出：string（拼接后的文本）
-  split 输出：list（切割后的字符串数组）
-  separator 默认是逗号
--->"""
-    },
-    {
-        "type": "58", "name": "ToJson",
-        "desc": "将上游多个字段组装成 JSON 字符串，输入字段一一映射到 JSON 对象的 key",
-        "xml": """<!-- ToJson 节点：多个输入字段 → JSON 字符串 -->
-<node id="230001" type="tojson">
-  <in name="name" ref="130001.output"/>
-  <in name="age" ref="140001.result"/>
-  <in name="scores" ref="150001.filtered_outputs"/>
-  <out name="output" type="string"/>
-</node>
-<!--
-  输入：任意多个字段，每个 in 的 name 成为 JSON key，值成为 JSON value
-  输出：output（JSON 字符串，如 {"name":"Alice","age":"25","scores":[...]}）
-  典型用法：组装数据 → HTTP 请求的 body，或传给 run_script 的 payload
--->"""
-    },
-    {
-        "type": "59", "name": "FromJson",
-        "desc": "将 JSON 字符串解析为结构化字段，输入一个 JSON 字符串，输出按声明的字段名提取",
-        "xml": """<!-- FromJson 节点：JSON 字符串 → 结构化字段 -->
-<node id="240001" type="fromjson">
-  <!-- 输入：JSON 字符串 -->
-  <in name="input" ref="230001.output"/>
-
-  <!-- 输出：按需声明要从 JSON 中提取的字段 -->
-  <out name="name" type="string"/>
-  <out name="age" type="integer"/>
-  <out name="scores" type="list"/>
-</node>
-<!--
-  输入：input（JSON 字符串，通常来自 HTTP 响应 body 或 ToJson 输出）
-  输出：按 out 声明的字段名从 JSON 中提取对应值
-  解析失败时降级返回原始字符串，不中断工作流
--->"""
-    },
-    # ===== 外部调用 =====
-    {
-        "type": "45", "name": "HTTP 请求 (HTTP)",
-        "desc": "发起 HTTP 请求（GET/POST/PUT/DELETE），支持 headers/params/body/auth 配置，URL 和 body 中可用 {{}} 模板引用上游输出",
-        "xml": """<!-- HTTP 请求节点 -->
-<node id="250001" type="http">
-  <!-- API 信息：method 和 url（url 中可用 {{变量}} 模板） -->
-  <param name="method" literal="POST">POST</param>
-  <param name="url"><![CDATA[https://api.example.com/v1/chat/completions]]></param>
-
-  <!-- 请求头 -->
-  <param name="Content-Type" literal="application/json" header="true">application/json</param>
-  <param name="Authorization" header="true"><![CDATA[Bearer {{api_key}}]]></param>
-
-  <!-- URL 查询参数 -->
-  <param name="version" literal="v1" query="true">v1</param>
-
-  <!-- 模板入参 -->
-  <in name="api_key" ref="190001.api_key"/>
-  <in name="body_data" ref="230001.output"/>
-
-  <!-- 请求体（JSON body） -->
-  <param name="bodyType" literal="json">json</param>
-  <body><![CDATA[{{body_data}}]]></body>
-
-  <!-- 超时和重试 -->
-  <param name="timeout" type="integer">30</param>
-  <param name="retryTimes" type="integer">2</param>
-
-  <out name="body" type="string"/>
-  <out name="statusCode" type="integer"/>
-  <out name="headers" type="object"/>
-</node>
-<!--
-  header="true" 的 param 作为请求头；query="true" 的 param 作为 URL 查询参数
-  body 元素内的 CDATA 为请求体，支持 {{变量}} 模板
-  输出：body（响应体字符串）, statusCode（HTTP 状态码）, headers（响应头JSON对象）
--->"""
+        "xml": "<!-- 批处理节点(composite)：逐元素并发执行体内 blocks -->\n<node id=\"210001\" type=\"batch\">\n  <!-- batchSize: 每批处理条数；concurrentSize: 并发数 -->\n  <param name=\"batchSize\" type=\"integer\">5</param>\n  <param name=\"concurrentSize\" type=\"integer\">3</param>\n\n  <!-- 输入：要批处理的数组 -->\n  <in name=\"items\" ref=\"170001.filtered_outputs\"/>\n\n  <blocks>\n    <!-- 体内节点：通过 loop-item / loop-index 引用当前元素和索引 -->\n    <node id=\"210010\" type=\"llm\">\n      <in name=\"item\" loop-item=\"true\"/>\n      <in name=\"index\" loop-index=\"true\"/>\n      <param name=\"prompt\"><![CDATA[处理第 {{index}} 项：{{item}}]]></param>\n      <out name=\"output\" type=\"string\"/>\n    </node>\n  </blocks>\n\n  <out name=\"all_outputs\" type=\"list\"/>\n  <out name=\"filtered_outputs\" type=\"list\"/>\n</node>\n<!--\n  体内引用：loop-item=\"true\" 取当前元素，loop-index=\"true\" 取当前索引\n  输出：all_outputs(所有结果list), filtered_outputs(过滤null后的结果), nth_output(第n个结果)\n  体内也支持 Break(19) 和 Continue(29)\n-->",
     },
     {
         "type": "9", "name": "子工作流 (SubWorkflow)",
         "desc": "调用另一个已注册的工作流作为子流程，传入参数、获取结构化返回值",
-        "xml": """<!-- 子工作流节点：调用另一个工作流 -->
-<node id="260001" type="subworkflow">
-  <!-- workflow: 目标工作流名（.agent/workflows/ 下的文件名，不含扩展名） -->
-  <param name="workflow" literal="greet">greet</param>
-
-  <!-- 输入：传给子工作流的参数（对应子工作流开始节点的 out 声明） -->
-  <in name="name" ref="130001.output"/>
-
-  <!-- 输出：子工作流结束节点返回的字段 -->
-  <out name="greeting" type="string"/>
-  <out name="output" type="string"/>
-</node>
-<!--
-  workflow 参数：目标工作流的文件名（不含扩展名）
-  输入字段对应子工作流开始节点(100001)声明的 out
-  输出字段对应子工作流结束节点(900001)的 out
--->"""
+        "xml": "<!-- 子工作流节点：调用另一个工作流 -->\n<node id=\"260001\" type=\"subworkflow\">\n  <!-- workflow: 目标工作流名（.agent/workflows/ 下的文件名，不含扩展名） -->\n  <param name=\"workflow\" literal=\"greet\">greet</param>\n\n  <!-- 输入：传给子工作流的参数（对应子工作流开始节点的 out 声明） -->\n  <in name=\"name\" ref=\"130001.output\"/>\n\n  <!-- 输出：子工作流结束节点返回的字段 -->\n  <out name=\"greeting\" type=\"string\"/>\n  <out name=\"output\" type=\"string\"/>\n</node>\n<!--\n  workflow 参数：目标工作流的文件名（不含扩展名）\n  输入字段对应子工作流开始节点(100001)声明的 out\n  输出字段对应子工作流结束节点(900001)的 out\n-->",
     },
-    # ===== 交互节点（工具模式下受限） =====
     {
         "type": "13", "name": "输出发送 (OutputEmitter)",
         "desc": "交互式输出：在工作流执行中途向外部发送消息（工具模式下仅收集输出，不会真正交互）",
-        "xml": """<!-- 输出发送节点：向外部发送中间结果（工具模式下仅记录） -->
-<node id="270001" type="output">
-  <in name="message" ref="130001.output"/>
-  <in name="data" ref="150001.result"/>
-</node>
-<!--
-  交互模式下向用户发送消息；工具模式下输出被收集到 ctx.emitMessages
-  通常和 InputReceiver(30) 配对使用，实现"中间输出-等待输入-继续执行"
--->"""
+        "xml": "<!-- 输出发送节点：向外部发送中间结果（工具模式下仅记录） -->\n<node id=\"270001\" type=\"output\">\n  <in name=\"message\" ref=\"130001.output\"/>\n  <in name=\"data\" ref=\"150001.result\"/>\n</node>\n<!--\n  交互模式下向用户发送消息；工具模式下输出被收集到 ctx.emitMessages\n  通常和 InputReceiver(30) 配对使用，实现\"中间输出-等待输入-继续执行\"\n-->",
     },
     {
         "type": "30", "name": "输入接收 (InputReceiver)",
         "desc": "交互式输入：暂停工作流等待外部输入（工具模式下不支持，会报错）",
-        "xml": """<!-- 输入接收节点：等待外部输入（⚠ 工具模式下不支持，会报错） -->
-<node id="280001" type="input">
-  <out name="user_response" type="string"/>
-</node>
-<!--
-  ⚠ 仅交互模式（如 Coze 预览）可用，工具/Agent 调用模式下会抛出 WorkflowError
-  如需在工具模式下实现"确认后再继续"，改用 Selector + 条件判断
--->"""
+        "xml": "<!-- 输入接收节点：等待外部输入（⚠ 工具模式下不支持，会报错） -->\n<node id=\"280001\" type=\"input\">\n  <out name=\"user_response\" type=\"string\"/>\n</node>\n<!--\n  ⚠ 仅交互模式（如 Coze 预览）可用，工具/Agent 调用模式下会抛出 WorkflowError\n  如需在工具模式下实现\"确认后再继续\"，改用 Selector + 条件判断\n-->",
     },
     {
         "type": "31", "name": "注释 (Comment)",
         "desc": "纯注释节点，不参与执行，用于在画布上添加说明文字",
-        "xml": """<!-- 注释节点：不参与执行，仅用于画布标注 -->
-<node id="290001" type="comment">
-  <content>这里是对后续逻辑的说明，不会被执行</content>
-</node>
-<!-- 注释节点在扫描和执行时均被跳过，不会产生任何输出 -->"""
+        "xml": "<!-- 注释节点：不参与执行，仅用于画布标注 -->\n<node id=\"290001\" type=\"comment\">\n  <content>这里是对后续逻辑的说明，不会被执行</content>\n</node>\n<!-- 注释节点在扫描和执行时均被跳过，不会产生任何输出 -->",
     },
 ]
+
+def _node_catalog() -> list:
+    """全量节点目录 = 核心（本表）+ 插件（node_plugins.catalog_entries 动态聚合——
+    插件的 desc/xml 示例跟实现走，用户级 .agent/nodes/ 的目录声明同样生效）。
+    延迟 import：node_plugins.default_dirs 反向依赖本模块 WORKSPACE，顶层 import 会循环。"""
+    try:
+        from node_plugins import catalog_entries
+        return _CORE_NODE_CATALOG + catalog_entries()
+    except Exception:
+        return list(_CORE_NODE_CATALOG)
 
 
 
 def list_workflow_nodes() -> str:
     """列出工作流所有可用节点类型（名称 + 类型码 + 简介）。
     先调用它了解节点全景，再用 query_workflow_node(type="3") 或 query_workflow_node(name="LLM") 查具体某个节点的完整 XML 示例。"""
-    lines = ["=== 工作流可用节点（共 {} 种）===".format(len(_NODE_CATALOG)),
+    cat = _node_catalog()
+    lines = ["=== 工作流可用节点（共 {} 种）===".format(len(cat)),
              "{:<6} {:<20} {}".format("type", "名称", "简介"),
              "-" * 70]
-    for n in _NODE_CATALOG:
+    for n in cat:
         lines.append("{:<6} {:<20} {}".format(n["type"], n["name"], n["desc"]))
     lines.append("")
     lines.append('用法：query_workflow_node(type="3") 或 query_workflow_node(name="LLM") 查看某节点的完整 XML 示例。')
@@ -1957,15 +1499,15 @@ def query_workflow_node(type: str = "", name: str = "") -> str:
 
     特殊：type="4" 或 name="plugin" 时额外列出所有可用内置工具及其参数。"""
     if type:
-        matches = [n for n in _NODE_CATALOG if n["type"] == type]
+        matches = [n for n in _node_catalog() if n["type"] == type]
     elif name:
         nl = name.lower()
-        matches = [n for n in _NODE_CATALOG if nl in n["name"].lower() or nl in n["desc"].lower()]
+        matches = [n for n in _node_catalog() if nl in n["name"].lower() or nl in n["desc"].lower()]
     else:
         return '请提供 type 或 name 参数。先用 list_workflow_nodes 查看所有可用节点。\n示例：query_workflow_node(type="3") 或 query_workflow_node(name="循环")'
 
     if not matches:
-        hint = "可用 type：" + ", ".join(sorted(set(n["type"] for n in _NODE_CATALOG), key=lambda x: int(x)))
+        hint = "可用 type：" + ", ".join(sorted({n["type"] for n in _node_catalog()}, key=lambda x: int(x) if x.isdigit() else 9999))
         return f"[未匹配] type={type}, name={name}\n{hint}\n先用 list_workflow_nodes 查看所有可用节点。"
 
     parts = []
@@ -2046,29 +1588,7 @@ def get_tool_timeout() -> str:
     return f"当前工具超时：{TOOL_TIMEOUT}s"
 
 
-# ===== 内置轻量工具（工作流编排可用）=====
-# 纯函数型（add/subtract/multiply/divide/join/split/contains/starts_with/ends_with/
-# to_ascii/pass_through/list_append/get_list_item/sleep/kw_score 共 15 个）已外置到
-# tools/builtin/*.py（script_tools.py 扫描注册、/reload tools 热加载；外置同名覆盖内置）。
-# 此处保留：有框架依赖的（llm_call 三件套/cosine_sim/kv_cache）与暂缓迁移的（diff 等）。
-
-def length(obj) -> int:
-    """返回字符串/列表/字典的长度。"""
-    try:
-        return len(obj)
-    except TypeError:
-        return len(str(obj))
-
-def to_uppercase(text: str) -> str:
-    """字符串转大写。"""
-    return (text or "").upper()
-
-def to_lowercase(text: str) -> str:
-    """字符串转小写。"""
-    return (text or "").lower()
-
-from typing import Any as _Any   # kv_cache_write 注解用（pass_through 已外置 tools/builtin）
-
+# length/to_uppercase/to_lowercase → tools/builtin/str_tools.py（纯函数外置）
 # ===== 工作流 ReAct 原语三件套 =====
 # _WF_CTX 由 workflow._handle_plugin 在调用这三个工具时注入（llm=执行上下文的 LLMClient、
 # tools=工具箱）。它们只在工作流 plugin 节点里有意义——Agent/代码节点直接调用会拿到错误提示。
@@ -2219,74 +1739,6 @@ def git_commit(message: str, files: str = "") -> str:
                 f"（网络/权限问题可稍后手动 git push；commit 已在本地）")
     r_log = _git("log", "-1", "--oneline")
     return f"✅ 已提交并推送\n{r_log.stdout.strip()}\n（trailer: Co-authored-by: Agt）"
-
-
-def cosine_sim(text1: str, text2: str) -> float:
-    """计算两段文本的语义余弦相似度（-1~1，越大越相关）。
-    复用 /rag 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后计算。
-    用于工作流批处理重排：query 与每个候选切片的相似度（需先配置 RAG 的 embedding）。
-    text2 的向量缓存由 _CachedEmbedder 包装层自动处理（LRU），本函数无需自己管缓存。
-    惰性构建：单例未就绪时 ensure_rag 等待后台预热完成（启动初期首次调用可能等几秒）。"""
-    from rag import ensure_rag
-    rag = ensure_rag()
-    if rag is None:
-        raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
-    import numpy as np
-    vecs = rag.embedder.encode([str(text1 or ""), str(text2 or "")],
-                               normalize_embeddings=True, show_progress_bar=False)
-    return round(float(np.dot(vecs[0], vecs[1])), 4)
-
-
-# —— 应用级 KV 结果缓存（kv_cache_read/write 工具的进程级存储）——
-# 同输入结果确定的 LLM 调用（如关键词提取）做 memoization：同轮多个 before_turn 工作流
-# 共用一次提取。namespace 兼作版本号——改提示词/换模型时换 namespace 即整体失效。
-_KV_CACHE: dict = {}
-
-
-def _kv_key(key: str, namespace: str) -> tuple:
-    """缓存键：namespace + 内容哈希（超长消息也不占内存，value 原样存）。"""
-    h = hashlib.sha1(str(key).encode("utf-8", errors="ignore")).hexdigest()
-    return (str(namespace or ""), h)
-
-
-def kv_cache_read(key: str, namespace: str = "") -> dict:
-    """读应用级 KV 缓存：命中返回 {"hit": true, "value": ...}，未命中 {"hit": false, "value": null}。
-    key 任意字符串（通常接 user_message 原文，内部按内容哈希存储）；namespace 隔离不同用途/版本。
-    进程级存储：重启清空（结果缓存语义，丢失=下次重新计算，无正确性影响）。"""
-    v = _KV_CACHE.get(_kv_key(key, namespace))
-    return {"hit": v is not None, "value": v}
-
-
-def kv_cache_write(key: str, value: _Any, namespace: str = "") -> dict:
-    """写应用级 KV 缓存：把 value（任意 JSON 类型：list/dict/string/number...）存到 key 下，
-    与 kv_cache_read 配对（read 未命中 → 计算 → 写回）。返回 {"ok": true}。"""
-    _KV_CACHE[_kv_key(key, namespace)] = value
-    return {"ok": True}
-
-
-# —— embedding 可用性探测（结果缓存 5 分钟：首次失败后不必每次调用都重试模型加载）——
-_EMB_PROBE: dict = {"ok": None, "ts": 0.0}
-
-
-def emb_probe() -> bool:
-    """探测 RAG embedding 模型是否可用（未配置 / 加载失败 / API 不通 → False）。
-    内部试 encode 一对短文本；结果进程内缓存 5 分钟（避免每次调用都做真实 encode）。
-    用于工作流降级路由：probe=True → cosine_sim 语义重排；False → 关键词命中数评分。"""
-    now = time.time()
-    if _EMB_PROBE["ok"] is not None and now - _EMB_PROBE["ts"] < 300:
-        return _EMB_PROBE["ok"]
-    ok = False
-    try:
-        from rag import ensure_rag
-        rag = ensure_rag()   # 预热中等待完成再判定（避免预热期误降级 + 5 分钟缓存粘住）
-        if rag is not None and rag.embedder is not None:
-            v = rag.embedder.encode(["探测", "probe"], normalize_embeddings=True,
-                                    show_progress_bar=False)
-            ok = len(v) == 2 and len(getattr(v[0], "tolist", lambda: v[0])()) > 0
-    except Exception:
-        ok = False
-    _EMB_PROBE.update(ok=ok, ts=now)
-    return ok
 
 
 def _myers_diff(a_lines, b_lines):
@@ -2450,13 +1902,6 @@ def diff_files(file1: str, file2: str, context: int = 2,
                                 a_offset=s1, b_offset=s2)
 
 
-def diff_lines(a_text: str, b_text: str, context: int = 2) -> str:
-    """Myers Diff 对比两个【文本块】（按行），输出与 diff_files 同款 unified 风格。
-    工作流编排用：比较两个节点的文本输出 / 两段代码 / 改前改后草稿，无需落盘。"""
-    A = (a_text or "").splitlines()
-    B = (b_text or "").splitlines()
-    return _render_unified_diff(A, B, _myers_diff(A, B), "a_text", "b_text", context)
-
 
 
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
@@ -2529,12 +1974,11 @@ REAL_TOOLS = Toolbox(
     }),
 )
 
-# 轻量工具（基础函数：plugin 节点 / 代码节点 / Agent 均可调；build_agent 注册进 agent.tools）
-# 纯函数型 15 个已外置 tools/builtin/（script_tools.py 扫描注册，hidden 语义由描述符携带）
 LIGHT_TOOLS = Toolbox(
-    Tool(length),
-    Tool(to_uppercase),
-    Tool(to_lowercase),
+    # 纯函数型（length/to_uppercase/to_lowercase）→ tools/builtin/str_tools.py
+    # kv_cache_read/write → tools/builtin/kv_tools.py（_KV_CACHE 状态随外置件走）
+    # diff_lines → tools/builtin/diff_tools.py（Myers 三件套副本；框架侧 diff_files 用本文件算法）
+    # cosine_sim/emb_probe → 本体 rag.py，注册 tools/builtin/rag_tools.py（与 embedder 单例共生）
     # 工作流 ReAct 原语三件套（仅工作流 plugin 节点可用；执行时由 workflow 引擎注入 llm/tools 上下文）
     Tool(llm_call, outputs=LLM_CALL_OUTPUTS, param_descriptions={
         "messages": "OpenAI 格式消息数组（system/user/assistant/tool 均可；循环中用循环变量累积）",
@@ -2547,27 +1991,6 @@ LIGHT_TOOLS = Toolbox(
         "name": "工具名（接 llm_call.tool_calls.0.name）",
         "arguments": "参数 dict（接 llm_call.tool_calls.0.arguments）",
     }),
-    Tool(cosine_sim, outputs=[{"name": "raw", "type": "number", "description": "余弦相似度（-1~1，越大越相关）"}], param_descriptions={
-        "text1": "第一段文本（批处理时接 loop-item=候选切片）",
-        "text2": "第二段文本（通常接 query 原文）",
-    }),
-    Tool(kv_cache_read, outputs=[
-        {"name": "hit", "type": "boolean", "description": "是否命中缓存"},
-        {"name": "value", "type": "any", "description": "缓存的值（未命中为 null）"},
-    ], param_descriptions={
-        "key": "缓存键（通常接 user_message 原文，内部按内容哈希）",
-        "namespace": "命名空间：隔离不同用途，兼作版本号（改提示词/换模型时换名即整体失效）",
-    }),
-    Tool(kv_cache_write, param_descriptions={
-        "key": "缓存键（与配套 read 相同的 key）",
-        "value": "要缓存的值（任意 JSON 类型：list/dict/string/number...）",
-        "namespace": "命名空间（与配套 read 相同）",
-    }),
-    Tool(diff_lines, param_descriptions={
-        "a_text": "改前文本（接上游节点输出）",
-        "b_text": "改后文本",
-        "context": "每个 hunk 前后的上下文行数（默认 2）",
-    }),
     Tool(dir_outline, param_descriptions={
         "path": "要列大纲的目录（workspace 内；也可传单个文件）",
         "max_files": "最多展开的文件数（默认 200，超出截断标注）",
@@ -2578,7 +2001,6 @@ LIGHT_TOOLS = Toolbox(
         "max_files": "最多拼接的文件数（默认 50）",
         "max_chars": "拼接结果字符上限（默认 64000）",
     }),
-    Tool(emb_probe, outputs=[{"name": "raw", "type": "boolean", "description": "embedding 是否可用（探测结果缓存 5 分钟）"}]),
     hidden=True,
 )
 

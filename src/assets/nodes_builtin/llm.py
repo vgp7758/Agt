@@ -98,4 +98,7 @@ def _handle_llm(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "3", "label": "LLM", "handler": _handle_llm}
+    return {"type": "3", "label": "LLM", "handler": _handle_llm, "catalog": _CATALOG}
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "LLM", "desc": "调用大语言模型，支持模板渲染 {{变量}}、systemPrompt、temperature/maxTokens 等参数配置，可声明结构化输出 schema", "xml": "<!-- LLM 节点：调用大模型 -->\n<node id=\"130001\" type=\"llm\">\n  <!-- 模板入参：声明后在 prompt/systemPrompt 中用 {{变量名}} 引用 -->\n  <in name=\"query\" ref=\"100001.query\"/>\n  <in name=\"context\" ref=\"120001.result\"/>\n\n  <!-- LLM 参数（param）：在 Coze 中等同于 llmParam -->\n  <param name=\"prompt\"><![CDATA[根据以下上下文回答问题：{{query}}\n\n上下文：\n{{context}}]]></param>\n  <param name=\"systemPrompt\"><![CDATA[你是专业的问答助手。回答简洁准确，不超过 200 字。]]></param>\n  <param name=\"temperature\" type=\"float\">0.7</param>\n  <param name=\"maxTokens\" type=\"integer\">1024</param>\n  <param name=\"modelName\"><![CDATA[deepseek-chat]]></param>\n\n  <!-- 结构化输出（可选）：声明 output 字段及其 schema，LLM 将按 JSON Schema 输出 -->\n  <out name=\"output\" type=\"string\"/>\n  <out name=\"answer\" type=\"string\"/>\n  <out name=\"confidence\" type=\"integer\"/>\n</node>\n<!--\n  llmParam 可用参数：prompt, systemPrompt, temperature, maxTokens, modelName, topP\n  输入：in 声明的模板变量（在 prompt 中用 {{变量名}} 引用）\n  输出：output（LLM 原始输出）；若声明了多个 out 字段，LLM 将输出符合 schema 的 JSON\n-->"}

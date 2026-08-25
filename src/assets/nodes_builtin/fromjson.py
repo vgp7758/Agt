@@ -24,4 +24,7 @@ def _fromjson(node: dict, ctx) -> dict:
 
 
 def agt_node():
-    return {"type": "59", "label": "FromJSON", "handler": _fromjson}
+    return {"type": "59", "label": "FromJSON", "handler": _fromjson, "catalog": _CATALOG}
+
+# ===== 节点目录条目（list_workflow_nodes / query_workflow_node 动态聚合自插件声明）=====
+_CATALOG = {"name": "FromJson", "desc": "将 JSON 字符串解析为结构化字段，输入一个 JSON 字符串，输出按声明的字段名提取", "xml": "<!-- FromJson 节点：JSON 字符串 → 结构化字段 -->\n<node id=\"240001\" type=\"fromjson\">\n  <!-- 输入：JSON 字符串 -->\n  <in name=\"input\" ref=\"230001.output\"/>\n\n  <!-- 输出：按需声明要从 JSON 中提取的字段 -->\n  <out name=\"name\" type=\"string\"/>\n  <out name=\"age\" type=\"integer\"/>\n  <out name=\"scores\" type=\"list\"/>\n</node>\n<!--\n  输入：input（JSON 字符串，通常来自 HTTP 响应 body 或 ToJson 输出）\n  输出：按 out 声明的字段名从 JSON 中提取对应值\n  解析失败时降级返回原始字符串，不中断工作流\n-->"}

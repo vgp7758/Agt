@@ -398,3 +398,46 @@ if __name__ == "__main__":
         for h in rag.query(q):
             print(f"  {Path(h['file_path']).name}:{h['start_line']}-{h['end_line']}"
                   f"  {h['text'][:80].replace(chr(10), ' ')}")
+
+
+# ===== 语义工具（cosine_sim / emb_probe，从 real_tools 迁入——注册在 tools/builtin/rag_tools.py）=====
+# 语义归属 RAG 组：与 embedder 单例共生（ensure_rag 共享预热）；real_tools 不再持有。
+
+
+def cosine_sim(text1: str, text2: str) -> float:
+    """计算两段文本的语义余弦相似度（-1~1，越大越相关）。
+    复用 /rag 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后计算。
+    用于工作流批处理重排：query 与每个候选切片的相似度（需先配置 RAG 的 embedding）。
+    text2 的向量缓存由 _CachedEmbedder 包装层自动处理（LRU），本函数无需自己管缓存。
+    惰性构建：单例未就绪时 ensure_rag 等待后台预热完成（启动初期首次调用可能等几秒）。"""
+    rag = ensure_rag()
+    if rag is None:
+        raise RuntimeError("RAG embedding 未配置（/rag 页面配置后可用）")
+    import numpy as np
+    vecs = rag.embedder.encode([str(text1 or ""), str(text2 or "")],
+                               normalize_embeddings=True, show_progress_bar=False)
+    return round(float(np.dot(vecs[0], vecs[1])), 4)
+
+
+# —— embedding 可用性探测（结果缓存 5 分钟：首次失败后不必每次调用都重试模型加载）——
+_EMB_PROBE: dict = {"ok": None, "ts": 0.0}
+
+
+def emb_probe() -> bool:
+    """探测 RAG embedding 模型是否可用（未配置 / 加载失败 / API 不通 → False）。
+    内部试 encode 一对短文本；结果进程内缓存 5 分钟（避免每次调用都做真实 encode）。
+    用于工作流降级路由：probe=True → cosine_sim 语义重排；False → 关键词命中数评分。"""
+    now = time.time()
+    if _EMB_PROBE["ok"] is not None and now - _EMB_PROBE["ts"] < 300:
+        return _EMB_PROBE["ok"]
+    ok = False
+    try:
+        rag = ensure_rag()   # 预热中等待完成再判定（避免预热期误降级 + 5 分钟缓存粘住）
+        if rag is not None and rag.embedder is not None:
+            v = rag.embedder.encode(["探测", "probe"], normalize_embeddings=True,
+                                    show_progress_bar=False)
+            ok = len(v) == 2 and len(getattr(v[0], "tolist", lambda: v[0])()) > 0
+    except Exception:
+        ok = False
+    _EMB_PROBE.update(ok=ok, ts=now)
+    return ok

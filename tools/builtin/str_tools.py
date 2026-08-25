@@ -36,6 +36,24 @@ def split(text: str, separator: str = ",") -> list:
     return text.split(separator) if text else []
 
 
+def length(obj) -> int:
+    """返回字符串/列表/字典的长度。"""
+    try:
+        return len(obj)
+    except TypeError:
+        return len(str(obj))
+
+
+def to_uppercase(text: str) -> str:
+    """字符串转大写。"""
+    return (text or "").upper()
+
+
+def to_lowercase(text: str) -> str:
+    """字符串转小写。"""
+    return (text or "").lower()
+
+
 def agt_register():
     return [
         {"name": "contains", "func": contains, "hidden": True, "group": "light", "version": 1},
@@ -44,4 +62,7 @@ def agt_register():
         {"name": "to_ascii", "func": to_ascii, "hidden": True, "group": "light", "version": 1},
         {"name": "join", "func": join, "hidden": True, "group": "light", "version": 1},
         {"name": "split", "func": split, "hidden": True, "group": "light", "version": 1},
+        {"name": "length", "func": length, "hidden": True, "group": "light", "version": 1},
+        {"name": "to_uppercase", "func": to_uppercase, "hidden": True, "group": "light", "version": 1},
+        {"name": "to_lowercase", "func": to_lowercase, "hidden": True, "group": "light", "version": 1},
     ]

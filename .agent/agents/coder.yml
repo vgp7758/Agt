@@ -4,6 +4,7 @@ tools: run_python, write_file, edit, read_file, grep
 model: null
 assembly:
 - file: .agent/agents/coder.md
+- history|optional
 - user_message
 - steps
 hooks:

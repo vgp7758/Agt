@@ -188,11 +188,33 @@ def load_agents_index(workspace: Path) -> list[dict]:
 
 
 def agents_summary(workspace: Path) -> str:
-    """拼成 SYSTEM 里一行一个子 agent 的摘要（name + description/何时调用）。无则空串。"""
+    """拼成 SYSTEM 里一行一个子 agent 的摘要（name + description/何时调用）。
+    声明了 optional 装配段的附一行提示——主 Agent 派活时才知道可用 assembly 参数按需打开。"""
     idx = load_agents_index(workspace)
     if not idx:
         return ""
-    return "\n".join(f"- {a['name']}: {a['description']}" for a in idx)
+    _HINT = {"history": "history=on 可带本 agent 历轮对话记忆",
+             "ltm": "ltm=on 可带跨会话长期记忆",
+             "rules": "rules=on 可带项目规则",
+             "tail": "tail=on 可带动态尾块",
+             "hooks": "hooks=on 可跑钩子工作流"}
+    lines = []
+    for a in idx:
+        opt_segs = []
+        try:
+            meta, _ = load_agent_yml(workspace / a["path"])
+            for it in (meta.get("assembly") or []):
+                if isinstance(it, str) and "|" in it:
+                    base = it.split("|", 1)[0].split("=")[0].strip()
+                    if base in _HINT and base not in opt_segs:
+                        opt_segs.append(base)
+        except Exception:
+            pass
+        tail = ""
+        if opt_segs:
+            tail = " [可选装配: " + "；".join(_HINT[s] for s in opt_segs) + "（默认关）]"
+        lines.append(f"- {a['name']}: {a['description']}{tail}")
+    return "\n".join(lines)
 
 
 def seed_default_agents(workspace: Path) -> int:

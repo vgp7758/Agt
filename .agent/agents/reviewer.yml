@@ -4,6 +4,7 @@ tools: read_file, grep
 model: null
 assembly:
 - file: .agent/agents/reviewer.md
+- history|optional
 - user_message
 - steps
 hooks:

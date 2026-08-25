@@ -252,7 +252,9 @@ def _asm_item_from_str(s: str):
             return {"kind": "tool", "tool": f"{tname}({targs})", "tool_name": tname, "tool_args": targs,
                     "timing": "turn"}
         return None
-    seg = raw.split("|", 1)[0].strip()
+    seg_raw, _, tail = raw.partition("|")          # 尾随 '|optional' 等标志（optional=真语义：默认不装，=on 打开）
+    opt = tail.strip().lower() == "optional"
+    seg = seg_raw.strip()
     mode = None
     if "=" in seg:
         seg, _, mode = seg.partition("=")
@@ -264,6 +266,8 @@ def _asm_item_from_str(s: str):
             _LOG.warning("assembly history 模式 '%s' 未知（合法：%s），按默认处理", mode, list(_ASSEMBLY_HISTORY_MODES))
             mode = None
         item = {"kind": "seg", "name": seg}
+        if opt:
+            item["opt"] = True   # 默认不装配：messages_for_llm 跳过；agent_prompt assembly="seg=on" 清此标记打开
         if mode:
             item["mode"] = mode
         return item
@@ -395,6 +399,7 @@ def _apply_assembly_overrides(base_plan: list, overrides_str: str) -> tuple:
             continue
         existing = next((it for it in plan if it.get("kind") == "seg" and it.get("name") == seg), None)
         if existing is not None:
+            existing.pop("opt", None)   # optional 段（默认关）被 =on 显式打开：清标记
             if mode:
                 existing["mode"] = mode
             continue

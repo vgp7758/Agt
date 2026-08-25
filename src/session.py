@@ -1091,6 +1091,8 @@ class Session:
             for item in plan:
                 kind = item.get("kind")
                 if kind == "seg":
+                    if item.get("opt"):
+                        continue   # optional 段默认不装配（agent_prompt assembly="seg=on" 清标记后才会到这里）
                     name = item.get("name")
                     if self.current_turn_only and name in ("history", "ltm"):
                         continue   # reuse 投影隔离：历史系段一律不投影

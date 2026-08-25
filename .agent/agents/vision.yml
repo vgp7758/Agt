@@ -5,6 +5,7 @@ tools: ''
 model: qwen
 assembly:
 - file: .agent/agents/vision.md
+- history|optional
 - user_message
 - steps
 hooks:

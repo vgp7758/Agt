@@ -2095,26 +2095,46 @@ function quickSetRef(i,val){
 function quickSetItemField(i,name){setInputSource(i,name?('item.'+name):'item');}
 function quickSetGlobal(i,name){setInputSource(i,'global');if(name)setRefPath(i,name);}
 
-// ===== 连线编辑折叠组（手机无拖拽连线的替代入口；PC 默认折叠不碍事）=====
-// 流程连线：本节点每个出口（主出口/错误出口/selector分支/intent分支）→ 下游节点下拉。
-// 语义对齐拖线：分支端口每分支一条（换目标覆盖），选（无）删边。数据直接改 WF.edges，与拖线完全等价。
-function renderFlowLinks(n){
-  let ports=[];
-  if(n.type!=='2'&&!['8','19','22','29'].includes(n.type))ports.push({port:'',label:'主出口'});
-  if(n.type!=='2'&&!['8','19','22','29'].includes(n.type))ports.push({port:n.id+'_error',label:'错误出口'});
+// ===== 连线编辑折叠组（手机无拖拽连线的替代入口；PC 线乱/节点远时同样好用；默认折叠不碍事）=====
+// 枚举某节点的全部流程出口（主/错误/selector分支/intent分支）
+function _flowOutPortsOf(n){
+  const ports=[];
+  if(n.type!=='2'&&!['8','19','22','29'].includes(n.type)){
+    ports.push({port:'',label:'主出口'});
+    ports.push({port:n.id+'_error',label:'错误出口'});
+  }
   if(n.type==='8'){
-    const brs=n.data.inputs?.branches||[];
-    brs.forEach((b,i)=>ports.push({port:i===0?'true':'true_'+i,label:'分支'+(i+1)}));
+    (n.data.inputs?.branches||[]).forEach((b,i)=>ports.push({port:i===0?'true':'true_'+i,label:'分支'+(i+1)}));
     ports.push({port:'false',label:'else'});
   }
   if(n.type==='22'){
     (n.data.inputs?.intents||[]).forEach((it,i)=>ports.push({port:'branch_'+i,label:it.name||('意图'+(i+1))}));
     ports.push({port:'default',label:'默认'});
   }
-  if(!ports.length)return '';
+  return ports;
+}
+// 入口行下拉选项：所有其它节点的所有出口（"节点id@@port"编码；@@ 分隔避免与 id/port 内容冲突）
+function _flowInOptions(n,cur){
+  let h=`<option value="">（断开此连线）</option>`;
+  WF.nodes.forEach(on=>{
+    if(on.id===n.id||on.type==='2')return;
+    _flowOutPortsOf(on).forEach(pt=>{
+      const v=on.id+'@@'+pt.port;
+      h+=`<option value="${v}"${cur===v?' selected':''}>${nodeTitle(on)} · ${pt.label}</option>`;
+    });
+  });
+  return h;
+}
+// 流程连线：双视角编辑——出口（源视角）每出口一行选下游；入口（目标视角）每条入边一行选上游出口。
+// 入口段是用户场景的主入口：线乱/节点远时在目标节点上直接选"谁连到我"（含分支/error口），支持多上游汇聚。
+function renderFlowLinks(n){
+  const myPorts=_flowOutPortsOf(n);
+  if(!myPorts.length)return '';
   const tgts=WF.nodes.filter(t=>t.id!==n.id&&String(t.type)!=='1');   // 下游不可是开始节点（对齐拖线目标约束）
-  let h=`<details style="margin:4px 0"><summary style="cursor:pointer;color:#fff;font-size:11px;padding:2px 0">🔗 流程连线（出口 → 下游节点）</summary><div style="padding:2px 0 2px 6px">`;
-  ports.forEach(pt=>{
+  let h=`<details style="margin:4px 0"><summary style="cursor:pointer;color:#fff;font-size:11px;padding:2px 0">🔗 流程连线</summary><div style="padding:2px 0 2px 6px">`;
+  // —— 出口 → 下游（单选：主出口多下游请用下方入口段逐条维护，这里改选会清该出口其它下游）——
+  h+=`<div style="font-size:10px;color:#8a9099">出口 → 下游：</div>`;
+  myPorts.forEach(pt=>{
     const edge=WF.edges.find(e=>e.sourceNodeID===n.id&&String(e.sourcePortID||'')===pt.port);
     const cur=edge?edge.targetNodeID:'';
     h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
@@ -2124,16 +2144,47 @@ function renderFlowLinks(n){
       +tgts.map(t=>`<option value="${t.id}" ${cur===t.id?'selected':''}>${nodeTitle(t)}</option>`).join('')
       +`</select></div>`;
   });
+  // —— 入口 ← 上游出口（目标视角；每条入边一行，可增删改）——
+  if(n.type!=='1'){
+    h+=`<div style="font-size:10px;color:#8a9099;margin-top:4px">入口 ← 上游出口：</div>`;
+    WF.edges.forEach((e,i)=>{
+      if(e.targetNodeID!==n.id)return;
+      const cur=e.sourceNodeID+'@@'+String(e.sourcePortID||'');
+      h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
+        +`<select onchange="setFlowInLink(${i},this.value)" style="flex:1;font-size:10px">`
+        +_flowInOptions(n,cur)
+        +`</select></div>`;
+    });
+    h+=`<button onclick="addFlowInLink()" style="font-size:10px;padding:1px 6px">＋ 入口</button>`;
+  }
   return h+`</div></details>`;
 }
 function setFlowLink(port,tgt){
   const n=findN(selNode);if(!n)return;
   // 下拉是单选语义：先清空该出口的全部边，再按需 push。
-  // 分支端口对齐拖线（本来就单条）；主出口牺牲多下游表达（多下游仍可用拖线/浮窗实现），换 UI 一致性
+  // 分支端口对齐拖线（本来就单条）；主出口牺牲多下游表达（多下游用入口段逐条维护），换 UI 一致性
   WF.edges=WF.edges.filter(e=>!(e.sourceNodeID===n.id&&String(e.sourcePortID||'')===port));
   if(tgt)WF.edges.push({sourceNodeID:n.id,targetNodeID:tgt,sourcePortID:port});
   renderAll();showProps();
   toast(tgt?'已连接流程线':'已断开流程线');
+}
+// 入口行：改选上游出口 / （断开此连线）删该边；同源同口重复连本节点自动去重
+function setFlowInLink(i,val){
+  if(!val){WF.edges.splice(i,1);toast('已断开流程线');}
+  else{
+    const at=val.split('@@');
+    const e=WF.edges[i];
+    e.sourceNodeID=at[0];e.sourcePortID=at[1]||'';
+    WF.edges=WF.edges.filter((x,xi)=>xi===i||!(x.sourceNodeID===e.sourceNodeID&&String(x.sourcePortID||'')===String(e.sourcePortID||'')&&x.targetNodeID===e.targetNodeID));
+    toast('已连接流程线');
+  }
+  renderAll();showProps();
+}
+// ＋入口：push 一条空源边占位（renderAll 对找不到源的边安全跳过不画线；saveWf 落盘前过滤空边）
+function addFlowInLink(){
+  const n=findN(selNode);if(!n)return;
+  WF.edges.push({sourceNodeID:'',targetNodeID:n.id,sourcePortID:''});
+  showProps();renderAll();
 }
 // 变量连线：本节点每个输入字段 ← 上游节点输出字段下拉（同类型过滤，含 object 子字段点号路径）。
 // 选中即 setInputRef（含类型跟随），选（字面量）清引用——与拖线/▾ 引用选择完全同路径。
@@ -2847,7 +2898,7 @@ async function saveWf(){
     if(n.blocks&&n.blocks.length)c.blocks=n.blocks;
     if(n.edges&&n.edges.length)c.edges=n.edges;
     return c;
-  }),edges:WF.edges,versions:{}};
+  }),edges:WF.edges.filter(e=>e.sourceNodeID&&e.targetNodeID),versions:{}};   // 过滤空边（入口段的未选占位）
   const fmt=(document.getElementById('saveFormat')||{}).value||'json';
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}

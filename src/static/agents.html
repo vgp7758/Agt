@@ -35,6 +35,7 @@ textarea{width:100%;resize:vertical}
 .frow{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
 .frow label{min-width:88px;color:var(--muted);font-size:12px}
 .asmrow,.hkrow{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;flex-wrap:wrap}
+.hkrow .val{flex:1 1 120px;width:auto;min-width:110px}   /* 全局 input[type=text]{width:100%} 会撑满把 async/× 挤下一行——钩子行的值输入框自适应占位 */
 .asmrow select.tsel{width:118px}
 .asmrow .val{flex:1;min-width:140px}
 .asmrow textarea.val{min-height:64px;font-family:Consolas,monospace;font-size:12px}
@@ -79,6 +80,14 @@ textarea{width:100%;resize:vertical}
         <label style="min-width:auto">工具</label><input type="text" id="fTools" style="flex:1;min-width:180px" placeholder="逗号分隔；留空=继承主 Agent 全部"></div>
       <div class="chips" id="toolChips"></div>
       <div class="hint" id="toolsHint">点工具 chip 快速增删；留空=继承全部（除管理工具）。</div>
+      <div class="frow" style="margin-top:10px"><label>回退链</label><input type="text" id="fFallback" style="flex:1;min-width:180px" placeholder="逗号分隔模型名；留空=继承全局 settings 配置">
+        <select id="fFbPolicy" title="sticky=回退后停在新模型直到手动切换；reset=每轮从链首重试" style="width:120px">
+          <option value="">策略:跟随全局</option>
+          <option value="sticky">sticky 粘住</option>
+          <option value="reset">reset 每轮重试</option>
+        </select></div>
+      <div class="chips" id="fbChips"></div>
+      <div class="hint">点模型 chip 快速增删回退链（声明级：该 Agent 的 llm 独立生效；留空=继承全局）。</div>
     </div>
 
     <div class="fgroup" id="gPersona">
@@ -263,6 +272,16 @@ function toggleTool(t){
   const i=cur.indexOf(t);i>=0?cur.splice(i,1):cur.push(t);
   $('fTools').value=cur.join(',');renderChips();
 }
+// 回退链 chips（与工具选择同款交互：点模型 chip 增删，顺序=点击顺序即链序）
+function renderFbChips(){
+  const cur=new Set(($('fFallback').value||'').split(',').map(x=>x.trim()).filter(Boolean));
+  $('fbChips').innerHTML=models.map(m=>`<span class="chip ${cur.has(m)?'on':''}" onclick="toggleFb('${m}')">${esc(m)}</span>`).join('');
+}
+function toggleFb(m){
+  const cur=($('fFallback').value||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const i=cur.indexOf(m);i>=0?cur.splice(i,1):cur.push(m);
+  $('fFallback').value=cur.join(',');renderFbChips();
+}
 
 async function loadEdit(name){
   const d=await api('/api/agents/'+encodeURIComponent(name));
@@ -278,17 +297,19 @@ async function loadEdit(name){
   $('toolsHint').style.display=isMain?'none':'';
   document.querySelector('button.btn.danger').style.display=isMain?'none':'';
   $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
+  $('fFallback').value=d.fallback||'';$('fFbPolicy').value=d.fallback_policy||'';
   $('fPersona').value=d.persona||'';
   asmData=(d.assembly||[]).map(asmToRow);
   if(!asmData.length)asmData=[{kind:'seg',name:'system',opt:false}];
   hkData=hkToRows(d.hooks);
-  renderAsm();renderHk();renderChips();
+  renderAsm();renderHk();renderChips();renderFbChips();
   location.hash='edit='+encodeURIComponent(d.name);
 }
 
 async function saveAgent(){
   const body={
     description:$('fDesc').value,tools:$('fTools').value.trim(),model:$('fModel').value,
+    fallback:$('fFallback').value.trim(),fallback_policy:$('fFbPolicy').value,
     persona:$('fPersona').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
   };
   const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});

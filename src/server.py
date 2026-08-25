@@ -281,10 +281,8 @@ async def api_wf_get(name: str):
                 meta["auto_param"] = root.get("auto_param")
             if root.get("hook"):
                 meta["hook"] = root.get("hook")
-            # hidden 在 <workflow hidden="true"> 根属性上（canvas_to_xml 写出侧早已支持）——
-            # 之前漏读导致编辑器打开 XML 工作流时 hidden 复选框总是空的
-            if root.get("hidden") is not None:
-                meta["hidden"] = root.get("hidden") == "true"
+            # hidden 默认 true（与 workflow._scan_xml_workflows 同语义）：只有显式 hidden="false" 才注册为工具
+            meta["hidden"] = root.get("hidden", "true") != "false"
             if root.get("async") is not None:
                 meta["async"] = root.get("async") == "true"
             if root.get("recap") is not None:
@@ -554,7 +552,7 @@ async def api_status(request: Request):
                     "hook": hook_pos,
                     "enabled": m.get("enabled", True),
                     "async": m.get("async", False),
-                    "hidden": m.get("hidden", False),
+                    "hidden": m.get("hidden", True),
                 })
         st["hooks"] = hooks
     except Exception:
@@ -867,6 +865,36 @@ def _persona_from_decl(meta: dict, system: str) -> str:
     return system or ""
 
 
+def _fb_of(meta: dict):
+    """fallback 声明 → (chain 逗号串, policy)。三形态（串/list/{chain,policy}）归一，与
+    multiagent._parse_agent_fallback 的解析形态对齐；未声明 → ('', '')（前端留空=继承全局）"""
+    raw = meta.get("fallback")
+    if raw is None:
+        return "", ""
+    policy = ""
+    chain = raw
+    if isinstance(raw, dict):
+        chain = raw.get("chain", [])
+        policy = str(raw.get("policy") or "").strip()
+    if isinstance(chain, str):
+        chain = [m.strip() for m in chain.split(",") if m.strip()]
+    else:
+        chain = [str(m).strip() for m in (chain or []) if str(m).strip()]
+    return ",".join(chain), policy
+
+
+def _fb_yaml_value(body: dict):
+    """提交的 fallback 串 + policy → yml 值（未声明返回 None=不写键=继承全局）。
+    串非空 → list 或 {chain, policy}（policy 指定时）；与 _parse_agent_fallback 读形态对齐。"""
+    chain = [m.strip() for m in str(body.get("fallback") or "").split(",") if m.strip()]
+    if not chain:
+        return None
+    policy = str(body.get("fallback_policy") or "").strip()
+    if policy in ("sticky", "reset"):
+        return {"chain": chain, "policy": policy}
+    return chain
+
+
 @app.get("/api/agents/{name}")
 async def api_agents_get(name: str):
     """单个 Agent 完整声明。_main_ 特判（~/.agt/main.yml，is_main=True）。"""
@@ -882,11 +910,13 @@ async def api_agents_get(name: str):
         except Exception as e:
             return {"error": f"main.yml 解析失败：{type(e).__name__}: {e}"}
         asm_raw = meta.get("assembly")
+        _fb, _fbp = _fb_of(meta)
         return {
             "name": "_main_", "is_main": True,
             "description": meta.get("description", ""),
             "model": meta.get("model") or "",
             "tools": "", "persona": "",
+            "fallback": _fb, "fallback_policy": _fbp,
             "assembly": asm_raw if isinstance(asm_raw, list) else None,
             "hooks": meta.get("hooks") if isinstance(meta.get("hooks"), dict) else {},
             "file": str(p),
@@ -901,6 +931,7 @@ async def api_agents_get(name: str):
         return {"error": f"解析失败：{type(e).__name__}: {e}"}
     asm_raw = meta.get("assembly")
     persona = _persona_from_decl(meta, system)
+    _fb, _fbp = _fb_of(meta)
     persona_file = ""
     if isinstance(asm_raw, list) and asm_raw and isinstance(asm_raw[0], dict) and asm_raw[0].get("file"):
         persona_file = str(asm_raw[0]["file"])
@@ -909,6 +940,7 @@ async def api_agents_get(name: str):
         "description": meta.get("description", ""),
         "model": meta.get("model") or "",
         "tools": meta.get("tools") or "",
+        "fallback": _fb, "fallback_policy": _fbp,   # 声明级回退链（引擎 _parse_agent_fallback 消费：新建/复用/复活三路径均应用）
         "persona": persona,
         "persona_file": persona_file,   # 非空=persona 走独立 md（file: 引用形态）
         "assembly": asm_raw if isinstance(asm_raw, list) else None,
@@ -945,6 +977,11 @@ def _dump_agent_yml(body: dict, safe: str) -> Path:
     hooks = body.get("hooks")
     if isinstance(hooks, dict) and hooks:
         data["hooks"] = hooks
+    # 声明级回退链：非空才写（list / {chain,policy}——与 _parse_agent_fallback 读形态对齐）；
+    # 留空不写键 = 继承全局 settings 配置（管理页语义；「显式关回退」手写 yml 空串实现）
+    _fbv = _fb_yaml_value(body)
+    if _fbv is not None:
+        data["fallback"] = _fbv
     p = d / f"{safe}.yml"
     p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
     (d / f"{safe}.md").write_text(persona + ("\n" if persona else ""), encoding="utf-8")
@@ -975,6 +1012,11 @@ async def api_agents_save(name: str, request: Request):
         asm = body.get("assembly")
         if isinstance(asm, list) and asm:
             base["assembly"] = asm
+        _fbv = _fb_yaml_value(body)   # 主 Agent 同样支持声明级回退链（留空=删键继承全局）
+        if _fbv is not None:
+            base["fallback"] = _fbv
+        elif "fallback" in body:
+            base.pop("fallback", None)
         hooks = body.get("hooks")
         if isinstance(hooks, dict):
             if hooks:

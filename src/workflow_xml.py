@@ -849,7 +849,11 @@ def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
         attrs += f' hook={_qa(meta["hook"])}'
     if meta.get("enabled") is False:
         attrs += ' enabled="false"'
-    if meta.get("hidden") is True:
+    # hidden 默认 true：显式写两个值（true/false），读侧按 != "false" 三态解析——
+    # 写 false = 注册为 wf_* 工具（用户显式取消勾选保存）；其余一律 hidden
+    if meta.get("hidden") is False:
+        attrs += ' hidden="false"'
+    else:
         attrs += ' hidden="true"'
     if meta.get("async") is True:
         attrs += ' async="true"'

@@ -1856,8 +1856,9 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
                 meta["auto_param"] = root.get("auto_param")
             if root.get("hook"):
                 meta["hook"] = root.get("hook")
-            if root.get("hidden"):
-                meta["hidden"] = root.get("hidden") == "true"
+            # hidden 默认 true（未设置=不注册成 Agent 工具）：只有显式 hidden="false" 才注册为 wf_* 工具。
+            # 大多数工作流是钩子/子工作流/demo——进工具箱反而是 schema 噪声；想给 Agent 用的显式取消勾选。
+            meta["hidden"] = root.get("hidden", "true") != "false"
             if root.get("async") is not None:
                 meta["async"] = root.get("async") == "true"
             if root.get("recap") is not None:
@@ -2041,8 +2042,8 @@ def refresh_workflow_tools(toolbox, workspace: Path = None, agent=None) -> tuple
         meta = item["meta"] or {}
         if meta.get("enabled") is False:
             continue
-        if meta.get("hidden") is True:
-            continue   # hidden 工作流：不注册成 Agent 工具（钩子/子工作流专用）
+        if meta.get("hidden") is not False:
+            continue   # 默认 hidden（未设置=true）：不注册成 Agent 工具。显式 hidden=False（管理页/编辑器取消勾选保存）才注册
         if item["error"] or item["canvas"] is None:
             broken.append((item["name"], item["error"]))
             continue

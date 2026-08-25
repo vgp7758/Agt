@@ -1455,11 +1455,6 @@ _CORE_NODE_CATALOG = [
         "xml": "<!-- 输出发送节点：向外部发送中间结果（工具模式下仅记录） -->\n<node id=\"270001\" type=\"output\">\n  <in name=\"message\" ref=\"130001.output\"/>\n  <in name=\"data\" ref=\"150001.result\"/>\n</node>\n<!--\n  交互模式下向用户发送消息；工具模式下输出被收集到 ctx.emitMessages\n  通常和 InputReceiver(30) 配对使用，实现\"中间输出-等待输入-继续执行\"\n-->",
     },
     {
-        "type": "30", "name": "输入接收 (InputReceiver)",
-        "desc": "交互式输入：暂停工作流等待外部输入（工具模式下不支持，会报错）",
-        "xml": "<!-- 输入接收节点：等待外部输入（⚠ 工具模式下不支持，会报错） -->\n<node id=\"280001\" type=\"input\">\n  <out name=\"user_response\" type=\"string\"/>\n</node>\n<!--\n  ⚠ 仅交互模式（如 Coze 预览）可用，工具/Agent 调用模式下会抛出 WorkflowError\n  如需在工具模式下实现\"确认后再继续\"，改用 Selector + 条件判断\n-->",
-    },
-    {
         "type": "31", "name": "注释 (Comment)",
         "desc": "纯注释节点，不参与执行，用于在画布上添加说明文字",
         "xml": "<!-- 注释节点：不参与执行，仅用于画布标注 -->\n<node id=\"290001\" type=\"comment\">\n  <content>这里是对后续逻辑的说明，不会被执行</content>\n</node>\n<!-- 注释节点在扫描和执行时均被跳过，不会产生任何输出 -->",

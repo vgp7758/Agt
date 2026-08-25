@@ -255,6 +255,44 @@ onchange 只在值**变化**时触发——占位边的当前值与「断开」�
 
 验证：JS 语法 + 10 项结构断言全过。Ctrl+F5 强刷编辑器即见新分组。
 
+## 批次九（`0aee996`）：节点描述三处可见（tooltip + props 描述段 + 浮窗 title）
+
+主线索：**描述可读**——节点创建后类型描述在画布上可见，不用靠猜。用户提案："节点创建出来以后就看不到节点描述了"。
+
+### 19. 描述三处显示
+
+| 显示位置 | 实现 |
+|---|---|
+| 画布 hover tooltip | `renderNode` 的 g 上加 SVG `<title>`（原生浏览器 tooltip，须为首个子元素才可靠显示）——悬停任意节点即见 |
+| props 面板描述段 | 头部 `标题 · 类型` 行下方浅蓝底小卡片（10px 灰蓝字）——点选节点即见，不用等 hover |
+| 浮窗按钮 title | 静态组（LLM/选择器/循环…）补齐 title（此前只有工具组有），悬停按钮即见 |
+
+### 描述来源：一条新端点 + 两条路
+
+`nodeDesc(n)`（src/static/workflow_editor.html）两条路取描述：
+
+- **type4 工具节点** → 工具 schema 的 `description`（含参数语义，比目录更准）
+- **其余类型** → `NODE_DESC[n.type]`，来自新端点 **`GET /api/wf/nodes`**
+
+`/api/wf/nodes`（src/server.py）：返回 `{type: desc}`，数据源 = `real_tools._node_catalog()`——「核心 12 条 + 节点插件 `catalog_entries()` 动态聚合」的 25 类目录。插件节点 desc 跟实现走，改 `.py` 自动跟上。见 [节点插件化 · catalog_entries](../architecture/node-plugins.md)。
+
+前端加载细节：
+
+```javascript
+let NODE_DESC={};
+async function loadNodeDesc(){
+  try{const r=await fetch('/api/wf/nodes');const d=await r.json();NODE_DESC=d.nodes||{};}
+  catch(e){}  // 失败静默：离线/旧后端 → 无 tooltip 但不炸
+}
+```
+
+- `renderNode` 在 g 首 append `<title>`——tooltip 与 props 描述段**同源**（均走 `nodeDesc`）
+- `showProps` 头部行下追加描述段卡片
+- `nodePicker` 浮窗按钮补 `title`（`NODE_DESC[b[0]]`），静态组与工具组统一
+- 初始化链 `loadNodeDesc().then(()=>renderAll())`——描述异步到位后重绘一次
+
+验证：`/api/wf/nodes` 实测 25 类全有 desc（LLM/代码/选择器/AND/N1 抽查通过）；type4 优先工具 schema。Ctrl+F5 强刷编辑器即生效。
+
 ## 附：enum 参数渲染为下拉框（通用机制）
 
 工具 schema 里带 `enum` 的参数，编辑器自动渲染为 **select 下拉框**（替代 text input），空值选项显示「（跟随）」。三层链路：

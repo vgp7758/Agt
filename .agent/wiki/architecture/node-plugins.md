@@ -70,6 +70,10 @@ def agt_node():
 
 **效果**：以后写新节点插件，目录自动跟着进——不再有「节点能用但目录查无此类」的暗区。
 
+### 第三个消费端：编辑器描述段（/api/wf/nodes，2026-08）
+
+`_node_catalog()` 此前两个消费端：`list_workflow_nodes`、`query_workflow_node`。2026-08 增第三个——**`GET /api/wf/nodes`**（server.py）：把 `{type: desc}` 喂给工作流编辑器画布的 hover tooltip / props 面板描述段（前端 `NODE_DESC` 全局）。效果：插件节点（AND/OR/timestamp 等）的 desc 在编辑器 UI 同步可见，改插件 `.py` 的 desc 自动跟上，不用手工回填前端。详见 [工作流编辑器 UX · 批次九](../features/editor-ux-improvements.md)。
+
 ## 前端约定（.js）
 
 ```javascript

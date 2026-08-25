@@ -375,6 +375,7 @@ class Turn:
     answer: str = ""
     answer_reasoning: str = ""                       # 最终回答那步的 reasoning_content（GLM 等要求回传）
     summary: str = ""                                # 该轮的一句话摘要（finish 时生成，贴在该轮最后）
+    recap: str = ""                                  # 一句话 recap（turn_end 异步生成：队友看板 + fc 折叠摘要行）
 
 
 def _eval_assembly_workflow(name: str, session) -> str:
@@ -803,6 +804,15 @@ class Session:
                         seen.add(tc.call_id); kept_ids.append(tc.call_id)
         kept_entries = [e for e in (self.toollog.get(c) for c in kept_ids) if e]
         self._atomic_write_lines(tl_path, kept_entries)
+        # recaps.jsonl 同步裁剪：idx >= keep 的 recap 若不删，rewind 后新轮会长到这些 idx
+        # 而被旧 recap 张冠李戴（load 侧按 idx 盲配）。内存 Turn.recap 顺带清（pop 的轮已不在）。
+        rp_path = sd / "recaps.jsonl"
+        if rp_path.exists():
+            kept_recs = []
+            for t in self.turns[:keep]:
+                if (t.recap or "").strip():
+                    kept_recs.append({"idx": self.turns.index(t), "recap": t.recap, "ts": int(time.time())})
+            self._atomic_write_lines(rp_path, kept_recs)
         self.toollog = ToolLog()
         if tl_path.exists():
             self.toollog.load_from_jsonl(tl_path)   # 加载 clean 数据 + 绑 path + 恢复 counter
@@ -1398,16 +1408,68 @@ class Session:
         return s[:150]
 
     def _folded_summary(self, fold_count: int) -> str:
-        """被折叠的早期轮次概览：每轮 user + (已折叠N次工具调用) + answer摘要/中断(未回答)。
-        纯结构信息、无需 LLM（answer 用代码摘要：首行+标题行）；逐字原文用 recall 召回。"""
+        """被折叠的早期轮次概览：每轮 user + (已折叠N次工具调用) + recap/answer摘要/中断(未回答)。
+        纯结构信息、无需 LLM。tail 优先级：recap（turn_end 本地小模型生成的一句话——语义密度高于
+        answer 代码摘要的"首行+标题"，后者常是"完成并推送"类横幅文案）→ answer 代码摘要 → 中断标注。
+        逐字原文用 recall 召回。"""
         lines = []
         for i, t in enumerate(self.turns[:fold_count]):
             n = sum(len(s.tool_calls) for s in t.steps)
             u = (t.user_message or "").strip().replace("\n", " ")[:80]
             mid = f" (已折叠{n}次工具调用) " if n else " "
-            tail = self._summarize_answer(t.answer) or "中断(未回答)"
+            tail = ((t.recap or "").strip()
+                    or self._summarize_answer(t.answer)
+                    or "中断(未回答)")
             lines.append(f"[第{i + 1}轮] {u}{mid}→ {tail}")
         return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + "\n".join(lines)
+
+    def set_turn_recap(self, idx: int, recap: str) -> None:
+        """回写某轮的 recap（turn_end 异步生成完成时调用）：Turn.recap + 追加 recaps.jsonl。
+        持久化使 /restart 后 fc 折叠摘要仍能用 recap（events 重放不含 recap——它是事后异步产物）。
+        idx 越界静默跳过（rewind 后迟到的旧回写无害丢弃）；同值跳过（防重复 append）。
+        同 idx 重复 append（resume 后重新 finish 同一轮）由 load 侧 last-wins 兜底。"""
+        try:
+            recap = (recap or "").strip().split("\n")[0].strip()[:60]
+            if not recap or idx < 0 or idx >= len(self.turns):
+                return
+            if (self.turns[idx].recap or "") == recap:
+                return
+            self.turns[idx].recap = recap
+            sdir = getattr(self, "session_dir", None)
+            if sdir:
+                p = Path(sdir) / "recaps.jsonl"
+                try:
+                    with open(p, "a", encoding="utf-8") as f:
+                        f.write(json.dumps({"idx": idx, "recap": recap, "ts": int(time.time())},
+                                           ensure_ascii=False) + "\n")
+                except Exception:
+                    pass   # 持久化失败不影响内存（本进程内 fc 摘要仍可用）
+        except Exception:
+            pass
+
+    def _load_recaps(self, sdir: Path) -> None:
+        """从 recaps.jsonl 恢复各轮 recap（load 时调用）。同 idx 多条 last-wins。"""
+        p = sdir / "recaps.jsonl"
+        if not p.exists():
+            return
+        try:
+            rc: dict = {}
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                i = r.get("idx")
+                if isinstance(i, int) and (r.get("recap") or "").strip():
+                    rc[i] = str(r["recap"]).strip()[:60]
+            for i, t in enumerate(self.turns):
+                if i in rc:
+                    t.recap = rc[i]
+        except Exception:
+            pass
 
     @staticmethod
     def _count_chars(msgs: list[dict]) -> int:
@@ -2102,6 +2164,7 @@ class Session:
             if llm_calls_path.exists():
                 s.llm_calls.load_from_jsonl(llm_calls_path)
             s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
+            s._load_recaps(sdir)              # 恢复各轮 recap（异步产物不进事件流，sidecar 持久化）
         elif "turns" in data:
             # —— 旧格式迁移：meta.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
             s.toollog.load_list(data.get("toollog", []))            # 0.7.4 嵌入字段进内存

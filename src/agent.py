@@ -915,9 +915,11 @@ class Agent:
                 self._utility_llm = self.llm   # 配置无效退回主模型
         return self._utility_llm
 
-    def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None):
+    def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None,
+                        turn_idx: int = -1):
         """异步用 LLM 生成一句话 recap（最近在干嘛），不阻塞主循环。
-        recap 不进入自己的上下文，但队友在 teammates_block 中能看到。
+        recap 不进入自己的上下文，但队友在 teammates_block 中能看到；
+        turn_idx >= 0 时同时回写 Turn.recap（fc 折叠摘要行用它——语义密度高于 answer 代码摘要）。
         用统一辅助模型（utility_model 未配=主模型）。失败静默（recap 保持上一轮的值或空）。"""
         def _bg():
             try:
@@ -934,6 +936,8 @@ class Agent:
                     self._recap = recap
                     if self.registry:
                         self.registry.update_recap(self.agent_id, recap)
+                    if turn_idx >= 0:
+                        self.session.set_turn_recap(turn_idx, recap)   # Turn.recap + recaps.jsonl
             except Exception:
                 pass   # 静默失败，recap 保持上一轮的值
         threading.Thread(target=_bg, daemon=True).start()
@@ -1117,6 +1121,10 @@ class Agent:
                 _hook = hook
                 _rid_c = _rid
                 _ctx = dict(context)
+                # turn_end 钩子的 recap 回写目标轮：此刻 finish_turn 还没跑（钩子在 finish 前触发），
+                # 正在收尾的轮归档后将落在 index=len(turns)（无其它轮可插队——_current 是唯一在飞轮）；
+                # turn_end 注入重做（continue 分支）时轮延后归档，但落点 index 不变。
+                _turn_idx = len(self.session.turns) if hook == "turn_end" else -1
                 def _async_hook():
                     try:
                         _llm = _agent_ref.utility_client()
@@ -1143,6 +1151,9 @@ class Agent:
                                 _agent_ref._recap = _rc
                                 if _agent_ref.registry:
                                     _agent_ref.registry.update_recap(_agent_ref.agent_id, _rc)
+                                if _turn_idx >= 0:
+                                    # 回写 Turn.recap（fc 折叠摘要行用；recap_gen 本地小模型的产出落到轮上）
+                                    _agent_ref.session.set_turn_recap(_turn_idx, _rc)
                         if message.strip():
                             _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
                                         "text": message, "auto": True})
@@ -1628,7 +1639,8 @@ class Agent:
                                 self._generate_recap(
                                     (self.session._current.user_message if self.session._current else msg),
                                     resp.content,
-                                    [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None)
+                                    [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None,
+                                    turn_idx=len(self.session.turns) - 1)   # finish 后 turns[-1]=本轮（Turn.recap 供 fc 折叠摘要）
                             # 目标检查：跑验证脚本，PASS 则结束自主模式
                             if self.goal_check_script:
                                 result = self.run_goal_check()

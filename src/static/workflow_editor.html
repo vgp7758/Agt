@@ -29,7 +29,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 #canvasWrap{flex:1;background:#1a1a2e;overflow:auto;position:relative;cursor:grab;scrollbar-width:none}
 #canvasWrap::-webkit-scrollbar{display:none}
 #canvasWrap:active{cursor:grabbing}
-#svgCanvas{display:block}
+#svgCanvas{display:block;touch-action:none}
 .grid-line{stroke:#ffffff08}
 .node-body{fill:#16213e;stroke:#533483;stroke-width:1.5;rx:6}
 .node-body.sel{stroke:#7b2ff7;stroke-width:2.5;filter:drop-shadow(0 0 6px #7b2ff755)}
@@ -98,6 +98,7 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
   <button onclick="autoLayout()" title="按流程方向分层自动布局，孤立节点纵向罗列">📐 自动布局</button>
+  <button onclick="addNodeBtn()" title="在画布中心弹出节点选择浮窗（手机/触屏无双击，加节点用这个）">🧩 节点</button>
   <button onclick="location.href=(WF.name?('/wfdebug?wf='+encodeURIComponent(WF.name)):'/wfdebug')" title="跳转到调试页运行此工作流">▶ 调试</button>
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
@@ -1100,6 +1101,72 @@ svg.addEventListener('contextmenu',(e)=>{
   }
 });
 
+// ============ 触屏适配：touch → mouse 合成事件 ============
+// 手机上 mousedown/mousemove/mouseup 不触发，拖节点/连线/平移全失效。
+// 单指 touch 转合成 MouseEvent 派发到触点元素——全部既有 mouse 逻辑零改动复用：
+//   touchstart→mousedown / touchmove→mousemove(preventDefault 防页面滚动) / touchend→mouseup
+// mouseup 用 elementFromPoint 找当前触点下元素派发（touch 的 target 固定为起点，
+// 直接派发到起点则目标端口的 onmouseup 永远不触发 → 连线连不上）。
+// 面板/表单控件内的触摸不劫持（保留原生行为：select 弹系统 picker、输入框聚焦）。
+// 双指=捏合缩放画布（对齐桌面滚轮缩放）；拖拽中第二指按下则取消单指状态防残留。
+(function(){
+  let _tap=null;   // 单指状态 {x,y,target,moved}
+  let _pinch=null; // 双指状态 {d0,z0}
+  function _synth(type,t,target){
+    try{
+      target.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,
+        clientX:t.clientX,clientY:t.clientY,screenX:t.screenX,screenY:t.screenY,button:0,buttons:1}));
+    }catch(e){}
+  }
+  function _cancelTap(synthUp){
+    if(!_tap)return;
+    if(synthUp){try{_synth('mouseup',{clientX:_tap.x,clientY:_tap.clientY},_tap.target);}catch(e){}}
+    _tap=null;dragNode=null;panning=false;
+    if(edgeFrom&&edgeFrom.kind!=='disconnect'){edgeFrom=null;renderAll();}   // 拖线中双指介入：取消临时线
+  }
+  document.addEventListener('touchstart',function(e){
+    if(e.touches.length===2){
+      const [a,b]=e.touches;
+      _pinch={d0:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)||1,z0:dz};
+      _cancelTap(false);   // 取消进行中的单指拖拽（不补 mouseup——状态直接复位）
+      return;
+    }
+    if(e.touches.length!==1)return;
+    const t=e.changedTouches[0];
+    const el=t.target;
+    // 表单控件 / 浮窗（属性面板/节点选择器/顶栏）内不劫持——原生 select 在手机上弹系统 picker 体验更好
+    if(el&&el.closest&&el.closest('#propsFloat,#nodePicker,#topbar,input,textarea,select,button,option'))return;
+    _tap={x:t.clientX,y:t.clientY,target:el,moved:false};
+    _synth('mousedown',t,el);
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(_pinch&&e.touches.length===2){
+      e.preventDefault();   // 双指捏合不缩放页面（配合 svg 的 touch-action:none）
+      const [a,b]=e.touches;
+      const d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)||1;
+      dz=Math.max(0.2,Math.min(2,_pinch.z0*(d/_pinch.d0)));
+      renderAll();
+      return;
+    }
+    if(!_tap||e.touches.length!==1)return;
+    const t=e.changedTouches[0];
+    if(Math.hypot(t.clientX-_tap.x,t.clientY-_tap.y)>8)_tap.moved=true;
+    if(_tap.moved)e.preventDefault();   // 拖节点/连线/平移时阻止页面滚动（tap 静止不拦，保留轻扫退出等系统手势）
+    _synth('mousemove',t,_tap.target);
+  },{passive:false});
+  document.addEventListener('touchend',function(e){
+    if(e.touches.length<2)_pinch=null;
+    if(!_tap)return;
+    const t=e.changedTouches[0];
+    // mouseup 派发到当前触点下的元素（elementFromPoint）——连线落点/端口判定靠它
+    const el=document.elementFromPoint(t.clientX,t.clientY)||_tap.target;
+    _synth('mouseup',t,el);
+    _tap=null;
+    // tap（未移动）→ 浏览器随后自动派发 click（toggleExpand ▾/剪刀 onclick 靠它），无需手动补
+  });
+  document.addEventListener('touchcancel',function(){_pinch=null;_cancelTap(false);});
+})();
+
 // ============ Selector 分支（画布内 foreignObject）============
 function renderSelectorBranches(g,n){
   try{
@@ -1479,7 +1546,14 @@ function showProps(){
   const n=findN(selNode);if(!n){wrap.style.display='none';p.innerHTML='';return;}
   wrap.style.display='block';
   try{
-  let h=`<h3>${TYPE_LABEL[n.type]||'节点'} <span style="color:#8a9099;font-size:10px;font-weight:normal">· ${n.type}</span></h3>
+  // 面板头部：标题 + 操作按钮（✕ 关闭 / 🗑 删除节点——手机无 Delete 键的删除入口）
+  const _canDel=!['100001','900001'].includes(n.id);
+  let h=`<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:4px">
+    <h3 style="margin:0;border:none;padding:0">${TYPE_LABEL[n.type]||'节点'} <span style="color:#8a9099;font-size:10px;font-weight:normal">· ${n.type}</span></h3>
+    <span style="white-space:nowrap;flex:none">
+      ${_canDel?'<button class="del" onclick="deleteSelectedNode()" title="删除此节点（含关联连线）">🗑 删除</button>':''}
+      <button onclick="closeProps()" title="关闭面板">✕</button>
+    </span></div>
     <label>标题 <input value="${ext(nodeTitle(n))}" onchange="setTitle(this.value)"></label>
     <label>ID <input value="${n.id}" ${['100001','900001'].includes(n.id)?'readonly':''} onchange="setProp('id',this.value)"></label>
     <label>宽度 <input type="number" value="${n.w}" onchange="setProp('w',+this.value)"></label>`;
@@ -1929,9 +2003,10 @@ function renderIOFields(arr,kind,lockedAll){
     h+=`<tr><td colspan="6"><input value="${ext(f.description)}" placeholder="描述" onchange="setField('${kind}',${i},'description',this.value)" style="font-size:10px;color:#8a9099"></td></tr>`;
 
     // 展开行（输入字段）：值编辑（点值按钮展开字面量控件）/ 引用选择（点▾展开下拉）
+    // flex-wrap：手机窄屏自动换行（原 nowrap 一行挤 select+2input 会溢出面板）
     if(kind==='in'&&_valEditing===('in:'+i)){
-      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px;white-space:nowrap">${_litControlHTML(f,i)} `
-        +`<button onclick="_valEditing=null;showProps()" style="font-size:10px" title="收起">✓</button></td></tr>`;
+      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px"><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${_litControlHTML(f,i)} `
+        +`<button onclick="_valEditing=null;showProps()" style="font-size:10px" title="收起">✓</button></div></td></tr>`;
     }
     if(kind==='in'&&_refPicking===('in:'+i)){
       const c=f.input?.value?.content;
@@ -1940,8 +2015,8 @@ function renderIOFields(arr,kind,lockedAll){
       else if(c?.source==='loop-item')curRef='__item';
       else if(c?.source==='loop-index')curRef='__index';
       const inType=f.input?.type||'string';
-      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px;white-space:nowrap">`
-        +`<select style="width:auto;max-width:60%" onchange="quickSetRef(${i},this.value)">`
+      h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px"><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">`
+        +`<select style="flex:1 1 150px;min-width:120px;max-width:100%" onchange="quickSetRef(${i},this.value)">`
         +`<option value=""${curRef?'':' selected'}>（字面量/未选）</option>`;
       WF.nodes.forEach(on=>{
         if(on.id===n.id)return;
@@ -1955,7 +2030,7 @@ function renderIOFields(arr,kind,lockedAll){
         +`<option value="__index"${curRef==='__index'?' selected':''}>index</option></select>`
         +` <input placeholder="item字段" style="width:56px" value="${ext(c?.source==='loop-item'?(c.name||''):'')}" onchange="quickSetItemField(${i},this.value)">`
         +` <input placeholder="global名" style="width:70px" value="${ext(String(c?.source||'').startsWith('global_variable')?((c.path||[])[0]||''):'')}" onchange="quickSetGlobal(${i},this.value)">`
-        +`</td></tr>`;
+        +`</div></td></tr>`;
     }
     // list：item 行（item: [类型下拉]（object 时加 📋 导入/+子字段））
     if(t==='list'){
@@ -2125,6 +2200,18 @@ function _condRefOptions(n,content){
 
 // ============ 字段编辑 ============
 function findArr(kind){const n=findN(selNode);return kind==='in'?nodeInputs(n):nodeOutputs(n);}
+// 删除选中节点（含关联连线 + 引用清理）——面板 🗑 按钮与 Delete 键共用
+function deleteSelectedNode(){
+  if(!selNode)return;
+  if(['100001','900001'].includes(selNode)){toast('开始/结束节点不可删除');return;}
+  WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
+  WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
+  WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
+  selNode=null;showProps();renderAll();
+  toast('已删除节点');
+}
+// 关闭属性面板（不清选中态数据也可以，但清掉最干净——画布高亮随 renderAll 保留更好）
+function closeProps(){selEdge=null;showProps();renderAll();}
 function setProp(k,v){const n=findN(selNode);n[k]=v;renderAll();}
 function setTitle(v){const n=findN(selNode);n.data.nodeMeta=n.data.nodeMeta||{};n.data.nodeMeta.title=v;renderAll();}
 function addIO(kind){const n=findN(selNode);const item={name:'var'+Date.now()%1000,description:''};
@@ -2733,9 +2820,7 @@ document.addEventListener('keydown',(e)=>{
   // 焦点与选区随之丢失 → 紧随的 V 键落到 body 上 → 粘贴失效。松开 Ctrl 同理（见 keyup）。
   if(e.key==='Control'&&!ctrlDown){ctrlDown=true;if(!_editing(e))renderAll();}
   if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&!_editing(e)){
-    WF.nodes=WF.nodes.filter(n=>n.id!==selNode);WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
-    WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
-    selNode=null;showProps();renderAll();
+    deleteSelectedNode();
   }
 });
 document.addEventListener('keyup',(e)=>{
@@ -2766,6 +2851,14 @@ function focusEntry(){
   wrap.scrollLeft=Math.max(0,en.x-200);
   wrap.scrollTop=Math.max(0,en.y-100);
   selNode='100001';showProps();
+}
+// 🧩 节点按钮：在画布视口中心弹出节点选择浮窗（不连线，独立创建）——
+// 手机/触屏无双击画布，加节点走这里；桌面上也是便利入口
+function addNodeBtn(){
+  const wrap=document.getElementById('canvasWrap');
+  const sx=(wrap.scrollLeft+wrap.clientWidth/2)/dz;
+  const sy=(wrap.scrollTop+wrap.clientHeight/2)/dz;
+  openNodePicker(window.innerWidth/2,window.innerHeight/2,sx,sy,null);
 }
 // 自动布局：从开始节点沿流程线分层（层=最长前驱路径），同层纵向排，层间水平拉开；
 // 连不到开始节点的孤立节点纵向罗列在最右侧。

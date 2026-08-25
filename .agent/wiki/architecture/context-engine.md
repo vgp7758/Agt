@@ -13,7 +13,7 @@
 [tail ambient]     合并成一组 <system-reminder>：时间/后台任务/计划/episodic 召回
 ```
 
-assembly DSL（子 Agent .md frontmatter）可关段：rules/history/hooks/tail（system/user_message/steps 恒装）；`reuse`（current_turn_only）时 history 强制关。
+assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（commit 1e3b206）起真语义：标记即默认不装配**（`messages_for_llm` 的 seg 分支对 `opt=True` 的项跳过），`agent_prompt assembly="seg=on"` 清标记打开、`=off` 移除；未标记段列出即装，必装 system/user_message/steps 未列出自动补插；`reuse`（current_turn_only）与 opt **正交叠加**（reuse 时 history 强制关）。详见 [multi-agent · assembly DSL](multi-agent.md#assembly-dsl上下文装配配方)。
 
 装配时顺手记录分段统计到 `_proj_stats`（`/context` 直接读——live 口径，见 [投影分段统计](#投影分段统计-context-改读真实投影缓存commit-4212f65)）。
 
@@ -188,5 +188,6 @@ t{轮号}_s{步号}_{微秒戳}.txt
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — episodic 召回（tail ambient `[epi·长期记忆]` 行来源）的检索流水线与演进
+- [multi-agent](multi-agent.md) — 子 Agent assembly DSL（`|optional` 段默认不装配、`=on` 按需打开）与 reuse 隔离
 - [运维与排障](../guides/ops.md) — /stats 页、投影转储、/context live 分段统计、常见错误对照
 - [系统总览](../architecture/overview.md) — 模块地图、数据流

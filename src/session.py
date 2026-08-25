@@ -1146,8 +1146,15 @@ class Session:
                 if end <= st:
                     continue   # 空段
                 seg = msgs[st:end]
+                # 段 tokens 用纯内容口径（include_schema=False）——schema 是请求级，
+                # 逐段含 schema 会重复计入（每段带一份底噪、段间之和≠合计）；schema 单列一段
                 sections.append({"name": mn, "msgs": end - st, "chars": self._count_chars(seg),
-                                 "tokens": self._estimate_tokens(seg), "meta": meta})
+                                 "tokens": self._estimate_tokens(seg, include_schema=False), "meta": meta})
+            if self._tools_schema_chars:
+                sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,
+                                 "chars": self._tools_schema_chars,
+                                 "tokens": int(self._tools_schema_chars / self._chars_per_token),
+                                 "meta": "随请求计费的函数 schema——各内容段之外单独占的部分"})
             self._proj_stats = {"sections": sections,
                                 "total_msgs": len(msgs),
                                 "total_chars": self._count_chars(msgs),
@@ -1420,12 +1427,16 @@ class Session:
                 n += len(str(fn.get("name", ""))) + len(str(fn.get("arguments", "")))
         return n
 
-    def _estimate_tokens(self, msgs: list[dict]) -> int:
+    def _estimate_tokens(self, msgs: list[dict], include_schema: bool = True) -> int:
         """估算 token = (chars + tools schema 字符) / _chars_per_token。
         分子与 observe_llm_usage 校准【同口径】（校准 = (chars+extra_chars)÷prompt）——
         补齐 schema 后折叠计划/保命阀按"真实将发出的 token"判阈，不再系统性少算。
-        初值 4=旧行为；observe_llm_usage 用回包实测持续校准该比率。够阈值判断，不必精确。"""
-        return int((self._count_chars(msgs) + self._tools_schema_chars) / self._chars_per_token)
+        初值 4=旧行为；observe_llm_usage 用回包实测持续校准该比率。够阈值判断，不必精确。
+        include_schema=False：纯内容口径（/context 段统计用——schema 是请求级只计一次，
+        逐段调用若含 schema 会把它重复计入每段：N 段各带一份 schema 底噪，段间之和
+        虚高且 ≠ 合计；schema 由段统计单列一段展示）。"""
+        n = self._count_chars(msgs) + (self._tools_schema_chars if include_schema else 0)
+        return int(n / self._chars_per_token)
 
     # ========== 实测 token 校准 + 超窗/panic 判阈（react 回包喂入） ==========
     def _load_calibration(self) -> None:

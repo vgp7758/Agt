@@ -48,7 +48,7 @@ _server_thread = None
 _server_error = None
 
 # ===== 事件缓冲 + 多客户端广播 =====
-_clients: list[dict] = []       # [{ws, queue}]  所有活跃连接
+_clients: list[dict] = []       # [{ws, queue, target}]  target=该客户端正在交互的 agent_id（默认 _main_）
 _event_log: list[tuple[int, dict]] = []
 _seq: int = 0
 _main_loop = None               # uvicorn 线程的 asyncio loop（broadcast 跨线程推送用）
@@ -86,7 +86,10 @@ _WF_MONITOR_HTML = (_STATIC_DIR / "wf_monitor.html").read_text(encoding="utf-8")
 
 
 def _broadcast(ev: dict):
-    """记录事件到日志缓冲 + 广播给所有活跃客户端。
+    """记录事件到日志缓冲 + 按 agent 交互目标分发。
+    事件带 agent_id（Agent._emit 自动打标：主=_main_、子 Agent=各自 id）→ 只发给
+    target 匹配的客户端（多页签各与不同 Agent 交互时互不串台）；无 agent_id
+    （系统级：sessions/workflows/config/wf_debug/命令回显）→ 广播全部。
     无 WS 客户端（服务未起 / 无连接）时直接 return —— 纯 CLI 模式零开销，
     且 _main_loop 未就绪时也不会因 call_soon_threadsafe 报错。"""
     if not _clients:
@@ -99,7 +102,14 @@ def _broadcast(ev: dict):
     loop = _main_loop
     if loop is None:
         return
+    aid = str(ev.get("agent_id") or "")
     for c in _clients:
+        if aid and c.get("target", "_main_") != aid:
+            # answer 特例：同步工具型子 Agent（explore_subagent 等）的回应需要进主视图的
+            # answer 分页——主 Agent 页签（target=_main_）额外放行其它 Agent 的 answer
+            if not (aid != "_main_" and ev.get("type") in ("answer", "wrap_answer")
+                    and c.get("target", "_main_") == "_main_"):
+                continue   # Agent 专属事件：只发给与该 Agent 交互的客户端
         try:
             loop.call_soon_threadsafe(c["queue"].put_nowait, ev)
         except Exception:
@@ -496,6 +506,7 @@ async def api_status(request: Request):
         "inbox_size": len(agent.inbox) if hasattr(agent, "inbox") else -1,
         "pending_messages": len(getattr(agent, "pending_messages", [])),
         "active_target": getattr(agent, "_active_target", "_main_"),
+        "ws_clients": [{"target": c.get("target", "_main_")} for c in _clients],   # 各 WS 客户端的交互目标
         "autonomous_mode": getattr(agent, "autonomous_mode", False),
         "utility_model": getattr(agent, "utility_model", ""),
         "server": server_status(),
@@ -1098,7 +1109,7 @@ async def ws_endpoint(websocket: WebSocket):
 
     queue: asyncio.Queue = asyncio.Queue()
     registry = build_default_registry()
-    client = {"ws": websocket, "queue": queue}
+    client = {"ws": websocket, "queue": queue, "target": "_main_"}   # target=本客户端正在交互的 agent_id
     _clients.append(client)
 
     is_reconnect = len(_event_log) > 0
@@ -1144,7 +1155,7 @@ async def ws_endpoint(websocket: WebSocket):
                 continue
             if ws_task in done:
                 raw = ws_task.result()
-                await _handle_user_input(websocket, agent, raw, queue, loop, registry)
+                await _handle_user_input(websocket, agent, raw, queue, loop, registry, client)
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -1172,11 +1183,16 @@ def _history_event(agent, name_override: str = "") -> dict:
 
 
 def _broadcast_history(agent, name_override: str = ""):
-    _broadcast(_history_event(agent, name_override))
+    """广播主 Agent 的 session 历史——带 agent_id="_main_"（只刷与主 Agent 交互的客户端；
+    其它页签正与子 Agent 交互时不会被主 session 的历史冲掉视图）。"""
+    ev = _history_event(agent, name_override)
+    ev["agent_id"] = "_main_"
+    _broadcast(ev)
 
 
-async def _handle_user_input(ws, agent, raw, queue, loop, registry):
-    """处理一条用户输入（文本/命令/action）。"""
+async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None):
+    """处理一条用户输入（文本/命令/action）。client=来源客户端 dict（含 target——
+    文本按其交互目标路由：主 Agent 走 work_q；子 Agent 按忙闲插话/task 直达）。"""
     # JSON action?
     try:
         _d = json.loads(raw) if raw.lstrip().startswith("{") else None
@@ -1196,7 +1212,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             except Exception as e:
                 print(f"❌ 回溯失败：{type(e).__name__}: {e}")
                 return
-            _broadcast({"type": "restored", "target": target or ""})
+            _broadcast({"type": "restored", "target": target or "", "agent_id": "_main_"})
             _broadcast_history(agent)
         _work_q.put(("task", _do_restore))
         await _send(ws, {"type": "system", "text": "⏮ 回溯中…"})
@@ -1232,7 +1248,30 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                          "names": list_sessions(workspace=_workspace)})
         return
     if isinstance(_d, dict) and _d.get("action") == "current_history":
-        # 重连后前端请求：返回当前内存中 session 的历史（不从磁盘重载；默认当前档，可展开）
+        # 重连后前端请求：返回当前内存中 session 的历史（不从磁盘重载；默认当前档，可展开）。
+        # target 参数：前端 sessionStorage 记住的交互目标——重连/刷新后恢复该客户端的
+        # agent 视图（校验存在性；running 的目标退回 _main_ 防卡在忙实例上）。
+        rt = (_d.get("target") or "").strip() if isinstance(_d, dict) else ""
+        if rt and rt != "_main_" and client is not None:
+            reg0 = getattr(agent, "registry", None)
+            e0 = reg0.lookup(rt) if reg0 else None
+            if e0 is not None and e0.status != "running":
+                client["target"] = rt
+                agent._active_target = rt
+            else:
+                rt = ""
+        cur = (client or {}).get("target", "_main_")
+        if cur != "_main_":
+            reg0 = getattr(agent, "registry", None)
+            e0 = reg0.lookup(cur) if reg0 else None
+            if e0 is not None and e0.agent is not None:
+                await _send(ws, {"type": "session_history",
+                                 "name": f"{e0.name} [{cur}]", "agent_id": cur,
+                                 "turns": e0.agent.session.to_history()})
+                return
+            # 历史子 Agent 或已失效：退回主 session（client target 一并复位）
+            if client is not None:
+                client["target"] = "_main_"
         await _send(ws, _history_event(agent))
         # 补发活动 spec：spec 面板靠 spec 事件驱动，重连不会自动重放。
         # 如果有 pending spec（committed 态），用 spec_pending 让前端渲染交互气泡。
@@ -1296,7 +1335,14 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             cur = int(_d.get("from") or 0)
         except (TypeError, ValueError):
             cur = 0
+        # 按客户端交互目标取对应 session（页签 A 在子 Agent 视图展开时不该拿到主 session 的轮次）
+        tgt = (client or {}).get("target", "_main_")
         s = agent.session
+        if tgt != "_main_":
+            reg0 = getattr(agent, "registry", None)
+            e0 = reg0.lookup(tgt) if reg0 else None
+            if e0 is not None and e0.agent is not None:
+                s = e0.agent.session
         new_start = max(0, cur - 15)
         turns = s.to_history(start_turn=new_start, end_turn=cur)
         await _send(ws, {"type": "history_expand", "turns": turns,
@@ -1311,7 +1357,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
                 agent.on_event({"type": "system", "text": f"⚠️ 无法恢复：{err}", "transient": True})
                 return
             # 广播 turn_resume：前端据此清掉中断轮"继续"按钮、复用原容器继续（不新建轮）
-            _broadcast({"type": "turn_resume"})
+            _broadcast({"type": "turn_resume", "agent_id": "_main_"})
             agent.run("", _resume_current=True)
         _work_q.put(("task", _do_resume))
         await _send(ws, {"type": "system", "text": "▶ 恢复中断轮，从断点继续…", "transient": True})
@@ -1352,7 +1398,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
             await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
         else:
             team = reg.format_team(exclude_id="")
-            cur = getattr(agent, "_active_target", "_main_")
+            cur = (client or {}).get("target", "_main_")   # 本客户端自己的交互目标
             await _send(ws, {"type": "team_list", "team": team, "current_target": cur})
         return
     if isinstance(_d, dict) and _d.get("action") == "switch_agent":
@@ -1361,48 +1407,51 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
         if not reg:
             await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
             return
-        if target_id in ("_main_", "main", "back"):
-            agent._active_target = "_main_"
-            await _send(ws, {"type": "system", "text": "✅ 已切回主 Agent"})
-            # 广播主 Agent 的 session 历史
-            _broadcast({"type": "session_history",
-                        "name": agent.session.name or "(当前会话)",
-                        "turns": agent.session.to_history()})
-            return
-        entry = reg.lookup(target_id)
-        if entry is None:
-            await _send(ws, {"type": "system", "text": f"❌ agent_id='{target_id}' 不在注册表中"})
-            return
-        if entry.status == "running":
-            await _send(ws, {"type": "system", "text": f"⏳ '{target_id}' 正在执行任务，完成后才能切换直接交互"})
-            return
-        agent._active_target = target_id
-        await _send(ws, {"type": "system", "text": f"✅ 已切换到与 '{entry.name}' [{target_id}] 直接交互"})
-        # 广播目标 Agent 的 session 历史
-        if entry.agent:
-            # Agent 实例在内存中（运行中的子 Agent）：直接取 session 历史
-            _broadcast({"type": "session_history",
-                        "name": f"{entry.name} [{target_id}]",
-                        "turns": entry.agent.session.to_history()})
+        if target_id in ("_main_", "main", "back", ""):
+            target_id = "_main_"
         else:
-            # 历史子 Agent（从磁盘恢复，agent=None）：用 Session.load 从磁盘加载历史
-            try:
-                sdir = getattr(agent.session, "session_dir", None)
-                if sdir:
-                    sub_meta = Path(sdir) / "agents" / target_id / "meta.json"
-                    if sub_meta.exists():
+            entry = reg.lookup(target_id)
+            if entry is None:
+                await _send(ws, {"type": "system", "text": f"❌ agent_id='{target_id}' 不在注册表中"})
+                return
+            if entry.status == "running":
+                await _send(ws, {"type": "system", "text": f"⏳ '{target_id}' 正在执行任务，完成后才能切换直接交互"})
+                return
+        # —— 客户端级切换：只改本客户端的 target（多页签各与不同 Agent 交互互不干扰）——
+        # agent._active_target 保留为"最后被切换的目标"（CLI 输入路由 / /api/status 全局视角用）
+        if client is not None:
+            client["target"] = target_id
+        agent._active_target = target_id
+        # —— 响应只发给切换的这个客户端；session_history 单发（其它页签视图不动）——
+        await _send(ws, {"type": "system",
+                         "text": "✅ 已切回主 Agent" if target_id == "_main_"
+                                 else f"✅ 已切换到与 '{target_id}' 直接交互"})
+        if target_id == "_main_":
+            await _send(ws, _history_event(agent))
+        else:
+            entry = reg.lookup(target_id)
+            if entry and entry.agent:
+                await _send(ws, {"type": "session_history",
+                                 "name": f"{entry.name} [{target_id}]",
+                                 "agent_id": target_id,
+                                 "turns": entry.agent.session.to_history()})
+            else:
+                # 历史子 Agent（从磁盘恢复，agent=None）：磁盘加载历史
+                try:
+                    sdir = getattr(agent.session, "session_dir", None)
+                    sub_meta = Path(sdir) / "agents" / target_id / "meta.json" if sdir else None
+                    if sub_meta and sub_meta.exists():
                         from session import Session
                         sub_session = Session.load(str(sub_meta), llm=agent.llm,
                                                    workspace=agent.session.workspace)
-                        _broadcast({"type": "session_history",
-                                    "name": f"{entry.name} [{target_id}]",
-                                    "turns": sub_session.to_history()})
+                        await _send(ws, {"type": "session_history",
+                                         "name": f"{entry.name} [{target_id}]",
+                                         "agent_id": target_id,
+                                         "turns": sub_session.to_history()})
                     else:
                         await _send(ws, {"type": "system", "text": f"⚠️ 子 Agent '{target_id}' 的存档不存在"})
-                else:
-                    await _send(ws, {"type": "system", "text": f"⚠️ 无法定位子 Agent '{target_id}' 的存档"})
-            except Exception as e:
-                await _send(ws, {"type": "system", "text": f"⚠️ 加载子 Agent 历史失败：{type(e).__name__}: {e}"})
+                except Exception as e:
+                    await _send(ws, {"type": "system", "text": f"⚠️ 加载子 Agent 历史失败：{type(e).__name__}: {e}"})
         return
     if isinstance(_d, dict) and _d.get("action") == "open_coze":
         from workflow import workflows_info
@@ -1452,6 +1501,44 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry):
     text = text.strip()
     if not text and not images:
         return
+
+    # —— 按客户端交互目标路由：本客户端切到了某个子 Agent → 文本直达该 Agent ——
+    # （与 CLI /agent 切换后的直连语义对齐；多页签互不影响：其它页签仍走主 Agent work_q）
+    _tgt = (client or {}).get("target", "_main_")
+    if _tgt != "_main_" and not text.startswith("/"):
+        reg0 = getattr(agent, "registry", None)
+        e0 = reg0.lookup(_tgt) if reg0 else None
+        if e0 is None or e0.agent is None:
+            # 目标已失效（进程重启后 registry 重建）：复位回主 Agent 并提示
+            if client is not None:
+                client["target"] = "_main_"
+            await _send(ws, {"type": "system", "text": f"⚠️ '{_tgt}' 已不在线，本客户端已切回主 Agent；消息将发给主 Agent"})
+            _tgt = "_main_"
+        elif e0.status == "running" or getattr(e0.agent, "busy", False):
+            # 子 Agent 正在跑（异步任务中）：走插话队列（下一步边界注入），不并发 run
+            e0.agent.queue_user_message(text)
+            await _send(ws, {"type": "system", "transient": True,
+                             "text": f"📥 已排队并将在下一步注入 '{_tgt}' 的当前任务"})
+            return
+        else:
+            # 空闲：task 进 work_q（与主 Agent run 同 worker 串行——agent.run 非线程安全）。
+            # 交互期间临时接通事件流（on_event=broadcast 带 agent_id → 只推给与该 Agent
+            # 交互的客户端），平时异步任务保持无事件流。
+            _sub = e0.agent
+            def _run_sub(_a=_sub, _t=text):
+                _old = getattr(_a, "on_event", None)
+                _a.on_event = agent.on_event
+                try:
+                    _a.run(_t)
+                finally:
+                    _a.on_event = _old
+            if _work_q is not None:
+                _work_q.put(("task", _run_sub))
+                await _send(ws, {"type": "system", "transient": True, "text": f"✅ 已发送给 '{_tgt}'，处理中…"})
+            else:
+                await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环（work_q 缺失）"})
+            return
+    # _tgt == "_main_"（或已复位）：走原有主 Agent 路径
 
     # 斜杠命令（即时处理，不进 work_q）
     if text.startswith("/"):

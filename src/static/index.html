@@ -246,11 +246,6 @@
   <div id="specPanel" class="plan-panel" style="display:none"><button class="spec-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button><details open><summary id="specSummary">📐 施工方案</summary><div id="specList"></div></details></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
-  <div id="wfPanel" class="plan-panel" style="display:none"><details open>
-    <summary>🧩 工作流（点 <b>调试</b> 运行工作流 · <a href="#" id="wfReload">🔄 重载</a>）</summary>
-    <div id="wfList"></div>
-  </details></div>
-
   <div id="msgArea"></div>
 
   <div id="attBar"></div>
@@ -259,8 +254,7 @@
     <select id="modelSel" title="切换模型"></select>
     <button class="btn" id="btnImg">📁 加图</button>
     <button class="btn" id="btnToolCall" title="工具调用表单：选工具→填参数→生成 /call 命令发送">🔧 工具</button>
-    <button class="btn" id="btnWf" title="工作流：查看/重载/调试运行">🧩 工作流</button>
-    <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">✏ 编辑器</button>
+    <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">🧩 工作流</button>
     <button class="btn" id="btnRag" onclick="window.open('/rag','_blank')" title="RAG 文档库管理">📚 RAG</button>
     <button class="btn" id="btnMemory" onclick="window.open('/memory','_blank')" title="长期记忆管理">🧠 记忆</button>
     <button class="btn" id="btnAgents" onclick="window.open('/agents','_blank')" title="Agent 声明管理（主 Agent + 子 Agent）">🤖 Agent</button>
@@ -375,11 +369,14 @@ let reconnectTimer = null;
 
 function connectWS(){
   ws = new WebSocket(`ws://${location.host}/ws`);
+  // 本客户端正在交互的 agent_id（多页签各自独立；sessionStorage 记住——刷新/重连后恢复视图）
+  try{ myTarget = sessionStorage.getItem('agt_target') || '_main_'; }catch(e){ myTarget = '_main_'; }
   ws.onopen = ()=>{
     setOnline(true);
     // 无论首次连接还是断线重连，都请求当前内存中的 session 历史——
-    // 新设备/新浏览器连上来时也能看到正在进行的会话
-    ws.send(JSON.stringify({action:'current_history'}));
+    // 新设备/新浏览器连上来时也能看到正在进行的会话。
+    // 带 target：后端按本客户端的交互目标返回对应 Agent 的历史（重连/刷新后恢复视图）
+    ws.send(JSON.stringify({action:'current_history', target: myTarget}));
     firstConnect = false;
   };
   ws.onclose = ()=>{
@@ -409,6 +406,7 @@ const queueStatus = document.getElementById('queueStatus');
 const queueCount = document.getElementById('queueCount');
 
 let busy = false;
+var myTarget = '_main_';           // 本客户端正在交互的 agent_id（connectWS 从 sessionStorage 恢复；各页签独立）
 let autonomousMode = false;
 let curTurn = null;
 const attachments = []; // data URL 数组
@@ -1265,6 +1263,9 @@ agentSel.addEventListener('mousedown', ()=>{
 agentSel.addEventListener('change', ()=>{
   const targetId = agentSel.value;
   if(targetId === agentSel.dataset.curTarget) return;  // 没变化
+  // 本地立即记录（后端响应到达前事件过滤已生效）+ sessionStorage 持久（刷新恢复）
+  myTarget = targetId;
+  try{ targetId === '_main_' ? sessionStorage.removeItem('agt_target') : sessionStorage.setItem('agt_target', targetId); }catch(e){}
   ws.send(JSON.stringify({action:'switch_agent', target_id: targetId}));
 });
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
@@ -1662,6 +1663,14 @@ function clearToolProgress(){
 window.onerror=function(msg,url,line,col,err){console.error(msg,err);try{addRow('err','JS错误: '+(msg+'').slice(0,100));}catch(e){}};
 function onWSMessage(ev){
   let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
+  // 事件按 agent_id 过滤（双保险——后端已按各客户端 target 分发，这里再挡一层防漏）：
+  // 事件属于其它 Agent 且本端不在与其交互 → 忽略。
+  // 特例放行：本端在主视图（_main_）时放行其它 Agent 的 answer——同步工具型子 Agent
+  // （explore_subagent 等）的回应要进本视图的 answer 分页（见后端 _broadcast 的同款特判）
+  if(m.agent_id && m.agent_id !== (myTarget||'_main_')){
+    const _am = (myTarget||'_main_') === '_main_' && (m.type==='answer'||m.type==='wrap_answer');
+    if(!_am) return;
+  }
   try{
   switch(m.type){
     case 'background_trigger':
@@ -1883,18 +1892,15 @@ function onWSMessage(ev){
         addRow('sys', `📨 插话已注入 Agent 上下文：${m.text}`);
       }
       break;
-    case 'workflows':
-      renderWorkflows(m.items||[]);
-      break;
     case 'coze_url':
       if(m.url){ window.open(m.url, '_blank'); }
       else addRow('sys', '⚠️ 该工作流未配置 coze_url');
       break;
     case 'team_list':
       _agentListLoading = false;   // 复位加载标记，允许下次点击重新获取
-      // 更新 Agent 团队下拉框
+      // 更新 Agent 团队下拉框（当前选中以本客户端的 myTarget 为准——各页签独立）
       const team = m.team || '';
-      const cur = m.current_target || '_main_';
+      const cur = myTarget || m.current_target || '_main_';
       const sel = document.getElementById('agentSel');
       // 解析 team 文本，提取 agent_id 和 name
       const lines = team.split('\n').filter(l => l.startsWith('- '));
@@ -2012,12 +2018,6 @@ function renderWorkflows(items){
            ` <a href="/wfdebug?wf=${encodeURIComponent(it.name)}" target="_blank" class="wfDebug" style="margin-left:8px">调试 ↗</a></div>`;
   }).join('');
 }
-document.getElementById('btnWf').onclick=()=>{
-  const p=document.getElementById('wfPanel');
-  p.style.display = p.style.display==='none' ? 'block' : 'none';
-  ws.send(JSON.stringify({action:'list_workflows'}));
-};
-document.getElementById('wfReload').onclick=(e)=>{ e.preventDefault(); e.stopPropagation(); ws.send(JSON.stringify({action:'reload_workflows'})); };
 
 inp.focus();
 </script>

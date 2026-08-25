@@ -38,3 +38,5 @@ resume/
 
 # === 设计草稿 / 临时验证（不入版本） ===
 design/
+# wiki 维护攒批队列（运行时状态，勿提交）
+.agent/wiki_queue/

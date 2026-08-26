@@ -1196,6 +1196,20 @@ def _cmd_reload(ctx: CommandContext, args):
         print(f"  ⚠️ utility 通道重建失败：{e}")
 
 
+def _cmd_exit(ctx: CommandContext, args):
+    """/exit（= /quit）—— 优雅退出：等当前任务完成后退出程序。
+    与 CLI 裸词 quit/exit/q/退出 等价；斜杠形态在 WebUI/stdin 驱动等所有入口都可用。
+    ⚠️ agt-web 模式下会关掉整个服务（所有客户端断连）——远程关服入口。"""
+    print("👋 再见！（/exit：等当前任务完成后退出）")
+    q = getattr(ctx, "work_q", None)
+    if q is None:
+        q = getattr(ctx.agent, "_work_q", None)   # 兜底：WebUI dispatch 漏传 work_q 时
+    if q is not None:
+        q.put(None)   # 哨兵：worker 完成当前项后退出 → 主循环 finally 清理（停服务/防孤儿进程）
+    else:
+        print("⚠️ 无 work_q 通道，请在终端 Ctrl+C 退出")
+
+
 def _cmd_restart(ctx: CommandContext, args):
     """/restart [消息] —— 看门狗式重启：本进程优雅退出 → 看门狗拉起新进程（新代码生效）
     → 自动恢复当前 session 与 Web 服务端口 → （可选）把剩余参数作为重启后第一条消息发送。
@@ -1704,6 +1718,11 @@ def build_default_registry() -> CommandRegistry:
         "/agent coder        切换到与 coder 直接交互\n"
         "/agent _main_       切回主 Agent\n"
         "  仅允许 done/idle 状态的子 Agent；running 的需等完成后才能切换")
+    reg.register("exit", _cmd_exit,
+        "优雅退出（= /quit = 裸词 quit）：等当前任务完成后退出；agt-web 模式会关掉整个服务",
+        "/exit              退出（所有入口可用：CLI/WebUI/stdin 驱动）\n"
+        "/quit              同上（别名）")
+    reg.register("quit", _cmd_exit, "同 /exit（别名）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
     return reg

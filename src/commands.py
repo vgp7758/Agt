@@ -242,10 +242,13 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
     cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
-    # 步距衰减参数（存 settings.json，运行时设在 toollog 模块变量上）
+    # 步距衰减参数（存 settings.json；detail_base 显示【实际生效值】——显式配置 > 窗口推导 > 1500，
+    # 只显示 load_detail_base() 会把推导值误报成 1500）
     try:
         import config as _cfg2
-        cfg["detail_base"] = _cfg2.load_detail_base()
+        cfg["detail_base"] = getattr(agent.session, "detail_base", _cfg2.load_detail_base())
+        cfg["detail_base_source"] = ("显式" if _cfg2.load_detail_base_opt() else
+                                     ("窗口推导" if getattr(agent.session, "max_effective_context_window", None) else "默认"))
         cfg["detail_step"] = _cfg2.load_detail_step()
         cfg["panic_context_window"] = _cfg2.load_panic_window()
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
@@ -398,6 +401,14 @@ def apply_config(agent, values: dict) -> list:
                 saved = config.load_runtime_settings(); saved[_dk] = val; config.save_runtime_settings(saved)
                 if _dk == "detail_base":
                     toollog.set_detail_params(base=val)
+                    # Session 侧统一入口也失效（投影消费点全部走 session.detail_base；
+                    # toollog 模块变量保留给 set_detail_params 旧路径，但不再是唯一真相）
+                    try:
+                        agent.session.invalidate_detail_base()
+                    except Exception:
+                        pass
+                    results.append(f"✅ detail_base={val}（已存 settings.json + 即时生效；"
+                                   f"当前投影生效值={getattr(agent.session, 'detail_base', val)}）")
                 else:
                     toollog.set_detail_params(step=val)
                 results.append(f"✅ {_dk} = {val}（已存 settings.json + 即时生效）")
@@ -1376,6 +1387,11 @@ def _cmd_context(ctx: CommandContext, args):
     段落：system / rules / 长期记忆·静态 / 折叠摘要 / 各档历史 / global_summary / 当前轮 / tail。"""
     import time as _time
     s = ctx.agent.session
+    # 失效 base 缓存重读（直改 settings.json 后 /context 立即反映新配置——显式值变化场景）
+    try:
+        s.invalidate_detail_base()
+    except Exception:
+        pass
 
     # ① 最近一次 react 调用（实际 token，来自 llm_calls）
     last_react = None

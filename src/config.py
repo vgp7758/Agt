@@ -166,6 +166,17 @@ def load_detail_base() -> int:
         return 1500
 
 
+def load_detail_base_opt():
+    """detail_base 的【显式配置检测】：settings.json 配了 detail_base 返回 int，否则 None。
+    None 时消费方（Session.detail_base）按 max_effective_context_window 自动推导——
+    大窗口放宽/小窗口收紧（用户提案：base 应是窗口的函数，而非恒定 1500）。"""
+    try:
+        v = load_runtime_settings().get("detail_base")
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
 def load_panic_window() -> int:
     """轮内保命阀阈值（settings.json 的 panic_context_window；0=跟随 max_effective_context_window）。
     独立于分档窗口：分档窗口常设为总窗口 ~50%（_plan_fold 折到 75%×它），保命线可设为

@@ -524,6 +524,7 @@ class Session:
         self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
         # —— 分档上下文投影（provider 设 max_effective_context_window 才启用，否则走原 recent_window+summary）——
         self.max_effective_context_window = getattr(self.llm, "max_effective_context_window", None)
+        self._detail_base = None   # 惰性缓存（detail_base property；/config / switch_model / /context 时失效重读）
         self.max_level = config.load_max_level()
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
         self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
@@ -547,6 +548,31 @@ class Session:
         self._hist_marks: Optional[list] = None   # 装配进行中的 history 子段标记 [(name, 段内偏移, meta)]（临时态）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
+
+    # ========== 步距衰减基数（显式配置 > 窗口推导 > 1500） ==========
+    @property
+    def detail_base(self) -> int:
+        """步距衰减的档 1 基数（字/步）：档 N 上限 = base >> (N-1)。
+        优先级：settings.json 显式 detail_base > 按 max_effective_context_window 推导 > 1500。
+        推导公式 base = clamp(win × 0.00375, 600, 6000)——0.00375 恰使 400K 窗口=1500
+        （主流配置行为不变）；600K→2250、900K→3375、60K→600。
+        缓存 _detail_base：/config、switch_model（窗口变）、/context（直改 settings.json 后）
+        各自失效重读。此前的坑：消费点混用 toollog from-import 绑定值（set_detail_params
+        改模块变量不更新副本）与运行时属性访问，显式配置在部分路径永不生效。"""
+        if self._detail_base is None:
+            explicit = config.load_detail_base_opt()
+            if explicit:
+                self._detail_base = explicit
+            elif self.max_effective_context_window:
+                self._detail_base = max(600, min(6000, int(self.max_effective_context_window * 0.00375)))
+            else:
+                self._detail_base = 1500
+        return self._detail_base
+
+    def invalidate_detail_base(self):
+        """失效 base 缓存（配置变化时调用：/config detail_base、switch_model 窗口变、
+        /context 入口——兜底直改 settings.json 的场景）。冻结渲染随 key 自动失效。"""
+        self._detail_base = None
 
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def projection_breakdown(self) -> dict:
@@ -606,7 +632,7 @@ class Session:
                                  meta="工具调用折叠成一行标注，保留回复+reasoning原文")
                         for lv in sorted(lv_msgs, reverse=True):   # 档4(老)→档1(新)，与投影顺序一致
                             _add(f"档{lv}历史({lv_turns[lv]}轮)", lv_msgs[lv],
-                                 meta=f"工具结果上限{max(__import__('toollog').DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步")
+                                 meta=f"工具结果上限{max(self.detail_base >> (lv-1), DETAIL_FLOOR)}字/步")
                     else:
                         if self.global_summary:
                             _add("历史摘要(窗口外)", [{"role": "system", "content": self._ambient("【历史会话摘要】\n" + self.global_summary)}])
@@ -1222,15 +1248,15 @@ class Session:
         return 1 + sum(1 for b in self._tier_boundaries if b >= turn_idx)
 
     def _render_turn_frozen(self, turn_idx: int) -> list[dict]:
-        """渲染一个【已完成】turn，按其档位级别冻结：同 (level, fold) 直接复用缓存 → byte-stable。
-        档位 base = DETAIL_BASE >> (level-1)：level1=1500 / 2=750 / 3=375… 不低于 DETAIL_FLOOR。
-        level 变了（毕业顺移）才重算；fold 开关变化也失效重算（key 含 fold 位）。
+        """渲染一个【已完成】turn，按其档位级别冻结：同 (level, fold, base) 直接复用缓存 → byte-stable。
+        档位 base = self.detail_base >> (level-1)（显式配置/窗口推导——见 detail_base property）。
+        level 变了（毕业顺移）才重算；fold 开关/base 变化也失效重算（key 含 fold 位与 base）。
         超深档折叠（fold_deep_tools 开 且 raw level > max_level）：工具调用整体折叠成
         一行标注 + 保留最终回复原文与 reasoning 原文（用户设计——超深档残缺摘要信息密度低，
         不如结论原文 + 可 recall 的完整存档）。"""
         level = self._tier_level(turn_idx)
         fold = config.load_fold_deep_tools() and self._raw_tier_level(turn_idx) > self.max_level
-        key = (level, fold)
+        key = (level, fold, self.detail_base)
         cached = self._frozen_renders.get(turn_idx)
         if cached and cached[0] == key:
             return cached[1]
@@ -1246,7 +1272,7 @@ class Session:
                 a_msg["reasoning_content"] = turn.answer_reasoning
             msgs.append(a_msg)
         else:
-            base = max(__import__("toollog").DETAIL_BASE >> (level - 1), DETAIL_FLOOR)
+            base = max(self.detail_base >> (level - 1), DETAIL_FLOOR)
             msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
                                                  base=base, full_window=(1 if level == 1 else 0)))
             if turn.answer:
@@ -1286,7 +1312,7 @@ class Session:
             else:
                 lv = self._tier_level(i)
                 gname = f"档{lv}"
-                gmeta = f"工具结果上限{max(DETAIL_BASE >> (lv-1), DETAIL_FLOOR)}字/步"
+                gmeta = f"工具结果上限{max(self.detail_base >> (lv-1), DETAIL_FLOOR)}字/步"
             if gname not in groups:
                 groups[gname] = []
                 turns_n[gname] = 0
@@ -1370,13 +1396,15 @@ class Session:
         new_b = last_completed if seg_len <= GRADUATE_BATCH_TURNS \
             else seg_start + GRADUATE_BATCH_TURNS - 1
         self._tier_boundaries.append(new_b)
-        # 冻结缓存失效判定用完整 key (level, fold)——毕业顺移可能只改 raw 不改封顶 level
-        # （raw 4→5 时 tier 仍 4 但 fold 位 False→True），也要失效重渲染
+        # 冻结缓存失效判定用完整 key (level, fold, base)——毕业顺移可能只改 raw 不改封顶 level
+        # （raw 4→5 时 tier 仍 4 但 fold 位 False→True），base 变化（/config/切模型窗口变）同理
         _fold_on = config.load_fold_deep_tools()
+        _db = self.detail_base
         for i in range(len(self.turns)):
             fr = self._frozen_renders.get(i)
             if fr and fr[0] != (self._tier_level(i),
-                                _fold_on and self._raw_tier_level(i) > self.max_level):
+                                _fold_on and self._raw_tier_level(i) > self.max_level,
+                                _db):
                 self._frozen_renders.pop(i, None)
         return True
 
@@ -1673,7 +1701,7 @@ class Session:
             msgs.append({"role": "system", "content": f"（本轮的 {skipped} 个早期步骤已省略，仅保留最近 {max_steps} 步）"})
         total = len(steps)
         cur_group = (total - 1) // GROUP_STEPS if total else 0   # 当前步所在组（0-based）
-        eff_base = base if base is not None else DETAIL_BASE     # 当前轮 base=None → 用 DETAIL_BASE
+        eff_base = base if base is not None else self.detail_base   # 当前轮 base=None → 用统一 base（显式配置/窗口推导）
         for idx, step in enumerate(steps):
             if not step.tool_calls:
                 continue

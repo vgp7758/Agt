@@ -484,9 +484,18 @@ class Agent:
     def switch_model(self, name: str, _user_initiated: bool = False):
         """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。
         _user_initiated=True 时（用户 /model 或 WebUI 下拉框），llm 会重建有效回退链
-        （把新模型提前到链首）；回退路径切换不传此参数，不动链。"""
+        （把新模型提前到链首）；回退路径切换不传此参数，不动链。
+        切换后同步刷新 session 的窗口副本 + base 缓存（不同 profile 的
+        max_effective_context_window 不同——此前 session 里的是构造时旧值，
+        /context 与折叠计划在切模型后仍按旧窗口算）。"""
         self.llm.switch_model(name, _user_initiated=_user_initiated)
         self.model_name = name
+        try:
+            self.session.max_effective_context_window = getattr(
+                self.llm, "max_effective_context_window", None)
+            self.session.invalidate_detail_base()   # 窗口变 → base 重推导（显式配置除外）
+        except Exception:
+            pass
 
     # ========== 运行时状态的存取（随 session 落盘/恢复）==========
     def capture_runtime_state(self) -> dict:

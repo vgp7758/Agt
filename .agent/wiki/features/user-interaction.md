@@ -147,6 +147,22 @@ clearInterval(rec.timer);
 
 `run_id` 由 `src/agent.py` `_run_hooks` 生成（同步线程池 + async 后台线程全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件均携带），注册表与观测页实现见 [工作流运行观测](wf-monitor.md)。旧进程的事件不带 run_id（不可点击），需 `/restart` 生效。
 
+## 前端 UI 遮罩坑：toast 透明条遮挡输入框失焦（2026-08，commit 0a415bc）
+
+**现象**：对话几轮后，WebUI 消息输入框中间靠后的位置被「透明的东西」挡住，点击那里输入框会失去焦点。
+
+**根因**：`toast()`（`src/static/index.html`）惰性创建 `#toast` 提示条——`position:fixed; bottom:20px; left:50%` 居中 + `z-index:999`。第一次调用（发送消息时的「✅ 已接收，处理中…」transient 提示）后元素**永久驻留 DOM**；2 秒后只把 `opacity` 降到 0 淡出，**元素仍在**，且原 cssText **没有 `pointer-events:none`** → 点击落在那个透明 div 上，textarea 拿不到焦点。三个现象全部对上：
+
+① 「几轮后出现」= toast 首次调用才创建，之后一直残留；
+② 「中间靠后」= `bottom:20px` 正好落在底部 inputBar（约 66px 高）范围内、`left:50%` 居中盖住中段，宽度随最后一条文案变化（较长文案伸得更远）；
+③ 「点击失焦」= 无 `pointer-events:none`，透明元素照样吃点击。
+
+**修复**：`cssText` 追加 `pointer-events:none`——toast 是纯提示元素，本来就不需要交互，显示期间点击也穿透到下层输入框。
+
+**同类坑**：与[气泡级复制按钮](bubble-interaction.md)的 `.bubble-copy` 同款——**`opacity:0` ≠ 不存在，透明元素照样吃点击**（淡出 + `pointer-events:none` 二者缺一不可）。顺带复核其它遮罩物确认安全：specPanel/specFab/modal-overlay 默认 `display:none`、剪贴板兜底 textarea 即用即删。
+
+**生效方式**：index.html 磁盘 serve，**Ctrl+F5 强刷即生效，无需 /restart**。
+
 ## before_turn 钩子并行执行保证
 
 见 [工作流引擎与钩子](../architecture/workflow-hooks.md#before_turn-钩子并行执行2026-08-新v0182-发布)：

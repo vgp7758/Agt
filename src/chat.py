@@ -428,7 +428,22 @@ def _worker(agent, work_q, registry, state):
                 state["desc"] = user_msg[:40] or "(后台事件)"
                 agent.run(user_msg, _seeds=seeds or None)
         except Exception as e:
+            import logging as _lg, traceback as _tb
             print(f"\n⚠️ 执行出错：{e}")
+            # 中断原因留痕（三处）：log 文件 / session（start_turn 归档时带进 turn_end 事件）/
+            # llm_log 事件（WebUI 日志面板）——此前异常逃出后原因只 print 一行即丢失，
+            # 下一轮归档只剩"（中断，本轮未完成）"标注，排障无从下手（用户报告的痛点）。
+            try:
+                agent.session._interrupt_reason = f"{type(e).__name__}: {e}"
+            except Exception:
+                pass
+            _lg.getLogger("agt.chat").error("run 异常中断：%s\n%s",
+                                           type(e).__name__, _tb.format_exc(limit=6))
+            try:
+                agent._emit({"type": "llm_log", "level": "error",
+                             "text": f"轮中断：{type(e).__name__}: {str(e)[:200]}"})
+            except Exception:
+                pass
         finally:
             state["busy"] = False
             try:

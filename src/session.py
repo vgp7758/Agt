@@ -366,6 +366,13 @@ _MIDTURN_TAG = "📨〔用户中途补充，非新一轮〕\n"
 _INTERRUPT_MARKS = ("（中断，本轮未完成）", "（被中断）", "（被用户停止）", "（被用户中断）")
 
 
+def _is_interrupt_mark(answer: str) -> bool:
+    """answer 是否为中断标注——前缀匹配（start_turn 归档的新文案带原因后缀
+    "（中断，本轮未完成——XXX: ...）"，精确 in 集合会漏判 → resume 拒绝恢复）。"""
+    a = (answer or "").strip()
+    return any(a.startswith(m) for m in _INTERRUPT_MARKS)
+
+
 @dataclass
 class Turn:
     user_message: str
@@ -696,9 +703,20 @@ class Session:
             prev = self._current
             prev.answer = prev.answer or "（中断，本轮未完成）"
             self.turns.append(prev)
+            _reason = getattr(self, "_interrupt_reason", "") or ""
+            if _reason:
+                # 标记完整闭合（_is_interrupt_mark 前缀匹配），原因另起一行——
+                # 带原因内嵌的变体会让前缀匹配失效（"——原因）"插在标记的"）"之前）
+                prev.answer = f"（中断，本轮未完成）\n原因：{_reason}"
+                self._interrupt_reason = ""
+            import logging as _lg
+            _lg.getLogger("agt.session").warning(
+                "归档异常中断轮（user=%r…，%d 步）原因：%s",
+                (prev.user_message or "")[:40], len(prev.steps), _reason or "未知（无 _interrupt_reason）")
             self._emit_event({"event": "turn_end", "answer": prev.answer,
                               "answer_reasoning": prev.answer_reasoning or "",
-                              "summary": prev.summary or ""})
+                              "summary": prev.summary or "",
+                              "interrupt_reason": _reason})
             self._refresh_summary_cache()
             self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
@@ -2299,7 +2317,7 @@ def _replay_events(events: list) -> list:
             # 重放闭环：turn_end(中断) → turn_resume → step… → turn_end(最终)。
             if cur is None and turns:
                 cur = turns.pop()
-                if (cur.answer or "").strip() in _INTERRUPT_MARKS:
+                if _is_interrupt_mark(cur.answer or ""):
                     cur.answer = ""
                     cur.answer_reasoning = ""
         elif et == "turn_end":

@@ -1365,14 +1365,14 @@ class Agent:
         两条路径汇合后：清中断标注、发 turn_resume 事件、_autosave。返回 "" 成功，否则错误消息。
         已归档 steps 完整保留——若上一步 tool_call 曾发起但未完成，该 step 未归档；
         恢复后投影里看到的是已完成链，模型从断点自然续跑。"""
-        from session import _INTERRUPT_MARKS
+        from session import _is_interrupt_mark
         s = self.session
         if s._current is not None:
             # ② 挂起形态：直接以挂着的 _current 续跑（此前这里无条件拒绝——异常逃出后点继续
             #    恒报"当前已有进行中的轮次"，恰是最该恢复的形态没有恢复路径）
             t = s._current
             a = (t.answer or "").strip()
-            if a and a not in _INTERRUPT_MARKS:
+            if a and not _is_interrupt_mark(a):
                 return "[错误] 当前轮已有回答（非中断态），无法恢复"
             t.answer = ""
             t.answer_reasoning = ""
@@ -1386,7 +1386,7 @@ class Agent:
             return "[错误] 没有可恢复的轮次"
         t = s.turns[-1]
         a = (t.answer or "").strip()
-        if a and a not in _INTERRUPT_MARKS:
+        if a and not _is_interrupt_mark(a):
             return f"[错误] 最后一轮已正常完成（answer 非中断标注），无需恢复"
         s.turns.pop()
         t.answer = ""

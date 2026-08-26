@@ -1161,7 +1161,7 @@ async function saveModels(){
     if(d.error){alert(d.error);}else{settingsModal.style.display='none';toast('✅ 模型已保存');}
   }catch(e){alert(e);}
 }
-function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
+function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#533483;color:#fff;padding:8px 20px;border-radius:6px;z-index:999;transition:opacity .3s;pointer-events:none';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
 function saveRuntime(){
   const values={
     max_steps: parseInt(document.getElementById('cfg_max_steps').value),

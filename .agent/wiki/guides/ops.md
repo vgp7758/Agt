@@ -78,6 +78,8 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - **阶段二（根因已修正）**：9100 端口新实例反复退出（rc=0）的真正根因是**端口被旧实例（pid 22636）占用**，非此前推断的 entry point/端口探测问题——已 `taskkill` 清理，进程死亡导致 daemon 线程与 inbox 消息丢失的表象见 [三层消费机制](../architecture/multi-agent.md#三层消费机制当前代码消息不会丢前提进程存活)。
 - **阶段三（进行中）**：端口清理后新实例稳定，stdin 通道端到端验证成功（`send_to_service` → busy=True）；唤醒链路两处核心观测点日志已埋（commit e0ae60b，见 [端到端验证状态](../architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)）；新实例首轮因 proxy 响应极慢（单次 590+ 秒）未完成，观测点未触发，已挂定时巡检等待闭环。
 
+**跨实例不止查询（2026-08）**：实例还可作为对方实例的 **WS 客户端**——收初始事件、只读 action、发消息驱动对方 agent 干活、斜杠命令（⚠️ 含 `/exit` 可远程关服）；服务无鉴权，跨电脑/公网使用需隧道。demo 见 `tools/remote_client_demo.py`，详见 [跨实例客户端](../features/remote-client.md)。
+
 ### 轮边界缓存观测（2026-08）
 
 - **折叠事件（t206）**：/stats 单步深跌（98%+ miss），下一步即恢复 ~99.9% → 预期一次性成本，无需处置（折叠摘要 byte-stable）。见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)

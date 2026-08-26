@@ -38,6 +38,8 @@
 
 > 详见 [多 Agent 体系 · 端到端验证状态](../architecture/multi-agent.md#端到端验证状态2026-08-18三阶段)。
 
+**延伸（2026-08）**：跨实例不止这条 REST 快照——实例还可作为对方实例的 **WS 客户端**（收初始事件 / 只读 action / 发消息驱动对方 agent / 斜杠命令），demo 见 `tools/remote_client_demo.py`，详见 [跨实例客户端](remote-client.md)。
+
 ## 与其他模块的关系
 
 | 模块 | 关系 |
@@ -61,3 +63,5 @@
 - [多 Agent 体系](../architecture/multi-agent.md) — AgentRegistry 机制、三层消费机制与 registry 修复
 - [系统总览](../architecture/overview.md) — 模块地图与数据流
 - [v0.18.2 发布记录](../releases/v0.18.2.md) — 版本交付内容总览
+- [跨实例客户端](remote-client.md) — REST 之外的完整通道：WS 消息驱动 / 只读 action / 斜杠命令（demo 脚本 `tools/remote_client_demo.py`）
+

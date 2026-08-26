@@ -169,6 +169,29 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
 
 **与子工作流的关系**：`dir_snapshot` / `diff_snapshots` 是通用子工作流（在 `.agent/workflows/`），`commit_wiki` 是主工作流内的节点。重构后主工作流更清晰，子工作流可被其他工作流复用（如代码变更检测、配置变更审计等）。
 
+## busy 检查与攒批短路：按 name 子串判定 + 多实例多行判定（2026-08-26）
+
+**入口判定**：wiki_auto_maintenance 是【攒批队列模式】——`list_team` 查 `wiki-updater` 忙闲：
+
+```
+值得记录 → list_team 看板 → busy_parse（code 节点）
+  ├─ 忙 → 本轮摘录入 .agent/wiki_queue/pending.jsonl 短路（攒批，下批一起消费）
+  └─ 空闲 → pending 全量转 context_messages → agent_prompt 派 wiki-updater 消费
+```
+
+**判定依据——按 name 子串，不是 agent_id**（`busy_parse` 节点，`.agent/workflows/wiki_auto_maintenance.xml`）：
+
+```python
+lines = [l for l in txt.splitlines() if "wiki-updater" in l]   # name 子串匹配
+is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非 ✅ 即忙
+```
+
+看板每行 `name` 列都是 `wiki-updater`（wiki-updater / _2 / _3 三行都会被 `"wiki-updater" in l` 命中），所以按 agent_id 精确匹配会漏判多实例。
+
+**多行判定修复**：旧版只看**首行**——多实例时「首行 ✅ 但 _2 还在跑」会误判空闲 → 双消费者并发消费同一攒批队列，破坏单消费者语义。改为 `any(...)`：任一行非空闲即忙。
+
+> **多实例的真正根因不在 busy 检查**：每次 `/restart` 后旧实例变历史条目，reuse 走复活分支时 `_revive_subagent` 因 NameError（调用已删除的 `_build_subagent_system`）静默落回新建 → auto-numbering 造 _2/_3。修复见 [多 Agent 体系 · 复活路径 NameError](../architecture/multi-agent.md#复活路径-nameerror--wiki-updater-多实例根因修复2026-08-26commit-6d396af)。busy 多行判定是配套加固。
+
 ## 模板措辞中性化（2026-08，commit 17312eb）
 
 **问题**：拼接模板（`336423` text 节点）此前把判官输入以 `user message: ... assistant answer: ...` 的**判官口吻裸转储**拼进任务文本——wiki-updater 收到的 update_wiki 任务 prompt 也是这个开头（团队看板里 wiki-updater 的 recap 复述出 `user message:` 开头而暴露）。

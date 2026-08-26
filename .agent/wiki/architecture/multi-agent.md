@@ -9,7 +9,7 @@
 ```
 agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?, caller?)
   ├─ reuse=true 且有同名空闲活实例 → 直接派活（沿用 agent_id/session）
-  ├─ reuse=true 无活实例但有同名历史条目 → 复活（读 md + Session.load 磁盘历史）
+  ├─ reuse=true 无活实例但有同名历史条目 → 复活（读声明同源 _agent_def_path+load_agent_yml，+ Session.load 磁盘历史）
   └─ 否则新建（session 嵌套 主session/agents/<id>/，meta.json 记 _agent_meta）
 全异步：立即返回；完成后按 caller_id 路由 answer 入调用者 inbox（下轮自动激活）
 要结果才继续 → wait_subagents(agent_ids)
@@ -21,6 +21,32 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - `_agent_meta`（agent_id/name/model/task/caller_id/recap/status）无条件写子 meta.json → 读档 `_restore_subagents` 恢复团队
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
+
+## 复活路径 NameError · wiki-updater 多实例根因修复（2026-08-26，commit 6d396af）
+
+**现象**：团队看板出现 `wiki-updater` / `wiki-updater_2` / `wiki-updater_3` 多个同 name 实例，各自带着同样的攒批任务 recap——"不是检查忙就攒批短路了吗，为什么还建新实例？"
+
+**根因链**（与 busy 检查无关，问题在复用路径的**复活分支**）：
+
+```
+每次 /restart → _restore_subagents 按 meta.json 恢复 registry
+  → 旧 wiki-updater 条目 agent=None（历史条目，非活实例）
+  → 下次派活 reuse=true：无空闲活实例 → 有同名历史条目 → 走复活
+  → _revive_subagent 调用【已删除的 _build_subagent_system】
+  → NameError → except 吞掉 → 静默落回「新建」路径
+  → auto-numbering 造出 wiki-updater_2 / _3
+```
+
+日志铁证：`[WARNING] 复活子 Agent wiki-updater(wiki-updater) 失败: name '_build_subagent_system' is not defined`，跨度 08-25 23:24 ~ 08-26 15:24，恰好对应三次重启。
+
+**修复**（src/multiagent.py `_revive_subagent`）：
+- 声明加载与新建路径【同源】——`_agent_def_path` + `load_agent_yml`（v2.1 yml / 旧 md 双格式）
+- 顺带根因二：旧实现 `_agent_md_path` + `_split_frontmatter` + 已删除的 `_build_subagent_system`，对 v2.1 纯 YAML 解析出 `meta={}`（工具白名单/模型全丢）——即便不 NameError 也会丢配置
+- 复活后投影 `current_turn_only=True`（reuse 语义）：历史轮完整归档可查，但不进上下文
+
+**本地清理**：删掉 `wiki-updater/`、`wiki-updater_2/` 的 meta.json（`_restore_subagents` 读 meta.json 恢复，删后重启不再注册这两个重复条目；当前进程看板仍显示是因目录句柄占用删不了整目录）——`/restart` 后只恢复 wiki-updater_3，实例数收敛为 1。
+
+**关联**：wiki_auto_maintenance 的 busy 检查按 **name 子串**（`"wiki-updater" in l`，见 [wiki 自动维护 · busy 检查](../features/wiki-auto-maintenance.md#busy-检查与攒批短路按-name-子串判定--多实例多行判定2026-08-26)），其多行判定已同步加固。
 
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 

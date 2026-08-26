@@ -9,9 +9,9 @@
 run_python(code="", file="", args="")
 ```
 
-- **code / file 二选一**：
-  - `code`：一段内联 Python 代码（写临时文件再跑）
-  - `file`：运行已存在的 .py 文件——跑已保存脚本用这个，别再用 subprocess 包壳
+- **code / file 二选一**（何时选哪个见 [inline vs file 经济学](#inline-vs-file-经济学参数描述写入迭代决策指引2026-08commit-6caf290)）：
+  - `code`：一段内联 Python 代码（写临时文件再跑）——一次性验证/分析首选
+  - `file`：运行已存在的 .py 文件——调试迭代首选（edit 差量改 + 重跑），跑已保存脚本用这个，别再用 subprocess 包壳
 - **args**：传给脚本的参数字符串，子进程经环境变量 `PY_ARGS` 读取：
 
 ```python
@@ -31,6 +31,41 @@ run_python(file="tools/analyze.py", args='{"src": "main.py", "dst": "backup.py"}
 - 实现机制：`_run_subprocess_streaming` 新增 `env` 参数（None=继承父进程环境）；`args` 非空时把 `PY_ARGS` 注入子进程环境变量，**不传则完全不注入**（脚本端 `os.environ.get("PY_ARGS", "")` 得空串）
 - 与 `run_script` 的 `PAYLOAD` 环境变量同款机制——工具级约定：**参数不进 argv，走环境变量**，规避命令行转义/引号问题
 - `file` 路径走 `_resolve` 严格沙箱（须在 workspace 内）；workspace 外路径可经 args 传入、脚本内自行读
+
+## inline vs file 经济学：参数描述写入迭代决策指引（2026-08，commit 6caf290）
+
+用户观察：**有了 run_python 后 agent 特别爱用它**——而 Claude Code 没有 inline 模式，每次都是「写本地文件 → 跑 → 删」三步。数据分析证实了偏好，也定位了真正的浪费点。
+
+## 实测数据（单 session llm_calls 分析，2026-08）
+
+| 指标 | 数值 |
+|---|---|
+| run_python 总调用 | 1139 次（该 session 最常用工具） |
+| inline（code）vs file | **1116 : 23（98% inline）** |
+| inline 总量 | 113 万字符，中位单次 740 字符 |
+| 迭代重发（相邻两次相似度 >0.6 = 同一脚本改了重跑） | 122 次 |
+| 迭代重发浪费 | 16.9 万字符 ≈ 4.2 万 tokens（占 inline 总量 15%） |
+
+## 两个结论：偏好本身不是错，错在迭代场景
+
+- **一次性验证/分析，inline 真优**：1 次调用搞定 vs Claude Code 的 write→run→delete 3 次工具往返；不污染 workspace、不用记得清理。98% inline 里大部分属于此类，不动。
+- **迭代调试，inline 反而贵**：脚本报错 → 整段代码重发（实际只改几行）→ 又报错 → 又重发。file 路径下 `edit` 是**差量传输**，重发是**全量传输**。实测一对相似度 0.89 的相邻调用重发了 2711 字符——只改了几行。
+
+```
+inline 迭代：脚本报错 → 整段代码重发 → 又报错 → 又重发…
+file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= → …
+```
+
+## 修复：决策指引写进 param_descriptions（最小干预）
+
+不删 inline（会伤害约 85% 的正确场景），把「何时用哪个」写进参数描述——**LLM 决定怎么调的时候一定看得到的地方**（`src/real_tools.py`）：
+
+- `code` 补充：*适合一次性验证/分析（1 次调用搞定）；预计要反复调试改跑的脚本，先 write_file 落盘再 run_python(file=...)，后续 edit 改+重跑——整段代码重发比 edit 差量贵得多*
+- `file` 补充：*调试迭代场景首选：edit 精确改文件后重跑，不用整段重发*
+
+这是**工具描述驱动行为**的路线：把最佳实践写在 Agent 决策时一定看得到的地方，而不是指望它自己悟（与 vision 派活带 `<img>` 标签同款手法）。
+
+生效：`/restart` 后新 schema 生效。预期一次性验证照旧 inline，"会跑几轮的脚本"先落盘——122 次迭代重发（4.2 万 tokens）是未来最直接的缩减目标。
 
 ## 流式执行基础设施
 

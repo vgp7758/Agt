@@ -46,6 +46,9 @@
   .tf-head { cursor:pointer; user-select:none; color:#1f6feb; }
   .tf-head:hover { text-decoration:underline dotted; }
   .tf-body { margin:2px 0 4px 0; }
+  /* 思考内容折叠（reasoning 流式段落默认收起，点开全文不截断） */
+  .tf-head.think-head { color:#9aa0a6; font-style:italic; }
+  .tf-body.think-body { color:#9aa0a6; font-style:italic; white-space:pre-wrap; }
   .ev.res { color:#5b6470; padding-left:14px; border-left:2px solid var(--line); margin-left:2px; }
   .ev.step { color:var(--muted); font-size:11.5px; margin-top:6px; }
   .ev.warn { color:#b45309; }
@@ -693,6 +696,26 @@ function appendToolResult(resultText){
     _curToolFold.body.appendChild(r);
   } else addTrace('res', `→ ${resultText}`);
 }
+// —— 思考内容（reasoning）默认折叠：流式 chunk 累积进同一折叠组的 body（全文不截断）——
+// head 摘要行显示字数；展开即全文。新一步（step 事件）/ 工具调用到达时关闭归属，下一段思考新建组
+let _curThinkFold = null;
+function renderThinking(text, label){
+  if(!curTurn) newTurn();
+  if(!_curThinkFold || !_curThinkFold.body.isConnected){
+    const wrap=document.createElement('div'); wrap.className='ev tool-fold';
+    const head=document.createElement('div'); head.className='tf-head think-head';
+    const body=document.createElement('div'); body.className='tf-body think-body'; body.style.display='none';
+    head.onclick=()=>toggleFold(head, body);
+    wrap.appendChild(head); wrap.appendChild(body);
+    curTurn.traceBox.appendChild(wrap);
+    _curThinkFold={head, body, buf:'', label: label||'💭 思考'};
+  }
+  _curThinkFold.buf += text;
+  _curThinkFold.body.textContent = _curThinkFold.buf;
+  _curThinkFold.head.textContent = '▸ ' + _curThinkFold.label +
+    '（' + _curThinkFold.buf.length + ' 字，点击展开）';
+  scrollBottom();
+}
 // finishAnswer 带 agent_id：主（_main_/缺省）= 正常最终回答；子 Agent 回应进同轮 answer 的分页
 // （一轮内多个 agent 各有文本时，answer 顶部渲染小 tag 按钮，点击翻页——仅对该轮有效）
 function finishAnswer(text, agentId){
@@ -800,13 +823,15 @@ function renderHistTurn(t, box, isLast){
   // 临时借用全局渲染函数：把 curTurn 指向本行
   const prev=curTurn; curTurn={traceBox, answerEl:ans, det};
   (t.steps||[]).forEach(s=>{
-    if(s.reasoning) addTrace('think','💭 '+s.reasoning);
+    _curThinkFold = null;   // 每步新思考段（防上一步 reasoning 拼进同组）
+    if(s.reasoning) renderThinking(s.reasoning, '💭 思考');
     (s.tool_calls||[]).forEach(tc=>{
       renderToolCall(tc.name, tc.arguments);
       if(tc.result) appendToolResult(tc.result);   // 折叠组的 result 进 body（历史与实时同构）
     });
   });
-  if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
+  if(t.answer_reasoning) renderThinking(t.answer_reasoning, '💭(回答推理)');
+  _curThinkFold = null;   // 历史渲染完复位（防污染后续实时轮的归属）
   if(curTurn.traceBox.children.length===0) det.style.display='none';
   const a=t.answer||'';
   const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
@@ -1936,10 +1961,14 @@ function onWSMessage(ev){
       break;
     }
     case 'error': addRow('err', m.text); setBusy(false); break;
-    case 'step': addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
-    case 'thinking': addTrace('think', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+'💭 '+m.text); break;
+    case 'step': _curThinkFold = null; addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
+    case 'thinking':
+      // 流式思考分块 → 累积进当前思考折叠组（默认收起，点开全文；新一步/工具调用时自动分组）
+      renderThinking((m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+m.text,
+                     '💭 '+(m.agent_id&&m.agent_id!=='_main_'?m.agent_id+' ':'')+'思考');
+      break;
     case 'parallel': _inParallel = true; _parLeft = m.count; addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
-    case 'tool_call': clearToolProgress(); renderToolCall(m.name, m.arguments); break;
+    case 'tool_call': clearToolProgress(); _curThinkFold = null; renderToolCall(m.name, m.arguments); break;
     case 'tool_stream':
       // 流式输出：优先追加进当前折叠组的 body（折叠着也在累积），否则追加到 trace 的最后一个 stream 行
       if(!curTurn) newTurn();

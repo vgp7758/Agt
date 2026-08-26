@@ -23,6 +23,35 @@ import config
 
 _LOG = logging.getLogger("agt.llm")  # 直接用标准 logging（不 import log.py）；handler 由 agent 配置时挂到 agt root
 
+# ===== 前端日志面板通道：把 WARNING/ERROR 级日志转发给 UI（回退/限流/截断等此前只进文件）=====
+_LOG_SINKS: list = []          # callable(level_str, msg)——由 build_agent 注册（主 Agent 的 llm_log 事件广播）
+_LOG_SINK_HANDLER = None
+
+
+class _SinkHandler(logging.Handler):
+    """捕获 WARNING+ 记录转发给 UI sink（文件日志照常由 root handler 写，二者并存）。"""
+
+    def emit(self, record):
+        if record.levelno < logging.WARNING:
+            return
+        msg = record.getMessage()
+        lvl = "error" if record.levelno >= logging.ERROR else "warn"
+        for fn in list(_LOG_SINKS):
+            try:
+                fn(lvl, msg)
+            except Exception:
+                pass
+
+
+def set_log_sink(fn) -> None:
+    """注册一个日志转发回调（level ∈ {warn,error}）。惰性安装 handler；幂等（不重复注册）。"""
+    global _LOG_SINK_HANDLER
+    if _LOG_SINK_HANDLER is None:
+        _LOG_SINK_HANDLER = _SinkHandler()
+        _LOG.addHandler(_LOG_SINK_HANDLER)
+    if fn not in _LOG_SINKS:
+        _LOG_SINKS.append(fn)
+
 # —— max_tokens 默认值与截断重试上限 ——
 # 推理模型 reasoning 可能很长；若不设 max_tokens 会用 provider 默认值（有的很小），导致 reasoning
 # 吃光预算、content 空/半截（finish_reason=length）。这里给推理模型一个宽裕默认，并在检测到

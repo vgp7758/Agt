@@ -244,6 +244,10 @@
   <!-- spec 浮层抽屉：默认折叠成右上角图标按钮（有 spec 时显示）；横屏=右侧 40% 抽屉 / 竖屏=占满 -->
   <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
   <div id="specPanel" class="plan-panel" style="display:none"><button class="spec-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button><details open><summary id="specSummary">📐 施工方案</summary><div id="specList"></div></details></div>
+  <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
+       有日志才显示 🐞 入口（badge=未读 error 数）；打开即已读清零 -->
+  <button id="logFab" title="日志（回退/限流/错误，点击展开）" style="position:fixed;top:112px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#4b5563;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:none;align-items:center;justify-content:center" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
+  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;overflow-y:auto;padding:12px 14px"><button onclick="toggleLogPanel(false)" title="收起到图标" style="position:absolute;top:8px;right:10px;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button><div style="font-weight:600;color:#374151;margin-bottom:8px">🐞 日志（回退 / 限流 / 截断 / 错误）</div><div id="logList"></div></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
@@ -1382,6 +1386,47 @@ function toggleSpecPanel(open){
 }
 document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 
+// ===== 日志面板（类似 spec 抽屉）：llm_log 事件（回退/限流/截断等 warning/error）=====
+let _logEntries = [];        // [{ts, level, text}]——面板内容（打开时渲染；上限 200 条滚动截断）
+let _logUnreadErr = 0;       // 未读 error 计数（badge 显示；打开面板清零）
+
+function toggleLogPanel(open){
+  const panel = document.getElementById('logPanel');
+  const fab = document.getElementById('logFab');
+  if(!panel || !fab) return;
+  panel.style.display = open ? 'block' : 'none';
+  fab.style.display = open ? 'none' : 'flex';
+  if(open){   // 打开即已读：清 badge；滚到底（最新在下）
+    _logUnreadErr = 0;
+    const bd = document.getElementById('logFabBadge');
+    if(bd){ bd.style.display = 'none'; bd.textContent = '0'; }
+    const list = document.getElementById('logList');
+    if(list) list.scrollTop = list.scrollHeight;
+  }
+}
+
+function pushLogEntry(level, text){
+  _logEntries.push({ts: new Date(), level, text});
+  if(_logEntries.length > 200) _logEntries.shift();   // 上限滚动（内存友好；文件日志仍完整）
+  const fab = document.getElementById('logFab');
+  if(fab && fab.style.display !== 'flex') fab.style.display = 'flex';   // 有日志 → 显示入口（面板开着时它本来是 none，收起后自然恢复）
+  if(level === 'error'){
+    _logUnreadErr++;
+    const bd = document.getElementById('logFabBadge');
+    if(bd){ bd.style.display = 'block'; bd.textContent = String(_logUnreadErr > 99 ? '99+' : _logUnreadErr); }
+  }
+  const list = document.getElementById('logList');
+  if(list){   // 面板开着就实时追加（关着只累计）
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11.5px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all'
+      + (level === 'error' ? ';color:#b91c1c;background:#fef2f2' : ';color:#92400e;background:#fffbeb');
+    row.textContent = `[${_logEntries[_logEntries.length-1].ts.toLocaleTimeString('sv-SE')}] ${text}`;
+    list.appendChild(row);
+    while(list.children.length > 200) list.removeChild(list.firstChild);
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
 // commit_spec 阻塞时，在 answer 区域渲染交互式 spec 气泡
 function renderSpecBubble(spec, specId, specTitle, specDesign){
   window._specDecided = false;   // 新一轮批阅开始：重置双击防抖
@@ -1862,6 +1907,10 @@ function onWSMessage(ev){
       renderToolProgress(m.name, m.elapsed, m.lines);
       break;
     case 'tool_result': clearToolProgress(); addTrace('res', `→ ${m.result}`); break;
+    case 'llm_log':
+      // LLM 运行日志（回退/限流/截断/空响应/链耗尽等——此前只进 log 文件，用户看不到）
+      pushLogEntry(m.level || 'warn', m.text || '');
+      break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
     case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;

@@ -325,6 +325,13 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         agent.retrieval_llm = agent.utility_client()
     except Exception:
         agent.retrieval_llm = agent.llm
+    # 前端日志面板通道：llm_client 的 WARNING/ERROR（回退/限流/截断/空响应等）转发为 llm_log 事件，
+    # 经 broadcast（带 agent_id）推到 WebUI 日志面板——此前这些只进 log 文件，用户看不到。
+    try:
+        from llm_client import set_log_sink
+        set_log_sink(lambda lvl, txt, _a=agent: _a._emit({"type": "llm_log", "level": lvl, "text": txt}))
+    except Exception:
+        pass
     return agent
 
 

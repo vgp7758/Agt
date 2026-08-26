@@ -166,9 +166,12 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
     """解析 list_team 看板：wiki-updater 行存在且非 ✅(空闲) → 忙（本轮摘录入 pending 队列，下批一起消费）。
     无 wiki-updater 行（从未跑过）= 空闲。"""
     txt = str(args.params.get("team_text") or "")
-    line = next((l for l in txt.splitlines() if "wiki-updater" in l), "")
-    is_busy = bool(line) and ("✅" not in line)
-    return {"is_busy": is_busy, "status_line": line.strip()[:120]}]]></code>
+    # 多实例（历史重启可能攒出 wiki-updater/_2/_3）：任一行在跑即忙——只看第一行会在
+    # 「首行 ✅ 但 _2 还在跑」时误判空闲，双消费者并发破坏攒批队列的单消费者语义
+    lines = [l for l in txt.splitlines() if "wiki-updater" in l]
+    is_busy = bool(lines) and any("✅" not in l for l in lines)
+    status_line = " | ".join(l.strip()[:60] for l in lines[:3])
+    return {"is_busy": is_busy, "status_line": status_line}]]></code>
     <out name="is_busy" type="boolean"/>
     <out name="status_line" type="string"/>
     <batch enabled="false"/>

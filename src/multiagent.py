@@ -565,17 +565,22 @@ def make_communication_tools(agent) -> list:
 
 def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
     """复活一个历史子 Agent（registry 中 agent=None、磁盘上有 session）：
-    读声明 md 重建实例 + Session.load 恢复完整历史 + 回填 registry。
+    读声明重建实例 + Session.load 恢复完整历史 + 回填 registry。
     返回 (Agent, model_name, sub_dir) 或 None（声明/磁盘 session 丢失时，调用方落回新建路径）。
     复活后投影 current_turn_only=True（reuse 语义）：历史轮完整归档可查，但不进上下文。
-    system_append DSL 同样生效（用本次新任务 prompt 展开动态段）。"""
+    声明加载与新建路径【同源】（_agent_def_path + load_agent_yml：v2.1 yml / 旧 md 双格式）——
+    旧实现用 _agent_md_path+_split_frontmatter+已删除的 _build_subagent_system，
+    对 v2.1 纯 YAML 解析出 meta={}（工具白名单/模型全丢），且 NameError 导致每次重启后
+    复活失败 → 静默新建实例（wiki-updater_2/_3 多实例的根因）。"""
     try:
-        p = _agent_md_path(entry.name)
+        p = _agent_def_path(entry.name)
         if p is None or not p.exists():
             return None
-        meta, system = _split_frontmatter(p.read_text(encoding="utf-8"))
-        system = (system or "").strip() or "你是一个自主子 Agent，用工具完成任务。"
-        system = _build_subagent_system(agent, system, _parse_system_append(meta), prompt, entry.agent_id)
+        from agent_config import load_agent_yml
+        meta, system = load_agent_yml(p)
+        # .yml：正文为空、persona 在 assembly file: 项里 → system 传空；.md 旧格式无正文才用兜底文案
+        if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
+            system = "你是一个自主子 Agent，用工具完成任务。"
         toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
         model_name = meta.get("model") or entry.model or agent.model_name
         if model_name not in config.MODELS:

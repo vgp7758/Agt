@@ -104,6 +104,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 子 Agent 调用后主 Agent 不响应 | **先看下一行**：若伴随实例反复退出 rc=0 → 多为端口被旧实例占用（`netstat` 查 pid → `taskkill`） |
 | answer 完成后插话不消费、滞留到用户发下条消息才注入 | 已修（commit fb115aa）：answer 后只查 inbox、漏 pending_messages（插话队列）→ 现 inbox 空时兜底消费插话队列，自动 `background_trigger·user_insert` 开新轮；旧进程需 `/restart`（见 [user-interaction](../features/user-interaction.md#插话全生命周期2026-08-19-修复闭环commit-fb115aa)） |
 | 并行钩子（同 hook 挂多工作流）某行「执行中」永远闪烁不消失 | 已修（commit fb115aa）：前端单数 runningWf 被后启动的钩子覆盖引用 → 改 Map 按 hook::name 独立跟踪；`/restart` + 强刷生效（见 [user-interaction](../features/user-interaction.md#并行钩子执行中状态跟踪修复2026-08-19)） |
+| 手机 `/restart` 后电脑无端多开一个浏览器 tab，新 tab 显示「(当前对话)」需手动刷新才见会话 | 已修（commit 7ca6cfc）：重启链路 `open_browser` 无条件开 tab + `/resume` 恢复慢于页面连接、完成后又无推送 → 重启场景跳过 open_browser（检测 `AGT_RESTART_*` env）+ 恢复即 `broadcast_session_state` 广播全端；旧进程需 `/restart`（见 [user-interaction](../features/user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)） |
 | 「⏳ 工作流执行中…」行不可点击、看不到节点进度 | 旧进程代码（事件不带 run_id）→ `/restart` 后新运行即可点击打开 [/wf/monitor 实时观测](#wfmonitor-工作流运行观测页2026-08-20新commit-8aeb21a) |
 | 观测页节点预览无 📄、点不开全文 | 旧进程（无 full 存储）或**全量预算（20M 字符）耗尽**后只存预览；先 `/restart`，仍不行即预算耗尽属预期降级（见 [wf-monitor · 节点全文查看](../features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)） |
 

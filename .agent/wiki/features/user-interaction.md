@@ -8,6 +8,7 @@
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：后台事件通知**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复，见下节）
 - **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行带每秒跳动的实时秒表 `(Ns)`（commit 6aa5903）、可点击打开实时观测页，完成/失败行定格显示总耗时
+- **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
 ## 多客户端 target 路由 · 页签级 Agent 隔离（2026-08，commit 30ac45b）
 
@@ -65,6 +66,35 @@ user 事件 → _broadcast 按客户端 target 分发（原有）
 | stdin 驱动（send_to_service） | web 终端日志显示驱动消息 |
 
 **生效方式**：前端 Ctrl+F5 刷新；CLI 侧 chat.py 为引擎代码需 `/restart`。与上一节（target 路由）共同构成多客户端改造闭环：**事件按 Agent 分发 + user 消息多端可见**。
+
+## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
+
+> 用户报告（手机 `/restart` 场景）：① 电脑端每次无端多开一个浏览器 tab；② 新开 tab 显示「(当前对话) · Agt」，需手动刷新才见 session。两个现象是**同一条时序链上的两个 bug**（src/chat.py + src/server.py，commit 7ca6cfc）。
+
+**根因链**：
+
+```
+手机 /restart → 看门狗拉新进程 web_main：
+  ① start_server → open_browser        ← 无条件开浏览器——手机触发的重启，电脑端无端多开 tab（问题1）
+  ② 新 tab 秒连 WS → current_history   ← 此刻 _recover_restart_env 还没跑
+  ③ _recover_restart_env → /resume → Session.load（大 session 重放数千 events，
+     秒级~十秒级——慢于页面连接）
+  ④ resume 完成后无任何推送            ← 早连页签拿到 ③ 之前的空 session，永远没人
+                                          告诉它「已恢复」→ 一直 (当前对话) 直到手动刷新（问题2）
+```
+
+**修复**：
+
+| 问题 | 修复 |
+|---|---|
+| 多开页签 | `web_main` 的 `open_browser` 前检测 `AGT_RESTART_SESSION` / `AGT_RESTART_MESSAGE` env——重启场景跳过（用户已有页签靠 WS 自动重连）；正常 `agt-web` 启动照旧开浏览器。检测窗口成立的原因：env 要到 `_recover_restart_env` 才 pop，此处仍在 |
+| 空白直到刷新 | `_recover_restart_env` 的 `/resume` 成功后调 `broadcast_session_state`（新公共函数）——早连的页签 / 重连的手机端收到推送立即渲染，页面标题随推送从「(当前对话)」更新为会话名 |
+
+**broadcast_session_state**（`src/server.py` 新公共函数）：广播完整视图态——session_history（经 `_broadcast_history` 带 `agent_id="_main_"`，按 target 分发：与子 Agent 交互的页签视图不被冲掉，见 [target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)）+ team_list（全端广播，agent 下拉刷新）+ pending spec。从 `load_session` 的 `_sync_loaded` 闭包提取为公共函数——**`/resume` 会话切换与重启恢复两条路径共用同一广播**（此前恢复路径完全没有这一步，正是问题 2 的根因）；`load_session` 侧改为直接调用。
+
+**生效方式**：引擎层（chat.py / server.py），需 `/restart`。收益双向——电脑端不再多开 tab；手机端自己的 tab 重连后也不再需要手动刷新即见恢复的会话。
+
+**验证**：mock 全链路——编译 ×2、三处消费点（load_session 复用 / chat 恢复路径）、open_browser 跳过逻辑、广播 target 分发（session_history 按 agent_id / team_list 全端）+ 无客户端 no-op。
 
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 

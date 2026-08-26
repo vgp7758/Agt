@@ -413,14 +413,21 @@ def _eval_assembly_workflow(name: str, session) -> str:
 
 
 def _interp_funcs(text: str) -> str:
-    """把文本里的 {func:name()} 占位替换成模板函数结果（白名单 load_models/load_workflows）。
-    未知名/异常 → 保留原占位（不炸装配）。声明投影（load_agents 等）每次 build 重读——
-    create_agent 后立即派活（高频场景）当轮生效；轮内编辑声明破缓存属低频可接受代价。"""
+    """把文本里的 {func:name()} 占位替换成模板函数结果（白名单 FUNC_REGISTRY）。
+    未注册名 → 保留原占位（不炸装配）；已注册但返回空串 → 替换为空（load_remote_instances
+    无连接时静默不注入的设计依赖此语义——空结果≠失败）。声明投影（load_agents 等）每次
+    build 重读——create_agent 后立即派活（高频场景）当轮生效；轮内编辑声明破缓存属低频可接受代价。"""
     import re as _re
     def _rep(m):
-        from agent_config import resolve_assembly_func
-        r = resolve_assembly_func(m.group(1).strip().rstrip("()").strip())
-        return r if r else m.group(0)
+        from agent_config import FUNC_REGISTRY
+        name = m.group(1).strip().rstrip("()").strip()
+        fn = FUNC_REGISTRY.get(name)
+        if fn is None:
+            return m.group(0)          # 未注册：保留占位（提示声明写错了）
+        try:
+            return str(fn() or "")     # 已注册：空串也替换（无连接=不注入）
+        except Exception:
+            return m.group(0)          # 执行异常：保留占位（不炸装配）
     return _re.sub(r"\{func:([^}]+)\}", _rep, text)
 
 

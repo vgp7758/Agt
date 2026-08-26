@@ -493,6 +493,35 @@ async def api_mcp_save(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/tool/exec")
+async def api_tool_exec(request: Request):
+    """跨实例工具直执行（server_id 路由的远程侧）：{name, arguments} → 本地工具箱执行 → {ok, result}。
+    异步壳 + run_in_threadpool（工具执行可能长：run_python 等，不占事件循环）。
+    不进 agent.run/不碰 session（纯"手"，与 WS 消息驱动的"脑"互补）；
+    file_version 乐观锁 / py_auto_diag 等钩子在工具执行路径上自然生效。
+    信任模型与 /api/status 一致（局域网；WS 本就能驱动任意行为，无增量风险）。"""
+    from fastapi.concurrency import run_in_threadpool
+    if _agent is None:
+        return {"ok": False, "error": "Agent 未就绪（服务未注入或未启动）"}
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"请求体不是合法 JSON：{e}"}
+    name = str(body.get("name") or "").strip()
+    args = body.get("arguments") or {}
+    if not isinstance(args, dict):
+        return {"ok": False, "error": f"arguments 须为对象（dict），收到 {type(args).__name__}"}
+    if not name:
+        return {"ok": False, "error": "缺少 name（要执行的工具名）"}
+    if name not in _agent.tools:
+        return {"ok": False, "error": f"未知工具 '{name}'（本实例工具箱共 {len(list(_agent.tools))} 个）"}
+    try:
+        result = await run_in_threadpool(_agent.tools.call, name, args)
+        return {"ok": True, "result": str(result)}
+    except Exception as e:
+        return {"ok": False, "error": f"工具 {name} 执行失败：{type(e).__name__}: {e}"}
+
+
 @app.post("/api/status")
 async def api_status(request: Request):
     """实例运行时状态快照（POST，供跨实例/外部诊断用）。

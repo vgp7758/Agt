@@ -89,6 +89,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - 新功能落 wiki：features/ 目录下按功能建页，home.md 加入口
 - 架构变动：architecture/ 目录下对应页更新，home.md 同步
+| [multi-instance.md](architecture/multi-instance.md) | 多实例组网：server_id 工具路由（把另一台机器的 agt 当远程工具箱） | 判断远程工具调用/连接管理 |
 - 版本发布：releases/ 目录下 v*.*.*.md 记录，home.md 快速事实同步
 - 修复闭环：对应页修复说明 + releases/ 发布记录
 - 工具增强：features/ 新工具页 + workflow-hooks 更新 LIGHT_TOOLS 章节

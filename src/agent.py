@@ -451,6 +451,22 @@ class Agent:
         except Exception:
             return None
 
+    def _exec_tool(self, name: str, arguments) -> str:
+        """工具执行统一入口（server_id 路由——多 agt 实例组网）：
+        arguments(dict) 带 "server_id" 键 → pop 出来 POST 到远程实例的 /api/tool/exec
+        （远程工具箱执行，结果前缀 [remote:id]）；未带 → 本地执行（现状不变）。
+        server_id 是路由元数据：pop 后不进远程参数、不进 toollog 存档（记录纯工具参数）。
+        顶层自定义字段会被 provider 的结构化解析丢弃——放 arguments 里是唯一保真通道。"""
+        if isinstance(arguments, dict) and "server_id" in arguments:
+            sid = str(arguments.pop("server_id") or "").strip()
+            if sid:
+                try:
+                    from remote_tools import route_remote_call
+                    return route_remote_call(sid, name, arguments)
+                except Exception as e:
+                    return f"[远程执行失败] {type(e).__name__}: {e}"
+        return self.tools.call(name, arguments)
+
     def _run_tools_parallel(self, calls: list) -> list:
         """并行执行一组工具调用，按原顺序返回结果。
         以【目标文件】为锁：同文件的多个调用按原顺序【串行】（避免 read-modify-write 竞态丢更新），
@@ -469,7 +485,7 @@ class Agent:
             for i in idxs:
                 tc = calls[i]
                 try:
-                    out.append((i, self.tools.call(tc["name"], tc["arguments"])))
+                    out.append((i, self._exec_tool(tc["name"], tc["arguments"])))
                 except Exception as e:
                     out.append((i, f"[执行出错] {type(e).__name__}: {e}"))
             return out
@@ -1722,7 +1738,7 @@ class Agent:
                                 if _need_snap:
                                     _snap_before = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                                 _t0 = time.time()
-                                result = self.tools.call(tc["name"], tc["arguments"])
+                                result = self._exec_tool(tc["name"], tc["arguments"])
                                 _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"],
                                           time.time() - _t0, len(result or ""))
                                 cid = self.session.toollog.next_id()
@@ -1757,7 +1773,7 @@ class Agent:
                             if _need1:
                                 _snap_b1 = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                             _t0 = time.time()
-                            result = self.tools.call(tc["name"], tc["arguments"])
+                            result = self._exec_tool(tc["name"], tc["arguments"])
                             _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"], time.time() - _t0, len(result or ""))
                             cid = self.session.toollog.next_id()
                             result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)

@@ -279,6 +279,12 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     for t in _stb:
         agent.tool_groups[t.name] = getattr(t, "group", "") or "脚本"   # 描述符 group 优先（如 wiki）
     _reg(make_hot_reload_tools(agent), "脚本")   # reload_hot：钩子工作流/Agent 改插件后热生效
+    # 多 agt 实例组网：remote_connect/disconnect/list 三件套 + 启动重连持久化配置
+    # （settings.json remote_servers；连不上标 offline 不炸启动）。server_id 路由在
+    # Agent._exec_tool（工具执行统一入口），SYSTEM 清单由 {func:load_remote_instances()} 注入。
+    from remote_tools import make_remote_tools, reconnect_all
+    _reg(make_remote_tools(agent), "远程实例")
+    reconnect_all(background=True)   # 后台探测（远程机器未开机时 5s 超时×N 不阻塞启动）
     _reg(mcp_mgr.get_tools(), "MCP")
     _reg(make_subagent_tools(agent), "子Agent")
     _reg(SKILL_TOOLS, "技能")

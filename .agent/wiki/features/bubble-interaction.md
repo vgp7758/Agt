@@ -139,3 +139,5 @@ event.setdefault("agent_id", self.agent_id)   # 主=_main_，子 Agent=各自 id
 - [系统总览](../architecture/overview.md)：事件流 _emit → broadcast 链路
 - [运维与排障](../guides/ops.md)：可观测性（llm_calls.jsonl / events.jsonl）
 - [v0.18.2 发布记录](../releases/v0.18.2.md)：气泡折叠为该版交付项之一
+- [WebUI 过程区折叠](trace-fold.md)：trace 内思考/工具/钩子三级降噪（共享 toggleFold 基建，与气泡折叠两套机制）
+

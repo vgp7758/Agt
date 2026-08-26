@@ -12,3 +12,8 @@ hooks:
   turn_end:
   - workflow: recap_gen
     async: true
+fallback:
+  chain:
+  - qwen
+  - kimi
+  policy: reset

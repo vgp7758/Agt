@@ -1909,8 +1909,8 @@ WEB_SEARCH_OUTPUTS = [
 
 REAL_TOOLS = Toolbox(
     Tool(run_python, param_descriptions={
-        "code": "内联 Python 代码（多行，写临时文件再跑）。和 file 二选一。",
-        "file": "已存在的 .py 文件路径（跑已保存的脚本传这个，别再用 subprocess 包壳）。和 code 二选一。",
+        "code": "内联 Python 代码（多行，写临时文件再跑）。和 file 二选一。适合一次性验证/分析（1 次调用搞定）；预计要反复调试改跑的脚本，先 write_file 落盘再 run_python(file=...)，后续 edit 改+重跑——整段代码重发比 edit 差量贵得多",
+        "file": "已存在的 .py 文件路径（跑已保存的脚本传这个，别再用 subprocess 包壳）。和 code 二选一。调试迭代场景首选：edit 精确改文件后重跑，不用整段重发",
     }),
     Tool(read_file, param_descriptions={
         "line_numbers": "默认 True=每行前加行号(宽度按本段最大行号自适应对齐)，便于接下来用 insert/delete/move 按行号编辑；False=纯文本",

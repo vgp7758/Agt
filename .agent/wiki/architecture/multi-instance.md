@@ -54,9 +54,12 @@ run_python({"code": "...", "server_id": "comfy"})   ← 远程 CPU/GPU
 
 ## 已验证（E2E 8001 mock 实例）
 
-connect 探测注册 / 远程 read（前缀+内容+file_version）/ server_id pop 副作用 /
-远程 edit 改文件 / 复核新 version / 未知工具模型可读错误 / 本地无 server_id 直通 /
-SYSTEM 注入 / disconnect 清理——全链路过。
+单进程起 mock 实例（8001，避开在忙的 8000）完整链路：connect 探测注册 / 远程 read（`[remote:t8001]` 前缀 + 内容 + file_version）/ **server_id pop 副作用**（不进远程参数）/ 远程 edit 改文件 / 复核新 version / 未知工具模型可读错误 / 本地无 server_id 直通 / SYSTEM 注入 / disconnect 清理——全过。commit `6b5ca52`（spec 五步全绿）。
+
+**两个调试插曲（复用价值）**：
+
+- **main.yml 装配方插入坏块**：run_python 脚本往两份 main.yml（`~/.agt/main.yml` L37 与 `src/assets/main.yml` L22，runtime_env 段后）插 `{func:load_remote_instances()}` 行，第一次按"下一个同级 `- `"找块边界产生嵌套缩进坏行 → yaml 解析报错；第二次先删坏行重插才干净。教训：**脚本改 yml，收工前必须 `yaml.safe_load` 验证通过**。
+- **mock `/api/status` 连续 500 两次**：手写 mock dict 相继缺 `_current`、缺 `_lock` 而炸——/api/status 的字段面比想象宽（依赖 AgentRegistry 内部状态），最终 mock 直接**继承真 `AgentRegistry`** 才过。对照：**`/api/tool/exec` 只依赖 `agent.tools`，依赖面比 status 轻得多**（connect 探测走 status，工具执行不走）。
 
 ## 边界与后续
 

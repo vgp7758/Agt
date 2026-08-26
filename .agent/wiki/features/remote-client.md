@@ -8,7 +8,9 @@
 
 与 [api-status](api-status.md) 的关系：那条是 REST 只读快照（跨实例**诊断**）；本页是完整客户端能力（跨实例**驱动**）。
 
-## 能力矩阵（四条通道）
+与 [multi-instance](../architecture/multi-instance.md)（2026-08 组网落地）的关系：那边是**第一等的工具级组网**——本地模型在任意工具调用的 arguments 带 `server_id` 即自动路由到远程实例执行（`POST /api/tool/exec`，不进对方 session）；本页是**消息级驱动**（对方带着它自己 session 的上下文干活）。"脑"（带上下文决策）与"手"（直执行）互补——见下文语义辨析。
+
+## 能力矩阵（四条通道 + 工具级直执行）
 
 | 通道 | 能做什么 | 门槛/依赖 |
 |------|---------|----------|
@@ -16,6 +18,7 @@
 | WS 文本消息 | 驱动对方 agent 跑任务（对方消耗**它自己的** token、带着**它自己** session 的上下文）——即"远程指挥干活" | `run_python` + websocket 库 |
 | WS 斜杠命令 | 即时处理不进对方 LLM：/model、/reload、/restart 甚至 **/exit（可远程关服）** | 同上 |
 | 跨电脑 | 换 url 即可 `ws://192.168.x.x:8000/ws` | 网络可达；⚠️ 服务无鉴权，公网需隧道 |
+| 工具级直执行（2026-08 已第一等化） | 本地模型在工具 arguments 带 `server_id` → 远程 `POST /api/tool/exec` 直执行——不进对方 session、不跑对方 LLM | 已内建（SYSTEM 自动注入实例清单），无需写脚本——见 [multi-instance](../architecture/multi-instance.md) |
 
 ## 演示脚本（tools/remote_client_demo.py）
 

@@ -56,6 +56,7 @@
 - **生效方式**：commit a922121 已推送，但当前运行进程需 `/restart` 才能加载新代码
 - **诊断场景**：多实例部署时，可逐个实例 POST `/api/status` 采集快照做横向对比
 - **排障首选**：若再现"子 Agent 完成后主 Agent 未唤醒"症状，首先 POST `/api/status` 检查 registry 字段是否为 None——根因在入队端而非消费端
+- **mock 测试坑（2026-08，server_id 组网 E2E 实测）**：手写 mock 的 /api/status 相继因缺 `_current`、缺 `_lock` 连续 500 两次——字段面比想象宽（依赖 AgentRegistry 内部状态），mock 请直接继承真 `AgentRegistry`；对照 `/api/tool/exec` 只依赖 `agent.tools`，mock 成本低得多（详见 [multi-instance · 已验证](../architecture/multi-instance.md)）
 
 ## 相关页面
 

@@ -34,6 +34,38 @@
 
 **调试插曲**：① 前端 JS 误用 Python 风格 `#` 注释会炸掉整个 script 块——node --check 抓出改 `//`（py_auto_diag 只查 .py 看不到）；② 测试 stub 用 `[]` 冒充 queue → `.put_nowait` 抛 AttributeError 被 `_broadcast` 的 `except` 吞 → 事件全丢、测试假失败，换真 `queue.Queue` 后 6 场景全绿。
 
+## 多端消息同步 · user 事件渲染到同 Agent 的其它客户端/CLI（2026-08，commit 1168ea9）
+
+**背景**：一个前端发消息后，另一个正与同一 Agent 交互的前端/CLI 只见回答不见问题——`agent.run()` 的 user 事件（`_emit` 自动带 `agent_id`）早已经 `_broadcast` 按 target 分发，只是两端消费侧都不渲染。本次补齐两端消费，复用既有事件流，**零新增广播**。
+
+**机制**：
+
+```
+user 事件 → _broadcast 按客户端 target 分发（原有）
+  → 前端 case 'user'：_pendingLocalEcho 对账 → 他端消息渲染 user 气泡 + busy
+  → CLI   _render_loop：_cli_echo 对账 → 「🧑 你（来自其它客户端）：…」
+```
+
+**两端对账（同款语义，发送端自己不双渲染）**：
+- **逐条匹配**：前端 `send()` 记录文本进 `_pendingLocalEcho`（`src/static/index.html`）；CLI 输入 `_record()` 进 `_cli_echo`（`src/chat.py`）——user 事件到达时移除一条，本端乐观渲染过的跳过
+- **合并形态**：worker drain 把多条合并成 `"a\n\n---\nb"` 时逐段对账，不误杀
+- **过滤**：`[后台通知·]` 跳过（`_merge_batch` 已打 ⏰ 行、`background_trigger` 事件已渲染）；其它 Agent 的 user 事件（如 wiki-updater 批量任务输入）按 agent_id 过滤不渲染
+- **附图**：图片 data URL 不随事件走（太大），他端显示「（附带 N 张图片）」计数
+
+**关键改动点**：
+- `src/chat.py`：`_render_loop` 新增 `echo_pending` 参数；`_input_thread` 定义内新增 `_cli_echo` 账本，`entry.agent.run(user)` / `work_q.put(("user", user))` 前 `_record(user)`
+- `src/static/index.html`：新增 `_pendingLocalEcho`；`send()` 非 busy 时 `addUserBubble` 后 push；`case 'user'` 处理对账 + 他端气泡渲染
+
+| 场景 | 效果 |
+|---|---|
+| 页签 A 发消息，页签 B 同看主 Agent | B 实时看到蓝色气泡 + 回答过程 |
+| 手机发消息，PC 终端（web 模式日志） | 终端显示 `🧑 你（来自其它客户端）：…` |
+| CLI 输入（已回显） | `_cli_echo` 对账跳过，不双打印 |
+| 页签 B 切到子 Agent X，有人向 X 发消息 | B 看到 X 的 user 气泡（target 路由） |
+| stdin 驱动（send_to_service） | web 终端日志显示驱动消息 |
+
+**生效方式**：前端 Ctrl+F5 刷新；CLI 侧 chat.py 为引擎代码需 `/restart`。与上一节（target 路由）共同构成多客户端改造闭环：**事件按 Agent 分发 + user 消息多端可见**。
+
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 
 **修复前问题（用户实测报告）**：answer 完成后的自动触发点只查 `inbox`（后台队列），不查 `pending_messages`（插话队列）——**两套队列漏了一半** → answer 期间发的插话滞留在队列里，直到用户手动发下一条消息才被注入消费。

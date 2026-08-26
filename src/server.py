@@ -1202,6 +1202,26 @@ def _broadcast_history(agent, name_override: str = ""):
     _broadcast(ev)
 
 
+def broadcast_session_state(agent):
+    """广播完整视图态（session_history + team_list + pending spec）——会话切换/重启恢复后调用。
+    供 server 的 load_session 与 chat._recover_restart_env 共用：重启后早连的页签
+    拿到的是恢复前的空 session（大 session 重放慢于页面连接的竞态），此后无任何推送
+    告知"已恢复"→ 一直显示 (当前对话) 直到手动刷新；广播一发全治。"""
+    _broadcast_history(agent)
+    reg = getattr(agent, "registry", None)
+    if reg:
+        _broadcast({"type": "team_list",
+                    "team": reg.format_team(exclude_id=""),
+                    "current_target": getattr(agent, "_active_target", "_main_")})
+    try:
+        from spec_tools import check_pending_spec, _spec_event_payload
+        if not check_pending_spec(agent):
+            if getattr(agent, "active_spec", None):
+                _broadcast(_spec_event_payload(agent))
+    except Exception:
+        pass
+
+
 async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None):
     """处理一条用户输入（文本/命令/action）。client=来源客户端 dict（含 target——
     文本按其交互目标路由：主 Agent 走 work_q；子 Agent 按忙闲插话/task 直达）。"""
@@ -1324,18 +1344,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         _work_q.put(("user", f"/resume {_ls_name}"))
         # 紧随其后：广播 session_history 给所有 WS 客户端（/resume 完成后串行执行）
         def _sync_loaded():
-            _broadcast_history(agent)
-            # 广播 team_list 让 agent 下拉框自动刷新
-            reg = getattr(agent, "registry", None)
-            if reg:
-                _broadcast({"type": "team_list",
-                            "team": reg.format_team(exclude_id=""),
-                            "current_target": getattr(agent, "_active_target", "_main_")})
-            # 切会话后检查是否有 pending spec
-            from spec_tools import check_pending_spec, _spec_event_payload
-            if not check_pending_spec(agent):
-                if getattr(agent, "active_spec", None):
-                    _broadcast(_spec_event_payload(agent))
+            broadcast_session_state(agent)
         _work_q.put(("task", _sync_loaded))
         await _send(ws, {"type": "system", "text": f"🔄 恢复「{_ls_name}」中…"})
         return

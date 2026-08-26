@@ -628,6 +628,15 @@ def _recover_restart_env(agent, work_q, registry, state):
     if sess:
         try:
             registry.dispatch(f"/resume {sess}", CommandContext(agent=agent, work_q=work_q, state=state))
+            # 恢复后广播视图态（session_history + team_list + pending spec）：早连的页签
+            # （重连的手机端 / 旧进程的 tab 在服务起来瞬间连上）拿到的 current_history
+            # 是恢复前的空 session（大 session 重放慢于页面连接——竞态），此后没有任何
+            # 推送告诉它"已恢复"→ 一直显示 (当前对话) 直到手动刷新。广播一发全治。
+            try:
+                from server import broadcast_session_state
+                broadcast_session_state(agent)
+            except Exception:
+                pass
         except Exception as e:
             print(f"⚠️ 恢复会话「{sess}」失败：{e}（可用 /resume 手动恢复）")
     if msg:
@@ -677,7 +686,11 @@ def web_main(port=None):
     print(f"  本机:   http://127.0.0.1:{port}/")
     print(f"  局域网: {', '.join(lan_urls(port))}")
     print("  （局域网内任何设备可连并驱动 Agent，仅在可信网络使用；Ctrl+C 退出）")
-    open_browser(port)
+    # /restart 看门狗重启：不再开新页签——用户已有页签会自动重连（手机触发重启时
+    # 电脑端无端多开一个 tab 正是用户报告的困扰）；env 在 _recover_restart_env 才 pop，此处仍在
+    import os as _os
+    if not (_os.environ.get("AGT_RESTART_SESSION") or _os.environ.get("AGT_RESTART_MESSAGE")):
+        open_browser(port)
 
     def _inbox_thread():
         import logging as _lg

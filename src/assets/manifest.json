@@ -1,65 +1,184 @@
 [
- {
-  "name": "cs_auto_diag",
-  "type": "workflow",
-  "src": "workflows/cs_auto_diag.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "改 .cs 后自动跑 cs_diag，仅当含 [ERROR] 时注入诊断（默认关；如需启用，在 ~/.agt/main.yml 的 hooks.after_tool 里声明。基于 changed_files 快照 diff——任何方式改了 .cs 都触发；需先 ensure_lsp('csharp')）"
- },
- {
-  "name": "py_auto_diag",
-  "type": "workflow",
-  "src": "workflows/py_auto_diag.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "改 .py 后自动跑 py_diag：语法通过/错误都注入，非 .py 不注入（经 ~/.agt/main.yml hooks.after_tool 声明后触发；基于 changed_files 快照 diff——run_python/MCP 等任何方式改了 .py 都触发；循环遍历+ends_with 过滤）"
- },
- {
-  "name": "wiki_auto_query",
-  "type": "workflow",
-  "src": "workflows/wiki_auto_query.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "每轮开始前自动查 wiki（本地流水线版）：LLM 提关键词→wiki_search→embedding 余弦打分（降级关键词评分）→top3 注入命中页面摘录、无关不注入（经 ~/.agt/main.yml hooks.before_turn 声明后触发）"
- },
- {
-  "name": "wiki_auto_maintenance",
-  "type": "workflow",
-  "src": "workflows/wiki_auto_maintenance.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "最终回答前自动维护 wiki：短路检查→意图识别→agent_prompt 派 wiki-updater（reuse+caller=user 不唤醒主Agent）→wait_subagents→快照 diff→git_commit 提交推送（before_answer，async）"
- },
- {
-  "name": "dir_snapshot",
-  "type": "workflow",
-  "src": "workflows/dir_snapshot.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "目录 mtime 快照（JSON 字符串），排除 .git/__pycache__/嵌套仓库；path 留空=整个 workspace。与 diff_snapshots 配对：改前拍 before、改后拍 after、diff 出变更清单"
- },
- {
-  "name": "diff_snapshots",
-  "type": "workflow",
-  "src": "workflows/diff_snapshots.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "对比两份 dir_snapshot 快照：mtime 变化/新增/删除 → files（逗号分隔，可直接喂 git_commit）+ count + changed（list<object>）"
- },
- {
-  "name": "react_agent_demo",
-  "type": "workflow",
-  "src": "workflows/react_agent_demo.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "纯工作流装配的 ReAct 循环 Agent 骨架：get_tool_schemas→llm_call(messages+tools)→call_tool+append 回 messages 循环。可复制改工具集/系统提示成自定义 Agent"
- },
- {
-  "name": "custom_tool_demo",
-  "type": "workflow",
-  "src": "workflows/custom_tool_demo.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "工作流内定义工具箱没有的自定义工具：text 写 schema→code 拼进官方表→llm_call→选择器按名路由(自定义→code 实现/官方→call_tool)→append 回 messages 循环"
- },
- {
-  "name": "recap_gen",
-  "type": "workflow",
-  "src": "workflows/recap_gen.xml",
-  "default_dir": ".agent/workflows",
-  "desc": "每轮回答完成后异步生成一句话 recap（本地小模型 local-qwen）：经 ~/.agt/main.yml hooks.turn_end 声明（| async 标志）+ recap 标志，结果由引擎写回 agent._recap（队友可见）。需 models.json 配 local-qwen 条目（8080 llama-server）"
- }
+  {
+    "name": "before_turn_retrieval",
+    "type": "workflow",
+    "src": "workflows/before_turn_retrieval.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "每轮开始前检索会话历史/语义/episodic 记忆，注入 retrieval-hint（钩子）"
+  },
+  {
+    "name": "cs_auto_diag",
+    "type": "workflow",
+    "src": "workflows/cs_auto_diag.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "after_tool 快照 diff 检出 .cs 变更时自动注入编译诊断（钩子）"
+  },
+  {
+    "name": "custom_tool_demo",
+    "type": "workflow",
+    "src": "workflows/custom_tool_demo.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "工作流内自定义工具模式示例（text schema+选择器路由）"
+  },
+  {
+    "name": "diff_snapshots",
+    "type": "workflow",
+    "src": "workflows/diff_snapshots.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "两份快照 diff 出变更文件清单（子工作流）"
+  },
+  {
+    "name": "dir_snapshot",
+    "type": "workflow",
+    "src": "workflows/dir_snapshot.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "目录文件 mtime 快照（子工作流）"
+  },
+  {
+    "name": "extract_keywords",
+    "type": "workflow",
+    "src": "workflows/extract_keywords.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "本地小模型提取关键词（kw_extract_v2 缓存，子工作流）"
+  },
+  {
+    "name": "py_auto_diag",
+    "type": "workflow",
+    "src": "workflows/py_auto_diag.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "after_tool 快照 diff 检出 .py 变更时自动注入语法诊断（钩子）"
+  },
+  {
+    "name": "react_agent_demo",
+    "type": "workflow",
+    "src": "workflows/react_agent_demo.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "工作流内装配 ReAct Agent 的骨架示例（llm_call+call_tool+循环）"
+  },
+  {
+    "name": "recap_gen",
+    "type": "workflow",
+    "src": "workflows/recap_gen.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "turn_end 本地小模型一句话总结（recap 回写 Turn + 队友看板，钩子）"
+  },
+  {
+    "name": "reload_hot",
+    "type": "workflow",
+    "src": "workflows/reload_hot.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "after_tool 检测节点/工具脚本改动自动热重载（钩子）"
+  },
+  {
+    "name": "rerank_topk",
+    "type": "workflow",
+    "src": "workflows/rerank_topk.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "通用重排：items+scores+k → topk（子工作流）"
+  },
+  {
+    "name": "score_rerank",
+    "type": "workflow",
+    "src": "workflows/score_rerank.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "打分重排：embedding 可用走余弦、不可用降级关键词评分（子工作流）"
+  },
+  {
+    "name": "skill_suggest",
+    "type": "workflow",
+    "src": "workflows/skill_suggest.xml",
+    "default_dir": ".agent/workflows",
+    "desc": ""
+  },
+  {
+    "name": "stock_query",
+    "type": "workflow",
+    "src": "workflows/stock_query.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "HTTP+LLM 查股价示例"
+  },
+  {
+    "name": "wiki_auto_maintenance",
+    "type": "workflow",
+    "src": "workflows/wiki_auto_maintenance.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "最终回答前自动维护 wiki：攒批队列+agent_prompt 派 wiki-updater+自动提交（钩子）"
+  },
+  {
+    "name": "wiki_auto_query",
+    "type": "workflow",
+    "src": "workflows/wiki_auto_query.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "每轮开始前本地流水线检索 wiki 命中注入（embedding 余弦+阈值裁决，钩子）"
+  },
+  {
+    "name": "wiki_auto_query_react_demo",
+    "type": "workflow",
+    "src": "workflows/wiki_auto_query_react_demo.xml",
+    "default_dir": ".agent/workflows",
+    "desc": "wiki_auto_query 的 ReAct 结构化提交版备份"
+  },
+  {
+    "name": "coder",
+    "type": "agent_decl",
+    "src": "agents/coder.md",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "coder",
+    "type": "agent_decl",
+    "src": "agents/coder.yml",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "explorer",
+    "type": "agent_decl",
+    "src": "agents/explorer.md",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "explorer",
+    "type": "agent_decl",
+    "src": "agents/explorer.yml",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "reviewer",
+    "type": "agent_decl",
+    "src": "agents/reviewer.md",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "reviewer",
+    "type": "agent_decl",
+    "src": "agents/reviewer.yml",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "vision",
+    "type": "agent_decl",
+    "src": "agents/vision.md",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "vision",
+    "type": "agent_decl",
+    "src": "agents/vision.yml",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  },
+  {
+    "name": "wiki-updater",
+    "type": "agent_decl",
+    "src": "agents/wiki-updater.yml",
+    "default_dir": ".agent/agents",
+    "desc": "默认子 Agent 声明（装配清单/persona/工具白名单）"
+  }
 ]

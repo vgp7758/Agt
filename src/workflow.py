@@ -2009,7 +2009,8 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id:
 def seed_default_workflows(workspace: Path = None) -> int:
     """把随包附带的默认工作流（src/workflows/*.xml）播种到 workspace/.agent/workflows/。
     仅在目标不存在时拷贝（用户改动过的同名文件不会被覆盖）。返回播种数量。
-    用于让"默认行为类"工作流（如 cs_auto_diag 自动诊断）对 pip 安装的用户也开箱即用。"""
+    用于让"默认行为类"工作流（如 cs_auto_diag 自动诊断）对 pip 安装的用户也开箱即用。
+    播种时写 seed_state 基线（asset_sync 的 /update-assets 依赖三方 hash 判定可否安全更新）。"""
     workspace = workspace or WORKSPACE
     try:
         bundled_dir = Path(__file__).resolve().parent / "workflows"
@@ -2017,15 +2018,20 @@ def seed_default_workflows(workspace: Path = None) -> int:
             return 0
         target_dir = workspace / ".agent" / "workflows"
         target_dir.mkdir(parents=True, exist_ok=True)
+        from asset_sync import _sha, _load_state, _save_state
+        st = _load_state(workspace)
         n = 0
         for src in sorted(bundled_dir.glob("*.xml")):
             dst = target_dir / src.name
             if not dst.exists():
                 try:
-                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                    dst.write_bytes(src.read_bytes())   # 字节级：write_text 行尾转换会让 /update-assets 的 hash 对不上
+                    st[f"workflow/{src.name}"] = _sha(src)   # 基线：随包 hash
                     n += 1
                 except Exception:
                     pass
+        if n:
+            _save_state(workspace, st)
         return n
     except Exception:
         return 0

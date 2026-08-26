@@ -1451,6 +1451,17 @@ def _cmd_context(ctx: CommandContext, args):
                   f"各段按 {k:.1f}× 折算即实际量级，占比不变）")
 
 
+def _cmd_update_assets(ctx: CommandContext, args):
+    """/update-assets [apply] [--force] —— 随包播种资产对比/热更新（pip 升级后用）。
+    无参=预览差异表；apply=执行安全更新（装缺+更新未改项）；--force 连本地已改/未知项也覆盖。
+    工具脚本/节点插件直接从随包 assets 目录扫描（升级即新版），不在本命令管辖内。"""
+    from asset_sync import update_seed_assets
+    sub = [a.lower() for a in (args or [])]
+    apply = "apply" in sub
+    force = "--force" in sub or "force" in sub
+    print(update_seed_assets(apply=apply, force=force, workspace=ctx.session.workspace))
+
+
 def _cmd_agent(ctx: CommandContext, args):
     """/agent [agent_id] —— 切换直接交互的 Agent 目标。
     无参数：列出所有团队成员（含 agent_id、名称、状态）。
@@ -1664,6 +1675,13 @@ def build_default_registry() -> CommandRegistry:
         "/context\n"
         "  长会话想知道「上下文都被什么吃了」时用；段落占比直接对应\n"
         "  messages_for_llm 装配顺序，配合 /stats 折线看缓存命中。")
+    reg.register("update-assets", _cmd_update_assets,
+        "[apply] [--force]  随包播种资产对比/热更新（pip 升级后把旧工作流/声明刷成新版）",
+        "/update-assets           预览：哪些资产落后/本地已改/缺失（不动文件）\n"
+        "/update-assets apply     执行安全更新（装缺 + 更新本地未改过的；已改过的跳过保护）\n"
+        "/update-assets apply --force   连本地已改/未知状态的也覆盖（基线刷新，慎用）\n"
+        "  判定：三方 hash（随包/本地/播种基线 seed_state.json）——本地没改过的才自动更新；\n"
+        "  更新即生效（工作流每轮重扫/声明每次读取），无需 /restart。通常配合 /update 升级后使用。")
     reg.register("agent", _cmd_agent,
         "[agent_id]  列出/切换直接交互的 Agent 目标",
         "/agent              列出所有团队成员（agent_id/名称/状态/recap）\n"

@@ -237,20 +237,30 @@ def agents_summary(workspace: Path) -> str:
 
 
 def seed_default_agents(workspace: Path) -> int:
-    """首次启动把随包默认子 agent 模板（src/agents/*.yml）播种到 .agent/agents/。
-    目标已存在则跳过（不覆盖用户修改）。返回播种数量。照搬 workflow.seed_default_workflows。"""
+    """首次启动把随包默认子 agent 模板（src/agents/ 的 yml+md——v2.1 声明的 persona md
+    必须随行，缺了装配清单的 file: 项取不到人设）播种到 .agent/agents/。
+    目标已存在则跳过（不覆盖用户修改）。返回播种数量。照搬 workflow.seed_default_workflows。
+    播种时写 seed_state 基线（/update-assets 三方 hash 判定用）。"""
     bundled = Path(__file__).resolve().parent / "agents"
     dst = workspace / _AGENT_DIR / "agents"
     if not bundled.exists():
         return 0
     dst.mkdir(parents=True, exist_ok=True)
+    from asset_sync import _sha, _load_state, _save_state
+    st = _load_state(workspace)
     n = 0
-    for src in sorted(bundled.glob("*.yml")):
+    for src in sorted(list(bundled.glob("*.yml")) + list(bundled.glob("*.md"))):
         target = dst / src.name
         if target.exists():
             continue
-        target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        n += 1
+        try:
+            target.write_bytes(src.read_bytes())   # 字节级：write_text 行尾转换会让 /update-assets 的 hash 对不上
+            st[f"agent/{src.name}"] = _sha(src)
+            n += 1
+        except Exception:
+            pass
+    if n:
+        _save_state(workspace, st)
     return n
 
 

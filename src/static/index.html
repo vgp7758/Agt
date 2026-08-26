@@ -41,6 +41,11 @@
   .ev { white-space:pre-wrap; word-break:break-word; margin:3px 0; line-height:1.5; }
   .ev.think { color:#9aa0a6; font-style:italic; }
   .ev.tool { color:#1f6feb; }
+  /* 工具调用折叠（非 diff 类默认折叠：head 摘要行点击展开 body=完整调用+结果+流式） */
+  .ev.tool-fold { padding:2px 0; }
+  .tf-head { cursor:pointer; user-select:none; color:#1f6feb; }
+  .tf-head:hover { text-decoration:underline dotted; }
+  .tf-body { margin:2px 0 4px 0; }
   .ev.res { color:#5b6470; padding-left:14px; border-left:2px solid var(--line); margin-left:2px; }
   .ev.step { color:var(--muted); font-size:11.5px; margin-top:6px; }
   .ev.warn { color:#b45309; }
@@ -645,9 +650,48 @@ function toolCallHTML(name, a){
   }
   return null;
 }
+ // —— 工具调用折叠（用户提案：文件 diff 类不可折叠，其它默认折叠；钩子行同款）——
+const _DIFF_TOOLS = new Set(['edit','write_file','insert','replace_lines','delete','move']);
+let _curToolFold = null;        // 当前可折叠工具组（非 diff 且非并行）：result/stream 追加进 body
+let _inParallel = false;        // 并行批内 result 无法与具体 call 配对 → 独立行（不进 body）
+let _parLeft = 0;
+
 function renderToolCall(name, args){
+  if(!curTurn) newTurn();
   const html=toolCallHTML(name, args);
-  if(html) addTraceHTML('tool', html); else addTrace('tool', `🔧 ${name}(${fmtArgs(args)})`);
+  const fallback=`🔧 ${name}(${fmtArgs(args)})`;
+  if(_DIFF_TOOLS.has(name)){
+    // 文件 diff 类：不可折叠（默认展开——改动详情是一轮里最值得看的东西）
+    addTraceHTML('tool', html || esc(fallback));
+    _curToolFold = null;
+    return;
+  }
+  // 其它工具：默认折叠——head 摘要行（工具名+主参数），点击展开 body=完整调用+结果+流式
+  const wrap=document.createElement('div'); wrap.className='ev tool tool-fold';
+  const head=document.createElement('div'); head.className='tf-head';
+  const brief = args && typeof args==='object'
+    ? (args.path || args.query || args.name || args.command || '') : '';
+  head.textContent = '▸ 🔧 ' + name + (brief ? `(${String(brief).slice(0,60)})` : '');
+  const body=document.createElement('div'); body.className='tf-body'; body.style.display='none';
+  if(html) body.innerHTML=html; else body.textContent=fallback;
+  head.onclick=()=>toggleFold(head, body);
+  wrap.appendChild(head); wrap.appendChild(body);
+  curTurn.traceBox.appendChild(wrap); scrollBottom();
+  // 并行批内不追踪归属（result 无法与具体 call 配对，走独立行）；单个调用则 result/stream 进 body
+  if(_inParallel){ _parLeft--; if(_parLeft<=0) _inParallel=false; _curToolFold=null; }
+  else _curToolFold={head, body};
+}
+function toggleFold(head, body){
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  head.textContent = (open ? '▸ ' : '▾ ') + head.textContent.slice(2);
+}
+// 工具结果追加进当前折叠组的 body（历史渲染复用；无折叠组回退独立行）
+function appendToolResult(resultText){
+  if(_curToolFold && _curToolFold.body && _curToolFold.body.isConnected){
+    const r=document.createElement('div'); r.className='ev res'; r.textContent=`→ ${resultText}`;
+    _curToolFold.body.appendChild(r);
+  } else addTrace('res', `→ ${resultText}`);
 }
 // finishAnswer 带 agent_id：主（_main_/缺省）= 正常最终回答；子 Agent 回应进同轮 answer 的分页
 // （一轮内多个 agent 各有文本时，answer 顶部渲染小 tag 按钮，点击翻页——仅对该轮有效）
@@ -759,7 +803,7 @@ function renderHistTurn(t, box, isLast){
     if(s.reasoning) addTrace('think','💭 '+s.reasoning);
     (s.tool_calls||[]).forEach(tc=>{
       renderToolCall(tc.name, tc.arguments);
-      if(tc.result) addTrace('res', '→ '+tc.result);
+      if(tc.result) appendToolResult(tc.result);   // 折叠组的 result 进 body（历史与实时同构）
     });
   });
   if(t.answer_reasoning) addTrace('think','💭(回答推理) '+t.answer_reasoning);
@@ -1894,22 +1938,26 @@ function onWSMessage(ev){
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking': addTrace('think', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+'💭 '+m.text); break;
-    case 'parallel': addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
+    case 'parallel': _inParallel = true; _parLeft = m.count; addTrace('tool', `⚡ 并行 ${m.count} 个工具`); break;
     case 'tool_call': clearToolProgress(); renderToolCall(m.name, m.arguments); break;
     case 'tool_stream':
-      // 流式输出：追加到当前 trace 的最后一个 stream 行，或新建
+      // 流式输出：优先追加进当前折叠组的 body（折叠着也在累积），否则追加到 trace 的最后一个 stream 行
       if(!curTurn) newTurn();
-      const last = curTurn.traceBox.lastElementChild;
-      if(last && last.classList.contains('ev') && last.dataset.stream){
-        last.textContent += m.text; scrollBottom();
-      } else {
-        const e=document.createElement('div'); e.className='ev res'; e.dataset.stream='1'; e.textContent=m.text; curTurn.traceBox.appendChild(e); scrollBottom();
+      {
+        const cont = (_curToolFold && _curToolFold.body && _curToolFold.body.isConnected) ? _curToolFold.body : curTurn.traceBox;
+        const last = cont.lastElementChild;
+        if(last && last.classList.contains('ev') && last.dataset.stream){
+          last.textContent += m.text;
+        } else {
+          const e=document.createElement('div'); e.className='ev res'; e.dataset.stream='1'; e.textContent=m.text; cont.appendChild(e);
+        }
+        scrollBottom();
       }
       break;
     case 'tool_progress':
       renderToolProgress(m.name, m.elapsed, m.lines);
       break;
-    case 'tool_result': clearToolProgress(); addTrace('res', `→ ${m.result}`); break;
+    case 'tool_result': clearToolProgress(); _inParallel = false; appendToolResult(m.result); break;
     case 'llm_log':
       // LLM 运行日志（回退/限流/截断/空响应/链耗尽等——此前只进 log 文件，用户看不到）
       pushLogEntry(m.level || 'warn', m.text || '');
@@ -2029,7 +2077,19 @@ function onWSMessage(ev){
 	          const rw = ent.el;
 	          rw.classList.remove('running');
 	          rw.classList.add('done');
-	          rw.textContent = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成'+total+'：'+m.text;
+	          // 工具调用前后的钩子（py_auto_diag/reload_hot 等）完成文本常带完整诊断/重载清单——
+	          // 默认折叠（head 截断摘要，点击展开全文）；before_turn/turn_end 等轮级钩子保持原样
+	          const _full = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成'+total+'：'+m.text;
+	          if((m.hook==='before_tool'||m.hook==='after_tool') && _full.length>140){
+	            rw.innerHTML='';
+	            const _h=document.createElement('div'); _h.className='tf-head';
+	            _h.style.color='#059669';
+	            _h.textContent='▸ '+_full.slice(0,120).replace(/\n[\s\S]*$/,'')+' …（点击展开）';
+	            const _b=document.createElement('div'); _b.className='tf-body'; _b.style.display='none';
+	            _b.style.whiteSpace='pre-wrap'; _b.textContent=_full;
+	            _h.onclick=()=>toggleFold(_h,_b);
+	            rw.appendChild(_h); rw.appendChild(_b);
+	          } else rw.textContent=_full;
 	          window._runningWf.delete(key);
 	        } else {
 	          addTrace('auto done', '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成'+total+'：'+m.text);

@@ -407,6 +407,7 @@ const queueCount = document.getElementById('queueCount');
 
 let busy = false;
 var myTarget = '_main_';           // 本客户端正在交互的 agent_id（connectWS 从 sessionStorage 恢复；各页签独立）
+var _pendingLocalEcho = [];        // 本端乐观渲染的 user 文本（send() 记录；user 事件到达时对账移除——防双气泡，多端同步）
 let autonomousMode = false;
 let curTurn = null;
 const attachments = []; // data URL 数组
@@ -889,7 +890,7 @@ function send(){
   // 普通模式（含忙时）：照常发送——后端按 busy 路由（忙→中途注入下一步，闲→下一轮），不再丢弃
   const imgs=attachments.slice();
   sendRaw(t, imgs);
-  if(!busy){ addTimeDivider(); lastUserBubble = addUserBubble(t, imgs); }   // 插话（busy）不渲染 user 气泡——由 message_queued 队列气泡承载
+  if(!busy){ addTimeDivider(); lastUserBubble = addUserBubble(t, imgs); _pendingLocalEcho.push(t); }   // 插话（busy）不渲染 user 气泡——由 message_queued 队列气泡承载；_pendingLocalEcho 供 user 事件对账去重
   inp.value=''; inp.style.height='auto';
   attachments.length=0; renderThumbs();
   if(!t.startsWith('/') && !busy){ setBusy(true); curTurn=null; }  // 仅空闲新轮才置 busy；忙时是插话不切轮
@@ -1822,6 +1823,26 @@ function onWSMessage(ev){
       // Agent 调用 rename_session 工具 / /rename 后，标题即时同步
       if(m.name) setSessionTitle(m.name);
       break;
+    case 'user': {
+      // 多端同步：与同 Agent 交互的其它客户端/CLI 发来的消息——渲染 user 气泡。
+      // 本端乐观渲染的（send() 已画过）对账跳过，防双气泡；批量合并形态（"a\n\n---\nb"）逐段对账。
+      const t = m.text || '';
+      const pi = _pendingLocalEcho.indexOf(t);
+      if(pi >= 0){ _pendingLocalEcho.splice(pi,1); break; }
+      const parts = t.split('\n\n---\n');
+      if(parts.length > 1 && parts.every(p => _pendingLocalEcho.includes(p))){
+        parts.forEach(p => _pendingLocalEcho.splice(_pendingLocalEcho.indexOf(p),1));
+        break;
+      }
+      if(t.startsWith('[后台通知·') || t.startsWith('[后台触发·')){
+        // 后台触发轮：background_trigger 事件已渲染（📭/⏰ 行），不重复为用户气泡
+        break;
+      }
+      addTimeDivider();
+      addUserBubble(t + (m.image_count ? `\n（附带 ${m.image_count} 张图片）` : ''), []);
+      if(!busy){ setBusy(true); curTurn = null; }
+      break;
+    }
     case 'error': addRow('err', m.text); setBusy(false); break;
     case 'step': addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${m.tokens} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking': addTrace('think', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+'💭 '+m.text); break;

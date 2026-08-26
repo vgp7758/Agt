@@ -451,11 +451,13 @@ def _merge_batch(batch):
 
 
 def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=3.0,
-                 interactive=True, quit_check=None):
+                 interactive=True, quit_check=None, echo_pending=None):
     """主线程：消费 event_q 调 agent._print_event 渲染 agent 事件 + 长任务心跳 + 检测 worker 退出。
     所有 print 都在本线程 → 与 worker 的命令/提示 print 基本不并发（worker 串行 + 心跳仅长任务）。
     长任务（agent.run 超过 threshold 秒）才开始报心跳——心跳用 ANSI escape 原地刷新（不刷屏），
-    有实际事件输出时自动隐去、下个 tick 再现。quit_check：CLI 两段式 Ctrl+C 退出用。"""
+    有实际事件输出时自动隐去、下个 tick 再现。quit_check：CLI 两段式 Ctrl+C 退出用。
+    echo_pending：CLI 本地输入对账表（user 事件到达时逐条匹配移除——input() 已回显的不重复打印；
+    web 模式传 None：stdin 无回显，全部 user 事件渲染为日志行）。"""
     import sys, shutil, itertools
     _status_active = False
     spinner = itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
@@ -506,7 +508,30 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
                 break   # CLI 第二次 Ctrl+C：SIGINT 处理器塞入的退出事件 → 立即退出
             _clear_status()   # 有实际输出：先隐去状态行，避免穿插
             if etype == "user":
-                continue   # CLI 模式下 input() 已回显，不重复渲染（WebUI 走 broadcast 不受影响）
+                # user 事件回显（多端同步）：与 CLI 交互的同一 Agent 收到来自其它客户端（WebUI/
+                # 手机/stdin 驱动）的消息时打印出来——否则 CLI 只见回答不见问题，日志缺半边。
+                _aid = str(e.get("agent_id") or "_main_")
+                _cur = str(getattr(agent, "_active_target", "_main_") or "_main_")
+                if _aid != _cur:
+                    continue   # 其它 Agent 的 user 事件（同步子 Agent 的任务输入/wiki-updater 的批量任务）不渲染
+                _txt = e.get("text") or ""
+                if echo_pending is not None:
+                    # 本 CLI 刚输入的（input() 已回显）——对账移除，防双打印。
+                    # 批量合并形态（worker drain 合并 "a\n\n---\nb"）也逐段对账。
+                    _parts = _txt.split("\n\n---\n")
+                    if _txt in echo_pending:
+                        echo_pending.remove(_txt)
+                        continue
+                    if len(_parts) > 1 and all(p in echo_pending for p in _parts):
+                        for p in _parts:
+                            echo_pending.remove(p)
+                        continue
+                if _txt.startswith("[后台通知·") or _txt.startswith("[后台触发·"):
+                    continue   # 后台触发轮：_merge_batch 已打 ⏰ 行，不重复渲染为用户消息
+                _ic = e.get("image_count") or 0
+                print(f"\n🧑 你（来自其它客户端）：{_txt[:500]}"
+                      + (f"（+{_ic}图）" if _ic else ""))
+                continue
             if etype == "spec_pending":
                 # commit_spec 阻塞等待用户裁定：CLI 打印 spec 详情 + 提示
                 spec = e.get("spec", [])
@@ -745,7 +770,16 @@ def main():
     except (ValueError, OSError):
         pass   # 非主线程注册失败 → 退回默认 KeyboardInterrupt 行为（兜底退出）
 
+    _cli_echo = []   # CLI 本地输入对账表（_input_thread 记录 → _render_loop 的 user 事件逐条匹配移除）
+
     def _input_thread():
+        _echo = _cli_echo   # 本地输入对账表（user 事件到达时匹配移除——input() 已回显的不重复打印）
+
+        def _record(t):
+            _echo.append(t)
+            if len(_echo) > 10:
+                _echo.pop(0)
+
         while True:
             try:
                 user = input("").strip()   # 提示由主线程 _render_loop 在 agent 完成后打印
@@ -806,6 +840,7 @@ def main():
                 entry = agent.registry.lookup(target) if agent.registry else None
                 if entry and entry.agent:
                     try:
+                        _record(user)   # CLI 已回显：user 事件回来时对账跳过（防双打印）
                         entry.agent.run(user)
                         print("\n🧑 你：", end="", flush=True)
                         continue
@@ -818,8 +853,8 @@ def main():
                 else:
                     print(f"\n⚠️ 找不到目标 '{target}'，已切回主 Agent")
                     agent._active_target = "_main_"
+            _record(user)   # CLI 已回显：user 事件回来时对账跳过（防双打印）
             work_q.put(("user", user))
-            # 忙时给即时回执，让用户知道没丢、会排队（agent 空闲则正常处理、无需提示）
             if state.get("busy"):
                 print(f"\n📥 已排队（当前任务结束后处理）：{user[:40]!r}", flush=True)
 
@@ -843,7 +878,7 @@ def main():
 
     try:
         _render_loop(agent, event_q, worker, state, work_q, interactive=True,
-                     quit_check=lambda: _quit_state["quit"])
+                     quit_check=lambda: _quit_state["quit"], echo_pending=_cli_echo)
     except KeyboardInterrupt:
         # 兜底：SIGINT 处理器注册失败时才走到这（默认 KeyboardInterrupt 行为）→ 退出
         print("\n⏹ 已请求停止，等当前步完成…")

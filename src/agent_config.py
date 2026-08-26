@@ -95,12 +95,34 @@ def _func_load_agents() -> str:
         return ""
 
 
+def _func_runtime_env() -> str:
+    """{func:runtime_env()} —— 运行时自我认知：包名/版本/升级方式（main.yml 装配引用）。
+    版本动态读 src/__init__.py 的 __version__（发版自动跟随，不烘焙）。
+    其它 repo 的 session 由此知道自己跑在 agt-agent 里、怎么升级（用户提案）。"""
+    try:   # 优先运行源码的 __version__（开发机 importlib.metadata 可能是旧安装的 0.9.0）
+        import __init__ as _pkg
+        v = getattr(_pkg, "__version__", "") or "?"
+    except Exception:
+        v = ""
+    if not v or v == "?":
+        try:
+            from importlib.metadata import version as _v
+            v = _v("agt-agent")
+        except Exception:
+            v = "?"
+    return (f"agt-agent v{v}（pip 包；CLI `agt` / WebUI `agt-web`）。"
+            f"升级：`pip install -U agt-agent` 后 /restart 生效；"
+            f"随包播种资产刷新：/update-assets apply。GitHub: vgp7758/Agt")
+
+
 FUNC_REGISTRY = {
     "load_models": _func_load_models,
     "load_workflows": _func_load_workflows,
     "load_skills": _func_load_skills,
     "load_agents": _func_load_agents,
+    "runtime_env": _func_runtime_env,
 }
+
 
 
 def resolve_assembly_func(name: str) -> str:

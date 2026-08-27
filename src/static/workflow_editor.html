@@ -1639,35 +1639,31 @@ function showProps(){
     const filt=b.filter||{logic:2,conditions:[]};
     if(!filt.conditions.length)filt.conditions.push({operator:14,left:{input:{type:'integer',value:{type:'ref',content:{source:'block-output',blockID:'__batch_output__',name:''}}}},right:{input:{type:'integer',value:{type:'literal',content:''}}}});
     h+='<h3>筛选条件 (filtered_outputs) <select onchange="setCompLogic(parseInt(this.value))" style="width:auto;font-size:10px"><option value="2"'+(filt.logic!==1?' selected':'')+'>AND</option><option value="1"'+(filt.logic===1?' selected':'')+'>OR</option></select></h3>';
-    // 收集可用输出字段（含 object 子字段）
-    // 收集可用筛选字段：从输出的 item schema 取字段
-    const outFields=[];
-    nodeOutputs(n).forEach(o=>{
-      if(o.name==='all_outputs'||o.name==='filtered_outputs'||o.name==='nth_output'){
-        // list 输出，schema 是 item 类型：{type:'string'} 或 [{name,type}](object字段数组)
-        const sch=o.schema;
-        if(Array.isArray(sch)){
-          // item 是 object，有字段
-          sch.forEach(sf=>outFields.push(sf.name));
-        }else if(sch&&sch.type==='object'){
-          // item 是 object，schema 可能在 schema.fields
-          (sch.fields||[]).forEach(sf=>outFields.push(sf.name));
-        }
-        // item 是基础类型(string/int)时无字段，不加入
-      }else{
-        // 普通输出字段
-        outFields.push(o.name);
-        if(o.type==='object'&&Array.isArray(o.schema)){o.schema.forEach(sf=>outFields.push(o.name+'.'+sf.name));}
-      }
-    });
+    // 收集可用筛选字段：基于 nth_output 的 item 结构（用户语义：_round_out 本身 / 子字段 / .length）
+    // value 编码：@self=元素本身(name='') / @len=长度 / @empty=空判定 / 其余=子字段名（含点号路径）
+    const nthO=(nodeOutputs(n)||[]).find(o=>o.name==='nth_output')||{};
+    const outFields=[['@self','_round_out（本轮输出本身）',(nthO.type||'any')]];
+    (function _walk(sch,prefix){
+      (Array.isArray(sch)?sch:[]).forEach(sf=>{
+        const nm=prefix?prefix+'.'+sf.name:sf.name;
+        outFields.push([nm,'_round_out.'+nm,(sf.type||'string')]);
+        if(sf.type==='object')_walk(sf.schema,nm);
+      });
+    })(nthO.schema,'');
+    if(nthO.type==='list'||nthO.type==='string'){
+      outFields.push(['@len','_round_out.length（长度）','integer']);
+      outFields.push(['@empty','_round_out.is_empty（空判定）','boolean']);
+    }
     filt.conditions.forEach((c,ci)=>{
       const isUnary=[9,10,11,12].includes(c.operator);
       const rv=c.right?.input?.value||{};
       const rIsRef=rv.type==='ref';
       const lName=c.left?.input?.value?.content?.name||'';
+      // 选中态映射：@self ↔ name='' / @len ↔ 'length' / @empty ↔ 'is_empty' / 字段路径原样
+      const lSel=(lName==='length')?'@len':(lName==='is_empty')?'@empty':(lName===''?'':'__f__'+lName);
       h+='<div style="display:flex;gap:2px;margin:2px 0;flex-wrap:wrap;align-items:center">';
-      // 左值：下拉选输出字段
-      h+='<select onchange="setCompFilt('+ci+',\'left\',this.value)" style="width:90px;font-size:10px"><option value="">--字段--</option>'+outFields.map(fn=>'<option value="'+fn+'"'+(lName===fn?' selected':'')+'>'+fn+'</option>').join('')+'</select>';
+      // 左值：下拉（_round_out 本身 / 子字段 / .length）
+      h+='<select onchange="setCompFilt('+ci+',\'left\',this.value)" style="width:130px;font-size:10px"><option value="">--选择--</option>'+outFields.map(fo=>'<option value="'+fo[0]+'"'+((lSel===''?'@self':'__f__'+lSel.slice(6))===fo[0]||lSel===fo[0]?' selected':'')+'>'+fo[1]+'</option>').join('')+'</select>';
       h+='<select onchange="setCompFilt('+ci+',\'op\',parseInt(this.value))" style="width:45px;font-size:10px">'+OPERATORS.map(o=>'<option value='+o.v+(c.operator===o.v?' selected':'')+'>'+o.t+'</option>').join('')+'</select>';
       if(!isUnary){
         h+='<select onchange="setCompFiltSrc('+ci+',this.value)" style="width:auto;font-size:10px"><option value="literal"'+(!rIsRef?' selected':'')+'>literal</option><option value="ref"'+(rIsRef?' selected':'')+'>ref</option></select>';
@@ -1754,7 +1750,9 @@ function showProps(){
     if(nthIdx>=0){
       h+='<div style="font-size:10px;color:#8a9099;margin-bottom:2px">类型: <select onchange="setNthType(this.value)">'+IO_TYPES.map(t=>'<option value='+t+(outs[nthIdx].type===t?' selected':'')+'>'+t+'</option>').join('')+'</select></div>';
       if(outs[nthIdx].type==='object'||Array.isArray(outs[nthIdx].schema)){
-        h+='<div style="font-size:10px;color:#8a9099;margin:4px 0">字段（每轮输出的 item 结构）:</div>';
+        h+='<div style="display:flex;gap:4px;align-items:center;font-size:10px;color:#8a9099;margin:4px 0">字段（每轮输出的 item 结构）'
+          +`<button onclick="addSubFieldP('out','f${nthIdx}')" title="添加字段" style="font-size:10px;padding:0 5px">+ 字段</button>`
+          +`<button onclick="importFieldSchema('out','f${nthIdx}')" title="粘贴JSON对象按结构推断字段" style="font-size:10px;padding:0 5px">📋 JSON导入</button></div>`;
         h+=renderObjectSubFields(outs[nthIdx],'out',nthIdx,'object');
       }else{
         h+='<div style="font-size:10px;color:#8a9099">item 类型为 '+outs[nthIdx].type+'（基础类型，无子字段）</div>';
@@ -2672,7 +2670,7 @@ function addLocalVar(){const n=findN(selNode);n.data.inputs.variableParameters=n
 function setLocalVar(i,field,v){const n=findN(selNode);const vp=n.data.inputs.variableParameters[i];if(field==='name')vp.name=v;if(field==='init')vp.input.value.content=v;if(field==='type')vp.input.type=v;showProps();}
 function delLocalVar(i){const n=findN(selNode);n.data.inputs.variableParameters.splice(i,1);showProps();}
 function setCompArraySrc(v){/* 标记哪个 list 字段是数组源 — 已由第一个 list 型输入自动确定 */showProps();}
-function setCompFilt(ci,field,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){c.left.input.value.content.name=v;c.left.input.value.content.blockID='__batch_output__';}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:v}};}}
+function setCompFilt(ci,field,v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(field==='op')c.operator=v;if(field==='left'){const ct=c.left.input.value.content;ct.blockID='__batch_output__';if(v==='@self'){ct.name='';}else if(v==='@len'){ct.name='length';c.left.input.type='integer';}else if(v==='@empty'){ct.name='is_empty';c.left.input.type='boolean';}else{ct.name=v;/* 类型联动：按 nth schema 查该字段类型 */const nthO=(nodeOutputs(n)||[]).find(o=>o.name==='nth_output');let tp=null;(function _w(sch){(Array.isArray(sch)?sch:[]).forEach(sf=>{if(sf.name===v)tp=sf.type||'string';else if(sf.type==='object')_w(sf.schema);});})(nthO&&nthO.schema);if(tp)c.left.input.type=tp;}}if(field==='right')c.right.input.value.content=v;if(field==='type'){c.left.input.type=v;c.right.input.type=v;}if(field==='refName'){c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:v}};}}
 function setCompFiltSrc(ci,src){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});const c=f.conditions[ci];if(src==='literal')c.right.input.value={type:'literal',content:''};else c.right.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};showProps();}
 function setCompLogic(v){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};const f=n.data.inputs.batch.filter||(n.data.inputs.batch.filter={logic:2,conditions:[]});f.logic=v;showProps();}
 function delCompFilt(ci){const n=findN(selNode);const f=n.data.inputs.batch?.filter||{};if(f.conditions)f.conditions.splice(ci,1);showProps();}

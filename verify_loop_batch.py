@@ -239,23 +239,120 @@ check("filtered_outputs 只留 ≥30", [o.get("doubled") for o in r.get("filtere
       r.get("filtered"))
 check("nth_output = 第一个 filtered", (r.get("nth") or {}).get("doubled") == 30, r.get("nth"))
 
-# ============ T6: 编辑器模板形态的 loop（all/filtered/nth 无 input 引用）============
-print("\n== T6 编辑器模板形态 loop（输出无 input 引用）——验证执行器行为 ==")
+# ============ T6: continue-result 单字段模型（string 类型 result → all_outputs 裸值列表）============
+print("\n== T6 continue-result 单字段(string): all_outputs 元素是裸值而非 {output:...} ==")
 editor_loop = deepcopy(loop_multi)
 for n in editor_loop["nodes"]:
     if n["id"] == LOOP:
         n["data"]["outputs"] = [
-            {"name": "all_outputs", "type": "list"},
-            {"name": "filtered_outputs", "type": "list"},
-            {"name": "nth_output", "type": "object"}]
+            {"name": "all_outputs", "type": "list", "schema": {"type": "string"}},
+            {"name": "filtered_outputs", "type": "list", "schema": {"type": "string"}},
+            {"name": "nth_output", "type": "string"}]
         n["data"]["inputs"]["batch"] = {"nth": 0}
+        # body 末尾置变量后接 continue（result ref text 节点 output），替代旧的回 composite 边
+        # 旧边: 200014→LOOP(loop-function-inline-input) ；新增 __continue__ 节点
+        n["blocks"].append({"id": "__continue__", "type": "29", "data": {
+            "inputs": {"inputParameters": [
+                {"name": "result", "input": {"type": "string", "value": ref("200013", "output")}}]}}})
+        n["edges"] = [e for e in n["edges"]
+                      if not (e.get("sourceNodeID") == "200014" and str(e.get("targetNodeID")) == LOOP)]
+        n["edges"].append({"sourceNodeID": "200014", "targetNodeID": "__continue__"})
     if n["id"] == "900001":
         n["data"]["inputs"]["inputParameters"] = [
             in_param("all", "list", ref(LOOP, "all_outputs")),
-            in_param("nth", "object", ref(LOOP, "nth_output"))]
+            in_param("nth", "string", ref(LOOP, "nth_output"))]
 r = run(editor_loop, {"items": [{"word": "ab"}, {"word": "cd"}]})
-print("  编辑器形态 loop 实际输出:", json.dumps(r, ensure_ascii=False)[:200])
-check("【已知差异】all_outputs 非空才算编辑器形态可用", bool(r.get("all")), r.get("all"))
+print("  continue-result 形态 loop 实际输出:", json.dumps(r, ensure_ascii=False)[:200])
+# 本轮输出 = text 节点 output（裸字符串），不再包 {output:...}
+check("all_outputs 元素是裸字符串(无 output 包壳)",
+      r.get("all") == ["|ab#0|AB", "|ab#0|AB|cd#1|CD"], r.get("all"))
+check("nth_output 是裸字符串", r.get("nth") == "|ab#0|AB", r.get("nth"))
+
+# ============ T8: continue-result list 类型（itemType=list 对齐）============
+print("\n== T8 continue-result(list 类型): result 是 list → all_outputs=[[...],[...]] ==")
+list_loop = deepcopy(loop_multi)
+for n in list_loop["nodes"]:
+    if n["id"] == LOOP:
+        # result 类型 = list（与 nth_output.type=list / all_outputs.itemType=list 联动）
+        n["data"]["outputs"] = [
+            {"name": "all_outputs", "type": "list", "schema": {"type": "list"}},
+            {"name": "filtered_outputs", "type": "list", "schema": {"type": "list"}},
+            {"name": "nth_output", "type": "list"}]
+        n["data"]["inputs"]["batch"] = {"nth": 0}
+        # 改 text 节点输出为 list：把 [word] 包成 list 作为本轮 result（模拟 extract_keywords continue result=list）
+        # text 200013 改成 code，输出 words(list)
+        for b in n["blocks"]:
+            if b["id"] == "200013":
+                b["type"] = "5"; b["data"] = {
+                    "inputs": {"inputParameters": [
+                        in_param("a", "string", ref("200011", "shouted")),
+                        in_param("b", "string", ref("200012", "raw"))],
+                        "code": "async def main(args):\n    return {'words': [args.params['a'], args.params['b']]}",
+                        "language": 3},
+                    "outputs": [{"name": "words", "type": "list", "schema": {"type": "string"}}]}
+        n["blocks"].append({"id": "__continue__", "type": "29", "data": {
+            "inputs": {"inputParameters": [
+                {"name": "result", "input": {"type": "list", "value": ref("200013", "words")}}]}}})
+        n["edges"] = [e for e in n["edges"]
+                      if not (e.get("sourceNodeID") == "200014" and str(e.get("targetNodeID")) == LOOP)]
+        n["edges"].append({"sourceNodeID": "200014", "targetNodeID": "__continue__"})
+    if n["id"] == "900001":
+        n["data"]["inputs"]["inputParameters"] = [
+            in_param("all", "list", ref(LOOP, "all_outputs")),
+            in_param("nth", "list", ref(LOOP, "nth_output"))]
+r = run(list_loop, {"items": [{"word": "ab"}, {"word": "cd"}]})
+print("  list-result 形态 loop 实际输出:", json.dumps(r, ensure_ascii=False)[:200])
+check("all_outputs 元素是裸 list(无 result 包壳)",
+      r.get("all") == [["ab#0", "AB"], ["cd#1", "CD"]], r.get("all"))
+check("nth_output 是裸 list", r.get("nth") == ["ab#0", "AB"], r.get("nth"))
+
+# ============ T9: batch continue-result 模型（batch body 末尾接 continue）============
+print("\n== T9 batch continue-result: body→continue，收集裸值 ==")
+BATC = "230001"
+batch_cont = {
+    "nodes": [
+        {"id": "100001", "type": "1", "data": {"outputs": [
+            {"name": "items", "type": "list", "schema": [{"name": "word", "type": "string"}], "required": True}],
+            "trigger_parameters": []}},
+        {"id": BATC, "type": "28",
+         "data": {"inputs": {"batchSize": {"type": "integer", "value": lit(10)},
+                  "concurrentSize": {"type": "integer", "value": lit(1)},
+                  "inputParameters": [in_param("input", "list", ref("100001", "items"))],
+                  "batch": {"nth": 0}},
+          "outputs": [
+              {"name": "all_outputs", "type": "list", "schema": {"type": "string"}},
+              {"name": "filtered_outputs", "type": "list", "schema": {"type": "string"}},
+              {"name": "nth_output", "type": "string"}]},
+         "blocks": [
+             {"id": "230011", "type": "5", "data": {
+                 "inputs": {"inputParameters": [
+                     in_param("w", "string", {"type": "ref", "content": {"source": "loop-item", "name": "word"}}),
+                     {"name": "idx", "input": {"type": "integer",
+                         "value": {"type": "ref", "content": {"source": "loop-index"}}}}],
+                     "code": "async def main(args):\n    return {'shouted': args.params['w']+'#'+str(args.params['idx'])}",
+                     "language": 3},
+                 "outputs": [{"name": "shouted", "type": "string"}]}},
+             {"id": "__continue__", "type": "29", "data": {
+                 "inputs": {"inputParameters": [
+                     {"name": "result", "input": {"type": "string", "value": ref("230011", "shouted")}}]}}}],
+         "edges": [
+             {"sourceNodeID": BATC, "targetNodeID": "230011", "sourcePortID": "batch-function-inline-output"},
+             {"sourceNodeID": "230011", "targetNodeID": "__continue__"}]},
+        {"id": "900001", "type": "2", "data": {"inputs": {"terminatePlan": "returnVariables",
+            "inputParameters": [
+                in_param("all", "list", ref(BATC, "all_outputs")),
+                in_param("nth", "string", ref(BATC, "nth_output"))]}}},
+    ],
+    "edges": [
+        {"sourceNodeID": "100001", "targetNodeID": BATC, "sourcePortID": ""},
+        {"sourceNodeID": BATC, "targetNodeID": "900001", "sourcePortID": ""},
+    ],
+}
+r = run(batch_cont, {"items": [{"word": "ab"}, {"word": "cd"}, {"word": "ef"}]})
+print("  batch continue-result 实际输出:", json.dumps(r, ensure_ascii=False)[:200])
+check("batch all_outputs 3 轮裸字符串",
+      r.get("all") == ["ab#0", "cd#1", "ef#2"], r.get("all"))
+check("batch nth_output 裸字符串", r.get("nth") == "ab#0", r.get("nth"))
 
 # ============ T7: XML 往返 ============
 print("\n== T7 XML 序列化/反序列化往返 ==")

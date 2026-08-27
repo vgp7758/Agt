@@ -99,11 +99,26 @@ async def main(args):
       <!-- break 控制点：selector 命中低分时走到这里，提前结束循环 -->
       <node id="__break__" type="break" title="中断(Break)"/>
 
-      <!-- continue：捕获本轮输出（name/score/round）→ all/filtered/nth -->
-      <node id="__continue__" type="continue" title="继续(本轮输出)">
+      <!-- c3: 组装本轮 object（name/score/round）→ 单 result 供 continue 传递 -->
+      <node id="200017" type="code" title="组装本轮输出对象">
         <in name="name"  ref="200013.raw"    type="string"/>
         <in name="score" ref="200012.raw"    type="number"/>
         <in name="round" ref="200011.round"  type="integer"/>
+        <code language="3"><![CDATA[
+async def main(args):
+    return {"result": {"name": args.params.get("name"), "score": args.params.get("score"),
+                       "round": args.params.get("round")}}
+]]></code>
+        <out name="result" type="object">
+          <field name="name" type="string"/>
+          <field name="score" type="number"/>
+          <field name="round" type="integer"/>
+        </out>
+      </node>
+
+      <!-- continue：固定单 result 字段（type 联动 nth_output），连线传值 -->
+      <node id="__continue__" type="continue" title="继续(本轮输出)">
+        <in name="result" ref="200017.result" type="object"/>
       </node>
     </blocks>
     <edges>
@@ -114,9 +129,10 @@ async def main(args):
       <edge source="200013" target="200014"/>
       <edge source="200014" target="200015"/>
       <edge source="200015" target="200016"/>
-      <!-- selector 分支：true(score<70) → break；false → continue -->
+      <!-- selector 分支：true(score<70) → break；false → 组装 → continue -->
       <edge source="200016" target="__break__" sourcePort="true"/>
-      <edge source="200016" target="__continue__" sourcePort="false"/>
+      <edge source="200016" target="200017" sourcePort="false"/>
+      <edge source="200017" target="__continue__"/>
     </edges>
   </node>
 
@@ -177,17 +193,18 @@ async def main(args):
     name = args.params.get('name', '?')
     grade = args.params.get('grade', '?')
     note = args.params.get('note', '')
-    # 模拟 LLM：输入 → 结构化输出 {name, comment}
-    return {'name': name, 'comment': f'[{grade}] {note} → 表现良好'}
+    # 模拟 LLM：输入 → 结构化输出 result 对象 {name, comment}
+    return {'result': {'name': name, 'comment': f'[{grade}] {note} → 表现良好'}}
 ]]></code>
-        <out name="name" type="string"/>
-        <out name="comment" type="string"/>
+        <out name="result" type="object">
+          <field name="name" type="string"/>
+          <field name="comment" type="string"/>
+        </out>
       </node>
 
-      <!-- continue：捕获本轮输出（name+comment），驱动 all/filtered/nth -->
+      <!-- continue：固定单 result 字段（type 联动 nth_output），连线传值 -->
       <node id="__continue__" type="continue" title="继续(本轮输出)">
-        <in name="name"    ref="300012.name"    type="string"/>
-        <in name="comment" ref="300012.comment" type="string"/>
+        <in name="result" ref="300012.result" type="object"/>
       </node>
     </blocks>
     <edges>

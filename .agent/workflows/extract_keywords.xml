@@ -9,7 +9,7 @@
     <out name="value" type="any"/>
     <batch enabled="false"/>
   </node>
-  <node id="120001" type="selector" title="cache_hit?" x="720" y="80">
+  <node id="120001" type="selector" title="cache_hit?" x="727.3201112512854" y="48.279517911096306">
     <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
   </node>
@@ -50,13 +50,15 @@
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2819" y="80">
+  <node id="900001" type="end" title="Exit_hit" x="2820" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
     <out name="idx" ref="933950.index" type="integer"/>
+    <out name="kw" ref="1275951.keywords" type="list"/>
+    <out name="nth" ref="1275951.nth_output" type="list"/>
   </node>
-  <node id="933950" type="aggregator" title="变量聚合" x="2520" y="80">
-    <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="110001.value" type="list"/><var ref="1275951.nth_output" type="list"/></group>
+  <node id="933950" type="aggregator" title="变量聚合" x="2273" y="255">
+    <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="1275951.nth_output" type="list"/><var ref="110001.value" type="list"/></group>
   </node>
   <node id="908175" type="plugin" title="write_pending" x="1020" y="80" toolName="kv_cache_write">
     <in name="key" type="string" ref="100001.user_message"/>
@@ -65,7 +67,7 @@
     <out name="result" type="object" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="129000" type="code" title="init_kw" x="1020" y="208">
+  <node id="129000" type="code" title="init_kw" x="977" y="298">
     <in name="x" type="string">init</in>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 等待循环的 keywords 变量初值：空表（list var 的 literal 初值会是字符串，经 code 节产出正确类型；
@@ -74,13 +76,12 @@
     <out name="empty" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="1275951" type="loop" title="wait_extract" x="1320" y="314">
+  <node id="1275951" type="loop" title="wait_extract" x="1486.9074542012072" y="292.8177101945134">
     <param name="loopType"><![CDATA[count]]></param>
     <param name="loopCount" type="integer"><![CDATA[90]]></param>
     <var name="keywords" type="list" ref="129000.empty"/>
     <var name="find" type="boolean" literal="False"/>
     <in name="user" type="string" ref="100001.user_message"/>
-    <out name="keywords" type="list" description="等待到的关键词（超时=空表，调用方零注入兜底）" ref="1275951.keywords"/>
     <out name="all_outputs" type="list" description="所有结果" itemType="list"/>
     <out name="filtered_outputs" type="list" description="筛选结果" itemType="list"/>
     <out name="nth_output" type="list" description="第n个结果"/>
@@ -93,7 +94,7 @@
   </node>
       <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80"/>
       <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154">
-    <in name="result" type="list" ref="926184.raw"/>
+    <in name="result" type="list" ref="926184.raw.list"/>
     <batch enabled="false"/>
   </node>
       <node id="693978" type="plugin" title="sleep" x="420" y="80" toolName="sleep">
@@ -130,9 +131,9 @@
       <node id="413345" type="setvar" title="置变量(循环)" x="1620" y="172">
     <in name="find" left="find.find" left_type="string" right="ref:570563.hit" right_type="boolean"/>
   </node>
-      <node id="926184" type="plugin" title="pass_through" x="1920" y="172" toolName="pass_through">
+      <node id="926184" type="plugin" title="pass_through" x="1916.8620922276725" y="184.5516310893098" toolName="pass_through">
     <in name="input" type="any" ref="570563.value"/>
-    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）" itemType="string"/>
     <batch enabled="false"/>
   </node>
     </blocks>

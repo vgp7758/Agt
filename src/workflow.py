@@ -570,9 +570,10 @@ def _find_body_entry(edges: list, composite_id: str) -> str | None:
 
 def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
                         body_outputs: dict, ctx, max_steps: int = 5000):
-    """执行复合节点内部子图一轮。返回 (信号, 本轮输出dict)。
-    信号 'done'/'break'/'continue'。本轮输出：Continue节点(2/29)解析的 inputParameters，
-    或最后产出值节点的 outputs（旧格式无 continue 时）。Break(19) 判类型；入口(1) 跳过。"""
+    """执行复合节点内部子图一轮。返回 (信号, 本轮输出值)。
+    信号 'done'/'break'/'continue'。本轮输出值：Continue 节点(2/29) 唯一 result 字段
+    经连线 ref 解析出的值（裸值，不包 dict）。Break(19)/done 不产出（None）。
+    数据完全由 continue 节点的 result 连线决定——不再兜底取最后产出值节点。"""
     start = None
     for e in edges:
         if str(e.get("sourceNodeID")) == composite_id and str(e.get("sourcePortID", "")).endswith(_INLINE_OUT_SUFFIX):
@@ -580,28 +581,25 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             break
     saved = ctx.node_outputs
     ctx.node_outputs = body_outputs
-    last_data = None   # 最近一个"产出值"的节点（排除控制节点），用于无 continue 时的兜底
-
-    def _round_out():
-        return dict(body_outputs.get(last_data, {}) or {}) if last_data else {}
 
     try:
         current = start
         for _ in range(max_steps):
             if current is None or current == composite_id:
-                return "done", _round_out()
+                return "done", None
             node = blocks_by_id.get(current)
             if node is None:
-                return "done", _round_out()
+                return "done", None
             ntype = str(node.get("type"))
             if ntype == "19":
-                return "break", _round_out()
+                return "break", None
             if ntype in ("29", "2"):
-                # Continue 节点：解析其 inputParameters 作为本轮输出（编辑器 type2 / 标准 type29）
-                round_out = {}
+                # Continue 节点：固定取唯一 result 字段经连线解析的值（裸值，不包 dict）。
+                # result.type 与复合节点 nth_output.type 联动（编辑器约定），即 all/filtered 的 itemType。
                 for p in node.get("data", {}).get("inputs", {}).get("inputParameters", []):
-                    round_out[p.get("name")] = resolve_value(p.get("input"), ctx)
-                return "continue", round_out
+                    if p.get("name") == "result":
+                        return "continue", resolve_value(p.get("input"), ctx)
+                return "continue", None   # result 字段缺失（容错旧数据）→ 本轮空值
             if ntype == "1":
                 # 迭代入口标记：跳过（保留预置的迭代上下文输出）
                 current = _next_node(edges, current, None)
@@ -614,10 +612,8 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             #   loop-item 引用解析到外层 batch_item=None → 工具参数全 None）
             result = _run_node_with_batch(node, handler, ctx)
             ctx.node_outputs[current] = result.get("outputs") or {}
-            if ntype not in ("19", "29", "20"):
-                last_data = current
             current = _next_node(edges, current, result.get("port"))
-        return "done", _round_out()
+        return "done", None
     finally:
         # debug：记录本复合节点最后一轮迭代的子画布输出（list_workflow_outputs('comp/sub') 读）
         if getattr(ctx, "record_sub", False):
@@ -634,7 +630,7 @@ def _collect_composite_outputs(decl: list, round_items: list, batch: dict):
     filt = (batch or {}).get("filter")
     filtered = []
     for o in all_outputs:
-        if not o or _is_null_output(o):
+        if _is_null_output(o):   # 裸值/空 dict 判空统一走 _is_null_output（避免 o=0/False 被 not 误杀）
             continue
         if filt and not _eval_batch_filter(filt, o):
             continue
@@ -727,12 +723,15 @@ def _handle_loop(node: dict, ctx) -> dict:
             body_outputs[entry_id] = entry_exp
         signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_exposed, last_body = exposed, body_outputs
-        round_items.append(round_out)
-        if ctx.on_round:   # 调试页逐轮刷新：每轮迭代完成即回调（不等整个循环跑完）
-            try:
-                ctx.on_round(composite_id, idx, round_out)
-            except Exception:
-                pass
+        # 本轮输出完全由 continue 节点 result 连线决定：仅 continue 信号产出（裸值）；
+        # break/done 不产出（中断/旧格式无 continue 时本轮无 item）
+        if signal == "continue":
+            round_items.append(round_out)
+            if ctx.on_round:   # 调试页逐轮刷新：每轮迭代完成即回调（不等整个循环跑完）
+                try:
+                    ctx.on_round(composite_id, idx, round_out)
+                except Exception:
+                    pass
         if signal == "break":
             break
 
@@ -801,14 +800,16 @@ def _handle_batch(node: dict, ctx) -> dict:
             entry_exp = {"item": elem, "index": idx}
             entry_exp.update(other_inputs)
             body_outputs[entry_id] = entry_exp
-        _, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
         last_body = body_outputs
-        round_items.append(round_out)
-        if ctx.on_round:   # 调试页逐轮刷新
-            try:
-                ctx.on_round(composite_id, idx, round_out)
-            except Exception:
-                pass
+        # 本轮输出完全由 continue 节点 result 连线决定：仅 continue 信号产出（裸值）
+        if signal == "continue":
+            round_items.append(round_out)
+            if ctx.on_round:   # 调试页逐轮刷新
+                try:
+                    ctx.on_round(composite_id, idx, round_out)
+                except Exception:
+                    pass
         if native:
             saved = ctx.node_outputs
             ctx.node_outputs = body_outputs
@@ -1317,12 +1318,17 @@ def _run_node_with_batch(node: dict, handler, ctx):
     }, "port": None}
 
 
-def _is_null_output(out: dict) -> bool:
-    """判断单次输出是否算 null（全空值）。"""
-    vals = [v for k, v in out.items() if k != "_error"]
-    if not vals:
-        return True
-    return all(v is None or v == "" or v == [] or v == {} for v in vals)
+def _is_null_output(out) -> bool:
+    """判断单次输出是否算 null（全空值）。
+    复合节点 continue-result 解包后元素是裸值（str/list/object-dict/number/None）；
+    单节点批处理 _run_node_with_batch 仍产出 dict（{raw:x, ...}）。两种形态都要能判。"""
+    if isinstance(out, dict):
+        vals = [v for k, v in out.items() if k != "_error"]
+        if not vals:
+            return True
+        return all(v is None or v == "" or v == [] or v == {} for v in vals)
+    # 裸值（str/list/number/None/bool）
+    return out is None or out == "" or out == [] or out == {}
 
 
 # 不需要右值的运算符（为空/非空/True/False）——右侧残留的未设置值不应影响判断

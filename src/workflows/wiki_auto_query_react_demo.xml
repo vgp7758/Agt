@@ -197,11 +197,21 @@ async def main(args):
       <node id="310005" type="setvar" title="upd_messages" x="1920" y="80">
     <in name="messages" left="__entry__.messages" left_type="list" right="ref:310004.messages" right_type="list"/>
   </node>
-      <node id="__continue__" type="continue" title="继续(本轮输出)" x="2220" y="154">
+      <node id="310006" type="code" title="round_out" x="1920" y="340">
     <in name="resp" type="object" ref="310001.raw"/>
     <in name="tool" type="string" ref="310003.raw"/>
     <in name="report" type="object" ref="310008.answer"/>
     <in name="fallback" type="object" ref="645462.raw"/>
+    <code language="3"><![CDATA[async def main(args):
+    """continue 单 result 模型：组装本轮 object（未走分支的字段为 None，与旧多字段行为一致）"""
+    p = args.params
+    return {"result": {"resp": p.get("resp"), "tool": p.get("tool"),
+                       "report": p.get("report"), "fallback": p.get("fallback")}}]]></code>
+    <out name="result" type="object"><field name="resp" type="object"/><field name="tool" type="string"/><field name="report" type="object"/><field name="fallback" type="object"/></out>
+    <batch enabled="false"/>
+  </node>
+      <node id="__continue__" type="continue" title="继续(本轮输出)" x="2220" y="154">
+    <in name="result" type="object" ref="310006.result"/>
     <batch enabled="false"/>
   </node>
       <node id="__break__" type="break" title="完成退出" x="2220" y="80"/>
@@ -229,7 +239,8 @@ async def main(args):
     <edge source="310002" target="310003" sourcePort="true_1"/>
     <edge source="310001" target="1122665"/>
     <edge source="1122665" target="310002"/>
-    <edge source="310005" target="__continue__"/>
+    <edge source="310005" target="310006"/>
+    <edge source="310006" target="__continue__"/>
     </edges>
     <batch enabled="false" nth="0"/>
   </node>

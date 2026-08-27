@@ -1700,9 +1700,9 @@ function showProps(){
 
   // 输入字段（聚合节点用 mergeGroups，跳过常规输入）
   if(n.type!=='1'&&n.type!=='32'){
-    const label=n.type==='2'?'输出映射（返回变量绑定）':'输入字段';
+    const label=n.type==='2'?'输出映射（返回变量绑定）':(n.type==='29'?'本轮输出（result，类型联动 nth_output）':'输入字段');
     const lockedInputs=['9'].includes(n.type)||(n.type==='4'&&nodeInputs(n).every(p=>p.input?.type!=='any'));  // 子工作流全锁；plugin 全 any 时不锁
-    h+=`<h3>${label} ${lockedInputs?'🔒(来自工具schema，不可改)':'<button onclick=\"addIO(\'in\')\">+ 添加</button> <button onclick=\"importJSONSchema(\'in\')\" title=\"粘贴JSON自动分析结构并初始化输入字段\">📋 从JSON导入</button>'}</h3>`;
+    h+=`<h3>${label} ${(lockedInputs||n.type==='29')?'🔒(固定 result，连线传值)':'<button onclick=\"addIO(\'in\')\">+ 添加</button> <button onclick=\"importJSONSchema(\'in\')\" title=\"粘贴JSON自动分析结构并初始化输入字段\">📋 从JSON导入</button>'}</h3>`;
     h+=renderIOFields(nodeInputs(n),'in');
   }
   // 输出字段（入口=工作流入参；意图/聚合无输出字段编辑）
@@ -1887,7 +1887,10 @@ function setBatch(k,v){
 // 复合节点 nth_output 字段管理（all/filtered 自动同步 schema）
 function _nthOut(){const n=findN(selNode);return nodeOutputs(n).find(o=>o.name==='nth_output');}
 function _syncListSchema(){const n=findN(selNode);const nth=_nthOut();if(!nth)return;(nodeOutputs(n)||[]).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.type='list';o.schema=nth.schema?[...nth.schema]:{type:nth.type};}});}
-function setNthType(v){const nth=_nthOut();if(!nth)return;nth.type=v;if(v==='object'&&!Array.isArray(nth.schema))nth.schema=[];else if(v!=='object')delete nth.schema;_syncListSchema();showProps();renderAll();}
+function setNthType(v){const nth=_nthOut();if(!nth)return;nth.type=v;if(v==='object'&&!Array.isArray(nth.schema))nth.schema=[];else if(v!=='object')delete nth.schema;_syncListSchema();
+  // 联动子画布 continue 节点唯一 result 字段的类型（result.type ≡ nth_output.type）
+  ((findN(selNode)?.blocks)||[]).forEach(b=>{if(String(b.type)==='29'){(b.data.inputs?.inputParameters||[]).forEach(p=>{if(p.name==='result')p.input.type=v;});}});
+  showProps();renderAll();}
 function delNthSubField(si){const nth=_nthOut();if(!nth)return;nth.schema.splice(si,1);_syncListSchema();showProps();}
 function setNthSubField(si,field,v){const nth=_nthOut();if(!nth)return;nth.schema[si][field]=v;_syncListSchema();showProps();}
 function _batchFilt(){const n=findN(selNode);n.data.inputs.batch=n.data.inputs.batch||{};if(!n.data.inputs.batch.filter)n.data.inputs.batch.filter={logic:2,conditions:[]};return n.data.inputs.batch.filter;}
@@ -2030,7 +2033,9 @@ function renderIOFields(arr,kind,lockedAll){
              +`<button onclick="addSubFieldP('${kind}','f${i}')" title="添加一个子字段" style="font-size:10px;padding:0 3px">+</button>`;
     }
     const _typeSel=`<select ${locked?'disabled':''} onchange="setField('${kind}',${i},'type',this.value)">${IO_TYPES.map(x=>`<option value="${x}" ${t===x?'selected':''}>${x}</option>`).join('')}</select>`;
-    const _delTd=`<td style="width:24px;text-align:center">${locked?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td>`;
+    // continue(29)：result 字段名固定、不可删；type 可编辑（setField 内反向联动 nth_output）
+    const _contLock=kind==='in'&&n&&n.type==='29';
+    const _delTd=`<td style="width:24px;text-align:center">${(locked||_contLock)?'🔒':`<button class="del" onclick="delField('${kind}',${i})">×</button>`}</td>`;
     if(kind==='in'){
       // 值按钮：ref 绑定优先显示 displayName（节点.字段/item/index/global），未绑定显示字面量值；
       // 点击展开当前类型的字面量输入控件（输入即覆盖为 literal）；▾ 弹出引用选择
@@ -2039,7 +2044,7 @@ function renderIOFields(arr,kind,lockedAll){
       const _trunc=s=>s.length>22?s.slice(0,21)+'…':s;
       const btnTxt=sm?('🔗 '+sm.name):(lit?_trunc(lit):'（字面量）');
       h+=`<tr style="display:flex;width:100%;gap:2px;align-items:center">`
-        +`<td style="flex:1 1 56px;min-width:40px"><input value="${ext(f.name)}" ${locked?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>`
+        +`<td style="flex:1 1 56px;min-width:40px"><input value="${ext(f.name)}" ${(locked||_contLock)?'readonly':''} onchange="setField('${kind}',${i},'name',this.value)"></td>`
         +`<td style="flex:0 0 74px">${_typeSel}</td>`
         +`<td style="flex:1 1 48px;min-width:32px"><button class="val-btn${sm?' src':(lit?'':' ph')}" style="width:100%" title="${sm?('当前引用：'+sm.name+'。点击改为输入字面量（将覆盖引用）'):'点击输入/编辑字面量'}" onclick="toggleValEditor(${i})">${ext(btnTxt)}</button></td>`
         +`<td style="flex:0 0 16px;text-align:center"><button class="src-btn" title="选择输入源（节点输出 / item / index / 全局变量；选（字面量）=清除引用）" onclick="toggleRefPicker(${i})">▾</button></td>`
@@ -2406,6 +2411,7 @@ function closeProps(){selNode=null;selEdge=null;showProps();renderAll();}   // �
 function setProp(k,v){const n=findN(selNode);n[k]=v;renderAll();}
 function setTitle(v){const n=findN(selNode);n.data.nodeMeta=n.data.nodeMeta||{};n.data.nodeMeta.title=v;renderAll();}
 function addIO(kind){const n=findN(selNode);const item={name:'var'+Date.now()%1000,description:''};
+  if(n.type==='29')return;   // continue 固定唯一 result 字段，不可增
   if(kind==='in'){
     n.data.inputs=n.data.inputs||{};n.data.inputs.inputParameters=n.data.inputs.inputParameters||[];
     if(n.type==='20'){item.left={type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}};item.right={type:'string',value:{type:'literal',content:''}};}
@@ -2422,6 +2428,7 @@ function setVarName(i,v){const n=findN(selNode);const p=n.data.inputs.inputParam
 function setVarVal(i,v){const n=findN(selNode);const p=n.data.inputs.inputParameters[i];const target=n.type==='20'?p.right:p.input;target.value.content=v;}
 function delField(kind,i){
   const n=findN(selNode);
+  if(n.type==='29')return;   // continue 固定唯一 result 字段，不可删
   if(kind==='out'&&n.type==='32'){
     const o=n.data.outputs[i];
     n.data.inputs.mergeGroups=(n.data.inputs.mergeGroups||[]).filter(g=>g.name!==o.name);
@@ -2433,6 +2440,8 @@ function setField(kind,i,field,v){
   // 工具/子工作流/意图query 字段锁定，不可改 name/type——但 any 类型不锁（透传/组装用）
   if(kind==='in'&&['4','9'].includes(n.type)&&nodeInputs(n)[i]?.input?.type!=='any') return;
   if(kind==='in'&&n.type==='22'&&nodeInputs(n)[i]?.name==='query'&&field!=='description') return;
+  // continue 节点固定唯一 result 字段：name 不可改（type 可改但反向联动 nth_output）
+  if(n.type==='29'&&kind==='in'&&field==='name') return;
   const arr=findArr(kind);const f=arr[i];
   if(field==='name')f.name=v;
   if(field==='description')f.description=v;
@@ -2441,6 +2450,15 @@ function setField(kind,i,field,v){
     if(['21','28'].includes(n.type)&&kind==='out'){
       const outs=n.data.outputs||[];
       outs.forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.schema={type:v};}});
+    }
+    // continue(29) 的 result.type 反向联动父复合节点 nth_output（子画布上下文——父节点在栈顶帧）
+    if(n.type==='29'&&kind==='in'&&f.name==='result'&&_currentParent){
+      const frame=_compositeStack[_compositeStack.length-1];
+      const pn=(frame?.nodes||[]).find(x=>x.id===_currentParent);
+      const nth=(pn?.data?.outputs||[]).find(o=>o.name==='nth_output');
+      if(nth){nth.type=v;if(v==='object'&&!Array.isArray(nth.schema))nth.schema=[];else if(v!=='object')delete nth.schema;
+        (pn.data.outputs||[]).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.type='list';o.schema=(v==='object'?(Array.isArray(nth.schema)?nth.schema:[]):{type:v});}});
+      }
     }
   }
   showProps();renderAll();}
@@ -2711,23 +2729,30 @@ function _syncEntryOutputs(n,entryNode){
   });
   entryNode.data.outputs=outs;
 }
-// 同步 continue 节点的输入：按 nth_output schema 初始化，保留已有连线
+// 同步 continue 节点的输入：固定唯一 result 字段（type 与 nth_output.type 联动），保留已有连线。
+// 旧多字段数据（每字段一个输入）迁移：字段集合转入 nth_output 的 object schema，result 收拢为单 object 入口。
 function _syncContinueInputs(n,contNode){
   const nth=nodeOutputs(n).find(o=>o.name==='nth_output');
   contNode.data.inputs=contNode.data.inputs||{};
-  if(!nth){contNode.data.inputs.inputParameters=contNode.data.inputs.inputParameters||[];return;}
-  const existing={};
-  (contNode.data.inputs.inputParameters||[]).forEach(p=>{existing[p.name]=p;});
-  let contParams=[];
-  if(Array.isArray(nth.schema)&&nth.schema.length){
-    // nth_output 有子字段：每个字段一个输入
-    contParams=nth.schema.map(sf=>existing[sf.name]||{name:sf.name,input:{type:sf.type||'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}});
-  }else{
-    // 无子字段：保留已有输入；若无则默认 result 字段捕获本轮输出
-    contParams=Object.keys(existing).length?Object.values(existing)
-      :[{name:'result',input:{type:nth.type||'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}}];
+  contNode.data.inputs.inputParameters=contNode.data.inputs.inputParameters||[];
+  if(!nth)return;
+  const params=contNode.data.inputs.inputParameters;
+  // 旧多字段 continue 迁移：字段声明转入 nth_output.schema（object），收拢为单 result。
+  // 旧字段各自的连线无法并入单 result（ref 指向不同节点）→ 丢失，toast 提示重连。
+  if(params.length>1){
+    if(!Array.isArray(nth.schema)||!nth.schema.length){
+      nth.type='object';
+      nth.schema=params.filter(p=>p.name&&p.name!=='result').map(p=>({name:p.name,type:p.input?.type||'string'}));
+      // 直接在 n 上同步 all/filtered 的 item schema（_syncListSchema 依赖 selNode，此处不保证指向 n）
+      (nodeOutputs(n)||[]).forEach(o=>{if(o.name==='all_outputs'||o.name==='filtered_outputs'){o.type='list';o.schema=[...nth.schema];}});
+    }
+    toast('continue 已固定为单 result(object) 字段——请重连 result');
   }
-  contNode.data.inputs.inputParameters=contParams;
+  const existing=params.find(p=>p.name==='result');
+  const ref=(existing&&existing.input&&existing.input.value&&existing.input.value.type==='ref')
+    ?existing.input.value
+    :{type:'ref',content:{source:'block-output',blockID:'',name:''}};
+  contNode.data.inputs.inputParameters=[{name:'result',input:{type:nth.type||'string',value:ref}}];
 }
 // 复合节点双击：进入子画布
 function openComposite(nodeId){

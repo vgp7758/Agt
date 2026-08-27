@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_query" description="每轮开始前自动查 wiki（本地流水线版）：extract_keywords 子工作流（KV 缓存，与 before_turn_retrieval 共用，命中不调 LLM）抽3~10关键词 → wiki_search(regex) 一次搜 → LLM批处理逐片打分(score:number，默认utility可切local) → rerank_topk 子工作流重排取topk → 相关才注入。无关/短消息不注入（before_turn 钩子）" hidden="true">
+<workflow hook="before_turn" name="wiki_auto_query" description="每轮开始前自动查 wiki（本地流水线版）：extract_keywords 子工作流（KV 缓存，与 before_turn_retrieval 共用，命中不调 LLM）抽3~10关键词 → wiki_search(regex) 一次搜 → LLM批处理逐片打分(score:number，默认utility可切local) → rerank_topk 子工作流重排取topk → 相关才注入。无关/短消息不注入（before_turn 钩子）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>

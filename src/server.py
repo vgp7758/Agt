@@ -378,6 +378,18 @@ async def api_wf_save(name: str, request: Request):
     if fmt == "xml":
         from workflow_xml import canvas_to_xml
         xf = _WF_DIR / f"{safe}.xml"
+        # 钩子根属性保底：编辑器 UI 已不管理 hook/async/recap/enabled（钩子挂载统一走 /agents 声明面），
+        # 保存请求缺这些字段时从磁盘现有 XML 根属性合并——防编辑器每次保存逐步丢光
+        # （实际发生过：22 个 XML 里只剩 2 个还带 hook 标志，播种面新装机钩子全死）
+        try:
+            _old_head = xf.read_text(encoding="utf-8")[:900]
+            for _k in ("hook", "async", "recap", "enabled"):
+                if _k not in meta:
+                    _mm = re.search(rf'\b{_k}="([^"]*)"', _old_head)
+                    if _mm and _mm.group(1):
+                        meta[_k] = _mm.group(1)
+        except OSError:
+            pass
         try:
             xf.write_text(canvas_to_xml(canvas, meta), encoding="utf-8")
         except Exception as e:

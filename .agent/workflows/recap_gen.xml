@@ -1,4 +1,4 @@
-<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型）：user_message+answer 渲染进 LLM 节点 prompt（model=local-qwen）→ ≤30字总结 → 引擎写回 agent._recap（队友可见，不进自己上下文）。turn_end 钩子 + async + recap 三标志" hidden="true">
+<workflow hook="turn_end" async="true" recap="true" name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型）：user_message+answer 渲染进 LLM 节点 prompt（model=local-qwen）→ ≤30字总结 → 引擎写回 agent._recap（队友可见，不进自己上下文）。turn_end 钩子 + async + recap 三标志" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>

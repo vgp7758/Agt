@@ -44,6 +44,8 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
+GRADUATE_FORCE_TURNS = 60  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
+                           # 8000 实例实测 64 轮档1 占 58.6%：窗口宽绰时压力循环永不触发，档1 失去"近期窗口"语义）
 RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
@@ -1377,6 +1379,23 @@ class Session:
                     prefix.append({"role": "system", "content": _b})
             except Exception:
                 pass
+        # —— 卫生性强制毕业（不依赖窗口压力）——
+        # 当前档（最后边界之后的段）> GRADUATE_FORCE_TURNS 时分批升前 30 轮：
+        # 档1 是全量披露档（"近期窗口"语义），窗口宽绰时压力循环永不触发会让它无限膨胀
+        # （用户在 8000 实例观察到 64 轮/58.6%）。分批语义复用 _graduate_once（每刀 30，近期轮保持）。
+        last_completed = len(self.turns) - 1
+        _seg_start = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+        if last_completed - _seg_start + 1 > GRADUATE_FORCE_TURNS:
+            _before = len(self._tier_boundaries)
+            while len(self._tier_boundaries) < len(self.turns) // GRADUATE_BATCH_TURNS + self.max_level + 2:
+                _lc = len(self.turns) - 1
+                _ss = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+                if _lc - _ss + 1 <= GRADUATE_FORCE_TURNS:
+                    break
+                if not self._graduate_once():
+                    break
+            g = len(self._tier_boundaries) - _before   # 并入总刀数（日志/报告）
+            _LOG.info("卫生性强制毕业 +%d 刀（当前档曾 >%d 轮）", g, GRADUATE_FORCE_TURNS)
         # 先升档：反复 graduate 直到 ≤75%（或无可升）。估算 = prefix + 历史 + 当前轮近似
         cur_est = self._seg_msgs_user_message() + self._seg_msgs_steps()   # 当前轮（tail 量小不计）
         g = 0

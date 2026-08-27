@@ -103,6 +103,14 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
   <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
   <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fenabled" onchange="WF.meta.enabled=this.checked"> 启用</label>
+  <label style="font-size:11px;color:#8a9099" title="目标钩子（协议声明）：选择后自动按钩子约定规范化 start 输入/end 输出(inject+result) schema。仅声明本工作流实现什么钩子协议——最终挂载到哪些 Agent 由各 agent 的 .yml hooks 声明决定">钩子 <select id="fhook" onchange="onHookChange(this.value)" style="font-size:11px;background:#0f3460;color:#fff;border:1px solid #533">
+    <option value="">（无）</option>
+    <option value="before_turn">每轮开始前</option>
+    <option value="before_tool">工具调用前</option>
+    <option value="after_tool">工具调用后</option>
+    <option value="before_answer">最终回答前</option>
+    <option value="turn_end">本轮完成后</option>
+  </select></label>
   <label style="font-size:11px;color:#8a9099" title="hidden 默认开：不注册成 Agent 工具（钩子/子工作流/demo 专用）。想给 Agent 用（wf_* 工具）：取消勾选并保存"><input type="checkbox" id="fhidden" onchange="WF.meta.hidden=this.checked"> hidden</label>
   <label style="font-size:11px;color:#8a9099" title="async=钩子工作流后台异步执行，不阻塞主循环（如 wiki 维护等推理长但无需等结果注入的钩子）"><input type="checkbox" id="fasync" onchange="WF.meta.async=this.checked"> async</label>
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
@@ -2929,6 +2937,7 @@ async function openWf(name){
   document.getElementById('fenabled').checked=WF.meta.enabled!==false;   // 默认 true
   document.getElementById('fhidden').checked=WF.meta.hidden!==false;      // 默认 hidden（勾=不注册为工具；取消勾选+保存=注册）
   document.getElementById('fasync').checked=WF.meta.async===true;
+ document.getElementById('fhook').value=WF.meta.hook||'';   // 协议声明回显（挂载归 /agents yml）
   // hook 已迁 Agent 声明管理（/agents 的 hooks 编辑）——编辑器不再提供设置入口；
   // meta.hook 原样保留（已有钩子工作流保存后不丢字段，读侧 get_hook_workflows 继续生效）
   const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
@@ -2951,8 +2960,38 @@ function syncPluginOutputs(n){
     if(!outs.find(x=>x.name===o.name)) outs.push(JSON.parse(JSON.stringify(o)));
   });
 }
-// 钩子位置→schema 约定（onHookChange/HOOK_INPUTS 已随 fhook 下拉移除：钩子挂载统一走 /agents 管理页的 hooks 编辑；
-// 新建钩子工作流的 start/end schema 由 Agent 手写或参考 .agent/workflows/ 现有钩子工作流）
+// 各钩子位置 Agent 注入的上下文 key（= 工作流开始节点的输入）；结束节点统一返回 {inject,result}
+// （协议声明 + schema 规范化：仅声明本工作流实现什么钩子协议——挂载归 /agents 的 .yml hooks 声明；
+//   磁盘 meta.hook 根属性供无 yml 声明场景（播种面）的 get_hook_workflows 扫描）
+const HOOK_INPUTS={
+  before_turn:[['user_message','string','用户本轮消息']],
+  before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)']],
+  after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果'],['changed_files','string','引擎快照diff的变更文件清单(JSON数组串)']],
+  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答'],['changed_calls','string','有文件变更的工具调用原文清单(JSON数组，含call_id/arguments/结果预览)']],
+  turn_end:[['user_message','string','用户本轮消息'],['draft_answer','string','最终回答'],['turn_context','string','本轮上下文摘要']],
+};
+const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前',turn_end:'本轮完成后'};
+function onHookChange(v){
+  WF.meta.hook=v||undefined;
+  document.getElementById('fhook').value=v||'';
+  if(!v) return;                       // 清空钩子不动 schema
+  const start=WF.nodes.find(n=>n.type==='1'), end=WF.nodes.find(n=>n.type==='2');
+  if(!start){toast('缺少开始节点，无法初始化输入');return;}
+  // 已有自定义输入则确认，避免覆盖现成工作流
+  const hasCustom=(start.data.outputs&&start.data.outputs.length)>0;
+  if(hasCustom && !confirm('将按「'+(HOOK_LABELS[v]||v)+'」钩子约定重置开始节点输入与结束节点输出(inject/result)，覆盖现有定义。继续？')) return;
+  start.data.outputs=HOOK_INPUTS[v].map(([nm,t,d])=>({name:nm,type:t,description:d}));
+  if(end){
+    end.data.inputs=end.data.inputs||{};
+    end.data.inputs.terminatePlan='returnVariables';
+    end.data.inputs.inputParameters=[
+      {name:'inject',input:{type:'boolean',value:{type:'literal',content:true}}},
+      {name:'result',input:{type:'string',value:{type:'literal',content:''}}},
+    ];
+  }
+  autoLayout(true); if(selNode) showProps();
+  toast('已按 '+(HOOK_LABELS[v]||v)+' 钩子初始化输入/输出 schema（挂载由 agent 的 .yml 声明）');
+}
 async function saveWf(){
   // 子画布中：先退出所有层级
   while(_currentParent)exitComposite();
@@ -2963,6 +3002,7 @@ async function saveWf(){
    WF.meta.enabled=document.getElementById('fenabled').checked;   // 默认 true，取消则 enabled=false
    WF.meta.hidden=document.getElementById('fhidden').checked;      // 勾=hidden（默认）；取消勾选+保存=注册为 wf_* 工具
    WF.meta.async=document.getElementById('fasync').checked;
+ WF.meta.hook=document.getElementById('fhook').value||'';   // 协议声明（空=清除；挂载归 /agents yml）
    // meta.hook 不动（原值透传——钩子挂载已迁 Agent 声明管理页 /agents，旧值保字段不丢）
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   // blocks/edges 是复合节点(21/28)的【节点级】子画布属性（与 data 平级，不在 data 里）——

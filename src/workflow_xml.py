@@ -359,6 +359,8 @@ def _node_to_json(nd) -> dict:
                 conds.append(_cond(br))   # branch 直接带条件（单条件简写）
             branches.append({"condition": {"logic": int(br.get("logic", "2")), "conditions": conds}})
         inp["branches"] = branches
+        if ntype in ("AND", "OR"):   # 逻辑节点输出 result/results（selector 输出=分支端口，不解析 <out>）
+            out.extend(_out_to_json(o) for o in nd.findall("out"))
     elif ntype == "32":     # aggregator：<group name type><var ref|literal type/>
         mg = []
         for g in nd.findall("group"):
@@ -727,6 +729,8 @@ def _node_to_xml(n):
         for br in inp.get("branches", []):
             cs = (br.get("condition") or {}).get("conditions", [])
             inner.append("<branch>" + "".join(_cond_to_xml(c) for c in cs) + "</branch>" if cs else "<branch/>")
+        if ntype in ("AND", "OR"):   # 逻辑节点输出 result/results（此前双向丢：读侧不解析/写侧不输出 → 重载端口消失）
+            inner.extend(out_el(o) for o in out)
     elif ntype == "32":
         for g in inp.get("mergeGroups", []):
             gname = g.get("name", "")

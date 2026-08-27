@@ -169,6 +169,13 @@ function _effInput(p){
   // type20的输入是right, type40是input, 普通节点是input, left用于指向变量名
   return p.right||p.input||p.left||{};
 }
+// 值容器写路径（type20 的值在 right，left 指向变量名；其余节点在 input）：先确保存在再返回。
+// 属性面板通用输入字段区的类型下拉/引用选择/字面量控件此前全写 p.input——type20 炸 undefined
+function _valBlockW(p,n){
+  const t=(n||{}).type||(findN(selNode)||{}).type;
+  if(t==='20'){if(!p.right)p.right={type:'string',value:{type:'literal',content:''}};return p.right;}
+  if(!p.input)p.input={type:'string',value:{type:'literal',content:''}};return p.input;
+}
 function inputIsLinked(p){
   const eff=_effInput(p); const v=eff.value;
   return v&&v.type==='ref'&&v.content?.source==='block-output'&&v.content?.blockID;
@@ -412,7 +419,7 @@ function renderAll(){
       const tp=inPortPos(tn, p.name);
       const key=tn.id+'::'+p.name;
       const sel=selEdge&&selEdge.kind==='var'&&selEdge.key===key;
-      const col=fieldColor(p.input?.type||'string');
+      const col=fieldColor(_effInput(p).type||'string');
       // 源端口位置：若 src.name 含点号且源节点展开了该 object，定位到子行；否则定位到父字段行
       let sx;
       if(src.name.includes('.')){
@@ -821,8 +828,9 @@ function renderNode(n){
 
 // 未连线输入控件（placeholder=字段名，宽度由调用方设置）
 function makeInputControl(n,p,i,ph){
-  const t=p.input?.type||'string';
-  const v=p.input?.value;
+  const _eb=_effInput(p);   // type20 读 right（画布字面量控件此前读写错容器）
+  const t=_eb.type||'string';
+  const v=_eb.value;
   const fo=document.createElementNS(NS,'foreignObject');
   fo.setAttribute('width',80);fo.setAttribute('height',16);
   const div=document.createElement('div');
@@ -881,7 +889,8 @@ function makeInputControl(n,p,i,ph){
 }
 function setInputLiteral(nodeId,i,value){
   const n=findN(nodeId);if(!n)return;
-  n.data.inputs.inputParameters[i].input.value=value;
+  const p=n.data.inputs.inputParameters[i];if(!p)return;
+  _valBlockW(p,n).value=value;   // type20 值容器是 right（此前写 input → 专用区读 right 恒空）
   renderAll();
 }
 
@@ -944,7 +953,7 @@ function doDisconnect(info){
       else{
         const p=tn?.data.inputs.inputParameters.find(x=>x.name===info.tgtField)
           || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===info.tgtField):null);
-        if(p){p.input.value={type:'literal',content:''};toast('已断开变量线');}
+        if(p){_valBlockW(p,tn).value={type:'literal',content:''};toast('已断开变量线');}
       }
     }
   }
@@ -996,9 +1005,8 @@ function finishVar(tgtId,field,color){
     || (['21','28'].includes(tn.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===parent):null);
   if(!p){edgeFrom=null;toast('目标无匹配输入字段');renderAll();return;}
   // 源可能是子字段(点号)或整对象；name 用完整路径，执行器按点号取值
-  // type20 的值存在 right 里
-  const target=tn.type==='20'?p.right:p.input;
-  if(!target){p.input={type:'string',value:{}};target=p.input;}
+  // type20 的值存在 right 里（fallback 此前写错容器：type20 无 right 时建到 input 上，专用区读 right 恒空）
+  const target=_valBlockW(p,tn);
   target.value={type:'ref',content:{source:'block-output',blockID:edgeFrom.nodeId,name:edgeFrom.field}};
   if(field.includes('.')) target.type=color2type(color);
   // list→list 连线：同步输入端口的 type + item schema 与源输出一致（普通节点 + 复合节点统一处理）
@@ -1089,7 +1097,7 @@ svg.addEventListener('contextmenu',(e)=>{
     else{
       const p=tn?.data.inputs.inputParameters.find(x=>x.name===fname)
         || (['21','28'].includes(tn?.type)?(tn.data.inputs.variableParameters||[]).find(x=>x.name===fname):null);
-      if(p)p.input.value={type:'literal',content:''};
+      if(p)_valBlockW(p,tn).value={type:'literal',content:''};
     }
     selEdge=null;renderAll();
   }
@@ -1972,20 +1980,22 @@ function setInputRef(i,val){
   const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
   const on=findN(bid);
   const of=(on?_outFieldOptions(on):[]).find(x=>x.path===name);
-  p.input.value={type:'ref',content:{source:'block-output',blockID:bid,name}};
-  if(of)p.input.type=of.type||'string';
+  const blk=_valBlockW(p,n);   // type20 值容器是 right——此前写 p.input 直接炸（undefined.value）
+  blk.value={type:'ref',content:{source:'block-output',blockID:bid,name}};
+  if(of)blk.type=of.type||'string';
   showProps();renderAll();
 }
 function setInputLitVal(i,v){const n=findN(selNode);setInputLiteral(n.id,i,{type:'literal',content:v});}
 function setInputSource(i,src){
   const n=findN(selNode);const p=nodeInputs(n)[i];if(!p)return;
-  if(src==='node')p.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
-  else if(src==='item')p.input.value={type:'ref',content:{source:'loop-item',name:''}};
-  else if(src==='index')p.input.value={type:'ref',content:{source:'loop-index'}};
-  else if(src.startsWith('item.'))p.input.value={type:'ref',content:{source:'loop-item',name:src.slice(5)}};
-  else if(src==='global')p.input.value={type:'ref',content:{source:'global_variable_app',path:['']}};
-  else if(src==='local')p.input.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
-  else if(src==='literal')p.input.value={type:'literal',content:''};
+  const blk=_valBlockW(p,n);   // type20 值容器是 right
+  if(src==='node')blk.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
+  else if(src==='item')blk.value={type:'ref',content:{source:'loop-item',name:''}};
+  else if(src==='index')blk.value={type:'ref',content:{source:'loop-index'}};
+  else if(src.startsWith('item.'))blk.value={type:'ref',content:{source:'loop-item',name:src.slice(5)}};
+  else if(src==='global')blk.value={type:'ref',content:{source:'global_variable_app',path:['']}};
+  else if(src==='local')blk.value={type:'ref',content:{source:'block-output',blockID:'',name:''}};
+  else if(src==='literal')blk.value={type:'literal',content:''};
   showProps();renderAll();
 }
 
@@ -1997,7 +2007,7 @@ function renderIOFields(arr,kind,lockedAll){
   arr.forEach((f,i)=>{
     const bg=i%2?'io-fbg-odd':'io-fbg-even';
     h+=`<tbody class="${bg}">`;
-    const t=f.input?.type||f.type||'string';
+    const t=_effInput(f).type||f.type||'string';   // type20 读 right（类型下拉此前恒显示 string）
     const locked=lockedAll||(n&&kind==='in'&&(['22'].includes(n.type)&&f.name==='query'||(['4','9'].includes(n.type)&&t!=='any')));  // any 类型不锁（透传/组装用）
     // 行内操作按钮（仅 object / list<object> 显示）：📋=该字段粘贴JSON导入子字段结构；+=添加子字段
     // ——插在 ×/🔒 与类型下拉之间（用户布局偏好），子字段块内的同名按钮上移消重
@@ -2012,7 +2022,7 @@ function renderIOFields(arr,kind,lockedAll){
       // 值按钮：ref 绑定优先显示 displayName（节点.字段/item/index/global），未绑定显示字面量值；
       // 点击展开当前类型的字面量输入控件（输入即覆盖为 literal）；▾ 弹出引用选择
       const sm=_srcMeta(f);
-      const lit=String(f.input?.value?.content ?? '');
+      const lit=String(_effInput(f).value?.content ?? '');
       const _trunc=s=>s.length>22?s.slice(0,21)+'…':s;
       const btnTxt=sm?('🔗 '+sm.name):(lit?_trunc(lit):'（字面量）');
       h+=`<tr style="display:flex;width:100%;gap:2px;align-items:center">`
@@ -2045,12 +2055,13 @@ function renderIOFields(arr,kind,lockedAll){
         +`<button onclick="_valEditing=null;showProps()" style="font-size:10px" title="收起">✓</button></div></td></tr>`;
     }
     if(kind==='in'&&_refPicking===('in:'+i)){
-      const c=f.input?.value?.content;
+      const _eb=_effInput(f);   // type20 读 right
+      const c=_eb.value?.content;
       let curRef='';
       if(c?.source==='block-output'&&c.blockID)curRef=c.blockID+'.'+(c.name||'');
       else if(c?.source==='loop-item')curRef='__item';
       else if(c?.source==='loop-index')curRef='__index';
-      const inType=f.input?.type||'string';
+      const inType=_eb.type||'string';
       h+=`<tr><td colspan="6" style="padding:2px 4px;font-size:10px"><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">`
         +`<select style="flex:1 1 150px;min-width:120px;max-width:100%" onchange="quickSetRef(${i},this.value)">`
         +`<option value=""${curRef?'':' selected'}>（字面量/未选）</option>`;
@@ -2089,7 +2100,7 @@ function renderIOFields(arr,kind,lockedAll){
 let _valEditing=null, _refPicking=null;   // 展开态：'in:<i>'（同一时刻只展开其一，互斥）
 // 值来源元信息：ref 绑定返回 {name: displayName}，literal/未绑定返回 null
 function _srcMeta(f){
-  const v=f.input?.value, c=v?.content;
+  const v=_effInput(f).value, c=v?.content;   // type20 读 right（值按钮此前恒显示"（字面量）"）
   if(v?.type==='literal'||!c||!c.source)return null;
   if(c.source==='block-output'&&c.blockID){
     const on=findN(c.blockID);
@@ -2102,8 +2113,9 @@ function _srcMeta(f){
 }
 // 当前类型的字面量输入控件（展开行用）
 function _litControlHTML(f,i){
-  const t=f.input?.type||'string';
-  const cur=String(f.input?.value?.content ?? '');
+  const _eb=_effInput(f);   // type20 读 right
+  const t=_eb.type||'string';
+  const cur=String(_eb.value?.content ?? '');
   if(t==='boolean')return `<input type="checkbox"${(cur==='true'||cur===true)?' checked':''} onchange="updateLitValB(${i},this.checked)" style="width:auto"> <span style="color:#8a9099">true / false</span>`;
   if(['integer','number','float'].includes(t))return `<input type="number" value="${ext(cur)}" placeholder="数值字面量" style="width:90px" onchange="updateLitVal(${i},this.value)">`;
   return `<input value="${ext(cur)}" placeholder="字面量值" style="width:140px" onchange="updateLitVal(${i},this.value)">`;
@@ -2224,14 +2236,15 @@ function renderVarLinks(n){
   if(!ps.length||n.type==='32')return '';
   let h=`<details style="margin:4px 0"><summary style="cursor:pointer;color:#61afef;font-size:11px;padding:2px 0">🔗 变量连线（输入字段 ← 上游输出）</summary><div style="padding:2px 0 2px 6px">`;
   ps.forEach((p,i)=>{
-    const c=p.input?.value?.content;
+    const _eb=_effInput(p);   // type20 读 right
+    const c=_eb.value?.content;
     let cur='';
-    if(p.input?.value?.type==='ref'){
+    if(_eb.value?.type==='ref'){
       if(c?.source==='block-output'&&c.blockID)cur=c.blockID+'.'+(c.name||'');
       else if(c?.source==='loop-item')cur='__item';
       else if(c?.source==='loop-index')cur='__index';
     }
-    const inType=p.input?.type||'string';
+    const inType=_eb.type||'string';
     h+=`<div style="display:flex;gap:3px;align-items:center;margin:2px 0">`
       +`<span style="flex:0 0 58px;font-size:10px;color:${fieldColor(inType)}" title="${inType}">${ext(p.name)}</span>`
       +`<select onchange="setVarLink(${i},this.value)" style="flex:1;font-size:10px">`
@@ -2371,7 +2384,7 @@ function deleteSelectedNode(){
   if(['100001','900001'].includes(selNode)){toast('开始/结束节点不可删除');return;}
   WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
   WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
-  WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)p.input.value={type:'literal',content:''};}));
+  WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)_valBlockW(p,n).value={type:'literal',content:''};}));
   selNode=null;showProps();renderAll();
   toast('已删除节点');
 }
@@ -2410,7 +2423,7 @@ function setField(kind,i,field,v){
   const arr=findArr(kind);const f=arr[i];
   if(field==='name')f.name=v;
   if(field==='description')f.description=v;
-  if(field==='type'){if(kind==='in'){f.input.type=v;if(v!=='list'&&v!=='object')delete f.input.schema;}else{f.type=v;if(v!=='list'&&v!=='object')delete f.schema;}
+  if(field==='type'){if(kind==='in'){const _vb=_valBlockW(f,n);_vb.type=v;if(v!=='list'&&v!=='object')delete _vb.schema;}else{f.type=v;if(v!=='list'&&v!=='object')delete f.schema;}
     // 复合节点：item 类型变更时，all/filtered/nth 的 schema 跟随
     if(['21','28'].includes(n.type)&&kind==='out'){
       const outs=n.data.outputs||[];
@@ -2434,8 +2447,8 @@ function addAggrGroup(){
   n.data.outputs=n.data.outputs||[]; n.data.outputs.push({name:nm,type:'string'});
   showProps();renderAll();
 }
-function setRefPath(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.path=[v];showProps();}
-function setRefName(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];p.input.value.content.name=v;showProps();}
+function setRefPath(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];_valBlockW(p,n).value.content.path=[v];showProps();}
+function setRefName(i,v){const n=findN(selNode);const p=nodeInputs(n)[i];_valBlockW(p,n).value.content.name=v;showProps();}
 function _ensureCond(br,ci){
   if(!br.condition)br.condition={logic:2,conditions:[]};
   if(!br.condition.conditions[ci])br.condition.conditions[ci]={operator:1,left:{input:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}}},right:{input:{type:'string',value:{type:'literal',content:''}}}};
@@ -2864,6 +2877,7 @@ async function openWf(name){
   WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
   WF.nodes.forEach(syncToolNode);   // 插件节点按 toolName schema 补全空输入/输出字段
+  WF.nodes.forEach(syncPluginOutputs);   // 节点插件默认 outputs 补齐（手写 XML/旧存档无 <out> 声明 → 端口丢失）
   // 子工作流节点按目标工作流 schema 同步输入/输出字段（保留已连的线）
   Promise.all(WF.nodes.filter(n=>n.type==='9'&&n.data.inputs?.workflowId).map(syncSubworkflowNode)).then(()=>{autoLayout(true);if(selNode)showProps();});
   document.getElementById('fileSel').value=name;
@@ -2881,6 +2895,18 @@ async function openWf(name){
   document.getElementById('fstatus').textContent='';
   WF.nodes.forEach(_uncollapseNode);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
   selNode=null;autoLayout(true);toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
+}
+// 节点插件默认 outputs 补齐：插件 .js 的 defaults.outputs 是该类型节点的【协议端口】
+// （AND 的 result/results 等）。手写 XML（如引擎侧重写工作流）或旧版存档可能缺 <out> 声明——
+// 执行不受影响（handler 运行时返回 outputs），但编辑器渲染端口/连线靠 data.outputs。
+// 与 syncToolNode 同思路：已有端口保留，defaults 声明了而节点缺的按名字补（深拷贝防串改模板）。
+function syncPluginOutputs(n){
+  const tpl=NODE_TEMPLATES[n.type];
+  if(!tpl||!Array.isArray(tpl.outputs)||!tpl.outputs.length)return;
+  const outs=n.data.outputs||(n.data.outputs=[]);
+  tpl.outputs.forEach(o=>{
+    if(!outs.find(x=>x.name===o.name)) outs.push(JSON.parse(JSON.stringify(o)));
+  });
 }
 // 钩子位置→schema 约定（onHookChange/HOOK_INPUTS 已随 fhook 下拉移除：钩子挂载统一走 /agents 管理页的 hooks 编辑；
 // 新建钩子工作流的 start/end schema 由 Agent 手写或参考 .agent/workflows/ 现有钩子工作流）

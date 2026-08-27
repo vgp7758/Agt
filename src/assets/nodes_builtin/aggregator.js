@@ -9,7 +9,7 @@ EdFW.register({
              inputs: {mergeGroups: [{name: "Group1", variables: []}]},
              outputs: [{name: "Group1", type: "string"},
                        {name: "index", type: "integer", fixed: true,
-                        description: "拿到值的分组序号(0起，全空=-1。调试用)"}]},
+                        description: "贡献值的变量序号(组内0起，全空=-1。调试用：观测哪个分支端口拿到值)"}]},
   params: [
     { key: "groups", label: "分组", widget: "groups",
       get(n) { return String((n.data.inputs?.mergeGroups || []).length); }, set() {} },

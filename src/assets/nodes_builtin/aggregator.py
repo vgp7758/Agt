@@ -10,7 +10,7 @@
 PARAMS = [
     {"key": "mergeGroups", "type": "list", "required": True,
      "desc": "分组列表；每项 {name, variables:[{type, value(ref|literal)}]}——"
-             "取第一个【执行过且值非空】的变量作为分组输出；另有协议输出 index：拿到值的分组 0 起序号（全空=-1）"},
+             "取第一个【执行过且值非空】的变量作为分组输出；另有协议输出 index：贡献值的变量组内序号(0起，全空=-1)"},
 ]
 
 from workflow_node_api import resolve_value
@@ -19,12 +19,14 @@ from workflow_node_api import resolve_value
 def _handle_aggregator(node: dict, ctx) -> dict:
     groups = node.get("data", {}).get("inputs", {}).get("mergeGroups", [])
     out = {}
+    var_idx = []   # 每分组：贡献值的变量序号（chosen 优先，fallback 次之；全空 None）
     for g in groups:
         gname = g.get("name")
         chosen = None
         fallback = None
         has_fallback = False
-        for bi in g.get("variables", []):
+        vi = vi_fb = None
+        for i, bi in enumerate(g.get("variables", [])):
             val = bi.get("value", bi) if isinstance(bi, dict) else {}
             content = val.get("content") if isinstance(val, dict) else None
             if isinstance(content, dict) and content.get("source") == "block-output":
@@ -32,22 +34,28 @@ def _handle_aggregator(node: dict, ctx) -> dict:
                     continue   # 该分支未执行过：跳过（继续看后续变量）
                 v = resolve_value(bi, ctx)
                 if v is not None and v != "":
-                    chosen = v          # 执行过且有值：选定
+                    chosen, vi = v, i   # 执行过且有值：选定（记变量序号）
                     break
                 if not has_fallback:    # 执行过但无值：记兜底，继续找后面的
-                    fallback, has_fallback = v, True
+                    fallback, has_fallback, vi_fb = v, True, i
             else:
                 v = resolve_value(bi, ctx)  # 字面量/全局变量：取非空者
                 if v is not None:
-                    chosen = v
+                    chosen, vi = v, i
                     break
         out[gname] = chosen if chosen is not None else fallback
-    # index 调试端口（协议输出）：第一个【值非空】分组的 0 起序号——selector/intent 汇聚时
-    # = 实际走到的分支编号，画布连线/调试页一眼看出哪个端口拿到值；全空 = -1。
+        var_idx.append(vi if chosen is not None else (vi_fb if has_fallback else None))
+    # index 调试端口（协议输出，变量级）：第一个【值非空】分组内贡献值的变量 0 起序号——
+    # selector/intent 分支经聚合汇聚时 = 实际走到的路径/分支编号（组内变量按声明序对应各路径），
+    # 画布连线/调试页一眼看出哪个端口拿到值；全空 = -1。
     # 分组名恰好叫 "index" 时不覆盖（该分组的输出优先）。
     if "index" not in out:
-        out["index"] = next((i for i, g in enumerate(groups)
-                             if out.get(g.get("name")) not in (None, "")), -1)
+        idx = -1
+        for gi, g in enumerate(groups):
+            if out.get(g.get("name")) not in (None, ""):
+                idx = var_idx[gi] if var_idx[gi] is not None else -1
+                break
+        out["index"] = idx
     return {"outputs": out, "port": None}
 
 

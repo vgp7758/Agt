@@ -1,4 +1,4 @@
-<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存）：kv_cache_read 按 user_message 查缓存，命中直接返回；未命中则 local-qwen 提取 3~10 个关键词（纯文本 | 分隔——3B 模型输出 JSON schema 吃力）→ split 切分 → code 清洗（strip/去空/去重）→ 写回缓存。同轮多个 before_turn 工作流共用，只花第一次的 LLM 调用（hidden，仅供 subworkflow 引用）" hidden="true">
+<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + pending 互斥）：kv_cache_read 按 user_message 查缓存，命中真实值直接返回；读到 pending（并发方正在提取）→ 等待循环（2s 轮询×15 次）直到对方写回后取走（setvar→break 携带值）；未命中则写 pending 占位 → local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。同轮多个 before_turn 工作流共用，只花第一次的 LLM 调用（hidden，仅供 subworkflow 引用）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
@@ -7,27 +7,29 @@
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="hit" type="boolean"/>
     <out name="value" type="any"/>
+    <batch enabled="false"/>
   </node>
   <node id="120001" type="selector" title="cache_hit?" x="720" y="80">
+    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
   </node>
-  <node id="130001" type="llm" title="extract" x="1020" y="80">
+  <node id="130001" type="llm" title="extract" x="1320" y="80">
     <in name="q" type="string" ref="100001.user_message"/>
     <param name="temperature" type="string"><![CDATA[0.2]]></param>
     <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
     <param name="prompt" type="string"><![CDATA[{{q}}]]></param>
-    <model>local-qwen</model>
     <param name="output_format" type="string"><![CDATA[text]]></param>
+    <model>local-lfm-vl</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="130002" type="plugin" title="split" x="1320" y="80" toolName="split">
+  <node id="130002" type="plugin" title="split" x="1620" y="80" toolName="split">
     <in name="text" type="string" ref="130001.output"/>
     <in name="separator" type="string">|</in>
     <out name="raw" type="list"/>
     <out name="result" type="any" description="工具返回值"/>
   </node>
-  <node id="130003" type="code" title="clean" x="1620" y="80">
+  <node id="130003" type="code" title="clean" x="1920" y="80">
     <in name="items" type="list" ref="130002.raw"/>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 清洗：strip（模型可能在 | 两侧带空格/换行）、去空、去重（保序）、剔超长项
@@ -41,27 +43,109 @@
     <out name="keywords" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="140001" type="plugin" title="cache_write" x="1920" y="80" toolName="kv_cache_write">
+  <node id="140001" type="plugin" title="cache_write" x="2220" y="80" toolName="kv_cache_write">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="value" type="any" ref="130003.keywords"/>
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2520" y="80">
+  <node id="900001" type="end" title="Exit_hit" x="2820" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
   </node>
-  <node id="933950" type="aggregator" title="变量聚合" x="2220" y="80">
-    <group name="Group1" type="list"><var ref="110001.value" type="list"/><var ref="130003.keywords" type="list"/></group>
+  <node id="933950" type="aggregator" title="变量聚合" x="2520" y="80">
+    <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="110001.value" type="list"/></group>
+  </node>
+  <node id="908175" type="plugin" title="write_pending" x="1020" y="80" toolName="kv_cache_write">
+    <in name="key" type="string" ref="100001.user_message"/>
+    <in name="value" type="string">pending</in>
+    <in name="namespace" type="string">kw_extract_v2</in>
+    <out name="result" type="object" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="129000" type="code" title="init_kw" x="1020" y="208">
+    <in name="x" type="string">init</in>
+    <code language="3"><![CDATA[async def main(args) -> dict:
+    # 等待循环的 keywords 变量初值：空表（list var 的 literal 初值会是字符串，经 code 节产出正确类型；
+    # 超时保持空表 → 聚合器选中空表 → 调用方拿到 [] 零关键词，优雅跳过本轮注入）
+    return {"empty": []}]]></code>
+    <out name="empty" type="list"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="1275951" type="loop" title="wait_extract" x="1320" y="314">
+    <param name="loopType"><![CDATA[count]]></param>
+    <param name="loopCount" type="integer"><![CDATA[15]]></param>
+    <var name="keywords" type="list" ref="129000.empty"/>
+    <in name="user" type="string" ref="100001.user_message"/>
+    <out name="keywords" type="list" description="等待到的关键词（超时=空表，调用方零注入兜底）" ref="1275951.keywords"/>
+    <out name="all_outputs" type="list" description="所有结果" itemType="list"/>
+    <out name="filtered_outputs" type="list" description="筛选结果" itemType="list"/>
+    <out name="nth_output" type="list" description="第n个结果"/>
+    <blocks>
+      <node id="__entry__" type="start" title="迭代入口" x="120" y="80">
+    <out name="index" type="integer" description="当前索引(0起)"/>
+    <out name="keywords" type="list" description="本地变量(可被置变量修改)"/>
+    <out name="user" type="string" description="复合节点输入"/>
+  </node>
+      <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80"/>
+      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154">
+    <in name="result" type="list">{'source': 'block-output', 'blockID': '', 'name': ''}</in>
+    <batch enabled="false"/>
+  </node>
+      <node id="693978" type="plugin" title="sleep" x="420" y="80" toolName="sleep">
+    <in name="seconds" type="number">2</in>
+    <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="570563" type="plugin" title="recheck" x="720" y="80" toolName="kv_cache_read">
+    <in name="key" type="string" ref="__entry__.user"/>
+    <in name="namespace" type="string">kw_extract_v2</in>
+    <out name="hit" type="boolean" description="是否命中缓存"/>
+    <out name="value" type="any" description="缓存的值（未命中为 null）"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="1057177" type="AND" title="ready?" x="1020" y="80">
+    <branch><cond op="2" left="570563.value" right="pending" left_type="any"/></branch>
+    <branch><cond op="11" left="570563.hit" right="" left_type="boolean"/></branch>
+    <batch enabled="false"/>
+  </node>
+      <node id="1306597" type="selector" title="dispatch" x="1320" y="80">
+    <branch><cond op="11" left="1057177.result" right="" left_type="boolean"/></branch>
+  </node>
+      <node id="1544480" type="plugin" title="capture" x="1620" y="80" toolName="pass_through">
+    <in name="input" type="any" ref="570563.value"/>
+    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <batch enabled="false"/>
+  </node>
+      <node id="1544481" type="setvar" title="set_keywords" x="1920" y="80">
+    <in name="keywords" left="__entry__.keywords" left_type="list" right="ref:1544480.raw" right_type="list"/>
+  </node>
+    </blocks>
+    <edges>
+    <edge source="1275951" target="__entry__" sourcePort="loop-function-inline-output"/>
+    <edge source="__entry__" target="693978"/>
+    <edge source="693978" target="570563"/>
+    <edge source="570563" target="1057177"/>
+    <edge source="1057177" target="1306597"/>
+    <edge source="1306597" target="1544480" sourcePort="true"/>
+    <edge source="1544480" target="1544481"/>
+    <edge source="1544481" target="__break__"/>
+    <edge source="1306597" target="__continue__" sourcePort="false"/>
+    </edges>
+    <batch enabled="false" nth="-1"/>
   </node>
   <edge from="100001" to="110001"/>
   <edge from="110001" to="120001"/>
-  <edge from="120001" to="130001" port="false"/>
   <edge from="130001" to="130002"/>
   <edge from="130002" to="130003"/>
   <edge from="130003" to="140001"/>
-  <edge from="120001" to="933950" port="true"/>
+  <edge from="120001" to="933950" port="true_1"/>
   <edge from="933950" to="900001"/>
   <edge from="140001" to="933950"/>
+  <edge from="120001" to="908175" port="false"/>
+  <edge from="908175" to="130001"/>
+  <edge from="120001" to="129000" port="true"/>
+  <edge from="129000" to="1275951"/>
+  <edge from="1275951" to="933950"/>
 </workflow>

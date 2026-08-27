@@ -12,3 +12,7 @@ hooks:
   turn_end:
   - workflow: recap_gen
     async: true
+fallback:
+- ms-deepseek
+- deepseek
+- local-lfm

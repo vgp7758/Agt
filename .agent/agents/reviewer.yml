@@ -16,4 +16,5 @@ fallback:
   - glm
   - ms-deepseek
   - deepseek-chat
+  - local-lfm
   policy: reset

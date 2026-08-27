@@ -13,11 +13,11 @@
     <param name="prompt" type="string"><![CDATA[user message：
 {{user_message}}
 
-assistant answer：
+your answer：
 {{answer}}]]></param>
-    <param name="systemPrompt" type="string"><![CDATA[You are a summarizer. Summarize in one sentence what the assistant did in this round of conversation (no more than 30 tokens). Only output the sentence itself, without any explanation, quotation marks, prefixes, or special symbols]]></param>
-    <model>local-qwen</model>
+    <param name="systemPrompt" type="string"><![CDATA[You are a summarizer. Summarize in one sentence what you did in this round of conversation (no more than 30 tokens). Only output the sentence itself, without any explanation, quotation marks, prefixes, or special symbols]]></param>
     <param name="output_format" type="string"><![CDATA[text]]></param>
+    <model>local-lfm</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

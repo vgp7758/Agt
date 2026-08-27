@@ -287,6 +287,10 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     reconnect_all(background=True)   # 后台探测（远程机器未开机时 5s 超时×N 不阻塞启动）
     _reg(mcp_mgr.get_tools(), "MCP")
     _reg(make_subagent_tools(agent), "子Agent")
+    # 钩子副作用工具（hook_write）：recap_gen 等钩子工作流经 hook_ctx 组装 payload 调它回写——
+    # 回写从引擎特判移到工作流数据流（用户提案：多钩子共存时"以谁为准"由工作流显式决定）
+    from multiagent import make_hook_side_effects
+    _reg(make_hook_side_effects(agent), "钩子")
     _reg(SKILL_TOOLS, "技能")
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")

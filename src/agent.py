@@ -1128,6 +1128,12 @@ class Agent:
             return []
         from real_tools import WORKSPACE as _ws
         from workflow import run_hook
+        # 钩子上下文袋（用户提案）：start 声明 hook_ctx(object) 输入时整袋可取——
+        # 含 turn_idx 等引擎元信息，工作流组装 payload 后调 hook_write 工具决定回写
+        context = dict(context)
+        if "turn_idx" not in context:
+            context["turn_idx"] = len(self.session.turns) if hook == "turn_end" else -1
+        context["hook_ctx"] = dict(context)
         tasks = self._hook_tasks(hook)
         # 拆分：emit 即时执行（同步发事件）；cmd 走同步执行器；workflow 走原 sync/async 并发
         emit_tasks = [t for t in tasks if t["kind"] == "emit"]
@@ -1169,10 +1175,7 @@ class Agent:
                 _hook = hook
                 _rid_c = _rid
                 _ctx = dict(context)
-                # turn_end 钩子的 recap 回写目标轮：此刻 finish_turn 还没跑（钩子在 finish 前触发），
-                # 正在收尾的轮归档后将落在 index=len(turns)（无其它轮可插队——_current 是唯一在飞轮）；
-                # turn_end 注入重做（continue 分支）时轮延后归档，但落点 index 不变。
-                _turn_idx = len(self.session.turns) if hook == "turn_end" else -1
+                # turn_end 钩子的轮号已进 hook_ctx（context 袋）——工作流 hook_write 据它回写 Turn.recap
                 def _async_hook():
                     try:
                         _llm = _agent_ref.utility_client()
@@ -1186,22 +1189,10 @@ class Agent:
                             _llm._scene_override = _ov
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
-                        # recap 工作流回写：meta.recap=true 的异步钩子，结果写 agent._recap（队友可见，
-                        # 不进自己上下文）——recap_gen 等本地小模型总结工作流的引擎侧落点。
-                        # 错误过滤：LLM 端点挂掉/回退链耗尽时 run_hook 会把错误文本当 result 返回
-                        # （如 "APIStatusError: Error code: 402..."）——特征识别，不污染 recap（保持旧值）
-                        _RECAP_ERR_MARKS = ("APIStatusError", "APIConnectionError", "APITimeoutError",
-                                            "RateLimitError", "Error code:", "执行失败", "Traceback",
-                                            "[工作流", "出错]", "BadRequestError")
-                        if (_hw.get("recap") or (_hw.get("meta") or {}).get("recap") or _hw.get("name") == "recap_gen") and (result or "").strip():
-                            _rc = (result or "").strip().split("\n")[0].strip()[:60]
-                            if _rc and not any(mk in _rc for mk in _RECAP_ERR_MARKS):
-                                _agent_ref._recap = _rc
-                                if _agent_ref.registry:
-                                    _agent_ref.registry.update_recap(_agent_ref.agent_id, _rc)
-                                if _turn_idx >= 0:
-                                    # 回写 Turn.recap（fc 折叠摘要行用；recap_gen 本地小模型的产出落到轮上）
-                                    _agent_ref.session.set_turn_recap(_turn_idx, _rc)
+                        # 【recap 回写已移到工作流数据流】：钩子工作流经 hook_ctx 拿 turn_idx，
+                        # 组装 {"action":"set_recap","value":...,"turn":N} 调 hook_write 工具回写
+                        # 三落点（multiagent.make_hook_side_effects）——多个 turn_end 钩子共存时
+                        # "以谁为准"由工作流显式决定（谁调 hook_write 谁负责），引擎不再特判。
                         if message.strip():
                             _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
                                         "text": message, "auto": True})

@@ -38,6 +38,8 @@ _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"
                      "list_team", "agent_ask", "agent_notify",
                      "agent_query_events", "agent_query_tool_detail", "wait_subagents",
                      "get_session_history", "semantic_search_history", "rename_session",
+                     # 钩子副作用工具：闭包绑定 agent（写 _recap/registry/Turn.recap）——子 Agent 需重绑自身版本
+                     "hook_write",
                      # spec 五件套：闭包绑定创建时的 agent（主 Agent）——被子 Agent 继承会
                      # 跨 agent 串写状态（子 Agent 建 spec 会挂到主 Agent、气泡弹到主会话）
                      "create_spec", "commit_spec", "regenerate_spec", "list_specs", "recall_spec"}
@@ -92,6 +94,10 @@ class SubAgent:
         # 而不是继承自主 Agent 的闭包（那会查到主 Agent 的历史）
         from session_tools import make_session_tools
         for t in make_session_tools(self.agent):
+            self.agent.tools.register(t)
+        # 钩子副作用工具同样重绑：turn_end 钩子（recap_gen）里的 hook_write 必须
+        # 写【子 Agent 自己】的 _recap/registry/Turn——不能继承主 Agent 闭包版本
+        for t in make_hook_side_effects(self.agent):
             self.agent.tools.register(t)
         self.caller_id = caller_id or ""
 
@@ -561,6 +567,62 @@ def make_communication_tools(agent) -> list:
         return []
     return [Tool(list_team), Tool(agent_ask), Tool(agent_notify),
             Tool(agent_query_events), Tool(agent_query_tool_detail)]
+
+
+# recap 错误特征：LLM 端点挂掉/回退链耗尽时 run_hook 会把错误文本当 result 返回——
+# 不污染 recap（保持旧值）。从 agent.py 的 _async_hook 引擎侧回写迁移而来（见 make_hook_side_effects）
+_RECAP_ERR_MARKS = ("APIStatusError", "APIConnectionError", "APITimeoutError",
+                    "RateLimitError", "Error code:", "执行失败", "Traceback",
+                    "[工作流", "出错]", "BadRequestError")
+
+
+def make_hook_side_effects(agent) -> list:
+    """钩子工作流的副作用写入工具（hidden，仅 plugin 节点调用）。
+    用户提案：回写从引擎特判（_async_hook 的 recap 分支 + meta.recap 契约标志）移到工作流数据流——
+    多个 turn_end 钩子共存时"以谁为准"由工作流显式决定（谁调 hook_write 谁负责，后写覆盖），
+    而不是引擎靠 name 兜底猜。工作流经 hook_ctx（start 的 object 输入，引擎注入整袋上下文
+    含 turn_idx）拿到轮号等元信息，组装 payload 后调本工具。
+    payload 键值分派：{"action":"set_recap","value":"一句话","turn":轮号} → 三落点回写。"""
+    import json as _json
+
+    def hook_write(payload: dict) -> str:
+        """钩子副作用写入。payload={"action":"set_recap","value":"≤60字总结","turn":轮号}：
+        set_recap 写 agent._recap（队友看板）+ registry 条目 + Turn.recap（recaps.jsonl 持久化，
+        fc 折叠摘要行优先用）。值疑似 LLM 错误文本（APIStatusError 等）时跳过保持旧值。"""
+        try:
+            d = payload if isinstance(payload, dict) else _json.loads(payload)
+        except Exception:
+            return "[hook_write] payload 需为对象（含 action 键）"
+        if not isinstance(d, dict):
+            return "[hook_write] payload 需为对象"
+        act = str(d.get("action") or "").strip()
+        if act == "set_recap":
+            rc = str(d.get("value") or "").strip().split("\n")[0].strip()[:60]
+            if not rc or any(mk in rc for mk in _RECAP_ERR_MARKS):
+                return "[hook_write] set_recap 值为空或疑似错误文本，跳过（保持旧值）"
+            agent._recap = rc
+            reg = getattr(agent, "registry", None)
+            if reg:
+                try:
+                    reg.update_recap(agent.agent_id, rc)
+                except Exception:
+                    pass
+            t = d.get("turn")
+            try:
+                t = int(t)
+            except (TypeError, ValueError):
+                t = -1
+            if t >= 0:
+                try:
+                    agent.session.set_turn_recap(t, rc)
+                except Exception as e:
+                    _LOG.warning("hook_write set_recap 落 Turn 失败(turn=%s): %s", t, e)
+            return f"✅ recap 已写入（turn={t}）：{rc[:40]}"
+        return f"[hook_write] 未知 action：{act or '(空)'}（支持：set_recap）"
+
+    t = Tool(hook_write)
+    t.hidden = True   # 仅钩子工作流 plugin 节点调用，不投影主 LLM
+    return [t]
 
 
 def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):

@@ -2964,11 +2964,11 @@ function syncPluginOutputs(n){
 // （协议声明 + schema 规范化：仅声明本工作流实现什么钩子协议——挂载归 /agents 的 .yml hooks 声明；
 //   磁盘 meta.hook 根属性供无 yml 声明场景（播种面）的 get_hook_workflows 扫描）
 const HOOK_INPUTS={
-  before_turn:[['user_message','string','用户本轮消息']],
-  before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)']],
-  after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果'],['changed_files','string','引擎快照diff的变更文件清单(JSON数组串)']],
-  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答'],['changed_calls','string','有文件变更的工具调用原文清单(JSON数组，含call_id/arguments/结果预览)']],
-  turn_end:[['user_message','string','用户本轮消息'],['draft_answer','string','最终回答'],['turn_context','string','本轮上下文摘要']],
+  before_turn:[['user_message','string','用户本轮消息'],['hook_ctx','object','钩子上下文袋（含 turn_idx 等引擎元信息——组装 payload 调 hook_write 用）']],
+  before_tool:[['user_message','string','用户本轮消息'],['tool_name','string','即将调用的工具名'],['tool_args','string','工具参数(JSON串)'],['hook_ctx','object','钩子上下文袋']],
+  after_tool:[['user_message','string','用户本轮消息'],['tool_name','string','刚调用的工具名'],['tool_args','string','工具参数(JSON串)'],['tool_result','string','工具返回结果'],['changed_files','string','引擎快照diff的变更文件清单(JSON数组串)'],['hook_ctx','object','钩子上下文袋']],
+  before_answer:[['user_message','string','用户本轮消息'],['draft_answer','string','模型草拟的最终回答'],['changed_calls','string','有文件变更的工具调用原文清单(JSON数组，含call_id/arguments/结果预览)'],['hook_ctx','object','钩子上下文袋']],
+  turn_end:[['user_message','string','用户本轮消息'],['draft_answer','string','最终回答'],['turn_context','string','本轮上下文摘要'],['hook_ctx','object','钩子上下文袋（含 turn_idx=回写 Turn.recap 的轮号）']],
 };
 const HOOK_LABELS={before_turn:'每轮开始前',before_tool:'工具调用前',after_tool:'工具调用后',before_answer:'最终回答前',turn_end:'本轮完成后'};
 function onHookChange(v){

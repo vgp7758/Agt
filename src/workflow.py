@@ -618,9 +618,16 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
                 return "done", None
             ntype = str(node.get("type"))
             if ntype == "19":
+                # Break 节点：与 Continue 同款解析唯一 result 字段——break 携带值退出
+                # （await 语义：就绪轮的最终结果进 all_outputs 末位；未连 result → None 不占位）
+                for p in node.get("data", {}).get("inputs", {}).get("inputParameters", []):
+                    if p.get("name") == "result":
+                        return "break", resolve_value(p.get("input"), ctx)
                 return "break", None
-            if ntype in ("29", "2"):
-                # Continue 节点：固定取唯一 result 字段经连线解析的值（裸值，不包 dict）。
+            if ntype in ("29", "2", "yield"):
+                # Continue / Yield 节点：固定取唯一 result 字段经连线解析的值（裸值，不包 dict）。
+                # yield ≡ continue(result)——"本轮产出该值"的语义化一等节点（用户提案：
+                # 比"在 continue 上放输出端口"更自然；break 保持纯退出或带终值）。
                 # result.type 与复合节点 nth_output.type 联动（编辑器约定），即 all/filtered 的 itemType。
                 for p in node.get("data", {}).get("inputs", {}).get("inputParameters", []):
                     if p.get("name") == "result":
@@ -821,6 +828,15 @@ def _handle_loop(node: dict, ctx) -> dict:
                 except Exception:
                     pass
         if signal == "break":
+            # break 轮携带值时同样计入 all_outputs（await 语义：就绪轮的最终结果）；
+            # 未带值（result 未连线）不占位——保持纯退出语义
+            if round_out is not None:
+                round_items.append(round_out)
+                if ctx.on_round:
+                    try:
+                        ctx.on_round(composite_id, idx, round_out)
+                    except Exception:
+                        pass
             break
 
     decl = node.get("data", {}).get("outputs", [])
@@ -916,6 +932,12 @@ def _handle_batch(node: dict, ctx) -> dict:
                     ctx.on_round(composite_id, idx, round_out)
                 except Exception:
                     pass
+        if signal == "break":
+            # 批处理体内 Break：停止迭代（此前 break 信号被静默忽略——继续跑完剩余元素）；
+            # 携带值时同样计入约定输出
+            if round_out is not None:
+                round_items.append(round_out)
+            break
         if native:
             saved = ctx.node_outputs
             ctx.node_outputs = body_outputs
@@ -2026,7 +2048,7 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
 
 
 # 执行器支持的所有节点 type（含调度器特判的 entry/exit/break/continue/注释）
-_SUPPORTED_TYPES = set(NODE_HANDLERS.keys()) | {"1", "2", "19", "29", "31"}
+_SUPPORTED_TYPES = set(NODE_HANDLERS.keys()) | {"1", "2", "19", "29", "31", "yield"}
 
 
 def validate_canvas_detailed(canvas: dict) -> list[str]:

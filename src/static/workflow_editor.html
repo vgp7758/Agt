@@ -122,8 +122,8 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 
 <script>
 // ============ 常量 ============
-const TYPE_LABEL={1:'Entry',2:'Exit',3:'LLM',5:'Code',8:'Selector',9:'SubWorkflow',4:'Plugin',13:'Output',15:'Text',19:'Break',20:'SetVar',21:'Loop',22:'Intent',28:'Batch',29:'Continue',32:'Aggregator',40:'Assigner',45:'HTTP',58:'ToJSON',59:'FromJSON'};
-const TYPE_CATEGORY={1:'flow',2:'flow',3:'llm',5:'code',8:'branch',9:'ext',4:'ext',13:'ext',15:'data',21:'composite',22:'llm',28:'composite',32:'data',40:'data',45:'ext',58:'data',59:'data'};
+const TYPE_LABEL={1:'Entry',2:'Exit',3:'LLM',5:'Code',8:'Selector',9:'SubWorkflow',4:'Plugin',13:'Output',15:'Text',19:'Break',20:'SetVar',21:'Loop',22:'Intent',28:'Batch',29:'Continue',32:'Aggregator',40:'Assigner',45:'HTTP',58:'ToJSON',59:'FromJSON',yield:'Yield'};
+const TYPE_CATEGORY={1:'flow',2:'flow',3:'llm',5:'code',8:'branch',9:'ext',4:'ext',13:'ext',15:'data',21:'composite',22:'llm',28:'composite',32:'data',40:'data',45:'ext',58:'data',59:'data',yield:'flow'};
 const HDR_COLOR={flow:'#1a5c2a',llm:'#1a3a6b',code:'#3a1a6b',branch:'#6b3a1a',composite:'#1a6b6b',data:'#4a4a1a',ext:'#4a1a4a'};
 const IO_TYPES=['string','integer','float','number','boolean','object','list','any','file','time'];
 // 变量类型颜色
@@ -546,7 +546,7 @@ function renderNode(n){
     g.appendChild(fIn);
   }
   // 流程出口（2=exit、8/22=分支各自出端口、19/29=循环控制节点 均无流程出口）
-  if(n.type!=='2' && !['8','19','22','29'].includes(n.type)){
+  if(n.type!=='2' && !['8','19','22','29','yield'].includes(n.type)){
     const fOut=elm('circle',{cx:n.w,cy:HDR_H/2,r:6,class:'port-flow',title:'流程出口'});
     fOut.onmousedown=(e)=>{e.stopPropagation();startFlow(n.id);};
     g.appendChild(fOut);

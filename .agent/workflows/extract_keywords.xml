@@ -93,11 +93,10 @@
     <out name="find" type="boolean" description="本地变量(可被置变量修改)"/>
     <out name="user" type="string" description="复合节点输入"/>
   </node>
-      <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80"/>
-      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154">
-    <in name="result" type="list" ref="926184.raw.list"/>
-    <batch enabled="false"/>
+      <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80">
+    <in name="result" type="list" ref="926184.raw"/>
   </node>
+      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154"/>
       <node id="693978" type="plugin" title="sleep" x="420" y="80" toolName="sleep">
     <in name="seconds" type="number">2</in>
     <out name="result" type="string" description="工具返回值"/>

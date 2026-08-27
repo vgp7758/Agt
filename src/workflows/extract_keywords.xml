@@ -2,18 +2,18 @@
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
-  <node id="110001" type="plugin" title="cache_read" x="420" y="80" toolName="kv_cache_read">
+  <node id="110001" type="plugin" title="cache_read" x="414.83643865819363" y="133.7010379547859" toolName="kv_cache_read">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="hit" type="boolean"/>
     <out name="value" type="any"/>
     <batch enabled="false"/>
   </node>
-  <node id="120001" type="selector" title="cache_hit?" x="720" y="80">
-    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
+  <node id="120001" type="selector" title="cache_hit?" x="1320" y="80">
+    <branch><cond op="11" left="1370692.result" right="pending" left_type="boolean"/></branch>
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
   </node>
-  <node id="130001" type="llm" title="extract" x="1320" y="80">
+  <node id="130001" type="llm" title="extract" x="1920" y="80">
     <in name="q" type="string" ref="100001.user_message"/>
     <param name="temperature" type="string"><![CDATA[0.2]]></param>
     <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
@@ -23,13 +23,13 @@
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="130002" type="plugin" title="split" x="1620" y="80" toolName="split">
+  <node id="130002" type="plugin" title="split" x="2220" y="80" toolName="split">
     <in name="text" type="string" ref="130001.output"/>
     <in name="separator" type="string">|</in>
     <out name="raw" type="list"/>
     <out name="result" type="any" description="工具返回值"/>
   </node>
-  <node id="130003" type="code" title="clean" x="1920" y="80">
+  <node id="130003" type="code" title="clean" x="2520" y="80">
     <in name="items" type="list" ref="130002.raw"/>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 清洗：strip（模型可能在 | 两侧带空格/换行）、去空、去重（保序）、剔超长项
@@ -43,29 +43,32 @@
     <out name="keywords" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="140001" type="plugin" title="cache_write" x="2220" y="80" toolName="kv_cache_write">
+  <node id="140001" type="plugin" title="cache_write" x="2820" y="80" toolName="kv_cache_write">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="value" type="any" ref="130003.keywords"/>
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2819" y="80">
+  <node id="900001" type="end" title="Exit_hit" x="3420" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
     <out name="idx" ref="933950.index" type="integer"/>
+    <out name="kw" ref="1275951.keywords" type="list"/>
+    <out name="nth" ref="1275951.nth_output" type="list"/>
+    <out name="and" ref="1370692.result" type="boolean"/>
   </node>
-  <node id="933950" type="aggregator" title="变量聚合" x="2520" y="80">
-    <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="110001.value" type="list"/><var ref="1275951.nth_output" type="list"/></group>
+  <node id="933950" type="aggregator" title="变量聚合" x="3120" y="80">
+    <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="1275951.nth_output" type="list"/><var ref="1482263.raw" type="list"/></group>
   </node>
-  <node id="908175" type="plugin" title="write_pending" x="1020" y="80" toolName="kv_cache_write">
+  <node id="908175" type="plugin" title="write_pending" x="1620" y="80" toolName="kv_cache_write">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="value" type="string">pending</in>
     <in name="namespace" type="string">kw_extract_v2</in>
     <out name="result" type="object" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="129000" type="code" title="init_kw" x="1020" y="208">
+  <node id="129000" type="code" title="init_kw" x="1620" y="208">
     <in name="x" type="string">init</in>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 等待循环的 keywords 变量初值：空表（list var 的 literal 初值会是字符串，经 code 节产出正确类型；
@@ -74,13 +77,12 @@
     <out name="empty" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="1275951" type="loop" title="wait_extract" x="1320" y="314">
+  <node id="1275951" type="loop" title="wait_extract" x="1920" y="314">
     <param name="loopType"><![CDATA[count]]></param>
     <param name="loopCount" type="integer"><![CDATA[90]]></param>
     <var name="keywords" type="list" ref="129000.empty"/>
     <var name="find" type="boolean" literal="False"/>
     <in name="user" type="string" ref="100001.user_message"/>
-    <out name="keywords" type="list" description="等待到的关键词（超时=空表，调用方零注入兜底）" ref="1275951.keywords"/>
     <out name="all_outputs" type="list" description="所有结果" itemType="list"/>
     <out name="filtered_outputs" type="list" description="筛选结果" itemType="list"/>
     <out name="nth_output" type="list" description="第n个结果"/>
@@ -91,11 +93,10 @@
     <out name="find" type="boolean" description="本地变量(可被置变量修改)"/>
     <out name="user" type="string" description="复合节点输入"/>
   </node>
-      <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80"/>
-      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154">
+      <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80">
     <in name="result" type="list" ref="926184.raw"/>
-    <batch enabled="false"/>
   </node>
+      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154"/>
       <node id="693978" type="plugin" title="sleep" x="420" y="80" toolName="sleep">
     <in name="seconds" type="number">2</in>
     <out name="result" type="string" description="工具返回值"/>
@@ -108,31 +109,27 @@
     <out name="value" type="any" description="缓存的值（未命中为 null）"/>
     <batch enabled="false"/>
   </node>
-      <node id="1057177" type="AND" title="ready?" x="1020" y="80">
+      <node id="1057177" type="AND" title="ready?" x="1320" y="80">
     <branch><cond op="2" left="570563.value" right="pending" left_type="any"/></branch>
     <branch><cond op="11" left="__entry__.find" right="" left_type="boolean"/></branch>
     <out name="result" type="boolean"/>
     <out name="results" type="list" itemType="boolean"/>
     <batch enabled="false"/>
   </node>
-      <node id="1306597" type="selector" title="dispatch" x="1320" y="80">
+      <node id="1306597" type="selector" title="dispatch" x="1620" y="80">
     <branch><cond op="11" left="1057177.result" right="" left_type="boolean"/></branch>
     <branch><cond op="1" left="570563.value" right="pending" left_type="any"/></branch>
   </node>
-      <node id="1544480" type="plugin" title="capture" x="1620" y="80" toolName="pass_through">
-    <in name="input" type="any" ref="570563.value"/>
-    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
-    <batch enabled="false"/>
-  </node>
       <node id="1544481" type="setvar" title="set_keywords" x="1920" y="80">
-    <in name="keywords" left="__entry__.keywords" left_type="list" right="ref:1544480.raw" right_type="list"/>
+    <in name="keywords" left="__entry__.keywords" left_type="list" right="ref:926184.raw" right_type="list"/>
   </node>
-      <node id="413345" type="setvar" title="置变量(循环)" x="1620" y="172">
+      <node id="413345" type="setvar" title="置变量(循环)" x="1920" y="172">
     <in name="find" left="find.find" left_type="string" right="ref:570563.hit" right_type="boolean"/>
+    <in name="keywords" left="" left_type="string" right="ref:926184.raw" right_type="list"/>
   </node>
-      <node id="926184" type="plugin" title="pass_through" x="1920" y="172" toolName="pass_through">
+      <node id="926184" type="plugin" title="pass_through" x="1020" y="80" toolName="pass_through">
     <in name="input" type="any" ref="570563.value"/>
-    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）" itemType="string"/>
     <batch enabled="false"/>
   </node>
     </blocks>
@@ -140,20 +137,30 @@
     <edge source="1275951" target="__entry__" sourcePort="loop-function-inline-output"/>
     <edge source="__entry__" target="693978"/>
     <edge source="693978" target="570563"/>
-    <edge source="570563" target="1057177"/>
     <edge source="1057177" target="1306597"/>
-    <edge source="1306597" target="1544480" sourcePort="true"/>
-    <edge source="1544480" target="1544481"/>
     <edge source="1544481" target="__break__"/>
     <edge source="1306597" target="__continue__" sourcePort="false"/>
+    <edge source="413345" target="__continue__"/>
+    <edge source="570563" target="926184"/>
+    <edge source="926184" target="1057177"/>
+    <edge source="1306597" target="1544481" sourcePort="true"/>
     <edge source="1306597" target="413345" sourcePort="true_1"/>
-    <edge source="413345" target="926184"/>
-    <edge source="926184" target="__continue__"/>
     </edges>
     <batch enabled="false" nth="-1"/>
   </node>
+  <node id="1482263" type="plugin" title="pass_through" x="720" y="80" toolName="pass_through">
+    <in name="input" type="any" ref="110001.value"/>
+    <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="1370692" type="AND" title="AND" x="1020" y="80">
+    <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
+    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
+    <out name="result" type="boolean" description="全部条件组满足时为 true"/>
+    <out name="results" type="list" description="每组条件的判定结果"/>
+    <batch enabled="false"/>
+  </node>
   <edge from="100001" to="110001"/>
-  <edge from="110001" to="120001"/>
   <edge from="130001" to="130002"/>
   <edge from="130002" to="130003"/>
   <edge from="130003" to="140001"/>
@@ -165,4 +172,7 @@
   <edge from="120001" to="129000" port="true"/>
   <edge from="129000" to="1275951"/>
   <edge from="1275951" to="933950"/>
+  <edge from="110001" to="1482263"/>
+  <edge from="1482263" to="1370692"/>
+  <edge from="1370692" to="120001"/>
 </workflow>

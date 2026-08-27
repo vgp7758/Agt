@@ -1108,11 +1108,21 @@ def _cmd_debug(ctx: CommandContext, args):
     """/debug prompt <提示词> —— 提示词调试：按【当前上下文投影 + 提示词】直接调 LLM，
     不落盘（不 start_turn，session/events 零写入）、不执行（回包的 tool_calls 只展示不跑），
     打印完整回包（耗时/finish_reason/usage含缓存命中/content/reasoning/tool_calls）。
-    用于调试 system/上下文工程/工具 schema 对模型行为的影响，零副作用。"""
+    用于调试 system/上下文工程/工具 schema 对模型行为的影响，零副作用。
+    /debug hook <提示词> —— before_turn 钩子调试：以提示词为 user_message 真实触发钩子，
+    不落盘（不 start_turn）、不进主循环（钩子跑完即 return），打印注入结果与上下文预览。"""
     import json as _json
     import time as _time
-    if not args or args[0] != "prompt" or len(args) < 2:
+    sub = args[0] if args else ""
+    if sub == "hook":
+        if len(args) < 2:
+            print("用法：/debug hook <提示词>   —— 以提示词为 user_message 触发 before_turn 钩子；不落盘、不进主循环")
+            return
+        _debug_hook(ctx, " ".join(args[1:]).strip())
+        return
+    if sub != "prompt" or len(args) < 2:
         print("用法：/debug prompt <提示词>   —— 按当前上下文投影直接调 LLM；不落盘、不执行工具，打印完整回包")
+        print("      /debug hook <提示词>     —— 以提示词触发 before_turn 钩子；不落盘，钩子跑完即 return")
         return
     if ctx.state and ctx.state.get("busy"):
         print("⏳ Agent 正在处理任务（busy），/debug 需在空闲时使用——避免与主循环并发调 LLM")
@@ -1156,6 +1166,57 @@ def _cmd_debug(ctx: CommandContext, args):
     print(resp.content or "(空)")
     print("─" * 56)
     print("（本次调用已记入 llm_calls.jsonl，/stats 可查；session 未受影响）")
+
+
+def _debug_hook(ctx: CommandContext, text: str):
+    """/debug hook 实现：以提示词为 user_message 真实触发 before_turn 钩子（走 _run_hooks 生产路径），
+    不落盘（不 start_turn → session/events 零写入；检索类工具只读历史轮次，结果与生产一致）、
+    不进主循环（钩子执行完即 return，不调主 LLM）。打印各钩子注入结果 + 将拼入上下文的
+    system-reminder 预览。异步钩子后台完成（观测页看轨迹）。"""
+    import time as _time
+    agent = ctx.agent
+    if ctx.state and ctx.state.get("busy"):
+        print("⏳ Agent 正在处理任务（busy），/debug 需在空闲时使用——避免与主循环并发执行钩子")
+        return
+    if not text:
+        print("用法：/debug hook <提示词>   —— 以提示词为 user_message 触发 before_turn 钩子；不落盘、不进主循环")
+        return
+    # 钩子开关（与 _run_hooks 同源判定）：off 时直接告知，不静默空跑
+    if not getattr(agent.session, "assembly", {}).get("hooks",
+                                                      getattr(agent.session, "hooks_default_on", True)):
+        print("⚠️ 钩子未启用（assembly hooks=off 或子 Agent 默认不跑钩子）——/debug hook 无可触发项")
+        return
+    tasks = agent._hook_tasks("before_turn")
+    if not tasks:
+        print("⚠️ 未声明 before_turn 钩子（.agent/workflows/ 的 meta.hook=before_turn，或 agent.yml hooks 装配）")
+        return
+    sync = [t for t in tasks if not t.get("async")]
+    async_ = [t for t in tasks if t.get("async")]
+    print("🪝 [debug hook] before_turn · 不落盘 · 不进主循环")
+    line = f"   同步触发：{', '.join(t['name'] for t in sync) or '(无)'}"
+    if async_:
+        line += f" · 异步(后台)：{', '.join(t['name'] for t in async_)}"
+    print(line)
+    bt_ctx = agent._before_turn_ctx(text)
+    print(f"   user_message（{len(text)} 字）: {text[:80]}{'…' if len(text) > 80 else ''}")
+    print("─" * 56)
+    t0 = _time.time()
+    notes = agent._run_hooks("before_turn", bt_ctx)
+    dt = _time.time() - t0
+    print(f"⏱  钩子执行完成 {dt:.1f}s · 待注入 {len(notes)} 条")
+    for n in notes:
+        print("─" * 56)
+        res = n.get("result") or ""
+        print(f'📄 <hook name="{n["name"]}">（{len(res)} 字）')
+        print(res or "(空)")
+    if notes:
+        print("─" * 56)
+        print("📦 将注入上下文的 system-reminder 预览（session 投影时渲染在 user 消息之后）：")
+        print(agent.render_before_turn_hint(notes))
+    else:
+        print("（无注入：所有钩子 inject≠True 或 result 为空——workflow_message 类静默钩子不注入）")
+    print("─" * 56)
+    print("（运行轨迹已注册观测页 wf runs（节点级执行明细）；钩子内 LLM 调用记入 llm_calls.jsonl；session 未受影响）")
 
 
 def _cmd_reload(ctx: CommandContext, args):
@@ -1692,10 +1753,15 @@ def build_default_registry() -> CommandRegistry:
         "/restart 继续刚才的任务       重启恢复后自动发送该消息\n"
         "  改了 agt 源码(src/)后用它让新代码生效；日志 ~/.agt/restart.log")
     reg.register("debug", _cmd_debug,
-        "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包",
+        "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包\n"
+        "hook <提示词>    调试用：以提示词触发 before_turn 钩子，不落盘，钩子跑完即 return",
         "/debug prompt 你好，介绍下你自己\n"
         "  投影=当前 session 状态+提示词；tool_calls 只展示不执行；\n"
-        "  session/events 零写入（llm_calls.jsonl 仍记录，/stats 可观测）")
+        "  session/events 零写入（llm_calls.jsonl 仍记录，/stats 可观测）\n"
+        "/debug hook 帮我查一下上周的部署记录\n"
+        "  以提示词为 user_message 真实触发 before_turn 钩子（检索/意图识别）；\n"
+        "  不 start_turn 不进主循环；打印注入结果 + system-reminder 预览；\n"
+        "  轨迹进观测页 wf runs，session 未受影响")
     reg.register("status", _cmd_status,
         "实例状态总览：模型/队列/子进程树(PID+命令行)/后台服务/团队/钩子（诊断卡死首选）",
         "/status            全量状态；busy 长时间无进展时看进程树——\n"

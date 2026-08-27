@@ -1090,6 +1090,29 @@ class Agent:
         self._wf_idx_cache = (stamp, idx)
         return idx
 
+    def _before_turn_ctx(self, msg: str) -> dict:
+        """before_turn 钩子上下文（run 主循环与 /debug hook 同源构造）：
+        user_message/session_id + 工作流 meta.auto_param 桥接（auto_param 声明的入参名也喂 msg）。"""
+        bt_ctx = {
+            "user_message": msg,
+            "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),
+        }
+        try:
+            from real_tools import WORKSPACE as _ws2
+            from workflow import get_hook_workflows
+            for aw in get_hook_workflows(_ws2, "before_turn"):
+                if aw.get("auto_param"):
+                    bt_ctx[aw["auto_param"]] = msg
+        except Exception:
+            pass
+        return bt_ctx
+
+    @staticmethod
+    def render_before_turn_hint(notes: list[dict]) -> str:
+        """钩子旁注 → 注入上下文的 <system-reminder> 文本（run 主循环与 /debug hook 同源渲染）。"""
+        parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in notes]
+        return '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>'
+
     def _run_hooks(self, hook: str, context: dict) -> list[dict]:
         """运行所有声明在 hook 位置触发的任务（工作流 / 命令 / 事件），返回需注入的旁注列表。
         context: 该钩子位置的上下文（key 对应工作流开始节点 <out> 声明）。
@@ -1476,25 +1499,11 @@ class Agent:
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
             bt_notes = []   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走 _run_hooks
             if not resumed:
-                bt_ctx = {
-                    "user_message": msg,
-                    "session_id": self.session.name or (self.session.session_dir.name if self.session.session_dir else ""),
-                }
-                try:
-                    from real_tools import WORKSPACE as _ws2
-                    from workflow import get_hook_workflows
-                    for aw in get_hook_workflows(_ws2, "before_turn"):
-                        if aw.get("auto_param"):
-                            bt_ctx[aw["auto_param"]] = msg
-                except Exception:
-                    pass
-                bt_notes = self._run_hooks("before_turn", bt_ctx)
+                bt_notes = self._run_hooks("before_turn", self._before_turn_ctx(msg))
             if bt_notes and not auto_flag:
                 # before_turn 对 user_message 做意图识别/预检索等预处理，结果作为【user 之后的补充】注入
                 # （不拼进 user 文本）：多个钩子合并成一组挂到当前 turn，session 投影时在 user 消息后渲染
-                parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in bt_notes]
-                self.session._current._before_turn_hint = (
-                    '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>')
+                self.session._current._before_turn_hint = self.render_before_turn_hint(bt_notes)
             if not resumed:   # 中断轮续跑：首轮已发过 user/autonomous_continue 事件，不重发（否则前端误判为新轮）
                 if not auto_flag:
                     self._emit({"type": "user", "text": msg, "image_count": len(imgs or [])})

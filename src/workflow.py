@@ -684,15 +684,53 @@ def _collect_composite_outputs(decl: list, round_items: list, batch: dict):
     return {"all_outputs": all_outputs, "filtered_outputs": filtered, "nth_output": nth_output}
 
 
+def _setvar_left_name(left) -> str | None:
+    """SetVar(type20) 的 left（目标变量名）多形态解析：
+    - 标准 canvas 结构 {value:{content:{name}}}（编辑器路线）；
+    - XML 简写字符串：'__entry__.keywords' / '1275951.keywords' / 裸 'keywords'
+      （点号路径 → 取最后段；__entry__ 前缀即循环变量本名）；
+    - 字符串字面量名（编辑器 round-trip 的 {input:{value:{content:'name'}}} 变体）。
+    解析失败返回 None（调用方静默跳过——不炸循环体）。"""
+    if isinstance(left, dict):
+        lv = left.get("value", left)
+        if isinstance(lv, dict):
+            content = lv.get("content")
+            if isinstance(content, dict) and content.get("name"):
+                return str(content["name"])
+            if isinstance(content, str) and content.strip():
+                s = content.strip()
+                return s.split(".")[-1] if "." in s else s
+        elif isinstance(lv, str) and lv.strip():
+            s = lv.strip()
+            return s.split(".")[-1] if "." in s else s
+    elif isinstance(left, str) and left.strip():
+        s = left.strip()
+        return s.split(".")[-1] if "." in s else s
+    return None
+
+
+def _setvar_right_value(right, ctx):
+    """SetVar(type20) 的 right（新值）多形态解析：
+    - 标准 canvas 结构（p['right'] 或 p['input'] 的 BlockInput）→ resolve_value；
+    - XML 简写字符串：'ref:节点.字段' → 按点号路径解析上游输出；裸值 → 字面量。"""
+    if isinstance(right, str) and right.strip().startswith("ref:"):
+        path = right.strip()[4:]
+        bid, _, fname = path.partition(".")
+        src = ctx.node_outputs.get(bid, {})
+        # __entry__ / 复合节点 id 同样在 node_outputs（迭代上下文已注入）
+        return _dotted_get(src, fname) if fname else src
+    return resolve_value(right, ctx)
+
+
 def _handle_loop_setvar(node: dict, ctx) -> dict:
-    """type 20：循环内设置变量。left 指向循环变量名(blockID=复合节点)，right 为新值；写 ctx.loop_vars。"""
+    """type 20：循环内设置变量。left 指向循环变量名(blockID=复合节点/__entry__)，right 为新值；写 ctx.loop_vars。
+    left/right 均兼容编辑器结构化与 XML 简写（'__entry__.keywords' / 'ref:节点.字段'）。"""
     for p in node.get("data", {}).get("inputs", {}).get("inputParameters", []):
-        left = p.get("left", {})
-        lv = left.get("value", left) if isinstance(left, dict) else {}
-        content = lv.get("content") if isinstance(lv, dict) else None
-        var_name = content.get("name") if isinstance(content, dict) else None
-        new_val = resolve_value(p.get("right", p.get("input")), ctx)
-        if var_name and getattr(ctx, "loop_vars", None) is not None:
+        var_name = _setvar_left_name(p.get("left"))
+        if var_name is None:
+            continue   # left 未设置：跳过该参数（不炸循环体）
+        new_val = _setvar_right_value(p.get("right", p.get("input")), ctx)
+        if getattr(ctx, "loop_vars", None) is not None:
             ctx.loop_vars[var_name] = new_val
     return {"outputs": {}, "port": None}
 
@@ -792,6 +830,12 @@ def _handle_loop(node: dict, ctx) -> dict:
     # 编辑器约定输出：continue 捕获本轮输出 → all/filtered/nth
     if conv_outs:
         outputs.update(_collect_composite_outputs(conv_outs, round_items, inputs.get("batch")))
+    # 循环变量终值【无条件并入】：'复合节点.变量名' 是一等输出引用面（__entry__ 的变量端口
+    # 在编辑器本来就暴露）——此前只在声明了原生输出(native_outs)时才 merge，漏声明时
+    # 下游 ref '循环.变量' 恒 None（extract_keywords 的 keywords 输出 null 的根因）。
+    # setdefault：约定输出（all/filtered/nth）与显式原生输出优先，不覆盖。
+    for _vk, _vv in loop_vars.items():
+        outputs.setdefault(_vk, _vv)
     # 原生输出：用最后一轮 body + 累加终值解析
     if native_outs:
         merged = dict(last_body) if last_body else dict(outer)

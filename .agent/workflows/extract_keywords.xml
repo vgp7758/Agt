@@ -10,7 +10,7 @@
     <batch enabled="false"/>
   </node>
   <node id="120001" type="selector" title="cache_hit?" x="1320" y="80">
-    <branch><cond op="9" left="1370692.result" right="pending" left_type="boolean"/></branch>
+    <branch><cond op="11" left="1370692.result" right="pending" left_type="boolean"/></branch>
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
   </node>
   <node id="130001" type="llm" title="extract" x="1920" y="80">
@@ -156,7 +156,7 @@
   </node>
   <node id="1370692" type="AND" title="AND" x="1020" y="80">
     <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
-    <branch><cond op="2" left="110001.value" right="pending" left_type="any"/></branch>
+    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
     <out name="result" type="boolean" description="全部条件组满足时为 true"/>
     <out name="results" type="list" description="每组条件的判定结果"/>
     <batch enabled="false"/>

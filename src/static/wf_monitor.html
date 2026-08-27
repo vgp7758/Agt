@@ -73,7 +73,8 @@ const _expanded = new Set();
 function stopPoll(){ if(timer){clearInterval(timer); timer=null;} }
 
 // 子节点轨迹表（复合=最后一轮迭代；子工作流=完整子执行）。children 元素自带 title/ntype/status/dur/preview
-function childTableHTML(n){
+function childTableHTML(n, depth){
+  depth = depth || 0;
   const kids = n.children || [];
   const head = n.wf_name
     ? `🔗 子工作流 <b>${esc(n.wf_name)}</b> · ${kids.length} 个节点`
@@ -82,12 +83,18 @@ function childTableHTML(n){
     const st = c.status==="running" ? '<span class="st-node-running">⏳</span>'
              : c.status==="error" ? '<span class="st-node-error">❌</span>'
              : '<span class="st-node-done">✓</span>';
+    // 递归深层：子层节点自身还有 children（子工作流里再套循环/子工作流）时，
+    // 在行下追加一个嵌套展开（depth<2 限深防失控；数据层最多两层，够用）
+    let deep = "";
+    if(depth < 2 && Array.isArray(c.children) && c.children.length){
+      deep = `<tr class="subdeep"><td colspan="7">${childTableHTML(c, depth+1)}</td></tr>`;
+    }
     return `<tr><td class="meta">${i+1}</td>
-      <td><b>${esc(c.title)}</b> <span class="meta">${esc(c.id)}</span></td>
+      <td><b>${esc(c.title)}</b> <span class="meta">${esc(c.id)}</span>${c.rounds!=null?` <span class="tag">♻${c.rounds}轮</span>`:""}</td>
       <td>${esc(NTYPES[c.ntype] || c.ntype || "")}</td><td>${st}</td>
       <td class="dur">${c.dur_ms!=null?fmtDur(c.dur_ms):(c.status==="running"?"…":"")}</td>
       <td></td>
-      <td><span class="prev" title="${esc(c.preview)}">${esc(c.preview)}</span></td></tr>`;
+      <td><span class="prev" title="${esc(c.preview)}">${esc(c.preview)}</span></td></tr>${deep}`;
   }).join("");
   if(!rows) rows = `<tr><td colspan="7" class="empty">（暂无子节点轨迹）</td></tr>`;
   return `<div style="padding:2px 0 4px 14px">

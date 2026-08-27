@@ -215,6 +215,44 @@ async def api_wf_list():
     return {"items": items}
 
 
+@app.get("/api/wf/runs")
+async def api_wf_runs():
+    """最近工作流运行列表（观测页首页用，倒序摘要）。
+    ⚠ 必须注册在 /api/wf/{name} 之前——FastAPI 按注册顺序匹配路径参数，
+    否则 GET /api/wf/runs 被 {name} 路由吞掉（"工作流 'runs' 不存在"）。"""
+    from workflow import list_wf_runs
+    return {"runs": list_wf_runs()}
+
+
+@app.get("/api/wf/runs/{run_id}")
+async def api_wf_run(run_id: str, canvas: str = ""):
+    """单次工作流运行的完整轨迹（节点时间线 + 输出预览）。
+    ?canvas=1 时附带 run 注册时快照的画布（观测页"在调试页查看"按钮单次拉取）。"""
+    from workflow import get_wf_run, get_wf_run_canvas
+    r = get_wf_run(run_id)
+    if r is None:
+        return {"error": f"运行 {run_id} 不存在（可能已被清理，仅保留最近 50 次）"}
+    if canvas in ("1", "true"):
+        c = get_wf_run_canvas(run_id)
+        if c is not None:
+            r["canvas"] = c
+    return r
+
+
+@app.get("/api/wf/runs/{run_id}/node/{node_id}")
+async def api_wf_run_node(run_id: str, node_id: str):
+    """某节点全量输出（text/plain 纯文本页——观测页点击节点打开，浏览器原生渲染无样式）。"""
+    from fastapi.responses import PlainTextResponse
+    from workflow import get_wf_node_full
+    full = get_wf_node_full(run_id, node_id)
+    if full is None:
+        return PlainTextResponse(f"[不存在] 运行 {run_id} 或节点 {node_id} 未找到（运行仅保留最近 50 次）",
+                                 status_code=404)
+    if not full:
+        return PlainTextResponse(f"[无全文] 节点 {node_id} 未记录全量输出（执行中 / 全量预算耗尽只存预览）")
+    return PlainTextResponse(full, media_type="text/plain; charset=utf-8")
+
+
 def _infer_tool_group(name: str) -> str:
     """工具名 → 模块分组（前缀推断；build_agent 标注优先）。"""
     if name.startswith("wf_"):
@@ -618,41 +656,6 @@ async def wf_monitor_page(run: str = ""):
     """工作流运行观测页：?run=<run_id> 实时轮询单次运行节点轨迹；无参=最近运行列表。"""
     return HTMLResponse(_WF_MONITOR_HTML)
 
-
-@app.get("/api/wf/runs")
-async def api_wf_runs():
-    """最近工作流运行列表（观测页首页用，倒序摘要）。"""
-    from workflow import list_wf_runs
-    return {"runs": list_wf_runs()}
-
-
-@app.get("/api/wf/runs/{run_id}")
-async def api_wf_run(run_id: str, canvas: str = ""):
-    """单次工作流运行的完整轨迹（节点时间线 + 输出预览）。
-    ?canvas=1 时附带 run 注册时快照的画布（观测页"在调试页查看"按钮单次拉取）。"""
-    from workflow import get_wf_run, get_wf_run_canvas
-    r = get_wf_run(run_id)
-    if r is None:
-        return {"error": f"运行 {run_id} 不存在（可能已被清理，仅保留最近 50 次）"}
-    if canvas in ("1", "true"):
-        c = get_wf_run_canvas(run_id)
-        if c is not None:
-            r["canvas"] = c
-    return r
-
-
-@app.get("/api/wf/runs/{run_id}/node/{node_id}")
-async def api_wf_run_node(run_id: str, node_id: str):
-    """某节点全量输出（text/plain 纯文本页——观测页点击节点打开，浏览器原生渲染无样式）。"""
-    from fastapi.responses import PlainTextResponse
-    from workflow import get_wf_node_full
-    full = get_wf_node_full(run_id, node_id)
-    if full is None:
-        return PlainTextResponse(f"[不存在] 运行 {run_id} 或节点 {node_id} 未找到（运行仅保留最近 50 次）",
-                                 status_code=404)
-    if not full:
-        return PlainTextResponse(f"[无全文] 节点 {node_id} 未记录全量输出（执行中 / 全量预算耗尽只存预览）")
-    return PlainTextResponse(full, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/stats")

@@ -379,6 +379,10 @@ def _node_to_json(nd) -> dict:
                                       "value": _var_val(v)} for v in g.findall("var")]})
             out.append({"name": gname, "type": gtype})
         inp["mergeGroups"] = mg
+        # index 协议输出（handler 固定返回，写侧不落盘——读侧重加，往返幂等）：
+        # 第一个值非空分组的 0 起序号（调试观测哪个分支端口拿到值），全空=-1
+        if not any(o.get("name") == "index" for o in out):
+            out.append({"name": "index", "type": "integer"})
     elif ntype == "22":     # intent：<in query/> + <intent name/> + <param/>（systemPrompt等）+ <model/>
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
         inp["intents"] = [{"name": it.get("name")} for it in nd.findall("intent")]

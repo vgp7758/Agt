@@ -285,6 +285,9 @@ function aggrLayout(n){
     res.push({gname:grp.name||'?', outY:gy+12, varsY:vars.map((v,i)=>gy+12+(i+1)*18)});
     gy+=28+Math.max((vars.length-1)*18,0)+10;
   });
+  // index 协议端口行（分组之后追加，不占分组索引 gi——变量线渲染 L[gi] 不受影响）：
+  // portY('out','index') 经 find(gname) 命中此行（分组恰好叫 index 时命中分组行，语义让位）
+  res.push({gname:'index', outY:gy+12, isIndex:true});
   return res;
 }
 // 取某端口的 y（按它在所在侧的行序）
@@ -719,7 +722,7 @@ function renderNode(n){
       const vars=grp.variables||[];
       gy+=28+Math.max((vars.length-1)*18,0)+10;
     });
-    n.h=gy+20;
+    n.h=gy+32;   // +1 行给 index 协议端口（此前 +20 全是分组底距）
     // 更新已画的 rect height
     const bodyRect=g.querySelector('.node-body');
     if(bodyRect) bodyRect.setAttribute('height', n.h);
@@ -777,6 +780,12 @@ function renderNode(n){
       const vars2=grp.variables||[];
       gy+=28+Math.max((vars2.length-1)*18,0)+10;
     });
+    // index 协议端口（分组之后一行，integer 青色）：拿到值的分组 0 起序号——调试观测哪个分支端口真的拿到值
+    const iCol=fieldColor('integer');
+    g.appendChild(elm('text',{x:6,y:gy+12,class:'sub-row',fill:'#8a9099'},'index'));
+    const iP=elm('circle',{cx:n.w,cy:gy+12,r:4,class:'port-var',fill:iCol,stroke:iCol,cursor:'crosshair',title:'index：拿到值的分组序号(0起，-1=全空)'});
+    iP.onmousedown=(e)=>{e.stopPropagation();startVar(n.id,'index',iCol,n.x+n.w,n.y+gy+12);};
+    g.appendChild(iP);
   }
 
   // 节点插件画布体扩展（text 大框等；插件未注入时走内置 '15' 兜底）
@@ -1259,7 +1268,7 @@ async def main(args: Args) -> Output:
   '21':{nodeMeta:{title:'循环'},inputs:{loopType:'array',loopCount:{type:'integer',value:{type:'literal',content:10}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],variableParameters:[],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
   '28':{nodeMeta:{title:'批处理'},inputs:{batchSize:{type:'integer',value:{type:'literal',content:10}},concurrentSize:{type:'integer',value:{type:'literal',content:1}},inputParameters:[{name:'input',input:{type:'list',schema:{type:'string'},value:{type:'literal',content:''}}}],batch:{nth:0}},outputs:[{name:'all_outputs',type:'list',description:'所有结果'},{name:'filtered_outputs',type:'list',description:'筛选结果'},{name:'nth_output',type:'object',description:'第n个结果'}],blocks:[],edges:[]},
   '22':{nodeMeta:{title:'意图识别'},inputs:{inputParameters:[{name:'query',input:{type:'string',value:{type:'literal',content:''}}}],intents:[{name:'闲聊'},{name:'查询证券资讯'},{name:'编写研报'}],mode:'all'},outputs:[]},
-  '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'}]},
+  '32':{nodeMeta:{title:'变量聚合'},inputs:{mergeGroups:[{name:'Group1',variables:[]}]},outputs:[{name:'Group1',type:'string'},{name:'index',type:'integer',description:'拿到值的分组序号(0起，全空=-1。调试用)'}]},
   '20':{nodeMeta:{title:'置变量(循环)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'block-output',blockID:'',name:''}}},right:{type:'string',value:{type:'literal',content:''}}}]},outputs:[]},
   '40':{nodeMeta:{title:'赋值(全局)'},inputs:{inputParameters:[{name:'var',left:{type:'string',value:{type:'ref',content:{source:'global_variable_app',path:['']}}},input:{type:'string',value:{type:'literal',content:''}}}],variableTypeMap:{}},outputs:[{name:'isSuccess',type:'boolean',description:''}]},
   '45':{nodeMeta:{title:'HTTP'},inputs:{apiInfo:{method:'GET',url:''},params:[],headers:[],body:{bodyType:'EMPTY',bodyData:{}},setting:{timeout:15}},outputs:[{name:'body',type:'string',description:''},{name:'statusCode',type:'integer',description:''}]},

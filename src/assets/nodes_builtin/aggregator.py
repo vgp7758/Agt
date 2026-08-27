@@ -10,7 +10,7 @@
 PARAMS = [
     {"key": "mergeGroups", "type": "list", "required": True,
      "desc": "分组列表；每项 {name, variables:[{type, value(ref|literal)}]}——"
-             "取第一个【执行过且值非空】的变量作为分组输出"},
+             "取第一个【执行过且值非空】的变量作为分组输出；另有协议输出 index：拿到值的分组 0 起序号（全空=-1）"},
 ]
 
 from workflow_node_api import resolve_value
@@ -42,6 +42,12 @@ def _handle_aggregator(node: dict, ctx) -> dict:
                     chosen = v
                     break
         out[gname] = chosen if chosen is not None else fallback
+    # index 调试端口（协议输出）：第一个【值非空】分组的 0 起序号——selector/intent 汇聚时
+    # = 实际走到的分支编号，画布连线/调试页一眼看出哪个端口拿到值；全空 = -1。
+    # 分组名恰好叫 "index" 时不覆盖（该分组的输出优先）。
+    if "index" not in out:
+        out["index"] = next((i for i, g in enumerate(groups)
+                             if out.get(g.get("name")) not in (None, "")), -1)
     return {"outputs": out, "port": None}
 
 

@@ -64,7 +64,7 @@
     <out name="result" type="object" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="129000" type="code" title="init_kw" x="1020" y="208">
+  <node id="129000" type="code" title="init_kw" x="1019" y="208">
     <in name="x" type="string">init</in>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 等待循环的 keywords 变量初值：空表（list var 的 literal 初值会是字符串，经 code 节产出正确类型；
@@ -75,7 +75,7 @@
   </node>
   <node id="1275951" type="loop" title="wait_extract" x="1320" y="314">
     <param name="loopType"><![CDATA[count]]></param>
-    <param name="loopCount" type="integer"><![CDATA[15]]></param>
+    <param name="loopCount" type="integer"><![CDATA[90]]></param>
     <var name="keywords" type="list" ref="129000.empty"/>
     <var name="find" type="boolean" literal="False"/>
     <in name="user" type="string" ref="100001.user_message"/>

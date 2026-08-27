@@ -64,8 +64,43 @@ def new_wf_run(name: str, hook: str = "", canvas: dict = None) -> str:
     return rid
 
 
+def _track_apply(nodes_list: list, ev: dict, store_full: bool = True):
+    """对一个节点事件列表应用 start/end/error/meta 事件（run["nodes"] 与嵌套 children 共用）。
+    store_full=False 用于嵌套子节点（只存 preview，全文与预算仍归顶层节点）。"""
+    global _full_total
+    kind = ev.get("ev")
+    t = ev.get("t", _time.time())
+    if kind == "node_start":
+        nodes_list.append({"id": ev.get("id", ""), "title": ev.get("title", ""),
+                           "ntype": ev.get("ntype", ""), "status": "running",
+                           "t_start": t, "t_end": None, "dur_ms": None, "preview": ""})
+    elif kind in ("node_end", "node_error"):
+        for n in reversed(nodes_list):
+            if n["id"] == ev.get("id") and n["status"] == "running":
+                n["status"] = "done" if kind == "node_end" else "error"
+                n["t_end"] = t
+                try:
+                    n["dur_ms"] = int((t - n["t_start"]) * 1000)
+                except Exception:
+                    pass
+                n["preview"] = ev.get("preview", "")
+                full = ev.get("full")
+                if store_full and isinstance(full, str) and full and _full_total < _FULL_BUDGET:
+                    n["full"] = full
+                    _full_total += len(full)
+                break
+    elif kind == "node_meta":
+        # 复合节点/子工作流的嵌套元数据：children（最后一轮/子执行轨迹）、rounds、childmeta
+        for n in reversed(nodes_list):
+            if n["id"] == ev.get("id"):
+                for k in ("children", "rounds", "childmeta", "wf_name"):
+                    if ev.get(k) is not None:
+                        n[k] = ev[k]
+                break
+
+
 def _run_track(run_id: str, ev: dict):
-    """写入运行轨迹事件（节点 start/end/error、run done/failed）。未知 run 静默忽略。"""
+    """写入顶层运行轨迹事件（节点 start/end/error/meta、run done/failed）。未知 run 静默忽略。"""
     global _full_total
     if not run_id:
         return
@@ -73,33 +108,24 @@ def _run_track(run_id: str, ev: dict):
         run = _WF_RUNS.get(run_id)
         if not run:
             return
-        kind = ev.get("ev")
         t = ev.get("t", _time.time())
-        if kind == "node_start":
-            run["nodes"].append({"id": ev.get("id", ""), "title": ev.get("title", ""),
-                                 "ntype": ev.get("ntype", ""), "status": "running",
-                                 "t_start": t, "t_end": None, "dur_ms": None, "preview": ""})
-        elif kind in ("node_end", "node_error"):
-            for n in reversed(run["nodes"]):
-                if n["id"] == ev.get("id") and n["status"] == "running":
-                    n["status"] = "done" if kind == "node_end" else "error"
-                    n["t_end"] = t
-                    try:
-                        n["dur_ms"] = int((t - n["t_start"]) * 1000)
-                    except Exception:
-                        pass
-                    n["preview"] = ev.get("preview", "")
-                    # 全量输出（预算内才存；观测页点击节点 text/plain 全文路由消费）
-                    full = ev.get("full")
-                    if isinstance(full, str) and full and _full_total < _FULL_BUDGET:
-                        n["full"] = full
-                        _full_total += len(full)
-                    break
-        elif kind == "run_done":
+        if ev.get("ev") in ("node_start", "node_end", "node_error", "node_meta"):
+            _track_apply(run["nodes"], ev)
+        elif ev.get("ev") == "run_done":
             run["status"] = "done"; run["finished_at"] = t
-        elif kind == "run_failed":
+        elif ev.get("ev") == "run_failed":
             run["status"] = "failed"; run["finished_at"] = t
             run.setdefault("error", ev.get("error", ""))
+
+
+def _track_dispatch(ctx, ev: dict):
+    """节点事件分发：嵌套执行（复合体迭代内/子工作流内）→ 写 ctx.track_stack 栈顶容器；
+    顶层 → _run_track。子节点全文不存（观测页展开看 preview；全文预算归顶层）。"""
+    st = getattr(ctx, "track_stack", None)
+    if st:
+        _track_apply(st[-1], ev, store_full=False)
+    else:
+        _run_track(getattr(ctx, "run_id", None), ev)
 
 
 def get_wf_run(run_id: str) -> dict | None:
@@ -607,11 +633,20 @@ def _run_composite_body(blocks_by_id: dict, edges: list, composite_id: str,
             handler = NODE_HANDLERS.get(ntype)
             if handler is None:
                 raise WorkflowError(f"复合节点体内未支持的节点类型 {ntype}（节点 {current}）")
+            # 观测：子画布内节点事件经 _track_dispatch（嵌套时写轮容器栈顶，顶层时进 run registry）
+            _do_track = getattr(ctx, "run_id", None) is not None
+            if _do_track:
+                _track_dispatch(ctx, {"ev": "node_start", "id": current,
+                                      "title": _node_title(node), "ntype": ntype})
             # 走 _run_node_with_batch：子画布内节点同样支持节点级批处理
             # （此前直接 handler(node, ctx)——体内 batch.enabled=true 被静默忽略，
             #   loop-item 引用解析到外层 batch_item=None → 工具参数全 None）
             result = _run_node_with_batch(node, handler, ctx)
             ctx.node_outputs[current] = result.get("outputs") or {}
+            if _do_track:
+                _track_dispatch(ctx, {"ev": "node_end", "id": current,
+                                      "preview": _preview_str(ctx.node_outputs[current]),
+                                      "full": _full_str(ctx.node_outputs[current])})
             current = _next_node(edges, current, result.get("port"))
         return "done", None
     finally:
@@ -702,6 +737,9 @@ def _handle_loop(node: dict, ctx) -> dict:
     last_exposed, last_body = {}, {}
     entry_id = _find_body_entry(edges, composite_id)   # 迭代入口节点（新模型）；None=旧格式
     round_items = []   # 编辑器约定：每轮最后一个产出值节点的输出 dict
+    _track = getattr(ctx, "run_id", None) is not None   # 观测：子画布节点轨迹进轮容器
+    _childmeta = {bid: {"title": _node_title(b), "ntype": str(b.get("type"))}
+                  for bid, b in blocks_by_id.items()}
     for idx, elem in enumerate(items[:_MAX_LOOP_ITERS]):
         ctx.batch_item = elem
         ctx.batch_index = idx
@@ -721,7 +759,19 @@ def _handle_loop(node: dict, ctx) -> dict:
             entry_exp.update(other_inputs)
             entry_exp.update(loop_vars)
             body_outputs[entry_id] = entry_exp
-        signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        _round_children = []
+        if _track:
+            ctx.track_stack.append(_round_children)   # 本轮子画布节点事件写入轮容器
+        try:
+            signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        finally:
+            if _track:
+                ctx.track_stack.pop()
+        # 观测：每轮尾部实时更新 node_meta（栈已恢复外层——children 挂到本复合节点 entry；
+        # 运行中展开观测页即可看到最后一轮轨迹逐轮刷新）
+        if _track:
+            _track_dispatch(ctx, {"ev": "node_meta", "id": composite_id,
+                                  "children": _round_children, "rounds": idx + 1, "childmeta": _childmeta})
         last_exposed, last_body = exposed, body_outputs
         # 本轮输出完全由 continue 节点 result 连线决定：仅 continue 信号产出（裸值）；
         # break/done 不产出（中断/旧格式无 continue 时本轮无 item）
@@ -786,6 +836,9 @@ def _handle_batch(node: dict, ctx) -> dict:
     last_body = {}
     entry_id = _find_body_entry(edges, composite_id)   # 迭代入口节点（新模型）；None=旧格式
     round_items = []   # 编辑器约定：每轮最后一个产出值节点的输出 dict
+    _track = getattr(ctx, "run_id", None) is not None   # 观测：子画布节点轨迹进轮容器
+    _last_round_children = None
+    _rounds = 0
     for idx, elem in enumerate(elements[:_MAX_LOOP_ITERS]):
         ctx.batch_item = elem
         ctx.batch_index = idx
@@ -800,7 +853,16 @@ def _handle_batch(node: dict, ctx) -> dict:
             entry_exp = {"item": elem, "index": idx}
             entry_exp.update(other_inputs)
             body_outputs[entry_id] = entry_exp
-        signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        _round_children = []
+        if _track:
+            ctx.track_stack.append(_round_children)
+        try:
+            signal, round_out = _run_composite_body(blocks_by_id, edges, composite_id, body_outputs, ctx)
+        finally:
+            if _track:
+                ctx.track_stack.pop()
+        _rounds = idx + 1
+        _last_round_children = _round_children
         last_body = body_outputs
         # 本轮输出完全由 continue 节点 result 连线决定：仅 continue 信号产出（裸值）
         if signal == "continue":
@@ -839,6 +901,12 @@ def _handle_batch(node: dict, ctx) -> dict:
             finally:
                 ctx.node_outputs = saved
     ctx.batch_item, ctx.batch_index = saved_item, saved_idx
+    # 观测：批处理节点的子画布轨迹（最后一轮 children + 轮数 + 子节点标题映射）
+    if _track and _last_round_children is not None:
+        _track_dispatch(ctx, {"ev": "node_meta", "id": composite_id,
+                              "children": _last_round_children, "rounds": _rounds,
+                              "childmeta": {bid: {"title": _node_title(b), "ntype": str(b.get("type"))}
+                                            for bid, b in blocks_by_id.items()}})
     return {"outputs": outputs, "port": None}
 
 
@@ -935,8 +1003,23 @@ def _handle_subworkflow(node: dict, ctx) -> dict:
     canvas = _find_local_workflow(ctx, wf_id)
     if canvas is None:
         raise WorkflowError(f"子工作流未找到：{wf_id!r}（本地按 .agent/workflows/<名>.json 的 name/文件名匹配）")
-    result = execute(canvas, params, tools=ctx.tools, llm=ctx.llm, emit=ctx.emit,
-                     workspace=ctx.workspace, return_exit_dict=True)
+    _track = getattr(ctx, "run_id", None) is not None   # 观测：子执行轨迹挂到本节点 entry
+    _container = []
+    if _track:
+        # 嵌套观测容器：子 execute 的节点事件写本容器（不发 run_done——栈非空由 execute 判断）
+        ctx.track_stack.append(_container)
+    try:
+        result = execute(canvas, params, tools=ctx.tools, llm=ctx.llm, emit=ctx.emit,
+                         workspace=ctx.workspace, return_exit_dict=True,
+                         run_id=ctx.run_id, track_stack=ctx.track_stack)
+    finally:
+        if _track:
+            ctx.track_stack.pop()
+    if _track:
+        _track_dispatch(ctx, {"ev": "node_meta", "id": str(node["id"]),
+                              "children": _container, "wf_name": wf_id,
+                              "childmeta": {str(n.get("id")): {"title": _node_title(n), "ntype": str(n.get("type"))}
+                                            for n in canvas.get("nodes", [])}})
     # 子工作流输出保留 end 字段结构：output=整个 end dict（可 .field 引用），字段同时平铺
     outputs = {"output": result, **(result if isinstance(result, dict) else {})}
     return {"outputs": outputs, "port": None}
@@ -1070,6 +1153,10 @@ class _Ctx:
         self.llm = llm
         self.emit = emit
         self.workspace = workspace or WORKSPACE
+        # 观测（run registry）：run_id 非空时节点事件写 _WF_RUNS（观测页轮询）；
+        # track_stack 非空 = 嵌套执行（复合体迭代内/子工作流内）→ 事件写栈顶容器而非顶层 run
+        self.run_id: str | None = None
+        self.track_stack: list = []
         # 子画布节点输出追踪（debug 用）：record_sub=True 时 _run_composite_body 把每轮迭代的
         # body_outputs 存到 sub_trace[复合节点id]——debug 工具用 "复合id/子节点id" 语法读取。
         self.record_sub = False
@@ -1409,10 +1496,15 @@ def _node_title(n: dict) -> str:
     return ((n.get("data", {}).get("nodeMeta", {}) or {}).get("title") or f"节点{n.get('id')}")
 
 
-def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False, run_id: str = None):
+def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False, run_id: str = None, track_stack: list = None):
     """执行一个 Coze 画布，返回结束节点的输出（字符串）。
-    run_id：传 new_wf_run() 的 id 时，节点执行事件写入 _WF_RUNS（观测页 /wf/monitor 实时轮询）。"""
+    run_id：传 new_wf_run() 的 id 时，节点执行事件写入 _WF_RUNS（观测页 /wf/monitor 实时轮询）。
+    track_stack：嵌套观测容器栈（子工作流执行时由 _handle_subworkflow 传入——子节点事件写栈顶
+    容器而非顶层 run；栈非空时本 execute 不发 run_done，整体结束态归最外层）。"""
     ctx = _Ctx(tools=tools, llm=llm, emit=emit, workspace=workspace)
+    ctx.run_id = run_id
+    ctx.track_stack = list(track_stack or [])
+    _nested = bool(ctx.track_stack)
     nodes = {str(n["id"]): n for n in canvas.get("nodes", [])}
     edges = canvas.get("edges", [])
 
@@ -1421,18 +1513,21 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
         raise WorkflowError("画布缺少开始节点（id=100001, type=1）")
     ctx.node_outputs[ENTRY_ID] = _bind_entry(entry, inputs or {})
     if run_id:
-        _run_track(run_id, {"ev": "node_start", "id": ENTRY_ID, "title": _node_title(entry),
-                            "ntype": str(entry.get("type"))})
-        _run_track(run_id, {"ev": "node_end", "id": ENTRY_ID, "preview": _preview_str(ctx.node_outputs[ENTRY_ID]),
-                            "full": _full_str(ctx.node_outputs[ENTRY_ID])})
+        _track_dispatch(ctx, {"ev": "node_start", "id": ENTRY_ID, "title": _node_title(entry),
+                              "ntype": str(entry.get("type"))})
+        _track_dispatch(ctx, {"ev": "node_end", "id": ENTRY_ID, "preview": _preview_str(ctx.node_outputs[ENTRY_ID]),
+                              "full": _full_str(ctx.node_outputs[ENTRY_ID])})
 
     # —— DAG 拓扑调度（扇出 + 汇聚 + 端口分支）——
     from collections import deque
     out_edges, pending_in = _build_dag(nodes, edges)
     # 初始就绪：所有 pending_in<=0 的节点（entry 后继 + 无入边孤立节点，ComfyUI 风格）。
-    # 孤立 end（type=2 无入边）排除——手写画布里可能当视觉标记，不作为出口触发提前返回
+    # 孤立 end（type=2 且非 entry 后继——手写画布可能当视觉标记）排除；entry 的直接后继
+    # （含 start→end 直连的 exit）不排除——此前无条件排除 type 2，start→end 直连的
+    # 子工作流 exit 永远不进 ready → 隐式结束返回 {}（execute_debug 无此排除故一直正常）
+    _entry_succs = {tid for tid, _ in out_edges.get(ENTRY_ID, [])}
     ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0
-                  and str(nodes[nid].get("type")) != "2")
+                  and not (str(nodes[nid].get("type")) == "2" and nid not in _entry_succs))
     executed: set[str] = set()
 
     try:
@@ -1450,10 +1545,10 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             if current == EXIT_ID or (node is not None and str(node.get("type")) == "2"):
                 raw = _exit_result(node if node is not None else nodes[EXIT_ID], ctx)
                 if run_id:
-                    _run_track(run_id, {"ev": "node_start", "id": current,
-                                        "title": _node_title(node), "ntype": "2"})
-                    _run_track(run_id, {"ev": "node_end", "id": current, "preview": _preview_str(raw),
-                                        "full": _full_str(raw)})
+                    _track_dispatch(ctx, {"ev": "node_start", "id": current,
+                                          "title": _node_title(node), "ntype": "2"})
+                    _track_dispatch(ctx, {"ev": "node_end", "id": current, "preview": _preview_str(raw),
+                                          "full": _full_str(raw)})
                 return raw if return_exit_dict else _stringify_result(raw)
             if node is None:
                 raise WorkflowError(f"节点 {current} 不存在")
@@ -1462,25 +1557,25 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             if handler is None:
                 raise WorkflowError(f"未支持的节点类型 {ntype}（节点 {current}）")
             if run_id:
-                _run_track(run_id, {"ev": "node_start", "id": current,
-                                    "title": _node_title(node), "ntype": ntype})
+                _track_dispatch(ctx, {"ev": "node_start", "id": current,
+                                      "title": _node_title(node), "ntype": ntype})
             try:
                 result = _run_node_with_batch(node, handler, ctx)
                 ctx.node_outputs[current] = result.get("outputs") or {}
                 port = result.get("port")   # selector/intent 分支端口
                 if run_id:
-                    _run_track(run_id, {"ev": "node_end", "id": current,
-                                        "preview": _preview_str(ctx.node_outputs[current]),
-                                        "full": _full_str(ctx.node_outputs[current])})
+                    _track_dispatch(ctx, {"ev": "node_end", "id": current,
+                                          "preview": _preview_str(ctx.node_outputs[current]),
+                                          "full": _full_str(ctx.node_outputs[current])})
             except Exception as e:
                 # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
                 # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
                 ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
                 port = f"{current}_error"   # 每个节点默认 error 端口名
                 if run_id:
-                    _run_track(run_id, {"ev": "node_error", "id": current,
-                                        "preview": _preview_str(ctx.node_outputs[current]),
-                                        "full": _full_str(ctx.node_outputs[current])})
+                    _track_dispatch(ctx, {"ev": "node_error", "id": current,
+                                          "preview": _preview_str(ctx.node_outputs[current]),
+                                          "full": _full_str(ctx.node_outputs[current])})
 
             # 扇出 + port 匹配：遍历当前节点的所有出边
             for tid, src_port in out_edges.get(current, []):
@@ -1505,8 +1600,9 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                         else _stringify_result(ctx.node_outputs[last]))
         return {} if return_exit_dict else _stringify_result({})
     finally:
-        if run_id:
-            # 整体结束态：正常返回=done；异常抛出=failed（finally 里判断——except 重抛前记录）
+        if run_id and not _nested:
+            # 整体结束态：正常返回=done；异常抛出=failed（finally 里判断——except 重抛前记录）。
+            # 嵌套执行（track_stack 非空）不发——整体结束态归最外层 execute
             _run_track(run_id, {"ev": "run_done"})
 
 

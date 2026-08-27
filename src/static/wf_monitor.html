@@ -66,11 +66,62 @@ const fmtDur = ms => ms==null ? "" : (ms<1000 ? ms+"ms" : (ms/1000).toFixed(1)+"
 const NTYPES = {"1":"开始","2":"结束","3":"LLM","5":"代码","8":"选择器","15":"文本","21":"循环",
   "22":"意图","28":"批处理","32":"聚合","40":"赋值","45":"HTTP","9":"子工作流","4":"工具","13":"输出","58":"ToJSON","59":"FromJSON"};
 
-let timer = null, lastNodes = 0;
+let timer = null, lastNodes = 0, lastRun = null;
+// 展开的嵌套节点（复合/子工作流）：node id 集合——2s 轮询重渲染时保持展开态
+const _expanded = new Set();
 
 function stopPoll(){ if(timer){clearInterval(timer); timer=null;} }
 
+// 子节点轨迹表（复合=最后一轮迭代；子工作流=完整子执行）。children 元素自带 title/ntype/status/dur/preview
+function childTableHTML(n){
+  const kids = n.children || [];
+  const head = n.wf_name
+    ? `🔗 子工作流 <b>${esc(n.wf_name)}</b> · ${kids.length} 个节点`
+    : `♻ 共 ${n.rounds || 0} 轮 · 最后一轮迭代轨迹（${kids.length} 节点）`;
+  let rows = kids.map((c, i) => {
+    const st = c.status==="running" ? '<span class="st-node-running">⏳</span>'
+             : c.status==="error" ? '<span class="st-node-error">❌</span>'
+             : '<span class="st-node-done">✓</span>';
+    return `<tr><td class="meta">${i+1}</td>
+      <td><b>${esc(c.title)}</b> <span class="meta">${esc(c.id)}</span></td>
+      <td>${esc(NTYPES[c.ntype] || c.ntype || "")}</td><td>${st}</td>
+      <td class="dur">${c.dur_ms!=null?fmtDur(c.dur_ms):(c.status==="running"?"…":"")}</td>
+      <td></td>
+      <td><span class="prev" title="${esc(c.preview)}">${esc(c.preview)}</span></td></tr>`;
+  }).join("");
+  if(!rows) rows = `<tr><td colspan="7" class="empty">（暂无子节点轨迹）</td></tr>`;
+  return `<div style="padding:2px 0 4px 14px">
+    <div class="meta" style="margin:6px 0 4px">${head}</div>
+    <table style="background:#fafbfc;border:1px solid #eef1f4;border-radius:8px">
+      <thead><tr><th>#</th><th>子节点</th><th>类型</th><th>状态</th><th>耗时</th><th></th><th>输出预览</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+// 主行后的展开行同步：展开且有时渲染/更新；收起或无 children 时移除
+function syncChildRow(n, mainTr){
+  let cr = mainTr.nextSibling;
+  while(cr && !(cr.tagName==="TR" && cr.classList.contains("childrow") && cr.dataset.for===n.id))
+    cr = cr.nextSibling;
+  const want = _expanded.has(n.id) && Array.isArray(n.children);
+  if(!want){ if(cr) cr.remove(); return; }
+  if(!cr){
+    cr = document.createElement("tr");
+    cr.className = "childrow"; cr.dataset.for = n.id;
+    const td = document.createElement("td");
+    td.colSpan = 7; td.style.background = "#fbfcfd";
+    cr.appendChild(td);
+    mainTr.after(cr);
+  }
+  cr.cells[0].innerHTML = childTableHTML(n);
+}
+
+function toggleExpand(nid){
+  if(_expanded.has(nid)) _expanded.delete(nid); else _expanded.add(nid);
+  if(lastRun) renderRun(lastRun);   // 用缓存数据立即重画（不等下一轮轮询）
+}
+
 function renderRun(r){
+  lastRun = r;
   $("runHead").style.display = "";
   $("nodesCard").style.display = "";
   $("listCard").style.display = "none";
@@ -83,20 +134,34 @@ function renderRun(r){
   $("rDur").textContent = r.finished_at ? "总耗时 " + fmtDur((r.finished_at-r.started_at)*1000) : "";
   // 节点表
   const tb = $("nodes").tBodies[0];
-  // 增量 append（已渲染的不重画，running 行原地更新）
+  // 增量 append（按 mainrow 过滤定位——展开行 childrow 不占主行序号）
   const nodes = r.nodes || [];
   const t0 = r.started_at, tEnd = r.finished_at || Date.now()/1000;
   const span = Math.max(0.001, tEnd - t0);
+  const mains = () => Array.from(tb.rows).filter(x => x.classList.contains("mainrow"));
   for(let i=0;i<nodes.length;i++){
     const n = nodes[i];
-    let tr = tb.rows[i];
+    let tr = mains()[i];
     if(!tr){
       tr = tb.insertRow(-1);
+      tr.className = "mainrow"; tr.dataset.nid = n.id;
       for(let k=0;k<7;k++) tr.insertCell(-1);
     }
     const cells = tr.cells;
     cells[0].textContent = i+1;
-    cells[1].innerHTML = `<b>${esc(n.title)}</b> <span class="meta">${esc(n.id)}</span>`;
+    // 嵌套节点（复合/子工作流）可点击展开：▸/▾ + 子节点数/轮数/子工作流名徽章
+    if(Array.isArray(n.children)){
+      const exp = _expanded.has(n.id);
+      tr.classList.add("clickable");
+      tr.onclick = ev => { if(ev.target.closest("td:nth-child(7)")) return; toggleExpand(n.id); };
+      const badge = n.wf_name
+        ? `<span class="meta">🔗 ${esc(n.wf_name)} · ${n.children.length} 节点</span>`
+        : `<span class="meta">♻ ${n.rounds||0} 轮 · ${n.children.length} 子节点</span>`;
+      cells[1].innerHTML = `${exp?"<b>▾</b>":"<b>▸</b>"} <b>${esc(n.title)}</b> <span class="meta">${esc(n.id)}</span> ${badge}`;
+    } else {
+      tr.classList.remove("clickable"); tr.onclick = null;
+      cells[1].innerHTML = `<b>${esc(n.title)}</b> <span class="meta">${esc(n.id)}</span>`;
+    }
     cells[2].textContent = NTYPES[n.ntype] || n.ntype;
     const stn = n.status==="running" ? '<span class="st-node-running">⏳ 运行中</span>'
               : n.status==="error" ? '<span class="st-node-error">❌ 出错</span>'
@@ -111,10 +176,12 @@ function renderRun(r){
     // 预览单元格：has_full 时点击打开 text/plain 全文页（浏览器原生渲染，无样式）
   if(n.has_full){
     cells[6].innerHTML = `<span class="prev" style="cursor:pointer;text-decoration:underline dotted"
-      title="点击查看完整输出（纯文本页）" onclick="window.open('/api/wf/runs/${runId}/node/${encodeURIComponent(n.id)}','_blank')">${esc(n.preview)} 📄</span>`;
+      title="点击查看完整输出（纯文本页）" onclick="event.stopPropagation();window.open('/api/wf/runs/${runId}/node/${encodeURIComponent(n.id)}','_blank')">${esc(n.preview)} 📄</span>`;
   } else {
     cells[6].innerHTML = `<span class="prev" title="${esc(n.preview)}">${esc(n.preview)}</span>`;
   }
+  // 展开行同步（展开/收起/每轮刷新）
+  syncChildRow(n, tr);
   }
   // 完成后停轮询
   if(r.status !== "running") stopPoll();

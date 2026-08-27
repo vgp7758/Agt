@@ -6,8 +6,8 @@ EdFW.register({
   defaults: {nodeMeta: {title: "AND"},
              inputs: {inputParameters: [],
                       branches: [{condition: {logic: 2, conditions: []}}]},
-             outputs: [{name: "result", type: "boolean", description: "全部条件组满足时为 true"},
-                       {name: "results", type: "list", itemType: "boolean", description: "每组条件的判定结果"}]},
+             outputs: [{name: "result", type: "boolean", description: "全部条件组满足时为 true", fixed: true},
+                       {name: "results", type: "list", itemType: "boolean", description: "每组条件的判定结果", fixed: true}]},
   params: [
     { key: "branches", label: "条件组", widget: "branches",
       get(n) { return String((n.data.inputs?.branches || []).length); }, set() {} },

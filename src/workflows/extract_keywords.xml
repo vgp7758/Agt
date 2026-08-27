@@ -50,9 +50,10 @@
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2820" y="80">
+  <node id="900001" type="end" title="Exit_hit" x="2819" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
+    <out name="idx" ref="933950.index" type="integer"/>
   </node>
   <node id="933950" type="aggregator" title="变量聚合" x="2520" y="80">
     <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="110001.value" type="list"/><var ref="1275951.nth_output" type="list"/></group>
@@ -75,7 +76,7 @@
   </node>
   <node id="1275951" type="loop" title="wait_extract" x="1320" y="314">
     <param name="loopType"><![CDATA[count]]></param>
-    <param name="loopCount" type="integer"><![CDATA[15]]></param>
+    <param name="loopCount" type="integer"><![CDATA[90]]></param>
     <var name="keywords" type="list" ref="129000.empty"/>
     <var name="find" type="boolean" literal="False"/>
     <in name="user" type="string" ref="100001.user_message"/>

@@ -50,9 +50,10 @@
     <out name="ok" type="boolean"/>
     <out name="result" type="object" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="2820" y="80">
+  <node id="900001" type="end" title="Exit_hit" x="2819" y="80">
     <out name="keywords" ref="933950.Group1" type="list"/>
     <out name="cached" type="boolean">True</out>
+    <out name="idx" ref="933950.index" type="integer"/>
   </node>
   <node id="933950" type="aggregator" title="变量聚合" x="2520" y="80">
     <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="110001.value" type="list"/><var ref="1275951.nth_output" type="list"/></group>
@@ -64,7 +65,7 @@
     <out name="result" type="object" description="工具返回值"/>
     <batch enabled="false"/>
   </node>
-  <node id="129000" type="code" title="init_kw" x="1019" y="208">
+  <node id="129000" type="code" title="init_kw" x="1020" y="208">
     <in name="x" type="string">init</in>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 等待循环的 keywords 变量初值：空表（list var 的 literal 初值会是字符串，经 code 节产出正确类型；

@@ -1034,6 +1034,11 @@ def make_subagent_tools(agent) -> list:
         if not ids:
             return "(没有正在跑的后台子 Agent；已完成的见【后台子 Agent 任务】看板)"
         deadline = time.time() + max(0, int(timeout))
+        # 状态快照日志（卡等诊断：用户实测 wait 长时间不返回时，看这里每个 id 的线程/任务态）
+        _LOG.info("wait_subagents: ids=%s timeout=%ds | 线程态=%s | 任务态=%s", ids, int(timeout),
+                  {aid: ("alive" if (agent._bg_threads.get(aid) or threading.Thread()).is_alive() else "dead")
+                   for aid in ids},
+                  {aid: agent.background_tasks.get(aid, {}).get("status", "?") for aid in ids})
         out = []
         for aid in ids:
             th = agent._bg_threads.get(aid)
@@ -1044,6 +1049,9 @@ def make_subagent_tools(agent) -> list:
             res = (entry.get("result") or "").strip().replace("\n", " ")
             res = (res[:800] + f"…（截断，完整回复 agent_query_events(\"{aid}\", 1)）") if len(res) > 800 else res
             still = th is not None and th.is_alive()
+            if still:
+                _LOG.info("wait_subagents: %s join 超时仍 running（timeout=%ds）——任务未完成而非卡死判定",
+                          aid, int(timeout))
             out.append(f"[{aid}] {'⏳仍在跑（超时，稍后再 wait）' if still else f'{st}：{res}'}")
         return "\n\n".join(out)
 

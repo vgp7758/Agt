@@ -850,6 +850,14 @@ async def agents_page():
     return HTMLResponse(_AGENTS_HTML)
 
 
+@app.get("/agents/{agent_id}")
+async def agent_chat_page(agent_id: str):
+    """Agent 专属对话页：/agents/<agent_id> 与裸 / 同一页面（index.html 读 URL 初始化交互目标）。
+    URL 直接编码目标 Agent——刷新/分享/收藏自动落在对应视图（如 /agents/wiki-updater_3）；
+    裸 / 默认主 Agent。与 /agents（无 id，声明管理页）按路径形态区分，互不冲突。"""
+    return HTMLResponse(_INDEX_HTML)
+
+
 def _agent_safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_")
 

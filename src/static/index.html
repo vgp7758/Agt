@@ -381,6 +381,16 @@ let reconnectTimer = null;
 
 function connectWS(){
   ws = new WebSocket(`ws://${location.host}/ws`);
+  // URL 路由 /agents/<agent_id>：优先级高于 sessionStorage——分享/收藏的专属页链接直接落位
+  // （页面内切换时代码在 agentSel change 里同步写 URL，刷新后本行把它转回交互目标）
+  try{
+    const _m = location.pathname.match(/^\/agents\/([^/]+)\/?$/);
+    if(_m){
+      const _aid = decodeURIComponent(_m[1]);
+      if(_aid && _aid !== '_main_') sessionStorage.setItem('agt_target', _aid);
+      else sessionStorage.removeItem('agt_target');
+    }
+  }catch(e){}
   // 本客户端正在交互的 agent_id（多页签各自独立；sessionStorage 记住——刷新/重连后恢复视图）
   try{ myTarget = sessionStorage.getItem('agt_target') || '_main_'; }catch(e){ myTarget = '_main_'; }
   ws.onopen = ()=>{
@@ -1342,6 +1352,8 @@ agentSel.addEventListener('change', ()=>{
   // 本地立即记录（后端响应到达前事件过滤已生效）+ sessionStorage 持久（刷新恢复）
   myTarget = targetId;
   try{ targetId === '_main_' ? sessionStorage.removeItem('agt_target') : sessionStorage.setItem('agt_target', targetId); }catch(e){}
+  // URL 同步为专属页路由（/agents/<id>）：刷新/分享时保持该 Agent 视图；主 Agent 回根路径
+  try{ history.replaceState(null, '', targetId === '_main_' ? '/' : '/agents/' + encodeURIComponent(targetId)); }catch(e){}
   ws.send(JSON.stringify({action:'switch_agent', target_id: targetId}));
 });
 inp.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });

@@ -190,11 +190,11 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 **多行判定修复**：旧版只看**首行**——多实例时「首行 ✅ 但 _2 还在跑」会误判空闲 → 双消费者并发消费同一攒批队列，破坏单消费者语义。改为 `any(...)`：任一行非空闲即忙。
 
-**✅❌ 都算空闲：failed 躺平不再死锁（2026-08-28，commit b674265）**——运行中实测（run 13b27c38 + wiki-updater_3 现场）：看板出现 `wiki-updater_3 ❌`（任务被 /restart 中断——events 尾部 turn_start + 5 step 后无 turn_end，meta 已写 `status="failed"`，**不是 LLM 失败，是中断的产物**），但 `any("✅" not in l)` 把 ❌ 行也判成忙 → 每次维护触发 → 入队（pending 堆到 21 条）→ 永不消费——**攒批队列对躺平失败者死锁**（它 agent=None 早已不在干活）。修复：`is_busy = bool(lines) and any(("✅" not in l) and ("❌" not in l) for l in lines)`——**✅(done)/❌(failed) 都算空闲**，躺平的失败者 reuse 复活接活；只有真运行态行（无 ✅❌ 标记）才算忙。四场景验证：真实看板（✅✅❌）→ 空闲 ✓ 死锁解除。
+**✅❌ 都算空闲：failed 躺平不再死锁（2026-08-28，commit b674265）**——运行中实测（run 13b27c38 + wiki-updater_3 现场）：看板出现 `wiki-updater_3 ❌`（任务被 /restart 中断——events 尾部 turn_start + 5 step 后无 turn_end，meta 已写 `status="failed"`，**不是 LLM 失败，是中断的产物**），但 `any("✅" not in l)` 把 ❌ 行也判成忙 → 每次维护触发 → 入队（pending 堆到 21 条）→ 永不消费——**攒批队列对躺平失败者死锁**（它 agent=None 早已不在干活）。修复：`is_busy = bool(lines) and any(("✅" not in l) and ("❌" not in l) for l in lines)`——**✅(done)/❌(failed) 都算空闲**，躺平的失败者 reuse 复活接活；只有真运行态行（无 ✅❌ 标记）才算忙。四场景验证：真实看板（✅✅❌）→ 空闲 ✓ 死锁解除。**活验收（v0.22.1 发布轮，2026-08-28）**：预判兑现——wiki-updater_3 从 ❌ 积压 21 条 → 判空闲 → 全量读批次 → 复活消费 → ✅ 正常消化归档（看板实时可证），攒批队列轮转清空。
 
 > **多实例的真正根因不在 busy 检查**：每次 `/restart` 后旧实例变历史条目，reuse 走复活分支时 `_revive_subagent` 因 NameError（调用已删除的 `_build_subagent_system`）静默落回新建 → auto-numbering 造 _2/_3。修复见 [多 Agent 体系 · 复活路径 NameError](../architecture/multi-agent.md#复活路径-nameerror--wiki-updater-多实例根因修复2026-08-26commit-6d396af)。busy 多行判定是配套加固。
 
-> **恢复状态修正（同 commit，引擎侧防谎报）**：`_restore_subagents` 读档时 meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ busy_parse 判忙 → 同款死锁。堆积的 pending 不用手动清：/restart 后下一轮触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活消费 → 队列轮转清空。
+> **恢复状态修正（同 commit，引擎侧防谎报）**：`_restore_subagents` 读档时 meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ busy_parse 判忙 → 同款死锁。堆积的 pending 不用手动清：/restart 后下一轮触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活消费 → 队列轮转清空（该路径已被 v0.22.1 发布轮活验收证实）。
 
 ## 模板措辞中性化（2026-08，commit 17312eb）
 

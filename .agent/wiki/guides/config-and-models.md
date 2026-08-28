@@ -45,7 +45,7 @@
 
 ## 本地模型（llama-server，local-lfm 系列）
 
-本地两个 llama-server 模型（CPU 部署）：`local-lfm`@8081（lfm2.5-2.6B，thinking）与 `local-lfm-vl`@8080（lfm2.5-vl-3B，vision）。2026-08 探针评估结论：**2.6B 有真 function calling + 可靠 JSON 提取**，适合攒批型 utility / 子 Agent 简单任务 / react demo；速度 18~38s/次是硬伤。**两个未修服务端坑**：VL 视觉通道 HTTP 500（缺 `--mmproj`）；thinking 模型 content 可能为空（答案落 `reasoning_content`，utility 短调用建议直接 `thinking: false`）。完整能力矩阵与用途建议见 [本地模型评估](local-models.md)。
+本地两个 llama-server 模型（CPU 部署）：`local-lfm`@8081（lfm2.5-2.6B，`--reasoning-format deepseek`）与 `local-lfm-vl`@8080（lfm2.5-vl-3B，`--mmproj` 已挂载）。2026-08 探针评估结论：**2.6B 有真 function calling + 可靠 JSON 提取**，适合攒批型 utility / 子 Agent 简单任务 / react demo；速度 18~38s/次是硬伤。**此前两个服务端坑均已修（2026-08 改启动脚本，重启生效）**：VL 视觉通道 500 → 启动命令加 `--mmproj`；thinking content 空 → 加 `--reasoning-format deepseek` 分离思考链（见 [启动脚本与坑的修复](local-models.md#启动脚本bat-三件套2026-08-起)）。一个残余注意：thinking 小模型短调用要留思考余量（`max_tokens` 抠太紧会被思考耗尽致 content 空）。完整能力矩阵与用途建议见 [本地模型评估](local-models.md)。
 
 ## 踩坑记录
 

@@ -81,7 +81,7 @@ user_message
 ## 已知瑕疵
 
 - **utility 通道偶发 400**：utility_client 连续报 400 → `/restart` 重启进程即恢复（排障表见 [guides/ops](../guides/ops.md) 常见错误对照）
-- **local-qwen@8080 依赖**：提词环节依赖本地 8080 端口的 qwen 服务，服务未启动时该环节失败
+- **本地提词服务依赖（端口 8080 易主，需核对）**：提词环节依赖本地 8080 端口的 LLM 服务——文档原记录为 local-qwen；2026-08 起 8080 被 [local-lfm-vl](../guides/local-models.md) 占用（llama-server）。若 extract_keywords 仍指向 qwen 的 provider/端口需改配置；服务未启动时该环节失败
 
 ## 相关页面
 

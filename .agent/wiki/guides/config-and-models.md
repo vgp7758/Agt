@@ -43,6 +43,10 @@
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 
+## 本地模型（llama-server，local-lfm 系列）
+
+本地两个 llama-server 模型（CPU 部署）：`local-lfm`@8081（lfm2.5-2.6B，thinking）与 `local-lfm-vl`@8080（lfm2.5-vl-3B，vision）。2026-08 探针评估结论：**2.6B 有真 function calling + 可靠 JSON 提取**，适合攒批型 utility / 子 Agent 简单任务 / react demo；速度 18~38s/次是硬伤。**两个未修服务端坑**：VL 视觉通道 HTTP 500（缺 `--mmproj`）；thinking 模型 content 可能为空（答案落 `reasoning_content`，utility 短调用建议直接 `thinking: false`）。完整能力矩阵与用途建议见 [本地模型评估](local-models.md)。
+
 ## 踩坑记录
 
 1. **model id 必须逐字符核对**：`deepseek-ai/DeepSeek-V4-Pro-0813` 不存在（正确 id 无 -0813 后缀）→ BadRequestError 400 "has no provider supported"。用 /v1/models 接口核对

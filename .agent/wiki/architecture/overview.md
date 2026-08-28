@@ -36,7 +36,7 @@ longterm_memory.py（长期记忆三类 + episodic 召回流水线）详见 [长
          → 每个钩子执行注册 run_id（run registry），UI「执行中」行可点击实时观测
       ④ ReAct 循环（每步）：
            _chat_msgs() = session.messages_for_llm()（投影）+ hook 旁注
-           llm.chat()（回退链；scene=react + turn/step 埋点，与投影转储文件名同源）
+           llm.chat()（回退链；scene=react·{agent_id} + turn/step 埋点，与投影转储文件名同源）
            tool_calls → before_tool 钩子 → 工具执行（并行/文件锁串行）
                      → wf_* 工具调用同样注册 run（可观测）
                      → after_tool 钩子（mtime 快照 diff → changed_files → py_auto_diag）

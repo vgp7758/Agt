@@ -54,11 +54,18 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 
 - **turn**（commit 4aced81）：当前已完成轮数（值为 `len(turns)`），与投影文件名中的 `t{N}` 对应
 - **step**（commit 4aced81）：当前轮已完成步数（值为 `len(_current.steps)`），与投影文件名中的 `s{M}` 对应
-- 仅 `scene=react`（主循环）的记录有 turn/step；其他场景（钩子/recap/debug 等）为 null
-- **传递链**（三层贯通，与 scene 同款机制）：`src/agent.py` react 主循环 3 处调用点（主调用/DSML 重试/空回答重试）传 `turn=len(turns), step=len(_current.steps)`（与 `_dump_projection` 完全同源）→ `src/llm_client.py` `chat()` 设 `_turnstep_ctx`（与 `_scene_ctx` 同构 contextvar，finally 清理，**不进 API 请求**）→ `_record_call` 落盘 → `src/server.py` `/api/stats` 透传 → `src/static/stats.html` tooltip 拼接
+- 仅 scene=`react·{agent_id}`（主循环）的记录有 turn/step；其他场景（钩子/recap/debug 等）为 null
+- **传递链**（三层贯通，与 scene 同款机制）：`src/agent.py` react 主循环 3 处调用点（主调用/DSML 重试/空回答重试）传 `turn=len(turns), step=len(_current.steps)`（与 `_dump_projection` 完全同源）→ `src/llm_client.py` `chat()` 设 `_turnstep_ctx`（chat() 进入设置、finally 清理，**不进 API 请求**）→ `_record_call` 落盘 → `src/server.py` `/api/stats` 透传 → `src/static/stats.html` tooltip 拼接
 - 老记录无 turn/step 字段，新记录添加后向前兼容（读取侧可选）
 
-scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug（/debug prompt）/ wrap_up / completer / llm.chat（默认，如 RAG 检索）
+scene 取值（2026-08-29 起携带发起者——与 [🐞 日志面板](#日志面板--场景标注2026-08) 行尾小括号同源）：
+
+| 调用方 | scene |
+|---|---|
+| ReAct 主循环（主调用/DSML 重试/空回答重试 3 处） | `react·{agent_id}`，如 `react·_main_` |
+| 钩子内工作流 LLM 调用（同步 + async） | `hook:{位置}·{工作流名}·{agent_id}`，如 `hook:before_turn·wiki_auto_query·_main_` |
+| recap 生成 / wrap_up 收尾总结 | `recap·{agent_id}` / `wrap_up·{agent_id}` |
+| 其余 | debug（/debug prompt）/ completer / llm.chat（默认，如 RAG 检索） |
 
 ### 其他
 
@@ -67,6 +74,27 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - `/stats`（CLI）/ /logs：文本版统计与日志
 - restart.log（~/.agt/）：/restart 看门狗全程时序（含新进程 stderr）
 - **唤醒链路观测点日志（commit e0ae60b）**：`src/agent.py` 中 `_bg` 路由 `push_message`（answer 入 caller inbox）与 `inbox_thread` 搬运（inbox→work_q）两处已埋诊断日志——排"子 Agent 完成后主 Agent 未唤醒"时直接看实例日志定位断点（需 `/restart` 加载新代码）
+
+### 🐞 日志面板 · 场景标注（2026-08）
+
+WebUI 右下角 🐞 入口（v0.20.1 引入；最多留 200 条滚动、error 未读徽标）实时显示 LLM 运行告警——回退链切换 / 限流换 token / max_tokens 截断 / 空响应重试 / 回退链耗尽，此前这些只进 log 文件、前端无从感知。2026-08-29 起**每条行尾附场景小括号**，一眼看出这次限流/回退是谁发起的：
+
+```
+回退 glm→deepseek-chat 原因=RateLimitError 退避5s (hook:before_turn·wiki_auto_maintenance·_main_)
+空响应(疑似限流) 重试 1/3 退避5s 耗时0.4s (react·_main_)
+回退链耗尽 tried=['glm','deepseek-chat'] (hook:turn_end·recap_gen·_main_)
+```
+
+scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/recap/wrap_up 尾缀 `·{agent_id}`；钩子三段式 `hook:{位置}·{工作流名}·{agent_id}`；空场景省略括号。
+
+**四层链路**：
+
+1. `src/llm_client.py`：`chat()` 进入时把 scene 写入 **ContextVar `_SCENE_CTX`**（线程隔离）、finally reset；`_SinkHandler.emit` 捕获 WARNING+ 记录读取后，以三参 `(level, msg, scene)` 回调 sinks。**为什么用 ContextVar 而非 client 实例属性**：utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖（A 场景的告警挂上 B 的场景）。
+2. `src/agent.py` 六处调用点：react 主循环 3 处（主调用/DSML 重试/空回答重试）/ recap / wrap_up 带 `agent_id`；同步与 async 钩子执行前给 utility client 设 `_scene_override = f"hook:{位置}·{工作流名}·{agent_id}"`，finally 恢复原值。
+3. `src/chat.py`：`set_log_sink` 回调把 scene 塞进 `llm_log` 事件（主 Agent `_emit` 广播）。
+4. `src/static/index.html`：`pushLogEntry(level, text, scene)` 行尾拼 `(scene)`。
+
+生效方式：`/restart`。
 
 ### 跨进程状态查询（/api/status）
 

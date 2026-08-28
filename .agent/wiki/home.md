@@ -105,6 +105,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 ## 快速事实增补（2026-08-29）
 
 - **投影转储 JSON 化：负载本体 pretty-print，零构造零截断**（2026-08，commit 2dc64f2）：`_dump_projection` 直接 `json.dumps(payload, indent=2, ensure_ascii=False, default=str)` 转储发给模型的完整负载（含 tool_calls 结构、reasoning_content），元信息收进 `_meta` 顶层字段（turn/step/model/agent_id/time）——`json.load` 即消费，考古/对拍零损耗；文件名 `t{N}_s{M}_{ts}.json` 惯例不变（原 `.txt` 自定义格式 + 8000 字截断仅存旧存档）。上方「排障闭环：t{N}·s{M} 轮步标记」条目中的 `.txt` 引用即旧格式——排障时打开 `projections/t{N}_s{M}_*.json`（详见 [context-engine · 投影转储](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)、[ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)）
+- **🐞 日志面板场景标注**（2026-08-29）：限流/回退/截断等 LLM 告警行尾附 `(scene)` 小括号——哪个 agent/工作流发起这次调用一眼可见（`react·_main_` / `hook:before_turn·wiki_auto_query·_main_` 三段式 / `recap·wiki-updater_3`）；scene 经 **ContextVar 线程隔离**（utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖）从 `llm_client.chat()` 贯通到 `llm_log` 事件 → 日志面板，llm_calls.jsonl 的 scene 字段同步携带发起者——见 [ops · 日志面板](guides/ops.md#日志面板--场景标注2026-08)
 
 ## 维护约定
 

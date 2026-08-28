@@ -1,7 +1,7 @@
 name: explorer
 description: 只读搜索/定位代码。何时调用：需要在多个文件/目录间搜索、定位定义/引用、只要结论不要全文时。
 tools: read_file,grep,list_dir,glob,glob_files
-model: utility
+model: null
 assembly:
 - file: .agent/agents/explorer.md
 - history|optional // 需要结合此前搜索发现继续排查时打开

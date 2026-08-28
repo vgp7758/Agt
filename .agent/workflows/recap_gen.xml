@@ -9,7 +9,6 @@
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <in name="turn_ctx" type="string" ref="100001.turn_context"/>
-    <model>local-lfm-vl</model>
     <param name="temperature" type="string"><![CDATA[0.3]]></param>
     <param name="thinking" type="string"><![CDATA[false]]></param>
     <param name="prompt" type="string"><![CDATA[user message：
@@ -19,6 +18,7 @@ your answer：
 {{answer}}]]></param>
     <param name="systemPrompt" type="string"><![CDATA[You are a summarizer. Summarize in one sentence what you did in this round of conversation (no more than 30 tokens). Only output the sentence itself, without any explanation, quotation marks, prefixes, or special formatting. 你在总结一轮 Agent 工作对话（可能是主 Agent 的任务轮或子 Agent 的派活轮），用一句话概括这轮做了什么（≤30字，中文任务用中文）。]]></param>
     <param name="output_format" type="string"><![CDATA[text]]></param>
+    <model>local-lfm</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

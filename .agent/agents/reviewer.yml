@@ -1,7 +1,7 @@
 name: reviewer
 description: 审查代码找问题。何时调用：改动后要审查（bug/质量/安全/约定）时。
 tools: read_file,grep,list_dir
-model: utility
+model: null
 assembly:
 - file: .agent/agents/reviewer.md
 - history|optional // 对照之前的审查结论复查时打开

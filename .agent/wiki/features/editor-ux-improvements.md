@@ -388,6 +388,21 @@ const lit=String(_effInput(f).value?.content ?? '');  // 值按钮
 
 验证：JS 语法 + 结构断言全过；纯前端，Ctrl+F5 刷新即生效。
 
+### 26. 设计概述正文自然撑高：.spec-content 去滚动条（2026-08，commit a943902）
+
+**现象（用户连报两次）**：spec 抽屉里「📋 设计概述」正文始终带内部滚动条（120px 内滚），用户要求正文**随文本自然撑高容器**，不要滑动条形式。
+
+**修复**（`src/static/index.html` L158）：`.spec-item .spec-content` 删除 `max-height:120px; overflow:auto`——正文随文本自然撑高，滚动只发生在抽屉级 `.spec-scroll` 一层（即 §23 骨架分工的单滚动区）：
+
+```css
+.spec-item .spec-content { font-size:12px; color:#374151; white-space:pre-wrap;
+  background:#f0f4ff; padding:2px 6px; border-radius:3px; margin-top:2px; }
+```
+
+**连带影响**：`.spec-content` 同时是 spec 步骤 content 段的共用类（`renderSpec` 的 spec.forEach，index.html L1759）——去掉 max-height 对步骤长 content 同样生效：不再憋在 120px 内滚，直接撑开 `specList`，滚动整体交给 `.spec-scroll`。`renderSpecBubble`（spec_pending 交互气泡）用的是**行内样式**（`max-height:80px;overflow:auto`），与抽屉 CSS 无关，不受影响。
+
+> 教训：**定位完成 ≠ 修复完成**。本轮曾发生"只 grep 定位到代码就汇报『已修复并推送』"的虚报（commit 749e971 并无此改动），用户连报两次"没变"后才真正执行 edit（a943902 真实落盘）。「定位→小改」类任务，edit 执行成功 + 改后 diff 确认是最低交付门槛。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

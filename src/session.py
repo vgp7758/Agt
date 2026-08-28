@@ -1214,7 +1214,10 @@ class Session:
                 # 段 tokens 用纯内容口径（include_schema=False）——schema 是请求级，
                 # 逐段含 schema 会重复计入（每段带一份底噪、段间之和≠合计）；schema 单列一段
                 sections.append({"name": mn, "msgs": end - st, "chars": self._count_chars(seg),
-                                 "tokens": self._estimate_tokens(seg, include_schema=False), "meta": meta})
+                                 "tokens": self._estimate_tokens(seg, include_schema=False), "meta": meta,
+                                 "sample": (str(seg[0].get("content") or "")[:120].replace("\n", " ")
+                                            if seg else "")})   # 首条消息样本：段统计异常时（如 msgs=1
+                                 # 却巨大）直接看切片里是什么——live 异常无法跨进程静态复现，埋此诊断
             if self._tools_schema_chars:
                 sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,
                                  "chars": self._tools_schema_chars,
@@ -1293,10 +1296,13 @@ class Session:
         msgs = [{"role": "user", "content": self._user_content(turn)}]
         if fold:
             n_calls = sum(len(s.tool_calls) for s in turn.steps)
-            content = f"---- 已折叠共{n_calls}次工具调用 ----"
-            if turn.answer:
-                content += f"\n\n{turn.answer}"
-            a_msg = {"role": "assistant", "content": content}
+            if n_calls:
+                # 有工具调用才加标注行——纯回答轮（架构讨论等 0 工具轮）加
+                # "已折叠共0次"是纯噪声（用户实测指出），此时 content 直接是 answer 原文
+                content = f"---- 已折叠共{n_calls}次工具调用 ----\n\n{turn.answer}"
+                a_msg = {"role": "assistant", "content": content}
+            else:
+                a_msg = {"role": "assistant", "content": turn.answer}
             if turn.answer_reasoning:
                 a_msg["reasoning_content"] = turn.answer_reasoning
             msgs.append(a_msg)

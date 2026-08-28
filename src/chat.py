@@ -658,6 +658,7 @@ def web_main(port=None):
     """agt-web 入口：装配 Agent + 自动起 Web 服务 + 开浏览器，跑主循环服务 WS/后台（非交互 REPL）。
     端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
     import sys
+    _early_argv()   # --help / --version（打印后退出，不起服务）
     _ensure_utf8_stdout()
     if port is None:
         for a in sys.argv[1:]:
@@ -760,7 +761,44 @@ def web_main(port=None):
         mcp_mgr.shutdown()
 
 
+def _early_argv():
+    """agt / agt-web 的 --help / --version 支持。新环境探索的 agent 常试 `agt --help`
+    获取能力概貌（README 上手指引也指向这里）——打印后退出，不进交互。"""
+    import sys
+    a = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+    if not a:
+        return
+    if a in ("--help", "-h", "help", "/help"):
+        try:
+            from __init__ import __version__ as _v
+        except Exception:
+            _v = "?"
+        print(f"agt-agent v{_v} —— AI Agent 框架（CLI / WebUI / stdin 驱动）")
+        print()
+        print("用法：")
+        print("  agt          交互式 CLI 模式（终端对话；进入后 /help 查看全部命令）")
+        print("  agt-web      WebUI 服务（浏览器/手机访问；--port 指定端口，默认 8000）")
+        print()
+        print("常用（进入会话后的斜杠命令）：")
+        print("  /help        全部命令清单        /status    实例状态（进程/队列/钩子）")
+        print("  /context     上下文堆积概况      /stats     LLM 调用与缓存命中统计页")
+        print("  /model X     切换模型            /reload    工具/节点插件热重载")
+        print("  /restart     重启实例（看门狗自动接管）      /exit      退出")
+        print("  /update-assets apply  随包播种资产对比更新（pip 升级后）")
+        print()
+        print("新环境探索指引：README「Agent 上手指引」节（GitHub: vgp7758/Agt）")
+        sys.exit(0)
+    if a in ("--version", "-V", "version"):
+        try:
+            from __init__ import __version__ as _v
+        except Exception:
+            _v = "?"
+        print(_v)
+        sys.exit(0)
+
+
 def main():
+    _early_argv()
     _ensure_utf8_stdout()
     print("=" * 64)
     print("🤖 交互式 Agent")

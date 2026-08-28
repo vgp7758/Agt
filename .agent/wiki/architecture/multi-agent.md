@@ -48,6 +48,16 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 
 **关联**：wiki_auto_maintenance 的 busy 检查按 **name 子串**（`"wiki-updater" in l`，见 [wiki 自动维护 · busy 检查](../features/wiki-auto-maintenance.md#busy-检查与攒批短路按-name-子串判定--多实例多行判定2026-08-26)），其多行判定已同步加固。
 
+### 恢复状态修正：meta running → failed（2026-08-28，commit b674265）
+
+**背景（用户诊断链）**：wiki-updater_3 看板恒显示 ❌（任务被 /restart 中断——events 尾部 turn_start + 5 step 后无 turn_end，meta 已写 `status="failed"`），但 busy_parse 把 ❌ 行判成忙 → 攒批队列对躺平失败者死锁（pending 堆 21 条永不消费）。用户猜想：「是不是前面的任务被中断后状态一直显示忙，后面任务还认为它在忙（实际早中断躺平了）」。
+
+**修复**：`_restore_subagents` 读档恢复时，meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ 攒批判定永久死锁。配套：busy_parse 判定改为 ✅(done)/❌(failed) **都算空闲**（见 [wiki-auto-maintenance · busy 检查](../features/wiki-auto-maintenance.md#busy-检查与攒批短路按-name-子串判定--多实例多行判定2026-08-26)）。
+
+**后续自动恢复**：堆积的 pending 不用手动清——/restart 后下一轮 before_answer 触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活（reuse 复活路径已修好）消费 → 队列轮转清空。
+
+**最终验收（2026-08 末，随 Agent 专属页 URL 路由同批）**：闭环达成——wiki-updater_3 从 ❌ 复活为 running、消化完堆积的 21 条 pending（攒批队列轮转清空）、看板回 ✅ 带新 recap——「❌ 判忙 → 永不入队 → 永不消费」的死锁链彻底断开。
+
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 
 声明里的 `fallback` 键决定该 Agent 的 LLM 回退链，**覆盖全局 settings.fallback_chain**。三形态（`_parse_agent_fallback`，src/multiagent.py）：
@@ -168,8 +178,6 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 `_emit` 给事件打的 `agent_id` 除了驱动前端 answer 分页 / trace 前缀（上节），现在被 **`src/server.py` 的 `_broadcast` 消费**做多客户端过滤：每个 WS 客户端记录正在交互的 `target`（agent_id，默认 `_main_`），带 `agent_id` 的事件只发给 target 匹配的客户端——多页签各与不同 Agent 交互时互不串台；无 `agent_id` 的系统级事件仍全端广播。
 
 配套：客户端切 Agent 改自身 target + 响应单发；文本直达 target 子 Agent（对齐 CLI `/agent` 切换语义）；`load_session` 历史广播带 `agent_id="_main_"`；`current_history`/`expand_history` 按客户端 target 取对应 session。完整行为表与 answer 特例见 [用户交互 · 多客户端 target 路由](../features/user-interaction.md)。
-
-## caller 汇报对象与动态 enum 注入（2026-08）
 
 ## caller 汇报对象与动态 enum 注入（2026-08）
 

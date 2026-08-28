@@ -35,6 +35,32 @@
 
 **调试插曲**：① 前端 JS 误用 Python 风格 `#` 注释会炸掉整个 script 块——node --check 抓出改 `//`（py_auto_diag 只查 .py 看不到）；② 测试 stub 用 `[]` 冒充 queue → `.put_nowait` 抛 AttributeError 被 `_broadcast` 的 `except` 吞 → 事件全丢、测试假失败，换真 `queue.Queue` 后 6 场景全绿。
 
+## Agent 专属页 URL 路由 · /agents/&lt;agent_id&gt; 直接落位（2026-08，commit 5393ee4；修复 c819618）
+
+> src/server.py（路由）+ src/static/index.html（URL 解析与同步）。同一服务多个 Agent 各有一个专属对话页——URL 直接编码交互目标：`/agents/_main_` 主 Agent、`/agents/wiki-updater_3` 各子 Agent；裸 `/` 默认主 Agent。**刷新/分享/收藏自动落在对应视图**，不再只靠 sessionStorage（它记不住跨页签/新设备）。
+
+**路由形态**（与声明管理页按路径形态区分，互不冲突）：
+
+| 路径 | 视图 |
+|------|------|
+| `/` | 主 Agent 对话页（默认） |
+| `/agents` | 声明管理页（agents.html，无 id；见 [Agent 管理页](agents-admin.md)） |
+| `/agents/<agent_id>` | **Agent 专属对话页**——同一 index.html（`_INDEX_HTML`），前端读 URL 初始化交互目标 |
+
+**三个衔接点**（server.py + index.html）：
+
+1. **加载落位**：`connectWS` 解析 `location.pathname` 匹配 `^/agents/([^/]+)/?$` → `_main_` 清 sessionStorage、其它 id 写入 `agt_target`——**URL 优先级高于 sessionStorage 残留**，再走既有 target 恢复链路（校验存在性、失效复位 `_main_` 兜底）
+2. **切换同步**：agentSel change 里 `history.replaceState` 同步 URL——主 Agent 回 `/`、子 Agent 到 `/agents/<encodeURIComponent(id)>`（replaceState 不产生历史记录噪声）；页面内切换后刷新/分享/收藏都保持该视图
+3. **多页签独立**：与客户端级 target 路由（上节）自然衔接——每个页签的 URL 各自带自己的目标，互不串台
+
+**坑与修复（commit c819618，用户实测两现象）**：
+
+- **静态资源 404**：index.html 内 6 处引用原为相对路径（`icons/favicon.ico`、`manifest.json`）——子路径下解析成 `/agents/icons/...` 全 404（manifest 404 返回 HTML 错误页 → 报 "Syntax error"）。全部改根相对 `/icons/...`、`/manifest.json`。**教训：子路径路由页面里的资源引用一律根相对**。
+- **URL 直达被弹回主视图**：`current_history` 对**历史子 Agent**（重启后磁盘恢复条目，`e0.agent is None`）走"失效"分支 → 复位 `_main_` + 返回主历史 → 打开 `/agents/wiki-updater_3` 看到的却是主 Agent 页面。而 `switch_agent`（下拉切换路径）对同款条目有磁盘加载分支（`Session.load(agents/<id>/meta.json)`）——补齐 current_history 的 `agent=None` 分支同款磁盘加载，两条路径行为一致。**连带症状**："切换后 URL 不变"——复位发生后前端 myTarget 仍记着子 Agent、下拉值不变 → change 事件不触发 → replaceState 不执行；视图真实落位后链路自然恢复。
+
+**生效方式**：引擎层（server.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效。
+
+
 ## 多端消息同步 · user 事件渲染到同 Agent 的其它客户端/CLI（2026-08，commit 1168ea9）
 
 **背景**：一个前端发消息后，另一个正与同一 Agent 交互的前端/CLI 只见回答不见问题——`agent.run()` 的 user 事件（`_emit` 自动带 `agent_id`）早已经 `_broadcast` 按 target 分发，只是两端消费侧都不渲染。本次补齐两端消费，复用既有事件流，**零新增广播**。

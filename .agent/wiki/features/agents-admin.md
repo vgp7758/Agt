@@ -11,6 +11,7 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 - 列表卡片 + 编辑表单两态：点卡片加载声明 → 各字段编辑 → 保存；`_main_` 置顶（读 main.yml，显示 assembly 段数 + hooks 位置）
 - **入口：控件栏 🤖 Agent 按钮**（🧠 记忆右侧，新标签打开）——commit 3f0ef32 前只建了页面忘加入口
 - **存量迁移**：对旧格式声明（coder/explorer/vision 等旧 .md 声明）保存一次 → 自动转 v2.1（persona 拆到独立 md）
+- **与 Agent 专属对话页的路径区分**（commit 5393ee4）：`/agents`（**无 id**）= 本声明管理页；`/agents/<agent_id>` = 该 Agent 的专属对话页（同一 index.html，前端读 URL 初始化交互目标）——同前缀两条路由按路径形态区分互不冲突，详见 [用户交互 · Agent 专属页 URL 路由](user-interaction.md)
 
 ## REST 五件套（server.py）
 

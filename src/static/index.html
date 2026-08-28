@@ -140,8 +140,13 @@
     background:#dc2626; color:#fff; font-size:10px; line-height:16px; text-align:center; padding:0 3px; }
   #specPanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:130; max-height:none;
     background:#fafbff; border-left:1px solid #c7d2fe; box-shadow:-4px 0 24px #0003;
-    overflow-y:auto; padding:12px 14px; }
-  #specPanel .spec-close { position:absolute; top:8px; right:10px; width:26px; height:26px; border-radius:50%;
+    flex-direction:column; overflow:hidden; padding:12px 14px; }
+  /* 标题栏固定在抽屉顶部（flex 0 0 auto），下方 .spec-scroll 才是滚动区 */
+  #specPanel .spec-headbar { flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:2px 0 8px; border-bottom:1px solid #e0e7ff; margin-bottom:8px; }
+  #specPanel .spec-headbar .spec-title { flex:1; font-weight:600; color:#4338ca; min-width:0; }
+  #specPanel .spec-scroll { flex:1 1 auto; overflow-y:auto; min-height:0; padding-right:2px; }
+  #specPanel .spec-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
     border:none; background:#e0e7ff; color:#4338ca; font-size:14px; cursor:pointer; line-height:1; }
   #specPanel .spec-close:hover { background:#c7d2fe; }
   @media (orientation: portrait) { #specPanel { width:100%; border-left:none; } }
@@ -251,11 +256,17 @@
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
   <!-- spec 浮层抽屉：默认折叠成右上角图标按钮（有 spec 时显示）；横屏=右侧 40% 抽屉 / 竖屏=占满 -->
   <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
-  <div id="specPanel" class="plan-panel" style="display:none"><button class="spec-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button><details open><summary id="specSummary">📐 施工方案</summary><div id="specList"></div></details></div>
+  <div id="specPanel" class="plan-panel" style="display:none">
+    <div class="spec-headbar">
+      <div class="spec-title" id="specSummary">📐 施工方案</div>
+      <button class="spec-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button>
+    </div>
+    <div class="spec-scroll"><div id="specList"></div></div>
+  </div>
   <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
        有日志才显示 🐞 入口（badge=未读 error 数）；打开即已读清零 -->
   <button id="logFab" title="日志（回退/限流/错误，点击展开）" style="position:fixed;top:112px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#4b5563;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:none;align-items:center;justify-content:center" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
-  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;overflow-y:auto;padding:12px 14px"><button onclick="toggleLogPanel(false)" title="收起到图标" style="position:absolute;top:8px;right:10px;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button><div style="font-weight:600;color:#374151;margin-bottom:8px">🐞 日志（回退 / 限流 / 截断 / 错误）</div><div id="logList"></div></div>
+  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（回退 / 限流 / 截断 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
@@ -1464,7 +1475,7 @@ function toggleSpecPanel(open){
   const panel = document.getElementById('specPanel');
   const fab = document.getElementById('specFab');
   if(!panel || !fab) return;
-  panel.style.display = open ? 'block' : 'none';
+  panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';   // 展开时藏图标（面板自身有 ✕），收起时恢复
 }
 document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
@@ -1477,7 +1488,7 @@ function toggleLogPanel(open){
   const panel = document.getElementById('logPanel');
   const fab = document.getElementById('logFab');
   if(!panel || !fab) return;
-  panel.style.display = open ? 'block' : 'none';
+  panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';
   if(open){   // 打开即已读：清 badge；滚到底（最新在下）
     _logUnreadErr = 0;

@@ -2091,81 +2091,100 @@ function onWSMessage(ev){
       sel.innerHTML = opts;
       sel.dataset.curTarget = cur;
       break;
-    case 'auto_wf_start':
-	      // 自动工作流开始执行：显示带脉冲动画的"执行中"提示 + 实时计时 (Ns)
-	      // Map 按 hook::name 索引——并行钩子（before_turn 同时挂两个工作流）时各自的
-	      // running 行独立跟踪；此前单数变量，第二个 start 覆盖第一个的引用 → 第一个永远闪烁
-	      if(!curTurn) newTurn();
-	      {
-	        const rw = document.createElement('div');
-	        rw.className = 'ev auto running';
-	        const _t0 = Date.now();
-	        const _base = ()=> '⏳ '+wfHookTag(m)+'工作流「'+m.name+'」执行中…';
-	        rw.textContent = _base()+' (0s)';
-	        if(m.run_id){   // 可点击：打开观测页实时看节点轨迹
-	          rw.style.cursor='pointer'; rw.title='点击打开实时观测页';
-	          rw.style.textDecoration='underline dotted';
-	          rw.onclick=()=>window.open('/wf/monitor?run='+encodeURIComponent(m.run_id),'_blank');
-	        }
-	        curTurn.traceBox.appendChild(rw); scrollBottom();
-	        // 每秒更新已耗时（本地计时；行被历史重渲染清掉时自动停表防泄漏）
-	        const timer = setInterval(()=>{
-	          if(!rw.isConnected){ clearInterval(timer); return; }
-	          const s = Math.round((Date.now()-_t0)/1000);
-	          rw.textContent = _base()+' ('+s+'s)';
-	        }, 1000);
-	        (window._runningWf = window._runningWf || new Map()).set((m.hook||'')+'::'+m.name, {el: rw, timer, t0: _t0});
-	      }
-	      break;
-	    case 'auto_wf':
-	      // 自动工作流执行完成：停止计时，显示总耗时（按 hook::name 取；跨 turn 的迟到完成回退 addTrace）
-	      {
-	        const key = (m.hook||'')+'::'+m.name;
-	        const ent = (window._runningWf||new Map()).get(key);
-	        const dur = ent ? Math.round((Date.now()-ent.t0)/1000) : null;
-	        const total = dur!=null ? '（共 '+dur+'s）' : '';
-	        if(ent) clearInterval(ent.timer);
-	        if(ent && ent.el && ent.el.isConnected){
-	          const rw = ent.el;
-	          rw.classList.remove('running');
-	          rw.classList.add('done');
-	          // 工具调用前后的钩子（py_auto_diag/reload_hot 等）完成文本常带完整诊断/重载清单——
-	          // 默认折叠（head 截断摘要，点击展开全文）；before_turn/turn_end 等轮级钩子保持原样
-	          const _full = '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成'+total+'：'+m.text;
-	          if((m.hook==='before_tool'||m.hook==='after_tool') && _full.length>140){
-	            rw.innerHTML='';
-	            const _h=document.createElement('div'); _h.className='tf-head';
-	            _h.style.color='#059669';
-	            _h.textContent='▸ '+_full.slice(0,120).replace(/\n[\s\S]*$/,'')+' …（点击展开）';
-	            const _b=document.createElement('div'); _b.className='tf-body'; _b.style.display='none';
-	            _b.style.whiteSpace='pre-wrap'; _b.textContent=_full;
-	            _h.onclick=()=>toggleFold(_h,_b);
-	            rw.appendChild(_h); rw.appendChild(_b);
-	          } else rw.textContent=_full;
-	          window._runningWf.delete(key);
-	        } else {
-	          addTrace('auto done', '✅ '+wfHookTag(m)+'工作流「'+m.name+'」完成'+total+'：'+m.text);
-	        }
-	      }
-	      break;
-	    case 'auto_wf_error':
-	      {
-	        const key = (m.hook||'')+'::'+m.name;
-	        const ent = (window._runningWf||new Map()).get(key);
-	        const dur = ent ? Math.round((Date.now()-ent.t0)/1000) : null;
-	        const total = dur!=null ? '（'+dur+'s 后失败）' : '';
-	        if(ent) clearInterval(ent.timer);
-	        if(ent && ent.el && ent.el.isConnected){
-	          const rw = ent.el;
-	          rw.classList.remove('running');
-	          rw.classList.add('failed');
-	          rw.textContent = '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败'+total+'：'+m.text;
-	          window._runningWf.delete(key);
-	        } else {
-	          addTrace('auto failed', '❌ '+wfHookTag(m)+'工作流「'+m.name+'」失败'+total+'：'+m.text);
-	        }
-	      }
-	      break;
+    case 'auto_wf_start': {
+      // 钩子组折叠显示（用户设计）：同 hook 位置的多个工作流收进一个组头
+      // 「▸ [每轮开始前]钩子 ×2 (1/2) ⏳(12s)」——默认收起，点击展开看各工作流执行详情。
+      // 计时/计数在组头（第一个 start 起，全部 done 停表）；行内保留观测页跳转/完成态。
+      if(!curTurn) newTurn();
+      const _hk = m.hook || '';
+      const _grps = (window._hookGrp = window._hookGrp || {});
+      let g = _grps[_hk];
+      if(!g || !g.head || !g.head.isConnected){
+        const wrap = document.createElement('div'); wrap.className = 'ev auto';
+        const head = document.createElement('div'); head.className = 'tf-head'; head.style.color = '#7c3aed';
+        const box = document.createElement('div'); box.className = 'tf-body'; box.style.display = 'none';
+        head.onclick = ()=>{ const open = box.style.display !== 'none';
+          box.style.display = open ? 'none' : 'block'; g.upd(); };
+        wrap.appendChild(head); wrap.appendChild(box);
+        curTurn.traceBox.appendChild(wrap);
+        g = _grps[_hk] = {head, box, total: 0, done: 0, failed: 0, t0: Date.now(), timer: null, upd: null};
+        g.upd = ()=>{
+          if(!g.head || !g.head.isConnected) return;
+          const run = (g.done + g.failed) < g.total;
+          const s = Math.round((Date.now() - g.t0) / 1000);
+          const tag = (m && m.hook) ? wfHookTag(m) : '自动工作流';
+          g.head.textContent = (g.box.style.display === 'none' ? '▸ ' : '▾ ') + tag + ' ×' + g.total
+            + '（' + (g.done + g.failed) + '/' + g.total + '）'
+            + (run ? ' ⏳ ' + s + 's' : (g.failed ? ' ⚠️ 共' + s + 's' : ' ✅ 共' + s + 's'));
+          g.head.parentElement.classList.toggle('running', run);
+        };
+        g.timer = setInterval(()=>{ if(!g.head.isConnected){ clearInterval(g.timer); return; } g.upd(); }, 1000);
+      }
+      g.total++;
+      const rw = document.createElement('div');
+      rw.className = 'ev auto running';
+      rw.textContent = '⏳ 「' + m.name + '」执行中…';
+      if(m.run_id){
+        rw.style.cursor = 'pointer'; rw.title = '点击打开实时观测页'; rw.style.textDecoration = 'underline dotted';
+        rw.onclick = ()=>window.open('/wf/monitor?run=' + encodeURIComponent(m.run_id), '_blank');
+      }
+      g.box.appendChild(rw);
+      (window._runningWf = window._runningWf || new Map()).set(_hk + '::' + m.name, {el: rw, grp: g, t0: Date.now()});
+      g.upd(); scrollBottom();
+      break;
+    }
+    case 'auto_wf': {
+      // 单工作流完成：行内更新（长文本行内二级折叠）+ 组头计数推进
+      const key = (m.hook || '') + '::' + m.name;
+      const ent = (window._runningWf || new Map()).get(key);
+      const dur = ent ? Math.round((Date.now() - ent.t0) / 1000) : null;
+      const total = dur != null ? '（' + dur + 's）' : '';
+      if(ent && ent.el && ent.el.isConnected){
+        const rw = ent.el;
+        rw.classList.remove('running'); rw.classList.add('done');
+        const _full = '✅ 「' + m.name + '」完成' + total + '：' + (m.text || '');
+        if(_full.length > 160){
+          rw.innerHTML = '';
+          const _h = document.createElement('div'); _h.className = 'tf-head'; _h.style.color = '#059669';
+          _h.textContent = '▸ ' + _full.slice(0, 110).replace(/\n[\s\S]*$/, '') + ' …（点击展开）';
+          const _b = document.createElement('div'); _b.className = 'tf-body'; _b.style.display = 'none';
+          _b.style.whiteSpace = 'pre-wrap'; _b.textContent = _full;
+          _h.onclick = ()=>toggleFold(_h, _b);
+          rw.appendChild(_h); rw.appendChild(_b);
+        } else rw.textContent = _full;
+      } else {
+        addTrace('auto done', '✅ ' + wfHookTag(m) + '工作流「' + m.name + '」完成' + total + '：' + m.text);
+      }
+      (window._runningWf || new Map()).delete(key);
+      const _g = (window._hookGrp || {})[(m.hook || '')];
+      if(_g && _g.head && _g.head.isConnected){
+        _g.done++;
+        if(_g.done + _g.failed >= _g.total && _g.timer) clearInterval(_g.timer);
+        _g.upd();
+      }
+      break;
+    }
+    case 'auto_wf_error': {
+      const key = (m.hook || '') + '::' + m.name;
+      const ent = (window._runningWf || new Map()).get(key);
+      const dur = ent ? Math.round((Date.now() - ent.t0) / 1000) : null;
+      const total = dur != null ? '（' + dur + 's 后失败）' : '';
+      if(ent && ent.el && ent.el.isConnected){
+        const rw = ent.el;
+        rw.classList.remove('running'); rw.classList.add('failed');
+        rw.textContent = '❌ 「' + m.name + '」失败' + total + '：' + (m.text || '');
+      } else {
+        addTrace('auto failed', '❌ ' + wfHookTag(m) + '工作流「' + m.name + '」失败' + total + '：' + m.text);
+      }
+      (window._runningWf || new Map()).delete(key);
+      const _g = (window._hookGrp || {})[(m.hook || '')];
+      if(_g && _g.head && _g.head.isConnected){
+        _g.failed++;
+        if(_g.done + _g.failed >= _g.total && _g.timer) clearInterval(_g.timer);
+        _g.upd();
+      }
+      break;
+    }
     case 'workflow_message':
       addRow('sys', '💬 '+(m.name?('【'+m.name+'】'):'')+m.text, {auto: m.auto});
       break;

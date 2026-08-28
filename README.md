@@ -58,6 +58,18 @@ agt-web      # WebUI（浏览器打开 http://localhost:8000）
 
 ---
 
+## Agent 上手指引（新环境探索）
+
+> 本节写给 **Agent 自己**——当 agt 实例被部署到新环境（云容器 / 新机器 / 新 repo）时，首轮对话建议按此探索，快速建立对所处环境的认知：
+
+1. **进程与环境**：`/status`（工具箱规模 / MCP 连接 / 后台服务 / 子进程树）与 `/context`（模型与上下文配置）
+2. **任务指引**：`read_file("AGENTS.md")`——用户为当前 workspace 定制行为的入口（不存在则跳过）
+3. **workspace 结构**：`list_dir` + README / 核心配置文件——先摸清这个 repo 是什么、用什么语言、怎么构建
+4. **能力面**：`.agent/` 三件套——`agents/`（子 Agent 声明）、`workflows/`（工作流）、`skills/`（技能 SOP）
+5. **模型配置**：`~/.agt/models.json`——本机可用 provider 与默认模型；`/config` 查看运行时设置
+6. **多实例组网**：`remote_connect(url)` 连接其它机器上的 agt 实例（server_id 可省略自动生成）→ 之后任意工具调用 arguments 里带 `"server_id"` 即路由到远程执行（工具级直执行，不消耗远程 LLM token）
+7. **框架参考**：需要理解 / 修改 agt-agent 自身时，本仓库（GitHub: vgp7758/Agt）的 `docs/` 与 `.agent/wiki/`（部署后）是权威资料
+
 ## 上下文管理
 
 长对话不爆上下文、细节也不丢（`session.py`）：

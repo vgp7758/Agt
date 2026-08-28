@@ -66,7 +66,8 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
     log = lambda *a: print(time.strftime("[%H:%M:%S]"), *a, flush=True)
     log(f"watchdog 启动：parent={parent_pid} mode={mode} session={session!r} port={port} msg={message[:40]!r}")
 
-    # 1) 等父进程退出（优雅退出=当前轮跑完才退，长轮/自动工作流可超 90s，容忍 300s）
+    # 1) 等父进程退出（优雅退出=当前轮跑完才退，长轮/自动工作流可超 90s，容忍 300s；
+    #    超时则强杀——/restart 是用户显式重启请求，卡死进程不应阻塞重启）
     time.sleep(1.0)
     deadline = time.time() + 300
     last_note = time.time()
@@ -78,9 +79,17 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
             last_note = time.time()
         time.sleep(0.5)
     else:
-        log(f"❌ 等父进程 {parent_pid} 退出超时（300s，可能卡死），放弃重启——"
-            f"服务已下线，需手动启动")
-        return
+        log(f"⚠️ 父进程 {parent_pid} 300s 未退出（可能卡死），/restart 显式请求——强杀后继续")
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(parent_pid)],
+                               capture_output=True, timeout=15)
+            else:
+                import signal
+                os.kill(parent_pid, signal.SIGKILL)
+        except Exception as e:
+            log(f"⚠️ 强杀失败（{type(e).__name__}: {e}），仍尝试拉起新进程")
+        time.sleep(2.0)
     log(f"父进程 {parent_pid} 已退出")
 
     # 2) web 模式：等端口释放（stop_server 后应很快；uvicorn 释放有延迟容忍）
@@ -104,8 +113,11 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
         env["AGT_RESTART_SESSION"] = session
     if message and message != "-":
         env["AGT_RESTART_MESSAGE"] = message
-    log_file = Path.home() / ".agt" / "restart.log"
+    # 日志按实例分离（mode+port）：多实例共写单文件会互相混杂——9000 与 8000 的 stdout
+    # 交错 16 万行，排障时找不到彼此的段（实测教训）；新实例日志可独立 tail
+    log_file = Path.home() / ".agt" / f"restart-{mode}-{port or 'cli'}.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
+
     kwargs = {}
     if os.name == "nt":
         kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -119,7 +131,6 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
         proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=cwd, env=env,
                                 stdout=lf, stderr=subprocess.STDOUT, **kwargs)
     log(f"新进程已拉起 pid={proc.pid}")
-
     # 4) 确认就绪：web 轮询 HTTP 200（装配 MCP/RAG 冷启动可超 90s——曾见 HF 联网探测挂起
     #    装配数分钟，故容忍 300s 且每 20s 报进度）；cli 确认 3s 内没秒退
     if mode == "web" and port:
@@ -157,7 +168,7 @@ def spawn_watchdog(parent_pid: int, mode: str, session: str, port: int, message:
            "--session", session or "-", "--port", str(port or 0),
            "--message", message or "-", "--cwd", cwd,
            "--src-dir", str(script.parent)]
-    log_file = Path.home() / ".agt" / "restart.log"
+    log_file = Path.home() / ".agt" / f"restart-{mode}-{port or 'cli'}.log"   # 与 run() 同名分离
     log_file.parent.mkdir(parents=True, exist_ok=True)
     kwargs = {}
     if os.name == "nt":

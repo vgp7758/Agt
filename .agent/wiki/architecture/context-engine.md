@@ -24,16 +24,18 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：
 
 ```
-t{轮号}_s{步号}_{微秒戳}.txt
+t{轮号}_s{步号}_{微秒戳}.json
 ```
 
 - `t{轮号}`：已完成轮数（`len(turns)`，进行中的是第 turn+1 轮），与 llm_calls.jsonl 中的 `turn` 字段对应
 - `s{步号}`：当前轮已完成步数（`len(_current.steps)`），与 llm_calls.jsonl 中的 `step` 字段对应
 - `{微秒戳}`：调用时间戳（去重用）
 
+**格式：负载本体 pretty-print，零构造零截断（2026-08，commit 2dc64f2）**：`_dump_projection`（src/agent.py）直接 `json.dumps(payload, indent=2, ensure_ascii=False, default=str)` 转储**发给模型的完整负载**——messages 全量（含 tool_calls 结构、reasoning_content 等），发什么存什么，不重新构造中间格式、不截断：`json.load` 即可消费，考古/对拍零损耗。元信息（turn/step/model/agent_id/time）收进 `_meta` 顶层字段：`{"_meta": {...}, "messages": [...]}`。⚠️ 历史 dump 是 `.txt` 自定义格式（`=== 投影转储 turn=... ===` + `--- [N] role=... (chars) ---` 逐条 + 8000 字截断），仅存于旧存档——本页下方 t206/t224/t228 实证引用 `*.txt` 均为当时的历史文件；新进程一律 `.json`。
+
 **同源保证**：react 主循环 3 处 `llm.chat` 调用点（主调用 / DSML 重试 / 空回答重试，`src/agent.py`）均传 `turn=len(turns), step=len(_current.steps)`——与 `_dump_projection` 完全同一取值；`src/llm_client.py` `chat()` 经 `_turnstep_ctx`（与 `_scene_ctx` 同构 contextvar，finally 清理，不进 API 请求）落盘 jsonl，`src/server.py` `/api/stats` 透传。**在 react 循环新增 LLM 调用点时记得带上这两个参数**，否则该点 tooltip 无轮步标记、无法映射到投影文件。
 
-**与 /stats tooltip 对齐**：从 `/stats` 折线图 hover 获取 `· t206 · s6` 标记 → 直接打开 `projections/t206_s6_*.txt` 查看当时完整投影，快速定位升档/折叠等事件断点（详见 [运维与排障](../guides/ops.md#stats-页webui-统计按钮)）。
+**与 /stats tooltip 对齐**：从 `/stats` 折线图 hover 获取 `· t206 · s6` 标记 → 直接打开 `projections/t206_s6_*.json` 查看当时完整投影，快速定位升档/折叠等事件断点（详见 [运维与排障](../guides/ops.md#stats-页webui-统计按钮)）。
 
 ## 投影分段统计：/context 改读真实投影缓存（commit 4212f65）
 

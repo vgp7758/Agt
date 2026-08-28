@@ -102,6 +102,10 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **fc 大刀首折：至少吞超深档一半**（2026-08，commit 4d37e90）：边界密集（滚动毕业 ~1.9 轮/边界）时碎刀偏勤——超深态（answer/reasoning 原文）留存太短；现每次首折 `_fold_leap_target` 至少吞超深段（`[fc, bs[-max_level]]`）一半，触发间隔约翻 4 倍（203 边界/406 轮实测 52→200 轮），缓存经济无损（摘要尾部追加式）——见 [context-engine · fc 大刀首折](architecture/context-engine.md#fc-大刀首折至少吞超深档一半2026-08commit-4d37e90)
 - **busy_parse ✅❌ 都算空闲**（2026-08-28，commit b674265）：wiki-updater 任务被 /restart 中断后看板显示 ❌（meta failed，agent=None 躺平），旧判定 `any("✅" not in l)` 把 ❌ 行也判忙 → pending 堆到 21 条永不消费（攒批队列死锁）；现 ✅(done)/❌(failed) 都算空闲，只有真运行态行（无 ✅❌ 标记）才算忙；`_restore_subagents` 读档时 meta running → 修正为 failed（重启物理上杀掉了所有 daemon 线程，恢复条目不可能在跑）——见 [wiki-auto-maintenance · busy 检查](features/wiki-auto-maintenance.md#busy-检查与攒批短路按-name-子串判定--多实例多行判定2026-08-26)；**活验收（v0.22.1 发布轮）：wiki-updater_3 从 ❌ 积压 21 条 → ✅ 正常消化归档，攒批队列轮转清空**
 
+## 快速事实增补（2026-08-29）
+
+- **投影转储 JSON 化：负载本体 pretty-print，零构造零截断**（2026-08，commit 2dc64f2）：`_dump_projection` 直接 `json.dumps(payload, indent=2, ensure_ascii=False, default=str)` 转储发给模型的完整负载（含 tool_calls 结构、reasoning_content），元信息收进 `_meta` 顶层字段（turn/step/model/agent_id/time）——`json.load` 即消费，考古/对拍零损耗；文件名 `t{N}_s{M}_{ts}.json` 惯例不变（原 `.txt` 自定义格式 + 8000 字截断仅存旧存档）。上方「排障闭环：t{N}·s{M} 轮步标记」条目中的 `.txt` 引用即旧格式——排障时打开 `projections/t{N}_s{M}_*.json`（详见 [context-engine · 投影转储](architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)、[ops · /stats 页](guides/ops.md#stats-页webui-统计按钮)）
+
 ## 维护约定
 
 - 新功能落 wiki：features/ 目录下按功能建页，home.md 加入口

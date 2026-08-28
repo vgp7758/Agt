@@ -43,9 +43,10 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
   - **tooltip 锁定数据点（v0.18.7，commit aae43b0 打包发布）**：吸附后 tooltip 不驻留鼠标附近，而是**锁定到所吸附的数据点上**、y 跟随曲线起伏——横扫多条折线时 tooltip 始终贴着当前数据点，读数与曲线视觉位置一致；纯前端，Ctrl+F5 生效
 - tooltip：序号/时间（**精确到秒**，bd0d1ef 前为分钟级）/命中率/具体 cached/prompt tokens/**scene**（调用时机）/**turn/step 轮步标记**（commit 4aced81）
   - turn/step 标记格式：`· t{轮号} · s{步号}`（如 `· t206 · s6`）
-  - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.txt`
+  - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.json`
   - 老记录（/restart 前生成的）无 turn/step 字段，tooltip 自动省略该段
-  - 使用场景：从 /stats 折线图发现异常点（如缓存单步深跌）→ 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 直接打开 `projections/t{N}_s{M}_*.txt` 查看当时完整投影，快速定位升档/折叠等事件断点
+  - 使用场景：从 /stats 折线图发现异常点（如缓存单步深跌）→ 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 直接打开 `projections/t{N}_s{M}_*.json` 查看当时完整投影，快速定位升档/折叠等事件断点
+  - ⚠️ 转储格式（2026-08，commit 2dc64f2）：`.json` pretty-print **负载本体**（`{"_meta": {...}, "messages": [...]}`，零构造零截断，`json.load` 即消费）；历史 `.txt` 自定义格式仅存旧存档。详见 [context-engine · 投影转储](context-engine.md#投影转储文件名与-ts-标记commit-4aced81)
 
 ### llm_calls.jsonl 每条记录
 
@@ -114,7 +115,7 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 | 空响应连续 3 次 | 限流/服务波动 → 自动退避重试+回退；ModelScope 空壳 200 是已知病 |
 | 回答是 XML 状 `<｜｜DSML｜｜invoke...` | 模型把工具调用泄进 content → llm_client 自动兜底解析；仍残留会提示重试 |
 | tool_calls 与 content 同现 | 思考误放 content → 自动转移 content→reasoning（投影保 CoT） |
-| /stats 命中率**单步深跌**（如 98%+ miss），下一步即恢复 ~99.9% | **折叠（fold）事件，预期一次性成本，无需处置**：轮边界 `_plan_fold` 计划触发全档折叠，历史段整段全价重算（t206_s7 实证，见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）。新模型下折叠只在**轮边界**统一计划（先升档到 75% 再折叠到 75%），不再轮内随机触发——单步深跌即轮边界重排的代价，之后轮内零调整、缓存整段命中。区别于：持续骤降且与 utility 交错=驱逐；恒 0=随机路由（见下行两条）。**排障速查**：/stats 折线图看到异常点 → 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 打开 `projections/t{N}_s_{M}*.txt` 直接看当时完整投影（见 [turn/step 轮步标记](#stats-页webui-统计按钮)） |
+| /stats 命中率**单步深跌**（如 98%+ miss），下一步即恢复 ~99.9% | **折叠（fold）事件，预期一次性成本，无需处置**：轮边界 `_plan_fold` 计划触发全档折叠，历史段整段全价重算（t206_s7 实证，见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)）。新模型下折叠只在**轮边界**统一计划（先升档到 75% 再折叠到 75%），不再轮内随机触发——单步深跌即轮边界重排的代价，之后轮内零调整、缓存整段命中。区别于：持续骤降且与 utility 交错=驱逐；恒 0=随机路由（见下行两条）。**排障速查**：/stats 折线图看到异常点 → 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 打开 `projections/t{N}_s_{M}*.json` 直接看当时完整投影（2026-08 起转储为 JSON pretty-print 负载本体，见 [turn/step 轮步标记](#stats-页webui-统计按钮)） |
 | 新一轮初始 prompt_tokens 远超 win×0.75（如 win=400K 时 >300K）却**折叠 0 轮**、无升档/折叠日志 | **`_estimate_tokens` 漏算 tools schema（旧代码）**：估算≠实际（实际含 130+ 工具 schema 的 ~264K 字符），计划「以为达标」实超窗 → 升级 session.py/agent.py 修复 + `/restart`（见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)）。排障佐证：llm_calls.jsonl 实际 prompt_tokens 与 /stats 或估算口径相差一个量级（十万级） |
 | 某端点缓存命中骤降 | per-token 驱逐：utility 与 react 共用 token → 分条目分 token |
 | 某端点命中率恒 0 | 随机路由或 provider 不支持缓存 → 链路后置 |

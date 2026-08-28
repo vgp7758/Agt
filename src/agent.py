@@ -1335,7 +1335,9 @@ class Agent:
         return msgs
 
     def _dump_projection(self, msgs: list):
-        """把完整投影（messages）以纯文本写到 session_dir/projections/ 目录。"""
+        """把完整请求负载（messages）以 pretty-print JSON 写到 session_dir/projections/。
+        直接 dumps 负载本体（含 meta 元信息顶层字段），不重新构造格式、不截断——
+        转储即一手数据：json.load 即可消费，考古/对拍零损耗。"""
         try:
             sdir = getattr(self.session, "session_dir", None)
             if not sdir:
@@ -1347,18 +1349,16 @@ class Agent:
             ts = datetime.now().strftime("%H%M%S")
             turn_num = len(self.session.turns)
             step_num = len(self.session._current.steps) if self.session._current else 0
-            fname = f"t{turn_num}_s{step_num}_{ts}.txt"
-            lines = [f"=== 投影转储 turn={turn_num} step={step_num} model={self.llm.model_name} time={datetime.now().isoformat()} ===\n"]
-            for i, m in enumerate(msgs):
-                role = m.get("role", "?")
-                content = m.get("content", "") or ""   # 可能是 None（带 tool_calls 的 assistant 消息）
-                # 截断超长 tool_call 相关内容（保持可读性）
-                if len(content) > 8000:
-                    content = content[:8000] + f"\n... (+{len(content) - 8000} chars)"
-                lines.append(f"--- [{i}] role={role} ({len(content)} chars) ---")
-                lines.append(content)
-                lines.append("")
-            (proj_dir / fname).write_text("\n".join(lines), encoding="utf-8")
+            fname = f"t{turn_num}_s{step_num}_{ts}.json"
+            payload = {
+                "_meta": {"turn": turn_num, "step": step_num,
+                          "model": self.llm.model_name, "agent_id": self.agent_id,
+                          "time": datetime.now().isoformat()},
+                "messages": msgs,
+            }
+            (proj_dir / fname).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8")
         except Exception as e:
             _LOG.warning("投影转储失败: %s", e)
 

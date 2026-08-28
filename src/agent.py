@@ -456,8 +456,14 @@ class Agent:
         arguments(dict) 带 "server_id" 键 → pop 出来 POST 到远程实例的 /api/tool/exec
         （远程工具箱执行，结果前缀 [remote:id]）；未带 → 本地执行（现状不变）。
         server_id 是路由元数据：pop 后不进远程参数、不进 toollog 存档（记录纯工具参数）。
-        顶层自定义字段会被 provider 的结构化解析丢弃——放 arguments 里是唯一保真通道。"""
-        if isinstance(arguments, dict) and "server_id" in arguments:
+        顶层自定义字段会被 provider 的结构化解析丢弃——放 arguments 里是唯一保真通道。
+        remote_* 管理工具族豁免路由：它们的 server_id 参数是【管理语义】（想用什么 id
+        连接/断开哪个 id），不是路由语义——实际事故：remote_connect(server_id=..., url=...)
+        被路由拦截吃掉 → 连接注册从未本地执行 → "[未知 server_id]" 死循环（comfy session
+        三连败后模型放弃框架通道自己手写了 urllib 轮子）。"""
+        _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list")
+        if (isinstance(arguments, dict) and "server_id" in arguments
+                and not name.startswith(_REMOTE_ADMIN)):
             sid = str(arguments.pop("server_id") or "").strip()
             if sid:
                 try:

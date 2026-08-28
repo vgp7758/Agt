@@ -64,6 +64,25 @@
 
 **轮询带宽**：`get_wf_run` 返回前剥离所有 `full` 并补 `has_full` 布尔——观测页 2s 轮询只传摘要，全文按需单节点拉取。
 
+## 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
+
+## 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
+
+**背景**：观测页只能看到顶层节点——loop/batch/subworkflow 是一个黑盒节点，子画布内部跑到哪看不到（调试 wait_extract 等待循环 / 子工作流时缺关键视野）。
+
+**引擎侧（src/workflow.py）**：
+
+- **`track_stack` 嵌套观测容器栈**：`execute(canvas, ..., track_stack=[])` 新增参数——子工作流执行时 `_handle_subworkflow` push 容器，子节点事件写**栈顶容器**而非顶层 run；栈非空时本 execute **不发 run_done**（整体结束态归最外层）
+- **复合节点（loop/batch）轮容器**：`_run_composite_body` 每轮迭代收集体内节点事件 → 每轮尾部实时更新 `node_meta`（`children`=最后一轮轨迹 + `rounds` + `childmeta` 子节点标题映射）——运行中展开观测页即可看到最后一轮逐轮刷新
+- **嵌套复合**（子画布里还有 loop）经栈自然支持任意深度
+- 子节点事件走 `_track_apply(store_full=False)`：嵌套子节点**只存 preview**，全文与预算仍归顶层节点（防 20M 预算被嵌套爆掉）
+
+**前端（wf_monitor.html）**：顶层节点行可展开（`▸ 循环 200001 ♻ 12 轮 · 5 子节点` / `▸ sub_test 🔗 extract_keywords · 9 节点`）——子轨迹表（子节点/类型/状态/耗时/输出预览）；展开状态跨 2s 轮询保持；点击立即重画。
+
+**顺手修的真 bug（测试暴露）**：execute 初始 ready **无条件排除 type 2**——`start→end` 直连的子工作流 exit 永远不进 ready 队列 → 隐式结束返回 `{}`（输出丢失）；`execute_debug` 没有这个排除所以调试页一直正常，掩盖了问题。修复：只排除「非 entry 后继的孤立 end」。
+
+**e2e 验证**：loop rounds=3 + 最后一轮 children + childmeta ✓；subworkflow wf_name + 完整子轨迹（entry+exit）✓；run_done 只发一次（嵌套不发）✓；输出正确透传 ✓。需 `/restart` 生效（详见 [workflow-hooks · 嵌套子画布轨迹](../architecture/workflow-hooks.md#嵌套子画布轨迹复合节点--子工作流的子节点事件2026-08commit-31d5ef3)）。
+
 ## API 与前端
 
 ### server.py 路由

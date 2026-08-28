@@ -86,6 +86,22 @@ scene 取值：react（主循环）/ hook:before_turn 等钩子 / recap / debug�
 - **正常轮边界（t224）**：/stats 显示 98%+ 命中，仅 1~2% 结构性重算 → 验证轮边界平滑路径已生效（未超 75% 阈值）。见 [context-engine 正常轮边界路径](../architecture/context-engine.md#正常轮边界路径t224-实证2026-08)
 - **折叠判阈口径修复（2026-08）**：`_estimate_tokens` 估算分子补齐 tools schema——修前估算「以为达标」（271,623 判 ≤300K → 折叠 0 轮）而实际 419,284 超 win=400K（估算 vs 实际系统性差 ~147K/请求）。**症状**：新一轮初始 prompt_tokens 远超 400K×0.75 目标却折叠 0 轮 / 未见升档折叠日志。需升级代码 + `/restart` 生效。见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)
 
+### /restart 看门狗与 agt 入口（2026-08）
+
+### /restart 看门狗：超时强杀兜底 + 日志按实例分离（2026-08，commit affdb09）
+
+**背景（8000 实例用户报告）**：/restart 后浏览器一直等待，看门狗始终没拉起新服务，直到手动在 repo 启动一个新实例才触发旧实例恢复成功（用户纠正过机制：手动实例还在装配没起服务时旧链路就拉起了，退掉手动实例旧实例也不关——实际卡点是**新进程装配期**的共享资源交互，现场已失）。
+
+**看门狗超时放弃（已修）**：旧逻辑父进程 300s 未退出 → **放弃重启**（服务已下线需手动启动）。修复：300s 未退 → `taskkill /F /T`（POSIX SIGKILL）→ **继续拉起流程**——`/restart` 是用户显式重启请求，卡死进程不应阻塞它；优雅退出留给正常退出，强杀留给明确要求重启的时刻。
+
+**日志按实例分离（已修）**：多实例 stdout 此前**都追加写同一个 `~/.agt/restart.log`**——9000 与 8000 交错 16 万行，排障时搜不到彼此的段（追加写不互锁，但可观测性灾难）。修复：`~/.agt/restart-{mode}-{port}.log`（如 restart-web-8000.log / restart-web-9000.log），新进程 `-u` unbuffered——装配日志实时落盘（块缓冲会把输出困住几十分钟，事后无法判断新进程卡在哪个阶段）。
+
+**下次复现时一眼定位**：`restart-web-8000.log` 里看门狗拉起实例的**最后输出行**就是卡点——停在「[MCP] 已连接 'python-lsp'」之后=卡下一个 MCP；停在「[rag] 加载 embedding 模型」=模型/HF 路径。候选：MCP stdio 双实例竞争（LSP 单实例锁）、HF 联网探测挂起、模型文件锁——若确认，下一步给装配阶段加超时保护（MCP 连接限时、`HF_HUB_OFFLINE` 兜底）。
+
+### `agt --help` / `--version`（2026-08，commit 0e186c9）
+
+**背景（用户观察）**：Agent 新环境探索时常用 `agt --help` 获取帮助——此前不支持，直接进交互。修复：`_early_argv()` 支持 `--help/-h/help`、`--version/-V`，打印能力概貌后退出（不进交互），`agt`/`agt-web` 两入口都有；无参数直通不变。与 README「Agent 上手指引」闭环（[multi-instance 边界](../architecture/multi-instance.md#边界与后续)）。
+
 ## 常见错误对照
 
 | 症状 | 原因 → 处置 |

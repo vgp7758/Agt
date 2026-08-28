@@ -49,15 +49,12 @@
 
 ## 缺的一层封装（方向，未实施）
 
-现在是"每次写段脚本"的形态，没有第一等工具。若成为常用场景，值得封装约 60 行：
+**2026-08 已封装为第一等工具**（commit 398a60a）——用户提案落地：`remote_message(server_id, message)`（异步 fire-and-forget，WS 送达即返）+ `remote_ask(server_id, question, timeout=120)`（同步问答，挂流收 answer 聚合返回）。两者都在 `remote_tools.py`（`_ws_send_collect` 统一 WS 客户端），与工具级直执行同属 [multi-instance 组网](../architecture/multi-instance.md) 的五件套，加入 `_REMOTE_ADMIN` 豁免路由（server_id=发给谁，管理语义）。**不再需要每次写脚本**——`remote_ask("agt-8000", "你当前 session 的名字？")` 一个工具调用即可。实现细节见 [multi-instance · 跨实例消息通信](../architecture/multi-instance.md#跨实例消息通信remote_message--remote_ask2026-08)。
 
-```python
-remote_agt(url, message, timeout=120)
-  # 连接 → 发消息 → 挂流收事件直到 _done → 聚合 answer + 工具调用摘要返回
-remote_agt(url, action="list_team")   # 只读 action 快捷通道
-```
-
-长等待需配合 `set_tool_timeout` 或转后台轮询。附带愿景：**多实例组网**——A 机器实例派 B 机器的 vision 看图（B 有 GPU 跑本地模型），答案回流入 A 的 inbox。
+**剩余未实施的部分**：
+- 只读 action 快捷通道（`remote_agt(url, action="list_team")`）——`remote_list` 已覆盖连接管理，其余 action 走 WS 仍要脚本
+- 长等待超时降级文案（「对方在忙长任务——加大 timeout 或改用 remote_message」）已实现，但无独立后台轮询形态
+- **多实例组网愿景**：A 机器派 B 机器的 vision 看图（B 有 GPU 跑本地模型），答案回流入 A 的 inbox——方向未实施，`remote_ask` 的同步问答是雏形
 
 ## 注意事项
 

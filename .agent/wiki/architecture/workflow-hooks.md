@@ -81,6 +81,45 @@ with ThreadPoolExecutor() as pool:
 
 实例与修复（SYSTEM 硬约束原文）：[wiki_auto_query · LLM2 输出纪律](../features/wiki-auto-query.md#llm2-输出纪律只摘录不生成2026-08-20-修复)
 
+### 钩子声明面三层：编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载（2026-08）
+
+### hook_ctx 上下文袋 + hook_write 工具（2026-08）
+
+### hook_ctx 上下文袋 + hook_write 工具：回写从引擎特判移到工作流（2026-08，commit 91b8437）
+
+**背景（用户提案）**：recap 等钩子副作用的回写逻辑原来在引擎侧特判（`_async_hook` 的 recap 分支，meta.recap/name 兜底 17 行）——问题：**turn_end 挂着多个工作流时以谁为准**？引擎特判无法表达。用户方案：给钩子 start 输入加一个 `{}` 上下文袋参数，定义 `hook_write` 工具以袋为入参，工作流里组装 payload 后调用，由工具按字典键值对决定如何处理。
+
+**四层实现**：
+
+| 层 | 内容 |
+|---|---|
+| **① hook_ctx 上下文袋** | `_run_hooks` 入口统一注入：`turn_idx`（turn_end=len(turns)，此前「turn_idx 只有引擎知道」的障碍解除）+ `hook_ctx`（整袋快照）。start 声明 `hook_ctx(object)` 输入即可整袋取 |
+| **② hook_write 工具**（`multiagent.make_hook_side_effects`） | `payload={"action":"set_recap","value":"≤60字","turn":N}` → 三落点（`_recap` / registry / Turn.recap+recaps.jsonl）；错误特征过滤（`_RECAP_ERR_MARKS`：APIStatusError 等不污染 recap，保持旧值）+ JSON 字符串/turn 容错。`hidden=True` 仅钩子工作流 plugin 节点调用，不投影主 LLM |
+| **③ recap_gen.xml 改造** | `start(+hook_ctx) → llm → code 组装 payload → plugin hook_write → end`——回写链路在工作流里**显式可见**，编辑器可改可观测 |
+| **④ 引擎去特化** | `_async_hook` 的 recap 回写分支删除——工作流接管 |
+
+**多钩子共存语义**：谁调 `hook_write` 谁负责，后写覆盖先写（recap 语义本来就是最新的）；条件判断/只在特定轮写/各写各的字段——全在工作流里连线表达，引擎零特判。
+
+**主/子 Agent 双注册**：`make_hook_side_effects` 闭包绑定 agent——子 Agent（multiagent.py 的 `_setup_subagent`）重绑自身版本，防继承主 Agent 闭包错写。
+
+**验证全过**：hook_write 单元（三落点/错误过滤/JSON 串容错/turn 容错）+ recap_gen e2e（mock llm，turn=9 落点正确）+ 播种一致 + 编译 ×3。生效方式：工作流每轮重扫，不用重启。
+
+### 钩子声明面三层：编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载（2026-08，commit 9f8f085 + 628f5b1）
+
+**背景**：钩子挂载曾从编辑器迁到 /agents 管理页（批次七删了顶栏钩子下拉），但发现两件事：① 钩子工作流需要**协议 schema 规范化**（start 注入什么、end 返回什么）的编辑器特性；② 编辑器 UI 不再管理 hook/async/recap 字段后，**保存请求缺这些字段 → 每次编辑器保存逐步丢光**（实测 22 个 XML 里只剩 2 个还带 hook 标志，播种面新装机钩子全死）。
+
+**三层分工（当前定稿）**：
+
+| 层 | 职责 | 入口 |
+|---|---|---|
+| **编辑器** | 声明「本工作流实现什么钩子协议」+ schema 规范化 | 顶栏「钩子」下拉（写 meta.hook 根属性；start 自动补协议输入 / end 自动补 inject+result 输出；已有自定义输入 confirm 保护；toast 明示「挂载由 agent 的 .yml 声明」） |
+| **/agents 管理页** | 声明「哪些 Agent 挂哪些钩子」 | hooks 编辑（yml 优先，运行时权威） |
+| **磁盘 meta** | 播种面兜底（无 yml 声明场景的 `get_hook_workflows` 扫描） | **server PUT 保底**：保存请求缺 hook/async/recap/enabled 时从磁盘现有 XML 根属性合并——UI 不管理的字段不被 UI 保存抹掉 |
+
+**schema 规范化（HOOK_INPUTS，workflow_editor.html）**：各钩子位置 start 输入约定——`before_turn`：[user_message, hook_ctx]、`before_tool`：[user_message, tool_name, tool_args, hook_ctx]、`after_tool`：[…, tool_result, changed_files, hook_ctx]、`before_answer`：[…, draft_answer, changed_calls, hook_ctx]、`turn_end`：[user_message, draft_answer, turn_context, hook_ctx]；end 统一返回 `{inject:boolean, result:string}` 协议对。
+
+**修复记录**：5 个工作流补根属性（before_turn_retrieval/wiki_auto_query 补 `hook="before_turn"`、py_auto_diag/cs_auto_diag 补 `hook="after_tool"`、recap_gen 补 `hook="turn_end" async="true" recap="true"`）+ server PUT 保底合并 + `get_hook_workflows` 修复后识别全部 6 个钩子。
+
 ## 运行观测（run registry，2026-08-20 新，commit 8aeb21a；全文查看 commit bb56a82）
 
 工作流执行的节点级实时观测，消除「钩子在跑但不知道跑到哪」的盲盒感。**接入点**：
@@ -93,6 +132,25 @@ with ThreadPoolExecutor() as pool:
 | `src/agent.py` `_run_hooks` | 同步（线程池）+ async（后台线程）钩子全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件带 run_id |
 
 注册表 `_WF_RUNS`（`threading.Lock` 线程安全，最近 50 次内存上限）+ `new_wf_run / list_wf_runs / get_wf_run / get_wf_node_full` API。节点 end/error 事件并行存 `preview`（200 字）与 `full`（`_full_str`：保留换行/JSON 结构，单节点上限 `_FULL_CAP=200K` 超限截断标注，总预算 `_FULL_BUDGET=20M` 字符防爆内存、evict 时扣减 `_full_total`，预算耗尽只存预览）；`get_wf_run` 轮询视图**剥离 full、补 has_full**（2s 轮询不传大 payload），全文走 `GET /api/wf/runs/<id>/node/<nid>` → PlainTextResponse 纯文本页。观测入口：对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点时间线甘特图 2s 轮询，has_full 预览可点击开全文。详见 **[工作流运行观测](../features/wf-monitor.md)**（主页面：实现/路由/前端/内存防线/与其他可观测能力对比）。
+
+### 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
+
+### 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
+
+**背景（用户请求 2026-08）**：观测页只能看到顶层节点（loop/batch/subworkflow 是一个黑盒节点），子画布内部跑到哪看不到——调试 wait_extract 的等待循环 / 子工作流时缺关键视野。
+
+**引擎侧（src/workflow.py）**：
+
+- **`track_stack` 嵌套观测容器栈**：`execute(canvas, ..., track_stack=[])` 新增参数——子工作流执行时 `_handle_subworkflow` 把子节点事件写**栈顶容器**而非顶层 run；栈非空时本 execute **不发 run_done**（整体结束态归最外层）
+- **复合节点（loop/batch）轮容器**：`_run_composite_body` 每轮迭代收集体内节点事件 → 每轮尾部实时更新 `node_meta`（`children`=最后一轮轨迹 + `rounds` + `childmeta` 子节点标题映射）——运行中展开观测页即可看到最后一轮逐轮刷新
+- **子工作流**：push 容器 → 子 execute 继承 → pop 后 `node_meta` 挂 `children` + `wf_name` + `childmeta`；嵌套复合（子画布里还有 loop）经栈自然支持任意深度
+- 子节点事件也走 `_track_apply`（`store_full=False`：嵌套子节点只存 preview，**全文与预算仍归顶层节点**——防 20M 预算被嵌套爆掉）
+
+**前端（wf_monitor.html）**：`▸ 循环 200001 ♻ 12 轮 · 5 子节点` 可点击展开子轨迹表（子节点/类型/状态/耗时/输出预览）；子工作流行显示目标名（`🔗 sub_test · 9 节点`）。展开状态跨 2s 轮询保持。
+
+**顺手修的真 bug**：execute 初始 ready **无条件排除 type 2**——`start→end` 直连的子工作流 exit 永远不进 ready 队列 → 隐式结束返回 `{}`（输出丢失）；`execute_debug` 没有这个排除所以调试页一直正常，掩盖了问题。修复：只排除「非 entry 后继的孤立 end」。
+
+**e2e 验证**：loop rounds=3 + 最后一轮 children + childmeta ✓；subworkflow wf_name + 完整子轨迹 ✓；run_done 只发一次（嵌套不发）✓；输出正确透传 ✓。需 `/restart` 生效。
 
 ## 13 类节点速查
 
@@ -127,4 +185,20 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
   | 字面量 / 全局变量 | 非 None 即选（原行为不变） |
 
   **关键取舍**：空列表/空 dict 是合法值**不**触发跳过——`filtered_outputs=[]` 是批处理节点的合法产出（0 条命中也是有意义的信息）；只有 None 和空串（解析不到 / 渲染为空）才继续往后找。九场景验证通过（含 var1 未执行取 var2、空列表不误判、多分组互不影响）；引擎层修复需 `/restart` 生效。
+
+### 引擎语义补全：setvar XML 简写 / 循环变量终值 / break 携带值 / yield（2026-08）
+
+### 2026-08 引擎语义补全：setvar XML 简写 / 循环变量终值 / break 携带值 / yield（commits ace13b2 + 8bc6c66）
+
+**背景（extract_keywords wait_extract 调试链，用户实测驱动）**：等待循环里 recheck 读到数据、但输出的 keywords/nth_output 恒 null——排查出三个叠加的引擎缺口：
+
+**① setvar(20) 的 left 支持 XML 简写（commit ace13b2）**：手写/编辑器保存的 `<in left="__entry__.keywords" right="ref:926184.raw"/>` 转成 canvas 后 left 是**字符串**，而旧引擎只认编辑器结构化形态（`{value:{content:{name}}}`）→ `var_name=None` → **setvar 执行了但一个字都没写**（观测显示 done 却是空转——最难的静默失败）。修复：`_setvar_left_name` 多形态解析（`__entry__.keywords` 点号路径取尾段 / 裸名 / 结构化 dict / round-trip 变体）+ `_setvar_right_value` 支持 `ref:节点.字段` 字符串简写。解析失败返回 None（调用方静默跳过——不炸循环体）。
+
+**② 循环变量终值无条件并入 outputs（同 commit）**：`loop_vars` 只在声明了原生输出时才 merge——wait_extract 只声明 all/filtered/nth 三个约定输出 → `1275951.keywords` 恒 None → 聚合器四变量全空 → fallback 到 var3 的 `"pending"`（index=3 正是 var3 的序号——观测与代码互证）。修复：`loop_vars` **setdefault 无条件并入**——「复合节点.变量名」是一等输出引用面（编辑器 `__entry__` 的变量端口一直暴露着它），约定输出（all/filtered/nth）与显式原生输出优先不覆盖。
+
+**③ Break(19) 携带值（commit 8bc6c66，await 语义）**：旧实现恒 `return "break", None` 且 break 轮 round_out 直接丢弃 → 就绪轮 set_keywords 拿到值后 `__break__` 退出，值死在退出瞬间。修复：与 Continue 同款解析唯一 result 字段——break 携带值退出（就绪轮终值进 all_outputs 末位；未连 result → None 不占位，保持纯退出语义）。批处理体内 break 同款修复（此前 break 信号被静默忽略——继续跑完剩余元素）。
+
+**④ yield 节点（用户提案，同 commit）**：`ntype in ("29","2","yield")`——yield ≡ continue(result)，「本轮产出该值」的语义化一等节点；编辑器 TYPE_LABEL/TYPE_CATEGORY/流程出口排除同步注册。
+
+**e2e 验证（复刻 wait_extract 结构）**：count 循环 + selector 分支（未就绪轮 continue(无 result) / 就绪轮 setvar→break(带 result)）→ `all_outputs=[null×4, kw]`、`filtered_outputs=[kw]`、`nth_output=kw`、`keywords 变量=kw`——用户期望三元组精确达成。extract_keywords.xml 配套：`__break__` 连上 `result ← 926184.raw`、`__continue__` 移除坏引用 `926184.raw.list`（引擎无 `.list` 派生属性）。
 

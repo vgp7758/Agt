@@ -231,12 +231,12 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **两条生成路径（都回写 `Turn.recap` + recaps.jsonl，2026-08 新）**：
 
-| 路径 | 触发时点 | `turn_idx` 捕获 |
-|------|----------|-----------------|
-| recap_gen 工作流（`turn_end: recap_gen\|async` 钩子） | turn_end 钩子在 **finish_turn 之前**触发 | `len(session.turns)`（轮尚未归档，落点即 len(turns)） |
-| 内置 `_generate_recap`（无工作流声明时） | finish **之后** daemon 线程 | `len(session.turns) - 1` |
+| 路径 | 触发时点 | `turn_idx` 捕获 | 回写执行者 |
+|------|----------|-----------------|-----------|
+| recap_gen 工作流（`turn_end: recap_gen\|async` 钩子） | turn_end 钩子在 **finish_turn 之前**触发 | `len(session.turns)`（轮尚未归档，落点即 len(turns)）——经 **hook_ctx 上下文袋**注入 | **工作流自身**：`start(+hook_ctx) → llm → code 组装 payload → plugin hook_write → end`（见 [workflow-hooks · hook_ctx/hook_write](workflow-hooks.md#hook_ctx-上下文袋--hook_write-工具2026-08)） |
+| 内置 `_generate_recap`（无工作流声明时） | finish **之后** daemon 线程 | `len(session.turns) - 1` | 引擎（同 hook_write 的 set_turn_recap 落点） |
 
-两条路径都带 `turn_idx` 调 `session.set_turn_recap(idx, recap)` → 写内存 `Turn.recap` + 追加 `recaps.jsonl` 一行（sidecar 持久化——recap 是事后异步产物，**不进事件流**，events 重放不含它，load 侧 `_load_recaps` 按 idx 恢复）。turns 只追加不移动，异步结果到达时写回，idx 永远对得上。
+**2026-08（commit 91b8437）回写迁移**：recap_gen 工作流路径的回写**从引擎特判移到工作流**——`_async_hook` 的 recap 分支（meta.recap/name 兜底 17 行）删除，工作流经 `hook_write` 工具显式回写（三落点：`_recap` / registry / Turn.recap+recaps.jsonl，错误特征过滤 `_RECAP_ERR_MARKS` 不污染）。**多 turn_end 钩子共存时「以谁为准」由工作流显式决定**（谁调 hook_write 谁负责，后写覆盖先写）。`hook_write` 闭包绑定 agent，主/子 Agent 双注册（子 Agent 重绑自身版本）。
 
 **rewind 一致性**：`_rewrite_persistence` 同步裁剪 recaps.jsonl（只留 idx < keep）——否则回溯后新轮「长到」旧 idx 会被旧 recap 张冠李戴（load 侧按 idx 盲配）。
 

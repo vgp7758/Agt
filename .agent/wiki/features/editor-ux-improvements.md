@@ -306,6 +306,62 @@ async function loadNodeDesc(){
 
 首个受益场景：`llm_call.model`（models.json provider 列表 + 空=跟随）。2026-08 多 Agent 工具跟进：`agent_prompt`/`kill_agent` 的 `name`（.agent/agents/ 声明扫描）、`agent_prompt.caller`（['', 'user']）、通信工具 `target_id`（registry 当前 agent_id）——enum 由 `_inject_agent_enums` 动态注入，create/kill 声明变化后自动刷新，详见 [多 Agent · caller 汇报对象与动态 enum 注入](../architecture/multi-agent.md#caller-汇报对象与动态-enum-注入2026-08)。
 
+## 批次十（2026-08 下旬）：值容器统一 + 复合节点输出端口 + 筛选下拉修复
+
+## 批次十一（2026-08）：钩子协议下拉回归（声明 + schema 规范化）
+
+## 批次十一（2026-08）：钩子协议下拉回归（声明 + schema 规范化，挂载归 yml）
+
+**背景（用户提案）**：钩子逻辑改到 agent 的 dsl 语义数据装配后，工作流里通过下拉框选择匹配钩子 + 自动规范化输入输出 schema 的编辑器特性不应丢——**但最终哪些 Agent 的钩子上挂着哪些东西由该 agent 的 .yml 定义**。
+
+**恢复内容（workflow_editor.html，commit 628f5b1）**：顶栏「钩子」下拉（5 位置 + 无）——选定后：
+
+- **start 输入自动规范化**：`HOOK_INPUTS` 按钩子位置补协议输入（turn_end 场景补 user_message/draft_answer/turn_context + hook_ctx；after_tool 含 tool_result/changed_files + hook_ctx；before_answer 含 draft_answer/changed_calls + hook_ctx——引擎后来注入的上下文字段，原版被删时还没有）
+- **end 输出自动规范化**：`inject(boolean)` + `result(string)` 协议对
+- 已有自定义输入 → **confirm 保护**（不静默覆盖现成工作流）
+- toast 明示语义：「挂载由 agent 的 .yml 声明」
+- openWf 回显 `WF.meta.hook`；保存时写 `meta.hook`（空=清除）
+
+**三层分工定稿**：编辑器=声明「实现什么钩子协议」+ schema 规范化（写 meta.hook 根属性）；/agents 管理页=声明「哪些 Agent 挂哪些钩子」（yml 优先，运行时权威）；磁盘 meta=播种面兜底（server PUT 保底合并，见 [workflow-hooks · 钩子声明面三层](../architecture/workflow-hooks.md#钩子声明面三层编辑器协议下拉--磁盘-meta-保底--yml-挂载2026-08)）。
+
+## 批次十（2026-08 下旬）：值容器统一 + 复合节点输出端口 + 筛选下拉修复
+
+### 20. SetVar（type20）值容器 right 统一：类型下拉/引用选择/字面量控件全炸修复
+
+**现象（用户报告）**：SetVar 节点输入字段选类型下拉报 `Cannot set properties of undefined (setting 'type')`，选引用端口报 `setting 'value'`。
+
+**根因**：SetVar（type20）节点的数据结构**异构**——每个 inputParameter 是 `{name, left, right}` 三元组：`left`=目标变量名、**`right`=要写的新值（值容器）**、没有 `input` 键。而属性面板通用输入字段区（类型下拉 `setField`、值按钮、▾ 引用选择 `quickSetRef→setInputRef`、字面量展开 `_litControlHTML`、画布内嵌控件、变量连线折叠组 `setVarLink`、拖线落点 `finishVar`、断线重置、全局变量 `setRefPath/setRefName`）全部按普通节点的 `p.input` 结构读写——type20 时 `p.input` 是 undefined：**写** `f.input.type=v` 炸、**读**恒空（类型显示 string、值按钮恒显「（字面量）」、变量线恒黄）。
+
+**修复（统一容器解析，workflow_editor.html）**：
+
+```javascript
+// 写路径：_valBlockW(p,n) —— type20 → right（确保存在），其余 → input
+function _valBlockW(p,n){
+  const t=(n||{}).type||(findN(selNode)||{}).type;
+  if(t==='20'){if(!p.right)p.right={type:'string',value:{type:'literal',content:''}};return p.right;}
+  if(!p.input)p.input={type:'string',value:{type:'literal',content:''}};return p.input;
+}
+// 读路径：_effInput(p)（right||input||left 兜底）——19 处读点全部接上
+const t=_effInput(f).type||f.type||'string';   // 类型下拉
+const lit=String(_effInput(f).value?.content ?? '');  // 值按钮
+```
+
+覆盖面：类型下拉 / 引用选择（▾ 下拉、变量连线组同路径）/ 字面量（值按钮展开 + 画布内嵌控件）/ 拖线落点 finishVar（fallback 此前还写错容器）/ 断线重置 / 全局变量 / 渲染读（值按钮显 🔗 引用名、类型下拉、refPicking 展开行、变量线颜色）。Ctrl+F5 强刷编辑器生效（纯前端）。
+
+### 21. 复合节点本地变量输出侧端口（循环变量终值暴露）
+
+**现象（用户报告）**：复合节点（loop/batch）的本地变量添加时只在输入侧有连线端口，输出侧没有——但循环变量的**终值**本就要从复合节点输出暴露（`890541.diag` 这类下游引用），输出侧没端口意味着既拖不出变量线、已连线下游引用源定位还画错位置（fallback 到节点顶部）。
+
+**修复**（`nodeRows`）：variableParameters 每个变量同步 push 输入侧行 + **输出侧行**（`localVarOut` 标记）——输出端口渲染（`startVar` 拖线发起）、`portY('out')` 定位、变量线源对齐全部经既有机制自动生效，零额外接线。
+
+### 22. 筛选下拉 `_round_out`/`op`/`literal` 全炸：渲染与写入对象不一致
+
+**现象（用户报告）**：批处理筛选（filtered_outputs）的 `_round_out` / op / literal 三个下拉都报 `Cannot set properties of undefined (setting 'operator')`。
+
+**根因**：渲染时 `filt = b.filter || {临时构造}` + push 占位条件——**没有写回 node**（loop 节点从来就没有 batch.filter）；点下拉时 `setCompFilt` 新建空 `{conditions:[]}` → `conditions[ci]` 是 undefined → `c.operator=v` 炸。
+
+**双修复**：① 渲染处写回 `if(!b.filter)b.filter={logic:2,conditions:[]}; n.data.inputs.batch=b`——filt 与 setCompFilt 读写**同一对象**（治本）；② `setCompFilt` 越界防御 `while(conditions.length<=ci) push 占位`——已渲染的面板残留 ci 不再炸（向后兼容）。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

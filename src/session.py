@@ -1007,7 +1007,9 @@ class Session:
                 break                                       # 已回落到位
             if self._graduate_once():                       # 先升档（无损压缩）止血
                 continue
-            nxt = self._next_fold_target(fold_count)
+            # 应急首刀同款大刀（超深一半）；起点之后的微调碎刀
+            nxt = (self._fold_leap_target(fold_count) if fold_count == self._planned_fold
+                   else self._next_fold_target(fold_count))
             if nxt is not None:
                 fold_count = nxt
                 continue
@@ -1408,12 +1410,14 @@ class Session:
             if not self._graduate_once():
                 break
             g += 1
-        # 再折叠：若升档后仍 >75%，逐档折叠到 ≤75%（或无可折）
+        # 再折叠：若升档后仍 >75%，折叠到 ≤75%（或无可折）。
+        # 首刀大刀（_fold_leap_target）：至少吞超深档的一半——边界密集时碎刀（每刀 1-2 轮）
+        # 触发过勤，超深态留存太短；之后仍超线再碎刀微调。
         fc = 0
         for _ in range(len(self.turns) + 4):
             if self._estimate_tokens(prefix + self._render_tiered_history(fc) + cur_est) <= target:
                 break
-            nxt = self._next_fold_target(fc)
+            nxt = self._fold_leap_target(fc) if fc == 0 else self._next_fold_target(fc)
             if nxt is None:
                 break
             fc = nxt
@@ -1459,6 +1463,27 @@ class Session:
             if b + 1 > fold_count:
                 return b + 1
         return None
+
+    def _fold_leap_target(self, fc: int):
+        """fc 大刀首折目标：至少吞掉【超深档的一半】到 fc 结构摘要（用户裁定 2026-08-28：
+        边界密集（滚动毕业 ~1.9 轮/边界）时碎刀偏勤——每轮边界触发、每刀只折 1-2 轮，
+        超深态（answer/reasoning 原文）留存太短。一次大刀一半，触发间隔翻倍、留存翻倍）。
+        超深段 = [fc, bs[-max_level]]（raw>max_level 的轮；最后一个超深轮 = 倒数第 max_level 个边界，
+        因 raw_level(i)=1+count(b>=i)，count(bs[-max_level])=max_level → raw=max_level+1）。
+        fold_deep_tools 关 / 档梯未满（无超深段）→ 退化为碎刀 _next_fold_target。"""
+        if not config.load_fold_deep_tools():
+            return self._next_fold_target(fc)
+        bs = sorted(self._tier_boundaries)
+        if len(bs) <= self.max_level:
+            return self._next_fold_target(fc)   # 边界数 ≤ max_level：档梯未满，无超深段
+        deep_end = bs[-self.max_level]          # 最后一个超深轮（合法折叠点 = deep_end+1）
+        if deep_end + 1 <= fc:
+            return self._next_fold_target(fc)   # 超深段已折完：剩档内段，碎刀
+        half = fc + max(1, (deep_end + 1 - fc) // 2)   # 至少吞一半（≥1 段）
+        for b in bs:                            # 对齐到 ≥half 的最小合法折叠点（boundary+1）
+            if b + 1 >= half:
+                return min(b + 1, deep_end + 1)
+        return deep_end + 1
 
     @staticmethod
     def _summarize_answer(answer: str) -> str:

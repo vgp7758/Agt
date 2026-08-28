@@ -969,7 +969,7 @@ class Agent:
                     f"工具调用：{', '.join(tool_names) if tool_names else '无'}\n"
                     f"只输出这一句话，不要任何额外内容。"
                 )
-                resp = self.utility_client().chat([{"role": "user", "content": prompt}], scene="recap")
+                resp = self.utility_client().chat([{"role": "user", "content": prompt}], scene=f"recap·{self.agent_id}")
                 recap = (resp.content or "").strip().split("\n")[0].strip()[:60]
                 if recap:
                     self._recap = recap
@@ -1194,7 +1194,7 @@ class Agent:
                     try:
                         _llm = _agent_ref.utility_client()
                         _ov = getattr(_llm, "_scene_override", None)
-                        _llm._scene_override = f"hook:{_hook}"
+                        _llm._scene_override = f"hook:{_hook}·{_hw['name']}·{_agent_ref.agent_id}"
                         try:
                             inject, result, message = run_hook(_hw["canvas"], _ctx,
                                                       tools=_agent_ref.tools, llm=_llm, workspace=_ws,
@@ -1224,7 +1224,7 @@ class Agent:
                                 "run_id": rid, "text": str(context)[:80]})
                     hook_llm = self.utility_client()
                     _ov = getattr(hook_llm, "_scene_override", None)
-                    hook_llm._scene_override = f"hook:{hook}"   # 钩子内 LLM 调用标注 scene（chat 自动读取）
+                    hook_llm._scene_override = f"hook:{hook}·{hw['name']}·{self.agent_id}"   # 钩子内 LLM 调用标注 scene（含工作流名+agent，日志面板据此显示发起者）
                     try:
                         try:
                             inject, result, message = run_hook(hw["canvas"], context,
@@ -1580,7 +1580,7 @@ class Agent:
                         msgs = self._chat_msgs()
                         _t_num = len(self.session.turns)   # 与 _dump_projection 同源（对上 projections/t{N}_s{M} 文件名）
                         _s_num = len(self.session._current.steps) if self.session._current else 0
-                        resp = self.llm.chat(msgs, tools=tool_schemas, scene="react", turn=_t_num, step=_s_num)
+                        resp = self.llm.chat(msgs, tools=tool_schemas, scene=f"react·{self.agent_id}", turn=_t_num, step=_s_num)
                         # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
                         # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
                         # function calling 重试一次（重试结果不再二次检查，避免无限循环）。
@@ -1593,7 +1593,7 @@ class Agent:
                                 "content": "你上一轮的工具调用以文本(DSML 标记)泄漏进了回复正文，系统没能解析执行。"
                                           "请重新发起这些工具调用，务必使用标准的 function calling（tool_calls 字段），"
                                           "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
-                            }], tools=tool_schemas, scene="react")
+                            }], tools=tool_schemas, scene=f"react·{self.agent_id}")
                         # 空回答保险丝：无工具调用且 content 为空（ModelScope 等偶发空响应）→ 提示重试一次
                         if not resp.tool_calls and not (resp.content or "").strip():
                             self._emit({"type": "warn", "text": "⚠️ 模型返回空回答，已提示重试"})
@@ -1602,7 +1602,7 @@ class Agent:
                                     msgs + [{
                                         "role": "system",
                                         "content": "你上一轮返回了空内容。请给出明确的最终回答，或调用工具继续完成任务，不要返回空内容。"
-                                    }], tools=tool_schemas, scene="react", turn=_t_num, step=_s_num)
+                                    }], tools=tool_schemas, scene=f"react·{self.agent_id}", turn=_t_num, step=_s_num)
                                 if r2.tool_calls or (r2.content or "").strip():
                                     resp = r2
                             except Exception:
@@ -1866,7 +1866,7 @@ class Agent:
             "content": "token 预算或步数已达上限。请基于目前已有的工具结果，直接给出最终总结性回答，不要再调用工具。"
         }]
         try:
-            resp = self.utility_client().chat(msgs, scene="wrap_up")   # 收尾总结走辅助模型（预算耗尽时主模型可能正是问题源）
+            resp = self.utility_client().chat(msgs, scene=f"wrap_up·{self.agent_id}")   # 收尾总结走辅助模型（预算耗尽时主模型可能正是问题源）
             answer = resp.content
             if resp.usage:
                 self.cumulative_tokens += resp.usage.get("total_tokens", 0)

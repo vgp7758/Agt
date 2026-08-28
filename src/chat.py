@@ -339,7 +339,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # 经 broadcast（带 agent_id）推到 WebUI 日志面板——此前这些只进 log 文件，用户看不到。
     try:
         from llm_client import set_log_sink
-        set_log_sink(lambda lvl, txt, _a=agent: _a._emit({"type": "llm_log", "level": lvl, "text": txt}))
+        set_log_sink(lambda lvl, txt, scene="", _a=agent:
+                     _a._emit({"type": "llm_log", "level": lvl, "text": txt, "scene": scene or ""}))
     except Exception:
         pass
     return agent

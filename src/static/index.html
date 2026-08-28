@@ -1499,8 +1499,8 @@ function toggleLogPanel(open){
   }
 }
 
-function pushLogEntry(level, text){
-  _logEntries.push({ts: new Date(), level, text});
+function pushLogEntry(level, text, scene){
+  _logEntries.push({ts: new Date(), level, text, scene: scene||''});
   if(_logEntries.length > 200) _logEntries.shift();   // 上限滚动（内存友好；文件日志仍完整）
   const fab = document.getElementById('logFab');
   if(fab && fab.style.display !== 'flex') fab.style.display = 'flex';   // 有日志 → 显示入口（面板开着时它本来是 none，收起后自然恢复）
@@ -1514,7 +1514,9 @@ function pushLogEntry(level, text){
     const row = document.createElement('div');
     row.style.cssText = 'padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11.5px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all'
       + (level === 'error' ? ';color:#b91c1c;background:#fef2f2' : ';color:#92400e;background:#fffbeb');
-    row.textContent = `[${_logEntries[_logEntries.length-1].ts.toLocaleTimeString('sv-SE')}] ${text}`;
+    // 行尾小括号附场景（哪个 agent/工作流发起的这次调用——限流/回退时一眼定位来源）
+    row.textContent = `[${_logEntries[_logEntries.length-1].ts.toLocaleTimeString('sv-SE')}] ${text}`
+      + (scene ? ` (${scene})` : '');
     list.appendChild(row);
     while(list.children.length > 200) list.removeChild(list.firstChild);
     list.scrollTop = list.scrollHeight;
@@ -2012,7 +2014,8 @@ function onWSMessage(ev){
     case 'tool_result': clearToolProgress(); _inParallel = false; appendToolResult(m.result); break;
     case 'llm_log':
       // LLM 运行日志（回退/限流/截断/空响应/链耗尽等——此前只进 log 文件，用户看不到）
-      pushLogEntry(m.level || 'warn', m.text || '');
+      // scene=发起场景（react·_main_ / hook:before_turn·wiki_auto_query·_main_ 等），行尾小括号显示
+      pushLogEntry(m.level || 'warn', m.text || '', m.scene || '');
       break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
     case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id); break;

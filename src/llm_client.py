@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+import contextvars
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -23,22 +24,32 @@ import config
 
 _LOG = logging.getLogger("agt.llm")  # 直接用标准 logging（不 import log.py）；handler 由 agent 配置时挂到 agt root
 
+# 当前 LLM 调用场景（线程隔离）：react·_main_ / hook:before_turn·wiki_auto_query·_main_ / recap·wiki-updater_3 ...
+# chat() 进入时 set、finally reset——sink（日志面板）emit 时读取，把"谁发起的这次调用"附到日志尾部。
+# 用 ContextVar 而非 client 实例属性：utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖。
+_SCENE_CTX: contextvars.ContextVar = contextvars.ContextVar("agt_llm_scene", default="")
+
 # ===== 前端日志面板通道：把 WARNING/ERROR 级日志转发给 UI（回退/限流/截断等此前只进文件）=====
-_LOG_SINKS: list = []          # callable(level_str, msg)——由 build_agent 注册（主 Agent 的 llm_log 事件广播）
+_LOG_SINKS: list = []          # callable(level_str, msg, scene)——由 build_agent 注册（主 Agent 的 llm_log 事件广播）
 _LOG_SINK_HANDLER = None
 
 
 class _SinkHandler(logging.Handler):
-    """捕获 WARNING+ 记录转发给 UI sink（文件日志照常由 root handler 写，二者并存）。"""
+    """捕获 WARNING+ 记录转发给 UI sink（文件日志照常由 root handler 写，二者并存）。
+    尾部附 scene（ContextVar 线程隔离读取）——日志面板显示这条限流/回退是哪个 agent/工作流发起的。"""
 
     def emit(self, record):
         if record.levelno < logging.WARNING:
             return
         msg = record.getMessage()
         lvl = "error" if record.levelno >= logging.ERROR else "warn"
+        try:
+            scene = _SCENE_CTX.get("")
+        except Exception:
+            scene = ""
         for fn in list(_LOG_SINKS):
             try:
-                fn(lvl, msg)
+                fn(lvl, msg, scene)
             except Exception:
                 pass
 
@@ -408,11 +419,13 @@ class LLMClient:
         llm_calls.jsonl——/stats tooltip 可显示 'react · t220 · s0' 直接对上投影文件。"""
         self._scene_ctx = scene or getattr(self, "_scene_override", None) or "llm.chat"
         self._turnstep_ctx = (turn, step) if turn is not None else None
+        _sv_tok = _SCENE_CTX.set(self._scene_ctx)   # 线程隔离：sink（日志面板）据此在日志尾部附场景
         try:
             return self._chat_with_fallback(messages, **overrides)
         finally:
             self._scene_ctx = None
             self._turnstep_ctx = None
+            _SCENE_CTX.reset(_sv_tok)
 
     def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
         """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。"""

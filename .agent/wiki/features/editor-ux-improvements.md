@@ -91,6 +91,8 @@ LLM 节点画布在 prompt 框（§1）基础上增加 **systemPrompt 框**—�
 
 spec / 结构编辑（📋）从弹窗改为**浮层抽屉**——默认折叠不占视口，右上角图标唤出，编辑时仍可看到画布上下文。
 
+2026-08 下旬布局细化：标题栏钉顶 + 下方独立滚动区（details/summary 拆开，`specSummary` 变 div）——见下文批次十二 §23。
+
 ### 11. 修复：LLM 输出格式下拉切换不生效
 
 右侧属性面板切换 LLM「输出格式」下拉后**静默丢失**——保存路径（lpSet）未携带该字段，切了等于没切、无任何报错。修复：补上通用补建路径，下拉切换即写回生效。
@@ -357,6 +359,34 @@ const lit=String(_effInput(f).value?.content ?? '');  // 值按钮
 **根因**：渲染时 `filt = b.filter || {临时构造}` + push 占位条件——**没有写回 node**（loop 节点从来就没有 batch.filter）；点下拉时 `setCompFilt` 新建空 `{conditions:[]}` → `conditions[ci]` 是 undefined → `c.operator=v` 炸。
 
 **双修复**：① 渲染处写回 `if(!b.filter)b.filter={logic:2,conditions:[]}; n.data.inputs.batch=b`——filt 与 setCompFilt 读写**同一对象**（治本）；② `setCompFilt` 越界防御 `while(conditions.length<=ci) push 占位`——已渲染的面板残留 ci 不再炸（向后兼容）。
+
+## 批次十二（`092a0df`）：spec / 🐞 日志抽屉布局统一——标题栏钉顶 + 滚动区独立
+
+主线索：**抽屉骨架统一**——落点在 WebUI 对话页 `src/static/index.html`（📐 spec 抽屉 §10 与 🐞 日志抽屉同页，非编辑器页）。此前两个抽屉都是**整面板滚动**：内容一长，标题与 ✕ 关闭按钮跟着滚出视野。用户提案：「最上面的标题栏都应该在抽屉顶部固定，下面的区域才作为滚动区域」。
+
+### 23. 抽屉骨架：headbar 钉顶 + 滚动区独立
+
+| 抽屉 | 之前 | 现在 |
+|---|---|---|
+| 📐 spec 抽屉（`#specPanel`，§10） | 整面板 `overflow-y:auto` | `.spec-headbar`（标题 + 批阅态徽章 + ✕）`flex:0 0 auto` 钉顶；`.spec-scroll`（specList + 批阅栏）`flex:1 1 auto; overflow-y:auto; min-height:0` |
+| 🐞 日志抽屉（`#logPanel`，随 [v0.20.1](../releases/v0.20.1.md)） | 同款整面板滚动 | 标题行 + ✕ 钉顶（行内样式同构）；`#logList` `flex:1` 独立滚动——打开即滚到底、200 条滚动截断逻辑不变 |
+
+骨架公式（两抽屉同构）：容器 `flex-direction:column; overflow:hidden` + 头部 `flex:0 0 auto` + 滚动区 `flex:1 1 auto; overflow-y:auto; min-height:0`。**`min-height:0` 不可省**——flex 子项默认 `min-height:auto` 不允许收缩到内容以下，缺了滚动区不会滚。
+
+### 24. specPanel 的 details/summary 拆开
+
+原结构 `<details open><summary id="specSummary">📐…</summary><div id="specList">` 把 summary 与列表绑死，无法单独钉顶。拆开后：
+
+- `specSummary` 从 `<summary>` 变 `<div class="spec-title">`——`renderSpec` 的 textContent/appendChild 照常工作；批阅栏 `insertBefore(bar, list)` 在新父容器下语义不变
+- ✕ 从 absolute 浮动回归 flex 流内——成为固定头部的一员，滚动不再影响
+
+### 25. display 切换值必须与容器 display 类型一致（坑）
+
+容器改 flex 列后，`toggleSpecPanel`/`toggleLogPanel` 里写死的 `panel.style.display = open ? 'block' : 'none'` 会让 flex-direction 失效——两处同步 `'block'`→`'flex'`。
+
+> 教训：**CSS 容器 display 类型与 JS toggle 写死的切换值是隐形耦合**——改一处必须同步查另一处。
+
+验证：JS 语法 + 结构断言全过；纯前端，Ctrl+F5 刷新即生效。
 
 ## 相关页面
 

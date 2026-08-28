@@ -74,8 +74,6 @@ def agt_node():
 
 `_node_catalog()` 此前两个消费端：`list_workflow_nodes`、`query_workflow_node`。2026-08 增第三个——**`GET /api/wf/nodes`**（server.py）：把 `{type: desc}` 喂给工作流编辑器画布的 hover tooltip / props 面板描述段（前端 `NODE_DESC` 全局）。效果：插件节点（AND/OR/timestamp 等）的 desc 在编辑器 UI 同步可见，改插件 `.py` 的 desc 自动跟上，不用手工回填前端。详见 [工作流编辑器 UX · 批次九](../features/editor-ux-improvements.md)。
 
-### syncPluginOutputs 与聚合 index 协议端口（2026-08）
-
 ### syncPluginOutputs：插件 fixed 协议端口补齐（2026-08，commits 36045ee + 7607e9b）
 
 **背景链**：① AND/OR 节点的 result/results 输出端口在「保存 → 重载」后消失——`canvas_to_xml` 的 `("8","AND","OR")` 共享分支只写 `<branch>` 不写 `<out>`，读侧同款不解析 outputs=[]，**XML 序列化层双向丢失**（执行完全不受影响——`_handle_and` 运行时返回 outputs dict，所以 e2e 测试全过而编辑器里端口消失，纯显示层的双向丢失，最难排查那种）；② 编辑器兜底 `syncPluginOutputs` 初版查 `NODE_TEMPLATES` 按名补端口——但内置模板混着**示例端口**（code 的 key0/key1/key2 只是新建模板的示例），用户删掉后重开又冒出来（用户报告的回归）。

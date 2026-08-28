@@ -58,8 +58,6 @@ run_python({"code": "...", "server_id": "agt-192-168-1-2-8000"})   ← 远程 CP
 
 **三层组网通道（2026-08 定稿）**：工具级（任意调用带 server_id，远程零 LLM 成本）/ 消息级异步（`remote_message`，通报派活）/ 消息级同步（`remote_ask`，问它才知道的事）——详见 [跨实例消息通信](#跨实例消息通信remote_message--remote_ask2026-08)。
 
-## 跨实例消息通信（remote_message / remote_ask，2026-08）
-
 ## 跨实例消息通信（remote_message / remote_ask，2026-08，commit 398a60a）
 
 **用户提案**：跨实例工具调用直接调工具即可（工具级直执行），而跨实例通信（发消息让对方带上下文干活）还需要 run_python 手写 WS 客户端——为什么不做一个工具？直接传 server_id 和要发送的消息，异步继续。

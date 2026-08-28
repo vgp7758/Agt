@@ -1,15 +1,15 @@
-<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型）并【在工作流内显式回写】：llm 总结 → code 组装 payload → hook_write 工具写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" async="true" recap="true" hidden="true">
-  <node id="100001" type="start" title="Entry" x="100" y="100">
+<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型）并【在工作流内显式回写】：llm 总结 → code 组装 payload → hook_write 工具写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
+  <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
     <out name="turn_context" type="string"/>
     <out name="hook_ctx" type="object"/>
   </node>
-  <node id="120001" type="llm" title="summarize" x="380" y="100">
+  <node id="120001" type="llm" title="summarize" x="420" y="80">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <in name="turn_ctx" type="string" ref="100001.turn_context"/>
-    <param name="model"><![CDATA[local-qwen]]></param>
+    <model>local-lfm-vl</model>
     <param name="temperature" type="string"><![CDATA[0.3]]></param>
     <param name="thinking" type="string"><![CDATA[false]]></param>
     <param name="prompt" type="string"><![CDATA[user message：
@@ -18,12 +18,14 @@
 your answer：
 {{answer}}]]></param>
     <param name="systemPrompt" type="string"><![CDATA[You are a summarizer. Summarize in one sentence what you did in this round of conversation (no more than 30 tokens). Only output the sentence itself, without any explanation, quotation marks, prefixes, or special formatting. 你在总结一轮 Agent 工作对话（可能是主 Agent 的任务轮或子 Agent 的派活轮），用一句话概括这轮做了什么（≤30字，中文任务用中文）。]]></param>
+    <param name="output_format" type="string"><![CDATA[text]]></param>
     <out name="output" type="string"/>
+    <batch enabled="false"/>
   </node>
-  <node id="130001" type="code" title="build_payload" x="660" y="100">
+  <node id="130001" type="code" title="build_payload" x="720" y="80">
     <in name="summary" type="string" ref="120001.output"/>
     <in name="hook_ctx" type="object" ref="100001.hook_ctx"/>
-    <code><![CDATA[async def main(args):
+    <code language="3"><![CDATA[async def main(args):
     p = args.params
     hc = p.get("hook_ctx") or {}
     turn = hc.get("turn_idx", -1)
@@ -34,11 +36,12 @@ your answer：
     return {"payload": {"action": "set_recap", "value": str(p.get("summary") or ""), "turn": turn}}]]></code>
     <out name="payload" type="object"/>
   </node>
-  <node id="140001" type="plugin" toolName="hook_write" title="write_recap" x="940" y="100">
+  <node id="140001" type="plugin" title="write_recap" x="1020" y="80" toolName="hook_write">
     <in name="payload" type="object" ref="130001.payload"/>
     <out name="raw" type="string"/>
+    <out name="result" type="string" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit" x="1220" y="100">
+  <node id="900001" type="end" title="Exit" x="1320" y="80">
     <out name="result" ref="140001.raw" type="string"/>
   </node>
   <edge from="100001" to="120001"/>

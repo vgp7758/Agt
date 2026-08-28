@@ -21,6 +21,8 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 
 **节点全文查看（commit bb56a82）**：预览 200 字不够排障时，`has_full` 节点的预览单元格**可点击**（📄 标记 + 虚线下划线）→ 新标签 `GET /api/wf/runs/<id>/node/<nid>` 打开 **text/plain 纯文本页**——页面文本直接就是节点完整输出（非 HTML、无样式，浏览器原生渲染）。单节点 200K 字符内原文，超限截断并标注总长；全量总预算 20M 字符耗尽后节点只存预览（不可点击）。看 LLM 节点完整回包、检索节点全量结果用它。
 
+**嵌套子画布轨迹（2026-08，commit 31d5ef3）**：复合节点（loop/batch）/子工作流不再是黑盒——`track_stack` 容器栈收集子节点事件，复合节点逐轮更新 `children`（最后一轮轨迹 + rounds + childmeta），观测页顶层行可点击展开子轨迹表（`▸ 循环 200001 ♻ 12 轮 · 5 子节点` / `🔗 sub_test · 9 节点`）。调试 wait_extract 等待循环 / 子工作流时用它（详见 [wf-monitor · 嵌套子画布](../features/wf-monitor.md#嵌套子画布轨迹复合节点--子工作流的子节点事件2026-08commit-31d5ef3)）。
+
 覆盖三类执行路径：同步钩子（线程池）、async 钩子（后台线程）、wf_* 工具调用。注意：`_WF_RUNS` 是进程内存，/restart 清空；旧进程的「执行中」行不携带 run_id（不可点击），需 /restart 后生效。实现细节见 [工作流运行观测](../features/wf-monitor.md)。
 
 ### 工作流调试页 · 节点输出白框（2026-08-21，commit 6c804a2）

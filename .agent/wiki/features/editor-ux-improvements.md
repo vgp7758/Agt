@@ -306,10 +306,6 @@ async function loadNodeDesc(){
 
 首个受益场景：`llm_call.model`（models.json provider 列表 + 空=跟随）。2026-08 多 Agent 工具跟进：`agent_prompt`/`kill_agent` 的 `name`（.agent/agents/ 声明扫描）、`agent_prompt.caller`（['', 'user']）、通信工具 `target_id`（registry 当前 agent_id）——enum 由 `_inject_agent_enums` 动态注入，create/kill 声明变化后自动刷新，详见 [多 Agent · caller 汇报对象与动态 enum 注入](../architecture/multi-agent.md#caller-汇报对象与动态-enum-注入2026-08)。
 
-## 批次十（2026-08 下旬）：值容器统一 + 复合节点输出端口 + 筛选下拉修复
-
-## 批次十一（2026-08）：钩子协议下拉回归（声明 + schema 规范化）
-
 ## 批次十一（2026-08）：钩子协议下拉回归（声明 + schema 规范化，挂载归 yml）
 
 **背景（用户提案）**：钩子逻辑改到 agent 的 dsl 语义数据装配后，工作流里通过下拉框选择匹配钩子 + 自动规范化输入输出 schema 的编辑器特性不应丢——**但最终哪些 Agent 的钩子上挂着哪些东西由该 agent 的 .yml 定义**。

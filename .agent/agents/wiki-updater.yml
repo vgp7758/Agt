@@ -15,4 +15,5 @@ hooks:
 fallback:
 - ms-deepseek
 - deepseek
+- proxy
 - local-lfm

@@ -81,10 +81,6 @@ with ThreadPoolExecutor() as pool:
 
 实例与修复（SYSTEM 硬约束原文）：[wiki_auto_query · LLM2 输出纪律](../features/wiki-auto-query.md#llm2-输出纪律只摘录不生成2026-08-20-修复)
 
-### 钩子声明面三层：编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载（2026-08）
-
-### hook_ctx 上下文袋 + hook_write 工具（2026-08）
-
 ### hook_ctx 上下文袋 + hook_write 工具：回写从引擎特判移到工作流（2026-08，commit 91b8437）
 
 **背景（用户提案）**：recap 等钩子副作用的回写逻辑原来在引擎侧特判（`_async_hook` 的 recap 分支，meta.recap/name 兜底 17 行）——问题：**turn_end 挂着多个工作流时以谁为准**？引擎特判无法表达。用户方案：给钩子 start 输入加一个 `{}` 上下文袋参数，定义 `hook_write` 工具以袋为入参，工作流里组装 payload 后调用，由工具按字典键值对决定如何处理。
@@ -132,8 +128,6 @@ with ThreadPoolExecutor() as pool:
 | `src/agent.py` `_run_hooks` | 同步（线程池）+ async（后台线程）钩子全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件带 run_id |
 
 注册表 `_WF_RUNS`（`threading.Lock` 线程安全，最近 50 次内存上限）+ `new_wf_run / list_wf_runs / get_wf_run / get_wf_node_full` API。节点 end/error 事件并行存 `preview`（200 字）与 `full`（`_full_str`：保留换行/JSON 结构，单节点上限 `_FULL_CAP=200K` 超限截断标注，总预算 `_FULL_BUDGET=20M` 字符防爆内存、evict 时扣减 `_full_total`，预算耗尽只存预览）；`get_wf_run` 轮询视图**剥离 full、补 has_full**（2s 轮询不传大 payload），全文走 `GET /api/wf/runs/<id>/node/<nid>` → PlainTextResponse 纯文本页。观测入口：对话中「⏳ 执行中…」行可点击 → `/wf/monitor?run=<id>` 节点时间线甘特图 2s 轮询，has_full 预览可点击开全文。详见 **[工作流运行观测](../features/wf-monitor.md)**（主页面：实现/路由/前端/内存防线/与其他可观测能力对比）。
-
-### 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
 
 ### 嵌套子画布轨迹：复合节点 / 子工作流的子节点事件（2026-08，commit 31d5ef3）
 
@@ -185,8 +179,6 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
   | 字面量 / 全局变量 | 非 None 即选（原行为不变） |
 
   **关键取舍**：空列表/空 dict 是合法值**不**触发跳过——`filtered_outputs=[]` 是批处理节点的合法产出（0 条命中也是有意义的信息）；只有 None 和空串（解析不到 / 渲染为空）才继续往后找。九场景验证通过（含 var1 未执行取 var2、空列表不误判、多分组互不影响）；引擎层修复需 `/restart` 生效。
-
-### 引擎语义补全：setvar XML 简写 / 循环变量终值 / break 携带值 / yield（2026-08）
 
 ### 2026-08 引擎语义补全：setvar XML 简写 / 循环变量终值 / break 携带值 / yield（commits ace13b2 + 8bc6c66）
 

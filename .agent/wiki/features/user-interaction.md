@@ -7,7 +7,7 @@
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：后台事件通知**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复，见下节）
-- **并行钩子 UI 状态**：多个 before_turn 钩子并行执行时，各自独立显示「执行中」状态，互不覆盖；执行中行带每秒跳动的实时秒表 `(Ns)`（commit 6aa5903）、可点击打开实时观测页，完成/失败行定格显示总耗时
+- **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
 ## 多客户端 target 路由 · 页签级 Agent 隔离（2026-08，commit 30ac45b）
@@ -234,6 +234,33 @@ clearInterval(rec.timer);
 上述「执行中」行在事件携带 `run_id` 时**可点击**（虚线下划线 + pointer），`window.open('/wf/monitor?run='+encodeURIComponent(m.run_id))` 新标签打开观测页，实时查看该工作流的节点时间线甘特图（跑到哪个节点、卡了多久、输出预览）——解决"钩子在跑但完全是盲盒"的观测需求。
 
 `run_id` 由 `src/agent.py` `_run_hooks` 生成（同步线程池 + async 后台线程全覆盖，`auto_wf_start`/`auto_wf`/`auto_wf_error` 事件均携带），注册表与观测页实现见 [工作流运行观测](wf-monitor.md)。旧进程的事件不带 run_id（不可点击），需 `/restart` 生效。
+
+### 钩子组折叠显示：同 hook 位置收进一个组头（2026-08，commit 4455503）
+
+**用户诉求**：钩子触发时默认折叠显示，形态类似 `before_turn (1/2)`——点击展开看钩子里各工作流的具体执行情况。此前每行独立「执行中」闪烁 + 逐行秒表（commit 6aa5903）在多个钩子并行时刷屏。
+
+**实现**（`src/static/index.html`，纯前端，`auto_wf_start` / `auto_wf` / `auto_wf_error` 三事件处理内）：
+
+```
+▸ [每轮开始前]钩子 ×2（0/2）⏳ 3s          ← 运行中：脉冲动画 + 组级秒表（每秒跳动）
+▸ [每轮开始前]钩子 ×2（2/2）✅ 共 5s        ← 全部完成：停表定格，仍可点开回看详情
+▸ [每轮开始前]钩子 ×2（1/2）⚠️ 共 8s       ← 有失败：黄色定格
+  点击展开：
+    ⏳ 「wiki_auto_query」执行中…            ← 各工作流行（虚线下划线=可点观测页）
+    ✅ 「before_turn_retrieval」完成（2s）：…（点击展开）   ← 长文本行内二级折叠
+```
+
+| 点 | 说明 |
+|---|---|
+| **按 hook 分组** | `window._hookGrp = {hook: {head, box, total, done, failed, t0, timer, upd}}`——同一位置挂 N 个工作流收进一个组头；同轮多个 hook 位置（before_turn/after_tool…）各一组 |
+| **组级计时** | 首个 start 起表（t0）、全部 done/failed 停表（`clearInterval`）——一行只有一个跳动的秒数，替代 commit 6aa5903 的逐行 `(Ns)` 秒表（逐行 setInterval 随组折叠移除） |
+| **计数动态增长** | `total` 随每个 start 事件递增——并行钩子可能不同时 start（`as_completed` 等待期间有先后），分母实时长大 |
+| **默认收起** | `box.style.display='none'`，点组头展开/收起；head 前缀 `▸/▾` 复用 [trace-fold](trace-fold.md) 的折叠约定（内联实现同款 toggle，额外调 `g.upd()` 刷新组头） |
+| **行内保留** | 各工作流行：⏳ 执行中（脉冲）→ ✅ 完成（>160 字行内二级折叠）/ ❌ 失败；带 `run_id` 可点击打开观测页（commit 8aeb21a 能力保留） |
+| **Map 值扩展** | `_runningWf` 值从 `{el, timer, t0}` 改为 `{el, grp, t0}`——完成/失败时借 `grp` 引用推进组头计数并检查停表 |
+| **迟到完成兜底** | 跨轮完成的 async 钩子组已脱 DOM → `addTrace` 独立行（原有行为不变） |
+
+**生效方式**：纯前端（index.html 磁盘 serve），**Ctrl+F5 强刷即生效，无需 /restart**。事件协议零改动——纯渲染层聚合。
 
 ## 前端 UI 遮罩坑：toast 透明条遮挡输入框失焦（2026-08，commit 0a415bc）
 

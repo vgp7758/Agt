@@ -9,7 +9,8 @@
 | 💭 思考内容（reasoning 流式段落） | **折叠** | `▸ 💭 思考（N 字，点击展开）`，字数随流式增长 | 2026-08，commit ee968be |
 | 🔧 非 diff 工具调用 | **折叠** | `▸ 🔧 工具名(主参数)` | 同批（用户提案） |
 | 文件 diff 类工具（edit/write_file/insert/replace_lines/delete/move） | **展开（不可折叠）** | 无——改动详情是一轮里最值得看的东西 | 同批 |
-| 钩子完成文本（before_tool/after_tool） | >140 字才折叠 | 截 120 字（换行处截断） | 此前已有 |
+| 钩子组（同 hook 多工作流，auto_wf_start 起） | **折叠** | `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`（组头计数+计时） | 2026-08，commit 4455503 |
+| 钩子完成文本（组内行级二级折叠） | >160 字才折叠 | 截 110 字（换行处截断） | 2026-08，commit 4455503 |
 
 ## 基建：toggleFold + .tf-head/.tf-body
 
@@ -21,7 +22,7 @@ function toggleFold(head, body){          // 通用折叠：body display 切换 
 ```
 
 - CSS：`.ev.tool-fold` > `.tf-head`（蓝色，工具/钩子）+ `.tf-body`；思考版 `.tf-head.think-head` / `.tf-body.think-body`（**灰斜体 + pre-wrap**，视觉承袭原 `.ev.think` 思考行）
-- 三个消费端（思考组/工具组/钩子行）同一函数，head 前缀约定 `▸ /▾ ` 两个字符供切换时改写
+- 四个消费端同一折叠语义：思考组/工具组/钩子完成文本直接调 `toggleFold`；**钩子组**（auto_wf_start 建组）内联实现同款 toggle（额外调 `g.upd()` 刷新组头计数/前缀）。head 前缀约定 `▸ /▾ ` 两个字符供切换时改写
 
 ## 💭 思考内容折叠（commit ee968be，核心交付）
 
@@ -67,7 +68,9 @@ thinking 事件带 `agent_id`（`_emit` 统一打标，见 [气泡交互](bubble
 
 ## 钩子行折叠
 
-`auto_wf` 完成事件：before_tool/after_tool 钩子的完成文本常带完整诊断/重载清单 → 全文 >140 字时折叠（head 截 120 字 + 换行截断，`…（点击展开）`）；before_turn/turn_end 等轮级钩子保持原样。
+**组折叠（auto_wf_start 起，commit 4455503）**：同 hook 位置的多个工作流收进一个组头 `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`——**默认收起**，点击展开看各工作流执行详情。组头带计数（done/total）+ 组级秒表，运行中脉冲动画、全完成/有失败停表定格；行内工作流保留观测页跳转 / 完成态。实现细节与跨轮兜底见 [用户交互 · 钩子组折叠显示](user-interaction.md#钩子组折叠显示同-hook-位置收进一个组头2026-08commit-4455503)。
+
+**完成文本二级折叠（auto_wf）**：组内行完成文本 `✅ 「name」完成（Ns）：…` 全文 >160 字时折叠（head 截 110 字 + 换行截断，`…（点击展开）`）——组已折叠的前提下展开组还能再展开长文本（两级降噪）。跨轮迟到的完成（async 钩子，组已脱 DOM）回退 `addTrace` 独立行。
 
 ## 与其他模块的关系
 

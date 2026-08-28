@@ -99,15 +99,50 @@ def probe_server(url: str) -> dict | None:
             "checked_at": time.time()}
 
 
+def _auto_server_id(url: str, existing: set) -> str:
+    """从 url 推导默认 server_id（remote_connect 未传时的自动生成）。
+    127.0.0.1/localhost → agt-{port}（本地隧道场景端口是唯一区分维度——如 SSH 隧道 8300→远端 8000）；
+    远程主机 → agt-{host}-{port}（清洗非法字符）。冲突时 -2/-3 递增。"""
+    import re as _re
+    from urllib.parse import urlparse as _up
+    try:
+        u = _up(url if "//" in url else "http://" + url)
+        host, port = (u.hostname or "remote"), u.port
+    except Exception:
+        host, port = "remote", None
+    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        base = f"agt-{port}" if port else "agt-local"
+    else:
+        h = _re.sub(r"[^0-9a-zA-Z-]+", "-", host).strip("-")
+        base = f"agt-{h}-{port}" if port else f"agt-{h}"
+    sid, n = base, 2
+    while sid in existing:
+        sid = f"{base}-{n}"
+        n += 1
+    return sid
+
+
 def connect(server_id: str, url: str) -> str:
-    """注册一个远程实例（探测成功才入表）。"""
+    """注册一个远程实例（探测成功才入表）。server_id 留空时自动生成（推荐）：
+    本地 url → agt-{端口}（隧道场景）；远程 → agt-{host}-{端口}；同 url 重复连接幂等复用。"""
     server_id = (server_id or "").strip()
-    if not server_id:
-        return "[参数错误] server_id 不能为空"
     info = probe_server(url)
     if info is None:
         return f"[连接失败] {url} 探测无响应或 Agent 未就绪（检查 URL/端口/服务是否在跑）"
     with _LOCK:
+        if not server_id:
+            # 幂等：同 url 已在表 → 复用其 id（offline 恢复/重复连接场景）
+            for k, v in REMOTE_SERVERS.items():
+                if v.get("url") == info["url"]:
+                    server_id = k
+                    break
+            if not server_id:
+                server_id = _auto_server_id(url, set(REMOTE_SERVERS))
+        else:
+            # url 与 id 一对一：显式改名时移除同 url 的旧 id 条目（防同 url 双 id 并存混乱）
+            for k in [k for k, v in REMOTE_SERVERS.items()
+                      if v.get("url") == info["url"] and k != server_id]:
+                del REMOTE_SERVERS[k]
         REMOTE_SERVERS[server_id] = info
     _persist_current()
     return (f"✅ 已连接 '{server_id}' → {info['url']}"
@@ -182,11 +217,12 @@ def reconnect_all(background: bool = False):
 def make_remote_tools(agent) -> list[Tool]:
     """远程实例管理三件套。agent 参数保留签名一致性（当前不需要 agent 状态）。"""
 
-    def remote_connect(server_id: str, url: str) -> str:
+    def remote_connect(server_id: str = "", url: str = "") -> str:
         """连接一个远程 agt 实例（server_id 路由的注册入口）。url 如 http://192.168.1.2:8000
-        （探测 /api/status 成功才注册）。连接后任意工具调用的 arguments 里带
-        "server_id": "<id>" 即路由到该实例执行（结果前缀 [remote:id]）。配置持久化到
-        settings.json 的 remote_servers（重启自动重连）。"""
+        （探测 /api/status 成功才注册）。server_id 可省略——自动生成（本地 url→agt-{端口}，
+        远程→agt-{host}-{端口}，重复连接同 url 幂等复用），返回消息里带最终 id。
+        连接后任意工具调用的 arguments 里带 "server_id": "<id>" 即路由到该实例执行
+        （结果前缀 [remote:id]）。配置持久化到 settings.json 的 remote_servers（重启自动重连）。"""
         return connect(server_id, url)
 
     def remote_disconnect(server_id: str) -> str:

@@ -233,6 +233,28 @@ _inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
 
 通信工具的 `target_id` 动态注入 enum（registry 当前全部 agent_id，作提示性候选）——见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)。
 
+## wait_subagents：干等调查与诊断埋点（2026-08，commit 22cf719）
+
+**现象（/restart 前，t456）**：观测页 wait_subagents 节点一直 running（"干等"）——用户怀疑「判断 agent 状态的逻辑是否被改过」。
+
+**排查结论：wait 逻辑从未被改过**——`agent_ids` 空→取所有活线程、`th.is_alive()`→`join(timeout)`、读 `background_tasks.status`，从引入以来一行没变。近期改动都在周边（busy_parse 工作流侧判空闲、复活路径 NameError），与 wait 本身无关。
+
+**"忙完了还在等"的真实机制（时间线推断）**：
+
+```
+本轮 before_answer 钩子触发 → agent_prompt 派 wiki-updater_3（21 条攒批大维护）
+  → wait_subagents("wiki-updater_3") join 等待
+  → 大维护 × ms-deepseek 慢速跑了很久
+  → 钩子超时（hook_timeout=300s）：fut 取消 + 结果丢弃 + 主循环放行（主 Agent 轮继续）
+     ↑ 但执行线程还活着在 join → 观测页 wait 节点一直 running ← 你看到的"干等"
+  → 看板 ✅/recap 更新 = 上一轮任务的完成态（让你以为它忙完了）
+  → 实际本轮新任务它还在跑，wait 在等的就是这个新任务
+```
+
+要点：**hook 超时放行 ≠ 线程被杀**——daemon 线程继续跑完，wait 的 join 一直阻塞到任务真结束；「干等」表象其实是「真在等一个慢任务」——wait 没判断错，错的是"以为它忙完了"的观感来源（看板显示的是上一轮完成态）。wait 的 `timeout` 只约束本工具调用，超时返回 running 项、不杀线程（见 [声明与生命周期](#声明与生命周期) 的调用约定）。
+
+**修复（src/multiagent.py，commit 22cf719）**：wait 入口记录 `ids / timeout / 每个 id 的线程态与任务态`；join 超时再记一条。下次卡等日志直接显示「在等谁、它处于什么状态」——线程没退 / 任务真没完 / join 错对象，一眼可辨。需 `/restart` 生效。关联的派活侧语义见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)（`caller="user"` + wait_subagents 取结果）。
+
 ## recap（每轮一句话总结）
 
 finish_turn 后异步生成（utility_client，scene=recap）——不进自己上下文，但显示在队友的 teammates_block；子 Agent 完成后 recap 写入 `_agent_meta` 随 meta.json 持久化。

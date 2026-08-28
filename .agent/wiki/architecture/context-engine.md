@@ -69,6 +69,32 @@ t{轮号}_s{步号}_{微秒戳}.txt
 
 **验证四项全过**：内容段纯口径 / schema 段单列 / **Σ段 = 合计**（口径闭环）/ 整包判阈估算不受影响（默认 `include_schema=True`）。修复后 asm 段显示真实小尺寸（几百 tok 级），schema 占比（~4%，≈19.5K）单独可见（此前藏在每段底噪里查不到）。需 `/restart` 生效。
 
+### 段统计异常诊断：sample 字段（2026-08，commit feeb123）
+
+**背景（454 轮 session 实测）**：live 段统计出现「当前轮steps(1步)=83,161 tok」异常——上一步只有一次 grep，1 步不可能 83K tok；且该轮下一轮归档进档2 仅 2,070 tok（压缩量级正常）——「归档后瞬间从 83K 压成 2K」在数值链条上自相矛盾。同时近 2 轮 answer 顶部标注 `---- 已折叠共0次工具调用 ----` 与「实际只调了 4 次」也疑似对不上。
+
+**排查：干净重算完全正常（无法静态复现）**：子进程 `Session.load` 重载当前 session（455 轮）跑 `messages_for_llm` 干净重算——Σ段=合计、无巨型消息（最大单条 ~8K chars）、`_steps_to_messages` 对单步的输出上限 FULL_STEP_CAP_CHARS≈32K chars（≈8K tok）——83K tok 需 ~133K chars，静态推导不出。**live 异常无法跨进程复现**，指向进程内瞬时态。
+
+**澄清「已折叠共0次」**：dump 数据证实那些是**真实的纯讨论轮**（remote_tools 评估、server_id 评估等架构讨论，一字工具没调）——数据没错、标注次数与 events 完全一致；但「0 次也加标注行」是纯噪声 → 另见 [超深档折叠标注：0 次工具调用省略标注行](#超深档折叠标注0-次工具调用省略标注行2026-08commit-feeb123)。
+
+**根因假设（未证实）**：live 异常快照时段（t452/t453）恰好是连续编辑 session.py **本身**的轮次——live 进程还跑着编辑前的旧代码，新旧 `_render_tiered_history`/`_hist_marks` 的 marks 语义可能有瞬时不一致（旧代码 marks 与新版 `_seg_msgs_history` 分派不匹配）。
+
+**修复（session.py，commit feeb123）**：`_proj_stats.sections[]` 每段增 `sample` 字段（该段首条消息 content 前 120 字、换行压空格）——段统计异常时（如 msgs=1 却巨大）直接看切片里装的是什么，live 异常无需跨进程静态复现即可定位。`projection_breakdown()` 浅拷贝透传（含 sample）；`/context` 展示侧未接（要显示需在段落表加一行）。需 `/restart` 生效。
+
+#### 段统计错位实证闭环：总量守恒、段间错位（2026-08，t456/t457）
+
+/restart 后异常复现（这次只有 2 次 grep）：`当前轮steps(1步)=100,401 tok`（24.3%）。t456 干净重算 + t457 live 对照两轮调查，把「段统计错位」的性质钉死：
+
+| 项 | 数据 | 判定 |
+|---|---|---|
+| /context 合计 | 327,868 est + schema 30,257 ≈ 358K ≈ 实测 prompt 356,528（92% cached） | ✅ **总量其实准的**（Σ段=合计守恒） |
+| 段间分布 | steps 段 100,401 est tok ≈ 163K chars，但那 1 步（2 个 grep）实际仅 ~25K chars | ❌ **steps 虚高 ~85%，别段被低估** |
+| 理论上限 | 单步 cap FULL_STEP_CAP_CHARS=32K chars；2 个 grep 最多 ~45K chars ≈ 28K tok | 100K 超上限 3.5×，**必是统计错位而非内容真实** |
+
+**关键结论：错位在统计层、不在投影层**——干净子进程重算 Σ段=合计、无巨型消息（最大单条 ~8K chars）；live 进程的段切分把 steps 段算大、别段算小，但总和守恒（各段占比失真、合计可信——`/context` 的总量与实测 prompt_tokens 对得上）。最可疑机制：hist 子标记偏移换算（`st + off`）在某种边界下错位——静态读码三轮未抓获现行。
+
+**收尾**：/restart 后的进程已带 sample 诊断（本页上节）——下次异常段出现，`/context` 输出直接显示「msgs=1 的段里装的是什么消息」，错位边界当场现形。归因与修复等待下一次复现的证据（live 瞬时态无法静态推导）。
+
 ## 分档投影（轮间）
 
 - 每档字数上限：1500 → 750 → 375 → 187（`_tier_limit`，detail_base 减半递进）
@@ -234,6 +260,14 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 3. 中断标注（未回答）
 
 recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `recaps.jsonl` sidecar 持久化（recap 是事后异步产物，**不进事件流**，events 重放不含它，load 侧 `_load_recaps` 按 idx 恢复）；两条生成路径的 turn_idx 捕获时机与 rewind 裁剪见 [multi-agent · recap](multi-agent.md#recap每轮一句话总结)。注意它与 `Turn.summary`（finish 时生成、贴在该轮最后的一句话摘要）是**两个不同字段**——用户提案「recap 填到触发那轮的 summary」实现为写 `Turn.recap`、供折叠摘要行消费。`/restart` 后生效——每轮 recap 落 recaps.jsonl，下次折叠触发即见 recap 版轮次概览。
+
+## 超深档折叠标注：0 次工具调用省略标注行（2026-08，commit feeb123）
+
+**背景**：fc 折叠后，超深档历史的每轮折叠行格式为 `---- 已折叠共N次工具调用 ----\n\n{answer}`。**纯讨论轮**（架构评估类，一字工具没调）N=0 也照加标注行——用户实测指出两处观感问题：①「已折叠共0次」不传递任何信息，纯噪声；② 近 2 轮 answer 顶部标注次数与「实际工具调用次数」印象对不上，疑似统计错乱。dump 数据澄清②：那些轮**确实是 0 工具调用的真实讨论轮**（remote_tools 评估、server_id 评估），标注次数与 events 完全一致——数据没错，问题只在①的展示冗余。
+
+**修复（session.py，commit feeb123）**：折叠渲染处 `n_calls = sum(len(s.tool_calls) for s in turn.steps)` 判空——`n_calls > 0` 才加标注行；`n_calls == 0` 时 content 直接是 answer 原文（`answer_reasoning` 照常附）。效果：折叠历史里 0 工具轮显示为纯净 answer，与「纯讨论轮」语义一致；非 0 轮标注照旧。
+
+**注意**：该标注是**折叠历史渲染**的产物（见 [fc 大刀首折](#fc-大刀首折至少吞超深档一半2026-08commit-4d37e90)），与 `_folded_summary` 的轮次概览行（recap tail，见上节）是两套格式——前者保 answer 原文、后者保结构摘要。
 
 ## 前缀缓存三层优化（详见 blog/03）
 

@@ -212,6 +212,127 @@ def reconnect_all(background: bool = False):
         _do()
 
 
+# ===================== 跨实例消息通信（WS 消息级——"脑"通道） =====================
+# 与工具级路由（/api/tool/exec，"手"通道）互补：消息发给对方 agent，它带自己的 session
+# 上下文跑一轮 LLM 处理（消耗它的 token）。remote_message 异步送达即返；remote_ask
+# 挂流等 _done 聚合 answer。
+
+def _ws_endpoint(url: str) -> str:
+    """http(s) url → ws(s) 端点（/ws）。"""
+    u = url.strip().rstrip("/")
+    if u.startswith("https://"):
+        u = "wss://" + u[8:]
+    elif u.startswith("http://"):
+        u = "ws://" + u[7:]
+    elif not u.startswith(("ws://", "wss://")):
+        u = "ws://" + u
+    return u + "/ws"
+
+
+def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
+                     ack_timeout: float = 10.0) -> tuple[str, list[str]]:
+    """WS 客户端：发一条消息；wait_done=True 时挂流收 answer 直到 _done（或 timeout）。
+    返回 (状态说明, answer 文本段列表)。异常转错误文案不抛。"""
+    try:
+        import websocket   # websocket-client（run_python 沙箱已验证环境可用）
+    except ImportError:
+        return "[缺依赖] websocket-client 未安装（pip install websocket-client）", []
+    import threading as _th
+
+    answers, state = [], {"ack": False, "done": False, "err": ""}
+    done_ev = _th.Event()
+
+    def _on_msg(_ws, raw):
+        try:
+            m = json.loads(raw)
+        except Exception:
+            return
+        t = m.get("type")
+        if t == "user":                      # 对方 session 已记录消息 = 送达回执
+            state["ack"] = True
+        elif t == "answer":
+            answers.append(m.get("text") or m.get("content") or "")
+        elif t == "_done":
+            state["done"] = True
+            try:
+                _ws.close()
+            except Exception:
+                pass
+            done_ev.set()
+        elif t == "message_queued":          # 对方正忙：消息进了它的插话队列（也算送达）
+            state["ack"] = True
+
+    ws_app = websocket.WebSocketApp(
+        _ws_endpoint(url), on_message=_on_msg,
+        on_error=lambda w, e: (state.update(err=str(e)), done_ev.set()))
+
+    _th.Thread(target=ws_app.run_forever, daemon=True,
+               kwargs={"ping_interval": 20}).start()
+    # 等连接建立（初始事件到达）——用短轮询近似
+    deadline = time.time() + 5
+    while time.time() < deadline and not state["err"]:
+        try:
+            if ws_app.sock and ws_app.sock.connected:
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+    if state["err"] or not (ws_app.sock and ws_app.sock.connected):
+        return f"[连接失败] {url}/ws（{state['err'] or '超时'}）", []
+    try:
+        ws_app.send(json.dumps({"text": text, "images": []}))
+    except Exception as e:
+        return f"[发送失败] {type(e).__name__}: {e}", []
+    if not wait_done:
+        # 异步语义：等送达回执（user/message_queued），最多 ack_timeout
+        ack_dl = time.time() + ack_timeout
+        while time.time() < ack_dl and not state["ack"] and not state["err"]:
+            time.sleep(0.1)
+        try:
+            ws_app.close()
+        except Exception:
+            pass
+        return ("已送达（对方将异步处理）" if state["ack"]
+                else "已发送（未收到送达回执——连接已建立，消息应已入队）"), []
+    done_ev.wait(timeout=timeout)
+    try:
+        ws_app.close()
+    except Exception:
+        pass
+    if state["done"] or answers:
+        return ("完成" if state["done"] else f"超时（>{int(timeout)}s，收到部分回答）"), answers
+    return (f"[无回答] 对方 {int(timeout)}s 内未完成本轮（可能在忙长任务——"
+            f"稍后用工具级调用 remote_ask 或看对方 session）" if not state["err"]
+            else f"[错误] {state['err']}"), answers
+
+
+def send_message(server_id: str, message: str) -> str:
+    """异步消息：发给对方 agent 后立即返回（fire-and-forget）。它将带着自己的 session
+    上下文异步跑一轮处理（消耗它的 LLM）。送达确认 = 收到 user/message_queued 回执。"""
+    with _LOCK:
+        it = REMOTE_SERVERS.get(server_id)
+    if it is None:
+        known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
+        return f"[未知 server_id] '{server_id}'（remote_list 查看：{known}）"
+    status, _ = _ws_send_collect(it["url"], message, wait_done=False, ack_timeout=10)
+    return f"[remote:{server_id}] {status}：{message[:80]}" + ("…" if len(message) > 80 else "")
+
+
+def ask(server_id: str, question: str, timeout: int = 120) -> str:
+    """同步问答：发消息并挂流等对方跑完本轮，聚合它的最终回答返回。
+    消耗对方一次 LLM 调用（带它的全量投影）。适合"问它一个它才知道的问题"。"""
+    with _LOCK:
+        it = REMOTE_SERVERS.get(server_id)
+    if it is None:
+        known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
+        return f"[未知 server_id] '{server_id}'（remote_list 查看：{known}）"
+    status, answers = _ws_send_collect(it["url"], question, wait_done=True, timeout=timeout)
+    body = "\n".join(a for a in answers if a).strip()
+    if body:
+        return f"[remote:{server_id}] {body}"
+    return f"[remote:{server_id}] {status}"
+
+
 # ===================== 工具（make_remote_tools） =====================
 
 def make_remote_tools(agent) -> list[Tool]:
@@ -233,4 +354,17 @@ def make_remote_tools(agent) -> list[Tool]:
         """列出已连接的远程 agt 实例（id/url/状态/工具数/session）。"""
         return list_servers()
 
-    return [Tool(remote_connect), Tool(remote_disconnect), Tool(remote_list)]
+    def remote_message(server_id: str, message: str) -> str:
+        """向远程实例的 agent 异步发一条消息（fire-and-forget）：送达即返回，它带自己的
+        session 上下文异步处理（消耗它的 LLM）。适合通报/派活——如告知框架修复、
+        让它开始一个任务。要拿回答用 remote_ask。"""
+        return send_message(server_id, message)
+
+    def remote_ask(server_id: str, question: str, timeout: int = 120) -> str:
+        """向远程实例的 agent 提问并等待它的最终回答（挂流到本轮完成，默认 120s）。
+        消耗对方一次 LLM 调用。适合问"只有它才知道"的事（它的环境/它的进度）。
+        对方正忙时消息进它的插话队列，回答可能超时——可加大 timeout 或改用 remote_message。"""
+        return ask(server_id, question, timeout)
+
+    return [Tool(remote_connect), Tool(remote_disconnect), Tool(remote_list),
+            Tool(remote_message), Tool(remote_ask)]

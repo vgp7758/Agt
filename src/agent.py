@@ -461,7 +461,8 @@ class Agent:
         连接/断开哪个 id），不是路由语义——实际事故：remote_connect(server_id=..., url=...)
         被路由拦截吃掉 → 连接注册从未本地执行 → "[未知 server_id]" 死循环（comfy session
         三连败后模型放弃框架通道自己手写了 urllib 轮子）。"""
-        _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list")
+        _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list",
+                         "remote_message", "remote_ask")   # 消息工具的 server_id=发给谁（管理语义）
         if (isinstance(arguments, dict) and "server_id" in arguments
                 and not name.startswith(_REMOTE_ADMIN)):
             sid = str(arguments.pop("server_id") or "").strip()

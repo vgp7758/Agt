@@ -1042,11 +1042,23 @@ class Session:
         return out
 
     def _seg_msgs_steps(self) -> list[dict]:
-        """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。"""
+        """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
+        recent-file（跟屁虫快照）只在这里注入：全轮按文件去重——同文件后写覆盖，
+        每文件只保留【最新一份】快照，统一放当前轮 steps 尾部。归档轮/历史段（含档1 的
+        base=None 全量路径）一律不注入（用户裁定 2026-08-29：此前每步逐 call 注入，
+        实测 llm_client.py 一轮重复 4 份）。"""
         if self._current is None:
             return []
         out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
                                            full_window=RECENT_FULL_STEPS))
+        latest: dict[str, dict] = {}
+        for s in self._current.steps:
+            for _cid, snap in (s.file_snapshots or {}).items():
+                if isinstance(snap, dict) and snap.get("path"):
+                    latest[str(snap["path"])] = snap   # 后面步骤覆盖 → 每文件留最新
+        for path, snap in latest.items():
+            out.append({"role": "system", "content":
+                f"<recent-file file='{path}' version='{snap.get('version', '')}'>\n{snap.get('text', '')}\n</recent-file>"})
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
@@ -1813,11 +1825,9 @@ class Session:
                            else self._summarize_text(result, limit, tc.call_id))
                 content = self._project_imgs(content)
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
-                # 跟屁虫：该工具调用若改了文件，其 snapshot 挂在这个 tool result 尾巴上
-                snap = step.file_snapshots.get(tc.call_id)
-                if snap and full:   # 仅全量步注入（压缩步省略，防膨胀）
-                    msgs.append({"role": "system", "content":
-                        f"<recent-file file='{snap['path']}' version='{snap['version']}'>\n{snap['text']}\n</recent-file>"})
+                # recent-file 跟屁虫已移出（用户裁定 2026-08-29：每步逐 call 注入导致同文件
+                # 多份重复——实测 llm_client.py 一轮 4 份；归档轮（档1 base=None 路径）也在注入）。
+                # 现在统一由 _seg_msgs_steps 在【当前轮尾部】按文件去重注入最新一份。
         return msgs
 
     def _cap_full_result(self, result: str, call_id: str) -> str:

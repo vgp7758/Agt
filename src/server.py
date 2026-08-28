@@ -1353,7 +1353,24 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                                  "name": f"{e0.name} [{cur}]", "agent_id": cur,
                                  "turns": e0.agent.session.to_history()})
                 return
-            # 历史子 Agent 或已失效：退回主 session（client target 一并复位）
+            # 历史子 Agent（agent=None，磁盘恢复条目）：从磁盘加载历史（与 switch_agent 同款）——
+            # /agents/<id> URL 直达时不再被复位回主视图（此前 agent=None 走"失效"分支直接回主，
+            # 专属页路由打开显示的却是主 Agent 历史）
+            if e0 is not None:
+                try:
+                    sdir = getattr(agent.session, "session_dir", None)
+                    sub_meta = Path(sdir) / "agents" / cur / "meta.json" if sdir else None
+                    if sub_meta and sub_meta.exists():
+                        from session import Session
+                        sub_session = Session.load(str(sub_meta), llm=agent.llm,
+                                                   workspace=agent.session.workspace)
+                        await _send(ws, {"type": "session_history",
+                                         "name": f"{e0.name} [{cur}]", "agent_id": cur,
+                                         "turns": sub_session.to_history()})
+                        return
+                except Exception:
+                    pass
+            # 真失效（registry 无此条目且无存档）：退回主 session（client target 一并复位）
             if client is not None:
                 client["target"] = "_main_"
         await _send(ws, _history_event(agent))

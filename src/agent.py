@@ -916,6 +916,13 @@ class Agent:
                     am = (meta.get("extra_state") or {}).get("_agent_meta") or {}
                 except Exception:
                     pass
+            # 恢复状态修正：meta 存 running = 进程被杀时任务在跑（_bg 没来得及写终态）——
+            # 重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑。
+            # 不修正的话看板谎报"忙"，攒批队列等忙碌消费者的判定会永久死锁
+            # （busy_parse 白名单只认 ✅❌ 为空闲，running 行判忙）。
+            st = am.get("status", "done")
+            if st == "running":
+                st = "failed"
             self.registry.register(
                 am.get("agent_id", aid),
                 am.get("name", aid),
@@ -923,7 +930,7 @@ class Agent:
                 am.get("model", "?"),
                 agent=None,
                 task=am.get("task", "(历史任务)"),
-                status=am.get("status", "done"),
+                status=st,
                 caller_id=am.get("caller_id", ""),
                 recap=am.get("recap", ""),
             )

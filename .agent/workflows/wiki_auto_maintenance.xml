@@ -163,13 +163,14 @@ changed tool calls（引擎快照 diff 检出的文件变更调用原文——�
   <node id="147110" type="code" title="busy_parse" x="2520" y="80">
     <in name="team_text" type="string" ref="147100.raw"/>
     <code language="3"><![CDATA[async def main(args):
-    """解析 list_team 看板：wiki-updater 行存在且非 ✅(空闲) → 忙（本轮摘录入 pending 队列，下批一起消费）。
-    无 wiki-updater 行（从未跑过）= 空闲。"""
+    """解析 list_team 看板判 wiki-updater 忙闲。
+    ✅(done)/❌(failed) 都算空闲——failed 是"中断后躺平"（/restart 杀掉任务、agent=None 无活线程），
+    reuse 会复活它接新活；只有真正的运行态（无 ✅❌ 标记的行，如 running）才算忙。
+    此前 any("✅" not in l) 把 ❌ 判成忙 → 中断躺平的实例永久死锁攒批队列（pending 堆 21 条的根因）。
+    多实例（wiki-updater/_2/_3）：任一行真在跑即忙（防双消费者破坏单消费者语义）。"""
     txt = str(args.params.get("team_text") or "")
-    # 多实例（历史重启可能攒出 wiki-updater/_2/_3）：任一行在跑即忙——只看第一行会在
-    # 「首行 ✅ 但 _2 还在跑」时误判空闲，双消费者并发破坏攒批队列的单消费者语义
     lines = [l for l in txt.splitlines() if "wiki-updater" in l]
-    is_busy = bool(lines) and any("✅" not in l for l in lines)
+    is_busy = bool(lines) and any(("✅" not in l and "❌" not in l) for l in lines)
     status_line = " | ".join(l.strip()[:60] for l in lines[:3])
     return {"is_busy": is_busy, "status_line": status_line}]]></code>
     <out name="is_busy" type="boolean"/>

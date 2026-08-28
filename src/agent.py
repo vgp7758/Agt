@@ -1335,9 +1335,8 @@ class Agent:
         return msgs
 
     def _dump_projection(self, msgs: list):
-        """把完整请求负载（messages）以 pretty-print JSON 写到 session_dir/projections/。
-        直接 dumps 负载本体（含 meta 元信息顶层字段），不重新构造格式、不截断——
-        转储即一手数据：json.load 即可消费，考古/对拍零损耗。"""
+        """投影转储：负载本体（纯 messages 数组）写 .json，元信息写旁车文件 .json.meta。
+        转储即一手数据：json.load 负载文件直接得数组，元信息（turn/step/model/time）独立小文件。"""
         try:
             sdir = getattr(self.session, "session_dir", None)
             if not sdir:
@@ -1349,15 +1348,16 @@ class Agent:
             ts = datetime.now().strftime("%H%M%S")
             turn_num = len(self.session.turns)
             step_num = len(self.session._current.steps) if self.session._current else 0
-            fname = f"t{turn_num}_s{step_num}_{ts}.json"
-            payload = {
-                "_meta": {"turn": turn_num, "step": step_num,
-                          "model": self.llm.model_name, "agent_id": self.agent_id,
-                          "time": datetime.now().isoformat()},
-                "messages": msgs,
-            }
-            (proj_dir / fname).write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            base = f"t{turn_num}_s{step_num}_{ts}"
+            (proj_dir / f"{base}.json").write_text(
+                json.dumps(msgs, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8")
+            (proj_dir / f"{base}.json.meta").write_text(
+                json.dumps({"turn": turn_num, "step": step_num,
+                            "model": self.llm.model_name, "agent_id": self.agent_id,
+                            "time": datetime.now().isoformat(),
+                            "messages": len(msgs)},
+                           ensure_ascii=False, indent=2),
                 encoding="utf-8")
         except Exception as e:
             _LOG.warning("投影转储失败: %s", e)

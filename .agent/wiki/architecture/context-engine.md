@@ -253,7 +253,7 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 
 组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
 
-## recent-file 跟屁虫快照：三版演进——终版按 call_id 挂进工具结果（2026-08-29，dd7fd81 + 39e7115 + 348adfc）
+## recent-file 跟屁虫快照：注入三版演进 + rf 免疫收拢单源（2026-08-29，dd7fd81 + 39e7115 + 348adfc + 983c417）
 
 **机制是什么**：react 每步工具调用读写 repo 文件时，把文件快照记进 `step.file_snapshots`（call_id → {path, version, structure, content…}），投影装配时以 `<recent-file file='…' version='…'>` 块注入——让模型看到自己「刚操作的是什么版本的文件」，同文件连续操作不必反复 read（跟屁虫语义）。
 
@@ -303,6 +303,29 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 **四场景验证全过**：同文件两次 edit 仅最新 call（c3）带 rf、旧 c1 不带 ✓；另一文件正常挂 ✓；独立 system rf 消息 0 条 ✓；归档轮零注入 ✓。机制自证：编辑 session.py 的轮次，session.py 全文快照就挂在本轮最后一次 edit 的工具结果后面。
 
 **口径连带**：修复二的 `_rf_chars()` 判阈刨除集合终版起与 `_rf_latest_map` 同源（同文件留最新一份口径不变，毕业判阈 rf 免疫语义不变）。
+
+### 修复四：估算剥离 `_rf_stripped`——rf 免疫扩展到毕业/保命阀，四层口径收拢单源（2026-08-29，commit 983c417，用户设计）
+
+**背景**：修复三把快照挂进 tool result content 后，rf 体积成了真实投影的一部分，但两处估算分子没跟上——①毕业升档/折叠判阈（`_plan_fold` 的 cur_est）含 rf 块：大 rf 轮会推动升档/折叠这类**不可逆历史压缩**，panic 轮内路径调 `_plan_fold` 时（cur_est 含 rf）尤其过激；②保命阀应急估算（`_history_tiered_msgs` 的 rest）同理。用户裁定：rf 是轮内易变项（归档即消失），**它的体积不该推动升档/折叠**——修复二的判阈刨除逻辑要跟着注入机制一起改：从当前轮所有 role:tool 区按 rf_map 找命中，把多出来的估算量去掉。
+
+**实现（src/session.py）**：
+
+- `_RE_RF_BLOCK` 模块级正则 `\n<recent-file[\s\S]*?</recent-file>`：剥离与量体积共用
+- `_rf_stripped(msgs)`：返回剥除 rf 块的消息副本（**不动原消息**——投影产物不可变）。两处消费：`_plan_fold` 的 cur_est（毕业升档/折叠估算）、`_history_tiered_msgs` 的 rest（保命阀应急估算，循环外算一次）
+- `_rf_in_msgs(msgs)`：诊断口径——msgs 中实际附加的 rf 块总字符数
+
+**判定口径（用户设计；content 子串版中间态被推翻）**：第一版按 content 子串检测（`"<recent-file" in c`）——「按实际附加了多少算」的思路没错（full/字符串等附加条件都已体现在渲染产物里，直接量最准），但用户裁定改为**按 `tool_call_id ∈ rf_map 命中集合` 判定**：与附加时的命中条件同源——**附加按 cid 命中，剥离也按 cid，因果一致不漂移，不做 content 子串检测**。防御两处：sub 对无块 content 是 no-op；多模态 list content 由 isinstance 天然跳过。
+
+**rf 四层口径收拢 `_rf_latest_map` 单一真相源（同源映射，永不漂移）**：
+
+| 层 | 消费点 | 口径 |
+|---|---|---|
+| 附加（投影） | `_steps_to_messages` 的 `_rf_hit`（rf_map 仅当前轮传入） | cid 命中 → `<recent-file/>` 挂该次 tool result content 尾部 |
+| 判阈刨除（over 判定） | `observe_llm_usage`：`over = (prompt − rf_tok) > win`（`_rf_chars()` = 映射 text 总量） | **panic 判阈不刨**（按真实请求体积保命） |
+| 估算剥离 | `_rf_stripped`（毕业 cur_est + 保命阀 rest） | 先剥块再进 `_estimate_tokens`——估算分子反映「归档后真实留存体积」 |
+| 诊断 | `_rf_in_msgs` | 量实际附加的块总字符（验证用） |
+
+**验证**：c1 挂 / c2 不挂回归 ✓；剥离差值闭环 12,514 tok ✓；无 rf 轮零影响 ✓。与 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08) 同族口径哲学：schema 是请求级固定项要**加进**估算分子，rf 是轮内易变项要**刨出去**——方向相反、原则同一。需 `/restart` 生效；攒批待发 0.22.2。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

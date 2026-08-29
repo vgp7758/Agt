@@ -15,7 +15,7 @@
 
 assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（commit 1e3b206）起真语义：标记即默认不装配**（`messages_for_llm` 的 seg 分支对 `opt=True` 的项跳过），`agent_prompt assembly="seg=on"` 清标记打开、`=off` 移除；未标记段列出即装，必装 system/user_message/steps 未列出自动补插；`reuse`（current_turn_only）与 opt **正交叠加**（reuse 时 history 强制关）。详见 [multi-agent · assembly DSL](multi-agent.md#assembly-dsl上下文装配配方)。
 
-装配时顺手记录分段统计到 `_proj_stats`（`/context` 直接读——live 口径，见 [投影分段统计](#投影分段统计-context-改读真实投影缓存commit-4212f65)）。
+装配时顺手记录分段统计到 `_proj_stats`，并覆盖写旁车 `session_dir/proj_stats.json`（含档位边界快照，2026-08-29 起——`/context` 三级读取：内存 live → 旁车 sidecar（跨重启）→ 现算兜底，见 [投影分段统计](#投影分段统计-context-改读真实投影缓存commit-4212f65)）。
 
 episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产出、注入 tail ambient——演进史与中文命中率坑见 [长期记忆](../features/longterm-memory.md)。
 
@@ -96,6 +96,46 @@ t{轮号}_s{步号}_{微秒戳}.json
 **关键结论：错位在统计层、不在投影层**——干净子进程重算 Σ段=合计、无巨型消息（最大单条 ~8K chars）；live 进程的段切分把 steps 段算大、别段算小，但总和守恒（各段占比失真、合计可信——`/context` 的总量与实测 prompt_tokens 对得上）。最可疑机制：hist 子标记偏移换算（`st + off`）在某种边界下错位——静态读码三轮未抓获现行。
 
 **收尾**：/restart 后的进程已带 sample 诊断（本页上节）——下次异常段出现，`/context` 输出直接显示「msgs=1 的段里装的是什么消息」，错位边界当场现形。归因与修复等待下一次复现的证据（live 瞬时态无法静态推导）。
+
+### 段统计旁车持久化：proj_stats.json + /context 三级读取（2026-08-29，commit e703c67）
+
+**提案（用户，2026-08-29）**：投影时把各档位边界记录下来写入旁车文件；`/context` 优先读最新旁车、结合消息体复原各档在总上下文中所占的比例。
+
+**动机**：`_proj_stats` 是进程内存——/restart 后消失，`/context` 退化为「现算估算」（事后模拟；在 reuse / 保命阀触发的轮，模拟与真实投影口径本来就不一致）。旁车把「上次真实投影」的 live 口径（含档位边界快照）持久化到 session 目录，跨重启存活。
+
+**演进对照**：本节 4212f65 版读取侧是两级（内存 live → 现算兜底）；本次扩为三级，中间插旁车层。上方读取侧描述中的「只有本进程还没跑过投影时才回退现算兜底」即旧两级口径。
+
+**写入侧（src/session.py）**：`_save_proj_stats_sidecar(stats)`——`messages_for_llm` 装配记录 `_proj_stats` 后**覆盖写** `session_dir/proj_stats.json`（永远只留最新一份）：
+
+```json
+{
+  "tier_boundaries": [9, 19, 29],          // 档位边界快照（提案点名的核心）
+  "fold_count": 227, "max_level": 6, "chars_per_token": 1.62,
+  "sections": [ {"name": "...", "msgs": ..., "chars": ..., "tokens": ..., "sample": "..."} ],
+  "total_msgs": ..., "total_chars": ..., "total_tokens": ...,
+  "ts": 1756..., "turn": 468, "step": 3, "source": "live"
+}
+```
+
+- **原子写**；session_dir 未就绪 / 写失败**静默**——旁车只是诊断增强，绝不影响投影主路径
+
+**读取侧三级（`projection_breakdown()` + src/commands.py `/context`）**：
+
+1. **内存 live**：本进程最近一次真实投影（首选，最新）
+2. **旁车 sidecar**：内存为空（重启后首次 /context）时读 `proj_stats.json`——`source` 标 `sidecar`
+3. **现算兜底**：旁车也没有（新 session / 文件缺失）才重算段函数
+
+`/context` 输出三态来源标注：
+
+```
+段落统计（采自上次真实投影 t468·s3，5秒前）                    ← live
+段落统计（采自旁车 t468·s3——上次真实投影的存档，跨重启有效）  ← sidecar
+段落统计（现算估算——本进程尚未跑过投影，且无旁车存档）        ← 兜底
+```
+
+**验证四场景全过**：旁车写入含档位边界快照（`[9,19,29]` + fold_count + max_level）✓；模拟重启（清空内存 `_proj_stats`）后 breakdown 读旁车 `source=sidecar` ✓；删旁车文件现算兜底 ✓；/context 三态渲染分支在位 ✓。
+
+需 `/restart` 生效；攒批待发 0.22.2。
 
 ## 分档投影（轮间）
 

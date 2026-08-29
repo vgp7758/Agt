@@ -70,7 +70,7 @@ scene 取值（2026-08-29 起携带发起者——与 [🐞 日志面板](#日�
 ### 其他
 
 - `/debug prompt <提示词>`：按当前投影直调 LLM，**不落盘不执行**，打印完整回包（耗时/finish_reason/usage/含缓存命中/tool_calls）——与投影转储配套（进什么 vs 出什么）
-- `/context`：投影分段统计 + 缓存概况——分段数据现读 **live 缓存 `_proj_stats`**（真实投影装配时顺手记录，commit 4212f65）：零重算、口径=真实发给模型的那份，输出带来源标注（「采自上次真实投影 t336·s2，4分钟前」；本进程未跑过投影才现算兜底）；另结合 llm_calls 最近 react 回包实测 prompt_tokens 校准。见 [context-engine · 投影分段统计](../architecture/context-engine.md#投影分段统计-context-改读真实投影缓存commit-4212f65)
+- `/context`：投影分段统计 + 缓存概况——分段数据**三级读取**（2026-08-29，commit e703c67）：内存 **live 缓存 `_proj_stats`**（真实投影装配时顺手记录，commit 4212f65）→ **旁车 `session_dir/proj_stats.json`**（上次真实投影 + 档位边界快照的存档，跨重启有效）→ 现算兜底（新 session 无存档时）。零重算、口径=真实发给模型的那份，输出带三态来源标注（live「采自上次真实投影 t336·s2，4分钟前」/ sidecar「采自旁车——上次真实投影的存档，跨重启有效」/「现算估算——本进程尚未跑过投影，且无旁车存档」）；另结合 llm_calls 最近 react 回包实测 prompt_tokens 校准。见 [context-engine · 投影分段统计](../architecture/context-engine.md#投影分段统计-context-改读真实投影缓存commit-4212f65)、[段统计旁车持久化](../architecture/context-engine.md#段统计旁车持久化proj_statsjson--context-三级读取2026-08-29commit-e703c67)
 - `/stats`（CLI）/ /logs：文本版统计与日志
 - restart.log（~/.agt/）：/restart 看门狗全程时序（含新进程 stderr）
 - **唤醒链路观测点日志（commit e0ae60b）**：`src/agent.py` 中 `_bg` 路由 `push_message`（answer 入 caller inbox）与 `inbox_thread` 搬运（inbox→work_q）两处已埋诊断日志——排"子 Agent 完成后主 Agent 未唤醒"时直接看实例日志定位断点（需 `/restart` 加载新代码）

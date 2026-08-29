@@ -4,13 +4,14 @@
 
 ## 投影总览（messages_for_llm 装配顺序）
 
+**2026-08-29 起系统信息合并形态**（`_walk_plan` 走查，见下方专节）：连续的系统信息段合并成一条 system，动态注入一律 user role：
+
 ```
-[system]           md/人设正文（子 Agent 可被 system_append DSL 追加动态段）
-[rules]            AGENTS.md + .agent/rules/*.md + skills 清单（每轮重读，当轮生效）
-[summary]          历史会话摘要（无分档时的老路径）
-[tiered history]   分档投影（需 provider 配 max_effective_context_window）
-[current turn]     user_message + before_turn hint + steps（工具调用按分组衰减；文件快照以 <recent-file/> 挂在【该文件最新一次改它的 tool result】content 尾部、全轮按文件去重，见「recent-file 跟屁虫快照」节）+ pending hints
-[tail ambient]     合并成一组 <system-reminder>：时间/后台任务/计划/episodic 召回
+[1条 system]       system + rules + asm 动作项（text/file/dir/cmd/workflow/tool）裸文本合并
+[tiered history]   分档投影（需 provider 配 max_effective_context_window）；摘要消息仍独立 system（frozen）
+[1条 system]       ltm 静态层（独立成条——默认清单里被 history 隔开）
+[current turn]     user_message + before_turn hint(user role) + steps（工具调用按分组衰减；文件快照以 <recent-file/> 挂在【该文件最新一次改它的 tool result】content 尾部、全轮按文件去重，见「recent-file 跟屁虫快照」节）+ pending hints
+[tail ambient]     一组 <system-reminder>（时间/后台任务/计划/episodic 召回）——**role=user**（DeepSeek v4 对变化的 system 消息做规范化会断全序列缓存，2026-08-29 实证修复，见 provider 侧缓存坑）
 ```
 
 assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（commit 1e3b206）起真语义：标记即默认不装配**（`messages_for_llm` 的 seg 分支对 `opt=True` 的项跳过），`agent_prompt assembly="seg=on"` 清标记打开、`=off` 移除；未标记段列出即装，必装 system/user_message/steps 未列出自动补插；`reuse`（current_turn_only）与 opt **正交叠加**（reuse 时 history 强制关）。详见 [multi-agent · assembly DSL](multi-agent.md#assembly-dsl上下文装配配方)。
@@ -18,6 +19,18 @@ assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（
 装配时顺手记录分段统计到 `_proj_stats`，并覆盖写旁车 `session_dir/proj_stats.json`（含档位边界快照，2026-08-29 起——`/context` 三级读取：内存 live → 旁车 sidecar（跨重启）→ 现算兜底，见 [投影分段统计](#投影分段统计-context-改读真实投影缓存commit-4212f65)）。
 
 episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产出、注入 tail ambient——演进史与中文命中率坑见 [长期记忆](../features/longterm-memory.md)。
+
+### 系统信息合并与动态注入 user 化（2026-08-29，用户设计）
+
+**两件事同一天落地，动机同源**：投影形态既要语义干净（静态指令 vs 动态注入分开），又要对 provider 前缀缓存友好（byte-stable 头部 + 不触碰 system 规范化的坑）。
+
+**① 系统信息合并（`_walk_plan` 重构）**：`history`/`user_message`/`steps` 之外的一切（system/rules/ltm/tail 段 + asm 动作项）归为系统信息，装配走查时**连续的系统信息段合并成一条 system 消息**（content 空行连接）。旧形态每个 asm 动作项独立一条 system 且带 `[assembly:kind label]` 前缀 + `<system-reminder>` 包裹——语义噪声；新形态裸文本合并（main.yml 11 个 text 项 + rules 合成一条 ~5.3k 字符）。`projection_breakdown` 现算兜底同用 `_walk_plan`（消掉 ~70 行重复走查）；段统计改**块级口径**：合并 run 非首段 `msgs=0` + meta 注明「并入上方相邻段」，`sum(sections.msgs)==total_msgs` 严格成立。`<system-reminder>` 只保留给真正动态的块（tail 组、钩子、history 摘要、中途补充）——静态指令裸、动态注入带标签，对齐 Claude Code 线上协议。
+
+**② asm 内插空判**：text 项里任一**已注册** `{func:...()}` 占位求值为空串 → 整段返回 ""（装配侧丢弃）。混合文本（`【远程实例】\n{func:load_remote_instances()}`）无连接时旧形态剩标题空壳；纯占位项的丢弃语义补齐到混合形态。未注册名仍保留占位原样（声明写错的提示语义）。
+
+**③ 动态注入 user 化（当天下午的缓存实证催生，见 [provider 侧缓存坑](#provider-侧缓存坑重要教训)）**：tail 合并消息、钩子旁注（`<system-reminder pos=...>`）、before_turn hint 的 role 从 system 改为 **user**（内容层的 `<system-reminder>` 包裹保留）。原因：DeepSeek v4 对 messages 里**变化的 system** 消息做规范化处理，tail 时间块每步变 → 全序列缓存断（实测 6%）——user role 的动态注入不触发（99%）。
+
+验证：verify_assembly 34 项（含合并形态/无前缀无标签/tail user role 断言）、verify_agent_yml 29 项、midturn/recent_file/debug_hook/ltm 全过；端到端真请求三步步进 99% 命中（修复前同形态 6%）。
 
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 
@@ -397,15 +410,19 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 ## provider 侧缓存坑（重要教训）
 
-- **随机路由**：deepseek-v4-flash 等按请求随机分实例 → 每实例缓存独立 → 命中恒 0。客户端无法修，应对=回退链后置或 provider 会话粘性
-- **per-token 隔离**：GLM 缓存按 api_token 隔离且容量有限 → 同 token 交错 react 长调用与 utility 短调用互相驱逐缓存 → **utility 必须独立条目+独立 token**；该类条目配 `"token_rotate": false`（sticky）。ModelScope 不吃缓存但按号限额度 → 多 token 预旋转分摊是刚需，保持默认 true
-- 判别：**单步深跌后立即恢复**=折叠事件（预期一次性成本，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)）；**同轮连续两次深跌**=保命阀折叠目标太保守（见 [t228 实证](#轮内应急折叠保命阀t228-实证2026-08)）；骤降且与 utility 调用交错相关=驱逐；恒 0=不支持/随机路由。另注意：**折叠计划判阈的估算口径**——估算"以为达标"但实际超窗时，症状是新一轮初始 prompt 远超 75% 目标却折叠 0 轮（见 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08)）
+- **DeepSeek v4 system 规范化（2026-08-29 实锤，价差最大的坑）**：v4 后端对 messages 里**变化的 `role:system` 消息**做规范化处理（疑似前置/合并进缓存键），任一 system 内容变化（无论头部/中部/尾部）→ **全序列缓存断**（实测 6%，只残存头部 ~14k）。对策：动态注入（tail/钩子/before_turn）一律 **user role + `<system-reminder>` 标签**（已修，见上文「动态注入 user 化」）；**缓存价差：miss 单价 ≈ hit 的 30-50 倍**（官方账单 v4-flash 实测 hit ¥0.05/M vs miss ¥1.5/M = 30 倍），低命中时代价极大
+- **tools 列表变化也全断（2026-08-29 实锤）**：messages 完全相同、tools 尾部 +1 工具 → 全断（实测 7%）。tools 在缓存序列最前。Agt 的 `refresh_workflow_tools` 是 `drop(wf_*)` + sorted(glob) 重注册——集合不变时每轮 byte-stable ✓；一次性动态注册（ensure_lsp 首调等）断一步后稳定，可接受。**勿在高频路径动态增删工具**
+- **随机路由（2026-08-29 修正）**：旧判定「deepseek-v4-flash 随机分实例 → 命中恒 0」大概率是 system 规范化/tools 变化断裂的误判（当时未找到根因）——见下方实证。真随机路由无法客户端修，但先按三条铁律排查
+- **per-token 隔离**：GLM 缓存按 api_token 隔离且容量有限 → 同 token 交错 react 长调用与 utility 短调用互相驱逐缓存 → **utility 必须独立条目+独立 token**；该类条目配 `"token_rotate": false`（sticky）。ModelScope 不吃缓存但按号限额度 → 多 token 预旋转分摊是刚需，保持默认 true。DeepSeek 曾疑同款 per-token 隔离——**2026-08-29 否证**（单 token 账号同样断，根因是 system 规范化）
+- 判别：**单步深跌后立即恢复**=折叠事件（预期一次性成本，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)）；**同轮连续两次深跌**=保命阀折叠目标太保守（见 [t228 实证](#轮内应急折叠保命阀t228-实证2026-08)）；骤降且与 utility 调用交错相关=驱逐；**DeepSeek 端持续低命中**=先查动态 system/tools 变化（见下方实证三铁律）。另注意：**折叠计划判阈的估算口径**——估算"以为达标"但实际超窗时，症状是新一轮初始 prompt 远超 75% 目标却折叠 0 轮（见 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08)）
 
-### DeepSeek 缓存行为实证：位置敏感、不合并 system（2026-08 探针）
+### DeepSeek 缓存行为实证：v3 位置敏感 → v4 system 规范化（2026-08 两代后端）
+
+#### 第一代实证（v3 后端，deepseek-chat 旧模型，2026-08-14 前有效）
 
 **背景（用户怀疑）**：分层投影把 system 块分散在历史中间——怀疑 deepseek 端点默认把 messages 中所有 role:system 合并放到最前 → 规范化重排 → 缓存前缀断裂 → 命中率低。
 
-**探针（tools/deepseek_cache_probe.py，model=deepseek-v4-flash）**：用模拟 agt 分层投影形态的 payload（system 分散中段 + 历史 reasoning_content + tool_calls 结构），5 组判别：
+**探针（tools/deepseek_cache_probe.py，当时后端）**：用模拟 agt 分层投影形态的 payload（system 分散中段 + 历史 reasoning_content + tool_calls 结构），5 组判别：
 
 | 组 | 操作 | 结果 | 判定 |
 |---|---|---|---|
@@ -415,16 +432,40 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 | D 位置重排（判别组） | S3 从中间挪到最前（其余字节完全不变） | D1(原位)=91.5% 命中 A；D2(挪前)=**0.0%** | **不做 system 合并** |
 | E 去 reasoning | 历史 assistant 去掉 reasoning_content | E1(带)=91.5%、E2(去)=91.5% | reasoning 不参与缓存键 |
 
-**结论（用户假设被否证）**：DeepSeek **不会**把 system 合并到最前——D 组决定性证据：同内容 system 块只是位置移动（其它字节完全一致），若服务端合并 system，D2 规范化后应与 D1 相同、缓存理应命中；实际 D2=0% 全 miss，而 **D1（原始位置）精准命中 A 建立的缓存（91.5%）**。缓存**按原始消息序列位置敏感**：前缀字节相同才命中（B 组尾部追加 90.8% ✓），位置一变全 miss（D2 ✓）。分层投影结构本身**不是**低命中原因——装配字节稳定即可命中（D1 证明），无需改装配形态。
+**v3 结论**：缓存按**原始消息序列位置敏感**、不合并 system；`reasoning_content` 不参与缓存键（历史 reasoning 放心回传）。**⚠️ 2026-08-29 起后端换代 v4，"不合并 system"结论已失效**（v4 对变化的 system 做规范化，见下）；"位置敏感/前缀匹配/reasoning 不参与"三条仍成立（v4 复测一致）。
 
-**附带发现**：`reasoning_content` 不参与缓存键——历史 reasoning 可放心回传、不伤缓存（对 `requires_reasoning_in_history: true` 的 DeepSeek 思考模型是好消息，见 [配置体系](../guides/config-and-models.md#模型能力标志速查)）。
+#### 第二代实证（v4 后端，v4-flash/v4-pro，2026-08-29，13 轮探针链）
 
-**下一步候选根因（2026-08 分析，未验证）**：
+**触发场景**：comfy session t253——s0 冷启动后 s1-s3 命中仅 3-6%（8320/14080 恒定残段），而 glm-official 同投影 99.6%；用户自述 claude-code 里 deepseek 命中正常、别的时间段 Agt 也持续低命中。官方账单按小时对照：同 key 同日，cc（claude-code，00-07 点，单请求 2.5-6.7 万 tok）56-79% ✅、探针（21 点）87% ✅、**Agt（13-16 点，单请求 20-32 万 tok，81 请求 miss 1480 万）2-4% ❌**——账号/端点正常，问题特定于请求形态。
 
-- **multi-token 轮换 → per-token 缓存隔离（首选嫌疑）**：DeepSeek 疑似与 GLM 同款按 api_token 分缓存空间——models.json 的 deepseek.api_token 是**数组**（多 token），每换一次 token 就换一个空缓存空间，命中率直接清零。验证法：用第 2 个 token 发同一 payload——若 0% 则实锤，对策同 GLM：`token_rotate: false` 或 utility 独立条目
-- **TTL**：DeepSeek 官方缓存 TTL 若短于 GLM，长间隔轮次全 miss（查官方文档确认数值）
+**排查链（tools/deepseek_v4_cache_probe2~13.py，逐步对齐变量全 99% 直到锁定）**：R2 真实投影重发/45s 间隔 ✓、R3 假 tools+真实投影 ✓、R4 增量（前缀 byte 同+尾部变）✓、R5/R7-R11 真实重建工具箱（99 个）/agent 消息形态（assistant+tool_calls+reasoning 回传+tool）/时序/参数/温度/OpenAI SDK 同栈 ✓——全部 99%。R12 复刻 agent 节奏（步进生长+**每步变化的 tail system**）→ **全 6% 复现**。R12b 变体矩阵锁定元凶：
 
-> 探针脚本读取 models.json 的 deepseek profile 直连官方 /chat/completions，`usage.prompt_tokens_details.cached_tokens` 读缓存命中；可复用跑其它 provider。
+| 尾部消息 | 内容 | 增量命中 |
+|---|---|---|
+| system | 固定 | 99% ✅ |
+| system | 变化 | **6% ❌（恒定 14,080 残段）** |
+| user | 变化 | 99% ✅ |
+
+R13 机制判别：E3 头部 system 变化同样全断（5%，**位置无关**，"per-system 独立分层"假说被否定）；E5 **tools 尾部 +1 工具也全断**（7%，messages 全同）。
+
+**行为模型（工程可依赖的三条铁律）**：
+
+```
+缓存序列 ≈ [tools] + [规范化的 system 块（疑前置合并）] + [其余消息原序]，前缀匹配
+① 任何 system 消息变化（无论位置）→ 全断
+② tools 列表任何变化（哪怕尾部 +1）→ 全断
+③ user/assistant 变化 → 只断其位置之后，前缀照常命中
+```
+
+（"重排合并" vs "级联分层"两种机制解释在全部实验上等价，外部不可再分；行为模型已足够指导工程。）
+
+**修复（当天落地）**：动态注入（tail 合并消息/钩子旁注/before_turn hint）role system → **user**，`<system-reminder>` 内容包裹保留——对齐 Claude Code 线上协议（其动态注入本就是 user role，故 cc 在 v4 上 79% 正常）。端到端验证：修复形态三步步进 99/99/99（修复前同形态 6%）。
+
+**候选根因旧案销案**：multi-token 轮换 per-token 隔离——**否证**（单 token 账号同样断）；TTL——**否证**（45s 重发 99%，且断裂与间隔无关）；"随机路由"——大概率误判（见缓存坑条目）。
+
+**成本量级**：comfy session 16 点段 81 请求 miss 1480 万 tok ≈ ¥22/小时输入费；修复后按 90%+ 命中（miss 价 30 倍于 hit）输入费降约一个量级。GLM 的 miss/hit 价差约 4 倍——DeepSeek 对缓存的敏感度比 GLM 高一个数量级，长会话优先保证 DeepSeek 前缀稳定。
+
+> 探针族留存 `tools/deepseek_cache_probe*.py`（v1=五组判别、2~13=R 系列变量对齐链），读取 models.json 的 deepseek profile 直连官方端点，`prompt_tokens_details.cached_tokens`/`prompt_cache_hit_tokens` 读命中；DeepSeek 再换行为可复跑对照。
 
 ## 相关页面
 

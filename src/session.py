@@ -1039,7 +1039,9 @@ class Session:
         out = [{"role": "user", "content": self._user_content(self._current)}]
         _bt = getattr(self._current, "_before_turn_hint", None)
         if _bt:
-            out.append({"role": "system", "content": _bt})
+            # user role：同 tail——DeepSeek v4 对变化的 system 消息做规范化会断缓存（R12b）；
+            # before_turn 提示跨轮变化，user+<system-reminder> 语义等价且缓存友好
+            out.append({"role": "user", "content": _bt})
         return out
 
     def _seg_msgs_steps(self) -> list[dict]:
@@ -1075,7 +1077,10 @@ class Session:
             except Exception:
                 pass
         grouped_tail = self._ambient_group(tail_blocks)
-        return [{"role": "system", "content": grouped_tail}] if grouped_tail else []
+        # role=user（对齐 Claude Code 线上协议的动态注入形态）：DeepSeek v4 端点对 messages 里的
+        # system 消息做规范化（重排/合并进缓存键），tail 每步重渲染变化 → system role 会让整个
+        # 序列的缓存从头部就断（实测 6%/恒定14k 残段命中；改 user 后 99%，探针 R12b 2026-08-29）
+        return [{"role": "user", "content": grouped_tail}] if grouped_tail else []
 
     def _asm_action_msgs(self, item: dict) -> list[dict]:
         """assembly 清单里的动作项（file/dir/cmd/workflow/text）→ 一条 system 消息（裸内容——

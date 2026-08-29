@@ -46,7 +46,7 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
   - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.json`
   - 老记录（/restart 前生成的）无 turn/step 字段，tooltip 自动省略该段
   - 使用场景：从 /stats 折线图发现异常点（如缓存单步深跌）→ 拖拽扫描（或 hover）tooltip 获取 t{N}·s{M} → 直接打开 `projections/t{N}_s{M}_*.json` 查看当时完整投影，快速定位升档/折叠等事件断点
-  - ⚠️ 转储格式（2026-08，commit 2dc64f2）：`.json` pretty-print **负载本体**（`{"_meta": {...}, "messages": [...]}`，零构造零截断，`json.load` 即消费）；历史 `.txt` 自定义格式仅存旧存档。详见 [context-engine · 投影转储](context-engine.md#投影转储文件名与-ts-标记commit-4aced81)
+  - ⚠️ 转储格式（2026-08，commit 2dc64f2）：`.json` pretty-print **负载本体**（`{"_meta": {...}, "messages": [...]}`，零构造零截断，`json.load` 即消费）；历史 `.txt` 自定义格式仅存旧存档。详见 [context-engine · 投影转储](../architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)
 
 ### llm_calls.jsonl 每条记录
 
@@ -116,7 +116,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 - **折叠事件（t206）**：/stats 单步深跌（98%+ miss），下一步即恢复 ~99.9% → 预期一次性成本，无需处置（折叠摘要 byte-stable）。见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)
 - **正常轮边界（t224）**：/stats 显示 98%+ 命中，仅 1~2% 结构性重算 → 验证轮边界平滑路径已生效（未超 75% 阈值）。见 [context-engine 正常轮边界路径](../architecture/context-engine.md#正常轮边界路径t224-实证2026-08)
 - **折叠判阈口径修复（2026-08）**：`_estimate_tokens` 估算分子补齐 tools schema——修前估算「以为达标」（271,623 判 ≤300K → 折叠 0 轮）而实际 419,284 超 win=400K（估算 vs 实际系统性差 ~147K/请求）。**症状**：新一轮初始 prompt_tokens 远超 400K×0.75 目标却折叠 0 轮 / 未见升档折叠日志。需升级代码 + `/restart` 生效。见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)
-- **DeepSeek 端低命中排查（2026-08 探针实证）**：DeepSeek 缓存按**原始消息序列位置敏感**、**不做 system 合并规范化**、`reasoning_content` 不参与缓存键——装配字节稳定即可命中（D 组实证：同内容 system 块原位命中 91.5%、挪到最前 0%），分层投影结构本身不是低命中原因。持续低命中优先查 **multi-token 轮换**（per-token 缓存隔离）与 **TTL**；判别手段 `tools/deepseek_cache_probe.py`（可复用其它 provider）。见 [context-engine 缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证位置敏感不合并-system2026-08-探针)
+- **DeepSeek 端低命中排查（2026-08-29 实证定案）**：v4 后端对 messages 里**变化的 system 消息**做规范化、**tools 列表变化**也会 → **全序列缓存断**（miss 单价 ≈ hit 的 30-50 倍，GLM 仅 ~4 倍，代价极大）。三条铁律：①任何 system 变化全断；②tools 任何变化全断；③user/assistant 变化只断其后。框架已修（动态注入 user role + 工作流工具 sorted 重注册保 byte-stable）；自定义开发注意**别在投影里用变化的 system role，别在高频路径增删工具**。旧嫌疑 multi-token 轮换/TTL/随机路由均已否证或降级。判别探针 `tools/deepseek_v4_cache_probe*.py`（R12b 三行变体矩阵 3 分钟定位）。见 [context-engine 缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)
 
 ### /restart 看门狗与 agt 入口（2026-08）
 

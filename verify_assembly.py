@@ -88,7 +88,8 @@ check("静态块无 <system-reminder>、无 [assembly: 前缀",
       "<system-reminder>" not in msgs[0]["content"] and "[assembly:" not in content)
 check("rules 在 history 前", content.index("RULES_BLOCK") < content.index("早"), "")
 check("ltm 独立成条且裸内容", any(m["role"] == "system" and m["content"] == "LTM_BLOCK" for m in msgs))
-check("tail 动态块保留 <system-reminder> 组", msgs[-1]["role"] == "system"
+check("tail 动态块 = user role + <system-reminder> 组（防 DeepSeek system 规范化断缓存）",
+      msgs[-1]["role"] == "user"
       and msgs[-1]["content"].startswith("<system-reminder>") and "TIME_BLOCK" in msgs[-1]["content"],
       str(msgs[-1])[:100])
 check("默认装配=清单顺序且无异常", isinstance(msgs, list) and len(msgs) > 0)
@@ -118,6 +119,14 @@ s3 = Session("P")
 s3.set_assembly_plan(plan_once)
 m3a = s3.messages_for_llm(); m3b = s3.messages_for_llm()
 check("once text 两项都在", "ONCE_ONLY" in str(m3a) and "ONCE_ONLY" in str(m3b))
+# 内插空判（2026-08-29）：任一已注册 {func:...()} 占位空 → 整段丢弃；未注册名保留占位不触发丢弃
+from session import _interp_funcs
+check("纯占位空 → 整段空（丢弃）", _interp_funcs("{func:load_remote_instances()}") == "")
+check("混合文本占位空 → 整段空（丢弃标题壳）", _interp_funcs("【远程】\n{func:load_remote_instances()}") == "")
+_out = _interp_funcs("前缀{func:runtime_env()}")
+check("混合文本占位非空 → 正常注入", _out.startswith("前缀") and len(_out) > len("前缀"), _out[:60])
+check("未注册名 → 保留占位不丢弃", _interp_funcs("静态{func:no_such()}") == "静态{func:no_such()}")
+check("多占位一空 → 丢弃", _interp_funcs("{func:runtime_env()}|{func:load_remote_instances()}") == "")
 
 # —— 5. history 三态 ——
 print("\n【5】history 三态")

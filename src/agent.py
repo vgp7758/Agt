@@ -1320,6 +1320,9 @@ class Agent:
         # 钩子旁注【按位置分组】：同一位置（before_tool/after_tool/before_answer）多个触发合并成
         # 一组 <system-reminder pos="...">，用 <hook> 子标签区分各工作流；不同位置各自独立一条，
         # 保持各钩子结果在消息队列里的位置归属（而非混并成一坨）。
+        # role=user（非 system）：DeepSeek v4 端点对 messages 里的 system 消息做规范化（重排/合并
+        # 进缓存键），动态插入的 system 每步变会把整个序列的缓存从头部断掉（探针 R12b 2026-08-29）；
+        # Claude Code 线上协议的动态注入同样是 user role + <system-reminder> 标签。
         if notes:
             from collections import OrderedDict
             groups = OrderedDict()
@@ -1328,7 +1331,7 @@ class Agent:
             for hook_pos, items in groups.items():
                 parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in items]
                 inner = "\n".join(parts)
-                msgs.append({"role": "system", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
+                msgs.append({"role": "user", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
         # 投影转储（调试用）：把完整 messages 以纯文本写到 projections/ 目录
         if getattr(self, "dump_projections", False):
             self._dump_projection(msgs)

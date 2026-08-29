@@ -1,7 +1,7 @@
 name: coder
 description: 写代码实现功能。何时调用：需要实现/修改代码（写函数、修 bug、加功能）时。
 tools: run_python, write_file, edit, read_file, grep
-model: null
+model: glm-official-flash
 assembly:
 - file: .agent/agents/coder.md
 - history|optional // 接续上次未完成的重构或修复任务时打开

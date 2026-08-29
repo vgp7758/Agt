@@ -1043,22 +1043,15 @@ class Session:
 
     def _seg_msgs_steps(self) -> list[dict]:
         """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
-        recent-file（跟屁虫快照）只在这里注入：全轮按文件去重——同文件后写覆盖，
-        每文件只保留【最新一份】快照，统一放当前轮 steps 尾部。归档轮/历史段（含档1 的
-        base=None 全量路径）一律不注入（用户裁定 2026-08-29：此前每步逐 call 注入，
-        实测 llm_client.py 一轮重复 4 份）。"""
+        recent-file（跟屁虫快照，用户设计 2026-08-29）：_rf_latest_map 维护 filename→最新改它的
+        call_id 映射，_steps_to_messages 渲染 role:tool 时按 call_id 命中——快照附加在【那次
+        工具调用的 result content】尾部（因果位置自然，紧跟改它的调用）；同文件多次 edit 只有
+        最新一次的 call 命中。归档轮/历史段不传映射（call_id 不在映射里，天然"前面的轮不管"）。"""
         if self._current is None:
             return []
         out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
-                                           full_window=RECENT_FULL_STEPS))
-        latest: dict[str, dict] = {}
-        for s in self._current.steps:
-            for _cid, snap in (s.file_snapshots or {}).items():
-                if isinstance(snap, dict) and snap.get("path"):
-                    latest[str(snap["path"])] = snap   # 后面步骤覆盖 → 每文件留最新
-        for path, snap in latest.items():
-            out.append({"role": "system", "content":
-                f"<recent-file file='{path}' version='{snap.get('version', '')}'>\n{snap.get('text', '')}\n</recent-file>"})
+                                           full_window=RECENT_FULL_STEPS,
+                                           rf_map=self._rf_latest_map()))
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
@@ -1659,19 +1652,26 @@ class Session:
         except Exception:
             pass
 
-    def _rf_chars(self) -> int:
-        """当前轮 recent-file（跟屁虫快照）的总字符数——按文件去重后的集合（与
-        _seg_msgs_steps 的注入集合同款：同文件后写覆盖，每文件留最新一份）。
-        判阈刨除用（用户裁定 2026-08-29）：rf 是轮内易变项（归档即消失），
-        它的体积不该推动毕业等不可逆历史压缩。"""
+    def _rf_latest_map(self) -> dict:
+        """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。
+        同文件多次 edit 后写覆盖——只有【最新一次改它的 tool_call】会在投影时命中挂快照。
+        归档轮/历史段的 call_id 不在映射里（映射只从 _current 构建），天然"前面的轮不管"。"""
         if self._current is None:
-            return 0
+            return {}
         latest: dict[str, dict] = {}
         for s in self._current.steps:
-            for _cid, snap in (s.file_snapshots or {}).items():
+            for cid, snap in (s.file_snapshots or {}).items():
                 if isinstance(snap, dict) and snap.get("path"):
-                    latest[str(snap["path"])] = snap
-        return sum(len(str(snap.get("text", ""))) for snap in latest.values())
+                    latest[str(snap["path"])] = {"cid": cid, "path": str(snap["path"]),
+                                                 "version": str(snap.get("version", "")),
+                                                 "text": str(snap.get("text", ""))}
+        return latest
+
+    def _rf_chars(self) -> int:
+        """当前轮 recent-file（跟屁虫快照）的总字符数——按文件去重后的集合口径。
+        判阈刨除用（用户裁定 2026-08-29）：rf 是轮内易变项（归档即消失），
+        它的体积不该推动毕业等不可逆历史压缩。"""
+        return sum(len(m["text"]) for m in self._rf_latest_map().values())
 
     def observe_llm_usage(self, msgs: list[dict], usage: dict, extra_chars: int = 0) -> None:
         """react 每次成功 LLM 调用后由 agent 喂入回包 usage（拿到 resp 即成功——失败走 raise）：
@@ -1790,7 +1790,7 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = None, full_window: int = None) -> list[dict]:
+                           base: int = None, full_window: int = None, rf_map: dict = None) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
         工具名/入参/结果从 toollog 按 call_id 召回。step 级策略（分组投影，缓存友好）：
         - 每 GROUP_STEPS 步一组，组内所有步 limit 一致 → byte-stable（利于前缀缓存）；
@@ -1801,6 +1801,7 @@ class Session:
         - reasoning 永远原样挂 reasoning_content（不压缩，含 step0 的核心设计思考）。
         max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
+        _rf_hit = {m["cid"]: m for m in (rf_map or {}).values()}   # call_id→快照（O(1) 命中查；rf_map 仅当前轮传入）
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
             steps = steps[-max_steps:]
@@ -1843,10 +1844,15 @@ class Session:
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
                 content = self._project_imgs(content)
+                # recent-file（用户设计 2026-08-29·第三版）：按 call_id 从映射命中——快照附加在
+                # 【该次工具调用的 result content】尾部（因果位置：紧跟改它的调用）。映射只由
+                # _seg_msgs_steps 从当前轮构建（filename→最新改它的 cid）：同文件多次 edit 仅
+                # 最新 call 命中（旧 call 不挂）；归档轮/历史段不传映射（cid 不在映射里）天然不挂。
+                if rf_map and full and (tc.call_id or "") in _rf_hit and isinstance(content, str):
+                    _m = _rf_hit[tc.call_id or ""]
+                    content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}'>\n"
+                                f"{_m['text']}\n</recent-file>")
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
-                # recent-file 跟屁虫已移出（用户裁定 2026-08-29：每步逐 call 注入导致同文件
-                # 多份重复——实测 llm_client.py 一轮 4 份；归档轮（档1 base=None 路径）也在注入）。
-                # 现在统一由 _seg_msgs_steps 在【当前轮尾部】按文件去重注入最新一份。
         return msgs
 
     def _cap_full_result(self, result: str, call_id: str) -> str:

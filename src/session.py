@@ -1659,6 +1659,20 @@ class Session:
         except Exception:
             pass
 
+    def _rf_chars(self) -> int:
+        """当前轮 recent-file（跟屁虫快照）的总字符数——按文件去重后的集合（与
+        _seg_msgs_steps 的注入集合同款：同文件后写覆盖，每文件留最新一份）。
+        判阈刨除用（用户裁定 2026-08-29）：rf 是轮内易变项（归档即消失），
+        它的体积不该推动毕业等不可逆历史压缩。"""
+        if self._current is None:
+            return 0
+        latest: dict[str, dict] = {}
+        for s in self._current.steps:
+            for _cid, snap in (s.file_snapshots or {}).items():
+                if isinstance(snap, dict) and snap.get("path"):
+                    latest[str(snap["path"])] = snap
+        return sum(len(str(snap.get("text", ""))) for snap in latest.values())
+
     def observe_llm_usage(self, msgs: list[dict], usage: dict, extra_chars: int = 0) -> None:
         """react 每次成功 LLM 调用后由 agent 喂入回包 usage（拿到 resp 即成功——失败走 raise）：
         1. 校准：投影字符数 ÷ prompt_tokens → 实测 chars/token，EMA(0.5) 平滑进 _chars_per_token，
@@ -1682,12 +1696,17 @@ class Session:
             ratio = min(max(chars / prompt, 1.0), 8.0)
             self._chars_per_token = round(0.5 * self._chars_per_token + 0.5 * ratio, 3)
         panic = config.load_panic_window() or win
-        over = total > win
+        # 触发判定（用户裁定 2026-08-29）：实测 prompt_tokens 刨除 recent-file 估算后仍超 win 才算 over——
+        # rf 是轮内易变项（同文件后写覆盖、归档即消失），它的体积不该推动下轮的历史压缩（毕业不可逆）。
+        # panic 判阈不刨（按真实请求体积保命：请求确实超了就必须救——rf 也在真实请求里）。
+        rf_tok = self._rf_chars() / max(0.1, self._chars_per_token)
+        over = (prompt - rf_tok) > win
         hit_panic = total > panic
         self._append_token_usage({
             "ts": int(time.time()), "model": getattr(self.llm, "model_name", "") or "",
             "chars": chars, "prompt_tokens": prompt, "completion_tokens": completion,
             "total_tokens": total, "chars_per_token": self._chars_per_token,
+            "rf_tok": int(rf_tok),
             "over": over, "panic": hit_panic,
         })
         if hit_panic:
@@ -1695,8 +1714,8 @@ class Session:
                          total, panic)
             self._plan_fold()
         elif over:
-            _LOG.info("实测 token=%d 超 win=%d（未超 panic=%d）：标记下轮边界重规划",
-                      total, win, panic)
+            _LOG.info("实测 token=%d（刨 recent-file %d 估算后仍超 win=%d）：标记下轮边界重规划",
+                      prompt, rf_tok, win)
             self._over_window_mark = True
 
     @staticmethod

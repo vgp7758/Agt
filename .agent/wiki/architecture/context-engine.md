@@ -9,7 +9,7 @@
 [rules]            AGENTS.md + .agent/rules/*.md + skills 清单（每轮重读，当轮生效）
 [summary]          历史会话摘要（无分档时的老路径）
 [tiered history]   分档投影（需 provider 配 max_effective_context_window）
-[current turn]     user_message + before_turn hint + steps（工具调用按分组衰减）+ pending hints
+[current turn]     user_message + before_turn hint + steps（工具调用按分组衰减）+ pending hints + recent-file（steps 尾部、按文件去重只留最新一份，见「recent-file 跟屁虫快照」节）
 [tail ambient]     合并成一组 <system-reminder>：时间/后台任务/计划/episodic 召回
 ```
 
@@ -252,6 +252,40 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 | ≥2 | `base - 10 × detail_step × 组号差`（≥DETAIL_FLOOR=20） |
 
 组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
+
+## recent-file 跟屁虫快照：轮尾去重注入 + 毕业判阈免疫（2026-08-29，commits dd7fd81 + 39e7115）
+
+**机制是什么**：react 每步工具调用读写 repo 文件时，把文件快照记进 `step.file_snapshots`（call_id → {path, version, structure, content…}），投影装配时以 `<recent-file file='…' version='…'>` 块注入——让模型看到自己「刚操作的是什么版本的文件」，同文件连续操作不必反复 read（跟屁虫语义）。
+
+### 旧注入的重复放大（用户实测抓到）
+
+用户检查当前 session 最近一次请求负载：`src/llm_client.py` ×4、`src/agent.py` ×2、`src/static/index.html` ×2——同一文件多份不同版本快照并存。
+
+根因两层：
+
+1. **步内逐 call 注入（源头）**：旧 `_steps_to_messages` 每步逐 tool_call 注入 recent-file——连续编辑同一文件的轮里，每步各带一份当时版本快照，一轮累积 N 份
+2. **档1 冻结复用（放大器）**：档1 归档轮渲染（base=None 全量路径）也注入 → `_render_turn_frozen` 把含 recent-file 的渲染缓存进 `_frozen_renders`（key = level/fold/base），档1 存续期内每次投影复用，直到毕业顺移才失效重算——上一轮的文件快照跟着档1 轮继续出现在后续投影里
+
+### 修复一：轮尾去重注入（2026-08-29，commit dd7fd81，用户裁定「只有当前轮管，前面的轮都不管」）
+
+- `_steps_to_messages` 步内注入**完全移除**——连带消除冻结放大器：`_frozen_renders` 缓存的是渲染结果，源头不产生、缓存里自然没有；且它本就是内存缓存不落盘，无跨重启残留
+- `_seg_msgs_steps` 统一注入：**只在当前轮 steps 尾部**、全轮按文件去重——同文件后写覆盖，每文件只保留【最新一份】快照
+- 归档轮/历史段（含档1 的 base=None 全量路径）**一律不注入**
+- 顺带修掉 `_seg_msgs_steps` 里 `out.append({...}` 缺右括号的既有语法 bug
+
+六场景验证全过（含档1 归档轮 0 份）。机制自证：编辑 session.py 的轮次，轮尾注入的就是最新版全文一份（旧代码下是两份不同版本并存）。
+
+### 修复二：毕业判阈 rf 免疫（2026-08-29，commit 39e7115，用户裁定）
+
+**问题**：rf 是轮内易变项（同文件后写覆盖、**归档即消失**——下一轮投影里就没了），但它的体积计入实测 prompt_tokens → 大 rf 轮把 over 判真 → 下一轮边界频繁触发毕业（不可逆历史压缩）。裁定：**rf 的体积不该推动毕业**。
+
+**实现（src/session.py）**：
+
+- 新增 `_rf_chars()`：当前轮 rf 按文件去重后的集合（与 `_seg_msgs_steps` 注入集合同款）的总字符数
+- 回包触发判定（observe_llm_usage）：`over = (prompt − rf_tok) > win`，其中 `rf_tok = _rf_chars() / max(0.1, _chars_per_token)`——实测 prompt_tokens 刨除 rf 估算后仍超窗才算 over
+- **panic 判阈不刨**（`hit_panic = total > panic` 按真实请求体积保命：请求确实超了就必须救——rf 也在真实请求里）
+
+**口径哲学**：与 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08) 同族——判阈分子应反映「归档后真实留存的历史体积」。schema 是请求级固定项要加进来，rf 是轮内易变项要刨出去：方向相反、原则同一。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

@@ -137,7 +137,8 @@ s7.set_assembly_plan([{"kind": "seg", "name": "system"},
 from real_tools import REAL_TOOLS
 s7._asm_workflow_tools = REAL_TOOLS
 c7 = " || ".join(str(m.get("content")) for m in s7.messages_for_llm())
-check("tool:read_file 执行并注入", "assembly:tool" in c7 and len(c7) > 100, c7[:80])
+# 2026-08-29 起 tool 装配项不再带 [assembly:tool] 前缀（系统信息合并，裸内容注入）
+check("tool:read_file 执行并注入", "AGENTS" in c7 and "assembly:" not in c7 and len(c7) > 100, c7[:80])
 check("未知工具跳过不炸", s7._asm_evaluate({"kind": "tool", "tool_name": "no_such_tool", "tool_args": ""}) == "")
 from real_tools import LIGHT_TOOLS as _LT
 check("concat_files glob 拼接", "===" in _LT.call("concat_files", {"pattern": ".agent/rules/*.md"}))

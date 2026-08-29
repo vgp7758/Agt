@@ -7,6 +7,8 @@
   4. 动作项求值：file/dir/cmd/text 注入 + once 缓存 + turn 每次重求
   5. history 三态：window/full/tiered(无预算退化 full)
   6. 子 Agent hooks 默认 off、显式声明则 on
+  7. 系统信息合并（2026-08-29）：连续系统段+动作项 → 一条 system（无 [assembly:] 前缀、
+     静态块不包 <system-reminder>）；ltm 独立成条；tail 动态块保留 <system-reminder> 组
 
 跑法：python verify_assembly.py
 """
@@ -77,12 +79,18 @@ try:
     s.turns.append(t)
 except Exception as e:
     print("  (跳过 turns 构造:", e, ")")
+s._time_provider = lambda: "TIME_BLOCK"
 msgs = s.messages_for_llm()
-roles = [m["role"] for m in msgs]
 content = " || ".join(str(m.get("content")) for m in msgs)
-check("system 首位", msgs[0]["content"] == "TESTPERSONA", str(msgs[0]))
+check("头部系统信息合并成一条", msgs[0]["role"] == "system"
+      and msgs[0]["content"] == "TESTPERSONA\n\nRULES_BLOCK", str(msgs[0])[:120])
+check("静态块无 <system-reminder>、无 [assembly: 前缀",
+      "<system-reminder>" not in msgs[0]["content"] and "[assembly:" not in content)
 check("rules 在 history 前", content.index("RULES_BLOCK") < content.index("早"), "")
-check("LTM 块存在", "LTM_BLOCK" in content)
+check("ltm 独立成条且裸内容", any(m["role"] == "system" and m["content"] == "LTM_BLOCK" for m in msgs))
+check("tail 动态块保留 <system-reminder> 组", msgs[-1]["role"] == "system"
+      and msgs[-1]["content"].startswith("<system-reminder>") and "TIME_BLOCK" in msgs[-1]["content"],
+      str(msgs[-1])[:100])
 check("默认装配=清单顺序且无异常", isinstance(msgs, list) and len(msgs) > 0)
 
 # —— 4. 动作项 ——
@@ -96,9 +104,12 @@ plan = [
     {"kind": "seg", "name": "user_message"},
     {"kind": "seg", "name": "steps"},
 ]
+s2._current = None
 s2.set_assembly_plan(plan)
 m1 = s2.messages_for_llm()
 c1 = " || ".join(str(m.get("content")) for m in m1)
+check("动作项并入头部一条 system（user/steps 空）", len(m1) == 1
+      and m1[0]["role"] == "system" and "STATTEXT" in str(m1[0].get("content")), f"len={len(m1)}")
 check("file 项注入 .gitignore 内容", "#" in c1 and "__pycache__" in c1)
 check("text 项注入静态文本", "STATTEXT" in c1)
 check("dir 项注入大纲", "coder.md" in c1 and "[L" in c1)

@@ -9,7 +9,7 @@
 [rules]            AGENTS.md + .agent/rules/*.md + skills 清单（每轮重读，当轮生效）
 [summary]          历史会话摘要（无分档时的老路径）
 [tiered history]   分档投影（需 provider 配 max_effective_context_window）
-[current turn]     user_message + before_turn hint + steps（工具调用按分组衰减）+ pending hints + recent-file（steps 尾部、按文件去重只留最新一份，见「recent-file 跟屁虫快照」节）
+[current turn]     user_message + before_turn hint + steps（工具调用按分组衰减；文件快照以 <recent-file/> 挂在【该文件最新一次改它的 tool result】content 尾部、全轮按文件去重，见「recent-file 跟屁虫快照」节）+ pending hints
 [tail ambient]     合并成一组 <system-reminder>：时间/后台任务/计划/episodic 召回
 ```
 
@@ -253,9 +253,11 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 
 组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
 
-## recent-file 跟屁虫快照：轮尾去重注入 + 毕业判阈免疫（2026-08-29，commits dd7fd81 + 39e7115）
+## recent-file 跟屁虫快照：三版演进——终版按 call_id 挂进工具结果（2026-08-29，dd7fd81 + 39e7115 + 348adfc）
 
 **机制是什么**：react 每步工具调用读写 repo 文件时，把文件快照记进 `step.file_snapshots`（call_id → {path, version, structure, content…}），投影装配时以 `<recent-file file='…' version='…'>` 块注入——让模型看到自己「刚操作的是什么版本的文件」，同文件连续操作不必反复 read（跟屁虫语义）。
+
+**注入位置三版演进（2026-08-29 当天走完一个螺旋）**：v1 每步逐 call 注入（重复放大）→ v2 轮尾去重独立消息（唯一性有了、因果位置丢了）→ **v3 终版：按 call_id 命中，快照附加在【该文件最新一次改它的那次 tool_call 的 result content】尾部——位置与唯一性兼得**（见下方修复三；修复一/二为中间态，机制语义仍有效）。
 
 ### 旧注入的重复放大（用户实测抓到）
 
@@ -286,6 +288,21 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 - **panic 判阈不刨**（`hit_panic = total > panic` 按真实请求体积保命：请求确实超了就必须救——rf 也在真实请求里）
 
 **口径哲学**：与 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08) 同族——判阈分子应反映「归档后真实留存的历史体积」。schema 是请求级固定项要加进来，rf 是轮内易变项要刨出去：方向相反、原则同一。
+
+### 修复三（终版设计）：快照挂进「改它的那次工具调用」result content（2026-08-29，commit 348adfc，用户设计）
+
+**动机**：修复一的轮尾注入保住了唯一性，但快照变成轮尾一条独立消息——模型看不出「哪次调用改的它」，因果位置丢了。用户裁定改回【挂在工具调用结果上】+ 投影时命中式去重：**内存维护 filename → 最新改它的 tool_call 映射，渲染 role:tool 时按 call_id 命中，把 `<recent-file/>` 块附加在该次工具调用 result content 尾部**。
+
+**实现（src/session.py 四处）**：
+
+- 新增 `_rf_latest_map()`：从当前轮 `_current.steps` 各步的 `file_snapshots` 构建 `filename → {cid, path, version, text}`——同文件多次 edit **后写覆盖**，只有【最新一次改它的 call】进映射（会在投影时命中挂快照）；映射只从 `_current` 构建 → 归档轮/历史段的 call_id 天然不在映射里，「前面的轮不管」零判断开销
+- `_seg_msgs_steps` 构建映射传入 `_steps_to_messages`（签名增 `rf_map: dict = None`）；归档轮/历史段不传——call_id 不在映射里自然不命中
+- `_steps_to_messages` 内建 `_rf_hit = {m["cid"]: m for m in (rf_map or {}).values()}`（call_id → 快照，O(1) 索引）
+- 渲染循环：content 走完 cap_full/summarize + 图片投影后，`tc.call_id` 命中 → content 尾部追加 `<recent-file file version>全文</recent-file>`
+
+**四场景验证全过**：同文件两次 edit 仅最新 call（c3）带 rf、旧 c1 不带 ✓；另一文件正常挂 ✓；独立 system rf 消息 0 条 ✓；归档轮零注入 ✓。机制自证：编辑 session.py 的轮次，session.py 全文快照就挂在本轮最后一次 edit 的工具结果后面。
+
+**口径连带**：修复二的 `_rf_chars()` 判阈刨除集合终版起与 `_rf_latest_map` 同源（同文件留最新一份口径不变，毕业判阈 rf 免疫语义不变）。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

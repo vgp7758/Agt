@@ -422,7 +422,7 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 **背景（用户怀疑）**：分层投影把 system 块分散在历史中间——怀疑 deepseek 端点默认把 messages 中所有 role:system 合并放到最前 → 规范化重排 → 缓存前缀断裂 → 命中率低。
 
-**探针（tools/deepseek_cache_probe.py，当时后端）**：用模拟 agt 分层投影形态的 payload（system 分散中段 + 历史 reasoning_content + tool_calls 结构），5 组判别：
+**探针（probes/deepseek_cache_probe.py，当时后端）**：用模拟 agt 分层投影形态的 payload（system 分散中段 + 历史 reasoning_content + tool_calls 结构），5 组判别：
 
 | 组 | 操作 | 结果 | 判定 |
 |---|---|---|---|
@@ -438,7 +438,7 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 **触发场景**：comfy session t253——s0 冷启动后 s1-s3 命中仅 3-6%（8320/14080 恒定残段），而 glm-official 同投影 99.6%；用户自述 claude-code 里 deepseek 命中正常、别的时间段 Agt 也持续低命中。官方账单按小时对照：同 key 同日，cc（claude-code，00-07 点，单请求 2.5-6.7 万 tok）56-79% ✅、探针（21 点）87% ✅、**Agt（13-16 点，单请求 20-32 万 tok，81 请求 miss 1480 万）2-4% ❌**——账号/端点正常，问题特定于请求形态。
 
-**排查链（tools/deepseek_v4_cache_probe2~13.py，逐步对齐变量全 99% 直到锁定）**：R2 真实投影重发/45s 间隔 ✓、R3 假 tools+真实投影 ✓、R4 增量（前缀 byte 同+尾部变）✓、R5/R7-R11 真实重建工具箱（99 个）/agent 消息形态（assistant+tool_calls+reasoning 回传+tool）/时序/参数/温度/OpenAI SDK 同栈 ✓——全部 99%。R12 复刻 agent 节奏（步进生长+**每步变化的 tail system**）→ **全 6% 复现**。R12b 变体矩阵锁定元凶：
+**排查链（probes/deepseek_v4_cache_probe2~13.py，逐步对齐变量全 99% 直到锁定）**：R2 真实投影重发/45s 间隔 ✓、R3 假 tools+真实投影 ✓、R4 增量（前缀 byte 同+尾部变）✓、R5/R7-R11 真实重建工具箱（99 个）/agent 消息形态（assistant+tool_calls+reasoning 回传+tool）/时序/参数/温度/OpenAI SDK 同栈 ✓——全部 99%。R12 复刻 agent 节奏（步进生长+**每步变化的 tail system**）→ **全 6% 复现**。R12b 变体矩阵锁定元凶：
 
 | 尾部消息 | 内容 | 增量命中 |
 |---|---|---|
@@ -465,7 +465,7 @@ R13 机制判别：E3 头部 system 变化同样全断（5%，**位置无关**�
 
 **成本量级**：comfy session 16 点段 81 请求 miss 1480 万 tok ≈ ¥22/小时输入费；修复后按 90%+ 命中（miss 价 30 倍于 hit）输入费降约一个量级。GLM 的 miss/hit 价差约 4 倍——DeepSeek 对缓存的敏感度比 GLM 高一个数量级，长会话优先保证 DeepSeek 前缀稳定。
 
-> 探针族留存 `tools/deepseek_cache_probe*.py`（v1=五组判别、2~13=R 系列变量对齐链），读取 models.json 的 deepseek profile 直连官方端点，`prompt_tokens_details.cached_tokens`/`prompt_cache_hit_tokens` 读命中；DeepSeek 再换行为可复跑对照。
+> 探针族留存 `probes/deepseek_cache_probe*.py`（v1=五组判别、2~13=R 系列变量对齐链），读取 models.json 的 deepseek profile 直连官方端点，`prompt_tokens_details.cached_tokens`/`prompt_cache_hit_tokens` 读命中；DeepSeek 再换行为可复跑对照。⚠️ 探针必须放 `probes/`（**勿放 `tools/`——那是 script_tools 的插件扫描目录，import 即执行顶层代码**，曾致 agt 启动自动烧探针 token；全部探针已加 `__main__` 保护双保险）。
 
 ## 相关页面
 

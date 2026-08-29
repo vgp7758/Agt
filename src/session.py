@@ -594,12 +594,56 @@ class Session:
         self._detail_base = None
 
     # ========== 投影分段估算（/context 诊断用，只读） ==========
+    def _save_proj_stats_sidecar(self, stats: dict) -> None:
+        """投影分段统计旁车持久化（用户提案 2026-08-29）：session_dir/proj_stats.json
+        覆盖写最新一份，含档位边界快照（tier_boundaries/fold_count/max_level）——
+        /context 重启后也能读"上次真实投影"的 live 口径（内存 _proj_stats 随进程消失）。
+        原子写；session_dir 未就绪/失败静默（旁车只是诊断增强，绝不影响投影）。"""
+        sdir = getattr(self, "session_dir", None)
+        if sdir is None or not stats:
+            return
+        try:
+            data = dict(stats)
+            data["tier_boundaries"] = list(self._tier_boundaries)
+            data["fold_count"] = self._last_fold_count
+            data["max_level"] = self.max_level
+            data["chars_per_token"] = self._chars_per_token
+            p = Path(sdir) / "proj_stats.json"
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, p)
+        except Exception:
+            pass
+
+    def _load_proj_stats_sidecar(self) -> Optional[dict]:
+        """读旁车 proj_stats.json（读档后/重启后无内存缓存时的最近真实投影口径）。
+        返回前改标 source=sidecar（/context 据此显示跨重启口径）。失败/不存在返回 None。"""
+        sdir = getattr(self, "session_dir", None)
+        if sdir is None:
+            return None
+        try:
+            p = Path(sdir) / "proj_stats.json"
+            if not p.exists():
+                return None
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if data and data.get("sections"):
+                data = dict(data)
+                data["source"] = "sidecar"
+                return data
+        except Exception:
+            pass
+        return None
+
     def projection_breakdown(self) -> dict:
-        """分段统计：优先返回【真实装配时顺手记录】的 _proj_stats（live——真实发给模型的口径，
-        含 ts/turn/step 元信息）；无缓存（本进程还没跑过投影）才现算兜底（重算一遍段函数）。
+        """分段统计三级读取（用户提案 2026-08-29）：内存 live（真实装配时顺手记录的
+        _proj_stats，含 ts/turn/step 元信息）→ 旁车 sidecar（session_dir/proj_stats.json，
+        跨重启的最近真实投影+档位边界快照）→ 现算兜底（重算一遍段函数）。
         返回 {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars, source?}。"""
         if self._proj_stats and self._proj_stats.get("sections"):
             return dict(self._proj_stats)   # 浅拷贝：调用方改动不污染缓存
+        sc = self._load_proj_stats_sidecar()
+        if sc:
+            return sc
         out = {"sections": [], "total_tokens": 0, "total_chars": 0}
 
         def _add(name: str, msgs: list, meta: str = ""):
@@ -1240,6 +1284,7 @@ class Session:
                                 "turn": len(self.turns),
                                 "step": len(self._current.steps) if self._current else 0,
                                 "source": "live"}
+            self._save_proj_stats_sidecar(self._proj_stats)   # 旁车持久化（含档位边界快照——跨重启可读）
         except Exception as e:
             _LOG.warning("投影分段统计失败（不影响投影）：%s", e)
         finally:

@@ -116,6 +116,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 - **折叠事件（t206）**：/stats 单步深跌（98%+ miss），下一步即恢复 ~99.9% → 预期一次性成本，无需处置（折叠摘要 byte-stable）。见 [context-engine 折叠实证](../architecture/context-engine.md#折叠事件与缓存命中t206-实证2026-08)
 - **正常轮边界（t224）**：/stats 显示 98%+ 命中，仅 1~2% 结构性重算 → 验证轮边界平滑路径已生效（未超 75% 阈值）。见 [context-engine 正常轮边界路径](../architecture/context-engine.md#正常轮边界路径t224-实证2026-08)
 - **折叠判阈口径修复（2026-08）**：`_estimate_tokens` 估算分子补齐 tools schema——修前估算「以为达标」（271,623 判 ≤300K → 折叠 0 轮）而实际 419,284 超 win=400K（估算 vs 实际系统性差 ~147K/请求）。**症状**：新一轮初始 prompt_tokens 远超 400K×0.75 目标却折叠 0 轮 / 未见升档折叠日志。需升级代码 + `/restart` 生效。见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)
+- **DeepSeek 端低命中排查（2026-08 探针实证）**：DeepSeek 缓存按**原始消息序列位置敏感**、**不做 system 合并规范化**、`reasoning_content` 不参与缓存键——装配字节稳定即可命中（D 组实证：同内容 system 块原位命中 91.5%、挪到最前 0%），分层投影结构本身不是低命中原因。持续低命中优先查 **multi-token 轮换**（per-token 缓存隔离）与 **TTL**；判别手段 `tools/deepseek_cache_probe.py`（可复用其它 provider）。见 [context-engine 缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证位置敏感不合并-system2026-08-探针)
 
 ### /restart 看门狗与 agt 入口（2026-08）
 

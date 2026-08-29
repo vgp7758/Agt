@@ -401,6 +401,31 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 - **per-token 隔离**：GLM 缓存按 api_token 隔离且容量有限 → 同 token 交错 react 长调用与 utility 短调用互相驱逐缓存 → **utility 必须独立条目+独立 token**；该类条目配 `"token_rotate": false`（sticky）。ModelScope 不吃缓存但按号限额度 → 多 token 预旋转分摊是刚需，保持默认 true
 - 判别：**单步深跌后立即恢复**=折叠事件（预期一次性成本，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)）；**同轮连续两次深跌**=保命阀折叠目标太保守（见 [t228 实证](#轮内应急折叠保命阀t228-实证2026-08)）；骤降且与 utility 调用交错相关=驱逐；恒 0=不支持/随机路由。另注意：**折叠计划判阈的估算口径**——估算"以为达标"但实际超窗时，症状是新一轮初始 prompt 远超 75% 目标却折叠 0 轮（见 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08)）
 
+### DeepSeek 缓存行为实证：位置敏感、不合并 system（2026-08 探针）
+
+**背景（用户怀疑）**：分层投影把 system 块分散在历史中间——怀疑 deepseek 端点默认把 messages 中所有 role:system 合并放到最前 → 规范化重排 → 缓存前缀断裂 → 命中率低。
+
+**探针（tools/deepseek_cache_probe.py，model=deepseek-v4-flash）**：用模拟 agt 分层投影形态的 payload（system 分散中段 + 历史 reasoning_content + tool_calls 结构），5 组判别：
+
+| 组 | 操作 | 结果 | 判定 |
+|---|---|---|---|
+| A 基线 | 同 payload 连发 2 次 | A1=0% → A2=91.5% | 缓存通道本身健康 |
+| B 尾部追加 | hist + 一条 user | 90.8% | 前缀不变 → 跨请求命中 ✓ |
+| C 中插 system | 历史中插新 system 块后重发 | C1=0% → C2=93.6% | 同 payload 正常 |
+| D 位置重排（判别组） | S3 从中间挪到最前（其余字节完全不变） | D1(原位)=91.5% 命中 A；D2(挪前)=**0.0%** | **不做 system 合并** |
+| E 去 reasoning | 历史 assistant 去掉 reasoning_content | E1(带)=91.5%、E2(去)=91.5% | reasoning 不参与缓存键 |
+
+**结论（用户假设被否证）**：DeepSeek **不会**把 system 合并到最前——D 组决定性证据：同内容 system 块只是位置移动（其它字节完全一致），若服务端合并 system，D2 规范化后应与 D1 相同、缓存理应命中；实际 D2=0% 全 miss，而 **D1（原始位置）精准命中 A 建立的缓存（91.5%）**。缓存**按原始消息序列位置敏感**：前缀字节相同才命中（B 组尾部追加 90.8% ✓），位置一变全 miss（D2 ✓）。分层投影结构本身**不是**低命中原因——装配字节稳定即可命中（D1 证明），无需改装配形态。
+
+**附带发现**：`reasoning_content` 不参与缓存键——历史 reasoning 可放心回传、不伤缓存（对 `requires_reasoning_in_history: true` 的 DeepSeek 思考模型是好消息，见 [配置体系](../guides/config-and-models.md#模型能力标志速查)）。
+
+**下一步候选根因（2026-08 分析，未验证）**：
+
+- **multi-token 轮换 → per-token 缓存隔离（首选嫌疑）**：DeepSeek 疑似与 GLM 同款按 api_token 分缓存空间——models.json 的 deepseek.api_token 是**数组**（多 token），每换一次 token 就换一个空缓存空间，命中率直接清零。验证法：用第 2 个 token 发同一 payload——若 0% 则实锤，对策同 GLM：`token_rotate: false` 或 utility 独立条目
+- **TTL**：DeepSeek 官方缓存 TTL 若短于 GLM，长间隔轮次全 miss（查官方文档确认数值）
+
+> 探针脚本读取 models.json 的 deepseek profile 直连官方 /chat/completions，`usage.prompt_tokens_details.cached_tokens` 读缓存命中；可复用跑其它 provider。
+
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — episodic 召回（tail ambient `[epi·长期记忆]` 行来源）的检索流水线与演进

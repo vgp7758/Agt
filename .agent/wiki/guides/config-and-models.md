@@ -40,6 +40,7 @@
 | 长会话上下文压缩 | `max_effective_context_window`（不配=全量投影，长会话必爆） |
 | DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
+| DeepSeek 多 token（缓存隔离候选，2026-08 探针分析） | 缓存疑似按 api_token 分空间（同 GLM 机制）——多 token 轮换 = 每换一次 token 换一个空缓存空间，命中率清零；未实测，若实锤配 `token_rotate: false`（见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证位置敏感不合并-system2026-08-探针)） |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 

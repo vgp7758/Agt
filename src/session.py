@@ -1661,26 +1661,29 @@ class Session:
     def _rf_stripped(self, msgs: list[dict]) -> list[dict]:
         """返回剥除 <recent-file> 块的消息副本（不动原消息——投影产物不可变）。
         毕业（_plan_fold 的 cur_est）/ 保命阀（_history_tiered_msgs 的 rest）估算用：
-        rf 是轮内易变项（归档即消失），不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）。"""
+        rf 是轮内易变项（归档即消失），不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）。
+        判定按 tool_call_id ∈ rf_map 命中集合（用户设计）：与附加时的命中条件同源——
+        附加按 cid 命中，剥离也按 cid，因果一致不漂移，不做 content 子串检测；
+        sub 对无块 content 是 no-op，多模态 list 由 isinstance 防御天然跳过。"""
+        _hit = {m["cid"] for m in self._rf_latest_map().values()}
         out = []
         for m in msgs:
             c = m.get("content")
-            if isinstance(c, str) and "<recent-file" in c:
+            if (m.get("role") == "tool" and m.get("tool_call_id") in _hit
+                    and isinstance(c, str)):
                 m = dict(m, content=_RE_RF_BLOCK.sub("", c))
             out.append(m)
         return out
 
     def _rf_in_msgs(self, msgs: list[dict]) -> int:
-        """msgs 中 role:tool 的 content 里实际附加的 <recent-file> 块总字符数（真实投影口径——
-        用户裁定 2026-08-29：判阈刨除按【实际附加了多少】算，而非映射总量：full/字符串
-        等附加条件都已体现在渲染产物里，直接量它最准）。"""
+        """msgs 中实际附加的 <recent-file> 块总字符数（诊断/验证口径）。判定同
+        _rf_stripped：tool_call_id ∈ rf_map 命中集合（不做 content 子串检测）。"""
+        _hit = {m["cid"] for m in self._rf_latest_map().values()}
         n = 0
         for m in msgs:
-            if m.get("role") != "tool":
-                continue
-            c = m.get("content")
-            if isinstance(c, str) and "<recent-file" in c:
-                n += sum(len(x) for x in _RE_RF_BLOCK.findall(c))
+            if (m.get("role") == "tool" and m.get("tool_call_id") in _hit
+                    and isinstance(m.get("content"), str)):
+                n += sum(len(x) for x in _RE_RF_BLOCK.findall(m["content"]))
         return n
 
     def _rf_latest_map(self) -> dict:

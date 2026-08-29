@@ -50,6 +50,9 @@ RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
 _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
+# recent-file 跟屁虫块（tool result content 尾部附加的文件快照）：_rf_in_msgs 量体积 /
+# 毕业判定估算时剥离用（rf 是轮内易变项，不该推动升档/折叠等不可逆历史压缩——用户裁定 2026-08-29）
+_RE_RF_BLOCK = re.compile(r"\n<recent-file[\s\S]*?</recent-file>")
 
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
@@ -990,9 +993,10 @@ class Session:
         panic_win = config.load_panic_window() or win
         settle = int(win * FOLD_TARGET_RATIO)
         fold_count = self._planned_fold
-        # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）
-        rest = (self._seg_msgs_ltm() + self._seg_msgs_user_message()
-                + self._seg_msgs_steps() + self._seg_msgs_tail())
+        # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）。
+        # 剥除 recent-file 块（_rf_stripped）：应急判定针对历史段，rf 是轮内易变项不该推动升档/折叠（用户裁定 2026-08-29）
+        rest = self._rf_stripped(self._seg_msgs_ltm() + self._seg_msgs_user_message()
+                                 + self._seg_msgs_steps() + self._seg_msgs_tail())
         panic_mode = False
         for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
             body = self._render_tiered_history(fold_count)
@@ -1410,7 +1414,9 @@ class Session:
             g = len(self._tier_boundaries) - _before   # 并入总刀数（日志/报告）
             _LOG.info("卫生性强制毕业 +%d 刀（当前档曾 >%d 轮）", g, GRADUATE_FORCE_TURNS)
         # 先升档：反复 graduate 直到 ≤75%（或无可升）。估算 = prefix + 历史 + 当前轮近似
-        cur_est = self._seg_msgs_user_message() + self._seg_msgs_steps()   # 当前轮（tail 量小不计）
+        # 当前轮估算剥除 recent-file 块（_rf_stripped）：rf 是轮内易变项（归档即消失），
+        # 它的体积不该推动升档/折叠——panic 轮内路径调用本函数时 cur_est 含 rf 会过激压缩
+        cur_est = self._rf_stripped(self._seg_msgs_user_message() + self._seg_msgs_steps())   # 当前轮（tail 量小不计）
         g = 0
         # 上限宽松化：分批毕业后一次 _plan_fold 可能连切数刀（90 轮大档=3 刀），
         # max_level 封顶的是【档位级别】而非【边界数】——按轮数/批宽 + max_level 算足够上限
@@ -1651,6 +1657,31 @@ class Session:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception:
             pass
+
+    def _rf_stripped(self, msgs: list[dict]) -> list[dict]:
+        """返回剥除 <recent-file> 块的消息副本（不动原消息——投影产物不可变）。
+        毕业（_plan_fold 的 cur_est）/ 保命阀（_history_tiered_msgs 的 rest）估算用：
+        rf 是轮内易变项（归档即消失），不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）。"""
+        out = []
+        for m in msgs:
+            c = m.get("content")
+            if isinstance(c, str) and "<recent-file" in c:
+                m = dict(m, content=_RE_RF_BLOCK.sub("", c))
+            out.append(m)
+        return out
+
+    def _rf_in_msgs(self, msgs: list[dict]) -> int:
+        """msgs 中 role:tool 的 content 里实际附加的 <recent-file> 块总字符数（真实投影口径——
+        用户裁定 2026-08-29：判阈刨除按【实际附加了多少】算，而非映射总量：full/字符串
+        等附加条件都已体现在渲染产物里，直接量它最准）。"""
+        n = 0
+        for m in msgs:
+            if m.get("role") != "tool":
+                continue
+            c = m.get("content")
+            if isinstance(c, str) and "<recent-file" in c:
+                n += sum(len(x) for x in _RE_RF_BLOCK.findall(c))
+        return n
 
     def _rf_latest_map(self) -> dict:
         """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。

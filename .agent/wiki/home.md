@@ -142,3 +142,8 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **后台任务完成自动通知：bg_task 恒唤醒（2026-08-30，commit 6460ad1，用户直觉触发「同步转后台的任务一般都需要收到通知」）**：run_python / run_shell 超时转后台后此前**无人通知**——Agent 只能记着 check_bg_task 轮询。补上完成回调链（三文件）：`real_tools.py` 模块级 `_bg_notify_cb` + `set_bg_notify(cb)`（`_bg_reader` 进程退出后触发 `cb(bg_id, name, rc)`，cb 抛异常仅记日志不影响读线程）→ `chat.py` build_agent 装配时注入 → `agent.py` `_on_bg_task_done`（仿 _on_service_exit 的 seed 模式，包成 **check_bg_task 合成工具记录**带尾部输出 40 行）→ `push_message(wake=True)` **恒唤醒**——转后台任务本是同步等待被迫转的，结果是决策链一环；一次性跑完即报、无套娃（与 service_exit 崩溃退避不同，天然安全不需策略参数）。转后台返回文案改「完成时会自动推送通知唤醒你（无需轮询）」。至此后台事件三族通知语义齐：service_exit 策略化（never/crash 退避/always）+ **bg_task 恒通知** + 定时任务（schedule 原有）——每种按「结果是否决策链一环 + 有无循环风险」定唤醒。引擎层 /restart 生效；与本批（UI 收尾等）攒批待发（拟 0.22.4）——见 [user-interaction · bg_task 恒唤醒](features/user-interaction.md#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1)、[run-python · 转后台自动通知](features/run-python.md#超时转后台与完成自动通知2026-08-30commit-6460ad1)
 
+## 快速事实增补（2026-08-30 · v0.22.4 发布）
+
+
+- **v0.22.4 发布**（2026-08-30，commit `f30de75`，PyPI `agt-agent` 已上线；自 0.14.1 → 0.22.4 共推 **37 个版本**）：**service_exit 唤醒策略化**（`start_service(on_exit_wake=...)` 三策略 never/crash 退避/always，commit eb9a7de）+ **bg_task 完成恒通知**（run_python/run_shell 转后台退出即推 check_bg_task 合成记录 + wake=True，commit 6460ad1）——两件均为用户提案；**三族后台通知语义至此齐备**（service_exit 策略化 / bg_task 恒通知 / 定时任务），共同原则「按结果是否决策链一环 + 有无循环风险定唤醒，而非一刀切」；wiki-updater_3 三笔 docs 随批入库；版本 bump 走 edit 工具直接改 `src/__init__.py`（0.22.3 教训落实，一次过）。上一节末「攒批待发（拟 0.22.4）」即此批，现全部落地——见 [v0.22.4 发布记录](releases/v0.22.4.md)
+

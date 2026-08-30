@@ -301,6 +301,10 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # attach_script_tools 注册；ltm 工具经 ensure_ltm 单例与注入 provider 共享实例）
     _reg(make_tool_log_tools(agent), "工具日志")
     _reg(make_background_tools(agent), "后台/调度")
+    # 后台任务（run_python/run_shell 超时转后台）完成通知链：
+    # real_tools._bg_reader 进程退出 → agent._on_bg_task_done → inbox 唤醒（一次性任务无套娃）
+    import real_tools as _rt_mod
+    _rt_mod.set_bg_notify(agent._on_bg_task_done)
     # wiki CRUD/章节四件套由外置件提供（attach_script_tools 已注册，group=wiki）；
     # update_wiki 已删除——wiki_auto_maintenance 工作流用 agent_prompt 直接派 wiki-updater
     # rag_query 由外置件 tools/builtin/rag_tools.py 提供（attach_script_tools 已注册，

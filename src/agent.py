@@ -806,6 +806,25 @@ class Agent:
             self._crash_wake_ts.pop(name, None)
         self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
 
+    def _on_bg_task_done(self, bg_id: str, name: str, rc: int):
+        """后台任务（run_python/run_shell 超时转后台）完成回调（real_tools._bg_reader 触发，
+        chat.py 装配时经 set_bg_notify 注入）。包成一条 check_bg_task 合成工具记录推 inbox 唤醒——
+        转后台任务本来是同步等待（超时被迫转后台），结果通常是决策链一环，需要收到通知
+        （用户提案 2026-08-30）；一次性任务跑完即报、无套娃循环，故 wake=True。
+        忙时 push_message 的 inbox 机制天然排队到下一步边界注入，闲时立即唤醒。
+        注意：set_bg_notify 是模块级全局——多 Agent 场景下由最后装配者接收（当前主 Agent）。"""
+        try:
+            from real_tools import _bg_tasks
+            task = _bg_tasks.get(bg_id, {})
+            out = "".join(task.get("output", [])[-40:])
+        except Exception:
+            out = ""
+        ok = "✅ 正常结束" if rc == 0 else f"⚠️ 异常结束（rc={rc}）"
+        rec = {"name": "check_bg_task", "args": {"task_id": bg_id},
+               "result": (f"[后台任务完成·自动通知] {name}（{bg_id}）{ok}。\n尾部输出：\n{out[-4000:]}")}
+        header = f"📨〔后台任务完成〕「{name}」{bg_id}（{ok}）"
+        self.push_message(header, source=f"bg_task:{bg_id}", seed=[rec], wake=True)
+
     @staticmethod
     def _format_service_exit(name: str, startup: dict, rc: int, logs: list) -> str:
         """组装后台服务退出时塞进 tool 结果 content 的文本：退出判读 + 启动参数复盘 + 尾部日志。"""

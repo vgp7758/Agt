@@ -41,6 +41,13 @@ _tool_emit = None
 
 # 后台任务表：超时未完成的 run_python/run_shell 子进程转后台后注册在此
 _bg_tasks: dict = {}
+_bg_notify_cb = None   # 后台任务完成回调（chat.py 装配时注入 agent.push_message 通知链）：一次性任务无套娃，默认唤醒
+
+
+def set_bg_notify(cb):
+    """注册后台任务完成回调 cb(bg_id, name, returncode)。cb 抛异常仅记日志，不影响读线程。"""
+    global _bg_notify_cb
+    _bg_notify_cb = cb
 
 
 def _resolve(path: str) -> Path:
@@ -172,10 +179,21 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
                 _task["finished"] = True
                 if _tool_emit:
                     _tool_emit({"type": "tool_stream", "name": name,
-                                "text": f"\n[后台任务 {_bg_id} 已完成，返回码={_task['returncode']}]"})
+                                "text": f"\n[后台任务 {_bg_id} 已完成，返回码={_task['returncode']}，已推送通知]"})
+                # 完成通知（用户提案 2026-08-30：同步转后台的任务结果通常是决策链一环，需要收到通知）。
+                # 转后台任务是一次性的（跑完即报，无套娃循环），wake=True 走 inbox——Agent 忙时自然排队
+                # 到下一步边界注入、闲时立即唤醒。cb 异常不炸读线程。
+                if _bg_notify_cb is not None:
+                    try:
+                        _bg_notify_cb(_bg_id, name, _task["returncode"])
+                    except Exception as _e:
+                        try:
+                            import logging; logging.getLogger("agt.real_tools").warning("bg 完成回调失败: %s", _e)
+                        except Exception:
+                            pass
             threading.Thread(target=_bg_reader, daemon=True).start()
             return (f"[执行超过 {TOOL_TIMEOUT}s，已转后台运行（任务ID: {bg_id}）。\n"
-                    f"进程继续运行，不阻塞当前工作。用 check_bg_task(\"{bg_id}\") 查看进度和结果。"
+                    f"进程继续运行，不阻塞当前工作；完成时会自动推送通知唤醒你（无需轮询）。中途可用 check_bg_task(\"{bg_id}\") 查进度。"
                     f"已捕获 {len(output_lines)} 行输出。]")
 
     proc.wait()

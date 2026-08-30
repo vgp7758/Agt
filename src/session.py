@@ -45,6 +45,8 @@ GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 l
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
 GRADUATE_FORCE_TURNS = 60  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
+RF_MAX_CHARS = 100_000  # recent-file 快照单文件上限（用户裁定 2026-08-31）：超大文件全文注入让近期缓存上蹿下跳
+                         # （index.html 130K 单步稀释命中率 99%→81%）——超过则跳过全文、只挂一行提示
                            # 8000 实例实测 64 轮档1 占 58.6%：窗口宽绰时压力循环永不触发，档1 失去"近期窗口"语义）
 RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
@@ -1769,16 +1771,21 @@ class Session:
     def _rf_latest_map(self) -> dict:
         """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。
         同文件多次 edit 后写覆盖——只有【最新一次改它的 tool_call】会在投影时命中挂快照。
-        归档轮/历史段的 call_id 不在映射里（映射只从 _current 构建），天然"前面的轮不管"。"""
+        归档轮/历史段的 call_id 不在映射里（映射只从 _current 构建），天然"前面的轮不管"。
+        超大文件跳过（用户裁定 2026-08-31·RF_MAX_CHARS）：text 超 100K 的置空 + skip 标记——
+        投影时挂一行自闭合提示而非全文（巨型文件单步稀释命中率：index.html 130K 实测 99%→81%）。"""
         if self._current is None:
             return {}
         latest: dict[str, dict] = {}
         for s in self._current.steps:
             for cid, snap in (s.file_snapshots or {}).items():
                 if isinstance(snap, dict) and snap.get("path"):
+                    _txt = str(snap.get("text", ""))
+                    _too_big = len(_txt) > RF_MAX_CHARS
                     latest[str(snap["path"])] = {"cid": cid, "path": str(snap["path"]),
                                                  "version": str(snap.get("version", "")),
-                                                 "text": str(snap.get("text", ""))}
+                                                 "text": "" if _too_big else _txt,
+                                                 "skip": len(_txt) if _too_big else 0}
         return latest
 
     def _rf_chars(self) -> int:
@@ -1964,8 +1971,16 @@ class Session:
                 # 最新 call 命中（旧 call 不挂）；归档轮/历史段不传映射（cid 不在映射里）天然不挂。
                 if rf_map and full and (tc.call_id or "") in _rf_hit and isinstance(content, str):
                     _m = _rf_hit[tc.call_id or ""]
-                    content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}'>\n"
-                                f"{_m['text']}\n</recent-file>")
+                    if _m.get("skip"):
+                        # 超大文件（>RF_MAX_CHARS=100K，用户裁定 2026-08-31）：一行自闭合提示——不挂全文
+                        # （巨型文件单步稀释命中率），模型仍知道文件改过、需要时自己 read_file。
+                        # 自闭合形式不匹配 _RE_RF_BLOCK（配对标签正则）——_rf_in_msgs/_rf_stripped
+                        # 天然不计不剥；_rf_chars 按 map text（已置空）计 0，判阈刨除口径自动一致。
+                        content += (f"\n<recent-file file='{_m['path']}' skipped='too-large "
+                                    f"({_m['skip']:,} 字符 > {RF_MAX_CHARS:,})——已修改，需要时 read_file 查看当前内容'/>")
+                    else:
+                        content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}'>\n"
+                                    f"{_m['text']}\n</recent-file>")
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 

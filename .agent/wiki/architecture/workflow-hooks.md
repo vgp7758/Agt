@@ -11,6 +11,27 @@
 - **type3 LLM 节点的 model 序列化为独立 `<model>` 标签**（workflow_xml.py 写侧），不是 `<param name="model">`——grep param 形态搜不到 ≠ model 未设置。误诊实例（2026-08-30，commit e8ef64a 修复）：曾据 param 搜不到错判 recap_gen「model 未设置→utility 兜底」，真实是 `<model>proxy</model>` → proxy 路由 → glm（bigmodel）429 余额不足（319 条失败）；同批清掉播种源 `src/workflows/recap_gen.xml` 的新老形态**双声明**残留（老 `<param name="model">local-qwen</param>`——该 provider 键已不存在，若生效会报未知模型 + 新标签并存，删旧留新）
 - **编辑器里改模型不点保存不落盘**：「日志还在用旧模型」先读磁盘 XML 核实再怀疑刷新（recap_gen 案例：用户选了 local-lfm 但没点保存，磁盘一直 proxy）；反向同理——改完 XML **当轮即生效**（每轮重扫，下轮钩子触发就走新模型，无需 /restart）
 
+## `_get_llm` 静默 fallback 加日志（2026-08-30，commit 0d852a0）
+
+**背景（recap_gen 三轮排障收官，续 e8ef64a）**：recap_gen.xml 已改成 `<model>local-lfm</model>`，用户仍见「调的是 utility 然后走回退链」，怀疑反序列化读的是旧 `<param name="model">local-qwen</param>` 残留、`<model>` 标签没读。
+
+**param 假设五层排除（全过）**：磁盘 XML（`<model>local-lfm</model>` 唯一，param 残留 e8ef64a 已清）→ `xml_to_canvas` 解析（cfg['model']='local-lfm'）→ `get_profile('local-lfm')` 子进程 OK → LLMClient 构造 OK → 8081 服务在线（lfm2.5-2.6b 已加载）。
+
+**真凶：`_get_llm` 静默 fallback**（src/workflow.py，LLM 节点取模型处）：
+
+```python
+except KeyError:
+    return ctx.llm      # 悄悄回退，无任何日志——排障黑洞
+```
+
+**根因：`config.MODELS` 是启动时快照**——长寿进程启动于 local-lfm 条目加入 models.json **之前**，此后运行时对该键一无所知：`get_profile('local-lfm')` KeyError → 静默回退 ctx.llm（utility）→ utility 400/429 → 回退链（glm 429×3 → proxy 成功）。子进程测试全通（读的是新 models.json）——「子进程全通、运行时不通」的谜底。
+
+**排查方法论（可复用口诀）**：llm_client 通用异常路径**有** llm_calls 记录——请求只要发出过（成功或失败）必有一条 model=X 的记录。**llm_calls 无 X 记录 = 请求从未发出 = 换模型发生在请求前（get_llm 层）**；有 X 记录（400/429）才是网络/provider 侧问题。
+
+**修复（commit 0d852a0）**：回退处加 `_LOG.warning`——`LLM 节点模型 'X' 未找到（KeyError）——回退 ctx.llm=Y。检查 models.json 键名/是否需 /reload models`——LLM 节点选了 X 却悄悄用 ctx.llm 跑的情况一眼定位，不再有侦探剧。处置：`/reload models`（MODELS 热刷新）或 `/restart`，之后 LLM 节点才真正走所选模型（llm_calls 会出现 model=X 的记录）。
+
+关联坑：[config 踩坑 · MODELS 启动快照](../guides/config-and-models.md#踩坑记录)（与窗口值副本坑同源不同症状）、[ops 常见错误对照](../guides/ops.md#常见错误对照)、续 [双格式与热加载](#双格式与热加载) 的 `<model>` 标签形态误诊。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。

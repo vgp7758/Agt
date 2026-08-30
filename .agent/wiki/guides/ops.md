@@ -148,6 +148,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | BadRequestError 400 "has no provider supported" | model id 写错（逐字符与 /v1/models 核对） |
 | 400 "only 1 is allowed...temperature" | kimi 类模型限制 → 换模型或 provider 侧适配 |
 | utility 通道连续 400（钩子/辅助 LLM 报错） | 进程内通道状态异常 → `/restart` 重启即恢复（调试 [wiki_auto_query](../features/wiki-auto-query.md) 时遇到） |
+| 工作流 LLM 节点选了模型 X，llm_calls 里却全是 utility/回退链、**没有一条 X 的记录** | **`_get_llm` 静默 fallback**：MODELS 是**启动时快照**，X 是进程启动后新加进 models.json 的条目 → `get_profile(X)` KeyError → 悄悄回退 ctx.llm（2026-08-30，commit 0d852a0 起打 warning）→ `/reload models` 或 `/restart`。判别口诀：**llm_calls 无 X 记录 = 请求从未发出 = 换模型发生在请求前**；有 X 记录（400/429）才是 provider 侧问题（recap_gen 三轮排障案例，见 [workflow-hooks · `_get_llm`](../architecture/workflow-hooks.md#_get_llm-静默-fallback-加日志2026-08-30commit-0d852a0)） |
 | 空响应连续 3 次 | 限流/服务波动 → 自动退避重试+回退；ModelScope 空壳 200 是已知病 |
 | 回答是 XML 状 `<｜｜DSML｜｜invoke...` | 模型把工具调用泄进 content → llm_client 自动兜底解析；仍残留会提示重试 |
 | tool_calls 与 content 同现 | 思考误放 content → 自动转移 content→reasoning（投影保 CoT） |

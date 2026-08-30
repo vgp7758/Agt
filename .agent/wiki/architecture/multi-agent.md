@@ -289,6 +289,8 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **遗留**：utility 的 glm（bigmodel，glm-5.3-flash）余额不足未修——意图分类 / 精排等 utility 场景仍会撞 429（充值或 `/config utility_model` 换通道）。
 
+**后续（同日 commit 0d852a0，三轮排障收官）**：「当轮即走 local-lfm 免重启」有一层前提——**进程得认识该 provider 键**。`config.MODELS` 是启动时快照，长寿进程启动于 local-lfm 条目加入 models.json 之前 → 运行时 `get_profile('local-lfm')` KeyError → `_get_llm` **静默回退 ctx.llm（utility）**——用户再报「还是 utility 走回退链」（param 反序列化假设五层验证排除后锁定此层）。修复：回退处加 `_LOG.warning`（下次一眼定位）；处置 `/reload models` 后才真正走 8081（llm_calls 会出现 model=local-lfm 的记录）。详见 [workflow-hooks · `_get_llm` 静默 fallback 加日志](workflow-hooks.md#_get_llm-静默-fallback-加日志2026-08-30commit-0d852a0)。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

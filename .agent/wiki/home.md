@@ -147,3 +147,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **v0.22.4 发布**（2026-08-30，commit `f30de75`，PyPI `agt-agent` 已上线；自 0.14.1 → 0.22.4 共推 **37 个版本**）：**service_exit 唤醒策略化**（`start_service(on_exit_wake=...)` 三策略 never/crash 退避/always，commit eb9a7de）+ **bg_task 完成恒通知**（run_python/run_shell 转后台退出即推 check_bg_task 合成记录 + wake=True，commit 6460ad1）——两件均为用户提案；**三族后台通知语义至此齐备**（service_exit 策略化 / bg_task 恒通知 / 定时任务），共同原则「按结果是否决策链一环 + 有无循环风险定唤醒，而非一刀切」；wiki-updater_3 三笔 docs 随批入库；版本 bump 走 edit 工具直接改 `src/__init__.py`（0.22.3 教训落实，一次过）。上一节末「攒批待发（拟 0.22.4）」即此批，现全部落地——见 [v0.22.4 发布记录](releases/v0.22.4.md)
 
+## 快速事实增补（2026-08-30 · 四）
+
+- **user 消息语义标签体系闭环：后台通知轮 vs 用户轮（2026-08-30，用户提案；混合批边界 commit 803b3a5）**：inbox 唤醒的轮（service_exit / bg_task / schedule / 子 Agent 反馈）此前与真用户消息渲染成同款蓝色 user 气泡——「这轮谁在说话」不可辨。三条路径语义统一：①**实时结构化 source**——`_merge_batch` 返回 first_src → `run(_msg_source=)` → user 事件仅非空时带 `source` 字段 → 前端 `renderNotifyBubble` 系统通知气泡（默认折叠、图标按来源 📪/📨/⏰/🤝，点击展开全文）；②**历史前缀判别**——历史轮 source 未持久化，`renderHistTurn` 以 `[后台通知·`/`[后台触发·` 文本前缀判别渲染同款通知气泡；③**混合批边界（批首归属，本 commit）**——手输+通知同批时 first_src 仅当 background 排批首（parts 尚空）才记（旧 `if not first_src` 会让手输在先的批被后到的 background 项抢走标签 → **用户的话被折进通知气泡**）：**批首是谁这轮就是谁的轮**，用户排首 → 蓝色气泡、搭车通知靠前缀自识别。四场景验证全过；`[后台通知·` 前缀一键三用（LLM 来源标注 / 历史判别 / 多端同步对账过滤）。`/restart` + Ctrl+F5 生效；与本批攒批待发（拟 0.22.5）——见 [user-interaction · 语义标签](features/user-interaction.md#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)
+

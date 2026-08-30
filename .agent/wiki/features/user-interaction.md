@@ -7,6 +7,7 @@
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒；同日另一族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
+- **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
@@ -249,6 +250,48 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 共同原则：每种按「结果是否决策链一环 + 有无循环风险」定唤醒，而非一刀切。
 
 **验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。
+
+## user 消息语义标签 · 后台通知轮 vs 用户轮（2026-08-30，用户提案；批首归属 commit 803b3a5）
+
+> 用户提案（2026-08-30）：inbox 唤醒的轮（service_exit / bg_task / schedule / 子 Agent 反馈）此前与真用户消息渲染成**同款蓝色 user 气泡**——「这轮谁在说话」不可辨。语义标签体系把「通知轮 vs 用户轮」的判别落到三条路径、语义一致闭环。涉及 `src/chat.py`（`_merge_batch` 批合并与 first_src）+ `src/agent.py`（`run(_msg_source=)` 事件打标）+ `src/static/index.html`（`renderNotifyBubble` + 历史前缀判别）。
+
+**三条路径**：
+
+```
+① 实时（结构化 source）
+   worker drain → _merge_batch(batch) → (user_msg, seeds, first_src)
+     → agent.run(user_msg, _seeds=…, _msg_source=first_src)
+     → user 事件仅 source 非空时带 source 字段（agent.py run() 条件展开）
+     → 前端 case 'user' 分流：m.source → renderNotifyBubble（系统通知气泡）
+                          无 source → 蓝色 user 气泡（原逻辑 + _pendingLocalEcho 对账不变）
+② 历史（前缀判别）
+   历史轮 source 未持久化 → renderHistTurn 以文本前缀判别：
+   startsWith('[后台通知·') 或 startsWith('[后台触发·') → 系统通知气泡（默认折叠）
+   ——与实时 source 分流同语义
+③ 混合批边界（批首归属，commit 803b3a5）
+   手输 + 后台通知合进同一批（通知唤醒轮 + 用户搭车插话）时：
+   first_src 仅当 background 排批首（parts 尚空）才记——
+   批首是谁，这轮就是谁的轮
+```
+
+**通知气泡形态**（`renderNotifyBubble`，index.html）：`row sys` + 默认折叠一行摘要、点击展开全文——与 autonomous 系统消息同款交互（见 [气泡交互](bubble-interaction.md)）；图标按 source 前缀取：📪 service_exit / 📨 bg_task / ⏰ schedule / 🤝 subagent / 🔔 其它，标题形如「后台通知（bg_task:x1）」。
+
+**修复③的根因**（用户实测抓到的瑕疵）：旧代码 `if not first_src:` 只看「是否已记过」——**手输在先**的混合批（批序 user → background）里，后到的 background 项仍会抢走 first_src → 整轮被渲染成通知气泡，**用户的话被折进通知气泡**。修复加 `and not parts`（批首判别）；搭车的通知不丢——文本自带 `[后台通知·<source>]` 前缀，在气泡内自识别，历史路径②同前缀判别。
+
+**四场景验证**（全过）：
+
+- 纯后台批 → first_src=`bg_task:x1` → 系统通知气泡
+- **手输在先混合批**（用户指出的瑕疵）→ first_src=空 → **蓝色 user 气泡**（通知文本带前缀自识别）
+- 后台在先混合批（通知唤醒 + 搭车插话）→ first_src=`schedule:z` → 系统通知气泡（这轮确实是通知触发的）
+- 纯手输批 → first_src=空 → 蓝色 user 气泡（现状不变）
+
+**与相关机制的关系**：
+
+- **唤醒端 vs 呈现端**：上两节通知 wake 语义（service_exit 策略化 / bg_task 恒唤醒）管「该不该醒」，本节管「醒了长什么样」——通知轮不再伪装成用户轮
+- **`[后台通知·` 前缀一键三用**：LLM 侧来源标注（`_merge_batch` 组装时打，让模型识别是哪个调度任务/进程发的）+ 历史渲染判别（路径②）+ 多端同步对账过滤（`_pendingLocalEcho` / `_cli_echo` 跳过通知文本，见[多端消息同步](#多端消息同步--user-事件渲染到同-agent-的其它客户端cli2026-08-commit-1168ea9)）
+- **background_trigger 事件行**（📭/⏰ 行）与通知气泡并存——事件行标注触发来源，气泡承载消息全文
+
+**生效方式**：引擎层（chat.py / agent.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效（Ctrl+F5 强刷兜底）。
 
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 

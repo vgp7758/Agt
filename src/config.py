@@ -69,6 +69,9 @@ def reload_models():
     MODELSCOPE_API_KEY = LLM_API_KEY = (_active.get("api_tokens") or [""])[0]
     MODEL_NAME = LLM_MODEL = _active.get("model", "")
     LLM_THINKING_SUPPORTED = _active.get("thinking", False)
+    # 记录本次加载的 mtime——get_profile 的惰性检查据此判断磁盘是否又变了
+    global _MODELS_MTIME
+    _MODELS_MTIME = _AGT_MODELS.stat().st_mtime if _AGT_MODELS.exists() else 0.0
 
 
 # === 加载模型 ===
@@ -76,6 +79,27 @@ def reload_models():
 # 由用户在设置页添加第一个模型。真正发 LLM 请求时若仍无模型，LLMClient 会给友好提示。
 MODELS, DEFAULT_MODEL = _load_models()
 _NO_MODELS = not MODELS
+_MODELS_MTIME = _AGT_MODELS.stat().st_mtime if _AGT_MODELS.exists() else 0.0
+_MODELS_RELOADING = False   # 重入保护（reload 内部调 get_profile 时不重入检查）
+
+
+def _maybe_reload_models():
+    """models.json 磁盘变化时惰性重读（get_profile 入口检查，stat 一次开销可忽略）。
+    消除"MODELS 快照比 models.json 旧"这一类故障——手改配置加条目后无需 /reload models，
+    运行中进程下次取 profile 自动可见（recap_gen 模型路由三轮排查的根因修复）。"""
+    global _MODELS_MTIME, _MODELS_RELOADING
+    if _MODELS_RELOADING:
+        return   # reload 内部（_active = get_profile(...)）重入——直接跳过，防递归
+    try:
+        m = _AGT_MODELS.stat().st_mtime
+    except OSError:
+        return
+    if m != _MODELS_MTIME:
+        _MODELS_RELOADING = True
+        try:
+            reload_models()   # 尾部会刷新 _MODELS_MTIME
+        finally:
+            _MODELS_RELOADING = False
 if _NO_MODELS:
     print("⚠️ 尚未配置任何模型。请运行 agt-web，在浏览器「设置」页添加第一个模型，"
           "或在 site-packages/src/ 下复制 models.example.py 为 models.py 并填入 token。")
@@ -84,6 +108,7 @@ if _NO_MODELS:
 def get_profile(name: str) -> dict:
     """按名字取模型 profile；未知名字抛 KeyError。
     api_token 统一为 list（支持多账号轮流）。"""
+    _maybe_reload_models()   # 磁盘变了自动重读——新加的条目立即可见
     if name not in MODELS:
         raise KeyError(f"未知模型 '{name}'，可用：{list(MODELS)}")
     p = dict(MODELS[name])
@@ -96,8 +121,6 @@ def get_profile(name: str) -> dict:
     else:
         p["api_tokens"] = [str(tok)]
     return p
-
-
 # 空配置兜底：无模型时不调 get_profile（会 KeyError），给空 profile 让兼容别名有值。
 _active = get_profile(DEFAULT_MODEL) if not _NO_MODELS else {}
 

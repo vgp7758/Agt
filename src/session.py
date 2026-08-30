@@ -553,6 +553,14 @@ class Session:
         self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
         # —— 分档上下文投影（provider 设 max_effective_context_window 才启用，否则走原 recent_window+summary）——
         self.max_effective_context_window = getattr(self.llm, "max_effective_context_window", None)
+        # 折叠目标线比例（per-provider，llm profile 的 fold_target_ratio；None=引擎默认 0.75）——
+        # 缓存未命中折扣悬殊的 provider（DeepSeek≈60x vs GLM≈4x）应调高：晚折叠、保前缀稳定。
+        # 同步点：switch_model / /reload models / WebUI 保存模型配置（与窗口同步同款）。
+        self.fold_target_ratio = getattr(self.llm, "fold_target_ratio", None)
+        # 组间步距衰减（per-provider 覆盖全局 settings；0=不衰减——所有组 limit 恒定，
+        # 老步骤渲染字节稳定 → 前缀缓存打满。DeepSeek 类 60x 差价 provider 推荐 0：
+        # 宁可投影大（命中便宜）也不让组边界衰减重截老步骤断缓存——用户裁定 2026-08-30）。
+        self.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
         self._detail_base = None   # 惰性缓存（detail_base property；/config / switch_model / /context 时失效重读）
         self.max_level = config.load_max_level()
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
@@ -603,6 +611,26 @@ class Session:
         /context 入口——兜底直改 settings.json 的场景）。冻结渲染随 key 自动失效。"""
         self._detail_base = None
 
+    def fold_target(self) -> int:
+        """折叠目标线（tok）= win × ratio。ratio 来自 llm profile（fold_target_ratio，
+        per-provider 缓存经济学参数——DeepSeek 未命中≈60x 应调高如 0.95：晚折叠、
+        保前缀稳定；GLM≈4x 用默认即可）或引擎默认 FOLD_TARGET_RATIO(0.75)。
+        win 未配置（分档禁用）返回 0。轮边界计划与保命阀回落目标共用本线。"""
+        win = self.max_effective_context_window
+        if not win:
+            return 0
+        ratio = self.fold_target_ratio if self.fold_target_ratio else FOLD_TARGET_RATIO
+        return int(win * ratio)
+
+    @property
+    def detail_step(self) -> int:
+        """组间步距衰减（字/组距）：profile.detail_step（per-provider）> settings 全局 > 默认 15。
+        0 = 不衰减——当前轮更早组的 limit 与近组相同，渲染字节永不回缩 → 前缀缓存打满
+        （DeepSeek 类未命中≈60x 差价的最优解；GLM≈4x 用全局默认即可）。"""
+        if self.profile_detail_step is not None:
+            return self.profile_detail_step
+        return config.load_detail_step()
+
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def _save_proj_stats_sidecar(self, stats: dict) -> None:
         """投影分段统计旁车持久化（用户提案 2026-08-29）：session_dir/proj_stats.json
@@ -623,7 +651,8 @@ class Session:
             # （profile 改配置后 reload/restart 前的旧值正是元凶，旁车留证据）。
             data["win"] = self.max_effective_context_window
             if self.max_effective_context_window:
-                data["fold_target"] = int(self.max_effective_context_window * FOLD_TARGET_RATIO)
+                data["fold_ratio"] = self.fold_target_ratio or FOLD_TARGET_RATIO
+                data["fold_target"] = self.fold_target()   # win×ratio（per-provider 缓存经济学参数）
                 try:
                     import config as _cfg
                     data["panic"] = _cfg.load_panic_window()
@@ -998,7 +1027,7 @@ class Session:
         超 panic 才应急：先升档（无损压缩）再折叠。"""
         win = self.max_effective_context_window
         panic_win = config.load_panic_window() or win
-        settle = int(win * FOLD_TARGET_RATIO)
+        settle = self.fold_target()   # per-provider ratio（DeepSeek≈60x 折扣悬殊→配高如 0.95：晚折叠保前缀）
         fold_count = self._planned_fold
         # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）。
         # 剥除 recent-file 块（_rf_stripped）：应急判定针对历史段，rf 是轮内易变项不该推动升档/折叠（用户裁定 2026-08-29）
@@ -1335,7 +1364,7 @@ class Session:
         不如结论原文 + 可 recall 的完整存档）。"""
         level = self._tier_level(turn_idx)
         fold = config.load_fold_deep_tools() and self._raw_tier_level(turn_idx) > self.max_level
-        key = (level, fold, self.detail_base)
+        key = (level, fold, self.detail_base, self.detail_step)   # 含衰减参数：切 provider（detail_step 变）缓存失效重渲染
         cached = self._frozen_renders.get(turn_idx)
         if cached and cached[0] == key:
             return cached[1]
@@ -1418,7 +1447,7 @@ class Session:
             self._planned_fold = 0
             self._planned_graduates = 0
             return
-        target = int(self.max_effective_context_window * FOLD_TARGET_RATIO)
+        target = self.fold_target()   # per-provider ratio：DeepSeek≈60x 折扣悬殊→配高如 0.95（晚折叠保前缀）
         prefix = [{"role": "system", "content": self.system}]
         if self._task_guidance_provider:
             try:
@@ -1477,8 +1506,9 @@ class Session:
                 break
             fc = nxt
         if fc != self._planned_fold or g != self._planned_graduates:
-            _LOG.info("轮边界计划：升档 %d 档 + 折叠 %d 轮（目标 ≤75%%×%d）",
-                      g, fc, self.max_effective_context_window)
+            _LOG.info("轮边界计划：升档 %d 档 + 折叠 %d 轮（目标 ≤%.0f%%×%d）",
+                      g, fc, 100 * (self.fold_target_ratio or FOLD_TARGET_RATIO),
+                      self.max_effective_context_window)
         self._planned_fold = fc
         self._planned_graduates = g
 
@@ -1503,11 +1533,12 @@ class Session:
         # （raw 4→5 时 tier 仍 4 但 fold 位 False→True），base 变化（/config/切模型窗口变）同理
         _fold_on = config.load_fold_deep_tools()
         _db = self.detail_base
+        _ds = self.detail_step
         for i in range(len(self.turns)):
             fr = self._frozen_renders.get(i)
             if fr and fr[0] != (self._tier_level(i),
                                 _fold_on and self._raw_tier_level(i) > self.max_level,
-                                _db):
+                                _db, _ds):
                 self._frozen_renders.pop(i, None)
         return True
 
@@ -1896,7 +1927,7 @@ class Session:
                 limit = base
             else:
                 full = False       # 更早组：按组号差线性衰减
-                limit = max(eff_base - GROUP_STEPS * config.load_detail_step() * group_diff,
+                limit = max(eff_base - GROUP_STEPS * self.detail_step * group_diff,
                             DETAIL_FLOOR)
             a_tool_calls = []
             for i, tc in enumerate(step.tool_calls):

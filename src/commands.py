@@ -1248,10 +1248,13 @@ def _cmd_reload(ctx: CommandContext, args):
             try:
                 agent.session.max_effective_context_window = getattr(
                     agent.llm, "max_effective_context_window", None)
+                agent.session.fold_target_ratio = getattr(agent.llm, "fold_target_ratio", None)
+                agent.session.profile_detail_step = getattr(agent.llm, "profile_detail_step", None)
                 agent.session.invalidate_detail_base()
                 w = agent.session.max_effective_context_window
+                _r = agent.session.fold_target_ratio or 0.75
                 print(f"  · session 窗口已同步：{w or '未配置（分档禁用）'}"
-                      + (f"（折叠目标线 {int(w * 0.75):,} tok）" if w else ""))
+                      + (f"（折叠目标线 {int(w * _r):,} tok = {_r:.0%}）" if w else ""))
             except Exception as _e:
                 print(f"  ⚠️ session 窗口同步失败：{_e}")
         else:

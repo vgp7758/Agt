@@ -519,6 +519,10 @@ class Agent:
         try:
             self.session.max_effective_context_window = getattr(
                 self.llm, "max_effective_context_window", None)
+            # per-provider 缓存经济学参数同步（fold_target_ratio / detail_step）——折叠目标线
+            # 与步距衰减跟随新 profile（DeepSeek 类 60x 差价配置切过去的瞬间生效）
+            self.session.fold_target_ratio = getattr(self.llm, "fold_target_ratio", None)
+            self.session.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
             self.session.invalidate_detail_base()   # 窗口变 → base 重推导（显式配置除外）
         except Exception:
             pass

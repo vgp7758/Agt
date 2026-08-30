@@ -501,6 +501,8 @@ async def api_models_save(request: Request):
                 try:
                     _agent.session.max_effective_context_window = getattr(
                         _agent.llm, "max_effective_context_window", None)
+                    _agent.session.fold_target_ratio = getattr(_agent.llm, "fold_target_ratio", None)
+                    _agent.session.profile_detail_step = getattr(_agent.llm, "profile_detail_step", None)
                     _agent.session.invalidate_detail_base()
                 except Exception:
                     pass

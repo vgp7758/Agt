@@ -266,6 +266,21 @@ class LLMClient:
         self.model = profile.get("model", "")
         self.thinking_supported = profile.get("thinking", False)
         self.vision_supported = profile.get("vision", False)   # 多模态能力：视觉模型投影时把 <img> 转成 image_url
+        # 折叠目标线比例（用户提案 2026-08-30：缓存经济学 per-provider 差异）——
+        # GLM 未命中≈命中 4x、DeepSeek 未命中≈60x：折扣越悬殊越不该轻易破坏缓存前缀。
+        # 调高（如 0.95）= 折叠更晚触发、投影长期维持稳定前缀（省下的命中价差 >> 超窗的占用）。
+        # None = 引擎默认 0.75。clamp 0.5~0.99。
+        _ftr = profile.get("fold_target_ratio")
+        self.fold_target_ratio = float(_ftr) if _ftr else None
+        if self.fold_target_ratio is not None:
+            self.fold_target_ratio = min(0.99, max(0.5, self.fold_target_ratio))
+        # 组间步距衰减（per-provider；None=跟全局 settings 的 detail_step）。0=不衰减——
+        # 所有组 limit 恒定，老步骤渲染字节稳定 → 前缀缓存打满（DeepSeek 类 60x 差价
+        # provider 推荐 0：宁可投影大也不让组边界衰减断缓存——用户裁定 2026-08-30）。
+        _ds = profile.get("detail_step")
+        self.profile_detail_step = int(_ds) if _ds is not None and str(_ds).strip() != "" else None
+        if self.profile_detail_step is not None:
+            self.profile_detail_step = max(0, min(200, self.profile_detail_step))
         # max_tokens：profile 可显式指定；否则推理模型(thinking)用宽裕默认（防长 reasoning 被 provider
         # 默认小值截断 → content 空/半截），非推理模型用 None（交 provider 默认）。
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)

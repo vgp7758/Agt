@@ -284,6 +284,7 @@ class Agent:
         # 后台服务 + 定时调度（producer）→ inbox → run()内循环 / chat/web 消费者 串行触发
         self.inbox: collections.deque = collections.deque()
         self._notices: collections.deque = collections.deque()   # 非唤醒通知登记（service_exit 等）：不独立触发轮，下次自然轮以 seed 并入
+        self._crash_wake_ts: dict = {}   # 服务异常退出唤醒退避表 {name: last_wake_ts}——5 分钟内同名第二次异常降级登记
         self._inbox_lock = threading.Lock()
         self.services = ServiceManager(on_exit=self._on_service_exit)
         self.scheduler = Scheduler(self)
@@ -787,9 +788,23 @@ class Agent:
                           "stop_service 工具结果注入供你查阅；注意这是服务自行退出，并非你主动 stop)"),
         }
         header = f"📨〔后台服务退出〕「{name}」已自行退出（{brief}）"
-        # wake=False：通知登记不唤醒——service_exit 是"告知即可"的系统事件，不该独立触发一轮
-        # （防套娃：通知→Agent 重启服务→又退出→又通知→…）。下次自然轮开始时以 seed 并入。
-        self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=False)
+        # 唤醒策略（start_service 启动参数 on_exit_wake——调用方最清楚服务的重要性，用户提案 2026-08-30）：
+        #   never(默认)  任何退出都登记不唤醒——一次性验证服务；下次自然轮以 seed 并入（防套娃）
+        #   crash        rc≠0 唤醒一轮（服务死了要人管）+ 退避：5 分钟内同名第二次异常降级登记
+        #                ——既保住"真正需要救"的场景，又封死套娃循环（通知→重启→又崩→又通知→♾️）
+        #   always       任何退出都唤醒（无退避，调用方明确要的——如单次任务型服务跑完即报）
+        # rc==0 正常退出清退避状态（服务活过一次，重新计崩窗）。
+        pol = str(entry.get("on_exit_wake", "never"))
+        wake = False
+        if pol == "always":
+            wake = True
+        elif pol == "crash" and rc != 0:
+            now = time.time()
+            wake = (now - self._crash_wake_ts.get(name, 0.0)) >= 300
+            self._crash_wake_ts[name] = now
+        if rc == 0:
+            self._crash_wake_ts.pop(name, None)
+        self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
 
     @staticmethod
     def _format_service_exit(name: str, startup: dict, rc: int, logs: list) -> str:

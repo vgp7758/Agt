@@ -17,12 +17,15 @@ def make_background_tools(agent) -> list:
     svc = agent.services
     sch = agent.scheduler
 
-    def start_service(name: str, command: str, cwd: str = "") -> str:
+    def start_service(name: str, command: str, cwd: str = "", on_exit_wake: str = "never") -> str:
         """后台启动一个长运行的服务（不阻塞）。用于把你写的后端跑起来做联调，
         如 `python app.py` / `npm run dev` / `python -m http.server 8000`。
         启动后其状态会自动出现在每轮系统提示里；用 service_logs 看输出、stop_service 停止。
-        name 自取一个易记的名字，command 是 shell 命令。"""
-        return svc.start(name, command, cwd)
+        name 自取一个易记的名字，command 是 shell 命令。
+        on_exit_wake（自行退出时是否唤醒你处理，默认 never=仅登记、下次交互时并入）：
+        crash=异常退出(rc≠0)唤醒一轮处理、5分钟内同名连续崩溃自动退避为登记（防套娃）；
+        always=任何退出都唤醒（含正常退出，如单次任务跑完即报）。常驻关键服务建议 crash。"""
+        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake)
 
     def stop_service(name: str) -> str:
         """停止指定的后台服务（先 terminate，3 秒不退则 kill）。

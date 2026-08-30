@@ -1081,8 +1081,10 @@ async def api_agents_save(name: str, request: Request):
     except Exception:
         return {"error": "请求体需为 JSON"}
     if name == "_main_":
-        # 主 Agent 保存：直接写 ~/.agt/main.yml——assembly 原样保留（多 text 段与动作交错是
-        # 完整配方，不做 persona 拆分），保留未识别字段；不写 .md。生效需 /restart（启动时装配）。
+        # 主 Agent 保存：写 config_file 解析的 main.yml（repo 级覆盖：<cwd>/.agent/main.yml
+        # 存在则读写本地——多实例组网的角色实例独立主声明；否则全局 ~/.agt/main.yml）——
+        # assembly 原样保留（多 text 段与动作交错是完整配方，不做 persona 拆分），
+        # 保留未识别字段；不写 .md。生效需 /restart（启动时装配）。
         import yaml
         from agent_config import seed_main_agent
         p = seed_main_agent(_workspace)
@@ -1110,7 +1112,7 @@ async def api_agents_save(name: str, request: Request):
                 base.pop("hooks", None)
         p.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return {"ok": True, "name": "_main_", "file": str(p),
-                "note": "已写 ~/.agt/main.yml；/restart 后生效（主 Agent 装配在启动时读取）"}
+                "note": f"已写 {p}；/restart 后生效（主 Agent 装配在启动时读取）"}
     safe = _agent_safe_name(name)
     if not safe:
         return {"error": "name 非法"}

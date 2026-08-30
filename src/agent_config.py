@@ -309,15 +309,17 @@ def seed_default_agents(workspace: Path) -> int:
 
 def seed_main_agent(workspace: Path = None) -> Path:
     """首次启动把随包默认主 agent 元信息（src/assets/main.yml）播种到 ~/.agt/main.yml。
-    目标已存在则跳过（不覆盖用户修改）。返回 main.yml 路径。"""
-    from config import _AGT_DIR
+    目标已存在则跳过（不覆盖用户修改）。返回 main.yml 路径——repo 级覆盖（用户裁定
+    2026-08-31·多实例组网）：<cwd>/.agent/main.yml 存在则优先返回它（本地实例的
+    独立主声明——角色实例的认知/配置双隔离），播种本身仍写全局。"""
+    from config import _AGT_DIR, config_file
     bundled = Path(__file__).resolve().parent / "assets" / "main.yml"
     dst = _AGT_DIR / "main.yml"
     if bundled.exists():
         _AGT_DIR.mkdir(parents=True, exist_ok=True)
         if not dst.exists():
             dst.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
-    return dst
+    return config_file("main.yml")   # repo 级覆盖：本地存在读本地（播种不动全局既有份）
 
 
 def migrate_agents_md_to_yml(workspace: Path) -> int:

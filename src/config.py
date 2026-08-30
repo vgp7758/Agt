@@ -20,7 +20,20 @@ if str(_root) not in sys.path:
 
 # === 用户配置目录 ===
 _AGT_DIR = Path.home() / ".agt"
-_AGT_MODELS = _AGT_DIR / "models.json"
+
+
+def config_file(name: str) -> Path:
+    """配置文件解析（用户裁定 2026-08-31·多实例组网前置）：
+    <cwd>/.agent/<name> 优先（repo 级覆盖——每实例独立配置的基础：多 repo 角色实例
+    各持自己的 main.yml/models.json/settings.json/mcp.json，认知与配置双隔离），
+    缺省 ~/.agt/<name>（全局）。文件级覆盖（非字段合并）——本地存在即整份生效；
+    写侧跟随读到的那份（本地被读→保存写本地，全局被读→写全局）。
+    cwd 在 import 时锚定（进程启动目录=workspace，与 mcp_client 的 WORKSPACE 语义一致）。"""
+    _local = Path.cwd() / ".agent" / name
+    return _local if _local.exists() else _AGT_DIR / name
+
+
+_AGT_MODELS = config_file("models.json")    # repo 级覆盖：<cwd>/.agent/models.json 优先
 
 
 def _load_models() -> tuple[dict, str]:
@@ -132,7 +145,7 @@ MODEL_NAME = LLM_MODEL = _active.get("model", "")
 LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 
 # === 运行时设置持久化 ===
-_AGT_SETTINGS = _AGT_DIR / "settings.json"
+_AGT_SETTINGS = config_file("settings.json")   # repo 级覆盖：<cwd>/.agent/settings.json 优先
 
 def load_runtime_settings() -> dict:
     """从 ~/.agt/settings.json 加载运行时设置。"""

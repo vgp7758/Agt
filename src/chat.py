@@ -688,7 +688,7 @@ def web_main(port=None):
     from server import broadcast, start_server, open_browser, lan_urls, stop_server_if_running
     mcp_mgr = MCPManager()
     mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
-    mcp_mgr.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))
+    mcp_mgr.connect_from_config(str(config.config_file("mcp.json")))   # repo 级覆盖：<cwd>/.agent/mcp.json 优先（多实例组网）
     event_q: "queue.Queue" = queue.Queue()
     def _on_event(e):
         broadcast(e); event_q.put(e)
@@ -823,7 +823,7 @@ def main():
     # 连接 MCP server（workspace/.mcp.json + 全局 ~/.agt/mcp.json）
     mcp_mgr = MCPManager()
     mcp_mgr.connect_from_config(str(WORKSPACE / ".mcp.json"))
-    mcp_mgr.connect_from_config(str(Path.home() / ".agt" / "mcp.json"))   # 全局已装 LSP（ensure_lsp 装配的）
+    mcp_mgr.connect_from_config(str(config.config_file("mcp.json")))   # repo 级覆盖：<cwd>/.agent/mcp.json 优先（多实例组网）   # 全局已装 LSP（ensure_lsp 装配的）
 
     # 装配 Agent（web 与 CLI 共用 build_agent，消除装配漂移）。
     # on_event=broadcast：无 Web 客户端时 no-op，纯 CLI 零开销；/web 起服务、有客户端连上后才推送。

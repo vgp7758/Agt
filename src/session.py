@@ -1438,16 +1438,18 @@ class Session:
         return body
 
     def _plan_fold(self):
-        """轮边界折叠+毕业计划（start_turn 时机）：把投影压到 max_effective_context_window 的 75% 以下。
-        【升档也在这里做】——先升档（压缩老档）再折叠（终极兜底），两步都算到 75% 目标。
-        轮内 _build 以计划结果为起点零调整（75%~100% 之间纯追加，前缀缓存最优）。
+        """轮边界折叠+毕业计划（start_turn 时机）：
+        触发线 = max_effective_context_window（投影顶窗才触发）；触发后压到 win×ratio
+        （保留水位——ratio 是"触发后保留多少"，不是触发阈值；低 ratio 压得狠、下次顶窗间隔长）。
+        【升档也在这里做】——先升档（压缩老档）再折叠（终极兜底），两步都以保留水位为目标。
+        未触发区间（target~win）零动作纯追加，前缀缓存最优（轮内 _build 以计划结果为起点不再调整）。
         无窗口配置时计划为 0（现状）。估算用近似前缀（system+指引+静态记忆）+ 完整 body——
-        与 _build 的真实估算差个动态 tail，75% 余量下可忽略。"""
+        与 _build 的真实估算差个动态 tail，余量下可忽略。"""
         if not self.max_effective_context_window:
             self._planned_fold = 0
             self._planned_graduates = 0
             return
-        target = self.fold_target()   # per-provider ratio：DeepSeek≈60x 折扣悬殊→配高如 0.95（晚折叠保前缀）
+        target = self.fold_target()   # 保留水位（win×ratio）；触发线见下方 win 判定——语义经用户两次澄清
         prefix = [{"role": "system", "content": self.system}]
         if self._task_guidance_provider:
             try:
@@ -1484,6 +1486,12 @@ class Session:
         # 当前轮估算剥除 recent-file 块（_rf_stripped）：rf 是轮内易变项（归档即消失），
         # 它的体积不该推动升档/折叠——panic 轮内路径调用本函数时 cur_est 含 rf 会过激压缩
         cur_est = self._rf_stripped(self._seg_msgs_user_message() + self._seg_msgs_steps())   # 当前轮（tail 量小不计）
+        # —— 触发判定（修复：曾以 target 为触发线——投影在 target~win 健康区间也每轮升档毕业）——
+        # 触发线 = 窗口本身：未顶窗零动作；顶窗后升档/折叠压到 target（保留水位）。
+        if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= self.max_effective_context_window:
+            self._planned_fold = 0
+            self._planned_graduates = 0
+            return
         g = 0
         # 上限宽松化：分批毕业后一次 _plan_fold 可能连切数刀（90 轮大档=3 刀），
         # max_level 封顶的是【档位级别】而非【边界数】——按轮数/批宽 + max_level 算足够上限

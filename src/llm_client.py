@@ -267,12 +267,13 @@ class LLMClient:
         self.thinking_supported = profile.get("thinking", False)
         self.vision_supported = profile.get("vision", False)   # 多模态能力：视觉模型投影时把 <img> 转成 image_url
         # 折叠目标线比例（用户提案 2026-08-30：缓存经济学 per-provider 差异）。
-        # GLM 未命中≈命中 4x、DeepSeek 未命中≈60x：折扣越悬殊越要避免【折叠】（不是避免升档）。
-        # 升档（graduate）只动历史段尾部档内轮、断缓存范围小；折叠（fold）改写历史段头部 fc
-        # 摘要、断缓存范围大（t206 实证「是折叠事件，不是升档」）。_plan_fold 先升档后折叠、都
-        # 压到 ≤ target：低 ratio（如 0.5）= 更早让小步升档消化压力、少触发大折叠（DeepSeek
-        # 60x 差价推荐低值）；高 ratio = 投影涨到接近窗口才超线，届时历史多为超深档、升档压
-        # 不动、只得折叠（大段）。GLM(4x) 用默认 0.75 平衡点。None=引擎默认。clamp 0.5~0.99。
+        # 语义（用户澄清）：【触发后保留多少】——不是触发阈值。触发线是 max_effective_context_window
+        # 本身（投影涨到窗口线就触发毕业/折叠）；ratio 决定触发后压回的目标水位（target = win × ratio）。
+        # 缓存经济学：GLM 未命中≈命中 4x、DeepSeek≈60x。折扣越悬殊越要避免【折叠】（不是避免升档）——
+        # 升档只动历史段尾部档内轮、断缓存小；折叠改写历史段头部 fc 摘要、断缓存大（t206 实证）。
+        # _plan_fold 先升档后折叠、都压到 ≤ target：低 ratio（如 0.5）= 触发后压得更狠、留更多余量、
+        # 下次触发间隔更长（升档消化压力、少触发大折叠）→ DeepSeek(60x) 推荐低值；GLM(4x) 用默认 0.75。
+        # None=引擎默认。clamp 0.5~0.99。
         _ftr = profile.get("fold_target_ratio")
         self.fold_target_ratio = float(_ftr) if _ftr else None
         if self.fold_target_ratio is not None:

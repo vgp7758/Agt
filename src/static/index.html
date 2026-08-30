@@ -30,6 +30,8 @@
   .bubble { max-width:85%; padding:9px 13px; border-radius:13px; line-height:1.55; font-size:14px;
             white-space:pre-wrap; word-break:break-word; box-shadow:0 1px 2px rgba(0,0,0,.05); }
   .row.me .bubble { background:var(--me); color:#fff; border-bottom-right-radius:4px; }
+.row.sys { justify-content:flex-start; }
+.row.sys .bubble { background:#f3e8ff; border:1px solid #d8b4fe; color:#6b21a8; font-size:12.5px; cursor:pointer; white-space:pre-wrap; }
   .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px;min-width:250px; }
   .row.sys .bubble { background:#eef2ff; border:1px solid #c7d2fe; color:#3730a3; font-size:12.5px; max-width:92%; white-space:pre-wrap; }
   .row.err .bubble { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; }
@@ -834,13 +836,27 @@ function expandHistory(){
 // isLast=true 且是中断轮 → 渲染继续按钮（只有最新一轮的中断才可续跑）；
 // 历史中断轮 → 灰字标注（不可恢复）
 function renderHistTurn(t, box, isLast){
-  // 用户气泡（右侧）
+  // 用户气泡（右侧）；后台通知轮（user_message 带 [后台通知· 前缀——历史轮 source 未持久化，
+  // 以文本前缀判别）渲染成系统通知气泡而非蓝色 user 气泡（与实时 source 分流同语义）
   if(t.user){
-    const urow=document.createElement('div'); urow.className='row me';
-    const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
-    urow.appendChild(ub);
-    attachCopyBtn(urow, ub);   // 历史用户气泡同款复制按钮
-    box.appendChild(urow);
+    const _tu = t.user || '';
+    if(_tu.startsWith('[后台通知·') || _tu.startsWith('[后台触发·')){
+      const nrow=document.createElement('div'); nrow.className='row sys';
+      const nb=document.createElement('div'); nb.className='bubble';
+      nb.dataset.collapsed='1'; nb.dataset.full=_tu;
+      nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）';
+      nb.onclick=function(){
+        if(nb.dataset.collapsed==='1'){ nb.dataset.collapsed='0'; nb.textContent=nb.dataset.full; }
+        else{ nb.dataset.collapsed='1'; nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）'; }
+      };
+      nrow.appendChild(nb); box.appendChild(nrow);
+    } else {
+      const urow=document.createElement('div'); urow.className='row me';
+      const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
+      urow.appendChild(ub);
+      attachCopyBtn(urow, ub);   // 历史用户气泡同款复制按钮
+      box.appendChild(urow);
+    }
   }
   // bot 回复（过程 trace + answer）
   const row=document.createElement('div'); row.className='row bot';
@@ -943,6 +959,29 @@ function addUserBubble(text, imgs){
   msgArea.appendChild(row); scrollBottom();
   return row;
 }
+// 后台通知气泡（用户提案 2026-08-30）：user 事件带 source 标签（inbox 唤醒的
+// service_exit/bg_task/schedule/子Agent反馈）→ 系统通知形态而非蓝色 user 气泡。
+// 默认折叠一行摘要，点击展开全文——与 autonomous 系统消息同款交互。
+function renderNotifyBubble(source, text){
+  const ICON={'service_exit':'📪','bg_task':'📨','schedule':'⏰','subagent':'🤝'};
+  const pre=String(source||'').split(':')[0];
+  const icon=ICON[pre]||'🔔';
+  const label=icon+' 后台通知（'+source+'）';
+  const txt=String(text||'');
+  const row=document.createElement('div'); row.className='row sys';
+  const b=document.createElement('div'); b.className='bubble';
+  const head=txt.split('\n')[0].slice(0,120);
+  const needFold=txt.length>120||txt.includes('\n');
+  b.dataset.collapsed='1'; b.dataset.full=label+'\n'+txt;
+  b.textContent=label+'：'+head+(needFold?' …（点击展开）':'');
+  b.onclick=function(){
+    if(b.dataset.collapsed==='1'){ b.dataset.collapsed='0'; b.textContent=b.dataset.full; }
+    else{ b.dataset.collapsed='1'; b.textContent=label+'：'+txt.split('\n')[0].slice(0,120)+' …（点击展开）'; }
+  };
+  row.appendChild(b); msgArea.appendChild(row); scrollBottom();
+  return row;
+}
+
 // 气泡级复制按钮：host（row/col，hover 触发区+定位容器）+ bubble（取文本的目标）
 // 按钮是 host 的子节点而非 bubble 的——answer 内容会被 innerHTML 重写（finishAnswer/spec/survey），
 // 放 bubble 里会被清掉；放 host 上则与内容解耦，随时复制当前内容。
@@ -1986,6 +2025,14 @@ function onWSMessage(ev){
       if(m.name) setSessionTitle(m.name);
       break;
     case 'user': {
+      // 语义标签分流（用户提案）：source 非空 = 后台通知唤醒（inbox 的 service_exit/
+      // bg_task/schedule/子Agent反馈经 _merge_batch → run(_msg_source=) 透传）→
+      // 系统通知气泡（默认折叠）；无标签 = 真用户消息 → 蓝色气泡（下方原逻辑不变）。
+      if(m.source){
+        renderNotifyBubble(m.source, m.text || '');
+        if(!busy){ setBusy(true); curTurn = null; }
+        break;
+      }
       // 多端同步：与同 Agent 交互的其它客户端/CLI 发来的消息——渲染 user 气泡。
       // 本端乐观渲染的（send() 已画过）对账跳过，防双气泡；批量合并形态（"a\n\n---\nb"）逐段对账。
       const t = m.text || '';

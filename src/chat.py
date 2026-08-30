@@ -437,11 +437,11 @@ def _worker(agent, work_q, registry, state):
                         work_q.put(nxt)
                         break
                     batch.append(nxt)
-                user_msg, seeds = _merge_batch(batch)
+                user_msg, seeds, first_src = _merge_batch(batch)
                 if not user_msg and not seeds:
                     continue
                 state["desc"] = user_msg[:40] or "(后台事件)"
-                agent.run(user_msg, _seeds=seeds or None)
+                agent.run(user_msg, _seeds=seeds or None, _msg_source=first_src)
         except Exception as e:
             import logging as _lg, traceback as _tb
             print(f"\n⚠️ 执行出错：{e}")
@@ -468,15 +468,20 @@ def _worker(agent, work_q, registry, state):
 
 
 def _merge_batch(batch):
-    """把 drain 出的一批 (kind, payload) 合并成 (user_message, seeds)，一次 agent.run 处理。
+    """把 drain 出的一批 (kind, payload) 合并成 (user_message, seeds, first_src)，一次 agent.run 处理。
     background 标注来源（[后台通知·<source>]），让 agent 识别是哪个调度任务/进程发的；
     user 原样。多条用 --- 分隔。background 携带的 seed（后台服务退出等合成工具记录）收集进
-    seeds，由 agent.run 经 _seeds 预置成 Step。"""
+    seeds，由 agent.run 经 _seeds 预置成 Step。
+    first_src = 首个后台项的 source（纯手输批为 ""）——传给 run(_msg_source=)，user 事件
+    带 source 字段供前端渲染成系统通知气泡（默认折叠）而非蓝色 user 气泡（用户提案 2026-08-30）。"""
     parts = []
     seeds = []
+    first_src = ""
     for k, p in batch:
         if k == "background":
             src, msg, seed = p
+            if not first_src:
+                first_src = src
             print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
             parts.append(f"[后台通知·{src}] {msg}")
             if seed:
@@ -484,7 +489,7 @@ def _merge_batch(batch):
         else:  # user
             parts.append(p)
     user_msg = parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
-    return user_msg, seeds
+    return user_msg, seeds, first_src
 
 
 def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=3.0,

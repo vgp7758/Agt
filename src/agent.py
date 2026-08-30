@@ -1495,7 +1495,7 @@ class Agent:
     # ========== ReAct 主循环 ==========
     def run(self, user_message: str, images: Optional[list] = None,
             _autonomous_continue: bool = False, _seeds: Optional[list] = None,
-            _resume_current: bool = False) -> str:
+            _resume_current: bool = False, _msg_source: str = "") -> str:
         """
         :param user_message: 用户消息（自主继续时为自动生成的提示）
         :param images: 图片列表
@@ -1555,7 +1555,10 @@ class Agent:
                 self.session._current._before_turn_hint = self.render_before_turn_hint(bt_notes)
             if not resumed:   # 中断轮续跑：首轮已发过 user/autonomous_continue 事件，不重发（否则前端误判为新轮）
                 if not auto_flag:
-                    self._emit({"type": "user", "text": msg, "image_count": len(imgs or [])})
+                    # source 非空 = 后台通知唤醒（service_exit/bg_task/schedule/子Agent反馈）——
+                    # 前端据此渲染成系统通知气泡（默认折叠）而非蓝色 user 气泡（用户提案 2026-08-30）
+                    self._emit({"type": "user", "text": msg, "image_count": len(imgs or []),
+                                **({"source": _msg_source} if _msg_source else {})})
                 else:
                     self._emit({"type": "autonomous_continue", "text": msg})
             _LOG.info("run 开始 session=%s: %s", self.session.name or "(未命名)", (msg or "")[:60])

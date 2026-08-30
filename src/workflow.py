@@ -364,7 +364,11 @@ def _get_llm(ctx, model_name: str = ""):
         try:
             profile = _config.get_profile(model_name)
             cache[model_name] = LLMClient(profile=profile, model_name=model_name)
-        except KeyError:
+        except KeyError as e:
+            # 静默 fallback 是排障黑洞：LLM 节点选了 X 却悄悄用 ctx.llm 跑——
+            # llm_calls 里 model 对不上，得靠这条日志定位（recap_gen 三轮排查的教训）
+            _LOG.warning("LLM 节点模型 '%s' 未找到（%s）——回退 ctx.llm=%s。检查 models.json 键名/是否需 /reload models",
+                         model_name, e, getattr(ctx.llm, "model_name", None))
             return ctx.llm
     return cache[model_name]
 

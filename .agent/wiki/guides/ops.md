@@ -87,14 +87,20 @@ WebUI 右下角 🐞 入口（v0.20.1 引入；最多留 200 条滚动、error �
 
 scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/recap/wrap_up 尾缀 `·{agent_id}`；钩子三段式 `hook:{位置}·{工作流名}·{agent_id}`；空场景省略括号。
 
-**四层链路**：
+**三级日志：消息/警告/错误 + 毕业折叠事件进面板（2026-08-30，commit a3dbd45，用户提案「发生折叠/毕业或轮内小毕业就打一行日志说明发生了什么」）**：
 
-1. `src/llm_client.py`：`chat()` 进入时把 scene 写入 **ContextVar `_SCENE_CTX`**（线程隔离）、finally reset；`_SinkHandler.emit` 捕获 WARNING+ 记录读取后，以三参 `(level, msg, scene)` 回调 sinks。**为什么用 ContextVar 而非 client 实例属性**：utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖（A 场景的告警挂上 B 的场景）。
+- **sink 门槛 WARNING+ → INFO+**，level 三值 `info/warn/error`；`set_log_sink` 的 `_SinkHandler` 同时挂 **`agt.llm` 与 `agt.session` 两个 logger**——回退/限流之外，**毕业/折叠等上下文工程事件**实时进面板：`轮边界计划：升档 X 档 + 折叠 N 轮（目标 ≤95%×700000）`、`卫生性强制毕业 +N 刀（当前档曾 >60 轮）`、保命阀触发等（事件机制见 [context-engine](../architecture/context-engine.md#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）
+- 前端三级分色：**消息(info)=蓝灰底 / 警告(warn)=黄底 / 错误(error)=红底**
+- 降噪：`成功`/`流式成功` 两条高频 info 日志降为 debug（否则每次 LLM 调用刷屏；llm_calls.jsonl 有更全记录）
+
+**抽屉 push 布局（同 commit，用户提案「抽屉应插在整个聊天区右侧、把聊天区往左挤」）**：🐞/📐 抽屉打开时 `body.drawer-push` → 聊天区全链（header/planPanel/queueStatus/msgArea/attBar/controls/toolForm/inputBar）`margin-right:40%`（0.25s 过渡）——抽屉插在右侧让出的空间里，**不再覆盖聊天区**；竖屏（抽屉全屏覆盖模式）不挤；两抽屉互斥（开一个自动关另一个）；spec 被清空时自动解除挤压（防御）。生效：`/restart` + Ctrl+F5。
+
+**四层链路**（scene 贯通）：
+
+1. `src/llm_client.py`：`chat()` 进入时把 scene 写入 **ContextVar `_SCENE_CTX`**（线程隔离）、finally reset；`_SinkHandler.emit` 捕获 INFO+（2026-08-30 前为 WARNING+）记录读取后，以三参 `(level, msg, scene)` 回调 sinks。**为什么用 ContextVar 而非 client 实例属性**：utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖（A 场景的告警挂上 B 的场景）。
 2. `src/agent.py` 六处调用点：react 主循环 3 处（主调用/DSML 重试/空回答重试）/ recap / wrap_up 带 `agent_id`；同步与 async 钩子执行前给 utility client 设 `_scene_override = f"hook:{位置}·{工作流名}·{agent_id}"`，finally 恢复原值。
 3. `src/chat.py`：`set_log_sink` 回调把 scene 塞进 `llm_log` 事件（主 Agent `_emit` 广播）。
 4. `src/static/index.html`：`pushLogEntry(level, text, scene)` 行尾拼 `(scene)`。
-
-生效方式：`/restart`。
 
 ### 跨进程状态查询（/api/status）
 
@@ -117,6 +123,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 - **正常轮边界（t224）**：/stats 显示 98%+ 命中，仅 1~2% 结构性重算 → 验证轮边界平滑路径已生效（未超 75% 阈值）。见 [context-engine 正常轮边界路径](../architecture/context-engine.md#正常轮边界路径t224-实证2026-08)
 - **折叠判阈口径修复（2026-08）**：`_estimate_tokens` 估算分子补齐 tools schema——修前估算「以为达标」（271,623 判 ≤300K → 折叠 0 轮）而实际 419,284 超 win=400K（估算 vs 实际系统性差 ~147K/请求）。**症状**：新一轮初始 prompt_tokens 远超 400K×0.75 目标却折叠 0 轮 / 未见升档折叠日志。需升级代码 + `/restart` 生效。见 [context-engine 估算与校准口径闭环](../architecture/context-engine.md#估算与校准口径闭环tools-schema-补齐2026-08)
 - **DeepSeek 端低命中排查（2026-08-29 实证定案）**：v4 后端对 messages 里**变化的 system 消息**做规范化、**tools 列表变化**也会 → **全序列缓存断**（miss 单价 ≈ hit 的 30-50 倍，GLM 仅 ~4 倍，代价极大）。三条铁律：①任何 system 变化全断；②tools 任何变化全断；③user/assistant 变化只断其后。框架已修（动态注入 user role + 工作流工具 sorted 重注册保 byte-stable）；自定义开发注意**别在投影里用变化的 system role，别在高频路径增删工具**。旧嫌疑 multi-token 轮换/TTL/随机路由均已否证或降级。判别探针 `probes/deepseek_v4_cache_probe*.py`（R12b 三行变体矩阵 3 分钟定位）。见 [context-engine 缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)
+- **「投影远未到窗口却每轮毕业」＝ live 窗口旧值（2026-08-29，commit f57de5d）**：改 models.json 窗口后 `/reload models` 旧版只刷 llm profile、session 窗口副本不动——毕业/折叠仍按旧窗口算（实证：配置 700K/400K，live 实为 256K 档 → 投影 200K 对 192K 目标线持续贴线每轮毕业）。0.22.2 起四入口同步（reload 输出「session 窗口已同步」行即生效）；排障第一手证据 = 旁车 `proj_stats.json` 的 `win`/`fold_target` 字段。见 [context-engine · 窗口值生命周期](../architecture/context-engine.md#窗口值生命周期llm-固化副本--改窗口四入口同步2026-08-29commit-f57de5d)
 
 ### /restart 看门狗与 agt 入口（2026-08）
 

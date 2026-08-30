@@ -150,6 +150,22 @@ t{轮号}_s{步号}_{微秒戳}.json
 
 需 `/restart` 生效；攒批待发 0.22.2。
 
+#### 旁车窗口快照：win / fold_target / panic（2026-08-29，commit f57de5d）
+
+**动机（诊断盲点补齐）**：「触发毕业/折叠时 live 窗口到底是多少」此前只能从行为反推——「投影 200K 为何每轮毕业」排查辛苦的根源正是没有这个证据（真相是 live 窗口为旧值 256K 档而非配置里的 400K/700K，见 [窗口值生命周期](#窗口值生命周期llm-固化副本--改窗口四入口同步2026-08-29commit-f57de5d)）。旁车直接留证据。
+
+**新增字段**（src/session.py `_save_proj_stats_sidecar`，与 tier_boundaries 同级写出）：
+
+| 字段 | 计算 | 实例（win=700K） |
+|------|------|------|
+| `win` | `session.max_effective_context_window` 快照——本次投影判阈**实际用的值** | 700000 |
+| `fold_target` | `int(win × FOLD_TARGET_RATIO)`——折叠目标线（75%） | 525000 |
+| `panic` | `config.load_panic_window()`——保命阀阈值（settings `panic_context_window`，0=跟随窗口） | 900000 |
+
+win 为 None（未配窗口、分档禁用）时 fold_target/panic 不写。
+
+**诊断口径**：旁车 est 长期贴线（`est ≈ fold_target`）→ 先看 `win` 是否等于当前配置预期值；不等 → `/reload models`（0.22.2+ 会同步 session 副本并打印目标线）或 `/restart`。
+
 ## 分档投影（轮间）
 
 - 每档字数上限：1500 → 750 → 375 → 187（`_tier_limit`，detail_base 减半递进）
@@ -178,6 +194,46 @@ t{轮号}_s{步号}_{微秒戳}.json
 - 超窗增量是**当前轮自己**：这轮 5 步大工具调用把 steps 段撑到 ~172K，投影从 ~257K 涨到 449K
 
 **轮内零调整正是缓存经济核心**：75% ~ panic(900K) 之间纯追加、不动前缀；超窗部分几乎全命中缓存（react 99%），实际成本不爆炸。下一轮边界（t371）时这 5 步已归档进历史，估算 ≈450K > 300K → 届时 `_plan_fold` 才实际折叠/升档，`/context` 里的 `_planned_fold` 即非 0。
+
+### 窗口值生命周期：llm 固化副本 + 改窗口四入口同步（2026-08-29，commit f57de5d）
+
+**背景（comfy session 用户报告）**：models.json 已把 deepseek 条目窗口改到 700K（此前 400K），`/reload models` 后投影 200K 仍然**每轮毕业/折叠**——用户质疑「200K 远没达到 400K 的窗口」成立：若窗口真是 400K（目标线 300K），est≈250K 根本不可能触发。
+
+**根因：窗口是 llm client 创建时固化进 session 的副本**。`session.max_effective_context_window` 在 session 构造时从 llm 读一次；`/reload models` 旧版只 `llm._apply_profile(...)` 刷新 profile，**session 副本不同步**——毕业/折叠计划与 detail_base 推导仍按旧窗口算。
+
+**真相三段证据互锁（live 窗口 = 旧值 256K 档，非配置里的 400K/700K）**：
+
+| 证据 | 内容 |
+|------|------|
+| ① 反证 | 若窗口 400K（target=300K）：轮边界 est≈250K << 300K → 不该触发——但边界确实在持续增涨 |
+| ② 贴线实证 | fold_count 停在 148 时旁车 est=184,964≈185K，恰好压到 192K（=256K×0.75）目标线下一点点——每轮 est≈192~250K 持续超线 → 升档 + fc 小口吞 → 吞到 185K < 192K 才停。200K+ 的投影对 192K 的线就是「持续贴线滚动」状态 |
+| ③ 引擎自证 | dry-run（win=700K）不触发——引擎判定逻辑本身正确，问题只在 live 窗口值 |
+
+**修复（四入口同步：`switch_model` / `/reload models`（src/commands.py）/ WebUI 保存模型配置（src/server.py）/ `/config`）**：换 profile 后同步 session 窗口副本 + `invalidate_detail_base()`——reload 输出多一行 `· session 窗口已同步：700000（折叠目标线 525,000 tok）` 即生效。直接改 models.json 文件后：跑一次 `/reload models`（0.22.2+）或 `/restart`（新进程构造时读新配置）。
+
+**排障第一手证据**：旁车 `proj_stats.json` 的 `win`/`fold_target` 字段（见 [旁车窗口快照](#旁车窗口快照-win--fold_target--panic2026-08-29commit-f57de5d)）——「投影 200K 为何每轮毕业」这类问题不再需要从行为反推 live 窗口值（本 commit 顺带新增，正是那次排查辛苦的产物）。
+
+### per-provider 缓存经济学参数：fold_target_ratio + detail_step（2026-08-30，commit 27fea56，用户提案）
+
+**动机（用户提案 2026-08-30）**：各 provider 缓存命中的价差结构不同——GLM miss≈hit 的 **4 倍**、DeepSeek miss≈hit 的 **30~60 倍**（v4-flash 账单实测 30 倍）：折扣越悬殊，越不该轻易破坏缓存前缀（省下的命中价差 >> 超窗的占用）。故把**折叠目标线比例**与**组间衰减步距**从引擎全局常量提升为 models.json 的 per-provider 参数。
+
+**两参数**（`src/llm_client.py` profile 读取与 clamp + `src/session.py` 消费）：
+
+| 参数 | 范围/缺省 | 语义 |
+|------|----------|------|
+| `fold_target_ratio` | clamp 0.5~0.99；缺省=引擎 FOLD_TARGET_RATIO(0.75) | 折叠保留目标线占窗口比——调高（如 0.95）= 晚折叠、投影长期维持稳定前缀 |
+| `detail_step` | clamp 0~200；缺省=全局 settings(15) | 组间步距衰减字数——**0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩 → 前缀缓存打满（宁可投影大也不让组边界衰减重截断缓存） |
+
+**单一真相源与同步点**：
+
+- `session.fold_target()` = win × ratio——**轮边界计划与保命阀回落目标共用**（`_plan_fold` / 保命阀 settle 均改调它）；旁车 `proj_stats.json` 记 `fold_ratio`；轮边界日志改实际百分比（`轮边界计划：升档 2 档 + 折叠 0 轮（目标 ≤95%×700000）`——🐞 面板可见）
+- `session.detail_step` property（profile > 全局 settings > 15）——分组衰减公式消费（见 [分组衰减](#分组衰减轮内2026-08-新)）；**冻结渲染缓存 key 加 detail_step 维度**：切 provider（衰减参数变）时归档轮渲染正确失效重算
+- 三处同步点：`switch_model` / `/reload models` / WebUI 保存模型配置（src/agent.py / commands.py / server.py）——与窗口副本同步同款（见 [窗口值生命周期](#窗口值生命周期llm-固化副本--改窗口四入口同步2026-08-29commit-f57de5d)）
+- WebUI：模型卡片 max_tokens 旁 +2 数字框（折叠目标% / detail_step，tooltip 带经济学说明）
+
+**验证**：0.95 → 目标线 380,000 tok ✓；detail_step=0 生效、未配置回退全局 15 ✓；**渲染字节稳定性**——detail_step=0 下 25 步 3 组的 tool 结果长度全同（1556 字节），组边界衰减不再回缩缓存，缓存打满的直接证据 ✓。
+
+**推荐配置（DeepSeek 缓存三件套）**：`fold_target_ratio: 0.95`（晚折叠）+ `detail_step: 0`（不衰减）+ `token_rotate: false`（sticky）——配合动态注入 user 化，把前缀稳定到物理极限；GLM（4x 价差）用默认 0.75+15 的平衡点即可。需 `/restart` 生效；配置示例见 [配置体系](../guides/config-and-models.md)。
 
 ### 估算与校准口径闭环：tools schema 补齐（2026-08）
 
@@ -305,6 +361,8 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 | ≥2 | `base - 10 × detail_step × 组号差`（≥DETAIL_FLOOR=20） |
 
 组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
+
+**`detail_step` per-provider 化（2026-08-30，commit 27fea56）**：步距衰减字数不再只有全局 settings 一档——models.json profile 可按 provider 覆盖（`session.detail_step` property：profile > settings > 15；clamp 0~200）。**0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩——DeepSeek 类 miss/hit 价差悬殊（~60x）的 provider 推荐配 0（宁可投影大也不让组边界衰减重截断缓存）；GLM（4x）用默认 15 平衡点即可。详见 [per-provider 缓存经济学参数](#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
 
 ## recent-file 跟屁虫快照：注入三版演进 + rf 免疫收拢单源 + 源头收缩（2026-08-29，dd7fd81 + 39e7115 + 348adfc + 983c417 + 22eaa04）
 

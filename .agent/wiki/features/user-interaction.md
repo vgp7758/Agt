@@ -22,7 +22,7 @@
 **文本路由**（`_handle_user_input`）：客户端切换到子 Agent（target ≠ `_main_`）后，非 `/` 开头的文本**直达该子 Agent**（对齐 CLI `/agent` 切换后的直连语义）；多页签互不影响——其它页签仍走主 Agent work_q。目标失效（进程重启后 registry 重建）→ 自动复位 `_main_` + 提示，消息转主 Agent 不丢。
 
 **会话视图隔离**：
-- `current_history` / `expand_history`：按客户端 `target` 取对应 session——页签 A 在子 Agent 视图展开历史时不会拿到主 session 的轮次；重连/刷新后前端 sessionStorage 记住的 target 先校验存在性，`running` 中的目标退回 `_main_` 防卡在忙实例上
+- `current_history` / `expand_history`：按客户端 `target` 取对应 session——页签 A 在子 Agent 视图展开历史时不会拿到主 session 的轮次；重连/刷新后前端 sessionStorage 记住的 target 先校验存在性；`running` 目标曾退回 `_main_`「防卡忙实例」——**2026-08-30（commit d69bd8e）起放行**，busy 页面恰是观测价值最大的时刻（见下节 URL 路由的 busy 放行小节）
 - `load_session` 广播历史：带 `agent_id="_main_"`（`_broadcast_history`）——其它页签正与子 Agent 交互时不被主 session 历史冲掉视图
 
 **answer 特例**：同步工具型子 Agent（explore_subagent / update_wiki）的回应**额外放行给主视图**——主 Agent 正在等其工具结果（保住 answer 分页，见 [气泡交互](../features/bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）；反向：子 Agent 视图不收主 Agent 的 answer。
@@ -30,7 +30,7 @@
 | 场景 | 行为 |
 |---|---|
 | 页签 A（主）+ 页签 B（coder_1）同时在线 | 主 Agent 事件只到 A，coder_1 事件只到 B，互不串台 |
-| B 切换 Agent | 只改 B 的 target + 响应单发（A 视图不动）；sessionStorage 记住，刷新/重连自动恢复 |
+| B 切换 Agent | 只改 B 的 target + 响应单发（A 视图不动）；sessionStorage 记住，刷新/重连自动恢复；busy 实例也可切（d69bd8e 起，提示排队注入） |
 | B 向 coder_1 发消息 | 忙时走 coder_1 插话队列；空闲时 task 进 work_q 与主 Agent run 串行，交互期临时接通事件流 |
 | B 的目标失效 | 复位主 Agent + 提示，消息转主 Agent |
 
@@ -61,6 +61,37 @@
 
 **生效方式**：引擎层（server.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效。
 
+
+### busy 实例页面放行：running 目标不再弹回主视图（2026-08-30，commit d69bd8e）
+
+**用户报告**：浏览器打开正在跑任务（busy，`status == "running"`）的子 Agent 专属页 `/agents/wiki-updater_3`，看到的却是**主 Agent 的会话上下文**。
+
+**根因——「防卡忙实例」旧防御**（上上节 target 路由改造 commit 30ac45b 时引入）：
+
+```python
+# current_history 的存在性校验（修复前）：
+if e0 is not None and e0.status != "running":   # ← busy 目标被拒
+    client["target"] = rt
+    agent._active_target = rt
+else:
+    rt = ""                                       # → 复位 → 返回主 Agent 历史
+```
+
+- `current_history`（URL 直达/刷新路径）：busy 目标被拒 → `rt=""` 复位 → 走主历史分支——现象即此
+- `switch_agent`（下拉切换路径）同款拒绝：`⏳ 'xxx' 正在执行任务，完成后才能切换直接交互`
+
+防御本意是「重连时别卡在忙实例视图上」，但误伤了正当需求：**busy 实例的页面恰恰是观测价值最大的时刻**（看它正在跑什么）。
+
+**修复**（src/server.py 两处，commit d69bd8e）：
+
+| 路径 | 行为 |
+|---|---|
+| current_history（URL 直达/刷新） | running 也允许设为 target——busy 页面：历史正常浏览 + 事件流按 agent_id 分发**实时可见**（它跑的每一步 thinking/step 都推给该页签） |
+| switch_agent（下拉切换） | running 允许切换，提示带排队说明：`✅ 已切换到与 'xxx' 直接交互（正在执行任务：消息将排队注入其当前轮）` |
+
+安全语义不变：向 busy 实例发文本走**插话队列**（`_handle_user_input` 既有路径，注入其当前轮），**不会并发 run**。
+
+与上节 c819618 修复对照：同是「URL 直达被弹回主视图」，彼次根因是历史子 Agent `agent is None`，本次是 busy 防御——两条都已闭环。**生效方式**：引擎层（src/server.py），需 `/restart`。
 
 ## 多端消息同步 · user 事件渲染到同 Agent 的其它客户端/CLI（2026-08，commit 1168ea9）
 

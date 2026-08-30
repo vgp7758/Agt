@@ -403,6 +403,18 @@ const lit=String(_effInput(f).value?.content ?? '');  // 值按钮
 
 > 教训：**定位完成 ≠ 修复完成**。本轮曾发生"只 grep 定位到代码就汇报『已修复并推送』"的虚报（commit 749e971 并无此改动），用户连报两次"没变"后才真正执行 edit（a943902 真实落盘）。「定位→小改」类任务，edit 执行成功 + 改后 diff 确认是最低交付门槛。
 
+### 27. 竖屏 portrait 全屏补齐 logPanel（2026-08，commit 962b7cf）
+
+**现象（用户报告）**：竖屏（portrait）时 📐 spec 抽屉全屏了，但 🐞 日志抽屉没有——portrait 媒体查询只写了 `#specPanel`，logPanel 漏在段外。
+
+**修复**（src/static/index.html L152，一行）：`#specPanel` → `#specPanel, #logPanel`，logPanel 并入同段竖屏全屏：
+
+```css
+@media (orientation: portrait) { #specPanel, #logPanel { width:100%; border-left:none; } }
+```
+
+§23 骨架（headbar 钉顶 + 滚动区独立）两抽屉同构，本次仅补响应式宽度这一处——两抽屉竖屏行为对齐。纯前端，Ctrl+F5 刷新即生效。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

@@ -58,6 +58,20 @@ function toggleFold(head, body){          // 通用折叠：body display 切换 
 
 thinking 事件带 `agent_id`（`_emit` 统一打标，见 [气泡交互](bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）：文本加 `[agent_id] ` 前缀、label 显示 `💭 agent_id 思考`——子 Agent 的思考不裸混进主 trace。
 
+## step 事件行：累计 token 数字格式化（2026-08，commit 962b7cf）
+
+**动机（长 session 实测）**：累计 token 到百万级后 step 分隔行 `— 第 N 步 · 累计 4872345 token · by proxy —` 原始数字不可读。
+
+**修复**（src/static/index.html）：新增 `fmtTokens()`，step 事件行累计 token 改走它：
+
+```javascript
+function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); }
+// step 行：— 第 1 步 · 累计 4.8M token · by proxy —
+```
+
+格式化规则：≥1M → `x.xM`、≥1K → `x.xK`、否则原数。`fmtArgs` 同处新增（本轮顺带），供其它参数字符串化复用（`JSON.stringify` 失败兜底 `String`）。纯前端，Ctrl+F5 刷新即生效。
+
 ## 🔧 工具调用折叠（同批基建）
 
 - `_DIFF_TOOLS = new Set(['edit','write_file','insert','replace_lines','delete','move'])` → diff 类**不折叠**（改动详情值得直视）；其余工具建折叠组

@@ -8,6 +8,8 @@
 - `.meta` 旁车 / XML 根属性：name/description/**hook**/enabled/**hidden**/**async**/auto/coze_url
 - 每轮对话开始自动扫描；**hidden 默认 true（2026-08，commit a667da4 起翻转）——未写 hidden 不注册为 `wf_*` 工具**，只有显式 `hidden="false"`（编辑器取消勾选+保存）才进工具箱 schema；钩子触发/子工作流调用不看 hidden（保证不变，见下下节）
 - meta.hidden 的 XML 往返已修复（api_wf_get 读根属性）——历史丢 hidden 的文件已补回；写侧现显式写 true/false 两值（往返幂等）
+- **type3 LLM 节点的 model 序列化为独立 `<model>` 标签**（workflow_xml.py 写侧），不是 `<param name="model">`——grep param 形态搜不到 ≠ model 未设置。误诊实例（2026-08-30，commit e8ef64a 修复）：曾据 param 搜不到错判 recap_gen「model 未设置→utility 兜底」，真实是 `<model>proxy</model>` → proxy 路由 → glm（bigmodel）429 余额不足（319 条失败）；同批清掉播种源 `src/workflows/recap_gen.xml` 的新老形态**双声明**残留（老 `<param name="model">local-qwen</param>`——该 provider 键已不存在，若生效会报未知模型 + 新标签并存，删旧留新）
+- **编辑器里改模型不点保存不落盘**：「日志还在用旧模型」先读磁盘 XML 核实再怀疑刷新（recap_gen 案例：用户选了 local-lfm 但没点保存，磁盘一直 proxy）；反向同理——改完 XML **当轮即生效**（每轮重扫，下轮钩子触发就走新模型，无需 /restart）
 
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 

@@ -41,7 +41,7 @@
 
 ## 用途建议（按适配度排序）
 
-1. **攒批型 utility 任务**（最匹配）：wiki 维护批、夜间整理——18~38s 的速度硬伤在「不着急的批量」场景消失，且零 token 成本；ms-deepseek 端点不稳时它是备胎（**wiki-updater 的回退链加 local-lfm 即可**，见 [声明级回退链](../architecture/multi-agent.md)）
+1. **攒批型 utility 任务**（最匹配）：wiki 维护批、夜间整理——18~38s 的速度硬伤在「不着急的批量」场景消失，且零 token 成本；ms-deepseek 端点不稳时它是备胎（**wiki-updater 的回退链加 local-lfm 即可**，见 [声明级回退链](../architecture/multi-agent.md)）。**首个落地（2026-08-30，commit e8ef64a）：recap_gen（turn_end 钩子）已切 local-lfm**——原 model=proxy → glm 429 余额不足致 recap 批量失败，切后零 token 成本 + 关 thinking 提速（见 [multi-agent · recap_gen 切换](../architecture/multi-agent.md)）
 2. **子 Agent 简单任务**：分类 / 精排 / 格式转换——`agent_prompt` 派活的声明模型指 local-lfm，工具调用能力足以支撑 3~5 步小流程
 3. **react_agent_demo 本地演示位**：工具调用四连已测通，能跑通 ReAct 原语演示（教学 / 调试用）
 4. **local-lfm-vl（已就位）**：vision 子 Agent 的免费备胎（qwen 视觉限流时回退）——形状 / 颜色 / 布局理解 OK；**精细文字识别别指望 3B**
@@ -51,7 +51,7 @@
 ## 注意事项
 
 - **thinking 小模型要留思考余量**（本轮最大教训）：`--reasoning-format deepseek` 后答案落在 `content`，但思考链先吃掉 token——`max_tokens` 抠太紧（如 250）会被思考耗尽导致 content 空。models.json 里 8192 没问题，是测试参数抠了；通用规则：短调用给 thinking 模型留足「思考链 + 输出」的余量
-- **utility 短调用可关 thinking**：recap_gen / 意图判断不需要思考链，`thinking: false` 还能提速一倍
+- **utility 短调用可关 thinking（已落地，2026-08-30 commit e8ef64a）**：recap_gen / 意图判断不需要思考链——recap_gen 节点级 `thinking:false` 原本已配，models.json 里 local-lfm 实例级补 `thinking:false` 兜底，关思考链提速约一倍（~38s→~15s）；utility 场景直接不请求思考链，也绕开上面的余量问题
 - **8080 端口易主**：此前文档记录 local-qwen@8080（[wiki_auto_query 提词依赖](../features/wiki-auto-query.md)），现被 local-lfm-vl 占用——若 extract_keywords 仍指向 qwen 需改端口 / 换 provider，未核对前视为潜在断链
 - **服务未启动**：对应环节直接失败（同 local-qwen 依赖语义），攒批任务前先探活端口；开机起服务直接双击 `D:\Programs\env\` 下的 bat（可同时开两个窗口起全套）
 

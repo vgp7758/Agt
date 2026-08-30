@@ -276,6 +276,19 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **第二消费端（2026-08 新）**：recap 同时填进 fc 折叠摘要行的 tail——`_folded_summary` 每轮 tail 优先级改为 **recap → answer 代码摘要 → 中断标注**（recap 语义密度高于 answer 代码摘要的「首行+标题」，后者常是「完成并推送 ✅」类横幅文案）。详见 [context-engine · 折叠摘要 tail 优先级](context-engine.md#折叠摘要-tail-优先级recap--answer-代码摘要--中断标注2026-08)。
 
+### recap_gen 模型切 local-lfm（2026-08-30，commit e8ef64a）
+
+**背景**：用户发现 recap 批量失败（llm_calls 319 条 429）并质疑「工作流里选了 local-lfm，日志却报 utility」——排查真相：`.agent/workflows/recap_gen.xml` 的 LLM 节点磁盘上一直是 `<model>proxy</model>`（用户在编辑器选过 local-lfm 但**未点保存**），真实失败链 = proxy 路由 → glm（bigmodel）→ 429 insufficient balance。此前「model 未设置 → utility 兜底」的诊断是 **grep 形态错误**：type3 LLM 节点的 model 是独立 `<model>` 标签而非 `<param name="model">`，搜不到 ≠ 未设置（坑详见 [workflow-hooks · 双格式与热加载](workflow-hooks.md#双格式与热加载)）。
+
+**修复三处（commit e8ef64a）**：
+1. `.agent/workflows/recap_gen.xml`：model `proxy → local-lfm`
+2. 播种源 `src/workflows/recap_gen.xml`：清双重声明——老 `<param name="model">local-qwen</param>` 残留（该 provider 键已不存在）与新 `<model>` 标签并存，删旧留新
+3. models.json：local-lfm `thinking → false`（节点级 thinking:false 原本已配，实例级兜底）——关思考链提速 ~38s→~15s
+
+**生效方式**：工作流每轮重扫，**当轮 turn_end 即走 local-lfm**（免重启；llm_calls 里 scene=`hook:turn_end·recap_gen` 的 model 字段可验证）。零 token 成本的 recap 通道至此落地（见 [本地模型评估](../guides/local-models.md)）。
+
+**遗留**：utility 的 glm（bigmodel，glm-5.3-flash）余额不足未修——意图分类 / 精排等 utility 场景仍会撞 429（充值或 `/config utility_model` 换通道）。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

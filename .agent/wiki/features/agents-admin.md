@@ -4,7 +4,7 @@
 
 ## 职责
 
-Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）名称/描述/模型/回退链/工具/assembly/hooks 全部表单化编辑**，不再手写 YAML；**主 Agent（`~/.agt/main.yml`）置顶纳入**——直接编辑原始 assembly 清单。顺带定稿 **v2.1 声明格式**（用户插话设计）：persona 拆独立 md，yml 回归纯配置。
+Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）名称/描述/模型/回退链/工具/assembly/hooks 全部表单化编辑**，不再手写 YAML；**主 Agent（main.yml）置顶纳入**——直接编辑原始 assembly 清单（2026-08-31 起 repo 级覆盖：`<cwd>/.agent/main.yml` 存在则读写本地，见 [config_file 解析](../guides/config-and-models.md)）。顺带定稿 **v2.1 声明格式**（用户插话设计）：persona 拆独立 md，yml 回归纯配置。
 
 ## 页面：/agents（agents.html）
 
@@ -28,7 +28,7 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 - `_agent_safe_name(name)`：名字清洗（`[^A-Za-z0-9_-]` → `_` + 取 basename），防路径注入
 - `_persona_from_decl(meta, system)`：**双形态**读取——新格式 file: 引用（读独立 md）or 旧格式 text: 内联/system 兜底
 - `_read_persona_md(rel_path)`：读 persona md，剥 frontmatter（`multiagent._split_frontmatter`，兼容存量旧格式声明 md 带 frontmatter 的情况）；路径基准 `_workspace` + resolve 后 `relative_to` 沙箱越界拒绝——与写盘 `_dump_agent_yml` 读写对称
-- `seed_main_agent(_workspace)` / `load_agent_yml`（agent_config）：定位并读取 `~/.agt/main.yml`——管理页读主 Agent 的通道
+- `seed_main_agent(_workspace)` / `load_agent_yml`（agent_config）：定位并读取 main.yml——管理页读主 Agent 的通道（2026-08-31 起 repo 级覆盖，commit 10d717e：`config_file` 解析，`<cwd>/.agent/main.yml` 存在优先返回；**播种仍写全局** `~/.agt/main.yml`，不覆盖本地独立主声明）
 
 ## `_main_` 主 Agent 纳入管理（2026-08，commit 3f0ef32）
 
@@ -54,11 +54,11 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 |---|---|
 | list | `_main_` 置顶（读 main.yml，返回 assembly 段数 + hooks 位置） |
 | get | `is_main=True`；**不含 persona/tools 字段**（不适用）；assembly 原样返回 |
-| 保存 | `yaml.safe_load` 现有 main.yml 为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；提示 `/restart` 后生效（启动时装配） |
+| 保存 | `yaml.safe_load` 现有 main.yml 为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；**写 `config_file` 解析的那份 main.yml**（repo 级覆盖、写侧跟随读到的那份，2026-08-31 commit 10d717e——本地存在则读写本地，多实例角色实例独立主声明）；提示 `/restart` 后生效（启动时装配） |
 | create | 拒绝 `_main_`/`main` 保留名作子 Agent 名 |
 | delete | 拒绝——主 Agent 声明不可删除 |
 
-前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 隐藏删除按钮；保存 toast 显示后端 note（主 Agent：`/restart` 后生效；子 Agent：新派活生效，reuse 实例下一任务生效）。
+前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 隐藏删除按钮；保存 toast 显示后端 note（主 Agent：`/restart` 后生效 + **实际写入路径**（`已写 {p}；/restart 后生效`，动态而非硬编码 `~/.agt`）；子 Agent：新派活生效，reuse 实例下一任务生效）。
 
 ## 编辑器 assembly 往返增强（agents.html，同 commit）
 

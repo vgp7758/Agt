@@ -37,6 +37,33 @@
 
 > **回退链分层（2026-08，commit a667da4 起）**：settings 是**全局默认**；Agent 声明级 `fallback` 键（逗号串 / list / {chain,policy} 三形态）覆盖全局——[/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=继承全局），`_main_` 主 Agent 同样支持；引擎侧解析见 [multi-agent · 声明级回退链](../architecture/multi-agent.md)。
 
+## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
+
+四份配置文件（models.json / settings.json / main.yml / mcp.json）的解析统一走 `config.config_file(name)`（src/config.py，用户裁定 2026-08-31 · 多实例组网前置，commit 10d717e）：
+
+```python
+_AGT_DIR = Path.home() / ".agt"
+
+def config_file(name: str) -> Path:
+    _local = Path.cwd() / ".agent" / name
+    return _local if _local.exists() else _AGT_DIR / name
+```
+
+| 规则 | 语义 |
+|---|---|
+| 优先级 | `<cwd>/.agent/<name>`（repo 级）→ `~/.agt/<name>`（全局兜底）；无本地文件时行为与旧版完全一致 |
+| 覆盖粒度 | **文件级覆盖（非字段合并）**——本地存在即整份生效，全局同名文件被完全遮蔽 |
+| 写侧跟随 | 读到哪份就写哪份：本地被读 → 保存写本地；全局被读 → 写全局（配置自治，不会「读 A 写 B」） |
+| cwd 锚定 | import 时锚定（进程启动目录 = workspace，与 mcp_client 的 WORKSPACE 语义一致） |
+
+**接入点**：`_AGT_MODELS` / `_AGT_SETTINGS` 两常量改走 `config_file`（加载 / 保存 / mtime 惰性重载全部自动跟随）；`seed_main_agent` 返回值（读侧本地优先，**播种仍写全局**、不覆盖本地独立主声明）；chat.py 两处 mcp 连接（`.mcp.json` 项目级原有职责不变——repo 覆盖是新增一层）；/agents 管理页 `_main_` 保存（写跟随读，note 动态显示实际路径，见 [agents-admin](../features/agents-admin.md)）。
+
+**用途：多实例角色化的配置隔离**——每个角色实例（游戏组网的导演 / 多媒体等 repo）各持自己的四件套，认知（persona/assembly）与配置（模型/参数/MCP）双隔离，`~/.agt/` 全局只是无本地时的兜底。详见 [multi-instance · 配置 repo 级覆盖](../architecture/multi-instance.md)。
+
+**注意**：`ensure_lsp` 的持久化仍固定写 `~/.agt/mcp.json`（lsp_manager `_GLOBAL_MCP`，设计如此「不写 cwd」）——repo 级 `.agent/mcp.json` 存在的实例**读不到后装的 LSP 条目**（本地整份遮蔽全局）。
+
+验证（2026-08-31）：临时 cwd 带 `.agent/` 本地文件 → MODELS 只见本地条目（default 取本地）、settings 本地读（utility_model/max_level 本地值）、seed_main_agent 返回本地 main.yml；无本地对照 → 全局路径（现状完全不变）。8+1 项全过。
+
 ## 模型能力标志速查
 
 | 场景 | 配置 |

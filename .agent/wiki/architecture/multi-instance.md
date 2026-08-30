@@ -84,6 +84,28 @@ run_python({"code": "...", "server_id": "agt-192-168-1-2-8000"})   ← 远程 CP
 - **main.yml 装配方插入坏块**：run_python 脚本往两份 main.yml（`~/.agt/main.yml` L37 与 `src/assets/main.yml` L22，runtime_env 段后）插 `{func:load_remote_instances()}` 行，第一次按"下一个同级 `- `"找块边界产生嵌套缩进坏行 → yaml 解析报错；第二次先删坏行重插才干净。教训：**脚本改 yml，收工前必须 `yaml.safe_load` 验证通过**。
 - **mock `/api/status` 连续 500 两次**：手写 mock dict 相继缺 `_current`、缺 `_lock` 而炸——/api/status 的字段面比想象宽（依赖 AgentRegistry 内部状态），最终 mock 直接**继承真 `AgentRegistry`** 才过。对照：**`/api/tool/exec` 只依赖 `agent.tools`，依赖面比 status 轻得多**（connect 探测走 status，工具执行不走）。
 
+## 配置 repo 级覆盖：角色实例认知/配置双隔离的地基（2026-08-31，commit 10d717e）
+
+**游戏组网愿景第一步（用户裁定 2026-08-31）**：此前所有实例读的都是全局 `~/.agt/` 四件套（main.yml / models.json / settings.json / mcp.json）——角色实例无法各持配置。统一解析入口 `config.config_file(name)`（src/config.py）：
+
+- `<cwd>/.agent/<name>` 存在 → 用它（**repo 级覆盖**，文件级整份生效、非字段合并）；否则 `~/.agt/<name>` 全局兜底
+- **写侧跟随读到的那份**：本地被读 → 保存写本地；全局被读 → 写全局。`seed_main_agent` 播种仍写全局（不动本地独立主声明），读侧返回本地；/agents 管理页 `_main_` 保存与读侧同源（note 动态显示实际路径）
+- cwd 在 import 时锚定（进程启动目录 = workspace）
+- 接入六处：config.py 两常量（models/settings——加载/保存/mtime 惰性重载自动跟随）+ `seed_main_agent` + chat.py mcp 连接 ×2 + server.py `_main_` 保存
+
+**角色实例组网用法**（每 repo 一个实例、各自 cwd 启动）：
+
+```
+D:\Games\Director\   .agent/{main.yml, models.json}    ← 导演 persona + 独立模型面（creative-kimi）
+D:\Games\Media\      .agent/{main.yml, settings.json}  ← 多媒体专家 persona + 独立窗口/折叠参数
+```
+
+认知（persona/装配）与配置（模型/参数/MCP）**双隔离**、互不污染；`~/.agt/` 全局只是无本地时的兜底。**本 repo（自我迭代仓库）无 `.agent/models.json` 等本地配置 → 行为不变，纯增量能力**；`/restart` 后生效（当前进程仍是旧代码）。
+
+验证：临时 cwd 带本地四件套 → MODELS 只见本地条目（default 本地）、settings 本地读、seed_main_agent 返回本地 main.yml、文件不存在名回退全局；无本地对照 → 全局路径（现状完全不变）。8+1 项全过，commit `10d717e`。解析规则速查与 `ensure_lsp` 持久化注意（LSP 条目仍固定写全局）见 [config-and-models · 配置文件解析](../guides/config-and-models.md)。
+
+> 与组网工具链的分工：remote_* 五件套解决**实例间怎么通信**，本节解决**每个实例自己是谁**（认知与配置从哪来）——多实例角色化的两块地基，至此齐了（下一步：角色 persona 纯粹化 + 资产工作流封装）。
+
 ## 边界与后续
 
 - 远程工具箱以对方 `/api/status` 报告的 tools_count 为信息展示（具体工具 schema 未拉取投影——模型按通用工具语义调用，未知工具错误文案兜底）

@@ -64,6 +64,36 @@ def config_file(name: str) -> Path:
 
 验证（2026-08-31）：临时 cwd 带 `.agent/` 本地文件 → MODELS 只见本地条目（default 取本地）、settings 本地读（utility_model/max_level 本地值）、seed_main_agent 返回本地 main.yml；无本地对照 → 全局路径（现状完全不变）。8+1 项全过。
 
+## 设置页配置来源切换：生效份 / 全局 / 本地（2026-08-31，commit ad0f385）
+
+repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本节补**UI 显式选择**（用户裁定 2026-08-31 ·「设置页保存和读取时需要能选用全局还是本地」，commit ad0f385）——WebUI 设置弹窗（⚙️）顶部新增「配置来源」切换条：
+
+```
+配置来源：[生效份] [🌐 全局 ~/.agt] [📦 本地 .agent]   📦 本地覆盖生效中（徽章）
+```
+
+**三模式语义**：
+
+| 模式 | 读取 | 保存 |
+|---|---|---|
+| **生效份**（默认，现状） | 自动本地优先 + 显示覆盖徽章（active_scope=local 时） | 写生效份 + 热应用（reload / apply_config） |
+| **🌐 全局** | 显式载入 `~/.agt/` 那份的**原始文件视图**（模型卡片 + settings） | 写全局——**若本地覆盖生效中则存档备用、不热应用**（保存提示明确说明） |
+| **📦 本地** | 显式载入 `.agent/` 覆盖份（不存在时提示「保存将新建」） | 写本地 + 若即生效份则热应用 |
+
+**实现三层**：
+
+| 层 | 内容 |
+|---|---|
+| src/config.py | **六个 scoped 函数**：`config_file_scoped(name, scope="auto")`（auto=`config_file` 现状 / local=强制 `<cwd>/.agent/` / global=强制 `~/.agt/`）+ `active_scope(name)`（本地文件存在='local' 覆盖生效中，否则 'global'）+ read/save × models/settings 四个 scoped 读写——**非生效份只落盘、不进运行时** |
+| src/server.py | WS `get_config`/`set_config` 接受 scope；local/global 时返回 **`config_scoped` 事件**（该份原始 models+settings + active 标注，与 auto 的运行时视图分开）。REST `/api/models` GET/PUT 接受 scope（auto 响应附 `active` 字段，向后兼容） |
+| src/static/index.html | scope-bar 切换条（`setCfgScope`/`cfgScope` 状态）+ 读取/保存全链带 scope + `fillSettingsForm(v)` 抽取共用——auto 的运行时视图与 scoped 的文件原始视图同一填表函数 |
+
+**保存语义关键**：显式写**非生效份**只落盘不热应用——「改了 `~/.agt/` 但 `.agent/` 覆盖生效中」的存档备用场景由保存提示明确说明，避免「写了却看似没生效」的困惑；写生效份照旧走现状通道（保存后 reload + apply_config 热应用）。
+
+验证（2026-08-31）：node --check + 9 项结构断言全过；**`/restart` + Ctrl+F5** 后生效。
+
+用途与角色实例组网见 [multi-instance · 配置 repo 级覆盖](../architecture/multi-instance.md)——10d717e（读侧自动优先）+ ad0f385（UI 显式选择）拼成完整闭环：角色实例（游戏组网的导演/编剧/多媒体）可在各自 repo 的 WebUI 里直接管理自己的配置，也能查看/编辑全局兜底份。
+
 ## 模型能力标志速查
 
 | 场景 | 配置 |

@@ -480,8 +480,9 @@ def _merge_batch(batch):
     for k, p in batch:
         if k == "background":
             src, msg, seed = p
-            if not first_src:
-                first_src = src
+            if not first_src and not parts:  # 仅当 background 排批首（parts 尚空）才记 source——
+                first_src = src              # 首项为手输的混合批视为用户轮（通知文本带前缀自识别），
+                                              # 防止用户的话被折进通知气泡
             print(f"\n⏰ [后台触发·{src}] {msg[:120]}")
             parts.append(f"[后台通知·{src}] {msg}")
             if seed:

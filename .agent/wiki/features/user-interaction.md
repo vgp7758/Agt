@@ -6,7 +6,7 @@
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **后台通知 wake 语义**：后台事件通知**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复，见下节）
+- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒（见下节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
@@ -184,6 +184,36 @@ if item:
 **与上节的区分**：上节（fb115aa）修的是「该触发的没触发」（插话滞留），本节修的是「不该触发的乱触发」（通知套娃）——**唤醒权收敛到自然轮**是两者共同原则。
 
 **生效方式**：引擎层（`src/agent.py`），需 `/restart`。
+
+### 唤醒策略化：on_exit_wake 启动参数 + crash 五分钟退避（2026-08-30，commit eb9a7de）
+
+> src/background_tools.py（工具签名 + docstring 选择指引）+ src/background.py（entry 存储）+ src/agent.py（策略判定 + 退避表）。v0.19.2 一刀切「通知一律不唤醒」根治了套娃，但也把「常驻关键服务崩了没人管」一起埋了——本改动把唤醒权还给**启动时的每服务声明**（用户设计：调用方最清楚这个服务重不重要，比全局按 rc 硬编码精确）。
+
+**三策略**（`start_service(name, command, cwd, on_exit_wake="never")`）：
+
+| on_exit_wake | 语义 | 适用 |
+|---|---|---|
+| `never`（默认） | 任何退出仅登记 `_notices`，并入下次自然轮 | 一次性验证服务——行为与 v0.19.2 完全一致（防套娃基线不动） |
+| `crash` | rc≠0 → `push_message(wake=True)` 唤醒一轮处理；**同名 5 分钟内第二次异常降级为登记**（退避） | 常驻关键服务——既保住「服务死了要人管」，又封死 通知→重启→又崩→又通知 循环 |
+| `always` | 任何退出都唤醒（含 rc=0） | 单次任务型服务跑完即报 |
+
+**退避细节**（`src/agent.py`）：rc≠0 唤醒时记 `self._crash_wake_ts[name]`（`{name: last_wake_ts}` 退避表）；同名 5 分钟内第二次异常 → 降级登记；**rc==0 正常退出清退避状态**——服务活过一次，重新计崩窗（连续崩→修好跑通→再崩，仍会唤醒）。
+
+**数据链**（策略从启动参数来，随 entry 走）：
+
+```
+启动：start_service(..., on_exit_wake="crash")          # background_tools.py：工具参数 +1
+      → svc.start(name, command, cwd, on_exit_wake)     # background.py：start() 签名 +1 参数
+      → entry["on_exit_wake"]                            # 存进 self._services[name]，退出时原样带回
+退出：_on_service_exit(name, entry, rc)                  # agent.py
+      pol = entry.get("on_exit_wake", "never")           # 旧 entry 无字段缺省 never（向后兼容）
+      pol=="always" 或（pol=="crash" 且 rc!=0 且不在退避窗）→ wake=True → inbox → 触发一轮
+      其余 → wake=False 登记（下次自然轮以 stop_service 合成记录并入，v0.19.2 语义）
+```
+
+**验证**：六场景全过——never 崩不唤醒 / crash 首崩唤醒 / 连崩退避 / rc=0 清退避后再崩又唤醒 / always 正常退出也唤醒 / 旧 entry 缺省 never；三文件编译通过。
+
+**生效方式**：引擎层三文件（background.py / background_tools.py / agent.py），需 `/restart`；之后启动 watchdog 型服务自动带 `on_exit_wake="crash"`（docstring 已写选择指引）。
 
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 

@@ -577,8 +577,27 @@ class LLMClient:
                     time.sleep(self._backoff(attempt))
                     continue
                 _toks = usage.get("total_tokens") if usage else None
+                # 成功请求也进日志面板（用户显式要求）：格式对齐 /stats tooltip——端点·场景·轮步·命中率·耗时
+                try:
+                    from llm_call_log import normalize_usage
+                    _nu = normalize_usage(usage) if usage else None
+                    _ptd = (_nu or {}).get("prompt_tokens_details") or {}
+                    _cached = _ptd.get("cached_tokens") or 0
+                    _pt = (_nu or {}).get("prompt_tokens") or 0
+                    _scene = (getattr(self, "_scene_ctx", None) or getattr(self, "_scene_override", None)
+                              or "llm.chat")
+                    _ts = getattr(self, "_turnstep_ctx", None)
+                    _name = getattr(resp, "model", None) or self.model_name
+                    _fk = lambda n: f"{n/1e6:.1f}M" if n >= 1e6 else f"{n/1e3:.1f}K"
+                    _LOG.info("✅ %s · %s%s · 命中 %.0f%% (%s/%s) · %.1fs",
+                              _name, _scene,
+                              f" · t{_ts[0]}·s{_ts[1]}" if _ts else "",
+                              100 * _cached / _pt if _pt else 0.0,
+                              _fk(_cached), _fk(_pt), _elapsed)
+                except Exception:
+                    pass
                 _LOG.debug("成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
-                           _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")   # debug：高频成功日志不进面板（sink INFO+；llm_calls.jsonl 有更全记录）
+                           _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")
                 msg = choices[0].message.model_dump()
                 self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
                                   finish_reason=fr, usage=usage, elapsed=_elapsed, outcome="success",

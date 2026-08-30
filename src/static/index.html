@@ -241,6 +241,17 @@
     background:#fff; cursor:pointer; color:#5b6470; user-select:none; }
   .ans-tab:hover { background:#f3f4f6; }
   .ans-tab.active { background:var(--me); color:#fff; border-color:var(--me); }
+   /* 抽屉 push 布局（用户提案 2026-08-30）：抽屉打开时主区右移让位（聊天区往左挤），
+      不再覆盖聊天区。竖屏（抽屉全屏覆盖模式）不挤。 */
+   body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
+   body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
+   body.drawer-push #toolForm, body.drawer-push #inputBar {
+     margin-right: 40%; transition: margin-right .25s ease; }
+   @media (orientation: portrait) {
+     body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
+     body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
+     body.drawer-push #toolForm, body.drawer-push #inputBar { margin-right: 0; }
+   }
 </style>
 </head>
 <body>
@@ -1475,8 +1486,10 @@ function toggleSpecPanel(open){
   const panel = document.getElementById('specPanel');
   const fab = document.getElementById('specFab');
   if(!panel || !fab) return;
+  if(open) toggleLogPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';   // 展开时藏图标（面板自身有 ✕），收起时恢复
+  document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）
 }
 document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 
@@ -1488,8 +1501,10 @@ function toggleLogPanel(open){
   const panel = document.getElementById('logPanel');
   const fab = document.getElementById('logFab');
   if(!panel || !fab) return;
+  if(open) toggleSpecPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';
+  document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）
   if(open){   // 打开即已读：清 badge；滚到底（最新在下）
     _logUnreadErr = 0;
     const bd = document.getElementById('logFabBadge');
@@ -1513,7 +1528,9 @@ function pushLogEntry(level, text, scene){
   if(list){   // 面板开着就实时追加（关着只累计）
     const row = document.createElement('div');
     row.style.cssText = 'padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11.5px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all'
-      + (level === 'error' ? ';color:#b91c1c;background:#fef2f2' : ';color:#92400e;background:#fffbeb');
+      + (level === 'error' ? ';color:#b91c1c;background:#fef2f2'
+         : level === 'info' ? ';color:#3730a3;background:#eef2ff'   // 消息级（info）：蓝灰底——毕业/折叠等上下文工程事件
+         : ';color:#92400e;background:#fffbeb');
     // 行尾小括号附场景（哪个 agent/工作流发起的这次调用——限流/回退时一眼定位来源）
     row.textContent = `[${_logEntries[_logEntries.length-1].ts.toLocaleTimeString('sv-SE')}] ${text}`
       + (scene ? ` (${scene})` : '');
@@ -1667,6 +1684,7 @@ function renderSpec(spec, specId, reviewState, specTitle, specDesign){
     panel.style.display = 'none';
     const fab = document.getElementById('specFab');
     if (fab) fab.style.display = 'none';
+    document.body.classList.remove('drawer-push');   // spec 清空时若抽屉开着，解除主区挤压
     if (sum) sum.textContent = '📐 施工方案';
     return;
   }

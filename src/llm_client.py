@@ -35,14 +35,17 @@ _LOG_SINK_HANDLER = None
 
 
 class _SinkHandler(logging.Handler):
-    """捕获 WARNING+ 记录转发给 UI sink（文件日志照常由 root handler 写，二者并存）。
-    尾部附 scene（ContextVar 线程隔离读取）——日志面板显示这条限流/回退是哪个 agent/工作流发起的。"""
+    """捕获 INFO+ 记录转发给 UI sink（文件日志照常由 root handler 写，二者并存）。
+    尾部附 scene（ContextVar 线程隔离读取）——日志面板显示这条限流/回退是哪个 agent/工作流发起的。
+    INFO 放行是为 agt.session 的毕业/折叠事件（"轮边界计划：升档 X 档 + 折叠 N 轮"等）进面板
+    ——上下文工程事件对用户可观测（用户提案 2026-08-30：日志分消息/警告/错误三级）。"""
 
     def emit(self, record):
-        if record.levelno < logging.WARNING:
+        if record.levelno < logging.INFO:
             return
         msg = record.getMessage()
-        lvl = "error" if record.levelno >= logging.ERROR else "warn"
+        lvl = ("error" if record.levelno >= logging.ERROR
+               else "warn" if record.levelno >= logging.WARNING else "info")
         try:
             scene = _SCENE_CTX.get("")
         except Exception:
@@ -55,11 +58,14 @@ class _SinkHandler(logging.Handler):
 
 
 def set_log_sink(fn) -> None:
-    """注册一个日志转发回调（level ∈ {warn,error}）。惰性安装 handler；幂等（不重复注册）。"""
+    """注册一个日志转发回调（level ∈ {info,warn,error}）。惰性安装 handler；幂等（不重复注册）。
+    handler 同时挂 agt.llm（回退/限流/截断）与 agt.session（毕业/折叠等上下文工程事件）——
+    "轮边界计划：升档 X 档 + 折叠 N 轮"这类事件进面板（用户提案 2026-08-30：三级日志）。"""
     global _LOG_SINK_HANDLER
     if _LOG_SINK_HANDLER is None:
         _LOG_SINK_HANDLER = _SinkHandler()
         _LOG.addHandler(_LOG_SINK_HANDLER)
+        logging.getLogger("agt.session").addHandler(_LOG_SINK_HANDLER)
     if fn not in _LOG_SINKS:
         _LOG_SINKS.append(fn)
 
@@ -552,8 +558,8 @@ class LLMClient:
                     time.sleep(self._backoff(attempt))
                     continue
                 _toks = usage.get("total_tokens") if usage else None
-                _LOG.info("成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
-                          _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")
+                _LOG.debug("成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
+                           _toks, _elapsed, f" (重试{attempt}次)" if attempt else "")   # debug：高频成功日志不进面板（sink INFO+；llm_calls.jsonl 有更全记录）
                 msg = choices[0].message.model_dump()
                 self._record_call(messages=messages, attempt=attempt + 1, max_tokens=cur_max_tokens,
                                   finish_reason=fr, usage=usage, elapsed=_elapsed, outcome="success",
@@ -656,8 +662,8 @@ class LLMClient:
                         args = {"_raw_arguments": f["arguments"]}
                     tool_calls.append({"id": f["id"], "name": f["name"], "arguments": args})
                 _toks = usage.get("total_tokens") if usage else None
-                _LOG.info("流式成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
-                          _toks, time.time() - _t0, f" (重试{attempt}次)" if attempt else "")
+                _LOG.debug("流式成功 model=%s tokens=%s 耗时%.1fs%s", self.model_name,
+                           _toks, time.time() - _t0, f" (重试{attempt}次)" if attempt else "")   # debug：高频成功日志不进面板（llm_calls.jsonl 有更全记录）
                 if finish_reason == "length":
                     _LOG.warning("⚠️ 流式响应被 max_tokens 截断(finish_reason=length) model=%s —— 输出可能不完整", self.model_name)
                 return _postprocess_response(LLMResponse(

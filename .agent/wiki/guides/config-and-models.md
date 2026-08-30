@@ -12,8 +12,8 @@
     "model": "glm-5.3",                  // 必须与 /v1/models 返回的 id 完全一致（含大小写/后缀！）
     "thinking": false,                   // 思考模型 true；utility 短调用建议 false
     "vision": false,                     // 多模态能力（投影时 <img> 转 image_url）
-    "max_effective_context_window": 60000, // 配了才启用分档投影
-    "fold_target_ratio": 0.75,           // 折叠目标线占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——DeepSeek（miss≈hit 60x）配低如 0.5：更早用小步升档（断尾部小）消化压力、少大折叠（断头部大）
+    "max_effective_context_window": 60000, // 配了才启用分档投影；触发线=本值（顶窗才毕业折叠，commit 304bc16）
+    "fold_target_ratio": 0.75,           // 保留水位占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——只决定触发后压到多低，不是触发阈值；DeepSeek（miss≈hit 60x）配低如 0.5：触发后压得狠、下次顶窗间隔长，小步升档（断尾部小）即可消化、少大折叠（断头部大）
     "detail_step": 0,                    // 组间步距衰减字数（clamp 0~200；缺省=全局 settings 15）——0=不衰减：渲染字节永不回缩、前缀缓存打满
     "requires_reasoning_in_history": false, // DeepSeek 思考模型=true：自动补历史 reasoning_content 占位防 400
     "token_rotate": true                 // 多token成功后预旋转；GLM等cache按token隔离的直连条目配false
@@ -23,7 +23,7 @@
 
 优先级：models.json > 项目根 models.py（gitignored，向后兼容）。
 
-> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=更早升档消化压力、少触发大折叠——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
+> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56；触发语义修正 commit 304bc16）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=触发后压得狠、涨回窗口需 (1−ratio)×win、顶窗间隔长→折叠事件少——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线/保留线区分见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16)。
 
 ## settings.json（运行时）
 
@@ -44,7 +44,7 @@
 | 长会话上下文压缩 | `max_effective_context_window`（不配=全量投影，长会话必爆） |
 | DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
-| DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——更早用小步升档消化压力、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案) |
+| DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——触发后压得狠、顶窗间隔长，升档即可消化、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线语义见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16) |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 
@@ -60,4 +60,5 @@
 4. **500/502/503**：InternalServerError 已纳入回退捕获（旧版漏掉会直接崩）——确认 agt ≥ 0.16.2
 5. **改窗口配置后 live 进程不生效（0.22.2 修复，commit f57de5d）**：`max_effective_context_window` 是 llm 创建时固化进 session 的**副本**——`/reload models` 此前只刷 profile 不同步副本，毕业/折叠仍按旧窗口算（实测：改 700K 仍按 256K 档的 192K 目标线每轮毕业）。现四入口全同步（`/model` 切换 / `/reload models` / WebUI 保存模型配置 / `/config`），reload 输出 `· session 窗口已同步：…（折叠目标线 … tok）` 即生效；**直接改 models.json 文件后跑一次 `/reload models`（0.22.2+）或 `/restart`**。详见 [context-engine · 窗口值生命周期](../architecture/context-engine.md#窗口值生命周期llm-固化副本--改窗口四入口同步2026-08-29commit-f57de5d)
 6. **工作流 LLM 节点的 model 是独立 `<model>` 标签，不是 `<param name="model">`（2026-08-30 误诊教训）**：type3 节点序列化形态见 workflow_xml.py 写侧——grep param 形态搜不到 ≠ model 未设置（曾据此错判 recap_gen「未设置→utility 兜底」，真实是 `<model>proxy</model>` → glm 429）。另编辑器改模型**不点保存不落盘**，「日志还是旧模型」先读磁盘 XML 再怀疑刷新。详见 [workflow-hooks · 双格式与热加载](../architecture/workflow-hooks.md#双格式与热加载)
+7. **轮边界「每轮毕业」第二例：触发判据错用保留线（commit 304bc16 修复，用户诊断）**：`_plan_fold` 入口判据曾是 `est > win×fold_ratio`（把保留水位当触发线）——投影在 target~win 健康区间（如 400K 窗口下 280K~400K）**每轮升档毕业**。v0.22.3 语义定稿「ratio=保留水位非触发阈值」时文档写对了、代码未对齐，错位一个版本周期。修复后触发线=win 本身、触发后压到 win×ratio；未触发区间零动作纯追加（前缀缓存最优）。**排障口诀**：先看旁车 `proj_stats.json` 的 `win`/`fold_target`——窗口值错=踩坑 5（配置同步问题）；窗口值对还每轮毕业=本条（判据问题，升级 ≥ 修复版本）。详见 [context-engine · 触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16)
 

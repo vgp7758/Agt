@@ -466,9 +466,15 @@ async def api_wf_delete(name: str):
 # ===================== 模型配置 API =====================
 
 @app.get("/api/models")
-async def api_models():
-    """返回模型列表+默认模型名。"""
-    return {"models": config.MODELS, "default": config.DEFAULT_MODEL}
+async def api_models(scope: str = "auto"):
+    """返回模型列表+默认模型名。scope=local/global 显式读某一份（UI 全局/本地切换，用户裁定 2026-08-31）。"""
+    if scope in ("local", "global"):
+        d = config.read_models_scoped(scope)
+        return {"models": d["models"], "default": d["default"], "exists": d["exists"],
+                "path": d["path"], "scope": scope,
+                "active": config.active_scope("models.json")}
+    return {"models": config.MODELS, "default": config.DEFAULT_MODEL,
+            "active": config.active_scope("models.json")}
 
 
 @app.get("/api/model-list")
@@ -480,13 +486,20 @@ async def api_model_list():
 
 @app.put("/api/models")
 async def api_models_save(request: Request):
-    """保存模型配置到 ~/.agt/models.json。"""
+    """保存模型配置。body.scope=local/global 写指定份；写非生效份只落盘不热应用（存档备用），
+    写生效份（或未指定 scope）走现状通道（save_user_models + reload + 实例层热应用）。"""
     try:
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
     models = body.get("models") or {}
     default = body.get("default") or ""
+    _scope = (body.get("scope") or "auto").strip()
+    if _scope in ("local", "global") and _scope != config.active_scope("models.json"):
+        # 非生效份：scoped 落盘（不 reload、不热应用——当前进程仍跑生效份）
+        r = config.save_models_scoped(models, default, _scope)
+        return {"ok": True, "path": r["path"], "scope": _scope, "reloaded": False,
+                "note": f"已写非生效份（当前生效：{config.active_scope('models.json')}）——存档备用，不热应用"}
     config.save_user_models(models, default)
     # 实例层热应用：主 llm 同名 profile 重应用（token/model id 刷新）+ utility 通道重建
     # （save_user_models 已自动 reload_models 刷新 config.MODELS；LLMClient 实例 profile 是
@@ -1314,10 +1327,41 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         await _send(ws, {"type": "system", "text": "⏮ 回溯中…"})
         return
     if isinstance(_d, dict) and _d.get("action") == "get_config":
-        await _send(ws, {"type": "config", "values": read_config(agent)})
+        # scope：auto=生效份（现状）| local/global=显式查看某一份（UI 全局/本地切换，用户裁定 2026-08-31）
+        _scope = (_d.get("scope") or "auto").strip()
+        if _scope in ("local", "global"):
+            await _send(ws, {"type": "config_scoped", "scope": _scope,
+                             "models": config.read_models_scoped(_scope),
+                             "settings": config.read_settings_scoped(_scope),
+                             "active": {"models": config.active_scope("models.json"),
+                                        "settings": config.active_scope("settings.json")}})
+        else:
+            # auto：现状（运行时视角）+ 附生效 scope（前端显示"本地覆盖生效中"徽章；旧前端忽略新字段）
+            await _send(ws, {"type": "config", "values": read_config(agent),
+                             "active": {"models": config.active_scope("models.json"),
+                                        "settings": config.active_scope("settings.json")}})
         return
     if isinstance(_d, dict) and _d.get("action") == "set_config":
         values = _d.get("values") or {}
+        _scope = (_d.get("scope") or "auto").strip()
+        if _scope in ("local", "global"):
+            _act = config.active_scope("settings.json")
+            note = ""
+            if _scope == _act:
+                # 写的就是生效份 → 现状通道（save_runtime_settings 写生效份 + apply_config 热应用）
+                config.save_runtime_settings(values)
+                lines = apply_config(agent, values)
+            else:
+                _rs = config.save_settings_scoped(values, _scope)
+                lines = []
+                note = (f"💾 已写 {_rs.get('path')}\n"
+                        f"ℹ️ 非生效份（当前生效：{'📦 本地' if _act == 'local' else '🌐 全局'}）——存档备用，不热应用")
+            if isinstance(_d.get("modelsData"), dict):
+                _rm = config.save_models_scoped(_d["modelsData"], _d.get("modelsDefault") or "", _scope)
+                if _rm.get("reloaded"):
+                    note += "\n🔄 模型配置已重载（生效份）"
+            await _send(ws, {"type": "system", "text": ("\n".join(lines) + "\n" + note).strip()})
+            return
         config.save_runtime_settings(values)
         lines = apply_config(agent, values)
         await _send(ws, {"type": "system", "text": "\n".join(lines) or "（无更改）"})

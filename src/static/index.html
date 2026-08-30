@@ -104,6 +104,10 @@
     color:#8a9099; border-bottom:2px solid transparent; margin-bottom:-1px; }
   .settings-tabs .tab-btn:hover { color:#5b6470; }
   .settings-tabs .tab-btn.active { color:var(--me); border-bottom-color:var(--me); font-weight:600; }
+/* 配置来源切换（repo 级覆盖）：生效份=自动（本地优先）/ 全局 ~/.agt / 本地 .agent */
+.scope-bar { display:flex; gap:5px; align-items:center; padding:8px 0 2px; font-size:11px; color:#8a9099; flex-wrap:wrap; }
+.scope-bar .scope-btn { padding:3px 10px; border:1px solid var(--line); border-radius:10px; background:none; cursor:pointer; font-size:11px; color:#6b7280; }
+.scope-bar .scope-btn.on { background:#eef2ff; border-color:#a5b4fc; color:#4338ca; font-weight:600; }
   .settings-panel { display:none; flex:1; min-height:0; }
   .settings-panel.active { display:flex; flex-direction:column; }
   /* 运行时参数：分组标题 + 行间距，避免拥挤 */
@@ -321,6 +325,13 @@
 <div id="settingsModal" class="modal-overlay">
   <div class="modal" style="width:90vw;height:90vh;max-width:760px">
     <h3>⚙ 设置</h3>
+    <div class="scope-bar">
+      <span>配置来源：</span>
+      <button class="scope-btn on" id="scopeAuto" onclick="setCfgScope('auto')" title="自动读生效的那份（本地 .agent/ 存在则本地优先，否则全局 ~/.agt/）——现状行为">生效份</button>
+      <button class="scope-btn" id="scopeGlobal" onclick="setCfgScope('global')" title="查看/编辑全局 ~/.agt/ 下的 models.json + settings.json（写非生效份时存档备用不热应用）">🌐 全局 ~/.agt</button>
+      <button class="scope-btn" id="scopeLocal" onclick="setCfgScope('local')" title="查看/编辑本 repo 的 .agent/ 覆盖份（多实例组网：角色实例独立配置；不存在时保存将新建）">📦 本地 .agent</button>
+      <span id="scopeBadge" style="display:none;color:#7c3aed">📦 本地覆盖生效中</span>
+    </div>
     <div class="settings-tabs">
       <button class="tab-btn active" onclick="switchSettingsTab('models',this)">模型管理</button>
       <button class="tab-btn" onclick="switchSettingsTab('mcp',this)">MCP</button>
@@ -366,6 +377,7 @@
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
+    <label title="关闭后：LLM 日志（成功/回退/限流/截断/毕业折叠等）只累计进前端内存（_logEntries，上限200条），不真正渲染到 🐞 面板 DOM——面板保持隐藏，省去枯燥调试信息的渲染开销。开启后：实时追加到面板。"><input id="cfg_show_log_panel" type="checkbox"> 显示日志面板（🐞）</label>
     </div>
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
@@ -1184,7 +1196,42 @@ document.getElementById('sessionSel').addEventListener('change',e=>{
     if(opt) setSessionTitle(opt.textContent);
   }
 });
-document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; ws.send(JSON.stringify({action:'get_config'})); loadModelList(); };
+document.getElementById('btnSettings').onclick=()=>{ settingsModal.style.display='flex'; refreshSettings(); };
+// —— 配置来源切换（repo 级覆盖，用户裁定 2026-08-31）：auto=生效份（本地优先）/
+//    global=显式查看/编辑 ~/.agt/ 那份 / local=显式查看/编辑 .agent/ 覆盖份 ——
+let cfgScope='auto';
+function setCfgScope(s){
+  cfgScope=s;
+  document.getElementById('scopeAuto').classList.toggle('on',s==='auto');
+  document.getElementById('scopeGlobal').classList.toggle('on',s==='global');
+  document.getElementById('scopeLocal').classList.toggle('on',s==='local');
+  refreshSettings();
+}
+function refreshSettings(){
+  ws.send(JSON.stringify({action:'get_config', scope:cfgScope}));
+  loadModelList();
+}
+// settings 表单填充（auto 的运行时视图与 scoped 的文件原始视图共用）
+function fillSettingsForm(v){
+  document.getElementById('cfg_max_steps').value = v.max_steps;
+  document.getElementById('cfg_token_budget').value = v.token_budget;
+  document.getElementById('cfg_max_retries').value = v.max_retries;
+  document.getElementById('cfg_temperature').value = v.temperature;
+  document.getElementById('cfg_dump_projections').checked = !!v.dump_projections;
+  document.getElementById('cfg_enable_thinking').checked = !!v.enable_thinking;
+  document.getElementById('cfg_fallback_chain').value = v.fallback_chain || '';
+  document.getElementById('cfg_fallback_policy').value = v.fallback_policy || 'sticky';
+  _cfgWanted.cfg_reasoning_completer=v.reasoning_completer || '';
+  _cfgWanted.cfg_utility_model=v.utility_model || '';
+  fillModelSelect('cfg_reasoning_completer','（关闭）');
+  fillModelSelect('cfg_utility_model','（跟随主模型）');
+  document.getElementById('cfg_tool_timeout').value = v.tool_timeout || '';
+  document.getElementById('cfg_max_level').value = v.max_level || '';
+  document.getElementById('cfg_detail_base').value = v.detail_base_source === '显式' ? (v.detail_base || '') : '';
+  document.getElementById('cfg_detail_step').value = v.detail_step || '';
+  document.getElementById('cfg_panic_window').value = v.panic_context_window ?? 0;
+  document.getElementById('cfg_fold_deep_tools').checked = !!v.fold_deep_tools;
+}
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 // —— 反馈 ——
 const feedbackModal = document.getElementById('feedbackModal');
@@ -1237,7 +1284,7 @@ function fillModelSelect(id, emptyLabel){
 
 async function loadModelList(){
   try{
-    const r=await fetch('/api/models');_modelData=await r.json();renderModelList();
+    const r=await fetch('/api/models'+(cfgScope!=='auto'?('?scope='+cfgScope):''));_modelData=await r.json();renderModelList();
     fillModelSelect('cfg_reasoning_completer','（关闭）');
     fillModelSelect('cfg_utility_model','（跟随主模型）');
   }catch(e){}
@@ -1303,7 +1350,7 @@ function addModel(){
 }
 async function saveModels(){
   try{
-    const r=await fetch('/api/models',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(_modelData)});
+    const r=await fetch('/api/models',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({..._modelData,scope:cfgScope})});
     const d=await r.json();
     if(d.error){alert(d.error);}else{settingsModal.style.display='none';toast('✅ 模型已保存');}
   }catch(e){alert(e);}
@@ -1330,7 +1377,7 @@ function saveRuntime(){
   };
   {const _db = document.getElementById('cfg_detail_base').value.trim();
    if(_db){ values.detail_base = parseInt(_db) || 1500; }}
-  ws.send(JSON.stringify({action:'set_config', values}));
+  ws.send(JSON.stringify({action:'set_config', values, scope:cfgScope}));
   settingsModal.style.display='none';
 }
 // 底部保存按钮：按当前 tab 分流——模型管理→保存模型配置，运行时→保存运行时
@@ -1558,6 +1605,8 @@ function toggleLogPanel(open){
 function pushLogEntry(level, text, scene){
   _logEntries.push({ts: new Date(), level, text, scene: scene||''});
   if(_logEntries.length > 200) _logEntries.shift();   // 上限滚动（内存友好；文件日志仍完整）
+  // 用户可关闭日志面板（设置→运行时→「显示日志面板」）：关闭时只累计进内存，不渲染、不显示入口
+  if(!showLogPanel) return;
   const fab = document.getElementById('logFab');
   if(fab && fab.style.display !== 'flex') fab.style.display = 'flex';   // 有日志 → 显示入口（面板开着时它本来是 none，收起后自然恢复）
   if(level === 'error'){
@@ -1908,27 +1957,18 @@ function onWSMessage(ev){
       addRow('sys', '✅ 已回溯：工作区文件与对话已恢复到该指令之前。');
       break;
     case 'config':
-      if(m.values){
-        document.getElementById('cfg_max_steps').value = m.values.max_steps;
-        document.getElementById('cfg_token_budget').value = m.values.token_budget;
-        document.getElementById('cfg_max_retries').value = m.values.max_retries;
-        document.getElementById('cfg_temperature').value = m.values.temperature;
-        document.getElementById('cfg_dump_projections').checked = !!m.values.dump_projections;
-        document.getElementById('cfg_enable_thinking').checked = !!m.values.enable_thinking;
-        document.getElementById('cfg_fallback_chain').value = m.values.fallback_chain || '';
-        document.getElementById('cfg_fallback_policy').value = m.values.fallback_policy || 'sticky';
-        _cfgWanted.cfg_reasoning_completer=m.values.reasoning_completer || '';
-        _cfgWanted.cfg_utility_model=m.values.utility_model || '';
-        fillModelSelect('cfg_reasoning_completer','（关闭）');
-        fillModelSelect('cfg_utility_model','（跟随主模型）');
-        document.getElementById('cfg_tool_timeout').value = m.values.tool_timeout || '';
-        document.getElementById('cfg_max_level').value = m.values.max_level || '';
-        // 空 = 窗口推导（placeholder 提示），有显式值才回填
-        document.getElementById('cfg_detail_base').value = m.values.detail_base_source === '显式' ? (m.values.detail_base || '') : '';
-        document.getElementById('cfg_detail_step').value = m.values.detail_step || '';
-        document.getElementById('cfg_panic_window').value = m.values.panic_context_window ?? 0;
-        document.getElementById('cfg_fold_deep_tools').checked = !!m.values.fold_deep_tools;
-      }
+      if(m.values){ fillSettingsForm(m.values); }
+      { // 生效 scope 徽章：本地覆盖生效中（auto 视图时提示用户当前生效的是哪份）
+        const _b=document.getElementById('scopeBadge');
+        if(_b){ const act=(m.active&&m.active.settings)||(m.active&&m.active.models);
+                _b.style.display = act==='local' ? 'inline' : 'none'; } }
+      break;
+    case 'config_scoped':
+      // 显式查看某一份（scope 切换）：models 卡片 + settings 表单填该份文件原始内容
+      if(m.models){ _modelData={models:m.models.models||{}, default:m.models.default||''}; renderModelList(); }
+      if(m.settings){ fillSettingsForm(m.settings.values||{}); }
+      toast((m.scope==='local'?'📦 本地':'🌐 全局')
+            + (((m.settings||{}).exists||((m.models||{}).exists)) ? ' 配置已载入' : ' 尚无此份——保存时将新建'));
       break;
     case 'saved':
       ws.send(JSON.stringify({action:'list_sessions'}));

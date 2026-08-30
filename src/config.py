@@ -36,6 +36,76 @@ def config_file(name: str) -> Path:
 _AGT_MODELS = config_file("models.json")    # repo 级覆盖：<cwd>/.agent/models.json 优先
 
 
+def config_file_scoped(name: str, scope: str = "auto") -> Path:
+    """scope 解析（用户裁定 2026-08-31·UI 全局/本地选择）：auto=config_file（本地优先，现状）/
+    local=强制 <cwd>/.agent/ / global=强制 ~/.agt/。UI 显式查看/编辑某一份时用。"""
+    if scope == "local":
+        return Path.cwd() / ".agent" / name
+    if scope == "global":
+        return _AGT_DIR / name
+    return config_file(name)
+
+
+def active_scope(name: str) -> str:
+    """当前读侧生效的 scope：本地文件存在='local'（覆盖生效中），否则 'global'。"""
+    return "local" if (Path.cwd() / ".agent" / name).exists() else "global"
+
+
+def read_models_scoped(scope: str = "auto") -> dict:
+    """读指定 scope 的 models.json 原始内容（UI 编辑视图；不动内存 MODELS）。"""
+    p = config_file_scoped("models.json", scope)
+    out: dict = {"models": {}, "default": "", "exists": False, "path": str(p)}
+    if not p.exists():
+        return out
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        out.update(models=data.get("models", {}) or {}, default=data.get("default", ""), exists=True)
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
+def save_models_scoped(models: dict, default: str = "", scope: str = "auto") -> dict:
+    """写指定 scope 的 models.json。写生效份（scope==active 或 auto）时 reload_models()
+    当前进程立即生效；写非生效份只落盘（如编辑全局但本地覆盖生效中——存档备用）。"""
+    p = config_file_scoped("models.json", scope)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = {"models": models, "default": default or (list(models.keys())[0] if models else "")}
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    hit = (scope == "auto") or (scope == active_scope("models.json"))
+    if hit:
+        reload_models()
+    return {"ok": True, "path": str(p), "reloaded": hit}
+
+
+def read_settings_scoped(scope: str = "auto") -> dict:
+    """读指定 scope 的 settings.json 原始值（UI 编辑视图；运行时值走 commands.read_config）。"""
+    p = config_file_scoped("settings.json", scope)
+    out: dict = {"values": {}, "exists": False, "path": str(p)}
+    if not p.exists():
+        return out
+    try:
+        out.update(values=json.loads(p.read_text(encoding="utf-8")) or {}, exists=True)
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
+def save_settings_scoped(values: dict, scope: str = "auto") -> dict:
+    """写指定 scope 的 settings.json（合并该份已有值后覆盖 values 非空键——表单部分保存语义）。"""
+    p = config_file_scoped("settings.json", scope)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    base: dict = {}
+    if p.exists():
+        try:
+            base = json.loads(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            base = {}
+    base.update({k: v for k, v in values.items() if v is not None})
+    p.write_text(json.dumps(base, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "path": str(p)}
+
+
 def _load_models() -> tuple[dict, str]:
     """加载模型字典：优先 ~/.agt/models.json，其次 models.py。返回 (MODELS, DEFAULT_MODEL)。"""
     # 1) ~/.agt/models.json

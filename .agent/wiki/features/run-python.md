@@ -76,6 +76,13 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 - `cwd` 固定 WORKSPACE
 - Windows 加 CREATE_NO_WINDOW：detached（/restart 看门狗拉起）进程无控制台时，子进程默认各弹一个终端窗，闪退即此（见 [ops 常见错误对照](../guides/ops.md#常见错误对照)）
 
+## 超时转后台与完成自动通知（2026-08-30，commit 6460ad1）
+
+- 工具同步等待超时后，run_python / run_shell **转后台继续跑**：`_bg_tasks` 登记 + `_bg_reader` daemon 读线程继续收输出，返回 bg_id 供 `check_bg_task` 手动查询
+- **完成自动通知**（本 commit 接通）：`_bg_reader` 检测到进程退出 → `_bg_notify_cb(bg_id, name, rc)`（模块级钩子，`set_bg_notify` 注册；chat.py build_agent 装配时注入 `agent._on_bg_task_done`）→ 包成 **check_bg_task 合成工具记录**（带尾部输出 40 行）→ `push_message(wake=True)` 唤醒——Agent 闲时立即开轮、忙时 inbox 排队步边界注入
+- 转后台返回文案同步更新：「完成时会自动推送通知唤醒你（无需轮询）」；check_bg_task docstring 同步（手动查询仍可用）
+- 唤醒理由（与 service_exit 策略化对照）：转后台任务本来是**同步等待**（超时被迫转），结果通常是决策链一环；一次性任务跑完即报、无套娃循环——恒唤醒天然安全，不需要策略参数。三族通知语义全景见 [用户交互 · 后台任务完成自动通知](user-interaction.md#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1)
+
 ## 与其他模块的关系
 
 - 工具箱真实工具（LLM 可直接调用），也可在工作流 plugin 节点（type 4）中使用

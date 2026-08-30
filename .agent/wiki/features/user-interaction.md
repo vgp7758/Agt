@@ -6,7 +6,7 @@
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒（见下节）
+- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒；同日另一族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
@@ -214,6 +214,41 @@ if item:
 **验证**：六场景全过——never 崩不唤醒 / crash 首崩唤醒 / 连崩退避 / rc=0 清退避后再崩又唤醒 / always 正常退出也唤醒 / 旧 entry 缺省 never；三文件编译通过。
 
 **生效方式**：引擎层三文件（background.py / background_tools.py / agent.py），需 `/restart`；之后启动 watchdog 型服务自动带 `on_exit_wake="crash"`（docstring 已写选择指引）。
+
+### 后台任务完成自动通知：bg_task 恒唤醒（2026-08-30，commit 6460ad1）
+
+> 用户直觉触发：「同步自动异步转后台的任务一般都需要收到通知」。run_python / run_shell 超时转后台此前完成后**无人通知**——Agent 只能记着 check_bg_task 轮询或干脆忘了。本改动补上完成回调链：跑完那一刻一条 📨 通知推 inbox 唤醒，决策链不中断。commit 6460ad1。
+
+**链路**（real_tools.py / agent.py / chat.py 三文件）：
+
+```
+run_python / run_shell 同步等待超时 → 转后台（_bg_tasks 登记 + _bg_reader daemon 读线程继续跑）
+  ↓ 返回文案：「完成时会自动推送通知唤醒你（无需轮询）」
+_bg_reader：进程退出 → returncode/finished 落表 → _bg_notify_cb(bg_id, name, rc)
+  ↓ 模块级钩子（chat.py build_agent 在 _reg(make_background_tools(...)) 后注入）
+real_tools.set_bg_notify(agent._on_bg_task_done)
+  ↓ agent.py（仿 _on_service_exit 的 seed 模式）
+_on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 40 行）
+  → push_message(wake=True) → 闲时立即唤醒一轮 / 忙时 inbox 排队步边界注入
+```
+
+**设计要点**：
+
+- **wake=True 恒唤醒、不需策略参数**（与上节 service_exit 对照）：转后台任务本来是**同步等待**（超时被迫转后台），结果通常是决策链一环；且一次性任务跑完即报、**无套娃循环**——service_exit 那边崩溃场景要 5 分钟退避，这边天然安全
+- **回调隔离**：cb 抛异常仅记日志，不影响 `_bg_reader` 读线程；未注册（`_bg_notify_cb=None`）静默跳过
+- **check_bg_task 不变**：手动查询仍可用（docstring 同步更新）——自动通知即其合成记录（msg 形如「📨〔后台任务完成〕run_python（⚠️ 异常结束 rc=3）」，含尾部输出）
+
+**后台事件通知语义全景（至此三族齐）**：
+
+| 事件族 | 唤醒语义 | 依据 |
+|---|---|---|
+| service_exit（start_service） | 策略化：never（默认）/ crash（rc≠0 唤醒 + 5min 退避）/ always | 服务重要性由启动方声明；崩溃循环要退避 |
+| **bg_task（run_python/run_shell 超时转后台）** | **恒唤醒**（wake=True） | 原同步等待被迫转后台，结果是决策链一环；一次性跑完即报无循环 |
+| 定时任务（schedule 原有） | 按 schedule 自身语义 | 既有机制 |
+
+共同原则：每种按「结果是否决策链一环 + 有无循环风险」定唤醒，而非一刀切。
+
+**验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。
 
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 

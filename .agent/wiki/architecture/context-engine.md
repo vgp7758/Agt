@@ -166,6 +166,33 @@ win 为 None（未配窗口、分档禁用）时 fold_target/panic 不写。
 
 **诊断口径**：旁车 est 长期贴线（`est ≈ fold_target`）→ 先看 `win` 是否等于当前配置预期值；不等 → `/reload models`（0.22.2+ 会同步 session 副本并打印目标线）或 `/restart`。
 
+### /context 展示侧两修复：scene 精确匹配失配 + markdown 段落表（2026-08-31，commit 3ae7a76）
+
+**① 「最近 react 调用 41.3 小时前」——scene 精确匹配失配**：用户报告 /context 顶部时间戳停在 41.3h 前。根因（src/commands.py 取最近 react 记录处）：
+
+```python
+if r.get("scene") == "react" and r.get("outcome") == "success":   # 旧：精确匹配
+```
+
+scene 增强后（2026-08-29 起，格式见 [ops · scene 取值](../guides/ops.md#llm_callsjsonl-每条记录)）react 主循环记录的 scene 是 `react·_main_`（带 agent 后缀）——精确匹配 `== "react"` **一条都命中不了**，reversed 扫描一路落到增强部署前最后一条纯 `"react"` 记录（41.3 小时前）。修复：
+
+```python
+if str(r.get("scene") or "").startswith("react") and not (r.get("error") or ""):   # 新：前缀匹配
+```
+
+实测命中 0 分钟前（glm-official）✓。**教训（又一例「功能增强打破下游假设」）**：scene 加 agent 后缀时，[ops.md](../guides/ops.md#llm_callsjsonl-每条记录) 早已写明新格式，但 /context 这个消费端仍用旧精确匹配——**改字段语义必须全局搜消费点**（与 [事件流 agent_id 打标](multi-agent.md#事件流-agent_id-打标与-webui-串台修复2026-08-21commit-ba0940b) 时的「收口一处全覆盖」同属一条纪律的两面）。
+
+**② 段落表 markdown 表格化（用户「能不能用 div 约束一下让几列对齐」）**：段落构成此前用 `{name:<28}` 空格填充对齐——**中文段名 CJK 显示宽度 2、格式化按字符数 1 计**，列永远参差。改 markdown 表格：
+
+```
+| 段落 | 估算 tok | 占比 | 图表 |
+|---|---:|---:|---|
+| 折叠摘要(227轮) | 25,164 | 7.7% | ███████████████ |
+| **合计** | **435,409** | **100%** | 756,568 字符 / 527 条消息 |
+```
+
+WebUI 的 markdown 渲染自动变对齐表格（表格单元格即天然 div 约束）；CLI 裸文本 `|` 分隔仍可读。段名 meta（「工具结果上限 xxx 字/步」等说明）并入图表列尾部。/restart 生效。
+
 ## 分档投影（轮间）
 
 - 每档字数上限：1500 → 750 → 375 → 187（`_tier_limit`，detail_base 减半递进）

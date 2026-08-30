@@ -289,7 +289,9 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **遗留**：utility 的 glm（bigmodel，glm-5.3-flash）余额不足未修——意图分类 / 精排等 utility 场景仍会撞 429（充值或 `/config utility_model` 换通道）。
 
-**后续（同日 commit 0d852a0，三轮排障收官）**：「当轮即走 local-lfm 免重启」有一层前提——**进程得认识该 provider 键**。`config.MODELS` 是启动时快照，长寿进程启动于 local-lfm 条目加入 models.json 之前 → 运行时 `get_profile('local-lfm')` KeyError → `_get_llm` **静默回退 ctx.llm（utility）**——用户再报「还是 utility 走回退链」（param 反序列化假设五层验证排除后锁定此层）。修复：回退处加 `_LOG.warning`（下次一眼定位）；处置 `/reload models` 后才真正走 8081（llm_calls 会出现 model=local-lfm 的记录）。详见 [workflow-hooks · `_get_llm` 静默 fallback 加日志](workflow-hooks.md#_get_llm-静默-fallback-加日志2026-08-30commit-0d852a0)。
+**后续一（同日 commit 0d852a0）**：「当轮即走 local-lfm 免重启」有一层前提——**进程得认识该 provider 键**。`config.MODELS` 是启动时快照，长寿进程启动于 local-lfm 条目加入 models.json 之前 → 运行时 `get_profile('local-lfm')` KeyError → `_get_llm` **静默回退 ctx.llm（utility）**——用户再报「还是 utility 走回退链」（param 反序列化假设五层验证排除后锁定此层）。修复：回退处加 `_LOG.warning`（下次一眼定位）；当时处置 `/reload models` 后才真正走 8081（llm_calls 出现 model=local-lfm 的记录）。
+
+**后续二（次日 commit 85a41fd，用户裁定「只加一行错误日志不算修复」——根因闭环）**：`get_profile` 入口惰性 mtime 重载（`_maybe_reload_models` + `_MODELS_RELOADING` 重入保护）——models.json 磁盘变化自动重读，条目缺失类故障整类消除，**无需人工 /reload models**。至此 recap_gen 模型路由三层全修：XML 声明（e8ef64a）→ fallback warning（0d852a0，诊断层）→ 惰性重载（85a41fd，根因层）。详见 [workflow-hooks · `_get_llm` 静默 fallback 与 MODELS 惰性重载](workflow-hooks.md#_get_llm-静默-fallback-加日志与-models-惰性重载根因修复2026-08)。
 
 ## assembly DSL（上下文装配配方）
 

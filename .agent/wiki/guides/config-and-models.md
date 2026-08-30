@@ -13,7 +13,7 @@
     "thinking": false,                   // 思考模型 true；utility 短调用建议 false
     "vision": false,                     // 多模态能力（投影时 <img> 转 image_url）
     "max_effective_context_window": 60000, // 配了才启用分档投影
-    "fold_target_ratio": 0.95,           // 折叠目标线占窗口比例（clamp 0.5~0.99；缺省 0.75）——per-provider 缓存经济学（2026-08-30）：价差悬殊（DeepSeek miss≈hit 60x）配高=晚折叠保前缀
+    "fold_target_ratio": 0.75,           // 折叠目标线占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——DeepSeek（miss≈hit 60x）配低如 0.5：更早用小步升档（断尾部小）消化压力、少大折叠（断头部大）
     "detail_step": 0,                    // 组间步距衰减字数（clamp 0~200；缺省=全局 settings 15）——0=不衰减：渲染字节永不回缩、前缀缓存打满
     "requires_reasoning_in_history": false, // DeepSeek 思考模型=true：自动补历史 reasoning_content 占位防 400
     "token_rotate": true                 // 多token成功后预旋转；GLM等cache按token隔离的直连条目配false
@@ -23,7 +23,7 @@
 
 优先级：models.json > 项目根 models.py（gitignored，向后兼容）。
 
-> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56）：GLM miss≈hit 4x 用默认即可，DeepSeek ~60x 推荐三件套 `0.95 + 0 + token_rotate:false`。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
+> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=更早升档消化压力、少触发大折叠——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
 
 ## settings.json（运行时）
 
@@ -44,7 +44,7 @@
 | 长会话上下文压缩 | `max_effective_context_window`（不配=全量投影，长会话必爆） |
 | DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
-| DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.95`（晚折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案) |
+| DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——更早用小步升档消化压力、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案) |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 

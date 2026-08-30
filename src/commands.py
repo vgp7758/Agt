@@ -1483,10 +1483,13 @@ def _cmd_context(ctx: CommandContext, args):
         pass
 
     # ① 最近一次 react 调用（实际 token，来自 llm_calls）
+    # scene 用 startswith——scene 增强后 react 的 scene 是 "react·_main_"（带 agent 后缀），
+    # 精确匹配会漏掉新记录、回退到旧记录（41.3小时前 bug 的根因）
     last_react = None
     try:
         for r in reversed(s.llm_calls.all_records()):
-            if r.get("scene") == "react" and r.get("outcome") == "success":
+            # scene startswith：scene 增强后是 "react·_main_"（带 agent 后缀）；error 空=成功
+            if str(r.get("scene") or "").startswith("react") and not (r.get("error") or ""):
                 last_react = r
                 break
     except Exception:
@@ -1542,15 +1545,18 @@ def _cmd_context(ctx: CommandContext, args):
         if s.global_summary:
             print(f"global_summary: {len(s.global_summary)} 字（窗口外轮次摘要）")
 
-    # 段落表
-    print("\n段落构成（估算 tok / 占比）：")
+    # 段落表（markdown 表格——WebUI 自动渲染成对齐表格；CLI 裸文本也可读。
+    # 之前用 {name:<28} 空格对齐——中文段名宽度不稳定导致列参差不齐）
+    print("\n段落构成（估算 tok / 占比）：\n")
+    print("| 段落 | 估算 tok | 占比 | 图表 |")
+    print("|---|---:|---:|---|")
     for sec in bd["sections"]:
         p = sec["tokens"] * 100 / total
         bar = "█" * min(int(p * 2), 40)
-        meta = f"   ← {sec['meta']}" if sec["meta"] else ""
-        print(f"  {sec['name']:<28} {sec['tokens']:>9,}  {p:5.1f}% {bar}{meta}")
-    print(f"  {'合计':<28} {bd['total_tokens']:>9,}  100.0%  ({bd['total_chars']:,} 字符 / "
-          f"{sum(x['msgs'] for x in bd['sections']):,} 条消息)")
+        meta = f"　·　{sec['meta']}" if sec["meta"] else ""
+        print(f"| {sec['name']} | {sec['tokens']:,} | {p:.1f}% | {bar}{meta} |")
+    print(f"| **合计** | **{bd['total_tokens']:,}** | **100%** | "
+          f"{bd['total_chars']:,} 字符 / {sum(x['msgs'] for x in bd['sections']):,} 条消息 |")
     # 标定系数：估算(chars/4)对中文偏低；有实际 react 值时给出换算比，各段占比不受影响
     if last_react:
         pt = (last_react.get("usage") or {}).get("prompt_tokens") or 0

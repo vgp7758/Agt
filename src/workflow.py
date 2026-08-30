@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -24,6 +25,8 @@ import config as _config
 from llm_client import LLMClient
 from real_tools import WORKSPACE
 from tools import Tool, Toolbox
+
+_LOG = logging.getLogger("agt.workflow")   # 0d852a0 引入 _LOG.warning 时漏了定义——NameError 让钩子链静默
 
 # Coze 固定节点 ID
 ENTRY_ID = "100001"   # type "1" 开始

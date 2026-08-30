@@ -1349,9 +1349,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         if rt and rt != "_main_" and client is not None:
             reg0 = getattr(agent, "registry", None)
             e0 = reg0.lookup(rt) if reg0 else None
-            if e0 is not None and e0.status != "running":
-                client["target"] = rt
-                agent._active_target = rt
+            if e0 is not None:   # running 也允许——busy 实例页面正是观测价值最大的时刻
+                client["target"] = rt      # （历史正常浏览；事件流按 agent_id 分发实时可见；
+                agent._active_target = rt  #   向它发消息走插话队列。旧"防卡忙实例"防御已撤）
             else:
                 rt = ""
         cur = (client or {}).get("target", "_main_")
@@ -1514,9 +1514,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             if entry is None:
                 await _send(ws, {"type": "system", "text": f"❌ agent_id='{target_id}' 不在注册表中"})
                 return
-            if entry.status == "running":
-                await _send(ws, {"type": "system", "text": f"⏳ '{target_id}' 正在执行任务，完成后才能切换直接交互"})
-                return
+            _busy = entry.status == "running"   # 允许切换 busy 实例——观测正在跑的过程正是价值所在；
+            #   向它发文本走插话队列（_handle_user_input 已有路径），不会并发 run
         # —— 客户端级切换：只改本客户端的 target（多页签各与不同 Agent 交互互不干扰）——
         # agent._active_target 保留为"最后被切换的目标"（CLI 输入路由 / /api/status 全局视角用）
         if client is not None:
@@ -1525,7 +1524,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         # —— 响应只发给切换的这个客户端；session_history 单发（其它页签视图不动）——
         await _send(ws, {"type": "system",
                          "text": "✅ 已切回主 Agent" if target_id == "_main_"
-                                 else f"✅ 已切换到与 '{target_id}' 直接交互"})
+                                 else f"✅ 已切换到与 '{target_id}' 直接交互"
+                                      + ("（正在执行任务：消息将排队注入其当前轮）" if _busy else "")})
         if target_id == "_main_":
             await _send(ws, _history_event(agent))
         else:

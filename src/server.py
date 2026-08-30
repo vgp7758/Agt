@@ -496,6 +496,14 @@ async def api_models_save(request: Request):
             cur = _agent.llm.model_name
             if cur in config.MODELS:
                 _agent.llm._apply_profile(config.get_profile(cur))
+                # session 窗口副本同步（switch_model/_cmd_reload 同款）：窗口随新 profile 生效，
+                # 折叠计划/detail_base 不再按旧窗口算
+                try:
+                    _agent.session.max_effective_context_window = getattr(
+                        _agent.llm, "max_effective_context_window", None)
+                    _agent.session.invalidate_detail_base()
+                except Exception:
+                    pass
             _agent._utility_llm = None
             _agent.retrieval_llm = _agent.utility_client()
         except Exception:

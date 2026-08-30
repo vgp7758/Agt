@@ -1243,6 +1243,17 @@ def _cmd_reload(ctx: CommandContext, args):
         if cur in config.MODELS:
             agent.llm._apply_profile(config.get_profile(cur))
             print(f"  · 主模型 '{cur}' profile 已刷新（model={agent.llm.model}，tokens={len(agent.llm.api_tokens)} 个）")
+            # session 窗口副本同步（switch_model 同款）：窗口是 llm 创建时固化的——reload 换 profile
+            # 后若不同步，折叠计划/detail_base 仍按旧窗口算（comfy session "改 700K 仍每轮毕业"的根因）。
+            try:
+                agent.session.max_effective_context_window = getattr(
+                    agent.llm, "max_effective_context_window", None)
+                agent.session.invalidate_detail_base()
+                w = agent.session.max_effective_context_window
+                print(f"  · session 窗口已同步：{w or '未配置（分档禁用）'}"
+                      + (f"（折叠目标线 {int(w * 0.75):,} tok）" if w else ""))
+            except Exception as _e:
+                print(f"  ⚠️ session 窗口同步失败：{_e}")
         else:
             print(f"  ⚠️ 当前模型 '{cur}' 不在新配置中——保持旧 profile，可用 /model 切换")
     except Exception as e:

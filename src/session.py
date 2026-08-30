@@ -618,6 +618,17 @@ class Session:
             data["fold_count"] = self._last_fold_count
             data["max_level"] = self.max_level
             data["chars_per_token"] = self._chars_per_token
+            # 窗口快照（诊断盲点补齐）：触发毕业/折叠时的 win 与目标线直接可查——
+            # "投影 200K 为何每轮毕业"这类问题不再需要从行为反推 live 窗口值
+            # （profile 改配置后 reload/restart 前的旧值正是元凶，旁车留证据）。
+            data["win"] = self.max_effective_context_window
+            if self.max_effective_context_window:
+                data["fold_target"] = int(self.max_effective_context_window * FOLD_TARGET_RATIO)
+                try:
+                    import config as _cfg
+                    data["panic"] = _cfg.load_panic_window()
+                except Exception:
+                    pass
             p = Path(sdir) / "proj_stats.json"
             tmp = p.with_suffix(p.suffix + ".tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")

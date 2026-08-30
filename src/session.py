@@ -1489,7 +1489,10 @@ class Session:
         # —— 触发判定（修复：曾以 target 为触发线——投影在 target~win 健康区间也每轮升档毕业）——
         # 触发线 = 窗口本身：未顶窗零动作；顶窗后升档/折叠压到 target（保留水位）。
         if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= self.max_effective_context_window:
-            self._planned_fold = 0
+            # 未顶窗：保留现有折叠计划（含 load 恢复值）——"折叠粘性"（缓存稳定优先，用户裁定 2026-08-31）。
+            # 曾在此清零（自适应退折：窗口宽绰时放弃折叠）——但 fc 变化会重写历史段头部（fc 摘要边界），
+            # restart 后前缀全断（t506·s0 实测 12.7% 命中 / 300K tok 全价）。退折场景罕见（窗口调大），
+            # 且加刀路径仍在（真超窗继续折叠）；强制退折可手动清 meta.json 的 fold_count。
             self._planned_graduates = 0
             return
         g = 0
@@ -2318,6 +2321,7 @@ class Session:
                 "max_steps_per_turn": self.max_steps_per_turn,
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
                 "tier_boundaries": self._tier_boundaries,  # 分档毕业边界（持久化；_frozen_renders 内存重算）
+                "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
                 "saved_at": int(time.time()),
             }
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件
@@ -2377,6 +2381,11 @@ class Session:
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
         s._tier_boundaries = data.get("tier_boundaries", []) or []
+        # 折叠计划恢复（缓存稳定，用户裁定 2026-08-31）：重启后沿用旧折叠形态——历史段头部
+        # （fc 摘要）与重启前逐字节一致，前缀缓存不断。曾因 fc 不持久化 + _plan_fold 未顶窗清零，
+        # restart 后投影重算归零 → 历史段头部重排 → t506·s0 实测 12.7% 命中（300K tok 全价）。
+        s._planned_fold = int(data.get("fold_count") or 0)
+        s._last_fold_count = s._planned_fold
         # 判断是新文件夹结构还是旧扁平结构
         is_new_structure = path.name == "meta.json"
         if is_new_structure:

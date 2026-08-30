@@ -1490,7 +1490,11 @@ class Session:
         cur_est = self._rf_stripped(self._seg_msgs_user_message() + self._seg_msgs_steps())   # 当前轮（tail 量小不计）
         # —— 触发判定（修复：曾以 target 为触发线——投影在 target~win 健康区间也每轮升档毕业）——
         # 触发线 = 窗口本身：未顶窗零动作；顶窗后升档/折叠压到 target（保留水位）。
-        if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= self.max_effective_context_window:
+        # 口径修复（2026-08-31·用户报告"实测 381K<win 仍每轮毕业"）：以【实际生效口径】
+        # （当前折叠计划 _planned_fold 渲染）估算——曾硬编码 fc=0 假想（假装零折叠渲染全部
+        # 历史），对已折叠 session 该假想恒超线（实测 856K vs 实际投影 320K），导致每轮
+        # 进压力路径→升档刀每轮顺移（"每轮毕业"）。fc=0 时两口径等价（首次判定语义不变）。
+        if self._estimate_tokens(prefix + self._render_tiered_history(self._planned_fold) + cur_est) <= self.max_effective_context_window:
             # 未顶窗：保留现有折叠计划（含 load 恢复值）——"折叠粘性"（缓存稳定优先，用户裁定 2026-08-31）。
             # 曾在此清零（自适应退折：窗口宽绰时放弃折叠）——但 fc 变化会重写历史段头部（fc 摘要边界），
             # restart 后前缀全断（t506·s0 实测 12.7% 命中 / 300K tok 全价）。退折场景罕见（窗口调大），

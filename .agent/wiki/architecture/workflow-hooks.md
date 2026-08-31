@@ -150,6 +150,47 @@ if _mv and getattr(llm, "model_name", "") != _mv:
 
 需 `/restart` 生效（当前进程启动于 19:16 前，8bc4838 现场条 + fbb6d0b llm_models 两个决定性观测均不在运行代码中）。叙事侧见 [multi-agent · 四验](multi-agent.md#四验6d754e26-复现与-llm_models-三方对照布网2026-08-31commit-fbb6d0b)；观测页消费见 [wf-monitor · llm_models](../features/wf-monitor.md#llm_models-溯源run-注册时提取-llm-节点-model2026-08-31commit-fbb6d0b)。
 
+#### 五验：scene 张冠李戴与 local-qwen 配置残留——悬案终审（2026-08-31 晚，未提交）
+
+**终审判定（run=e9a1f65e，llm_models=['local-lfm'] 首验回本）**：`/restart` 后首个真实 turn_end recap_gen——llm_calls 里 21:54:55 有 `hook:turn_end·recap_gen | utility` 表面像回退，但**两条配对 warning（空值/KeyError/现场条）全静默**、llm_models=`['local-lfm']` 实锤入口对。真相不在执行链，在**观测层**：那条 utility 是**并发启动的 wiki_auto_maintenance（async, before_answer）**的回退调用（其 LLM 节点配 local-qwen → KeyError → utility），`_scene_override` 被两个 hook 线程竞写后**戴着 recap_gen 的 scene 面具落账**。recap_gen 真正的调用是 21:57:41 `llm.chat | local-lfm | success`（171 秒本地推理，run 同秒 finished）——**模型配置自始生效**。四验判决表的 A（无效值）/B（空值）两模式都不适用，因为「handler 读到 local-qwen」根本不是 recap_gen 读的。
+
+**根因一：`_scene_override` 实例属性竞写（观测 bug）**。sync/async 两个 hook 分支都拿 `self.utility_client()`（同一实例），scene 标注挂实例属性：
+
+```python
+# 旧（agent.py，竞写源）
+hook_llm = self.utility_client()
+_ov = getattr(hook_llm, "_scene_override", None)
+hook_llm._scene_override = f"hook:{hook}·{hw['name']}·{self.agent_id}"   # 两个线程并发写同一实例
+```
+
+修复——scene 链路 ContextVar 化（`src/llm_client.py` + `src/agent.py`）：
+
+```python
+# llm_client.py：hook 线程环境 scene（线程隔离）；独立 client 无参 chat() 也继承
+_HOOK_SCENE = contextvars.ContextVar("agt_hook_scene", default="")
+_TURNSTEP_CTX = contextvars.ContextVar("agt_llm_turnstep", default=None)
+
+# chat() 里（原 self._scene_ctx / getattr(self,"_scene_override") 全删）：
+_sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")
+_ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
+try: return self._chat_with_fallback(messages, **overrides)
+finally:
+    _SCENE_CTX.reset(_sv_tok)
+    if _ts_tok is not None: _TURNSTEP_CTX.reset(_ts_tok)
+
+# agent.py 两个分支（async/sync 同款）：
+from llm_client import _HOOK_SCENE
+_sc_tok = _HOOK_SCENE.set(f"hook:{hook}·{hw['name']}·{self.agent_id}")
+try: inject, result, message = run_hook(...)
+finally: _HOOK_SCENE.reset(_sc_tok)
+```
+
+**三处收益**：①并发钩子不再互相覆盖（每线程独立 ContextVar）；②独立 client（`get_llm` 建的 local-lfm）**顺带继承 scene**——此前记成裸 `llm.chat`（四验「未解线索」18:30:39 那条 local-lfm 成功调用正是它），现在一眼 `hook:turn_end·recap_gen | local-lfm`；③`_turnstep_ctx` 同款竞写一并修复（react 主循环与后台 hook 并发时 turn/step 互置 None）。
+
+**根因二：local-qwen 配置残留**。`intent_route.xml`（4×）与 `wiki_auto_maintenance.xml`（1×）一直写着 `<model>local-qwen</model>`——e8ef64a 清 recap_gen 播种源双声明时漏了这两个；models.json 无此键 → 每次 KeyError 回退 utility。悬案反复「读到 local-qwen」的真源在此，不是 recap_gen 的 canvas 被污染。修正：两文件 `<model>local-qwen</model>` → `<model>local-lfm</model>`，扫描层 warn→ok。
+
+**验证**：并发语义仿真（两线程各 set 不同 scene + 共享 client 并发 chat）PASS；`/restart` 生效后真实验证点：发消息触发 turn_end，llm_calls 应出现 `hook:turn_end·recap_gen | local-lfm`、`hook:before_answer·wiki_auto_maintenance | local-lfm`，`'local-qwen' 未找到` warning 消失。叙事终审见 [multi-agent · 五验](multi-agent.md#五验scene-张冠李戴--local-qwen-配置残留悬案终审2026-08-31)。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。

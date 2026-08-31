@@ -264,6 +264,9 @@ class Agent:
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
         self.session._system_extra_provider = self._runtime_system_extra  # system prompt 实时注入后台服务状态
         self.session._time_provider = self._runtime_time_block  # tail 每步注入实时时间（感知时段）
+        # tail.remote（2026-09-01 从 SYSTEM 头部迁移）：远程实例清单动态注入——连接变化零缓存代价
+        from agent_config import _func_remote_instances as _fri
+        self.session._remote_provider = _fri
         # 长期记忆（per-repo，跨 session）：ensure_ltm 模块级单例（主/子 Agent 共享同一实例——
         # 外置工具 tools/builtin/ltm_tools.py 也走它，内存缓存不分裂）+ 挂两个注入 provider
         self.ltm = ensure_ltm(self.session.workspace)
@@ -1362,6 +1365,16 @@ class Agent:
                                 "text": str(e2)[:200]})
         except Exception as e:
             _LOG.error("钩子机制异常 (%s): %s", hook, e)
+        # 钩子触发落盘（2026-09-01·Step 4）：inject 结果作为 hook_note 事件写入 events.jsonl——
+        # 事后审查（当轮模型看到了什么注入）与读档回放可见；不进投影历史（时效性内容不重复喂——
+        # 之前"只有当轮 react 看得到"的观测缺口补上：注入内容可追溯，行为可复盘）
+        for n in notes:
+            try:
+                self.session._emit_event({"type": "hook_note", "hook": n.get("hook"),
+                                          "name": n.get("name"), "run_id": str(n.get("rid") or ""),
+                                          "result": str(n.get("result", ""))[:2000]})
+            except Exception:
+                pass
         return notes
 
     def _turn_context_str(self) -> str:
@@ -1404,10 +1417,27 @@ class Agent:
             groups = OrderedDict()
             for n in notes:
                 groups.setdefault(n["hook"], []).append(n)
+            # 钩子注入 merge 化（2026-09-01·三区重构）：不再独立成条——按位置分组渲染后
+            # merge 到 msgs[-1]（触发位置的上一条：最后的 tool result / user）content 末尾。
+            # 多个位置组顺序追加到同一条末尾（位置语义由 pos 属性保留）；msgs 空或末条是
+            # assistant（重做草稿场景，不污染草稿语义）→ 回退独立 user 消息（兜底）。
             for hook_pos, items in groups.items():
                 parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</hook>' for n in items]
                 inner = "\n".join(parts)
-                msgs.append({"role": "user", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
+                _blk = f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'
+                if msgs and msgs[-1].get("role") != "assistant":
+                    _last = msgs[-1]
+                    _c = _last.get("content")
+                    _m2 = {**_last}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改
+                    if isinstance(_c, str):
+                        _m2["content"] = _c + "\n" + _blk
+                    elif isinstance(_c, list):
+                        _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + _blk}]
+                    else:
+                        _m2["content"] = _blk
+                    msgs[-1] = _m2
+                else:
+                    msgs.append({"role": "user", "content": _blk})
         # 投影转储（调试用）：把完整 messages 以纯文本写到 projections/ 目录
         if getattr(self, "dump_projections", False):
             self._dump_projection(msgs)

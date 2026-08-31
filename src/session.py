@@ -926,8 +926,10 @@ class Session:
     # ========== assembly DSL v2：清单驱动投影 ==========
     # 默认装配清单（无声明 = 主 Agent / 未写 assembly 的路径）——与历史版硬编码投影顺序一致：
     # system(人设) → rules(AGENTS/规则/技能，每轮重读) → history(滑动窗口+摘要 或 分档毕业)
-    # → ltm(长期记忆静态层) → user_message(当前轮) → steps(当前轮步骤) → tail(易变环境块)。
+    # → ltm(长期记忆静态层) → user_message(当前轮) → steps(当前轮步骤) → tail.*(易变环境块拆段)。
     # ltm 统一放在 history 之后：它偶发变化（agent 写记忆），越靠后变化时的缓存爆炸半径越小。
+    # tail 拆平铺段（2026-09-01·用户提案：写死内容组装化）：time/system/plan/spec/episodic/remote
+    # 各自可配顺序/开关/增删；旧 tail 段在 set_assembly_plan 自动展开（yml 兼容）。
     _DEFAULT_ASSEMBLY_PLAN = [
         {"kind": "seg", "name": "system"},
         {"kind": "seg", "name": "rules"},
@@ -935,23 +937,47 @@ class Session:
         {"kind": "seg", "name": "ltm"},
         {"kind": "seg", "name": "user_message"},
         {"kind": "seg", "name": "steps"},
-        {"kind": "seg", "name": "tail"},
+        {"kind": "seg", "name": "tail.time"},
+        {"kind": "seg", "name": "tail.system"},
+        {"kind": "seg", "name": "tail.plan"},
+        {"kind": "seg", "name": "tail.spec"},
+        {"kind": "seg", "name": "tail.episodic"},
+        {"kind": "seg", "name": "tail.remote"},
     ]
 
     def set_assembly_plan(self, plan: Optional[list]):
         """设置 assembly 清单（multiagent 解析 .md frontmatter / agent_prompt 参数覆盖后调用）。
         None = 恢复默认清单。同时派生旧版开关 dict（assembly.get("hooks") 等消费点不变）：
-        可关段在清单中出现 → True，未出现 → False（白名单语义）；hooks 不占投影位置，仅开关。"""
+        可关段在清单中出现 → True，未出现 → False（白名单语义）；hooks 不占投影位置，仅开关。
+        旧 tail 段自动展开成六个 tail.* 子段（2026-09-01·拆段兼容——yml 不改不断）。"""
+        if plan is not None:
+            plan = self._expand_tail(plan)
         self.assembly_plan = plan
         self._assembly_once_cache = {}
         if plan is None:
             self.assembly = {}
             return
         segs = {it.get("name") for it in plan if it.get("kind") == "seg"}
-        self.assembly = {t: (t in segs) for t in ("rules", "history", "ltm", "tail")}
+        # tail 开关：任一 tail.* 子段在清单 → True（拆段后语义：tail 家族有内容才装配）
+        self.assembly = {t: (t in segs) for t in ("rules", "history", "ltm")}
+        self.assembly["tail"] = any(str(s).startswith("tail.") for s in segs)
         hist = next((it for it in plan if it.get("kind") == "seg" and it.get("name") == "history"), None)
         if hist and hist.get("mode"):
             self.assembly["history_mode"] = hist["mode"]
+
+    # tail 拆段默认展开序（旧 tail 段 → 六个子段，与 _DEFAULT_ASSEMBLY_PLAN 的尾部一致）
+    _TAIL_EXPAND = ("tail.time", "tail.system", "tail.plan", "tail.spec", "tail.episodic", "tail.remote")
+
+    @classmethod
+    def _expand_tail(cls, plan: list) -> list:
+        """清单规范化：旧 {"kind":"seg","name":"tail"} → 六个 tail.* 子段（保持原位置）。"""
+        out = []
+        for it in plan:
+            if isinstance(it, dict) and it.get("kind") == "seg" and it.get("name") == "tail":
+                out.extend({"kind": "seg", "name": tn} for tn in cls._TAIL_EXPAND)
+            else:
+                out.append(it)
+        return out
 
     def _seg_msgs_system(self) -> list[dict]:
         """核心 system（人设+今日+用户名）——真正的指令，不包裹。
@@ -1075,16 +1101,22 @@ class Session:
         return []
 
     def _seg_msgs_user_message(self) -> list[dict]:
-        """当前进行中轮的 user 消息 + before_turn 钩子提示（保证工具对话连续）。"""
+        """当前进行中轮的 user 消息（before_turn 钩子提示 merge 到 content 末尾）。"""
         if self._current is None:
             return []
-        out = [{"role": "user", "content": self._user_content(self._current)}]
+        _c = self._user_content(self._current)
         _bt = getattr(self._current, "_before_turn_hint", None)
         if _bt:
-            # user role：同 tail——DeepSeek v4 对变化的 system 消息做规范化会断缓存（R12b）；
-            # before_turn 提示跨轮变化，user+<system-reminder> 语义等价且缓存友好
-            out.append({"role": "user", "content": _bt})
-        return out
+            # 钩子注入 merge 化（2026-09-01·三区重构）：before_turn hint 不再独立成条——
+            # merge 到 user 消息 content 末尾（触发位置的上一条 = 当前轮 user）；跨轮变化
+            # 只影响本条（本来就在未命中区），消息形状由对话本体决定
+            if isinstance(_c, str):
+                _c = _c + "\n" + _bt
+            elif isinstance(_c, list):
+                _c = list(_c) + [{"type": "text", "text": "\n" + _bt}]
+            else:
+                _c = _bt
+        return [{"role": "user", "content": _c}]
 
     def _seg_msgs_steps(self) -> list[dict]:
         """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
@@ -1101,6 +1133,37 @@ class Session:
         if _psh:
             out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
         return out
+
+    def _tail_block_msgs(self, name: str) -> list[dict]:
+        """tail.* 拆段的单段块收集（2026-09-01·用户提案：写死内容组装化）：按子段名取各自
+        provider 的块 → _ambient_group 分组渲染。返回 [] 则该段不出现（零噪声）。
+        子段：time/system/plan/spec/episodic/remote（remote 由 chat.py 挂 _remote_provider）。"""
+        blocks = []
+        sub = str(name).split(".", 1)[1] if "." in str(name) else str(name)
+        if sub == "time":
+            self._collect_ambient(blocks, self._time_provider)
+        elif sub == "system":
+            self._collect_ambient(blocks, self._system_extra_provider)
+        elif sub == "plan":
+            self._collect_ambient(blocks, self._plan_provider)
+        elif sub == "spec":
+            self._collect_ambient(blocks, self._spec_provider)
+        elif sub == "episodic":
+            # 情境层（episodic）按问题召回
+            if self._ltm_episodic_provider and self._current is not None and self._current.user_message:
+                try:
+                    block = self._ltm_episodic_provider(self._current.user_message)
+                    if block and block.strip():
+                        blocks.append(block.strip())
+                except Exception:
+                    pass
+        elif sub == "remote":
+            # 远程实例清单（2026-09-01 从 SYSTEM 头部迁移到 tail——连接变化零缓存代价）
+            self._collect_ambient(blocks, getattr(self, "_remote_provider", None))
+        # 区3 统一包裹（三区重构）：裸块拼接（空行连接）——<system-reminder> 由 _walk_plan
+        # 尾部 merge 段统一包一层（各段不各自包裹，避免多层标签）
+        grouped = "\n\n".join(b for b in blocks if b and b.strip())
+        return [{"role": "user", "content": grouped}] if grouped else []
 
     def _seg_msgs_tail(self) -> list[dict]:
         """tail ambient（易变块合并成一组 <system-reminder>：时间+后台+计划+spec+情境记忆，
@@ -1238,7 +1301,8 @@ class Session:
         self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
         run: list[dict] = []                # 系统信息 run 缓冲（各段 0/1 条消息）
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
-        tail_merge_text: str = ""           # tail merge（用户方案 2026-08-31）：不独立成条，装配后并入末条
+        tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项）：装配后统一包裹并入末条
+        passed_steps = False                # 三区状态（2026-09-01）：steps 段处理过后 → 区3（尾部 merge 语义）
 
         def _sec(name: str, own: list, meta: str = "", msgs_n: int = -1, note: str = "") -> None:
             if not own:
@@ -1278,15 +1342,17 @@ class Session:
                 name = item.get("name")
                 if self.current_turn_only and name in ("history", "ltm"):
                     continue   # reuse 投影隔离：历史系段一律不投影
-                if name in ("system", "rules", "ltm", "tail"):
+                if name in ("system", "rules", "ltm") or str(name).startswith("tail."):
                     own = (self._seg_msgs_system() if name == "system" else
                            self._seg_msgs_rules() if name == "rules" else
-                           self._seg_msgs_ltm() if name == "ltm" else self._seg_msgs_tail())
+                           self._seg_msgs_ltm() if name == "ltm" else self._tail_block_msgs(str(name)))
                     if own:
-                        if name == "tail":
-                            # tail merge（用户方案 2026-08-31）：不进 run/不独立成条——记录文本，
-                            # 装配结束后并入最后一条 message 的 content 末尾（见 _flush_run 后的 merge 段）。
-                            tail_merge_text = "\n".join(str(m.get("content") or "") for m in own)
+                        if str(name).startswith("tail."):
+                            # tail.* 拆段（2026-09-01·用户提案：写死内容组装化）：各子段独立收集，
+                            # 依清单顺序合并进 tail_merge_text（装配后 merge 到末条 content——
+                            # 见 _flush_run 后的 merge 段）；空段自动跳过（零噪声）
+                            _b = "\n".join(str(m.get("content") or "") for m in own)
+                            tail_merge_text = (tail_merge_text + "\n" + _b) if tail_merge_text else _b
                             continue
                         run.extend(own)
                         run_secs.append((
@@ -1320,6 +1386,7 @@ class Session:
                     own = self._seg_msgs_steps()
                     msgs.extend(own)
                     _sec(f"当前轮steps({len(self._current.steps) if self._current else 0}步)", own)
+                    passed_steps = True   # 三区状态翻转：之后的段/动作项进区3（尾部 merge）
                 # 其它段名（hooks 已在 _normalize 移除；未知名静默跳过）
             else:
                 own = self._asm_action_msgs(item)
@@ -1327,30 +1394,40 @@ class Session:
                     nm = f"asm:{item.get('kind')} {item.get('path') or item.get('name') or item.get('cmd') or ''}".strip()
                     meta = ("once" if item.get("timing") == "once" or
                             (item.get("kind") == "workflow" and not item.get("timing")) else "turn")
-                    run.extend(own)
-                    run_secs.append((nm, own, meta))
+                    if passed_steps:
+                        # 区3（2026-09-01·三区重构）：steps 之后的 asm 动作项不进 run 缓冲
+                        # （不独立成条）——并入 tail_merge_text（装配后统一包裹 merge 到末条）
+                        _b = "\n".join(str(m.get("content") or "") for m in own)
+                        tail_merge_text = (tail_merge_text + "\n\n" + _b) if tail_merge_text else _b
+                        _sec(f"{nm}（尾部）", own, meta + "·并入末条", msgs_n=0)
+                    else:
+                        run.extend(own)
+                        run_secs.append((nm, own, meta))
         _flush_run()
-        # —— tail merge（用户方案 2026-08-31）：请求时并入末条 content，不额外创建 message ——
-        # 缓存友好：末条本来就在未命中区（当前步新产生），tail 变化不再扰动任何已缓存前缀；
+        # —— 区3 统一 merge（三区重构 2026-09-01，演进自 2026-08-31 tail merge）——
+        # steps 后的所有段（tail.* 拆段 + asm 动作项）求值合并 → 统一 <system-reminder> 包裹 →
+        # 并入最后一条 message 的 content 末尾（不额外创建 message）。
+        # 缓存友好：末条本来就在未命中区（当前步新产生），动态变化不再扰动任何已缓存前缀；
         # 也避开动态 user/system 消息被端点规范化（R12b 探针的坑）的扰动面。
         # 例外：末条是 assistant（罕见，如恢复场景）或 msgs 空 → 回退独立 user 消息（旧行为）。
         if tail_merge_text:
-            _tail_own = [{"role": "user", "content": tail_merge_text}]
+            _wrapped = "<system-reminder>\n" + tail_merge_text + "\n</system-reminder>"
+            _tail_own = [{"role": "user", "content": _wrapped}]
             if msgs and msgs[-1].get("role") != "assistant":
                 _last = msgs[-1]
                 _c = _last.get("content")
                 _m2 = {**_last}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
                 if isinstance(_c, str):
-                    _m2["content"] = _c + "\n" + tail_merge_text
+                    _m2["content"] = _c + "\n" + _wrapped
                 elif isinstance(_c, list):
-                    _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + tail_merge_text}]
+                    _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + _wrapped}]
                 else:
-                    _m2["content"] = tail_merge_text
+                    _m2["content"] = _wrapped
                 msgs[-1] = _m2
-                _sec("tail(时间/计划/团队/召回)", _tail_own, "并入末条 content 末尾（缓存友好）", msgs_n=0)
+                _sec("tail(易变环境块·拆段)", _tail_own, "统一<system-reminder>包裹·并入末条", msgs_n=0)
             else:
-                msgs.append({"role": "user", "content": tail_merge_text})
-                _sec("tail(时间/计划/团队/召回)", _tail_own, "")
+                msgs.append({"role": "user", "content": _wrapped})
+                _sec("tail(易变环境块·拆段)", _tail_own, "")
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):

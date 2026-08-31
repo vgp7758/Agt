@@ -140,6 +140,8 @@ docstring 注明「溯源闭环 2026-08-31·补遗：首轮注入无 run 即此�
 
 判决：llm_models=local-qwen → canvas 在 `_run_one` 之前已被污染（元凶 `_wf_canvas_index` 缓存层）；llm_models=local-lfm 但 warning 是 local-qwen → handler 层 llmParam 被换。`/restart` 生效。排障叙事见 [multi-agent · 四验](../architecture/multi-agent.md#四验6d754e26-复现与-llm_models-三方对照布网2026-08-31commit-fbb6d0b)、机制见 [workflow-hooks · 四验](../architecture/workflow-hooks.md#四验6d754e26-复现与-llm_models-溯源2026-08-31commit-fbb6d0b)。
 
+**首验回本（2026-08-31 晚，run=e9a1f65e）**：`/restart` 后首个真实 turn_end recap_gen，`llm_models=['local-lfm']` + 两条配对 warning 全静默——**直接证伪判决表的「canvas 被污染」分支**，把排查导向场景层，最终锁定真相是 `_scene_override` 并发竞写（wiki 的回退调用戴着 recap_gen 的 scene 落账）——见 [multi-agent · 五验终审](../architecture/multi-agent.md#五验scene-张冠李戴--local-qwen-配置残留悬案终审2026-08-31)。llm_models 字段的价值兑现：不是等 warning 复现，而是**入口读数直接排除一整类「执行前污染」假设**。
+
 ## API 与前端
 
 ### server.py 路由

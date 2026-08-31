@@ -381,6 +381,32 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 机制实现见 [workflow-hooks · 四验](workflow-hooks.md#四验6d754e26-复现与-llm_models-溯源2026-08-31commit-fbb6d0b)；观测消费侧见 [wf-monitor · llm_models 溯源](../features/wf-monitor.md#llm_models-溯源run-注册时提取-llm-节点-model2026-08-31commit-fbb6d0b)。
 
+#### 五验：scene 张冠李戴 + local-qwen 配置残留——悬案终审（2026-08-31 晚，未提交）
+
+**复现（run=e9a1f65e，`/restart` 后 9000 实例首个真实 turn_end recap_gen，21:54:50→21:57:41）**：llm_calls 里 21:54:55 出现 `hook:turn_end·recap_gen·_main_` model=utility——表面看「四验判决表又命中：recap_gen 走 utility 回退链」，但**四验布的两条配对 warning 一条都没出现**（空值/KeyError/现场观测全静默），llm_models 实锤 `['local-lfm']`——入口 canvas 注册时就是对的。判决表 A/B 两模式**都不适用**，悬案的真相比判决表更靠外。
+
+**真相：不是回退，是观测层张冠李戴 + 配置残留。**
+
+| 证据 | 真实归属 |
+|---|---|
+| 21:54:51 warning `'local-qwen' 未找到` | **wiki_auto_maintenance**（async, before_answer，21:54:50 同秒启动）——它的 LLM 节点一直配 `<model>local-qwen</model>`（models.json 无此键）→ KeyError 回退 utility |
+| 21:54:55 `hook:turn_end·recap_gen \| utility` | **wiki 的那次回退调用**，戴着 recap_gen 的 scene 面具落账 |
+| 21:57:41 `llm.chat \| local-lfm \| success`（run 同秒 finished） | **recap_gen 真正的调用**——171 秒 = 本地 2.6b 小模型推理，模型配置从头到尾生效 |
+
+**scene 为何张冠李戴**：sync（recap_gen）与 async（wiki）两个 hook 分支都拿 `self.utility_client()`——**共享同一实例**，`_scene_override` 挂在这个实例上。两个线程并发 set → 竞写：wiki 线程 set `before_answer·wiki_auto_maintenance` 后，recap 线程 set `turn_end·recap_gen` 覆盖之；wiki 的调用记账时读 `_scene_override` 读到 recap 的值 → 记成 recap_gen。独立 client（get_llm 建的 local-lfm）不继承 scene（scene 只挂 ctx.llm），记成裸 `llm.chat`——**四验的「未解线索」18:30:39 local-lfm 成功、scene=llm.chat、无对应 run 正是这个**：那本就是 recap_gen 的正常调用，只是无法从 scene 关联回工作流。
+
+**local-qwen 从哪来（悬案反复「handler 读到 local-qwen」的真源）**：不是 recap_gen 的 canvas 被污染——是 `intent_route.xml`（4×）与 `wiki_auto_maintenance.xml`（1×）一直写着 `<model>local-qwen</model>`。e8ef64a 清 recap_gen 播种源双声明残留时**没清这两个工作流**；models.json 从来只有 local-lfm/local-lfm-vl。四验里「handler 三次读到 local-qwen」其实是把 wiki 的 KeyError warning（scene 被竞写成 recap_gen）当成了 recap_gen 的——排查方向整个偏到「canvas 污染」去了。
+
+**修复（两处）**：
+- **scene 链路 ContextVar 化**（llm_client.py `_HOOK_SCENE`/`_TURNSTEP_CTX` + agent.py 两个 hook 分支）——线程隔离，并发钩子不再互相覆盖；独立 client 顺带继承 scene（下次一眼看到 `hook:turn_end·recap_gen | local-lfm`）
+- **工作流修正**：intent_route.xml 4× + wiki_auto_maintenance.xml 1× `<model>local-qwen</model>` → `local-lfm`
+
+**验证**：并发语义仿真 PASS（recap 线程独立 client 记 `hook:turn_end·recap_gen`+`local-lfm`；wiki 记自己的；主线程 `llm.chat`）；intent_route / wiki_auto_maintenance 扫描层 warn→ok。
+
+**悬案收官的元教训**：观测层的标识字段（scene）若和被测对象共享可变状态，观测本身会制造假案——「看起来在回退」≠「在回退」。先证伪观测，再深挖执行。
+
+机制见 [workflow-hooks · 五验](workflow-hooks.md#五验scene-张冠李戴与-local-qwen-配置残留悬案终审2026-08-31)。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

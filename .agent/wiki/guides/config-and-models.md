@@ -10,7 +10,7 @@
     "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
     "api_token": "独立key",              // 或数组=["k1","k2"] 多号轮换
     "model": "glm-5.3",                  // 必须与 /v1/models 返回的 id 完全一致（含大小写/后缀！）
-    "thinking": false,                   // 思考模型 true；utility 短调用建议 false
+    "thinking": "low",                   // 三态（2026-08-31）：false=不发参数 / true=开关型思考模型发 enable_thinking（Qwen/ModelScope 类）/ "low"|"medium"|"high"|"max"=GLM 始终思考模型发 thinking={type:档位}——enable_thinking 对它 400 code 1210，详见下方「thinking 三态」节
     "vision": false,                     // 多模态能力（投影时 <img> 转 image_url）
     "max_effective_context_window": 60000, // 配了才启用分档投影；触发线=本值（顶窗才毕业折叠，commit 304bc16）
     "fold_target_ratio": 0.75,           // 保留水位占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——只决定触发后压到多低，不是触发阈值；DeepSeek（miss≈hit 60x）配低如 0.5：触发后压得狠、下次顶窗间隔长，小步升档（断尾部小）即可消化、少大折叠（断头部大）
@@ -94,6 +94,28 @@ repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本�
 
 用途与角色实例组网见 [multi-instance · 配置 repo 级覆盖](../architecture/multi-instance.md)——10d717e（读侧自动优先）+ ad0f385（UI 显式选择）拼成完整闭环：角色实例（游戏组网的导演/编剧/多媒体）可在各自 repo 的 WebUI 里直接管理自己的配置，也能查看/编辑全局兜底份。
 
+## thinking 三态：bool 开关与档位字符串（GLM 始终思考模型，2026-08-31，commit 99f3bca）
+
+**背景（用户提案 2026-08-31，commit 99f3bca）**：GLM 类「始终思考」模型（glm-5.x coding 系）对 `enable_thinking` 参数直接 **400 code 1210**「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」——provider 的 thinking 不该是 true/false 复选框，而是关/开/档位多选。落地为**三态**（models.json 条目 `"thinking"` 键）：
+
+| `"thinking"` 值 | 请求发射（`extra_body`） | 适用 |
+|---|---|---|
+| `false`（缺省） | 不发任何参数 | 能力关（utility 短调用；对 GLM 始终思考模型也安全——不发就不 400，但档位不可控） |
+| `true`（旧语义） | `{"enable_thinking": true/false}`（false 也发——该类模型支持显式关） | Qwen/ModelScope 类开关型思考模型 |
+| `"low"` / `"medium"` / `"high"` / `"max"`（档位字符串） | `{"thinking": {"type": 档位}}`，**enable_thinking 永不发** | GLM 类「始终思考」模型 |
+
+**实现三层**：
+
+| 层 | 内容 |
+|---|---|
+| src/llm_client.py | profile 解析出 `thinking_type`（档位字符串；非四档之一的 str 回退 None 走 bool 语义）。`_build_kwargs` 发射优先级：**per-node 档位（overrides `thinking_tier`）> profile 档位 > enable_thinking**——档位模式下 enable_thinking override（全局 `/config`、per-node bool）全部忽略；非档位模型也可被节点单独指定档位 |
+| src/static/index.html | 模型卡片 thinking 复选框 → **六选下拉**（思考：关 / 开 / low / medium / high / max）+ badge 显示档位名（🧠 low；true 仍显 thinking）；旧数据 bool 完全兼容（true→开 / false→关） |
+| src/assets/nodes_builtin/llm.py | llm(3) 节点 per-node `thinking` 支持档位字符串 → overrides `thinking_tier`（此前统一 bool 转换、档位会被吃掉），见 [workflow-hooks · llm 节点 thinking 档位](../architecture/workflow-hooks.md#llm3-节点-per-node-thinking-档位2026-08-31commit-99f3bca) |
+
+**为什么要档位**：思考模型惯例配 `thinking: true` → 对 GLM 始终思考模型每次调用都发 `enable_thinking` → **必 400**（utility/回退链第一跳总是先炸一次再退避，8 月底 recap_gen 排障里反复出现的「utility 400『始终思考』」即此）。配档位后该条目改发 `thinking={"type":"low"}`——全局 `/config enable_thinking`、工作流 per-node thinking 打到它身上都不再触发 400，第一跳直接成功。
+
+**操作**：`/restart` + Ctrl+F5，设置 → 模型管理把 GLM 条目（utility / glm-official）的 thinking 从「开」改成档位（如 `low`）。400 症状条目见 [ops · 常见错误对照](ops.md#常见错误对照)。
+
 ## 模型能力标志速查
 
 | 场景 | 配置 |
@@ -101,6 +123,7 @@ repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本�
 | 长会话上下文压缩 | `max_effective_context_window`（不配=全量投影，长会话必爆） |
 | DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
+| GLM 始终思考模型（glm-5.x coding，2026-08-31） | `thinking` 配**档位字符串**（如 `"low"`）——发 `thinking={type:档位}`、永不发 enable_thinking（该参数 400 code 1210），见 [thinking 三态](#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca) |
 | DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——触发后压得狠、顶窗间隔长，升档即可消化、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线语义见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16) |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |

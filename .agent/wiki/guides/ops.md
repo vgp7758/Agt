@@ -167,6 +167,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 |------|------------|
 | BadRequestError 400 "has no provider supported" | model id 写错（逐字符与 /v1/models 核对） |
 | 400 "only 1 is allowed...temperature" | kimi 类模型限制 → 换模型或 provider 侧适配 |
+| 400 code 1210「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」 | GLM 类「始终思考」模型收到了 `enable_thinking` 参数（条目 `thinking:true` / 全局或 per-node 思考开关都会发）→ 条目改配**档位字符串** `"thinking": "low"` 等（发 `thinking={type:档位}`、永不发 enable_thinking，2026-08-31 commit 99f3bca；`/restart` + Ctrl+F5 后设置页六选下拉改档位），见 [thinking 三态](config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca) |
 | utility 通道连续 400（钩子/辅助 LLM 报错） | 进程内通道状态异常 → `/restart` 重启即恢复（调试 [wiki_auto_query](../features/wiki-auto-query.md) 时遇到） |
 | 工作流 LLM 节点选了模型 X，llm_calls 里却全是 utility/回退链、**没有一条 X 的记录** | **`_get_llm` 静默 fallback**：MODELS 是**启动时快照**，X 是进程启动后新加进 models.json 的条目 → `get_profile(X)` KeyError → 悄悄回退 ctx.llm（0d852a0 起打 warning）。**85a41fd 根因修复：`get_profile` 入口惰性 mtime 重载**——models.json 磁盘变化自动重读，运行中进程下次取 profile 自动可见新条目，**无需 /reload models**。判别口诀：**llm_calls 无 X 记录 = 请求从未发出 = 换模型发生在请求前**；有 X 记录（400/429）才是 provider 侧问题（recap_gen 三轮排障案例，见 [workflow-hooks · `_get_llm`](../architecture/workflow-hooks.md#_get_llm-静默-fallback-加日志与-models-惰性重载根因修复2026-08)） |
 | 空响应连续 3 次 | 限流/服务波动 → 自动退避重试+回退；ModelScope 空壳 200 是已知病 |

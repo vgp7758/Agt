@@ -284,3 +284,11 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 
 **e2e 验证（复刻 wait_extract 结构）**：count 循环 + selector 分支（未就绪轮 continue(无 result) / 就绪轮 setvar→break(带 result)）→ `all_outputs=[null×4, kw]`、`filtered_outputs=[kw]`、`nth_output=kw`、`keywords 变量=kw`——用户期望三元组精确达成。extract_keywords.xml 配套：`__break__` 连上 `result ← 926184.raw`、`__continue__` 移除坏引用 `926184.raw.list`（引擎无 `.list` 派生属性）。
 
+### llm(3) 节点 per-node thinking 档位（2026-08-31，commit 99f3bca）
+
+llm(3) 节点的 per-node `thinking` 参数从纯 bool 扩为**三态**（用户提案 · GLM 思考档位，commit 99f3bca，配套 models.json profile 侧同款三态）：值 ∈ `low/medium/high/max` 时走 overrides `thinking_tier`（client 侧转 `extra_body={"thinking":{"type":档位}}`，**不发 enable_thinking**——GLM 类「始终思考」模型发该参数 400 code 1210「该模型始终思考，不支持关闭思考」）；其余值仍按 `true/1/yes/on` 布尔转 `enable_thinking`。
+
+发射优先级（src/llm_client.py `_build_kwargs`）：**per-node 档位 > profile 档位（models.json `"thinking": "low"` 等）> enable_thinking**——档位模式下 enable_thinking（实例默认 / 全局 `/config enable_thinking` / per-node bool）全部被忽略；非档位模型（profile 无档位）也可被节点单独指定档位。此前 per-node thinking 统一 bool 转换、档位字符串会被吃掉——本修复补齐。
+
+背景、配置矩阵与操作见 [config-and-models · thinking 三态](../guides/config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca)。
+

@@ -366,7 +366,13 @@ def _get_llm(ctx, model_name: str = ""):
     if model_name not in cache:
         try:
             profile = _config.get_profile(model_name)
-            cache[model_name] = LLMClient(profile=profile, model_name=model_name)
+            _c = LLMClient(profile=profile, model_name=model_name)
+            # 复制主 client 的调用记录器（llm_calls 写入）：_record_call 对 recorder=None
+            # 静默跳过——独立 client 不挂 recorder 则其调用不进 llm_calls（2026-08-31
+            # 17:42 实测：local-lfm 真实执行成功、日志面板有记录，但 llm_calls 零写入
+            # 的根因）。recorder 写主 session 的流水文件——钩子执行本属主 agent 的 session ✓
+            _c.call_recorder = getattr(ctx.llm, "call_recorder", None) if ctx.llm is not None else None
+            cache[model_name] = _c
         except KeyError as e:
             # 静默 fallback 是排障黑洞：LLM 节点选了 X 却悄悄用 ctx.llm 跑——
             # llm_calls 里 model 对不上，得靠这条日志定位（recap_gen 三轮排查的教训）

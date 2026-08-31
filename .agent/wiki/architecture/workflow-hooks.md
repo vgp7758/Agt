@@ -99,6 +99,34 @@ llm = get_llm(ctx, _mv)
 
 关联叙事：[multi-agent · 二验复现](multi-agent.md#二验acf4985e-复现与关键分化是两种失败模式不是一种2026-08-31commit-f0808f1)。
 
+#### 最后一击：llmParam 执行现场观测（2026-08-31，commit 8bc4838）
+
+**动机（local-qwen 悬案收网，用户「加」）**：两种失败模式（A 无效值 / B 空值）各有专属 warning，但都只回答「回退到谁」——还差一层：**回退发生时，执行现场的 llmParam 原文到底是什么**。此前观测点只有 `get_llm` 之前（f0808f1 空值检查）与 `get_llm` 内部（KeyError warning），**执行时的 llmParam 值无人拍照**——「cfg 构造有鬼」还是「canvas 在执行链中被换」无法现场分化。
+
+**实现（src/assets/nodes_builtin/llm.py，commit 8bc4838）**：`get_llm(ctx, _mv)` 之后，若 `_mv` 与 `llm.model_name` 不一致（发生了回退），dump 执行时的 llmParam 原文：
+
+```python
+if _mv and getattr(llm, "model_name", "") != _mv:
+    # fallback 现场观测：请求 X 却拿到 Y——
+    # 原文=X（与 canvas 快照同）但 cfg 出 Y → cfg 构造有鬼（resolve_value 深挖）；
+    # 原文=Y（与快照不同）→ canvas 在执行链中被换（run_hook/execute 深挖）
+    _lp = json.dumps([{"name": p.get("name"),
+                       "v": str((((p.get("input") or {}).get("value") or {}).get("content")) or "")[:40]}
+                      for p in inputs.get("llmParam", ...)])
+    _LOG.warning("LLM 节点 model='%s' 回退到 '%s'——llmParam 执行现场：%s", _mv, llm.model_name, _lp)
+```
+
+**配对 warning 判决表（🐞 面板两条一起看）**：
+
+| 🐞 面板（两条配对） | llmParam 现场的 v 值 | 判决 → 深挖方向 |
+|---|---|---|
+| `[workflow] LLM 节点模型 'local-qwen' 未找到（…）——回退 ctx.llm`（已有，KeyError 路径） | 现场 v = **local-lfm**（与 canvas 快照同） | **cfg 构造有鬼**——同一份 llmParam 读出两个值 → 深挖 resolve_value / xml_to_canvas 构造链 |
+| `[workflow] LLM 节点 model='local-qwen' 回退到 'utility'——llmParam 执行现场：[{"name":"model","v":"____"}…]`（新增，8bc4838） | 现场 v = **local-qwen**（与快照不同） | **canvas 在执行链中被换**——读到的就是旧值 → 深挖 run_hook / execute 的数据流 |
+
+跨了一天的 local-qwen 悬案至此收网：下次 recap_gen 再走 utility 回退链，两条配对 warning 直接给出终审判决方向。`/restart` 生效。
+
+关联叙事：[multi-agent · recap_gen 悬案](multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。
@@ -288,7 +316,11 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 
 llm(3) 节点的 per-node `thinking` 参数从纯 bool 扩为**三态**（用户提案 · GLM 思考档位，commit 99f3bca，配套 models.json profile 侧同款三态）：值 ∈ `low/medium/high/max` 时走 overrides `thinking_tier`（client 侧转 `extra_body={"thinking":{"type":档位}}`，**不发 enable_thinking**——GLM 类「始终思考」模型发该参数 400 code 1210「该模型始终思考，不支持关闭思考」）；其余值仍按 `true/1/yes/on` 布尔转 `enable_thinking`。
 
+**节点 schema enum 已同步扩为 7 值**（`["", "true", "false", "low", "medium", "high", "max"]`，desc 注明「true/false=思考开关；low/medium/high/max=GLM 档位（不发 enable_thinking 改发 thinking:type）；空=跟随默认」）——编辑器 llmParam 的 thinking 下拉直接可选档位，枚举透传见 [editor-ux · enum 渲染下拉](../features/editor-ux-improvements.md#附enum-参数渲染为下拉框通用机制)。
+
 发射优先级（src/llm_client.py `_build_kwargs`）：**per-node 档位 > profile 档位（models.json `"thinking": "low"` 等）> enable_thinking**——档位模式下 enable_thinking（实例默认 / 全局 `/config enable_thinking` / per-node bool）全部被忽略；非档位模型（profile 无档位）也可被节点单独指定档位。此前 per-node thinking 统一 bool 转换、档位字符串会被吃掉——本修复补齐。
 
 背景、配置矩阵与操作见 [config-and-models · thinking 三态](../guides/config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca)。
+
+> **排查关联（同批，local-qwen 悬案）**：thinking 档位落地后，若 LLM 节点选了档位仍见「utility 400 始终思考」第一跳——大概率不是 thinking 配置问题，而是节点 model 被换/取空导致的回退链（观测链见 [最后一击](#最后一击llmparam-执行现场观测2026-08-31commit-8bc4838)）。
 

@@ -342,6 +342,19 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 机制表、节点层实现与分化诊断详见 [workflow-hooks · 二验复现与两种失败模式](workflow-hooks.md#二验复现acf4985e-与两种失败模式分化节点层空值-warning2026-08-31commit-f0808f1)。
 
+#### 三验收网：llmParam 执行现场观测——最后一块拼图（2026-08-31，commit 8bc4838）
+
+**收网（用户「加」）**：A/B 两种模式分化后，悬案仍差一层——**回退发生时执行现场的 llmParam 原文**。f0808f1 的空值检查与 0d852a0 的 KeyError warning 都在 `get_llm` 前后，但「cfg 构造有鬼」还是「canvas 被换」无法现场区分。commit 8bc4838 在节点本体补最后一块：`get_llm` 返回模型与请求不一致时 dump 执行时 llmParam 各参数原文（name + value 前 40 字），与 KeyError warning **配对出现**：
+
+| llmParam 现场 v 值 | 判决 → 深挖方向 |
+|---|---|
+| `'local-lfm'`（与 canvas 快照同） | **cfg 构造有鬼**（同一份 llmParam 读出两个值）→ resolve_value |
+| `'local-qwen'`（异于快照） | **canvas 在执行链中被换** → run_hook/execute 数据流 |
+
+**配置建议（同批，用户操作）**：utility / glm-official 的 thinking 从「开」改成档位（如 `low`）——治掉回退链第一跳的 400（code 1210「始终思考」），下次 recap_gen 异常时回退链自身不再先炸一次。
+
+跨了一天的 local-qwen 悬案至此收网——下次复发两条配对 warning 即终审。机制与代码见 [workflow-hooks · 最后一击](workflow-hooks.md#最后一击llmparam-执行现场观测2026-08-31commit-8bc4838)。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

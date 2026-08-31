@@ -4,14 +4,14 @@
 
 ## 投影总览（messages_for_llm 装配顺序）
 
-**2026-08-29 起系统信息合并形态**（`_walk_plan` 走查，见下方专节）：连续的系统信息段合并成一条 system，动态注入一律 user role：
+**2026-08-29 起系统信息合并形态**（`_walk_plan` 走查，见下方专节）：连续的系统信息段合并成一条 system，动态注入一律 user role；**2026-08-31 起 tail 段不再独立成条——装配后并入最后一条 message 的 content 末尾**（用户方案 bafaf7e，见下方「tail 并入末条 content」节）：
 
 ```
 [1条 system]       system + rules + asm 动作项（text/file/dir/cmd/workflow/tool）裸文本合并
 [tiered history]   分档投影（需 provider 配 max_effective_context_window）；摘要消息仍独立 system（frozen）
 [1条 system]       ltm 静态层（独立成条——默认清单里被 history 隔开）
 [current turn]     user_message + before_turn hint(user role) + steps（工具调用按分组衰减；文件快照以 <recent-file/> 挂在【该文件最新一次改它的 tool result】content 尾部、全轮按文件去重，见「recent-file 跟屁虫快照」节）+ pending hints
-[tail ambient]     一组 <system-reminder>（时间/后台任务/计划/episodic 召回）——**role=user**（DeepSeek v4 对变化的 system 消息做规范化会断全序列缓存，2026-08-29 实证修复，见 provider 侧缓存坑）
+[tail merge]       一组 <system-reminder>（时间/后台任务/计划/episodic 召回）——**并入最后一条 message 的 content 末尾**（2026-08-31 起，用户方案 bafaf7e：不额外创建一条 message——正常情况下末条是 user/tool 非 assistant；末条是 assistant 或空时才回退独立 user 消息）
 ```
 
 assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（commit 1e3b206）起真语义：标记即默认不装配**（`messages_for_llm` 的 seg 分支对 `opt=True` 的项跳过），`agent_prompt assembly="seg=on"` 清标记打开、`=off` 移除；未标记段列出即装，必装 system/user_message/steps 未列出自动补插；`reuse`（current_turn_only）与 opt **正交叠加**（reuse 时 history 强制关）。详见 [multi-agent · assembly DSL](multi-agent.md#assembly-dsl上下文装配配方)。
@@ -30,7 +30,27 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **③ 动态注入 user 化（当天下午的缓存实证催生，见 [provider 侧缓存坑](#provider-侧缓存坑重要教训)）**：tail 合并消息、钩子旁注（`<system-reminder pos=...>`）、before_turn hint 的 role 从 system 改为 **user**（内容层的 `<system-reminder>` 包裹保留）。原因：DeepSeek v4 对 messages 里**变化的 system** 消息做规范化处理，tail 时间块每步变 → 全序列缓存断（实测 6%）——user role 的动态注入不触发（99%）。
 
+> **后续演进（2026-08-31，commit bafaf7e，用户方案）**：`[tail ambient]` 从「独立 user 消息」进一步改为「**并入最后一条 message 的 content 末尾**」——tail 既不独立成 system 也不独立成 user 消息（见下方「tail 并入末条 content」）。动态注入 user 化对钩子旁注 / before_turn hint 仍然适用（它们没有「并入末条」的语义位置）。
+
 验证：verify_assembly 34 项（含合并形态/无前缀无标签/tail user role 断言）、verify_agent_yml 29 项、midturn/recent_file/debug_hook/ltm 全过；端到端真请求三步步进 99% 命中（修复前同形态 6%）。
+
+### tail 并入末条 content（tail merge，2026-08-31，用户方案，commit bafaf7e）
+
+**提案（用户，2026-08-31）**：「以 role:system 和 role:user 注入都不太合适」——**如果发送前最后一条不是 assistant，把 tail 在请求时直接添加到 messages 最后一条 message 的 content 末尾，不额外创建一条 message**（正常情况下最后一条一般是 user，不会是 assistant）。
+
+**实现（src/session.py）**：
+
+- **装配侧**：tail 段不进系统信息 run 缓冲（不独立成条）——只记录 `tail_merge_text`（用户方案落地：`run_secs`/`_flush_run` 对 tail 跳过，装配循环结束后走 merge 段）
+- **请求侧 merge**：msgs 非空且末条 role ≠ assistant → **浅拷贝末条**（`{**last}`——**绝不就地改**：末条可能是当前轮 user/工具结果的共享引用，防污染 session 持久数据）→ content 末尾追加 `"\n" + tail 文本`（str 直接追加 / 多模态 list 追加 text 块）
+- **回退**：末条是 assistant（罕见——如恢复场景）或 msgs 空 → 回退独立 user 消息（旧行为；不把 tail 拼进 assistant 消息污染 answer 语义）
+
+**缓存收益（为什么这样最好）**：末条本来就是**当前步新产生的内容（未命中区）**——tail 的变化只影响它自己，**前面所有已缓存前缀完整保留**（不再像独立 system/user 消息那样，每步重渲染 tail 就从那个位置断前缀）；顺带避开动态 user/system 消息被端点规范化（R12b 探针发现的坑）的扰动面；且序列少一条消息。
+
+**验证两场景全过**：① 末条 user → tail 并入末条 content 末尾、无独立 tail 消息 ✓；② 末条 assistant → 回退独立 user 消息（tail 单独成条）✓。
+
+**段统计口径**：tail 段 msgs_n=0（并入末条），`/context` 段统计里 tail 行显示「并入末条 content 末尾（缓存友好）」——Σ段 msgs == total_msgs 对账不破。
+
+需 `/restart` 生效。
 
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 

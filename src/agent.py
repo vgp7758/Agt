@@ -708,6 +708,16 @@ class Agent:
         的套娃循环。通知暂存 _notices（不持久化，瞬时语义），下次自然轮开始时以 seed 并入该轮
         （run() 顶部 _drain_notices）。适合 service_exit 这类"告知即可、无需立即行动"的系统事件；
         子 Agent 反馈 / schedule 提醒 / 插话等"任务输入"语义的消息必须 wake=True。"""
+        # 源头规范化（修复 2026-08-31·唤醒轮崩溃根因）：seed 契约是 dict——曾有条目传 list
+        # 导致消费侧 _seed_steps 的 sd.get() 抛 AttributeError、唤醒轮秒崩（用户观察到
+        # "turn_start 后卡住不进 repl"）。非 dict 在入口即包装，inbox/_notices 里永远不进
+        # 坏 seed（消费侧防御仍在——双保险，历史持久化的坏条目靠消费侧兜）。
+        if seed is not None and not isinstance(seed, dict):
+            _LOG.warning("push_message 收到非 dict seed（source=%s，类型=%s）——已包装为 notice",
+                         source, type(seed).__name__)
+            seed = {"tool": "notice", "args": {"raw": str(seed)[:500], "source": source},
+                    "result": "（原始 seed 为非 dict 结构，入口已自动包装）",
+                    "reasoning": f"(系统通知（{source}）——seed 结构异常，降级展示)"}
         if not wake:
             with self._inbox_lock:
                 self._notices.append((source, msg, seed))
@@ -743,6 +753,13 @@ class Agent:
             self._notices.clear()
         seeds = []
         for (src, msg, seed) in items:
+            # 类型防御（修复 2026-08-31·bg_task 唤醒轮崩溃）：seed 必须是 dict——曾有条目
+            # 传 list 导致 _seed_steps 的 sd.get() 抛 AttributeError，唤醒轮秒崩（用户观察到
+            # "turn_start 后卡住不进 repl"）。非 dict 一律降级包装成 notice seed，绝不崩轮。
+            if not isinstance(seed, dict):
+                seed = {"tool": "notice", "args": {"source": src, "raw": str(seed)[:500]},
+                        "result": msg or "",
+                        "reasoning": f"(系统通知（{src}）——原始 seed 为非 dict 结构，已降级包装)"}
             if not seed:
                 seed = {"tool": "notice", "args": {"source": src}, "result": msg or "",
                         "reasoning": f"(系统通知（{src}），供你知悉；无需专门处理)"}
@@ -753,8 +770,13 @@ class Agent:
         """把一批合成工具记录预置成本轮 Step：每条 {tool, args, result, reasoning} 落 toollog +
         建一个 Step（单 ToolCall）add_step。使本轮首轮 _chat_msgs 就把它们渲染成
         assistant(tool_use)→tool(结果)——用于后台服务退出等异步事件，让模型在上下文里直接看到
-        事件结果（含启动参数）而非一段纯文本通知。"""
+        事件结果（含启动参数）而非一段纯文本通知。
+        类型防御：非 dict 的 seed 降级包装（_drain_notices 同款——历史坏条目直通到这里也不崩轮）。"""
         for sd in seeds:
+            if not isinstance(sd, dict):
+                sd = {"tool": "notice", "args": {"raw": str(sd)[:500]},
+                      "result": "（原始 seed 为非 dict 结构，已降级包装）",
+                      "reasoning": "(系统通知——seed 结构异常，降级展示)"}
             cid = self.session.toollog.next_id()
             self.session.toollog.record(cid, sd.get("tool", ""), sd.get("args", {}),
                                         sd.get("result", ""))

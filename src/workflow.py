@@ -2065,13 +2065,27 @@ _SUPPORTED_TYPES = set(NODE_HANDLERS.keys()) | {"1", "2", "19", "29", "31", "yie
 
 
 def validate_canvas_detailed(canvas: dict) -> list[str]:
-    """不执行地扫描画布（含复合节点 blocks），报告未支持的节点类型。返回问题字符串列表。"""
+    """不执行地扫描画布（含复合节点 blocks），报告未支持的节点类型。返回问题字符串列表。
+    含 LLM 节点 model 校验（2026-08-31·间歇性 local-qwen 排查）：llmParam 声明的模型名
+    不在 MODELS 时告警——把「执行时才爆」的模型路由问题提前到「每次扫描」可见
+    （workflows_info 的 warn 状态——观测网从执行时扩大到扫描时）。"""
     issues = []
+    try:
+        import config as _cfg
+        _known = set(getattr(_cfg, "MODELS", {}) or {})
+    except Exception:
+        _known = None
     def _walk(nodes):
         for n in nodes or []:
             t = str(n.get("type"))
             if t not in _SUPPORTED_TYPES:
                 issues.append(f"节点 {n.get('id')} 类型 {t} 暂未支持")
+            if t == "3" and _known is not None:
+                for p in (((n.get("data") or {}).get("inputs") or {}).get("llmParam") or []):
+                    if isinstance(p, dict) and p.get("name") == "model":
+                        mv = str((((p.get("input") or {}).get("value") or {}).get("content")) or "")
+                        if mv and mv not in _known:
+                            issues.append(f"LLM 节点 {n.get('id')} 模型 '{mv}' 不在 models.json（执行将回退 ctx.llm）")
             _walk(n.get("blocks"))
     try:
         _walk(canvas.get("nodes", []))

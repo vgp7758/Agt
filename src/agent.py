@@ -845,7 +845,11 @@ class Agent:
         rec = {"name": "check_bg_task", "args": {"task_id": bg_id},
                "result": (f"[后台任务完成·自动通知] {name}（{bg_id}）{ok}。\n尾部输出：\n{out[-4000:]}")}
         header = f"📨〔后台任务完成〕「{name}」{bg_id}（{ok}）"
-        self.push_message(header, source=f"bg_task:{bg_id}", seed=[rec], wake=True)
+        # seed=dict 直传（修复 2026-08-31·终验发现）：曾 seed=[rec]（list 包装）违反 dict 契约——
+        # 消费侧 _seed_steps 的 sd.get() 崩唤醒轮（AttributeError），是 11:23 bg_task 唤醒崩溃的产地。
+        # 三层防御（push 入口/drain/seed_steps）兜住后仍降级显示为 notice——产地修正后恢复标准
+        # check_bg_task 合成记录（通知轮工具名/参数正确，不再依赖降级包装）。
+        self.push_message(header, source=f"bg_task:{bg_id}", seed=rec, wake=True)
 
     @staticmethod
     def _format_service_exit(name: str, startup: dict, rc: int, logs: list) -> str:

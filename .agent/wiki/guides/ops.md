@@ -102,6 +102,23 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 3. `src/chat.py`：`set_log_sink` 回调把 scene 塞进 `llm_log` 事件（主 Agent `_emit` 广播）。
 4. `src/static/index.html`：`pushLogEntry(level, text, scene)` 行尾拼 `(scene)`。
 
+#### 显示开关修复：勾选仍空白（2026-08-31，commit ef19875）
+
+**症状（用户报告）**：设置面板勾「显示日志面板」后日志仍一片空白。
+
+**根因——变量从未声明/初始化（虚报）**：`showLogPanel` 在 t504 加复选框时只"定位"过、从未落地声明——`pushLogEntry` 里 `if(!showLogPanel) return` 读到 **undefined（恒 falsy）** → 日志永远不渲染；复选框勾了也空白，checkbox 与显示逻辑无任何绑定，是纯摆设。
+
+**修复四处（src/static/index.html，纯前端）**：
+
+1. 模块级声明 `let showLogPanel = localStorage.getItem('show_log_panel') !== '0'`（缺省 true=显示）+ `setShowLogPanel(v)` 写 localStorage
+2. **开启时补渲染关闭期间累计的条目**（`_logEntries` 上限 200 条滚动截断，关闭期间只进内存）——勾上后不仅新日志实时追加，关闭期间积压的也一次性补上
+3. input 绑 `onchange="setShowLogPanel(this.checked)"`（原来裸 checkbox 无事件）
+4. 设置表单回填 `cfg_show_log_panel`.checked = showLogPanel（纯前端状态，回填当前开关）
+
+**生效**：Ctrl+F5 刷新即可，无需 /restart。
+
+**教训**：复选框勾了没反应（尤其「勾了仍空白/无效」类）先查**目标变量有没有声明与初始化**——undefined 参与逻辑恒 falsy 是静默假象，比逻辑错误更难定位。
+
 ### 跨进程状态查询（/api/status）
 
 **已实现并验证**（commit a922121，`src/server.py` POST `/api/status`）：返回实例运行时状态快照（18 个顶层字段 + 3 个嵌套数组），用于跨实例诊断。详见 [/api/status 端点](../features/api-status.md)。

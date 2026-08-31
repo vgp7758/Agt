@@ -80,6 +80,7 @@ body/error 端口位置一律用 `_baseH`（**不含**输出框高度）：error
 - 验证：JS 语法检查 + 结构断言全过
 - 白框内容是截断视图，不是全文——排障要全文走观测页全文路由
 - **画布逻辑与编辑页同源**：编辑器已删除 type5 代码节点画布灰字预览摘要（见 [编辑器 UX 改进 §7](editor-ux-improvements.md#7-代码节点两处)），本页 `_baseH` 仍含「type5 代码预览 +40」分支——下次从编辑器同步画布改动时注意一并核对
+- **⚠️ debug 全绿 ≠ 真实执行正常（2026-08-31 排查教训）**：`debug_workflow`（workflow_debug_tools.py）执行时取 `agent.utility_client()` / `agent.llm`（`execute_debug` 的调试执行路径），**不产生 llm_calls 记录**（实证：5 节点全通、llm_calls 无对应记录）——debug 通过只能证明画布/节点逻辑正确，**模型路由、provider 行为等真实链路必须真实触发验证**（如 turn_end 钩子实跑后查 llm_calls 的 `model` 字段）。这是「子进程全通、运行时不通」同款陷阱的又一形态：换了个人「看起来像真跑」的入口，其实绕过了真实 client（关联 [workflow-hooks · `_get_llm` 排查方法论](../architecture/workflow-hooks.md#_get_llm-静默-fallback-加日志与-models-惰性重载根因修复2026-08)）
 
 ## 相关页面
 

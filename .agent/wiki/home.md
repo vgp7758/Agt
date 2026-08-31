@@ -205,3 +205,8 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **seed 产地修正：`_on_bg_task_done` 的 `seed=[rec]` → `rec` dict 直传（2026-08-31，commit 44ae953，终验发现）**：三层防御（0565971，见 ·七）兜住了崩溃，但通知轮仍**降级显示** notice——降级形态本身暴露产地：bg_task 通知构造处包了层 list，**每次通知都在产坏 seed**（11:23 秒崩的产地，非历史残留；凌晨 team_create 是另一条恰好同型的 list）。修正后通知轮恢复标准 check_bg_task 合成记录，三层防御保留兜旁路。终验全链路绿（15s 超时转后台 → agent 忙通知排队 2m14s → turn_end 即触发 → 处理一次通过）——**bg_task 忙时排队路径首次实测**。新口诀：「降级包装出现在上下文 = 仍有产地在产坏 seed」——防御是兜底不是免罪牌——见 [user-interaction · 产地修正](features/user-interaction.md#产地修正_on_bg_task_done-的-seed-list-包装2026-08-31commit-44ae953终验发现)
 
+## 快速事实增补（2026-08-31 · 九）
+
+- **日志面板显示开关修复：勾选仍空白的虚报（2026-08-31，commit ef19875，用户报告「设置里勾上显示日志面板日志还是一篇空白」）**：根因是 `showLogPanel` **从未声明/初始化**——t504 加复选框只"定位"没落地实现，`pushLogEntry` 里 `if(!showLogPanel) return` 读到 undefined（恒 falsy）→ 日志永远不渲染、复选框是纯摆设。修复四处（src/static/index.html，纯前端）：模块级声明 + localStorage 持久化（缺省 true）/ `setShowLogPanel` 开启时**补渲染关闭期间累计条目**（`_logEntries` 上限 200 滚动）/ input onchange 绑定 / 设置表单回填。Ctrl+F5 即生效。**教训：复选框勾了没反应先查目标变量声明与初始化——undefined 参与逻辑恒 falsy 是静默假象**——见 [ops · 🐞 日志面板显示开关](guides/ops.md#显示开关修复勾选仍空白2026-08-31commit-ef19875)
+- **排查教训（同轮，问题未定论）**：工作流 LLM 节点选模型 X 保存后真实执行仍走 utility/回退链——XML→xml_to_canvas→_load_canvas→插件 resolve_value→get_profile→插件版本六环节**代码层全绿**；同时 **debug_workflow 全通不落 llm_calls**（调试执行路径，全绿不代表真实执行正常）——判定需真实触发（turn_end recap_gen 实跑查 llm_calls.model 字段），见 [workflow-debug · 注意事项](features/workflow-debug.md#注意事项)
+

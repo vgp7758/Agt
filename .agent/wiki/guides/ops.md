@@ -67,6 +67,8 @@ scene 取值（2026-08-29 起携带发起者——与 [🐞 日志面板](#日�
 | recap 生成 / wrap_up 收尾总结 | `recap·{agent_id}` / `wrap_up·{agent_id}` |
 | 其余 | debug（/debug prompt）/ completer / llm.chat（默认，如 RAG 检索） |
 
+- **独立构造的 LLMClient 也落流水（2026-08-31，commit 7c38a98）**：工作流 LLM 节点经 `_get_llm` 命中 MODELS 后**独立构造**的 client，此前不进 llm_calls——「真实走了 local-lfm」这类路由无从从流水验证的观测盲区；现补齐。这是 recap_gen 间歇性 local-qwen 排查三层观测网的流水层（另两层：扫描层 `validate_canvas_detailed` model 校验 0dc1dfc / 执行层 KeyError warning 0d852a0），见 [workflow-hooks · 复发与三层观测网](../architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)
+
 ### 其他
 
 - `/debug prompt <提示词>`：按当前投影直调 LLM，**不落盘不执行**，打印完整回包（耗时/finish_reason/usage/含缓存命中/tool_calls）——与投影转储配套（进什么 vs 出什么）

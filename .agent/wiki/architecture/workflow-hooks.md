@@ -41,6 +41,31 @@ except KeyError:
 
 关联坑：[config 踩坑 · MODELS 启动快照](../guides/config-and-models.md#踩坑记录)（与窗口值副本坑同源不同症状）、[ops 常见错误对照](../guides/ops.md#常见错误对照)、续 [双格式与热加载](#双格式与热加载) 的 `<model>` 标签形态误诊。
 
+### 复发与三层观测网：扫描层 model 校验（2026-08-31，commit 0dc1dfc）
+
+**复发（2026-08-31 18:04，recap_gen）**：三层修复收官次日，「先 utility 再走回退链」再现（同进程上一轮 17:42 local-lfm 正常，日志面板证据）——执行层 warning（0d852a0）抓到实锤：`LLM 节点模型 'local-qwen' 未找到（可用：[qwen, glm, ...]）`——**那轮 canvas 读到的 model 是 local-qwen**（该 provider 键 e8ef64a 时已从播种源删除，MODELS 无此键）→ KeyError → fallback utility（400「该模型始终思考，不支持关闭思考」）→ 回退链 glm 429（insufficient balance——glm 条目 ModelScope 余额又见底）→ proxy（deepseek-v4-flash）兜底成功。
+
+**静态排查排除法（全部排除 → 僵局）**：
+- 磁盘 recap_gen.xml mtime 13:04 后未变，内容一直是 `<model>local-lfm</model>`
+- 解析路径统一：scan / get_hook / _load 全走 `xml_to_canvas`（逐一验证，无第二解析入口）
+- 无内存缓存冲突、无全局 canvas 副本
+
+同进程两次触发读出不同 model——local-qwen 的运行时来源**无法从代码层推出**，静态排查到极限，转观测网。
+
+**三层观测网（已布下，下次复现不会溜走）**：
+
+| 层 | 机制 | commit | 捕捉时机 |
+|---|---|---|---|
+| **扫描层** | `validate_canvas_detailed` 新增 LLM 节点 model 校验：llmParam 声明的模型名不在 `config.MODELS` 时告警（MODELS 读取全程 try 保护；复合节点 blocks 递归 `_walk`） | 0dc1dfc | 每次扫描（workflows_info 的 **warn 状态**）——**把「执行时才爆」提前到「每次扫描」可见** |
+| **执行层** | `_get_llm` KeyError warning | 0d852a0（已有） | 执行时命中即打——18:04 实锤即它抓到 |
+| **流水** | 工作流内**独立构造的 LLMClient** 调用记入 llm_calls.jsonl（此前不落流水，观测盲区） | 7c38a98 | /stats 可见每跳 model / 错误 |
+
+**定位策略**：下次 local-qwen 再现，扫描层先告警——对比**扫描时刻 vs 磁盘 mtime**：扫描时已异常 = 读盘/解析瞬间就有；扫描正常、执行时异常 = 运行中被改。
+
+**run_id 注入提案（用户方案，方向未实施）**：工作流结果注入时带上 run registry 的缓存 id + 现场缓存 canvas——间歇性异常发生时观测页可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面），现场即证据、无需从日志反推。与 [运行观测](#运行观测run-registry2026-08-20-新commit-8aeb21a全文查看-commit-bb56a82) 天然衔接。
+
+关联叙事：[multi-agent · recap_gen 间歇性复发](multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。

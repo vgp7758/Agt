@@ -293,6 +293,26 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **后续二（次日 commit 85a41fd，用户裁定「只加一行错误日志不算修复」——根因闭环）**：`get_profile` 入口惰性 mtime 重载（`_maybe_reload_models` + `_MODELS_RELOADING` 重入保护）——models.json 磁盘变化自动重读，条目缺失类故障整类消除，**无需人工 /reload models**。至此 recap_gen 模型路由三层全修：XML 声明（e8ef64a）→ fallback warning（0d852a0，诊断层）→ 惰性重载（85a41fd，根因层）。详见 [workflow-hooks · `_get_llm` 静默 fallback 与 MODELS 惰性重载](workflow-hooks.md#_get_llm-静默-fallback-加日志与-models-惰性重载根因修复2026-08)。
 
+### recap_gen 间歇性 local-qwen 复发与观测网（2026-08-31）
+
+**现象（用户：「/restart 后第二轮 repl 再次出现 recap_gen 先调 utility → 回退链——上一轮看起来正常了这一轮又来了，很玄学」）**：同进程内 17:42 local-lfm 正常（日志面板证据）→ 18:04 异常。
+
+**实锤（0d852a0 的 warning 抓到）**：`LLM 节点模型 'local-qwen' 未找到`——那轮执行读到的 model 确实是 **local-qwen**（非 local-lfm）→ KeyError → fallback utility（400「该模型始终思考，不支持关闭思考」）→ 回退链 glm 429（insufficient balance——glm 条目 ModelScope 余额又见底，充值或调回退链）→ proxy（deepseek-v4-flash）兜底成功。
+
+**玄学的本质**：磁盘 recap_gen.xml mtime 13:04 后未变（一直是 `<model>local-lfm</model>`）、解析路径统一（scan / get_hook / _load 全走 xml_to_canvas，逐一验证）、无缓存冲突/全局副本——**静态排查已到极限，local-qwen 的运行时来源无法从代码层推出**。前次三层修复（e8ef64a / 0d852a0 / 85a41fd）覆盖的是「可静态解释」的成因，间歇性复发属另一层。
+
+**应对：三层观测网（commits 0dc1dfc + 7c38a98，下次复现不会溜走）**：
+
+| 层 | 捕捉 |
+|---|---|
+| 扫描层：`validate_canvas_detailed` LLM 节点 model 校验（0dc1dfc） | 每次钩子触发前的 scan——local-qwen 出现在 canvas 里就告警（workflows_info warn 状态） |
+| 执行层：`_get_llm` KeyError warning（0d852a0 已有） | 18:04 实锤即它抓到 |
+| 流水：独立 client 调用记入 llm_calls（7c38a98） | /stats 可见每跳 model / 错误 |
+
+下次再出现 local-qwen，**扫描层先告警**——对比扫描时刻与文件 mtime 即可锁定是「读到的瞬间就有」还是「运行中变化」。引擎侧详情（排除法 / validate_canvas_detailed 实现 / 定位策略）见 [workflow-hooks · 复发与三层观测网](workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)。
+
+**run_id 注入提案（用户方案，未实施）**：注入工作流调用结果时带上缓存 id + 现场缓存——每次钩子执行的结果注入都带 run_id，观测页可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面）——间歇性异常发生时现场本身就是证据，不用再从日志反推。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

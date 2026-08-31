@@ -314,6 +314,22 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **run_id 注入已落地（用户提案「把缓存 id 带上」→ commit 38afea6）**：每次钩子执行的结果注入带 run id——`/wf/monitor?run=<rid>` 可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面）——间歇性异常发生时现场本身就是证据，不用再从日志反推。实现两处（src/agent.py：notes 补 rid 键 + 注入标签带 run 属性）详见 [wf-monitor · run_id 注入溯源](../features/wf-monitor.md#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)；`/restart` 生效。
 
+#### 观测网首验：recorder 实证生效与 18:22 遗物归因（2026-08-31）
+
+**recorder（7c38a98）生效铁证**：/restart 后 18:26:21 llm_calls 出现 `model=local-lfm-vl  resp=…lfm2.5-vl-3b…gguf` 记录——**独立 client 的调用（wiki_auto_query 的本地 vl）首次进 llm_calls 流水**，此前这类调用全为盲区。
+
+**18:22 的 utility 回退 = 旧进程遗物**：时间线——18:22:41 proxy 兜底成功（旧进程最后一次 recap）→ restart → 18:26 新进程（local-lfm-vl 已正常路由）——该次回退**不构成新进程复发证据**。
+
+**下一个观察点**：新进程首个真实 turn_end recap_gen（三层观测网 + 注入溯源就位）——
+
+| 观测点 | 看什么 |
+|---|---|
+| llm_calls | `model=local-lfm` ✅（玄学或随旧进程消亡——canvas 残留是旧进程内存态，restart 即清）/ `model=utility` 🔴 复发——但这次有现场：注入 `run` 属性直达 `/wf/monitor?run=<rid>` 回溯 canvas |
+| 扫描层校验（0dc1dfc） | recap_gen 状态变 warn（模型不在 models.json）——扫描时刻即抓到 |
+| 🐞 面板 | 成功/回退日志带 scene 标注 |
+
+注：before_turn 位置的 run 属性（38afea6 漏网路径）同轮已补（e8d3792，见 [wf-monitor · before_turn 补遗](../features/wf-monitor.md#before_turn-专用渲染路径补遗2026-08-31commit-e8d3792)），需再 /restart 生效。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

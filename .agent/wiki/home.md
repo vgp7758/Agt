@@ -218,3 +218,8 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **run_id 注入溯源：钩子注入标签带 run 属性（2026-08-31，commit 38afea6，用户提案「把缓存 id 带上」）**：[recap_gen 间歇性 local-qwen 排查](architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)的配套提案落地——钩子结果注入从 `<hook name="...">` 变为 `<hook name="..." run="<rid>">`，run registry id 随结果进上下文（notes 补 rid 键 + 注入标签带 run 属性，src/agent.py 两处；rid 此前在返回值里、append 时丢了）。`/wf/monitor?run=<rid>` 直达该次执行的完整 canvas（llmParam 的 model 原值等现场证据）——间歇性异常复现时现场即证据，是三层观测网（扫描/执行/流水）之外的第四层。容量由已有 50 次 LRU + 20M 全文预算控制；`/restart` 生效——见 [wf-monitor · run_id 注入溯源](features/wf-monitor.md#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)
 
+## 快速事实增补（2026-08-31 · 十二）
+
+- **run 属性 before_turn 补遗：专用渲染路径漏改（2026-08-31，commit e8d3792，restart 后首轮注入实证）**：38afea6 生效后 before_turn 注入仍无 `run=`——before_turn 有**专用渲染路径** `render_before_turn_hint`（run 主循环与 /debug hook 同源渲染），**不经 `_chat_msgs` 的 notes 排空**（38afea6 只覆盖 before_tool/after_tool/before_answer 三位置）；同款补齐 `run="{rid}"`，四个钩子位置的注入标签至此全覆盖，下次 /restart 后生效。**教训：改注入格式先盘点所有渲染产出点——同名 `<hook>` 注入可能经多条路径产出**——见 [wf-monitor · before_turn 补遗](features/wf-monitor.md#before_turn-专用渲染路径补遗2026-08-31commit-e8d3792)
+- **观测网首验（同轮，local-qwen 复发排查）**：recorder 修复（7c38a98）实证生效——restart 后独立 client 调用（wiki_auto_query 的 local-lfm-vl）**首次进 llm_calls**；18:22 的 utility 回退归因为**旧进程遗物**（18:22 旧进程末次 recap → restart → 18:26 新进程正常路由），非新进程复发；新进程首个 turn_end recap_gen 为复发与否判定点（local-lfm = 玄学随旧进程消亡 / utility = 复发但有现场：run 属性 + canvas 快照）——见 [multi-agent · 观测网首验](architecture/multi-agent.md#观测网首验recorder-实证生效与-1822-遗物归因2026-08-31)
+

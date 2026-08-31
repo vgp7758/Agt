@@ -107,6 +107,23 @@ parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</
 
 **容量前提（已有，无需新做）**：注册表 50 次 LRU（≈16 轮钩子观测历史，每轮约 3 次钩子 run）+ `_full_total` 20M 全文预算——比原始提案「超 3 轮清掉」宽裕且内存已控。`/restart` 生效。
 
+### before_turn 专用渲染路径补遗（2026-08-31，commit e8d3792）
+
+**现象（38afea6 生效后当场抓到）**：/restart 后 before_turn 的注入（如 wiki_auto_query 首轮命中）仍是 `<hook name="wiki_auto_query">` **无 `run=`**——before_tool / after_tool / before_answer 三位置的注入正常带。
+
+**根因**：before_turn 有**专用渲染路径**——`render_before_turn_hint`（src/agent.py 静态方法，run 主循环与 /debug hook **同源渲染**）把钩子旁注直接渲染成 `<system-reminder pos="before_turn">` 文本，**不经 `_chat_msgs` 的 notes 排空**；38afea6 的 ② 号改动（注入标签带 run 属性）只改了排空那条路，此路径漏改。
+
+**修复（同款补齐）**：
+
+```python
+parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</hook>' for n in notes]
+return '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>'
+```
+
+docstring 注明「溯源闭环 2026-08-31·补遗：首轮注入无 run 即此路径漏改」。**下次 /restart 后** before_turn 注入也带溯源凭证——四个钩子位置的注入标签至此全覆盖。
+
+**教训**：改注入标签格式需先盘点**所有渲染产出点**——同名 `<hook>` 注入可能经多条路径产出（此处两条：`_chat_msgs` notes 排空 + `render_before_turn_hint` 专用函数）；一条路改了另一条漏，表象即「部分位置带、部分位置不带」。
+
 ## API 与前端
 
 ### server.py 路由

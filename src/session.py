@@ -1238,6 +1238,7 @@ class Session:
         self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
         run: list[dict] = []                # 系统信息 run 缓冲（各段 0/1 条消息）
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
+        tail_merge_text: str = ""           # tail merge（用户方案 2026-08-31）：不独立成条，装配后并入末条
 
         def _sec(name: str, own: list, meta: str = "", msgs_n: int = -1, note: str = "") -> None:
             if not own:
@@ -1282,12 +1283,16 @@ class Session:
                            self._seg_msgs_rules() if name == "rules" else
                            self._seg_msgs_ltm() if name == "ltm" else self._seg_msgs_tail())
                     if own:
+                        if name == "tail":
+                            # tail merge（用户方案 2026-08-31）：不进 run/不独立成条——记录文本，
+                            # 装配结束后并入最后一条 message 的 content 末尾（见 _flush_run 后的 merge 段）。
+                            tail_merge_text = "\n".join(str(m.get("content") or "") for m in own)
+                            continue
                         run.extend(own)
                         run_secs.append((
                             {"system": "system(人设+环境)",
                              "rules": "rules(AGENTS+规则+技能)",
-                             "ltm": "长期记忆·静态",
-                             "tail": "tail(时间/计划/团队/召回)"}[name], own, ""))
+                             "ltm": "长期记忆·静态"}[name], own, ""))
                     continue
                 _flush_run()   # 对话本体段：先把缓冲里的系统信息落成消息
                 if name == "history":
@@ -1325,6 +1330,27 @@ class Session:
                     run.extend(own)
                     run_secs.append((nm, own, meta))
         _flush_run()
+        # —— tail merge（用户方案 2026-08-31）：请求时并入末条 content，不额外创建 message ——
+        # 缓存友好：末条本来就在未命中区（当前步新产生），tail 变化不再扰动任何已缓存前缀；
+        # 也避开动态 user/system 消息被端点规范化（R12b 探针的坑）的扰动面。
+        # 例外：末条是 assistant（罕见，如恢复场景）或 msgs 空 → 回退独立 user 消息（旧行为）。
+        if tail_merge_text:
+            _tail_own = [{"role": "user", "content": tail_merge_text}]
+            if msgs and msgs[-1].get("role") != "assistant":
+                _last = msgs[-1]
+                _c = _last.get("content")
+                _m2 = {**_last}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
+                if isinstance(_c, str):
+                    _m2["content"] = _c + "\n" + tail_merge_text
+                elif isinstance(_c, list):
+                    _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + tail_merge_text}]
+                else:
+                    _m2["content"] = tail_merge_text
+                msgs[-1] = _m2
+                _sec("tail(时间/计划/团队/召回)", _tail_own, "并入末条 content 末尾（缓存友好）", msgs_n=0)
+            else:
+                msgs.append({"role": "user", "content": tail_merge_text})
+                _sec("tail(时间/计划/团队/召回)", _tail_own, "")
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):

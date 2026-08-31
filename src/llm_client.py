@@ -29,6 +29,16 @@ _LOG = logging.getLogger("agt.llm")  # 直接用标准 logging（不 import log.
 # 用 ContextVar 而非 client 实例属性：utility client 被主/子 Agent/工作流线程并发共用，实例属性会互相覆盖。
 _SCENE_CTX: contextvars.ContextVar = contextvars.ContextVar("agt_llm_scene", default="")
 
+# hook 线程环境 scene（线程隔离）：agent._run_hooks 执行钩子工作流前 set——该线程内所有
+# LLM 调用（含 get_llm 建的 per-model 独立 client）无参 chat() 都继承此 scene。
+# 取代旧 _scene_override 实例属性：sync/async 钩子并发共用 utility client，实例属性互相
+# 覆盖 → llm_calls 张冠李戴（2026-08-31·21:54 wiki 的回退调用戴着 recap_gen 的 scene 落账，
+# 误诊为「LLM 节点选型不生效」）。独立 client 不再继承不到 scene（旧法只挂 ctx.llm）。
+_HOOK_SCENE: contextvars.ContextVar = contextvars.ContextVar("agt_hook_scene", default="")
+# react 轮/步标记（线程隔离）：chat(turn=, step=) 进入时 set、finally reset——_record_call
+# 读取。同因弃用实例属性 _turnstep_ctx（并发 chat 互相置 None）。
+_TURNSTEP_CTX: contextvars.ContextVar = contextvars.ContextVar("agt_llm_turnstep", default=None)
+
 # ===== 前端日志面板通道：把 WARNING/ERROR 级日志转发给 UI（回退/限流/截断等此前只进文件）=====
 _LOG_SINKS: list = []          # callable(level_str, msg, scene)——由 build_agent 注册（主 Agent 的 llm_log 事件广播）
 _LOG_SINK_HANDLER = None
@@ -451,19 +461,18 @@ class LLMClient:
     def chat(self, messages, scene: str = None, turn: int = None, step: int = None, **overrides) -> LLMResponse:
         """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。
         scene：调用时机标注（react主循环/hook:before_turn/recap/debug/wrap_up/completer...），
-        记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 _scene_override（钩子上下文）
-        或默认 'llm.chat'。不进 API 请求参数。
+        记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 hook 线程上下文（_HOOK_SCENE，
+        本线程内跑的钩子工作流）或默认 'llm.chat'。不进 API 请求参数。
         turn/step：与投影转储（projections/t{turn}_s{step}_*.txt）同源的轮/步标记，记入
         llm_calls.jsonl——/stats tooltip 可显示 'react · t220 · s0' 直接对上投影文件。"""
-        self._scene_ctx = scene or getattr(self, "_scene_override", None) or "llm.chat"
-        self._turnstep_ctx = (turn, step) if turn is not None else None
-        _sv_tok = _SCENE_CTX.set(self._scene_ctx)   # 线程隔离：sink（日志面板）据此在日志尾部附场景
+        _sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")   # 线程隔离：sink（日志面板）据此在日志尾部附场景
+        _ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
         try:
             return self._chat_with_fallback(messages, **overrides)
         finally:
-            self._scene_ctx = None
-            self._turnstep_ctx = None
             _SCENE_CTX.reset(_sv_tok)
+            if _ts_tok is not None:
+                _TURNSTEP_CTX.reset(_ts_tok)
 
     def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
         """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。"""
@@ -524,19 +533,18 @@ class LLMClient:
         """把一次 LLM 调用记到 llm_calls 流水（供 /stats 聚合）。recorder 未注入则跳过。
         model=provider 名（如 proxy）；resp_model=API 回包里的实际模型字段（如 glm-5.2）。
         scene=调用时机（react/hook:before_turn/recap/debug/completer/llm.chat）；
-        不传时取 chat() 注入的 _scene_ctx。"""
+        不传时取当前线程 scene 上下文（_SCENE_CTX，chat() 进入时注入）。"""
         rec = self.call_recorder
         if rec is None:
             return
         try:
             from llm_call_log import normalize_usage
-            _ts = getattr(self, "_turnstep_ctx", None)   # (turn, step)：react 主循环的轮/步标记（对上 projections 文件名）
+            _ts = _TURNSTEP_CTX.get()   # (turn, step)：react 主循环的轮/步标记（对上 projections 文件名）
             rec({
                 "ts": time.time(),
                 "model": model or self.model_name,
                 "resp_model": resp_model or "",
-                "scene": scene or getattr(self, "_scene_ctx", None)
-                         or getattr(self, "_scene_override", None) or "llm.chat",
+                "scene": scene or _SCENE_CTX.get() or "llm.chat",
                 **({"turn": _ts[0], "step": _ts[1]} if _ts else {}),
                 "attempt": attempt, "max_tokens": max_tokens,
                 "finish_reason": finish_reason, "usage": normalize_usage(usage),
@@ -597,9 +605,8 @@ class LLMClient:
                     _ptd = (_nu or {}).get("prompt_tokens_details") or {}
                     _cached = _ptd.get("cached_tokens") or 0
                     _pt = (_nu or {}).get("prompt_tokens") or 0
-                    _scene = (getattr(self, "_scene_ctx", None) or getattr(self, "_scene_override", None)
-                              or "llm.chat")
-                    _ts = getattr(self, "_turnstep_ctx", None)
+                    _scene = _SCENE_CTX.get() or "llm.chat"
+                    _ts = _TURNSTEP_CTX.get()
                     _name = getattr(resp, "model", None) or self.model_name
                     _fk = lambda n: f"{n/1e6:.1f}M" if n >= 1e6 else f"{n/1e3:.1f}K"
                     _LOG.info("✅ %s · %s%s · 命中 %.0f%% (%s/%s) · %.1fs",

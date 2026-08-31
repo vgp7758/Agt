@@ -4,28 +4,28 @@
   </node>
   <node id="130060" type="intent" title="Intent" x="420" y="80">
     <in name="query" type="string" ref="100001.query"/>
-    <model>local-qwen</model>
+    <model>local-lfm</model>
     <intent name="退款"/>
     <intent name="咨询"/>
   </node>
   <node id="130061" type="llm" title="LLM" x="720" y="80">
     <in name="query" type="string" ref="100001.query"/>
     <param name="prompt" type="string"><![CDATA[用户想退款（原文：{{query}}）。用一句话安抚并简述退款流程。]]></param>
-    <model>local-qwen</model>
+    <model>local-lfm</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
   <node id="130062" type="llm" title="LLM" x="720" y="172">
     <in name="query" type="string" ref="100001.query"/>
     <param name="prompt" type="string"><![CDATA[用户在咨询（原文：{{query}}）。用一句话友善解答。]]></param>
-    <model>local-qwen</model>
+    <model>local-lfm</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
   <node id="130063" type="llm" title="LLM" x="720" y="264">
     <in name="query" type="string" ref="100001.query"/>
     <param name="prompt" type="string"><![CDATA[未明确识别用户意图（原文：{{query}}）。用一句话引导用户说明需求。]]></param>
-    <model>local-qwen</model>
+    <model>local-lfm</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

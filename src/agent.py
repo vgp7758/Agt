@@ -1262,14 +1262,16 @@ class Agent:
                 def _async_hook():
                     try:
                         _llm = _agent_ref.utility_client()
-                        _ov = getattr(_llm, "_scene_override", None)
-                        _llm._scene_override = f"hook:{_hook}·{_hw['name']}·{_agent_ref.agent_id}"
+                        # scene 标注线程隔离（ContextVar）：并发钩子共用 utility client，
+                        # 实例属性会互相覆盖 → llm_calls 张冠李戴（2026-08-31 排障教训）
+                        from llm_client import _HOOK_SCENE
+                        _sc_tok = _HOOK_SCENE.set(f"hook:{_hook}·{_hw['name']}·{_agent_ref.agent_id}")
                         try:
                             inject, result, message = run_hook(_hw["canvas"], _ctx,
                                                       tools=_agent_ref.tools, llm=_llm, workspace=_ws,
                                                       run_id=_rid_c)
                         finally:
-                            _llm._scene_override = _ov
+                            _HOOK_SCENE.reset(_sc_tok)
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
                         # 【recap 回写已移到工作流数据流】：钩子工作流经 hook_ctx 拿 turn_idx，
@@ -1292,15 +1294,17 @@ class Agent:
                     self._emit({"type": "auto_wf_start", "name": hw["name"], "hook": hook,
                                 "run_id": rid, "text": str(context)[:80]})
                     hook_llm = self.utility_client()
-                    _ov = getattr(hook_llm, "_scene_override", None)
-                    hook_llm._scene_override = f"hook:{hook}·{hw['name']}·{self.agent_id}"   # 钩子内 LLM 调用标注 scene（含工作流名+agent，日志面板据此显示发起者）
+                    # scene 标注线程隔离（ContextVar，同 async 分支）：钩子内 LLM 调用（含 get_llm
+                    # 独立 client）统一继承「hook:<位置>·<工作流>·<agent>」，日志面板据此显示发起者
+                    from llm_client import _HOOK_SCENE
+                    _sc_tok = _HOOK_SCENE.set(f"hook:{hook}·{hw['name']}·{self.agent_id}")
                     try:
                         try:
                             inject, result, message = run_hook(hw["canvas"], context,
                                                       tools=self.tools, llm=hook_llm, workspace=_ws,
                                                       run_id=rid)
                         finally:
-                            hook_llm._scene_override = _ov
+                            _HOOK_SCENE.reset(_sc_tok)
                         return hw["name"], inject, result, message, rid
                     except Exception as e2:
                         # 单个钩子失败不拖垮并行组：发错误事件 + 返回空结果（不注入）

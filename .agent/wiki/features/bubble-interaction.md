@@ -36,6 +36,23 @@
 
 **设计意图**：系统消息（py_auto_diag 注入、async 钩子日志、wiki_auto_query inject 等）篇幅长但非当前关注焦点 → 默认折叠降噪；用户气泡是对话主线 → 默认展开。点击切换让用户按需深入，不强制滚动跳过。
 
+## 系统气泡 markdown 渲染（index.html，2026-08-31，commit fdfc28a）
+
+用户报告「/context 紫色系统信息气泡中的表格渲染还是纯文本」——WebUI 聊天面板的系统气泡（`index.html`，与 editor.html 的编辑器面板是两套实现）此前从未接上 markdown 管线。
+
+**根因**：`case 'system'` → `addRow('sys', text)` 用 `textContent` 纯文本渲染；markdown 渲染（`renderAnswer` 的表格 `tryTable` / 代码块 / 段落）只服务 answer 气泡。上下文引擎侧早把 /context 段落表输出成 markdown 表格（[context-engine · /context 展示侧两修复](../architecture/context-engine.md#context-展示侧两修复scene-精确匹配失配--markdown-段落表2026-08-31commit-3ae7a76)），但系统气泡渲染成纯文本 → 用户看到的还是 `|` 分隔的裸表格——后端输出与前端渲染两段没打通。
+
+**修复两处**（`src/static/index.html`）：
+
+| 位置 | 改动 |
+|---|---|
+| `addRow` sys 分支 | `b.innerHTML = renderAnswer(text)`——表格/代码块正常渲染，文本仍经 `esc()` 转义（与 answer 同安全模型）；auto 折叠态点击展开时同样走 markdown（`b.innerHTML = renderAnswer(b.dataset.full)`） |
+| `renderNotifyBubble`（后台通知气泡） | 展开态同款：`b.innerHTML = renderAnswer(b.dataset.full)` |
+
+**效果**：/context 段落构成表在系统气泡里渲染成真表格（`.bubble table` 边框样式早已存在，此前无消费方）；通知气泡（user 语义标签体系，见 [用户交互 · user 消息语义标签](user-interaction.md#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)）展开同样受益。Ctrl+F5 刷新即生效，纯前端改动无需 /restart。
+
+**配套关系**：/context 展示侧输出 markdown 表格（3ae7a76，引擎侧）+ 系统气泡渲染 markdown（fdfc28a，前端侧）——两段合起来才让「段落构成表」真正以表格呈现；若只改后端不接前端，看到的仍是纯文本（本 bug 即此断点）。
+
 ## 气泡级复制按钮（index.html，2026-08-19）
 
 ### 交互效果

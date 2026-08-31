@@ -282,6 +282,30 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 
 **验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。
 
+## seed 契约三层防御：非 dict 坏 seed 不再崩唤醒轮（2026-08-31，bg_task 唤醒轮秒崩修复）
+
+> src/agent.py（push_message / _drain_notices / _seed_steps 三处）。bg_task 唤醒轮**触发了但秒崩**的根因修复——用户报告「卡在这里不动了，下一轮没触发」，实测是**触发了但秒崩**（旧代码异常中断不可见 → 看起来像纯卡住）。
+
+**复现链（11:22 实验）**：timeout 180→20s + run_python sleep(30) → 转后台 → 本轮 turn_end → 10 秒后后台完成 → push(wake=True) → 唤醒轮确实触发（turn_start 写入 events）→ run() 顶部消费 inbox → `AttributeError: 'list' object has no attribute 'get'` → 轮秒崩（「中断，本轮未完成」）。**不是没触发，是触发了但秒崩**。
+
+**根因链**（雷是早前自己埋的）：凌晨 05:51 VideoGameTeam 后台任务的 team_create 通知 push 时 **seed 传了 list**（违反 dict 契约）→ 在 inbox 躺了 5 小时 → bg_task 唤醒轮把它和通知一起 pop → `_seed_steps` 的 `sd.get("tool")` 对 list 调 `.get` → AttributeError → 轮秒崩。8000 实例同款根因（旧代码连中断标记都不写，看起来纯卡住；其 llm_calls 09:51 的 react 是前一轮尾巴/切换期调用，唤醒轮本身秒崩没留痕）。
+
+**三层修复**（src/agent.py，子进程验证全过）：
+
+| 层 | 位置 | 修复 | 效果 |
+|---|---|---|---|
+| ① 入口（治本） | `push_message` | `if seed is not None and not isinstance(seed, dict)` → 包装成 notice seed（tool=notice + `_LOG.warning` 注明 source/类型） | **inbox/_notices 里永远不进坏 seed** |
+| ② 通知队列兜底 | `_drain_notices` | `isinstance(seed, dict)` 防御——原 `if not seed` 漏过 **truthy 的 list**（非空 list 为真值，`if not seed` 不拦截） | 历史/旁路坏条目直通不崩 |
+| ③ 最后防线 | `_seed_steps` | 循环体首行同款防御 | 任何路径进来的坏 seed 都降级包装，绝不崩轮 |
+
+降级包装形态统一：`{"tool": "notice", "args": {"raw": str(seed)[:500], ...}, "result": ..., "reasoning": "（系统通知——seed 结构异常，已降级包装）"}`——模型在上下文里看到的是可读通知而非崩溃。
+
+**验证**：list seed 三层全降级——① push 入口包装 tool=notice ✓ / ② _drain_notices 2 条全转 dict ✓ / ③ _seed_steps 直吞 list 不崩 ✓。
+
+**排障口诀**：**「turn_start 落了但无 step ≠ 没触发，是秒崩」**——唤醒轮的异常中断在旧代码里是隐形的（8000 连中断标记都不写，看起来纯卡住）；新代码（中断留痕 + 三层防御）把它变成**可见且不致命**。
+
+**备注**：崩溃时坏 seed 已被 pop 出队（inbox.jsonl 已清）+ 三层防御双保险，bg_task 唤醒链稳定；/restart 生效（消费侧防御仍在，历史持久化的坏条目靠消费侧兜）。
+
 ## user 消息语义标签 · 后台通知轮 vs 用户轮（2026-08-30，用户提案；批首归属 commit 803b3a5）
 
 > 用户提案（2026-08-30）：inbox 唤醒的轮（service_exit / bg_task / schedule / 子 Agent 反馈）此前与真用户消息渲染成**同款蓝色 user 气泡**——「这轮谁在说话」不可辨。语义标签体系把「通知轮 vs 用户轮」的判别落到三条路径、语义一致闭环。涉及 `src/chat.py`（`_merge_batch` 批合并与 first_src）+ `src/agent.py`（`run(_msg_source=)` 事件打标）+ `src/static/index.html`（`renderNotifyBubble` + 历史前缀判别）。

@@ -81,6 +81,32 @@
 
 **e2e 验证**：loop rounds=3 + 最后一轮 children + childmeta ✓；subworkflow wf_name + 完整子轨迹（entry+exit）✓；run_done 只发一次（嵌套不发）✓；输出正确透传 ✓。需 `/restart` 生效（详见 [workflow-hooks · 嵌套子画布轨迹](../architecture/workflow-hooks.md#嵌套子画布轨迹复合节点--子工作流的子节点事件2026-08commit-31d5ef3)）。
 
+## run_id 注入溯源：钩子注入标签带 run 属性（2026-08-31，commit 38afea6）
+
+**背景（用户提案「把缓存 id 带上」）**：run registry 的 canvas 现场缓存（`new_wf_run` 注册时保存的执行画布快照——观测页「在调试页查看」导入的就是它）此前只与 UI 入口（执行中行可点击）关联；[recap_gen 间歇性 local-qwen 排查](../architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)暴露的缺口是——异常轮的**注入文本**与该次执行的 run 无关联，间歇性异常只能从日志反推。
+
+**改动两处（src/agent.py）**：
+
+```python
+# ① _run_hooks 合并段——rid 此前在返回值里、append 时丢了
+notes.append({"hook": hook, "name": nm, "result": result.strip(), "rid": rid})
+
+# ② _chat_msgs 注入标签带 run 属性（n.get 容错：旧 notes 无 rid → 空串）
+parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</hook>' for n in items]
+```
+
+**注入形态**（下一轮起主 Agent 上下文里可见）：
+
+```html
+<hook name="wiki_auto_query" run="ec822fe4">
+📖 相关 wiki（本地检索流水线命中）：...
+</hook>
+```
+
+**意义**：注入文本自带溯源凭证——`run` 属性直达 `/wf/monitor?run=<rid>`，回溯该次执行的完整 canvas（节点输入里 llmParam 的 model 原值等现场证据）。间歇性异常（如 local-qwen 路由）复现时，**现场本身就是证据**——配合扫描层/执行层/流水三层观测网（0dc1dfc + 0d852a0 + 7c38a98）构成完整捕捉面。
+
+**容量前提（已有，无需新做）**：注册表 50 次 LRU（≈16 轮钩子观测历史，每轮约 3 次钩子 run）+ `_full_total` 20M 全文预算——比原始提案「超 3 轮清掉」宽裕且内存已控。`/restart` 生效。
+
 ## API 与前端
 
 ### server.py 路由

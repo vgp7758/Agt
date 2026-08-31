@@ -301,17 +301,18 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **玄学的本质**：磁盘 recap_gen.xml mtime 13:04 后未变（一直是 `<model>local-lfm</model>`）、解析路径统一（scan / get_hook / _load 全走 xml_to_canvas，逐一验证）、无缓存冲突/全局副本——**静态排查已到极限，local-qwen 的运行时来源无法从代码层推出**。前次三层修复（e8ef64a / 0d852a0 / 85a41fd）覆盖的是「可静态解释」的成因，间歇性复发属另一层。
 
-**应对：三层观测网（commits 0dc1dfc + 7c38a98，下次复现不会溜走）**：
+**应对：三层观测网 + 注入溯源（commits 0dc1dfc + 7c38a98 + 38afea6，下次复现不会溜走）**：
 
 | 层 | 捕捉 |
 |---|---|
 | 扫描层：`validate_canvas_detailed` LLM 节点 model 校验（0dc1dfc） | 每次钩子触发前的 scan——local-qwen 出现在 canvas 里就告警（workflows_info warn 状态） |
 | 执行层：`_get_llm` KeyError warning（0d852a0 已有） | 18:04 实锤即它抓到 |
 | 流水：独立 client 调用记入 llm_calls（7c38a98） | /stats 可见每跳 model / 错误 |
+| 注入溯源：结果注入带 run id（38afea6） | `<hook name="..." run="<rid>">`——异常轮注入文本自身即凭证 |
 
 下次再出现 local-qwen，**扫描层先告警**——对比扫描时刻与文件 mtime 即可锁定是「读到的瞬间就有」还是「运行中变化」。引擎侧详情（排除法 / validate_canvas_detailed 实现 / 定位策略）见 [workflow-hooks · 复发与三层观测网](workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)。
 
-**run_id 注入提案（用户方案，未实施）**：注入工作流调用结果时带上缓存 id + 现场缓存——每次钩子执行的结果注入都带 run_id，观测页可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面）——间歇性异常发生时现场本身就是证据，不用再从日志反推。
+**run_id 注入已落地（用户提案「把缓存 id 带上」→ commit 38afea6）**：每次钩子执行的结果注入带 run id——`/wf/monitor?run=<rid>` 可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面）——间歇性异常发生时现场本身就是证据，不用再从日志反推。实现两处（src/agent.py：notes 补 rid 键 + 注入标签带 run 属性）详见 [wf-monitor · run_id 注入溯源](../features/wf-monitor.md#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)；`/restart` 生效。
 
 ## assembly DSL（上下文装配配方）
 

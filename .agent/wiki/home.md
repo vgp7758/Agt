@@ -214,3 +214,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **recap_gen 间歇性 local-qwen 复发：静态排查到极限，转三层观测网（2026-08-31，commits 0dc1dfc + 7c38a98，用户「很玄学」）**：三层修复收官次日「先 utility 再走回退链」再现——warning 实锤那轮 canvas 读到的 model 是 **local-qwen**（MODELS 无此键 → KeyError → utility 400「始终思考」→ glm 429 → proxy 兜底）；但磁盘 XML 一直 local-lfm（mtime 证实）、解析路径统一（scan/get_hook/_load 全走 xml_to_canvas）、无缓存冲突——同进程两次触发读出不同 model，运行时来源无法静态推出。布下观测网：**扫描层**（`validate_canvas_detailed` 校验 LLM 节点 model ∈ MODELS 即告警，0dc1dfc，「执行时才爆」提前到「每次扫描」可见，workflows_info warn 状态）+ 执行层（0d852a0 已有，实锤即它抓到）+ **流水**（独立构造 LLMClient 的调用记入 llm_calls，7c38a98，补「真实走了 X」无从验证的盲区）。下次复发扫描层先告警——对比扫描时刻 vs mtime 即定位「读到的瞬间就有 / 运行中被改」。配套提案（未实施）：结果注入带 run_id + 现场缓存 canvas——现场即证据——见 [workflow-hooks · 复发与观测网](architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)、[multi-agent · recap_gen 间歇性复发](architecture/multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)
 
+## 快速事实增补（2026-08-31 · 十一）
+
+- **run_id 注入溯源：钩子注入标签带 run 属性（2026-08-31，commit 38afea6，用户提案「把缓存 id 带上」）**：[recap_gen 间歇性 local-qwen 排查](architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)的配套提案落地——钩子结果注入从 `<hook name="...">` 变为 `<hook name="..." run="<rid>">`，run registry id 随结果进上下文（notes 补 rid 键 + 注入标签带 run 属性，src/agent.py 两处；rid 此前在返回值里、append 时丢了）。`/wf/monitor?run=<rid>` 直达该次执行的完整 canvas（llmParam 的 model 原值等现场证据）——间歇性异常复现时现场即证据，是三层观测网（扫描/执行/流水）之外的第四层。容量由已有 50 次 LRU + 20M 全文预算控制；`/restart` 生效——见 [wf-monitor · run_id 注入溯源](features/wf-monitor.md#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)
+

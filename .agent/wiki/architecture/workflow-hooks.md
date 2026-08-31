@@ -52,17 +52,18 @@ except KeyError:
 
 同进程两次触发读出不同 model——local-qwen 的运行时来源**无法从代码层推出**，静态排查到极限，转观测网。
 
-**三层观测网（已布下，下次复现不会溜走）**：
+**三层观测网 + 注入溯源层（已布下，下次复现不会溜走）**：
 
 | 层 | 机制 | commit | 捕捉时机 |
 |---|---|---|---|
 | **扫描层** | `validate_canvas_detailed` 新增 LLM 节点 model 校验：llmParam 声明的模型名不在 `config.MODELS` 时告警（MODELS 读取全程 try 保护；复合节点 blocks 递归 `_walk`） | 0dc1dfc | 每次扫描（workflows_info 的 **warn 状态**）——**把「执行时才爆」提前到「每次扫描」可见** |
 | **执行层** | `_get_llm` KeyError warning | 0d852a0（已有） | 执行时命中即打——18:04 实锤即它抓到 |
 | **流水** | 工作流内**独立构造的 LLMClient** 调用记入 llm_calls.jsonl（此前不落流水，观测盲区） | 7c38a98 | /stats 可见每跳 model / 错误 |
+| **注入溯源** | 钩子注入标签带 `run="<rid>"`——run id 随结果进上下文 | 38afea6 | 注入文本即凭证，`/wf/monitor?run=<rid>` 直达该次执行 canvas |
 
-**定位策略**：下次 local-qwen 再现，扫描层先告警——对比**扫描时刻 vs 磁盘 mtime**：扫描时已异常 = 读盘/解析瞬间就有；扫描正常、执行时异常 = 运行中被改。
+**定位策略**：下次 local-qwen 再现，扫描层先告警——对比**扫描时刻 vs 磁盘 mtime**：扫描时已异常 = 读盘/解析瞬间就有；扫描正常、执行时异常 = 运行中被改。**注入溯源层补「运行中被改」的现场**——注入标签里的 rid 指向该次执行的完整 canvas（节点输入里 llmParam 的 model 原值），异常轮的注入文本自身就是证据。
 
-**run_id 注入提案（用户方案，方向未实施）**：工作流结果注入时带上 run registry 的缓存 id + 现场缓存 canvas——间歇性异常发生时观测页可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面），现场即证据、无需从日志反推。与 [运行观测](#运行观测run-registry2026-08-20-新commit-8aeb21a全文查看-commit-bb56a82) 天然衔接。
+**run_id 注入落地（用户提案「把缓存 id 带上」→ commit 38afea6，src/agent.py 两处）**：① `_run_hooks` 合并段 `notes.append({..., "rid": rid})`——rid 此前在返回值里、append 时丢了；② `_chat_msgs` 注入标签 `<hook name="..." run="...">` 带 run 属性（`n.get("rid","")` 容错，旧 notes 无 rid → 空串）。下一轮起钩子注入自带溯源凭证：`/wf/monitor?run=<rid>` 可回溯**那次执行用的完整 canvas**（llmParam 的 model 原值在里面）——间歇性异常发生时现场即证据、无需从日志反推。canvas 现场缓存与容量（50 次 LRU + 20M 全文预算）见 [运行观测](#运行观测run-registry2026-08-20-新commit-8aeb21a全文查看-commit-bb56a82) 与 [wf-monitor · run_id 注入溯源](../features/wf-monitor.md#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)。`/restart` 生效。
 
 关联叙事：[multi-agent · recap_gen 间歇性复发](multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)。
 

@@ -62,8 +62,14 @@ def _handle_llm(node: dict, ctx) -> dict:
             overrides["temperature"] = float(cfg["temperature"])
         except (TypeError, ValueError):
             pass
-    if cfg.get("thinking") is not None:   # per-node 开关覆盖实例默认（推理模型）
-        overrides["enable_thinking"] = str(cfg.get("thinking")).strip().lower() in ("true", "1", "yes", "on")
+    if cfg.get("thinking") is not None:   # per-node 覆盖实例默认：bool 开关或档位字符串
+        _tv = str(cfg.get("thinking")).strip().lower()
+        if _tv in ("low", "medium", "high", "max"):
+            # 档位（GLM 始终思考类，用户提案 2026-08-31）：client 侧转 thinking={"type":...}，
+            # 不发 enable_thinking（对该类模型 400 code 1210）
+            overrides["thinking_tier"] = _tv
+        else:
+            overrides["enable_thinking"] = _tv in ("true", "1", "yes", "on")
     if cfg.get("timeout") is not None:
         try:
             overrides["timeout"] = float(cfg["timeout"])

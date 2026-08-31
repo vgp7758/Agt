@@ -264,7 +264,14 @@ class LLMClient:
         self._token_idx = 0
         self.api_key = self.api_tokens[0]
         self.model = profile.get("model", "")
-        self.thinking_supported = profile.get("thinking", False)
+        # thinking 三态（用户提案 2026-08-31·GLM 思考档位）：bool（旧语义——true=发
+        # enable_thinking=true / false=不发）或 str 档位（low/medium/high/max——GLM 类
+        # "始终思考"模型：不发 enable_thinking（该参数对这类模型 400 code 1210「该模型
+        # 始终思考，不支持关闭思考；请使用 low、high 或 max」），改发 thinking={"type": 档位}）
+        _TIER = ("low", "medium", "high", "max")
+        _th = profile.get("thinking", False)
+        self.thinking_type = _th.strip().lower() if isinstance(_th, str) and _th.strip().lower() in _TIER else None
+        self.thinking_supported = bool(_th) or self.thinking_type is not None
         self.vision_supported = profile.get("vision", False)   # 多模态能力：视觉模型投影时把 <img> 转成 image_url
         # 折叠目标线比例（用户提案 2026-08-30：缓存经济学 per-provider 差异）。
         # 语义（用户澄清）：【触发后保留多少】——不是触发阈值。触发线是 max_effective_context_window
@@ -391,7 +398,13 @@ class LLMClient:
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         # enable_thinking 是 Qwen/ModelScope 专有透传参数；对不支持的 provider 不发，避免 400。
-        if self.thinking_supported:
+        # 档位模式（GLM 类"始终思考"模型，用户提案 2026-08-31）：不发 enable_thinking（对这类模型
+        # 是 400 code 1210），改发 thinking={"type": 档位}；enable_thinking override 在档位模式下忽略。
+        # 优先级：per-node 档位（工作流 LLM 节点 overrides thinking_tier）> profile 档位 > enable_thinking。
+        _tier = overrides.pop("thinking_tier", None) or self.thinking_type
+        if _tier:
+            kwargs["extra_body"] = {"thinking": {"type": _tier}}
+        elif self.thinking_supported:
             kwargs["extra_body"] = {"enable_thinking": enable_thinking}
         if timeout is not None:
             kwargs["timeout"] = timeout

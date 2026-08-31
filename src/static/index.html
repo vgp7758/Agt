@@ -1298,13 +1298,14 @@ function renderModelList(){
   box.innerHTML=Object.entries(models).map(([name,m])=>{
     const escName = name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const isDefault = name===def;
-    const thinking = !!m.thinking;
+    const thinking = m.thinking;   // 三态（用户提案 2026-08-31）：false / true / 档位字符串(low/medium/high/max)
+    const thinkTier = (typeof thinking==='string') ? thinking.toLowerCase() : '';
     const vision = !!m.vision;
     return `<div class="model-item">
       <div class="mi-row">
         <span class="mi-name">${escName}</span>
         ${isDefault ? '<span class="mi-badge default">✓ 默认</span>' : ''}
-        ${thinking ? '<span class="mi-badge thinking">🧠 thinking</span>' : ''}
+        ${thinking ? `<span class="mi-badge thinking">🧠 ${thinkTier||'thinking'}</span>` : ''}
         ${vision ? '<span class="mi-badge vision">👁 vision</span>' : ''}
         <button class="mi-del" onclick="delete _modelData.models[\'${escName}\'];renderModelList()" title="删除">×</button>
       </div>
@@ -1315,9 +1316,15 @@ function renderModelList(){
       <div class="mi-row">
         <input value="${m.temperature??''}" placeholder="温度(空=全局)" type="number" step="0.1" min="0" max="2" onchange="_modelData.models['${escName}'].temperature=this.value===''?undefined:parseFloat(this.value)" title="该模型专用温度（不同 provider 推荐值不同）；空=用运行时全局 temperature" style="width:110px">
         <input value="${m.max_effective_context_window||''}" placeholder="窗口(空=关分档)" type="number" onchange="_modelData.models['${escName}'].max_effective_context_window=this.value?parseInt(this.value):undefined" title="分档上下文投影的最大有效窗口(token估算)；空=关闭走原窗口+摘要" style="width:140px">
-        <label class="mi-check" title="该模型是否支持深度思考（推理模型，如 Qwen/ModelScope 的 enable_thinking）。是能力声明：勾了才会在请求里带 enable_thinking；运行时是否真开由「运行时」区的 enable_thinking 控制">
-          <input type="checkbox" ${thinking?'checked':''} onchange="_modelData.models['${escName}'].thinking=this.checked;renderModelList()"> thinking
-        </label>
+        <select title="思考模式（三态）：开=请求带 enable_thinking=true（Qwen/ModelScope 类）；关=能力关不发；档位（low/medium/high/max）=GLM 类『始终思考』模型——不发 enable_thinking（该参数对这类模型 400 code 1210），改发 thinking={type:档位}"
+          onchange="_modelData.models['${escName}'].thinking=this.value==='off'?false:(this.value==='on'?true:this.value);renderModelList()" style="width:96px">
+          <option value="off" ${!thinking?'selected':''}>思考：关</option>
+          <option value="on" ${thinking===true?'selected':''}>思考：开</option>
+          <option value="low" ${thinkTier==='low'?'selected':''}>low</option>
+          <option value="medium" ${thinkTier==='medium'?'selected':''}>medium</option>
+          <option value="high" ${thinkTier==='high'?'selected':''}>high</option>
+          <option value="max" ${thinkTier==='max'?'selected':''}>max</option>
+        </select>
         <label class="mi-check" title="该模型是否支持多模态视觉（能看图）。勾了后工具返回的图片会以 image_url 形式喂给该模型，否则降级为文字占位并提示委托视觉子 agent">
           <input type="checkbox" ${vision?'checked':''} onchange="_modelData.models['${escName}'].vision=this.checked;renderModelList()"> vision
         </label>

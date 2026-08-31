@@ -69,7 +69,16 @@ def _handle_llm(node: dict, ctx) -> dict:
             overrides["timeout"] = float(cfg["timeout"])
         except (TypeError, ValueError):
             pass
-    llm = get_llm(ctx, str(cfg.get("model", "") or ""))
+    _mv = str(cfg.get("model", "") or "")
+    if not _mv:
+        # 空 model 观测（2026-08-31·两种失败模式的模式 B）：cfg['model'] 空 → get_llm("")
+        # 直接回退 ctx.llm（无 KeyError、无 warning——18:28 acf4985e 复现时全程静默的根因）。
+        # 打 warning 让空值路径可见（模式 A=无效值已有 KeyError warning；两种模式全覆盖）
+        import logging as _lg
+        _lg.getLogger("agt.workflow").warning(
+            "LLM 节点 model 配置为空——回退 ctx.llm（%s）。检查 canvas llmParam 的 model 项是否丢失",
+            getattr(ctx.llm, "model_name", None))
+    llm = get_llm(ctx, _mv)
     on_error = cfg.get("onError")
     try:
         resp = llm.chat(msgs, **overrides)

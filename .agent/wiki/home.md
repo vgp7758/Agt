@@ -201,3 +201,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **seed 契约三层防御：非 dict 坏 seed 不再崩唤醒轮（2026-08-31，commit 0565971，用户报告「卡在这里不动了，下一轮没触发」）**：bg_task 唤醒轮**触发了但秒崩**——凌晨 VideoGameTeam 后台任务 team_create 通知 push 时 seed 传了 **list**（违反 dict 契约）→ inbox 躺 5 小时 → bg_task 唤醒轮 pop → `_seed_steps` 的 `sd.get("tool")` 对 list 抛 AttributeError → 轮秒崩（旧代码异常中断不可见 → 看起来纯卡住）。**排障口诀：「turn_start 落了但无 step ≠ 没触发，是秒崩」**——唤醒轮异常中断旧代码隐形（8000 连中断标记都不写），新代码（中断留痕 + 三层防御）变可见且不致命。三层修复（src/agent.py）：① `push_message` 入口非 dict seed 包装成 notice + warning 日志（inbox 永不进坏 seed，治本）；② `_drain_notices` `isinstance` 防御（原 `if not seed` 漏过 truthy 的 list）；③ `_seed_steps` 循环首行同款（历史坏条目最后防线）。子进程验证三层全降级；/restart 生效——见 [user-interaction · seed 契约三层防御](features/user-interaction.md#seed-契约三层防御非-dict-坏-seed-不再崩唤醒轮2026-08-31bg_task-唤醒轮秒崩修复)
 
+## 快速事实增补（2026-08-31 · 八）
+
+- **seed 产地修正：`_on_bg_task_done` 的 `seed=[rec]` → `rec` dict 直传（2026-08-31，commit 44ae953，终验发现）**：三层防御（0565971，见 ·七）兜住了崩溃，但通知轮仍**降级显示** notice——降级形态本身暴露产地：bg_task 通知构造处包了层 list，**每次通知都在产坏 seed**（11:23 秒崩的产地，非历史残留；凌晨 team_create 是另一条恰好同型的 list）。修正后通知轮恢复标准 check_bg_task 合成记录，三层防御保留兜旁路。终验全链路绿（15s 超时转后台 → agent 忙通知排队 2m14s → turn_end 即触发 → 处理一次通过）——**bg_task 忙时排队路径首次实测**。新口诀：「降级包装出现在上下文 = 仍有产地在产坏 seed」——防御是兜底不是免罪牌——见 [user-interaction · 产地修正](features/user-interaction.md#产地修正_on_bg_task_done-的-seed-list-包装2026-08-31commit-44ae953终验发现)
+

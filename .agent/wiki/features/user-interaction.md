@@ -306,6 +306,44 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 
 **备注**：崩溃时坏 seed 已被 pop 出队（inbox.jsonl 已清）+ 三层防御双保险，bg_task 唤醒链稳定；/restart 生效（消费侧防御仍在，历史持久化的坏条目靠消费侧兜）。
 
+### 产地修正：_on_bg_task_done 的 seed list 包装（2026-08-31，commit 44ae953，终验发现）
+
+> src/agent.py `_on_bg_task_done`（bg_task 通知构造）。三层防御（上节，commit 0565971）兜住了崩溃，但终验发现通知轮仍**降级显示** notice——降级形态本身暴露了产地：`_on_bg_task_done` 构造 seed 时包了层 list（`seed=[rec]`），**每一次 bg_task 通知都在产坏 seed**（不是历史残留）——11:23 秒崩的产地即此；凌晨 05:51 team_create 那条是另一个独立的 list，恰好同型。
+
+**修复**（commit 44ae953，一处）：
+
+```python
+# agent.py _on_bg_task_done（修正前）
+self.push_message(header, source=f"bg_task:{bg_id}", seed=[rec], wake=True)
+                                          #      ^^^^^^^^ list 包装——11:23 崩溃元凶
+# 修正后：seed=rec  # dict 直传——通知轮恢复标准合成记录
+```
+
+**效果**：通知轮恢复**标准 check_bg_task 合成记录**（工具名/参数正确，含尾部输出）——不再依赖三层防御的降级包装（模型上下文里看到 `check_bg_task(task_id=...)` 而非 `notice(raw=[...])`）。三层防御保留，兜历史/旁路条目。
+
+**完整修复链**：
+
+| 提交 | 层次 | 效果 |
+|---|---|---|
+| 0565971 | 三层防御（push 入口 + drain + seed_steps） | 坏 seed 不再崩轮，降级为可读 notice |
+| 44ae953 | 产地修正（`[rec]` → `rec`） | 通知轮恢复标准合成记录 |
+| （终验） | /restart 后全链路 | 转后台 → 忙时排队 → 唤醒 → 处理 ✓ 全绿 |
+
+**终验时序（2026-08-31 12:10 实验：timeout 15s + run_python sleep(25)，bg_1788149442381）**：
+
+```
+12:10:03  sleep(25) 启动 → 15s 超时转后台
+12:10:28  后台完成 → 通知到达 → agent 忙（观察轮在跑）→ 忙时排队：压 inbox 等本轮结束（2m14s）
+12:12:42  观察轮 turn_end → 通知【立即】触发新轮
+          → 钩子照常跑、check_bg_task 合成记录正确、处理一次通过
+```
+
+终验同时补上 [bg_task 恒唤醒](#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1) 节中「忙时排队」路径的**首次实测证据**（闲时立即此前已有 8000 案例佐证）：通知不丢、不抢当前轮，turn_end 即触发。
+
+**新排障口诀（补充上节）**：**「降级包装出现在上下文 = 仍有产地在产坏 seed」**——三层防御是兜底不是免罪牌；看到 `notice(raw=[...])` 形态的合成记录，应顺着 `push_message` 调用方找产地修正，而不是满足于不崩。
+
+**生效方式**：引擎层（src/agent.py），需 `/restart`。
+
 ## user 消息语义标签 · 后台通知轮 vs 用户轮（2026-08-30，用户提案；批首归属 commit 803b3a5）
 
 > 用户提案（2026-08-30）：inbox 唤醒的轮（service_exit / bg_task / schedule / 子 Agent 反馈）此前与真用户消息渲染成**同款蓝色 user 气泡**——「这轮谁在说话」不可辨。语义标签体系把「通知轮 vs 用户轮」的判别落到三条路径、语义一致闭环。涉及 `src/chat.py`（`_merge_batch` 批合并与 first_src）+ `src/agent.py`（`run(_msg_source=)` 事件打标）+ `src/static/index.html`（`renderNotifyBubble` + 历史前缀判别）。

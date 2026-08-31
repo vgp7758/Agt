@@ -124,6 +124,22 @@ docstring 注明「溯源闭环 2026-08-31·补遗：首轮注入无 run 即此�
 
 **教训**：改注入标签格式需先盘点**所有渲染产出点**——同名 `<hook>` 注入可能经多条路径产出（此处两条：`_chat_msgs` notes 排空 + `render_before_turn_hint` 专用函数）；一条路改了另一条漏，表象即「部分位置带、部分位置不带」。
 
+### llm_models 溯源：run 注册时提取 LLM 节点 model（2026-08-31，commit fbb6d0b）
+
+**背景（local-qwen 悬案第三次复现，run=6d754e26）**：canvas 快照虽存（观测页可导入调试页），但要人工翻节点输入找 llmParam 的 model 值；悬案需要「执行**入口**读数 vs 执行读数」的直接对照——排障上下文见 [run_id 注入溯源](#run_id-注入溯源钩子注入标签带-run-属性2026-08-31commit-38afea6)。
+
+**实现（src/workflow.py `new_wf_run`，commit fbb6d0b）**：注册 run 时从入参 canvas 提取**所有 llm 节点的 llmParam.model 值**，存入 run 记录 `llm_models` 字段（list）——`/api/wf/runs/<rid>` 直接返回，观测页无需翻节点即可见每次执行【入口处】用的 model。
+
+**三方对照（下次 recap_gen 复现走 utility 回退链时）**：
+
+| 观测 | 位置 | 读数时刻 |
+|---|---|---|
+| ① llm_models | run API / 观测页 | 入口（new_wf_run 注册时） |
+| ② 两条配对 warning（KeyError + 8bc4838 llmParam 现场原文） | 🐞 面板 | 执行（节点 handler） |
+| ③ canvas 快照 | `/wf/monitor?run=<rid>` | 入口（同 ①） |
+
+判决：llm_models=local-qwen → canvas 在 `_run_one` 之前已被污染（元凶 `_wf_canvas_index` 缓存层）；llm_models=local-lfm 但 warning 是 local-qwen → handler 层 llmParam 被换。`/restart` 生效。排障叙事见 [multi-agent · 四验](../architecture/multi-agent.md#四验6d754e26-复现与-llm_models-三方对照布网2026-08-31commit-fbb6d0b)、机制见 [workflow-hooks · 四验](../architecture/workflow-hooks.md#四验6d754e26-复现与-llm_models-溯源2026-08-31commit-fbb6d0b)。
+
 ## API 与前端
 
 ### server.py 路由

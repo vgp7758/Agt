@@ -633,6 +633,22 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 
 **首次实战（2026-08-31，合入约一小时后）**：同 session 末尾 edit `src/static/index.html`（136K 字符）——正是本修复针对的头号嫌疑文件，rf 全文注入被替换为一行 `skipped='too-large'` 提示，缓存不再被打断。新机制在自己的开发流程里当场生效、改它的那一轮就吃到收益——「省 read 降级为知道改过」的实证闭环。
 
+### 修复七：超大文件结构大纲投影——从「跳过」到「投影结构」（2026-08-31，commit c888876，用户提案迭代）
+
+**用户提案（对修复六的迭代）**：「对 100k 以上的文件不是跳过，而是投影出文件的一个大致结构……主要是各函数的行号结构、markdown 文件的大纲」——用户记得代码里有相关处理逻辑：正是 `real_tools._md_outline`（与 dir_outline / _md_snapshot 同源的 md 标题大纲提取）。
+
+**实现三处（src/session.py，commit c888876）**：
+
+1. **`_rf_outline(path, text)`（新 staticmethod）**：超大文件的结构摘要——`md` → 复用 `real_tools._md_outline`（标题大纲，截 4000 字符）；`py` → `ast.parse` 提取类/函数行号结构（`class X [L1-L2]` / `def y [L3-L4]`，纯标准库、无 LSP 依赖）；其它 → 行数 + 头部 5 行缩略。统一限 60 行（防超大类清单本身膨胀）。
+2. **`_rf_latest_map`**：超大条目（>RF_MAX_CHARS）在 text 置空 + skip 标记（修复六）之外新增 `outline` 字段——构建映射时顺手生成，不额外读盘。
+3. **挂载点**：skip 条目有 outline → 挂**配对标签** `<recent-file file version note='文件过大（N 字符）——投影结构大纲，全文可 read_file'>` + 大纲内容 + `</recent-file>`；无 outline（提取失败等）回退修复六的一行自闭合提示。
+
+**口径变化（与修复六「自闭合红利」对照）**：修复六的自闭合提示行不匹配 `_RE_RF_BLOCK`（天然不计不剥）；修复七的配对标签**有内容、匹配配对正则——rf 统计（`_rf_in_msgs`）与剥除（`_rf_stripped`）口径正常计入**；判阈刨除 `_rf_chars` 仍按映射 text（已置空 → 计 0）。大纲体积上限（60 行 / 4000 字符）保证其对估算与缓存的影响可控。
+
+**验证（三种真实形态）**：py（120K 假文件）→ 类/函数行号结构 ✓；md（100K）→ 标题大纲（frontmatter / 多级标题 / 行号范围）✓；其它（100K）→ 行数 + 头部 5 行缩略 ✓。
+
+**语义升级**：rf 对超大文件从「知道文件改了但看不到内容」（修复六）升级为「**改了 + 结构全貌**」——函数在哪、行号范围直接可见，需要细节时 read_file 精准段读取。效果实证：本 repo `src/session.py`（147K）——修复六形态是一行 `skipped='too-large'`，本修复后投影完整类/函数行号结构（几十行）。/restart 生效。
+
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 
 `_folded_summary(fold_count)` 生成被折叠早期轮次的结构概览（纯结构信息、无需 LLM；逐字原文靠 recall 召回）。每轮一行：`user[:80]` + `(已折叠N次工具调用) ` + tail。tail 的优先级链：

@@ -355,6 +355,32 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 跨了一天的 local-qwen 悬案至此收网——下次复发两条配对 warning 即终审。机制与代码见 [workflow-hooks · 最后一击](workflow-hooks.md#最后一击llmparam-执行现场观测2026-08-31commit-8bc4838)。
 
+#### 四验：6d754e26 复现与 llm_models 三方对照布网（2026-08-31，commit fbb6d0b）
+
+**复现（run=6d754e26，用户报告「recap 模型错误 bug 的现场又来了」——第三次复现：一验 18:04 / 二验 acf4985e 之后）**：llm_calls 实锤 `hook:turn_end·recap_gen·_main_` model=utility、BadRequestError 400 code 1210「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」（utility 条目 thinking 未配档位所致，用户明示「先不管我的设置」——修法见 [thinking 三态](../guides/config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca)）；核心 bug 照旧：**为什么走的不是声明里的 local-lfm**。
+
+**本轮排查（三个关键事实 + 两个新排除）**：
+
+| 检查 | 结果 |
+|---|---|
+| canvas 快照（6d754e26） | `model='local-lfm'`——**第三次确认 canvas 注册时是对的** |
+| 20:35:03 warning | `'local-qwen' 未找到`——handler（节点执行层）第三次读到旧值——模式 A（无效值）再现 |
+| 主动 debug 复现实验 | **不复现**（20:55 无 warning）——同一磁盘文件走 debug 路径正常，只有真实钩子路径触发（与 [workflow-debug 注意事项](../features/workflow-debug.md#注意事项)「debug 全绿不代表真实执行正常」互证） |
+| `.xml.meta` 旁车缓存 / 全局插件目录 | 都不存在——本轮新排除的两个候选 |
+
+僵局画像：canvas 注册时对（快照可证）→ 执行时错（warning 可证）→ debug 路径不复现——污染只发生在真实钩子执行链路（new_wf_run 之后、节点执行之前或 handler 层），静态代码层无解。
+
+**布网（commit fbb6d0b，src/workflow.py `new_wf_run`）**：run 注册时从 canvas 提取所有 llm 节点的 llmParam.model 值，存入 run 记录 **`llm_models` 字段**——观测页/API 直接可见每次执行【入口处】用的 model，与 canvas 快照、执行 warning 三方对照：
+
+| 下次复现查 run 的 llm_models | 判决 |
+|---|---|
+| `['local-qwen']` | canvas 在 `_run_one` 之前已被污染 → 元凶是 `_wf_canvas_index` 缓存层 |
+| `['local-lfm']` 但 warning 是 local-qwen | handler 层的鬼（llmParam 被换） |
+
+**等待 /restart**：当前进程启动于 19:16 前——缺两个决定性观测：8bc4838 的 llmParam 现场条（fallback 时 warning 带 handler 读到的原文）+ fbb6d0b 的 llm_models（执行入口的 model 值）。重启后下次 recap_gen 再走 utility 回退链：①🐞 面板两条配对 warning + ②run API 的 llm_models + ③canvas 快照，三方对照 → 污染层精确定位。悬案已熬三次复现、十余候选排除——所有静态路径都是对的，唯一解释空间只剩运行时数据流。
+
+机制实现见 [workflow-hooks · 四验](workflow-hooks.md#四验6d754e26-复现与-llm_models-溯源2026-08-31commit-fbb6d0b)；观测消费侧见 [wf-monitor · llm_models 溯源](../features/wf-monitor.md#llm_models-溯源run-注册时提取-llm-节点-model2026-08-31commit-fbb6d0b)。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

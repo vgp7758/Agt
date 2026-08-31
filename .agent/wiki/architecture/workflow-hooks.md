@@ -127,6 +127,29 @@ if _mv and getattr(llm, "model_name", "") != _mv:
 
 关联叙事：[multi-agent · recap_gen 悬案](multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)。
 
+#### 四验：6d754e26 复现与 llm_models 溯源（2026-08-31，commit fbb6d0b）
+
+**复现（run=6d754e26，第三次复现——一验 18:04 / 二验 acf4985e 之后）**：三验收网（8bc4838）布下 llmParam 现场观测后当天再现——recap_gen 先调 utility（400 code 1210「始终思考」，utility thinking 未配档位，用户明示暂不处理——见 [thinking 三态](../guides/config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca)）再走回退链；20:35:03 执行层 KeyError warning `'local-qwen' 未找到`——**模式 A（无效值）再现**。
+
+**三个关键事实（污染窗口进一步收窄）**：
+
+| 事实 | 证据 | 含义 |
+|---|---|---|
+| canvas 注册时是对的 | new_wf_run 快照 `model='local-lfm'`（第三次确认） | 污染不发生在读盘/解析/注册 |
+| 执行时读到旧值 | KeyError warning `'local-qwen'`（第三次） | 污染发生在注册之后、节点执行之前（或 handler 层 cfg 解析） |
+| debug 路径不复现 | 20:55 主动 debug 复现实验无 warning | 只有真实钩子路径触发 |
+
+**本轮新排除**：`.xml.meta` 旁车缓存、全局插件目录（两个候选）——都不存在。
+
+**llm_models 溯源（commit fbb6d0b，src/workflow.py `new_wf_run`）**：`_WF_RUNS[rid]` 注册时从入参 canvas 提取所有 llm 节点的 llmParam.model 值写入 `llm_models` 字段（代码注释锚定「2026-08-31·local-qwen 悬案收网」）——执行【入口处】的 model 读数直读可见（不必翻 canvas 快照找节点输入），与执行层 warning 构成两端对照：
+
+| llm_models（入口读数） | warning（执行读数） | 判决 → 深挖方向 |
+|---|---|---|
+| `['local-qwen']` | local-qwen | canvas 在 `_run_one` 之前已被污染 → 元凶 `_wf_canvas_index` 缓存层 |
+| `['local-lfm']` | local-qwen | handler 层的鬼——llmParam/cfg 在执行链中被换 |
+
+需 `/restart` 生效（当前进程启动于 19:16 前，8bc4838 现场条 + fbb6d0b llm_models 两个决定性观测均不在运行代码中）。叙事侧见 [multi-agent · 四验](multi-agent.md#四验6d754e26-复现与-llm_models-三方对照布网2026-08-31commit-fbb6d0b)；观测页消费见 [wf-monitor · llm_models](../features/wf-monitor.md#llm_models-溯源run-注册时提取-llm-节点-model2026-08-31commit-fbb6d0b)。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。

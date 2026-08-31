@@ -12,8 +12,8 @@ PARAMS = [
      "desc": "系统提示词（角色/格式约束）；outputs 声明会自动并入 JSON Schema 约束"},
     {"key": "model",        "type": "string", "required": False, "default": "",
      "desc": "models.json provider 名；空=跟随 ctx.llm（utility/主模型）"},
-    {"key": "thinking",     "type": "string", "required": False, "enum": ["", "true", "false"],
-     "desc": "思考开关；空=跟随默认"},
+    {"key": "thinking",     "type": "string", "required": False, "enum": ["", "true", "false", "low", "medium", "high", "max"],
+     "desc": "思考开关（true/false）或 GLM 档位（low/medium/high/max——不发 enable_thinking 改发 thinking:type）；空=跟随默认"},
     {"key": "timeout",      "type": "number", "required": False,
      "desc": "请求超时秒数；空=全局默认"},
     {"key": "onError",      "type": "string", "required": False,
@@ -85,6 +85,20 @@ def _handle_llm(node: dict, ctx) -> dict:
             "LLM 节点 model 配置为空——回退 ctx.llm（%s）。检查 canvas llmParam 的 model 项是否丢失",
             getattr(ctx.llm, "model_name", None))
     llm = get_llm(ctx, _mv)
+    if _mv and getattr(llm, "model_name", "") != _mv:
+        # fallback 现场观测（2026-08-31·local-qwen 悬案最后一击）：请求 X 却拿到 Y——
+        # 带执行时的 llmParam 原文。原文=X（与 canvas 快照同）但 cfg 出 Y → cfg 构造有鬼；
+        # 原文=Y（与快照不同）→ canvas 在执行链中被换（run_hook/execute 深挖）
+        import logging as _lg, json as _jn
+        try:
+            _lp = _jn.dumps([{"name": p.get("name"),
+                              "v": str((((p.get("input") or {}).get("value") or {}).get("content")) or "")[:40]}
+                             for p in inputs.get("llmParam", []) if isinstance(p, dict)],
+                            ensure_ascii=False)[:300]
+        except Exception:
+            _lp = "<序列化失败>"
+        _lg.getLogger("agt.workflow").warning(
+            "LLM 节点 model=%r 回退到 %r——llmParam 执行现场：%s", _mv, getattr(llm, "model_name", "?"), _lp)
     on_error = cfg.get("onError")
     try:
         resp = llm.chat(msgs, **overrides)

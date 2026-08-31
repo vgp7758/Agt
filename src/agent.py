@@ -1190,8 +1190,10 @@ class Agent:
 
     @staticmethod
     def render_before_turn_hint(notes: list[dict]) -> str:
-        """钩子旁注 → 注入上下文的 <system-reminder> 文本（run 主循环与 /debug hook 同源渲染）。"""
-        parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in notes]
+        """钩子旁注 → 注入上下文的 <system-reminder> 文本（run 主循环与 /debug hook 同源渲染）。
+        带_run 属性（溯源闭环 2026-08-31·补遗）：before_turn 有专用渲染路径（不经 _chat_msgs
+        的 notes 排空）——首轮注入无 run 即此路径漏改；观测页 /wf/monitor?run=<rid> 回溯现场。"""
+        parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</hook>' for n in notes]
         return '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>'
 
     def _run_hooks(self, hook: str, context: dict) -> list[dict]:

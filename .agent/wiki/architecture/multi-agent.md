@@ -330,6 +330,18 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 注：before_turn 位置的 run 属性（38afea6 漏网路径）同轮已补（e8d3792，见 [wf-monitor · before_turn 补遗](../features/wf-monitor.md#before_turn-专用渲染路径补遗2026-08-31commit-e8d3792)），需再 /restart 生效。
 
+#### 二验：acf4985e 复现与关键分化——是两种失败模式，不是一种（2026-08-31，commit f0808f1）
+
+**复现**：/restart（观测网 + 注入溯源全部就位）后首个真实 turn_end recap_gen——turn_end·recap_gen 先调 utility 再走回退链，用户持注入的 run id 直达 `/wf/monitor?run=acf4985e`（run_id 溯源首用即回本）。
+
+**决定性差异：全程无 warning**。18:04 复发（local-qwen）执行层 KeyError warning 必然出现，18:28 没有 → 排除模式 A，是**模式 B：canvas llmParam 的 model 项为空**——`get_llm("")` 直接回退 ctx.llm（utility），不经 KeyError 分支、无任何日志。「这次没有 warning」正是该差异的证据——**此前三层观测网 + 注入溯源对模式 B 全盲**。
+
+**补强（f0808f1）**：节点本体（`src/assets/nodes_builtin/llm.py`）在 get_llm 前检查空 model 打 warning（含 ctx.llm 实际模型名 + 提示查 canvas llmParam 的 model 项是否丢失）。至此两种失败模式全覆盖——A（无效值）/ B（空值）各有专属 warning，下次复现 🐞 面板一条日志直接告诉你这次是哪种：**空值 → 查 xml_to_canvas 的 model 项构造链；无效值 → 查 canvas 数据源**。
+
+**未解线索（下次一起看）**：18:30:39 一条 `model=local-lfm` 成功调用（scene=llm.chat、无对应 run）——acf4985e 完成后 70 秒，同进程内某路径的 local-lfm 调用是成功的——与失败路径形成**同进程内对照**，两边 canvas 的差异即根因。
+
+机制表、节点层实现与分化诊断详见 [workflow-hooks · 二验复现与两种失败模式](workflow-hooks.md#二验复现acf4985e-与两种失败模式分化节点层空值-warning2026-08-31commit-f0808f1)。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

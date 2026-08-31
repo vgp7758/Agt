@@ -67,6 +67,38 @@ except KeyError:
 
 关联叙事：[multi-agent · recap_gen 间歇性复发](multi-agent.md#recap_gen-间歇性-local-qwen-复发与观测网2026-08-31)。
 
+#### 二验复现：acf4985e 与两种失败模式分化——节点层空值 warning（2026-08-31，commit f0808f1）
+
+**复现（18:28，acf4985e）**：观测网 + run_id 注入全部就位后（/restart），新进程首个真实 turn_end recap_gen 再次「先 utility 再走回退链」——用户持注入标签的 run id 直达 `/wf/monitor?run=acf4985e`（注入溯源层首用即回本，用户第一时间贴出观测页）。
+
+**关键分化——不是同一种失败，是两种模式**：
+
+| 模式 | 复现 | cfg['model'] 的值 | 路径 | 可见性 |
+|---|---|---|---|---|
+| A | 18:04 | `'local-qwen'`（无效值） | `get_profile` KeyError → fallback utility | ✅ 执行层 warning（0d852a0，实锤即它抓到） |
+| B | 18:28 acf4985e | **空**（model 项丢失或值为空） | `get_llm(ctx, "")` → 直接回退 ctx.llm | ❌ **全程静默**——不经 KeyError 分支，无任何日志 |
+
+acf4985e 执行全程无 warning 本身就是分化证据——**此前布下的观测网对模式 B 失明**：执行层 warning 挂在 KeyError 分支上（空值不触发），扫描层/流水层看到的都是「utility 在跑」而非「为什么走 utility」。
+
+**补强（commit f0808f1，节点本体层）**：`src/assets/nodes_builtin/llm.py`（type3 LLM 节点插件后端）在调 `get_llm` 之前检查空 model：
+
+```python
+_mv = str(cfg.get("model", "") or "")
+if not _mv:
+    import logging as _lg
+    _lg.getLogger("agt.workflow").warning(
+        "LLM 节点 model 配置为空——回退 ctx.llm（%s）。检查 canvas llmParam 的 model 项是否丢失",
+        getattr(ctx.llm, "model_name", None))
+llm = get_llm(ctx, _mv)
+```
+
+- 位置在**节点本体**而非引擎 `_get_llm`——空值在进入 get_llm 之前就可见；`getattr(ctx.llm, "model_name", None)` 顺带显示实际回退到谁
+- **两种模式全覆盖**：A（无效值）= 执行层 KeyError warning / B（空值）= 节点层 warning。`/restart` 后再复现，🐞 面板一条日志直接分化收网：**空值 warning → 查 canvas llmParam 的 model 项构造链（xml_to_canvas 的 model 项为什么丢）；KeyError warning → 查 canvas 数据源（local-qwen 旧值哪里来）**
+
+**未解线索（同轮发现，下次复现一起看）**：18:30:39 有一条 `model=local-lfm` 的成功调用（scene=llm.chat、无对应 run）——发生在 acf4985e 完成后 70 秒，**同进程内某个路径的 local-lfm 调用是成功的**。与 acf4985e 的失败路径形成同进程对照：下次复现把它的 timeline 与 warning 类型对照，两边 canvas 的差异就是根因。
+
+关联叙事：[multi-agent · 二验复现](multi-agent.md#二验acf4985e-复现与关键分化是两种失败模式不是一种2026-08-31commit-f0808f1)。
+
 ## demo / 子工作流 hidden 归类（2026-08，commit d59dcbd）
 
 **背景**：每轮扫描把 `.agent/workflows/` 下所有工作流注册为 `wf_*` 工具投影给主 Agent，但 demo 与引擎级子工作流**不是主 Agent 该直接调用的**——白占工具表位置与 schema 体积。

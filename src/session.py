@@ -1798,6 +1798,40 @@ class Session:
                 n += sum(len(x) for x in _RE_RF_BLOCK.findall(m["content"]))
         return n
 
+    @staticmethod
+    def _rf_outline(path: str, text: str) -> str:
+        """超大 recent-file 的结构摘要（用户提案 2026-08-31）：py → ast 函数/类行号结构；
+        md → 标题大纲（复用 real_tools._md_outline——与 dir_outline/_md_snapshot 同源）；
+        其它 → 行数 + 头部缩略。限 60 行（防超大类清单本身膨胀）。"""
+        try:
+            p = str(path).lower()
+            if p.endswith(".md"):
+                from real_tools import _md_outline
+                o = _md_outline(text)
+                return o[:4000]
+            if p.endswith(".py"):
+                import ast
+                tree = ast.parse(text)
+                out = []
+                def _walk(node, prefix=""):
+                    for ch in ast.iter_child_nodes(node):
+                        if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            end = getattr(ch, "end_lineno", None) or ch.lineno
+                            out.append(f"{prefix}def {ch.name}()  [L{ch.lineno}-L{end}]")
+                        elif isinstance(ch, ast.ClassDef):
+                            end = getattr(ch, "end_lineno", None) or ch.lineno
+                            out.append(f"{prefix}class {ch.name}  [L{ch.lineno}-L{end}]")
+                            _walk(ch, prefix + "  ")
+                _walk(tree)
+                if len(out) > 60:
+                    out = out[:60] + [f"…（共 {len(out)} 项，截断显示前 60）"]
+                return "\n".join(out) or "(无顶层定义)"
+            lines = text.splitlines()
+            head = [l.strip()[:60] for l in lines if l.strip()][:5]
+            return f"（{len(lines)} 行）\n" + "\n".join(head)
+        except Exception as e:
+            return f"(结构提取失败: {type(e).__name__})"
+
     def _rf_latest_map(self) -> dict:
         """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。
         同文件多次 edit 后写覆盖——只有【最新一次改它的 tool_call】会在投影时命中挂快照。
@@ -1815,7 +1849,11 @@ class Session:
                     latest[str(snap["path"])] = {"cid": cid, "path": str(snap["path"]),
                                                  "version": str(snap.get("version", "")),
                                                  "text": "" if _too_big else _txt,
-                                                 "skip": len(_txt) if _too_big else 0}
+                                                 "skip": len(_txt) if _too_big else 0,
+                                                 # 结构摘要（用户提案 2026-08-31）：超大文件不再只挂
+                                                 # 提示行——投影 py 的函数行号结构 / md 的大纲（_rf_outline）
+                                                 "outline": (self._rf_outline(str(snap["path"]), _txt)
+                                                             if _too_big else "")}
         return latest
 
     def _rf_chars(self) -> int:
@@ -2002,12 +2040,17 @@ class Session:
                 if rf_map and full and (tc.call_id or "") in _rf_hit and isinstance(content, str):
                     _m = _rf_hit[tc.call_id or ""]
                     if _m.get("skip"):
-                        # 超大文件（>RF_MAX_CHARS=100K，用户裁定 2026-08-31）：一行自闭合提示——不挂全文
-                        # （巨型文件单步稀释命中率），模型仍知道文件改过、需要时自己 read_file。
-                        # 自闭合形式不匹配 _RE_RF_BLOCK（配对标签正则）——_rf_in_msgs/_rf_stripped
-                        # 天然不计不剥；_rf_chars 按 map text（已置空）计 0，判阈刨除口径自动一致。
-                        content += (f"\n<recent-file file='{_m['path']}' skipped='too-large "
-                                    f"({_m['skip']:,} 字符 > {RF_MAX_CHARS:,})——已修改，需要时 read_file 查看当前内容'/>")
+                        # 超大文件（>RF_MAX_CHARS=100K，用户裁定 2026-08-31）：投影结构大纲（用户
+                        # 提案迭代——不再只挂提示行）：py=函数/类行号结构 / md=标题大纲（_rf_outline）。
+                        # 配对标签（有内容）——_RE_RF_BLOCK 可匹配，rf 统计/剥除口径正常计入；
+                        # 无 outline（提取失败等）回退一行提示。全文仍可 read_file 按需读取。
+                        if _m.get("outline"):
+                            content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}' "
+                                        f"note='文件过大（{_m['skip']:,} 字符）——投影结构大纲，全文可 read_file'>\n"
+                                        f"{_m['outline']}\n</recent-file>")
+                        else:
+                            content += (f"\n<recent-file file='{_m['path']}' skipped='too-large "
+                                        f"({_m['skip']:,} 字符 > {RF_MAX_CHARS:,})——已修改，需要时 read_file 查看当前内容'/>")
                     else:
                         content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}'>\n"
                                     f"{_m['text']}\n</recent-file>")

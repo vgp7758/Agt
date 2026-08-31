@@ -377,7 +377,7 @@
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
-    <label title="关闭后：LLM 日志（成功/回退/限流/截断/毕业折叠等）只累计进前端内存（_logEntries，上限200条），不真正渲染到 🐞 面板 DOM——面板保持隐藏，省去枯燥调试信息的渲染开销。开启后：实时追加到面板。"><input id="cfg_show_log_panel" type="checkbox"> 显示日志面板（🐞）</label>
+    <label title="关闭后：LLM 日志（成功/回退/限流/截断/毕业折叠等）只累计进前端内存（_logEntries，上限200条），不真正渲染到 🐞 面板 DOM——面板保持隐藏，省去枯燥调试信息的渲染开销。开启后：实时追加到面板。"><input id="cfg_show_log_panel" type="checkbox" onchange="setShowLogPanel(this.checked)"> 显示日志面板（🐞）</label>
     </div>
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
@@ -1232,6 +1232,7 @@ function fillSettingsForm(v){
   document.getElementById('cfg_detail_step').value = v.detail_step || '';
   document.getElementById('cfg_panic_window').value = v.panic_context_window ?? 0;
   document.getElementById('cfg_fold_deep_tools').checked = !!v.fold_deep_tools;
+  document.getElementById('cfg_show_log_panel').checked = showLogPanel;   // 纯前端状态：回填报表当前开关（localStorage）
 }
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
 // —— 反馈 ——
@@ -1585,6 +1586,35 @@ document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 // ===== 日志面板（类似 spec 抽屉）：llm_log 事件（回退/限流/截断等 warning/error）=====
 let _logEntries = [];        // [{ts, level, text}]——面板内容（打开时渲染；上限 200 条滚动截断）
 let _logUnreadErr = 0;       // 未读 error 计数（badge 显示；打开面板清零）
+// 显示开关（修复 2026-08-31：曾无声明/无初始化——pushLogEntry 读到 undefined 恒 falsy，
+// 日志永远不渲染、复选框勾了也空白。localStorage 持久化，缺省 true=显示）
+let showLogPanel = localStorage.getItem('show_log_panel') !== '0';
+
+function setShowLogPanel(v){
+  showLogPanel = !!v;
+  try{ localStorage.setItem('show_log_panel', showLogPanel ? '1' : '0'); }catch(e){}
+  if(showLogPanel){
+    // 开启：补渲染累计条目（关闭期间只进了内存）+ 显示入口
+    const list = document.getElementById('logList');
+    if(list && _logEntries.length && !list.children.length){
+      _logEntries.forEach(en => {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11.5px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all'
+          + (en.level === 'error' ? ';color:#b91c1c;background:#fef2f2'
+             : en.level === 'info' ? ';color:#3730a3;background:#eef2ff'
+             : ';color:#92400e;background:#fffbeb');
+        row.textContent = `[${en.ts.toLocaleTimeString('sv-SE')}] ${en.text}` + (en.scene ? ` (${en.scene})` : '');
+        list.appendChild(row);
+      });
+      list.scrollTop = list.scrollHeight;
+    }
+    if(_logEntries.length){
+      const fab = document.getElementById('logFab');
+      const panel = document.getElementById('logPanel');
+      if(fab && panel && panel.style.display !== 'flex') fab.style.display = 'flex';
+    }
+  }
+}
 
 function toggleLogPanel(open){
   const panel = document.getElementById('logPanel');

@@ -1347,7 +1347,10 @@ class Agent:
                             self._emit({"type": "workflow_message", "name": nm, "hook": hook,
                                     "text": message, "auto": True})
                         if inject and result.strip():
-                            notes.append({"hook": hook, "name": nm, "result": result.strip()})
+                            # rid（run registry id）随结果带进 notes——注入溯源（用户提案 2026-08-31）：
+                            # 注入标签 <hook name run="..."> 带 run id，观测页 /wf/monitor?run=<rid>
+                            # 可回溯该次执行的完整 canvas（llmParam 的 model 原值等现场证据）
+                            notes.append({"hook": hook, "name": nm, "result": result.strip(), "rid": rid})
                 except Exception as e2:
                     self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
                                 "text": str(e2)[:200]})
@@ -1396,7 +1399,7 @@ class Agent:
             for n in notes:
                 groups.setdefault(n["hook"], []).append(n)
             for hook_pos, items in groups.items():
-                parts = [f'<hook name="{n["name"]}">\n{n["result"]}\n</hook>' for n in items]
+                parts = [f'<hook name="{n["name"]}" run="{n.get("rid", "")}">\n{n["result"]}\n</hook>' for n in items]
                 inner = "\n".join(parts)
                 msgs.append({"role": "user", "content": f'<system-reminder pos="{hook_pos}">\n{inner}\n</system-reminder>'})
         # 投影转储（调试用）：把完整 messages 以纯文本写到 projections/ 目录

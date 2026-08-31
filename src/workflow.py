@@ -64,6 +64,20 @@ def new_wf_run(name: str, hook: str = "", canvas: dict = None) -> str:
                          "started_at": _time.time(), "finished_at": None, "nodes": [],
                          "canvas": (json.loads(json.dumps(canvas, ensure_ascii=False, default=str))
                                     if isinstance(canvas, dict) else None)}
+        # LLM 节点 model 溯源（2026-08-31·local-qwen 悬案收网）：注册时从 canvas 提取所有
+        # llm 节点的 llmParam.model 值——观测页/API 直接可见每次执行【入口处】用的 model。
+        # 与 canvas 快照/执行 warning 三方对照：llm_models=local-qwen → canvas 在 _run_one
+        # 之前已被污染（_wf_canvas_index 缓存层）；=local-lfm 但 warning local-qwen → handler 层。
+        try:
+            _llm_models = []
+            for _n in (canvas or {}).get("nodes", []):
+                if str(_n.get("type")) == "3":
+                    for _p in (((_n.get("data") or {}).get("inputs") or {}).get("llmParam") or []):
+                        if isinstance(_p, dict) and _p.get("name") == "model":
+                            _llm_models.append(str((((_p.get("input") or {}).get("value") or {}).get("content")) or ""))
+            _WF_RUNS[rid]["llm_models"] = _llm_models
+        except Exception:
+            pass
     return rid
 
 

@@ -255,10 +255,19 @@
      margin-right: 40%; transition: margin-right .25s ease; }
    @media (orientation: portrait) {
      body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
-     body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
-     body.drawer-push #toolForm, body.drawer-push #inputBar { margin-right: 0; }
-   }
-</style>
+      body.drawer-push #toolForm, body.drawer-push #inputBar { margin-right: 0; }
+    }
+    /* 工具选择浮窗（工具表单模式——用户提案 2026-09-01：下拉框→按钮+工具箱，参照编辑器 nodePicker） */
+    #toolPicker{width:460px;max-width:90vw;max-height:520px;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;box-shadow:0 4px 24px #0003}
+    #toolPicker .tpk-filter{width:100%;margin-bottom:6px;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:#fafbfc;box-sizing:border-box}
+    #toolPicker .tpk-group{color:#7c3aed;font-size:11px;font-weight:bold;margin:8px 0 4px;padding-bottom:2px;border-bottom:1px solid var(--line)}
+    #toolPicker .tpk-row{display:flex;flex-wrap:wrap;gap:4px}
+    #toolPicker .tpk-item{flex:1 1 calc(50% - 4px);min-width:180px;text-align:left;padding:6px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px;background:#f8f9fc;overflow:hidden}
+    #toolPicker .tpk-item:hover{border-color:#7c3aed;background:#f3f0ff}
+    #toolPicker .tpk-item .tpk-name{font-weight:600;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #toolPicker .tpk-item .tpk-desc{color:#8a9099;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+    @media (max-width:768px){ #toolPicker{width:92vw} #toolPicker .tpk-item{flex:1 1 100%} }
+ </style>
 </head>
 <body>
   <header>
@@ -312,7 +321,10 @@
   </div>
 
   <div id="toolForm" style="display:none;background:#fff;border-top:1px solid var(--line);padding:8px 12px;flex-wrap:wrap;align-items:center;gap:6px">
-    <select id="toolSel" style="padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px;max-width:200px" onchange="onToolSelChange()"><option value="">选择工具…</option></select>
+    <div style="position:relative">
+      <button class="btn" id="toolPickerBtn" onclick="toggleToolPicker(event)" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🔧 选择工具…</button>
+      <div id="toolPicker" style="display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:80"></div>
+    </div>
     <span id="toolParams" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"></span>
     <button class="btn primary" id="toolSend" onclick="sendToolCall()">发送</button>
     <button class="btn" id="toolClose" onclick="exitToolForm()" style="font-size:16px;padding:4px 10px" title="返回普通输入">✕</button>
@@ -1094,40 +1106,69 @@ let _toolFormMode = false;
 async function loadToolListForForm(){
   try{ const r = await fetch('/api/tools'); const d = await r.json(); _toolList = d.tools||[]; }catch(e){}
 }
-function renderToolSelect(){
-  const sel = document.getElementById('toolSel');
-  const groups = {};
-  _toolList.forEach(t => { (groups[t.group||'其它'] = groups[t.group||'其它'] || []).push(t); });
-  let h = '<option value="">选择工具…</option>';
-  for(const [g, tools] of Object.entries(groups)){
-    h += `<optgroup label="${g}">`;
-    tools.forEach(t => h += `<option value="${t.name}">${t.display||t.name}</option>`);
-    h += '</optgroup>';
-  }
-  sel.innerHTML = h;
+let _pickedTool = "";   // 工具箱选中的工具名（下拉框退役——按钮+浮窗模式，用户提案 2026-09-01）
+function toggleToolPicker(ev){
+  ev.stopPropagation();
+  const p = document.getElementById('toolPicker');
+  const open = p.style.display === 'none';
+  p.style.display = open ? 'block' : 'none';
+  if(open){ renderToolPicker(); const f = document.getElementById('tpkFilter'); if(f) f.focus(); }
 }
-function onToolSelChange(){
-  const sel = document.getElementById('toolSel');
-  const t = _toolList.find(x => x.name === sel.value);
+function renderToolPicker(){
+  // 工具箱浮窗（参照编辑器 nodePicker）：搜索过滤（名/显示名/描述）+ 分组 + 卡片带描述
+  const fv = document.getElementById('tpkFilter');
+  const q = ((fv && fv.value) || '').toLowerCase();
+  const groups = {};
+  _toolList.filter(t => !q || t.name.toLowerCase().includes(q)
+    || (t.display||'').toLowerCase().includes(q) || (t.desc||'').toLowerCase().includes(q))
+    .forEach(t => { (groups[t.group||'其它'] = groups[t.group||'其它'] || []).push(t); });
+  let h = `<input id="tpkFilter" class="tpk-filter" placeholder="🔍 搜索工具名/描述…" oninput="renderToolPicker()" onclick="event.stopPropagation()">`;
+  for(const [g, tools] of Object.entries(groups)){
+    h += `<div class="tpk-group">${esc(g)}</div><div class="tpk-row">`;
+    tools.forEach(t => {
+      h += `<div class="tpk-item" data-name="${esc(t.name)}" onclick="pickTool(this.dataset.name)">` +
+           `<div class="tpk-name">${esc(t.display||t.name)}</div>` +
+           (t.desc ? `<div class="tpk-desc">${esc(t.desc)}</div>` : '') + `</div>`;
+    });
+    h += '</div>';
+  }
+  if(!Object.keys(groups).length) h += '<div style="color:#8a9099;font-size:12px;padding:10px">（无匹配工具）</div>';
+  document.getElementById('toolPicker').innerHTML = h;
+  const f2 = document.getElementById('tpkFilter');
+  if(f2){ f2.focus(); f2.setSelectionRange(f2.value.length, f2.value.length); }
+}
+function pickTool(name){
+  _pickedTool = name;
+  const t = _toolList.find(x => x.name === name);
+  document.getElementById('toolPickerBtn').textContent = '🔧 ' + ((t && (t.display||t.name)) || name);
+  document.getElementById('toolPicker').style.display = 'none';
+  renderToolParamsFor(t);
+}
+function renderToolParamsFor(t){
   const box = document.getElementById('toolParams');
-  if(!t){ box.innerHTML=''; return; }
-  // 根据 params 生成输入控件
+  if(!t){ box.innerHTML = ''; return; }
+  // 参数控件：description 优先作 placeholder（用户提案——布局稍占位置不介意，信息优先）
   let h = '';
   (t.params||[]).forEach(p => {
     const nm = p.name; const tp = p.type || 'string';
+    const ph = esc(String(p.desc || nm));
     if(tp === 'boolean'){
-      h += `<label style="font-size:12px">${nm}: <input type="checkbox" id="tp_${nm}" style="width:auto"></label>`;
+      h += `<label style="font-size:12px" title="${ph}">${nm}: <input type="checkbox" id="tp_${nm}" style="width:auto"></label>`;
     }else if(tp === 'integer' || tp === 'number'){
-      h += `<input id="tp_${nm}" type="number" placeholder="${nm}" style="width:90px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
+      h += `<input id="tp_${nm}" type="number" placeholder="${ph}" title="${ph}" style="width:130px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
     }else{
-      // string：用 text input（对 path 类参数，也可以后续加 file picker）
-      const w = nm === 'path' || nm === 'query' ? 200 : 120;
-      h += `<input id="tp_${nm}" type="text" placeholder="${nm}" style="width:${w}px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
+      const w = nm === 'path' || nm === 'query' ? 260 : 190;
+      h += `<input id="tp_${nm}" type="text" placeholder="${ph}" title="${ph}" style="width:${w}px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
     }
   });
   if(!t.params || !t.params.length) h = '<span style="font-size:11px;color:#8a9099">（无参数）</span>';
   box.innerHTML = h;
 }
+// 点浮窗外部关闭（工具箱模式）
+document.addEventListener('click', e => {
+  const p = document.getElementById('toolPicker');
+  if(p && p.style.display !== 'none' && !e.target.closest('#toolPicker,#toolPickerBtn')) p.style.display = 'none';
+});
 function exitToolForm(){
   _toolFormMode = false;
   document.getElementById('toolForm').style.display = 'none';
@@ -1138,8 +1179,7 @@ function exitToolForm(){
   inp.focus();
 }
 function sendToolCall(){
-  const sel = document.getElementById('toolSel');
-  const toolName = sel.value;
+  const toolName = _pickedTool;
   if(!toolName){ toast('⚠️ 请选择工具'); return; }
   const t = _toolList.find(x => x.name === toolName);
   // 收集参数
@@ -1169,7 +1209,11 @@ document.getElementById('btnToolCall').onclick = async ()=>{
   const btn = document.getElementById('btnToolCall');
   if(_toolFormMode){
     if(!_toolList.length) await loadToolListForForm();
-    renderToolSelect();
+    // 按钮复位（工具箱模式——选中态清空，等用户从浮窗挑选）
+    _pickedTool = '';
+    const pkBtn = document.getElementById('toolPickerBtn');
+    if(pkBtn) pkBtn.textContent = '🔧 选择工具…';
+    renderToolParamsFor(null);
     form.style.display = 'flex';
     bar.style.display = 'none';
     btn.textContent = '💬 普通';

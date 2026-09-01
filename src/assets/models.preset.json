@@ -10,10 +10,10 @@
         "qwen":     {"model": "Qwen/Qwen3-235B-A22B-Instruct-2507", "thinking": true,  "desc": "通义千问 235B 旗舰（推理）"},
         "glm":      {"model": "zai-org/GLM-5.2",                    "thinking": true,  "desc": "智谱 GLM-5.2"},
         "deepseek": {"model": "deepseek-ai/DeepSeek-V4-Flash-0731", "thinking": true,  "desc": "DeepSeek V4 Flash"},
-        "kimi":     {"model": "moonshotai/Kimi-K3",                 "thinking": true,  "desc": "月之暗面 Kimi K3"}
+        "kimi":     {"model": "moonshotai/Kimi-K3:Moonshot", "thinking": true, "desc": "月之暗面 Kimi K3（temperature 锁 1——API 硬约束）", "temperature": 1, "param_lock": ["temperature"]}
       }
     },
-    "zhipu": {
+    "z.ai": {
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "register_url": "https://open.bigmodel.cn/usercenter/apikeys",
       "api_tokens": ["require an key"],

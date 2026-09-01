@@ -302,6 +302,15 @@ class LLMClient:
         self.profile_detail_step = int(_ds) if _ds is not None and str(_ds).strip() != "" else None
         if self.profile_detail_step is not None:
             self.profile_detail_step = max(0, min(200, self.profile_detail_step))
+        # 参数硬约束（用户提案 2026-09-01）：① profile 的 param_lock/param_omit（显式定制——锁定
+        # 的参数以 profile 值强制、无视全局/请求 override；omit 的永不发送）② 内置规则表的 set
+        # 置位（requires_reasoning_in_history 等 profile 级标志——base_url+model 匹配自动生效）
+        self.param_lock = [str(x) for x in (profile.get("param_lock") or [])]
+        self.param_omit = [str(x) for x in (profile.get("param_omit") or [])]
+        for r in self._match_provider_rules():
+            for k, v in (r.get("set") or {}).items():
+                if not getattr(self, k, False):
+                    setattr(self, k, v)
         # max_tokens：profile 可显式指定；否则推理模型(thinking)用宽裕默认（防长 reasoning 被 provider
         # 默认小值截断 → content 空/半截），非推理模型用 None（交 provider 默认）。
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)
@@ -309,7 +318,9 @@ class LLMClient:
         self.max_effective_context_window = profile.get("max_effective_context_window")
         # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
         # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。配此标志后发请求前自动补占位。
-        self.requires_reasoning_in_history = profile.get("requires_reasoning_in_history", False)
+        # profile 显式配置优先；未显式配置（None）时保留内置规则表已 set 的置位（_match_provider_rules）
+        _rr = profile.get("requires_reasoning_in_history")
+        self.requires_reasoning_in_history = bool(_rr) if _rr is not None else getattr(self, "requires_reasoning_in_history", False)
         # 多 token 成功后预旋转开关（默认开）：ModelScope 等按号限每日额度的 provider 靠轮换分摊配额
         # （反正不吃缓存，换了无损失）；GLM/bigmodel 等 prompt cache 按 api_token 隔离的 provider 配
         # "token_rotate": false 保持 sticky（每次成功不换 token，缓存不被自己交错驱逐；限流轮换仍生效）。
@@ -380,6 +391,33 @@ class LLMClient:
                 and self.model_name != self._user_model):
             self.switch_model(self._user_model)
 
+    # ========== Provider 参数硬约束规则表（用户提案 2026-09-01：base_url+model 预检查） ==========
+    # 已知各家 API 的硬性参数差异——请求前自动修正（用户无感知；profile 的 param_lock 是显式定制层，
+    # 本表是内置兜底层：手配模型未走 onboarding 也受保护）。知识随版本分发。
+    # url_has/model_has：base_url / model id 的子串匹配（大小写敏感按原文）；
+    # fix：强制参数值（覆盖一切来源）；omit：永不发送的参数；set：自动置位的 profile 级标志。
+    _PROVIDER_PARAM_RULES = [
+        # Kimi（Moonshot 及聚合端点）：temperature 必须为 1（其它值 400——用户实测）
+        {"url_has": "moonshot", "model_has": "imi", "fix": {"temperature": 1.0}},
+        {"url_has": "modelscope", "model_has": "imi", "fix": {"temperature": 1.0}},
+        # 智谱"始终思考"系（flash）：不能发 enable_thinking=false（400 code 1210）——
+        # thinking 三态（profile 档位）是主路径；这里按 model 含 flash 双保险 omit
+        {"url_has": "bigmodel", "model_has": "flash", "omit": ["enable_thinking"]},
+        # DeepSeek 官方端点：历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段
+        {"url_has": "api.deepseek.com", "set": {"requires_reasoning_in_history": True}},
+    ]
+
+    def _match_provider_rules(self) -> list[dict]:
+        """当前 profile（base_url+model）命中的内置规则集。"""
+        hits = []
+        for r in self._PROVIDER_PARAM_RULES:
+            if r.get("url_has") and r["url_has"] not in (self.base_url or ""):
+                continue
+            if r.get("model_has") and r["model_has"] not in (self.model or ""):
+                continue
+            hits.append(r)
+        return hits
+
     def _build_kwargs(self, messages, stream: bool, **overrides) -> dict:
         """组装请求参数。tools / tool_choice 等可通过 overrides 透传。
         enable_thinking / timeout 可经 overrides 按 call 覆盖实例默认值（工作流 LLM 节点 per-node 设置）。"""
@@ -419,6 +457,25 @@ class LLMClient:
         if timeout is not None:
             kwargs["timeout"] = timeout
         kwargs.update(overrides)
+        # —— 参数硬约束尾段（优先级：内置规则 fix > profile param_lock > 请求 override > 全局）——
+        # 内置规则 fix（API 会 400 的硬约束——如 Kimi temperature 必须 1）/ omit（如智谱 flash
+        # 不能发 enable_thinking）——base_url+model 匹配，用户无感知自动修正
+        for r in self._match_provider_rules():
+            for k, v in (r.get("fix") or {}).items():
+                kwargs[k] = v
+            for k in (r.get("omit") or []):
+                kwargs.pop(k, None)
+                if isinstance(kwargs.get("extra_body"), dict):
+                    kwargs["extra_body"].pop(k, None)
+        # profile param_lock：锁定的参数以 profile 值强制（覆盖请求 override/全局）
+        for k in self.param_lock:
+            if k == "temperature" and self.profile_temperature is not None:
+                kwargs["temperature"] = self.profile_temperature
+        # profile param_omit：永不发送
+        for k in self.param_omit:
+            kwargs.pop(k, None)
+            if isinstance(kwargs.get("extra_body"), dict):
+                kwargs["extra_body"].pop(k, None)
         return kwargs
 
     def _backoff(self, attempt: int) -> float:

@@ -52,6 +52,8 @@ members:
 
 **坑的通用化**：`create_agent` 默认装配已显式含 `user_message,steps` 防同类（见 [multi-agent · create_agent 传参拓展](../architecture/multi-agent.md)）；手工声明务必把必需段列全（/agents 管理页保存也会显式化）。
 
+> **补记（同日 commit 2effa73）**：cb57597 补的 `- seg: user_message` 这类 **dict 形态此前被 `_asm_item_from_dict` 静默丢弃**（只认动作键与已知段名做键）——直到 2effa73 加 `seg:` 键分支 + 补 `tail.*` 白名单（`tail.time` 等连字符串形态也会被当未知段名丢弃）才真正生效。修复细节与「写→读→解析」全链验证教训见 [multi-agent · assembly DSL](../architecture/multi-agent.md#assembly-dsl上下文装配配方)。
+
 ## 与其他模块的关系
 
 - 上游：[multi-instance · 组网](../architecture/multi-instance.md)——remote_connect / remote_message / auto server_id 是团队组网的底层通道；team_tools 是把它们编排成「团队级操作」的一层

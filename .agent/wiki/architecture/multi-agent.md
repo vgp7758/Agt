@@ -478,6 +478,19 @@ assembly:
 
 **白名单坑（2026-09-02，team-manager 实锤，commit cb57597）**：装配是**白名单**——列什么装什么。team-manager 声明只列 text（缺 user_message/steps）→ 任务消息不进投影，Agent「看起来活着但收不到活」。`create_agent` 默认装配已显式含 `user_message,steps` 防同类（commit 9ddaf63）；手工声明务必把必需段列全（/agents 管理页保存也会显式化，见 [agents-admin · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。team-manager 修复细节见 [team-tools](../features/team-tools.md)。
 
+### `seg:` 键形态兼容 + tail.* 拆段补全（2026-09-02，commit 2effa73）
+
+**用户复盘抓到的静默丢弃**：装配项 dict 形态此前只认两类——动作键（file/dir/cmd/workflow/text/func/tool）+ 已知段名做键（如 `history: window`）。用户书写的 `- seg: user_message`（段名做值）与 create_agent 生成的 `{"seg": ...}` 两者都匹配不上 → `_asm_item_from_dict` 返回 None → **静默丢弃**（连告警都没有）。team-manager.md / wf-calibrator.yml / wf-designer.yml 里的段项全是哑弹——只验了「生成的 yml 内容」没验「解析回来」，验证盲区（用户复盘「确认一下读取逻辑怎么处理」直接点破）。
+
+**修复（src/multiagent.py，commit 2effa73，两层）**：
+
+- `_asm_item_from_dict` 加 `seg:` 键分支——**值复用字符串解析全语义**（`段名[|optional][=mode]` + 行内描述同款）：`{seg: "history|optional"}` ≡ 字符串形态 `- history|optional`；`{seg: ..., optional: true, desc: ...}` 的独立 `optional` / `desc` 键照常消费——`optional: true` → `opt=True`（[`|optional` 真语义](#optional-真语义默认不装配on-打开2026-08commit-1e3b206)同款：默认不装配，`=on` 打开）
+- **第二层连带修复**：`_ASSEMBLY_SEGS` / toggles / 段序三集合补 `tail.*` 拆段（time/system/plan/spec/episodic/remote）——session 侧 2026-09-01 已拆段（spec s_edeeec31，见 [context-engine · 投影三区重构](context-engine.md#投影三区重构tail-拆段--区3-统一包裹--钩子-merge-化2026-09-01用户提案)）但 multiagent 侧没同步——**连字符串形态 `- tail.time` 都会被 `_asm_item_from_str` 当未知段名丢弃**（白名单集合不含它，与 `_DEFAULT_ASSEMBLY_PLAN` 脱节）
+
+**验证（三个真实声明文件全链「写→读→解析」）**：team-manager.md（段=[system, user_message, steps, tail.time, tail.system] + 动作 text，必装段 system 自动补插 ✓）、wf-calibrator.yml、wf-designer.yml 全过——此前写的声明现在真实生效（create_agent 输出同款受益）。
+
+**教训**：写入端引入新形态前必须跑「写→读→解析」全链验证（只验生成内容 ≠ 生效）；解析端不认识的键要告警、不能静默吞——否则声明「看起来生效」实则全是哑弹，且无复盘就会一直潜伏。
+
 ## system_append DSL（SYSTEM 动态追加）
 
 ```yaml

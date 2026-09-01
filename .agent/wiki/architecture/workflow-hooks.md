@@ -251,8 +251,6 @@ with ThreadPoolExecutor() as pool:
 
 ## 钩子注入 merge 化 + hook_note 落盘（2026-09-01，用户提问触发）
 
-**提问（用户）**：「我们当前的钩子触发似乎没有落盘 events 吧，是不是每次触发只有那一轮 react 模型会看到？」——两件事由此落地：①注入形态 merge 化（缓存经济，与 session.py 三区重构同批）；②注入内容落盘可追溯（堵「只有当轮 react 看得到」的观测缺口）。
-
 **① 注入 merge 化（src/agent.py）**：
 
 - **before_turn hint**：不再独立成条——merge 到当前轮 user 消息 content 末尾（`_seg_msgs_user_message` 的 `_before_turn_hint` 追加；跨轮变化只影响本条，消息形状由对话本体决定）
@@ -266,7 +264,14 @@ with ThreadPoolExecutor() as pool:
 - 直接回答用户提问：此前钩子注入只活在「那一次请求的投影里」（反应模型的瞬时上下文），事件流无痕迹——行为可复盘性缺口；hook_note 落盘后注入内容可追溯、行为可复盘
 - 与 events.jsonl 既有事件（step/thinking/answer 等）并列，读档（turns 回放）同样可见
 
-**效果**：反应模型看到的注入内容（tail/钩子/hint）全部可复查；同时投影形态按三区稳定（钩子注入不再改变消息形状）。需 `/restart` 生效（commit fc3db93）。
+**③ 前端消费（commit acc06f1，spec Step 4 补全，src/static/index.html）**：`case 'hook_note'` 渲染分支——钩子注入折叠成一条记录提示（复用 toggleFold + .tf-head/.tf-body 基建），**默认收起**，点击展开看注入全文（「当轮模型看到了什么注入」实时即可查，读档/实时同路径）：
+
+- 摘要行：`⚡ [位置]钩子注入「name」· run=xxx（N字·点击展开）`（`wfHookTag(m)` 取位置标签；`run_id` 存在时附 `· run=<rid>`；紫 #7c3aed 区分钩子注入）
+- body：`white-space:pre-wrap` 注入全文，默认收起
+- **实时 vs 历史分工**：实时（本轮进行中）折叠组渲染；**历史读档不渲染**——`renderHistTurn` 只遍历 steps 工具链 + answer（与 auto_wf 钩子完成事件同约定，历史轮 UI 保持简洁），事后可追溯靠 events.jsonl 磁盘证据——「UI 不堆砌历史噪声、磁盘保留完整真相」
+- 纯前端消费，Ctrl+F5 生效；折叠形态细节见 [trace-fold · hook_note 注入折叠](../features/trace-fold.md#hook_note-注入折叠2026-09-01commit-acc06f1)
+
+**效果**：反应模型看到的注入内容（tail/钩子/hint）全部可复查（实时折叠可见 + 磁盘 events.jsonl 可溯）；同时投影形态按三区稳定（钩子注入不再改变消息形状）。后端需 `/restart` 生效（commit fc3db93），前端 Ctrl+F5（commit acc06f1）。
 
 ## 检索型钩子的输出纪律：选择+摘录，禁止生成（2026-08-20）
 

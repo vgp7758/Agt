@@ -86,6 +86,24 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 **完成文本二级折叠（auto_wf）**：组内行完成文本 `✅ 「name」完成（Ns）：…` 全文 >160 字时折叠（head 截 110 字 + 换行截断，`…（点击展开）`）——组已折叠的前提下展开组还能再展开长文本（两级降噪）。跨轮迟到的完成（async 钩子，组已脱 DOM）回退 `addTrace` 独立行。
 
+## hook_note 注入折叠（2026-09-01，commit acc06f1）
+
+**事件源**：`case 'hook_note'`——钩子注入落盘事件（后端 `_run_hooks` 每项 inject 结果写 events.jsonl，见 [workflow-hooks · hook_note 落盘](../architecture/workflow-hooks.md#钩子注入-merge-化--hook_note-落盘2026-09-01用户提问触发)）的前端消费端：实时视图折叠成一条记录提示，默认收起，点击展开看注入全文（「当轮模型看到了什么注入」实时可查，读档/实时同路径）。
+
+**渲染形态**（复用 toggleFold + .tf-head/.tf-body 基建，纯前端消费、后端零改动）：
+
+- 摘要行：`⚡ [位置]钩子注入「name」· run=xxx（N字·点击展开）`——`wfHookTag(m)` 取位置标签；`run_id` 存在时附 `· run=<rid>`；紫 #7c3aed 区分钩子注入
+- body：`white-space:pre-wrap` 注入全文，`display:none` 默认收起
+
+**实时 vs 历史分工**：
+
+| 场景 | 行为 |
+|------|------|
+| 实时（本轮进行中） | 折叠组渲染——「这轮注入了什么」可见 |
+| 历史读档 | **不渲染**——`renderHistTurn` 只遍历 steps 工具链 + answer（与 auto_wf 钩子完成事件同约定） |
+
+**为什么历史不渲染**：历史轮 UI 保持简洁（用户气泡 + 工具链 + answer），运行时噪声只出现在实时视图；事后可追溯靠 events.jsonl 磁盘证据（`"type":"hook_note"`）——「UI 不堆砌历史噪声、磁盘保留完整真相」。
+
 ## 与其他模块的关系
 
 - **后端零改动**：纯前端消费既有事件流（thinking/step/tool_call/tool_stream/tool_result/auto_wf）——折叠是渲染层投影，不动协议

@@ -42,6 +42,16 @@ members:
 - 复用引擎 remote_* 基础设施：`remote_tools.probe_server` / `connect` / `send_message`
 - 配套声明：`.agent/agents/team-manager.md`——team-manager 子 Agent（local-lfm 巡检省 token）；`agent_prompt("team-manager", "把团队拉起来")` 即可让它运营
 
+### team-manager 定位与装配修复（2026-09-02，commit cb57597）
+
+用户评审指出两问题并落地：
+
+1. **装配缺 user_message/steps（白名单坑实锤）**：原声明 assembly 只列 text——装配是**白名单语义**，没列的段不装 → 任务消息不进投影，**Agent「看起来活着但收不到活」**。补 `user_message / steps / tail.time / tail.system` 四段
+2. **定位改为 VideoGameTeam 固定成员**：是视频游戏开发团队的成员，不是本 repo 的临时 sub-agent
+3. **tools 显式白名单**：`team_up, team_status, remote_*`——team_tools 作它的**专属插件**（不继承主 Agent 全量工具）
+
+**坑的通用化**：`create_agent` 默认装配已显式含 `user_message,steps` 防同类（见 [multi-agent · create_agent 传参拓展](../architecture/multi-agent.md)）；手工声明务必把必需段列全（/agents 管理页保存也会显式化）。
+
 ## 与其他模块的关系
 
 - 上游：[multi-instance · 组网](../architecture/multi-instance.md)——remote_connect / remote_message / auto server_id 是团队组网的底层通道；team_tools 是把它们编排成「团队级操作」的一层

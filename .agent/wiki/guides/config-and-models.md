@@ -50,11 +50,24 @@
 
 **生效方式**：后端新端点需 `/restart`；前端下拉 Ctrl+F5。
 
-### 实测验证：全链路正常——看不到 UI 是浏览器缓存（2026-09-02，night_tasks #2）
+### onboarding 弹窗不可见真根因：modal-overlay 默认 display:none（2026-09-02，commit 5a30aa8）
 
-用户报告「下拉框选 provider 模型没有 token 输入 UI、也不自动开官网」——playwright 全新无缓存上下文实测**全链路正常**：`GET /api/models` 有 preset ✓（新代码进程）、下拉 4 组（✅ 已配置 + ✨z.ai / deepseek-official / siliconflow）✓、选中 `preset::` 条目 → onboarding modal 完整弹出（provider 说明 + 「🌐 打开申请页面」+ token 输入框 + 保存切换）✓，截图留证 `onboard_modal_verified.png`。
+**上节「看不到 UI 是浏览器缓存」的结论是误判——用户复查两次指出截图里没有弹窗，质疑完全正确，真根因在代码层**：
 
-**结论：后端热更新（8934cc2）只保证返回新内容，浏览器层需 Ctrl+F5 强刷一次**——看不到 onboarding UI 时先强刷排除缓存，再怀疑代码。
+`.modal-overlay` 的 CSS 默认 `display:none`——settingsModal 用它时靠 JS 显式置 `flex` 才可见；`showPresetOnboard` 只做了 `document.body.appendChild(ov)`，没设 display → **DOM 在但视觉隐藏**（截图里没有弹窗正是此因）。
+
+**误判链复盘**：night_tasks #2 的 playwright 验证只查了「DOM 存在」，没查 `getComputedStyle` 的实际 display 值——**DOM 存在 ≠ 视觉可见**。用户两次指出截图里没有弹窗，都被验证方法漏洞误读为「缓存」。
+
+**修复一行**（src/static/index.html）：
+
+```js
+document.body.appendChild(ov);
+ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——必须显式置 flex（settingsModal 同款），否则弹窗不可见
+```
+
+**复验（视觉级，playwright）**：display:flex / z-index:100 / 全屏遮罩（1440×769）/ token 输入框可见，截图 `onboard_modal_fixed_visible.png`。**Ctrl+F5 强刷即见**。
+
+**教训**：弹窗类「看不到」排障顺序——① 先查 CSS 默认 display + JS 是否显式设置（`getComputedStyle`）→ ② 再怀疑浏览器缓存（Ctrl+F5）。「先强刷排除缓存」只解决浏览器层，代码层根因（display 未置）强刷无用；验证弹窗可见性必须查视觉状态（computed style），不能只查 DOM 存在性。
 
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 

@@ -22,6 +22,28 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
+## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
+
+create_agent（src/multiagent.py，程序化声明入口——[/agents 管理页](../features/agents-admin.md)的表单化对应物）从五参扩到七参（用户提案 2026-09-02）：
+
+```python
+create_agent(name, description, system, tools="", model="",
+             assembly="user_message,steps,history|optional,tail.time,rules|off",
+             hooks="before_turn=wiki_auto_query,turn_end=recap_gen|async")
+```
+
+| 参数 | 语义 |
+|---|---|
+| `system` | 角色/任务定义；**超过 2000 字自动抽到 `<name>.md`**，yml 里落 `file: .agent/agents/<name>.md` 装配（v2.1 形态，yml 保持精简）——见 [agents-admin · v2.1 声明格式](../features/agents-admin.md#v21-声明格式用户设计) |
+| `assembly` | 装配清单（逗号分隔段名，**白名单语义**）。后缀：`\|optional`=声明但默认不装、派活时 `=on` 打开；`\|off`=移除。**默认已含 user_message/steps**——防「只列 text 收不到任务消息」的坑（team-manager 实锤，见 [team-tools](../features/team-tools.md)） |
+| `hooks` | `位置=工作流` 键值对，`\|async` 后缀（如 `turn_end=recap_gen\|async`） |
+| `tools` | 留空/all=继承主 Agent 全部（除管理工具）；逗号分隔=白名单只注册这些（**专属插件语义**——team-manager 的 `team_up,team_status,remote_*` 即此形态） |
+| `model` | 留空=主 Agent 当前模型 |
+
+- 装配段名/模式完整 DSL 见 [assembly DSL](#assembly-dsl上下文装配配方)（含 `|optional` 真语义、段可带模式 `history=tiered`）
+- 声明后 `_inject_agent_enums` 重注入——agent_prompt 节点的 name 下拉立刻出现新 Agent（见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
+- 写 `.agent/agents/<name>.yml` 不建实例；kill_agent 清理
+
 ## 复活路径 NameError · wiki-updater 多实例根因修复（2026-08-26，commit 6d396af）
 
 **现象**：团队看板出现 `wiki-updater` / `wiki-updater_2` / `wiki-updater_3` 多个同 name 实例，各自带着同样的攒批任务 recap——"不是检查忙就攒批短路了吗，为什么还建新实例？"
@@ -451,6 +473,10 @@ assembly:
 **段可带模式**：`history=tiered`——主 Agent 用分档 history（见 [context-engine 分档投影](context-engine.md)）。段名与模式的编辑往返在 [/agents 管理页编辑器](../features/agents-admin.md#编辑器-assembly-往返增强agentshtml同-commit)已支持。
 
 **主 Agent 的 assembly 是完整配方**（`~/.agt/main.yml`，当前 17 项）：人设分块 text（主体/多 Agent 协作规则/披露规则…）与**动态动作交错**——`{func:load_models()}` 可用模型插值、`{func:load_agents()}` 子 Agent 清单、`tool read_file(AGENTS.md)` / `tool concat_files(.agent/rules/*.md)` 每轮读取注入——尾部才是 history=tiered/ltm/user_message/steps/tail 五段。**"清单即装配顺序"**：主 Agent 的 SYSTEM 不是一块静态人设，子 Agent 的单 md persona 模型不适用。可在 [/agents 管理页](../features/agents-admin.md#_main_-主-agent-纳入管理2026-08commit-3f0ef32) 直接编辑原始清单（保存原样写回 main.yml，`/restart` 生效）。
+
+### 白名单坑：缺 user_message/steps = 收不到任务消息（2026-09-02，team-manager 实锤）
+
+**白名单坑（2026-09-02，team-manager 实锤，commit cb57597）**：装配是**白名单**——列什么装什么。team-manager 声明只列 text（缺 user_message/steps）→ 任务消息不进投影，Agent「看起来活着但收不到活」。`create_agent` 默认装配已显式含 `user_message,steps` 防同类（commit 9ddaf63）；手工声明务必把必需段列全（/agents 管理页保存也会显式化，见 [agents-admin · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。team-manager 修复细节见 [team-tools](../features/team-tools.md)。
 
 ## system_append DSL（SYSTEM 动态追加）
 

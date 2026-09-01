@@ -272,3 +272,9 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **团队管理工具组（2026-09-02，commit f232bd8，night_tasks #4）**：`tools/builtin/team_tools.py`——**team_up**（按清单启动各成员 agt-web → 等端口就绪 → remote_connect 组网 → 恢复指定 session；dry_run 默认先行）+ **team_status**（在线/模型/session/忙闲总览，POST /api/status 逐一探测）；`.agent/team.example.yml` 成员清单样例（**session 填名 = 成员带历史经验上岗**）+ `.agent/agents/team-manager.md` 声明（local-lfm 巡检省 token）——`agent_prompt("team-manager", "把团队拉起来")` 即可运营；**MCP 形态留作后续**。⚠️ 随包副本 src/assets/tools_builtin/ 待同步（详见 [团队管理工具](features/team-tools.md)、[multi-instance 组网](architecture/multi-instance.md)）
 - **顺带观察**：wiki-updater_3（local-lfm）整夜正常消化攒批维护 ✅——本地模型跑维护的省钱路线实证闭环（见 [local-models 用途建议](guides/local-models.md#用途建议按适配度排序)）
 
+## 快速事实增补（2026-09-02 · 二 · 复审修正）
+
+- **onboarding 弹窗不可见真根因（修正 night_tasks #2 的「浏览器缓存」误判，commit 5a30aa8）**：`.modal-overlay` CSS 默认 `display:none`——settingsModal 靠 JS 显式置 flex，`showPresetOnboard` 只 appendChild 没设 display → **DOM 在但视觉隐藏**（用户两次指出截图里没有弹窗；playwright 只查 DOM 存在没查 `getComputedStyle` 导致误判）。修复：appendChild 后 `ov.style.display='flex'` 一行；视觉级复验（display:flex / z-index / 全屏遮罩 / token 输入框可见）截图 `onboard_modal_fixed_visible.png`。**弹窗「看不到」先查 CSS display + JS 是否显式置，再怀疑缓存**（详见 [config-and-models · onboarding 真根因](guides/config-and-models.md)）
+- **create_agent 传参拓展（2026-09-02，commit 9ddaf63）**：`create_agent(name, description, system, tools, model, assembly, hooks)` 七参——system >2000 字自动抽 `<name>.md` 由 `file:` 装配（v2.1 形态）；assembly 逗号分隔段名（`|optional` 默认不装 / `|off` 移除）；hooks `位置=工作流`（`|async`）；**默认装配含 user_message/steps** 防白名单坑（详见 [multi-agent · create_agent 传参拓展](architecture/multi-agent.md)）
+- **team-manager 装配与定位修复（2026-09-02，commit cb57597）**：声明只列 text（白名单语义）缺 user_message/steps → **收不到任务消息**，补 user_message/steps/tail.time/tail.system；定位改 **VideoGameTeam 固定成员**（非本 repo 临时 sub-agent）；tools 显式清单 `team_up,team_status,remote_*`（team_tools 作专属插件）（详见 [团队管理工具](features/team-tools.md)）
+

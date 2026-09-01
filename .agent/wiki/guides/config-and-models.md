@@ -25,6 +25,31 @@
 
 > `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56；触发语义修正 commit 304bc16）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=触发后压得狠、涨回窗口需 (1−ratio)×win、顶窗间隔长→折叠事件少——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线/保留线区分见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16)。
 
+## 预设 provider 模板：models.preset.json 播种 + onboarding（2026-09-01，spec s_d4241d58，commit 7b8f156）
+
+**用户提案（2026-09-01）**：新用户打开 WebUI 模型下拉框是空的——模型卡片有它的好处，但 provider 和用户都希望下拉框**开箱就有模型可选**。落地为**随包播种预设 provider**：`src/assets/models.preset.json`（4 provider × 9 模型），运行时只读合并进下拉视图，选中占位条目走 onboarding 弹窗引导申请 key 并落地用户配置。
+
+**预设内容**（spec s_d4241d58）：modelscope（🎁 **free trial**——多数开源模型每日免费额度）/ zhipu 🔑 / deepseek-official 🔑 / siliconflow 🔑——各家带 `register_url`（申请页链接）+ `desc` + 模型参数（thinking/vision/desc 等，**模型级参数保持可配置**，落地时随条目写入）。
+
+**api_tokens 占位语义**（预设条目专用，占位 token 永不真正使用）：
+
+| 占位值 | 含义 | 前端行为 |
+|---|---|---|
+| `"free trial"` | 该 provider 有免费 token 额度 | 🎁 引导「领取免费额度」+ 输入 token |
+| `"require an key"` | 须申请 key | 🔑 引导「打开申请页面」+ 输入 token |
+
+**三条链路**（config.py + server.py + index.html，commit 7b8f156）：
+
+| 层 | 内容 |
+|---|---|
+| config.py | `preset_models_view()` 合并视图（**用户已配置同名条目不在 preset 重复——用户优先**）+ `preset_entry()`（onboarding 拼 profile）——preset 只读，**不写用户 models.json** |
+| server.py | `GET /api/models` 响应带 preset 字段；WS 连接/重连 system 消息带 preset（前端一次拿全）；**`POST /api/models/onboard`**：body `{name, api_keys}`（逗号分隔多 key，含中文逗号兼容）→ 预设参数 + 用户 token → 完整条目写 models.json（写生效份 + reload + 实例层热应用）→ 前端刷新下拉即可切换 |
+| index.html | 模型下拉**分组渲染**：`✅ 已配置` optgroup + 预设 provider 分组（🎁/🔑 徽标）；选中 `preset::` 条目 → onboarding modal（provider 说明 + 「🌐 打开申请页面」新标签 + **多 key 输入**（数组保留多 key 配置能力））→ 落地后自动切换并刷新下拉 |
+
+**中立性保留**：预设只是「开箱可选」——用户手动改 json 加自有 provider 的路径完全不变（`models.json` 条目永远优先于预设；想加预设外的 provider 就手动编辑 models.json）。
+
+**生效方式**：后端新端点需 `/restart`；前端下拉 Ctrl+F5。
+
 ## settings.json（运行时）
 
 | 键 | 说明 |

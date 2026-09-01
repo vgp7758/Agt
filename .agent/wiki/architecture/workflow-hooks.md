@@ -322,6 +322,27 @@ with ThreadPoolExecutor() as pool:
 
 **修复记录**：5 个工作流补根属性（before_turn_retrieval/wiki_auto_query 补 `hook="before_turn"`、py_auto_diag/cs_auto_diag 补 `hook="after_tool"`、recap_gen 补 `hook="turn_end" async="true" recap="true"`）+ server PUT 保底合并 + `get_hook_workflows` 修复后识别全部 6 个钩子。
 
+## 运行时钩子开关：/hook 命令（2026-09-01，commit c9f82b0）
+
+**用户提案（2026-09-01，`/hook before_turn on/off` 形态）**：钩子的启用/禁用此前只能靠编辑器勾选 `meta.enabled`（持久化基线），调试时临时关某个钩子要改配置——新增 **CLI 斜杠命令 `/hook`** 做**运行时开关**（src/commands.py `_cmd_hook` + src/agent.py `_filter_hook_tasks`，commit c9f82b0）。
+
+**语法**：
+
+```
+/hook                                     列出所有位置+工作流+开关状态
+/hook before_turn                         列出该位置的工作流
+/hook before_turn off|on                  整位禁用/开启（用户举例形态）
+/hook before_turn wiki_auto_query off|on  单个工作流开关
+```
+
+**语义**：
+
+- **运行时开关（内存 `_hook_disabled` 集合，不落盘）**——调试临时关钩子用，重启后复位；**持久化仍走编辑器勾选 `meta.enabled`**（两条线不打架：编辑器开关恒为基线，`/hook` 是临时覆盖）
+- **位置前缀隔离**：`before_turn off` 不影响 `before_tool` 同名单项（开关键 = `位置` 或 `位置::工作流名`）
+- **立即生效**：`_hook_tasks` 两条 return 统一过 `_filter_hook_tasks`（`_hook_disabled` 过滤）——每轮实时读，`/hook off` 后下一轮钩子立即不触发，无需重启
+
+**验证**：5 场景全过（默认全开 / 单工作流禁用 / 整位禁用 / 整位开启连带 / 位置隔离）。生效方式：commands.py 是引擎代码，需 `/restart`。
+
 ## 运行观测（run registry，2026-08-20 新，commit 8aeb21a；全文查看 commit bb56a82）
 
 工作流执行的节点级实时观测，消除「钩子在跑但不知道跑到哪」的盲盒感。**接入点**：

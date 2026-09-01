@@ -1,0 +1,33 @@
+# 团队成员清单样例（night_tasks #4）——复制为 .agent/team.yml 后按实际修改。
+# team_up 按此拉起成员：agt-web 实例（各自 repo）→ remote_connect 组网 → 恢复指定 session。
+# session 留空 = 不主动恢复（成员按自身默认行为启动）；填名字 = 成员带着该 session 的历史经验上岗。
+members:
+  - name: director          # server_id（组网标识——remote_ask/remote_message 用它寻址）
+    repo: D:/Projects/VideoGameTeam/director   # 成员 repo（agt-web 的工作目录）
+    port: 9201
+    session: ""             # 要恢复的 session 名（空=全新开始）
+    role: 导演——把控叙事节奏与任务分工，产出分镜与场景描述
+
+  - name: screenwriter
+    repo: D:/Projects/VideoGameTeam/screenwriter
+    port: 9202
+    session: ""
+    role: 编剧——把导演的分镜扩写为对白与剧情文本
+
+  - name: scriptwriter
+    repo: D:/Projects/VideoGameTeam/scriptwriter
+    port: 9203
+    session: ""
+    role: 脚本工程师——把剧情文本转成游戏脚本/状态机
+
+  - name: painter
+    repo: D:/Projects/VideoGameTeam/painter
+    port: 9204
+    session: ""
+    role: 画师——按分镜生成场景图（调用生图 docker 的实例）
+
+  - name: composer
+    repo: D:/Projects/VideoGameTeam/composer
+    port: 9205
+    session: ""
+    role: 作曲——生成场景配乐与音效（调用音频 docker 的实例）

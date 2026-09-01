@@ -262,7 +262,7 @@
     #toolPicker .tpk-filter{width:100%;margin-bottom:6px;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:#fafbfc;box-sizing:border-box}
     #toolPicker .tpk-group{color:#7c3aed;font-size:11px;font-weight:bold;margin:8px 0 4px;padding-bottom:2px;border-bottom:1px solid var(--line)}
     #toolPicker .tpk-row{display:flex;flex-wrap:wrap;gap:4px}
-    #toolPicker .tpk-item{flex:1 1 calc(50% - 4px);min-width:180px;text-align:left;padding:6px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px;background:#f8f9fc;overflow:hidden}
+    #toolPicker .tpk-item{flex:1 1 calc(50% - 4px);min-width:var(--tpk-min,180px);text-align:left;padding:6px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px;background:#f8f9fc;overflow:hidden}
     #toolPicker .tpk-item:hover{border-color:#7c3aed;background:#f3f0ff}
     #toolPicker .tpk-item .tpk-name{font-weight:600;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #toolPicker .tpk-item .tpk-desc{color:#8a9099;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
@@ -1115,16 +1115,27 @@ function toggleToolPicker(ev){
   if(open){ renderToolPicker(); const f = document.getElementById('tpkFilter'); if(f) f.focus(); }
 }
 function renderToolPicker(){
-  // 工具箱浮窗（参照编辑器 nodePicker）：搜索过滤（名/显示名/描述）+ 分组 + 卡片带描述
-  const fv = document.getElementById('tpkFilter');
+  // 工具箱浮窗（参照编辑器 nodePicker）：搜索过滤（名/显示名/描述）+ 分组 + 卡片带描述。
+  // 输入框与列表分离（2026-09-01 修复：整块 innerHTML 重建会吃掉输入框的值和焦点——
+  // 每敲一个字符框就被清空，"输入不了字符"的根因）：首次建结构，后续只更新列表区。
+  const box = document.getElementById('toolPicker');
+  let fv = document.getElementById('tpkFilter');
+  if(!fv){
+    box.innerHTML = `<input id="tpkFilter" class="tpk-filter" placeholder="🔍 搜索工具名/描述…" oninput="renderToolPicker()" onclick="event.stopPropagation()"><div id="tpkList"></div>`;
+    fv = document.getElementById('tpkFilter');
+  }
   const q = ((fv && fv.value) || '').toLowerCase();
   const groups = {};
   _toolList.filter(t => !q || t.name.toLowerCase().includes(q)
     || (t.display||'').toLowerCase().includes(q) || (t.desc||'').toLowerCase().includes(q))
     .forEach(t => { (groups[t.group||'其它'] = groups[t.group||'其它'] || []).push(t); });
-  let h = `<input id="tpkFilter" class="tpk-filter" placeholder="🔍 搜索工具名/描述…" oninput="renderToolPicker()" onclick="event.stopPropagation()">`;
+  let h = '';
+  // 工具名宽度估算（分组内自适应——用户提案 2026-09-01：每组卡片宽度按该组最长名单独算，
+  // 短名组窄卡多列、长名组（如 __mcp__ 前缀）宽卡不截断）
+  const estW = s => { let w = 0; for(const ch of String(s||'')) w += ch.charCodeAt(0) > 0x2E80 ? 13 : 7.5; return w; };
   for(const [g, tools] of Object.entries(groups)){
-    h += `<div class="tpk-group">${esc(g)}</div><div class="tpk-row">`;
+    const mw = Math.round(Math.max(110, Math.min(280, Math.max(...tools.map(t => estW(t.display||t.name))) + 34)));
+    h += `<div class="tpk-group">${esc(g)}</div><div class="tpk-row" style="--tpk-min:${mw}px">`;
     tools.forEach(t => {
       h += `<div class="tpk-item" data-name="${esc(t.name)}" onclick="pickTool(this.dataset.name)">` +
            `<div class="tpk-name">${esc(t.display||t.name)}</div>` +
@@ -1133,9 +1144,7 @@ function renderToolPicker(){
     h += '</div>';
   }
   if(!Object.keys(groups).length) h += '<div style="color:#8a9099;font-size:12px;padding:10px">（无匹配工具）</div>';
-  document.getElementById('toolPicker').innerHTML = h;
-  const f2 = document.getElementById('tpkFilter');
-  if(f2){ f2.focus(); f2.setSelectionRange(f2.value.length, f2.value.length); }
+  document.getElementById('tpkList').innerHTML = h;
 }
 function pickTool(name){
   _pickedTool = name;

@@ -75,14 +75,24 @@ def _inject_node_plugins(html: str) -> str:
     return html.replace("</body>", "\n".join(blocks) + "\n</body>", 1)
 
 
-_INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-_EDITOR_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_editor.html").read_text(encoding="utf-8"))
-_RAG_HTML = (_STATIC_DIR / "rag.html").read_text(encoding="utf-8")
-_WF_DEBUG_HTML = _inject_node_plugins((_STATIC_DIR / "workflow_debug.html").read_text(encoding="utf-8"))
-_MEMORY_HTML = (_STATIC_DIR / "memory.html").read_text(encoding="utf-8")
-_AGENTS_HTML = (_STATIC_DIR / "agents.html").read_text(encoding="utf-8")
-_STATS_HTML = (_STATIC_DIR / "stats.html").read_text(encoding="utf-8")
-_WF_MONITOR_HTML = (_STATIC_DIR / "wf_monitor.html").read_text(encoding="utf-8")
+# 静态 HTML 热更新（2026-09-01·用户报告：改 HTML 后 Ctrl+Shift+R 不生效须 /restart——
+# 启动时读进模块级常量的内存快照是根因）：mtime 缓存——文件没变用缓存（stat 零开销），
+# 变了重读（transform 一并重跑——节点插件注入也热生效）。此后改 HTML 硬刷新即生效。
+_HTML_CACHE: dict = {}
+
+def _serve_html(filename: str, transform=None) -> str:
+    try:
+        mtime = (_STATIC_DIR / filename).stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    ent = _HTML_CACHE.get(filename)
+    if ent is None or ent["mtime"] != mtime:
+        text = (_STATIC_DIR / filename).read_text(encoding="utf-8")
+        if transform:
+            text = transform(text)
+        _HTML_CACHE[filename] = {"mtime": mtime, "text": text}
+        return text
+    return ent["text"]
 
 
 def _broadcast(ev: dict):
@@ -138,36 +148,36 @@ def _safe_wf_path(name: str) -> Path:
 
 @app.get("/")
 async def index():
-    return HTMLResponse(_INDEX_HTML)
+    return HTMLResponse(_serve_html("index.html"))
 
 
 @app.get("/editor")
 async def workflow_editor():
-    return HTMLResponse(_EDITOR_HTML)
+    return HTMLResponse(_serve_html("workflow_editor.html", _inject_node_plugins))
 
 
 @app.get("/wfdebug")
 async def workflow_debug():
     """工作流调试页：只读渲染画布 + 流式执行 + 逐节点查看输出。"""
-    return HTMLResponse(_WF_DEBUG_HTML)
+    return HTMLResponse(_serve_html("workflow_debug.html", _inject_node_plugins))
 
 
 @app.get("/rag")
 async def rag_page():
     """RAG 文档库管理页：配置 + 建库 + 查询测试。"""
-    return HTMLResponse(_RAG_HTML)
+    return HTMLResponse(_serve_html("rag.html"))
 
 
 @app.get("/memory")
 async def memory_page():
     """长期记忆管理页：查看/编辑/删除三类记忆。"""
-    return HTMLResponse(_MEMORY_HTML)
+    return HTMLResponse(_serve_html("memory.html"))
 
 
 @app.get("/stats")
 async def stats_page():
     """LLM 调用统计页：缓存命中率折线图 + 各模型调用概览表。"""
-    return HTMLResponse(_STATS_HTML)
+    return HTMLResponse(_serve_html("stats.html"))
 
 
 @app.get("/icons/{name}")
@@ -689,7 +699,7 @@ async def api_status(request: Request):
 @app.get("/wf/monitor")
 async def wf_monitor_page(run: str = ""):
     """工作流运行观测页：?run=<run_id> 实时轮询单次运行节点轨迹；无参=最近运行列表。"""
-    return HTMLResponse(_WF_MONITOR_HTML)
+    return HTMLResponse(_serve_html("wf_monitor.html"))
 
 
 
@@ -870,7 +880,7 @@ async def api_memory_delete(memory_id: str):
 @app.get("/agents")
 async def agents_page():
     """子 Agent 声明管理页：列表 + 参数编辑（名称/描述/模型/工具/assembly/hooks）。"""
-    return HTMLResponse(_AGENTS_HTML)
+    return HTMLResponse(_serve_html("agents.html"))
 
 
 @app.get("/agents/{agent_id}")
@@ -878,7 +888,7 @@ async def agent_chat_page(agent_id: str):
     """Agent 专属对话页：/agents/<agent_id> 与裸 / 同一页面（index.html 读 URL 初始化交互目标）。
     URL 直接编码目标 Agent——刷新/分享/收藏自动落在对应视图（如 /agents/wiki-updater_3）；
     裸 / 默认主 Agent。与 /agents（无 id，声明管理页）按路径形态区分，互不冲突。"""
-    return HTMLResponse(_INDEX_HTML)
+    return HTMLResponse(_serve_html("index.html"))
 
 
 def _agent_safe_name(name: str) -> str:

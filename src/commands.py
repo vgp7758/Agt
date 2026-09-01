@@ -1104,6 +1104,59 @@ def _cmd_update(ctx: CommandContext, args):
     check_and_update(force=True, announce=print)
 
 
+def _cmd_hook(ctx: CommandContext, args):
+    """/hook [位置] [工作流名] [on|off] —— 查看/切换钩子运行时开关（用户提案 2026-09-01）。
+    运行时开关（内存，不落盘）——调试时临时关钩子用；重启后复位（持久化用编辑器勾选 meta.enabled）。
+    语法：
+      /hook                                     列出所有位置+工作流+开关状态
+      /hook before_turn                         列出该位置工作流
+      /hook before_turn off|on                  整位禁用/开启
+      /hook before_turn wiki_auto_query off|on  单个工作流开关"""
+    agent = ctx.agent
+    _HOOKS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
+    d = getattr(agent, "_hook_disabled", None) or set()
+    parts = (args or "").split()
+
+    def _show_one(h):
+        tasks = agent._hook_tasks(h)
+        if not tasks:
+            print(f"  {h}：（无）"); return
+        if f"{h}::*" in d:
+            print(f"  {h}：⛔ 整位禁用"); return
+        for t in tasks:
+            nm = t.get("name")
+            mark = "✅" if f"{h}::{nm}" not in d else "⛔"
+            print(f"    {mark} {nm}" + ("  [async]" if t.get("async") else ""))
+
+    if not parts:
+        print("🪝 钩子运行时开关（重启后复位，持久化用编辑器 meta.enabled）：")
+        for h in _HOOKS:
+            print(f"  {h}：")
+            _show_one(h)
+        return
+    hook = parts[0]
+    if hook not in _HOOKS:
+        print(f"⚠️ 未知钩子位置 '{hook}'。可用：{', '.join(_HOOKS)}")
+        print("用法：/hook [位置] [工作流名] [on|off]")
+        return
+    if len(parts) == 1:
+        print(f"🪝 {hook}：")
+        _show_one(hook)
+        return
+    # /hook <位置> on|off
+    if len(parts) == 2 and parts[1] in ("on", "off"):
+        agent._set_hook_switch(hook, "*", parts[1] == "on")
+        print(f"🪝 {hook}：{'✅ 已开启' if parts[1] == 'on' else '⛔ 已禁用（整位）'}")
+        return
+    # /hook <位置> <工作流名> on|off
+    if len(parts) == 3 and parts[2] in ("on", "off"):
+        nm = parts[1]
+        agent._set_hook_switch(hook, nm, parts[2] == "on")
+        print(f"🪝 {hook} · {nm}：{'✅ 已开启' if parts[2] == 'on' else '⛔ 已禁用'}")
+        return
+    print("用法：/hook [位置] [工作流名] [on|off]")
+
+
 def _cmd_debug(ctx: CommandContext, args):
     """/debug prompt <提示词> —— 提示词调试：按【当前上下文投影 + 提示词】直接调 LLM，
     不落盘（不 start_turn，session/events 零写入）、不执行（回包的 tool_calls 只展示不跑），
@@ -1776,6 +1829,13 @@ def build_default_registry() -> CommandRegistry:
         "/restart                     重启并恢复当前会话\n"
         "/restart 继续刚才的任务       重启恢复后自动发送该消息\n"
         "  改了 agt 源码(src/)后用它让新代码生效；日志 ~/.agt/restart.log")
+    reg.register("hook", _cmd_hook,
+        "[位置] [工作流名] [on|off]  查看/切换钩子运行时开关（内存，重启复位）",
+        "/hook                      列出所有钩子位置+工作流+开关状态\n"
+        "/hook before_turn          列出 before_turn 位置的工作流\n"
+        "/hook before_turn off      整位禁用 before_turn 所有钩子\n"
+        "/hook before_turn wiki_auto_query off   禁用单个工作流\n"
+        "  运行时开关（内存不落盘），调试临时关钩子用；持久化用编辑器勾选 meta.enabled")
     reg.register("debug", _cmd_debug,
         "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包\n"
         "hook <提示词>    调试用：以提示词触发 before_turn 钩子，不落盘，钩子跑完即 return",

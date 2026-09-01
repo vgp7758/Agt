@@ -1133,10 +1133,10 @@ class Agent:
         specs = getattr(self.session, "hook_specs", None)
         if specs is None:
             hws = get_hook_workflows(_ws, hook)
-            return [{"kind": "workflow", "name": hw["name"], "canvas": hw["canvas"],
-                     "async": bool((hw.get("meta") or {}).get("async")),
-                     "recap": bool((hw.get("meta") or {}).get("recap")),
-                     "meta": hw.get("meta") or {}} for hw in hws]
+            return self._filter_hook_tasks([{"kind": "workflow", "name": hw["name"], "canvas": hw["canvas"],
+                      "async": bool((hw.get("meta") or {}).get("async")),
+                      "recap": bool((hw.get("meta") or {}).get("recap")),
+                      "meta": hw.get("meta") or {}} for hw in hws], hook)
         tasks = []
         for item in specs.get(hook, []):
             kind = item.get("kind")
@@ -1151,7 +1151,32 @@ class Agent:
                     _LOG.warning("hooks 声明的工作流 '%s' 未找到（.agent/workflows/），跳过", name)
                     continue
             tasks.append(entry)
-        return tasks
+        return self._filter_hook_tasks(tasks, hook)
+
+    def _filter_hook_tasks(self, tasks: list, hook: str) -> list:
+        """运行时钩子开关（/hook 命令，2026-09-01 用户提案）：_hook_disabled 存「位置::名」或
+        「位置::*」。'*' 整位禁用；否则按名过滤。默认空 = 全开。"""
+        d = getattr(self, "_hook_disabled", None) or set()
+        if not d or not tasks:
+            return tasks
+        if f"{hook}::*" in d:
+            return []
+        return [t for t in tasks if f"{hook}::{t.get('name')}" not in d]
+
+    def _set_hook_switch(self, hook: str, name: str, on: bool):
+        """/hook 命令的开关写口：on=移除禁用项，off=加入。name='*' 表示整位开关（on 时连带清掉该位所有单项禁用）。"""
+        d = getattr(self, "_hook_disabled", None)
+        if d is None:
+            self._hook_disabled = d = set()
+        key = f"{hook}::{name}"
+        if on:
+            if name == "*":
+                for k in [k for k in d if k.startswith(f"{hook}::")]:
+                    d.discard(k)
+            else:
+                d.discard(key)
+        else:
+            d.add(key)
 
     def _wf_canvas_index(self) -> dict:
         """工作流名 → canvas 索引（钩子声明解析用）。带 mtime 缓存：目录没变不重扫。"""

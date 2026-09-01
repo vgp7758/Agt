@@ -41,7 +41,7 @@
 
 ## 用途建议（按适配度排序）
 
-1. **攒批型 utility 任务**（最匹配）：wiki 维护批、夜间整理——18~38s 的速度硬伤在「不着急的批量」场景消失，且零 token 成本；ms-deepseek 端点不稳时它是备胎（**wiki-updater 的回退链加 local-lfm 即可**，见 [声明级回退链](../architecture/multi-agent.md)）。**首个落地（2026-08-30，commit e8ef64a）：recap_gen（turn_end 钩子）已切 local-lfm**——原 model=proxy → glm 429 余额不足致 recap 批量失败，切后零 token 成本 + 关 thinking 提速（见 [multi-agent · recap_gen 切换](../architecture/multi-agent.md)）
+1. **攒批型 utility 任务**（最匹配）：wiki 维护批、夜间整理——18~38s 的速度硬伤在「不着急的批量」场景消失，且零 token 成本；ms-deepseek 端点不稳时它是备胎（**wiki-updater 的回退链加 local-lfm 即可**，见 [声明级回退链](../architecture/multi-agent.md)）。**首个落地（2026-08-30，commit e8ef64a）：recap_gen（turn_end 钩子）已切 local-lfm**——原 model=proxy → glm 429 余额不足致 recap 批量失败，切后零 token 成本 + 关 thinking 提速（见 [multi-agent · recap_gen 切换](../architecture/multi-agent.md)）。**实证闭环（2026-09-02）**：wiki-updater_3（local-lfm）整夜正常消化攒批维护 ✅——本地模型跑维护的省钱路线稳定运行
 2. **子 Agent 简单任务**：分类 / 精排 / 格式转换——`agent_prompt` 派活的声明模型指 local-lfm，工具调用能力足以支撑 3~5 步小流程
 3. **react_agent_demo 本地演示位**：工具调用四连已测通，能跑通 ReAct 原语演示（教学 / 调试用）
 4. **local-lfm-vl（已就位）**：vision 子 Agent 的免费备胎（qwen 视觉限流时回退）——形状 / 颜色 / 布局理解 OK；**精细文字识别别指望 3B**

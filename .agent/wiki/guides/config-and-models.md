@@ -50,6 +50,12 @@
 
 **生效方式**：后端新端点需 `/restart`；前端下拉 Ctrl+F5。
 
+### 实测验证：全链路正常——看不到 UI 是浏览器缓存（2026-09-02，night_tasks #2）
+
+用户报告「下拉框选 provider 模型没有 token 输入 UI、也不自动开官网」——playwright 全新无缓存上下文实测**全链路正常**：`GET /api/models` 有 preset ✓（新代码进程）、下拉 4 组（✅ 已配置 + ✨z.ai / deepseek-official / siliconflow）✓、选中 `preset::` 条目 → onboarding modal 完整弹出（provider 说明 + 「🌐 打开申请页面」+ token 输入框 + 保存切换）✓，截图留证 `onboard_modal_verified.png`。
+
+**结论：后端热更新（8934cc2）只保证返回新内容，浏览器层需 Ctrl+F5 强刷一次**——看不到 onboarding UI 时先强刷排除缓存，再怀疑代码。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

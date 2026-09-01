@@ -13,6 +13,22 @@
 
 memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长期记忆](../features/longterm-memory.md)。
 
+## 存档写盘容错：session 落盘失败不再阻塞 react（2026-09-02，commit e5f2733）
+
+**症状（用户报告，night_tasks #1）**：session 里写的几个 jsonl / json 文件（toollog.jsonl / events.jsonl / meta.json / _origin.txt）写入失败时直接异常、阻塞 react 运作。
+
+**审计结论**：session 大部分写盘点已有 try 保护，**三处裸写是真凶**（commit e5f2733）：
+
+| 写盘点 | 位置 | 修复后语义 |
+|---|---|---|
+| `_atomic_write_lines`（**toollog 每步写——最热点**） | src/session.py | 磁盘满 / 文件被杀软锁定 → 只告警，内存 toollog 继续可查 |
+| `save()` 的 `_origin.txt` | src/session.py | 失败告警，不抛 |
+| `save()` 的 `meta.json` 原子写（autosave 每轮触发） | src/session.py | 失败告警，内存 session 仍是真相 |
+
+验证：写不存在的盘（Z:/）→ 仅告警不抛 ✓ + py_compile 通过。
+
+**原则**：落盘是持久化增强，内存 session 才是运行时真相——写失败绝不阻塞主循环。
+
 ## 可观测性
 
 ### /wf/monitor 工作流运行观测页（2026-08-20 新，commit 8aeb21a）
@@ -186,6 +202,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | 手机 `/restart` 后电脑无端多开一个浏览器 tab，新 tab 显示「(当前对话)」需手动刷新才见会话 | 已修（commit 7ca6cfc）：重启链路 `open_browser` 无条件开 tab + `/resume` 恢复慢于页面连接、完成后又无推送 → 重启场景跳过 open_browser（检测 `AGT_RESTART_*` env）+ 恢复即 `broadcast_session_state` 广播全端；旧进程需 `/restart`（见 [user-interaction](../features/user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)） |
 | 「⏳ 工作流执行中…」行不可点击、看不到节点进度 | 旧进程代码（事件不带 run_id）→ `/restart` 后新运行即可点击打开 [/wf/monitor 实时观测](#wfmonitor-工作流运行观测页2026-08-20新commit-8aeb21a) |
 | 观测页节点预览无 📄、点不开全文 | 旧进程（无 full 存储）或**全量预算（20M 字符）耗尽**后只存预览；先 `/restart`，仍不行即预算耗尽属预期降级（见 [wf-monitor · 节点全文查看](../features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)） |
+| session 落盘失败直接异常、阻塞 react（toollog / _origin / meta 裸写） | 已修（2026-09-02，commit e5f2733）：三处裸写容错——`_atomic_write_lines`（toollog 每步写·最热点）+ `save()` 的 `_origin.txt` / `meta.json`——失败只告警不抛，内存 session 仍是真相（见 [存档写盘容错](#存档写盘容错session-落盘失败不再阻塞-react2026-09-02commit-e5f2733)） |
 
 ## 相关页面
 

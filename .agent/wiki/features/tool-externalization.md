@@ -7,7 +7,7 @@
 | 位置 | 角色 |
 |------|------|
 | `tools/builtin/*.py` | 工具源文件（开发处） |
-| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 10 个：fs/str/list/misc/**kv/diff**/wiki/rag/ltm/download——kv/diff 为 2026-08 纯函数批新增，commit 17312eb） |
+| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 10 个：fs/str/list/misc/**kv/diff**/wiki/rag/ltm/download——kv/diff 为 2026-08 纯函数批新增，commit 17312eb；⚠️ team_tools.py 2026-09-02 已写 tools/builtin/、随包副本待同步） |
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**。
 
@@ -41,7 +41,7 @@ def agt_register(ctx=None):
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。
 
-## 外置件清单（10 文件；真限界上下文四组 + 纯函数批，commit 17312eb 扩容）
+## 外置件清单（11 文件；真限界上下文四组 + 纯函数批 + 团队管理组，commit 17312eb 扩容）
 
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
@@ -54,12 +54,9 @@ def agt_register(ctx=None):
 | `rag_tools.py` | rag_query + **cosine_sim / emb_probe**（2026-08 迁入注册） | 注册外置 + 实现留框架 | agt_register 触发 `preload_async` 预热；本体留 `src/rag.py` 共享 embedder 单例——cosine_sim/emb_probe 本体 2026-08 从 real_tools 迁入 rag.py（语义归属 RAG 组），见 [rag](rag.md)、[cosine-sim](cosine-sim.md) |
 | `ltm_tools.py` | ltm 五件套 | 注册外置 + 实现留框架 | 本体留 `src/longterm_memory.py`，经 **ensure_ltm 模块级单例**与 Agent 注入 provider 共享同一实例（内存缓存不分裂）；origin_session 由 provider 每轮刷新，见 [longterm-memory](longterm-memory.md) |
 | `download_tools.py` | list_downloadable / download_asset | 纯函数（调框架实现） | 资产目录自写自读；框架 `src/download.py` 保留 `list_assets`/`download_asset` 供 `/download` 命令（commands.py）；`agt_register(ctx)` 覆盖 `_WORKSPACE` |
+| `team_tools.py`（新，2026-09-02） | team_up / team_status | 纯函数（编排引擎 remote_* 子进程/HTTP） | 团队管理：按清单启动成员 agt-web → 等端口就绪 → remote_connect 组网 → 恢复指定 session；dry_run 默认先行 + team_status 总览（POST /api/status 逐一探测）；⚠️ 随包副本待同步，见 [team-tools](team-tools.md) |
 
 工厂清理：`make_ltm_tools` / `make_download_tools` 已删，chat.py 装配线同步清理（ltm/download 改由 attach_script_tools 扫描注册）。
-
-### download 外置顺带修的 bug
-
-`src/assets/manifest.json` 9 条目缺 `src`/`default_dir` 字段——`list_assets` 直接 KeyError（测试 download 外置件时当场抓到），已补全（字段：name/type/src/default_dir/desc；修复后清单 9 项正常列出）。
 
 ## 与节点插件化对照
 

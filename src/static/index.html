@@ -2336,6 +2336,25 @@ function onWSMessage(ev){
     case 'workflow_message':
       addRow('sys', '💬 '+(m.name?('【'+m.name+'】'):'')+m.text, {auto: m.auto});
       break;
+    case 'hook_note': {
+      // 钩子注入落盘事件（2026-09-01 Step 4 前端消费）：折叠成一条记录提示——默认收起，
+      // 点击展开看注入全文（事后可追溯"当轮模型看到了什么注入"，读档/实时同路径）
+      const _tag = wfHookTag(m);
+      const _blk = (m.result || '').toString();
+      const _head = `⚡ ${_tag}注入「${m.name||''}」${m.run_id?(' · run='+m.run_id):''}`;
+      if(_blk){
+        addTraceHTML('hook_note',
+          `<div class="tf-head" style="color:#7c3aed">▸ ${esc(_head)} <span class="dim">（${_blk.length}字·点击展开）</span></div>` +
+          `<div class="tf-body" style="display:none;white-space:pre-wrap">${esc(_blk)}</div>`);
+        const _e = curTurn.traceBox.lastElementChild;
+        const _he = _e && _e.querySelector('.tf-head');
+        const _be = _e && _e.querySelector('.tf-body');
+        if(_he && _be) _he.onclick = ()=>toggleFold(_he, _be);
+      } else {
+        addTrace('hook_note', _head);
+      }
+      break;
+    }
     case '_ping':
       break;  // 心跳，不渲染
     case '_done':

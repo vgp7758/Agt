@@ -361,6 +361,7 @@
       <h4 style="margin:0;font-size:13px">MCP Server 配置（.mcp.json）</h4>
       <button onclick="addMcpServer()" style="font-size:11px">+ 添加 Server</button>
       <button class="btn primary" onclick="saveMcpConfig()" style="font-size:11px">💾 保存 MCP</button>
+      <button class="btn" onclick="refreshMcpStatus()" style="font-size:11px" title="刷新各 server 的连接状态与工具数">🔄 状态</button>
       <span style="font-size:10px;color:#8a9099">保存到 workspace/.mcp.json · 重启 Agent 生效</span>
     </div>
     <div id="mcpList" style="flex:1;overflow-y:auto"></div>
@@ -1458,8 +1459,23 @@ reconnectChk.onchange = function(){
 
 // ===== MCP 配置管理（设置弹窗 MCP 标签）=====
 let _mcpData = {};
+let _mcpStatus = {};
 async function loadMcpConfig(){
-  try{ const r = await fetch('/api/mcp'); _mcpData = await r.json(); renderMcpList(); }catch(e){}
+  try{
+    const [r, rs] = await Promise.all([fetch('/api/mcp'), fetch('/api/mcp/status').catch(()=>null)]);
+    _mcpData = await r.json();
+    if(rs){ try{ _mcpStatus = (await rs.json()).servers || {}; }catch(e){ _mcpStatus = {}; } }
+    renderMcpList();
+  }catch(e){}
+}
+async function refreshMcpStatus(){
+  try{
+    const rs = await fetch('/api/mcp/status');
+    _mcpStatus = (await rs.json()).servers || {};
+    renderMcpList();
+    const n = Object.values(_mcpStatus).filter(s=>s.connected).length;
+    toast(`🔄 MCP 状态已刷新（${n}/${Object.keys(_mcpStatus).length} 连接）`);
+  }catch(e){ toast('❌ 状态刷新失败'); }
 }
 function renderMcpList(){
   const box = document.getElementById('mcpList');
@@ -1470,8 +1486,13 @@ function renderMcpList(){
   }
   box.innerHTML = Object.entries(servers).map(([name, cfg])=>{
     const escName = String(name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const st = _mcpStatus[name];
+    const badge = st ? (st.connected
+        ? `<span style="color:#059669;font-size:11px" title="${esc((st.tools||[]).join(', ').slice(0,400))}">🟢 已连接 · ${st.tool_count} 工具</span>`
+        : `<span style="color:#dc2626;font-size:11px">🔴 未连接（保存后热重载可重连）</span>`)
+      : `<span style="color:#8a9099;font-size:11px">⚪ 状态未知（点 🔄 刷新）</span>`;
     return `<div class="mcp-item">
-      <div class="mcp-row"><b>${escName}</b>
+      <div class="mcp-row"><b>${escName}</b> ${badge}
         <button class="mi-del" onclick="deleteMcpServer('${escName}')" title="删除">×</button>
       </div>
       <div class="mcp-row"><input value="${esc(cfg.command||'')}" placeholder="command" onchange="_mcpData.mcpServers['${escName}'].command=this.value" style="flex:2"></div>

@@ -598,6 +598,40 @@ async def api_mcp_get():
         return {"mcpServers": {}}
 
 
+@app.get("/api/mcp/status")
+async def api_mcp_status():
+    """MCP server 状态概览（night_tasks #3）：配置的 server × 连接态 × 工具清单。
+    数据源：.mcp.json 配置 ∪ agent.mcp_mgr.sessions（已连接会话——含动态注入不在配置里的）。"""
+    import json as _j
+    p = _workspace / ".mcp.json"
+    configured = {}
+    if p.exists():
+        try:
+            configured = _j.loads(p.read_text(encoding="utf-8")).get("mcpServers", {})
+        except Exception:
+            pass
+    mgr = getattr(_agent, "mcp_mgr", None) if _agent is not None else None
+    sessions = getattr(mgr, "sessions", {}) or {}
+    def _tnames(sess):
+        try:
+            return [t.get("name", "") for t in (sess.get("tools") or []) if t.get("name")]
+        except Exception:
+            return []
+    out = {}
+    for name, c in configured.items():
+        sess = sessions.get(name)
+        tools = _tnames(sess) if sess else []
+        out[name] = {"connected": bool(sess), "tool_count": len(tools), "tools": tools[:60],
+                     "command": c.get("command", ""), "args": c.get("args", []),
+                     "transport": "stdio"}
+    for name, sess in sessions.items():   # 已连接但不在配置（动态注入）
+        if name not in out:
+            tools = _tnames(sess)
+            out[name] = {"connected": True, "tool_count": len(tools), "tools": tools[:60],
+                         "command": "", "args": [], "transport": "stdio(dynamic)"}
+    return {"servers": out}
+
+
 @app.put("/api/mcp")
 async def api_mcp_save(request: Request):
     """保存 workspace/.mcp.json。"""

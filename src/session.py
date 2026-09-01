@@ -914,13 +914,18 @@ class Session:
 
     @staticmethod
     def _atomic_write_lines(path: Path, rows: list):
-        """原子写 jsonl：先 .tmp 再 os.replace，防并发/崩溃读到半个文件。"""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            for r in rows:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        os.replace(tmp, path)
+        """原子写 jsonl：先 .tmp 再 os.replace，防并发/崩溃读到半个文件。
+        落盘容错（night_tasks #1 2026-09-02）：写失败（磁盘满/文件被杀软或 OneDrive 锁定）
+        只告警不抛——toollog 内存仍在（view 可查），绝不阻塞 react 主循环。"""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            os.replace(tmp, path)
+        except Exception as e:
+            _LOG.warning("toollog 落盘失败（内存继续，不阻塞）：%s %s", path.name, e)
 
     # ========== 融合上下文（关键）==========
     # ========== assembly DSL v2：清单驱动投影 ==========
@@ -2469,8 +2474,11 @@ class Session:
             self.name = name  # /save <name> 改名：只改 self.name，meta.json 会写入新名
         self._capture_state()  # 落盘前收集 Agent 附加状态（plan/自主模式等），无论谁触发 save
         sdir = self._ensure_session_dir()  # 确保文件夹存在（新 session 首次 save）
-        # repo 级 _origin.txt（记录工作区路径，便于排查）
-        (sdir.parent.parent / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")
+        # repo 级 _origin.txt（记录工作区路径，便于排查）——失败仅告警（night_tasks #1）
+        try:
+            (sdir.parent.parent / "_origin.txt").write_text(str(self.workspace.resolve()), encoding="utf-8")
+        except Exception as e:
+            _LOG.warning("_origin.txt 写入失败（跳过）：%s", e)
         path = sdir / "meta.json"
         # 锁保护「快照 turns + 序列化 + 写文件」整段：与 _autosave 的 daemon 线程、
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。
@@ -2489,10 +2497,14 @@ class Session:
                 "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
                 "saved_at": int(time.time()),
             }
-            # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp_path, path)
+            # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件。
+            # 落盘容错（night_tasks #1）：写失败仅告警——内存 session 仍是真相，autosave/主循环不炸
+            try:
+                tmp_path = path.with_suffix(path.suffix + ".tmp")
+                tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp_path, path)
+            except Exception as e:
+                _LOG.warning("meta.json 落盘失败（内存继续，不阻塞）：%s", e)
         return path
 
     def rename(self, new_name: str) -> str:

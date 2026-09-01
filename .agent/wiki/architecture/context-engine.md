@@ -52,6 +52,55 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 需 `/restart` 生效。
 
+## 投影三区重构：tail 拆段 + 区3 统一包裹 + 钩子 merge 化（2026-09-01，用户提案）
+
+**一句话**：tail merge（2026-08-31，bafaf7e）再进一步——tail 从写死的一块拆成六个可配子段（time/system/plan/spec/episodic/remote），steps 之后的全部动态内容（tail.* + asm 动作项 + 钩子旁注）统一 `<system-reminder>` 包裹后 merge 到末条 content 末尾。消息序列形状完全由对话本体（history/user/steps）决定 → byte-stable 最大化。同批补上钩子注入的落盘可追溯性（hook_note 事件，见 [workflow-hooks · 钩子注入 merge 化 + hook_note 落盘](workflow-hooks.md#钩子注入-merge-化--hook_note-落盘2026-09-01)）。
+
+**三区划分（src/session.py `_walk_plan`，`passed_steps` 三区状态位——steps 段处理过后进入区3）**：
+
+| 区 | 内容 | 形态 |
+|----|------|------|
+| **区1 头部** | system/rules/ltm + 头部 asm 动作项 | 合并成一条 system（2026-08-29 `_walk_plan` 形态延续）——**头部不因 tail 变化而变**（byte-stable 关键） |
+| **区2 对话本体** | history（分档/窗口）+ user_message + steps | 唯一随轮演化的部分——**消息形状由它决定** |
+| **区3 尾部动态** | steps 之后的 asm 动作项 + tail.* 六子段 | 统一 `<system-reminder>` 包裹 → merge 到末条 content 末尾（2026-08-31 tail merge 的推广；`tail_merge_text` 收集桶成分改为「区3 收集桶」） |
+
+**tail 拆段（写死内容组装化，用户提案落地）**：
+
+- `_DEFAULT_ASSEMBLY_PLAN` 尾部从单一 `tail` 段拆成六个 `tail.*` 子段：time / system / plan / spec / episodic / remote——各自可配顺序/开关/增删
+- **旧 yml 兼容**：`set_assembly_plan` 对旧 `tail` 段自动 `_expand_tail()` 展开成六子段——yml 不改不断；`_assembly_once_cache` 一并失效重算
+- `_tail_block_msgs(name)`：按子段名取各自 provider 的块 → `_ambient_group` 分组渲染；返回 `[]` 则该段不出现（零噪声）
+- **remote 迁移（动态内容放尾部）**：远程实例清单从 SYSTEM 头部（main.yml 的 `{func:load_remote_instances()}` 占位）迁移到 `tail.remote` 段——agent.py 挂 `_remote_provider = _func_remote_instances`；实例连接/断开变化只落在区3 末条，零缓存代价（此前在头部，变化全序列断）
+
+**钩子注入 merge 化（同批，src/agent.py）**：
+
+- **before_turn hint**（`_current._before_turn_hint`）：不再独立成条——merge 到当前轮 user 消息 content 末尾（触发位置的上一条 = 当前轮 user）；跨轮变化只影响本条（本来就在未命中区），消息形状由对话本体决定
+- **before_tool / after_tool / before_answer 的 notes**：按 hook 位置分组（`OrderedDict`，hook 名归组）渲染后 merge 到 `msgs[-1]`（触发位置的上一条：最后的 tool result / user）content 末尾——多个位置组按 `pos` 属性顺序追加到同一条末尾
+- **兜底**：msgs 空或末条是 assistant（重做草稿场景，不污染草稿语义）→ 回退独立 user 消息（旧行为）
+
+**缓存收益（为什么这是形态终局）**：
+
+```
+之前：tail 独立 user 消息 + before_turn hint 独立 user 消息 + notes 独立 user 消息
+       → 每步动态内容增加 1-3 条消息 → 消息序列形状每步都变 → 缓存边界漂移
+现在：所有动态内容（tail/钩子/hint）merge 到现有消息的 content 末尾
+       → 消息序列形状完全由对话本体（history/user/steps）决定 → byte-stable 最大化
+```
+
+**最终消息形状**：
+
+```
+[system]   区1 头部合并（system+rules+ltm+text...）
+[user]     history 末条 / 当前轮 user（含 before_turn hint merge）
+[tool]     工具结果（含 after_tool hook merge）
+[assistant] 模型回应
+...
+[user]     最新 user（末条含 <system-reminder> 统一包裹的 tail.* + asm + hooks）
+```
+
+（末条 assistant / msgs 空 → 兜底独立 user 消息。）
+
+**验证**：三区形态 / byte-stable（头部不因 tail 变化而变）/ 旧 yml 兼容（tail → 六子段展开）/ hook merge / hook_note 落盘——全过。需 `/restart` 生效（commit fc3db93）。
+
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 
 当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：

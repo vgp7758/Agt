@@ -249,6 +249,25 @@ with ThreadPoolExecutor() as pool:
 - 同一钩子工作流不要同时被 async 和非 async 调用——行为不确定
 - 后台事件（含 async 钩子完成）的唤醒语义：v0.19.2 起通知**不独立触发轮**（见 [user-interaction · wake 语义](../features/user-interaction.md#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192)）
 
+## 钩子注入 merge 化 + hook_note 落盘（2026-09-01，用户提问触发）
+
+**提问（用户）**：「我们当前的钩子触发似乎没有落盘 events 吧，是不是每次触发只有那一轮 react 模型会看到？」——两件事由此落地：①注入形态 merge 化（缓存经济，与 session.py 三区重构同批）；②注入内容落盘可追溯（堵「只有当轮 react 看得到」的观测缺口）。
+
+**① 注入 merge 化（src/agent.py）**：
+
+- **before_turn hint**：不再独立成条——merge 到当前轮 user 消息 content 末尾（`_seg_msgs_user_message` 的 `_before_turn_hint` 追加；跨轮变化只影响本条，消息形状由对话本体决定）
+- **before_tool / after_tool / before_answer 的 notes**：按 hook 位置分组（`OrderedDict` 归组）渲染后 merge 到 `msgs[-1]`（触发位置的上一条：最后的 tool result / user）content 末尾——多个位置组按 `pos` 属性顺序追加同一条
+- **兜底**：msgs 空或末条是 assistant（重做草稿场景，不污染草稿语义）→ 回退独立 user 消息（旧行为）
+
+动机与三区重构同源：动态注入从「每步多 1-3 条独立消息」变成「merge 进现有消息 content 末尾」——消息序列形状不再因 tail/钩子/hint 的变化而漂移、byte-stable 最大化（详见 [context-engine · 投影三区重构](context-engine.md#投影三区重构tail-拆段--区3-统一包裹--钩子-merge-化2026-09-01用户提案)）。
+
+**② hook_note 落盘（events.jsonl，Step 4）**：`_run_hooks` return 前，每项 inject 结果作为 **hook_note 事件**写入 events.jsonl（hook / name / run_id / result）——事后审查（当轮模型看到了什么注入）与读档回放可见；**不进投影历史**（时效性内容不重复喂）。
+
+- 直接回答用户提问：此前钩子注入只活在「那一次请求的投影里」（反应模型的瞬时上下文），事件流无痕迹——行为可复盘性缺口；hook_note 落盘后注入内容可追溯、行为可复盘
+- 与 events.jsonl 既有事件（step/thinking/answer 等）并列，读档（turns 回放）同样可见
+
+**效果**：反应模型看到的注入内容（tail/钩子/hint）全部可复查；同时投影形态按三区稳定（钩子注入不再改变消息形状）。需 `/restart` 生效（commit fc3db93）。
+
 ## 检索型钩子的输出纪律：选择+摘录，禁止生成（2026-08-20）
 
 **通用原则**：凡以「检索知识 → inject 注入主上下文」为职责的钩子，其 LLM 节点只做「**选择 + 摘录**」——每条命中必须是源文档原文的逐字/近逐字摘录（可截断、不可改写语义）；**严禁**在原文之外生成分析、建议、「结合问题谈谈看法」等内容。宁可少摘也不要补全：源里没写的就让它不存在。

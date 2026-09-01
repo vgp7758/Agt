@@ -703,11 +703,15 @@ def _inject_agent_enums(agent, tools_list):
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
 
-    def create_agent(name: str, description: str, system: str, tools: str = "", model: str = "") -> str:
+    def create_agent(name: str, description: str, system: str, tools: str = "", model: str = "",
+                     assembly: str = "", hooks: str = "") -> str:
         """声明一个子 Agent（写 .agent/agents/<name>.yml，不建实例）。
         name: 唯一名；description: 一句话作用 + 何时调用（投影给主 Agent 决定何时派活）；
-        system: 子 Agent 的角色/任务定义（存为 assembly 的首个 text: 项，即 persona）；tools: 留空/all=继承主 Agent 全部
-               (除管理工具)，或逗号分隔工具名只注册这些；model: 指定模型，留空=主 Agent 当前模型。
+        system: 子 Agent 的角色/任务定义（超过 2000 字自动抽到 <name>.md 由 file: 装配——yml 保持精简，用户提案 2026-09-02）；
+        tools: 留空/all=继承主 Agent 全部(除管理工具)，或逗号分隔工具名只注册这些；model: 指定模型，留空=主 Agent 当前模型。
+        assembly: 装配清单（逗号分隔段名，支持 |optional 后缀——如 'user_message,steps,history|optional,tail.time'）。
+                留空=默认（system + user_message + steps——白名单语义下没这两个段收不到任务，2026-09-02 教训）。
+        hooks: 钩子挂载（逗号分隔 '位置=工作流'，支持 |async 后缀——如 'before_turn=wiki_auto_query,turn_end=recap_gen|async'）。
         声明后下一轮主 Agent SYSTEM 就会列出它，可用 agent_prompt 派活。"""
         d = WORKSPACE / _AGENT_DIR / "agents"
         if not _NAME_RE.match(name or ""):
@@ -716,16 +720,58 @@ def make_subagent_tools(agent) -> list:
             return f"[未知模型] '{model}'，可用：{list(config.MODELS)}"
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{name}.yml"
+        # 装配清单：system 大段抽 .md（file: 装配）；assembly 参数解析段名（|optional）；默认补必需段
+        asm = []
+        _sys = (system or "").strip()
+        if len(_sys) > 2000:
+            md = d / f"{name}.md"
+            md.write_text(_sys, encoding="utf-8")
+            asm.append({"file": f".agent/agents/{name}.md"})
+        else:
+            asm.append({"text": _sys})
+        if assembly.strip():
+            for part in assembly.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "|" in part:
+                    seg, _, mods = part.partition("|")
+                    if "off" in mods:
+                        continue   # 显式 off：不进清单
+                    item = {"seg": seg.strip()}
+                    if "optional" in mods:
+                        item["optional"] = True
+                else:
+                    item = {"seg": part}
+                asm.append(item)
+        else:
+            asm.extend([{"seg": "user_message"}, {"seg": "steps"}])   # 默认必需段（收任务/看步骤）
         data = {
             "name": name,
             "description": description,
             "tools": tools,
             "model": model,
-            "assembly": [{"text": system.strip()}],
+            "assembly": asm,
         }
+        # 钩子挂载：'位置=工作流[|async]' → {hooks: {位置: [{workflow, async}]}}
+        if hooks.strip():
+            hk = {}
+            for part in hooks.split(","):
+                pos, _, wf = part.strip().partition("=")
+                if not pos.strip() or not wf.strip():
+                    return f"[hooks 格式错] '{part.strip()}'——应为 '位置=工作流'，如 'before_turn=wiki_auto_query'"
+                _async = "|async" in wf
+                wf = wf.replace("|async", "").strip()
+                entry = {"workflow": wf}
+                if _async:
+                    entry["async"] = True
+                hk.setdefault(pos.strip(), []).append(entry)
+            data["hooks"] = hk
         p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 name 的 enum（编辑器下拉/LLM schema 同步）
-        return f"✅ 已声明子 Agent '{name}' -> {p.relative_to(WORKSPACE)}（下一轮 SYSTEM 可见）"
+        _extra = (f"；system {len(_sys):,} 字已抽 {name}.md（file: 装配）" if len(_sys) > 2000 else "")
+        _extra += (f"；钩子：{hooks.strip()}" if hooks.strip() else "")
+        return f"✅ 已声明子 Agent '{name}' -> {p.relative_to(WORKSPACE)}（下一轮 SYSTEM 可见）{_extra}"
 
     def kill_agent(name: str) -> str:
         """删除子 Agent 声明（.agent/agents/<name>.yml；同名 .md 一并清理）。"""

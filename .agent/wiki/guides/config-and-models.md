@@ -50,6 +50,45 @@
 
 **生效方式**：后端新端点需 `/restart`；前端下拉 Ctrl+F5。
 
+## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
+
+**背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。
+
+**规则表**（`src/llm_client.py` `_PROVIDER_PARAM_RULES`，`_match_provider_rules` 应用）：
+
+```python
+_PROVIDER_PARAM_RULES = [
+    {"url_has": "moonshot",   "model_has": "imi",    "fix":  {"temperature": 1.0}},   # kimi 温度必须 1
+    {"url_has": "modelscope", "model_has": "imi",    "fix":  {"temperature": 1.0}},   # 聚合端点同款
+    {"url_has": "bigmodel",   "model_has": "flash",  "omit": ["enable_thinking"]},    # 智谱 flash 禁发
+    {"url_has": "api.deepseek.com",                  "set":  {"requires_reasoning_in_history": True}},
+]
+```
+
+**三种动作**：
+
+| 动作 | 语义 |
+|---|---|
+| `fix` | 强制参数值——**覆盖一切来源**（请求 override 也改不回） |
+| `omit` | 永不发送的参数（请求前剔除） |
+| `set` | 自动置位 profile 级标志（如 requires_reasoning_in_history） |
+
+匹配键 `url_has` / `model_has`：base_url / model id 的子串匹配（大小写敏感按原文）；`_build_kwargs` 组装时命中即应用。
+
+**双层 + 优先级**：
+
+```
+内置规则 fix > profile param_lock > 请求 override > 全局默认
+```
+
+profile 显式定制层：`param_lock: ["temperature"]`（锁定参数无视 override）+ `param_omit: [...]`（永不发）——`_apply_profile` 读取、`_build_kwargs` 应用。预设 kimi 条目已带 `temperature: 1 + param_lock: ["temperature"]`（onboarding 落地双保险）。
+
+**profile 显式优先于规则 set**：`requires_reasoning_in_history` 等键 profile 显式配置（true/false）优先；未显式配置（None）时保留规则表已 set 的置位——修掉了验证中发现的置位时序 bug（旧 `profile.get(key, False)` 默认值会覆盖规则 set）。
+
+**验证（6 场景全过）**：kimi 强制 1（override 1.5 被修正）✓ / 智谱 flash omit ✓ / deepseek 自动置位 ✓ / profile 显式 False 不被规则覆盖 ✓ / param_lock 锁回 ✓ / 无命中原样 ✓。
+
+以后发现新硬约束（如某端点不接受 top_p），往规则表加一行即可——用户无感知自动修正。`/restart` 后生效。
+
 ## settings.json（运行时）
 
 | 键 | 说明 |
@@ -146,9 +185,10 @@ repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本�
 | 场景 | 配置 |
 |------|------|
 | 长会话上下文压缩 | `max_effective_context_window`（不配=全量投影，长会话必爆） |
-| DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true` |
+| DeepSeek 思考模型混用历史 | `requires_reasoning_in_history: true`（规则表已自动置位；profile 显式配置优先） |
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
 | GLM 始终思考模型（glm-5.x coding，2026-08-31） | `thinking` 配**档位字符串**（如 `"low"`）——发 `thinking={type:档位}`、永不发 enable_thinking（该参数 400 code 1210），见 [thinking 三态](#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca) |
+| Kimi K3（moonshot / modelscope 聚合，2026-09-01） | `temperature` 锁 **1**（API 硬约束）——规则表 fix 强制 + preset 条目 `param_lock` 双保险，见 [硬约束规则表](#provider-参数硬约束规则表base_urlmodel-预检查2026-09-01用户提案commit-8c2fc6c) |
 | DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——触发后压得狠、顶窗间隔长，升档即可消化、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线语义见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16) |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |

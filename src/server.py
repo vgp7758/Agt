@@ -477,14 +477,18 @@ async def api_wf_delete(name: str):
 
 @app.get("/api/models")
 async def api_models(scope: str = "auto"):
-    """返回模型列表+默认模型名。scope=local/global 显式读某一份（UI 全局/本地切换，用户裁定 2026-08-31）。"""
+    """返回模型列表+默认模型名。scope=local/global 显式读某一份（UI 全局/本地切换，用户裁定 2026-08-31）。
+    preset（spec s_d4241d58）：随包预设条目（下拉框开箱可选 + onboarding 引导）——
+    用户已配置的同名条目不在 preset（用户优先）；选中 preset 条目走 /api/models/onboard 落地。"""
     if scope in ("local", "global"):
         d = config.read_models_scoped(scope)
         return {"models": d["models"], "default": d["default"], "exists": d["exists"],
                 "path": d["path"], "scope": scope,
-                "active": config.active_scope("models.json")}
+                "active": config.active_scope("models.json"),
+                "preset": config.preset_models_view()}
     return {"models": config.MODELS, "default": config.DEFAULT_MODEL,
-            "active": config.active_scope("models.json")}
+            "active": config.active_scope("models.json"),
+            "preset": config.preset_models_view()}
 
 
 @app.get("/api/model-list")
@@ -534,6 +538,49 @@ async def api_models_save(request: Request):
         except Exception:
             pass
     return {"ok": True, "default": config.DEFAULT_MODEL}
+
+
+@app.post("/api/models/onboard")
+async def api_models_onboard(request: Request):
+    """预设条目 onboarding 落地（spec s_d4241d58）：预设 provider 参数 + 用户 token
+    → 完整条目写入 models.json（写生效份 + reload + 实例层热应用）→ 前端刷新下拉即可切换。
+    body: {name: 预设模型名, api_keys: "key1,key2"（逗号分隔多 key）}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    name = (body.get("name") or "").strip()
+    keys_raw = (body.get("api_keys") or "").strip()
+    if not name or not keys_raw:
+        return {"error": "缺少 name 或 api_keys"}
+    pe = config.preset_entry(name)
+    if not pe:
+        return {"error": f"预设条目 '{name}' 不存在（可能已配置——已配置的走设置页编辑）"}
+    toks = [t.strip() for t in keys_raw.replace("，", ",").split(",") if t.strip()]
+    if not toks:
+        return {"error": "api_keys 无有效条目"}
+    entry = {"base_url": pe.get("base_url", ""),
+             "api_token": toks[0] if len(toks) == 1 else toks,
+             "model": pe.get("model", ""),
+             "thinking": bool(pe.get("thinking", False))}
+    if pe.get("vision"):
+        entry["vision"] = True
+    if pe.get("model_desc"):
+        entry["desc"] = pe.get("model_desc")
+    models = dict(config.MODELS)
+    models[name] = entry
+    config.save_user_models(models, config.DEFAULT_MODEL)
+    # 实例层热应用（与 PUT /api/models 同款——主 llm 同名刷新 + utility 通道重建）
+    if _agent is not None:
+        try:
+            cur = _agent.llm.model_name
+            if cur in config.MODELS:
+                _agent.llm._apply_profile(config.get_profile(cur))
+            _agent._utility_llm = None
+            _agent.retrieval_llm = _agent.utility_client()
+        except Exception:
+            pass
+    return {"ok": True, "name": name, "reload": True}
 
 
 # ===================== MCP 配置 API =====================
@@ -1216,12 +1263,14 @@ async def ws_endpoint(websocket: WebSocket):
         await _send(websocket, {"type": "system",
                                 "text": "✅ 已重连（前端会自动请求当前对话历史）",
                                 "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
+                                "preset": config.preset_models_view(),
                                 "current_model": agent.model_name})
     else:
         await _send(websocket, {
             "type": "system",
             "text": f"已连接。模型={agent.model_name}，工具 {len(list(agent.tools))} 个。直接对话，或输入 /help 看命令。",
             "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
+            "preset": config.preset_models_view(),
             "current_model": agent.model_name,
         })
     from session import list_sessions

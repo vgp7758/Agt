@@ -1507,7 +1507,53 @@ async function saveMcpConfig(){
 }
 
 document.getElementById('cfgSave').onclick=saveCurrentTab;
-modelSel.addEventListener('change', ()=>sendRaw('/model '+modelSel.value, []));
+modelSel.addEventListener('change', ()=>{
+    const _v=modelSel.value;
+    if(_v.startsWith('preset::')){ showPresetOnboard(_v.slice(8)); return; }   // 预设条目 → onboarding（落地后才可切换）
+    sendRaw('/model '+_v, []);
+  });
+  // —— 预设条目 onboarding modal（spec s_d4241d58）——
+  let _presetModels = {};
+  function showPresetOnboard(name){
+    const pe=_presetModels[name];
+    if(!pe){ toast('⚠️ 预设条目不存在（可能已配置）'); return; }
+    const isFree=pe.status==='free_trial';
+    const ov=document.createElement('div'); ov.className='modal-overlay';
+    ov.innerHTML=`<div class="modal" style="max-width:500px">
+      <h3 style="margin-top:0">${isFree?'🎁':'🔑'} 启用预设模型「${esc(pe.name)}」</h3>
+      <div style="font-size:13px;color:#556;margin:8px 0;line-height:1.7">
+        <div><b>Provider：</b>${esc(pe.provider)}${pe.provider_desc?(' — '+esc(pe.provider_desc)):''}</div>
+        <div><b>模型：</b><code>${esc(pe.model)}</code>${pe.model_desc?(' — '+esc(pe.model_desc)):''}</div>
+        <div style="margin-top:8px;padding:8px;background:${isFree?'#f0fdf4':'#fffbeb'};border-radius:6px;font-size:12px">
+          ${isFree
+            ? '🎁 该 provider 提供免费额度——点下方按钮打开页面，登录后复制你的 Access Token 粘贴到输入框即可启用。'
+            : '🔑 该模型需要 API Key——点下方按钮打开注册页面申请（多数有新用户免费额度），粘贴到输入框启用。'}
+        </div>
+      </div>
+      <div style="margin:10px 0">
+        <button class="btn" onclick="window.open('${esc(pe.register_url)}','_blank')">🌐 打开 ${esc(pe.provider)} 申请页面</button>
+      </div>
+      <input id="onboardKeys" type="text" placeholder="粘贴 API Key（多个用逗号分隔，可轮流使用）" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;box-sizing:border-box">
+      <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+        <button class="btn" id="onboardCancel">取消</button>
+        <button class="btn primary" id="onboardSave">✅ 保存并切换</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#onboardCancel').onclick=()=>ov.remove();
+    ov.querySelector('#onboardKeys').focus();
+    ov.querySelector('#onboardSave').onclick=async ()=>{
+      const keys=ov.querySelector('#onboardKeys').value.trim();
+      if(!keys){ toast('⚠️ 请先粘贴 API Key'); return; }
+      try{
+        const r=await fetch('/api/models/onboard',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name, api_keys:keys})});
+        const d=await r.json();
+        if(d.ok){ ov.remove(); toast('✅ 「'+name+'」已配置，切换中…'); sendRaw('/model '+name, []); setTimeout(()=>location.reload(), 800); }
+        else toast('❌ '+(d.error||'保存失败'));
+      }catch(e){ toast('❌ 请求失败：'+e.message); }
+    };
+  }
 
 // ===== Agent 团队切换下拉框 =====
 const agentSel = document.getElementById('agentSel');
@@ -2025,13 +2071,28 @@ function onWSMessage(ev){
       scrollBottom(); break;
     case 'system':
       if(m.models){
+        // 分组渲染（spec s_d4241d58）：已配置 optgroup + 预设 provider 分组（🎁free trial / 🔑require key）
+        _presetModels = m.preset || {};
         modelSel.innerHTML='';
+        const ogCur=document.createElement('optgroup'); ogCur.label='✅ 已配置';
         m.models.forEach(md=>{
           const o=document.createElement('option'); o.value=md.name;
           o.textContent=md.name + (md.desc?(' — '+md.desc):'');
           if(md.name===m.current_model) o.selected=true;
-          modelSel.appendChild(o);
+          ogCur.appendChild(o);
         });
+        modelSel.appendChild(ogCur);
+        const _byProv={};
+        Object.values(_presetModels).forEach(pe=>{ (_byProv[pe.provider]=_byProv[pe.provider]||[]).push(pe); });
+        for(const [prov, items] of Object.entries(_byProv)){
+          const og=document.createElement('optgroup'); og.label='✨ '+prov;
+          items.forEach(pe=>{
+            const o=document.createElement('option'); o.value='preset::'+pe.name;
+            o.textContent=(pe.status==='free_trial'?'🎁 ':'🔑 ')+pe.name+'（'+(pe.model_desc||pe.model)+'）';
+            og.appendChild(o);
+          });
+          modelSel.appendChild(og);
+        }
         ws.send(JSON.stringify({action:'list_sessions'}));
       }
       m.transient ? toast(m.text) : addRow('sys', m.text); scrollBottom(); break;

@@ -204,6 +204,41 @@ def get_profile(name: str) -> dict:
     else:
         p["api_tokens"] = [str(tok)]
     return p
+
+# ========== 预设 provider 模板（随包播种，spec s_d4241d58） ==========
+# models.preset.json：WebUI 下拉框开箱可选的预设条目。运行时只读合并（不写用户 models.json）；
+# api_tokens 占位语义：'free trial'=该 provider 有免费额度（引导领取）/ 'require an key'=须申请——
+# 选中占位条目时前端弹 onboarding（register_url 引导 + key 输入），落地后写用户文件生效。
+_PRESET_PATH = Path(__file__).parent / "assets" / "models.preset.json"
+
+def _load_preset() -> dict:
+    try:
+        return json.loads(_PRESET_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+def preset_models_view() -> dict:
+    """预设条目合并视图（下拉框/onboarding 用）：{name: {provider/base_url/register_url/
+    model/thinking/status...}}。用户 models.json 已配置的条目优先（同名跳过预设）；
+    get_profile 链路不经过这里（预设条目经 onboarding 落地进 MODELS 后才可切换）。"""
+    out = {}
+    for pname, pv in (_load_preset().get("providers") or {}).items():
+        toks = pv.get("api_tokens") or []
+        status = "free_trial" if any("free" in str(t).lower() for t in toks) else "require_key"
+        for mname, mv in (pv.get("models") or {}).items():
+            if mname in MODELS:
+                continue   # 用户已配置——用户条目优先
+            out[mname] = {"name": mname, "provider": pname, "base_url": pv.get("base_url", ""),
+                          "register_url": pv.get("register_url", ""), "provider_desc": pv.get("desc", ""),
+                          "model": mv.get("model", ""), "thinking": mv.get("thinking", False),
+                          "vision": bool(mv.get("vision", False)), "model_desc": mv.get("desc", ""),
+                          "status": status}
+    return out
+
+def preset_entry(mname: str) -> dict:
+    """按模型名取单条预设条目（onboarding 保存拼完整 profile 用）；无则 {}。"""
+    return preset_models_view().get(mname) or {}
+
 # 空配置兜底：无模型时不调 get_profile（会 KeyError），给空 profile 让兼容别名有值。
 _active = get_profile(DEFAULT_MODEL) if not _NO_MODELS else {}
 

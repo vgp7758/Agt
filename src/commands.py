@@ -1115,6 +1115,8 @@ def _cmd_hook(ctx: CommandContext, args):
     agent = ctx.agent
     _HOOKS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
     d = getattr(agent, "_hook_disabled", None) or set()
+    if isinstance(args, (list, tuple)):   # dispatch 传 parts[1:] 列表（/call 外的命令）
+        args = " ".join(str(x) for x in args)
     parts = (args or "").split()
 
     def _show_one(h):

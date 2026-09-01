@@ -11,6 +11,7 @@
 | 文件 diff 类工具（edit/write_file/insert/replace_lines/delete/move） | **展开（不可折叠）** | 无——改动详情是一轮里最值得看的东西 | 同批 |
 | 钩子组（同 hook 多工作流，auto_wf_start 起） | **折叠** | `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`（组头计数+计时） | 2026-08，commit 4455503 |
 | 钩子完成文本（组内行级二级折叠） | >160 字才折叠 | 截 110 字（换行处截断） | 2026-08，commit 4455503 |
+| ⚡ 钩子注入记录（hook_note 事件，**历史读档不渲染**） | **折叠** | `⚡ [位置]钩子注入「name」· run=xxx（N字·点击展开）` | 2026-09-01，commit acc06f1 |
 
 ## 基建：toggleFold + .tf-head/.tf-body
 

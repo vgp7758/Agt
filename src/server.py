@@ -1019,7 +1019,12 @@ async def api_agents_list():
             "hooks_positions": sorted(hooks.keys()) if isinstance(hooks, dict) else [],
             "file": str(it.get("path", "")),
         })
-    return {"items": out}
+    try:
+        from agent_config import FUNC_REGISTRY
+        _funcs = sorted(FUNC_REGISTRY.keys())   # assembly 编辑器 func 下拉的选项源（agents.html）
+    except Exception:
+        _funcs = []
+    return {"items": out, "funcs": _funcs}
 
 
 def _read_persona_md(rel_path: str) -> str:

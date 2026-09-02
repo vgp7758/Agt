@@ -130,6 +130,7 @@ async function api(u,opt){const r=await fetch(u,opt);return r.json();}
 /* ---------- 列表 ---------- */
 async function loadList(){
   const d=await api('/api/agents');
+  window._asmFuncs = d.funcs || [];   // FUNC_REGISTRY 清单（assembly 编辑器 func 下拉的选项源）
   $('cnt').textContent=d.items?`${d.items.length} 个声明`:(d.error||'');
   $('cards').innerHTML=(d.items||[]).map(a=>`
     <div class="acard" onclick="location.hash='edit='+encodeURIComponent('${a.name}')">
@@ -204,6 +205,14 @@ function renderAsm(){
     const typeSel=`<select class="tsel" title="类型：seg=投影段（名称见右下拉）/ 动作项（file/text/func...）" onchange="asmKind(${i},this.value)">${['seg',...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
     const valHtml=r.kind==='text'
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
+      :r.kind==='func'
+      ?(()=>{   // func 下拉（用户提案 2026-09-02：选 func 后看不到有哪些注册函数）：选项=FUNC_REGISTRY+()；
+                // 当前值不在清单（自定义/历史值）插入首项保往返不丢
+          const fns=(window._asmFuncs||[]).map(f=>f+'()');
+          const cur=r.value||'';
+          if(cur && !fns.includes(cur)) fns.unshift(cur);
+          return `<select class="val" onchange="asmData[${i}].value=this.value">${fns.map(f=>`<option value="${esc(f)}" ${f===cur?'selected':''}>${esc(f)}</option>`).join('')}</select>`;
+        })()
       :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;
     const extra=isSeg
       ?`<span class="opt"><input type="checkbox" ${r.opt?'checked':''} onchange="asmData[${i}].opt=this.checked"> optional</span>`

@@ -329,6 +329,15 @@ class Agent:
         if self.registry is not None:
             self.registry.register(self.agent_id, "main", "main", self.model_name,
                                    agent=self, task="", status="running")
+        # FUNC_REGISTRY 运行时挂点（用户提案 2026-09-02）：spec_content/spec_steps/plan_content/
+        # plan_steps/bg_services/get_team_profiles 等实例状态函数（agent_config.FUNC_REGISTRY）
+        # 经模块级引用取数。只挂主 Agent——子 Agent 构造（agent_id 非 _main_）不覆盖主挂点。
+        if self.agent_id == "_main_":
+            try:
+                import agent_config as _ac
+                _ac.set_runtime_agent(self)
+            except Exception:
+                pass
         self.session._teammates_provider = self._teammates_block
 
     # ========== 事件输出 ==========

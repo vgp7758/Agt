@@ -147,12 +147,125 @@ def _func_print_time() -> str:
 
 
 def _func_team_profiles() -> str:
-    """{func:get_team_profiles()} —— 团队成员看板（agent_id/模型/忙闲/recap——替代 tail.system 的团队部分）。"""
+    """{func:get_team_profiles()} —— 团队成员看板（agent_id/模型/忙闲/recap——registry 为准，不含自己）。
+    修复注记（2026-09-02）：此前 from multiagent import format_team 是恒 ImportError 的坏路径
+    （multiagent 无模块级 format_team——它是 AgentRegistry 方法）→ 恒空串；改走运行时挂点。"""
+    a = _RUNTIME_AGENT
+    reg = getattr(a, "registry", None) if a is not None else None
+    if reg is None:
+        return ""
     try:
-        from multiagent import format_team
-        return format_team()
+        return reg.format_team(exclude_id=a.agent_id)
     except Exception:
         return ""
+
+
+# 运行时主 Agent 挂点（用户提案 2026-09-02）：FUNC_REGISTRY 补实例状态函数——spec/plan/bg_services/
+# 团队看板的数据在 Agent 实例上（active_spec/active_plan/services/registry），模块级函数经此引用取数。
+# 主 Agent 构造时自挂（agent.py，agent_id == '_main_'）；子 Agent/无引擎场景（外置脚本独立跑）无挂点
+# → 相关函数返回空（内插空判语义：整段不注入，不炸装配）。
+_RUNTIME_AGENT = None
+
+
+def set_runtime_agent(agent) -> None:
+    """主 Agent 构造时挂引用（幂等——重建/复用时覆盖为最新主实例）。"""
+    global _RUNTIME_AGENT
+    _RUNTIME_AGENT = agent
+
+
+def _active_spec_dict():
+    """活动 spec dict 或 None（approved 态返回 None——已生成 plan，由 plan_* 接管注入，防双重）。"""
+    a = _RUNTIME_AGENT
+    s = getattr(a, "active_spec", None) if a is not None else None
+    if not s or not s.get("steps") or s.get("review_state") == "approved":
+        return None
+    return s
+
+
+def _active_plan_dict():
+    a = _RUNTIME_AGENT
+    p = getattr(a, "active_plan", None) if a is not None else None
+    return p if (p and p.get("steps")) else None
+
+
+def _func_spec_content() -> str:
+    """{func:spec_content()} —— 当前活动 spec 的设计概述（id/标题/design/批阅态）。
+    draft/committed/rejected 态注入；approved 由 plan 接管返回空。与 spec_steps() 配套拆开装配。"""
+    s = _active_spec_dict()
+    if not s:
+        return ""
+    try:
+        from spec_tools import _SPEC_LABEL
+    except Exception:
+        _SPEC_LABEL = {}
+    title = s.get("title", "")
+    rs = s.get("review_state", "draft")
+    head = (f"【施工方案 spec】{s.get('id', '')}" + (f" · {title}" if title else "")
+            + f"（{_SPEC_LABEL.get(rs, rs)}）")
+    design = (s.get("design") or "").strip()
+    return head + (f"\n设计：{design}" if design else "")
+
+
+def _func_spec_steps() -> str:
+    """{func:spec_steps()} —— 当前活动 spec 的施工步骤清单（[action] file @ anchor — rationale，
+    尾随批阅态提示行——草稿未提交/待批阅/已返工+反馈）。"""
+    s = _active_spec_dict()
+    if not s:
+        return ""
+    rs = s.get("review_state", "draft")
+    lines = [f"施工步骤（共 {len(s['steps'])} 步）："]
+    for i, st in enumerate(s["steps"]):
+        anchor_s = f" @ {st['anchor']}" if st.get("anchor") else ""
+        rat_s = f" — {st.get('rationale', '')}" if st.get("rationale") else ""
+        lines.append(f"  {i + 1}. [{st.get('action', 'review')}] {st.get('file', '') or '(无文件)'}{anchor_s}{rat_s}")
+    if rs == "draft":
+        lines.append("这是草稿，尚未提交批阅。用 commit_spec 提交，或 regenerate_spec 改进。")
+    elif rs == "committed":
+        lines.append("已提交批阅，等待用户裁定（通过 → 自动建 plan 开始施工；返工 → 据反馈重新生成）。")
+    elif rs == "rejected":
+        fb = s.get("feedback", "")
+        lines.append("已被返工。" + (f"用户反馈：{fb}" if fb else ""))
+    return "\n".join(lines)
+
+
+def _func_plan_content() -> str:
+    """{func:plan_content()} —— 当前活动计划的设计概述（id/标题/design）。无活动计划返回空。"""
+    p = _active_plan_dict()
+    if not p:
+        return ""
+    title = p.get("title", "")
+    head = f"【当前计划】{p.get('id', '')}" + (f" · {title}" if title else "")
+    design = (p.get("design") or "").strip()
+    return head + f"\n设计：{design or '（无）'}"
+
+
+def _func_plan_steps() -> str:
+    """{func:plan_steps()} —— 当前活动计划的步骤进度清单（☐/▶/✅ + 描述 + 状态 + 推进提示行）。"""
+    p = _active_plan_dict()
+    if not p:
+        return ""
+    from plan_tools import _PLAN_ICON, _PLAN_LABEL   # 延迟 import：防顶层循环
+    steps = p["steps"]
+    done = sum(1 for x in steps if x.get("status") == "completed")
+    lines = [f"进度（共 {len(steps)} 步，已完成 {done}）："]
+    for i, x in enumerate(steps):
+        st = x.get("status")
+        lines.append(f"  {_PLAN_ICON.get(st, '?')} {i + 1}. {x.get('description', '')} ({_PLAN_LABEL.get(st, '')})")
+    lines.append("推进时用 update_plan 更新状态、add_step 追加步骤、edit_plan 改标题/设计、exit_plan 退出。")
+    return "\n".join(lines)
+
+
+def _func_bg_services() -> str:
+    """{func:bg_services()} —— 后台服务清单（名称/pid/运行时长/退出——_runtime_system_extra 的服务部分）。
+    无运行中服务返回空（整段不注入）。"""
+    a = _RUNTIME_AGENT
+    if a is None:
+        return ""
+    try:
+        svc = a.services.status_lines()
+    except Exception:
+        return ""
+    return ("【后台服务状态】当前服务：\n" + "\n".join(svc)) if svc else ""
 
 
 FUNC_REGISTRY = {
@@ -164,6 +277,11 @@ FUNC_REGISTRY = {
     "load_remote_instances": _func_remote_instances,
     "print_time": _func_print_time,
     "get_team_profiles": _func_team_profiles,
+    "spec_content": _func_spec_content,
+    "spec_steps": _func_spec_steps,
+    "plan_content": _func_plan_content,
+    "plan_steps": _func_plan_steps,
+    "bg_services": _func_bg_services,
 }
 
 

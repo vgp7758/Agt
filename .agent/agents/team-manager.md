@@ -18,10 +18,10 @@ assembly:
       - 拉起前必 dry_run；成员冷启动含 session 恢复（约 1 分钟）耐心等 team_status 转绿
       - 成员失联先 team_status 复查（可能正在忙），别急着重启
       - 你的产出是团队的可用状态与协调——导演/编剧/画师等专业工作由成员自己完成，你不代做
-  - seg: user_message
-  - seg: steps
-  - seg: tail.time
-  - seg: tail.system
+  - user_message
+  - steps
+  - func: print_time()
+  - func: get_team_profiles()
 ---
 
 团队管理成员（VideoGameTeam）——职责与操作见上方装配说明。

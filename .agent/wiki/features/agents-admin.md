@@ -137,6 +137,16 @@ assembly:
 
 `/restart` 生效（挂点启动时挂）。
 
+#### 后补：get_team_profiles viewer_id 视角机制（2026-09-02）
+
+c7a9339 的「顺手修真 bug」（get_team_profiles 改走挂点）在**同日晚间**再演进一层（与贬值六 Agent 巡检同批）：
+
+- `resolve_assembly_func(name, viewer_id="")`（src/agent_config.py）：**签名探测式传参**——`viewer_id` 在函数签名里才传；func 求值所属的 agent 由 src/session.py 的 `_asm_agent_id` 转发
+- `get_team_profiles(viewer_id)`：exclude **看者自己**（此前挂点版本恒 `exclude_id=主agent_id`）——子 Agent 装配看板时不再 exclude 主 Agent，能看到主 Agent 忙闲 + 队友 + 各自 recap；缺省（text 内插等无所属场景）= 挂点主 Agent
+- viewer_id 无签名参数的函数（runtime_env / print_time 等）走原路径，不受影响
+
+自检口径：子 Agent 声明的 assembly 尾部统一有 `- func: get_team_profiles()`（六 Agent 全部，补记见 [team-tools · 补记四](team-tools.md)）。
+
 ### steps 段模式下拉：reminder / reasoning（2026-09-02，commit dd5b0b4）
 
 steps 段（尾段注入模式）的 mode 编辑从文本框改为 **select 下拉**（与 history 段文本框 mode 对照——history 是自由文本、steps 是枚举）：

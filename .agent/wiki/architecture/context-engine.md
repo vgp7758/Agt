@@ -115,7 +115,15 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **区3 三区划分与 merge 语义全部保留**——撤的只是「写死内容拆成六段名」这层过度设计；区1/区2/区3 边界、byte-stable 收益、钩子 merge 化不受影响。声明文件同步改（team-manager.md / wf-calibrator.yml / wf-designer.yml——裸字符串段 + func 项）。形态细节与撤除清单见 [multi-agent · 段形态简化定稿](multi-agent.md)。
 
-### steps 段注入模式：steps=reasoning（2026-09-02，用户提案，commit dd5b0b4）
+### tail 段剥自带 system-reminder：双层嵌套修复（2026-09-02）
+
+**现象（2026-09-02，本 session 每步注入实锤）**：投影里出现**双层 `<system-reminder>` 嵌套**。
+
+**根因（两层包裹叠加，src/session.py `_walk_plan` tail 段分支）**：tail 子段经 `_ambient_group` 分组渲染**自带一层 `<system-reminder>` 包裹**；而区3 merge（并入末条 content）又**统一再包一层**——两层叠加（`<system-reminder>\n<system-reminder>…</system-reminder>\n</system-reminder>`）。
+
+**修复**：tail 分支收集子段文本（`_b = "\n".join(...)`）时**剥掉自带包裹**——`startswith("<system-reminde"` 形态判断后剥除首尾标签，只留 merge 段统一包的那一层。空段自动跳过（零噪声）语义不变。其它动态块（钩子旁注 / before_turn hint）原本就只 merge 包一层，不受影响。
+
+### steps 段注入模式：steps=reasoning（2026-09-02，用户提案）
 
 **提案（用户，2026-09-02）**：steps 段可带参数声明其后尾段的注入姿势，两种模式：
 

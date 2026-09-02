@@ -60,6 +60,14 @@ members:
 
 > **补记三（commit dd5b0b4）**：`seg:` dict 分支**当日撤销后于同批恢复**——steps 段模式提案（steps=reasoning）复盘发现 docstring 残留声明但代码无分支，`{seg: steps=reasoning}` 仍被静默丢弃；已恢复并委托 `_asm_item_from_str` 全语义解析（|optional/=mode//描述 全生效）。最终**三形态并存**：裸字符串 / `{steps: reasoning}`（段名做键）/ `{seg: steps=reasoning}`（段名做值）。详见 [multi-agent · 段形态简化定稿后记](../architecture/multi-agent.md)。
 
+#### 补记四：六 Agent 声明巡检 + team-manager 补全 + 团队看板 func 视角化（2026-09-02）
+
+> **补记四（2026-09-02，用户「有几个子 agent 没有加钩子，装配好像也不太全，检查一下」→ 六声明逐一核对）**：coder / explorer / reviewer / vision / wiki-updater 五者**健康**（recap_gen 钩子 + file + history|optional + user_message + steps 齐全）；**team-manager 是唯一问题户**——此前「已同步最终形态」的记录不实：hooks **无 recap_gen**（它的 recap 从没上过看板）、assembly **缺 history/user_message/steps**（巡检连续性/任务消息缺失）、还有占位残留 text 块（「You are a team manager. 见上方装配…」）。
+>
+> **补全三件**：hooks 补 `turn_end: recap_gen`；assembly 补 `history|optional` + `user_message` + `steps`；删占位残留。
+>
+> **同批六 Agent 统一挂团队看板 func**（`- func: get_team_profiles()` 加进各自 assembly 尾部）——配套做了**视角机制**：`resolve_assembly_func(name, viewer_id)`（src/agent_config.py）签名探测式传参会话所属 agent（src/session.py func 项求值转发 `self._asm_agent_id`），`get_team_profiles` 据此 **exclude 看者自己**——子 Agent 装配看板时能看到主 Agent 忙闲 + 其他队友 + 各自 recap（它们本就有 agent_ask/notify 通信工具，此前却不知道队友是谁）；**不再恒 exclude 主 Agent**。顺带修掉恒 ImportError 坏路径（`from multiagent import format_team`——那是 AgentRegistry 方法非模块级函数，异常被吞恒空串）→ 改走运行时挂点 `_RUNTIME_AGENT`。无 viewer_id 参数的函数（runtime_env 等）不受影响。详见 [multi-agent · func viewer_id](../../architecture/multi-agent.md) 与 [agents-admin · FUNC_REGISTRY 扩容](../agents-admin.md)。
+
 ## 与其他模块的关系
 
 - 上游：[multi-instance · 组网](../architecture/multi-instance.md)——remote_connect / remote_message / auto server_id 是团队组网的底层通道；team_tools 是把它们编排成「团队级操作」的一层

@@ -452,6 +452,12 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **播种源同步**：`.agent/workflows/recap_gen.xml`（生效）+ `src/workflows/recap_gen.xml`（播种）双份一致——**下个发布版自带**，其它 repo `/update-assets` 即可拿到。团队看板里 wiki-updater_3 的坏 recap 是旧版工作流跑出的存量数据，待其下次干活完成后新 recap_gen 以对话式形态重新生成并覆盖。
 
+#### 坏 recap 定性：磁盘为空、内存残留——重启即清（2026-09-02）
+
+**上节「待其下次干活完成后重新生成覆盖」的存量判断修正（2026-09-02 定性）**：wiki-updater_3 看板那条「以上是主 Agent 自上次 wiki 维护以来…」坏 recap——查磁盘 `meta.json` 的 recap 字段是**空的**（`_agent_meta` 持久化是好的），坏值只在**当前进程内存 registry**（旧 recap_gen 产出，b85f298 之前的指令模板形态）。
+
+**结论：重启即清，无需处理、也不用等下次干活覆盖**——/restart 后 `_restore_subagents` 按磁盘 meta 恢复（recap 为空），内存残留随进程消亡。若同进程内继续看板显示坏值，属内存态未刷新，非新数据。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml
@@ -545,6 +551,16 @@ if d.get("seg"):
 **至此段名三形态齐备**：裸字符串（标准形态）/ `{steps: reasoning}`（段名做键 + mode 值）/ `{seg: steps=reasoning}`（段名做值，委托字符串解析）。
 
 **教训（504a518 的补课）**：撤销形态时，docstring 残留的声明要么同步清、要么代码兑现——「文档说支持、代码没有」比「两种形态并存」更坑：用户按文档书写，结果被静默丢弃，连告警都没有。
+
+#### func 项 viewer_id 视角：get_team_profiles 谁在看谁排除（2026-09-02）
+
+**func 项求值带「谁在看」视角（2026-09-02，六 Agent 巡检同批）**：`resolve_assembly_func(name, viewer_id="")` 签名探测式传参会话所属的 agent（src/session.py func 项求值转发 `self._asm_agent_id`）——**带 `viewer_id` 形参的函数收到视角，不带的不受影响**：
+
+- `get_team_profiles(viewer_id)`：exclude **看者自己**（此前挂点版恒 exclude 主 Agent）——子 Agent 装配团队看板时能看到主 Agent 忙闲 + 队友 + 各自身 recap（它们本有 agent_ask/notify 通信工具却不知队友是谁）；缺省/无所属场景 = 挂点主 Agent
+- 六个子 Agent 声明 assembly 尾部统一加 `- func: get_team_profiles()`
+- 顺带修掉恒 ImportError 坏路径：`from multiagent import format_team`（`format_team` 是 AgentRegistry 方法，multiagent 无模块级函数——异常被吞恒空串）→ 改走运行时挂点 `_RUNTIME_AGENT`
+
+实现：agent_config.py `_func_team_profiles` / `resolve_assembly_func`；session.py func 项分支。全链路：`/api/agents` func 下拉（FUNC_REGISTRY 驱动）→ 声明 func 项 → 装配求值带 viewer_id → 看板注入。详见 [agents-admin · viewer_id 后补](../features/agents-admin.md) 与 [team-tools · 补记四](../features/team-tools.md)。
 
 ## system_append DSL（SYSTEM 动态追加）
 

@@ -250,6 +250,26 @@ function renderChart(models, stats){
     g += `<text x="${xx.toFixed(1)}" y="${H-8}" fill="#8b949e" font-size="11" `
       + (t===lo?'':'text-anchor="middle"') + `>#${t+1}</text>`;
   }
+  // —— 叠加柱状层（用户提案 2026-09-02：K线成交量风格）：柱高 ∝ 该次调用的 prompt 总 tokens，
+  // 按调用所属模型着色、fill-opacity 0.18 低透明度——量感直观又不喧宾夺主（画在折线之下）。
+  // 峰值留 15% headroom 不顶折线区上缘；参考虚线+右端标注给出柱高的读数锚点。
+  const bars = [];
+  for(const m of visible)
+    for(const p of (stats[m].pts||[])) if(p.gi>=lo && p.gi<=hi && p.prompt) bars.push({gi:p.gi, prompt:p.prompt, m});
+  bars.sort((a,b)=>a.gi-b.gi);
+  if(bars.length){
+    const pmax = Math.max(...bars.map(b=>b.prompt));
+    const colW = Math.max(1, Math.min(14, (W-padL-padR)/(span||1)*0.7));
+    const baseY = H-padB, fullH = (H-padT-padB)*0.85;
+    for(const b of bars){
+      const bh = Math.max(1, b.prompt/pmax*fullH);
+      g += `<rect x="${(x(b.gi)-colW/2).toFixed(1)}" y="${(baseY-bh).toFixed(1)}" `
+        + `width="${colW.toFixed(1)}" height="${bh.toFixed(1)}" fill="${modelColor(models, b.m)}" fill-opacity="0.18"/>`;
+    }
+    const peakY = (baseY-fullH).toFixed(1);
+    g += `<line x1="${padL}" y1="${peakY}" x2="${W-padR}" y2="${peakY}" stroke="#30363d" stroke-width="1" stroke-dasharray="3 5"/>`
+      + `<text x="${W-padR-4}" y="${peakY-4}" fill="#6e7681" font-size="10" text-anchor="end">prompt峰值 ${fmtK(pmax)}</text>`;
+  }
   for(const m of visible){
     const pts = stats[m].pts;
     const col = modelColor(models, m);

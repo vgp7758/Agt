@@ -327,8 +327,17 @@ class Agent:
             self.utility_model = ""
         self._utility_llm = None   # 惰性创建的辅助 client（None=未建；=self.llm 表示回退主模型）
         if self.registry is not None:
-            self.registry.register(self.agent_id, "main", "main", self.model_name,
-                                   agent=self, task="", status="running")
+            # 防覆盖（用户实锤 2026-09-02）：SubAgent 包装创建内嵌 Agent 时也传了 registry——
+            # 用默认 "_main_" 注册会覆盖真实主 Agent 的条目（此后 _route_answer 查 _main_
+            # 拿到的是子 Agent → answer 推进子 Agent 自己的 inbox，主 Agent 永远收不到）。
+            # 防御：registry 已有活体 _main_ 且不是本实例 → 跳过（子 Agent 由 multiagent.py
+            # 用正确 agent_id 另行注册）。
+            _existing = self.registry.lookup("_main_")
+            if _existing is not None and _existing.agent is not None and _existing.agent is not self:
+                _LOG.debug("Agent.__init__: registry 已有主 Agent（%s），跳过 _main_ 注册", type(self).__name__)
+            else:
+                self.registry.register(self.agent_id, "main", "main", self.model_name,
+                                       agent=self, task="", status="running")
         # FUNC_REGISTRY 运行时挂点（用户提案 2026-09-02）：spec_content/spec_steps/plan_content/
         # plan_steps/bg_services/get_team_profiles 等实例状态函数（agent_config.FUNC_REGISTRY）
         # 经模块级引用取数。只挂主 Agent——子 Agent 构造（agent_id 非 _main_）不覆盖主挂点。

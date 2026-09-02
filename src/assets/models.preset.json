@@ -41,6 +41,39 @@
         "qwen-sf":  {"model": "Qwen/Qwen3-235B-A22B-Instruct-2507", "thinking": true,  "desc": "通义千问 235B（硅基流动）"},
         "glm-sf":   {"model": "zai-org/GLM-5.2",                    "thinking": true,  "desc": "GLM-5.2（硅基流动）"}
       }
+    },
+    "orcarouter": {
+      "base_url": "https://api.orcarouter.ai/v1",
+      "register_url": "https://www.orcarouter.ai/console",
+      "api_tokens": ["require an key"],
+      "desc": "OrcaRouter —— OpenAI 兼容聚合网关，零加价路由十一家上游（openai/anthropic/google/deepseek/grok/qwen/kimi/minimax/z-ai…），含 -free 免费模型",
+      "models": {
+        "orca-fusion":           {"model": "orcarouter/fusion",                 "thinking": false, "desc": "Fable 5 级融合：前沿模型并行作答+裁判择优"},
+        "orca-fusion-flash":     {"model": "orcarouter/fusion-flash",           "thinking": false, "desc": "融合快速版（262K 上下文）"},
+        "orca-fusion-mini":      {"model": "orcarouter/fusion-mini",            "thinking": false, "desc": "融合轻量版（1M 上下文）"},
+        "orca-free":             {"model": "orcarouter/free",                   "thinking": false, "desc": "免费自动路由（-free 池）"},
+        "orca-claude-opus-5":    {"model": "anthropic/claude-opus-5",           "thinking": false, "desc": "Claude Opus 5 旗舰（推理）"},
+        "orca-claude-sonnet-5":  {"model": "anthropic/claude-sonnet-5",         "thinking": false, "desc": "Claude Sonnet 5 均衡"},
+        "orca-claude-haiku-4.5": {"model": "anthropic/claude-haiku-4.5",        "thinking": false, "desc": "Claude Haiku 4.5 快速"},
+        "orca-gpt-5.5":          {"model": "openai/gpt-5.5",                    "thinking": false, "desc": "GPT-5.5 旗舰"},
+        "orca-gpt-5.4-mini":     {"model": "openai/gpt-5.4-mini",               "thinking": false, "desc": "GPT-5.4 Mini 轻量"},
+        "orca-gpt-4o-mini":      {"model": "openai/gpt-4o-mini",                "thinking": false, "desc": "GPT-4o mini 最便宜对话"},
+        "orca-gemini-2.5-pro":   {"model": "google/gemini-2.5-pro",             "thinking": false, "desc": "Gemini 2.5 Pro（强推理）"},
+        "orca-gemini-2.5-flash": {"model": "google/gemini-2.5-flash",           "thinking": false, "desc": "Gemini 2.5 Flash（长上下文+便宜）"},
+        "orca-deepseek-chat":    {"model": "deepseek/deepseek-chat",            "thinking": false, "desc": "DeepSeek V4 对话"},
+        "orca-deepseek-reasoner": {"model": "deepseek/deepseek-reasoner",       "thinking": false, "desc": "DeepSeek 推理（R 系列）"},
+        "orca-deepseek-free":    {"model": "deepseek/deepseek-v4-flash-free",   "thinking": false, "desc": "DeepSeek V4 Flash 免费"},
+        "orca-grok-4.6":         {"model": "grok/grok-4.6",                     "thinking": false, "desc": "Grok 4.6（xAI 旗舰）"},
+        "orca-qwen3.8-max":      {"model": "qwen/qwen3.8-max",                  "thinking": false, "desc": "通义千问 3.8 Max 旗舰"},
+        "orca-qwen3.6-flash":    {"model": "qwen/qwen3.6-flash",                "thinking": false, "desc": "通义千问 3.6 Flash 快速"},
+        "orca-kimi-k3":          {"model": "kimi/kimi-k3",                      "thinking": false, "temperature": 1, "param_lock": ["temperature"], "desc": "月之暗面 Kimi K3 旗舰（temperature 锁 1）"},
+        "orca-kimi-k2.6":        {"model": "kimi/kimi-k2.6",                    "thinking": false, "temperature": 1, "param_lock": ["temperature"], "desc": "Kimi K2.6（temperature 锁 1）"},
+        "orca-minimax-m3":       {"model": "minimax/minimax-m3",                "thinking": false, "desc": "MiniMax M3 旗舰"},
+        "orca-minimax-m2.7":     {"model": "minimax/minimax-m2.7",              "thinking": false, "desc": "MiniMax M2.7"},
+        "orca-glm-5.3":          {"model": "z-ai/glm-5.3",                      "thinking": false, "param_omit": ["enable_thinking"], "desc": "智谱 GLM-5.3 旗舰"},
+        "orca-glm-5.3-flash":    {"model": "z-ai/glm-5.3-flash",                "thinking": false, "param_omit": ["enable_thinking"], "desc": "GLM-5.3 Flash 快速"},
+        "orca-hunyuan-h3":       {"model": "tencent/hy3",                       "thinking": false, "desc": "腾讯混元 3"}
+      }
     }
   }
 }

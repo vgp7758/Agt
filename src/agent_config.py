@@ -135,6 +135,26 @@ def _func_remote_instances() -> str:
         return ""
 
 
+def _func_print_time() -> str:
+    """{func:print_time()} —— 实时时段块（替代 tail.time 拆段——用户简化 2026-09-02：动态内容用 func 项放清单尾部，
+    配合三区重构的「steps 后全进区3 merge」语义，无需专门段名）。"""
+    try:
+        import agent_config as _self
+        from datetime import datetime
+        return f"[当前时间] {datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}"
+    except Exception:
+        return ""
+
+
+def _func_team_profiles() -> str:
+    """{func:get_team_profiles()} —— 团队成员看板（agent_id/模型/忙闲/recap——替代 tail.system 的团队部分）。"""
+    try:
+        from multiagent import format_team
+        return format_team()
+    except Exception:
+        return ""
+
+
 FUNC_REGISTRY = {
     "load_models": _func_load_models,
     "load_workflows": _func_load_workflows,
@@ -142,6 +162,8 @@ FUNC_REGISTRY = {
     "load_agents": _func_load_agents,
     "runtime_env": _func_runtime_env,
     "load_remote_instances": _func_remote_instances,
+    "print_time": _func_print_time,
+    "get_team_profiles": _func_team_profiles,
 }
 
 

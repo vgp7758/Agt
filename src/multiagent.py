@@ -149,17 +149,12 @@ def _agent_def_path(name: str):
 # （未列出时按默认顺序相对位置自动补插）；可关段 rules/history/ltm/tail 未列出即不装；
 # hooks 不占投影位置（产出绑在当前轮内），仅作开关——子 Agent 未列出时默认 off。
 # 动作项：file/dir/cmd/text 默认每轮求值（mtime 热改生效），workflow 默认 once 实例固化。
-_ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "tail",
-                  # tail.* 拆段（2026-09-01 spec s_edeeec31——与 session._DEFAULT_ASSEMBLY_PLAN 对齐；
-                  # 此前缺漏导致 'tail.time' 等被 _asm_item_from_str 当未知段名丢弃——2026-09-02 复盘修复）
-                  "tail.time", "tail.system", "tail.plan", "tail.spec", "tail.episodic", "tail.remote"}
-_ASSEMBLY_TOGGLES = {"rules", "history", "ltm", "hooks", "tail",
-                     "tail.time", "tail.system", "tail.plan", "tail.spec", "tail.episodic", "tail.remote"}
+_ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "tail"}
+_ASSEMBLY_TOGGLES = {"rules", "history", "ltm", "hooks", "tail"}
 _ASSEMBLY_ACTIONS = ("file", "dir", "cmd", "workflow", "text", "func", "tool")
 _ASSEMBLY_MUST = ("system", "user_message", "steps")
 # 段的默认相对顺序（必装段自动补插的位置基准；= session._DEFAULT_ASSEMBLY_PLAN 的段序）
-_ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps",
-                       "tail.time", "tail.system", "tail.plan", "tail.spec", "tail.episodic", "tail.remote", "tail")
+_ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps", "tail")
 _ASSEMBLY_HISTORY_MODES = ("tiered", "window", "full")
 _HOOK_POSITIONS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
 
@@ -313,15 +308,6 @@ def _asm_item_from_dict(d: dict):
     / {tool: read_file(x)} [+ every/once] 或 {history: window} 简写 → 项 dict 或 None。
     {seg: "段名[|optional][=mode]"}（2026-09-02 兼容——声明书写的友好形态：段名做值而非做键，
     值复用字符串解析全语义——用户复盘 seg: 形态此前被静默丢弃）。"""
-    if d.get("seg"):
-        x = _asm_item_from_str(str(d["seg"]))
-        if x:
-            if d.get("optional") is True:
-                x["opt"] = True   # create_agent 生成的独立 optional 键 → opt 真语义（默认不装，=on 打开）
-            _d = str(d.get("desc") or "").strip()
-            if _d and not x.get("desc"):
-                x["desc"] = _d
-            return x
     for k in _ASSEMBLY_ACTIONS:
         if k in d and d[k]:
             val = str(d[k]).strip()
@@ -754,14 +740,12 @@ def make_subagent_tools(agent) -> list:
                     seg, _, mods = part.partition("|")
                     if "off" in mods:
                         continue   # 显式 off：不进清单
-                    item = {"seg": seg.strip()}
-                    if "optional" in mods:
-                        item["optional"] = True
+                    item = f"{seg.strip()}|optional" if "optional" in mods else seg.strip()
                 else:
-                    item = {"seg": part}
+                    item = part
                 asm.append(item)
         else:
-            asm.extend([{"seg": "user_message"}, {"seg": "steps"}])   # 默认必需段（收任务/看步骤）
+            asm.extend(["user_message", "steps"])   # 默认必需段（裸字符串——标准形态，收任务/看步骤）
         data = {
             "name": name,
             "description": description,

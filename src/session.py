@@ -942,12 +942,7 @@ class Session:
         {"kind": "seg", "name": "ltm"},
         {"kind": "seg", "name": "user_message"},
         {"kind": "seg", "name": "steps"},
-        {"kind": "seg", "name": "tail.time"},
-        {"kind": "seg", "name": "tail.system"},
-        {"kind": "seg", "name": "tail.plan"},
-        {"kind": "seg", "name": "tail.spec"},
-        {"kind": "seg", "name": "tail.episodic"},
-        {"kind": "seg", "name": "tail.remote"},
+        {"kind": "seg", "name": "tail"},
     ]
 
     def set_assembly_plan(self, plan: Optional[list]):
@@ -975,14 +970,9 @@ class Session:
 
     @classmethod
     def _expand_tail(cls, plan: list) -> list:
-        """清单规范化：旧 {"kind":"seg","name":"tail"} → 六个 tail.* 子段（保持原位置）。"""
-        out = []
-        for it in plan:
-            if isinstance(it, dict) and it.get("kind") == "seg" and it.get("name") == "tail":
-                out.extend({"kind": "seg", "name": tn} for tn in cls._TAIL_EXPAND)
-            else:
-                out.append(it)
-        return out
+        """（2026-09-02 撤拆段——用户简化：动态内容用 func: 项放清单尾部，无需 tail.* 段名）
+        保留方法以兼容调用点，恒等直通。"""
+        return plan
 
     def _seg_msgs_system(self) -> list[dict]:
         """核心 system（人设+今日+用户名）——真正的指令，不包裹。
@@ -1347,12 +1337,12 @@ class Session:
                 name = item.get("name")
                 if self.current_turn_only and name in ("history", "ltm"):
                     continue   # reuse 投影隔离：历史系段一律不投影
-                if name in ("system", "rules", "ltm") or str(name).startswith("tail."):
+                if name in ("system", "rules", "ltm", "tail"):
                     own = (self._seg_msgs_system() if name == "system" else
                            self._seg_msgs_rules() if name == "rules" else
-                           self._seg_msgs_ltm() if name == "ltm" else self._tail_block_msgs(str(name)))
+                           self._seg_msgs_ltm() if name == "ltm" else self._seg_msgs_tail())
                     if own:
-                        if str(name).startswith("tail."):
+                        if name == "tail":
                             # tail.* 拆段（2026-09-01·用户提案：写死内容组装化）：各子段独立收集，
                             # 依清单顺序合并进 tail_merge_text（装配后 merge 到末条 content——
                             # 见 _flush_run 后的 merge 段）；空段自动跳过（零噪声）

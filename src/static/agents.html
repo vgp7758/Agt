@@ -201,7 +201,7 @@ function renderAsm(){
       :isSeg?`<input class="tsel" type="text" value="${esc(r.name)}" oninput="asmData[${i}].name=this.value">`:'';
     const modeHtml=(isSeg&&r.name==='history')
       ?`<input style="width:76px" type="text" placeholder="tiered" value="${esc(r.mode||'')}" oninput="asmData[${i}].mode=this.value">`:'';
-    const typeSel=isSeg?'':`<select class="tsel" onchange="asmKind(${i},this.value)">${[...SEG_TYPES,...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
+    const typeSel=`<select class="tsel" title="类型：seg=投影段（名称见右下拉）/ 动作项（file/text/func...）" onchange="asmKind(${i},this.value)">${['seg',...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
     const valHtml=r.kind==='text'
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
       :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;

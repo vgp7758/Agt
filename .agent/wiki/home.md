@@ -321,3 +321,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **func 项跨版本兼容（8000 巡检附带洞察）**：`get_team_profiles()` 在旧版 agt（FUNC_REGISTRY 扩容前）上求值 → 白名单查不到 → 空 → 段自动跳过——**安全失败方向是变空而非报错**，跨实例装配 func 项无风险（详见 [agents-admin · viewer_id 后补](features/agents-admin.md)）
 - **8000 侧坏 recap + 双层 system-reminder 均为内存态**：磁盘 recap 已确认为空、嵌套修复已进代码——那边 `/restart` 一并消失（与本 repo [坏 recap 定性](architecture/multi-agent.md#坏-recap-定性磁盘为空内存残留重启即清2026-09-02) 同结论）
 
+## 快速事实增补（2026-09-02 · 十二 · cache_breakpoint 缓存断点分析外置工具）
+
+- **cache_breakpoint 缓存断点分析外置工具（2026-09-02，用户提案，commit 8f9a6c6）**：`cache_breakpoint(turn=582, step=2)` → 对比该次 LLM 调用与**它上一次调用**的投影 dump（`projections/t{N}_s{M}_{ts}.json`，JSON 化格式），定位**缓存前缀在哪条消息断裂**——段位（SYSTEM/人设区、折叠摘要区、历史档位·近端档1/中段档2-3/远端深档、当前轮步骤·第 N 步、当前轮 user_message）+ 消息索引 + 字符位置 + 变化前后对比窗口；`step=0` 自动取上一轮最后一步（轮边界场景）。载体 `tools/builtin/cache_tools.py`（303 行）——外置件形态，`agt_register()` **无参**（`Path.home()` 全局扫最近活跃 session，零框架依赖），随包副本已同步，`/reload tools` 热加载即用。实测两场景：步内 t587_s8→s9 断 `messages[400]`（第 8 步 assistant reasoning_content 变化——正常步进预期行为，新增一步总断末尾）；轮边界 t587_s9→t588_s0 断 `messages[0]` SYSTEM/人设区（远程实例清单消失致人设段位移）——**「头部动态内容断缓存」的直接可视化**（正是三区重构 / DeepSeek 铁律一要治的病），详见 [cache-tools](features/cache-tools.md)（外置件清单 11→12 文件，见 [tool-externalization](features/tool-externalization.md#外置件清单12-文件真限界上下文四组--纯函数批--团队管理组--缓存分析组)）
+

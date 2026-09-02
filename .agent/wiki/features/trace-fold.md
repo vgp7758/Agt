@@ -7,8 +7,8 @@
 | 层级 | 默认态 | 摘要行 | 上线 |
 |------|--------|--------|------|
 | 💭 思考内容（reasoning 流式段落） | **折叠** | `▸ 💭 思考（N 字，点击展开）`，字数随流式增长 | 2026-08，commit ee968be |
-| 🔧 非 diff 工具调用 | **折叠** | `▸ 🔧 工具名(主参数)` | 同批（用户提案） |
-| 文件 diff 类工具（edit/write_file/insert/replace_lines/delete/move） | **展开（不可折叠）** | 无——改动详情是一轮里最值得看的东西 | 同批 |
+| 🔧 无文件变更的工具调用 | **折叠** | `▸ 🔧 工具名(主参数)` | 同批（用户提案） |
+| 真实产生文件 diff 的工具调用（白名单 ∪ ToolCall.changed 非空） | **展开（不可折叠）** | `📝 N 文件变更（a.py, b.py）`——改动详情是一轮里最值得看的东西 | 白名单同批；**真实 diff 驱动 2026-09-02，commit 2bd25be** |
 | 钩子组（同 hook 多工作流，auto_wf_start 起） | **折叠** | `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`（组头计数+计时） | 2026-08，commit 4455503 |
 | 钩子完成文本（组内行级二级折叠） | >160 字才折叠 | 截 110 字（换行处截断） | 2026-08，commit 4455503 |
 | ⚡ 钩子注入记录（hook_note 事件，**历史读档不渲染**） | **折叠** | `⚡ [位置]钩子注入「name」· run=xxx（N字·点击展开）` | 2026-09-01，commit acc06f1 |
@@ -75,11 +75,36 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 ## 🔧 工具调用折叠（同批基建）
 
-- `_DIFF_TOOLS = new Set(['edit','write_file','insert','replace_lines','delete','move'])` → diff 类**不折叠**（改动详情值得直视）；其余工具建折叠组
+- **判定 = 白名单 ∪ 真实 diff**（2026-09-02，commit 2bd25be，用户请求「其它步如果工具调用前后发生了文件 diff，前端也需要展开工具调用渲染」）：`_DIFF_TOOLS.has(name) || (changed && changed.length)`——`_DIFF_TOOLS = new Set(['edit','write_file','insert','replace_lines','delete','move'])` 白名单保留（文件编辑类铁定展开）；**其余工具改看 `renderToolCall(name, args, changed)` 第三参 `changed`（该调用前后快照 diff 的真实文件清单）**：非空 → 展开（不可折叠）+ head 标注 `📝 N 文件变更（a.py, b.py）`；空 → 折叠（grep/read_file 全读不改，照旧收起）
+- **效果矩阵**：
+
+  | 工具调用 | 之前 | 现在 |
+  |---|---|---|
+  | edit / write_file（白名单） | 展开 | 展开（不变） |
+  | run_python 里写了文件 | 折叠 ❌ | **展开 + `📝 2 文件变更（a.py, b.py）`** ✅ |
+  | git_commit 改了文件 | 折叠 ❌ | **展开 + 标注** ✅ |
+  | grep / read_file（无 diff） | 折叠 | 折叠（不变） |
 - head 摘要 = 工具名 + 主参数（args.path/query/name/command 截 60 字）；body = 完整调用渲染（`toolCallHTML`）+ result + 流式
 - `appendToolResult`：result 追加进 `_curToolFold.body`（`→ ` 前缀灰行）；无折叠组回退独立行
 - `tool_stream`：流式输出优先追加进折叠组 body（折叠着也在累积）
 - **并行批不追踪归属**（`_inParallel`/`_parLeft`）：并行结果无法与具体 call 配对 → 独立行，不进 body
+
+### 数据链：快照 diff 恒开 → changed 全链路（commit 2bd25be）
+
+`changed` 不是前端猜的——来自引擎每步真实快照对比：
+
+```
+工具执行前 mtime 快照 → 执行 → after 快照 → diff
+  → ToolCall.changed = [文件清单]         （session.py dataclass 加字段，默认空 list）
+  → tool_result 事件带 changed            （实时前端：已折叠组立即展开+标注）
+  → step 事件 changes 字段（三处序列化）    （持久化——读档/rewind 后历史也有）
+  → 重放恢复 ToolCall.changed              （renderHistTurn 历史渲染传入，与实时同构）
+```
+
+- **快照恒开**：引擎内快照 diff 此前只在钩子活跃时做（省开销），现改恒开——mtime 扫描 + **链式复用上次 after 快照作本次 before**，成本可控——钩子开不开都能感知真实副作用
+- **三处序列化**（session.py L786/L878/L2606）：`"changes": [[tc.call_id, tc.changed] for tc in step.tool_calls if tc.changed]`（step.tool_calls ×2 + s.tool_calls ×1，只序列化非空项省体积）
+- **重放恢复**：`_chm = dict(e.get("changes") or [])` → `ToolCall(call_id=c, changed=_chm.get(c) or [])`——历史轮与实时轮渲染判定完全同构
+- 引擎代码（agent.py / session.py）需 `/restart` 生效；纯前端三处（renderToolCall + 历史渲染 m.changed + tc.changed）随静态资源刷新
 
 ## 钩子行折叠
 
@@ -107,16 +132,19 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 ## 与其他模块的关系
 
-- **后端零改动**：纯前端消费既有事件流（thinking/step/tool_call/tool_stream/tool_result/auto_wf）——折叠是渲染层投影，不动协议
+- **后端赋能（2026-09-02 起，commit 2bd25be）**：折叠判定消费引擎真实快照 diff 结果——agent.py 快照恒开 → session.py ToolCall.changed → tool_result 事件带 changed / step 事件 changes 序列化；前端不再是纯渲染层投影（此前「后端零改动」的说法随真实 diff 驱动升级失效）。快照恒开细节见 [snapshot-diff · 快照恒开](../architecture/snapshot-diff.md#快照恒开副作用双消费2026-09-02commit-2bd25be用户请求)
+- 其余消费既有事件流（thinking/step/tool_call/tool_stream/tool_result/auto_wf）——思考折叠、钩子行折叠等仍是纯前端投影
 - agent_id 打标链路见 [气泡交互 · answer 多 Agent 分页](bubble-interaction.md)（`_emit` setdefault）
 - 与气泡级折叠（editor.html 系统气泡）是**两套独立机制**：前者是 trace 内行级折叠，后者是气泡面板级展开——勿混
 
 ## 注意事项
 
 - **「打开不截断」的实现口径**：body 里存的始终是完整 buf（textContent 全量），没有截断这回事；用户感知的「截断」来自此前整段平铺太长。摘要只出现在折叠 head（字数提示），不在 body
-- 折叠状态**不持久化**：跨轮/刷新重置为默认收起（与气泡折叠同约定）
+- **折叠状态不持久化**：跨轮/刷新重置为默认收起（与气泡折叠同约定）
 - `renderThinking` 会 `scrollBottom()`——流式期间即使折叠着也持续贴底，与工具进度行行为一致
 - 新增消费端（如以后的计划行折叠）直接复用 `toggleFold`，head 文本前缀必须保持 `▸ /▾ ` 两字符格式（切换逻辑按 `slice(2)` 改写）
+- **changed 判定口径**：白名单是保底（即使快照 diff 漏报/未开也展开），`changed` 是扩展覆盖（白名单外任何工具的真实副作用都能感知）——判定语义 = 「要么是编辑类工具，要么实际产生了 diff」
+- **快照恒开的成本口径**：mtime 扫描每次工具调用前后各一次，before 复用上次 after 快照——快照本体不复制文件内容，开销在扫目录；钩子关闭时原本连扫都不扫，现为前端判定改恒开（有意取舍）
 
 ## 相关页面
 

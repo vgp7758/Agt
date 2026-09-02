@@ -45,9 +45,18 @@
 
 | 维度 | 引擎内部（after_tool 钩子） | 子工作流（对外暴露） |
 |------|------------------------------|----------------------|
-| 用途 | ReAct 循环内工具副作用检测 → changed_files 注入钩子 | 任意工作流显式调用，按需快照/diff |
+| 用途 | ReAct 循环内工具副作用检测 → changed_files 注入钩子 ∪ **ToolCall.changed 回流（恒开）** | 任意工作流显式调用，按需快照/diff |
 | 排除范围 | 更广：`.git`/`.agent`/`.agt` + gitignore 全模式 + 嵌套 git 仓库整棵剪枝 | 基础：`.git`/`__pycache__` |
-| 输出 | `changed_files` 数组直传钩子 | `files`(逗号分隔) + `count` + `changed`(结构化) |
+| 输出 | `changed_files` 数组直传钩子 + **ToolCall.changed（前端折叠判定 + events 持久化）** | `files`(逗号分隔) + `count` + `changed`(结构化) |
+
+### 快照恒开：副作用双消费（2026-09-02，commit 2bd25be，用户请求）
+
+快照 diff 此前**只在钩子活跃时做**（省开销）；用户提议「其它步如果工具调用前后发生了文件 diff，前端也需要展开工具调用渲染」后改为**恒开**——每次工具调用前后各扫一次 mtime（**链式复用上次 after 快照作本次 before**，成本可控），结果种进 `ToolCall.changed`（session.py dataclass 新字段）：
+
+- **消费一（原有）**：钩子活跃时 `changed_files` 注入钩子上下文
+- **消费二（新增）**：`tool_result` 事件带 changed（实时前端判定展开）+ `step` 事件 `changes` 字段序列化持久化（读档/rewind 后历史渲染同构恢复）
+
+前端折叠判定与效果矩阵见 [trace-fold · 工具调用折叠](../features/trace-fold.md#🔧-工具调用折叠同批基建)。
 
 ## 与 diff_files 工具的分工（2026-08-19 新）
 

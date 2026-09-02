@@ -295,6 +295,23 @@ async function loadNodeDesc(){
 
 验证：`/api/wf/nodes` 实测 25 类全有 desc（LLM/代码/选择器/AND/N1 抽查通过）；type4 优先工具 schema。Ctrl+F5 强刷编辑器即生效。
 
+### nodeDesc 兜底链：目录/工具 schema 未命中不静默（2026-09，commit c307a08）
+
+**现象排查（用户：「画布上的节点想通过 tooltips 显示节点描述」）**：tooltip 机制其实一直在——§19 交付的 `renderNode` SVG `<title>` + `nodeDesc` 从未丢。现象真根因是**当前进程跑旧代码**：
+
+- 实测运行中进程的 `GET /api/wf/nodes` 只返回核心 12 类，llm(3)/code(5)/text(15)/AND/OR/HTTP(45) 等**插件节点全部缺席** → 这些节点 hover 无 tooltip（正是用户最近在用的那批）
+- 磁盘上的新代码 `_node_catalog()` 已聚合 **24 项**，插件节点全带 desc（`调用大语言模型，支持模板渲染 {{变量}}…` 等）——**重启加载新端点后自然出现，无需改代码**
+
+**顺手补的兜底**（`nodeDesc`，workflow_editor.html）：目录（/api/wf/nodes）与工具 schema **双未命中**时不再静默空 title，按兜底链回显，保证 hover 至少有基本信息：
+
+```
+type 4 且工具 schema 无 desc → 「插件节点：调用工具 X」
+NODE_DESC / TYPE_LABEL 命中    → 「LLM 节点」/「文本拼接 节点」（类型名 + 节点）
+都未命中                      → 「节点类型 N」
+```
+
+效果：将来某个插件未声明 catalog，hover 也有响应，不会"指上去啥也没有"。修复 = **/restart + Ctrl+F5 强刷编辑器**。
+
 ## 附：enum 参数渲染为下拉框（通用机制）
 
 工具 schema 里带 `enum` 的参数，编辑器自动渲染为 **select 下拉框**（替代 text input），空值选项显示「（跟随）」。三层链路：

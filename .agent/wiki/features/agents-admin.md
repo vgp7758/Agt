@@ -68,6 +68,26 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 - **未知段名**：已知段名（SEG_TYPES：system/rules/history/ltm/user_message/steps/tail/hooks）→ 下拉；未知段名/带模式 → 文本框——**保往返不丢**
 - ACT_TYPES（text/file/dir/cmd/workflow/tool/func）与 seg 两 kind 统一行模型
 
+### 类型下拉修复：全行显示 + 选项 = seg + ACT_TYPES（2026-09-02，commit 504a518）
+
+**现象（用户在 /agents#edit= 复现）**：点击 `+ 添加段` 创建段后，类型下拉框只显示一半段类型。
+
+**根因（两个）**：① **seg 行此前没有类型下拉**（`isSeg ? '' : select`）——动作类型（text/file/dir/cmd/workflow/tool/func）对 seg 行**不可达**；② 类型选项是 `[...SEG_TYPES, ...ACT_TYPES]`——**把段名混进类型选项**，选中后 `asmKind` 会把 kind 写成 `'system'` 等（段名当类型用，语义混乱）。
+
+**修复（src/static/agents.html）**：所有行统一显示类型下拉；类型选项 = `['seg', ...ACT_TYPES]`——`seg`=投影段（具体段名走右侧名称下拉，SEG_TYPES：system/rules/history/ltm/user_message/steps/tail/hooks），动作项 = text/file/dir/cmd/workflow/tool/func；title 提示「类型：seg=投影段（名称见右下拉）/ 动作项」。`asmKind` 切换时 seg 行保留原段名（默认 `user_message`）。JS 语法验证通过——与 [段形态简化定稿](../architecture/multi-agent.md) 同 commit 504a518。
+
+### func 值下拉框：选项 = FUNC_REGISTRY 注册函数（2026-09-02，commit bab7dee）
+
+**用户请求**：类型选 `func` 以后看不出有哪些注册的函数可选——值控件此前是自由文本框，得先知道函数名才能填。改成下拉框。
+
+- **后端（src/server.py，api_agents_list）**：`GET /api/agents` 返回新增 `funcs` 字段 = `sorted(FUNC_REGISTRY.keys())`（`from agent_config import FUNC_REGISTRY`，兜底 `except → []`）——assembly 编辑器 func 下拉的选项源
+- **前端（src/static/agents.html）**：列表加载时存 `window._asmFuncs = d.funcs || []`；`func` 行的值控件从文本框改 **select**——
+  - 选项 = 函数名 + `()` 形态（`print_time()`、`load_models()`… 当前 8 个）
+  - **当前值不在清单时插入首项保往返**（历史值/自定义值不丢）
+- 效果：以后往 `FUNC_REGISTRY` 注册新函数，刷新 agents 列表下拉自动跟上（选项源每次 `GET /api/agents` 现取）
+
+前端改动走 mtime 热更新，Ctrl+F5 强刷即用（不依赖 /restart）。
+
 ## v2.1 声明格式（用户设计）
 
 ```

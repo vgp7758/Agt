@@ -496,7 +496,9 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
     pattern: 搜索模式，**默认按正则**（支持 a|b 多选一、. * 等元字符，与 ripgrep 一致）；
     要按字面匹配（把 pattern 当普通字符串）传 regex=False。path: 文件或目录(默认 workspace 根)。
     glob: 文件名过滤如 '*.js'；context: 每条命中前后各显示几行（默认 0=只显示匹配行）；
-    max_results: 最多返回匹配数。每个文件头部的 file_version 传给 insert/delete/move 的 version 参数。"""
+    max_results: 最多返回匹配数。每个文件头部的 file_version 传给 insert/delete/move 的 version 参数。
+    搜索范围跳过 .gitignore 排除项与 .git/__pycache__ 等（与 git 工作区一致）；显式指定被排除的
+    目录/文件（如 path='blog'）则尊重意图照搜。"""
     import fnmatch
     import re
     root = _resolve(path)
@@ -507,8 +509,44 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
     except re.error as e:
         return f"[正则错误] {e}\n（pattern 含特殊字符？可传 regex=False 按字面匹配）"
     DOC_EXT = {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}
-    # path 是文件 → 只搜该文件；是目录 → 递归其下（rglob 在文件上返回空，故需分支）
-    candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+    # path 是文件 → 只搜该文件（显式意图，不过滤）；是目录 → os.walk 递归：
+    # 排除 .git/__pycache__/node_modules 硬清单 + workspace .gitignore 全模式 + 嵌套 git 仓库
+    # 整棵剪枝（用户提案 2026-09-02——此前 rglob 全量，__pycache__ 的 .pyc 乱码污染结果）。
+    # 显式进排除区：root 自身被 gitignore 命中（如 path="blog"）→ 尊重意图只硬排（同 dir_outline 语义）。
+    _HARD = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    if root.is_file():
+        candidates = [root]
+    else:
+        from agent import _make_gitignore_filter   # 延迟 import：agent 顶部依赖 real_tools，防循环
+        keep_dir, keep_file = _make_gitignore_filter(WORKSPACE)
+        _apply_gi = True
+        try:
+            _rel_root = root.relative_to(WORKSPACE).as_posix()
+        except ValueError:
+            _rel_root = ""   # workspace 外（罕见）：不走 gitignore（模式是 workspace 根的）
+        if _rel_root and _rel_root != ".":
+            _apply_gi = keep_dir(_rel_root)
+        import os
+        candidates = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            base = Path(dirpath)
+            try:
+                rel_base = base.relative_to(WORKSPACE)
+            except ValueError:
+                rel_base = None
+            keep = []
+            for d in dirnames:
+                if d.lower() in _HARD or (base / d / ".git").exists():
+                    continue
+                if _apply_gi and rel_base is not None and not keep_dir((rel_base / d).as_posix()):
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            for f in filenames:
+                if _apply_gi and rel_base is not None and not keep_file((rel_base / f).as_posix()):
+                    continue
+                candidates.append(base / f)
+        candidates.sort()
     # 按文件聚合：rel -> (version, lines, [命中行号])
     files, scanned, total = {}, 0, 0
     capped = False

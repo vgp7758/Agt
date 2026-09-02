@@ -21,6 +21,9 @@ glob_files("**/*.pyc")                    → 无匹配（__pycache__ 已排除�
 - `_EXCLUDE_DIRS`：遍历时自动排除 `.git / __pycache__ / node_modules / .venv / venv / dist / build / .idea / .vscode`
 - `_MAX_RESULTS = 500`：命中条数上限，防止巨型匹配爆屏
 - 输出含头部统计行（pattern + 命中数）+ 路径列表
+- **gitignore 跳过语义（2026-09-02，commit 725d257，version 1→2）**：`_make_gitignore_filter(base)` 读 workspace `.gitignore` → `(keep_dir, keep_file)` 谓词——锚定模式（`/dir`）按 gitignore 语义落到对应层级；遍历时**硬清单 + gitignore 全模式 + 嵌套 git 仓库整棵剪枝**。与引擎 agent.py 同款语义的**轻量复制**（外置件自洽：不 import src，subprocess 模式下 sys.path 无 src）。**显式进排除区豁免**：默认跳过排除项（与 git 工作区视角一致），但 glob 的**静态前缀**命中排除区（`'blog/**/*.md'`、`path='blog'`）尊重意图照搜（只硬排 .git/__pycache__）——本 repo 的 blog/、models.py、design/ 都在 gitignore 里，豁免是特意为之（显式指定是唯一搜法）
+- 随包副本 src/assets/tools_builtin/ 同步（copy）；改 fs_tools.py 后 `/reload tools` 热加载即生效
+- **grep 同 commit 补齐同语义**（src/real_tools.py）：`rglob` 换 `os.walk` + 目录剪枝，见 [grep](grep.md)；快照 diff 的 gitignore 剪枝（agent.py）更早已有——三个搜索/快照面排除语义收敛一致
 
 ## 验证插曲（排除逻辑确认）
 

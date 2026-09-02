@@ -88,7 +88,56 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 
 前端改动走 mtime 热更新，Ctrl+F5 强刷即用（不依赖 /restart）。
 
-### ### steps 段模式下拉：reminder / reasoning（2026-09-02，commit dd5b0b4）
+### func 下拉 tooltips：docstring 首行作 option title + runtime_env 澄清（2026-09-02，commit 63a886a）
+
+**用户双问（同一轮）**：①「runtime_env() 是 spec/plan 这些东西吗？」②「func 选的时候能不能把各选择的函数 docstring 作为 tooltips 加上」。先答问题，再落地增强。
+
+**runtime_env() 不是 spec/plan**：它是「运行时自我认知」函数（第 399 轮用户此前提案加的），产出 SYSTEM 注入文本——`agt-agent v0.22.x（pip 包；CLI agt / WebUI agt-web）。升级：pip install -U agt-agent 后 /restart 生效；随包播种资产刷新：/update-assets apply。GitHub: vgp7758/Agt`——让**其它 repo** 的 session 知道自己跑在 agt-agent 里、怎么升级（版本动态读 `src/__init__.py.__version__`，发版自动跟随）。**spec/plan 的注入走另一条路**（`_spec_provider` / `_plan_provider` 挂的 tail 块），与这个函数无关。
+
+**tooltips 三层实现**：
+
+- **后端（src/server.py，api_agents_list）**：`GET /api/agents` 新增 `func_docs` = `{name: docstring 首个非空行}`（截 160 字）——FUNC_REGISTRY 的 docstring 首句即用途摘要，全文多行不适 tooltip；无 docstring → 空串；`except → {}` 兜底
+- **前端（src/static/agents.html）**：列表加载存 `window._asmFuncDocs = d.func_docs || {}`；func 下拉每个 `<option>` 加 `title` 属性（桌面端 hover 显示用途摘要）；「当前值不在清单插入首项保往返」逻辑不变
+- 效果：8 个注册函数实测全显示 docstring 首行（load_models / runtime_env / load_agents / load_remote_instances…）；手机端无 hover 不显示但不影响选择
+
+Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不用 /restart）。
+
+### FUNC_REGISTRY 扩容 8→13：实例状态函数 + 运行时挂点（2026-09-02，commit c7a9339）
+
+**用户报**：「func 后面的下拉框里没看到 _spec_content/spec_steps/plan_content/plan_steps/bg_services 等等这些函数可选」——**不是没显示，而是 FUNC_REGISTRY 里根本没有**。架构卡点：FUNC_REGISTRY 是**模块级无实例函数**，而 spec/plan/后台服务的数据在 **Agent 实例**上——此前只有 load_models 这类纯配置函数能做。
+
+**解法：运行时挂点（`_RUNTIME_AGENT`）**——agent_config 模块级挂点 + `set_runtime_agent()`；主 Agent 构造时自挂（**`agent_id == "_main_"` 才挂，子 Agent 构造不覆盖主挂点**，src/agent.py）；FUNC_REGISTRY 函数经挂点取数。无引擎场景（外置脚本独立跑）无挂点 → 函数返回空 → 装配内插空判不炸。
+
+**新增 5 函数**：
+
+| func | 产出（下拉可选，hover 有 tooltip） |
+|---|---|
+| `spec_content()` | 【施工方案 spec】s_xxx · 标题（待批阅）· 设计概述 |
+| `spec_steps()` | 施工步骤：[create] file @ anchor — rationale + 批阅态提示行 |
+| `plan_content()` | 【当前计划】p_xxx · 标题 · 设计 |
+| `plan_steps()` | 进度：✅/▶/☐ 步骤清单 + 推进提示 |
+| `bg_services()` | 【后台服务状态】服务名 pid 运行时长（= tail 服务部分） |
+
+细节：spec **approved 态返回空**（已生成 plan，交给 plan_* 接管，防双重注入，与 `_format_spec_block` 同语义）；docstring 首行 tooltip 自动跟上（上一轮机制，无需另配）。
+
+**顺手修的真 bug：`get_team_profiles()` 此前恒空**——实现 `from multiagent import format_team` 永远 ImportError（`format_team` 是 `AgentRegistry` 的方法，multiagent **没有模块级函数**），异常被吞 → 改走挂点 `registry.format_team(exclude_id=主agent_id)`，现在能正常产出团队看板。
+
+**用法**：编辑 main.yml（或任何子 Agent 声明）的 assembly，类型选 func → 下拉 13 个选项 + hover 看用途。示例把 tail 段拆开装配：
+
+```yaml
+assembly:
+  - user_message
+  - steps
+  - func: print_time()
+  - func: bg_services()
+  - func: spec_content()     # 内容与步骤分开装配
+  - func: spec_steps()
+  - func: get_team_profiles()
+```
+
+`/restart` 生效（挂点启动时挂）。
+
+### steps 段模式下拉：reminder / reasoning（2026-09-02，commit dd5b0b4）
 
 steps 段（尾段注入模式）的 mode 编辑从文本框改为 **select 下拉**（与 history 段文本框 mode 对照——history 是自由文本、steps 是枚举）：
 

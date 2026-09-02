@@ -2006,6 +2006,18 @@ class Agent:
                 self._emit({"type": "interrupted"})
                 self.session.abort_current_turn("（被用户停止）")   # 与 stop_flag 路径统一文案（旧"（被用户中断）"不在 _INTERRUPT_MARKS，resume 会拒绝）
                 return ""
+            except Exception as e:
+                # 轮异常中断（LLM 回退链耗尽/内部错误——run 主体抛出且非 KeyboardInterrupt）：
+                # abort 轮（session 存档一致性——turn_start 有配对的 turn_end/abort 事件）+ 向上
+                # 传播。子 Agent 场景由 _bg 的 except 捕获：通知 caller + registry 标 failed
+                # （用户提案 2026-09-02——此前 LLM 回退链耗尽直接从 run() 冒出，
+                #  轮悬空无 abort 事件、看板状态不停留在 running）
+                self._emit({"type": "interrupted", "text": f"轮异常中断：{type(e).__name__}: {e}"})
+                try:
+                    self.session.abort_current_turn(f"（异常中断：{type(e).__name__}）")
+                except Exception:
+                    pass   # abort 自身失败不掩盖原异常
+                raise
 
     def _wrap_up(self) -> str:
         """预算/步数到顶时，做一次无工具的总结性收尾。"""

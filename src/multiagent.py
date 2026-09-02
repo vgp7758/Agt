@@ -930,9 +930,43 @@ def make_subagent_tools(agent) -> list:
                     except Exception as route_err:
                         _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
 
+                def _write_meta(status: str, recap: str = ""):
+                    """写 _agent_meta 到子 Agent 的 meta.json（start/done/failed 三时机）。"""
+                    if not _sub_dir:
+                        return
+                    try:
+                        import json
+                        meta_path = _sub_dir / "meta.json"
+                        meta = {}
+                        if meta_path.exists():
+                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        meta.setdefault("extra_state", {})["_agent_meta"] = {
+                            "agent_id": _aid, "name": _name, "model": _model,
+                            "task": _prompt, "caller_id": caller_id,
+                            "recap": recap, "status": status,
+                        }
+                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception as meta_err:
+                        _LOG.warning("子 Agent %s 写 _agent_meta(status=%s) 失败: %s", _aid, status, meta_err)
+
+                # 任务开始时写 running 态（用户提案 2026-09-02：/restart 杀 daemon 线程后
+                # meta.json 停留旧 done——重启恢复无法辨别中断；start 时写 running 让
+                # _restore_subagents 检测到"meta=running 但进程已重启"→ 标 failed）
+                _write_meta("running")
+
                 try:
                     _target.cumulative_tokens = 0
                     res = _target.run(enriched) or "(空回复)"
+
+                    # 中断轮检测（用户提案 2026-09-02）：run 返回但 session._current 未清/
+                    # 无 answer——被用户停止（stop_flag→return ""）或收尾 wrap_up 失败。
+                    # 此前一律标 done（看板 ✅ 误导）。中断 → caller 收到中断通知 + registry 标 failed。
+                    _sa = getattr(_target, "agent", _target)
+                    _cur = getattr(getattr(_sa, "session", None), "_current", None)
+                    if _cur is not None and not (_cur.answer or "").strip():
+                        res = (f"[中断] 子 Agent 轮未正常完成（已完成 {len(_cur.steps)} 步、"
+                               f"可能被停止或收尾失败）。\n部分结果可 agent_query_events(\"{_aid}\", 3) 查看")
+
                     # 立即路由 answer（在 recap/meta 之前——即使后续被杀，answer 已在 inbox）
                     _route_answer(res)
                     # 等待 recap 生成（异步 daemon 线程，最多等 3 秒）
@@ -941,45 +975,17 @@ def make_subagent_tools(agent) -> list:
                             break
                         time.sleep(0.1)
                     recap = getattr(_target, '_recap', '')
-                    # 无条件写完整 _agent_meta 到子 Agent 的 meta.json
-                    if _sub_dir:
-                        meta_path = _sub_dir / "meta.json"
-                        try:
-                            import json
-                            meta = {}
-                            if meta_path.exists():
-                                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                            meta.setdefault("extra_state", {})["_agent_meta"] = {
-                                "agent_id": _aid, "name": _name, "model": _model,
-                                "task": _prompt, "caller_id": caller_id,
-                                "recap": recap, "status": "done",
-                            }
-                            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-                        except Exception as meta_err:
-                            _LOG.warning("子 Agent %s 写 _agent_meta 到 meta.json 失败: %s", _aid, meta_err)
-                    agent.background_tasks[_aid].update(status="done", result=res, finished_at=time.time())
+                    _is_fail = res.startswith("[失败]") or res.startswith("[中断]")
+                    _write_meta("failed" if _is_fail else "done", recap)
+                    agent.background_tasks[_aid].update(status="failed" if _is_fail else "done",
+                                                        result=res, finished_at=time.time())
                     if reg:
-                        reg.update_status(_aid, "done")
+                        reg.update_status(_aid, "failed" if _is_fail else "done")
                 except Exception as ex:
                     res = f"[失败] {type(ex).__name__}: {ex}"
                     # 失败也立即路由（caller 需要知道子 Agent 出错了）
                     _route_answer(res)
-                    # 失败也要写 _agent_meta
-                    if _sub_dir:
-                        meta_path = _sub_dir / "meta.json"
-                        try:
-                            import json
-                            meta = {}
-                            if meta_path.exists():
-                                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                            meta.setdefault("extra_state", {})["_agent_meta"] = {
-                                "agent_id": _aid, "name": _name, "model": _model,
-                                "task": _prompt, "caller_id": caller_id,
-                                "recap": "", "status": "failed",
-                            }
-                            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-                        except Exception:
-                            pass
+                    _write_meta("failed")
                     agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
                     if reg:
                         reg.update_status(_aid, "failed")

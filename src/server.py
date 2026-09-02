@@ -1022,9 +1022,15 @@ async def api_agents_list():
     try:
         from agent_config import FUNC_REGISTRY
         _funcs = sorted(FUNC_REGISTRY.keys())   # assembly 编辑器 func 下拉的选项源（agents.html）
+        # func 下拉 tooltips（用户提案 2026-09-02）：各函数 docstring 首个非空行（FUNC_REGISTRY 的
+        # docstring 首句即用途摘要；全文多行不适 tooltip），超 160 字截断
+        _fd = {}
+        for _n, _fn in FUNC_REGISTRY.items():
+            _lines = [ln.strip() for ln in (_fn.__doc__ or "").splitlines() if ln.strip()]
+            _fd[_n] = (_lines[0][:160] if _lines else "")
     except Exception:
-        _funcs = []
-    return {"items": out, "funcs": _funcs}
+        _funcs, _fd = [], {}
+    return {"items": out, "funcs": _funcs, "func_docs": _fd}
 
 
 def _read_persona_md(rel_path: str) -> str:

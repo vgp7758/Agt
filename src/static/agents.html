@@ -131,6 +131,7 @@ async function api(u,opt){const r=await fetch(u,opt);return r.json();}
 async function loadList(){
   const d=await api('/api/agents');
   window._asmFuncs = d.funcs || [];   // FUNC_REGISTRY 清单（assembly 编辑器 func 下拉的选项源）
+  window._asmFuncDocs = d.func_docs || {};   // name→docstring 首行（func 下拉 option 的 title tooltip）
   $('cnt').textContent=d.items?`${d.items.length} 个声明`:(d.error||'');
   $('cards').innerHTML=(d.items||[]).map(a=>`
     <div class="acard" onclick="location.hash='edit='+encodeURIComponent('${a.name}')">
@@ -213,11 +214,14 @@ function renderAsm(){
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
       :r.kind==='func'
       ?(()=>{   // func 下拉（用户提案 2026-09-02：选 func 后看不到有哪些注册函数）：选项=FUNC_REGISTRY+()；
-                // 当前值不在清单（自定义/历史值）插入首项保往返不丢
+                // 当前值不在清单（自定义/历史值）插入首项保往返不丢；
+                // option 带 title tooltip（用户提案 2026-09-02）=后端 func_docs（docstring 首行）——
+                // 桌面端 hover 显示用途摘要，一眼知道每个模板函数是干嘛的
           const fns=(window._asmFuncs||[]).map(f=>f+'()');
           const cur=r.value||'';
           if(cur && !fns.includes(cur)) fns.unshift(cur);
-          return `<select class="val" onchange="asmData[${i}].value=this.value">${fns.map(f=>`<option value="${esc(f)}" ${f===cur?'selected':''}>${esc(f)}</option>`).join('')}</select>`;
+          const doc=f=>esc((window._asmFuncDocs||{})[f.replace(/\(\)$/,'')]||'');
+          return `<select class="val" onchange="asmData[${i}].value=this.value">${fns.map(f=>`<option value="${esc(f)}" ${f===cur?'selected':''} title="${doc(f)}">${esc(f)}</option>`).join('')}</select>`;
         })()
       :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;
     const extra=isSeg

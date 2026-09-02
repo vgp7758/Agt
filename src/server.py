@@ -478,8 +478,9 @@ async def api_wf_delete(name: str):
 @app.get("/api/models")
 async def api_models(scope: str = "auto"):
     """返回模型列表+默认模型名。scope=local/global 显式读某一份（UI 全局/本地切换，用户裁定 2026-08-31）。
-    preset（spec s_d4241d58）：随包预设条目（下拉框开箱可选 + onboarding 引导）——
-    用户已配置的同名条目不在 preset（用户优先）；选中 preset 条目走 /api/models/onboard 落地。"""
+    preset（spec s_d4241d58）：随包预设条目（下拉框开箱可选 + onboarding 引导）。用户条目按
+    base_url+model 命中预设时该条目标 configured（provider 组内直接可选，"已配置"组不重复显示）；
+    未命中的选中走 /api/models/onboard 落地。"""
     if scope in ("local", "global"):
         d = config.read_models_scoped(scope)
         return {"models": d["models"], "default": d["default"], "exists": d["exists"],
@@ -555,7 +556,9 @@ async def api_models_onboard(request: Request):
         return {"error": "缺少 name 或 api_keys"}
     pe = config.preset_entry(name)
     if not pe:
-        return {"error": f"预设条目 '{name}' 不存在（可能已配置——已配置的走设置页编辑）"}
+        return {"error": f"预设条目 '{name}' 不存在"}
+    if pe.get("configured"):
+        return {"error": f"'{name}' 已配置（条目「{pe.get('config_name')}」）——下拉框直接选择即可，参数在设置页编辑"}
     toks = [t.strip() for t in keys_raw.replace("，", ",").split(",") if t.strip()]
     if not toks:
         return {"error": "api_keys 无有效条目"}

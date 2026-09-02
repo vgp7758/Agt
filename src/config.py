@@ -219,20 +219,32 @@ def _load_preset() -> dict:
 
 def preset_models_view() -> dict:
     """预设条目合并视图（下拉框/onboarding 用）：{name: {provider/base_url/register_url/
-    model/thinking/status...}}。用户 models.json 已配置的条目优先（同名跳过预设）；
+    model/thinking/status/configured/config_name...}}。
+    匹配规则（用户提案 2026-09-02）：用户条目按 base_url+model 与预设比对——命中的预设
+    条目标 configured=true + config_name（前端 provider 组内直接可选 ✅，"已配置"组的
+    重复项隐藏——选完模型贴完 key 它还在原地，只是从占位变已配置）；未命中的保持占位
+    （选中弹 onboarding）。同名用户条目优先，其次 (base_url, model) 首个命中（MODELS 保序）。
     get_profile 链路不经过这里（预设条目经 onboarding 落地进 MODELS 后才可切换）。"""
+    # (base_url, model) → 用户条目名：首个命中稳定（同组合多配置不摇摆）；空字段不参与
+    _by_bm = {}
+    for k, v in MODELS.items():
+        bu, mo = v.get("base_url", ""), v.get("model", "")
+        if bu and mo:
+            _by_bm.setdefault((bu, mo), k)
     out = {}
     for pname, pv in (_load_preset().get("providers") or {}).items():
         toks = pv.get("api_tokens") or []
         status = "free_trial" if any("free" in str(t).lower() for t in toks) else "require_key"
         for mname, mv in (pv.get("models") or {}).items():
-            if mname in MODELS:
-                continue   # 用户已配置——用户条目优先
+            bm = (pv.get("base_url", ""), mv.get("model", ""))
+            same = MODELS.get(mname)
+            hit = mname if same and (same.get("base_url", ""), same.get("model", "")) == bm else _by_bm.get(bm, "")
             out[mname] = {"name": mname, "provider": pname, "base_url": pv.get("base_url", ""),
                           "register_url": pv.get("register_url", ""), "provider_desc": pv.get("desc", ""),
                           "model": mv.get("model", ""), "thinking": mv.get("thinking", False),
                           "vision": bool(mv.get("vision", False)), "model_desc": mv.get("desc", ""),
-                          "status": status}
+                          "status": status,
+                          "configured": bool(hit), "config_name": hit or ""}
     return out
 
 def preset_entry(mname: str) -> dict:

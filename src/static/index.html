@@ -2112,24 +2112,35 @@ function onWSMessage(ev){
       scrollBottom(); break;
     case 'system':
       if(m.models){
-        // 分组渲染（spec s_d4241d58）：已配置 optgroup + 预设 provider 分组（🎁free trial / 🔑require key）
+        // 分组渲染（spec s_d4241d58）：已配置 optgroup + 预设 provider 分组（🎁free trial / 🔑require key）。
+        // 匹配代理（用户提案 2026-09-02）：已配置条目按 base_url+model 命中预设时，隐藏"已配置"组的
+        // 重复项——由 provider 组内该条目代理显示（✅ 前缀，点击=直接选中所建配置，不再弹 onboarding）
         _presetModels = m.preset || {};
+        const _proxied = new Set(Object.values(_presetModels).filter(pe=>pe.configured).map(pe=>pe.config_name));
         modelSel.innerHTML='';
         const ogCur=document.createElement('optgroup'); ogCur.label='✅ 已配置';
         m.models.forEach(md=>{
+          if(_proxied.has(md.name)) return;   // 命中预设 → 只在 provider 组显示，此处去重
           const o=document.createElement('option'); o.value=md.name;
           o.textContent=md.name + (md.desc?(' — '+md.desc):'');
           if(md.name===m.current_model) o.selected=true;
           ogCur.appendChild(o);
         });
-        modelSel.appendChild(ogCur);
+        if(ogCur.children.length) modelSel.appendChild(ogCur);
         const _byProv={};
         Object.values(_presetModels).forEach(pe=>{ (_byProv[pe.provider]=_byProv[pe.provider]||[]).push(pe); });
         for(const [prov, items] of Object.entries(_byProv)){
           const og=document.createElement('optgroup'); og.label='✨ '+prov;
           items.forEach(pe=>{
-            const o=document.createElement('option'); o.value='preset::'+pe.name;
-            o.textContent=(pe.status==='free_trial'?'🎁 ':'🔑 ')+pe.name+'（'+(pe.model_desc||pe.model)+'）';
+            const o=document.createElement('option');
+            if(pe.configured){
+              o.value=pe.config_name;   // 代理到所建配置——change 事件走普通 /model 切换
+              o.textContent='✅ '+pe.name+'（'+(pe.model_desc||pe.model)+'）';
+              if(pe.config_name===m.current_model) o.selected=true;
+            }else{
+              o.value='preset::'+pe.name;
+              o.textContent=(pe.status==='free_trial'?'🎁 ':'🔑 ')+pe.name+'（'+(pe.model_desc||pe.model)+'）';
+            }
             og.appendChild(o);
           });
           modelSel.appendChild(og);

@@ -3067,8 +3067,11 @@ function nodeDesc(n){
   if(n.type==='4'&&n.data.toolName){
     const t=AGENT_TOOLS.find(x=>x.name===n.data.toolName);
     if(t&&t.description)return t.description;
+    return '插件节点：调用工具 '+n.data.toolName;   // 工具 schema 无描述时的兜底
   }
-  return NODE_DESC[n.type]||'';
+  // 目录（/api/wf/nodes 核心+插件聚合）命中 → 描述；未命中（未声明 catalog 的插件等）→ 类型名兜底，
+  // 至少 hover 有响应的基本信息（不静默无 title）
+  return NODE_DESC[n.type] || (TYPE_LABEL[n.type] ? (TYPE_LABEL[n.type]+' 节点') : ('节点类型 '+n.type));
 }
 function _mapToolType(t){return {string:'string',integer:'integer',int:'integer',number:'number',float:'float',boolean:'boolean',bool:'boolean',array:'list',object:'object'}[t]||'any';}
 

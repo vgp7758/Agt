@@ -154,6 +154,53 @@ user 事件 → _broadcast 按客户端 target 分发（原有）
 
 **验证**：mock 全链路——编译 ×2、三处消费点（load_session 复用 / chat 恢复路径）、open_browser 跳过逻辑、广播 target 分发（session_history 按 agent_id / team_list 全端）+ 无客户端 no-op。
 
+## 连接补发进行中轮 · current_turn 事件（2026-09-02，用户提案）
+
+> src/server.py（`_current_turn_event` + `current_history` 处理器两分支补发）+ src/static/index.html（`case 'current_turn'`）。d69bd8e 放行了 busy 实例页浏览 + 实时事件后仍有一个「现在进行时」缺口：**新连接的客户端（刷新 / 新开页签 / URL 直达 busy 页）只渲染历史轮**——后端正在进行的轮（`session._current`）在历史渲染完的那一刻没有任何呈现，UI 停在上一轮完成态，用户以为卡了/坏了，实际 agent 正在跑长工具（长 read_file / run_python / 后台等待）。
+
+**背景缺口**：`session_history` 事件只带 `to_history()` 的**已完成轮**；`session._current` 是内存态活轮，不落历史。此前 busy 页打开只能看到「上一轮的完成态 + 之后陆续到达的实时事件」，**历史渲染与实时事件之间夹着的正在进行轮完全不可见**——本轮用户提案正是补这段：历史渲染完后把进行中轮**已完成的步骤**也补发出来。
+
+**方案**（用户提案 2026-09-02）：`session_history` 发完后紧接着补发一个 `current_turn` 事件——格式对齐 `to_history()` 的 steps 结构（name/arguments/result/call_id），无 answer（还在跑）。前端渲染完该轮后 `curTurn` 指向它，后续实时事件自然追加，无缝衔接。
+
+**后端**（src/server.py）：
+
+```python
+def _current_turn_event(agent):
+    """构造 current_turn 事件：正在进行的轮（session._current）——新连接的客户端
+    在历史渲染完后补发当前轮已完成的步骤（用户提案 2026-09-02）。格式对齐 to_history()
+    的 steps 结构（name/arguments/result/call_id），无 answer（还在跑）。"""
+    s = agent.session
+    cur = getattr(s, "_current", None)
+    if cur is None or not (cur.user_message or "").strip():
+        return None          # 空闲 / 无有效 user 消息 → 不补发
+    steps = []               # 遍历 cur.steps 的 tool_calls：经 s.toollog.view(tc.call_id)
+    ...                      # 取 name/arguments/result（单条异常降级跳过）
+```
+
+- **主 Agent 分支**（`current_history` 处理器）：`session_history` 发完 → `cur_ev = _current_turn_event(agent)`，非 None 即补发（agent 空闲 `_current=None` 不发，老路径零开销不变）
+- **子 Agent 分支同款**：`cur_ev0["agent_id"] = cur` 后补发——观测**正在跑的子 Agent**（刷新 wiki-updater 等专属页）恰是切换页价值最大的场景
+
+**前端**（src/static/index.html）`case 'current_turn'`：
+
+```javascript
+case 'current_turn': {
+    addTimeDivider();
+    addUserBubble(m.user || '(进行中)', []);
+    newTurn();                       // 建 trace + answer 结构
+    setBusy(true);                   // UI 显示忙状态
+    if (m.agent_id && m.agent_id !== '_main_')
+      addTrace('step', `[${m.agent_id}] — 进行中的轮（已完成 ${m.steps.length} 步）—`);
+    // 遍历 m.steps：s.reasoning → renderThinking；s.tool_calls → renderToolCall（含 changed）
+    // curTurn 指向本轮 → 后续实时事件（新 step / tool_call / finishAnswer）自然追加
+}
+```
+
+关键设计：**`curTurn` 指向新渲染的轮**——之后的实时广播事件无缝追加到同一 DOM 结构，answer 区留空等 `finishAnswer` 事件来填，**不需要任何特判**；thinking 走既有 renderThinking 默认折叠，与 trace-fold 约定一致。
+
+**顺手清理死代码**：`session_history` case 中原 `in_progress` 摘要渲染块删除——后端从未发过 `in_progress` 字段（遗留幻想代码），本次由真实 `current_turn` 事件取代。
+
+**生效方式**：引擎层（server.py）+ index.html 均服务启动载入内存 → `/restart` 后生效；之后刷新/新开页签，正在跑的轮的 user 气泡与已完成步骤（含思考）直接可见。
+
 ## 插话全生命周期（2026-08-19 修复闭环，commit fb115aa）
 
 **修复前问题（用户实测报告）**：answer 完成后的自动触发点只查 `inbox`（后台队列），不查 `pending_messages`（插话队列）——**两套队列漏了一半** → answer 期间发的插话滞留在队列里，直到用户手动发下一条消息才被注入消费。

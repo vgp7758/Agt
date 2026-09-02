@@ -1422,12 +1422,24 @@ class Session:
         # reasoning 模式下 user 后无 assistant（s0 首步）→ 回退 reminder 语义。
         if tail_merge_text:
             _ai = -1
-            if tail_mode == "reasoning" and user_end_idx >= 0:
+            if user_end_idx >= 0:
                 for i in range(len(msgs) - 1, user_end_idx - 1, -1):
                     if msgs[i].get("role") == "assistant":
                         _ai = i
                         break
-            if _ai >= 0:
+            # 注入模式判定（两路，均注入末条 assistant 的 reasoning_content 前缀）：
+            # · steps=reasoning 显式声明 → 无条件注入；
+            # · 默认 reminder + 模型 requires_reasoning_in_history + 末条 assistant reasoning 为空
+            #   （用户提案 2026-09-02·空槽承载）：DeepSeek 占位逻辑反正要给缺字段的补空串——
+            #   空槽放动态状态严格优于空占位（信息量↑，缓存代价相同：都在未命中区）；非空
+            #   （模型产生了真实思考）→ 不打断，保持 reminder 并入末条 content。
+            _why = ""
+            if _ai >= 0 and tail_mode == "reasoning":
+                _why = "steps=reasoning"
+            elif (_ai >= 0 and getattr(self.llm, "requires_reasoning_in_history", False)
+                  and not str(msgs[_ai].get("reasoning_content") or "").strip()):
+                _why = "requires_reasoning·空槽承载动态状态"
+            if _why:
                 _src = msgs[_ai]
                 _rc = str(_src.get("reasoning_content") or "")
                 _inj = f"当前状态：{tail_merge_text}"
@@ -1435,7 +1447,7 @@ class Session:
                 _m2["reasoning_content"] = (f"{_inj}\n{_rc}" if _rc else _inj)
                 msgs[_ai] = _m2
                 _sec("tail(易变环境块·拆段)", [{"role": "assistant", "content": _inj}],
-                     f"reasoning前缀注入末条assistant(#{_ai})·steps=reasoning", msgs_n=0)
+                     f"reasoning前缀注入末条assistant(#{_ai})·{_why}", msgs_n=0)
             else:
                 _wrapped = "<system-reminder>\n" + tail_merge_text + "\n</system-reminder>"
                 _tail_own = [{"role": "user", "content": _wrapped}]

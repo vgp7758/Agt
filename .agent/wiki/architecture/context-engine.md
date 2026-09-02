@@ -126,6 +126,8 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **回退**：s0 首步（user 后还没有 assistant）→ 回退 reminder 模式（不能注入到 history 里上一轮的 assistant 上）。
 
+**空槽承载（用户提案·同日补充）**：默认 reminder 模式下，若模型 `requires_reasoning_in_history=true`（DeepSeek 思考模式——历史带 tool_calls 的 assistant 必须有 reasoning_content 字段，`_build_kwargs` L432-439 发请求前给缺字段的补**空串占位**）且末条 assistant 的 reasoning 为空 → **也注入**（`"当前状态：{result}"`，末条 content 不再叠加 system-reminder）：空槽反正要占位，放动态状态严格优于空占位——信息量↑、缓存代价相同（都在未命中区）、占位逻辑跳过已带字段（注入值直接生效）。reasoning 非空（模型产生了真实思考）→ 不打断，保持 reminder。meta：`requires_reasoning·空槽承载动态状态`（/context 可观测）。
+
 **DSL 三形态 + 覆盖**（src/multiagent.py）：`steps=reasoning`（yml 裸字符串）/ `{steps: reasoning}`（dict）/ `{seg: steps=reasoning}`（seg 做值——本批顺带修复该形态此前被静默丢弃的既有 bug，现委托 `_asm_item_from_str` 全语义解析）；`agent_prompt(assembly="steps=reasoning")` 参数覆盖（在必装检查前拦截；base 清单无 steps 项时也插入——否则投影走默认清单丢 mode）。非法值 warning + 按默认 reminder。
 
 **实现（src/session.py `_walk_plan`）**：steps 分支记 `tail_mode`（item.mode）；user_message 分支记 `user_end_idx`（reasoning 注入的搜索起点——只认 user 之后的 assistant）；区3 merge 双模式分派——reasoning 找到目标后**浅拷贝替换**（`{**msg}` 不就地改，防污染 session 数据），`content`/`tool_calls` 不动；`_sec` 记 `reasoning前缀注入末条assistant(#idx)`（msgs=0，/context 可见）。

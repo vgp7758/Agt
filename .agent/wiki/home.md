@@ -333,3 +333,10 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **子 Agent 完成主 Agent 不醒第二根因：registry `_main_` 被内嵌实例覆盖（2026-09-02，commit 533d64c）**：`agent_prompt` 派 vision 走 SubAgent 包装 → 内嵌 Agent 构造时 agent_id 默认 `"_main_"` → 字典注册**覆盖**真实主 Agent 条目 → vision 完成后 `_route_answer` 查 `_main_` 拿到子 Agent → answer 推进 `agents/vision_10/inbox.jsonl`（主 inbox 恒空永不被唤醒）。铁证：主 session 根 inbox.jsonl 不存在、vision_10 自家 inbox 躺着完整 answer。修复：`Agent.__init__` 注册点防覆盖——registry 已有活体 `_main_` 且非本实例则跳过（子 Agent 由 multiagent.py 用正确 id 另行注册）。与 v0.18.2 旧根因（registry=None）同表象不同因，详见 [multi-agent · 复发](architecture/multi-agent.md#复发2026-09-02内嵌-agent-注册覆盖-_main_-条目answer-推错门commit-533d64c)
 
+## 快速事实增补（2026-09-02 · 十五 · CNB videogame-gdd 仓库建仓收官——8000 已建好）
+
+
+- **videogame-gdd 仓库 CNB 建仓收官（2026-09-02，用户「代码仓库在 CNB 上建一个，gdd 目录由 8000 实例维护，查她记录找信息把仓库弄起来」）**：结论——**8000 侧早已建好并 push 初始内容**（首提交 `4dfcdf4 initial: GDD structure`：README + chapters/characters/storyboards/worldbuilding + assets-registry + tech-stack）。主 Agent 先查 API 以为「仓库已建=空仓」，clone 空仓试图 push 才撞见已有内容；clone 下来逐一比对，与本地 `D:/Projects/VideoGameTeam/gdd/` **完全一致**。仓库 `https://cnb.cool/years-2025/videogame-gdd`（private）
+  - **CNB API 建仓端点教训**：`POST /user/repos` 建仓 → **404**；查平台 `swagger.json` 得正确端点为 **`/{组织}/-/repos`**。另一教训：建仓前先查组织下已有仓库（GET 组织 repos）——CNB 组织归属 **`years-2025`**（comfyui-cloud / indextts 等 6 repo 同组织，comfy 8000 也在此），8000 侧此前已把 gdd 播种上去（与 [team-tools · 补记五](features/team-tools.md#补记五跨实例七-agent-声明巡检8000-实例comfy-repo修补闭环2026-09-02) 中 8000 实例 repo 含 gdd 引用一致）
+  - **遗留待决（用户未答，下一轮接续）**：①各成员 repo 间 gdd 目录级引用（软链到共享位，只改一处）②或本地 gdd 目录从 VideoGameTeam 清出、只留 git 单源。本轮零代码变更（仅临时 `cnb_push_test.py` 写文件测试 git CLI 带 token push，写完即删）
+

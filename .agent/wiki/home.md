@@ -314,3 +314,10 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **tail 段剥自带 system-reminder：双层嵌套修复（2026-09-02，src/session.py）**：tail 子段 `_ambient_group` 自带一层包裹 + 区3 merge 统一再包 → 每步注入双层 `<system-reminder>`（本 session 实锤）；`_walk_plan` tail 分支收集时剥掉自带标签（详见 [context-engine · tail 剥自带包裹](architecture/context-engine.md)）
 - **坏 recap 定性（2026-09-02）**：wiki-updater_3 那条「以上是主 Agent 自上次 wiki 维护…」坏 recap——磁盘 meta.json recap 字段**为空**，坏值只在当前进程内存 registry（旧 recap_gen 产出）→ **/restart 即清**，无需处理（详见 [multi-agent · 坏 recap 定性](architecture/multi-agent.md)）
 
+## 快速事实增补（2026-09-02 · 十一 · 跨实例七 Agent 装配巡检 + remote_message 修复）
+
+- **8000 实例（comfy repo）七 Agent 声明巡检修补（2026-09-02，用户「连到 8000 的服务实例上，检查那边的各 sub-agent 装配，不合适帮他补一补」）**：把本 repo 六声明巡检（补记四）同一套标准搬到远程实例——7 声明逐一核对，**差距比本 repo 大得多**：coder/explorer/reviewer 只缺新看板；**vision（只有孤零 file 项）/ wf-reviewer（只有 text 一项）/ wiki-updater（只有 file）装配残缺** + vision/wf-designer/wf-reviewer/wiki-updater **无钩子**。修补：残缺者补全装配段（history|optional + user_message + steps；wiki-updater 加 tool: wiki_tree()）+ 四户补 `turn_end: recap_gen` + 七 Agent 统一 `get_team_profiles()` 看板。7 份 yml `yaml.safe_load` 全过 + 断言全绿；**声明按 mtime 热重读，对方下次 agent_prompt 即生效无需重启**（详见 [team-tools · 补记五](features/team-tools.md)）
+- **remote_message 发消息即炸修复（2026-09-02，commit dc1918d）**：`_ws_send_collect` 调用漏传必填 `timeout`（只传了 `ack_timeout`）→ `remote_message` 首次真实使用即崩；补 `timeout=10`。8000 巡检知会触发时实测捕获——该轮通知改走无此 bug 的 `remote_ask` 送达（教训：新端点要有一次真实往返验证，详见 [multi-instance · 跨实例消息通信](architecture/multi-instance.md)）
+- **func 项跨版本兼容（8000 巡检附带洞察）**：`get_team_profiles()` 在旧版 agt（FUNC_REGISTRY 扩容前）上求值 → 白名单查不到 → 空 → 段自动跳过——**安全失败方向是变空而非报错**，跨实例装配 func 项无风险（详见 [agents-admin · viewer_id 后补](features/agents-admin.md)）
+- **8000 侧坏 recap + 双层 system-reminder 均为内存态**：磁盘 recap 已确认为空、嵌套修复已进代码——那边 `/restart` 一并消失（与本 repo [坏 recap 定性](architecture/multi-agent.md#坏-recap-定性磁盘为空内存残留重启即清2026-09-02) 同结论）
+

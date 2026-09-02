@@ -68,6 +68,21 @@ members:
 >
 > **同批六 Agent 统一挂团队看板 func**（`- func: get_team_profiles()` 加进各自 assembly 尾部）——配套做了**视角机制**：`resolve_assembly_func(name, viewer_id)`（src/agent_config.py）签名探测式传参会话所属 agent（src/session.py func 项求值转发 `self._asm_agent_id`），`get_team_profiles` 据此 **exclude 看者自己**——子 Agent 装配看板时能看到主 Agent 忙闲 + 其他队友 + 各自 recap（它们本就有 agent_ask/notify 通信工具，此前却不知道队友是谁）；**不再恒 exclude 主 Agent**。顺带修掉恒 ImportError 坏路径（`from multiagent import format_team`——那是 AgentRegistry 方法非模块级函数，异常被吞恒空串）→ 改走运行时挂点 `_RUNTIME_AGENT`。无 viewer_id 参数的函数（runtime_env 等）不受影响。详见 [multi-agent · func viewer_id](../../architecture/multi-agent.md) 与 [agents-admin · FUNC_REGISTRY 扩容](../agents-admin.md)。
 
+#### 补记五：跨实例七 Agent 声明巡检——8000 实例（comfy repo）修补闭环（2026-09-02）
+
+> **补记五（2026-09-02，用户「连到 8000 的服务实例上，检查那边的各 sub-agent 装配，不合适帮他补一补」→ remote_ask 探明 + remote 工具跨实例修补）**：把本 repo 六声明巡检（补记四）的同一套标准搬到**远程实例**（comfy repo，agt-8000）——7 声明逐一核对，**差距比本 repo 大得多**：
+>
+> - **只有 coder / explorer / reviewer 结构完整**，缺的只是新看板
+> - **装配残缺三户**：vision 只有孤零零一个 file 项（无 history/user_message/steps）、wf-reviewer 只有 text 一项、wiki-updater 只有 file（缺 wiki_tree/装配段）——**白名单坑（没列的段不装）在手工声明里比预想普遍**，不止 team-manager 一例
+> - **无钩子四户**：vision / wf-designer / wf-reviewer / wiki-updater（recap 从没上过看板）
+> - wf-calibrator 基本健康（有 print_time + 钩子），只缺看板
+>
+> 修补动作：残缺者补全装配段（`history|optional` + `user_message` + `steps`；wiki-updater 加 `tool: wiki_tree()`）+ 四户补 `turn_end: recap_gen` + **七 Agent 统一加 `- func: get_team_profiles()`**。验证：7 份 yml 全量 `yaml.safe_load` 解析通过 + 看板/recap 钩子/装配段断言全绿。**声明按 mtime 热重读——对方下次 `agent_prompt` 即生效，无需重启**。
+>
+> **跨版本兼容洞察**：`get_team_profiles()` 若在**旧版本 agt**（FUNC_REGISTRY 扩容 commit c7a9339 之前）上求值——白名单查不到 → 返回空 → 该 func 段**自动跳过**，内插空判语义使其**无害**；对方升级后自动生效。func 项装配到跨版本实例上安全——**安全失败方向是变空而非报错**。
+>
+> **8000 侧坏 recap + 双层 `<system-reminder>` 均为内存态**：磁盘 recap 已确认为空、嵌套修复已进代码（本 repo 侧），那边 `/restart` 一并消失——与本 repo [坏 recap 定性](../architecture/multi-agent.md#坏-recap-定性磁盘为空内存残留重启即清2026-09-02) 同结论。
+
 ## 与其他模块的关系
 
 - 上游：[multi-instance · 组网](../architecture/multi-instance.md)——remote_connect / remote_message / auto server_id 是团队组网的底层通道；team_tools 是把它们编排成「团队级操作」的一层

@@ -71,6 +71,8 @@ run_python({"code": "...", "server_id": "agt-192-168-1-2-8000"})   ← 远程 CP
 
 **实现**（remote_tools.py `_ws_send_collect`）：http→ws 端点转换、送达回执（对方正忙时 `message_queued` 进它的插话队列也算送达）、answer 聚合、超时降级文案（「对方在忙长任务——加大 timeout 或改用 remote_message」）。两工具加入 `_REMOTE_ADMIN` 豁免（server_id=发给谁，管理语义，防路由拦截——同 remote_connect 的坑）。
 
+**remote_message 发消息即炸修复（2026-09-02，commit dc1918d）**：`_ws_send_collect(it["url"], message, wait_done=False, ack_timeout=10)` 调用**漏传必填 `timeout`**（只传了 `ack_timeout`）→ `remote_message` 首次真实使用即崩。修复：补 `timeout=10`。由 8000 实例（comfy repo）跨机巡检知会触发时实测捕获——该轮通知改走无此 bug 的 `remote_ask` 送达。教训：**新端点/新工具要有一次真实往返验证**（此前只测过 `remote_ask` 的同步路径，异步路径的必填参数缺口没暴露）。
+
 **实测闭环**：`remote_connect("http://127.0.0.1:8000")` → auto id `agt-8000`（139 工具）→ `remote_ask("agt-8000", "你当前 session 的名字？")` → `[remote:agt-8000] 我当前 session 的名字是「在CNB上调用ComfyUI」`。替代了此前两次手写 WS 客户端场景（问环境那次、发修复通报那次——后者还得事后翻对方 events.jsonl 才拿到回答）。
 
 **三层组网通道**：**工具级**（任意调用带 server_id，零远程 LLM，远程只是「手」）/ **消息级异步**（remote_message，通报派活）/ **消息级同步**（remote_ask，问它才知道的事）。`/restart` 后工具箱即有五件套。

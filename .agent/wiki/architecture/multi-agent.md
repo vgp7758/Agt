@@ -471,7 +471,7 @@ assembly:
 
 端到端验证 5/5：opt 解析 / 默认投影跳过历史（无记忆）/ `history=on` 后历史进投影（带记忆）/ `=off` 移除 / summary 提示注入。`/restart` 后生效——之后派 coder 干活时主 Agent 就会看到提示行。
 
-**段可带模式**：`history=tiered`——主 Agent 用分档 history（见 [context-engine 分档投影](context-engine.md)）。段名与模式的编辑往返在 [/agents 管理页编辑器](../features/agents-admin.md#编辑器-assembly-往返增强agentshtml同-commit)已支持。
+**段可带模式**：`history=tiered`——主 Agent 用分档 history（见 [context-engine 分档投影](context-engine.md)）；`steps=reasoning`——steps 后的尾段以思考链姿势注入（末条 assistant 的 reasoning_content 前缀，见 [context-engine · steps 注入模式](context-engine.md#steps-段注入模式stepsreasoning2026-09-02用户提案)）。段名与模式的编辑往返在 [/agents 管理页编辑器](../features/agents-admin.md#编辑器-assembly-往返增强agentshtml同-commit)已支持（steps 为下拉，history 为文本框）。
 
 **主 Agent 的 assembly 是完整配方**（`~/.agt/main.yml`，当前 17 项）：人设分块 text（主体/多 Agent 协作规则/披露规则…）与**动态动作交错**——`{func:load_models()}` 可用模型插值、`{func:load_agents()}` 子 Agent 清单、`tool read_file(AGENTS.md)` / `tool concat_files(.agent/rules/*.md)` 每轮读取注入——尾部才是 history=tiered/ltm/user_message/steps/tail 五段。**"清单即装配顺序"**：主 Agent 的 SYSTEM 不是一块静态人设，子 Agent 的单 md persona 模型不适用。可在 [/agents 管理页](../features/agents-admin.md#_main_-主-agent-纳入管理2026-08commit-3f0ef32) 直接编辑原始清单（保存原样写回 main.yml，`/restart` 生效）。
 

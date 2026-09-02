@@ -101,6 +101,41 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **验证**：三区形态 / byte-stable（头部不因 tail 变化而变）/ 旧 yml 兼容（tail → 六子段展开）/ hook merge / hook_note 落盘——全过。需 `/restart` 生效（commit fc3db93）。
 
+### 后记（2026-09-02，commit 504a518，用户裁定）：tail.* 拆段撤销——恢复单一 tail 段，动态内容 func 项化
+
+**用户裁定（2026-09-02，commit 504a518）**：「没必要定义 {seg:x} 和 tail.* 这些东西——在 steps 后面直接添加 func 项就可以了」。已定义很多段名，动态内容不需要专门段名：**三区「steps 后全进区3 merge」语义下，func 项放清单尾部就是 tail 位置**。
+
+**撤拆段（src/session.py）**：
+
+- `_DEFAULT_ASSEMBLY_PLAN` 尾部恢复**单一 `tail` 段**（六 `tail.*` 移除）；`_expand_tail` 恒等直通（保留方法兼容调用点，注释记根因）
+- `_walk_plan` tail 分支走整段：`_seg_msgs_tail()` 一次性收集全部 provider（time / system_extra / plan / spec / episodic）→ 区3 merge 语义不变（并入末条 content 末尾，`<system-reminder>` 统一包裹）
+- `_tail_block_msgs` / `_TAIL_EXPAND` 保留但不再被走查调用（legacy——兼容旧 yml 手写的 `tail.*` 段名；`set_assembly_plan` 的 `tail.*` 开关判定仍在）
+
+**动态内容 func 项化（src/agent_config.py）**：FUNC_REGISTRY 注册 `print_time()`（实时时段块——替代 tail.time）/ `get_team_profiles()`（团队成员看板——替代 tail.system 团队部分）；`load_remote_instances()` 已有——远程实例清单从 `tail.remote` 段回到 func 动作项形态（声明需要就自己放清单尾部，如样板 func 三件套）。
+
+**区3 三区划分与 merge 语义全部保留**——撤的只是「写死内容拆成六段名」这层过度设计；区1/区2/区3 边界、byte-stable 收益、钩子 merge 化不受影响。声明文件同步改（team-manager.md / wf-calibrator.yml / wf-designer.yml——裸字符串段 + func 项）。形态细节与撤除清单见 [multi-agent · 段形态简化定稿](multi-agent.md)。
+
+### steps 段注入模式：steps=reasoning（2026-09-02，用户提案）
+
+**提案（用户，2026-09-02）**：steps 段可带参数声明其后尾段的注入姿势，两种模式：
+
+| 模式 | 行为 |
+|------|------|
+| `reminder`（默认） | 区3 收集桶（steps 后的段/动作项求值合并）→ `<system-reminder>` 包裹 → 并入最后一条 message 的 content 末尾（三区重构语义，不变） |
+| `reasoning` | **作为思考链一部分注入**：user_message 之后**最后一条 assistant** 的 `reasoning_content` 前缀——`"当前状态：{result}\n" + 原reasoning_content`（消息形态 `{"role":"assistant","tool_calls":[...],"content":null,"reasoning_content":"当前状态：…"}`）；原 reasoning 为空则只注前缀。语义：环境状态是**思考的输入**而非对话内容，不占 content 位。 |
+
+**回退**：s0 首步（user 后还没有 assistant）→ 回退 reminder 模式（不能注入到 history 里上一轮的 assistant 上）。
+
+**DSL 三形态 + 覆盖**（src/multiagent.py）：`steps=reasoning`（yml 裸字符串）/ `{steps: reasoning}`（dict）/ `{seg: steps=reasoning}`（seg 做值——本批顺带修复该形态此前被静默丢弃的既有 bug，现委托 `_asm_item_from_str` 全语义解析）；`agent_prompt(assembly="steps=reasoning")` 参数覆盖（在必装检查前拦截；base 清单无 steps 项时也插入——否则投影走默认清单丢 mode）。非法值 warning + 按默认 reminder。
+
+**实现（src/session.py `_walk_plan`）**：steps 分支记 `tail_mode`（item.mode）；user_message 分支记 `user_end_idx`（reasoning 注入的搜索起点——只认 user 之后的 assistant）；区3 merge 双模式分派——reasoning 找到目标后**浅拷贝替换**（`{**msg}` 不就地改，防污染 session 数据），`content`/`tool_calls` 不动；`_sec` 记 `reasoning前缀注入末条assistant(#idx)`（msgs=0，/context 可见）。
+
+**兼容性**：DeepSeek 占位（`requires_reasoning_in_history`）只补 `"reasoning_content" not in m` 的消息——注入后的值不被覆盖；末条 assistant 本在未命中区，缓存代价与 reminder 模式相同。
+
+**验证**（mock Session 全链路）：reasoning 注入末条（多 text 项空行连接合并）✓ / 无污染（`_current.steps` 原文不动）✓ / 显式 reminder = 默认行为 ✓ / s0 回退 ✓ / `messages_for_llm` 全链路 ✓ / DSL 解析 6 形态 ✓ / overrides 三场景（已有 steps 改 mode / 空 base 插入 / steps=off 拒绝）✓。
+
+管理页（/agents）steps 段增模式下拉（默认/reminder/reasoning）；hint 文案同步。需 `/restart` 生效。
+
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 
 当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：

@@ -156,6 +156,10 @@ _ASSEMBLY_MUST = ("system", "user_message", "steps")
 # 段的默认相对顺序（必装段自动补插的位置基准；= session._DEFAULT_ASSEMBLY_PLAN 的段序）
 _ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps", "tail")
 _ASSEMBLY_HISTORY_MODES = ("tiered", "window", "full")
+# steps 段的尾段注入模式（用户提案 2026-09-02）：reminder=求值合并→<system-reminder>包裹并入
+# 末条 content（默认，三区重构语义）；reasoning=作为思考链一部分注入——user 之后最后一条
+# assistant 的 reasoning_content 前缀（"当前状态：{result}\n"+原文；s0 无 assistant 回退 reminder）。
+_ASSEMBLY_STEPS_MODES = ("reminder", "reasoning")
 _HOOK_POSITIONS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
 
 
@@ -279,6 +283,9 @@ def _asm_item_from_str(s: str):
         if seg == "history" and mode and mode not in _ASSEMBLY_HISTORY_MODES:
             _LOG.warning("assembly history 模式 '%s' 未知（合法：%s），按默认处理", mode, list(_ASSEMBLY_HISTORY_MODES))
             mode = None
+        if seg == "steps" and mode and mode not in _ASSEMBLY_STEPS_MODES:
+            _LOG.warning("assembly steps 模式 '%s' 未知（合法：%s），按默认 reminder 处理", mode, list(_ASSEMBLY_STEPS_MODES))
+            mode = None
         item = {"kind": "seg", "name": seg}
         if opt:
             item["opt"] = True   # 默认不装配：messages_for_llm 跳过；agent_prompt assembly="seg=on" 清此标记打开
@@ -308,6 +315,9 @@ def _asm_item_from_dict(d: dict):
     / {tool: read_file(x)} [+ every/once] 或 {history: window} 简写 → 项 dict 或 None。
     {seg: "段名[|optional][=mode]"}（2026-09-02 兼容——声明书写的友好形态：段名做值而非做键，
     值复用字符串解析全语义——用户复盘 seg: 形态此前被静默丢弃）。"""
+    # {seg: "steps=reasoning"}：段名做值——委托字符串解析（全语义：|optional/=mode//描述）
+    if d.get("seg"):
+        return _asm_item_from_str(str(d["seg"]))
     for k in _ASSEMBLY_ACTIONS:
         if k in d and d[k]:
             val = str(d[k]).strip()
@@ -330,6 +340,8 @@ def _asm_item_from_dict(d: dict):
             item = {"kind": "seg", "name": seg}
             if seg == "history" and val in _ASSEMBLY_HISTORY_MODES:
                 item["mode"] = val
+            if seg == "steps" and val in _ASSEMBLY_STEPS_MODES:
+                item["mode"] = val   # {steps: reasoning}——尾段注入模式（reminder=默认）
             return item
     return None
 
@@ -396,6 +408,9 @@ def _apply_assembly_overrides(base_plan: list, overrides_str: str) -> tuple:
         seg, _, val = part.partition("=")
         seg, val = seg.strip(), val.strip().lower()
         cleaned = seg.split("|", 1)[0]
+        if cleaned == "steps" and val in _ASSEMBLY_STEPS_MODES:
+            add["steps"] = val   # steps 模式覆盖（steps=reasoning：尾段以思考链注入）——须在必装检查前拦截
+            continue
         if cleaned in ("system", "user_message", "steps"):
             notes.append(f"'{cleaned}' 必装不可关")
             continue
@@ -424,8 +439,8 @@ def _apply_assembly_overrides(base_plan: list, overrides_str: str) -> tuple:
             if mode:
                 existing["mode"] = mode
             continue
-        if seg in _ASSEMBLY_MUST:
-            continue
+        if seg in _ASSEMBLY_MUST and not mode:
+            continue   # 必装段无需"打开"；但带 mode 覆盖时（steps=reasoning）须插入清单——否则投影走默认清单丢 mode
         pos = 0
         for i, it in enumerate(plan):
             if it.get("kind") == "seg" and it.get("name") in _ASSEMBLY_SEG_ORDER \
@@ -809,8 +824,10 @@ def make_subagent_tools(agent) -> list:
                没有则新建（之后的同名 reuse 调用会复用它）。复用实例的上下文投影【只含当前轮】
                （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
                复用次数增长，适合高频派活避免实例越建越多。同名实例全在跑时返回提示。
-        assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off' 或
-               'history=window|tiered|full'。可关段 rules/history/ltm/hooks/tail。
+         assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off'、
+                'history=window|tiered|full' 或 'steps=reasoning'（steps 后的尾段以思考链姿势注入——
+                末条 assistant 的 reasoning_content 前缀"当前状态：…"；默认 reminder=<system-reminder>
+                包裹并入末条 content）。可关段 rules/history/ltm/hooks/tail。
                动作项（file/dir/cmd/workflow/text）不能在参数里新增，只走 .md 声明。
                .md 的 assembly 声明是基线，参数在其上覆盖。
                ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。

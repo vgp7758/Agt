@@ -100,7 +100,7 @@ textarea{width:100%;resize:vertical}
       <h3>上下文装配 assembly（顺序即装配顺序，只装列出的段）</h3>
       <div id="asmList"></div>
       <button class="btn sm" onclick="asmAdd()">＋ 添加段</button>
-      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤 / tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。</div>
+      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤（可加模式：steps=reasoning 使 steps 后的段注入末条 assistant 的 reasoning_content 前缀，默认 reminder=包裹并入末条 content）/ tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。</div>
     </div>
 
     <div class="fgroup">
@@ -201,7 +201,13 @@ function renderAsm(){
       ?`<select class="tsel" onchange="asmSegName(${i},this.value)">${SEG_TYPES.map(t=>`<option value="${t}" ${r.name===t?'selected':''}>${t}</option>`).join('')}</select>`
       :isSeg?`<input class="tsel" type="text" value="${esc(r.name)}" oninput="asmData[${i}].name=this.value">`:'';
     const modeHtml=(isSeg&&r.name==='history')
-      ?`<input style="width:76px" type="text" placeholder="tiered" value="${esc(r.mode||'')}" oninput="asmData[${i}].mode=this.value">`:'';
+      ?`<input style="width:76px" type="text" placeholder="tiered" value="${esc(r.mode||'')}" oninput="asmData[${i}].mode=this.value">`
+      :(isSeg&&r.name==='steps')
+      ?`<select style="width:92px" title="尾段注入模式：reminder=<system-reminder>包裹并入末条 content（默认）/ reasoning=注入末条 assistant 的 reasoning_content 前缀（steps 后的段以思考链姿势呈现）" onchange="asmData[${i}].mode=this.value">
+          <option value="" ${!r.mode?'selected':''}>尾注·默认</option>
+          <option value="reminder" ${r.mode==='reminder'?'selected':''}>reminder</option>
+          <option value="reasoning" ${r.mode==='reasoning'?'selected':''}>reasoning</option>
+        </select>`:'';
     const typeSel=`<select class="tsel" title="类型：seg=投影段（名称见右下拉）/ 动作项（file/text/func...）" onchange="asmKind(${i},this.value)">${['seg',...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
     const valHtml=r.kind==='text'
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`

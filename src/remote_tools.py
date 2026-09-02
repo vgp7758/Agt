@@ -314,7 +314,7 @@ def send_message(server_id: str, message: str) -> str:
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
         return f"[未知 server_id] '{server_id}'（remote_list 查看：{known}）"
-    status, _ = _ws_send_collect(it["url"], message, wait_done=False, ack_timeout=10)
+    status, _ = _ws_send_collect(it["url"], message, wait_done=False, timeout=10, ack_timeout=10)
     return f"[remote:{server_id}] {status}：{message[:80]}" + ("…" if len(message) > 80 else "")
 
 

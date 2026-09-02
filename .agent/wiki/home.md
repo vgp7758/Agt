@@ -304,3 +304,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **grep/glob_files 补齐 gitignore 跳过 + 显式豁免（2026-09-02，用户问「grep 工具没跳过 .gitignore 排除项吗」，commit 725d257）**：grep 此前 `rglob` 裸递归——`__pycache__` 的 .pyc 二进制乱码常年污染结果。修复：`os.walk` + 目录剪枝三件套（硬清单 .git/__pycache__/node_modules + **workspace .gitignore 全模式** + **嵌套 git 仓库整棵剪枝**）；glob_files（外置件 fs_tools.py）同 commit 补齐同语义——自带轻量 gitignore 解析（外置件自洽不 import src，subprocess 模式 sys.path 无 src），version 1→2、播种源已同步、`/reload tools` 热加载。**显式进排除区豁免**：默认搜索跳过排除项（与 git 工作区视角一致），但显式指定 path（'blog'、单文件、glob 静态前缀 'blog/**/*.md'）命中排除区照搜——本 repo blog/、models.py、design/ 都在 gitignore，豁免是特意为之（详见 [grep](features/grep.md) 新页、[glob_files 排除语义](features/glob-files.md)）
 
+## 快速事实增补（2026-09-02 · 九 · recap 对话式组装）
+
+- **recap 对话式组装：build_msgs 直组 messages 三轮（2026-09-02，commit b85f298，用户提案）**：recap_gen 从「指令模板」形态（单条 user 消息转发 systemPrompt 内嵌总结指令）改为**对话续写**形态——code 节点 build_msgs 把 `user_message / answer / 「用一句话(30个token以内)总结一下近期做了什么」` 组装成 user→assistant→user 三轮 messages，llm_call 节点（**messages 直通，零节点能力新增**）一次调用提取回答，model=local-lfm、enable_thinking=False。动机：3B 级小模型对指令模板遵循差（实测坏 recap 复述 systemPrompt 原文）、对对话续写遵循好（预训练分布内形态，few-shot 三轮不跑偏）；实跑切换即见效。**先试后弃经验**：主 Agent 初版给 llm 节点加了 `messages`(array) 声明直通，用户指出 llm_call 本来就吃完整 messages 数组 → git checkout 回滚——工作流要发任意形态对话只需 code 节点组装数组。播种源 `.agent/workflows/recap_gen.xml` + `src/workflows/recap_gen.xml` 双份一致，下个发布版自带（详见 [multi-agent · recap 对话式组装](architecture/multi-agent.md#recap-对话式组装build_msgs-直组-messages-三轮2026-09-02commit-b85f298用户提案)）
+

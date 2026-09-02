@@ -430,6 +430,28 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 机制见 [workflow-hooks · 五验](workflow-hooks.md#五验scene-张冠李戴与-local-qwen-配置残留悬案终审2026-08-31)。
 
+### recap 对话式组装：build_msgs 直组 messages 三轮（2026-09-02，commit b85f298，用户提案）
+
+**背景/动机（用户提案）**：旧 recap_gen 的 LLM 节点喂**指令模板**形态（单条 user 消息转发 systemPrompt 内嵌「总结近期做了什么」指令）。local-lfm 这类 3B 小模型对指令模板遵循差——实测坏 recap 把 systemPrompt 原文复述成「以上是主 Agent 自上次 wiki 维护以来完成的交互轮次……请基于 → user」（模板串直接照抄回显）；对**对话续写**遵循好——user/assistant 交替是预训练分布内形态，few-shot 式三轮几乎不跑偏。
+
+**用户设计**：跳过中间态，直接把本轮 user_message + answer 组装成 messages 数组，发一次 llm_call 提取回答：
+
+```json
+[
+  {"role":"user",      "content":"{user_message}"},
+  {"role":"assistant", "content":"{answer}"},
+  {"role":"user",      "content":"用一句话(30个token以内)总结一下近期做了什么"}
+]
+```
+
+**先试后弃（llm 节点 messages 直通 → 回滚）**：主 Agent 先给 `src/assets/nodes_builtin/llm.py`（type3 节点）加了 `messages`(array) 声明直通——in 声明 messages 数组且非空 → 直接作为对话发送（忽略 prompt/systemPrompt——单 user 消息形态的语义；schema 约束同样不并入，不能改写用户提供的消息序列）。用户指出 **llm_call（real_tools.py）本来就吃完整 messages 数组**——节点层加直通纯属多余 → 同轮 `git checkout` 回滚，改用现成 llm_call 节点。**教训：llm_call 节点即已被完整复用为「messages 直通容器」，工作流要发任意形态对话只需 code 节点组装数组，无需新增节点能力**。
+
+**最终形态**：recap_gen 工作流 5 节点链——`start → build_msgs（code，组装三轮 messages）→ llm_call（plugin 节点，messages 直通，model=local-lfm、enable_thinking=False、out: content 端口）→ build_payload（code）→ hook_write`。
+
+**实跑验证**（debug_workflow，8081 的 lfm2.5-2.6b 在线，输入模拟本轮 user_message + answer）：local-lfm 产出正常一句话 recap（"Rewrote the recap pipeline to use code-structured user/assistant conversations…"）；对比旧版坏 recap（复述 systemPrompt）——**形态一切换立即见效**，用户判断（对话续写是预训练分布内形态、指令模板不是）被直接证实。hook_write 三落点写入正常（✅ recap 已写入（turn=573））。
+
+**播种源同步**：`.agent/workflows/recap_gen.xml`（生效）+ `src/workflows/recap_gen.xml`（播种）双份一致——**下个发布版自带**，其它 repo `/update-assets` 即可拿到。团队看板里 wiki-updater_3 的坏 recap 是旧版工作流跑出的存量数据，待其下次干活完成后新 recap_gen 以对话式形态重新生成并覆盖。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml
@@ -508,7 +530,7 @@ assembly:
 
 **教训（两层）**：① 写入端引入新形态前必须跑「写→读→解析」全链验证、解析端不认识的键要告警不能静默吞（2effa73 修复的盲区）；② **新形态若语义可被既有机制覆盖（func 项 + 区3 merge），优先复用而非发明 DSL 段名**——当天引入当天撤的绕弯即此。
 
-#### #### 后记（2026-09-02，commit dd5b0b4）：`{seg: xxx}` 分支恢复——委托字符串解析全语义
+#### 后记（2026-09-02，commit dd5b0b4）：`{seg: xxx}` 分支恢复——委托字符串解析全语义
 
 504a518 撤掉 2effa73 的 `{seg: x}` 兼容分支时，**docstring 残留的 seg 说明没同步清**（声称支持、代码已无分支）。本轮用户为 steps 段模式提案复盘时抓到：**`{seg: steps=reasoning}`（段名做值的 dict 形态）在 `_asm_item_from_dict` 里仍被静默丢弃（返回 None）**——docstring 声称支持、实际哑弹，与 2effa73 修复的盲区同源。
 

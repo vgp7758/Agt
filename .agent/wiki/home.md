@@ -329,3 +329,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **连接补发进行中轮 · current_turn 事件（2026-09-02，用户提案「后端正在进行中的 repl 轮在客户端没有渲染，有没有好办法在历史渲染完后把当前轮已完成的 step 也渲染出来」）**：此前新连接客户端（刷新 / 新开页签 / URL 直达 busy 页）只渲染历史轮——进行中轮（`session._current`）在历史渲染完那一刻完全不可见，UI 停在上一轮完成态，用户误以为卡了（实际 agent 在跑长工具）。方案：`session_history` 发完后紧接着补发 `current_turn` 事件——server.py 新增 `_current_turn_event(agent)`（从 `session._current` 取 steps，tool_calls 经 `toollog.view` 对齐 `to_history()` 同构格式，无 answer；空闲不发），`current_history` 处理器**主 Agent + 子 Agent 两分支**补发（观测正在跑的子 Agent 是切换页核心场景）。前端 `case 'current_turn'`：addUserBubble → newTurn → setBusy(true) → 遍历 steps 渲染 thinking/tool_call（默认折叠）——**`curTurn` 指向本轮**，后续实时事件（step/tool_call/finishAnswer）自然追加无需特判；顺手清理 `in_progress` 死代码（后端从未发过该字段）。`/restart` 后生效（详见 [user-interaction · 连接补发进行中轮](features/user-interaction.md#连接补发进行中轮--current_turn-事件2026-09-02用户提案)）
 
+## ## 快速事实增补（2026-09-02 · 十四 · registry 防覆盖——answer 推错门修复）
+
+- **子 Agent 完成主 Agent 不醒第二根因：registry `_main_` 被内嵌实例覆盖（2026-09-02，commit 533d64c）**：`agent_prompt` 派 vision 走 SubAgent 包装 → 内嵌 Agent 构造时 agent_id 默认 `"_main_"` → 字典注册**覆盖**真实主 Agent 条目 → vision 完成后 `_route_answer` 查 `_main_` 拿到子 Agent → answer 推进 `agents/vision_10/inbox.jsonl`（主 inbox 恒空永不被唤醒）。铁证：主 session 根 inbox.jsonl 不存在、vision_10 自家 inbox 躺着完整 answer。修复：`Agent.__init__` 注册点防覆盖——registry 已有活体 `_main_` 且非本实例则跳过（子 Agent 由 multiagent.py 用正确 id 另行注册）。与 v0.18.2 旧根因（registry=None）同表象不同因，详见 [multi-agent · 复发](architecture/multi-agent.md#复发2026-09-02内嵌-agent-注册覆盖-_main_-条目answer-推错门commit-533d64c)
+

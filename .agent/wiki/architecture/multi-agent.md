@@ -157,16 +157,47 @@ registry 注册 → push_message(caller_id, answer)★ → caller.inbox
   → inbox_thread 搬运★ → work_q 触发 → _worker 调度 → 主 Agent run() 新一轮
 ```
 
+### 复发（2026-09-02）：内嵌 Agent 注册覆盖 _main_ 条目——answer 推错门（commit 533d64c）
+
+**现象**：用户「失败了」——上一轮 `agent_prompt("vision", ...)` 派活后主 Agent 收尾称「如果 inbox 唤醒链路正常，vision 完成后应自动唤醒我」；vision_10 实际已完成（meta.json `status=done caller_id='_main_'`），但主 Agent 始终未被唤醒。与 [旧版根因](#旧版根因)（registry=None → answer 未入队）**同表象、不同根因**——registry 早已非 None，三层消费机制本身没问题，问题在 **registry 里 `_main_` 条目被换掉了**。
+
+**证据链**（session `20260811_013200`）：
+- 主 session 根 `inbox.jsonl` **不存在**（没有任何 answer 被 push 到主 Agent）
+- `agents/vision_10/inbox.jsonl` 里躺着完整 answer：`📨〔子 Agent 'vision' [vision_10] 完成〕这是一张深色背景的技术架构图…`——**answer 被推到了子 Agent 自己的 inbox**
+- 结论：`_route_answer` 的 `registry.lookup("_main_")` 拿到的不是主 Agent
+
+**根因链**（registry 字典式「后写覆盖先写」）：
+
+```
+agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
+  → SubAgent.__init__ 创建内嵌 Agent 实例（也传了 registry）
+  → Agent.__init__（src/agent.py）agent_id 默认 "_main_" → 按默认值注册
+  → registry.register("_main_", agent=内嵌子Agent)  ← 【覆盖】了真实主 Agent 的条目！
+  → 随后 SubAgent 把 agent_id 改为 "vision_10"，multiagent.py 以正确 id 另行注册
+    （但 _main_ 条目已被内嵌 Agent 占住，无人纠正）
+  ...
+  → vision 完成 → _route_answer → lookup(caller_id="_main_") → 命中【内嵌子 Agent】
+  → push_message 写进 agents/vision_10/inbox.jsonl（子 Agent 自己的 inbox）
+  → 主 Agent inbox 恒空 → inbox_thread / work_q 永远捡不到 → 主 Agent 永不被唤醒
+```
+
+**修复（src/agent.py，Agent.__init__ 注册点防覆盖，commit 533d64c）**：注册前检查——registry 已有活体 `_main_` 且不是本实例 → **跳过**（内嵌子 Agent 由 multiagent.py 用正确 agent_id 另行注册）；仅首次创建主 Agent（或 `_main_` 空槽）时正常注册。
+
+**验证**：`/restart` 后重派一个 vision 任务 → vision 完成后主 Agent 应被自动唤醒——inbox 唤醒链路（`push_message → inbox_thread → work_q → worker → agent.run`）本身一直是好的，此前只是 answer 被推错门。
+
+**教训**：registry 全进程共享、以 agent_id 为键——任何 Agent 构造入口（含 SubAgent 包装的内嵌实例）都不能无防御地拿默认 id 注册。排查「子 Agent 完成主 Agent 不醒」先看 **answer 落进了谁家 inbox**（见下节排障速查第 2 步）。
+
 ### 注意事项
 
 - registry 是进程内全局对象；运行时状态现可通过 POST `/api/status` 端点从外部 HTTP 查询（commit a922121，见 [/api/status 端点](../features/api-status.md)），读取时已加锁/快照
 - 子 Agent 工具闭包重绑自身时也依赖 registry 确认身份，旧版同样受影响
 - **排障速查**：若再现"子 Agent 完成后主 Agent 未唤醒"，按序排查——
   1. **实例是否反复退出 rc=0**：先查端口占用——`netstat -ano | findstr <端口>` → `taskkill /PID <pid>`（9100 案例即旧实例 pid 22636 占用端口，清理后稳定）。进程死亡 → daemon 线程死亡 + inbox 消息丢失，表象同链路 bug 但属环境问题（见 [ops 常见错误对照](../guides/ops.md#常见错误对照)）
-  2. **registry 是否为 None**：查 `/api/status` 快照 registry 字段
-  3. **观测点日志定位断点**：commit e0ae60b 已在 push_message 入队与 inbox_thread 搬运两处埋日志，看实例日志即可判断 answer 是否入队、是否被搬运
-  4. **排除"首轮太慢"误判**：proxy 单次响应可慢至 590+ 秒，观测点未出现≠链路坏，看 llm_calls.jsonl 的 elapsed 区分"慢/死"
-  三层消费机制在进程存活前提下设计上不丢消息
+  2. **answer 是否推错门（2026-09-02 复发根因）**：对比主 session 根 `inbox.jsonl` 与 `agents/<id>/inbox.jsonl`——answer 躺在子 Agent 自己的 inbox、主 inbox 恒空 = registry `_main_` 条目被 SubAgent 包装创建的内嵌 Agent 覆盖（registry 非 None 也会中招，见上节 [复发：内嵌 Agent 注册覆盖 _main_](#复发2026-09-02内嵌-agent-注册覆盖-_main_-条目answer-推错门commit-533d64c)）
+  3. **registry 是否为 None**：查 `/api/status` 快照 registry 字段
+  4. **观测点日志定位断点**：commit e0ae60b 已在 push_message 入队与 inbox_thread 搬运两处埋日志，看实例日志即可判断 answer 是否入队、是否被搬运
+  5. **排除"首轮太慢"误判**：proxy 单次响应可慢至 590+ 秒，观测点未出现≠链路坏，看 llm_calls.jsonl 的 elapsed 区分"慢/死"
+  三层消费机制在进程存活前提下设计上不丢消息（前提：answer 进对 inbox）
 
 ## 事件流 agent_id 打标与 WebUI 串台修复（2026-08-21，commit ba0940b）
 

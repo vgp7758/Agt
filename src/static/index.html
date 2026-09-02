@@ -719,13 +719,18 @@ let _curToolFold = null;        // 当前可折叠工具组（非 diff 且非并
 let _inParallel = false;        // 并行批内 result 无法与具体 call 配对 → 独立行（不进 body）
 let _parLeft = 0;
 
-function renderToolCall(name, args){
+function renderToolCall(name, args, changed){
   if(!curTurn) newTurn();
   const html=toolCallHTML(name, args);
   const fallback=`🔧 ${name}(${fmtArgs(args)})`;
-  if(_DIFF_TOOLS.has(name)){
-    // 文件 diff 类：不可折叠（默认展开——改动详情是一轮里最值得看的东西）
-    addTraceHTML('tool', html || esc(fallback));
+  const _changedTag = (changed && changed.length)
+    ? ` <span style="color:#d97706;font-size:11px">📝 ${changed.length} 文件变更${changed.length<=3?`（${changed.map(f=>String(f).split(/[\\/]/).pop()).join(', ')}）`:''}</span>` : '';
+  if(_DIFF_TOOLS.has(name) || (changed && changed.length)){
+    // 文件 diff 类 / 实际产生 diff 的工具：不可折叠（默认展开——用户提案 2026-09-02：
+    // 判定从工具名白名单扩为「快照对比有真实 diff」——run_python 写文件/git_commit 等也展开）
+    const w=document.createElement('div'); w.className='ev tool';
+    w.innerHTML=(html || esc(fallback)) + _changedTag;
+    curTurn.traceBox.appendChild(w); scrollBottom();
     _curToolFold = null;
     return;
   }
@@ -900,7 +905,7 @@ function renderHistTurn(t, box, isLast){
     _curThinkFold = null;   // 每步新思考段（防上一步 reasoning 拼进同组）
     if(s.reasoning) renderThinking(s.reasoning, '💭 思考');
     (s.tool_calls||[]).forEach(tc=>{
-      renderToolCall(tc.name, tc.arguments);
+      renderToolCall(tc.name, tc.arguments, tc.changed);
       if(tc.result) appendToolResult(tc.result);   // 折叠组的 result 进 body（历史与实时同构）
     });
   });
@@ -2292,7 +2297,15 @@ function onWSMessage(ev){
     case 'tool_progress':
       renderToolProgress(m.name, m.elapsed, m.lines);
       break;
-    case 'tool_result': clearToolProgress(); _inParallel = false; appendToolResult(m.result); break;
+    case 'tool_result':
+      clearToolProgress(); _inParallel = false;
+      // 真实 diff 到达（用户提案 2026-09-02）：有变更的工具调用不可折叠——已折叠的当前组立即展开 + 标注
+      if(m.changed && m.changed.length && _curToolFold && _curToolFold.head && _curToolFold.head.isConnected){
+        _curToolFold.body.style.display='block';
+        _curToolFold.head.innerHTML = '▾ ' + esc(_curToolFold.head.textContent.slice(2))
+          + ` <span style="color:#d97706;font-size:11px">📝 ${m.changed.length} 文件变更</span>`;
+      }
+      appendToolResult(m.result); break;
     case 'llm_log':
       // LLM 运行日志（回退/限流/截断/空响应/链耗尽等——此前只进 log 文件，用户看不到）
       // scene=发起场景（react·_main_ / hook:before_turn·wiki_auto_query·_main_ 等），行尾小括号显示

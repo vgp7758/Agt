@@ -355,6 +355,7 @@ _NAME_SAFE_RE = re.compile(r"[^\w一-鿿]")
 @dataclass
 class ToolCall:
     call_id: str = ""   # 在 session.toollog 的 id（c1/c2/…）；完整 name/arguments/result 存 toollog，组装上下文时按 id 召回
+    changed: list = field(default_factory=list)  # 该调用前后真实产生的文件 diff 清单（快照对比；前端「有 diff 不可折叠」判定 + events 重放持久化）
 
 
 @dataclass
@@ -782,7 +783,8 @@ class Session:
             raise RuntimeError("没有进行中的 Turn，请先 start_turn()")
         self._current.steps.append(step)
         self._emit_event({"event": "step", "reasoning": step.reasoning or "",
-                          "call_ids": [tc.call_id for tc in step.tool_calls]})
+                          "call_ids": [tc.call_id for tc in step.tool_calls],
+                           "changes": [[tc.call_id, tc.changed] for tc in step.tool_calls if tc.changed]})
 
     def finish_turn(self, answer: str, answer_reasoning: str = ""):
         if self._current is None:
@@ -874,7 +876,8 @@ class Session:
                 events.append({"event": "snapshot", "sha": t.snapshot_sha})
             for s in t.steps:
                 events.append({"event": "step", "reasoning": s.reasoning or "",
-                               "call_ids": [tc.call_id for tc in s.tool_calls]})
+                               "call_ids": [tc.call_id for tc in s.tool_calls],
+                               "changes": [[tc.call_id, tc.changed] for tc in s.tool_calls if tc.changed]})
             events.append({"event": "turn_end", "answer": t.answer or "",
                            "answer_reasoning": t.answer_reasoning or "", "summary": t.summary or ""})
         events.append({"event": "restore", "keep": keep})
@@ -2602,7 +2605,8 @@ class Session:
                     s._emit_event({"event": "snapshot", "sha": t.snapshot_sha})
                 for step in t.steps:
                     s._emit_event({"event": "step", "reasoning": step.reasoning or "",
-                                   "call_ids": [tc.call_id for tc in step.tool_calls]})
+                                   "call_ids": [tc.call_id for tc in step.tool_calls],
+                           "changes": [[tc.call_id, tc.changed] for tc in step.tool_calls if tc.changed]})
                 s._emit_event({"event": "turn_end", "answer": t.answer,
                                "answer_reasoning": t.answer_reasoning, "summary": t.summary})
             s.turns = old_turns
@@ -2689,8 +2693,10 @@ def _replay_events(events: list) -> list:
         elif et == "snapshot" and cur is not None:
             cur.snapshot_sha = e.get("sha", "")
         elif et == "step" and cur is not None:
+            _chm = dict(e.get("changes") or [])   # 快照 diff 恢复（有变更的调用——重放进 ToolCall.changed）
             cur.steps.append(Step(reasoning=e.get("reasoning", ""),
-                                  tool_calls=[ToolCall(call_id=c) for c in e.get("call_ids", [])]))
+                                  tool_calls=[ToolCall(call_id=c, changed=_chm.get(c) or [])
+                                    for c in e.get("call_ids", [])]))
         elif et == "turn_resume":
             # 中断轮恢复事件（resume_interrupted 发）：最后一个已归档 turn 弹回进行中状态。
             # 重放闭环：turn_end(中断) → turn_resume → step… → turn_end(最终)。

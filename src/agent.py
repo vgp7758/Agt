@@ -1885,7 +1885,7 @@ class Agent:
                                 # before_answer 钩子存在时也做快照（_turn_changed_calls 收集用——wiki 维护等钩子
                                 # 直接消费变更调用原文，免子 Agent read_file 重读源文件）
                                 _snap_before = None
-                                _need_snap = ("after_tool" in self._active_hooks) or ("before_answer" in self._active_hooks)
+                                _need_snap = True   # 恒开（2026-09-02 用户提案）：真实 diff 也驱动前端「有 diff 不可折叠」——mtime 扫描 + 链式复用，成本可接受
                                 if _need_snap:
                                     _snap_before = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                                 _t0 = time.time()
@@ -1913,14 +1913,15 @@ class Agent:
                                             "tool_args": tc_args_json, "tool_result": result,
                                             "changed_files": changed})   # 直接传数组（工作流 ref 原样透传，无需序列化往返）
                                 self._emit({"type": "tool_result", "name": tc["name"],
-                                            "result": self._truncate(result), "parallel": len(calls) > 1})
+                                            "result": self._truncate(result), "parallel": len(calls) > 1,
+                                            "changed": changed or []})
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
-                                step.tool_calls.append(ToolCall(call_id=cid))
+                                step.tool_calls.append(ToolCall(call_id=cid, changed=changed or []))
                         elif len(calls) == 1:
                             tc = calls[0]
                             self._emit({"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]})
                             _snap_b1 = None
-                            _need1 = "before_answer" in self._active_hooks
+                            _need1 = True   # 恒开（同上——真实 diff 驱动前端展开）
                             if _need1:
                                 _snap_b1 = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                             _t0 = time.time()
@@ -1937,9 +1938,10 @@ class Agent:
                                         "call_id": cid, "name": tc["name"], "arguments": tc["arguments"],
                                         "result_preview": (result or "")[:800], "changed_files": _ch1})
                             self._emit({"type": "tool_result", "name": tc["name"],
-                                        "result": self._truncate(result), "parallel": False})
+                                        "result": self._truncate(result), "parallel": False,
+                                        "changed": _ch1 or []})
                             self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
-                            step.tool_calls.append(ToolCall(call_id=cid))
+                            step.tool_calls.append(ToolCall(call_id=cid, changed=_ch1 or []))
                         else:
                             self._emit({"type": "parallel", "count": len(calls)})
                             for tc in calls:

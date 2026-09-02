@@ -115,7 +115,7 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **区3 三区划分与 merge 语义全部保留**——撤的只是「写死内容拆成六段名」这层过度设计；区1/区2/区3 边界、byte-stable 收益、钩子 merge 化不受影响。声明文件同步改（team-manager.md / wf-calibrator.yml / wf-designer.yml——裸字符串段 + func 项）。形态细节与撤除清单见 [multi-agent · 段形态简化定稿](multi-agent.md)。
 
-### steps 段注入模式：steps=reasoning（2026-09-02，用户提案）
+### steps 段注入模式：steps=reasoning（2026-09-02，用户提案，commit dd5b0b4）
 
 **提案（用户，2026-09-02）**：steps 段可带参数声明其后尾段的注入姿势，两种模式：
 

@@ -88,6 +88,16 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 
 前端改动走 mtime 热更新，Ctrl+F5 强刷即用（不依赖 /restart）。
 
+### ### steps 段模式下拉：reminder / reasoning（2026-09-02，commit dd5b0b4）
+
+steps 段（尾段注入模式）的 mode 编辑从文本框改为 **select 下拉**（与 history 段文本框 mode 对照——history 是自由文本、steps 是枚举）：
+
+- 选项：空（= 默认 reminder）/ `reminder` / `reasoning`
+- title 提示：「尾段注入模式：reminder=&lt;system-reminder&gt;包裹并入末条 content（默认）/ reasoning=注入末条 assistant 的 reasoning_content 前缀（steps 后的段以思考链姿势呈现）」
+- `onchange="asmData[i].mode=this.value"`——选择即写入，`asmToRow`/保存往返不丢
+
+语义对照见 [context-engine · steps 注入模式](../architecture/context-engine.md#steps-段注入模式stepsreasoning2026-09-02用户提案)。
+
 ## v2.1 声明格式（用户设计）
 
 ```

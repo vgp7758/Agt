@@ -54,6 +54,12 @@ members:
 
 > **补记（同日 commit 2effa73）**：cb57597 补的 `- seg: user_message` 这类 **dict 形态此前被 `_asm_item_from_dict` 静默丢弃**（只认动作键与已知段名做键）——直到 2effa73 加 `seg:` 键分支 + 补 `tail.*` 白名单（`tail.time` 等连字符串形态也会被当未知段名丢弃）才真正生效。修复细节与「写→读→解析」全链验证教训见 [multi-agent · assembly DSL](../architecture/multi-agent.md#assembly-dsl上下文装配配方)。
 
+#### 补记二：声明最终形态 = 裸字符串段 + func 项（同 commit 504a518）
+
+> **补记二（同日 commit 504a518，用户裁定「没必要定义 {seg:x} 和 tail.* 这些东西」）**：`seg:` dict 形态与 `tail.*` 拆段**当天引入当天撤销**——最终声明形态 = 裸字符串段（`- user_message` / `- steps`）+ func 项（`- func: print_time()` 替代 tail.time、`- func: get_team_profiles()` 替代 tail.system 团队部分）。`tail.*` 六拆段恢复单一 `tail` 段（`_expand_tail` 恒等直通）。team-manager.md 已同步为最终形态（text 块 + user_message + steps + func 三件套）。详见 [multi-agent · 段形态简化定稿](../architecture/multi-agent.md)。
+
+> **补记三（commit dd5b0b4）**：`seg:` dict 分支**当日撤销后于同批恢复**——steps 段模式提案（steps=reasoning）复盘发现 docstring 残留声明但代码无分支，`{seg: steps=reasoning}` 仍被静默丢弃；已恢复并委托 `_asm_item_from_str` 全语义解析（|optional/=mode//描述 全生效）。最终**三形态并存**：裸字符串 / `{steps: reasoning}`（段名做键）/ `{seg: steps=reasoning}`（段名做值）。详见 [multi-agent · 段形态简化定稿后记](../architecture/multi-agent.md)。
+
 ## 与其他模块的关系
 
 - 上游：[multi-instance · 组网](../architecture/multi-instance.md)——remote_connect / remote_message / auto server_id 是团队组网的底层通道；team_tools 是把它们编排成「团队级操作」的一层

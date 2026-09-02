@@ -508,6 +508,22 @@ assembly:
 
 **教训（两层）**：① 写入端引入新形态前必须跑「写→读→解析」全链验证、解析端不认识的键要告警不能静默吞（2effa73 修复的盲区）；② **新形态若语义可被既有机制覆盖（func 项 + 区3 merge），优先复用而非发明 DSL 段名**——当天引入当天撤的绕弯即此。
 
+#### #### 后记（2026-09-02，commit dd5b0b4）：`{seg: xxx}` 分支恢复——委托字符串解析全语义
+
+504a518 撤掉 2effa73 的 `{seg: x}` 兼容分支时，**docstring 残留的 seg 说明没同步清**（声称支持、代码已无分支）。本轮用户为 steps 段模式提案复盘时抓到：**`{seg: steps=reasoning}`（段名做值的 dict 形态）在 `_asm_item_from_dict` 里仍被静默丢弃（返回 None）**——docstring 声称支持、实际哑弹，与 2effa73 修复的盲区同源。
+
+修复（同 commit dd5b0b4）：`_asm_item_from_dict` **恢复 `{seg: xxx}` 分支**——委托 `_asm_item_from_str` 全语义解析（`|optional` / `=mode` / `//描述` 全部生效，比 2effa73 的局部兼容更彻底）：
+
+```python
+# {seg: "steps=reasoning"}：段名做值——委托字符串解析（全语义：|optional/=mode//描述）
+if d.get("seg"):
+    return _asm_item_from_str(str(d["seg"]))
+```
+
+**至此段名三形态齐备**：裸字符串（标准形态）/ `{steps: reasoning}`（段名做键 + mode 值）/ `{seg: steps=reasoning}`（段名做值，委托字符串解析）。
+
+**教训（504a518 的补课）**：撤销形态时，docstring 残留的声明要么同步清、要么代码兑现——「文档说支持、代码没有」比「两种形态并存」更坑：用户按文档书写，结果被静默丢弃，连告警都没有。
+
 ## system_append DSL（SYSTEM 动态追加）
 
 ```yaml

@@ -1382,7 +1382,35 @@ def _history_event(agent, name_override: str = "") -> dict:
             "expand_from": start, "total_turns": total}
 
 
-def _broadcast_history(agent, name_override: str = ""):
+def _current_turn_event(agent):
+    """构造 current_turn 事件：正在进行的轮（session._current）——新连接的客户端
+    在历史渲染完后补发当前轮已完成的步骤（用户提案 2026-09-02）。格式对齐 to_history()
+    的 steps 结构（name/arguments/result/call_id），无 answer（还在跑）。"""
+    s = agent.session
+    cur = getattr(s, "_current", None)
+    if cur is None or not (cur.user_message or "").strip():
+        return None
+    steps = []
+    for st in cur.steps:
+        tcs = []
+        for tc in st.tool_calls:
+            try:
+                n, a, r = s.toollog.view(tc.call_id)
+            except Exception:
+                n, a, r = tc.call_id, {}, ""
+            tcs.append({"name": n, "arguments": a, "result": (r or "")[:500],
+                        "call_id": tc.call_id,
+                        "changed": list(getattr(tc, "changed", None) or [])})
+        if tcs:
+            steps.append({"tool_calls": tcs, "reasoning": st.reasoning or ""})
+    return {"type": "current_turn",
+            "turn": len(s.turns) + 1,
+            "user": cur.user_message,
+            "steps": steps,
+            "agent_id": getattr(agent, "agent_id", "_main_")}
+
+
+
     """广播主 Agent 的 session 历史——带 agent_id="_main_"（只刷与主 Agent 交互的客户端；
     其它页签正与子 Agent 交互时不会被主 session 的历史冲掉视图）。"""
     ev = _history_event(agent, name_override)
@@ -1519,6 +1547,11 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 await _send(ws, {"type": "session_history",
                                  "name": f"{e0.name} [{cur}]", "agent_id": cur,
                                  "turns": e0.agent.session.to_history()})
+                # 补发子 Agent 进行中的轮（同主 Agent——观测正在跑的子 Agent 是切换页的核心场景）
+                cur_ev0 = _current_turn_event(e0.agent)
+                if cur_ev0:
+                    cur_ev0["agent_id"] = cur
+                    await _send(ws, cur_ev0)
                 return
             # 历史子 Agent（agent=None，磁盘恢复条目）：从磁盘加载历史（与 switch_agent 同款）——
             # /agents/<id> URL 直达时不再被复位回主视图（此前 agent=None 走"失效"分支直接回主，
@@ -1541,6 +1574,10 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             if client is not None:
                 client["target"] = "_main_"
         await _send(ws, _history_event(agent))
+        # 补发进行中的轮（用户提案 2026-09-02）：新连接的客户端看到当前正在跑的步骤
+        cur_ev = _current_turn_event(agent)
+        if cur_ev:
+            await _send(ws, cur_ev)
         # 补发活动 spec：spec 面板靠 spec 事件驱动，重连不会自动重放。
         # 如果有 pending spec（committed 态），用 spec_pending 让前端渲染交互气泡。
         from spec_tools import check_pending_spec, _spec_event_payload

@@ -146,16 +146,19 @@ def _func_print_time() -> str:
         return ""
 
 
-def _func_team_profiles() -> str:
-    """{func:get_team_profiles()} —— 团队成员看板（agent_id/模型/忙闲/recap——registry 为准，不含自己）。
+def _func_team_profiles(viewer_id: str = "") -> str:
+    """{func:get_team_profiles()} —— 团队成员看板（agent_id/模型/忙闲/recap——registry 为准，不含看者自己）。
+    viewer_id：看板所属的 agent（session._asm_agent_id 经 resolve_assembly_func 转发）——子 Agent 装配时
+    exclude 自己而非主 Agent；缺省（text 内插等无所属场景）= 挂点主 Agent。
     修复注记（2026-09-02）：此前 from multiagent import format_team 是恒 ImportError 的坏路径
     （multiagent 无模块级 format_team——它是 AgentRegistry 方法）→ 恒空串；改走运行时挂点。"""
     a = _RUNTIME_AGENT
+    exclude = str(viewer_id or "").strip() or (a.agent_id if a is not None else "")
     reg = getattr(a, "registry", None) if a is not None else None
     if reg is None:
         return ""
     try:
-        return reg.format_team(exclude_id=a.agent_id)
+        return reg.format_team(exclude_id=exclude)
     except Exception:
         return ""
 
@@ -286,12 +289,17 @@ FUNC_REGISTRY = {
 
 
 
-def resolve_assembly_func(name: str) -> str:
-    """执行 assembly func: 项里的模板函数（白名单）。未知名返回空。"""
+def resolve_assembly_func(name: str, viewer_id: str = "") -> str:
+    """执行 assembly func: 项里的模板函数（白名单）。未知名返回空。
+    viewer_id：func 项所属的 agent（session._asm_agent_id）——签名带 viewer_id 的函数
+    （get_team_profiles 等「谁在看」敏感的）据此区分视角；其余函数忽略。"""
+    import inspect
     fn = FUNC_REGISTRY.get(name)
     if fn is None:
         return ""
     try:
+        if "viewer_id" in inspect.signature(fn).parameters:
+            return str(fn(viewer_id=viewer_id) or "").strip()
         return str(fn() or "").strip()
     except Exception:
         return ""

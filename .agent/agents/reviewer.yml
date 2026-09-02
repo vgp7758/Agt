@@ -7,6 +7,7 @@ assembly:
 - history|optional // 对照之前的审查结论复查时打开
 - user_message
 - steps
+- func: get_team_profiles()   # 团队看板（registry 为准，不含自己——队友状态/recap 可见）
 hooks:
   turn_end:
   - workflow: recap_gen

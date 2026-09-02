@@ -1213,7 +1213,10 @@ class Session:
                 return _interp_funcs(str(item.get("text") or ""))
             if kind == "func":
                 from agent_config import resolve_assembly_func
-                return resolve_assembly_func(str(item.get("func") or ""))
+                # viewer_id：func 求值所属的 agent（session._asm_agent_id）——get_team_profiles 等
+                # 需要区分「谁在看」的函数用它 exclude 自己（子 Agent 装配看板时不再 exclude 主 Agent）
+                return resolve_assembly_func(str(item.get("func") or ""),
+                                             viewer_id=str(getattr(self, "_asm_agent_id", "") or ""))
             if kind in ("file", "dir"):
                 # 路径基准 = session.workspace（子 Agent 复活/临时目录场景与 real_tools.WORKSPACE 可能不同）；
                 # 解析产物把值存在同名键下（{file: path} → item["file"]）；path 键兼容手写清单
@@ -1352,8 +1355,14 @@ class Session:
                         if name == "tail":
                             # tail.* 拆段（2026-09-01·用户提案：写死内容组装化）：各子段独立收集，
                             # 依清单顺序合并进 tail_merge_text（装配后 merge 到末条 content——
-                            # 见 _flush_run 后的 merge 段）；空段自动跳过（零噪声）
-                            _b = "\n".join(str(m.get("content") or "") for m in own)
+                            # 见 _flush_run 后的 merge 段）；空段自动跳过（零噪声）。
+                            # 剥自带 <system-reminder> 包裹（_ambient_group 会包一层，而 merge 段
+                            # 统一再包——不剥则双层嵌套，2026-09-02 实锤于本 session 每步注入）
+                            _b = "\n".join(str(m.get("content") or "") for m in own).strip()
+                            if _b.startswith("<system-reminder>"):
+                                _b = _b[len("<system-reminder>"):].strip()
+                            if _b.endswith("</system-reminder>"):
+                                _b = _b[:-len("</system-reminder>")].strip()
                             tail_merge_text = (tail_merge_text + "\n" + _b) if tail_merge_text else _b
                             continue
                         run.extend(own)

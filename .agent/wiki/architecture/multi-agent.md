@@ -28,7 +28,7 @@ create_agent（src/multiagent.py，程序化声明入口——[/agents 管理页
 
 ```python
 create_agent(name, description, system, tools="", model="",
-             assembly="user_message,steps,history|optional,tail.time,rules|off",
+             assembly="user_message,steps,history|optional,tail,rules|off",
              hooks="before_turn=wiki_auto_query,turn_end=recap_gen|async")
 ```
 
@@ -43,6 +43,7 @@ create_agent(name, description, system, tools="", model="",
 - 装配段名/模式完整 DSL 见 [assembly DSL](#assembly-dsl上下文装配配方)（含 `|optional` 真语义、段可带模式 `history=tiered`）
 - 声明后 `_inject_agent_enums` 重注入——agent_prompt 节点的 name 下拉立刻出现新 Agent（见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 - 写 `.agent/agents/<name>.yml` 不建实例；kill_agent 清理
+- **2026-09-02（commit 504a518，用户裁定）**：生成形态从 `{seg:}` dict 改为**裸字符串段**（`'user_message'` / `'history|optional'`——与手写声明同形，所见即所装）；示例装配里的 `tail.time` 回落 `tail`（tail.* 拆段同日撤销，见下方「段形态简化定稿」节）
 
 ## 复活路径 NameError · wiki-updater 多实例根因修复（2026-08-26，commit 6d396af）
 
@@ -478,18 +479,34 @@ assembly:
 
 **白名单坑（2026-09-02，team-manager 实锤，commit cb57597）**：装配是**白名单**——列什么装什么。team-manager 声明只列 text（缺 user_message/steps）→ 任务消息不进投影，Agent「看起来活着但收不到活」。`create_agent` 默认装配已显式含 `user_message,steps` 防同类（commit 9ddaf63）；手工声明务必把必需段列全（/agents 管理页保存也会显式化，见 [agents-admin · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。team-manager 修复细节见 [team-tools](../features/team-tools.md)。
 
-### `seg:` 键形态兼容 + tail.* 拆段补全（2026-09-02，commit 2effa73）
+### 段形态简化定稿：`seg:` dict 兼容 + tail.* 拆段补全（2effa73）→ 当日撤销（504a518，用户裁定）
 
-**用户复盘抓到的静默丢弃**：装配项 dict 形态此前只认两类——动作键（file/dir/cmd/workflow/text/func/tool）+ 已知段名做键（如 `history: window`）。用户书写的 `- seg: user_message`（段名做值）与 create_agent 生成的 `{"seg": ...}` 两者都匹配不上 → `_asm_item_from_dict` 返回 None → **静默丢弃**（连告警都没有）。team-manager.md / wf-calibrator.yml / wf-designer.yml 里的段项全是哑弹——只验了「生成的 yml 内容」没验「解析回来」，验证盲区（用户复盘「确认一下读取逻辑怎么处理」直接点破）。
+**前史（commit 2effa73，2026-09-02 上午）**：用户复盘抓到装配项 dict 形态的静默丢弃——`- seg: user_message`（段名做值）与 create_agent 生成的 `{"seg": ...}` 都匹配不上 `_asm_item_from_dict`（此前只认动作键 + 段名做键）→ 返回 None **静默丢弃**（连告警都没有），team-manager.md / wf-calibrator.yml / wf-designer.yml 里的段项全是哑弹。修复两层：加 `seg:` 键分支（值复用字符串解析全语义）+ `_ASSEMBLY_SEGS` / toggles / 段序三集合补 `tail.*` 六拆段白名单。验证三声明文件「写→读→解析」全链通过。
 
-**修复（src/multiagent.py，commit 2effa73，两层）**：
+**当日撤销（commit 504a518，用户裁定「没必要定义 {seg:x} 和 tail.* 这些东西」）**：动态内容直接在 steps 后写 func 项即可——
 
-- `_asm_item_from_dict` 加 `seg:` 键分支——**值复用字符串解析全语义**（`段名[|optional][=mode]` + 行内描述同款）：`{seg: "history|optional"}` ≡ 字符串形态 `- history|optional`；`{seg: ..., optional: true, desc: ...}` 的独立 `optional` / `desc` 键照常消费——`optional: true` → `opt=True`（[`|optional` 真语义](#optional-真语义默认不装配on-打开2026-08commit-1e3b206)同款：默认不装配，`=on` 打开）
-- **第二层连带修复**：`_ASSEMBLY_SEGS` / toggles / 段序三集合补 `tail.*` 拆段（time/system/plan/spec/episodic/remote）——session 侧 2026-09-01 已拆段（spec s_edeeec31，见 [context-engine · 投影三区重构](context-engine.md#投影三区重构tail-拆段--区3-统一包裹--钩子-merge-化2026-09-01用户提案)）但 multiagent 侧没同步——**连字符串形态 `- tail.time` 都会被 `_asm_item_from_str` 当未知段名丢弃**（白名单集合不含它，与 `_DEFAULT_ASSEMBLY_PLAN` 脱节）
+```yaml
+assembly:
+  - user_message          # 裸字符串段（标准形态）
+  - steps
+  - func: print_time()    # 动态内容 = func 动作项放 steps 后
+  - func: get_team_profiles()
+  - func: load_remote_instances()
+```
 
-**验证（三个真实声明文件全链「写→读→解析」）**：team-manager.md（段=[system, user_message, steps, tail.time, tail.system] + 动作 text，必装段 system 自动补插 ✓）、wf-calibrator.yml、wf-designer.yml 全过——此前写的声明现在真实生效（create_agent 输出同款受益）。
+**为什么这样就够**：三区重构「steps 后全进区3（统一 `<system-reminder>` 包裹 merge 到末条）」语义下，func 项放清单尾部就是 tail 位置——**不需要为动态内容发明段名**（`{func:...()}` 占位替换是既有能力，见 [context-engine · 投影三区重构](context-engine.md)）。
 
-**教训**：写入端引入新形态前必须跑「写→读→解析」全链验证（只验生成内容 ≠ 生效）；解析端不认识的键要告警、不能静默吞——否则声明「看起来生效」实则全是哑弹，且无复盘就会一直潜伏。
+**撤除清单（src/multiagent.py + src/session.py）**：
+
+| 撤除项 | 替代 |
+|---|---|
+| `{seg: x}` dict 形态（2effa73 刚加的兼容分支） | 裸字符串 `- user_message`（`\|optional` 后缀）——`_asm_item_from_dict` 只剩动作键 + 段名做键两分支（docstring 残留提及 seg:） |
+| `tail.time/system/plan/spec/episodic/remote` 六拆段 | 默认清单恢复**单一 `tail` 段**（`_seg_msgs_tail` 整段收集全部 provider）；`_expand_tail` 恒等直通（保留方法兼容调用点）；`_walk_plan` 恢复整段 |
+| create_agent 生成 `{seg:}` dict | 生成裸字符串段（`'user_message'` / `'history\|optional'`） |
+
+**配套新增（src/agent_config.py）**：FUNC_REGISTRY 注册 `print_time()`（实时时段块——替代 tail.time）/ `get_team_profiles()`（团队成员看板——替代 tail.system 团队部分）；`load_remote_instances()` 已有（回到 func 动作项形态）。三个声明文件同步改（team-manager.md / wf-calibrator.yml / wf-designer.yml——裸字符串段 + func 项）。
+
+**教训（两层）**：① 写入端引入新形态前必须跑「写→读→解析」全链验证、解析端不认识的键要告警不能静默吞（2effa73 修复的盲区）；② **新形态若语义可被既有机制覆盖（func 项 + 区3 merge），优先复用而非发明 DSL 段名**——当天引入当天撤的绕弯即此。
 
 ## system_append DSL（SYSTEM 动态追加）
 

@@ -1330,6 +1330,9 @@ function switchSettingsTab(name, btn){
   // 底部保存按钮语义随 tab 切换：模型 tab=保存模型配置，运行时 tab=保存运行时
   const saveBtn=document.getElementById('cfgSave');
   if(saveBtn) saveBtn.textContent = name==='models' ? '💾 保存模型配置' : '💾 保存运行时';
+  // 切到 MCP 标签时加载配置+状态（此前 loadMcpConfig 无调用点——列表恒空，用户实锤：
+  // playwright/python-lsp/csharp-lsp 全看不到；每次切入都刷新，读最新盘上配置）
+  if(name==='mcp') loadMcpConfig();
 }
 function fillModelSelect(id, emptyLabel){
   const sel=document.getElementById(id); if(!sel) return;
@@ -1485,11 +1488,10 @@ async function refreshMcpStatus(){
 function renderMcpList(){
   const box = document.getElementById('mcpList');
   const servers = _mcpData.mcpServers || {};
-  if(!Object.keys(servers).length){
-    box.innerHTML = '<div style="color:#8a9099;font-size:12px;padding:8px">暂无 MCP Server。点击"+ 添加 Server"添加。</div>';
-    return;
-  }
-  box.innerHTML = Object.entries(servers).map(([name, cfg])=>{
+  // 不早退（2026-09-02）：空配置时也要继续渲染动态 server 只读区——早退会把它整个吞掉
+  const emptyHint = !Object.keys(servers).length
+    ? '<div style="color:#8a9099;font-size:12px;padding:8px">暂无 MCP Server 配置。点击"+ 添加 Server"添加。</div>' : '';
+  box.innerHTML = emptyHint + Object.entries(servers).map(([name, cfg])=>{
     const escName = String(name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const st = _mcpStatus[name];
     const badge = st ? (st.connected
@@ -1504,8 +1506,20 @@ function renderMcpList(){
       <div class="mcp-row"><input value="${(cfg.args||[]).join(' ')}" placeholder="args（空格分隔）" onchange="_mcpData.mcpServers['${escName}'].args=this.value.split(' ').filter(Boolean)" style="flex:2"></div>
       <div class="mcp-row"><input value="${esc(cfg.cwd||'')}" placeholder="cwd（可选）" onchange="_mcpData.mcpServers['${escName}'].cwd=this.value" style="flex:1;min-width:120px"></div>
     </div>`;
-  }).join('');
-  // 给 mcp-item 加样式（内联）
+  }).join('')
+  // —— 动态注入 server 只读区（2026-09-02·用户报告 python-lsp/csharp-lsp 看不见）：ensure_lsp 等
+  // 运行时装配的会话不在 .mcp.json——配置区天然不含；从 _mcpStatus 补渲染不在配置清单的项，
+  // 只读展示连接态+工具数（它们的"配置"在引擎装配逻辑里，不由本页管理）
+  + (()=>{ const extra = Object.entries(_mcpStatus).filter(([n])=>!servers[n]);
+    if(!extra.length) return '';
+    return `<div style="margin-top:10px;font-size:11px;color:#8a9099">动态注入 / 运行时连接（只读——不在 .mcp.json，由引擎按需装配）：</div>`
+      + extra.map(([name,st])=>{
+        const b = st.connected
+          ? `<span style="color:#059669;font-size:11px" title="${esc((st.tools||[]).join(', ').slice(0,400))}">🟢 已连接 · ${st.tool_count} 工具 · ${esc(st.transport||'')}</span>`
+          : `<span style="color:#dc2626;font-size:11px">🔴 未连接</span>`;
+        return `<div class="mcp-item" style="opacity:.85"><div class="mcp-row"><b>${esc(name)}</b> ${b}</div></div>`;
+      }).join('');
+  })();
   if(!document.getElementById('mcpStyle')){
     const st = document.createElement('style'); st.id = 'mcpStyle';
     st.textContent = '.mcp-item{background:#f9fafb;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px}.mcp-row{display:flex;gap:6px;margin:4px 0}.mcp-row input{flex:1;min-width:100px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px}.mcp-row b{min-width:80px}';

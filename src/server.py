@@ -613,8 +613,15 @@ async def api_mcp_status():
     mgr = getattr(_agent, "mcp_mgr", None) if _agent is not None else None
     sessions = getattr(mgr, "sessions", {}) or {}
     def _tnames(sess):
+        # 兼容两种形态（2026-09-02·tool_count=0 修复）：mcp SDK 的 Tool 对象（.name 属性——
+        # sessions[name]["tools"] 存的就是它）与 dict（{"name": ...}）
         try:
-            return [t.get("name", "") for t in (sess.get("tools") or []) if t.get("name")]
+            out = []
+            for t in (sess.get("tools") or []):
+                n = t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
+                if n:
+                    out.append(str(n))
+            return out
         except Exception:
             return []
     out = {}

@@ -8,7 +8,7 @@ assembly:
 - history|optional // 连续看图任务或需要对比之前看过的图片时打开
 - user_message
 - steps
-- func: get_team_profiles()   # 团队看板（registry 为准，不含自己——队友状态/recap 可见）
+- func: get_team_profiles()
 hooks:
   turn_end:
   - workflow: recap_gen
@@ -16,6 +16,7 @@ hooks:
 fallback:
   chain:
   - qwen
+  - glm-official-flash
   - kimi
   - utility
   - local-lfm-vl

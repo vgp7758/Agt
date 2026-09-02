@@ -232,6 +232,10 @@ class LLMClient:
         self.fallback_chain: list[str] = []   # 运行时有效回退链（= _user_model 提前 + base 其余）
         self.fallback_policy: str = "sticky"  # reset=每轮回 _user_model / sticky=回退后不动
         self._fallback_owned = False          # 本实例的回退链来自 agent .yml 显式声明（而非全局 settings）
+        # 回退冷却（用户提案 2026-09-02）：provider（model 名）失败后 N 秒内跳过——避免连续撞同一个
+        # 故障端点。冷却期间该 provider 从可用链剔除；成功后自动清除冷却态（恢复即可用）。
+        self._provider_cooldown: dict[str, float] = {}   # {model_name: 上次失败时间戳}
+        self._cooldown_seconds: float = 300.0            # 默认 5 分钟（settings.json cooldown_seconds 可覆盖）
         # 回退配置来源：构造参数显式传入（agent .yml 声明）优先；否则读全局 settings.json
         # （/model、WebUI 配置的——语义上是主 Agent 的用户配置，未声明的子 Agent 继承它）
         if fallback_chain is not None:
@@ -248,6 +252,10 @@ class LLMClient:
                 _fp = (_rt.get("fallback_policy") or "").strip().lower()
                 if _fp in ("sticky", "reset"):
                     self.fallback_policy = _fp
+                # provider 冷却时长（settings.json 可覆盖默认 300s）
+                _cd = _rt.get("cooldown_seconds")
+                if _cd is not None and str(_cd).strip() != "":
+                    self._cooldown_seconds = max(0, float(_cd))
             except Exception:
                 pass
         # reasoning 补全模型：settings.json 显式配置优先；未配时回退统一辅助模型（utility_model）
@@ -532,57 +540,103 @@ class LLMClient:
                 _TURNSTEP_CTX.reset(_ts_tok)
 
     def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
-        """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。"""
+        """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。
+        新增 provider 冷却（用户提案 2026-09-02）：model+token 签名失败后 N 秒内跳过——
+        避免连续撞同一个故障端点/token。成功后自动清除冷却态。"""
+        import hashlib
         self._maybe_reset_to_head()
-        tried_tokens = 0
-        tried = [self.model_name]
+
+        def _ck():
+            tok_sig = hashlib.md5(self.api_key.encode()).hexdigest()[:8] if self.api_key else "0"
+            return f"{self.model_name}:{tok_sig}"
+
+        def _cooled(key):
+            ts = self._provider_cooldown.get(key)
+            if ts is None:
+                return False
+            remain = self._cooldown_seconds - (time.time() - ts)
+            if remain <= 0:
+                self._provider_cooldown.pop(key, None)
+                return False
+            return True
+
+        def _advance(reason, from_cooldown=False):
+            """推进到下一个可用 provider。from_cooldown=True 表示冷却跳过（无退避）。"""
+            if self.model_name not in tried:
+                tried.append(self.model_name)
+            if not self.fallback_chain:
+                _LOG.error("调用失败且无回退链: %s", reason)
+                raise RuntimeError(f"调用失败且无回退链: {reason}")
+            try:
+                idx = self.fallback_chain.index(self.model_name)
+            except ValueError:
+                raise RuntimeError(f"当前模型 {self.model_name} 不在回退链中")
+            next_m = None
+            for m in self.fallback_chain[idx + 1:]:
+                if m not in tried:
+                    next_m = m
+                    break
+            if not next_m:
+                _LOG.error("回退链耗尽 tried=%s 原因=%s", tried, reason)
+                raise RuntimeError(
+                    f"回退链中所有模型均已尝试({', '.join(tried)})：{reason}")
+            tried.append(next_m)
+            tried_tokens[0] = 0
+            if from_cooldown:
+                _LOG.info("冷却跳过 %s→%s 原因=%s", self.model_name, next_m, reason)
+            else:
+                _LOG.warning("回退 %s→%s 原因=%s 退避%.0fs",
+                             self.model_name, next_m, reason, self._backoff(len(tried) - 1))
+                time.sleep(self._backoff(len(tried) - 1))
+            self.switch_model(next_m)
+
+        tried_tokens = [0]          # 用 list 包一层让 _advance 能修改（闭包）
+        tried = [self.model_name]   # 本次调用内已试过的 model 名
+
         while True:
+            ck = _ck()
+
+            # 冷却检查：该 model+token 组合还在冷却窗口 → 直接跳过（不走 _chat_inner）
+            if _cooled(ck):
+                remain = self._cooldown_seconds - (time.time() - self._provider_cooldown[ck])
+                _advance(f"冷却中(剩余{remain:.0f}s)", from_cooldown=True)
+                continue
+
+            # 已试过（非冷却，如 reset 策略重复切回）→ 跳过
+            if self.model_name in tried and tried.index(self.model_name) < len(tried) - 1:
+                _advance("已尝试过", from_cooldown=True)
+                continue
+
+            if self.model_name not in tried:
+                tried.append(self.model_name)
+
             try:
                 resp = self._chat_inner(messages, **overrides)
-                # 成功后预旋转到下一个 token（下次调用自动用不同账号）：多号配额分摊（ModelScope 等
-                # 按号限每日额度的 provider 反正不吃缓存，换了无损失）。GLM 等 cache 按 token 隔离的
-                # provider 在条目里配 "token_rotate": false 保持 sticky（限流轮换路径不受此开关影响）。
+                # 成功！清除该 provider+token 的冷却态（恢复即可用）
+                self._provider_cooldown.pop(ck, None)
                 if len(self.api_tokens) > 1 and self.token_rotate:
                     self._rotate_token()
-                # reasoning 补全：思考模型只回 reasoning 无 content → 交非思考模型据 reasoning 补正文
                 if (self.reasoning_completer and (resp.reasoning or "").strip()
                         and not (resp.content or "").strip() and not resp.tool_calls):
                     _LOG.info("思考模型只回 reasoning 无 content，交 %s 据 reasoning 补正文", self.reasoning_completer)
                     content = self._complete_via_completer(messages, resp.reasoning)
                     if content:
-                        resp.content = content   # 保留原 reasoning
+                        resp.content = content
                 return resp
             except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError,
                     BadRequestError, InternalServerError) as e:
-                # BadRequestError 也触发回退：某些模型会因请求格式拒绝整个请求（典型如 DeepSeek 思考模式
-                # 要求工具调用轮回传 reasoning_content；跨模型混用、历史缺 reasoning 时会 400）。
-                # 换下一个模型即可，不该让单模型的可恢复拒绝把整轮/整条链崩掉。
-                # 先试下一个 api_token（同模型多账号）
-                if isinstance(e, RateLimitError) and tried_tokens < len(self.api_tokens) - 1:
-                    tried_tokens += 1
+                # 限流 → token 轮换（同 model 内部，不进冷却——只是配额问题）
+                if isinstance(e, RateLimitError) and tried_tokens[0] < len(self.api_tokens) - 1:
+                    tried_tokens[0] += 1
                     self._rotate_token()
                     _LOG.warning("限流，换 token 重试 (%d/%d) 原因=%s",
-                                 tried_tokens + 1, len(self.api_tokens), type(e).__name__)
+                                 tried_tokens[0] + 1, len(self.api_tokens), type(e).__name__)
                     continue
-                # 再走模型回退链
-                if not self.fallback_chain:
-                    _LOG.error("调用失败且无回退链: %s: %s", type(e).__name__, e)
-                    raise
-                try:
-                    idx = self.fallback_chain.index(self.model_name)
-                except ValueError:
-                    raise
-                next_m = self.fallback_chain[idx + 1] if idx + 1 < len(self.fallback_chain) else None
-                if not next_m or next_m in tried:
-                    _LOG.error("回退链耗尽 tried=%s 原因=%s", tried, type(e).__name__)
-                    raise RuntimeError(
-                        f"回退链中所有模型均已尝试({', '.join(tried)})：{e}") from e
-                tried.append(next_m)
-                tried_tokens = 0
-                _LOG.warning("回退 %s→%s 原因=%s 退避%.0fs",
-                             self.model_name, next_m, type(e).__name__, self._backoff(len(tried) - 1))
-                self.switch_model(next_m)
-                time.sleep(self._backoff(len(tried) - 1))
+                # 其它失败 → 记录冷却（model+token 签名）
+                self._provider_cooldown[ck] = time.time()
+                _LOG.warning("provider %s 失败，进入 %ds 冷却：%s",
+                             ck, self._cooldown_seconds, type(e).__name__)
+                _advance(str(e))
 
     def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,
                      elapsed, outcome, content="", reasoning="", tool_calls=0,

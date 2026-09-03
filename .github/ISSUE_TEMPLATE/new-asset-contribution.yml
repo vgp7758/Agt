@@ -1,0 +1,31 @@
+name: 新资产贡献
+description: 想贡献一个 workflow / 节点插件 / skill / MCP 配置，但不会开 PR
+title: "[community] 想贡献 <类型>: <名称>"
+labels: [community, help wanted]
+body:
+  - type: dropdown
+    id: asset_type
+    attributes:
+      label: 资产类型
+      options: [workflow, node, skill, mcp]
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: 名称
+      description: 唯一取用名，^[A-Za-z0-9_-]+$
+    validations:
+      required: true
+  - type: textarea
+    id: desc
+    attributes:
+      label: 描述
+      description: 这个资产做什么，输入/输出是什么
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 补充
+      description: 大致实现思路、参考链接等

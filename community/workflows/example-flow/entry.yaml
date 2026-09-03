@@ -1,0 +1,7 @@
+# 社区贡献条目元数据（等价于 awesome-openrouter 的 app.yaml）
+# 必填：name / type / desc；可选：author / source / license / date_added
+name: example-flow
+type: workflow
+desc: "示范条目：一句话解释任意主题（输入 topic，输出解释）。演示社区 workflow 贡献的目录与元数据约定。"
+author: "Agt 作者"
+# license: MIT  # 缺省继承仓库 MIT

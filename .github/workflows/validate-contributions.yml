@@ -1,0 +1,21 @@
+name: validate-contributions
+
+on:
+  pull_request:
+    paths:
+      - 'community/**'
+      - 'tools/validate_contributions.py'
+      - '.github/workflows/validate-contributions.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 校验器用 git diff origin/main...HEAD 拿 PR 改动文件
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pyyaml
+      - run: python tools/validate_contributions.py

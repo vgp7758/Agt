@@ -43,11 +43,14 @@ def make_background_tools(agent) -> list:
 
     def add_schedule(name: str, every_seconds: float = 0, at: str = "",
                      message: str = "", tool: str = "", tool_args: dict = None,
-                     repeat: bool = True) -> str:
+                     repeat: bool = None) -> str:
         """添加定时/到点任务，到时自动推送一条消息触发 Agent 跑一轮。
-        触发方式二选一：every_seconds>0 = 每 N 秒（repeat 控制是否循环）；at = 到某时刻一次性（ISO 如 '2026-07-20T17:30:00'）。
+        触发方式二选一：every_seconds>0 = 每 N 秒（repeat 控制是否循环，默认循环）；
+        at = 完整 ISO（如 '2026-07-20T17:30:00'，单次）或短格式 'HH:MM'（如 '17:30'，每日闹钟，
+        repeat=False 则只响下一个该时刻一次；ISO + repeat=True 也可每日循环）。
         推送内容二选一：message = 静态文本；tool(+tool_args) = 到点执行该工具（如 web_search），结果作为消息（动态消息）。
         例：每 60 秒提醒 → add_schedule('tick', every_seconds=60, message='该检查进度了')；
+        每日 9 点闹钟 → add_schedule('morning', at='09:00', message='早会时间')；
         到点搜索 → add_schedule('news', at='2026-07-20T18:00:00', tool='web_search', tool_args={'query':'AI最新进展'})。"""
         tool_args = tool_args or {}
         if every_seconds > 0 and at:
@@ -56,9 +59,10 @@ def make_background_tools(agent) -> list:
         if not message and not action:
             return "[需提供 message 或 tool 作为推送内容]"
         if every_seconds > 0:
-            return sch.add_interval(name, every_seconds, message=message, action=action, repeat=repeat)
+            return sch.add_interval(name, every_seconds, message=message, action=action,
+                                    repeat=(True if repeat is None else bool(repeat)))
         if at:
-            return sch.add_at(name, at, message=message, action=action)
+            return sch.add_at(name, at, message=message, action=action, repeat=repeat)
         return "[需提供 every_seconds 或 at 之一作为触发方式]"
 
     def cancel_schedule(name: str) -> str:

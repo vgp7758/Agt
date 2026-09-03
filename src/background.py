@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import collections
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -24,7 +25,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 _LOG_CAP = 1000  # 每个服务的滚动日志行数上限
@@ -234,8 +235,24 @@ class Schedule:
     spec: float                     # interval=秒；at=触发时间戳
     message: str = ""               # 静态推送文本（与 action 二选一）
     action: Optional[dict] = None   # {"tool":..., "args":...} 到点执行拿结果
-    repeat: bool = True             # interval 是否循环；at 恒为单次
+    repeat: bool = True             # interval 是否循环；at+daily 每日闹钟
+    daily: str = ""                 # at 每日模式 "HH:MM[:SS]"（每日闹钟重算锚点）
     next_fire: float = 0.0
+
+
+_DAILY_RE = re.compile(r"^\d{1,2}:\d{1,2}(:\d{1,2})?$")
+
+
+def _next_daily_fire(hhmm: str) -> float:
+    """每日时刻 → 下一个未来的本地时间戳（今天没到=今天，否则明天）。"""
+    parts = [int(p) for p in hhmm.split(":")]
+    h, m = parts[0], parts[1]
+    sec = parts[2] if len(parts) > 2 else 0
+    now = datetime.now()
+    cand = now.replace(hour=h, minute=m, second=sec, microsecond=0)
+    if cand.timestamp() <= time.time():
+        cand += timedelta(days=1)
+    return cand.timestamp()
 
 
 class Scheduler:
@@ -262,19 +279,39 @@ class Scheduler:
             self._by_name[name] = sch.id
         return f"✅ 定时任务「{name}」已加：每 {seconds:g}s 触发（{'循环' if repeat else '单次'}）"
 
-    def add_at(self, name, dt_iso, message="", action=None) -> str:
-        try:
-            when = datetime.fromisoformat(dt_iso).timestamp()
-        except Exception as e:
-            return f"[时间格式错误] {dt_iso}（需 ISO 如 2026-07-20T17:30:00 或 2026-07-20 17:30:00）：{e}"
-        if when <= time.time():
-            return f"[时间已过] {dt_iso}"
+    def add_at(self, name, dt_iso, message="", action=None, repeat=None) -> str:
+        """到点任务。两种格式：
+        - 完整 ISO（2026-07-20T17:30:00）→ 单次到点（repeat 不传时默认单次，显式 True 则每日该时刻循环）
+        - 短格式 HH:MM[:SS]（17:30）→ 每日闹钟（repeat 默认 True；显式 False 只响下一个该时刻一次）"""
+        s = (dt_iso or "").strip()
+        if not s:
+            return "[时间格式错误] at 不能为空（ISO 如 2026-07-20T17:30:00；每日闹钟用 HH:MM 如 17:30）"
+        if _DAILY_RE.match(s):   # 短格式：每日闹钟（默认循环）
+            if not (0 <= int(s.split(":")[0]) <= 23 and 0 <= int(s.split(":")[1]) <= 59):
+                return f"[时间格式错误] {s}（HH:MM 的 HH≤23、MM≤59）"
+            rep = True if repeat is None else bool(repeat)
+            when = _next_daily_fire(s)
+            daily = s
+        else:                    # 完整 ISO：默认单次；显式 repeat=True → 每日该时刻
+            try:
+                when = datetime.fromisoformat(s).timestamp()
+            except Exception as e:
+                return f"[时间格式错误] {s}（需 ISO 如 2026-07-20T17:30:00 或 2026-07-20 17:30:00；每日闹钟用 HH:MM 如 17:30）：{e}"
+            if when <= time.time():
+                return f"[时间已过] {s}"
+            rep = False if repeat is None else bool(repeat)
+            if rep:
+                daily = s.split("T")[-1].split(" ")[-1][:8]   # 取时刻部分做每日锚点
+                when = _next_daily_fire(daily)
+            else:
+                daily = ""
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="at", spec=when,
-                       message=message, action=action, repeat=False, next_fire=when)
+                       message=message, action=action, repeat=rep, daily=daily, next_fire=when)
         with self._lock:
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
-        return f"✅ 定时任务「{name}」已加：到 {dt_iso} 触发一次"
+        disp = f"每天 {daily}" if rep else f"到 {s} 触发一次"
+        return f"✅ 定时任务「{name}」已加：{disp}"
 
     def cancel(self, name_or_id) -> str:
         with self._lock:
@@ -308,6 +345,8 @@ class Scheduler:
                 item["tool_args"] = s.action.get("args")
             if s.kind == "interval":
                 item["interval_secs"] = float(s.spec)
+            elif s.daily:
+                item["daily"] = s.daily                 # 每日闹钟 HH:MM[:SS]
             else:
                 item["fire_at"] = datetime.fromtimestamp(s.spec).strftime("%m-%d %H:%M:%S")
             out.append(item)
@@ -327,6 +366,9 @@ class Scheduler:
                 payload = s.message or "(空)"
             if s.kind == "interval":
                 rows.append(f"  {s.name:<16} 每 {s.spec:g}s {'循环' if s.repeat else '单次'} | {payload[:50]}")
+            elif s.daily:
+                left = int(s.next_fire - now)
+                rows.append(f"  {s.name:<16} 每天 {s.daily} (还有{left}s) | {payload[:50]}")
             else:
                 left = int(s.next_fire - now)
                 rows.append(f"  {s.name:<16} {datetime.fromtimestamp(s.spec).strftime('%m-%d %H:%M:%S')}"
@@ -346,7 +388,8 @@ class Scheduler:
         return sch.message or f"[定时任务「{sch.name}」触发]"
 
     def _loop(self):
-        """后台轮询：到点 produce → push_message；interval 循环重算 next_fire，at 单次删除。"""
+        """后台轮询：到点 produce → push_message；interval 循环重算 next_fire；
+        at+daily（每日闹钟）触发后推到明天同一时刻；at 单次触发后删除。"""
         while not self._stop:
             now = time.time()
             fire = []
@@ -356,7 +399,9 @@ class Scheduler:
                         fire.append(sch)
                         if sch.kind == "interval" and sch.repeat:
                             sch.next_fire = now + sch.spec
-                        else:  # at 或 interval 单次：触发后删除
+                        elif sch.kind == "at" and sch.repeat and sch.daily:
+                            sch.next_fire = _next_daily_fire(sch.daily)   # 明天同一时刻
+                        else:  # at 单次 或 interval 单次：触发后删除
                             self._schedules.pop(sid, None)
                             self._by_name.pop(sch.name, None)
             for sch in fire:

@@ -147,15 +147,18 @@ c7a9339 的「顺手修真 bug」（get_team_profiles 改走挂点）在**同日
 
 自检口径：子 Agent 声明的 assembly 尾部统一有 `- func: get_team_profiles()`（本 repo 六 Agent + 8000 实例七 Agent，补记见 [team-tools · 补记四/五](team-tools.md)）。**跨版本兼容（8000 跨实例巡检实证，2026-09-02）**：func 项在旧版本 agt（FUNC_REGISTRY 无该函数）上求值 → 白名单查不到 → 返回空 → func 段自动跳过——**安全失败方向是变空而非报错**，跨实例手工装配 func 项无风险；对方升级后自动生效。
 
-### steps 段模式下拉：reminder / reasoning（2026-09-02，commit dd5b0b4）
+### 动作项 pose 下拉：并入正文 / 注入思考链（2026-09-03，commit 24597f3 · 粒度演进）
 
-steps 段（尾段注入模式）的 mode 编辑从文本框改为 **select 下拉**（与 history 段文本框 mode 对照——history 是自由文本、steps 是枚举）：
+**背景（用户 2026-09-03 复盘）**：「我又想了想，我们把 steps 后面的下拉框（附加在正文尾部/注入思考链）改成在后面的各段分别通过下拉框选择吧」——dd5b0b4 把注入姿势做成 steps 行一个下拉（单点全局管 steps 后所有段），本轮**粒度下放**：撤销 steps 段专用模式下拉，改为 steps 之后**每个动作项各自选注入姿势**。
 
-- 选项：空（= 默认 reminder）/ `reminder` / `reasoning`
-- title 提示：「尾段注入模式：reminder=&lt;system-reminder&gt;包裹并入末条 content（默认）/ reasoning=注入末条 assistant 的 reasoning_content 前缀（steps 后的段以思考链姿势呈现）」
-- `onchange="asmData[i].mode=this.value"`——选择即写入，`asmToRow`/保存往返不丢
+- **动作项 pose 下拉**（非 seg 行——text/file/dir/cmd/workflow/tool/func 各自一个）：
+  - `并入正文(reminder)`（默认）= `<system-reminder>` 包裹并入末条 content（区3 三区 merge 语义）
+  - `注入思考链(reasoning)` = 并入末条 assistant 的 `reasoning_content` 前缀——steps 后的项想当环境状态给模型思考看就选它
+  - `onchange="asmData[i].mode=this.value;renderAsm()"`——选择即写入；rowToItem 动作项把 mode 写回 `mode: xxx`（往返不丢）
+- **steps 段自身不再有模式下拉**（`steps=reasoning` 段级声明引擎仍兼容——`tail_mode` 语义降为「未标 pose 项的整体默认」，可经 yml 手写/段名带模式文本往返）；history 段 mode 文本框保留（tiered 自由文本）
+- hint 文案同步：「每个动作项可选注入姿势：并入正文(reminder)=&lt;system-reminder&gt;包裹并入末条 content（默认）/ 注入思考链(reasoning)=作为末条 assistant 的 reasoning_content 前缀」
 
-语义对照见 [context-engine · steps 注入模式](../architecture/context-engine.md#steps-段注入模式stepsreasoning2026-09-02用户提案)。
+引擎双桶语义（reasoning_merge_text / tail_merge_text 分桶合批、s0 回退）与 mock 验证形态见 [context-engine · 粒度演进](../architecture/context-engine.md)。`/restart` 后生效（agents.html 随启动载入内存）。
 
 ## v2.1 声明格式（用户设计）
 

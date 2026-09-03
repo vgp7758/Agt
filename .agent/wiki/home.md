@@ -358,3 +358,11 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **v0.22.9 发布（2026-09-02，commit c591501，PyPI 已上线）**：620fd3d 一句话简介功能批的发布收口（`src/__init__.py` 版本 0.22.8 → 0.22.9，edit 工具直接改；0.14.1 → 0.22.9 共推 **42 个版本**）。自 0.22.8 的 3 笔实质提交：①**Provider 一句话简介**（preset 五家 icon+brief → onboarding 横幅 / 模型下拉分组名+悬停 / README 目录表，commit 620fd3d，见[十七](#快速事实增补2026-09-02--十七--provider工具一句话简介双落地commit-620fd3d)）；②**工具箱卡片 Tool.brief 三级优先**（tool_briefs.py 130+ 条字典，同 commit 620fd3d，见[十七](#快速事实增补2026-09-02--十七--provider工具一句话简介双落地commit-620fd3d)）；③**README 三件**（commit 84097f7 + 58b046e）——中文标语置顶 + 内置 Provider 目录表（与 preset 五家同步）+ OrcaRouter 申请页换 referral 链接（84097f7 换、58b046e 再 update，×3 修正闭环）。发布链验证：wheel 内容抽查（tool_briefs.py 10.6KB / models.preset.json 五家 brief / index.html onboarding+optgroup 代码）全进包 + PyPI 索引 latest 刷新 0.22.9。另两台实例（8000 / 团队成员们）升级后模型下拉选 OrcaRouter 即走 referral 申请 key（详见 [v0.22.9 发布记录](releases/v0.22.9.md)）
 
+## 快速事实增补（2026-09-03 · 一 · 注入姿势粒度演进：steps 全局 → 逐动作项 pose）
+
+- **assembly 注入姿势粒度演进：steps 全局 → 逐动作项 pose（2026-09-03，用户「我又想了想，我们把 steps 后面的下拉框（附加在正文尾部/注入思考链）改成在后面的各段分别通过下拉框选择吧」，commit 24597f3）**：dd5b0b4 的 steps 段全局注入模式下拉（单点管其后所有段）撤销，**粒度下放到每个动作项**——
+  - DSL：动作项 dict 支持 `mode: reminder|reasoning`（如 `{func: load_models(), mode: reasoning}`，默认 reminder）；`steps=reasoning` 段级声明保留，语义降为「未标 pose 项的整体默认」（tail_mode）
+  - 引擎双桶（session `_walk_plan` 区3）：reasoning 项 → `reasoning_merge_text`（合成一次注入末条 assistant `reasoning_content` 前缀 `"当前状态：{result}\n"`）；默认/reminder 项 + tail.* 块 → `tail_merge_text`（合成一次 `<system-reminder>` 包裹并入末条 content）——**同姿合批、每轮至多两批注入**，不逐段 create 消息（缓存友好）；s0 无 assistant 时 reasoning 桶回退并入 reminder 桶（文字不丢）
+  - 管理页：steps 段全局下拉删除（history mode 文本框保留）；**非 seg 动作项行各自 pose 下拉**（并入正文=reminder 默认 / 注入思考链=reasoning）；hint 文案同步
+  - mock 验证：两个 reasoning 项合成一次注入 assistant 思考槽（`当前状态：val:A⏎val:B`），reminder 项独立并入 user content——详见 [context-engine · 粒度演进](architecture/context-engine.md) 与 [agents-admin · 动作项 pose 下拉](features/agents-admin.md#动作项-pose-下拉并入正文--注入思考链2026-09-03commit-24597f3--粒度演进)
+

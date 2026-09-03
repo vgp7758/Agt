@@ -146,6 +146,33 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 管理页（/agents）steps 段增模式下拉（默认/reminder/reasoning）；hint 文案同步。需 `/restart` 生效。
 
+#### 粒度演进：steps 全局 → 逐动作项 pose 双桶（2026-09-03，commit 24597f3，用户提案）
+
+**用户请求（2026-09-03）**：「我又想了想，我们把 steps 后面的下拉框（附加在正文尾部/注入思考链）改成在后面的各段分别通过下拉框选择吧」——注入姿势从**单点全局**（steps 一处声明管其后所有段，dd5b0b4）演进为**每个动作项各自选择**（粒度变化；两种姿势的注入语义本身不变）。
+
+**DSL（src/multiagent.py）**：动作项 dict 支持 `mode:` 键——`{func: load_models(), mode: reasoning}`；`mode: reminder|reasoning`（默认 reminder）。`_ASSEMBLY_STEPS_MODES` 枚举保留做校验（非法值 warning + 按默认 reminder）。`steps=reasoning` 段级声明**保留**（改写 `tail_mode`，语义降为「**未标 pose 的动作项**的整体默认」）。
+
+**引擎双桶（src/session.py `_walk_plan` 区3）**：steps 之后的 asm 动作项不进 run 缓冲（不独立成条），按每项 pose（`item.mode`）**归双桶**：
+
+| 桶 | 收纳 | 装配后去向 |
+|---|---|---|
+| `tail_merge_text` | 默认/reminder 项 + tail.* 块 | `<system-reminder>` 包裹并入末条 content（三区 merge 语义不变） |
+| `reasoning_merge_text` | reasoning pose 项 | 作为思考链注入末条 assistant `reasoning_content` 前缀（`"当前状态：{result}\n"`+原文；s0 无 assistant 回退并入 reminder 桶——文字不丢） |
+
+同姿势**合批**：每轮至多两批注入，不逐段 create 消息——缓存友好（不新增断点）；DeepSeek 空槽承载语义对 reasoning 桶同样适用（末条 reasoning 空则注入值直接生效）。
+
+**管理页（src/static/agents.html）**：steps 段的全局模式下拉**删除**（history 段 mode 文本框保留）；**非 seg（动作项）行**（text/file/dir/cmd/workflow/tool/func）各自新增 pose 下拉：`并入正文(reminder)`（默认）/ `注入思考链(reasoning)`——`onchange` 写 `asmData[i].mode` + 重渲染；rowToItem 动作项把 mode 写回 `mode: xxx` 保往返；hint 文案同步（「每个动作项可选注入姿势…steps 后的项想当环境状态给模型思考看就选它」）。`/restart` 生效（agents.html 随启动载入内存）。
+
+**mock 装配验证**（关键形态）：
+
+```
+[2] assistant (tool_calls)                                        ← 末条 assistant 候选
+[4] assistant reasoning_content='当前状态：val:A⏎⏎val:B⏎我先想'      ← 两个 reasoning 项合成一次注入
+[5] user content='当前问题⏎<system-reminder>val:C⏎</system-reminder>' ← reminder 项独立并入
+```
+
+语义清楚：A/B 放进 assistant 思考槽（环境状态当「想」的输入），C 走对话正文备注。UI 细节见 [agents-admin · 动作项 pose 下拉](../features/agents-admin.md)。
+
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 
 当 `/config dump_projections true` 时，每次调用 LLM 前会转储完整投影到 `sessions/<ts>/projections/` 目录，文件名格式：

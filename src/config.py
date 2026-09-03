@@ -241,6 +241,7 @@ def preset_models_view() -> dict:
             hit = mname if same and (same.get("base_url", ""), same.get("model", "")) == bm else _by_bm.get(bm, "")
             out[mname] = {"name": mname, "provider": pname, "base_url": pv.get("base_url", ""),
                           "register_url": pv.get("register_url", ""), "provider_desc": pv.get("desc", ""),
+                          "provider_brief": pv.get("brief", ""), "provider_icon": pv.get("icon", ""),
                           "model": mv.get("model", ""), "thinking": mv.get("thinking", False),
                           "vision": bool(mv.get("vision", False)), "model_desc": mv.get("desc", ""),
                           "status": status,

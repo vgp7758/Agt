@@ -1,79 +1,253 @@
 {
-  "_readme": "预设 provider 模板（随包播种，spec s_d4241d58）：WebUI 模型下拉框开箱可选。api_tokens 占位语义——'free trial'=该 provider 提供免费额度（引导领取）；'require an key'=须申请 key。选中占位条目时前端弹 onboarding（register_url 引导 + key 输入），落地后写用户 models.json（用户条目优先于本预设）。想加预设外的 provider 请手动编辑 ~/.agt/models.json。各家 model id 以官方文档为准，本模板为初始参考。",
-  "providers": {
-    "modelscope": {
-      "base_url": "https://api-inference.modelscope.cn/v1",
-      "register_url": "https://modelscope.cn/my/accessToken",
-      "api_tokens": ["free trial"],
-      "desc": "魔搭 ModelScope（阿里达摩院开源社区）——多数开源模型每日免费额度，token 即模型社区访问令牌",
-      "models": {
-        "qwen":     {"model": "Qwen/Qwen3-235B-A22B-Instruct-2507", "thinking": true,  "desc": "通义千问 235B 旗舰（推理）"},
-        "glm":      {"model": "zai-org/GLM-5.2",                    "thinking": true,  "desc": "智谱 GLM-5.2"},
-        "deepseek": {"model": "deepseek-ai/DeepSeek-V4-Flash-0731", "thinking": true,  "desc": "DeepSeek V4 Flash"},
-        "kimi":     {"model": "moonshotai/Kimi-K3:Moonshot", "thinking": true, "desc": "月之暗面 Kimi K3（temperature 锁 1——API 硬约束）", "temperature": 1, "param_lock": ["temperature"]}
-      }
+ "_readme": "预设 provider 模板（随包播种，spec s_d4241d58）：WebUI 模型下拉框开箱可选。api_tokens 占位语义——'free trial'=该 provider 提供免费额度（引导领取）；'require an key'=须申请 key。选中占位条目时前端弹 onboarding（register_url 引导 + key 输入），落地后写用户 models.json（用户条目优先于本预设）。想加预设外的 provider 请手动编辑 ~/.agt/models.json。各家 model id 以官方文档为准，本模板为初始参考。",
+ "providers": {
+  "modelscope": {
+   "base_url": "https://api-inference.modelscope.cn/v1",
+   "register_url": "https://modelscope.cn/my/accessToken",
+   "api_tokens": [
+    "free trial"
+   ],
+   "desc": "魔搭 ModelScope（阿里达摩院开源社区）——多数开源模型每日免费额度，token 即模型社区访问令牌",
+   "models": {
+    "qwen": {
+     "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+     "thinking": true,
+     "desc": "通义千问 235B 旗舰（推理）"
     },
-    "z.ai": {
-      "base_url": "https://open.bigmodel.cn/api/paas/v4",
-      "register_url": "https://open.bigmodel.cn/usercenter/apikeys",
-      "api_tokens": ["require an key"],
-      "desc": "智谱 AI 开放平台——GLM 官方 API，新注册赠送 token 额度",
-      "models": {
-        "glm-official":        {"model": "glm-5.3",        "thinking": true,  "desc": "GLM-5.3（官方旗舰）"},
-        "glm-official-flash":  {"model": "glm-5.3-flash",  "thinking": true,  "desc": "GLM-5.3 Flash（轻量快速）"}
-      }
+    "glm": {
+     "model": "zai-org/GLM-5.2",
+     "thinking": true,
+     "desc": "智谱 GLM-5.2"
     },
-    "deepseek-official": {
-      "base_url": "https://api.deepseek.com",
-      "register_url": "https://platform.deepseek.com/api_keys",
-      "api_tokens": ["require an key"],
-      "desc": "DeepSeek 官方平台——V4 系列，新注册赠送额度",
-      "models": {
-        "deepseek-official": {"model": "deepseek-chat", "thinking": false, "desc": "deepseek-chat（V4 非推理）"}
-      }
+    "deepseek": {
+     "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+     "thinking": true,
+     "desc": "DeepSeek V4 Flash"
     },
-    "siliconflow": {
-      "base_url": "https://api.siliconflow.cn/v1",
-      "register_url": "https://cloud.siliconflow.cn/account/ak",
-      "api_tokens": ["require an key"],
-      "desc": "硅基流动——聚合多家开源模型 API，注册送额度",
-      "models": {
-        "qwen-sf":  {"model": "Qwen/Qwen3-235B-A22B-Instruct-2507", "thinking": true,  "desc": "通义千问 235B（硅基流动）"},
-        "glm-sf":   {"model": "zai-org/GLM-5.2",                    "thinking": true,  "desc": "GLM-5.2（硅基流动）"}
-      }
-    },
-    "orcarouter": {
-      "base_url": "https://api.orcarouter.ai/v1",
-      "register_url": "https://www.orcarouter.ai/console",
-      "api_tokens": ["require an key"],
-      "desc": "OrcaRouter —— OpenAI 兼容聚合网关，零加价路由十一家上游（openai/anthropic/google/deepseek/grok/qwen/kimi/minimax/z-ai…），含 -free 免费模型",
-      "models": {
-        "orca-fusion":           {"model": "orcarouter/fusion",                 "thinking": false, "desc": "Fable 5 级融合：前沿模型并行作答+裁判择优"},
-        "orca-fusion-flash":     {"model": "orcarouter/fusion-flash",           "thinking": false, "desc": "融合快速版（262K 上下文）"},
-        "orca-fusion-mini":      {"model": "orcarouter/fusion-mini",            "thinking": false, "desc": "融合轻量版（1M 上下文）"},
-        "orca-free":             {"model": "orcarouter/free",                   "thinking": false, "desc": "免费自动路由（-free 池）"},
-        "orca-claude-opus-5":    {"model": "anthropic/claude-opus-5",           "thinking": false, "desc": "Claude Opus 5 旗舰（推理）"},
-        "orca-claude-sonnet-5":  {"model": "anthropic/claude-sonnet-5",         "thinking": false, "desc": "Claude Sonnet 5 均衡"},
-        "orca-claude-haiku-4.5": {"model": "anthropic/claude-haiku-4.5",        "thinking": false, "desc": "Claude Haiku 4.5 快速"},
-        "orca-gpt-5.5":          {"model": "openai/gpt-5.5",                    "thinking": false, "desc": "GPT-5.5 旗舰"},
-        "orca-gpt-5.4-mini":     {"model": "openai/gpt-5.4-mini",               "thinking": false, "desc": "GPT-5.4 Mini 轻量"},
-        "orca-gpt-4o-mini":      {"model": "openai/gpt-4o-mini",                "thinking": false, "desc": "GPT-4o mini 最便宜对话"},
-        "orca-gemini-2.5-pro":   {"model": "google/gemini-2.5-pro",             "thinking": false, "desc": "Gemini 2.5 Pro（强推理）"},
-        "orca-gemini-2.5-flash": {"model": "google/gemini-2.5-flash",           "thinking": false, "desc": "Gemini 2.5 Flash（长上下文+便宜）"},
-        "orca-deepseek-chat":    {"model": "deepseek/deepseek-chat",            "thinking": false, "desc": "DeepSeek V4 对话"},
-        "orca-deepseek-reasoner": {"model": "deepseek/deepseek-reasoner",       "thinking": false, "desc": "DeepSeek 推理（R 系列）"},
-        "orca-deepseek-free":    {"model": "deepseek/deepseek-v4-flash-free",   "thinking": false, "desc": "DeepSeek V4 Flash 免费"},
-        "orca-grok-4.6":         {"model": "grok/grok-4.6",                     "thinking": false, "desc": "Grok 4.6（xAI 旗舰）"},
-        "orca-qwen3.8-max":      {"model": "qwen/qwen3.8-max",                  "thinking": false, "desc": "通义千问 3.8 Max 旗舰"},
-        "orca-qwen3.6-flash":    {"model": "qwen/qwen3.6-flash",                "thinking": false, "desc": "通义千问 3.6 Flash 快速"},
-        "orca-kimi-k3":          {"model": "kimi/kimi-k3",                      "thinking": false, "temperature": 1, "param_lock": ["temperature"], "desc": "月之暗面 Kimi K3 旗舰（temperature 锁 1）"},
-        "orca-kimi-k2.6":        {"model": "kimi/kimi-k2.6",                    "thinking": false, "temperature": 1, "param_lock": ["temperature"], "desc": "Kimi K2.6（temperature 锁 1）"},
-        "orca-minimax-m3":       {"model": "minimax/minimax-m3",                "thinking": false, "desc": "MiniMax M3 旗舰"},
-        "orca-minimax-m2.7":     {"model": "minimax/minimax-m2.7",              "thinking": false, "desc": "MiniMax M2.7"},
-        "orca-glm-5.3":          {"model": "z-ai/glm-5.3",                      "thinking": false, "param_omit": ["enable_thinking"], "desc": "智谱 GLM-5.3 旗舰"},
-        "orca-glm-5.3-flash":    {"model": "z-ai/glm-5.3-flash",                "thinking": false, "param_omit": ["enable_thinking"], "desc": "GLM-5.3 Flash 快速"},
-        "orca-hunyuan-h3":       {"model": "tencent/hy3",                       "thinking": false, "desc": "腾讯混元 3"}
-      }
+    "kimi": {
+     "model": "moonshotai/Kimi-K3:Moonshot",
+     "thinking": true,
+     "desc": "月之暗面 Kimi K3（temperature 锁 1——API 硬约束）",
+     "temperature": 1,
+     "param_lock": [
+      "temperature"
+     ]
     }
+   },
+   "icon": "🎁",
+   "brief": "开源模型每日免费额度，零成本起步首选"
+  },
+  "z.ai": {
+   "base_url": "https://open.bigmodel.cn/api/paas/v4",
+   "register_url": "https://open.bigmodel.cn/usercenter/apikeys",
+   "api_tokens": [
+    "require an key"
+   ],
+   "desc": "智谱 AI 开放平台——GLM 官方 API，新注册赠送 token 额度",
+   "models": {
+    "glm-official": {
+     "model": "glm-5.3",
+     "thinking": true,
+     "desc": "GLM-5.3（官方旗舰）"
+    },
+    "glm-official-flash": {
+     "model": "glm-5.3-flash",
+     "thinking": true,
+     "desc": "GLM-5.3 Flash（轻量快速）"
+    }
+   },
+   "icon": "⚡",
+   "brief": "GLM 官方直连、国内低延迟，新户送额度"
+  },
+  "deepseek-official": {
+   "base_url": "https://api.deepseek.com",
+   "register_url": "https://platform.deepseek.com/api_keys",
+   "api_tokens": [
+    "require an key"
+   ],
+   "desc": "DeepSeek 官方平台——V4 系列，新注册赠送额度",
+   "models": {
+    "deepseek-official": {
+     "model": "deepseek-chat",
+     "thinking": false,
+     "desc": "deepseek-chat（V4 非推理）"
+    }
+   },
+   "icon": "🐋",
+   "brief": "V4 官方 API：价格厚道，缓存命中折扣极深"
+  },
+  "siliconflow": {
+   "base_url": "https://api.siliconflow.cn/v1",
+   "register_url": "https://cloud.siliconflow.cn/account/ak",
+   "api_tokens": [
+    "require an key"
+   ],
+   "desc": "硅基流动——聚合多家开源模型 API，注册送额度",
+   "models": {
+    "qwen-sf": {
+     "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+     "thinking": true,
+     "desc": "通义千问 235B（硅基流动）"
+    },
+    "glm-sf": {
+     "model": "zai-org/GLM-5.2",
+     "thinking": true,
+     "desc": "GLM-5.2（硅基流动）"
+    }
+   },
+   "icon": "🌊",
+   "brief": "一把 key 用遍各家开源模型，注册即送额度"
+  },
+  "orcarouter": {
+   "base_url": "https://api.orcarouter.ai/v1",
+   "register_url": "https://www.orcarouter.ai/console",
+   "api_tokens": [
+    "require an key"
+   ],
+   "desc": "OrcaRouter —— OpenAI 兼容聚合网关，零加价路由十一家上游（openai/anthropic/google/deepseek/grok/qwen/kimi/minimax/z-ai…），含 -free 免费模型",
+   "models": {
+    "orca-fusion": {
+     "model": "orcarouter/fusion",
+     "thinking": false,
+     "desc": "Fable 5 级融合：前沿模型并行作答+裁判择优"
+    },
+    "orca-fusion-flash": {
+     "model": "orcarouter/fusion-flash",
+     "thinking": false,
+     "desc": "融合快速版（262K 上下文）"
+    },
+    "orca-fusion-mini": {
+     "model": "orcarouter/fusion-mini",
+     "thinking": false,
+     "desc": "融合轻量版（1M 上下文）"
+    },
+    "orca-free": {
+     "model": "orcarouter/free",
+     "thinking": false,
+     "desc": "免费自动路由（-free 池）"
+    },
+    "orca-claude-opus-5": {
+     "model": "anthropic/claude-opus-5",
+     "thinking": false,
+     "desc": "Claude Opus 5 旗舰（推理）"
+    },
+    "orca-claude-sonnet-5": {
+     "model": "anthropic/claude-sonnet-5",
+     "thinking": false,
+     "desc": "Claude Sonnet 5 均衡"
+    },
+    "orca-claude-haiku-4.5": {
+     "model": "anthropic/claude-haiku-4.5",
+     "thinking": false,
+     "desc": "Claude Haiku 4.5 快速"
+    },
+    "orca-gpt-5.5": {
+     "model": "openai/gpt-5.5",
+     "thinking": false,
+     "desc": "GPT-5.5 旗舰"
+    },
+    "orca-gpt-5.4-mini": {
+     "model": "openai/gpt-5.4-mini",
+     "thinking": false,
+     "desc": "GPT-5.4 Mini 轻量"
+    },
+    "orca-gpt-4o-mini": {
+     "model": "openai/gpt-4o-mini",
+     "thinking": false,
+     "desc": "GPT-4o mini 最便宜对话"
+    },
+    "orca-gemini-2.5-pro": {
+     "model": "google/gemini-2.5-pro",
+     "thinking": false,
+     "desc": "Gemini 2.5 Pro（强推理）"
+    },
+    "orca-gemini-2.5-flash": {
+     "model": "google/gemini-2.5-flash",
+     "thinking": false,
+     "desc": "Gemini 2.5 Flash（长上下文+便宜）"
+    },
+    "orca-deepseek-chat": {
+     "model": "deepseek/deepseek-chat",
+     "thinking": false,
+     "desc": "DeepSeek V4 对话"
+    },
+    "orca-deepseek-reasoner": {
+     "model": "deepseek/deepseek-reasoner",
+     "thinking": false,
+     "desc": "DeepSeek 推理（R 系列）"
+    },
+    "orca-deepseek-free": {
+     "model": "deepseek/deepseek-v4-flash-free",
+     "thinking": false,
+     "desc": "DeepSeek V4 Flash 免费"
+    },
+    "orca-grok-4.6": {
+     "model": "grok/grok-4.6",
+     "thinking": false,
+     "desc": "Grok 4.6（xAI 旗舰）"
+    },
+    "orca-qwen3.8-max": {
+     "model": "qwen/qwen3.8-max",
+     "thinking": false,
+     "desc": "通义千问 3.8 Max 旗舰"
+    },
+    "orca-qwen3.6-flash": {
+     "model": "qwen/qwen3.6-flash",
+     "thinking": false,
+     "desc": "通义千问 3.6 Flash 快速"
+    },
+    "orca-kimi-k3": {
+     "model": "kimi/kimi-k3",
+     "thinking": false,
+     "temperature": 1,
+     "param_lock": [
+      "temperature"
+     ],
+     "desc": "月之暗面 Kimi K3 旗舰（temperature 锁 1）"
+    },
+    "orca-kimi-k2.6": {
+     "model": "kimi/kimi-k2.6",
+     "thinking": false,
+     "temperature": 1,
+     "param_lock": [
+      "temperature"
+     ],
+     "desc": "Kimi K2.6（temperature 锁 1）"
+    },
+    "orca-minimax-m3": {
+     "model": "minimax/minimax-m3",
+     "thinking": false,
+     "desc": "MiniMax M3 旗舰"
+    },
+    "orca-minimax-m2.7": {
+     "model": "minimax/minimax-m2.7",
+     "thinking": false,
+     "desc": "MiniMax M2.7"
+    },
+    "orca-glm-5.3": {
+     "model": "z-ai/glm-5.3",
+     "thinking": false,
+     "param_omit": [
+      "enable_thinking"
+     ],
+     "desc": "智谱 GLM-5.3 旗舰"
+    },
+    "orca-glm-5.3-flash": {
+     "model": "z-ai/glm-5.3-flash",
+     "thinking": false,
+     "param_omit": [
+      "enable_thinking"
+     ],
+     "desc": "GLM-5.3 Flash 快速"
+    },
+    "orca-hunyuan-h3": {
+     "model": "tencent/hy3",
+     "thinking": false,
+     "desc": "腾讯混元 3"
+    }
+   },
+   "icon": "🧭",
+   "brief": "一把 key 零加价路由 11 家前沿模型（含免费池）"
   }
+ }
 }

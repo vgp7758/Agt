@@ -14,6 +14,8 @@ import inspect
 import json
 from typing import Any as _TypingAny, Callable, get_origin, get_type_hints
 
+from tool_briefs import TOOL_BRIEFS
+
 # Python 类型 → JSON Schema 类型（str/int/float/bool/list/dict；Any 特判在 _type_to_schema）
 _PY_TO_JSON_SCHEMA = {str: "string", int: "integer", float: "number", bool: "boolean",
                       list: "array", dict: "object"}
@@ -34,9 +36,23 @@ def _type_to_schema(ptype):
     return None
 
 
+def _brief_from_desc(desc: str, limit: int = 44) -> str:
+    """description 首句 → brief 兜底：截到第一个句末标点（。；.;）或换行，再限长。
+    用于没写 brief 的工具（MCP 工具/未来新增工具）——工具箱里至少有句人话可显示。"""
+    s = (desc or "").strip()
+    for i, ch in enumerate(s):
+        if ch in "。；;：:．.\n":
+            s = s[:i]
+            break
+    if len(s) > limit:
+        s = s[:limit].rstrip() + "…"
+    return s
+
+
 class Tool:
     def __init__(self, func: Callable, outputs: list = None, hidden: bool = False,
-                 param_descriptions: dict = None, param_schemas: dict = None):
+                 param_descriptions: dict = None, param_schemas: dict = None,
+                 brief: str = None):
         self.func = func
         self.name = func.__name__
         self.hidden = hidden   # True=注册在工具箱（plugin/编辑器可用）但不投影给 LLM（schemas 跳过）
@@ -52,6 +68,9 @@ class Tool:
         if not first_line:
             raise ValueError(f"工具 {self.name} 必须有 docstring 作为描述")
         self.description = first_line
+        # 用户视角一句话简介（WebUI 工具箱卡片/编辑器选工具时给人看的"选它干什么"）。
+        # 优先级：显式传参 > tool_briefs.py 集中字典 > description 首句截断兜底。
+        self.brief = brief or TOOL_BRIEFS.get(self.name) or _brief_from_desc(first_line)
 
         self._hints = get_type_hints(func)
         self._sig = inspect.signature(func)

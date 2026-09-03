@@ -47,6 +47,16 @@ pip install agt-agent
 
 启动后点 ⚙ 设置 → 添加模型（base_url / api_token / model id），保存到 `~/.agt/models.json`。
 
+**内置 Provider 目录**（模型下拉框开箱可选——点选即弹引导：申请页直达 + key 粘贴，落地自动写配置）：
+
+| | Provider | 为什么选它 |
+|---|---|---|
+| 🎁 | ModelScope | 开源模型每日免费额度，零成本起步首选 |
+| ⚡ | Z.ai（智谱） | GLM 官方直连、国内低延迟，新户送额度 |
+| 🐋 | DeepSeek 官方 | V4 官方 API：价格厚道，缓存命中折扣极深 |
+| 🌊 | 硅基流动 | 一把 key 用遍各家开源模型，注册即送额度 |
+| 🧭 | OrcaRouter | 一把 key 零加价路由 11 家前沿模型（含免费池） |
+
 或手动：复制 `models.example.py` → `models.py`，填 token。
 
 ### 3. 启动

@@ -293,6 +293,10 @@ async def api_tools():
         params = []
         for pn, ps in props.items():
             pm = {"name": pn, "type": (ps.get("type") if isinstance(ps, dict) else None) or "any"}
+            # 参数级描述透传（param_descriptions 注入 schema 的那批）——
+            # WebUI 工具表单把它渲染成输入框 placeholder（用户提案：参数说不清光靠名字）
+            if isinstance(ps, dict) and ps.get("description"):
+                pm["desc"] = ps["description"]
             # enum 透传（通用）：工具 schema 自带 enum 的参数（如 agent_prompt.name 的子 Agent 名单、
             # agent_prompt.caller、llm_call.model）——编辑器检测 enum 渲染下拉控件 + LLM 调用时的合法值约束
             if isinstance(ps, dict) and isinstance(ps.get("enum"), list) and ps["enum"]:

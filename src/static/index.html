@@ -1558,11 +1558,19 @@ modelSel.addEventListener('change', ()=>{
     const pe=_presetModels[name];
     if(!pe){ toast('⚠️ 预设条目不存在（可能已配置）'); return; }
     const isFree=pe.status==='free_trial';
+    const icon=pe.provider_icon||'🔌';
     const ov=document.createElement('div'); ov.className='modal-overlay';
     ov.innerHTML=`<div class="modal" style="max-width:500px">
       <h3 style="margin-top:0">${isFree?'🎁':'🔑'} 启用预设模型「${esc(pe.name)}」</h3>
+      <div style="display:flex;gap:12px;align-items:center;margin:10px 0;padding:10px;background:#f8f9fc;border:1px solid var(--line);border-radius:8px">
+        <div style="font-size:30px;line-height:1">${icon}</div>
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:14px">${esc(pe.provider)}</div>
+          <div style="font-size:12.5px;color:#5b21b6;margin-top:2px">${esc(pe.provider_brief||'')}</div>
+          ${pe.provider_desc?`<div style="font-size:11px;color:#8a9099;margin-top:3px">${esc(pe.provider_desc)}</div>`:''}
+        </div>
+      </div>
       <div style="font-size:13px;color:#556;margin:8px 0;line-height:1.7">
-        <div><b>Provider：</b>${esc(pe.provider)}${pe.provider_desc?(' — '+esc(pe.provider_desc)):''}</div>
         <div><b>模型：</b><code>${esc(pe.model)}</code>${pe.model_desc?(' — '+esc(pe.model_desc)):''}</div>
         <div style="margin-top:8px;padding:8px;background:${isFree?'#f0fdf4':'#fffbeb'};border-radius:6px;font-size:12px">
           ${isFree
@@ -2130,9 +2138,11 @@ function onWSMessage(ev){
         const _byProv={};
         Object.values(_presetModels).forEach(pe=>{ (_byProv[pe.provider]=_byProv[pe.provider]||[]).push(pe); });
         for(const [prov, items] of Object.entries(_byProv)){
-          const og=document.createElement('optgroup'); og.label='✨ '+prov;
+          const _ic=items[0].provider_icon||'', _br=items[0].provider_brief||'';
+          const og=document.createElement('optgroup'); og.label='✨ '+(_ic?_ic+' ':'')+prov+(_br?' — '+_br:'');
           items.forEach(pe=>{
             const o=document.createElement('option');
+            o.title=(_br?_br+'\n':'')+(pe.model_desc||pe.model||'');   // 悬停看简介（option 无富文本，title 兜底）
             if(pe.configured){
               o.value=pe.config_name;   // 代理到所建配置——change 事件走普通 /model 切换
               o.textContent='✅ '+pe.name+'（'+(pe.model_desc||pe.model)+'）';

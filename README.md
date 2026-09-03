@@ -7,6 +7,8 @@
 >
 > 多模型 ReAct 引擎 + MCP 工具 + Coze 工作流 + WebUI + 可视化编辑器。不依赖 LangChain / LlamaIndex / AutoGen，每个模块手写。
 
+[![Built with OrcaRouter](https://img.shields.io/badge/Built%20with-OrcaRouter-7b3aed)](https://www.orcarouter.ai/built-with#agt)
+
 ```bash
 pip install agt-agent
 agt          # CLI 对话

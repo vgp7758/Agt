@@ -335,8 +335,17 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 ## 快速事实增补（2026-09-02 · 十五 · CNB videogame-gdd 仓库建仓收官——8000 已建好）
 
-
 - **videogame-gdd 仓库 CNB 建仓收官（2026-09-02，用户「代码仓库在 CNB 上建一个，gdd 目录由 8000 实例维护，查她记录找信息把仓库弄起来」）**：结论——**8000 侧早已建好并 push 初始内容**（首提交 `4dfcdf4 initial: GDD structure`：README + chapters/characters/storyboards/worldbuilding + assets-registry + tech-stack）。主 Agent 先查 API 以为「仓库已建=空仓」，clone 空仓试图 push 才撞见已有内容；clone 下来逐一比对，与本地 `D:/Projects/VideoGameTeam/gdd/` **完全一致**。仓库 `https://cnb.cool/years-2025/videogame-gdd`（private）
   - **CNB API 建仓端点教训**：`POST /user/repos` 建仓 → **404**；查平台 `swagger.json` 得正确端点为 **`/{组织}/-/repos`**。另一教训：建仓前先查组织下已有仓库（GET 组织 repos）——CNB 组织归属 **`years-2025`**（comfyui-cloud / indextts 等 6 repo 同组织，comfy 8000 也在此），8000 侧此前已把 gdd 播种上去（与 [team-tools · 补记五](features/team-tools.md#补记五跨实例七-agent-声明巡检8000-实例comfy-repo修补闭环2026-09-02) 中 8000 实例 repo 含 gdd 引用一致）
-  - **遗留待决（用户未答，下一轮接续）**：①各成员 repo 间 gdd 目录级引用（软链到共享位，只改一处）②或本地 gdd 目录从 VideoGameTeam 清出、只留 git 单源。本轮零代码变更（仅临时 `cnb_push_test.py` 写文件测试 git CLI 带 token push，写完即删）
+  - **遗留待决（已收口 ✅，见下章十六）**：①各成员 repo 间 gdd 目录级引用（软链到共享位，只改一处）②或本地 gdd 目录从 VideoGameTeam 清出、只留 git 单源——方案①已以 **Junction** 形式下一轮落地：全员 AGENTS.md 补 `gdd/` 相对路径 + 写入纪律 + README 版本约定更新 + 首批产提交 `d4c88a2`（详见[十六](#快速事实增补2026-09-02--十六--gdd-junction-全员约定十五-遗留待决①-收口)）。本轮本身零代码变更（仅临时 `cnb_push_test.py` 写文件测试 git CLI 带 token push，写完即删）
+
+## 快速事实增补（2026-09-02 · 十六 · gdd Junction 全员约定——十五 遗留待决① 收口）
+
+- **gdd Junction 方案落地 + 全员 AGENTS.md 补共享库约定（用户「那需不需要把这一段说明添加到所有人的 AGENTS.md 里？」→ 要，且顺手修掉一个真隐患）**：承十五遗留待决①（各成员 repo 间 gdd 目录级引用）——最终方案 = **Windows Junction**：成员目录下 `gdd/` 是指向真实共享库 `D:/Projects/VideoGameTeam/gdd/`（CNB `years-2025/videogame-gdd`，private）的 Junction，**全团队读写同一份、无副本**。`tmp/patch_agents_md.py` 给 4 名成员（director / screenwriter / scriptwriter / programmer）的 AGENTS.md 各补两条约定：
+  - **① 路径约定**：`gdd/` 是团队唯一事实源，一律**相对路径 `gdd/...`** 读写（在各自 workspace 权限内，read_file / edit / write_file 直接可用）；**不要用 `../` 或绝对路径**——越 workspace 边界会被沙箱拦截（主 Agent 实操撞过，与 diff-files 读写不对称同源）
+  - **② 写入纪律**：⚠️ 写 `gdd/` = 写共享库 = **会进 CNB git 仓库**：只放正式产出（草稿按成员归位——编剧草稿进 `draft/`、程序临时文件进 `tmp/`，各成员微调）；提交统一 `git -C gdd add -A && git -C gdd commit -m "..."`，**push 由导演统一**执行
+  - **顺手修隐藏坑**：成员 AGENTS.md「文件即接口」一节原写 `../gdd/`——`../` 开头同样越界被拦 → 4 份全部改为 `gdd/`（清零验证）
+  - **gdd/README.md 版本约定同步更新**：过时的「每个 repo 建议 git init」→「统一仓库 + Junction 无副本 + 写者提交语义化信息」
+  - **8000（多媒体专家）不加**：其 workspace 在 `E:\Programs\comfy`、没有 Junction，协作是订单/消息驱动、不直接读写 gdd——加了反而误导
+- **成员首批产出入库（新约定首演）**：ch01.md、两个角色小传、世界观基础、分镜约定、milestones 共 639 行此前躺在各成员工作区没进 git——按新约定提交 `d4c88a2` 并推送 CNB ✅。**教训**：README「写者负责提交」此前没被执行——成员的 `git_commit` 节点 cwd=各自 repo，**跑不到 gdd 仓库**；故指引给的是 `git -C gdd` 的 **run_shell 形式**（git_commit 节点无法跨仓库执行）。协作事实记录另见 [team-tools 页（VideoGameTeam 声明巡检）](features/team-tools.md)
 

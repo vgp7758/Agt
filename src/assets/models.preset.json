@@ -248,6 +248,118 @@
    },
    "icon": "🧭",
    "brief": "一把 key 零加价路由 11 家前沿模型（含免费池）"
+  },
+  "openrouter": {
+   "base_url": "https://openrouter.ai/api/v1",
+   "register_url": "https://openrouter.ai/settings/keys",
+   "api_tokens": [
+    "require an key"
+   ],
+   "desc": "OpenRouter —— 全球最大 OpenAI 兼容聚合网关，400+ 模型（GPT/Claude/Gemini/DeepSeek/Qwen/GLM/Grok…），openrouter/auto 自动选模，:free 免费池",
+   "models": {
+    "or-auto": {
+     "model": "openrouter/auto",
+     "thinking": false,
+     "desc": "Auto Router：按提示自动选最优模型"
+    },
+    "or-free": {
+     "model": "openrouter/free",
+     "thinking": false,
+     "desc": "免费自动路由（:free 池随机）"
+    },
+    "or-glm-5.2-free": {
+     "model": "z-ai/glm-5.2:free",
+     "thinking": false,
+     "param_omit": [
+      "enable_thinking"
+     ],
+     "desc": "GLM-5.2（免费池）"
+    },
+    "or-minimax-m3-free": {
+     "model": "minimax/minimax-m3:free",
+     "thinking": false,
+     "desc": "MiniMax M3（免费池）"
+    },
+    "or-claude-opus-5": {
+     "model": "anthropic/claude-opus-5",
+     "thinking": false,
+     "desc": "Claude Opus 5 旗舰"
+    },
+    "or-claude-sonnet-5": {
+     "model": "anthropic/claude-sonnet-5",
+     "thinking": false,
+     "desc": "Claude Sonnet 5 均衡"
+    },
+    "or-claude-haiku-4.5": {
+     "model": "anthropic/claude-haiku-4.5",
+     "thinking": false,
+     "desc": "Claude Haiku 4.5 快速"
+    },
+    "or-gpt-5.6-luna-pro": {
+     "model": "openai/gpt-5.6-luna-pro",
+     "thinking": false,
+     "desc": "GPT-5.6 Luna Pro 旗舰"
+    },
+    "or-gpt-5.5": {
+     "model": "openai/gpt-5.5",
+     "thinking": false,
+     "desc": "GPT-5.5 均衡"
+    },
+    "or-gpt-5.4-mini": {
+     "model": "openai/gpt-5.4-mini",
+     "thinking": false,
+     "desc": "GPT-5.4 Mini 轻量"
+    },
+    "or-gemini-3.1-pro": {
+     "model": "google/gemini-3.1-pro-preview",
+     "thinking": false,
+     "desc": "Gemini 3.1 Pro（预览）"
+    },
+    "or-gemini-3.8-flash": {
+     "model": "google/gemini-3.8-flash",
+     "thinking": false,
+     "desc": "Gemini 3.8 Flash 快速"
+    },
+    "or-deepseek-v4-pro": {
+     "model": "deepseek/deepseek-v4-pro",
+     "thinking": false,
+     "desc": "DeepSeek V4 Pro"
+    },
+    "or-deepseek-v4-flash": {
+     "model": "deepseek/deepseek-v4-flash",
+     "thinking": false,
+     "desc": "DeepSeek V4 Flash 便宜"
+    },
+    "or-qwen3.8-max": {
+     "model": "qwen/qwen3.8-max",
+     "thinking": false,
+     "desc": "通义千问 3.8 Max 旗舰"
+    },
+    "or-glm-5.3": {
+     "model": "z-ai/glm-5.3",
+     "thinking": false,
+     "param_omit": [
+      "enable_thinking"
+     ],
+     "desc": "智谱 GLM-5.3 旗舰"
+    },
+    "or-grok-4.6": {
+     "model": "x-ai/grok-4.6",
+     "thinking": false,
+     "desc": "Grok 4.6（xAI 旗舰）"
+    },
+    "or-kimi-k3": {
+     "model": "moonshotai/kimi-k3",
+     "thinking": false,
+     "temperature": 1,
+     "param_lock": [
+      "temperature"
+     ],
+     "desc": "月之暗面 Kimi K3（temperature 锁 1）"
+    }
+   },
+   "icon": "🔀",
+   "brief": "全球最大聚合网关：一把 key 400+ 前沿模型"
   }
  }
 }

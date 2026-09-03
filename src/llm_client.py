@@ -336,7 +336,7 @@ class LLMClient:
         # 按模型温度（profile.temperature）：不同 provider 对温度要求不同（如推荐 0.6 vs 1.0）。
         # None=未配置——回退实例默认（运行时全局 temperature）。优先级：请求 overrides > per-profile > 全局。
         self.profile_temperature = profile.get("temperature")
-        self._client = OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured")
+        self._client = self._openai_client()
 
     def _ensure_config(self):
         """发请求前校验：无模型配置时给友好错误，指引用户去设置。"""
@@ -347,13 +347,23 @@ class LLMClient:
                 "models.example.py 为 models.py 并填入 token 后重启。"
             )
 
+    def _openai_client(self) -> OpenAI:
+        """构造 OpenAI SDK 客户端。OpenRouter 端点带归因头（X-Title / HTTP-Referer）——
+        其公开 rankings/应用目录按这两个头把调用方识别为独立应用（Agt 消费即上榜，免费曝光）；
+        其它 provider 忽略未知头，无影响。"""
+        headers = {}
+        if "openrouter.ai" in (self.base_url or ""):
+            headers = {"HTTP-Referer": "https://github.com/vgp7758/Agt", "X-Title": "Agt"}
+        return OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured",
+                      default_headers=headers or None)
+
     def _rotate_token(self):
         """轮流切换到下一个 api_token，返回是否成功切换。"""
         if len(self.api_tokens) <= 1:
             return False
         self._token_idx = (self._token_idx + 1) % len(self.api_tokens)
         self.api_key = self.api_tokens[self._token_idx]
-        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self._client = self._openai_client()
         return True
 
     def switch_model(self, name: str, _user_initiated: bool = False) -> "LLMClient":

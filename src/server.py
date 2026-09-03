@@ -194,6 +194,26 @@ async def serve_icon(name: str):
     return FileResponse(p, media_type="image/png")
 
 
+@app.get("/api/asset")
+async def api_asset(path: str = ""):
+    """workspace 内资产文件（answer 气泡的图片框/音频控件用：`[!标题](相对路径)` 渲染时 src 指这里）。
+    安全约束：相对 workspace 根解析 + resolve 后必须仍在 workspace 内（防路径穿越/任意文件泄露）；
+    media_type 按扩展名（图/音/文）。不存在或越界返回 404。"""
+    import mimetypes
+    if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
+        return HTMLResponse("not found", status_code=404)
+    base = Path(_workspace).resolve()
+    try:
+        p = (base / path).resolve()
+        p.relative_to(base)   # 越界抛 ValueError
+    except (ValueError, OSError):
+        return HTMLResponse("not found", status_code=404)
+    if not p.is_file():
+        return HTMLResponse("not found", status_code=404)
+    mt, _ = mimetypes.guess_type(str(p))
+    return FileResponse(p, media_type=mt or "application/octet-stream")
+
+
 @app.get("/manifest.json")
 async def manifest():
     """PWA manifest。"""

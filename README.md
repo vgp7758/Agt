@@ -1,5 +1,7 @@
 # Agt — AI Agent 框架
 
+> **自己开发自己的 AI Agent 框架。**
+>
 > **An agent framework that builds itself.** —— 本仓库的绝大多数迭代由 Agt 自身完成（dogfooding：用它开发它）。
 > *A quine that evolves*：输出不是自己的副本，而是下一个版本的自己。
 >
@@ -55,7 +57,7 @@ pip install agt-agent
 | ⚡ | Z.ai（智谱） | GLM 官方直连、国内低延迟，新户送额度 |
 | 🐋 | DeepSeek 官方 | V4 官方 API：价格厚道，缓存命中折扣极深 |
 | 🌊 | 硅基流动 | 一把 key 用遍各家开源模型，注册即送额度 |
-| 🧭 | OrcaRouter | 一把 key 零加价路由 11 家前沿模型（含免费池） |
+| 🧭 | [OrcaRouter](https://www.orcarouter.ai/ref/ref_b771782ce1de898b72b5) | 一把 key 零加价路由 11 家前沿模型（含免费池） |
 
 或手动：复制 `models.example.py` → `models.py`，填 token。
 

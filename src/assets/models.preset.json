@@ -100,7 +100,7 @@
   },
   "orcarouter": {
    "base_url": "https://api.orcarouter.ai/v1",
-   "register_url": "https://www.orcarouter.ai/console",
+   "register_url": "https://www.orcarouter.ai/ref/ref_b771782ce1de898b72b5",
    "api_tokens": [
     "require an key"
    ],

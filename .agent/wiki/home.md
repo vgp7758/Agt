@@ -366,3 +366,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
   - 管理页：steps 段全局下拉删除（history mode 文本框保留）；**非 seg 动作项行各自 pose 下拉**（并入正文=reminder 默认 / 注入思考链=reasoning）；hint 文案同步
   - mock 验证：两个 reasoning 项合成一次注入 assistant 思考槽（`当前状态：val:A⏎val:B`），reminder 项独立并入 user content——详见 [context-engine · 粒度演进](architecture/context-engine.md) 与 [agents-admin · 动作项 pose 下拉](features/agents-admin.md#动作项-pose-下拉并入正文--注入思考链2026-09-03commit-24597f3--粒度演进)
 
+## 快速事实增补（2026-09-04 · 一 · answer 气泡行内资源渲染）
+
+- **answer 气泡行内富文本与资源渲染（2026-09-04，用户提案，commit `4baa66a`）**：agent 在回答里写 `<https://...>` autolink（可点、新标签打开）、`[!标题](assets/images/x.png)` 图框内嵌（标题+`<img>`，点击看原图，失败降级链接）、`[!标题](assets/audios/x.wav)` 音频控件（`<audio controls>`）、`[文字](https://...)` 普通外链；code span 优先保护不解析。前端 `index.html` 新 `inlineRich(t)` 管线（`\x02` 占位符先摘特殊片段 → 全文 esc → 统一还原，防「esc 吃掉尖括号匹配不到 / 已生成 HTML 二次转义」两病），段落/表格 cell 两个消费点接入；`assetBoxHtml` 按扩展名分流图/音/链接。后端 `server.py` 新 `GET /api/asset?path=`——workspace 内资产文件服务（相对根解析 + resolve 后 `relative_to` 越界 404 防穿越 + mimetypes 判型）。**意义：Agent 把产物（图/音频/截图）写进 workspace 后即可在回答中直接引用呈现**。验证全绿（六场景纯逻辑 + uvicorn 冒烟穿越/缺失/绝对路径全 404 + playwright 真实 png 全链路 onload）；`server.py` 路由需 `/restart` 生效——见 [bubble-interaction · 行内资源渲染](features/bubble-interaction.md#answer-气泡行内富文本与资源渲染2026-09-04用户提案commit-4baa66a)
+

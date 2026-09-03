@@ -155,7 +155,7 @@
   #specPanel .spec-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
     border:none; background:#e0e7ff; color:#4338ca; font-size:14px; cursor:pointer; line-height:1; }
   #specPanel .spec-close:hover { background:#c7d2fe; }
-  @media (orientation: portrait) { #specPanel, #logPanel { width:100% !important; border-left:none !important; } }
+  @media (orientation: portrait) { #specPanel, #logPanel, #teamPanel, #svcPanel { width:100% !important; border-left:none !important; } }
   #specPanel summary { color:#4338ca; padding-right:30px; }
   .spec-item { padding:4px 0; border-left:3px solid #c7d2fe; padding-left:8px; margin:2px 0; }
   .spec-item .spec-head { font-weight:600; color:#4338ca; }
@@ -303,6 +303,12 @@
        有日志才显示 🐞 入口（badge=未读 error 数）；打开即已读清零 -->
   <button id="logFab" title="日志（回退/限流/错误，点击展开）" style="position:fixed;top:112px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#4b5563;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:none;align-items:center;justify-content:center" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
   <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（回退 / 限流 / 截断 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+  <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
+  <button id="teamFab" title="Agent 团队看板（子 Agent + 远程实例，点击展开）" style="position:fixed;top:160px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#0e7490;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:flex;align-items:center;justify-content:center" onclick="toggleTeamPanel(true)">👥</button>
+  <div id="teamPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fbfdff;border-left:1px solid #a5d8e8;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #d0ebf3;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#0e7490">👥 Agent 团队</div><button onclick="toggleTeamPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#d0ebf3;color:#0e7490;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="teamList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+  <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
+  <button id="svcFab" title="后台服务看板（运行/退出、实时日志，点击展开）" style="position:fixed;top:208px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#7c3aed;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:flex;align-items:center;justify-content:center" onclick="toggleSvcPanel(true)">🛠</button>
+  <div id="svcPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fcfaff;border-left:1px solid #ddd3f0;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #e9e0f7;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#7c3aed">🛠 后台（服务 + 定时）</div><button onclick="toggleSvcPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e9e0f7;color:#7c3aed;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="svcList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
@@ -1774,12 +1780,167 @@ function toggleSpecPanel(open){
   const panel = document.getElementById('specPanel');
   const fab = document.getElementById('specFab');
   if(!panel || !fab) return;
-  if(open) toggleLogPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
+  if(open){
+    toggleLogPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
+    toggleTeamPanel(false); toggleSvcPanel(false);
+  }
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';   // 展开时藏图标（面板自身有 ✕），收起时恢复
   document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）
 }
 document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
+
+// ===== Agent 团队看板 + 后台服务看板（抽屉，用户提案 2026-09-04）=====
+// 数据源 GET /api/dash：{team:[registry], remotes:[REMOTE_SERVERS], services:[snapshot]}
+// 打开时拉取渲染，并 3s 轮询刷新（recap/状态/日志在变）；关闭停轮询。
+let _dashTimers = {};          // panelId -> interval id（团队/服务各自独立轮询）
+let _svcExpanded = {};         // 服务行展开态：name -> true（轮询刷新时保持展开）
+let _teamExpanded = {};        // 团队行展开态（recap 折叠，点击展开全文）
+
+function _dashFetch(){
+  return fetch('/api/dash').then(r=>r.json()).catch(()=>null);
+}
+function _dashPoll(panelId){
+  clearInterval(_dashTimers[panelId]);
+  _dashTimers[panelId] = setInterval(()=>{ if(panelId==='teamPanel') renderTeamDash(); else renderSvcDash(); }, 3000);
+}
+function _dashStop(panelId){
+  if(_dashTimers[panelId]){ clearInterval(_dashTimers[panelId]); delete _dashTimers[panelId]; }
+}
+const _AGENT_ICON = {running:'🏃', idle:'💤', done:'✅', failed:'❌'};
+const _SVC_ICON   = {running:'🟢', exited:'🔴', '?':'⚪'};
+
+function toggleTeamPanel(open){
+  const panel = document.getElementById('teamPanel');
+  const fab = document.getElementById('teamFab');
+  if(!panel || !fab) return;
+  if(open){
+    toggleSpecPanel(false); toggleLogPanel(false); toggleSvcPanel(false);   // 互斥
+    renderTeamDash(); _dashPoll('teamPanel');
+  }else{
+    _dashStop('teamPanel');
+  }
+  panel.style.display = open ? 'flex' : 'none';
+  fab.style.display = open ? 'none' : 'flex';
+  document.body.classList.toggle('drawer-push', open);
+}
+function toggleSvcPanel(open){
+  const panel = document.getElementById('svcPanel');
+  const fab = document.getElementById('svcFab');
+  if(!panel || !fab) return;
+  if(open){
+    toggleSpecPanel(false); toggleLogPanel(false); toggleTeamPanel(false);   // 互斥
+    renderSvcDash(); _dashPoll('svcPanel');
+  }else{
+    _dashStop('svcPanel');
+  }
+  panel.style.display = open ? 'flex' : 'none';
+  fab.style.display = open ? 'none' : 'flex';
+  document.body.classList.toggle('drawer-push', open);
+}
+// —— 团队看板渲染：主 + 子 Agent（registry）+ 远程实例分组 ——
+async function renderTeamDash(){
+  const d = await _dashFetch();
+  if(!d) return;
+  const list = document.getElementById('teamList');
+  if(!list) return;
+  let h = '';
+  // 本地 Agent（registry：主 + 子，含 recap/状态/url）
+  const locals = d.team || [];
+  if(locals.length){
+    h += '<div style="font-size:11px;color:#0e7490;font-weight:700;margin:2px 0 6px">🧑 本机 Agent</div>';
+    locals.forEach(e => {
+      const icon = _AGENT_ICON[e.status] || '❓';
+      const name = e.agent_id==='_main_' ? '主 Agent' : `${e.name} [${e.agent_id}]`;
+      const url = e.url ? `<a href="${esc(e.url)}" title="打开该 Agent 专属页" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
+      const rec = e.recap || '';
+      const key = e.agent_id;
+      const open = !!_teamExpanded[key];
+      h += `<div style="border:1px solid #d0ebf3;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span title="状态">${icon}</span><b style="font-size:13px">${esc(name)}</b>
+          <span style="font-size:11px;color:#5b6472">${esc(e.model||'')}</span>
+          ${url}
+        </div>
+        ${rec ? `<div style="margin-top:4px;font-size:11.5px;color:#374151;line-height:1.5">${open ? esc(rec) : esc(rec.slice(0,80)) + (rec.length>80?'…':'')}${rec.length>80?'':' '}
+          <span style="color:#0e7490;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap）</div>'}
+      </div>`;
+    });
+  }
+  const remotes = d.remotes || [];
+  if(remotes.length){
+    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🌐 远程实例</div>';
+    remotes.forEach(r => {
+      const st = (r.status||'?').toLowerCase();
+      const icon = st==='online' ? '🟢' : st==='offline' ? '🔴' : '⚪';
+      h += `<div style="border:1px solid #ddd3f0;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span title="状态 ${r.status}">${icon}</span><b style="font-size:13px">${esc(r.server_id)}</b>
+          <a href="${esc(r.url||'#')}" target="_blank" rel="noopener" title="打开该实例" style="color:#7c3aed;text-decoration:underline;font-size:12px">${esc(r.url||'')}</a>
+        </div>
+        <div style="margin-top:3px;font-size:11px;color:#5b6472">${esc(r.session_name||'')}${r.model?' · '+esc(r.model):''}${r.tools_count?' · '+esc(String(r.tools_count))+' 工具':''}</div>
+      </div>`;
+    });
+  }
+  if(!locals.length && !remotes.length) h = '<div style="color:#8a9099;font-size:12px;padding:10px">（无活跃 Agent）</div>';
+  list.innerHTML = h;
+}
+// —— 后台看板渲染：定时任务组（⏰ 无日志只有时间线）+ 服务组（行点击展开实时日志）——
+async function renderSvcDash(){
+  const d = await _dashFetch();
+  if(!d) return;
+  const list = document.getElementById('svcList');
+  if(!list) return;
+  let h = '';
+  // —— 定时/到点任务（schedule 与 service 独立：无日志，只展示触发时间线）——
+  const scheds = d.schedules || [];
+  if(scheds.length){
+    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:2px 0 6px">⏰ 定时任务</div>';
+    scheds.forEach(s => {
+      const when = s.kind==='interval'
+        ? `每 ${s.interval_secs}s${s.repeat?'':'（单次）'}`
+        : `到 ${s.fire_at}`;
+      const payload = s.tool ? `🔧 ${s.tool}` : (s.message||'').slice(0,40);
+      h += `<div style="border:1px solid #e9e0f7;border-radius:8px;padding:6px 9px;margin-bottom:5px;background:#fff">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span>⏱</span><b style="font-size:12.5px">${esc(s.name)}</b>
+          <span style="font-size:11px;color:#047857">${when}</span>
+          <span style="font-size:11px;color:#8a9099">${s.next_fire_in!=null?`下次 ${s.next_fire_in}s 后`:''}</span>
+        </div>
+        <div style="margin-top:2px;font-size:11px;color:#5b6472;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(payload)}</div>
+      </div>`;
+    });
+  }
+  // —— 后台服务 ——
+  const svcs = d.services || [];
+  if(!svcs.length && !scheds.length){
+    list.innerHTML = '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务与定时任务——start_service / add_schedule 启动的会显示在这里）</div>';
+    return;
+  }
+  if(svcs.length){
+    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🛠 服务（点击展开实时日志）</div>';
+  }
+  svcs.forEach(s => {
+    const icon = s.running ? _SVC_ICON.running : _SVC_ICON.exited;
+    const stTxt = s.running ? `运行中 pid=${s.pid} · ${s.uptime}s` : `已退出 rc=${s.rc}`;
+    const open = !!_svcExpanded[s.name];
+    const logs = (s.logs||[]);
+    h += `<div style="border:1px solid #e9e0f7;border-radius:8px;margin-bottom:6px;background:#fff;overflow:hidden">
+      <div style="padding:6px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;flex-wrap:wrap" onclick="_svcExpanded['${esc(s.name)}']=!_svcExpanded['${esc(s.name)}'];renderSvcDash()">
+        <span>${open?'▼':'▶'}</span><span>${icon}</span><b style="font-size:12.5px">${esc(s.name)}</b>
+        <span style="font-size:11px;color:${s.running?'#047857':'#b91c1c'}">${stTxt}</span>
+        <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.command||'')}</span>
+      </div>
+      ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>` : ''}
+    </div>`;
+  });
+  list.innerHTML = h;
+  // 服务日志自动滚底（只看最新——展开中的服务）
+  if(list && list.querySelector('pre')){
+    const ps = list.querySelectorAll('pre');
+    ps.forEach(p => p.scrollTop = p.scrollHeight);
+  }
+}
 
 // ===== 日志面板（类似 spec 抽屉）：llm_log 事件（回退/限流/截断等 warning/error）=====
 let _logEntries = [];        // [{ts, level, text}]——面板内容（打开时渲染；上限 200 条滚动截断）
@@ -1818,7 +1979,10 @@ function toggleLogPanel(open){
   const panel = document.getElementById('logPanel');
   const fab = document.getElementById('logFab');
   if(!panel || !fab) return;
-  if(open) toggleSpecPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
+  if(open){
+    toggleSpecPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
+    toggleTeamPanel(false); toggleSvcPanel(false);
+  }
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';
   document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）

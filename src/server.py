@@ -811,6 +811,67 @@ async def api_status(request: Request):
     return st
 
 
+@app.get("/api/dash")
+async def api_dash():
+    """WebUI 看板数据（团队 + 后台）：右侧抽屉的两个看板一次拿全——
+    team: 主+子 Agent（registry，含 recap/状态/专属页 url）+ remote 实例（REMOTE_SERVERS）；
+    services: 后台服务快照（ServiceManager.snapshot：pid/运行态/时长/command/logs tail）；
+    schedules: 定时/到点任务快照（Scheduler.snapshot：interval/at、下次触发、message/tool）。
+    schedule 与 service 是独立管理器（service=长进程有日志可展开；schedule=定时器无日志，
+    只有触发时间线）——前端 svcPanel 里分两组展示。
+    无 Agent 时返回空结构（服务未接入时前端显示空态）。"""
+    out = {"team": [], "remotes": [], "services": [], "schedules": []}
+    if _agent is None:
+        return out
+    agent = _agent
+    # —— 本地 Agent 团队（registry：主 + 子）——
+    reg = getattr(agent, "registry", None)
+    if reg:
+        with reg._lock:
+            for e in reg._agents.values():
+                out["team"].append({
+                    "agent_id": e.agent_id,
+                    "name": e.name,
+                    "role": e.role,
+                    "model": e.model,
+                    "status": e.status,
+                    "caller_id": e.caller_id,
+                    "recap": (e.recap or e.task or "")[:200],
+                    "url": "" if e.agent_id in ("_main_", "main") else f"/agents/{e.agent_id}",
+                })
+    # —— 远程 agt 实例（remote_tools.REMOTE_SERVERS 内存态）——
+    try:
+        import remote_tools as _rt
+        with _rt._LOCK:
+            for sid, it in list(_rt.REMOTE_SERVERS.items()):
+                out["remotes"].append({
+                    "server_id": sid,
+                    "url": it.get("url", ""),
+                    "status": it.get("status", "?"),
+                    "tools_count": it.get("tools_count", "?"),
+                    "session_name": it.get("session_name", ""),
+                    "model": it.get("model", ""),
+                    "checked_at": it.get("checked_at"),
+                })
+    except Exception:
+        pass
+    # —— 后台服务（ServiceManager 结构化快照）——
+    svc = getattr(agent, "services", None)
+    if svc is not None:
+        try:
+            out["services"] = svc.snapshot(tail=150) or []
+        except Exception:
+            out["services"] = []
+    # —— 定时/到点任务（Scheduler 快照；与 service 同属 Agent 后台 producer）——
+    sch = getattr(agent, "scheduler", None)
+    if sch is not None:
+        try:
+            out["schedules"] = sch.snapshot() or []
+        except Exception:
+            out["schedules"] = []
+    return out
+
+
 @app.get("/wf/monitor")
 async def wf_monitor_page(run: str = ""):
     """工作流运行观测页：?run=<run_id> 实时轮询单次运行节点轨迹；无参=最近运行列表。"""

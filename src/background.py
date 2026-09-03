@@ -141,6 +141,30 @@ class ServiceManager:
                 rows.append(f"  {name:<16} {st}  | {e['command']}")
             return "\n".join(rows)
 
+    def snapshot(self, tail: int = 120) -> list:
+        """结构化快照（WebUI 后台服务看板用）：每服务 {name, running, rc, pid,
+        started_at, uptime, command, cwd, on_exit_wake, logs:[最近 tail 行]}。
+        内部 _services 带锁读出——server 侧不直接摸内部结构。"""
+        with self._lock:
+            now = time.time()
+            out = []
+            for name, e in self._services.items():
+                rc = e["proc"].poll()
+                running = rc is None
+                out.append({
+                    "name": name,
+                    "running": running,
+                    "rc": rc,
+                    "pid": e.get("pid"),
+                    "started_at": e.get("started_at"),
+                    "uptime": int(now - e["started_at"]) if running and e.get("started_at") else 0,
+                    "command": e.get("command", ""),
+                    "cwd": e.get("cwd", ""),
+                    "on_exit_wake": e.get("on_exit_wake", ""),
+                    "logs": list(e["logs"])[-max(1, int(tail)):],
+                })
+            return out
+
     def logs(self, name: str, lines: int = 50) -> str:
         with self._lock:
             e = self._services.get(name)
@@ -260,6 +284,34 @@ class Scheduler:
             sch = self._schedules.pop(sid)
             self._by_name.pop(sch.name, None)
         return f"🗑 已取消任务「{sch.name}」"
+
+    def snapshot(self) -> list:
+        """结构化快照（WebUI 后台服务看板·定时任务分组用）：每任务 {id, name, kind,
+        interval_secs, fire_at, next_fire_in, repeat, message, tool, tool_args}。
+        schedule 与 service 是两个独立管理器（都是 Agent 后台 producer：
+        service=长进程有日志可展开；schedule=定时器无日志只有触发时间线）。"""
+        with self._lock:
+            items = list(self._schedules.values())
+        now = time.time()
+        out = []
+        for s in items:
+            item = {
+                "id": s.id,
+                "name": s.name,
+                "kind": s.kind,           # interval | at
+                "repeat": bool(s.repeat),
+                "next_fire_in": max(0, int(s.next_fire - now)) if s.next_fire else None,
+                "message": s.message or "",
+            }
+            if s.action:
+                item["tool"] = str(s.action.get("tool") or "")
+                item["tool_args"] = s.action.get("args")
+            if s.kind == "interval":
+                item["interval_secs"] = float(s.spec)
+            else:
+                item["fire_at"] = datetime.fromtimestamp(s.spec).strftime("%m-%d %H:%M:%S")
+            out.append(item)
+        return out
 
     def list(self) -> str:
         with self._lock:

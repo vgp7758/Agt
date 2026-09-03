@@ -69,6 +69,32 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **教训**：弹窗类「看不到」排障顺序——① 先查 CSS 默认 display + JS 是否显式设置（`getComputedStyle`）→ ② 再怀疑浏览器缓存（Ctrl+F5）。「先强刷排除缓存」只解决浏览器层，代码层根因（display 未置）强刷无用；验证弹窗可见性必须查视觉状态（computed style），不能只查 DOM 存在性。
 
+### provider 一句话简介（选择理由）：preset 增 icon+brief，onboarding/下拉/README 三处消费（2026-09-02，commit 620fd3d）
+
+**用户请求**：「工具还需要一句话简介（面向用户的，给他一个选择使用这个工具的理由）」——主 Agent 收到澄清后**主落点在 Provider 目录**（选 key 时回答「为什么选这家」）；工具侧简介的真缺口（卡片行从无数据）作为顺手修复，见 [tool-form · Tool.brief 三级优先](../features/tool-form.md#工具卡片简介补齐toolbrief-三级优先--tool_briefspy-集中字典2026-09-02commit-620fd3d)。语义分工：`desc`=这是什么（详情小字）；`brief`=为什么选它（一句话选择理由，给挑 provider 的人类用户）。
+
+**preset schema 扩展**（src/assets/models.preset.json）：每家 provider 新增两键——`icon`（emoji 徽标）+ `brief`（一句话选择理由）。当前五家：
+
+| provider | icon | brief |
+|---|---|---|
+| modelscope | 🎁 | 开源模型每日免费额度，零成本起步首选 |
+| z.ai | ⚡ | GLM 官方直连、国内低延迟，新户送额度 |
+| deepseek-official | 🐋 | V4 官方 API：价格厚道，缓存命中折扣极深 |
+| siliconflow | 🌊 | 一把 key 用遍各家开源模型，注册即送额度 |
+| orcarouter | 🧭 | 一把 key 零加价路由 11 家前沿模型（含免费池） |
+
+**数据链**：models.preset.json 只读合并 → config.py 视图输出 `provider_icon / provider_brief / provider_desc`（+ 既有模型级 `model_desc`）→ index.html 一次拿全渲染。
+
+**三处消费**（选 key 的时刻正好看见选它的理由）：
+
+| 消费点 | 呈现 |
+|---|---|
+| Onboarding 弹窗 | 头部改为 **provider 横幅**（index.html `showPresetOnboard`）：大 emoji icon + provider 名 + **brief 紫色醒目** + desc 小字详情 |
+| 模型下拉框 | 预设 provider 分组 optgroup 名：`✨ 🎁 modelscope — 开源模型每日免费额度…`；option 悬停 title = brief + model_desc（option 无富文本，title 兜底） |
+| README（PyPI） | 「配置模型」章节 provider 一览表——装完包一眼知道选哪家起步 |
+
+**生效**：后端 /restart + 前端 Ctrl+F5；README 已进 git，下次发版随包上线。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

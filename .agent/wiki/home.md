@@ -349,3 +349,8 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
   - **8000（多媒体专家）不加**：其 workspace 在 `E:\Programs\comfy`、没有 Junction，协作是订单/消息驱动、不直接读写 gdd——加了反而误导
 - **成员首批产出入库（新约定首演）**：ch01.md、两个角色小传、世界观基础、分镜约定、milestones 共 639 行此前躺在各成员工作区没进 git——按新约定提交 `d4c88a2` 并推送 CNB ✅。**教训**：README「写者负责提交」此前没被执行——成员的 `git_commit` 节点 cwd=各自 repo，**跑不到 gdd 仓库**；故指引给的是 `git -C gdd` 的 **run_shell 形式**（git_commit 节点无法跨仓库执行）。协作事实记录另见 [team-tools 页（VideoGameTeam 声明巡检）](features/team-tools.md)
 
+## 快速事实增补（2026-09-02 · 十七 · provider/工具一句话简介双落地，commit 620fd3d）
+
+- **Provider 目录一句话简介（用户「工具还需要一句话简介——给他一个选择使用这个工具的理由」，澄清后主落点转向 provider，commit 620fd3d）**：models.preset.json 每家 provider 新增 `icon`（emoji）+ `brief`（一句话选择理由）——modelscope 🎁 开源模型每日免费额度、z.ai ⚡ GLM 官方直连低延迟、deepseek-official 🐋 V4 官方价格厚道缓存折扣深、siliconflow 🌊 一把 key 用遍开源模型、orcarouter 🧭 一把 key 零加价路由 11 家。config.py 视图输出 `provider_icon/provider_brief/provider_desc`；三处消费：Onboarding 弹窗头部 provider 横幅（大 icon + brief 醒目 + desc 小字）、模型下拉 optgroup 分组名 `✨ icon prov — brief`（option title 悬停）、README「配置模型」章节表格。详见 [config-and-models · provider 一句话简介](guides/config-and-models.md#provider-一句话简介选择理由preset-增-iconbriefonboarding下拉readme-三处消费2026-09-02commit-620fd3d)
+- **顺手修真缺口：工具箱卡片简介行从未有数据（同日 commit 620fd3d）**：前端浮窗 `.tpk-desc` 卡片第二行渲染 `t.desc` 但后端从未输出该字段 → 行从未显示（2026-09-01 建浮窗时的隐形缺口）。补齐数据源：新建 **src/tool_briefs.py**（TOOL_BRIEFS 集中字典 130+ 条，面向 WebUI 挑工具的人类：≤30 字、动词开头、说「用它干什么」）+ Tool 类新增 `brief` 参数，三级优先 `显式 brief > TOOL_BRIEFS 字典 > description 首句截断兜底`（`_brief_from_desc`，MCP 工具自动落兜底层）；/api/tools 工具条目输出 desc + 参数级 desc 透传（表单 placeholder 恢复）。详见 [tool-form · Tool.brief 三级优先](features/tool-form.md#工具卡片简介补齐toolbrief-三级优先--tool_briefspy-集中字典2026-09-02commit-620fd3d)
+

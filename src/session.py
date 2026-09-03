@@ -1302,9 +1302,14 @@ class Session:
         self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
         run: list[dict] = []                # 系统信息 run 缓冲（各段 0/1 条消息）
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
-        tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项）：装配后统一包裹并入末条
-        tail_mode = "reminder"              # 尾段注入模式（steps=reasoning 声明改写）：reminder=包裹并入末条 content；
+        tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项·默认/reminder posture）：
+                                            # 装配后统一包裹并入末条 content
+        reasoning_merge_text: str = ""      # 区3 收集桶（steps 后声明 reasoning pose 的 asm 项）：
+                                            # 装配后作为思考链注入末条 assistant reasoning_content 前缀
+        tail_mode = "reminder"              # 尾段注入模式（steps=reasoning 声明改写；2026-09-03 粒度演进
+                                            # 后为"未标 pose 项"的整体默认）：reminder=包裹并入末条 content；
                                             # reasoning=作为思考链注入末条 assistant 的 reasoning_content 前缀
+                                            # （steps 段自身不再触发 reasoning——改由每 asm 动作项带 pose）
         user_end_idx: int = -1              # user_message 段装配完后的 msgs 边界（reasoning 注入的搜索起点——
                                             # 只认 user 之后的 assistant，s0 无 assistant 回退 reminder）
         passed_steps = False                # 三区状态（2026-09-01）：steps 段处理过后 → 区3（尾部 merge 语义）
@@ -1410,71 +1415,100 @@ class Session:
                     meta = ("once" if item.get("timing") == "once" or
                             (item.get("kind") == "workflow" and not item.get("timing")) else "turn")
                     if passed_steps:
-                        # 区3（2026-09-01·三区重构）：steps 之后的 asm 动作项不进 run 缓冲
-                        # （不独立成条）——并入 tail_merge_text（装配后统一包裹 merge 到末条）
+                        # 区3（2026-09-01·三区重构；2026-09-03 双桶演进）：steps 之后的 asm 动作项
+                        # 不进 run 缓冲（不独立成条）。按每项 pose（item.mode）归桶：
+                        # · reasoning → reasoning_merge_text（装配后注入末条 assistant 思考链）
+                        # · 默认/reminder → tail_merge_text（装配后包裹并入末条 content）
+                        _pose = str(item.get("mode") or "").strip().lower()
                         _b = "\n".join(str(m.get("content") or "") for m in own)
-                        tail_merge_text = (tail_merge_text + "\n\n" + _b) if tail_merge_text else _b
-                        _sec(f"{nm}（尾部）", own, meta + "·并入末条", msgs_n=0)
+                        if _pose == "reasoning":
+                            reasoning_merge_text = (reasoning_merge_text + "\n\n" + _b) if reasoning_merge_text else _b
+                            _sec(f"{nm}（尾部·思考链）", own, meta + "·注入思考链(reasoning)", msgs_n=0)
+                        else:
+                            tail_merge_text = (tail_merge_text + "\n\n" + _b) if tail_merge_text else _b
+                            _sec(f"{nm}（尾部）", own, meta + "·并入末条(reminder)", msgs_n=0)
                     else:
                         run.extend(own)
                         run_secs.append((nm, own, meta))
-        _flush_run()
-        # —— 区3 统一 merge（三区重构 2026-09-01，演进自 2026-08-31 tail merge）——
-        # steps 后的所有段（tail.* 拆段 + asm 动作项）求值合并后按 tail_mode 注入：
-        # · reminder（默认）：<system-reminder> 包裹 → 并入最后一条 message 的 content 末尾（不额外
-        #   创建 message）。缓存友好：末条本来就在未命中区，动态变化不再扰动已缓存前缀；也避开动态
-        #   user/system 消息被端点规范化（R12b 探针的坑）。
-        # · reasoning（steps=reasoning，用户提案 2026-09-02）：作为思考链一部分——user 之后最后一条
-        #   assistant 的 reasoning_content 前缀（"当前状态：{result}\n"+原文）。语义：环境状态是
-        #   思考的输入而非对话内容，不占 content 位；末条 assistant 同样在未命中区，缓存代价相同。
+        # —— 区3 统一 merge（三区重构 2026-09-01，双桶演进 2026-09-03）——
+        # steps 后的所有段（tail.* 拆段 + asm 动作项）按 pose 分两批注入：
+        # · reminder（默认桶 tail_merge_text）：<system-reminder> 包裹 → 并入最后一条 message 的
+        #   content 末尾（不额外创建 message）。缓存友好：末条本来就在未命中区，动态变化不再扰动
+        #   已缓存前缀；也避开动态 user/system 消息被端点规范化（R12b 探针的坑）。
+        # · reasoning（桶 reasoning_merge_text，2026-09-03 粒度演进——每 asm 动作项可独自选
+        #   reasoning pose）：作为思考链一部分——user 之后最后一条 assistant 的 reasoning_content
+        #   前缀（"当前状态：{result}\n"+原文）。语义：环境状态是思考的输入而非对话内容，不占
+        #   content 位；末条 assistant 同样在未命中区，缓存代价相同。
         # 例外回退：末条是 assistant（罕见，如恢复场景）或 msgs 空 → 独立 user 消息（旧行为）；
-        # reasoning 模式下 user 后无 assistant（s0 首步）→ 回退 reminder 语义。
+        # reasoning 桶 user 后无 assistant（s0 首步）→ 回退 remainder 并入末条语义。
+        def _apply_reasoning_bucket(text: str, _src_idx: int, _why: str):
+            _src = msgs[_src_idx]
+            _rc = str(_src.get("reasoning_content") or "")
+            _inj = f"当前状态：{text}"
+            _m2 = {**_src}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
+            _m2["reasoning_content"] = (f"{_inj}\n{_rc}" if _rc else _inj)
+            msgs[_src_idx] = _m2
+            _sec("tail(易变环境块·思考链)", [{"role": "assistant", "content": _inj}],
+                 f"reasoning前缀注入末条assistant(#{_src_idx})·{_why}", msgs_n=0)
+
+        def _apply_reminder_bucket(text: str) -> None:
+            _wrapped = "<system-reminder>\n" + text + "\n</system-reminder>"
+            _tail_own = [{"role": "user", "content": _wrapped}]
+            if msgs and msgs[-1].get("role") != "assistant":
+                _last = msgs[-1]
+                _c = _last.get("content")
+                _m2 = {**_last}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
+                if isinstance(_c, str):
+                    _m2["content"] = _c + "\n" + _wrapped
+                elif isinstance(_c, list):
+                    _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + _wrapped}]
+                else:
+                    _m2["content"] = _wrapped
+                msgs[-1] = _m2
+                _sec("tail(易变环境块·并入末条)", _tail_own, "统一<system-reminder>包裹·并入末条", msgs_n=0)
+            else:
+                msgs.append({"role": "user", "content": _wrapped})
+                _sec("tail(易变环境块·并入末条)", _tail_own, "")
+
+        def _find_assistant_after_user() -> int:
+            if user_end_idx < 0:
+                return -1
+            for i in range(len(msgs) - 1, user_end_idx - 1, -1):
+                if msgs[i].get("role") == "assistant":
+                    return i
+            return -1
+
+        # —— reasoning 桶：作为思考链注入末条 assistant reasoning_content 前缀 ——
+        # 触发（2026-09-03 粒度演进后）：仅当有 asm 项显式声明 reasoning pose。s0（无 assistant）
+        # 或末条已非 assistant → 内容并入 reminder 桶（整桶退回 reminder 语义，不丢文字）。
+        if reasoning_merge_text:
+            _rai = _find_assistant_after_user()
+            if _rai >= 0:
+                _apply_reasoning_bucket(reasoning_merge_text, _rai, "asm项 reasoning pose")
+            else:
+                # 无可用 assistant（s0 首步）→ 并入 reminder 桶合并注入，内容不丢
+                tail_merge_text = (tail_merge_text + "\n\n" + reasoning_merge_text) if tail_merge_text else reasoning_merge_text
+                _sec("tail(易变环境块·reasoning→reminder 回退)", [{"role": "user"}], "s0无assistant，reasoning桶并入正文", msgs_n=0)
+
+        # —— reminder 桶：<system-reminder> 包裹 → 并入末条 content ——
+        # 额外保留 steps=reasoning 的兼容 + requires_reasoning 空槽承载（用户提案 2026-09-02）：
+        # steps 段声明的 reasoning 仍使 reminder 桶整体改思考链注入（向后兼容旧写法——未标 pose
+        # 的项显式/隐式走该路径）；requires_reasoning_in_history 模型且末条 assistant 思考槽为空
+        # （DeepSeek 占位反正补空串）→ 动态状态占空槽优于空占位。
         if tail_merge_text:
-            _ai = -1
-            if user_end_idx >= 0:
-                for i in range(len(msgs) - 1, user_end_idx - 1, -1):
-                    if msgs[i].get("role") == "assistant":
-                        _ai = i
-                        break
-            # 注入模式判定（两路，均注入末条 assistant 的 reasoning_content 前缀）：
-            # · steps=reasoning 显式声明 → 无条件注入；
-            # · 默认 reminder + 模型 requires_reasoning_in_history + 末条 assistant reasoning 为空
-            #   （用户提案 2026-09-02·空槽承载）：DeepSeek 占位逻辑反正要给缺字段的补空串——
-            #   空槽放动态状态严格优于空占位（信息量↑，缓存代价相同：都在未命中区）；非空
-            #   （模型产生了真实思考）→ 不打断，保持 reminder 并入末条 content。
+            _ai = _find_assistant_after_user()
             _why = ""
+            # steps=reasoning（seg 级，向后兼容旧写法）仍整体把 reminder 桶改思考链注入；
+            # requires_reasoning_in_history 模型且末条 assistant 思考槽为空 → 动态状态占空槽。
             if _ai >= 0 and tail_mode == "reasoning":
-                _why = "steps=reasoning"
+                _why = "steps=reasoning(后兼容，未标pose项整体默认)"
             elif (_ai >= 0 and getattr(self.llm, "requires_reasoning_in_history", False)
                   and not str(msgs[_ai].get("reasoning_content") or "").strip()):
                 _why = "requires_reasoning·空槽承载动态状态"
             if _why:
-                _src = msgs[_ai]
-                _rc = str(_src.get("reasoning_content") or "")
-                _inj = f"当前状态：{tail_merge_text}"
-                _m2 = {**_src}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
-                _m2["reasoning_content"] = (f"{_inj}\n{_rc}" if _rc else _inj)
-                msgs[_ai] = _m2
-                _sec("tail(易变环境块·拆段)", [{"role": "assistant", "content": _inj}],
-                     f"reasoning前缀注入末条assistant(#{_ai})·{_why}", msgs_n=0)
+                _apply_reasoning_bucket(tail_merge_text, _ai, _why)
             else:
-                _wrapped = "<system-reminder>\n" + tail_merge_text + "\n</system-reminder>"
-                _tail_own = [{"role": "user", "content": _wrapped}]
-                if msgs and msgs[-1].get("role") != "assistant":
-                    _last = msgs[-1]
-                    _c = _last.get("content")
-                    _m2 = {**_last}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
-                    if isinstance(_c, str):
-                        _m2["content"] = _c + "\n" + _wrapped
-                    elif isinstance(_c, list):
-                        _m2["content"] = list(_c) + [{"type": "text", "text": "\n" + _wrapped}]
-                    else:
-                        _m2["content"] = _wrapped
-                    msgs[-1] = _m2
-                    _sec("tail(易变环境块·拆段)", _tail_own, "统一<system-reminder>包裹·并入末条", msgs_n=0)
-                else:
-                    msgs.append({"role": "user", "content": _wrapped})
-                    _sec("tail(易变环境块·拆段)", _tail_own, "")
+                _apply_reminder_bucket(tail_merge_text)
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):

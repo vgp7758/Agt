@@ -100,7 +100,7 @@ textarea{width:100%;resize:vertical}
       <h3>上下文装配 assembly（顺序即装配顺序，只装列出的段）</h3>
       <div id="asmList"></div>
       <button class="btn sm" onclick="asmAdd()">＋ 添加段</button>
-      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤（可加模式：steps=reasoning 使 steps 后的段注入末条 assistant 的 reasoning_content 前缀，默认 reminder=包裹并入末条 content）/ tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。</div>
+      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤 / tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。每个动作项可选注入姿势：并入正文(reminder)=<system-reminder>包裹并入末条 content（默认）/ 注入思考链(reasoning)=作为末条 assistant 的 reasoning_content 前缀（steps 后的项想当环境状态给模型思考看就选它）。</div>
     </div>
 
     <div class="fgroup">
@@ -181,7 +181,7 @@ function asmToRow(it){
   }
   if(typeof it==='object'){
     for(const k of ACT_TYPES){
-      if(k in it)return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every,desc:String(it.desc??'')};
+      if(k in it)return {kind:k,value:String(it[k]??''),once:it.once===true,every:it.every,mode:it.mode||'',desc:String(it.desc??'')};
     }
   }
   return {kind:'seg',name:'user_message',opt:false};
@@ -190,8 +190,12 @@ function rowToItem(r){
   // 描述组装回行尾 ' // 说明'（单行：清换行防 YAML 多行语义）；desc 仅在非空时携带
   const d=r.desc&&String(r.desc).trim()?` // ${String(r.desc).replace(/[\r\n]+/g,' ').trim()}`:'';
   if(r.kind==='seg'){const nm=r.mode?`${r.name}=${r.mode}`:r.name;return `${r.opt?`${nm}|optional`:nm}${d}`;}
-  if(r.kind==='text'){const o={text:r.value||''};if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;}
-  const o={};o[r.kind]=r.value||'';if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;   // 动作项描述走 dict 元字段 desc（引擎 _asm_item_from_dict 读）——字符串 'file: x' 形态引擎不解析，不能输出
+  // 动作项 pose（用户提案 2026-09-03·粒度演进）：并入正文(reminder)/注入思考链(reasoning)——
+  // 每 steps 后动作项各自选姿势。mode 默认 reminder（引擎同为默认，可不写）；reasoning 必写。
+  const poseOk=r.mode==='reasoning'||r.mode==='reminder';
+  const m=poseOk?{mode:r.mode}:{};
+  if(r.kind==='text'){const o={text:r.value||'',...m};if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;}
+  const o={[r.kind]:r.value||'',...m};if(r.once)o.once=true;if(r.every)o.every=r.every;const dd=String(r.desc||'').trim();if(dd)o.desc=dd;return o;   // 动作项描述走 dict 元字段 desc（引擎 _asm_item_from_dict 读）——字符串 'file: x' 形态引擎不解析，不能输出
 }
 
 function renderAsm(){
@@ -203,12 +207,7 @@ function renderAsm(){
       :isSeg?`<input class="tsel" type="text" value="${esc(r.name)}" oninput="asmData[${i}].name=this.value">`:'';
     const modeHtml=(isSeg&&r.name==='history')
       ?`<input style="width:76px" type="text" placeholder="tiered" value="${esc(r.mode||'')}" oninput="asmData[${i}].mode=this.value">`
-      :(isSeg&&r.name==='steps')
-      ?`<select style="width:92px" title="尾段注入模式：reminder=<system-reminder>包裹并入末条 content（默认）/ reasoning=注入末条 assistant 的 reasoning_content 前缀（steps 后的段以思考链姿势呈现）" onchange="asmData[${i}].mode=this.value">
-          <option value="" ${!r.mode?'selected':''}>尾注·默认</option>
-          <option value="reminder" ${r.mode==='reminder'?'selected':''}>reminder</option>
-          <option value="reasoning" ${r.mode==='reasoning'?'selected':''}>reasoning</option>
-        </select>`:'';
+      :'';
     const typeSel=`<select class="tsel" title="类型：seg=投影段（名称见右下拉）/ 动作项（file/text/func...）" onchange="asmKind(${i},this.value)">${['seg',...ACT_TYPES].map(t=>`<option value="${t}" ${r.kind===t?'selected':''}>${t}</option>`).join('')}</select>`;
     const valHtml=r.kind==='text'
       ?`<textarea class="val" oninput="asmData[${i}].value=this.value">${esc(r.value||'')}</textarea>`
@@ -224,6 +223,14 @@ function renderAsm(){
           return `<select class="val" onchange="asmData[${i}].value=this.value">${fns.map(f=>`<option value="${esc(f)}" ${f===cur?'selected':''} title="${doc(f)}">${esc(f)}</option>`).join('')}</select>`;
         })()
       :isSeg?'':`<input class="val" type="text" placeholder="值（路径/名/命令/文本）" value="${esc(r.value||'')}" oninput="asmData[${i}].value=this.value">`;
+    // 动作项 pose 下拉（用户提案 2026-09-03·粒度演进）：steps 后每动作项各自选姿势——
+    // 并入正文(reminder=默认) / 注入思考链(reasoning)。只在非 seg（动作项）行显示。
+    const poseHtml=(!isSeg&&(r.kind==='text'||r.kind==='file'||r.kind==='dir'||r.kind==='cmd'
+                    ||r.kind==='workflow'||r.kind==='tool'||r.kind==='func'))
+      ?`<select style="width:128px" title="本项注入姿势：并入正文=<system-reminder>包裹并入末条 content（默认）/ 注入思考链=并入末条 assistant 的 reasoning_content 前缀（steps 后的项以思考链姿势呈现——按需：想让它当环境状态思考而非对话内容就选这个）" onchange="asmData[${i}].mode=this.value;renderAsm()">
+          <option value="reminder" ${(r.mode||'reminder')==='reminder'?'selected':''}>并入正文(reminder)</option>
+          <option value="reasoning" ${r.mode==='reasoning'?'selected':''}>注入思考链(reasoning)</option>
+        </select>`:'';
     const extra=isSeg
       ?`<span class="opt"><input type="checkbox" ${r.opt?'checked':''} onchange="asmData[${i}].opt=this.checked"> optional</span>`
       :(r.kind==='file'||r.kind==='dir'||r.kind==='cmd'||r.kind==='workflow'||r.kind==='tool'||r.kind==='func'
@@ -232,7 +239,8 @@ function renderAsm(){
     const descHtml=`<input class="val" style="flex:1;min-width:110px" type="text" placeholder="说明(//)——optional 段的提示文案" value="${esc(r.desc||'')}" oninput="asmData[${i}].desc=this.value">`;
     return `<div class="asmrow">
       ${typeSel}${segSel}${modeHtml}
-      ${valHtml}${extra}${descHtml}
+      ${valHtml}${extra}
+      <span style="display:inline-flex;gap:4px">${poseHtml}</span>${descHtml}
       <button class="btn sm" onclick="asmMove(${i},-1)">↑</button>
       <button class="btn sm" onclick="asmMove(${i},1)">↓</button>
       <button class="btn sm danger" onclick="asmData.splice(${i},1);renderAsm()">×</button>

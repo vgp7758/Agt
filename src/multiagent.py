@@ -156,10 +156,17 @@ _ASSEMBLY_MUST = ("system", "user_message", "steps")
 # 段的默认相对顺序（必装段自动补插的位置基准；= session._DEFAULT_ASSEMBLY_PLAN 的段序）
 _ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps", "tail")
 _ASSEMBLY_HISTORY_MODES = ("tiered", "window", "full")
-# steps 段的尾段注入模式（用户提案 2026-09-02）：reminder=求值合并→<system-reminder>包裹并入
-# 末条 content（默认，三区重构语义）；reasoning=作为思考链一部分注入——user 之后最后一条
-# assistant 的 reasoning_content 前缀（"当前状态：{result}\n"+原文；s0 无 assistant 回退 reminder）。
+# steps 段的尾段注入模式（用户提案 2026-09-02，演进自单点全局）：reminder=求值合并→
+# <system-reminder> 包裹并入末条 content（默认，三区重构语义）；reasoning=作为思考链一部分注入
+# ——user 之后最后一条 assistant 的 reasoning_content 前缀（"当前状态：{result}\n"+原文；
+# s0 无 assistant 回退 reminder）。
+# 【粒度演进 2026-09-03】从 step 一处全局 → steps 后每个动作项各自带 pose（mode）：
+# every 动作项（text/func/tool/file/dir/cmd/workflow）可声明 mode: reasoning（思考链）或
+# reminder（并入正文，默认）；引擎按 pose 分两批合入（reasoning 合并一次注入思考链，
+# reminder 合并一次并入末条 content）——兼顾"每段独立选姿势"与"同姿势合批缓存友好"。
+# steps=reasoning（seg 级）保留为"未标 pose 项整体默认 reasoning"的向后兼容写法。
 _ASSEMBLY_STEPS_MODES = ("reminder", "reasoning")
+_ACTION_MODES = ("reminder", "reasoning")   # 动作项 pose 合法值（与 steps 段共用语义）
 _HOOK_POSITIONS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
 
 
@@ -314,7 +321,9 @@ def _asm_item_from_dict(d: dict):
     """{file: path} / {dir: path} / {cmd: str} / {workflow: name} / {text: str} / {func: name()}
     / {tool: read_file(x)} [+ every/once] 或 {history: window} 简写 → 项 dict 或 None。
     {seg: "段名[|optional][=mode]"}（2026-09-02 兼容——声明书写的友好形态：段名做值而非做键，
-    值复用字符串解析全语义——用户复盘 seg: 形态此前被静默丢弃）。"""
+    值复用字符串解析全语义——用户复盘 seg: 形态此前被静默丢弃）。
+    动作项 pose（2026-09-03 粒度演进）：dict 支持 `mode: reminder|reasoning`（并入正文/注入
+    思考链，默认 reminder）——steps 后每个动作项各自选择注入姿势，引擎按 pose 分两批合入。"""
     # {seg: "steps=reasoning"}：段名做值——委托字符串解析（全语义：|optional/=mode//描述）
     if d.get("seg"):
         return _asm_item_from_str(str(d["seg"]))
@@ -333,6 +342,9 @@ def _asm_item_from_dict(d: dict):
             _d = str(d.get("desc") or "").strip()
             if _d:
                 item["desc"] = _d   # 管理页/手写声明的动作项行内描述（与段名项 '// 说明' 同语义）
+            _m = str(d.get("mode") or "").strip().lower()
+            if _m in _ACTION_MODES:
+                item["mode"] = _m   # 动作项 pose（并入正文/注入思考链）
             return item
     for seg in _ASSEMBLY_SEGS:
         if seg in d and d[seg]:

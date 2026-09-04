@@ -164,6 +164,24 @@ def _post_feishu(webhook_url: str, payload: dict) -> tuple[bool, str]:
         return False, "resp parse"
 
 
+def _looks_like_probe(content: str, contact: str) -> bool:
+    """疑似自动化扫描器探针（PyPI 新版本会触发批量 fuzz——实测 gvisor 沙箱跑 agt
+    调 /feedback /tmp/pp-fuzz/probe 探测外发通道，飞书每次发布后被骚扰）：
+    无空格纯路径 / 超短无语义 + 未留联系方式 → 判探针。保守：留了联系方式或
+    含空格/非路径文本一律当真人（误伤也只是不推送，本地仍落盘）。"""
+    c = (content or "").strip()
+    if (contact or "").strip():
+        return False
+    if not c:
+        return True
+    if " " in c:
+        return False                  # 有空格 = 有语义句子 → 真人
+    if "/" in c:
+        return True                   # 无空格含 / = 纯路径探针（真人谈路径一般带说明文字）
+    # 无路径无空格：ASCII 超短碎片拦（机器人特征）；中文短反馈（"很好用"）放行
+    return len(c) < 4 and not any("\u4e00" <= ch <= "\u9fff" for ch in c)
+
+
 def submit_feedback(kind: str, content: str, contact: str = "",
                     env_info: Optional[dict] = None, agent=None) -> str:
     """提交反馈。本地一定落盘；webhook 启用且配了 URL 才推送。返回结果文案。
@@ -193,6 +211,8 @@ def submit_feedback(kind: str, content: str, contact: str = "",
     # 2) webhook 推送（可选）；成功文案末尾带作者联系方式（方便用户后续直接联系）
     tail = author_contact_str()
     suffix = f"\n  如需直接联系作者：{tail}" if tail else ""
+    if _looks_like_probe(content, record["contact"]):
+        return f"✅ 已记录（疑似自动探针，仅本地不推送）：{local_path.name}{suffix}"
     cfg = load_feedback_config()
     if not cfg.get("enabled", True):
         return f"✅ 已记录（仅本地，已关闭上报）：{local_path.name}{suffix}"

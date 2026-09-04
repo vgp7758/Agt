@@ -93,6 +93,19 @@ else:
 
 与上节 c819618 修复对照：同是「URL 直达被弹回主视图」，彼次根因是历史子 Agent `agent is None`，本次是 busy 防御——两条都已闭环。**生效方式**：引擎层（src/server.py），需 `/restart`。
 
+### 团队看板「🔗 专属页」链接：新页签打开（2026-09-04，commit 59f9140）
+
+**用户请求**：Agent 团队抽屉面板里的子 Agent 点击时最好打开新页签，而不是替换当前页——此前团队看板（`renderTeamDash`，src/static/index.html L1974）每个本机 Agent 条目的「🔗 专属页」是同页跳转，点开子 Agent 专属页就把当前主 Agent 对话视图替换掉了。
+
+**修复**（一处）：链接补 `target="_blank" rel="noopener"`，title 同步标注「（新页签）」。要点：
+
+- **新页签独立落位、原页签不动**：专属页靠 URL 路由（本节开头）初始化交互目标，`sessionStorage` 按页签隔离——新页签自动落位 `/agents/<agent_id>`，**原页签交互目标不变**，可回原页签继续与主 Agent 对话，两边并行观测
+- **`rel="noopener"`**：新页签拿不到 `window.opener` 引用，防反向操作原页签
+- **对齐既有惯例**：远程实例分组（`d.remotes`）的实例链接（L1998）本就带 `target="_blank" rel="noopener"`，本次把本机 Agent 分组与之对齐；页面顶部 🧩/📚/🧠/🤖/📊 按钮、/wf/monitor 观测页入口同款新页签语义
+- **与上节 busy 放行（d69bd8e）配合**：正在跑的子 Agent 也能新页签直达其专属页实时观测 thinking/step，原页签会话不被打断
+
+**验证**（playwright 真页面）：团队看板 6 个链接（coder / vision / vision_10 / vision_11 / wiki-updater_3 专属页 + director 远程实例）全部 `target="_blank"`。纯前端，Ctrl+F5 刷新即生效。
+
 ## 多端消息同步 · user 事件渲染到同 Agent 的其它客户端/CLI（2026-08，commit 1168ea9）
 
 **背景**：一个前端发消息后，另一个正与同一 Agent 交互的前端/CLI 只见回答不见问题——`agent.run()` 的 user 事件（`_emit` 自动带 `agent_id`）早已经 `_broadcast` 按 target 分发，只是两端消费侧都不渲染。本次补齐两端消费，复用既有事件流，**零新增广播**。

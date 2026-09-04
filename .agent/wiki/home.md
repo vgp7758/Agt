@@ -387,3 +387,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **wait_subagents 返回值不截断不压平**（commit `12d1ff4`，用户裁定「工具返回值本身不截断——截断已有投影层统一在做」）：旧 800 字截断 + `\n`→空格把子 Agent 验收报告的 markdown 表格压烂，模型为看全文连跑三轮（query_events 误查 + get_tool_detail 拿到的 toollog 本就是截断版，死循环）——现原样透传，toollog 存档即全文、get_tool_detail 自然完整；inbox 推送 4000 字截断保留（唤醒轮 user 消息不受步距衰减保护）——见 [multi-agent · wait 不截断](architecture/multi-agent.md#工具返回值不截断不压平2026-09-04commit-12d1ff4用户裁定)
 - **target_id enum 动态化：registry on_change 订阅**（同 commit）：enum 此前工具创建时快照一次（启动时 registry 只有 `_main_`），导演模型「明知该查 vision_4 但枚举没有」退传 `_main_` 查了自己；现 `AgentRegistry.add_on_change` 订阅机制（同 subscriber_id 覆盖、unregister 自动清理、锁外触发防死锁），主 Agent（make_subagent_tools）+ 子 Agent（SubAgent.__init__）双订阅点 → 子 Agent 创建/读档恢复/kill 全覆盖自动重注入——见 [multi-agent · enum on_change](architecture/multi-agent.md#enum-快照过时--registry-on_change-订阅2026-09-04commit-12d1ff4)
 
+## 快速事实增补（2026-09-04 · 五 · 团队看板专属页链接新页签打开）
+
+- **团队看板「🔗 专属页」链接新页签打开（2026-09-04，commit 59f9140，用户请求）**：Agent 团队抽屉里本机 Agent 条目的专属页链接此前是同页跳转（点开子 Agent 页会替换当前主 Agent 视图）——补 `target="_blank" rel="noopener"` 新页签打开；专属页靠 URL 路由落位 + sessionStorage 按页签隔离，原页签交互目标不变、两边并行。与远程实例分组链接（本就 `_blank`）对齐，playwright 6 链接验证全过。见 [user-interaction · 专属页](features/user-interaction.md)。
+

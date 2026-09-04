@@ -629,8 +629,19 @@ function addTrace(cls, text){
   curTurn.traceBox.appendChild(e); scrollBottom();
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-// 行内 `code` → <code>（在已 esc 的 html 上做；反引号不受 esc 影响）
-function inlineCode(h){ return String(h==null?'':h).replace(/`([^`]+)`/g, function(_,c){ return '<code>'+c+'</code>'; }); }
+// 行内 `code` → <code>（在已 esc 的 html 上做；反引号不受 esc 影响）。
+// code 内容是 URL（http/https/ftp 整串）时渲染成可点击链接（新标签打开）——
+// 2026-09-04 用户提案：LLM 常用 `https://…` 反引号包裹 URL，纯文本不可点。
+// 输入可能是裸文本（inlineRich ① 分支）或已 esc 文本（L646 / 表格外链文字）——
+// 统一按 \S 判定（esc 后 &→&amp; 不影响匹配；href 放 esc 值是合法 HTML）。
+var _URL_RE = /^(https?|ftp):\/\/[^\s<>"']+$/i;
+function codeUrlHtml(c){
+  // c：已 esc 或裸文本。href 用原串（若含 &amp; 浏览器解析回 &，链接正确）
+  return '<a href="'+c+'" target="_blank" rel="noopener" class="md-link"><code>'+c+'</code></a>';
+}
+function inlineCode(h){ return String(h==null?'':h).replace(/`([^`]+)`/g, function(_,c){
+  return _URL_RE.test(c) ? codeUrlHtml(c) : '<code>'+c+'</code>';
+}); }
 // —— 行内富文本（answer 气泡资源渲染，用户提案 2026-09-04）——
 // 支持：`` `code` ``（保护，不解析）/ `<https://...>` autolink（点击打开）/
 // `[!标题](相对路径)` 资源引用（图片→图框内嵌 / 音频→audio 控件 / 其它→链接）/
@@ -639,7 +650,10 @@ function inlineCode(h){ return String(h==null?'':h).replace(/`([^`]+)`/g, functi
 function inlineRich(t){
   var hold=[];
   t=String(t==null?'':t);
-  t=t.replace(/`([^`]+)`/g, function(_,c){ hold.push('<code>'+esc(c)+'</code>'); return '\x02'+(hold.length-1)+'\x02'; });   // ① code span 优先（内容 esc——LLM 输出不可信）
+  t=t.replace(/`([^`]+)`/g, function(_,c){
+    // code span：URL 整串 → 可点击链接（用户提案 2026-09-04）；其余纯 code（内容 esc——LLM 输出不可信）
+    hold.push(_URL_RE.test(c) ? codeUrlHtml(esc(c)) : '<code>'+esc(c)+'</code>');
+    return '\x02'+(hold.length-1)+'\x02'; });   // ① code span 优先
   t=t.replace(/<((?:https?|ftp):\/\/[^<>\s]+)>/g, function(_,u){ hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link">'+esc(u)+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ② <url> autolink
   t=t.replace(/\[!([^\]]*)\]\(([^)\s]+)\)/g, function(_,title,path){ hold.push(assetBoxHtml(title,path)); return '\x02'+(hold.length-1)+'\x02'; });   // ③ [!title](path) 资源框
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_,txt,url){ hold.push('<a href="'+esc(url)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ④ [文字](http) 普通外链

@@ -173,6 +173,38 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **下次复现时一眼定位**：`restart-web-8000.log` 里看门狗拉起实例的**最后输出行**就是卡点——停在「[MCP] 已连接 'python-lsp'」之后=卡下一个 MCP；停在「[rag] 加载 embedding 模型」=模型/HF 路径。候选：MCP stdio 双实例竞争（LSP 单实例锁）、HF 联网探测挂起、模型文件锁——若确认，下一步给装配阶段加超时保护（MCP 连接限时、`HF_HUB_OFFLINE` 兜底）。
 
+### /restart 拉起即退：就绪后新进程无声退出——三层死因留痕 + stdin DEVNULL（2026-09-04，commit 6e08dae，用户报告）
+
+**现象（programmer 8103 用户报告）**：/restart 后实例「无法正常拉起」，需手动在终端起一个新实例才恢复。
+
+**日志还原现场（restart-web-8103.log 13:39 段）**——真相是**拉起了、就绪了、然后无声退出**：
+
+```
+[13:39:25] watchdog 启动：parent=156752（昨晚 22:12 拉起的进程）
+[13:39:26] 父进程已退出 / 端口 8103 已释放
+[13:39:26] 新进程已拉起 pid=169100
+[13:39:41] ✅ 新进程就绪（HTTP 200）
+✅ 已恢复会话：程序（46 轮）
+再见！          ← 就绪 15 秒后新进程静默退出，只剩这一行，死因无迹可查
+```
+
+定性：worker 线程无声死亡 → 主循环（render_loop）检测到 worker 已死且事件排空 → 进程退出；旧代码所有退出路径都**不打原因**。
+
+**复现（18103 同构链）**：同款 watchdog 链 + 同款 46 轮会话恢复，两次均正常存活 → **偶发/时序敏感**（疑与恢复瞬间某事件时序相关），非确定性 bug，本次未能当场抓到死因。
+
+**修复：三层死因留痕（src/chat.py）+ 一层玄学排除（src/restart_watchdog.py），commit 6e08dae**：
+
+| 层 | 改动 | 复发时日志给出 |
+|---|---|---|
+| worker 哨兵 | 到达时打一行 + 队列残留数 | `[worker] 退出哨兵到达（正常退出路径：信号处理器/exit/restart 命令）` → 查谁 put 的 None |
+| worker 异常 | 外层 `BaseException` 捕获 + traceback | `[worker] ⚠️ 线程异常退出：...` + 完整栈 |
+| render_loop | 三个退出点各打原因 | 区分 `quit_check`（CLI 两段式 Ctrl+C）/ `worker 线程已死亡`（异常看上方 [worker] 行；无则为止损哨兵）/ `_quit` 事件（第二次 Ctrl+C） |
+| watchdog stdin | 拉起时 `stdin=DEVNULL` | 排除隔代 DETACHED 链上无效 handle 传递的未定义行为；`_stdin_thread` 读 DEVNULL 得确定性 EOF → return，无副作用 |
+
+**机制澄清（「手动起新实例就触发」的真相）**：watchdog 确认新进程就绪（HTTP 200）后即撤离，新进程随后死掉**没有任何机制再拉**——手动起的新实例只是顶替占位（抢占端口后服务表象恢复），不存在「触发旧进程复活」。
+
+**下次复发**：看 `~/.agt/restart-web-{port}.log` 最后一段，诊断行直接锁定死因——哨兵行→查信号/exit 路径；⚠️ 行→完整栈；render_loop 退出行→区分三出口。与[超时强杀 + 日志按实例分离](#restart-看门狗超时强杀兜底--日志按实例分离2026-08commit-affdb09)同属 /restart 链路排障；浏览器侧时序坑另见 [user-interaction · /restart 重启双坑](../features/user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)。
+
 ### `agt --help` / `--version`（2026-08，commit 0e186c9）
 
 **背景（用户观察）**：Agent 新环境探索时常用 `agt --help` 获取帮助——此前不支持，直接进交互。修复：`_early_argv()` 支持 `--help/-h/help`、`--version/-V`，打印能力概貌后退出（不进交互），`agt`/`agt-web` 两入口都有；无参数直通不变。与 README「Agent 上手指引」闭环（[multi-instance 边界](../architecture/multi-instance.md#边界与后续)）。

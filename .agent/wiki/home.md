@@ -408,3 +408,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **飞书探针骚扰定性 + 治理**：每次 PyPI 发布后作者飞书收到 `/tmp/pp-fuzz/probe` 推送——定性为订阅 PyPI 新版本的自动化安全扫描器（gvisor 沙箱 + fuzz 探针字面内容 + 无联系方式 + 时机同步，四证齐全），借 /feedback 真实 POST 测出网通道。`src/feedback.py` 新增 `_looks_like_probe()` 保守启发式（留联系方式/含空格句子/中文短反馈→真人放行；无空格纯路径/ASCII 超短碎片→拦截），探针仅本地落盘不推送，commit b6d3ea2。详见 [feedback 通道](features/feedback.md)。
 
+## 快速事实增补（2026-09-04 · 十 · 8103 拉起即退：死因三层留痕）
+
+- **/restart 拉起即退排查（commit 6e08dae，用户报告 8103）**：现象「restart 后无法拉起、需手动起实例」——日志还原真相是**拉起就绪（HTTP 200）15 秒后新进程无声退出**（worker 线程死亡触发主循环退出，旧代码退出零留痕只剩「再见！」）；18103 同构复现两次均存活 → 偶发/时序敏感，非确定性 bug。修复：worker 哨兵到达行（含队列残留）+ `BaseException` 外层 traceback + render_loop 三退出点各打原因（src/chat.py），watchdog 拉起 `stdin=DEVNULL` 排除隔代 DETACHED 链悬空 handle（src/restart_watchdog.py）。机制澄清：watchdog 就绪即撤离、新进程死掉无人再拉，手动实例只是顶替占位。下次复发看 `~/.agt/restart-web-{port}.log` 诊断行直接定死因——见 [ops · 拉起即退](guides/ops.md#restart-拉起即退就绪后新进程无声退出三层死因留痕--stdin-devnull2026-09-04commit-6e08dae用户报告)
+

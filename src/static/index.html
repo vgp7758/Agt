@@ -235,6 +235,12 @@
   #filePanel .fp-scroll { flex:1 1 auto; overflow:auto; min-height:0; }
   #filePanel pre.fp-pre { margin:0; font:12px ui-monospace,Menlo,Consolas,monospace; line-height:1.5;
     white-space:pre-wrap; word-break:break-word; color:#1f2937; }
+   /* 轻量语法高亮（VS Code Light 配色）——hlCode 注入 */
+   #filePanel .hl-c { color:#6a9955; }   /* 注释 */
+   #filePanel .hl-s { color:#a31515; }   /* 字符串 */
+   #filePanel .hl-n { color:#098658; }   /* 数字 */
+   #filePanel .hl-k { color:#0033b3; }   /* 关键字 */
+   #filePanel .hl-t { color:#800000; }   /* 标签 */
   @media (orientation: portrait) { #filePanel { width:100% !important; border-left:none !important; } }
   .bubble table { border-collapse:collapse; margin:8px 0; font-size:13px; max-width:100%; }
   .bubble th,.bubble td { border:1px solid var(--line); padding:4px 8px; text-align:left; white-space:normal; }
@@ -703,6 +709,69 @@ function assetBoxHtml(title, path){
   }
   return '<a href="'+src+'" target="_blank" rel="noopener" class="md-link">'+(cap||esc(path))+'</a>';
 }
+// —— 轻量语法高亮（2026-09-04 用户提案：预览抽屉纯文本阅读代码体验差）——
+// 不手写状态机：组合交替正则（docstring→注释→字符串→数字→关键字→标签）单遍扫描——
+// 正则引擎本身就是状态机，O(n) 一遍过；最左优先 + alternation 顺序保优先级。
+// token 与普通文本全 esc 后拼 span，安全模型与 textContent 等价。
+var _HL_LANGS = null;
+function _hlInit(){
+  if(_HL_LANGS) return _HL_LANGS;
+  _HL_LANGS = {};
+  var KW_C = ('if else for while return break continue function class new this null true false '+
+    'switch case do try catch throw finally const let var import export default async await '+
+    'interface enum struct typedef namespace using public private protected virtual override static '+
+    'int float double char void bool long short unsigned signed auto decltype nullptr sizeof '+
+    'typeof instanceof delete super extends implements package final abstract yield in of as '+
+    'def lambda pass raise with global nonlocal assert del match from self None True False '+
+    'str list dict set tuple print len range').split(' ');
+  var KW_SQL = ('select from where insert into update delete set values create table drop alter '+
+    'index view join left right inner outer full cross on group by order having limit offset '+
+    'as distinct union all and or not null primary key foreign references default check unique '+
+    'constraint cascade exists between like asc desc').split(' ');
+  function mk(exts, line, blockC, tag, kws){
+    var kw = new Set(kws || []);
+    exts.split(',').forEach(function(e){ _HL_LANGS[e] = {line:line, blockC:blockC, tag:tag, kw:kw}; });
+  }
+  mk('py,pyw', '#', null, false, KW_C);
+  mk('sh,bash,zsh,yaml,yml,toml,ini,cfg,conf,rb,pl,r,gitignore,env,properties,mak,makefile,dockerfile,gradle', '#', null, false, null);
+  mk('js,ts,jsx,tsx,cs,java,c,cpp,h,hpp,cc,hh,cxx,go,rs,swift,kt,kts,dart,scala,php,css,scss,less,json,json5', '//', true, false, KW_C);
+  mk('sql', '--', true, false, KW_SQL);
+  mk('html,htm,xml,vue,svelte,svg', null, 'html', true, null);
+  return _HL_LANGS;
+}
+function hlCode(text, ext){
+  text = String(text==null?'':text);
+  if(text.length > 200000) return esc(text);   // 超大文本跳过高亮（性能护栏，纯文本兜底）
+  var L = _hlInit()[String(ext||'').toLowerCase()];
+  if(!L || (!L.line && !L.blockC && !L.tag && !(L.kw && L.kw.size))) return esc(text);
+  // 交替正则构建（组号→类映射同步记录，避免固定序号错位）
+  // ⚠ 每分支整体包一层捕获组——alternation 平级展开后没有外层括号的话 m[i] 全 undefined
+  // （调试实锤：token 命中但组判定全空、cls 全落默认色），组号=分支顺序=左括号顺序。
+  var parts = [], groups = [];   // groups[i] = {g:组号, cls:类名}
+  function add(p, cls){ groups.push({g: parts.length + 1, cls: cls}); parts.push('(' + p + ')'); }
+  if(L.line === '#' || L.line === '--' || L.line === '//'){
+    if(L.blockC === true) add('\\/\\*[\\s\\S]*?\\*\\/', 'hl-c');
+    add(L.line === '//' ? '\\/\\/[^\\n]*' : L.line.replace(/[-#]/g, '\\$&') + '[^\\n]*', 'hl-c');
+  }
+  if(L.blockC === 'html') add('<!--[\\s\\S]*?-->', 'hl-c');
+  add('\'\'\'[\\s\\S]*?\'\'\'|"""[\\s\\S]*?"""', 'hl-s');            // 三引号 docstring（py）
+  add('"(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\'|`(?:[^`\\\\]|\\\\.)*`', 'hl-s');  // 字符串
+  add('\\b0x[0-9a-fA-F]+\\b|\\b\\d+(?:\\.\\d+)?\\b', 'hl-n');        // 数字
+  if(L.kw && L.kw.size) add('\\b(?:' + Array.from(L.kw).join('|') + ')\\b', 'hl-k');
+  if(L.tag) add('<\\/?[a-zA-Z][\\w:.-]*|\\/?>', 'hl-t');             // 标签（开闭尖括号对）
+  var re = new RegExp(parts.join('|'), 'g');
+  var out = [], last = 0, m;
+  while((m = re.exec(text)) !== null){
+    if(!m[0].length){ re.lastIndex++; continue; }                    // 防空匹配死循环
+    if(m.index > last) out.push(esc(text.slice(last, m.index)));
+    var cls = 'hl-t';
+    for(var i = 0; i < groups.length; i++){ if(m[groups[i].g] !== undefined){ cls = groups[i].cls; break; } }
+    out.push('<span class="' + cls + '">' + esc(m[0]) + '</span>');
+    last = m.index + m[0].length;
+  }
+  if(last < text.length) out.push(esc(text.slice(last)));
+  return out.join('');
+}
 // 文本文件预览抽屉（[!名](txt 等) 点击打开；无 fab 按钮，纯点击气泡触发——用户提案 2026-09-04）
 function openFilePreview(path){
   var panel=document.getElementById('filePanel');
@@ -718,13 +787,14 @@ function openFilePreview(path){
   if(typeof toggleTeamPanel==='function' && document.getElementById('teamPanel').style.display!=='none') toggleTeamPanel(false);
   if(typeof toggleSvcPanel==='function' && document.getElementById('svcPanel').style.display!=='none') toggleSvcPanel(false);
   document.body.classList.add('drawer-push');   // push 布局：主区右移让位（竖屏 CSS 覆盖为 0）
+  var ext = (String(path).split('.').pop()||'').toLowerCase();   // 扩展名 → 语言表（语法高亮用）
   fetch('/api/asset?path='+encodeURIComponent(path)).then(function(r){
     if(!r.ok) throw new Error('HTTP '+r.status);
     return r.text();
   }).then(function(txt){
     load.style.display='none';
     if(txt.length>300000){ txt='（文件过大：'+txt.length+' 字符，仅显示前 300,000 字符）\n\n'+txt.slice(0,300000); }
-    body.textContent=txt;   // textContent：文件内容当纯文本展示，杜绝 HTML 注入
+    body.innerHTML=hlCode(txt, ext);   // 轻量语法高亮（token 全 esc，安全模型不变）；>200k 降级纯文本
     body.style.display='block';
   }).catch(function(e){
     load.textContent='❌ 读取失败：'+e.message+'（'+path+'）';

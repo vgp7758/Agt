@@ -1971,7 +1971,7 @@ async function renderTeamDash(){
     locals.forEach(e => {
       const icon = _AGENT_ICON[e.status] || '❓';
       const name = e.agent_id==='_main_' ? '主 Agent' : `${e.name} [${e.agent_id}]`;
-      const url = e.url ? `<a href="${esc(e.url)}" title="打开该 Agent 专属页" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
+      const url = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" title="打开该 Agent 专属页（新页签）" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
       const rec = e.recap || '';
       const key = e.agent_id;
       const open = !!_teamExpanded[key];

@@ -1,11 +1,63 @@
-<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·llm_call 对话式三轮消息）并【在工作流内显式回写】：code 组装 user→assistant→user 三轮对话（用户提案 2026-09-02：小模型对指令模板遵循差、对对话续写遵循好——few-shot 式形态几乎不跑偏，llm_call 原生支持 messages 数组）→ llm_call 取 content → code 组装 payload → hook_write 工具写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
+<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·llm_call 对话式三轮消息）并【在工作流内显式回写】：① code 检查 answer 是否符合回答风格约定（首行一句话总结 + --- 分隔线）→ 符合直接取首行作 recap 跳过 LLM（省一次推理）；② 不符合则 code 组装 user→assistant→user 三轮对话（小模型对对话续写遵循好——few-shot 几乎不跑偏）→ llm_call 取 content → code 组装 payload → hook_write 写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
     <out name="turn_context" type="string"/>
     <out name="hook_ctx" type="object"/>
   </node>
-  <node id="110001" type="code" title="build_msgs" x="270" y="80">
+  <node id="105001" type="code" title="check_style" x="320" y="80">
+    <in name="answer" type="string" ref="100001.draft_answer"/>
+    <code language="3"><![CDATA[async def main(args):
+    # 检查 answer 是否符合回答风格约定（SYSTEM 回答风格提示写死的格式）：
+    # 首行 = 一句话总结（≤50 字），紧跟或隔一空行后出现 --- 分隔线。
+    # 符合 → 直接取首行作 recap，跳过 LLM（省一次本地推理）；不符合 → 走 llm_call。
+    import re
+    p = args.params
+    ans = str(p.get("answer") or "").strip()
+    lines = ans.split("\n")
+    matched = False
+    recap = ""
+    if len(lines) >= 2:
+        first = lines[0].strip()
+        second = lines[1].strip() if len(lines) > 1 else ""
+        third  = lines[2].strip() if len(lines) > 2 else ""
+        has_sep = (second == "---") or (second == "" and third == "---")
+        if first and has_sep:
+            s = re.sub(r'^[#>\-\*\s]+', '', first).strip()       # 去行首 markdown 装饰（#/->/*）
+            s = s.replace('**', '').replace('*', '').replace('`', '').strip()  # 去行内强调
+            if s and len(s) <= 50:
+                matched = True
+                recap = s
+    return {"matched": matched, "recap": recap}]]></code>
+    <out name="matched" type="boolean"/>
+    <out name="recap" type="string"/>
+  </node>
+  <node id="106001" type="selector" title="style_matched?" x="560" y="80">
+    <branch><cond op="11" left="105001.matched" left_type="boolean"/></branch>
+  </node>
+  <!-- ===== fast 路径：符合约定 → 直接取首行作 recap ===== -->
+  <node id="120002" type="code" title="build_payload_fast" x="820" y="40">
+    <in name="recap" type="string" ref="105001.recap"/>
+    <in name="hook_ctx" type="object" ref="100001.hook_ctx"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    hc = p.get("hook_ctx") or {}
+    turn = hc.get("turn_idx", -1)
+    try: turn = int(turn)
+    except (TypeError, ValueError): turn = -1
+    return {"payload": {"action": "set_recap", "value": str(p.get("recap") or ""), "turn": turn}}]]></code>
+    <out name="payload" type="object"/>
+  </node>
+  <node id="140002" type="plugin" title="write_recap_fast" x="1120" y="40" toolName="hook_write">
+    <in name="payload" type="object" ref="120002.payload"/>
+    <out name="raw" type="string"/>
+    <out name="result" type="string" description="工具返回值"/>
+  </node>
+  <node id="910002" type="end" title="Exit_fast" x="1420" y="40">
+    <out name="result" ref="140002.raw" type="string"/>
+  </node>
+  <!-- ===== slow 路径：不符合约定 → llm_call 生成 ===== -->
+  <node id="110001" type="code" title="build_msgs" x="820" y="200">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <in name="answer" type="string" ref="100001.draft_answer"/>
     <code language="3"><![CDATA[async def main(args):
@@ -20,7 +72,7 @@
     ]}]]></code>
     <out name="messages" type="list"/>
   </node>
-  <node id="120001" type="plugin" title="summarize(llm_call)" x="470" y="80" toolName="llm_call">
+  <node id="120001" type="plugin" title="summarize(llm_call)" x="1120" y="200" toolName="llm_call">
     <in name="messages" type="list" ref="110001.messages"/>
     <in name="temperature" type="number">0.3</in>
     <in name="enable_thinking" type="boolean">False</in>
@@ -29,7 +81,7 @@
     <out name="content" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="130001" type="code" title="build_payload" x="720" y="80">
+  <node id="130001" type="code" title="build_payload" x="1420" y="200">
     <in name="summary" type="string" ref="120001.content"/>
     <in name="hook_ctx" type="object" ref="100001.hook_ctx"/>
     <code language="3"><![CDATA[async def main(args):
@@ -43,15 +95,20 @@
     return {"payload": {"action": "set_recap", "value": str(p.get("summary") or ""), "turn": turn}}]]></code>
     <out name="payload" type="object"/>
   </node>
-  <node id="140001" type="plugin" title="write_recap" x="1020" y="80" toolName="hook_write">
+  <node id="140001" type="plugin" title="write_recap" x="1720" y="200" toolName="hook_write">
     <in name="payload" type="object" ref="130001.payload"/>
     <out name="raw" type="string"/>
     <out name="result" type="string" description="工具返回值"/>
   </node>
-  <node id="900001" type="end" title="Exit" x="1320" y="80">
+  <node id="900001" type="end" title="Exit" x="2020" y="200">
     <out name="result" ref="140001.raw" type="string"/>
   </node>
-  <edge from="100001" to="110001"/>
+  <edge from="100001" to="105001"/>
+  <edge from="105001" to="106001"/>
+  <edge from="106001" to="120002" port="true"/>
+  <edge from="106001" to="110001" port="false"/>
+  <edge from="120002" to="140002"/>
+  <edge from="140002" to="910002"/>
   <edge from="110001" to="120001"/>
   <edge from="120001" to="130001"/>
   <edge from="130001" to="140001"/>

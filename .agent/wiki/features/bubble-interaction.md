@@ -4,6 +4,7 @@
 
 ## 职责
 
+
 气泡交互目前有四个独立特性：
 
 | 特性 | 前端文件 | 上线 |
@@ -11,7 +12,9 @@
 | **系统消息展开/折叠**：系统气泡默认折叠、用户气泡默认展开，点击切换 | `static/editor.html` | v0.18.2 |
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
-| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌（后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commit 4baa66a |
+| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a |
+
+配套：回答侧的「Agent 怎么知道这些渲染能力」由[回答风格提示](../architecture/context-engine.md#回答风格提示system-尾部写死追加2026-09-04用户提案commit-fe44b5a)（同日 fe44b5a，写死装配到第一条 system 尾部）解决——渲染端（本页）与告知端（装配层）同 commit 配套落地。
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -60,13 +63,17 @@
 
 ### 三种语法 → 三种渲染
 
+
 | 气泡里写 | 渲染成 |
 |---|---|
 | `<https://xxx.xxx.cn/>` | autolink 蓝色链接（`a.md-link`，新标签打开） |
 | `[!架构示意图](assets/images/arch.png)` | **图框** `.asset-box`：标题 `.asset-cap` + 内嵌 `<img>`（外层 `<a target=_blank>` 点击看原图；加载失败降级为链接） |
 | `[!主题曲](assets/audios/theme.wav)` | **音频框**：标题 + `<audio controls>` 播放器 |
+| `[!设计文档](docs/gdd.md)` | **文本资产框**（2026-09-04 · 二，commit fe44b5a）：📄 标题框可点击 → 打开[文件预览抽屉](#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)；覆盖 40 种文本扩展名（见下节） |
 | `[文字](https://...)` | 普通外链（顺带支持的标准 markdown 语法） |
 | `` `<https://a.b>` `` | code span 内原样——**优先保护，不解析**（防误伤） |
+
+> 资产引用按扩展名分流在 `assetBoxHtml(title, path)`：初版（4baa66a）图 / 音 / 其它→普通链接三分支；二阶段（fe44b5a）把文本扩展名单列成**可点击资产框**（初版里文本文件只会渲染成普通链接）。
 
 ### 前端管线：inlineRich + \x02 占位符（src/static/index.html）
 
@@ -91,6 +98,39 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 - playwright 真页面：三种语法 DOM 齐备；真实 png 全链路 `img.onload naturalWidth=128` ✅
 
 ⚠️ `server.py` 新路由 + 静态页改动——需 `/restart` 生效（与纯前端的[系统气泡 markdown 渲染](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)不同，那个 Ctrl+F5 即可）。
+
+### 文本文件 → 预览抽屉（2026-09-04 · 二，commit fe44b5a，用户提案）
+
+
+用户提案（同日二阶段，commit fe44b5a）：除了图片/音频，**一般文本文件也应可引用**——点击气泡里的文本资产框，直接在抽屉里读内容，不用去文件系统翻。
+
+**渲染扩展**（`assetBoxHtml`，src/static/index.html）：扩展名分流从三分支变四路——
+
+| 扩展名 | 渲染 |
+|---|---|
+| png/jpg/jpeg/gif/webp/svg/bmp/avif | 图框内嵌 |
+| wav/mp3/ogg/oga/m4a/aac/flac/opus | 音频控件 |
+| **40 种文本扩展**（txt/md/log/json/py/js/ts/tsx/html/css/scss/xml/yaml/yml/toml/ini/cfg/csv/sh/bat/ps1/c/cpp/java/go/rs/rb/php/lua/vue/svelte/sql/gradle/dockerfile/…） | **📄 文本资产框**（cursor:pointer，点击 `openFilePreview(path)`） |
+| 其它 | 普通链接（初版行为） |
+
+**抽屉形态**（用户指定）：右侧 40% 固定抽屉——
+
+```
+┌─ 📄 docs/gdd.md ────────────────────── ✕ ─┐  ← 顶栏固定：文件路径 + 关闭（不随内容滚动）
+│                                            │
+│   （textContent 纯文本渲染 · 滚动区）          │
+│                                            │
+└────────────────────────────────────────────┘
+```
+
+- **无 fab 图标按钮**——与 spec/🐞日志/团队/后台四个抽屉不同，它**纯由气泡 markdown 资产点击触发**（低频入口不占图标位）
+- **textContent 渲染防 HTML 注入**（文件内容不可信，与 answer 转义同安全模型）；>300k 字符截断提示（防超大文件卡渲染）
+- 文件内容经既有 `GET /api/asset`（workspace 沙箱）拉取——**后端零改动**，纯前端
+- **双向互斥**：打开它时关掉 spec/🐞/团队/后台四抽屉（drawer-push 40% 只让一份）；反向四个抽屉打开时也 `closeFilePreview()`；✕ / ESC 关闭，竖屏全屏
+
+**验证（playwright 真页面全链路）**：写 demo md → 回答里引用它 → 📄 资产框出现 → 点击 → 抽屉打开、标题=路径、内容经 /api/asset 加载显示 → ✕/ESC 均可关 → drawer-push 正确清除 → 与其它抽屉互斥正常。
+
+⚠️ 生效：本节为纯前端改动，Ctrl+F5 即生效（/api/asset 路由 4baa66a 已带）；同 commit 的[回答风格提示](../architecture/context-engine.md#回答风格提示system-尾部写死追加2026-09-04用户提案commit-fe44b5a)属装配层，需 `/restart`。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

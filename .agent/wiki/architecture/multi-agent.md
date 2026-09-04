@@ -263,6 +263,25 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 
 **刷新时机**：`make_subagent_tools` 装配时注入一次；**create_agent / kill_agent 声明变化后重注入**——新建一个子 Agent，agent_prompt 节点的 name 下拉里立刻出现它。enum 是**提示性的**（不在列表内的值仍可传），过期无害。
 
+#### enum 快照过时 → registry on_change 订阅（2026-09-04，commit 12d1ff4）
+
+
+**证据（导演 session `20260903_004955` c116）**：`agent_query_events` 的 `target_id` enum 只有 `_main_`——模型 reasoning 明写「应该查 vision_4，但枚举里没有」→ 退而传 `_main_`，查了自己的历史，白烧一轮。**模型对 schema 枚举的信任度很高：明知该传什么也会迁就枚举**，过期枚举的误导是行为级的。
+
+**根因**：`_inject_agent_enums` 只在**工具创建时快照一次**——主 Agent 的通信工具在进程启动时装配，此刻 registry 只有 `_main_`；之后子 Agent 创建 / 读档恢复（`_restore_subagents`）都不刷新。声明扫描类 enum（`agent_prompt` 的 name）有 create/kill 重注入兜着，但 **registry 动态类**（target_id/caller）没有刷新源。
+
+**修复：AgentRegistry 变化订阅机制**（src/registry.py + src/multiagent.py，commit 12d1ff4）：
+
+- `registry.add_on_change(subscriber_id, cb)`：注册表变化时触发回调刷新工具 schema；**同 subscriber_id 覆盖**（重连/重新装配不叠列表）；`unregister` 时自动清除订阅
+- `register` / `unregister` 在**锁外**触发回调——锁内回调若再进 registry 方法会死锁
+- **订阅点两处**：主 Agent（`make_subagent_tools`，订阅者 `_self_id`）+ 每个子 Agent（`SubAgent.__init__` 重绑通信工具后）→ 回调统一 `_inject_agent_enums` 重注入
+- 覆盖面：**子 Agent 创建 / 读档恢复 / kill 全自动跟上** registry 现状，无需任何手动刷新
+- 内存：订阅回调随 `entry.agent` 生命周期（实例本被 registry 引用常驻），零额外开销
+
+**验证**：on_change 触发/覆盖/清理单测全绿；`register("vision_5")` 后 enum 立即含 vision_5。enum 仍是提示性候选（不在表内的值仍可传），但动态化后基本不再过期。
+
+**教训**：给 LLM 的枚举约束若源自动态数据源（registry 就是），必须有刷新通道——「创建时快照」只对静态数据成立。
+
 ### 三层全通：LLM schema → /api/tools → 编辑器下拉框
 
 `/api/tools`（server.py `api_tools`）此前只硬编码 `llm_call.model` 一条 enum 透传路；现改为**通用透传**——工具 schema 自带 enum 的参数一律原样带给编辑器（`llm_call.model` 保留 API 侧附加路径——它在 LIGHT_TOOLS 构造时无法静态声明 enum）。前端基建早已就位：`syncToolNode` 同步 enum（工具 schema 更新后已有节点选项跟着变）、`makeInputControl` 检测 enum 渲染 select 下拉（空值选项显示「（跟随）」）。
@@ -308,6 +327,33 @@ _inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
 要点：**hook 超时放行 ≠ 线程被杀**——daemon 线程继续跑完，wait 的 join 一直阻塞到任务真结束；「干等」表象其实是「真在等一个慢任务」——wait 没判断错，错的是"以为它忙完了"的观感来源（看板显示的是上一轮完成态）。wait 的 `timeout` 只约束本工具调用，超时返回 running 项、不杀线程（见 [声明与生命周期](#声明与生命周期) 的调用约定）。
 
 **修复（src/multiagent.py，commit 22cf719）**：wait 入口记录 `ids / timeout / 每个 id 的线程态与任务态`；join 超时再记一条。下次卡等日志直接显示「在等谁、它处于什么状态」——线程没退 / 任务真没完 / join 错对象，一眼可辨。需 `/restart` 生效。关联的派活侧语义见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)（`caller="user"` + wait_subagents 取结果）。
+
+### 工具返回值不截断不压平（2026-09-04，commit 12d1ff4，用户裁定）
+
+
+**证据链（导演 session `20260903_004955`——导演在与子 Agent 交互中对工具调用连环困惑，用户逐条还原）**：
+
+| 调用 | 现象 |
+|---|---|
+| c115 `wait_subagents(vision_4)` | vision_4 验收报告被 **800 字截断** + **`\n`→空格压平**（markdown 表格全压烂） |
+| c116 `agent_query_events(_main_)` | 模型 reasoning 明写「应查 vision_4，但 **target_id enum 里没有**」→ 传 `_main_` 查了自己的历史（enum 快照过时，见[下下节](#enum-快照过时--registry-on_change-订阅2026-09-04commit-12d1ff4)） |
+| c119 `get_tool_detail(c115)` | toollog 存档的就是截断版——查详情拿到的仍是截断，**死循环无解** |
+
+为看全文连跑三轮——截断省下的 token 远小于多推理烧掉的（用户定性「得不偿失」）。
+
+**用户裁定**：工具返回值本身不截断——**截断已有投影层统一在做**（步距衰减）。修复（src/multiagent.py）一行：
+
+```python
+# 旧：800 字截断 + 压平
+res = (entry.get("result") or "").strip().replace("\n", " ")
+res = (res[:800] + "…（截断…）") if len(res) > 800 else res
+# 新：原样透传
+res = (entry.get("result") or "").strip()
+```
+
+**连带收益**：toollog 存档即全文 → `get_tool_detail` 自然完整，c119 式「查详情还是截断版」的死循环消失。
+
+**边界保留**：inbox 推送的 4000 字截断**保留**——它进的是唤醒轮开头的 user 消息（不受步距衰减保护），需要兜底；如需放开随时可议。
 
 ## recap（每轮一句话总结）
 

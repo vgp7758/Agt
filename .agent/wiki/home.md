@@ -375,3 +375,15 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **v0.23.0 + v0.23.1 同日两连发（2026-09-04，PyPI 已上线；0.23.1 commit `3c287c8`）**：用户「发一手吧」→ 攒批 **0.23.0**（看板 / answer 行内资源渲染 `4baa66a` / 逐动作项 pose `24597f3` / OpenRouter / 社区流水线，见 [v0.23.0 发布记录](releases/v0.23.0.md)）；上传后用户拍板每日闹钟（「短格式+repeat 确实可以有」）——PyPI 不允许覆盖版本号 → **0.23.1** 两连发。0.14.1 → 0.23.1 共推 **44 个版本**。
 - **add_schedule 每日闹钟（0.23.1 核心；src/background.py + background_tools.py）**：`at` 支持短格式 `HH:MM[:SS]` = **每日闹钟**（repeat 缺省 True；触发后 `_next_daily_fire` 重算，候选 `<= now` 即 +1 天——同秒触发也必推明天，当天绝不二次触发；每日任务触发后保留 / 单次触发后删除）；`repeat=False` 只响下一个该时刻一次；完整 ISO 仍单次（+`repeat=True` 也可每日循环）。工具 `repeat` 参数默认 **None 按格式语义分发**（短格式不传=每日 / ISO 不传=单次，显式传值优先）。校验：`25:00` 报格式错误、ISO 已过时报时间已过；list_schedules / snapshot / 后台看板同步展示「每天 09:00 (还有Ns)」。验证 9 项断言全过（`_next_daily_fire` 今天/明天边界 / 四种 at 组合文案 / 拨到点触发 / 工具层透传）。**用法**：`add_schedule('morning', at='09:00', message='早会时间')`——详见 [background-scheduler](features/background-scheduler.md)（首次建页）、[v0.23.1 发布记录](releases/v0.23.1.md)
 
+## 快速事实增补（2026-09-04 · 三 · 回答风格提示写死装配 + 文本资产预览抽屉）
+
+
+- **回答风格提示写死装配**（commit `fe44b5a`，src/session.py）：`_ANSWER_STYLE_HINT` 恒定文本，`_append_answer_style` 在 `messages_for_llm` 装配后追加到第一条 system（人设）末尾——主/子 Agent 全覆盖；幂等（已含标记跳过）+ 浅拷贝重建消息（不污染共享引用）+ 恒定文本缓存友好。Agent 从此默认知道 `[!名](路径)` 渲染能力与「首行一句话总结」的回答格式——见 [context-engine · 回答风格提示](architecture/context-engine.md#回答风格提示system-尾部写死追加2026-09-04用户提案commit-fe44b5a)
+- **文本资产 → 预览抽屉**（同 commit，src/static/index.html，纯前端）：`assetBoxHtml` 扩展名分流加第四路——40 种文本扩展名 → 📄 可点击资产框 → 右侧 40% 抽屉（顶栏固定：文件路径 + ✕；下方 textContent 滚动区防注入，>300k 截断）；无 fab 图标、纯气泡 markdown 点击触发；与 spec/🐞/团队/后台四抽屉双向互斥；文件经既有 `/api/asset` 沙箱拉取（后端零改动）——见 [bubble-interaction · 文本预览抽屉](features/bubble-interaction.md#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)
+
+## 快速事实增补（2026-09-04 · 四 · wait_subagents 不截断 + target_id enum 动态化）
+
+
+- **wait_subagents 返回值不截断不压平**（commit `12d1ff4`，用户裁定「工具返回值本身不截断——截断已有投影层统一在做」）：旧 800 字截断 + `\n`→空格把子 Agent 验收报告的 markdown 表格压烂，模型为看全文连跑三轮（query_events 误查 + get_tool_detail 拿到的 toollog 本就是截断版，死循环）——现原样透传，toollog 存档即全文、get_tool_detail 自然完整；inbox 推送 4000 字截断保留（唤醒轮 user 消息不受步距衰减保护）——见 [multi-agent · wait 不截断](architecture/multi-agent.md#工具返回值不截断不压平2026-09-04commit-12d1ff4用户裁定)
+- **target_id enum 动态化：registry on_change 订阅**（同 commit）：enum 此前工具创建时快照一次（启动时 registry 只有 `_main_`），导演模型「明知该查 vision_4 但枚举没有」退传 `_main_` 查了自己；现 `AgentRegistry.add_on_change` 订阅机制（同 subscriber_id 覆盖、unregister 自动清理、锁外触发防死锁），主 Agent（make_subagent_tools）+ 子 Agent（SubAgent.__init__）双订阅点 → 子 Agent 创建/读档恢复/kill 全覆盖自动重注入——见 [multi-agent · enum on_change](architecture/multi-agent.md#enum-快照过时--registry-on_change-订阅2026-09-04commit-12d1ff4)
+

@@ -52,6 +52,34 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 需 `/restart` 生效。
 
+### 回答风格提示：SYSTEM 尾部写死追加（2026-09-04，用户提案，commit fe44b5a）
+
+
+**动机（用户提案）**：WebUI 的 answer 气泡已支持 `[!名称](路径)` 资产引用渲染（图/音内嵌、文本文件点击开预览抽屉，见 [bubble-interaction](../features/bubble-interaction.md)）与 autolink——**但 Agent（LLM）不知道渲染端有这些能力**，永远输出纯文本。用户提案：把回答风格规范写死在装配代码里，所有 Agent 默认知晓，无需每个声明手写一段。
+
+**实现**（src/session.py）：`_ANSWER_STYLE_HINT` 恒定文本 + `_append_answer_style(msgs)`——`messages_for_llm` 装配完成后（`_walk_plan` 之后、tools schema 统计之前），把提示**追加到装配后第一条 system 消息（人设）content 末尾**：
+
+```
+较长的最终回答尽可能用Markdown输出，回答风格提示：
+首行：用一句话总结做了什么
+---
+(Markdown回答详细)
+---
+注: Markdown中可通过 [!名称](path/to/file) 的方式表示引用的资产
+（图片/音频自动渲染、文本文件点击可打开预览抽屉），
+或用 <https://xx.xx.xx> 的方式插入链接。
+```
+
+**三个工程约束**：
+
+| 约束 | 做法 | 为什么 |
+|---|---|---|
+| 幂等 | content 已含「回答风格提示」标记则跳过 | 防 reuse/重装配场景重复叠加 |
+| 不污染共享引用 | **浅拷贝重建消息 dict** 再追加，绝不就地改 | `self.system` 等持久数据若被就地追加，后续每轮投影都会再叠一段（旧坑规避） |
+| 缓存友好 | 恒定文本，所有会话/所有轮次同一段 | system 前缀稳定——旧会话首次装配后前缀固化，此后每轮命中（[DeepSeek 三铁律](#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)：变化才断，恒定不断） |
+
+**覆盖面**：主 Agent + 全部子 Agent（都走 `messages_for_llm` 装配路径，无需各声明维护）；`/restart` 后新装配生效，历史轮投影不变。
+
 ## 投影三区重构：tail 拆段 + 区3 统一包裹 + 钩子 merge 化（2026-09-01，用户提案）
 
 **一句话**：tail merge（2026-08-31，bafaf7e）再进一步——tail 从写死的一块拆成六个可配子段（time/system/plan/spec/episodic/remote），steps 之后的全部动态内容（tail.* + asm 动作项 + 钩子旁注）统一 `<system-reminder>` 包裹后 merge 到末条 content 末尾。消息序列形状完全由对话本体（history/user/steps）决定 → byte-stable 最大化。同批补上钩子注入的落盘可追溯性（hook_note 事件，见 [workflow-hooks · 钩子注入 merge 化 + hook_note 落盘](workflow-hooks.md#钩子注入-merge-化--hook_note-落盘2026-09-01)）。

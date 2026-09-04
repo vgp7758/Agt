@@ -89,6 +89,11 @@ class SubAgent:
         comm_tools = make_communication_tools(self.agent)
         for t in comm_tools:
             self.agent.tools.register(t)
+        # 注册表变化时刷新自己 comm 工具的 target_id enum（订阅与 registry entry 同生命周期，
+        # 不额外增加内存——agent 实例本就被 entry.agent 引用常驻）
+        if registry:
+            registry.add_on_change(str(agent_id or name),
+                                   lambda: _inject_agent_enums(self.agent, list(self.agent.tools)))
         # 会话工具同样重绑：钩子工作流（before_turn_retrieval 等）在子 Agent 里跑时，
         # get_session_history/semantic_search 必须查【子 Agent 自己的 session】，
         # 而不是继承自主 Agent 的闭包（那会查到主 Agent 的历史）
@@ -1127,8 +1132,10 @@ def make_subagent_tools(agent) -> list:
                 th.join(timeout=max(0.0, deadline - time.time()))
             entry = agent.background_tasks.get(aid, {})
             st = entry.get("status", "?")
-            res = (entry.get("result") or "").strip().replace("\n", " ")
-            res = (res[:800] + f"…（截断，完整回复 agent_query_events(\"{aid}\", 1)）") if len(res) > 800 else res
+            # 2026-09-04·用户裁定：工具返回值不截断、换行不压平——投影层按步距衰减统一压缩。
+            # 此前 800 字截断 + \n→空格把 markdown 表格压烂（导演 session c115：验收报告
+            # 被拦腰截断，为看全文连跑 agent_query_events/_main_ 误查 + get_tool_detail 三轮）。
+            res = (entry.get("result") or "").strip()
             still = th is not None and th.is_alive()
             if still:
                 _LOG.info("wait_subagents: %s join 超时仍 running（timeout=%ds）——任务未完成而非卡死判定",
@@ -1151,5 +1158,10 @@ def make_subagent_tools(agent) -> list:
     tools_list = [Tool(create_agent), Tool(kill_agent), Tool(agent_prompt), Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)
+        # 注册表变化时自动刷新 target_id enum（2026-09-04·导演 session 教训：创建时快照的
+        # enum 只有 _main_，模型看枚举就传了 _main_ 误查自己、连跑三轮才绕出来——
+        # 子 Agent 创建/读档恢复/kill 后 enum 需自动跟上；同 subscriber_id 覆盖不叠列表）
+        _self_id = str(getattr(agent, "agent_id", "") or "_main_")
+        reg.add_on_change(_self_id, lambda: _inject_agent_enums(agent, list(agent.tools)))
     _inject_agent_enums(agent, tools_list)   # name/caller/target_id 动态 enum（编辑器下拉 + LLM schema）
     return tools_list

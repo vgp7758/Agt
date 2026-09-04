@@ -33,6 +33,24 @@ class AgentRegistry:
     def __init__(self):
         self._agents: dict[str, AgentEntry] = {}
         self._lock = threading.RLock()
+        self._on_change: list[tuple[str, object]] = []   # (订阅者 agent_id, 回调)：注册表变化时触发
+
+    def add_on_change(self, subscriber_id: str, cb):
+        """订阅注册表变化（如刷新自己工具 schema 的 target_id enum）。
+        同 subscriber_id 覆盖（重连/重新装配不叠列表）；unregister 时自动清除。"""
+        with self._lock:
+            self._on_change = [(i, c) for (i, c) in self._on_change if i != subscriber_id]
+            self._on_change.append((subscriber_id, cb))
+
+    def _fire_change(self):
+        """锁外触发全部订阅回调（回调异常不炸注册路径）。"""
+        with self._lock:
+            cbs = list(self._on_change)
+        for _, cb in cbs:
+            try:
+                cb()
+            except Exception:
+                pass
 
     def register(self, agent_id: str, name: str, role: str, model: str,
                  agent: object, task: str = "", status: str = "running",
@@ -45,12 +63,15 @@ class AgentRegistry:
                 recap=recap,
             )
             self._agents[agent_id] = entry
-            return entry
+        self._fire_change()   # 子 Agent 创建/读档恢复后刷新通信工具的 target_id enum
+        return entry
 
     def unregister(self, agent_id: str):
         """注销一个 Agent（主 Agent 退出时清理用）。"""
         with self._lock:
             self._agents.pop(agent_id, None)
+            self._on_change = [(i, c) for (i, c) in self._on_change if i != agent_id]
+        self._fire_change()
 
     def lookup(self, agent_id: str) -> Optional[AgentEntry]:
         """按 agent_id 查找。找不到返回 None。"""

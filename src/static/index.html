@@ -213,6 +213,10 @@
   .asset-box.file .asset-cap { color:#2563eb; margin-bottom:0; word-break:break-all; }
   .asset-box.file .asset-cap::before { content:"📄 "; }
   .asset-box.file .asset-cap small { color:#8a9099; font-weight:400; margin-left:6px; }
+  /* answer 尾部"未交代变更文件"补充区（2026-09-04 用户提案：快照 diff 补渲染） */
+  .ans-changed { margin-top:10px; padding:8px 10px; border-top:1px dashed #cbd5e1;
+    background:#f8fafc; border-radius:0 0 10px 10px; }
+  .ans-changed .ac-title { font-size:12px; color:#64748b; font-weight:600; margin-bottom:6px; }
   /* 文件预览抽屉（点击 markdown 里的文本资产打开——无 fab，纯点击触发） */
   #filePanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:135;
     background:#fbfdff; border-left:1px solid #bfdbfe; box-shadow:-4px 0 24px #0003;
@@ -906,23 +910,48 @@ function renderThinking(text, label){
 }
 // finishAnswer 带 agent_id：主（_main_/缺省）= 正常最终回答；子 Agent 回应进同轮 answer 的分页
 // （一轮内多个 agent 各有文本时，answer 顶部渲染小 tag 按钮，点击翻页——仅对该轮有效）
-function finishAnswer(text, agentId){
+// changed（2026-09-04 用户提案）：本轮快照 diff 聚合 [{file,change}]——answer 未以 [!名](路径)
+// 交代的文件，在 _main_ 页尾补资产框（点击预览），历史读档同样渲染。
+function finishAnswer(text, agentId, changed){
   if(!curTurn) newTurn();
   const id = agentId || '_main_';
   curTurn.pages = curTurn.pages || {};
   curTurn.pages[id] = text;
   curTurn.activePage = id;   // 最新到达的页激活（子 Agent 回应到达时自动切过去看）
+  if(Array.isArray(changed) && changed.length) curTurn.changed = changed;   // 仅主 answer 事件携带
   renderAnswerPages();
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
+}
+// 未交代变更文件补充块：answer 引用了的（[!名](路径) 全等或 basename 相等）剔除；
+// 其余渲染资产框（modified/new 可点击预览抽屉，deleted 只读）。差集空 → 空串（零噪声）。
+function unmentionedChangesHtml(answerText, changed){
+  if(!Array.isArray(changed) || !changed.length) return '';
+  const cited = new Set();
+  String(answerText||'').replace(/\[![^\]]*\]\(([^)\s]+)\)/g, function(_, p){ cited.add(p); cited.add(p.split('/').pop()); return _; });
+  const rest = changed.filter(c => c && c.file && !cited.has(c.file) && !cited.has(c.file.split('/').pop()));
+  if(!rest.length) return '';
+  const ICON = {modified:'✏️', new:'➕', deleted:'🗑'};
+  let h = '<div class="ans-changed"><div class="ac-title">📎 本轮变更文件（回答中未交代，共 '+rest.length+' 个）</div>';
+  rest.forEach(c=>{
+    const f = String(c.file), ic = ICON[c.change]||'✏️';
+    if(c.change === 'deleted'){
+      h += '<div class="asset-box file" style="opacity:.55">🗑 <span class="asset-cap">'+esc(f)+'</span>（已删除）</div>';
+    } else {
+      h += '<div class="asset-box file" onclick="openFilePreview(\''+esc(f).replace(/'/g,'&#39;')+'\')">'+
+           '<div class="asset-cap">'+ic+' '+esc(f)+'</div></div>';
+    }
+  });
+  return h + '</div>';
 }
 function renderAnswerPages(){
   const t = curTurn; if(!t) return;
   const ids = Object.keys(t.pages);
   const cur = t.activePage && t.pages[t.activePage]!==undefined ? t.activePage : ids[ids.length-1];
   t.activePage = cur;
+  const tail = (cur === '_main_') ? unmentionedChangesHtml(t.pages[cur], t.changed) : '';
   if(ids.length <= 1){   // 单页：无 tabs（保持原视觉）
-    t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '');
+    t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '') + tail;
     return;
   }
   let tabs = '<div class="ans-tabs">';
@@ -931,7 +960,7 @@ function renderAnswerPages(){
     tabs += `<button class="ans-tab${id===cur?' active':''}" onclick="switchAnswerPage('${esc(id)}')">${label}</button>`;
   });
   tabs += '</div>';
-  t.answerEl.innerHTML = tabs + renderAnswer(t.pages[cur] || '');
+  t.answerEl.innerHTML = tabs + renderAnswer(t.pages[cur] || '') + tail;
 }
 function switchAnswerPage(id){
   if(!curTurn || !curTurn.pages || curTurn.pages[id]===undefined) return;
@@ -1041,7 +1070,7 @@ function renderHistTurn(t, box, isLast){
   else if(isInterrupted){                                   // 历史中断 → 灰字标注
     ans.textContent='⏹ 本轮被中断，未完成'; ans.style.color='#8a9099';
   }
-  else finishAnswer(a);
+   else finishAnswer(a, undefined, t.changed);
   curTurn=prev;
   return row;
 }
@@ -2642,7 +2671,7 @@ function onWSMessage(ev){
       pushLogEntry(m.level || 'warn', m.text || '', m.scene || '');
       break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
-    case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id); break;
+    case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id, m.changed); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
     case 'turn_resume':

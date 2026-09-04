@@ -391,6 +391,8 @@ class Turn:
     answer_reasoning: str = ""                       # 最终回答那步的 reasoning_content（GLM 等要求回传）
     summary: str = ""                                # 该轮的一句话摘要（finish 时生成，贴在该轮最后）
     recap: str = ""                                  # 一句话 recap（turn_end 异步生成：队友看板 + fc 折叠摘要行）
+    changed: list = field(default_factory=list)      # 本轮文件变更清单 [{"file","change"}]（各步快照 diff 按
+                                                     # 文件去重后写覆盖——webui answer 下补充渲染用）
 
 
 def _eval_assembly_workflow(name: str, session) -> str:
@@ -792,6 +794,17 @@ class Session:
         self._pinned_ctx = None   # context_messages 用完即焚（本轮投影期间已展开；复用实例下一轮不带）
         self._current.answer = answer
         self._current.answer_reasoning = answer_reasoning
+        # 本轮文件变更清单（各步快照 diff 按文件去重，后写覆盖——webui answer 下补充渲染用：
+        # LLM 未以 [!名](路径) 交代的文件，前端在 answer 尾部补资产框，2026-09-04 用户提案）
+        _chg: dict = {}
+        for _s in self._current.steps:
+            for _tc in _s.tool_calls:
+                for _it in (_tc.changed or []):
+                    try:
+                        _chg[str(_it.get("file"))] = _it.get("change") or "modified"
+                    except Exception:
+                        pass
+        self._current.changed = [{"file": f, "change": c} for f, c in _chg.items()]
         # 生成该轮 summary（贴在该轮最后：作语义索引 + 窗口外摘要源 + 召回匹配文本）
         try:
             self._current.summary = self._summarize_turn(self._current)
@@ -803,7 +816,8 @@ class Session:
         self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
         self._emit_event({"event": "turn_end", "answer": finished.answer,
                           "answer_reasoning": finished.answer_reasoning,
-                          "summary": finished.summary})
+                          "summary": finished.summary,
+                          "changed": finished.changed})
         self._refresh_summary_cache()  # 维护窗口外 summary 拼接（不截断 turns）
         self._autosave()               # 异步落盘
         self._index_turn(finished)     # 向量库增量索引（vec_store 为 None 时 no-op）
@@ -879,7 +893,8 @@ class Session:
                                "call_ids": [tc.call_id for tc in s.tool_calls],
                                "changes": [[tc.call_id, tc.changed] for tc in s.tool_calls if tc.changed]})
             events.append({"event": "turn_end", "answer": t.answer or "",
-                           "answer_reasoning": t.answer_reasoning or "", "summary": t.summary or ""})
+                           "answer_reasoning": t.answer_reasoning or "", "summary": t.summary or "",
+                           "changed": t.changed or []})   # 快照 diff 聚合（读档重放恢复 turn.changed）
         events.append({"event": "restore", "keep": keep})
 
         if self._event_path is None:
@@ -2551,7 +2566,8 @@ class Session:
                     steps.append({"tool_calls": tcs, "reasoning": s.reasoning or ""})
             out.append({"turn": offset + i + 1, "user": t.user_message, "answer": t.answer,
                         "summary": t.summary, "steps": steps,
-                        "answer_reasoning": t.answer_reasoning or ""})
+                        "answer_reasoning": t.answer_reasoning or "",
+                        "changed": t.changed or []})
         return out
 
     def to_history_full(self, max_turns: int = None) -> list:
@@ -2828,6 +2844,7 @@ def _replay_events(events: list) -> list:
                 cur.answer = e.get("answer", "")
                 cur.answer_reasoning = e.get("answer_reasoning", "")
                 cur.summary = e.get("summary", "")
+                cur.changed = e.get("changed") or []   # 快照 diff 聚合（读档恢复——answer 补充渲染用）
                 turns.append(cur)
                 cur = None
         elif et == "restore":

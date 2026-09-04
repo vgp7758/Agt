@@ -1819,8 +1819,33 @@ class Agent:
                                 self._emit({"type": "warn",
                                             "text": "⚠️ turn_end 钩子注入达上限(3)，强制结束本轮"})
                             self.session.finish_turn(resp.content, resp.reasoning)
+                            # changed：本轮快照 diff 聚合（webui answer 下补充渲染未交代文件——
+                            # finish_turn 刚归档，turns[-1].changed 即本轮清单，2026-09-04 用户提案）
+                            _chg = list(self.session.turns[-1].changed) if self.session.turns else []
+                            # 镜像存在性检查（用户插话 2026-09-04）：快照 diff 是工具执行"当时"的
+                            # 检测，后续步骤可能已把文件删了（创建/修改后又删的临时产物）——
+                            # modified/new 但此刻磁盘不存在的降级 deleted，前端渲染的资产框
+                            # 始终真实可点（预览不 404）。
+                            try:
+                                from pathlib import Path as _P
+                                _ws = _P(self.workspace) if getattr(self, "workspace", None) else None
+                                _fixed = []
+                                for _it in _chg:
+                                    _f = str(_it.get("file") or "")
+                                    if _it.get("change") in ("modified", "new") and _f:
+                                        _p = _P(_f)
+                                        if not _p.is_absolute() and _ws is not None:
+                                            _p = _ws / _f
+                                        if not _p.is_file():
+                                            _fixed.append({"file": _f, "change": "deleted"})
+                                            continue
+                                    _fixed.append(_it)
+                                _chg = _fixed
+                            except Exception:
+                                pass
                             self._emit({"type": "answer", "text": resp.content,
-                                        "tokens": self.cumulative_tokens})
+                                        "tokens": self.cumulative_tokens,
+                                        "changed": _chg})
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
                             # 异步生成一句话 recap（队友可见，不进入自己上下文）：
                             # 有 recap 工作流装配在本 Agent 的 turn_end（yml hook_specs 或磁盘 meta 二者其一——

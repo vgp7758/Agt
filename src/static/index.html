@@ -198,7 +198,7 @@
   .bubble .md-p { margin:0; white-space:pre-wrap; word-break:break-word; }
   .bubble .md-p code { background:#f0f2f5; padding:0 4px; border-radius:4px; font:12px ui-monospace,Menlo,Consolas,monospace; }
   .bubble a.md-link { color:#1a66e0; text-decoration:underline; word-break:break-all; }
-  /* —— 行内资源框（[!标题](相对路径)：图片内嵌 / 音频控件，2026-09-04）—— */
+  /* —— 行内资源框（[!标题](相对路径)：图片内嵌 / 音频控件 / 文本文件→点击打开预览抽屉，2026-09-04）—— */
   .asset-box { display:inline-block; max-width:100%; margin:6px 0; border:1px solid var(--line);
     border-radius:10px; padding:8px; background:#f8f9fc; text-align:center; }
   .asset-box .asset-cap { font-size:12px; color:#5b6472; margin-bottom:6px; font-weight:600; }
@@ -206,6 +206,29 @@
   .asset-box.audio { display:block; max-width:420px; text-align:left; }
   .asset-box audio { width:100%; height:34px; }
   .asset-box.err { opacity:.6; }
+  /* 文本文件资产：可点击的框（📄 图标 + 标题/路径），点击在右侧预览抽屉打开内容 */
+  .asset-box.file { display:inline-block; text-align:left; cursor:pointer; user-select:none;
+    border:1px dashed #94a3b8; background:#fbfcfe; transition:border-color .15s, background .15s; }
+  .asset-box.file:hover { border-color:#2563eb; background:#eff6ff; }
+  .asset-box.file .asset-cap { color:#2563eb; margin-bottom:0; word-break:break-all; }
+  .asset-box.file .asset-cap::before { content:"📄 "; }
+  .asset-box.file .asset-cap small { color:#8a9099; font-weight:400; margin-left:6px; }
+  /* 文件预览抽屉（点击 markdown 里的文本资产打开——无 fab，纯点击触发） */
+  #filePanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:135;
+    background:#fbfdff; border-left:1px solid #bfdbfe; box-shadow:-4px 0 24px #0003;
+    flex-direction:column; overflow:hidden; padding:12px 14px; }
+  #filePanel .fp-headbar { flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:2px 0 8px; border-bottom:1px solid #dbeafe; margin-bottom:8px; }
+  #filePanel .fp-headbar .fp-title { flex:1; font-weight:600; color:#1d4ed8; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+  #filePanel .fp-headbar .fp-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+    border:none; background:#dbeafe; color:#1d4ed8; font-size:14px; cursor:pointer; line-height:1; }
+  #filePanel .fp-headbar .fp-close:hover { background:#bfdbfe; }
+  #filePanel .fp-load { color:#8a9099; font-size:12px; padding:20px 4px; }
+  #filePanel .fp-scroll { flex:1 1 auto; overflow:auto; min-height:0; }
+  #filePanel pre.fp-pre { margin:0; font:12px ui-monospace,Menlo,Consolas,monospace; line-height:1.5;
+    white-space:pre-wrap; word-break:break-word; color:#1f2937; }
+  @media (orientation: portrait) { #filePanel { width:100% !important; border-left:none !important; } }
   .bubble table { border-collapse:collapse; margin:8px 0; font-size:13px; max-width:100%; }
   .bubble th,.bubble td { border:1px solid var(--line); padding:4px 8px; text-align:left; white-space:normal; }
   .bubble thead th { background:#f0f2f5; }
@@ -309,6 +332,14 @@
   <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
   <button id="svcFab" title="后台服务看板（运行/退出、实时日志，点击展开）" style="position:fixed;top:208px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#7c3aed;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:flex;align-items:center;justify-content:center" onclick="toggleSvcPanel(true)">🛠</button>
   <div id="svcPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fcfaff;border-left:1px solid #ddd3f0;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #e9e0f7;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#7c3aed">🛠 后台（服务 + 定时）</div><button onclick="toggleSvcPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e9e0f7;color:#7c3aed;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="svcList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+  <!-- 文件预览抽屉（点击气泡 markdown 里的文本资产 [!名](路径) 打开——无 fab 图标按钮，纯点击触发） -->
+  <div id="filePanel" style="display:none">
+    <div class="fp-headbar">
+      <div class="fp-title" id="fpTitle">📄 文件预览</div>
+      <button class="fp-close" onclick="closeFilePreview()" title="关闭">✕</button>
+    </div>
+    <div class="fp-scroll" id="fpScroll"><div class="fp-load" id="fpLoading">加载中…</div><pre class="fp-pre" id="fpBody" style="display:none"></pre></div>
+  </div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
@@ -611,7 +642,8 @@ function inlineRich(t){
   t=inlineCode(esc(t));
   return t.replace(/\x02(\d+)\x02/g, function(_,i){ return hold[+i]||''; });
 }
-// [!标题](路径) → 图框/音频/链接（路径相对 workspace；/api/asset 端点安全取文件）
+// [!标题](路径) → 图框/音频/文本预览/链接（路径相对 workspace；/api/asset 端点安全取文件）
+const _TEXT_EXTS = ('txt,md,markdown,log,json,py,js,ts,jsx,tsx,html,htm,css,scss,less,xml,yaml,yml,toml,ini,cfg,conf,csv,tsv,sh,bat,cmd,ps1,cs,java,c,cpp,h,hpp,cc,go,rs,rb,php,lua,vue,svelte,sql,pl,swift,kt,kts,gradle,properties,env,gitignore,dockerfile').split(',');
 function assetBoxHtml(title, path){
   var src='/api/asset?path='+encodeURIComponent(path);
   var cap=esc(title||'');
@@ -627,8 +659,50 @@ function assetBoxHtml(title, path){
     return '<div class="asset-box audio">'+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
       '<audio controls preload="metadata" src="'+src+'"></audio></div>';
   }
+  if(_TEXT_EXTS.indexOf(ext)>=0){   // 文本类 → 点击打开预览抽屉（📄）
+    var pEsc=esc(path).replace(/'/g,'&#39;');
+    return '<div class="asset-box file" onclick="openFilePreview(\''+pEsc+'\')">'+
+      (cap?'<div class="asset-cap">'+cap+'<small>'+esc(ext)+'</small></div>':
+            '<div class="asset-cap">'+esc(path)+'</div>')+'</div>';
+  }
   return '<a href="'+src+'" target="_blank" rel="noopener" class="md-link">'+(cap||esc(path))+'</a>';
 }
+// 文本文件预览抽屉（[!名](txt 等) 点击打开；无 fab 按钮，纯点击气泡触发——用户提案 2026-09-04）
+function openFilePreview(path){
+  var panel=document.getElementById('filePanel');
+  var body=document.getElementById('fpBody'), load=document.getElementById('fpLoading'), title=document.getElementById('fpTitle');
+  if(!panel||!body) return;
+  document.getElementById('fpTitle').textContent='📄 '+(path||'');
+  body.style.display='none'; body.textContent='';
+  load.style.display='block'; load.textContent='加载中…';
+  panel.style.display='flex';
+  // 互斥：关掉其它右侧抽屉（走各自 toggle 关闭——停轮询/恢复 fab，避免残留状态）
+  if(typeof toggleSpecPanel==='function' && document.getElementById('specPanel').style.display!=='none') toggleSpecPanel(false);
+  if(typeof toggleLogPanel==='function' && document.getElementById('logPanel').style.display!=='none') toggleLogPanel(false);
+  if(typeof toggleTeamPanel==='function' && document.getElementById('teamPanel').style.display!=='none') toggleTeamPanel(false);
+  if(typeof toggleSvcPanel==='function' && document.getElementById('svcPanel').style.display!=='none') toggleSvcPanel(false);
+  document.body.classList.add('drawer-push');   // push 布局：主区右移让位（竖屏 CSS 覆盖为 0）
+  fetch('/api/asset?path='+encodeURIComponent(path)).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.text();
+  }).then(function(txt){
+    load.style.display='none';
+    if(txt.length>300000){ txt='（文件过大：'+txt.length+' 字符，仅显示前 300,000 字符）\n\n'+txt.slice(0,300000); }
+    body.textContent=txt;   // textContent：文件内容当纯文本展示，杜绝 HTML 注入
+    body.style.display='block';
+  }).catch(function(e){
+    load.textContent='❌ 读取失败：'+e.message+'（'+path+'）';
+  });
+}
+function closeFilePreview(){
+  var panel=document.getElementById('filePanel');
+  if(panel) panel.style.display='none';
+  // 若有其它抽屉开着则保留 push，否则解除
+  var anyOpen=['specPanel','logPanel','teamPanel','svcPanel'].some(function(id){ var p=document.getElementById(id); return p&&p.style.display!=='none'; });
+  if(!anyOpen) document.body.classList.remove('drawer-push');
+}
+// ESC 关闭预览抽屉
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeFilePreview(); });
 // 表格行 cell 拆分：保护反引号段（code span 内的 | 不切）+ \| 转义还原 + 去首尾 |
 function splitCells(row){
   var hold=[];
@@ -1781,8 +1855,8 @@ function toggleSpecPanel(open){
   const fab = document.getElementById('specFab');
   if(!panel || !fab) return;
   if(open){
-    toggleLogPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
-    toggleTeamPanel(false); toggleSvcPanel(false);
+    toggleLogPanel(false); toggleTeamPanel(false); toggleSvcPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
+    closeFilePreview();                                                       // 文本预览抽屉也互斥
   }
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';   // 展开时藏图标（面板自身有 ✕），收起时恢复
@@ -1816,6 +1890,7 @@ function toggleTeamPanel(open){
   if(!panel || !fab) return;
   if(open){
     toggleSpecPanel(false); toggleLogPanel(false); toggleSvcPanel(false);   // 互斥
+    closeFilePreview();
     renderTeamDash(); _dashPoll('teamPanel');
   }else{
     _dashStop('teamPanel');
@@ -1830,6 +1905,7 @@ function toggleSvcPanel(open){
   if(!panel || !fab) return;
   if(open){
     toggleSpecPanel(false); toggleLogPanel(false); toggleTeamPanel(false);   // 互斥
+    closeFilePreview();
     renderSvcDash(); _dashPoll('svcPanel');
   }else{
     _dashStop('svcPanel');
@@ -1980,8 +2056,8 @@ function toggleLogPanel(open){
   const fab = document.getElementById('logFab');
   if(!panel || !fab) return;
   if(open){
-    toggleSpecPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
-    toggleTeamPanel(false); toggleSvcPanel(false);
+    toggleSpecPanel(false); toggleTeamPanel(false); toggleSvcPanel(false);   // 互斥
+    closeFilePreview();
   }
   panel.style.display = open ? 'flex' : 'none';
   fab.style.display = open ? 'none' : 'flex';

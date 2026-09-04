@@ -1269,6 +1269,10 @@ class Session:
         try:
             sections: list[dict] = []
             self._walk_plan(msgs, sections)
+            # 2026-09-04·回答风格提示（写死代码，用户提案）：装配后第一条 system 消息（人设）尾部
+            # 追加 Markdown 回答规范与资产引用语法告知——Agent 不知道 webui 支持 [!名](路径) 渲染。
+            # 幂等：已含标记则跳过（防重复装配叠加）；恒定文本不引入额外缓存扰动。
+            self._append_answer_style(msgs)
             if self._tools_schema_chars:
                 sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,
                                  "chars": self._tools_schema_chars,
@@ -1288,6 +1292,32 @@ class Session:
         finally:
             self._hist_marks = None
         return msgs
+    # —— 回答风格提示（2026-09-04·用户提案，写死代码）：webui 支持 Markdown 资产引用渲染，
+    # Agent 默认不知道；装配后追加到第一条 system 消息（人设）末尾统一告知。恒定文本不破坏缓存。
+    _ANSWER_STYLE_HINT = (
+        "\n\n较长的最终回答尽可能用Markdown输出，回答风格提示：\n"
+        "首行：用一句话总结做了什么\n"
+        "---\n"
+        "(Markdown回答详细)\n"
+        "---\n"
+        "注: Markdown中可通过 [!名称](path/to/file) 的方式表示引用的资产"
+        "（图片/音频自动渲染、文本文件点击可打开预览抽屉），"
+        "或用 <https://xx.xx.xx> 的方式插入链接。"
+    )
+
+    def _append_answer_style(self, msgs: list[dict]) -> None:
+        """把回答风格提示拼到第一条 system 消息（人设）content 末尾。
+        幂等：content 已含「回答风格提示」标记则跳过（防重复装配叠加）；
+        浅拷贝重建该消息——绝不就地改共享引用（防污染 self.system 等持久数据）。"""
+        for i, m in enumerate(msgs):
+            if isinstance(m, dict) and m.get("role") == "system":
+                c = str(m.get("content") or "")
+                if "回答风格提示" in c:
+                    return
+                m2 = dict(m)
+                m2["content"] = c + self._ANSWER_STYLE_HINT
+                msgs[i] = m2
+                return
 
     def _walk_plan(self, msgs: list, sections: list) -> None:
         """清单走查（messages_for_llm 装配主体 / projection_breakdown 现算兜底共用，填 msgs+sections）。

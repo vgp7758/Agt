@@ -198,6 +198,9 @@
   .bubble .md-p { margin:0; white-space:pre-wrap; word-break:break-word; }
   .bubble .md-p code { background:#f0f2f5; padding:0 4px; border-radius:4px; font:12px ui-monospace,Menlo,Consolas,monospace; }
   .bubble a.md-link { color:#1a66e0; text-decoration:underline; word-break:break-all; }
+   /* code span 可点击追加到输入框（2026-09-04 用户提案）——hover 高亮示意可交互 */
+   code.code-append { cursor:copy; transition:background .12s, color .12s; }
+   code.code-append:hover { background:#e0e7ff !important; color:#3730a3 !important; }
   /* —— 行内资源框（[!标题](相对路径)：图片内嵌 / 音频控件 / 文本文件→点击打开预览抽屉，2026-09-04）—— */
   .asset-box { display:inline-block; max-width:100%; margin:6px 0; border:1px solid var(--line);
     border-radius:10px; padding:8px; background:#f8f9fc; text-align:center; }
@@ -639,9 +642,24 @@ function codeUrlHtml(c){
   // c：已 esc 或裸文本。href 用原串（若含 &amp; 浏览器解析回 &，链接正确）
   return '<a href="'+c+'" target="_blank" rel="noopener" class="md-link"><code>'+c+'</code></a>';
 }
+// 普通 code span：可点击——内容追加到消息输入框末尾并聚焦（2026-09-04 用户提案：
+// 回答里的命令/文件名/参数常需复用到下一条消息，点一下免手抄）。
+// v：已 esc 的原文（data 属性读回自动解码）；委托点击见 _codeAppendInit。
+function _codeSpanHtml(c){ return '<code class="code-append" data-v="'+c+'" title="点击追加到输入框">'+c+'</code>'; }
 function inlineCode(h){ return String(h==null?'':h).replace(/`([^`]+)`/g, function(_,c){
-  return _URL_RE.test(c) ? codeUrlHtml(c) : '<code>'+c+'</code>';
+  return _URL_RE.test(c) ? codeUrlHtml(c) : _codeSpanHtml(c);
 }); }
+// code span 点击委托：内容追加到消息输入框末尾并聚焦（data-v 由 innerHTML 解码回原文）
+document.addEventListener('click', function(e){
+  const c = e.target && e.target.closest ? e.target.closest('code.code-append') : null;
+  if(!c) return;
+  const v = c.dataset.v || '';
+  if(!v) return;
+  inp.value = inp.value ? inp.value.replace(/\s+$/,'') + ' ' + v : v;
+  inp.focus();
+  inp.dispatchEvent(new Event('input', {bubbles:true}));   // 触发自适应高度/发送按钮态
+  toast('已追加到输入框');
+});
 // —— 行内富文本（answer 气泡资源渲染，用户提案 2026-09-04）——
 // 支持：`` `code` ``（保护，不解析）/ `<https://...>` autolink（点击打开）/
 // `[!标题](相对路径)` 资源引用（图片→图框内嵌 / 音频→audio 控件 / 其它→链接）/
@@ -651,8 +669,8 @@ function inlineRich(t){
   var hold=[];
   t=String(t==null?'':t);
   t=t.replace(/`([^`]+)`/g, function(_,c){
-    // code span：URL 整串 → 可点击链接（用户提案 2026-09-04）；其余纯 code（内容 esc——LLM 输出不可信）
-    hold.push(_URL_RE.test(c) ? codeUrlHtml(esc(c)) : '<code>'+esc(c)+'</code>');
+    // code span：URL 整串 → 可点击链接；其余 → 可点击追加到输入框（内容 esc——LLM 输出不可信）
+    hold.push(_URL_RE.test(c) ? codeUrlHtml(esc(c)) : _codeSpanHtml(esc(c)));
     return '\x02'+(hold.length-1)+'\x02'; });   // ① code span 优先
   t=t.replace(/<((?:https?|ftp):\/\/[^<>\s]+)>/g, function(_,u){ hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link">'+esc(u)+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ② <url> autolink
   t=t.replace(/\[!([^\]]*)\]\(([^)\s]+)\)/g, function(_,title,path){ hold.push(assetBoxHtml(title,path)); return '\x02'+(hold.length-1)+'\x02'; });   // ③ [!title](path) 资源框
@@ -1382,6 +1400,7 @@ function sendToolCall(){
   addRow('sys', `🔧 已发送：${cmd.replace(/call /, 'call ')}`);
   // 清空参数
   (t.params||[]).forEach(p => { const el = document.getElementById('tp_'+p.name); if(el) el.value = el.type==='checkbox' ? false : ''; });
+  exitToolForm();   // 发送即退表单模式，恢复普通输入框（2026-09-04 用户提案：手动调用是低频动作，发完该回对话）
 }
 document.getElementById('btnToolCall').onclick = async ()=>{
   _toolFormMode = !_toolFormMode;

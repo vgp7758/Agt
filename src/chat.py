@@ -402,69 +402,80 @@ def _worker(agent, work_q, registry, state):
     """后台 worker：串行消费 work_q，跑 agent.run / task / background。
     维护 state(busy/started/desc) 供主线程心跳。agent verbose=False（事件经 on_event
     入 event_q，由主线程 _render_loop 渲染）；本线程只发命令/提示类 print——与主线程
-    事件渲染基本不并发（跑命令时 agent 未在跑、无事件；agent.run 期间本线程不 print）。"""
-    while True:
-        item = work_q.get()
-        if item is None:
-            break
-        kind, payload = item
-        state["kind"] = kind
-        state["started"] = time.time()
-        state["busy"] = True
-        try:
-            if kind == "task":
-                # task（工作流调试/RAG 建库）单独跑，不合并
-                state["desc"] = "工作流调试/RAG 建库"
-                payload()
-            elif kind == "user" and payload.startswith("/"):
-                # 斜杠命令：即时分发，不合并、不进 agent.run
-                state["desc"] = payload[:40]
-                registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q, state=state))
-            else:
-                # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
-                batch = [(kind, payload)]
-                while True:
-                    try:
-                        nxt = work_q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if nxt is None:
-                        work_q.put(None)   # 退出哨兵放回，本轮处理后退出
-                        break
-                    nk, np_ = nxt
-                    # task / 斜杠命令不能合并进 agent.run：放回队尾停止 drain
-                    if nk == "task" or (nk == "user" and np_.startswith("/")):
-                        work_q.put(nxt)
-                        break
-                    batch.append(nxt)
-                user_msg, seeds, first_src = _merge_batch(batch)
-                if not user_msg and not seeds:
-                    continue
-                state["desc"] = user_msg[:40] or "(后台事件)"
-                agent.run(user_msg, _seeds=seeds or None, _msg_source=first_src)
-        except Exception as e:
-            import logging as _lg, traceback as _tb
-            print(f"\n⚠️ 执行出错：{e}")
-            # 中断原因留痕（三处）：log 文件 / session（start_turn 归档时带进 turn_end 事件）/
-            # llm_log 事件（WebUI 日志面板）——此前异常逃出后原因只 print 一行即丢失，
-            # 下一轮归档只剩"（中断，本轮未完成）"标注，排障无从下手（用户报告的痛点）。
+    事件渲染基本不并发（跑命令时 agent 未在跑、无事件；agent.run 期间本线程不 print）。
+    外层 BaseException 捕获（2026-09-04·8103 拉起即退排查）：worker 无声死亡时此前
+    只剩"再见！"一行，死因（哨兵/异常/信号）无迹可查——现在全部留痕。"""
+    import traceback as _tb
+    try:
+        while True:
+            item = work_q.get()
+            if item is None:
+                print(f"\n[worker] 退出哨兵到达（正常退出路径：信号处理器/exit/restart 命令）。"
+                      f"排队残留: {work_q.qsize()}", flush=True)
+                break
+            kind, payload = item
+            state["kind"] = kind
+            state["started"] = time.time()
+            state["busy"] = True
             try:
-                agent.session._interrupt_reason = f"{type(e).__name__}: {e}"
-            except Exception:
-                pass
-            _lg.getLogger("agt.chat").error("run 异常中断：%s\n%s",
-                                           type(e).__name__, _tb.format_exc(limit=6))
-            try:
-                agent._emit({"type": "llm_log", "level": "error",
-                             "text": f"轮中断：{type(e).__name__}: {str(e)[:200]}"})
-            except Exception:
-                pass
-        finally:
-            state["busy"] = False
-            try:
-                agent.on_event({"type": "_done"})   # 通知前端 agent 空闲（解除 busy）；CLI _render_loop 收到打印输入提示
-            except Exception:
-                pass
+                if kind == "task":
+                    # task（工作流调试/RAG 建库）单独跑，不合并
+                    state["desc"] = "工作流调试/RAG 建库"
+                    payload()
+                elif kind == "user" and payload.startswith("/"):
+                    # 斜杠命令：即时分发，不合并、不进 agent.run
+                    state["desc"] = payload[:40]
+                    registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q, state=state))
+                else:
+                    # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
+                    batch = [(kind, payload)]
+                    while True:
+                        try:
+                            nxt = work_q.get_nowait()
+                        except queue.Empty:
+                            break
+                        if nxt is None:
+                            work_q.put(None)   # 退出哨兵放回，本轮处理后退出
+                            break
+                        nk, np_ = nxt
+                        # task / 斜杠命令不能合并进 agent.run：放回队尾停止 drain
+                        if nk == "task" or (nk == "user" and np_.startswith("/")):
+                            work_q.put(nxt)
+                            break
+                        batch.append(nxt)
+                    user_msg, seeds, first_src = _merge_batch(batch)
+                    if not user_msg and not seeds:
+                        continue
+                    state["desc"] = user_msg[:40] or "(后台事件)"
+                    agent.run(user_msg, _seeds=seeds or None, _msg_source=first_src)
+            except Exception as e:
+                import logging as _lg
+                print(f"\n⚠️ 执行出错：{e}")
+                # 中断原因留痕（三处）：log 文件 / session（start_turn 归档时带进 turn_end 事件）/
+                # llm_log 事件（WebUI 日志面板）——此前异常逃出后原因只 print 一行即丢失，
+                # 下一轮归档只剩"（中断，本轮未完成）"标注，排障无从下手（用户报告的痛点）。
+                try:
+                    agent.session._interrupt_reason = f"{type(e).__name__}: {e}"
+                except Exception:
+                    pass
+                _lg.getLogger("agt.chat").error("run 异常中断：%s\n%s",
+                                               type(e).__name__, _tb.format_exc(limit=6))
+                try:
+                    agent._emit({"type": "llm_log", "level": "error",
+                                 "text": f"轮中断：{type(e).__name__}: {str(e)[:200]}"})
+                except Exception:
+                    pass
+            finally:
+                state["busy"] = False
+                try:
+                    agent.on_event({"type": "_done"})   # 通知前端 agent 空闲（解除 busy）；CLI _render_loop 收到打印输入提示
+                except Exception:
+                    pass
+    except BaseException as _be:
+        # worker 无声死亡诊断（2026-09-04·8103 拉起即退排查）：哨兵之外的任何退出（异常/
+        # SystemExit/线程内崩）都在这留 traceback——此前只剩"再见！"一行无迹可查。
+        print(f"\n[worker] ⚠️ 线程异常退出：{type(_be).__name__}: {_be}\n{_tb.format_exc(limit=8)}", flush=True)
+        raise
 
 
 def _merge_batch(batch):
@@ -531,9 +542,12 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
             # 无事件：检查 worker 是否退出 / 是否请求退出 / 是否该报心跳
             if quit_check and quit_check():
                 _clear_status()
+                print("\n[render_loop] 退出：quit_check（CLI 两段式 Ctrl+C）", flush=True)
                 break
             if not worker.is_alive() and event_q.empty():
                 _clear_status()
+                print(f"\n[render_loop] 退出：worker 线程已死亡（异常信息应见上方 [worker] 行；"
+                      f"若无则为止损哨兵）", flush=True)   # 8103 排查：区分死因
                 break   # worker 已退出且事件排空 → 主线程退出
             if state.get("busy") and state.get("started"):
                 elapsed = time.time() - state["started"]
@@ -548,6 +562,7 @@ def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval
             etype = e.get("type")
             if etype == "_quit":
                 _clear_status()
+                print("\n[render_loop] 退出：_quit 事件（CLI 两段式 Ctrl+C 的第二次）", flush=True)
                 break   # CLI 第二次 Ctrl+C：SIGINT 处理器塞入的退出事件 → 立即退出
             _clear_status()   # 有实际输出：先隐去状态行，避免穿插
             if etype == "user":

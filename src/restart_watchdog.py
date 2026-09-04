@@ -129,7 +129,12 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
         # -u：新进程 unbuffered——装配日志实时落盘（块缓冲会把输出困住几十分钟，
         # 事后无法判断新进程卡在哪个阶段）
         proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=cwd, env=env,
-                                stdout=lf, stderr=subprocess.STDOUT, **kwargs)
+                                stdout=lf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL,   # 切断隔代悬空 stdin（DETACHED 链上无效
+                                                            # handle 的传递是未定义行为——8103 拉起即退
+                                                            # 排查：排除 stdin 玄学变量；_stdin_thread 读
+                                                            # DEVNULL 得确定性 EOF → return，无副作用）
+                                **kwargs)
     log(f"新进程已拉起 pid={proc.pid}")
     # 4) 确认就绪：web 轮询 HTTP 200（装配 MCP/RAG 冷启动可超 90s——曾见 HF 联网探测挂起
     #    装配数分钟，故容忍 300s 且每 20s 报进度）；cli 确认 3s 内没秒退

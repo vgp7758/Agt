@@ -4,7 +4,6 @@
 
 ## 职责
 
-
 气泡交互目前有四个独立特性：
 
 | 特性 | 前端文件 | 上线 |
@@ -12,9 +11,7 @@
 | **系统消息展开/折叠**：系统气泡默认折叠、用户气泡默认展开，点击切换 | `static/editor.html` | v0.18.2 |
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
-| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a |
-
-配套：回答侧的「Agent 怎么知道这些渲染能力」由[回答风格提示](../architecture/context-engine.md#回答风格提示system-尾部写死追加2026-09-04用户提案commit-fe44b5a)（同日 fe44b5a，写死装配到第一条 system 尾部）解决——渲染端（本页）与告知端（装配层）同 commit 配套落地。
+| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -103,7 +100,6 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 
 ### 文本文件 → 预览抽屉（2026-09-04 · 二，commit fe44b5a，用户提案）
 
-
 用户提案（同日二阶段，commit fe44b5a）：除了图片/音频，**一般文本文件也应可引用**——点击气泡里的文本资产框，直接在抽屉里读内容，不用去文件系统翻。
 
 **渲染扩展**（`assetBoxHtml`，src/static/index.html）：扩展名分流从三分支变四路——
@@ -120,13 +116,13 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 ```
 ┌─ 📄 docs/gdd.md ────────────────────── ✕ ─┐  ← 顶栏固定：文件路径 + 关闭（不随内容滚动）
 │                                            │
-│   （textContent 纯文本渲染 · 滚动区）          │
+│   （hlCode 语法高亮渲染 · 滚动区）             │
 │                                            │
 └────────────────────────────────────────────┘
 ```
 
 - **无 fab 图标按钮**——与 spec/🐞日志/团队/后台四个抽屉不同，它**纯由气泡 markdown 资产点击触发**（低频入口不占图标位）
-- **textContent 渲染防 HTML 注入**（文件内容不可信，与 answer 转义同安全模型）；>300k 字符截断提示（防超大文件卡渲染）
+- **渲染演进**：初版 `textContent` 纯文本（防 HTML 注入，与 answer 转义同安全模型）→ 同日·四升级为 [hlCode 轻量语法高亮](#预览抽屉轻量语法高亮组合交替正则单遍扫描2026-09-04--四commit-cb01d70用户提问)（token 全 esc 后拼 span，安全模型等价）；>300k 字符截断提示 + >200k 降级纯文本双护栏（防超大文件卡渲染）
 - 文件内容经既有 `GET /api/asset`（workspace 沙箱）拉取——**后端零改动**，纯前端
 - **双向互斥**：打开它时关掉 spec/🐞/团队/后台四抽屉（drawer-push 40% 只让一份）；反向四个抽屉打开时也 `closeFilePreview()`；✕ / ESC 关闭，竖屏全屏
 
@@ -152,6 +148,32 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 - **可交互暗示**：CSS `cursor:copy` + hover 高亮（紫底 `#e0e7ff` / 深紫字 `#3730a3`）——与普通 code 的静态灰底区分开
 
 **验证（playwright 真页面全绿）**：两个 code span 渲染 + `data-v` 原文正确；URL code 仍是链接；点击后输入框 = 前文 + 空格 + 追加内容且聚焦 ✓；[工具表单发送即退](tool-form.md#发送即退表单模式2026-09-04commit-fd3d465用户提案)同轮验证。纯前端改动，Ctrl+F5 生效。
+
+### 预览抽屉轻量语法高亮：组合交替正则单遍扫描（2026-09-04 · 四，commit cb01d70，用户提问）
+
+用户提问：抽屉里纯文本渲染读代码不爽——能不能给关键字/注释/标签对着色？并担心「是不是要手写状态机、逻辑会不会重」。
+
+**裁决：不需要手写状态机**——正则引擎本身就是状态机。把全部 token 类型拼成**一个组合交替正则**（分支顺序：docstring→注释→字符串→数字→关键字→标签），一次 `exec` 循环单遍扫完（O(n)）；最左优先 + 分支顺序天然保优先级（字符串先于其内部的 `#` 被整体吃掉，不会截断错着色）。~80 行零依赖，commit `cb01d70`。
+
+**实现**（`_HL_LANGS` 惰性初始化 + `hlCode(txt, ext)`，src/static/index.html；`openFilePreview` 渲染从 `body.textContent=txt` 改为 `body.innerHTML=hlCode(txt, ext)`）：
+
+| token 类 | CSS 类 / 色（VS Code Light） | 覆盖 |
+|---|---|---|
+| 注释 | `.hl-c` `#6a9955` | `#`（py/sh/yaml…）、`//`+`/* */`（js/ts/cs/java/c/go…）、`--`（sql）、`<!-- -->`（html/xml） |
+| 字符串 | `.hl-s` `#a31515` | `'…'`/`"…"`/`` `…` `` + 三引号 docstring **整体着色** |
+| 数字 | `.hl-n` `#098658` | 十进制 / 小数 / `0x` 十六进制 |
+| 关键字 | `.hl-k` `#0033b3` | 按语言族分表（C 系 91 词 / SQL 43 词） |
+| 标签 | `.hl-t` `#800000` | `<tag` / `>` / 自闭合对（html/xml/vue/svg） |
+
+- **安全模型不变**：token 与普通文本全部 esc 后再拼 span——innerHTML 的注入面与原 textContent 等价（「文件内容不可信须转义」纪律不变，见[预览抽屉安全模型](#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)）
+- **双护栏**：>200k 字符降级纯文本；>300k 截断提示（fe44b5a 原有）；md/txt/log 无 token 本就纯文本不受影响
+- json/yaml 配置文件：键值字符串 + 数字着色
+
+**调试实锤两 bug（都修）**：
+1. `openFilePreview` 里 `ext` 未定义——变量原本只在 `assetBoxHtml` 里提取，预览入口拿不到；改从 path 现场提取扩展名
+2. **alternation 分支不包捕获组 → `m[i]` 全 undefined**：token 明明命中但组判定全空、cls 全落默认色（playwright 截图肉眼发现）；修复 = 每分支整体包一层 `(...)`，组号 = 分支顺序 = 左括号顺序（`groups[i]` 同步登记组号→类映射，不依赖固定序号）
+
+**验证（playwright 真页面）**：py 样本 24 关键字 / 8 字符串（docstring 整体 ✓）/ 9 数字；html 8 标签 + 注释；json 键值；js 行/块注释——全绿后清理测试残留（`_hl_demo.py`）。实测 140k 字符高亮 30ms。纯前端改动，Ctrl+F5 生效。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

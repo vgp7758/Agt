@@ -396,3 +396,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 - **code span 可点击：点击追加到输入框（2026-09-04，commit `fd3d465`，用户提案）**：answer 里反引号包裹的命令/文件名/参数（非 URL）渲染为 `code.code-append`（hover 高亮 + copy 光标）——点击**空格分隔追加到输入框末尾 + 聚焦** + 派发 input 事件（自适应高度/发送按钮态），document 级委托一处覆盖流式/历史/子 Agent 分页；URL 整串 code span 保持链接态（`_URL_RE` 分流），`inlineRich` 与 `inlineCode` 双管线收敛到 `codeUrlHtml`/`_codeSpanHtml` 三件套单源；内容 esc 进 `data-v` 属性、点击读回自动解码——见 [bubble-interaction · code span 可点击化](features/bubble-interaction.md#code-span-可点击化url-链接--点击追加输入框2026-09-04--三commit-fd3d465用户提案)
 - **工具表单发送即退**（同 commit，纯前端）：`sendToolCall()` 发出 `/call` 后直接 `exitToolForm()` 恢复普通输入框——手动调用低频，发完该回对话，不用再手动点 ✕——见 [tool-form · 发送即退](features/tool-form.md#发送即退表单模式2026-09-04commit-fd3d465用户提案)
 
+## 快速事实增补（2026-09-04 · 七 · 预览抽屉轻量语法高亮）
+
+- **预览抽屉轻量语法高亮（2026-09-04，commit `cb01d70`，用户提问「要不要手写状态机？」）**：文件预览抽屉从 textContent 纯文本升级为 `hlCode()` 着色——**不手写状态机**，组合交替正则（docstring→注释→字符串→数字→关键字→标签）单遍 O(n) 扫描，~80 行零依赖；VS Code Light 五色（注释 `#6a9955`/字符串 `#a31515`/数字 `#098658`/关键字 `#0033b3`/标签 `#800000`），C 系 91 词 + SQL 43 词关键字表、三引号 docstring 整体着色、html/xml 标签对；token 全 esc 后拼 span，安全模型与 textContent 等价；>200k 降级纯文本 + >300k 截断双护栏，140k 字符实测 30ms。调试揪出两 bug：`openFilePreview` 的 `ext` 未定义（改从 path 现提取）+ **alternation 分支不包捕获组致 `m[i]` 全 undefined、token 命中却全落默认色**（每分支包 `(...)`，组号=分支顺序）——见 [bubble-interaction · 预览抽屉语法高亮](features/bubble-interaction.md#预览抽屉轻量语法高亮组合交替正则单遍扫描2026-09-04--四commit-cb01d70用户提问)
+

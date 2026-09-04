@@ -391,3 +391,8 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **团队看板「🔗 专属页」链接新页签打开（2026-09-04，commit 59f9140，用户请求）**：Agent 团队抽屉里本机 Agent 条目的专属页链接此前是同页跳转（点开子 Agent 页会替换当前主 Agent 视图）——补 `target="_blank" rel="noopener"` 新页签打开；专属页靠 URL 路由落位 + sessionStorage 按页签隔离，原页签交互目标不变、两边并行。与远程实例分组链接（本就 `_blank`）对齐，playwright 6 链接验证全过。见 [user-interaction · 专属页](features/user-interaction.md)。
 
+## 快速事实增补（2026-09-04 · 六 · code span 点击追加输入框 + 工具表单发送即退）
+
+- **code span 可点击：点击追加到输入框（2026-09-04，commit `fd3d465`，用户提案）**：answer 里反引号包裹的命令/文件名/参数（非 URL）渲染为 `code.code-append`（hover 高亮 + copy 光标）——点击**空格分隔追加到输入框末尾 + 聚焦** + 派发 input 事件（自适应高度/发送按钮态），document 级委托一处覆盖流式/历史/子 Agent 分页；URL 整串 code span 保持链接态（`_URL_RE` 分流），`inlineRich` 与 `inlineCode` 双管线收敛到 `codeUrlHtml`/`_codeSpanHtml` 三件套单源；内容 esc 进 `data-v` 属性、点击读回自动解码——见 [bubble-interaction · code span 可点击化](features/bubble-interaction.md#code-span-可点击化url-链接--点击追加输入框2026-09-04--三commit-fd3d465用户提案)
+- **工具表单发送即退**（同 commit，纯前端）：`sendToolCall()` 发出 `/call` 后直接 `exitToolForm()` 恢复普通输入框——手动调用低频，发完该回对话，不用再手动点 ✕——见 [tool-form · 发送即退](features/tool-form.md#发送即退表单模式2026-09-04commit-fd3d465用户提案)
+

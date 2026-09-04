@@ -63,7 +63,6 @@
 
 ### 三种语法 → 三种渲染
 
-
 | 气泡里写 | 渲染成 |
 |---|---|
 | `<https://xxx.xxx.cn/>` | autolink 蓝色链接（`a.md-link`，新标签打开） |
@@ -71,7 +70,9 @@
 | `[!主题曲](assets/audios/theme.wav)` | **音频框**：标题 + `<audio controls>` 播放器 |
 | `[!设计文档](docs/gdd.md)` | **文本资产框**（2026-09-04 · 二，commit fe44b5a）：📄 标题框可点击 → 打开[文件预览抽屉](#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)；覆盖 40 种文本扩展名（见下节） |
 | `[文字](https://...)` | 普通外链（顺带支持的标准 markdown 语法） |
-| `` `<https://a.b>` `` | code span 内原样——**优先保护，不解析**（防误伤） |
+| `` `https://a.b` `` | code span **URL 整串 → 链接**（`a.md-link` 包 code，新标签打开） |
+| `` `pip install -U agt-agent` `` | code span 非 URL → **可点击追加**：点一下把内容追加到消息输入框末尾并聚焦（2026-09-04 · 三，commit fd3d465，见[下节](#code-span-可点击化url-链接--点击追加输入框2026-09-04--三commit-fd3d465用户提案)） |
+| `` `<https://a.b>` `` | code span 优先保护——内部 autolink / `[!…]` 资源语法不解析（防误伤）；仅按「URL 整串 / 其余」二分决定链接态还是可点击追加态 |
 
 > 资产引用按扩展名分流在 `assetBoxHtml(title, path)`：初版（4baa66a）图 / 音 / 其它→普通链接三分支；二阶段（fe44b5a）把文本扩展名单列成**可点击资产框**（初版里文本文件只会渲染成普通链接）。
 
@@ -79,8 +80,9 @@
 
 - `inlineRich(t)` 替代原 `inlineCode(esc(...))`——段落 `flush()` 与表格 `cell()` 两个消费点全部换上
 - **占位符保护**：先用 `\x02N\x02` 把特殊片段摘进 hold 数组，全文 esc 后统一还原。否则两个病：esc 把 `<` `>` 转义成实体后正则匹配不到 autolink/资源引用；已生成的 HTML 会被二次转义显示成源码
-- 处理顺序：① code span 优先（内容 **esc——LLM 输出不可信**，初版漏了 esc，验证轮补上）→ ② autolink → ③ `[!标题](相对路径)` 资源引用 → ④ 普通外链
-- `assetBoxHtml(title, path)` 按扩展名分流：图（png/jpg/jpeg/gif/webp/svg/bmp/avif）→ 图框；音（wav/mp3/ogg/oga/m4a/aac/flac/opus）→ 音频框；其它扩展 → 普通链接。src 统一 `/api/asset?path=<encodeURIComponent(path)>`
+- 处理顺序：① code span 优先（内容 **esc——LLM 输出不可信**，初版漏了 esc，验证轮补上；2026-09-04 · 三起按 `_URL_RE` 分流：URL 整串 → `codeUrlHtml` 链接 / 其余 → `_codeSpanHtml` 可点击追加）→ ② autolink → ③ `[!标题](相对路径)` 资源引用 → ④ 普通外链
+- `assetBoxHtml(title, path)` 按扩展名分流：图（png/jpg/jpeg/gif/webp/svg/bmp/avif）→ 图框；音（wav/mp3/ogg/oga/m4a/aac/flac/opus）→ 音频框；40 种文本扩展 → 📄 可点击资产框（·二）；其它扩展 → 普通链接。src 统一 `/api/asset?path=<encodeURIComponent(path)>`
+- **code span 三件套单源（·三，commit fd3d465）**：`_URL_RE` / `codeUrlHtml` / `_codeSpanHtml` 由 `inlineRich` 与独立 `inlineCode`（普通外链文本等非 rich 场景）双管线共享——URL→链接与点击追加两种行为全场景一致
 
 ### 后端：GET /api/asset（src/server.py）
 
@@ -131,6 +133,25 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 **验证（playwright 真页面全链路）**：写 demo md → 回答里引用它 → 📄 资产框出现 → 点击 → 抽屉打开、标题=路径、内容经 /api/asset 加载显示 → ✕/ESC 均可关 → drawer-push 正确清除 → 与其它抽屉互斥正常。
 
 ⚠️ 生效：本节为纯前端改动，Ctrl+F5 即生效（/api/asset 路由 4baa66a 已带）；同 commit 的[回答风格提示](../architecture/context-engine.md#回答风格提示system-尾部写死追加2026-09-04用户提案commit-fe44b5a)属装配层，需 `/restart`。
+
+### code span 可点击化：URL 链接 + 点击追加输入框（2026-09-04 · 三，commit fd3d465，用户提案）
+
+用户提案：回答里反引号包裹的文本（命令 / 文件名 / 参数）常需复用到下一条消息——**点一下直接追加到消息输入框末尾并聚焦**，免手抄（与上一条「发送即退表单」同 commit）。
+
+**code span 分流**（`_URL_RE` + `codeUrlHtml` + `_codeSpanHtml` 三件套，src/static/index.html）：
+
+| code span 内容 | 渲染 | 点击行为 |
+|---|---|---|
+| URL 整串（http/https/ftp，`_URL_RE`） | `<a class="md-link" target=_blank>` 包 `<code>`（链接态） | 新标签打开 |
+| 其余（命令 / 文件名 / 参数…） | `<code class="code-append" data-v="…" title="点击追加到输入框">` | **追加输入框末尾 + 聚焦** |
+
+- **追加语义**：输入框已有内容 → 先去尾白再**空格分隔**追加（不打断已写的话）；为空 → 直接填入。追加后 `focus()` + 派发 `input` 事件（触发 textarea 自适应高度与发送按钮态）+ toast「已追加到输入框」
+- **事件委托**：document 级监听 `closest('code.code-append')`——流式渲染 / 历史渲染 / 子 Agent 分页里的 code span 一处全覆盖，无需逐个绑
+- **esc 往返**：`data-v` 存**已 esc 原文**（属性注入安全），点击时 `dataset.v` 由 innerHTML 读取自动解码回原文——安全与正确性兼得（「LLM 输出不可信须转义」纪律不变）
+- **双管线收敛**：URL→链接是同日早前迭代先行（inlineRich 里）；本轮 `inlineCode`（独立路径：外链文本等非 rich 场景）也改走同一三件套——两种 code span 行为全场景单源一致
+- **可交互暗示**：CSS `cursor:copy` + hover 高亮（紫底 `#e0e7ff` / 深紫字 `#3730a3`）——与普通 code 的静态灰底区分开
+
+**验证（playwright 真页面全绿）**：两个 code span 渲染 + `data-v` 原文正确；URL code 仍是链接；点击后输入框 = 前文 + 空格 + 追加内容且聚焦 ✓；[工具表单发送即退](tool-form.md#发送即退表单模式2026-09-04commit-fd3d465用户提案)同轮验证。纯前端改动，Ctrl+F5 生效。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

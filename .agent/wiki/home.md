@@ -400,3 +400,11 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **预览抽屉轻量语法高亮（2026-09-04，commit `cb01d70`，用户提问「要不要手写状态机？」）**：文件预览抽屉从 textContent 纯文本升级为 `hlCode()` 着色——**不手写状态机**，组合交替正则（docstring→注释→字符串→数字→关键字→标签）单遍 O(n) 扫描，~80 行零依赖；VS Code Light 五色（注释 `#6a9955`/字符串 `#a31515`/数字 `#098658`/关键字 `#0033b3`/标签 `#800000`），C 系 91 词 + SQL 43 词关键字表、三引号 docstring 整体着色、html/xml 标签对；token 全 esc 后拼 span，安全模型与 textContent 等价；>200k 降级纯文本 + >300k 截断双护栏，140k 字符实测 30ms。调试揪出两 bug：`openFilePreview` 的 `ext` 未定义（改从 path 现提取）+ **alternation 分支不包捕获组致 `m[i]` 全 undefined、token 命中却全落默认色**（每分支包 `(...)`，组号=分支顺序）——见 [bubble-interaction · 预览抽屉语法高亮](features/bubble-interaction.md#预览抽屉轻量语法高亮组合交替正则单遍扫描2026-09-04--四commit-cb01d70用户提问)
 
+## 快速事实增补（2026-09-04 · 八 · 语法高亮标签配色调整 + 语言分组规则）
+
+- **语法高亮标签配色调整 + 语言分组规则澄清**（commit 96873e8）：预览抽屉 `.hl-t` 标签色由 `#800000` 褐红改**青 `#0e7490`**（与字符串暗红 `#a31515` 同属暗红系难分辨，用户观察提冷色）；确认 `hlCode` 按**文件后缀分 5 组语言配置**（`#` 系 / `//` 系 / `--` 系 sql / 标签系 html-xml-vue-svelte-svg / 无高亮 md-txt-log-csv），每组独立注释风格 + 关键字表，正则只拼本组分支——playwright 计算样式实测四色分离。详见 [气泡交互 · 语法高亮配色调整](features/bubble-interaction.md#语法高亮配色调整--语言分组规则澄清2026-09-04--五commit-96873e8用户观察)。
+
+## 快速事实增补（2026-09-04 · 九 · 反馈通道探针过滤）
+
+- **飞书探针骚扰定性 + 治理**：每次 PyPI 发布后作者飞书收到 `/tmp/pp-fuzz/probe` 推送——定性为订阅 PyPI 新版本的自动化安全扫描器（gvisor 沙箱 + fuzz 探针字面内容 + 无联系方式 + 时机同步，四证齐全），借 /feedback 真实 POST 测出网通道。`src/feedback.py` 新增 `_looks_like_probe()` 保守启发式（留联系方式/含空格句子/中文短反馈→真人放行；无空格纯路径/ASCII 超短碎片→拦截），探针仅本地落盘不推送，commit b6d3ea2。详见 [feedback 通道](features/feedback.md)。
+

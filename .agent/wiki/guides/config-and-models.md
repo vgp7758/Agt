@@ -95,6 +95,34 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **生效**：后端 /restart + 前端 Ctrl+F5；README 已进 git，下次发版随包上线。
 
+### flatkey 聚合中转入库：77 模型全量实测与短超时误判补录（2026-09，run_python 后台长测）
+
+**背景**：用户在 preset 新增第 6 家 provider **flatkey**（聚合中转——一把 key 全家桶：claude / deepseek / gemini / glm / gpt / kimi / qwen / minimax / gemma / macaron 十大家族，免各家分别充值），主 Agent 负责**全量实测入库**：首批快测连通入库 + run_python 后台长测补录 3 个，合计 **77 个对话模型**全部实测连通，条目 `fk-*` 带 `desc`（家族定位 + 响应速度提示）与 `thinking` 参数。
+
+**核心教训：短超时快测会误杀「慢但可用」的中转模型**：
+
+- 首批探测用 20~45s 超时 → glm-5.3 / gpt-5.6-terra / gpt-6-astra 被判「超时不可用」；
+- 改用 **run_python 后台任务（150s 长超时）重测** → 三个全部连通：glm-5.3 实际 21.7s（中转首 token ~20s 属正常水位）、gpt-5.6-terra 8.2s（快测时偶发拥堵）、gpt-6-astra 35.6s（慢但通）；
+- **方法论**：聚合中转端点的首 token 延迟天然高于官方直连（排队/路由），探测可用性必须留足长尾余量——判「不可用」前先用后台长测区分「是死是慢」。
+
+**补录 3 条**（desc 带速度标注，供人类用户选型）：
+
+| 条目 | model | 长测 | desc 要点 |
+|---|---|---|---|
+| fk-glm-5.3 | glm-5.3 | ✅ 21.7s | GLM-5.3 智谱旗舰，中转首 token 较慢 ~20s |
+| fk-gpt-5.6-terra | gpt-5.6-terra | ✅ 8.2s | GPT-5.6 Terra，OpenAI 旗舰 |
+| fk-gpt-6-astra | gpt-6-astra | ✅ 35.6s | GPT-6 Astra，OpenAI 最新旗舰，响应较慢 |
+
+**确认排除清单**（避免死条目入库）：
+
+| model | 排除原因 |
+|---|---|
+| glm-5 | 150s 长测仍超时——确认不可用 |
+| claude-opus-5 | 仅流式可通（非流式空 choices）——agt 主调用非流式，不可用 |
+| claude-sonnet-4-6 | Unknown——端点不存在该模型 |
+
+**定位与生效**：官方直连（z.ai / deepseek-official 等）仍是主力更优解（响应快），flatkey 的价值在**一把 key 全家桶**；preset 只读合并视图，`/restart` 后 WebUI 模型下拉框即见 flatkey 全系列（用户选中走 onboarding 落地自身 key）。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

@@ -412,3 +412,9 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **/restart 拉起即退排查（commit 6e08dae，用户报告 8103）**：现象「restart 后无法拉起、需手动起实例」——日志还原真相是**拉起就绪（HTTP 200）15 秒后新进程无声退出**（worker 线程死亡触发主循环退出，旧代码退出零留痕只剩「再见！」）；18103 同构复现两次均存活 → 偶发/时序敏感，非确定性 bug。修复：worker 哨兵到达行（含队列残留）+ `BaseException` 外层 traceback + render_loop 三退出点各打原因（src/chat.py），watchdog 拉起 `stdin=DEVNULL` 排除隔代 DETACHED 链悬空 handle（src/restart_watchdog.py）。机制澄清：watchdog 就绪即撤离、新进程死掉无人再拉，手动实例只是顶替占位。下次复发看 `~/.agt/restart-web-{port}.log` 诊断行直接定死因——见 [ops · 拉起即退](guides/ops.md#restart-拉起即退就绪后新进程无声退出三层死因留痕--stdin-devnull2026-09-04commit-6e08dae用户报告)
 
+## 快速事实增补（2026-09 · flatkey 中转 77 模型入库与短超时误判补录）
+
+## 快速事实增补（2026-09 · flatkey 中转 77 模型入库与短超时误判补录）
+
+- **models.preset.json 新增第 6 家 provider `flatkey`（聚合中转）：77 个对话模型全量实测入库**（claude/deepseek/gemini/glm/gpt/kimi/qwen/minimax/gemma/macaron 十大家族，一把 key 全家桶），条目 fk-* 带 desc（家族定位 + 响应速度）。**方法论教训**：20~45s 短超时快测误杀 3 个「慢但可用」的中转模型（glm-5.3 实际 21.7s / gpt-5.6-terra 8.2s / gpt-6-astra 35.6s），run_python 后台 150s 长测补录——中转端点首 token 天然慢于官方直连，判「不可用」前先区分「是死是慢」；确认排除：glm-5（150s 仍超时）/ claude-opus-5（仅流式可通，agt 主调用非流式）/ claude-sonnet-4-6（不存在）。/restart 后下拉即见——见 [config-and-models · flatkey 入库](guides/config-and-models.md#flatkey-聚合中转入库77-模型全量实测与短超时误判补录2026-09run_python-后台长测)
+

@@ -2977,7 +2977,11 @@ function onWSMessage(ev){
       const _hk = m.hook || '';
       const _grps = (window._hookGrp = window._hookGrp || {});
       let g = _grps[_hk];
-      if(!g || !g.head || !g.head.isConnected){
+      // 组复用条件（修复 2026-09-06）：除 isConnected 外还须【同一轮】（g.turn === curTurn）——
+      // 旧组 DOM 留在历史轮的过程区里永不销毁（isConnected 恒 true），此前跨轮复用导致
+      // 后续每轮的钩子执行行全 append 进第一次触发位置的旧组（用户实锤：折叠进第一次的位置）。
+      // curTurn 为 newTurn/renderHistTurn 每轮新建的对象引用——引用比较即可区分轮次。
+      if(!g || !g.head || !g.head.isConnected || g.turn !== curTurn){
         const wrap = document.createElement('div'); wrap.className = 'ev auto';
         const head = document.createElement('div'); head.className = 'tf-head'; head.style.color = '#7c3aed';
         const box = document.createElement('div'); box.className = 'tf-body'; box.style.display = 'none';
@@ -2985,7 +2989,7 @@ function onWSMessage(ev){
           box.style.display = open ? 'none' : 'block'; g.upd(); };
         wrap.appendChild(head); wrap.appendChild(box);
         curTurn.traceBox.appendChild(wrap);
-        g = _grps[_hk] = {head, box, total: 0, done: 0, failed: 0, t0: Date.now(), timer: null, upd: null};
+        g = _grps[_hk] = {head, box, total: 0, done: 0, failed: 0, t0: Date.now(), timer: null, upd: null, turn: curTurn};
         g.upd = ()=>{
           if(!g.head || !g.head.isConnected) return;
           const run = (g.done + g.failed) < g.total;
@@ -3007,13 +3011,15 @@ function onWSMessage(ev){
         rw.onclick = ()=>window.open('/wf/monitor?run=' + encodeURIComponent(m.run_id), '_blank');
       }
       g.box.appendChild(rw);
-      (window._runningWf = window._runningWf || new Map()).set(_hk + '::' + m.name, {el: rw, grp: g, t0: Date.now()});
+      // key 加 run_id（修复 2026-09-06）：跨轮同名钩子工作流（每轮都跑的 wiki_auto_query 等）
+      // 此前 key=hook::name 跨轮冲突——后轮 start 覆盖前轮 ent，异步完成时更新错行
+      (window._runningWf = window._runningWf || new Map()).set(_hk + '::' + m.name + '::' + (m.run_id || ''), {el: rw, grp: g, t0: Date.now()});
       g.upd(); scrollBottom();
       break;
     }
     case 'auto_wf': {
       // 单工作流完成：行内更新（长文本行内二级折叠）+ 组头计数推进
-      const key = (m.hook || '') + '::' + m.name;
+      const key = (m.hook || '') + '::' + m.name + '::' + (m.run_id || '');
       const ent = (window._runningWf || new Map()).get(key);
       const dur = ent ? Math.round((Date.now() - ent.t0) / 1000) : null;
       const total = dur != null ? '（' + dur + 's）' : '';
@@ -3034,7 +3040,9 @@ function onWSMessage(ev){
         addTrace('auto done', '✅ ' + wfHookTag(m) + '工作流「' + m.name + '」完成' + total + '：' + m.text);
       }
       (window._runningWf || new Map()).delete(key);
-      const _g = (window._hookGrp || {})[(m.hook || '')];
+      // 组头推进优先 ent.grp（精确归属——完成事件晚于建组到达，即使已跨轮/新轮建了新组，
+      // ent.grp 仍指向它自己的组；退化取 _hookGrp[hook]（兼容无 ent 的漏事件））
+      const _g = (ent && ent.grp) || (window._hookGrp || {})[(m.hook || '')];
       if(_g && _g.head && _g.head.isConnected){
         _g.done++;
         if(_g.done + _g.failed >= _g.total && _g.timer) clearInterval(_g.timer);
@@ -3043,7 +3051,7 @@ function onWSMessage(ev){
       break;
     }
     case 'auto_wf_error': {
-      const key = (m.hook || '') + '::' + m.name;
+      const key = (m.hook || '') + '::' + m.name + '::' + (m.run_id || '');
       const ent = (window._runningWf || new Map()).get(key);
       const dur = ent ? Math.round((Date.now() - ent.t0) / 1000) : null;
       const total = dur != null ? '（' + dur + 's 后失败）' : '';
@@ -3055,7 +3063,7 @@ function onWSMessage(ev){
         addTrace('auto failed', '❌ ' + wfHookTag(m) + '工作流「' + m.name + '」失败' + total + '：' + m.text);
       }
       (window._runningWf || new Map()).delete(key);
-      const _g = (window._hookGrp || {})[(m.hook || '')];
+      const _g = (ent && ent.grp) || (window._hookGrp || {})[(m.hook || '')];   // 同 auto_wf：精确归属
       if(_g && _g.head && _g.head.isConnected){
         _g.failed++;
         if(_g.done + _g.failed >= _g.total && _g.timer) clearInterval(_g.timer);

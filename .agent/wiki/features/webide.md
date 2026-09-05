@@ -8,19 +8,21 @@
 
 拉起/复用 WebIDE，语义按序：
 
-1. **复用优先**：探测 8443 已活（HTTP 可达且 body > 500 字符——VS Code 组件下载占位页仅 146 字符，就绪工作台 4.5KB）→ 直接返回 payload，不重复拉起。
-2. **未活则拉起**：`code serve-web --host 0.0.0.0 --port 8443 --without-connection-token --accept-server-license-terms`
+1. **端口潜规则（用户 2026-09-06）**：WebIDE 端口 = **当前 WebUI 端口 + 30000**——从 `request` 的 Host 头解析（`agt-web --port` 直接决定），多实例各跑各的 serve-web、互不抢固定口。Host 头无端口（异常兜底）→ 38000。
+2. **复用优先**：探测动态端口已活（HTTP 可达且 body > 500 字符——VS Code 组件下载占位页仅 146 字符，就绪工作台 4.5KB）→ 直接返回 payload，不重复拉起。
+3. **未活则拉起**：`code serve-web --host 0.0.0.0 --port {webui_port+30000} --without-connection-token --accept-server-license-terms`
    - 有 agent：`_agent.services.start("webide", cmd)` **纳管**——看板可见、可停止、退出码可观测；同名条目在但探测不活（僵死/未起完）→ 先 `stop` 再 `start`；
    - 无 agent：独立 `subprocess.Popen`（`CREATE_NO_WINDOW`）兜底。
-3. **就绪等待**：150s 轮询（3s 间隔）探测，就绪 → `ready=true`；超时 → `ready=false` + hint（首次启动 VS Code 下载 server 组件，一次性 ~1 分钟，磁盘缓存后重启秒开；serve-web 下载页**自带自动刷新**，页签开着即可）。
+4. **就绪等待**：150s 轮询（3s 间隔）探测，就绪 → `ready=true`；超时 → `ready=false` + hint（首次启动 VS Code 下载 server 组件，一次性 ~1 分钟，磁盘缓存后重启秒开；serve-web 下载页**自带自动刷新**，页签开着即可）。
 
 ## 响应 payload（_ide_payload）
 
 ```json
-{"ok": true, "port": 8443, "ready": true,
+{"ok": true, "port": 39000, "ready": true,
  "folder_uri": "file:///D:/AI_Usings/Agt"}
 ```
 
+- `port` **动态**：当前 WebUI 端口 + 30000（例：WebUI 9000 → 39000、8000 → 38000、9100 → 39100；Host 头无端口兜底 38000）；
 - `folder_uri` 用 `file:///` 形态（serve-web `?folder=` 参数约定）；
 - 未就绪时附加 `hint` 字段（前端 toast 直接展示）。
 
@@ -39,8 +41,9 @@
 ## 注意事项
 
 - 首次启动要下载 server 组件（一次性 ~1 分钟，磁盘缓存后重启秒开）；150s 超时返回 `ready=false` **不是失败**——下载页自动刷新。
-- 端口固定 8443、命令固定 `code serve-web`，**未做成 settings 可配**（可选增强：端口/命令可配、支持 code-server）。
-- 手机竖屏触屏体验受 VS Code Web 本身限制（VS Code 侧的事）。
+- **端口是潜规则（WebUI 端口 + 30000），不是 settings 可配**；命令固定 `code serve-web`（可选增强：命令可配、支持 code-server）。
+- **手机现状维持**（用户 2026-09-06 裁定「手机就忍了吧，能打开能看就不错了」）：serve-web 监听 0.0.0.0 局域网可达，但竖屏触屏体验受 VS Code Web 本身限制（VS Code 侧的事，不做额外适配）。
+- 端口从 Host 头解析：本实例 9000 → WebIDE 39000；改 `agt-web --port` 后自动跟随，多实例互不抢口。
 
 ## 相关页面
 

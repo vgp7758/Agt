@@ -1806,16 +1806,31 @@ function toggleFabDock(force){
 async function openWebIde(){
   const b = document.getElementById('btnIde');
   if(!b) return;
-  b.disabled = true; const old = b.textContent; b.textContent = '⏳ IDE…';
+  b.disabled = true; const old = b.textContent; b.textContent = '⏳';
+  // 端口潜规则前端同款（fetch 超时/失败时的退回口——正常路径用后端返回的实际口，可能因端口被占偏移 +1..+5）
+  const curPort = parseInt(location.port || '8000', 10);
+  const fallbackUrl = `http://${location.hostname}:${curPort + 30000}/`;
+  // 12s 超时（后端等待上限同为 12s——此前 150s 长轮询把按钮卡成沙漏两分半，用户实锤）
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 12000);
   try{
-    const r = await fetch('/api/ide/open', {method:'POST'});
+    const r = await fetch('/api/ide/open', {method:'POST', signal: ctl.signal});
     const d = await r.json();
-    // 用 location.hostname 而非 127.0.0.1：手机/其它设备访问时 serve-web 监听 0.0.0.0 可达
-    // 工作区由 serve-web --default-folder 直开（勿用 ?folder= 参数——1.114 会误路由成远程代理会话）
-    const url = `http://${location.hostname}:${d.port}/`;
-    window.open(url, '_blank');
-    toast(d.ready ? '📝 已打开 WebIDE（新页签）。界面文字/图标若显示异常：Ctrl+Shift+P → Configure Display Language → English（一次即好）' : '⏳ '+ (d.hint || 'VS Code Server 组件首次下载中，页签会自动刷新'));
-  }catch(e){ toast('❌ 打开 IDE 失败：'+e.message); }
+    clearTimeout(timer);
+    if(d.ok){
+      const url = `http://${location.hostname}:${d.port}/`;
+      window.open(url, '_blank');
+      toast(d.ready ? '📝 已打开 WebIDE（新页签）。界面文字/图标若显示异常：Ctrl+Shift+P → Configure Display Language → English（一次即好）'
+                    : '⏳ ' + (d.hint || 'VS Code Server 组件初始化中，页签会自动刷新'));
+    } else {
+      toast('❌ ' + (d.error || '无法启动 WebIDE'));
+    }
+  }catch(e){
+    clearTimeout(timer);
+    // 超时/网络异常：退回潜规则口乐观打开（后端可能仍在拉起）
+    window.open(fallbackUrl, '_blank');
+    toast('⏳ WebIDE 正在后台启动（超时乐观打开）——若页签空白请稍后刷新');
+  }
   b.textContent = old; b.disabled = false;
 }
 function addModel(){

@@ -966,28 +966,45 @@ async def api_dash():
 
 @app.post("/api/ide/open")
 async def api_ide_open(request: Request):
-    """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：控件栏按钮 → 新页签打开工作区。
-    端口潜规则（用户 2026-09-06）：WebIDE 端口 = 当前 WebUI 端口 + 30000（从 Host 头解析——agt-web
-    的 --port 直接决定，避免多实例抢固定 8443）。复用优先：探测已活直接返回；否则 code serve-web
-    后台拉起（agent.services 纳管——看板可见可停止；无 agent 时独立 Popen 兜底）。就绪判定：HTTP
-    可达且 body > 500 字符（下载占位页仅 146）。首次下载 server 组件（一次性 ~1 分钟，磁盘缓存后
-    重启秒开）——150s 未就绪返回 ready=false + 提示（serve-web 下载页自带自动刷新）。"""
+    """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：dock 图标 → 新页签打开工作区。
+    端口潜规则：当前 WebUI 端口 + 30000；被占（WinNAT 隐形保留 / serve-web 孤儿进程——code-tunnel
+    启动器被杀后 node 子进程继承 socket，bind 10048 且 netstat owner 指向已退 pid，实锤
+    2026-09-06：39000 被 pid 21512「幽灵 LISTENING」占住）时向后扫 +1..+5 选可 bind 口。
+    等待上限 12s（首次下载组件不阻塞交互——返回 ready=false + hint，组件缓存后秒起；
+    此前 150s 长轮询导致按钮卡⌛两分半、页签迟迟不弹——用户实锤）。"""
     import urllib.request as _ur
+    import socket as _sk
     try:
         _host = request.headers.get("host") or ""
-        PORT = int(_host.rsplit(":", 1)[1]) + 30000 if ":" in _host else 38000
+        base_port = int(_host.rsplit(":", 1)[1]) + 30000 if ":" in _host else 38000
     except Exception:
-        PORT = 38000
+        base_port = 38000
 
-    def _probe():
+    def _probe(port):
         try:
-            with _ur.urlopen(f"http://127.0.0.1:{PORT}/", timeout=3) as r:
-                return len(r.read() or b"") > 500
+            with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
+                return len(r.read() or b"") > 500   # 下载占位页仅 146 字符
         except Exception:
             return False
 
-    if _probe():
-        return _ide_payload(True, PORT)
+    def _bindable(port):
+        s = _sk.socket()
+        try:
+            s.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
+    # ① 潜规则口已有活服务 → 直接复用（服务在听则不可 bind 但可用，probe 优先于 bind 判定）
+    if _probe(base_port):
+        return _ide_payload(True, base_port)
+    # ② 选口：潜规则口可 bind 用它；被占（隐形保留/孤儿 socket）向后扫 +1..+5
+    PORT = next((p for p in [base_port + i for i in range(6)] if _bindable(p)), None)
+    if PORT is None:
+        return {"ok": False, "error": f"端口 {base_port}..{base_port + 5} 均被占用且无可复用服务"
+                f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
     # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
     # "远程代理"会话，标签页名变成 l10n 字面量如「不受支持的断点的图标。」，用户实锤）
     cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} --without-connection-token '
@@ -995,7 +1012,7 @@ async def api_ide_open(request: Request):
     if _agent is not None:
         try:
             r = _agent.services.start("webide", cmd)
-            if "已存在" in str(r):   # 同名条目在但探测不活（僵死/未起完/端口因 --port 变化失效）——先清再拉
+            if "已存在" in str(r):   # 同名条目但探测不活（上次失败已退/端口已变）——重建
                 try:
                     _agent.services.stop("webide")
                     _agent.services.start("webide", cmd)
@@ -1008,10 +1025,10 @@ async def api_ide_open(request: Request):
         _sp.Popen(cmd, shell=True,
                   creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
     t0 = time.time()
-    while time.time() - t0 < 150:
-        if _probe():
+    while time.time() - t0 < 12:   # 12s 上限：非首次秒起；首次下载交给页签自动刷新，不阻塞按钮
+        if _probe(PORT):
             return _ide_payload(True, PORT)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
     return _ide_payload(False, PORT)
 
 

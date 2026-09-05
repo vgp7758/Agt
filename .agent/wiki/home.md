@@ -414,7 +414,9 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 ## 快速事实增补（2026-09 · flatkey 中转 77 模型入库与短超时误判补录）
 
-## 快速事实增补（2026-09 · flatkey 中转 77 模型入库与短超时误判补录）
-
 - **models.preset.json 新增第 6 家 provider `flatkey`（聚合中转）：77 个对话模型全量实测入库**（claude/deepseek/gemini/glm/gpt/kimi/qwen/minimax/gemma/macaron 十大家族，一把 key 全家桶），条目 fk-* 带 desc（家族定位 + 响应速度）。**方法论教训**：20~45s 短超时快测误杀 3 个「慢但可用」的中转模型（glm-5.3 实际 21.7s / gpt-5.6-terra 8.2s / gpt-6-astra 35.6s），run_python 后台 150s 长测补录——中转端点首 token 天然慢于官方直连，判「不可用」前先区分「是死是慢」；确认排除：glm-5（150s 仍超时）/ claude-opus-5（仅流式可通，agt 主调用非流式）/ claude-sonnet-4-6（不存在）。/restart 后下拉即见——见 [config-and-models · flatkey 入库](guides/config-and-models.md#flatkey-聚合中转入库77-模型全量实测与短超时误判补录2026-09run_python-后台长测)
+
+## 快速事实增补（2026-09-05 · onboarding 级联：同 provider 一把 key 全家桶）
+
+- **onboarding 级联落地：同 provider 一把 key 自动配全家桶**（2026-09-05，commit `fa69b83`，用户报告 + 提案）：preset 的 `configured` 判定是逐条目的（base_url+model 命中才算）——flatkey 给一个模型配了 key，其余 76 个选中仍弹要 key 窗口，对聚合网关体验全错。`POST /api/models/onboard` 级联扩展：落地目标条目后遍历**同 provider** 未配置预设条目用同一 key 一并建卡（thinking/desc/vision 逐条保留；已配置跳过不覆盖、其它 provider 不动；响应带 cascade 清单）；onboarding 弹窗加「将自动一并配置其余 N 个模型」提示 + toast 显示实际配置数。效果：贴一次 key → 77 卡全落地，任意切换不再弹窗。边界预留：特殊平台可加 `key_scope:"model"` 关闭级联——见 [config-and-models · 级联落地](guides/config-and-models.md#onboarding-级联落地同-provider-一把-key-全家桶自动配置2026-09-05用户提案commit-fa69b83)
 

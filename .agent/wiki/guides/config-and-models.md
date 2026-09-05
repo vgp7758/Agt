@@ -123,6 +123,24 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **定位与生效**：官方直连（z.ai / deepseek-official 等）仍是主力更优解（响应快），flatkey 的价值在**一把 key 全家桶**；preset 只读合并视图，`/restart` 后 WebUI 模型下拉框即见 flatkey 全系列（用户选中走 onboarding 落地自身 key）。
 
+### onboarding 级联落地：同 provider 一把 key 全家桶自动配置（2026-09-05，用户提案，commit fa69b83）
+
+**用户报告（2026-09-05）**：preset 的 `configured` 判定是**逐条目**的（`base_url+model` 命中才算已配置）——给 flatkey 任一模型（如 fk-ds-v4-flash）填了 key 只落地那一个条目，其余 76 个模型在 models.json 无对应条目，选中仍弹 onboarding 要 key 窗口。对聚合网关这个体验完全错误：**一把 key 本来就全家桶通用**。
+
+**级联落地**（commit fa69b83，用户提案「自动创建一个模型卡片把 key 拷贝好」）：
+
+| 层 | 内容 |
+|---|---|
+| server.py `POST /api/models/onboard` | 落地目标条目后**遍历同 provider 全部未配置的预设条目**，用同一 key 一并创建完整卡片（thinking/desc/vision 等参数逐条保留）；已配置条目跳过（不覆盖手动调过的参数）、其它 provider 不动；响应带 `cascade` 清单（本次落地了哪些模型） |
+| index.html 弹窗 | 新增提示：`💡 同一 provider 一把 key 通用——保存后将自动用此 key 一并配置该 provider 其余 N 个模型`（`sameProv` 按 provider 实时计数，N>1 才显示） |
+| index.html toast | 保存成功按 cascade 数量分流：`✅ 已配置 4 个「flatkey」模型（含 …），切换中…` vs 单条目 `✅ 「…」已配置，切换中…` |
+
+**效果**：给 flatkey 任选一个模型贴 key → **77 个卡片一次全部落地** → 下拉框 flatkey 全组 ✅ 已配置，任意切换（glm / gpt / claude / gemini…）直接可用，永不弹 key 窗口。
+
+**边界（预留，未实施）**：级联假设「同 provider 共享 key」——对聚合网关（flatkey / modelscope / orcarouter）完全正确；将来若遇「同 provider 不同模型须独立 key」的特殊平台，可在 preset 加 `"key_scope": "model"` 标记关闭级联。
+
+**验证**：py_compile + node --check ✓；场景——级联 4 条 / 跳过已配置 / 保留原条目 / 多 key 数组形态、已配置条目拦截、未知条目拦截，全过。生效 `/restart` + Ctrl+F5。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

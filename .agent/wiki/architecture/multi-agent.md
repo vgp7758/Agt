@@ -535,6 +535,26 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 **结论：重启即清，无需处理、也不用等下次干活覆盖**——/restart 后 `_restore_subagents` 按磁盘 meta 恢复（recap 为空），内存残留随进程消亡。若同进程内继续看板显示坏值，属内存态未刷新，非新数据。
 
+### ### commit 首行直供 recap：recap 最优先级（2026-09-06，commit 2520ac7，用户提案）
+
+**用户提案（2026-09-06）**：「我发现在一轮对话中如果调用了 git_commit 工具，直接用 message 的第一句话作为 recap 挺合适的」——commit 首行本来就是「一句话摘要」约定，比 LLM 再总结 / answer 首行截取都精准且零成本。
+
+**recap 优先级链（现行）**：
+
+```
+⓪ 本轮有 git_commit → commit message 首行（新，最优先）
+① answer 符合风格约定（首行≤50字 + ---）→ answer 首行
+② LLM 兜底（local-lfm 对话续写）
+```
+
+**引擎侧（src/agent.py `run_hook`，turn_end 分支）**：触发时扫当轮 tool_calls，经 toollog 找 `git_commit` 调用——**多次提交取最后一次**（最接近收尾态）、message **取首行**截 60 字 → 经 `hook_ctx.commit_first_line` 直供工作流。设计取向：**引擎知道的东西直接给**（引擎有 tool_calls 权威视图），不让工作流再解析字符串。无 commit 调用则不设字段（走原逻辑）。
+
+**工作流侧（recap_gen.xml）**：Entry 新增 `commit_first_line` 输出；`check_style` code 节点加同参输入**置于逻辑最前**——命中即 `matched=true` 走 fast 路径（`hook_write set_recap` 三落点：agent._recap / registry / Turn.recap+recaps.jsonl，即 [recap 回写迁移](multi-agent.md#recap每轮一句话总结) 的落点）；不命中才回落 ① answer 风格检查 → ② LLM 兜底。
+
+**验证**：py_compile + canvas 加载 ✅；引擎提取三断言（多次提交取最后 / 多行 message 取首行 / 无 commit 不设字段）✅；code 节点短路（⓪命中不再走 ①②）✅。`/restart` 后生效。
+
+**连带收益**：消化了 ① 的既有 miss——answer 首行超长（68 字，超 50 字风格线）的场景，只要本轮带了 commit 就不再依赖 answer 风格检查，命中率显著提高。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

@@ -158,14 +158,15 @@
    /* 右侧工具 dock（用户提案 2026-09-06）：非对话交互按钮全部收进右侧一列 fab，
       折叠态只显示主按钮（🧰）——点击展开/收起整列，防图标越积越多 */
    #fabDock { position:fixed; top:64px; right:16px; z-index:120; display:flex; flex-direction:column;
-     gap:8px; align-items:center; }
+     gap:8px; align-items:flex-end; }   /* flex-end：主按钮贴右缘，展开两列时不横跳 */
    #fabDockBtn { width:42px; height:42px; border-radius:50%; background:#1f2937; color:#fff; border:none;
      font-size:19px; cursor:pointer; box-shadow:0 2px 12px #0005; display:flex; align-items:center;
      justify-content:center; transition:transform .18s; }
    #fabDockBtn:hover { transform:scale(1.08); }
    #fabDock.open #fabDockBtn { transform:rotate(45deg); }   /* 展开态主按钮旋转 45°（✕ 收起暗示） */
-   #fabDockMenu { display:none; flex-direction:column; gap:8px; align-items:center; }
+   #fabDockMenu { display:none; flex-direction:row; gap:8px; align-items:flex-start; }
    #fabDock.open #fabDockMenu { display:flex; }
+   .fabCol { display:flex; flex-direction:column; gap:8px; align-items:center; }
    .fabItem { width:42px; height:42px; border-radius:50%; color:#fff; border:none; font-size:19px;
      cursor:pointer; box-shadow:0 2px 12px #0005; display:flex; align-items:center; justify-content:center;
      position:relative; text-decoration:none; }
@@ -362,10 +363,15 @@
   <div id="fabDock">
     <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
     <div id="fabDockMenu">
+      <!-- 第一列（贴右缘）：原右侧 fab（看板/抽屉 4 个）——主按钮正下方 -->
+      <div class="fabCol">
       <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
       <button id="logFab" class="fabItem" style="background:#4b5563;display:none" title="日志（回退/限流/错误，点击展开）" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
       <button id="teamFab" class="fabItem" style="background:#0e7490" title="Agent 团队看板（子 Agent + 远程实例，点击展开）" onclick="toggleTeamPanel(true)">👥</button>
       <button id="svcFab" class="fabItem" style="background:#7c3aed" title="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" onclick="toggleSvcPanel(true)">🛠</button>
+      </div>
+      <!-- 第二列（左侧）：原控件栏收进的按钮（9 个） -->
+      <div class="fabCol">
       <button class="fabItem" id="btnEditor" style="background:#2563eb" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器（新页签）">🧩</button>
       <button class="fabItem" id="btnRag" style="background:#b45309" onclick="window.open('/rag','_blank')" title="RAG 文档库管理（新页签）">📚</button>
       <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" title="长期记忆管理（新页签）">🧠</button>
@@ -375,6 +381,7 @@
       <button class="fabItem" id="btnFeedback" style="background:#16a34a" title="反馈">💬</button>
       <button class="fabItem" id="btnSettings" style="background:#52525b" title="设置">⚙</button>
       <button class="fabItem" id="btnClear" style="background:#b91c1c" title="清空消息区">🚮</button>
+      </div>
     </div>
   </div>
   <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。

@@ -116,7 +116,7 @@ def _func_runtime_env() -> str:
 
 
 def _func_remote_instances() -> str:
-    """{func:load_remote_instances()} —— 已连接远程 agt 实例清单 + server_id 路由使用规则。
+    """{func:load_remote_instances()} —— 已连接远程 agt 实例清单 + remote_instance_id 路由使用规则。
     无连接返回空串（不注入——避免无远程场景的 SYSTEM 噪声）。"""
     try:
         import remote_tools as _rt
@@ -124,11 +124,11 @@ def _func_remote_instances() -> str:
             items = list(_rt.REMOTE_SERVERS.items())
         if not items:
             return ""
-        lines = ["【远程 agt 实例（工具调用 arguments 带 server_id=\"<id>\" 即路由到该实例执行，结果前缀 [remote:id]）】"]
+        lines = ["【远程 agt 实例（工具调用 arguments 里加 remote_instance_id=\"<id>\" 即路由到该实例执行，结果前缀 [remote:id]；id 值即下列 server_id）】"]
         for sid, it in items:
             tag = "" if it.get("status") == "online" else f" [⚠ {it.get('status')}]"
             lines.append(f"- {sid}: {it['url']}{tag} · {it.get('tools_count', '?')} 工具 · session={it.get('session_name', '?')}")
-        lines.append("规则：远程文件操作（read/edit/write…）对同一文件须持续带同一 server_id（远程 file_version 乐观锁跨实例生效）；"
+        lines.append("规则：远程文件操作（read/edit/write…）对同一文件须持续带同一 remote_instance_id（远程 file_version 乐观锁跨实例生效）；"
                      "远程实例的会话上下文不参与——纯工具直执行（要对方带上下文干活用消息驱动而非工具路由）。")
         return "\n".join(lines)
     except Exception:

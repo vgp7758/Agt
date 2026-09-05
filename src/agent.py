@@ -477,27 +477,60 @@ class Agent:
             return None
 
     def _exec_tool(self, name: str, arguments) -> str:
-        """工具执行统一入口（server_id 路由——多 agt 实例组网）：
-        arguments(dict) 带 "server_id" 键 → pop 出来 POST 到远程实例的 /api/tool/exec
+        """工具执行统一入口（remote_instance_id 路由——多 agt 实例组网）：
+        arguments(dict) 带 "remote_instance_id" 键 → pop 出来 POST 到远程实例的 /api/tool/exec
         （远程工具箱执行，结果前缀 [remote:id]）；未带 → 本地执行（现状不变）。
-        server_id 是路由元数据：pop 后不进远程参数、不进 toollog 存档（记录纯工具参数）。
+        路由标记是元数据：pop 后不进远程参数、不进 toollog 存档（记录纯工具参数）。
         顶层自定义字段会被 provider 的结构化解析丢弃——放 arguments 里是唯一保真通道。
-        remote_* 管理工具族豁免路由：它们的 server_id 参数是【管理语义】（想用什么 id
-        连接/断开哪个 id），不是路由语义——实际事故：remote_connect(server_id=..., url=...)
-        被路由拦截吃掉 → 连接注册从未本地执行 → "[未知 server_id]" 死循环（comfy session
-        三连败后模型放弃框架通道自己手写了 urllib 轮子）。"""
+        参数名沿革（2026-09-06 用户提案）：旧名 server_id 与工具自身同名参数易撞名
+        （remote_* 管理族的 server_id 是【管理语义】——remote_connect(server_id=..., url=...)
+        被路由拦截吃掉曾致 "[未知 server_id]" 死循环）；新名 remote_instance_id 不撞名、
+        全工具生效；旧名仅对非 remote_* 工具兼容保留。"""
         _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list",
-                         "remote_message", "remote_ask")   # 消息工具的 server_id=发给谁（管理语义）
-        if (isinstance(arguments, dict) and "server_id" in arguments
-                and not name.startswith(_REMOTE_ADMIN)):
-            sid = str(arguments.pop("server_id") or "").strip()
-            if sid:
-                try:
-                    from remote_tools import route_remote_call
-                    return route_remote_call(sid, name, arguments)
-                except Exception as e:
-                    return f"[远程执行失败] {type(e).__name__}: {e}"
+                         "remote_message", "remote_ask")   # 管理族双名均豁免：其 remote_instance_id/
+        rid = ""                                            # server_id 是管理语义（连谁/发给谁），非路由标记
+        if isinstance(arguments, dict):
+            if name.startswith(_REMOTE_ADMIN):
+                # 旧名规范化（历史投影兼容）：管理族的 server_id → remote_instance_id（工具新签名）
+                if "server_id" in arguments and "remote_instance_id" not in arguments:
+                    arguments["remote_instance_id"] = arguments.pop("server_id")
+            else:
+                if "remote_instance_id" in arguments:
+                    rid = str(arguments.pop("remote_instance_id") or "").strip()
+                elif "server_id" in arguments:
+                    rid = str(arguments.pop("server_id") or "").strip()   # 旧名兼容（历史投影习惯）
+        if rid:
+            try:
+                from remote_tools import route_remote_call
+                return route_remote_call(rid, name, arguments)
+            except Exception as e:
+                return f"[远程执行失败] {type(e).__name__}: {e}"
         return self.tools.call(name, arguments)
+
+    def _llm_tool_schemas(self) -> list:
+        """发给 LLM 的工具 schema 视图：统一注入 remote_instance_id 路由参数（可选，不撞名）。
+        只影响 LLM 请求视图——toolbox 原 schema（工作流 plugin 节点 / WebUI 工具表单 / 编辑器）
+        不感知（避免扩散）。remote_* 管理族豁免（本身就是跨实例工具，再路由即套娃）。"""
+        import copy
+        RID = "remote_instance_id"
+        DESC = ("路由到远程 agt 实例执行本工具（多实例组网，可选）：值=remote_list 清单里的 "
+                "server_id。对同一远程文件的连续操作须始终带同一 id（远程 file_version 乐观锁"
+                "跨实例生效）；本地执行则省略本参数。")
+        out = []
+        for s in self.tools.schemas():
+            s = copy.deepcopy(s)
+            fname = (s.get("function") or {}).get("name", "")
+            if fname.startswith("remote_"):
+                out.append(s)
+                continue
+            try:
+                props = s["function"]["parameters"].setdefault("properties", {})
+                if RID not in props:
+                    props[RID] = {"type": "string", "description": DESC}
+            except Exception:
+                pass
+            out.append(s)
+        return out
 
     def _run_tools_parallel(self, calls: list) -> list:
         """并行执行一组工具调用，按原顺序返回结果。
@@ -1696,7 +1729,7 @@ class Agent:
                     self._active_hooks = {hw["hook"] for hw in get_hook_workflows(_ws)}
             except Exception:
                 self._active_hooks = set()
-            tool_schemas = self.tools.schemas()
+            tool_schemas = self._llm_tool_schemas()   # LLM 视图：注入 remote_instance_id 路由参数
             # tools schema 随请求计费进 prompt_tokens 但不在投影 msgs 里：每轮算一次其字符数，
             # observe_llm_usage 拿它修正 chars/token 校准分子（否则比率系统性估高 → 过早压缩）
             try:
@@ -2018,7 +2051,7 @@ class Agent:
                         # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas
                         # （schemas 无缓存，只是 dict 遍历，成本低）
                         self._refresh_tools_if_written(step)
-                        tool_schemas = self.tools.schemas()
+                        tool_schemas = self._llm_tool_schemas()   # LLM 视图：注入 remote_instance_id 路由参数
                         try:   # 工具重注册后 schema 变了：校准分子同步刷新（与轮初同式）
                             tool_schema_chars = len(json.dumps(tool_schemas, ensure_ascii=False))
                         except Exception:

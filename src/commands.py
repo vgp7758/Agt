@@ -1194,7 +1194,7 @@ def _cmd_debug(ctx: CommandContext, args):
     print("─" * 56)
     t0 = _time.time()
     try:
-        resp = agent.utility_client().chat(msgs, tools=agent.tools.schemas(), scene="debug")
+        resp = agent.utility_client().chat(msgs, tools=agent._llm_tool_schemas(), scene="debug")
     except Exception as e:
         print(f"❌ 调用失败: {type(e).__name__}: {e}")
         return

@@ -147,7 +147,7 @@ def connect(server_id: str, url: str) -> str:
     _persist_current()
     return (f"✅ 已连接 '{server_id}' → {info['url']}"
             f"（{info['tools_count']} 工具 · session={info['session_name']} · model={info['model']}）。"
-            f"现在可在任意工具调用的 arguments 里带 \"server_id\": \"{server_id}\" 路由执行。")
+            f"现在可在任意工具调用的 arguments 里带 \"remote_instance_id\": \"{server_id}\" 路由执行。")
 
 
 def disconnect(server_id: str) -> str:
@@ -163,9 +163,9 @@ def list_servers() -> str:
     with _LOCK:
         items = list(REMOTE_SERVERS.items())
     if not items:
-        return ("当前无远程实例连接。用 remote_connect(server_id, url) 注册——"
+        return ("当前无远程实例连接。用 remote_connect(remote_instance_id, url) 注册——"
                 "例如 remote_connect(\"comfy\", \"http://192.168.1.2:8000\")")
-    lines = ["已连接的远程 agt 实例（工具调用 arguments 带 server_id=<id> 即路由到该实例）："]
+    lines = ["已连接的远程 agt 实例（工具调用 arguments 带 remote_instance_id=<id> 即路由到该实例）："]
     for sid, it in items:
         age = int(time.time() - (it.get("checked_at") or 0))
         lines.append(f"- {sid}: {it['url']} [{it['status']}] · {it.get('tools_count', '?')} 工具 · "
@@ -179,7 +179,7 @@ def route_remote_call(server_id: str, name: str, args: dict) -> str:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
-        return f"[未知 server_id] '{server_id}'——remote_list 查看已连接实例（{known}）"
+        return f"[未知实例 id] '{server_id}'——remote_list 查看已连接实例（{known}）"
     ok, resp = _http_json(f"{it['url']}/api/tool/exec", {"name": name, "arguments": args}, EXEC_TIMEOUT)
     if not ok or not isinstance(resp, dict):
         # 连接失败：标 offline 保留配置（下次 connect 或 reconnect 恢复）
@@ -313,7 +313,7 @@ def send_message(server_id: str, message: str) -> str:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
-        return f"[未知 server_id] '{server_id}'（remote_list 查看：{known}）"
+        return f"[未知实例 id] '{server_id}'（remote_list 查看：{known}）"
     status, _ = _ws_send_collect(it["url"], message, wait_done=False, timeout=10, ack_timeout=10)
     return f"[remote:{server_id}] {status}：{message[:80]}" + ("…" if len(message) > 80 else "")
 
@@ -325,7 +325,7 @@ def ask(server_id: str, question: str, timeout: int = 120) -> str:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
-        return f"[未知 server_id] '{server_id}'（remote_list 查看：{known}）"
+        return f"[未知实例 id] '{server_id}'（remote_list 查看：{known}）"
     status, answers = _ws_send_collect(it["url"], question, wait_done=True, timeout=timeout)
     body = "\n".join(a for a in answers if a).strip()
     if body:
@@ -338,33 +338,33 @@ def ask(server_id: str, question: str, timeout: int = 120) -> str:
 def make_remote_tools(agent) -> list[Tool]:
     """远程实例管理三件套。agent 参数保留签名一致性（当前不需要 agent 状态）。"""
 
-    def remote_connect(server_id: str = "", url: str = "") -> str:
-        """连接一个远程 agt 实例（server_id 路由的注册入口）。url 如 http://192.168.1.2:8000
-        （探测 /api/status 成功才注册）。server_id 可省略——自动生成（本地 url→agt-{端口}，
+    def remote_connect(remote_instance_id: str = "", url: str = "") -> str:
+        """连接一个远程 agt 实例（remote_instance_id 工具路由的注册入口）。url 如 http://192.168.1.2:8000
+        （探测 /api/status 成功才注册）。remote_instance_id 可省略——自动生成（本地 url→agt-{端口}，
         远程→agt-{host}-{端口}，重复连接同 url 幂等复用），返回消息里带最终 id。
-        连接后任意工具调用的 arguments 里带 "server_id": "<id>" 即路由到该实例执行
+        连接后任意工具调用的 arguments 里带 "remote_instance_id": "<id>" 即路由到该实例执行
         （结果前缀 [remote:id]）。配置持久化到 settings.json 的 remote_servers（重启自动重连）。"""
-        return connect(server_id, url)
+        return connect(remote_instance_id, url)
 
-    def remote_disconnect(server_id: str) -> str:
+    def remote_disconnect(remote_instance_id: str) -> str:
         """断开并移除一个远程实例连接（从持久化配置删除）。"""
-        return disconnect(server_id)
+        return disconnect(remote_instance_id)
 
     def remote_list() -> str:
         """列出已连接的远程 agt 实例（id/url/状态/工具数/session）。"""
         return list_servers()
 
-    def remote_message(server_id: str, message: str) -> str:
+    def remote_message(remote_instance_id: str, message: str) -> str:
         """向远程实例的 agent 异步发一条消息（fire-and-forget）：送达即返回，它带自己的
         session 上下文异步处理（消耗它的 LLM）。适合通报/派活——如告知框架修复、
         让它开始一个任务。要拿回答用 remote_ask。"""
-        return send_message(server_id, message)
+        return send_message(remote_instance_id, message)
 
-    def remote_ask(server_id: str, question: str, timeout: int = 120) -> str:
+    def remote_ask(remote_instance_id: str, question: str, timeout: int = 120) -> str:
         """向远程实例的 agent 提问并等待它的最终回答（挂流到本轮完成，默认 120s）。
         消耗对方一次 LLM 调用。适合问"只有它才知道"的事（它的环境/它的进度）。
         对方正忙时消息进它的插话队列，回答可能超时——可加大 timeout 或改用 remote_message。"""
-        return ask(server_id, question, timeout)
+        return ask(remote_instance_id, question, timeout)
 
     return [Tool(remote_connect), Tool(remote_disconnect), Tool(remote_list),
             Tool(remote_message), Tool(remote_ask)]

@@ -147,14 +147,28 @@
   .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
   .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
   .plan-item .pi { width:20px; text-align:center; }
-  /* spec 面板（施工方案）：浮层抽屉——默认折叠成右上角图标按钮；
-     展开时横屏=窗口右侧 40% 宽抽屉，竖屏=占满窗口 */
-  #specFab { position:fixed; top:64px; right:16px; z-index:120; width:42px; height:42px; border-radius:50%;
-    background:#4338ca; color:#fff; border:none; font-size:19px; cursor:pointer; box-shadow:0 2px 12px #0005;
-    display:none; align-items:center; justify-content:center; }
-  #specFab:hover { background:#3730a3; }
-  #specFab .badge { position:absolute; top:-4px; right:-4px; min-width:16px; height:16px; border-radius:8px;
-    background:#dc2626; color:#fff; font-size:10px; line-height:16px; text-align:center; padding:0 3px; }
+   /* spec 面板（施工方案）：浮层抽屉——默认折叠成图标按钮（在右侧 fabDock 内）；
+      展开时横屏=窗口右侧 40% 宽抽屉，竖屏=占满窗口 */
+   #specFab { position:relative; width:42px; height:42px; border-radius:50%;
+     background:#4338ca; color:#fff; border:none; font-size:19px; cursor:pointer; box-shadow:0 2px 12px #0005;
+     display:none; align-items:center; justify-content:center; }
+   #specFab:hover { background:#3730a3; }
+   #specFab .badge { position:absolute; top:-4px; right:-4px; min-width:16px; height:16px; border-radius:8px;
+     background:#dc2626; color:#fff; font-size:10px; line-height:16px; text-align:center; padding:0 3px; }
+   /* 右侧工具 dock（用户提案 2026-09-06）：非对话交互按钮全部收进右侧一列 fab，
+      折叠态只显示主按钮（🧰）——点击展开/收起整列，防图标越积越多 */
+   #fabDock { position:fixed; top:64px; right:16px; z-index:120; display:flex; flex-direction:column;
+     gap:8px; align-items:center; }
+   #fabDockBtn { width:42px; height:42px; border-radius:50%; background:#1f2937; color:#fff; border:none;
+     font-size:19px; cursor:pointer; box-shadow:0 2px 12px #0005; display:flex; align-items:center;
+     justify-content:center; transition:transform .18s; }
+   #fabDockBtn:hover { transform:scale(1.08); }
+   #fabDock.open #fabDockBtn { transform:rotate(45deg); }   /* 展开态主按钮旋转 45°（✕ 收起暗示） */
+   #fabDockMenu { display:none; flex-direction:column; gap:8px; align-items:center; }
+   #fabDock.open #fabDockMenu { display:flex; }
+   .fabItem { width:42px; height:42px; border-radius:50%; color:#fff; border:none; font-size:19px;
+     cursor:pointer; box-shadow:0 2px 12px #0005; display:flex; align-items:center; justify-content:center;
+     position:relative; text-decoration:none; }
   #specPanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:130; max-height:none;
     background:#fafbff; border-left:1px solid #c7d2fe; box-shadow:-4px 0 24px #0003;
     flex-direction:column; overflow:hidden; padding:12px 14px; }
@@ -337,8 +351,6 @@
   </header>
 
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
-  <!-- spec 浮层抽屉：默认折叠成右上角图标按钮（有 spec 时显示）；横屏=右侧 40% 抽屉 / 竖屏=占满 -->
-  <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
   <div id="specPanel" class="plan-panel" style="display:none">
     <div class="spec-headbar">
       <div class="spec-title" id="specSummary">📐 施工方案</div>
@@ -346,15 +358,31 @@
     </div>
     <div class="spec-scroll"><div id="specList"></div></div>
   </div>
+  <!-- 右侧工具 dock（用户提案 2026-09-06）：非对话交互按钮全部收进一列 fab，折叠态只显示 🧰 主按钮，点击展开/收起整列 -->
+  <div id="fabDock">
+    <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
+    <div id="fabDockMenu">
+      <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
+      <button id="logFab" class="fabItem" style="background:#4b5563;display:none" title="日志（回退/限流/错误，点击展开）" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
+      <button id="teamFab" class="fabItem" style="background:#0e7490" title="Agent 团队看板（子 Agent + 远程实例，点击展开）" onclick="toggleTeamPanel(true)">👥</button>
+      <button id="svcFab" class="fabItem" style="background:#7c3aed" title="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" onclick="toggleSvcPanel(true)">🛠</button>
+      <button class="fabItem" id="btnEditor" style="background:#2563eb" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器（新页签）">🧩</button>
+      <button class="fabItem" id="btnRag" style="background:#b45309" onclick="window.open('/rag','_blank')" title="RAG 文档库管理（新页签）">📚</button>
+      <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" title="长期记忆管理（新页签）">🧠</button>
+      <button class="fabItem" id="btnAgents" style="background:#0d9488" onclick="window.open('/agents','_blank')" title="Agent 声明管理（主 Agent + 子 Agent，新页签）">🤖</button>
+      <button class="fabItem" id="btnIde" style="background:#475569" onclick="openWebIde()" title="用 WebIDE (VS Code·serve-web) 新页签打开工作区">📝</button>
+      <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" title="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）">📊</button>
+      <button class="fabItem" id="btnFeedback" style="background:#16a34a" title="反馈">💬</button>
+      <button class="fabItem" id="btnSettings" style="background:#52525b" title="设置">⚙</button>
+      <button class="fabItem" id="btnClear" style="background:#b91c1c" title="清空消息区">🚮</button>
+    </div>
+  </div>
   <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
-       有日志才显示 🐞 入口（badge=未读 error 数）；打开即已读清零 -->
-  <button id="logFab" title="日志（回退/限流/错误，点击展开）" style="position:fixed;top:112px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#4b5563;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:none;align-items:center;justify-content:center" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
+       有日志才显示 🐞 入口（badge=未读 error 数，在 fabDock 内）；打开即已读清零 -->
   <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（回退 / 限流 / 截断 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
-  <button id="teamFab" title="Agent 团队看板（子 Agent + 远程实例，点击展开）" style="position:fixed;top:160px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#0e7490;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:flex;align-items:center;justify-content:center" onclick="toggleTeamPanel(true)">👥</button>
   <div id="teamPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fbfdff;border-left:1px solid #a5d8e8;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #d0ebf3;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#0e7490">👥 Agent 团队</div><button onclick="toggleTeamPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#d0ebf3;color:#0e7490;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="teamList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
-  <button id="svcFab" title="后台服务看板（运行/退出、实时日志，点击展开）" style="position:fixed;top:208px;right:16px;z-index:120;width:42px;height:42px;border-radius:50%;background:#7c3aed;color:#fff;border:none;font-size:19px;cursor:pointer;box-shadow:0 2px 12px #0005;display:flex;align-items:center;justify-content:center" onclick="toggleSvcPanel(true)">🛠</button>
   <div id="svcPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fcfaff;border-left:1px solid #ddd3f0;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #e9e0f7;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#7c3aed">🛠 后台（服务 + 定时）</div><button onclick="toggleSvcPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e9e0f7;color:#7c3aed;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="svcList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- 文件预览抽屉（点击气泡 markdown 里的文本资产 [!名](路径) 打开——无 fab 图标按钮，纯点击触发） -->
   <div id="filePanel" style="display:none">
@@ -374,21 +402,12 @@
     <select id="modelSel" title="切换模型"></select>
     <button class="btn" id="btnImg">📁 加图</button>
     <button class="btn" id="btnToolCall" title="工具调用表单：选工具→填参数→生成 /call 命令发送">🔧 工具</button>
-    <button class="btn" id="btnEditor" onclick="window.open('/editor','_blank')" title="可视化工作流编辑器">🧩 工作流</button>
-    <button class="btn" id="btnRag" onclick="window.open('/rag','_blank')" title="RAG 文档库管理">📚 RAG</button>
-    <button class="btn" id="btnMemory" onclick="window.open('/memory','_blank')" title="长期记忆管理">🧠 记忆</button>
-    <button class="btn" id="btnAgents" onclick="window.open('/agents','_blank')" title="Agent 声明管理（主 Agent + 子 Agent）">🤖 Agent</button>
-    <button class="btn" id="btnIde" onclick="openWebIde()" title="用 WebIDE (VS Code·serve-web) 新页签打开工作区">📝 IDE</button>
-    <button class="btn" id="btnStats" onclick="window.open('/stats','_blank')" title="LLM 调用统计：缓存命中率折线图 + 各模型概览">📊 统计</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <!-- Agent 团队切换下拉框 -->
     <select id="agentSel" title="切换直接交互的 Agent（点击时自动刷新列表）">
       <option value="_main_">🤖 主 Agent</option>
     </select>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
-    <button class="btn" id="btnFeedback">💬 反馈</button>
-    <button class="btn" id="btnSettings">⚙ 设置</button>
-    <button class="btn spacer" id="btnClear">🚮 清空</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
 
@@ -1768,6 +1787,13 @@ function locateModelCard(name){
   card.scrollIntoView({behavior:'smooth', block:'center'});
   card.classList.add('flash');
   setTimeout(()=>card.classList.remove('flash'), 2000);
+}
+// 右侧工具 dock 开合（用户提案 2026-09-06）：折叠态只显示 🧰，点击展开整列
+function toggleFabDock(force){
+  const d = document.getElementById('fabDock');
+  if(!d) return;
+  const open = (typeof force === 'boolean') ? force : !d.classList.contains('open');
+  d.classList.toggle('open', open);
 }
 // 用 WebIDE（VS Code serve-web）新页签打开工作区（用户提案 2026-09-06）
 async function openWebIde(){

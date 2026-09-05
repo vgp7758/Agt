@@ -235,6 +235,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | 「⏳ 工作流执行中…」行不可点击、看不到节点进度 | 旧进程代码（事件不带 run_id）→ `/restart` 后新运行即可点击打开 [/wf/monitor 实时观测](#wfmonitor-工作流运行观测页2026-08-20新commit-8aeb21a) |
 | 观测页节点预览无 📄、点不开全文 | 旧进程（无 full 存储）或**全量预算（20M 字符）耗尽**后只存预览；先 `/restart`，仍不行即预算耗尽属预期降级（见 [wf-monitor · 节点全文查看](../features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)） |
 | session 落盘失败直接异常、阻塞 react（toollog / _origin / meta 裸写） | 已修（2026-09-02，commit e5f2733）：三处裸写容错——`_atomic_write_lines`（toollog 每步写·最热点）+ `save()` 的 `_origin.txt` / `meta.json`——失败只告警不抛，内存 session 仍是真相（见 [存档写盘容错](#存档写盘容错session-落盘失败不再阻塞-react2026-09-02commit-e5f2733)） |
+| WebIDE 文件树显示「不受支持的断点图标」+ 打开时弹「选择要管理的远程代理」/ 标签页名是翻译字面量 | **serve-web 1.134 把 `?folder=` URL 参数误路由成「远程代理」会话**；深层诱因是中文语言包 web 资源经 `vscode-unpkg.net` 代理 403 致 l10n 字面量泄漏 → 已修：服务端 `--default-folder` 直开工作区、URL 零参数，`/restart` 生效；残留图标/文案异常在 WebIDE 内 `Ctrl+Shift+P → Configure Display Language → English` 一次即治（见 [webide](../features/webide.md#注意事项)） |
 
 ## 相关页面
 

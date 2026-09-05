@@ -1295,6 +1295,28 @@ class Agent:
         context = dict(context)
         if "turn_idx" not in context:
             context["turn_idx"] = len(self.session.turns) if hook == "turn_end" else -1
+        # git_commit 首行直供 recap（用户提案 2026-09-06）：本轮最后一次 git_commit 的
+        # message 首行——commit 首行本来就是"一句话摘要"约定，比 LLM 再总结 / answer 首行
+        # 截取都精准且零成本。经 hook_ctx 整袋下发，recap_gen 的 check_style 最优先采用。
+        if hook == "turn_end" and "commit_first_line" not in context:
+            try:
+                first = ""
+                cur_t = self.session._current
+                if cur_t is not None:
+                    for st in cur_t.steps:
+                        for tc in st.tool_calls:
+                            try:
+                                _n, _a, _r = self.session.toollog.view(tc.call_id)
+                            except Exception:
+                                continue
+                            if _n == "git_commit" and isinstance(_a, dict):
+                                _msg = str(_a.get("message") or "").strip()
+                                if _msg:
+                                    first = _msg.split("\n")[0].strip()   # 多次提交取最后一次（最接近收尾态）
+                if first:
+                    context["commit_first_line"] = first[:60]
+            except Exception:
+                pass
         context["hook_ctx"] = dict(context)
         tasks = self._hook_tasks(hook)
         # 拆分：emit 即时执行（同步发事件）；cmd 走同步执行器；workflow 走原 sync/async 并发

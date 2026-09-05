@@ -1,18 +1,24 @@
-<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·llm_call 对话式三轮消息）并【在工作流内显式回写】：① code 检查 answer 是否符合回答风格约定（首行一句话总结 + --- 分隔线）→ 符合直接取首行作 recap 跳过 LLM（省一次推理）；② 不符合则 code 组装 user→assistant→user 三轮对话（小模型对对话续写遵循好——few-shot 几乎不跑偏）→ llm_call 取 content → code 组装 payload → hook_write 写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
+<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·llm_call 对话式三轮消息）并【在工作流内显式回写】：⓪ 本轮有 git_commit → 直接取 commit message 首行作 recap（引擎 hook_ctx.commit_first_line 直供，最优先——commit 首行本就是一句话摘要约定）；① code 检查 answer 是否符合回答风格约定（首行一句话总结 + --- 分隔线）→ 符合直接取首行作 recap 跳过 LLM（省一次推理）；② 不符合则 code 组装 user→assistant→user 三轮对话（小模型对对话续写遵循好——few-shot 几乎不跑偏）→ llm_call 取 content → code 组装 payload → hook_write 写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx/commit_first_line）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>
     <out name="turn_context" type="string"/>
+    <out name="commit_first_line" type="string"/>
     <out name="hook_ctx" type="object"/>
   </node>
   <node id="105001" type="code" title="check_style" x="320" y="80">
     <in name="answer" type="string" ref="100001.draft_answer"/>
+    <in name="commit_first_line" type="string" ref="100001.commit_first_line"/>
     <code language="3"><![CDATA[async def main(args):
-    # 检查 answer 是否符合回答风格约定（SYSTEM 回答风格提示写死的格式）：
-    # 首行 = 一句话总结（≤50 字），紧跟或隔一空行后出现 --- 分隔线。
-    # 符合 → 直接取首行作 recap，跳过 LLM（省一次本地推理）；不符合 → 走 llm_call。
+    # recap 优先级（用户提案 2026-09-06）：⓪ 本轮有 git_commit → 直接取 commit message
+    # 首行作 recap（commit 首行本就是"一句话摘要"约定，最精准零成本）；
+    # ① answer 符合回答风格约定（首行一句话总结≤50字 + --- 分隔线）→ 取首行；
+    # ② 都不命中 → 走 llm_call。
     import re
     p = args.params
+    cfl = str(p.get("commit_first_line") or "").strip()
+    if cfl:
+        return {"matched": True, "recap": cfl}
     ans = str(p.get("answer") or "").strip()
     lines = ans.split("\n")
     matched = False

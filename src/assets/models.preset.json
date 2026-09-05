@@ -750,6 +750,21 @@
      "model": "qwen3.8-max",
      "thinking": false,
      "desc": "通义千问 3.8 Max（最新旗舰）"
+    },
+    "fk-glm-5.3": {
+     "model": "glm-5.3",
+     "thinking": false,
+     "desc": "GLM-5.3（智谱旗舰，中转首 token 较慢 ~20s）"
+    },
+    "fk-gpt-5.6-terra": {
+     "model": "gpt-5.6-terra",
+     "thinking": false,
+     "desc": "GPT-5.6 Terra（OpenAI 旗舰）"
+    },
+    "fk-gpt-6-astra": {
+     "model": "gpt-6-astra",
+     "thinking": false,
+     "desc": "GPT-6 Astra（OpenAI 最新旗舰，响应较慢）"
     }
    },
    "icon": "🔑",

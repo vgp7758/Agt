@@ -1778,9 +1778,10 @@ async function openWebIde(){
     const r = await fetch('/api/ide/open', {method:'POST'});
     const d = await r.json();
     // 用 location.hostname 而非 127.0.0.1：手机/其它设备访问时 serve-web 监听 0.0.0.0 可达
-    const url = `http://${location.hostname}:${d.port}/?folder=${encodeURIComponent(d.folder_uri || '')}`;
+    // 工作区由 serve-web --default-folder 直开（勿用 ?folder= 参数——1.114 会误路由成远程代理会话）
+    const url = `http://${location.hostname}:${d.port}/`;
     window.open(url, '_blank');
-    toast(d.ready ? '📝 已打开 WebIDE（新页签）' : '⏳ '+ (d.hint || 'VS Code Server 组件首次下载中，页签会自动刷新'));
+    toast(d.ready ? '📝 已打开 WebIDE（新页签）。界面文字/图标若显示异常：Ctrl+Shift+P → Configure Display Language → English（一次即好）' : '⏳ '+ (d.hint || 'VS Code Server 组件首次下载中，页签会自动刷新'));
   }catch(e){ toast('❌ 打开 IDE 失败：'+e.message); }
   b.textContent = old; b.disabled = false;
 }

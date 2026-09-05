@@ -2,7 +2,7 @@ name: team-manager
 description: 团队管理 Agent——自动拉起团队成员、恢复各自 session、组网并维护团队运转。何时调用：要多实例协作（成员各自 repo/session
   的独立 agt 实例）时，把团队清单交给它运营。
 tools: ''
-model: local-lfm
+model: fk-ds-flash
 assembly:
 - file: .agent/agents/team-manager.md
 - history|optional // 巡检连续性：需要对照此前拉起/巡检记录时打开

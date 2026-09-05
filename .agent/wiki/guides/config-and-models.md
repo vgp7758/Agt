@@ -141,6 +141,10 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **验证**：py_compile + node --check ✓；场景——级联 4 条 / 跳过已配置 / 保留原条目 / 多 key 数组形态、已配置条目拦截、未知条目拦截，全过。生效 `/restart` + Ctrl+F5。
 
+#### 补记（同日二轮）：级联范围收敛为「当前选中 + ⭐ 收藏精选」
+
+**77 张全家桶全量落地用了没几轮，用户就提出「设置弹窗里模型卡片会不会显得特别多」——级联范围同日二轮迭代收敛为 ⭐ 收藏维度**：preset 给 flatkey 77 个模型标注 14 个精选（`starred: true`），onboard 级联筛选改为 `if mname != name and not mpe.get("starred"): continue`（当前选中的必落）。现在贴一次 key 落地 **15 张**（当前选中 + 14⭐）而非 77 张，其余模型随时在搜索摘选弹窗一键添加（见下下节）。弹窗提示与计数变量 `sameProv` → `starProv`（「将自动配置 N 个⭐精选模型，其余可在搜索弹窗一键添加」）。完整四件套见 [收藏精选与搜索摘选一键添加](#收藏精选与搜索摘选一键添加add-one-端点--双分组弹窗2026-09-05-同日二轮用户确认)。
+
 ### 模型搜索摘选弹窗：级联落地后的卡片定位（2026-09-05，用户提案）
 
 **用户请求（2026-09-05）**：「这样设置弹窗里模型卡片会不会显得特别多。。要不加个搜索摘选的弹窗？」——上节级联落地把 flatkey 77 个模型一次性全部落成卡片后，设置面板模型 tab 翻找困难。落地为**搜索摘选弹窗**（仅前端 src/static/index.html，+48 行，零后端改动）：
@@ -160,6 +164,23 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 **playwright 实测（真页面全链路）**：打开设置 → 模型 tab → 🔍 搜索模型 → 弹窗列全量条目（当前 models.json 13 条）；输入 "glm" → 过滤 4 条 + 计数同步；点击 glm 条目 → 弹窗关闭 ✅ → 卡片滚至视口中央 ✅ → flash 高亮生效 ✅。
 
 **生效**：纯 HTML 改动走 mtime 热更新，Ctrl+F5 即见（无需 /restart）。
+
+### 收藏精选与搜索摘选一键添加：add-one 端点 + 双分组弹窗（2026-09-05 同日二轮，用户确认）
+
+**用户确认「可以」落地收藏维度**：搜索摘选弹窗首版（上节）只能**定位已配置卡片**；级联全量 77 张又太爆炸。同日二轮四件套把闭环补齐——**级联只落收藏、其余搜索即配**（首版定位-only 语义保留，弹窗整体重构）：
+
+| # | 层 | 内容 |
+|---|---|---|
+| 1 | src/assets/models.preset.json | flatkey 77 个模型标注 **14 个 ⭐ 精选**（`starred: true`，覆盖免费/旗舰/主力轻量）：fk-ds-v4-flash（限时免费）/ fk-ds-v4-pro / fk-glm-5.3（主力）/ fk-glm-5.3-flash / fk-gpt-5.6-sol / fk-gpt-5.4-mini / fk-cl-sonnet-5 / fk-cl-opus-4-5 / fk-g-2.5-pro / fk-g-3.1-pro-preview / fk-kimi-k3 / fk-q38-max / fk-q35-397b-a17b / fk-mm-m2.7 |
+| 2 | src/config.py | `preset_models_view()` 透传 `starred`（同批补齐 provider_brief/icon/desc 等字段透传） |
+| 3 | src/server.py | ①onboard 级联筛选改收藏维度（见上节补记）；②**新端点 `POST /api/models/add-one`**：body `{name}`——把某个未配置 preset 模型一键落地；**同 provider 已配置条目的 key 直接复用**（聚合网关一把 key 通用，不再弹 key 窗口）；该 provider 完全没配过 key → `need_key=true` + `register_url`，前端自动转 onboarding 补 key |
+| 4 | src/static/index.html | 搜索弹窗重构（整段 84 行 + CSS）：**双分组**「✅ 已配置（点击定位）/ 🔌 可一键添加（同 provider key 可复用）」；未配置条目 ⭐ 徽标 + **➕ 按钮**（点击调 add-one → 刷新下拉）；搜索过滤覆盖两组（模型名 / model id / base_url / provider / 描述）；级联提示文案与计数 `sameProv` → `starProv` |
+
+**效果**：贴一次 key → 当前选中 + 14⭐ 共 15 张落地（不再是 77 张）；其余 60+ 个 flatkey 模型以及**任何 provider 的未配置 preset 条目**，随时「设置 → 🔍 搜索模型」搜到即配、➕ 一键添加——搜索摘选从「已配置卡片定位器」升级为**全 preset 目录的配置入口**。
+
+**验证**：py_compile（server/config）+ node --check ✓；onboard 四场景（当前+starred 级联 / key 复用 / need_key 转 onboarding / 已配置拦截）✓；playwright 冒烟——分组渲染（已配置 13 / 可添加 128）、flatkey 过滤 77（未配置 76，fk-ds-flash 已命中）、➕ 请求发出 ✓。**生效：starred 透传与 add-one 是后端能力，需 `/restart`**（前端 Ctrl+F5）。
+
+**「可添加 128」的口径**：包含所有 provider 的未配置 preset 条目（flatkey 77 + orcarouter / modelscope 等 51）——未来想用的任何 preset 模型都能在搜索弹窗搜到即配，不受级联收敛影响。
 
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
@@ -300,7 +321,8 @@ repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本�
 | GLM 直连多 token | `token_rotate: false` + utility 分开条目 |
 | GLM 始终思考模型（glm-5.x coding，2026-08-31） | `thinking` 配**档位字符串**（如 `"low"`）——发 `thinking={type:档位}`、永不发 enable_thinking（该参数 400 code 1210），见 [thinking 三态](#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca) |
 | Kimi K3（moonshot / modelscope 聚合，2026-09-01） | `temperature` 锁 **1**（API 硬约束）——规则表 fix 强制 + preset 条目 `param_lock` 双保险，见 [硬约束规则表](#provider-参数硬约束规则表base_urlmodel-预检查2026-09-01用户提案commit-8c2fc6c) |
-| DeepSeek v4 缓存敏感（2026-08-29 实证） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 / tools 列表变化 → 全序列缓存断**——动态注入必须 user role（框架已修，见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——触发后压得狠、顶窗间隔长，升档即可消化、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线语义见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16) |
+| DeepSeek v4 缓存敏感（2026-08-29 实证；2026-09-05 断点细化） | **miss 单价 ≈ hit 的 30-50 倍**（GLM 仅 ~4 倍），长会话慎用大 prompt；**变化的 system 消息 → 全序列缓存断；tools 变化断点已细化（2026-09-05 探针）——tools 内部同样前缀匹配：尾部追加只付增量、修改第 N 个工具从它断到结尾（含全部 messages）**，动态注入必须 user role、改工具 schema 放新 session（见 [缓存行为实证](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)、[工具 schema 断点实证](../architecture/context-engine.md#工具-schema-变化断点实证tools-内部前缀匹配--64-token-块对齐--冷节点全-miss2026-09-05双端点探针)）。多 token per-token 隔离嫌疑已否证（单 token 同样断），多 token 无需特殊配置。**经济学对策三件套（2026-08-30，commit 27fea56）：`fold_target_ratio: 0.5`（低——触发后压得狠、顶窗间隔长，升档即可消化、少大折叠）+ `detail_step: 0`（组间不衰减）+ `token_rotate: false`（sticky）**——方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)、机制见 [per-provider 参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线语义见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16) |
+| 聚合中转层（flatkey 等，2026-09-05 实测） | **缓存字段被中转剥掉（`cached_tokens` 恒 0）——无法观测也难以证明有缓存**，按「无缓存、全价」做预期管理；付费模型跑大上下文优先官方直连（DeepSeek 系 miss≈hit 数十倍，无缓存时代价一个量级），见 [断点实证 · flatkey](../architecture/context-engine.md#工具-schema-变化断点实证tools-内部前缀匹配--64-token-块对齐--冷节点全-miss2026-09-05双端点探针) |
 | ModelScope 多号额度 | 默认预旋转（true），无需配置 |
 | 视觉模型 | `vision: true`（read_file 读图片自动压缩到 2048 边长） |
 

@@ -885,6 +885,34 @@ R13 机制判别：E3 头部 system 变化同样全断（5%，**位置无关**�
 
 > 探针族留存 `probes/deepseek_cache_probe*.py`（v1=五组判别、2~13=R 系列变量对齐链），读取 models.json 的 deepseek profile 直连官方端点，`prompt_tokens_details.cached_tokens`/`prompt_cache_hit_tokens` 读命中；DeepSeek 再换行为可复跑对照。⚠️ 探针必须放 `probes/`（**勿放 `tools/`——那是 script_tools 的插件扫描目录，import 即执行顶层代码**，曾致 agt 启动自动烧探针 token；全部探针已加 `__main__` 保护双保险）。
 
+### 工具 schema 变化断点实证：tools 内部前缀匹配 + 64-token 块对齐 + 冷节点全 miss（2026-09-05，双端点探针）
+
+**触发（用户请求）**：「测一下使用 fk-ds-v4-flash 和 deepseek 时候的缓存命中情况，比如在工具 schema 变化时，缓存会从哪里断开」——上方 v4 实证（R13 E5）只测过「tools 尾部 +1」且判「全断」，未测 tools **内部**的断点粒度，也没测中转层（flatkey）能否吃到缓存。
+
+**探针**（`tmp/cache_probe_tools.py`）：固定 messages（system + 3 轮对话，~300 tok），只变换 tools 数组（2 个真实感工具 A/B 及变体），7 场景对照（DeepSeek 官方直连 api.deepseek.com，读 `prompt_cache_hit_tokens`）：
+
+| 场景 | tools | prompt | hit | 断点解读 |
+|---|---|---:|---:|---|
+| S1 基线 | [A,B] | 662 | 0 | 首次全 miss |
+| S2 完全重复 | [A,B] | 662 | 640 | 缓存生效（22=尾块不满 64 对齐） |
+| S3 尾部追加 | [A,B,C] | 753 | **640** | **只 miss 新增（C 的 91 tok + 尾块）——前缀完整保留** ✅ |
+| S4 恢复 | [A,B] | 662 | 640 | 缓存恢复 |
+| S5 改第 1 个工具 description | [A′,B] | 652 | **0** | **从该工具起全断（含全部 messages）** |
+| S6 改第 2 个工具 description | [A,B′] | 666 | **256** | **只保留工具 A 部分（256=4×64 块）** |
+| S7 messages 尾部追加 | [A,B] | 678 | 640 | 增量命中 ✅ |
+
+**三条规律**：
+
+1. **缓存序列 = tools → system → messages**：tools 排在最前参与前缀缓存（与 v4 实证一致）；
+2. **tools 内部同样是前缀匹配**：改第 N 个工具 → 从它断到结尾（其后工具与全部 messages 全部重算）；**尾部追加工具 → 只付增量 miss**（与追加消息同理）。⚠️ **细化 R13 E5 的「tools 尾部 +1 → 全断」字面口径**——受控探针（同脚本构造、字节级同前缀、复验稳定）下尾部 +1 只付增量；当时的全断观察疑受冷节点/序列化伪象干扰（冷节点现象当时未知，见下）。对 agt 的重定价：**会话中途追加新工具只付增量成本**（此前按全断预期管理）；但**修改已有工具 schema（加参数/改描述）仍是从该工具起全断**——300K 大会话一次重算按 miss≈hit 数十倍计价，**工具版本变更放新 session**；
+3. **64-token 块对齐**：hit 恒为 64 的倍数（640/256），末尾不满一块的部分恒 miss（S2/S4 的 22 tok）。
+
+**插曲：S3 首测 hit=0 是「冷节点」，不是断缓存**：S3 第一次跑出全 miss，差点误判「追加工具断全部」——复验 **[A,B,C] 连发 5 次全部稳定 hit=640**。结论：**DeepSeek 官方也是多实例部署、节点级缓存偶不共享**，撞上冷节点就一次性全 miss（之后 8 连发全是热节点）。与 ModelScope「随机路由吃不到缓存」同机制，官方概率低得多。**排障口径补充：单次全 miss ≠ 缓存规则破坏，连发复验再定性**。
+
+**fk-ds-v4-flash（flatkey 中转）：缓存不可观测 ⚠️**：7 场景 + 重复调用 `cached_tokens` **恒 0**——中转只回 OpenAI 风格 usage，DeepSeek 的 `prompt_cache_hit/miss_tokens` 字段被剥掉。**无法证明它有没有缓存**，按「无缓存、全价计费」做预期管理（该渠道限时免费，损失可忽略）；若将来在 flatkey 跑**付费模型**做大上下文任务，缓存经济账按无缓存重算——大上下文优先官方直连或 glm-official。
+
+> 探针留存 `tmp/cache_probe_tools.py`（DeepSeek 再换代可复跑对照；勿移入 `tools/`——插件扫描目录 import 即执行，见上方探针警告）。
+
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — episodic 召回（tail ambient `[epi·长期记忆]` 行来源）的检索流水线与演进

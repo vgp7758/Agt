@@ -28,7 +28,7 @@ members:
 1. **启动成员进程**：`agt-web --port <port>`，cwd=成员 repo（`subprocess.Popen`，Windows 下 `CREATE_NO_WINDOW`）
 2. **等端口就绪**：最多 60s（冷启动含 session 恢复），`probe_server` 每秒轮询
 3. **remote_connect 组网**（connect=false 只启动不组网）
-4. **恢复指定 session**：`remote_message(server_id, "/resume <session>")`
+4. **恢复指定 session**：`remote_message(remote_instance_id, "/resume <session>")`（形参 2026-09-06 由 server_id 改名，旧名调用会被引擎透明规范化、不报错）
 
 **dry_run 默认 true**——只打印执行计划不真拉；确认后传 `dry_run=false` 执行。已在运行的成员跳过启动直接组网。返回逐成员结果行（✅ / ⚠️ 60s 未就绪 / ❌ 启动失败）。
 

@@ -78,9 +78,10 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 
 ## 超时转后台与完成自动通知（2026-08-30，commit 6460ad1）
 
-- 工具同步等待超时后，run_python / run_shell **转后台继续跑**：`_bg_tasks` 登记 + `_bg_reader` daemon 读线程继续收输出，返回 bg_id 供 `check_bg_task` 手动查询
+- 工具同步等待超时后，run_python / run_shell **转后台继续跑**：`_bg_tasks` 登记 + `_bg_reader` daemon 读线程继续收输出，返回 bg_id 供 `check_bg_task` 手动查询——**2026-09-06（commit e72c0e1）起 check_bg_task 注册为真工具**（此前只有提示文本承诺它、工具本体从未进工具箱）：不传参列全部（**bg_id 枚举找回**，上下文折叠吃掉 bg_id 也能兜底）、传 id 查状态 + 已跑时长 + 累计行数 + 尾部输出（≤2000 字）
 - **完成自动通知**（本 commit 接通）：`_bg_reader` 检测到进程退出 → `_bg_notify_cb(bg_id, name, rc)`（模块级钩子，`set_bg_notify` 注册；chat.py build_agent 装配时注入 `agent._on_bg_task_done`）→ 包成 **check_bg_task 合成工具记录**（带尾部输出 40 行）→ `push_message(wake=True)` 唤醒——Agent 闲时立即开轮、忙时 inbox 排队步边界注入
 - 转后台返回文案同步更新：「完成时会自动推送通知唤醒你（无需轮询）」；check_bg_task docstring 同步（手动查询仍可用）
+- **`list_services` 合并视图**（2026-09-06 同批，background_tools.py）：【后台服务】+【后台任务】（bg_id/工具名/状态/已跑时长）一处看全——详见 [background-scheduler](background-scheduler.md#后台进程一览与任务查询list_services-合并视图--check_bg_task-真工具2026-09-06commit-e72c0e1)
 - 唤醒理由（与 service_exit 策略化对照）：转后台任务本来是**同步等待**（超时被迫转），结果通常是决策链一环；一次性任务跑完即报、无套娃循环——恒唤醒天然安全，不需要策略参数。三族通知语义全景见 [用户交互 · 后台任务完成自动通知](user-interaction.md#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1)
 
 ## 与其他模块的关系

@@ -988,8 +988,10 @@ async def api_ide_open(request: Request):
 
     if _probe():
         return _ide_payload(True, PORT)
-    cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} '
-           f'--without-connection-token --accept-server-license-terms')
+    # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
+    # "远程代理"会话，标签页名变成 l10n 字面量如「不受支持的断点的图标。」，用户实锤）
+    cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} --without-connection-token '
+           f'--accept-server-license-terms --default-folder "{_workspace}"')
     if _agent is not None:
         try:
             r = _agent.services.start("webide", cmd)
@@ -1014,12 +1016,13 @@ async def api_ide_open(request: Request):
 
 
 def _ide_payload(ready: bool, port: int) -> dict:
-    """WebIDE 打开参数：前端拼 http://{location.hostname}:{port}/?folder={folder_uri} 新页签打开。
-    folder_uri 用 file:/// 形态（serve-web ?folder= 参数约定）；host 用前端 location.hostname——
-    手机/其它设备访问时 127.0.0.1 不可达，serve-web 监听 0.0.0.0 局域网可进。"""
-    ws = str(_workspace).replace("\\", "/")
-    folder_uri = "file:///" + ws.lstrip("/")
-    out = {"ok": True, "port": port, "ready": ready, "folder_uri": folder_uri}
+    """WebIDE 打开参数：前端拼 http://{location.hostname}:{port}/ 新页签打开（工作区由
+    serve-web 的 --default-folder 直开，URL 无需参数）。host 用前端 location.hostname——
+    手机/其它设备访问时 127.0.0.1 不可达，serve-web 监听 0.0.0.0 局域网可进。
+    hint：中文语言包的 web 资源经 vscode-unpkg.net 代理 403 时 UI 会泄漏 l10n 字面量
+    （标签名/图标描述串）——切显示语言为 English 一次即治（Ctrl+Shift+P → Configure
+    Display Language → English，serve-web 自己的 profile 记住，不影响桌面版）。"""
+    out = {"ok": True, "port": port, "ready": ready}
     if not ready:
         out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
     return out

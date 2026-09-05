@@ -19,6 +19,8 @@ venv/
 # === 构建产物 ===
 dist/
 build/
+temp/
+tmp/
 *.egg
 
 # === IDE / 编辑器 ===

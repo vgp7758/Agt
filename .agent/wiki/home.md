@@ -420,3 +420,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 
 - **onboarding 级联落地：同 provider 一把 key 自动配全家桶**（2026-09-05，commit `fa69b83`，用户报告 + 提案）：preset 的 `configured` 判定是逐条目的（base_url+model 命中才算）——flatkey 给一个模型配了 key，其余 76 个选中仍弹要 key 窗口，对聚合网关体验全错。`POST /api/models/onboard` 级联扩展：落地目标条目后遍历**同 provider** 未配置预设条目用同一 key 一并建卡（thinking/desc/vision 逐条保留；已配置跳过不覆盖、其它 provider 不动；响应带 cascade 清单）；onboarding 弹窗加「将自动一并配置其余 N 个模型」提示 + toast 显示实际配置数。效果：贴一次 key → 77 卡全落地，任意切换不再弹窗。边界预留：特殊平台可加 `key_scope:"model"` 关闭级联——见 [config-and-models · 级联落地](guides/config-and-models.md#onboarding-级联落地同-provider-一把-key-全家桶自动配置2026-09-05用户提案commit-fa69b83)
 
+## 快速事实增补（2026-09-05 · 二 · 模型搜索摘选弹窗）
+
+- **模型搜索摘选弹窗（2026-09-05，用户提案）**：onboarding 级联落地后设置面板模型卡片暴涨（flatkey 一家 77 张）——设置 → 模型 tab「+ 添加模型」旁新增 🔍 搜索模型按钮 + 弹窗：按**模型名 / model id / base_url / 描述**实时模糊过滤（不区分大小写）+ 匹配计数；点击结果 → 滚动定位卡片视口居中 + 紫色 flash 高亮 2s；Enter 定位首条；安全细节 `data-name` 引号转义防注入 + modal 显式 `display:flex`（复用 onboarding 弹窗不可见坑的教训）。纯前端 index.html +48 行零后端改动，playwright 实测全链路通过（全量 → "glm" 过滤 4 条 → 点击定位+高亮）；HTML mtime 热更新，Ctrl+F5 即见——见 [config-and-models · 模型搜索摘选弹窗](guides/config-and-models.md#模型搜索摘选弹窗级联落地后的卡片定位2026-09-05用户提案)
+

@@ -141,6 +141,26 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **验证**：py_compile + node --check ✓；场景——级联 4 条 / 跳过已配置 / 保留原条目 / 多 key 数组形态、已配置条目拦截、未知条目拦截，全过。生效 `/restart` + Ctrl+F5。
 
+### 模型搜索摘选弹窗：级联落地后的卡片定位（2026-09-05，用户提案）
+
+**用户请求（2026-09-05）**：「这样设置弹窗里模型卡片会不会显得特别多。。要不加个搜索摘选的弹窗？」——上节级联落地把 flatkey 77 个模型一次性全部落成卡片后，设置面板模型 tab 翻找困难。落地为**搜索摘选弹窗**（仅前端 src/static/index.html，+48 行，零后端改动）：
+
+| 层 | 内容 |
+|---|---|
+| CSS | `.model-item.flash`（紫色 outline + box-shadow 渐隐高亮 2s）+ `.ms-item`（弹窗结果行样式） |
+| JS `showModelSearch()` | 🔍 弹窗：搜索框（按**模型名 / model id / base_url / 描述**模糊匹配，不区分大小写，边输边过滤）+ 实时计数（`共 N 个` / `匹配 N 个`）+ 结果列表 |
+| 入口 | 模型 tab 底部「+ 添加模型」旁新增 `🔍 搜索模型` 按钮 |
+
+**交互语义**：
+
+- 点击结果条目 → 关闭弹窗 → **滚动到对应卡片（视口居中）** → flash 高亮 2s（setTimeout 移除）；
+- Enter → 定位第一条匹配；过滤范围 = 设置面板已配置模型卡片（设置面板只管已配置条目）；
+- 安全细节：卡片 `data-name` 引号转义防注入；modal 显式置 `display:flex`（`.modal-overlay` CSS 默认 display:none——onboarding 弹窗同款坑，见上上节教训）。
+
+**playwright 实测（真页面全链路）**：打开设置 → 模型 tab → 🔍 搜索模型 → 弹窗列全量条目（当前 models.json 13 条）；输入 "glm" → 过滤 4 条 + 计数同步；点击 glm 条目 → 弹窗关闭 ✅ → 卡片滚至视口中央 ✅ → flash 高亮生效 ✅。
+
+**生效**：纯 HTML 改动走 mtime 热更新，Ctrl+F5 即见（无需 /restart）。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

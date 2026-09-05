@@ -27,7 +27,7 @@
 
 ## 前端：📝 IDE 按钮（src/static/index.html）
 
-- 控件栏 `🤖 Agent` 按钮旁新增 `📝 IDE`（`id=btnIde`，title「用 WebIDE (VS Code·serve-web) 新页签打开工作区」）。
+- 按钮 `📝 IDE`（`id=btnIde`，title「用 WebIDE (VS Code·serve-web) 新页签打开工作区」）。**2026-09-06 起收进右侧工具 dock**（与其它管理按钮一起折叠进 🧰，见 [fab-dock](fab-dock.md)）——控件栏不再直接摆放，展开 dock 后点击。
 - `openWebIde()`：禁用按钮 → `⏳ IDE…` → `fetch POST /api/ide/open` → 用 **`location.hostname`** 拼 `http://{host}:{port}/`（**零参数**——工作区由 serve-web `--default-folder` 直开；勿拼 `?folder=`，1.134 会误路由成远程代理会话）→ `window.open` 新页签 → toast（`ready` 成功附语言 workaround 提示 / 未就绪展示后端 `hint`）→ 恢复按钮。
 - host 用 `location.hostname` 而非 `127.0.0.1`：手机/其它设备访问时 serve-web 监听 0.0.0.0 局域网可达。
 

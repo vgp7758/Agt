@@ -1814,6 +1814,7 @@ modelSel.addEventListener('change', ()=>{
     if(!pe){ toast('⚠️ 预设条目不存在（可能已配置）'); return; }
     const isFree=pe.status==='free_trial';
     const icon=pe.provider_icon||'🔌';
+    const sameProv=Object.values(_presetModels).filter(x=>x.provider===pe.provider&&!x.configured).length;  // 级联：同 provider 未配置数（2026-09-05）
     const ov=document.createElement('div'); ov.className='modal-overlay';
     ov.innerHTML=`<div class="modal" style="max-width:500px">
       <h3 style="margin-top:0">${isFree?'🎁':'🔑'} 启用预设模型「${esc(pe.name)}」</h3>
@@ -1837,6 +1838,7 @@ modelSel.addEventListener('change', ()=>{
         <button class="btn" onclick="window.open('${esc(pe.register_url)}','_blank')">🌐 打开 ${esc(pe.provider)} 申请页面</button>
       </div>
       <input id="onboardKeys" type="text" placeholder="粘贴 API Key（多个用逗号分隔，可轮流使用）" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;box-sizing:border-box">
+      ${sameProv>1?`<div style="font-size:12px;color:#6b7280;margin-top:8px">💡 同一 provider 一把 key 通用——保存后将自动用此 key 一并配置该 provider 其余 <b>${sameProv-1}</b> 个模型（无需逐个填 key）</div>`:''}
       <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
         <button class="btn" id="onboardCancel">取消</button>
         <button class="btn primary" id="onboardSave">✅ 保存并切换</button>
@@ -1853,7 +1855,7 @@ modelSel.addEventListener('change', ()=>{
         const r=await fetch('/api/models/onboard',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({name, api_keys:keys})});
         const d=await r.json();
-        if(d.ok){ ov.remove(); toast('✅ 「'+name+'」已配置，切换中…'); sendRaw('/model '+name, []); setTimeout(()=>location.reload(), 800); }
+        if(d.ok){ ov.remove(); const n=(d.cascade||[]).length; toast(n>1?('✅ 已配置 '+n+' 个「'+pe.provider+'」模型（含 '+name+'），切换中…'):('✅ 「'+name+'」已配置，切换中…')); sendRaw('/model '+name, []); setTimeout(()=>location.reload(), 800); }
         else toast('❌ '+(d.error||'保存失败'));
       }catch(e){ toast('❌ 请求失败：'+e.message); }
     };

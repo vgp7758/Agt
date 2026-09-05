@@ -567,9 +567,11 @@ async def api_models_save(request: Request):
 
 @app.post("/api/models/onboard")
 async def api_models_onboard(request: Request):
-    """预设条目 onboarding 落地（spec s_d4241d58）：预设 provider 参数 + 用户 token
+    """预设条目 onboarding 落地（spec s_d4241d58 + 2026-09-05 级联扩展）：预设 provider 参数 + 用户 token
     → 完整条目写入 models.json（写生效份 + reload + 实例层热应用）→ 前端刷新下拉即可切换。
-    body: {name: 预设模型名, api_keys: "key1,key2"（逗号分隔多 key）}"""
+    级联（用户提案 2026-09-05）：同 provider 其它未配置预设条目用同一 key 一并落地——
+    聚合网关（如 flatkey）一把 key 全家桶，配一个不再逐个弹 key 窗口。
+    body: {name: 预设模型名, api_keys: "key1,key2"（逗号分隔多 key）}，返回 cascade=落地条目清单"""
     try:
         body = await request.json()
     except Exception:
@@ -586,16 +588,24 @@ async def api_models_onboard(request: Request):
     toks = [t.strip() for t in keys_raw.replace("，", ",").split(",") if t.strip()]
     if not toks:
         return {"error": "api_keys 无有效条目"}
-    entry = {"base_url": pe.get("base_url", ""),
-             "api_token": toks[0] if len(toks) == 1 else toks,
-             "model": pe.get("model", ""),
-             "thinking": bool(pe.get("thinking", False))}
-    if pe.get("vision"):
-        entry["vision"] = True
-    if pe.get("model_desc"):
-        entry["desc"] = pe.get("model_desc")
+    provider = pe.get("provider", "")
     models = dict(config.MODELS)
-    models[name] = entry
+    added = []
+    for mname, mpe in config.preset_models_view().items():
+        if mpe.get("provider") != provider or mpe.get("configured"):
+            continue
+        entry = {"base_url": mpe.get("base_url", ""),
+                 "api_token": toks[0] if len(toks) == 1 else toks,
+                 "model": mpe.get("model", ""),
+                 "thinking": bool(mpe.get("thinking", False))}
+        if mpe.get("vision"):
+            entry["vision"] = True
+        if mpe.get("model_desc"):
+            entry["desc"] = mpe.get("model_desc")
+        models[mname] = entry
+        added.append(mname)
+    if not added:
+        return {"error": "该 provider 无可落地的预设条目"}
     config.save_user_models(models, config.DEFAULT_MODEL)
     # 实例层热应用（与 PUT /api/models 同款——主 llm 同名刷新 + utility 通道重建）
     if _agent is not None:
@@ -607,7 +617,7 @@ async def api_models_onboard(request: Request):
             _agent.retrieval_llm = _agent.utility_client()
         except Exception:
             pass
-    return {"ok": True, "name": name, "reload": True}
+    return {"ok": True, "name": name, "reload": True, "cascade": added}
 
 
 # ===================== MCP 配置 API =====================

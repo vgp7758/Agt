@@ -130,6 +130,13 @@
   .model-item .mi-del:hover { background:#fef2f2; }
   .model-item .mi-btn { font-size:11px; padding:3px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; white-space:nowrap; color:#374151; }
   .model-item .mi-btn:hover { background:#f3f4f6; }
+  /* 模型搜索摘选弹窗（2026-09-05，用户提案：77 张卡片太多，加搜索定位） */
+  .model-item.flash { outline:2px solid #7c3aed; box-shadow:0 0 0 4px rgba(124,58,237,.15); transition:box-shadow .3s; background:#f5f3ff !important; }
+  .ms-item { padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .ms-item:hover { background:#f3f0ff; }
+  .ms-item code { font-size:11px; color:#7c3aed; background:#f3f0ff; padding:1px 5px; border-radius:4px; }
+  .ms-item b { font-weight:600; color:#1f2329; }
+  .ms-item .ms-host { font-size:11px; color:#8a9099; margin-left:auto; }
   .model-item .mi-btn.set-default { color:#059669; border-color:#a7f3d0; }
   .model-item .mi-btn.set-default:hover { background:#ecfdf5; }
   .plan-panel { background:#fff; border-bottom:1px solid var(--line); padding:6px 14px; font-size:13px; max-height:200px; overflow-y:auto; }
@@ -413,6 +420,7 @@
     <div id="modelList" style="flex:1;overflow-y:auto;margin:4px 0"></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
       <button onclick="addModel()" style="font-size:12px">+ 添加模型</button>
+      <button onclick="showModelSearch()" style="font-size:12px" title="按模型名 / model id / base_url 搜索并定位卡片">🔍 搜索模型</button>
       <span style="font-size:10px;color:#8a9099">改完点底部「保存模型配置」写回 ~/.agt/models.json</span>
     </div>
     </div>
@@ -1666,6 +1674,51 @@ function renderModelList(){
       </div>
     </div>`;
   }).join('')||'<div style="color:#8a9099;padding:8px">暂无模型，点击下方"添加模型"</div>';
+}
+// —— 模型搜索摘选弹窗（2026-09-05，用户提案：provider 级联后卡片太多，搜索定位）——
+function showModelSearch(){
+  const ov=document.createElement('div'); ov.className='modal-overlay';
+  ov.innerHTML=`<div class="modal" style="max-width:440px">
+      <h3 style="margin-top:0">🔍 搜索模型</h3>
+      <input id="msSearch" type="text" placeholder="按 模型名 / model id / base_url / 描述 搜索…" autocomplete="off" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;box-sizing:border-box">
+      <div id="msList" style="max-height:58vh;overflow-y:auto;margin-top:10px;border:1px solid var(--line);border-radius:8px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <span style="font-size:11px;color:#8a9099;margin-right:auto;align-self:center" id="msCount"></span>
+        <button class="btn" id="msClose">关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.style.display = 'flex';   // .modal-overlay 默认 display:none——必须显式置 flex（onboarding/settings 同款坑）
+  const inp=ov.querySelector('#msSearch'), list=ov.querySelector('#msList'), cnt=ov.querySelector('#msCount');
+  const render=()=>{
+    const q=(inp.value||'').trim().toLowerCase();
+    const items=Object.entries(_modelData.models||{}).filter(([n,m])=>{
+      if(!q) return true;
+      return [n, m.model||'', m.base_url||'', m.desc||''].some(s=>String(s).toLowerCase().includes(q));
+    }).sort((a,b)=>a[0].localeCompare(b[0]));
+    cnt.textContent = q ? ('匹配 '+items.length+' 个') : ('共 '+items.length+' 个');
+    list.innerHTML=items.length?items.map(([n,m])=>{
+      const host=String(m.base_url||'').replace(/^https?:\/\//,'').split('/')[0];
+      return `<div class="ms-item" data-name="${n.replace(/"/g,'&quot;')}">
+        <b>${esc(n)}</b><code>${esc(m.model||'')}</code><span class="ms-host">${esc(host||'')}</span>
+      </div>`;
+    }).join(''):'<div style="color:#8a9099;padding:12px;text-align:center">无匹配模型</div>';
+    list.querySelectorAll('.ms-item').forEach(el=>{
+      el.onclick=()=>{ ov.remove(); locateModelCard(el.dataset.name); };
+    });
+  };
+  inp.oninput=render; render(); inp.focus();
+  inp.onkeydown=e=>{ if(e.key==='Enter'){ const f=list.querySelector('.ms-item'); if(f) f.click(); } };
+  ov.querySelector('#msClose').onclick=()=>ov.remove();
+}
+function locateModelCard(name){
+  const card=Array.from(document.querySelectorAll('#modelList .model-item')).find(c=>{
+    const n=c.querySelector('.mi-name'); return n && n.textContent===name;
+  });
+  if(!card){ toast('⚠️ 未找到「'+name+'」卡片'); return; }
+  card.scrollIntoView({behavior:'smooth', block:'center'});
+  card.classList.add('flash');
+  setTimeout(()=>card.classList.remove('flash'), 2000);
 }
 function addModel(){
   const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;

@@ -445,3 +445,7 @@
 
 - **commit 首行直供 recap——recap 最优先级（2026-09-06，commit 2520ac7，用户提案）**：本轮调了 git_commit 就直接用 message 首行当 recap——commit 首行本就是「一句话摘要」约定，比 LLM 总结 / answer 首行截取都精准且零成本。引擎侧（agent.py `run_hook`）turn_end 扫当轮 tool_calls 找 git_commit：**多次提交取最后一次**、message 取首行截 60 字 → `hook_ctx.commit_first_line` 直供；工作流侧（recap_gen.xml）Entry 增 commit_first_line 输出、check_style 同参输入置逻辑最前命中即短路。优先级链：⓪ commit 首行 → ① answer 风格（首行≤50字+---）→ ② LLM 兜底（local-lfm）。`/restart` 生效；连带消化 answer 首行超长（68 字）时 ① miss 的问题——详见 [multi-agent · commit 首行直供 recap](../architecture/multi-agent.md#commit-首行直供-recaprecap-最优先级2026-09-06commit-2520ac7用户提案)。
 
+## 快速事实增补（2026-09-06 · 三 · WebIDE 按钮）
+
+- **WebIDE：📝 IDE 按钮 → VS Code serve-web 新页签打开工作区（2026-09-06，用户提案「点一个按钮用 WebIDE 打开工作区好接吗」）**：`code serve-web`（VS Code 1.134+ **自带**，非 code-server、零额外安装）后台拉起 → 浏览器完整 VS Code 工作台（实测标题「…- Agt - Visual Studio Code」✅）。后端 `POST /api/ide/open`（src/server.py）：**复用优先**（探测 8443 已活直接返回）+ `_agent.services.start("webide", ...)` 纳管（看板可见可停止、退出码可观测；无 agent 独立 Popen 兜底）+ **就绪判定 body > 500 字符**（组件下载占位页仅 146 字符）+ 150s 超时 `ready=false` + hint；前端控件栏 `🤖 Agent` 旁新增 `📝 IDE` 按钮（src/static/index.html `openWebIde()`，点击 `⏳ IDE…` 禁用态），URL host 用 **`location.hostname`**（serve-web 监听 0.0.0.0——手机/局域网设备可达），`window.open` 新页签 + toast。首次启动下载 server 组件一次性 ~1 分钟（磁盘缓存后重启秒开），下载页自带自动刷新。验证：serve-web 实际拉起 + playwrght 打开标题 + py_compile/node --check 全绿——详见 [webide](features/webide.md)
+

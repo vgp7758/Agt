@@ -34,8 +34,48 @@ def make_background_tools(agent) -> list:
         return svc.stop(name)
 
     def list_services() -> str:
-        """列出所有后台服务及其运行状态（运行中 pid/已运行时长 或 已退出）。"""
-        return svc.list()
+        """列出所有后台进程：分两段——【后台服务】（start_service 创建：运行中 pid/已运行时长 或 已退出）
+        +【后台任务】（run_python/run_shell 超时自动转后台的一次性任务：bg_id/工具名/状态/已跑时长）。"""
+        base = svc.list()
+        try:
+            from real_tools import _bg_tasks
+        except Exception:
+            _bg_tasks = {}
+        if not _bg_tasks:
+            return base
+        import time as _t
+        rows = []
+        for bid, t in _bg_tasks.items():
+            state = "运行中" if not t.get("finished") else f"已结束 rc={t.get('returncode')}"
+            rows.append(f"  {bid} [{t.get('name')}] {state}, 已跑 {int(_t.time()-t.get('started_at',0))}s")
+        head = "" if base.endswith("\n") else "\n"
+        return (f"{base}{head}后台任务 (run_python/run_shell 超时转后台, check_bg_task 查详情):\n"
+                + "\n".join(rows))
+
+    def check_bg_task(task_id: str = "") -> str:
+        """查询 run_python/run_shell 超时自动转后台的一次性任务。不传 task_id = 列出全部
+        （bg_id/工具名/运行状态/已跑时长）；传 task_id = 该任务状态 + 尾部输出（≤2000 字）。
+        任务完成时系统会自动推送通知，本工具用于中途查进度、补看结果或 bg_id 丢失后枚举找回。"""
+        import time as _t
+        try:
+            from real_tools import _bg_tasks
+        except Exception:
+            _bg_tasks = {}
+        if not _bg_tasks:
+            return "(无后台任务)"
+        def _row(bid, t):
+            state = "运行中" if not t.get("finished") else f"已结束 rc={t.get('returncode')}"
+            return f"  {bid} [{t.get('name')}] {state}, 已跑 {int(_t.time()-t.get('started_at',0))}s"
+        if not task_id:
+            return f"后台任务 共 {len(_bg_tasks)} 个:\n" + "\n".join(_row(b, t) for b, t in _bg_tasks.items())
+        t = _bg_tasks.get(task_id)
+        if not t:
+            return f"[错误] 后台任务 '{task_id}' 不存在。当前登记: {', '.join(_bg_tasks)}"
+        state = "运行中" if not t.get("finished") else f"已结束 rc={t.get('returncode')}"
+        out = "".join(t.get("output", []))
+        return (f"[后台任务 {task_id}] [{t.get('name')}] {state}, "
+                f"已跑 {int(_t.time()-t.get('started_at',0))}s, 累计 {len(t.get('output', []))} 行输出\n"
+                f"尾部输出:\n{out[-2000:]}")
 
     def service_logs(name: str, lines: int = 50) -> str:
         """查看某个后台服务最近 N 行输出日志。name 是 start_service 时起的名字。"""
@@ -80,5 +120,5 @@ def make_background_tools(agent) -> list:
         return svc.send(name, message)
 
     return [Tool(start_service), Tool(stop_service), Tool(list_services),
-            Tool(service_logs), Tool(send_to_service),
+            Tool(service_logs), Tool(send_to_service), Tool(check_bg_task),
             Tool(add_schedule), Tool(cancel_schedule), Tool(list_schedules)]

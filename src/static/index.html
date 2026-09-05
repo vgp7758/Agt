@@ -378,6 +378,7 @@
     <button class="btn" id="btnRag" onclick="window.open('/rag','_blank')" title="RAG 文档库管理">📚 RAG</button>
     <button class="btn" id="btnMemory" onclick="window.open('/memory','_blank')" title="长期记忆管理">🧠 记忆</button>
     <button class="btn" id="btnAgents" onclick="window.open('/agents','_blank')" title="Agent 声明管理（主 Agent + 子 Agent）">🤖 Agent</button>
+    <button class="btn" id="btnIde" onclick="openWebIde()" title="用 WebIDE (VS Code·serve-web) 新页签打开工作区">📝 IDE</button>
     <button class="btn" id="btnStats" onclick="window.open('/stats','_blank')" title="LLM 调用统计：缓存命中率折线图 + 各模型概览">📊 统计</button>
     <select id="sessionSel" title="会话"><option value="__new__">➕ 新会话</option></select>
     <!-- Agent 团队切换下拉框 -->
@@ -1767,6 +1768,21 @@ function locateModelCard(name){
   card.scrollIntoView({behavior:'smooth', block:'center'});
   card.classList.add('flash');
   setTimeout(()=>card.classList.remove('flash'), 2000);
+}
+// 用 WebIDE（VS Code serve-web）新页签打开工作区（用户提案 2026-09-06）
+async function openWebIde(){
+  const b = document.getElementById('btnIde');
+  if(!b) return;
+  b.disabled = true; const old = b.textContent; b.textContent = '⏳ IDE…';
+  try{
+    const r = await fetch('/api/ide/open', {method:'POST'});
+    const d = await r.json();
+    // 用 location.hostname 而非 127.0.0.1：手机/其它设备访问时 serve-web 监听 0.0.0.0 可达
+    const url = `http://${location.hostname}:${d.port}/?folder=${encodeURIComponent(d.folder_uri || '')}`;
+    window.open(url, '_blank');
+    toast(d.ready ? '📝 已打开 WebIDE（新页签）' : '⏳ '+ (d.hint || 'VS Code Server 组件首次下载中，页签会自动刷新'));
+  }catch(e){ toast('❌ 打开 IDE 失败：'+e.message); }
+  b.textContent = old; b.disabled = false;
 }
 function addModel(){
   const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;

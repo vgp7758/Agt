@@ -964,6 +964,62 @@ async def api_dash():
     return out
 
 
+@app.post("/api/ide/open")
+async def api_ide_open():
+    """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：控件栏按钮 → 新页签打开工作区。
+    复用优先：8443 已活直接返回；否则 code serve-web 后台拉起（agent.services 纳管——看板可见
+    可停止，退出码可观测；无 agent 时独立 Popen 兜底）。就绪判定：HTTP 可达且 body > 500 字符
+    （下载占位页仅 146 字符）。首次启动 VS Code 会下载 server 组件（一次性 ~1 分钟，磁盘缓存后
+    重启秒开）——150s 未就绪返回 ready=false + 提示（serve-web 下载页自带自动刷新，页签开着即可）。"""
+    import urllib.request as _ur
+    PORT = 8443
+
+    def _probe():
+        try:
+            with _ur.urlopen(f"http://127.0.0.1:{PORT}/", timeout=3) as r:
+                return len(r.read() or b"") > 500
+        except Exception:
+            return False
+
+    if _probe():
+        return _ide_payload(True)
+    cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} '
+           f'--without-connection-token --accept-server-license-terms')
+    if _agent is not None:
+        try:
+            r = _agent.services.start("webide", cmd)
+            if "已存在" in str(r):   # 同名条目在但探测不活（僵死/未起完）——先清再拉
+                try:
+                    _agent.services.stop("webide")
+                    _agent.services.start("webide", cmd)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    else:
+        import subprocess as _sp
+        _sp.Popen(cmd, shell=True,
+                  creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+    t0 = time.time()
+    while time.time() - t0 < 150:
+        if _probe():
+            return _ide_payload(True)
+        await asyncio.sleep(3)
+    return _ide_payload(False)
+
+
+def _ide_payload(ready: bool) -> dict:
+    """WebIDE 打开参数：前端拼 http://{location.hostname}:{port}/?folder={folder_uri} 新页签打开。
+    folder_uri 用 file:/// 形态（serve-web ?folder= 参数约定）；host 用前端 location.hostname——
+    手机/其它设备访问时 127.0.0.1 不可达，serve-web 监听 0.0.0.0 局域网可进。"""
+    ws = str(_workspace).replace("\\", "/")
+    folder_uri = "file:///" + ws.lstrip("/")
+    out = {"ok": True, "port": 8443, "ready": ready, "folder_uri": folder_uri}
+    if not ready:
+        out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
+    return out
+
+
 @app.get("/wf/monitor")
 async def wf_monitor_page(run: str = ""):
     """工作流运行观测页：?run=<run_id> 实时轮询单次运行节点轨迹；无参=最近运行列表。"""

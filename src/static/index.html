@@ -1188,9 +1188,13 @@ function renderHistTurn(t, box, isLast){
   curTurn=prev;
   return row;
 }
+// 钩子组折叠的复用粒度 = 同一轮同一步（用户修正 2026-09-06：after_tool 钩子一步一触发，
+// 轮级粒度会让同轮第 2 步的钩子又复用第 1 步的组——渲染错位只是范围缩小）。任何
+// step/user/current_turn/历史重绘都开新 epoch，组复用要求 epoch 一致。
+let _hookEpoch = 0;
 function renderHistory(turns){
   // 读档：渲染当前档位的轮次 + 顶部"展开更早"蓝字（_histExpandFrom>0 时）
-  msgArea.innerHTML=''; curTurn=null; lastUserBubble=null;
+  msgArea.innerHTML=''; curTurn=null; lastUserBubble=null; _hookEpoch++;
   if(_histExpandFrom>0) msgArea.appendChild(makeExpandBar());
   if(!turns || !turns.length) return;
   turns.forEach((t,i)=>renderHistTurn(t, msgArea, i===turns.length-1));   // 只有最新轮可显示继续按钮
@@ -2800,6 +2804,7 @@ function onWSMessage(ev){
       addUserBubble(m.user || '(进行中)', []);
       newTurn();
       setBusy(true);
+      _hookEpoch++;   // 补发进行中轮：后续实时事件属"下一步"——组不复用补发前的
       if(m.agent_id && m.agent_id !== '_main_')
         addTrace('step', `[${m.agent_id}] — 进行中的轮（已完成 ${m.steps.length} 步）—`);
       else
@@ -2831,6 +2836,7 @@ function onWSMessage(ev){
       if(m.source){
         renderNotifyBubble(m.source, m.text || '');
         if(!busy){ setBusy(true); curTurn = null; }
+        _hookEpoch++;   // 通知唤醒轮：新轮新 epoch
         break;
       }
       // 多端同步：与同 Agent 交互的其它客户端/CLI 发来的消息——渲染 user 气泡。
@@ -2850,10 +2856,11 @@ function onWSMessage(ev){
       addTimeDivider();
       addUserBubble(t + (m.image_count ? `\n（附带 ${m.image_count} 张图片）` : ''), []);
       if(!busy){ setBusy(true); curTurn = null; }
+      _hookEpoch++;   // 真用户消息：新轮新 epoch（跨端同步/多端消息同样算）
       break;
     }
     case 'error': addRow('err', m.text); setBusy(false); break;
-    case 'step': _curThinkFold = null; addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${fmtTokens(m.tokens)} token${m.model?` · by ${m.model}`:''} —`); break;
+    case 'step': _curThinkFold = null; _hookEpoch++; addTrace('step', (m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+`— 第 ${m.n} 步 · 累计 ${fmtTokens(m.tokens)} token${m.model?` · by ${m.model}`:''} —`); break;
     case 'thinking':
       // 流式思考分块 → 累积进当前思考折叠组（默认收起，点开全文；新一步/工具调用时自动分组）
       renderThinking((m.agent_id&&m.agent_id!=='_main_'?`[${m.agent_id}] `:'')+m.text,
@@ -2977,11 +2984,12 @@ function onWSMessage(ev){
       const _hk = m.hook || '';
       const _grps = (window._hookGrp = window._hookGrp || {});
       let g = _grps[_hk];
-      // 组复用条件（修复 2026-09-06）：除 isConnected 外还须【同一轮】（g.turn === curTurn）——
-      // 旧组 DOM 留在历史轮的过程区里永不销毁（isConnected 恒 true），此前跨轮复用导致
-      // 后续每轮的钩子执行行全 append 进第一次触发位置的旧组（用户实锤：折叠进第一次的位置）。
-      // curTurn 为 newTurn/renderHistTurn 每轮新建的对象引用——引用比较即可区分轮次。
-      if(!g || !g.head || !g.head.isConnected || g.turn !== curTurn){
+      // 组复用条件（修复 2026-09-06·用户二次修正：粒度=同一轮同一步）：isConnected 之外还须
+      // 同 turn 且同 epoch——旧组 DOM 留在历史轮/早前步的过程区里永不销毁（isConnected 恒 true），
+      // 此前跨轮复用导致后续每轮钩子执行行全 append 进第一次触发位置的旧组；轮级 turn 粒度对
+      // after_tool（一步一触发）不够——同轮第 2 步又会复用第 1 步的组。epoch 在每个
+      // step/user/current_turn/renderHistory 处自增，天然标记"当前触发位置"。
+      if(!g || !g.head || !g.head.isConnected || g.turn !== curTurn || g.epoch !== _hookEpoch){
         const wrap = document.createElement('div'); wrap.className = 'ev auto';
         const head = document.createElement('div'); head.className = 'tf-head'; head.style.color = '#7c3aed';
         const box = document.createElement('div'); box.className = 'tf-body'; box.style.display = 'none';
@@ -2989,7 +2997,7 @@ function onWSMessage(ev){
           box.style.display = open ? 'none' : 'block'; g.upd(); };
         wrap.appendChild(head); wrap.appendChild(box);
         curTurn.traceBox.appendChild(wrap);
-        g = _grps[_hk] = {head, box, total: 0, done: 0, failed: 0, t0: Date.now(), timer: null, upd: null, turn: curTurn};
+        g = _grps[_hk] = {head, box, total: 0, done: 0, failed: 0, t0: Date.now(), timer: null, upd: null, turn: curTurn, epoch: _hookEpoch};
         g.upd = ()=>{
           if(!g.head || !g.head.isConnected) return;
           const run = (g.done + g.failed) < g.total;

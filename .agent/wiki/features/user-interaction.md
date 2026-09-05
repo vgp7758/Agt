@@ -523,6 +523,23 @@ clearInterval(rec.timer);
 
 **生效方式**：纯前端（index.html 磁盘 serve），**Ctrl+F5 强刷即生效，无需 /restart**。事件协议零改动——纯渲染层聚合。
 
+### 跨轮复用修复：钩子组归属 turn + _runningWf key 加 run_id（2026-09-06，commit bca1932）
+
+**现象（用户报告）**：WebUI 启动后，所有钩子的执行信息都被渲染在第一条 answer 的过程区里——折叠进第一次触发的位置，而不是触发的那一轮。
+
+**根因**：组复用条件只查 `g.head.isConnected`——组 DOM 留在历史轮的过程区里**永不销毁**（isConnected 恒 true），跨轮复用导致后续每轮钩子执行行全 append 进第一次触发位置的旧组。`curTurn` 是 `newTurn`/`renderHistTurn` 每轮新建的对象引用——引用比较即可区分轮次。
+
+**修复四处联动**（src/static/index.html，纯前端）：
+
+| 改动 | 语义 |
+|---|---|
+| 复用条件加 `g.turn === curTurn` | 组复用仅限**同一轮**（同轮多个 before_turn 钩子仍收进同组——组折叠本意）；跨轮自动建新组、渲染在触发位置 |
+| 建组时记 `turn: curTurn` | 对象引用比较天然区分轮次，无需轮号 |
+| `_runningWf` key 加 run_id（`hook::name::run_id`） | 修复第二个 bug：跨轮同名钩子工作流（每轮都跑的 wiki_auto_query 等）key=`hook::name` 跨轮冲突——后轮 start 覆盖前轮 ent，异步完成时更新错行 |
+| 完成事件（auto_wf / auto_wf_error）组头推进优先 `ent.grp` | 完成可能晚于建组到达（异步/已跨轮）——`ent.grp` 精确指向自己的组，停表/计数不丢；退化取 `_hookGrp[hook]`（兼容无 ent 的漏事件） |
+
+**生效**：纯前端（index.html），Ctrl+F5 刷新即生效，无需 /restart。
+
 ## 前端 UI 遮罩坑：toast 透明条遮挡输入框失焦（2026-08，commit 0a415bc）
 
 **现象**：对话几轮后，WebUI 消息输入框中间靠后的位置被「透明的东西」挡住，点击那里输入框会失去焦点。

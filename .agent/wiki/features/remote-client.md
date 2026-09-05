@@ -8,7 +8,7 @@
 
 与 [api-status](api-status.md) 的关系：那条是 REST 只读快照（跨实例**诊断**）；本页是完整客户端能力（跨实例**驱动**）。
 
-与 [multi-instance](../architecture/multi-instance.md)（2026-08 组网落地）的关系：那边是**第一等的工具级组网**——本地模型在任意工具调用的 arguments 带 `server_id` 即自动路由到远程实例执行（`POST /api/tool/exec`，不进对方 session）；本页是**消息级驱动**（对方带着它自己 session 的上下文干活）。"脑"（带上下文决策）与"手"（直执行）互补——见下文语义辨析。
+与 [multi-instance](../architecture/multi-instance.md)（2026-08 组网落地）的关系：那边是**第一等的工具级组网**——本地模型在任意工具调用的 arguments 带 `remote_instance_id`（2026-09-06 改名，旧名 server_id 兼容）即自动路由到远程实例执行（`POST /api/tool/exec`，不进对方 session）；本页是**消息级驱动**（对方带着它自己 session 的上下文干活）。"脑"（带上下文决策）与"手"（直执行）互补——见下文语义辨析。
 
 ## 能力矩阵（四条通道 + 工具级直执行）
 
@@ -18,7 +18,7 @@
 | WS 文本消息 | 驱动对方 agent 跑任务（对方消耗**它自己的** token、带着**它自己** session 的上下文）——即"远程指挥干活" | `run_python` + websocket 库 |
 | WS 斜杠命令 | 即时处理不进对方 LLM：/model、/reload、/restart 甚至 **/exit（可远程关服）** | 同上 |
 | 跨电脑 | 换 url 即可 `ws://192.168.x.x:8000/ws` | 网络可达；⚠️ 服务无鉴权，公网需隧道 |
-| 工具级直执行（2026-08 已第一等化） | 本地模型在工具 arguments 带 `server_id` → 远程 `POST /api/tool/exec` 直执行——不进对方 session、不跑对方 LLM | 已内建（SYSTEM 自动注入实例清单），无需写脚本——见 [multi-instance](../architecture/multi-instance.md) |
+| 工具级直执行（2026-08 已第一等化） | 本地模型在工具 arguments 带 `remote_instance_id`（2026-09-06 前名 server_id，旧名兼容）→ 远程 `POST /api/tool/exec` 直执行——不进对方 session、不跑对方 LLM | 已内建（SYSTEM 自动注入实例清单），无需写脚本——见 [multi-instance](../architecture/multi-instance.md) |
 
 ## 演示脚本（tools/remote_client_demo.py）
 
@@ -49,12 +49,7 @@
 
 ## 缺的一层封装（方向，未实施）
 
-**2026-08 已封装为第一等工具**（commit 398a60a）——用户提案落地：`remote_message(server_id, message)`（异步 fire-and-forget，WS 送达即返）+ `remote_ask(server_id, question, timeout=120)`（同步问答，挂流收 answer 聚合返回）。两者都在 `remote_tools.py`（`_ws_send_collect` 统一 WS 客户端），与工具级直执行同属 [multi-instance 组网](../architecture/multi-instance.md) 的五件套，加入 `_REMOTE_ADMIN` 豁免路由（server_id=发给谁，管理语义）。**不再需要每次写脚本**——`remote_ask("agt-8000", "你当前 session 的名字？")` 一个工具调用即可。实现细节见 [multi-instance · 跨实例消息通信](../architecture/multi-instance.md#跨实例消息通信remote_message--remote_ask2026-08)。
-
-**剩余未实施的部分**：
-- 只读 action 快捷通道（`remote_agt(url, action="list_team")`）——`remote_list` 已覆盖连接管理，其余 action 走 WS 仍要脚本
-- 长等待超时降级文案（「对方在忙长任务——加大 timeout 或改用 remote_message」）已实现，但无独立后台轮询形态
-- **多实例组网愿景**：A 机器派 B 机器的 vision 看图（B 有 GPU 跑本地模型），答案回流入 A 的 inbox——方向未实施，`remote_ask` 的同步问答是雏形
+**2026-08 已封装为第一等工具**（commit 398a60a）——用户提案落地：`remote_message(remote_instance_id, message)`（形参 2026-09-06 由 server_id 改名，异步 fire-and-forget，WS 送达即返）+ `remote_ask(remote_instance_id, question, timeout=120)`（同步问答，挂流收 answer 聚合返回）。两者都在 `remote_tools.py`（`_ws_send_collect` 统一 WS 客户端），与工具级直执行同属 [multi-instance 组网](../architecture/multi-instance.md) 的五件套，加入 `_REMOTE_ADMIN` 豁免路由（remote_instance_id=发给谁，管理语义）。**不再需要每次写脚本**——`remote_ask("agt-8000", "你当前 session 的名字？")` 一个工具调用即可。实现细节见 [multi-instance · 跨实例消息通信](../architecture/multi-instance.md#跨实例消息通信remote_message--remote_ask2026-08)。
 
 ## 注意事项
 

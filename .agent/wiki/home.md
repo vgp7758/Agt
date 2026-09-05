@@ -6,16 +6,18 @@
 
 ## 地图
 
+## 地图
+
 | 页面 | 内容 | 什么时候看 |
 |------|------|-----------|
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
-| [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：**系统信息合并（_walk_plan 连续系统段一条 system + 动态注入 user role）** + 分档投影 + 轮边界统一重排（升档+折叠）+ **估算与校准口径闭环（tools schema 补齐）** + **卫生性强制毕业（GRADUATE_FORCE_TURNS=60 防档1 膨胀）** + **fc 大刀首折（至少吞超深档一半）** + 分组衰减 + 折叠实证 + 前缀缓存三层优化 + **DeepSeek v4 缓存实证（变化的 system/tools 变化全断，三铁律）** | 改投影/token 优化 |
+| [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：**系统信息合并（_walk_plan 连续系统段一条 system + 动态注入 user role）** + 分档投影 + 轮边界统一重排（升档+折叠）+ **估算与校准口径闭环（tools schema 补齐）** + **卫生性强制毕业（GRADUATE_FORCE_TURNS=60 防档1 膨胀）** + fc 大刀首折 + 分组衰减 + 折叠实证 + 前缀缓存三层优化 + **DeepSeek v4 缓存实证（变化的 system/tools 变化全断，三铁律）** | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** + **recap 回写迁移 hook_write（工作流显式决定以谁为准）** | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **钩子声明面三层（编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载）** + **hook_ctx 上下文袋 + hook_write 工具（回写从引擎特判移到工作流）** + **运行观测（run registry 接入点 + 节点全文预算 + 嵌套子画布轨迹）** + **引擎语义补全（setvar XML 简写 / 循环变量终值 / break 携带值 / yield）** + changed_calls 变更调用收集 + git_commit 节点 + 13 类节点速查 | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
 | [architecture/node-plugins](architecture/node-plugins.md) | 节点插件化：三级目录同名覆盖（12 组 py+js 配对）+ SDK/EdFW 前后端约定 + 热加载 + .pyc 坑 + 打包核对 + **目录条目动态聚合（catalog_entries）** + **syncPluginOutputs（defaults.outputs fixed:true 协议端口补齐；code 示例端口删后不复活）** + **aggregator index 协议输出（变量级组内序号）** | 加新节点类型 / 定制覆写内置节点 |
-| [architecture/multi-instance](architecture/multi-instance.md) | 多 agt 实例组网：server_id 工具路由（/api/tool/exec 工具级直执行）+ **auto server_id（url→agt-{port}，幂等复用）** + **_REMOTE_ADMIN 豁免路由（管理语义 vs 路由语义）** + **remote_message/remote_ask（WS 消息级通信，三层组网通道定稿）** | 跨实例组网 / 远程操控 |
+| [architecture/multi-instance](architecture/multi-instance.md) | 多 agt 实例组网：**remote_instance_id 工具路由（原 server_id，2026-09-06 改名 + 全工具 schema 自动注入）**（/api/tool/exec 工具级直执行）+ **auto server_id（url→agt-{port}，幂等复用）** + **_REMOTE_ADMIN 豁免路由（管理语义 vs 路由语义）** + **remote_message/remote_ask（WS 消息级通信，三层组网通道定稿）** | 跨实例组网 / 远程操控 |
 | [architecture/tool-externalization-criteria](architecture/tool-externalization-criteria.md) | 工具外置判别标准：**数据写者决定归属**——自写自读（wiki/ltm/download/rag=真限界上下文，**四组已全部外置 ✅**）vs 引擎写工具读（recall/toollog=可观测性出口，永远内置）；重放拿到数据 ≠ 独立（格式契约耦合更危险）；**rag/ltm 边界裁剪：注册外置+实现留框架（共享单例）**；**纯函数批收官：LIGHT_TOOLS 13→5** | 判断某组工具能否外置 / 理解外置边界 |
-architecture/adr-stateful-externalization.md — 有状态系统外置评估（否决）：五触点分析、MCP 三矛盾、认知归属 vs 数据归属
+| architecture/adr-stateful-externalization.md | 有状态系统外置评估（否决）：五触点分析、MCP 三矛盾、认知归属 vs 数据归属 | 评估某个系统该不该外置 |
 | [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
 | [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** + **嵌套子画布轨迹（复合节点/子工作流的子节点事件，track_stack + 轮容器）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
 | [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳；**字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新** | 调试工作流时在画布上看节点实际产出 |
@@ -38,6 +40,7 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 | [features/spec-tools](features/spec-tools.md) | spec 工具集：explore_subagent 同步前置探索（**≠ explorer 声明式子 Agent**，不注册 registry、只读白名单） | 理解 spec 流程 / 区分两个 explorer |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
 | [features/rag](features/rag.md) | RAG 文档语义检索：ensure_rag 线程安全惰性单例 + preload_async 后台预热 + **共享 embedder（修双份内存）** + rag_tools.py 外置件 | 改 RAG / 理解 embedder 共享 / 外置工具写法 |
+| [features/background-scheduler](features/background-scheduler.md) | 定时/到点任务调度 add_schedule + **后台服务/后台任务工具九件（list_services 合并视图 + check_bg_task 真工具）**：interval 与 at（每日闹钟）、Schedule 数据结构、三族后台通知语义 | 定时任务 / 后台服务管理 |
 | [releases/v0.22.0](releases/v0.22.0.md) | v0.22.0 发布记录（最新）：hook_ctx/hook_write 回写迁移 + 钩子协议下拉回归 + 嵌套子画布观测 + break 携带值/yield + index 变量级修正 | 查最新版本交付内容 |
 | [releases/v0.21.1](releases/v0.21.1.md) | v0.21.1 发布记录：聚合 index 端口 + 卫生性强制毕业 + extract_keywords 修复 + 编辑器批次十 | 查版本交付内容 / 发布流程 |
 | [releases/v0.20.1](releases/v0.20.1.md) | v0.20.1 发布记录：WebUI 🐞 日志面板 + 中断原因三处留痕 + user 事件多端同步 + /update-assets + 修复三件 | 查版本交付内容 / 发布流程 |
@@ -423,4 +426,18 @@ architecture/adr-stateful-externalization.md — 有状态系统外置评估（�
 ## 快速事实增补（2026-09-05 · 二 · 模型搜索摘选弹窗）
 
 - **模型搜索摘选弹窗（2026-09-05，用户提案）**：onboarding 级联落地后设置面板模型卡片暴涨（flatkey 一家 77 张）——设置 → 模型 tab「+ 添加模型」旁新增 🔍 搜索模型按钮 + 弹窗：按**模型名 / model id / base_url / 描述**实时模糊过滤（不区分大小写）+ 匹配计数；点击结果 → 滚动定位卡片视口居中 + 紫色 flash 高亮 2s；Enter 定位首条；安全细节 `data-name` 引号转义防注入 + modal 显式 `display:flex`（复用 onboarding 弹窗不可见坑的教训）。纯前端 index.html +48 行零后端改动，playwright 实测全链路通过（全量 → "glm" 过滤 4 条 → 点击定位+高亮）；HTML mtime 热更新，Ctrl+F5 即见——见 [config-and-models · 模型搜索摘选弹窗](guides/config-and-models.md#模型搜索摘选弹窗级联落地后的卡片定位2026-09-05用户提案)
+
+## 快速事实增补（2026-09-05 · 三 · 收藏精选 + 搜索摘选一键添加）
+
+- **preset ⭐ 收藏精选 + add-one 一键添加（2026-09-05，用户确认）**：级联全量 77 张太爆炸、搜索弹窗首版只能定位已配置卡片——同日二轮四件套收口：①flatkey 77 个标 **14 个 ⭐ 精选**（`starred`：免费/旗舰/主力轻量）；②onboard 级联改收藏维度——贴一次 key 落 **15 张**（当前选中 + 14⭐）而非 77 张；③新端点 `POST /api/models/add-one`：未配置 preset 条目一键落地，**同 provider 已有 key 直接复用**（无 key → need_key 转 onboarding 补）；④搜索弹窗双分组「✅ 已配置定位 / 🔌 可一键添加（➕ + ⭐ 徽标）」。效果：其余模型随时「🔍 搜索模型」搜到即配（搜索摘选升级为全 preset 目录的配置入口）。/restart 生效——见 [config-and-models · 收藏精选与一键添加](guides/config-and-models.md#收藏精选与搜索摘选一键添加add-one-端点--双分组弹窗2026-09-05-同日二轮用户确认)
+
+## 快速事实增补（2026-09-05 · 四 · 工具 schema 缓存断点实证 + flatkey 缓存不可观测）
+
+- **DeepSeek 工具 schema 缓存断点实证（双端点探针，tmp/cache_probe_tools.py）**：①官方直连——**tools 内部同样前缀匹配**：尾部追加工具只付增量 miss（细化 2026-08-29 R13「tools +1 也全断」的字面口径，疑冷节点伪象——S3 首测全 miss，复验 5 连发稳定命中；官方多实例节点级缓存偶不共享，**单次全 miss 需连发复验再定性**）；修改第 N 个工具从它断到结尾（含全部 messages）→ **改工具 schema 放新 session**；hit 恒 64-token 块对齐。②flatkey 中转——`cached_tokens` 恒 0（DeepSeek 缓存字段被剥），**缓存不可观测**，按无缓存全价做预期管理；付费模型跑大上下文优先官方直连——见 [context-engine · 断点实证](architecture/context-engine.md#工具-schema-变化断点实证tools-内部前缀匹配--64-token-块对齐--冷节点全-miss2026-09-05双端点探针)
+
+## 快速事实增补（2026-09-06 · 后台工具真落地 + 路由改名 + 钩子折叠修复）
+
+- **check_bg_task 真工具落地 + list_services 合并视图（2026-09-06，commit e72c0e1）**：check_bg_task 自 v0.17.1 起只有提示文本承诺、工具本体从未注册——现注册为真工具：不传参列全部（**bg_id 枚举找回**，上下文折叠吃掉 bg_id 也能兜底）、传 id 查状态 + 已跑时长 + 累计行数 + 尾部输出（≤2000 字）；list_services 合并视图——【后台服务】+【后台任务】（bg_id/工具名/状态/已跑时长）一处看全，无任务时输出与原版完全一致（存量消费方零感知）。五场景验证全过——见 [background-scheduler · 后台进程一览与任务查询](features/background-scheduler.md#后台进程一览与任务查询list_services-合并视图--check_bg_task-真工具2026-09-06commit-e72c0e1)、[run-python · 超时转后台](features/run-python.md)
+- **路由参数改名 remote_instance_id + 全工具 schema 自动注入（2026-09-06，用户提案）**：旧路由标记名 server_id 极易与工具/MCP 同名参数撞名（remote_* 管理族实证——`remote_connect(server_id=..., url=...)` 被路由拦截吃掉曾致死循环）→ 改名 `remote_instance_id`，且 `_llm_tool_schemas()` 给**每个工具（含 MCP）的 LLM 视图自动注入**该可选参数（deepcopy 不污染 toolbox 原件；remote_* 族豁免防套娃）；旧名 server_id 仍兼容路由、remote_* 族旧名透明规范化不 TypeError；管理族五件套形参同步改名。`/restart` 后生效——见 [multi-instance · 路由参数改名](architecture/multi-instance.md#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)
+- **钩子折叠组跨轮复用修复（2026-09-06，commit bca1932，用户实锤「所有钩子渲染在第一条 answer」）**：组复用条件原只查 `head.isConnected`——组 DOM 留在历史轮永不销毁，后续每轮钩子执行行全 append 进第一次触发位置的旧组。修复：复用条件加 `g.turn === curTurn`（同一轮才复用，curTurn 是每轮 `newTurn()` 新建的对象引用）、`_runningWf` key 加 run_id（跨轮同名工作流 key 冲突）、完成事件组头推进优先 `ent.grp`（精确归属）——见 [user-interaction · 跨轮复用修复](features/user-interaction.md#跨轮复用修复钩子组归属-turn--runningwf-key-加-run_id2026-09-06commit-bca1932)、[trace-fold · 钩子行折叠](features/trace-fold.md#钩子行折叠)
 

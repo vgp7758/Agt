@@ -4,24 +4,29 @@
 
 ## 模块地图（按职责分层）
 
+## 模块地图（按职责分层）
+
 ```
-入口层    chat.py（CLI main / Web web_main，work_q 驱动）
-          server.py（FastAPI+WS，/memory /stats /rag /wfeditor /wf/monitor /api/status /api/tool/exec 路由）
-─────────────────────────────────────────────────
-引擎层    agent.py（ReAct 循环、事件流 _emit、工具执行统一入口 _exec_tool（server_id 远程路由）、并行工具调度、钩子执行、消息队列）
-          llm_client.py（多模型回退链、token 轮换、DSML 兜底、scene/turn/step 调用埋点、usage 归一化）
-          session.py（分层上下文引擎、事件流持久化、分档投影）
-─────────────────────────────────────────────────
-能力层    real_tools.py（130+ 内置工具，含 diff_files 文件级 Myers Diff，见 [features/diff-files](../features/diff-files.md))  tools.py（Tool/Toolbox schema）
-          mcp_client.py  lsp_manager.py  workflow.py + workflow_xml.py（含 run registry 运行观测）
-          multiagent.py（子 Agent）  registry.py（团队注册表）
-          remote_tools.py（多实例组网：server_id 路由 + 远程连接管理，见 [architecture/multi-instance](multi-instance.md)）
-─────────────────────────────────────────────────
-支撑层    longterm_memory.py  plan_tools.py  spec_tools.py  survey_tools.py
-          background.py（后台服务）  restart_watchdog.py  updater.py
+WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/settings/wf_monitor/mcp 等）
+─────────────────────────────────────────────────────
+服务层     server.py（WS + REST 路由、静态资源、/api/tool/exec）
+           chat.py（agent 装配 build_agent：工具箱/记忆/调度/服务/MCP 注入）
+           commands.py（斜杠命令）
+           AgentRegistry（多 Agent 会话注册表，v0.18.2 修复 answer 路由）
+─────────────────────────────────────────────────────
+引擎层     agent.py（ReAct 循环、事件流 _emit、工具执行统一入口 _exec_tool（remote_instance_id 远程路由 + _llm_tool_schemas 全工具 schema 注入）、并行工具调度、钩子执行、消息队列）
+           session.py（历史/投影 messages_for_llm、分档折叠、recent-file 注入）
+           config.py（MODELS/SETTINGS 加载与 repo 级覆盖、agent 声明装配 _asm_evaluate）
+─────────────────────────────────────────────────────
+能力层     real_tools.py（edit/read/grep/run_python…） + tools/builtin/ 外置工具
+           memory_tools / plan_tools / spec_tools / background_tools / wiki_tools / team_tools / remote_tools / mcp
+           remote_tools.py（多实例组网：remote_instance_id 路由 + 远程连接管理，见 [architecture/multi-instance](multi-instance.md)）
+           background.py（后台服务）  restart_watchdog.py  updater.py
+─────────────────────────────────────────────────────
+资产层     assets/（main.yml 装配 + workflows/ + agents/*.md + nodes_builtin/ + presets）
 ```
 
-longterm_memory.py（长期记忆三类 + episodic 召回流水线）详见 [长期记忆](../features/longterm-memory.md)。
+要点：外置工具体系见 [tool-externalization](tool-externalization.md)（含判别标准）；节点插件化见 [node-plugins](node-plugins.md)。
 
 ## 一轮对话的数据流
 
@@ -84,7 +89,7 @@ longterm_memory.py（长期记忆三类 + episodic 召回流水线）详见 [长
 - [工作流运行观测](../features/wf-monitor.md)：run registry + /wf/monitor 实时节点轨迹
 - [用户交互 · 插话机制与消息路由](../features/user-interaction.md)：插话全生命周期 / 后台触发 / 并行钩子 UI 修复
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制 / 子 Agent 唤醒
-- [多实例组网](multi-instance.md)：server_id 工具路由 / /api/tool/exec 工具级直执行 / 远程连接管理（与 WS 消息驱动的"脑"互补的"手"）
+- [多实例组网](multi-instance.md)：remote_instance_id 工具路由（2026-09-06 前名 server_id，旧名兼容）/ /api/tool/exec 工具级直执行 / 远程连接管理（与 WS 消息驱动的"脑"互补的"手"）
 - [上下文引擎与缓存优化](../architecture/context-engine.md)：投影装配 / 分档投影 / 前缀缓存三层优化
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：before_turn 典型实例（默认关闭）
 

@@ -110,6 +110,8 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 **组折叠（auto_wf_start 起，commit 4455503）**：同 hook 位置的多个工作流收进一个组头 `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`——**默认收起**，点击展开看各工作流执行详情。组头带计数（done/total）+ 组级秒表，运行中脉冲动画、全完成/有失败停表定格；行内工作流保留观测页跳转 / 完成态。实现细节与跨轮兜底见 [用户交互 · 钩子组折叠显示](user-interaction.md#钩子组折叠显示同-hook-位置收进一个组头2026-08commit-4455503)。
 
+**跨轮复用修复（2026-09-06，commit bca1932）**：组复用条件原只查 `head.isConnected`——组 DOM 留在历史轮过程区永不销毁，导致后续每轮钩子执行行全 append 进第一次触发位置的旧组（用户实锤「所有钩子渲染在第一条 answer 的过程区」）。修复：复用条件加 `g.turn === curTurn`（同一轮才复用，`curTurn` 是每轮 `newTurn()` 新建的对象引用）、建组记 turn、`_runningWf` key 加 run_id（跨轮同名工作流 key 冲突）、完成事件组头推进优先 `ent.grp`（精确归属）——详见 [用户交互 · 跨轮复用修复](user-interaction.md#跨轮复用修复钩子组归属-turn--runningwf-key-加-run_id2026-09-06commit-bca1932)。
+
 **完成文本二级折叠（auto_wf）**：组内行完成文本 `✅ 「name」完成（Ns）：…` 全文 >160 字时折叠（head 截 110 字 + 换行截断，`…（点击展开）`）——组已折叠的前提下展开组还能再展开长文本（两级降噪）。跨轮迟到的完成（async 钩子，组已脱 DOM）回退 `addTrace` 独立行。
 
 ## hook_note 注入折叠（2026-09-01，commit acc06f1）

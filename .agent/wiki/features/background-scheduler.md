@@ -5,7 +5,7 @@
 ## 职责
 
 - **src/background.py**（现 414 行）：后台调度线程，`_loop` 周期扫描 `next_fire`，到点把消息推给 Agent 触发一轮（唤醒链见 [user-interaction · 后台通知 wake 语义](user-interaction.md)）
-- **src/background_tools.py**（现 84 行）：工具入口 `add_schedule`（建任务）/ `list_schedules`（查任务），LLM 可直接调用
+- **src/background_tools.py**（现 124 行）：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `send_to_service`）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
 - 两类触发：**interval**（每 N 秒）与 **at**（到点；v0.23.1 起支持每日闹钟）
 
 ## Schedule 数据结构（dataclass）
@@ -43,6 +43,37 @@
 
 - `list_schedules` / `/api/status` snapshot：每日任务展示「每天 09:00 (还有Ns)」，单次任务带「单次」标注
 - 后台看板的定时任务分组同步可见每日任务
+
+## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
+
+**背景**：后台进程只有「服务」没有「任务」——run_python / run_shell 超时自动转后台的一次性任务（`_bg_tasks` 登记）此前只能靠返回文案里的 bg_id 单独查；且 **check_bg_task 自 v0.17.1 起只有提示文本承诺它、工具本体从未注册**（空头支票：模型按 docstring 调它 → 未知工具报错）。本次两件事一起补齐（src/background_tools.py，commit e72c0e1）。
+
+## list_services 合并视图：后台服务 + 后台任务一处看全
+
+输出分两段（`svc.list()` 服务段 + `real_tools._bg_tasks` 任务段拼接）：
+
+```
+后台服务:
+  demo(运行中, pid=123, 已跑 60s)
+后台任务 (run_python/run_shell 超时转后台, check_bg_task 查详情):
+  bg_111 [run_python] 运行中, 已跑 45s
+  bg_222 [run_shell] 已结束 rc=0, 已跑 300s
+```
+
+- 无任务时输出与原版完全一致（`(无后台服务)` 原样返回），**有任务才追加段落**——存量消费方零感知
+- 任务段每行：bg_id / 工具名 / 状态（运行中 | 已结束 rc=N）/ 已跑时长
+- 拼接换行修复：`head = "" if base.endswith("\n") else "\n"`（不再强制多补一个换行）
+
+## check_bg_task 真工具落地（此前只有提示文本承诺）
+
+| 用法 | 行为 |
+|---|---|
+| `check_bg_task()` 不传参 | 列出全部后台任务——**bg_id 枚举找回**（上下文折叠吃掉 bg_id 也能兜底） |
+| `check_bg_task("bg_xxx")` | 状态 + 已跑时长 + 累计行数 + 尾部输出（≤2000 字） |
+
+三块短板全补上：中途查进度 / 补看结果 / bg_id 丢失枚举。实现读 `real_tools._bg_tasks`（import 兜底空 dict）；注册列表补 `Tool(check_bg_task)`。
+
+**验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
 ## 与其他模块的关系
 

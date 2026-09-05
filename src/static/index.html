@@ -2100,6 +2100,7 @@ document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 // 打开时拉取渲染，并 3s 轮询刷新（recap/状态/日志在变）；关闭停轮询。
 let _dashTimers = {};          // panelId -> interval id（团队/服务各自独立轮询）
 let _svcExpanded = {};         // 服务行展开态：name -> true（轮询刷新时保持展开）
+let _bgExpanded = {};          // 后台任务行展开态：bg_id -> true（2026-09-06 看板新增）
 let _teamExpanded = {};        // 团队行展开态（recap 折叠，点击展开全文）
 
 function _dashFetch(){
@@ -2220,8 +2221,8 @@ async function renderSvcDash(){
   }
   // —— 后台服务 ——
   const svcs = d.services || [];
-  if(!svcs.length && !scheds.length){
-    list.innerHTML = '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务与定时任务——start_service / add_schedule 启动的会显示在这里）</div>';
+  if(!svcs.length && !scheds.length && !(d.bg_tasks||[]).length){
+    list.innerHTML = '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务/定时任务/后台任务——start_service / add_schedule 启动的、run_python 超时转后台的都会显示在这里）</div>';
     return;
   }
   if(svcs.length){
@@ -2239,6 +2240,25 @@ async function renderSvcDash(){
         <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.command||'')}</span>
       </div>
       ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>` : ''}
+    </div>`;
+  });
+  // —— 后台任务（run_python/run_shell 超时转后台；2026-09-06 用户提案并入看板）——
+  const bgs = d.bg_tasks || [];
+  if(bgs.length){
+    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🧪 后台任务（run_python/run_shell 超时转后台，点击展开尾部输出）</div>';
+  }
+  bgs.forEach(b => {
+    const icon = b.finished ? (b.rc===0 ? '✅' : '⚠️') : '⏳';
+    const stColor = b.finished ? (b.rc===0 ? '#047857' : '#b91c1c') : '#92400e';
+    const stTxt = b.finished ? `已结束 rc=${b.rc}` : `运行中 · ${b.elapsed}s`;
+    const open = !!_bgExpanded[b.bg_id];
+    h += `<div style="border:1px solid #e9e0f7;border-radius:8px;margin-bottom:6px;background:#fff;overflow:hidden">
+      <div style="padding:6px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;flex-wrap:wrap" onclick="_bgExpanded['${esc(b.bg_id)}']=!_bgExpanded['${esc(b.bg_id)}'];renderSvcDash()">
+        <span>${open?'▼':'▶'}</span><span>${icon}</span><b style="font-size:12.5px;font-family:ui-monospace,Consolas,monospace">${esc(b.bg_id)}</b>
+        <span style="font-size:11px;color:${stColor}">${stTxt}</span>
+        <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap">${esc(b.tool)} · ${b.lines} 行输出</span>
+      </div>
+      ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(b.tail||'（暂无输出）')}</pre>` : ''}
     </div>`;
   });
   list.innerHTML = h;

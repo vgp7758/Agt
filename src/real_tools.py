@@ -177,6 +177,7 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
                 _task["proc"].wait()
                 _task["returncode"] = _task["proc"].returncode
                 _task["finished"] = True
+                _task["finished_at"] = time.time()   # 看板显示总时长用（elapsed=finished_at-started_at）
                 if _tool_emit:
                     _tool_emit({"type": "tool_stream", "name": name,
                                 "text": f"\n[后台任务 {_bg_id} 已完成，返回码={_task['returncode']}，已推送通知]"})

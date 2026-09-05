@@ -888,8 +888,10 @@ async def api_dash():
     schedules: 定时/到点任务快照（Scheduler.snapshot：interval/at、下次触发、message/tool）。
     schedule 与 service 是独立管理器（service=长进程有日志可展开；schedule=定时器无日志，
     只有触发时间线）——前端 svcPanel 里分两组展示。
+    bg_tasks: run_python/run_shell 超时转后台的一次性任务（real_tools._bg_tasks，2026-09-06 用户
+    提案并入看板）：bg_id/工具名/运行态/rc/时长/输出行数/尾部输出——运行中排前、组内新的在前。
     无 Agent 时返回空结构（服务未接入时前端显示空态）。"""
-    out = {"team": [], "remotes": [], "services": [], "schedules": []}
+    out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": []}
     if _agent is None:
         return out
     agent = _agent
@@ -938,6 +940,27 @@ async def api_dash():
             out["schedules"] = sch.snapshot() or []
         except Exception:
             out["schedules"] = []
+    # —— 后台任务（run_python/run_shell 超时转后台，real_tools._bg_tasks；2026-09-06 并入看板）——
+    try:
+        import time as _t
+        from real_tools import _bg_tasks as _bgt
+        for bid, t in list(_bgt.items()):
+            started = t.get("started_at") or 0
+            done = bool(t.get("finished"))
+            out["bg_tasks"].append({
+                "bg_id": bid,
+                "tool": t.get("name", "?"),
+                "finished": done,
+                "rc": t.get("returncode"),
+                "started_at": started,
+                # 运行中=至今时长；已结束=总时长（finished_at 缺失时退化为至今）
+                "elapsed": int((t.get("finished_at") or _t.time()) - started),
+                "lines": len(t.get("output") or []),
+                "tail": "".join((t.get("output") or [])[-15:])[-1500:],
+            })
+        out["bg_tasks"].sort(key=lambda x: (x["finished"], -(x["started_at"] or 0)))
+    except Exception:
+        pass
     return out
 
 

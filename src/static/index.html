@@ -134,6 +134,10 @@
   .model-item.flash { outline:2px solid #7c3aed; box-shadow:0 0 0 4px rgba(124,58,237,.15); transition:box-shadow .3s; background:#f5f3ff !important; }
   .ms-item { padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .ms-item:hover { background:#f3f0ff; }
+  .ms-sec { padding:6px 10px; font-size:11px; font-weight:700; color:#7c3aed; background:#f3f0ff; border-bottom:1px solid var(--line); }
+  .ms-star { font-size:12px; }
+  .ms-plus { font-size:14px; color:#7c3aed; margin-left:4px; }
+  .ms-item.ms-add:hover .ms-plus { transform:scale(1.2); display:inline-block; }
   .ms-item code { font-size:11px; color:#7c3aed; background:#f3f0ff; padding:1px 5px; border-radius:4px; }
   .ms-item b { font-weight:600; color:#1f2329; }
   .ms-item .ms-host { font-size:11px; color:#8a9099; margin-left:auto; }
@@ -1676,9 +1680,10 @@ function renderModelList(){
   }).join('')||'<div style="color:#8a9099;padding:8px">暂无模型，点击下方"添加模型"</div>';
 }
 // —— 模型搜索摘选弹窗（2026-09-05，用户提案：provider 级联后卡片太多，搜索定位）——
+// —— 模型搜索摘选弹窗（2026-09-05：provider 级联后卡片太多，搜索定位 + 未配置 preset 一键添加）——
 function showModelSearch(){
   const ov=document.createElement('div'); ov.className='modal-overlay';
-  ov.innerHTML=`<div class="modal" style="max-width:440px">
+  ov.innerHTML=`<div class="modal" style="max-width:480px">
       <h3 style="margin-top:0">🔍 搜索模型</h3>
       <input id="msSearch" type="text" placeholder="按 模型名 / model id / base_url / 描述 搜索…" autocomplete="off" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;box-sizing:border-box">
       <div id="msList" style="max-height:58vh;overflow-y:auto;margin-top:10px;border:1px solid var(--line);border-radius:8px"></div>
@@ -1692,24 +1697,63 @@ function showModelSearch(){
   const inp=ov.querySelector('#msSearch'), list=ov.querySelector('#msList'), cnt=ov.querySelector('#msCount');
   const render=()=>{
     const q=(inp.value||'').trim().toLowerCase();
-    const items=Object.entries(_modelData.models||{}).filter(([n,m])=>{
-      if(!q) return true;
-      return [n, m.model||'', m.base_url||'', m.desc||''].some(s=>String(s).toLowerCase().includes(q));
-    }).sort((a,b)=>a[0].localeCompare(b[0]));
-    cnt.textContent = q ? ('匹配 '+items.length+' 个') : ('共 '+items.length+' 个');
-    list.innerHTML=items.length?items.map(([n,m])=>{
-      const host=String(m.base_url||'').replace(/^https?:\/\//,'').split('/')[0];
-      return `<div class="ms-item" data-name="${n.replace(/"/g,'&quot;')}">
-        <b>${esc(n)}</b><code>${esc(m.model||'')}</code><span class="ms-host">${esc(host||'')}</span>
-      </div>`;
-    }).join(''):'<div style="color:#8a9099;padding:12px;text-align:center">无匹配模型</div>';
-    list.querySelectorAll('.ms-item').forEach(el=>{
+    const hit=s=>!q || String(s||'').toLowerCase().includes(q);
+    // 已配置组：点击定位卡片
+    const cfgs=Object.entries(_modelData.models||{}).filter(([n,m])=>hit(n)||hit(m.model)||hit(m.base_url)||hit(m.desc))
+      .sort((a,b)=>a[0].localeCompare(b[0]));
+    // 未配置 preset 组：点击一键添加（复用同 provider key）
+    const unconf=Object.entries(_presetModels||{}).filter(([n,p])=>!p.configured)
+      .filter(([n,p])=>hit(n)||hit(p.model)||hit(p.base_url)||hit(p.provider)||hit(p.model_desc))
+      .sort((a,b)=>a[0].localeCompare(b[0]));
+    const total=cfgs.length+unconf.length;
+    cnt.textContent = q ? ('匹配 '+total+' 个') : ('已配置 '+cfgs.length+' · 可添加 '+unconf.length);
+    let h='';
+    if(cfgs.length){
+      h+='<div class="ms-sec">✅ 已配置（点击定位）</div>';
+      h+=cfgs.map(([n,m])=>{
+        const host=String(m.base_url||'').replace(/^https?:\/\//,'').split('/')[0];
+        return `<div class="ms-item" data-name="${n.replace(/"/g,'&quot;')}">
+          <b>${esc(n)}</b><code>${esc(m.model||'')}</code><span class="ms-host">${esc(host||'')}</span>
+        </div>`;
+      }).join('');
+    }
+    if(unconf.length){
+      h+='<div class="ms-sec">🔌 可一键添加（同 provider key 自动复用）</div>';
+      h+=unconf.map(([n,p])=>{
+        const host=String(p.base_url||'').replace(/^https?:\/\//,'').split('/')[0];
+        return `<div class="ms-item ms-add" data-name="${n.replace(/"/g,'&quot;')}">
+          <b>${esc(n)}</b><code>${esc(p.model||'')}</code>
+          ${p.starred?'<span class="ms-star" title="⭐精选：onboarding 级联自动落地">⭐</span>':''}
+          <span class="ms-host">${esc((p.provider||'')+' · '+(host||''))}</span>
+          <span class="ms-plus" title="一键添加（复用同 provider key）">➕</span>
+        </div>`;
+      }).join('');
+    }
+    list.innerHTML = total ? h : '<div style="color:#8a9099;padding:12px;text-align:center">无匹配模型</div>';
+    list.querySelectorAll('.ms-item:not(.ms-add)').forEach(el=>{
       el.onclick=()=>{ ov.remove(); locateModelCard(el.dataset.name); };
+    });
+    list.querySelectorAll('.ms-item.ms-add').forEach(el=>{
+      el.onclick=()=>addOneModel(el.dataset.name, ov);
     });
   };
   inp.oninput=render; render(); inp.focus();
   inp.onkeydown=e=>{ if(e.key==='Enter'){ const f=list.querySelector('.ms-item'); if(f) f.click(); } };
   ov.querySelector('#msClose').onclick=()=>ov.remove();
+}
+// 一键添加未配置 preset 模型（2026-09-05）：复用同 provider 已有 key；无 key 时转 onboarding
+async function addOneModel(name, ov){
+  try{
+    const r=await fetch('/api/models/add-one',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const d=await r.json();
+    if(d.ok){
+      toast('✅ 已添加「'+name+'」');
+      await loadModelList();        // 刷新已配置列表（_modelData + renderModelList）
+      if(ov && document.body.contains(ov)){ const inp=ov.querySelector('#msSearch'); if(inp) inp.oninput(); }
+    } else if(d.need_key){
+      ov.remove(); showPresetOnboard(name);   // 同 provider 尚无 key → 走 onboarding 补 key
+    } else toast('❌ '+(d.error||'添加失败'));
+  }catch(e){ toast('❌ 请求失败：'+e.message); }
 }
 function locateModelCard(name){
   const card=Array.from(document.querySelectorAll('#modelList .model-item')).find(c=>{
@@ -1867,7 +1911,7 @@ modelSel.addEventListener('change', ()=>{
     if(!pe){ toast('⚠️ 预设条目不存在（可能已配置）'); return; }
     const isFree=pe.status==='free_trial';
     const icon=pe.provider_icon||'🔌';
-    const sameProv=Object.values(_presetModels).filter(x=>x.provider===pe.provider&&!x.configured).length;  // 级联：同 provider 未配置数（2026-09-05）
+    const starProv=Object.values(_presetModels).filter(x=>x.provider===pe.provider&&!x.configured&&x.starred).length;  // 级联精选数（2026-09-05：只自动落 starred）
     const ov=document.createElement('div'); ov.className='modal-overlay';
     ov.innerHTML=`<div class="modal" style="max-width:500px">
       <h3 style="margin-top:0">${isFree?'🎁':'🔑'} 启用预设模型「${esc(pe.name)}」</h3>
@@ -1891,7 +1935,7 @@ modelSel.addEventListener('change', ()=>{
         <button class="btn" onclick="window.open('${esc(pe.register_url)}','_blank')">🌐 打开 ${esc(pe.provider)} 申请页面</button>
       </div>
       <input id="onboardKeys" type="text" placeholder="粘贴 API Key（多个用逗号分隔，可轮流使用）" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;box-sizing:border-box">
-      ${sameProv>1?`<div style="font-size:12px;color:#6b7280;margin-top:8px">💡 同一 provider 一把 key 通用——保存后将自动用此 key 一并配置该 provider 其余 <b>${sameProv-1}</b> 个模型（无需逐个填 key）</div>`:''}
+      ${starProv>1?`<div style="font-size:12px;color:#6b7280;margin-top:8px">💡 同一 provider 一把 key 通用——保存后将自动用此 key 一并配置该 provider 的 <b>${starProv-1}</b> 个⭐精选模型；其余可随时在「设置 → 🔍 搜索模型」一键添加</div>`:''}
       <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
         <button class="btn" id="onboardCancel">取消</button>
         <button class="btn primary" id="onboardSave">✅ 保存并切换</button>

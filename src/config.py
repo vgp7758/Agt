@@ -244,6 +244,7 @@ def preset_models_view() -> dict:
                           "provider_brief": pv.get("brief", ""), "provider_icon": pv.get("icon", ""),
                           "model": mv.get("model", ""), "thinking": mv.get("thinking", False),
                           "vision": bool(mv.get("vision", False)), "model_desc": mv.get("desc", ""),
+                          "starred": bool(mv.get("starred", False)),   # 收藏标记（2026-09-05）：onboarding 级联只落 starred
                           "status": status,
                           "configured": bool(hit), "config_name": hit or ""}
     return out

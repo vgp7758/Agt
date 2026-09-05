@@ -17,6 +17,11 @@
     "glm": {
      "model": "zai-org/GLM-5.2",
      "thinking": true,
+     "desc": "智谱 GLM-5.2(org)"
+    },
+    "glm-5.2": {
+     "model": "Zhipu/GLM-5.2",
+     "thinking": true,
      "desc": "智谱 GLM-5.2"
     },
     "deepseek": {
@@ -67,10 +72,15 @@
    ],
    "desc": "DeepSeek 官方平台——V4 系列，新注册赠送额度",
    "models": {
-    "deepseek-official": {
-     "model": "deepseek-chat",
-     "thinking": false,
-     "desc": "deepseek-chat（V4 非推理）"
+    "ds-v4-pro": {
+     "model": "deepseek-v4-pro",
+     "thinking": true,
+     "desc": "deepseek-v4-pro 模型"
+    },
+    "ds-v4-flash": {
+     "model": "deepseek-v4-flash",
+     "thinking": true,
+     "desc": "deepseek-v4-flash 模型"
     }
    },
    "icon": "🐋",
@@ -382,7 +392,8 @@
     "fk-cl-opus-4-5": {
      "model": "claude-opus-4-5",
      "thinking": false,
-     "desc": "Claude Opus 4.5（旗舰推理）"
+     "desc": "Claude Opus 4.5（旗舰推理）",
+     "starred": true
     },
     "fk-cl-opus-4-6": {
      "model": "claude-opus-4-6",
@@ -407,7 +418,8 @@
     "fk-cl-sonnet-5": {
      "model": "claude-sonnet-5",
      "thinking": false,
-     "desc": "Claude Sonnet 5（均衡）"
+     "desc": "Claude Sonnet 5（均衡）",
+     "starred": true
     },
     "fk-cl-sonnet-4.5": {
      "model": "anthropic/claude-sonnet-4.5",
@@ -437,7 +449,8 @@
     "fk-ds-v4-flash": {
      "model": "deepseek-v4-flash",
      "thinking": false,
-     "desc": "DeepSeek V4 Flash（限时免费）"
+     "desc": "DeepSeek V4 Flash（限时免费）",
+     "starred": true
     },
     "fk-ds-v4-flash-fk-hs": {
      "model": "deepseek-v4-flash-fk-hs",
@@ -447,7 +460,8 @@
     "fk-ds-v4-pro": {
      "model": "deepseek-v4-pro",
      "thinking": false,
-     "desc": "DeepSeek V4 Pro（旗舰）"
+     "desc": "DeepSeek V4 Pro（旗舰）",
+     "starred": true
     },
     "fk-ds-v4-pro-0813": {
      "model": "deepseek-v4-pro-0813",
@@ -467,7 +481,8 @@
     "fk-g-2.5-pro": {
      "model": "gemini-2.5-pro",
      "thinking": false,
-     "desc": "Gemini 2.5 Pro（强推理）"
+     "desc": "Gemini 2.5 Pro（强推理）",
+     "starred": true
     },
     "fk-g-3-flash-preview": {
      "model": "gemini-3-flash-preview",
@@ -487,7 +502,8 @@
     "fk-g-3.1-pro-preview": {
      "model": "gemini-3.1-pro-preview",
      "thinking": false,
-     "desc": "Gemini 3.1 Pro（预览，旗舰推理）"
+     "desc": "Gemini 3.1 Pro（预览，旗舰推理）",
+     "starred": true
     },
     "fk-g-3.1-pro-preview-customtools": {
      "model": "gemini-3.1-pro-preview-customtools",
@@ -567,7 +583,8 @@
     "fk-glm-5.3-flash": {
      "model": "glm-5.3-flash",
      "thinking": false,
-     "desc": "GLM-5.3 Flash（轻量快速）"
+     "desc": "GLM-5.3 Flash（轻量快速）",
+     "starred": true
     },
     "fk-gpt-4.1-mini": {
      "model": "gpt-4.1-mini",
@@ -602,7 +619,8 @@
     "fk-gpt-5.4-mini": {
      "model": "gpt-5.4-mini",
      "thinking": false,
-     "desc": "GPT-5.4 Mini"
+     "desc": "GPT-5.4 Mini",
+     "starred": true
     },
     "fk-gpt-5.4-mini-fk-cx": {
      "model": "gpt-5.4-mini-fk-cx",
@@ -642,7 +660,8 @@
     "fk-gpt-5.6-sol": {
      "model": "gpt-5.6-sol",
      "thinking": false,
-     "desc": "GPT-5.6 Sol"
+     "desc": "GPT-5.6 Sol",
+     "starred": true
     },
     "fk-gpt-5.6-sol-fk-cx": {
      "model": "gpt-5.6-sol-fk-cx",
@@ -679,7 +698,8 @@
      "temperature": 1,
      "param_lock": [
       "temperature"
-     ]
+     ],
+     "starred": true
     },
     "fk-macaron-v1-coding-venti": {
      "model": "macaron-v1-coding-venti",
@@ -694,7 +714,8 @@
     "fk-mm-m2.7": {
      "model": "minimax-m2.7",
      "thinking": false,
-     "desc": "MiniMax M2.7"
+     "desc": "MiniMax M2.7",
+     "starred": true
     },
     "fk-q35-27b": {
      "model": "qwen3.5-27b",
@@ -709,7 +730,8 @@
     "fk-q35-397b-a17b": {
      "model": "qwen3.5-397b-a17b",
      "thinking": false,
-     "desc": "通义千问 3.5 397B A17B（旗舰）"
+     "desc": "通义千问 3.5 397B A17B（旗舰）",
+     "starred": true
     },
     "fk-q35-flash": {
      "model": "qwen3.5-flash",
@@ -749,12 +771,14 @@
     "fk-q38-max": {
      "model": "qwen3.8-max",
      "thinking": false,
-     "desc": "通义千问 3.8 Max（最新旗舰）"
+     "desc": "通义千问 3.8 Max（最新旗舰）",
+     "starred": true
     },
     "fk-glm-5.3": {
      "model": "glm-5.3",
      "thinking": false,
-     "desc": "GLM-5.3（智谱旗舰，中转首 token 较慢 ~20s）"
+     "desc": "GLM-5.3（智谱旗舰，中转首 token 较慢 ~20s）",
+     "starred": true
     },
     "fk-gpt-5.6-terra": {
      "model": "gpt-5.6-terra",

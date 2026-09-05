@@ -594,6 +594,8 @@ async def api_models_onboard(request: Request):
     for mname, mpe in config.preset_models_view().items():
         if mpe.get("provider") != provider or mpe.get("configured"):
             continue
+        if mname != name and not mpe.get("starred"):
+            continue   # 级联只落 starred 精选；当前选中的必落（2026-09-05 收藏维度）
         entry = {"base_url": mpe.get("base_url", ""),
                  "api_token": toks[0] if len(toks) == 1 else toks,
                  "model": mpe.get("model", ""),
@@ -618,6 +620,63 @@ async def api_models_onboard(request: Request):
         except Exception:
             pass
     return {"ok": True, "name": name, "reload": True, "cascade": added}
+@app.post("/api/models/add-one")
+async def api_models_add_one(request: Request):
+    """搜索摘选一键落地（2026-09-05）：body {name}——把某个 preset 模型加入 models.json。
+    优先复用同 provider 已配置条目的 key（聚合网关一把 key 通用）；无同 provider key 时
+    返回 need_key=true + register_url 让前端走 onboarding 补 key。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "缺少 name"}
+    view = config.preset_models_view()
+    pe = view.get(name)
+    if not pe:
+        return {"error": f"预设条目 '{name}' 不存在"}
+    if pe.get("configured"):
+        return {"error": f"'{name}' 已配置（条目「{pe.get('config_name')}」）"}
+    provider = pe.get("provider", "")
+    # 复用同 provider 已配置条目的 key（首个命中；支持单 key / 多 key 数组 / 逗号分隔串）
+    toks = None
+    for mname, mpe in view.items():
+        if mpe.get("provider") != provider or not mpe.get("configured"):
+            continue
+        src = config.MODELS.get(mpe.get("config_name", "")) or {}
+        tok = src.get("api_token")
+        if isinstance(tok, list) and tok:
+            toks = list(tok)
+        elif isinstance(tok, str) and tok.strip():
+            toks = [t.strip() for t in tok.split(",") if t.strip()]
+        if toks:
+            break
+    if not toks:
+        return {"ok": False, "need_key": True, "name": name, "provider": provider,
+                "register_url": pe.get("register_url", "")}
+    entry = {"base_url": pe.get("base_url", ""),
+             "api_token": toks[0] if len(toks) == 1 else toks,
+             "model": pe.get("model", ""),
+             "thinking": bool(pe.get("thinking", False))}
+    if pe.get("vision"):
+        entry["vision"] = True
+    if pe.get("model_desc"):
+        entry["desc"] = pe.get("model_desc")
+    models = dict(config.MODELS)
+    models[name] = entry
+    config.save_user_models(models, config.DEFAULT_MODEL)
+    # 实例层热应用（与 onboard 同款）
+    if _agent is not None:
+        try:
+            cur = _agent.llm.model_name
+            if cur in config.MODELS:
+                _agent.llm._apply_profile(config.get_profile(cur))
+            _agent._utility_llm = None
+            _agent.retrieval_llm = _agent.utility_client()
+        except Exception:
+            pass
+    return {"ok": True, "name": name, "reload": True}
 
 
 # ===================== MCP 配置 API =====================

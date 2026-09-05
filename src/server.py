@@ -965,14 +965,19 @@ async def api_dash():
 
 
 @app.post("/api/ide/open")
-async def api_ide_open():
+async def api_ide_open(request: Request):
     """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：控件栏按钮 → 新页签打开工作区。
-    复用优先：8443 已活直接返回；否则 code serve-web 后台拉起（agent.services 纳管——看板可见
-    可停止，退出码可观测；无 agent 时独立 Popen 兜底）。就绪判定：HTTP 可达且 body > 500 字符
-    （下载占位页仅 146 字符）。首次启动 VS Code 会下载 server 组件（一次性 ~1 分钟，磁盘缓存后
-    重启秒开）——150s 未就绪返回 ready=false + 提示（serve-web 下载页自带自动刷新，页签开着即可）。"""
+    端口潜规则（用户 2026-09-06）：WebIDE 端口 = 当前 WebUI 端口 + 30000（从 Host 头解析——agt-web
+    的 --port 直接决定，避免多实例抢固定 8443）。复用优先：探测已活直接返回；否则 code serve-web
+    后台拉起（agent.services 纳管——看板可见可停止；无 agent 时独立 Popen 兜底）。就绪判定：HTTP
+    可达且 body > 500 字符（下载占位页仅 146）。首次下载 server 组件（一次性 ~1 分钟，磁盘缓存后
+    重启秒开）——150s 未就绪返回 ready=false + 提示（serve-web 下载页自带自动刷新）。"""
     import urllib.request as _ur
-    PORT = 8443
+    try:
+        _host = request.headers.get("host") or ""
+        PORT = int(_host.rsplit(":", 1)[1]) + 30000 if ":" in _host else 38000
+    except Exception:
+        PORT = 38000
 
     def _probe():
         try:
@@ -982,13 +987,13 @@ async def api_ide_open():
             return False
 
     if _probe():
-        return _ide_payload(True)
+        return _ide_payload(True, PORT)
     cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} '
            f'--without-connection-token --accept-server-license-terms')
     if _agent is not None:
         try:
             r = _agent.services.start("webide", cmd)
-            if "已存在" in str(r):   # 同名条目在但探测不活（僵死/未起完）——先清再拉
+            if "已存在" in str(r):   # 同名条目在但探测不活（僵死/未起完/端口因 --port 变化失效）——先清再拉
                 try:
                     _agent.services.stop("webide")
                     _agent.services.start("webide", cmd)
@@ -1003,18 +1008,18 @@ async def api_ide_open():
     t0 = time.time()
     while time.time() - t0 < 150:
         if _probe():
-            return _ide_payload(True)
+            return _ide_payload(True, PORT)
         await asyncio.sleep(3)
-    return _ide_payload(False)
+    return _ide_payload(False, PORT)
 
 
-def _ide_payload(ready: bool) -> dict:
+def _ide_payload(ready: bool, port: int) -> dict:
     """WebIDE 打开参数：前端拼 http://{location.hostname}:{port}/?folder={folder_uri} 新页签打开。
     folder_uri 用 file:/// 形态（serve-web ?folder= 参数约定）；host 用前端 location.hostname——
     手机/其它设备访问时 127.0.0.1 不可达，serve-web 监听 0.0.0.0 局域网可进。"""
     ws = str(_workspace).replace("\\", "/")
     folder_uri = "file:///" + ws.lstrip("/")
-    out = {"ok": True, "port": 8443, "ready": ready, "folder_uri": folder_uri}
+    out = {"ok": True, "port": port, "ready": ready, "folder_uri": folder_uri}
     if not ready:
         out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
     return out

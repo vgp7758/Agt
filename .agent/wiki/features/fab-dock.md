@@ -1,4 +1,4 @@
-# 右侧工具 dock（fabDock）· 非对话按钮收进一列可折叠图标
+# 右侧工具 dock（fabDock）· 非对话按钮收进可折叠图标列（双列布局）
 
 > src/static/index.html。用户提案 2026-09-06「消息输入框上面的按钮越来越多——把和对话交互不直接相关的按钮都收到右侧那一竖排 icon 里；icon 也越来越多，折叠到一个 icon，点击时打开/折叠所有」。
 
@@ -21,27 +21,44 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 
 原先散排在控件栏/浮动位的管理按钮（设置/反馈/统计/团队/后台/编辑器/记忆/RAG/Agent 管理/清空/WebIDE）全部移出。
 
-## dock 结构（L361-379）
+## dock 结构：双列布局（L361 起）
 
 ```html
 <div id="fabDock">
   <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
   <div id="fabDockMenu">
-    <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge">!</span></button>
-    <button id="logFab" class="fabItem" ...>🐞<span id="logFabBadge">0</span></button>
-    <button id="teamFab" class="fabItem" ...>👥</button>
-    <button id="svcFab" class="fabItem" ...>🛠</button>
-    ...共 13 个图标
+    <!-- 第一列（贴右缘）：原右侧独立 fab 4 个——主按钮正下方 -->
+    <div class="fabCol">
+      <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge">!</span></button>
+      <button id="logFab" class="fabItem" ...>🐞<span id="logFabBadge">0</span></button>
+      <button id="teamFab" class="fabItem" ...>👥</button>
+      <button id="svcFab" class="fabItem" ...>🛠</button>
+    </div>
+    <!-- 第二列：原消息框上方控件栏收进的 9 个 -->
+    <div class="fabCol">
+      <button id="btnEditor" ...>🧩</button>
+      ... 📚 🧠 🤖 📝 📊 💬 ⚙ 🚮
+    </div>
   </div>
 </div>
 ```
 
-- `#fabDock`：`position:fixed; top:64px; right:16px; z-index:120` 纵向 flex——右上角贴边一列；
+- `#fabDock`：`position:fixed; top:64px; right:16px; z-index:120`；`align-items:flex-end`——**主按钮贴右缘，展开两列时不横跳**（改自 align-items:center）；
 - `#fabDockBtn`：42px 圆（深灰 #1f2937），默认**折叠态唯一可见元素**；
-- `#fabDockMenu`：默认 `display:none`，`.open` 时 `display:flex` 纵向 gap:8px；
+- `#fabDockMenu`：默认 `display:none`，`.open` 时 `display:flex; flex-direction:row`（**多列容器**）gap:8px；
+- `.fabCol`：每列内部 `flex-direction:column; gap:8px; align-items:center`（2026-09-07 双列化新增）；
 - 每个 `.fabItem`：42px 圆 + 各自背景色区分。
 
-**13 个图标清单**：
+**双列分组（2026-09-07，用户裁定「原本在消息框上面的那些图标一列，其余放在第二列」）**：
+
+| 列 | 图标（id） | 来源 |
+|---|---|---|
+| 第一列（贴右缘，主按钮正下方） | 📐specFab / 🐞logFab / 👥teamFab / 🛠svcFab | 原右侧独立 fab（badge 红点原位保留） |
+| 第二列（左侧） | 🧩btnEditor / 📚btnRag / 🧠btnMemory / 🤖btnAgents / 📝btnIde / 📊btnStats / 💬btnFeedback / ⚙btnSettings / 🚮btnClear | 原消息框上方控件栏收进 |
+
+**为什么双列**：单列 13 个 ≈ 13×50px 纵向排布超出小视口（用户反馈「图标还是有点超出范围」）；双列把高度砍半——展开总高约 490px，实测 818px 视口内 ✅ 不再超出。
+
+**13 个图标完整清单**（功能不变，仅布局分列）：
 
 | 图标 | id | 功能 | 动作 |
 |---|---|---|---|
@@ -79,8 +96,10 @@ function toggleFabDock(force){
 
 ## 验证
 
-- node --check + dock 区段 13 个 id 精确断言；
-- playwright 真页面三态：折叠（仅 3 按钮 + 图标列隐藏）/ 展开（13 图标 + 主按钮旋转）/ 再点收起。
+- node --check + dock 区段 13 个 id 精确断言（**4+9 两列、无重复 id**）；
+- 双列化插曲：交换列序时首轮编辑曾产生重复列（4 个 fab 在 DOM 里出现两份）——断言抓到后删除 7 行，终验无重复 id；
+- playwright 真页面三态：折叠（仅主按钮）/ 展开（13 图标双列 + 主按钮旋转）/ 再点收起；
+- 双列展开总高实测 ~490px（818px 视口内 ✅ 不再超范围；上一轮单列 13 个纵向超界）。
 
 **生效方式**：纯前端（index.html 磁盘 serve），**Ctrl+F5 刷新即生效**，无需 /restart。
 

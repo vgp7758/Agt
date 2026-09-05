@@ -461,3 +461,7 @@
 
 - **右侧工具 dock（fabDock）：非对话按钮收进一列可折叠图标（2026-09-06，用户提案「按钮越来越多——不直接相关的收进右侧一竖排 icon，icon 也折叠成一个，点击开/合」）**：输入框上方控件栏瘦身——只留对话直接相关（模型/会话/Agent 切换 + 📁 加图 + 🔧 工具 + ⏹ 停止）；13 个管理/观测/编辑按钮（📐施工方案/🐞日志/👥团队/🛠后台/🧩编辑器/📚RAG/🧠记忆/🤖Agent 管理/📝WebIDE/📊统计/💬反馈/⚙设置/🚮清空）收进右侧 fixed 一列 fab，整列折叠成单个 🧰 主按钮（`toggleFabDock`，无参切换 / force 强制；展开态主按钮旋转 45° 作 ✕ 暗示）。**id 全部原样保留**——JS `getElementById` 绑定与 badge/条件显示零改动；specFab 由独立 floating 改 relative 进 dock。纯前端 Ctrl+F5 即生效；playwright 三态全过（折叠/展开/再收起）——见 [fab-dock](features/fab-dock.md)
 
+## 快速事实增补（2026-09-06 · 七 · fab dock 双列布局）
+
+右侧工具 dock 从单列 13 图标改为**双列**（用户裁定：「原本在消息框上面的那些图标一列，其余放在第二列」）——第一列（贴右缘、主按钮正下方）= 原右侧 4 fab（📐spec/🐞log/👥team/🛠svc），第二列 = 原控件栏收进的 9 个（🧩📚🧠🤖📝📊💬⚙🚮）。`#fabDock` 改 `align-items:flex-end`（主按钮贴右缘，展开两列不横跳），`#fabDockMenu` 改 `flex-direction:row` 多列容器 + `.fabCol` 子列。展开总高：单列 13 个超出小视口 → 双列 ~490px（818px 视口实测 ✅）。交换列序时首轮编辑曾产生重复列（4 fab 两份），断言抓到后删 7 行。纯前端，Ctrl+F5 生效。详见 [fab-dock](features/fab-dock.md)。
+

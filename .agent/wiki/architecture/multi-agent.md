@@ -26,6 +26,32 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
+## agent_prompt 默认复用翻转（2026-09-06，用户提案，commit 595fa2f）
+
+**动机**：旧语义「不传 reuse=新建」——`reuse=true` 很少被模型主动传（LLM 默认不带），而高频派活（看图/检查）同名声明的实例越建越多（vision_1→vision_13、wiki-updater_2/3 式堆积，每 /restart 复活路径又造 _N）。用户提案：**默认复用已有实例，换成一个参数传了才创建新的**。
+
+**判定公式**（src/multiagent.py）：
+
+```python
+want_new = bool(new_instance) or (reuse is False)
+# 默认（reuse=None）→ want_new=False → 走复用路径
+# new_instance=true / 显式 reuse=false → want_new=True → 跳过复用/复活强制新建
+# 新建路径 current_turn_only=(not want_new)：复用/复活实例投影隔离
+```
+
+| 参数组合 | 行为 |
+|---|---|
+| 不传（默认） | **复用**：同名空闲活实例直接派活 → 无活实例复活磁盘同名 → 都没有才新建 |
+| `new_instance=true` | 强制新建独立实例（完整上下文投影、历史跨任务累积）——适合带完整记忆长期工作；高频派活别开（实例越建越多） |
+| `reuse=true` | 兼容旧调用，行为=默认复用（wiki_auto_maintenance.xml 存量传此值继续工作） |
+| `reuse=false`（显式） | 等价 `new_instance=true` |
+
+- 复用/复活实例投影**只含当前轮**（历史轮完整归档可 agent_query_events 查、不进上下文）——每次任务上下文干净、token 不随复用次数增长
+- 同名实例全在跑 → 返回 `[忙]` 提示（引导 `wait_subagents` 等它完成，或 `new_instance=true` 并行）——**默认路径不再悄悄多建实例**
+- **SYSTEM 投影提示同步**：chat.py 内置版 + assets/main.yml 播种源——「多次派同名=独立实例（不共享状态）」→「默认复用同名活实例（空闲直接接活；无同名则复活磁盘实例）」；原 `reuse=true` 提示段改为 `new_instance=true` 说明（「要并行跑多个同名实例或要独立完整记忆时强制新建，实例会越建越多」）
+- **验证**：`test/test_agent_prompt_default_reuse.py`（mock registry 行为级测试，8 断言全过）——schema 双参数（reuse/new_instance）就位 / 默认派活撞 busy → `[忙]`（证明走了复用路径而非新建）/ `new_instance=true` 跳过复用 / `reuse=false` 同效 / 无同名落到新建 / 同名空闲 → `♻️ 已复用`
+- 需 `/restart` 生效
+
 ## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
 
 create_agent（src/multiagent.py，程序化声明入口——[/agents 管理页](../features/agents-admin.md)的表单化对应物）从五参扩到七参（用户提案 2026-09-02）：
@@ -675,7 +701,7 @@ system_append:
 
 ## 实践建议
 
-- 派活默认即复用（2026-09-06 起语义翻转：同名空闲实例直接接活，上下文只含当前轮，token 不随复用次数增长）；要独立完整记忆或并行多实例才 `new_instance=true`
+- 派活**默认即复用**（2026-09-06 起语义翻转，见 [agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)）：同名空闲实例直接接活，上下文只含当前轮、token 不随复用次数增长；要独立完整记忆或并行多实例才 `new_instance=true`
 - 需要子 Agent 带历轮记忆的派活（「继续上次那个重构」类）→ 传 `assembly="history=on"`；普通任务默认无记忆态省 token（见上节 optional 真语义）
 - **工作流节点里派活、结果由工作流自身消费**（`wait_subagents` 取）→ `agent_prompt(..., caller="user")`：fire-and-forget，子 Agent 完成不唤醒主 Agent 烧一轮 token（见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)）
 - 长报告类子 Agent answer 上限 4000 字，超长指引用 `agent_query_events(id, 1)` 取全文

@@ -479,3 +479,7 @@
 
 - **变更文件列表：图片/音频直接内嵌渲染（2026-09-06，用户提案）**：answer 尾部「📎 本轮变更文件」补充区（`unmentionedChangesHtml`，2026-09-04「快照 diff 补渲染」引入）此前对 modified/new 一律渲染成文本资产框——图片（如 `src/static/icons/vscode.png`）也按文本显示，用户报告要直接渲染图片。修复：按扩展名分流，**复用 `assetBoxHtml`**（`[!名](路径)` 引用同款）——图片（png/jpg/jpeg/gif/webp/svg/bmp/avif）直接内嵌图框（caption 带 ✏️/➕ 标记、点击看原图）、音频（wav/mp3/ogg/oga/m4a/aac/flac/opus）渲染 audio 播放条；文本/代码仍走预览抽屉、deleted 仍灰框（不变）。实时与历史读档同一函数一处生效。验证：读档实测 vscode.png 图框 naturalWidth=170 + 四场景单测（mp3 播放条 / png 图框 / py 文本预览 / wav deleted 灰框）全过。纯前端，Ctrl+F5 生效——见 [bubble-interaction · 本轮变更文件补充区](features/bubble-interaction.md#本轮变更文件补充区图片音频直接内嵌渲染2026-09-06用户提案)
 
+## 快速事实增补（2026-09-06 · 十一 · agent_prompt 默认复用翻转）
+
+- **agent_prompt 默认语义翻转为复用（2026-09-06，用户提案「默认应该是使用已有实例比较合适，换成一个参数传了才会创建新的实例」，commit 595fa2f）**：旧语义「不传 reuse=新建」→ `reuse=true` 很少被模型主动传 → 同名子 Agent 实例越建越多（vision_1→vision_13、wiki-updater_2/3 式堆积）。翻转后默认【复用】：同名空闲活实例直接派活 → 无活实例但有同名历史条目 → 复活磁盘实例 → 都没有才新建；`new_instance=true`（或显式 `reuse=false`）才强制新建独立实例（完整上下文投影、历史跨任务累积）；`reuse` 改三态兼容参数（None=默认复用 / true=兼容旧调用 / false=等价 new_instance）。同名实例全在跑 → 返回 `[忙]` 提示引导 `wait_subagents` 等它或 `new_instance=true` 并行——默认路径不再悄悄多建实例。SYSTEM 投影提示同步（chat.py 内置版 + assets/main.yml 播种源：「多次派同名=独立实例」→「默认复用同名活实例」）；wiki_auto_maintenance.xml 存量 `reuse=True` 兼容继续工作（行为=默认复用）；`test/test_agent_prompt_default_reuse.py` 8 断言全过（默认撞 busy → [忙] 证走复用路径 / new_instance 跳过复用 / reuse=false 同效 / 无同名落新建 / 同名空闲 → ♻️ 已复用）——见 [multi-agent · 声明与生命周期](architecture/multi-agent.md#声明与生命周期)、[multi-agent · 实践建议](architecture/multi-agent.md#实践建议)
+

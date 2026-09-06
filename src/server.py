@@ -980,7 +980,16 @@ async def api_ide_open(request: Request):
     except Exception:
         base_port = 38000
 
-    def _probe(port):
+    # alive=端口在（能建立 HTTP 连接，无论 202 下载页还是 200 工作台）；ready=组件就绪（工作台>500 字符）
+    def _alive(port):
+        try:
+            with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
+                r.read()
+                return True
+        except Exception:
+            return False
+
+    def _ready(port):
         try:
             with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
                 return len(r.read() or b"") > 500   # 下载占位页仅 146 字符
@@ -997,10 +1006,11 @@ async def api_ide_open(request: Request):
         finally:
             s.close()
 
-    # ① 潜规则口已有活服务 → 直接复用（服务在听则不可 bind 但可用，probe 优先于 bind 判定）
-    if _probe(base_port):
-        return _ide_payload(True, base_port)
-    # ② 选口：潜规则口可 bind 用它；被占（隐形保留/孤儿 socket）向后扫 +1..+5
+    # ① 潜规则口「端口还在」→ 直接复用打开页签（用户提案 2026-09-06：不纠结组件是否就绪，
+    #    下载中(202)/工作台(200)都算“服务在”，页签自己等下载自动刷新；避免重复起新实例）
+    if _alive(base_port):
+        return _ide_payload(_ready(base_port), base_port)
+    # ② 端口没服务（连接拒绝/幽灵占位）→ 选口：潜规则口可 bind 用它；被占向后扫 +1..+5
     PORT = next((p for p in [base_port + i for i in range(6)] if _bindable(p)), None)
     if PORT is None:
         return {"ok": False, "error": f"端口 {base_port}..{base_port + 5} 均被占用且无可复用服务"
@@ -1026,7 +1036,7 @@ async def api_ide_open(request: Request):
                   creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
     t0 = time.time()
     while time.time() - t0 < 12:   # 12s 上限：非首次秒起；首次下载交给页签自动刷新，不阻塞按钮
-        if _probe(PORT):
+        if _ready(PORT):
             return _ide_payload(True, PORT)
         await asyncio.sleep(2)
     return _ide_payload(False, PORT)

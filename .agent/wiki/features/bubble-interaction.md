@@ -4,7 +4,7 @@
 
 ## 职责
 
-气泡交互目前有四个独立特性：
+气泡交互目前有五个独立特性：
 
 | 特性 | 前端文件 | 上线 |
 |------|---------|------|
@@ -12,6 +12,7 @@
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读 | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化 |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -202,6 +203,31 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 **跨语言不误伤**：同一个 `#` 符号，py 文件里高亮成注释、js 文件里（不在该组规则中）不匹配——js 组行注释是 `//`，所以 C 的 `#include` 不会被 js 规则误吃；`.gitignore`/`env` 这类配置文件只有注释着色也够用。
 
 **验证**：临时写 `_hl_colors.html`（标签/字符串/注释/关键字四类样本同屏）→ playwright 截图 + 计算样式核对四色 → 验证后清理临时文件（`_hl_colors.html` + `_hl_colors.png`）。纯前端改动，Ctrl+F5 生效。
+
+### 📎 本轮变更文件补充区：图片/音频直接内嵌渲染（2026-09-06，用户提案）
+
+### 📎 本轮变更文件补充区：图片/音频直接内嵌渲染（2026-09-06，用户提案）
+
+**背景**：answer 尾部「📎 本轮变更文件」补充区（`unmentionedChangesHtml`，2026-09-04 用户提案「快照 diff 补渲染」引入）此前对 modified/new 的**所有文件一律渲染成文本资产框**（点击开预览抽屉）——图片/音频也按文本逻辑显示。用户报告：变更文件列表里的 `src/static/icons/vscode.png` 没有直接渲染图片，只是一行文本。
+
+**修复**（`unmentionedChangesHtml`，src/static/index.html）：对 modified/new 按扩展名分流，**复用 `assetBoxHtml`**（就是 `[!名](路径)` 引用同款渲染逻辑）：
+
+| 变更文件类型 | 之前 | 现在 |
+|---|---|---|
+| 图片（png/jpg/jpeg/gif/webp/svg/bmp/avif） | 文本框（点击开预览抽屉） | **直接内嵌图框**，caption 带 ✏️/➕ 标记，点击看原图 |
+| 音频（wav/mp3/ogg/oga/m4a/aac/flac/opus） | 文本框 | **audio 播放条** 🔊（同一分支天然覆盖） |
+| 文本/代码类 | 点击预览抽屉 | 不变 ✅ |
+| deleted | 灰框只读 | 不变 ✅ |
+
+- **caption 带变更标记**：`assetBoxHtml(ic+' '+f, f)`——icon（✏️ modified / ➕ new）拼进标题，与文本资产框视觉一致
+- **实时渲染与历史读档走同一函数**（`renderAnswerPages` 调 `unmentionedChangesHtml`）——一处改动两处生效
+- 差集逻辑不变：answer 已用 `[!名](路径)` 引用过的不再重复列出（全等或 basename 相等），差集空 → 零噪声
+
+**验证（playwright 实测 + 浏览器内单测）**：
+- 读档实测（上一轮变更列表）：`vscode.png` → 图框，`<img>` loaded=true、naturalWidth=170；`index.html` → 仍文本框 ✅
+- 四场景单测（evaluate 直接调 `unmentionedChangesHtml`）：`mp3_is_audio_player` / `png_is_img` / `py_is_text_preview` / `wav_deleted_grey` 全 true
+
+纯前端改动，Ctrl+F5 即生效（无后端路由变更）。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

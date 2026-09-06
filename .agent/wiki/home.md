@@ -475,3 +475,7 @@
 - **全部 dock 图标 hover 浮现文字标签**（用户提案「图标在 hover 的时候变成文字标题」）：纯 CSS `#fabDock [data-label]::after { content: attr(data-label); right:calc(100%+8px) }`——dock 贴右缘，label 向左展开不遮图标；`title` 全部移除、语义迁至 `aria-label`（避免原生 tooltip 与 CSS 标签双重弹出）。
 - 顺带修复：`openWebIde()` 加载态 `b.textContent='⏳'` → `.loading` class（`opacity:.55`）——按钮内容已是 `<img>`，覆盖 textContent 会清掉 logo。详见 [fab-dock](features/fab-dock.md) 与 [webide](features/webide.md)。
 
+## 快速事实增补（2026-09-06 · 十 · 变更文件列表图片/音频直接内嵌渲染）
+
+- **变更文件列表：图片/音频直接内嵌渲染（2026-09-06，用户提案）**：answer 尾部「📎 本轮变更文件」补充区（`unmentionedChangesHtml`，2026-09-04「快照 diff 补渲染」引入）此前对 modified/new 一律渲染成文本资产框——图片（如 `src/static/icons/vscode.png`）也按文本显示，用户报告要直接渲染图片。修复：按扩展名分流，**复用 `assetBoxHtml`**（`[!名](路径)` 引用同款）——图片（png/jpg/jpeg/gif/webp/svg/bmp/avif）直接内嵌图框（caption 带 ✏️/➕ 标记、点击看原图）、音频（wav/mp3/ogg/oga/m4a/aac/flac/opus）渲染 audio 播放条；文本/代码仍走预览抽屉、deleted 仍灰框（不变）。实时与历史读档同一函数一处生效。验证：读档实测 vscode.png 图框 naturalWidth=170 + 四场景单测（mp3 播放条 / png 图框 / py 文本预览 / wav deleted 灰框）全过。纯前端，Ctrl+F5 生效——见 [bubble-interaction · 本轮变更文件补充区](features/bubble-interaction.md#本轮变更文件补充区图片音频直接内嵌渲染2026-09-06用户提案)
+

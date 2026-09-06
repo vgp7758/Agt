@@ -465,3 +465,7 @@
 
 右侧工具 dock 从单列 13 图标改为**双列**（用户裁定：「原本在消息框上面的那些图标一列，其余放在第二列」）——第一列（贴右缘、主按钮正下方）= 原右侧 4 fab（📐spec/🐞log/👥team/🛠svc），第二列 = 原控件栏收进的 9 个（🧩📚🧠🤖📝📊💬⚙🚮）。`#fabDock` 改 `align-items:flex-end`（主按钮贴右缘，展开两列不横跳），`#fabDockMenu` 改 `flex-direction:row` 多列容器 + `.fabCol` 子列。展开总高：单列 13 个超出小视口 → 双列 ~490px（818px 视口实测 ✅）。交换列序时首轮编辑曾产生重复列（4 fab 两份），断言抓到后删 7 行。纯前端，Ctrl+F5 生效。详见 [fab-dock](features/fab-dock.md)。
 
+## 快速事实增补（2026-09-06 · 八 · WebIDE 卡沙漏治本：幽灵端口 + 12s 乐观开页签）
+
+- **WebIDE 卡沙漏治本：幽灵端口占位根因 + 12s 乐观开页签（2026-09-06 · 八，commit 55f37e3 推送 + 二轮本地）**：用户实锤「点 IDE 变沙漏 + 白色 IDE…文字，很长时间不开页签」。根因=**serve-web 孤儿进程**：code-tunnel 启动器被杀后其 spawn 的 node 子进程继承 LISTEN socket 存活——39000 被已退 pid 21512「幽灵 LISTENING」占住（bind 10048 / 连接 10061）；旧端点 150s 长轮询 → 按钮卡 ⌛ 两分半、window.open 迟迟不执行。治本三件（src/server.py + index.html）：①选口 **bind 实测 + 向后扫 +1..+5**（WinNAT 隐形保留/孤儿残留自动滚到可用口，不依赖人工清理）；`_agent.services.start` 绑**独立进程组**、stop 整树杀（不再漏子进程）；②等待上限 **150s→12s**（`ready=false` + hint，组件缓存后秒起，不阻塞交互）；③前端 fetch **AbortController 12s 超时**，超时/异常**乐观开页签**（退回潜规则口 `http://{host}:{webui_port+30000}/`）+ toast「后台启动中，稍后刷新」，按钮最迟 12s 恢复。**复用判定拆分 `_alive`/`_ready`**（二轮，用户建议「启动时先查 39000，端口还在就直接打开页面」）：`_alive`（HTTP 能连上——202 下载页 / 200 工作台都算）→ 复用依据；`_ready`（body>500）只决定 toast 文案——修掉真空隙：serve-web 活着但正在下载组件时旧判定（body>500）误判「无服务」→ bind 扫描滚到 +1 又起一个实例，双实例并存。现在端口在 → 直接复用该口开页签，页签自己等下载自动刷新——详见 [webide · 端点复用语义](features/webide.md#端点post-apideopen-srcserverpy)
+

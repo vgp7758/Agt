@@ -1728,7 +1728,15 @@ class Agent:
             if self.snapshot_manager is not None:
                 try:
                     sha = self.snapshot_manager.snapshot()
-                    self.session.record_snapshot(sha)   # 设 _current.snapshot_sha + 记 snapshot 事件
+                    # 顺带记录用户真仓库 HEAD（rewind 撞车检测：检查点后有 git 提交则回溯会被拦，
+                    # 除非 --git reset 把 HEAD 一并退回——用户提案 2026-09-06）
+                    _gh = ""
+                    try:
+                        from snapshots import user_repo_head
+                        _gh = user_repo_head(self.snapshot_manager.workspace)
+                    except Exception:
+                        pass
+                    self.session.record_snapshot(sha, git_head=_gh)   # 设 _current.snapshot_sha/git_head + 记事件
                     self._emit({"type": "checkpoint", "sha": sha})
                 except Exception as e:
                     self._emit({"type": "warn", "text": f"快照失败：{type(e).__name__}: {e}"})

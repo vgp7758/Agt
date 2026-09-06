@@ -864,8 +864,10 @@ def _cmd_snapshot(ctx: CommandContext, args):
 
     if sub == "restore":
         if len(positional) < 2:
-            print("用法：/snapshot restore <序号|sha>")
+            print("用法：/snapshot restore <序号|sha> [--git reset]")
             return
+        # --git reset：检查点后有 git 提交时的处置（默认拦截；reset=真仓库 HEAD 一并退到检查点时刻）
+        git_policy = "reset" if ("--git" in args and "reset" in args) or "--git-reset" in args else "block"
         key = positional[1]
         sha = None
         if key.isdigit():
@@ -883,9 +885,9 @@ def _cmd_snapshot(ctx: CommandContext, args):
                 print(f"❌ 前缀 {key} 匹配多个快照，请用更长的前缀或序号")
                 return
         try:
-            target = restore_snapshot(ctx.agent, sha)
+            target = restore_snapshot(ctx.agent, sha, git_policy=git_policy)
         except Exception as e:
-            print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+            print(f"❌ 回溯失败：{e}")
             return
         if target is None:
             print("❌ 回溯未生效（对话中找不到该快照点）")
@@ -910,6 +912,7 @@ def _cmd_rewind(ctx: CommandContext, args):
     count = 1
     if args and args[0].isdigit():
         count = max(1, int(args[0]))
+    git_policy = "reset" if ("--git" in args and "reset" in args) or "--git-reset" in args else "block"
     n = len(turns)
     if count > n:
         print(f"⚠️ 共 {n} 轮，回溯全部（回到最初）")
@@ -920,9 +923,9 @@ def _cmd_rewind(ctx: CommandContext, args):
         print(f"❌ 倒数第 {count} 轮没有快照点，无法回溯")
         return
     try:
-        restore_snapshot(ctx.agent, sha)
+        restore_snapshot(ctx.agent, sha, git_policy=git_policy)
     except Exception as e:
-        print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+        print(f"❌ 回溯失败：{e}")
         return
     remain = len(ctx.session.turns)
     print(f"✅ 已回溯（撤销最近 {count} 轮的对话 + 文件改动），剩余 {remain} 轮")
@@ -1791,14 +1794,17 @@ def build_default_registry() -> CommandRegistry:
         "/web stop         停止服务、释放端口\n"
         "/web status       查看服务状态")
     reg.register("snapshot", _cmd_snapshot,
-        "list | restore <序号|sha>  工作区快照回溯（检查点）",
+        "list | restore <序号|sha> [--git reset]  工作区快照回溯（检查点）",
         "/snapshot list          列出所有快照点\n"
         "/snapshot restore 3     回溯到第 3 个快照之前（撤销该轮及之后的文件改动+对话）\n"
-        "/snapshot restore a1b2  用 sha 前缀回溯")
+        "/snapshot restore a1b2  用 sha 前缀回溯\n"
+        "/snapshot restore 3 --git reset   检查点后有 git 提交时：真仓库 HEAD 一并退到\n"
+        "                                  检查点时刻（默认拦截防撞车；被退提交 reflog 可找回）")
     reg.register("rewind", _cmd_rewind,
-        "[count]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）",
+        "[count] [--git reset]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）",
         "/rewind            撤销最近 1 轮（对话+文件改动）\n"
-        "/rewind 3          撤销最近 3 轮")
+        "/rewind 3          撤销最近 3 轮\n"
+        "/rewind --git reset  检查点后有 git 提交时一并退 HEAD（否则默认拦截并提示")
     reg.register("rag", _cmd_rag,
         "build | config [k v] | stats | query <词>  RAG 文档库管理",
         "/rag stats                         查看索引状态\n"

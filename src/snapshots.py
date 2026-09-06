@@ -72,3 +72,44 @@ class SnapshotManager:
             self._run(["checkout-index", "-a", "-f"])
             # 删除快照之后新建的文件（快照仓库视角下的未跟踪文件；.agt/.git 已在 exclude）
             self._run(["clean", "-fd", "-e", ".agt"])
+
+
+# ---------- 用户真仓库 HEAD 工具（rewind 撞车检测，用户提案 2026-09-06）----------
+# 快照仓库只管工作区文件树；用户的 .git（真仓库）HEAD 不受快照回溯影响——
+# 检查点之后若有 git 提交，回溯会导致「session 回到过去、git 历史在未来」的撞车
+# （之后 add -A 会把回溯差异整笔提交）。三个小工具给 chat.restore_snapshot 用。
+
+def _user_git(workspace, args, check=True) -> str:
+    r = subprocess.run(["git", "-C", str(workspace), *args], capture_output=True, text=True,
+                       timeout=60, creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+    if check and r.returncode != 0:
+        raise RuntimeError(f"git {args[0]} 失败: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout.strip()
+
+def user_repo_head(workspace) -> str:
+    """用户真仓库当前 HEAD sha；非 git 仓库/失败返回空串（=不启用撞车检测）。"""
+    try:
+        if not (Path(workspace) / ".git").exists():
+            return ""
+        return _user_git(workspace, ["rev-parse", "HEAD"], check=False)
+    except Exception:
+        return ""
+
+def git_log_between(workspace, old_head: str, new_head: str) -> str:
+    """old_head..new_head 的 oneline 提交清单（撞车提示用）。"""
+    try:
+        return _user_git(workspace, ["log", "--oneline", f"{old_head}..{new_head}"], check=False)
+    except Exception:
+        return ""
+
+def user_repo_reset_hard(workspace, sha: str) -> None:
+    """真仓库 git reset --hard <sha>（rewind 撞车的处置方案 B：HEAD 一并退到检查点时刻）。
+    被退掉的提交仍在 reflog 可找回；若已 push 过，之后需 push --force 覆盖远端。
+    防护：reset 前把 .agt/ 从 index 摘除（若被真仓库误跟踪）——--hard 只重置 tracked 文件，
+    摘除后 .agt 变 untracked 保留在工作区，防快照仓库(.agt/snapshots)被连带删除
+    （测试实测踩中：真仓库 add -A 跟踪了 .agt → reset --hard 把整个快照仓库删了）。"""
+    try:
+        _user_git(workspace, ["rm", "-r", "--cached", "-q", ".agt"], check=False)
+    except Exception:
+        pass
+    _user_git(workspace, ["reset", "--hard", sha])

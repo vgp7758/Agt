@@ -364,11 +364,32 @@ def get_snapshot_list(session):
     return items
 
 
-def restore_snapshot(agent, sha):
+def restore_snapshot(agent, sha, git_policy="block"):
     """检查点回溯：还原工作区文件树 + 截断对话。
-    返回被截那轮的 user_message；snapshot_manager 未装或 sha 不存在返回 None。"""
+    返回被截那轮的 user_message；snapshot_manager 未装或 sha 不存在返回 None。
+
+    撞车检测（用户提案 2026-09-06）：目标轮记录的用户真仓库 HEAD ≠ 当前 HEAD
+    = 检查点之后有 git 提交。回溯会造成「session 在过去、git 历史在未来」——
+    之后任何 add -A 提交都会把回溯差异整笔提交。git_policy：
+      block（默认）→ 抛 RuntimeError（带提交清单与处置指引），回溯不生效
+      reset        → git reset --hard 到检查点时刻的 HEAD（被退提交在 reflog 可找回；
+                     若已 push 过，之后需 push --force），随后正常回溯"""
     if agent.snapshot_manager is None:
         return None
+    target_head = agent.session.git_head_at_snapshot(sha)
+    if target_head:
+        from snapshots import user_repo_head, git_log_between, user_repo_reset_hard
+        cur_head = user_repo_head(agent.snapshot_manager.workspace)
+        if cur_head and cur_head != target_head:
+            log = git_log_between(agent.snapshot_manager.workspace, target_head, cur_head)
+            n = len([l for l in log.splitlines() if l.strip()])
+            if git_policy != "reset":
+                raise RuntimeError(
+                    f"检查点之后有 {n} 笔 git 提交，回溯会与 git 历史撞车（session 回到过去、"
+                    f"HEAD 还在未来——之后 add -A 会把回溯差异整笔提交）：\n{log}\n"
+                    f"处置：① 重新执行并带 --git reset（真仓库 HEAD 一并退到 {target_head[:10]}）；"
+                    f"② 手动 git reset --hard {target_head[:10]} 后再回溯；③ 放弃回溯")
+            user_repo_reset_hard(agent.snapshot_manager.workspace, target_head)
     agent.snapshot_manager.restore(sha)
     return agent.session.restore_to_snapshot(sha)
 

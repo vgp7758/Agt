@@ -386,6 +386,8 @@ class Turn:
     user_message: str
     images: list = field(default_factory=list)       # list[str] 用户附带的图片(data URL)，多模态用
     snapshot_sha: str = ""                           # 该轮发送前的工作区快照(检查点回溯用)
+    git_head: str = ""                               # 该轮发送前用户真仓库 HEAD（rewind 撞车检测：检查点后
+                                                     # 有 git 提交则回溯会与 git 历史冲突——chat.restore_snapshot 拦）
     steps: list = field(default_factory=list)        # list[Step]
     answer: str = ""
     answer_reasoning: str = ""                       # 最终回答那步的 reasoning_content（GLM 等要求回传）
@@ -741,11 +743,19 @@ class Session:
             except Exception:
                 pass
 
-    def record_snapshot(self, sha: str):
-        """记录工作区快照 sha 到当前 turn（检查点回溯用）。agent 打快照后调用。"""
+    def record_snapshot(self, sha: str, git_head: str = ""):
+        """记录工作区快照 sha（+ 用户真仓库 HEAD，rewind 撞车检测用）到当前 turn。agent 打快照后调用。"""
         if self._current is not None:
             self._current.snapshot_sha = sha
-            self._emit_event({"event": "snapshot", "sha": sha})
+            self._current.git_head = git_head or ""
+            self._emit_event({"event": "snapshot", "sha": sha, "git_head": git_head or ""})
+
+    def git_head_at_snapshot(self, sha: str) -> str:
+        """返回 snapshot_sha==sha 那轮记录的用户真仓库 HEAD（无记录/找不到返回空串）。"""
+        for t in self.turns:
+            if t.snapshot_sha == sha:
+                return getattr(t, "git_head", "") or ""
+        return ""
 
     def start_turn(self, user_message: str, images: Optional[list] = None):
         # 防御：上一轮未正常 finish/abort（run 中途异常逃出，如 LLM 502 抛穿循环）→
@@ -887,7 +897,8 @@ class Session:
         for t in self.turns[:keep]:
             events.append({"event": "turn_start", "user": t.user_message, "images": t.images or []})
             if t.snapshot_sha:
-                events.append({"event": "snapshot", "sha": t.snapshot_sha})
+                events.append({"event": "snapshot", "sha": t.snapshot_sha,
+                               "git_head": getattr(t, "git_head", "") or ""})
             for s in t.steps:
                 events.append({"event": "step", "reasoning": s.reasoning or "",
                                "call_ids": [tc.call_id for tc in s.tool_calls],
@@ -2736,7 +2747,8 @@ class Session:
             for t in old_turns:                                      # 旧 turns → 事件 append
                 s._emit_event({"event": "turn_start", "user": t.user_message, "images": t.images})
                 if t.snapshot_sha:
-                    s._emit_event({"event": "snapshot", "sha": t.snapshot_sha})
+                    s._emit_event({"event": "snapshot", "sha": t.snapshot_sha,
+                                   "git_head": getattr(t, "git_head", "") or ""})
                 for step in t.steps:
                     s._emit_event({"event": "step", "reasoning": step.reasoning or "",
                                    "call_ids": [tc.call_id for tc in step.tool_calls],
@@ -2826,6 +2838,7 @@ def _replay_events(events: list) -> list:
                        snapshot_sha="", steps=[])
         elif et == "snapshot" and cur is not None:
             cur.snapshot_sha = e.get("sha", "")
+            cur.git_head = e.get("git_head", "") or ""   # rewind 撞车检测用（旧档无此字段→空串=不拦）
         elif et == "step" and cur is not None:
             _chm = dict(e.get("changes") or [])   # 快照 diff 恢复（有变更的调用——重放进 ToolCall.changed）
             cur.steps.append(Step(reasoning=e.get("reasoning", ""),

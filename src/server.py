@@ -1720,16 +1720,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     if isinstance(_d, dict) and _d.get("action") == "restore":
         # 走 work_q → worker 线程执行：print 到 CLI + 广播 session_history 给所有 WS 客户端
         _sha = _d.get("sha", "")
+        _gp = "reset" if _d.get("git_reset") else "block"   # 撞车处置：默认拦截，前端可显式要求 reset
         if _work_q is None:
             await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环"})
             return
         def _do_restore():
             import chat as chatmod
             try:
-                target = chatmod.restore_snapshot(agent, _sha)
+                target = chatmod.restore_snapshot(agent, _sha, git_policy=_gp)
                 print(f"⏮ 已回溯到检查点（截掉的轮：「{(target or '')[:60]}」）")
             except Exception as e:
-                print(f"❌ 回溯失败：{type(e).__name__}: {e}")
+                # 撞车/失败原因广播给 WebUI（此前只 print 到 CLI，前端只看到"回溯中…"后无声失败）
+                _broadcast({"type": "system", "text": f"❌ 回溯失败：{e}"})
+                print(f"❌ 回溯失败：{e}")
                 return
             _broadcast({"type": "restored", "target": target or "", "agent_id": "_main_"})
             _broadcast_history(agent)

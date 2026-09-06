@@ -1087,8 +1087,15 @@ function unmentionedChangesHtml(answerText, changed){
     if(c.change === 'deleted'){
       h += '<div class="asset-box file" style="opacity:.55">🗑 <span class="asset-cap">'+esc(f)+'</span>（已删除）</div>';
     } else {
-      h += '<div class="asset-box file" onclick="openFilePreview(\''+esc(f).replace(/'/g,'&#39;')+'\')">'+
-           '<div class="asset-cap">'+ic+' '+esc(f)+'</div></div>';
+      const ext=(f.split('.').pop()||'').toLowerCase();
+      if(('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0 ||
+         ('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0){
+        // 图片/音频 → 直接内嵌渲染（用户提案 2026-09-06：不再走文本预览逻辑），icon 标进 caption
+        h += assetBoxHtml(ic+' '+f, f);
+      } else {
+        h += '<div class="asset-box file" onclick="openFilePreview(\''+esc(f).replace(/'/g,'&#39;')+'\')">'+
+             '<div class="asset-cap">'+ic+' '+esc(f)+'</div></div>';
+      }
     }
   });
   return h + '</div>';

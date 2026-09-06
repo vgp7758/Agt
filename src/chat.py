@@ -65,8 +65,8 @@ def _rules_and_skills_section(workspace=WORKSPACE) -> str:
                      + skills + "\n（完成可复用任务后可用 save_skill 沉淀新技能）")
     agents = agents_summary(workspace)
     if agents:
-        parts.append("=== 可用子 Agent（.agent/agents/，一次性）===\n"
-                     "用 agent_prompt(name, 任务) 派给独立子 Agent 执行（实例即弃；过程回流本对话）：\n"
+        parts.append("=== 可用子 Agent（.agent/agents/）===\n"
+                     "用 agent_prompt(name, 任务) 派给子 Agent 执行（默认复用同名活实例；过程回流本对话）：\n"
                      + agents)
     return ("\n\n" + "\n\n".join(parts)) if parts else ""
 
@@ -102,16 +102,16 @@ SYSTEM = build_system(
         "需要历史步骤的完整内容(完整 traceback、run_python 全部输出、edit 的完整 old/new)时调 get_tool_detail 拉取——"
         "可传单个 id 或多个(逗号分隔，如 get_tool_detail(\"c7,c8\"))一次取回多条；不确定有哪些 id 时先 list_tool_logs。\n"
         + "多 Agent 协作（全异步 + 自动 caller 绑定）：子 Agent 声明在 .agent/agents/<name>.md，下方【可用子 Agent】清单已为你投影——"
-        "匹配某子 Agent 时直接 agent_prompt(name, 任务) 派活：它读声明建临时实例在后台自主跑，立即返回（不阻塞你）。"
+        "匹配某子 Agent 时直接 agent_prompt(name, 任务) 派活：默认复用同名活实例（空闲直接接活；无同名则复活磁盘实例），立即返回不阻塞你。"
         "完成后结果自动入队到你的 inbox——你下一步边界就能看到（跟用户插话效果一样），你也可以结束本轮等它汇报回来时自动激活下一轮。"
         "需要立即要结果才能继续时，调 wait_subagents(agent_ids) 显式阻塞等待。"
-        "（多次 prompt 同名 = 独立实例，不共享状态；过程输出会回流到本对话）。"
+        "（复用实例的投影只含当前轮——token 不随派活次数增长；过程输出会回流到本对话）。"
         "需要新角色时 create_agent(name, description, system, tools, model) 写一条声明"
         "（description=一句话作用+何时调用，会投影进你的 SYSTEM；system=角色定义；tools 留空=继承全部(除管理工具)，或逗号分隔工具名；model 留空=用你当前模型）；"
         "不再需要时 kill_agent(name) 删声明；list_agents() 查看全部。"
         "复杂任务可拆分派给不同角色/模型的子 Agent 再综合——全异步并行，互不阻塞。"
-        "高频反复派活（如反复看图/检查）时用 agent_prompt(name, 任务, reuse=true)：复用同名活实例，"
-        "其上下文投影只含当前轮（token 不随复用次数增长），避免实例越建越多。"
+        "要并行跑多个同名实例或要独立完整记忆的实例时传 new_instance=true 强制新建（实例会越建越多，高频派活别开）；"
+        "同名实例都在跑时 agent_prompt 返回[忙]提示（wait_subagents 等它完成，或 new_instance=true 并行）。"
         "可用模型：" + _MODELS_DESC + "。"
         + "\n\n【工作流编排】【推荐用 XML 写工作流】在 .agent/workflows/ 创建 .xml 文件（系统自动转 Coze JSON 执行）。"
         "XML 用标签+CDATA 包裹代码/提示词，内部双引号/花括号/换行/JSON 块都【无需转义】，远比手写 JSON 不易出错：\n"

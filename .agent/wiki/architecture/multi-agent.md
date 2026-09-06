@@ -7,10 +7,14 @@
 子 Agent 声明：`.agent/agents/<name>.yml`（v2.1：纯配置，persona 拆独立同名 .md，.yml 优先加载）或旧版单 `.md`（frontmatter：name/description/model/tools + assembly/system_append DSL）。**2026-08（commit f177674）存量 5 个子 Agent（coder/explorer/reviewer/vision/wiki-updater）已全部规范化为 v2.1**——必装段显式入 assembly（所见即所装）、recap_gen 显式入 hooks（详见 [/agents 管理页 · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。**主 Agent 声明：`~/.agt/main.yml`**（全局，非 .agent/agents/ 成员；assembly 是完整配方，见下）。可视化管理走 [/agents 管理页](../features/agents-admin.md)。
 
 ```
-agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?, caller?)
-  ├─ reuse=true 且有同名空闲活实例 → 直接派活（沿用 agent_id/session）
-  ├─ reuse=true 无活实例但有同名历史条目 → 复活（读声明同源 _agent_def_path+load_agent_yml，+ Session.load 磁盘历史）
-  └─ 否则新建（session 嵌套 主session/agents/<id>/，meta.json 记 _agent_meta）
+agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?, caller?, new_instance?)
+  ├─ 默认【复用】（2026-09-06 用户提案：默认翻转，防同名实例越建越多）：
+  │   有同名空闲活实例 → 直接派活（沿用 agent_id/session，current_turn_only 投影隔离）
+  │   无活实例但有同名历史条目 → 复活（读声明同源 _agent_def_path+load_agent_yml，+ Session.load 磁盘历史）
+  │   都没有 → 新建（current_turn_only=True）
+  ├─ new_instance=true（或显式 reuse=false）→ 跳过复用/复活强制新建（完整上下文投影、历史跨任务累积）
+  └─ reuse 兼容参数：不传/true=默认复用；显式 false=等价 new_instance=true
+  同名实例全在跑 → [忙] 提示（wait_subagents 等它，或 new_instance=true 并行）
 全异步：立即返回；完成后按 caller_id 路由 answer 入调用者 inbox（下轮自动激活）
 要结果才继续 → wait_subagents(agent_ids)
 caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获调用者；'user'=fire-and-forget
@@ -671,7 +675,7 @@ system_append:
 
 ## 实践建议
 
-- 高频反复派活（看图/检查）→ `reuse=True`：上下文只含当前轮，token 不随复用次数增长
+- 派活默认即复用（2026-09-06 起语义翻转：同名空闲实例直接接活，上下文只含当前轮，token 不随复用次数增长）；要独立完整记忆或并行多实例才 `new_instance=true`
 - 需要子 Agent 带历轮记忆的派活（「继续上次那个重构」类）→ 传 `assembly="history=on"`；普通任务默认无记忆态省 token（见上节 optional 真语义）
 - **工作流节点里派活、结果由工作流自身消费**（`wait_subagents` 取）→ `agent_prompt(..., caller="user")`：fire-and-forget，子 Agent 完成不唤醒主 Agent 烧一轮 token（见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)）
 - 长报告类子 Agent answer 上限 4000 字，超长指引用 `agent_query_events(id, 1)` 取全文

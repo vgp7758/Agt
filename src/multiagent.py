@@ -3,12 +3,11 @@
 子 Agent 是【声明式 + 按需实例化 + 一次性】：声明存 .agent/agents/<name>.md
 （frontmatter: name/description/tools/model + body: systemPrompt）。harness 每轮把
 可用子 agent 清单投影进主 Agent SYSTEM（见 agent_config.agents_summary）。agent_prompt
-默认复用同名活实例（空闲直接派活；无活实例复活磁盘同名实例；都没有才新建）——
-new_instance=true 才强制新建独立实例（完整上下文投影、历史跨任务累积）。
+按需读 md 建临时实例跑完即弃——多次 agent_prompt 同名 = 多个独立实例（无共享状态）。
 
 工具：
   create_agent(name, description, system, tools, model)  写 .agent/agents/<name>.md（不建实例）
-  agent_prompt(name, prompt)               默认复用同名实例派活；new_instance=true 强制新建
+  agent_prompt(name, prompt)               读 md 建临时实例，跑完返回报告后销毁
   kill_agent(name)                         删 .agent/agents/<name>.md
   list_agents()                            扫 .agent/agents/ 列出
 """
@@ -822,13 +821,11 @@ def make_subagent_tools(agent) -> list:
         _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 enum
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: bool = None,
-                     assembly: str = "", caller: str = "", context_messages: str = "",
-                     new_instance: bool = False) -> str:
+    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
+                     assembly: str = "", caller: str = "", context_messages: str = "") -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
-        默认【复用】：同名空闲活实例直接派活（不新建）；无活实例则复活磁盘上最近的同名实例；
-        都没有才新建。new_instance=true 强制新建独立实例（完整上下文投影、历史跨任务累积）。
+        多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
         context_messages: 【一次性前置上下文】JSON 数组 [{"role","content"},...]——投影时展开在
                 本轮 user_message 之前（结构化角色消息：还原的历史对话/工作记录），轮结束即焚
                 （不落 turns、复用实例下一轮不带）——适合"把一批历史记录交给子 Agent 消费"的场景
@@ -840,11 +837,11 @@ def make_subagent_tools(agent) -> list:
         tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
                管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。复用模式下忽略（实例工具已定）。
         agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。复用模式下忽略（沿用原 id）。
-        new_instance: 强制新建独立实例——跳过复用/复活直接建新（上下文完整投影、历史跨任务累积），
-                适合需要"带完整记忆长期工作"的独立实例；高频派活别开（实例会越建越多）。
-        reuse: 兼容参数（旧开关）。不传/true=默认复用（见上）；显式传 false 等价 new_instance=true。
-        复用/复活实例的上下文投影【只含当前轮】（历史轮完整归档可 agent_query_events 查但不投影）——
-                每次任务上下文干净、token 不随复用次数增长。同名实例全在跑时返回提示（等它或 new_instance 并行）。
+        reuse: 复用模式（枚举 yes/no，默认 yes=复用——不传即复用）：yes=registry 中有同名且空闲
+                (done/failed)的活实例则直接派新任务给它（不新建实例；无活实例则复活同名历史实例，
+                都没有才新建）；no=强制新建独立实例。复用实例的上下文投影【只含当前轮】
+                （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
+                复用次数增长。同名实例全在跑时返回提示（wait_subagents 等它完成，或 reuse=no 并行开新实例）。
          assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off'、
                 'history=window|tiered|full' 或 'steps=reasoning'（steps 后的尾段以思考链姿势注入——
                 末条 assistant 的 reasoning_content 前缀"当前状态：…"；默认 reminder=<system-reminder>
@@ -853,10 +850,17 @@ def make_subagent_tools(agent) -> list:
                .md 的 assembly 声明是基线，参数在其上覆盖。
                ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
+        # reuse 字符串枚举解析（用户提案 2026-09-06：默认复用少建实例）。
+        # 宽松兼容 true/false/1/0/bool（工作流 plugin 节点旧传参 type=boolean 直传 Python bool）
+        _rv = str(reuse).strip().lower()
+        if _rv in ("yes", "true", "1", "y", ""):
+            reuse = True
+        elif _rv in ("no", "false", "0", "n"):
+            reuse = False
+        else:
+            return (f"[参数错误] reuse 只接受 yes/no（收到 '{reuse}'）。"
+                    f"yes=复用同名活实例（默认，不传即是），no=新建独立实例。")
         caller_id = (caller or "").strip().lower() or agent.agent_id   # 汇报对象：显式指定 > 自动捕获
-        # 复用/新建判定（用户提案 2026-09-06：默认复用，防同名实例越建越多）：
-        #   new_instance=true 或显式 reuse=false → 强制新建；否则默认复用（reuse 不传/true 同义——兼容旧调用）
-        want_new = bool(new_instance) or (reuse is False)
         # context_messages 直通：JSON 串 → list（plugin 节点传参恒为字符串）；非法输入静默忽略
         import json as _json
         _ctx_msgs = None
@@ -1021,8 +1025,8 @@ def make_subagent_tools(agent) -> list:
             return (f"{tag}子 Agent '{_name}' [agent_id={_aid}]（异步，不阻塞）。"
                     f"完成后结果自动入队通知你。需要立即要结果可 wait_subagents(agent_ids=\"{_aid}\")。")
 
-        # —— 复用路径（默认）：registry 中找同名实例直接派任务（不新建） ——
-        if not want_new and reg:
+        # —— reuse 复用模式：registry 中找同名实例直接派任务（不新建） ——
+        if reuse and reg:
             with reg._lock:
                 same = [e for e in reg._agents.values()
                         if e.name == name and e.role == "subagent"]
@@ -1033,7 +1037,7 @@ def make_subagent_tools(agent) -> list:
                 if not idle:
                     busy = ", ".join(e.agent_id for e in live)
                     return (f"[忙] '{name}' 的实例都在跑（{busy}）。"
-                            f"先 wait_subagents 等它完成再派，或传 new_instance=true 新建独立实例并行跑。")
+                            f"先 wait_subagents 等它完成，或传 reuse=no 新建独立实例。")
                 entry = max(idle, key=lambda e: e.registered_at)
                 entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
                 entry.agent.session.set_assembly_plan(base_asm)  # assembly：声明基线清单 + 参数覆盖（本次生效）
@@ -1064,7 +1068,7 @@ def make_subagent_tools(agent) -> list:
                                  caller_id=caller_id)
                     return _launch(sub_agent, entry.agent_id, name, model_name,
                                    sub_dir, prompt, _reused=True) + asm_note
-            # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=复用语义）
+            # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=reuse）
 
         # —— 新建路径：读声明文件（.yml v2 / .md 旧格式）建临时实例 ——
         p = _agent_def_path(name)
@@ -1094,7 +1098,7 @@ def make_subagent_tools(agent) -> list:
             sub = SubAgent(name, model_name, system, toolbox,
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
-                           caller_id=caller_id, current_turn_only=(not want_new),
+                           caller_id=caller_id, current_turn_only=reuse,
                            assembly=(base_asm or None))
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks
@@ -1162,7 +1166,11 @@ def make_subagent_tools(agent) -> list:
 
     # 通信工具由 make_communication_tools 统一生成（绑定到正确的 agent 实例）
     reg = getattr(agent, "registry", None)
-    tools_list = [Tool(create_agent), Tool(kill_agent), Tool(agent_prompt), Tool(list_agents), Tool(wait_subagents)]
+    tools_list = [Tool(create_agent), Tool(kill_agent),
+                  Tool(agent_prompt, param_schemas={
+                      "reuse": {"type": "string", "enum": ["yes", "no"],
+                                "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"}}),
+                  Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)
         # 注册表变化时自动刷新 target_id enum（2026-09-04·导演 session 教训：创建时快照的

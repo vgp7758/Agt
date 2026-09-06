@@ -39,7 +39,7 @@ async def main(args):
     <in name="name" type="string">wiki-updater</in>
     <in name="prompt" type="string" ref="147140.prompt_text"/>
     <in name="context_messages" type="string" ref="147140.ctx_json"/>
-    <in name="reuse" type="boolean">True</in>
+    <in name="reuse" type="string">yes</in>
     <in name="caller" type="string">user</in>
     <in name="tools" type="string"></in>
     <in name="agent_id" type="string"></in>

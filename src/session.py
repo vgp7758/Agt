@@ -501,7 +501,7 @@ class Session:
                  recent_window_turns: int = 4, max_steps_per_turn: int = 80,
                  workspace=None, session_dir=None, current_turn_only: bool = False):
         self.system = system
-        # 复用模式投影开关（子 Agent agent_prompt 默认复用 / new_instance=false）：True 时历史轮一律不投影，
+        # 复用模式投影开关（子 Agent agent_prompt 默认复用 / reuse=no 显式新建时 False）：True 时历史轮一律不投影，
         # 只投影 system + 任务指引 + 当前进行中的轮 + tail ambient。历史轮仍完整归档在
         # turns/落盘（可 agent_query_events / recall 查）——session 积累、投影隔离。
         self.current_turn_only = current_turn_only

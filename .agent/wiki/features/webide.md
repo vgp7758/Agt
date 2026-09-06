@@ -1,4 +1,4 @@
-# WebIDE · 📝 IDE 按钮 → VS Code serve-web 新页签打开工作区
+# WebIDE · VS Code logo 按钮 → serve-web 新页签打开工作区
 
 ## 职责
 
@@ -26,10 +26,11 @@
 - **不再携带 `folder_uri`**（2026-09-06 随 `--default-folder` 直开移除）：工作区由 serve-web 服务端直开，URL 零参数、payload 无需文件夹路径；
 - 未就绪时附加 `hint` 字段（前端 toast 直接展示）。
 
-## 前端：📝 IDE 按钮（src/static/index.html）
+## 前端：VS Code logo 按钮（src/static/index.html）
 
-- 按钮 `📝 IDE`（`id=btnIde`，title「用 WebIDE (VS Code·serve-web) 新页签打开工作区」）。**2026-09-06 起收进右侧工具 dock**（与其它管理按钮一起折叠进 🧰，见 [fab-dock](fab-dock.md)）——控件栏不再直接摆放，展开 dock 后点击。
-- `openWebIde()`：禁用按钮 → `⏳` → `fetch POST /api/ide/open` → 用 **`location.hostname`** 拼 `http://{host}:{port}/`（**零参数**——工作区由 serve-web `--default-folder` 直开；勿拼 `?folder=`，1.134 会误路由成远程代理会话）→ `window.open` 新页签 → toast（`ready` 成功附语言 workaround 提示 / 未就绪展示后端 `hint`）→ 恢复按钮。
+- 按钮（2026-09-06 图标换代）：**白底圆形按钮**（`background:#fff`）+ **VS Code logo 图片** `<img src="/icons/vscode.png" alt="VS Code" style="width:26px;height:26px;object-fit:contain">`（`id=btnIde`）——logo 已下载到 `src/static/icons/vscode.png`（170×170 透明底，经 `/icons/{name}` 静态端点服务）；`data-label="WebIDE (VS Code)"`（dock hover 标签）+ `aria-label` 完整语义（原 `title` 移除，见 [fab-dock](fab-dock.md)）。
+- **2026-09-06 起收进右侧工具 dock**（与其它管理按钮一起折叠进 🧰，见 [fab-dock](fab-dock.md)）——控件栏不再直接摆放，展开 dock 后点击。
+- `openWebIde()`：禁用按钮 + **`.loading` class**（`opacity:.55; cursor:progress`——图标已是 `<img>`，不再用 `textContent='⏳'` 覆盖，2026-09-06 修复）→ `fetch POST /api/ide/open` → 用 **`location.hostname`** 拼 `http://{host}:{port}/`（**零参数**——工作区由 serve-web `--default-folder` 直开；勿拼 `?folder=`，1.134 会误路由成远程代理会话）→ `window.open` 新页签 → toast（`ready` 成功附语言 workaround 提示 / 未就绪展示后端 `hint`）→ 恢复按钮。
 - **fetch 12s 超时 + 乐观开页签（2026-09-06，用户实锤按钮卡沙漏）**：`AbortController` + `setTimeout(…, 12000)`——12s 超时或异常时**不再干等**：退回前端同款潜规则口 `http://{host}:{webui_port+30000}/` **乐观开页签** + toast「后台启动中，稍后刷新」；按钮最迟 12s 恢复。此前无超时随后端 150s 长轮询走 → 按钮 ⌛ 两分半、页签不弹。
 - host 用 `location.hostname` 而非 `127.0.0.1`：手机/其它设备访问时 serve-web 监听 0.0.0.0 局域网可达。
 

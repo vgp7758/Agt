@@ -25,19 +25,19 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 
 ```html
 <div id="fabDock">
-  <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
+  <button id="fabDockBtn" aria-label="工具面板（点击展开/收起全部）" data-label="工具面板" onclick="toggleFabDock()">🧰</button>
   <div id="fabDockMenu">
     <!-- 第一列（贴右缘）：原右侧独立 fab 4 个——主按钮正下方 -->
     <div class="fabCol">
-      <button id="specFab" title="施工方案（点击展开）">📐<span class="badge" id="specFabBadge">!</span></button>
-      <button id="logFab" class="fabItem" ...>🐞<span id="logFabBadge">0</span></button>
-      <button id="teamFab" class="fabItem" ...>👥</button>
-      <button id="svcFab" class="fabItem" ...>🛠</button>
+      <button id="specFab" aria-label="施工方案（点击展开）" data-label="施工方案">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
+      <button id="logFab" class="fabItem" aria-label="日志（回退/限流/错误，点击展开）" data-label="日志">🐞<span id="logFabBadge">0</span></button>
+      <button id="teamFab" class="fabItem" aria-label="Agent 团队看板（子 Agent + 远程实例，点击展开）" data-label="团队看板">👥</button>
+      <button id="svcFab" class="fabItem" aria-label="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" data-label="后台看板">🛠</button>
     </div>
     <!-- 第二列：原消息框上方控件栏收进的 9 个 -->
     <div class="fabCol">
-      <button id="btnEditor" ...>🧩</button>
-      ... 📚 🧠 🤖 📝 📊 💬 ⚙ 🚮
+      <button id="btnEditor" ... data-label="工作流编辑器">🧩</button>
+      ... 📚 🧠 🤖 <img src="/icons/vscode.png" alt="VS Code"> 📊 💬 ⚙ 🚮
     </div>
   </div>
 </div>
@@ -49,12 +49,14 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 - `.fabCol`：每列内部 `flex-direction:column; gap:8px; align-items:center`（2026-09-07 双列化新增）；
 - 每个 `.fabItem`：42px 圆 + 各自背景色区分。
 
+**按钮属性换代（2026-09-06，用户提案 hover 标签）**：全部按钮 `title` 移除 → `aria-label`（无障碍完整语义）+ `data-label`（hover 文字标签渲染源）——hover 机制见下文「hover 文字标签」章节。
+
 **双列分组（2026-09-07，用户裁定「原本在消息框上面的那些图标一列，其余放在第二列」）**：
 
 | 列 | 图标（id） | 来源 |
 |---|---|---|
 | 第一列（贴右缘，主按钮正下方） | 📐specFab / 🐞logFab / 👥teamFab / 🛠svcFab | 原右侧独立 fab（badge 红点原位保留） |
-| 第二列（左侧） | 🧩btnEditor / 📚btnRag / 🧠btnMemory / 🤖btnAgents / 📝btnIde / 📊btnStats / 💬btnFeedback / ⚙btnSettings / 🚮btnClear | 原消息框上方控件栏收进 |
+| 第二列（左侧） | 🧩btnEditor / 📚btnRag / 🧠btnMemory / 🤖btnAgents / VS Code logo btnIde / 📊btnStats / 💬btnFeedback / ⚙btnSettings / 🚮btnClear | 原消息框上方控件栏收进 |
 
 **为什么双列**：单列 13 个 ≈ 13×50px 纵向排布超出小视口（用户反馈「图标还是有点超出范围」）；双列把高度砍半——展开总高约 490px，实测 818px 视口内 ✅ 不再超出。
 
@@ -70,11 +72,32 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 | 📚 | `btnRag` | RAG 文档库 | 新页签 /rag |
 | 🧠 | `btnMemory` | 记忆管理 | 新页签 /memory |
 | 🤖 | `btnAgents` | Agent 声明管理 | 新页签 /agents |
-| 📝 | `btnIde` | WebIDE | `openWebIde()` 新页签开 VS Code serve-web（见 [webide](webide.md)） |
+| VS Code logo | `btnIde` | WebIDE | `openWebIde()` 新页签开 VS Code serve-web（见 [webide](webide.md)）——**2026-09-06 由 📝 换为 `<img src="/icons/vscode.png">`** |
 | 📊 | `btnStats` | 统计 | 新页签 /stats |
 | 💬 | `btnFeedback` | 反馈 | 反馈弹窗 |
 | ⚙ | `btnSettings` | 设置 | 设置弹窗 |
 | 🚮 | `btnClear` | 清空消息区 | 危险红 |
+
+## hover 文字标签：data-label 左侧浮现（2026-09-06，用户提案）
+
+dock 内所有图标（含主按钮 🧰、两列 13 个）hover 时**左侧立即浮现深色文字标签**，替代原生 `title` 延迟 1~2s 才出现的灰框提示（用户提案 2026-09-06「图标在 hover 的时候变成文字标题」）。
+
+**纯 CSS 实现（零 JS）**：
+
+```css
+#fabDock [data-label]::after { content: attr(data-label); position:absolute; right:calc(100% + 8px);
+  top:50%; transform:translateY(-50%); white-space:nowrap; background:#1f2937; color:#fff; font-size:12px;
+  line-height:1; padding:6px 10px; border-radius:6px; opacity:0; pointer-events:none;
+  transition:opacity .12s ease; box-shadow:0 2px 10px #0005; z-index:140; }
+#fabDock [data-label]:hover::after { opacity:1; }
+```
+
+- `::after` 内容 = 按钮 `data-label` 属性（`content: attr(data-label)`）——标签文案随按钮走，零 JS、零字典；
+- **位置 `right: calc(100% + 8px)` + `top:50%` 垂直居中**：dock 贴右缘，label **向左展开**，不遮挡图标本身（fab 按钮 `position:relative`）；
+- `opacity:0 → 1` 过渡 + `pointer-events:none`（标签不挡点击、不挡其它元素 hover）；
+- **`title` 全部移除**：语义迁至 `aria-label`（描述比原 title 更完整、含动作说明）——避免原生 tooltip 与 CSS 标签**双重弹出**（两套提示叠一起反而乱）。
+
+**同 commit 顺带修复——`openWebIde()` 加载态**：原 `b.textContent = '⏳'` 覆盖式加载提示——按钮内容已换成 `<img>`（VS Code logo），覆盖 textContent 会**直接清掉图标**。改为 `.fabItem.loading { opacity:.55; cursor:progress; }` class 切换（禁用 + 半透明），不动 DOM 内容。
 
 ## 开合机制（toggleFabDock，L1791-1797）
 
@@ -105,6 +128,7 @@ function toggleFabDock(force){
 
 ## 相关页面
 
-- [webide](webide.md)：📝 IDE 按钮入口（原控件栏，本次收进 dock）
+- [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）
 - [用户交互](user-interaction.md)：主对话页其余交互机制
 - [气泡交互](bubble-interaction.md)：📐 施工方案/🐞 日志抽屉的展开对象
+

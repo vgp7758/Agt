@@ -469,3 +469,9 @@
 
 - **WebIDE 卡沙漏治本：幽灵端口占位根因 + 12s 乐观开页签（2026-09-06 · 八，commit 55f37e3 推送 + 二轮本地）**：用户实锤「点 IDE 变沙漏 + 白色 IDE…文字，很长时间不开页签」。根因=**serve-web 孤儿进程**：code-tunnel 启动器被杀后其 spawn 的 node 子进程继承 LISTEN socket 存活——39000 被已退 pid 21512「幽灵 LISTENING」占住（bind 10048 / 连接 10061）；旧端点 150s 长轮询 → 按钮卡 ⌛ 两分半、window.open 迟迟不执行。治本三件（src/server.py + index.html）：①选口 **bind 实测 + 向后扫 +1..+5**（WinNAT 隐形保留/孤儿残留自动滚到可用口，不依赖人工清理）；`_agent.services.start` 绑**独立进程组**、stop 整树杀（不再漏子进程）；②等待上限 **150s→12s**（`ready=false` + hint，组件缓存后秒起，不阻塞交互）；③前端 fetch **AbortController 12s 超时**，超时/异常**乐观开页签**（退回潜规则口 `http://{host}:{webui_port+30000}/`）+ toast「后台启动中，稍后刷新」，按钮最迟 12s 恢复。**复用判定拆分 `_alive`/`_ready`**（二轮，用户建议「启动时先查 39000，端口还在就直接打开页面」）：`_alive`（HTTP 能连上——202 下载页 / 200 工作台都算）→ 复用依据；`_ready`（body>500）只决定 toast 文案——修掉真空隙：serve-web 活着但正在下载组件时旧判定（body>500）误判「无服务」→ bind 扫描滚到 +1 又起一个实例，双实例并存。现在端口在 → 直接复用该口开页签，页签自己等下载自动刷新——详见 [webide · 端点复用语义](features/webide.md#端点post-apideopen-srcserverpy)
 
+## 快速事实增补（2026-09-06 · 九 · IDE 图标换 VS Code logo + dock 图标 hover 文字标签）
+
+- **fabDock 的 IDE 按钮图标 📝 → VS Code logo**（commit b085721）：官方透明 logo 下载到 `src/static/icons/vscode.png`（170×170，经 `/icons/{name}` 静态端点服务），白底圆形按钮内 `<img src="/icons/vscode.png" alt="VS Code">` 26px 展示。
+- **全部 dock 图标 hover 浮现文字标签**（用户提案「图标在 hover 的时候变成文字标题」）：纯 CSS `#fabDock [data-label]::after { content: attr(data-label); right:calc(100%+8px) }`——dock 贴右缘，label 向左展开不遮图标；`title` 全部移除、语义迁至 `aria-label`（避免原生 tooltip 与 CSS 标签双重弹出）。
+- 顺带修复：`openWebIde()` 加载态 `b.textContent='⏳'` → `.loading` class（`opacity:.55`）——按钮内容已是 `<img>`，覆盖 textContent 会清掉 logo。详见 [fab-dock](features/fab-dock.md) 与 [webide](features/webide.md)。
+

@@ -156,7 +156,11 @@ let _pendingHandles=[];            // 连线断开 handle（延后到节点之�
 let _scissors=[];                  // Ctrl 按下时每条线中点的剪刀：{x,y,info}
 let _compositeStack=[];            // 子画布栈 [{parentId, name, nodes, edges}]
 let _currentParent=null;           // 当前所在复合节点 id（null=顶层）
-
+// ---- 多选/框选/复制粘贴（用户提案 2026-09-07）----
+let multiSel=new Set();            // 多选节点 id 集合（Ctrl+空白框选 / Ctrl+点节点 toggle）
+let _rubber=null;                  // 框选矩形进行中 {x0,y0,x1,y1}（画布坐标）
+let _lastPt={x:0,y:0};             // 鼠标最后画布坐标（Ctrl+V 粘贴锚点）
+let _clip=null;                    // 复制缓冲 {nodes,edges}（深拷贝；剪贴板 JSON 失败时的同页兜底）
 // ============ 工具 ============
 function elm(tag,attrs={},text){
   const e=document.createElementNS(NS,tag);
@@ -525,6 +529,14 @@ function renderAll(){
     const sx=edgeFrom.sp?edgeFrom.sp.x:edgeFrom.x, sy=edgeFrom.sp?edgeFrom.sp.y:edgeFrom.y;
     svg.appendChild(elm('path',{d:bezier({x:sx,y:sy},{x:edgeFrom.mx,y:edgeFrom.my},edgeFrom.kind!=='flow'),class:'edge-ghost',stroke:edgeFrom.color||'#7b2ff7'}));
   }
+
+  // ---- 框选矩形（最上层；虚线半透明，用户提案 2026-09-07）----
+  if(_rubber){
+    const rx=Math.min(_rubber.x0,_rubber.x1), ry=Math.min(_rubber.y0,_rubber.y1);
+    const rw=Math.abs(_rubber.x1-_rubber.x0), rh=Math.abs(_rubber.y1-_rubber.y0);
+    svg.appendChild(elm('rect',{x:rx,y:ry,width:rw,height:rh,fill:'#7b2ff722',stroke:'#7b2ff7',
+      'stroke-width':1.5,'stroke-dasharray':'6 4','pointer-events':'none'}));
+  }
 }
 
 function bezier(sp,tp,isVar){
@@ -540,7 +552,7 @@ function renderNode(n){
   {const d=nodeDesc(n); if(d)g.appendChild(elm('title',{},d));}
   const cat=TYPE_CATEGORY[n.type]||'llm';
   // 体
-  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+(selNode===n.id?' sel':'')}));
+  g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:n.h,class:'node-body'+((selNode===n.id||multiSel.has(n.id))?' sel':'')}));
   // 标题栏
   g.appendChild(elm('rect',{x:0,y:0,width:n.w,height:HDR_H,fill:HDR_COLOR[cat]||'#533483',rx:6,'class':'node-header-rect'}));
   g.appendChild(elm('text',{x:n.w/2,y:11,class:'node-title','text-anchor':'middle'},nodeTitle(n)));
@@ -840,6 +852,11 @@ function renderNode(n){
     if(e.button!==0)return;
     if(e.target.classList.contains('port-flow')||e.target.classList.contains('port-var'))return;
     e.stopPropagation();
+    // Ctrl+点节点：toggle 进出多选集合（不启动拖动——多选模式下的拖动用无 Ctrl 的普通拖）
+    if(e.ctrlKey||e.metaKey){
+      if(multiSel.has(n.id))multiSel.delete(n.id);else multiSel.add(n.id);
+      selNode=null;renderAll();return;
+    }
     const sp=svgPos(e); dragNode=n.id; dragDX=n.x-sp.x; dragDY=n.y-sp.y;
     dragStartX=sp.x; dragStartY=sp.y;   // 记录起点：mouseup 判定点击 vs 拖拽
     selNode=n.id; selEdge=null; renderAll();   // 仅选中高亮，弹面板延后到 mouseup（拖动不弹）
@@ -1060,12 +1077,34 @@ function finishVar(tgtId,field,color){
 function color2type(col){return Object.entries(TYPE_COLOR).find(([k,v])=>v===col)?.[0]||'string';}
 function svgPos(e){const r=svg.getBoundingClientRect();return{x:(e.clientX-r.left)/dz,y:(e.clientY-r.top)/dz};}
 svg.addEventListener('mousemove',(e)=>{
-  if(dragNode){const p=svgPos(e);const n=findN(dragNode);if(n){n.x=p.x+dragDX;n.y=p.y+dragDY;renderAll();}}
-  if(edgeFrom){const p=svgPos(e);edgeFrom.mx=p.x;edgeFrom.my=p.y;renderAll();}
+  const p0=svgPos(e); _lastPt=p0;   // 记录最后画布坐标（Ctrl+V 粘贴锚点）
+  if(_rubber){_rubber.x1=p0.x;_rubber.y1=p0.y;renderAll();return;}
+  if(dragNode){const p=p0;const n=findN(dragNode);if(n){
+    // 多选整体拖动（用户提案 2026-09-07）：拖的是选中集合成员 → 全员同步位移（保持相对布局）
+    if(multiSel.size>1&&multiSel.has(dragNode)){
+      const dx=(p.x+dragDX)-n.x, dy=(p.y+dragDY)-n.y;
+      multiSel.forEach(id=>{const m=findN(id);if(m){m.x+=dx;m.y+=dy;}});
+    } else { n.x=p.x+dragDX; n.y=p.y+dragDY; }
+    renderAll();
+  }}
+  if(edgeFrom){const p=p0;edgeFrom.mx=p.x;edgeFrom.my=p.y;renderAll();}
   if(panning){const wrap=document.getElementById('canvasWrap');wrap.scrollLeft=panStartX-(e.clientX-panX);wrap.scrollTop=panStartY-(e.clientY-panY);}
 });
 svg.addEventListener('mouseup',(e)=>{
   const _sp=svgPos(e);
+  // 框选收尾（用户提案 2026-09-07）：矩形与节点 bbox 相交 → 进多选集合
+  if(_rubber){
+    const rx=Math.min(_rubber.x0,_rubber.x1), ry=Math.min(_rubber.y0,_rubber.y1);
+    const rw=Math.abs(_rubber.x1-_rubber.x0), rh=Math.abs(_rubber.y1-_rubber.y0);
+    _rubber=null;
+    if(rw>4||rh>4){   // 微动视为误触，不产生选择
+      multiSel=new Set(WF.nodes.filter(n=>(n.x||0)<rx+rw&&(n.x||0)+(n.w||0)>rx
+        &&(n.y||0)<ry+rh&&(n.y||0)+(n.h||0)>ry).map(n=>n.id));
+      selNode=null;selEdge=null;
+      toast(multiSel.size?('已选中 '+multiSel.size+' 个节点（Ctrl+C 复制 / Delete 删除 / 拖动任意选中节点整体移动）'):'框内没有节点');
+    }
+    renderAll();return;
+  }
   const wasDrag=!!dragNode;                                                 // 本次松手前是否在拖节点
   const moved=wasDrag && Math.hypot(_sp.x-dragStartX, _sp.y-dragStartY)>3;  // 移动>3px=拖拽，否则视为点击
   dragNode=null;panning=false;
@@ -1090,6 +1129,11 @@ svg.addEventListener('mouseup',(e)=>{
 });
 svg.addEventListener('mousedown',(e)=>{
   if(e.target===svg||e.target.classList.contains('grid-line')){
+    // Ctrl+左键空白：启动框选（用户提案 2026-09-07）——不进 panning
+    if((e.ctrlKey||e.metaKey)&&e.button===0){
+      const p=svgPos(e);_rubber={x0:p.x,y0:p.y,x1:p.x,y1:p.y};
+      e.preventDefault();return;
+    }
     panning=true;panX=e.clientX;panY=e.clientY;
     const wrap=document.getElementById('canvasWrap');panStartX=wrap.scrollLeft;panStartY=wrap.scrollTop;
   }
@@ -1104,7 +1148,7 @@ svg.addEventListener('dblclick',(e)=>{
 svg.addEventListener('click',(e)=>{
   if(_suppressClick){_suppressClick=false;return;}   // 拖线弹窗刚开，跳过本次点击
   if(e.target===svg||e.target.classList.contains('grid-line')){
-    selNode=null;selEdge=null;edgeFrom=null;closeNodePicker();showProps();renderAll();
+    selNode=null;selEdge=null;edgeFrom=null;multiSel.clear();closeNodePicker();showProps();renderAll();
   }
 });
 svg.addEventListener('contextmenu',(e)=>{
@@ -1606,7 +1650,7 @@ function showProps(){
   wrap.style.display='block';
   try{
   // 面板头部：标题 + 操作按钮（✕ 关闭 / 🗑 删除节点——手机无 Delete 键的删除入口）
-  const _canDel=!['100001','900001'].includes(n.id);
+  const _canDel=!['1','2'].includes(n.type);
   let h=`<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:4px">
     <h3 style="margin:0;border:none;padding:0">${TYPE_LABEL[n.type]||'节点'} <span style="color:#8a9099;font-size:10px;font-weight:normal">· ${n.type}</span></h3>
     <span style="white-space:nowrap;flex:none">
@@ -2409,12 +2453,99 @@ function findArr(kind){const n=findN(selNode);return kind==='in'?nodeInputs(n):n
 // 删除选中节点（含关联连线 + 引用清理）——面板 🗑 按钮与 Delete 键共用
 function deleteSelectedNode(){
   if(!selNode)return;
-  if(['100001','900001'].includes(selNode)){toast('开始/结束节点不可删除');return;}
+  if(['1','2'].includes(findN(selNode)?.type)){toast('开始/结束节点不可删除');return;}   // 按 type 判（替换语义下 start/end 不一定叫 100001/900001）
   WF.nodes=WF.nodes.filter(n=>n.id!==selNode);
   WF.edges=WF.edges.filter(ed=>ed.sourceNodeID!==selNode&&ed.targetNodeID!==selNode);
   WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{if(inputRefSource(p)?.blockID===selNode)_valBlockW(p,n).value={type:'literal',content:''};}));
   selNode=null;showProps();renderAll();
   toast('已删除节点');
+}
+
+// ============ 多选：复制/粘贴/批量删除（用户提案 2026-09-07） ============
+// Ctrl+C：选中节点（深拷贝）+ 内部边（两端都在集合内）打包 {nodes,edges} → JSON 进系统剪贴板
+// （跨标签页/跨画布可粘；剪贴板写失败时留 _clip 兜底——同页粘贴仍可用）
+function copySelection(){
+  const ids=new Set(multiSel);
+  const nodes=WF.nodes.filter(n=>ids.has(n.id)).map(n=>JSON.parse(JSON.stringify(n)));
+  const edges=WF.edges.filter(ed=>ids.has(ed.sourceNodeID)&&ids.has(ed.targetNodeID))
+    .map(ed=>({sourceNodeID:ed.sourceNodeID,targetNodeID:ed.targetNodeID,sourcePortID:ed.sourcePortID||''}));
+  _clip={nodes,edges};
+  const payload=JSON.stringify({type:'agt-wf-selection',nodes,edges});
+  const okMsg=`📋 已复制 ${nodes.length} 节点 + ${edges.length} 内部边（Ctrl+V 粘贴）`;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(payload).then(()=>toast(okMsg),()=>toast(okMsg+'（剪贴板写入被拒，仅本页内可粘贴）'));
+  } else toast(okMsg);
+}
+// Ctrl+V：优先读系统剪贴板 JSON（跨画布/跨标签页），非本格式回退 _clip；
+// 节点全部换新 id（与现有冲突则重生成），边端点按映射换——粘贴后保持相对布局，锚到鼠标最后位置；
+// 输入 ref 引用了块外节点的（跨画布粘贴常见）清成 literal，防悬空引用
+function pasteFromClipboard(){
+  const _do=(data)=>{
+    if(!data||!Array.isArray(data.nodes)||!data.nodes.length){toast('剪贴板里没有可粘贴的工作流选区');return;}
+    try{
+      const idMap={};const taken=new Set(WF.nodes.map(n=>n.id));
+      const newNodes=[],replaced=[];
+      data.nodes.forEach(src=>{
+        const c=JSON.parse(JSON.stringify(src));
+        // start/end 替换语义（用户插话 2026-09-07）：画布唯一——不新建，把现有同类型节点
+        // 承接粘贴版的 data/宽度（id 不变），块内其它节点对它的边经 idMap 自动连到现有节点；
+        // 画布里没有该类型（异常/子画布特殊结构）才走新建
+        if(c.type==='1'||c.type==='2'){
+          const exist=WF.nodes.find(x=>x.type===c.type);
+          if(exist){exist.data=c.data;exist.w=c.w||exist.w;idMap[src.id]=exist.id;replaced.push({node:exist,src:c});return;}
+        }
+        let nid;do{nid=genId();}while(taken.has(nid));
+        taken.add(nid);idMap[src.id]=nid;c.id=nid;newNodes.push(c);
+      });
+      // 相对布局：以粘贴版原始坐标统一算包围盒（含替换型），锚到鼠标最后位置
+      const allSrc=[...newNodes,...replaced.map(r=>r.src)];
+      const mx=Math.min(...allSrc.map(n=>n.x||0)), my=Math.min(...allSrc.map(n=>n.y||0));
+      const ox=_lastPt.x-mx, oy=_lastPt.y-my;
+      newNodes.forEach(n=>{n.x=(n.x||0)+ox;n.y=(n.y||0)+oy;});
+      replaced.forEach(r=>{r.node.x=(r.src.x||0)+ox;r.node.y=(r.src.y||0)+oy;});
+      // 输入引用修復：块内引用 → 重映射到新 id（此前漏的：块内 ref 保留旧 id 会悬空）；
+      // 块外引用（跨画布粘贴常见）→ 清成 literal 防悬空。覆盖普通输入 + 复合本地变量 + 批处理数组源
+      [...newNodes,...replaced.map(r=>r.node)].forEach(n=>{
+        const _allP=[...nodeInputs(n)];
+        if(['21','28'].includes(n.type))_allP.push(...nodeLocalVars(n));
+        const _bp=n.data.inputs?.batch?.input;
+        if(_bp?.value?.type==='ref'&&_bp.value.content?.blockID)_allP.push({input:_bp});
+        _allP.forEach(p=>{
+          const src=inputRefSource(p);
+          if(!(src&&src.blockID))return;
+          if(idMap[src.blockID])src.blockID=idMap[src.blockID];
+          else _valBlockW(p,n).value={type:'literal',content:''};
+        });
+      });
+      const newEdges=(data.edges||[]).filter(ed=>idMap[ed.sourceNodeID]&&idMap[ed.targetNodeID])
+        .map(ed=>({sourceNodeID:idMap[ed.sourceNodeID],targetNodeID:idMap[ed.targetNodeID],sourcePortID:ed.sourcePortID||''}));
+      WF.nodes.push(...newNodes);WF.edges.push(...newEdges);
+      multiSel=new Set([...newNodes.map(n=>n.id),...replaced.map(r=>r.node.id)]);selNode=null;selEdge=null;
+      renderAll();
+      toast(`📥 已粘贴 ${newNodes.length} 新节点 + ${newEdges.length} 边`+(replaced.length?`（${replaced.length} 个开始/结束已替换现有节点）`:''));
+    }catch(err){toast('粘贴失败：'+(err.message||err));}
+  };
+  if(navigator.clipboard&&navigator.clipboard.readText){
+    navigator.clipboard.readText().then(txt=>{
+      try{const d=JSON.parse(txt);
+        if(d&&d.type==='agt-wf-selection')_do(d);else _do(_clip);
+      }catch(_){_do(_clip);}
+    },()=>_do(_clip));
+  } else _do(_clip);
+}
+// Delete 多选批量删除（对齐单删语义：start/end 不可删；输入参数里被删节点的引用清成 literal）
+function deleteMultiNodes(){
+  const ids=new Set([...multiSel].filter(id=>{const n=findN(id);return n&&!['1','2'].includes(n.type);}));   // 按 type 保护 start/end
+  const skipped=multiSel.size-ids.size;
+  if(!ids.size){toast('选中只有开始/结束节点，不可删除');return;}
+  WF.nodes=WF.nodes.filter(n=>!ids.has(n.id));
+  WF.edges=WF.edges.filter(ed=>!ids.has(ed.sourceNodeID)&&!ids.has(ed.targetNodeID));
+  WF.nodes.forEach(n=>nodeInputs(n).forEach(p=>{
+    const src=inputRefSource(p);
+    if(src&&ids.has(src.blockID))_valBlockW(p,n).value={type:'literal',content:''};
+  }));
+  multiSel.clear();selNode=null;showProps();renderAll();
+  toast(`🗑 已删除 ${ids.size} 个节点`+(skipped?`（跳过 ${skipped} 个开始/结束）`:''));
 }
 // 关闭属性面板（不清选中态数据也可以，但清掉最干净——画布高亮随 renderAll 保留更好）
 function closeProps(){selNode=null;selEdge=null;showProps();renderAll();}   // 关闭=清选中态（selNode 不清则 showProps 立即重渲染面板，按钮看似无反应）
@@ -2768,6 +2899,7 @@ function _syncContinueInputs(n,contNode){
 function openComposite(nodeId){
   const n=findN(nodeId);if(!n)return;
   const label=TYPE_LABEL[n.type];
+  multiSel.clear();_rubber=null;_clip=null;   // 跨画布状态卫生（多选/框选/复制缓冲不留到子画布）
   _compositeStack.push({parentId:_currentParent, name:WF.name||'', nodes:WF.nodes, edges:WF.edges});
   _currentParent=nodeId;
   n.blocks=n.blocks||[]; n.edges=n.edges||[];
@@ -2813,6 +2945,7 @@ function openComposite(nodeId){
 }
 function exitComposite(){
   if(!_currentParent||!_compositeStack.length)return;
+  multiSel.clear();_rubber=null;   // 跨画布状态卫生（回到父层清掉子画布里的选择态）
   // ⚠️ 复合节点在【父层】的 nodes 里（进入子画布后 WF.nodes=子画布 blocks，findN 找不到它）——
   // 必须从栈顶帧（父层）找，否则写回静默跳过 → 子画布编辑全丢（"保存后清空"的根因）。
   const prev=_compositeStack[_compositeStack.length-1];
@@ -3080,11 +3213,19 @@ let ctrlDown=false;   // Ctrl 按下时显示每条线中点的剪刀图标
 const _editing=(e)=>e.target&&['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName);  // 焦点在表单控件内（文本节点大框/属性面板输入框）
 document.addEventListener('keydown',(e)=>{
   if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveWf();}
+  // ---- 多选复制/粘贴（用户提案 2026-09-07）：选中节点+内部边打包 JSON 进剪贴板，跨画布可粘贴 ----
+  if(!_editing(e)&&(e.ctrlKey||e.metaKey)&&(e.key==='c'||e.key==='C')&&multiSel.size){
+    e.preventDefault();copySelection();return;
+  }
+  if(!_editing(e)&&(e.ctrlKey||e.metaKey)&&(e.key==='v'||e.key==='V')&&!edgeFrom&&!dragNode){
+    e.preventDefault();pasteFromClipboard();return;
+  }
   // 编辑中按 Ctrl（Ctrl+V/Ctrl+C 的前奏）不重绘：renderAll 会销毁重建 textarea，
   // 焦点与选区随之丢失 → 紧随的 V 键落到 body 上 → 粘贴失效。松开 Ctrl 同理（见 keyup）。
   if(e.key==='Control'&&!ctrlDown){ctrlDown=true;if(!_editing(e))renderAll();}
-  if((e.key==='Delete'||e.key==='Backspace')&&selNode&&!['100001','900001'].includes(selNode)&&!_editing(e)){
-    deleteSelectedNode();
+  if((e.key==='Delete'||e.key==='Backspace')&&!_editing(e)){
+    if(multiSel.size>1){deleteMultiNodes();}
+    else if(selNode&&!['100001','900001'].includes(selNode)){deleteSelectedNode();}
   }
 });
 document.addEventListener('keyup',(e)=>{

@@ -204,6 +204,12 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 **播种同步**：`.agent/workflows/wiki_auto_maintenance.xml` → `src/workflows/wiki_auto_maintenance.xml`（随包种子副本，随本修复一并同步）。
 
+## reuse 传参播种同步：boolean True → string yes（2026-09-07，随 v0.26.0 发布）
+
+**变更**：`.agent/workflows/wiki_auto_maintenance.xml` + 随包种子副本 `src/workflows/wiki_auto_maintenance.xml` 的 reuse 传参从 `boolean True` 改为 `string yes`——agent_prompt 的 reuse 三态兼容参数（None/true/false，见 [multi-agent · 默认复用翻转](../architecture/multi-agent.md#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)）字符串形态对齐；宽松解析兼容旧值，**不改也能跑**。
+
+**播种面影响**：没手改过此工作流的 repo 升级后 `/update-assets apply` 走 `seed_newer` 自动更新；手改过的跳过保护（`--force` 才覆盖）。详见 [v0.26.0 发布记录](../releases/v0.26.0.md#播种资产变更2)。
+
 ## 与其他模块的关系
 
 - **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）

@@ -218,6 +218,12 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # main.yml 声明了 fallback 时覆盖全局 settings（未声明=走 /model、WebUI 配的全局链）
     if main_fb is not None:
         agent.llm.set_fallback(main_fb[0], main_fb[1])
+    # 热重载锚点（用户提案 2026-09-07）：记录 main.yml 路径+mtime+声明的 model——
+    # 每轮 run 开始 _reload_main_dsl 检测变更，改 DSL 免 /restart
+    import os as _os
+    agent._main_yml_path = main_yml
+    agent._main_yml_mtime = _os.path.getmtime(main_yml) if _os.path.isfile(str(main_yml)) else None
+    agent._main_yml_model = model_name or ""
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace

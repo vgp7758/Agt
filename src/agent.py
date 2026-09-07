@@ -582,6 +582,52 @@ class Agent:
         except Exception:
             pass
 
+    def _reload_main_dsl(self):
+        """main.yml 热重载（mtime 惰性检测——用户提案 2026-09-07：改主 Agent DSL 免 /restart）。
+        每轮 run 开始 stat 一次（~0.1ms）；mtime 变了才重读：
+        assembly 清单 / hooks / fallback / model 四项全部重新应用——与 build_agent 启动路径同源。
+        子 Agent 声明（.agent/agents/*.yml）本就每次 agent_prompt 现场读（即时生效），不归这里管。"""
+        import os
+        p = getattr(self, "_main_yml_path", None)
+        if not p or not os.path.isfile(p):
+            return
+        try:
+            m = os.path.getmtime(p)
+        except OSError:
+            return
+        if m == getattr(self, "_main_yml_mtime", None):
+            return
+        self._main_yml_mtime = m
+        try:
+            from agent_config import load_agent_yml
+            from pathlib import Path as _P
+            from multiagent import _parse_assembly, _parse_hooks, _parse_agent_fallback
+            from config import MODELS
+            meta, _ = load_agent_yml(_P(p))   # ⚠️ 必须 Path：str 走 path.suffix 会 AttributeError（静默吞）
+            if not meta:
+                return
+            asm = _parse_assembly(meta)
+            if asm is not None:
+                self.session.set_assembly_plan(asm)
+            hs = _parse_hooks(meta)
+            if hs is not None:
+                self.session.hook_specs = hs
+            fb = _parse_agent_fallback(meta)
+            if fb is not None:
+                self.llm.set_fallback(fb[0], fb[1])
+            mn = (meta.get("model") or "").strip()
+            if mn and mn in (MODELS or {}) and mn != getattr(self, "_main_yml_model", None):
+                self.switch_model(mn, _user_initiated=True)
+                if fb is None:   # 声明了 fallback 时 set_fallback 已在 switch 后被上面调用（顺序：先 fb 后 model 会盖）——model 切换重建链后，声明 fb 需再压一遍
+                    pass
+                else:
+                    self.llm.set_fallback(fb[0], fb[1])
+            self._main_yml_model = mn or getattr(self, "_main_yml_model", None)
+            self._emit({"type": "system",
+                        "text": f"♻️ main.yml 已热重载（assembly/hooks/fallback/model 按最新声明生效）"})
+        except Exception as e:
+            self._emit({"type": "warn", "text": f"main.yml 热重载失败：{type(e).__name__}: {e}"})
+
     # ========== 运行时状态的存取（随 session 落盘/恢复）==========
     def capture_runtime_state(self) -> dict:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
@@ -1725,6 +1771,7 @@ class Agent:
                 else:
                     self._emit({"type": "autonomous_continue", "text": msg})
             _LOG.info("run 开始 session=%s: %s", self.session.name or "(未命名)", (msg or "")[:60])
+            self._reload_main_dsl()   # main.yml mtime 惰性热重载：改主 Agent DSL 当轮生效（子 Agent 声明本就即读即用）
             if self.snapshot_manager is not None:
                 try:
                     sha = self.snapshot_manager.snapshot()

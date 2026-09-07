@@ -4,14 +4,14 @@
 
 ## 投影总览（messages_for_llm 装配顺序）
 
-**2026-08-29 起系统信息合并形态**（`_walk_plan` 走查，见下方专节）：连续的系统信息段合并成一条 system，动态注入一律 user role；**2026-08-31 起 tail 段不再独立成条——装配后并入最后一条 message 的 content 末尾**（用户方案 bafaf7e，见下方「tail 并入末条 content」节）：
+**2026-08-29 起系统信息合并形态**（`_walk_plan` 走查，见下方专节）：连续的系统信息段合并成一条 system，动态注入一律 user role；**2026-08-31 起 tail 段不再独立成条——装配后并入最后一条 message 的 content 末尾**（用户方案 bafaf7e，见下方「tail 并入末条 content」节）；**2026-09-07 起 recent-file 快照段式化——不再内嵌 tool result 尾部，独立 `recent_file` 段走装配清单（steps 后、tail 前，与 tail 同桶并入末条 content 的 system-reminder）**（用户方案，见「recent-file 跟屁虫快照」节）：
 
 ```
 [1条 system]       system + rules + asm 动作项（text/file/dir/cmd/workflow/tool）裸文本合并
 [tiered history]   分档投影（需 provider 配 max_effective_context_window）；摘要消息仍独立 system（frozen）
 [1条 system]       ltm 静态层（独立成条——默认清单里被 history 隔开）
-[current turn]     user_message + before_turn hint(user role) + steps（工具调用按分组衰减；文件快照以 <recent-file/> 挂在【该文件最新一次改它的 tool result】content 尾部、全轮按文件去重，见「recent-file 跟屁虫快照」节）+ pending hints
-[tail merge]       一组 <system-reminder>（时间/后台任务/计划/episodic 召回）——**并入最后一条 message 的 content 末尾**（2026-08-31 起，用户方案 bafaf7e：不额外创建一条 message——正常情况下末条是 user/tool 非 assistant；末条是 assistant 或空时才回退独立 user 消息）
+[current turn]     user_message + before_turn hint(user role) + steps（工具调用按分组衰减）+ pending hints
+[tail merge]       recent_file 快照段 + 一组 <system-reminder>（时间/后台任务/计划/episodic 召回）——**并入最后一条 message 的 content 末尾**（2026-08-31 起，用户方案 bafaf7e：不额外创建一条 message——正常情况下末条是 user/tool 非 assistant；末条是 assistant 或空时才回退独立 user 消息；2026-09-07 起 recent_file 段同桶并入）
 ```
 
 assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（commit 1e3b206）起真语义：标记即默认不装配**（`messages_for_llm` 的 seg 分支对 `opt=True` 的项跳过），`agent_prompt assembly="seg=on"` 清标记打开、`=off` 移除；未标记段列出即装，必装 system/user_message/steps 未列出自动补插；`reuse`（current_turn_only）与 opt **正交叠加**（reuse 时 history 强制关）。详见 [multi-agent · assembly DSL](multi-agent.md#assembly-dsl上下文装配配方)。
@@ -19,66 +19,6 @@ assembly DSL（子 Agent 声明）段可带 `|optional` 尾标——**2026-08（
 装配时顺手记录分段统计到 `_proj_stats`，并覆盖写旁车 `session_dir/proj_stats.json`（含档位边界快照，2026-08-29 起——`/context` 三级读取：内存 live → 旁车 sidecar（跨重启）→ 现算兜底，见 [投影分段统计](#投影分段统计-context-改读真实投影缓存commit-4212f65)）。
 
 episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产出、注入 tail ambient——演进史与中文命中率坑见 [长期记忆](../features/longterm-memory.md)。
-
-### 系统信息合并与动态注入 user 化（2026-08-29，用户设计）
-
-**两件事同一天落地，动机同源**：投影形态既要语义干净（静态指令 vs 动态注入分开），又要对 provider 前缀缓存友好（byte-stable 头部 + 不触碰 system 规范化的坑）。
-
-**① 系统信息合并（`_walk_plan` 重构）**：`history`/`user_message`/`steps` 之外的一切（system/rules/ltm/tail 段 + asm 动作项）归为系统信息，装配走查时**连续的系统信息段合并成一条 system 消息**（content 空行连接）。旧形态每个 asm 动作项独立一条 system 且带 `[assembly:kind label]` 前缀 + `<system-reminder>` 包裹——语义噪声；新形态裸文本合并（main.yml 11 个 text 项 + rules 合成一条 ~5.3k 字符）。`projection_breakdown` 现算兜底同用 `_walk_plan`（消掉 ~70 行重复走查）；段统计改**块级口径**：合并 run 非首段 `msgs=0` + meta 注明「并入上方相邻段」，`sum(sections.msgs)==total_msgs` 严格成立。`<system-reminder>` 只保留给真正动态的块（tail 组、钩子、history 摘要、中途补充）——静态指令裸、动态注入带标签，对齐 Claude Code 线上协议。
-
-**② asm 内插空判**：text 项里任一**已注册** `{func:...()}` 占位求值为空串 → 整段返回 ""（装配侧丢弃）。混合文本（`【远程实例】\n{func:load_remote_instances()}`）无连接时旧形态剩标题空壳；纯占位项的丢弃语义补齐到混合形态。未注册名仍保留占位原样（声明写错的提示语义）。
-
-**③ 动态注入 user 化（当天下午的缓存实证催生，见 [provider 侧缓存坑](#provider-侧缓存坑重要教训)）**：tail 合并消息、钩子旁注（`<system-reminder pos=...>`）、before_turn hint 的 role 从 system 改为 **user**（内容层的 `<system-reminder>` 包裹保留）。原因：DeepSeek v4 对 messages 里**变化的 system** 消息做规范化处理，tail 时间块每步变 → 全序列缓存断（实测 6%）——user role 的动态注入不触发（99%）。
-
-> **后续演进（2026-08-31，commit bafaf7e，用户方案）**：`[tail ambient]` 从「独立 user 消息」进一步改为「**并入最后一条 message 的 content 末尾**」——tail 既不独立成 system 也不独立成 user 消息（见下方「tail 并入末条 content」）。动态注入 user 化对钩子旁注 / before_turn hint 仍然适用（它们没有「并入末条」的语义位置）。
-
-验证：verify_assembly 34 项（含合并形态/无前缀无标签/tail user role 断言）、verify_agent_yml 29 项、midturn/recent_file/debug_hook/ltm 全过；端到端真请求三步步进 99% 命中（修复前同形态 6%）。
-
-### tail 并入末条 content（tail merge，2026-08-31，用户方案，commit bafaf7e）
-
-**提案（用户，2026-08-31）**：「以 role:system 和 role:user 注入都不太合适」——**如果发送前最后一条不是 assistant，把 tail 在请求时直接添加到 messages 最后一条 message 的 content 末尾，不额外创建一条 message**（正常情况下最后一条一般是 user，不会是 assistant）。
-
-**实现（src/session.py）**：
-
-- **装配侧**：tail 段不进系统信息 run 缓冲（不独立成条）——只记录 `tail_merge_text`（用户方案落地：`run_secs`/`_flush_run` 对 tail 跳过，装配循环结束后走 merge 段）
-- **请求侧 merge**：msgs 非空且末条 role ≠ assistant → **浅拷贝末条**（`{**last}`——**绝不就地改**：末条可能是当前轮 user/工具结果的共享引用，防污染 session 持久数据）→ content 末尾追加 `"\n" + tail 文本`（str 直接追加 / 多模态 list 追加 text 块）
-- **回退**：末条是 assistant（罕见——如恢复场景）或 msgs 空 → 回退独立 user 消息（旧行为；不把 tail 拼进 assistant 消息污染 answer 语义）
-
-**缓存收益（为什么这样最好）**：末条本来就是**当前步新产生的内容（未命中区）**——tail 的变化只影响它自己，**前面所有已缓存前缀完整保留**（不再像独立 system/user 消息那样，每步重渲染 tail 就从那个位置断前缀）；顺带避开动态 user/system 消息被端点规范化（R12b 探针发现的坑）的扰动面；且序列少一条消息。
-
-**验证两场景全过**：① 末条 user → tail 并入末条 content 末尾、无独立 tail 消息 ✓；② 末条 assistant → 回退独立 user 消息（tail 单独成条）✓。
-
-**段统计口径**：tail 段 msgs_n=0（并入末条），`/context` 段统计里 tail 行显示「并入末条 content 末尾（缓存友好）」——Σ段 msgs == total_msgs 对账不破。
-
-需 `/restart` 生效。
-
-### 回答风格提示：SYSTEM 尾部写死追加（2026-09-04，用户提案，commit fe44b5a）
-
-
-**动机（用户提案）**：WebUI 的 answer 气泡已支持 `[!名称](路径)` 资产引用渲染（图/音内嵌、文本文件点击开预览抽屉，见 [bubble-interaction](../features/bubble-interaction.md)）与 autolink——**但 Agent（LLM）不知道渲染端有这些能力**，永远输出纯文本。用户提案：把回答风格规范写死在装配代码里，所有 Agent 默认知晓，无需每个声明手写一段。
-
-**实现**（src/session.py）：`_ANSWER_STYLE_HINT` 恒定文本 + `_append_answer_style(msgs)`——`messages_for_llm` 装配完成后（`_walk_plan` 之后、tools schema 统计之前），把提示**追加到装配后第一条 system 消息（人设）content 末尾**：
-
-```
-较长的最终回答尽可能用Markdown输出，回答风格提示：
-首行：用一句话总结做了什么
----
-(Markdown回答详细)
----
-注: Markdown中可通过 [!名称](path/to/file) 的方式表示引用的资产
-（图片/音频自动渲染、文本文件点击可打开预览抽屉），
-或用 <https://xx.xx.xx> 的方式插入链接。
-```
-
-**三个工程约束**：
-
-| 约束 | 做法 | 为什么 |
-|---|---|---|
-| 幂等 | content 已含「回答风格提示」标记则跳过 | 防 reuse/重装配场景重复叠加 |
-| 不污染共享引用 | **浅拷贝重建消息 dict** 再追加，绝不就地改 | `self.system` 等持久数据若被就地追加，后续每轮投影都会再叠一段（旧坑规避） |
-| 缓存友好 | 恒定文本，所有会话/所有轮次同一段 | system 前缀稳定——旧会话首次装配后前缀固化，此后每轮命中（[DeepSeek 三铁律](#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)：变化才断，恒定不断） |
-
-**覆盖面**：主 Agent + 全部子 Agent（都走 `messages_for_llm` 装配路径，无需各声明维护）；`/restart` 后新装配生效，历史轮投影不变。
 
 ## 投影三区重构：tail 拆段 + 区3 统一包裹 + 钩子 merge 化（2026-09-01，用户提案）
 
@@ -797,6 +737,37 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 **验证（三种真实形态）**：py（120K 假文件）→ 类/函数行号结构 ✓；md（100K）→ 标题大纲（frontmatter / 多级标题 / 行号范围）✓；其它（100K）→ 行数 + 头部 5 行缩略 ✓。
 
 **语义升级**：rf 对超大文件从「知道文件改了但看不到内容」（修复六）升级为「**改了 + 结构全貌**」——函数在哪、行号范围直接可见，需要细节时 read_file 精准段读取。效果实证：本 repo `src/session.py`（147K）——修复六形态是一行 `skipped='too-large'`，本修复后投影完整类/函数行号结构（几十行）。/restart 生效。
+
+### 修复八（第四版·段式化）：快照独立装配段 _seg_msgs_recent_file（2026-09-07，用户提案）
+
+**用户提案（2026-09-07）**：「把 recent-file 改一下吧，不附加在那次工具调用的结果位置了，而是作为一个段走装配逻辑」——结构：
+
+```xml
+<recent-file>
+<file path="xxx.py" version="a1b2">          ← 小文件：行号化全文（与 read_file 同款宽度自适应）
+ 1| import os
+ 2| import abc from xxy.py
+</file>
+<file path="dd.md" version="c3d4" size="130537">   ← 大文件（>RF_MAX_CHARS=100K）
+<overview>
+（py=类/函数行号结构 / md=标题大纲——修复七的 outline 语义延续）
+</overview>
+<content note="文件过大（130,537 字符 > 100,000）——此处省略，需要时 read_file 分段读取"/>
+</file>
+</recent-file>
+```
+
+**实现（src/session.py）**：
+
+- `_DEFAULT_ASSEMBLY_PLAN` 新增 `{"kind": "seg", "name": "recent_file"}`——插在 `steps` 后、`tail` 前（可配位置/开关：声明清单不列它就不投影，标准声明式语义）
+- 新段 `_seg_msgs_recent_file()`：构建 `<recent-file>` 包裹的 XML 块——小文件走行号化全文（read_file 同款）；大文件（>RF_MAX_CHARS）`<overview>` 结构大纲（py=ast 类/函数行号、md=标题大纲，修复七的 `_rf_outline` 延续）+ `<content note=…/>` 省略提示；同文件多次 edit 只带最新一份
+- `_steps_to_messages` **移除内嵌**：`rf_map` 参数、`_rf_hit` 命中索引、content 尾部追加逻辑整体删除——tool result 不再携带快照（`_seg_msgs_steps` docstring 同步更新）
+- `_walk_plan` walk 清单 `recent_file` 段 → 与 `tail` 同桶 merge（区3 收集桶）→ `<system-reminder>` 统一包裹并入末条 content 末尾（末条 assistant / 空 → 回退独立 user 消息兜底不变）
+- **估算口径不变**：rest 的 `ltm + user_message + steps + tail` 不含 recent_file——rf 仍是轮内易变项（归档即消失），不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29 延续）；`_rf_stripped` / `_RE_RF_BLOCK` / `_rf_in_msgs` 保留作旧内嵌形态兜底（剥离/诊断口径）
+- **清单同步**：播种 `src/assets/main.yml` + 全局 `~/.agt/main.yml`（`steps=reasoning` 后）都加段；**显式声明了 assembly 的子 Agent 不列它就没有**（如 VideoGameTeam 成员要的话需自己加）
+- **测试**：新增 `test/test_recent_file_segment.py`（13 断言全过：结构包裹 / `path`+`version` 属性 / 行号宽度自适应 / 大文件 size+overview+content note / 体积可控（<全文一半）/ tool result 不再含 `<recent-file>` / walk_plan 集成并入末条 reminder 桶 / projection_breakdown 单列 / 空映射零噪声 / 同文件多改仅最新）
+
+**缓存收益（为什么比第三版更稳）**：第三版快照挂在中段 tool result content 尾部——快照每步变化会让该 tool result 位置之后的全部消息重算；段式化后快照并入**末条**（本来就在缓存未命中区）——每步快照变化零前缀扰动。`/context` 段落统计出现 `recent_file(改文件快照段)` 单列、投影转储（旁车）里 XML 块直接可见。需 `/restart` 生效。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

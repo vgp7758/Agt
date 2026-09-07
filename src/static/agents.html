@@ -100,7 +100,7 @@ textarea{width:100%;resize:vertical}
       <h3>上下文装配 assembly（顺序即装配顺序，只装列出的段）</h3>
       <div id="asmList"></div>
       <button class="btn sm" onclick="asmAdd()">＋ 添加段</button>
-      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤 / tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。每个动作项可选注入姿势：并入正文(reminder)=<system-reminder>包裹并入末条 content（默认）/ 注入思考链(reasoning)=作为末条 assistant 的 reasoning_content 前缀（steps 后的项想当环境状态给模型思考看就选它）。</div>
+      <div class="hint">段名：system=声明正文 / rules=AGENTS.md与规则 / history=分档历史 / user_message / steps=轮内步骤 / recent_file=改文件快照段(本轮) / tail=易变尾块 / hooks=钩子旁注。动作项：text=静态文本 / file=读文件 / dir=目录清单 / cmd=命令输出 / workflow=执行工作流 / tool=执行工具（每轮求值注入）。每个动作项可选注入姿势：并入正文(reminder)=<system-reminder>包裹并入末条 content（默认）/ 注入思考链(reasoning)=作为末条 assistant 的 reasoning_content 前缀（steps 后的项想当环境状态给模型思考看就选它）。</div>
     </div>
 
     <div class="fgroup">
@@ -155,7 +155,7 @@ async function createAgent(){
 }
 
 /* ---------- 编辑 ---------- */
-const SEG_TYPES=['system','rules','history','ltm','user_message','steps','tail','hooks'];
+const SEG_TYPES=['system','rules','history','ltm','user_message','steps','recent_file','tail','hooks'];
 const ACT_TYPES=['text','file','dir','cmd','workflow','tool','func'];
 
 function asmToRow(it){

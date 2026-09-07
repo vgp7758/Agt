@@ -432,6 +432,42 @@ const lit=String(_effInput(f).value?.content ?? '');  // 值按钮
 
 §23 骨架（headbar 钉顶 + 滚动区独立）两抽屉同构，本次仅补响应式宽度这一处——两抽屉竖屏行为对齐。纯前端，Ctrl+F5 刷新即生效。
 
+## 批次十三（`3f2329b`）：多选 / 框选 / 复制粘贴套件（Ctrl+框选 / Ctrl+C / Ctrl+V / 整体拖动 / Delete）
+
+主线索：**批量编辑**——Ctrl 框选/点选攒集合，Ctrl+C/V 跨画布搬运子图，拖动任意选中节点整体位移，Delete 批量删。用户提案 2026-09-07，全部落在 `src/static/workflow_editor.html`。
+
+### 28. 交互清单
+
+| 操作 | 行为 |
+|---|---|
+| **Ctrl + 左键空白拖拽** | 框选（`_rubber` 紫色虚线矩形，最上层渲染）——松手后与矩形相交的节点进 `multiSel` 集合（`renderNode` 描边 `node-body sel` 高亮 + toast 数量提示） |
+| **Ctrl + 点节点** | toggle 进出 `multiSel`（不启动拖动——多选模式下的拖动用无 Ctrl 的普通拖） |
+| **Ctrl + C** | `copySelection()`：`multiSel` 节点深拷贝 + **内部边**（两端都在集合内）打包 `{type:'agt-wf-selection', nodes, edges}` JSON 写系统剪贴板（`navigator.clipboard.writeText`）；写失败留 `_clip` 内存兜底（同页粘贴仍可用） |
+| **Ctrl + V** | `pasteFromClipboard()`：优先读剪贴板 JSON（`navigator.clipboard.readText`，**跨标签页 / 跨画布 / 跨子画布都能粘**），回退 `_clip`；保持相对布局，锚到鼠标最后位置（`_lastPt`，svg mousemove 持续记录），粘贴后自动选中新块 |
+| **拖动任意选中节点** | `multiSel.size>1 && multiSel.has(dragNode)` → 全员同步位移（相对布局不散架） |
+| **Delete / Backspace** | 多选批量删（连边 + 引用清理）；单选时删单个（原行为保留） |
+
+新状态变量（声明区 L159 附近）：`multiSel`（Set）/ `_rubber`（框选矩形）/ `_lastPt`（粘贴锚点）/ `_clip`（复制缓冲）。进出子画布自动清空三件套，防跨层状态串台。
+
+### 29. 复制/粘贴核心语义
+
+- **JSON 格式**：`{type:'agt-wf-selection', nodes, edges}`——nodes 深拷贝（`JSON.parse(JSON.stringify(n))`），edges 只带 `{sourceNodeID, targetNodeID, sourcePortID}` 三元组
+- **内部边判定**：`ids.has(ed.sourceNodeID) && ids.has(ed.targetNodeID)`——两端都在集合内才算内部边，指向集合外的边不随复制
+- **id 重映射**：粘贴时为新节点分配新 id，原 id → 新 id 映射表贯穿三条链路：① 边重连 ② **块内引用重映射**（粘贴版 data 里输入 ref 的 `blockID` 字段保留的是源画布旧 id——统一映射到新 id；块外引用才清 literal）③ start/end 承接
+- **键位细节**：Ctrl+C/V 需 `!_editing(e)`（不处于编辑态）+ multiSel 非空（C）/ 无拖线无拖动（V）；编辑中按 Ctrl 不重绘——`renderAll` 会销毁重建 textarea，焦点与选区随之丢失，紧随的 V 落到 body 上导致粘贴失效
+
+### 30. start/end 替换语义（用户插话补充）
+
+粘贴块含开始/结束节点时**不新建**——目标画布现有同类型节点直接承接粘贴版的 data/宽度/位置（id 不变），块内其它节点对它的边经 id 映射自动连上；画布里没有该类型（异常场景）才走新建。toast 提示「N 个开始/结束已替换现有节点」。
+
+**顺带修掉的坑：start/end 保护原按固定 id 判断**（`100001/900001`）——替换语义下 start 不一定叫这个名字，三处（单删 / 多删 / 面板按钮删除）统一改为**按 type 判**。
+
+### 31. 验证
+
+JS 语法 + 15 项结构断言全过；Playwright 真实编辑器实测：复制 4 节点 3 边 → 粘贴到异构画布（start/end 被替换、A/B 新 id、边和引用全部正确重映射）→ 整体拖动 movedTogether → Delete 保留 start/end → 框选矩形渲染。
+
+生效：**Ctrl+F5 强刷编辑器**即生效（静态资源 mtime 热更新，无需 /restart）。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

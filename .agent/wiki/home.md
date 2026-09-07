@@ -500,3 +500,7 @@
 
 - **v0.26.1 发布（2026-09-07，commit `1e8b74f`，PyPI + Git 已上线）**：**agents 管理页 `SEG_TYPES` 补 `recent_file` 段枚举（commit 67c7f57）随包发布**——v0.26.0 发布时该前端修复尚未提交，本补丁把它推出。核心：段名下拉选项源 `SEG_TYPES` 硬编码缺 `recent_file`（2026-09-07 段式化新增段，见 [context-engine · 修复八](../architecture/context-engine.md#修复八第四版段式化快照独立装配段-_seg_msgs_recent_file2026-09-07用户提案)）→ `asmToRow` 落到「未知段名 → 文本框」兜底分支（功能无损但观感/可编辑性差）；修复 = 数组补 `'recent_file'`（插在 steps 后、tail 前，与引擎 `_DEFAULT_ASSEMBLY_PLAN` 默认装配序一致）+ hint 文案同步——详见 [agents-admin · SEG_TYPES 补 recent_file](../features/agents-admin.md#seg_types-补-recent_file-段枚举段名不再走文本框兜底2026-09-07commit-67c7f57)。**生效方式**：静态页 mtime 热更新，Ctrl+F5 强刷 /agents 即生效，不依赖 /restart；其它机器 `pip install -U agt-agent`。wheel 抽检通过（agents.html 含 recent_file 段名 / 版本号正确）——详见 [v0.26.1 发布记录](releases/v0.26.1.md)
 
+## 快速事实增补（2026-09-07 · 四 · 编辑器多选/框选/复制粘贴套件）
+
+- **工作流编辑器多选套件（2026-09-07，commit `3f2329b`，用户提案）**：Ctrl+空白拖拽框选（`_rubber` 虚线矩形，相交进 `multiSel`）/ Ctrl+点节点 toggle / **Ctrl+C** 打包选中节点 + 内部边（两端都在集合内）为 `{type:'agt-wf-selection', nodes, edges}` JSON 写系统剪贴板（失败留 `_clip` 内存兜底）→ **Ctrl+V** 跨画布/跨子画布/跨标签页粘贴（相对布局锚鼠标最后位置，id 重映射贯通边 + 块内引用 + start/end）/ 拖动任意选中节点全员同步位移（相对布局不散架）/ Delete 批量删。**start/end 替换语义**：粘贴块含开始/结束节点不新建，目标画布同类型节点直接承接（id 不变），原按固定 id（100001/900001）的保护改按 type 判（三处）。块内引用悬空修复：粘贴版输入 ref 的 blockID 统一重映射到新 id。Playwright 实测 4 节点 3 边异构画布往返全绿（详见 [editor-ux · 批次十三](features/editor-ux-improvements.md)）
+

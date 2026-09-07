@@ -678,6 +678,59 @@ def _ensure_utf8_stdout():
         pass
 
 
+def _pick_recent_session_name(workspace) -> str:
+    """本 repo 最近活跃的 session 名（--resume 无值时的目标，用户提案 2026-09-08）。
+    活跃口径 = sessions 目录里 mtime 最新（最后写入）且 turns 非空；无则空串。"""
+    import json as _j
+    from session import _repo_sessions_dir
+    base = _repo_sessions_dir(workspace)
+    best = None   # (mtime, name)
+    try:
+        for d in base.iterdir():
+            mp = d / "meta.json"
+            if not (d.is_dir() and mp.exists()):
+                continue
+            try:
+                meta = _j.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            # 活跃判定（用户提案 2026-09-08）：新格式 meta.json 不含 turns（turns 从 events.jsonl
+            # 重放恢复）——用事件流存在且非空代替；名字缺失回退目录名
+            ev = d / "events.jsonl"
+            if not ev.exists() or ev.stat().st_size < 200:
+                continue   # 无事件流/近乎空 → 不算活跃
+            m = d.stat().st_mtime
+            if best is None or m > best[0]:
+                best = (m, meta.get("name") or d.name)
+    except Exception:
+        return ""
+    return best[1] if best else ""
+
+
+def _apply_resume_arg(argv, workspace):
+    """--resume [name]（用户提案 2026-09-08）：启动时自动加载 session 的启动参数。
+    无值 = 本 repo 最近活跃的 session；带值 = 指定名。转成 AGT_RESTART_SESSION env →
+    复用 /restart 恢复链路（_recover_restart_env 统一消费：/resume + web 广播视图态，
+    CLI/Web 两端行为一致）；已有 restart env（看门狗重启带明确目标）时不覆盖——
+    restart 指令优先。无活跃 session 时静默新开。"""
+    import os
+    if "--resume" not in argv:
+        return
+    i = argv.index("--resume")
+    nxt = argv[i + 1] if i + 1 < len(argv) else ""
+    # 下一个参数是选项或纯数字（端口；session 目录名含下划线，isdigit 必 False）→ 视为无值形态
+    name = "" if (not nxt or nxt.startswith("-") or nxt.isdigit()) else nxt
+    if os.environ.get("AGT_RESTART_SESSION"):
+        return
+    if not name:
+        name = _pick_recent_session_name(workspace)
+        if not name:
+            print("（--resume：本 repo 暂无活跃 session，新开对话）")
+            return
+        print(f"▶ --resume：最近活跃 session =「{name}」")
+    os.environ["AGT_RESTART_SESSION"] = name
+
+
 def _recover_restart_env(agent, work_q, registry, state):
     """/restart 或 restart_agent 看门狗重启后的自动恢复：消费 AGT_RESTART_* 环境变量。
     AGT_RESTART_SESSION → /resume 恢复会话；AGT_RESTART_MESSAGE → 作为第一条消息进 work_q。
@@ -686,8 +739,7 @@ def _recover_restart_env(agent, work_q, registry, state):
     sess = os.environ.pop("AGT_RESTART_SESSION", "")
     msg = os.environ.pop("AGT_RESTART_MESSAGE", "")
     if not sess and not msg:
-        return
-    print("🔁 检测到重启恢复指令…")
+        return    print("🔁 检测到重启恢复指令…")
     if sess:
         try:
             registry.dispatch(f"/resume {sess}", CommandContext(agent=agent, work_q=work_q, state=state))
@@ -712,6 +764,7 @@ def web_main(port=None):
     端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
     import sys
     _early_argv()   # --help / --version（打印后退出，不起服务）
+    _apply_resume_arg(sys.argv[1:], WORKSPACE)   # --resume [名字]：启动自动恢复 session（转 env，_recover_restart_env 消费）
     _ensure_utf8_stdout()
     if port is None:
         for a in sys.argv[1:]:
@@ -832,6 +885,9 @@ def _early_argv():
         print("  agt          交互式 CLI 模式（终端对话；进入后 /help 查看全部命令）")
         print("  agt-web      WebUI 服务（浏览器/手机访问；--port 指定端口，默认 8000）")
         print()
+        print("  两端通用：--resume [名字]  启动即自动恢复 session（无值=本 repo 最近活跃；")
+        print("            默认不自动恢复，新开对话）")
+        print()
         print("常用（进入会话后的斜杠命令）：")
         print("  /help        全部命令清单        /status    实例状态（进程/队列/钩子）")
         print("  /context     上下文堆积概况      /stats     LLM 调用与缓存命中统计页")
@@ -851,7 +907,9 @@ def _early_argv():
 
 
 def main():
+    import sys
     _early_argv()
+    _apply_resume_arg(sys.argv[1:], WORKSPACE)   # --resume [名字]：CLI 同款（与 agt-web 行为一致）
     _ensure_utf8_stdout()
     print("=" * 64)
     print("🤖 交互式 Agent")

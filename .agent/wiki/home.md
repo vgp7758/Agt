@@ -504,3 +504,7 @@
 
 - **工作流编辑器多选套件（2026-09-07，commit `3f2329b`，用户提案）**：Ctrl+空白拖拽框选（`_rubber` 虚线矩形，相交进 `multiSel`）/ Ctrl+点节点 toggle / **Ctrl+C** 打包选中节点 + 内部边（两端都在集合内）为 `{type:'agt-wf-selection', nodes, edges}` JSON 写系统剪贴板（失败留 `_clip` 内存兜底）→ **Ctrl+V** 跨画布/跨子画布/跨标签页粘贴（相对布局锚鼠标最后位置，id 重映射贯通边 + 块内引用 + start/end）/ 拖动任意选中节点全员同步位移（相对布局不散架）/ Delete 批量删。**start/end 替换语义**：粘贴块含开始/结束节点不新建，目标画布同类型节点直接承接（id 不变），原按固定 id（100001/900001）的保护改按 type 判（三处）。块内引用悬空修复：粘贴版输入 ref 的 blockID 统一重映射到新 id。Playwright 实测 4 节点 3 边异构画布往返全绿（详见 [editor-ux · 批次十三](features/editor-ux-improvements.md)）
 
+## 快速事实增补（2026-09-07 · 五 · 框选后节点不被选中修复）
+
+- **框选后节点不被选中修复（2026-09-07，commit `3d60ca4`，用户实测）**：批次十三框选套件的收尾 bug——框选松手 **toast 提示出了但节点没被选中**（高亮一闪而过）。根因：mousedown/up 都在空白 → 浏览器紧随 mouseup **自动派发一次 click** → 「点空白清多选」handler 把刚算好的 `multiSel` 立即清空（toast 在清空前已出，故现象是"提示成功但选择消失"）。修复：框选收尾分支加 `_suppressClick=true`（复用现成 click 抑制机制），吞掉紧随的那次 click；用户主动点空白取消不受影响。此前 Playwright 合成 `dispatchEvent` 复现不了（合成事件不触发浏览器自动派发 click），真实鼠标路径复测才抓到——详见 [editor-ux · 批次十三 §32](features/editor-ux-improvements.md)
+

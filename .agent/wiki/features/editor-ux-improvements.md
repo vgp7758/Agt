@@ -468,6 +468,40 @@ JS 语法 + 15 项结构断言全过；Playwright 真实编辑器实测：复制
 
 生效：**Ctrl+F5 强刷编辑器**即生效（静态资源 mtime 热更新，无需 /restart）。
 
+### 32. 框选后节点不被选中：`_suppressClick` 吞紧随 click（2026-09-07，commit 3d60ca4，用户实锤）
+
+**现象（用户实测）**：框选松手后 toast 提示出了（「已选中 N 个」），但节点没有被选中——高亮一闪而过，画布恢复全空。
+
+**根因（时序还原）**：
+
+```
+Ctrl+mousedown 空白 → 拖拽 → mouseup：
+  ① mouseup 收尾：multiSel 计算完成 → toast 数量提示 → renderAll（高亮出现）
+  ② 浏览器紧随派发 click（mousedown/up 都在空白 = 一次点击）
+  ③ click handler「点空白清多选」→ multiSel.clear() → renderAll（高亮消失）
+```
+
+用户看到的现象完全吻合：**toast 出了**（选择计算成功），**高亮一闪而过**（被 ③ 立即清空）。此前 Playwright 用合成 `dispatchEvent` 复现不了——合成事件**不会触发浏览器自动派发 click**，这正是该 bug 藏到现在的原因。
+
+**修复**（`src/static/workflow_editor.html`）：框选收尾分支加一行 `_suppressClick=true`——复用编辑器现成的 click 抑制机制（拖线弹窗防误关同款），吞掉紧随的 click：
+
+```javascript
+if(_rubber){
+  …
+  _rubber=null;
+  _suppressClick=true;   // ⬅ 抑制紧随的 click：mousedown/mouseup 都在空白 → 浏览器派发 click
+                         //    「点空白清多选」逻辑会把刚选的立即清掉（toast 出了但高亮闪没）
+  if(rw>4||rh>4){        // 微动视为误触，不产生选择
+    multiSel=new Set(/* 与矩形相交的节点 */);
+    …
+```
+
+**用户主动点空白取消选择不受影响**——`_suppressClick` 只吞掉紧随框选收尾的那一次 click，下一次真实点击正常走清空逻辑。
+
+**验证（真实鼠标路径 Playwright 复测）**：`keyboard.down('Control') + mouse.down/move/up`（非合成事件）——框选 P/Q 后（等 click 派发完）`multiSel=[400001,400002]`、`.sel` 高亮 2 个 ✅；主动点空白 `multiSel=0`、高亮 0 ✅（取消仍正常）。**Ctrl+F5 强刷编辑器即生效**。
+
+> 教训：**「toast 出了但 UI 没变」类现象，优先怀疑紧随事件流的副作用（浏览器自动派发的 click/dblclick）**——合成事件测试天然掩盖这类 bug，验证必须走真实输入路径。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

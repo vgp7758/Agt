@@ -241,6 +241,7 @@ class Agent:
         snapshot_manager=None,
         session_dir=None,
         registry=None,
+        agent_id: str = "_main_",
     ):
         self.base_system = system
         self.tools = tools
@@ -311,7 +312,7 @@ class Agent:
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
         self._turn_end_inject_count: int = 0    # 本轮 turn_end 注入次数（封顶 3 防死循环）
         # —— Agent 注册表（多 Agent 协作通信）——
-        self.agent_id: str = "_main_"   # 本 Agent 在 registry 中的 id（子 Agent 创建时覆盖）
+        self.agent_id: str = agent_id or "_main_"   # 本 Agent 在 registry 中的 id（子 Agent 创建时显式传入，默认主 _main_）
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         self.dump_projections: bool = False  # 投影转储开关（运行时设置）
@@ -327,16 +328,24 @@ class Agent:
             self.utility_model = ""
         self._utility_llm = None   # 惰性创建的辅助 client（None=未建；=self.llm 表示回退主模型）
         if self.registry is not None:
-            # 防覆盖（用户实锤 2026-09-02）：SubAgent 包装创建内嵌 Agent 时也传了 registry——
-            # 用默认 "_main_" 注册会覆盖真实主 Agent 的条目（此后 _route_answer 查 _main_
-            # 拿到的是子 Agent → answer 推进子 Agent 自己的 inbox，主 Agent 永远收不到）。
-            # 防御：registry 已有活体 _main_ 且不是本实例 → 跳过（子 Agent 由 multiagent.py
-            # 用正确 agent_id 另行注册）。
-            _existing = self.registry.lookup("_main_")
-            if _existing is not None and _existing.agent is not None and _existing.agent is not self:
-                _LOG.debug("Agent.__init__: registry 已有主 Agent（%s），跳过 _main_ 注册", type(self).__name__)
+            if self.agent_id == "_main_":
+                # 防覆盖（用户实锤 2026-09-02）：SubAgent 包装创建内嵌 Agent 时也传了 registry——
+                # 用默认 "_main_" 注册会覆盖真实主 Agent 的条目（此后 _route_answer 查 _main_
+                # 拿到的是子 Agent → answer 推进子 Agent 自己的 inbox，主 Agent 永远收不到）。
+                # 防御：registry 已有活体 _main_ 且不是本实例 → 跳过（子 Agent 由 multiagent.py
+                # 用正确 agent_id 另行注册）。
+                _existing = self.registry.lookup("_main_")
+                if _existing is not None and _existing.agent is not None and _existing.agent is not self:
+                    _LOG.debug("Agent.__init__: registry 已有主 Agent（%s），跳过 _main_ 注册", type(self).__name__)
+                else:
+                    self.registry.register("_main_", "main", "main", self.model_name,
+                                           agent=self, task="", status="running")
             else:
-                self.registry.register(self.agent_id, "main", "main", self.model_name,
+                # 子 Agent：用正确 id/role 注册（2026-09-07 根治——此前子 Agent 构造时 agent_id
+                # 仍为默认 "_main_"，走上面分支抢注/覆盖主槽 → 完成通知路由进错误的 inbox，
+                # 主 Agent 收不到、子 Agent 吃自己的完成通知再开新轮自循环）。key=子 id、role=subagent，
+                # 不碰 _main_ 槽。
+                self.registry.register(self.agent_id, self.agent_id, "subagent", self.model_name,
                                        agent=self, task="", status="running")
         # FUNC_REGISTRY 运行时挂点（用户提案 2026-09-02）：spec_content/spec_steps/plan_content/
         # plan_steps/bg_services/get_team_profiles 等实例状态函数（agent_config.FUNC_REGISTRY）

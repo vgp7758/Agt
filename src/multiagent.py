@@ -72,9 +72,9 @@ class SubAgent:
         self.agent = Agent(system, tools, model_name=model_name,
                            enable_thinking=True, max_steps=max_steps,
                            token_budget=token_budget, verbose=False, on_event=on_event,
-                           session_dir=session_dir, registry=registry)
+                           session_dir=session_dir, registry=registry,
+                           agent_id=agent_id or (name or "_main_"))   # 构造即带正确 id —— Agent.__init__ 按 id 分流注册
         if agent_id:
-            self.agent.agent_id = agent_id
             self.agent.session._asm_agent_id = agent_id   # assembly workflow 项的入参 agent_id
         # 复用模式：session 投影只含当前轮（历史轮不投影但完整归档）——多次派活不膨胀上下文
         if current_turn_only:

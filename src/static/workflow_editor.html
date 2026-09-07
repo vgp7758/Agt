@@ -1097,6 +1097,8 @@ svg.addEventListener('mouseup',(e)=>{
     const rx=Math.min(_rubber.x0,_rubber.x1), ry=Math.min(_rubber.y0,_rubber.y1);
     const rw=Math.abs(_rubber.x1-_rubber.x0), rh=Math.abs(_rubber.y1-_rubber.y0);
     _rubber=null;
+    _suppressClick=true;   // ⬅ 抑制紧随的 click：mousedown/mouseup 都在空白 → 浏览器派发 click →
+                           //    「点空白清多选」逻辑会把刚选的立即清掉（toast 出了但高亮闪没——用户实锤）
     if(rw>4||rh>4){   // 微动视为误触，不产生选择
       multiSel=new Set(WF.nodes.filter(n=>(n.x||0)<rx+rw&&(n.x||0)+(n.w||0)>rx
         &&(n.y||0)<ry+rh&&(n.y||0)+(n.h||0)>ry).map(n=>n.id));

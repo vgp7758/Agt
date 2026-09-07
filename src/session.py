@@ -52,8 +52,8 @@ RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
 _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
-# recent-file 跟屁虫块（tool result content 尾部附加的文件快照）：_rf_in_msgs 量体积 /
-# 毕业判定估算时剥离用（rf 是轮内易变项，不该推动升档/折叠等不可逆历史压缩——用户裁定 2026-08-29）
+# recent-file 段（2026-09-07·第四版：独立装配段 _seg_msgs_recent_file，不再内嵌 tool result）：
+# _RE_RF_BLOCK/_rf_stripped/_rf_in_msgs 保留旧内嵌形态的兜底（剥离/诊断口径）
 _RE_RF_BLOCK = re.compile(r"\n<recent-file[\s\S]*?</recent-file>")
 
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
@@ -964,6 +964,7 @@ class Session:
     # ltm 统一放在 history 之后：它偶发变化（agent 写记忆），越靠后变化时的缓存爆炸半径越小。
     # tail 拆平铺段（2026-09-01·用户提案：写死内容组装化）：time/system/plan/spec/episodic/remote
     # 各自可配顺序/开关/增删；旧 tail 段在 set_assembly_plan 自动展开（yml 兼容）。
+    # recent_file 段（2026-09-07·用户提案：快照不再内嵌 tool result，独立段走装配）：steps 后、tail 前。
     _DEFAULT_ASSEMBLY_PLAN = [
         {"kind": "seg", "name": "system"},
         {"kind": "seg", "name": "rules"},
@@ -971,6 +972,7 @@ class Session:
         {"kind": "seg", "name": "ltm"},
         {"kind": "seg", "name": "user_message"},
         {"kind": "seg", "name": "steps"},
+        {"kind": "seg", "name": "recent_file"},
         {"kind": "seg", "name": "tail"},
     ]
 
@@ -1082,7 +1084,8 @@ class Session:
         settle = self.fold_target()   # per-provider ratio（DeepSeek≈60x 折扣悬殊→配高如 0.95：晚折叠保前缀）
         fold_count = self._planned_fold
         # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）。
-        # 剥除 recent-file 块（_rf_stripped）：应急判定针对历史段，rf 是轮内易变项不该推动升档/折叠（用户裁定 2026-08-29）
+        # recent_file 段不计入（2026-09-07·段式化后语义不变）：rf 是轮内易变项（归档即消失），
+        # 不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）——_rf_stripped 兜底旧内嵌形态。
         rest = self._rf_stripped(self._seg_msgs_ltm() + self._seg_msgs_user_message()
                                  + self._seg_msgs_steps() + self._seg_msgs_tail())
         panic_mode = False
@@ -1144,19 +1147,50 @@ class Session:
 
     def _seg_msgs_steps(self) -> list[dict]:
         """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
-        recent-file（跟屁虫快照，用户设计 2026-08-29）：_rf_latest_map 维护 filename→最新改它的
-        call_id 映射，_steps_to_messages 渲染 role:tool 时按 call_id 命中——快照附加在【那次
-        工具调用的 result content】尾部（因果位置自然，紧跟改它的调用）；同文件多次 edit 只有
-        最新一次的 call 命中。归档轮/历史段不传映射（call_id 不在映射里，天然"前面的轮不管"）。"""
+        （2026-09-07 起 recent-file 不再内嵌 tool result 尾部——独立段 _seg_msgs_recent_file，
+        走装配清单可配位置/开关。）"""
         if self._current is None:
             return []
         out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
-                                           full_window=RECENT_FULL_STEPS,
-                                           rf_map=self._rf_latest_map()))
+                                           full_window=RECENT_FULL_STEPS))
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
         return out
+
+    def _seg_msgs_recent_file(self) -> list[dict]:
+        """recent-file 段（2026-09-07·用户提案·第四版）：当前轮改过的文件快照以独立段投影
+        （2026-08-29 第三版是内嵌在那次工具调用 result 尾部）。结构（用户给定）：
+            <recent-file>
+            <file path="xxx.py" version="a1b2">        小文件：行号化全文
+            1| import os
+            </file>
+            <file path="big.md" version="c3d4" size="130537">   大文件（>RF_MAX_CHARS）：
+            <overview>结构大纲</overview>              py=函数/类行号结构 / md=标题大纲（_rf_outline）
+            <content note="文件过大省略——需要时 read_file 分段读取"/>
+            </file>
+            </recent-file>
+        数据源 _rf_latest_map：同文件多次 edit 只有最新快照命中；归档轮天然不在映射（前面的轮不管）。
+        空映射 → 空段（零噪声）。version=快照记录的 file_version（乐观锁版本）。"""
+        m = self._rf_latest_map()
+        if not m:
+            return []
+        parts = []
+        for info in m.values():
+            if info.get("skip"):
+                ov = str(info.get("outline") or "").strip() or "(结构提取失败)"
+                parts.append(
+                    f'<file path="{info["path"]}" version="{info["version"]}" size="{info["skip"]}">\n'
+                    f"<overview>\n{ov}\n</overview>\n"
+                    f'<content note="文件过大（{info["skip"]:,} 字符 > {RF_MAX_CHARS:,}）——此处省略，'
+                    f'需要时 read_file 分段读取"/>\n</file>')
+            else:
+                _lines = str(info["text"]).split("\n")
+                _w = max(2, len(str(len(_lines))))          # 行号宽度自适应（与 read_file 口径一致）
+                numbered = "\n".join(f"{i:>{_w}}| {ln}" for i, ln in enumerate(_lines, 1))
+                parts.append(f'<file path="{info["path"]}" version="{info["version"]}">\n{numbered}\n</file>')
+        block = "<recent-file>\n" + "\n".join(parts) + "\n</recent-file>"
+        return [{"role": "user", "content": block}]
 
     def _tail_block_msgs(self, name: str) -> list[dict]:
         """tail.* 拆段的单段块收集（2026-09-01·用户提案：写死内容组装化）：按子段名取各自
@@ -1413,10 +1447,11 @@ class Session:
                 name = item.get("name")
                 if self.current_turn_only and name in ("history", "ltm"):
                     continue   # reuse 投影隔离：历史系段一律不投影
-                if name in ("system", "rules", "ltm", "tail"):
+                if name in ("system", "rules", "ltm", "tail", "recent_file"):
                     own = (self._seg_msgs_system() if name == "system" else
                            self._seg_msgs_rules() if name == "rules" else
-                           self._seg_msgs_ltm() if name == "ltm" else self._seg_msgs_tail())
+                           self._seg_msgs_ltm() if name == "ltm" else
+                           self._seg_msgs_tail() if name == "tail" else self._seg_msgs_recent_file())
                     if own:
                         if name == "tail":
                             # tail.* 拆段（2026-09-01·用户提案：写死内容组装化）：各子段独立收集，
@@ -1430,6 +1465,14 @@ class Session:
                             if _b.endswith("</system-reminder>"):
                                 _b = _b[:-len("</system-reminder>")].strip()
                             tail_merge_text = (tail_merge_text + "\n" + _b) if tail_merge_text else _b
+                            continue
+                        if name == "recent_file":
+                            # recent_file 段（2026-09-07·用户提案·段式化）：与 tail 同桶——
+                            # <recent-file> 块并入 tail_merge_text（装配后统一 <system-reminder>
+                            # 包裹 merge 到末条 content；末条在未命中区，每步变化零缓存扰动）。
+                            _b = "\n".join(str(m.get("content") or "") for m in own).strip()
+                            tail_merge_text = (tail_merge_text + "\n" + _b) if tail_merge_text else _b
+                            _sec("recent_file(改文件快照段)", own, "并入末条(reminder)", msgs_n=0)
                             continue
                         run.extend(own)
                         run_secs.append((
@@ -2198,7 +2241,7 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = None, full_window: int = None, rf_map: dict = None) -> list[dict]:
+                           base: int = None, full_window: int = None) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
         工具名/入参/结果从 toollog 按 call_id 召回。step 级策略（分组投影，缓存友好）：
         - 每 GROUP_STEPS 步一组，组内所有步 limit 一致 → byte-stable（利于前缀缓存）；
@@ -2209,7 +2252,6 @@ class Session:
         - reasoning 永远原样挂 reasoning_content（不压缩，含 step0 的核心设计思考）。
         max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
-        _rf_hit = {m["cid"]: m for m in (rf_map or {}).values()}   # call_id→快照（O(1) 命中查；rf_map 仅当前轮传入）
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
             steps = steps[-max_steps:]
@@ -2252,27 +2294,7 @@ class Session:
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
                 content = self._project_imgs(content)
-                # recent-file（用户设计 2026-08-29·第三版）：按 call_id 从映射命中——快照附加在
-                # 【该次工具调用的 result content】尾部（因果位置：紧跟改它的调用）。映射只由
-                # _seg_msgs_steps 从当前轮构建（filename→最新改它的 cid）：同文件多次 edit 仅
-                # 最新 call 命中（旧 call 不挂）；归档轮/历史段不传映射（cid 不在映射里）天然不挂。
-                if rf_map and full and (tc.call_id or "") in _rf_hit and isinstance(content, str):
-                    _m = _rf_hit[tc.call_id or ""]
-                    if _m.get("skip"):
-                        # 超大文件（>RF_MAX_CHARS=100K，用户裁定 2026-08-31）：投影结构大纲（用户
-                        # 提案迭代——不再只挂提示行）：py=函数/类行号结构 / md=标题大纲（_rf_outline）。
-                        # 配对标签（有内容）——_RE_RF_BLOCK 可匹配，rf 统计/剥除口径正常计入；
-                        # 无 outline（提取失败等）回退一行提示。全文仍可 read_file 按需读取。
-                        if _m.get("outline"):
-                            content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}' "
-                                        f"note='文件过大（{_m['skip']:,} 字符）——投影结构大纲，全文可 read_file'>\n"
-                                        f"{_m['outline']}\n</recent-file>")
-                        else:
-                            content += (f"\n<recent-file file='{_m['path']}' skipped='too-large "
-                                        f"({_m['skip']:,} 字符 > {RF_MAX_CHARS:,})——已修改，需要时 read_file 查看当前内容'/>")
-                    else:
-                        content += (f"\n<recent-file file='{_m['path']}' version='{_m['version']}'>\n"
-                                    f"{_m['text']}\n</recent-file>")
+                # （2026-09-07 起 recent-file 快照不再内嵌此处——独立段 _seg_msgs_recent_file 走装配）
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 

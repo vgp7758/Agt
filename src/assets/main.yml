@@ -88,6 +88,7 @@ assembly:
   - ltm
   - user_message
   - steps
+  - recent_file
   - tail
 hooks:
   before_turn:

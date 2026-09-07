@@ -54,11 +54,11 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 |---|---|
 | list | `_main_` 置顶（读 main.yml，返回 assembly 段数 + hooks 位置） |
 | get | `is_main=True`；**不含 persona/tools 字段**（不适用）；assembly 原样返回 |
-| 保存 | `yaml.safe_load` 现有 main.yml 为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；**写 `config_file` 解析的那份 main.yml**（repo 级覆盖、写侧跟随读到的那份，2026-08-31 commit 10d717e——本地存在则读写本地，多实例角色实例独立主声明）；提示 `/restart` 后生效（启动时装配） |
+| 保存 | `yaml.safe_load` 现有 main.yml 为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；**写 `config_file` 解析的那份 main.yml**（repo 级覆盖、写侧跟随读到的那份，2026-08-31 commit 10d717e——本地存在则读写本地，多实例角色实例独立主声明）；提示 `/restart` 后生效（启动时装配）——**2026-09-07 起 main.yml mtime 热重载，改 DSL 当轮生效**，见 [multi-agent · main.yml 热重载](../architecture/multi-agent.md) |
 | create | 拒绝 `_main_`/`main` 保留名作子 Agent 名 |
 | delete | 拒绝——主 Agent 声明不可删除 |
 
-前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 隐藏删除按钮；保存 toast 显示后端 note（主 Agent：`/restart` 后生效 + **实际写入路径**（`已写 {p}；/restart 后生效`，动态而非硬编码 `~/.agt`）；子 Agent：新派活生效，reuse 实例下一任务生效）。
+前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 隐藏删除按钮；保存 toast 显示后端 note（主 Agent：`/restart` 后生效 + **实际写入路径**（`已写 {p}；/restart 后生效`，动态而非硬编码 `~/.agt`；**2026-09-07 起热重载生效、提示降级为「已热重载」**）；子 Agent：新派活生效，reuse 实例下一任务生效）。
 
 ## 编辑器 assembly 往返增强（agents.html，同 commit）
 
@@ -283,7 +283,7 @@ load_agents_index 返回的 path 是 str（".agent/agents/coder.yml"）
 
 ## 注意事项
 
-- **生效语义不同**：子 Agent 保存 → 新派活即生效（reuse 实例下一任务）；`_main_` 保存 → 需 `/restart`（主 Agent 启动时装配）
+- **生效语义不同**：子 Agent 保存 → 新派活即生效（reuse 实例下一任务）；`_main_` 保存 → **2026-09-07 起 main.yml mtime 热重载、当轮生效**（此前需 `/restart`，主 Agent 启动时装配；见 [multi-agent · main.yml 热重载](../architecture/multi-agent.md)）
 - 迁移存量声明的最短路径：管理页打开 → 保存一次 → 自动 v2.1；之后 persona 直接改 md 即时生效
 - **`except Exception: pass` 的代价**（f177674 教训）：api_agents_list 的兜底 except 把 str/Path 的 AttributeError 吞成"恒空 meta"，表象指向声明而根因在读侧——宽 except 只配 debug 日志；且验证必须覆盖"列表里真有子 Agent"的分支（临时 workspace 无子 Agent 时该分支从未执行，`_main_` 分支掩盖了它）
 - 主 Agent assembly 的具体项数/内容随 main.yml 演进变化，上表是 2026-08 快照；结构性事实（text/动作交错 + 尾部 seg 段）是稳定的

@@ -26,6 +26,37 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
+## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
+
+**背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：
+
+| DSL | 生效时机（修复前） |
+|---|---|
+| 子 Agent 声明（`.agent/agents/*.yml`） | **即时**——每次 `agent_prompt` 派活都现场读声明并重设装配清单（复用实例也是下一任务生效） |
+| 主 Agent DSL（`~/.agt/main.yml` / workspace `.agent/main.yml`） | **只在 `build_agent` 启动时读一次**——改了必须 `/restart` |
+
+根因：`build_agent`（src/chat.py）启动时 `load_agent_yml → _parse_assembly → set_assembly_plan` 一次性完成，之后再没人碰这个文件。
+
+**修复：`Agent._reload_main_dsl()` mtime 惰性热重载（src/agent.py + src/chat.py）**：
+
+```
+build_agent：记录热重载锚点（agent._main_yml_path / _main_yml_mtime / _main_yml_model）
+每轮 run 开始 → _reload_main_dsl()
+  stat main.yml（~0.1ms）→ mtime 没变直接返回
+  变了 → 重读 → 四项重新应用（与 build_agent 启动路径同源）：
+    assembly 清单（set_assembly_plan + 清 once 缓存）
+    hook_specs（钩子挂载）
+    fallback（回退链）
+    model（switch_model 联动窗口副本/base 缓存刷新）
+  → emit「♻️ main.yml 已热重载」系统提示
+```
+
+- 与 HTML mtime 热更新、models.json 惰性重载（`_maybe_reload_models`）同一模式——配置文件热更新三部曲至此凑齐
+- **子 Agent 声明不归这里管**：本就每次 agent_prompt 现场读（即时生效）
+- **顺带修一个静默坑**：`load_agent_yml` 必须传 `Path`——传 `str` 会在 `path.suffix` 上直接 AttributeError 被外层 except 吞掉，表现为「热重载无反应也没报错」（内部强制转换）
+- **验证 5/5**：未变更 no-op（不触发重读）/ 改文件后 assembly 热重载（text 项更新）/ hooks 热重载（before_turn 挂载生效）/ 非法 model 名跳过切换（防手滑写错把模型切崩）/ 幂等（同 mtime 不重复加载）
+- 生效方式：**`/restart` 一次让修复本身生效，之后改 main.yml 当轮生效**——[/agents 管理页保存 `_main_`](../features/agents-admin.md) 同步受益（不再提示重启）
+
 ## agent_prompt 默认复用翻转（2026-09-06，用户提案，commit 595fa2f）
 
 **动机**：旧语义「不传 reuse=新建」——`reuse=true` 很少被模型主动传（LLM 默认不带），而高频派活（看图/检查）同名声明的实例越建越多（vision_1→vision_13、wiki-updater_2/3 式堆积，每 /restart 复活路径又造 _N）。用户提案：**默认复用已有实例，换成一个参数传了才创建新的**。
@@ -216,6 +247,23 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 **验证**：`/restart` 后重派一个 vision 任务 → vision 完成后主 Agent 应被自动唤醒——inbox 唤醒链路（`push_message → inbox_thread → work_q → worker → agent.run`）本身一直是好的，此前只是 answer 被推错门。
 
 **教训**：registry 全进程共享、以 agent_id 为键——任何 Agent 构造入口（含 SubAgent 包装的内嵌实例）都不能无防御地拿默认 id 注册。排查「子 Agent 完成主 Agent 不醒」先看 **answer 落进了谁家 inbox**（见下节排障速查第 2 步）。
+
+### 根治（2026-09-07）：agent_id 构造传参 + 主/子分流注册——抢注闭环（用户实锤）
+
+**复发再定性**：533d64c 的防覆盖是**打补丁**——堵住「内嵌 Agent 覆盖 `_main_`」这一条，但根子没除：`Agent.__init__` 没有 `agent_id` 参数，实例属性硬编码默认 `"_main_"`（src/agent.py L314）；`SubAgent` 构造内嵌 `Agent` 时不传 id（构造完 L76 才事后改）。于是防覆盖逻辑对子 Agent 也拿默认 `"_main_"` 走——registry 里 `_main_` 槽是**幽灵条目（agent=None，`_restore_subagents` 恢复的历史子 Agent 场景）**或空时，子 Agent 用它自己注册成 `_main_` → 之后所有 `_route_answer` 查 `lookup("_main_")` 拿到的是子 Agent → 完成通知全部 push 进子 Agent 自己的 inbox（主 Agent 永远收不到）→ 子 Agent 空闲后又把自己完成通知当新任务消费开新轮 → **自循环 + 旧结论复述**。
+
+**用户实锤（vision_14 session）**：vision_14 的 inbox 里堆着它自己 turn1/turn3 的 + vision_15 的通知（互串），turn 3 就是它吃自己完成通知（含旧结论全文）开出来的——「投影带历史」是假象，真相是这条 registry 抢注引发的通知回灌。
+
+**修复（双管齐下）**：
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent.py` | `Agent.__init__` 新增 `agent_id` 参数（默认 `"_main_"`）；`self.agent_id` 从参数取；**注册逻辑主/子分流**——`_main_` 走原防覆盖逻辑（role=main），其余以真实 id + `role=subagent` 注册，**永不碰 `_main_` 槽** |
+| `src/multiagent.py` | `SubAgent.__init__` 构造 `Agent` 时**就传** `agent_id`（name 兜底），删掉事后改 id 的两行 |
+
+**验证（8/8，test/test_subagent_registry_slot.py）**：主 Agent 注册 `_main_`（agent=自身，role=main）/ 子 Agent 注册 `vision_x`（agent=自身，role=subagent）/ 【核心】子 Agent 构造后 `_main_` 槽仍指向主 Agent（未被抢注）/ 重复 `_main_` 构造不覆盖原主 Agent（防覆盖仍生效）/ 无 agent_id 时兜底 name，不落 `_main_`。
+
+**排障速查补丁**：上节「注意事项」第 2 步（answer 推错门）加一问——**谁注册成了 `_main_`**（幽灵条目场景与 533d64c 的活体覆盖场景表象同、根因分支不同）。vision_10~15 到处长的同源症状（wiki-updater_2/3 也是亲戚）一并治愈。`/restart` 后生效。
 
 ### 注意事项
 

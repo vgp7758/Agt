@@ -508,3 +508,11 @@
 
 - **框选后节点不被选中修复（2026-09-07，commit `3d60ca4`，用户实测）**：批次十三框选套件的收尾 bug——框选松手 **toast 提示出了但节点没被选中**（高亮一闪而过）。根因：mousedown/up 都在空白 → 浏览器紧随 mouseup **自动派发一次 click** → 「点空白清多选」handler 把刚算好的 `multiSel` 立即清空（toast 在清空前已出，故现象是"提示成功但选择消失"）。修复：框选收尾分支加 `_suppressClick=true`（复用现成 click 抑制机制），吞掉紧随的那次 click；用户主动点空白取消不受影响。此前 Playwright 合成 `dispatchEvent` 复现不了（合成事件不触发浏览器自动派发 click），真实鼠标路径复测才抓到——详见 [editor-ux · 批次十三 §32](features/editor-ux-improvements.md)
 
+## 快速事实增补（2026-09-07 · 六 · main.yml 热重载——改主 Agent DSL 免 /restart）
+
+- **main.yml 热重载（2026-09-07，用户提案「改过 agent 的 DSL 以后似乎要 /restart 才生效」）**：主 Agent DSL 此前只在 `build_agent` 启动时读一次（改主 Agent 声明必须 /restart；子 Agent 声明本就每次派活现场读、即时生效）。修复：`Agent._reload_main_dsl()` mtime 惰性热重载——每轮 run 开始 stat main.yml（~0.1ms），mtime 变了才重读，**assembly 清单 / hooks / fallback / model 四项全部重新应用**（与 build_agent 启动路径同源）+ 「♻️ main.yml 已热重载」系统提示；build_agent 记录 `_main_yml_path/_mtime/_model` 锚点（src/chat.py）。与 HTML mtime 热更新、models.json 惰性重载（`_maybe_reload_models`）同模式——配置文件热更新三部曲凑齐。顺带修静默坑：`load_agent_yml` 必须传 Path（str 会在 path.suffix AttributeError 被 except 吞，表现为「热重载无反应也没报错」）。验证 5/5（no-op / assembly / hooks / 非法 model 跳过 / 幂等）。`/restart` 一次让修复生效，之后改 main.yml 当轮生效（详见 [multi-agent · main.yml 热重载](architecture/multi-agent.md)；[/agents 保存 `_main_`](../features/agents-admin.md) 同步受益不再提示重启）
+
+## 快速事实增补（2026-09-07 · 七 · registry 抢注根治——子 Agent 不再抢 _main_ 槽）
+
+- **SubAgent 抢注 `_main_` registry 槽根治（2026-09-07，用户实锤「projection 带历史是假象，真相是通知回灌」）**：`Agent.__init__` 无 `agent_id` 参数、实例属性硬编码默认 `"_main_"`；`SubAgent` 构造内嵌 `Agent` 不传 id（构造完才事后改）——533d64c 的防覆盖只堵「活体覆盖」一条，**幽灵 `_main_` 槽（agent=None 的历史条目，`_restore_subagents` 恢复场景）**下子 Agent 仍会用默认 id 注册成 `_main_` → `_route_answer` 查到子 Agent → 完成通知 push 进子 Agent 自己 inbox → 主 Agent 永不醒 + 子 Agent 吃自己完成通知自循环开新轮（vision_14 inbox 堆自己 turn1/turn3 + vision_15 通知互串实锤）。修复：`Agent.__init__` 新增 `agent_id` 参数 + **注册主/子分流**（`_main_` 走防覆盖 role=main；其余以真实 id + role=subagent 注册，永不碰 `_main_` 槽）；`SubAgent.__init__` 构造时即传 agent_id（multiagent.py，删事后改 id 两行）。验证 8/8（test/test_subagent_registry_slot.py）。`/restart` 生效（详见 [multi-agent · 根治](architecture/multi-agent.md)）
+

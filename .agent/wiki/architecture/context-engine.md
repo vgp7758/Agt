@@ -769,6 +769,14 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 
 **缓存收益（为什么比第三版更稳）**：第三版快照挂在中段 tool result content 尾部——快照每步变化会让该 tool result 位置之后的全部消息重算；段式化后快照并入**末条**（本来就在缓存未命中区）——每步快照变化零前缀扰动。`/context` 段落统计出现 `recent_file(改文件快照段)` 单列、投影转储（旁车）里 XML 块直接可见。需 `/restart` 生效。
 
+#### 注入姿势确认：固定 reminder 桶，不受 steps=reasoning 影响（2026-09-07 交互确认）
+
+用户问：「recent-file 放在 steps 后面是和配置的其它尾部段一起被 system-reminder 包裹附加在最后一条 message 的 content 上的对吧？」——**对，且固定**：
+
+- **同桶 merge 到末条**：`_walk_plan` 里 `recent_file` 段与 `tail` 同走 `tail_merge_text` 桶（源码注释「与 tail 同桶——`<recent-file>` 块并入 tail_merge_text（装配后统一 `<system-reminder>` 包裹并入末条 content）」）——**不额外创建 message**，正是三区 merge 语义（末条本来就在缓存未命中区，快照每步变化零前缀扰动）
+- **不因 `steps=reasoning` 改变姿势**：`steps=reasoning` 只影响 steps 后【动作项】（text/file/func 等按各自 pose 分桶，见 [粒度演进](#粒度演进steps-全局--逐动作项-pose-双桶2026-09-03commit-24597f3用户提案)）；`recent_file` 固定走 reminder 桶——文件快照是大体积内容，塞进 `reasoning_content` 思考链不合适
+- 清单顺序：`steps` 后、`tail` 前（`_DEFAULT_ASSEMBLY_PLAN` 插位）——reminder 内部靠前
+
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 
 `_folded_summary(fold_count)` 生成被折叠早期轮次的结构概览（纯结构信息、无需 LLM；逐字原文靠 recall 召回）。每轮一行：`user[:80]` + `(已折叠N次工具调用) ` + tail。tail 的优先级链：

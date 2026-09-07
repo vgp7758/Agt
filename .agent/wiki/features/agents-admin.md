@@ -76,6 +76,23 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 
 **修复（src/static/agents.html）**：所有行统一显示类型下拉；类型选项 = `['seg', ...ACT_TYPES]`——`seg`=投影段（具体段名走右侧名称下拉，SEG_TYPES：system/rules/history/ltm/user_message/steps/tail/hooks），动作项 = text/file/dir/cmd/workflow/tool/func；title 提示「类型：seg=投影段（名称见右下拉）/ 动作项」。`asmKind` 切换时 seg 行保留原段名（默认 `user_message`）。JS 语法验证通过——与 [段形态简化定稿](../architecture/multi-agent.md) 同 commit 504a518。
 
+### SEG_TYPES 补 recent_file 段枚举：段名不再走文本框兜底（2026-09-07，commit 67c7f57）
+
+**用户观察（agents#edit 页面）**：「webui 上 agents#edit 页面里 recent-file 显示不太对劲，是不是因为不在枚举里？」——**正是**。
+
+**根因（前端白名单缺段，src/static/agents.html）**：段名下拉的选项源 `SEG_TYPES` 硬编码缺 `recent_file`（段式化 2026-09-07 新增段，见 [context-engine · 修复八](../architecture/context-engine.md)）。`asmToRow` 解析 `recent_file` 段时 `SEG_TYPES.includes(base)` 为 false → 落到「未知段名/带模式 → 文本框」兜底分支（L204-207 注释「已知段名→下拉；未知段名/带模式→文本框（保往返不丢）」）——**显示成普通文本输入框而不是段名下拉**，功能无损（往返不丢）但观感/可编辑性差。
+
+**修复（两处，commit 67c7f57）**：
+
+```javascript
+const SEG_TYPES=['system','rules','history','ltm','user_message','steps','recent_file','tail','hooks'];
+```
+
+- `recent_file` 插在 **steps 后、tail 前**——与引擎 `_DEFAULT_ASSEMBLY_PLAN` 的默认装配序一致（所见即所装）
+- hint 文案同步补说明：「recent_file=改文件快照段(本轮)」
+
+**生效**：Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不依赖 /restart）。
+
 ### func 值下拉框：选项 = FUNC_REGISTRY 注册函数（2026-09-02，commit bab7dee）
 
 **用户请求**：类型选 `func` 以后看不出有哪些注册的函数可选——值控件此前是自由文本框，得先知道函数名才能填。改成下拉框。

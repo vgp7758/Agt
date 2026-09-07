@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from openai import (OpenAI, RateLimitError, APITimeoutError, APIConnectionError,
-                    BadRequestError, InternalServerError)
+                    BadRequestError, InternalServerError,
+                    PermissionDeniedError, AuthenticationError, NotFoundError)
 
 import config
 
@@ -634,7 +635,8 @@ class LLMClient:
                         resp.content = content
                 return resp
             except (RuntimeError, RateLimitError, APITimeoutError, APIConnectionError,
-                    BadRequestError, InternalServerError) as e:
+                    BadRequestError, InternalServerError,
+                    PermissionDeniedError, AuthenticationError, NotFoundError) as e:
                 # 限流 → token 轮换（同 model 内部，不进冷却——只是配额问题）
                 if isinstance(e, RateLimitError) and tried_tokens[0] < len(self.api_tokens) - 1:
                     tried_tokens[0] += 1
@@ -643,9 +645,16 @@ class LLMClient:
                                  tried_tokens[0] + 1, len(self.api_tokens), type(e).__name__)
                     continue
                 # 其它失败 → 记录冷却（model+token 签名）
+                # 401/403/404（鉴权/配额/模型不存在）也走回退（2026-09-08 用户调试 flatkey 余额 403 直接炸轮的根因）：
+                # 该 provider 不可用不代表链上其它也不可用——冷却后切下一个，保证会话不断
                 self._provider_cooldown[ck] = time.time()
-                _LOG.warning("provider %s 失败，进入 %ds 冷却：%s",
-                             ck, self._cooldown_seconds, type(e).__name__)
+                if isinstance(e, (PermissionDeniedError, AuthenticationError, NotFoundError)):
+                    _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退：%s",
+                                 ck, getattr(e, "status_code", "?"), self._cooldown_seconds,
+                                 str(e)[:200])
+                else:
+                    _LOG.warning("provider %s 失败，进入 %ds 冷却：%s",
+                                 ck, self._cooldown_seconds, type(e).__name__)
                 _advance(str(e))
 
     def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,

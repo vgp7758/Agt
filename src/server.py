@@ -655,6 +655,7 @@ async def api_models_add_one(request: Request):
     if not toks:
         return {"ok": False, "need_key": True, "name": name, "provider": provider,
                 "register_url": pe.get("register_url", "")}
+    key_from = mname   # 复用 key 的来源条目（toast 展示"从哪把 key 带过来"）
     entry = {"base_url": pe.get("base_url", ""),
              "api_token": toks[0] if len(toks) == 1 else toks,
              "model": pe.get("model", ""),
@@ -676,7 +677,7 @@ async def api_models_add_one(request: Request):
             _agent.retrieval_llm = _agent.utility_client()
         except Exception:
             pass
-    return {"ok": True, "name": name, "reload": True}
+    return {"ok": True, "name": name, "reload": True, "key_from": key_from}
 
 
 # ===================== MCP 配置 API =====================

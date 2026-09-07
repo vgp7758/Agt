@@ -1985,8 +1985,27 @@ async function saveMcpConfig(){
 document.getElementById('cfgSave').onclick=saveCurrentTab;
 modelSel.addEventListener('change', ()=>{
     const _v=modelSel.value;
-    if(_v.startsWith('preset::')){ showPresetOnboard(_v.slice(8)); return; }   // 预设条目 → onboarding（落地后才可切换）
+    if(_v.startsWith('preset::')){
+      const name=_v.slice(8);
+      const _prev=modelSel.dataset.cur||'';
+      // 先试同 provider key 复用（用户提案 2026-09-08：聚合网关一把 key，选模型不逐个弹窗）——
+      // 复用成功 → 落地直接切换；同 provider 无任何 key（need_key）才弹 onboarding 补 key
+      fetch('/api/models/add-one',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})
+        .then(r=>r.json()).then(async d=>{
+          if(d.ok){
+            toast('✅ 「'+name+'」已复用'+(d.key_from?('「'+d.key_from+'」的 key'):'同 provider key')+'，落地完成，切换中…');
+            await loadModelList();          // 刷新已配置组（name 进入下拉常规段）
+            sendRaw('/model '+name, []);
+          } else if(d.need_key){
+            showPresetOnboard(name);        // 该 provider 尚无任何 key → onboarding 补 key
+          } else {
+            toast('❌ '+(d.error||'添加失败')); modelSel.value=_prev;
+          }
+        }).catch(e=>{ toast('❌ 请求失败：'+e.message); modelSel.value=_prev; });
+      return;
+    }
     sendRaw('/model '+_v, []);
+    modelSel.dataset.cur=_v;
   });
   // —— 预设条目 onboarding modal（spec s_d4241d58）——
   let _presetModels = {};

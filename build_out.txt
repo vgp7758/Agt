@@ -1,0 +1,1168 @@
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68
+  - wheel
+* Getting build dependencies for wheel...
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing agt_agent.egg-info\PKG-INFO
+writing dependency_links to agt_agent.egg-info\dependency_links.txt
+writing entry points to agt_agent.egg-info\entry_points.txt
+writing requirements to agt_agent.egg-info\requires.txt
+writing top-level names to agt_agent.egg-info\top_level.txt
+reading manifest file 'agt_agent.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'agt_agent.egg-info\SOURCES.txt'
+* Building wheel...
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running bdist_wheel
+running build
+running build_py
+running egg_info
+writing agt_agent.egg-info\PKG-INFO
+writing dependency_links to agt_agent.egg-info\dependency_links.txt
+writing entry points to agt_agent.egg-info\entry_points.txt
+writing requirements to agt_agent.egg-info\requires.txt
+writing top-level names to agt_agent.egg-info\top_level.txt
+reading manifest file 'agt_agent.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'agt_agent.egg-info\SOURCES.txt'
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.agents' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.agents' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.agents' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.agents' to be distributed and are
+        already explicitly excluding 'src.agents' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.assets' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.assets' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.assets' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.assets' to be distributed and are
+        already explicitly excluding 'src.assets' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.assets.nodes_builtin' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.assets.nodes_builtin' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.assets.nodes_builtin' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.assets.nodes_builtin' to be distributed and are
+        already explicitly excluding 'src.assets.nodes_builtin' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.assets.tools_builtin' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.assets.tools_builtin' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.assets.tools_builtin' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.assets.tools_builtin' to be distributed and are
+        already explicitly excluding 'src.assets.tools_builtin' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.lsp_scripts' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.lsp_scripts' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.lsp_scripts' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.lsp_scripts' to be distributed and are
+        already explicitly excluding 'src.lsp_scripts' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.static' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.static' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.static' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.static' to be distributed and are
+        already explicitly excluding 'src.static' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.static.icons' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.static.icons' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.static.icons' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.static.icons' to be distributed and are
+        already explicitly excluding 'src.static.icons' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+C:\Users\vgp77\AppData\Local\Temp\build-env-upilc_it\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'src.workflows' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'src.workflows' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'src.workflows' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'src.workflows' to be distributed and are
+        already explicitly excluding 'src.workflows' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+installing to build\bdist.win-amd64\wheel
+running install
+running install_lib
+creating build\bdist.win-amd64\wheel
+creating build\bdist.win-amd64\wheel\src
+copying build\lib\src\agent.py -> build\bdist.win-amd64\wheel\.\src
+creating build\bdist.win-amd64\wheel\src\agents
+copying build\lib\src\agents\coder.md -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\coder.yml -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\explorer.md -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\explorer.yml -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\reviewer.md -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\reviewer.yml -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\vision.md -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\vision.yml -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agents\wiki-updater.yml -> build\bdist.win-amd64\wheel\.\src\agents
+copying build\lib\src\agent_config.py -> build\bdist.win-amd64\wheel\.\src
+creating build\bdist.win-amd64\wheel\src\assets
+copying build\lib\src\assets\main.yml -> build\bdist.win-amd64\wheel\.\src\assets
+copying build\lib\src\assets\manifest.json -> build\bdist.win-amd64\wheel\.\src\assets
+copying build\lib\src\assets\models.preset.json -> build\bdist.win-amd64\wheel\.\src\assets
+creating build\bdist.win-amd64\wheel\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\aggregator.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\aggregator.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\and.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\and.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\assigner.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\assigner.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\code.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\code.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\fromjson.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\fromjson.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\http.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\http.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\intent.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\intent.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\llm.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\llm.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\or.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\or.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\selector.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\selector.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\text.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\text.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\tojson.js -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+copying build\lib\src\assets\nodes_builtin\tojson.py -> build\bdist.win-amd64\wheel\.\src\assets\nodes_builtin
+creating build\bdist.win-amd64\wheel\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\cache_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\diff_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\download_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\fs_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\kv_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\list_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\ltm_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\misc_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\rag_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\str_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\assets\tools_builtin\wiki_tools.py -> build\bdist.win-amd64\wheel\.\src\assets\tools_builtin
+copying build\lib\src\asset_sync.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\background.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\background_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\cache_sim.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\chat.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\commands.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\config.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\download.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\feedback.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\llm_call_log.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\llm_client.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\log.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\longterm_memory.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\lsp_manager.py -> build\bdist.win-amd64\wheel\.\src
+creating build\bdist.win-amd64\wheel\src\lsp_scripts
+copying build\lib\src\lsp_scripts\csharp_lsp.py -> build\bdist.win-amd64\wheel\.\src\lsp_scripts
+copying build\lib\src\lsp_scripts\python_lsp.py -> build\bdist.win-amd64\wheel\.\src\lsp_scripts
+copying build\lib\src\mcp_client.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\mdrender.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\memory_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\models.example.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\multiagent.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\node_plugins.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\plan_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\prompts.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\rag.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\real_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\registry.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\remote_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\restart_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\restart_watchdog.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\script_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\server.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\session.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\session_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\session_vec.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\snapshots.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\spec_tools.py -> build\bdist.win-amd64\wheel\.\src
+creating build\bdist.win-amd64\wheel\src\static
+copying build\lib\src\static\agents.html -> build\bdist.win-amd64\wheel\.\src\static
+creating build\bdist.win-amd64\wheel\src\static\icons
+copying build\lib\src\static\icons\favicon.ico -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_128.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_16.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_192.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_256.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_32.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_48.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_mini_512.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_128.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_16.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_192.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_256.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_32.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_48.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\icon_prompt_512.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\icons\vscode.png -> build\bdist.win-amd64\wheel\.\src\static\icons
+copying build\lib\src\static\index.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\manifest.json -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\memory.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\rag.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\stats.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\wf_monitor.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\workflow_debug.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\static\workflow_editor.html -> build\bdist.win-amd64\wheel\.\src\static
+copying build\lib\src\survey_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\toollog.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\tool_briefs.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\updater.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\workflow.py -> build\bdist.win-amd64\wheel\.\src
+creating build\bdist.win-amd64\wheel\src\workflows
+copying build\lib\src\workflows\before_turn_retrieval.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\cs_auto_diag.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\custom_tool_demo.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\diff_snapshots.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\dir_snapshot.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\extract_keywords.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\py_auto_diag.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\react_agent_demo.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\recap_gen.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\reload_hot.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\rerank_topk.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\score_rerank.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\skill_suggest.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\stock_query.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\wiki_auto_maintenance.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\wiki_auto_query.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflows\wiki_auto_query_react_demo.xml -> build\bdist.win-amd64\wheel\.\src\workflows
+copying build\lib\src\workflow_debug_tools.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\workflow_node_api.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\workflow_xml.py -> build\bdist.win-amd64\wheel\.\src
+copying build\lib\src\__init__.py -> build\bdist.win-amd64\wheel\.\src
+running install_egg_info
+Copying agt_agent.egg-info to build\bdist.win-amd64\wheel\.\agt_agent-0.26.2-py3.13.egg-info
+running install_scripts
+creating build\bdist.win-amd64\wheel\agt_agent-0.26.2.dist-info\WHEEL
+creating 'D:\\AI_Usings\\Agt\\dist\\.tmp-_rkktdtq\\agt_agent-0.26.2-py3-none-any.whl' and adding 'build\\bdist.win-amd64\\wheel' to it
+adding 'agt_agent-0.26.2.dist-info/licenses/LICENSE'
+adding 'src/__init__.py'
+adding 'src/agent.py'
+adding 'src/agent_config.py'
+adding 'src/asset_sync.py'
+adding 'src/background.py'
+adding 'src/background_tools.py'
+adding 'src/cache_sim.py'
+adding 'src/chat.py'
+adding 'src/commands.py'
+adding 'src/config.py'
+adding 'src/download.py'
+adding 'src/feedback.py'
+adding 'src/llm_call_log.py'
+adding 'src/llm_client.py'
+adding 'src/log.py'
+adding 'src/longterm_memory.py'
+adding 'src/lsp_manager.py'
+adding 'src/mcp_client.py'
+adding 'src/mdrender.py'
+adding 'src/memory_tools.py'
+adding 'src/models.example.py'
+adding 'src/multiagent.py'
+adding 'src/node_plugins.py'
+adding 'src/plan_tools.py'
+adding 'src/prompts.py'
+adding 'src/rag.py'
+adding 'src/real_tools.py'
+adding 'src/registry.py'
+adding 'src/remote_tools.py'
+adding 'src/restart_tools.py'
+adding 'src/restart_watchdog.py'
+adding 'src/script_tools.py'
+adding 'src/server.py'
+adding 'src/session.py'
+adding 'src/session_tools.py'
+adding 'src/session_vec.py'
+adding 'src/snapshots.py'
+adding 'src/spec_tools.py'
+adding 'src/survey_tools.py'
+adding 'src/tool_briefs.py'
+adding 'src/toollog.py'
+adding 'src/tools.py'
+adding 'src/updater.py'
+adding 'src/workflow.py'
+adding 'src/workflow_debug_tools.py'
+adding 'src/workflow_node_api.py'
+adding 'src/workflow_xml.py'
+adding 'src/agents/coder.md'
+adding 'src/agents/coder.yml'
+adding 'src/agents/explorer.md'
+adding 'src/agents/explorer.yml'
+adding 'src/agents/reviewer.md'
+adding 'src/agents/reviewer.yml'
+adding 'src/agents/vision.md'
+adding 'src/agents/vision.yml'
+adding 'src/agents/wiki-updater.yml'
+adding 'src/assets/main.yml'
+adding 'src/assets/manifest.json'
+adding 'src/assets/models.preset.json'
+adding 'src/assets/nodes_builtin/aggregator.js'
+adding 'src/assets/nodes_builtin/aggregator.py'
+adding 'src/assets/nodes_builtin/and.js'
+adding 'src/assets/nodes_builtin/and.py'
+adding 'src/assets/nodes_builtin/assigner.js'
+adding 'src/assets/nodes_builtin/assigner.py'
+adding 'src/assets/nodes_builtin/code.js'
+adding 'src/assets/nodes_builtin/code.py'
+adding 'src/assets/nodes_builtin/fromjson.js'
+adding 'src/assets/nodes_builtin/fromjson.py'
+adding 'src/assets/nodes_builtin/http.js'
+adding 'src/assets/nodes_builtin/http.py'
+adding 'src/assets/nodes_builtin/intent.js'
+adding 'src/assets/nodes_builtin/intent.py'
+adding 'src/assets/nodes_builtin/llm.js'
+adding 'src/assets/nodes_builtin/llm.py'
+adding 'src/assets/nodes_builtin/or.js'
+adding 'src/assets/nodes_builtin/or.py'
+adding 'src/assets/nodes_builtin/selector.js'
+adding 'src/assets/nodes_builtin/selector.py'
+adding 'src/assets/nodes_builtin/text.js'
+adding 'src/assets/nodes_builtin/text.py'
+adding 'src/assets/nodes_builtin/tojson.js'
+adding 'src/assets/nodes_builtin/tojson.py'
+adding 'src/assets/tools_builtin/cache_tools.py'
+adding 'src/assets/tools_builtin/diff_tools.py'
+adding 'src/assets/tools_builtin/download_tools.py'
+adding 'src/assets/tools_builtin/fs_tools.py'
+adding 'src/assets/tools_builtin/kv_tools.py'
+adding 'src/assets/tools_builtin/list_tools.py'
+adding 'src/assets/tools_builtin/ltm_tools.py'
+adding 'src/assets/tools_builtin/misc_tools.py'
+adding 'src/assets/tools_builtin/rag_tools.py'
+adding 'src/assets/tools_builtin/str_tools.py'
+adding 'src/assets/tools_builtin/wiki_tools.py'
+adding 'src/lsp_scripts/csharp_lsp.py'
+adding 'src/lsp_scripts/python_lsp.py'
+adding 'src/static/agents.html'
+adding 'src/static/index.html'
+adding 'src/static/manifest.json'
+adding 'src/static/memory.html'
+adding 'src/static/rag.html'
+adding 'src/static/stats.html'
+adding 'src/static/wf_monitor.html'
+adding 'src/static/workflow_debug.html'
+adding 'src/static/workflow_editor.html'
+adding 'src/static/icons/favicon.ico'
+adding 'src/static/icons/icon_mini_128.png'
+adding 'src/static/icons/icon_mini_16.png'
+adding 'src/static/icons/icon_mini_192.png'
+adding 'src/static/icons/icon_mini_256.png'
+adding 'src/static/icons/icon_mini_32.png'
+adding 'src/static/icons/icon_mini_48.png'
+adding 'src/static/icons/icon_mini_512.png'
+adding 'src/static/icons/icon_prompt_128.png'
+adding 'src/static/icons/icon_prompt_16.png'
+adding 'src/static/icons/icon_prompt_192.png'
+adding 'src/static/icons/icon_prompt_256.png'
+adding 'src/static/icons/icon_prompt_32.png'
+adding 'src/static/icons/icon_prompt_48.png'
+adding 'src/static/icons/icon_prompt_512.png'
+adding 'src/static/icons/vscode.png'
+adding 'src/workflows/before_turn_retrieval.xml'
+adding 'src/workflows/cs_auto_diag.xml'
+adding 'src/workflows/custom_tool_demo.xml'
+adding 'src/workflows/diff_snapshots.xml'
+adding 'src/workflows/dir_snapshot.xml'
+adding 'src/workflows/extract_keywords.xml'
+adding 'src/workflows/py_auto_diag.xml'
+adding 'src/workflows/react_agent_demo.xml'
+adding 'src/workflows/recap_gen.xml'
+adding 'src/workflows/reload_hot.xml'
+adding 'src/workflows/rerank_topk.xml'
+adding 'src/workflows/score_rerank.xml'
+adding 'src/workflows/skill_suggest.xml'
+adding 'src/workflows/stock_query.xml'
+adding 'src/workflows/wiki_auto_maintenance.xml'
+adding 'src/workflows/wiki_auto_query.xml'
+adding 'src/workflows/wiki_auto_query_react_demo.xml'
+adding 'agt_agent-0.26.2.dist-info/METADATA'
+adding 'agt_agent-0.26.2.dist-info/WHEEL'
+adding 'agt_agent-0.26.2.dist-info/entry_points.txt'
+adding 'agt_agent-0.26.2.dist-info/top_level.txt'
+adding 'agt_agent-0.26.2.dist-info/RECORD'
+removing build\bdist.win-amd64\wheel
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68
+  - wheel
+* Getting build dependencies for sdist...
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing agt_agent.egg-info\PKG-INFO
+writing dependency_links to agt_agent.egg-info\dependency_links.txt
+writing entry points to agt_agent.egg-info\entry_points.txt
+writing requirements to agt_agent.egg-info\requires.txt
+writing top-level names to agt_agent.egg-info\top_level.txt
+reading manifest file 'agt_agent.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'agt_agent.egg-info\SOURCES.txt'
+* Building sdist...
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\config\_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+C:\Users\vgp77\AppData\Local\Temp\build-env-7avns5k1\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running sdist
+running egg_info
+writing agt_agent.egg-info\PKG-INFO
+writing dependency_links to agt_agent.egg-info\dependency_links.txt
+writing entry points to agt_agent.egg-info\entry_points.txt
+writing requirements to agt_agent.egg-info\requires.txt
+writing top-level names to agt_agent.egg-info\top_level.txt
+reading manifest file 'agt_agent.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'agt_agent.egg-info\SOURCES.txt'
+running check
+creating agt_agent-0.26.2
+creating agt_agent-0.26.2\.agent
+creating agt_agent-0.26.2\.agent\agents
+creating agt_agent-0.26.2\.agent\nodes
+creating agt_agent-0.26.2\.agent\nodes\__pycache__
+creating agt_agent-0.26.2\.agent\rules
+creating agt_agent-0.26.2\.agent\skills\explore-codebase
+creating agt_agent-0.26.2\.agent\tmp
+creating agt_agent-0.26.2\.agent\wiki
+creating agt_agent-0.26.2\.agent\wiki\architecture
+creating agt_agent-0.26.2\.agent\wiki\features
+creating agt_agent-0.26.2\.agent\wiki\guides
+creating agt_agent-0.26.2\.agent\wiki\releases
+creating agt_agent-0.26.2\.agent\wiki_queue
+creating agt_agent-0.26.2\.agent\workflows
+creating agt_agent-0.26.2\agt_agent.egg-info
+creating agt_agent-0.26.2\examples
+creating agt_agent-0.26.2\src
+creating agt_agent-0.26.2\src\agents
+creating agt_agent-0.26.2\src\assets
+creating agt_agent-0.26.2\src\assets\nodes_builtin
+creating agt_agent-0.26.2\src\assets\tools_builtin
+creating agt_agent-0.26.2\src\lsp_scripts
+creating agt_agent-0.26.2\src\static
+creating agt_agent-0.26.2\src\static\icons
+creating agt_agent-0.26.2\src\workflows
+creating agt_agent-0.26.2\test
+copying files to agt_agent-0.26.2...
+copying LICENSE -> agt_agent-0.26.2
+copying MANIFEST.in -> agt_agent-0.26.2
+copying README.md -> agt_agent-0.26.2
+copying pyproject.toml -> agt_agent-0.26.2
+copying requirements.txt -> agt_agent-0.26.2
+copying .agent\team.example.yml -> agt_agent-0.26.2\.agent
+copying .agent\agents\coder.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\coder.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\explorer.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\explorer.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\reviewer.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\reviewer.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\team-manager.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\team-manager.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\vision.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\vision.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\wiki-updater.md -> agt_agent-0.26.2\.agent\agents
+copying .agent\agents\wiki-updater.yml -> agt_agent-0.26.2\.agent\agents
+copying .agent\nodes\timestamp.js -> agt_agent-0.26.2\.agent\nodes
+copying .agent\nodes\timestamp.py -> agt_agent-0.26.2\.agent\nodes
+copying .agent\nodes\__pycache__\timestamp.cpython-313.pyc -> agt_agent-0.26.2\.agent\nodes\__pycache__
+copying .agent\rules\workflow.md -> agt_agent-0.26.2\.agent\rules
+copying .agent\skills\explore-codebase\SKILL.md -> agt_agent-0.26.2\.agent\skills\explore-codebase
+copying .agent\tmp\check_figs06.py -> agt_agent-0.26.2\.agent\tmp
+copying .agent\tmp\check_figs06_extra.py -> agt_agent-0.26.2\.agent\tmp
+copying .agent\wiki\home.md -> agt_agent-0.26.2\.agent\wiki
+copying .agent\wiki\architecture\adr-stateful-externalization.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\context-engine.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\multi-agent.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\multi-instance.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\node-plugins.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\overview.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\snapshot-diff.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\tool-externalization-criteria.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\architecture\workflow-hooks.md -> agt_agent-0.26.2\.agent\wiki\architecture
+copying .agent\wiki\features\agents-admin.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\api-status.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\background-scheduler.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\bubble-interaction.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\cache-tools.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\cosine-sim.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\diff-files.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\diff-lines.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\editor-ux-improvements.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\fab-dock.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\feedback.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\get-list-item.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\glob-files.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\grep.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\longterm-memory.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\mcp-config.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\rag.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\remote-client.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\run-python.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\snapshot-rewind.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\spec-tools.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\team-tools.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\tool-externalization.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\tool-form.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\trace-fold.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\user-interaction.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\webide.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\wf-monitor.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\wiki-auto-maintenance.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\wiki-auto-query.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\wiki-tools.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\features\workflow-debug.md -> agt_agent-0.26.2\.agent\wiki\features
+copying .agent\wiki\guides\config-and-models.md -> agt_agent-0.26.2\.agent\wiki\guides
+copying .agent\wiki\guides\local-models.md -> agt_agent-0.26.2\.agent\wiki\guides
+copying .agent\wiki\guides\ops.md -> agt_agent-0.26.2\.agent\wiki\guides
+copying .agent\wiki\releases\v0.18.2.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.18.7.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.19.2.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.20.1.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.21.1.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.0.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.1.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.3.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.4.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.5.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.7.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.22.9.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.23.0.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.23.1.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.25.0.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.26.0.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki\releases\v0.26.1.md -> agt_agent-0.26.2\.agent\wiki\releases
+copying .agent\wiki_queue\events.jsonl -> agt_agent-0.26.2\.agent\wiki_queue
+copying .agent\workflows\README.md -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\batch_double.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\batch_double.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\before_turn_retrieval.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\classify_age.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\classify_age.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\composite_demo.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\composite_demo.xml.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\cs_auto_diag.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\custom_tool_demo.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\diff_snapshots.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\dir_snapshot.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\double_xml.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\extract_keywords.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\full_demo.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\greet.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\greet.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\greet_xml.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\intent_route.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\json_roundtrip.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\json_roundtrip.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\loop_greet.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\loop_greet.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\py_auto_diag.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\react_agent_demo.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\recap_gen.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\reload_hot.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\rerank_topk.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\score_rerank.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\skill_suggest.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\stock_query.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\use_subworkflow.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\use_subworkflow.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wait_demo.json -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wait_demo.json.meta -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wf_recap_gen.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wiki_auto_maintenance.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wiki_auto_query.xml -> agt_agent-0.26.2\.agent\workflows
+copying .agent\workflows\wiki_auto_query_react_demo.xml -> agt_agent-0.26.2\.agent\workflows
+copying agt_agent.egg-info\PKG-INFO -> agt_agent-0.26.2\agt_agent.egg-info
+copying agt_agent.egg-info\SOURCES.txt -> agt_agent-0.26.2\agt_agent.egg-info
+copying agt_agent.egg-info\dependency_links.txt -> agt_agent-0.26.2\agt_agent.egg-info
+copying agt_agent.egg-info\entry_points.txt -> agt_agent-0.26.2\agt_agent.egg-info
+copying agt_agent.egg-info\requires.txt -> agt_agent-0.26.2\agt_agent.egg-info
+copying agt_agent.egg-info\top_level.txt -> agt_agent-0.26.2\agt_agent.egg-info
+copying examples\conversation.py -> agt_agent-0.26.2\examples
+copying examples\step0_hello.py -> agt_agent-0.26.2\examples
+copying examples\step1_demo.py -> agt_agent-0.26.2\examples
+copying examples\step2_demo.py -> agt_agent-0.26.2\examples
+copying examples\step3_demo.py -> agt_agent-0.26.2\examples
+copying examples\step4_demo.py -> agt_agent-0.26.2\examples
+copying examples\step5_demo.py -> agt_agent-0.26.2\examples
+copying examples\step6_demo.py -> agt_agent-0.26.2\examples
+copying examples\step7_demo.py -> agt_agent-0.26.2\examples
+copying examples\structured.py -> agt_agent-0.26.2\examples
+copying src\__init__.py -> agt_agent-0.26.2\src
+copying src\agent.py -> agt_agent-0.26.2\src
+copying src\agent_config.py -> agt_agent-0.26.2\src
+copying src\asset_sync.py -> agt_agent-0.26.2\src
+copying src\background.py -> agt_agent-0.26.2\src
+copying src\background_tools.py -> agt_agent-0.26.2\src
+copying src\cache_sim.py -> agt_agent-0.26.2\src
+copying src\chat.py -> agt_agent-0.26.2\src
+copying src\commands.py -> agt_agent-0.26.2\src
+copying src\config.py -> agt_agent-0.26.2\src
+copying src\download.py -> agt_agent-0.26.2\src
+copying src\feedback.py -> agt_agent-0.26.2\src
+copying src\llm_call_log.py -> agt_agent-0.26.2\src
+copying src\llm_client.py -> agt_agent-0.26.2\src
+copying src\log.py -> agt_agent-0.26.2\src
+copying src\longterm_memory.py -> agt_agent-0.26.2\src
+copying src\lsp_manager.py -> agt_agent-0.26.2\src
+copying src\mcp_client.py -> agt_agent-0.26.2\src
+copying src\mdrender.py -> agt_agent-0.26.2\src
+copying src\memory_tools.py -> agt_agent-0.26.2\src
+copying src\models.example.py -> agt_agent-0.26.2\src
+copying src\multiagent.py -> agt_agent-0.26.2\src
+copying src\node_plugins.py -> agt_agent-0.26.2\src
+copying src\plan_tools.py -> agt_agent-0.26.2\src
+copying src\prompts.py -> agt_agent-0.26.2\src
+copying src\rag.py -> agt_agent-0.26.2\src
+copying src\real_tools.py -> agt_agent-0.26.2\src
+copying src\registry.py -> agt_agent-0.26.2\src
+copying src\remote_tools.py -> agt_agent-0.26.2\src
+copying src\restart_tools.py -> agt_agent-0.26.2\src
+copying src\restart_watchdog.py -> agt_agent-0.26.2\src
+copying src\script_tools.py -> agt_agent-0.26.2\src
+copying src\server.py -> agt_agent-0.26.2\src
+copying src\session.py -> agt_agent-0.26.2\src
+copying src\session_tools.py -> agt_agent-0.26.2\src
+copying src\session_vec.py -> agt_agent-0.26.2\src
+copying src\snapshots.py -> agt_agent-0.26.2\src
+copying src\spec_tools.py -> agt_agent-0.26.2\src
+copying src\survey_tools.py -> agt_agent-0.26.2\src
+copying src\tool_briefs.py -> agt_agent-0.26.2\src
+copying src\toollog.py -> agt_agent-0.26.2\src
+copying src\tools.py -> agt_agent-0.26.2\src
+copying src\updater.py -> agt_agent-0.26.2\src
+copying src\workflow.py -> agt_agent-0.26.2\src
+copying src\workflow_debug_tools.py -> agt_agent-0.26.2\src
+copying src\workflow_node_api.py -> agt_agent-0.26.2\src
+copying src\workflow_xml.py -> agt_agent-0.26.2\src
+copying src\agents\coder.md -> agt_agent-0.26.2\src\agents
+copying src\agents\coder.yml -> agt_agent-0.26.2\src\agents
+copying src\agents\explorer.md -> agt_agent-0.26.2\src\agents
+copying src\agents\explorer.yml -> agt_agent-0.26.2\src\agents
+copying src\agents\reviewer.md -> agt_agent-0.26.2\src\agents
+copying src\agents\reviewer.yml -> agt_agent-0.26.2\src\agents
+copying src\agents\vision.md -> agt_agent-0.26.2\src\agents
+copying src\agents\vision.yml -> agt_agent-0.26.2\src\agents
+copying src\agents\wiki-updater.yml -> agt_agent-0.26.2\src\agents
+copying src\assets\main.yml -> agt_agent-0.26.2\src\assets
+copying src\assets\manifest.json -> agt_agent-0.26.2\src\assets
+copying src\assets\models.preset.json -> agt_agent-0.26.2\src\assets
+copying src\assets\nodes_builtin\aggregator.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\aggregator.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\and.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\and.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\assigner.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\assigner.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\code.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\code.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\fromjson.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\fromjson.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\http.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\http.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\intent.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\intent.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\llm.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\llm.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\or.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\or.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\selector.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\selector.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\text.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\text.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\tojson.js -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\nodes_builtin\tojson.py -> agt_agent-0.26.2\src\assets\nodes_builtin
+copying src\assets\tools_builtin\cache_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\diff_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\download_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\fs_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\kv_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\list_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\ltm_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\misc_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\rag_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\str_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\assets\tools_builtin\wiki_tools.py -> agt_agent-0.26.2\src\assets\tools_builtin
+copying src\lsp_scripts\csharp_lsp.py -> agt_agent-0.26.2\src\lsp_scripts
+copying src\lsp_scripts\python_lsp.py -> agt_agent-0.26.2\src\lsp_scripts
+copying src\static\agents.html -> agt_agent-0.26.2\src\static
+copying src\static\index.html -> agt_agent-0.26.2\src\static
+copying src\static\manifest.json -> agt_agent-0.26.2\src\static
+copying src\static\memory.html -> agt_agent-0.26.2\src\static
+copying src\static\rag.html -> agt_agent-0.26.2\src\static
+copying src\static\stats.html -> agt_agent-0.26.2\src\static
+copying src\static\wf_monitor.html -> agt_agent-0.26.2\src\static
+copying src\static\workflow_debug.html -> agt_agent-0.26.2\src\static
+copying src\static\workflow_editor.html -> agt_agent-0.26.2\src\static
+copying src\static\icons\favicon.ico -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_128.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_16.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_192.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_256.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_32.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_48.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_mini_512.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_128.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_16.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_192.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_256.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_32.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_48.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\icon_prompt_512.png -> agt_agent-0.26.2\src\static\icons
+copying src\static\icons\vscode.png -> agt_agent-0.26.2\src\static\icons
+copying src\workflows\before_turn_retrieval.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\cs_auto_diag.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\custom_tool_demo.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\diff_snapshots.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\dir_snapshot.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\extract_keywords.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\py_auto_diag.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\react_agent_demo.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\recap_gen.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\reload_hot.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\rerank_topk.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\score_rerank.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\skill_suggest.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\stock_query.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\wiki_auto_maintenance.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\wiki_auto_query.xml -> agt_agent-0.26.2\src\workflows
+copying src\workflows\wiki_auto_query_react_demo.xml -> agt_agent-0.26.2\src\workflows
+copying test\test_403_fallback.py -> agt_agent-0.26.2\test
+copying test\test_context_panic.py -> agt_agent-0.26.2\test
+copying test\test_local_llm.py -> agt_agent-0.26.2\test
+copying test\test_node_plugins.py -> agt_agent-0.26.2\test
+copying test\test_recent_file_segment.py -> agt_agent-0.26.2\test
+copying test\test_resume_arg.py -> agt_agent-0.26.2\test
+copying test\test_rewind_git_conflict.py -> agt_agent-0.26.2\test
+copying test\test_script_tools.py -> agt_agent-0.26.2\test
+copying test\test_subagent_registry_slot.py -> agt_agent-0.26.2\test
+Writing agt_agent-0.26.2\setup.cfg
+Creating tar archive
+removing 'agt_agent-0.26.2' (and everything under it)
+Successfully built agt_agent-0.26.2-py3-none-any.whl and agt_agent-0.26.2.tar.gz

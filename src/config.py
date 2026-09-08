@@ -217,6 +217,20 @@ def _load_preset() -> dict:
     except Exception:
         return {}
 
+def _norm_bu(bu: str) -> str:
+    """base_url 归一化（宽松匹配用）：小写 + 去尾斜杠。"""
+    return str(bu or "").strip().lower().rstrip("/")
+
+
+def _norm_mid(mid: str) -> str:
+    """model id 归一化：小写 + 去 org 命名空间前缀 + 去非字母数字。
+    应对同平台多写法（zai-org/GLM-5.2 / Zhipu/GLM-5.2 / ZhipuAI/GLM-5.2 本是一家）。"""
+    s = str(mid or "").strip().lower()
+    if "/" in s:
+        s = s.split("/", 1)[1]
+    return "".join(ch for ch in s if ch.isalnum())
+
+
 def preset_models_view() -> dict:
     """预设条目合并视图（下拉框/onboarding 用）：{name: {provider/base_url/register_url/
     model/thinking/status/configured/config_name...}}。
@@ -224,13 +238,17 @@ def preset_models_view() -> dict:
     条目标 configured=true + config_name（前端 provider 组内直接可选 ✅，"已配置"组的
     重复项隐藏——选完模型贴完 key 它还在原地，只是从占位变已配置）；未命中的保持占位
     （选中弹 onboarding）。同名用户条目优先，其次 (base_url, model) 首个命中（MODELS 保序）。
+    宽松兜底（2026-09-08）：精确 bm 不中再试归一化 bm（大小写/尾斜杠/org 前缀/分隔符差异）——
+    ModelScope 等平台同一模型常有多写法 id，精确匹配会让用户卡片永远合不进 provider 组。
     get_profile 链路不经过这里（预设条目经 onboarding 落地进 MODELS 后才可切换）。"""
     # (base_url, model) → 用户条目名：首个命中稳定（同组合多配置不摇摆）；空字段不参与
     _by_bm = {}
+    _by_bm_norm = {}
     for k, v in MODELS.items():
         bu, mo = v.get("base_url", ""), v.get("model", "")
         if bu and mo:
             _by_bm.setdefault((bu, mo), k)
+            _by_bm_norm.setdefault((_norm_bu(bu), _norm_mid(mo)), k)
     out = {}
     for pname, pv in (_load_preset().get("providers") or {}).items():
         toks = pv.get("api_tokens") or []
@@ -238,7 +256,9 @@ def preset_models_view() -> dict:
         for mname, mv in (pv.get("models") or {}).items():
             bm = (pv.get("base_url", ""), mv.get("model", ""))
             same = MODELS.get(mname)
-            hit = mname if same and (same.get("base_url", ""), same.get("model", "")) == bm else _by_bm.get(bm, "")
+            hit = mname if same and (same.get("base_url", ""), same.get("model", "")) == bm else ""
+            if not hit:
+                hit = _by_bm.get(bm, "") or _by_bm_norm.get((_norm_bu(bm[0]), _norm_mid(bm[1])), "")
             out[mname] = {"name": mname, "provider": pname, "base_url": pv.get("base_url", ""),
                           "register_url": pv.get("register_url", ""), "provider_desc": pv.get("desc", ""),
                           "provider_brief": pv.get("brief", ""), "provider_icon": pv.get("icon", ""),

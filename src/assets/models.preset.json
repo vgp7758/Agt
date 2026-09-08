@@ -10,33 +10,34 @@
    "desc": "魔搭 ModelScope（阿里达摩院开源社区）——多数开源模型每日免费额度，token 即模型社区访问令牌",
    "models": {
     "qwen": {
+     "model": "Qwen/Qwen3.5-397B-A17B",
+     "thinking": true,
+     "desc": "通义千问 Qwen3.5-397B 旗舰（MoE 推理）"
+    },
+    "qwen3-235b": {
      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
      "thinking": true,
-     "desc": "通义千问 235B 旗舰（推理）"
+     "desc": "通义千问 Qwen3-235B（上代旗舰）"
     },
     "glm": {
-     "model": "zai-org/GLM-5.2",
-     "thinking": true,
-     "desc": "智谱 GLM-5.2(org)"
-    },
-    "glm-5.2": {
-     "model": "Zhipu/GLM-5.2",
+     "model": "ZhipuAI/GLM-5.2",
      "thinking": true,
      "desc": "智谱 GLM-5.2"
+    },
+    "glm-4.7-flash": {
+     "model": "ZhipuAI/GLM-4.7-Flash",
+     "thinking": true,
+     "desc": "智谱 GLM-4.7 Flash（轻量快速）"
     },
     "deepseek": {
      "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
      "thinking": true,
      "desc": "DeepSeek V4 Flash"
     },
-    "kimi": {
-     "model": "moonshotai/Kimi-K3:Moonshot",
+    "ms-ds-pro": {
+     "model": "deepseek-ai/DeepSeek-V4-Pro",
      "thinking": true,
-     "desc": "月之暗面 Kimi K3（temperature 锁 1——API 硬约束）",
-     "temperature": 1,
-     "param_lock": [
-      "temperature"
-     ]
+     "desc": "DeepSeek V4 Pro（旗舰）"
     }
    },
    "icon": "🎁",

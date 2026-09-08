@@ -2762,10 +2762,21 @@ function onWSMessage(ev){
         // 重复项——由 provider 组内该条目代理显示（✅ 前缀，点击=直接选中所建配置，不再弹 onboarding）
         _presetModels = m.preset || {};
         const _proxied = new Set(Object.values(_presetModels).filter(pe=>pe.configured).map(pe=>pe.config_name));
+        // base_url 归组（2026-09-08）：未被预设命中的用户自定义条目（预设里没这个模型——如手填
+        // 冷门模型/新模型）按 base_url 归入对应 provider 组末尾显示 ✅，"已配置"组不再重复。
+        const _pbu = {};
+        Object.values(_presetModels).forEach(pe=>{ const u=String(pe.base_url||'').toLowerCase().replace(/\/+$/,''); if(u) _pbu[u]=pe.provider; });
+        const _mergedByProv = {};
+        m.models.forEach(md=>{
+          if(_proxied.has(md.name)) return;
+          const u=String(md.base_url||'').toLowerCase().replace(/\/+$/,'');
+          const prov=_pbu[u];
+          if(prov){ (_mergedByProv[prov]=_mergedByProv[prov]||[]).push(md); _proxied.add(md.name); }
+        });
         modelSel.innerHTML='';
         const ogCur=document.createElement('optgroup'); ogCur.label='✅ 已配置';
         m.models.forEach(md=>{
-          if(_proxied.has(md.name)) return;   // 命中预设 → 只在 provider 组显示，此处去重
+          if(_proxied.has(md.name)) return;   // 命中预设/已归组 → 在 provider 组显示，此处去重
           const o=document.createElement('option'); o.value=md.name;
           o.textContent=md.name + (md.desc?(' — '+md.desc):'');
           if(md.name===m.current_model) o.selected=true;
@@ -2788,6 +2799,12 @@ function onWSMessage(ev){
               o.value='preset::'+pe.name;
               o.textContent=(pe.status==='free_trial'?'🎁 ':'🔑 ')+pe.name+'（'+(pe.model_desc||pe.model)+'）';
             }
+            og.appendChild(o);
+          });
+          (_mergedByProv[prov]||[]).forEach(md=>{   // 该 provider 上的用户自定义条目归组追加
+            const o=document.createElement('option'); o.value=md.name;
+            o.textContent='✅ '+md.name+(md.desc?(' — '+md.desc):'');
+            if(md.name===m.current_model) o.selected=true;
             og.appendChild(o);
           });
           modelSel.appendChild(og);

@@ -1583,17 +1583,21 @@ async def ws_endpoint(websocket: WebSocket):
     _clients.append(client)
 
     is_reconnect = len(_event_log) > 0
+    def _models_view():
+        # base_url 供前端把用户自定义条目归入对应 provider 分组（2026-09-08）
+        return [{"name": n, "desc": m.get("desc", ""), "base_url": m.get("base_url", "")}
+                for n, m in config.MODELS.items()]
     if is_reconnect:
         await _send(websocket, {"type": "system",
                                 "text": "✅ 已重连（前端会自动请求当前对话历史）",
-                                "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
+                                "models": _models_view(),
                                 "preset": config.preset_models_view(),
                                 "current_model": agent.model_name})
     else:
         await _send(websocket, {
             "type": "system",
             "text": f"已连接。模型={agent.model_name}，工具 {len(list(agent.tools))} 个。直接对话，或输入 /help 看命令。",
-            "models": [{"name": n, "desc": m.get("desc", "")} for n, m in config.MODELS.items()],
+            "models": _models_view(),
             "preset": config.preset_models_view(),
             "current_model": agent.model_name,
         })

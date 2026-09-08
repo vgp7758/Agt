@@ -348,6 +348,35 @@ provider 403（flatkey 欠费）
 
 **生效方式**：引擎层（agent.py 事件 + index.html），需 `/restart`——下次 provider 欠费断链，气泡上直接点开充值页，充完点「▶ 继续」从断点续跑。
 
+## spec 批阅气泡 · 通过后自动收起成摘要（2026-09-08，用户提案）
+
+**用户诉求**：spec 通过并开始实施以后，answer 区的 spec 大卡片应从气泡中隐藏——详情转为主要在 📐 抽屉查看，把 answer 区还给施工过程与最终回答。此前大卡片在批准后仍占着 answer 区直到轮末（施工几十步都被它遮住）。
+
+**时序变化**（`src/static/index.html`）：
+
+| 时刻 | 之前 | 现在 |
+|---|---|---|
+| commit_spec 阻塞批阅 | 大卡片（design + steps + 通过/返工按钮） | 同左——**批阅交互不变** |
+| 点「通过并施工」（answer 区或抽屉批阅栏任一入口） | 按钮区变一行字，卡片其余部分继续占着 answer 区 | 大卡片收起 → `📐「标题」已通过，开始实施 · N 步 [📐 在抽屉中查看]` 一行摘要 |
+| 施工过程（几十步） | answer 区一直是 spec 死内容 | 干净一行摘要，过程区不再被遮 |
+| 最终 answer | 覆盖 | 覆盖（顺带清标记） |
+
+**关键实现**：
+
+- `_specBubbleActive` 标记：`renderSpecBubble` 入口置 true（answer 区被 spec 气泡占用）；`case 'answer'/'wrap_answer'` 置 false（最终回答到来时清标记）
+- `collapseSpecBubble(m)`：置 false 标记 + 把 answer 区气泡重写为一行摘要（标题 + 通过徽章 + 步数 + `[📐 在抽屉中查看]` 按钮 → `toggleSpecPanel(true)` 打开抽屉）；详情完整渲染不受影响——`renderSpec` 照常全量填充抽屉（标题/状态徽章/设计概述/steps），approved 态本就有完整详情，现在成为主要查看入口
+- `case 'spec'` 事件（WS 分发）：`m.review_state === 'approved' && window._specBubbleActive` → `collapseSpecBubble(m)`
+
+**边界处理**：
+
+- **draft / rejected 不收起**——返工流程原样（马上会被新一轮 `spec_pending` 重渲染，收起反而闪烁）
+- **从抽屉里批准的**（抽屉批阅栏也有通过/返工按钮）同样生效——收起逻辑挂在 `case 'spec'` 事件上，不关心批准入口在哪
+- **读档场景天然无此问题**：`spec_pending` 是 UI 事件不落盘，历史轮只有 answer 文本；重连补发只在 committed 态（那时才需要交互气泡）
+
+**验证**：node 行为模拟全过（pending 置位 → draft/rejected 事件**不**收起 → approved 事件收起、步数与抽屉按钮渲染正确）+ JS 语法 + 6 项结构断言全绿。**纯前端改动，Ctrl+F5 生效**。
+
+抽屉侧形态（headbar 钉顶 + 滚动区独立 + 设计概述自然撑高）见 [编辑器 UX · spec 抽屉](../features/editor-ux-improvements.md#批次十二092a0dfspec--日志抽屉布局统一标题栏钉顶--滚动区独立)。
+
 ## 与后端的关系
 
 - 气泡内容由 `agent.py` 事件流 `_emit` → WS broadcast → 前端渲染；**所有事件统一携带 `agent_id` 字段**（主=`_main_`，子 Agent=各自 id，`setdefault` 兜底）——前端 answer 分页 / trace 前缀均据此分流

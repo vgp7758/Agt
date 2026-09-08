@@ -528,3 +528,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - 配套行为变更：**401/403/404（鉴权/配额/模型不存在）也纳入回退链**（此前直接炸轮）——flatkey 余额 403 冷却后切链上下一 provider，会话不断
 - 详见 [bubble-interaction · 中断轮充值入口按钮](../features/bubble-interaction.md#answer-中断轮充值入口按钮--回退链全失败一键打开2026-09-08用户提案)
 
+## 快速事实增补（2026-09-08 · 三 · spec 通过后 answer 区气泡自动收起——详情转抽屉）
+
+- spec 通过并开始施工后，answer 区的 spec 大卡片**自动收起成一行摘要**（`📐「标题」已通过，开始实施 · N 步 [📐 在抽屉中查看]`），把 answer 区还给施工过程与最终回答（用户提案，详见 [气泡交互 · spec 批阅气泡收起](../features/bubble-interaction.md#spec-批阅气泡--通过后自动收起成摘要2026-09-08用户提案)）——`_specBubbleActive` 标记 + `case 'spec'` approved 事件触发 `collapseSpecBubble`；draft/rejected 不收起（返工流程原样）、抽屉批阅入口同样生效；纯前端 Ctrl+F5
+

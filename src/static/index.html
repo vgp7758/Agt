@@ -1124,12 +1124,25 @@ function switchAnswerPage(id){
   renderAnswerPages();
 }
 // 中断轮：answer 区域渲染"继续"按钮（替代"(无回答)"死文本）——点击发送继续指令接续断掉的工作
+// 配额/鉴权类失败（回退链全断）时附充值入口按钮组（用户提案 2026-09-08）：错误消息内嵌链接/
+// preset recharge_url 的一键打开——flatkey 欠费 403 那类场景不用翻日志找充值页
+let _rechargeHints = null;   // interrupted 事件带来，finishInterrupted 消费后清空
 function finishInterrupted(turnNo){
   if(!curTurn) newTurn();
   const n = turnNo ? `第${turnNo}轮` : '本轮';
+  const rh = _rechargeHints || []; _rechargeHints = null;
+  let rb = '';
+  if(rh.length){
+    rb = rh.map(h=>{
+      const u = String(h.url||'').replace(/'/g,'%27');
+      return `<button class="btn" style="color:#b45309;border-color:#fcd34d" title="${esc(h.reason||'')}" `+
+             `onclick="window.open('${u}','_blank')">💰 充值 ${esc(h.provider||h.model||'')}</button>`;
+    }).join('');
+    rb = '<span style="margin:0 2px">·</span>' + rb;
+  }
   curTurn.answerEl.innerHTML =
     `<div class="interrupted-bar"><span>⏹ ${n}被中断，未完成</span>`+
-    `<button class="btn" onclick="continueInterrupted(this)">▶ 继续</button></div>`;
+    `<button class="btn" onclick="continueInterrupted(this)">▶ 继续</button>${rb}</div>`;
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }
@@ -3024,7 +3037,9 @@ function onWSMessage(ev){
       // curTurn 可能因读档重渲染被置空——此时无需操作，后续 step 会自然建轮。
       if(curTurn && curTurn.answerEl) curTurn.answerEl.innerHTML = '';
       break;
-    case 'interrupted': addRow('sys','⏹ 已中断'); setBusy(false); break;
+    case 'interrupted':
+      if(m.recharge && m.recharge.length) _rechargeHints = m.recharge;   // 配额类失败——_done 时随继续按钮渲染充值入口
+      addRow('sys','⏹ 已中断'); setBusy(false); break;
     case 'autonomous_status':
       setAutonomousMode(!!m.active);
       if(m.active){

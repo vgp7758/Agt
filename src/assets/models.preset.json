@@ -63,7 +63,8 @@
     }
    },
    "icon": "⚡",
-   "brief": "GLM 官方直连、国内低延迟，新户送额度"
+   "brief": "GLM 官方直连、国内低延迟，新户送额度",
+   "recharge_url": "https://z.ai/manage/credits"
   },
   "deepseek-official": {
    "base_url": "https://api.deepseek.com",
@@ -85,7 +86,8 @@
     }
    },
    "icon": "🐋",
-   "brief": "V4 官方 API：价格厚道，缓存命中折扣极深"
+   "brief": "V4 官方 API：价格厚道，缓存命中折扣极深",
+   "recharge_url": "https://platform.deepseek.com/top_up"
   },
   "siliconflow": {
    "base_url": "https://api.siliconflow.cn/v1",
@@ -107,7 +109,8 @@
     }
    },
    "icon": "🌊",
-   "brief": "一把 key 用遍各家开源模型，注册即送额度"
+   "brief": "一把 key 用遍各家开源模型，注册即送额度",
+   "recharge_url": "https://cloud.siliconflow.cn/account/balance"
   },
   "orcarouter": {
    "base_url": "https://api.orcarouter.ai/v1",
@@ -370,7 +373,8 @@
     }
    },
    "icon": "🔀",
-   "brief": "全球最大聚合网关：一把 key 400+ 前沿模型"
+   "brief": "全球最大聚合网关：一把 key 400+ 前沿模型",
+   "recharge_url": "https://openrouter.ai/credits"
   },
   "flatkey": {
    "base_url": "https://router.flatkey.ai/v1",
@@ -793,7 +797,8 @@
     }
    },
    "icon": "🔑",
-   "brief": "一把密钥路由 160+ 官方模型，含限时免费 DeepSeek V4 Flash"
+   "brief": "一把密钥路由 160+ 官方模型，含限时免费 DeepSeek V4 Flash",
+   "recharge_url": "https://console.flatkey.ai/wallet"
   }
  }
 }

@@ -443,6 +443,8 @@ class Agent:
             print(render_cli(e['text'].strip()))
         elif t == "interrupted":
             print("\n\n⏹ 已中断（已完成的轮次保留在会话中，可用 /save 保存）。")
+            for h in (e.get("recharge") or []):   # 配额/鉴权类失败 → 一键充值入口
+                print(f"   💰 {h.get('provider')} 充值入口: {h.get('url')}")
         elif t == "autonomous_status":
             if e.get("active"):
                 print(f"\n🔁 纯自主模式已开启，持续到 {e['end_time']}")
@@ -2165,7 +2167,23 @@ class Agent:
                 # 传播。子 Agent 场景由 _bg 的 except 捕获：通知 caller + registry 标 failed
                 # （用户提案 2026-09-02——此前 LLM 回退链耗尽直接从 run() 冒出，
                 #  轮悬空无 abort 事件、看板状态不停留在 running）
-                self._emit({"type": "interrupted", "text": f"轮异常中断：{type(e).__name__}: {e}"})
+                # 充值入口（用户提案 2026-09-08）：链上 quota/auth 类失败带一键充值按钮——
+                # 从 llm.last_failures 去重提取（错误消息内嵌链接 > preset recharge_url > register_url）
+                hints = []
+                try:
+                    _seen = set()
+                    for f in (getattr(self.llm, "last_failures", None) or []):
+                        if f.get("cls") in ("quota", "auth") and f.get("url") and f["url"] not in _seen:
+                            _seen.add(f["url"])
+                            hints.append({"provider": f.get("provider") or f.get("model", ""),
+                                          "model": f.get("model", ""), "url": f["url"],
+                                          "reason": (f.get("msg") or "")[:120]})
+                except Exception:
+                    hints = []
+                ev = {"type": "interrupted", "text": f"轮异常中断：{type(e).__name__}: {e}"}
+                if hints:
+                    ev["recharge"] = hints
+                self._emit(ev)
                 try:
                     self.session.abort_current_turn(f"（异常中断：{type(e).__name__}）")
                 except Exception:

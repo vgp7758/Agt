@@ -273,6 +273,20 @@ def preset_entry(mname: str) -> dict:
     """按模型名取单条预设条目（onboarding 保存拼完整 profile 用）；无则 {}。"""
     return preset_models_view().get(mname) or {}
 
+
+def preset_recharge_map() -> dict:
+    """充值入口映射（回退链全失败时 UI 一键打开，用户提案 2026-09-08）：
+    {norm(base_url): {provider, recharge_url, register_url}}。
+    recharge_url=preset 显式配置的充值页；register_url 兜底（注册/控制台页）。"""
+    out = {}
+    for pname, pv in (_load_preset().get("providers") or {}).items():
+        bu = _norm_bu(pv.get("base_url", ""))
+        if bu:
+            out[bu] = {"provider": pname,
+                       "recharge_url": pv.get("recharge_url", ""),
+                       "register_url": pv.get("register_url", "")}
+    return out
+
 # 空配置兜底：无模型时不调 get_profile（会 KeyError），给空 profile 让兼容别名有值。
 _active = get_profile(DEFAULT_MODEL) if not _NO_MODELS else {}
 

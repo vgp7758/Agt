@@ -202,6 +202,42 @@ def _parse_tool_calls(msg: dict) -> list[dict]:
     return out
 
 
+_QUOTA_PAT = re.compile(r"quota|credit|balance|余额|欠费|insufficient|arrear|top.?up|充值", re.I)
+
+
+def _classify_err(e) -> str:
+    """失败归类（充值提示用）：quota=配额/余额不足（一键充值有意义）；
+    auth=鉴权失败（可跳注册/控制台页）；其余网络/限流/超时类与钱无关。"""
+    if isinstance(e, (PermissionDeniedError, AuthenticationError)):
+        return "quota" if _QUOTA_PAT.search(str(e)) else "auth"
+    if isinstance(e, RateLimitError):
+        return "quota" if _QUOTA_PAT.search(str(e)) else "rate_limit"
+    if isinstance(e, (APITimeoutError, APIConnectionError)):
+        return "network"
+    if isinstance(e, NotFoundError):
+        return "not_found"
+    return "other"
+
+
+def _extract_url(msg: str) -> str:
+    """从错误消息提取第一个 http(s) 链接（如 flatkey 403 的 'Add credits at https://...'）。"""
+    m = re.search(r"https?://[^\s'\"\]）)]+", str(msg))
+    return m.group(0).rstrip(".,;") if m else ""
+
+
+def _recharge_url_for(model_name: str, msg: str) -> tuple:
+    """(provider名, 充值URL)。优先级：错误消息内嵌链接 > preset recharge_url > register_url。"""
+    try:
+        from config import MODELS, preset_recharge_map, _norm_bu
+        bu = _norm_bu((MODELS.get(model_name) or {}).get("base_url", ""))
+        pe = preset_recharge_map().get(bu, {})
+        prov = pe.get("provider", "")
+    except Exception:
+        prov, pe = "", {}
+    url = _extract_url(msg) or pe.get("recharge_url", "") or pe.get("register_url", "")
+    return prov, url
+
+
 class LLMClient:
     def __init__(
         self,
@@ -556,6 +592,7 @@ class LLMClient:
         避免连续撞同一个故障端点/token。成功后自动清除冷却态。"""
         import hashlib
         self._maybe_reset_to_head()
+        self.last_failures = []   # 每次调用重新收集（回退链全失败时 UI 生成充值入口）
 
         def _ck():
             tok_sig = hashlib.md5(self.api_key.encode()).hexdigest()[:8] if self.api_key else "0"
@@ -610,6 +647,10 @@ class LLMClient:
             # 冷却检查：该 model+token 组合还在冷却窗口 → 直接跳过（不走 _chat_inner）
             if _cooled(ck):
                 remain = self._cooldown_seconds - (time.time() - self._provider_cooldown[ck])
+                self.last_failures.append({"model": self.model_name, "err": "Cooldown",
+                                            "cls": "cooldown",
+                                            "msg": f"冷却中跳过(剩余{remain:.0f}s，上次失败)",
+                                            "provider": "", "url": ""})
                 _advance(f"冷却中(剩余{remain:.0f}s)", from_cooldown=True)
                 continue
 
@@ -648,6 +689,14 @@ class LLMClient:
                 # 401/403/404（鉴权/配额/模型不存在）也走回退（2026-09-08 用户调试 flatkey 余额 403 直接炸轮的根因）：
                 # 该 provider 不可用不代表链上其它也不可用——冷却后切下一个，保证会话不断
                 self._provider_cooldown[ck] = time.time()
+                try:
+                    _prov, _rurl = _recharge_url_for(self.model_name, str(e))
+                except Exception:
+                    _prov, _rurl = "", ""
+                self.last_failures.append({
+                    "model": self.model_name, "err": type(e).__name__,
+                    "cls": _classify_err(e), "msg": str(e)[:200],
+                    "provider": _prov, "url": _rurl})
                 if isinstance(e, (PermissionDeniedError, AuthenticationError, NotFoundError)):
                     _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退：%s",
                                  ck, getattr(e, "status_code", "?"), self._cooldown_seconds,

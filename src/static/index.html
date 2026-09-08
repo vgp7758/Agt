@@ -2467,8 +2467,10 @@ function pushLogEntry(level, text, scene){
 }
 
 // commit_spec 阻塞时，在 answer 区域渲染交互式 spec 气泡
+window._specBubbleActive = false;   // answer 区被 spec 气泡占用标记（approved 后收起用，用户提案 2026-09-08）
 function renderSpecBubble(spec, specId, specTitle, specDesign){
   window._specDecided = false;   // 新一轮批阅开始：重置双击防抖
+  window._specBubbleActive = true;
   if(!curTurn) newTurn();
   let h = '<div style="border:2px solid #4338ca;border-radius:10px;padding:12px;background:#fafbff">';
   h += '<div style="font-size:15px;font-weight:600;color:#4338ca;margin-bottom:8px">📐 ' + esc(specTitle||'施工方案') + ' <span style="font-size:12px;color:#8a9099;font-weight:400">'+esc(specId||'')+'</span></div>';
@@ -2522,6 +2524,20 @@ function specConfirmRejectText(fb){
   const b = document.getElementById('specBtns');
   if(b) b.innerHTML = '<span style="color:#dc2626">❌ 已返工，等待 Agent 重新生成…</span>';
   ws.send(JSON.stringify({action:'spec_decision', decision:'reject', feedback: (fb||'').trim()}));
+}
+// spec 通过并开始施工（用户提案 2026-09-08）：answer 区的 spec 大卡片收起成一行摘要——
+// 详情转为主要在 📐 抽屉查看（renderSpec 全量渲染不受影响），把 answer 区还给施工过程与最终回答
+function collapseSpecBubble(m){
+  window._specBubbleActive = false;
+  if(!curTurn || !curTurn.answerEl) return;
+  const t = m && m.spec_title ? m.spec_title : '施工方案';
+  const sid = m && m.spec_id ? m.spec_id : '';
+  curTurn.answerEl.innerHTML =
+    '<div class="interrupted-bar" style="border:1px solid #c7d2fe;border-radius:8px;padding:8px 12px;background:#fafbff">'+
+    '<span>📐 「'+esc(t)+'」'+(sid?('<span style="color:#8a90a9;font-size:12px">'+esc(sid)+'</span> '):'')+
+    '已通过，开始实施 · '+((m&&m.spec&&m.spec.length)||'?')+' 步</span>'+
+    '<button class="btn" style="color:#4338ca;border-color:#c7d2fe" onclick="toggleSpecPanel(true)">📐 在抽屉中查看</button></div>';
+  scrollBottom();
 }
 // ========== 问卷渲染（ask_user 阻塞等待用户回答） ==========
 function renderSurveyBubble(questions){
@@ -2880,6 +2896,8 @@ function onWSMessage(ev){
       break;
     case 'spec':
       renderSpec(m.spec, m.spec_id, m.review_state, m.spec_title, m.spec_design);
+      // 通过并开始施工 → answer 区的 spec 大卡片收起成一行摘要（详情转抽屉，用户提案 2026-09-08）
+      if(m.review_state === 'approved' && window._specBubbleActive) collapseSpecBubble(m);
       break;
     case 'spec_pending':
       // commit_spec 阻塞等待用户裁定：在 answer 区域渲染交互式 spec 气泡
@@ -3029,7 +3047,7 @@ function onWSMessage(ev){
       pushLogEntry(m.level || 'warn', m.text || '', m.scene || '');
       break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
-    case 'answer': case 'wrap_answer': finishAnswer(m.text, m.agent_id, m.changed); break;
+    case 'answer': case 'wrap_answer': window._specBubbleActive=false; finishAnswer(m.text, m.agent_id, m.changed); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
     case 'turn_resume':

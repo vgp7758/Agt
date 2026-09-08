@@ -516,3 +516,7 @@
 
 - **SubAgent 抢注 `_main_` registry 槽根治（2026-09-07，用户实锤「projection 带历史是假象，真相是通知回灌」）**：`Agent.__init__` 无 `agent_id` 参数、实例属性硬编码默认 `"_main_"`；`SubAgent` 构造内嵌 `Agent` 不传 id（构造完才事后改）——533d64c 的防覆盖只堵「活体覆盖」一条，**幽灵 `_main_` 槽（agent=None 的历史条目，`_restore_subagents` 恢复场景）**下子 Agent 仍会用默认 id 注册成 `_main_` → `_route_answer` 查到子 Agent → 完成通知 push 进子 Agent 自己 inbox → 主 Agent 永不醒 + 子 Agent 吃自己完成通知自循环开新轮（vision_14 inbox 堆自己 turn1/turn3 + vision_15 通知互串实锤）。修复：`Agent.__init__` 新增 `agent_id` 参数 + **注册主/子分流**（`_main_` 走防覆盖 role=main；其余以真实 id + role=subagent 注册，永不碰 `_main_` 槽）；`SubAgent.__init__` 构造时即传 agent_id（multiagent.py，删事后改 id 两行）。验证 8/8（test/test_subagent_registry_slot.py）。`/restart` 生效（详见 [multi-agent · 根治](architecture/multi-agent.md)）
 
+## 快速事实增补（2026-09-08 · 一 · 预设合并 miss 三层修复：model id 写错 + 归一化匹配 + base_url 归组）
+
+modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 catalog 的 model id 写错**（精确匹配永远 miss）：`glm` 写了不存在的 `zai-org/GLM-5.2`（真实 `ZhipuAI/GLM-5.2`）、`qwen` 记的是上代旗舰 Qwen3-235B（真实 Qwen3.5-397B）、`deepseek` 唯一正确所以 ms-deepseek 一直正常。三层修复（commit 260903b）：① models.preset.json 对照 `/v1/models` 实测修正（modelscope 组 6 条全实测连通）；② config.py 归一化宽松匹配兜底（`_norm_bu` 去尾斜杠 + `_norm_mid` 去 org 前缀/分隔符）；③ server.py + index.html 按 base_url 归组（预设外手填条目也归入 provider 组末尾）。preset 修正即时生效，base_url 归组需 /restart。详见 [config-and-models · 预设合并 miss 排障](guides/config-and-models.md)。
+

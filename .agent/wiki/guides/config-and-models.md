@@ -182,6 +182,31 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **「可添加 128」的口径**：包含所有 provider 的未配置 preset 条目（flatkey 77 + orcarouter / modelscope 等 51）——未来想用的任何 preset 模型都能在搜索弹窗搜到即配，不受级联收敛影响。
 
+### 预设合并 miss 排障：model id 写错 + 归一化匹配 + base_url 归组（2026-09-08，用户提问）
+
+**用户报告（2026-09-08）**：modelscope 上配的 qwen / glm 模型卡片在下拉框里没有合并进 modelscope 这个 provider 分组——只有 `ms-deepseek` 合并了。主 Agent 拉 ModelScope `/v1/models` 实测（50 个模型）对照，**根因不是用户配置问题，是预设 catalog 的 model id 写错了**，导致 `preset_models_view()` 的 (base_url, model) 精确匹配永远 miss：
+
+| 预设条目 | 预设里写的 model id | 平台真实 id（/v1/models 实测） | 结果 |
+|---|---|---|---|
+| `glm` | `zai-org/GLM-5.2` | `ZhipuAI/GLM-5.2` | ❌ 平台没有 `zai-org/` 这个前缀 |
+| `glm-5.2` | `Zhipu/GLM-5.2` | 同上 | ❌ 也不存在（且与上条重复，已删） |
+| `qwen` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | `Qwen/Qwen3.5-397B-A17B`（用户正在用的） | ❌ 记的是上代旗舰 |
+| `deepseek` | `deepseek-ai/DeepSeek-V4-Flash-0731` | 一致 | ✅ 唯一命中（所以 ms-deepseek 合并了） |
+
+**三层修复**（commit 260903b）：
+
+| # | 层 | 内容 |
+|---|---|---|
+| 1 | src/assets/models.preset.json | **preset 数据修正**（对照实测）：`qwen` → `Qwen/Qwen3.5-397B-A17B`、`glm` → `ZhipuAI/GLM-5.2`（删 `zai-org/` 前缀无效条目 + `Zhipu/` 重复条目），顺手补 3 个实测可用的：`qwen3-235b`（`Qwen/Qwen3-235B-A22B-Instruct-2507`，上代旗舰）/ `glm-4.7-flash` / `ms-ds-pro`。modelscope 组最终 6 条，全部实测连通 |
+| 2 | src/config.py | **归一化宽松匹配兜底**：新增 `_norm_bu`（base_url 小写 + 去尾斜杠）与 `_norm_mid`（model id 小写 + 去 org 命名空间前缀 + 去非字母数字）——精确比对不中时再走一层宽松匹配，应对同平台多写法漂移（`zai-org/GLM-5.2` / `Zhipu/GLM-5.2` / `ZhipuAI/GLM-5.2` 本是一家）。`preset_models_view()` 合并判定改为「精确优先 + 归一化兜底」 |
+| 3 | src/server.py + src/static/index.html | **base_url 归组（终极兜底）**：WS 连接/重连 system 消息的 models 视图补 `base_url` 字段；前端把**未被预设命中的用户自定义条目**（预设里没这个模型——如手填冷门模型/新模型）按 base_url 归入对应 provider 组末尾显示 ✅，「已配置」组不再重复 |
+
+**验证**：用户三张卡片（qwen / glm / ms-deepseek）全部 ✅ 合并进 modelscope 组；归组单测（含尾斜杠差异）全过。
+
+**生效方式**：preset 修正**即时生效**（`_load_preset` 每次现读文件）——刷新下拉即见 qwen/glm 进组；base_url 归组需 `/restart` 一次（system 事件补 base_url 字段 + 前端归组是新代码）。
+
+**教训**：预设条目是「给人看也喂给合并判定」的双重身份——**id 写错时下拉框不报错、只表现为合并 miss**，排障要先对平台 `/v1/models` 逐字符核对预设 catalog（同 [踩坑记录 1](#踩坑记录) 的口径），而不是怀疑用户配置。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

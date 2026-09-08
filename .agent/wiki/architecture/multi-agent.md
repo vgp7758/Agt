@@ -155,6 +155,7 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 - **agent_prompt 新建/复活/reuse 三条路径都消费**——改链后 reuse 实例下一任务即生效
 - 未声明 = 继承全局 `fallback_chain / fallback_policy`（见 [配置体系](../guides/config-and-models.md)）
 - 2026-08（commit a667da4）起 [/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（此前只能手写 yml）：模型 chips 点选（顺序=链序）+ 策略下拉；**留空 = 继承全局**（保存不写键）；「显式关回退」（区别于继承）手写 yml 空串；`_main_` 主 Agent 同样支持声明级回退链（main.yml，留空=删键）
+- **捕获面（2026-09-08，commit d3164be）**：401/403/404（鉴权/配额/模型不存在）也纳入回退捕获——此前 flatkey 余额 403 直接炸轮（用户调试根因）；现在记录冷却（model+token 签名）后切链上下一 provider，该 provider 不可用不代表链上其它也不可用，会话不断。每次调用在开头重置 `llm.last_failures` 逐跳收集失败（含 `_classify_err` 归类 quota/auth/rate_limit/network + 充值 URL）——链全断时 run() 异常中断 except 从它提取充值入口（interrupted 事件带 `recharge` 数组 → WebUI/CLI 一键打开，见 [配置体系 · 一键充值](../guides/config-and-models.md#回退链中断一键充值preset-recharge_url--401403404-纳入回退2026-09-08用户提案)）
 
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 

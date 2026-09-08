@@ -207,6 +207,37 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **教训**：预设条目是「给人看也喂给合并判定」的双重身份——**id 写错时下拉框不报错、只表现为合并 miss**，排障要先对平台 `/v1/models` 逐字符核对预设 catalog（同 [踩坑记录 1](#踩坑记录) 的口径），而不是怀疑用户配置。
 
+### 回退链中断一键充值：preset recharge_url + 401/403/404 纳入回退（2026-09-08，用户提案）
+
+**用户提案（2026-09-08）**：回退链全部失败、轮中断后，answer 气泡里除了「▶ 继续」按钮外，把余额不足的几个 provider 充值入口链接也带上——点击一键打开充值页。落地为 preset 增 `recharge_url` 字段 + config.py `preset_recharge_map()` 映射 + llm_client 失败归类与 last_failures 收集（数据链与前端渲染见 [bubble-interaction · answer 中断轮充值入口按钮](../features/bubble-interaction.md#answer-中断轮充值入口按钮--回退链全失败一键打开2026-09-08用户提案)）。
+
+**preset 增 `recharge_url` 键**（src/assets/models.preset.json，provider 级）：充值直达页——语义与 `register_url`（注册/控制台页）区分开。当前六家：
+
+| provider | recharge_url | register_url 兜底 |
+|---|---|---|
+| flatkey | `https://console.flatkey.ai/wallet` | — |
+| openrouter | `https://openrouter.ai/credits` | — |
+| siliconflow | `https://cloud.siliconflow.cn/account/balance` | — |
+| z.ai | `https://z.ai/manage/credits` | — |
+| deepseek-official | `https://platform.deepseek.com/top_up` | — |
+| orcarouter | `""`（无已知充值直达） | register_url 兜底 |
+
+**`preset_recharge_map()`**（src/config.py）：`{norm(base_url): {provider, recharge_url, register_url}}`——按归一化 base_url 索引（`_norm_bu` 复用，小写 + 去尾斜杠），回退链全失败时 UI 一键打开用。
+
+**充值 URL 三级来源**（优先级递减，src/agent.py run() 异常中断处从 `llm.last_failures` 提取）：
+
+1. **错误消息内嵌链接**——flatkey 403 里的 `Add credits at https://console.flatkey.ai/wallet` 直接提取（provider 自己指路，最准确）
+2. **preset `recharge_url`**（本节）
+3. **`register_url` 兜底**——控制台/注册页总比没有强
+
+**配套行为变更：401/403/404（鉴权/配额/模型不存在）也纳入回退链**（src/llm_client.py）——此前 flatkey 余额 403 直接炸轮（用户调试根因）；现在记录冷却（model+token 签名）后切链上下一 provider，**该 provider 不可用不代表链上其它也不可用**，会话不断。`last_failures` 每次调用重新收集（`self.last_failures = []` 开头重置），逐跳 append `{model, err, cls, msg, provider, url}`——链断时从它生成充值入口。
+
+**失败归类 `_classify_err(e)`**（src/llm_client.py）：只把 **quota**（`_QUOTA_PAT` 命中 quota/credit/balance/余额/欠费/insufficient/arrear/top_up/充值）和 **auth**（鉴权失败，可跳注册/控制台页）类失败生成按钮——网络/限流/超时类与钱无关，断链时不冒无关充值按钮。按钮 `title` 悬停显示失败原因摘要（如 `Failed to pre-deduct quota...`）。
+
+**去重**：按 URL 去重——flatkey 全家 77 个模型共享一把 key，链上挂 5 个 flatkey 条目也只出一个「💰 充值 flatkey」按钮。
+
+**生效方式**：引擎层（config.py / llm_client.py / agent.py / index.html），需 `/restart`。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

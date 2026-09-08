@@ -318,6 +318,36 @@ event.setdefault("agent_id", self.agent_id)   # 主=_main_，子 Agent=各自 id
 
 分页引入后，answer 气泡的 innerText 会带上 tabs 按钮文字 → 复制按钮改为**克隆排除 UI 元素**再取文本（见上文「复制内容」小节），复制内容始终是当前页正文。
 
+## answer 中断轮充值入口按钮 · 回退链全失败一键打开（2026-09-08，用户提案）
+
+**用户提案（2026-09-08）**：回退链全部失败、轮中断后，answer 区域除「▶ 继续」按钮（`finishInterrupted` 既有）外，把余额不足的几个 provider 充值入口也带上——点击一键打开充值页。此前配额/鉴权类失败只能翻日志找充值页（flatkey 欠费 403 那类场景），现在按钮直达。
+
+**数据链**：
+
+```
+provider 403（flatkey 欠费）
+  → llm.last_failures 逐跳收集 {model, cls, msg, provider, url}（每次调用开头重置）
+  → 回退链耗尽 → run() except 捕获（agent.py）
+  → 从 last_failures 去重（按 url）提取 hints：
+      错误消息内嵌链接 > preset recharge_url > register_url（详见 [配置体系 · 一键充值](../guides/config-and-models.md#回退链中断一键充值preset-recharge_url--401403404-纳入回退2026-09-08用户提案)）
+  → interrupted 事件带 recharge: [{provider, url, reason}]
+  → 前端 case 'interrupted' → _rechargeHints → finishInterrupted() 渲染按钮组
+```
+
+**前端**（src/static/index.html）：
+
+- `_rechargeHints` 模块级变量：`interrupted` 事件带来，`finishInterrupted` 消费后清空（不跨轮残留）
+- `finishInterrupted` 渲染：`▶ 继续` 按钮旁附 `💰 <provider>` 按钮组（`<a target=_blank>` 新标签打开 `url`，URL 单引号转义 `%27` 防属性注入）；按钮 `title` 悬停显示失败原因摘要
+- 无充值入口（网络/限流断链）→ 只有「▶ 继续」，行为与旧版一致
+
+**CLI 侧**（src/chat.py）：`interrupted` 事件同样打印 `💰 {provider} 充值入口: {url}`。
+
+**失败归类纪律**：只对 **quota**（余额/配额/欠费）和 **auth** 类失败生成按钮——`_classify_err`（llm_client）把网络/限流/超时归其它类，断链时不冒无关充值按钮；`title` 悬停可看具体原因（如 `Failed to pre-deduct quota...`）。
+
+**验证（全绿）**：flatkey 403 真实消息归类 quota ✓ / 消息内嵌 wallet 链接精确提取 ✓ / 全链失败 mock（2 个 flatkey 条目都 403）→ 2 条 last_failures 去重 1 个按钮 ✓ / CLI 中断打印 ✓ / JS 语法 + 5 项结构断言 ✓。
+
+**生效方式**：引擎层（agent.py 事件 + index.html），需 `/restart`——下次 provider 欠费断链，气泡上直接点开充值页，充完点「▶ 继续」从断点续跑。
+
 ## 与后端的关系
 
 - 气泡内容由 `agent.py` 事件流 `_emit` → WS broadcast → 前端渲染；**所有事件统一携带 `agent_id` 字段**（主=`_main_`，子 Agent=各自 id，`setdefault` 兜底）——前端 answer 分页 / trace 前缀均据此分流

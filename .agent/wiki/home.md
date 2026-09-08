@@ -520,3 +520,11 @@
 
 modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 catalog 的 model id 写错**（精确匹配永远 miss）：`glm` 写了不存在的 `zai-org/GLM-5.2`（真实 `ZhipuAI/GLM-5.2`）、`qwen` 记的是上代旗舰 Qwen3-235B（真实 Qwen3.5-397B）、`deepseek` 唯一正确所以 ms-deepseek 一直正常。三层修复（commit 260903b）：① models.preset.json 对照 `/v1/models` 实测修正（modelscope 组 6 条全实测连通）；② config.py 归一化宽松匹配兜底（`_norm_bu` 去尾斜杠 + `_norm_mid` 去 org 前缀/分隔符）；③ server.py + index.html 按 base_url 归组（预设外手填条目也归入 provider 组末尾）。preset 修正即时生效，base_url 归组需 /restart。详见 [config-and-models · 预设合并 miss 排障](guides/config-and-models.md)。
 
+## 快速事实增补（2026-09-08 · 二 · 回退链全失败中断——answer 气泡一键充值入口）
+
+- 回退链全失败中断后，answer 气泡在「▶ 继续」旁附**一键充值入口**（用户提案）——数据链：`llm.last_failures` 逐跳收集（每次调用重置）→ run() except 提取去重 → `interrupted` 事件带 `recharge:[{provider,url,reason}]` → 前端按钮组（title 悬停见失败原因），CLI 同款打印
+- 充值 URL 三级来源：错误消息内嵌链接（flatkey 403 自指 wallet）> preset `recharge_url` > `register_url` 兜底；失败归类 `_classify_err` 只对 quota/auth 类生成按钮（网络/限流不冒无关按钮）
+- preset 六家配充值直达页：flatkey/…，见 [配置体系 · 一键充值](../guides/config-and-models.md#回退链中断一键充值preset-recharge_url--401403404-纳入回退2026-09-08用户提案)；按钮去重——flatkey 77 模型共享一把 key 只出一个按钮
+- 配套行为变更：**401/403/404（鉴权/配额/模型不存在）也纳入回退链**（此前直接炸轮）——flatkey 余额 403 冷却后切链上下一 provider，会话不断
+- 详见 [bubble-interaction · 中断轮充值入口按钮](../features/bubble-interaction.md#answer-中断轮充值入口按钮--回退链全失败一键打开2026-09-08用户提案)
+

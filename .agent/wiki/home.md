@@ -550,3 +550,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **v0.26.4 发布**（2026-09-09，commit `92782d8`，PyPI 已上线；自 v0.26.3 以来 1 笔功能提交 = `424be9e` 未知后缀嗅探，详见 [v0.26.4 发布记录](releases/v0.26.4.md)）：📦 版本 bump 0.26.3 → 0.26.4——09-09·二 已记录的功能事实（未知后缀引用按内容嗅探渲染：`_sniff_kind` magic bytes 矩阵 + `/api/file-kind` 端点 + 前端原位升级四形态 + 编码感知解码）正式随版发布，无新增代码
 - 更新方式：`pip install -U agt-agent`；引擎层（`/api/file-kind` + 前端嗅探）需 `/restart` 生效，其它实例 `/update-assets apply`
 
+## 快速事实增补（2026-09-09 · 四 · 气泡复制按钮 hover 断链修复 + 复制内容改 markdown 原文）
+
+- **气泡复制按钮 hover 断链修复**（用户报障「移过去按钮就消失」，commit `c54a004`）：`.bubble-copy` 原 `top:100%; margin-top:2px`——margin 缝不属于宿主盒，鼠标从气泡滑向按钮途中 `:hover` 断链 → 按钮 `opacity:0 + pointer-events:none` 自锁消失（确定性死锁）；改 `top:calc(100% - 2px)` 顶部伸进宿主盒内 2px，路径几何连续（详见 [气泡交互 · 交互效果](../features/bubble-interaction.md#交互效果)）
+- **复制内容改 markdown 原文**：用户问询后定案——answer 复制应得原文（表格 `|` 分隔、代码块带围栏，可直接再编辑/投喂）；`renderAnswerPages` 把当前页原文挂 `__md_text` expando，复制优先取它；spec/问卷/中断卡片等重写点置 `null` 失配即回退 innerText（克隆排除法）；多 Agent 分页复制当前激活页、历史轮读档自动覆盖
+- 纯前端改动（src/static/index.html），Ctrl+F5 生效
+

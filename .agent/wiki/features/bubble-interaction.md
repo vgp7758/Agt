@@ -263,6 +263,10 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 
 按钮 `.bubble-copy` 默认 `pointer-events:none`（未 hover 时不拦截气泡下层点击），hover 浮现时才恢复可点——「透明/浮层元素不拦点击」的防坑，与 [用户交互 · toast 透明条遮挡输入框失焦](user-interaction.md#前端-ui-遮罩坑toast-透明条遮挡输入框失焦2026-08commit-0a415bc) 同源。
 
+**hover 断链修复（2026-09-09，用户报障「移过去按钮就消失」，commit c54a004）**：按钮原定位 `top:100%; margin-top:2px`——**margin 区域不属于宿主盒**，鼠标从气泡底部滑向按钮必经这 2px 缝：此刻不在 `.turn:hover` 触发区 → 按钮 `opacity:0 + pointer-events:none` → 鼠标到达按钮原位置也点不了（确定性死锁，不是灵敏度问题）。修复：去掉 margin，`top:calc(100% - 2px)` 让按钮顶部**伸进宿主盒内 2px**——气泡→按钮路径几何连续，hover 冒泡不断；视觉上按钮自带边框贴着气泡底边，看不出位移。
+
+> ⚠️ 教训：悬浮按钮与宿主 hover 触发区之间**不能留 margin 缝**（会断 :hover 链导致按钮自锁消失），间距应靠按钮自身 padding / border 或与宿主盒重叠实现。
+
 ### 四处挂载（实时 + 历史全覆盖）
 
 | 位置 | 函数（均在 `static/index.html`） |
@@ -276,19 +280,17 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 
 ### 关键设计——按钮挂在宿主（row/col）上而非 bubble 里
 
-```
-answer 内容会被 innerHTML 反复重写（finishAnswer / renderAnswerPages / renderSpecBubble / renderSurveyBubble）
-  → 按钮放 bubble 内 = 每次重写都被清掉
-  → 按钮放 col 上（absolute 定位在气泡下方角落）= 与内容解耦，始终存活
-```
-
-- hover 触发区也用宿主（`.row.me:hover` / `.turn:hover`）——鼠标在气泡和按钮之间移动不会闪烁（触发区连成一片）
+- hover 触发区也用宿主（`.row.me:hover` / `.turn:hover`）——鼠标在气泡和按钮之间移动不会闪烁（触发区连成一片）。⚠️ 2026-09-09 修复前并不完全成立：按钮 `margin-top:2px` 在宿主与按钮间留缝，穿缝即 `:hover` 断链（详见[上文 · hover 断链修复](#交互效果)）
 - 这是「DOM 会被整体重写的容器，交互控件必须挂到不被重写的祖先上」的通用范式，后续给气泡加其它悬浮按钮时同理
 
 ### 复制内容与剪贴板降级
 
-- 取文本改用**克隆排除法**（2026-08-21，ba0940b）：`bubble.cloneNode(true)` 后 `querySelectorAll('.ans-tabs,.copy-btn,.run-btn')` 全部 remove，再取 `innerText`——answer 多 Agent 分页的 tabs 按钮字、其他 UI 元素不混进复制内容，**复制到的只有当前页正文**
-- 取 `innerText` 而非 `textContent`——answer 里渲染成表格/代码块的内容复制后保留文本结构（表格变成制表对齐的行、代码块原样），不是一坨裸文本
+- **复制 markdown 原文**（2026-09-09 定案，用户问询「复制的是 markdown 原文吗」后改，commit c54a004）：`renderAnswerPages` 渲染 answer 时把**当前页 markdown 原文**挂在 bubble 元素 `__md_text` expando 上（`innerHTML` 重写不清 expando）；`attachCopyBtn` 点击时优先取 `__md_text`（非空才用）——表格是 `|` 分隔、代码块带 ` ``` ` 围栏，可直接再编辑/投喂。此前取渲染后 innerText：表格变制表符对齐、代码块丢围栏，**不可再渲染**，是本次问询暴露的语义缺陷
+- **回退链**：spec/问卷/中断卡片等非 answer 渲染在重写 answer 区时各自置 `__md_text = null`——复制按钮取到 null 即回退 `innerText`（仍走克隆排除法：`cloneNode(true)` 后 remove `.ans-tabs,.copy-btn,.run-btn`，见下），不会拿到上一次 answer 的旧原文
+- **多 Agent 分页**：`renderAnswerPages` 单页/多页两分支都在重渲染时挂 `__md_text = 当前激活页原文`——切页随重渲染自动更新，复制到的始终是当前页
+- **历史轮**：读档走同一条 `finishAnswer` → `renderAnswerPages` 路径，自动覆盖
+- **user 气泡**本为纯文本，复制行为不变
+- 取 `innerText` 而非 `textContent` 的回退语义保留——表格/代码块至少保留文本结构，不是一坨裸文本
 - `clipboard API` 失败自动降级 `execCommand`（兼容老浏览器）
 
 ### 与代码块级复制的层级

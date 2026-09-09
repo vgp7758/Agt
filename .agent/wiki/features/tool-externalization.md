@@ -39,6 +39,8 @@ def agt_register(ctx=None):
 
 **ctx["agent"] 注入（2026-09-09，commit 4bcd144）**：需要引擎状态（会话/toollog/exec 闭包、嫁接 `_seed_steps`）的**工厂工具**经 agent 引用外置——`scan_script_tools(dirs=None, agent=None)` / `attach_script_tools(tb, dirs=None, agent=None)` 透传主 Agent 引用进 ctx（`ctx["agent"] = agent`，chat.py 装配线 `attach_script_tools(agent.tools, agent=agent)`）。外置件按需声明接收（`ctx.get("agent")`），**无 agent 环境（纯工具箱构建/测试）时自行降级不注册，不炸主程序**。首个消费端 = explore_tools.py（explore 嫁接 `_seed_steps`），见 [spec-tools · explore](spec-tools.md)。
 
+**reload 路径漏传 agent（2026-09-09，commit 371db5e，用户报告「/reload tools 摘 46 添 46」）**：启动装配线 `attach_script_tools(agent.tools, agent=agent)` 传了 agent（47 个含 explore ✓），但 `/reload tools` 的 `reload_script_tools` 重扫时**漏传 agent**——ctx 无 agent → explore 的 agt_register 走降级分支返回 []（不注册）→ 摘除 47、注册 46，explore 被**静默丢弃且无任何报错**。降级本是给「纯工具箱构建/测试」环境准备的，被 reload 误触发了。修复一行：`attach_script_tools(agent.tools, dirs=dirs, agent=agent)`。**教训：agent 注入型外置件，所有装配入口（启动 / reload / 工具箱构建）必须同参透传 agent——降级分支安静，漏传即静默丢工具。**
+
 ## 热加载
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。

@@ -28,6 +28,8 @@
 
 e2e 四场景全绿（test/test_explore_tool.py）：嫁接 2 步落盘 + `_replay_events` 读档重放重建树 / 超时降级（`[外置探索·步数上限]` 部分结果）/ edit 白名单双闸拒绝（schema 不含 + 执行白名单）/ 白名单只读。详见 [tool-externalization](tool-externalization.md)。
 
+⚠️ **降级边界误触（2026-09-09，commit 371db5e）**：降级分支只该在「纯工具箱构建/测试」触发，但 `/reload tools`（`reload_script_tools`）曾漏传 agent 误触发它——启动 47（含 explore），reload 摘 46 添 46，explore 被静默摘除不注册。已修复（reload 路径补 `agent=agent` 透传）。**判断 explore 在不在：对比启动装配与 reload 是否同参（reload 结果数 ≠ 启动数即异常），reload 显示的「摘 N 添 N」配对本身看不出丢**。
+
 ## token_budget 残留修复（2026-08，commit eafed25）
 
 早期「解除子 Agent 预算」改造只改了 `agent_prompt` 路径（→0），explore_subagent 的独立构造路径漏掉仍为 20000。已对齐：

@@ -544,3 +544,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - 探测结果缓存 `_assetKindCache`，重绘 / 读档 / 展开更早轮次同步命中不再闪占位；`openFilePreview` 改 arrayBuffer + `TextDecoder(encoding)`——**gbk / utf-16 文本不乱码**（`r.text()` 恒 utf-8 旧疾）
 - 验证：`test/test_file_kind.py`（新建）14 例嗅探矩阵 + 真实文件 e2e + 路径穿越拒绝全绿；需 /restart（详见 [气泡交互 · 未知后缀嗅探](../features/bubble-interaction.md#未知后缀引用按内容嗅探渲染apifile-kind--编码感知解码2026-09-09用户提案)）
 
+## 快速事实增补（2026-09-09 · 三 · v0.26.4 发布）
+
+
+- **v0.26.4 发布**（2026-09-09，commit `92782d8`，PyPI 已上线；自 v0.26.3 以来 1 笔功能提交 = `424be9e` 未知后缀嗅探，详见 [v0.26.4 发布记录](releases/v0.26.4.md)）：📦 版本 bump 0.26.3 → 0.26.4——09-09·二 已记录的功能事实（未知后缀引用按内容嗅探渲染：`_sniff_kind` magic bytes 矩阵 + `/api/file-kind` 端点 + 前端原位升级四形态 + 编码感知解码）正式随版发布，无新增代码
+- 更新方式：`pip install -U agt-agent`；引擎层（`/api/file-kind` + 前端嗅探）需 `/restart` 生效，其它实例 `/update-assets apply`
+

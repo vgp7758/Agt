@@ -280,7 +280,7 @@ def reload_script_tools(agent, dirs=None) -> str:
         if agent.tools.unregister(nm):
             gone += 1
     _CACHE.clear()   # 强制全量重扫（不只是 mtime 变了的——目录增删文件也要看到）
-    stb = attach_script_tools(agent.tools, dirs=dirs)
+    stb = attach_script_tools(agent.tools, dirs=dirs, agent=agent)   # agent 必传——explore 等工厂工具热加载时也要拿到引擎引用（否则降级不注册，表现为"reload 后工具消失"）
     n = len(_LAST["names"])
     failed = _LAST["failed"]
     head = f"✅ 脚本工具已重载：注册 {n} 个（摘除旧 {gone} 个）"

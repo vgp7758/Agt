@@ -237,11 +237,6 @@
      "thinking": false,
      "desc": "免费自动路由（:free 池随机）"
     },
-    "or-minimax-m3-free": {
-     "model": "minimax/minimax-m3:free",
-     "thinking": false,
-     "desc": "MiniMax M3（免费池）"
-    },
     "or-claude-opus-5": {
      "model": "anthropic/claude-opus-5",
      "thinking": false,
@@ -318,6 +313,12 @@
       "temperature"
      ],
      "desc": "月之暗面 Kimi K3（temperature 锁 1）"
+    },
+    "or-minimax-m3": {
+     "model": "minimax/minimax-m3",
+     "thinking": true,
+     "vision": true,
+     "desc": "MiniMax M3 多模态旗舰（text/image/video 输入，1M ctx，$0.3/M 超值）"
     }
    },
    "icon": "🔀",

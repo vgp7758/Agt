@@ -728,6 +728,11 @@ function inlineRich(t){
     // code span：URL 整串 → 可点击链接；其余 → 可点击追加到输入框（内容 esc——LLM 输出不可信）
     hold.push(_URL_RE.test(c) ? codeUrlHtml(esc(c)) : _codeSpanHtml(esc(c)));
     return '\x02'+(hold.length-1)+'\x02'; });   // ① code span 优先
+  // ①' 粗体包裹的 URL（**https://…**）→ 可点击链接、保留粗体强调（用户提案 2026-09-09：
+  // LLM 常用 **URL** 强调链接地址，纯文本不可点）。只匹配整串 URL——普通 **文本** 不动。
+  t=t.replace(/\*\*((?:https?|ftp):\/\/[^\s*<>"']+)\*\*/g, function(_,u){
+    hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link"><strong>'+esc(u)+'</strong></a>');
+    return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/<((?:https?|ftp):\/\/[^<>\s]+)>/g, function(_,u){ hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link">'+esc(u)+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ② <url> autolink
   t=t.replace(/\[!([^\]]*)\]\(([^)\s]+)\)/g, function(_,title,path){ hold.push(assetBoxHtml(title,path)); return '\x02'+(hold.length-1)+'\x02'; });   // ③ [!title](path) 资源框
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_,txt,url){ hold.push('<a href="'+esc(url)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ④ [文字](http) 普通外链

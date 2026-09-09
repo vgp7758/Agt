@@ -281,7 +281,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # 外置脚本工具（tools/ 与 .agent/tools/ 的 agt_register() 声明）：register_or_replace——
     # 同名覆盖内置（用户定制覆写机制）；改脚本用 /reload tools 热加载，不需要 /restart
     from script_tools import attach_script_tools, make_hot_reload_tools
-    _stb = attach_script_tools(agent.tools)
+    _stb = attach_script_tools(agent.tools, agent=agent)
     for t in _stb:
         agent.tool_groups[t.name] = getattr(t, "group", "") or "脚本"   # 描述符 group 优先（如 wiki）
     _reg(make_hot_reload_tools(agent), "脚本")   # reload_hot：钩子工作流/Agent 改插件后热生效

@@ -196,12 +196,16 @@ def default_dirs() -> list:
     return [pkg, WORKSPACE / "tools", WORKSPACE / ".agent" / "tools"]
 
 
-def scan_script_tools(dirs=None) -> Toolbox:
-    """扫描目录 → Toolbox（同名后扫覆盖先扫；坏脚本跳过并记 _scan_failed，不炸主程序）。"""
+def scan_script_tools(dirs=None, agent=None) -> Toolbox:
+    """扫描目录 → Toolbox（同名后扫覆盖先扫；坏脚本跳过并记 _scan_failed，不炸主程序）。
+    agent：主 Agent 引用（explore 等需要会话/toollog/exec 闭包的工具用；None=无 agent 环境
+    如纯工具箱构建/测试，此类工具自行降级不注册——spec s_54a1eb86）。"""
     if dirs is None:
         dirs = default_dirs()
     from real_tools import WORKSPACE as _WS
     ctx = {"cwd": str(_WS), "version": 1}   # 通用上下文：workspace 绝对路径等（签名兼容传入）
+    if agent is not None:
+        ctx["agent"] = agent   # 需要引擎状态的工厂工具（explore 嫁接：session/toollog/_exec_tool）
     tb = Toolbox()
     failed = []
     for d in dirs:
@@ -234,10 +238,11 @@ def scan_script_tools(dirs=None) -> Toolbox:
     return tb
 
 
-def attach_script_tools(tb: Toolbox, dirs=None) -> Toolbox:
+def attach_script_tools(tb: Toolbox, dirs=None, agent=None) -> Toolbox:
     """把脚本工具注册进 tb（同名覆盖——后注册胜出即外置覆盖内置）；记录名字供 reload 摘除。
-    返回扫描出的脚本工具 Toolbox（含 _scan_failed 供命令输出）。"""
-    stb = scan_script_tools(dirs)
+    agent：主 Agent 引用（透传 scan_script_tools——explore 等工厂工具需要）。返回扫描出的
+    脚本工具 Toolbox（含 _scan_failed 供命令输出）。"""
+    stb = scan_script_tools(dirs, agent=agent)
     for t in stb:
         tb.register_or_replace(t)
     _LAST["names"] = {t.name for t in stb}

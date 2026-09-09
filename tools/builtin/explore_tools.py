@@ -31,6 +31,12 @@ _SYSTEM = (
 
 _RESULT_CAP = 6000   # 单次工具结果进探索上下文/嫁接记录的字符上限（防投影膨胀）
 
+# 嫁接锁（用户裁定 2026-09-09：常规用法是同一步并行多个 explore 各查不同目标）——
+# 探索循环本身并行，只有 _seed_steps 嫁接段串行化：session.add_step→_emit_event
+# 追加写 events.jsonl 无锁，并发嫁接可能行交错；锁内做 seed 逐条落盘，开销可忽略。
+import threading
+_SEED_LOCK = threading.Lock()
+
 
 def _make_explore(agent):
     def explore(goal: str, max_steps: int = 8, budget_seconds: int = 120, model: str = "") -> str:
@@ -38,6 +44,7 @@ def _make_explore(agent):
         便宜且不占你的步数），探索的原始工具调用记录自动嫁接进本轮上下文（可追溯），你直接拿摘要继续工作。
         何时用：需要 3 步以上搜索/阅读才能定位的探索（如"找到 X 功能的实现和调用链"）；
         单次 grep 能命中时直接自己调更省。返回=结构化摘要（不衰减）；嫁接步允许轮内衰减。
+        并行用法：在【同一步】发起多个 explore（各查不同目标）即多路并行探索——比逐个串行调用快得多。
 
         goal: 探索目标——尽量具体（要找什么、在哪个模块、关注哪些方面）
         max_steps: 最多工具调用轮数（默认 8，上限 20）
@@ -114,7 +121,8 @@ def _make_explore(agent):
         grafted = 0
         if seeds:
             try:
-                agent._seed_steps(seeds)   # toollog + Step + add_step（自动落 events.jsonl）；此时 explore 调用步尚未归档 → 嫁接步自然在前
+                with _SEED_LOCK:   # 并行 explore 时串行化嫁接段（events.jsonl 追加写无锁）
+                    agent._seed_steps(seeds)   # toollog + Step + add_step（自动落 events.jsonl）；此时 explore 调用步尚未归档 → 嫁接步自然在前
                 grafted = len(seeds)
             except Exception as e:
                 grafted = f"失败:{type(e).__name__}"

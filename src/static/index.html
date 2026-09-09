@@ -2836,7 +2836,7 @@ function onWSMessage(ev){
   // 事件按 agent_id 过滤（双保险——后端已按各客户端 target 分发，这里再挡一层防漏）：
   // 事件属于其它 Agent 且本端不在与其交互 → 忽略。
   // 特例放行：本端在主视图（_main_）时放行其它 Agent 的 answer——同步工具型子 Agent
-  // （explore_subagent 等）的回应要进本视图的 answer 分页（见后端 _broadcast 的同款特判）
+  // 的回应要进本视图的 answer 分页（见后端 _broadcast 的同款特判）
   if(m.agent_id && m.agent_id !== (myTarget||'_main_')){
     const _am = (myTarget||'_main_') === '_main_' && (m.type==='answer'||m.type==='wrap_answer');
     if(!_am) return;

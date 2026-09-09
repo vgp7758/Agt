@@ -460,33 +460,12 @@ def make_spec_tools(agent) -> list:
             out += f"\n（替代了被返工的 spec {spec['replaces']}）"
         return out
 
-    def explore_subagent(name: str, goal: str, model: str = "") -> str:
-        """派一个一次性【探索子 Agent】去读/摸清某个模块或文件，返回发现报告。
-        name: 子 Agent 角色（如 'reader'/'arch'）；goal: 探索目标（如 '摸清 src/session.py 的上下文注入点'）。
-        在【同一步】里发起多个 explore_subagent 即可并行探索不同模块，各自返回报告，
-        汇总后喂给你生成更准的施工方案（create_spec）。
-        model: 指定模型，留空=用当前模型。本质是 agent_prompt 的语义化包装（探索专用）。"""
-        from multiagent import SubAgent
-        import config
-        system = (f"你是探索子 Agent「{name}」，专注【只读探索】。目标：{goal}\n"
-                  "用 read_file/grep/list_dir/find_function 等只读工具摸清代码结构，"
-                  "返回结构化发现报告：关键文件、关键函数/类、注入点/集成点、潜在坑。不要改任何文件。")
-        model_name = model or getattr(agent, "utility_model", "") or agent.model_name
-        if model_name not in config.MODELS:
-            model_name = agent.model_name
-        _READONLY = {"read_file", "grep", "list_dir", "find_function", "get_tool_detail",
-                     "list_tool_logs", "recall", "web_search", "open_url"}
-        from tools import Toolbox
-        chosen = [t for t in agent.tools if t.name in _READONLY]
-        try:
-            sub = SubAgent(name, model_name, system, Toolbox(*chosen), on_event=agent.on_event,
-                           max_steps=12, token_budget=0)   # 预算解除（与 agent_prompt 路径对齐；步数 12 保留——探索是有界任务）
-            return sub.prompt(f"探索目标：{goal}\n返回结构化发现报告。")
-        except Exception as e:
-            return f"[探索子 Agent 调用出错] {type(e).__name__}: {e}"
+    # explore_subagent 已删（用户裁定 2026-09-09）：被 tools/builtin/explore_tools.py 的
+    # explore 工具取代——小上下文 react 探索 + Step 嫁接回主上下文，比一次性子 Agent
+    # 更轻（无独立实例开销、结果直接进投影）；同一步并行多个 explore 即多路并行探索。
 
     return [Tool(create_spec), Tool(commit_spec),
-            Tool(regenerate_spec), Tool(list_specs), Tool(recall_spec), Tool(explore_subagent)]
+            Tool(regenerate_spec), Tool(list_specs), Tool(recall_spec)]
 
 def resolve_spec_decision(agent, decision: str, feedback: str = ""):
     """用户对 commit_spec 的阻塞等待做出裁定。由 server.py（WS action）或 chat.py（CLI 命令）调用。

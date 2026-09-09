@@ -130,7 +130,7 @@ TOOL_BRIEFS = {
     "agent_notify": "向另一 Agent 插话，消息进它的队列",
     "agent_query_events": "看另一个 Agent 最近在干嘛",
     "agent_query_tool_detail": "查另一个 Agent 某次工具调用的完整详情",
-    "explore_subagent": "派一次性探索子 Agent 去摸清一个模块",
+    "explore": "外置探索：小上下文 react 摸清代码，结果嫁接回上下文",
     "hook_write": "钩子工作流写回副作用（如 set_recap）",
 
     # ===== 技能 =====

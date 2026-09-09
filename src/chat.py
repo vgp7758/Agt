@@ -82,7 +82,7 @@ SYSTEM = build_system(
         "insert(按行号插入) / delete(按行号删行) / move(搬代码块) / grep(内容搜索) / "
         "list_dir(workspace 内) / web_search / open_url(抓网页提取正文) / run_shell(慎用)。"
         "其它工具由 MCP server 动态提供，名字带 __mcp__ 前缀（按描述选用）。\n"
-        "复杂任务（涉及多处修改/跨文件/需要先探索）建议先用 explore_subagent 派探索子 Agent 摸清相关模块，"
+        "复杂任务（涉及多处修改/跨文件/需要先探索）建议先用 explore 外置探索摸清相关模块（同一步可并行多个 explore 各查不同目标），"
         "再用 create_spec(title, steps, design) 制定施工方案（每步含 file/action/anchor/content/rationale），"
         "然后用 commit_spec 提交供用户批阅；用户「通过」则自动建 plan 开始施工，「返工」则据反馈 regenerate_spec 重新生成。\n"
         "简单任务直接用 create_plan(steps) 拆成步骤清单，每完成一步用 update_plan(step, status) 标记进度。\n"

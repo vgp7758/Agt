@@ -115,7 +115,7 @@ def _broadcast(ev: dict):
     aid = str(ev.get("agent_id") or "")
     for c in _clients:
         if aid and c.get("target", "_main_") != aid:
-            # answer 特例：同步工具型子 Agent（explore_subagent 等）的回应需要进主视图的
+            # answer 特例：同步工具型子 Agent 的回应需要进主视图的
             # answer 分页——主 Agent 页签（target=_main_）额外放行其它 Agent 的 answer
             if not (aid != "_main_" and ev.get("type") in ("answer", "wrap_answer")
                     and c.get("target", "_main_") == "_main_"):

@@ -246,7 +246,7 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 |---|---|---|
 | **flatkey** | 77 → **23** | 重灾区：ds v3 全系、gemini 2.5 全系 + 3.0~3.7 中间代 + lite + gemma、glm 4.7/5/5.1/5.2、gpt 4o/4.1 + 5.x 中间代 + fk-cx 变体、kimi k2.5/2.6、mm m2.5、qwen 3.6/3.7 + 27b/35b/plus 快照 |
 | **orcarouter** | 25 → **17** | gpt-4o-mini、deepseek-chat/reasoner（v3 时代命名）、kimi-k2.6、minimax-m2.7、qwen3.6-flash、gemini-2.5-pro |
-| **openrouter** | 18 → **17** | glm-5.2-free（5.3 已出，留 m3-free 当前代免费档） |
+| **openrouter** | 18 → **17** | glm-5.2-free（5.3 已出，当时以为 m3-free 是当前代免费档——随后实测 m3-free 也下架换付费 or-minimax-m3，见 [下节](#补记openrouter-free-档现状实测m3-free-下架换付费-or-minimax-m32026-09-10--二轮)） |
 | modelscope / z.ai / deepseek-official / siliconflow | 6/2/2/2 不动 | 之前修过 / 本来就精简 |
 
 **保留原则**（用户裁定 2026-09-10）：**每系列最新代表 2~4**——claude 留 fable-5 / sonnet-5★ / haiku-4.5 / opus-4-8 / opus-4-5★；gemini 留 3.8-flash / flash-latest / 3.1-pro★ / pro-latest；gpt 留 6-astra / 5.6-sol★ / 5.5 / 5.4-mini★（旗舰/主力/便宜三档 + 最新旗舰）；**已配置必留**（下拉框合并显示不受影响）；**starred 全保留**——唯一豁免 `fk-g-2.5-pro`（gemini 2.5 整代过时且 3.1-pro★ 已在列）。
@@ -254,6 +254,34 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 **验证**：已配置合并 6/6 ✓ / 24 个旧代条目抽查清零 ✓ / starred 13/13 ✓ / 总数 69。
 
 **生效**：preset 现读（`_load_preset` 无缓存）——**刷新页面即生效**（flatkey 组 77 占位 → 23）；已安装实例 `/update-assets apply` 拉新 preset。
+
+### 补记：openrouter `:free` 档现状实测——m3-free 下架换付费 or-minimax-m3（2026-09-10 · 二轮）
+
+**用户提问（2026-09-10）**：openrouter 上 glm-5.2-free 有什么限制？minimax-m3 是视觉模型吗？主 Agent 拉 OpenRouter 官方 API 全量实测（**430 个模型**）应答，顺手修正 preset（commit 584ef3b）。
+
+**`glm-5.2:free` 已下架——且是普遍现象**：全站 `:free` 变体只剩 **18 个**，全是小厂模型（nemotron / gemma-4 / lfm / inkling 之类）——**z-ai 系 glm 一个 free 都没有了**，minimax / deepseek 的免费档也全没了。所以上节筛选删 glm-5.2-free 不只是「旧」，是「下架了、配置也调不通」。
+
+**:free 档的固有代价**（免费变体的通用限制，选型前须知）：
+
+| 限制 | 说明 |
+|---|---|
+| 速率 | 未充值账号 ~50 请求/天；充值 ≥$10 的账号 ~1000 请求/天（需保持余额） |
+| 上下文 | 免费变体常被截断到比原版短得多的 ctx |
+| 隐私 | 提示可能被记录/用于训练（免费档无数据承诺） |
+| 稳定性 | **随时上下架**（本轮两连就是活例子） |
+
+当前 OpenRouter 仅存的知名旗舰级免费档：`google/gemma-4-31b-it:free`（列表里唯一）。
+
+**minimax-m3 = 全模态（用户猜测实测确认）**：`input_modalities: ['text','image','video']`——不止图片，还吃视频输入；`context 1,048,576`（1M ctx）、`$0.3/M prompt tokens`。MiniMax M2.x 全系纯文本，**m3 是他们家的多模态旗舰**。
+
+**preset 变更**（src/assets/models.preset.json，openrouter 组；模型数 17 → 17）：
+
+- 删 `or-minimax-m3-free`（实测 430 模型无此 id，免费变体已下架）
+- 新增 `or-minimax-m3`：`{"model": "minimax/minimax-m3", "thinking": true, "vision": true, "desc": "MiniMax M3 多模态旗舰（text/image/video 输入，1M ctx，$0.3/M 超值）"}`——**补 `vision: true` 标记**后，onboarding 落地它会进视觉模型组（`vision: true` 的 entry 在 read_file 读图时 `<img>` 转 image_url）
+
+**顺带结论：z.ai 现状**——glm-5.3 / 5.3-flash 付费双档在架（1.3M ctx）、glm-5.2 降到 $0.28/M；z.ai 官方通道（glm-official 直连）与 openrouter 差价不大，继续用官方直连更稳。
+
+**生效**：preset 现读（`_load_preset` 无缓存）——刷新即见，无需 /restart；已安装实例 `/update-assets apply`。
 
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 

@@ -556,3 +556,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **复制内容改 markdown 原文**：用户问询后定案——answer 复制应得原文（表格 `|` 分隔、代码块带围栏，可直接再编辑/投喂）；`renderAnswerPages` 把当前页原文挂 `__md_text` expando，复制优先取它；spec/问卷/中断卡片等重写点置 `null` 失配即回退 innerText（克隆排除法）；多 Agent 分页复制当前激活页、历史轮读档自动覆盖
 - 纯前端改动（src/static/index.html），Ctrl+F5 生效
 
+## 快速事实增补（2026-09-09 · 五 · explore 外置探索工具——小上下文 react 探索 + 步嫁接回主循环）
+
+- **explore 外置探索工具**（spec s_54a1eb86，2026-09-09，commit `4bcd144`，用户提案）：纯探索过程（多轮 grep/read_file 定位代码）对历史会话依赖低——新外置件 `tools/builtin/explore_tools.py` 在小上下文 react 循环里完成（默认 utility 模型，system(探索者人设)+user(goal)，只读白名单 grep/read_file/glob_files/find_function/list_dir，单结果 6000 字截断，终止=模型收口/步数/墙钟预算），**工具调用嫁接回主 agent steps**（复用 `agent._seed_steps`：toollog.record + Step + add_step——events.jsonl/读档重放/步距衰减全走既有管线，零新落盘代码；reasoning 标注 `[外置探索]`，随轮内分组自然衰减可追溯），主 Agent 只拿结构化摘要（不衰减）继续干活
+- **接线**：`scan_script_tools(dirs=None, agent=None)` / `attach_script_tools(tb, dirs=None, agent=None)` 把主 Agent 引用注入 ctx（`ctx["agent"]`）——无 agent 环境（纯工具箱构建/测试）本组工具**自行降级不注册**，不炸主程序；chat.py 装配线传 `agent=agent`；播种源 `src/assets/tools_builtin/explore_tools.py` 已同步（随包打包，下版发布自带）；`/reload tools` 即可注册（详见 [spec-tools · explore 第三个同名者](features/spec-tools.md#explore外置探索工具2026-09-09第三个同名者)、[tool-externalization · 外置件清单](features/tool-externalization.md)）
+- **e2e 四场景全绿**（test/test_explore_tool.py，FakeLLM + 临时目录真 Session，`_seed_steps` 同款逻辑 5 行等价实现）：①嫁接 2 步（grep/read_file）落盘——events.jsonl 4 行 step 事件 2 条、`_replay_events` 读档重放重建 Turn>Step>ToolCall 树 ✅ ②超时降级（max_steps=1 强制截断）——`[外置探索·步数上限]` 嫁接 1 步 + 摘要段含「部分」✅ ③edit 白名单拒绝——schema 不含（第一道闸）+ 执行白名单（第二道闸）双拒 ✅ ④recent-file 语义澄清——`_FILE_SNAP_TOOLS` 只挂写工具，探索全只读不进 rf_map，与主循环一致（rf 管「本轮变更文件速览」，原担心的断链不成立）
+

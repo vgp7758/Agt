@@ -6,8 +6,8 @@
 
 | 位置 | 角色 |
 |------|------|
-| `tools/builtin/*.py` | 工具源文件（开发处，现 12 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/**cache**） |
-| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 11 个——kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；team_tools.py 2026-09-02 已写源文件、随包副本仍待同步；cache_tools.py 2026-09-02 新建**随包副本已同步**） |
+| `tools/builtin/*.py` | 工具源文件（开发处，现 13 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/cache/**explore**） |
+| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 12 个——kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；team_tools.py 2026-09-02 已写源文件、随包副本仍待同步；cache_tools.py 2026-09-02 新建**随包副本已同步**；explore_tools.py 2026-09-09 新建**随包副本已同步**） |
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**。
 
@@ -37,11 +37,13 @@ def agt_register(ctx=None):
 - 以后通用依赖状态（session 目录、repos 根等）都往 ctx 加字段，外置件按需声明接收（`version` 留协议演进）
 - ⚠️ ctx 只作用于**扫描器加载的那个模块实例**（`_import_fresh`）；别处再直接 `import wiki_tools` 拿到的是新实例，仍是 import 时的 `Path.cwd()`。验证时以扫描注册出的**工具行为**为准（实测：os.chdir 到临时目录后扫描，wiki_tree 仍返回真 workspace 的 346 行树）——别拿直连 import 的模块状态断言（开发期两次误报皆源于此）
 
+**ctx["agent"] 注入（2026-09-09，commit 4bcd144）**：需要引擎状态（会话/toollog/exec 闭包、嫁接 `_seed_steps`）的**工厂工具**经 agent 引用外置——`scan_script_tools(dirs=None, agent=None)` / `attach_script_tools(tb, dirs=None, agent=None)` 透传主 Agent 引用进 ctx（`ctx["agent"] = agent`，chat.py 装配线 `attach_script_tools(agent.tools, agent=agent)`）。外置件按需声明接收（`ctx.get("agent")`），**无 agent 环境（纯工具箱构建/测试）时自行降级不注册，不炸主程序**。首个消费端 = explore_tools.py（explore 嫁接 `_seed_steps`），见 [spec-tools · explore](spec-tools.md)。
+
 ## 热加载
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。
 
-## 外置件清单（12 文件；真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组）
+## 外置件清单（13 文件；真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组 + 探索组）
 
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
@@ -56,8 +58,9 @@ def agt_register(ctx=None):
 | `download_tools.py` | list_downloadable / download_asset | 纯函数（调框架实现） | 资产目录自写自读；框架 `src/download.py` 保留 `list_assets`/`download_asset` 供 `/download` 命令（commands.py）；`agt_register(ctx)` 覆盖 `_WORKSPACE` |
 | `team_tools.py`（新，2026-09-02） | team_up / team_status | 纯函数（编排引擎 remote_* 子进程/HTTP） | 团队管理：按清单启动成员 agt-web → 等端口就绪 → remote_connect 组网 → 恢复指定 session；dry_run 默认先行 + team_status 总览（POST /api/status 逐一探测）；⚠️ 随包副本待同步，见 [team-tools](team-tools.md) |
 | `cache_tools.py`（新，2026-09-02，commit 8f9a6c6） | cache_breakpoint | 纯函数整体外置（只读分析存档） | **缓存断点分析**：对比两次连续 LLM 调用的投影 dump（`projections/t{N}_s{M}_{ts}.json`），定位缓存前缀断裂处——段位（SYSTEM/折叠摘要/历史档位/当前轮步骤）+ 消息索引 + 字符位置 + 前后对比窗口；agt_register **无参**（`Path.home()` 全局扫最近活跃 session，无需 ctx）；随包副本已同步；见 [cache-tools](cache-tools.md) |
+| `explore_tools.py`（新，2026-09-09，commit 4bcd144，spec s_54a1eb86） | explore | 工厂工具外置（**agent 注入 ctx**） | **工作流式 react 探索**：小上下文循环（只读白名单 grep/read_file/glob_files/find_function/list_dir）定位代码，工具调用嫁接回主 agent steps（`agent._seed_steps`：toollog.record + Step + add_step，events.jsonl/读档重放/步距衰减走既有管线，reasoning 标注 `[外置探索]`），主 agent 只拿结构化摘要；单结果 6000 字截断；终止=模型收口/步数/墙钟预算；无 agent 引用降级不注册；随包副本已同步；e2e 四场景（嫁接落盘/读档重放/超时降级/白名单双闸）；见 [spec-tools · explore](spec-tools.md) |
 
-工厂清理：`make_ltm_tools` / `make_download_tools` 已删，chat.py 装配线同步清理（ltm/download 改由 attach_script_tools 扫描注册）。
+工厂清理：`make_ltm_tools` / `make_download_tools` 已删，chat.py 装配线同步清理（ltm/download 改由 attach_script_tools 扫描注册）。explore_tools 的 agent 引用走 attach_script_tools 透传（`ctx["agent"]`），chat.py 装配线加 `agent=agent`。
 
 ## 与节点插件化对照
 
@@ -73,8 +76,9 @@ def agt_register(ctx=None):
 
 1. **真限界上下文 4/4 全部外置 ✅**：wiki（第二批）/ rag（第三批）/ ltm + download（第四批，commit fd06c48）——文件由工具组自己写自己读，数据主权在本组；此后这批外置件的改动都走 `/reload tools` 秒级热加载
 2. **纯函数批 ✅（第五批，2026-08 commit 17312eb）**：real_tools 再外置 8 工具（length/to_uppercase/to_lowercase → str_tools；kv_cache_read/write → kv_tools，`_KV_CACHE` 状态随外置件走；diff_lines → diff_tools 算法副本；cosine_sim/emb_probe 本体迁 rag.py、注册并入 rag_tools）——**LIGHT_TOOLS 13→5，剩余全是框架状态型**（ReAct 原语三件套 `_WF_CTX` 注入 + dir_outline/concat_files `_resolve` 沙箱），判别标准全量过筛收官
-3. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
-4. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
+3. **agent 注入型外置 ✅（第六批，2026-09-09 commit 4bcd144）**：explore_tools.py——需要引擎状态（会话/toollog/exec 闭包、嫁接 `_seed_steps`）的工厂工具经 `ctx["agent"]` 注入外置，无 agent 环境降级不注册（见 [spec-tools · explore](spec-tools.md)）
+4. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
+5. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
 
 ## 相关页面
 

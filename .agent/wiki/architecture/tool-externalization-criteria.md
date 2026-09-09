@@ -82,19 +82,20 @@ ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemo
 
 ## 双模式先例（代码库里已有三个）
 
-`format_team(session_dir=...)` 磁盘兜底、`agent_query_events` lazy-load `Session.load`、`_restore_subagents` 扫 `agents/` 目录——**有 agent 走活视图，没有走磁盘约定**。外置工具可继承此模式（描述符 make / make_standalone 双工厂）。
+`format_team(session_dir=...)` 磁盘兜底、`agent_query_events` lazy-load `Session.load`、`_restore_subagents` 扫 `agents/` 目录——**有 agent 走活视图，没有走磁盘约定**。外置工具可继承此模式（描述符 make / make_standalone 双工厂）。**2026-09-09 explore_tools.py 落地为外置形态**（迁移进度 3）：有 agent（`ctx["agent"]`）走活视图嫁接 `_seed_steps`，无 agent 降级不注册——「有 agent 走活视图、没有走降级」的实锤先例。
 
 ## 迁移进度（判别标准驱动；真限界上下文四组 + 纯函数批双收官）
 
 1. wiki 六件套 ✅ + rag ✅ + ltm 五件套 ✅ + download ✅（第四批 commit fd06c48 收官）——数据主权本来就在工具组；**此后这四组的改动走 `/reload tools` 秒级热加载**
 2. **纯函数批 ✅（第五批，2026-08 commit 17312eb）**：real_tools LIGHT_TOOLS 再外置 8 工具（见上节）——**LIGHT_TOOLS 13→5，剩余全是框架状态型**，判别标准对 real_tools 全量过筛收官
-3. factory kind 机制（D 类描述热改收益仍在：工具 docstring 就是 LLM 看的 schema 描述）
-4. plan/spec CRUD 半边
-5. memory_tools/toollog **不迁**（判别标准下从旧名单划掉）
+3. **agent 注入型外置 ✅（第六批，2026-09-09 commit 4bcd144，spec s_54a1eb86）**：explore_tools.py——需要引擎状态（会话/toollog/exec 闭包、嫁接 `_seed_steps`）的**工厂工具**经 `ctx["agent"]` 注入外置（`scan_script_tools(dirs, agent=None)` / `attach_script_tools(tb, dirs, agent=None)` 透传主 Agent 引用）；无 agent 环境（纯工具箱构建/测试）自行降级不注册，不炸主程序——「双模式先例」的外置落地形态（有 agent 走活视图、没有走降级）。详见 [spec-tools · explore](../features/spec-tools.md#explore外置探索工具2026-09-09第三个同名者)
+4. factory kind 机制（D 类描述热改收益仍在：工具 docstring 就是 LLM 看的 schema 描述）
+5. plan/spec CRUD 半边
+6. memory_tools/toollog **不迁**（判别标准下从旧名单划掉）
 
 ## 相关页面
 
-- features/tool-externalization.md（外置体系：目录/装配/ctx 注入/热加载/**外置件 10 文件清单**）
+- features/tool-externalization.md（外置体系：目录/装配/ctx 注入/热加载/**外置件 13 文件清单**）
 - features/rag.md（rag 外置混合形态：注册外置 + 实现留框架）
 - features/longterm-memory.md（ltm 外置 + ensure_ltm 共享单例）
 - features/glob-files.md（外置首例演示：纯函数整体外置）

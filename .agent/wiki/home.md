@@ -566,3 +566,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 `/reload tools` 摘 46 添 46（比启动 47 少 1，explore 被静默丢弃无报错）：`reload_script_tools` 重扫时**漏传 agent** → ctx 无 agent → explore 的 agt_register 走「纯工具箱环境降级」分支不注册。修复一行：`attach_script_tools(agent.tools, dirs=dirs, agent=agent)`（commit 371db5e）。**教训：agent 注入型外置件，启动 / reload / 工具箱构建所有装配入口必须同参透传 agent——降级分支安静，漏传即静默丢工具。**详见 [tool-externalization · ctx agent 注入](features/tool-externalization.md) 与 [spec-tools · explore](features/spec-tools.md)。
 
+## 快速事实增补（2026-09-09 · 七 · explore_subagent 删除——探索职责并入 explore 外置，同一步并行多路）
+
+- **explore_subagent 删除 + 并行 explore 落地（2026-09-09，用户裁定，commit ce6de5f）**：用户观察「explore_subagent 从来没被调用过，多余；更常规的操作是并行调用多个 explore」→ 删除六处：`src/spec_tools.py` 函数 + `Tool(explore_subagent)` 注册（spec 工具集回归五件套 create/commit/regenerate/list/recall_spec，留注释说明被 explore 取代）；SYSTEM 引导句两处（chat.py + main.yml 播种源）改「先 explore 外置探索摸清相关模块（同一步可并行多个 explore 各查不同目标），再用 create_spec 制定施工方案」；tool_briefs 换 explore 一句话简介；server.py/index.html 注释示例措辞同步（answer 分页特例逻辑保留，继续服务 update_wiki 等同步子 Agent）。**并行用法配套**：explore_tools.py 新增 `_SEED_LOCK`——探索循环本身并行，仅 `_seed_steps` 嫁接段串行化（events.jsonl 追加写无锁、并发嫁接可能行交错；锁内逐条落盘开销可忽略）；docstring 补「同一步多个 explore 各查不同目标 = 多路并行探索」。验证：4 并行 explore → 嫁接恰 4 步、events.jsonl 无交错（详见 [spec 工具集](features/spec-tools.md)）
+

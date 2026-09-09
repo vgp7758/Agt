@@ -285,15 +285,15 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气泡里混入子 Agent 回应和主 Agent answer，互相覆盖。
 
 ```
-根因链（spec_tools.py L482）
-  explore_subagent 构造 SubAgent 时传 on_event=agent.on_event
+根因链（当年 spec_tools.py L482——explore_subagent 构造 SubAgent 时传 on_event=agent.on_event，
+       该工具已于 2026-09-09 删除（commit ce6de5f），on_event=agent.on_event 的同步子 Agent 形态仍存）
   → 同步子 Agent 的 answer 事件直接流入主事件流
   → 前端 finishAnswer 写当前轮 answerEl → 与主 answer 覆盖混排
 ```
 
-**范围**：仅**同步调用**的子 Agent（explore_subagent / update_wiki / 早期 wait 场景）——主 Agent 等它工具结果期间其 answer 先到。异步 `agent_prompt` 路径 on_event=None 本就不串——answer 走 inbox → 主 Agent 新一轮（消费机制见上节）。
+**范围**：仅**同步调用**的子 Agent（update_wiki 等仍存；explore_subagent 已删，见 [spec 工具集](../features/spec-tools.md)）——主 Agent 等它工具结果期间其 answer 先到。异步 `agent_prompt` 路径 on_event=None 本就不串——answer 走 inbox → 主 Agent 新一轮（消费机制见上节）。
 
-> **身份澄清（2026-08，commit eafed25）**：explore_subagent 是 `src/spec_tools.py` 里的**同步工具**（spec 前置探索：制定施工方案前并行派 N 个摸不同模块，产出喂 create_spec；不注册 registry、硬编码只读白名单），与 `.agent/agents/explorer.md` 的 explorer 声明式子 Agent 是**两回事**——对照表见 [spec 工具集](../features/spec-tools.md)。同 commit 顺带修复其残留的 `token_budget=20000`（早期「解除子 Agent 预算」改造漏掉的独立构造路径）→ 对齐为 0，`max_steps=12` 保留。
+> **身份澄清（2026-08，commit eafed25，存档）**：explore_subagent 曾是 `src/spec_tools.py` 里的**同步工具**（spec 前置探索：制定施工方案前并行派 N 个摸不同模块，产出喂 create_spec；不注册 registry、硬编码只读白名单 9 工具），与 `.agent/agents/explorer.md` 的 explorer 声明式子 Agent 是**两回事**——对照表见 [spec 工具集](../features/spec-tools.md)。其残留 `token_budget=20000`（早期「解除子 Agent 预算」改造漏掉的独立构造路径）曾对齐为 0、`max_steps=12` 保留；**2026-09-09 用户裁定整体删除**（从未被调用；探索职责由 explore 外置工具接管，见 [spec 工具集 · 探索入口演进](../features/spec-tools.md#探索入口演进explorer--explore_subagent--explore2026-09-09-收敛为二)）。
 
 ### 修复
 

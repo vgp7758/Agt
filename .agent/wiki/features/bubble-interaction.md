@@ -304,14 +304,14 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 现象：同一轮 answer 气泡里混入子 Agent 的回应消息和主 Agent 的 answer，互相覆盖混排。
 
 ```
-根因链（spec_tools.py L482）
-  explore_subagent 构造 SubAgent 时传 on_event=agent.on_event
+根因链（当年 spec_tools.py L482——explore_subagent 构造 SubAgent 时传 on_event=agent.on_event，
+       该工具 2026-09-09 已删（commit ce6de5f），on_event=agent.on_event 的同步子 Agent 形态仍存）
   → 子 Agent 的 answer 事件（type="answer"）直接流入主事件流
   → 前端 finishAnswer 写入当前轮 answerEl
   → 与主 Agent 的 answer 互相覆盖 ← 串台
 ```
 
-**范围界定**：只有**同步调用**的子 Agent（explore_subagent / update_wiki）有此问题——主 Agent 正在等它的工具结果时，它的 answer 先到，写进了同一个气泡。异步 `agent_prompt` 路径 on_event=None 本就不串——其 answer 走 inbox → 主 Agent 新一轮处理（见 [多 Agent 体系](../architecture/multi-agent.md)）。
+**范围界定**：只有**同步调用**的子 Agent（update_wiki 等仍存；explore_subagent 已于 2026-09-09 删除，探索前置改走外置 explore——见 [spec 工具集](spec-tools.md)）有此问题——主 Agent 正在等它的工具结果时，它的 answer 先到，写进了同一个气泡。异步 `agent_prompt` 路径 on_event=None 本就不串——其 answer 走 inbox → 主 Agent 新一轮处理（见 [多 Agent 体系](../architecture/multi-agent.md)）。
 
 ### 修复：事件统一打 agent_id（后端一处改动全覆盖）
 

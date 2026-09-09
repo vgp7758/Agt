@@ -25,7 +25,7 @@
 - `current_history` / `expand_history`：按客户端 `target` 取对应 session——页签 A 在子 Agent 视图展开历史时不会拿到主 session 的轮次；重连/刷新后前端 sessionStorage 记住的 target 先校验存在性；`running` 目标曾退回 `_main_`「防卡忙实例」——**2026-08-30（commit d69bd8e）起放行**，busy 页面恰是观测价值最大的时刻（见下节 URL 路由的 busy 放行小节）
 - `load_session` 广播历史：带 `agent_id="_main_"`（`_broadcast_history`）——其它页签正与子 Agent 交互时不被主 session 历史冲掉视图
 
-**answer 特例**：同步工具型子 Agent（explore_subagent / update_wiki）的回应**额外放行给主视图**——主 Agent 正在等其工具结果（保住 answer 分页，见 [气泡交互](../features/bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）；反向：子 Agent 视图不收主 Agent 的 answer。
+**answer 特例**：同步工具型子 Agent（update_wiki 等仍存；explore_subagent 已于 2026-09-09 删除，见 [spec 工具集](spec-tools.md)）的回应**额外放行给主视图**——主 Agent 正在等其工具结果（保住 answer 分页，见 [气泡交互](../features/bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）；反向：子 Agent 视图不收主 Agent 的 answer。
 
 | 场景 | 行为 |
 |---|---|

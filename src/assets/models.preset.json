@@ -130,11 +130,6 @@
      "thinking": false,
      "desc": "融合快速版（262K 上下文）"
     },
-    "orca-fusion-mini": {
-     "model": "orcarouter/fusion-mini",
-     "thinking": false,
-     "desc": "融合轻量版（1M 上下文）"
-    },
     "orca-free": {
      "model": "orcarouter/free",
      "thinking": false,
@@ -165,30 +160,10 @@
      "thinking": false,
      "desc": "GPT-5.4 Mini 轻量"
     },
-    "orca-gpt-4o-mini": {
-     "model": "openai/gpt-4o-mini",
-     "thinking": false,
-     "desc": "GPT-4o mini 最便宜对话"
-    },
-    "orca-gemini-2.5-pro": {
-     "model": "google/gemini-2.5-pro",
-     "thinking": false,
-     "desc": "Gemini 2.5 Pro（强推理）"
-    },
     "orca-gemini-2.5-flash": {
      "model": "google/gemini-2.5-flash",
      "thinking": false,
      "desc": "Gemini 2.5 Flash（长上下文+便宜）"
-    },
-    "orca-deepseek-chat": {
-     "model": "deepseek/deepseek-chat",
-     "thinking": false,
-     "desc": "DeepSeek V4 对话"
-    },
-    "orca-deepseek-reasoner": {
-     "model": "deepseek/deepseek-reasoner",
-     "thinking": false,
-     "desc": "DeepSeek 推理（R 系列）"
     },
     "orca-deepseek-free": {
      "model": "deepseek/deepseek-v4-flash-free",
@@ -205,11 +180,6 @@
      "thinking": false,
      "desc": "通义千问 3.8 Max 旗舰"
     },
-    "orca-qwen3.6-flash": {
-     "model": "qwen/qwen3.6-flash",
-     "thinking": false,
-     "desc": "通义千问 3.6 Flash 快速"
-    },
     "orca-kimi-k3": {
      "model": "kimi/kimi-k3",
      "thinking": false,
@@ -219,24 +189,10 @@
      ],
      "desc": "月之暗面 Kimi K3 旗舰（temperature 锁 1）"
     },
-    "orca-kimi-k2.6": {
-     "model": "kimi/kimi-k2.6",
-     "thinking": false,
-     "temperature": 1,
-     "param_lock": [
-      "temperature"
-     ],
-     "desc": "Kimi K2.6（temperature 锁 1）"
-    },
     "orca-minimax-m3": {
      "model": "minimax/minimax-m3",
      "thinking": false,
      "desc": "MiniMax M3 旗舰"
-    },
-    "orca-minimax-m2.7": {
-     "model": "minimax/minimax-m2.7",
-     "thinking": false,
-     "desc": "MiniMax M2.7"
     },
     "orca-glm-5.3": {
      "model": "z-ai/glm-5.3",
@@ -280,14 +236,6 @@
      "model": "openrouter/free",
      "thinking": false,
      "desc": "免费自动路由（:free 池随机）"
-    },
-    "or-glm-5.2-free": {
-     "model": "z-ai/glm-5.2:free",
-     "thinking": false,
-     "param_omit": [
-      "enable_thinking"
-     ],
-     "desc": "GLM-5.2（免费池）"
     },
     "or-minimax-m3-free": {
      "model": "minimax/minimax-m3:free",
@@ -400,25 +348,10 @@
      "desc": "Claude Opus 4.5（旗舰推理）",
      "starred": true
     },
-    "fk-cl-opus-4-6": {
-     "model": "claude-opus-4-6",
-     "thinking": false,
-     "desc": "Claude Opus 4.6（旗舰）"
-    },
-    "fk-cl-opus-4-7": {
-     "model": "claude-opus-4-7",
-     "thinking": false,
-     "desc": "Claude Opus 4.7（旗舰）"
-    },
     "fk-cl-opus-4-8": {
      "model": "claude-opus-4-8",
      "thinking": false,
      "desc": "Claude Opus 4.8（旗舰）"
-    },
-    "fk-cl-sonnet-4-5": {
-     "model": "claude-sonnet-4-5",
-     "thinking": false,
-     "desc": "Claude Sonnet 4.5（均衡主力）"
     },
     "fk-cl-sonnet-5": {
      "model": "claude-sonnet-5",
@@ -426,41 +359,11 @@
      "desc": "Claude Sonnet 5（均衡）",
      "starred": true
     },
-    "fk-cl-sonnet-4.5": {
-     "model": "anthropic/claude-sonnet-4.5",
-     "thinking": false,
-     "desc": "Claude Sonnet 4.5（Anthropic 原厂）"
-    },
-    "fk-ds-v3": {
-     "model": "deepseek-v3",
-     "thinking": false,
-     "desc": "DeepSeek V3（经典版）"
-    },
-    "fk-ds-v3.1": {
-     "model": "deepseek-v3.1",
-     "thinking": false,
-     "desc": "DeepSeek V3.1"
-    },
-    "fk-ds-v3.2": {
-     "model": "deepseek-v3.2",
-     "thinking": false,
-     "desc": "DeepSeek V3.2"
-    },
-    "fk-ds-v3.2-thinking": {
-     "model": "deepseek-v3.2-thinking",
-     "thinking": false,
-     "desc": "DeepSeek V3.2 Thinking（推理增强）"
-    },
     "fk-ds-v4-flash": {
      "model": "deepseek-v4-flash",
      "thinking": false,
      "desc": "DeepSeek V4 Flash（限时免费）",
      "starred": true
-    },
-    "fk-ds-v4-flash-fk-hs": {
-     "model": "deepseek-v4-flash-fk-hs",
-     "thinking": false,
-     "desc": "DeepSeek V4 Flash（fk 高速通道）"
     },
     "fk-ds-v4-pro": {
      "model": "deepseek-v4-pro",
@@ -468,72 +371,11 @@
      "desc": "DeepSeek V4 Pro（旗舰）",
      "starred": true
     },
-    "fk-ds-v4-pro-0813": {
-     "model": "deepseek-v4-pro-0813",
-     "thinking": false,
-     "desc": "DeepSeek V4 Pro 0813"
-    },
-    "fk-g-2.5-flash": {
-     "model": "gemini-2.5-flash",
-     "thinking": false,
-     "desc": "Gemini 2.5 Flash（Google，快速+长上下文）"
-    },
-    "fk-g-2.5-flash-lite": {
-     "model": "gemini-2.5-flash-lite",
-     "thinking": false,
-     "desc": "Gemini 2.5 Flash Lite（更轻）"
-    },
-    "fk-g-2.5-pro": {
-     "model": "gemini-2.5-pro",
-     "thinking": false,
-     "desc": "Gemini 2.5 Pro（强推理）",
-     "starred": true
-    },
-    "fk-g-3-flash-preview": {
-     "model": "gemini-3-flash-preview",
-     "thinking": false,
-     "desc": "Gemini 3 Flash（预览）"
-    },
-    "fk-g-3.1-flash-lite": {
-     "model": "gemini-3.1-flash-lite",
-     "thinking": false,
-     "desc": "Gemini 3.1 Flash Lite"
-    },
-    "fk-g-3.1-flash-lite-preview": {
-     "model": "gemini-3.1-flash-lite-preview",
-     "thinking": false,
-     "desc": "Gemini 3.1 Flash Lite（预览）"
-    },
     "fk-g-3.1-pro-preview": {
      "model": "gemini-3.1-pro-preview",
      "thinking": false,
      "desc": "Gemini 3.1 Pro（预览，旗舰推理）",
      "starred": true
-    },
-    "fk-g-3.1-pro-preview-customtools": {
-     "model": "gemini-3.1-pro-preview-customtools",
-     "thinking": false,
-     "desc": "Gemini 3.1 Pro（预览·工具版）"
-    },
-    "fk-g-3.5-flash": {
-     "model": "gemini-3.5-flash",
-     "thinking": false,
-     "desc": "Gemini 3.5 Flash"
-    },
-    "fk-g-3.5-flash-lite": {
-     "model": "gemini-3.5-flash-lite",
-     "thinking": false,
-     "desc": "Gemini 3.5 Flash Lite"
-    },
-    "fk-g-3.6-flash": {
-     "model": "gemini-3.6-flash",
-     "thinking": false,
-     "desc": "Gemini 3.6 Flash"
-    },
-    "fk-g-3.7-flash": {
-     "model": "gemini-3.7-flash",
-     "thinking": false,
-     "desc": "Gemini 3.7 Flash"
     },
     "fk-g-3.8-flash": {
      "model": "gemini-3.8-flash",
@@ -545,45 +387,10 @@
      "thinking": false,
      "desc": "Gemini Flash（latest 滚动）"
     },
-    "fk-g-flash-lite-latest": {
-     "model": "gemini-flash-lite-latest",
-     "thinking": false,
-     "desc": "Gemini Flash Lite（latest）"
-    },
     "fk-g-pro-latest": {
      "model": "gemini-pro-latest",
      "thinking": false,
      "desc": "Gemini Pro（latest 滚动）"
-    },
-    "fk-gemma-4-26b-a4b-it": {
-     "model": "gemma-4-26b-a4b-it",
-     "thinking": false,
-     "desc": "Gemma 4 26B A4B（Google 开源）"
-    },
-    "fk-gemma-4-31b-it": {
-     "model": "gemma-4-31b-it",
-     "thinking": false,
-     "desc": "Gemma 4 31B（Google 开源）"
-    },
-    "fk-glm-4.7": {
-     "model": "glm-4.7",
-     "thinking": false,
-     "desc": "GLM-4.7（智谱）"
-    },
-    "fk-glm-5-turbo": {
-     "model": "glm-5-turbo",
-     "thinking": false,
-     "desc": "GLM-5 Turbo（快速）"
-    },
-    "fk-glm-5.1": {
-     "model": "glm-5.1",
-     "thinking": false,
-     "desc": "GLM-5.1（智谱）"
-    },
-    "fk-glm-5.2": {
-     "model": "glm-5.2",
-     "thinking": false,
-     "desc": "GLM-5.2（智谱）"
     },
     "fk-glm-5.3-flash": {
      "model": "glm-5.3-flash",
@@ -591,110 +398,22 @@
      "desc": "GLM-5.3 Flash（轻量快速）",
      "starred": true
     },
-    "fk-gpt-4.1-mini": {
-     "model": "gpt-4.1-mini",
-     "thinking": false,
-     "desc": "GPT-4.1 Mini（OpenAI 轻量）"
-    },
-    "fk-gpt-4o": {
-     "model": "gpt-4o",
-     "thinking": false,
-     "desc": "GPT-4o（经典旗舰）"
-    },
-    "fk-gpt-4o-mini": {
-     "model": "gpt-4o-mini",
-     "thinking": false,
-     "desc": "GPT-4o Mini（最便宜）"
-    },
-    "fk-gpt-5-mini": {
-     "model": "gpt-5-mini",
-     "thinking": false,
-     "desc": "GPT-5 Mini"
-    },
-    "fk-gpt-5.3-codex-spark": {
-     "model": "gpt-5.3-codex-spark",
-     "thinking": false,
-     "desc": "GPT-5.3 Codex Spark（代码）"
-    },
-    "fk-gpt-5.4": {
-     "model": "gpt-5.4",
-     "thinking": false,
-     "desc": "GPT-5.4（OpenAI）"
-    },
     "fk-gpt-5.4-mini": {
      "model": "gpt-5.4-mini",
      "thinking": false,
      "desc": "GPT-5.4 Mini",
      "starred": true
     },
-    "fk-gpt-5.4-mini-fk-cx": {
-     "model": "gpt-5.4-mini-fk-cx",
-     "thinking": false,
-     "desc": "GPT-5.4 Mini（fk 渠道）"
-    },
-    "fk-gpt-5.4-nano": {
-     "model": "gpt-5.4-nano",
-     "thinking": false,
-     "desc": "GPT-5.4 Nano（超轻量）"
-    },
     "fk-gpt-5.5": {
      "model": "gpt-5.5",
      "thinking": false,
      "desc": "GPT-5.5（旗舰）"
-    },
-    "fk-gpt-5.5-fk-cx": {
-     "model": "gpt-5.5-fk-cx",
-     "thinking": false,
-     "desc": "GPT-5.5（fk 渠道）"
-    },
-    "fk-gpt-5.5-openai-compact": {
-     "model": "gpt-5.5-openai-compact",
-     "thinking": false,
-     "desc": "GPT-5.5 OpenAI Compact"
-    },
-    "fk-gpt-5.6-luna": {
-     "model": "gpt-5.6-luna",
-     "thinking": false,
-     "desc": "GPT-5.6 Luna（OpenAI 新系）"
-    },
-    "fk-gpt-5.6-luna-fk-cx": {
-     "model": "gpt-5.6-luna-fk-cx",
-     "thinking": false,
-     "desc": "GPT-5.6 Luna（fk 渠道）"
     },
     "fk-gpt-5.6-sol": {
      "model": "gpt-5.6-sol",
      "thinking": false,
      "desc": "GPT-5.6 Sol",
      "starred": true
-    },
-    "fk-gpt-5.6-sol-fk-cx": {
-     "model": "gpt-5.6-sol-fk-cx",
-     "thinking": false,
-     "desc": "GPT-5.6 Sol（fk 渠道）"
-    },
-    "fk-gpt-5.6-terra-fk-cx": {
-     "model": "gpt-5.6-terra-fk-cx",
-     "thinking": false,
-     "desc": "GPT-5.6 Terra（fk 渠道）"
-    },
-    "fk-kimi-k2.5": {
-     "model": "kimi-k2.5",
-     "thinking": false,
-     "desc": "Kimi K2.5（月之暗面）",
-     "temperature": 1,
-     "param_lock": [
-      "temperature"
-     ]
-    },
-    "fk-kimi-k2.6": {
-     "model": "kimi-k2.6",
-     "thinking": false,
-     "desc": "Kimi K2.6（月之暗面）",
-     "temperature": 1,
-     "param_lock": [
-      "temperature"
-     ]
     },
     "fk-kimi-k3": {
      "model": "kimi-k3",
@@ -711,26 +430,11 @@
      "thinking": false,
      "desc": "Macaron V1 Coding Venti（编程）"
     },
-    "fk-mm-m2.5": {
-     "model": "minimax-m2.5",
-     "thinking": false,
-     "desc": "MiniMax M2.5"
-    },
     "fk-mm-m2.7": {
      "model": "minimax-m2.7",
      "thinking": false,
      "desc": "MiniMax M2.7",
      "starred": true
-    },
-    "fk-q35-27b": {
-     "model": "qwen3.5-27b",
-     "thinking": false,
-     "desc": "通义千问 3.5 27B"
-    },
-    "fk-q35-35b-a3b": {
-     "model": "qwen3.5-35b-a3b",
-     "thinking": false,
-     "desc": "通义千问 3.5 35B A3B（MoE 高效）"
     },
     "fk-q35-397b-a17b": {
      "model": "qwen3.5-397b-a17b",
@@ -743,36 +447,6 @@
      "thinking": false,
      "desc": "通义千问 3.5 Flash"
     },
-    "fk-q35-plus": {
-     "model": "qwen3.5-plus",
-     "thinking": false,
-     "desc": "通义千问 3.5 Plus"
-    },
-    "fk-q35-plus-2026-02-15": {
-     "model": "qwen3.5-plus-2026-02-15",
-     "thinking": false,
-     "desc": "通义千问 3.5 Plus（2026-02-15）"
-    },
-    "fk-q36-max-preview": {
-     "model": "qwen3.6-max-preview",
-     "thinking": false,
-     "desc": "通义千问 3.6 Max（预览）"
-    },
-    "fk-q36-plus": {
-     "model": "qwen3.6-plus",
-     "thinking": false,
-     "desc": "通义千问 3.6 Plus"
-    },
-    "fk-q37-max": {
-     "model": "qwen3.7-max",
-     "thinking": false,
-     "desc": "通义千问 3.7 Max"
-    },
-    "fk-q37-plus": {
-     "model": "qwen3.7-plus",
-     "thinking": false,
-     "desc": "通义千问 3.7 Plus"
-    },
     "fk-q38-max": {
      "model": "qwen3.8-max",
      "thinking": false,
@@ -784,11 +458,6 @@
      "thinking": false,
      "desc": "GLM-5.3（智谱旗舰，中转首 token 较慢 ~20s）",
      "starred": true
-    },
-    "fk-gpt-5.6-terra": {
-     "model": "gpt-5.6-terra",
-     "thinking": false,
-     "desc": "GPT-5.6 Terra（OpenAI 旗舰）"
     },
     "fk-gpt-6-astra": {
      "model": "gpt-6-astra",

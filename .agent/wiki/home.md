@@ -570,3 +570,14 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **explore_subagent 删除 + 并行 explore 落地（2026-09-09，用户裁定，commit ce6de5f）**：用户观察「explore_subagent 从来没被调用过，多余；更常规的操作是并行调用多个 explore」→ 删除六处：`src/spec_tools.py` 函数 + `Tool(explore_subagent)` 注册（spec 工具集回归五件套 create/commit/regenerate/list/recall_spec，留注释说明被 explore 取代）；SYSTEM 引导句两处（chat.py + main.yml 播种源）改「先 explore 外置探索摸清相关模块（同一步可并行多个 explore 各查不同目标），再用 create_spec 制定施工方案」；tool_briefs 换 explore 一句话简介；server.py/index.html 注释示例措辞同步（answer 分页特例逻辑保留，继续服务 update_wiki 等同步子 Agent）。**并行用法配套**：explore_tools.py 新增 `_SEED_LOCK`——探索循环本身并行，仅 `_seed_steps` 嫁接段串行化（events.jsonl 追加写无锁、并发嫁接可能行交错；锁内逐条落盘开销可忽略）；docstring 补「同一步多个 explore 各查不同目标 = 多路并行探索」。验证：4 并行 explore → 嫁接恰 4 步、events.jsonl 无交错（详见 [spec 工具集](features/spec-tools.md)）
 
+## 快速事实增补（2026-09-10 · 一 · explore 文件树预注入——免 list_dir 开局）
+
+- **explore system 尾部预注入 workspace 文件树**（用户提案 2026-09-09 同日二轮：「直接把文件树一开始就交给他，省的它还要去 list_dir」）：`workspace_tree()` 生成缩进树（硬清单 + gitignore 过滤 + 行数/深度截断 + 每层限宽），system = 探索者人设 + 规则 0「先扫树：看到可疑文件直接 read_file、无需 list_dir 摸结构；树截断时 glob_files 补充」+ 树块；**TTL 60s 缓存**（同轮并行 N 个 explore 共享一份，首次 ~94ms / 二次 0.01ms）；树为空/生成失败降级无树不阻塞；`agt_register(ctx)` 时 `_WORKSPACE = Path(ctx["cwd"])`（引擎视角真实 workspace，os.chdir 不漂移）。详见 [spec-tools · explore 文件树预注入](features/spec-tools.md)
+- **调试连续翻车的四个「预算吞噬者」**（真实 repo 实测逐个处置）：嵌套 git 仓库（`.git` 存在即短路「子模块，未展开」）/ 字母序饿死（顶层**源码优先序** src/tools/test/docs/examples + 浅层文件宽 48）/ 深子树吞噬（本层文件先于子目录 + 每层限宽根 12/48 深层 6/12 + 全局 400 行截断）/ gitignore 路径模式缺口（keep_dir 补全路径 fnmatch，fs_tools 谓词同款缺口顺手修副本）。gitignore 语义实测：`.agent/` 本身保留、只排 rag/wiki_queue 子路径（wiki/agents/workflows 是 git 跟踪资产，探索有价值）。本 repo 树 405 行 / 8554 字符；播种同步 src/assets/tools_builtin/；`/reload tools` 带树上岗
+
+## 快速事实增补（2026-09-10 · 二 · preset 旧模型筛选——120 → 69）
+
+- **models.preset.json 旧模型筛选**（用户提案 2026-09-10，commit a35eb7c）：每 provider 单系列只保留最新代表 2~4 → **120 → 69**。flatkey 77 → 23（重灾区：ds v3 全系 / gemini 2.5 全系 + 3.0~3.7 中间代 / glm 4.7~5.2 / gpt 4o~5.x 中间代 / kimi k2.5-2.6 / mm m2.5 / qwen 3.6-3.7 快照）、orcarouter 25 → 17、openrouter 18 → 17、modelscope / z.ai / deepseek-official / siliconflow 不动
+- **保留原则**：已配置 6 条必留（合并显示不受影响）/ starred 13 全保留（唯一豁免 fk-g-2.5-pro——gemini 2.5 整代过时且 3.1-pro★ 已在列）/ 每系列旗舰+主力+便宜三档 + 最新旗舰（claude/gemini/gpt 各留 4~5）。验证：合并 6/6、旧代抽查清零、starred 13/13（详见 [config-and-models · preset 筛选](guides/config-and-models.md)）
+- **生效**：preset 现读（`_load_preset` 无缓存）——刷新页面即生效（flatkey 组 77 占位 → 23）；已安装实例 `/update-assets apply` 拉新 preset
+

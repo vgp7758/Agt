@@ -68,6 +68,34 @@ _SEED_LOCK = threading.Lock()
 - 嫁接段 `with _SEED_LOCK: agent._seed_steps(seeds)`（toollog + Step + add_step 自动落 events.jsonl；此时 explore 调用步尚未归档 → 嫁接步自然在前）
 - **验证**：4 线程并行 explore → 嫁接 steps=4 恰好（预期 4），events.jsonl 6 行全部合法 JSON 无交错 ✓
 
+### 文件树预注入：system 尾部附 workspace 文件树（2026-09-09 同日二轮，用户提案）
+
+**用户提案**：「对于 explore 的 agent 是不是有必要直接把文件树一开始就交给他，省的它还要去 list_dir 什么的了，在文件树中看到与 goal 相关的可疑文件时，它也可能会直接去查看」→ explore 的 system 尾部预注入 workspace 文件树（已排除 .gitignore/构建产物），`_SYSTEM` 规则 0 改为**先扫树**——看到可疑文件直接 read_file，无需 list_dir 摸结构；树被截断时用 glob_files 补充。
+
+**实现**（tools/builtin/explore_tools.py）：
+
+```python
+# agt_register(ctx) 时 _WORKSPACE = Path(ctx["cwd"])——树根=引擎视角真实 workspace
+# （ctx["cwd"] 比 Path.cwd() 稳，os.chdir 后不漂移）
+system = _SYSTEM + ("\n\n## workspace 文件树\n```\n" + tree + "\n```" if tree else "")
+# 树生成为空/异常 → 降级无树，不阻塞探索
+```
+
+- `workspace_tree()`：缩进树文本（目录/文件混合，硬清单 + gitignore 过滤，行数/深度截断 + 每层限宽）；**TTL 60s 缓存**——同轮并行 N 个 explore 共享一份树（首次 ~94ms，二次 0.01ms）
+
+**调试连续翻车的四个「预算吞噬者」**（真实 repo 实测，逐个处置）：
+
+| 元凶 | 现象 | 处置 |
+|---|---|---|
+| **嵌套 git 仓库**（coze-studio/.git 是目录——完整 clone 非 submodule） | 展开吃掉 258 行，src/ 整体出局 | `.git` 存在（文件或目录）即短路：只列 `coze-studio/（子模块，未展开）` |
+| **字母序饿死** | 限宽后 session/server（s 段）仍被 a~p 段挤掉 | 顶层目录**源码优先序**（src/tools/test/docs/examples 前置）+ 浅层文件宽 48（src 直下 46 个全覆盖） |
+| **深子树吞噬** | assets/ 深度优先展开吃预算 | **本层文件先于子目录输出** + 每层限宽（根 12 目录/48 文件，深层 6/12）+ 全局 400 行截断 |
+| **gitignore 路径模式缺口** | `.agent/wiki_queue/` 这种带路径的行 name 级匹配漏掉 | keep_dir 补全路径 fnmatch（fs_tools 谓词同款缺口，顺手修副本） |
+
+**gitignore 语义实测**（用户中途补充确认）：`src/cache_sim.py` / `.agent/rag*` / `.agent/wiki_queue/` / `dist/` 全排除；**`.agent/` 本身保留**（gitignore 只排它的 rag/wiki_queue 子路径——wiki/agents/workflows 是 git 跟踪的资产，探索有价值）。
+
+本 repo 实测：树 405 行 / 8554 字符。播种同步 `src/assets/tools_builtin/explore_tools.py`；`/reload tools` 后带树上岗。
+
 ## 注意事项
 
 - spec 工具集现状 = 五件套（create/commit/regenerate/list/recall_spec）——「先探索」不再由 spec 工具承担，走外置 explore

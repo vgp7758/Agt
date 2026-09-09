@@ -238,6 +238,23 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **生效方式**：引擎层（config.py / llm_client.py / agent.py / index.html），需 `/restart`。
 
+### preset 旧模型筛选：120 → 69（2026-09-10，用户提案）
+
+**用户请求（2026-09-10）**：「models.preset 里有很多去年的旧模型，每 provider 的单系列模型一般只保留最有代表性最新的 2~4 款模型」→ 全量筛选 preset 删去年旧代。**结果：120 → 69**（commit a35eb7c）：
+
+| provider | 之前 → 之后 | 删掉的旧代 |
+|---|---|---|
+| **flatkey** | 77 → **23** | 重灾区：ds v3 全系、gemini 2.5 全系 + 3.0~3.7 中间代 + lite + gemma、glm 4.7/5/5.1/5.2、gpt 4o/4.1 + 5.x 中间代 + fk-cx 变体、kimi k2.5/2.6、mm m2.5、qwen 3.6/3.7 + 27b/35b/plus 快照 |
+| **orcarouter** | 25 → **17** | gpt-4o-mini、deepseek-chat/reasoner（v3 时代命名）、kimi-k2.6、minimax-m2.7、qwen3.6-flash、gemini-2.5-pro |
+| **openrouter** | 18 → **17** | glm-5.2-free（5.3 已出，留 m3-free 当前代免费档） |
+| modelscope / z.ai / deepseek-official / siliconflow | 6/2/2/2 不动 | 之前修过 / 本来就精简 |
+
+**保留原则**（用户裁定 2026-09-10）：**每系列最新代表 2~4**——claude 留 fable-5 / sonnet-5★ / haiku-4.5 / opus-4-8 / opus-4-5★；gemini 留 3.8-flash / flash-latest / 3.1-pro★ / pro-latest；gpt 留 6-astra / 5.6-sol★ / 5.5 / 5.4-mini★（旗舰/主力/便宜三档 + 最新旗舰）；**已配置必留**（下拉框合并显示不受影响）；**starred 全保留**——唯一豁免 `fk-g-2.5-pro`（gemini 2.5 整代过时且 3.1-pro★ 已在列）。
+
+**验证**：已配置合并 6/6 ✓ / 24 个旧代条目抽查清零 ✓ / starred 13/13 ✓ / 总数 69。
+
+**生效**：preset 现读（`_load_preset` 无缓存）——**刷新页面即生效**（flatkey 组 77 占位 → 23）；已安装实例 `/update-assets apply` 拉新 preset。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

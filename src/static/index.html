@@ -305,9 +305,12 @@
   .interrupted-bar { display:flex; align-items:center; gap:10px; color:#8a9099; font-size:13px; }
   .interrupted-bar button { color:#059669; border-color:#a7f3d0; }
   /* 气泡级复制按钮（user/answer 气泡 hover 浮现；挂在 row/col 上不被 answer 的 innerHTML 重写清掉） */
-  .bubble-copy { position:absolute; top:100%; margin-top:2px; padding:2px 7px; font-size:11px;
+  .bubble-copy { position:absolute; top:calc(100% - 2px); padding:2px 7px; font-size:11px;
     background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
     opacity:0; transition:opacity .15s; z-index:5; pointer-events:none; }
+   /* ↑ top 伸进宿主盒内 2px、不用 margin-top——margin 会在宿主 hover 区与按钮间留 2px 缝：
+      鼠标穿过时 :hover 断链 → 按钮 opacity:0+pointer-events:none 死锁（用户报障 2026-09-09）。
+      重叠 2px 保证气泡→按钮路径几何连续，hover 冒泡不断。 */
   /* 仅在气泡 hover 时恢复可点击，避免透明按钮溢出到输入框上方吞掉点击 */
   .turn:hover .bubble-copy, .row.me:hover .bubble-copy { pointer-events:auto; }
   .bubble-copy:hover { background:#f3f4f6; color:#1f2329; }
@@ -1150,6 +1153,7 @@ function renderAnswerPages(){
   const tail = (cur === '_main_') ? unmentionedChangesHtml(t.pages[cur], t.changed) : '';
   if(ids.length <= 1){   // 单页：无 tabs（保持原视觉）
     t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '') + tail;
+    t.answerEl.__md_text = t.pages[cur] || '';   // 复制按钮取 markdown 原文（历史轮同走此路径）
     probeUnknownAssets();   // 未知后缀引用 → 异步嗅探升级形态（2026-09-09）
     return;
   }
@@ -1160,6 +1164,7 @@ function renderAnswerPages(){
   });
   tabs += '</div>';
   t.answerEl.innerHTML = tabs + renderAnswer(t.pages[cur] || '') + tail;
+  t.answerEl.__md_text = t.pages[cur] || '';   // 多页：复制取当前激活页原文（切页时随重渲染更新）
   probeUnknownAssets();
 }
 function switchAnswerPage(id){
@@ -1187,6 +1192,7 @@ function finishInterrupted(turnNo){
   curTurn.answerEl.innerHTML =
     `<div class="interrupted-bar"><span>⏹ ${n}被中断，未完成</span>`+
     `<button class="btn" onclick="continueInterrupted(this)">▶ 继续</button>${rb}</div>`;
+    curTurn.answerEl.__md_text = null;   // 非 answer 渲染（spec/survey/interrupted）——复制按钮回退 innerText
   if(curTurn.det) curTurn.det.open=false;
   scrollBottom();
 }
@@ -1393,10 +1399,18 @@ function attachCopyBtn(host, bubble){
   btn.className='bubble-copy'; btn.textContent='📋 复制';
   btn.title='复制整个气泡内容到剪贴板';
   btn.onclick=()=>{
-    // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容）
-    const clone=bubble.cloneNode(true);
-    clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn').forEach(n=>n.remove());
-    const text=(clone.innerText||'').replace(/\u00a0/g,' ').trimEnd();
+    // 优先 markdown 原文（用户报障 2026-09-09 问询后定案：answer 复制应得原文——表格是 | 分隔、
+    // 代码块带 ``` 围栏，可直接再编辑/投喂；__md_text 由 renderAnswerPages 挂在 bubble 元素上，
+    // innerHTML 重写不清 expando——spec/survey/interrupted 等重写点各自置 null 失配即回退）
+    let text = null;
+    if(bubble.__md_text != null && String(bubble.__md_text).trim()){
+      text = String(bubble.__md_text).replace(/\u00a0/g,' ').trimEnd();
+    } else {
+      // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容）
+      const clone=bubble.cloneNode(true);
+      clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn').forEach(n=>n.remove());
+      text=(clone.innerText||'').replace(/\u00a0/g,' ').trimEnd();
+    }
     if(!text.trim()){ toast('气泡无文本'); return; }
     const done=()=>{ btn.textContent='✓ 已复制'; setTimeout(()=>btn.textContent='📋 复制',1500); };
     if(navigator.clipboard){
@@ -2544,6 +2558,7 @@ function renderSpecBubble(spec, specId, specTitle, specDesign){
   h += '</div>';
   h += '</div>';
   curTurn.answerEl.innerHTML = h;
+    curTurn.answerEl.__md_text = null;   // 非 answer 渲染（spec/survey/interrupted）——复制按钮回退 innerText
   if(curTurn.det) curTurn.det.open = false;
   scrollBottom();
 }
@@ -2583,6 +2598,7 @@ function collapseSpecBubble(m){
     '<span>📐 「'+esc(t)+'」'+(sid?('<span style="color:#8a90a9;font-size:12px">'+esc(sid)+'</span> '):'')+
     '已通过，开始实施 · '+((m&&m.spec&&m.spec.length)||'?')+' 步</span>'+
     '<button class="btn" style="color:#4338ca;border-color:#c7d2fe" onclick="toggleSpecPanel(true)">📐 在抽屉中查看</button></div>';
+    curTurn.answerEl.__md_text = null;   // 非 answer 渲染（spec/survey/interrupted）——复制按钮回退 innerText
   scrollBottom();
 }
 // ========== 问卷渲染（ask_user 阻塞等待用户回答） ==========
@@ -2621,6 +2637,7 @@ function renderSurveyBubble(questions){
   h += '<button class="btn" style="background:#0891b2;color:#fff;border:none;font-size:14px;padding:8px 24px;cursor:pointer;border-radius:8px;margin-top:6px" onclick="submitSurvey()">提交问卷</button>';
   h += '</div>';
   curTurn.answerEl.innerHTML = h;
+    curTurn.answerEl.__md_text = null;   // 非 answer 渲染（spec/survey/interrupted）——复制按钮回退 innerText
   if(curTurn.det) curTurn.det.open = false;
   scrollBottom();
 }
@@ -3100,6 +3117,7 @@ function onWSMessage(ev){
       // 中断轮已从断点恢复：清掉"恢复中"占位，保持 curTurn 指向原容器续跑（不新建轮）。
       // curTurn 可能因读档重渲染被置空——此时无需操作，后续 step 会自然建轮。
       if(curTurn && curTurn.answerEl) curTurn.answerEl.innerHTML = '';
+    curTurn.answerEl.__md_text = null;   // 非 answer 渲染（spec/survey/interrupted）——复制按钮回退 innerText
       break;
     case 'interrupted':
       if(m.recharge && m.recharge.length) _rechargeHints = m.recharge;   // 配额类失败——_done 时随继续按钮渲染充值入口

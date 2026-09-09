@@ -206,8 +206,6 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 
 ### 📎 本轮变更文件补充区：图片/音频直接内嵌渲染（2026-09-06，用户提案）
 
-### 📎 本轮变更文件补充区：图片/音频直接内嵌渲染（2026-09-06，用户提案）
-
 **背景**：answer 尾部「📎 本轮变更文件」补充区（`unmentionedChangesHtml`，2026-09-04 用户提案「快照 diff 补渲染」引入）此前对 modified/new 的**所有文件一律渲染成文本资产框**（点击开预览抽屉）——图片/音频也按文本逻辑显示。用户报告：变更文件列表里的 `src/static/icons/vscode.png` 没有直接渲染图片，只是一行文本。
 
 **修复**（`unmentionedChangesHtml`，src/static/index.html）：对 modified/new 按扩展名分流，**复用 `assetBoxHtml`**（就是 `[!名](路径)` 引用同款渲染逻辑）：
@@ -228,6 +226,34 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 - 四场景单测（evaluate 直接调 `unmentionedChangesHtml`）：`mp3_is_audio_player` / `png_is_img` / `py_is_text_preview` / `wav_deleted_grey` 全 true
 
 纯前端改动，Ctrl+F5 即生效（无后端路由变更）。
+
+### 未知后缀引用按内容嗅探渲染：/api/file-kind + 编码感知解码（2026-09-09，用户提案）
+
+**用户提案**：answer 中引用的文件**后缀未识别**（无扩展名 / 冷门扩展 / 伪装后缀）时，先探测文件内容与编码，再决定渲染方式——文本（utf/gbk/ascii 等）点击渲染在文本抽屉里；图片渲染为图片；音频渲染为播放条；视频或其它二进制以文件完整路径从浏览器新页签打开（由浏览器按嗅探出的 Content-Type 渲染，而非触发下载）。
+
+**后端（src/server.py）**：
+
+- `_sniff_kind(header)` —— 读文件头 magic bytes 的嗅探矩阵（输入=头 4KB）：
+
+| 判定 kind | 识别依据（magic bytes） |
+|---|---|
+| `image` | `\x89PNG` / `\xff\xd8\xff`(jpg) / `GIF8` / `BM`(bmp) / `RIFF..WEBP` |
+| `audio` | `ID3`、mp3 帧头 / `RIFF....WAVE` / `OggS` / `fLaC` |
+| `video` | `ftyp`(mp4/mov) / `\x1aE\xdf\xa3`(mkv/webm) / `RIFF....AVI` |
+| `text` | BOM → `utf-8-sig` / `utf-16`；utf-8 试解码 → gbk 试解码；NUL 或控制字符 >10% → `binary` |
+
+- **`GET /api/file-kind?path=`**（新端点）：workspace 沙箱取文件头 → `_sniff_kind` → `{kind, encoding, media_type}`（与 /api/asset 同款路径穿越防护）
+- **`GET /api/asset` 增强**：后缀未识别或只猜出 `application/octet-stream` 时读文件头嗅探修正 Content-Type——`.bin` 后缀的 mp4 也能被浏览器直接渲染而非触发下载（端到端实测）
+
+**前端（src/static/index.html）**：
+
+- `probeUnknownAssets()`：渲染后扫描 `.asset-box[data-probe]`（扩展名表全 miss 的引用占位框），逐个异步 `GET /api/file-kind`，按结果**原位升级重建**为对应形态：`text` → 📄 可点击资产框（开预览抽屉）；`image` → 图框内嵌；`audio` → 播放条；`video`/`binary` → 新页签链接（`/api/asset` 的 Content-Type 已被后端修正，浏览器直接渲染）
+- **探测缓存 `_assetKindCache[path] = {kind, encoding, media_type}`**：重绘（多 Agent 分页切换 / 读档 / 展开更早轮次）同步命中不再闪占位框——`renderAnswerPages` / `renderHistory` / `prependHistory` 三处渲染入口统一调 `probeUnknownAssets()`
+- **编码感知解码**：`openFilePreview` 从 `r.text()`（恒 utf-8）改为 `arrayBuffer()` + `new TextDecoder(嗅探的 encoding)`——gbk / utf-16 文本文件在预览抽屉里正确显示不乱码（已知文本后缀默认 utf-8，未知后缀用 /api/file-kind 嗅探的 encoding）
+
+**验证**：`test/test_file_kind.py`（新建）——`_sniff_kind` 矩阵 14 例全过 + 真实文件端到端（无扩展名 jpg / gbk `.dat` / `.bin` 内 mp4 / `.weird` ascii）+ 路径穿越拒绝 + node 两阶段行为模拟（占位 → 缓存命中同步渲染四形态）全绿。
+
+**生效方式**：后端新端点 + 前端——需 `/restart`。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 
@@ -383,7 +409,7 @@ provider 403（flatkey 欠费）
 - 系统气泡 vs 用户气泡的区分依据：事件类型（`system` / `user`）——前端按类型赋默认 collapsed 状态
 - async 钩子工作流（见 [工作流引擎与钩子](../architecture/workflow-hooks.md#async-元信息字段2026-08-新)）的返回值不注入主循环，但若产生日志/副作用事件，仍以系统气泡形式展示（默认折叠）
 - 气泡级复制、answer 分页翻页均为纯前端行为（只读 innerText / 切换已存页面），不涉及后端额外改动
-- **例外：answer 行内资源渲染**（2026-09-04）需要后端配合——`server.py` 的 `GET /api/asset` 为图框/音频控件供文件（workspace 沙箱服务），是本页唯一的非纯前端特性
+- **例外：answer 行内资源渲染**（2026-09-04 起）需要后端配合——`server.py` 的 `GET /api/asset` 为图框/音频控件供文件（workspace 沙箱服务）；2026-09-09 起新增 `GET /api/file-kind`（未知后缀引用先嗅探内容类型/编码再定渲染形态，见[本节末章](#未知后缀引用按内容嗅探渲染apifile-kind--编码感知解码2026-09-09用户提案)）——是本页仅有的两个非纯前端特性
 
 ## 相关页面
 

@@ -532,3 +532,15 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - spec 通过并开始施工后，answer 区的 spec 大卡片**自动收起成一行摘要**（`📐「标题」已通过，开始实施 · N 步 [📐 在抽屉中查看]`），把 answer 区还给施工过程与最终回答（用户提案，详见 [气泡交互 · spec 批阅气泡收起](../features/bubble-interaction.md#spec-批阅气泡--通过后自动收起成摘要2026-09-08用户提案)）——`_specBubbleActive` 标记 + `case 'spec'` approved 事件触发 `collapseSpecBubble`；draft/rejected 不收起（返工流程原样）、抽屉批阅入口同样生效；纯前端 Ctrl+F5
 
+## 快速事实增补（2026-09-09 · 一 · v0.26.3 发布）
+
+- **v0.26.3 发布**（2026-09-09，commit `d6c2ea8`，PyPI 已上线；自 v0.26.2 以来 2 笔功能提交，详见 [v0.26.3 发布记录](releases/v0.26.3.md)）：①💰 **断链充值入口**——回退链全失败中断时 answer 气泡附充值按钮组（quota/auth 类失败按 URL 去重，点击一键打开充值页；URL 三级来源：错误消息内嵌 > preset `recharge_url` > `register_url`；配套 401/403/404 纳入回退链），见 [气泡交互 · 充值入口](../features/bubble-interaction.md#answer-中断轮充值入口按钮--回退链全失败一键打开2026-09-08用户提案)；②📐 **spec 批准开工后气泡收起**——answer 区 spec 大卡片收起成一行摘要、详情转 📐 抽屉，见 [气泡交互 · spec 收起](../features/bubble-interaction.md#spec-批阅气泡--通过后自动收起成摘要2026-09-08用户提案)
+- 更新方式：`pip install -U agt-agent`；充值入口链路（引擎层 llm_client/agent）需 `/restart`，spec 收起纯前端强刷即可；其它实例 `/update-assets apply` 刷新播种资产（preset recharge_url）
+
+## 快速事实增补（2026-09-09 · 二 · 未知后缀引用按内容嗅探渲染——四形态自动升级）
+
+- answer 中引用文件**后缀未识别**（无扩展名 / 冷门扩展 / 伪装后缀）时先探测内容再定渲染：后端 `_sniff_kind` magic bytes 嗅探矩阵（png/jpg/gif/bmp/webp 图；ID3/RIFF-WAVE/OggS/flac 音；ftyp / `\x1aE\xdf\xa3` / RIFF-AVI 视频；BOM + utf-8/gbk 试解码文本，NUL 或控制字符 >10% → binary）+ 新端点 `GET /api/file-kind`（workspace 沙箱返回 `{kind, encoding, media_type}`）
+- 前端 `probeUnknownAssets()` 扫描 `.asset-box[data-probe]` 占位框异步嗅探后**原位升级**：text → 📄 预览抽屉 / image → 图框 / audio → 播放条 / video·binary → 新页签（`/api/asset` 对未识别后缀读头修正 Content-Type——`.bin` 里的 mp4 浏览器直接播而非触发下载）
+- 探测结果缓存 `_assetKindCache`，重绘 / 读档 / 展开更早轮次同步命中不再闪占位；`openFilePreview` 改 arrayBuffer + `TextDecoder(encoding)`——**gbk / utf-16 文本不乱码**（`r.text()` 恒 utf-8 旧疾）
+- 验证：`test/test_file_kind.py`（新建）14 例嗅探矩阵 + 真实文件 e2e + 路径穿越拒绝全绿；需 /restart（详见 [气泡交互 · 未知后缀嗅探](../features/bubble-interaction.md#未知后缀引用按内容嗅探渲染apifile-kind--编码感知解码2026-09-09用户提案)）
+

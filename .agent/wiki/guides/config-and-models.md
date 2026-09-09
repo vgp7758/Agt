@@ -322,6 +322,47 @@ profile 显式定制层：`param_lock: ["temperature"]`（锁定参数无视 ove
 
 以后发现新硬约束（如某端点不接受 top_p），往规则表加一行即可——用户无感知自动修正。`/restart` 后生效。
 
+## OpenRouter 调用归因请求头：HTTP-Referer / X-Title（2026-09-03，commit c63a640）
+
+**用户提问**：OpenRouter 发请求时是不是在请求头里带应用名称记入调用源？
+
+**是——且早已实现**（commit c63a640，2026-09-03 接 OpenRouter 那轮顺手加的；攒批进 [v0.23.0](../releases/v0.23.0.md) 的 OpenRouter 接入件）。
+
+**机制**：OpenRouter 两个**可选**请求头，用于把调用归因到一个「应用」：
+
+| 请求头 | 作用 |
+|---|---|
+| `HTTP-Referer` | 应用主页/仓库地址（点击来源跳转用） |
+| `X-Title` | 应用显示名 |
+
+**用途（非计费——计费只认 `Authorization` 的 key）**：
+
+- **归属展示**：OpenRouter Activity 页每条调用标注来源 app；不带的调用显示 **Unknown app**
+- **公开排行榜**：openrouter.ai/rankings 按 app 聚合调用量，上榜应用有曝光位
+
+**实现**（src/llm_client.py `_openai_client()` L387-395）：
+
+```python
+def _openai_client(self) -> OpenAI:
+    """OpenRouter 端点带归因头（X-Title / HTTP-Referer）——
+    其公开 rankings/应用目录按这两个头把调用方识别为独立应用（Agt 消费即上榜，免费曝光）；
+    其它 provider 忽略未知头，无影响。"""
+    headers = {}
+    if "openrouter.ai" in (self.base_url or ""):
+        headers = {"HTTP-Referer": "https://github.com/vgp7758/Agt", "X-Title": "Agt"}
+    return OpenAI(base_url=..., api_key=..., default_headers=headers or None)
+```
+
+要点：
+
+- **条件限定**——只有 base_url 指向 openrouter.ai 才带（openai SDK 的 `default_headers` 是加到每个请求的；对其它 provider 硬塞 OpenRouter 专属头虽多被忽略，但保持条件限定不污染）
+- **openai SDK 默认不带这两个头**（默认头只有 Authorization/Content-Type/User-Agent）——裸用 SDK 调 OpenRouter 一定是 Unknown app，归因是显式加的
+- 效果：OpenRouter Activity / rankings 里的调用归属显示为 **Agt**（链接 GitHub 仓库）——调用量大即免费曝光位
+
+**注释补充**（docstring 已写明）："其它 provider 忽略未知头，无影响"——即条件限定同时是保险丝，未来加新 provider 端点不被误伤。
+
+**相关**：OpenRouter 接入的 preset 侧（模型条目 / recharge_url / `:free` 实测）见 [补记：openrouter `:free` 档现状实测](#补记openrouter-free-档现状实测m3-free-下架换付费-or-minimax-m32026-09-10--二轮)；provider 接入的整体形态见 [v0.23.0 发布记录](../releases/v0.23.0.md)。
+
 ## settings.json（运行时）
 
 | 键 | 说明 |

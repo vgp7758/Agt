@@ -198,7 +198,8 @@ async def serve_icon(name: str):
 async def api_asset(path: str = ""):
     """workspace 内资产文件（answer 气泡的图片框/音频控件用：`[!标题](相对路径)` 渲染时 src 指这里）。
     安全约束：相对 workspace 根解析 + resolve 后必须仍在 workspace 内（防路径穿越/任意文件泄露）；
-    media_type 按扩展名（图/音/文）。不存在或越界返回 404。"""
+    media_type 按扩展名（图/音/文）；后缀未识别时读文件头 magic bytes 嗅探兜底（用户提案
+    2026-09-09——无扩展名/冷门扩展的图片视频也能在新页签被浏览器正确渲染，而非触发下载）。"""
     import mimetypes
     if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
         return HTMLResponse("not found", status_code=404)
@@ -211,7 +212,90 @@ async def api_asset(path: str = ""):
     if not p.is_file():
         return HTMLResponse("not found", status_code=404)
     mt, _ = mimetypes.guess_type(str(p))
-    return FileResponse(p, media_type=mt or "application/octet-stream")
+    if not mt or mt == "application/octet-stream":   # 后缀未识别/只给出通用流 → 内容嗅探
+        try:                                            # （.bin 等"认识但无意义"的后缀同样嗅探）
+            with open(p, "rb") as f:
+                head = f.read(4096)
+            mt = _sniff_kind(head)[2] or "application/octet-stream"
+        except OSError:
+            mt = "application/octet-stream"
+    return FileResponse(p, media_type=mt)
+
+
+def _sniff_kind(head: bytes) -> tuple:
+    """文件头嗅探（用户提案 2026-09-09：后缀未识别时按内容判定渲染方式）。
+    返回 (kind, encoding, mime)：kind ∈ image/audio/text/binary；encoding 仅 text 有
+    （utf-8/utf-8-sig/gbk）；mime 为浏览器可直接渲染的类型（text 与 binary 无益时给空）。"""
+    if head.startswith(b"\x89PNG"):
+        return "image", "", "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image", "", "image/jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image", "", "image/gif"
+    if head.startswith(b"BM") and len(head) > 6:
+        return "image", "", "image/bmp"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image", "", "image/webp"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio", "", "audio/wav"
+    if head.startswith(b"ID3") or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return "audio", "", "audio/mpeg"
+    if head.startswith(b"OggS"):
+        return "audio", "", "audio/ogg"
+    if head.startswith(b"fLaC"):
+        return "audio", "", "audio/flac"
+    if head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return "binary", "", "video/x-msvideo"
+    if head[4:8] == b"ftyp":
+        return "binary", "", "video/mp4"
+    if head.startswith(b"\x1aE\xdf\xa3"):
+        return "binary", "", "video/x-matroska"
+    # 文本：BOM → 编码
+    if head.startswith(b"\xef\xbb\xbf"):
+        return "text", "utf-8-sig", ""
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "text", "utf-16", ""
+    sample = head[:4096]
+    if not sample:
+        return "text", "utf-8", ""   # 空文件当文本
+    if b"\x00" in sample:
+        return "binary", "", ""
+    ctrl = sum(1 for b in sample if b < 9 or (13 < b < 32))
+    if ctrl / len(sample) > 0.1:
+        return "binary", "", ""
+    try:
+        sample.decode("utf-8")
+        return "text", "utf-8", ""
+    except UnicodeDecodeError:
+        try:
+            sample.decode("gbk")
+            return "text", "gbk", ""
+        except UnicodeDecodeError:
+            return "binary", "", ""
+
+
+@app.get("/api/file-kind")
+async def api_file_kind(path: str = ""):
+    """后缀未识别文件的类型嗅探（前端渲染方式判定，用户提案 2026-09-09）：
+    {kind: image/audio/text/binary, encoding}。text 带编码（utf-8/gbk/utf-16…）——
+    预览抽屉用 TextDecoder 按此解码，避免 gbk 文本乱码。安全约束同 /api/asset。"""
+    if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
+        return {"error": "bad path"}
+    base = Path(_workspace).resolve()
+    try:
+        p = (base / path).resolve()
+        p.relative_to(base)
+    except (ValueError, OSError):
+        return {"error": "bad path"}
+    if not p.is_file():
+        return {"error": "not found"}
+    try:
+        with open(p, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return {"error": "read fail"}
+    kind, enc, _ = _sniff_kind(head)
+    return {"kind": kind, "encoding": enc}
 
 
 @app.get("/manifest.json")

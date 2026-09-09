@@ -733,6 +733,10 @@ function inlineRich(t){
 }
 // [!标题](路径) → 图框/音频/文本预览/链接（路径相对 workspace；/api/asset 端点安全取文件）
 const _TEXT_EXTS = ('txt,md,markdown,log,json,py,js,ts,jsx,tsx,html,htm,css,scss,less,xml,yaml,yml,toml,ini,cfg,conf,csv,tsv,sh,bat,cmd,ps1,cs,java,c,cpp,h,hpp,cc,go,rs,rb,php,lua,vue,svelte,sql,pl,swift,kt,kts,gradle,properties,env,gitignore,dockerfile').split(',');
+// 后缀未识别时（用户提案 2026-09-09）：渲染探测占位框，异步 /api/file-kind 嗅探内容类型后
+// 升级为正确形态（文本→📄抽屉 / 图片→图框 / 音频→播放条 / 视频等二进制→新页签由浏览器按
+// 嗅探出的 Content-Type 渲染）。结果缓存 _assetKindCache——重绘（多 agent 分页切换/读档）同步命中。
+var _assetKindCache = {};   // path → {kind, encoding}
 function assetBoxHtml(title, path){
   var src='/api/asset?path='+encodeURIComponent(path);
   var cap=esc(title||'');
@@ -740,6 +744,15 @@ function assetBoxHtml(title, path){
   var ext=(String(path).split('.').pop()||'').toLowerCase();
   var isImg=('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0;
   var isAud=('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0;
+  var isTxt=_TEXT_EXTS.indexOf(ext)>=0;
+  if(!isImg && !isAud && !isTxt){   // 后缀表全 miss → 查嗅探缓存（同步命中直接定形态）
+    var ck=_assetKindCache[path];
+    if(ck){
+      if(ck.kind==='image') isImg=true;
+      else if(ck.kind==='audio') isAud=true;
+      else if(ck.kind==='text') isTxt=true;
+    }
+  }
   if(isImg){
     return '<div class="asset-box">'+(cap?'<div class="asset-cap">'+cap+'</div>':'')+
       '<a href="'+src+'" target="_blank" rel="noopener" title="点击查看原图"><img src="'+src+'" loading="lazy" alt="'+alt+'" onerror="this.closest(\'.asset-box\').classList.add(\'err\');this.remove()"></a></div>';
@@ -748,13 +761,36 @@ function assetBoxHtml(title, path){
     return '<div class="asset-box audio">'+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
       '<audio controls preload="metadata" src="'+src+'"></audio></div>';
   }
-  if(_TEXT_EXTS.indexOf(ext)>=0){   // 文本类 → 点击打开预览抽屉（📄）
+  if(isTxt){   // 文本类 → 点击打开预览抽屉（📄）
     var pEsc=esc(path).replace(/'/g,'&#39;');
     return '<div class="asset-box file" onclick="openFilePreview(\''+pEsc+'\')">'+
       (cap?'<div class="asset-cap">'+cap+'<small>'+esc(ext)+'</small></div>':
             '<div class="asset-cap">'+esc(path)+'</div>')+'</div>';
   }
+  if(_assetKindCache[path]===undefined){   // 未知且未嗅探 → 占位探测框（probeUnknownAssets 异步升级）
+    var dEsc=esc(path).replace(/"/g,'&quot;'), tEsc=esc(title||'').replace(/"/g,'&quot;');
+    return '<div class="asset-box file" data-probe="'+dEsc+'" data-title="'+tEsc+'">'+
+      (title?'<div class="asset-cap">'+esc(title)+'</div>':'<div class="asset-cap">'+esc(path)+'</div>')+
+      '</div>';
+  }
   return '<a href="'+src+'" target="_blank" rel="noopener" class="md-link">'+(cap||esc(path))+'</a>';
+}
+// 扫描 msgArea 里的探测占位框：/api/file-kind 嗅探 → 缓存 + 按形态重建替换（幂等：处理后摘 data-probe）
+function probeUnknownAssets(){
+  var els=document.querySelectorAll('#msgArea [data-probe]');
+  if(!els.length) return;
+  els.forEach(function(el){
+    var path=el.getAttribute('data-probe'); el.removeAttribute('data-probe');
+    fetch('/api/file-kind?path='+encodeURIComponent(path)).then(function(r){return r.json();}).then(function(d){
+      if(!d || d.error){ el.classList.add('err'); return; }
+      _assetKindCache[path]=d;
+      if(!document.body.contains(el)) return;   // 已被重绘移除——缓存留着，重绘时同步命中
+      var title=el.getAttribute('data-title')||'';
+      var tmp=document.createElement('div');
+      tmp.innerHTML=assetBoxHtml(title, path);   // 缓存已命中 → 同步渲染正确形态
+      el.replaceWith(tmp.firstChild);
+    }).catch(function(){ el.classList.add('err'); });
+  });
 }
 // —— 轻量语法高亮（2026-09-04 用户提案：预览抽屉纯文本阅读代码体验差）——
 // 不手写状态机：组合交替正则（docstring→注释→字符串→数字→关键字→标签）单遍扫描——
@@ -835,10 +871,16 @@ function openFilePreview(path){
   if(typeof toggleSvcPanel==='function' && document.getElementById('svcPanel').style.display!=='none') toggleSvcPanel(false);
   document.body.classList.add('drawer-push');   // push 布局：主区右移让位（竖屏 CSS 覆盖为 0）
   var ext = (String(path).split('.').pop()||'').toLowerCase();   // 扩展名 → 语言表（语法高亮用）
+  // 编码感知解码（用户提案 2026-09-09）：未知后缀经 /api/file-kind 嗅探的 encoding（gbk/utf-16…）
+  // 用 TextDecoder 按编码解码——r.text() 恒按 utf-8，gbk 文本会乱码。已知文本后缀默认 utf-8。
   fetch('/api/asset?path='+encodeURIComponent(path)).then(function(r){
     if(!r.ok) throw new Error('HTTP '+r.status);
-    return r.text();
-  }).then(function(txt){
+    return r.arrayBuffer();
+  }).then(function(buf){
+    var enc=(_assetKindCache[path]||{}).encoding||'utf-8';
+    var txt;
+    try { txt=new TextDecoder(enc).decode(buf); }
+    catch(e){ txt=new TextDecoder('utf-8').decode(buf); }   // 未知编码名兜底
     load.style.display='none';
     if(txt.length>300000){ txt='（文件过大：'+txt.length+' 字符，仅显示前 300,000 字符）\n\n'+txt.slice(0,300000); }
     body.innerHTML=hlCode(txt, ext);   // 轻量语法高亮（token 全 esc，安全模型不变）；>200k 降级纯文本
@@ -1108,6 +1150,7 @@ function renderAnswerPages(){
   const tail = (cur === '_main_') ? unmentionedChangesHtml(t.pages[cur], t.changed) : '';
   if(ids.length <= 1){   // 单页：无 tabs（保持原视觉）
     t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '') + tail;
+    probeUnknownAssets();   // 未知后缀引用 → 异步嗅探升级形态（2026-09-09）
     return;
   }
   let tabs = '<div class="ans-tabs">';
@@ -1117,6 +1160,7 @@ function renderAnswerPages(){
   });
   tabs += '</div>';
   t.answerEl.innerHTML = tabs + renderAnswer(t.pages[cur] || '') + tail;
+  probeUnknownAssets();
 }
 function switchAnswerPage(id){
   if(!curTurn || !curTurn.pages || curTurn.pages[id]===undefined) return;
@@ -1253,6 +1297,7 @@ function renderHistory(turns){
   if(_histExpandFrom>0) msgArea.appendChild(makeExpandBar());
   if(!turns || !turns.length) return;
   turns.forEach((t,i)=>renderHistTurn(t, msgArea, i===turns.length-1));   // 只有最新轮可显示继续按钮
+  probeUnknownAssets();   // 历史轮里未知后缀引用同样嗅探升级
   scrollBottom();
 }
 // 展开返回：前置插入更早一档的轮次（不重绘已有内容）
@@ -1265,6 +1310,7 @@ function prependHistory(turns){
   turns.forEach(t=>renderHistTurn(t, frag, false));   // 展开的都是更早的轮次——永不是最新（无继续按钮）
   msgArea.insertBefore(frag, msgArea.firstChild);
   if(_histExpandFrom>0) msgArea.insertBefore(makeExpandBar(), msgArea.firstChild);
+  probeUnknownAssets();   // 展开的更早轮次里未知后缀引用同样嗅探升级
 }
 
 // —— 图片附件 ——

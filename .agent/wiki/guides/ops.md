@@ -251,6 +251,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 ### 桌面版发布：云构建为主（GitHub Actions）
 
 - **桌面版发布走云构建（2026-09-10 · 十三轮）**：`.github/workflows/desktop-release.yml` — push tag `v*` 自动出 GitHub Release（附 `Agt-Desktop-<ver>-win64.zip`）；Actions 手动触发只出 artifact 供试装。**发布前门禁**：`Agt.exe --selftest` 必须打印 `SELFTEST_PASS`（拦缓存旧字节码 / 漏收集 workflow_node_api 类坏产物）。版本戳由 `tools/ci_stamp_version.py` 把 `paths.VERSION` + `packaging/version_file.txt` 同步为 tag 号。本地 `python release.py --desktop` 降为兜底（离线/应急，不 bump 版本、不上 PyPI）。见 [桌面版 · 云构建 + Release](../features/desktop-mode.md#云构建--releasegithub-actions-流水线2026-09-10--十三轮spec-决策云构建为主)
+- **CI 脚本输出编码坑（2026-09-10 · 十五轮，实测必修）**：GitHub `windows-latest` 的 Python（3.12+）stdout 默认 **cp1252**，脚本里 `print` 中文 → `UnicodeEncodeError: 'charmap' codec can't encode ...` 直接崩（本地终端 GBK/UTF-8 不复现）。双层兜底：workflow 顶层 `env: PYTHONIOENCODING: utf-8` + `PYTHONUTF8: "1"`（护住所有 python 步骤）+ 脚本内 `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")`；跑 python 的步骤统一 `shell: pwsh`。**通用教训**：CI 里别裸 print 非 ASCII，「本地能跑」≠「CI 能跑」
 - **用户侧发版三步**：`git push` → Actions 手动 Run workflow 试装（约 10-15 分钟）→ `git tag v0.26.5 && git push origin v0.26.5` 自动出 Release。本机未装 `gh`，Release 由 Actions 创建，无需 gh
 
 ## 相关页面

@@ -263,7 +263,7 @@ launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
 
 **决策**：桌面版发布走**云构建为主**（GitHub Actions `windows-latest`，公开仓库免费无限额），本地 `python release.py --desktop` 降为**兜底**（离线 / 应急 / 无网时用）。理由：本机打包约 6 分钟且需 `--clean` 全量、环境坑多（pathlib backport / 缓存复用），云端干净环境 + 门禁更可靠。
 
-**文件**：`.github/workflows/desktop-release.yml`（92 行）+ `tools/ci_stamp_version.py`（52 行，仅 CI 调用）
+**文件**：`.github/workflows/desktop-release.yml` + `tools/ci_stamp_version.py`（仅 CI 调用）
 
 ### 触发与权限
 
@@ -292,7 +292,30 @@ jobs.build: { runs-on: windows-latest, timeout-minutes: 45 }
 8. **stage**：`packaging/dist/release/` 下 `Launcher.exe` 与 `Agt\` **平级**（与 [发布布局](#发布布局打完即生效) 同构）
 9. **zip**：`Agt-Desktop-<ver>-win64.zip`（tag → tag 名去 v；手动 → `dev-<sha12>`），路径写 `$GITHUB_ENV.ZIP_PATH`
 10. `actions/upload-artifact@v4`
-11. `softprops/action-gh-release@v2`（`if: github.ref_type == 'tag'`）：传 zip + `generate_release_notes: true` + **中文使用说明 body**（解压到非 Program Files / 双击 Launcher.exe / 首启迁移提示 / 排障看 `%APPDATA%\Agt\logs\desktop.log`）
+11. `softprops/action-gh-release@v2`（`if: github.ref_type == 'tag'`）：传 zip + `generate_release_notes: true` + **中文使用说明 body**（解压到非 Program Files / 双击 Launcher.exe / 首启迁移提示 / 排障看桌面日志）
+
+### ⚠️ 编码：Windows runner 的 Python stdout 默认 cp1252（2026-09-10 · 十五轮，必修）
+
+**症状（用户贴 Actions 日志）**：`python tools/ci_stamp_version.py "branch" "main"` 在 runner 上崩：
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4
+  File "C:\hostedtoolcache\windows\Python\3.13.15\x64\Lib\encodings\cp1252.py", line 19, in encode
+  print(f"手动触发（ref_type={ref_type}）——沿用仓库版本号 …")
+```
+
+**根因**：GitHub Windows runner 上 Python（3.12+ 非 UTF-8 模式）stdout 默认 **cp1252**，中文 `print` 直接编码失败。**本地不复现**——本机 Windows 终端是 GBK/UTF-8，字符集能编，只有 runner 严格 cp1252 才炸。
+
+**双层兜底（都做，不只修一个脚本）**：
+
+| 层 | 改动 | 保护范围 |
+|---|---|---|
+| workflow 顶层 `env` | `PYTHONIOENCODING: utf-8` + `PYTHONUTF8: "1"` | 之后**所有** python 步骤的输出（不只 ci_stamp_version.py） |
+| 脚本自身 | `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")` | 本地 / 其他环境直跑也不崩 |
+
+顺带：所有跑 python 的步骤统一 `shell: pwsh`（cmd 代码页是另一坑）。
+
+**教训（通用）**：CI 脚本里**不要裸 `print` 非 ASCII**——要么 reconfigure stdio，要么在 workflow 层设 `PYTHONIOENCODING`；「本地能跑」不构成「CI 能跑」的证据（终端编码与 runner 默认编码不同源）。
 
 ### tools/ci_stamp_version.py：CI 版本戳
 
@@ -323,6 +346,8 @@ git push                                    # 推送后 Actions 就位
 # GitHub → Actions → desktop-release → Run workflow（手动试装，约 10-15 分钟）
 git tag v0.26.5 && git push origin v0.26.5  # 自动出 Release + zip
 ```
+
+**排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现。
 
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 

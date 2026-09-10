@@ -154,7 +154,7 @@ def _agent_def_path(name: str):
 # （未列出时按默认顺序相对位置自动补插）；可关段 rules/history/ltm/tail 未列出即不装；
 # hooks 不占投影位置（产出绑在当前轮内），仅作开关——子 Agent 未列出时默认 off。
 # 动作项：file/dir/cmd/text 默认每轮求值（mtime 热改生效），workflow 默认 once 实例固化。
-_ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "tail"}
+_ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "recent_file", "tail"}
 _ASSEMBLY_TOGGLES = {"rules", "history", "ltm", "hooks", "tail"}
 _ASSEMBLY_ACTIONS = ("file", "dir", "cmd", "workflow", "text", "func", "tool")
 _ASSEMBLY_MUST = ("system", "user_message", "steps")

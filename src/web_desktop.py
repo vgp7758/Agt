@@ -111,11 +111,12 @@ def open_window(port: int):
         print("❌ 桌面模式需要 pywebview：pip install agt-agent[desktop]")
         print("   （浏览器模式不受影响：直接 agt-web 即可）")
         sys.exit(2)
-    if not _acquire_single_instance():
-        print("⚠️  Agt 桌面版已在运行（单实例锁）。请使用已打开的窗口；")
-        print("   如确认没有窗口，删除锁文件后重试：" + str(_lock_file()))
-        sys.exit(3)
     url = f"http://127.0.0.1:{port}/"
+    if not _acquire_single_instance():
+        # 已有桌面实例：**只开一个指向它的窗口，不再启一套引擎**（多开支持，
+        # 2026-09-10 用户裁定）：单实例锁退化为进程内的窗口去重，引擎/端口/引擎
+        # 数据（AGENTS.md/rules/.agent）都是新的，互不干扰。
+        print(f"ℹ️  已有 Agt 桌面实例在运行——本窗口改为多开模式（服务 {url}）")
     _WINDOW = webview.create_window(
         "Agt", url,
         width=1280, height=860, min_size=(900, 600),

@@ -24,7 +24,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent          # 脚本所在目录即仓库根（与 cwd 解耦）
-INIT = ROOT / "src" / "__init__.py"
+# 版本唯一真源在 paths.py 的 VERSION（src/__init__.py 反向导入它——2026-09 桌面版
+# 平铺打包改造后 __init__ 里不再有静态 __version__ 字符串，老正则匹配不到）
+PATHS = ROOT / "src" / "paths.py"
+VERFILE = ROOT / "packaging" / "version_file.txt"   # exe 版本资源（桌面版）
 # 默认纳入发布的改动路径；coze-studio 子模块永不纳入（保持历史约定：留在本地不提交）
 STAGE_PATHS = ["src", ".agent/workflows"]
 EXCLUDE = "coze-studio"
@@ -45,9 +48,9 @@ def _must(proc: subprocess.CompletedProcess, what: str) -> subprocess.CompletedP
 
 
 def current_version() -> str:
-    m = re.search(r'__version__\s*=\s*["\']([\d.]+)["\']', INIT.read_text(encoding="utf-8"))
+    m = re.search(r'VERSION\s*=\s*"([\d.]+)"', PATHS.read_text(encoding="utf-8"))
     if not m:
-        sys.exit("❌ 在 src/__init__.py 里没找到 __version__")
+        sys.exit("❌ 在 src/paths.py 里没找到 VERSION（唯一真源）")
     return m.group(1)
 
 
@@ -57,9 +60,14 @@ def bump(ver: str, part: str) -> str:
 
 
 def write_version(ver: str):
-    t = INIT.read_text(encoding="utf-8")
-    INIT.write_text(re.sub(r'__version__\s*=\s*["\'][\d.]+["\']', f'__version__ = "{ver}"', t),
-                    encoding="utf-8")
+    t = PATHS.read_text(encoding="utf-8")
+    PATHS.write_text(re.sub(r'VERSION\s*=\s*"[\d.]+"', f'VERSION = "{ver}"', t),
+                     encoding="utf-8")
+    if VERFILE.exists():   # exe 版本资源同步（桌面版本地构建吃它）
+        vt = VERFILE.read_text(encoding="utf-8")
+        nv, cnt = re.subn(r"\d+\.\d+\.\d+", ver, vt)
+        if cnt:
+            VERFILE.write_text(nv, encoding="utf-8")
 
 
 def stage() -> list[str]:
@@ -164,7 +172,7 @@ if __name__ == "__main__":
 def build_desktop() -> int:
     """桌面版打包（spec s_d53311f8）：PyInstaller onedir → dist/Agt/ → Agt-Desktop-<ver>.zip。
     不 bump 版本、不上传（GitHub Releases 附件用 gh CLI 或手动，Token 未配时给路径提示）。"""
-    ver = re.search(r'__version__\s*=\s*"([^"]+)"', INIT.read_text(encoding="utf-8")).group(1)
+    ver = re.search(r'VERSION\s*=\s*"([^"]+)"', PATHS.read_text(encoding="utf-8")).group(1)
     dist = ROOT / "packaging" / "dist"
     print(f"📦 桌面版打包 v{ver}（PyInstaller onedir）…")
     r = subprocess.run([sys.executable, "-m", "PyInstaller", "packaging/Agt.spec", "--noconfirm",

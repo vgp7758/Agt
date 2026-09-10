@@ -329,6 +329,7 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 - **wake=True 恒唤醒、不需策略参数**（与上节 service_exit 对照）：转后台任务本来是**同步等待**（超时被迫转后台），结果通常是决策链一环；且一次性任务跑完即报、**无套娃循环**——service_exit 那边崩溃场景要 5 分钟退避，这边天然安全
 - **回调隔离**：cb 抛异常仅记日志，不影响 `_bg_reader` 读线程；未注册（`_bg_notify_cb=None`）静默跳过
 - **check_bg_task 不变**：手动查询仍可用（docstring 同步更新）——自动通知即其合成记录（msg 形如「📨〔后台任务完成〕run_python（⚠️ 异常结束 rc=3）」，含尾部输出）
+- **合成记录键名契约**（2026-09-11 修复）：seed 四键 `{tool, args, result, reasoning}`——`tool` 是消费侧 `_seed_steps` 读的键，写成 `name` 则工具名恒空、通知轮退化成纯 user 通知（本族曾踩，见 [键名漂移修复](#键名漂移修复bg_task-合成记录-name--tool2026-09-11用户观察触发)）
 
 **后台事件通知语义全景（至此三族齐）**：
 
@@ -340,7 +341,7 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 
 共同原则：每种按「结果是否决策链一环 + 有无循环风险」定唤醒，而非一刀切。
 
-**验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。
+**验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。**后续修正**：seed list 包装（44ae953）+ 键名漂移（2026-09-11）两处产地缺陷，见 [seed 契约三层防御](#seed-契约三层防御非-dict-坏-seed-不再崩唤醒轮2026-08-31bg_task-唤醒轮秒崩修复) 及其后两节。
 
 ## seed 契约三层防御：非 dict 坏 seed 不再崩唤醒轮（2026-08-31，bg_task 唤醒轮秒崩修复）
 
@@ -381,12 +382,15 @@ self.push_message(header, source=f"bg_task:{bg_id}", seed=[rec], wake=True)
 
 **效果**：通知轮恢复**标准 check_bg_task 合成记录**（工具名/参数正确，含尾部输出）——不再依赖三层防御的降级包装（模型上下文里看到 `check_bg_task(task_id=...)` 而非 `notice(raw=[...])`）。三层防御保留，兜历史/旁路条目。
 
+> ⚠️ **后记（2026-09-11）**：本节注释宣称的「工具名正确」**当时并未成立**——`rec` 用的键是 `"name"`，而消费侧 `_seed_steps` 读 `"tool"`，工具名恒为空串。list 包装修了，**键名漂移漏网**，症状（通知轮无工具形态、看起来像 user 通知）一直持续到 2026-09-11 用户观察才闭环——见下节。
+
 **完整修复链**：
 
 | 提交 | 层次 | 效果 |
 |---|---|---|
 | 0565971 | 三层防御（push 入口 + drain + seed_steps） | 坏 seed 不再崩轮，降级为可读 notice |
-| 44ae953 | 产地修正（`[rec]` → `rec`） | 通知轮恢复标准合成记录 |
+| 44ae953 | 产地修正（`[rec]` → `rec`） | 坏 seed 产地关闭（**但键名仍错，工具名空**） |
+| 2026-09-11 | 键名修正（`"name"` → `"tool"`） | 合成记录真正带名带参（见下节） |
 | （终验） | /restart 后全链路 | 转后台 → 忙时排队 → 唤醒 → 处理 ✓ 全绿 |
 
 **终验时序（2026-08-31 12:10 实验：timeout 15s + run_python sleep(25)，bg_1788149442381）**：
@@ -401,6 +405,42 @@ self.push_message(header, source=f"bg_task:{bg_id}", seed=[rec], wake=True)
 终验同时补上 [bg_task 恒唤醒](#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1) 节中「忙时排队」路径的**首次实测证据**（闲时立即此前已有 8000 案例佐证）：通知不丢、不抢当前轮，turn_end 即触发。
 
 **新排障口诀（补充上节）**：**「降级包装出现在上下文 = 仍有产地在产坏 seed」**——三层防御是兜底不是免罪牌；看到 `notice(raw=[...])` 形态的合成记录，应顺着 `push_message` 调用方找产地修正，而不是满足于不崩。
+
+**生效方式**：引擎层（src/agent.py），需 `/restart`。
+
+### 键名漂移修复：bg_task 合成记录 `name` → `tool`（2026-09-11，用户观察触发）
+
+> src/agent.py `_on_bg_task_done`（一处）。**用户观察**：「bg_task 现在退出时看起来是 user 吧？我觉得也可以以工具记录的通知形式（不过现在似乎只有 check_bg_task 工具？）」——用户看到的「user 通知」不是渲染问题，是**合成记录从落地起就是残缺的**。
+
+**根因：seed 键名契约不匹配**（生产侧与消费侧各写各的）：
+
+```python
+# 生产侧 _on_bg_task_done（修复前）—— 用 "name" 键：
+rec = {"name": "check_bg_task", "args": {...}, "result": ...}
+
+# 消费侧 _seed_steps（src/agent.py L892）—— 读 "tool" 键：
+self.session.toollog.record(cid, sd.get("tool", ""), sd.get("args", {}), sd.get("result", ""))
+#                              ^^^^^^^^^^^^^^^ 恒拿到空串 → 工具名空
+```
+
+→ `toollog` 里记下的工具名恒为 `""`，投影出来**无名无工具形态**，看起来就是纯 user 通知。**service_exit 一直用 `"tool"` 键所以正常**——两类通知的对照恰好让用户发现了不一致。
+
+**历史澄清**：t530 那次修复（[上节](#产地修正_on_bg_task_done-的-seed-list-包装2026-08-31commit-44ae953终验发现)，commit 44ae953）的注释宣称「恢复标准 check_bg_task 合成记录（工具名/参数正确）」——**当时只修了 list 包装，键名漂移漏网，注释里的效果从未成立**。三层防御（0565971）同理只兜「不崩」，兜不住「键名对不对」。
+
+**修复**（一处，与 `_on_service_exit` / `_drain_notices` 降级包装的 `{tool, args, result, reasoning}` 四键契约对齐）：
+
+```python
+rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
+       "result": (f"[后台任务完成·自动通知] {name}（{bg_id}）{ok}。\n尾部输出：\n{out[-4000:]}")}
+```
+
+**验证**（单测三场景）：① 修复后 seed → 工具记录 `name=check_bg_task`、args/result 完整 ✅；② service_exit 契约不变 ✅；③ **旧 `"name"` 键形态复现：工具名 = `''`**——用户观察到的症状实锤。
+
+**为什么不需要新工具**（回答用户括号里的问题）：合成记录的 `tool` 字段本来就是**虚拟标注**——`stop_service` 那条也不是真的 stop 调用（其 reasoning 明确写「这是自行退出，并非你主动 stop」）。用 `check_bg_task` 作 bg_task 通知的合成名语义正合适：它就是「查这个后台任务」的结果形态，且模型想深挖时还能真的调 `check_bg_task(bg_id)` 拿全量输出——**合成记录与真实查询共用同一心智模型**。
+
+**修复后效果**：bg_task 完成通知醒来时，上下文里是一条**带名带参带尾部输出的完整工具记录**（assistant `tool_use` → `tool` 结果配对渲染），与 service_exit 同款。
+
+**新排障口诀（补充前两节）**：**「合成记录渲染成 user 通知 = 先查 seed 键名，再查是否 list 包装」**——三层防御 / list 包装修正都只管「不崩」，**键名契约**是第三条独立故障线；看到通知轮没有工具形态，先比对生产侧 rec 的键与 `_seed_steps` 读的键。
 
 **生效方式**：引擎层（src/agent.py），需 `/restart`。
 

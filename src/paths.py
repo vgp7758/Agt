@@ -60,4 +60,4 @@ AGT_DIR = resolve_agt_home()
 
 # 版本号唯一真源（桌面平铺打包形态没有 src 包——server.api_latest 等处从这取；
 # src/__init__.py 反向导入保持 pip 侧 __version__ 一致）
-VERSION = "0.26.4"
+VERSION = "0.26.5"

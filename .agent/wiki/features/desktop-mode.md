@@ -42,7 +42,7 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 ### Agt.spec（PyInstaller onedir）
 
 - 构建：`pyinstaller packaging/Agt.spec --noconfirm` → 产物 `dist/Agt/`
-- **平铺形态（spec 修 #1）**：`pathex=[str(SRC)]`（src/）→ 模块以**顶层名**收集（config/session/chat…），与 pip 运行时 `src/__init__.py` 的 sys.path hack（把 src/ 塞进 sys.path）同构——运行时代码里的裸 `import config` 才能在 PYZ 命中。首版 `pathex=仓库根` 是坑：模块以 `src.config` 命名空间收集，裸 import 找不到（见 [施工中排掉的五个坑 · 3](#施工中排掉的五个坑)）
+- **平铺形态（spec 修 #1）**：`pathex=[str(SRC)]`（src/）→ 模块以**顶层名**收集（config/session/chat…），与 pip 运行时 `src/__init__.py` 的 sys.path hack（把 src/ 塞进 sys.path）同构——运行时代码里的裸 `import config` 才能在 PYZ 命中。首版 `pathex=仓库根` 是坑：模块以 `src.config` 命名空间收集，裸 import 找不到（见 [施工中排掉的坑 · 3](#施工中排掉的坑)）
 - datas 同样**平铺到 `_internal/` 根**：`src/static → static`、`src/assets → assets`——`config.py` 的 `Path(__file__).parent/"assets"` 在 `_internal/assets` 命中
 - 排除 tkinter / matplotlib / pytest / pip；隐藏 imports 收集子模块（uvicorn / webview / anyio + encodings 补全 + web_desktop + **workflow_node_api**——节点插件 `assets/nodes_builtin/*.py` 运行时 `_import_fresh` 动态加载、静态分析看不到其 import，须显式收集，spec 修 #3）
 - **hookspath 覆盖社区 hook（spec 修 #2，2026-09-10 三轮）**：`hookspath=[ROOT/packaging/hooks]` 放空操作 `hook-workflow.py`（`hiddenimports = []`）——覆盖 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 hook（顶层模块 `workflow` 与本项目 `src/workflow.py` 平铺后同名冲突，社区 hook 的 import 会失败）；project hookspath 优先于社区 hooks
@@ -54,6 +54,7 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 - **workspace 锚定 exe 旁**：`Path(sys.executable).parent` 作为 cwd 基线——防快捷方式启动时 cwd 歧视（工作区相对路径解析不到）；首启自动创建 workspace/ 并 chdir
 - **`--pyrun` 子进程分流**：PyInstaller 下 `sys.executable` = Agt.exe 本体，直接 spawn Python 子进程会 **GUI 套娃**（Agt.exe 再拉 Agt.exe）——real_tools 三处 spawn 点（run_python / 相关子进程工具）已接 `_py_child_cmd`：打包形态用 `sys.executable --pyrun <file>` 分流到纯子进程 stub（runpy 直接执行目标文件，env 打 `AGT_FROZEN_CHILD=1`），源码形态直接 `sys.executable`
 - **`--selftest` 产物自检（2026-09-10 三轮升级为完整自检）**：`Agt.exe --selftest` ①**全模块 import 链**（config/paths/session/web_desktop/chat/server/**workflow_node_api**，逐个 `__import__`）②**资源就位**（static/index.html + assets/models.preset.json + **assets/nodes_builtin**）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件——判定 **`n_ok > 0`**，不再恒 True，0 个时提示「目录缺失/放错路径」——**漏收集 workflow_node_api 会在此暴露**，实测 ok=12 fail=0）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码——打包后跑一条命令替代难自动化的 GUI 冒烟（CI/发布前自动验证）
+- **`_redirect_stdio()`（2026-09-10 五轮，commit c9bd925）**：GUI（`console=False`）无控制台时 `sys.stdout/stderr` 为 None——uvicorn `DefaultFormatter.__init__` 调 `isatty()` 启动即崩（`Unable to configure formatter 'default'`）。进 `web_main` 前把 None 的 stdio **重定向到数据目录 `logs/desktop.log`**（spec「日志写文件」落地 + 桌面版排障第一现场），stdin 兜 devnull（见 [施工中排掉的坑 · 7](#施工中排掉的坑)）
 
 ## Step 3：首启向导 + 应用内更新检查（server.py / index.html）
 
@@ -89,7 +90,7 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 
 重打包 `dist/Agt/Agt.exe` **84MB**（自带 Python 3.13 运行时 + 全部依赖，解压即用）；发布链 `python release.py --desktop`（打包 → zip → GitHub Releases）。
 
-### 施工中排掉的六个坑
+### 施工中排掉的坑
 
 1. **pathlib backport 冲突**：环境里装的 Python 2 时代 `pathlib` backport 包与 PyInstaller 冲突 → 卸载后打包即通
 2. **冻结环境 GUI 套娃**：PyInstaller 下 `sys.executable` = `Agt.exe` 本体，run_python 直接 spawn 会 Agt.exe 再拉 Agt.exe → `--pyrun` 入口分流（见 [打包基建 · desktop_entry.py](#打包基建packagingagtspec--desktopentrypy-step-2)），冻结形态实测跑通
@@ -97,14 +98,17 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 4. **hook-workflow 同名冲突（2026-09-10 三轮，平铺后暴露，spec 修 #2）**：顶层模块 `workflow`（`src/workflow.py` 平铺收集）撞上 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 `hook-workflow.py`（其 import 必然失败）→ 仓库内 `packaging/hooks/hook-workflow.py` 放**空操作 hook**（`hiddenimports = []`）覆盖（project `hookspath` 优先于社区 hooks），见 [打包基建 · Agt.spec](#打包基建packagingagtspec--desktopentrypy-step-2)
 5. **节点插件 `No module named 'workflow_node_api'`（2026-09-10 三轮，spec 修 #3）**：节点插件（`assets/nodes_builtin/*.py`）由 `_import_fresh` 运行时**动态加载**，其 `import workflow_node_api` 静态分析看不见 → `hiddenimports` 显式补 `workflow_node_api`；`--selftest` 加节点插件动态加载自检（漏收集即暴露，实测 ok=12 fail=0）
 6. **PyInstaller 增量缓存复用（重打包必须 `--clean`，2026-09-10 四轮）**：重打包默认复用 `--workpath packaging/build` 的 Analysis 缓存，`desktop_entry.py` 刚做的 selftest 扩展（查 `assets/nodes_builtin` + workflow_node_api 收集）**没真正进产物**——exe 里嵌的还是旧字节码 → 产物 `--selftest` 报 `SELFTEST_FAIL`（仍在查老路径 `assets/nodes`、节点插件动态加载 0 个）。修复 = **全量 `--clean` 重打包**（清 Analysis 缓存，产物才会带当前 desktop_entry.py）；教训「PyInstaller 重打包须 --clean」已记长期记忆。同轮把节点插件自检判定从恒 `True` 收紧为 `n_ok > 0`（0 个=目录缺失/放错路径提示），避免空载被掩盖
+7. **GUI 无控制台 → `sys.stdout/stderr` 为 None → uvicorn formatter 启动即崩（2026-09-10 五轮，commit c9bd925，用户双击实测）**：`console=False` 的 GUI 程序（explorer 双击启动）**没有控制台**，`sys.stdout`/`sys.stderr` 是 `None`——`server.start_server()` → uvicorn `configure_logging` → `DefaultFormatter.__init__` 调 `sys.stdout.isatty()` 直接崩 `AttributeError: 'NoneType' object has no attribute 'isatty'` → `ValueError: Unable to configure formatter 'default'` → 启动即崩。**selftest 抓不到的盲区**：只做 import 链不启动 uvicorn，且 cmd 下跑 selftest 继承控制台（stdio 非 None）——**只有真·双击才触发**。修复 = `desktop_entry._redirect_stdio()`：进 `web_main` 前检测 stdio 为 None 则**重定向到数据目录 `logs/desktop.log`**（落实 spec「日志写文件」约定，成为桌面版排障第一现场），stdin 兜 devnull；**pythonw 无控制台模拟验证全过**（REDIRECT_STDOUT_OK isatty=False / REDIRECT_STDERR_OK / **UVICORN_FORMATTER_OK use_colors=False**——原崩溃的那一行现在构造成功）。修复后 `--clean` 全量重打包，完成后再 selftest 回归 + `AGT_HOME` 临时目录无控制台拉起 exe 端到端验证
 
 ## 验证状态
 
 四步全部施工完成并推送（commit 6c2efce + f634d0d）；PyInstaller 全量打包 **84MB**（自带 Python 3.13 运行时 + 全部依赖）构建成功，最终冻结冒烟 ✓——代码/文件双模式 run_python 走 `--pyrun` 子进程分流实测跑通（FROZEN_OK）。
 
-**打包形态修复（2026-09-10 二轮 + 三轮，commit c41d169 已推送）**：用户实测 `desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'` → 定位为收集形态错位，spec 改**平铺同构**（[施工中排掉的六个坑 · 3](#施工中排掉的六个坑)）。平铺后三连坑一次收口：config 错位（坑 3）+ **hook-workflow 同名冲突**（坑 4）+ **workflow_node_api 漏收集**（坑 5，见 [施工中排掉的六个坑](#施工中排掉的六个坑)）。重打包产物 `Agt.exe --selftest` **完整自检通过**：全模块 import 链 ✅（含 workflow_node_api）、三资源就位 ✅、**节点插件动态加载 ok=12 fail=0**（workflow_node_api 依赖闭环）→ `SELFTEST_PASS`。
+**打包形态修复（2026-09-10 二轮 + 三轮，commit c41d169 已推送）**：用户实测 `desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'` → 定位为收集形态错位，spec 改**平铺同构**（[施工中排掉的坑 · 3](#施工中排掉的坑)）。平铺后三连坑一次收口：config 错位（坑 3）+ **hook-workflow 同名冲突**（坑 4）+ **workflow_node_api 漏收集**（坑 5，见 [施工中排掉的坑](#施工中排掉的坑)）。重打包产物 `Agt.exe --selftest` **完整自检通过**：全模块 import 链 ✅（含 workflow_node_api）、三资源就位 ✅、**节点插件动态加载 ok=12 fail=0**（workflow_node_api 依赖闭环）→ `SELFTEST_PASS`。
 
-**增量缓存坑（2026-09-10 四轮，commit c41d169 之后）**：两轮 `run_shell` 打包任务正常结束后，`Agt.exe --selftest` 却报 `SELFTEST_FAIL`——产物嵌的是**旧版 desktop_entry.py**（还在查老路径 `assets/nodes`、节点插件动态加载 0 个）：PyInstaller 未 `--clean` 时复用 `--workpath packaging/build` 的 Analysis 缓存，新 selftest 扩展根本没进产物（见 [施工中排掉的六个坑 · 6](#施工中排掉的六个坑)）。处理：发起**全量 `--clean` 重打包**（后台任务），并把「重打包须 --clean」记入长期记忆；同时节点插件自检判定收紧为 `n_ok > 0`。`--clean` 产物完成后再次 `--selftest` 收尾验证。
+**增量缓存坑（2026-09-10 四轮，commit c41d169 之后）**：两轮 `run_shell` 打包任务正常结束后，`Agt.exe --selftest` 却报 `SELFTEST_FAIL`——产物嵌的是**旧版 desktop_entry.py**（还在查老路径 `assets/nodes`、节点插件动态加载 0 个）：PyInstaller 未 `--clean` 时复用 `--workpath packaging/build` 的 Analysis 缓存，新 selftest 扩展根本没进产物（见 [施工中排掉的坑 · 6](#施工中排掉的坑)）。处理：发起**全量 `--clean` 重打包**（后台任务），并把「重打包须 --clean」记入长期记忆；同时节点插件自检判定收紧为 `n_ok > 0`。`--clean` 产物完成后再次 `--selftest` 收尾验证。
+
+**uvicorn formatter 崩溃（2026-09-10 五轮，commit c9bd925，用户双击实测）**：`AttributeError: 'NoneType' object has no attribute 'isatty'` → `Unable to configure formatter 'default'` 启动即崩——GUI 程序（`console=False`）无控制台，`sys.stdout/stderr` 为 None，uvicorn `DefaultFormatter` 调 `isatty()` 崩溃（selftest 覆盖不到：不启动 uvicorn + cmd 下继承控制台）。修复 = `desktop_entry._redirect_stdio()` 重定向 stdio 到数据目录 `logs/desktop.log`（spec「日志写文件」落地），pythonw 无控制台模拟验证全过（见 [施工中排掉的坑 · 7](#施工中排掉的坑)）；后续 `--clean` 重打包完成后 `AGT_HOME` 临时目录无控制台拉起 exe 端到端验证。
 
 交付验收（GUI 只能人工验）：`packaging/dist/Agt/Agt.exe` 双击 → 首启向导 → 配 token → 对话一轮 → 关窗重开（session 恢复）——自检覆盖不到 GUI 交互层。验收通过后 `python release.py --desktop` 一键出 zip 上 GitHub Releases。
 

@@ -608,3 +608,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **`--selftest` 升级完整自检**：全模块 import 链（config/paths/session/web_desktop/chat/server/**workflow_node_api**）+ 资源就位（static/index.html + models.preset.json + **nodes_builtin**）+ **节点插件动态加载自检**（真实 `_import_fresh` 走 nodes_builtin，ok=12 fail=0，漏收集 workflow_node_api 时在此暴露）→ `SELFTEST_PASS`；GUI 交互层自检覆盖不到，仍需人工双击验收
 - 详见 [桌面版 · 施工中排掉的五个坑](features/desktop-mode.md#施工中排掉的五个坑)
 
+## 快速事实增补（2026-09-10 · 八 · 桌面版 uvicorn 启动即崩——GUI 无控制台 stdio 为 None）
+
+- **双击启动即崩修复（commit c9bd925）**：`AttributeError: 'NoneType' object has no attribute 'isatty'` → `ValueError: Unable to configure formatter 'default'`。根因 = GUI 程序（`console=False`）无控制台 → `sys.stdout/stderr` 为 `None` → uvicorn `DefaultFormatter.__init__` 调 `isatty()` 启动即崩。**selftest 覆盖不到的盲区**：只做 import 链不启动 uvicorn，且 cmd 下跑 selftest 继承控制台（stdio 非 None）——只有真·双击才触发
+- **修复 = `desktop_entry._redirect_stdio()`**：进 `web_main` 前检测 stdio 为 None 则**重定向到数据目录 `logs/desktop.log`**（落实 spec「日志写文件」约定，成为桌面版排障第一现场），stdin 兜 devnull；**pythonw 无控制台模拟验证全过**（REDIRECT_STDOUT_OK isatty=False / REDIRECT_STDERR_OK / UVICORN_FORMATTER_OK use_colors=False——原崩溃那一行现在构造成功）；`--clean` 全量重打包 + 无控制台拉起 exe 端到端验证进行中
+- 详见 [桌面版 · 施工中排掉的坑 · 7](features/desktop-mode.md#施工中排掉的坑)
+

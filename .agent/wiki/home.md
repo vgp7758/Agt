@@ -636,16 +636,13 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 ## 快速事实增补（2026-09-10 · 十二 · 桌面版迁移判定 bug：目录存在 ≠ 已初始化）
 
-用户三问（读 models.py 而非 ~/.agt ？/ launcher 选 repo 后 session 下拉框空 / web 端有无回归）——**同一根因**，已修（`src/paths.py`，重打包后台进行中）。
-
-- **`models.py` 没被打进包**：模型来自**用户所选 repo 目录里的 `models.py`**（config 向后兼容回退链：`AGT_HOME/models.json` 不存在 → 读 workspace 的 `models.py`）
-- **session 空 + 存档目录差异**：桌面版 = `%APPDATA%\Agt`（正常版 `~/.agt`），首启本应**一次性全量迁移**——但被 **launcher 预建目录短路**：launcher 先写 `%APPDATA%\Agt\recent_workspaces.json` → 目录已存在 → 旧判据 `not new.exists()` 判"已初始化" → 跳过迁移 → 空配置空存档 → 模型回退读 workspace 的 `models.py`
-- **修复**：迁移判定从「目录存在」改为「**有无用户数据**」——`_USER_DATA = (models.json / settings.json / mcp.json / main.yml / repos / remote_instances.json)` 任一存在才算已初始化；`copytree(dirs_exist_ok=True)` 兼容预建目录；成功写 `.migrated-from` 留痕；OSError 静默不阻塞启动。单测四场景全过（预建目录仍迁移 / 有数据不迁移 / 非 desktop 回默认 / 干净启动）
+- **`models.py` 没被打进包**：模型来自**用户所选 repo 目录里的 `models.py`**（config 向后兼容回退链：`models.json` 不存在 → 读 workspace 的 `models.py`）
+- **session 空 + 存档目录差异**（当时设计）：桌面版 = `%APPDATA%\Agt`（正常版 `~/.agt`），首启本应**一次性全量迁移**——但被 **launcher 预建目录短路**：launcher 先写 `%APPDATA%\Agt\recent_workspaces.json` → 目录已存在 → 旧判据 `not new.exists()` 判"已初始化" → 跳过迁移 → 空配置空存档 → 模型回退读 workspace 的 `models.py`
+- **当时的修复**：迁移判定从「目录存在」改为「**有无用户数据**」——`_USER_DATA = (models.json / settings.json / mcp.json / main.yml / repos / remote_instances.json)` 任一存在才算已初始化；`copytree(dirs_exist_ok=True)` 兼容预建目录；成功写 `.migrated-from` 留痕；OSError 静默不阻塞启动。单测四场景全过
 - **web 端无回归 ✅**：pip 态起 9001 web 服务 → HTTP 200（18.6KB 页面正常）；chat.py 两处改动只在桌面分支生效
-- **生效**：`--clean` 重打包（后台 `bg_1789023078536`，约 6 分钟）→ launcher 打开 repo 首启提示迁移 → session 下拉框出现全部历史
-- **遗留待决**：迁移是**全量拷贝**（含所有 repo 存档），数据大时首启卡顿——可选「只搬全局配置不搬 repos / 存档懒迁移」，待用户裁定
-- **通用教训**：**「目录存在」≠「已初始化」**——初始化/迁移判据必须基于业务数据存在性，别用目录 `exists()`（launcher / 日志 / 缓存会预建目录）
-- 详见 [features/desktop-mode · 迁移判定 bug](features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)、[guides/ops · 存档布局](guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos)
+- **⚠️ 后续（同日 · 十四轮，用户裁定）**：整个「桌面版独立数据目录 + 迁移」方案**已回退**——数据根统一 `~/.agt`，`_USER_DATA` 迁移判据随之作废（见 [十四 · 数据根统一回退](#快速事实增补2026-09-10--十四--数据根统一回退-agt)）。全量拷贝的卡顿与「与 CLI 版分叉」一并消失
+- **通用教训（仍成立）**：**「目录存在」≠「已初始化」**——初始化/迁移判据必须基于业务数据存在性，别用目录 `exists()`（launcher / 日志 / 缓存会预建目录）
+- 详见 [features/desktop-mode · 迁移判定 bug](features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)、[features/desktop-mode · 数据根统一回退](features/desktop-mode.md#数据根统一回退桌面版不再迁-appdata2026-09-10--十四轮用户裁定commit-8ed30f6)、[guides/ops · 存档布局](guides/ops.md#存档布局paths-py两级解析--单一数据根-agt-repos)
 
 ## 快速事实增补（2026-09-10 · 十三 · 桌面版云构建 + Release 流水线）
 
@@ -653,4 +650,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **`ci_stamp_version.py` 版本戳**：tag → 把 `src/paths.py` 的 `VERSION`（**唯一真源**，`src/__init__.py` 反向导入随其同步）+ `packaging/version_file.txt`（exe 版本资源）同步为 tag 名去 v，保证**产物版本 == tag 版本**；手动触发（`ref_type=branch`）不改、沿用仓库版本；非 `x.y.z` tag 跳过告警。**踩坑**：首版还去改 `src/__init__.py` 的 `__version__`——平铺打包后该文件是反向导入（无字面量）→ 正则 0 处 `AssertionError`，收敛为「只改唯一真源」。单测三场景全过（v9.9.9 双同步 / branch 沿用 / vNext 跳过），已还原
 - **与本地发布链**：`python release.py --desktop` 降为兜底（离线/应急；不 bump 版本、不上传 PyPI）；本机未装 `gh`，正式 Release 由 Actions 自己创建。**用户侧下一步**（需 GitHub 账号）：`git push` → Actions 手动 Run workflow 试装 → `git tag v0.26.5 && git push origin v0.26.5` 出 Release
 - 详见 [桌面版 · 云构建 + Release](features/desktop-mode.md#云构建--releasegithub-actions-流水线2026-09-10--十三轮spec-决策云构建为主)
+
+## 快速事实增补（2026-09-10 · 十四 · 数据根统一回退 ~/.agt）
+
+- **数据根统一 `~/.agt`（2026-09-10 · 十四轮，用户裁定，commit 8ed30f6）**：用户质疑「是要把存档 copy 到 APPDATA? 保持在 `~/.agt/` 读写就行吧？claude code 的 vs 插件和 cli 端读的也是同一个位置吧」——判断正确，`%APPDATA%\Agt` 迁移方案**整体回退**。`resolve_agt_home()` 桌面分支不再返回 AppData（两级：`AGT_HOME` env > `~/.agt`）；新增 `_reclaim_legacy_appdata()` 把此前迁出去的产物**搬回**（只搬缺失项、从不覆盖、失败静默），覆盖 models.json/settings.json/mcp.json/main.yml/models.py/repos/memories/logs/remote_instances.json 九类；`%APPDATA%\Agt` 仅留系统侧产物（Launcher recent 列表 / 桌面日志 / 实例锁）。**收益**：桌面版与 CLI/pip 版共用一份数据（session/记忆/模型配置不再分叉）、云构建与多机部署不再复制 GB 级存档；两形态可同时开（同 repo 同 session 才会撞）。单测四场景全过；`--clean` 重打包后台（`bg_1789037352009`）——见 [桌面版 · 数据根统一回退](features/desktop-mode.md#数据根统一回退桌面版不再迁-appdata2026-09-10--十四轮用户裁定commit-8ed30f6)、[ops · 存档布局](guides/ops.md#存档布局paths-py两级解析--单一数据根-agt-repos)
+- **上一轮的迁移判定修复随之作废，但教训保留**：`_USER_DATA` 判据（迁移判定改看用户数据而非目录存在）随方案回退失效；**「目录存在 ≠ 已初始化」仍是通用教训**——初始化/迁移判据必须基于业务数据存在性（launcher/日志/缓存会预建目录）。见 [桌面版 · 迁移判定 bug](features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)
+- **遗留（非功能性）**：`src/desktop_entry.py` docstring 第 1 条、`src/config.py` L21 注释仍写「数据目录迁 %APPDATA%\Agt」，实际行为已统一 `~/.agt`，注释待清理
 

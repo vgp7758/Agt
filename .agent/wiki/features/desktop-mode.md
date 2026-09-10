@@ -2,7 +2,9 @@
 
 ## 职责
 
-把 Agt 从「浏览器交互的 Web 服务」升级为「双击即用的桌面应用」（spec s_d53311f8 · 四步全交付）：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2 / mac: WKWebView / Linux: gtkwebkit，非 Electron）；配套数据目录迁移（桌面模式进 Windows AppData 惯例位置）、PyInstaller 打包基建（onedir 自带 Python 运行时，下载即用）、**首启向导 + 应用内更新检查**（无 provider 配置自动弹 onboarding + GitHub Releases 版本横幅）、**图标 / Windows 版本资源 / SmartScreen 教学文档**。pip 用户走 Step 1（窗口模式）；分发走 Step 2-4（打包 + 首启体验 + 发版物料）。
+把 Agt 从「浏览器交互的 Web 服务」升级为「双击即用的桌面应用」（spec s_d53311f8 · 四步全交付）：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2 / mac: WKWebView / Linux: gtkwebkit，非 Electron）；配套 PyInstaller 打包基建（onedir 自带 Python 运行时，下载即用）、**首启向导 + 应用内更新检查**（无 provider 配置自动弹 onboarding + GitHub Releases 版本横幅）、**图标 / Windows 版本资源 / SmartScreen 教学文档**。pip 用户走 Step 1（窗口模式）；分发走 Step 2-4（打包 + 首启体验 + 发版物料）。
+
+**数据根：单一 `~/.agt`（用户裁定 2026-09-10，见 [数据目录唯一真源](#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)）**——桌面版与 CLI/pip 版、多桌面实例、Launcher 打开的不同 workspace 全部读写同一份数据，与 VS Code 插件/CLI 共用 `~/.claude` 同构。曾按桌面惯例迁 `%APPDATA%\Agt` 并全量拷贝，已回退。
 
 **瘦启动器（spec s_37494daf，2026-09-10 续）**：在四步之上加一层「先选工作区再拉起主程序」的入口——`Launcher.exe`（11.3MB 独立 onefile）双击选目录 → 以该目录为 workspace 启动 `Agt.exe`；直接双击 `Agt.exe` 仍进默认 workspace（两入口共存）。见 [瘦启动器 Launcher.exe](#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10)。
 
@@ -39,14 +41,27 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 
 实现细节：开窗与运行分离（open_window 注册 → run_loop 阻塞），窗口关闭事件接回主循环；单实例锁（pid 存活 + 进程名比对防 pid 复用）。
 
-## 数据目录唯一真源：paths.py（Step 2，七处收编）
+## 数据目录唯一真源：paths.py · 单一数据根（用户裁定 2026-09-10）
 
-- 桌面打包形态由入口设 `AGT_DESKTOP=1` → 数据进 AppData（Windows 惯例）；测试/多实例用 `AGT_HOME` env 覆盖
-- **存量迁移**：首次桌面启动新目录为空且旧 `~/.agt` 存在 → 整体复制（旧目录保留不删，回滚不丢数据）
-- **七处独立定义收编**：此前 `Path.home()/".agt"` 散落在 config / session / lsp_manager / restart_watchdog / spec_tools / updater / feedback 各自定义——桌面模式数据目录迁移前**必须**统一，否则数据分裂三处。现全部改 `from paths import AGT_DIR`（或 `AGT_DIR / "..."` 拼子目录）
-- config.py 的迁移逻辑也移入 paths.py：config 不再自持目录解析，**避免 session→config 循环 import**
-- 外置工具（`assets/tools_builtin`，无 src 可 import）各自轻量复制三级逻辑（同款语义），如 cache_tools.py
+**单一数据根：始终 `~/.agt`**（用户裁定 2026-09-10，回退桌面 AppData 方案）：
+
+| 优先级 | 来源 | 用途 |
+|---|---|---|
+| 1 | `AGT_HOME` env | 测试 / 多实例隔离 |
+| 2 | `~/.agt`（默认，**含桌面模式**） | 全部形态共用一份数据 |
+
+- **为什么统一**（用户判断，与 Claude Code 同构）：VS Code 插件 / CLI / 各项目共用 `~/.claude`——差异在 **workspace**（打开哪个目录），不在数据根。桌面版若另立 `%APPDATA%\Agt`：① 每台把 Agt 装到别处的机器、**每次 CI 云构建**都要全量复制 GB 级存档；② 与 CLI 版数据**分叉**（在哪边干活，另一边的记忆/session 就"丢"）——`~/.agt` 下模型配置 / settings / 长期记忆 / 跨 repo 的 wiki·RAG 只需一份
+- **回退与回收**：`resolve_agt_home()` 桌面分支不再返回 AppData，改为调 `_reclaim_legacy_appdata()`——把此前被迁出去的产物**搬回** `~/.agt`：**只搬缺失项、从不覆盖、`OSError` 静默**（回收失败不阻塞启动），覆盖 `models.json / settings.json / mcp.json / main.yml / models.py / repos / memories / logs / remote_instances.json` 九类，成功打印「📦 数据根统一：回收 … → `~/.agt`」
+- **`%APPDATA%\Agt` 保留为系统侧产物**（不进 git 数据根）：Launcher 的 `recent_workspaces.json`（`packaging/launcher.py` `_data_dir()`）、桌面 `logs/desktop.log`（`desktop_entry._redirect_stdio()`）、`web_desktop` 单实例锁 `instance.lock`
+- **七处独立定义收编**：此前 `Path.home()/".agt"` 散落在 config / session / lsp_manager / restart_watchdog / spec_tools / updater / feedback 各自定义——现全部改 `from paths import AGT_DIR`（或 `AGT_DIR / "..."` 拼子目录）。外置工具（`assets/tools_builtin`，无 src 可 import）各自轻量复制同款逻辑
+- config.py 的目录解析也移入 paths.py：config 不再自持目录解析，**避免 session→config 循环 import**
 - **版本号唯一真源同在此文件**（2026-09-10 二轮，平铺打包）：`VERSION = "0.26.4"`，`src/__init__.py` 反向 `from paths import VERSION as __version__` 保持 pip 侧一致；`server.py /api/latest` 也从 `import src` 改 `from paths import VERSION`（桌面平铺形态无 src 包）
+
+**单测（四场景全过）**：桌面根=`~/.agt` 且不再外迁 ✅ / 回收搬回 models+repos ✅ / 目标已有不覆盖 ✅ / CLI 分支不触发回收 ✅。
+
+**与 CLI 版可同时开**：同一 `~/.agt`、不同 workspace / 实例互不干扰；同 repo 同 session 才会撞（与多实例组网约束一致）。
+
+**历史（已废弃方案，留作教训）**：曾按桌面惯例 `%APPDATA%\Agt` + 首启全量迁移 `~/.agt`，并因此踩过 [迁移判定被 launcher 预建目录短路](#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)（迁移判定改看「用户数据存在性」）——该轮修复的 `_USER_DATA` 判据随本轮回退一并作废，但「目录存在 ≠ 已初始化」的通用教训仍成立。
 
 ## 打包基建：packaging/Agt.spec + desktop_entry.py（Step 2）
 
@@ -165,10 +180,12 @@ open_window(8001)         ← 窗口加载 http://127.0.0.1:8001/ → 无人监�
 
 **用户报告（三问，同一根因）**：① 桌面版看起来读的是 `models.py` / `config.py` 而不是 `~/.agt/`——是被打进包了吗？② 从 `Launcher.exe` 选了一个已有 repo，打开后 **session 下拉框是空的**——桌面端存档目录和正常版有区别吗？③ 正常 web 端有没有回归？
 
+> **后续（2026-09-10 同日，用户裁定）**：本节根因所在的「桌面版独立数据目录 `%APPDATA%\Agt`」方案**已被整体回退**——数据根统一 `~/.agt`，迁移逻辑随之作废（见 [数据目录唯一真源](#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)）。本节保留为**「目录存在 ≠ 已初始化」这一通用教训**的原始案例。
+
 **逐问结论**：
 
-1. **`models.py`/`config.py` 没被打进包**——模型来自**用户所选 repo 目录里的 `models.py`**（config 的向后兼容回退链：`AGT_HOME/models.json` 不存在 → 读 workspace 的 `models.py`）。真问题是 `%APPDATA%\Agt\models.json` 为什么不存在 → 见 2
-2. **桌面端存档目录确实不同**（设计如此）：桌面版 = `%APPDATA%\Agt`，正常版 = `~/.agt`；首次桌面启动会**一次性全量迁移** `~/.agt` → `%APPDATA%\Agt`（session / 模型配置全跟过来）。但迁移被 **launcher 预建目录短路**（见下），故桌面版空配置 + 空存档 → session 空 + 模型回退到 workspace 的 `models.py`
+1. **`models.py`/`config.py` 没被打进包**——模型来自**用户所选 repo 目录里的 `models.py`**（config 的向后兼容回退链：`models.json` 不存在 → 读 workspace 的 `models.py`）。真问题是 `%APPDATA%\Agt\models.json` 为什么不存在 → 见 2
+2. **桌面端存档目录当时确实不同**（当时设计）：桌面版 = `%APPDATA%\Agt`，正常版 = `~/.agt`；首次桌面启动会**一次性全量迁移** `~/.agt` → `%APPDATA%\Agt`（session / 模型配置全跟过来）。但迁移被 **launcher 预建目录短路**（见下），故桌面版空配置 + 空存档 → session 空 + 模型回退到 workspace 的 `models.py`
 3. **web 端无回归 ✅**（实测）：pip 态起 9001 web 服务 → HTTP 200（18.6KB 页面正常返回）；chat.py 两处改动（`pick_port` 前置、开窗条件）都只在桌面分支生效
 
 **根因（时序 bug，`src/paths.py` `resolve_agt_home`）**：
@@ -180,15 +197,32 @@ launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
 → 桌面版：空配置 + 空存档 → fallback 读到 workspace 的 models.py
 ```
 
-**修复（`src/paths.py`）**：迁移判定从「**目录存在**」改为「**有无用户数据**」——定义 `_USER_DATA = ("models.json", "settings.json", "mcp.json", "main.yml", "repos", "remote_instances.json")`，任一存在才算已初始化；`shutil.copytree(old, new, dirs_exist_ok=True)` 兼容 launcher 预建目录（logs/ 亦系统产物，目录存在 ≠ 已初始化）。迁移成功写 `(new / ".migrated-from").write_text(str(old))` 留痕；`OSError` 静默（迁移失败不阻塞启动，空配置起步）。首启打印「📦 首次桌面启动：迁移 … （一次性，含全部 repo 存档）…」。
+**当时的修复（`src/paths.py`）**：迁移判定从「**目录存在**」改为「**有无用户数据**」——定义 `_USER_DATA = ("models.json", "settings.json", "mcp.json", "main.yml", "repos", "remote_instances.json")`，任一存在才算已初始化；`shutil.copytree(old, new, dirs_exist_ok=True)` 兼容 launcher 预建目录（logs/ 亦系统产物，目录存在 ≠ 已初始化）。迁移成功写 `.migrated-from` 留痕；`OSError` 静默。首启打印「📦 首次桌面启动：迁移 …」。
 
 **验证（单测四场景全过）**：预建目录（仅 recent/logs）仍迁移 ✅ / 有用户数据不迁移 ✅ / 非 desktop 回默认 `~/.agt` ✅ / 干净启动正常迁移 ✅。
 
-**生效方式**：`--clean` 重打包完成后（后台任务 `bg_1789023078536`，约 6 分钟），再用 launcher 打开该 repo → 首次提示迁移 → session 下拉框出现全部历史 + 模型读 `%APPDATA%\Agt\models.json`。
+**教训（本轮最有价值的部分，与方案回退无关）**：**「目录存在」不是「已初始化」的判据**——任何「首次运行才执行」的初始化/迁移逻辑，判定条件必须基于**业务数据的存在性**（models.json / repos 等），而非目录/文件系统层面存在性；有别的组件（launcher / 日志 / 缓存）会预先创建目录，用 `exists()` 判据必被短路。
 
-**遗留讨论（用户提问，未决）**：迁移是**全量拷贝**（`~/.agt` 下所有 repo 的存档），数据大时首启会卡一会儿——可选优化：只搬全局配置（models/settings）不搬 repos、存档按需懒迁移。待用户裁定。
+**同轮暴露的下一步**：用户随即质疑「为什么桌面版要复制一份数据？」→ 触发数据根统一（[见上](#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)），全量拷贝的卡顿问题与「与 CLI 版分叉」一并消失。
 
-**教训**：**「目录存在」不是「已初始化」的判据**——任何「首次运行才执行」的初始化/迁移逻辑，判定条件必须基于**业务数据的存在性**（models.json / repos 等），而非目录/文件系统层面存在性；有别的组件（launcher / 日志 / 缓存）会预先创建目录，用 `exists()` 判据必被短路。
+## 数据根统一回退：桌面版不再迁 %APPDATA%（2026-09-10 · 十四轮，用户裁定，commit 8ed30f6）
+
+**数据根统一 `~/.agt`（2026-09-10 · 十四轮，用户裁定，commit 8ed30f6）**
+
+**用户提问**：「是要把存档 copy 到 APPDATA? 我觉得保持在 `~/.agt/` 里读写就行吧？claude code 的 vs 插件和 cli 端读写的也是同一个位置的东西吧」——判断正确，`%APPDATA%\Agt` 迁移方案整体回退。
+
+| 反直觉坏处 | 说明 |
+|---|---|
+| 云构建/多机成本 | 每台把 Agt 装到别处的机器、**每次 CI 云构建**都要复制 GB 级存档 |
+| 数据分叉 | 桌面版与 CLI/pip 版各持一份——在哪边干活，另一边的记忆 / session 就"丢" |
+
+**改动**：`resolve_agt_home()` 桌面分支不再返回 AppData（两级：`AGT_HOME` env > `~/.agt`）；新增 `_reclaim_legacy_appdata()` 把此前被迁出去的产物**搬回** `~/.agt`（只搬缺失项、从不覆盖、失败静默），覆盖 `models.json / settings.json / mcp.json / main.yml / models.py / repos / memories / logs / remote_instances.json` 九类；`%APPDATA%\Agt` 保留为系统侧产物（Launcher recent 列表 / 桌面日志 / 实例锁）。详见 [数据目录唯一真源](#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)。
+
+**验证**：单测四场景全过（桌面根=`~/.agt` 且不再外迁 / 回收搬回 models+repos / 目标已有不覆盖 / CLI 分支不触发回收）；`--clean` 重打包后台进行（`bg_1789037352009`），完成后新产物启动会打印一次「📦 数据根统一：回收 … → `~/.agt`」（若此前试装迁走过数据），随后与 CLI 版完全共用一份数据（session 下拉框直接看到全部历史）。
+
+**顺带**：桌面版与 CLI 版可同时运行（同一 `~/.agt`、不同 workspace/实例互不干扰；同 repo 同 session 才会撞，与多实例组网约束一致）。
+
+**遗留（代码注释未同步，非功能性）**：`src/desktop_entry.py` 模块 docstring 第 1 条仍写「数据目录迁 `%APPDATA%\Agt`」、`src/config.py` L21 注释仍写「AGT_HOME env > 桌面 %APPDATA%\Agt > ~/.agt」——实际行为已统一 `~/.agt`，注释待顺手清理。
 
 ## 云构建 + Release：GitHub Actions 流水线（2026-09-10 · 十三轮，spec 决策：云构建为主）
 

@@ -1,10 +1,12 @@
 # 运维、可观测性与排障
 
-## 存档布局（paths.py 三级解析 · 默认 ~/.agt/repos/）
+## 存档布局（paths.py 两级解析 · 单一数据根 ~/.agt/repos/）
 
-数据目录解析唯一真源在 `src/paths.py`（2026-09-10，spec s_d53311f8 Step 2）：`AGT_HOME` env（测试/多实例）> 桌面模式 `%APPDATA%\Agt` > 默认 `~/.agt`。桌面打包形态由入口设 `AGT_DESKTOP=1` → 数据进 AppData（Windows 惯例）；首次桌面启动把旧 `~/.agt` 整体复制到新目录（旧目录保留可回滚）。此前 `Path.home()/".agt"` 散落在 config/session/lsp_manager/restart_watchdog/spec_tools/updater/feedback **七处独立定义**，已全部收编 `from paths import AGT_DIR`（外置工具各自轻量复制三级逻辑）。详见 [桌面版](../features/desktop-mode.md)。
+数据目录解析唯一真源在 `src/paths.py`（2026-09-10，spec s_d53311f8）：**两级——`AGT_HOME` env（测试/多实例隔离）> `~/.agt`（默认，含桌面模式）**。桌面版与 CLI/pip 版、多桌面实例、Launcher 打开的不同 workspace **全部读写同一份数据**（与 VS Code 插件/CLI 共用 `~/.claude` 同构；用户裁定 2026-09-10，commit 8ed30f6）。此前 `Path.home()/".agt"` 散落在 config/session/lsp_manager/restart_watchdog/spec_tools/updater/feedback **七处独立定义**，已全部收编 `from paths import AGT_DIR`（外置工具各自轻量复制同款逻辑）。详见 [桌面版 · 数据目录唯一真源](../features/desktop-mode.md#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)。
 
-**迁移判定看「用户数据」而非「目录存在」（2026-09-10 · 七轮，用户报告 session 空 + 读到 workspace models.py）**：`resolve_agt_home` 桌面分支的迁移条件 = `old.is_dir() and not any((new / f).exists() for f in _USER_DATA)`，`_USER_DATA = (models.json / settings.json / mcp.json / main.yml / repos / remote_instances.json)`——**launcher 会先建 `%APPDATA%\Agt` 写 `recent_workspaces.json`（logs/ 亦系统产物），目录存在 ≠ 已初始化**；旧判据 `not new.exists()` 被 launcher 预建目录短路 → 桌面版空配置空 session + 模型回退读 workspace 的 `models.py`（用户误以为 models.py 被打进包，实际是 config 的向后兼容回退链）。`copytree(dirs_exist_ok=True)` 兼容预建目录，迁移成功写 `.migrated-from` 留痕。**通用教训：初始化/迁移的判据必须是业务数据存在性，不能用目录 `exists()`**。见 [桌面版 · 迁移判定 bug](../features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)。
+**历史（已回退）**：曾按桌面惯例把根迁到 `%APPDATA%\Agt` + 首启全量拷贝 `~/.agt`——用户实测裁定为错（每台装到别处的机器、每次 CI 云构建都要复制 GB 级存档；且与 CLI 版数据分叉）。现 `resolve_agt_home()` 桌面分支只调 `_reclaim_legacy_appdata()`：把迁出去的产物**搬回** `~/.agt`（只搬缺失项、从不覆盖、失败静默），`%APPDATA%\Agt` 仅保留系统侧产物（Launcher 的 `recent_workspaces.json`、桌面 `logs/desktop.log`、实例锁 `instance.lock`）。
+
+**通用教训（迁移判定，2026-09-10 · 七轮）**：初始化/迁移的判据必须是**业务数据存在性**，不能用目录 `exists()`——launcher / 日志 / 缓存会预先建目录，用 `exists()` 必被短路（该轮案例见 [桌面版 · 迁移判定 bug](../features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)）。
 
 ```
 <fixed-cwd>/            # cwd 斜线替换为'-'（D:\A\Agt → D--A-Agt；旧 hash 目录启动自动迁移）
@@ -241,9 +243,10 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | session 落盘失败直接异常、阻塞 react（toollog / _origin / meta 裸写） | 已修（2026-09-02，commit e5f2733）：三处裸写容错——`_atomic_write_lines`（toollog 每步写·最热点）+ `save()` 的 `_origin.txt` / `meta.json`——失败只告警不抛，内存 session 仍是真相（见 [存档写盘容错](#存档写盘容错session-落盘失败不再阻塞-react2026-09-02commit-e5f2733)） |
 | WebIDE 文件树显示「不受支持的断点图标」+ 打开时弹「选择要管理的远程代理」/ 标签页名是翻译字面量 | **serve-web 1.134 把 `?folder=` URL 参数误路由成「远程代理」会话**；深层诱因是中文语言包 web 资源经 `vscode-unpkg.net` 代理 403 致 l10n 字面量泄漏 → 已修：服务端 `--default-folder` 直开工作区、URL 零参数，`/restart` 生效；残留图标/文案异常在 WebIDE 内 `Ctrl+Shift+P → Configure Display Language → English` 一次即治（见 [webide](../features/webide.md#注意事项)） |
 
-### 桌面版数据目录迁移被短路：session 空 + 模型读 workspace models.py
+### 桌面版数据根：统一 ~/.agt（旧：迁移被短路 → session 空 + 模型读 workspace models.py）
 
-- **桌面版选 repo 后 session 下拉框空 + 模型读的是 repo 里的 `models.py`（不是被打进包）**：桌面数据目录 `%APPDATA%\Agt` 的**首次迁移被 launcher 预建目录短路**（旧判据 `not new.exists()`，launcher 先写 `recent_workspaces.json` 建了目录）→ 空配置空存档 → config 向后兼容回退读 workspace 的 `models.py`。已修（2026-09-10 · 七轮，`src/paths.py` 迁移判定改看**用户数据**存在性：models.json/settings.json/mcp.json/main.yml/repos/remote_instances.json）；需 `--clean` 重打包生效，首启会打印「📦 首次桌面启动：迁移 …」。见 [桌面版 · 迁移判定 bug](../features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)
+- **桌面版数据根统一 `~/.agt`（2026-09-10 · 十四轮，用户裁定，commit 8ed30f6）**：桌面版**不再**迁 `%APPDATA%\Agt`——与 CLI/pip 版共用一份数据（session / 模型配置 / 长期记忆不再分叉）。`resolve_agt_home()` 桌面分支只调 `_reclaim_legacy_appdata()` 把此前迁出去的产物搬回（只搬缺失项、不覆盖、失败静默）；`%APPDATA%\Agt` 仅留系统侧产物（Launcher recent / 桌面日志 / 实例锁）。排障：新产物首启会打印一次「📦 数据根统一：回收 … → `~/.agt`」。见 [桌面版 · 数据根统一回退](../features/desktop-mode.md#数据根统一回退桌面版不再迁-appdata2026-09-10--十四轮用户裁定commit-8ed30f6)
+- **旧症状（已随方案回退消失，留作教训）**：桌面版选 repo 后 session 下拉框空 + 模型读的是 repo 里的 `models.py`（不是被打进包）——当时因桌面数据目录 `%APPDATA%\Agt` 的首次迁移被 launcher 预建目录短路 → 空配置空存档 → config 向后兼容回退读 workspace 的 `models.py`。**通用教训仍成立**：初始化/迁移判据必须是**业务数据存在性**，不能用目录 `exists()`（launcher / 日志 / 缓存会预先建目录）。见 [桌面版 · 迁移判定 bug](../features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)
 
 ### 桌面版发布：云构建为主（GitHub Actions）
 

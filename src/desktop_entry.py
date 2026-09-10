@@ -23,6 +23,26 @@ import sys
 from pathlib import Path
 
 
+def _force_utf8_stdio() -> None:
+    """冻结环境编码兜底（必须在任何引擎模块 import 之前跑）。
+
+    CI/英文 Windows 的 ANSI=cp1252：引擎模块 import 时的中文/emoji print
+    （config 首装引导、session/workflow 加载日志…）直接 UnicodeEncodeError →
+    模块 import 失败（CI selftest 7 个模块 ❌ 的实测根因）。且 PyInstaller
+    windowed bootloader 的模拟 stdio 不读 PYTHONIOENCODING（env 兜底无效，
+    本地 UTF-8 系统无法复现）——唯一可靠位置是 Python 层强制 reconfigure。
+    GUI 路径 stdio=None 由 _redirect_stdio 接管（utf-8 文件），此处自然跳过。"""
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_force_utf8_stdio()
+
+
 def _is_pyrun() -> bool:
     return len(sys.argv) >= 2 and sys.argv[1] == "--pyrun"
 

@@ -620,3 +620,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **顺手抓到第二个 bug（commit 1c4aaa7）**：`logs/desktop.log` 警告暴露 `src/multiagent.py` 的 **`_ASSEMBLY_SEGS` 校验集合漏加 `recent_file` 段**——session.py 投影层和管理页都认识它、唯独 DSL 解析漏了 → 显式声明 assembly 的清单里改文件快照段被静默丢弃（与 v0.26.1 修的前端 SEG_TYPES 是**同一新段的两半白名单**，前端补了后端没补）。修复 + 单测验证 dict/str 两路径解析全过无告警。第三次 `--clean` 重打包进行中，完成后 selftest + 端到端复验收官
 - 详见 [桌面版 · 端到端验证通过](features/desktop-mode.md) / [context-engine · 修复八后记](architecture/context-engine.md)
 
+## 快速事实增补（2026-09-10 · 十 · 桌面版窗口端口错位修复）
+
+- **桌面版双击 ERR_CONNECTION_REFUSED：端口错位（2026-09-10 六轮，commit ac9a79a，用户双击实测）**：用户双击 `Agt.exe` 后页面「127.0.0.1 拒绝连接」。根因 = **`pick_port` 被放在 `start_server` 之后**——服务已在 8000 监听，`pick_port` 的 connect 探测把**自己**判为"被占用" → 退让 8001 → `open_window(8001)` 指向无监听端口。修复两处（src/chat.py）：①`pick_port` **前置到 `start_server` 之前**（服务与窗口同端口；单测实锤 8000 无人听→8000、被自己监听→8001）②桌面模式 `/restart` 后**必须重开窗口**（旧窗口已随旧进程关闭；浏览器模式维持「重启不重开页签」不变）。**漏检教训**：前两轮端到端只查 `desktop.log`（服务在 8000 正常）+ 进程存活，未验证**窗口实际加载的 URL 可连**——本轮改为对窗口端口发 HTTP 请求确认。详见 [桌面版 · 窗口端口错位修复](features/desktop-mode.md#窗口端口错位修复err_connection_refused2026-09-10-六轮commit-ac9a79a用户双击实测)、[施工中排掉的坑 · 8](features/desktop-mode.md#施工中排掉的坑)
+

@@ -24,7 +24,16 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 
 **窗口关闭 = 优雅退出零新代码**：run_loop 返回后走 web_main 现有 finally 链（work_q None → worker join → stop_server → agent.shutdown → mcp shutdown）；正在跑的轮由 session 中断轮防御（t150/t272）在读档时兜底恢复。
 
-**/restart 看门狗重启分支**：desktop 模式端口退让 `pick_port(port)`（占用→+1）后，`AGT_RESTART_SESSION/MESSAGE` env 存在时**不开新窗口**（用户已有窗口会自动重连——与 Web 模式跳过 open_browser 同款语义，见 [user-interaction · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)）；非重启场景才 open_window。
+**端口选定必须在 `start_server` 之前（2026-09-10 六轮，用户双击实测 ERR_CONNECTION_REFUSED 修复）**：desktop 模式 `pick_port(port)`（占用→+1）**必须前置到 `start_server` 调用之前**——服务与窗口共用同一端口。若放在服务之后，`pick_port` 的 connect 探测会把**已监听的自己**判为"被占用" → 退让到 +1 端口 → 服务在 8000 而窗口指向 8001（无监听）→ `ERR_CONNECTION_REFUSED`（双击必现）。见 [施工中排掉的坑 · 8](#施工中排掉的坑)。
+
+**/restart 看门狗重启分支（2026-09-10 六轮修订）**：
+
+| 形态 | 重启后行为 | 理由 |
+|---|---|---|
+| 浏览器模式 | **不开新页签**（`AGT_RESTART_SESSION/MESSAGE` env 存在时跳过 open_browser） | 用户已有页签自动重连——手机触发重启时电脑端无端多开 tab 正是用户报告的困扰（见 [user-interaction · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)） |
+| 桌面模式 | **必须 `open_window(port)` 重开窗口** | 旧窗口已随旧进程关闭，不重开则应用消失（此前误按浏览器语义跳过，属连带 bug） |
+
+条件形态：`if _desk or not (AGT_RESTART_SESSION or AGT_RESTART_MESSAGE): open_window/open_browser`——env 在 `_recover_restart_env` 才 pop，此处仍在。
 
 实现细节：开窗与运行分离（open_window 注册 → run_loop 阻塞），窗口关闭事件接回主循环；单实例锁（pid 存活 + 进程名比对防 pid 复用）。
 
@@ -98,6 +107,7 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 4. **hook-workflow 同名冲突（2026-09-10 三轮，平铺后暴露，spec 修 #2）**：顶层模块 `workflow`（`src/workflow.py` 平铺收集）撞上 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 `hook-workflow.py`（其 import 必然失败）→ 仓库内 `packaging/hooks/hook-workflow.py` 放**空操作 hook**（`hiddenimports = []`）覆盖（project `hookspath` 优先于社区 hooks），见 [打包基建 · Agt.spec](#打包基建packagingagtspec--desktopentrypy-step-2)
 5. **节点插件 `No module named 'workflow_node_api'`（2026-09-10 三轮，spec 修 #3）**：节点插件（`assets/nodes_builtin/*.py`）由 `_import_fresh` 运行时**动态加载**，其 `import workflow_node_api` 静态分析看不见 → `hiddenimports` 显式补 `workflow_node_api`；`--selftest` 加节点插件动态加载自检（漏收集即暴露，实测 ok=12 fail=0）
 6. **PyInstaller 增量缓存复用（重打包必须 `--clean`，2026-09-10 四轮）**：重打包默认复用 `--workpath packaging/build` 的 Analysis 缓存，`desktop_entry.py` 刚做的 selftest 扩展（查 `assets/nodes_builtin` + workflow_node_api 收集）**没真正进产物**——exe 里嵌的还是旧字节码 → 产物 `--selftest` 报 `SELFTEST_FAIL`（仍在查老路径 `assets/nodes`、节点插件动态加载 0 个）。修复 = **全量 `--clean` 重打包**（清 Analysis 缓存，产物才会带当前 desktop_entry.py）；教训「PyInstaller 重打包须 --clean」已记长期记忆。同轮把节点插件自检判定从恒 `True` 收紧为 `n_ok > 0`（0 个=目录缺失/放错路径提示），避免空载被掩盖
+8. **端口错位 → 窗口指向无监听端口 `ERR_CONNECTION_REFUSED`（2026-09-10 六轮，commit ac9a79a，用户双击实测）**：用户双击 exe 后浏览器/窗口显示「127.0.0.1 拒绝连接 / ERR_CONNECTION_REFUSED」。根因 = **`pick_port` 被放在 `start_server` 之后**——`start_server(port=8000)` 同步等 uvicorn started（8000 已在监听）→ 随后 `pick_port(8000)` 的 connect 探测**把自己的服务判为"被占用"** → 退让到 8001 → `open_window(8001)` 指向无监听端口。**前两轮端到端漏检原因**：只查了 `logs/desktop.log`（服务在 8000 正常）和进程存活，**没验证窗口实际加载的端口**。修复 = `pick_port` 前置到 `start_server` 之前（服务与窗口同端口）；单测实锤：8000 无人听时 `pick_port→8000`，8000 被自己监听时 `→8001`（旧 bug 的窗口端口正是后者）。连带修：桌面模式 `/restart` 后必须重开窗口（见 [零侵入接入](#零侵入接入chatpy-两个分支点web_desktoppy)）。教训：**端口探测类操作必须在被探测服务启动之前**；GUI 形态的端到端验证须覆盖「窗口实际加载的 URL 可连」，而非只看服务端日志。
 7. **GUI 无控制台 → `sys.stdout/stderr` 为 None → uvicorn formatter 启动即崩（2026-09-10 五轮，commit c9bd925，用户双击实测）**：`console=False` 的 GUI 程序（explorer 双击启动）**没有控制台**，`sys.stdout`/`sys.stderr` 是 `None`——`server.start_server()` → uvicorn `configure_logging` → `DefaultFormatter.__init__` 调 `sys.stdout.isatty()` 直接崩 `AttributeError: 'NoneType' object has no attribute 'isatty'` → `ValueError: Unable to configure formatter 'default'` → 启动即崩。**selftest 抓不到的盲区**：只做 import 链不启动 uvicorn，且 cmd 下跑 selftest 继承控制台（stdio 非 None）——**只有真·双击才触发**。修复 = `desktop_entry._redirect_stdio()`：进 `web_main` 前检测 stdio 为 None 则**重定向到数据目录 `logs/desktop.log`**（落实 spec「日志写文件」约定，成为桌面版排障第一现场），stdin 兜 devnull；**pythonw 无控制台模拟验证全过**（REDIRECT_STDOUT_OK isatty=False / REDIRECT_STDERR_OK / **UVICORN_FORMATTER_OK use_colors=False**——原崩溃的那一行现在构造成功）。修复后 `--clean` 全量重打包，完成后再 selftest 回归 + `AGT_HOME` 临时目录无控制台拉起 exe 端到端验证
 
 ## 验证状态
@@ -127,6 +137,27 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 **顺手抓到第二个 bug（commit 1c4aaa7）**：`logs/desktop.log` 里一行被掩盖的警告 `assembly 含未知段名 'recent_file'`——`src/multiagent.py` 的 `_ASSEMBLY_SEGS` 校验集合漏加 recent_file 段（session.py 投影层 / 管理页编辑器都认识它，唯独 DSL 解析漏了）→ 声明清单里的改文件快照段被静默丢弃。修复 + 单测验证 dict/str 两路径解析全过、无告警，详见 [context-engine · 修复八后记](../architecture/context-engine.md)。
 
 第三次 `--clean` 全量重打包进行中（后台任务）——完成后跑 selftest 回归 + 再拉一次端到端确认警告消失，桌面版即收官。
+
+### 窗口端口错位修复：ERR_CONNECTION_REFUSED（2026-09-10 六轮，commit ac9a79a，用户双击实测）
+
+**用户报告**：双击 `Agt.exe` 启动后页面显示「无法访问此页面 / 127.0.0.1 拒绝连接 / ERR_CONNECTION_REFUSED」。
+
+**根因**（时序 bug，见 [施工中排掉的坑 · 8](#施工中排掉的坑)）：
+
+```
+start_server(port=8000)   ← uvicorn 监听 8000（同步等 started ✅）
+pick_port(8000)           ← 探测 8000：自己的服务在监听 → connect 成功 → 判"占用" → 退让 8001 ❌
+open_window(8001)         ← 窗口加载 http://127.0.0.1:8001/ → 无人监听 → ERR_CONNECTION_REFUSED
+```
+
+**修复（两处，src/chat.py）**：
+
+1. **`pick_port` 前置**——在 `start_server` 之前选好端口，服务与窗口同端口；单测实锤两种情形（8000 无人听 → `pick_port→8000`；8000 被自己监听 → `→8001`，即旧 bug 的窗口端口）
+2. **桌面模式 `/restart` 必须重开窗口**——旧窗口已随旧进程关闭；浏览器模式维持「重启不重开页签」不变（见 [零侵入接入](#零侵入接入chatpy-两个分支点web_desktoppy)）
+
+**验证方法（本轮补上的盲区）**：前两轮端到端只查 `desktop.log`（服务在 8000 正常）+ 进程存活，**未验证窗口实际加载的 URL 可连**——修复后改为对**窗口端口**发 HTTP 请求确认可连再收尾。`--clean` 重打包（约 6 分钟）后拉起 exe 复验。
+
+**教训**：端口探测类操作必须在被探测服务启动之前；GUI 形态的端到端验证须覆盖「窗口实际加载的 URL 可连」，而非只看服务端日志。
 
 ## 相关页面
 

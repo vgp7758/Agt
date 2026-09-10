@@ -794,6 +794,13 @@ def web_main(port=None):
     state: dict = {"busy": False, "started": 0.0, "desc": "", "kind": None}
     _install_signal_handlers(agent, work_q)   # 关终端/kill 兜底清理，防后台服务孤儿
 
+    # 桌面模式端口退让：必须在 start_server 之前选好（服务与窗口同端口）——若放在服务
+    # 之后，pick_port 的 connect 探测会把【已监听的自己】判为"被占用"→ 退让到 +1 端口
+    # → 服务在 8000 而窗口指向 8001（无监听）→ ERR_CONNECTION_REFUSED（双击必现）。
+    from web_desktop import is_desktop as _is_desktop
+    _desk = _is_desktop()
+    if _desk:
+        port = __import__("web_desktop").pick_port(port) or port
     ok, msg = start_server(agent=agent, work_q=work_q, mcp_mgr=mcp_mgr, workspace=WORKSPACE,
                            port=port, state=state)
     if not ok:
@@ -803,14 +810,11 @@ def web_main(port=None):
     print(f"  本机:   http://127.0.0.1:{port}/")
     print(f"  局域网: {', '.join(lan_urls(port))}")
     print("  （局域网内任何设备可连并驱动 Agent，仅在可信网络使用；Ctrl+C 退出）")
-    # /restart 看门狗重启：不再开新页签——用户已有页签会自动重连（手机触发重启时
-    # 电脑端无端多开一个 tab 正是用户报告的困扰）；env 在 _recover_restart_env 才 pop，此处仍在
+    # /restart 看门狗重启：浏览器模式不开新页签——用户已有页签会自动重连（手机触发重启
+    # 时电脑端无端多开一个 tab 正是用户报告的困扰）；桌面模式窗口已随旧进程关闭，必须重开。
+    # env 在 _recover_restart_env 才 pop，此处仍在
     import os as _os
-    from web_desktop import is_desktop as _is_desktop
-    _desk = _is_desktop()
-    if _desk:
-        port = __import__("web_desktop").pick_port(port) or port   # 端口退让（占用→+1）
-    if not (_os.environ.get("AGT_RESTART_SESSION") or _os.environ.get("AGT_RESTART_MESSAGE")):
+    if _desk or not (_os.environ.get("AGT_RESTART_SESSION") or _os.environ.get("AGT_RESTART_MESSAGE")):
         if _desk:
             __import__("web_desktop").open_window(port)   # 桌面窗口（spec s_d53311f8）
         else:

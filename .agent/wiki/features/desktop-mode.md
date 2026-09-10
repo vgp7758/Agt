@@ -81,7 +81,7 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 - **裸名导入**：平铺形态无 `src` 包 → `from chat import web_main`（不是 `from src.chat import`），与收集形态同构
 - **workspace 锚定 exe 旁**：`Path(sys.executable).parent` 作为 cwd 基线——防快捷方式启动时 cwd 歧视（工作区相对路径解析不到）；首启自动创建 workspace/ 并 chdir
 - **`--pyrun` 子进程分流**：PyInstaller 下 `sys.executable` = Agt.exe 本体，直接 spawn Python 子进程会 **GUI 套娃**（Agt.exe 再拉 Agt.exe）——real_tools 三处 spawn 点（run_python / 相关子进程工具）已接 `_py_child_cmd`：打包形态用 `sys.executable --pyrun <file>` 分流到纯子进程 stub（runpy 直接执行目标文件，env 打 `AGT_FROZEN_CHILD=1`），源码形态直接 `sys.executable`
-- **`--selftest` 产物自检（用途 = CI/发布前门禁，2026-09-10 十六轮去 GUI 化）**：`Agt.exe --selftest` ①**全模块 import 链**（config / paths / session / chat / server / workflow_node_api / **workflow / multiagent / llm_client / tools**，逐个 `__import__`，逐个 try）②**资源就位 6 项**（static/index.html + agents.html + assets/models.preset.json + nodes_builtin + tools_builtin + manifest.json）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件——判定 **`n_ok > 0`**，**逐个 try** 单个插件炸不再淹没整组）④**外置工具脚本 `py_compile` 校验**（`assets/tools_builtin/*.py`，与节点插件同属「随包动态加载」一类）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码（所有 print 包 try，输出编码问题不再让自检本身崩）。
+- **`--selftest` 产物自检（用途 = CI/发布前门禁，2026-09-10 十六轮去 GUI 化）**：`Agt.exe --selftest` ①**全模块 import 链**（config / paths / session / chat / server / workflow_node_api / **workflow / multiagent / llm_client / tools**，逐个 `__import__`，逐个 try）②**资源就位 6 项**（static/index.html + agents.html + assets/models.preset.json + nodes_builtin + tools_builtin + manifest.json）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件——判定 **`n_ok > 0`**，**逐个 try** 单个插件炸不再淹没整组）④**外置工具脚本 `py_compile` 校验**（`assets/tools_builtin/*.py`，与节点插件同属「随包动态加载」一类）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码（所有 print 包 try，输出编码问题不再让自检本身崩）+ **明细落文件 `cwd/selftest_result.txt`**（GUI 子系统 exe 在 CI 管道下 stdout 曾只剩末行，文件是确定性通道——2026-09-10 · 十七轮，见 [selftest 明细落文件](#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)）。
   - **不 import 任何 GUI 依赖模块**（关键约束）：`web_desktop`（pywebview）已从清单移除——CI runner 无桌面会话时 pythonnet/.NET 初始化会**挂住不返回**，导致 selftest 步骤永不结束 → job 被取消。真产物的问题（模块漏收集 / 资源缺 / 插件加载失败）照样全暴露，但**永远不会吊死流水线**。详见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)
 - **`_redirect_stdio()`（2026-09-10 五轮，commit c9bd925）**：GUI（`console=False`）无控制台时 `sys.stdout/stderr` 为 None——uvicorn `DefaultFormatter.__init__` 调 `isatty()` 启动即崩（`Unable to configure formatter 'default'`）。进 `web_main` 前把 None 的 stdio **重定向到数据目录 `logs/desktop.log`**（spec「日志写文件」落地 + 桌面版排障第一现场），stdin 兜 devnull（见 [施工中排掉的坑 · 7](#施工中排掉的坑)）
 
@@ -298,6 +298,63 @@ launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
 
 **教训（通用）**：**CI 门禁脚本必须「确定性退出」**——凡是可能因环境差异阻塞的调用（GUI / .NET / 网络 / 交互式输入）都不能进门禁路径；同时门禁步骤本身要有**超时兜底**，否则「挂住」比「失败」更难诊断（日志里只有一个 canceled）。
 
+### selftest 明细落文件 + 门禁改 Start-Process 重定向（2026-09-10 · 十七轮，commit 待推）
+
+**症状（用户贴 Actions 日志）**：门禁步骤**正常结束**（不再是挂起），但只报：
+
+```
+SELFTEST_FAIL
+Write-Error: selftest 未通过
+Error: Process completed with exit code 1.
+```
+
+——`SELFTEST_PASS` 判定失败，可是**看不到任何一条 ❌**，无从知道是哪个检查项挂了。
+
+**根因：GUI 子系统 exe（`console=False`）在 `Start-Job` 的管道传递下 stdout 句柄继承不完整**——实测 `Write-Host $out` 只出最后一行（全部 ✅/❌ 明细丢失，只剩末行的 `SELFTEST_FAIL`）。**不是 selftest 没跑完，是明细被丢了**——与 [十六轮](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮) 同族的「GUI 形态 × CI 管道」交互坑。
+
+**修复一：selftest 明细落文件（`src/desktop_entry.py`）**——逐项结果同时写 `cwd/selftest_result.txt`：
+
+```python
+lines = [("✅" if good else "❌", name, err) for name, good, err in checks]
+lines.append(("SUMMARY", "SELFTEST_" + ("PASS" if ok else "FAIL"), ""))
+try:
+    with open(os.path.join(os.getcwd(), "selftest_result.txt"), "w", encoding="utf-8") as f:
+        for a, b, c in lines:
+            f.write(f"{a} {b} {c}\n".rstrip() + "\n")
+except Exception:
+    pass   # 落文件失败不影响退出码判定
+```
+
+**文件是确定性通道**——print 通道再怎么丢，CI 门禁 `cat` 它就能拿完整明细。
+
+**修复二：门禁改 `Start-Process` 显式重定向（`.github/workflows/desktop-release.yml`）**——`Start-Job` 管道 → `Start-Process` + 三个显式文件：
+
+```yaml
+- name: Selftest gate (禁止坏产物出门)
+  shell: pwsh
+  run: |
+    $outF = "selftest_out.txt"; $errF = "selftest_err.txt"
+    $p = Start-Process -FilePath "packaging/dist/Agt/Agt.exe" -ArgumentList "--selftest" `
+        -RedirectStandardOutput $outF -RedirectStandardError $errF -PassThru
+    if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {}; Write-Error "selftest 180s 未结束（疑似挂起）"; exit 1 }
+    # 三份输出全部 cat 出来再判定，失败时明细不再丢
+```
+
+180s 超时语义保留（`WaitForExit(180000)` + `Kill`）——挂起仍 3 分钟明确失败。
+
+**拿到明细后的头号嫌疑（本机绿、CI 红的经典模式）**：
+
+| 环境 | Analysis 收集范围 | 后果 |
+|---|---|---|
+| 本机构建 | 全家桶（torch / playwright / modelscope… 都装了） | 全收集，产物齐全 |
+| CI 构建 | 只有 requirements.txt + pyinstaller + pywebview | 引擎某模块顶层 import 了 requirements 外的库 → **不收集** → 产物运行时 `ModuleNotFoundError` |
+
+新 selftest 恰好把 `workflow / multiagent / llm_client / tools` 加进了清单——若 ❌ 挂在它们身上，即此「环境遮蔽」问题（解法：把缺的库补进 CI 安装清单或 spec 的 `hiddenimports`）。
+
+**下一步**：本地模拟 CI 形态（`Start-Process` 重定向）验证输出通道 → 重试 push（遇 GitHub SSH 抖动）→ 用户再触发一次 Actions，即可看到具体 ❌ 是谁。
+
+**教训（通用）**：**CI 里「拿到完整输出」和「拿到正确退出码」是两件事**——GUI 子系统 exe / 重定向管道下 stdout 可能只剩末行；门禁脚本除退出码外必须有一条**文件通道**承载明细，否则失败时只有一句「未通过」，等于没有诊断信息。
+
 ## 云构建 + Release：GitHub Actions 流水线（2026-09-10 · 十三轮，spec 决策：云构建为主）
 
 **决策**：桌面版发布走**云构建为主**（GitHub Actions `windows-latest`，公开仓库免费无限额），本地 `python release.py --desktop` 降为**兜底**（离线 / 应急 / 无网时用）。理由：本机打包约 6 分钟且需 `--clean` 全量、环境坑多（pathlib backport / 缓存复用），云端干净环境 + 门禁更可靠。
@@ -321,7 +378,7 @@ jobs.build: { runs-on: windows-latest, timeout-minutes: 45 }
 
 ### 流水线 11 步
 
-7. **🔒 selftest 门禁（含 180s 超时兜底）**：`packaging/dist/Agt/Agt.exe --selftest` 输出不含 `SELFTEST_PASS` 即 `exit 1`——本 session 的**缓存旧字节码 / 漏收集 workflow_node_api** 这类坏产物从此出不了门。用 `Start-Job` + `Wait-Job -Timeout 180` 包住：selftest 万一挂起（历史坑：pywebview 在无桌面会话 runner 上挂死 → job 被 45min 取消）**3 分钟即明确失败**，不再拖垮流水线，详见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)
+7. **🔒 selftest 门禁（含 180s 超时兜底 + 明细文件通道）**：`packaging/dist/Agt/Agt.exe --selftest` 输出不含 `SELFTEST_PASS` 即 `exit 1`——本 session 的**缓存旧字节码 / 漏收集 workflow_node_api** 这类坏产物从此出不了门。用 `Start-Process -RedirectStandardOutput/-RedirectStandardError` + `WaitForExit(180000)` 包住：selftest 万一挂起（历史坑：pywebview 在无桌面会话 runner 上挂死 → job 被 45min 取消）**3 分钟即明确失败**；三份输出（stdout / stderr / `selftest_result.txt`）全部 `cat` 出来再判定——GUI 子系统 exe 在管道下 stdout 曾只剩末行（`SELFTEST_FAIL`），明细落文件是确定性通道。详见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮) 与 [selftest 明细落文件](#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)
 
 ### ⚠️ 编码：Windows runner 的 Python stdout 默认 cp1252（2026-09-10 · 十五轮，必修）
 
@@ -370,7 +427,7 @@ UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4
 
 ### 用户侧下一步（需 GitHub 账号，Agent 无法代做）
 
-**排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现；**selftest 步骤被 canceled / 超时**先查是否又引入了 GUI 依赖（见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)）。
+**排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现；**selftest 步骤被 canceled / 超时**先查是否又引入了 GUI 依赖（见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)）；**门禁只报 `SELFTEST_FAIL` 看不到 ❌ 明细**→ 看 `selftest_result.txt`（门禁已 cat，见 [十七轮](#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)），再按「本机绿 CI 红 = 环境遮蔽（CI 缺依赖 → 漏收集）」排查。
 
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 
@@ -433,6 +490,8 @@ Agt/                        ← 解压即用的发行包
 - **端口探测类操作必须在被探测服务启动之前**（`pick_port` 前置到 `start_server` 之前），否则会把自己的服务判为「被占用」
 - GUI 形态端到端验证须覆盖「**窗口实际加载的 URL 可连**」，而非只看服务端日志 / 进程存活
 - **selftest 里不要 import GUI 依赖模块**（pywebview / web_desktop）——CI runner 上会挂住不返回；门禁脚本必须确定性退出，且步骤本身要有超时兜底
+- **CI 门禁除退出码外必须有文件通道承载明细**：GUI 子系统 exe（`console=False`）在 `Start-Job` 管道下 stdout 只剩末行——selftest 写 `selftest_result.txt`，门禁用 `Start-Process -RedirectStandardOutput` 三份输出全 cat
+- **「本机绿、CI 红」先怀疑环境遮蔽**：本机装了全家桶（torch/playwright…）→ Analysis 全收集；CI 只有 requirements.txt → 顶层 import 缺库的模块不收集 → 产物运行时 `ModuleNotFoundError`（解法：补 CI 安装清单或 spec `hiddenimports`）
 
 ## 相关页面
 

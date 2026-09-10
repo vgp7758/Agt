@@ -2907,6 +2907,30 @@ function onWSMessage(ev){
           modelSel.appendChild(og);
         }
         ws.send(JSON.stringify({action:'list_sessions'}));
+        // 首启向导（spec s_d53311f8 Step 3）：无任何 provider 配置 → 自动弹 onboarding——
+        // 预选 modelscope qwen（免费额度，国内可达，对非技术用户最友好）
+        if(m.first_run && !m.transient){
+          setTimeout(()=>{ try{ showPresetOnboard('qwen'); }catch(e){} }, 800);
+        }
+        // 版本检查（一次性，非侵入横幅）：桌面版→下载 zip / pip→升级命令
+        fetch('/api/latest').then(r=>r.json()).then(d=>{
+          if(d && d.update_available===true){
+            const desktop = d.desktop;
+            const b=document.createElement('div');
+            b.id='updBanner';
+            b.style.cssText='display:flex;align-items:center;gap:10px;padding:4px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12.5px;color:#92400e';
+            b.innerHTML='🆕 新版本 <b>v'+esc(d.latest)+'</b> 可用（当前 v'+esc(d.current)+'）'+
+              (desktop
+                ? '<a class="md-link" href="'+esc(d.url)+'" target="_blank">下载桌面版</a>（下载后解压覆盖旧目录即可）'
+                : '<a class="md-link" href="'+esc(d.url)+'" target="_blank">查看发布</a> · 终端执行 <code>pip install -U agt-agent</code>');
+            const x=document.createElement('span');
+            x.textContent='✕'; x.style.cssText='cursor:pointer;margin-left:auto;color:#b45309';
+            x.onclick=()=>b.remove();
+            b.appendChild(x);
+            const hdr=document.querySelector('header');
+            (hdr?hdr.parentElement:document.body).insertBefore(b, hdr?hdr.nextSibling:document.body.firstChild);
+          }
+        }).catch(()=>{});
       }
       m.transient ? toast(m.text) : addRow('sys', m.text); scrollBottom(); break;
     case 'checkpoint':

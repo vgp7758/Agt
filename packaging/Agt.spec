@@ -51,7 +51,8 @@ exe = EXE(
     strip=False,
     upx=False,                                                  # upx 误杀率高（SmartScreen 雪上加霜）
     console=False,                                              # 桌面应用无控制台（日志写文件）
-    icon=str(ROOT / "packaging" / "agt.ico") if (ROOT / "packaging" / "agt.ico").exists() else None,
+    icon=str(ROOT / "packaging" / "agt.ico"),
+    version=str(ROOT / "packaging" / "version_file.txt"),
 )
 coll = COLLECT(
     exe,

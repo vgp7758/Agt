@@ -62,7 +62,8 @@ def _selftest() -> int:
             mod = _iu.module_from_spec(spec)
             spec.loader.exec_module(mod)
             n_ok += 1
-        checks.append((f"节点插件动态加载 {n_ok} 个", True, ""))
+        checks.append((f"节点插件动态加载 {n_ok} 个", n_ok > 0, "" if n_ok > 0 else "0 个=目录缺失/放错路径"))
+        ok = ok and n_ok > 0
     except Exception as e:
         checks.append(("节点插件动态加载", False, f"{type(e).__name__}: {e}"))
         ok = False

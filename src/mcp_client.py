@@ -64,8 +64,13 @@ class MCPTool:
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": mcp_tool.description or "",
-                "parameters": mcp_tool.inputSchema or {"type": "object", "properties": {}},
+                "description": getattr(mcp_tool, "description", None) or "",
+                # mcp SDK 版本兼容：1.18- 字段名 inputSchema（camelCase），更新版
+                # 改为 input_schema（snake_case，pydantic AttributeError 提示同名）。
+                # CI 装最新 mcp / 本机旧版 / 用户任意版本都要能跑（CI 实测炸点）。
+                "parameters": (getattr(mcp_tool, "inputSchema", None)
+                               or getattr(mcp_tool, "input_schema", None)
+                               or {"type": "object", "properties": {}}),
             },
         }
 

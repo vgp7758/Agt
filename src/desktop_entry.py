@@ -101,15 +101,23 @@ def _selftest() -> int:
     except Exception as e:
         checks.append(("外置工具脚本校验", False, f"{type(e).__name__}: {e}"))
         ok = False
-    for name, good, err in checks:
-        try:
-            print(("✅" if good else "❌"), name, err, flush=True)
-        except Exception:
-            pass   # 输出编码问题不该让自检本身崩（CI 门禁只看 SELFTEST_*）
+    # 明细落文件（cwd/selftest_result.txt）：GUI 子系统的 exe 在 CI 管道重定向下
+    # stdout 可能只出最后一行（实测：Write-Host $out 丢了全部 ✅/❌）——文件是
+    # 确定性通道，CI 门禁 cat 它拿完整明细。
+    lines = [(("✅" if good else "❌"), name, err) for name, good, err in checks]
+    lines.append(("SUMMARY", "SELFTEST_" + ("PASS" if ok else "FAIL"), ""))
     try:
-        print("SELFTEST_" + ("PASS" if ok else "FAIL"), flush=True)
+        import os as _os
+        with open(_os.path.join(_os.getcwd(), "selftest_result.txt"), "w", encoding="utf-8") as f:
+            for a, b, c in lines:
+                f.write(f"{a} {b} {c}\n".rstrip() + "\n")
     except Exception:
         pass
+    for a, b, c in lines:
+        try:
+            print(a, b, c, flush=True)
+        except Exception:
+            pass   # 输出编码问题不该让自检本身崩（CI 门禁看文件 + SELFTEST_*）
     return 0 if ok else 1
 
 

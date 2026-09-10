@@ -57,17 +57,27 @@ jobs:
       - name: Selftest gate (禁止坏产物出门)
         shell: pwsh
         run: |
-          # 带超时兜底：selftest 万一吊死（历史上 pywebview 在无桌面会话的 runner 上
-          # 挂过）不至于拖到 job 级 45min——180s 足够（本地实测 <20s）
-          $job = Start-Job -ScriptBlock {
-            & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String
+          # GUI 子系统 exe 在 Start-Job 管道下 stdout 曾只出最后一行（明细全丢）——
+          # 改 Start-Process 显式重定向到文件 + cat，确保拿到完整 ✅/❌ 清单；
+          # 180s 超时兜底：万一挂死（历史：pywebview 无桌面会话）3 分钟明确失败。
+          $outF = "selftest_out.txt"; $errF = "selftest_err.txt"
+          $p = Start-Process -FilePath "packaging/dist/Agt/Agt.exe" -ArgumentList "--selftest" `
+              -RedirectStandardOutput $outF -RedirectStandardError $errF -PassThru
+          if (-not $p.WaitForExit(180000)) {
+            try { $p.Kill() } catch {}
+            Write-Error "selftest 180s 未结束（疑似挂起）"; exit 1
           }
-          if (-not (Wait-Job $job -Timeout 180)) {
-            Stop-Job $job; Write-Error "selftest 180s 未结束（疑似挂起）"; exit 1
+          Write-Host "=== stdout ==="; if (Test-Path $outF) { Get-Content $outF }
+          Write-Host "=== stderr ==="; if (Test-Path $errF) { Get-Content $errF }
+          Write-Host "=== selftest_result.txt（确定性明细）==="
+          if (Test-Path "selftest_result.txt") { Get-Content "selftest_result.txt" }
+          $all = ""
+          foreach ($f in @($outF, $errF, "selftest_result.txt")) {
+            if (Test-Path $f) { $all += (Get-Content $f -Raw) }
           }
-          $out = Receive-Job $job; Remove-Job $job -Force
-          Write-Host $out
-          if ($out -notmatch "SELFTEST_PASS") { Write-Error "selftest 未通过"; exit 1 }
+          if ($all -notmatch "SELFTEST_PASS") {
+            Write-Error "selftest 未通过（❌ 明细见上方三段输出）"; exit 1
+          }
 
       - name: Stage release folder (Launcher.exe 与 Agt\ 平级)
         shell: pwsh

@@ -99,12 +99,13 @@ def pick_port(preferred: int) -> int:
 
 
 _WINDOW = None
+_PORT = 0
 
 
 def open_window(port: int):
     """注册桌面窗口（立即返回；真正显示在 run_loop 的 webview.start()）。
     服务此刻已就绪（调用点在 start_server 之后，与 open_browser 同位）。"""
-    global _WINDOW
+    global _WINDOW, _PORT
     try:
         import webview
     except ImportError:
@@ -128,10 +129,28 @@ def run_loop():
     """GUI 主循环（阻塞）：webview.start() 返回 = 所有窗口已关闭 → web_main 的
     finally 链接管优雅退出。agent 正在跑的轮：daemon worker 被强停，轮记录由
     session 的中断轮防御在读档时归档恢复（t150/t272 已验证的兜底）。
-    （确认弹窗版（busy 时 closing 确认）留后续版本——同步 confirm 在关闭事件里
-      有卡 GUI 线程风险，MVP 用存档兜底。）"""
-    import webview
-    webview.start()
+
+    降级链（2026-09-10 CI 实测两连坑后加）：pythonnet 新版/异构建的产物里
+    Python.Runtime.dll 加载失败（Failed to resolve ...Loader.Initialize）
+    → webview 两个 Windows 后端全灭 → 崩弹窗。webview 起不来时降级为
+    系统默认浏览器打开（服务还在，Agent 完全可用），进程保持运行直到
+    用户关闭（任务栏 python 进程/Ctrl+C）。桌面体验降级但不死。"""
+    url = f"http://127.0.0.1:{_PORT}/" if _PORT else None
+    try:
+        import webview
+        webview.start()
+    except Exception as e:
+        import webbrowser
+        print(f"⚠️  桌面窗口启动失败（{type(e).__name__}: {e}），降级为系统浏览器模式")
+        if url:
+            webbrowser.open(url)
+        print("   （进程继续在后台服务；关闭此进程退出）")
+        try:
+            import time as _t
+            while True:
+                _t.sleep(3600)   # 阻塞保活：无窗口可等，服务由 worker/子进程持续运行
+        except KeyboardInterrupt:
+            pass
     # 释放单实例锁（优雅路径；强杀由 pid 存活检测自愈）
     try:
         _lock_file().unlink(missing_ok=True)

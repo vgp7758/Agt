@@ -429,6 +429,37 @@ UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4
 
 **排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现；**selftest 步骤被 canceled / 超时**先查是否又引入了 GUI 依赖（见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)）；**门禁只报 `SELFTEST_FAIL` 看不到 ❌ 明细**→ 看 `selftest_result.txt`（门禁已 cat，见 [十七轮](#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)），再按「本机绿 CI 红 = 环境遮蔽（CI 缺依赖 → 漏收集）」排查。
 
+## 发布链修复：release.py 版本真源迁移 + `src/__init__.py` 导入顺序（2026-09-10 · 十八轮，v0.26.5 发版）
+
+**背景**：桌面版平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向 `from paths import VERSION as __version__`，**文件里不再有静态 `__version__` 字面量**）——本地一键发布脚本 `release.py` 仍按老假设正则扫 `src/__init__.py`，匹配 0 处 → 发布链失效（2026-09-10 · 十八轮，v0.26.5 发版时暴露）。
+
+**修复一：`release.py` 版本真源迁移**
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 版本读取源 | `INIT = ROOT / "src" / "__init__.py"` | `PATHS = ROOT / "src" / "paths.py"` |
+| 附加产物 | — | `VERFILE = ROOT / "packaging" / "version_file.txt"`（exe 版本资源） |
+| `current_version()` | 扫 `__version__` 字面量 | `re.search(r'VERSION\s*=\s*"([\d.]+)"', PATHS…)`；未命中 `sys.exit` 明确报错 |
+| `write_version(ver)` | 改 `__init__.py` | 改 `PATHS` 的 `VERSION` + `version_file.txt` 正则同步（计数 0 则跳过） |
+
+→ 与 CI 的 [`tools/ci_stamp_version.py`](#toolsci_stamp_versionpyci-版本戳) **同源同语义**（本地发布链 / 云构建链版本戳行为一致）。
+
+**修复二：`src/__init__.py` 导入顺序（PyPI sdist 构建坑）**
+
+`from paths import VERSION as __version__` 原本写在 sys.path hack **之前** → `python -m build`（sdist）时构建后端 import `src`，CWD 下没有 `paths`、同级目录还没进 `sys.path` → 崩。修复 = **hack 先行**：
+
+```python
+import sys, os
+_pkg = os.path.dirname(os.path.abspath(__file__))
+if _pkg not in sys.path:
+    sys.path.insert(0, _pkg)
+from paths import VERSION as __version__   # 版本唯一真源在 paths.py（桌面平铺打包共用）
+```
+
+**通用教训**：包内「sys.path hack + 同级模块导入」组合，**hack 必须永远排在同级 import 之前**——本地能跑是因为 CWD 恰在 sys.path（或装过旧版），构建后端 / 干净环境立刻暴露。
+
+**发版结果（v0.26.5）**：提交 `9b4cf0e`（bump）→ 修 `__init__.py` → 提交 `224d4ce` → wheel + sdist 构建 ✅ → PyPI 上传 ✅ → `origin main (0ced163..224d4ce)` 推送 ✅ → tag `v0.26.5` 触发 Actions 云构建（**首个带正式桌面安装包的 Release**）。详见 [v0.26.5 发布记录](../releases/v0.26.5.md)。
+
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 
 用户提案：「launcher.exe 可能是个瘦启动器，在窗口选一个 workspace 以后才去对应的目录启动真正的桌面应用」——VSCode / JetBrains 式「先选项目再开应用」。**两入口共存**：双击 `Launcher.exe` 选工作区；双击 `Agt.exe` 直接进默认 workspace（exe 旁 `workspace/`）兜底。

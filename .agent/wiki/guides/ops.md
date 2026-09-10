@@ -256,6 +256,11 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 - **门禁只报 `SELFTEST_FAIL`、看不到 ❌ 明细（2026-09-10 · 十七轮，用户贴 Actions 日志）**：门禁步骤正常结束（不再挂起），但日志只有 `SELFTEST_FAIL` + `Write-Error: selftest 未通过`——**根因 = GUI 子系统 exe（`console=False`）在 `Start-Job` 管道下 stdout 句柄继承不完整**，`Write-Host $out` 只出最后一行，全部 ✅/❌ 明细丢失（不是 selftest 没跑完，是明细被丢了）。修复双层：① `src/desktop_entry.py` 逐项结果同时写 `cwd/selftest_result.txt`（**文件是确定性通道**，print 通道再怎么丢都能 cat）② 门禁改 `Start-Process -RedirectStandardOutput/-RedirectStandardError` 显式重定向 + `WaitForExit(180000)`，三份输出全 cat 再判定。**拿到明细后的头号嫌疑 = 环境遮蔽**：本机构建装了全家桶（torch/playwright/modelscope…）→ Analysis 全收集；CI 只有 requirements.txt + pyinstaller + pywebview → 引擎某模块顶层 import 缺库 → 不收集 → 产物运行时 `ModuleNotFoundError`（解法：补 CI 安装清单或 spec `hiddenimports`）。**通用教训**：CI 里「拿到完整输出」和「拿到正确退出码」是两件事——门禁除退出码外必须有文件通道承载明细。见 [桌面版 · selftest 明细落文件](../features/desktop-mode.md#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)
 - **用户侧发版三步**：`git push` → Actions 手动 Run workflow 试装（约 10-15 分钟）→ `git tag v0.26.5 && git push origin v0.26.5` 自动出 Release。本机未装 `gh`，Release 由 Actions 创建，无需 gh
 
+## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
+
+- **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)
+- **用户侧发版三步**：`git push` → Actions 手动 Run workflow 试装（约 10-15 分钟）→ `git tag v0.26.5 && git push origin v0.26.5` 自动出 Release。本机未装 `gh`，Release 由 Actions 创建，无需 gh
+
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页

@@ -42,9 +42,10 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 ### Agt.spec（PyInstaller onedir）
 
 - 构建：`pyinstaller packaging/Agt.spec --noconfirm` → 产物 `dist/Agt/`
-- **平铺形态（spec 修 #1）**：`pathex=[str(SRC)]`（src/）→ 模块以**顶层名**收集（config/session/chat…），与 pip 运行时 `src/__init__.py` 的 sys.path hack（把 src/ 塞进 sys.path）同构——运行时代码里的裸 `import config` 才能在 PYZ 命中。首版 `pathex=仓库根` 是坑：模块以 `src.config` 命名空间收集，裸 import 找不到（见 [施工中排掉的两个坑 · 3](#施工中排掉的两个坑)）
+- **平铺形态（spec 修 #1）**：`pathex=[str(SRC)]`（src/）→ 模块以**顶层名**收集（config/session/chat…），与 pip 运行时 `src/__init__.py` 的 sys.path hack（把 src/ 塞进 sys.path）同构——运行时代码里的裸 `import config` 才能在 PYZ 命中。首版 `pathex=仓库根` 是坑：模块以 `src.config` 命名空间收集，裸 import 找不到（见 [施工中排掉的五个坑 · 3](#施工中排掉的五个坑)）
 - datas 同样**平铺到 `_internal/` 根**：`src/static → static`、`src/assets → assets`——`config.py` 的 `Path(__file__).parent/"assets"` 在 `_internal/assets` 命中
-- 排除 tkinter / matplotlib / pytest / pip，隐藏 imports 收集子模块（uvicorn / webview / anyio + encodings 补全 + web_desktop）
+- 排除 tkinter / matplotlib / pytest / pip；隐藏 imports 收集子模块（uvicorn / webview / anyio + encodings 补全 + web_desktop + **workflow_node_api**——节点插件 `assets/nodes_builtin/*.py` 运行时 `_import_fresh` 动态加载、静态分析看不到其 import，须显式收集，spec 修 #3）
+- **hookspath 覆盖社区 hook（spec 修 #2，2026-09-10 三轮）**：`hookspath=[ROOT/packaging/hooks]` 放空操作 `hook-workflow.py`（`hiddenimports = []`）——覆盖 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 hook（顶层模块 `workflow` 与本项目 `src/workflow.py` 平铺后同名冲突，社区 hook 的 import 会失败）；project hookspath 优先于社区 hooks
 - 发布：`release.py --desktop`（打包 → zip → GitHub Releases upload）
 
 ### desktop_entry.py（PyInstaller Analysis 入口）
@@ -52,7 +53,7 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 - **裸名导入**：平铺形态无 `src` 包 → `from chat import web_main`（不是 `from src.chat import`），与收集形态同构
 - **workspace 锚定 exe 旁**：`Path(sys.executable).parent` 作为 cwd 基线——防快捷方式启动时 cwd 歧视（工作区相对路径解析不到）；首启自动创建 workspace/ 并 chdir
 - **`--pyrun` 子进程分流**：PyInstaller 下 `sys.executable` = Agt.exe 本体，直接 spawn Python 子进程会 **GUI 套娃**（Agt.exe 再拉 Agt.exe）——real_tools 三处 spawn 点（run_python / 相关子进程工具）已接 `_py_child_cmd`：打包形态用 `sys.executable --pyrun <file>` 分流到纯子进程 stub（runpy 直接执行目标文件，env 打 `AGT_FROZEN_CHILD=1`），源码形态直接 `sys.executable`
-- **`--selftest` 产物自检**：`Agt.exe --selftest` 验证 import 链（config/paths/session/web_desktop/chat/server，逐个 `__import__`）+ 资源就位（static/index.html + assets/models.preset.json）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码——打包后跑一条命令替代难自动化的 GUI 冒烟（CI/发布前自动验证）
+- **`--selftest` 产物自检（2026-09-10 三轮升级为完整自检）**：`Agt.exe --selftest` ①**全模块 import 链**（config/paths/session/web_desktop/chat/server/**workflow_node_api**，逐个 `__import__`）②**资源就位**（static/index.html + assets/models.preset.json + **assets/nodes_builtin**）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件，ok=12 fail=0——**漏收集 workflow_node_api 会在此暴露**）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码——打包后跑一条命令替代难自动化的 GUI 冒烟（CI/发布前自动验证）
 
 ## Step 3：首启向导 + 应用内更新检查（server.py / index.html）
 
@@ -88,19 +89,21 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 
 重打包 `dist/Agt/Agt.exe` **84MB**（自带 Python 3.13 运行时 + 全部依赖，解压即用）；发布链 `python release.py --desktop`（打包 → zip → GitHub Releases）。
 
-### 施工中排掉的两个坑
+### 施工中排掉的五个坑
 
 1. **pathlib backport 冲突**：环境里装的 Python 2 时代 `pathlib` backport 包与 PyInstaller 冲突 → 卸载后打包即通
 2. **冻结环境 GUI 套娃**：PyInstaller 下 `sys.executable` = `Agt.exe` 本体，run_python 直接 spawn 会 Agt.exe 再拉 Agt.exe → `--pyrun` 入口分流（见 [打包基建 · desktop_entry.py](#打包基建packagingagtspec--desktopentrypy-step-2)），冻结形态实测跑通
 3. **模块收集形态错位（打包产物启动即崩，2026-09-10 二轮，用户实测）**：首版 `pathex=仓库根` → 模块以 `src.config` 命名空间收集；运行时代码裸 `import config` 找顶层 → PYZ 里只有 `src.config` → `ModuleNotFoundError: No module named 'config'`。修复 = **平铺同构**（spec 修 #1）：pathex=src/ + datas 平铺 `_internal/` 根 + desktop_entry 裸名导入 + 版本号唯一真源收 `paths.py`（`src/__init__.py` 反向 `from paths import VERSION`，pip 侧 `__version__` 保持单源一致）
+4. **hook-workflow 同名冲突（2026-09-10 三轮，平铺后暴露，spec 修 #2）**：顶层模块 `workflow`（`src/workflow.py` 平铺收集）撞上 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 `hook-workflow.py`（其 import 必然失败）→ 仓库内 `packaging/hooks/hook-workflow.py` 放**空操作 hook**（`hiddenimports = []`）覆盖（project `hookspath` 优先于社区 hooks），见 [打包基建 · Agt.spec](#打包基建packagingagtspec--desktopentrypy-step-2)
+5. **节点插件 `No module named 'workflow_node_api'`（2026-09-10 三轮，spec 修 #3）**：节点插件（`assets/nodes_builtin/*.py`）由 `_import_fresh` 运行时**动态加载**，其 `import workflow_node_api` 静态分析看不见 → `hiddenimports` 显式补 `workflow_node_api`；`--selftest` 加节点插件动态加载自检（漏收集即暴露，实测 ok=12 fail=0）
 
 ## 验证状态
 
 四步全部施工完成并推送（commit 6c2efce + f634d0d）；PyInstaller 全量打包 **84MB**（自带 Python 3.13 运行时 + 全部依赖）构建成功，最终冻结冒烟 ✓——代码/文件双模式 run_python 走 `--pyrun` 子进程分流实测跑通（FROZEN_OK）。
 
-**打包形态修复（2026-09-10 二轮）**：用户实测 `desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'` → 定位为收集形态错位，spec 改平铺同构（[施工中排掉的两个坑 · 3](#施工中排掉的两个坑)）。本地平铺 import 链全通 + `src.__version__` 与 `paths.VERSION` 单源一致已验；后台重打包完成后跑 `Agt.exe --selftest` 收口（期待 `SELFTEST_PASS`）。
+**打包形态修复（2026-09-10 二轮 + 三轮，commit c41d169 已推送）**：用户实测 `desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'` → 定位为收集形态错位，spec 改**平铺同构**（[施工中排掉的五个坑 · 3](#施工中排掉的五个坑)）。平铺后三连坑一次收口：config 错位（坑 3）+ **hook-workflow 同名冲突**（坑 4）+ **workflow_node_api 漏收集**（坑 5，见 [施工中排掉的五个坑](#施工中排掉的五个坑)）。重打包产物 `Agt.exe --selftest` **完整自检通过**：全模块 import 链 ✅（含 workflow_node_api）、三资源就位 ✅、**节点插件动态加载 ok=12 fail=0**（workflow_node_api 依赖闭环）→ `SELFTEST_PASS`。
 
-交付验收（GUI 只能人工验）：`packaging/dist/Agt/Agt.exe` 双击 → 首启向导 → 配 token → 对话一轮 → 关窗重开（session 恢复）。验收通过后 `python release.py --desktop` 一键出 zip 上 GitHub Releases。
+交付验收（GUI 只能人工验）：`packaging/dist/Agt/Agt.exe` 双击 → 首启向导 → 配 token → 对话一轮 → 关窗重开（session 恢复）——自检覆盖不到 GUI 交互层。验收通过后 `python release.py --desktop` 一键出 zip 上 GitHub Releases。
 
 ## 相关页面
 

@@ -600,5 +600,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **打包产物启动即崩修复**：`desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'`。根因 = **收集形态错位**（首版 `pathex=仓库根` → 模块以 `src.config` 命名空间收集，运行时代码裸 `import config` 找顶层 → PYZ 只有 `src.config`）。修复 = **平铺同构**（spec 修 #1）：`pathex=src/` 模块以顶层名收集（与 pip 运行时 `src/__init__` 的 sys.path hack 同构）+ datas 平铺 `_internal/` 根（`Path(__file__).parent/"assets"` 命中）+ `desktop_entry` 裸名导入 `from chat import web_main`
 - **版本号唯一真源收 `paths.py`**：`VERSION = "0.26.4"`，`src/__init__.py` 反向 `from paths import VERSION`（pip 侧 `__version__` 单源一致）；`server.py /api/latest` 从 `import src` 改 `from paths import VERSION`
 - **新增 `Agt.exe --selftest`**：产物 import 链自检（config/paths/session/web_desktop/chat/server）+ static/assets 资源就位 → `SELFTEST_PASS/FAIL`，替代难自动化的 GUI 冒烟
-- 详见 [桌面版 · 施工中排掉的两个坑 · 3](features/desktop-mode.md#施工中排掉的两个坑)
+- 详见 [桌面版 · 施工中排掉的五个坑 · 3](features/desktop-mode.md#施工中排掉的五个坑)
+
+## 快速事实增补（2026-09-10 · 七 · 桌面版打包三连坑收官——hook 覆盖 + workflow_node_api 显式收集 + selftest 完整化）
+
+- **打包三连坑全清（commit c41d169，产物 `SELFTEST_PASS`）**：平铺同构后还剩两个新坑 + selftest 一次收口——①**hook-workflow 同名冲突**：顶层 `workflow` 模块（`src/workflow.py` 平铺收集）撞上 pyinstaller-hooks-contrib 给**同名 PyPI 包 workflow** 准备的 hook（其 import 必失败）→ `packaging/hooks/hook-workflow.py` 空操作 hook（`hiddenimports=[]`）覆盖，project hookspath 优先；②**节点插件漏收集**：`assets/nodes_builtin/*.py` 运行时 `_import_fresh` 动态加载，其 `workflow_node_api` import 静态分析看不见 → `hiddenimports` 显式补 `workflow_node_api`
+- **`--selftest` 升级完整自检**：全模块 import 链（config/paths/session/web_desktop/chat/server/**workflow_node_api**）+ 资源就位（static/index.html + models.preset.json + **nodes_builtin**）+ **节点插件动态加载自检**（真实 `_import_fresh` 走 nodes_builtin，ok=12 fail=0，漏收集 workflow_node_api 时在此暴露）→ `SELFTEST_PASS`；GUI 交互层自检覆盖不到，仍需人工双击验收
+- 详见 [桌面版 · 施工中排掉的五个坑](features/desktop-mode.md#施工中排掉的五个坑)
 

@@ -5,14 +5,17 @@
 
 import os
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).parent          # 仓库根
 SRC = ROOT / "src"
 
 datas = [
-    (str(SRC / "static"), "src/static"),                      # WebUI（index/stats/editor 等 html）
-    (str(SRC / "assets"), "src/assets"),                      # 播种资产（preset/manifest/tools_builtin/workflows/nodes/agents）
+    (str(SRC / "static"), "static"),                         # WebUI（index/stats/editor 等 html）——
+    (str(SRC / "assets"), "assets"),                         # 播种资产（preset/manifest/tools_builtin/…）
+    # ↑ 平铺形态（spec s_d53311f8 修 #1）：Analysis pathex=SRC → 模块以顶层名收集（config/session/
+    # chat…），与 pip 运行时 src/__init__ 的 sys.path hack 同构；datas 也平铺到 _internal/
+    # 根（config.py 的 Path(__file__).parent/"assets" 在 _internal/assets 命中）。
 ]
 hiddenimports = (
     collect_submodules("uvicorn")                              # uvicorn 动态 worker/loop 加载
@@ -20,21 +23,21 @@ hiddenimports = (
     + collect_submodules("anyio")
     + [
         "engineio.async_client", "engineio.sync_client",
-        "encodings.utf_8", "encodings.gbk", "encodings.ascii",  # run_python/嗅探解码（Win 冻结环境 encodings 常缺）
-        "src.assets.tools_builtin",                             # 外置工具按目录扫描（非 import 收集）——
-        "src.web_desktop",
+        "encodings.utf_8", "encodings.gbk", "encodings.ascii",  # run_python/嗅探解码（Win 冻结环境常缺）
+        "web_desktop",
+        "workflow_node_api",                                   # 节点插件（assets/nodes/*.py 被 _import_fresh 动态
+                                                               # 加载）的公共 API——静态分析看不到动态 import，须显式收集
     ]
 )
-# 外置工具/节点插件是 .py 数据文件（运行时 _import_fresh 动态加载）——随 datas 已带，
-# 上面 hiddenimports 的包名只为保住包路径可见。
+# 外置工具/节点插件是 .py 数据文件（运行时 _import_fresh 动态加载）——随 assets datas 已带。
 
 a = Analysis(
     [str(SRC / "desktop_entry.py")],
-    pathex=[str(ROOT)],
+    pathex=[str(SRC)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[str(ROOT / "packaging" / "hooks")],   # 空 hook-workflow 覆盖社区 hook（同名 PyPI 包与本项目模块冲突）
     runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "pytest", "pip"],       # 瘦身（未用/重）
     noarchive=False,

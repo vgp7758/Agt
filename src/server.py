@@ -205,10 +205,10 @@ async def api_latest():
     import urllib.request
     import time as _t
     import os as _os
-    import src as _src_pkg
+    from paths import VERSION as _VER
     if _t.time() - _LATEST_CACHE["ts"] < 86400 and _LATEST_CACHE["data"]:
         return _LATEST_CACHE["data"]
-    out = {"current": _src_pkg.__version__, "latest": None, "update_available": None,
+    out = {"current": _VER, "latest": None, "update_available": None,
            "url": "https://github.com/vgp7758/Agt/releases/latest",
            "desktop": bool(_os.environ.get("AGT_DESKTOP", "").strip() in ("1", "true", "yes"))}
     try:

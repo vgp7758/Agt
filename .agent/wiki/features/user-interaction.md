@@ -329,7 +329,7 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 - **wake=True 恒唤醒、不需策略参数**（与上节 service_exit 对照）：转后台任务本来是**同步等待**（超时被迫转后台），结果通常是决策链一环；且一次性任务跑完即报、**无套娃循环**——service_exit 那边崩溃场景要 5 分钟退避，这边天然安全
 - **回调隔离**：cb 抛异常仅记日志，不影响 `_bg_reader` 读线程；未注册（`_bg_notify_cb=None`）静默跳过
 - **check_bg_task 不变**：手动查询仍可用（docstring 同步更新）——自动通知即其合成记录（msg 形如「📨〔后台任务完成〕run_python（⚠️ 异常结束 rc=3）」，含尾部输出）
-- **合成记录键名契约**（2026-09-11 修复）：seed 四键 `{tool, args, result, reasoning}`——`tool` 是消费侧 `_seed_steps` 读的键，写成 `name` 则工具名恒空、通知轮退化成纯 user 通知（本族曾踩，见 [键名漂移修复](#键名漂移修复bg_task-合成记录-name--tool2026-09-11用户观察触发)）
+- **合成记录键名契约**（2026-09-11 修复，v0.26.6）：seed 四键 `{tool, args, result, reasoning}`——`tool` 是消费侧 `_seed_steps` 读的键，写成 `name` 则工具名恒空、通知轮退化成纯 user 通知（本族曾踩，见 [键名漂移修复](#键名漂移修复bg_task-合成记录-name--tool2026-09-11用户观察触发)）
 
 **后台事件通知语义全景（至此三族齐）**：
 
@@ -341,7 +341,7 @@ _on_bg_task_done → 包成 check_bg_task 合成工具记录（含尾部输出 4
 
 共同原则：每种按「结果是否决策链一环 + 有无循环风险」定唤醒，而非一刀切。
 
-**验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。**后续修正**：seed list 包装（44ae953）+ 键名漂移（2026-09-11）两处产地缺陷，见 [seed 契约三层防御](#seed-契约三层防御非-dict-坏-seed-不再崩唤醒轮2026-08-31bg_task-唤醒轮秒崩修复) 及其后两节。
+**验证**：链路 mock（回调收到 (bg_id, name, rc) / None 安全）+ 全链路（msg/seed=check_bg_task 合成记录/wake=True 全过）。**生效方式**：引擎层三文件，需 `/restart`。**后续修正**：seed list 包装（44ae953，2026-08-31）+ 键名漂移（2026-09-11，v0.26.6）两处产地缺陷，见 [seed 契约三层防御](#seed-契约三层防御非-dict-坏-seed-不再崩唤醒轮2026-08-31bg_task-唤醒轮秒崩修复) 及其后两节。
 
 ## seed 契约三层防御：非 dict 坏 seed 不再崩唤醒轮（2026-08-31，bg_task 唤醒轮秒崩修复）
 
@@ -442,7 +442,7 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 
 **新排障口诀（补充前两节）**：**「合成记录渲染成 user 通知 = 先查 seed 键名，再查是否 list 包装」**——三层防御 / list 包装修正都只管「不崩」，**键名契约**是第三条独立故障线；看到通知轮没有工具形态，先比对生产侧 rec 的键与 `_seed_steps` 读的键。
 
-**生效方式**：引擎层（src/agent.py），需 `/restart`。
+**生效方式**：引擎层（src/agent.py），需 `/restart`。随 **v0.26.6 补丁版**发布（2026-09-11，commit `1d47b37`，PyPI 已上线；未单独 tag 桌面版）——见 [v0.26.6 发布记录](../releases/v0.26.6.md)。
 
 ## user 消息语义标签 · 后台通知轮 vs 用户轮（2026-08-30，用户提案；批首归属 commit 803b3a5）
 

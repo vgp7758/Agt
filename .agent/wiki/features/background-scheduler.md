@@ -73,6 +73,8 @@
 
 三块短板全补上：中途查进度 / 补看结果 / bg_id 丢失枚举。实现读 `real_tools._bg_tasks`（import 兜底空 dict）；注册列表补 `Tool(check_bg_task)`。
 
+**它同时是 bg_task 完成通知的合成记录名**（2026-08-30 起）：任务跑完自动推一条 `check_bg_task` 合成工具记录唤醒（`{tool, args, result, reasoning}` 四键，键名契约见 [用户交互 · 键名漂移修复](user-interaction.md#键名漂移修复bg_task-合成记录-name--tool2026-09-11用户观察触发)）——**合成记录与真实查询共用同一心智模型**：模型看到通知后想深挖，直接真调 `check_bg_task(bg_id)` 拿全量输出。
+
 **验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
 ## 与其他模块的关系

@@ -259,6 +259,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 
 - **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)
+- **补丁版发布（v0.26.6，2026-09-11，commit `1d47b37`）**：同一条链跑通——`python release.py -y` → 版本 0.26.5 → 0.26.6（暂存 1 文件）→ 提交 → 构建 whl + tar.gz → PyPI ✅ → 推送 `origin main (a8dabf7..1d47b37)`。**补丁版不单独 tag 桌面版**（不涉桌面关键路径，攒到下个功能版本一起发）。见 [v0.26.6 发布记录](../releases/v0.26.6.md)
 - **用户侧发版三步**：`git push` → Actions 手动 Run workflow 试装（约 10-15 分钟）→ `git tag v0.26.5 && git push origin v0.26.5` 自动出 Release。本机未装 `gh`，Release 由 Actions 创建，无需 gh
 
 ## 相关页面

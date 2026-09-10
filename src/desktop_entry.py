@@ -73,6 +73,29 @@ def _selftest() -> int:
     return 0 if ok else 1
 
 
+def _redirect_stdio() -> None:
+    """GUI 子系统（console=False）下 sys.stdout/stderr 是 None——uvicorn 的
+    DefaultFormatter.__init__ 会调 sys.stdout.isatty() 直接 AttributeError
+    （Unable to configure formatter 'default' → 启动即崩），print 同样炸。
+    重定向到数据目录 logs/desktop.log（spec 约定"日志写文件"），顺带成为
+    桌面版排障第一现场。stdin 一并兜底（uvicorn 不碰，某些库会）。"""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    from paths import resolve_agt_home
+    log_dir = resolve_agt_home() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    f = open(log_dir / "desktop.log", "a", buffering=1, encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = f
+    if sys.stderr is None:
+        sys.stderr = f
+    if sys.stdin is None:
+        try:
+            sys.stdin = open(os.devnull, "r")
+        except OSError:
+            pass
+
+
 def main():
     if _is_pyrun():
         return _run_py_child()
@@ -83,6 +106,7 @@ def main():
     ws = exe_dir / "workspace"
     ws.mkdir(exist_ok=True)
     os.chdir(ws)                       # workspace 锚定（快捷方式启动 cwd 歧义消除）
+    _redirect_stdio()                  # 无控制台兜底：必须在 uvicorn 前挂好（L86）
     from chat import web_main
     web_main()
     return 0

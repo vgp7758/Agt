@@ -4,6 +4,8 @@
 
 把 Agt 从「浏览器交互的 Web 服务」升级为「双击即用的桌面应用」（spec s_d53311f8 · 四步全交付）：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2 / mac: WKWebView / Linux: gtkwebkit，非 Electron）；配套数据目录迁移（桌面模式进 Windows AppData 惯例位置）、PyInstaller 打包基建（onedir 自带 Python 运行时，下载即用）、**首启向导 + 应用内更新检查**（无 provider 配置自动弹 onboarding + GitHub Releases 版本横幅）、**图标 / Windows 版本资源 / SmartScreen 教学文档**。pip 用户走 Step 1（窗口模式）；分发走 Step 2-4（打包 + 首启体验 + 发版物料）。
 
+**瘦启动器（spec s_37494daf，2026-09-10 续）**：在四步之上加一层「先选工作区再拉起主程序」的入口——`Launcher.exe`（11.3MB 独立 onefile）双击选目录 → 以该目录为 workspace 启动 `Agt.exe`；直接双击 `Agt.exe` 仍进默认 workspace（两入口共存）。见 [瘦启动器 Launcher.exe](#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10)。
+
 ## 用法
 
 ```bash
@@ -158,6 +160,72 @@ open_window(8001)         ← 窗口加载 http://127.0.0.1:8001/ → 无人监�
 **验证方法（本轮补上的盲区）**：前两轮端到端只查 `desktop.log`（服务在 8000 正常）+ 进程存活，**未验证窗口实际加载的 URL 可连**——修复后改为对**窗口端口**发 HTTP 请求确认可连再收尾。`--clean` 重打包（约 6 分钟）后拉起 exe 复验。
 
 **教训**：端口探测类操作必须在被探测服务启动之前；GUI 形态的端到端验证须覆盖「窗口实际加载的 URL 可连」，而非只看服务端日志。
+
+## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
+
+用户提案：「launcher.exe 可能是个瘦启动器，在窗口选一个 workspace 以后才去对应的目录启动真正的桌面应用」——VSCode / JetBrains 式「先选项目再开应用」。**两入口共存**：双击 `Launcher.exe` 选工作区；双击 `Agt.exe` 直接进默认 workspace（exe 旁 `workspace/`）兜底。
+
+## 交付四步
+
+| 步骤 | 内容 | 状态 |
+|---|---|---|
+| 1 | `desktop_entry._pick_workspace`：workspace 三级解析 | ✅ 单测三级优先级全过 |
+| 2 | `packaging/launcher.py`：tkinter 瘦启动器（176 行纯标准库） | ✅ 单测全过 |
+| 3 | `packaging/Launcher.spec`：onefile 独立打包 | ✅ 构建成功 `Launcher.exe` **11.3MB** |
+| 4 | 主程序 `--clean` 重打包 → launcher 端到端验证 | 进行中（后台） |
+
+## 发布布局（打完即生效）
+
+```
+Agt/                        ← 解压即用的发行包
+├── Launcher.exe   11.3MB   ← 双击这个：选工作区 → 拉起主程序（VSCode 式）
+├── Agt.exe       107MB     ← 或直接双击：进默认 workspace（兜底入口）
+└── _internal/
+```
+
+## desktop_entry：workspace 三级解析（`_pick_workspace`）
+
+优先级 **`AGT_WORKSPACE` env（launcher / 看门狗传）> `--workspace <path>` 参数 > exe 旁默认 `workspace/`**；`chdir` 必须在 `import 引擎之前`（锚定机制），目录不存在自动创建。
+
+- **env 不 pop**：`/restart` 继承 env 时新进程保持同 workspace——**重启不换区语义**（若 pop 掉，重启会掉回 exe 旁默认区，用户会话/记忆全丢）
+- launcher 传 `AGT_WORKSPACE` + `cwd=选定目录` 双保险
+
+## packaging/launcher.py：瘦启动器（纯标准库）
+
+**零引擎依赖**（tkinter + subprocess + json，不 import paths / config）——独立 onefile 打包，与主程序互不牵连。
+
+| 函数 | 职责 |
+|---|---|
+| `_data_dir()` / `_recent_file()` | recent 列表落 `%APPDATA%\Agt\recent_workspaces.json`（与 `paths.resolve_agt_home` 桌面分支同语义，launcher 不 import paths 保持零依赖） |
+| `_load_recent()` | 读列表 + **消失目录静默滤除** + 截断 `RECENT_MAX=8` |
+| `_save_recent(ws)` | 置顶去重（`lower()` 大小写不敏感）+ 写失败静默（不阻塞启动） |
+| `_main_exe()` | 定位主程序三级：`AGT_MAIN_EXE` env（测试）> frozen 同目录 `Agt.exe` > 源码态 `<repo>/dist/Agt/Agt.exe`（开发验证路径） |
+| `_launch(ws)` | 存 recent → `AGT_WORKSPACE` + `AGT_DESKTOP=1` env → `Popen(cwd=ws, DETACHED_PROCESS)` → **launcher 自退**（`sys.exit(0)`，主程序独立存活） |
+| `LauncherUI` | Treeview 最近列表（首项 `★` 前缀）+ 双击直开 + 浏览按钮；**空列表自动弹目录选择**（`root.after(150, self._browse)`）；无 recent 且取消 → 退出 |
+| `main()` | `--auto <dir>` 无 UI 直启（自动化验证 / 脚本用法，走 `return` 而非 `sys.exit` 供脚本断言输出） |
+
+## Launcher.spec：onefile 独立打包
+
+- 构建：`pyinstaller packaging/Launcher.spec --noconfirm --distpath packaging/dist`
+- `excludes` 大名单瘦身（numpy / PIL / uvicorn / webview / requests / pydantic / yaml / httpx / anyio…）——引擎模块本不在 pathex，此处兜底防意外收集 → 产物仅 11.3MB
+- `console=False`（GUI 启动器无控制台）+ `upx=False`（与主 spec 一致，upx 误杀率高且 SmartScreen 雪上加霜）+ 复用 `agt.ico` / `version_file.txt`
+
+**spec 三连坑（当场修掉）**：① `SPECPATH` 是 **str 不是 Path** → `SPECPATH / "launcher.py"` 报 `TypeError` → 先 `_SPEC = Path(SPECPATH)`；② 忘 `from pathlib import Path` → `NameError`；③ 另两处 `SPECPATH` 引用（icon / version）一并改 `_SPEC`。三次构建全绿。
+
+## 注意事项
+
+- launcher **必须与 `Agt.exe` 同目录分发**（`_main_exe` 靠同目录定位）；找不到主程序时弹 `messagebox` 提示而非静默失败
+- `AGT_MAIN_EXE` env 是测试/开发钩子（源码态验证指向 `dist/Agt/Agt.exe`），非用户面配置
+- `--auto` 模式 stdout 在 `console=False` 下仍可用（重定向），但 `print` 输出不保证可见——脚本断言以退出码为准
+- 主程序侧 workspace 语义变更集中在 `desktop_entry._pick_workspace` 一处，launcher 只负责传 env
+
+## 相关页面
+
+- [系统总览](../architecture/overview.md) — 模块地图（服务层 chat.py / 配置层 config.py 的桌面配套）
+- [运维 · 存档布局](../guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos) — 数据目录三级解析落地后存档根随 AGT_DIR 走
+- [用户交互 · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc) — 重启不开新窗口同款语义
+- [配置体系 · 配置文件解析 config_file](../guides/config-and-models.md) — repo 级覆盖与数据目录正交（路径解析归 paths.py）
+- [瘦启动器 Launcher.exe](#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10) — 先选 workspace 再拉起主程序（本页新增）
 
 ## 相关页面
 

@@ -624,3 +624,13 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **桌面版双击 ERR_CONNECTION_REFUSED：端口错位（2026-09-10 六轮，commit ac9a79a，用户双击实测）**：用户双击 `Agt.exe` 后页面「127.0.0.1 拒绝连接」。根因 = **`pick_port` 被放在 `start_server` 之后**——服务已在 8000 监听，`pick_port` 的 connect 探测把**自己**判为"被占用" → 退让 8001 → `open_window(8001)` 指向无监听端口。修复两处（src/chat.py）：①`pick_port` **前置到 `start_server` 之前**（服务与窗口同端口；单测实锤 8000 无人听→8000、被自己监听→8001）②桌面模式 `/restart` 后**必须重开窗口**（旧窗口已随旧进程关闭；浏览器模式维持「重启不重开页签」不变）。**漏检教训**：前两轮端到端只查 `desktop.log`（服务在 8000 正常）+ 进程存活，未验证**窗口实际加载的 URL 可连**——本轮改为对窗口端口发 HTTP 请求确认。详见 [桌面版 · 窗口端口错位修复](features/desktop-mode.md#窗口端口错位修复err_connection_refused2026-09-10-六轮commit-ac9a79a用户双击实测)、[施工中排掉的坑 · 8](features/desktop-mode.md#施工中排掉的坑)
 
+## 快速事实增补（2026-09-10 · 十一 · 桌面版瘦启动器 Launcher.exe）
+
+用户提案「launcher.exe 是个瘦启动器，窗口选一个 workspace 后才去对应目录启动真正的桌面应用」→ spec s_37494daf，VSCode 式两入口共存。
+
+- **`packaging/launcher.py`**（176 行纯标准库 tkinter，零引擎依赖）：最近工作区列表（`%APPDATA%\Agt\recent_workspaces.json`，置顶去重 / 消失目录滤除 / RECENT_MAX=8）+ 浏览选目录 + 双击直开 + 空列表自动弹选择；`--auto <dir>` 无 UI 直启（自动化验证）；启动后 launcher 自退（`DETACHED_PROCESS`）
+- **`Launcher.spec`**：独立 onefile，excludes 大名单瘦身 → **`Launcher.exe` 11.3MB**（主程序 Agt.exe 107MB）；spec 三连坑（`SPECPATH` 是 str 非 Path → TypeError；忘 import Path → NameError）当场修掉
+- **workspace 三级解析**（`desktop_entry._pick_workspace`）：`AGT_WORKSPACE` env > `--workspace` 参数 > exe 旁默认 `workspace/`；chdir 须在 import 引擎前；**env 不 pop**（`/restart` 继承 → 重启不换区）
+- 发布布局：`Launcher.exe` 与 `Agt/`（主程序 onedir）平级；双击 Agt.exe 仍进默认 workspace 兜底
+- 详见 [features/desktop-mode · 瘦启动器](features/desktop-mode.md#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10)
+

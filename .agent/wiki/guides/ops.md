@@ -1,6 +1,8 @@
 # 运维、可观测性与排障
 
-## 存档布局（~/.agt/repos/）
+## 存档布局（paths.py 三级解析 · 默认 ~/.agt/repos/）
+
+数据目录解析唯一真源在 `src/paths.py`（2026-09-10，spec s_d53311f8 Step 2）：`AGT_HOME` env（测试/多实例）> 桌面模式 `%APPDATA%\Agt` > 默认 `~/.agt`。桌面打包形态由入口设 `AGT_DESKTOP=1` → 数据进 AppData（Windows 惯例）；首次桌面启动把旧 `~/.agt` 整体复制到新目录（旧目录保留可回滚）。此前 `Path.home()/".agt"` 散落在 config/session/lsp_manager/restart_watchdog/spec_tools/updater/feedback **七处独立定义**，已全部收编 `from paths import AGT_DIR`（外置工具各自轻量复制三级逻辑）。详见 [桌面版](../features/desktop-mode.md)。
 
 ```
 <fixed-cwd>/            # cwd 斜线替换为'-'（D:\A\Agt → D--A-Agt；旧 hash 目录启动自动迁移）

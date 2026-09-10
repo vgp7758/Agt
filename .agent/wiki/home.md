@@ -585,3 +585,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **openrouter `:free` 档现状实测 + m3 换付费（用户提问 2026-09-10，commit 584ef3b）**：用户问「glm-5.2-free 有什么限制？minimax-m3 是视觉模型吗？」→ 拉 OpenRouter API 全量实测（430 模型）：**z-ai 系 glm `:free` 一个都没了**（全站 free 变体只剩 18 个小厂，minimax/deepseek 免费档也全下架）——9-10 筛选删 glm-5.2-free 不只是「旧」，是配置了也调不通。`:free` 固有代价：速率 ~50/天（未充值）/~1000/天（充 ≥$10）、ctx 常截短、提示可能进训练、**随时上下架**；仅存知名旗舰免费档 `google/gemma-4-31b-it:free`。**minimax-m3 实测全模态**（text/image/video 输入、1M ctx、$0.3/M）——M2.x 系纯文本、m3 是多模态旗舰。preset 变更：`or-minimax-m3-free` 下架删除 → 新增 `or-minimax-m3`（`thinking:true, vision:true`，desc 多模态）——vision 标记使其 onboarding 落地进视觉模型组。z.ai 现状：glm-5.3/5.3-flash 付费双档在架（1.3M ctx）、5.2 降 $0.28/M，官方直连差价不大继续用（详见 [config-and-models · 补记](guides/config-and-models.md#补记openrouter-free-档现状实测m3-free-下架换付费-or-minimax-m32026-09-10--二轮)）
 
+## 快速事实增补（2026-09-10 · 四 · 桌面版 Step 1+2——窗口模式 + 数据目录统一 + 打包基建）
+
+- **桌面版 Step 1+2（spec s_d53311f8，commit 6c2efce）**：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2，非 Electron），零侵入接入——web_main 只有两个分支点（`open_browser→web_desktop.open_window` / `_render_loop→web_desktop.run_loop`），窗口关闭走现成 finally 链优雅退出；`pyproject` 加 `desktop = ["pywebview>=5.0"]` extras，缺失给安装指引退出
+- **数据目录唯一真源 `src/paths.py`（Step 2）**：`AGT_HOME` env > 桌面 `%APPDATA%\Agt` > `~/.agt` 三级解析；此前 `Path.home()/".agt"` 散落 config/session/lsp_manager/restart_watchdog/spec_tools/updater/feedback **七处独立定义全部收编**（不统一桌面版数据会分裂三处），config 迁移逻辑也移入 paths 避免 session→config 循环 import；存量迁移：首次桌面启动把旧 `~/.agt` 整体复制到 AppData（旧目录保留可回滚）
+- **打包基建**：`packaging/Agt.spec`（PyInstaller onedir，datas 收 static+assets，排除 tkinter/matplotlib）+ `desktop_entry.py`（workspace 锚定 exe 旁防快捷方式 cwd 歧视 + `--pyrun` 子进程分流——PyInstaller 下 sys.executable=Agt.exe 直接 spawn 会 GUI 套娃，real_tools 三处 spawn 点已接 `_py_child_cmd`）+ `release.py --desktop`（打包→zip→gh release）。PyInstaller 全量构建后台进行中，Step 3（首启向导+应用内更新）、Step 4（图标/文档/SmartScreen 教学）待续。详见 [桌面版](features/desktop-mode.md)
+

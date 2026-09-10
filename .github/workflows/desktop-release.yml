@@ -57,7 +57,15 @@ jobs:
       - name: Selftest gate (禁止坏产物出门)
         shell: pwsh
         run: |
-          $out = & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String
+          # 带超时兜底：selftest 万一吊死（历史上 pywebview 在无桌面会话的 runner 上
+          # 挂过）不至于拖到 job 级 45min——180s 足够（本地实测 <20s）
+          $job = Start-Job -ScriptBlock {
+            & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String
+          }
+          if (-not (Wait-Job $job -Timeout 180)) {
+            Stop-Job $job; Write-Error "selftest 180s 未结束（疑似挂起）"; exit 1
+          }
+          $out = Receive-Job $job; Remove-Job $job -Force
           Write-Host $out
           if ($out -notmatch "SELFTEST_PASS") { Write-Error "selftest 未通过"; exit 1 }
 

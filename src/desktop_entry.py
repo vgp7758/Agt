@@ -1,14 +1,16 @@
 """desktop_entry.py —— 桌面版打包入口（PyInstaller Analysis 的入口脚本）。
 
 职责（进入 chat.web_main 之前的桌面形态准备）：
-1. AGT_DESKTOP=1：web_desktop/paths 据此开窗口 + 数据目录迁 %APPDATA%\\Agt
-2. workspace 锚定 exe 旁 workspace/（explorer 双击 cwd=exe 目录，但快捷方式/
-   开始菜单启动 cwd 可能是 System32——显式 chdir 消除歧义；首启自动创建）
+1. AGT_DESKTOP=1：桌面窗口模式（web_desktop）+ 数据根 ~/.agt（与 CLI 共用，paths 解析）
+2. workspace 锚定（AGT_WORKSPACE env > --workspace 参数 > exe 旁 workspace/；
+   explorer 双击 cwd=exe 目录，但快捷方式/开始菜单启动 cwd 可能是 System32——
+   显式 chdir 消除歧义；首启自动创建）
 3. run_python 子进程兼容：PyInstaller 冻结下 sys.executable=Agt.exe——
    子进程起 Agt.exe 会再跑一遍 GUI 入口（套娃）。用 --pyrun 入口分发：
    冻结环境子进程带 --pyrun <file> 参数 → 本入口分流直接 execfile，不进 GUI。
-4. --selftest：打包产物 import 链自检（chat/config/server/web_desktop/paths +
-   static/assets 资源就位）——CI/发布前自动验证，替代难自动化的 GUI 冒烟。
+4. --selftest：产物 import 链自检（核心模块 + 资源就位）——CI/发布前门禁。
+   不 import 任何 GUI 依赖模块（CI runner 无桌面会话也能确定性退出，实测坑：
+   pywebview/pythonnet 在无桌面会话环境会挂住不返回 → Actions 任务被取消）。
 
 打包形态（spec s_d53311f8 修 #1）：Analysis pathex=src → 本文件及全部引擎模块以
 【顶层名】收集（config/session/chat…，与 pip 运行时 src/__init__ 的 sys.path hack
@@ -37,9 +39,18 @@ def _run_py_child() -> int:
 
 
 def _selftest() -> int:
+    """产物自检。**用途是 CI/发布前门禁**——不需要任何 GUI 依赖，必须确定性退出。
+
+    历史坑：曾 import web_desktop（pywebview）——CI runner 上 pywebview 的
+    pythonnet/.NET 初始化在某些环境会挂住不返回（本地有 WebView2 就没事），
+    表现为 selftest 步骤永远不结束 → Actions 任务被取消。改为**只 import 无
+    GUI 依赖的核心模块**：真产物的问题（模块漏收集 / 资源缺 / 插件加载失败）
+    照样全暴露，但永远不会吊死流水线。
+    """
     ok = True
     checks = []
-    for mod in ("config", "paths", "session", "web_desktop", "chat", "server", "workflow_node_api"):
+    for mod in ("config", "paths", "session", "chat", "server", "workflow_node_api",
+                "workflow", "multiagent", "llm_client", "tools"):
         try:
             __import__(mod)
             checks.append((mod, True, ""))
@@ -47,29 +58,58 @@ def _selftest() -> int:
             checks.append((mod, False, f"{type(e).__name__}: {e}"))
             ok = False
     base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-    for res in ("static/index.html", "assets/models.preset.json", "assets/nodes_builtin"):
-        checks.append((res, (base / res).exists(), ""))
-        ok = ok and (base / res).exists()
+    for res in ("static/index.html", "static/agents.html", "assets/models.preset.json",
+                "assets/nodes_builtin", "assets/tools_builtin", "assets/manifest.json"):
+        feat = (base / res).exists()
+        checks.append((res, feat, ""))
+        ok = ok and feat
     # 节点插件动态加载自检（_import_fresh 路径——漏收集 workflow_node_api 时会在这里暴露）
     try:
         import importlib.util as _iu
         from pathlib import Path as _P
         np = _P(getattr(sys, "_MEIPASS", _P(sys.executable).parent)) / "assets" / "nodes_builtin"
         n_ok = 0
+        errs = []
         for py in sorted(np.glob("*.py")):
             m = f"agent_node_sf_{py.stem}"
-            spec = _iu.spec_from_file_location(m, py)
-            mod = _iu.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            n_ok += 1
-        checks.append((f"节点插件动态加载 {n_ok} 个", n_ok > 0, "" if n_ok > 0 else "0 个=目录缺失/放错路径"))
+            try:
+                spec = _iu.spec_from_file_location(m, py)
+                mod = _iu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                n_ok += 1
+            except Exception as e:
+                errs.append(f"{py.stem}:{type(e).__name__}")
+        checks.append((f"节点插件动态加载 {n_ok} 个", n_ok > 0, ",".join(errs[:3])))
         ok = ok and n_ok > 0
     except Exception as e:
         checks.append(("节点插件动态加载", False, f"{type(e).__name__}: {e}"))
         ok = False
+    # 外置工具脚本可编译自检（同属"随包数据被动态加载"的一类）
+    try:
+        import py_compile
+        from pathlib import Path as _P2
+        tp = _P2(getattr(sys, "_MEIPASS", _P2(sys.executable).parent)) / "assets" / "tools_builtin"
+        t_ok, t_err = 0, []
+        for py in sorted(tp.glob("*.py")):
+            try:
+                py_compile.compile(str(py), doraise=True, cfile=str(py) + ".pyc")
+                t_ok += 1
+            except Exception as e:
+                t_err.append(f"{py.stem}:{type(e).__name__}")
+        checks.append((f"外置工具脚本校验 {t_ok} 个", t_ok > 0, ",".join(t_err[:3])))
+        ok = ok and t_ok > 0
+    except Exception as e:
+        checks.append(("外置工具脚本校验", False, f"{type(e).__name__}: {e}"))
+        ok = False
     for name, good, err in checks:
-        print(("✅" if good else "❌"), name, err)
-    print("SELFTEST_" + ("PASS" if ok else "FAIL"))
+        try:
+            print(("✅" if good else "❌"), name, err, flush=True)
+        except Exception:
+            pass   # 输出编码问题不该让自检本身崩（CI 门禁只看 SELFTEST_*）
+    try:
+        print("SELFTEST_" + ("PASS" if ok else "FAIL"), flush=True)
+    except Exception:
+        pass
     return 0 if ok else 1
 
 

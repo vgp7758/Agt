@@ -283,6 +283,10 @@ ov.style.display = 'flex';   // .modal-overlay 的 CSS 默认 display:none——
 
 **生效**：preset 现读（`_load_preset` 无缓存）——刷新即见，无需 /restart；已安装实例 `/update-assets apply`。
 
+### first_run 自动 onboarding 入口（桌面版首启，2026-09-10）
+
+**新增自动触发入口（桌面版首启，2026-09-10，commit 6c2efce/f634d0d）**：此前 onboarding 全部是「用户选中 preset:: 条目手动触发」；桌面版 Step 3 加了**无配置自动弹**——WS 连接/重连时 `_first_run = not config.MODELS`（无任何 provider 配置 → true），system 消息带 `first_run` 字段，前端 `m.first_run && !m.transient` → 自动 `showPresetOnboard('qwen')`（预选 modelscope qwen——免费额度、国内可达、对非技术用户最友好）。弹窗与配置链路完全复用既有 onboarding，只是多了触发入口。详见 [desktop-mode · Step 3](../features/desktop-mode.md)。
+
 ## Provider 参数硬约束规则表：base_url+model 预检查（2026-09-01，用户提案，commit 8c2fc6c）
 
 **背景（用户提案 2026-09-01）**：各家 API 有已知硬约束（Kimi 温度必须 1、智谱 flash 不接受 enable_thinking、DeepSeek 思考模型必须补 reasoning 历史）——但这些约束在 models.preset.json 里没体现，且**手配模型（没走 onboarding）不受保护**。落地为**内置规则表 + 请求前自动修正**（用户无感知；profile 的 param_lock 是显式定制层，规则表是内置兜底层：手配模型未走 onboarding 也受保护，知识随版本分发）。

@@ -2,7 +2,7 @@
 
 ## 职责
 
-把 Agt 从「浏览器交互的 Web 服务」升级为「双击即用的桌面应用」：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2 / mac: WKWebView / Linux: gtkwebkit，非 Electron）；配套数据目录迁移（桌面模式进 Windows AppData 惯例位置）与 PyInstaller 打包基建（onedir 自带 Python 运行时，下载即用）。pip 用户走 Step 1（窗口模式）；分发走 Step 2（打包）。
+把 Agt 从「浏览器交互的 Web 服务」升级为「双击即用的桌面应用」（spec s_d53311f8 · 四步全交付）：`agt-web --desktop` 用 pywebview 弹系统 WebView 窗口（Win: WebView2 / mac: WKWebView / Linux: gtkwebkit，非 Electron）；配套数据目录迁移（桌面模式进 Windows AppData 惯例位置）、PyInstaller 打包基建（onedir 自带 Python 运行时，下载即用）、**首启向导 + 应用内更新检查**（无 provider 配置自动弹 onboarding + GitHub Releases 版本横幅）、**图标 / Windows 版本资源 / SmartScreen 教学文档**。pip 用户走 Step 1（窗口模式）；分发走 Step 2-4（打包 + 首启体验 + 发版物料）。
 
 ## 用法
 
@@ -56,9 +56,50 @@ AGT_HOME env（测试/多实例） > 桌面模式 %APPDATA%\Agt > ~/.agt（默�
 - **workspace 锚定 exe 旁**：`Path(sys.executable).parent` 作为 cwd 基线——防快捷方式启动时 cwd 歧视（工作区相对路径解析不到）
 - **`--pyrun` 子进程分流**：PyInstaller 下 `sys.executable` = Agt.exe 本体，直接 spawn Python 子进程会 **GUI 套娃**（Agt.exe 再拉 Agt.exe）——real_tools 三处 spawn 点（run_python / 相关子进程工具）已接 `_py_child_cmd`：打包形态用 `sys.executable --pyrun` 分流到一个纯子进程 stub，源码形态直接 `sys.executable`
 
+## Step 3：首启向导 + 应用内更新检查（server.py / index.html）
+
+### first_run 自动弹 onboarding（server.py + index.html）
+
+- `_first_run = not config.MODELS`：WS 连接时无任何 provider 配置 → true（首启向导触发条件）。连接/重连 system 消息携带 `first_run` 字段（与 `models` / `preset` / `current_model` 四字段同时补全，两条路径一致）
+- 前端：`m.first_run && !m.transient` → 自动弹 `showPresetOnboard('qwen')`（预选 modelscope qwen——免费额度、国内可达、对非技术用户最友好）——**复用既有 onboarding 弹窗**（[config-and-models · 预设 provider 模板](../guides/config-and-models.md)），仅是新增「无配置自动触发」入口，非新弹窗
+- 触发后用户照常走 onboarding 全链路（注册 → 拿 token → 粘贴 → 落地 → 刷新下拉），落地完成即有模型可对话
+
+### /api/latest 应用内更新检查
+
+GitHub Releases latest 比对 `src.__version__` 的版本检查端点：**24h 缓存 + 3s 超时 + 失败静默**（`update_available=null` 时前端不渲染横幅）。
+
+- `desktop` 字段 = env `AGT_DESKTOP` 布尔（`_os.environ.get(...)` 读取，区分运行形态）
+- 前端按形态给指引：桌面版 → 下载 zip 覆盖指引；pip → `pip install -U agt-agent`
+- 实现：模块级 `_LATEST_CACHE = {"ts", "data"}` + 端点内局部惰性 `import urllib.request / time as _t / os as _os / src as _src_pkg`（不污染模块顶部导入）
+
+## Step 4：图标（PIL 生成）+ Windows 版本资源 + packaging README
+
+### 图标：PIL 运行时生成
+
+深蓝渐变圆角方块 + 白色 "A" + 终端点（简洁可辨识），多尺寸 ico（256/128/64/48/32/16）——`run_python` + PIL 生成（`packaging/` 构建脚本内），exe 文件图标直接可见。
+
+### Windows 版本资源
+
+版本资源编译器注入中文产品名等版本信息（右键 exe → 属性 → 详细信息可见），走 PyInstaller `version` 资源文件。
+
+### packaging/README.md（分发说明）
+
+含 **SmartScreen 教学**——Windows 无签名 exe 首次运行的「更多信息 → 仍要运行」步骤图文指引（本机自签名的桌面应用必遇，写进文档降低用户门槛）。
+
+### 构建产物
+
+重打包 `dist/Agt/Agt.exe` **84MB**（自带 Python 3.13 运行时 + 全部依赖，解压即用）；发布链 `python release.py --desktop`（打包 → zip → GitHub Releases）。
+
+### 施工中排掉的两个坑
+
+1. **pathlib backport 冲突**：环境里装的 Python 2 时代 `pathlib` backport 包与 PyInstaller 冲突 → 卸载后打包即通
+2. **冻结环境 GUI 套娃**：PyInstaller 下 `sys.executable` = `Agt.exe` 本体，run_python 直接 spawn 会 Agt.exe 再拉 Agt.exe → `--pyrun` 入口分流（见 [打包基建 · desktop_entry.py](#打包基建packagingagtspec--desktopentrypy-step-2)），冻结形态实测跑通
+
 ## 验证状态
 
-Step 1+2 施工完成并推送（commit 6c2efce）；PyInstaller 全量打包后台进行中，完成后做干净目录验证。Step 3（首启向导 + 应用内更新检查）、Step 4（图标/文档/SmartScreen 教学）待打包验证通过后继续。
+四步全部施工完成并推送（commit 6c2efce + f634d0d）；PyInstaller 全量打包 **84MB**（自带 Python 3.13 运行时 + 全部依赖）构建成功，最终冻结冒烟 ✓——代码/文件双模式 run_python 走 `--pyrun` 子进程分流实测跑通（FROZEN_OK）。
+
+交付验收（GUI 只能人工验）：`packaging/dist/Agt/Agt.exe` 双击 → 首启向导 → 配 token → 对话一轮 → 关窗重开（session 恢复）。验收通过后 `python release.py --desktop` 一键出 zip 上 GitHub Releases。
 
 ## 相关页面
 

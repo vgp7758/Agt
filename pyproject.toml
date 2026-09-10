@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-desktop = ["pywebview>=5.0"]
+desktop = ["pywebview>=5.0,<7", "pythonnet>=3.0,<3.1.1", "clr-loader>=0.3,<0.4"]
 dev = ["pytest>=7", "pytest-asyncio>=0.21"]
 
 [project.scripts]

@@ -40,7 +40,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pywebview
+          # 桌面壳三件套锁版本（CI 实测坑）：不锁时 CI 拿最新 pythonnet，其
+          # Python.Runtime.dll 在 PyInstaller 冻结下加载失败（Failed to resolve
+          # Python.Runtime.Loader.Initialize → webview WinForms/EdgeChromium 后端全灭）。
+          # 本机验证过的组合：pythonnet 3.1.0 + pywebview 6.2.1 + clr-loader 0.3.1
+          pip install pyinstaller "pywebview==6.2.1" "pythonnet==3.1.0" "clr-loader==0.3.1"
 
       - name: Lock output version (release 构建按 tag 版本号)
         shell: pwsh

@@ -22,9 +22,15 @@ def resolve_agt_home() -> Path:
         if base:
             new = Path(base) / "Agt"
             old = Path.home() / ".agt"
+            # 迁移判定看【用户数据】而非目录存在性——launcher 会先建 %APPDATA%\Agt 写
+            # recent_workspaces.json（logs/ 亦系统产物），目录存在≠已初始化（否则迁移被
+            # 短路：桌面版空配置空 session，fallback 读到 workspace 的 models.py）。
+            _USER_DATA = ("models.json", "settings.json", "mcp.json", "main.yml",
+                          "repos", "remote_instances.json")
             try:
-                if old.is_dir() and not new.exists():
-                    shutil.copytree(old, new)   # 存量迁移：一次性（new 存在即跳过）
+                if old.is_dir() and not any((new / f).exists() for f in _USER_DATA):
+                    print(f"📦 首次桌面启动：迁移 {old} → {new}（一次性，含全部 repo 存档）…")
+                    shutil.copytree(old, new, dirs_exist_ok=True)   # launcher 预建目录不阻塞
                     (new / ".migrated-from").write_text(str(old), encoding="utf-8")
             except OSError:
                 pass   # 迁移失败不阻塞启动（空配置起步）

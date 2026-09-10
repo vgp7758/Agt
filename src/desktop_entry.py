@@ -96,6 +96,22 @@ def _redirect_stdio() -> None:
             pass
 
 
+def _pick_workspace(exe_dir: Path) -> Path:
+    """workspace 解析优先级：AGT_WORKSPACE env（launcher/看门狗传）> --workspace <path>
+    参数 > exe 旁默认 workspace/。chdir 必须在 import 引擎之前（锚定机制）。
+    env 不 pop——/restart 继承 env 时新进程保持同 workspace（重启不换区语义）。"""
+    target = os.environ.get("AGT_WORKSPACE", "").strip()
+    if not target:
+        argv = sys.argv[1:]
+        for i, a in enumerate(argv):
+            if a == "--workspace" and i + 1 < len(argv):
+                target = argv[i + 1]
+                break
+    ws = Path(target).expanduser().resolve() if target else exe_dir / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    return ws
+
+
 def main():
     if _is_pyrun():
         return _run_py_child()
@@ -103,9 +119,7 @@ def main():
         return _selftest()
     os.environ.setdefault("AGT_DESKTOP", "1")
     exe_dir = Path(sys.executable).resolve().parent
-    ws = exe_dir / "workspace"
-    ws.mkdir(exist_ok=True)
-    os.chdir(ws)                       # workspace 锚定（快捷方式启动 cwd 歧义消除）
+    os.chdir(_pick_workspace(exe_dir))   # workspace 锚定（env/参数 > exe 旁默认；须在 import 引擎前）
     _redirect_stdio()                  # 无控制台兜底：必须在 uvicorn 前挂好（L86）
     from chat import web_main
     web_main()

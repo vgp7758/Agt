@@ -614,3 +614,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **修复 = `desktop_entry._redirect_stdio()`**：进 `web_main` 前检测 stdio 为 None 则**重定向到数据目录 `logs/desktop.log`**（落实 spec「日志写文件」约定，成为桌面版排障第一现场），stdin 兜 devnull；**pythonw 无控制台模拟验证全过**（REDIRECT_STDOUT_OK isatty=False / REDIRECT_STDERR_OK / UVICORN_FORMATTER_OK use_colors=False——原崩溃那一行现在构造成功）；`--clean` 全量重打包 + 无控制台拉起 exe 端到端验证进行中
 - 详见 [桌面版 · 施工中排掉的坑 · 7](features/desktop-mode.md#施工中排掉的坑)
 
+## 快速事实增补（2026-09-10 · 九 · 桌面版端到端验证通过 + assembly 段校验补 recent_file）
+
+- **桌面版端到端验证通过（stdio 崩溃修复闭环）**：模拟双击启动（`AGT_HOME` 临时目录 + 无控制台拉起打包 exe）全绿——进程存活 / `logs/desktop.log` 写入（stdio 重定向生效）/ **uvicorn 启动 @ 0.0.0.0:8000（原 `Unable to configure formatter` 崩溃点已过）** / Agent 装配（模型 glm / 工具 133 个）/ 桌面窗口模式运行
+- **顺手抓到第二个 bug（commit 1c4aaa7）**：`logs/desktop.log` 警告暴露 `src/multiagent.py` 的 **`_ASSEMBLY_SEGS` 校验集合漏加 `recent_file` 段**——session.py 投影层和管理页都认识它、唯独 DSL 解析漏了 → 显式声明 assembly 的清单里改文件快照段被静默丢弃（与 v0.26.1 修的前端 SEG_TYPES 是**同一新段的两半白名单**，前端补了后端没补）。修复 + 单测验证 dict/str 两路径解析全过无告警。第三次 `--clean` 重打包进行中，完成后 selftest + 端到端复验收官
+- 详见 [桌面版 · 端到端验证通过](features/desktop-mode.md) / [context-engine · 修复八后记](architecture/context-engine.md)
+

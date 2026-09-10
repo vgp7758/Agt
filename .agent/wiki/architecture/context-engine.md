@@ -777,6 +777,14 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 - **不因 `steps=reasoning` 改变姿势**：`steps=reasoning` 只影响 steps 后【动作项】（text/file/func 等按各自 pose 分桶，见 [粒度演进](#粒度演进steps-全局--逐动作项-pose-双桶2026-09-03commit-24597f3用户提案)）；`recent_file` 固定走 reminder 桶——文件快照是大体积内容，塞进 `reasoning_content` 思考链不合适
 - 清单顺序：`steps` 后、`tail` 前（`_DEFAULT_ASSEMBLY_PLAN` 插位）——reminder 内部靠前
 
+#### 后记：_ASSEMBLY_SEGS 漏加 recent_file——DSL 声明段被静默丢弃（2026-09-10，commit 1c4aaa7）
+
+段式化新增 `recent_file` 段时，只补了**顶层判据**（`_DEFAULT_ASSEMBLY_PLAN` 默认装配序 / `_seg_msgs_recent_file` 构建函数 / 前端 SEG_TYPES 枚举 [agents-admin](agents-admin.md#seg_types-补-recent_file-段枚举段名不再走文本框兜底2026-09-07commit-67c7f57)），**`src/multiagent.py` 的合法段名校验集合 `_ASSEMBLY_SEGS` 漏加**——DSL 解析 `_asm_item_from_str` 把 `recent_file` 当未知段，打 `assembly 含未知段名 'recent_file'` 告警并返回 None **静默丢弃**（显式声明 assembly 的子 Agent 即使清单里写了该段也不投影，只见告警不见段）。与 v0.26.1 修的前端 SEG_TYPES 漏加**同构**（同一新段的两半白名单），v0.26.1 只补了前端那一半。
+
+**发现路径（桌面版端到端验证偶得）**：`logs/desktop.log` 里一行被掩盖的警告——assembly 解析发生在启动装配时，主 Agent 启动日志把这行残坑暴露出来。修复（commit 1c4aaa7）：`_ASSEMBLY_SEGS` 补 `"recent_file"` 一项；单测验证 dict/str 两路径解析全过、无告警。
+
+**教训**：新增装配段时应**三处同查**——前端枚举（agents.html `SEG_TYPES`）+ 后端校验集（`_ASSEMBLY_SEGS`）+ 默认装配序（`_DEFAULT_ASSEMBLY_PLAN`）；前端补白名单时须排查后端同名白名单（各管一端的合法段集合，漏一处 = 静默丢弃，连报错都没有）。
+
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 
 `_folded_summary(fold_count)` 生成被折叠早期轮次的结构概览（纯结构信息、无需 LLM；逐字原文靠 recall 召回）。每轮一行：`user[:80]` + `(已折叠N次工具调用) ` + tail。tail 的优先级链：

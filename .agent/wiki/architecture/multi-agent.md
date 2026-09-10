@@ -683,6 +683,12 @@ assembly:
 
 **白名单坑（2026-09-02，team-manager 实锤，commit cb57597）**：装配是**白名单**——列什么装什么。team-manager 声明只列 text（缺 user_message/steps）→ 任务消息不进投影，Agent「看起来活着但收不到活」。`create_agent` 默认装配已显式含 `user_message,steps` 防同类（commit 9ddaf63）；手工声明务必把必需段列全（/agents 管理页保存也会显式化，见 [agents-admin · 声明规范化](../features/agents-admin.md#声明规范化5-个子-agent-全部转正所见即所装)）。team-manager 修复细节见 [team-tools](../features/team-tools.md)。
 
+#### 合法段名校验集合 _ASSEMBLY_SEGS 漏 recent_file（2026-09-10，commit 1c4aaa7）
+
+`_ASSEMBLY_SEGS`（`src/multiagent.py`，L157）是**合法段名白名单**——不在集合里的段名在 `_asm_item_from_str` 打 `assembly 含未知段名` 告警并**静默忽略**（返回 None）。2026-09-07 段式化新增 `recent_file` 段时只补了 `_DEFAULT_ASSEMBLY_PLAN` / `_seg_msgs_recent_file` / 前端 SEG_TYPES，**漏了这里**——显式声明 assembly 的子 Agent 清单写 `- recent_file` 被当未知段丢弃（v0.26.1 修的 [SEG_TYPES](../features/agents-admin.md#seg_types-补-recent_file-段枚举段名不再走文本框兜底2026-09-07commit-67c7f57) 是前端那半边，同一新段的两半白名单）。修复 = 集合补 `"recent_file"`（commit 1c4aaa7，桌面版端到端验证时从 `logs/desktop.log` 警告暴露），详见 [context-engine · 修复八后记](context-engine.md)。
+
+**与白名单坑同源同教训**：白名单类机制（列什么装什么 / 集合里才算合法）新增成员时，**前端枚举 + 后端校验集 + 默认装配序三处同查**，且修一端要排查另一端。
+
 ### 段形态简化定稿：`seg:` dict 兼容 + tail.* 拆段补全（2effa73）→ 当日撤销（504a518，用户裁定）
 
 **前史（commit 2effa73，2026-09-02 上午）**：用户复盘抓到装配项 dict 形态的静默丢弃——`- seg: user_message`（段名做值）与 create_agent 生成的 `{"seg": ...}` 都匹配不上 `_asm_item_from_dict`（此前只认动作键 + 段名做键）→ 返回 None **静默丢弃**（连告警都没有），team-manager.md / wf-calibrator.yml / wf-designer.yml 里的段项全是哑弹。修复两层：加 `seg:` 键分支（值复用字符串解析全语义）+ `_ASSEMBLY_SEGS` / toggles / 段序三集合补 `tail.*` 六拆段白名单。验证三声明文件「写→读→解析」全链通过。

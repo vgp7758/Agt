@@ -112,6 +112,22 @@ GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源
 
 交付验收（GUI 只能人工验）：`packaging/dist/Agt/Agt.exe` 双击 → 首启向导 → 配 token → 对话一轮 → 关窗重开（session 恢复）——自检覆盖不到 GUI 交互层。验收通过后 `python release.py --desktop` 一键出 zip 上 GitHub Releases。
 
+### 端到端验证通过：stdio 修复闭环 + 顺手抓到 assembly 段校验残坑（2026-09-10）
+
+**模拟双击启动端到端验证通过**（`AGT_HOME` 临时目录 + 无控制台拉起打包 exe——替代真双击的自动化验证）：
+
+| 验证点 | 结果 |
+|---|---|
+| 进程存活（不再启动即崩） | ✅ |
+| `logs/desktop.log` 写入（stdio 重定向生效） | ✅ |
+| **uvicorn 启动 @ 0.0.0.0:8000**（原崩溃点 `Unable to configure formatter` 已过） | ✅ |
+| Agent 装配（模型 glm / 工具 133 个） | ✅ |
+| 桌面窗口模式运行 | ✅（验证完已 taskkill） |
+
+**顺手抓到第二个 bug（commit 1c4aaa7）**：`logs/desktop.log` 里一行被掩盖的警告 `assembly 含未知段名 'recent_file'`——`src/multiagent.py` 的 `_ASSEMBLY_SEGS` 校验集合漏加 recent_file 段（session.py 投影层 / 管理页编辑器都认识它，唯独 DSL 解析漏了）→ 声明清单里的改文件快照段被静默丢弃。修复 + 单测验证 dict/str 两路径解析全过、无告警，详见 [context-engine · 修复八后记](../architecture/context-engine.md)。
+
+第三次 `--clean` 全量重打包进行中（后台任务）——完成后跑 selftest 回归 + 再拉一次端到端确认警告消失，桌面版即收官。
+
 ## 相关页面
 
 - [系统总览](../architecture/overview.md) — 模块地图（服务层 chat.py / 配置层 config.py 的桌面配套）

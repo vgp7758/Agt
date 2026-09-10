@@ -42,3 +42,9 @@ resume/
 design/
 # wiki 维护攒批队列（运行时状态，勿提交）
 .agent/wiki_queue/
+
+# === 桌面版打包产物（本地构建，不入版本） ===
+packaging/dist/
+packaging/build/
+packaging/build_log.txt
+packaging/*.zip

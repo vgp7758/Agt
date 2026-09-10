@@ -14,8 +14,9 @@ from pathlib import Path
 
 from real_tools import WORKSPACE
 
-_LSP_DIR = Path.home() / ".agt" / "lsp"
-_GLOBAL_MCP = Path.home() / ".agt" / "mcp.json"
+from paths import AGT_DIR as _AGT_ROOT
+_LSP_DIR = _AGT_ROOT / "lsp"
+_GLOBAL_MCP = _AGT_ROOT / "mcp.json"
 _BUNDLED = Path(__file__).resolve().parent / "lsp_scripts"
 
 # 语言 → 装配信息。script: src/lsp_scripts/ 下的文件名；requires: pip 包名；

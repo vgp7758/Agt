@@ -23,7 +23,7 @@ from pathlib import Path
 
 PACKAGE = "agt-agent"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
-_AGT_DIR = Path.home() / ".agt"
+from paths import AGT_DIR as _AGT_DIR
 _STATE_FILE = _AGT_DIR / "update.json"
 _CHECK_INTERVAL = 24 * 3600   # 节流：两次 PyPI 查询最少间隔
 

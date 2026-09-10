@@ -155,4 +155,42 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # --desktop：只打包桌面版（不动版本号/PyPI）——pyinstaller onedir → zip
+    if "--desktop" in sys.argv[1:]:
+        sys.exit(build_desktop())
     sys.exit(main())
+
+
+def build_desktop() -> int:
+    """桌面版打包（spec s_d53311f8）：PyInstaller onedir → dist/Agt/ → Agt-Desktop-<ver>.zip。
+    不 bump 版本、不上传（GitHub Releases 附件用 gh CLI 或手动，Token 未配时给路径提示）。"""
+    ver = re.search(r'__version__\s*=\s*"([^"]+)"', INIT.read_text(encoding="utf-8")).group(1)
+    dist = ROOT / "packaging" / "dist"
+    print(f"📦 桌面版打包 v{ver}（PyInstaller onedir）…")
+    r = subprocess.run([sys.executable, "-m", "PyInstaller", "packaging/Agt.spec", "--noconfirm",
+                        "--distpath", str(dist), "--workpath", str(ROOT / "packaging" / "build")],
+                       cwd=ROOT)
+    if r.returncode != 0 or not (dist / "Agt" / "Agt.exe").exists():
+        print("❌ 打包失败（看 packaging/build_log 或上方输出）")
+        return 1
+    # zip
+    zpath = dist / f"Agt-Desktop-{ver}-win64.zip"
+    if zpath.exists():
+        zpath.unlink()
+    r2 = _run(["powershell", "-Command",
+               f"Compress-Archive -Path '{dist / 'Agt'}' -DestinationPath '{zpath}'"])
+    if r2.returncode != 0:
+        print("❌ zip 失败：" + r2.stderr)
+        return 1
+    size_mb = zpath.stat().st_size / 1048576
+    print(f"✅ {zpath.name}（{size_mb:.0f} MB）")
+    # GitHub Releases（gh 有登录则附到当前 tag，否则提示手动）
+    gh = _run(["gh", "--version"])
+    if gh.returncode == 0:
+        tag = f"v{ver}"
+        up = _run(["gh", "release", "upload", tag, str(zpath), "--clobber"])
+        print("✅ 已附到 GitHub Release " + tag if up.returncode == 0
+              else f"⚠️ gh upload 失败（release {tag} 不存在？先创建）：{up.stderr[:120]}")
+    else:
+        print(f"📎 未装 gh CLI——手动上传：{zpath}")
+    return 0

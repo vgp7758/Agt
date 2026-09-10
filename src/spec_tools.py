@@ -43,7 +43,8 @@ def _specs_dir(workspace) -> Path:
     """该工作区的【施工方案】目录：~/.agt/repos/<fixed-cwd>/specs/。与 plans/ 同根、互相隔离。
     每个 spec 一个 <spec_id>.json 文件，跨 session 共享。"""
     from session import _repo_key
-    d = Path.home() / ".agt" / "repos" / _repo_key(workspace) / "specs"
+    from paths import AGT_DIR
+    d = AGT_DIR / "repos" / _repo_key(workspace) / "specs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

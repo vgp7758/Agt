@@ -87,6 +87,14 @@ def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
     return True, current, ""
 
 
+def _py_child_cmd(target: str) -> list:
+    """run_python 子进程命令。PyInstaller 冻结环境（桌面版）sys.executable=Agt.exe——
+    直接 spawn 会重跑 GUI 入口套娃；desktop_entry 以 --pyrun <file> 分流为纯脚本执行
+    （spec s_d53311f8 Step 2）。普通环境即 [python, file]。"""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--pyrun", str(target)]
+    return [sys.executable, str(target)]
+
 def _run_subprocess_streaming(args, name, shell=False, env=None):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。
@@ -220,14 +228,14 @@ def run_python(code: str = "", file: str = "", args: str = "") -> str:
         target = _resolve(file)
         if not target.exists():
             return f"[文件不存在] {file}"
-        return _run_subprocess_streaming([sys.executable, str(target)], f"run_python {file}", env=env)
+        return _run_subprocess_streaming(_py_child_cmd(str(target)), f"run_python {file}", env=env)
     if not code:
         return "[参数缺失] run_python 需传 code（内联代码）或 file（.py 文件路径）"
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmp = f.name
     try:
-        return _run_subprocess_streaming([sys.executable, tmp], "run_python", env=env)
+        return _run_subprocess_streaming(_py_child_cmd(tmp), "run_python", env=env)
     finally:
         try:
             os.unlink(tmp)
@@ -1608,7 +1616,7 @@ def run_script(script: str, payload: str = "") -> str:
         pp = pp + os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pp
     try:
-        proc = subprocess.run([sys.executable, str(target)], capture_output=True, text=True,
+        proc = subprocess.run(_py_child_cmd(str(target)), capture_output=True, text=True,
                               timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
                               encoding="utf-8", errors="replace",
                               creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))

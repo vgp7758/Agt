@@ -806,8 +806,15 @@ def web_main(port=None):
     # /restart 看门狗重启：不再开新页签——用户已有页签会自动重连（手机触发重启时
     # 电脑端无端多开一个 tab 正是用户报告的困扰）；env 在 _recover_restart_env 才 pop，此处仍在
     import os as _os
+    from web_desktop import is_desktop as _is_desktop
+    _desk = _is_desktop()
+    if _desk:
+        port = __import__("web_desktop").pick_port(port) or port   # 端口退让（占用→+1）
     if not (_os.environ.get("AGT_RESTART_SESSION") or _os.environ.get("AGT_RESTART_MESSAGE")):
-        open_browser(port)
+        if _desk:
+            __import__("web_desktop").open_window(port)   # 桌面窗口（spec s_d53311f8）
+        else:
+            open_browser(port)
 
     def _inbox_thread():
         import logging as _lg
@@ -850,9 +857,12 @@ def web_main(port=None):
                 work_q.put(("user", line))
     threading.Thread(target=_stdin_thread, daemon=True).start()
 
-    print("（Web 模式：浏览器交互；Ctrl+C 退出）")
+    print("（Web 模式：浏览器交互；Ctrl+C 退出）" if not _desk else "（桌面窗口模式：关闭窗口退出）")
     try:
-        _render_loop(agent, event_q, worker, state, work_q, interactive=False)
+        if _desk:
+            __import__("web_desktop").run_loop()   # webview.start() 阻塞至窗口关闭 → 走 finally 优雅退出
+        else:
+            _render_loop(agent, event_q, worker, state, work_q, interactive=False)
     except KeyboardInterrupt:
         print("\n⏹ 已请求停止，等当前步完成…")
         agent._stop_flag = True

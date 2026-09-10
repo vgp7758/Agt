@@ -18,9 +18,9 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-# === 用户配置目录 ===
-_AGT_DIR = Path.home() / ".agt"
-
+# === 用户配置目录（解析唯一真源在 paths.py：AGT_HOME env > 桌面 %APPDATA%\Agt > ~/.agt；
+# 迁移逻辑也移至 paths.AGT_DIR，避免 session→config 循环 import）===
+from paths import AGT_DIR as _AGT_DIR
 
 def config_file(name: str) -> Path:
     """配置文件解析（用户裁定 2026-08-31·多实例组网前置）：

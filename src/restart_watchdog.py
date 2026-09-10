@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from paths import AGT_DIR as _AGT_WD
 
 
 def _pid_alive(pid: int) -> bool:
@@ -115,7 +116,7 @@ def run(parent_pid: int, mode: str, session: str, port: int, message: str, cwd: 
         env["AGT_RESTART_MESSAGE"] = message
     # 日志按实例分离（mode+port）：多实例共写单文件会互相混杂——9000 与 8000 的 stdout
     # 交错 16 万行，排障时找不到彼此的段（实测教训）；新实例日志可独立 tail
-    log_file = Path.home() / ".agt" / f"restart-{mode}-{port or 'cli'}.log"
+    log_file = _AGT_WD / f"restart-{mode}-{port or 'cli'}.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     kwargs = {}
@@ -173,7 +174,7 @@ def spawn_watchdog(parent_pid: int, mode: str, session: str, port: int, message:
            "--session", session or "-", "--port", str(port or 0),
            "--message", message or "-", "--cwd", cwd,
            "--src-dir", str(script.parent)]
-    log_file = Path.home() / ".agt" / f"restart-{mode}-{port or 'cli'}.log"   # 与 run() 同名分离
+    log_file = _AGT_WD / f"restart-{mode}-{port or 'cli'}.log"   # 与 run() 同名分离
     log_file.parent.mkdir(parents=True, exist_ok=True)
     kwargs = {}
     if os.name == "nt":

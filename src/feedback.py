@@ -20,7 +20,7 @@ from typing import Optional
 
 from tools import Tool
 
-_AGT_DIR = Path.home() / ".agt"
+from paths import AGT_DIR as _AGT_DIR
 _FEEDBACK_DIR = _AGT_DIR / "feedback"
 _FEEDBACK_CONFIG = _AGT_DIR / "feedback.json"
 

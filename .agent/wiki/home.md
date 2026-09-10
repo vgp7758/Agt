@@ -595,3 +595,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **桌面版 Step 3+4 收官（spec s_d53311f8，commit f634d0d，继 Step 1+2 的 6c2efce）**——**84MB 解压即用的 Windows 桌面应用已构建成功**（自带 Python 3.13 + 全依赖）。**Step 3 首启向导 + 应用内更新**：WS 连接/重连时 `_first_run = not config.MODELS`（无 provider 配置自动弹 onboarding，预选 modelscope qwen，复用既有弹窗仅加自动触发入口）；`GET /api/latest` GitHub Releases 版本比对（24h 缓存 + 3s 超时 + 失败静默，`desktop` 字段按运行形态给指引——桌面版下载 zip 覆盖 / pip 版升级命令）。**Step 4 发版物料**：PIL 图标（深蓝渐变 + 白 "A"）+ Windows 版本资源（中文产品名）+ `packaging/README.md`（SmartScreen「更多信息 → 仍要运行」教学）。**排掉两坑**：环境里 Python 2 时代 pathlib backport 与 PyInstaller 冲突（卸载即通）；冻结环境 `sys.executable`=Agt.exe 直接 spawn 会 GUI 套娃（`--pyrun` 入口分流实测跑通）。四步完成待人工 GUI 验收（首启 → 配 token → 对话 → 关窗重开 session 恢复），验收后 `python release.py --desktop` 出 zip 上 Release。详见 [桌面版](features/desktop-mode.md)
 
+## 快速事实增补（2026-09-10 · 六 · 桌面版打包平铺同构——config 找不到修复）
+
+- **打包产物启动即崩修复**：`desktop_entry.py → src.chat` 链报 `ModuleNotFoundError: No module named 'config'`。根因 = **收集形态错位**（首版 `pathex=仓库根` → 模块以 `src.config` 命名空间收集，运行时代码裸 `import config` 找顶层 → PYZ 只有 `src.config`）。修复 = **平铺同构**（spec 修 #1）：`pathex=src/` 模块以顶层名收集（与 pip 运行时 `src/__init__` 的 sys.path hack 同构）+ datas 平铺 `_internal/` 根（`Path(__file__).parent/"assets"` 命中）+ `desktop_entry` 裸名导入 `from chat import web_main`
+- **版本号唯一真源收 `paths.py`**：`VERSION = "0.26.4"`，`src/__init__.py` 反向 `from paths import VERSION`（pip 侧 `__version__` 单源一致）；`server.py /api/latest` 从 `import src` 改 `from paths import VERSION`
+- **新增 `Agt.exe --selftest`**：产物 import 链自检（config/paths/session/web_desktop/chat/server）+ static/assets 资源就位 → `SELFTEST_PASS/FAIL`，替代难自动化的 GUI 冒烟
+- 详见 [桌面版 · 施工中排掉的两个坑 · 3](features/desktop-mode.md#施工中排掉的两个坑)
+

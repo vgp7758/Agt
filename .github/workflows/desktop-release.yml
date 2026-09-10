@@ -3,6 +3,9 @@ name: desktop-release
 # 桌面版云构建 + Release（决策：云构建为主，本地 release.py --desktop 为兜底）。
 # 触发：打 tag v*（自动出 Release）或手动 workflow_dispatch（只留 artifact 供试装）。
 # 门禁：Agt.exe --selftest 必须 PASS 才继续——本 session 的缓存/漏收集坑正是它拦的。
+#
+# 编码：Windows runner 的 Python stdout 默认 cp1252，python 脚本/cmd 步骤里的中文会
+# UnicodeEncodeError 崩（实测）——故所有跑 python 的步骤统一 shell: pwsh + PYTHONIOENCODING。
 on:
   push:
     tags: ["v*"]
@@ -14,6 +17,10 @@ permissions:
 concurrency:
   group: desktop-release-${{ github.ref }}
   cancel-in-progress: false  # 发布任务不互相打断（排队）
+
+env:
+  PYTHONIOENCODING: utf-8    # 中文日志防崩（Windows runner 默认 cp1252）
+  PYTHONUTF8: "1"
 
 jobs:
   build:
@@ -29,6 +36,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -39,9 +47,11 @@ jobs:
         run: python tools/ci_stamp_version.py "${{ github.ref_type }}" "${{ github.ref_name }}"
 
       - name: Build main app (onedir)
+        shell: pwsh
         run: python -m PyInstaller packaging/Agt.spec --noconfirm --clean --distpath packaging/dist --workpath packaging/build
 
       - name: Build launcher (onefile)
+        shell: pwsh
         run: python -m PyInstaller packaging/Launcher.spec --noconfirm --clean --distpath packaging/dist
 
       - name: Selftest gate (禁止坏产物出门)
@@ -62,7 +72,7 @@ jobs:
       - name: Package zip
         shell: pwsh
         run: |
-          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev-${{ github.sha }}".Substring(0,12) }
+          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev-${{ github.sha }}".Substring(0,9) }
           $zip = "packaging/dist/Agt-Desktop-$ver-win64.zip"
           Compress-Archive -Path packaging/dist/release -DestinationPath $zip -Force
           $mb = [math]::Round((Get-Item $zip).Length / 1MB, 0)
@@ -87,6 +97,7 @@ jobs:
             1. 解压到任意位置（建议 `D:\Agt`，**避免 Program Files** —— 程序会在自己旁边建 `workspace\`）
             2. 双击 **`Launcher.exe`** → 选择工作区（VSCode 式）→ 进入应用
                （或直接双击 `Agt\Agt.exe` 进入默认工作区）
-            3. 首次启动会把 `%USERPROFILE%\.agt` 的数据迁移到 `%APPDATA%\Agt`
+            3. 数据目录与 CLI/pip 版共用 `~/.agt`（模型配置/存档/记忆一份，多处可用）
+               也可反复双击 `Launcher.exe` 打开多个工作区窗口（端口自动退让）
 
-            数据/日志目录：`%APPDATA%\Agt`（排障看 `logs\desktop.log`）
+            数据目录：`~/.agt`；桌面日志：`~/.agt/logs/desktop.log`（排障第一现场）

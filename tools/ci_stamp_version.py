@@ -2,10 +2,13 @@
 
 用法：python tools/ci_stamp_version.py <ref_type> <ref_name>
   ref_type=tag / branch …（workflow_dispatch 时 GitHub 给的 ref_type=branch）
-  是 tag → 把 src/__init__.py 的 __version__ 与 src/paths.py 的 VERSION 同步为
-  tag 名（去 v 前缀），保证 release 产物版本号 == tag 版本号（exe 版本资源
-  也吃 paths.VERSION，spec 的 version_file.txt 是静态文件、不参与这里）。
+  是 tag → 把 src/paths.py 的 VERSION（唯一真源，__version__ 反向导入它）与
+  packaging/version_file.txt 同步为 tag 名（去 v 前缀），保证 release 产物
+  版本号 == tag 版本号。
   非 tag（手动触发试装）→ 不改，用仓库当前版本号。
+
+Windows runner 的 stdout 默认 cp1252（Python 3.13）——中文 print 直接
+UnicodeEncodeError 崩（实测）。统一 reconfigure utf-8，杜绝 CI 输出编码坑。
 """
 from __future__ import annotations
 
@@ -13,8 +16,14 @@ import re
 import sys
 from pathlib import Path
 
+# CI Windows runner 输出编码兜底：cp1252 → utf-8（中文日志防崩）
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
-INIT = ROOT / "src" / "__init__.py"
 PATHS = ROOT / "src" / "paths.py"
 
 

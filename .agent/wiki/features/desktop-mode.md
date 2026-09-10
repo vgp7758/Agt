@@ -81,7 +81,8 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 - **裸名导入**：平铺形态无 `src` 包 → `from chat import web_main`（不是 `from src.chat import`），与收集形态同构
 - **workspace 锚定 exe 旁**：`Path(sys.executable).parent` 作为 cwd 基线——防快捷方式启动时 cwd 歧视（工作区相对路径解析不到）；首启自动创建 workspace/ 并 chdir
 - **`--pyrun` 子进程分流**：PyInstaller 下 `sys.executable` = Agt.exe 本体，直接 spawn Python 子进程会 **GUI 套娃**（Agt.exe 再拉 Agt.exe）——real_tools 三处 spawn 点（run_python / 相关子进程工具）已接 `_py_child_cmd`：打包形态用 `sys.executable --pyrun <file>` 分流到纯子进程 stub（runpy 直接执行目标文件，env 打 `AGT_FROZEN_CHILD=1`），源码形态直接 `sys.executable`
-- **`--selftest` 产物自检（2026-09-10 三轮升级为完整自检）**：`Agt.exe --selftest` ①**全模块 import 链**（config/paths/session/web_desktop/chat/server/**workflow_node_api**，逐个 `__import__`）②**资源就位**（static/index.html + assets/models.preset.json + **assets/nodes_builtin**）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件——判定 **`n_ok > 0`**，不再恒 True，0 个时提示「目录缺失/放错路径」——**漏收集 workflow_node_api 会在此暴露**，实测 ok=12 fail=0）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码——打包后跑一条命令替代难自动化的 GUI 冒烟（CI/发布前自动验证）
+- **`--selftest` 产物自检（用途 = CI/发布前门禁，2026-09-10 十六轮去 GUI 化）**：`Agt.exe --selftest` ①**全模块 import 链**（config / paths / session / chat / server / workflow_node_api / **workflow / multiagent / llm_client / tools**，逐个 `__import__`，逐个 try）②**资源就位 6 项**（static/index.html + agents.html + assets/models.preset.json + nodes_builtin + tools_builtin + manifest.json）③**节点插件动态加载自检**（走 `_import_fresh` 真实加载 `assets/nodes_builtin` 全部插件——判定 **`n_ok > 0`**，**逐个 try** 单个插件炸不再淹没整组）④**外置工具脚本 `py_compile` 校验**（`assets/tools_builtin/*.py`，与节点插件同属「随包动态加载」一类）→ 逐项 ✅/❌ 打印 + `SELFTEST_PASS/FAIL` 退出码（所有 print 包 try，输出编码问题不再让自检本身崩）。
+  - **不 import 任何 GUI 依赖模块**（关键约束）：`web_desktop`（pywebview）已从清单移除——CI runner 无桌面会话时 pythonnet/.NET 初始化会**挂住不返回**，导致 selftest 步骤永不结束 → job 被取消。真产物的问题（模块漏收集 / 资源缺 / 插件加载失败）照样全暴露，但**永远不会吊死流水线**。详见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)
 - **`_redirect_stdio()`（2026-09-10 五轮，commit c9bd925）**：GUI（`console=False`）无控制台时 `sys.stdout/stderr` 为 None——uvicorn `DefaultFormatter.__init__` 调 `isatty()` 启动即崩（`Unable to configure formatter 'default'`）。进 `web_main` 前把 None 的 stdio **重定向到数据目录 `logs/desktop.log`**（spec「日志写文件」落地 + 桌面版排障第一现场），stdin 兜 devnull（见 [施工中排掉的坑 · 7](#施工中排掉的坑)）
 
 ## Step 3：首启向导 + 应用内更新检查（server.py / index.html）
@@ -259,6 +260,44 @@ launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
 
 **遗留（代码注释未同步，非功能性）**：`src/desktop_entry.py` 模块 docstring 第 1 条仍写「数据目录迁 `%APPDATA%\Agt`」、`src/config.py` L21 注释仍写「AGT_HOME env > 桌面 %APPDATA%\Agt > ~/.agt」——实际行为已统一 `~/.agt`，注释待顺手清理。
 
+## selftest 去 GUI 化：CI 挂死根因与双层修复（2026-09-10 · 十六轮）
+
+**症状**：GitHub Actions 的 selftest 门禁步骤**永远不结束**——`$out = & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String` 挂住，job 拖到 45min 超时被 `Error: The operation was canceled.` 取消（日志里只有一句 Error，看不出崩在哪）。
+
+**根因**：selftest 的 import 清单里有 **`web_desktop`（pywebview）**。pywebview 的 pythonnet/.NET 初始化在**无桌面会话的 runner** 上会挂住不返回；本机有 WebView2 环境，所以本地跑得好好的——**「本地能跑」再次不构成「CI 能跑」的证据**（同 [编码坑](#️-编码windows-runner-的-python-stdout-默认-cp12522026-09-10--十五轮必修) 的教训）。
+
+**修复一：selftest 本身去 GUI 化**（`src/desktop_entry.py`）
+
+| 旧清单 | 新清单 |
+|---|---|
+| config / paths / session / **web_desktop** / chat / server / workflow_node_api | config / paths / session / chat / server / workflow_node_api + **workflow / multiagent / llm_client / tools**（引擎核心反而补全） |
+
+- 资源检查扩到 6 项（+ agents.html / tools_builtin / manifest.json）
+- 节点插件加载**逐个 try**（单个炸不再淹没整组）
+- 新增外置工具脚本 `py_compile` 校验（与节点插件同属「随包动态加载」一类）
+- 所有 print 包 try——输出编码问题不再让自检本身崩
+
+**修复二：workflow 门禁加 180s 超时兜底**（`.github/workflows/desktop-release.yml`）
+
+```yaml
+- name: Selftest gate (禁止坏产物出门)
+  shell: pwsh
+  run: |
+    $job = Start-Job -ScriptBlock { & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String }
+    if (-not (Wait-Job $job -Timeout 180)) { Stop-Job $job; Write-Error "selftest 180s 未结束（疑似挂起）"; exit 1 }
+    $out = Receive-Job $job; Remove-Job $job -Force
+    Write-Host $out
+    if ($out -notmatch "SELFTEST_PASS") { Write-Error "selftest 未通过"; exit 1 }
+```
+
+万一再有东西吊死，**3 分钟就明确失败**（报「疑似挂起」），不再拖到 job 级 45min 被取消。
+
+**净效果**：坏产物的检测能力**不降反升**（多查 4 个核心模块 + 3 类资源 + 工具脚本编译），但 selftest 从此不可能因环境问题吊死流水线。
+
+**验证**：`--clean` 重打包（验证新清单里 workflow / multiagent / llm_client / tools 在产物里真的可 import——此前没在 selftest 里查过）→ 新 selftest 回归 → 推送后再触发一次 Actions。
+
+**教训（通用）**：**CI 门禁脚本必须「确定性退出」**——凡是可能因环境差异阻塞的调用（GUI / .NET / 网络 / 交互式输入）都不能进门禁路径；同时门禁步骤本身要有**超时兜底**，否则「挂住」比「失败」更难诊断（日志里只有一个 canceled）。
+
 ## 云构建 + Release：GitHub Actions 流水线（2026-09-10 · 十三轮，spec 决策：云构建为主）
 
 **决策**：桌面版发布走**云构建为主**（GitHub Actions `windows-latest`，公开仓库免费无限额），本地 `python release.py --desktop` 降为**兜底**（离线 / 应急 / 无网时用）。理由：本机打包约 6 分钟且需 `--clean` 全量、环境坑多（pathlib backport / 缓存复用），云端干净环境 + 门禁更可靠。
@@ -282,17 +321,7 @@ jobs.build: { runs-on: windows-latest, timeout-minutes: 45 }
 
 ### 流水线 11 步
 
-1. `actions/checkout@v4`
-2. `actions/setup-python@v5`（3.13 + pip 缓存）
-3. 装依赖：`requirements.txt` + `pyinstaller` + `pywebview`
-4. **版本戳**：`python tools/ci_stamp_version.py "${{ github.ref_type }}" "${{ github.ref_name }}"`
-5. `Agt.spec` 构建（`--noconfirm --clean`，**必须 --clean**——见 [施工中排掉的坑 · 6](#施工中排掉的坑)）
-6. `Launcher.spec` 构建（onefile）
-7. **🔒 selftest 门禁**：`packaging/dist/Agt/Agt.exe --selftest` 输出不含 `SELFTEST_PASS` 即 `exit 1`——本 session 的**缓存旧字节码 / 漏收集 workflow_node_api** 这类坏产物从此出不了门
-8. **stage**：`packaging/dist/release/` 下 `Launcher.exe` 与 `Agt\` **平级**（与 [发布布局](#发布布局打完即生效) 同构）
-9. **zip**：`Agt-Desktop-<ver>-win64.zip`（tag → tag 名去 v；手动 → `dev-<sha12>`），路径写 `$GITHUB_ENV.ZIP_PATH`
-10. `actions/upload-artifact@v4`
-11. `softprops/action-gh-release@v2`（`if: github.ref_type == 'tag'`）：传 zip + `generate_release_notes: true` + **中文使用说明 body**（解压到非 Program Files / 双击 Launcher.exe / 首启迁移提示 / 排障看桌面日志）
+7. **🔒 selftest 门禁（含 180s 超时兜底）**：`packaging/dist/Agt/Agt.exe --selftest` 输出不含 `SELFTEST_PASS` 即 `exit 1`——本 session 的**缓存旧字节码 / 漏收集 workflow_node_api** 这类坏产物从此出不了门。用 `Start-Job` + `Wait-Job -Timeout 180` 包住：selftest 万一挂起（历史坑：pywebview 在无桌面会话 runner 上挂死 → job 被 45min 取消）**3 分钟即明确失败**，不再拖垮流水线，详见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)
 
 ### ⚠️ 编码：Windows runner 的 Python stdout 默认 cp1252（2026-09-10 · 十五轮，必修）
 
@@ -341,13 +370,7 @@ UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4
 
 ### 用户侧下一步（需 GitHub 账号，Agent 无法代做）
 
-```bash
-git push                                    # 推送后 Actions 就位
-# GitHub → Actions → desktop-release → Run workflow（手动试装，约 10-15 分钟）
-git tag v0.26.5 && git push origin v0.26.5  # 自动出 Release + zip
-```
-
-**排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现。
+**排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现；**selftest 步骤被 canceled / 超时**先查是否又引入了 GUI 依赖（见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)）。
 
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 
@@ -409,6 +432,7 @@ Agt/                        ← 解压即用的发行包
 - **多开允许但同 repo 同 session 不要开两个窗口**（同一 session 文件被两进程写）——不同 workspace 才是推荐用法；端口冲突由 `pick_port` 自动退让，无需人工干预
 - **端口探测类操作必须在被探测服务启动之前**（`pick_port` 前置到 `start_server` 之前），否则会把自己的服务判为「被占用」
 - GUI 形态端到端验证须覆盖「**窗口实际加载的 URL 可连**」，而非只看服务端日志 / 进程存活
+- **selftest 里不要 import GUI 依赖模块**（pywebview / web_desktop）——CI runner 上会挂住不返回；门禁脚本必须确定性退出，且步骤本身要有超时兜底
 
 ## 相关页面
 

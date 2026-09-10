@@ -663,3 +663,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **教训（通用）**：CI 脚本里**不要裸 print 非 ASCII**——要么 reconfigure stdio，要么在 workflow 层设 `PYTHONIOENCODING`；「本地能跑」不构成 CI 能跑的证据（终端编码与 runner 默认编码不同源）
 - 详见 [桌面版 · 云构建 + Release](features/desktop-mode.md#云构建--releasegithub-actions-流水线2026-09-10--十三轮spec-决策云构建为主)、[ops · 桌面版发布](guides/ops.md#桌面版发布云构建为主github-actions)
 
+## 快速事实增补（2026-09-10 · 十六 · CI selftest 挂死：去 GUI 化 + 180s 超时）
+
+- **CI selftest 挂死 → job 被取消（2026-09-10 · 十六轮，双层修复）**：Actions 日志只有 `Error: The operation was canceled.`——根因 = selftest import 了 **`web_desktop`（pywebview）**，**无桌面会话的 runner 上 pythonnet/.NET 初始化挂住不返回**（本机有 WebView2 不复现），selftest 步骤永不结束 → 拖到 job 级 45min 超时被取消。修复 ① **selftest 去 GUI 化**（`src/desktop_entry.py`）：import 清单移除 web_desktop，改补 **workflow / multiagent / llm_client / tools**（引擎核心反而补全）；资源检查扩到 6 项（+agents.html + tools_builtin + manifest.json）；节点插件加载**逐个 try**（单个炸不再淹没整组）；新增外置工具脚本 `py_compile` 校验；所有 print 包 try。② **门禁加 180s 超时兜底**（`.github/workflows/desktop-release.yml`）：`Start-Job` + `Wait-Job -Timeout 180`，挂起 3 分钟即报「疑似挂起」明确失败。**净效果**：坏产物检测能力不降反升，但 selftest 从此不可能吊死流水线。**教训**：CI 门禁脚本必须确定性退出（GUI/.NET/网络/交互式输入都不能进门禁路径），门禁步骤本身要有超时兜底——「挂住」比「失败」更难诊断（日志里只有一个 canceled）。见 [桌面版 · selftest 去 GUI 化](features/desktop-mode.md#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)
+

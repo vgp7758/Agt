@@ -634,3 +634,16 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - 发布布局：`Launcher.exe` 与 `Agt/`（主程序 onedir）平级；双击 Agt.exe 仍进默认 workspace 兜底
 - 详见 [features/desktop-mode · 瘦启动器](features/desktop-mode.md#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10)
 
+## 快速事实增补（2026-09-10 · 十二 · 桌面版迁移判定 bug：目录存在 ≠ 已初始化）
+
+用户三问（读 models.py 而非 ~/.agt ？/ launcher 选 repo 后 session 下拉框空 / web 端有无回归）——**同一根因**，已修（`src/paths.py`，重打包后台进行中）。
+
+- **`models.py` 没被打进包**：模型来自**用户所选 repo 目录里的 `models.py`**（config 向后兼容回退链：`AGT_HOME/models.json` 不存在 → 读 workspace 的 `models.py`）
+- **session 空 + 存档目录差异**：桌面版 = `%APPDATA%\Agt`（正常版 `~/.agt`），首启本应**一次性全量迁移**——但被 **launcher 预建目录短路**：launcher 先写 `%APPDATA%\Agt\recent_workspaces.json` → 目录已存在 → 旧判据 `not new.exists()` 判"已初始化" → 跳过迁移 → 空配置空存档 → 模型回退读 workspace 的 `models.py`
+- **修复**：迁移判定从「目录存在」改为「**有无用户数据**」——`_USER_DATA = (models.json / settings.json / mcp.json / main.yml / repos / remote_instances.json)` 任一存在才算已初始化；`copytree(dirs_exist_ok=True)` 兼容预建目录；成功写 `.migrated-from` 留痕；OSError 静默不阻塞启动。单测四场景全过（预建目录仍迁移 / 有数据不迁移 / 非 desktop 回默认 / 干净启动）
+- **web 端无回归 ✅**：pip 态起 9001 web 服务 → HTTP 200（18.6KB 页面正常）；chat.py 两处改动只在桌面分支生效
+- **生效**：`--clean` 重打包（后台 `bg_1789023078536`，约 6 分钟）→ launcher 打开 repo 首启提示迁移 → session 下拉框出现全部历史
+- **遗留待决**：迁移是**全量拷贝**（含所有 repo 存档），数据大时首启卡顿——可选「只搬全局配置不搬 repos / 存档懒迁移」，待用户裁定
+- **通用教训**：**「目录存在」≠「已初始化」**——初始化/迁移判据必须基于业务数据存在性，别用目录 `exists()`（launcher / 日志 / 缓存会预建目录）
+- 详见 [features/desktop-mode · 迁移判定 bug](features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)、[guides/ops · 存档布局](guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos)
+

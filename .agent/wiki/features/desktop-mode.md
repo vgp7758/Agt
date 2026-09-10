@@ -161,6 +161,35 @@ open_window(8001)         ← 窗口加载 http://127.0.0.1:8001/ → 无人监�
 
 **教训**：端口探测类操作必须在被探测服务启动之前；GUI 形态的端到端验证须覆盖「窗口实际加载的 URL 可连」，而非只看服务端日志。
 
+## 迁移判定 bug：目录存在 ≠ 已初始化（launcher 预建目录短路迁移，2026-09-10 · 七轮）
+
+**用户报告（三问，同一根因）**：① 桌面版看起来读的是 `models.py` / `config.py` 而不是 `~/.agt/`——是被打进包了吗？② 从 `Launcher.exe` 选了一个已有 repo，打开后 **session 下拉框是空的**——桌面端存档目录和正常版有区别吗？③ 正常 web 端有没有回归？
+
+**逐问结论**：
+
+1. **`models.py`/`config.py` 没被打进包**——模型来自**用户所选 repo 目录里的 `models.py`**（config 的向后兼容回退链：`AGT_HOME/models.json` 不存在 → 读 workspace 的 `models.py`）。真问题是 `%APPDATA%\Agt\models.json` 为什么不存在 → 见 2
+2. **桌面端存档目录确实不同**（设计如此）：桌面版 = `%APPDATA%\Agt`，正常版 = `~/.agt`；首次桌面启动会**一次性全量迁移** `~/.agt` → `%APPDATA%\Agt`（session / 模型配置全跟过来）。但迁移被 **launcher 预建目录短路**（见下），故桌面版空配置 + 空存档 → session 空 + 模型回退到 workspace 的 `models.py`
+3. **web 端无回归 ✅**（实测）：pip 态起 9001 web 服务 → HTTP 200（18.6KB 页面正常返回）；chat.py 两处改动（`pick_port` 前置、开窗条件）都只在桌面分支生效
+
+**根因（时序 bug，`src/paths.py` `resolve_agt_home`）**：
+
+```
+launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
+→ 目录已存在
+→ 迁移判定是「not new.exists()」→ 判"已初始化" → 跳过迁移 ❌
+→ 桌面版：空配置 + 空存档 → fallback 读到 workspace 的 models.py
+```
+
+**修复（`src/paths.py`）**：迁移判定从「**目录存在**」改为「**有无用户数据**」——定义 `_USER_DATA = ("models.json", "settings.json", "mcp.json", "main.yml", "repos", "remote_instances.json")`，任一存在才算已初始化；`shutil.copytree(old, new, dirs_exist_ok=True)` 兼容 launcher 预建目录（logs/ 亦系统产物，目录存在 ≠ 已初始化）。迁移成功写 `(new / ".migrated-from").write_text(str(old))` 留痕；`OSError` 静默（迁移失败不阻塞启动，空配置起步）。首启打印「📦 首次桌面启动：迁移 … （一次性，含全部 repo 存档）…」。
+
+**验证（单测四场景全过）**：预建目录（仅 recent/logs）仍迁移 ✅ / 有用户数据不迁移 ✅ / 非 desktop 回默认 `~/.agt` ✅ / 干净启动正常迁移 ✅。
+
+**生效方式**：`--clean` 重打包完成后（后台任务 `bg_1789023078536`，约 6 分钟），再用 launcher 打开该 repo → 首次提示迁移 → session 下拉框出现全部历史 + 模型读 `%APPDATA%\Agt\models.json`。
+
+**遗留讨论（用户提问，未决）**：迁移是**全量拷贝**（`~/.agt` 下所有 repo 的存档），数据大时首启会卡一会儿——可选优化：只搬全局配置（models/settings）不搬 repos、存档按需懒迁移。待用户裁定。
+
+**教训**：**「目录存在」不是「已初始化」的判据**——任何「首次运行才执行」的初始化/迁移逻辑，判定条件必须基于**业务数据的存在性**（models.json / repos 等），而非目录/文件系统层面存在性；有别的组件（launcher / 日志 / 缓存）会预先创建目录，用 `exists()` 判据必被短路。
+
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 
 用户提案：「launcher.exe 可能是个瘦启动器，在窗口选一个 workspace 以后才去对应的目录启动真正的桌面应用」——VSCode / JetBrains 式「先选项目再开应用」。**两入口共存**：双击 `Launcher.exe` 选工作区；双击 `Agt.exe` 直接进默认 workspace（exe 旁 `workspace/`）兜底。

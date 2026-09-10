@@ -647,3 +647,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **通用教训**：**「目录存在」≠「已初始化」**——初始化/迁移判据必须基于业务数据存在性，别用目录 `exists()`（launcher / 日志 / 缓存会预建目录）
 - 详见 [features/desktop-mode · 迁移判定 bug](features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)、[guides/ops · 存档布局](guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos)
 
+## 快速事实增补（2026-09-10 · 十三 · 桌面版云构建 + Release 流水线）
+
+- **桌面版云构建 + Release（2026-09-10 · 十三轮，spec 决策：云构建为主）**：`.github/workflows/desktop-release.yml`（92 行）+ `tools/ci_stamp_version.py`。**触发**：push tag `v*` → 自动发 Release（附 zip）；`workflow_dispatch` → 只出 artifact（14 天）供试装。**流水线 11 步**：checkout → setup-python 3.13 → 装依赖 → **版本戳** → `Agt.spec`（`--clean`）→ `Launcher.spec` → **🔒 `Agt.exe --selftest` 门禁**（不含 `SELFTEST_PASS` 即 fail——本 session 的缓存旧字节码 / 漏收集 workflow_node_api 正是它拦的）→ stage（`Launcher.exe` 与 `Agt\` 平级）→ zip `Agt-Desktop-<ver>-win64.zip` → artifact → `softprops/action-gh-release@v2`（仅 tag，含中文使用说明 + generate_release_notes）。`permissions: contents: write` + `concurrency` 排队不打断；`windows-latest` 公开仓库免费无限额
+- **`ci_stamp_version.py` 版本戳**：tag → 把 `src/paths.py` 的 `VERSION`（**唯一真源**，`src/__init__.py` 反向导入随其同步）+ `packaging/version_file.txt`（exe 版本资源）同步为 tag 名去 v，保证**产物版本 == tag 版本**；手动触发（`ref_type=branch`）不改、沿用仓库版本；非 `x.y.z` tag 跳过告警。**踩坑**：首版还去改 `src/__init__.py` 的 `__version__`——平铺打包后该文件是反向导入（无字面量）→ 正则 0 处 `AssertionError`，收敛为「只改唯一真源」。单测三场景全过（v9.9.9 双同步 / branch 沿用 / vNext 跳过），已还原
+- **与本地发布链**：`python release.py --desktop` 降为兜底（离线/应急；不 bump 版本、不上传 PyPI）；本机未装 `gh`，正式 Release 由 Actions 自己创建。**用户侧下一步**（需 GitHub 账号）：`git push` → Actions 手动 Run workflow 试装 → `git tag v0.26.5 && git push origin v0.26.5` 出 Release
+- 详见 [桌面版 · 云构建 + Release](features/desktop-mode.md#云构建--releasegithub-actions-流水线2026-09-10--十三轮spec-决策云构建为主)
+

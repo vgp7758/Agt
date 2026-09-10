@@ -190,6 +190,71 @@ launcher 先写 %APPDATA%\Agt\recent_workspaces.json（_save_recent）
 
 **教训**：**「目录存在」不是「已初始化」的判据**——任何「首次运行才执行」的初始化/迁移逻辑，判定条件必须基于**业务数据的存在性**（models.json / repos 等），而非目录/文件系统层面存在性；有别的组件（launcher / 日志 / 缓存）会预先创建目录，用 `exists()` 判据必被短路。
 
+## 云构建 + Release：GitHub Actions 流水线（2026-09-10 · 十三轮，spec 决策：云构建为主）
+
+**决策**：桌面版发布走**云构建为主**（GitHub Actions `windows-latest`，公开仓库免费无限额），本地 `python release.py --desktop` 降为**兜底**（离线 / 应急 / 无网时用）。理由：本机打包约 6 分钟且需 `--clean` 全量、环境坑多（pathlib backport / 缓存复用），云端干净环境 + 门禁更可靠。
+
+**文件**：`.github/workflows/desktop-release.yml`（92 行）+ `tools/ci_stamp_version.py`（52 行，仅 CI 调用）
+
+### 触发与权限
+
+| 触发 | 行为 |
+|---|---|
+| `push: tags: ["v*"]` | 构建 + **自动发 GitHub Release**（附 zip） |
+| `workflow_dispatch`（Actions 页面手动） | 只出 **artifact**（`retention-days: 14`）供试装，不动 Release |
+
+```yaml
+permissions: { contents: write }        # softprops/action-gh-release 需要
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false             # 发布任务排队，不互相打断
+jobs.build: { runs-on: windows-latest, timeout-minutes: 45 }
+```
+
+### 流水线 11 步
+
+1. `actions/checkout@v4`
+2. `actions/setup-python@v5`（3.13 + pip 缓存）
+3. 装依赖：`requirements.txt` + `pyinstaller` + `pywebview`
+4. **版本戳**：`python tools/ci_stamp_version.py "${{ github.ref_type }}" "${{ github.ref_name }}"`
+5. `Agt.spec` 构建（`--noconfirm --clean`，**必须 --clean**——见 [施工中排掉的坑 · 6](#施工中排掉的坑)）
+6. `Launcher.spec` 构建（onefile）
+7. **🔒 selftest 门禁**：`packaging/dist/Agt/Agt.exe --selftest` 输出不含 `SELFTEST_PASS` 即 `exit 1`——本 session 的**缓存旧字节码 / 漏收集 workflow_node_api** 这类坏产物从此出不了门
+8. **stage**：`packaging/dist/release/` 下 `Launcher.exe` 与 `Agt\` **平级**（与 [发布布局](#发布布局打完即生效) 同构）
+9. **zip**：`Agt-Desktop-<ver>-win64.zip`（tag → tag 名去 v；手动 → `dev-<sha12>`），路径写 `$GITHUB_ENV.ZIP_PATH`
+10. `actions/upload-artifact@v4`
+11. `softprops/action-gh-release@v2`（`if: github.ref_type == 'tag'`）：传 zip + `generate_release_notes: true` + **中文使用说明 body**（解压到非 Program Files / 双击 Launcher.exe / 首启迁移提示 / 排障看 `%APPDATA%\Agt\logs\desktop.log`）
+
+### tools/ci_stamp_version.py：CI 版本戳
+
+保证**产物版本号 == tag 版本号**。语义（`main()`）：
+
+- `ref_type != "tag"`（手动触发时 GitHub 给 `ref_type=branch`）→ **不改**，打印仓库当前 `paths.VERSION` 后返回 0
+- tag 名非 `x.y.z` 形态（如 `vNext`）→ 跳过并告警（用仓库当前值）
+- tag 正常 → 改两处：`src/paths.py` 的 `VERSION = "x.y.z"`（**唯一真源**，`src/__init__.py` 反向 `from paths import VERSION as __version__` 随其同步）+ `packaging/version_file.txt`（exe 版本资源，正则 `0\.\d+\.\d+` 替换，2 处）
+- `paths.py` 未匹配到 VERSION → 返回 1（CI 失败，不静默）
+
+**踩坑（当场修）**：首版还去改 `src/__init__.py` 的 `__version__`——平铺打包后该文件是**反向导入**（无字面量），正则匹配 0 处直接 `AssertionError`；收敛为「只改唯一真源 paths.VERSION + version_file.txt」。手动分支的「沿用仓库版本号」打印也一度写成 `from paths import VERSION`（CI 里 src 不在 sys.path，不可靠）→ 改回对 `paths.py` 正则解析。
+
+**验证（单测，已还原）**：tag `v9.9.9` → `paths.VERSION` 与 `version_file.txt` 双同步 ✅（新进程 import 实测 `VERSION = 9.9.9`）；手动触发（`ref_type=branch`）沿用仓库版本 ✅；非 x.y.z tag（`vNext`）跳过 ✅。
+
+### 与本地发布链的关系
+
+| 通道 | 命令 | 用途 |
+|---|---|---|
+| 云构建（主） | push tag `v*` / Actions 手动 | 正式 Release + 试装 artifact |
+| 本地兜底 | `python release.py --desktop`（PyInstaller onedir → zip → 有 `gh` 则 `gh release upload --clobber`，无则给手动上传路径） | 离线 / 应急 |
+
+**注意**：`release.py --desktop` **不 bump 版本、不上传 PyPI**（桌面 zip 与 pip 包两条独立通道）；本机未装 `gh`，正式 Release 由 Actions 自己创建，不需要 gh。
+
+### 用户侧下一步（需 GitHub 账号，Agent 无法代做）
+
+```bash
+git push                                    # 推送后 Actions 就位
+# GitHub → Actions → desktop-release → Run workflow（手动试装，约 10-15 分钟）
+git tag v0.26.5 && git push origin v0.26.5  # 自动出 Release + zip
+```
+
 ## 瘦启动器 Launcher.exe：先选工作区再拉起主程序（spec s_37494daf，2026-09-10）
 
 用户提案：「launcher.exe 可能是个瘦启动器，在窗口选一个 workspace 以后才去对应的目录启动真正的桌面应用」——VSCode / JetBrains 式「先选项目再开应用」。**两入口共存**：双击 `Launcher.exe` 选工作区；双击 `Agt.exe` 直接进默认 workspace（exe 旁 `workspace/`）兜底。
@@ -247,14 +312,6 @@ Agt/                        ← 解压即用的发行包
 - `AGT_MAIN_EXE` env 是测试/开发钩子（源码态验证指向 `dist/Agt/Agt.exe`），非用户面配置
 - `--auto` 模式 stdout 在 `console=False` 下仍可用（重定向），但 `print` 输出不保证可见——脚本断言以退出码为准
 - 主程序侧 workspace 语义变更集中在 `desktop_entry._pick_workspace` 一处，launcher 只负责传 env
-
-## 相关页面
-
-- [系统总览](../architecture/overview.md) — 模块地图（服务层 chat.py / 配置层 config.py 的桌面配套）
-- [运维 · 存档布局](../guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos) — 数据目录三级解析落地后存档根随 AGT_DIR 走
-- [用户交互 · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc) — 重启不开新窗口同款语义
-- [配置体系 · 配置文件解析 config_file](../guides/config-and-models.md) — repo 级覆盖与数据目录正交（路径解析归 paths.py）
-- [瘦启动器 Launcher.exe](#瘦启动器-launcherexe先选工作区再拉起主程序spec-s_37494daf2026-09-10) — 先选 workspace 再拉起主程序（本页新增）
 
 ## 相关页面
 

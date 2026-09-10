@@ -953,7 +953,7 @@ class Agent:
         except Exception:
             out = ""
         ok = "✅ 正常结束" if rc == 0 else f"⚠️ 异常结束（rc={rc}）"
-        rec = {"name": "check_bg_task", "args": {"task_id": bg_id},
+        rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
                "result": (f"[后台任务完成·自动通知] {name}（{bg_id}）{ok}。\n尾部输出：\n{out[-4000:]}")}
         header = f"📨〔后台任务完成〕「{name}」{bg_id}（{ok}）"
         # seed=dict 直传（修复 2026-08-31·终验发现）：曾 seed=[rec]（list 包装）违反 dict 契约——

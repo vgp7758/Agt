@@ -58,22 +58,30 @@ def _save_recent(ws: str) -> None:
 
 
 def _main_exe() -> Path:
-    """定位主程序：AGT_MAIN_EXE env 覆盖（测试）> frozen 同目录 Agt.exe >
-    源码态 repo 根 dist/Agt/Agt.exe（packaging/launcher.py 的开发验证路径）。"""
+    """定位主程序（三形态）：
+    ① AGT_MAIN_EXE env 覆盖（测试）
+    ② Launcher 旁 Agt.exe（平铺形态）
+    ③ Launcher 旁 Agt\\Agt.exe（onedir 发布包形态——zip 解压后 Launcher 与
+       Agt\ 文件夹平级；CI 实测坑：只认①时报 D:\tmp\dist\Agt\Agt.exe 找不到）
+    ④ 源码态 repo 根 dist/Agt/Agt.exe（packaging/launcher.py 开发验证路径）。"""
     env = os.environ.get("AGT_MAIN_EXE", "").strip()
     if env:
         return Path(env)
     here = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
-    cand = here / "Agt.exe"
-    if cand.exists():
-        return cand
+    for cand in (here / "Agt.exe", here / "Agt" / "Agt.exe"):
+        if cand.exists():
+            return cand
     return here.parent / "dist" / "Agt" / "Agt.exe"
 
 
 def _launch(ws: str) -> None:
+    here = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
     exe = _main_exe()
     if not exe.exists():
-        messagebox.showerror("Agt 启动器", f"未找到主程序：\n{exe}\n\nlauncher 须与 Agt.exe 同目录分发。")
+        messagebox.showerror("Agt 启动器", f"未找到主程序，合法位置（任选其一）：\n"
+                                       f"  ① Launcher 旁 Agt.exe\n"
+                                       f"  ② Launcher 旁 Agt\\Agt.exe（发布包默认布局）\n\n"
+                                       f"当前在 {here} 找过都未命中。")
         return
     _save_recent(ws)
     env = dict(os.environ)

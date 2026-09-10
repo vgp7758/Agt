@@ -79,20 +79,23 @@ jobs:
             Write-Error "selftest 未通过（❌ 明细见上方三段输出）"; exit 1
           }
 
-      - name: Stage release folder (Launcher.exe 与 Agt\ 平级)
+      - name: Stage release folder (版本命名的发布根)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path packaging/dist/release | Out-Null
-          Copy-Item packaging/dist/Agt -Destination packaging/dist/release/Agt -Recurse -Force
-          Copy-Item packaging/dist/Launcher.exe -Destination packaging/dist/release/Launcher.exe -Force
-          Get-ChildItem packaging/dist/release | Select-Object Name, Length
+          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev-${{ github.sha }}".Substring(0,9) }
+          $stage = "packaging/dist/Agt-Desktop-$ver"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item packaging/dist/Agt -Destination "$stage/Agt" -Recurse -Force
+          Copy-Item packaging/dist/Launcher.exe -Destination "$stage/Launcher.exe" -Force
+          Get-ChildItem $stage | Select-Object Name, Length
 
       - name: Package zip
         shell: pwsh
         run: |
           $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev-${{ github.sha }}".Substring(0,9) }
           $zip = "packaging/dist/Agt-Desktop-$ver-win64.zip"
-          Compress-Archive -Path packaging/dist/release -DestinationPath $zip -Force
+          Compress-Archive -Path "packaging/dist/Agt-Desktop-$ver" -DestinationPath $zip -Force
           $mb = [math]::Round((Get-Item $zip).Length / 1MB, 0)
           Write-Host "OK $zip ($mb MB)"
           "ZIP_PATH=$zip" >> $env:GITHUB_ENV

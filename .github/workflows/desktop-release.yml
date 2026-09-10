@@ -1,0 +1,92 @@
+name: desktop-release
+
+# 桌面版云构建 + Release（决策：云构建为主，本地 release.py --desktop 为兜底）。
+# 触发：打 tag v*（自动出 Release）或手动 workflow_dispatch（只留 artifact 供试装）。
+# 门禁：Agt.exe --selftest 必须 PASS 才继续——本 session 的缓存/漏收集坑正是它拦的。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write            # softprops/action-gh-release 需要写 Release
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false  # 发布任务不互相打断（排队）
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pywebview
+
+      - name: Lock output version (release 构建按 tag 版本号)
+        shell: pwsh
+        run: python tools/ci_stamp_version.py "${{ github.ref_type }}" "${{ github.ref_name }}"
+
+      - name: Build main app (onedir)
+        run: python -m PyInstaller packaging/Agt.spec --noconfirm --clean --distpath packaging/dist --workpath packaging/build
+
+      - name: Build launcher (onefile)
+        run: python -m PyInstaller packaging/Launcher.spec --noconfirm --clean --distpath packaging/dist
+
+      - name: Selftest gate (禁止坏产物出门)
+        shell: pwsh
+        run: |
+          $out = & packaging/dist/Agt/Agt.exe --selftest 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch "SELFTEST_PASS") { Write-Error "selftest 未通过"; exit 1 }
+
+      - name: Stage release folder (Launcher.exe 与 Agt\ 平级)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packaging/dist/release | Out-Null
+          Copy-Item packaging/dist/Agt -Destination packaging/dist/release/Agt -Recurse -Force
+          Copy-Item packaging/dist/Launcher.exe -Destination packaging/dist/release/Launcher.exe -Force
+          Get-ChildItem packaging/dist/release | Select-Object Name, Length
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev-${{ github.sha }}".Substring(0,12) }
+          $zip = "packaging/dist/Agt-Desktop-$ver-win64.zip"
+          Compress-Archive -Path packaging/dist/release -DestinationPath $zip -Force
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 0)
+          Write-Host "OK $zip ($mb MB)"
+          "ZIP_PATH=$zip" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Agt-Desktop-win64
+          path: ${{ env.ZIP_PATH }}
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_PATH }}
+          generate_release_notes: true
+          body: |
+            ## 桌面版（Windows x64，解压即用，无需安装 Python）
+
+            1. 解压到任意位置（建议 `D:\Agt`，**避免 Program Files** —— 程序会在自己旁边建 `workspace\`）
+            2. 双击 **`Launcher.exe`** → 选择工作区（VSCode 式）→ 进入应用
+               （或直接双击 `Agt\Agt.exe` 进入默认工作区）
+            3. 首次启动会把 `%USERPROFILE%\.agt` 的数据迁移到 `%APPDATA%\Agt`
+
+            数据/日志目录：`%APPDATA%\Agt`（排障看 `logs\desktop.log`）

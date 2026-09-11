@@ -37,6 +37,7 @@
 | [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS，hidden）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
 | [features/glob-files](features/glob-files.md) | glob_files 工具（外置首例·纯函数形态）：文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__ 等，500 条上限） | 按名字找文件 / 学外置工具写法 |
 | [features/tool-externalization](features/tool-externalization.md) | 工具外置体系：tools/builtin/*.py + `agt_register(ctx)` 描述符 + **ctx 通用上下文注入** + `/reload tools` 热加载 + 随包副本 + **外置件 10 文件（真限界上下文四组 + 纯函数批）** | 加新内置工具（零框架改动） |
+| [features/zai-tools](features/zai-tools.md) | Z.AI 工具集：智谱 BigModel 联网三件套（zai_web_search 搜索 / zai_web_reader 抓取 / zai_file_parser 文档解析），复用智谱系 api_token 零配置，不随包播种 | 实时联网搜索 / 抓网页正文 / 解析本地文档 |
 | [features/spec-tools](features/spec-tools.md) | spec 工具集：explore_subagent 同步前置探索（**≠ explorer 声明式子 Agent**，不注册 registry、只读白名单） | 理解 spec 流程 / 区分两个 explorer |
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
 | [features/rag](features/rag.md) | RAG 文档语义检索：ensure_rag 线程安全惰性单例 + preload_async 后台预热 + **共享 embedder（修双份内存）** + rag_tools.py 外置件 | 改 RAG / 理解 embedder 共享 / 外置工具写法 |
@@ -683,4 +684,8 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 ## 快速事实增补（2026-09 · Android 手机版）
 
 - **Android 手机版三件套（packaging/android/，2026-09）**：手机本地跑完整 Agt Agent——Termux（F-Droid，非应用商店）里 pip 装 agt-agent，LLM 走手机流量调云端 API、工具在手机本地执行、WebUI 手机浏览器访问 `127.0.0.1:8000`，数据目录 `~/.agt` 与电脑版同构（session/记忆/工作流）。**`install.sh`** 一键在线安装五步：Termux 自检（`[ -d /data/data/com.termux ]`）→ `pkg install python rust binutils libffi openssl` → 清华镜像 pip 装 agt-agent（`pydantic-core` 需 rust 本地编译，约 5-15 分钟）→ 初始化 `~/agt-demo` 演示 workspace + `~/start-agt.sh`（起服务 + `termux-open-url` 自动弹浏览器）→ 桌面快捷方式 `~/.shortcuts/Agt演示`（Termux:Widget 一键启动）。**`make-offline-bundle.sh`** 母本机打离线包：全量打包 `site.getsitepackages()[0]`（几百 MB）+ 生成 `restore-offline.sh`——目标机**零编译零下载**（只需装 Termux + python，解包即跑），产出 `~/agt-offline-<版本>-<日期>.tgz` 单文件微信/USB 分发。**已知限制**：无 iOS（沙盒禁常驻服务端）、LSP/MCP/pywebview 不可用、息屏冻结（保持亮屏 / 通知栏 wakelock）。与桌面版互为两条「超 pip CLI」分发通道（桌面 = PyInstaller onedir exe；Android = Termux pip / site-packages tgz），详见 [手机版](features/android-termux.md)
+
+## 快速事实增补（2026-09 · Z.AI 本地工具）
+
+- **Z.AI 本地工具三件套（2026-09-11，`tools/builtin/zai_tools.py`，用户个人工具·不随包播种）**：`zai_web_search(query, count=10, recency, domains)` → `POST /api/coding/paas/v4/web_search` 实时联网搜索（新闻/版本号/文档更新）；`zai_web_reader(url)` → `/api/coding/paas/v4/reader` 抓单网页正文；`zai_file_parser(path, file_type)` → `/api/paas/v4/files/parser/sync` 本地文档（PDF/Word/Excel/PPT/MD/TXT）解析提取文本。**鉴权零配置**——`_zai_token()` 轻量读 models.json 找智谱系（z.ai / glm-official，base_url 含 bigmodel.cn）的 `api_token` 复用，AGT_HOME 三级路径（kv_tools 同款）+ 新旧两级结构（`{"models":{...}}` / 扁平）+ str/list 多形态 token 兼容——设置里配过一次 z.ai key 即开箱可用。**实测踩坑已内置注释**：①reader 端点名是 `/reader` 不是文档给的 web_reader（探测多候选锁定）；②parser 端点在 `/api/paas/v4`（**不带 coding 前缀**）且 `file_type` 必填、需与扩展名严格一致（`.md→md` 成功、`markdown` 失败）；③token 实际是 list 形态（第一版只取 str 漏了）。`agt_register` 无参（token 读 ~/.agt 不依赖 workspace）；`/reload tools` 热加载实测 **50 个（47 旧 + 3 新）**，改完免重启（详见 [zai-tools](features/zai-tools.md)、[tool-externalization · 外置件清单](features/tool-externalization.md)）
 

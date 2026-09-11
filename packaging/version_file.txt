@@ -16,12 +16,12 @@ VSVersionInfo(
       StringTable('080404b0', [
         StringStruct('CompanyName', 'Agt'),
         StringStruct('FileDescription', 'Agt — 本地优先的自主 AI Agent 框架'),
-        StringStruct('FileVersion', '0.26.5'),
+        StringStruct('FileVersion', '0.26.6'),
         StringStruct('InternalName', 'Agt'),
         StringStruct('LegalCopyright', 'MIT License'),
         StringStruct('OriginalFilename', 'Agt.exe'),
         StringStruct('ProductName', 'Agt Desktop'),
-        StringStruct('ProductVersion', '0.26.5'),
+        StringStruct('ProductVersion', '0.26.6'),
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

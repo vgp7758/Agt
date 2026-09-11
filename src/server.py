@@ -1811,7 +1811,7 @@ def _current_turn_event(agent):
             "agent_id": getattr(agent, "agent_id", "_main_")}
 
 
-
+def _broadcast_history(agent, name_override: str = ""):
     """广播主 Agent 的 session 历史——带 agent_id="_main_"（只刷与主 Agent 交互的客户端；
     其它页签正与子 Agent 交互时不会被主 session 的历史冲掉视图）。"""
     ev = _history_event(agent, name_override)

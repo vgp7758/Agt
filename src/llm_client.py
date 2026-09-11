@@ -608,6 +608,20 @@ class LLMClient:
                 return False
             return True
 
+        def _nearest_cooldown():
+            """回退链上仍在冷却的 (model, 剩余秒) 里剩余最短的一个；全不在冷却则 None。
+            冷却键形如 model:token签名，前缀匹配到冒号为止即 model 名精确匹配。"""
+            best = None
+            now = time.time()
+            for m in self.fallback_chain:
+                for k, ts in self._provider_cooldown.items():
+                    if not k.startswith(m + ":"):
+                        continue
+                    remain = self._cooldown_seconds - (now - ts)
+                    if remain > 0 and (best is None or remain < best[1]):
+                        best = (m, remain)
+            return best
+
         def _advance(reason, from_cooldown=False):
             """推进到下一个可用 provider。from_cooldown=True 表示冷却跳过（无退避）。"""
             if self.model_name not in tried:
@@ -625,6 +639,20 @@ class LLMClient:
                     next_m = m
                     break
             if not next_m:
+                # 全链已试尽。若链上成员都只是冷却中（网络抖动/上游瞬时故障的典型形态：
+                # 失败即进冷却，冷却窗内整链重试都会被跳过），等最短剩余冷却解冻后
+                # 重试一轮，而不是立刻炸轮——2026-09-11 热点断网：glm+proxy 双双进
+                # 300s 冷却，用户窗内两次重发均秒失败"冷却中"。
+                near = _nearest_cooldown()
+                if near and waits_left[0] > 0:
+                    waits_left[0] -= 1
+                    _LOG.warning("回退链全在冷却：等 %s 解冻(剩余%.0fs)后重试整链（等待配额剩%d）",
+                                 near[0], near[1], waits_left[0])
+                    time.sleep(near[1] + 1.0)
+                    tried[:] = [near[0]]
+                    tried_tokens[0] = 0
+                    self.switch_model(near[0])
+                    return
                 _LOG.error("回退链耗尽 tried=%s 原因=%s", tried, reason)
                 raise RuntimeError(
                     f"回退链中所有模型均已尝试({', '.join(tried)})：{reason}")
@@ -640,6 +668,7 @@ class LLMClient:
 
         tried_tokens = [0]          # 用 list 包一层让 _advance 能修改（闭包）
         tried = [self.model_name]   # 本次调用内已试过的 model 名
+        waits_left = [2]            # 全链冷却时的等待配额（防死等：至多睡两个冷却窗再真报错）
 
         while True:
             ck = _ck()

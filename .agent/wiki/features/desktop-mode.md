@@ -530,4 +530,5 @@ Agt/                        ← 解压即用的发行包
 - [运维 · 存档布局](../guides/ops.md#存档布局paths-py-三级解析--默认-agt-repos) — 数据目录三级解析落地后存档根随 AGT_DIR 走
 - [用户交互 · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc) — 重启不开新窗口同款语义
 - [配置体系 · 配置文件解析 config_file](../guides/config-and-models.md) — repo 级覆盖与数据目录正交（路径解析归 paths.py）
+- [手机版 · Android（Termux）](android-termux.md) — 另一条「超 pip CLI」分发通道（Termux pip / site-packages tgz，非 PyInstaller exe；数据根同理共享 `~/.agt`）
 

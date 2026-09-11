@@ -41,6 +41,7 @@
 | [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
 | [features/rag](features/rag.md) | RAG 文档语义检索：ensure_rag 线程安全惰性单例 + preload_async 后台预热 + **共享 embedder（修双份内存）** + rag_tools.py 外置件 | 改 RAG / 理解 embedder 共享 / 外置工具写法 |
 | [features/background-scheduler](features/background-scheduler.md) | 定时/到点任务调度 add_schedule + **后台服务/后台任务工具九件（list_services 合并视图 + check_bg_task 真工具）**：interval 与 at（每日闹钟）、Schedule 数据结构、三族后台通知语义 | 定时任务 / 后台服务管理 |
+| [features/android-termux](features/android-termux.md) | Android（Termux）手机版：手机本地跑完整 Agt Agent——install.sh 一键装 + make-offline-bundle.sh 离线包 + README；数据目录 `~/.agt` 与电脑版同构，与桌面版互为两条「超 pip CLI」分发通道 | 手机上跑 Agt / 离线分发 |
 | [releases/v0.22.0](releases/v0.22.0.md) | v0.22.0 发布记录（最新）：hook_ctx/hook_write 回写迁移 + 钩子协议下拉回归 + 嵌套子画布观测 + break 携带值/yield + index 变量级修正 | 查最新版本交付内容 |
 | [releases/v0.21.1](releases/v0.21.1.md) | v0.21.1 发布记录：聚合 index 端口 + 卫生性强制毕业 + extract_keywords 修复 + 编辑器批次十 | 查版本交付内容 / 发布流程 |
 | [releases/v0.20.1](releases/v0.20.1.md) | v0.20.1 发布记录：WebUI 🐞 日志面板 + 中断原因三处留痕 + user 事件多端同步 + /update-assets + 修复三件 | 查版本交付内容 / 发布流程 |
@@ -678,4 +679,8 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 ## 快速事实增补（2026-09-11 · v0.26.6 发布：bg_task 通知 seed 键名修复）
 
 - **v0.26.6 发布（2026-09-11，commit `1d47b37`，PyPI 已上线；补丁版，未单独 tag 桌面版）**：核心 = **bg_task 合成记录键名漂移修复**——用户观察「bg_task 退出时看起来是 user 吧？」，实为**合成记录从落地起就残缺**：生产侧 `_on_bg_task_done` 的 rec 用 `"name"` 键，消费侧 `_seed_steps` 读 `"tool"` 键 → `toollog` 工具名恒 `""` → 投影无名无工具形态，看着就是纯 user 通知（service_exit 一直用 `"tool"` 键所以正常，两类通知的对照让用户发现不一致）。修复 = `{"tool": "check_bg_task", ...}`，与 `_on_service_exit` / `_drain_notices` 降级包装的 `{tool, args, result, reasoning}` 四键契约对齐。**历史澄清**：commit 44ae953 注释宣称的「工具名/参数正确」当时并未成立（只修了 list 包装，键名漂移漏网）；三层防御（0565971）只兜「不崩」，兜不住「键名对不对」。**新排障口诀**：合成记录渲染成 user 通知 = 先查 seed 键名，再查是否 list 包装。同版含 release.py 版本真源迁移补录。见 [v0.26.6 发布记录](releases/v0.26.6.md)、[用户交互 · 键名漂移修复](features/user-interaction.md#键名漂移修复bg_task-合成记录-name--tool2026-09-11用户观察触发)
+
+## 快速事实增补（2026-09 · Android 手机版）
+
+- **Android 手机版三件套（packaging/android/，2026-09）**：手机本地跑完整 Agt Agent——Termux（F-Droid，非应用商店）里 pip 装 agt-agent，LLM 走手机流量调云端 API、工具在手机本地执行、WebUI 手机浏览器访问 `127.0.0.1:8000`，数据目录 `~/.agt` 与电脑版同构（session/记忆/工作流）。**`install.sh`** 一键在线安装五步：Termux 自检（`[ -d /data/data/com.termux ]`）→ `pkg install python rust binutils libffi openssl` → 清华镜像 pip 装 agt-agent（`pydantic-core` 需 rust 本地编译，约 5-15 分钟）→ 初始化 `~/agt-demo` 演示 workspace + `~/start-agt.sh`（起服务 + `termux-open-url` 自动弹浏览器）→ 桌面快捷方式 `~/.shortcuts/Agt演示`（Termux:Widget 一键启动）。**`make-offline-bundle.sh`** 母本机打离线包：全量打包 `site.getsitepackages()[0]`（几百 MB）+ 生成 `restore-offline.sh`——目标机**零编译零下载**（只需装 Termux + python，解包即跑），产出 `~/agt-offline-<版本>-<日期>.tgz` 单文件微信/USB 分发。**已知限制**：无 iOS（沙盒禁常驻服务端）、LSP/MCP/pywebview 不可用、息屏冻结（保持亮屏 / 通知栏 wakelock）。与桌面版互为两条「超 pip CLI」分发通道（桌面 = PyInstaller onedir exe；Android = Termux pip / site-packages tgz），详见 [手机版](features/android-termux.md)
 

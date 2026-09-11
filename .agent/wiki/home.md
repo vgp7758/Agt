@@ -6,11 +6,10 @@
 
 ## 地图
 
-## 地图
-
 | 页面 | 内容 | 什么时候看 |
 |------|------|-----------|
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
+| [guides/scnet](guides/scnet.md) | **SCNet 算力网**：外部 GPU 平台接入（API Key / playwright / E-Shell 三通道）+ **commit 式自定义镜像**（非 Dockerfile）+ 实探资源与价格表（异构加速卡 / L20 / A800 / 免费容器组 K8s） | 接外部算力 / 白嫖 GPU / 查卡时价格 |
 | [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：**系统信息合并（_walk_plan 连续系统段一条 system + 动态注入 user role）** + 分档投影 + 轮边界统一重排（升档+折叠）+ **估算与校准口径闭环（tools schema 补齐）** + **卫生性强制毕业（GRADUATE_FORCE_TURNS=60 防档1 膨胀）** + fc 大刀首折 + 分组衰减 + 折叠实证 + 前缀缓存三层优化 + **DeepSeek v4 缓存实证（变化的 system/tools 变化全断，三铁律）** | 改投影/token 优化 |
 | [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** + **recap 回写迁移 hook_write（工作流显式决定以谁为准）** | 派子 Agent / 改协作机制 |
 | [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **钩子声明面三层（编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载）** + **hook_ctx 上下文袋 + hook_write 工具（回写从引擎特判移到工作流）** + **运行观测（run registry 接入点 + 节点全文预算 + 嵌套子画布轨迹）** + **引擎语义补全（setvar XML 简写 / 循环变量终值 / break 携带值 / yield）** + changed_calls 变更调用收集 + git_commit 节点 + 13 类节点速查 | 写工作流 / 加钩子 / async 钩子 / 快照变更 |

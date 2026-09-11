@@ -16,6 +16,12 @@ import requests
 
 _URL = "https://open.bigmodel.cn/api/coding/paas/v4/web_search"
 _RECENCY = ("noLimit", "oneDay", "oneWeek", "oneMonth", "oneYear")
+# 文件解析支持的类型清单（官方口径 27 种——含图片=可 OCR 提取文字）
+_ZAI_FT = {"pdf", "docx", "doc", "xls", "xlsx", "ppt", "pptx",
+           "png", "jpg", "jpeg", "bmp", "gif", "webp", "heic", "heif", "jp2",
+           "eps", "icns", "im", "pcx", "ppm", "tiff", "xbm",
+           "csv", "txt", "md", "html"}
+_FT_ALIAS = {"tif": "tiff", "markdown": "md", "htm": "html", "jpe": "jpg"}
 
 
 def _zai_token() -> str:
@@ -149,10 +155,13 @@ def zai_web_reader(url: str) -> str:
 
 
 def zai_file_parser(path: str, file_type: str = "") -> str:
-    """用 Z.AI（智谱）同步解析本地文档并返回提取文本（PDF/Word/Excel/PPT/Markdown/TXT 等）。
-    适合处理用户附带的文件：读入文本后可直接据此总结/改写/提取要点。
-    path: 本地文件绝对或相对路径（需存在）；file_type: 文件类型，默认按扩展名自动识别
-    （.pdf→pdf / .docx→docx / .xlsx→xlsx / .pptx→pptx / .md→md / .txt→txt），不确定时显式传。
+    """用 Z.AI（智谱）同步解析本地文档并返回提取文本/Markdown。支持 27 种类型：
+    文档 pdf/docx/doc/xls/xlsx/ppt/pptx/csv/txt/md/html + **图片 png/jpg/jpeg/bmp/gif/
+    webp/heic/heif/jp2/eps/icns/im/pcx/ppm/tiff/xbm——图片转 Markdown：文字全部转写，
+    图示部分以图片引用保留（实测：含文字的封面图能完整提取标题/正文，纯 logo 只回引用）**。
+    适合处理用户附带的文件、截图、扫描件：读入文本后可直接据此总结/改写/提取要点。
+    path: 本地文件绝对或相对路径（需存在）；file_type: 类型，默认按扩展名自动识别
+    （.tif→tiff/.htm→html/.markdown→md 等别名已处理），不确定时显式传。
     需在设置里配过 z.ai / glm-official 的 api_token。"""
     p = str(path or "").strip()
     if not p:
@@ -162,7 +171,11 @@ def zai_file_parser(path: str, file_type: str = "") -> str:
         return f"[错误] 文件不存在：{p}"
     ft = str(file_type or "").strip().lower()
     if not ft:
-        ft = fp.suffix.lstrip(".").lower() or "txt"   # 按扩展名自动识别
+        ext = fp.suffix.lstrip(".").lower()
+        ft = _FT_ALIAS.get(ext, ext)          # 别名归一（tif→tiff 等）
+    if ft not in _ZAI_FT:
+        return (f"[错误] 不支持的文件类型 {ft!r}。支持：{'/'.join(sorted(_ZAI_FT))}"
+                "（若扩展名特殊可显式传 file_type）")
     try:
         raw = fp.read_bytes()
     except OSError as e:
@@ -210,9 +223,11 @@ def agt_register():
          }},
         {"name": "zai_web_reader", "func": zai_web_reader, "hidden": False, "version": 1,
          "params": {"url": "要抓取的网页地址"}},
-        {"name": "zai_file_parser", "func": zai_file_parser, "hidden": False, "version": 1,
+        {"name": "zai_file_parser", "func": zai_file_parser, "hidden": False, "version": 2,
          "params": {
-             "path": "本地文件路径（PDF/Word/Excel/Markdown/代码等）",
-             "file_type": "文件类型（默认按扩展名自动识别：pdf/docx/xlsx/pptx/md/txt）",
+             "path": "本地文件路径（文档/表格/图片均可，图片走 OCR）",
+             "file_type": ("文件类型：pdf|docx|doc|xls|xlsx|ppt|pptx|csv|txt|md|html|"
+                           "png|jpg|jpeg|bmp|gif|webp|heic|heif|jp2|eps|icns|im|pcx|ppm|tiff|xbm"
+                           "（默认按扩展名自动识别）"),
          }},
     ]

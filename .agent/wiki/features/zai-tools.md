@@ -8,7 +8,7 @@
 |---|---|---|
 | `zai_web_search(query, count=10, recency="noLimit", domains="")` | `POST /api/coding/paas/v4/web_search` | 实时联网搜索（新闻/版本号/文档更新/价格），中文与国内技术内容比 DuckDuckGo 更准 |
 | `zai_web_reader(url)` | `POST /api/coding/paas/v4/reader` | 抓取单个 URL 正文（替代 open_url 的通用抓取——对部分站点/JS 渲染页更干净） |
-| `zai_file_parser(path, file_type="")` | `POST /api/paas/v4/files/parser/sync` | 同步解析本地文档（PDF/Word/Excel/PPT/Markdown/TXT）提取文本 |
+| `zai_file_parser(path, file_type="")` | `POST /api/paas/v4/files/parser/sync` | 同步解析本地文档/表格/图片（27 种类型）提取文本/Markdown——图片走 vision 转 Markdown（见下文专章） |
 
 ## 鉴权：复用智谱系 api_token（零配置）
 
@@ -23,8 +23,24 @@ WebUI 设置页配过一次 z.ai 或 glm-official 的 key 即全局复用，无�
 ## 关键实现与踩坑（实测修正，已写进代码注释）
 
 1. **reader 端点名**：文档给的路径不对，实测锁定 `/reader`（**不是 web_reader**）——响应结构 `{"reader_result": {"content" / "title" / "url"}}`；
-2. **parser 端点名**：正确在 `/api/paas/v4`（**不带 coding 前缀**），且 `file_type` **必填**、需与扩展名严格一致（`.md→md` 成功、`markdown` 失败）；
+2. **parser 端点名**：正确在 `/api/paas/v4`（**不带 coding 前缀**）；`file_type` 现为**可选**——默认按扩展名自动识别并经 `_FT_ALIAS` 别名归一（`.tif→tiff`/`.htm→html`/`.markdown→md`/`.jpe→jpg`，大小写归一），不再要求与扩展名严格一致；
 3. **token 是 list 形态**：第一版只取 str，用户机器实际是 list，当场补兼容（`api_token` str/list + `api_tokens` list 三态兜底）。
+
+## zai_file_parser 27 种类型：白名单 + 别名归一 + 图片转 Markdown（2026-09，用户请求）
+
+`_ZAI_FT` 白名单常量（官方口径 27 种，2026-09 用户请求补齐），`zai_file_parser` 只认这张表：
+
+- **文档 11 种**：pdf / docx / doc / xls / xlsx / ppt / pptx / csv / txt / md / html
+- **图片 16 种**：png / jpg / jpeg / bmp / gif / webp / heic / heif / jp2 / eps / icns / im / pcx / ppm / tiff / xbm
+- **别名归一 `_FT_ALIAS`**：tif→tiff、markdown→md、htm→html、jpe→jpg（其余同名直传，大小写统一 lower）
+- **不支持的类型明确报错**：返回 `[错误] 不支持的文件类型 'py'。支持：…`（全清单列出），不再静默失败；特殊扩展名可显式传 `file_type`
+- 注册 `version` 1→2；`file_type` 参数描述把 27 个值全列出（模型可读的枚举提示，同 recency 的写法）
+
+**实测发现：图片解析不是纯 OCR，而是「图片转 Markdown」**（vision 级解析，已按真实口径改写 docstring）：
+
+- 覆盖两张实测图：含文字的架构封面图 → 标题/副标题/底部说明文字全部转写为 markdown，图示部分以 `![](images/xxx-image.png)` 图片引用保留；纯 logo 图（无文字）→ 只有图片引用，不硬编内容
+- 结论：截图/扫描件/带图 PDF 可直接得到结构化 Markdown；对纯 logo 等无文字图不要抱「能读出内容」的期待
+- 与 web_search / web_reader 不同，parser 走 `/api/paas/v4`（不带 coding 前缀），`file_type` 现在不传也 OK（自动识别）
 
 ## 注册形态
 

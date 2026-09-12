@@ -867,11 +867,27 @@ models.json profile 增 `in_history_system`（deepseek/deepseek-chat 已标 true
 默认 false=现状归一化行为；anthropic 形态 system 为顶层参数天然不支持）。Agent.run 轮初
 同步 `session._in_history_system = llm.in_history_system`。
 
+## 施工收官（2026-09-12，commit 1dc8829）：五步落地 + 13 项场景测试全绿
+
+spec s_eb14a8fd 五步施工落地（commit `1dc8829`），13 项场景测试全绿（重放 / append / 归一化 / 撤回 / 跨重启持久化 / 断点置脏等）：
+
+| # | 文件 | 落地 |
+|---|------|------|
+| 1 | src/session.py | `_system_ledger` 四键账本 + `_apply_system_ledger`（装配后处理，**挂 `_append_answer_style` 之后**——比较口径含回答风格提示文本，hint 不随 append 叠加）+ `mark_system_dirty`（幂等置脏） |
+| 2 | src/session.py | save/load：meta.json 顶层键 `system_ledger` 持久化与恢复（绕开 extra_state 的 `_state_provider` 全量替换语义）；load 缺省恢复值 `{"last_text":"","count":0,"dirty":True}`（存量 session 首轮建基线） |
+| 3 | src/session.py | `_plan_fold` 计划真实变化处（`fc != _planned_fold or g != _planned_graduates`）顺带 `mark_system_dirty`——历史段形态真实变化（毕业顺移/折叠重排）= 前缀必断，断点清账零成本；**计划未变的纯追加轮不置** |
+| 4 | src/llm_client.py | profile 能力位 `in_history_system` 读取（默认 False = 现状归一化行为） |
+| 5 | src/agent.py | 轮初同步两点：`_sync_tools_schema_hash`（schema hash 变化=请求级前缀断 → 顺带置 dirty；首次调用只建基线不算断点）+ `session._in_history_system` 透传（切模型后下次 run 生效） |
+
+**版本号跨重启延续**：append 生效文本带版本号（vN），`count` 随账本持久化——重启前 append 到 v2、重启后下一次 append 是 **v3 不重置**（重置会让重启首轮 append 的版本号回跳，引入一次多余的前缀变化）→ 跨重启前缀依然逐字节稳定，与 fold_count 持久化同属「restart 缓存稳定」家族（见 [折叠计划持久化](#折叠计划持久化fold_count--折叠粘性2026-08-31commit-7893bd5用户裁定)）。
+
+**生效方式与首轮预期**：`/restart` 一次；重启后**首次投影**账本为空 → 走 `normalized 首建快照`（建基线），这一次断点是预期内的建账成本，之后进入正常三态循环。
+
 ## 可观测
 
-`/context` 段落表上方显示 `system 段形态：**appended v2**（append-not-replace 账本；
-in_history_system=on）`；形态记入 _proj_stats.system_form（live+旁车都带）。
-byte-stable=全命中复用 / appended vN=追加且前缀保持 / normalized=归一化单条（断点清账）。
+`/context` 段落表上方显示 `system 段形态：**appended v2**（append-not-replace 账本；in_history_system=on）`；形态记入 _proj_stats.system_form（live+旁车都带）。byte-stable=全命中复用 / appended vN=追加且前缀保持 / normalized=归一化单条（断点清账）。
+
+**跳变观察口径（施工收官后）**：改人设/钩子清单 → 形态 byte-stable → appended v1 跳变，`/stats` 折线对应位置**不再出现头部大断点**；毕业/折叠执行轮 → normalized（断点清账，预期内单断）；重启首轮 → normalized 首建快照（账本建基线，预期内）。
 
 ## usage 归一化（llm_call_log.normalize_usage）
 

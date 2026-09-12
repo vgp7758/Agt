@@ -235,13 +235,22 @@ def _parse_hooks(meta: dict) -> dict:
         src = items if isinstance(items, list) else [items]
         for it in src:
             if isinstance(it, dict):
-                # {workflow: x | async} 或 {cmd: ...} 或 {emit: ...}
+                # dict 项两类来源：管理页（/agents#edit）保存的 {workflow: x, async: true}；
+                # agent_prompt 注入默认的 {kind: workflow, value: x, async: true}。
+                # kind 键取值走字符串解析；其余真值兄弟键（async 等）→ 标志位——
+                # 曾静默丢弃 async 键：turn_end 钩子按同步跑，阻塞轮结束+注入结果
+                # （用户实测抓到，2026-09-12）。
+                item = None
                 for k, v in it.items():
                     if k in ("workflow", "cmd", "emit"):
                         item = _hook_item_from_str(f"{k}: {v}")
                         break
-                else:
-                    item = _hook_item_from_str(next(iter(it.values())) if it else "")
+                if item is None:
+                    item = _hook_item_from_str(str(it.get("value") or
+                                                   (next(iter(it.values())) if it else "")))
+                for k, v in it.items():
+                    if k not in ("workflow", "cmd", "emit", "kind", "value") and v:
+                        item[str(k).strip().lower()] = True   # async: true → {"async": True}
             else:
                 item = _hook_item_from_str(it)
             if item.get("value"):

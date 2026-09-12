@@ -7,8 +7,31 @@
 ## 快照机制（src/snapshots.py）
 
 - `SnapshotManager`：工作区旁路 git 仓库（`~/.agt/repos/<repo>/.agt/snapshots/`，`core.worktree` 指向 workspace，info/exclude 掉 `.agt/` `.git/`）——`add -A` → `write-tree` → `commit-tree` 得 sha，挂 `refs/agt/snap/<sha>` 防 GC
-- `snapshot()` 每轮开始打点；`restore(sha)` 还原文件树（read-tree + checkout-index）+ `clean -fd -e .agt` 删快照之后新建的文件
+- `snapshot()` 每轮开始打点；`restore(sha)` 还原文件树（`git restore`，只重写内容有差异的文件）+ `clean -fd -e .agt` 删快照之后新建的文件
 - 回溯**不动用户真仓库 `.git`**——这是撞车问题的根源（见下）
+
+## mtime 全量刷新修复：checkout-index -f → git restore（2026-09，commit a08e967）
+
+用户观察到 `/rewind` 会刷新所有文件的最后修改时间（mtime）。根因在 `restore()` 老实现用的 git plumbing 组合：
+
+```python
+git read-tree <tree>          # 快照树读进 index
+git checkout-index -a -f      # ← 元凶
+```
+
+`checkout-index -a -f` 语义是**无条件强制写出 index 全部文件**：`-f` 不比对工作区文件是否已经一致，内容没变的文件也被整块重写 → mtime 全部刷新。这是 plumbing 命令的已知特性——porcelain 层的 `git checkout` / `git restore` 才有「内容相同则不碰文件」的优化。
+
+修复：改用 porcelain `git restore`：
+
+```python
+git restore --source=<tree> --staged --worktree -- .
+```
+
+它走 `unpack-trees` 快速路径：先 stat + hash 比对，只重写内容真有差异的文件。git < 2.23（无 restore）时 try/except 退回老路径，语义等价（会刷 mtime）。
+
+验证（修复前后对照）：20 个文件改 2 个 → rewind，老实现 20 个 mtime 全刷；新实现 19 个未变文件 mtime 保持，改动 2 个正确还原，快照之后新建的文件仍被 `clean -fd` 删除（行为不变）。
+
+附带收益：rewind 之后 tools 热重载、静态页 mtime 缓存、编辑器断点等一切依赖 mtime 的机制不再被整批误判失效。
 
 ## 撞车：检查点之后有 git 提交（用户提案 2026-09-06）
 

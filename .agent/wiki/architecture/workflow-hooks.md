@@ -249,6 +249,28 @@ with ThreadPoolExecutor() as pool:
 - 同一钩子工作流不要同时被 async 和非 async 调用——行为不确定
 - 后台事件（含 async 钩子完成）的唤醒语义：v0.19.2 起通知**不独立触发轮**（见 [user-interaction · wake 语义](../features/user-interaction.md#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192)）
 
+## 钩子声明 dict 项的 async 键静默丢弃修复（2026-09-12，commit cb7e7d1，用户实测抓到，随 v0.26.7 发布）
+
+**现象（用户实测，2026-09-12）**：/agents#edit 管理页给钩子勾上 async 复选框后，声明 yml 落盘形态是：
+
+```yaml
+turn_end:
+- workflow: recap_gen
+  async: true
+```
+
+运行时却**同步执行**——结果被注入上下文、阻塞轮结束，与 [async 元信息](#async-元信息字段2026-08-新v0182-正式发布) 的语义完全相反。
+
+**根因（src/multiagent.py `_parse_hooks`）**：钩子项的 dict 形态此前只消费 kind 键——`workflow`/`cmd`/`emit`/`value` 取值走 `_hook_item_from_str` 字符串解析，**其余兄弟键被静默丢弃**：`async: true` 从未提升为 item 标志位 → 运行时读不到 async → 按同步跑。字符串形态（`'workflow: x | async'` 尾随标志）一直正常，dict 形态全灭——而管理页恰是钩子挂载的主入口（[声明面三层](#钩子声明面三层编辑器协议下拉--磁盘-meta-保底--yml-挂载2026-08commit-9f8f085--628f5b1)），等于 async 在主路径上失效。
+
+**修复（commit cb7e7d1，随 [v0.26.7](../releases/v0.26.7.md) 发布）**：kind 键解析得到 item 后，再遍历 dict 其余键，**真值兄弟键提升为标志位**（`item[str(k).strip().lower()] = True`，排除 workflow/cmd/emit/kind/value 六个结构键）——`async: true` → `{"async": True}`，与字符串尾随标志同构。dict 项两类来源一并受益：管理页保存的 `{workflow: x, async: true}` 与 agent_prompt 注入默认的 `{kind: workflow, value: x, async: true}`。
+
+**边界**：标志位提升只认真值——`async: false` 显式写 false 与不写同义（falsy 不设标志，与 yml 语义一致）；关 async 走编辑器取消勾选（删键）。
+
+生效：引擎层改动，`/restart` 后生效。验证点：turn_end 钩子勾 async 后发消息应立即得到回答（recap 后台生成、不注入当轮）。
+
+关联：[Agent 管理页](../features/agents-admin.md)（dict 形态产地）、[多 Agent 体系](multi-agent.md)（`_parse_hooks` 所在模块）。
+
 ## 钩子注入 merge 化 + hook_note 落盘（2026-09-01，用户提问触发）
 
 **① 注入 merge 化（src/agent.py）**：

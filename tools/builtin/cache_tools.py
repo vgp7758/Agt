@@ -24,7 +24,12 @@ def _find_projections_dir(session_dir: str = "") -> Path:
             p = p / "projections"
         if p.is_dir():
             return p
-    root = Path.home() / ".agt" / "repos"
+    import os as _os
+    _env = _os.environ.get("AGT_HOME", "").strip()
+    _base = (Path(_env) if _env else
+             (Path(_os.environ["APPDATA"]) / "Agt" if _os.environ.get("AGT_DESKTOP") in ("1", "true") and _os.environ.get("APPDATA")
+              else Path.home() / ".agt"))
+    root = _base / "repos"
     best_mtime, best = 0, None
     for repo in root.iterdir():
         if not repo.is_dir():

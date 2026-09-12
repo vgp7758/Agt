@@ -63,13 +63,20 @@ class SnapshotManager:
             return sha
 
     def restore(self, sha: str) -> None:
-        """把工作区文件树还原到 sha 对应的快照（含删除快照之后新建的文件）。"""
+        """把工作区文件树还原到 sha 对应的快照（含删除快照之后新建的文件）。
+
+        用 git restore（而非 read-tree+checkout-index -f）：只重写内容有差异的文件，
+        内容未变的文件 mtime 保持——rewind 不再刷全仓 mtime（否则 tools 热重载/静态页
+        mtime 缓存全部失效重读）。git < 2.23 无 restore 时退回老路径（会刷 mtime，语义等价）。"""
         with self._lock:
             self.ensure_repo()
             self._run(["cat-file", "-t", sha])  # 校验 sha 存在，不存在会抛错
             tree = self._run(["rev-parse", f"{sha}^{{tree}}"])
-            self._run(["read-tree", tree])
-            self._run(["checkout-index", "-a", "-f"])
+            try:
+                self._run(["restore", f"--source={tree}", "--staged", "--worktree", "--", "."])
+            except RuntimeError:
+                self._run(["read-tree", tree])
+                self._run(["checkout-index", "-a", "-f"])
             # 删除快照之后新建的文件（快照仓库视角下的未跟踪文件；.agt/.git 已在 exclude）
             self._run(["clean", "-fd", "-e", ".agt"])
 

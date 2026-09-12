@@ -52,6 +52,24 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 
 - 容器服务文案：「全新升级为基于 K8S 调度的容器组」（武汉 k8s 集群1）——配合 k8s 完成任务的设想被证实。
 
+## 免费容器组巡检定时任务（scnet_free_card_watch，2026-09）
+
+免费 K8s 容器组（武汉 138 组，¥0）是本平台唯一的免费算力入口，但长期满载。已挂**定时后台任务** `scnet_free_card_watch`（[add_schedule](background-scheduler.md) 机制，`src/background.py` 调度，到点弹后台通知轮唤醒）——到点自动巡检，抢到空位即自助创建。
+
+巡检流程（playwright 复用扫码登录态，全自动）：
+
+1. 打开创建容器实例页：`https://www.scnet.cn/ui/console/index.html#/container-service/container-group/add`
+2. 等「创建容器实例」出现后，读「单机可用卡数」：`innerText` 正则 `单机\s*(\d+)\s*\/\s*(\d+)`（当前值 `0/2`）
+
+分支：
+
+- **可用 > 0（抢到）**：按既定配置直接创建——卡数=1、镜像 `PyTorch/2.9.0/py3.11-Ubuntu22.04/dtk26.04`、协议已勾、其余默认；创建成功后跑 `python C:\Users\vgp77\.agt\mcp\scnet\scnet_mcp.py --selftest` 验证区域 token 解锁；一切就绪后 `cancel_schedule` 自停本任务。
+- **仍为 0**：一句话汇报结果，不做任何多余操作，任务留到下轮。
+
+**当前状态（2026-09 巡检）**：武汉 138 组仍 **0/2 可用（满载）**，任务保持挂机等空位。
+
+> `scnet_mcp.py`（`~/.agt/mcp/scnet/`）：SCNet 配套独立脚本（非 workspace 内，用户侧），`--selftest` 用于创建成功后验证「区域 token 解锁」是否生效（首次开卡的基础条件）。
+
 ## 侦察留痕（playwright 产物）
 
 本轮侦察由 playwright MCP 完成，产物落在 workspace 根：
@@ -69,7 +87,7 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 
 - **实名认证【未认证】**：左侧栏显示未认证，大概率影响购买卡时；需先到 `个人中心 > 实名认证`。
 - **50 卡时免费额度**：费用总览余额区为 `****`，无单独券显示；可能在商城商品页领取或下单时自动抵扣，待实名+创建 key 后验证。
-- 下一步候选：给 API Key 加 provider，或开免费容器组试 K8s。
+- 下一步候选：给 API Key 加 provider（免费容器组「试 K8s」已挂自动化巡检，见上「免费容器组巡检定时任务」）。
 
 ## 相关页面
 

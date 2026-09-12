@@ -809,6 +809,70 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 2. **轮间层**：分档冻结渲染（见上）+ **轮边界统一重排**（升档+折叠统一计划，见 [轮边界统一计划](#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f)）；折叠为预期一次性 miss，见 [t206 实证](#折叠事件与缓存命中t206-实证2026-08)；正常轮边界平滑路径见 [t224 实证](#正常轮边界路径t224-实证2026-08)；超长轮保命阀例外见 [t228 实证](#轮内应急折叠保命阀t228-实证2026-08)。⚠️ 判阈依赖 `_estimate_tokens` 估算，口径已闭环（含 tools schema，见 [估算与校准口径闭环](#估算与校准口径闭环tools-schema-补齐2026-08)）
 3. **轮内层**：分组衰减 + `_build` 以 `_planned_fold`/`_planned_graduates` 为起点**零调整**（顶满窗口时保命阀应急折叠例外，见 [轮边界统一计划](#升档graduate-与折叠轮边界统一计划2026-08commit-1e9af8f) / [t228 实证](#轮内应急折叠保命阀t228-实证2026-08)）
 
+## system 段 append-not-replace（2026-09-12）
+
+# —— system 段 append-not-replace：缓存连续时追加、毕业断点处归一化（2026-09-12，spec s_eb14a8fd，用户提案+裁定） ——
+
+## 动机
+
+SYSTEM 段每次投影全量渲染（replace 语义）：人设/钩子清单/团队看板变化 → 从序列头断缓存 →
+长会话全量重算。DSH（deepseek-harness）的 SystemPromptProjection 给出教科书解法，本页
+策略是其在 Agt 架构的精确映射（用户裁定：**归一化挂在毕业时**——毕业/折叠历史全量重排、
+缓存必断，此时收敛堆积版本零成本 = DSH「断点清账」）。
+
+## 实测背书（2026-09-12，api.deepseek.com · deepseek-flash，固定前缀 ≈4055 tok）
+
+| 请求 | hit | 命中率 | 结论 |
+|---|---|---|---|
+| A2 基线重发 | 3840 | 94.7% | 通道健康 |
+| C1 尾部 append user(同文本) | 3840 | 94.3% | append 本身不断 |
+| **B1 尾部 append system(v2)** | **3840** | **94.3%** | **前缀完整命中，仅 miss 新增 233 tok** |
+| B2 B1 同 payload 重发 | 3840 | 94.3% | 含中部 system 的 payload 稳定可缓存 |
+| D1 头部 replace system(v2) | 0 | 0% | 全断（对照组：实验对 system 变化灵敏） |
+
+与既有记录的关系：574 轮「v4 对**变化的** system 规范化」是同位置改内容触发；472 轮
+「中插 system hit=0」是前缀断在插入点（越靠前 miss 越大）——两者都不是"尾部追加"，
+本实验把**位置**与**角色**两个变量拆开做了对照。
+
+## 账本（session._system_ledger，meta.json 顶层键持久化——绕开 extra_state 全量替换）
+
+- `last_text`：头部快照字节（归一化时刷新；存**含回答风格提示的最终文本**——比较点在
+  `_append_answer_style` 拼接之后，hint 不随 append 重复叠加）
+- `pending_text`：已 append 生效的最新版本（append 时记录。**没有它会死循环**：下次同文本
+  渲染再次视为"变化"重复 append——首版实现实测踩到）
+- `count`：堆积数（>4 防御性归一化）；`dirty`：断点标记
+
+## 决策表（`_apply_system_ledger`，装配后处理）
+
+| 条件 | 动作 | 缓存效果 |
+|---|---|---|
+| cur == 上次投影输出形态的版本 | 重放/原样（byte-stable） | 全命中 |
+| 变化 && llm.in_history_system && !dirty && count<4 | 头部=last_text 快照 + **当前轮 user 之前**插一条 system:cur | 历史前缀全命中 |
+| dirty（毕业/折叠执行 / tools hash 变 / 堆积超限）或 !in_history_system | 归一化单条=cur，last_text 刷新、清账 | 断点处免费清账 |
+| cur 回归 last_text 且有 pending | 撤回 append（尾部少一条，前缀到历史段稳定） | 小断 |
+
+插入锚点=**最后一条 user 之前**（B1 实验形态 [前缀][sys_v2][问题]；每步重复应用同一规则 →
+appended system 跨步位置稳定、前缀不漂移）。
+
+## 三断点置 dirty（mark_system_dirty）
+
+1. `_plan_fold` 计划真实变化处（升档/折叠执行——轮边界/回溯/轮内应急三路径共用此点）
+2. tools schema hash 变化（`Agent._sync_tools_schema_hash`：schema 在请求级、是 provider
+   前缀的一部分，变化必断——首次调用只建基线不算断点）
+3. 堆积 >4 条防御
+
+## provider 能力位
+
+models.json profile 增 `in_history_system`（deepseek/deepseek-chat 已标 true，实测背书；
+默认 false=现状归一化行为；anthropic 形态 system 为顶层参数天然不支持）。Agent.run 轮初
+同步 `session._in_history_system = llm.in_history_system`。
+
+## 可观测
+
+`/context` 段落表上方显示 `system 段形态：**appended v2**（append-not-replace 账本；
+in_history_system=on）`；形态记入 _proj_stats.system_form（live+旁车都带）。
+byte-stable=全命中复用 / appended vN=追加且前缀保持 / normalized=归一化单条（断点清账）。
+
 ## usage 归一化（llm_call_log.normalize_usage）
 
 各家缓存字段差异：GLM=`prompt_tokens_details.cached_tokens`，DeepSeek=`prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`。写入 jsonl 前归一化为标准格式；读取侧 `cached_tokens_of()` 三级兜底（标准→DS hit→miss 推算），历史记录免迁移。

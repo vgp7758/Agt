@@ -1825,6 +1825,8 @@ class Agent:
             except Exception:
                 tool_schema_chars = 0
             self.session._tools_schema_chars = tool_schema_chars   # 估算分子同源（start_turn 的 _plan_fold 用它）
+            self._sync_tools_schema_hash(tool_schemas)   # schema hash 变化=请求级前缀断 → system 账本顺带归一化
+            self.session._in_history_system = bool(getattr(self.llm, "in_history_system", False))  # append 能力位（切模型后下次 run 同步）
             continue_loop = False
             try:
                     for step_num in range(1, self.max_steps + 1):
@@ -2145,6 +2147,7 @@ class Agent:
                         except Exception:
                             tool_schema_chars = 0
                         self.session._tools_schema_chars = tool_schema_chars
+                        self._sync_tools_schema_hash(tool_schemas)   # 同轮初：hash 变化置 system 账本 dirty
 
                     if continue_loop:
                         continue
@@ -2206,6 +2209,24 @@ class Agent:
         self.session.finish_turn(answer)
         self._emit({"type": "wrap_answer", "text": answer})
         return answer
+
+    def _sync_tools_schema_hash(self, tool_schemas) -> None:
+        """tools schema hash 检测（2026-09-12·append-not-replace 配套）：schema 在请求级
+        （provider 前缀的一部分），变化必断缓存——此时 system 账本顺带归一化（断点清账）。
+        首次调用只记录基线不算断点（启动时的第一次 hash 建立无历史可断）。"""
+        import hashlib as _hl
+        try:
+            h = _hl.md5(json.dumps(tool_schemas, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:10]
+        except Exception:
+            return
+        prev = getattr(self, "_last_tools_schema_hash", "")
+        if h != prev:
+            if prev:   # 非首次 → 真断点
+                try:
+                    self.session.mark_system_dirty(f"tools schema 变化（{prev}→{h}）")
+                except Exception:
+                    pass
+            self._last_tools_schema_hash = h
 
     def _refresh_tools_if_written(self, step) -> bool:
         """若本步用 write_file/edit 写了 .agent/workflows/ 下的文件（工具脚本 *.py 或工作流 *.json），

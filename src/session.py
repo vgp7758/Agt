@@ -586,6 +586,18 @@ class Session:
                                               #   折叠计划"以为达标"实超窗；本次排查实证：目标
                                               #   400K×0.75 正确，但估算漏 schema 压到 297K 就停、
                                               #   实际发出去 412K）
+        # —— system 段 append-not-replace 账本（2026-09-12·用户提案，DSH 断点清账架构；spec s_eb14a8fd）——
+        # 实测背书（api.deepseek.com·deepseek-flash）：尾部 append 一条 system 前缀 hit 94.3% 完整命中；
+        # 头部 replace 则 0%。决策表（_apply_system_ledger）：
+        #   新渲染 == last_text            → 原样（byte-stable，全命中）
+        #   变化 && in_history_system && !dirty → 头部回放 last_text 快照 + 当前轮 user 前插一条
+        #                                       system:新文本（历史前缀全命中；count++ 防无限堆积）
+        #   dirty / 不支持 / 堆积>4        → 归一化单条（断点处免费清账：毕业/折叠/tools hash 变化
+        #                                       本就断缓存，顺手收敛版本）
+        # last_text 存含回答风格提示的最终文本（比较点在 _append_answer_style 拼接之后）。
+        self._system_ledger: dict = {"last_text": "", "count": 0, "dirty": True}
+        self._in_history_system: bool = False  # provider 能力位（agent 启动/切模型时设置；False=现状归一化）
+        self._ledger_form: str = ""            # 最近一次投影的 system 段形态（byte-stable/appended vN/normalized——/context 观测用）
         self._load_calibration()              # 回读 ~/.agt/token_usage.jsonl 末尾同模型记录作初值（跨 session 校准）
         # —— 投影分段统计（真实装配时顺手记录，/context 直接读——见 messages_for_llm 尾部）——
         # None=本进程还没跑过投影（projection_breakdown 回退现算）；否则 {"sections":[...], ts, turn, step, ...}
@@ -1334,6 +1346,7 @@ class Session:
             # 追加 Markdown 回答规范与资产引用语法告知——Agent 不知道 webui 支持 [!名](路径) 渲染。
             # 幂等：已含标记则跳过（防重复装配叠加）；恒定文本不引入额外缓存扰动。
             self._append_answer_style(msgs)
+            self._apply_system_ledger(msgs)   # 三态后处理（必须在 answer_style 之后——比较口径含提示文本）
             if self._tools_schema_chars:
                 sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,
                                  "chars": self._tools_schema_chars,
@@ -1346,6 +1359,7 @@ class Session:
                                 "ts": time.time(),
                                 "turn": len(self.turns),
                                 "step": len(self._current.steps) if self._current else 0,
+                                "system_form": self._ledger_form or "-",  # system 段形态（byte-stable/appended vN/normalized——append-not-replace 观测）
                                 "source": "live"}
             self._save_proj_stats_sidecar(self._proj_stats)   # 旁车持久化（含档位边界快照——跨重启可读）
         except Exception as e:
@@ -1384,6 +1398,81 @@ class Session:
                 m2["content"] = c + self._ANSWER_STYLE_HINT
                 msgs[i] = m2
                 return
+
+    def mark_system_dirty(self, reason: str) -> None:
+        """标记 system 账本需要归一化（断点事件：毕业/折叠执行、tools schema hash 变化）。
+        这些事件本身就会断 provider 前缀缓存，归一化在断点处执行零额外成本——DSH「断点清账」。
+        幂等：已 dirty 不重复记日志。"""
+        L = self._system_ledger
+        if not L.get("dirty"):
+            L["dirty"] = True
+            _LOG.info("system账本置dirty（下次投影归一化）：%s", reason)
+
+    def _apply_system_ledger(self, msgs: list) -> None:
+        """system 段 append-not-replace 三态后处理（spec s_eb14a8fd；2026-09-12 用户提案）。
+
+        实测背书（api.deepseek.com·deepseek-flash）：尾部 append 一条 system 前缀 hit 94.3%，replace 则 0%。
+        账本四键：last_text=头部快照字节（归一化时刷新）；pending_text=已 append 生效的最新版本
+        （append 时记录——没有它，下次同文本渲染会再次视为"变化"重复 append，堆积死循环）；
+        count=堆积数；dirty=断点标记。byte-stable 判定基准=与【上次投影输出形态】比对（非仅 last_text）：
+        - pend 存在（上次形态=[last][hist][pend][user…]）：cur==pend → 重放（byte-stable）；
+          cur==last → 撤回 append（[last][hist][user…]，前缀到 hist 稳定）；否则再追加 count++
+        - pend 空：cur==last → 单条 byte-stable；变化且支持且 !dirty 且 count<4 → append；
+          否则归一化（单条=cur，last 刷新、清账）
+        插入锚点=最后一条 user 之前（B1 实验形态 [前缀][sys_v2][问题]；每步重复应用同一规则，
+        appended system 跨步位置稳定，前缀不漂移）。"""
+        self._ledger_form = ""
+        if not msgs or msgs[0].get("role") != "system":
+            return                                  # 无头部 system（异常形态）——不动账本按现状
+        cur = str(msgs[0].get("content") or "")
+        L = self._system_ledger
+        last = str(L.get("last_text") or "")
+        pend = str(L.get("pending_text") or "")
+
+        def _insert_before_user(text: str) -> None:
+            ins = len(msgs) - 1
+            while ins > 0 and msgs[ins].get("role") != "user":
+                ins -= 1                            # 从尾部找最后一条 user（当前轮提问）
+            if ins <= 0:
+                ins = len(msgs)                     # 无 user（纯 steps 轮）→ 退到末尾
+            msgs.insert(ins, {"role": "system", "content": text})
+
+        def _append_version() -> None:
+            msgs[0] = {"role": "system", "content": last}   # 头部=持久化快照字节（渲染抖动不进前缀）
+            _insert_before_user(cur)
+            L["pending_text"] = cur
+            L["count"] = int(L.get("count", 0)) + 1
+            self._ledger_form = f"appended v{L['count']}"
+            _LOG.info("system段 append-not-replace：追加 v%d（前缀保持，%d 字）", L["count"], len(cur))
+
+        if not last:
+            L.update(last_text=cur, pending_text="", count=0, dirty=False)
+            self._ledger_form = "normalized"
+            _LOG.info("system段 首建快照（%d 字）", len(cur))
+            return
+        if pend:
+            if cur == pend:                         # 与上次 append 输出形态一致 → 重放（byte-stable）
+                msgs[0] = {"role": "system", "content": last}
+                _insert_before_user(pend)
+                self._ledger_form = f"appended v{L.get('count', 1)}"
+                return
+            if cur == last:                         # 回归快照版本 → 撤回 append（尾部少一条，前缀到 hist 稳定）
+                L["pending_text"] = ""
+                self._ledger_form = "append撤回"
+                _LOG.info("system段 回归快照版本：撤回 append（前缀至历史段稳定）")
+                return
+        elif cur == last:
+            self._ledger_form = "byte-stable"
+            return
+        # 变化版本：追加（头部快照不动）或归一化
+        if (self._in_history_system and not L.get("dirty")
+                and int(L.get("count", 0)) < 4):
+            _append_version()
+            return
+        L.update(last_text=cur, pending_text="", count=0, dirty=False)
+        self._ledger_form = "normalized"
+        _LOG.info("system段 归一化（dirty=%s count=%s in_history=%s，%d 字）",
+                  bool(L.get("dirty")), L.get("count"), self._in_history_system, len(cur))
 
     def _walk_plan(self, msgs: list, sections: list) -> None:
         """清单走查（messages_for_llm 装配主体 / projection_breakdown 现算兜底共用，填 msgs+sections）。
@@ -1815,6 +1904,9 @@ class Session:
             _LOG.info("轮边界计划：升档 %d 档 + 折叠 %d 轮（目标 ≤%.0f%%×%d）",
                       g, fc, 100 * (self.fold_target_ratio or FOLD_TARGET_RATIO),
                       self.max_effective_context_window)
+            # 历史段形态真实变化（毕业顺移/折叠重排）= 前缀缓存必断——system 账本顺带归一化（DSH 断点清账，
+            # 用户裁定 2026-09-12：append 以后的归一化挂在这一时刻）。计划未变（纯追加轮）不置。
+            self.mark_system_dirty(f"毕业/折叠执行（升{g}档+折{fc}轮）")
         self._planned_fold = fc
         self._planned_graduates = g
 
@@ -2656,6 +2748,7 @@ class Session:
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
                 "tier_boundaries": self._tier_boundaries,  # 分档毕业边界（持久化；_frozen_renders 内存重算）
                 "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
+                "system_ledger": self._system_ledger,       # system append-not-replace 账本（last_text 快照字节——重启后前缀仍稳定）
                 "saved_at": int(time.time()),
             }
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件。
@@ -2718,6 +2811,7 @@ class Session:
         s.created_at = data.get("created_at") or _ts_from_dirname(path.parent) or time.time()
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
+        s._system_ledger = data.get("system_ledger") or {"last_text": "", "count": 0, "dirty": True}
         s._tier_boundaries = data.get("tier_boundaries", []) or []
         # 折叠计划恢复（缓存稳定，用户裁定 2026-08-31）：重启后沿用旧折叠形态——历史段头部
         # （fc 摘要）与重启前逐字节一致，前缀缓存不断。曾因 fc 不持久化 + _plan_fold 未顶窗清零，

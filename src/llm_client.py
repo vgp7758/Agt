@@ -373,6 +373,11 @@ class LLMClient:
         # 按模型温度（profile.temperature）：不同 provider 对温度要求不同（如推荐 0.6 vs 1.0）。
         # None=未配置——回退实例默认（运行时全局 temperature）。优先级：请求 overrides > per-profile > 全局。
         self.profile_temperature = profile.get("temperature")
+        # in-history system 能力位（2026-09-12·append-not-replace，spec s_eb14a8fd）：该 provider 端点
+        # 支持读 messages 序列后部的 system 消息作为有效 prompt（实测 api.deepseek.com 支持：尾部
+        # append 一条 system 前缀 hit 94.3% 完整命中）。True 时 SYSTEM 段变化走 append（前缀保持），
+        # False（默认）走归一化（现状）。anthropic 形态（system 为顶层参数）天然不支持。
+        self.in_history_system = bool(profile.get("in_history_system"))
         self._client = self._openai_client()
 
     def _ensure_config(self):

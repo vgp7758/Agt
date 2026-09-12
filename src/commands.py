@@ -1606,6 +1606,11 @@ def _cmd_context(ctx: CommandContext, args):
     # 段落表（markdown 表格——WebUI 自动渲染成对齐表格；CLI 裸文本也可读。
     # 之前用 {name:<28} 空格对齐——中文段名宽度不稳定导致列参差不齐）
     print("\n段落构成（估算 tok / 占比）：\n")
+    # system 段形态标注（append-not-replace 可观测，2026-09-12）：byte-stable=全命中复用；
+    # appended vN=新版本追加前缀保持；normalized=归一化单条（断点清账）。live/sidecar 都带。
+    _form = str(bd.get("system_form") or "").strip()
+    if _form and _form != "-":
+        print(f"system 段形态：**{_form}**（append-not-replace 账本；in_history_system={'on' if getattr(s, '_in_history_system', False) else 'off'}）")
     print("| 段落 | 估算 tok | 占比 | 图表 |")
     print("|---|---:|---:|---|")
     for sec in bd["sections"]:

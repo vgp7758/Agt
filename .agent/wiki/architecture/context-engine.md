@@ -838,8 +838,10 @@ SYSTEM 段每次投影全量渲染（replace 语义）：人设/钩子清单/团
 
 - `last_text`：头部快照字节（归一化时刷新；存**含回答风格提示的最终文本**——比较点在
   `_append_answer_style` 拼接之后，hint 不随 append 重复叠加）
-- `pending_text`：已 append 生效的最新版本（append 时记录。**没有它会死循环**：下次同文本
-  渲染再次视为"变化"重复 append——首版实现实测踩到）
+- `appends`：**按轮锚定的追加版本列表** `[{turn, text}]`（2026-09-12 · 二形态 A 修正起，取代旧
+  单值 `pending_text`——append 时记录。**没有它会死循环**：下次同文本渲染再次视为"变化"
+  重复 append，首版实现实测踩到）。多版本共存于历史各自原位（≤4 条，DSH system/message
+  surface 节点同款）；同轮内版本再变原地替换末条，不堆积
 - `count`：堆积数（>4 防御性归一化）；`dirty`：断点标记
 
 ## 决策表（`_apply_system_ledger`，装配后处理）
@@ -847,12 +849,38 @@ SYSTEM 段每次投影全量渲染（replace 语义）：人设/钩子清单/团
 | 条件 | 动作 | 缓存效果 |
 |---|---|---|
 | cur == 上次投影输出形态的版本 | 重放/原样（byte-stable） | 全命中 |
-| 变化 && llm.in_history_system && !dirty && count<4 | 头部=last_text 快照 + **当前轮 user 之前**插一条 system:cur | 历史前缀全命中 |
-| dirty（毕业/折叠执行 / tools hash 变 / 堆积超限）或 !in_history_system | 归一化单条=cur，last_text 刷新、清账 | 断点处免费清账 |
-| cur 回归 last_text 且有 pending | 撤回 append（尾部少一条，前缀到历史段稳定） | 小断 |
+| 变化 && llm.in_history_system && !dirty && 堆积<4 | 头部=last_text 快照 + append 新版本**按轮锚定**（形态 A）：账本记 `{"turn": N, "text"}`——轮 N 进行中插当前轮 user 前；轮 N 归档后由 `_render_tiered_history` 固定插在**轮 N 渲染块之前** | 历史前缀全命中 |
+| dirty（毕业/折叠执行 / tools hash 变 / 堆积超限）或 !in_history_system | 归一化单条=cur，last_text 刷新、清账；**顺带摘除历史渲染已插入的本批废弃 append** | 断点处免费清账 |
+| cur 回归 last_text 且有堆积 append | 撤回 append（尾部少一条，前缀到历史段稳定） | 小断 |
 
-插入锚点=**最后一条 user 之前**（B1 实验形态 [前缀][sys_v2][问题]；每步重复应用同一规则 →
-appended system 跨步位置稳定、前缀不漂移）。
+插入锚点（形态 A·按轮锚定，2026-09-12 · 二修正，commit be55762）：append 在轮 N 发生 →
+锚定轮 N，轮归档后位置永不漂移、多版本历史原位共存——首版「浮动插入（最后一条 user 之前）」
+每开新轮漂一格、公共前缀每轮断一次，用户两图对照抓出后废弃（见[下节](#形态修正浮动插入--按轮锚定形态-a2026-09-12--二commit-be55762用户两图对照裁定)）。
+
+## 形态修正：浮动插入 → 按轮锚定（形态 A，2026-09-12 · 二，commit be55762，用户两图对照裁定）
+
+用户拿两张投影图对照发问「和 DSH 是一样的逻辑吗？」——图 A = DSH 形态（v2 固化在 turn3
+之后、v3 出现时新添一条在 turn5 之后，多版本共存），图 B = 全量收拢形态。对照暴露首版实现
+的真实缺陷：
+
+**首版 = 形态 B 变体（浮动插入），有跨轮漂移**：append 的 system 恒插在「当前轮 user 之前」
+——轮内步进稳定，但**每开一个新轮它跟着新 user 后移一格**（sys_v2 从 t2 后漂到 t3 后……），
+公共前缀每轮断一次。append 的前缀收益只吃一轮，第二轮就把断点转移到历史中部，比 replace
+还不如（replace 至少断在头部、历史重算一次后稳定）。
+
+**修正 = 形态 A（按轮锚定，与 DSH 同构：append 即固化）**：
+
+- 账本 `appends` 记 `{"turn": N, "text": ...}`——**append 发生轮即锚点**
+- 轮 N 进行中：插当前轮 user 前（不变）
+- 轮 N 归档后：`_render_tiered_history` 建 `turn → text` 插入表，固定插在**轮 N 渲染块之前**
+  （`_turn_block` 前置，轮号 1-based）——位置永不漂移，前缀跨轮稳定
+- 多版本历史原位共存（v2@t2、v3@t5，正是图 A）；同轮内版本再变（s0=v3、s3=v3b）**原地替换
+  末条**，不堆积
+- 归一化清账时**同步摘除历史渲染已插入的废弃条目**——时序坑：渲染先于清账（`_render_tiered_history`
+  先读账本插入了），不清则废弃版本残留一条到下次投影才消失
+
+验证 7 项全绿（v2 锚定 t2 块前 / v2·v3 历史共存 / t3→t4 前缀含 v2 / 重启后 v3 仍在原锚位 /
+同轮原地替换 / 撤回回归 / 归一化清账+残留摘除）。`/restart` 生效。
 
 ## 三断点置 dirty（mark_system_dirty）
 

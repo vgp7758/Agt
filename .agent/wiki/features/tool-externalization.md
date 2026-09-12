@@ -7,9 +7,29 @@
 | 位置 | 角色 |
 |------|------|
 | `tools/builtin/*.py` | 工具源文件（开发处，现 15 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/cache/**explore**/**zai**/**agentid**） |
-| `src/assets/tools_builtin/*.py` | 随包副本（pip 安装即有，与 nodes_builtin 同思路；现 12 个——kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；team_tools.py 2026-09-02 已写源文件、随包副本仍待同步；cache_tools.py 2026-09-02 新建**随包副本已同步**；explore_tools.py 2026-09-09 新建**随包副本已同步**；**zai_tools.py 2026-09 用户个人工具，不随包播种**；**agentid_tools.py 2026-09-11 用户个人工具，不随包播种**） |
+| `src/assets/tools_builtin/*.py` | 随包副本 = **发布真源**（pip 安装即有，与 nodes_builtin 同思路；现 12 个、与 workspace 层 12 文件重合——2026-09-12 md5 对账全一致（commit 971535a），角色划分与漂移修复见[下节](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版；**team_tools / zai_tools / agentid_tools 三件不随包**（本地私有工具层，2026-09-12 对账定档） |
 
-约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**。
+约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**——同名时 workspace 层覆盖 assets 层（本 repo 实际生效的是 workspace 份），两层角色与一致性对账见下节。
+
+## 双层一致性对账：workspace 层 vs assets 层（2026-09-12，commit 971535a，用户提问触发）
+
+用户提问（2026-09-12）：`tools/builtin` 里和 `src/assets/tools_builtin` 重复的文件是不是多余的——没有它们也会读 assets？**功能上对，删不得**。两层角色不同：
+
+| 层 | 角色 | 谁读它 |
+|---|---|---|
+| `tools/builtin/`（workspace 层） | 开发地 + **本 repo 实际生效版**（同名覆盖 assets 层） | 本 repo |
+| `src/assets/tools_builtin/`（assets 层） | **发布真源**——wheel 只打包它 | pip 正装的所有机器 |
+
+重合 12 文件里 assets 版在本 repo 是死代码，但**双份必须保持一致**——否则「本 repo 测的 ≠ 发布出去的」。md5 对账（2026-09-12）发现 **2/12 漂移（都是 workspace 层落后于 assets）**，已用 assets 版覆盖修复（commit `971535a`，现 12 文件全一致）：
+
+| 文件 | 漂移内容 | 后果 |
+|---|---|---|
+| `list_tools.py` | 本 repo 缺 `get_list_items` 批量取元素（assets 60 行版 vs workspace 42 行精简版） | 本 repo 比发布版**少一个工具**（反向漂移），见 [get-list-item](get-list-item.md) |
+| `cache_tools.py` | 本 repo 缺 `AGT_HOME`/`AGT_DESKTOP` 数据根适配（桌面版那轮 6c2efce 只改了 assets 份） | 桌面版环境下 cache_breakpoint 找错存档目录，见 [cache-tools](cache-tools.md) |
+
+**3 个有意不随包**（只存在于 workspace 层，「本地私有工具」层的正确用法，别动）：`agentid_tools.py`（本机身份）/ `team_tools.py`（VideoGameTeam 专用）/ `zai_tools.py`（用户裁定不播种）。
+
+**防再犯两条路**：①本 repo 是 editable 安装——只写 assets 那份**同样即时生效**（workspace 层不放同名文件就不会被覆盖，可考虑以后单源维护）；②发布流程加一步 12 文件 md5 一致性检查，不一致即拦。
 
 ## ctx 通用上下文注入（2026-08，commit fd06c48）
 

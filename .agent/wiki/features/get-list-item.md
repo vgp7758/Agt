@@ -42,6 +42,12 @@ get_list_item([1, 2, 3], 5)   # → "[越界] index=5，列表长度 3"
 - 注册于 `LIGHT_TOOLS`，`outputs=[{"name": "raw", "type": "any", "description": "列表元素（类型随元素；越界返回错误文本）"}]`
 - **any 类型不锁 schema**——编辑器可改 object 逐字段连线组装结构透传（见 [workflow-hooks pass_through 工具](../architecture/workflow-hooks.md#pass_through-工具light_toolsinputany-schema-空-编辑器-any-类型不锁可改-object-逐字段连线组装结构透传)）
 
+## 姊妹工具 get_list_items（批量版；2026-09-12 双层对账补齐，commit 971535a）
+
+外置件 `tools/builtin/list_tools.py` 里还有批量版 **`get_list_items`**（一次取多个元素）。2026-09-12 双层 md5 对账（workspace 层 vs `src/assets/tools_builtin` 随包层）时发现本 repo 的 workspace 份（42 行精简版）落后于随包份（60 行，含批量版）——即**发布版比开发版多一个工具**（反向漂移），已用随包版覆盖补齐（commit 971535a，见 [工具外置 · 双层一致性对账](tool-externalization.md#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。
+
+工作流里批量消费上游 list 输出用 `get_list_items`，单元素场景仍用本页的 `get_list_item`。
+
 ## 与 selector 运算符的关系
 
 | 方式 | 用途 |

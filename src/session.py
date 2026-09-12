@@ -589,13 +589,15 @@ class Session:
         # —— system 段 append-not-replace 账本（2026-09-12·用户提案，DSH 断点清账架构；spec s_eb14a8fd）——
         # 实测背书（api.deepseek.com·deepseek-flash）：尾部 append 一条 system 前缀 hit 94.3% 完整命中；
         # 头部 replace 则 0%。决策表（_apply_system_ledger）：
-        #   新渲染 == last_text            → 原样（byte-stable，全命中）
-        #   变化 && in_history_system && !dirty → 头部回放 last_text 快照 + 当前轮 user 前插一条
-        #                                       system:新文本（历史前缀全命中；count++ 防无限堆积）
-        #   dirty / 不支持 / 堆积>4        → 归一化单条（断点处免费清账：毕业/折叠/tools hash 变化
-        #                                       本就断缓存，顺手收敛版本）
+        #   新渲染 == 上次投影形态      → 原样（byte-stable，全命中）
+        #   变化 && in_history_system && !dirty → append 新版本【按轮锚定】（v2·形态A）：轮 N 进行中插
+        #       当前轮 user 前；轮 N 归档后由 _render_tiered_history 固定插在轮 N 块前——位置永不漂移，
+        #       前缀跨轮稳定（首版"浮动插入"每轮漂移断缓存，用户两图对照抓出后修正）
+        #   dirty / 不支持 / 堆积>4    → 归一化单条（断点处免费清账：毕业/折叠/tools hash 变化
+        #       本就断缓存，顺手收敛版本）
+        # appends: [{"turn": N(1-based), "text": ...}]——多版本共存于历史原位（DSH system/message 节点同款）。
         # last_text 存含回答风格提示的最终文本（比较点在 _append_answer_style 拼接之后）。
-        self._system_ledger: dict = {"last_text": "", "count": 0, "dirty": True}
+        self._system_ledger: dict = {"last_text": "", "appends": [], "dirty": True}
         self._in_history_system: bool = False  # provider 能力位（agent 启动/切模型时设置；False=现状归一化）
         self._ledger_form: str = ""            # 最近一次投影的 system 段形态（byte-stable/appended vN/normalized——/context 观测用）
         self._load_calibration()              # 回读 ~/.agt/token_usage.jsonl 末尾同模型记录作初值（跨 session 校准）
@@ -1409,25 +1411,29 @@ class Session:
             _LOG.info("system账本置dirty（下次投影归一化）：%s", reason)
 
     def _apply_system_ledger(self, msgs: list) -> None:
-        """system 段 append-not-replace 三态后处理（spec s_eb14a8fd；2026-09-12 用户提案）。
+        """system 段 append-not-replace 后处理（spec s_eb14a8fd；2026-09-12 用户提案；形态 A 修正）。
 
         实测背书（api.deepseek.com·deepseek-flash）：尾部 append 一条 system 前缀 hit 94.3%，replace 则 0%。
-        账本四键：last_text=头部快照字节（归一化时刷新）；pending_text=已 append 生效的最新版本
-        （append 时记录——没有它，下次同文本渲染会再次视为"变化"重复 append，堆积死循环）；
-        count=堆积数；dirty=断点标记。byte-stable 判定基准=与【上次投影输出形态】比对（非仅 last_text）：
-        - pend 存在（上次形态=[last][hist][pend][user…]）：cur==pend → 重放（byte-stable）；
-          cur==last → 撤回 append（[last][hist][user…]，前缀到 hist 稳定）；否则再追加 count++
-        - pend 空：cur==last → 单条 byte-stable；变化且支持且 !dirty 且 count<4 → append；
-          否则归一化（单条=cur，last 刷新、清账）
-        插入锚点=最后一条 user 之前（B1 实验形态 [前缀][sys_v2][问题]；每步重复应用同一规则，
-        appended system 跨步位置稳定，前缀不漂移）。"""
+        账本：last_text=头部快照字节（归一化时刷新）；appends=[{turn, text}] 按轮锚定的追加版本
+        （≤4；多版本共存于历史原位——DSH system/message surface 节点同款）；dirty=断点标记。
+
+        形态 A（用户两图对照裁定）：append 在轮 N 发生 → 轮 N 进行中插在当前轮 user 前；
+        轮 N 归档后由 _render_tiered_history 固定插在轮 N 块前——位置永不漂移，前缀跨轮稳定。
+        （首版"浮动插入"每轮跟着当前 user 走 → 每轮断一次缓存，已废弃。）
+
+        决策：cur==上次形态版本 → 重放/原样（byte-stable，含"append 已固化进历史"的情形——
+        历史渲染自动带了它，消息层不再插）；cur==last → 撤回末条 append；变化且支持且 !dirty
+        且 len(appends)<4 → append（同轮变更原地替换末条，跨轮新追加）；否则归一化清账。"""
         self._ledger_form = ""
         if not msgs or msgs[0].get("role") != "system":
             return                                  # 无头部 system（异常形态）——不动账本按现状
         cur = str(msgs[0].get("content") or "")
         L = self._system_ledger
+        appends = L.setdefault("appends", [])
         last = str(L.get("last_text") or "")
-        pend = str(L.get("pending_text") or "")
+        cur_turn = len(self.turns) + 1              # 当前轮号（1-based，与 to_history 口径一致）
+        pend = appends[-1] if appends else None
+        pend_live = bool(pend) and pend.get("turn") == cur_turn   # 末条 append 在当前轮（未固化）
 
         def _insert_before_user(text: str) -> None:
             ins = len(msgs) - 1
@@ -1437,42 +1443,52 @@ class Session:
                 ins = len(msgs)                     # 无 user（纯 steps 轮）→ 退到末尾
             msgs.insert(ins, {"role": "system", "content": text})
 
-        def _append_version() -> None:
-            msgs[0] = {"role": "system", "content": last}   # 头部=持久化快照字节（渲染抖动不进前缀）
-            _insert_before_user(cur)
-            L["pending_text"] = cur
-            L["count"] = int(L.get("count", 0)) + 1
-            self._ledger_form = f"appended v{L['count']}"
-            _LOG.info("system段 append-not-replace：追加 v%d（前缀保持，%d 字）", L["count"], len(cur))
+        def _can_append() -> bool:
+            return (self._in_history_system and not L.get("dirty")
+                    and len(appends) < 4)
 
         if not last:
-            L.update(last_text=cur, pending_text="", count=0, dirty=False)
+            L.update(last_text=cur, appends=[], dirty=False)
             self._ledger_form = "normalized"
             _LOG.info("system段 首建快照（%d 字）", len(cur))
             return
         if pend:
-            if cur == pend:                         # 与上次 append 输出形态一致 → 重放（byte-stable）
+            if cur == str(pend.get("text")):
+                # 末条 append 即当前版本：轮内（live）重插 user 前重放；已固化（历史渲染自动带）不重复插
                 msgs[0] = {"role": "system", "content": last}
-                _insert_before_user(pend)
-                self._ledger_form = f"appended v{L.get('count', 1)}"
+                if pend_live:
+                    _insert_before_user(cur)
+                self._ledger_form = f"appended v{len(appends)}"
                 return
-            if cur == last:                         # 回归快照版本 → 撤回 append（尾部少一条，前缀到 hist 稳定）
-                L["pending_text"] = ""
+            if cur == last:                         # 回归快照版本 → 撤回末条 append
+                appends.pop()
                 self._ledger_form = "append撤回"
-                _LOG.info("system段 回归快照版本：撤回 append（前缀至历史段稳定）")
+                _LOG.info("system段 回归快照版本：撤回末条 append（前缀至撤回点稳定）")
                 return
         elif cur == last:
             self._ledger_form = "byte-stable"
             return
         # 变化版本：追加（头部快照不动）或归一化
-        if (self._in_history_system and not L.get("dirty")
-                and int(L.get("count", 0)) < 4):
-            _append_version()
+        if _can_append():
+            if pend_live:
+                appends.pop()                       # 同轮内版本替换（v2→v3 原位，不堆积）
+            appends.append({"turn": cur_turn, "text": cur})
+            msgs[0] = {"role": "system", "content": last}
+            _insert_before_user(cur)
+            self._ledger_form = f"appended v{len(appends)}"
+            _LOG.info("system段 append-not-replace：v%d @t%d（前缀保持，%d 字）",
+                      len(appends), cur_turn, len(cur))
             return
-        L.update(last_text=cur, pending_text="", count=0, dirty=False)
+        L.update(last_text=cur, appends=[], dirty=False)
+        # 摘除历史渲染循环已插入的本批 append（时序：_render_tiered_history 先读账本插入了，
+        # 此处清账要同步摘掉——否则废弃版本残留一条在历史里，下次投影才消失）
+        _dead = {str(a.get("text")) for a in appends}
+        for i in range(len(msgs) - 1, 0, -1):
+            if msgs[i].get("role") == "system" and str(msgs[i].get("content")) in _dead:
+                msgs.pop(i)
         self._ledger_form = "normalized"
-        _LOG.info("system段 归一化（dirty=%s count=%s in_history=%s，%d 字）",
-                  bool(L.get("dirty")), L.get("count"), self._in_history_system, len(cur))
+        _LOG.info("system段 归一化（dirty=%s appends=%d in_history=%s，%d 字）",
+                  bool(L.get("dirty")), len(appends), self._in_history_system, len(cur))
 
     def _walk_plan(self, msgs: list, sections: list) -> None:
         """清单走查（messages_for_llm 装配主体 / projection_breakdown 现算兜底共用，填 msgs+sections）。
@@ -1782,13 +1798,23 @@ class Session:
         分组拼接顺序与逐轮顺序完全一致（档位随 turn 索引单调不增），byte-stable 不变。"""
         marks = self._hist_marks
         body = []
+        # system append-not-replace 按轮锚定插入表（形态A·2026-09-12 用户裁定）：append 的 system
+        # 固定插在【append 发生轮】的渲染块之前——轮归档后位置永不漂移，前缀跨轮稳定。
+        _ap = {int(a.get("turn", 0)): str(a.get("text") or "")
+               for a in (self._system_ledger.get("appends") or [])}
+
+        def _turn_block(i: int) -> list[dict]:
+            blk = self._render_turn_frozen(i)
+            t = _ap.get(i + 1)                      # 轮号 1-based
+            return ([{"role": "system", "content": t}] + blk) if t is not None else blk
+
         if fold_count > 0:
             if marks is not None:   # 装配外调用（_plan_fold/load/start_turn）无标记表，只渲染不记标记
                 marks.append((f"折叠摘要({fold_count}轮)", 0, f"最早{fold_count}轮折叠为结构摘要，原文可recall"))
             body.append({"role": "system", "content": self._ambient(self._folded_summary(fold_count))})
         if marks is None:
             for i in range(fold_count, len(self.turns)):
-                body.extend(self._render_turn_frozen(i))
+                body.extend(_turn_block(i))
             return body
         # 按档分组渲染 + 标记（与 projection_breakdown 同款分组；顺序不变）
         fold_on = config.load_fold_deep_tools()
@@ -1809,7 +1835,7 @@ class Session:
                 turns_n[gname] = 0
                 metas[gname] = gmeta
                 order.append(gname)
-            groups[gname].extend(self._render_turn_frozen(i))
+            groups[gname].extend(_turn_block(i))
             turns_n[gname] += 1
         for gname in order:
             _start = len(body)   # 段开始位置（与顶层 marks 的 len(msgs) 语义一致——都是 extend 前快照）

@@ -1186,7 +1186,12 @@ class Session:
             </file>
             </recent-file>
         数据源 _rf_latest_map：同文件多次 edit 只有最新快照命中；归档轮天然不在映射（前面的轮不管）。
-        空映射 → 空段（零噪声）。version=快照记录的 file_version（乐观锁版本）。"""
+        空映射 → 空段（零噪声）。version=快照记录的 file_version（乐观锁版本）。
+        施工模式（2026-09-13·用户裁定）返回空：施工期快照回内嵌形态——贴在该次写调用的
+        tool result 尾部（当时的版本、不去重、不限数量），独立段不投影防双份（见
+        _steps_to_messages / _rf_inline_block）。"""
+        if self._construction_mode():
+            return []
         m = self._rf_latest_map()
         if not m:
             return []
@@ -2206,8 +2211,9 @@ class Session:
         rf 是轮内易变项（归档即消失），不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）。
         判定按 tool_call_id ∈ rf_map 命中集合（用户设计）：与附加时的命中条件同源——
         附加按 cid 命中，剥离也按 cid，因果一致不漂移，不做 content 子串检测；
-        sub 对无块 content 是 no-op，多模态 list 由 isinstance 防御天然跳过。"""
-        _hit = {m["cid"] for m in self._rf_latest_map().values()}
+        sub 对无块 content 是 no-op，多模态 list 由 isinstance 防御天然跳过。
+        施工模式命中集合全量扩展（_rf_hit_cids——内嵌不去重，剥离随附加口径）。"""
+        _hit = self._rf_hit_cids()
         out = []
         for m in msgs:
             c = m.get("content")
@@ -2219,8 +2225,9 @@ class Session:
 
     def _rf_in_msgs(self, msgs: list[dict]) -> int:
         """msgs 中实际附加的 <recent-file> 块总字符数（诊断/验证口径）。判定同
-        _rf_stripped：tool_call_id ∈ rf_map 命中集合（不做 content 子串检测）。"""
-        _hit = {m["cid"] for m in self._rf_latest_map().values()}
+        _rf_stripped：tool_call_id ∈ rf_map 命中集合（不做 content 子串检测）。
+        施工模式命中集合全量扩展（_rf_hit_cids——与内嵌附加口径同源）。"""
+        _hit = self._rf_hit_cids()
         n = 0
         for m in msgs:
             if (m.get("role") == "tool" and m.get("tool_call_id") in _hit
@@ -2261,6 +2268,36 @@ class Session:
             return f"（{len(lines)} 行）\n" + "\n".join(head)
         except Exception as e:
             return f"(结构提取失败: {type(e).__name__})"
+
+    def _rf_hit_cids(self) -> set:
+        """rf 命中 cid 集合（剥离 _rf_stripped / 诊断 _rf_in_msgs 的判定源，与附加口径同源）：
+        非施工 = _rf_latest_map 的 cid（同文件只有最新一次命中，段式集中投影）；
+        施工模式（2026-09-13·用户裁定）= 当前轮全部写调用 cid——内嵌不去重/不限数量，
+        每个写调用各挂各的当时快照，剥离/诊断集合随之全量扩展。"""
+        if self._current is None:
+            return set()
+        if self._construction_mode():
+            return {cid for s in self._current.steps for cid in (s.file_snapshots or {})}
+        return {m["cid"] for m in self._rf_latest_map().values()}
+
+    def _rf_inline_block(self, snap: dict) -> str:
+        """施工期 <recent-file> 内嵌块（用户裁定 2026-09-13）：贴在该次写调用的 tool result
+        尾部，内容 = 该次调用【当时】的快照（file_snapshots 按 call_id 存的就是当时版本——
+        不去重、不限数量）。小文件行号化全文（与段式段 / read_file 口径一致）；超大文件
+        （>RF_MAX_CHARS）outline + 省略提示（口径与 _seg_msgs_recent_file 相同）。
+        块以 \\n 开头——_RE_RF_BLOCK 剥离/诊断正则天然命中。"""
+        path, ver = str(snap.get("path", "")), str(snap.get("version", ""))
+        text = str(snap.get("text", ""))
+        if len(text) > RF_MAX_CHARS:
+            ov = self._rf_outline(path, text).strip() or "(结构提取失败)"
+            return (f'\n<recent-file file="{path}" version="{ver}" size="{len(text)}">\n'
+                    f"<overview>\n{ov}\n</overview>\n"
+                    f'<content note="文件过大（{len(text):,} 字符 > {RF_MAX_CHARS:,}）——此处省略，'
+                    f'需要时 read_file 分段读取"/>\n</recent-file>')
+        _lines = text.split("\n")
+        _w = max(2, len(str(len(_lines))))          # 行号宽度自适应（与 read_file / 段式口径一致）
+        numbered = "\n".join(f"{i:>{_w}}| {ln}" for i, ln in enumerate(_lines, 1))
+        return f'\n<recent-file file="{path}" version="{ver}">\n{numbered}\n</recent-file>'
 
     def _rf_latest_map(self) -> dict:
         """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。
@@ -2418,8 +2455,12 @@ class Session:
               老轮则用 base=该档最大字数，不额外衰减）；
             · 差 ≥ 2 → limit = eff_base - GROUP_STEPS * detail_step * 组号差（≥DETAIL_FLOOR）；
         - reasoning 永远原样挂 reasoning_content（不压缩，含 step0 的核心设计思考）。
+        施工模式（2026-09-13·用户裁定）：recent-file 快照回内嵌——该次写调用【当时】的快照贴在
+        该次 tool result 尾部（不去重/不限数量：每个写调用各挂各的，施工要"每次操作时文件长什么样"
+        的因果上下文）；非施工模式不内嵌（第四版段式 _seg_msgs_recent_file 走装配）。
         max_steps>0 只保留最近 max_steps 步。"""
         msgs = []
+        constr = self._construction_mode()
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
             steps = steps[-max_steps:]
@@ -2462,7 +2503,15 @@ class Session:
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
                 content = self._project_imgs(content)
-                # （2026-09-07 起 recent-file 快照不再内嵌此处——独立段 _seg_msgs_recent_file 走装配）
+                # recent-file 挂载点：2026-09-07 起改独立段走装配（_seg_msgs_recent_file）；
+                # 施工模式（2026-09-13·用户裁定）回内嵌形态——该次调用【当时】的快照贴在该次
+                # tool result 尾部：不去重（同文件多次编辑各挂当时的版本）、不限数量（每个写
+                # 调用都挂）——施工需要"每次操作时文件长什么样"的因果上下文。归档轮
+                # file_snapshots 不持久化（空 dict）+ 非施工不内嵌——双保险不走旧路。
+                if constr:
+                    snap = (step.file_snapshots or {}).get(tc.call_id)
+                    if isinstance(snap, dict) and snap.get("path"):
+                        content += self._rf_inline_block(snap)
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 

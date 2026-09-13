@@ -785,6 +785,10 @@ GRADUATE_FORCE_TURNS = 60   # 卫生性强档阈值：当前档超过此轮数�
 
 **教训**：新增装配段时应**三处同查**——前端枚举（agents.html `SEG_TYPES`）+ 后端校验集（`_ASSEMBLY_SEGS`）+ 默认装配序（`_DEFAULT_ASSEMBLY_PLAN`）；前端补白名单时须排查后端同名白名单（各管一端的合法段集合，漏一处 = 静默丢弃，连报错都没有）。
 
+#### 后记二：快照层行号化污染——rf 双前缀 + outline 恒失败（2026-09-13，随施工模式实测抓到）
+
+段式化后 rf 渲染全走 `_seg_msgs_recent_file`（小文件行号化全文），但快照收集层（src/agent.py `_collect_file_snapshots`）存进 `file_snapshots` 的非 md 文件**已是行号化文本**——渲染层再行号化 → `1| 1│` 双前缀；大文件 outline 拿行号化文本 `ast.parse` → 恒 IndentationError（`session.py` 结构提取一直失败的根因，t789 投影实证）。修复（随施工模式收官 `f375483`）：**快照存原文、行号化归展示层**——数据层存事实（原文+版本），渲染姿势归投影层。详见 [施工模式 · 顺带修复](#顺带修复同轮实测抓到)。
+
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 
 `_folded_summary(fold_count)` 生成被折叠早期轮次的结构概览（纯结构信息、无需 LLM；逐字原文靠 recall 召回）。每轮一行：`user[:80]` + `(已折叠N次工具调用) ` + tail。tail 的优先级链：
@@ -811,7 +815,11 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 ## system 段 append-not-replace（2026-09-12）
 
+缓存连续时把 system 新版本 append 进当前轮（历史前缀完整命中）、毕业/折叠/tools 变化等断点处归一化清账（append-not-replace，spec s_eb14a8fd）——专题块见下方。
+
 ## 施工模式投影（2026-09-13）
+
+存在未完成活动 plan 时投影切换施工视图：history 停装 + 头部施工牌（design 全文，byte-stable）——专题块见下方；2026-09-13 收官（commit `f375483`，16+3 场景测试全绿 + 首个实战样本）。
 
 # —— 施工模式投影（2026-09-13，spec s_e1804804，用户提案） ——
 
@@ -833,7 +841,8 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 ## 防双份
 
 施工模式下 `plan_content()` 返回空（design 已前移施工牌）；`plan_steps()` 原位输出。
-非施工模式两者行为不变（全完成 → plan_content 一行 / plan_steps 空）。
+`_seg_msgs_recent_file()` 同样返回空（快照回内嵌进 tool result，见 [施工期 recent-file：回内嵌形态](#施工期-recent-file回内嵌形态2026-09-13用户裁定)）。
+非施工模式两者行为不变（全完成 → plan_content 一行 / plan_steps 空 / rf 独立段照旧）。
 
 ## 可观测
 
@@ -842,9 +851,50 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 ## 顺带修复（同轮实测抓到）
 
-file_snapshots 快照 text 存的是行号化文本（`_number_lines`）——rf 段渲染再行号化产生
-双前缀（`1| 1│`），且大文件 outline 对行号化文本 ast.parse 恒 IndentationError
-（session.py 一直显示"结构提取失败"的根因）。修复：快照存原文，行号化归展示层。
+**发现（2026-09-13，施工模式验证轮 t789 投影实测抓到）**：rf 段小文件显示 `1| 1│` **双行号前缀**、`session.py` 恒显示 `(结构提取失败: IndentationError)`——同源根因：快照收集（src/agent.py `_collect_file_snapshots`）给非 md 文件存的是**行号化文本**（`_number_lines`），rf 段渲染层（修复八）渲染时再行号化一次 → 双前缀；大文件 outline 拿行号化文本 `ast.parse` 必炸（行号前缀破坏缩进）→ 恒失败——`session.py` 的结构提取一直空转的根因。
+
+**修复（src/agent.py `_collect_file_snapshots`）**：快照存**原文**（`text = _md_snapshot(raw) if md else raw`），行号化归展示层——rf 段渲染时自行做；md 保留 `_md_snapshot`（摘要态，非行号化源码）。分工原则：快照层只管「原文 + 版本号」这份事实，渲染姿势是投影层的事。
+
+**验证**：修复后子进程实测 outline 正常输出 `def _repo_key() [L72-L77]` 式类/函数结构；双前缀消失。
+
+## 施工收官：16+3 场景测试全绿 + 首个实战样本（2026-09-13，commit f375483）
+
+spec s_e1804804 四步全部完成（16+3 场景测试全绿），commit `f375483` 推送。
+
+**变更落点（4 文件）**：
+
+| 文件 | 变更 |
+|---|---|
+| src/session.py | `_construction_mode()` 判定（`_RUNTIME_AGENT` 与 `plan_content()` 同源，绑定 session 同一性）；history 段装配跳过（段统计 meta=`跳过(施工模式——plan 未完成，历史不装配；recall 可查)`）；施工牌装配（`_append_answer_style` 之后插第二条 system = design 全文，不进 `_apply_system_ledger` 快照口径） |
+| src/agent_config.py | `_func_plan_content()` 施工模式返回空（防双份，见 [防双份](#防双份)） |
+| src/commands.py | `/context` 顶部施工模式标注（施工牌字数从段统计的 `施工牌` 行提取） |
+| src/agent.py | 顺带修复：rf 快照存原文（见 [顺带修复](#顺带修复同轮实测抓到)） |
+
+**首个实战样本（2026-09-13，交付验证轮自身投影）**：主 Agent 下一轮投影注入即见【施工牌·进行中计划】`p_c1848eb7` 出现在头部、`plan_content` 区3 块同步消失（防双份实证闭环）——新机制在自己的开发流程里当场生效。需 `/restart` 生效。
+
+## 施工期 recent-file：回内嵌形态（2026-09-13，用户裁定）
+
+**用户裁定（2026-09-13·施工中两次插话）**：「施工期的 recent-file 还是和之前一样跟在具体的工具调用后面吧，施工期不用去重，不用限制文件数量」+「工具调用后面贴的应该是**当时的文件快照**」——施工语义要的是**因果上下文**：每次操作时文件长什么样（施工在文件上连续推进，看当时的版本才知道每步改了什么），而不是第四版段式的"最新版集中投影"。
+
+## 行为（施工模式特例）
+
+- `_steps_to_messages`：施工模式按 call_id 命中 `step.file_snapshots`，把该次调用【当时】的快照以 `\n<recent-file file version>` 块附加在该次 tool result content 尾部——**不去重**（同文件多次编辑各挂各的当时版本）、**不限数量**（每个写调用都挂）；块构造 `_rf_inline_block`（小文件行号化全文 / 超大文件 >RF_MAX_CHARS 走 outline + 省略提示，与段式同口径）
+- `_seg_msgs_recent_file`：施工模式返回空——**防双份**（内嵌与段式互斥；与 `plan_content()` 的防双份同构）
+- 非施工模式行为不变（第四版段式照旧：同文件仅最新一份、独立段走装配）
+
+## 口径一致性
+
+- 命中集合 `_rf_hit_cids()`（剥离 `_rf_stripped` / 诊断 `_rf_in_msgs` 判定源，与附加口径同源）：非施工 = `_rf_latest_map` 的 cid（最新版集中）；施工 = 当前轮**全部写调用** cid——附加全挂 → 剥离全剥，估算免疫不漏
+- 内嵌块以 `\n<recent-file` 开头 → `_RE_RF_BLOCK` 配对正则天然命中
+- 归档轮 `file_snapshots` 不持久化（空 dict）+ 非施工不内嵌——双保险，第三版"归档轮注入"老问题不会复发
+
+## 缓存代价权衡
+
+内嵌位置在 steps 区 tool result 尾部——每步新快照使该位置之后的消息重算（正是第四版段式化要消除的扰动）。施工期接受该代价换因果保真：施工期 history 本就不装配（前缀只有 system + 施工牌，byte-stable），扰动面 = 当前轮 steps（本来就在未命中区）——实际缓存损失趋零；施工结束自动回段式（第四版恢复）。
+
+## 验证
+
+`test/test_construction_rf_inline.py` 14 断言全绿（判定 / 防双份 / 内嵌命中 / 不去重各挂当时版本 / 不限数量 / 剥离全量 / 非施工回归）+ `test_recent_file_segment.py` 13 断言回归全绿。需 `/restart` 生效。
 
 # —— system 段 append-not-replace：缓存连续时追加、毕业断点处归一化（2026-09-12，spec s_eb14a8fd，用户提案+裁定） ——
 

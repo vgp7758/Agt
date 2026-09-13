@@ -1355,6 +1355,21 @@ function addImageFile(file){
 document.addEventListener('paste', e=>{
   const items = e.clipboardData?.items || [];
   for(const it of items){ if(it.type.startsWith('image/')){ const f=it.getAsFile(); if(f) addImageFile(f); } }
+  // 大段粘贴标记（用户提案 2026-09-13）：往输入框粘贴大段文本（≥6 行或 ≥400 字符——典型如日志）
+  // 自动包裹 <pasted-log>；extract_keywords 工作流提取关键词时剥离这种块——大段日志不再带偏
+  // 关键词（本地小模型对日志里的技术词很敏感）。标记可见可手删；阈值保守（正常打消息不触发）。
+  if(e.target === inp){
+    const txt = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    const nLines = txt.split('\n').length;
+    if(txt && (nLines >= 6 || txt.length >= 400)){
+      e.preventDefault();
+      const wrapped = `<pasted-log>\n${txt.replace(/\s+$/,'')}\n</pasted-log>`;
+      const s = inp.selectionStart ?? inp.value.length, ep = inp.selectionEnd ?? inp.value.length;
+      inp.setRangeText((s>0 && inp.value[s-1] !== '\n' ? '\n' : '') + wrapped, s, ep, 'end');
+      inp.dispatchEvent(new Event('input', {bubbles:true}));
+      toast(`📋 大段粘贴已标记 <pasted-log>（${nLines} 行）——关键词提取将忽略这段`);
+    }
+  }
 });
 fileInput.addEventListener('change', e=>{
   for(const f of e.target.files) addImageFile(f);

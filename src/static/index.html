@@ -1124,11 +1124,16 @@ function finishAnswer(text, agentId, changed){
 }
 // 未交代变更文件补充块：answer 引用了的（[!名](路径) 全等或 basename 相等）剔除；
 // 其余渲染资产框（modified/new 可点击预览抽屉，deleted 只读）。差集空 → 空串（零噪声）。
+// 路径归一（2026-09-13·用户问诊补全）：引用可能是完整/相对路径、/ 或 \ 分隔——
+// 统一 \→/ + basename 小写化后比对（旧版 p.split('/') 对纯 \ 路径切不出文件名 →
+// 反斜杠引用被漏判为"未交代"而重复补充）。
 function unmentionedChangesHtml(answerText, changed){
   if(!Array.isArray(changed) || !changed.length) return '';
+  const _norm = s => String(s||'').replace(/\\/g, '/');
+  const _base = s => _norm(s).split('/').pop().toLowerCase();   // basename（两种分隔符都切 + 大小写不敏感）
   const cited = new Set();
-  String(answerText||'').replace(/\[![^\]]*\]\(([^)\s]+)\)/g, function(_, p){ cited.add(p); cited.add(p.split('/').pop()); return _; });
-  const rest = changed.filter(c => c && c.file && !cited.has(c.file) && !cited.has(c.file.split('/').pop()));
+  String(answerText||'').replace(/\[![^\]]*\]\(([^)\s]+)\)/g, function(_, p){ cited.add(_norm(p)); cited.add(_base(p)); return _; });
+  const rest = changed.filter(c => c && c.file && !cited.has(_norm(c.file)) && !cited.has(_base(c.file)));
   if(!rest.length) return '';
   const ICON = {modified:'✏️', new:'➕', deleted:'🗑'};
   let h = '<div class="ans-changed"><div class="ac-title">📎 本轮变更文件（回答中未交代，共 '+rest.length+' 个）</div>';

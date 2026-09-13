@@ -742,3 +742,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **v0.27.1 补丁版**（2026-09-13，commit `57a2d30`）：用户在 CNB 容器 `agt-web` 经 HTTPS 反代域名（`https://xxx-8000.cnb.run`）打开 WebUI，控制台刷 `Mixed Content` + `SecurityError: Failed to construct 'WebSocket'`，点工具再级联 `Cannot read properties of null (reading 'send')`——根因 index.html `connectWS()` **硬编码 `ws://`**：HTTPS 页面禁止发起不加密 WS（浏览器 Mixed Content 拦截；rag.html / workflow_debug.html 早是协议自适应写法，主界面是漏网）。修复：协议自适应 `` `${location.protocol==='https:'?'wss':'ws'}` ``——TLS 边缘代理解密后转容器内 ws，**服务端零改动**，任何 HTTPS 反代（CNB / Cloudflare Tunnel / frp+TLS / nginx）直接可用；顺带 `sendToolCall` 加未连接防护（toast 替代级联报错）。`pip install -U agt-agent` + `/restart` + 强刷生效——见 [v0.27.1 发布记录](releases/v0.27.1.md)、[user-interaction · WS 协议自适应](features/user-interaction.md#ws-协议自适应cnb-https-反代-mixed-content-修复2026-09-13v0271)
 
+## 快速事实增补（2026-09-13 · 八 · 大段粘贴标记——extract_keywords 提词剥离）
+
+- **大段粘贴标记 `<pasted-log>`（2026-09-13，commit `f1b4ecb`，用户提案）**：往 WebUI 输入框粘贴 ≥6 行 / ≥400 字符文本（典型日志）自动包裹 `<pasted-log>…</pasted-log>`（toast 提示、可见可手删、阈值保守正常消息不触发）；extract_keywords 链头新增 strip_pasted 正则剥块（`100001 → 115001 → claim`），剥离后文本作 claim key / LLM q / cache_write key / recheck key **四处同源**——贴大段日志不再把本地提词带偏（此前 pip/OSError/idna 之类词导致 wiki/记忆检索误命中）；user_message 原文照常归档投影，主 Agent 看得到完整日志。生效：WebUI Ctrl+F5 + 工作流下一轮 before_turn——见 [大段粘贴标记](features/pasted-log.md)
+

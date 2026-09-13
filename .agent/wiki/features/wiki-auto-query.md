@@ -53,6 +53,10 @@ user_message
 
 整条检索流水线**零云端 token、零云端延迟依赖**，质量还比 3B 打分版高。
 
+## extract_keywords 链头剥离大段粘贴（2026-09-13，commit f1b4ecb）
+
+> **链头剥离大段粘贴**（2026-09-13，commit `f1b4ecb`，用户提案）：extract_keywords 链头新增 strip_pasted 节点（`100001 → 115001 → claim`），正则剥掉 `<pasted-log>…</pasted-log>` 包裹块——WebUI 往输入框粘贴 ≥6 行 / ≥400 字符文本（典型日志）时自动包裹该标记。剥离后文本作为 claim key / LLM q / cache_write key / recheck key **四处同源**，大段日志不再把本地提词模型带偏（pip/OSError/idna 之类技术词敏感，此前会带偏检索）；user_message 原文照常归档投影，主 Agent 不受影响。两路 before_turn 钩子（wiki_auto_query / before_turn_retrieval）共用此子工作流，同时受益——详见 [大段粘贴标记](pasted-log.md)。
+
 ## 旧版三档漏斗（v3 及之前，已废弃）
 
 > 保留作为历史参考。v4 用 embedding 余弦替代了 LLM 精排，用关键词提取替代了 LLM 意图识别。
@@ -85,8 +89,10 @@ user_message
 
 ## 相关页面
 
+- [大段粘贴标记](pasted-log.md)：WebUI 粘贴自动包裹 &lt;pasted-log&gt; + extract_keywords 链头剥离——大段日志不进提词（2026-09-13）
 - [cosine_sim · 语义余弦相似度工具](../features/cosine-sim.md)：v4 核心组件，复用 RAG embedding
 - [长期记忆](../features/longterm-memory.md)：同族 before_turn 检索流水线（记忆版：local-qwen 提词 → search_memory → LLM 精排裁决，episodic 召回已并入）
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 约定返回 / utility_client / 检索型钩子输出纪律 / 批处理节点 + 子工作流调用
 - [上下文引擎](../architecture/context-engine.md)：inject 落在 current turn 的 before_turn hint
 - [guides/ops](../guides/ops.md)：scene=hook:before_turn 观测、utility 400 处置
+

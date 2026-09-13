@@ -500,6 +500,7 @@ class Agent:
         _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list",
                          "remote_message", "remote_ask")   # 管理族双名均豁免：其 remote_instance_id/
         rid = ""                                            # server_id 是管理语义（连谁/发给谁），非路由标记
+        _explicit_local = False                             # 显式选 self（已有路由意识）——不再教育提示
         if isinstance(arguments, dict):
             if name.startswith(_REMOTE_ADMIN):
                 # 旧名规范化（历史投影兼容）：管理族的 server_id → remote_instance_id（工具新签名）
@@ -511,40 +512,50 @@ class Agent:
                 elif "server_id" in arguments:
                     rid = str(arguments.pop("server_id") or "").strip()   # 旧名兼容（历史投影习惯）
                 if rid.lower() in ("self", "local"):
-                    rid = ""   # schema 必填模式的显式本机选择（enum 含 'self'）——归一为本地执行
+                    rid = ""   # 显式本机选择（enum 含 'self'）——归一为本地执行
+                    _explicit_local = True
         if rid:
             try:
                 from remote_tools import route_remote_call
                 return route_remote_call(rid, name, arguments)
             except Exception as e:
                 return f"[远程执行失败] {type(e).__name__}: {e}"
-        return self.tools.call(name, arguments)
+        r = self.tools.call(name, arguments)
+        # 组网教育提示（用户裁定 2026-09-14·二轮）：schema 精简（一句话描述+enum），
+        # 实例意识改由缺参时机注入——本地执行时每轮【首次】在结果尾附一行提示
+        # （有实际组网才提示；单机零噪声；一轮只提示一次不刷屏——_rid_hint_fp 轮指纹）。
+        try:
+            from remote_tools import REMOTE_SERVERS as _RS
+            _fp = id(self.session._current)
+            if _RS and not _explicit_local and isinstance(r, str) and getattr(self, "_rid_hint_fp", None) != _fp:
+                self._rid_hint_fp = _fp
+                _ids = "、".join(sorted(_RS))
+                r += (f"\n\n[提示] 本次在本机执行。已组网实例：{_ids}——操作它们那边的"
+                      f"文件/命令时，在工具参数里带 remote_instance_id 即可路由过去执行"
+                      f"（self=显式本机）。")
+        except Exception:
+            pass
+        return r
 
     def _llm_tool_schemas(self) -> list:
-        """发给 LLM 的工具 schema 视图：多实例组网时注入 remote_instance_id 路由参数且【必填】
-        （用户提案 2026-09-14）：LLM 训练语料普遍缺乏"调远端实例当手脚"的玩法意识，可选参数
-        几乎不会被主动想起——改为 required + enum(self + 各实例 id) 强制模型每次调用显式选择
-        执行实例，路由意识进入决策链；单机（无连接）不注入（零路由噪声，行为与旧版一致）。
+        """发给 LLM 的工具 schema 视图：多实例组网时注入 remote_instance_id 路由参数。
+        【可选 + 精简】（用户裁定 2026-09-14·二轮）：长描述在每个工具里重复会膨胀 schema——
+        参数只留一句话 + enum（枚举值自带提示）；模型缺参时的实例教育改由 _exec_tool 运行时
+        提示承担（每轮首次缺参附一行提示）。单机（无连接）不注入（零路由噪声）。
         只影响 LLM 请求视图——toolbox 原 schema（工作流 plugin 节点 / WebUI 工具表单 / 编辑器）
         不感知（避免扩散）。remote_* 管理族豁免（本身就是跨实例工具，再路由即套娃）。
         执行侧 self/local 归一为本地（_exec_tool）。"""
         import copy
         RID = "remote_instance_id"
-        # 远端清单 {id: url}：组网非空才注入（enum/描述动态带实例简报）
         try:
             from remote_tools import REMOTE_SERVERS
-            peers = {str(k): str(v.get("url") or "") for k, v in REMOTE_SERVERS.items()}
+            peers = {str(k) for k in REMOTE_SERVERS}
         except Exception:
-            peers = {}
+            peers = set()
         if not peers:
             return [copy.deepcopy(s) for s in self.tools.schemas()]   # 单机：不注入
-        _ids = "；".join(f"{k}={v}" for k, v in peers.items())
-        PROP = {"type": "string", "enum": ["self"] + list(peers),
-                "description": (f"执行本工具的实例（必填）：self=本机执行；或远程实例 id——"
-                                f"当前已连接 {_ids}。远程实例是你分布在别处的手脚（各有自己的"
-                                f"workspace/工具）：改它那边的文件、跑它那边的命令时选它的 id；"
-                                f"对同一远程文件的连续操作须始终同一 id（远程 file_version "
-                                f"乐观锁跨实例生效）。")}
+        PROP = {"type": "string", "enum": ["self"] + sorted(peers),
+                "description": "执行实例：self=本机（默认，可不传）；或已连远程实例 id"}
         out = []
         for s in self.tools.schemas():
             s = copy.deepcopy(s)
@@ -553,13 +564,9 @@ class Agent:
                 out.append(s)
                 continue
             try:
-                fn = s["function"]
-                props = fn["parameters"].setdefault("properties", {})
+                props = s["function"]["parameters"].setdefault("properties", {})
                 if RID not in props:
                     props[RID] = PROP
-                    req = fn["parameters"].setdefault("required", [])
-                    if RID not in req:
-                        req.append(RID)
             except Exception:
                 pass
             out.append(s)

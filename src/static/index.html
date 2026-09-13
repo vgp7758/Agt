@@ -1285,7 +1285,10 @@ function renderHistTurn(t, box, isLast){
       if(tc.result) appendToolResult(tc.result);   // 折叠组的 result 进 body（历史与实时同构）
     });
   });
-  if(t.answer_reasoning) renderThinking(t.answer_reasoning, '💭(回答推理)');
+  if(t.answer_reasoning){
+    _curThinkFold = null;   // 回答推理是新组（用户实测 2026-09-13：不置 null 会拼进最后一个工具步的思考组——读档渲染 s4+s5 reasoning 合并的根因）
+    renderThinking(t.answer_reasoning, '💭(回答推理)');
+  }
   _curThinkFold = null;   // 历史渲染完复位（防污染后续实时轮的归属）
   if(curTurn.traceBox.children.length===0) det.style.display='none';
   const a=t.answer||'';

@@ -734,3 +734,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **kv_cache_claim 原子互斥（2026-09-13，commit 1c1c944，用户实测抓到）**：extract_keywords 同轮并发偶发一个失败——同 hook 双工作流（ThreadPoolExecutor 并发）毫秒级同时 read 都 miss → 双双越过「read→write_pending」两节点互斥同时打本地单并发模型，一个失败 + pending 永久残留（后续同消息傻等 90×2s 超时）。修复 = `kv_cache_claim` 把 check-and-set 收进进程级 `_KV_LOCK`，三态单次判定（hit / pending / claimed——并发 claim 同 key 恰好一个 claimed）；pending TTL 150s < 等待循环 180s 兜底，提取方死亡后下一 claim 方自动接管。extract_keywords 删 write_pending 节点改 selector 三分支路由（hit 直取 / pending 等待 / claimed 提取链）。验证：单元 8 线程 barrier（恰好 1 claimed / 7 pending）+ debug e2e 两路径（claimed→提取写回 / 二次 hit 秒回）全绿；`/reload tools` 即时生效（53 工具，+1）。见 [kv-tools](features/kv-tools.md)
 - **rf 快照白名单补 `replace_lines`（同轮顺带抓到）**：`_FILE_SNAP_TOOLS` 7→8——replace_lines 是写操作却不在白名单，rf 快照对它改的文件显示旧版（调试轮 edge 区可见滞后快照）。见 [context-engine · 修复五补遗](architecture/context-engine.md)
 
+## 快速事实增补（2026-09-13 · 六 · 变更文件补充区路径归一化——反斜杠引用漏判修复）
+
+- **「本轮变更文件」剔除逻辑路径归一化（2026-09-13，commit `b1ef5e4`，用户问诊触发）**：answer 引用变更文件有四种形态（完整/相对 × `/`/`\` 分隔），`unmentionedChangesHtml` 的「已引用剔除」判定（全等 + basename 兜底）原版只覆盖 `/` 两种——`p.split('/')` 切不开反斜杠，`\` 分隔引用切不出文件名 → 两层判定全 miss，被误判「未交代」而重复补充。修复：比对前统一 `_norm`（`\`→`/`）+ `_base`（basename 小写化），全等/basename 两层都走归一化口径，顺带覆盖大小写变体（`Src/X.Y.PY` 引用 `src/x/y.py` 同判已引用）。node 7 场景全绿；纯前端 Ctrl+F5 生效。见 [bubble-interaction · 路径归一化](features/bubble-interaction.md#变更文件补充区路径归一化反斜杠大小写引用漏判修复2026-09-13用户问诊commit-b1ef5e4)
+

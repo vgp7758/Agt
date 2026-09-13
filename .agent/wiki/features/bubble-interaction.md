@@ -12,7 +12,7 @@
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 |
-| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读 | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化 |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化 |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -226,6 +226,32 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 - 四场景单测（evaluate 直接调 `unmentionedChangesHtml`）：`mp3_is_audio_player` / `png_is_img` / `py_is_text_preview` / `wav_deleted_grey` 全 true
 
 纯前端改动，Ctrl+F5 即生效（无后端路由变更）。
+
+### 变更文件补充区路径归一化：反斜杠/大小写引用漏判修复（2026-09-13，用户问诊，commit b1ef5e4）
+
+**用户问诊（2026-09-13）**：answer 里引用变更文件的形态有四种——完整路径 / 相对路径 × `/` 或 `\` 分隔。「📎 本轮变更文件」补充区的「已引用剔除」逻辑到底覆盖哪几种？**答案：原版只覆盖 `/` 分隔的两种，`\` 分隔的两种漏判**（明明引用了仍被重复补充）。
+
+**原版覆盖矩阵**（剔除判定两层：引用路径全等 + basename 兜底比对）：
+
+| answer 引用形态 | 全等 | basename 兜底 | 结果 |
+|---|---|---|---|
+| `src/x/y.py`（相对，`/`） | ✅ 与 changed file 全等 | — | 剔除 ✓ |
+| `D:/proj/src/x/y.py`（绝对，`/`） | ❌（前缀多） | ✅ `split('/')` 切出 `y.py` | 剔除 ✓ |
+| `src\x\y.py`（相对，`\`） | ❌ | ❌ **`split('/')` 切不开反斜杠**——pop 回来还是整串 `src\x\y.py`，与 `y.py` 不等 | **误判「未交代」→ 重复补充** ✗ |
+| `D:\proj\src\x\y.py`（绝对，`\`） | ❌ | ❌ 同上 | 同上 ✗ |
+
+**根因一句话**：basename 切分只认 `/`——纯 `\` 路径切不出文件名，两层判定全 miss。
+
+**修复**（`unmentionedChangesHtml`，src/static/index.html，commit `b1ef5e4`）：比对前先归一化——
+
+```javascript
+const _norm = s => String(s||'').replace(/\\/g, '/');       // \ → / 统一
+const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符都切 + 大小写不敏感
+```
+
+全等与 basename 判定都走归一化后比对；顺带覆盖**大小写变体**（模型写 `Src/X/Y.PY` 引用 `src/x/y.py`——Windows 大小写不敏感，同样判「已引用」剔除）。
+
+**验证（node 7/7）**：相对`/` / 绝对`/` / 相对`\` / 绝对`\` / 大小写变体 → 全部正确判定为「已引用」；未引用 / 引用其它文件 → 正确判定为「需补充」。纯前端改动，Ctrl+F5 生效。
 
 ### 未知后缀引用按内容嗅探渲染：/api/file-kind + 编码感知解码（2026-09-09，用户提案）
 

@@ -729,3 +729,8 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **answer 推理读档拼组修复（2026-09-13，commit `08546b7`，用户实测 t788）**：v0.27.0 发布轮 restart 后刷新页面，t788 的 s5（answer 步）reasoning 被拼进 s4 的思考组（文本直接相连、标签还是 s4 的 `💭 思考`）。数据侧无辜——answer reasoning 存 `turn.answer_reasoning` 独立字段，投影/存档本就分开；根因在 `renderHistTurn` 读档路径：`renderThinking` 语义是「有当前组就追加」，steps 循环结束后 `_curThinkFold` 还指着最后一步的组，answer_reasoning 渲染前漏置 null → 追加拼组。实时路径 tool_call 事件会关组所以无感——**只在读档渲染触发**。修复：answer_reasoning 渲染前置 `_curThinkFold = null`（独立成组、标签 `💭(回答推理)`）。「归属关闭时点」三→四（新增 answer_reasoning 渲染前）。纯前端 Ctrl+F5 生效——见 [trace-fold · answer 推理读档拼组修复](features/trace-fold.md#answer-推理读档拼组修复renderhistturn-漏关组2026-09-13commit-08546b7用户实测)
 
+## 快速事实增补（2026-09-13 · 五 · kv_cache_claim 原子互斥——钩子并发竞态修复）
+
+- **kv_cache_claim 原子互斥（2026-09-13，commit 1c1c944，用户实测抓到）**：extract_keywords 同轮并发偶发一个失败——同 hook 双工作流（ThreadPoolExecutor 并发）毫秒级同时 read 都 miss → 双双越过「read→write_pending」两节点互斥同时打本地单并发模型，一个失败 + pending 永久残留（后续同消息傻等 90×2s 超时）。修复 = `kv_cache_claim` 把 check-and-set 收进进程级 `_KV_LOCK`，三态单次判定（hit / pending / claimed——并发 claim 同 key 恰好一个 claimed）；pending TTL 150s < 等待循环 180s 兜底，提取方死亡后下一 claim 方自动接管。extract_keywords 删 write_pending 节点改 selector 三分支路由（hit 直取 / pending 等待 / claimed 提取链）。验证：单元 8 线程 barrier（恰好 1 claimed / 7 pending）+ debug e2e 两路径（claimed→提取写回 / 二次 hit 秒回）全绿；`/reload tools` 即时生效（53 工具，+1）。见 [kv-tools](features/kv-tools.md)
+- **rf 快照白名单补 `replace_lines`（同轮顺带抓到）**：`_FILE_SNAP_TOOLS` 7→8——replace_lines 是写操作却不在白名单，rf 快照对它改的文件显示旧版（调试轮 edge 区可见滞后快照）。见 [context-engine · 修复五补遗](architecture/context-engine.md)
+

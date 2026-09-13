@@ -69,7 +69,7 @@ ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemo
 | 工具 | 去向 | 判定 |
 |---|---|---|
 | length / to_uppercase / to_lowercase | `str_tools.py` 追加 | 零状态纯函数 |
-| kv_cache_read / kv_cache_write | `kv_tools.py` 新建 | **`_KV_CACHE` 状态随外置件走**——进程级 dict 自写自读（"自写自读的文件"退化为内存态）；用途是同输入结果确定的 LLM 调用 memoization（同轮多个 before_turn 工作流共用一次提取），namespace 兼作版本号；重启清空=结果缓存语义（丢失=下次重算，无正确性影响） |
+| kv_cache_read / kv_cache_write / **kv_cache_claim**（2026-09-13 增） | `kv_tools.py` 新建 | **`_KV_CACHE` 状态随外置件走**——进程级 dict 自写自读（"自写自读的文件"退化为内存态）；用途是同输入结果确定的 LLM 调用 memoization（同轮多个 before_turn 工作流共用一次提取），namespace 兼作版本号；重启清空=结果缓存语义（丢失=下次重算，无正确性影响）。**claim 原子互斥（2026-09-13，commit 1c1c944）**：check-and-set 收进进程级锁、三态单次判定——「read→write_pending」两节点互斥有毫秒级双 miss 窗口（同 hook 双工作流并发曾双双越过同时打本地模型），详见 [kv-tools](../features/kv-tools.md) |
 | diff_lines | `diff_tools.py` 新建 | **算法副本**形态：Myers 三件套复制实现而非 import 框架（外置件零框架依赖约定）——Myers 是稳定经典算法，双份各自带回归（随机重放 200/200），注释互指路、改动两处同步 |
 | cosine_sim / emb_probe | 本体迁 `src/rag.py` + 注册 `rag_tools.py` | 语义归属 RAG 组：与 embedder 单例共生，rag_query 同款「本体在框架、注册在外置」 |
 

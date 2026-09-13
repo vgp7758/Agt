@@ -229,6 +229,8 @@ with ThreadPoolExecutor() as pool:
 
 **相关页**：[wiki_auto_query](../features/wiki-auto-query.md)（before_turn 典型实例）
 
+> ⚠️ **并发线程共享外置件状态必须用原子工具**（2026-09-13 实战教训，commit `1c1c944`）：extract_keywords 曾因双钩子并发，在「read 判定 → 另一节点 write_pending 占位」的两节点互斥上双双 miss（read 与占位非原子）→ 同时打本地单并发模型、一个失败 + pending 永久残留（后续同消息傻等 90×2s 超时）。修复 = `kv_cache_claim` 原子互斥（check-and-set 收进进程级锁，三态 hit/pending/claimed），详见 [kv-tools · 竞态修复](../features/kv-tools.md)。
+
 ## async 元信息字段（2026-08 新，v0.18.2 正式发布）
 
 钩子工作流可标记 `async=true`，使其**异步执行不阻塞主循环**。全链路读写：

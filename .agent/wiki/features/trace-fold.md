@@ -37,7 +37,7 @@ function toggleFold(head, body){          // 通用折叠：body display 切换 
 - head 摘要行实时更新字数：`▸ 💭 思考（2847 字，点击展开）`——折叠时也知道这段思考多大
 - 无组或组已脱 DOM（`!_curThinkFold.body.isConnected`）→ 自动新建折叠组（`.ev tool-fold` + think-head/think-body），防御历史重渲染清掉 DOM 后的悬空引用
 
-### 自动分组：归属关闭的三个时点
+### 自动分组：归属关闭的四个时点
 
 下一段思考拼不进上一段——在以下时点置 `_curThinkFold = null` 关闭归属：
 
@@ -45,6 +45,7 @@ function toggleFold(head, body){          // 通用折叠：body display 切换 
 |------|------|------|
 | `step` 事件（新一步） | onWSMessage case 'step' | 每步的 reasoning 各成一组 |
 | `tool_call` 到达 | onWSMessage case 'tool_call' | 思考段与后续工具调用分离 |
+| `answer_reasoning` 渲染前 | renderHistTurn 轮末（**2026-09-13 补**，commit 08546b7） | answer 推理独立成组，不拼进最后一步的思考组——读档拼组 bug 的根因正是漏了此时点（见下节） |
 | 历史渲染 | renderHistTurn：每步开始重置 + 整轮渲染完复位 | 防上一步 reasoning 拼进同组；防污染后续实时轮的归属 |
 
 ### 历史渲染同构（renderHistTurn）
@@ -58,6 +59,18 @@ function toggleFold(head, body){          // 通用折叠：body display 切换 
 ### 子 Agent 标识
 
 thinking 事件带 `agent_id`（`_emit` 统一打标，见 [气泡交互](bubble-interaction.md#answer-多-agent-分页indexhtml--agentpy2026-08-21)）：文本加 `[agent_id] ` 前缀、label 显示 `💭 agent_id 思考`——子 Agent 的思考不裸混进主 trace。
+
+### answer 推理读档拼组修复：renderHistTurn 漏关组（2026-09-13，commit 08546b7，用户实测）
+
+**现象（t788 读档实证，用户报告「把 answer 的 reasoning_content 和上一条合并了」）**：v0.27.0 发布轮（t788）restart 后刷新页面回看，s4 的 reasoning（「PyPI 上传成功。现在 git commit + push 版本号变更。」）与 s5（answer 步）的 reasoning（「发布完成。给最终回答（按固定格式）…」）渲染成**一个** `💭 思考` 组，文本直接拼接、组标签还停留在 s4 的 `💭 思考`。
+
+**数据侧无辜**：answer reasoning 不存在任何 Step 里——后端 `finish_turn(content, reasoning)` 存进 `turn.answer_reasoning` 独立字段，投影与存档里 s4、s5 本来就是分开的（投影里它渲染为末条 assistant）。
+
+**根因（读档渲染路径独有）**：`renderThinking` 的语义是「有当前组就追加」（`_curThinkFold.buf += text`，组 `isConnected` 即复用）。`renderHistTurn` 的 steps 循环内每步开头置 null 建新组，但**循环结束后渲染 answer_reasoning 前漏置 null** → `_curThinkFold` 还指着最后一步（s4）的组（历史路径的工具渲染不关组）→ buf 直接追加拼进该组。
+
+**为什么实时无感**：实时路径 s4 的 `tool_call` 事件到达即 `_curThinkFold = null`（关组）→ s5 的 thinking 事件自然新建组。所以 bug **只在读档渲染触发**——典型触发场景正是 restart 后刷新页面。
+
+**修复**（src/static/index.html，commit `08546b7`，纯前端 Ctrl+F5 生效）：answer_reasoning 渲染前置 `_curThinkFold = null`——独立成组、标签 `💭(回答推理)`；即上表「四个时点」的第三行。本页既有描述「回答前推理单列一组」自此次修复起才与实现一致（此前文档超前于实现，读档路径实际会拼组）。
 
 ## step 事件行：累计 token 数字格式化（2026-08，commit 962b7cf）
 

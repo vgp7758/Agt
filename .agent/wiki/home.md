@@ -725,3 +725,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - 版本 **0.27.0**（2026-09-13，发布 `bcec989`，PyPI 已上线）：**minor 功能版**——施工模式是投影引擎行为级新功能（投影形态随活动 plan 状态自动切换），版本号 0.26.x → 0.27.0。本版核心 = 施工模式投影（`f375483`，含顺带修复 rf 快照行号化污染）；同版打包此前迭代三件：施工期 recent-file 回内嵌（`4fb84bb`）+ steps=reasoning 段级旧写法废弃（`b60cce8`，t781_s2 投影实证——无姿势内建段被拖进思考链）+ plan 完成态投影瘦身（`f8fb2b9`）。见 [v0.27.0 发布记录](releases/v0.27.0.md)、[context-engine · 施工模式投影](architecture/context-engine.md#施工模式投影2026-09-13)
 
+## 快速事实增补（2026-09-13 · 四 · answer 推理读档拼组修复）
+
+- **answer 推理读档拼组修复（2026-09-13，commit `08546b7`，用户实测 t788）**：v0.27.0 发布轮 restart 后刷新页面，t788 的 s5（answer 步）reasoning 被拼进 s4 的思考组（文本直接相连、标签还是 s4 的 `💭 思考`）。数据侧无辜——answer reasoning 存 `turn.answer_reasoning` 独立字段，投影/存档本就分开；根因在 `renderHistTurn` 读档路径：`renderThinking` 语义是「有当前组就追加」，steps 循环结束后 `_curThinkFold` 还指着最后一步的组，answer_reasoning 渲染前漏置 null → 追加拼组。实时路径 tool_call 事件会关组所以无感——**只在读档渲染触发**。修复：answer_reasoning 渲染前置 `_curThinkFold = null`（独立成组、标签 `💭(回答推理)`）。「归属关闭时点」三→四（新增 answer_reasoning 渲染前）。纯前端 Ctrl+F5 生效——见 [trace-fold · answer 推理读档拼组修复](features/trace-fold.md#answer-推理读档拼组修复renderhistturn-漏关组2026-09-13commit-08546b7用户实测)
+

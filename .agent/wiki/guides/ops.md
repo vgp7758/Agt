@@ -242,6 +242,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | 观测页节点预览无 📄、点不开全文 | 旧进程（无 full 存储）或**全量预算（20M 字符）耗尽**后只存预览；先 `/restart`，仍不行即预算耗尽属预期降级（见 [wf-monitor · 节点全文查看](../features/wf-monitor.md#节点全文查看2026-08-20commit-bb56a82)） |
 | session 落盘失败直接异常、阻塞 react（toollog / _origin / meta 裸写） | 已修（2026-09-02，commit e5f2733）：三处裸写容错——`_atomic_write_lines`（toollog 每步写·最热点）+ `save()` 的 `_origin.txt` / `meta.json`——失败只告警不抛，内存 session 仍是真相（见 [存档写盘容错](#存档写盘容错session-落盘失败不再阻塞-react2026-09-02commit-e5f2733)） |
 | WebIDE 文件树显示「不受支持的断点图标」+ 打开时弹「选择要管理的远程代理」/ 标签页名是翻译字面量 | **serve-web 1.134 把 `?folder=` URL 参数误路由成「远程代理」会话**；深层诱因是中文语言包 web 资源经 `vscode-unpkg.net` 代理 403 致 l10n 字面量泄漏 → 已修：服务端 `--default-folder` 直开工作区、URL 零参数，`/restart` 生效；残留图标/文案异常在 WebIDE 内 `Ctrl+Shift+P → Configure Display Language → English` 一次即治（见 [webide](../features/webide.md#注意事项)） |
+| HTTPS 反代域名（CNB / Cloudflare Tunnel 等）打开 WebUI 控制台刷 Mixed Content + `SecurityError: Failed to construct 'WebSocket'`，点工具再报 `Cannot read properties of null (reading 'send')` | 已修（v0.27.1，commit 57a2d30）：index.html `connectWS()` 硬编码 `ws://`，HTTPS 页面禁止发起不加密 WS → 协议自适应（`https:` 页面用 `wss://`，边缘代理终结 TLS 后转容器内 ws，服务端零改动）；升级 + `/restart` + 强刷（见 [user-interaction · WS 协议自适应](../features/user-interaction.md#ws-协议自适应cnb-https-反代-mixed-content-修复2026-09-13v0271)） |
 
 ### 桌面版数据根：统一 ~/.agt（旧：迁移被短路 → session 空 + 模型读 workspace models.py）
 

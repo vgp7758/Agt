@@ -25,7 +25,7 @@
 | [features/remote-client](features/remote-client.md) | 跨实例客户端：agt 实例作另一实例的 WS 客户端（可跨电脑）——REST / 只读 action / 消息驱动任务 / 斜杠命令四通道；**remote_message/remote_ask 已封装为第一等工具（2026-08）**；无"直接调远程工具"端点（工具级直执行已内建） | 远程指挥另一台机器的实例 / 多实例组网 |
 | [features/agents-admin](features/agents-admin.md) | Agent 管理页 /agents：子 Agent 声明表单化编辑 + **v2.1 声明格式** + **_main_ 主 Agent 置顶纳入** + 回退链表单 + 钩子行布局 + 5 子 Agent 声明规范化 | 管理子 Agent 声明 / 改 persona |
 | [features/longterm-memory](features/longterm-memory.md) | 长期记忆：三类记忆 × **episodic 召回三代演进** + **ensure_ltm per-workspace 单例** + 写入幂等 + /memory 双主权 + 存储 hash→可读转写 | 改记忆系统 / 理解 episodic 检索 |
-| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由 + **后台通知 wake 语义** + 并行钩子「执行中」UI Map 跟踪 + 实测 8 条现象对照 | 改插话 / 消息队列 / 后台触发 / 钩子 UI 状态 |
+| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由 + **后台通知 wake 语义** + 并行钩子「执行中」UI Map 跟踪 + **WS 协议自适应（CNB HTTPS 反代修复，v0.27.1）** | 改插话 / 消息队列 / 后台触发 / 钩子 UI 状态 / HTTPS 反代部署 |
 | [features/wiki-tools](features/wiki-tools.md) | wiki 工具集十件套：页面级六件套 + **章节级维护四件套**——章节边界=标题+全部子树（fence 感知）+ wiki-updater【增量维护优先】约定 | 改 wiki 工具 / 理解章节级维护语义 |
 | [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before → **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki → commit_wiki，自动维护并 git 提交推送 wiki；**busy 检查 ✅❌ 都算空闲（failed 躺平不死锁）** | 改 wiki 维护流程 / 调 commit 节点 |
 | [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，v4 流水线（3B 提词 + cosine 精排 + 阈值裁决）+ related=False 短路 | 开自动检索 / 调钩子工作流 |
@@ -737,4 +737,8 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 ## 快速事实增补（2026-09-13 · 六 · 变更文件补充区路径归一化——反斜杠引用漏判修复）
 
 - **「本轮变更文件」剔除逻辑路径归一化（2026-09-13，commit `b1ef5e4`，用户问诊触发）**：answer 引用变更文件有四种形态（完整/相对 × `/`/`\` 分隔），`unmentionedChangesHtml` 的「已引用剔除」判定（全等 + basename 兜底）原版只覆盖 `/` 两种——`p.split('/')` 切不开反斜杠，`\` 分隔引用切不出文件名 → 两层判定全 miss，被误判「未交代」而重复补充。修复：比对前统一 `_norm`（`\`→`/`）+ `_base`（basename 小写化），全等/basename 两层都走归一化口径，顺带覆盖大小写变体（`Src/X.Y.PY` 引用 `src/x/y.py` 同判已引用）。node 7 场景全绿；纯前端 Ctrl+F5 生效。见 [bubble-interaction · 路径归一化](features/bubble-interaction.md#变更文件补充区路径归一化反斜杠大小写引用漏判修复2026-09-13用户问诊commit-b1ef5e4)
+
+## 快速事实增补（2026-09-13 · 七 · v0.27.1 发布：CNB HTTPS 反代 WS 协议自适应）
+
+- **v0.27.1 补丁版**（2026-09-13，commit `57a2d30`）：用户在 CNB 容器 `agt-web` 经 HTTPS 反代域名（`https://xxx-8000.cnb.run`）打开 WebUI，控制台刷 `Mixed Content` + `SecurityError: Failed to construct 'WebSocket'`，点工具再级联 `Cannot read properties of null (reading 'send')`——根因 index.html `connectWS()` **硬编码 `ws://`**：HTTPS 页面禁止发起不加密 WS（浏览器 Mixed Content 拦截；rag.html / workflow_debug.html 早是协议自适应写法，主界面是漏网）。修复：协议自适应 `` `${location.protocol==='https:'?'wss':'ws'}` ``——TLS 边缘代理解密后转容器内 ws，**服务端零改动**，任何 HTTPS 反代（CNB / Cloudflare Tunnel / frp+TLS / nginx）直接可用；顺带 `sendToolCall` 加未连接防护（toast 替代级联报错）。`pip install -U agt-agent` + `/restart` + 强刷生效——见 [v0.27.1 发布记录](releases/v0.27.1.md)、[user-interaction · WS 协议自适应](features/user-interaction.md#ws-协议自适应cnb-https-反代-mixed-content-修复2026-09-13v0271)
 

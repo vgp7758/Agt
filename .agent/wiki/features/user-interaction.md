@@ -596,6 +596,46 @@ clearInterval(rec.timer);
 
 **生效方式**：index.html 磁盘 serve，**Ctrl+F5 强刷即生效，无需 /restart**。
 
+## WS 协议自适应：CNB HTTPS 反代 Mixed Content 修复（2026-09-13，v0.27.1）
+
+> src/static/index.html 两处（`connectWS` + `sendToolCall`），commit `57a2d30`，随 v0.27.1 发布。用户在 CNB 容器启动 `agt-web`，经 HTTPS 反代域名 `https://6hz0h133db-8000.cnb.run/` 打开 WebUI，控制台大量报错、消息发不出去。
+
+**报错与根因链**：
+
+```
+Mixed Content: The page at 'https://…cnb.run/' was loaded over HTTPS,
+  but attempted to connect to the insecure WebSocket endpoint 'ws://…cnb.run/ws'
+  → SecurityError: Failed to construct 'WebSocket'          ← 连接构造当场失败
+  → ws 保持 null
+  → 点工具按钮 sendToolCall 里 ws.send                       ← 级联 TypeError: null.send
+```
+
+- **根因**：`connectWS()` 硬编码 `ws = new WebSocket('ws://' + location.host + '/ws')`——浏览器安全策略**禁止 HTTPS 页面发起不加密的 ws:// 连接**（Mixed Content），`new WebSocket` 直接抛 SecurityError，后面的 null.send 全是级联噪声
+- **部署结构**：CNB 是 **TLS 边缘反代**——浏览器 ↔ `https://xxx-8000.cnb.run`（HTTPS/WSS）↔ 容器内 `:8000`（HTTP/WS），TLS 由边缘终结。容器内服务始终明文没有问题，问题只在前端协议写死
+- **漏网原因**：`rag.html` / `workflow_debug.html` 早就是协议自适应写法（`'https:'?'wss':'ws'`）——主界面 index.html 是唯一漏网
+
+**修复**（两处，src/static/index.html）：
+
+1. **协议自适应**（治本）：
+
+```javascript
+ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+```
+
+   WSS 到边缘代理解密后转发容器内 `ws://localhost:8000/ws`——**服务端零改动**，FastAPI 侧无任何感知。
+
+2. **sendToolCall 未连接防护**（治标防级联）：
+
+```javascript
+if(!ws || ws.readyState !== 1){ toast('⚠️ WebSocket 未连接（页面刷新可重连）——消息发不出去'); return; }
+```
+
+   连接被拦/断开时点工具按钮不再抛 TypeError，改 toast 明示。
+
+**生效方式**：index.html 随服务启动载入内存——升级 + `/restart` 生效（浏览器侧 Ctrl+F5 强刷兜底）。CNB 容器内 `pip install -U agt-agent` 后重启 agt-web 即通。
+
+**收益外延**：任何 HTTPS 反代场景（CNB / Cloudflare Tunnel / frp+TLS / nginx 反代）同一修复全部直接可用——**协议跟着页面走，部署拓扑不再影响前端连接**。部署排障速查见 [ops · 常见错误对照](../guides/ops.md#常见错误对照)。
+
 ## before_turn 钩子并行执行保证
 
 见 [工作流引擎与钩子](../architecture/workflow-hooks.md#before_turn-钩子并行执行2026-08-新v0182-发布)：

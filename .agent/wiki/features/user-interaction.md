@@ -6,7 +6,7 @@
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒；同日另一族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
+- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编，见下文专节）；同日另一族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
 - **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
@@ -306,6 +306,35 @@ if item:
 **验证**：六场景全过——never 崩不唤醒 / crash 首崩唤醒 / 连崩退避 / rc=0 清退避后再崩又唤醒 / always 正常退出也唤醒 / 旧 entry 缺省 never；三文件编译通过。
 
 **生效方式**：引擎层三文件（background.py / background_tools.py / agent.py），需 `/restart`；之后启动 watchdog 型服务自动带 `on_exit_wake="crash"`（docstring 已写选择指引）。
+
+### 误用收编：非枚举文本 = 自定义作业指令 + 无条件唤醒（2026-09-14，commit 7283f52，用户裁定·8000 实例实测）
+
+> src/agent.py（`_on_service_exit` 策略判定 + 通知三处注入）+ src/background_tools.py（`start_service` docstring）。**起因**：8000 实例（comfy repo）启动 mimg5_chain 镜像构建服务时，把 `on_exit_wake` 当「服务退出时的返回提示」填了一大段自然语言指令——「mimg5_chain（第5轮镜像构建·CPU远端手脚）退出——查 mimg5_result.txt 终局（PUSH_RC=0=成品/失败）+ r5 阶段，报用户……先报结果等指示」。旧实现：非枚举串**静默丢弃、按 never 处理**——调用方的意图整个落空。
+
+**用户裁定**：「如果 llm 传了这样的东西，就按这个返回并唤醒吧」——这种"误用"其实是好模式（启动时就把「退出后该干嘛」写好，醒来直接照作业执行），收编为特性。
+
+**四分支语义**（在 eb9a7de 三分支基础上扩一；上节全景表 service_exit 行自此为四分支）：
+
+| on_exit_wake | 行为 |
+|---|---|
+| `never`（默认）/ 空串 | 任何退出仅登记，并入下次自然轮（不变） |
+| `crash` | rc≠0 唤醒 + 5 分钟同名退避（不变） |
+| `always` | 任何退出都唤醒（大小写归一，`ALWAYS` 等价；不变） |
+| **其它非空任意文本** | **= 自定义作业指令：无条件唤醒（always 语义、无退避）+ 提示原文注入通知** |
+
+**通知形态**（醒来时看到）：header `📨〔后台服务退出〕「mimg5_chain」已自行退出（rc=0（正常退出））·附启动指令`；合成 stop_service 记录**三处注入**：
+
+1. **result 尾部**：「—— 启动时你留下的指令（on_exit_wake）——」+ 指令原文
+2. **reasoning**：「（你启动该服务时留的指令：…）」
+3. **header** 标记 `·附启动指令`
+
+Agent 醒来直接看到自己启动时留的作业——按指令查文件、报用户，决策闭环不断。
+
+**配套**：`start_service` docstring 补自定义指令语义说明——参数描述即提示词，引导后续 LLM 正确使用该用法（与 [run-python · 参数决策指引](run-python.md) 同款思路）。
+
+**验证**（9/9）：8000 真实场景四断言（唤醒 / header 标记 / result 注入 / reasoning 注入）+ 枚举全回归（never / crash+rc0 不唤醒 / crash+rc1 首次唤醒 / ALWAYS 大写 / 空串）。
+
+**生效方式**：引擎层（agent.py / background_tools.py），需 `/restart`。commit `7283f52` 已推送，随下个版本发布；8000 实例 `pip install -U agt-agent` 后生效。
 
 ### 后台任务完成自动通知：bg_task 恒唤醒（2026-08-30，commit 6460ad1）
 

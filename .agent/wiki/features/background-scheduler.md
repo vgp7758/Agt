@@ -77,6 +77,19 @@
 
 **验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
+## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令）
+
+服务退出时是否唤醒 Agent，由启动参数逐服务声明（`start_service(name, command, cwd, on_exit_wake="never")`）；策略判定与通知注入在 src/agent.py `_on_service_exit`：
+
+| on_exit_wake | 语义 |
+|---|---|
+| `never`（默认）/ 空串 | 仅登记，并入下次自然轮（v0.19.2 防套娃基线） |
+| `crash` | rc≠0 唤醒一轮；同名 5 分钟内连续崩溃自动退避为登记 |
+| `always` | 任何退出都唤醒（单次任务跑完即报） |
+| 非枚举任意文本 | **自定义作业指令：退出即无条件唤醒（无退避），指令原文注入通知**——2026-09-14（commit 7283f52，用户裁定）：LLM 把本参数当「退出时的返回提示」填自然语言，旧实现静默丢弃按 never；误用收编为特性。通知三处注入形态见 [user-interaction · 误用收编](user-interaction.md) |
+
+docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务建议 `always`；**退出后要 Agent 照办的事，直接把作业写进本参数**（启动时留指令、醒来照办）。
+
 ## 与其他模块的关系
 
 - [user-interaction](user-interaction.md)：schedule 唤醒的轮走 inbox；通知语义标签体系给 ⏰ `schedule:` source（通知气泡形态 + 混合批批首归属 `schedule:z` 判定）；service_exit / bg_task / schedule 三族唤醒全景表见该页

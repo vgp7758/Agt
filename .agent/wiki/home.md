@@ -746,3 +746,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **大段粘贴标记 `<pasted-log>`（2026-09-13，commit `f1b4ecb`，用户提案）**：往 WebUI 输入框粘贴 ≥6 行 / ≥400 字符文本（典型日志）自动包裹 `<pasted-log>…</pasted-log>`（toast 提示、可见可手删、阈值保守正常消息不触发）；extract_keywords 链头新增 strip_pasted 正则剥块（`100001 → 115001 → claim`），剥离后文本作 claim key / LLM q / cache_write key / recheck key **四处同源**——贴大段日志不再把本地提词带偏（此前 pip/OSError/idna 之类词导致 wiki/记忆检索误命中）；user_message 原文照常归档投影，主 Agent 看得到完整日志。生效：WebUI Ctrl+F5 + 工作流下一轮 before_turn——见 [大段粘贴标记](features/pasted-log.md)
 
+## 快速事实增补（2026-09-14 · on_exit_wake 误用收编——非枚举文本=自定义指令+恒唤醒）
+
+- **起因**：8000 实例（comfy repo）`start_service` 启动 mimg5_chain 镜像构建时，把 `on_exit_wake` 当「服务退出时的返回提示」填了自然语言作业（查 mimg5_result.txt 终局、报用户、先报结果等指示）——旧实现非枚举串静默丢弃按 never，调用方意图落空
+- **用户裁定**：「llm 传了这样的东西就按这个返回并唤醒」——误用收编为特性：**非枚举任意文本 = 自定义提示 + 无条件唤醒（无退避）**，`never`/`crash`/`always` 枚举语义不变（大小写归一，空串=never）
+- **通知形态**：合成 stop_service 记录三处注入——result 尾部「启动时你留下的指令」原文 + reasoning 提示 + header `·附启动指令` 标记；`start_service` docstring 同步补自定义指令语义（参数描述即提示词）
+- **验证**：9/9（8000 真实场景四断言 + 枚举全回归）；commit `7283f52` 已推送，随下版本发布（8000 端 `pip install -U agt-agent` 生效）
+- 详见 [user-interaction · 误用收编](features/user-interaction.md) / [background-scheduler · on_exit_wake](features/background-scheduler.md)
+

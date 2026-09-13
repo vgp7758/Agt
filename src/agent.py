@@ -926,17 +926,31 @@ class Agent:
         #   crash        rc≠0 唤醒一轮（服务死了要人管）+ 退避：5 分钟内同名第二次异常降级登记
         #                ——既保住"真正需要救"的场景，又封死套娃循环（通知→重启→又崩→又通知→♾️）
         #   always       任何退出都唤醒（无退避，调用方明确要的——如单次任务型服务跑完即报）
+        #   其它非空串   自定义提示 + 无条件唤醒（用户裁定 2026-09-14·8000 实例实测）：LLM 常把
+        #                本参数当"退出时的返回提示"填自然语言指令（如"查 result.txt 终局、报用户，
+        #                先报结果等指示"）——旧实现静默丢弃按 never，意图落空；现在按调用方本意：
+        #                退出即唤醒，提示原文注入通知（Agent 醒来看到自己启动时留的指令照做）。
         # rc==0 正常退出清退避状态（服务活过一次，重新计崩窗）。
-        pol = str(entry.get("on_exit_wake", "never"))
+        pol_raw = str(entry.get("on_exit_wake", "never") or "never").strip()
+        pol = pol_raw.lower()
+        custom_note = ""
         wake = False
         if pol == "always":
             wake = True
-        elif pol == "crash" and rc != 0:
-            now = time.time()
-            wake = (now - self._crash_wake_ts.get(name, 0.0)) >= 300
-            self._crash_wake_ts[name] = now
+        elif pol == "crash":
+            if rc != 0:
+                now = time.time()
+                wake = (now - self._crash_wake_ts.get(name, 0.0)) >= 300
+                self._crash_wake_ts[name] = now
+        elif pol not in ("never", "") and pol_raw:
+            custom_note = pol_raw          # 非枚举非空 → 自定义提示（always 语义唤醒）
+            wake = True
         if rc == 0:
             self._crash_wake_ts.pop(name, None)
+        if custom_note:
+            seed["result"] += (f"\n\n—— 启动时你留下的指令（on_exit_wake）——\n{custom_note}")
+            seed["reasoning"] += f"（你启动该服务时留的指令：{custom_note[:300]}）"
+            header += " ·附启动指令"
         self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
 
     def _on_bg_task_done(self, bg_id: str, name: str, rc: int):

@@ -24,7 +24,9 @@ def make_background_tools(agent) -> list:
         name 自取一个易记的名字，command 是 shell 命令。
         on_exit_wake（自行退出时是否唤醒你处理，默认 never=仅登记、下次交互时并入）：
         crash=异常退出(rc≠0)唤醒一轮处理、5分钟内同名连续崩溃自动退避为登记（防套娃）；
-        always=任何退出都唤醒（含正常退出，如单次任务跑完即报）。常驻关键服务建议 crash。"""
+        always=任何退出都唤醒（含正常退出，如单次任务跑完即报）。常驻关键服务建议 crash。
+        也可填一段自定义指令（非枚举的任意文本）：退出即无条件唤醒，指令原文注入通知——
+        你醒来直接看到自己启动时留的作业（如"查 result.txt 终局，报用户，先报结果等指示"）。"""
         return svc.start(name, command, cwd, on_exit_wake=on_exit_wake)
 
     def stop_service(name: str) -> str:

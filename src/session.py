@@ -1333,6 +1333,21 @@ class Session:
             _LOG.warning("assembly %s 项求值失败（%s），跳过：%s", kind, item.get("name") or item.get("path") or item.get("cmd"), e)
             return ""
 
+    def _construction_mode(self) -> bool:
+        """施工模式（2026-09-13·spec s_e1804804，用户提案）：活动 plan 存在未完成步时投影切换
+        施工视图——history 不装配 + 头部施工牌（plan design）。判定源 agent_config._RUNTIME_AGENT
+        （与 plan_content() 同源，无第二份状态）；绑定 session 同一性——子 Agent 的 session 不是
+        活动 plan 所属 agent 的 session，不受主 Agent 施工影响（其装配的 history 段照常）。"""
+        try:
+            from agent_config import _RUNTIME_AGENT
+            if _RUNTIME_AGENT is None or getattr(_RUNTIME_AGENT, "session", None) is not self:
+                return False
+            p = getattr(_RUNTIME_AGENT, "active_plan", None)
+            steps = (p or {}).get("steps") or []
+            return bool(steps) and any(str(x.get("status")) != "completed" for x in steps)
+        except Exception:
+            return False
+
     def messages_for_llm(self) -> list[dict]:
         """投影 = assembly 清单驱动：按 self.assembly_plan 的顺序装配段/动作项（走查看 _walk_plan——
         连续系统信息段合并成一条 system）；无声明走默认清单（与历史版硬编码顺序一致）。
@@ -1348,6 +1363,28 @@ class Session:
             # 追加 Markdown 回答规范与资产引用语法告知——Agent 不知道 webui 支持 [!名](路径) 渲染。
             # 幂等：已含标记则跳过（防重复装配叠加）；恒定文本不引入额外缓存扰动。
             self._append_answer_style(msgs)
+            # —— 施工牌（2026-09-13·spec s_e1804804·用户提案）：施工模式第二条 system = plan design
+            # 全文。施工期恒定 → 前缀 byte-stable（缓存吃满）；不进 _apply_system_ledger 的
+            # 快照口径（账本只认 msgs[0]）。位置=头部 system 之后（user/rules 的合并 system 是 msgs[0]）。
+            if self._construction_mode():
+                try:
+                    from agent_config import _RUNTIME_AGENT
+                    _p = getattr(_RUNTIME_AGENT, "active_plan", None) or {}
+                    _d = str(_p.get("design") or "").strip()
+                    if _d:
+                        _t = str(_p.get("title") or "")
+                        _h = f"【施工牌·进行中计划】{_p.get('id', '')}" + (f" · {_t}" if _t else "")
+                        msgs.insert(1, {"role": "system", "content":
+                                        f"{_h}\n设计：\n{_d}\n\n"
+                                        "（施工模式：历史对话未装配——背景以本设计为准；"
+                                        "需要历史细节用 recall 召回。）"})
+                        sections.insert(1, {"name": "施工牌(plan design)", "msgs": 1,
+                                            "chars": len(_d) + 80,
+                                            "tokens": int((len(_d) + 80) / self._chars_per_token),
+                                            "meta": "施工模式·恒定前缀（byte-stable）",
+                                            "sample": _h})
+                except Exception as e:
+                    _LOG.warning("施工牌注入失败（跳过）：%s", e)
             self._apply_system_ledger(msgs)   # 三态后处理（必须在 answer_style 之后——比较口径含提示文本）
             if self._tools_schema_chars:
                 sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,
@@ -1588,6 +1625,12 @@ class Session:
                     continue
                 _flush_run()   # 对话本体段：先把缓冲里的系统信息落成消息
                 if name == "history":
+                    if self._construction_mode():
+                        # 施工模式（2026-09-13·spec s_e1804804）：历史不投影——背景以施工牌
+                        # （头部第二条 system=design 全文）为准，需要细节 recall 召回
+                        sections.append({"name": "history段", "msgs": 0, "chars": 0, "tokens": 0,
+                                         "meta": "跳过(施工模式——plan 未完成，历史不装配；recall 可查)"})
+                        continue
                     st = len(msgs)
                     msgs.extend(self._seg_msgs_history(item.get("mode"), msgs))
                     subs = [(nm, st + off, mt) for (nm, off, mt) in (self._hist_marks or [])]

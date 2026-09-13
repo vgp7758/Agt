@@ -811,6 +811,41 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 ## system 段 append-not-replace（2026-09-12）
 
+## 施工模式投影（2026-09-13）
+
+# —— 施工模式投影（2026-09-13，spec s_e1804804，用户提案） ——
+
+## 语义
+
+存在**未全部完成的活动 plan** 时，主 Agent 投影切换施工视图：
+- history 段整个不装配（段统计标"跳过(施工模式)"）——施工背景以施工牌为准，recall 兜底
+- 头部第二条 system = 施工牌（plan design 全文 + 提示语）
+- 全部步骤 completed / exit_plan → 判定自然为否 → 恢复正常投影（动态判定，无状态同步）
+- 判定绑定 session 同一性（`_RUNTIME_AGENT.session is self`）——主 Agent 施工不波及子 Agent
+
+## 缓存经济
+
+- design（施工期恒定）进头部 → system 快照之后前缀 byte-stable，每步只增量计 steps/tail
+- plan_steps（每步变）留在区3 reminder 桶（未命中区零扰动）
+- 进入/退出各 miss 一次（形态切换），换取施工期省掉整个历史段——大 session 显著划算
+- 施工牌是第二条 system，不进 append-not-replace 账本口径（只认 msgs[0]）
+
+## 防双份
+
+施工模式下 `plan_content()` 返回空（design 已前移施工牌）；`plan_steps()` 原位输出。
+非施工模式两者行为不变（全完成 → plan_content 一行 / plan_steps 空）。
+
+## 可观测
+
+/context 顶部：`⚙️ **施工模式**（plan 未完成：history 未装配·施工牌 N 字…）`；
+段清单 history 行 = 跳过(施工模式)。
+
+## 顺带修复（同轮实测抓到）
+
+file_snapshots 快照 text 存的是行号化文本（`_number_lines`）——rf 段渲染再行号化产生
+双前缀（`1| 1│`），且大文件 outline 对行号化文本 ast.parse 恒 IndentationError
+（session.py 一直显示"结构提取失败"的根因）。修复：快照存原文，行号化归展示层。
+
 # —— system 段 append-not-replace：缓存连续时追加、毕业断点处归一化（2026-09-12，spec s_eb14a8fd，用户提案+裁定） ——
 
 ## 动机

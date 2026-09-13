@@ -1660,7 +1660,11 @@ class Agent:
             real = __import__("pathlib").Path(key)
             ver = _file_version(real)
             raw = real.read_text(encoding="utf-8")
-            text = _md_snapshot(raw) if real.suffix.lower() in {".md", ".markdown"} else _number_lines(raw)
+            # 快照存原文（2026-09-13·修复）：rf 段渲染时自行行号化——快照层行号化会双前缀
+            # （t789 投影实证 '1| 1│'），且大文件 outline 对行号化文本 ast.parse 必失败
+            # （session.py 恒"(结构提取失败: IndentationError)"的根因）。md 保留 _md_snapshot
+            # （摘要态，非行号化源码）。
+            text = _md_snapshot(raw) if real.suffix.lower() in {".md", ".markdown"} else raw
             rel = real.relative_to(WORKSPACE).as_posix()
             snapshots[cid] = {"path": rel, "version": ver, "text": text}
         return snapshots

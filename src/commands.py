@@ -1611,6 +1611,11 @@ def _cmd_context(ctx: CommandContext, args):
     _form = str(bd.get("system_form") or "").strip()
     if _form and _form != "-":
         print(f"system 段形态：**{_form}**（append-not-replace 账本；in_history_system={'on' if getattr(s, '_in_history_system', False) else 'off'}）")
+    # 施工模式标注（spec s_e1804804）：施工期 history 未装配 + 头部施工牌
+    if getattr(s, "_construction_mode", lambda: False)():
+        _plaque = next((x for x in bd.get("sections", []) if "施工牌" in str(x.get("name"))), None)
+        _pc = f"·施工牌 {_plaque['chars']:,} 字" if _plaque else ""
+        print(f"⚙️ **施工模式**（plan 未完成：history 未装配{_pc}——背景以施工牌为准，recall 可查历史）")
     print("| 段落 | 估算 tok | 占比 | 图表 |")
     print("|---|---:|---:|---|")
     for sec in bd["sections"]:

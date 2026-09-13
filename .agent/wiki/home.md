@@ -717,3 +717,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **plan funcs 完成态瘦身（2026-09-13，commit f8fb2b9，用户裁定「完成后只留一行标题」）**：`plan_content()` 此前在 plan 全部步骤完成后仍每步注入 design 全文（现场实锤：p_244505d9 5/5 全绿还整篇注入含实测表格的 design——纯浪费）；现在**完成态仅注一行** `【当前计划】p_xx · 标题（已完成 n/n 步——细节已消化；确认收尾可 exit_plan 退出）`（实测 74 字），`plan_steps()` 完成态返回空串（段不注入）；进行态全文不变（施工期需要细节），spec 侧不受影响（approved 态本就返回空由 plan 接管）。顺手收尾：p_244505d9 已 exit_plan，注入块整体消失。改的是 agent_config.py 代码层，/restart 生效（main.yml 热重载不覆盖代码）——见 [agents-admin · FUNC_REGISTRY 扩容](features/agents-admin.md)
 
+## 快速事实增补（2026-09-13 · 二 · 施工模式投影收官——history 停装 + 头部施工牌）
+
+- **施工模式投影收官（2026-09-13，commit `f375483`，spec s_e1804804，用户提案）**：存在**未全部完成的活动 plan** 时主 Agent 投影切换施工视图——**history 段整个不装配**（段统计 meta 标跳过）+ **头部第二条 system = 施工牌**（plan design 全文；施工期恒定 → byte-stable 前缀缓存吃满；不进 append-not-replace 账本口径）；全部步骤 completed / exit_plan 动态判定自动恢复正常投影（无状态同步）。`plan_content()` 施工期返回空（design 已前移施工牌，防双份）、`plan_steps()` 留区3；子 Agent 隔离（判定绑定 `_RUNTIME_AGENT.session is self`，主 Agent 施工不波及子 Agent 的 history）；recall / 存档不受影响（history 只是不投影）。16+3 场景测试全绿；**首个实战样本**：交付验证轮自身投影即见施工牌 `p_c1848eb7` 出现在头部、plan_content 区3 块同步消失（防双份实证闭环）。顺带修复 rf 快照行号化污染（双前缀 `1| 1│` + 大文件 outline 恒 IndentationError——快照存原文、行号化归展示层）。见 [context-engine · 施工模式投影](architecture/context-engine.md#施工模式投影2026-09-13)
+
+## 快速事实增补（2026-09-13 · 三 · v0.27.0 发布：施工模式投影）
+
+- 版本 **0.27.0**（2026-09-13，发布 `bcec989`，PyPI 已上线）：**minor 功能版**——施工模式是投影引擎行为级新功能（投影形态随活动 plan 状态自动切换），版本号 0.26.x → 0.27.0。本版核心 = 施工模式投影（`f375483`，含顺带修复 rf 快照行号化污染）；同版打包此前迭代三件：施工期 recent-file 回内嵌（`4fb84bb`）+ steps=reasoning 段级旧写法废弃（`b60cce8`，t781_s2 投影实证——无姿势内建段被拖进思考链）+ plan 完成态投影瘦身（`f8fb2b9`）。见 [v0.27.0 发布记录](releases/v0.27.0.md)、[context-engine · 施工模式投影](architecture/context-engine.md#施工模式投影2026-09-13)
+

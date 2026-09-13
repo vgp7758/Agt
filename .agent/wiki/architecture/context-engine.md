@@ -118,7 +118,7 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 
 **用户请求（2026-09-03）**：「我又想了想，我们把 steps 后面的下拉框（附加在正文尾部/注入思考链）改成在后面的各段分别通过下拉框选择吧」——注入姿势从**单点全局**（steps 一处声明管其后所有段，dd5b0b4）演进为**每个动作项各自选择**（粒度变化；两种姿势的注入语义本身不变）。
 
-**DSL（src/multiagent.py）**：动作项 dict 支持 `mode:` 键——`{func: load_models(), mode: reasoning}`；`mode: reminder|reasoning`（默认 reminder）。`_ASSEMBLY_STEPS_MODES` 枚举保留做校验（非法值 warning + 按默认 reminder）。`steps=reasoning` 段级声明**保留**（改写 `tail_mode`，语义降为「**未标 pose 的动作项**的整体默认」）。
+**DSL（src/multiagent.py）**：动作项 dict 支持 `mode:` 键——`{func: load_models(), mode: reasoning}`；`mode: reminder|reasoning`（默认 reminder）。`_ASSEMBLY_STEPS_MODES` 枚举保留做校验（非法值 warning + 按默认 reminder）。`steps=reasoning` 段级声明**保留**（改写 `tail_mode`，语义降为「**未标 pose 的动作项**的整体默认」——**2026-09 起该段级写法废弃，见下方后记**）。
 
 **引擎双桶（src/session.py `_walk_plan` 区3）**：steps 之后的 asm 动作项不进 run 缓冲（不独立成条），按每项 pose（`item.mode`）**归双桶**：
 
@@ -140,6 +140,14 @@ episodic 召回行（`[epi·长期记忆]`）由 before_turn 检索工作流产�
 ```
 
 语义清楚：A/B 放进 assistant 思考槽（环境状态当「想」的输入），C 走对话正文备注。UI 细节见 [agents-admin · 动作项 pose 下拉](../features/agents-admin.md)。
+
+#### 后记：段级旧写法 steps=reasoning 废弃——姿势收敛到逐动作项 pose（2026-09，commit b60cce8，t781_s2 投影实证）
+
+**实证（t781_s2 投影）**：段级 `steps=reasoning`（2026-09-02 引入；24597f3 后语义=「未标 pose 动作项的整体默认」）的实际影响面比设计大——它改写的 `tail_mode` 会把 **tail / recent_file / 钩子旁注等无姿势选择器的内建段**一并拖进思考链（作为 reasoning_content 前缀注入），而这些段本应走 reminder 桶（`<system-reminder>` 并入正文）。
+
+**废弃（commit `b60cce8`，随 [v0.27.0](../releases/v0.27.0.md) 发布）**：段级 `steps=reasoning` 写法废弃——声明不再生效，无姿势内建段回归 reminder 桶；注入姿势的声明入口**收敛为逐动作项 `mode:` 键**（pose 双桶）——想进思考链的段/动作项逐项标注，其余一律 reminder。
+
+（上方「段级声明保留 / 语义降为整体默认」为 2026-09-03 时点状态，已被本后记取代。）
 
 ## 投影转储文件名与 t/s 标记（commit 4aced81）
 

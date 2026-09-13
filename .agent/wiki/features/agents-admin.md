@@ -131,8 +131,8 @@ Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不用 /restart�
 |---|---|
 | `spec_content()` | 【施工方案 spec】s_xxx · 标题（待批阅）· 设计概述 |
 | `spec_steps()` | 施工步骤：[create] file @ anchor — rationale + 批阅态提示行 |
-| `plan_content()` | 【当前计划】p_xxx · 标题 · 设计 |
-| `plan_steps()` | 进度：✅/▶/☐ 步骤清单 + 推进提示 |
+| `plan_content()` | 【当前计划】p_xxx · 标题 · 设计（**全部步骤完成后仅一行标题**，见下「后补二」） |
+| `plan_steps()` | 进度：✅/▶/☐ 步骤清单 + 推进提示（完成态返回空串，段不注入） |
 | `bg_services()` | 【后台服务状态】服务名 pid 运行时长（= tail 服务部分） |
 
 细节：spec **approved 态返回空**（已生成 plan，交给 plan_* 接管，防双重注入，与 `_format_spec_block` 同语义）；docstring 首行 tooltip 自动跟上（上一轮机制，无需另配）。
@@ -163,6 +163,24 @@ c7a9339 的「顺手修真 bug」（get_team_profiles 改走挂点）在**同日
 - viewer_id 无签名参数的函数（runtime_env / print_time 等）走原路径，不受影响
 
 自检口径：子 Agent 声明的 assembly 尾部统一有 `- func: get_team_profiles()`（本 repo 六 Agent + 8000 实例七 Agent，补记见 [team-tools · 补记四/五](team-tools.md)）。**跨版本兼容（8000 跨实例巡检实证，2026-09-02）**：func 项在旧版本 agt（FUNC_REGISTRY 无该函数）上求值 → 白名单查不到 → 返回空 → func 段自动跳过——**安全失败方向是变空而非报错**，跨实例手工装配 func 项无风险；对方升级后自动生效。
+
+#### 后补二：plan funcs 完成态瘦身——design 全文 → 一行标题（2026-09-13，commit f8fb2b9，用户裁定）
+
+**现场**：用户贴出的消息本身就是问题实锤——append-not-replace 的 plan（p_244505d9）已 5/5 全部完成，投影里 `plan_content()` 仍把整个 design（含实测表格）全文注入。完成态每步注入 design 全文是**纯浪费**：步骤做完细节早已消化，仅需「有 plan 挂着、可 exit_plan 收尾」的可见性。用户裁定：「完成后只留一行标题」。
+
+**改动**（`_func_plan_content`，src/agent_config.py；docstring 同步写明语义）：
+
+| plan 状态 | `plan_content()` | `plan_steps()` |
+|---|---|---|
+| 进行中（有未完成步骤） | 全文（design + 步骤清单）——施工期需要细节，不变 | 全文 |
+| **全部完成** | **一行**：`【当前计划】p_xx · 标题（已完成 n/n 步——细节已消化；确认收尾可 exit_plan 退出）` | **空串**（段不注入） |
+| 无活动计划 | 空 | 空 |
+
+实测完成态从全文级压到 **74 字**；进行态回归不变。spec 侧无对应问题——`spec_content()` 在 approved 态本来就返回空（由 plan 接管）。
+
+**顺手收尾**：p_244505d9 确已全部完成，当场 `exit_plan` 退出——此后投影里该注入块整个消失（连 74 字都不出）。plan 注入的完整生命周期：create_plan（施工期全文注入）→ 全部完成（一行标题可见性）→ exit_plan（归零）。
+
+**生效**：改的是 `agent_config.py` 函数实现——main.yml 热重载覆盖不到代码层，需 `/restart` 生效。
 
 ### 动作项 pose 下拉：并入正文 / 注入思考链（2026-09-03，commit 24597f3 · 粒度演进）
 

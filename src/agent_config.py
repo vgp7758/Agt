@@ -232,24 +232,33 @@ def _func_spec_steps() -> str:
 
 
 def _func_plan_content() -> str:
-    """{func:plan_content()} —— 当前活动计划的设计概述（id/标题/design）。无活动计划返回空。"""
+    """{func:plan_content()} —— 当前活动计划的设计概述（id/标题/design）。
+    无活动计划返回空；**全部步骤完成后只留一行标题**（2026-09-13·用户裁定——
+    design 全文每步注入是纯浪费，完成态仅需可见性：知道有 plan 挂着、可 exit_plan 收尾）。"""
     p = _active_plan_dict()
     if not p:
         return ""
     title = p.get("title", "")
     head = f"【当前计划】{p.get('id', '')}" + (f" · {title}" if title else "")
+    steps = p.get("steps") or []
+    done = sum(1 for x in steps if x.get("status") == "completed")
+    if steps and done == len(steps):
+        return f"{head}（已完成 {done}/{len(steps)} 步——细节已消化；确认收尾可 exit_plan 退出）"
     design = (p.get("design") or "").strip()
     return head + f"\n设计：{design or '（无）'}"
 
 
 def _func_plan_steps() -> str:
-    """{func:plan_steps()} —— 当前活动计划的步骤进度清单（☐/▶/✅ + 描述 + 状态 + 推进提示行）。"""
+    """{func:plan_steps()} —— 当前活动计划的步骤进度清单（☐/▶/✅ + 描述 + 状态 + 推进提示行）。
+    全部完成后返回空（plan_content 的一行摘要已含进度——步骤全文不再注入）。"""
     p = _active_plan_dict()
     if not p:
         return ""
     from plan_tools import _PLAN_ICON, _PLAN_LABEL   # 延迟 import：防顶层循环
     steps = p["steps"]
     done = sum(1 for x in steps if x.get("status") == "completed")
+    if steps and done == len(steps):
+        return ""
     lines = [f"进度（共 {len(steps)} 步，已完成 {done}）："]
     for i, x in enumerate(steps):
         st = x.get("status")

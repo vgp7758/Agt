@@ -1,17 +1,18 @@
-<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + pending 互斥）：kv_cache_read 按 user_message 查缓存，命中真实值直接返回；读到 pending（并发方正在提取）→ 等待循环（2s 轮询×15 次）直到对方写回后取走（setvar→break 携带值）；未命中则写 pending 占位 → local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。同轮多个 before_turn 工作流共用，只花第一次的 LLM 调用（hidden，仅供 subworkflow 引用）" hidden="true">
+<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + claim 原子互斥）：kv_cache_claim 按 user_message 原子判定——hit（命中真实值）直接返回；pending（并发方正在提取）→ 等待循环（2s 轮询×90 次）直到对方写回后取走；claimed（本方独占提取权，已原子占位）→ local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。claim 的 check-and-set 在进程级锁内完成——同 hook 双工作流并发时恰一个提取方（旧 read→write-pending 两节点模式有毫秒级双 miss 窗口：双双打本地单并发模型必炸一个，2026-09-13 用户实测修复）；pending 带 150s TTL——提取方死亡后下一 claim 方自动接管（hidden，仅供 subworkflow 引用）" hidden="true">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
-  <node id="110001" type="plugin" title="cache_read" x="420" y="80" toolName="kv_cache_read">
+  <node id="110001" type="plugin" title="cache_claim" x="420" y="80" toolName="kv_cache_claim">
     <in name="key" type="string" ref="100001.user_message"/>
     <in name="namespace" type="string">kw_extract_v2</in>
-    <out name="hit" type="boolean"/>
+    <out name="state" type="string" description="claimed=本方提取/hit=命中/pending=等待"/>
     <out name="value" type="any"/>
     <batch enabled="false"/>
   </node>
-  <node id="120001" type="selector" title="cache_hit?" x="1320" y="80">
-    <branch><cond op="11" left="1370692.result" right="pending" left_type="boolean"/></branch>
-    <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
+  <node id="120001" type="selector" title="claim_state?" x="1320" y="80">
+    <branch><cond op="1" left="110001.state" right="hit" left_type="string"/></branch>
+    <branch><cond op="1" left="110001.state" right="pending" left_type="string"/></branch>
+    <branch><cond op="1" left="110001.state" right="claimed" left_type="string"/></branch>
   </node>
   <node id="130001" type="llm" title="extract" x="1920" y="80">
     <in name="q" type="string" ref="100001.user_message"/>
@@ -57,13 +58,6 @@
   </node>
   <node id="933950" type="aggregator" title="变量聚合" x="3120" y="80">
     <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="1275951.nth_output" type="list"/><var ref="1482263.raw" type="list"/></group>
-  </node>
-  <node id="908175" type="plugin" title="write_pending" x="1620" y="80" toolName="kv_cache_write">
-    <in name="key" type="string" ref="100001.user_message"/>
-    <in name="value" type="string">pending</in>
-    <in name="namespace" type="string">kw_extract_v2</in>
-    <out name="result" type="object" description="工具返回值"/>
-    <batch enabled="false"/>
   </node>
   <node id="129000" type="code" title="init_kw" x="1620" y="208">
     <in name="x" type="string">init</in>
@@ -153,26 +147,17 @@
     <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
     <batch enabled="false"/>
   </node>
-  <node id="1370692" type="AND" title="AND" x="1020" y="80">
-    <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
-    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
-    <out name="result" type="boolean" description="全部条件组满足时为 true"/>
-    <out name="results" type="list" description="每组条件的判定结果"/>
-    <batch enabled="false"/>
-  </node>
   <edge from="100001" to="110001"/>
   <edge from="130001" to="130002"/>
   <edge from="130002" to="130003"/>
   <edge from="130003" to="140001"/>
-  <edge from="120001" to="933950" port="true_1"/>
+  <edge from="120001" to="933950" port="true"/>
   <edge from="933950" to="900001"/>
   <edge from="140001" to="933950"/>
-  <edge from="120001" to="908175" port="false"/>
-  <edge from="908175" to="130001"/>
-  <edge from="120001" to="129000" port="true"/>
+  <edge from="120001" to="129000" port="true_1"/>
+  <edge from="120001" to="130001" port="true_2"/>
   <edge from="129000" to="1275951"/>
   <edge from="1275951" to="933950"/>
   <edge from="110001" to="1482263"/>
-  <edge from="1482263" to="1370692"/>
-  <edge from="1370692" to="120001"/>
-</workflow>
+  <edge from="1482263" to="120001"/>
+ </workflow>

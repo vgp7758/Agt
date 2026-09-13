@@ -407,7 +407,7 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 - **pass_through 工具**（LIGHT_TOOLS，hidden）：input=Any（schema 空）→ 编辑器 any 类型不锁，可改 object 逐字段连线组装结构透传
 - **starts_with/ends_with**：字符串前后缀判断（扩展名分流；隐藏工具，仅工作流可用）
 - **diff_lines 工具**（2026-08 纯函数批起外置 `tools/builtin/diff_tools.py`）：两个文本块按行 Myers diff（无需落盘），算法与 diff_files 同源副本（详见 [diff_lines 页](../features/diff-lines.md)）
-- **kv_cache_read/write 工具**（2026-08 新，外置 `tools/builtin/kv_tools.py`）：应用级 KV 结果缓存——同输入结果确定的 LLM 调用（如关键词提取）做 memoization，同轮多 before_turn 工作流共用一次提取；namespace 兼作版本号，重启清空（结果缓存语义，丢失=重算）
+- **kv_cache_read/write/claim 工具**（2026-08 新，外置 `tools/builtin/kv_tools.py`）：应用级 KV 结果缓存——同输入结果确定的 LLM 调用（如关键词提取）做 memoization，同轮多 before_turn 工作流共用一次提取；namespace 兼作版本号，重启清空（结果缓存语义，丢失=重算）。**kv_cache_claim 原子互斥**（2026-09-13，用户实测竞态修复）：三态单次判定 `{state: hit/pending/claimed, value}`——check-and-set 收进进程级 `_KV_LOCK`，并发多线程同时 claim 同一 key 恰好一个 `claimed`（提取方独占）；旧「read(miss)→节点写 pending→LLM→write」两节点模式有毫秒级双 miss 窗口——同 hook 双工作流（ThreadPoolExecutor 并发）双双越过互斥同时打本地单并发模型必炸一个，且失败方 pending 残留（后续同消息傻等 90×2s 超时）。claim 另带 pending TTL（150s < 等待循环 180s 兜底）：提取方死亡后下一 claim 方自动接管。消费方：`extract_keywords` 子工作流（selector 三分支 hit/pending/claimed 路由）
 - **get_list_item 工具**（LIGHT_TOOLS，hidden，outputs=any）：从列表取单个元素，支持正/负索引、越界安全返回错误提示（详见 [get_list_item 页](../features/get-list-item.md)）
 - **cosine_sim 工具**（本体 `src/rag.py`、注册外置 `rag_tools.py`，hidden）：语义余弦相似度，供工作流批处理节点做重排打分（详见 [cosine_sim 页](../features/cosine-sim.md)）
 - **run_python 工具新增 args 参数**：`run_python(code="...", file="...", args="...")`，经环境变量 `PY_ARGS` 传递（code 和 file 两模式都生效），脚本内 `import os; a = os.environ.get("PY_ARGS", "")` 读取（详见 [run_python 页](../features/run-python.md)）

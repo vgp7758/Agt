@@ -47,7 +47,7 @@ _FILE_TOOLS = frozenset({"read_file", "write_file", "edit", "insert", "delete", 
 # 不配 recent-file：read 的 result 已是全文（挂了=投影里同一内容出现两次），grep/find 只返回命中片段，
 # 全文快照纯膨胀（实测 grep 一下 2000 行文件 → 80K 字符全文进投影）。写语义不受影响：
 # read→edit 场景下 edit 自己进集合，rf_map 仍挂最新改它的 call。
-_FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file",
+_FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file", "replace_lines",
                               "run_python", "run_script"})
 _FILE_SNAP_MAX = 3         # 每步最多快照几个不同文件（防膨胀；同文件后面覆盖前面）
 _SERVICE_EXIT_LOG_LINES = 50   # 后台服务退出时，tool 结果里附带的尾部日志行数

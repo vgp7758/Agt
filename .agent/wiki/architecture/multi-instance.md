@@ -55,14 +55,33 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 **验证**：四文件 py_compile + 管理族三态（新名/旧名规范化/双名均不路由）+ 普通工具三态（新名路由 pop 干净/旧名路由/本地直通）+ schema 四断言（普通与 MCP 注入、remote_* 豁免、不进 required、原 schema 零污染）全绿。引擎层改动，`/restart` 后生效。
 
+### schema 瘦身 + 运行时缺参提示（2026-09-14·二轮，用户裁定）
+
+**用户反馈**：「每个工具都带这样的参数描述吗？那会不会显得很重复。。我觉得在少传参数的时候给个提示就行」——2026-09-06 版每个工具 description ~200 字，50 工具 × ~350 字符增量无谓膨胀 schema。
+
+**两段式改造**（commit `b56af39`）：
+
+| 层 | 做法 |
+|---|---|
+| **schema 瘦身**（`_llm_tool_schemas`） | 长描述 → **一句话 26 字**「执行实例：self=本机（默认，可不传）；或已连远程实例 id」+ **enum 数组**（`["self","comfy",…]`——枚举值本身自带提示）；**撤掉 required**（可选，本地执行省略即可）。每工具 schema 增量 ~350 → **<120 字符**；单机（无连接）不注入——零路由噪声 |
+| **教育下沉运行时**（`_exec_tool`） | 本地执行（未带 remote_instance_id）且组网非空 → 结果尾附一行提示：「本次在本机执行。已组网实例：cloud、comfy——操作它们那边的文件/命令时在工具参数里带 remote_instance_id 即可路由过去执行」。**防噪三则**：同轮只提示一次（轮指纹 `_rid_hint_fp`）/ 新轮重提一次 / **显式传 `self` 不再提示**（模型已表现出路由意识，不再教育）；单机零提示 |
+
+**执行侧配套**：显式 `self`/`local` → 归一为本地执行（enum 含 'self'）；管理族旧名 `server_id` → 透明规范化成 `remote_instance_id`（历史投影兼容）；`_REMOTE_ADMIN` 五件套豁免不变（其 id 参数是管理语义，2026-08 事故补丁见[组件清单](#组件清单)）。
+
+**边界不变**：只影响 LLM 请求视图（deepcopy 注入）——toolbox 原 schema（工作流 plugin 节点 / WebUI 工具表单 / 编辑器）依旧零感知。
+
+**为什么运行时提示反而更好**：提示出现在**模型刚做完一次本地调用的上下文里**——正是「这活其实该去 comfy 那边干」的认知时机，教育精准投放；schema 常驻成本压到最低。
+
+**验证**（11/11 全绿）：单机不注入+无提示 / 组网后无 required+一句话描述+enum / 增量<120 字符 / 首次缺参提示 / 同轮不重复 / 新轮重提 / 显式 self 不提示 / 管理族豁免。引擎层改动，`/restart` 生效。
+
 ## 组件清单
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
 | `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + settings.json `remote_servers` 持久化（启动自动重连/失败标 offline）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
-| `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；未带 → 本地执行。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
-| `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id（remote_* 豁免、deepcopy 不污染原件）——见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案) |
+| `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
+| `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id（一句话描述 + enum、可选、单机不注入——2026-09-14 瘦身；remote_* 豁免、deepcopy 不污染原件）——见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案) 与 [瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定) |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + remote_instance_id 路由使用规则；**无连接渲染为空串不注入**（零噪声） |
 | 五件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message)`**（异步 fire-and-forget）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答） |
 

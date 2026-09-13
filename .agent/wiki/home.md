@@ -754,3 +754,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **验证**：9/9（8000 真实场景四断言 + 枚举全回归）；commit `7283f52` 已推送，随下版本发布（8000 端 `pip install -U agt-agent` 生效）
 - 详见 [user-interaction · 误用收编](features/user-interaction.md) / [background-scheduler · on_exit_wake](features/background-scheduler.md)
 
+## 快速事实增补（2026-09-14 · 二 · remote_instance_id schema 瘦身——一句话+enum，教育下沉运行时缺参提示）
+
+- **用户反馈**：全工具注入的 ~200 字路由描述 × 50 工具太重复——「在少传参数的时候给个提示就行」
+- **schema 瘦身**（`_llm_tool_schemas`）：描述压到一句话 26 字 + enum 数组（枚举值自带提示），撤掉 required；每工具增量 ~350 → <120 字符；单机（无连接）不注入——零路由噪声
+- **教育下沉运行时**（`_exec_tool`）：本地执行且组网非空 → 结果尾附一行缺参提示；防噪三则（同轮一次·轮指纹 / 新轮重提 / 显式 self 不提示——模型已表现出路由意识）；显式 self/local 归一为本地执行
+- **验证** 11/11 全绿；commit `b56af39`，引擎层改动 `/restart` 生效
+- 详见 [multi-instance · schema 瘦身](architecture/multi-instance.md)
+

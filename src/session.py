@@ -1615,8 +1615,14 @@ class Session:
                     _sec(f"当前轮steps({len(self._current.steps) if self._current else 0}步)", own)
                     passed_steps = True   # 三区状态翻转：之后的段/动作项进区3（尾部 merge）
                     _m = str(item.get("mode") or "").strip().lower()
-                    if _m in ("reminder", "reasoning"):
-                        tail_mode = _m   # steps=reasoning：steps 后的段以思考链姿势注入（用户提案 2026-09-02）
+                    # steps=reasoning 旧写法废弃（2026-09-13·用户实测抓到副作用）：607 轮 pose 粒度
+                    # 下放到各 asm 动作项（mode: reasoning）后，段级整体默认已无存在价值——且它把
+                    # 没有姿势选择器的内建段（tail.* 六子段 / recent_file / 钩子旁注，设计=并入末条
+                    # content）也整体拖进思考链，glm 场景下 reminder/reasoning 两桶全进 reasoning_content
+                    # （t781_s2 投影实证）。此后仅 asm 项自身的 mode 生效；旧声明读日志提示迁移。
+                    if _m == "reasoning":
+                        _LOG.warning("steps=reasoning 旧写法已废弃（pose 已下放到各 asm 项 mode 字段）——"
+                                     "本声明被忽略；请把 yml 里 '- steps=reasoning' 改为 '- steps'")
                 # 其它段名（hooks 已在 _normalize 移除；未知名静默跳过）
             else:
                 own = self._asm_action_msgs(item)

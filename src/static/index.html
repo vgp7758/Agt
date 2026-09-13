@@ -539,7 +539,10 @@ let autoReconnect = localStorage.getItem('autoReconnect') === 'true';
 let reconnectTimer = null;
 
 function connectWS(){
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  // 协议自适应（2026-09-13·CNB HTTPS 反代实测报 Mixed Content）：页面经 HTTPS 反代
+  // （如 https://xxx.cnb.run）打开时必须用 wss://——边缘代理终结 TLS 后转容器内 ws。
+  // rag.html / workflow_debug.html 早就是自适应写法，本页此前硬编码 ws:// 是漏网。
+  ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
   // URL 路由 /agents/<agent_id>：优先级高于 sessionStorage——分享/收藏的专属页链接直接落位
   // （页面内切换时代码在 agentSel change 里同步写 URL，刷新后本行把它转回交互目标）
   try{
@@ -1592,6 +1595,7 @@ function exitToolForm(){
   inp.focus();
 }
 function sendToolCall(){
+  if(!ws || ws.readyState !== 1){ toast('⚠️ WebSocket 未连接（页面刷新可重连）——消息发不出去'); return; }   // 防 null.send（WS 被反代协议挡断时的级联报错，2026-09-13 CNB 实测）
   const toolName = _pickedTool;
   if(!toolName){ toast('⚠️ 请选择工具'); return; }
   const t = _toolList.find(x => x.name === toolName);

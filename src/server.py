@@ -1016,6 +1016,61 @@ def api_remote_add(body: dict):
     return {"ok": msg.startswith("✅"), "msg": msg}
 
 
+@app.post("/api/callback")
+async def api_callback(request: Request):
+    """外部回调注入（容器 monitor → 内网穿透 → 本机；2026-09-14·SCNet ComfyUI 批量生产场景）。
+
+    两种形态：
+    1) JSON 消息：{"token":…, "type":"message", "text":…, "source":…}
+       → agent.push_message(text, source, wake=True)——唤醒 Agent 一轮（inbox 持久化）
+    2) 文件推送：raw body = 文件字节，query ?token=…&type=file&filename=xxx.mp4
+       → 落盘 WORKSPACE/scnet_inbox/{ts}_{filename}，并 push 一条通知消息
+
+    鉴权：settings.json 的 callback_token（cpolar 等隧道暴露公网，无 token 一律拒绝）。
+    """
+    import json as _json
+    import os as _os
+    import time as _t
+    try:
+        _cfg = _json.load(open(_os.path.expanduser("~/.agt/settings.json"), encoding="utf-8"))
+        _want = str(_cfg.get("callback_token") or "")
+    except Exception:
+        _want = ""
+    q = request.query_params
+    token = str(q.get("token") or "")
+    if not _want:
+        return {"ok": False, "error": "未配置 callback_token（settings.json）——为安全考虑拒绝所有回调"}
+    if token != _want:
+        return {"ok": False, "error": "token 校验失败"}
+    if _agent is None:
+        return {"ok": False, "error": "Agent 未就绪"}
+
+    cb_type = str(q.get("type") or "message")
+    if cb_type == "file":
+        filename = _t.strftime("%H%M%S") + "_" + _os.path.basename(str(q.get("filename") or "file.bin"))
+        from real_tools import WORKSPACE as _ws
+        dst_dir = _ws / "scnet_inbox"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / filename
+        body = await request.body()
+        dst.write_bytes(body)
+        _agent.push_message(f"📥〔外部回调·文件〕scnet_inbox/{filename}（{len(body)/1e6:.2f} MB）",
+                            source="callback:file")
+        return {"ok": True, "saved": str(dst), "size": len(body)}
+
+    # 默认：JSON 消息
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"请求体不是合法 JSON：{e}"}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "缺少 text"}
+    src = str(body.get("source") or "callback")
+    _agent.push_message(text, source=src)
+    return {"ok": True, "queued": True, "inbox_size": len(_agent.inbox)}
+
+
 @app.post("/api/remote/remove")
 def api_remote_remove(body: dict):
     """团队看板手动移除远程实例（用户提案 2026-09-14）：remote_tools.disconnect——

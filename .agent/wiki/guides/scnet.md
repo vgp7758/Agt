@@ -169,6 +169,39 @@ Base：`https://cancon.hpccube.com:65011`（昆山集群；华中网关是 zzhpc
 
 前端 JS bundle（`https://www.scnet.cn/ui/console/static/js/app.addc4147.js`，2.8MB）→ 正则提取 **437 个端点**（含 notebook/instance/service/image/HPC 全部路由）。后续要补写操作 payload，从这里继续挖或抓一次浏览器真实请求。
 
+## 关机与生命周期 API（cookie 通道）
+
+**关机 / 开机（stop / restart）——三套路由里只有一套能用，2026-09-14 抓包实锤**
+
+浏览器真实请求（playwright request 监听，点下确认后抓到）：
+
+```
+POST https://www.scnet.cn/acx/aimgt/notebook/stop      # 关机
+{"id":"2099459694942883841","saveEnv":true,"clusterId":11250}
+
+POST https://www.scnet.cn/acx/aimgt/notebook/restart    # 开机（注意叫 restart 不叫 start）
+{"startType":"normal","notebookId":"2099459694942883841","taskId":"2099503338633965570",
+ "clusterId":11250,"teamSharingPath":"/public/share/act3fh878f"}
+```
+
+| 曾经试错的写法 | 结果 | 为什么错 |
+|---|---|---|
+| `POST cancon.hpccube.com:65011/acx/containermgt/notebook/task/actions/stop?ids=<id>` | `816822 任务不存在！` | 老 v1 路由；且 `ids` 要的是**当前 taskId**（每次开机会换） |
+| `POST cancon…/acx/appcenter/userAsset/notebook/<id>/stop` | `503` | appcenter 路由不在该网关 |
+| `POST www.scnet.cn/acx/appcenter/userAsset/notebook/<id>/stop` | `15011 数据资源不存在` | 域名对了但端点不对 |
+| `POST www.scnet.cn/…` + 区域 token | `401 用户未登录!` | **网页网关只认 cookie**，不吃 AK/SK 换的 token |
+
+要点：
+
+1. **域名**：网页控制台走 `www.scnet.cn`（cookie 鉴权）；`cancon.hpccube.com:65011` 是 HPC 老网关（只对 `containermgt/v2` 那套**读**接口有效）。
+2. **鉴权**：只认 **cookie**（导出在 `~/.agt/mcp/scnet/scnet_cookie.json`，15 键含 `token`/`Token`/`jsessionid`）。**可拷到其它机器/实例复用** —— 这正是"其它实例不配 playwright 也能关机"的解法。
+3. **taskId 是动态的**：每次开机都生成新 taskId（本次 `2099459695286816769` → `2099503338633965570`），所以 `restart` 前必须从 list 现取，不能缓存。
+4. **参数**：stop = `{id, saveEnv, clusterId}`；restart = `{startType:"normal", notebookId, taskId, clusterId, teamSharingPath?}`。昆山 `clusterId=11250`。
+5. **接线前**：点开机时会先 `POST /aimgt/notebook/check-image-exists`（**form-urlencoded**，`id=<实例id>`）校验镜像。
+6. **已固化**：`scnet_notebook(action="stop"|"restart", payload={"id": "...", "save_env": true})`。实测 stop：`{"code":"0","msg":"success"}`（Running → Shutting → Terminated）；对已关机实例：`{"code":"817140","msg":"当前Notebook已经停止！"}`（可作幂等判定）。restart 自动从 list 取最新 taskId。
+
+**按钮 DOM 定位**（playwright 自动化用）：Notebook 列表页「操作」列（第 8 个 td）内 2 个 `a.el-tooltip`——**第一个的运行/停机切换按钮**，靠 svg 的 `clip-path url(#…)` 判类型（`instance-start__` / `instance-shut-down__`），第二个是 `instance-more__`。两个坑：① 按钮需 **hover 行** 才可见；② 页面残留 `.el-dialog__wrapper`（例如点过「设置定时关机」）会**拦截指针事件**，hover/click 全部超时——先 `display:none` 清掉再操作。确认框：`.el-message-box:has-text("确认关机"/"确认开机")` 内的「确认」。
+
 ## 三单批量实测结果（K100_AI 64GB，￥2.53/时）
 
 | 单 | 时长 | 产物 |
@@ -345,6 +378,10 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 ## 待办与注意事项
 
 **2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_~00007_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署并**无人值守闭环持续运行**（2026-09-14 21:30 起，5 单批量 **4/5 已自动回传**落 `scnet_inbox/`，仅剩 `fe94db7b` 在跑，连续四单零人工零失败）；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；容器内执行命令经 **Jupyter terminals WebSocket API** 打通（纯 API，首次拉起亦可自动化）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 **稳态 443-444s/单（≈7.4 分，约 8 单/小时）**；产物清单 `scnet_outputs/manifest.json` 记 prompt_id/seed/时长便于复现。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
+
+**monitor 真源内联（2026-09-14 晚）**：monitor v3 源码已内嵌进 `~/.agt/mcp/scnet/scnet_mcp.py` 的 `MONITOR_SOURCE` 常量（`MONITOR_VERSION="v3-2026-09-14"`，逐字节等于原脚本），**单文件自包含**——`~/.agt/mcp/scnet/` 现只剩 `scnet_mcp.py`（61,312 B）+ `scnet_cookie.json`（1,817 B，敏感）+ `docs/`（20 份平台 API 参考）。旧的双份副本 `tools/scnet_monitor.py`（已从 repo 删除，commit `ea1b031`）与 `monitor_template.py`（已从 MCP 目录删除）消失，双源同步问题从根上消除；另清掉 9 个 `.bak`。给新实例开 SCNet 能力 = 拷 2 个文件 + mcp.json 加一行 + `reload_mcp_server scnet`。
+
+**方向（用户已表态，未实施）**：SCNet MCP 是**独立产品**，塞进 agt repo 属错配——考虑给它**自己的 repo**（`scnet-mcp`：`scnet_mcp.py` + `monitor.py` 独立文件 + `docs/` + README + `pyproject.toml` 支持 pip/uvx 分发）。独立 repo 后内联可拆回独立文件（那时只有一份真源且可读可 diff）。**隐私红线**：`scnet_cookie.json` 永不入库；AK/SK 走 `~/.agt/scnet.json`/环境变量（现状已无硬编码）；代码里已核查无实例 id / 隧道 URL / 回调 token；唯一待中性化的是注释里的实测用户名。待用户定 repo 名与可见性。
 
 ## 相关页面
 

@@ -786,3 +786,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **history 全量对账 8 条**：本机 5 单 + 2 条外部 `error`（`bc89599a` / `3aa63780`，seed=None 无产物，疑 ComfyUI 前端页面自动提交，与本批无关）。
 - 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md)
 
+## 快速事实增补（2026-09-14 · 十四 · SCNet monitor 真源内联 + 独立 repo 方向）
+
+- **monitor 真源内联（2026-09-14 晚，commit `ea1b031`）**：monitor v3 源码内嵌进 `~/.agt/mcp/scnet/scnet_mcp.py` 的 `MONITOR_SOURCE` 常量（`MONITOR_VERSION="v3-2026-09-14"`，**逐字节等于原脚本**），deploy 改读内联常量（保留 `payload={"source": 本地文件}` 覆写口）——**单文件自包含**（61,312 B），拷 `scnet_mcp.py` + `scnet_cookie.json` 到任意实例 + mcp.json 加一行 + `reload_mcp_server scnet` 即可用。
+- **双份副本从根上消失**：`tools/scnet_monitor.py`（从 repo 删除）与 `~/.agt/mcp/scnet/monitor_template.py`（从 MCP 目录删除）均移除，git 历史可回溯；另清 9 个 `.bak`，目录从 14 项瘦到 4 项（`scnet_mcp.py` / `scnet_cookie.json` / `docs/` / `__pycache__`）。
+- **方向：给 SCNet MCP 自己的 repo（用户表态，未实施）**——用户认为「纳入 repo 感觉怪怪的」，倾向独立 repo（`scnet-mcp`：`scnet_mcp.py` + monitor 独立文件 + `docs/` + README + `pyproject.toml` 供 pip/uvx 分发）。**独立后内联可拆回独立文件**（届时只有一份真源且可读可 diff）。隐私红线：cookie 永不入库、AK/SK 走 `~/.agt/scnet.json`/环境变量、代码已核查无实例 id/隧道 URL/回调 token（仅一处注释用户名待中性化）。待用户定 repo 名与可见性。
+- 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md#容器侧-monitorpy8191--v3-常驻--反代--http-加任务) / [SCNet 算力网](guides/scnet.md#待办与注意事项)
+

@@ -69,7 +69,9 @@
 
 ## 容器侧 monitor.py（:8191）· v3 常驻 + 反代 + HTTP 加任务
 
-**v3 版（2026-09-14，`tools/scnet_monitor.py`，304 行）**——在 v2 反代基础上修掉「假成功」，并完成**常驻化 + 任务 HTTP 化**改造。**已实际部署并跑通**（见下「首次无人值守闭环」）。
+**v3 版（2026-09-14，源码内联于 `scnet_mcp.MONITOR_SOURCE`，1261 行文件内的 11613 字节模板）**——在 v2 反代基础上修掉「假成功」，并完成**常驻化 + 任务 HTTP 化**改造。**已实际部署并跑通**（见下「首次无人值守闭环」）。
+
+> **真源变迁（2026-09-14 晚，两轮）**：先由 `tools/scnet_monitor.py`（仓库文件）→ `~/.agt/mcp/scnet/monitor_template.py`（副本）双份手工同步；当轮改为**内联单源**（`MONITOR_SOURCE` 常量 + `MONITOR_VERSION="v3-2026-09-14"`，逐字节等于原脚本），**两份旧文件均已删除**（`tools/scnet_monitor.py` 从 repo 移除、`monitor_template.py` 从 `~/.agt/mcp/scnet/` 移除，git 历史可回溯），并清掉 9 个 `.bak`。`scnet_mcp.py` 成为**单文件自包含**（61,312 B），拷 `scnet_mcp.py` + `scnet_cookie.json` 到任意实例即可用。
 
 ### 形态：常驻 + 任务持久化 + HTTP 管理
 
@@ -138,7 +140,7 @@ nohup python3 /root/monitor.py \
 **意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实，且连续四单零人工、零失败。
 
 **部署动作（本轮实际执行）**：
-1. 本地 `tools/scnet_monitor.py` → 复制为 `~/.agt/mcp/scnet/monitor_template.py`（11917 bytes，供 MCP 工具 `scnet_monitor` 的 deploy action 读取）
+1. monitor v3 源码内联进 `scnet_mcp.py`（`MONITOR_SOURCE` + `MONITOR_VERSION`），旧副本 `tools/scnet_monitor.py` / `monitor_template.py` 删除
 2. `scnet_mcp.py` 加 `scnet_monitor` 工具（`monitor_action`，py_compile OK，备份 `scnet_mcp.py.bak_20260914_212929`）
 3. 容器内 `pkill` 旧 monitor → `nohup` 拉起 v3
 
@@ -147,9 +149,9 @@ nohup python3 /root/monitor.py \
 ### monitor 的三步生命周期（谁在哪做）
 
 ```
-本地 tools/scnet_monitor.py（仓库文件，随 commit 走）
+~/.agt/mcp/scnet/scnet_mcp.py 的 MONITOR_SOURCE 常量（内联真源，单文件自包含）
    │  ① Jupyter Contents API：PUT /api/contents/root/monitor.py   ← 纯 API，可脚本化
-   │     （或 MCP scnet_monitor deploy：读 ~/.agt/mcp/scnet/monitor_template.py 上传）
+   │     （MCP scnet_monitor deploy：读内联 MONITOR_SOURCE 上传；payload={"source": 本地文件} 可覆写）
    ▼
 容器 /root/monitor.py（副本）
    │  ② 拉起进程：「访问自定义服务」填端口 8191 + 启动指令（首次）
@@ -318,8 +320,9 @@ python -c "import sys; sys.path.insert(0,'tools'); from wf_canvas2api import con
 - **隧道会丢 query string**（2026-09-14 实测）：回调鉴权一律走 header（`X-Cb-Token` 等），不要依赖 `?token=`。
 - **HTTP 200 ≠ 成功**：隧道/网关可能返回 200 + 业务 `ok=false`，消费端必须校验响应体 `ok==true`（monitor v3 已修）。
 - **单端口约束**：同一实例的自定义服务入口唯一，后启动顶掉先启动——任何新服务上线前先想清楚是否要反代（本轮 monitor 已按此改造）。
-- **monitor 源码现在是内联真源**（`scnet_mcp.MONITOR_SOURCE`，2026-09-14 起）：部署 = 上传为容器 `/root/monitor.py` + 拉起进程；①上传/③加任务由 MCP `scnet_monitor` 覆盖，②拉起可经 **Jupyter terminals WS** 纯 API 完成。容器内改文件**不会**回写 MCP 源码（单向快照）；改了 `MONITOR_SOURCE` 后需重新 deploy 才生效。
-- **v3 常驻进程与本地文件可能不同步**：本地已改 v3，容器内可能仍跑 v1——`/monitor` 返回里没有 `tasks` 键即说明是旧版，需重启（`pkill -f root/monitor.py` 后 nohup 拉起）。
+- **monitor 源码是内联真源**（`scnet_mcp.MONITOR_SOURCE`，2026-09-14 起）：部署 = 上传为容器 `/root/monitor.py` + 拉起进程；①上传/③加任务由 MCP `scnet_monitor` 覆盖，②拉起可经 **Jupyter terminals WS** 纯 API 完成。容器内改文件**不会**回写 MCP 源码（单向快照）；改了 `MONITOR_SOURCE` 后需重新 deploy 才生效。
+- **`scnet_mcp.py` 单文件自包含**：monitor 模板已内联，运行时只依赖 `scnet_mcp.py` + `scnet_cookie.json`（+ 可选 `docs/`）——不再有第二份脚本副本要同步。**cookie 是敏感文件，永不入库**。
+- **v3 常驻进程与真源可能不同步**：容器内可能仍跑旧版——`/monitor` 返回里没有 `tasks` 键即说明是旧版，需重启（`pkill -f root/monitor.py` 后 nohup 拉起）。
 - ComfyUI API 无鉴权，URL 即凭证（cpolar 隧道同理）——勿外泄。
 - 实例按 ¥2.53/时计费，余额有限时记得收工关机；monitor 的「全部完成」通知会提示是否关机。
 - 画布转换器依赖 `object_info` 快照（`scnet_objinfo.json`）——换镜像/换节点版本后要重新拉。

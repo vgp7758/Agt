@@ -321,7 +321,11 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     for t in agent.tools:                         # refresh 注册的 wf_* 标"工作流"
         if t.name.startswith("wf_"):
             agent.tool_groups[t.name] = "工作流"
-    _reg(make_mcp_tools(mcp_mgr, str(workspace / ".mcp.json")), "MCP管理")
+    # 两个配置路径都交给 reload_mcp_server：server 可能只在 repo .mcp.json，也可能只在
+    # 全局 ~/.agt/mcp.json（如 scnet）——逐个找同名 server 重连（2026-09-14·用户改 SCNet 用户名后发现）
+    # 传 agent：重连后**同步工具进工具箱**（新增/删除的 MCP 工具立即生效，无需 /restart）
+    _reg(make_mcp_tools(mcp_mgr, [str(workspace / ".mcp.json"),
+                                  str(config.config_file("mcp.json"))], agent), "MCP管理")
     _reg(make_lsp_tools(agent, mcp_mgr), "LSP")
     from workflow_debug_tools import make_workflow_debug_tools
     _reg(make_workflow_debug_tools(agent), "工作流调试")

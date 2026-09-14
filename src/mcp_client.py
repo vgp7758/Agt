@@ -219,17 +219,40 @@ class MCPManager:
         self.loop.call_soon_threadsafe(self.loop.stop)
 
 
-def make_mcp_tools(mcp_mgr, config_path: str) -> list:
-    """生成 reload_mcp_server 工具（闭包绑定 MCPManager + .mcp.json 路径）。"""
+def make_mcp_tools(mcp_mgr, config_path, agent=None) -> list:
+    """生成 reload_mcp_server 工具（闭包绑定 MCPManager + 配置路径）。
+
+    config_path: 单个路径或路径列表——server 可能注册在 repo 的 .mcp.json，也可能只在
+    全局 ~/.agt/mcp.json（如 scnet），逐个配置找同名 server 重连。
+    agent: 传入后，重连会**同步工具到工具箱**（摘旧 `__mcp__{server}__*` + 注册新发现的）
+    ——否则给 MCP server 新增工具必须 /restart 才可见（2026-09-14 用户实测缺口）。"""
     from tools import Tool
 
+    paths = [config_path] if isinstance(config_path, (str, Path)) else list(config_path)
+
     def reload_mcp_server(name: str) -> str:
-        """断开并重连指定 MCP server。当该 server 的代码被修改后调用，无需重启 Agent。
-        name: .mcp.json 中 mcpServers 下的键名（如 'agentank'）。"""
-        try:
-            mcp_mgr.reconnect_from_config_one(config_path, name)
-            return f"✅ MCP server '{name}' 已重新连接"
-        except Exception as e:
-            return f"[重连失败] {type(e).__name__}: {e}"
+        """断开并重连指定 MCP server，并把它的工具同步进工具箱（新增/删除的工具立即生效，
+        无需 /restart）。当该 server 的代码/凭证/工具集被修改后调用。
+        name: mcp.json（repo 或全局）中 mcpServers 下的键名（如 'agentank' / 'scnet'）。"""
+        errs = []
+        for p in paths:
+            try:
+                mcp_mgr.reconnect_from_config_one(str(p), name)
+                sync = ""
+                if agent is not None:
+                    prefix = f"__mcp__{name}__"
+                    dropped = agent.tools.drop(prefix)          # 摘掉该 server 的旧工具
+                    for k in [k for k in list(getattr(agent, "tool_groups", {}))
+                              if k.startswith(prefix) and k not in agent.tools]:
+                        del agent.tool_groups[k]                # 清理悬空 group 映射
+                    added = mcp_mgr.sync_to_toolbox(agent.tools)   # 复用既有同步器（幂等注册，返回新加入）
+                    for t in mcp_mgr.get_tools():
+                        if t.name.startswith(prefix):
+                            agent.tool_groups[t.name] = "MCP"
+                    sync = f"，工具已同步（摘除 {dropped} 个 / 新增 {len(added)} 个）"
+                return f"✅ MCP server '{name}' 已重新连接（配置：{p}）{sync}"
+            except Exception as e:
+                errs.append(f"  · {p}: {type(e).__name__}: {e}")
+        return f"[重连失败] 未在任何配置中找到 server '{name}'\n" + "\n".join(errs)
 
     return [Tool(reload_mcp_server)]

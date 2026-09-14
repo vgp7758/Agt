@@ -215,6 +215,19 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **背景（用户观察）**：Agent 新环境探索时常用 `agt --help` 获取帮助——此前不支持，直接进交互。修复：`_early_argv()` 支持 `--help/-h/help`、`--version/-V`，打印能力概貌后退出（不进交互），`agt`/`agt-web` 两入口都有；无参数直通不变。与 README「Agent 上手指引」闭环（[multi-instance 边界](../architecture/multi-instance.md#边界与后续)）。
 
+#### 单横线变体补齐：`-help` / `-version` / `-v`（2026-09-14，commit 9148a15，用户提问触发）
+
+**用户问**「是不是还不支持 `agt -version` `agt -help` 这样的指令」→ 实测定性：**双横线早已支持（上节 0e186c9），单横线变体是漏的**——`_early_argv()` 两个别名清单只列了 `--help/-h/help//help` 与 `--version/-V/version`，`-help`/`-version`/`-v` 不在清单 → fallthrough 进正常启动路径（打印欢迎横幅 + 连 MCP → 进交互 REPL，subprocess 里 stdin 关闭才 rc=0——终端用户视角就是「敲了没反应，进了个界面」）。
+
+**修复（src/chat.py 两行，commit 9148a15）**：help 清单补 `-help`；version 清单补 `-version`/`-v`。`agt`/`agt-web` 两入口同享（`_early_argv` 共用）；无参数直通不变。当前支持矩阵：
+
+| 变体 | 行为 |
+|---|---|
+| `--version` / `-version` / `-v` / `-V` / `version` | 打版本号退出（rc=0） |
+| `--help` / `-help` / `-h` / `help` / `/help` | 打能力概貌退出（rc=0） |
+
+**验证**：7 变体全过 rc=0（版本三连 → 0.27.2；帮助四连 → 帮助首行）。已装 0.27.2 的实例（CNB/远端）要等下个版本 `pip install -U agt-agent`（参数解析在启动时，升级后重启进程自然生效；镜像同步慢可加 `-i https://pypi.org/simple`）。
+
 ## 常见错误对照
 
 | 症状 | 原因 → 处置 |

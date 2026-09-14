@@ -772,3 +772,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **加固**（commit `cb955c5`）：看板 fetch 非 2xx 显式提示 `❌ HTTP xxx——端点不存在：服务进程是旧版本，/restart 后重试`；offline 条目移除逻辑本身无恙（断连+清持久化，上轮 4/4 已验）
 - 详见 [multi-instance · 失败提示加固](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-14 · 五 · `agt -help` / `-version` / `-v` 单横线变体补齐）
+
+- **用户问**「是不是还不支持 `agt -version` `agt -help`」→ 定性：双横线（0e186c9，2026-08）早已支持，**单横线是漏的**——`_early_argv()` 别名清单没列 `-help`/`-version`/`-v` → fallthrough 进正常启动（打横幅+连 MCP 后「进了个界面」，看似敲了没反应）。修复 commit `9148a15`：两清单各补单横线变体；7 变体实测全过 rc=0（版本三连 → 0.27.2 / 帮助四连 → 帮助首行）；`agt`/`agt-web` 两入口同享，无参数直通不变。已装 0.27.2 的远端实例等下版本 `pip install -U agt-agent`——见 [ops · agt 入口](guides/ops.md#agt--help--version2026-08commit-0e186c9)
+

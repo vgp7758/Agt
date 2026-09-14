@@ -74,11 +74,29 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 **验证**（11/11 全绿）：单机不注入+无提示 / 组网后无 required+一句话描述+enum / 增量<120 字符 / 首次缺参提示 / 同轮不重复 / 新轮重提 / 显式 self 不提示 / 管理族豁免。引擎层改动，`/restart` 生效。
 
+## 团队看板手动管理远程实例：＋添加 / ✕移除控件（2026-09-14，用户提案）
+
+**用户提案**：「团队抽屉里，可以添加 remote 实例的手动移除、添加控件」——此前组网管理只有 Agent 侧 `remote_connect/remote_disconnect` 工具（模型代劳）或手改 settings.json，用户在 WebUI 没有直接操作入口。
+
+**两层交付**（commit `0d5f167`，前端 `src/static/index.html` + 后端 `src/server.py`）：
+
+| 层 | 内容 |
+|---|---|
+| 后端两端点 | `POST /api/remote/add`（server_id 可空 + url 必填 → **复用 `remote_tools.connect`**——探测 /api/status 成功才注册；auto id 规则同工具：本地→`agt-{端口}`、远程→`agt-{host}-{端口}`；返回 `{ok: msg.startswith("✅")}`）/ `POST /api/remote/remove`（复用 `remote_tools.disconnect`——断连 + 清持久化）；异常吞掉转 `{ok:false, msg}`，不炸进程 |
+| 前端看板 | 团队抽屉「🌐 远程实例」分组**空态恒渲染**（去掉 `if(remotes.length)` 包裹——空态也给出「＋ 添加」入口）；组头「＋ 添加」→ `remoteAddToggle()` 内联表单展开（url 必填 + id 可空）；`remoteAddSubmit()` 提交连接；每实例行「✕ 移除」→ `remoteRemove()` confirm 后断连；结果 **toast 直出**（connect 的人性化文案原样展示：工具数/session/model 一目了然）；操作后 `renderTeamDash()` 即时刷新 |
+
+**关键设计——单源**：端点不另写注册/移除逻辑，直接 import `remote_tools` 走 connect/disconnect——探测、幂等（同 url 复用 id / url↔id 一对一）、settings.json 落盘、启动自动重连等语义与 Agent 侧 `remote_connect` 工具**完全同源**，不存在两套状态。延续 `_REMOTE_ADMIN` 事故以来的原则：组网管理面永远收敛到 remote_tools 一处（WebUI 端点只是它的一个新消费端）。
+
+**与看板数据面的关系**：团队抽屉远程分组读 status 的 `d.remotes`（`REMOTE_SERVERS` 快照）；`get_team_profiles` 的 SYSTEM 注入侧零改动——本次只动 WebUI 抽屉交互面，装配投影不受影响。
+
+**验证**：前端 6/6（三函数存在 / 表单字段 / 移除按钮 / 空态恒渲染）+ JS 语法 ✓；后端 4/4（坏 url 探测失败 / 空 url 拒绝 / 未知 id 未找到 / 真实条目移除清表）✓。**生效方式**：前端 Ctrl+F5；`server.py` 新端点需 `/restart`。
+
 ## 组件清单
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
+| `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
 | `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + settings.json `remote_servers` 持久化（启动自动重连/失败标 offline）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id（一句话描述 + enum、可选、单机不注入——2026-09-14 瘦身；remote_* 豁免、deepcopy 不污染原件）——见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案) 与 [瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定) |

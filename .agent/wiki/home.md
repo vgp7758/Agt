@@ -762,3 +762,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **验证** 11/11 全绿；commit `b56af39`，引擎层改动 `/restart` 生效
 - 详见 [multi-instance · schema 瘦身](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-14 · 三 · 团队看板远程实例手动添加/移除控件）
+
+- **团队看板手动管理远程实例**（2026-09-14，commit `0d5f167`，用户提案「团队抽屉里加 remote 实例的手动移除、添加控件」）：WebUI 团队抽屉「🌐 远程实例」分组**空态恒渲染** + 组头「＋ 添加」（内联表单：url 必填 + id 可空——自动生成本地→`agt-{端口}`/远程→`agt-{host}-{端口}`）+ 每实例行「✕ 移除」（confirm 后断连清配置）；后端 `POST /api/remote/add`·`/api/remote/remove`（src/server.py）**薄封装复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧五件套同一条链单源；前端 6/6 + 后端 4/4 全绿；server.py 端点需 /restart 生效——见 [multi-instance · 团队看板手动管理](architecture/multi-instance.md)
+

@@ -6,11 +6,7 @@
 
 ## 地图
 
-| 页面 | 内容 | 什么时候看 |
-|------|------|-----------|
-| [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
-| [guides/scnet](guides/scnet.md) | **SCNet 算力网**：外部 GPU 平台接入（API Key / playwright / E-Shell 三通道）+ **commit 式自定义镜像**（非 Dockerfile）+ 实探资源与价格表（异构加速卡 / L20 / A800 / 免费容器组 K8s） | 接外部算力 / 白嫖 GPU / 查卡时价格 |
-| [features/scnet-async-pipeline](features/scnet-async-pipeline.md) | **SCNet 异步生产流水线**：画布 → API 转换器（`tools/wf_canvas2api.py`，四对位坑）+ 本机 `POST /api/callback` 回调端点 + 容器侧 monitor.py(:8191) 主动回调 + 第一单出片 + 批量打法 | 容器批量出片 / 异步收货 / 画布转 API |
+| [features/scnet-async-pipeline](features/scnet-async-pipeline.md) | **SCNet 异步生产流水线**：画布 → API 转换器（`tools/wf_canvas2api.py`，四对位坑）+ 本机 `POST /api/callback` 回调端点 + 容器侧 monitor.py(:8191) **v3 常驻版**（反代 ComfyUI + `POST /monitor/add` 纯 HTTP 加任务）+ 本机兜底轮询 `tools/scnet_watch_batch.py` + 第一单出片 + 批量打法 | 容器批量出片 / 异步收货 / 画布转 API |
 
 ## 快速事实（2026-08 状态）
 
@@ -764,4 +760,8 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **⚠️ 框架缺口（实测确认）**：`reload_mcp_server` 只重连 session，**不注册工具进 `agent.tools`** → 新工具（如 `scnet_notebook`）调用报「工具箱里没有」，**必须 `/restart`**。修法方向：重连后调 `mcp_mgr.sync_to_toolbox(agent.tools)`（API 已存在，目前仅 ensure_lsp 在用）。
 - **部署通道**：容器内用 **JupyterLab 终端**重启 monitor（该镜像未装 SSH，比 SSH 指令更好用）。
 - 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md) / [MCP 配置页](features/mcp-config.md)。
+
+## 快速事实增补（2026-09-14 · 十 · SCNet monitor 常驻化 + 任务 HTTP 化）
+
+- **SCNet monitor 常驻化 + 任务 HTTP 化（v3）+ 兜底轮询（2026-09-14）**：用户提问「monitor 是本地文件还是容器里现写的？还是某个 MCP 工具有自动写进容器并运行的逻辑？」——答案是**本地仓库文件**（`tools/scnet_monitor.py`），部署=上传为容器 `/root/monitor.py` + 拉起进程，**三步全手工、无 MCP 自动化**。本轮把 v1「监控 N 单跑完即退」改造为 **v3 常驻版**：任务持久化 `/root/monitor_tasks.json` + 新增 **`POST /monitor/add {"ids":[...]}`**（本机经容器公网 URL 直接可达）→ **加任务不再需要进容器执行命令**，于是「在容器里执行命令」从每批一次降为**只做一次**（首次拉起）；顺带修 `STATE["tasks"][pid] = st if completed else "running"`（旧 `f"{st}/running"` 污染状态字符串）。另新增本机兜底轮询 `tools/scnet_watch_batch.py`（主动拉 `/history` → 下载到 `scnet_outputs/`，不依赖回调链）。同轮 5 单批量入队（`scnet_batch5.json`，预计 ~37 分钟）。**可工具化路径**：①上传（Jupyter Contents API PUT）③add/status（纯 HTTP）均可自动化，②首次拉起是唯一卡点——见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md#容器侧-monitorpy8191--v3-常驻--反代--http-加任务)、[兜底轮询](features/scnet-async-pipeline.md#兜底轮询toolsscnet_watch_batchpy本机主动拉不依赖容器-monitor)
 

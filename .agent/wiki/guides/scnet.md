@@ -348,11 +348,7 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 
 ## 待办与注意事项
 
-**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_.mp4` / `_00002_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署；monitor 因**单端口约束**升级为「反代 + 监控二合一」；热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
-
-**2026-09-14 · 纯 API 通道（新）**：Notebook 全生命周期已有纯 HTTP 后端 `cancon.hpccube.com:65011/acx/containermgt/v2/notebook/*`，与控制台**共用同一把区域 token**（AK/SK 换得）；list / notebook-url / config / start-command / port-pool 等只读端点已 200 实测，并已封装为 MCP 工具 `scnet_notebook`（纯 HTTP 拿 Jupyter URL，零浏览器）。写操作 payload 待抓包补齐后，playwright 可退居兜底。见上节「纯 API 通道实测」与 [SCNet 异步生产流水线 · MCP 封装](../features/scnet-async-pipeline.md)。
-
-**2026-09-14 · 回调链路加固（新）**：cpolar 隧道**丢弃 query string** 且可能返回 HTTP 200 + 业务 `ok=false` 的假成功——回调鉴权改走 header（`X-Cb-Token`/`X-Cb-Type`/`X-Cb-Filename`，服务端 header 优先 query 兜底），monitor v3 校验响应体 `ok==true`。修复后直连与 cpolar 双通道均实测落盘成功（`scnet_inbox/211448_hdr_ok.bin` / `211450_hdr_ok.bin`）。
+**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_.mp4` / `_00002_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
 
 ## 相关页面
 

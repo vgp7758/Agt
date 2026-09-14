@@ -743,7 +743,8 @@ def _recover_restart_env(agent, work_q, registry, state):
     sess = os.environ.pop("AGT_RESTART_SESSION", "")
     msg = os.environ.pop("AGT_RESTART_MESSAGE", "")
     if not sess and not msg:
-        return    print("🔁 检测到重启恢复指令…")
+        return
+    print("🔁 检测到重启恢复指令…")
     if sess:
         try:
             registry.dispatch(f"/resume {sess}", CommandContext(agent=agent, work_q=work_q, state=state))

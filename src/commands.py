@@ -472,7 +472,7 @@ def _cmd_reload_mcp(ctx: CommandContext, args):
     """断开并重连指定 MCP server，使代码修改后生效。"""
     positional = _parse_args(args)[0]
     if not positional:
-        print("用法：/reload_mcp <name>  （.mcp.json 中 mcpServers 的键名）")
+        print("用法：/reload_mcp <name>  （mcpServers 的键名；repo .mcp.json 或全局 ~/.agt/mcp.json 均可）")
         return
     name = positional[0]
     tool = next((t for t in ctx.agent.tools if t.name == "reload_mcp_server"), None)
@@ -1757,7 +1757,7 @@ def build_default_registry() -> CommandRegistry:
         "/model deepseek  切换到 deepseek")
     reg.register("reload_mcp", _cmd_reload_mcp,
         "<name>  重连指定 MCP server（代码修改后生效）",
-        "/reload_mcp python-lsp     （.mcp.json 中 mcpServers 的键名）")
+        "/reload_mcp python-lsp     （mcpServers 键名；repo .mcp.json 与全局 ~/.agt/mcp.json 都查）")
     reg.register("autonomous", _cmd_autonomous,
         "纯自主模式：任务完成后自动继续工作，直到时间到或目标达成",
         "/autonomous                    查看状态\n"

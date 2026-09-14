@@ -169,6 +169,28 @@ Base：`https://cancon.hpccube.com:65011`（昆山集群；华中网关是 zzhpc
 
 前端 JS bundle（`https://www.scnet.cn/ui/console/static/js/app.addc4147.js`，2.8MB）→ 正则提取 **437 个端点**（含 notebook/instance/service/image/HPC 全部路由）。后续要补写操作 payload，从这里继续挖或抓一次浏览器真实请求。
 
+## 代码仓库（2026-09-14 起独立为 scnet-mcp）
+
+**SCNet MCP 的代码已从 agt 仓库迁出，独立为私有 repo（2026-09-14）**：
+
+| 项 | 值 |
+|---|---|
+| 远端 | `https://codeup.aliyun.com/618914e04d2b371c479a6963/vgp7758/scnet_mcp.git`（阿里云 Codeup，**private**） |
+| 本地 | `D:\Projects\scnet-mcp` —— **真源**；`~/.agt/mcp.json` 的 `scnet` 直接指向这里的 `scnet_mcp.py` |
+| 内容 | `scnet_mcp.py`（9 工具）+ `monitor.py`（容器侧模板，唯一真源）+ `docs/`（20 篇平台 API 参考）+ README + pyproject |
+| 凭证 | AK/SK 走 `~/.agt/scnet.json` 或环境变量；**cookie 走 `~/.agt/scnet_cookie.json`**（已 gitignore，永不入库） |
+
+**在别的机器 / 别的 agt 实例启用**：
+```bash
+git clone https://codeup.aliyun.com/618914e04d2b371c479a6963/vgp7758/scnet_mcp.git
+pip install mcp websocket-client
+# mcp.json: "scnet": {"command": "python", "args": ["<clone>/scnet_mcp.py"]}
+# 导出浏览器 cookie → ~/.agt/scnet_cookie.json（JSON 数组：name/value）
+# 然后 reload_mcp_server scnet
+```
+
+**历史沿革**：monitor 模板走过「repo `tools/scnet_monitor.py` ↔ `~/.agt/mcp/scnet/monitor_template.py` 双份手工同步」→「内联进 `scnet_mcp.py`」→「独立 repo 后拆回同目录 `monitor.py` 文件（`_monitor_source()` 读它）」——**最终形态既真源唯一又可读可 diff**。agt 仓库里 `tools/scnet_*.py` 已删除（git 历史可回溯）。
+
 ## 关机与生命周期 API（cookie 通道）
 
 **关机 / 开机（stop / restart）——三套路由里只有一套能用，2026-09-14 抓包实锤**

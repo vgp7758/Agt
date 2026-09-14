@@ -1027,6 +1027,8 @@ async def api_callback(request: Request):
        → 落盘 WORKSPACE/scnet_inbox/{ts}_{filename}，并 push 一条通知消息
 
     鉴权：settings.json 的 callback_token（cpolar 等隧道暴露公网，无 token 一律拒绝）。
+    token/type/filename 读取优先级：**header（X-Cb-Token/X-Cb-Type/X-Cb-Filename）> query > body**
+    ——cpolar 等隧道会丢弃 query string（2026-09-14 实测），故 header 为主通道。
     """
     import json as _json
     import os as _os
@@ -1037,7 +1039,8 @@ async def api_callback(request: Request):
     except Exception:
         _want = ""
     q = request.query_params
-    token = str(q.get("token") or "")
+    h = request.headers
+    token = str(h.get("x-cb-token") or q.get("token") or "")
     if not _want:
         return {"ok": False, "error": "未配置 callback_token（settings.json）——为安全考虑拒绝所有回调"}
     if token != _want:
@@ -1045,9 +1048,10 @@ async def api_callback(request: Request):
     if _agent is None:
         return {"ok": False, "error": "Agent 未就绪"}
 
-    cb_type = str(q.get("type") or "message")
+    cb_type = str(h.get("x-cb-type") or q.get("type") or "message")
     if cb_type == "file":
-        filename = _t.strftime("%H%M%S") + "_" + _os.path.basename(str(q.get("filename") or "file.bin"))
+        raw_name = h.get("x-cb-filename") or q.get("filename") or "file.bin"
+        filename = _t.strftime("%H%M%S") + "_" + _os.path.basename(str(raw_name))
         from real_tools import WORKSPACE as _ws
         dst_dir = _ws / "scnet_inbox"
         dst_dir.mkdir(parents=True, exist_ok=True)

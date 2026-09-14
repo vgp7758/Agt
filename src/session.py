@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import json
 import logging
@@ -1103,6 +1104,7 @@ class Session:
         # 不该推动升档/折叠等不可逆历史压缩（用户裁定 2026-08-29）——_rf_stripped 兜底旧内嵌形态。
         rest = self._rf_stripped(self._seg_msgs_ltm() + self._seg_msgs_user_message()
                                  + self._seg_msgs_steps() + self._seg_msgs_tail())
+        _est = lambda k: self._estimate_tokens(prefix_msgs + self._render_tiered_history(k) + rest)
         panic_mode = False
         for _ in range(len(self.turns) + self.max_level + 4):   # 安全上限，不会死循环
             body = self._render_tiered_history(fold_count)
@@ -1115,11 +1117,13 @@ class Session:
                           est, panic_win, win, settle)
             if est <= settle:
                 break                                       # 已回落到位
-            if self._graduate_once():                       # 先升档（无损压缩）止血
+            if self._graduate_once():                       # ① 先升档（无损：只降文字档上限）止血
+                continue
+            if self._deepen_oldest_tier(est_fn=_est, target=settle, fold_count=fold_count):  # ② 再推老档进工具折叠档
                 continue
             # 应急首刀同款大刀（超深一半）；起点之后的微调碎刀
-            nxt = (self._fold_leap_target(fold_count) if fold_count == self._planned_fold
-                   else self._next_fold_target(fold_count))
+            nxt = (self._fold_leap_target(fold_count, _est, settle) if fold_count == self._planned_fold
+                   else self._next_fold_target(fold_count, est_fn=_est, target=settle))
             if nxt is not None:
                 fold_count = nxt
                 continue
@@ -1930,12 +1934,12 @@ class Session:
         # 档1 是全量披露档（"近期窗口"语义），窗口宽绰时压力循环永不触发会让它无限膨胀
         # （用户在 8000 实例观察到 64 轮/58.6%）。分批语义复用 _graduate_once（每刀 30，近期轮保持）。
         last_completed = len(self.turns) - 1
-        _seg_start = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+        _seg_start = self._last_boundary() + 1 if self._tier_boundaries else 0
         if last_completed - _seg_start + 1 > GRADUATE_FORCE_TURNS:
             _before = len(self._tier_boundaries)
             while len(self._tier_boundaries) < len(self.turns) // GRADUATE_BATCH_TURNS + self.max_level + 2:
                 _lc = len(self.turns) - 1
-                _ss = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+                _ss = self._last_boundary() + 1
                 if _lc - _ss + 1 <= GRADUATE_FORCE_TURNS:
                     break
                 if not self._graduate_once():
@@ -1960,23 +1964,37 @@ class Session:
             self._planned_graduates = 0
             return
         g = 0
-        # 上限宽松化：分批毕业后一次 _plan_fold 可能连切数刀（90 轮大档=3 刀），
-        # max_level 封顶的是【档位级别】而非【边界数】——按轮数/批宽 + max_level 算足够上限
-        g_cap = len(self.turns) // GRADUATE_BATCH_TURNS + self.max_level + 2
+        # 上限：分批毕业后一次 _plan_fold 可能连切数刀（90 轮大档=3 刀）；
+        # _deepen_oldest_tier 还要再切 max_level 刀把老档推进工具折叠档（重复边界不占 max_level），
+        # 故上限 = 轮数/批宽 + 2×max_level + 4。
+        g_cap = len(self.turns) // GRADUATE_BATCH_TURNS + 2 * self.max_level + 4
+        _est0 = lambda k: self._estimate_tokens(prefix + self._render_tiered_history(k) + cur_est)
         while g < g_cap:
+            if _est0(0) <= target:
+                break
+            # ① 先切最年轻段（无损：只降文字档上限，近期保真）
+            # ② 年轻端切完 → 推老档进工具折叠档（阶梯中间一级：工具调用折一行、answer/reasoning 原文保留）
+            # ③ 再没有可推的 → break 出去走折叠（结构摘要，终极兜底）
+            # 注意先估再动（推老档每刀都要重渲染 1-2 档；300 轮超深档实测单刀 ~1s）
             if self._estimate_tokens(prefix + self._render_tiered_history(0) + cur_est) <= target:
                 break
-            if not self._graduate_once():
-                break
-            g += 1
+            if self._graduate_once():
+                g += 1
+                continue
+            if self._deepen_oldest_tier(est_fn=_est0, target=target):
+                g += 1
+                continue
+            break
         # 再折叠：若升档后仍 >75%，折叠到 ≤75%（或无可折）。
         # 首刀大刀（_fold_leap_target）：至少吞超深档的一半——边界密集时碎刀（每刀 1-2 轮）
         # 触发过勤，超深态留存太短；之后仍超线再碎刀微调。
         fc = 0
+        _est = lambda k: self._estimate_tokens(prefix + self._render_tiered_history(k) + cur_est)
         for _ in range(len(self.turns) + 4):
-            if self._estimate_tokens(prefix + self._render_tiered_history(fc) + cur_est) <= target:
+            if _est(fc) <= target:
                 break
-            nxt = self._fold_leap_target(fc) if fc == 0 else self._next_fold_target(fc)
+            nxt = (self._fold_leap_target(fc, _est, target) if fc == 0
+                   else self._next_fold_target(fc, est_fn=_est, target=target))
             if nxt is None:
                 break
             fc = nxt
@@ -1987,6 +2005,14 @@ class Session:
             # 历史段形态真实变化（毕业顺移/折叠重排）= 前缀缓存必断——system 账本顺带归一化（DSH 断点清账，
             # 用户裁定 2026-09-12：append 以后的归一化挂在这一时刻）。计划未变（纯追加轮）不置。
             self.mark_system_dirty(f"毕业/折叠执行（升{g}档+折{fc}轮）")
+        if fc > 0 and self._tier_boundaries:
+            # 已折叠轮不再参与渲染：raw_level(i>=fc) 只数 b >= i 的边界 → < fc 的边界是死重，清掉：
+            # ① 语义干净（_fold_leap_target 的 bs[-max_level] 在超深段折空时正确退化为按轮吃）；
+            # ② meta.json 体积（本 session 曾有 183 个边界、绝大多数 < fc）。
+            # 对未折轮零影响（它们的 count 不含这些 b）→ 无需清冻结缓存。
+            _kept = [b for b in self._tier_boundaries if b >= fc]
+            if len(_kept) != len(self._tier_boundaries):
+                self._tier_boundaries = _kept
         self._planned_fold = fc
         self._planned_graduates = g
 
@@ -2000,15 +2026,25 @@ class Session:
         last_completed = len(self.turns) - 1
         if last_completed < 0:
             return False
-        seg_start = (self._tier_boundaries[-1] + 1) if self._tier_boundaries else 0
+        seg_start = self._last_boundary() + 1 if self._tier_boundaries else 0
         if seg_start > last_completed:
             return False   # 当前段只剩进行中 turn，无东西可升
         seg_len = last_completed - seg_start + 1
         new_b = last_completed if seg_len <= GRADUATE_BATCH_TURNS \
             else seg_start + GRADUATE_BATCH_TURNS - 1
         self._tier_boundaries.append(new_b)
-        # 冻结缓存失效判定用完整 key (level, fold, base)——毕业顺移可能只改 raw 不改封顶 level
-        # （raw 4→5 时 tier 仍 4 但 fold 位 False→True），base 变化（/config/切模型窗口变）同理
+        self._invalidate_frozen_after_graduate()
+        return True
+
+    def _last_boundary(self) -> int:
+        """最新毕业边界（= 最大边界）。_tier_boundaries 是【多重集】——_deepen_oldest_tier 会在
+        老位置（fc）插入重复边界承载"多切一刀"的档位深度（raw_level 只数个数），故取 max 而非 [-1]。"""
+        return max(self._tier_boundaries) if self._tier_boundaries else -1
+
+    def _invalidate_frozen_after_graduate(self) -> None:
+        """毕业/推进边界后的冻结缓存失效（_graduate_once / _deepen_oldest_tier 共用）。
+        判定用完整 key (level, fold, base)——毕业顺移可能只改 raw 不改封顶 level
+        （raw 4→5 时 tier 仍 4 但 fold 位 False→True），base 变化（/config/切模型窗口变）同理。"""
         _fold_on = config.load_fold_deep_tools()
         _db = self.detail_base
         _ds = self.detail_step
@@ -2018,17 +2054,62 @@ class Session:
                                 _fold_on and self._raw_tier_level(i) > self.max_level,
                                 _db, _ds):
                 self._frozen_renders.pop(i, None)
+
+    def _deepen_oldest_tier(self, est_fn=None, target: int = 0, fold_count: Optional[int] = None) -> bool:
+        """推进压缩阶梯的中间一级：把最老的【未折叠档】整档推进【工具折叠档】（raw_level > max_level）。
+        背景（用户裁定 2026-09-14）：升档刀 _graduate_once 只切最年轻段（最后边界之后的段），
+        年轻端切完即返回 False → 升档循环 break → 直接折叠整档进结构摘要，中间的「工具折叠档」
+        （工具调用折成一行标注、保留 answer/reasoning 原文）被整段跳过。本函数补上这一级。
+        原理：raw_level(i) = 1 + count(b >= i)——未折区【最小边界】b_min 是"最老档"
+        （i ∈ [fc, b_min]，raw_level 最大的那些轮）的上界：在 b_min 处再插一个边界，
+        该档整档 count+1（跨过 max_level 即整档工具折叠），而 i > b_min 的年轻轮 count 不变、
+        保真度零损失。每插一个即多切一刀，直到最老未折轮 raw_level > max_level（整档已折叠）为止。
+        带 est_fn/target 时按【实际压缩收益】决策（≥2% 才动，避免推进换来零收益却断缓存）。"""
+        if not config.load_fold_deep_tools():
+            return False
+        fc = self._planned_fold if fold_count is None else fold_count
+        if fc > len(self.turns) - 1:
+            return False                     # 没有未折叠的已完成轮
+        if self._raw_tier_level(fc) > self.max_level:
+            return False                     # 最老未折轮已在超深档：这一级已用尽
+        seg = [b for b in self._tier_boundaries if b >= fc]
+        if not seg:
+            return False                     # 未折区无边界：全员 +1 是 _graduate_once 的活
+        if est_fn is not None and target:
+            before = est_fn(fc)
+            if before <= target:
+                return False                 # 已达标：不该推进（调用方的循环条件会先 break）
+            b_min = min(seg)
+            bisect.insort(self._tier_boundaries, b_min)
+            after = est_fn(fc)
+            self._tier_boundaries.pop(bisect.bisect_left(self._tier_boundaries, b_min))
+            if after > before * 0.98:
+                return False                 # 收益 <2%：不值得为此重渲染一整档 + 断前缀缓存
+        # 位置取【未折区最小边界】：正好是"最老档"的上界（见 docstring）
+        bisect.insort(self._tier_boundaries, min(seg))
+        self._invalidate_frozen_after_graduate()
         return True
 
-    def _next_fold_target(self, fold_count: int):
-        """下一个折叠点 = 超过 fold_count 的最小 boundary +1（折掉一整档最早的 turn）。
-        所有 boundary 都已折叠则返回 None（无可再折）。"""
-        for b in sorted(self._tier_boundaries):
-            if b + 1 > fold_count:
-                return b + 1
-        return None
+    def _next_fold_target(self, fold_count: int, est_fn=None, target: int = 0):
+        """下一个折叠点。
+        带 est_fn/target（用户裁定 2026-09-14）：被折叠的轮不再参与档位渲染，对齐 boundary 已无意义
+        → 从 fold_count 起【按轮】吃，返回恰好达标（估算 ≤ target）的轮数：一次到位，既不浪费时间
+        （不多吃一轮），又不产生"每刀只折 1-2 轮"的碎刀（碎刀每轮都断前缀缓存）。
+        吃完全部轮仍不达标 → 返回全折（last_completed+1）；已经全折 → None。
+        不带 est_fn（旧调用点）→ 旧语义：超过 fold_count 的最小 boundary+1（按整档吃）。"""
+        last_completed = len(self.turns) - 1
+        if est_fn is None or not target:
+            for b in sorted(self._tier_boundaries):
+                if b + 1 > fold_count:
+                    return b + 1
+            return None
+        for cand in range(fold_count + 1, last_completed + 1):
+            if est_fn(cand) <= target:
+                return cand
+        nxt = last_completed + 1
+        return nxt if nxt > fold_count else None
 
-    def _fold_leap_target(self, fc: int):
+    def _fold_leap_target(self, fc: int, est_fn=None, target: int = 0):
         """fc 大刀首折目标：至少吞掉【超深档的一半】到 fc 结构摘要（用户裁定 2026-08-28：
         边界密集（滚动毕业 ~1.9 轮/边界）时碎刀偏勤——每轮边界触发、每刀只折 1-2 轮，
         超深态（answer/reasoning 原文）留存太短。一次大刀一半，触发间隔翻倍、留存翻倍）。
@@ -2036,13 +2117,13 @@ class Session:
         因 raw_level(i)=1+count(b>=i)，count(bs[-max_level])=max_level → raw=max_level+1）。
         fold_deep_tools 关 / 档梯未满（无超深段）→ 退化为碎刀 _next_fold_target。"""
         if not config.load_fold_deep_tools():
-            return self._next_fold_target(fc)
+            return self._next_fold_target(fc, est_fn, target)
         bs = sorted(self._tier_boundaries)
         if len(bs) <= self.max_level:
-            return self._next_fold_target(fc)   # 边界数 ≤ max_level：档梯未满，无超深段
+            return self._next_fold_target(fc, est_fn, target)   # 档梯未满：交按轮吃
         deep_end = bs[-self.max_level]          # 最后一个超深轮（合法折叠点 = deep_end+1）
         if deep_end + 1 <= fc:
-            return self._next_fold_target(fc)   # 超深段已折完：剩档内段，碎刀
+            return self._next_fold_target(fc, est_fn, target)   # 超深段已折完：剩档内段，交按轮吃
         half = fc + max(1, (deep_end + 1 - fc) // 2)   # 至少吞一半（≥1 段）
         for b in bs:                            # 对齐到 ≥half 的最小合法折叠点（boundary+1）
             if b + 1 >= half:

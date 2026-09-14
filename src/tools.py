@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import inspect
 import json
-from typing import Any as _TypingAny, Callable, get_origin, get_type_hints
+from typing import Any as _TypingAny, Callable, get_args, get_origin, get_type_hints
+from typing import Union as _typing_Union
 
 from tool_briefs import TOOL_BRIEFS
 
@@ -24,11 +25,18 @@ _PY_TO_JSON_SCHEMA = {str: "string", int: "integer", float: "number", bool: "boo
 def _type_to_schema(ptype):
     """Python 类型 → JSON Schema 片段。支持 str/int/float/bool/list/dict。
     typing.Any → {}（空 schema = 任意类型）：工具参数/返回类型不确定时的标记，
-    编辑器据此不锁死类型（用户可把它改成 object 逐字段连线组装）。"""
+    编辑器据此不锁死类型（用户可把它改成 object 逐字段连线组装）。
+    Optional[X] → X 的 schema（0.28.1 修复：read_file 的 start_line 等参数用 Optional[int]
+    注解时，PyPI 包在 Python 3.10 启动即炸 "类型 typing.Optional[int] 暂不支持"——
+    editable 的开发机进程未重启所以没暴露）。"""
     if ptype is _TypingAny:
         return {}
     if ptype in _PY_TO_JSON_SCHEMA:
         return {"type": _PY_TO_JSON_SCHEMA[ptype]}
+    if get_origin(ptype) is _typing_Union:
+        args = [a for a in get_args(ptype) if a is not type(None)]
+        if len(args) == 1:
+            return _type_to_schema(args[0])   # Optional[X] → 退化为 X
     if get_origin(ptype) is list or ptype is list:
         return {"type": "array", "items": {}}
     if get_origin(ptype) is dict or ptype is dict:

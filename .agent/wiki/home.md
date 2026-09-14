@@ -793,3 +793,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **方向：给 SCNet MCP 自己的 repo（用户表态，未实施）**——用户认为「纳入 repo 感觉怪怪的」，倾向独立 repo（`scnet-mcp`：`scnet_mcp.py` + monitor 独立文件 + `docs/` + README + `pyproject.toml` 供 pip/uvx 分发）。**独立后内联可拆回独立文件**（届时只有一份真源且可读可 diff）。隐私红线：cookie 永不入库、AK/SK 走 `~/.agt/scnet.json`/环境变量、代码已核查无实例 id/隧道 URL/回调 token（仅一处注释用户名待中性化）。待用户定 repo 名与可见性。
 - 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md#容器侧-monitorpy8191--v3-常驻--反代--http-加任务) / [SCNet 算力网](guides/scnet.md#待办与注意事项)
 
+## 快速事实增补（2026-09-14 · 十五 · 压缩阶梯三改 + 投影模拟器）
+
+- **压缩阶梯三改 + 投影模拟器**（2026-09-14，用户提案）：`_plan_fold` 压力顺序升级为「升档 → 推老档进工具折叠档（新 `_deepen_oldest_tier`）→ 折叠按轮吃到水位（`_next_fold_target` 带 est_fn/target）」+ prune `< fc` 死边界；新工具 `tools/proj_simulator.py` 按 events.jsonl 从头重放投影形状、`--rule old|new` 对照。862 轮真实回放：终态 fc 784→713（多留 71 轮原文）、终态投影 514K→478K tok、工具折叠档真正承压（峰值 99 轮）、残留边界 32→5；自测 17/17。详见 [context-engine · 压缩阶梯三改](architecture/context-engine.md#压缩阶梯三改--投影模拟器先升档推老档按轮吃2026-09-14用户提案)。未提交/未发布，需 `/restart` 生效。
+

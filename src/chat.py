@@ -888,7 +888,7 @@ def _early_argv():
     a = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
     if not a:
         return
-    if a in ("--help", "-h", "help", "/help"):
+    if a in ("--help", "-help", "-h", "help", "/help"):
         try:
             from __init__ import __version__ as _v
         except Exception:
@@ -911,7 +911,7 @@ def _early_argv():
         print()
         print("新环境探索指引：README「Agent 上手指引」节（GitHub: vgp7758/Agt）")
         sys.exit(0)
-    if a in ("--version", "-V", "version"):
+    if a in ("--version", "-version", "-v", "-V", "version"):
         try:
             from __init__ import __version__ as _v
         except Exception:

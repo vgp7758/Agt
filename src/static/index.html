@@ -738,6 +738,14 @@ function inlineRich(t){
     return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/<((?:https?|ftp):\/\/[^<>\s]+)>/g, function(_,u){ hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link">'+esc(u)+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ② <url> autolink
   t=t.replace(/\[!([^\]]*)\]\(([^)\s]+)\)/g, function(_,title,path){ hold.push(assetBoxHtml(title,path)); return '\x02'+(hold.length-1)+'\x02'; });   // ③ [!title](path) 资源框
+  // 标准 markdown 图片 ![alt](path)（用户问诊 2026-09-14：zai_file_parser 图片转 md 的输出格式
+  // / LLM 天然惯用写法——此前无此规则，整段原样显示为字面文本）：本地相对路径复用 assetBoxHtml
+  // （图框/音频/文本预览/未知后缀嗅探——与 [!名](path) 同一条资产链）；http(s) 外链直连 <img>。
+  t=t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function(_,alt,path){
+    if(/^(?:https?|ftp):\/\//i.test(path))
+      hold.push('<img src="'+esc(path)+'" alt="'+esc(alt)+'" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:4px 0">');
+    else hold.push(assetBoxHtml(alt||'图片', path));
+    return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_,txt,url){ hold.push('<a href="'+esc(url)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ④ [文字](http) 普通外链
   t=inlineCode(esc(t));
   return t.replace(/\x02(\d+)\x02/g, function(_,i){ return hold[+i]||''; });
@@ -1135,7 +1143,10 @@ function unmentionedChangesHtml(answerText, changed){
   const _norm = s => String(s||'').replace(/\\/g, '/');
   const _base = s => _norm(s).split('/').pop().toLowerCase();   // basename（两种分隔符都切 + 大小写不敏感）
   const cited = new Set();
-  String(answerText||'').replace(/\[![^\]]*\]\(([^)\s]+)\)/g, function(_, p){ cited.add(_norm(p)); cited.add(_base(p)); return _; });
+  const _collect = (_, p) => { cited.add(_norm(p)); cited.add(_base(p)); return _; };
+  String(answerText||'')
+    .replace(/\[![^\]]*\]\(([^)\s]+)\)/g, _collect)     // [!名](path) 自定义语法
+    .replace(/!\[[^\]]*\]\(([^)\s]+)\)/g, _collect);    // ![alt](path) 标准 markdown 图片（同步认——否则图片语法引用过的文件被误补）
   const rest = changed.filter(c => c && c.file && !cited.has(_norm(c.file)) && !cited.has(_base(c.file)));
   if(!rest.length) return '';
   const ICON = {modified:'✏️', new:'➕', deleted:'🗑'};

@@ -34,6 +34,20 @@
 - chat.py：`mcp_mgr.connect_from_config` 两处连接（workspace + repo 覆盖）
 - 工具外置判别 [运行时管理器的替代边界](../architecture/tool-externalization-criteria.md)：MCP 管理器是引擎侧 runtime 管理器，与 background/lsp/reload_hot 同族（不外置）
 
+## reload_mcp 热重连工具（2026-09-14：配置路径列表化）
+
+`src/mcp_client.py` 的 `make_mcp_tools` 生成 `reload_mcp_server` 工具——断开并重连指定 MCP server（server 代码改后免 `/restart`）。此前闭包只绑定**单一** `.mcp.json` 路径，导致**只注册在全局 `~/.agt/mcp.json` 的 server 无法热重连**（如 SCNet 凭证修复后 `reload_mcp_server('scnet')` 被拒）。
+
+本次修复（用户改 SCNet 用户名后发现）：
+
+- `make_mcp_tools` 入参由单路径改为**路径列表**，`reload_mcp_server(name)` 逐个配置找同名 server 重连（单字符串入参向后兼容）
+- `src/chat.py` 注册时同时传 `workspace/.mcp.json` 与 `config.config_file("mcp.json")`（repo 级优先、缺省全局）
+- `src/commands.py` 的 `/reload_mcp` CLI 帮助文案同步（「repo .mcp.json 与全局 ~/.agt/mcp.json 都查」）
+
+单元验证 4 场景全过：repo 内的 server / 只在全局的 server / 不存在的 server 报错清单 / 单路径兼容。
+
+用法：工具调用 `reload_mcp_server(name)`，或 CLI `/reload_mcp <name>`（name 为 `mcpServers` 键名）。实测场景见 [SCNet 凭证用户名变更](../guides/scnet.md)。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

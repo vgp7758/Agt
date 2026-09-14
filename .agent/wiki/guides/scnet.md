@@ -24,6 +24,24 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 - Anthropic 兼容：`https://api.scnet.cn/api/llm/v1/anthropic`
 - 接入 agt：拿到 key 后按 `guides/config-and-models.md` 的 provider 档案手工加一条即可；可白嫖其 GLM/DeepSeek 服务。
 
+## 凭证用户名变更（act3fh878f → brick，2026-09-14）
+
+用户改了 SCNet 平台登录用户名后，所有 scnet_* 工具报 `10009 用户不存在`。用直连 token 接口做三态最小复现对照，钉死了口径：
+
+| 请求头 `user` | 签名消息里的 user | 结果 |
+|---|---|---|
+| `act3fh878f`（旧值） | act3fh878f | ❌ `10009 用户不存在` |
+| `brick`（新值） | act3fh878f（旧签名） | ❌ `AK/SK签名校验失败`（→ brick 这个用户**存在**） |
+| `brick` | brick | ✅ `code:0 success`，拿到各区域 token |
+
+- **结论**：token 接口的 `user` 头要填**平台登录用户名**（现在是 `brick`），而不是 `act3fh878f`。
+- **签名公式**：`HMAC-SHA256(secret_key, json{accessKey, timestamp, user} sort_keys)` —— 消息体也含 user，所以要**一起改**，否则签名校验失败。
+- **`computeUser` 字段**：返回的 token payload 里 `computeUser` 仍是 `act3fh878f`（**计算用户 ID**），集群家目录 `/public/home/…`、作业与容器账号均不受改名影响。
+
+修复：`~/.agt/scnet.json` 的 `user` 由 `act3fh878f` → `brick`（AK/SK 未动），旧文件备份 `scnet.json.bak_20260914_124347`。环境变量（SCNET_USER 等）未设置时，该文件为唯一凭证来源。
+
+改动后需让 MCP 子进程用新凭证重连——它是常驻进程，凭证在启动时读入内存。配合 [MCP 配置页 · reload_mcp 热重连工具](../features/mcp-config.md) 用 `/reload_mcp scnet` 或 `/restart` 生效；在此之前 `scnet_free_card_watch` 巡检会因拿不到 token 而空转。
+
 ## 自定义镜像：commit 式（非 Dockerfile/制品仓库）
 
 官方文档《镜像说明》的机制不是构建/制品仓库，而是 **commit 式**：

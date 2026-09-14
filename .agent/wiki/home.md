@@ -755,3 +755,13 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **固定打法**：本地 enqueue N 单 → 平台页一键启动 monitor（8191）→ 关电脑等收货（回调唤醒 + 产物自动落盘）。详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md)。
 - **状态**：异步链路已全链路部署（monitor 已启动、第二批 2 单已 enqueue、cpolar 通路已验证），**只差一次 `/restart`** 装载 `/api/callback` 端点；实例 ¥2.53/时计费中。
 
+## 快速事实增补（2026-09-14 · 九 · 回调 header 通道打通 + scnet_notebook MCP 封装）
+
+- **`/restart` 完成，三件事全部验证通过** ✅
+- **header 通道打通（关键）**：cpolar 隧道**丢弃 query string**（`?token=…` 必失败），回调鉴权改走 header（`X-Cb-Token`/`X-Cb-Type`/`X-Cb-Filename`，服务端 header 优先 query 兜底）。修复后对照复验：直连 ✅ `211448_hdr_ok.bin`（680B）、**cpolar ✅ `211450_hdr_ok.bin`（680B）**——隧道坑彻底绕过。
+- **假成功陷阱**：隧道可能返回 HTTP 200 + 业务 `ok=false`，monitor 此前只看状态码 → 「pushed=2 但文件没落盘」被计成功。monitor v3 改为**校验响应体 `ok==true`**，`pushed` 计数可信。
+- **MCP 封装 `scnet_notebook`**（`~/.agt/mcp/scnet/scnet_mcp.py`）：端点摸清后封装 6 个 action（`list`/`info`/`url`/`config`/`start-command`/`ports`），**纯 HTTP 直调控制台后端、零浏览器**——实测直接拿到 Jupyter URL。写操作（创建/停止/服务配置）端点已从前端 JS 定位，payload 待补。
+- **⚠️ 框架缺口（实测确认）**：`reload_mcp_server` 只重连 session，**不注册工具进 `agent.tools`** → 新工具（如 `scnet_notebook`）调用报「工具箱里没有」，**必须 `/restart`**。修法方向：重连后调 `mcp_mgr.sync_to_toolbox(agent.tools)`（API 已存在，目前仅 ensure_lsp 在用）。
+- **部署通道**：容器内用 **JupyterLab 终端**重启 monitor（该镜像未装 SSH，比 SSH 指令更好用）。
+- 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md) / [MCP 配置页](features/mcp-config.md)。
+

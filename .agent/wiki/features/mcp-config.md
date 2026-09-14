@@ -57,3 +57,16 @@
 
 - [配置体系与模型调优](../guides/config-and-models.md)（mcp.json 在四份配置 repo 覆盖里）
 - [多实例组网](../architecture/multi-instance.md)（每角色实例各持自己的 .agent/mcp.json）
+## 缺口：reload_mcp_server 只重连 session，不注册工具（2026-09-14 实测确认）
+
+`reload_mcp_server` 的语义是「**断开并重连**」——`MCPManager.reconnect_from_config_one(path, name)` 只做两件事：`sessions.pop(name)` + `_connect_one(name, cfg)`，刷新的是 `mcp_mgr.sessions[name]["tools"]`（server 侧工具清单）。
+
+**它不碰 `agent.tools`（工具箱）**。装配期的注册在 `src/chat.py` 的 `build_agent` 里一次性完成（`make_mcp_tools` / `MCPTool` 注册，L326 附近），此后新增的 server 工具不会自动进工具箱。
+
+**实测后果（2026-09-14，SCNet 场景）**：给 `~/.agt/mcp/scnet/scnet_mcp.py` 新增 `scnet_notebook` 工具后，即使 `reload_mcp_server('scnet')` 成功重连（session 里能看到新工具），Agent 调用仍报「工具箱里没有」——**必须 `/restart`**。
+
+**修法方向**：重连后调 `mcp_mgr.sync_to_toolbox(agent.tools)`——该 API 已存在（`register_or_replace` 幂等，返回本次新增工具名列表），目前唯一调用方是 [ensure_lsp](../architecture/tool-externalization-criteria.md) 的 LSP 动态装配（`src/lsp_manager.py` L100）。缺口在于 `reload_mcp_server` 的闭包只绑了 `mcp_mgr` + 配置路径，**没绑 agent/toolbox**，故无法自行同步。
+
+**规避**：新增/改名 MCP 工具后一律 `/restart`（或 CLI 重启）；仅改 server 内部实现（工具名不变）时 `reload_mcp_server` 足够。
+
+

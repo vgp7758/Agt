@@ -54,9 +54,10 @@ GET /acx/containermgt/v2/notebook/{id}/notebook-url?clusterId=11250       → 20
 
 ## 尚缺与价值
 
-- **写操作未拿到**：创建实例 / 启停 / 配置自定义服务 / 关机的 payload 结构待补——`list` 返回字段是创建请求的反推源，再抓一次浏览器真实写请求即可补全（服务端参数校验会拦，不会误创建）。
+- **写操作未拿到**：创建实例 / 启停 / 配置自定义服务 / 关机的 payload 结构待补——`list` 返回字段是创建请求的反推源，再抓一次浏览器真实写请求即可补全（服务端参数校验会拦，不会误创建）。已定位候选端点：`/acx/aimgt/notebook`、`/acx/containermgt/notebook/task/actions/*`（前端 JS 提取，见「端点清单来源」）。
 - **打开全无人值守**：`AK/SK 换 token → POST 创建 Notebook（选镜像/资源组/无卡或有卡）→ 轮询 notebookStatus 至 Running → POST 配自定义服务（端口+启动指令）→ 等 ComfyUI /system_stats → enqueue 批量 → monitor 回调（已通）→ POST 关机`。
 - playwright 由此降级为「兜底 + 抓包取证」工具；现有巡检任务（`scnet_free_card_watch` / `scnet_img_sync`）可择机改写为纯 API。
+- **只读段已完成**：list / notebook-url / config / start-command / port-pool 已封装进 MCP 工具 `scnet_notebook`（零浏览器）；**写操作段是当前唯一缺口**。
 
 ## LLM API 端点与 provider 接线
 
@@ -135,9 +136,52 @@ AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：
 
 **URL 规律**：`https://c-{实例数字ID}.zzai.scnet.cn:58043/`（zzai.scnet.cn 域，公网直达、无鉴权）。
 
-**⚠️ 单端口约束（2026-09-14 实测，重要）**：同一实例**只有一个公网代理端口**（`…:58043`），**后启动的自定义服务会顶掉先前服务的入口**。实测：启 monitor(8191) 后 ComfyUI 的公网入口失效——58043 返回 monitor 状态页，`/history` 查不到任务。**对策**：把后来者做成反代（对外一个入口，内部按路径分流），参见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md) 的 monitor v2。
+**⚠️ 单端口约束（2026-09-14 实测，重要）**：同一实例**只有一个公网代理端口**（`…:58043`），**后启动的自定义服务会顶掉先前服务的入口**。实测：启 monitor(8191) 后 ComfyUI 的公网入口失效——58043 返回 monitor 状态页，`/history` 查不到任务。**对策**：把后来者做成反代（对外一个入口，内部按路径分流），参见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md) 的 monitor v2/v3。
 
 **容器内操作通道**：该镜像未装 SSH（提示「仅支持在线开发」），**JupyterLab 开终端**是重启/调试服务的最佳通道（本轮实测比 SSH 指令更好用）。
+
+## 控制台纯 API 地图 + 三单实测（2026-09-14）
+
+控制台网页操作（创建/启服务）不必依赖 playwright——**后端 HTTP API 可用 AK/SK 换来的区域 token 直接调**（`token` header，与 OpenAPI 共用同一 JWT 体系：payload 含 computeUser/clusterId/user）。
+
+## 已验证的端点（纯 HTTP，零 cookie）
+
+## 已验证的端点（纯 HTTP，零 cookie）
+
+Base：`https://cancon.hpccube.com:65011`（昆山集群；华中网关是 zzhpc.scnet.cn:65051 系）
+
+| 端点 | 方法 | 鉴权 | 实测 |
+|---|---|---|---|
+| `/acx/containermgt/v2/notebook/list?clusterId=11250` | GET | 区域 token | ✅ 200 实例列表全字段 |
+| `/acx/containermgt/v2/notebook/{id}/notebook-url?clusterId=11250` | GET | 区域 token | ✅ 200（含 Jupyter URL、status、userToken） |
+| `/acx/containermgt/notebook/v3/config` | GET | 区域 token | ✅ 200（releaseDays=30、createTimeTooLongMinutes=10 等） |
+| `/acx/containermgt/instance-service/start-command` | GET | 区域 token | ✅ 200（返回 jupyter/comfyui 等启动命令模板） |
+| `/acx/containermgt/port/pool/available/port/number` | GET | 区域 token | ✅ 200 |
+
+**已封装**：以上只读端点全部封装为 MCP 工具 `scnet_notebook`（`action = list / info / url / config / start-command / ports`，纯 HTTP 直调、零浏览器），见 [SCNet 异步生产流水线 · MCP 封装](../features/scnet-async-pipeline.md)。
+
+**实例对象关键字段**（创建 payload 的反推源）：notebookName/notebookStatus/imageName/imagePath/cpuNumber/acceleratorType(Number/Name/Mode)/ramSize/resourceGroupId/sshPassword/taskId/containerId/node/**command**（自定义服务启动指令）/**customsizePort**（服务端口）/maxNumber/**noCardMode + noCardCpuNum("0.5核心") + noCardRamSize("4GB")**（无卡模式规格！）
+
+**Jupyter URL 实测样例**（`scnet_notebook` 返回）：`https://n-2099459694942883841.ksai.scnet.cn:58043/jupyter-forward/.../lab/tree/root/?token=sothisai_...`。
+
+## 尚不通的端点（2026-09-14）
+
+- `/acx/aimgt/*`（创建 Notebook 主入口：POST /aimgt/notebook、resource/adjust、clone）→ **503 Service Unavailable**（本机与浏览器上下文一致，疑平台侧或需其它入口）
+- `/acx/containermgt/instance-service/task/list` 等 → `{"code":"1001","message":"jwt token is invalid"}`（需另一种 token）
+
+## 端点清单来源
+
+前端 JS bundle（`https://www.scnet.cn/ui/console/static/js/app.addc4147.js`，2.8MB）→ 正则提取 **437 个端点**（含 notebook/instance/service/image/HPC 全部路由）。后续要补写操作 payload，从这里继续挖或抓一次浏览器真实请求。
+
+## 三单批量实测结果（K100_AI 64GB，￥2.53/时）
+
+| 单 | 时长 | 产物 |
+|---|---|---|
+| e4bd2630（含首次权重加载） | 607s | MiniMax_H3_00001_.mp4 |
+| 5b4caea7（热态） | 464s | MiniMax_H3_00002_.mp4 |
+| 1b01d575（热态） | 444s | MiniMax_H3_00003_.mp4 |
+
+**结论**：权重加载仅占约 2.4 分钟，稳态 ~7.4 分钟/单（480p/5s，4步 Turbo+EasyCache）——速度调优（low_vram/EasyCache/分辨率）是后续产能优化的重点。
 
 ## 核心发现：113 组免费 BW 64GB（限时免费）
 
@@ -306,7 +350,9 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 
 **2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_.mp4` / `_00002_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署；monitor 因**单端口约束**升级为「反代 + 监控二合一」；热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
 
-**2026-09-14 · 纯 API 通道（新）**：Notebook 全生命周期已有纯 HTTP 后端 `cancon.hpccube.com:65011/acx/containermgt/v2/notebook/*`，与控制台**共用同一把区域 token**（AK/SK 换得）；list / notebook-url 只读端点已 200 实测。写操作 payload 待抓包补齐后，playwright 可退居兜底。见上节「纯 API 通道实测」。
+**2026-09-14 · 纯 API 通道（新）**：Notebook 全生命周期已有纯 HTTP 后端 `cancon.hpccube.com:65011/acx/containermgt/v2/notebook/*`，与控制台**共用同一把区域 token**（AK/SK 换得）；list / notebook-url / config / start-command / port-pool 等只读端点已 200 实测，并已封装为 MCP 工具 `scnet_notebook`（纯 HTTP 拿 Jupyter URL，零浏览器）。写操作 payload 待抓包补齐后，playwright 可退居兜底。见上节「纯 API 通道实测」与 [SCNet 异步生产流水线 · MCP 封装](../features/scnet-async-pipeline.md)。
+
+**2026-09-14 · 回调链路加固（新）**：cpolar 隧道**丢弃 query string** 且可能返回 HTTP 200 + 业务 `ok=false` 的假成功——回调鉴权改走 header（`X-Cb-Token`/`X-Cb-Type`/`X-Cb-Filename`，服务端 header 优先 query 兜底），monitor v3 校验响应体 `ok==true`。修复后直连与 cpolar 双通道均实测落盘成功（`scnet_inbox/211448_hdr_ok.bin` / `211450_hdr_ok.bin`）。
 
 ## 相关页面
 

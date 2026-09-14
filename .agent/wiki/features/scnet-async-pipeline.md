@@ -9,8 +9,9 @@
 本地 agt（:9000）                          SCNet 容器（K100_AI 68.7GB）
   │                                          ┌─ ComfyUI :8190（跑批）
   │  enqueue 工作流（HTTP /prompt） ────────▶│
-  │                                          ├─ monitor.py :8191（反代 + 监控二合一）
+  │                                          ├─ monitor.py :8191（反代 + 监控二合一，常驻）
   │                                          │   ├ /monitor        → 状态 JSON
+  │                                          │   ├ /monitor/add    → 加任务（纯 HTTP）
   │                                          │   ├ 其余路径        → 反代 127.0.0.1:8190
   │                                          │   ├ 自检回调：每 60s 重试（等本机 restart）
   │                                          │   └ 轮询 /history → 完成后回调
@@ -68,7 +69,7 @@
 
 ## 容器侧 monitor.py（:8191）· v3 常驻 + 反代 + HTTP 加任务
 
-**v3 版（2026-09-14，`tools/scnet_monitor.py`，304 行）**——在 v2 反代基础上修掉「假成功」，并完成**常驻化 + 任务 HTTP 化**改造（本轮本地文件改写；容器内仍是 v1 进程，重启才生效）。
+**v3 版（2026-09-14，`tools/scnet_monitor.py`，304 行）**——在 v2 反代基础上修掉「假成功」，并完成**常驻化 + 任务 HTTP 化**改造。**已实际部署并跑通**（见下「首次无人值守闭环」）。
 
 ### 形态：常驻 + 任务持久化 + HTTP 管理
 
@@ -106,24 +107,84 @@ nohup python3 /root/monitor.py \
   --token 2bc435c58e08fdb3013ff84569a78659 --port 8191 &
 ```
 
-> 注：`--ids` 可省——起来后本机 `POST /monitor/add` 加任务即可。那两单产物已手动下载到 `scnet_outputs/`，重启 monitor 补推主要是**验证通道**；真正价值在下次批量——enqueue 完即撒手，产物自己回家。
+> 注：`--ids` 可省——起来后本机 `POST /monitor/add` 加任务即可。
+
+### 首次无人值守闭环（2026-09-14 21:30，全链路真跑通 ✅）
+
+**第一个视频全程零人工自动回家**：`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB）。
+
+| 环节 | 状态 |
+|---|---|
+| monitor v3 常驻进程 | ✅ 已接管（`boot 21:30:46`，容器内 `pkill -f root/monitor.py` 后重启为 v3） |
+| **callback 自检（header 通道，即生产链路）** | ✅ `"ok"` —— **一次就通**（本机已 `/restart` 装载端点） |
+| 任务表 | ✅ 5 单全在表（1 done + 4 queued） |
+| 自动推送 | ✅ `pushed: 1`，`recent: ["21:30 MiniMax_H3_00004_.mp4"]` |
+| 剩余 4 单 | 🔄 排队/执行中（约 7.4 分/单，预计 22:00 前后全部完成） |
+
+**意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实。
+
+**部署动作（本轮实际执行）**：
+1. 本地 `tools/scnet_monitor.py` → 复制为 `~/.agt/mcp/scnet/monitor_template.py`（11917 bytes，供 MCP 工具 `scnet_monitor` 的 deploy action 读取）
+2. `scnet_mcp.py` 加 `scnet_monitor` 工具（`monitor_action`，py_compile OK，备份 `scnet_mcp.py.bak_20260914_212929`）
+3. 容器内 `pkill` 旧 monitor → `nohup` 拉起 v3
 
 ### monitor 的三步生命周期（谁在哪做）
 
 ```
 本地 tools/scnet_monitor.py（仓库文件，随 commit 走）
    │  ① Jupyter Contents API：PUT /api/contents/root/monitor.py   ← 纯 API，可脚本化
+   │     （或 MCP scnet_monitor deploy：读 ~/.agt/mcp/scnet/monitor_template.py 上传）
    ▼
 容器 /root/monitor.py（副本）
    │  ② 拉起进程：「访问自定义服务」填端口 8191 + 启动指令（首次）
-   │              ／ JupyterLab 终端 nohup（后续重启）            ← 唯一需"在容器里执行命令"的动作
+   │              ／ JupyterLab 终端 nohup（后续重启）
+   │              ／ **Jupyter terminals WebSocket API（纯 API，已打通）** ← 见下节
    ▼
 容器内常驻进程 → 轮询 ComfyUI → 推产物 + 回调本机
    │  ③ 加任务：POST https://c-{id}...:58043/monitor/add           ← 纯 HTTP，随时可做
    │     查状态：GET  https://c-{id}...:58043/monitor
 ```
 
-**结论（本轮用户提问触发）**：monitor **是本地仓库文件**（`tools/scnet_monitor.py`），部署时上传为容器 `/root/monitor.py`；**目前没有任何 MCP 工具自动做「写进容器 + 运行」**——三步均为手工。v3 常驻化后，可工具化的只剩 ①（上传）与 ③（add/status）两个纯 API 动作，② 是唯一卡点（一次性）。
+**结论（本轮更新）**：①③ 已可纯 API/工具化（MCP `scnet_monitor` 的 deploy/add/status）；② 曾被认为是唯一卡点，**本轮用 Jupyter terminals WS 打通**——三步现已全部可脚本化，只差封装成工具。
+
+### Jupyter terminals WebSocket API：容器内执行任意命令（2026-09-14 打通）
+
+自动化链路的最后一块拼图——**纯 API 在容器内执行命令**（比 browser 里的 JupyterLab 终端更可靠、可脚本化）：
+
+```
+wss://<host>/jupyter-forward/{实例ID}/terminals/websocket/{name}?token=<jupyter token>
+   → 发 ["stdin", "命令\r"]   # 实测 echo / pkill / nohup 全部可用
+```
+
+- 连接参数：`host` = `n-{id}.ksai.scnet.cn:58043`，`token` = `sothisai_{id}`（Jupyter URL 的 query 里就有）。
+- `sslopt={"cert_reqs": ssl.CERT_NONE}`（自签证书），`websocket-client` 库。
+- 实测：`echo WS_OK_PROBE` 回显正常；`pkill -f root/monitor.py` 生效。
+- **意义**：monitor 的**首次拉起也能全自动**了——此前只能靠人点 JupyterLab 终端或「访问自定义服务」表单。
+
+### MCP 工具 scnet_monitor（2026-09-14 落地）
+
+`~/.agt/mcp/scnet/scnet_mcp.py` 新增 `scnet_monitor` 工具（`monitor_action` 参数）：
+
+| action | 作用 |
+|---|---|
+| `deploy` | 读 `~/.agt/mcp/scnet/monitor_template.py` → Jupyter Contents API 上传为容器 `/root/monitor.py` |
+| `add` | `POST /monitor/add {"ids":[...]}` 加任务（纯 HTTP） |
+| `status` | `GET /monitor` 读状态 JSON |
+| `start-command` | 拿/配自定义服务启动指令 |
+
+模板文件同步：本地 `tools/scnet_monitor.py` → `~/.agt/mcp/scnet/monitor_template.py`（**两份需手工同步**，容器内改动不回写）。
+
+### 至此 SCNet 全链路 API 化完成
+
+```
+scnet_notebook(list/info/url/config/start-command/ports)   ← 实例查询/URL（已封装）
+scnet_monitor(deploy/add/status/start-command)             ← monitor 部署/加任务（已封装）
+Jupyter Contents API（上传文件） + terminals WS（执行命令）  ← 通道已打通
+ComfyUI API（enqueue/history/view）                        ← 批量生产（已封装）
+本机 /api/callback + cpolar（header 鉴权）                  ← 产物回传 + 唤醒（已通）
+```
+
+**下一步方向（未实施）**：把 terminals WS 与上传也封装成 MCP 工具（`scnet_exec` / `scnet_upload`），则「一句 enqueue → 自动收片」成为**纯工具调用序列**，零手工。
 
 ## 兜底轮询：tools/scnet_watch_batch.py（本机主动拉，不依赖容器 monitor）
 
@@ -216,8 +277,8 @@ python -c "import sys; sys.path.insert(0,'tools'); from wf_canvas2api import con
 - **隧道会丢 query string**（2026-09-14 实测）：回调鉴权一律走 header（`X-Cb-Token` 等），不要依赖 `?token=`。
 - **HTTP 200 ≠ 成功**：隧道/网关可能返回 200 + 业务 `ok=false`，消费端必须校验响应体 `ok==true`（monitor v3 已修）。
 - **单端口约束**：同一实例的自定义服务入口唯一，后启动顶掉先启动——任何新服务上线前先想清楚是否要反代（本轮 monitor 已按此改造）。
-- **monitor 是本地仓库文件**（`tools/scnet_monitor.py`），部署 = 上传为容器 `/root/monitor.py` + 拉起进程；**目前无 MCP 工具自动完成**（三步手工，见「monitor 的三步生命周期」）。容器内改文件**不会**回写本地仓库，两边需手工同步。
-- **v3 常驻进程与本地文件可能不同步**：本地已改 v3，容器内可能仍跑 v1——`/monitor` 返回里没有 `tasks` 键即说明是旧版，需重启。
+- **monitor 是本地仓库文件**（`tools/scnet_monitor.py`），部署 = 上传为容器 `/root/monitor.py` + 拉起进程；①上传/③加任务已由 MCP `scnet_monitor` 覆盖，②拉起可经 **Jupyter terminals WS** 纯 API 完成。容器内改文件**不会**回写本地仓库，两边需手工同步（模板副本 `~/.agt/mcp/scnet/monitor_template.py` 亦然）。
+- **v3 常驻进程与本地文件可能不同步**：本地已改 v3，容器内可能仍跑 v1——`/monitor` 返回里没有 `tasks` 键即说明是旧版，需重启（`pkill -f root/monitor.py` 后 nohup 拉起）。
 - ComfyUI API 无鉴权，URL 即凭证（cpolar 隧道同理）——勿外泄。
 - 实例按 ¥2.53/时计费，余额有限时记得收工关机；monitor 的「全部完成」通知会提示是否关机。
 - 画布转换器依赖 `object_info` 快照（`scnet_objinfo.json`）——换镜像/换节点版本后要重新拉。

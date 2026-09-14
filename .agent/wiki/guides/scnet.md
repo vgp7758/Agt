@@ -134,11 +134,7 @@ AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：
 
 ## Notebook 免费实例实测：自定义服务端口 → 公网 URL 全链路（2026-09-14）
 
-**URL 规律**：`https://c-{实例数字ID}.zzai.scnet.cn:58043/`（zzai.scnet.cn 域，公网直达、无鉴权）。
-
-**⚠️ 单端口约束（2026-09-14 实测，重要）**：同一实例**只有一个公网代理端口**（`…:58043`），**后启动的自定义服务会顶掉先前服务的入口**。实测：启 monitor(8191) 后 ComfyUI 的公网入口失效——58043 返回 monitor 状态页，`/history` 查不到任务。**对策**：把后来者做成反代（对外一个入口，内部按路径分流），参见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md) 的 monitor v2/v3。
-
-**容器内操作通道**：该镜像未装 SSH（提示「仅支持在线开发」），**JupyterLab 开终端**是重启/调试服务的最佳通道（本轮实测比 SSH 指令更好用）。
+**容器内操作通道**：该镜像未装 SSH（提示「仅支持在线开发」），**JupyterLab 开终端**是重启/调试服务的最佳通道（本轮实测比 SSH 指令更好用）。**纯 API 等价通道（2026-09-14 打通）**：Jupyter **terminals WebSocket API** —— `wss://n-{id}.ksai.scnet.cn:58043/jupyter-forward/{id}/terminals/websocket/{name}?token=sothisai_{id}`，发 `["stdin", "命令\r"]` 即可执行任意命令（`echo`/`pkill`/`nohup` 实测可用，`sslopt={"cert_reqs": ssl.CERT_NONE}`），使「首次拉起 monitor」不再需要人点终端。详见 [SCNet 异步生产流水线 · Jupyter terminals WS](../features/scnet-async-pipeline.md)。
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 
@@ -348,7 +344,7 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 
 ## 待办与注意事项
 
-**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_.mp4` / `_00002_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
+**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_~00004_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署并**首次无人值守闭环跑通**（2026-09-14 21:30，产物自动落 `scnet_inbox/`）；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；容器内执行命令经 **Jupyter terminals WebSocket API** 打通（纯 API，首次拉起亦可自动化）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
 
 ## 相关页面
 

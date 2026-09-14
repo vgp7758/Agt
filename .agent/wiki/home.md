@@ -765,3 +765,12 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **SCNet monitor 常驻化 + 任务 HTTP 化（v3）+ 兜底轮询（2026-09-14）**：用户提问「monitor 是本地文件还是容器里现写的？还是某个 MCP 工具有自动写进容器并运行的逻辑？」——答案是**本地仓库文件**（`tools/scnet_monitor.py`），部署=上传为容器 `/root/monitor.py` + 拉起进程，**三步全手工、无 MCP 自动化**。本轮把 v1「监控 N 单跑完即退」改造为 **v3 常驻版**：任务持久化 `/root/monitor_tasks.json` + 新增 **`POST /monitor/add {"ids":[...]}`**（本机经容器公网 URL 直接可达）→ **加任务不再需要进容器执行命令**，于是「在容器里执行命令」从每批一次降为**只做一次**（首次拉起）；顺带修 `STATE["tasks"][pid] = st if completed else "running"`（旧 `f"{st}/running"` 污染状态字符串）。另新增本机兜底轮询 `tools/scnet_watch_batch.py`（主动拉 `/history` → 下载到 `scnet_outputs/`，不依赖回调链）。同轮 5 单批量入队（`scnet_batch5.json`，预计 ~37 分钟）。**可工具化路径**：①上传（Jupyter Contents API PUT）③add/status（纯 HTTP）均可自动化，②首次拉起是唯一卡点——见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md#容器侧-monitorpy8191--v3-常驻--反代--http-加任务)、[兜底轮询](features/scnet-async-pipeline.md#兜底轮询toolsscnet_watch_batchpy本机主动拉不依赖容器-monitor)
 
+## 快速事实增补（2026-09-14 · 十一 · SCNet 首次无人值守闭环跑通 + Jupyter terminals WS 打通）
+
+- **🎉 无人值守链路第一次真实跑通（2026-09-14 21:30）**：第一个视频**全程零人工自动回家** —— `scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB）。链路：enqueue → 容器 monitor v3 轮询 `/history` 发现完成 → 抓产物 → **经 cpolar 推回本机** → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。此前各环节都是分头验证，本轮是**第一次端到端串起来自己跑**。
+- **状态明细**：monitor v3 常驻进程已接管（`boot 21:30:46`）；**callback 自检（header 通道 = 生产链路）一次就通** ✅ `"ok"`；任务表 5 单全在（1 done + 4 queued）；`pushed: 1`，`recent: ["21:30 MiniMax_H3_00004_.mp4"]`；剩余 4 单约 7.4 分/单，预计 22:00 前后完成。
+- **部署动作**：本地 `tools/scnet_monitor.py` → `~/.agt/mcp/scnet/monitor_template.py`（11917 B，供 deploy action 读）；`scnet_mcp.py` 加 `scnet_monitor` 工具（`monitor_action`：deploy/add/status/start-command，py_compile OK，备份 `.bak_20260914_212929`）；容器内 `pkill` 旧 monitor → `nohup` 拉起 v3。
+- **Jupyter terminals WebSocket API 打通（最后一块拼图）**：`wss://n-{id}.ksai.scnet.cn:58043/jupyter-forward/{id}/terminals/websocket/{name}?token=sothisai_{id}` → 发 `["stdin", "命令\r"]`，**纯 API 在容器内执行任意命令**（`echo`/`pkill`/`nohup` 实测可用，`sslopt={"cert_reqs": ssl.CERT_NONE}`）。此前 monitor 的「首次拉起」是唯一手工卡点，现在三步（上传 / 拉起 / 加任务）**全部可脚本化**。
+- **SCNet 全链路 API 化完成**：`scnet_notebook`（实例/URL）+ `scnet_monitor`（deploy/add/status）+ Jupyter Contents（上传）+ terminals WS（执行）+ ComfyUI API（生产）+ `/api/callback` + cpolar（回传唤醒）。**下一步方向（未实施）**：封装 `scnet_exec`（terminals WS）与 `scnet_upload`，则「一句 enqueue → 自动收片」成为纯工具调用序列。
+- 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md) / [MCP 配置页](features/mcp-config.md)。
+

@@ -2384,22 +2384,60 @@ async function renderTeamDash(){
     });
   }
   const remotes = d.remotes || [];
-  if(remotes.length){
-    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🌐 远程实例</div>';
-    remotes.forEach(r => {
-      const st = (r.status||'?').toLowerCase();
-      const icon = st==='online' ? '🟢' : st==='offline' ? '🔴' : '⚪';
-      h += `<div style="border:1px solid #ddd3f0;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span title="状态 ${r.status}">${icon}</span><b style="font-size:13px">${esc(r.server_id)}</b>
-          <a href="${esc(r.url||'#')}" target="_blank" rel="noopener" title="打开该实例" style="color:#7c3aed;text-decoration:underline;font-size:12px">${esc(r.url||'')}</a>
-        </div>
-        <div style="margin-top:3px;font-size:11px;color:#5b6472">${esc(r.session_name||'')}${r.model?' · '+esc(r.model):''}${r.tools_count?' · '+esc(String(r.tools_count))+' 工具':''}</div>
-      </div>`;
-    });
-  }
-  if(!locals.length && !remotes.length) h = '<div style="color:#8a9099;font-size:12px;padding:10px">（无活跃 Agent）</div>';
+  // 远程实例分组恒渲染（含空态——用户提案 2026-09-14：看板手动添加/移除控件）
+  h += `<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px;display:flex;align-items:center;gap:8px">
+    🌐 远程实例
+    <span id="remoteAddBtn" style="color:#0e7490;cursor:pointer;font-weight:400;font-size:11.5px" onclick="remoteAddToggle()">＋ 添加</span>
+  </div>
+  <div id="remoteAddForm" style="display:none;border:1px dashed #b197fc;border-radius:8px;padding:8px;margin-bottom:6px;background:#faf7ff">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <input id="raUrl" placeholder="url（必填，如 http://192.168.1.5:8000）" style="flex:2;min-width:160px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
+      <input id="raId" placeholder="id（可空=自动生成）" style="flex:1;min-width:100px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
+      <button class="btn" style="padding:5px 12px;font-size:12px" onclick="remoteAddSubmit()">连接</button>
+    </div>
+    <div style="font-size:10.5px;color:#8a9099;margin-top:4px">探测 /api/status 成功才注册（与 remote_connect 工具同链）</div>
+  </div>`;
+  remotes.forEach(r => {
+    const st = (r.status||'?').toLowerCase();
+    const icon = st==='online' ? '🟢' : st==='offline' ? '🔴' : '⚪';
+    h += `<div style="border:1px solid #ddd3f0;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span title="状态 ${r.status}">${icon}</span><b style="font-size:13px">${esc(r.server_id)}</b>
+        <a href="${esc(r.url||'#')}" target="_blank" rel="noopener" title="打开该实例" style="color:#7c3aed;text-decoration:underline;font-size:12px">${esc(r.url||'')}</a>
+        <span title="移除该远程实例（断开+清持久化配置）" style="margin-left:auto;color:#b91c1c;cursor:pointer;font-size:12px" onclick="remoteRemove('${esc(r.server_id)}')">✕ 移除</span>
+      </div>
+      <div style="margin-top:3px;font-size:11px;color:#5b6472">${esc(r.session_name||'')}${r.model?' · '+esc(r.model):''}${r.tools_count?' · '+esc(String(r.tools_count))+' 工具':''}</div>
+    </div>`;
+  });
+  if(!locals.length && !remotes.length) h += '<div style="color:#8a9099;font-size:12px;padding:2px 0 10px">（无本地活跃 Agent）</div>';
   list.innerHTML = h;
+}
+function remoteAddToggle(){
+  const f = document.getElementById('remoteAddForm');
+  if(f) f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+async function remoteAddSubmit(){
+  const url = (document.getElementById('raUrl')?.value || '').trim();
+  const sid = (document.getElementById('raId')?.value || '').trim();
+  if(!url){ toast('⚠️ url 必填'); return; }
+  toast('⏳ 探测中…');
+  try{
+    const r = await fetch('/api/remote/add', {method:'POST', headers:{'Content-Type':'application/json'},
+                                              body: JSON.stringify({url, server_id: sid})}).then(x=>x.json());
+    toast(r.msg || (r.ok ? '✅ 已连接' : '❌ 失败'));
+    if(r.ok){ document.getElementById('raUrl').value=''; document.getElementById('raId').value='';
+              document.getElementById('remoteAddForm').style.display='none'; }
+  }catch(e){ toast('❌ ' + e.message); }
+  renderTeamDash();
+}
+async function remoteRemove(sid){
+  if(!confirm(`移除远程实例「${sid}」？（断开连接并从持久化配置删除）`)) return;
+  try{
+    const r = await fetch('/api/remote/remove', {method:'POST', headers:{'Content-Type':'application/json'},
+                                                 body: JSON.stringify({server_id: sid})}).then(x=>x.json());
+    toast(r.msg || (r.ok ? '✅ 已移除' : '❌ 失败'));
+  }catch(e){ toast('❌ ' + e.message); }
+  renderTeamDash();
 }
 // —— 后台看板渲染：定时任务组（⏰ 无日志只有时间线）+ 服务组（行点击展开实时日志）——
 async function renderSvcDash(){

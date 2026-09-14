@@ -1002,6 +1002,33 @@ async def api_status(request: Request):
     return st
 
 
+@app.post("/api/remote/add")
+def api_remote_add(body: dict):
+    """团队看板手动添加远程实例（用户提案 2026-09-14）：复用 remote_tools.connect——
+    探测 /api/status 成功才注册（与 remote_connect 工具同一条链，持久化同样落盘）。
+    server_id 可空（自动生成：本地 url→agt-{端口}，远程→agt-{host}-{端口}）。"""
+    import remote_tools as _rt
+    try:
+        msg = _rt.connect(str(body.get("server_id") or "").strip(),
+                          str(body.get("url") or "").strip())
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+    return {"ok": msg.startswith("✅"), "msg": msg}
+
+
+@app.post("/api/remote/remove")
+def api_remote_remove(body: dict):
+    """团队看板手动移除远程实例（用户提案 2026-09-14）：remote_tools.disconnect——
+    断开 + 从持久化配置删除。"""
+    import remote_tools as _rt
+    sid = str(body.get("server_id") or "").strip()
+    try:
+        msg = _rt.disconnect(sid)
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+    return {"ok": msg.startswith("✅"), "msg": msg}
+
+
 @app.get("/api/dash")
 async def api_dash():
     """WebUI 看板数据（团队 + 后台）：右侧抽屉的两个看板一次拿全——

@@ -183,12 +183,12 @@ wss://<host>/jupyter-forward/{实例ID}/terminals/websocket/{name}?token=<jupyte
 
 | action | 作用 |
 |---|---|
-| `deploy` | 读 `~/.agt/mcp/scnet/monitor_template.py` → Jupyter Contents API 上传为容器 `/root/monitor.py` |
+| `deploy` | 取 **内联模板**（`scnet_mcp.MONITOR_SOURCE`，v3）→ Jupyter Contents API 上传为容器 `/root/monitor.py`；支持 `payload={"source": "本地文件"}` 覆写 |
 | `add` | `POST /monitor/add {"ids":[...]}` 加任务（纯 HTTP） |
 | `status` | `GET /monitor` 读状态 JSON |
 | `start-command` | 拿/配自定义服务启动指令 |
 
-模板文件同步：本地 `tools/scnet_monitor.py` → `~/.agt/mcp/scnet/monitor_template.py`（**两份需手工同步**，容器内改动不回写）。
+**模板真源（2026-09-14 起改为内联）**：monitor 源码内嵌于 `scnet_mcp.py` 的 `MONITOR_SOURCE` 常量（`r'''…'''` 包裹 + `MONITOR_VERSION` 标版本）——**单文件自包含**，拷 `scnet_mcp.py` + `scnet_cookie.json` 到任意实例即可用。此前的双份手工同步（repo `tools/scnet_monitor.py` ↔ `~/.agt/mcp/scnet/monitor_template.py`）已废除，两份旧文件均删除（git 历史可回溯）。容器内改动仍不回写（部署是单向快照）。
 
 ### 至此 SCNet 全链路 API 化完成
 
@@ -318,7 +318,7 @@ python -c "import sys; sys.path.insert(0,'tools'); from wf_canvas2api import con
 - **隧道会丢 query string**（2026-09-14 实测）：回调鉴权一律走 header（`X-Cb-Token` 等），不要依赖 `?token=`。
 - **HTTP 200 ≠ 成功**：隧道/网关可能返回 200 + 业务 `ok=false`，消费端必须校验响应体 `ok==true`（monitor v3 已修）。
 - **单端口约束**：同一实例的自定义服务入口唯一，后启动顶掉先启动——任何新服务上线前先想清楚是否要反代（本轮 monitor 已按此改造）。
-- **monitor 是本地仓库文件**（`tools/scnet_monitor.py`），部署 = 上传为容器 `/root/monitor.py` + 拉起进程；①上传/③加任务已由 MCP `scnet_monitor` 覆盖，②拉起可经 **Jupyter terminals WS** 纯 API 完成。容器内改文件**不会**回写本地仓库，两边需手工同步（模板副本 `~/.agt/mcp/scnet/monitor_template.py` 亦然）。
+- **monitor 源码现在是内联真源**（`scnet_mcp.MONITOR_SOURCE`，2026-09-14 起）：部署 = 上传为容器 `/root/monitor.py` + 拉起进程；①上传/③加任务由 MCP `scnet_monitor` 覆盖，②拉起可经 **Jupyter terminals WS** 纯 API 完成。容器内改文件**不会**回写 MCP 源码（单向快照）；改了 `MONITOR_SOURCE` 后需重新 deploy 才生效。
 - **v3 常驻进程与本地文件可能不同步**：本地已改 v3，容器内可能仍跑 v1——`/monitor` 返回里没有 `tasks` 键即说明是旧版，需重启（`pkill -f root/monitor.py` 后 nohup 拉起）。
 - ComfyUI API 无鉴权，URL 即凭证（cpolar 隧道同理）——勿外泄。
 - 实例按 ¥2.53/时计费，余额有限时记得收工关机；monitor 的「全部完成」通知会提示是否关机。

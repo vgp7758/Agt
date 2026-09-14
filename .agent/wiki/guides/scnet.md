@@ -11,12 +11,52 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 | 通道 | 用途 | 状态 |
 |---|---|---|
 | **API Key** | 调平台上的 LLM 服务，可加成 agt 的 provider | 待用户创建 key |
-| **Playwright 浏览器** | 控制台全操作（开 Notebook/容器、选卡、传文件、看账单） | ✅ 已生效 |
+| **AK/SK 直连 API** | ① 官方 OpenAPI（HPC 作业/文件/集群）+ ② **containermgt Notebook 后端**（纯 HTTP，见下节） | ✅ **已实测通（区域 token 即钥匙）** |
+| **Playwright 浏览器** | 控制台全操作（开 Notebook/容器、选卡、传文件、看账单）；写操作 payload 抓包取证 | ✅ 已生效（**已降级为兜底**） |
 | **E-Shell 网页命令行** | 实例起来后直接敲命令；另有「文件管理」 | 就绪 |
 
-- 算力编排（开卡/关机）**无公开 API**，playwright 是唯一自动化路径。
+- 算力编排（开卡/关机）**已有纯 API 路径**（containermgt，只读已验证、写操作待补 payload）；playwright 保留为兜底与抓包通道。
 - 控制台「密钥管理」页配额 50 个 key。
-- 权限的实用语义：用户在 playwright 窗口扫码登录 = 授权完成（登录态即操作权），无需额外配置。
+- 权限的实用语义：用户在 playwright 窗口扫码登录 = 授权完成（登录态即操作权），无需额外配置；而纯 API 只需 `~/.agt/scnet.json` 里的 AK/SK。
+
+## 纯 API 通道实测：containermgt 与控制台共用同一 JWT（2026-09-14）
+
+**结论：playwright 不再是唯一自动化路径——Notebook 全生命周期有纯 HTTP 后端，且鉴权钥匙就是已有的 AK/SK 区域 token。**
+
+## 三层 API 地图
+
+| 层 | 端点 | 鉴权 | 覆盖 | 实测 |
+|---|---|---|---|---|
+| ① 官方 OpenAPI | `api.scnet.cn` / `zzhpc.scnet.cn:65051` | AK/SK HMAC 签名 → 换区域 token | HPC 作业、文件、集群 | ✅ 已通（`scnet_mcp`） |
+| ② **控制台容器管理后端** | **`cancon.hpccube.com:65011/acx/containermgt/v2/notebook/*`** | **同一把区域 token（`token` header）** | **Notebook 全生命周期** | ✅ **只读已实测** |
+| ③ 容器内 API | Jupyter Contents/Terminal、ComfyUI :8190 | Jupyter token / 无 | 文件、终端、任务 | ✅ 已在用 |
+
+## 关键发现：② 与 ① 共用同一 JWT
+
+浏览器里 containermgt 请求的 `token` header 解出来是 `{computeUser: scnrilsyy5, clusterId: 11250, user: brick}`——与 AK/SK 换来的**昆山区域 token 完全一致**（创建实例后该区域 token 自动出现在 token 列表）。
+
+**AK/SK 换 token 实测返回**（`POST https://api.scnet.cn/api/user/v3/tokens`，HMAC 签名见上节「凭证用户名变更」）：
+
+| clusterId | 区域 | computeUser | user |
+|---|---|---|---|
+| 11250 | 华东一区【昆山】 | scnrilsyy5 | brick |
+| 20091 | 华中一区【A区】 | act3fh878f | brick |
+| 0 | ac（platform） | root | brick |
+
+## 实测端点（纯 urllib + token header，零 cookie）
+
+```
+GET /acx/containermgt/v2/notebook/list?clusterId=11250                    → 200 ✅ 实例列表全字段
+GET /acx/containermgt/v2/notebook/{id}/notebook-url?clusterId=11250       → 200 ✅ Jupyter URL
+```
+
+实例对象信息量大：`notebookStatus`、`sshPassword`、`containerId`、`node`、`resourceGroupId:15`、`command` + `customsizePort:8191`（自定义服务配置）、`noCardMode:"1"` / `noCardCpuNum:"0.5核心"` / `noCardRamSize:"4GB"`——**「无卡模式」= 0.5 核 / 4GB 免费 CPU 实例**，API 参数齐全。
+
+## 尚缺与价值
+
+- **写操作未拿到**：创建实例 / 启停 / 配置自定义服务 / 关机的 payload 结构待补——`list` 返回字段是创建请求的反推源，再抓一次浏览器真实写请求即可补全（服务端参数校验会拦，不会误创建）。
+- **打开全无人值守**：`AK/SK 换 token → POST 创建 Notebook（选镜像/资源组/无卡或有卡）→ 轮询 notebookStatus 至 Running → POST 配自定义服务（端口+启动指令）→ 等 ComfyUI /system_stats → enqueue 批量 → monitor 回调（已通）→ POST 关机`。
+- playwright 由此降级为「兜底 + 抓包取证」工具；现有巡检任务（`scnet_free_card_watch` / `scnet_img_sync`）可择机改写为纯 API。
 
 ## LLM API 端点与 provider 接线
 
@@ -265,6 +305,8 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 ## 待办与注意事项
 
 **2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_.mp4` / `_00002_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署；monitor 因**单端口约束**升级为「反代 + 监控二合一」；热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
+
+**2026-09-14 · 纯 API 通道（新）**：Notebook 全生命周期已有纯 HTTP 后端 `cancon.hpccube.com:65011/acx/containermgt/v2/notebook/*`，与控制台**共用同一把区域 token**（AK/SK 换得）；list / notebook-url 只读端点已 200 实测。写操作 payload 待抓包补齐后，playwright 可退居兜底。见上节「纯 API 通道实测」。
 
 ## 相关页面
 

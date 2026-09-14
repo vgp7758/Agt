@@ -801,3 +801,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **v0.28.0 发布**（2026-09-14，commit `1f66a4e`，PyPI `agt-agent` 已上线；VERSION 0.27.2 → 0.28.0，0.27.2 为本地中间号未单独发布）：**压缩阶梯三改 + 投影模拟器随包发布**（上一条「十五」的施工收官）——顶窗压力动作定稿三级阶梯「①升档 → ②推老档进工具折叠档（`_deepen_oldest_tier` 新增）→ ③按轮折叠到水位（`_next_fold_target` 不再整档吞）」+ `< fc` 死边界 prune（183→5）；`tools/proj_simulator.py` 回放对照模拟器（`--rule old|new` / `--every` / `--csv`，selftest 17/17）；862 轮真实回放背书（fc 784→713 多保 71 轮原文、档位 3 层→6 层、工具折叠档峰值 30→99）。附带收尾：`/api/callback` 回调 header 鉴权随包分发（此前仅本地生效）、`/reload_mcp` 帮助文案、wiki 记录 scnet-mcp 独立仓库——见 [v0.28.0 发布记录](releases/v0.28.0.md)
 
+## 快速事实增补（2026-09-14 · 十七 · SCNet 无卡模式镜像构建——015 实例 agt 组网）
+
+- **SCNet 无卡模式镜像构建全链路跑通（¥0）**：`POST /acx/aimgt/notebook/restart` + `startType:"no-card"`（cookie 通道 restart 端点扩一参）→ 0.5核/4GB 免费 CPU 实例，装环境全程 0 卡时；容器 `pip install agt-agent` + agt-web 起 8191（`customsizePort`）→ 公网 `c-2099459694942883841.ksai.scnet.cn:58043`（ksai 域，与 021 出片实例的 zzai 域并存）→ 本机 `remote_connect`（134 工具）→ `run_python(remote_instance_id="scnet")` 容器内执行实测通——主 Agent 直接管容器，不依赖 scnet MCP；models.json（fk-ds-flash 主力 + qwen utility）upload→mv 两段式注入（Jupyter Contents API 不让写 `.agt` 隐藏目录）。**环境持久性实测**：关机（saveEnv）→ 重开机 pip 包/热修/models.json 全在——试用实例即「活镜像」；**保存镜像被平台限制**（页面点击静默 + API 直调 Internal Server Error，根因 `manualSaveImage:false` 试用实例禁用）但需求已被关机保存覆盖。**计费澄清**：113 组（华中一区 BW 64GB）¥0 独立免费**不消耗** 50 卡时，015（昆山 minimaxh3 台，¥2/时）才消耗——无卡模式是给付费/试用组省卡时的，113 组正常开机即免费；跨组坑 BW/DCU GPU 环境不通用但权重与卡无关 + 家目录跨实例共享 → 分工：113 免费下载机 / 015 无卡装环境 / 015 有卡才推理——见 [SCNet · 无卡镜像构建](guides/scnet.md#notebook-无卡模式镜像构建015-实例-agt-组网--环境持久性实测2026-09-14)
+
+## 快速事实增补（2026-09-14 · 十八 · v0.28.1 发布）
+
+- **v0.28.1 发布**（2026-09-14，commit `7a2d781`，PyPI `agt-agent` 已上线）：**🐞 工具参数 `Optional[X]` 注解修复**——read_file 的 start_line/end_line 等参数用 `Optional[int]` 注解时，PyPI 0.28.0 在 Python 3.10 启动即炸 `类型 typing.Optional[int] 暂不支持`（`_type_to_schema` 只认基本类型 + Any，不认 Union origin；editable 开发机进程不重启不重扫 schema，所以一直没暴露）——**SCNet 容器无卡装机实测炸出**：`pip install agt-agent` → agt-web 首启即炸 → 当场热修 + 发版。修复：`_type_to_schema` 增 Union 分支剥 NoneType 退化（`Optional[int]` ≡ int 的 schema；真多参 Union 仍显式报错）+ 补 `Union` import——见 [v0.28.1 发布记录](releases/v0.28.1.md)
+

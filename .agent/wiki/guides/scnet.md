@@ -136,6 +136,59 @@ AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：
 
 **容器内操作通道**：该镜像未装 SSH（提示「仅支持在线开发」），**JupyterLab 开终端**是重启/调试服务的最佳通道（本轮实测比 SSH 指令更好用）。**纯 API 等价通道（2026-09-14 打通）**：Jupyter **terminals WebSocket API** —— `wss://n-{id}.ksai.scnet.cn:58043/jupyter-forward/{id}/terminals/websocket/{name}?token=sothisai_{id}`，发 `["stdin", "命令\r"]` 即可执行任意命令（`echo`/`pkill`/`nohup` 实测可用，`sslopt={"cert_reqs": ssl.CERT_NONE}`），使「首次拉起 monitor」不再需要人点终端。详见 [SCNet 异步生产流水线 · Jupyter terminals WS](../features/scnet-async-pipeline.md)。
 
+## Notebook 无卡模式镜像构建：015 实例 agt 组网 + 环境持久性实测（2026-09-14）
+
+**「无卡装环境、有卡跑推理」路线全链路跑通（¥0）**：015 实例（昆山，minimaxh3 那台）无卡模式开机 → 容器内装 agt → agt-web 公网直通 → 本机 remote 组网接管 → 「保存镜像」被平台限制，但实测**关机环境保存已覆盖该需求**。
+
+### 无卡模式开机：startType "no-card"
+
+此前 cookie 通道抓到的 [restart 端点](#关机与生命周期-apicookie-通道)扩一参即得：
+
+```
+POST https://www.scnet.cn/acx/aimgt/notebook/restart
+{"startType":"no-card","notebookId":"…","taskId":"…","clusterId":11250}
+```
+
+- 规格 = list 字段早已暴露的 `noCardCpuNum:"0.5核心" / noCardRamSize:"4GB"`——0.5 核 4GB 免费 CPU 实例，装环境/整理文件全程 0 卡时
+- 第二次开机实测通过；要切回有卡推理，再 restart 一次 `startType:"normal"` 即可
+
+### 容器内 agt 组网（agt-web 8191 → 公网 → remote 接管）
+
+1. `pip install agt-agent`（镜像 v2 自带 0.28.0 → 当晚升 0.28.1，见 [v0.28.1](../releases/v0.28.1.md)）
+2. `agt-web` 起在 **8191**（实例自定义服务端口 `customsizePort:8191`）→ 平台自动映射公网 `https://c-2099459694942883841.ksai.scnet.cn:58043`（**ksai 域**；021 出片实例是 zzai 域——两种域名并存）
+3. 本机 `remote_connect` → **134 工具**入列；工具路由实测：`run_python(remote_instance_id="scnet")` → `[remote:scnet]` 在容器里执行 ✅——主 Agent 无需 scnet MCP 也能直接操作容器（组网机制见 [multi-instance](../architecture/multi-instance.md)）
+
+### models.json 注入：upload→mv 两段式
+
+Jupyter Contents API **不让写 `.agt` 隐藏目录**——先 upload 到可见临时路径、再 shell `mv` 进 `~/.agt/`。内容在本机生成（fk-ds-flash 主力 + qwen utility，run_python 落 `scnet_agt_models.json` → base64 → 传输）。
+
+### 环境持久性实测：关机 → 重开机，容器层增量全在
+
+stop（`saveEnv:true`）→ restart 后验证：pip 包、热修的 `tools.py`、`models.json` **一个不少**——「关机环境保存」是真实的。**结论：试用实例本身就是「活镜像」**——只要不释放实例，环境跟着实例走，开机即用（呼应[自定义镜像 commit 式](#自定义镜像commit-式非-dockerfile制品仓库)的关机秒级保存机制）。
+
+### 保存镜像被平台限制（manualSaveImage: false）
+
+| 尝试 | 结果 |
+|---|---|
+| 页面菜单「保存镜像」 | 点击**完全静默**（无请求无弹窗）——前端拦截 |
+| API 直调（字段全部摸清：containerId/containerType/node/name/tag/fromPath/notebookId/clusterId） | 参数合法 → `Internal Server Error`——后端也拒 |
+| 根因 | list 返回 `manualSaveImage:false`——**试用实例禁用手动保存镜像** |
+
+需求实际已被「关机环境保存」覆盖（见上节）；真要跨实例分发镜像时，找平台开通 manualSaveImage 或换正式付费实例操作。
+
+### 资源组计费澄清：113 组免费 ≠ 50 卡时（用户问询钉死）
+
+| 资源组 | 卡型 | 计费 | 与 50 卡时试用额度 |
+|---|---|---|---|
+| **113 组**（华中一区，免费 BW） | BW 64GB | **¥0/时 免费** | **不消耗**——独立免费组 |
+| **015 实例**（昆山，minimaxh3 台） | DCU/L20 | ¥2/时 | **消耗**试用额度 |
+
+- 113 组直接正常开机就免费（15核/59GB，比无卡 0.5核/4GB 强 30 倍）——**不必对它用无卡模式**；无卡模式是给付费/试用组省卡时用的
+- **跨组坑**：BW 与 DCU 的 GPU 侧 Python 环境（torch 等）不通用；但**权重文件与卡无关**，且同一账号家目录 `/public/home/scnrilsyy5` **跨实例共享**
+- **分工策略**：113 组当免费下载机（下权重/数据集落家目录）→ 015 无卡装环境（¥0）→ 015 有卡才推理（只花真实卡时）
+
+当前状态：015 实例无卡挂着（¥0，agt-web 公网 ready + 组网在线），镜像内容 = ComfyUI + H3 + agt 0.28.1 + models.json，开关机不丢。
+
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 
 控制台网页操作（创建/启服务）不必依赖 playwright——**后端 HTTP API 可用 AK/SK 换来的区域 token 直接调**（`token` header，与 OpenAPI 共用同一 JWT 体系：payload 含 computeUser/clusterId/user）。

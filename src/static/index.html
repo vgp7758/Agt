@@ -2422,8 +2422,10 @@ async function remoteAddSubmit(){
   if(!url){ toast('⚠️ url 必填'); return; }
   toast('⏳ 探测中…');
   try{
-    const r = await fetch('/api/remote/add', {method:'POST', headers:{'Content-Type':'application/json'},
-                                              body: JSON.stringify({url, server_id: sid})}).then(x=>x.json());
+    const resp = await fetch('/api/remote/add', {method:'POST', headers:{'Content-Type':'application/json'},
+                                              body: JSON.stringify({url, server_id: sid})});
+    if(!resp.ok){ toast(`❌ HTTP ${resp.status}——端点不存在：服务进程是旧版本，/restart 后重试`); return; }
+    const r = await resp.json();
     toast(r.msg || (r.ok ? '✅ 已连接' : '❌ 失败'));
     if(r.ok){ document.getElementById('raUrl').value=''; document.getElementById('raId').value='';
               document.getElementById('remoteAddForm').style.display='none'; }
@@ -2433,8 +2435,10 @@ async function remoteAddSubmit(){
 async function remoteRemove(sid){
   if(!confirm(`移除远程实例「${sid}」？（断开连接并从持久化配置删除）`)) return;
   try{
-    const r = await fetch('/api/remote/remove', {method:'POST', headers:{'Content-Type':'application/json'},
-                                                 body: JSON.stringify({server_id: sid})}).then(x=>x.json());
+    const resp = await fetch('/api/remote/remove', {method:'POST', headers:{'Content-Type':'application/json'},
+                                                 body: JSON.stringify({server_id: sid})});
+    if(!resp.ok){ toast(`❌ HTTP ${resp.status}——端点不存在：服务进程是旧版本，/restart 后重试`); return; }
+    const r = await resp.json();
     toast(r.msg || (r.ok ? '✅ 已移除' : '❌ 失败'));
   }catch(e){ toast('❌ ' + e.message); }
   renderTeamDash();

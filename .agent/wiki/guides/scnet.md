@@ -184,10 +184,51 @@ stop（`saveEnv:true`）→ restart 后验证：pip 包、热修的 `tools.py`�
 | **015 实例**（昆山，minimaxh3 台） | DCU/L20 | ¥2/时 | **消耗**试用额度 |
 
 - 113 组直接正常开机就免费（15核/59GB，比无卡 0.5核/4GB 强 30 倍）——**不必对它用无卡模式**；无卡模式是给付费/试用组省卡时用的
-- **跨组坑**：BW 与 DCU 的 GPU 侧 Python 环境（torch 等）不通用；但**权重文件与卡无关**，且同一账号家目录 `/public/home/scnrilsyy5` **跨实例共享**
+- **跨组坑**：BW 与 DCU 的 GPU 侧 Python 环境（torch 等）不通用；但**权重文件与卡无关**，且同一账号家目录 `/public/home/scnrilsyy5` **同集群内跨实例共享**（⚠️ 2026-09-14 morning_wake 轮口径修正：**跨集群不共享**——113 武汉集群有独立家目录，昆山下的权重那边看不到，各自现下；此前「跨实例共享」表述仅对昆山 015/021 成立）
 - **分工策略**：113 组当免费下载机（下权重/数据集落家目录）→ 015 无卡装环境（¥0）→ 015 有卡才推理（只花真实卡时）
 
 当前状态：015 实例无卡挂着（¥0，agt-web 公网 ready + 组网在线），镜像内容 = ComfyUI + H3 + agt 0.28.1 + models.json，开关机不丢。
+
+## 模型全家桶下载：015 无卡容器 → 家目录共享盘（2026-09-14，scnet_dl_all.sh）
+
+morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好」）启动：视频游戏管线所需模型全家桶在 **015 无卡容器**（¥0，0.5核/4GB）批量下载，实测带宽 **35~40 MB/s**。
+
+**落点设计**：全部落昆山家目录共享盘 `/public/home/scnrilsyy5/comfy-models`——**关机不丢、换实例可用**（呼应[无卡环境持久性](#notebook-无卡模式镜像构建015-实例-agt-组网--环境持久性实测2026-09-14)）；容器侧 `extra_model_paths.yaml` 已配好（家目录 comfy-models + 镜像内置 `/home/models` 双挂载）。⚠️ 家目录共享仅限**昆山集群内**——113（武汉）不共享，见[下节注意点](#113-免费卡时-llm-推理侦察vllm-镜像盘点--实测方案2026-09-14)。
+
+**五个批次**（`scnet_dl_all.sh`，workspace 根，104 行）：
+
+| 批次 | 内容 | 去处（comfy-models/ 下） |
+|---|---|---|
+| A | Qwen-Image 文生图三件套：fp8 unet + qwen2.5-vl_7b_fp8 文本编码器 + vae（ModelScope `Comfy-Org/Qwen-Image_ComfyUI`） | diffusion_models / text_encoders / vae |
+| B | Qwen-Image-Edit 2511：int8_convrot + vae_fp16（ModelScope `Comfy-Org/Qwen-Image-Edit_ComfyUI`） | diffusion_models / vae |
+| C | IndexTTS-2.5 全套：gpt.pth(3.1G) + s2mel + codec + qwen0.6bemo4-merge 五小件（ModelScope `IndexTeam/IndexTTS-2.5`） | indextts/ |
+| D | H3 文戏缺件五件：fl2va 主模型 / qwen3vl_32b int8 文本编码器 / turbo_4step / FeiHou Remix / latent_upscaler_3d_fp16——**git-lfs 方式**（`GIT_LFS_SKIP_SMUDGE=1` 浅克隆 `cnb.cool/fuliai/minimaxH3` → `git lfs pull --include` 逐个拉） | 按文件名 case 归位 loras / upscale_models / text_encoders / diffusion_models |
+| E | custom_nodes 四件：VHS / LayerStyle / rgthree / KJNodes（github 直连已验证 200） | `/root/ComfyUI/custom_nodes/`（容器内，非共享盘） |
+
+**脚本幂等设计**：`dl()` 封装 `curl -sfL -C - --retry 3`（断点续传）× 30 轮重试；`dl.log` 全程留痕（OK/RETRY/FAIL/PLACED 分行带时间戳与体积）；已完成的文件秒过，可反复跑；批次 E 已存在的节点目录 SKIP；全部批次结束 `echo done > $M/dl.done` 哨兵文件。git-lfs 缺失时自动 apt 安装（失败仅 WARN 不阻断 A/B/C）。
+
+**巡检闭环**：25 分钟周期定时任务盯进度；`dl.done` 出现后汇总 OK/FAIL 清单报用户；FAIL 项自动换源补下。
+
+## 113 免费卡时 LLM 推理侦察：vllm 镜像盘点 + 实测方案（2026-09-14）
+
+用户指令第二步「试试去 113 的免费 50 卡时上推理看看」。纯 API 探查（不花卡时）已完成镜像盘点，实测方案已定。
+
+**镜像盘点**：BW 集群 = **clusterId 20091**，镜像库共 **93 个**，LLM 推理三候选：
+
+| 镜像 | 用途 | 体积 |
+|---|---|---|
+| **vllm 0.15.1-dtk26.04** | LLM 推理首选（SSH 形态） | 8.5G |
+| sglang 0428 | 备选推理框架 | 14.7G |
+| jupyterlab-pytorch 2.9.0-dtk26.04 | 通用兜底（vllm 起不来时 transformers 直跑） | 6.5G |
+
+**实测方案**（等下载批次收尾后执行）：113 组开 1×BW 64GB（免费，见[计费澄清](#资源组计费澄清113-组免费--50-卡时用户问询钉死)）→ ModelScope 直下 Qwen2.5-7B-Instruct-AWQ（5.7G，113 侧带宽分钟级）→ `vllm serve` 起服务 → curl 实测生成速度（token/s）→ **测完立刻关机**。若能跑出像样速度，50 免费 BW 卡时即可当 LLM 推理池用。
+
+**两个注意点（本轮口径）**：
+
+1. **模型要现下**：113 是武汉集群，与昆山家目录 `/public/home/scnrilsyy5` **不共享**——`comfy-models` 全家桶昆山专属，113 侧用不上；但 7B AWQ 仅 5.7G，现下无所谓（家目录共享口径修正详见[计费澄清节](#资源组计费澄清113-组免费--50-卡时用户问询钉死)）。
+2. **用完即关**：BW 实例开机即开始计（保守口径；与[计费澄清](#资源组计费澄清113-组免费--50-卡时用户问询钉死)「113 ¥0 不消耗试用额度」并存——反正实测流程压缩到最短，开→测→关一气呵成）。
+
+**节奏**：下载批次完成（`dl.done`）且无 FAIL → 自动开 113 → 7B 推理实测 → 关机 → 带 token/s 数据汇报；有 FAIL 则换源补下后再走同流程。015 无卡实例全程挂着（操作台 + agt 组网节点，¥0）。
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 

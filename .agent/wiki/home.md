@@ -797,3 +797,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **压缩阶梯三改 + 投影模拟器**（2026-09-14，用户提案）：`_plan_fold` 压力顺序升级为「升档 → 推老档进工具折叠档（新 `_deepen_oldest_tier`）→ 折叠按轮吃到水位（`_next_fold_target` 带 est_fn/target）」+ prune `< fc` 死边界；新工具 `tools/proj_simulator.py` 按 events.jsonl 从头重放投影形状、`--rule old|new` 对照。862 轮真实回放：终态 fc 784→713（多留 71 轮原文）、终态投影 514K→478K tok、工具折叠档真正承压（峰值 99 轮）、残留边界 32→5；自测 17/17。详见 [context-engine · 压缩阶梯三改](architecture/context-engine.md#压缩阶梯三改--投影模拟器先升档推老档按轮吃2026-09-14用户提案)。未提交/未发布，需 `/restart` 生效。
 
+## 快速事实增补（2026-09-14 · 十六 · v0.28.0 发布）
+
+- **v0.28.0 发布**（2026-09-14，commit `1f66a4e`，PyPI `agt-agent` 已上线；VERSION 0.27.2 → 0.28.0，0.27.2 为本地中间号未单独发布）：**压缩阶梯三改 + 投影模拟器随包发布**（上一条「十五」的施工收官）——顶窗压力动作定稿三级阶梯「①升档 → ②推老档进工具折叠档（`_deepen_oldest_tier` 新增）→ ③按轮折叠到水位（`_next_fold_target` 不再整档吞）」+ `< fc` 死边界 prune（183→5）；`tools/proj_simulator.py` 回放对照模拟器（`--rule old|new` / `--every` / `--csv`，selftest 17/17）；862 轮真实回放背书（fc 784→713 多保 71 轮原文、档位 3 层→6 层、工具折叠档峰值 30→99）。附带收尾：`/api/callback` 回调 header 鉴权随包分发（此前仅本地生效）、`/reload_mcp` 帮助文案、wiki 记录 scnet-mcp 独立仓库——见 [v0.28.0 发布记录](releases/v0.28.0.md)
+

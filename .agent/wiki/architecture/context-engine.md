@@ -393,6 +393,10 @@ if self._deepen_oldest_tier(fold_count):        # ② 再推老档进工具折�
 
 **用法**：`python tools/proj_simulator.py <session_dir> --rule new --every 50 --csv out.csv`（换 `--rule old` 复现对照）。
 
+#### 随 v0.28.0 发布（2026-09-14）
+
+**发布（2026-09-14，随 [v0.28.0](../releases/v0.28.0.md)）**：本节三改 + 模拟器随 v0.28.0 上线 PyPI + Git（发布提交 `1f66a4e`，VERSION 0.27.2 → 0.28.0）。同版随包分发的相关项：`/api/callback` 回调 header 鉴权（此前修复仅本地生效，见 [scnet-async-pipeline](../features/scnet-async-pipeline.md)）。改的是 session.py（引擎层），`/restart` 即生效；已有长 session 下次顶窗时新阶梯自然接管。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

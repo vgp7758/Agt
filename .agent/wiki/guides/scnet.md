@@ -42,6 +42,38 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 
 改动后需让 MCP 子进程用新凭证重连——它是常驻进程，凭证在启动时读入内存。配合 [MCP 配置页 · reload_mcp 热重连工具](../features/mcp-config.md) 用 `/reload_mcp scnet` 或 `/restart` 生效；在此之前 `scnet_free_card_watch` 巡检会因拿不到 token 而空转。
 
+## HPC API 实测口径与端到端跑通（2026-09-14）
+
+改名恢复后顺藤摸瓜，把 HPC 侧 API 一次测穿并端到端跑通（直连探测 + playwright 控制台对照）。
+
+## fetch_centers 用错 token（已修）
+
+CENTER 区域发现接口（`www.scnet.cn/ac/openapi/v2/center`）**必须用区域 token（如 20091）**，用 platform token（clusterId=0）恒返回 `10001 internal_error`——原实现一直用 platform token，导致 centers 恒空、hpc/ai/efile URL 全 None。修复：优先用第一个区域 token，无区域 token 才回退 platform；另加 `isinstance(it, dict)` 防御（出错时 data 是字符串）。
+
+## HPC 接口路径修正（scnet_mcp.py 三处，实测钉死）
+
+| action | 旧实现 | 实测 | 修正后 |
+|---|---|---|---|
+| queues | `GET /hpc/openapi/v2/queue?strJobManagerID=` | **404** | `GET /hpc/openapi/v2/jobs/queues?strJobManagerID=`（部分集群 data=null） |
+| list | `POST /hpc/openapi/v2/jobs` | **405** | `GET /hpc/openapi/v2/jobs?strClusterIDList=<调度器ID>` |
+| history | `POST /hpc/openapi/v2/history-jobs` | **404** | `GET /hpc/openapi/v2/jobs/history?strClusterIDList=<调度器ID>` |
+
+- submit（`POST /hpc/openapi/v2/apptemplates/BASIC/BASE/job`）与 clusters（`GET /hpc/openapi/v2/cluster`）原实现即正确。
+- **队列真实来源**：控制台接口 `www.scnet.cn/acx/resource/queue/manager/user-cluster-queues`（session 态，AKSK 通道拿不到）；jobs/queues 对华中一区返回 null 时，去控制台「作业提交」页查。
+
+## 华中一区（cluster_zz_2 / 20091）作业实测口径
+
+- 调度器：`cluster_zz_2`，SLURM，strJobManagerID=`1768486376`
+- 队列：**`hx1hdnormal`**（DCU 资源"高性能计算-异构加速卡BW-1"，648 卡 total/24 free；load=busy）
+- **提交必须 `ndcu>=1`**：GAP_NDCU 空串/0 报 `QOSMinGRES min tres(gres/dcu) request 0 exceeds per-job max tres limit 1`
+- 集群用户：`act3fh878f`，家目录 `/public/home/act3fh878f`
+
+**端到端验证**：2026-09-14 提交 `agt_probe_ok`（echo+hostname+sinfo）→ **jobId 834040，statC 完成**，节点 `a01r3n14`，runTime 00:00:01，输出落在 `/public/home/act3fh878f/agt_probe.out.834040`。
+
+## 容器/AI 通道边界
+
+华中一区 aiUrls 与 hpcUrls 同 host（`zzhpc.scnet.cn:65051`），但 `/ai/openapi/v2/*` 全 404——该网关只有 HPC。**免费容器组（武汉 138 组）API 不覆盖**，仍走 playwright 巡检（见上）。efile page-list 返回 `1001 未知异常`（URL 拼接已排除），待用文件传输时再查。
+
 ## 自定义镜像：commit 式（非 Dockerfile/制品仓库）
 
 官方文档《镜像说明》的机制不是构建/制品仓库，而是 **commit 式**：
@@ -54,6 +86,129 @@ SCNet（四川/九章算力网？控制台 www.scnet.cn）是外部 GPU 算力�
 - Notebook 关机**秒级保存开发环境**（新功能），小改甚至不用存镜像。
 - 镜像选择另有「社区镜像」tab（stable-diffusion-webui、yolov5 等 AIGC 现成镜像）。
 - 「我的镜像」独立页面是需付费开通的增值服务；Notebook 自带的保存镜像无需它。
+
+## AI 社区镜像库 · AIGC 现成镜像盘点（2026-09-14，共 895 个）
+
+AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：多模态（Wan/Z-Image/Qwen-Image/hunyuan3d/StableDiffusion/3D生成/图片生成/图片编辑/**视频生成**/视频编辑）、语音（CosyVoice 等五类）、ComfyUI、IDE 工具、NLP、行业模型。**我们自己 commit 的镜像目前 0 个**（还没开过容器）。
+
+## Notebook 免费实例实测：自定义服务端口 → 公网 URL 全链路（2026-09-14）
+
+## 核心发现：113 组免费 BW 64GB（限时免费）
+
+Notebook 创建页（控制台 > 人工智能 > Notebook，`#/notebook/add`）资源列表 10 组，**113 组 hx1hgbwnormal（华中一区【A区】，异构加速卡BW 64GB，内存 59GB/CPU 15核，DTK 26.04）标「限时免费 ¥0/时」，8/8 可用（总卡数 10000+）**——正是 minimaxh3 等社区镜像要求的 Hygon BW 环境，且免费。其余：079 昆山 16GB ¥2、021 昆山 AI 64GB ¥2.53（推荐）、097 四川 ¥3.6、012 L20 ¥3、013 4090 ¥3.6、016/064/096 A800 ¥6.9-7.8。
+
+**入口要点**：Notebook 创建页 ≠ 容器服务两处创建页——后者（新版容器组/旧版容器）最低 1 卡且无社区镜像 tab；**Notebook 创建页有「基础镜像/社区镜像/我的镜像」三个 tab**（113 组下社区镜像 tab 暂"无数据"，疑似按区域过滤，待查）。基础镜像：PyTorch/TF/JAX/MiGraphX/Paddle/SGInfer，四级级联（框架→版本→Python/OS→DTK），本次选 PyTorch 2.9.0 / py3.11-Ubuntu22.04 / dtk26.04。
+
+## 端到端实测（2026-09-14 18:43 创建成功）
+
+实例：`2609141843336261`（ID `2099448965488300033`），运行中，72h 上限至 09-17 18:43，¥0。快捷工具三件：**JupyterLab / 工具面板 / 访问自定义服务**（另有 SSH 指令+密码可查）。
+
+**「访问自定义服务」= 拿公网 URL 的机制**（弹窗表单）：
+
+```
+服务端口号：    8190
+服务启动指令：  python3 -m http.server 8190   （已在容器内起服务则可不填）
+[启动任务] → 平台在容器内执行指令 + 代理端口 → 自动打开公网 URL
+```
+
+实测结果：点「启动任务」后自动开新标签 `https://c-2099448965488300033.zzai.scnet.cn:58043/`——`python http.server` 的目录列表页渲染成功；**外网独立进程验证 HTTP 200（nginx 反代）**。
+
+**URL 规律**：`https://c-{实例数字ID}.zzai.scnet.cn:58043/`（zzai.scnet.cn 域，公网直达、无鉴权）。
+
+## ComfyUI 落地结论
+
+1. 创建 Notebook（113 组免费 BW）→ 容器内装/起 ComfyUI（或 JupyterLab 里手动起）
+2. 「访问自定义服务」填端口 8190 + 启动指令（ComfyUI 启动命令）→ 拿 `https://c-{id}.zzai.scnet.cn:58043/`
+3. 同 URL 直接 POST `/prompt`（ComfyUI API 无鉴权）→ `/history/{id}` 轮询 → `/view` 取产物——8000 实例在 CNB 上的 ComfyUI 自动化经验整套平移；2026-09-14 已封装成本地批量客户端 [`tools/scnet_comfy_client.py`](#scnet_comfy_clientpy--本地批量任务客户端2026-09-14)
+
+落地待办（已推进，2026-09-14）：113 组下社区镜像 tab 无数据，但该镜像在**华东一区 021 组**（昆山 AI 64GB，¥2.53/时）可用——已选定 director-v2 版本镜像、跨区同步中，见下节「minimaxh3-director-v2 落地」。
+
+## minimaxh3-director-v2 落地：镜像跨区同步 + scnet_img_sync 巡检（2026-09-14）
+
+把「ComfyUI 落地结论」从纸面推进到实际开卡，本轮完成到「等镜像同步」这一步。
+
+## 选型与资源组
+
+| 项 | 值 |
+|---|---|
+| 镜像 | `minimaxh3-comfyui-easycache-turbo-lora-docker`（**minimax-h3-director-v2** 版） |
+| 内容 | 全部权重 + 导演台工作流 + 3 张参考图（78.93GB） |
+| 资源组 | **021 昆山 AI 64GB**，¥2.53/时 |
+| 版本坑 | 021 组下该镜像有 4 个版本，旧的 `v1.0.3`（45GB）在 AI 卡上 **disabled**——选最新的 director-v2 |
+| 限制 | 提示「当前镜像未安装 SSH，仅支持在线开发」——符合预期，走 JupyterLab + ComfyUI WebUI |
+
+## 镜像跨区同步（阻塞点）
+
+021 组镜像需**跨区同步**（78.93GB 内网搬运，提示「同步镜像时间较长」），同步完成前无法创建实例。
+
+## scnet_img_sync 巡检任务（自动续跑）
+
+挂定时后台任务 `scnet_img_sync`（每 5 分钟，[add_schedule](background-scheduler.md) 机制）：
+
+1. 检查镜像同步状态
+2. 完成后自动回创建页（021 组 + **我的镜像** tab）→ 创建 Notebook → 开机
+3. 「访问自定义服务」填端口 **8190** + 启动指令
+4. 拿 `https://c-{id}.zzai.scnet.cn:58043/` → 验证 HTTP 200 → 汇报
+
+## 本地批量任务客户端（已备好，待实例就绪）
+
+`tools/scnet_comfy_client.py`——本地向容器批量布置任务并下载产物，走 ComfyUI 官方 HTTP API（enqueue/poll/download 全套 + 参考图上传接口预留）：
+
+```bash
+# 单次：提交工作流 → 轮询完成 → 自动下载产物到本地
+python tools/scnet_comfy_client.py --url https://c-xxx.zzai.scnet.cn:58043/ \
+    --wf workflow_api.json --outdir ./scnet_outputs
+
+# 批量：同一模板换提示词逐个 enqueue（如换 3 个镜头描述）
+python tools/scnet_comfy_client.py --url ... --wf ... \
+    --batch 'text::a cat::a dog::a car' --edit-node 6 --outdir ./scnet_outputs
+```
+
+## scnet_comfy_client.py · 本地批量任务客户端（2026-09-14）
+
+**职责**：把本地 workflow（API 格式 JSON）提交到 SCNet 容器里的 ComfyUI，轮询完成并下载产物；支持同一模板批量换字段值。
+
+**关键能力**
+- 走 ComfyUI 官方 HTTP API：`POST /prompt` → `GET /history/{id}` 轮询 → `/view` 取产物
+- 参考图上传接口预留（对接 H3 的 9 图/3 视频/3 音频参考能力）
+- `--batch '字段::值1::值2' --edit-node N`：同一 workflow 模板，逐值改写指定节点字段后逐个 enqueue
+- `--outdir`：产物落本地目录
+
+**与其它模块的关系**：SCNet 侧对应「[访问自定义服务](#notebook-免费实例实测自定义服务端口--公网-url-全链路2026-09-14)」拿到的公网 URL；自动化经验平移自 8000 实例在 CNB 上的 ComfyUI 玩法。注意 ComfyUI API 无鉴权，URL 即凭证，勿外泄。
+
+## 生视频镜像（视频生成分类，4 个，全部 DCU/BW 适配）
+
+| 镜像 | 作者 | 特点 | 开机可用 |
+|---|---|---|---|
+| **minimaxh3-comfyui-easycache-turbo-lora-docker** | acqe2rbhn4 | H3 Ref2VA + EasyCache + 4步 Turbo LoRA；**内置全部权重（43.25GB，镜像共 78.93GB）+导演台工作流+3 张参考图**；ComfyUI 0.31.0，端口 8190；运行环境 Hygon BW/gfx936/DTK 26.04；支持 9 图+3 视频+3 音频参考 | ✅ 真·开箱即用，无需下载模型（⚠️ 勿挂载空目录到 /root/ComfyUI/models，会遮挡内置权重） |
+| jupyter-minimax_h3 | eq1qe | H3 int8 量化 + 加速 LoRA，WebUI 适配单卡 | ✅（权重内置或自动下载，见详情） |
+| jupyter-ltx2.5 | eq1qe | LTX2.5，单卡 1920×1088×5s，降分辨率增时长 | ✅ |
+| comfyui-short-drama-openclaw | Icylin | 短剧制作：OpenClaw + Krea2 关键帧 + LTX2.3 工作流 + 云端点 | ✅ |
+
+## 生图镜像（图片生成分类 3 个 + 热门相关）
+
+| 镜像 | 作者 | 特点 |
+|---|---|---|
+| **comfyui_hygon_boost** | ac3jw5udsq | 原生 ComfyUI，**专为白嫖的海光 BW 卡提速**（Anima/Krea2 Turbo int8 加速明显） |
+| **jupyterlab-zimage-webui** | 智能时代 | Z-Image-Turbo 生图，中文提示词（热门，115h 运行时长） |
+| jupyterlab-qwen-image-edit | 智能时代 | Qwen-Image-Edit 20B 图像编辑（文本渲染扩展） |
+| anima-lora-train-dcu | SqrtZ | Anima 二次元 LoRA/LoKr 训练（DCU 版 flash_attn 预编译） |
+| anima-standalone-trainer-hygon | ac3jw5udsq | Anima 独立训练器（fa2/xformers/bnb） |
+
+## ComfyUI 整合包（ComfyUI 分类，3 个）
+
+- **comfyui-dcu-bigbomb**（BigBomb）：ComfyUI 0.33.3+常用节点，主打 Flux klein 9b 工作流——**需自备模型**（下载后连目录启动即用）
+- **comfyui-harness-minimaxh3**：H3 视频生成懒人包，内置 4 种社区方案+官流，**模型运行时自动下载**
+- **comfyui-withopenclaw**（Icylin）：Krea2 + MiniMax H3 模型和工作流，**开箱即用**
+
+## 智能体（免容器，最省事）
+
+- **MiniMaxH3视频生成--光影智创（LumaCraft）**：文生图+文生视频+图生视频一站式工作台，"无需配置模型环境"（22.5k 下载）
+- **月光音乐盒**：AI 音乐/歌曲生成（专家/快速双模式）
+
+## 使用入口
+
+镜像详情页「**快速开发**」按钮一键创建开发实例；或创建容器时填 DCU 镜像地址（如 `appstore.scnet.cn:5000/aihub/dcu/acqe2rbhn4/...:minimax-h3-director-v2`）。注意：容器组创建页的「基础镜像」只有训练/推理框架（JAX/PyTorch/TF/DeepSpeed/Xinference/SGInfer 等 10 类），AIGC 镜像在 AI 社区侧。硬件匹配：H3 全家桶需 64GB BW 卡（免费武汉 138 组 BW 匹配；16GB 小卡跑不动 H3，用 zimage 生图或 LumaCraft 智能体）。
 
 ## 资源实况（控制台实测单位：单卡·时，2026-09）
 

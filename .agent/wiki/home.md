@@ -780,3 +780,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **answer 气泡认标准 markdown 图片语法 `![alt](path)` 了**（2026-09-14，用户问诊，commit `6215ed1`）：此前 inlineRich 只认 `[!名](path)` 自定义语法，`![](comfy_out/...png)` 整段原样显示字面文本；现本地相对路径**复用 `assetBoxHtml`**（图框/音频/文本预览/未知后缀嗅探同一条资产链，alt 作 caption），http(s)/ftp 外链直连 `<img>`（no-referrer）。两大高频来源：zai_file_parser 图片转 Markdown 的输出格式 + LLM 天然惯用写法。**cited 判定同步认双语法**——📎 变更文件补充区不再误补图片语法引用过的文件（与 `\`→`/` 归一化同层防御）。纯前端 Ctrl+F5 生效（详见 [bubble-interaction](features/bubble-interaction.md#标准-markdown-图片语法渲染支持2026-09-14用户问诊commit-6215ed1)）
 
+## 快速事实增补（2026-09-14 · 七 · SCNet ComfyUI 落地推进：director-v2 镜像 + scnet_img_sync 巡检 + 本地批量客户端）
+
+- minimaxh3-comfyui 镜像在华东一区 021 组（¥2.53/时）选定 **director-v2** 版（78.93GB 含全部权重）——旧版 v1.0.3 在 AI 卡上 disabled；跨区同步中，挂 `scnet_img_sync` 巡检（每 5 分钟）自动续跑：同步完成 → 创建 Notebook（021 + 我的镜像）→ 开机 → 访问自定义服务填 8190 → 验证 URL 200 → 汇报
+- `tools/scnet_comfy_client.py`（新）：SCNet 容器内 ComfyUI 的本地批量任务客户端——enqueue/poll/download 全套 + 参考图上传接口预留；`--batch '字段::值1::值2' --edit-node N` 同一模板批量换提示词逐个出图
+
+详见 [SCNet 算力网](guides/scnet.md)
+

@@ -9,7 +9,9 @@
 本地 agt（:9000）                          SCNet 容器（K100_AI 68.7GB）
   │                                          ┌─ ComfyUI :8190（跑批）
   │  enqueue 工作流（HTTP /prompt） ────────▶│
-  │                                          ├─ monitor.py :8191（状态页 + 监控）
+  │                                          ├─ monitor.py :8191（反代 + 监控二合一）
+  │                                          │   ├ /monitor        → 状态 JSON
+  │                                          │   ├ 其余路径        → 反代 127.0.0.1:8190
   │                                          │   ├ 自检回调：每 60s 重试（等本机 restart）
   │                                          │   └ 轮询 /history → 完成后回调
   │  ◀── POST /api/callback（cpolar 隧道）────┘
@@ -18,6 +20,8 @@
 ```
 
 关键点：**容器是主动方**。本机不需要常驻轮询线程，也不需要公网 IP 之外的任何东西——cpolar 隧道已验证通路，容器侧只要拿到回调 URL 就能推。
+
+**⚠️ 平台级约束（本轮实测踩到）**：SCNet 同一实例**只有一个公网代理端口**（`…:58043`），后启动的自定义服务会**顶掉先前服务的入口**。启 monitor(8191) 后 ComfyUI 的公网入口即失效（58043 返回 monitor 状态页，`/history` 查不到）。因此 monitor 必须做成**反代**：对外一个入口，内部按路径分流到 8190。反代为纯 HTTP（ComfyUI API 足够）；前端 WebSocket 不经此代理，进度条降级。
 
 ## 本机端点：POST /api/callback（src/server.py）
 
@@ -31,12 +35,32 @@
 - 本地模拟回调实测：**HTTP 404**——精确命中预期（当前进程还是旧代码，路由不存在）；`/restart` 后即 200。
 - 未鉴权/错 token 行为未做额外容错：宁可 404/401 也不静默吞。
 
-## 容器侧 monitor.py（:8191）
+## 容器侧 monitor.py（:8191）· v2 反代 + 监控二合一
 
-- **状态页**：浏览器直开 `https://c-{id}.<region>.scnet.cn:58043/` 之外的 8191 端口（经「访问自定义服务」代理）看任务队列与进度。
+**v2 反代版（2026-09-14，`tools/scnet_monitor.py` 208 行）**——因上述单端口约束，monitor 从「独占状态页」升级为「反代 + 监控二合一」：
+
+- **路由**：`StatusHandler`（`BaseHTTPRequestHandler`）——`/monitor*` → 状态 JSON（`STATE`，`_LOCK` 保护）；其余全部反代到 `COMFY = http://127.0.0.1:8190`。
+- **反代实现**：`urllib.request` 转发 method + body + 请求头（剔除 `host/content-length/connection/accept-encoding`），回写响应头（剔除 `transfer-encoding/connection/content-length/content-encoding`）；`HTTPError` 原样透传状态码与 body，其他异常 → 502。`do_GET/POST/PUT/DELETE/HEAD` 全部绑到 `_handle`，`log_message` 静默。
+- **实测**：`https://c-{id}.ksai.scnet.cn:58043/system_stats` 反代通（API 全通），`/monitor` 走状态页。
 - **自检回调**：启动后每 60s 重试一次回调（等本机 `/restart` 激活端点），成功后转正常轮询。
 - **监控循环**：轮询 ComfyUI `/history`，任务完成 → 回调本机（message + 产物文件）。
 - **history 持久**：monitor 晚接入也能补推已完成任务（不会漏单）。
+- **CLI**：`--ids <prompt_id 逗号分隔>` `--cb <回调 URL>` `--token` `--port 8191` `--interval 15` `--no-push-file`。
+- **部署通道**：容器内用 **JupyterLab 开终端**重启（本轮实测比 SSH 更好用——该镜像未装 SSH）。
+
+## 热态出片速度实测（2026-09-14）
+
+| 任务 | 状态 | execution 时长 |
+|---|---|---|
+| e4bd2630（第一单·含首次权重加载） | ✅ | **607s**（10分07秒） |
+| 5b4caea7（第二单·权重已热） | ✅ | **464s**（7分44秒） |
+| 1b01d575（第三单） | 🔄 进行中 | — |
+
+**结论修正**：权重加载只占约 2.4 分钟，**真正瓶颈是推理本身 ~7-8 分钟/单**（480p/5s，4 步 Turbo + EasyCache，K100_AI）。批量生产偏慢，后续调优杠杆：`low_vram` 开关、EasyCache 参数、分辨率降档。
+
+**异常观察**：history 里另有两个非本机提交的 `error` 任务（20:19、20:30），疑似 ComfyUI 前端页面自动提交，待查。
+
+**产物**：`scnet_outputs/MiniMax_H3_00002_.mp4`（0.74 MB，第二单已下载）。
 
 ## 画布格式 → API 格式转换器：tools/wf_canvas2api.py
 
@@ -72,15 +96,17 @@ python -c "import sys; sys.path.insert(0,'tools'); from wf_canvas2api import con
 
 1. 本地 `convert` 出 API JSON（或直接用 `tools/scnet_comfy_client.py` 的 `--batch`）
 2. enqueue N 单（不同 seed / 提示词 / 镜头）
-3. 平台页一键启动 monitor（:8191）
+3. 平台页一键启动 monitor（:8191，**反代版**——一个入口同时保住 ComfyUI API 与状态页）
 4. **关电脑等收货**——回调唤醒 Agent，产物自动落 `scnet_inbox/`
 
 ## 注意事项
 
 - `/api/callback` 是引擎层改动，**必须 `/restart` 才生效**；在此之前容器侧自检会一直 404 重试。
+- **单端口约束**：同一实例的自定义服务入口唯一，后启动顶掉先启动——任何新服务上线前先想清楚是否要反代（本轮 monitor 已按此改造）。
 - ComfyUI API 无鉴权，URL 即凭证（cpolar 隧道同理）——勿外泄。
 - 实例按 ¥2.53/时计费，余额有限时记得收工关机；monitor 的「全部完成」通知会提示是否关机。
 - 画布转换器依赖 `object_info` 快照（`scnet_objinfo.json`）——换镜像/换节点版本后要重新拉。
+- 出片速度 ~7-8 分钟/单（热态），排产时按此估时。
 
 ## 相关页面
 

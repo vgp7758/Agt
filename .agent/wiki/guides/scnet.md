@@ -262,8 +262,12 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 - **50 卡时免费额度**：费用总览余额区为 `****`，无单独券显示；可能在商城商品页领取或下单时自动抵扣，待实名+创建 key 后验证。
 - 下一步候选：给 API Key 加 provider（免费容器组「试 K8s」已挂自动化巡检，见上「免费容器组巡检定时任务」）。
 
+**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片第一单**（`MiniMax_H3_00001_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署——详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
+
 ## 相关页面
 
+- [SCNet 异步生产流水线](../features/scnet-async-pipeline.md) — 画布转 API 转换器 + 容器主动回调 + 批量出片打法
 - [配置体系与模型调优](config-and-models.md)
 - [本地模型](local-models.md)
 - [运维、可观测性与排障](ops.md)
+

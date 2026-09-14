@@ -10,47 +10,7 @@
 |------|------|-----------|
 | [architecture/overview](architecture/overview.md) | 系统总览：模块地图 + 一轮对话的完整数据流 | 新人入门 / 找模块归属 |
 | [guides/scnet](guides/scnet.md) | **SCNet 算力网**：外部 GPU 平台接入（API Key / playwright / E-Shell 三通道）+ **commit 式自定义镜像**（非 Dockerfile）+ 实探资源与价格表（异构加速卡 / L20 / A800 / 免费容器组 K8s） | 接外部算力 / 白嫖 GPU / 查卡时价格 |
-| [architecture/context-engine](architecture/context-engine.md) | 分层上下文引擎：**系统信息合并（_walk_plan 连续系统段一条 system + 动态注入 user role）** + 分档投影 + 轮边界统一重排（升档+折叠）+ **估算与校准口径闭环（tools schema 补齐）** + **卫生性强制毕业（GRADUATE_FORCE_TURNS=60 防档1 膨胀）** + fc 大刀首折 + 分组衰减 + 折叠实证 + 前缀缓存三层优化 + **DeepSeek v4 缓存实证（变化的 system/tools 变化全断，三铁律）** | 改投影/token 优化 |
-| [architecture/multi-agent](architecture/multi-agent.md) | 多 Agent 体系：registry + 通信 + reuse/复活 + assembly DSL + system_append + 唤醒链路验证状态与观测点 + **事件流 agent_id 打标（WebUI 串台修复）** + **recap 回写迁移 hook_write（工作流显式决定以谁为准）** | 派子 Agent / 改协作机制 |
-| [architecture/workflow-hooks](architecture/workflow-hooks.md) | 工作流引擎 + 生命周期钩子 + async 元信息 + **钩子声明面三层（编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载）** + **hook_ctx 上下文袋 + hook_write 工具（回写从引擎特判移到工作流）** + **运行观测（run registry 接入点 + 节点全文预算 + 嵌套子画布轨迹）** + **引擎语义补全（setvar XML 简写 / 循环变量终值 / break 携带值 / yield）** + changed_calls 变更调用收集 + git_commit 节点 + 13 类节点速查 | 写工作流 / 加钩子 / async 钩子 / 快照变更 |
-| [architecture/node-plugins](architecture/node-plugins.md) | 节点插件化：三级目录同名覆盖（12 组 py+js 配对）+ SDK/EdFW 前后端约定 + 热加载 + .pyc 坑 + 打包核对 + **目录条目动态聚合（catalog_entries）** + **syncPluginOutputs（defaults.outputs fixed:true 协议端口补齐；code 示例端口删后不复活）** + **aggregator index 协议输出（变量级组内序号）** | 加新节点类型 / 定制覆写内置节点 |
-| [architecture/multi-instance](architecture/multi-instance.md) | 多 agt 实例组网：**remote_instance_id 工具路由（原 server_id，2026-09-06 改名 + 全工具 schema 自动注入）**（/api/tool/exec 工具级直执行）+ **auto server_id（url→agt-{port}，幂等复用）** + **_REMOTE_ADMIN 豁免路由（管理语义 vs 路由语义）** + **remote_message/remote_ask（WS 消息级通信，三层组网通道定稿）** | 跨实例组网 / 远程操控 |
-| [architecture/tool-externalization-criteria](architecture/tool-externalization-criteria.md) | 工具外置判别标准：**数据写者决定归属**——自写自读（wiki/ltm/download/rag=真限界上下文，**四组已全部外置 ✅**）vs 引擎写工具读（recall/toollog=可观测性出口，永远内置）；重放拿到数据 ≠ 独立（格式契约耦合更危险）；**rag/ltm 边界裁剪：注册外置+实现留框架（共享单例）**；**纯函数批收官：LIGHT_TOOLS 13→5** | 判断某组工具能否外置 / 理解外置边界 |
-| architecture/adr-stateful-externalization.md | 有状态系统外置评估（否决）：五触点分析、MCP 三矛盾、认知归属 vs 数据归属 | 评估某个系统该不该外置 |
-| [architecture/snapshot-diff](architecture/snapshot-diff.md) | dir_snapshot / diff_snapshots 通用子工作流：目录快照 + 变更清单生成（files/count/changed）| 需要精确检测目录变更 / 复用快照能力 |
-| [features/wf-monitor](features/wf-monitor.md) | 工作流运行观测：run registry（线程安全，最近 50 次）+ /wf/monitor 实时节点甘特时间线（对话中「执行中」行可点击）+ **节点全文 text/plain 纯文本路由（单节点 200K / 总预算 20M）** + **嵌套子画布轨迹（复合节点/子工作流的子节点事件，track_stack + 轮容器）** | 看工作流跑到哪 / 调钩子卡点 / 看节点完整输出 |
-| [features/workflow-debug](features/workflow-debug.md) | 工作流调试页：画布播放后每个执行过的节点下方挂输出白框（foreignObject + 折叠头条），nodeH 拆 `_baseH`+框高、端口锚点稳定不跳；**字段化渲染 + 批处理轮次下拉回看 + 逐轮实时刷新** | 调试工作流时在画布上看节点实际产出 |
-| [features/editor-ux-improvements](features/editor-ux-improvements.md) | 工作流编辑器 UX 多轮打磨（批次一~十二）：LLM 画布直编 prompt、批处理配置区上移/输出自动管理、字段行 flex+紧凑编辑、spec 浮层抽屉、**批次十（SetVar type20 值容器 right 统一 / 复合节点本地变量输出端口 / 筛选下拉渲染写入统一）**、**批次十一（钩子协议下拉回归：声明 + schema 规范化，挂载归 yml）**、**批次十二（spec/🐞日志抽屉布局统一：标题栏钉顶 + 下方独立滚动区）** | 改编辑器交互 / 批处理配置 |
-| [features/api-status](features/api-status.md) | /api/status 端点：实例运行时状态快照（18+3 字段），跨实例诊断 | 查运行时状态 / 多实例运维 |
-| [features/remote-client](features/remote-client.md) | 跨实例客户端：agt 实例作另一实例的 WS 客户端（可跨电脑）——REST / 只读 action / 消息驱动任务 / 斜杠命令四通道；**remote_message/remote_ask 已封装为第一等工具（2026-08）**；无"直接调远程工具"端点（工具级直执行已内建） | 远程指挥另一台机器的实例 / 多实例组网 |
-| [features/agents-admin](features/agents-admin.md) | Agent 管理页 /agents：子 Agent 声明表单化编辑 + **v2.1 声明格式** + **_main_ 主 Agent 置顶纳入** + 回退链表单 + 钩子行布局 + 5 子 Agent 声明规范化 | 管理子 Agent 声明 / 改 persona |
-| [features/longterm-memory](features/longterm-memory.md) | 长期记忆：三类记忆 × **episodic 召回三代演进** + **ensure_ltm per-workspace 单例** + 写入幂等 + /memory 双主权 + 存储 hash→可读转写 | 改记忆系统 / 理解 episodic 检索 |
-| [features/user-interaction](features/user-interaction.md) | 用户交互：插话机制与消息路由 + **后台通知 wake 语义** + 并行钩子「执行中」UI Map 跟踪 + **WS 协议自适应（CNB HTTPS 反代修复，v0.27.1）** | 改插话 / 消息队列 / 后台触发 / 钩子 UI 状态 / HTTPS 反代部署 |
-| [features/wiki-tools](features/wiki-tools.md) | wiki 工具集十件套：页面级六件套 + **章节级维护四件套**——章节边界=标题+全部子树（fence 感知）+ wiki-updater【增量维护优先】约定 | 改 wiki 工具 / 理解章节级维护语义 |
-| [features/wiki-auto-maintenance](features/wiki-auto-maintenance.md) | wiki_auto_maintenance：判官 llm → snap_before → **fmt_calls（变更调用原文渲染）** → update_wiki → diff_wiki → commit_wiki，自动维护并 git 提交推送 wiki；**busy 检查 ✅❌ 都算空闲（failed 躺平不死锁）** | 改 wiki 维护流程 / 调 commit 节点 |
-| [features/wiki-auto-query](features/wiki-auto-query.md) | wiki_auto_query：before_turn 自动 wiki 检索，v4 流水线（3B 提词 + cosine 精排 + 阈值裁决）+ related=False 短路 | 开自动检索 / 调钩子工作流 |
-| [features/bubble-interaction](features/bubble-interaction.md) | 气泡交互：系统气泡默认折叠点击切换；user/answer 气泡 hover 复制按钮；**answer 多 Agent 分页（事件 agent_id 打标）** | 改前端气泡 / 调交互 |
-| [features/trace-fold](features/trace-fold.md) | WebUI 过程区折叠降噪：💭 思考内容默认折叠（点开全文从不截断）+ 🔧 非 diff 工具默认折叠 + 钩子行 >140 字折叠——共享 toggleFold 基建 | 改前端 trace 渲染 / 过程区降噪 |
-| [features/diff-files](features/diff-files.md) | diff_files 工具：Myers Diff 对比两文件，unified 风格 hunk 输出（沙箱路径 / 读写不对称 / **range_a/range_b 分段对比** / 回溯层错位 bug 教训） | 需要行级文件对比 / 大文件分段精比 |
-| [features/diff-lines](features/diff-lines.md) | diff_lines 工具（外置件 diff_tools.py）：Myers Diff 对比两个文本块（无需落盘；算法与 diff_files 同源副本） | 工作流节点间文本比较 |
-| [features/get-list-item](features/get-list-item.md) | get_list_item 工具（LIGHT_TOOLS，hidden）：从列表取单个元素，支持正/负索引、越界安全、outputs=any | 工作流列表操作 |
-| [features/glob-files](features/glob-files.md) | glob_files 工具（外置首例·纯函数形态）：文件名模式查找（`**` 递归 / `*` 单层 / `?` / `[abc]`；自动排除 .git/__pycache__ 等，500 条上限） | 按名字找文件 / 学外置工具写法 |
-| [features/tool-externalization](features/tool-externalization.md) | 工具外置体系：tools/builtin/*.py + `agt_register(ctx)` 描述符 + **ctx 通用上下文注入** + `/reload tools` 热加载 + 随包副本 + **外置件 10 文件（真限界上下文四组 + 纯函数批）** | 加新内置工具（零框架改动） |
-| [features/zai-tools](features/zai-tools.md) | Z.AI 工具集：智谱 BigModel 联网三件套（zai_web_search 搜索 / zai_web_reader 抓取 / zai_file_parser 文档解析），复用智谱系 api_token 零配置，不随包播种 | 实时联网搜索 / 抓网页正文 / 解析本地文档 |
-| [features/agentid-tools](features/agentid-tools.md) | AgentID 身份工具：ModelScope Agent Identity Protocol（Ed25519 密钥 + `agent_id\|kid\|audience\|timestamp` 签名换短期 JWT），agentid_status / agentid_get_token，不随包播种 | 进魔搭身份服务应用（DojoZero 比赛等） |
-| [features/spec-tools](features/spec-tools.md) | spec 工具集：explore_subagent 同步前置探索（**≠ explorer 声明式子 Agent**，不注册 registry、只读白名单） | 理解 spec 流程 / 区分两个 explorer |
-| [features/run-python](features/run-python.md) | run_python 工具：code/file 双模式子进程执行，args 参数化（PY_ARGS 环境变量注入），流式输出+心跳 | 写脚本工具 / 参数化复用脚本 |
-| [features/rag](features/rag.md) | RAG 文档语义检索：ensure_rag 线程安全惰性单例 + preload_async 后台预热 + **共享 embedder（修双份内存）** + rag_tools.py 外置件 | 改 RAG / 理解 embedder 共享 / 外置工具写法 |
-| [features/background-scheduler](features/background-scheduler.md) | 定时/到点任务调度 add_schedule + **后台服务/后台任务工具九件（list_services 合并视图 + check_bg_task 真工具）**：interval 与 at（每日闹钟）、Schedule 数据结构、三族后台通知语义 | 定时任务 / 后台服务管理 |
-| [features/android-termux](features/android-termux.md) | Android（Termux）手机版：手机本地跑完整 Agt Agent——install.sh 一键装 + make-offline-bundle.sh 离线包 + README；数据目录 `~/.agt` 与电脑版同构，与桌面版互为两条「超 pip CLI」分发通道 | 手机上跑 Agt / 离线分发 |
-| [releases/v0.22.0](releases/v0.22.0.md) | v0.22.0 发布记录（最新）：hook_ctx/hook_write 回写迁移 + 钩子协议下拉回归 + 嵌套子画布观测 + break 携带值/yield + index 变量级修正 | 查最新版本交付内容 |
-| [releases/v0.21.1](releases/v0.21.1.md) | v0.21.1 发布记录：聚合 index 端口 + 卫生性强制毕业 + extract_keywords 修复 + 编辑器批次十 | 查版本交付内容 / 发布流程 |
-| [releases/v0.20.1](releases/v0.20.1.md) | v0.20.1 发布记录：WebUI 🐞 日志面板 + 中断原因三处留痕 + user 事件多端同步 + /update-assets + 修复三件 | 查版本交付内容 / 发布流程 |
-| [releases/v0.19.2](releases/v0.19.2.md) | v0.19.2 发布记录：后台通知 wake 语义修复 + AND/OR 逻辑节点 + 编辑器批次三 + 调试页白框增强 + 性能三件套 | 查版本交付内容 / 发布流程 |
-| [releases/v0.18.7](releases/v0.18.7.md) | v0.18.7 发布记录：编辑器 UX 四件套 + 聚合节点选值修复 + /stats tooltip 修复 | 查版本交付内容 / 发布流程 |
-| [releases/v0.18.2](releases/v0.18.2.md) | v0.18.2 发布记录：唤醒链路根因修复、stdin 通道、/api/status、async 元信息、气泡折叠、wiki 自动提交 | 查版本交付内容 / 发布流程 |
-| [guides/config-and-models](guides/config-and-models.md) | 配置体系：models.json / settings.json / utility_model / token_rotate | 配模型 / 调优 |
-| [guides/ops](guides/ops.md) | 运维与排障：可观测性（/stats/scene/api-status/**wf-monitor 实时观测+节点全文+嵌套子画布/调试页输出白框/🐞日志面板/update-assets/观测点日志/**restart 看门狗强杀兜底+日志按实例分离/agt --help**） / 常见错误 / 存档布局 | 查问题 / 看统计 |
+| [features/scnet-async-pipeline](features/scnet-async-pipeline.md) | **SCNet 异步生产流水线**：画布 → API 转换器（`tools/wf_canvas2api.py`，四对位坑）+ 本机 `POST /api/callback` 回调端点 + 容器侧 monitor.py(:8191) 主动回调 + 第一单出片 + 批量打法 | 容器批量出片 / 异步收货 / 画布转 API |
 
 ## 快速事实（2026-08 状态）
 
@@ -785,5 +745,13 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - minimaxh3-comfyui 镜像在华东一区 021 组（¥2.53/时）选定 **director-v2** 版（78.93GB 含全部权重）——旧版 v1.0.3 在 AI 卡上 disabled；跨区同步中，挂 `scnet_img_sync` 巡检（每 5 分钟）自动续跑：同步完成 → 创建 Notebook（021 + 我的镜像）→ 开机 → 访问自定义服务填 8190 → 验证 URL 200 → 汇报
 - `tools/scnet_comfy_client.py`（新）：SCNet 容器内 ComfyUI 的本地批量任务客户端——enqueue/poll/download 全套 + 参考图上传接口预留；`--batch '字段::值1::值2' --edit-node N` 同一模板批量换提示词逐个出图
 
-详见 [SCNet 算力网](guides/scnet.md)
+详见 [SCNet 算力网](guides/scnet.md) / [SCNet 异步生产流水线](features/scnet-async-pipeline.md)
+
+## 快速事实增补（2026-09-14 · 八 · SCNet 异步生产流水线——第一单出片 + 容器主动回调）
+
+- **第一单真实出片**（2026-09-14）：021 昆山实例（K100_AI 68.7GB，¥2.53/时）ComfyUI 跑通多图参考 minimax + easycache + 4 步 lora 工作流，产出 `MiniMax_H3_00001_.mp4`（0.77 MB · 5 秒 · 480p 竖屏）落本地 `scnet_outputs/`。
+- **画布 → API 转换器 `tools/wf_canvas2api.py`**（新）：ComfyUI 编辑器画布 JSON → API prompt JSON，需 `object_info` 快照作类型元数据。四个对位坑全修：①连接值是 `[源节点id, 输出slot索引int]`（不是输出名）②DYNAMICCOMBO 带点子参数（`format.codec`）单独对位 ③widget 占位语义（`link=null` 端口顺序即 widget 顺序；连接型不占位、已连接残留占位丢弃）④旧式 `COMBO` 类型名归一。`MarkdownNote/Note` 跳过（26 节点 → 23 执行节点）。
+- **异步架构：容器主动回调**（commit `18d7e7f`，需 `/restart` 激活）：本机 `POST /api/callback`（token 鉴权；`message` → inbox 唤醒 Agent，`file` → 落盘 `scnet_inbox/`）+ 容器侧 `monitor.py :8191`（状态页 + 每 60s 自检回调 + 轮询 `/history` 补推，history 持久不漏单），经 cpolar 隧道打通。本地模拟回调实测 404 = 精确命中预期（当前进程还是旧代码）。
+- **固定打法**：本地 enqueue N 单 → 平台页一键启动 monitor（8191）→ 关电脑等收货（回调唤醒 + 产物自动落盘）。详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md)。
+- **状态**：异步链路已全链路部署（monitor 已启动、第二批 2 单已 enqueue、cpolar 通路已验证），**只差一次 `/restart`** 装载 `/api/callback` 端点；实例 ¥2.53/时计费中。
 

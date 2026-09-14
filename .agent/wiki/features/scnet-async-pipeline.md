@@ -109,7 +109,7 @@ nohup python3 /root/monitor.py \
 
 > 注：`--ids` 可省——起来后本机 `POST /monitor/add` 加任务即可。
 
-### 无人值守闭环持续运行：5 单批量 2/5 已自动回传（2026-09-14 21:30 起）
+### 无人值守闭环持续运行：5 单批量 3/5 已自动回传（2026-09-14 21:30 起）
 
 **第一个视频全程零人工自动回家**：`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB），boot 21:30:46。
 
@@ -118,21 +118,22 @@ nohup python3 /root/monitor.py \
 | monitor v3 常驻进程 | ✅ 已接管（`boot 21:30:46`，容器内 `pkill -f root/monitor.py` 后重启为 v3） |
 | **callback 自检（header 通道，即生产链路）** | ✅ `"ok"` —— **一次就通**（本机已 `/restart` 装载端点） |
 | 任务表 | ✅ 5 单全在表 |
-| 自动推送 | ✅ `pushed: 2`，`recent: ["21:37 MiniMax_H3_00005_.mp4", "21:30 MiniMax_H3_00004_.mp4"]` |
-| 剩余 3 单 | 🔄 queued（feb418b4 / e3b00747 / fe94db7b），约 7 分钟/单，预计 22:00 前后收齐 |
+| 自动推送 | ✅ `pushed: 3`，`recent: ["21:44 MiniMax_H3_00006_.mp4", "21:37 MiniMax_H3_00005_.mp4", "21:30 MiniMax_H3_00004_.mp4"]` |
+| 剩余 2 单 | 🔄 queued（e3b00747 / fe94db7b），约 7.4 分钟/单，预计 22:00 前后收齐 |
 
-**两单实测回传（第二次通知轮 21:37 复验）**：
+**三单实测回传（第三次通知轮 21:44 复验）**：
 
 | 单 | prompt_id | 状态 | 产物（`scnet_inbox/`） |
 |---|---|---|---|
 | #1 | ca9055d5-2890-4c6e-a258-b98c96af4d99 | done | `213053_MiniMax_H3_00004_.mp4`（0.84 MB） |
 | #2 | dac0b572-42f1-4b14-8e99-91933ab962d8 | done | `213701_MiniMax_H3_00005_.mp4`（0.77 MB） |
-| #3~#5 | feb418b4 / e3b00747 / fe94db7b | queued | — |
+| #3 | feb418b4-569f-4037-822b-f7a97d245f82 | done | `214429_MiniMax_H3_00006_.mp4`（0.8 MB） |
+| #4~#5 | e3b00747 / fe94db7b | queued | — |
 
 - 每单节奏 ≈ 7 分钟，与热态基线（~7.4 分/单）一致；`callback: "ok"`、`pushed` 计数与实际落盘文件一一对应（v3 的响应体校验生效——不存在「200 假成功」虚增）。
-- 同一产物另有 `scnet_outputs/MiniMax_H3_00005_.mp4`（本机兜底轮询 `scnet_watch_batch` 下载副本），两条收货通道并行无冲突。
+- 同一产物另有 `scnet_outputs/` 副本（本机兜底轮询 `scnet_watch_batch` 下载），两条收货通道并行无冲突。
 
-**意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实，且连续两单零人工、零失败。
+**意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实，且连续三单零人工、零失败。
 
 **部署动作（本轮实际执行）**：
 1. 本地 `tools/scnet_monitor.py` → 复制为 `~/.agt/mcp/scnet/monitor_template.py`（11917 bytes，供 MCP 工具 `scnet_monitor` 的 deploy action 读取）
@@ -221,14 +222,16 @@ ComfyUI API（enqueue/history/view）                        ← 批量生产（
 `run_python` 直发 5 单（同一 API JSON 模板换 seed 变体），prompt_id：
 
 ```
-ca9055d5-2890-4c6e-a258-b98c96af4d99   → done（21:30 回传）
-dac0b572-42f1-4b14-8e99-91933ab962d8   → done（21:37 回传）
-feb418b4-569f-4037-822b-f7a97d245f82   → queued
+ca9055d5-2890-4c6e-a258-b98c96af4d99   → done（21:30 回传，seed=53225162）
+dac0b572-42f1-4b14-8e99-91933ab962d8   → done（21:37 回传，seed=1886098512）
+feb418b4-569f-4037-822b-f7a97d245f82   → done（21:44 回传，seed=2068805186）
 e3b00747-a52d-438f-9f3d-d3fa7016f2bb   → queued
 fe94db7b-0847-4d26-afd2-7d342a9bf1be   → queued
 ```
 
 入队后状态 `running=1 / pending=4`，首单约 21:32 完成。pids 落盘 `scnet_batch5.json` 供两条收货通道共用；`/monitor` 的 `tasks` 表即以此 5 个 pid 为键（状态机 `queued → running → done`）。
+
+**history 全量对账（8 条，含 2 条外部 error）**：除本机 5 单外，另有 `bc89599a` / `3aa63780` 两条 `error`（seed=None、无产物），疑为 ComfyUI 前端页面自动提交，与本批无关。
 
 ## 热态出片速度实测（2026-09-14）
 
@@ -236,13 +239,36 @@ fe94db7b-0847-4d26-afd2-7d342a9bf1be   → queued
 |---|---|---|
 | e4bd2630（第一单·含首次权重加载） | ✅ | **607s**（10分07秒） |
 | 5b4caea7（第二单·权重已热） | ✅ | **464s**（7分44秒） |
-| 1b01d575（第三单） | 🔄 进行中 | — |
+| 1b01d575（第三单） | ✅ | **444s**（7分24秒） |
+| ca9055d5（第四单） | ✅ | **443s** |
+| dac0b572（第五单） | ✅ | **444s** |
+| feb418b4（第六单） | ✅ | **443s** |
 
-**结论修正**：权重加载只占约 2.4 分钟，**真正瓶颈是推理本身 ~7-8 分钟/单**（480p/5s，4 步 Turbo + EasyCache，K100_AI）。批量生产偏慢，后续调优杠杆：`low_vram` 开关、EasyCache 参数、分辨率降档。
+**结论修正**：权重加载只占约 2.4 分钟，**真正瓶颈是推理本身 ~7-8 分钟/单**（480p/5s，4 步 Turbo + EasyCache，K100_AI）。**稳态基线收敛**：热态后连续三单 443/444/443s（≈7.4 分/单，几乎完全一致）——该配置产能可精确预估 **约 8 单/小时**。后续调优杠杆：`low_vram` 开关、EasyCache 参数、分辨率降档。
 
-**异常观察**：history 里另有两个非本机提交的 `error` 任务（20:19、20:30），疑似 ComfyUI 前端页面自动提交，待查。
+**异常观察**：history 里另有两个非本机提交的 `error` 任务（`bc89599a` / `3aa63780`，20:19、20:30），疑似 ComfyUI 前端页面自动提交，待查。
 
-**产物**：`scnet_outputs/MiniMax_H3_00002_.mp4`（0.74 MB，第二单已下载）。
+**产物**：`scnet_outputs/MiniMax_H3_00002_.mp4`（0.74 MB）等；本批已下载 `00002`~`00006`，另附 `scnet_outputs/manifest.json`（产物清单：prompt_id / seed / 时长）。
+
+## 产物清单：scnet_outputs/manifest.json（2026-09-14）
+
+
+等待期间顺手做的一份**产物清单**（收货侧旁车，便于复现/挑素材）：`scnet_outputs/manifest.json`，由 `run_python` 拉 `/history` 汇总生成。
+
+字段：`prompt_id` → `seed` / `execution 时长` / `产物文件名` / `status`。
+
+| 产物 | prompt_id | seed | 耗时 |
+|---|---|---|---|
+| MiniMax_H3_00001_.mp4 | e4bd2630 | 650007857835027 | 607s（含冷启动） |
+| MiniMax_H3_00002_.mp4 | 5b4caea7 | 1941978295 | 464s |
+| MiniMax_H3_00003_.mp4 | 1b01d575 | 266943330 | 444s |
+| MiniMax_H3_00004_.mp4 | ca9055d5 | 53225162 | 443s |
+| MiniMax_H3_00005_.mp4 | dac0b572 | 1886098512 | 444s |
+| MiniMax_H3_00006_.mp4 | feb418b4 | 2068805186 | 443s |
+
+- **seed 是复现的关键**——同 seed + 同 API JSON 可重出同一条片；清单把 seed 与产物绑定落盘，避免事后从 ComfyUI 前端翻记录。
+- 生成方式：`GET /history` 全量 → 解析 `status.messages` 时间戳算 execution 时长 → 汇总落盘。可随时重跑刷新（新单追加即可）。
+- 与 `scnet_batch5.json`（入队 pids）互补：前者记「提交了什么」，本清单记「出了什么、什么参数、多快」。
 
 ## 画布格式 → API 格式转换器：tools/wf_canvas2api.py
 
@@ -295,7 +321,7 @@ python -c "import sys; sys.path.insert(0,'tools'); from wf_canvas2api import con
 - ComfyUI API 无鉴权，URL 即凭证（cpolar 隧道同理）——勿外泄。
 - 实例按 ¥2.53/时计费，余额有限时记得收工关机；monitor 的「全部完成」通知会提示是否关机。
 - 画布转换器依赖 `object_info` 快照（`scnet_objinfo.json`）——换镜像/换节点版本后要重新拉。
-- 出片速度 ~7-8 分钟/单（热态），排产时按此估时。
+- 出片速度 ~7-8 分钟/单（热态），稳态基线 **443-444s/单**（≈7.4 分），产能约 **8 单/小时**——排产按此估时。
 - 新增 MCP 工具后 `reload_mcp_server` **不会**注册进 `agent.tools`（框架缺口），需 `/restart` 或等修复（见「MCP 封装」节）。
 
 ## 相关页面

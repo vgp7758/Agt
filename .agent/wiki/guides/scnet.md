@@ -344,7 +344,7 @@ python tools/scnet_comfy_client.py --url ... --wf ... \
 
 ## 待办与注意事项
 
-**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_~00005_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署并**无人值守闭环持续运行**（2026-09-14 21:30 起，5 单批量 2/5 已自动回传落 `scnet_inbox/`）；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；容器内执行命令经 **Jupyter terminals WebSocket API** 打通（纯 API，首次拉起亦可自动化）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 ~7-8 分钟/单。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
+**2026-09-14 落地进展（已实跑）**：021 昆山实例上 ComfyUI 已跑通并**出片**（`MiniMax_H3_00001_~00006_.mp4`），异步生产流水线（画布转 API + 容器主动回调本机）已部署并**无人值守闭环持续运行**（2026-09-14 21:30 起，5 单批量 **3/5 已自动回传**落 `scnet_inbox/`，连续三单零人工零失败）；monitor 因**单端口约束**升级为「反代 + 监控二合一」，并进一步**常驻化 + 任务 HTTP 化**（v3：`POST /monitor/add` 加任务，不必进容器）；容器内执行命令经 **Jupyter terminals WebSocket API** 打通（纯 API，首次拉起亦可自动化）；另备本机兜底轮询 `tools/scnet_watch_batch.py`。热态出片实测 **稳态 443-444s/单（≈7.4 分，约 8 单/小时）**；产物清单 `scnet_outputs/manifest.json` 记 prompt_id/seed/时长便于复现。详见 [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)。
 
 ## 相关页面
 

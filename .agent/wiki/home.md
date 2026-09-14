@@ -778,3 +778,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **SCNet 无人值守闭环持续运行：5 单批量 2/5 已自动回传（2026-09-14 21:30/21:37 两轮通知）**：monitor v3 常驻进程（boot 21:30:46）连续两单零人工收货——`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB）+ `scnet_inbox/213701_MiniMax_H3_00005_.mp4`（0.77 MB）；`/monitor` 状态 `pushed: 2`、`callback: "ok"`、`tasks` 表 2 done + 3 queued（feb418b4 / e3b00747 / fe94db7b），节奏 ≈7 分钟/单与热态基线一致，预计 22:00 前后收齐。**v3 的响应体校验（`ok==true`）生效**——`pushed` 计数与实际落盘文件一一对应，无「HTTP 200 假成功」虚增；同批产物另有 `scnet_outputs/` 兜底轮询副本，两条收货通道并行无冲突。**意义**：从「首次跑通」升级为「连续稳定运行」，关电脑等收货成为日常形态。收工三选一（自动关机 / 续跑 / 产物清单整理）待用户裁定——见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md)、[SCNet 算力网](guides/scnet.md)
 
+## 快速事实增补（2026-09-14 · 十三 · SCNet 无人值守闭环 3/5 + 产物清单 manifest.json）
+
+- **SCNet 无人值守闭环 3/5（2026-09-14 21:44 第三轮通知）**：`feb418b4` 完成 → `scnet_inbox/214429_MiniMax_H3_00006_.mp4`（0.8 MB），`/monitor` 状态 `pushed: 3`、`callback: "ok"`、`recent` 三连（21:30/21:37/21:44），剩余 2 单（e3b00747 / fe94db7b）queued。**连续三单零人工、零失败**，链路稳定性确认。
+- **稳态出片基线收敛**：热态后连续三单 execution **443 / 444 / 443s**（≈7.4 分/单，几乎完全一致）——该配置（480p/5s、4 步 Turbo + EasyCache、K100_AI 单卡）产能可精确预估 **约 8 单/小时**，排产按此估时。
+- **产物清单 `scnet_outputs/manifest.json`（新）**：等待期间顺手汇总 `GET /history` 全量 → 每条记 `prompt_id / seed / execution 时长 / 产物名 / status`。**seed 是复现关键**（同 seed + 同 API JSON 可重出同片），清单把 seed 与产物绑定落盘，免去事后翻 ComfyUI 前端记录；与 `scnet_batch5.json`（提交侧 pids）互补。
+- **history 全量对账 8 条**：本机 5 单 + 2 条外部 `error`（`bc89599a` / `3aa63780`，seed=None 无产物，疑 ComfyUI 前端页面自动提交，与本批无关）。
+- 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md)
+

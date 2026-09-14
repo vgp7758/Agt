@@ -11,8 +11,8 @@
 | **系统消息展开/折叠**：系统气泡默认折叠、用户气泡默认展开，点击切换 | `static/editor.html` | v0.18.2 |
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
-| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 |
-| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化 |
+| **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]` 与标准图片双语法） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -61,6 +61,8 @@
 
 ### 三种语法 → 三种渲染
 
+用户提案：agent 回答时在 answer 气泡中解析渲染 markdown 引用——链接可点、图片成框、音频成播放控件。此前 answer 的行内文本只有 `` `code` `` 高亮（`inlineCode`），其余全裸文本；这是 answer 气泡从「纯文本+表格+代码块」走向多模态呈现的一步。
+
 | 气泡里写 | 渲染成 |
 |---|---|
 | `<https://xxx.xxx.cn/>` | autolink 蓝色链接（`a.md-link`，新标签打开） |
@@ -68,11 +70,12 @@
 | `[!主题曲](assets/audios/theme.wav)` | **音频框**：标题 + `<audio controls>` 播放器 |
 | `[!设计文档](docs/gdd.md)` | **文本资产框**（2026-09-04 · 二，commit fe44b5a）：📄 标题框可点击 → 打开[文件预览抽屉](#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)；覆盖 40 种文本扩展名（见下节） |
 | `[文字](https://...)` | 普通外链（顺带支持的标准 markdown 语法） |
+| `` `![alt](相对路径)` `` | **标准 markdown 图片**（2026-09-14，commit 6215ed1）：本地路径**复用 `assetBoxHtml`**，与 `[!名](路径)` 同一条资产链（图框/音频/文本预览/未知后缀嗅探同款分流，alt 作 caption）；http(s)/ftp 外链直连 `<img>`——见[专节](#标准-markdown-图片语法渲染支持2026-09-14用户问诊commit-6215ed1) |
 | `` `https://a.b` `` | code span **URL 整串 → 链接**（`a.md-link` 包 code，新标签打开） |
 | `` `pip install -U agt-agent` `` | code span 非 URL → **可点击追加**：点一下把内容追加到消息输入框末尾并聚焦（2026-09-04 · 三，commit fd3d465，见[下节](#code-span-可点击化url-链接--点击追加输入框2026-09-04--三commit-fd3d465用户提案)） |
 | `` `<https://a.b>` `` | code span 优先保护——内部 autolink / `[!…]` 资源语法不解析（防误伤）；仅按「URL 整串 / 其余」二分决定链接态还是可点击追加态 |
 
-> 资产引用按扩展名分流在 `assetBoxHtml(title, path)`：初版（4baa66a）图 / 音 / 其它→普通链接三分支；二阶段（fe44b5a）把文本扩展名单列成**可点击资产框**（初版里文本文件只会渲染成普通链接）。
+> 资产引用按扩展名分流在 `assetBoxHtml(title, path)`：初版（4baa66a）图 / 音 / 其它→普通链接三分支；二阶段（fe44b5a）把文本扩展名单列成**可点击资产框**（初版里文本文件只会渲染成普通链接）。标准 markdown 图片语法（6215ed1）不新建渲染器——本地路径直接投喂同一条 `assetBoxHtml` 资产链。
 
 ### 前端管线：inlineRich + \x02 占位符（src/static/index.html）
 
@@ -280,6 +283,29 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 **验证**：`test/test_file_kind.py`（新建）——`_sniff_kind` 矩阵 14 例全过 + 真实文件端到端（无扩展名 jpg / gbk `.dat` / `.bin` 内 mp4 / `.weird` ascii）+ 路径穿越拒绝 + node 两阶段行为模拟（占位 → 缓存命中同步渲染四形态）全绿。
 
 **生效方式**：后端新端点 + 前端——需 `/restart`。
+
+### 标准 markdown 图片语法渲染支持（2026-09-14，用户问诊，commit 6215ed1）
+
+**用户问诊（2026-09-14）**：markdown 里的文件引用是不是还有 `![](comfy_out/edit_api_test/stormstreet_red_umbrella.png)` 这种写法？——**答案：此前不认**。`inlineRich` 管线只有 `[!名](path)` 自定义资源语法，标准 markdown 图片 `![alt](path)` 无规则命中 → 整段经 esc 后原样显示为字面文本（commit `6215ed1` 补上）。
+
+**两大高频来源**：
+
+1. **zai_file_parser 图片转 Markdown 的输出格式**——vision 解析产出的结构化 md 里图示就是 `![](images/xxx-image.png)` 引用（见 [zai-tools · 图片转 Markdown](zai-tools.md#zai_file_parser-27-种类型白名单--别名归一--图片转-markdown2026-09用户请求)），Agent 摘引该产物时原样进 answer；
+2. **LLM 天然惯用写法**——训练语料里标准图片语法是主流（comfy 生图产物引用是典型场景），模型自发输出概率高。
+
+**渲染规则**（`inlineRich` 管线 ③ `[!…]` 资源引用之后新增一条，src/static/index.html）：
+
+| 写法 | 渲染 |
+|---|---|
+| `![alt](本地相对路径)` | **复用 `assetBoxHtml(alt, path)`**——与 `[!名](path)` 完全同一条资产链：图框 / 音频播放条 / 📄 文本预览抽屉 / 未知后缀嗅探（`/api/file-kind`）全同款分流，alt 作 caption |
+| `![alt](https://… / ftp://…)` | **外链直连 `<img src>`**（src/alt 均 esc；`referrerpolicy="no-referrer"`） |
+
+- 正则 `!\[([^\]]*)\]\(([^)\s]+)\)`——与 `[!…]` 同款形态（path 不含空白/右括号）；
+- **插入位置在 ③ 资源引用之后**：自定义 `[!名](path)` 优先命中，标准图片语法兜底——两者不互抢。
+
+**cited 判定同步（变更文件补充区误补防御）**：「📎 本轮变更文件」的「已引用剔除」集合（归一化口径见[路径归一化修复](#变更文件补充区路径归一化反斜杠大小写引用漏判修复2026-09-13用户问诊commit-b1ef5e4)）此前只收集 `[!名](path)` 形态——answer 用标准图片语法引用过的文件仍会被误判「未交代」而重复补充。现 `_collect` 回调同时喂两种语法的正则，`cited` 收 `_norm`（`\`→`/`）+ `_base`（basename 小写）双份——与本页 2026-09-13 归一化修复同层防御。
+
+**生效方式**：纯前端，Ctrl+F5。验证方式：刷新后取一张真实产物图（如 comfy 的 `stormstreet_red_umbrella.png`）让 Agent 以 `![](路径)` 形态引用，应直接出图框而非字面文本。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

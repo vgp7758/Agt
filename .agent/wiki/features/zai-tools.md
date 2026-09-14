@@ -41,6 +41,7 @@ WebUI 设置页配过一次 z.ai 或 glm-official 的 key 即全局复用，无�
 - 覆盖两张实测图：含文字的架构封面图 → 标题/副标题/底部说明文字全部转写为 markdown，图示部分以 `![](images/xxx-image.png)` 图片引用保留；纯 logo 图（无文字）→ 只有图片引用，不硬编内容
 - 结论：截图/扫描件/带图 PDF 可直接得到结构化 Markdown；对纯 logo 等无文字图不要抱「能读出内容」的期待
 - 与 web_search / web_reader 不同，parser 走 `/api/paas/v4`（不带 coding 前缀），`file_type` 现在不传也 OK（自动识别）
+- **消费端闭环（2026-09-14，commit 6215ed1）**：parser 输出的 `![](相对路径)` 标准图片引用现已在 answer 气泡直接渲染成资产框（此前整段原样显示为字面文本）——正是该输出格式催生了 [气泡交互 · 标准 markdown 图片语法渲染支持](bubble-interaction.md#标准-markdown-图片语法渲染支持2026-09-14用户问诊commit-6215ed1)
 
 ## 注册形态
 

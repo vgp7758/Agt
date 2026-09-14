@@ -776,3 +776,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **用户问**「是不是还不支持 `agt -version` `agt -help`」→ 定性：双横线（0e186c9，2026-08）早已支持，**单横线是漏的**——`_early_argv()` 别名清单没列 `-help`/`-version`/`-v` → fallthrough 进正常启动（打横幅+连 MCP 后「进了个界面」，看似敲了没反应）。修复 commit `9148a15`：两清单各补单横线变体；7 变体实测全过 rc=0（版本三连 → 0.27.2 / 帮助四连 → 帮助首行）；`agt`/`agt-web` 两入口同享，无参数直通不变。已装 0.27.2 的远端实例等下版本 `pip install -U agt-agent`——见 [ops · agt 入口](guides/ops.md#agt--help--version2026-08commit-0e186c9)
 
+## 快速事实增补（2026-09-14 · 六 · 标准 markdown 图片语法渲染支持）
+
+- **answer 气泡认标准 markdown 图片语法 `![alt](path)` 了**（2026-09-14，用户问诊，commit `6215ed1`）：此前 inlineRich 只认 `[!名](path)` 自定义语法，`![](comfy_out/...png)` 整段原样显示字面文本；现本地相对路径**复用 `assetBoxHtml`**（图框/音频/文本预览/未知后缀嗅探同一条资产链，alt 作 caption），http(s)/ftp 外链直连 `<img>`（no-referrer）。两大高频来源：zai_file_parser 图片转 Markdown 的输出格式 + LLM 天然惯用写法。**cited 判定同步认双语法**——📎 变更文件补充区不再误补图片语法引用过的文件（与 `\`→`/` 归一化同层防御）。纯前端 Ctrl+F5 生效（详见 [bubble-interaction](features/bubble-interaction.md#标准-markdown-图片语法渲染支持2026-09-14用户问诊commit-6215ed1)）
+

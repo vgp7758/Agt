@@ -109,24 +109,37 @@ nohup python3 /root/monitor.py \
 
 > 注：`--ids` 可省——起来后本机 `POST /monitor/add` 加任务即可。
 
-### 首次无人值守闭环（2026-09-14 21:30，全链路真跑通 ✅）
+### 无人值守闭环持续运行：5 单批量 2/5 已自动回传（2026-09-14 21:30 起）
 
-**第一个视频全程零人工自动回家**：`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB）。
+**第一个视频全程零人工自动回家**：`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB），boot 21:30:46。
 
 | 环节 | 状态 |
 |---|---|
 | monitor v3 常驻进程 | ✅ 已接管（`boot 21:30:46`，容器内 `pkill -f root/monitor.py` 后重启为 v3） |
 | **callback 自检（header 通道，即生产链路）** | ✅ `"ok"` —— **一次就通**（本机已 `/restart` 装载端点） |
-| 任务表 | ✅ 5 单全在表（1 done + 4 queued） |
-| 自动推送 | ✅ `pushed: 1`，`recent: ["21:30 MiniMax_H3_00004_.mp4"]` |
-| 剩余 4 单 | 🔄 排队/执行中（约 7.4 分/单，预计 22:00 前后全部完成） |
+| 任务表 | ✅ 5 单全在表 |
+| 自动推送 | ✅ `pushed: 2`，`recent: ["21:37 MiniMax_H3_00005_.mp4", "21:30 MiniMax_H3_00004_.mp4"]` |
+| 剩余 3 单 | 🔄 queued（feb418b4 / e3b00747 / fe94db7b），约 7 分钟/单，预计 22:00 前后收齐 |
 
-**意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实。
+**两单实测回传（第二次通知轮 21:37 复验）**：
+
+| 单 | prompt_id | 状态 | 产物（`scnet_inbox/`） |
+|---|---|---|---|
+| #1 | ca9055d5-2890-4c6e-a258-b98c96af4d99 | done | `213053_MiniMax_H3_00004_.mp4`（0.84 MB） |
+| #2 | dac0b572-42f1-4b14-8e99-91933ab962d8 | done | `213701_MiniMax_H3_00005_.mp4`（0.77 MB） |
+| #3~#5 | feb418b4 / e3b00747 / fe94db7b | queued | — |
+
+- 每单节奏 ≈ 7 分钟，与热态基线（~7.4 分/单）一致；`callback: "ok"`、`pushed` 计数与实际落盘文件一一对应（v3 的响应体校验生效——不存在「200 假成功」虚增）。
+- 同一产物另有 `scnet_outputs/MiniMax_H3_00005_.mp4`（本机兜底轮询 `scnet_watch_batch` 下载副本），两条收货通道并行无冲突。
+
+**意义**：此前所有环节都是「分头验证过」，本轮是**第一次端到端串起来自己跑**——enqueue → 容器 monitor 轮询发现完成 → 抓产物 → 经 cpolar 推回本机 → 落盘 `scnet_inbox/` → 唤醒 Agent 一轮。**关电脑等收货**从设计变成事实，且连续两单零人工、零失败。
 
 **部署动作（本轮实际执行）**：
 1. 本地 `tools/scnet_monitor.py` → 复制为 `~/.agt/mcp/scnet/monitor_template.py`（11917 bytes，供 MCP 工具 `scnet_monitor` 的 deploy action 读取）
 2. `scnet_mcp.py` 加 `scnet_monitor` 工具（`monitor_action`，py_compile OK，备份 `scnet_mcp.py.bak_20260914_212929`）
 3. 容器内 `pkill` 旧 monitor → `nohup` 拉起 v3
+
+**收工三选一（跑完 5 单后的动作，待用户裁定）**：① 自动关机省余额（届时约 ¥7.5）；② 保留实例续跑更多单；③ 整理 `scnet_inbox/` 产物清单（附提示词/seed 记录）便于挑素材。
 
 ### monitor 的三步生命周期（谁在哪做）
 
@@ -208,14 +221,14 @@ ComfyUI API（enqueue/history/view）                        ← 批量生产（
 `run_python` 直发 5 单（同一 API JSON 模板换 seed 变体），prompt_id：
 
 ```
-ca9055d5-2890-4c6e-a258-b98c96af4d99
-dac0b572-42f1-4b14-8e99-91933ab962d8
-feb418b4-569f-4037-822b-f7a97d245f82
-e3b00747-a52d-438f-9f3d-d3fa7016f2bb
-fe94db7b-0847-4d26-afd2-7d342a9bf1be
+ca9055d5-2890-4c6e-a258-b98c96af4d99   → done（21:30 回传）
+dac0b572-42f1-4b14-8e99-91933ab962d8   → done（21:37 回传）
+feb418b4-569f-4037-822b-f7a97d245f82   → queued
+e3b00747-a52d-438f-9f3d-d3fa7016f2bb   → queued
+fe94db7b-0847-4d26-afd2-7d342a9bf1be   → queued
 ```
 
-入队后状态 `running=1 / pending=4`，首单约 21:32 完成。pids 落盘 `scnet_batch5.json` 供两条收货通道共用。
+入队后状态 `running=1 / pending=4`，首单约 21:32 完成。pids 落盘 `scnet_batch5.json` 供两条收货通道共用；`/monitor` 的 `tasks` 表即以此 5 个 pid 为键（状态机 `queued → running → done`）。
 
 ## 热态出片速度实测（2026-09-14）
 

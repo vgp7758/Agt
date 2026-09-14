@@ -774,3 +774,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **SCNet 全链路 API 化完成**：`scnet_notebook`（实例/URL）+ `scnet_monitor`（deploy/add/status）+ Jupyter Contents（上传）+ terminals WS（执行）+ ComfyUI API（生产）+ `/api/callback` + cpolar（回传唤醒）。**下一步方向（未实施）**：封装 `scnet_exec`（terminals WS）与 `scnet_upload`，则「一句 enqueue → 自动收片」成为纯工具调用序列。
 - 详见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md) / [SCNet 算力网](guides/scnet.md) / [MCP 配置页](features/mcp-config.md)。
 
+## 快速事实增补（2026-09-14 · 十二 · SCNet 无人值守闭环持续运行——5 单批量 2/5 已自动回传）
+
+- **SCNet 无人值守闭环持续运行：5 单批量 2/5 已自动回传（2026-09-14 21:30/21:37 两轮通知）**：monitor v3 常驻进程（boot 21:30:46）连续两单零人工收货——`scnet_inbox/213053_MiniMax_H3_00004_.mp4`（0.84 MB）+ `scnet_inbox/213701_MiniMax_H3_00005_.mp4`（0.77 MB）；`/monitor` 状态 `pushed: 2`、`callback: "ok"`、`tasks` 表 2 done + 3 queued（feb418b4 / e3b00747 / fe94db7b），节奏 ≈7 分钟/单与热态基线一致，预计 22:00 前后收齐。**v3 的响应体校验（`ok==true`）生效**——`pushed` 计数与实际落盘文件一一对应，无「HTTP 200 假成功」虚增；同批产物另有 `scnet_outputs/` 兜底轮询副本，两条收货通道并行无冲突。**意义**：从「首次跑通」升级为「连续稳定运行」，关电脑等收货成为日常形态。收工三选一（自动关机 / 续跑 / 产物清单整理）待用户裁定——见 [SCNet 异步生产流水线](features/scnet-async-pipeline.md)、[SCNet 算力网](guides/scnet.md)
+

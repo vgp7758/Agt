@@ -766,3 +766,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **团队看板手动管理远程实例**（2026-09-14，commit `0d5f167`，用户提案「团队抽屉里加 remote 实例的手动移除、添加控件」）：WebUI 团队抽屉「🌐 远程实例」分组**空态恒渲染** + 组头「＋ 添加」（内联表单：url 必填 + id 可空——自动生成本地→`agt-{端口}`/远程→`agt-{host}-{端口}`）+ 每实例行「✕ 移除」（confirm 后断连清配置）；后端 `POST /api/remote/add`·`/api/remote/remove`（src/server.py）**薄封装复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧五件套同一条链单源；前端 6/6 + 后端 4/4 全绿；server.py 端点需 /restart 生效——见 [multi-instance · 团队看板手动管理](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-14 · 四 · 看板移除报错定性——旧进程无端点 404 + 失败提示加固）
+
+- **用户报告**「已断开的远程实例点移除貌似会报错」→ 定性：非移除 bug，是**「页面新了、服务旧了」进程错位**——index.html 静态刷新即得新控件，但 `/api/remote/remove` 端点要 /restart 才装载；curl 实测旧进程 404 `{"detail":"Not Found"}`，FastAPI 404 是合法 JSON → 旧前端 `.json()` 成功 → `r.ok` undefined → 只 toast 干巴巴「❌ 失败」
+- **加固**（commit `cb955c5`）：看板 fetch 非 2xx 显式提示 `❌ HTTP xxx——端点不存在：服务进程是旧版本，/restart 后重试`；offline 条目移除逻辑本身无恙（断连+清持久化，上轮 4/4 已验）
+- 详见 [multi-instance · 失败提示加固](architecture/multi-instance.md)
+

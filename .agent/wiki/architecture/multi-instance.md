@@ -91,6 +91,31 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 **验证**：前端 6/6（三函数存在 / 表单字段 / 移除按钮 / 空态恒渲染）+ JS 语法 ✓；后端 4/4（坏 url 探测失败 / 空 url 拒绝 / 未知 id 未找到 / 真实条目移除清表）✓。**生效方式**：前端 Ctrl+F5；`server.py` 新端点需 `/restart`。
 
+### 失败提示加固：HTTP 非 2xx 显式提示「进程是旧版本」（2026-09-14 · 二轮，commit cb955c5）
+
+**用户报告**：「已断开的远程实例点移除的时候貌似会报错？」——定性：**不是移除逻辑的 bug，是「页面新了、服务旧了」的进程错位**。
+
+**根因链**：
+
+```
+Ctrl+F5 刷新页面 → 前端控件出现 ✓（index.html 是静态文件，刷新即得）
+但 server.py 的 /api/remote/remove 端点 → 需 /restart 才装载 ✗（上一轮「生效方式」注记的原话即此坑）
+点移除 → fetch 打到 404 → FastAPI 返回 {"detail":"Not Found"}（合法 JSON）
+→ 旧前端 .json() 解析成功 → r.ok = undefined → toast 只显示干巴巴「❌ 失败」
+```
+
+curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（404）——失败提示看不出 404，这就是「貌似报错」的全部真相。
+
+**移除逻辑本身无恙**：offline 条目照常走 `remote_tools.disconnect`（断连 + pop + 清持久化），上一轮后端 4/4 已验。
+
+**加固**（commit `cb955c5`，`remoteAddSubmit()`）：fetch 后先查 `resp.ok`，非 2xx 不再裸「❌ 失败」，直接提示——
+
+```
+❌ HTTP ${resp.status}——端点不存在：服务进程是旧版本，/restart 后重试
+```
+
+「前端新、服务旧」错位从此一眼定位。顺手验收路径：`/restart` 后移除 offline 条目（如 `agt-68j4mxgibv-8000-cnb-run`）→「＋ 添加」重新探测重连，即新控件完整闭环。
+
 ## 组件清单
 
 | 组件 | 位置 | 职责 |

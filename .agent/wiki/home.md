@@ -825,3 +825,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **SSH 隧道升级双向：本机 remote_connect 无需公网**（2026-09-15 二轮，用户问「需要暴露成公网 url 才能本机 remote_connect 对吧」）：**答：不一定，只要网络可达即可，公网只是其中一种**。`tools/ssh_reverse_tunnel.py` 在同一条 SSH 连接上新增正向 `-L 18080:127.0.0.1:8080`（本机 :18080 → 容器 agt-web :8080），与反向 `-R 19999`（LLM API 出网）并存为**双向隧道**；本机 `remote_connect("agt113", http://127.0.0.1:18080)` 实测打通（134 工具 · deepseek-flash · 容器 session 就绪），`remote_instance_id=agt113` 工具直执行跨隧道返回正常（`[remote:agt113] crdnotebook-2099660659602870274-act3fh878f-38125 · self_web:200`）。仍需要公网 URL 的场景只剩：手机/别的电脑访问 agt 页面、015 云端管家连 113（它在云端够不到本机 127.0.0.1）。⚠️ agt 服务无鉴权（`/api/tool/exec` 是任意代码执行级端点），`c-{id}.zzai.scnet.cn` 公网 URL 本质公开——**能走隧道就别暴露公网**——见 [SCNet · 双向隧道](guides/scnet.md#113-无外网容器-agt-离线安装--ssh-反向隧道-llm-通路2026-09-15)
 
+## 快速事实增补（2026-09-15 · 三 · repo 整理收尾——verify 归档 + gitignore 规整 + 3 工具入库）
+
+- **根目录 verify 脚本统一归档 `test/verify/`**（用户「把不要的都整理整理」+「根目录 verify_*.py 很乱」，commit `2445bc2`）：24 个 `verify_*.py` + `demo_tiered_projection.py` + `verify_prefix_cache.py` 共 26 个脚本搬进 `test/verify/`，绝大多数被 git 识别为 R rename（历史完整保留）；import 路径全修（`parent/"src"` → `parent.parent/"src"` 搬深一层 + `sys.path.insert(0, "src")` 绝对化，共 18 + 24 处），26 个脚本 `py_compile` 全过。根目录 `verify_*` 从此消失，一次性验证脚本归位。
+- **`.gitignore` 规整**：新增 SCNet 调试垃圾段（`scnet_*.json/txt/png/js/b64/csv/sh`、`scnet_inbox/`、`scnet_outputs/`、`nb_create*.png`、`qr_*.txt`、`sim_*.csv`）+ 离线包段（`agt_offline/`、`dl_qwen3_113.sh`）；移除已归档的 `/demo_tiered_projection.py`、`/verify_prefix_cache.py` 旧规则。
+- **3 个正式工具 commit 入库**：`tools/llm_relay.py`（http→https 反代）/ `tools/ssh_reverse_tunnel.py`（双向隧道）/ `tools/scnet_watch_batch.py`（ComfyUI 批量监控），此前均为 untracked——见 [SCNet · 产物清理](guides/scnet.md#产物清理与-gitignore-收尾2026-09-15-二轮)。
+- **插曲教训**：中间差点把 `test/` 整个加进 `.gitignore`（误判为全 untracked）——实际 git 的 glob 通配符在 Windows 下误报，`D/R` 状态才是跟踪铁证；已撤销该段，`test/` 目录维持 untracked 惯例（`test/test_constr_buf_stable.py` 等依旧不跟踪，不影响）。
+

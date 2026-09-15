@@ -364,7 +364,7 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 
 `.gitignore` 追加规则：`agt_offline/` + `dl_qwen3_113.sh`，`check-ignore` 验证通过。
 
-**顺带发现（待用户确认，未执行）**：git status 里还有一批 SCNet 侦察期攒下的 `??` 未跟踪产物——约 20 个调试垃圾（`scnet_*.json/txt`、`nb_create*.png`、`qr_*.txt`、`sim_*.csv` 等）应 gitignore，另有 3 个应提交的正式工具（`tools/llm_relay.py` / `tools/ssh_reverse_tunnel.py` / `tools/scnet_watch_batch.py`）——已向用户请示处置。
+**顺带发现的调试垃圾 + 3 工具处置（已执行，2026-09-15 repo 整理，commit `2445bc2`）**：此前「待用户确认」——现已执行：`.gitignore` 新增 SCNet 调试垃圾段（`scnet_*.json/txt/png/js/b64/csv/sh`、`scnet_inbox/`、`scnet_outputs/`、`nb_create*.png`、`qr_*.txt`、`sim_*.csv`）；3 个正式工具 `tools/llm_relay.py` / `tools/ssh_reverse_tunnel.py` / `tools/scnet_watch_batch.py` 已 commit 入库（此前 untracked）——见 [LLM 反代与双向隧道](#llm-api：ssh-反向隧道--本机-http到https-反代) 与 [兜底轮询](features/scnet-async-pipeline.md#兜底轮询tools-scnet_watch_batch-py本机主动拉不依赖容器-monitor)。
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 

@@ -65,5 +65,27 @@ s3._current.steps.append(Step(
 b3 = s3._seg_msgs_recent_file()[0]["content"]
 check("同文件多改：仅最新（v2）一份", 'version="v2"' in b3 and 'version="v1"' not in b3 and "newest" in b3)
 
+# —— 6. 阈值拆分（用户裁定 2026-09-15）：非施工段式 15K / 施工内嵌 100K ——
+# 15K~100K 区间的同一文件：段式转 outline（尾部易变项压体积）、内嵌仍是全文（定型字节冻结不伤缓存）
+import types as types_mod
+import agent_config
+mid_text = "y = 2\n" * 5_000                     # 30K 字符：15K < 30K < 100K
+s4 = Session(system="t", llm=None)
+s4.start_turn("阈值拆分轮")
+s4._current.steps.append(Step(
+    tool_calls=[ToolCall(call_id="m1")],
+    file_snapshots={"m1": {"path": "mid.py", "version": "vm", "text": mid_text}}))
+b4 = s4._seg_msgs_recent_file()[0]["content"]
+check("中文件(30K)：非施工段式转 outline（>15K 新阈值）",
+      f'size="{len(mid_text)}"' in b4 and "<overview>" in b4 and "y = 2" not in b4)
+inline4 = s4._rf_inline_block({"path": "mid.py", "version": "vm", "text": mid_text})
+check("中文件(30K)：施工内嵌仍全文行号化（<100K 不截）",
+      "<overview>" not in inline4 and " 1| y = 2" in inline4)
+# 施工模式判定（mock）：段式返回空（防双份），内嵌走 _constr_buf（快照 <100K 全文）
+agent_config._RUNTIME_AGENT = types_mod.SimpleNamespace(
+    session=s4, active_plan={"steps": [{"status": "pending"}]})
+check("施工模式：段式返回空（内嵌防双份照旧）", s4._seg_msgs_recent_file() == [])
+agent_config._RUNTIME_AGENT = None
+
 print("\n" + ("ALL PASS ✅" if ok else "SOME FAILED ❌"))
 sys.exit(0 if ok else 1)

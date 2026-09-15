@@ -46,7 +46,9 @@ GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 l
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
 GRADUATE_FORCE_TURNS = 60  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
-RF_MAX_CHARS = 100_000  # recent-file 快照单文件上限（用户裁定 2026-08-31）：超大文件全文注入让近期缓存上蹿下跳
+RF_MAX_CHARS = 100_000  # recent-file 快照单文件上限·施工期内嵌口径（用户裁定 2026-08-31）：超大文件全文注入让近期缓存上蹿下跳
+RF_SEG_MAX_CHARS = 15_000  # 非施工段式口径（用户裁定 2026-09-15）：尾部 <recent-file> 段是每步
+                          # 重渲染的易变项，>15K 即转 outline——段体积压小，尾部 miss 区代价低
                          # （index.html 130K 单步稀释命中率 99%→81%）——超过则跳过全文、只挂一行提示
                            # 8000 实例实测 64 轮档1 占 58.6%：窗口宽绰时压力循环永不触发，档1 失去"近期窗口"语义）
 RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+上一组 ≈ 最近 1~2 组全量）
@@ -1251,7 +1253,7 @@ class Session:
             <file path="xxx.py" version="a1b2">        小文件：行号化全文
             1| import os
             </file>
-            <file path="big.md" version="c3d4" size="130537">   大文件（>RF_MAX_CHARS）：
+            <file path="big.md" version="c3d4" size="130537">   大文件（非施工 >RF_SEG_MAX_CHARS=15K）：
             <overview>结构大纲</overview>              py=函数/类行号结构 / md=标题大纲（_rf_outline）
             <content note="文件过大省略——需要时 read_file 分段读取"/>
             </file>
@@ -1273,7 +1275,7 @@ class Session:
                 parts.append(
                     f'<file path="{info["path"]}" version="{info["version"]}" size="{info["skip"]}">\n'
                     f"<overview>\n{ov}\n</overview>\n"
-                    f'<content note="文件过大（{info["skip"]:,} 字符 > {RF_MAX_CHARS:,}）——此处省略，'
+                    f'<content note="文件过大（{info["skip"]:,} 字符 > {RF_SEG_MAX_CHARS:,}）——此处省略，'
                     f'需要时 read_file 分段读取"/>\n</file>')
             else:
                 _lines = str(info["text"]).split("\n")
@@ -2432,7 +2434,9 @@ class Session:
         """施工期 <recent-file> 内嵌块（用户裁定 2026-09-13）：贴在该次写调用的 tool result
         尾部，内容 = 该次调用【当时】的快照（file_snapshots 按 call_id 存的就是当时版本——
         不去重、不限数量）。小文件行号化全文（与段式段 / read_file 口径一致）；超大文件
-        （>RF_MAX_CHARS）outline + 省略提示（口径与 _seg_msgs_recent_file 相同）。
+        （>RF_MAX_CHARS=100K）outline + 省略提示。注意阈值与非施工段式（RF_SEG_MAX_CHARS=15K，
+        2026-09-15 收紧）不同——施工内嵌块走 _constr_buf 定型（字节冻结不重渲染），
+        大一些不伤缓存；段式是尾部每步重渲染的易变项，阈值更紧。
         块以 \\n 开头——_RE_RF_BLOCK 剥离/诊断正则天然命中。"""
         path, ver = str(snap.get("path", "")), str(snap.get("version", ""))
         text = str(snap.get("text", ""))
@@ -2451,8 +2455,10 @@ class Session:
         """当前轮 recent-file 最新映射（用户设计 2026-08-29）：filename -> {cid, path, version, text}。
         同文件多次 edit 后写覆盖——只有【最新一次改它的 tool_call】会在投影时命中挂快照。
         归档轮/历史段的 call_id 不在映射里（映射只从 _current 构建），天然"前面的轮不管"。
-        超大文件跳过（用户裁定 2026-08-31·RF_MAX_CHARS）：text 超 100K 的置空 + skip 标记——
-        投影时挂一行自闭合提示而非全文（巨型文件单步稀释命中率：index.html 130K 实测 99%→81%）。"""
+        超大文件跳过（用户裁定 2026-08-31 起阈值 RF_MAX_CHARS=100K；2026-09-15 非施工收紧为
+        RF_SEG_MAX_CHARS=15K——段式是尾部每步重渲染的易变项，小文件全文也该转 outline 压体积；
+        施工期内嵌仍走 100K（_rf_inline_block 口径不变））：置空 + skip 标记——投影时挂
+        outline + 省略提示而非全文（巨型文件单步稀释命中率：index.html 130K 实测 99%→81%）。"""
         if self._current is None:
             return {}
         latest: dict[str, dict] = {}
@@ -2460,7 +2466,7 @@ class Session:
             for cid, snap in (s.file_snapshots or {}).items():
                 if isinstance(snap, dict) and snap.get("path"):
                     _txt = str(snap.get("text", ""))
-                    _too_big = len(_txt) > RF_MAX_CHARS
+                    _too_big = len(_txt) > RF_SEG_MAX_CHARS
                     latest[str(snap["path"])] = {"cid": cid, "path": str(snap["path"]),
                                                  "version": str(snap.get("version", "")),
                                                  "text": "" if _too_big else _txt,

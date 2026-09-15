@@ -158,11 +158,15 @@ POST https://www.scnet.cn/acx/aimgt/notebook/restart
 2. `agt-web` 起在 **8191**（实例自定义服务端口 `customsizePort:8191`）→ 平台自动映射公网 `https://c-2099459694942883841.ksai.scnet.cn:58043`（**ksai 域**；021 出片实例是 zzai 域——两种域名并存）
 3. 本机 `remote_connect` → **134 工具**入列；工具路由实测：`run_python(remote_instance_id="scnet")` → `[remote:scnet]` 在容器里执行 ✅——主 Agent 无需 scnet MCP 也能直接操作容器（组网机制见 [multi-instance](../architecture/multi-instance.md)）
 
-### models.json 注入：upload→mv 两段式
+### models.json 注入：upload→mv 两段式（主模型真源在 main.yml）
 
 Jupyter Contents API **不让写 `.agt` 隐藏目录**——先 upload 到可见临时路径、再 shell `mv` 进 `~/.agt/`。内容在本机生成后 base64 传输。
 
-**本轮（2026-09-14 晚）升级为完整 16 providers**：本机 `~/.agt/models.json` 整份 clone（16 providers + default）落 `scnet_agt_models_full.json`，`default=glm-official`（与用户偏好一致）、`utility_model=qwen`；agt-web 重启后生效。容器里的 agt（scnet 组网节点）由此成为「容器管家」——可在 30 天保留期内自主打理模型补齐/寻源/生产任务监控。
+**16 providers 整份 clone（2026-09-14 晚）**：本机 `~/.agt/models.json` 整份 clone（16 providers + default + **deepseek 官方端点的缓存经济学参数** `fold_target_ratio: 0.4 / detail_step: 0 / requires_reasoning_in_history`）落 `scnet_agt_models_full.json`；agt-web 重启后生效。容器里的 agt（scnet 组网节点）由此成为「容器管家」——可在 30 天保留期内自主打理模型补齐/寻源/生产任务监控。
+
+**主模型真源在 main.yml，不在 models.json（2026-09-14 晚实测教训）**：改 models.json 的 `default` 后管家模型没变——主 Agent 的模型声明在 `/root/.agt/main.yml`（当时 `model: glm`），**装配 DSL 优先级高于 models.json default**。修法：sed 把 main.yml 改 `model: deepseek` + 清掉旧测试 session，重启 agt-web 生效。
+
+**容器管家定档 deepseek-flash（2026-09-14，用户裁定）**：「容器里的实例还是走 api 吧，可以用 deepseek-flash，相对稳定，用的比较慢」——慢=折叠触发少=缓存好，正合管家定位（守夜/巡检/批量任务监控，不追求首 token 快）。当前 134 工具入列、ready。
 
 ### 环境持久性实测：关机 → 重开机，容器层增量全在
 
@@ -187,9 +191,9 @@ stop（`saveEnv:true`）→ restart 后验证：pip 包、热修的 `tools.py`�
 
 - 113 组直接正常开机就免费（15核/59GB，比无卡 0.5核/4GB 强 30 倍）——**不必对它用无卡模式**；无卡模式是给付费/试用组省卡时用的
 - **跨组坑**：BW 与 DCU 的 GPU 侧 Python 环境（torch 等）不通用；但**权重文件与卡无关**，且同一账号家目录 `/public/home/scnrilsyy5` **同集群内跨实例共享**（⚠️ 2026-09-14 morning_wake 轮口径修正：**跨集群不共享**——113 武汉集群有独立家目录，昆山下的权重那边看不到，各自现下；此前「跨实例共享」表述仅对昆山 015/021 成立）
-- **分工策略**：113 组当免费下载机（下权重/数据集落家目录）→ 015 无卡装环境（¥0）→ 015 有卡才推理（只花真实卡时）
+- **分工策略（⚠️ 2026-09-14 晚修正）**：「113 当免费下载机」**已推翻**——113 网络出口不通（见下节），下载机职责归 015 无卡容器（35~40 MB/s）；现行分工 = 015 无卡装环境 + 下模型（¥0）→ 015 有卡才推理（只花真实卡时）；113 只当「离线免费推理卡」看待（模型经 SFTP 慢传 5.8h，或等外网开通）
 
-当前状态：015 实例无卡挂着（¥0，agt-web 公网 ready + 组网在线），镜像内容 = ComfyUI + H3 + agt 0.28.1 + models.json，开关机不丢。
+当前状态（2026-09-14 晚）：015 实例无卡常挂（¥0，agt-web 公网 ready + 组网在线）——管家模型 **deepseek-flash**（走 API，用户裁定）+ 家目录 comfy-models **80G 模型库全部就绪**（`dl.done`）；113 已关机（环境保存）；镜像内容 = ComfyUI + H3 + agt 0.28.1 + models.json，开关机不丢。
 
 ## 模型全家桶下载：015 无卡容器 → 家目录共享盘（2026-09-14，scnet_dl_all.sh）
 
@@ -211,17 +215,19 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 
 **巡检闭环**：25 分钟周期定时任务盯进度；`dl.done` 出现后汇总 OK/FAIL 清单报用户；FAIL 项自动换源补下。
 
-### 下载进度实测（2026-09-14 晚，第一批次）
+### 下载批次收官：80G 全部完成（2026-09-14 晚，dl.done）
 
-| 项 | 状态 | 体积/备注 |
+晚间巡检确认五批次**全部完成**（约 80G），`dl.done` 哨兵已落，`extra_model_paths.yaml` 双路径挂载就绪——**下次开有卡模式即可直接跑生产**，无需再下载。
+
+| 批次 | 状态 | 明细 |
 |---|---|---|
-| Qwen-Image 文生图（unet+文本编码器+vae） | ✅ | 19.5G + 8.8G + 250M |
-| Qwen-Image-Edit 2511（int8） | ✅ | 19.6G（vae 软链复用）；**顺带下 6 个 2509 系列编辑 LoRA**（重打光/换背景/多角度/Anything2RealAlpha） |
-| IndexTTS-2.5 | 🔄 | gpt.pth 3.26G ✅ / s2mel+codec+qwen0.6b 排队 |
-| H3 文戏缺件五件（fl2va/int8编码器/turbo/Remix/upscaler） | ⏳ | LFS 批次；顺带抓到官方源：真视频超分 realesr + RIFE 插帧 ✅ |
-| custom_nodes（VHS/LayerStyle/rgthree/KJNodes） | ⏳ | github 直连 |
+| A 文生图 | ✅ | Qwen-Image fp8 unet 19.5G + qwen2.5-vl 8.8G 文本编码器 + vae |
+| B 图片编辑 | ✅ | Qwen-Image-Edit 2511 int8_convrot 19.6G（vae 软链复用）+ **6 个 2509 系编辑 LoRA**（重打光/换背景/多角度/Anything2RealAlpha/Fusion/Light-Migration——修立绘场景正合适） |
+| C 语音 | ✅ | IndexTTS-2.5 全套（gpt.pth 3.26G / s2mel / codec / qwen0.6b-emo4） |
+| D 视频增强 + H3 | ✅* | realesr-animevideov3 真视频超分 + RIFE 插帧 ✅；H3 文戏五件部分到位——**个别上游断供件待寻源** |
+| E custom_nodes | ✅ | VHS-VideoHelperSuite / LayerStyle / rgthree / KJNodes |
 
-落点全在 `/public/home/scnrilsyy5/comfy-models/`（61PB 共享盘），`extra_model_paths.yaml` 双路径已接好。下载巡检仍按 25 分钟周期盯进度。
+落点 `/public/home/scnrilsyy5/comfy-models/`（61PB 共享盘，昆山集群内跨实例可用）。
 
 ## 113 免费卡时 LLM 推理侦察：vllm 镜像盘点 + 实测方案（2026-09-14）
 
@@ -259,6 +265,24 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 4. 立即创建 → 等 Running
 
 > 此前镜像盘点定的 vLLM 方案顺延：jupyterlab-qwen3-openwebui 自带模型，可免去「现下 7B AWQ」一步。
+
+### 113 网络出口不通 + SFTP 0.8 MB/s——推理验证搁置、关机收尾（2026-09-14 晚）
+
+实例创建成功（用户手点四步），SSH 通道 `ssh.zzai.scnet.cn:10300`（root + sshPassword）实测可连。本轮验证结果与原方案（ModelScope 现下 7B → vllm serve）预期相反：
+
+| 验证项 | 结果 |
+|---|---|
+| **无卡模式** | ✅ 可用——`stop(saveEnv) → restart(startType:"no-card")`，实测 torch 计数=0 完全不占卡 |
+| **网络出口** | ❌ **不通**——有卡/无卡模式下 ModelScope / pypi / github 全部连接失败（000） |
+| **SFTP 通道** | ✅ 通但仅 **0.8 MB/s**（平台 SSH 跳板限速；100MB 上传实测 123.8s） |
+
+**定性**：网络不通**不是无卡模式限制**（有卡模式同样不通）——疑 113 免费试用组**本来就没配外网出口**；对照 015 付费组 35~40 MB/s 全通。「113 当免费下载机」的分工策略就此推翻。
+
+**SFTP 经济账**：Qwen3-8B（ModelScope repo files API 实测：16 文件、>100KB 共 8 个、16.4G）经 0.8 MB/s 跳板要 **~5.8 小时**——本机已列好文件清单 + 生成 curl 直链下载脚本（`dl_qwen3_113.sh`，未执行），**推理验证搁置**。
+
+**处置**：113 **已关机（saveEnv，环境保留）**，要用随时拉起（无卡/有卡均可）；当日总消耗 ≈ 0.4 卡时（首开 8min + 网络验证 25min）。
+
+**后续两个选项（待用户定）**：① 哪天挂 SFTP 后台慢慢传（5.8h 无人值守，不占人）；② 问平台能否给 113 组开通外网——开了就是「免费 LLM 推理节点」，vllm 方案原样复活。
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 

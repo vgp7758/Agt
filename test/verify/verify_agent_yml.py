@@ -12,7 +12,7 @@
 """
 import sys, tempfile
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -99,7 +99,7 @@ check("emit 项触发事件", any(e.get("type") == "confirm_tool_use" for e in e
 
 # —— 5. main.yml 播种 + 主 system 走 text 项 ——
 print("\n【5】main.yml 播种")
-src_main = Path(__file__).resolve().parent / "src" / "assets" / "main.yml"
+src_main = Path(__file__).resolve().parent.parent / "src" / "assets" / "main.yml"
 check("随包 main.yml 存在", src_main.exists())
 mmeta, _ = load_agent_yml(src_main)
 check("main.yml 有 assembly text 项", any(it.get("kind") == "text" for it in _parse_assembly(mmeta)))

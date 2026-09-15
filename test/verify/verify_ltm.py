@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from session import Session  # noqa: E402
 from longterm_memory import LongTermMemory, TYPES  # noqa: E402

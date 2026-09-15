@@ -1,6 +1,6 @@
 """测试 full_demo.xml 工作流：三条意图路径（计算/查询/default）"""
 import sys, re
-sys.path.insert(0, "src")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.stdout.reconfigure(encoding="utf-8")
 from types import SimpleNamespace
 from workflow_xml import xml_to_canvas

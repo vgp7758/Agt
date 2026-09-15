@@ -8,7 +8,7 @@ import tempfile
 import shutil
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from session import Session, Step, ToolCall, _read_events  # noqa: E402
 from session import _repo_sessions_dir  # noqa: E402

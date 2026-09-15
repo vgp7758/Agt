@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import agent as agent_mod  # noqa: E402
 from tools import Toolbox as _Toolbox  # noqa: E402

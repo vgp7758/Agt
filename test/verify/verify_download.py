@@ -8,7 +8,7 @@ import tempfile
 import shutil
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from download import load_manifest, list_assets, download_asset  # noqa: E402
 from commands import build_default_registry  # noqa: E402

@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, "src")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 from agent import Agent

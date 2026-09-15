@@ -8,7 +8,7 @@ import tempfile
 import shutil
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from session import Session, Step, ToolCall  # noqa: E402
 from toollog import detail_limit, make_tool_log_tools  # noqa: E402

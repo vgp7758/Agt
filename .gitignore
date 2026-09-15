@@ -33,8 +33,6 @@ tmp/
 
 # === 开发分析脚本（本地用，不打包发布） ===
 src/cache_sim.py
-/demo_tiered_projection.py
-/verify_prefix_cache.py
 blog/
 resume/
 
@@ -48,3 +46,21 @@ packaging/dist/
 packaging/build/
 packaging/build_log.txt
 packaging/*.zip
+
+# === 113 无网容器离线安装 / 模型下载的本地产物（不入 git） ===
+agt_offline/
+dl_qwen3_113.sh
+
+# === SCNet 调试临时产物（不入 git） ===
+scnet_*.json
+scnet_*.txt
+scnet_*.png
+scnet_*.js
+scnet_*.b64
+scnet_*.csv
+scnet_*.sh
+scnet_inbox/
+scnet_outputs/
+nb_create*.png
+qr_*.txt
+sim_*.csv

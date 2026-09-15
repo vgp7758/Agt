@@ -9,7 +9,7 @@ import tempfile
 import shutil
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from log import configure_logging, get_logger, session_log_path  # noqa: E402
 from session import Session, _repo_hash, REPOS_DIR  # noqa: E402

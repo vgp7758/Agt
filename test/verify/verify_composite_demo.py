@@ -1,6 +1,6 @@
 """验证 composite_demo.xml：循环+批处理+单节点批处理 三合一工作流端到端跑通"""
 import sys, os
-sys.path.insert(0, "src")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 from types import SimpleNamespace

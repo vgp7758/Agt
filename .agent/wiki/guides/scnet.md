@@ -284,6 +284,48 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 
 **后续两个选项（待用户定）**：① 哪天挂 SFTP 后台慢慢传（5.8h 无人值守，不占人）；② 问平台能否给 113 组开通外网——开了就是「免费 LLM 推理节点」，vllm 方案原样复活。
 
+> **后记（2026-09-15，用户问「113 卡不通网下载不了东西？没有 ssh 吗？也装不了 agt？」）**：三个问题当日全部落定——SSH 一直在用；容器内 **agt 用离线 wheel 包装上了**；LLM API 走 **SSH 反向隧道**打通、端到端实测通过（用户问出了当时未列的第三条路）。详见[下节](#113-无外网容器-agt-离线安装--ssh-反向隧道-llm-通路2026-09-15)。
+
+## 113 无外网容器 agt 离线安装 + SSH 反向隧道 LLM 通路（2026-09-15）
+
+用户问「113 卡不通网下载不了东西？没有 ssh 吗？也装不了 agt？」——三个问题一轮全部落定：**SSH 一直在用；容器自己出不了网但有 SFTP；agt 离线包装上了，LLM API 也经反向隧道打通，端到端实测通过。** 上节「网络出口不通」的搁置局面就此翻案——不走「传大模型跑本地推理」，改走「离线 wheel 装 agt + 借本机出口调 API」。
+
+### 通道口径（实测）
+
+| 通道 | 状态 |
+|---|---|
+| 容器 → 外网（curl / pip 直连） | ❌ 全部 000（有卡/无卡都一样，疑 113 免费组无外网出口） |
+| **SSH / SFTP**（`ssh.zzai.scnet.cn:10300`） | ✅ 通，跳板限速 **0.8 MB/s**——16G 模型 5.8h ❌；**50MB 级的包 ~1 分钟 ✓** |
+
+### 离线 wheel 装 agt（绕开容器 pip 出口）
+
+1. **本机交叉打包**：`pip download agt-agent + 10 个直接依赖`，关键参数 `--python-version 311 --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp`（容器 py3.11/linux）——共 **46 wheel / 50.6 MB** 落本机 `agt_offline/`，tar.gz 后 **48.7 MB**
+2. **SFTP 上传**（paramiko）：**51 秒**传完
+3. **容器离线安装**：`pip install --no-index --find-links=pkgs agt-agent` → **0.28.1 装好**——镜像（jupyterlab-qwen3-openwebui）自带 fastapi/pydantic 等大件，实际只补 4 个包
+
+### LLM API：SSH 反向隧道 + 本机 http→https 反代
+
+装 agt 只解决一半——**调 LLM 才是难点（容器没网）**。解法：给 API 走 SSH 反向隧道，借本机出口：
+
+```
+容器 127.0.0.1:19999 ──SSH -R──▶ 本机 llm_relay(19999) ──https──▶ api.deepseek.com
+```
+
+两个新工具（tools/，本机侧常驻）：
+
+| 文件 | 职责 |
+|---|---|
+| `tools/llm_relay.py` | **http→https 反代**（FastAPI）：默认 127.0.0.1:19999 → api.deepseek.com；`python llm_relay.py 19998 https://api-inference.modelscope.cn/v1` 可换端口/上游；剥 host/content-length/connection 头透传 |
+| `tools/ssh_reverse_tunnel.py` | **paramiko 反向隧道**（等效 `ssh -R 19999:127.0.0.1:19999`）：把本机 19999 映射进容器同端口；30s 心跳 + 断线自动重连循环 |
+
+接线：本机 `start_service` 拉两个常驻服务（`llm_relay_ds` + `tunnel_113`）；容器 models.json 的 base_url 指 `http://127.0.0.1:19999`。
+
+### 验证与边界
+
+- **agt-web 容器内就绪**：`model: deepseek-flash | 134 工具 | ready`（与 015 容器管家同档）
+- **端到端实测**：WS 发「只回复五个字」→ **151 秒后收到 deepseek-flash 真实回答**（首轮含完整 SYSTEM 注入，走完整 agt 管线）✅
+- **边界三条**：①16G Qwen3-8B 仍传不动——本地 LLM 推理继续搁置，**API 型 agt 完全可用**；②**隧道依赖本机在线**——本机关机则容器内 agt 调不了 LLM（隧道自动重连，本机重启后重拉服务即可）；③8080 只在容器内——要网页访问需走平台「访问自定义服务」暴露公网 URL（同 015 做法，见[自定义服务全链路](#notebook-免费实例实测自定义服务端口--公网-url-全链路2026-09-14)）
+
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 
 控制台网页操作（创建/启服务）不必依赖 playwright——**后端 HTTP API 可用 AK/SK 换来的区域 token 直接调**（`token` header，与 OpenAPI 共用同一 JWT 体系：payload 含 computeUser/clusterId/user）。

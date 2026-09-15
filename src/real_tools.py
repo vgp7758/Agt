@@ -87,6 +87,90 @@ def _check_version(target: Path, version: str) -> tuple[bool, str, str]:
     return True, current, ""
 
 
+# ===== 行级视图注册表（用户裁定 2026-09-15·replace_lines 错位事故复盘）=====
+# version 门只防"文件被别人改过"，防不了"行号是旧的"——事故形态：edit 在文件顶部插入 4 行，
+# replace_lines 拿旧行号整段替换吞掉方法头；version 从 recent_file 头拿的（新鲜，门放行），
+# 行号却来自更早的 read（过期）。且 llm_client.py 47K 字符 > RF_SEG_MAX_CHARS，recent_file
+# 只投影 outline（函数级行号）——模型有新 version、没有行级新视图。
+# 服务端记账"模型带行号看过当前版本的哪些行"：read_file/grep/find_function 成功时注册
+# [lo,hi]；agent 侧 recent_file 完整投影（_collect_file_snapshots）注册全文件。
+# replace_lines 执行前校验 range 被当前版本视图覆盖，否则拒绝要求重读。
+# 进程态、不持久化：重启清零 → 首次拒绝 → 重读（与 version 门"令牌由模型持有"同哲学）。
+# 进程内跨线程共享（钩子/工作流/子 Agent）：记的是"本进程有模型看过此版本这些行"的事实，
+# 最后仍有 expect_head 锚点兜底内容比对。
+_LINE_VIEWS: dict = {}   # {abs_path: {"version": v, "spans": [(lo,hi), ...]}}
+
+
+def _merge_spans(spans: list) -> list:
+    """区间排序合并（重叠/相邻并入）。"""
+    out = []
+    for lo, hi in sorted(spans):
+        if out and lo <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], hi))
+        else:
+            out.append((lo, hi))
+    return out
+
+
+def _note_view(target: Path, lo: int, hi: int) -> None:
+    """记录模型带行号看到了当前版本的 [lo,hi] 行（version=此刻文件版本）。
+    写操作之后版本变化 → 旧 span 在 _view_covers 比对时自然失配作废，无需显式清除。
+    异常静默：记账失败不挡工具本体。"""
+    try:
+        key = str(target.resolve())
+        ver = _file_version(target)
+        ent = _LINE_VIEWS.get(key)
+        if not ent or ent["version"] != ver:
+            ent = {"version": ver, "spans": []}
+            _LINE_VIEWS[key] = ent
+        ent["spans"].append((max(1, int(lo)), max(1, int(hi))))
+        if len(ent["spans"]) > 64:      # 防膨胀：超限合并一次
+            ent["spans"] = _merge_spans(ent["spans"])
+    except Exception:
+        pass
+
+
+def _view_covers(target: Path, lo: int, hi: int) -> tuple:
+    """[lo,hi] 是否被当前版本的行级视图并集覆盖。返回 (ok, 已看区间列表)。"""
+    try:
+        ent = _LINE_VIEWS.get(str(target.resolve()))
+        if not ent or _file_version(target) != ent["version"]:
+            return False, []
+        spans = _merge_spans(ent["spans"])
+        cur = lo
+        for s_lo, s_hi in spans:
+            if s_hi < cur:
+                continue
+            if s_lo > cur:
+                break
+            cur = s_hi + 1
+            if cur > hi:
+                break
+        return cur > hi, spans
+    except Exception:
+        return False, []
+
+
+def reset_line_views() -> None:
+    """轮边界清零白名单——agent 每轮 start_turn 后调用。白名单只认【本轮】内带行号看过的视图
+    （用户裁定 2026-09-16：跨轮残留会让上轮的读绿本轮的写；进程重启也自然清零，语义同 version 门）。"""
+    _LINE_VIEWS.clear()
+
+
+def _require_view(target: Path, ranges: list, total: int) -> str:
+    """ranges: [(lo,hi),...] 必须都被当前版本行级视图覆盖，否则返回拒绝消息（空串=通过）。
+    total 用于给出建议的 read_file 区间（clamp 到文件尾）。"""
+    for lo, hi in ranges:
+        ok, spans = _view_covers(target, lo, min(hi, total))
+        if not ok:
+            _sp = "、".join(f"L{x}-L{y}" for x, y in spans[:8]) or "（无）"
+            return (f"[缺行级视图] L{lo}-L{min(hi, total)}：当前版本下你未带行号读过该文件的这段内容"
+                    f"（recent_file 对大文件只投 outline 不算；version 新鲜≠行号新鲜）。"
+                    f"已看区间：{_sp}。请先 read_file(start_line={max(1, lo - 10)}, "
+                    f"end_line={min(total, hi + 10)}) 后再编辑。 file_version={_file_version(target)}")
+    return ""
+
+
 def _py_child_cmd(target: str) -> list:
     """run_python 子进程命令。PyInstaller 冻结环境（桌面版）sys.executable=Agt.exe——
     直接 spawn 会重跑 GUI 入口套娃；desktop_entry 以 --pyrun <file> 分流为纯脚本执行
@@ -363,6 +447,8 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
         if line_numbers:
             w = len(str(total))
             body = "\n".join(f"{i+1:>{w}}│ {ln}" for i, ln in enumerate(lines))
+            if target.suffix.lower() not in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
+                _note_view(target, 1, total)   # 行级视图记账：全文带行号已看（文档提取行≠文件行，不记）
             return f"[{path} 共 {total} 行]\n{body}{ver_footer}"
         return text + ver_footer
     start = max(1, start_line or 1) - 1
@@ -374,6 +460,8 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     if line_numbers:
         w = len(str(end))
         body = "\n".join(f"{start+i+1:>{w}}│ {ln}" for i, ln in enumerate(selected))
+        if target.suffix.lower() not in {".docx", ".xlsx", ".xlsm", ".xltx", ".pdf"}:
+            _note_view(target, start + 1, end)   # 行级视图记账：该段带行号已看（文档提取文本的行≠文件行，不记）
     else:
         body = "\n".join(selected)
     return header + "\n" + body + ver_footer
@@ -596,6 +684,10 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
     for rel, (ver, lines, hits) in files.items():
         n = len(lines)
         parts.append(f"── {rel}  (file_version={ver}) ──")
+        # 行级视图记账：命中行 ±context 带行号已看（文档提取行≠文件行，不记）
+        if (WORKSPACE / rel).suffix.lower() not in DOC_EXT:
+            for lineno in hits:
+                _note_view(WORKSPACE / rel, max(1, lineno - c), min(n, lineno + c))
         for lineno in hits:
             if c:
                 lo, hi = max(1, lineno - c), min(n, lineno + c)
@@ -706,6 +798,12 @@ def insert(path: str, entries: list, version: str) -> str:
         return err
     out = target.read_text(encoding="utf-8").splitlines()
     total = len(out)
+    # 行级视图前置校验（用户裁定 2026-09-16）：每个定点插入的锚行必须被本轮看过；追加到末尾（ln 越界）无需。
+    _ins_ranges = [(ln, ln) for ln, _c in norm if 1 <= ln <= total]
+    if _ins_ranges:
+        _err = _require_view(target, _ins_ranges, total)
+        if _err:
+            return _err
     # 先按 line 排序（升序），再降序应用：先插大行号，不影响小行号位置
     norm.sort(key=lambda ec: ec[0], reverse=True)
     appended = 0
@@ -742,6 +840,10 @@ def delete(path: str, start_line: int, end_line: int, version: str) -> str:
     if e < s:
         return f"[参数错误] end_line({end_line}) 不能小于 start_line({start_line})"
     e = min(total, e)   # 超出末尾则截到文件尾（友善：删到末尾）
+    # 行级视图前置校验（用户裁定 2026-09-16）：删的整段必须被本轮带行号看过
+    _err = _require_view(target, [(s, e)], total)
+    if _err:
+        return _err
     del lines[s - 1:e]
     return "✅ " + _apply_lines(target, lines, path,
                                 f"已删除 {path} 第 {s}-{e} 行（共 {e - s + 1} 行）")
@@ -769,6 +871,10 @@ def move(path: str, start_line: int, end_line: int, dst_line: int, version: str)
     block = lines[s - 1:e]
     nblock = len(block)
     d = int(dst_line)
+    # 行级视图前置校验（用户裁定 2026-09-16）：搬的整段 + 目标锚行都要被本轮带行号看过
+    _err = _require_view(target, [(min(s, d), min(total, max(e, d)))], total)
+    if _err:
+        return _err
     # 目标落在源块自身范围内 → 无操作（否则行号语义自相矛盾）
     if s <= d <= e + 1:
         return f"[无操作] dst_line={d} 落在源块 {s}-{e} 内，无需移动。file_version={_file_version(target)}"
@@ -786,10 +892,16 @@ def move(path: str, start_line: int, end_line: int, dst_line: int, version: str)
 
 def replace_lines(path: str, entries: list, version: str) -> str:
     """按行号【一处或多处】整段替换文件内容，单次原子写入——重写整个函数/大段代码用它（比 edit 省 token，不必重吐旧文本）。
-    entries: 替换段数组，每项 {"range": [起, 止], "content": 新文本(可多行)}；range 1-based 含两端；
-             [n,n] 替换第 n 行；content="" 删除该范围（等价 delete）。多处直接传 read_file/grep 查到的原始行号即可——
-             内部按 range 起点降序应用（先改高位不扰动低位行号），各段 range 不许重叠。
-    需传 read_file/grep 返回的 file_version 校验（不匹配=文件已改、拒绝要求重读）；成功返回新 file_version。"""
+    entries: 替换段数组，每项 {"range": [起, 止], "content": 新文本(可多行), "expect_head": 区间首行现有原文}；
+             range 1-based 含两端；[n,n] 替换第 n 行；content="" 删除该范围（等价 delete）。多处直接传 read_file/grep
+             查到的原始行号即可——内部按 range 起点降序应用（先改高位不扰动低位行号），各段 range 不许重叠。
+    expect_head（可选·锚点兜底）：被替换区间第一行的现有内容（不含行号前缀，尾随空白宽容）。range 整段已被
+             本轮行级视图白名单覆盖时可不传；传了则首行对不上=拒绝并回显现状（额外兜"看过但记错行"）。
+    行级视图前置（用户裁定 2026-09-15/16）：range 必须在当前版本下被【本轮带行号看过】——read_file（全/分段）/
+             find_function/grep 命中±context，或 recent_file 完整投影（大文件只投 outline 不算）。没有→拒绝，
+             要求先 read_file 该区间（version 新鲜≠行号新鲜）。白名单每轮清零、写后版本变即失效。
+    需传 read_file/grep 返回的 file_version 校验（不匹配=文件已改、拒绝要求重读）；成功返回新 file_version
+    + 逐段删除摘要（range、行数、删掉的首尾行原文——错位/误吞在结果里当场可见）。"""
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
@@ -798,37 +910,71 @@ def replace_lines(path: str, entries: list, version: str) -> str:
     norm = []
     for i, e in enumerate(entries):
         if not isinstance(e, dict):
-            return f"[参数错误] entries[{i}] 需为对象 {{range, content}}，收到 {type(e).__name__}"
+            return f"[参数错误] entries[{i}] 需为对象 {{range, content, expect_head}}，收到 {type(e).__name__}"
         rng = e.get("range")
         ct = e.get("content")
+        hd = e.get("expect_head")
         if not (isinstance(rng, list) and len(rng) == 2
                 and all(isinstance(x, int) and not isinstance(x, bool) for x in rng)):
             return f"[参数错误] entries[{i}].range 需为两个整数 [起, 止]，收到 {rng!r}"
         if not isinstance(ct, str):
             return f"[参数错误] entries[{i}].content 需为字符串，收到 {type(ct).__name__}"
+        if hd is not None and not isinstance(hd, str):
+            return f"[参数错误] entries[{i}].expect_head 需为字符串（可选；不传则仅靠行级视图白名单校验），收到 {type(hd).__name__}"
         a, b = rng
         if a < 1 or a > b:
             return f"[参数错误] entries[{i}].range={rng} 非法：须 1≤起≤止"
-        norm.append([a, b, ct])
+        norm.append([a, b, ct, hd, i])   # 末位=调用方原始下标（错误提示对号，排序后不漂移）
     ok, _cur, err = _check_version(target, version)
     if not ok:
         return err
     lines = target.read_text(encoding="utf-8").splitlines()
     total = len(lines)
-    for a, _b, _ in norm:
+    for a, _b, _ct, _hd, _i in norm:
         if a > total:
             return f"[行号越界] 文件共 {total} 行，range 起={a}（须 ≤{total}）"
     for seg in norm:                 # 止点截到文件尾（友善，同 delete）
         seg[1] = min(total, seg[1])
     asc = sorted(norm, key=lambda x: x[0])   # 非重叠校验：升序看相邻段是否相交
-    for (a1, b1, _), (a2, _b2, _) in zip(asc, asc[1:]):
+    for (a1, b1, _c1, _h1, _i1), (a2, _b2, _c2, _h2, _i2) in zip(asc, asc[1:]):
         if a2 <= b1:
             return f"[参数错误] range 重叠：[{a1},{b1}] 与起点 {a2} 的段相交，请合并或调整行号"
-    for a, b, ct in sorted(norm, key=lambda x: x[0], reverse=True):   # 降序：先改高位
+    # 行级视图前置校验（用户裁定 2026-09-15/16）：range 必须落在【本轮】当前版本的行级视图内——
+    # read_file/find_function/grep 带行号看过，或 recent_file 完整投影过（outline 不算）。
+    # 防"version 新鲜、行号过期"（事故形态：version 从 recent_file 头拿、行号靠旧记忆推算）。
+    _err = _require_view(target, [(a, b) for a, b, _c, _h, _i in asc], total)
+    if _err:
+        return _err
+    # 锚点校验（可选·用户提案 2026-09-15）：传了 expect_head 则区间首行必须一致（尾随空白宽容，
+    # 行首缩进参与比较）。不符=行号疑似位移，拒绝写盘要求重读——兜"看过但记错行"。
+    for a, _b, _ct, hd, oi in asc:
+        if hd is None or not hd.strip():
+            continue
+        cur = lines[a - 1]
+        if cur.rstrip() != hd.rstrip():
+            _t = lambda s: (s[:160] + "…") if len(s) > 160 else s
+            return (f"[锚点不符] entries[{oi}] 第 {a} 行现状与 expect_head 对不上（行号疑似已位移）：\n"
+                    f"    现状: {_t(cur) if cur.strip() else '(空行)'}\n"
+                    f"    你给: {_t(hd)}\n"
+                    f"请 read_file 重读该区域取新行号后再替换。file_version={_file_version(target)}")
+    removed = {a: lines[a - 1:b] for a, b, _ct, _hd, _i in norm}   # 逐段被顶掉的原文（应用前留存）
+    for a, b, ct, _hd, _i in sorted(norm, key=lambda x: x[0], reverse=True):   # 降序：先改高位
         lines[a - 1:b] = (ct or "").splitlines()
-    new_lines = sum(len((ct or "").splitlines()) for _a, _b, ct in norm)
-    return "✅ " + _apply_lines(target, lines, path,
-                                f"已在 {path} 整段替换 {len(norm)} 处（新内容共 {new_lines} 行）")
+    new_lines = sum(len((ct or "").splitlines()) for _a, _b, ct, _hd, _i in norm)
+    # 逐段删除摘要（用户提案 2026-09-15）：首尾行回显——吞错段/边界差一行在结果里当场可见
+    _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+    _tr = lambda s: (s[:100] + "…") if len(s) > 100 else (s if s.strip() else "(空行)")
+    rpt = []
+    for i, (a, b, ct, _hd, _oi) in enumerate(asc):
+        rm = removed[a]
+        r = (f"{_CIRCLED[i] if i < 10 else i} L{a}-L{b} 删{len(rm)}行→新{len((ct or '').splitlines())}行"
+             f"｜删首: {_tr(rm[0])}")
+        if len(rm) > 1:
+            r += f"｜删尾: {_tr(rm[-1])}"
+        rpt.append(r)
+    head_msg = _apply_lines(target, lines, path,
+                            f"已在 {path} 整段替换 {len(norm)} 处（新内容共 {new_lines} 行）")
+    return "✅ " + head_msg + ("\n" + "\n".join(rpt) if rpt else "")
 
 
 # ===== 函数定位（find_function）=====
@@ -1013,6 +1159,7 @@ def find_function(name: str, path: str, lang: str = None, context: int = 0) -> s
         for s, e in blocks:
             total_matches += 1
             lo, hi = max(0, s - c), min(total - 1, e + c)
+            _note_view(fp, lo + 1, hi + 1)   # 行级视图记账：函数体±context 带行号已看
             parts.append(f"[{rel} L{s + 1}-L{e + 1}/{total}]  file_version={ver}")
             w = len(str(hi + 1))
             for j in range(lo, hi + 1):
@@ -1998,7 +2145,7 @@ REAL_TOOLS = Toolbox(
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(replace_lines, param_descriptions={
-        "entries": "替换段数组，每项 {range:[起,止](1-based含两端), content:新文本(可多行)}；[n,n]替换单行；content=\"\"删该范围；多处传原始行号即可(内部降序应用)",
+        "entries": "替换段数组，每项 {range:[起,止](1-based含两端), content:新文本(可多行), expect_head:区间首行现有原文(锚点,必填,不含行号前缀)}；[n,n]替换单行；content=\"\"删该范围；多处传原始行号即可(内部降序应用)",
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(list_dir),

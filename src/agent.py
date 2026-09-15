@@ -1688,7 +1688,7 @@ class Agent:
         """扫本步所有 tool_calls，收集涉及的文件路径（最多 3 个；同路径后面覆盖前面）。
         对每个文件读当前快照（>4000 行首尾截断），返回 {call_id: {path,version,text}}。
         run_python/run_script 的处理：run_python 有 file= 时捕获该路径（但 code= 内打开文件是黑盒，漏过可接受）"""
-        from real_tools import _resolve, _file_version, WORKSPACE, _number_lines, _md_snapshot
+        from real_tools import _resolve, _file_version, WORKSPACE, _number_lines, _md_snapshot, _note_view
         seen = {}      # resolved_key -> call_id
         order = []     # ordered resolved_key list (most recent first)
         for tc in reversed(step.tool_calls):
@@ -1724,6 +1724,17 @@ class Agent:
             text = _md_snapshot(raw) if real.suffix.lower() in {".md", ".markdown"} else raw
             rel = real.relative_to(WORKSPACE).as_posix()
             snapshots[cid] = {"path": rel, "version": ver, "text": text}
+            # recent_file 完整投影 = 模型带行号看过全文 → 行级视图记账（replace_lines 前置校验用）。
+            # 仅 ≤RF_SEG_MAX_CHARS 的纯文本：超上限段式口径只投 outline（函数级行号，不算行级视图
+            # ——2026-09-15 事故：llm_client.py 47K 只见 outline，version 新鲜、行号过期）；
+            # md 是摘要态也不算。施工期内嵌形态上限更宽（100K），这里按保守口径记 15K 内——
+            # 更大的宁可让模型 read_file 一次。
+            try:
+                from session import RF_SEG_MAX_CHARS as _RF_CAP
+                if real.suffix.lower() not in {".md", ".markdown"} and len(raw) <= _RF_CAP:
+                    _note_view(real, 1, len(raw.splitlines()))
+            except Exception:
+                pass
         return snapshots
 
     def resume_interrupted(self) -> str:
@@ -1800,6 +1811,10 @@ class Agent:
                 _resume_current = False
             else:
                 self.session.start_turn(msg, imgs)
+                # 行级视图白名单清零（用户裁定 2026-09-16）：replace_lines/insert/delete/move 的前置
+                # 校验只认【本轮】内带行号看过的区间；跨轮残留会让上轮的读绿本轮的写。
+                from real_tools import reset_line_views
+                reset_line_views()
             # 吸收积压的非唤醒通知（wake=False 登记，如 service_exit）：以合成 Step 并入【本轮】
             # ——通知不独立成轮（防套娃），自然轮的 user_message 语义保持纯净（before_turn 检索不跑偏）
             _nts = self._drain_notices()

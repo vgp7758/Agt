@@ -22,7 +22,7 @@ TOOL_BRIEFS = {
     "insert": "按行号在指定位置插入一段或多段文本，一次原子写入",
     "delete": "按行号删掉一段连续的行，外科手术式删行",
     "move": "把一段代码整体搬到新位置，重构挪块专用",
-    "replace_lines": "按行号整段替换，重写整个函数/大段代码比 edit 省 token",
+    "replace_lines": "按行号整段替换，重写整个函数/大段代码比 edit 省 token；range 须先带行号看过（read_file/find_function，recent_file 的 outline 不算），每段必带 expect_head 锚点（区间首行现有原文，防行号错位）",
     "diff_files": "两个文件逐行对比出差异，审计改动/版本对比用",
     "git_commit": "一键 add+commit+push，标准提交通道",
     "list_dir": "看目录下有哪些文件和子目录",

@@ -219,9 +219,72 @@ AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：
 
 4 个 Failed 实例留着（不占资源），方案定后继续。
 
+> **后记（2026-09-16）**：实际走的是第四条路——**小体积 ComfyUI 镜像（liveportrait 8.8GB）同步到华中A + 权重走模型管理克隆**，兼顾「镜像轻」与「113 免费卡」，另备 Plan B（qwen3 镜像自建 ComfyUI）。见[113 ComfyUI 落地推进](#113-comfyui-落地推进liveportrait-镜像同步--就绪巡检-v22026-09-16)。
+
 ### 后续待验
 
 下次起 113 拟用 `jupyterlab-qwen3-api`（纯 API 版，无 webui）+ 模型市场克隆 Qwen3-8B 走完整闭环——「113 当免费 LLM 推理节点」的正解形态。
+
+## 113 ComfyUI 落地推进：liveportrait 镜像同步 + 就绪巡检 v2（2026-09-16）
+
+「[113 拉不动 qwen-image-edit](#113-拉不动-qwen-image-edit可选可创建本区有副本才行2026-09-15)」僵局后的新路线：**不拉 54GB 官方编辑镜像，改同步 8.8GB 的 `jupyterlab-comfyui-liveportrait`**（DCU · pytorch2.1.0-dtk24.04.1-py3.10，自带 ComfyUI 运行时）到华中A 113，权重不塞镜像、走**模型管理**克隆三件（Qwen-Image-Edit / Qwen3-8B / IndexTTS-2.5）——镜像只管运行时、模型走平台内网通道（呼应[关键认知：模型获取不走容器网络](#关键认知模型获取不走容器网络)）。就绪后经 SSH 把模型落点 `/public/home/act3fh878f/SothisAI/model/ExternalSource/` 用 extra_model_paths 接进 ComfyUI。
+
+## 就绪巡检 v2 机制（scnet_ready_watch2）
+
+playwright 登录态定时巡检，**30 分钟一轮**（降频——避免高频刷 Failed 实例）；每轮**最多试建一次**无卡实例：
+
+| 步骤 | 动作 |
+|---|---|
+| ① 查状态 | 「我的镜像」页（`console/index.html#/image-management/list`）看 liveportrait 是否就绪；`GET /acx/aimgt/model?page=1&size=20`（`version:2.7.2` header，records 在 `d.data.records`）查三模型 status |
+| ② 试建一次 | 113 无卡创建（body 模板见下）；**Failed「镜像拉取失败」= 同步未完成**，本轮即止、等下轮 |
+| ③ Running 后 | SSH（ssh.zzai.scnet.cn:10300）查 ComfyUI 安装位置/版本、extra_model_paths 接模型落点、`source /opt/dtk*/env.sh` 后 `import torch` 验卡识别 |
+| ④ 收官 | 三模型全部下载完 + 实例环境配好 → **取消巡检**并汇报（ComfyUI 访问方式 + 模型路径） |
+| ⑤ 异常出口 | 模型下载卡住/失败 → 汇报并建议换源（如 HF 镜像） |
+
+**创建 body 模板（113 无卡，实测 code:0）**：`resourceGroupId:"113"` / `goodsId:"1005861210643496960"` / `imagePath:"/aihub/dcu/icszy_zs_ai/jupyterlab-comfyui-liveportrait:pytorch2.1.0-dtk24.04.1-py3.10-model"` / `imageSize:"8845379462"` / `clusterId:20091` / `startType:"no-card"` / `acceleratorName:"hx1hgbwnormal9306af58"` / `cpuNumber:15` / `notebookType:"jupyter"`。
+
+- **新证**：创建接口对「我的镜像」路径同样返回 `code:0 success`（taskId/orderId/notebookId 齐发）——[此前破解的 body 模板](#创建-api-body-模板破解写操作缺口再进一步)对自定义镜像路径同样成立，失败定性**纯是同步未完成**而非参数问题。
+
+### 第 1 轮实测（2026-09-16 01:08）：双未就绪
+
+| 项 | 状态 |
+|---|---|
+| liveportrait 镜像同步 | ⏳ 已入「我的镜像」（00:17:18 创建，与 minimaxh3-director-v2 并列共 2 条）但试建仍「镜像拉取失败」——同步 50 分钟未完（对照 78.93GB minimaxh3 当年按小时计，8.8GB 理应更快） |
+| 三模型 | ⏳ 全部 Downloading |
+
+### Plan B 止损：qwen3 镜像自建 ComfyUI 撞 DCU 兼容墙（2026-09-16）
+
+同步要等多久不可控（minimaxh3 那次按小时计），备用线曾并行推进——**终局：撞 DCU 兼容墙，止损弃线（2026-09-16）**。
+
+### 曾全通的四步
+
+- **依据**：华中A 可建的 `jupyterlab-qwen3-openwebui` 镜像底座自带 DCU 版 torch + DTK（与 liveportrait 镜像同源）；ComfyUI 本体是纯 Python 几十 MB，缺的只是 Python 依赖
+- **动作**：本机后台分批 `pip download` 离线依赖包（交叉打包参数同[离线 wheel 装 agt](#离线-wheel-装-agt绕开容器-pip-出口)：`--python-version 311 --platform manylinux2014_x86_64 --only-binary=:all:`，**排除 torch 系**——镜像自带 DCU 适配版），run_python 超 180s 自动转后台任务；ComfyUI 官方 master zip 13MB（ghproxy 加速）部署
+- **四步全通**：①依赖包扩到 **73 wheel / 189.7MB**（比首版 27 包大幅扩容——补齐 comfy-kitchen / comfy-aimdo / comfyui-embedded-docs 等 ComfyUI 新版拆分包）②ComfyUI 本体部署 ✅ ③传 113 后 `pip install --no-index --find-links` 依赖全装上 ✅ ④`source /opt/dtk*/env.sh` 后 torch 正常导入 ✅
+
+### 撞墙：comfy_kitchen kernel 注册失败（DCU torch ABI 不兼容）
+
+ComfyUI 初始化卡死在 `comfy_kitchen` 的 kernel 注册：
+
+```
+@torch.library.custom_op("comfy_kitchen::fp16_conv3d", …)
+→ schema 校验失败：DCU 版 torch 的类型系统与官方 torch ABI 不一致
+```
+
+monkeypatch 兜底（custom_op 注册失败转纯 python 回退）**没兜住**——错误来自更深的注册路径，5 分钟观察无推进。
+
+**定性**：这正解释了**平台为什么要专门维护 `-dtk` 适配版镜像**——官方 ComfyUI 在 DCU 上就是跑不起来，不是离线包能绕过的兼容层。
+
+### 止损裁定（2026-09-16）
+
+- **Plan B 弃线**；liveportrait 镜像同步是唯一正路——平台已解决 DCU 兼容的 ComfyUI，这正是它的价值
+- **离线包余热**：73 wheel 留 113 `/root/comfy_offline/pkgs/`——transformers / tokenizers / safetensors 等对后续（镜像实例内补包、diffusers 直跑路线）都是现成弹药，不必重传
+- **主线不变**：[就绪巡检 v2（scnet_ready_watch2）](#就绪巡检-v2-机制scnet_ready_watch2)继续 30 分钟盯 liveportrait 同步 + 三模型下载，就绪后建实例 → ExternalSource 接模型路径 → 汇报使用方式
+
+### 相关页面
+
+- [SCNet 异步生产流水线](../features/scnet-async-pipeline.md)：镜像就绪后的批量生产用法（scnet_comfy_client）
+- [113 无外网容器 agt 离线安装](#113-无外网容器-agt-离线安装--ssh-反向隧道-llm-通路2026-09-15)：离线 wheel + SFTP 通道的先例
 
 ## Notebook 免费实例实测：自定义服务端口 → 公网 URL 全链路（2026-09-14）
 

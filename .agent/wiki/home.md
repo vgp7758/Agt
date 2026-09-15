@@ -857,3 +857,16 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - 下一步方案 A（待用户确认）：换昆山主区（镜像全）同构验证全链路
 - 详见 [SCNet · 113 拉不动 qwen-image-edit](guides/scnet.md#113-拉不动-qwen-image-edit可选可创建本区有副本才行2026-09-15)
 
+## 快速事实增补（2026-09-16 · 113 ComfyUI 落地：liveportrait 同步巡检 v2 + Plan B）
+
+- **就绪巡检 v2**（scnet_ready_watch2，30 分钟/轮 · playwright 登录态）：盯 **jupyterlab-comfyui-liveportrait**（8.8GB，DCU/dtk24.04.1）跨区同步至华中A 113 + 三模型（Qwen-Image-Edit / Qwen3-8B / IndexTTS-2.5）模型管理克隆——**换小镜像破 54GB 拉不动僵局**（镜像管运行时、权重走平台内网，模型落点 `SothisAI/model/ExternalSource/`）；每轮最多试建一次无卡实例，Failed「镜像拉取失败」=同步未完
+- **第 1 轮（01:08）双未就绪**：镜像 00:17 已入「我的镜像」但试建仍拉取失败（同步 50 分钟未完）；三模型全 Downloading。创建 API 对「我的镜像」路径同样 `code:0`——参数层无坑，失败纯因同步未完成
+- **Plan B 并行**：不等镜像——qwen3-openwebui 镜像自带 DCU torch 底座，本机后台打 ComfyUI 27 包离线 wheel（排除 torch 系）落 `comfy_offline/`；双线谁先到走谁
+- 详见 [SCNet · 113 ComfyUI 落地推进](guides/scnet.md#113-comfyui-落地推进liveportrait-镜像同步--就绪巡检-v22026-09-16)
+
+## 快速事实增补（2026-09-16 · 二 · Plan B 止损——DCU 兼容墙）
+
+- **Plan B（qwen3 镜像自建 ComfyUI）止损弃线**：四步全通（离线依赖包扩到 **73 wheel / 189.7MB**、ComfyUI master 本体 13MB 部署、`pip install --no-index` 依赖全装、`source /opt/dtk*/env.sh` 后 torch 导入正常）后**初始化卡死在 `comfy_kitchen` kernel 注册**——`@torch.library.custom_op("comfy_kitchen::fp16_conv3d")` schema 校验失败，DCU 版 torch 类型系统与官方 torch ABI 不一致；monkeypatch 转纯 python 回退兜不住（错误在更深注册路径）。**定性：官方 ComfyUI 在 DCU 上就是跑不起来**——平台专门维护 `-dtk` 适配版镜像正是为此
+- **余热**：73 wheel 留 113 `/root/comfy_offline/pkgs/`（transformers/tokenizers/safetensors 等对镜像实例补包、diffusers 路线可复用）；主线不变——scnet_ready_watch2 继续 30 分钟盯 liveportrait 同步 + 三模型下载，就绪后建实例接 ExternalSource
+- 详见 [SCNet · Plan B 止损](guides/scnet.md#plan-b-止损qwen3-镜像自建-comfyui-撞-dcu-兼容墙2026-09-16)
+

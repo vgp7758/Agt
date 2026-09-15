@@ -252,6 +252,32 @@ playwright 登录态定时巡检，**30 分钟一轮**（降频——避免高�
 | liveportrait 镜像同步 | ⏳ 已入「我的镜像」（00:17:18 创建，与 minimaxh3-director-v2 并列共 2 条）但试建仍「镜像拉取失败」——同步 50 分钟未完（对照 78.93GB minimaxh3 当年按小时计，8.8GB 理应更快） |
 | 三模型 | ⏳ 全部 Downloading |
 
+### 第 3 轮实测（2026-09-16 02:08）：同步 2h 未完成超预期 + Plan C（diffusers 直推）备料
+
+| 项 | 状态（02:08） |
+|---|---|
+| liveportrait 镜像同步 | ⚠️ **~1 小时 50 分**仍「镜像拉取失败」——且「我的镜像」页**无进度显示**，无法确认是否真的在同步（疑点：跨区同步队列慢，或「每次创建才触发拉取、每次都从头失败」） |
+| 三模型 | ⏳ 全部 `Downloading`（~2 小时 10 分） |
+
+**超预期判定**：对照 819 轮 minimaxh3-director-v2 **78.93GB 同步约 40 分钟完成**——8.8GB 两小时未完成明显反常。但平台侧任务无失败标记（与「113 拉不动 image-edit」当时直接 Failed 不同），定性为「慢而未死」：**继续给时间，不再押注**。
+
+### Plan C 备料：diffusers 直推（本轮落地）
+
+ComfyUI 路线两头卡（镜像同步慢 + [comfy_kitchen DCU ABI 墙](#撞墙comfy_kitchen-kernel-注册失败dcu-torch-abi-不兼容)），**diffusers 路线恰好同时绕开两者**：
+
+- ✅ 不用 comfy_kitchen——那是 ComfyUI 专属 kernel 层，diffusers 无此依赖
+- ✅ 不用等 liveportrait 镜像——`jupyterlab-qwen3-openwebui` 实例已验证可建且正在跑（无卡 agt 台）
+- ✅ 依赖已齐：[Plan B 的 73-wheel 离线包](#止损裁定2026-09-16)里 transformers / tokenizers / safetensors / huggingface-hub 全有
+- ✅ 本轮补齐最后两件：**diffusers 0.40.0 + accelerate 1.15.0**（`pip download` 交叉打包参数同前：`--python-version 311 --platform manylinux2014_x86_64 --only-binary=:all: --no-deps`，落本机 `comfy_offline/`，与 73-wheel 包同目录体系，5MB 级）
+
+### 决策树（下一轮巡检执行）
+
+```
+镜像就绪      → 走平台 ComfyUI（最优，DCU 兼容是平台镜像的核心价值）
+镜像仍未就绪  → Plan C：传 diffusers wheels → 容器 pip 离线装 → 写推理脚本（模型到位直接跑）
+模型下载失败  → 换源（HF 镜像）重发下载任务
+```
+
 ### Plan B 止损：qwen3 镜像自建 ComfyUI 撞 DCU 兼容墙（2026-09-16）
 
 同步要等多久不可控（minimaxh3 那次按小时计），备用线曾并行推进——**终局：撞 DCU 兼容墙，止损弃线（2026-09-16）**。

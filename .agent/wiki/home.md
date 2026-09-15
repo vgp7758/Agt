@@ -870,3 +870,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **余热**：73 wheel 留 113 `/root/comfy_offline/pkgs/`（transformers/tokenizers/safetensors 等对镜像实例补包、diffusers 路线可复用）；主线不变——scnet_ready_watch2 继续 30 分钟盯 liveportrait 同步 + 三模型下载，就绪后建实例接 ExternalSource
 - 详见 [SCNet · Plan B 止损](guides/scnet.md#plan-b-止损qwen3-镜像自建-comfyui-撞-dcu-兼容墙2026-09-16)
 
+## 快速事实增补（2026-09-16 · 三 · 巡检第 3 轮——镜像同步 2h 超预期 + Plan C diffusers 直推备料）
+
+- **113 巡检第 3 轮：镜像同步 2h 超预期 + Plan C（diffusers 直推）备料（2026-09-16 02:08）**：liveportrait 镜像同步 ~1h50m 仍「镜像拉取失败」且平台侧无进度显示（对照 minimaxh3 78.93GB 约 40 分钟完成——8.8GB 两小时明显反常；但无失败标记，定性「慢而未死」，继续给时间不押注）；三模型仍 Downloading。**Plan C 备好**：diffusers 0.40.0 + accelerate 1.15.0 离线 wheel 已下（manylinux2014_x86_64/py311/no-deps，落 `comfy_offline/`，与 Plan B 的 73-wheel 包同体系）——diffusers 直推同时绕开两头卡：不用 comfy_kitchen（Plan B 撞的 DCU ABI 墙）、不用等镜像（qwen3-openwebui 实例已验证可建）。决策树：镜像就绪→平台 ComfyUI；仍未就绪→diffusers 三步走；模型失败→换 HF 源——见 [scnet · 就绪巡检 v2](guides/scnet.md#就绪巡检-v2-机制scnet_ready_watch2)
+

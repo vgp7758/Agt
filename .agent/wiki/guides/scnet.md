@@ -316,15 +316,32 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 | 文件 | 职责 |
 |---|---|
 | `tools/llm_relay.py` | **http→https 反代**（FastAPI）：默认 127.0.0.1:19999 → api.deepseek.com；`python llm_relay.py 19998 https://api-inference.modelscope.cn/v1` 可换端口/上游；剥 host/content-length/connection 头透传 |
-| `tools/ssh_reverse_tunnel.py` | **paramiko 反向隧道**（等效 `ssh -R 19999:127.0.0.1:19999`）：把本机 19999 映射进容器同端口；30s 心跳 + 断线自动重连循环 |
+| `tools/ssh_reverse_tunnel.py` | **paramiko 双向隧道**：反向 `-R 19999:127.0.0.1:19999`（容器内 LLM API 借本机出口）+ 正向 `-L 18080:127.0.0.1:8080`（本机进容器 agt-web）；30s 心跳 + 断线自动重连循环 |
 
 接线：本机 `start_service` 拉两个常驻服务（`llm_relay_ds` + `tunnel_113`）；容器 models.json 的 base_url 指 `http://127.0.0.1:19999`。
+
+### 正向隧道：本机 remote_connect 无需公网（2026-09-15 二轮）
+
+用户问「需要暴露成公网 URL 才能本机 remote_connect 对吧」——**不一定：只要网络可达就行，公网只是其中一种**。正向 `-L` 已在同一条 SSH 连接上打通本机直连：
+
+```
+本机 remote_connect("agt113", http://127.0.0.1:18080)
+  → SSH -L（正向隧道，与反向同一条 SSH 连接，断线 15s 自动重连）
+    → 容器 agt-web :8080  ✅ 134 工具 · model=deepseek · session=113容器agent已打通
+```
+
+**跨实例工具路由真实执行验证**：`run_shell(hostname + curl self)` 带 `remote_instance_id=agt113` → `[remote:agt113] crdnotebook-2099660659602870274-act3fh878f-38125 · self_web:200 · remote tool exec OK`——工具直执行跨隧道返回正常。
+
+**何时才真的需要公网 URL**：① 手机/别的电脑要打开 113 的 agt 页面；② 015 云端管家要连 113（它在云端够不到本机 127.0.0.1，得 113 公网暴露或在 015 侧做隧道出口）。
+
+⚠️ **公网暴露前要想清**：agt 服务无鉴权（`/api/tool/exec` 是任意代码执行级别的端点），SCNet 的 `c-{id}.zzai.scnet.cn` URL 带随机性但本质公开——**能走隧道就别暴露公网**；真要暴露建议加反代层 token 校验。
 
 ### 验证与边界
 
 - **agt-web 容器内就绪**：`model: deepseek-flash | 134 工具 | ready`（与 015 容器管家同档）
 - **端到端实测**：WS 发「只回复五个字」→ **151 秒后收到 deepseek-flash 真实回答**（首轮含完整 SYSTEM 注入，走完整 agt 管线）✅
-- **边界三条**：①16G Qwen3-8B 仍传不动——本地 LLM 推理继续搁置，**API 型 agt 完全可用**；②**隧道依赖本机在线**——本机关机则容器内 agt 调不了 LLM（隧道自动重连，本机重启后重拉服务即可）；③8080 只在容器内——要网页访问需走平台「访问自定义服务」暴露公网 URL（同 015 做法，见[自定义服务全链路](#notebook-免费实例实测自定义服务端口--公网-url-全链路2026-09-14)）
+- **本机 remote_connect 实测（2026-09-15 二轮）**：`remote_connect("agt113", http://127.0.0.1:18080)` → 134 工具入列、`[remote:agt113]` 工具直执行正常（见上节正向隧道）
+- **边界三条**：①16G Qwen3-8B 仍传不动——本地 LLM 推理继续搁置，**API 型 agt 完全可用**；②**隧道依赖本机在线**——本机关机则容器内 agt 调不了 LLM、本机也连不上 113（隧道自动重连，本机重启后重拉服务即可）；③8080 本机经正向隧道 `127.0.0.1:18080` 可达（无需公网）；**手机/其他电脑/015 云端管家**要访问仍需平台「访问自定义服务」暴露公网 URL（同 015 做法，见[自定义服务全链路](#notebook-免费实例实测自定义服务端口--公网-url-全链路2026-09-14)）
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 

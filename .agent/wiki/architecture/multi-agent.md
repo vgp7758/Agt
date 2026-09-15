@@ -144,7 +144,7 @@ create_agent(name, description, system, tools="", model="",
 
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 
-声明里的 `fallback` 键决定该 Agent 的 LLM 回退链，**覆盖全局 settings.fallback_chain**。三形态（`_parse_agent_fallback`，src/multiagent.py）：
+声明里的 `fallback` 键决定该 Agent 的 LLM 回退链。三形态（`_parse_agent_fallback`，src/multiagent.py）：
 
 ```yaml
 fallback: "glm, deepseek-chat"            # ① 逗号串
@@ -152,10 +152,36 @@ fallback: [glm, deepseek-chat]            # ② list
 fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 ```
 
-- **agent_prompt 新建/复活/reuse 三条路径都消费**——改链后 reuse 实例下一任务即生效
-- 未声明 = 继承全局 `fallback_chain / fallback_policy`（见 [配置体系](../guides/config-and-models.md)）
+> **作用域（2026-09-15 用户裁定后）**：声明链现为 **react 主调用专用**（`Agent._react_chain` → `chat(_chain=…)`）；非 react 调用（钩子/工作流/补全/utility）走实例链（全局 settings）。**未声明 = react 无回退**（不再继承全局）。详见下节 [回退链职责分离](#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
+
+- **agent_prompt 新建/复活/reuse 三条路径都消费**——改链后 reuse 实例下一任务即生效。**复活路径补注（2026-09-15）**：`_revive_subagent` 此前只设 `current_turn_only`，漏了 `set_fallback` / `_declared_fallback`（复活实例带着构造时从 settings 继承的链跑，「重启后子 Agent 回退链不对」的根因）——现读声明后**双补**（实例链 + react 链），见 src/multiagent.py L715-720
 - 2026-08（commit a667da4）起 [/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（此前只能手写 yml）：模型 chips 点选（顺序=链序）+ 策略下拉；**留空 = 继承全局**（保存不写键）；「显式关回退」（区别于继承）手写 yml 空串；`_main_` 主 Agent 同样支持声明级回退链（main.yml，留空=删键）
 - **捕获面（2026-09-08，commit d3164be）**：401/403/404（鉴权/配额/模型不存在）也纳入回退捕获——此前 flatkey 余额 403 直接炸轮（用户调试根因）；现在记录冷却（model+token 签名）后切链上下一 provider，该 provider 不可用不代表链上其它也不可用，会话不断。每次调用在开头重置 `llm.last_failures` 逐跳收集失败（含 `_classify_err` 归类 quota/auth/rate_limit/network + 充值 URL）——链全断时 run() 异常中断 except 从它提取充值入口（interrupted 事件带 `recharge` 数组 → WebUI/CLI 一键打开，见 [配置体系 · 一键充值](../guides/config-and-models.md#回退链中断一键充值preset-recharge_url--401403404-纳入回退2026-09-08用户提案)）
+
+## 回退链职责分离：react 只认 .yml 声明，设置页链只管非 react（2026-09-15，用户裁定）
+
+**用户裁定（2026-09-15）**：「设置页的那个回退链针对非 agent 调用吧，工作流、补全以及使用 utility_model 的那些场景，agent 自己的回退链就认 .yml 好了」——把此前「声明覆盖全局」的单链模型拆成**两条互不干扰的链**：
+
+| 调用类型 | 回退链来源 | 谁配 | 未声明时 |
+|---|---|---|---|
+| **react 主调用**（`scene=react·{agent_id}`） | **只认 agent .yml 的 `fallback:` 声明** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4) / main.yml | **无回退**（不继承全局 settings 链） |
+| **非 react 调用**（工作流 LLM/llm_call 节点、补全 `reasoning_completer`、utility_model 短调用、recap 等） | **实例链**（构造时从全局 `settings.json` 继承） | 设置页 / `/config fallback_chain` | 用 settings 全局链 |
+
+**动机**：此前「声明覆盖全局」是实例级单链——react 与钩子/工作流/utility 共用一条，全局链在 Agent 场景下被声明链顶掉或反过来被 settings 刷回，语义混淆；且**切模型/WebUI 改配置会重读 settings 覆盖实例链**（用户实测「给 agent 单独配的 provider 回退链看起来没生效，实际走的依然是 settings.json 里的默认回退链」）。分离后 react 链与实例状态解耦，跨轮/跨模型切换都稳定。
+
+**实现三层（不写实例状态）**：
+
+| 文件 | 改动 |
+|---|---|
+| `src/llm_client.py` | 新增 `_CHAIN_OVERRIDE` contextvar（线程隔离）；`chat(..., _chain=None)` 新参数——`list`（含空 list）= 本次调用显式指定链，`None`（默认）= 不覆盖走实例链。`_chat_with_fallback` 入口按 `_CHAIN_OVERRIDE` 决定本次链（`_user_model` 恒在首 + 去重），**不写 `self.fallback_chain`** |
+| `src/agent.py` | 新增 `_declared_fallback` 实例属性（`__init__` 置 `None`）+ `_react_chain()`——声明了返回声明的链，未声明返回 `None`；react 主调用改为 `_rc = self._react_chain() or []; self.llm.chat(msgs, ..., _chain=_rc)`；`_reload_main_dsl` 重读声明时同步 `set_fallback`（实例链）+ `_declared_fallback`（react 链） |
+| `src/commands.py` | `apply_config` 的 `fallback_chain` 分支注释与回执文案改为「**非 react 调用回退链**」（`✅ 非 react 调用回退链 = …` + 「适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明（主 Agent 未声明=无回退）」） |
+
+**`_chain` 语义细节**：`_chain=[]`（空 list）与 `_chain=None` 不同——前者是**显式无回退**（react 未声明时走这条），后者是**不覆盖**（钩子/工作流/utility 走实例链）。contextvar 在 `chat()` 的 `finally` 中 reset，钩子/工作流/子 Agent 各自线程取值互不干扰。
+
+**副作用（须知）**：主 Agent 的 `main.yml` 若未声明 `fallback`，其 **react 调用丧失回退能力**（硬刚当前 provider）；要恢复需在 main.yml 里显式加 `fallback: [glm, ms-deepseek, proxy]` 之类。
+
+**实测（六场景全过）**：主 Agent 未声明时 `_declared_fallback=None` → `_react_chain()=None`；① react（`_chain=[]`）→ `['glm-official-flash']` 无回退 ✓；② react + 声明 `['qwen','kimi']` → `['glm-official-flash','qwen','kimi']` ✓；③ 非 react（`_chain=None`）→ settings 链 ✓；④ 切模型到 deepseek；⑤ react（未声明）→ `['deepseek']` 仍无回退（跨轮稳定）✓；⑥ 非 react → `['deepseek','proxy']` ✓。
 
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 

@@ -371,13 +371,20 @@ def _openai_client(self) -> OpenAI:
 
 | 键 | 说明 |
 |----|------|
-| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建） |
+| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退），见下方分层说明 |
 | fallback_policy | reset=每轮重试 _user_model（默认）；sticky=回退后不回 |
 | utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑） |
 | detail_base / detail_step | 分档基准字数(1500)/步距衰减步长(15)——**detail_step 可被 models.json 条目级 `detail_step` 覆盖**（2026-08-30 起，clamp 0~200，0=不衰减；DeepSeek 类价差悬殊配 0），见 [per-provider 参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案) |
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试） |
 
-> **回退链分层（2026-08，commit a667da4 起）**：settings 是**全局默认**；Agent 声明级 `fallback` 键（逗号串 / list / {chain,policy} 三形态）覆盖全局——[/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=继承全局），`_main_` 主 Agent 同样支持；引擎侧解析见 [multi-agent · 声明级回退链](../architecture/multi-agent.md)。
+> **回退链分层（2026-09-15 用户裁定后，两链分离）**：
+>
+> | 调用 | 链来源 | 谁配 |
+> |---|---|---|
+> | react 主调用（`scene=react·*`） | agent .yml 的 `fallback:` 声明（三形态：逗号串 / list / `{chain,policy}`）；**未声明 = 无回退** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=删键）/ main.yml |
+> | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承） | 设置页 / `/config fallback_chain` |
+>
+> 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
 ## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
 

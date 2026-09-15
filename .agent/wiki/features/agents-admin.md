@@ -281,6 +281,12 @@ load_agents_index 返回的 path 是 str（".agent/agents/coder.yml"）
 
 引擎侧解析与消费详见 [multi-agent · 声明级回退链](../architecture/multi-agent.md)；全局链配置见 [配置体系](config-and-models.md)。
 
+### 作用域变更：表单链 = react 专用 + 复活路径双补（2026-09-15）
+
+**作用域变更（2026-09-15 用户裁定）**：管理页的「回退链」表单编辑的是 **react 主调用专用链**——保存后只影响该 Agent 的 react 调用（`Agent._react_chain` → `chat(_chain=…)`）；**留空保存 = 删 fallback 键 = react 无回退**（此前语义是「继承全局 settings 链」，现已不适用）。非 react 调用（工作流 LLM/llm_call、补全、utility 短调用）走设置页的实例链，与此表单互不影响。详见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
+
+**复活路径补注（2026-09-15）**：`_revive_subagent` 此前只设 `current_turn_only`，漏了 `set_fallback` / `_declared_fallback`——复活实例带着构造时从 settings 继承的链跑（「重启后子 Agent 回退链不对」的根因）。现读声明后**双补**（实例链 + react 链），见 src/multiagent.py L715-720。
+
 ### 钩子行布局：async/× 不再被挤下一行
 
 用户观察："async 复选框和 ✕ 可以和位置选择/类型选择两个下拉框放在一排"——本该如此，根因是全局 `input[type=text]{width:100%}` 把值输入框撑满整行。一行 CSS 修复（agents.html）：

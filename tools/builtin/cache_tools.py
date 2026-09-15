@@ -145,7 +145,10 @@ def _identify_zone(idx: int, msg: dict, msgs: list) -> tuple:
             if msgs[i].get("role") == "assistant" and msgs[i].get("tool_calls"):
                 step_est += 1
         if role == "tool":
-            return f"当前轮步骤·第 {step_est - 1} 步的 tool 结果" if step_est > 0 else "当前轮步骤·tool"
+            # ⚠️ 元组修复（用户实测 t877_s51 抓到）：此前漏了 ", ""——单串被解包成字符流，
+            # zone, note = _identify_zone(...) 报 too many values to unpack (expected 2)
+            return (f"当前轮步骤·第 {step_est - 1} 步的 tool 结果" if step_est > 0
+                    else "当前轮步骤·tool", "")
         if role == "assistant" and msg.get("tool_calls"):
             return f"当前轮步骤·第 {step_est} 步的 assistant(tool_calls)", ""
         if role == "assistant":

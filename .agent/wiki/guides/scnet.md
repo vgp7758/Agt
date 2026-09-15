@@ -343,6 +343,29 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 - **本机 remote_connect 实测（2026-09-15 二轮）**：`remote_connect("agt113", http://127.0.0.1:18080)` → 134 工具入列、`[remote:agt113]` 工具直执行正常（见上节正向隧道）
 - **边界三条**：①16G Qwen3-8B 仍传不动——本地 LLM 推理继续搁置，**API 型 agt 完全可用**；②**隧道依赖本机在线**——本机关机则容器内 agt 调不了 LLM、本机也连不上 113（隧道自动重连，本机重启后重拉服务即可）；③8080 本机经正向隧道 `127.0.0.1:18080` 可达（无需公网）；**手机/其他电脑/015 云端管家**要访问仍需平台「访问自定义服务」暴露公网 URL（同 015 做法，见[自定义服务全链路](#notebook-免费实例实测自定义服务端口--公网-url-全链路2026-09-14)）
 
+### 产物清理与 gitignore 收尾（2026-09-15 二轮）
+
+离线安装跑通后清理本机临时产物，并把离线包纳入 `.gitignore`（用户问「agt_offline 文件还有用不？还是说需要 gitignore」）。
+
+**删除三件（纯临时/中间产物，3 删）**：
+
+| 文件 | 原因 |
+|---|---|
+| `_sftp_speed_test.bin`（105MB） | SFTP 0.8 MB/s 测速残留，纯垃圾 |
+| `agt_offline.tar.gz`（49MB） | 传输中间包，源目录在 `agt_offline/` |
+| `qwen3_8b_files.json` | 一次性清单，直链已写死进 `dl_qwen3_113.sh` |
+
+**保留两件 + gitignore（2 留，下次 113 换镜像/重建要复用）**：
+
+| 文件 | 复用价值 |
+|---|---|
+| `agt_offline/`（46 wheel / 50MB） | 离线 wheel 安装包（见[离线 wheel 装 agt](#离线-wheel-装-agt绕开容器-pip-出口)一节），下次重装免重新打包 |
+| `dl_qwen3_113.sh` | Qwen3-8B 断点续传脚本，网络出口开通后慢传用（见[网络出口不通节](#113-网络出口不通--sftp-08-mbs推理验证搁置关机收尾2026-09-14-晚)） |
+
+`.gitignore` 追加规则：`agt_offline/` + `dl_qwen3_113.sh`，`check-ignore` 验证通过。
+
+**顺带发现（待用户确认，未执行）**：git status 里还有一批 SCNet 侦察期攒下的 `??` 未跟踪产物——约 20 个调试垃圾（`scnet_*.json/txt`、`nb_create*.png`、`qr_*.txt`、`sim_*.csv` 等）应 gitignore，另有 3 个应提交的正式工具（`tools/llm_relay.py` / `tools/ssh_reverse_tunnel.py` / `tools/scnet_watch_batch.py`）——已向用户请示处置。
+
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 
 控制台网页操作（创建/启服务）不必依赖 playwright——**后端 HTTP API 可用 AK/SK 换来的区域 token 直接调**（`token` header，与 OpenAPI 共用同一 JWT 体系：payload 含 computeUser/clusterId/user）。

@@ -160,7 +160,9 @@ POST https://www.scnet.cn/acx/aimgt/notebook/restart
 
 ### models.json 注入：upload→mv 两段式
 
-Jupyter Contents API **不让写 `.agt` 隐藏目录**——先 upload 到可见临时路径、再 shell `mv` 进 `~/.agt/`。内容在本机生成（fk-ds-flash 主力 + qwen utility，run_python 落 `scnet_agt_models.json` → base64 → 传输）。
+Jupyter Contents API **不让写 `.agt` 隐藏目录**——先 upload 到可见临时路径、再 shell `mv` 进 `~/.agt/`。内容在本机生成后 base64 传输。
+
+**本轮（2026-09-14 晚）升级为完整 16 providers**：本机 `~/.agt/models.json` 整份 clone（16 providers + default）落 `scnet_agt_models_full.json`，`default=glm-official`（与用户偏好一致）、`utility_model=qwen`；agt-web 重启后生效。容器里的 agt（scnet 组网节点）由此成为「容器管家」——可在 30 天保留期内自主打理模型补齐/寻源/生产任务监控。
 
 ### 环境持久性实测：关机 → 重开机，容器层增量全在
 
@@ -209,6 +211,18 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 
 **巡检闭环**：25 分钟周期定时任务盯进度；`dl.done` 出现后汇总 OK/FAIL 清单报用户；FAIL 项自动换源补下。
 
+### 下载进度实测（2026-09-14 晚，第一批次）
+
+| 项 | 状态 | 体积/备注 |
+|---|---|---|
+| Qwen-Image 文生图（unet+文本编码器+vae） | ✅ | 19.5G + 8.8G + 250M |
+| Qwen-Image-Edit 2511（int8） | ✅ | 19.6G（vae 软链复用）；**顺带下 6 个 2509 系列编辑 LoRA**（重打光/换背景/多角度/Anything2RealAlpha） |
+| IndexTTS-2.5 | 🔄 | gpt.pth 3.26G ✅ / s2mel+codec+qwen0.6b 排队 |
+| H3 文戏缺件五件（fl2va/int8编码器/turbo/Remix/upscaler） | ⏳ | LFS 批次；顺带抓到官方源：真视频超分 realesr + RIFE 插帧 ✅ |
+| custom_nodes（VHS/LayerStyle/rgthree/KJNodes） | ⏳ | github 直连 |
+
+落点全在 `/public/home/scnrilsyy5/comfy-models/`（61PB 共享盘），`extra_model_paths.yaml` 双路径已接好。下载巡检仍按 25 分钟周期盯进度。
+
 ## 113 免费卡时 LLM 推理侦察：vllm 镜像盘点 + 实测方案（2026-09-14）
 
 用户指令第二步「试试去 113 的免费 50 卡时上推理看看」。纯 API 探查（不花卡时）已完成镜像盘点，实测方案已定。
@@ -229,6 +243,22 @@ morning_wake 轮（用户指令「把需要下载和安装的东西都折腾好�
 2. **用完即关**：BW 实例开机即开始计（保守口径；与[计费澄清](#资源组计费澄清113-组免费--50-卡时用户问询钉死)「113 ¥0 不消耗试用额度」并存——反正实测流程压缩到最短，开→测→关一气呵成）。
 
 **节奏**：下载批次完成（`dl.done`）且无 FAIL → 自动开 113 → 7B 推理实测 → 关机 → 带 token/s 数据汇报；有 FAIL 则换源补下后再走同流程。015 无卡实例全程挂着（操作台 + agt 组网节点，¥0）。
+
+### 创建卡点：headless 镜像选择器失效 + API 1004（2026-09-14 晚）
+
+113 组免费实例的创建在自动化侧卡住，需用户手点 4 步。
+
+- **API 直调三轮**全被 `1004 参数不能为空` 拦（不指明字段）；创建字段已全部挖出——`goodsId=1005861210643496960`、`resourceGroupId=hx1hgbwnormal`（113 组）、加速器名「异构加速卡BW」、镜像 path/size 全套——但某个隐藏必填字段尚无法定位。
+- **headless 浏览器镜像选择器失效**：Element UI 的 cascader/卡片 popover 在 headless 下试了真实鼠标、dispatchEvent、Vue 实例直调，全部无法 commit。
+
+**需用户手点（4 步，2 分钟）**，起好后 Agent 全自动接管（vLLM 测速 → 关机）：
+
+1. scnet.cn 控制台 → Notebook → 创建Notebook
+2. 加速卡：选「113 组 hx1hgbwnormal · 限时免费」卡片（BW 64GB），卡数 1
+3. 开发镜像 →「社区镜像」tab → 选 **jupyterlab-qwen3-openwebui**（Qwen3 全家桶，开箱即用、BW 兼容、自带模型）
+4. 立即创建 → 等 Running
+
+> 此前镜像盘点定的 vLLM 方案顺延：jupyterlab-qwen3-openwebui 自带模型，可免去「现下 7B AWQ」一步。
 
 ## 控制台纯 API 地图 + 三单实测（2026-09-14）
 

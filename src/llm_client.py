@@ -39,6 +39,10 @@ _HOOK_SCENE: contextvars.ContextVar = contextvars.ContextVar("agt_hook_scene", d
 # react 轮/步标记（线程隔离）：chat(turn=, step=) 进入时 set、finally reset——_record_call
 # 读取。同因弃用实例属性 _turnstep_ctx（并发 chat 互相置 None）。
 _TURNSTEP_CTX: contextvars.ContextVar = contextvars.ContextVar("agt_llm_turnstep", default=None)
+# react 调用链覆盖（用户裁定 2026-09-15）：Agent 自己的回退策略（.yml 声明的 / 无声明=无回退）
+# 只对 react 主调用生效——通过 chat(_chain=[...]) 传入（或 None=无链），不写实例状态。
+# 线程隔离：钩子/工作流/子 Agent 各自线程内取值，互不干扰。
+_CHAIN_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("agt_llm_chain_override", default=None)
 
 # ===== 前端日志面板通道：把 WARNING/ERROR 级日志转发给 UI（回退/限流/截断等此前只进文件）=====
 _LOG_SINKS: list = []          # callable(level_str, msg, scene)——由 build_agent 注册（主 Agent 的 llm_log 事件广播）
@@ -265,7 +269,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
-        self._base_fallback_chain: list[str] = []  # 原回退链（构造参数显式传入 或 settings.json 配置；不变）
+        self._base_fallback_chain: list[str] = []  # 原回退链（agent .yml 声明 / 构造参数显式传入；不变）
         self.fallback_chain: list[str] = []   # 运行时有效回退链（= _user_model 提前 + base 其余）
         self.fallback_policy: str = "sticky"  # reset=每轮回 _user_model / sticky=回退后不动
         self._fallback_owned = False          # 本实例的回退链来自 agent .yml 显式声明（而非全局 settings）
@@ -273,8 +277,11 @@ class LLMClient:
         # 故障端点。冷却期间该 provider 从可用链剔除；成功后自动清除冷却态（恢复即可用）。
         self._provider_cooldown: dict[str, float] = {}   # {model_name: 上次失败时间戳}
         self._cooldown_seconds: float = 300.0            # 默认 5 分钟（settings.json cooldown_seconds 可覆盖）
-        # 回退配置来源：构造参数显式传入（agent .yml 声明）优先；否则读全局 settings.json
-        # （/model、WebUI 配置的——语义上是主 Agent 的用户配置，未声明的子 Agent 继承它）
+        # 回退链来源（用户裁定 2026-09-15，语义干脆化）：
+        #   ① agent .yml 显式声明（fallback_chain 构造参数 / set_fallback）→ owned=True，权威
+        #   ② 未声明（owned=False）→ 引擎默认链 = 全局 settings（/config fallback_chain 配置的）
+        #      —— 但这条链只对该实例的【非 react 调用】生效：react 主调用用 Agent 自己的回退策略
+        #      （见 agent._current_fallback），不需要改实例状态，跨轮/跨模型切换都稳定。
         if fallback_chain is not None:
             self._base_fallback_chain = [str(m).strip() for m in fallback_chain if str(m).strip()]
             self._fallback_owned = True
@@ -340,9 +347,9 @@ class LLMClient:
         self.fold_target_ratio = float(_ftr) if _ftr else None
         if self.fold_target_ratio is not None:
             self.fold_target_ratio = min(0.99, max(0.5, self.fold_target_ratio))
-        # 组间步距衰减（per-provider；None=跟全局 settings 的 detail_step）。0=不衰减——
-        # 所有组 limit 恒定，老步骤渲染字节稳定 → 前缀缓存打满（DeepSeek 类 60x 差价
-        # provider 推荐 0：宁可投影大也不让组边界衰减断缓存——用户裁定 2026-08-30）。
+        # 组间步距衰减（per-provider，模型卡片 detail_step；None=不衰减=0——用户裁定 2026-09-15：
+        # 全局 settings 的 detail_step 字段已删，未填就是 0，不再回落全局）。填了按填的为准：
+        # 所有组 limit 恒定的字节稳定被打破，换取投影更小（DeepSeek 类 60x 差价 provider 留空即最优）。
         _ds = profile.get("detail_step")
         self.profile_detail_step = int(_ds) if _ds is not None and str(_ds).strip() != "" else None
         if self.profile_detail_step is not None:
@@ -575,26 +582,44 @@ class LLMClient:
             _LOG.warning("reasoning_completer(%s) 补全失败：%s，回退原处理", self.reasoning_completer, e)
             return ""
 
-    def chat(self, messages, scene: str = None, turn: int = None, step: int = None, **overrides) -> LLMResponse:
+    def chat(self, messages, scene: str = None, turn: int = None, step: int = None,
+             _chain: list = None, **overrides) -> LLMResponse:
         """普通（非流式）调用。空响应退避重试；多 token 轮流；耗完后沿回退链切换模型。
         scene：调用时机标注（react主循环/hook:before_turn/recap/debug/wrap_up/completer...），
         记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 hook 线程上下文（_HOOK_SCENE，
         本线程内跑的钩子工作流）或默认 'llm.chat'。不进 API 请求参数。
         turn/step：与投影转储（projections/t{turn}_s{step}_*.txt）同源的轮/步标记，记入
-        llm_calls.jsonl——/stats tooltip 可显示 'react · t220 · s0' 直接对上投影文件。"""
         _sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")   # 线程隔离：sink（日志面板）据此在日志尾部附场景
         _ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
+        # _chain 语义（用户裁定 2026-09-15）：list（含空 list）= 显式指定链（react 调用传 Agent 声明的链，
+        # 空 list = 显式无回退）；None（默认）= 不覆盖，走实例链（钩子/工作流/utility 等非 react 调用）。
+        _chain_tok = _CHAIN_OVERRIDE.set([str(m).strip() for m in (_chain or []) if str(m).strip()]) \
+            if _chain is not None else None
+        不传时走实例链（settings 默认链 / yml 声明链）。"""
+        _sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")   # 线程隔离：sink（日志面板）据此在日志尾部附场景
+        _ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
+        _chain_tok = _CHAIN_OVERRIDE.set([str(m).strip() for m in _chain if str(m).strip()]) if _chain else None
         try:
             return self._chat_with_fallback(messages, **overrides)
         finally:
             _SCENE_CTX.reset(_sv_tok)
             if _ts_tok is not None:
                 _TURNSTEP_CTX.reset(_ts_tok)
+            if _chain_tok is not None:
+                _CHAIN_OVERRIDE.reset(_chain_tok)
 
-    def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
-        """chat 的原回退循环（token 轮换 → 模型回退链）。被 chat() 包住注入 scene 上下文。
-        新增 provider 冷却（用户提案 2026-09-02）：model+token 签名失败后 N 秒内跳过——
-        避免连续撞同一个故障端点/token。成功后自动清除冷却态。"""
+        import hashlib
+        # 回退链优先级（用户裁定 2026-09-15）：
+        #   ① 本次调用的 _chain 覆盖（Agent 自己的 react 链——yml 声明 / 无声明=无回退）
+        #   ② 否则用实例链（settings 全局链 / yml 声明链）——供钩子/工作流/utility 等非 react 调用
+        _override = _CHAIN_OVERRIDE.get()
+        if _override is not None:
+            self.fallback_chain = ([self._user_model]
+                                   + [m for m in _override if m != self._user_model])
+        else:
+            self._rebuild_chain()
+        self._maybe_reset_to_head()
+        self.last_failures = []   # 每次调用重新收集（回退链全失败时 UI 生成充值入口）
         import hashlib
         self._maybe_reset_to_head()
         self.last_failures = []   # 每次调用重新收集（回退链全失败时 UI 生成充值入口）

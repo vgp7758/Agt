@@ -494,7 +494,6 @@
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" placeholder="自动（按窗口推导）" title="工具结果摘要的初始字数上限（档1 base）。留空=按 max_effective_context_window 自动推导（400K→1500、600K→2250、60K→600，主流配置行为不变）；填写则显式固定"></label>
-    <label>步距衰减 step <input id="cfg_detail_step" type="number" min="1" title="每远一步减少的摘要字数（默认15）；越大老步压缩越快"></label>
     <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠并一次压回计划水位（分档窗口的75%，与轮边界计划对齐）"></label>
     <label title="超深档（真实档位超过 max_level）的早期轮：工具调用过程整体折叠成一行「---- 已折叠共N次工具调用 ----」，保留最终回复原文与 reasoning 原文——替代按 max_level(187字/步) 的逐调用残缺摘要。完整过程仍在存档可 recall。"><input id="cfg_fold_deep_tools" type="checkbox"> 折叠早期工具调用（超深档轮只留结论）</label>
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
@@ -1717,7 +1716,6 @@ function fillSettingsForm(v){
   document.getElementById('cfg_tool_timeout').value = v.tool_timeout || '';
   document.getElementById('cfg_max_level').value = v.max_level || '';
   document.getElementById('cfg_detail_base').value = v.detail_base_source === '显式' ? (v.detail_base || '') : '';
-  document.getElementById('cfg_detail_step').value = v.detail_step || '';
   document.getElementById('cfg_panic_window').value = v.panic_context_window ?? 0;
   document.getElementById('cfg_fold_deep_tools').checked = !!v.fold_deep_tools;
   document.getElementById('cfg_show_log_panel').checked = showLogPanel;   // 纯前端状态：回填报表当前开关（localStorage）
@@ -1827,7 +1825,7 @@ function renderModelList(){
       <div class="mi-row">
         <input value="${m.max_tokens||''}" placeholder="max_tokens(空=默认)" type="number" onchange="_modelData.models['${escName}'].max_tokens=this.value?parseInt(this.value):undefined" title="单次回复上限；空=默认（thinking 模型 8192，其他交 provider）；截断时引擎自动加倍重试" style="width:150px">
         <input value="${m.fold_target_ratio||''}" placeholder="折叠目标%(空=75)" type="number" step="0.05" min="0.5" max="0.99" onchange="_modelData.models['${escName}'].fold_target_ratio=this.value?parseFloat(this.value):undefined" title="折叠保留目标线比例（per-provider 缓存经济学）：升档只动历史段尾部、断缓存小；折叠改写历史段头部、断缓存大。折扣悬殊的 provider（DeepSeek≈60x）应调低如 0.5——更早用小步升档消化压力、少触发大折叠；GLM≈4x 用默认 0.75；空=引擎默认" style="width:150px">
-        <input value="${m.detail_step||''}" placeholder="步距衰减(空=全局)" type="number" min="0" max="200" onchange="_modelData.models['${escName}'].detail_step=this.value?parseInt(this.value):undefined" title="组间步距衰减字数（per-provider）：0=不衰减——所有组 limit 恒定、渲染字节稳定，前缀缓存打满（DeepSeek≈60x 推荐 0）；空=跟随全局 settings" style="width:150px">
+        <input value="${m.detail_step||''}" placeholder="步距衰减(空=0)" type="number" min="0" max="200" onchange="_modelData.models['${escName}'].detail_step=this.value?parseInt(this.value):undefined" title="组间步距衰减字数（per-provider）：空/0=不衰减——所有组 limit 恒定、渲染字节稳定，前缀缓存打满（推荐留空）；填了按填的为准（越大老步压缩越快）" style="width:150px">
         <label class="mi-check" title="DeepSeek 思考模式：历史 tool_calls 消息必须带 reasoning_content。勾了自动给缺失的历史消息补占位，跨模型混用不再 400">
           <input type="checkbox" ${m.requires_reasoning_in_history?'checked':''} onchange="_modelData.models['${escName}'].requires_reasoning_in_history=this.checked"> 补reasoning占位
         </label>
@@ -1994,7 +1992,7 @@ function saveRuntime(){
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
     // detail_base：空 = 不传（走窗口推导；传死 1500 会把显式通道污染，/context 恒显 1500）
-    detail_step: parseInt(document.getElementById('cfg_detail_step').value)||15,
+    // detail_step：全局字段已删（2026-09-15）——步距衰减只认模型卡片的 detail_step（未填=0 不衰减）
     panic_context_window: parseInt(document.getElementById('cfg_panic_window').value)||0,
     fold_deep_tools: document.getElementById('cfg_fold_deep_tools').checked,
   };

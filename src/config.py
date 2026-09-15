@@ -397,12 +397,6 @@ def load_fold_deep_tools() -> bool:
         return False
 
 
-def load_detail_step() -> int:
-    """步距衰减的每步减少字数（settings.json 的 detail_step；默认 15）。"""
-    try:
-        return int(load_runtime_settings().get("detail_step", 15))
-    except Exception:
-        return 15
 
 
 # === RAG 配置持久化（全局 embed + per-repo 索引策略） ===

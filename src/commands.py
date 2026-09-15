@@ -242,20 +242,19 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
     cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
-    # 步距衰减参数（存 settings.json；detail_base 显示【实际生效值】——显式配置 > 窗口推导 > 1500，
-    # 只显示 load_detail_base() 会把推导值误报成 1500）
+    # 步距衰减参数（detail_base 存 settings.json；detail_step 全局字段已删——用户裁定 2026-09-15，
+    # per-provider 只认模型卡片 detail_step，未填默认 0 不衰减）；detail_base 显示【实际生效值】——
+    # 显式配置 > 窗口推导 > 1500，只显示 load_detail_base() 会把推导值误报成 1500
     try:
         import config as _cfg2
         cfg["detail_base"] = getattr(agent.session, "detail_base", _cfg2.load_detail_base())
         cfg["detail_base_source"] = ("显式" if _cfg2.load_detail_base_opt() else
                                      ("窗口推导" if getattr(agent.session, "max_effective_context_window", None) else "默认"))
-        cfg["detail_step"] = _cfg2.load_detail_step()
         cfg["panic_context_window"] = _cfg2.load_panic_window()
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
         cfg["fold_deep_tools"] = _cfg2.load_fold_deep_tools()
     except Exception:
         cfg["detail_base"] = 1500
-        cfg["detail_step"] = 15
         cfg["panic_context_window"] = 0
         cfg["hook_timeout"] = 300
         cfg["fold_deep_tools"] = False
@@ -275,11 +274,20 @@ def apply_config(agent, values: dict) -> list:
             results.append(real_tools.set_tool_timeout(int(v)))
         except Exception as e:
             results.append(f"❌ tool_timeout 值非法：{v}（{e}）")
-    # fallback_chain 特殊处理（逗号分隔 → 存为 _base_fallback_chain + 重建有效链）
+    # fallback_chain 特殊处理（用户裁定 2026-09-15「职责分开」）：
+    #   • 这条链是【非 react 调用的实例链】：工作流 LLM/llm_call 节点、补全（reasoning_completer）、
+    #     以及 utility_model 相关的短调用——它们的 client 就是从 settings 继承链的实例。
+    #   • react 主调用有【自己的链】：只认 agent .yml 的 fallback 声明（Agent._react_chain），
+    #     不受这里影响。主 Agent 未声明 = 无 react 回退（不继承这条）。
     if "fallback_chain" in values:
         v = values.pop("fallback_chain")
         chain = [m.strip() for m in str(v).split(",") if m.strip()]
         agent.llm._base_fallback_chain = chain
+        # owned=True：本实例链已由用户显式指定，不再重读 settings 覆盖（否则切模型/PUT models 会被刷回）
+        try:
+            agent.llm._fallback_owned = True
+        except Exception:
+            pass
         agent.llm._rebuild_chain()
         try:
             import config
@@ -287,11 +295,10 @@ def apply_config(agent, values: dict) -> list:
         except Exception:
             pass
         eff = agent.llm.fallback_chain
-        results.append(f"✅ fallback_chain = {chain or '(空，无回退)'}"
-                       + (f"\n  有效链（{agent.llm._user_model} 在首）：{' → '.join(eff)}" if eff else ""))
-        if getattr(agent.llm, "_fallback_owned", False):
-            results.append("  ⚠️ 本 agent 的回退链由 .yml 声明锁定（fallback:），此次为运行时临时覆盖，重启后恢复 yml 声明；"
-                           "子 Agent 若在 .yml 声明了 fallback 则不受此全局设置影响")
+        results.append(f"✅ 非 react 调用回退链 = {chain or '(空，无回退)'}"
+                       + (f"\n  有效链（{agent.llm._user_model} 在首）：{' → '.join(eff)}" if eff else "")
+                       + "\n  适用：工作流 LLM/llm_call、补全、utility 短调用；"
+                         "react 主回退链由 agent .yml 的 fallback 单独声明（主 Agent 未声明=无回退）")
     # max_level：分档最高级别（设 session + 存 settings.json；改了清冻结缓存让其按新上限重算）
     if "max_level" in values:
         v = values.pop("max_level")
@@ -391,8 +398,14 @@ def apply_config(agent, values: dict) -> list:
                            + "（已存 settings.json + 即时生效）")
         except Exception as e:
             results.append(f"⚠️ fold_deep_tools 设置失败：{e}")
-    # detail_base / detail_step：步距衰减参数（存 settings.json + 改 toollog 模块变量即时生效）
-    for _dk in ("detail_base", "detail_step"):
+    # detail_base：每组基础字符数（存 settings.json + 改 toollog 模块变量即时生效）。
+    # detail_step 全局字段已删（用户裁定 2026-09-15）：步距衰减只认模型卡片 detail_step（未填=0 不衰减）。
+    # 收到 detail_step 时不再落盘，只提示去向。
+    if "detail_step" in values:
+        values.pop("detail_step")
+        results.append("ℹ️ 全局 detail_step 已废弃：步距衰减改在【模型卡片】的 detail_step 配置"
+                       "（未填默认 0=不衰减，字节稳定优先）")
+    for _dk in ("detail_base",):
         if _dk in values:
             v = values.pop(_dk)
             try:

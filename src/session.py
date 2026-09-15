@@ -659,12 +659,13 @@ class Session:
 
     @property
     def detail_step(self) -> int:
-        """组间步距衰减（字/组距）：profile.detail_step（per-provider）> settings 全局 > 默认 15。
-        0 = 不衰减——当前轮更早组的 limit 与近组相同，渲染字节永不回缩 → 前缀缓存打满
-        （DeepSeek 类未命中≈60x 差价的最优解；GLM≈4x 用全局默认即可）。"""
+        """组间步距衰减（字/组距）：只认 profile.detail_step（模型卡片 per-provider），
+        未填默认 0=不衰减（用户裁定 2026-09-15：全局 settings 的 detail_step 字段删除——
+        全局 15 曾让所有未配置 provider 的轮内组边界持续回缩，频繁触发轮内小毕业断缓存）。
+        0 = 不衰减——当前轮更早组的 limit 与近组相同，渲染字节永不回缩 → 前缀缓存打满。"""
         if self.profile_detail_step is not None:
             return self.profile_detail_step
-        return config.load_detail_step()
+        return 0
 
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def _save_proj_stats_sidecar(self, stats: dict) -> None:

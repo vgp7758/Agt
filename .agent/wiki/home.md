@@ -848,3 +848,12 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **SCNet 113 组可用社区镜像 139 个全量盘点**（[scnet.md](guides/scnet.md)）：创建页选 113 后【社区镜像】tab 分页拉全（playwright 抓 API），LLM 推理/SD/图像编辑/换装/视频/语音/OCR/视觉八类均可开箱启动；113 自定义容器三层困难确认（无外网 curl 全 000 + 无 Docker + 保存镜像被拦）；**关键认知：模型获取走「模型管理」平台内网通道（落盘 /root/public_data/model/），不占容器断网出口**——正解 = 社区镜像 + 模型市场克隆 + 无卡整理环境 → 有卡只烧推理。
 
+## 快速事实增补（2026-09-15 · 八 · 113 拉不动 qwen-image-edit——可选≠可创建 + 创建 API body 破解）
+
+- 用户令：验图片编辑流程——113 开社区 qwen edit 实例 + 无卡实例配合，编辑后下载回本机
+- **创建 API body 模板三次迭代破解**：`imagePath` 镜像库原样 `/aihub/dcu/...`、`resourceGroupId: "113"`、`notebookType: "jupyter"`——手动创建首例（无卡 qwen3）即由此打通
+- 但 image-edit 在 113 建不起来：4 次创建 3 败（官方 54G ×2 + 社区版 23.6G ×1 全「镜像拉取失败」），对照组 jupyterlab-qwen3-openwebui 能建 → **139 个可选 ≠ 可创建，本区有副本才是硬条件**
+- 测试图（SCNET→AGT 文本编辑）已传 113 家目录 `edit_test/input.png`；Failed 不计费（余额 ~49.5 卡时）
+- 下一步方案 A（待用户确认）：换昆山主区（镜像全）同构验证全链路
+- 详见 [SCNet · 113 拉不动 qwen-image-edit](guides/scnet.md#113-拉不动-qwen-image-edit可选可创建本区有副本才行2026-09-15)
+

@@ -54,10 +54,10 @@ GET /acx/containermgt/v2/notebook/{id}/notebook-url?clusterId=11250       → 20
 
 ## 尚缺与价值
 
-- **写操作未拿到**：创建实例 / 启停 / 配置自定义服务 / 关机的 payload 结构待补——`list` 返回字段是创建请求的反推源，再抓一次浏览器真实写请求即可补全（服务端参数校验会拦，不会误创建）。已定位候选端点：`/acx/aimgt/notebook`、`/acx/containermgt/notebook/task/actions/*`（前端 JS 提取，见「端点清单来源」）。
-- **打开全无人值守**：`AK/SK 换 token → POST 创建 Notebook（选镜像/资源组/无卡或有卡）→ 轮询 notebookStatus 至 Running → POST 配自定义服务（端口+启动指令）→ 等 ComfyUI /system_stats → enqueue 批量 → monitor 回调（已通）→ POST 关机`。
+- **写操作进度（2026-09-15 更新）**：三件已通——①创建（113 区域 token，body 模板三次迭代破解，见[113 拉不动 qwen-image-edit](#113-拉不动-qwen-image-edit可选可创建本区有副本才行2026-09-15)）；②stop / restart（cookie 通道，见[关机与生命周期 API](#关机与生命周期-apicookie-通道)）；③无卡/有卡切换（restart 的 `startType`）。**仍未拿到**：配置自定义服务、保存镜像等写 payload（候选端点 `/acx/aimgt/notebook`、`/acx/containermgt/notebook/task/actions/*`，见「端点清单来源」）。
+- **打开全无人值守**：`AK/SK 换 token → POST 创建 Notebook（✅ 已通）→ 轮询 notebookStatus 至 Running → POST 配自定义服务（端口+启动指令，待补）→ 等 ComfyUI /system_stats → enqueue 批量 → monitor 回调（已通）→ POST 关机（✅ 已通）`。
 - playwright 由此降级为「兜底 + 抓包取证」工具；现有巡检任务（`scnet_free_card_watch` / `scnet_img_sync`）可择机改写为纯 API。
-- **只读段已完成**：list / notebook-url / config / start-command / port-pool 已封装进 MCP 工具 `scnet_notebook`（零浏览器）；**写操作段是当前唯一缺口**。
+- **只读段已完成**：list / notebook-url / config / start-command / port-pool 已封装进 MCP 工具 `scnet_notebook`（零浏览器）；写操作段已通大半（创建/启停），剩自定义服务配置等。
 
 ## LLM API 端点与 provider 接线
 
@@ -175,6 +175,49 @@ AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：
 ```
 
 真正传不进去的只有**平台模型市场没有的**东西（自训模型、私有权重）——只能 SFTP 慢传或放弃。
+
+### 113 拉不动 qwen-image-edit：可选≠可创建，本区有副本才行（2026-09-15）
+
+用户指令：图片编辑 1 卡就够——开社区 qwen edit 实例与当前无卡实例配合，完成「编辑并下载回本地」流程验证。本轮推进到镜像层被卡，但拿到两个硬结论。
+
+### 已就位
+
+- **测试图**：本机 PIL 生成 `edit_test/input.png`（768×512，蓝底 "SCNET" 大字 + 中文副标）已传 113 家目录 `/public/home/act3fh878f/edit_test/input.png`——编辑指令「把 SCNET 改成 AGT」（文本编辑正是 Qwen-Image-Edit 的招牌能力）
+- **无卡 agt 实例**：Running（jupyterlab-qwen3-openwebui 镜像无卡模式，agt 0.28.1 在）
+
+### 创建 API body 模板破解（写操作缺口再进一步）
+
+手动创建的首个成功实例（无卡 qwen3）由此打通——body 模板三次迭代 + 页面抓包 / 前端 bundle 逆向对照，钉死三个关键字段：
+
+| 字段 | 取值 | 坑 |
+|---|---|---|
+| `imagePath` | 镜像库**原样路径**（`/aihub/dcu/...` 开头） | 不做任何改写/拼接 |
+| `resourceGroupId` | `"113"` | 字符串资源组号，不是 15 那种数字 id |
+| `notebookType` | `"jupyter"` | 缺它报参数错 |
+
+至此写操作已通三件：创建（本节）+ stop / restart（[cookie 通道](#关机与生命周期-apicookie-通道)）+ 无卡/有卡切换（restart 的 `startType`）。
+
+### 113 镜像可用性实证：4 次创建，image-edit 全败
+
+| 镜像 | 体积 | 创建结果 |
+|---|---|---|
+| jupyterlab-qwen-image-edit（官方） | 54GB | ❌ 镜像拉取失败 ×2 |
+| qwen_image_edit（社区版） | 23.6GB | ❌ 镜像拉取失败 ×1 |
+| 对照：jupyterlab-qwen3-openwebui | — | ✅ 能建（此前 869 轮成功过） |
+
+**结论：上节 139 个「可选」≠「可创建」——只有本区（华中A）有副本的镜像才拉得起来**（qwen3 系有、image-edit 无）。这是[镜像跨区同步阻塞点](#镜像跨区同步阻塞点)在 113 区的具体表现；与「[139 个均开箱启动](#139-个社区镜像均开箱启动按用途分类)」的口径区分：那是列表可选，本轮是创建实测，两回事。
+
+**经济面**：Failed 实例不计费（余额 ~49.5 卡时未动），30 天自动清。
+
+### 下一步（方案 A，待用户确认）
+
+| 方案 | 说明 |
+|---|---|
+| **A（推荐）** | 换昆山 015/021（主区镜像全，819 轮 minimaxh3 即从昆山拉起）跑「社区镜像 → 编辑 → 下载回本机」全链路——流程同构，经验可复用到任何区域（含日后 113 补副本） |
+| B | 113 换 qwen3 系镜像——只能验 LLM 推理闭环，非图片编辑 |
+| C | 等/催镜像同步到华中A——不可控 |
+
+4 个 Failed 实例留着（不占资源），方案定后继续。
 
 ### 后续待验
 

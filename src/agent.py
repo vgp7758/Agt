@@ -254,6 +254,8 @@ class Agent:
         self.registry = registry
         self.background_tasks: dict = {}   # 后台异步任务登记表 {id:{id,kind,name,task,status,session_dir,result,...}}；子 agent 异步化后供投影/wait
         self._bg_threads: dict = {}        # 异步子 agent 的后台线程 {agent_id: Thread}（仅内存，不持久化；wait_subagents 用它 join）
+        self._declared_fallback = None     # react 主调用的回退链（用户裁定 2026-09-15）：.yml 声明了才有，
+                                           # 未声明 = None = 无回退（不继承全局 settings 链——那条只给非 react 调用）
         self.model_name = model_name or config.DEFAULT_MODEL
 
         self.llm = LLMClient(model_name=self.model_name,
@@ -602,6 +604,14 @@ class Agent:
                     results[i] = r
         return results
 
+    def _react_chain(self):
+        """react 主调用用的回退链（用户裁定 2026-09-15）：只认 agent 自己的声明。
+        .yml 声明了 fallback → 声明的链；未声明 → None（无回退，不继承全局 settings 链）。
+        与实例状态无关（set_fallback 只管非 react 调用的实例链）——跨轮/跨模型切换都稳定。"""
+        if getattr(self, "_declared_fallback", None) is None:
+            return None
+        return list(self._declared_fallback)
+
     def switch_model(self, name: str, _user_initiated: bool = False):
         """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。
         _user_initiated=True 时（用户 /model 或 WebUI 下拉框），llm 会重建有效回退链
@@ -644,9 +654,13 @@ class Agent:
             from multiagent import _parse_assembly, _parse_hooks, _parse_agent_fallback
             from config import MODELS
             meta, _ = load_agent_yml(_P(p))   # ⚠️ 必须 Path：str 走 path.suffix 会 AttributeError（静默吞）
-            if not meta:
-                return
-            asm = _parse_assembly(meta)
+            fb = _parse_agent_fallback(meta)
+            if fb is not None:
+                self.llm.set_fallback(fb[0], fb[1])   # 非 react 调用（钩子/工作流/recap）的实例链
+                try:
+                    self._declared_fallback = list(fb[0])   # react 链（只认声明；未声明→None）
+                except Exception:
+                    pass
             if asm is not None:
                 self.session.set_assembly_plan(asm)
             hs = _parse_hooks(meta)
@@ -1891,21 +1905,17 @@ class Agent:
                             self.session._current._pending_step_hint = inject
                         else:
                             self.session._current._pending_step_hint = None
-                        if self.token_budget and self.cumulative_tokens >= self.token_budget:
-                            self._emit({"type": "budget_hit"})
-                            return self._wrap_up()
-
-                        self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens,
-                                    "model": self.llm.model_name})
-                        _LOG.debug("step %d 累计token=%d model=%s", step_num, self.cumulative_tokens,
-                                   self.llm.model_name)
-                        # 本步消息基底：session 上下文 + 排空 hook 旁注 + before_answer 重做草稿
-                        # （_chat_msgs 内部清空 _hook_notes，故本步工具钩子产生的新旁注留给下一步；
-                        #  重试复用同一 msgs 快照，旁注不丢失也不重复注入）
                         msgs = self._chat_msgs()
                         _t_num = len(self.session.turns)   # 与 _dump_projection 同源（对上 projections/t{N}_s{M} 文件名）
                         _s_num = len(self.session._current.steps) if self.session._current else 0
-                        resp = self.llm.chat(msgs, tools=tool_schemas, scene=f"react·{self.agent_id}", turn=_t_num, step=_s_num)
+                        # react 主调用用 Agent 自己的回退策略（用户裁定 2026-09-15）：
+                        # .yml 声明了 fallback → 用声明的链；未声明 → 空链（显式无回退，不继承全局 settings 链——
+                        # 全局链只服务钩子/工作流/补全等非 react 调用）。不改实例状态，跨轮/切模型稳定。
+                        _rc = self._react_chain() or []
+                        resp = self.llm.chat(msgs, tools=tool_schemas, scene=f"react·{self.agent_id}",
+                                             turn=_t_num, step=_s_num, _chain=_rc)
+                        _LOG.debug("step %d 累计token=%d model=%s", step_num, self.cumulative_tokens,
+                                    self.llm.model_name)
                         # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
                         # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
                         # function calling 重试一次（重试结果不再二次检查，避免无限循环）。

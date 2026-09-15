@@ -683,6 +683,14 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
             return None
         from agent_config import load_agent_yml
         meta, system = load_agent_yml(p)
+        # react 链也按声明注入（用户裁定 2026-09-15）：复活路径此前只设了 current_turn_only，
+        # 漏了 set_fallback/_declared_fallback —— 复活实例带着构造时从 settings 继承的链跑，
+        # "重启后子 Agent 回退链不对" 的根因。
+        from multiagent import _parse_agent_fallback as _paf   # self-module：同文件函数，防御式导入
+        try:
+            _fb = _paf(meta)
+        except Exception:
+            _fb = None
         # .yml：正文为空、persona 在 assembly file: 项里 → system 传空；.md 旧格式无正文才用兜底文案
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
@@ -701,13 +709,15 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
             return None
         loaded = Session.load(str(sub_meta), llm=agent.llm,
                               workspace=agent.session.workspace)
-        sub = SubAgent(entry.name, model_name, system, toolbox,
-                       session_dir=loaded.session_dir or sub_dir,
-                       registry=reg, agent_id=entry.agent_id,
-                       caller_id=caller_id, current_turn_only=True)
         sub.agent.set_session(loaded)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
         # set_session 会换掉 __init__ 里设过开关的那个 session，这里在 loaded session 上重设
         sub.agent.session.current_turn_only = True
+        if _fb is not None:   # 声明的回退链：实例链（非 react）+ react 链都补上
+            try:
+                sub.agent.llm.set_fallback(_fb[0], _fb[1])
+                sub.agent._declared_fallback = list(_fb[0])
+            except Exception:
+                pass
         return sub.agent, model_name, (loaded.session_dir or sub_dir)
     except Exception as e:
         _LOG.warning("复活子 Agent %s(%s) 失败: %s", entry.name, entry.agent_id, e)

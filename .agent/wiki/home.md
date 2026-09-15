@@ -844,3 +844,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **全局步距衰减字段删除：detail_step 只认模型卡片，未填默认 0（2026-09-15，commit `4ad2812`，用户裁定）**：t877_s51 断缓存诊断收尾（cache_breakpoint 元组解包修复 + 重放确认断点正常后）用户点破根因——「proxy 的步距衰减是全局的 15，s51 发生了轮内小毕业」：未配置 provider 回落全局 settings 15 → 轮内组边界（≥2 组号差）持续回缩 → 轮内小毕业断缓存。裁定「把全局步距衰减那个字段去掉，模型卡片的步距衰减不填就默认是 0，填了就按照填了的为准」。落地五文件：`session.py` property（profile > 0）/ `config.py` 删 `load_detail_step()` / `commands.py` `/config detail_step` 收到只提示去向不落盘 / 设置页 UI 输入框·回显·保存三处删 / 模型卡片 placeholder「空=0」。**0=不衰减：组 limit 恒定、渲染字节稳定、缓存打满（成为默认）**；想要衰减必须显式在模型卡片填。settings.json 残留键无消费方无害；`/restart` 生效——见 [context-engine · 全局 detail_step 字段删除](architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定)、[cache-tools · 诊断链闭环](features/cache-tools.md#诊断链闭环断点本身正常根因--全局-detail_step15-的轮内小毕业2026-09-15-同日二轮commit-4ad2812)
 
+## 快速事实增补（2026-09-15 · 七 · SCNet 113 社区镜像 139 个盘点 + 模型管理通道绕开断网）
+
+- **SCNet 113 组可用社区镜像 139 个全量盘点**（[scnet.md](guides/scnet.md)）：创建页选 113 后【社区镜像】tab 分页拉全（playwright 抓 API），LLM 推理/SD/图像编辑/换装/视频/语音/OCR/视觉八类均可开箱启动；113 自定义容器三层困难确认（无外网 curl 全 000 + 无 Docker + 保存镜像被拦）；**关键认知：模型获取走「模型管理」平台内网通道（落盘 /root/public_data/model/），不占容器断网出口**——正解 = 社区镜像 + 模型市场克隆 + 无卡整理环境 → 有卡只烧推理。
+

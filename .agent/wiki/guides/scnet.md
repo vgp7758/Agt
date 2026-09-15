@@ -132,6 +132,54 @@ CENTER 区域发现接口（`www.scnet.cn/ac/openapi/v2/center`）**必须用区
 
 AI 社区（/ui/aihub/image）镜像库共 895 个镜像，左侧分类树含：多模态（Wan/Z-Image/Qwen-Image/hunyuan3d/StableDiffusion/3D生成/图片生成/图片编辑/**视频生成**/视频编辑）、语音（CosyVoice 等五类）、ComfyUI、IDE 工具、NLP、行业模型。**我们自己 commit 的镜像目前 0 个**（还没开过容器）。
 
+### 113 组可用社区镜像 139 个盘点 + 模型管理通道绕开容器断网（2026-09-15）
+
+**与上节口径区分**：895 = AI 社区 aihub 镜像库总数；**139 = Notebook 创建页选 113 组（华中A）后【社区镜像】tab 实际可选数**（与资源组匹配的子集）。数据来源：playwright 抓创建页镜像列表 API 分页拉全（单次 100 条，产物 imglist_req/resp.json）。
+
+### 113 自定义容器：三层困难确认（用户两问实证）
+
+用户问「113 试用卡时想自定义容器怕是有点困难？但能用社区镜像启动？」——两问均「是」：
+
+| 障碍 | 实测证据 |
+|---|---|
+| **容器无外网** | curl 全 000（ModelScope/pypi/github 均不通）——装东西只能离线包（SFTP 0.8 MB/s，见 [113 无外网容器 agt 离线安装](#113-无外网容器-agt-离线安装--ssh-反向隧道-llm-通路2026-09-15)） |
+| **无 Docker** | Notebook 容器内没有 docker daemon，`docker build` 不存在 |
+| **保存镜像被拦** | [manualSaveImage: false](#保存镜像被平台限制-manualsaveimage-false)——113 组平台限制，付费组才开放 |
+
+**「准自定义」变通（015 实例已验证）**：[无卡模式](#notebook-无卡模式镜像构建015-实例-agt-组网--环境持久性实测2026-09-14)（¥0）+ 家目录持久化（`/public/home/` 下实例释放/重启不丢）——等效于自定义了一个环境，只是不能打包成镜像复用到其它实例。
+
+### 139 个社区镜像均开箱启动（按用途分类）
+
+| 类别 | 代表镜像 |
+|---|---|
+| **LLM 推理** | qwen3-openwebui（已实测✓）/ qwen3-api（OpenAI 兼容端点）/ deepseek-r1-api / deepseek-r1-671b-q4 / deepseek-v3-q2-kl / qwq32b-vllm / yi-34b / baichuan2 / gemma3-27b / minicpm-v / janus-pro-7b |
+| **图像生成** | **stable-diffusion-comfyui**（ComfyUI）/ sd-webui / sd-3.5-medium / fooocus / kolors / sdxl-refiner |
+| **图像编辑/修复** | **qwen-image-edit**（Qwen 图像编辑）/ instruct-pix2pix / iopaint / codeformer / stablesr / aurasr-v2 / tile-upscaler / zimage |
+| **换装/试穿** | catvton / ootd / outfitanyone / idm-vton / hivision-id-photos（证件照） |
+| **视频** | pyramid-flow / easyanimate / videocrafter / liveportrait / text-to-video / hunyuanvideo-foley |
+| **语音** | gpt-sovits / chattts / fish-speech / sensevoice / mini-omni / soulx-podcast（播客）/ fun-asr / glm-asr |
+| **OCR/文档** | got-ocr2.0 / deepseek-ocr-2 / hunyuanocr / rapidocr / mineru25（PDF 解析）/ infographic1（信息图） |
+| **视觉理解/检测** | qwen-vl / ovis2.5 / florence-2 / depth-anything-v2 / yolo-world / yolo-v9 |
+
+### 关键认知：模型获取不走容器网络
+
+社区镜像的模型下载走**「模型管理」（平台模型市场）克隆/下载**——平台侧内网通道，落盘 `/root/public_data/model/`，**不经过容器的断网出口**（qwen3 镜像的 `app.py` 找的就是该路径）。
+
+⇒ **113 的正确打开方式**：
+
+```
+社区镜像（开箱的推理框架/应用）
+  + 模型管理克隆（平台内网，绕开断网）
+  + 无卡模式整理环境（¥0）
+  → 有卡模式只做推理（烧卡时）
+```
+
+真正传不进去的只有**平台模型市场没有的**东西（自训模型、私有权重）——只能 SFTP 慢传或放弃。
+
+### 后续待验
+
+下次起 113 拟用 `jupyterlab-qwen3-api`（纯 API 版，无 webui）+ 模型市场克隆 Qwen3-8B 走完整闭环——「113 当免费 LLM 推理节点」的正解形态。
+
 ## Notebook 免费实例实测：自定义服务端口 → 公网 URL 全链路（2026-09-14）
 
 **容器内操作通道**：该镜像未装 SSH（提示「仅支持在线开发」），**JupyterLab 开终端**是重启/调试服务的最佳通道（本轮实测比 SSH 指令更好用）。**纯 API 等价通道（2026-09-14 打通）**：Jupyter **terminals WebSocket API** —— `wss://n-{id}.ksai.scnet.cn:58043/jupyter-forward/{id}/terminals/websocket/{name}?token=sothisai_{id}`，发 `["stdin", "命令\r"]` 即可执行任意命令（`echo`/`pkill`/`nohup` 实测可用，`sslopt={"cert_reqs": ssl.CERT_NONE}`），使「首次拉起 monitor」不再需要人点终端。详见 [SCNet 异步生产流水线 · Jupyter terminals WS](../features/scnet-async-pipeline.md)。

@@ -410,7 +410,38 @@ if self._deepen_oldest_tier(fold_count):        # ② 再推老档进工具折�
 
 组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
 
-**`detail_step` per-provider 化（2026-08-30，commit 27fea56）**：步距衰减字数不再只有全局 settings 一档——models.json profile 可按 provider 覆盖（`session.detail_step` property：profile > settings > 15；clamp 0~200）。**0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩——DeepSeek 类 miss/hit 价差悬殊（~60x）的 provider 推荐配 0（宁可投影大也不让组边界衰减重截断缓存）；GLM（4x）用默认 15 平衡点即可。详见 [per-provider 缓存经济学参数](#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
+**`detail_step` per-provider 化（2026-08-30，commit 27fea56）**：步距衰减字数不再只有全局 settings 一档——models.json profile 可按 provider 覆盖（`session.detail_step` property：profile > settings > 15；clamp 0~200）。**0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩——DeepSeek 类 miss/hit 价差悬殊（~60x）的 provider 推荐配 0（宁可投影大也不让组边界衰减重截断缓存）；GLM（4x）用默认 15 平衡点即可（⚠️ 2026-09-15 起 settings 全局 15 已删——想要衰减须在模型卡片显式填，见下方「全局 detail_step 字段删除」）。详见 [per-provider 缓存经济学参数](#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
+
+### 全局 detail_step 字段删除：只认模型卡片，未填默认 0（2026-09-15，commit 4ad2812，用户裁定）
+
+**诊断收尾（t877_s51 链闭环，2026-09-15）**：[cache_breakpoint 元组解包修复](../features/cache-tools.md) + 原参数重放确认 s51 断点本身是「正常断点」后，用户点破真正根因：「proxy 的步距衰减是全局的 15，s51 发生了**轮内小毕业**」——proxy 未在模型卡片配 `detail_step`，回落全局 settings 15 → 所有 ≥2 组号差的组 limit 持续回缩（`base − 10×15×组号差`）→ 同轮内更早步骤的渲染字节每过一组就变 → **组边界成了轮内缓存断点**。
+
+**用户裁定（2026-09-15，commit `4ad2812`）**：「把全局步距衰减那个字段去掉，模型卡片的步距衰减不填就默认是 0，填了就按照填了的为准」。
+
+**新语义（`session.detail_step` property，src/session.py）**：
+
+| 优先级 | 旧（2026-08-30 ~ 09-15） | 新（2026-09-15 起） |
+|---|---|---|
+| 1 | profile.detail_step（模型卡片） | profile.detail_step（**填了按填的**） |
+| 2 | settings.detail_step（全局） | **已删除** |
+| 兜底 | 15 | **0（不衰减）** |
+
+- **0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩 → 前缀缓存打满——现在成为**默认**（此前只有显式配 0 才享受）；**想要衰减的 provider 必须在模型卡片显式填**——上节 27fea56 段「profile > settings > 15」的链路被本裁定取代，「GLM 用默认 15 平衡点」不再存在
+- settings.json 里残留的旧 `detail_step: 15` 键无任何消费方，留着无害（想清爽可手动删）
+
+**落地五文件（commit 4ad2812）**：
+
+| 文件 | 改动 |
+|---|---|
+| src/session.py | `detail_step` property：profile > 0，不再回落 config |
+| src/config.py | `load_detail_step()` 删除（settings 通道不复存在） |
+| src/commands.py | `/config detail_step` 收到**不再落盘**、提示去向「改在模型卡片配置」；read_config 不再显示全局字段；`detail_base` 保留不动（显示实际生效值：显式 > 窗口推导 > 1500） |
+| src/llm_client.py | per-provider 注释同步（None=不衰减=0） |
+| src/static/index.html | 设置页步距衰减输入框/回显/保存三处删除；模型卡片 placeholder 改「空=0」 |
+
+**验证**：残留引用扫描 0 + py_compile×4 + JS 语法 + 行为单测（未填→0、填 15→15）全过。改的是引擎层，`/restart` 生效。
+
+**对 t877_s51 类断点的效果**：proxy 卡片未填 → 衰减恒 0 → 轮内组边界**永不回缩** → 轮内小毕业的触发源消失（此前 s50→s51「断点在当前轮第 0 步、前缀 559K 全保」的场景变为完全命中）。
 
 ## recent-file 跟屁虫快照：注入三版演进 + rf 免疫收拢单源 + 源头收缩（2026-08-29，dd7fd81 + 39e7115 + 348adfc + 983c417 + 22eaa04）
 

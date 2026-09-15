@@ -14,7 +14,7 @@
     "vision": false,                     // 多模态能力（投影时 <img> 转 image_url）
     "max_effective_context_window": 60000, // 配了才启用分档投影；触发线=本值（顶窗才毕业折叠，commit 304bc16）
     "fold_target_ratio": 0.75,           // 保留水位占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——只决定触发后压到多低，不是触发阈值；DeepSeek（miss≈hit 60x）配低如 0.5：触发后压得狠、下次顶窗间隔长，小步升档（断尾部小）即可消化、少大折叠（断头部大）
-    "detail_step": 0,                    // 组间步距衰减字数（clamp 0~200；缺省=全局 settings 15）——0=不衰减：渲染字节永不回缩、前缀缓存打满
+    "detail_step": 0,                    // 组间步距衰减字数（clamp 0~200；未填默认 0=不衰减——全局 settings 的 detail_step 字段已删 2026-09-15，只认模型卡片）——0=不衰减：渲染字节永不回缩、前缀缓存打满
     "requires_reasoning_in_history": false, // DeepSeek 思考模型=true：自动补历史 reasoning_content 占位防 400
     "token_rotate": true                 // 多token成功后预旋转；GLM等cache按token隔离的直连条目配false
   }
@@ -374,7 +374,8 @@ def _openai_client(self) -> OpenAI:
 | fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退），见下方分层说明 |
 | fallback_policy | reset=每轮重试 _user_model（默认）；sticky=回退后不回 |
 | utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑） |
-| detail_base / detail_step | 分档基准字数(1500)/步距衰减步长(15)——**detail_step 可被 models.json 条目级 `detail_step` 覆盖**（2026-08-30 起，clamp 0~200，0=不衰减；DeepSeek 类价差悬殊配 0），见 [per-provider 参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案) |
+| detail_base | 分档基准字数(1500)——设置页显示【实际生效值】：显式配置 > 按窗口推导（400K→1500、600K→2250、60K→600）> 1500 |
+| ~~detail_step~~（已删） | **全局 settings 字段已删除**（2026-09-15，commit 4ad2812，用户裁定；t877_s51 轮内小毕业诊断收尾）：步距衰减只认 models.json 条目级 `detail_step`（clamp 0~200，**未填默认 0=不衰减**；想要衰减必须显式填，DeepSeek 类价差悬殊配 0）；`/config detail_step` 收到只提示去向不落盘。见 [全局字段删除](../architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定) |
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试） |
 
 > **回退链分层（2026-09-15 用户裁定后，两链分离）**：

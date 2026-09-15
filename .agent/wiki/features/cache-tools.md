@@ -47,6 +47,12 @@ cache_breakpoint(turn=582, step=2, session_dir="", context_chars=120) -> str
 - **验证三层**：①单测构造 tool 消息断言返回 2 元组 ✓；②函数全分支 return 扫描，无其它漏网单串 ✓；③原参数重放 `cache_breakpoint(877, 51)` 正常出报告——断点 = messages[359] 当前轮步骤·第 0 步 tool 结果，内容变化为该轮 edit 引发的 llm_client.py recent-file 快照更新（正常断点，非异常断裂）
 - **生效方式**：外置件热加载——`/reload tools` 即用（当前进程加载的仍旧版），或下次 `/restart` 自动带新
 
+### 诊断链闭环：断点本身正常，根因 = 全局 detail_step=15 的轮内小毕业（2026-09-15 同日二轮，commit 4ad2812）
+
+用户在元组修复 + 原参数重放（确认 s51 断点 =「正常断点，非异常断裂」）之后点破真正根因：「我知道了，是因为 proxy 的步距衰减是全局的 15，s51 发生了**轮内小毕业**」——proxy 未在模型卡片配 `detail_step`，回落全局 settings 15 → 轮内组边界（≥2 组号差）持续回缩，组边界即轮内缓存断点。用户裁定删除全局字段（**detail_step 只认模型卡片、未填默认 0**，commit `4ad2812`，落地与语义见 [context-engine · 全局 detail_step 字段删除](../architecture/context-engine.md)）。
+
+本工具的诊断价值在此闭环中再次体现：把「缓存断了」定位到**段位坐标**后，才能区分「异常断裂」（工具层 bug）与「配置性常态断裂」（衰减参数）——两类断点对应两种修法，坐标是分流的前提。
+
 ## 与其他模块的关系
 
 - **消费方**：projections 转储——[上下文引擎 · 投影转储文件名与 t/s 标记](../architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)（JSON 化格式，commit 2dc64f2 起）；t/s 命名与 [/stats 页](../guides/ops.md#stats-页webui-统计按钮) 折线 tooltip 同源，排障闭环（stats 看到异常点 → 打开 dump → cache_breakpoint 对拍）

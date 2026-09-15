@@ -589,16 +589,16 @@ class LLMClient:
         记入 llm_calls.jsonl 供 /stats 折线 tooltip 展示；不传则取 hook 线程上下文（_HOOK_SCENE，
         本线程内跑的钩子工作流）或默认 'llm.chat'。不进 API 请求参数。
         turn/step：与投影转储（projections/t{turn}_s{step}_*.txt）同源的轮/步标记，记入
+        llm_calls.jsonl——/stats tooltip 可显示 'react · t220 · s0' 直接对上投影文件。
+        _chain：本次调用的回退链（用户裁定 2026-09-15）。list（含空 list）= 显式指定链
+        （react 调用传 Agent 声明的链，空 list = 显式无回退）；None（默认）= 不覆盖，
+        走实例链（钩子/工作流/utility 等非 react 调用：settings 默认链 / yml 声明链）。"""
         _sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")   # 线程隔离：sink（日志面板）据此在日志尾部附场景
         _ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
         # _chain 语义（用户裁定 2026-09-15）：list（含空 list）= 显式指定链（react 调用传 Agent 声明的链，
         # 空 list = 显式无回退）；None（默认）= 不覆盖，走实例链（钩子/工作流/utility 等非 react 调用）。
         _chain_tok = _CHAIN_OVERRIDE.set([str(m).strip() for m in (_chain or []) if str(m).strip()]) \
             if _chain is not None else None
-        不传时走实例链（settings 默认链 / yml 声明链）。"""
-        _sv_tok = _SCENE_CTX.set(scene or _HOOK_SCENE.get() or "llm.chat")   # 线程隔离：sink（日志面板）据此在日志尾部附场景
-        _ts_tok = _TURNSTEP_CTX.set((turn, step)) if turn is not None else None
-        _chain_tok = _CHAIN_OVERRIDE.set([str(m).strip() for m in _chain if str(m).strip()]) if _chain else None
         try:
             return self._chat_with_fallback(messages, **overrides)
         finally:
@@ -608,19 +608,22 @@ class LLMClient:
             if _chain_tok is not None:
                 _CHAIN_OVERRIDE.reset(_chain_tok)
 
+    def _chat_with_fallback(self, messages, **overrides) -> LLMResponse:
+        """chat 的回退循环主体（token 轮换 → 模型回退链）。被 chat() 包住注入 scene/_chain 上下文。
+        新增 provider 冷却（用户提案 2026-09-02）：model+token 签名失败后 N 秒内跳过——
+        避免连续撞同一个故障端点/token。成功后自动清除冷却态。"""
         import hashlib
         # 回退链优先级（用户裁定 2026-09-15）：
         #   ① 本次调用的 _chain 覆盖（Agent 自己的 react 链——yml 声明 / 无声明=无回退）
         #   ② 否则用实例链（settings 全局链 / yml 声明链）——供钩子/工作流/utility 等非 react 调用
+        # 覆盖走本地链、不写 self.fallback_chain：react 链写回实例会与非 react 调用互相覆盖
+        # （utility client 可能被多线程并发共用），跨轮/切模型也不稳定（见 _CHAIN_OVERRIDE 注释）。
         _override = _CHAIN_OVERRIDE.get()
         if _override is not None:
-            self.fallback_chain = ([self._user_model]
-                                   + [m for m in _override if m != self._user_model])
+            chain = [self._user_model] + [m for m in _override if m != self._user_model]
         else:
             self._rebuild_chain()
-        self._maybe_reset_to_head()
-        self.last_failures = []   # 每次调用重新收集（回退链全失败时 UI 生成充值入口）
-        import hashlib
+            chain = list(self.fallback_chain)
         self._maybe_reset_to_head()
         self.last_failures = []   # 每次调用重新收集（回退链全失败时 UI 生成充值入口）
 
@@ -643,7 +646,7 @@ class LLMClient:
             冷却键形如 model:token签名，前缀匹配到冒号为止即 model 名精确匹配。"""
             best = None
             now = time.time()
-            for m in self.fallback_chain:
+            for m in chain:
                 for k, ts in self._provider_cooldown.items():
                     if not k.startswith(m + ":"):
                         continue
@@ -656,15 +659,15 @@ class LLMClient:
             """推进到下一个可用 provider。from_cooldown=True 表示冷却跳过（无退避）。"""
             if self.model_name not in tried:
                 tried.append(self.model_name)
-            if not self.fallback_chain:
+            if not chain:
                 _LOG.error("调用失败且无回退链: %s", reason)
                 raise RuntimeError(f"调用失败且无回退链: {reason}")
             try:
-                idx = self.fallback_chain.index(self.model_name)
+                idx = chain.index(self.model_name)
             except ValueError:
                 raise RuntimeError(f"当前模型 {self.model_name} 不在回退链中")
             next_m = None
-            for m in self.fallback_chain[idx + 1:]:
+            for m in chain[idx + 1:]:
                 if m not in tried:
                     next_m = m
                     break

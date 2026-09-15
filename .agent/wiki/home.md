@@ -840,3 +840,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **cache_breakpoint tool 分支元组解包修复**（2026-09-15，commit `3cf55e9`，用户手动 `/call cache_breakpoint({"turn":877,"step":51})` 抓到）：`ValueError: too many values to unpack (expected 2)`——`_identify_zone` 的 `role=="tool"` 分支此前 return 单字符串（其余分支均 2 元组），调用方 `zone, note = ...` 对字符串按字符解包即炸；只有断点恰落「当前轮步骤区的 tool 结果消息」才触发，故发布以来首炸。修复补元组第二项 `""`；三层验证（单测 + 全分支 return 扫描 + 原参数 t877/s51 重放正常出报告）；外置件 `/reload tools` 热加载即生效——见 [cache-tools · 元组解包修复](features/cache-tools.md#元组解包修复_identify_zone-tool-分支漏第二项2026-09-15commit-3cf55e9用户实测-t877_s51-抓到)
 
+## 快速事实增补（2026-09-15 · 六 · 全局步距衰减字段删除——detail_step 只认模型卡片）
+
+- **全局步距衰减字段删除：detail_step 只认模型卡片，未填默认 0（2026-09-15，commit `4ad2812`，用户裁定）**：t877_s51 断缓存诊断收尾（cache_breakpoint 元组解包修复 + 重放确认断点正常后）用户点破根因——「proxy 的步距衰减是全局的 15，s51 发生了轮内小毕业」：未配置 provider 回落全局 settings 15 → 轮内组边界（≥2 组号差）持续回缩 → 轮内小毕业断缓存。裁定「把全局步距衰减那个字段去掉，模型卡片的步距衰减不填就默认是 0，填了就按照填了的为准」。落地五文件：`session.py` property（profile > 0）/ `config.py` 删 `load_detail_step()` / `commands.py` `/config detail_step` 收到只提示去向不落盘 / 设置页 UI 输入框·回显·保存三处删 / 模型卡片 placeholder「空=0」。**0=不衰减：组 limit 恒定、渲染字节稳定、缓存打满（成为默认）**；想要衰减必须显式在模型卡片填。settings.json 残留键无消费方无害；`/restart` 生效——见 [context-engine · 全局 detail_step 字段删除](architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定)、[cache-tools · 诊断链闭环](features/cache-tools.md#诊断链闭环断点本身正常根因--全局-detail_step15-的轮内小毕业2026-09-15-同日二轮commit-4ad2812)
+

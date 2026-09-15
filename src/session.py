@@ -608,6 +608,16 @@ class Session:
         self._hist_marks: Optional[list] = None   # 装配进行中的 history 子段标记 [(name, 段内偏移, meta)]（临时态）
         # 语义召回层（build_agent 注入；None=未配 embed → recall 退回子串）
         self.vec_store = None
+        # —— 施工投影缓冲（2026-09-15·用户提案，治施工期缓存命中上蹿下跳）——
+        # turn 级 append-only：每个 step 以 full 形态一次定型渲染成 msgs，append 后永不
+        # 改写 → 前缀 LCP 只增长不失配。原 _steps_to_messages 每次投影全量重渲染，同 step
+        # 快照采集时机（agent.py add_step 后统一采）+ 后续写操作会回溯改写前序 tool result
+        # 尾部的 <recent-file> 内嵌块——t861_s38-s76 实测命中率上蹿下跳的根因。
+        # 惰性 sync（_seg_msgs_steps 施工分支调 _constr_sync）：非施工轮零开销；施工激活前
+        # 的 explore steps / 后续新 step / 重启 resume 回填统一走同一路径，形态一致字节稳定。
+        # 运行时内存不落盘：重启后缓冲为空，首次投影按 steps 回填（file_snapshots 运行时
+        # 重建，形态与 append 同口径）。
+        self._constr_buf: list[list[dict]] = []   # 每 step 一组定型 msgs（与 _current.steps 对齐）
 
     # ========== 步距衰减基数（显式配置 > 窗口推导 > 1500） ==========
     @property
@@ -799,6 +809,7 @@ class Session:
             self._refresh_summary_cache()
             self._autosave()
         self._current = Turn(user_message=user_message, images=images or [])
+        self._constr_buf = []   # 施工投影缓冲：新轮清空（turn 级 append-only）
         self._emit_event({"event": "turn_start", "user": user_message, "images": images or []})
         if self._over_window_mark:   # 上轮实测 total 超 win（observe_llm_usage 置位）：本轮重规划并留痕
             _LOG.info("上轮实测 token 超窗（win=%d）：以校准比率 %.2f 字/token 重规划折叠",
@@ -839,6 +850,7 @@ class Session:
         self.turns.append(self._current)
         finished = self._current
         self._current = None
+        self._constr_buf = []   # 施工投影缓冲：归档即弃（运行时内存，不滞留）
         self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
         self._emit_event({"event": "turn_end", "answer": finished.answer,
                           "answer_reasoning": finished.answer_reasoning,
@@ -879,6 +891,7 @@ class Session:
         self.turns.append(self._current)
         finished = self._current
         self._current = None
+        self._constr_buf = []   # 施工投影缓冲：中断归档同样清（与 finish_turn 同口径）
         self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
         self._emit_event({"event": "turn_end", "answer": finished.answer,
                           "answer_reasoning": finished.answer_reasoning,
@@ -1164,14 +1177,68 @@ class Session:
                 _c = _bt
         return [{"role": "user", "content": _c}]
 
+    def _constr_step_msgs(self, step: Step) -> list[dict]:
+        """单个 step 的 full 形态定型渲染（施工投影缓冲 _constr_buf 的 append 单元）：
+        preceding_hint + assistant(tool_calls 全量 args + reasoning) + 各 tool result
+        （_cap_full_result 截断 + _project_imgs + 施工内嵌 <recent-file> 快照块）。
+        与 _steps_to_messages 的 full 分支（base=None/组差0）同口径；行号宽度、version、
+        快照文本在此一次定型——append 后字节冻结，后续文件变化/步数增长均不影响已定型的块。"""
+        msgs: list[dict] = []
+        if step.preceding_hint:
+            msgs.append({"role": "user", "content": _MIDTURN_TAG + step.preceding_hint})
+        if not step.tool_calls:
+            return msgs
+        a_tool_calls = []
+        for i, tc in enumerate(step.tool_calls):
+            name, args, _r = self.toollog.view(tc.call_id)
+            a_tool_calls.append({
+                "id": tc.call_id or str(i), "type": "function",
+                "function": {"name": name,
+                             "arguments": json.dumps(args, ensure_ascii=False)},
+            })
+        a_msg = {"role": "assistant", "content": None, "tool_calls": a_tool_calls}
+        if step.reasoning:
+            a_msg["reasoning_content"] = step.reasoning   # 思考原样，不压缩（与 full 分支一致）
+        msgs.append(a_msg)
+        for i, tc in enumerate(step.tool_calls):
+            _n, _a, result = self.toollog.view(tc.call_id)
+            content = self._cap_full_result(result, tc.call_id)
+            content = self._project_imgs(content)
+            snap = (step.file_snapshots or {}).get(tc.call_id)
+            if isinstance(snap, dict) and snap.get("path"):
+                content += self._rf_inline_block(snap)
+            msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
+        return msgs
+
+    def _constr_sync(self):
+        """施工投影缓冲对齐当前轮 steps（append-only 回填）。统一覆盖三种场景：施工激活前的
+        explore steps（首次投影回填）、后续新 step、重启/resume 后的旧 steps——同一路径同一
+        形态（full），字节稳定。steps 归档不回退，缓冲只增不减；防御性截断理论不触发。"""
+        if self._current is None:
+            return
+        if len(self._constr_buf) > len(self._current.steps):   # 防御：steps 不回退，理论不达
+            self._constr_buf = self._constr_buf[:len(self._current.steps)]
+        while len(self._constr_buf) < len(self._current.steps):
+            self._constr_buf.append(
+                self._constr_step_msgs(self._current.steps[len(self._constr_buf)]))
+
     def _seg_msgs_steps(self) -> list[dict]:
         """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
         （2026-09-07 起 recent-file 不再内嵌 tool result 尾部——独立段 _seg_msgs_recent_file，
-        走装配清单可配位置/开关。）"""
+        走装配清单可配位置/开关。）
+        施工模式（2026-09-15·用户提案）：走 turn 级 append-only 缓冲 _constr_buf——每 step
+        定型一次（full 形态 + 内嵌快照渲染），投影只拼不改 → 前缀字节稳定（治 t861_s38-s76
+        命中率上蹿下跳：原 _steps_to_messages 每次全量重渲染，前序 tool result 尾部的内嵌块
+        随后续写操作漂移断缓存）。max_steps 截断在施工分支不生效（当前轮语义；超长轮由
+        panic 阀兜底）。施工完成（plan 全 completed）切回原路，形态跳变一次可接受。"""
         if self._current is None:
             return []
-        out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
-                                           full_window=RECENT_FULL_STEPS))
+        if self._construction_mode():
+            self._constr_sync()
+            out = [m for grp in self._constr_buf for m in grp]
+        else:
+            out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
+                                               full_window=RECENT_FULL_STEPS))
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": _MIDTURN_TAG + _psh})

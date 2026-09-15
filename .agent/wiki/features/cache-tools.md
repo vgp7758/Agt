@@ -38,6 +38,15 @@ cache_breakpoint(turn=582, step=2, session_dir="", context_chars=120) -> str
 | 步内 `t587_s8 → t587_s9` | `messages[0..399]`（400 条 ~859,181 字符）全命中 ✓；断 `messages[400]` = 当前轮步骤·第 8 步 assistant(tool_calls)，字段 `reasoning_content` 变化 | 正常步进的**预期行为**——新增一步总断末尾 |
 | 轮边界 `step=0`（`t587_s9 → t588_s0`） | 缓存命中区 ❌ 无——`messages[0]` SYSTEM/人设区第 1,050 字符起变化（远程实例清单消失，comfy8000 断开致人设段内容位移） | **「头部动态内容断缓存」典型场景的直接可视化**——正是 [三区重构](../architecture/context-engine.md) 与 DeepSeek 铁律一（任何 system 变化全断）要治的病 |
 
+## 元组解包修复：_identify_zone tool 分支漏第二项（2026-09-15，commit 3cf55e9，用户实测 t877_s51 抓到）
+
+用户手动 `/call cache_breakpoint({"turn":877,"step":51})` 报 `ValueError: too many values to unpack (expected 2)`——根因在 `_identify_zone` 的 `role == "tool"` 分支：该分支此前 `return` **单个字符串**（函数其余分支均返回 2 元组），调用方 `zone, note = _identify_zone(...)` 对字符串解包 = 按字符流塞两个变量 → 直接炸。
+
+- **修复**（commit 3cf55e9）：tool 分支补元组第二项 `""`——`return (f"当前轮步骤·第 {N} 步的 tool 结果" if step_est > 0 else "当前轮步骤·tool", "")`，代码注释留痕（⚠️ 元组修复）
+- **为什么一直没炸**：只有断点消息恰好是「当前轮步骤区的 **tool 结果**」才走该分支；此前分析过的断点全落在 SYSTEM/折叠/档位/assistant(tool_calls) 区——第一次命中即踩雷
+- **验证三层**：①单测构造 tool 消息断言返回 2 元组 ✓；②函数全分支 return 扫描，无其它漏网单串 ✓；③原参数重放 `cache_breakpoint(877, 51)` 正常出报告——断点 = messages[359] 当前轮步骤·第 0 步 tool 结果，内容变化为该轮 edit 引发的 llm_client.py recent-file 快照更新（正常断点，非异常断裂）
+- **生效方式**：外置件热加载——`/reload tools` 即用（当前进程加载的仍旧版），或下次 `/restart` 自动带新
+
 ## 与其他模块的关系
 
 - **消费方**：projections 转储——[上下文引擎 · 投影转储文件名与 t/s 标记](../architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)（JSON 化格式，commit 2dc64f2 起）；t/s 命名与 [/stats 页](../guides/ops.md#stats-页webui-统计按钮) 折线 tooltip 同源，排障闭环（stats 看到异常点 → 打开 dump → cache_breakpoint 对拍）

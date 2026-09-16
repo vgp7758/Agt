@@ -348,7 +348,9 @@ function renderChart(models, stats){
       let segRowsOut = '', a2 = 0;
       for(let i=0;i<Math.min(segs.length, counts.length);i++){
         const segEnd = (a2 + counts[i]) / 100, segStart = a2 / 100;
-        const y0 = by + 8 + (headL.length + i) * rowH - 11;
+        // 行 y 与 headL 同体系（by+19+行号*15）：文字基线对齐，背景块 y0=基线-11（与 v2 重叠 bug 修正）
+        const yRow = by + 19 + (headL.length + i) * 15;
+        const y0 = yRow - 11;
         let bg = '';
         if(segEnd <= bp/100){        // 整段在断点前：绿
           bg = `<rect x="${bkX}" y="${y0}" width="${bkW}" height="${rowH-1}" fill="${G}"/>`;
@@ -362,7 +364,6 @@ function renderChart(models, stats){
         }
         const nm = String(segs[i].n||'').slice(0, 24);
         const txt = `${nm}  ${(segs[i].pct??0)}%${segs[i].tok?(' · '+fmtK(segs[i].tok)):''}`;
-        const yRow = y0 + 11;
         segRowsOut += bg + `<text x="${bx+8}" y="${yRow}" fill="#e6edf3" font-size="10" font-family="Consolas,monospace">${esc(txt.slice(0,44))}</text>`;
         a2 += counts[i];
       }

@@ -340,10 +340,10 @@ function renderChart(models, stats){
       let bp = 100;
       for(let i=segs.length-1; i>=0 && missTok>0; i--){
         const st = segs[i].tok||0;
-        // 不够扣整段：断点=该段开头（整段标红）——段内比例位置受估算口径偏差影响大（用户实测），
-        // 直接取段边界更符合"重算区=尾部若干段"的直觉
-        bp -= counts[i];
-        if(missTok >= st) missTok -= st; else break;
+        // 不够扣整段：断点=段内按 miss/段tok 比例的位置（用户裁定 2026-09-16：
+        // 断点落在段内时该段背景应前绿后红劈开——跨断点行内分色 + 贯穿竖线按同一 bp 渲染）
+        if(missTok >= st){ missTok -= st; bp -= counts[i]; }
+        else { bp -= counts[i] * (missTok/st); break; }
       }
       bp = Math.max(0, Math.min(100, bp));
       const headL = [l1,l2,l3,l4, ...(segs.length?["— 投影分布（绿底=缓存命中 红底=重算 │=断点）—,"]:[])];

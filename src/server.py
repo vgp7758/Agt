@@ -1295,6 +1295,7 @@ async def api_stats(scope: str = "current"):
             "scene": r.get("scene") or "",   # 调用时机（react/hook:before_turn/recap/debug/completer；老记录空）
             "turn": r.get("turn"),           # react 调用的轮号（对上 projections/t{N} 文件名；老记录 None）
             "step": r.get("step"),           # react 调用的步号（对上 projections/_s{M}）
+            "proj": r.get("proj") or None,   # 投影分布（[{n,tok,pct}]——agent 记录侧附入；/stats tooltip 渲染）
             "outcome": r.get("outcome") or "",
             "elapsed": r.get("elapsed") or 0,
             "cached": cached_tokens_of(r),

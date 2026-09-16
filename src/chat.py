@@ -117,10 +117,28 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         agent.session.set_assembly_plan(asm_plan)
         agent.session.hook_specs = hook_specs if hook_specs is not None else {}
     else:
-        agent = Agent(system=SYSTEM, tools=REAL_TOOLS,
+        # 回退（~/.agt/main.yml 损坏/读不到）：直接读随包 src/assets/main.yml 的 assembly——
+        # 单源（用户裁定 2026-09-16：删掉 chat.py 里手工维护的 SYSTEM 副本，它曾与播种源漂移；
+        # 随包文件随版本发布恒可解析，保底不炸）。仍失败则空 system + 默认装配兜底。
+        _fb_plan, _fb_model, _fb_hooks = None, None, {}
+        try:
+            _meta, _ = load_agent_yml(Path(__file__).resolve().parent / "assets" / "main.yml")
+            if _meta:
+                from multiagent import _parse_assembly, _parse_hooks
+                _fb_plan = _parse_assembly(_meta)
+                _fb_hooks = _parse_hooks(_meta) or {}
+                _fb_model = (_meta.get("model") or "").strip() or None
+        except Exception as _e:
+            if verbose:
+                print(f"[main.yml] 随包 assets/main.yml 读取失败（{_e}），空 system 兜底")
+        agent = Agent(system="", tools=REAL_TOOLS,
+                      model_name=_fb_model if _fb_model in (config.MODELS or {}) else None,
                       enable_thinking=True, max_steps=50, token_budget=80000,
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
                       registry=agent_registry)
+        if _fb_plan is not None:
+            agent.session.set_assembly_plan(_fb_plan)
+            agent.session.hook_specs = _fb_hooks
     # main.yml 声明了 fallback 时覆盖全局 settings（未声明=走 /model、WebUI 配的全局链）
     if main_fb is not None:
         agent.llm.set_fallback(main_fb[0], main_fb[1])

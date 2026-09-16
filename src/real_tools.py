@@ -2145,7 +2145,7 @@ REAL_TOOLS = Toolbox(
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(replace_lines, param_descriptions={
-        "entries": "替换段数组，每项 {range:[起,止](1-based含两端), content:新文本(可多行), expect_head:区间首行现有原文(锚点,必填,不含行号前缀)}；[n,n]替换单行；content=\"\"删该范围；多处传原始行号即可(内部降序应用)",
+        "entries": "替换段数组，每项 {range:[起,止](1-based含两端), content:新文本(可多行), expect_head?:区间首行现有原文(可选锚点,不含行号前缀)}；[n,n]替换单行；content=\"\"删该范围；多处传原始行号即可(内部降序应用)；range 必须本轮带行号看过",
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",
     }),
     Tool(list_dir),

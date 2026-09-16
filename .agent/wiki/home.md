@@ -874,3 +874,12 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **113 巡检第 3 轮：镜像同步 2h 超预期 + Plan C（diffusers 直推）备料（2026-09-16 02:08）**：liveportrait 镜像同步 ~1h50m 仍「镜像拉取失败」且平台侧无进度显示（对照 minimaxh3 78.93GB 约 40 分钟完成——8.8GB 两小时明显反常；但无失败标记，定性「慢而未死」，继续给时间不押注）；三模型仍 Downloading。**Plan C 备好**：diffusers 0.40.0 + accelerate 1.15.0 离线 wheel 已下（manylinux2014_x86_64/py311/no-deps，落 `comfy_offline/`，与 Plan B 的 73-wheel 包同体系）——diffusers 直推同时绕开两头卡：不用 comfy_kitchen（Plan B 撞的 DCU ABI 墙）、不用等镜像（qwen3-openwebui 实例已验证可建）。决策树：镜像就绪→平台 ComfyUI；仍未就绪→diffusers 三步走；模型失败→换 HF 源——见 [scnet · 就绪巡检 v2](guides/scnet.md#就绪巡检-v2-机制scnet_ready_watch2)
 
+## 快速事实增补（2026-09-16 · 四 · 配额撞墙与止损——特权写入穿透配额 + 只留 qwen-image-edit）
+
+## 快速事实增补（2026-09-16 · 四 · 配额撞墙与止损——特权写入穿透配额 + 只留 qwen-image-edit）
+
+- **三模型克隆文件实际全部到位**（`du` 对账：54+16+5.2=75G）但状态机停在 Downloading 不转正——根因：家目录配额 50G，**「模型管理」平台侧下载是特权写入不受用户配额拦截**（75G 能落盘），配额满导致收尾失败
+- **用户裁定止损**：只留 Qwen-Image-Edit（54G，稳态超配额 4G），删 Qwen3-8B + IndexTTS-2.5 回收 21G；模型管理 UI 无删除入口（API 404）留两条僵尸记录——文件已删+配额满=重试也写不进，风险自锁
+- **113 定位收敛：专跑 Qwen-Image-Edit 的图片编辑专用节点**（48.9 免费卡时 ≈ 几百张图）——权重只读+输出写容器本地盘，推理完全正常；被堵的只有家目录大文件新写入；「容量不足」警告恒在忽略即可（彻底消除 ¥8/月 扩 100G）
+- 详见 [SCNet · 配额撞墙与止损](guides/scnet.md#配额-50g-vs-实占-75g模型管理特权写入穿透配额止损只留-qwen-image-edit2026-09-16用户裁定)
+

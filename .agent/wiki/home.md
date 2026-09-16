@@ -912,3 +912,10 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **tooltip v2 段行与标题行重叠修复**（2026-09-16 · 二轮，commit `a59f8c0`，用户报「投影分布标题行与 tools schema 文本重叠」）：v2 段行 y 坐标自创公式 `by + 8 + … − 11` 与 headL 标题基线公式 `by + 19 + 行号×15` 不同体系——首段背景顶与标题基线只差 1px，直接压字；修复=段行 y 接续标题行距体系（`yRow = by + 19 + (headL.length + i) * 15`，背景顶=基线−11），相邻行距恒 15px。教训：同一 SVG 文本栈的行坐标必须共用一套基线公式。纯前端，Ctrl+F5 生效。见 [ops · proj 排障闭环 ④](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
 
+## 快速事实增补（2026-09-16 · 十二 · /stats tooltip missTok const→let——拖拽 22 连 TypeError）
+
+
+## 快速事实增补（2026-09-16 · 十二 · /stats tooltip missTok const→let——拖拽 22 连 TypeError）
+
+- **/stats tooltip 断点反推 missTok 修复**（2026-09-16 · 三轮，commit `d0825ec`，用户贴控制台 **22 连** `Assignment to constant variable`，show stats:346:35）：tooltip v2 断点反推把 `missTok`（prompt−cached）声明成 `const`，随后逐格分配循环里 `-= st` 扣减——对 const 赋值即抛，**每次拖拽 mousemove 触发一次 `show()` 刷一条**；`node --check` 只查语法不查 const 运行时赋值——④⑤**连续两次「验证通过但运行时炸」**同模式。修复 const→let（src/static/stats.html，纯前端 Ctrl+F5）；**验证首次升级浏览器级**：playwright 真页面 /stats 折线区连续拖拽 ×2 轮（14 次 mousemove）console **0 错误**（修复前每次 move 一条）——前端交互改动以后照此办理。见 [ops · ⑤ missTok const→let](guides/ops.md#⑤-misstok-声明-const-却在循环扣减assignment-to-constant-variable2026-09-16--三轮commit-d0825ec)、[context-engine · 排障闭环后记](architecture/context-engine.md#后记proj-链路当日排障闭环--tooltip-内联条形-v22026-09-16commits-d425358--d4796e3--a25d389)
+

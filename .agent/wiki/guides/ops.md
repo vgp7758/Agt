@@ -137,6 +137,15 @@ const y0 = yRow - 11;                              // 背景块顶 = 基线 - 11
 
 **教训**：同一 SVG 文本栈里的行坐标必须共用一套基线公式（或至少从同一行号游标递推）——两套公式各自「看着对」，代数差 1px 就是压字；改前先代入行号推演一遍相邻两行的基线/背景顶关系。纯前端，Ctrl+F5 生效。
 
+#### ⑤ missTok 声明 const 却在循环扣减——Assignment to constant variable（2026-09-16 · 三轮，commit d0825ec）
+
+用户贴 /stats 控制台 **22 连报错**：`Uncaught TypeError: Assignment to constant variable. at show (stats:346:35)`——每次拖拽 mousemove 触发一次 `show()`，一条不落（「拖拽扫描越久刷得越多」）。
+
+- **根因**：断点反推的 `const missTok = Math.max(0, (prompt||0) - (cached||0))` 声明后，随后的**逐格分配循环里 `missTok -= st` 扣减**（断点前绿后红的分格逻辑）——对 const 赋值即抛 TypeError。笔误来自④轮写断点反推时
+- **为什么又溜过**：`node --check` 只查**语法**，不查 const 运行时赋值（那是运行时 TypeError）——④（行距坐标错位）+ ⑤（const 赋值）**连续两次「语法检查通过、运行时炸」**都是这个模式
+- **修复**：`const` → `let` + 行内注释（src/static/stats.html，commit `d0825ec`），纯前端 Ctrl+F5 生效
+- **验证升级——首次上浏览器级实测**：playwright 打开真页面 `/stats`，折线区 `mouse.down` + **连续拖拽 ×2 轮（14 次 mousemove）**，console 收集 **0 个错误**（修复前每次 move 一条）。教训固化：前端改动的「语法检查」只兜最底层，**「真页面 + console 收集」才是完整验证**——以后 stats.html 一类纯前端交互改动照此办理
+
 ### 其他
 
 - `/debug prompt <提示词>`：按当前投影直调 LLM，**不落盘不执行**，打印完整回包（耗时/finish_reason/usage/含缓存命中/tool_calls）——与投影转储配套（进什么 vs 出什么）

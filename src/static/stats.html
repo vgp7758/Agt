@@ -380,15 +380,6 @@ function renderChart(models, stats){
         segRowsOut += bg + `<text x="${bx+8}" y="${yRow}" fill="#e6edf3" font-size="10" font-family="Consolas,monospace">${esc(txt.slice(0,44))}</text>`;
         a2 += counts[i];
       }
-      // 断点竖线：贯穿全部段行（x=断点比例处）。段对齐反推后断点总落在段边界（首个红段的
-      // 左缘），行内"跨断点"分支几乎不触发——原行内竖线因此消失（用户实测）。改为整列贯穿，
-      // 无论断点落在段边界还是段内都可见。
-      if(segs.length && bp < 100 && bp > 0){
-        const lineX = (bkX + bkW * bp / 100).toFixed(1);
-        const segTop = by + 8 + headL.length * 15 - 11;
-        const segBot = by + 8 + (headL.length + segs.length) * 15 - 11 + 14;
-        segRowsOut += `<line x1="${lineX}" y1="${segTop}" x2="${lineX}" y2="${segBot}" stroke="#e6edf3" stroke-width="1.3" opacity="0.95"/>`;
-      }
       tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
         + headL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('')
         + segRowsOut;

@@ -323,41 +323,49 @@ function renderChart(models, stats){
       const l2 = fmtTs(hit.p.ts);
       const l3 = `命中率 ${hit.p.rate}%（cached ${fmtK(hit.p.cached)} / prompt ${fmtK(hit.p.prompt)} tokens）`;
       const l4 = `completion ${fmtK(hit.p.completion)} tokens` + (hit.p.reasoning ? `（含思考 ${fmtK(hit.p.reasoning)}）` : '');
-      // 投影分布（react 调用记录的 proj 字段——当时上下文各段构成，agent 记录侧附入）
-      const projL = (hit.p.proj||[]).slice(0,16).map(s=>`${s.n}  ${fmtK(s.tok)} · ${s.pct}%`);
-      // 断点条（用户提案 2026-09-16）：100 段 ─ 按段占比分配（<1 给 1，调平恰 100）；
-      // 缓存断点（cached/prompt 比例处）前绿后红——一眼看出这次调用重算了哪些段
-      let barT = '';
-      if(hit.p.proj && hit.p.proj.length){
-        const segs = hit.p.proj, tt = segs.reduce((a,x)=>a+(x.tok||0),0);
-        if(tt > 0){
-          const counts = segs.map(x=>Math.max(1, Math.round((x.tok||0)*100/tt)));
-          let cs = counts.reduce((a,b)=>a+b,0);
-          while(cs > 100){ const i = counts.indexOf(Math.max(...counts)); if(counts[i] <= 1) break; counts[i]--; cs--; }
-          while(cs < 100){ counts[counts.indexOf(Math.max(...counts))]++; cs++; }
-          const bp = hit.p.prompt ? Math.min(100, Math.max(0, Math.round((hit.p.cached||0)/hit.p.prompt*100))) : 100;
-          let acc = 0;
-          for(let i=0;i<counts.length;i++){
-            const g = Math.max(0, Math.min(counts[i], bp - acc));
-            const r = counts[i] - g;
-            if(g) barT += `<tspan fill="#3fb950">${'─'.repeat(g)}</tspan>`;
-            if(r) barT += `<tspan fill="#f85149">${'─'.repeat(r)}</tspan>`;
-            acc += counts[i];
-          }
-        }
-      }
-      const allL = [l1,l2,l3,l4, ...(projL.length?["— 投影分布 —",...projL]:[])];
-      const bh = 14 + allL.length*15 + (barT ? 17 : 0);
-      const bw = Math.max(Math.max(...allL.map(s=>s.length))*6.8, barT ? 536 : 0) + 16;
+      // 投影分布 + 每段内联断点条（用户提案 2026-09-16·v2）：条不独立成行，而在每段行内、
+      // 横向位置=该段在总条（100 格）中的偏移；断点前绿/后红/断点字符 █；条形区左端对齐（tspan x 绝对定位）
+      const segs = hit.p.proj || [];
+      const tt = segs.reduce((a,x)=>a+(x.tok||0),0);
+      const counts = tt>0 ? segs.map(x=>Math.max(1, Math.round((x.tok||0)*100/tt))) : [];
+      { let cs = counts.reduce((a,b)=>a+b,0);
+        while(cs > 100){ const i = counts.indexOf(Math.max(...counts)); if(counts[i] <= 1) break; counts[i]--; cs--; }
+        while(cs < 100 && counts.length){ counts[counts.indexOf(Math.max(...counts))]++; cs++; } }
+      const bp = hit.p.prompt ? Math.min(100, Math.max(0, Math.round((hit.p.cached||0)/hit.p.prompt*100))) : 100;
+      const LCOL = 208;   // 左列宽（段名+pct）；条形区从 bx+8+LCOL 起，100 格 monospace 左端对齐
+      const headL = [l1,l2,l3,l4, ...(segs.length?["— 投影分布（100 格·绿=缓存命中 红=重算 █=断点）—,"]:[])];
+      const bh = 14 + (headL.length + segs.length)*15;
+      const bw = Math.max(Math.max(...headL.map(s=>s.length))*6.8, LCOL + 100*5.4) + 16;
       let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);
       // y 锁定在数据点附近：tooltip 垂直居中对准该点的命中率位置（上下缘自动收进绘图区）
       const sy = y(hit.p.rate);
       let by = sy - bh/2;
       if(by + bh > H-padB) by = H-padB-bh;
       if(by < padT) by = padT;
+      // 段行（名字+pct 左列 / 条形右列；前导 nbsp 占位体现段在总条中的偏移）
+      let segRowsOut = '', a2 = 0;
+      for(let i=0;i<Math.min(segs.length, counts.length);i++){
+        const c = counts[i], g = Math.max(0, Math.min(c, bp - a2));
+        const idx = bp - a2;   // 断点在段内第 idx 个字符（1..c）
+        let bar = '';
+        if(idx >= 1 && idx <= c){
+          if(idx > 1) bar += `<tspan fill="#3fb950">${'─'.repeat(idx-1)}</tspan>`;
+          bar += `<tspan fill="#e6edf3">█</tspan>`;
+          if(c - idx > 0) bar += `<tspan fill="#f85149">${'─'.repeat(c - idx)}</tspan>`;
+        } else {
+          if(g > 0) bar += `<tspan fill="#3fb950">${'─'.repeat(g)}</tspan>`;
+          if(c - g > 0) bar += `<tspan fill="#f85149">${'─'.repeat(c - g)}</tspan>`;
+        }
+        const nm = String(segs[i].n||'').slice(0, 18);
+        const yRow = by + 19 + (headL.length + i - 1) * 15 + 3;
+        segRowsOut += `<text x="${bx+8}" y="${yRow}" font-size="10" font-family="Consolas,monospace">`
+          + `<tspan fill="#8b949e">${esc((nm + ' ' + (segs[i].pct??0) + '%').slice(0,28))}</tspan>`
+          + `<tspan x="${bx+8+LCOL}">${'&nbsp;'.repeat(a2)}${bar}</tspan></text>`;
+        a2 += c;
+      }
       tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
-        + allL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('')
-        + (barT ? `<text x="${bx+8}" y="${by+13+allL.length*15}" font-size="9" font-family="Consolas,monospace" font-weight="bold">${barT}</text>` : '');
+        + headL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('')
+        + segRowsOut;
     };
     svgEl.addEventListener('mousedown', e=>{
       if(e.button!==0) return;

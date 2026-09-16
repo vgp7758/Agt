@@ -12,7 +12,7 @@
 | **气泡级复制按钮**：user/answer 气泡 hover 浮现「📋 复制」，一键复制整个气泡内容 | `static/index.html` | 2026-08-19，commit 3a7e9de |
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 |
-| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频**直接内嵌渲染**、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]` 与标准图片双语法） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]` 与标准图片双语法） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -68,6 +68,7 @@
 | `<https://xxx.xxx.cn/>` | autolink 蓝色链接（`a.md-link`，新标签打开） |
 | `[!架构示意图](assets/images/arch.png)` | **图框** `.asset-box`：标题 `.asset-cap` + 内嵌 `<img>`（外层 `<a target=_blank>` 点击看原图；加载失败降级为链接） |
 | `[!主题曲](assets/audios/theme.wav)` | **音频框**：标题 + `<audio controls>` 播放器 |
+| `[!演示视频](assets/videos/demo.mp4)` | **视频框**（2026-09-17）：内嵌 `<video controls>` 播放器 + 右上角 ↗ 新页签看原片（见[专节](#视频资产内嵌播放器渲染2026-09-17用户问诊)） |
 | `[!设计文档](docs/gdd.md)` | **文本资产框**（2026-09-04 · 二，commit fe44b5a）：📄 标题框可点击 → 打开[文件预览抽屉](#文本文件--预览抽屉2026-09-04--二commit-fe44b5a用户提案)；覆盖 40 种文本扩展名（见下节） |
 | `[文字](https://...)` | 普通外链（顺带支持的标准 markdown 语法） |
 | `` `![alt](相对路径)` `` | **标准 markdown 图片**（2026-09-14，commit 6215ed1）：本地路径**复用 `assetBoxHtml`**，与 `[!名](路径)` 同一条资产链（图框/音频/文本预览/未知后缀嗅探同款分流，alt 作 caption）；http(s)/ftp 外链直连 `<img>`——见[专节](#标准-markdown-图片语法渲染支持2026-09-14用户问诊commit-6215ed1) |
@@ -82,7 +83,7 @@
 - `inlineRich(t)` 替代原 `inlineCode(esc(...))`——段落 `flush()` 与表格 `cell()` 两个消费点全部换上
 - **占位符保护**：先用 `\x02N\x02` 把特殊片段摘进 hold 数组，全文 esc 后统一还原。否则两个病：esc 把 `<` `>` 转义成实体后正则匹配不到 autolink/资源引用；已生成的 HTML 会被二次转义显示成源码
 - 处理顺序：① code span 优先（内容 **esc——LLM 输出不可信**，初版漏了 esc，验证轮补上；2026-09-04 · 三起按 `_URL_RE` 分流：URL 整串 → `codeUrlHtml` 链接 / 其余 → `_codeSpanHtml` 可点击追加）→ ② autolink → ③ `[!标题](相对路径)` 资源引用 → ④ 普通外链
-- `assetBoxHtml(title, path)` 按扩展名分流：图（png/jpg/jpeg/gif/webp/svg/bmp/avif）→ 图框；音（wav/mp3/ogg/oga/m4a/aac/flac/opus）→ 音频框；40 种文本扩展 → 📄 可点击资产框（·二）；其它扩展 → 普通链接。src 统一 `/api/asset?path=<encodeURIComponent(path)>`
+- `assetBoxHtml(title, path)` 按扩展名分流：图（png/jpg/jpeg/gif/webp/svg/bmp/avif）→ 图框；音（wav/mp3/ogg/oga/m4a/aac/flac/opus）→ 音频框；**视频（mp4/webm/mov/mkv/avi/m4v/flv/ts/3gp/wmv/mpg/mpeg）→ 视频框（2026-09-17）**；40 种文本扩展 → 📄 可点击资产框（·二）；其它扩展 → 普通链接。src 统一 `/api/asset?path=<encodeURIComponent(path)>`
 - **code span 三件套单源（·三，commit fd3d465）**：`_URL_RE` / `codeUrlHtml` / `_codeSpanHtml` 由 `inlineRich` 与独立 `inlineCode`（普通外链文本等非 rich 场景）双管线共享——URL→链接与点击追加两种行为全场景一致
 
 ### 后端：GET /api/asset（src/server.py）
@@ -217,6 +218,7 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 |---|---|---|
 | 图片（png/jpg/jpeg/gif/webp/svg/bmp/avif） | 文本框（点击开预览抽屉） | **直接内嵌图框**，caption 带 ✏️/➕ 标记，点击看原图 |
 | 音频（wav/mp3/ogg/oga/m4a/aac/flac/opus） | 文本框 | **audio 播放条** 🔊（同一分支天然覆盖） |
+| 视频（mp4/webm/mov/mkv/avi/m4v/flv/ts/3gp/wmv/mpg/mpeg） | 文本框 | **内嵌 video 播放器** 🎬（2026-09-17 补——此前落 else 走文本预览抽屉，8000 实测，见[专节](#视频资产内嵌播放器渲染2026-09-17用户问诊)） |
 | 文本/代码类 | 点击预览抽屉 | 不变 ✅ |
 | deleted | 灰框只读 | 不变 ✅ |
 
@@ -306,6 +308,29 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 **cited 判定同步（变更文件补充区误补防御）**：「📎 本轮变更文件」的「已引用剔除」集合（归一化口径见[路径归一化修复](#变更文件补充区路径归一化反斜杠大小写引用漏判修复2026-09-13用户问诊commit-b1ef5e4)）此前只收集 `[!名](path)` 形态——answer 用标准图片语法引用过的文件仍会被误判「未交代」而重复补充。现 `_collect` 回调同时喂两种语法的正则，`cited` 收 `_norm`（`\`→`/`）+ `_base`（basename 小写）双份——与本页 2026-09-13 归一化修复同层防御。
 
 **生效方式**：纯前端，Ctrl+F5。验证方式：刷新后取一张真实产物图（如 comfy 的 `stormstreet_red_umbrella.png`）让 Agent 以 `![](路径)` 形态引用，应直接出图框而非字面文本。
+
+### 🎬 视频资产内嵌播放器渲染（2026-09-17，用户问诊）
+
+**用户问诊（2026-09-17）**：answer 气泡里引用的 `.mp4` 文件点开没走浏览器新页签，反而被当文本开了右侧预览抽屉；顺带问「视频能不能直接渲染成播放器」。**根因确认：两个入口都没把视频当视频**——
+
+- `assetBoxHtml` 的分流表只有图 / 音 / 40 种文本三张后缀表——mp4 落「其它 → 普通链接」；
+- 📎 变更文件补充区 `unmentionedChangesHtml` 的 inline 条件只认图片/音频——mp4 落 else → `openFilePreview()` 文本预览抽屉（8000 实例实测正主）。
+
+**修复（src/static/index.html）**：
+
+| 位置 | 改动 |
+|---|---|
+| `assetBoxHtml` | 新增 `isVid` 后缀表（mp4/webm/mov/mkv/avi/m4v/flv/ts/3gp/wmv/mpg/mpeg）→ **内嵌 `<video controls preload="metadata">` 播放器**（`src=/api/asset`，metadata 只取首帧不预载全片）+ 右上角 `↗` 新页签链接（`.vid-open`，浏览器按 /api/asset 的 Content-Type 直接播原片，不触发下载） |
+| `unmentionedChangesHtml` | 条件补视频类 → 走 `assetBoxHtml` 内嵌播放器（不再进文本抽屉） |
+| 嗅探前置 | 未知后缀探嗅条件补 `&& !isVid`——已知视频后缀短路，不再进 probe 链路 |
+| CSS | `.asset-box.video`（max-width 560px，relative）+ `.vid-open` 右上角定位 |
+
+- **caption 带变更标记**：`assetBoxHtml(ic+' '+f, f)` 已有——视频框自动继承 ✏️/➕ 标记
+- **与未知后缀嗅探（/api/file-kind，2026-09-09）共存**：已知视频后缀 → 直接内嵌播放器；未知后缀嗅探出 `video` kind 仍走新页签链接（原设计）——两条路各归其位
+
+**验证（run_python 断言）**：isVid 判定 ✓ / video 播放器分支 ✓ / 变更列表含视频 ✓ / CSS 写入 ✓。
+
+**生效**：纯前端，Ctrl+F5 刷新即生效（8000 实例需 /update-assets 或升级后重启取新静态资源）。
 
 ## 气泡级复制按钮（index.html，2026-08-19）
 

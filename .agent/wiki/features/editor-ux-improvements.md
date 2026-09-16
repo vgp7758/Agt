@@ -502,6 +502,27 @@ if(_rubber){
 
 > 教训：**「toast 出了但 UI 没变」类现象，优先怀疑紧随事件流的副作用（浏览器自动派发的 click/dblclick）**——合成事件测试天然掩盖这类 bug，验证必须走真实输入路径。
 
+## 批次十四（2026-09-17，commit 597fb81）：JSON Schema 导入双形态——真 schema 语义递归 + 数据样例推断
+
+主线索：**粘什么都对**——「📋 JSON 导入」不再只认数据样例。
+
+**用户实测（2026-09-17）**：字段行 📋（JSON 导入）粘贴**真 JSON Schema** 时结构全错——`{"type":"object","properties":{"slides":{"type":"array","items":{"properties":{...}}}}}` 的 `type`/`properties`/`items` 被当成**数据字段名**，数组 items 的嵌套结构根本导不出来。
+
+**根因**：`importJSONSchema` 名为「Schema」实为**数据样例导入**——`_inferFields` 按真实值推断字段类型。粘 schema 时没有真实值可推断，关键字本身成了字段（结构全歪）。
+
+**修复（双形态自动识别，src/static/workflow_editor.html）**：
+
+- **`_looksLikeSchema(obj)`** 识别真 schema：含 `$schema` / `properties` / `items` 键，或 `{type:<基本类型>±已知关键字}` 形态（type/properties/items 是保留关键字而非字段名）
+- 真 schema → **`_schemaToFields` 语义递归**：`object` → properties 逐字段展开、`array` → items 递归、`required` 数组标记、`type` 映射字段类型；顶层 array schema（`items.properties`）直接取元素字段
+- 数据样例 → 原 `_inferFields`（行为不变，向后兼容）
+- **`importFieldSchema`（单字段子结构导入）同步接入**同一双形态——两处入口一致
+
+**实测（node 直跑）**：嵌套数组 schema（`slides:list*{title:string, no:integer, tags:list[string]}`）完整解析 ✓；数据样例输入 → 同结构 ✓；顶层 array schema → 元素字段 ✓。
+
+> 教训：**函数名叫 Schema 不代表实现语义是 Schema**——「📋 JSON 导入」的预期模型是「导入后的结构应该和 JSON 长得一样」，两种输入（schema / 样例）都要产出正确结构，识别器要按形态分流而不是只服务一种。
+
+**生效**：纯前端改动，Ctrl+F5 强刷编辑器即生效。
+
 ## 相关页面
 
 - [v0.18.7 发布记录](../releases/v0.18.7.md) — 批次一（§1–§4）随该版发布；批次二为其后续打磨

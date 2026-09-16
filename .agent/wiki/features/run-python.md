@@ -85,6 +85,12 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 - **`list_services` 合并视图**（2026-09-06 同批，background_tools.py）：【后台服务】+【后台任务】（bg_id/工具名/状态/已跑时长）一处看全——详见 [background-scheduler](background-scheduler.md#后台进程一览与任务查询list_services-合并视图--check_bg_task-真工具2026-09-06commit-e72c0e1)
 - 唤醒理由（与 service_exit 策略化对照）：转后台任务本来是**同步等待**（超时被迫转），结果通常是决策链一环；一次性任务跑完即报、无套娃循环——恒唤醒天然安全，不需要策略参数。三族通知语义全景见 [用户交互 · 后台任务完成自动通知](user-interaction.md#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1)
 
+## TOOL_TIMEOUT 边界：只管 subprocess 系——inline 工具不受管（2026-09-16，commit 30fe776）
+
+用户问句钉死的执行模型边界：「tool_timeout 比 sleep(t) 短时，sleep 会在 timeout 提前结束吗？」——**不会**。转后台/超时机制挂在 `_run_subprocess_streaming`，只覆盖 **subprocess 系**（run_python / run_shell / run_script / subprocess 模式外置工具）；**inline 模式工具（进程内直调函数，如 misc_tools 的 sleep）没有这层包装，会真实睡满**。
+
+意外实证（开发验证时真调了 `sleep(600)`）：宿主 run_python 在 180s 超时转后台，sleep 本身在后台继续睡满 600s 不被掐——inline 工具不超时的直接证据；睡满后走 bg_task 完成通知（上节链路），无害。代价：inline sleep **阻塞当前 react 轮**（UI 工具运行中、插话排队），长睡（sleep 上限 2026-09-16 放宽到 3600s，commit 30fe776）期间整轮不可用——详见 [misc-tools · sleep](misc-tools.md)。
+
 ## 与其他模块的关系
 
 - 工具箱真实工具（LLM 可直接调用），也可在工作流 plugin 节点（type 4）中使用

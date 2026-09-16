@@ -630,6 +630,18 @@ pip install mcp websocket-client
 
 **历史沿革**：monitor 模板走过「repo `tools/scnet_monitor.py` ↔ `~/.agt/mcp/scnet/monitor_template.py` 双份手工同步」→「内联进 `scnet_mcp.py`」→「独立 repo 后拆回同目录 `monitor.py` 文件（`_monitor_source()` 读它）」——**最终形态既真源唯一又可读可 diff**。agt 仓库里 `tools/scnet_*.py` 已删除（git 历史可回溯）。
 
+### 工作交接：主仓产物入 scnet-mcp + 专职实例 agt_scnet（2026-09-16）
+
+用户指示「comfy_offline 等文件别堆在 agt 主仓目录——挪到 scnet repo，在那边启一个实例交接工作」。一轮完成挪移 + 文档化 + 开实例 + 交接：
+
+**① 产物挪移（agt workspace → `D:\Projects\scnet-mcp\assets\scnet113\`）**：`comfy_offline/`（82 wheels，260MB——[Plan B/C 的离线依赖包](#plan-c-备料diffusers-直推本轮落地)）+ `comfy_offline.tar.gz`（189MB）+ `scnet_out.png`（diffusers 出图样张）+ `qedit_env.txt` + `model_create_req.json` + `model_detail.json`（API 抓包）。大文件 gitignore（代码/文档入库、二进制不入库）。
+
+**② 交接文档（commit `03f2719` 推送 Codeup）**：`HANDOFF.md`（7.5KB 现场全量：实例表 + SSH 密码 + [50G 配额真相](#配额-50g-vs-实占-75g模型管理特权写入穿透配额止损只留-qwen-image-edit2026-09-16用户裁定) + Qwen-Image-Edit 完整配方含两个 patch + 踩坑链 + 待办）+ `AGENTS.md`（实例职责定义与必读指引）。主 Agent 的 SCNet memory（配方 pro_1789501564847）不迁移——HANDOFF.md 已内容实体化，独立记忆域读文件即可。
+
+**③ 专职实例**：`agt_scnet` @ **9300**（避让本机 cpolar 9200）· glm-5.3 · **144 工具（scnet 全家 11 个经全局 MCP 配置装配**）· cwd=scnet-mcp repo；stdin 交接消息（读 HANDOFF → scnet_status 诊断 → clone_status 查 liveportrait 同步 → 汇报就绪）。
+
+**交接后格局**：9000（Agt 框架本体开发）/ **9300（SCNet 算力业务全部**——实例/模型/镜像/推理生产/工具维护**）/ 3000（ComfyUI 图像管线开发）。[113 就绪巡检 v2](#就绪巡检-v2-机制scnet_ready_watch2) 等 SCNet 跟进职责随之移交 9300 实例；9000 主 Agent 保留 remote 工具跨实例调度能力（`remote_message` / `remote_ask`，见 [multi-instance](../architecture/multi-instance.md)）。
+
 ## 平台侧通道入 MCP（2026-09-16，commit 15eb3ae）
 
 113 攻坚（Qwen-Image-Edit diffusers 直推出图）过程中挖出的平台侧通道，从 playwright 临时操作固化为 MCP 工具（`D:\Projects\scnet-mcp\scnet_mcp.py`，**9→11 工具**，三端点真实 API 验证全过；README 已补两工具用法，commit `15eb3ae` 推送 Codeup）：

@@ -892,3 +892,11 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **三项投影调整**（commit `17af0a8`，用户提案）：①卫生性强档阈值 `GRADUATE_FORCE_TURNS` 60 → **15**（当前档 >15 轮无窗口压力也分批升前 30 轮——v0.21.1 引入时 60 的卫生线收紧）；②**llm_calls.jsonl 附投影分布**：react 记录带 `proj=[{n, tok, pct}]`（`projection_breakdown()` 同源，与 /context 一致）+ 顺带修 recorder 旧 session 引用隐患（动态取 `self.session`）；/stats 拖拽扫描 tooltip 新增「投影分布」块 + hover 小圆点 title 加压缩版一行；③**超深档（工具折叠档）不投影 answer_reasoning**（用户裁定：answer content 原文信息量已足），正常档位照旧——见 [context-engine · 三项调整](architecture/context-engine.md#三项调整卫生毕业-15-轮--llm_calls-附投影分布--超深档不投影-reasoning2026-09-16用户提案commit-17af0a8)
 
+## 快速事实增补（2026-09-16 · 七 · 卫生毕业参数裁定修正：触发线 30 / 每刀 15）
+
+- **卫生性强制毕业参数修正**（commit `82f6265`，用户裁定）：上一条 ① 的语义两处归位——**触发线 `GRADUATE_FORCE_TURNS` = 30**（当前档 >30 触发，非 15）+ **每刀批量新常量 `GRADUATE_FORCE_BATCH` = 15**（每刀只升当前档前 15 轮，非复用 30）；`_graduate_once()` 增 `batch` 参数，压力驱动路径（默认 30）行为完全不变，仅卫生性循环传 15；触发线与停刀线同阈值（≤30 停）。6 场景模拟全绿。详见 [context-engine · 修正后记](architecture/context-engine.md)。
+
+## 快速事实增补（2026-09-16 · 八 · SCNet 业务交接：产物入 scnet-mcp + 专职实例 9300）
+
+- **SCNet 工作交接**（用户指示「挪到 scnet 的 repo，在那边启一个实例交接」）：agt 主仓目录的 `comfy_offline/`（82 wheels 260MB）+ `comfy_offline.tar.gz` + 出图样张 + API 抓包共六件挪 `D:\Projects\scnet-mcp\assets\scnet113\`（大文件 gitignore）；交接文档 `HANDOFF.md`（现场全量）+ `AGENTS.md`（职责定义）commit `03f2719` 推 Codeup；新实例 **`agt_scnet` @ 9300**（glm-5.3 · 144 工具 · scnet 全家 11 工具全装配 · cwd=scnet-mcp）。交接后格局：9000 Agt 框架开发 / 9300 SCNet 业务 / 3000 ComfyUI 管线。详见 [scnet · 工作交接](guides/scnet.md)。
+

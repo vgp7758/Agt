@@ -336,7 +336,7 @@ function renderChart(models, stats){
       // 因尾部小段整数格虚高（<1 给 1）+ 估算口径偏差，落点漂到最后一段内部靠尾处。
       // 物理断点=缓存前缀末端=「重算区前沿」——真实 miss（prompt-cached）从最后一段
       // 往前扣估算 tok，扣完的位置即断点（miss 发生在尾部，锚定尾部更符合直觉）。
-      const missTok = Math.max(0, (hit.p.prompt||0) - (hit.p.cached||0));
+      let missTok = Math.max(0, (hit.p.prompt||0) - (hit.p.cached||0));   // let：循环内会扣减（const 报 Assignment——用户实测 22 连）
       let bp = 100;
       for(let i=segs.length-1; i>=0 && missTok>0; i--){
         const st = segs[i].tok||0;

@@ -45,7 +45,8 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
-GRADUATE_FORCE_TURNS = 15  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
+GRADUATE_FORCE_TURNS = 30  # 卫生性强档触发线：当前档超过此轮数时，无窗口压力也强制分批毕业（防档1 无限膨胀——
+GRADUATE_FORCE_BATCH = 15  # 卫生性每刀批量：触发后一次升【前 15 轮】（用户裁定 2026-09-16：触发线 30 / 每刀 15）
 RF_MAX_CHARS = 100_000  # recent-file 快照单文件上限·施工期内嵌口径（用户裁定 2026-08-31）：超大文件全文注入让近期缓存上蹿下跳
 RF_SEG_MAX_CHARS = 15_000  # 非施工段式口径（用户裁定 2026-09-15）：尾部 <recent-file> 段是每步
                           # 重渲染的易变项，>15K 即转 outline——段体积压小，尾部 miss 区代价低
@@ -2000,22 +2001,23 @@ class Session:
             except Exception:
                 pass
         # —— 卫生性强制毕业（不依赖窗口压力）——
-        # 当前档（最后边界之后的段）> GRADUATE_FORCE_TURNS 时分批升前 30 轮：
+        # 当前档（最后边界之后的段）> GRADUATE_FORCE_TURNS(30) 时分批升前 GRADUATE_FORCE_BATCH(15) 轮：
         # 档1 是全量披露档（"近期窗口"语义），窗口宽绰时压力循环永不触发会让它无限膨胀
-        # （用户在 8000 实例观察到 64 轮/58.6%）。分批语义复用 _graduate_once（每刀 30，近期轮保持）。
+        # （用户在 8000 实例观察到 64 轮/58.6%）。分批语义复用 _graduate_once（batch=15，
+        # 近期轮保持 level1；循环到当前档 ≤30 时停——触发线与停刀线同一阈值，语义自洽）。
         last_completed = len(self.turns) - 1
         _seg_start = self._last_boundary() + 1 if self._tier_boundaries else 0
         if last_completed - _seg_start + 1 > GRADUATE_FORCE_TURNS:
             _before = len(self._tier_boundaries)
-            while len(self._tier_boundaries) < len(self.turns) // GRADUATE_BATCH_TURNS + self.max_level + 2:
+            while len(self._tier_boundaries) < len(self.turns) // GRADUATE_FORCE_BATCH + self.max_level + 2:
                 _lc = len(self.turns) - 1
                 _ss = self._last_boundary() + 1
                 if _lc - _ss + 1 <= GRADUATE_FORCE_TURNS:
                     break
-                if not self._graduate_once():
+                if not self._graduate_once(batch=GRADUATE_FORCE_BATCH):
                     break
             g = len(self._tier_boundaries) - _before   # 并入总刀数（日志/报告）
-            _LOG.info("卫生性强制毕业 +%d 刀（当前档曾 >%d 轮）", g, GRADUATE_FORCE_TURNS)
+            _LOG.info("卫生性强制毕业 +%d 刀（当前档曾 >%d 轮，每刀升前 %d）", g, GRADUATE_FORCE_TURNS, GRADUATE_FORCE_BATCH)
         # 先升档：反复 graduate 直到 ≤75%（或无可升）。估算 = prefix + 历史 + 当前轮近似
         # 当前轮估算剥除 recent-file 块（_rf_stripped）：rf 是轮内易变项（归档即消失），
         # 它的体积不该推动升档/折叠——panic 轮内路径调用本函数时 cur_est 含 rf 会过激压缩
@@ -2086,12 +2088,13 @@ class Session:
         self._planned_fold = fc
         self._planned_graduates = g
 
-    def _graduate_once(self) -> bool:
+    def _graduate_once(self, batch: int = None) -> bool:
         """毕业一批 turn：append 新边界到 _tier_boundaries（边界之前的轮 level+1=顺移），
         并清掉 level 变了的冻结缓存让其按新级别重渲染。
-        批量语义（GRADUATE_BATCH_TURNS）：当前段（最后边界之后）≤30 轮 → 整段一次升（旧行为）；
-        >30 轮 → 只升【前 30 轮】（新边界=段起点+29），近期轮保持 level1 不动——
+        批量语义（batch 默认 GRADUATE_BATCH_TURNS=30）：当前段（最后边界之后）≤批时 → 整段一次升（旧行为）；
+        超过批 → 只升【前 N 轮】（新边界=段起点+N-1），近期轮保持 level1 不动——
         大档分批毕业，升档粒度可控（压缩需要多少升多少，近的保真）。
+        卫生性路径传 batch=GRADUATE_FORCE_BATCH（15，用户裁定 2026-09-16）。
         当前段无已完成 turn → 返回 False（_plan_fold/保命阀循环据此停止）。"""
         last_completed = len(self.turns) - 1
         if last_completed < 0:
@@ -2099,9 +2102,10 @@ class Session:
         seg_start = self._last_boundary() + 1 if self._tier_boundaries else 0
         if seg_start > last_completed:
             return False   # 当前段只剩进行中 turn，无东西可升
+        _b = batch or GRADUATE_BATCH_TURNS
         seg_len = last_completed - seg_start + 1
-        new_b = last_completed if seg_len <= GRADUATE_BATCH_TURNS \
-            else seg_start + GRADUATE_BATCH_TURNS - 1
+        new_b = last_completed if seg_len <= _b \
+            else seg_start + _b - 1
         self._tier_boundaries.append(new_b)
         self._invalidate_frozen_after_graduate()
         return True

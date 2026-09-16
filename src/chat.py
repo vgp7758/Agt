@@ -142,6 +142,14 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # main.yml 声明了 fallback 时覆盖全局 settings（未声明=走 /model、WebUI 配的全局链）
     if main_fb is not None:
         agent.llm.set_fallback(main_fb[0], main_fb[1])
+        # react 主调用的链也认这份声明（2026-09-16 修：此前只设了实例链（非 react 用），
+        # agent._declared_fallback 恒 None → react 链退化为 [当前模型] 单元素，
+        # glm 429 时直接"回退链耗尽"（用户实测 14:30:53 日志 tried=['glm-official']）——
+        # 与 _reload_main_dsl 里的赋值对齐（那边只在 mtime 变化时跑，首轮前不设）。
+        try:
+            agent._declared_fallback = list(main_fb[0])
+        except Exception:
+            pass
     # 热重载锚点（用户提案 2026-09-07）：记录 main.yml 路径+mtime+声明的 model——
     # 每轮 run 开始 _reload_main_dsl 检测变更，改 DSL 免 /restart
     import os as _os

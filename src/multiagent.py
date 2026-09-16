@@ -217,6 +217,23 @@ def _parse_agent_fallback(meta: dict):
     return chain, policy
 
 
+def _apply_declared_fallback(sub_agent, fb):
+    """子 Agent 声明式回退链统一应用（2026-09-16 修）：实例链（非 react 调用）+ react 链一并设。
+    此前三处调用点（新建/复用/复活）只调了 llm.set_fallback —— agent._declared_fallback
+    恒 None → react 链退化为 [当前模型] 单元素，主模型 429 时子 Agent 直接"回退链耗尽"炸轮
+    （用户实测 vision_17：tried=['glm-official-flash']），yml 里声明的 fallback 形同虚设。"""
+    if not fb:
+        return
+    try:
+        sub_agent.llm.set_fallback(fb[0], fb[1])
+    except Exception:
+        pass
+    try:
+        sub_agent._declared_fallback = list(fb[0])
+    except Exception:
+        pass
+
+
 def _parse_hooks(meta: dict) -> dict:
     """frontmatter/yml 的 hooks 字段 → {hook位置: [{kind, value, async...}]}。
     项格式：'workflow: x' / 'x'（裸名=workflow）/ 'cmd: ...' / 'emit: ...'，
@@ -1063,7 +1080,7 @@ def make_subagent_tools(agent) -> list:
                 if base_hooks is not None:
                     entry.agent.session.hook_specs = base_hooks
                 if base_fb is not None:   # fallback：yml 声明（改链后复用实例下一任务即生效）
-                    entry.agent.llm.set_fallback(base_fb[0], base_fb[1])
+                    _apply_declared_fallback(entry.agent, base_fb)
                 with reg._lock:
                     entry.task = prompt
                     entry.caller_id = caller_id
@@ -1081,7 +1098,7 @@ def make_subagent_tools(agent) -> list:
                     if base_hooks is not None:
                         sub_agent.session.hook_specs = base_hooks
                     if base_fb is not None:
-                        sub_agent.llm.set_fallback(base_fb[0], base_fb[1])
+                        _apply_declared_fallback(sub_agent, base_fb)
                     reg.register(entry.agent_id, name, "subagent", model_name,
                                  agent=sub_agent, task=prompt, status="running",
                                  caller_id=caller_id)
@@ -1122,7 +1139,7 @@ def make_subagent_tools(agent) -> list:
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks
             if base_fb is not None:
-                sub.agent.llm.set_fallback(base_fb[0], base_fb[1])
+                _apply_declared_fallback(sub.agent, base_fb)
             if reg:
                 reg.register(aid, name, "subagent", model_name,
                              agent=sub.agent, task=prompt, status="running",

@@ -914,8 +914,9 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 ## 快速事实增补（2026-09-16 · 十二 · /stats tooltip missTok const→let——拖拽 22 连 TypeError）
 
-
-## 快速事实增补（2026-09-16 · 十二 · /stats tooltip missTok const→let——拖拽 22 连 TypeError）
-
 - **/stats tooltip 断点反推 missTok 修复**（2026-09-16 · 三轮，commit `d0825ec`，用户贴控制台 **22 连** `Assignment to constant variable`，show stats:346:35）：tooltip v2 断点反推把 `missTok`（prompt−cached）声明成 `const`，随后逐格分配循环里 `-= st` 扣减——对 const 赋值即抛，**每次拖拽 mousemove 触发一次 `show()` 刷一条**；`node --check` 只查语法不查 const 运行时赋值——④⑤**连续两次「验证通过但运行时炸」**同模式。修复 const→let（src/static/stats.html，纯前端 Ctrl+F5）；**验证首次升级浏览器级**：playwright 真页面 /stats 折线区连续拖拽 ×2 轮（14 次 mousemove）console **0 错误**（修复前每次 move 一条）——前端交互改动以后照此办理。见 [ops · ⑤ missTok const→let](guides/ops.md#⑤-misstok-声明-const-却在循环扣减assignment-to-constant-variable2026-09-16--三轮commit-d0825ec)、[context-engine · 排障闭环后记](architecture/context-engine.md#后记proj-链路当日排障闭环--tooltip-内联条形-v22026-09-16commits-d425358--d4796e3--a25d389)
+
+## 快速事实增补（2026-09-16 · 十三 · /stats 断点竖线贯穿式渲染修复 + v3/段对齐补录）
+
+- **/stats 投影分布断点竖线消失修复 + v3/段对齐两轮补录**（2026-09-16 · 四轮，commit `26e05e2`，用户报「那个|的断点位置看不到了」）：段对齐反推后 bp 恒恰好落在段边界（首个红段左缘）→ 画在「跨断点段」行内分支里的白竖线**永不触发**；修复 = 竖线提为**贯穿式**——段行存在且 0<bp<100 即整列贯穿段行区，落边界/落段内都可见。教训：改底层数据算法后重查下游渲染分支可达性（数据对 ≠ 渲染路径活）。纯前端 Ctrl+F5，playwright 真页面拖拽实测（竖线/色块/分布块全在）。**同批补录此前漏记的两轮**：v3 背景色块形态（`c102a71`，用户设计——整行红绿背景 rect 替代 tspan 条形，像素级对齐）+ 断点尾部反推·段对齐（`7debb43`，精度修正——missTok 从尾段往前扣、不够扣取段边界整段标红）。见 [ops · proj 排障闭环](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
 

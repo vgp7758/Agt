@@ -908,3 +908,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **llm_calls proj 链路排障闭环三连 + tooltip 内联条形 v2**（2026-09-16，commits `d425358` + `d4796e3` + `a25d389`，用户实测两连报触发）：17af0a8 落地的 proj 特性当日三轮定位三个独立断点——①**记录侧**：`set_session` 裸赋值把 `__init__` 挂的投影 wrapper 覆盖（读档路径全裸；用户以为「前面有后面没有」，实扫 14514 行 **0 条**）；修复 = 抽 `_install_recorder(session)` 单一出口，`__init__` 与 `set_session` 都调用、wrapper 内动态取 self.session；②**端点侧**：`/api/stats` 白名单构造 recs 手工列字段漏 `proj`——字段没出 server，tooltip 永远空；修复一行；③**形态 v2**：tooltip 投影分布改**每段行内断点条**——条形横向位置=该段在总条中的偏移、断点字符 █（白）、断点前 ─ 绿后红、条形区左端 tspan 绝对定位对齐（用户 ASCII 草图设计，纯前端 Ctrl+F5 生效）。跨实例澄清：9300（PyPI 安装版 0.29.0）天然无 proj——特性未发版。闭环全记录见 [ops · proj 链路排障闭环](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
 
+## 快速事实增补（2026-09-16 · 十一 · tooltip v2 段行重叠修复）
+
+- **tooltip v2 段行与标题行重叠修复**（2026-09-16 · 二轮，commit `a59f8c0`，用户报「投影分布标题行与 tools schema 文本重叠」）：v2 段行 y 坐标自创公式 `by + 8 + … − 11` 与 headL 标题基线公式 `by + 19 + 行号×15` 不同体系——首段背景顶与标题基线只差 1px，直接压字；修复=段行 y 接续标题行距体系（`yRow = by + 19 + (headL.length + i) * 15`，背景顶=基线−11），相邻行距恒 15px。教训：同一 SVG 文本栈的行坐标必须共用一套基线公式。纯前端，Ctrl+F5 生效。见 [ops · proj 排障闭环 ④](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
+

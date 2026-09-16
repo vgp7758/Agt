@@ -900,3 +900,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **SCNet 工作交接**（用户指示「挪到 scnet 的 repo，在那边启一个实例交接」）：agt 主仓目录的 `comfy_offline/`（82 wheels 260MB）+ `comfy_offline.tar.gz` + 出图样张 + API 抓包共六件挪 `D:\Projects\scnet-mcp\assets\scnet113\`（大文件 gitignore）；交接文档 `HANDOFF.md`（现场全量）+ `AGENTS.md`（职责定义）commit `03f2719` 推 Codeup；新实例 **`agt_scnet` @ 9300**（glm-5.3 · 144 工具 · scnet 全家 11 工具全装配 · cwd=scnet-mcp）。交接后格局：9000 Agt 框架开发 / 9300 SCNet 业务 / 3000 ComfyUI 管线。详见 [scnet · 工作交接](guides/scnet.md)。
 
+## 快速事实增补（2026-09-16 · 九 · snapshots git init 挂死修复——9300 卡死诊断闭环）
+
+- **9300 实例卡死诊断闭环：git init 无 timeout 挂死（2026-09-16，commit `d39c033`）**：用户报告 9300「不落盘、不像在推理」——py-spy 线程栈实锤 `agent.run` 卡在每轮开头快照步骤的 `ensure_repo`（src/snapshots.py）：`git init --bare` 是**快照系统唯一没设 timeout 的 git 调用**（`_run()` 其余都有 120s），在无 console 的服务进程上下文偶发不退（cmd→git.exe 挂 13 分钟；本地复现失败，不深挖）。处置：①杀挂死 git → `snapshot()` 抛错被 agent.py try 捕获（只 warn 不阻塞轮）→ 立即恢复干活；②git init 对齐 `_run`：`timeout=120 + stdin=DEVNULL + CREATE_NO_WINDOW`；③影响面 = 所有 start_service 拉起新实例的**首跑快照**（`.agt/snapshots` 不存在才走 init），已初始化实例无感；挂死留下的空壳目录重试时幂等补齐——见 [snapshot-rewind · git init 挂死修复](features/snapshot-rewind.md)。
+

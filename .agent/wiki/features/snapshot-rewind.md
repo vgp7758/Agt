@@ -63,6 +63,23 @@ git restore --source=<tree> --staged --worktree -- .
 
 真仓库若没 ignore `.agt/`，`add -A` 会把**快照仓库本身**（`.agt/snapshots/`）提交进去 → 之后 `reset --hard` 会把整个快照仓库当「新增跟踪文件」**连带删除**，回溯能力当场报废。修复：`user_repo_reset_hard` reset 前先 `git rm -r --cached .agt`（变 untracked，`--hard` 不动 untracked，工作区保留）。
 
+## git init 挂死修复：快照链路唯一无 timeout 的 git 调用补上兜底（2026-09-16，commit d39c033）
+
+用户报告 9300 实例（agt_scnet，start_service 拉起）「任务卡住：无落盘、也不像在推理」。py-spy 线程栈实锤：`_worker` 线程挂死 13 分钟于 `subprocess.run ← ensure_repo (src/snapshots.py:40)` 的 **`git init --bare`**——它是快照系统里**唯一没设 timeout 的 git 调用**（`_run()` 内其余 git 调用都有 120s），`agent.run` 卡在每轮开头的快照步骤 → 无 LLM 调用、无任何落盘（正是用户看到的现象）。进程链 `cmd → git.exe` 自启动起不退，属「无 console 服务进程上下文」的偶发行为；本地三变体复现失败，不深挖，以超时兜底。
+
+### 修复（commit d39c033，对齐 `_run` 口径）
+
+git init 加三件套：`timeout=120`（超时抛 RuntimeError 明确文案）+ `stdin=subprocess.DEVNULL`（防继承父进程管道）+ Windows `CREATE_NO_WINDOW`。配合既有的引擎侧容错形成两道保险：
+
+- **agent.py 快照 try/except**（L1882-1896）只 emit warn 不阻塞轮——实际解卡就是靠杀掉挂死的 git 进程，`snapshot()` 抛错被捕获后 9300 立即恢复轮转
+- 本次修复后 `git init` 自身最坏 120s 转失败继续
+
+### 影响面与残留
+
+- 只影响 **start_service 拉起的新实例首跑快照**（`.agt/snapshots` 尚不存在才走 ensure_repo 的 git init）；已初始化实例不受影响
+- 挂死 init 留下的空壳 `.agt/snapshots` 目录（无 HEAD）：重试快照时 `git init --bare` 幂等，会补齐初始化（这次带超时）——无需手动清理
+- 验证：9300 解卡后 events / llm_calls 持续落盘，busy 干活中
+
 ## 顺带修复：WebUI 回溯失败广播
 
 此前 WebUI 回溯失败只 print 到 CLI（前端只看到「回溯中…」后无声失败）→ 现在失败原因 `_broadcast` 成 system 消息（src/server.py）。

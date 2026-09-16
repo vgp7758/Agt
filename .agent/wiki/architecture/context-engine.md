@@ -805,6 +805,60 @@ spec s_e1804804 四步全部完成（16+3 场景测试全绿），commit `f37548
 
 `test/test_construction_rf_inline.py` 14 断言全绿（判定 / 防双份 / 内嵌命中 / 不去重各挂当时版本 / 不限数量 / 剥离全量 / 非施工回归）+ `test_recent_file_segment.py` 13 断言回归全绿。需 `/restart` 生效。
 
+## 上一轮施工摘要：recap 数据跨轮接力（2026-09-16，commit bb3a4d4，用户裁定）
+
+**需求**：跨轮施工时，Agent 开局不知道「上一轮干了什么」——施工牌只给 plan 状态（进行中计划/design/步骤），上一轮的产出只能盲目重读文件（安全可从事件流反推，但费轮）。用户裁定：施工牌后追加「上一轮施工摘要」独立小段，实现跨轮接力。
+
+**装配形态（src/session.py 施工投影分支，紧随既有施工牌注入之后）**：
+
+```
+[system] 人设+环境（恒定）
+[system] 【施工牌·进行中计划】p_xxx · 标题 + design 全文   ← 恒定不动（byte-stable 缓存吃满）
+[system] 【上一轮施工摘要】完成了脚本工具外置与验证          ← 新增：每轮只换这一条（≤60 字）
+         （详细过程已归档，需要用 recall 召回。）
+[user]   继续施工第 2 步
+[steps]  当前轮 append-only（_constr_buf）...
+```
+
+- **数据源 = `Turn.recap`**：turn_end 异步生成的一句话总结（≤60 字，`recaps.jsonl` 持久化——重启恢复也在），**零额外推理成本**（复用已有 recap 产物）；取 `self.turns[-1].recap`，无上文 / 空串则整条跳过（不占位）
+- **注入位置 `msgs.insert(2, ...)`**：紧随施工牌（msgs[1]）之后、user 之前——独立的第三条 system 消息
+- **缓存经济**：牌保持恒定不动（byte-stable 缓存吃满）；**缓存断点 = 摘要消息开头**——其后 user/steps 本就是新内容，每轮实际牺牲的只有这条 ≤60 字小段，其余前缀全命中
+- **口径**：sections 段名「施工摘要(prev recap)」——/context 分段统计与 /stats 投影分布可见；履带式只留最新一条（每轮覆盖写）
+
+**验证（mock Session 两版校准）**：首版验证脚本未正确注入 `_RUNTIME_AGENT`/未走 start_turn，摘要未落在 msgs[2]（测试脚本问题，非代码缺陷）；二版 mock 全链路：`施工牌: ✓ | 摘要: ✓ | sections: ['system(人设+环境)', '施工牌(plan design)', '施工摘要(prev recap)', 'history段', '当前轮user(第2轮)']`。commit `bb3a4d4` 已推送，`/restart` 后生效。
+
+## 跨轮施工流：从施工开始的轮全部保留（2026-09-17，用户裁定）
+
+**用户裁定（2026-09-17）**：「我觉得还是从施工开始后的轮都保留吧，虽然上下文膨胀的比较快，不过起始总上下文低且持续维持缓存连续和思维链连续，能够更快的完成任务」——施工期投影从「仅当前轮」升级为**跨轮连续聊天记录**：施工中每轮归档时把本轮 `[user + steps 定型]` 追加进 `_constr_stream`（append-only），从施工激活轮起**全部保留**直到 plan 收工。
+
+**形态（装配后）**：
+
+```
+[tools schema]
+[system 人设]                ← 恒定（缓存吃满）
+[system 施工牌 design]        ← 恒定
+── 施工历史流（append-only，跨轮累积）──
+[user] 开始施工第一步          ← 轮1（施工激活轮）
+[assistant/tool] ...          ← 轮1 的 steps 定型
+[user] 继续第二步              ← 轮2
+[assistant/tool] ...          ← 轮2 的 steps 定型
+── 当前轮 ──
+[user] 继续第三步              ← 本轮 user（施工历史流在 user_message 段位置整体输出，其后接当前轮 user）
+[assistant/tool] ...          ← 本轮 append-only（_constr_buf）
+```
+
+**实现（src/session.py）**：
+
+- `self._constr_stream: list[dict]`——跨轮施工流（turn 级 append-only）
+- `_constr_migrate_turn(turn)`：每轮归档统一入流钩子——`finish_turn` 与 `abort_current_turn`（中断同口径）都调用。plan 仍在施工中 → 把 `[本轮 user + 各 step 定型 msgs]`（与 `_constr_buf` 同定型器，字节形态一致）追加进流；plan 全 completed（收工）/ 无 plan → 清空流（恢复常规历史装配，**形态跳变一次**）
+- 投影：user_message 段分支施工中先 `_constr_rebuild()`（惰性重建，兼顾重启）再 extend 历史流，steps 段照常输出当前轮 buf——序列 = 完整施工聊天记录
+- **重启持久化**：`extra_state["constr_start_idx"]`（起始轮号）——load 后 `_constr_stream` 为空（运行时内存不持久化），施工中再投影时按 `turns[start_idx:]` 惰性重建（重定型）
+- `_constr_buf` 类型注解简化：从「每 step 一组定型 msgs（与 _current.steps 对齐）」改为纯缓冲「施工投影缓冲：新轮清空（turn 级 append-only）」
+
+**验证（模拟多轮施工）**：轮2 投影 user = 恰当前轮 1 次 ✓；轮3 = 三轮齐、无重复 ✓；重启 load 后投影含全部历史施工轮 ✓；plan 全完成 → 流清空、恢复常规装配 ✓。
+
+**权衡与可见性**：施工越久上下文越大——但如用户判断：施工起点低（history 不装配）+ append-only 缓存连续 + 思维链连续，换的是施工效率。`/context` 与 /stats 投影分布显示「施工历史流(N轮起·append-only)」段。`/restart` 后生效。
+
 # —— system 段 append-not-replace：缓存连续时追加、毕业断点处归一化（2026-09-12，spec s_eb14a8fd，用户提案+裁定） ——
 
 ## 动机

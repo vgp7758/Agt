@@ -936,3 +936,15 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **/stats 断点显示两连：恒变段反推修正被 revert + 跨断点段分位换算修复**（2026-09-16 · 八/九轮，commits `6069cf4`（revert）+ `e651ebb`）：八轮用户观察「断点最好落 steps 末尾，有的落 tails 段里」→ 主 Agent 将 tail( / recent_file / hook 设为恒变段不参与反推扣减（bp 起点=100−恒红段总格数）；用户 revert 裁定「断点落 tail(思考链) 是可以理解的」——恒变段每步重渲染、物理上永远在缓存区外，断点落其段内=物理正确，反推算法保持原样。九轮用户以 **t934_s3 分段数值**钉死真 bug（渲染层）：cached 347.7k/prompt 350k → miss 2.3k，断点应落 tail(思考链) 段内 ~9% 分位，页面画在 ~95%（红区只剩缝）——`gW=bkW×(bp/100)` 把全局 bp 坐标（97.09）当段内分位乘整行宽；修复 `segFrac=(bp/100−segStart)/(segEnd−segStart)` 显式换算（纯前端 Ctrl+F5）。教训：跨层坐标语义（全局↔段内）传递必须显式换算——见 [ops · proj 排障闭环 ⑩⑪](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
 
+## 快速事实增补（2026-09-16 · 十八 · sleep 对 Agent 开放 + TOOL_TIMEOUT 边界定案）
+
+- **sleep 工具对 Agent 开放 + inline 不受 TOOL_TIMEOUT 管（2026-09-16，commit 30fe776，用户请求 + 超时问句钉死执行模型边界）**：misc_tools 的 sleep `hidden=True→False`（两份同步：tools/builtin + 播种 assets）+ 上限 300→3600（覆盖 sleep(600) 等外部事件场景）+ docstring 写明行为；real_tools.py 两处工具文案同步（「add/divide/kw_score 等（sleep 已对 Agent 开放）」）。**边界**：TOOL_TIMEOUT 转后台只挂 subprocess 系（run_python/run_shell/run_script/subprocess 模式外置工具）——sleep 是 inline 模式（进程内直调 time.sleep），**真实睡满不提前掐断**；意外实证 = 验证时真调 sleep(600)，宿主 run_python 180s 转后台、sleep 后台继续睡满（实测闭环：睡满 600s 正常结束，bg_task 通知无害）。代价：inline sleep 阻塞当前 react 轮、插话排队——语义符合「等外部事件」，长睡期间整轮不可用。见 [misc-tools](features/misc-tools.md)、[run-python · TOOL_TIMEOUT 边界](features/run-python.md#tool_timeout-边界只管-subprocess-系inline-工具不受管2026-09-16commit-30fe776)
+
+## 快速事实增补（2026-09-16 · 十九 · 施工牌追加上一轮施工摘要——recap 跨轮接力）
+
+commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独立 system 小段——紧随恒定施工牌之后、user 之前（`msgs.insert(2)`）。数据源 = `Turn.recap`（turn_end 一句话总结 ≤60 字，`recaps.jsonl` 持久化、重启恢复，零额外推理成本）；牌保持恒定不动（byte-stable 缓存吃满），每轮只换这一条 → **缓存断点 = 摘要消息开头**，其后 user/steps 本就是新内容，牺牲极小；无 recap 自动跳过不占位；sections 记「施工摘要(prev recap)」。`/restart` 生效。跨轮施工 Agent 开局即知「上一轮干了什么（摘要）+ 该干什么（plan 状态）」，不再盲目重读文件。详见 [context-engine · 上一轮施工摘要](../architecture/context-engine.md)。
+
+## 快速事实增补（2026-09-17 · 跨轮施工流——从施工开始的轮全部保留）
+
+- **跨轮施工流：从施工开始的轮全部保留**（2026-09-17，用户裁定，src/session.py）：施工期投影从「仅当前轮」升级为跨轮连续聊天记录——每轮归档（`finish_turn`/`abort_current_turn` 同口径）时施工中则把 `[本轮 user + steps 定型]` 追加进 `_constr_stream`（turn 级 append-only），user_message 段位置整体输出历史施工轮（`u,s,u,s,…`）+ 当前轮 user、steps 段输出当前轮 buf——序列即完整施工聊天记录。用户权衡：上下文膨胀快，但施工起始总上下文低（history 不装配）+ append-only 缓存连续 + 思维链连续，换施工效率。收工（plan 全 completed）清流恢复常规装配（形态跳变一次）；重启靠 `extra_state["constr_start_idx"]`（起始轮号）→ turns 惰性重建。`/context` 与 /stats 投影分布可见「施工历史流(N轮起·append-only)」段。`/restart` 生效——见 [context-engine · 跨轮施工流](architecture/context-engine.md#跨轮施工流从施工开始的轮全部保留2026-09-17用户裁定)
+

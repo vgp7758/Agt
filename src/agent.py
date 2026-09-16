@@ -756,11 +756,11 @@ class Agent:
             out = []
             for s in secs:
                 if out and out[-1]["_raw"] == s.get("name"):
-                    out[-1]["tok"] += s.get("tok") or 0
+                    out[-1]["tok"] += s.get("tokens") or 0
                     out[-1]["cnt"] += 1
                 else:
                     out.append({"_raw": s.get("name"), "n": s.get("name") or "?",
-                                "tok": s.get("tok") or 0, "cnt": 1})
+                                "tok": s.get("tokens") or 0, "cnt": 1})
             for o in out:
                 if o["cnt"] > 1:
                     o["n"] = f"{o['n']} ×{o['cnt']}"

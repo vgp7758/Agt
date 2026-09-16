@@ -325,8 +325,30 @@ function renderChart(models, stats){
       const l4 = `completion ${fmtK(hit.p.completion)} tokens` + (hit.p.reasoning ? `（含思考 ${fmtK(hit.p.reasoning)}）` : '');
       // 投影分布（react 调用记录的 proj 字段——当时上下文各段构成，agent 记录侧附入）
       const projL = (hit.p.proj||[]).slice(0,16).map(s=>`${s.n}  ${fmtK(s.tok)} · ${s.pct}%`);
+      // 断点条（用户提案 2026-09-16）：100 段 ─ 按段占比分配（<1 给 1，调平恰 100）；
+      // 缓存断点（cached/prompt 比例处）前绿后红——一眼看出这次调用重算了哪些段
+      let barT = '';
+      if(hit.p.proj && hit.p.proj.length){
+        const segs = hit.p.proj, tt = segs.reduce((a,x)=>a+(x.tok||0),0);
+        if(tt > 0){
+          const counts = segs.map(x=>Math.max(1, Math.round((x.tok||0)*100/tt)));
+          let cs = counts.reduce((a,b)=>a+b,0);
+          while(cs > 100){ const i = counts.indexOf(Math.max(...counts)); if(counts[i] <= 1) break; counts[i]--; cs--; }
+          while(cs < 100){ counts[counts.indexOf(Math.max(...counts))]++; cs++; }
+          const bp = hit.p.prompt ? Math.min(100, Math.max(0, Math.round((hit.p.cached||0)/hit.p.prompt*100))) : 100;
+          let acc = 0;
+          for(let i=0;i<counts.length;i++){
+            const g = Math.max(0, Math.min(counts[i], bp - acc));
+            const r = counts[i] - g;
+            if(g) barT += `<tspan fill="#3fb950">${'─'.repeat(g)}</tspan>`;
+            if(r) barT += `<tspan fill="#f85149">${'─'.repeat(r)}</tspan>`;
+            acc += counts[i];
+          }
+        }
+      }
       const allL = [l1,l2,l3,l4, ...(projL.length?["— 投影分布 —",...projL]:[])];
-      const bw = Math.max(...allL.map(s=>s.length))*6.8+16, bh = 14 + allL.length*15;
+      const bh = 14 + allL.length*15 + (barT ? 17 : 0);
+      const bw = Math.max(Math.max(...allL.map(s=>s.length))*6.8, barT ? 536 : 0) + 16;
       let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);
       // y 锁定在数据点附近：tooltip 垂直居中对准该点的命中率位置（上下缘自动收进绘图区）
       const sy = y(hit.p.rate);
@@ -334,7 +356,8 @@ function renderChart(models, stats){
       if(by + bh > H-padB) by = H-padB-bh;
       if(by < padT) by = padT;
       tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
-        + allL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('');
+        + allL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('')
+        + (barT ? `<text x="${bx+8}" y="${by+13+allL.length*15}" font-size="9" font-family="Consolas,monospace" font-weight="bold">${barT}</text>` : '');
     };
     svgEl.addEventListener('mousedown', e=>{
       if(e.button!==0) return;

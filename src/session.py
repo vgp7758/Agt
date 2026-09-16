@@ -1510,6 +1510,22 @@ class Session:
                                             "sample": _h})
                 except Exception as e:
                     _LOG.warning("施工牌注入失败（跳过）：%s", e)
+                # —— 上一轮施工摘要（2026-09-16·用户裁定）：跨轮接力细节。牌保持恒定不动
+                #（byte-stable 缓存吃满）；摘要作为独立小段紧随牌后——每轮只换这一条（≤60 字，
+                # recap 数据），缓存断点=摘要消息开头，其后 user/steps 本就是新内容，牺牲极小。
+                try:
+                    _prev = self.turns[-1] if self.turns else None
+                    _rc = (_prev.recap or "").strip() if _prev is not None else ""
+                    if _rc:
+                        msgs.insert(2, {"role": "system", "content":
+                                        f"【上一轮施工摘要】{_rc}\n（详细过程已归档，需要用 recall 召回。）"})
+                        sections.insert(2, {"name": "施工摘要(prev recap)", "msgs": 1,
+                                            "chars": len(_rc) + 40,
+                                            "tokens": int((len(_rc) + 40) / self._chars_per_token),
+                                            "meta": "施工模式·每轮一条（recap 接力）",
+                                            "sample": f"【上一轮施工摘要】{_rc[:36]}"})
+                except Exception as e:
+                    _LOG.warning("施工摘要注入失败（跳过）：%s", e)
             self._apply_system_ledger(msgs)   # 三态后处理（必须在 answer_style 之后——比较口径含提示文本）
             if self._tools_schema_chars:
                 sections.append({"name": "tools schema(请求级·计一次)", "msgs": 0,

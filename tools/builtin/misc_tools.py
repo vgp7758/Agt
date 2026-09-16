@@ -29,13 +29,15 @@ def divide(a: float, b: float) -> float:
 
 
 def sleep(seconds: float) -> str:
-    """等待指定秒数后返回（工作流 wait 节点：轮询间隔/限速等用）。seconds: 秒数（0~300）。"""
+    """等待指定秒数后返回。适用场景：轮询间隔/限速/等待外部事件（如后台任务/实例就绪）。
+    inline 执行不受 tool_timeout 影响（会真实睡满）；期间阻塞当前轮，插话会排队。
+    seconds: 秒数（0~3600）。"""
     try:
         s = float(seconds)
     except (TypeError, ValueError):
         return f"[错误] seconds 需为数字，收到 {seconds!r}"
-    if not (0 <= s <= 300):
-        return f"[错误] seconds 需在 0~300 之间，收到 {s:g}"
+    if not (0 <= s <= 3600):
+        return f"[错误] seconds 需在 0~3600 之间，收到 {s:g}"
     time.sleep(s)
     return f"已等待 {s:g} 秒"
 
@@ -56,7 +58,7 @@ def agt_register():
         {"name": "subtract", "func": subtract, "hidden": True, "group": "light", "version": 1},
         {"name": "multiply", "func": multiply, "hidden": True, "group": "light", "version": 1},
         {"name": "divide", "func": divide, "hidden": True, "group": "light", "version": 1},
-        {"name": "sleep", "func": sleep, "hidden": True, "group": "light", "version": 1},
+        {"name": "sleep", "func": sleep, "hidden": False, "group": "light", "version": 2},
         {"name": "kw_score", "func": kw_score,
          "params": {
              "keywords": "关键词数组（通常接 kv_cache_read.value = extract_keywords 的产物）",

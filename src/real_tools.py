@@ -1563,7 +1563,7 @@ def _fetch_demo_text(name: str) -> str:
 def _builtin_tools_reference() -> str:
     """列出工作流可用的内置工具（LIGHT_TOOLS + 外置脚本工具）及示例 plugin 节点 XML。"""
     lines = ["=== 工作流内置工具（未注册给 Agent，只能在工作流 plugin 节点用）===",
-             "这些轻量工具（add/split/sleep 等）Agent 不能直接调用，仅工作流编排可用。",
+             "这些轻量工具（add/divide/kw_score 等）Agent 不能直接调用，仅工作流编排可用（sleep 已对 Agent 开放）。",
              "调用：<node type=\"plugin\" toolName=\"工具名\">，输出 raw（工具返回值）。",
              "入参 <in> 接上游输出 ref=\"节点ID.字段\"，或字面量 literal=\"值\"。",
              ""]
@@ -1628,7 +1628,7 @@ _CORE_NODE_CATALOG = [
     },
     {
         "type": "4", "name": "插件 (Plugin)",
-        "desc": "调用内置轻量工具（add/split/sleep 等）或用户自定义 Python 工具，输入输出通过 in/out 声明",
+        "desc": "调用内置轻量工具（add/divide/kw_score 等）或用户自定义 Python 工具，输入输出通过 in/out 声明",
         "xml": "<!-- 插件节点：调用内置工具或用户工具 -->\n<!-- 示例1：调用内置加法工具 -->\n<node id=\"140001\" type=\"plugin\" toolName=\"add\">\n  <in name=\"a\" type=\"number\" ref=\"130001.x\"/>\n  <in name=\"b\" type=\"number\" literal=\"5\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n\n<!-- 示例2：调用内置分割工具 -->\n<node id=\"140002\" type=\"plugin\" toolName=\"split\">\n  <in name=\"text\" type=\"string\" ref=\"130001.output\"/>\n  <in name=\"separator\" type=\"string\" literal=\",\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n\n<!-- 示例3：调用用户自定义工具（.agent/workflows/tools/xxx.py） -->\n<node id=\"140003\" type=\"plugin\" toolName=\"my_custom_tool\">\n  <in name=\"param1\" type=\"string\" ref=\"130001.output\"/>\n  <in name=\"param2\" type=\"integer\" literal=\"42\"/>\n  <out name=\"raw\" type=\"string\"/>\n</node>\n<!--\n  内置工具列表见末尾 _builtin_tools_reference() 输出。\n  自定义工具放 .agent/workflows/tools/*.py，顶层函数自动注册。\n  输出固定为 raw（工具返回值字符串）。\n-->",
     },
     {

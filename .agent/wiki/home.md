@@ -876,10 +876,15 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 ## 快速事实增补（2026-09-16 · 四 · 配额撞墙与止损——特权写入穿透配额 + 只留 qwen-image-edit）
 
-## 快速事实增补（2026-09-16 · 四 · 配额撞墙与止损——特权写入穿透配额 + 只留 qwen-image-edit）
-
 - **三模型克隆文件实际全部到位**（`du` 对账：54+16+5.2=75G）但状态机停在 Downloading 不转正——根因：家目录配额 50G，**「模型管理」平台侧下载是特权写入不受用户配额拦截**（75G 能落盘），配额满导致收尾失败
 - **用户裁定止损**：只留 Qwen-Image-Edit（54G，稳态超配额 4G），删 Qwen3-8B + IndexTTS-2.5 回收 21G；模型管理 UI 无删除入口（API 404）留两条僵尸记录——文件已删+配额满=重试也写不进，风险自锁
 - **113 定位收敛：专跑 Qwen-Image-Edit 的图片编辑专用节点**（48.9 免费卡时 ≈ 几百张图）——权重只读+输出写容器本地盘，推理完全正常；被堵的只有家目录大文件新写入；「容量不足」警告恒在忽略即可（彻底消除 ¥8/月 扩 100G）
 - 详见 [SCNet · 配额撞墙与止损](guides/scnet.md#配额-50g-vs-实占-75g模型管理特权写入穿透配额止损只留-qwen-image-edit2026-09-16用户裁定)
+
+## 快速事实增补（2026-09-16 · 五 · 平台侧通道入 MCP——scnet_model / scnet_image 双工具落地）
+
+- **scnet-mcp 新增两工具（9→11），三端点真实 API 验证全过，已推送 Codeup（commit `15eb3ae`）**：`scnet_model`（模型管理 list/create/detail——**平台侧权重下载**，落点 `{目标区家目录}/SothisAI/model/ExternalSource/`，断网容器唯一取模通道、不占卡时）+ `scnet_image`（社区镜像跨区克隆 search/clone/clone_status——**镜像先克隆到目标区才能建实例**）
+- **两个 API 细节实测钉死**：clone 参数是 `targetClusterId`（**单数 int**；`clusterId`/`targetClusterIdList` 均报 820000）；`clone_status` 返回的 versionId 与源镜像不同（克隆产物自有私有 id），轮询以返回为准
+- **SCNet 全链路 11 工具零浏览器闭环**：取权重 → 选环境 → 建实例 → 跑生产 → 等结果（monitor 回调）→ 关机收尾；README 已补两工具用法。生效注意：`reload_mcp_server` 只刷 session，**新工具进工具箱必须 `/restart`**
+- 详见 [SCNet · 平台侧通道入 MCP](guides/scnet.md#平台侧通道入-mcp2026-09-16commit-15eb3ae)
 

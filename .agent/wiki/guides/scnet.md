@@ -616,7 +616,7 @@ Base：`https://cancon.hpccube.com:65011`（昆山集群；华中网关是 zzhpc
 |---|---|
 | 远端 | `https://codeup.aliyun.com/618914e04d2b371c479a6963/vgp7758/scnet_mcp.git`（阿里云 Codeup，**private**） |
 | 本地 | `D:\Projects\scnet-mcp` —— **真源**；`~/.agt/mcp.json` 的 `scnet` 直接指向这里的 `scnet_mcp.py` |
-| 内容 | `scnet_mcp.py`（9 工具）+ `monitor.py`（容器侧模板，唯一真源）+ `docs/`（20 篇平台 API 参考）+ README + pyproject |
+| 内容 | `scnet_mcp.py`（**11 工具**；2026-09-16 +scnet_model / scnet_image，见下节）+ `monitor.py`（容器侧模板，唯一真源）+ `docs/`（20 篇平台 API 参考）+ README + pyproject |
 | 凭证 | AK/SK 走 `~/.agt/scnet.json` 或环境变量；**cookie 走 `~/.agt/scnet_cookie.json`**（已 gitignore，永不入库） |
 
 **在别的机器 / 别的 agt 实例启用**：
@@ -629,6 +629,45 @@ pip install mcp websocket-client
 ```
 
 **历史沿革**：monitor 模板走过「repo `tools/scnet_monitor.py` ↔ `~/.agt/mcp/scnet/monitor_template.py` 双份手工同步」→「内联进 `scnet_mcp.py`」→「独立 repo 后拆回同目录 `monitor.py` 文件（`_monitor_source()` 读它）」——**最终形态既真源唯一又可读可 diff**。agt 仓库里 `tools/scnet_*.py` 已删除（git 历史可回溯）。
+
+## 平台侧通道入 MCP（2026-09-16，commit 15eb3ae）
+
+113 攻坚（Qwen-Image-Edit diffusers 直推出图）过程中挖出的平台侧通道，从 playwright 临时操作固化为 MCP 工具（`D:\Projects\scnet-mcp\scnet_mcp.py`，**9→11 工具**，三端点真实 API 验证全过；README 已补两工具用法，commit `15eb3ae` 推送 Codeup）：
+
+**11 工具全链路（零浏览器闭环）**：取权重 `scnet_model` → 选环境 `scnet_image`（search/clone）→ 建实例 `scnet_notebook` → 跑生产 `scnet_comfy` / `scnet_pipeline` → 等结果 `scnet_monitor`（回调回家）→ 收尾 `scnet_notebook stop`（省卡时）。
+
+### scnet_model（模型管理——平台侧权重下载）
+
+| action | 端点 | 说明 |
+|---|---|---|
+| list | GET `/acx/aimgt/model?page&size` | 任务列表与状态 |
+| create | POST `/acx/aimgt/model` | `{nameCn,name,source:"ExternalSource",storePath,targetClusterIdList,repoUrl,...}` |
+| detail | GET `/acx/aimgt/model/detail?modelId&clusterId` | 实际落点/进度 |
+
+- **权重落点**：`{目标区家目录}/SothisAI/model/ExternalSource/{name}/main/{name}`——容器内直接读（断网容器的唯一取模通道，不占卡时）
+- **配额坑**：华中A 家目录 50G 硬配额——超配额时特权写入可落盘（du>df），但状态卡 `Downloading` 不转正（2026-09-16 实测：75G 落在 50G 配额上，Qwen-Image-Edit 54G 照常推理）
+
+### scnet_image（社区镜像跨区克隆）
+
+| action | 端点 | 说明 |
+|---|---|---|
+| search | POST `/acx/aihub/images/select-list` | keyword/clusterId → versionList（id/tag/size） |
+| clone | POST `/acx/aimgt/images/aihub-clone` | `{versionId, tag, targetClusterId}`（**单数 int**，实测钉死） |
+| clone_status | GET `/acx/aimgt/images/aihub-clone/status?versionId&tag` | 各区域克隆状态轮询 |
+
+- **镜像必须先克隆到目标区才能建实例**（直接创建报"镜像拉取失败"）——`search → clone → 轮询 clone_status → scnet_notebook 创建` 是标准链路
+- clone 的错误码语义：820000 参数名错（要 `targetClusterId` 不是 `clusterId`/`clusterIdList`）；816304 目标区不支持该卡型
+- **clone_status 返回的 versionId 与源镜像不同**（克隆产物有自己的私有 id）——轮询以返回值为准，别拿源 versionId 对表
+- cluster_id 常用：**20091=华中一区A、11250=华东一区昆山**
+
+### 生效方式
+
+改 `scnet_mcp.py` 后 `reload_mcp_server('scnet')` 只刷新 session——**新工具进工具箱必须 `/restart`**（[reload_mcp_server 缺口](../features/mcp-config.md)）。
+
+### 未入 MCP 的相关能力（按需后补）
+
+- 存储配额查询：直接组合 `scnet_jupyter(exec: df -h /public/home/<user>)`
+- 模型记录删除：平台 API/ UI 均未找到入口（文件可 SSH rm，记录留着自锁无害）
 
 ## 关机与生命周期 API（cookie 通道）
 

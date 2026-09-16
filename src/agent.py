@@ -1725,13 +1725,17 @@ class Agent:
             rel = real.relative_to(WORKSPACE).as_posix()
             snapshots[cid] = {"path": rel, "version": ver, "text": text}
             # recent_file 完整投影 = 模型带行号看过全文 → 行级视图记账（replace_lines 前置校验用）。
-            # 仅 ≤RF_SEG_MAX_CHARS 的纯文本：超上限段式口径只投 outline（函数级行号，不算行级视图
-            # ——2026-09-15 事故：llm_client.py 47K 只见 outline，version 新鲜、行号过期）；
-            # md 是摘要态也不算。施工期内嵌形态上限更宽（100K），这里按保守口径记 15K 内——
-            # 更大的宁可让模型 read_file 一次。
+            # 阈值随投影形态（用户裁定 2026-09-16）：施工内嵌 ≤RF_MAX_CHARS(100K) 全文行号化
+            # （append-only 定型，投出去的就是模型收到的——"有视图却被拒"的误伤消除）；非施工
+            # 段式 ≤RF_SEG_MAX_CHARS(15K) 全文、超限只投 outline（函数级行号不算行级视图
+            # ——2026-09-15 事故：llm_client.py 47K 只见 outline，version 新鲜、行号过期）。
+            # md 两形态都是 _md_snapshot 摘要态（非原文行号），恒不算。防线不变：每轮清零、
+            # 写后版本变即作废（后续写同文件 → 新快照新版本重记，旧视图自然失配）。
             try:
-                from session import RF_SEG_MAX_CHARS as _RF_CAP
-                if real.suffix.lower() not in {".md", ".markdown"} and len(raw) <= _RF_CAP:
+                from session import RF_MAX_CHARS, RF_SEG_MAX_CHARS
+                _rf_cap = (RF_MAX_CHARS if self.session._construction_mode()
+                           else RF_SEG_MAX_CHARS)
+                if real.suffix.lower() not in {".md", ".markdown"} and len(raw) <= _rf_cap:
                     _note_view(real, 1, len(raw.splitlines()))
             except Exception:
                 pass

@@ -63,7 +63,7 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
   - 细节：tooltip 靠右缘自动左翻；拖拽中 `user-select:none` 防选中文字；SVG 外松手后回到图内自动清理；每次刷新重建 SVG 时重绑（无泄漏）
   - 原 hover 小圆点 tooltip **保留并存**（两种查看方式）；纯前端改动，Ctrl+F5 刷新即生效，不需 /restart
   - **tooltip 锁定数据点（v0.18.7，commit aae43b0 打包发布）**：吸附后 tooltip 不驻留鼠标附近，而是**锁定到所吸附的数据点上**、y 跟随曲线起伏——横扫多条折线时 tooltip 始终贴着当前数据点，读数与曲线视觉位置一致；纯前端，Ctrl+F5 生效
-- **投影分布 tooltip（2026-09-16，用户提案，commit 17af0a8）**：拖拽扫描（与 hover）tooltip 新增「— 投影分布 —」块——每段一行 `system 45.2K · 14.6%`（tok + 占比，tooltip 高度/宽度按段数自适应），数据 = 该次调用 llm_calls 记录的 `proj` 字段（当时真实装配统计，agent 记录侧附入，见 [llm_calls.jsonl](#llm_callsjsonl-每条记录)）；hover 小圆点原生 title 同步加一行压缩版（`投影分布: system 14.6% | tier1 38.7% | …`，前 6 段）。老记录/非 react 场景无 proj 自动省略该块——补上后单看 tooltip 即可回溯「这次调用时上下文由什么构成」，不再需要翻投影转储或现跑 /context。前端 Ctrl+F5 生效，记录侧 /restart 生效
+- **投影分布 tooltip（2026-09-16，用户提案，commit 17af0a8；形态 v2 commit a25d389）**：拖拽扫描（与 hover）tooltip 新增「— 投影分布 —」块，数据 = 该次调用 llm_calls 记录的 `proj` 字段（当时真实装配统计，agent 记录侧附入，见 [llm_calls.jsonl](#llm_callsjsonl-每条记录)）。**v2 形态（用户 ASCII 草图设计）：每段行内断点条**——左列段名+pct、右列 100 格条形，条形横向位置=该段在总条中的偏移（前导占位）、断点落在段内渲染 █（白）、断点前 `─` 绿（命中）后红（重算）、条形区左端 SVG tspan 绝对定位严格对齐；v1 曾为纯文本每段一行 + 断点条独立成行。hover 小圆点原生 title 同步加一行压缩版（`投影分布: system 14.6% | tier1 38.7% | …`，前 6 段）。老记录/非 react 场景无 proj 自动省略该块——单看 tooltip 即可回溯「这次调用时上下文由什么构成」，不再需要翻投影转储或现跑 /context。v1 首日即被用户抓出 tooltip 不渲染——实为 **`set_session` 覆盖 wrapper（d425358）+ `/api/stats` 白名单漏 proj 字段（d4796e3）双断点**，闭环记录见 [proj 链路排障闭环](#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)。前端 Ctrl+F5 生效，记录侧 /restart 生效
 - tooltip：序号/时间（**精确到秒**，bd0d1ef 前为分钟级）/命中率/具体 cached/prompt tokens/**scene**（调用时机）/**turn/step 轮步标记**（commit 4aced81）
   - turn/step 标记格式：`· t{轮号} · s{步号}`（如 `· t206 · s6`）
   - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.json`
@@ -92,6 +92,34 @@ scene 取值（2026-08-29 起携带发起者——与 [🐞 日志面板](#日�
 | 其余 | debug（/debug prompt）/ completer / llm.chat（默认，如 RAG 检索） |
 
 - **独立构造的 LLMClient 也落流水（2026-08-31，commit 7c38a98）**：工作流 LLM 节点经 `_get_llm` 命中 MODELS 后**独立构造**的 client，此前不进 llm_calls——「真实走了 local-lfm」这类路由无从从流水验证的观测盲区；现补齐。这是 recap_gen 间歇性 local-qwen 排查三层观测网的流水层（另两层：扫描层 `validate_canvas_detailed` model 校验 0dc1dfc / 执行层 KeyError warning 0d852a0），见 [workflow-hooks · 复发与三层观测网](../architecture/workflow-hooks.md#复发与三层观测网扫描层-model-校验2026-08-31commit-0dc1dfc)
+
+### llm_calls proj 链路排障闭环三连 + tooltip 内联条形 v2（2026-09-16）
+
+proj 特性（17af0a8，见 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 的 proj 条目与 [/stats 投影分布 tooltip](#stats-页webui--统计按钮)）落地当天，用户实测两连报——「llm_calls 里 proj 前面有后面没有」「/stats 拖拽 tooltip 不渲染投影分布」——三轮排障定位出**三个独立断点**，同日全部闭环（commits d425358 + d4796e3 + a25d389）：
+
+**① 记录侧：`set_session` 裸赋值覆盖 wrapper（commit d425358）**
+
+- **数据实况**：用户以为「前面有、后面没有」——实扫 `sessions/20260811_013200/llm_calls.jsonl` 全部 14514 行，含 proj 记录 **0 条**：不是前后差异，是整个文件全裸
+- **根因**：proj 靠挂在 `self.llm.call_recorder` 上的 wrapper（`_rec_with_proj`）附加（src/agent.py），而 **`set_session`（读档/切 session 必经路径）有一行裸赋值** `self.llm.call_recorder = session.llm_calls.record`——把 `__init__` 挂好的 wrapper 覆盖成裸记录函数。触发条件：**启动时自动恢复 session**（9000 实例重启即中招）；全新进程 + 全新空 session（未走 set_session）才正常——与观察完全吻合
+- **修复**：抽 `_install_recorder(session)` 方法作 wrapper 单一出口，`__init__` 与 `set_session` 都调用；wrapper 内动态取 `self.session`（切档后无需重挂）。验证：定义/两处调用点在场、无残留裸赋值、react 附 `[tier1 25%, tail 75%]`、hook 不附、py_compile 过
+
+**② 端点侧：`/api/stats` 白名单漏 proj（commit d4796e3）**
+
+- /restart 后 tooltip 仍不渲染：记录侧已好（18:01 起 react 记录全带 proj，22~25 段）、前端三处就位（`pts.push` / hover title / 拖拽 tooltip 块，src/static/stats.html）——逐级查到**后端 `/api/stats` 端点白名单构造 recs 时手工列字段漏了 `proj`**（src/server.py）：字段根本没出 server，前端 `c.proj||null` 永远 null
+- **修复一行**：`"proj": r.get("proj") or None`（老记录 → null，前端已兜底自动省略）。至此 proj 四环链路（记录 → 端点 → 前端 → tooltip）全通
+
+**③ 形态 v2：每段行内断点条（commit a25d389，用户 ASCII 草图设计）**
+
+v1 形态是「分布块独立于条形区」（每段一行 tok+占比文本 + 断点条独立放底部）。用户提出 v2 并给出 ASCII 草图：**断点条不独立成行，而在每段的位置**——
+
+- **每段一行**：左列段名+pct（截 18 字），右列 100 格条形；**条形横向位置 = 该段在总条中的偏移**（前导占位）——一眼看出该段在上下文的什么位置（小段不挤最左）
+- **断点标记**：断点落在段内时该字符渲染 **█（白）**，断点前 `─` 绿（缓存命中）/ 后红（重算）——「缓存恰好断在哪一段中间」直接可见
+- **条形区左端严格对齐**：SVG `tspan x` 绝对定位（LCOL=208px 固定起点），monospace 下每行条形同一起点
+- 分配规则：`round(占比×100)`、<1 给 1 格、总和调平恰 100；纯前端（stats.html）Ctrl+F5 生效免重启
+
+**跨实例澄清**：scnet-mcp 专职实例（9300）的 llm_calls 天然无 proj——它跑 **PyPI 安装版 agt_agent 0.29.0**（agt-web 启动），proj 是 src 侧当日提交、尚未发版；要带上需发新版后 `pip install -U`，或改跑 src 路径（与 9000 同款）。
+
+**注意事项**：老记录无 proj 属正常（当时没采到），tooltip 自动省略；非 react 场景（钩子/recap）本就不附；排障口诀——**tooltip 空先查三环**：记录（jsonl 有无 proj 字段）→ 端点（/api/stats 白名单）→ 前端（Ctrl+F5 缓存）。
 
 ### 其他
 

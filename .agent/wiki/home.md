@@ -904,3 +904,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **9300 实例卡死诊断闭环：git init 无 timeout 挂死（2026-09-16，commit `d39c033`）**：用户报告 9300「不落盘、不像在推理」——py-spy 线程栈实锤 `agent.run` 卡在每轮开头快照步骤的 `ensure_repo`（src/snapshots.py）：`git init --bare` 是**快照系统唯一没设 timeout 的 git 调用**（`_run()` 其余都有 120s），在无 console 的服务进程上下文偶发不退（cmd→git.exe 挂 13 分钟；本地复现失败，不深挖）。处置：①杀挂死 git → `snapshot()` 抛错被 agent.py try 捕获（只 warn 不阻塞轮）→ 立即恢复干活；②git init 对齐 `_run`：`timeout=120 + stdin=DEVNULL + CREATE_NO_WINDOW`；③影响面 = 所有 start_service 拉起新实例的**首跑快照**（`.agt/snapshots` 不存在才走 init），已初始化实例无感；挂死留下的空壳目录重试时幂等补齐——见 [snapshot-rewind · git init 挂死修复](features/snapshot-rewind.md)。
 
+## 快速事实增补（2026-09-16 · 十）
+
+- **llm_calls proj 链路排障闭环三连 + tooltip 内联条形 v2**（2026-09-16，commits `d425358` + `d4796e3` + `a25d389`，用户实测两连报触发）：17af0a8 落地的 proj 特性当日三轮定位三个独立断点——①**记录侧**：`set_session` 裸赋值把 `__init__` 挂的投影 wrapper 覆盖（读档路径全裸；用户以为「前面有后面没有」，实扫 14514 行 **0 条**）；修复 = 抽 `_install_recorder(session)` 单一出口，`__init__` 与 `set_session` 都调用、wrapper 内动态取 self.session；②**端点侧**：`/api/stats` 白名单构造 recs 手工列字段漏 `proj`——字段没出 server，tooltip 永远空；修复一行；③**形态 v2**：tooltip 投影分布改**每段行内断点条**——条形横向位置=该段在总条中的偏移、断点字符 █（白）、断点前 ─ 绿后红、条形区左端 tspan 绝对定位对齐（用户 ASCII 草图设计，纯前端 Ctrl+F5 生效）。跨实例澄清：9300（PyPI 安装版 0.29.0）天然无 proj——特性未发版。闭环全记录见 [ops · proj 链路排障闭环](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
+

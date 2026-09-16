@@ -425,6 +425,10 @@ if self._deepen_oldest_tier(fold_count):        # ② 再推老档进工具折�
 
 **模拟验证（6 场景全绿）**：29 轮不触发 / 31 轮 1 刀剩 16 / 45 轮 1 刀剩 30 / 46 轮 2 刀剩 16 / 70 轮 3 刀剩 25 / 档内 40 轮 1 刀剩 25。`/restart` 生效。
 
+#### 后记：proj 链路当日排障闭环 + tooltip 内联条形 v2（2026-09-16，commits d425358 + d4796e3 + a25d389）
+
+llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出**两个断点 + 一次形态重构**：①**记录侧**——`set_session` 裸赋值把 `__init__` 挂的 recorder wrapper 覆盖（读档路径全裸；用户以为「前面有后面没有」，实扫 14514 行 0 条 proj）——修复抽 `_install_recorder(session)` 单一出口，`__init__` 与 `set_session` 都调用、wrapper 内动态取 self.session（d425358）；②**端点侧**——`/api/stats` 端点白名单构造 recs 手工列字段漏 `proj`（记录/前端都好、字段没出 server，tooltip 永远空；d4796e3）；③**形态 v2**——tooltip 投影分布改每段行内断点条：条形横向位置=该段在总条中的偏移、断点字符 █（白）、断点前 ─ 绿（命中）后红（重算）、条形区左端 tspan 绝对定位对齐（a25d389，用户 ASCII 草图设计，纯前端 Ctrl+F5 生效）。闭环全记录见 [ops · proj 链路排障闭环](../guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

@@ -332,7 +332,20 @@ function renderChart(models, stats){
       { let cs = counts.reduce((a,b)=>a+b,0);
         while(cs > 100){ const i = counts.indexOf(Math.max(...counts)); if(counts[i] <= 1) break; counts[i]--; cs--; }
         while(cs < 100 && counts.length){ counts[counts.indexOf(Math.max(...counts))]++; cs++; } }
-      const bp = hit.p.prompt ? Math.min(100, Math.max(0, (hit.p.cached||0)/hit.p.prompt*100)) : 100;   // 断点比例（浮点）
+      // 断点：尾部反推法（用户实测 2026-09-16·精度修正）：绝对比例 cached/prompt×100
+      // 因尾部小段整数格虚高（<1 给 1）+ 估算口径偏差，落点漂到最后一段内部靠尾处。
+      // 物理断点=缓存前缀末端=「重算区前沿」——真实 miss（prompt-cached）从最后一段
+      // 往前扣估算 tok，扣完的位置即断点（miss 发生在尾部，锚定尾部更符合直觉）。
+      const missTok = Math.max(0, (hit.p.prompt||0) - (hit.p.cached||0));
+      let bp = 100;
+      for(let i=segs.length-1; i>=0 && missTok>0; i--){
+        const st = segs[i].tok||0;
+        // 不够扣整段：断点=该段开头（整段标红）——段内比例位置受估算口径偏差影响大（用户实测），
+        // 直接取段边界更符合"重算区=尾部若干段"的直觉
+        bp -= counts[i];
+        if(missTok >= st) missTok -= st; else break;
+      }
+      bp = Math.max(0, Math.min(100, bp));
       const headL = [l1,l2,l3,l4, ...(segs.length?["— 投影分布（绿底=缓存命中 红底=重算 │=断点）—,"]:[])];
       const bh = 14 + (headL.length + segs.length)*15;
       const bw = Math.max(...headL.map(s=>s.length), ...(segs.map(s=>String(s.n||'').length+8) || [0]))*6.8 + 16;

@@ -749,22 +749,37 @@ class Agent:
         session.llm_calls.record，把 wrapper 覆盖掉（用户实测：重启恢复 session 后所有
         react 记录都没 proj，而全新空 session 进程有）。
         取最近一次真实投影的 _proj_stats（messages_for_llm 装配口径）；非 react 场景不附。
-        连续同名段合并（用户提案 2026-09-16）：asm:text / asm:func（同名=同注入方式）等装配段
+        同名段合并（用户提案 2026-09-16）：asm:text / asm:func（同名=同注入方式）等装配段
         动辄十几条连续出现，逐条展示没信息量还挤掉后面的段——合并成一条带 ×N 计数。
+        v2（同日用户实测两处修正）：① 同名段【全合并】不限连续（asm:text 两组中间隔
+        file/tool 也合——同名同语义，位置信息无关紧要且更紧凑）；② asm:func（尾部·X）
+        归一为 tail(易变环境块·X)——它们是同一条消息的两部分（tail merge 语义：steps 后
+        动态内容统一并入末条），分开计数让用户误以为重复渲染。
         session 参数仅作兜底：wrapper 内动态取 self.session（切档后无需重挂）。"""
+        import re as _re
+        def _norm(n):
+            m = _re.match(r"asm:func（尾部·(.+?)）", str(n or ""))
+            if m:
+                return f"tail(易变环境块·{m.group(1)})"
+            return str(n or "?")
+
         def _merge_proj(secs):
-            out = []
+            agg = {}   # 名 → 聚合（按首次出现顺序）
+            order = []
             for s in secs:
-                if out and out[-1]["_raw"] == s.get("name"):
-                    out[-1]["tok"] += s.get("tokens") or 0
-                    out[-1]["cnt"] += 1
+                k = _norm(s.get("name"))
+                if k in agg:
+                    agg[k]["tok"] += s.get("tokens") or 0
+                    agg[k]["cnt"] += 1
                 else:
-                    out.append({"_raw": s.get("name"), "n": s.get("name") or "?",
-                                "tok": s.get("tokens") or 0, "cnt": 1})
-            for o in out:
+                    agg[k] = {"n": k, "tok": s.get("tokens") or 0, "cnt": 1}
+                    order.append(k)
+            out = []
+            for k in order:
+                o = dict(agg[k])
                 if o["cnt"] > 1:
                     o["n"] = f"{o['n']} ×{o['cnt']}"
-                o.pop("_raw", None)
+                out.append(o)
             return out
 
         def _rec_with_proj(rec: dict):

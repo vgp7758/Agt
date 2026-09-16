@@ -462,6 +462,12 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **顺带 bp 防护（src/static/stats.html）**：断点初值条件化 `bp = (tt > 0 && counts.length) ? 100 : NaN`——tt=0（旧版 0% 记录）或 counts 空时 NaN、`if(!Number.isNaN(bp))` 跳过反推循环，防 NaN 渗入渲染坐标造成背景错乱（正是「断在 tools schema」一类误读的画面来源）。全记录见 [ops · proj 链路排障闭环 ⑨](../guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)。
 
+#### 后记六：断点精度再两轮——恒变段反推修正被 revert（落 tail 物理合理）+ 跨断点段分位换算修复（t934_s3 实测，同日八/九轮，commits 6069cf4（revert）+ e651ebb）
+
+**八轮（commit `6069cf4`，被 revert）**：用户观察轮内断点「最好落 steps 末尾，有的落 tails 段里」→ 主 Agent 把 tail( / recent_file / hook 识别为恒变段（每步重渲染、物理恒在缓存区外），反推跳过其扣减 + bp 起点=100−恒红段总格数。**用户 revert 并裁定**：「断点落在 tail(思考链) 这个位置是可以理解的」——恒变段物理恒红，轮内断点落其段内=物理正确，反推算法保持原样。
+
+**九轮（commit `e651ebb`，真修复）**：用户以 t934_s3 分段数值钉死渲染层 bug：cached 347.7k / prompt 350k → miss 2.3k，反推应落 tail(思考链) 段内 ~9% 分位（绿区占段头），页面却画在 ~95%（红区只剩一条缝）——跨断点段 `gW = bkW × (bp/100)` 把**全局 bp 坐标**（97.09）当**段内分位**乘了整行宽；修复 `segFrac=(bp/100−segStart)/(segEnd−segStart)` 显式换算，该行绿 9%│红 91% 与反推一致。**反推算法未动**（revert 正确）。教训：坐标语义（全局↔段内）跨层传递必须显式换算。全记录见 [ops · proj 排障闭环 ⑩⑪](../guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

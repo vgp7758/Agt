@@ -932,3 +932,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 
 - **t933_s0「断在 tools schema」误读诊断——端点单发缓存丢失**（2026-09-16 · 七轮，用户问诊「是端点问题还是改了工具」）：三重证据定案端点侧——t932 尾部 99% → t933_s0 prompt 343,600 / cached 16,704（**4%**）→ t935 起 98-99% 持续（工具变更应持续 miss，排除）；messages 前缀 637/641 条字节级相同；单发突降 + 自动恢复 = glm-official 已知「存力不足清缓存 / 冷路由」行为。**tooltip 显示物理正确**：命中 16,704 tok 恰为请求头部 tools schema 段（序列化 tools 在前），断点物理位置就在 tools 内部（同型佐证 t936_s3 单发 cached 0）。要点：「成功但缓存冷」的响应不触发回退链（只对 429 生效），客户端无法避免、下一发即恢复。顺带 **bp 防护**（src/static/stats.html）：断点初值条件化 `bp=(tt>0&&counts.length)?100:NaN`，tt=0 / counts 空时跳过反推渲染，防 NaN 背景错乱造成同类误读——见 [ops · proj 排障闭环 ⑨](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
 
+## 快速事实增补（2026-09-16 · 十七 · /stats 断点显示两连——反推修正被 revert + 分位换算修复）
+
+- **/stats 断点显示两连：恒变段反推修正被 revert + 跨断点段分位换算修复**（2026-09-16 · 八/九轮，commits `6069cf4`（revert）+ `e651ebb`）：八轮用户观察「断点最好落 steps 末尾，有的落 tails 段里」→ 主 Agent 将 tail( / recent_file / hook 设为恒变段不参与反推扣减（bp 起点=100−恒红段总格数）；用户 revert 裁定「断点落 tail(思考链) 是可以理解的」——恒变段每步重渲染、物理上永远在缓存区外，断点落其段内=物理正确，反推算法保持原样。九轮用户以 **t934_s3 分段数值**钉死真 bug（渲染层）：cached 347.7k/prompt 350k → miss 2.3k，断点应落 tail(思考链) 段内 ~9% 分位，页面画在 ~95%（红区只剩缝）——`gW=bkW×(bp/100)` 把全局 bp 坐标（97.09）当段内分位乘整行宽；修复 `segFrac=(bp/100−segStart)/(segEnd−segStart)` 显式换算（纯前端 Ctrl+F5）。教训：跨层坐标语义（全局↔段内）传递必须显式换算——见 [ops · proj 排障闭环 ⑩⑪](guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)
+

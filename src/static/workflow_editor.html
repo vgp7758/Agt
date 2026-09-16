@@ -2699,6 +2699,65 @@ function _inferFields(obj){
     return f;
   });
 }
+// —— JSON Schema 导入（2026-09-17·用户实测：数组 items 无法导入）——
+// 此前 importJSONSchema 只认【数据样例】（_inferFields 按值推断）；用户粘的是真 schema
+// （{"type":"object","properties":{"slides":{"type":"array","items":{"properties":{...}}}}}）时，
+// type/properties/items 会被当成数据字段名 → 结构全错。现双形态自动识别：
+//   含 $schema/properties/items 或 {type:<基本类型>±...} → 走 _schemaToFields 按语义递归
+//   否则 → 走 _inferFields（数据样例推断，原行为）
+function _looksLikeSchema(o){
+  if(!o||typeof o!=='object'||Array.isArray(o))return false;
+  if(o.$schema||o.properties||o.items)return true;
+  const t=o.type;
+  if(typeof t!=='string')return false;
+  if(!['object','array','string','number','integer','boolean','null'].includes(t))return false;
+  // {type:'string'} 这类裸声明也算；但 {type:'apple'} 这种数据字段不算
+  return Object.keys(o).every(k=>['type','items','properties','required','description','default','enum','title','format','additionalProperties','$schema','$ref','nullable'].includes(k));
+}
+function _schemaType(t){
+  return ({object:'object',array:'list',string:'string',number:'number',integer:'integer',
+           boolean:'boolean',null:'string'})[t]||'string';
+}
+// JSON Schema → 字段树（递归）：object→properties / array→items（item 为 object 时其 properties
+// 作子字段；标量 item 记 {type}——与 _inferFields 的标量 list 表达一致）
+function _schemaToFields(sch,reqList){
+  if(!sch||typeof sch!=='object')return [];
+  const req=Array.isArray(reqList)?reqList:(Array.isArray(sch.required)?sch.required:[]);
+  const props=sch.properties;
+  if(!props||typeof props!=='object')return [];
+  return Object.entries(props).map(([k,v])=>{
+    v=(v&&typeof v==='object')?v:{};
+    let vt=v.type;
+    if(Array.isArray(vt))vt=vt.find(x=>x!=='null')||'string';
+    if(!vt)vt=v.properties?'object':(v.items?'array':(v.$ref?'object':'string'));
+    let type=_schemaType(vt);
+    if(v.$ref&&!v.properties&&!v.items)type='object';   // $ref 无法解析——保留 object 槽位
+    const f={name:k,type:type,description:v.description||'',required:req.indexOf(k)>=0};
+    if(v.properties)f.schema=_schemaToFields(v);
+    else if(v.items){
+      const it=v.items;
+      if(it&&typeof it==='object'&&it.properties)f.schema=_schemaToFields(it);
+      else if(it&&typeof it==='object'){
+        let it2=it.type; if(Array.isArray(it2))it2=it2.find(x=>x!=='null')||'string';
+        f.schema={type:_schemaType(it2||'string')};
+      }
+    }
+    return f;
+  });
+}
+// 顶层：object schema / array schema（items 为 object）→ 字段树
+function _schemaImportFields(node){
+  if(!node||typeof node!=='object')return [];
+  const req=Array.isArray(node.required)?node.required:[];
+  if(node.properties)return _schemaToFields(node,req);
+  if(node.items){
+    const it=node.items;
+    if(it&&it.properties)return _schemaToFields(it,Array.isArray(it.required)?it.required:[]);
+    if(it&&Array.isArray(it.type))return _schemaToFields({properties:{}},[]);   // 无信息
+  }
+  if(node.type==='object'||node.type==='array')return [];
+  return null;   // 非 schema
+}
 function importJSONSchema(kind){
   kind=kind||'out';
   const json=prompt('粘贴JSON数据，自动解析结构并创建'+(kind==='in'?'输入':'输出')+'字段：');
@@ -2706,8 +2765,12 @@ function importJSONSchema(kind){
   let obj;
   try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
   if(!obj||typeof obj!=='object'){toast('需要JSON对象或数组');return;}
+  // 双形态识别（2026-09-17·用户实测：数组 items 导入失败）——真 JSON Schema 走语义递归，
+  // 数据样例才走 _inferFields；否则 type/properties/items 会被当成字段名（结构全错）
   const sample=Array.isArray(obj)?(obj[0]||{}):obj;
-  const fields=_inferFields(sample);
+  let fields=null;
+  if(_looksLikeSchema(sample)) fields=_schemaImportFields(sample);
+  if(!fields) fields=_inferFields(sample);
   const n=findN(selNode);
   if(kind==='out'&&n.type==='59'){
     // FromJSON：输出固定是单个 output 对象（执行器把整棵解析树塞进 output），导入的是它的内部结构
@@ -2739,7 +2802,11 @@ function importFieldSchema(kind,path){
   let obj;
   try{obj=JSON.parse(json);}catch(e){toast('JSON解析失败: '+e.message);return;}
   if(!obj||typeof obj!=='object'||Array.isArray(obj)){toast('需要JSON对象 {...}');return;}
-  resolveSchemaHolder(kind,path).set(_inferFields(obj));
+  // 双形态识别（同 importJSONSchema）：JSON Schema → 语义递归；数据样例 → 推断
+  let _fs=null;
+  if(_looksLikeSchema(obj)) _fs=_schemaImportFields(obj);
+  if(!_fs) _fs=_inferFields(obj);
+  resolveSchemaHolder(kind,path).set(_fs);
   const n=findN(selNode);
   _uncollapseNode(n);
   if(['21','28'].includes(n?.type))_syncListSchema();

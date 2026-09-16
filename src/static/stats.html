@@ -332,25 +332,18 @@ function renderChart(models, stats){
       { let cs = counts.reduce((a,b)=>a+b,0);
         while(cs > 100){ const i = counts.indexOf(Math.max(...counts)); if(counts[i] <= 1) break; counts[i]--; cs--; }
         while(cs < 100 && counts.length){ counts[counts.indexOf(Math.max(...counts))]++; cs++; } }
-      // 断点：尾部反推法（用户实测 2026-09-16·精度修正 v2）：
-      // ① tail(易变环境块·) / recent_file 是【每步重渲染】的恒变段——物理上永远在缓存区外（红）。
-      //    反推时跳过它们的扣减（此前真实 miss 先撞上 tail 估算段就停——断点漂进 tail 里，
-      //    用户实测多轮；跳过后 miss 直接从 steps 段扣——轮内调用的断点自然落在 steps 内/末尾，
-      //    与物理断点=「上一步投影的 steps 末尾」一致）。
-      // ② 不够扣整段：断点=段内按 miss/段tok 比例（跨断点行内劈开绿|红）。
-      // ③ 防护：tt=0（旧版 0% 记录）或 counts 空时 bp=NaN——渲染层跳过红区（全绿）。
-      const ALWAYS_MISS = /^(tail\(|recent_file|hook)/;   // 恒变段：不参与反推扣减（区间自然全红）
-      const amCells = segs.reduce((a,s,i)=> a + (ALWAYS_MISS.test(String(s.n||'')) ? counts[i] : 0), 0);
-      // 起点 = 100 − 恒红段总格数（它们永远在断点之后）——否则 bp 落在恒红段的区间里（用户实测漂移）
-      let bp = (tt > 0 && counts.length) ? (100 - amCells) : NaN;
-      let missTok = Math.max(0, (hit.p.prompt||0) - (hit.p.cached||0));   // let：循环内会扣减
-      if(!Number.isNaN(bp)){
-        for(let i=segs.length-1; i>=0 && missTok>0; i--){
-          if(ALWAYS_MISS.test(String(segs[i].n||''))) continue;   // 恒红段跳过（bp 已在它们之前）
-          const st = segs[i].tok||0;
-          if(missTok >= st){ missTok -= st; bp -= counts[i]; }
-          else { bp -= counts[i] * (missTok/st); break; }
-        }
+      // 断点：尾部反推法（用户实测 2026-09-16·精度修正）：绝对比例 cached/prompt×100
+      // 因尾部小段整数格虚高（<1 给 1）+ 估算口径偏差，落点漂到最后一段内部靠尾处。
+      // 物理断点=缓存前缀末端=「重算区前沿」——真实 miss（prompt-cached）从最后一段
+      // 往前扣估算 tok，扣完的位置即断点（miss 发生在尾部，锚定尾部更符合直觉）。
+      let missTok = Math.max(0, (hit.p.prompt||0) - (hit.p.cached||0));   // let：循环内会扣减（const 报 Assignment——用户实测 22 连）
+      let bp = 100;
+      for(let i=segs.length-1; i>=0 && missTok>0; i--){
+        const st = segs[i].tok||0;
+        // 不够扣整段：断点=段内按 miss/段tok 比例的位置（用户裁定 2026-09-16：
+        // 断点落在段内时该段背景应前绿后红劈开——跨断点行内分色 + 贯穿竖线按同一 bp 渲染）
+        if(missTok >= st){ missTok -= st; bp -= counts[i]; }
+        else { bp -= counts[i] * (missTok/st); break; }
       }
       bp = Math.max(0, Math.min(100, bp));
       const headL = [l1,l2,l3,l4, ...(segs.length?["— 投影分布（绿底=缓存命中 红底=重算 │=断点）—,"]:[])];

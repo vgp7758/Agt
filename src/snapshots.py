@@ -37,9 +37,15 @@ class SnapshotManager:
         if (self.git_dir / "HEAD").exists():
             return
         self.git_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "init", "--bare", str(self.git_dir)],
-                       check=True, capture_output=True,
-                       creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+        # timeout + DEVNULL（2026-09-16 9300 实例实测挂死：git init 在无 console 的服务进程
+        # 上下文里偶发不退——与 _run 对齐 120s 超时兜底，stdin 显式断开防继承管道）
+        try:
+            subprocess.run(["git", "init", "--bare", str(self.git_dir)],
+                           check=True, capture_output=True, timeout=120,
+                           stdin=subprocess.DEVNULL,
+                           creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("git init --bare 超时（120s）——快照仓库初始化受阻，检查磁盘/杀毒")
         self._run(["config", "core.bare", "false"])
         self._run(["config", "core.worktree", str(self.workspace)])
         self._run(["config", "user.name", "Agt Snapshots"])          # commit-tree 需要

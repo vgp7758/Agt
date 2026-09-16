@@ -209,6 +209,11 @@ def _parse_tool_calls(msg: dict) -> list[dict]:
 _QUOTA_PAT = re.compile(r"quota|credit|balance|余额|欠费|insufficient|arrear|top.?up|充值", re.I)
 
 
+COOLDOWN_WAIT_MAX = 20.0   # 全链冷却时的最大睡等秒数（2026-09-16 用户实测裁定）：
+                           # 超过此阈值不再睡等重试，直接报错并列出各成员冷却剩余——
+                           # 原无脑 sleep(剩余)（可达 300s）会把 react 整轮卡死五分钟
+
+
 def _classify_err(e) -> str:
     """失败归类（充值提示用）：quota=配额/余额不足（一键充值有意义）；
     auth=鉴权失败（可跳注册/控制台页）；其余网络/限流/超时类与钱无关。"""
@@ -672,23 +677,35 @@ class LLMClient:
                     next_m = m
                     break
             if not next_m:
-                # 全链已试尽。若链上成员都只是冷却中（网络抖动/上游瞬时故障的典型形态：
-                # 失败即进冷却，冷却窗内整链重试都会被跳过），等最短剩余冷却解冻后
-                # 重试一轮，而不是立刻炸轮——2026-09-11 热点断网：glm+proxy 双双进
-                # 300s 冷却，用户窗内两次重发均秒失败"冷却中"。
+                # 全链已试尽。链上成员可能只是"冷却中"被跳过（失败即进冷却，冷却窗内重发会被整链跳过）。
+                # 等待策略（2026-09-16 修正）：仅当最短冷却剩余 ≤ COOLDOWN_WAIT_MAX 才睡等重试；
+                # 原实现无脑 sleep(剩余)（可达 300s）会把 react 整轮卡死五分钟（用户实测困惑：
+                # "第一个模型失败后就没动静了"）。超阈值直接报错，并把各成员冷却剩余一并抛出
+                # （UI 侧据 last_failures 显示重试/充值入口；并发场景也不该睡占工作线程）。
                 near = _nearest_cooldown()
-                if near and waits_left[0] > 0:
+                _cd_now = time.time()
+                _cd_best = {}                       # model → 最短剩余（同 model 多 token 签名只报最短一条）
+                for _m in chain:
+                    for _k, _ts in self._provider_cooldown.items():
+                        if not _k.startswith(_m + ":"):
+                            continue
+                        _remain = self._cooldown_seconds - (_cd_now - _ts)
+                        if _remain > 0 and (_m not in _cd_best or _remain < _cd_best[_m]):
+                            _cd_best[_m] = _remain
+                cd_detail = ", ".join("%s 剩%.0fs" % (_m, _v) for _m, _v in _cd_best.items())
+                if near and waits_left[0] > 0 and near[1] <= COOLDOWN_WAIT_MAX:
                     waits_left[0] -= 1
-                    _LOG.warning("回退链全在冷却：等 %s 解冻(剩余%.0fs)后重试整链（等待配额剩%d）",
-                                 near[0], near[1], waits_left[0])
+                    _LOG.warning("回退链全在冷却：等 %s 解冻(剩余%.0fs，≤%.0fs 阈值)后重试整链（等待配额剩%d）",
+                                 near[0], near[1], COOLDOWN_WAIT_MAX, waits_left[0])
                     time.sleep(near[1] + 1.0)
                     tried[:] = [near[0]]
                     tried_tokens[0] = 0
                     self.switch_model(near[0])
                     return
-                _LOG.error("回退链耗尽 tried=%s 原因=%s", tried, reason)
+                _LOG.error("回退链耗尽 tried=%s 原因=%s 冷却=%s", tried, reason, cd_detail or "无")
                 raise RuntimeError(
-                    f"回退链中所有模型均已尝试({', '.join(tried)})：{reason}")
+                    f"回退链不可用（已试: {', '.join(tried)}）：{reason}"
+                    + (f"；其余成员冷却中: {cd_detail}" if cd_detail else ""))
             tried.append(next_m)
             tried_tokens[0] = 0
             if from_cooldown:

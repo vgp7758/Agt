@@ -677,14 +677,12 @@ class Agent:
                     self._declared_fallback = list(fb[0])   # react 链（只认声明；未声明→None）
                 except Exception:
                     pass
+            asm = _parse_assembly(meta)   # 2026-09-16 修：此前漏赋值，热重载跑此行必 NameError
             if asm is not None:
                 self.session.set_assembly_plan(asm)
             hs = _parse_hooks(meta)
             if hs is not None:
                 self.session.hook_specs = hs
-            fb = _parse_agent_fallback(meta)
-            if fb is not None:
-                self.llm.set_fallback(fb[0], fb[1])
             mn = (meta.get("model") or "").strip()
             if mn and mn in (MODELS or {}) and mn != getattr(self, "_main_yml_model", None):
                 self.switch_model(mn, _user_initiated=True)

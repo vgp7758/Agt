@@ -1667,6 +1667,10 @@ class Session:
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
         tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项·默认/reminder posture）：
                                             # 装配后统一包裹并入末条 content
+        tail_stat_text: str = ""            # 统计专用镜像桶（2026-09-16·用户抓到重复计算）：与
+                                            # tail_merge_text 同步收集但【不含 recent_file】——rf 已单独
+                                            # _sec 记账，而真实 merge 时它并入 tail 同一条消息，统计若
+                                            # 用完整 text 会把 rf 的 tokens 算两次
         reasoning_merge_text: str = ""      # 区3 收集桶（steps 后声明 reasoning pose 的 asm 项）：
                                             # 装配后作为思考链注入末条 assistant reasoning_content 前缀
         tail_mode = "reminder"              # 尾段注入模式（steps=reasoning 声明改写；2026-09-03 粒度演进
@@ -1733,6 +1737,7 @@ class Session:
                             if _b.endswith("</system-reminder>"):
                                 _b = _b[:-len("</system-reminder>")].strip()
                             tail_merge_text = (tail_merge_text + "\n" + _b) if tail_merge_text else _b
+                            tail_stat_text = (tail_stat_text + "\n" + _b) if tail_stat_text else _b
                             continue
                         if name == "recent_file":
                             # recent_file 段（2026-09-07·用户提案·段式化）：与 tail 同桶——
@@ -1810,6 +1815,7 @@ class Session:
                             _sec(f"{nm}（尾部·思考链）", own, meta + "·注入思考链(reasoning)", msgs_n=0)
                         else:
                             tail_merge_text = (tail_merge_text + "\n\n" + _b) if tail_merge_text else _b
+                            tail_stat_text = (tail_stat_text + "\n\n" + _b) if tail_stat_text else _b
                             _sec(f"{nm}（尾部）", own, meta + "·并入末条(reminder)", msgs_n=0)
                     else:
                         run.extend(own)
@@ -1825,19 +1831,24 @@ class Session:
         #   content 位；末条 assistant 同样在未命中区，缓存代价相同。
         # 例外回退：末条是 assistant（罕见，如恢复场景）或 msgs 空 → 独立 user 消息（旧行为）；
         # reasoning 桶 user 后无 assistant（s0 首步）→ 回退 remainder 并入末条语义。
-        def _apply_reasoning_bucket(text: str, _src_idx: int, _why: str):
+        def _apply_reasoning_bucket(text: str, _src_idx: int, _why: str, stat_text: str = None):
+            _stat = text if stat_text is None else stat_text
             _src = msgs[_src_idx]
             _rc = str(_src.get("reasoning_content") or "")
             _inj = f"当前状态：{text}"
             _m2 = {**_src}   # 浅拷贝——末条可能是 session 数据的共享引用，绝不就地改（防污染持久数据）
             _m2["reasoning_content"] = (f"{_inj}\n{_rc}" if _rc else _inj)
             msgs[_src_idx] = _m2
-            _sec("tail(易变环境块·思考链)", [{"role": "assistant", "content": _inj}],
+            _sec("tail(易变环境块·思考链)", [{"role": "assistant", "content": f"当前状态：{_stat}"}],
                  f"reasoning前缀注入末条assistant(#{_src_idx})·{_why}", msgs_n=0)
 
-        def _apply_reminder_bucket(text: str) -> None:
+        def _apply_reminder_bucket(text: str, stat_text: str = None) -> None:
+            # stat_text（2026-09-16·用户抓到重复计算）：统计专用文本——不含 recent_file 的部分
+            #（rf 已单独 _sec("recent_file(改文件快照段)")，但真实 merge 时它并入 tail 桶同一条
+            # 消息——若统计用完整 text，rf 的 tokens 被算两次）。默认与 text 相同（无 rf 场景）。
+            _stat = text if stat_text is None else stat_text
             _wrapped = "<system-reminder>\n" + text + "\n</system-reminder>"
-            _tail_own = [{"role": "user", "content": _wrapped}]
+            _tail_own = [{"role": "user", "content": "<system-reminder>\n" + _stat + "\n</system-reminder>"}]
             if msgs and msgs[-1].get("role") != "assistant":
                 _last = msgs[-1]
                 _c = _last.get("content")
@@ -1872,6 +1883,7 @@ class Session:
             else:
                 # 无可用 assistant（s0 首步）→ 并入 reminder 桶合并注入，内容不丢
                 tail_merge_text = (tail_merge_text + "\n\n" + reasoning_merge_text) if tail_merge_text else reasoning_merge_text
+                tail_stat_text = (tail_stat_text + "\n\n" + reasoning_merge_text) if tail_stat_text else reasoning_merge_text
                 _sec("tail(易变环境块·reasoning→reminder 回退)", [{"role": "user"}], "s0无assistant，reasoning桶并入正文", msgs_n=0)
 
         # —— reminder 桶：<system-reminder> 包裹 → 并入末条 content ——
@@ -1890,9 +1902,9 @@ class Session:
                   and not str(msgs[_ai].get("reasoning_content") or "").strip()):
                 _why = "requires_reasoning·空槽承载动态状态"
             if _why:
-                _apply_reasoning_bucket(tail_merge_text, _ai, _why)
+                _apply_reasoning_bucket(tail_merge_text, _ai, _why, stat_text=tail_stat_text)
             else:
-                _apply_reminder_bucket(tail_merge_text)
+                _apply_reminder_bucket(tail_merge_text, tail_stat_text)
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):

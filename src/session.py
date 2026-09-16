@@ -621,6 +621,13 @@ class Session:
         # 运行时内存不落盘：重启后缓冲为空，首次投影按 steps 回填（file_snapshots 运行时
         # 重建，形态与 append 同口径）。
         self._constr_buf: list[list[dict]] = []   # 每 step 一组定型 msgs（与 _current.steps 对齐）
+        # —— 跨轮施工流（2026-09-17·用户裁定：从施工开始的轮全部保留）——
+        # 用户权衡：上下文膨胀快，但施工起始总上下文低（history 不装配）+ 持续 append-only
+        # → 缓存与思维链跨轮连续，完成任务更快。每轮 finish 时把 [本轮 user + 本轮 steps 定型]
+        # 追加进流；施工期投影在 user_message 段位置整体输出（历史施工轮 u/s 交替）+ 当前轮 user，
+        # steps 段输出当前轮 buf——序列 = 完整施工聊天记录。plan 全完成（收工）即清空。
+        # 持久化：extra_state["constr_start_idx"]（起始轮号）——重启后按 turns 惰性重建。
+        self._constr_stream: list[dict] = []
 
     # ========== 步距衰减基数（显式配置 > 窗口推导 > 1500） ==========
     @property
@@ -898,6 +905,7 @@ class Session:
             self._current.summary = ""
         self.turns.append(self._current)
         finished = self._current
+        self._constr_migrate_turn(finished)   # 跨轮施工流：施工中 → 本轮 [user + steps 定型] 入流
         self._current = None
         self._constr_buf = []   # 施工投影缓冲：归档即弃（运行时内存，不滞留）
         self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
@@ -939,6 +947,7 @@ class Session:
             self._current.summary = ""
         self.turns.append(self._current)
         finished = self._current
+        self._constr_migrate_turn(finished)   # 中断归档同口径：施工中同样入流
         self._current = None
         self._constr_buf = []   # 施工投影缓冲：中断归档同样清（与 finish_turn 同口径）
         self._ensure_name()            # name 就绪 → 绑定 events/toollog 路径并 flush 缓冲
@@ -1270,6 +1279,47 @@ class Session:
         while len(self._constr_buf) < len(self._current.steps):
             self._constr_buf.append(
                 self._constr_step_msgs(self._current.steps[len(self._constr_buf)]))
+
+    def _constr_migrate_turn(self, turn: "Turn") -> None:
+        """跨轮施工流迁移（2026-09-17·用户裁定：从施工开始的轮全部保留）：本轮归档时若 plan 仍在
+        施工中 → 把 [本轮 user + 各 step 定型 msgs] 追加进 _constr_stream（投影在 user_message 段
+        位置整体输出——连续聊天记录，append-only 跨轮）。plan 全完成（收工）/无 plan → 清空流
+        （恢复常规历史装配，形态跳变一次）。同步记 extra_state['constr_start_idx']（起始轮号）——
+        重启后按 turns 惰性重建。中断归档同口径（abort_current_turn 也调本方法）。"""
+        try:
+            if not self._construction_mode():
+                if self._constr_stream:
+                    self._constr_stream = []                     # 收工/非施工：清流
+                self.extra_state.pop("constr_start_idx", None)
+                return
+            self._constr_sync()   # 保证 buf 覆盖本轮全部 steps（定型器与投影同路径）
+            self._constr_stream.append({"role": "user", "content": turn.user_message or ""})
+            for _grp in self._constr_buf:
+                self._constr_stream.extend(_grp)
+            if self.extra_state.get("constr_start_idx") is None:
+                self.extra_state["constr_start_idx"] = len(self.turns) - 1   # 起始轮号
+            self._constr_buf = []
+        except Exception as e:
+            _LOG.warning("施工流迁移失败（跳过）：%s", e)
+
+    def _constr_rebuild(self) -> None:
+        """重启后施工流惰性重建（同裁定）：_constr_stream 为内存，重启丢失——施工中且
+        extra_state 有起始轮号时，用 turns[start:] 重定型每轮 [user + steps]（与 _constr_step_msgs
+        同定型器；归档轮 file_snapshots 不持久化→无内嵌快照块，形态从重建时刻重新 byte-stable）。"""
+        if self._constr_stream:
+            return          # 已有流（轮内由 _constr_migrate_turn 逐轮累积）
+        try:
+            _st = self.extra_state.get("constr_start_idx")
+            if not isinstance(_st, int) or not self._construction_mode():
+                return
+            # 只重建【已归档】轮（turns[_st:]）；当前进行中的轮不进流（其 user/steps 走常规段）
+            for _t in self.turns[_st:]:
+                self._constr_stream.append({"role": "user", "content": _t.user_message or ""})
+                for _s in _t.steps:
+                    self._constr_stream.extend(self._constr_step_msgs(_s))
+            self._constr_buf = []
+        except Exception as e:
+            _LOG.warning("施工流重建失败（跳过）：%s", e)
 
     def _seg_msgs_steps(self) -> list[dict]:
         """当前轮已完成的步骤 + 本步 pending 的用户中途补充（带标签，发出后滚入历史中部）。
@@ -1795,6 +1845,16 @@ class Session:
                                     for m in _pinned if isinstance(m, dict))
                         _sec(f"前置上下文({len(_pinned)}条)", msgs[st:])
                     own = self._seg_msgs_user_message()
+                    # 跨轮施工流（2026-09-17·用户裁定）：施工期在 user 前整体输出历史施工轮
+                    # [u,s,u,s...]（append-only 连续记录——缓存与思维链跨轮连续）；惰性重建
+                    # 兼顾重启（extra_state 起始轮号 → turns 重定型）
+                    if self._construction_mode():
+                        self._constr_rebuild()
+                        if self._constr_stream:
+                            _st2 = len(msgs)
+                            msgs.extend(self._constr_stream)
+                            _sec(f"施工历史流({self.extra_state.get('constr_start_idx', 0)}轮起·append-only)",
+                                 msgs[_st2:])
                     msgs.extend(own)
                     _sec(f"当前轮user(第{len(self.turns)+1}轮)", own)
                     user_end_idx = len(msgs)   # reasoning 注入边界：此后出现的 assistant 才是注入候选

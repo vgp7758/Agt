@@ -749,16 +749,34 @@ class Agent:
         session.llm_calls.record，把 wrapper 覆盖掉（用户实测：重启恢复 session 后所有
         react 记录都没 proj，而全新空 session 进程有）。
         取最近一次真实投影的 _proj_stats（messages_for_llm 装配口径）；非 react 场景不附。
+        连续同名段合并（用户提案 2026-09-16）：asm:text / asm:func（同名=同注入方式）等装配段
+        动辄十几条连续出现，逐条展示没信息量还挤掉后面的段——合并成一条带 ×N 计数。
         session 参数仅作兜底：wrapper 内动态取 self.session（切档后无需重挂）。"""
+        def _merge_proj(secs):
+            out = []
+            for s in secs:
+                if out and out[-1]["_raw"] == s.get("name"):
+                    out[-1]["tok"] += s.get("tok") or 0
+                    out[-1]["cnt"] += 1
+                else:
+                    out.append({"_raw": s.get("name"), "n": s.get("name") or "?",
+                                "tok": s.get("tok") or 0, "cnt": 1})
+            for o in out:
+                if o["cnt"] > 1:
+                    o["n"] = f"{o['n']} ×{o['cnt']}"
+                o.pop("_raw", None)
+            return out
+
         def _rec_with_proj(rec: dict):
             try:
                 cur = self.session
                 if str(rec.get("scene", "")).startswith("react") and getattr(cur, "_proj_stats", None):
                     bd = cur.projection_breakdown()
-                    tot = max(bd.get("total_tokens") or 0, 1)
-                    rec["proj"] = [{"n": s.get("name"), "tok": s.get("tokens", 0),
-                                    "pct": round((s.get("tokens") or 0) * 100 / tot, 1)}
-                                   for s in bd.get("sections", []) if s.get("tokens")]
+                    merged = _merge_proj([{"name": s.get("name"), "tokens": s.get("tokens", 0)}
+                                          for s in bd.get("sections", []) if s.get("tokens")])
+                    tot = max(sum(x["tok"] for x in merged), 1)
+                    rec["proj"] = [{"n": x["n"], "tok": x["tok"],
+                                    "pct": round(x["tok"] * 100 / tot, 1)} for x in merged]
             except Exception:
                 pass
             return cur.llm_calls.record(rec)

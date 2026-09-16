@@ -279,7 +279,7 @@ function renderChart(models, stats){
     for(const p of pts){
       const sc = p.scene ? ` · ${esc(p.scene)}` : '';
       const ts = (p.turn!=null && p.step!=null) ? ` · t${p.turn} · s${p.step}` : '';
-      const pj = (p.proj||[]).slice(0,6).map(s=>`${s.n} ${s.pct}%`).join(' | ');
+      const pj = (p.proj||[]).slice(0,10).map(s=>`${s.n} ${s.pct}%`).join(' | ');
       g += `<circle cx="${x(p.gi).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
         + `<title>${esc(m)} · #${p.gi+1}${sc}${ts}\n${fmtTs(p.ts)}\n命中率 ${p.rate}%（cached ${fmtK(p.cached)} / prompt ${fmtK(p.prompt)} tokens）\ncompletion ${fmtK(p.completion)} tokens${p.reasoning ? `（含思考 ${fmtK(p.reasoning)}）` : ''}${pj ? `\n投影分布: ${esc(pj)}` : ''}</title></circle>`;
     }
@@ -324,7 +324,7 @@ function renderChart(models, stats){
       const l3 = `命中率 ${hit.p.rate}%（cached ${fmtK(hit.p.cached)} / prompt ${fmtK(hit.p.prompt)} tokens）`;
       const l4 = `completion ${fmtK(hit.p.completion)} tokens` + (hit.p.reasoning ? `（含思考 ${fmtK(hit.p.reasoning)}）` : '');
       // 投影分布（react 调用记录的 proj 字段——当时上下文各段构成，agent 记录侧附入）
-      const projL = (hit.p.proj||[]).slice(0,8).map(s=>`${s.n}  ${fmtK(s.tok)} · ${s.pct}%`);
+      const projL = (hit.p.proj||[]).slice(0,16).map(s=>`${s.n}  ${fmtK(s.tok)} · ${s.pct}%`);
       const allL = [l1,l2,l3,l4, ...(projL.length?["— 投影分布 —",...projL]:[])];
       const bw = Math.max(...allL.map(s=>s.length))*6.8+16, bh = 14 + allL.length*15;
       let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);

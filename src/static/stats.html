@@ -370,7 +370,11 @@ function renderChart(models, stats){
         } else if(segStart >= bp/100){   // 整段在断点后：红
           bg = `<rect x="${bkX}" y="${y0}" width="${bkW}" height="${rowH-1}" fill="${R}"/>`;
         } else {                          // 跨断点：绿 | 红（竖线标断点）
-          const gW = bkW * (bp/100);
+          // 分位换算（2026-09-16 用户实测 t934_s3 抓到的 bug）：bp 是【全局格坐标】（如 97.088），
+          // 直接乘整行宽会把段内 8.8% 分位画成 97% 分位（红区只剩一条缝）。正确做法：
+          // 段内分位 = (bp − segStart) / 段格宽 —— 绿区宽度 = 段内分位 × 行宽。
+          const segFrac = Math.max(0, Math.min(1, (bp/100 - segStart) / ((segEnd - segStart) || 1)));
+          const gW = bkW * segFrac;
           bg = `<rect x="${bkX}" y="${y0}" width="${gW}" height="${rowH-1}" fill="${G}"/>`
              + `<rect x="${bkX+gW}" y="${y0}" width="${bkW-gW}" height="${rowH-1}" fill="${R}"/>`
              + `<line x1="${(bkX+gW).toFixed(1)}" y1="${y0}" x2="${(bkX+gW).toFixed(1)}" y2="${y0+rowH-1}" stroke="#e6edf3" stroke-width="1"/>`;

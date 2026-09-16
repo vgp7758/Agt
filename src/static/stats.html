@@ -164,7 +164,7 @@ function aggregate(slice){
       s.prompt += c.prompt;
       s.pts.push({gi:c.gi, ts:c.ts, rate: Math.round(c.cached/c.prompt*1000)/10,
                   cached:c.cached||0, prompt:c.prompt, completion:c.completion||0, reasoning:c.reasoning||0,
-                  scene:c.scene||'', turn:c.turn, step:c.step});
+                  scene:c.scene||'', turn:c.turn, step:c.step, proj:c.proj||null});
     }
   }
   for(const ep in stats){
@@ -279,8 +279,9 @@ function renderChart(models, stats){
     for(const p of pts){
       const sc = p.scene ? ` · ${esc(p.scene)}` : '';
       const ts = (p.turn!=null && p.step!=null) ? ` · t${p.turn} · s${p.step}` : '';
+      const pj = (p.proj||[]).slice(0,6).map(s=>`${s.n} ${s.pct}%`).join(' | ');
       g += `<circle cx="${x(p.gi).toFixed(1)}" cy="${y(p.rate).toFixed(1)}" r="${r}" fill="${col}">`
-        + `<title>${esc(m)} · #${p.gi+1}${sc}${ts}\n${fmtTs(p.ts)}\n命中率 ${p.rate}%（cached ${fmtK(p.cached)} / prompt ${fmtK(p.prompt)} tokens）\ncompletion ${fmtK(p.completion)} tokens${p.reasoning ? `（含思考 ${fmtK(p.reasoning)}）` : ''}</title></circle>`;
+        + `<title>${esc(m)} · #${p.gi+1}${sc}${ts}\n${fmtTs(p.ts)}\n命中率 ${p.rate}%（cached ${fmtK(p.cached)} / prompt ${fmtK(p.prompt)} tokens）\ncompletion ${fmtK(p.completion)} tokens${p.reasoning ? `（含思考 ${fmtK(p.reasoning)}）` : ''}${pj ? `\n投影分布: ${esc(pj)}` : ''}</title></circle>`;
     }
   }
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="user-select:none">${g}</svg>`;
@@ -322,7 +323,10 @@ function renderChart(models, stats){
       const l2 = fmtTs(hit.p.ts);
       const l3 = `命中率 ${hit.p.rate}%（cached ${fmtK(hit.p.cached)} / prompt ${fmtK(hit.p.prompt)} tokens）`;
       const l4 = `completion ${fmtK(hit.p.completion)} tokens` + (hit.p.reasoning ? `（含思考 ${fmtK(hit.p.reasoning)}）` : '');
-      const bw = Math.max(l1.length*7.2, Math.max(l3.length, l4.length)*6.4)+16, bh=67;
+      // 投影分布（react 调用记录的 proj 字段——当时上下文各段构成，agent 记录侧附入）
+      const projL = (hit.p.proj||[]).slice(0,8).map(s=>`${s.n}  ${fmtK(s.tok)} · ${s.pct}%`);
+      const allL = [l1,l2,l3,l4, ...(projL.length?["— 投影分布 —",...projL]:[])];
+      const bw = Math.max(...allL.map(s=>s.length))*6.8+16, bh = 14 + allL.length*15;
       let bx = sx+8; if(bx+bw > W-padR) bx = Math.max(padL, sx-8-bw);
       // y 锁定在数据点附近：tooltip 垂直居中对准该点的命中率位置（上下缘自动收进绘图区）
       const sy = y(hit.p.rate);
@@ -330,7 +334,7 @@ function renderChart(models, stats){
       if(by + bh > H-padB) by = H-padB-bh;
       if(by < padT) by = padT;
       tip.innerHTML = `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="#0d1117" stroke="#30363d" opacity="0.95"/>`
-        + [l1,l2,l3,l4].map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('');
+        + allL.map((s,i)=>`<text x="${bx+8}" y="${by+19+i*15}" fill="${i?'#8b949e':'#e6edf3'}" font-size="11">${esc(s)}</text>`).join('');
     };
     svgEl.addEventListener('mousedown', e=>{
       if(e.button!==0) return;

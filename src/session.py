@@ -45,7 +45,7 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
-GRADUATE_FORCE_TURNS = 60  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
+GRADUATE_FORCE_TURNS = 15  # 卫生性强档阈值：当前档超过此轮数时，无窗口压力也分批升前 30 轮（防档1 无限膨胀——
 RF_MAX_CHARS = 100_000  # recent-file 快照单文件上限·施工期内嵌口径（用户裁定 2026-08-31）：超大文件全文注入让近期缓存上蹿下跳
 RF_SEG_MAX_CHARS = 15_000  # 非施工段式口径（用户裁定 2026-09-15）：尾部 <recent-file> 段是每步
                           # 重渲染的易变项，>15K 即转 outline——段体积压小，尾部 miss 区代价低
@@ -1903,8 +1903,8 @@ class Session:
                 a_msg = {"role": "assistant", "content": content}
             else:
                 a_msg = {"role": "assistant", "content": turn.answer}
-            if turn.answer_reasoning:
-                a_msg["reasoning_content"] = turn.answer_reasoning
+            # 超深档不投影 reasoning（用户裁定 2026-09-16：answer content 原文信息量已足，
+            # reasoning 仅留在档位渲染与存档中，超深档只保留标注行 + answer 原文）
             msgs.append(a_msg)
         else:
             base = max(self.detail_base >> (level - 1), DETAIL_FLOOR)

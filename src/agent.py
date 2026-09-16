@@ -282,7 +282,23 @@ class Agent:
         self.session._spec_provider = self._spec_system_block
         self.session.utility_llm = self.utility_client()   # session 层短调用（摘要/命名）统一辅助模型
         self._task_guidance_provider_fn: Optional[Callable[[], str]] = None  # 由 chat.build_agent 注入（读 AGENTS.md/rules/skills）；set_session 转挂到新 session
-        self.llm.call_recorder = self.session.llm_calls.record   # LLM 调用流水落 llm_calls.jsonl（可观测性）
+        # LLM 调用流水落 llm_calls.jsonl（可观测性）。wrapper 附加投影分布（用户提案 2026-09-16）：
+        # react 主调用记录时附 proj=[{n:段名, tok, pct}]——/stats 拖拽 tooltip 直接渲染当时上下文构成。
+        # 取 self.session（动态属性查找）——load_session 换档后 recorder 也跟着新 session，不留旧引用。
+        _agent = self
+        def _rec_with_proj(rec: dict):
+            try:
+                sess = _agent.session
+                if str(rec.get("scene", "")).startswith("react") and getattr(sess, "_proj_stats", None):
+                    bd = sess.projection_breakdown()
+                    tot = max(bd.get("total_tokens") or 0, 1)
+                    rec["proj"] = [{"n": s.get("name"), "tok": s.get("tokens", 0),
+                                    "pct": round((s.get("tokens") or 0) * 100 / tot, 1)}
+                                   for s in bd.get("sections", []) if s.get("tokens")]
+            except Exception:
+                pass
+            return sess.llm_calls.record(rec)
+        self.llm.call_recorder = _rec_with_proj
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
         self._log_handler = configure_logging()
         self._log_handler.set_session(self.session.workspace, self.session.name)

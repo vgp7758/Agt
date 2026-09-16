@@ -282,23 +282,7 @@ class Agent:
         self.session._spec_provider = self._spec_system_block
         self.session.utility_llm = self.utility_client()   # session 层短调用（摘要/命名）统一辅助模型
         self._task_guidance_provider_fn: Optional[Callable[[], str]] = None  # 由 chat.build_agent 注入（读 AGENTS.md/rules/skills）；set_session 转挂到新 session
-        # LLM 调用流水落 llm_calls.jsonl（可观测性）。wrapper 附加投影分布（用户提案 2026-09-16）：
-        # react 主调用记录时附 proj=[{n:段名, tok, pct}]——/stats 拖拽 tooltip 直接渲染当时上下文构成。
-        # 取 self.session（动态属性查找）——load_session 换档后 recorder 也跟着新 session，不留旧引用。
-        _agent = self
-        def _rec_with_proj(rec: dict):
-            try:
-                sess = _agent.session
-                if str(rec.get("scene", "")).startswith("react") and getattr(sess, "_proj_stats", None):
-                    bd = sess.projection_breakdown()
-                    tot = max(bd.get("total_tokens") or 0, 1)
-                    rec["proj"] = [{"n": s.get("name"), "tok": s.get("tokens", 0),
-                                    "pct": round((s.get("tokens") or 0) * 100 / tot, 1)}
-                                   for s in bd.get("sections", []) if s.get("tokens")]
-            except Exception:
-                pass
-            return sess.llm_calls.record(rec)
-        self.llm.call_recorder = _rec_with_proj
+        self._install_recorder()   # LLM 调用流水 recorder（投影分布 wrapper——见方法定义）
         # 日志：配置根 agt logger（文件跟 session 走 + 控制台默认 WARNING+），handler 接到 session
         self._log_handler = configure_logging()
         self._log_handler.set_session(self.session.workspace, self.session.name)
@@ -749,7 +733,7 @@ class Agent:
         session._teammates_provider = self._teammates_block         # 团队感知·每轮注入
         session._task_guidance_provider = getattr(self, "_task_guidance_provider_fn", None)  # 任务指引·每轮重读
         session.system = self.base_system   # 读档用当前框架 system，丢弃存档里烤死的旧 task-guidance（防与新 provider 双重注入）
-        self.llm.call_recorder = session.llm_calls.record           # LLM 调用流水跟到新 session
+        self._install_recorder(session)   # LLM 调用流水跟到新 session（含投影分布 wrapper）
         # 辅助 client 的流水记录也跟到新 session（若有独立实例）
         if getattr(self, "_utility_llm", None) is not None and self._utility_llm is not self.llm:
             self._utility_llm.call_recorder = session.llm_calls.record
@@ -758,6 +742,31 @@ class Agent:
         self.restore_runtime_state(session.extra_state)
         self._restore_subagents()   # 扫描 session_dir/agents/ 恢复子 Agent 列表到 registry
         self._inbox_restore()       # 从 inbox.jsonl 恢复未消费的后台消息（/restart 或崩溃后不丢）
+    def _install_recorder(self, session=None):
+        """给 self.llm 挂 llm_calls recorder（用户提案 2026-09-16）：react 记录附投影分布
+        proj=[{n:段名, tok, pct}]——/stats 拖拽 tooltip 直接渲染当时上下文构成。
+        __init__ 与 set_session（读档/切 session）都须调用——此前 set_session 直接赋裸
+        session.llm_calls.record，把 wrapper 覆盖掉（用户实测：重启恢复 session 后所有
+        react 记录都没 proj，而全新空 session 进程有）。
+        取最近一次真实投影的 _proj_stats（messages_for_llm 装配口径）；非 react 场景不附。
+        session 参数仅作兜底：wrapper 内动态取 self.session（切档后无需重挂）。"""
+        def _rec_with_proj(rec: dict):
+            try:
+                cur = self.session
+                if str(rec.get("scene", "")).startswith("react") and getattr(cur, "_proj_stats", None):
+                    bd = cur.projection_breakdown()
+                    tot = max(bd.get("total_tokens") or 0, 1)
+                    rec["proj"] = [{"n": s.get("name"), "tok": s.get("tokens", 0),
+                                    "pct": round((s.get("tokens") or 0) * 100 / tot, 1)}
+                                   for s in bd.get("sections", []) if s.get("tokens")]
+            except Exception:
+                pass
+            return cur.llm_calls.record(rec)
+        try:
+            self.llm.call_recorder = _rec_with_proj
+        except Exception:
+            pass
+
 
     def _emit_plan_if_any(self):
         """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""

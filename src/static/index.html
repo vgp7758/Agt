@@ -242,6 +242,12 @@
   .asset-box img { max-width:100%; max-height:520px; border-radius:6px; display:block; cursor:zoom-in; }
   .asset-box.audio { display:block; max-width:420px; text-align:left; }
   .asset-box audio { width:100%; height:34px; }
+  /* 视频资产（2026-09-17）：内嵌播放器 + 右上角新页签链接（此前 mp4 落文本抽屉——8000 实测） */
+  .asset-box.video { display:block; max-width:560px; text-align:left; position:relative; }
+  .asset-box.video video { width:100%; max-height:420px; border-radius:6px; display:block; background:#000; }
+  .asset-box.video .vid-open { position:absolute; top:6px; right:8px; font-size:13px; text-decoration:none;
+    color:#5b6472; background:#fff; border:1px solid var(--line); border-radius:6px; padding:0 6px; line-height:18px; }
+  .asset-box.video .vid-open:hover { color:#2563eb; border-color:#2563eb; }
   .asset-box.err { opacity:.6; }
   /* 文本文件资产：可点击的框（📄 图标 + 标题/路径），点击在右侧预览抽屉打开内容 */
   .asset-box.file { display:inline-block; text-align:left; cursor:pointer; user-select:none;
@@ -762,22 +768,28 @@ function assetBoxHtml(title, path){
   var ext=(String(path).split('.').pop()||'').toLowerCase();
   var isImg=('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0;
   var isAud=('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0;
+  var isVid=('mp4,webm,mov,mkv,avi,m4v,flv,ts,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0;
   var isTxt=_TEXT_EXTS.indexOf(ext)>=0;
-  if(!isImg && !isAud && !isTxt){   // 后缀表全 miss → 查嗅探缓存（同步命中直接定形态）
+  if(!isImg && !isAud && !isVid && !isTxt){   // 后缀表全 miss → 查嗅探缓存（同步命中直接定形态）
     var ck=_assetKindCache[path];
     if(ck){
       if(ck.kind==='image') isImg=true;
       else if(ck.kind==='audio') isAud=true;
       else if(ck.kind==='text') isTxt=true;
     }
-  }
-  if(isImg){
+  }  if(isImg){
     return '<div class="asset-box">'+(cap?'<div class="asset-cap">'+cap+'</div>':'')+
       '<a href="'+src+'" target="_blank" rel="noopener" title="点击查看原图"><img src="'+src+'" loading="lazy" alt="'+alt+'" onerror="this.closest(\'.asset-box\').classList.add(\'err\');this.remove()"></a></div>';
   }
   if(isAud){
     return '<div class="asset-box audio">'+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
       '<audio controls preload="metadata" src="'+src+'"></audio></div>';
+  }
+  if(isVid){   // 视频 → 内嵌播放器（用户提案 2026-09-17：不再当文本开抽屉——mp4 走视频框；
+               // 点击标题/右上角链接可新页签看原片，浏览器按 /api/asset 的 Content-Type 直接播）
+    return '<div class="asset-box video">'+(cap?'<div class="asset-cap">🎬 '+cap+'</div>':'')+
+      '<video controls preload="metadata" src="'+src+'"></video>'+
+      '<a class="vid-open" href="'+src+'" target="_blank" rel="noopener" title="在新页签打开">↗</a></div>';
   }
   if(isTxt){   // 文本类 → 点击打开预览抽屉（📄）
     var pEsc=esc(path).replace(/'/g,'&#39;');
@@ -1157,8 +1169,10 @@ function unmentionedChangesHtml(answerText, changed){
     } else {
       const ext=(f.split('.').pop()||'').toLowerCase();
       if(('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0 ||
-         ('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0){
-        // 图片/音频 → 直接内嵌渲染（用户提案 2026-09-06：不再走文本预览逻辑），icon 标进 caption
+         ('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0 ||
+         ('mp4,webm,mov,mkv,avi,m4v,flv,ts,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0){
+        // 图片/音频/视频 → 直接内嵌渲染（用户提案 2026-09-06 起；视频 2026-09-17 补——
+        // 此前 mp4 落 else 走文本预览抽屉，8000 实测：点 mp4 打开的是文本抽屉）
         h += assetBoxHtml(ic+' '+f, f);
       } else {
         h += '<div class="asset-box file" onclick="openFilePreview(\''+esc(f).replace(/'/g,'&#39;')+'\')">'+

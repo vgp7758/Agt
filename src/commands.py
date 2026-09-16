@@ -1591,6 +1591,11 @@ def _cmd_context(ctx: CommandContext, args):
         age2 = _time.time() - bd.get("ts", 0)
         age2s = f"{age2:.0f}秒前" if age2 < 90 else (f"{age2/60:.0f}分钟前" if age2 < 5400 else f"{age2/3600:.1f}小时前")
         print(f"段落统计（采自旁车 t{bd.get('turn')}·s{bd.get('step')}，{age2s}——上次真实投影的存档，跨重启有效）")
+    elif bd.get("source") == "llm_calls":
+        age2 = _time.time() - bd.get("ts", 0)
+        age2s = f"{age2:.0f}秒前" if age2 < 90 else (f"{age2/60:.0f}分钟前" if age2 < 5400 else f"{age2/3600:.1f}小时前")
+        _m = f" · {bd.get('model')}" if bd.get("model") else ""
+        print(f"段落统计（采自 llm_calls 调用记录 t{bd.get('turn')}·s{bd.get('step')}{_m}，{age2s}——上次真实调用的投影分布，跨重启有效）")
     else:
         print("段落统计（现算估算——本进程尚未跑过投影，且无旁车存档）")
     total = max(bd["total_tokens"], 1)

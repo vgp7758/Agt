@@ -721,16 +721,61 @@ class Session:
             pass
         return None
 
+    def _llm_calls_proj(self) -> Optional[dict]:
+        """llm_calls.jsonl 尾扫：最后一条带 proj 的 react 记录（用户提案 2026-09-16）。
+    优先级位于 sidecar 之后、现算之前——跨重启且比现算准（那是当时真实发给 LLM 的分布），
+    但比 sidecar 略旧（sidecar 每次投影都写，含未成功调用的投影）。
+    proj 记录侧由 agent._install_recorder 的 wrapper 附加（d425358 修 set_session 覆盖）。"""
+        try:
+            sdir = getattr(self, "session_dir", None)
+            if not sdir:
+                return None
+            p = Path(sdir) / "llm_calls.jsonl"
+            if not p.exists():
+                return None
+            with open(p, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                chunk = min(size, 96 * 1024)   # 尾部 96KB 足够覆盖最近若干条
+                f.seek(size - chunk)
+                data = f.read().decode("utf-8", "replace")
+            for line in reversed(data.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if not r.get("proj"):
+                    continue
+                secs = [{"name": s.get("n") or "?", "tokens": int(s.get("tok") or 0),
+                         "msgs": 0, "chars": 0,
+                         "meta": f"{s.get('pct', 0)}%"} for s in r["proj"]]
+                return {"sections": secs,
+                        "total_tokens": sum(x["tokens"] for x in secs),
+                        "total_chars": 0, "source": "llm_calls",
+                        "ts": r.get("ts", 0), "turn": r.get("turn"), "step": r.get("step"),
+                        "model": r.get("resp_model") or r.get("model") or "",
+                        "note": "msgs/chars 不在此口径（采自调用记录 proj）"}
+            return None
+        except Exception:
+            return None
+
     def projection_breakdown(self) -> dict:
-        """分段统计三级读取（用户提案 2026-08-29）：内存 live（真实装配时顺手记录的
+        """分段统计四级读取（用户提案 2026-08-29 + 2026-09-16）：内存 live（真实装配时顺手记录的
         _proj_stats，含 ts/turn/step 元信息）→ 旁车 sidecar（session_dir/proj_stats.json，
-        跨重启的最近真实投影+档位边界快照）→ 现算兜底（_walk_plan 同一走查重算）。
+        跨重启的最近真实投影+档位边界快照）→ llm_calls 尾扫（最后一条带 proj 的 react 记录，
+        真实调用口径）→ 现算兑底（_walk_plan 同一走查重算）。
         返回 {sections: [{name, msgs, chars, tokens, meta}], total_tokens, total_chars, source?}。"""
         if self._proj_stats and self._proj_stats.get("sections"):
             return dict(self._proj_stats)   # 浅拷贝：调用方改动不污染缓存
         sc = self._load_proj_stats_sidecar()
         if sc:
             return sc
+        lc = self._llm_calls_proj()
+        if lc:
+            return lc
         out = {"sections": [], "total_tokens": 0, "total_chars": 0}
         # 现算兜底与 messages_for_llm 同一走查（_walk_plan）——口径天然一致（含系统信息合并）。
         # 代价是会路过保命阀（_history_tiered_msgs 的估算循环，极端情况顺带升档/折叠），但走到

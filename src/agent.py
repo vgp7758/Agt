@@ -774,6 +774,11 @@ class Agent:
                     bd = cur.projection_breakdown()
                     merged = _merge_proj([{"name": s.get("name"), "tokens": s.get("tokens", 0)}
                                           for s in bd.get("sections", []) if s.get("tokens")])
+                    # tools schema 提到最前（用户裁定 2026-09-16）：它是请求级参数（API 里先于
+                    # messages），体积又大（~35K/12%）——藏尾部不如放头部醒目
+                    _ts = [x for x in merged if str(x["n"]).startswith("tools schema")]
+                    if _ts:
+                        merged = _ts + [x for x in merged if not str(x["n"]).startswith("tools schema")]
                     tot = max(sum(x["tok"] for x in merged), 1)
                     rec["proj"] = [{"n": x["n"], "tok": x["tok"],
                                     "pct": round(x["tok"] * 100 / tot, 1)} for x in merged]

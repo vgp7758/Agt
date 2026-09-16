@@ -1636,7 +1636,13 @@ def _cmd_context(ctx: CommandContext, args):
         print(f"⚙️ **施工模式**（plan 未完成：history 未装配{_pc}——背景以施工牌为准，recall 可查历史）")
     print("| 段落 | 估算 tok | 占比 | 图表 |")
     print("|---|---:|---:|---|")
-    for sec in bd["sections"]:
+    # tools schema 提到最前（用户裁定 2026-09-16）：请求级参数、体积大，头部比尾部醒目
+    # （记录侧 _install_recorder 已排，此处覆盖 live/sidecar 口径的显示顺序）
+    _secs = list(bd["sections"])
+    _ts = [x for x in _secs if str(x.get("name", "")).startswith("tools schema")]
+    if _ts:
+        _secs = _ts + [x for x in _secs if not str(x.get("name", "")).startswith("tools schema")]
+    for sec in _secs:
         p = sec["tokens"] * 100 / total
         bar = "█" * min(int(p * 2), 40)
         meta = f"　·　{sec['meta']}" if sec["meta"] else ""

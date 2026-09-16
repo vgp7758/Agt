@@ -63,6 +63,7 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
   - 细节：tooltip 靠右缘自动左翻；拖拽中 `user-select:none` 防选中文字；SVG 外松手后回到图内自动清理；每次刷新重建 SVG 时重绑（无泄漏）
   - 原 hover 小圆点 tooltip **保留并存**（两种查看方式）；纯前端改动，Ctrl+F5 刷新即生效，不需 /restart
   - **tooltip 锁定数据点（v0.18.7，commit aae43b0 打包发布）**：吸附后 tooltip 不驻留鼠标附近，而是**锁定到所吸附的数据点上**、y 跟随曲线起伏——横扫多条折线时 tooltip 始终贴着当前数据点，读数与曲线视觉位置一致；纯前端，Ctrl+F5 生效
+- **投影分布 tooltip（2026-09-16，用户提案，commit 17af0a8）**：拖拽扫描（与 hover）tooltip 新增「— 投影分布 —」块——每段一行 `system 45.2K · 14.6%`（tok + 占比，tooltip 高度/宽度按段数自适应），数据 = 该次调用 llm_calls 记录的 `proj` 字段（当时真实装配统计，agent 记录侧附入，见 [llm_calls.jsonl](#llm_callsjsonl-每条记录)）；hover 小圆点原生 title 同步加一行压缩版（`投影分布: system 14.6% | tier1 38.7% | …`，前 6 段）。老记录/非 react 场景无 proj 自动省略该块——补上后单看 tooltip 即可回溯「这次调用时上下文由什么构成」，不再需要翻投影转储或现跑 /context。前端 Ctrl+F5 生效，记录侧 /restart 生效
 - tooltip：序号/时间（**精确到秒**，bd0d1ef 前为分钟级）/命中率/具体 cached/prompt tokens/**scene**（调用时机）/**turn/step 轮步标记**（commit 4aced81）
   - turn/step 标记格式：`· t{轮号} · s{步号}`（如 `· t206 · s6`）
   - 与 `projections/` 目录下投影转储文件名同源对齐：`t206_s6_*.json`
@@ -72,13 +73,14 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 
 ### llm_calls.jsonl 每条记录
 
-`ts / model / resp_model / scene / attempt / finish_reason / usage(归一化) / elapsed / outcome / content_len / reasoning_len / tool_calls / error / completer / turn / step`
+`ts / model / resp_model / scene / attempt / finish_reason / usage(归一化) / elapsed / outcome / content_len / reasoning_len / tool_calls / error / completer / turn / step / proj(投影分布)`
 
 - **turn**（commit 4aced81）：当前已完成轮数（值为 `len(turns)`），与投影文件名中的 `t{N}` 对应
 - **step**（commit 4aced81）：当前轮已完成步数（值为 `len(_current.steps)`），与投影文件名中的 `s{M}` 对应
 - 仅 scene=`react·{agent_id}`（主循环）的记录有 turn/step；其他场景（钩子/recap/debug 等）为 null
 - **传递链**（三层贯通，与 scene 同款机制）：`src/agent.py` react 主循环 3 处调用点（主调用/DSML 重试/空回答重试）传 `turn=len(turns), step=len(_current.steps)`（与 `_dump_projection` 完全同源）→ `src/llm_client.py` `chat()` 设 `_turnstep_ctx`（chat() 进入设置、finally 清理，**不进 API 请求**）→ `_record_call` 落盘 → `src/server.py` `/api/stats` 透传 → `src/static/stats.html` tooltip 拼接
 - 老记录无 turn/step 字段，新记录添加后向前兼容（读取侧可选）
+- **proj**（2026-09-16，用户提案，commit 17af0a8）：react 主调用记录附投影分布 `proj=[{n:段名, tok, pct}]`——当时真实装配的段构成（`projection_breakdown()`，与 /context、旁车 proj_stats.json 同源）。仅 `scene` 以 `react` 开头且 `_proj_stats` 非空时附；agent.py record wrapper 动态取 `self.session`（顺带修 load_session 换档后 recorder 留旧 session 引用的隐患）。消费端 = /stats tooltip「投影分布」块（见 [/stats 页](#stats-页webui--统计按钮)）；老记录无此字段向前兼容。机制见 [context-engine · 三项调整](../architecture/context-engine.md#三项调整卫生毕业-15-轮--llm_calls-附投影分布--超深档不投影-reasoning2026-09-16用户提案commit-17af0a8)
 
 scene 取值（2026-08-29 起携带发起者——与 [🐞 日志面板](#日志面板--场景标注2026-08) 行尾小括号同源）：
 

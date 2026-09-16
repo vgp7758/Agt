@@ -397,6 +397,21 @@ if self._deepen_oldest_tier(fold_count):        # ② 再推老档进工具折�
 
 **发布（2026-09-14，随 [v0.28.0](../releases/v0.28.0.md)）**：本节三改 + 模拟器随 v0.28.0 上线 PyPI + Git（发布提交 `1f66a4e`，VERSION 0.27.2 → 0.28.0）。同版随包分发的相关项：`/api/callback` 回调 header 鉴权（此前修复仅本地生效，见 [scnet-async-pipeline](../features/scnet-async-pipeline.md)）。改的是 session.py（引擎层），`/restart` 即生效；已有长 session 下次顶窗时新阶梯自然接管。
 
+### 三项调整：卫生毕业 15 轮 / llm_calls 附投影分布 / 超深档不投影 reasoning（2026-09-16，用户提案，commit 17af0a8）
+
+一轮三项投影侧调整（用户一条提案打包，commit `17af0a8`）：
+
+**① 卫生性强档阈值 60 → 15（src/session.py `GRADUATE_FORCE_TURNS`）**：当前档超过 15 轮时，无窗口压力也分批升前 30 轮——防档1 无限膨胀的卫生线收紧。该机制 v0.21.1 引入时阈值 60（诱因：8000 实例档1 膨胀到 64 轮/58.6%）；[压缩阶梯三改](#压缩阶梯三改--投影模拟器先升档推老档按轮吃2026-09-14用户提案)后升档路径更精细，卫生线同步收紧到 15。`/restart` 生效。
+
+**② llm_calls.jsonl 附投影分布 proj 字段（src/agent.py）**：react 主调用记录时附 `proj=[{n:段名, tok, pct}]`——口径取 `projection_breakdown()`（真实装配统计，与 [/context](#投影分段统计context-改读真实投影缓存commit-4212f65)、旁车 proj_stats.json 同源）。此前要看「这次调用时上下文由什么构成」只能事后翻投影转储或现跑 /context。
+- 条件：`scene` 以 `react` 开头且 `_proj_stats` 非空（钩子/recap/debug 等场景不附）
+- **顺带修隐患**：record wrapper 原捕获的 session 引用在 load_session 换档后会失效（recorder 留旧 session）——改为持 `_agent`、动态取 `self.session`
+- 消费端见 [ops · /stats 投影分布 tooltip](../guides/ops.md#stats-页webui--统计按钮)；老记录无 proj 字段向前兼容
+
+**③ 超深档（工具折叠档）不投影 answer_reasoning（src/session.py）**：fold 渲染分支删除 `reasoning_content` 附加——用户裁定「answer content 原文中的信息量已经很充足了」；标注行 + answer 原文构成不变（0 工具轮省标注行逻辑照旧，见 [超深档折叠标注](#超深档折叠标注0-次工具调用省略标注行2026-08commit-feeb123)）。**正常档位（档1..档N）照旧保留 reasoning**——只砍折叠档，省的是折叠档逐轮 reasoning 的 token（折叠档越深越常驻）。
+
+**验证**：模拟 react 记录带 proj、hook 场景不带；fold 轮投影无 reasoning / 正常档有。Python 侧 `/restart` 生效，前端 Ctrl+F5。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。
@@ -641,7 +656,7 @@ recap 作为 tail 的落地：`set_turn_recap(idx, recap)` 写 `Turn.recap` + `r
 
 **背景**：fc 折叠后，超深档历史的每轮折叠行格式为 `---- 已折叠共N次工具调用 ----\n\n{answer}`。**纯讨论轮**（架构评估类，一字工具没调）N=0 也照加标注行——用户实测指出两处观感问题：①「已折叠共0次」不传递任何信息，纯噪声；② 近 2 轮 answer 顶部标注次数与「实际工具调用次数」印象对不上，疑似统计错乱。dump 数据澄清②：那些轮**确实是 0 工具调用的真实讨论轮**（remote_tools 评估、server_id 评估），标注次数与 events 完全一致——数据没错，问题只在①的展示冗余。
 
-**修复（session.py，commit feeb123）**：折叠渲染处 `n_calls = sum(len(s.tool_calls) for s in turn.steps)` 判空——`n_calls > 0` 才加标注行；`n_calls == 0` 时 content 直接是 answer 原文（`answer_reasoning` 照常附）。效果：折叠历史里 0 工具轮显示为纯净 answer，与「纯讨论轮」语义一致；非 0 轮标注照旧。
+**修复（session.py，commit feeb123）**：折叠渲染处 `n_calls = sum(len(s.tool_calls) for s in turn.steps)` 判空——`n_calls > 0` 才加标注行；`n_calls == 0` 时 content 直接是 answer 原文（当时 `answer_reasoning` 照常附）。效果：折叠历史里 0 工具轮显示为纯净 answer，与「纯讨论轮」语义一致；非 0 轮标注照旧。（⚠️ 2026-09-16 起 **fold 档 reasoning 一律不再附**——用户裁定 answer 原文信息量已足，正常档位不受影响；见 [三项调整](#三项调整卫生毕业-15-轮--llm_calls-附投影分布--超深档不投影-reasoning2026-09-16用户提案commit-17af0a8)）
 
 **注意**：该标注是**折叠历史渲染**的产物（见 [历史补记 · fc 大刀首折](#历史补记--fc-大刀首折至少吞超深档一半2026-08commit-4d37e90)），与 `_folded_summary` 的轮次概览行（recap tail，见上节）是两套格式——前者保 answer 原文、后者保结构摘要。
 

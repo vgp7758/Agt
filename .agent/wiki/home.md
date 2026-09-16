@@ -888,3 +888,7 @@ modelscope 的 qwen/glm 卡片合并不进 provider 组——根因是**预设 c
 - **SCNet 全链路 11 工具零浏览器闭环**：取权重 → 选环境 → 建实例 → 跑生产 → 等结果（monitor 回调）→ 关机收尾；README 已补两工具用法。生效注意：`reload_mcp_server` 只刷 session，**新工具进工具箱必须 `/restart`**
 - 详见 [SCNet · 平台侧通道入 MCP](guides/scnet.md#平台侧通道入-mcp2026-09-16commit-15eb3ae)
 
+## 快速事实增补（2026-09-16 · 六 · 三项投影调整：卫生毕业 15 轮 / llm_calls proj / 超深档不投影 reasoning）
+
+- **三项投影调整**（commit `17af0a8`，用户提案）：①卫生性强档阈值 `GRADUATE_FORCE_TURNS` 60 → **15**（当前档 >15 轮无窗口压力也分批升前 30 轮——v0.21.1 引入时 60 的卫生线收紧）；②**llm_calls.jsonl 附投影分布**：react 记录带 `proj=[{n, tok, pct}]`（`projection_breakdown()` 同源，与 /context 一致）+ 顺带修 recorder 旧 session 引用隐患（动态取 `self.session`）；/stats 拖拽扫描 tooltip 新增「投影分布」块 + hover 小圆点 title 加压缩版一行；③**超深档（工具折叠档）不投影 answer_reasoning**（用户裁定：answer content 原文信息量已足），正常档位照旧——见 [context-engine · 三项调整](architecture/context-engine.md#三项调整卫生毕业-15-轮--llm_calls-附投影分布--超深档不投影-reasoning2026-09-16用户提案commit-17af0a8)
+

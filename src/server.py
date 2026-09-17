@@ -1818,6 +1818,26 @@ async def ws_endpoint(websocket: WebSocket):
                            "names": list_sessions(workspace=_workspace)})
     from workflow import workflows_info
     await _send(websocket, {"type": "workflows", "items": workflows_info(_workspace)})
+    # 团队下拉框初始化（用户提案 2026-09-17）：连接即推一次完整列表——此前要等首次点击
+    # 下拉框才拉取，刷新后下拉框只有"主 Agent"一项。前端收起态直接应用，无展开期竞态。
+    _reg = getattr(agent, "registry", None)
+    if _reg is not None:
+        try:
+            await _send(websocket, {"type": "team_list",
+                                    "team": _reg.format_team(exclude_id=""),
+                                    "current_target": client["target"]})
+        except Exception:
+            pass
+    # 团队下拉框初始化（用户提案 2026-09-17）：连接即推一次完整列表——此前要等首次点击
+    # 下拉框才拉取，刷新后下拉框只有"主 Agent"一项。前端收起态直接应用，无展开期竞态。
+    _reg = getattr(agent, "registry", None)
+    if _reg is not None:
+        try:
+            await _send(websocket, {"type": "team_list",
+                                    "team": _reg.format_team(exclude_id=""),
+                                    "current_target": client["target"]})
+        except Exception:
+            pass
 
     try:
         while True:
@@ -2619,6 +2639,12 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
     except OSError:
         return (False, f"端口 {port} 已占用或无权限")
     _agent, _work_q, _mcp_mgr, _workspace, _state = agent, work_q, mcp_mgr, workspace, state
+    # 团队下拉框推送源（用户提案 2026-09-17）：sub-agent 注册/注销（成员集合变化）→
+    # 广播 team_changed 通知前端重拉团队列表。add_on_change 同 id 覆盖（/web stop 再
+    # start 不叠订阅）；无 WS 客户端时 _broadcast 直接 return，纯 CLI 零开销。
+    _reg = getattr(agent, "registry", None)
+    if _reg is not None:
+        _reg.add_on_change("_webui_", lambda: _broadcast({"type": "team_changed"}))
     _port, _server_error = port, None
     config_obj = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
     srv = uvicorn.Server(config_obj)

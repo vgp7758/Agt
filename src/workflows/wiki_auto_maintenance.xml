@@ -10,7 +10,7 @@
     <code language="3"><![CDATA[import json
 async def main(args):
     """短路检查：无文件变更 或 变更全部在 wiki 目录下（主 Agent 已维护）→ 跳过整个维护流程。
-    纯代码零 LLM 调用——比意图识别更前置，省 local-qwen 一次调用。"""
+    纯代码零 LLM 调用——比意图识别更前置，省 local-lfm 一次调用。"""
     calls = args.params.get("changed_calls") or []
     if isinstance(calls, str):
         try: calls = json.loads(calls)
@@ -86,7 +86,7 @@ async def main(args):
   </node>
   <node id="682383" type="intent" title="意图识别" x="1320" y="80">
     <in name="query" type="string" ref="1030169.output"/>
-    <model>local-qwen</model>
+    <model>local-lfm</model>
     <intent name="值得记录"/>
     <intent name="不需要"/>
   </node>

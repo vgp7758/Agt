@@ -14,7 +14,25 @@
    - **端口 bind 实测 + 向后扫描（2026-09-06 轮次一，治幽灵占位）**：潜规则口被占（WinNAT 隐形保留 / serve-web 孤儿进程）→ 向后扫 **+1..+5** 选第一个可 bind 的口，不再死磕固定口、不依赖人工清理；
    - 有 agent：`_agent.services.start("webide", cmd)` **纳管**（**独立进程组，stop 整树杀**——治孤儿模式：code-tunnel 启动器被杀后 node 子进程继承 socket 成幽灵 LISTENING）——看板可见、可停止、退出码可观测；同名条目在但探测不活（僵死/未起完）→ 先 `stop` 再 `start`；
    - 无 agent：独立 `subprocess.Popen`（`CREATE_NO_WINDOW`）兜底。
-4. **等待上限 12s（2026-09-06，150s→12s）**：就绪 → `ready=true`；未就绪 → `ready=false` + hint（首次启动 VS Code 下载 server 组件，一次性 ~1 分钟，磁盘缓存后重启秒开；**不再长轮询阻塞交互**——此前 150s 长轮询导致按钮卡 ⌛ 两分半、页签迟迟不弹，用户实锤）。
+   - **`--commit-id` 钉缓存版本（2026-09-17，用户提案，commit `b17dc25`）**：拉起前扫缓存目录——有缓存 → 命令追加 `--commit-id <hash>`（不再检查更新、纯秒起）；无缓存（首次）→ 不加参数拉最新、下次命中。治「VS Code 更新即重下全套 689MB」，详见下文专节。
+4. **等待上限 12s（2026-09-06，150s→12s）**：就绪 → `ready=true`；未就绪 → `ready=false` + hint（首次启动 VS Code 下载 server 组件，一次性 ~1 分钟；钉缓存版本后正常情况不再重下，见下文专节；**不再长轮询阻塞交互**——此前 150s 长轮询导致按钮卡 ⌛ 两分半、页签迟迟不弹，用户实锤）。
+
+## `--commit-id` 钉缓存版本：VS Code 更新/重启不再重下 689MB（2026-09-17，用户提案，commit b17dc25）
+
+用户观察：「打开 WebIDE 下载时间挺长，重启后似乎要重新下载——不能第一次下载后缓存一下吗？」缓存目录数据实锤 + 根因定位 + 一轮修复闭环。
+
+**实锤：十一天重下三次**——`%USERPROFILE%\.vscode\cli\serve-web\<hash>\`（组件按 commit-hash 绑目录）：`a44adf7f…` 09-06 03:14（714MB）、`645f29cc…` 09-10 07:49（685MB）、`7debcd0e…` 09-17 19:57（689MB，当晚点按钮触发）。
+
+**根因**：`code serve-web` **默认拉「最新 stable commit」**——VS Code 客户端几天一自动更新 → commit 变 → hash 目录判不匹配 → **重新下载全套**（node.exe 92MB + out/extensions ≈ 689MB）。用户看到的「重启后重下」实为「**VS Code 更新后重下**」——版本没变时缓存本来命中、秒起，只是每次启动都去问一遍最新版。
+
+**修复（src/server.py 端点命令构造，commit `b17dc25`）**：拉起前扫缓存目录，**选 mtime 最新且含 node.exe 的 hash 目录**——
+
+- **有缓存** → 命令追加 `--commit-id <hash>`（`code serve-web --help` 原生参数："Use a specific commit SHA for the client"）——**不再检查更新，纯秒起**；除非缓存被清，永远不会再下载；
+- **无缓存（首次）** → 不加参数拉最新 stable，下载完下次自然命中（从此钉住）。
+
+本机验证：扫描命中 `7debcd0e…`（09-17 版）——之后点 IDE 按钮纯秒起。
+
+**代价与更新方式**：钉住后 WebIDE 客户端版本**不再跟随 VS Code 自动更新**（停在当前 commit）；想升级时删掉缓存目录里的旧 hash 文件夹 → 回落「无缓存」分支重下最新，随后再次钉住。生效：`/restart`（server.py 改动）。
 
 ## 响应 payload（_ide_payload）
 
@@ -42,7 +60,7 @@
 
 ## 注意事项
 
-- 首次启动要下载 server 组件（一次性 ~1 分钟，磁盘缓存后重启秒开）；12s 等待上限返回 `ready=false` **不是失败**——下载页自带自动刷新，页签开着等即可。
+- 首次启动要下载 server 组件（一次性 ~1 分钟）；此后由 `--commit-id` **钉住缓存版本**——重启、VS Code 更新都不再重下（2026-09-17 前「缓存后秒开」只在 VS Code 版本未变时成立，几天一更新就重下全套 689MB，见下方专节）；12s 等待上限返回 `ready=false` **不是失败**——下载页自带自动刷新，页签开着等即可。
 - **幽灵端口占位 / 孤儿进程教训（2026-09-06 用户实锤「点 IDE 变沙漏两分半不弹页签」）**：`code serve-web` 的启动器（code-tunnel）被杀后，其 spawn 的 node 子进程**继承 LISTEN socket 存活**成孤儿——`netstat` 显示 `39000 LISTENING owner=pid 21512`（该 pid 已不存在，`bind` 报 10048、连接报 10061）。旧端点 150s 长轮询 + 单 `_probe` 判定（body>500）→ 误判「无服务」→ 可能再起一个实例。治本三件：① `_agent.services.start` 绑**独立进程组**、stop 整树杀（杀启动器不漏子进程）；② 端口 **bind 实测 + 向后扫 +1..+5**（被占自动滚到可用口，不依赖人工清理）；③ 前端 fetch **12s 超时 + 乐观开页签**（不再干等）。清理命令参考：`netstat -ano | findstr 3900` 定位 owner 为已退 pid 的 LISTENING 后按 pid 清 node/cmd。
 - **端口是潜规则（WebUI 端口 + 30000），不是 settings 可配**；命令固定 `code serve-web`（可选增强：命令可配、支持 code-server）。**端口可能偏移 +1..+5**（被幽灵占用时）——正常路径前端用后端返回的实际口；乐观开页签用了潜规则口而实际口偏移时，页签内刷新一下即落到实际口。
 - **手机现状维持**（用户 2026-09-06 裁定「手机就忍了吧，能打开能看就不错了」）：serve-web 监听 0.0.0.0 局域网可达，但竖屏触屏体验受 VS Code Web 本身限制（VS Code 侧的事，不做额外适配）。

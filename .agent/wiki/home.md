@@ -978,3 +978,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **长期记忆静态层投影快照：add_memory 只落盘、投影到归档点才刷新（2026-09-17，用户提案，commit `12c7594`）**：semantic 常驻层此前每轮全量重渲染——轮中途 add_memory → ltm 段变化 → 头部断缓存全序列重算。修复：`_ltm_static_block` 投影走 `self._ltm_snap` 快照（`_ltm_refresh_epoch` 未变返回旧文本，byte-stable）；失效信号在 **system 归一化点**自增（本就断缓存，刷新搭归档断点顺风车零额外代价）；`set_session` 换档重置快照。`_origin_session` 握手不受影响（provider 仍每轮被调）；episodic 层不动（按召回注入 tail 本随轮变）。模拟四场景全绿；`/restart` 生效——见 [longterm-memory · 静态层投影快照](features/longterm-memory.md)、[context-engine · 归一化点刷新](architecture/context-engine.md)
 - **bash 代码块 Agent 执行改逐条指令（2026-09-17，用户提案，commit `60f3c6d`）**：answer 气泡 ` ```bash ` 块的 ▶ Agent 执行按钮此前整块发 run_shell——块内多行指令 + `#` 注释（安装指引典型形态）整块执行不成立。逐行清理五规则：shebang 删 / 行尾注释切（`#` 前有空白才切，防误杀 URL fragment）/ 纯注释行删 / trim 空行删 / 剩余=有效指令数组；▶ 按钮逐条发 `/call run_shell`（work_q 串行按序、每条独立显示、多行标注 N 条），💻 终端执行保持整块原文（独立 shell 原生支持注释）。全注释块空数组空操作不报错；node 单测全绿（URL `#` 完好）；纯前端 Ctrl+F5 生效——见 [bubble-interaction · bash 执行按钮](features/bubble-interaction.md)
 
+## 快速事实增补（2026-09-17 · 八 · WebIDE 组件钉缓存版本）
+
+- **`--commit-id` 钉缓存版本：重启/VS Code 更新后不再重下 689MB（2026-09-17，用户提案，commit `b17dc25`）**：用户观察到 WebIDE 下载慢且重启后疑似重新下载——缓存目录 `%USERPROFILE%\.vscode\cli\serve-web\<hash>` 十一天堆了三个版本（09-06 714MB / 09-10 685MB / 09-17 689MB）实锤。根因：serve-web 默认拉**最新 stable commit**，VS Code 几天一自动更新 → commit 变 → 重下全套（node.exe 92MB + out/extensions）；「重启后重下」实为「更新后重下」，版本没变时本来秒起。修复：拉起前扫缓存、选 mtime 最新且含 node.exe 的 hash——有缓存追加 `--commit-id`（不再检查更新，纯秒起），无缓存（首次）拉最新、下次命中。代价：版本钉住不跟随 VS Code 更新，想升级删旧 hash 目录即重下最新。`/restart` 生效——见 [webide · 钉缓存版本](features/webide.md)
+

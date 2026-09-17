@@ -982,3 +982,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **`--commit-id` 钉缓存版本：重启/VS Code 更新后不再重下 689MB（2026-09-17，用户提案，commit `b17dc25`）**：用户观察到 WebIDE 下载慢且重启后疑似重新下载——缓存目录 `%USERPROFILE%\.vscode\cli\serve-web\<hash>` 十一天堆了三个版本（09-06 714MB / 09-10 685MB / 09-17 689MB）实锤。根因：serve-web 默认拉**最新 stable commit**，VS Code 几天一自动更新 → commit 变 → 重下全套（node.exe 92MB + out/extensions）；「重启后重下」实为「更新后重下」，版本没变时本来秒起。修复：拉起前扫缓存、选 mtime 最新且含 node.exe 的 hash——有缓存追加 `--commit-id`（不再检查更新，纯秒起），无缓存（首次）拉最新、下次命中。代价：版本钉住不跟随 VS Code 更新，想升级删旧 hash 目录即重下最新。`/restart` 生效——见 [webide · 钉缓存版本](features/webide.md)
 
+## 快速事实增补（2026-09-17 · 九 · WebIDE 滚动预热——旧版秒起 + 后台预下 + 下次切换）
+
+- **WebIDE 滚动预热（2026-09-17 · 二轮，commit `7787f55`，用户提案 v2）**：v1 钉版本后升级要手动删缓存目录——同日追加 v2（浏览器双通道更新同款）：打开用缓存 mtime 最新版 `--commit-id` 秒起的同时，fire-and-forget 起后台 `_webide_prefetch`——默认行为 serve-web 拉最新 stable，**组件天然下到缓存目录**（无需「临时位置再移动」）→ 轮询新 hash 目录 node.exe 就绪（15s 间隔 / 10 分钟上限，慢网放弃下次再试）→ kill 预热进程 → 清理只留最近 2 版（顺手治掉 11 天 3 版 ≈2GB 累积老账）；下次打开自然选到新版（mtime 最新）再预热下一轮，无限滚动。预热端口 39990–39996 逐个试 bind（不撞工作台 +30000 潜规则区段）；版本永远比 stable 最新**晚一拍**（滚动更新固有代价），换打开永远秒起。首次无缓存不预热。四步模拟验证全过（old2 启动 → new1 落地 → old1 清理 → new1 滚动切换）——见 [webide · 滚动预热](features/webide.md#滚动预热用旧版秒起--后台预下新版--下次切换2026-09-17-同日v2commit-7787f55用户提案)
+

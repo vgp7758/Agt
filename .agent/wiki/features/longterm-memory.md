@@ -22,6 +22,32 @@ Agent 工具五件套：`add_memory` / `search_memory` / `read_procedure` / `upd
 - **为什么必须单例**：LongTermMemory 带内存缓存，注入 provider 与工具各持一份会**缓存分裂**——工具写了一条记忆，provider 下一轮看不到
 - **origin_session 元数据的轻量握手**：`_ltm_static_block`（provider，每轮必被调）顺带刷新单例的 `_origin_session = self.session.name or ""`；外置 add_memory 发生在轮内，读到的必是当前会话——不用把 session 名塞进工具参数
 
+## 静态层投影快照缓存：add_memory 只落盘，投影到归档点才刷新（2026-09-17，用户提案，commit 12c7594）
+
+**用户提案（2026-09-17，commit `12c7594`）**：「当前 add_memory 时会有断缓存的情况……add_memory 的时候只落盘但投影时先渲染旧的吧，直到触发需要 system 归档的时候再重读并更新长期记忆的投影信息」——semantic 常驻层此前每轮全量渲染（replace 语义），轮中途记忆更新 → 下次投影 ltm 段文本变化 → 从序列头断缓存、全序列重算。
+
+## 机制（src/agent.py `_ltm_static_block` + src/session.py 归一化分支）
+
+- **投影侧快照**：`_ltm_static_block` 产出走 `self._ltm_snap` 快照——epoch 未变直接返回上次文本（byte-stable，ltm 段前缀不动）；`session._ltm_refresh_epoch` 变化才重读记忆库刷新
+- **失效信号**：`_ltm_refresh_epoch` 在 **system 归档/归一化点**自增（session.py 归一化分支顺带自增）——归一化本就断缓存（[append-not-replace 的断点清账](../architecture/context-engine.md)），快照刷新**搭归档断点的顺风车，零额外断点**
+- **换档重置**：`set_session` 时 `self._ltm_snap = None`——切换 session 后首投影强制重读（记忆库已换，快照必失效）
+
+## 两个边界
+
+- **`_origin_session` 握手不受影响**——快照缓存的是**文本**，provider 本身仍每轮被调，顺带刷新单例 `_origin_session`（外置 add_memory 读它记来源会话，机制见上节）；add_memory 发生在轮内，读到的必是当前会话
+- **episodic 层不动**——按 query 每轮召回、注入 tail 位置（本来随轮变化，在缓存未命中区），与静态层的常驻语义不同
+
+## 验证（模拟四场景全绿）
+
+| 场景 | 期望 | 结果 |
+|---|---|---|
+| 三次连续投影 | static_block 实读 1 次（快照生效） | ✓ |
+| 记忆更新落盘（v1→v2） | 投影仍 v1（byte-stable） | ✓ |
+| epoch+1（归档点） | 投影变 v2（到点刷新） | ✓ |
+| `set_session` 换档 | 快照重置、首投影重读 | ✓ |
+
+**效果**：中途 add_memory 的那几轮缓存全程连续；新记忆最晚在下一次 system 归一化（通常伴随毕业/升档/折叠）时进入投影。`/restart` 生效。
+
 ## 外置件：ltm_tools.py（第四批，注册外置 + 实现留框架）
 
 rag 同款混合形态（判别标准四象限里 ltm 属真限界上下文，但实例被 provider 共享 → 只外置注册）：`agt_register()` 里 `import longterm_memory as lm` 注册五件套；函数本体留框架经 ensure_ltm 共享实例。`make_ltm_tools` 工厂删除、chat.py 装配线清理；`/reload tools` 热加载。详见 [tool-externalization-criteria · ltm 边界裁剪](../architecture/tool-externalization-criteria.md)。

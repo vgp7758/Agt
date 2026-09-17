@@ -937,6 +937,17 @@ SYSTEM 段每次投影全量渲染（replace 语义）：人设/钩子清单/团
    前缀的一部分，变化必断——首次调用只建基线不算断点）
 3. 堆积 >4 条防御
 
+## 归一化点顺带刷新长期记忆投影快照（_ltm_refresh_epoch，2026-09-17，commit 12c7594，用户提案）
+
+**背景**：长期记忆静态层（semantic 常驻 + procedural 标题，`_ltm_static_block`）此前每轮全量重渲染——轮中途 add_memory → ltm 段文本变化 → 从序列头断缓存全序列重算。用户提案（2026-09-17，commit `12c7594`）：「add_memory 只落盘，投影先渲染旧的，到 system 归档时再重读」。
+
+**落地**（src/session.py 归一化分支 + src/agent.py `_ltm_static_block`）：
+
+- `_apply_system_ledger` 归一化分支（= system 归档点，本就断缓存）顺带 `session._ltm_refresh_epoch += 1`——长期记忆快照失效信号
+- `_ltm_static_block` 投影走 `self._ltm_snap` 快照：epoch 未变直接返回上次文本（byte-stable）；epoch 变化才重读记忆库刷新；`set_session` 换档时快照重置（`self._ltm_snap = None`）
+
+**设计哲学**：与 DSH「断点清账」同源——把必须做的失效/刷新挪到本来就断的时刻，零额外断点；单例 `_origin_session` 握手不受影响（快照的是文本，provider 仍每轮被调）。机制详情与四场景验证见 [长期记忆 · 静态层投影快照](../features/longterm-memory.md)。`/restart` 生效。
+
 ## provider 能力位
 
 models.json profile 增 `in_history_system`（deepseek/deepseek-chat 已标 true，实测背书；

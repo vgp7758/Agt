@@ -973,3 +973,8 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **补丁 ×2 导出**：`patches/0001-fix-workflow-extract_keywords-claim-pending-recheck.patch` + `patches/0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch`——patches/ 累计 4 个（上轮 webui 0001/0002 + 本轮工作流 0001/0002，两组编号各自独立，git am 按文件名逐个应用）；工作流 XML 热加载即生效
 - 详见 [pasted-log · claim 修复与播种源对齐](features/pasted-log.md)、[user-interaction · patches/ 导出](features/user-interaction.md)
 
+## 快速事实增补（2026-09-17 · 七 · LTM 静态层投影快照 + bash 执行逐条指令化）
+
+- **长期记忆静态层投影快照：add_memory 只落盘、投影到归档点才刷新（2026-09-17，用户提案，commit `12c7594`）**：semantic 常驻层此前每轮全量重渲染——轮中途 add_memory → ltm 段变化 → 头部断缓存全序列重算。修复：`_ltm_static_block` 投影走 `self._ltm_snap` 快照（`_ltm_refresh_epoch` 未变返回旧文本，byte-stable）；失效信号在 **system 归一化点**自增（本就断缓存，刷新搭归档断点顺风车零额外代价）；`set_session` 换档重置快照。`_origin_session` 握手不受影响（provider 仍每轮被调）；episodic 层不动（按召回注入 tail 本随轮变）。模拟四场景全绿；`/restart` 生效——见 [longterm-memory · 静态层投影快照](features/longterm-memory.md)、[context-engine · 归一化点刷新](architecture/context-engine.md)
+- **bash 代码块 Agent 执行改逐条指令（2026-09-17，用户提案，commit `60f3c6d`）**：answer 气泡 ` ```bash ` 块的 ▶ Agent 执行按钮此前整块发 run_shell——块内多行指令 + `#` 注释（安装指引典型形态）整块执行不成立。逐行清理五规则：shebang 删 / 行尾注释切（`#` 前有空白才切，防误杀 URL fragment）/ 纯注释行删 / trim 空行删 / 剩余=有效指令数组；▶ 按钮逐条发 `/call run_shell`（work_q 串行按序、每条独立显示、多行标注 N 条），💻 终端执行保持整块原文（独立 shell 原生支持注释）。全注释块空数组空操作不报错；node 单测全绿（URL `#` 完好）；纯前端 Ctrl+F5 生效——见 [bubble-interaction · bash 执行按钮](features/bubble-interaction.md)
+

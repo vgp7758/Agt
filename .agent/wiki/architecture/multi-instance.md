@@ -163,7 +163,7 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id——**静态化第一档**（2026-09-17）：只认 `_REMOTE_ROUTABLE` 白名单 30 个、**恒定注入**（不看是否组网、无 enum）——连接前后 schema byte-stable 不断缓存；deepcopy 不污染原件。见 [静态化第一档章节](#第三轮静态化第一档_remote_routable-白名单恒定注入2026-09-17用户设计) |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + remote_instance_id 路由使用规则；**无连接渲染为空串不注入**（零噪声） |
-| 六件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message)`**（异步 fire-and-forget）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答）/ **`remote_call_tool(remote_instance_id, name, arguments)`**（远端独有工具/MCP 的统一通道，2026-09-17——见 [remote_call_tool 章节](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案)） |
+| 六件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message, expect_reply=False)`**（异步 fire-and-forget；expect_reply=True=派活后期望对方完成时回发 answer——见 [expect_reply 章节](#expect_reply派活后对方完成时回发-answer2026-09-17用户提案commit-d98a36c)）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答）/ **`remote_call_tool(remote_instance_id, name, arguments)`**（远端独有工具/MCP 的统一通道，2026-09-17——见 [remote_call_tool 章节](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案)） |
 
 **`_REMOTE_ADMIN` 豁免路由（2026-08，commit dfe9f89；2026-09-17 扩六件）**：`remote_connect/disconnect/list/message/ask/call_tool` 的 id 参数是**管理语义**（想用什么 id 连接 / 发给谁 / **调谁的工具**——remote_call_tool 内部自己 `route_remote_call`，走通用路由会把整次调用发到对端再弹回来——套娃），不是路由语义——实际事故：`remote_connect(server_id="cnb-agt", url=...)` 被路由拦截吃掉 → 连接注册从未本地执行 → `[未知 server_id]` 死循环（comfy session 三连败后模型放弃框架通道自己手写了 urllib 轮子）。修复：管理工具族 `name.startswith(_REMOTE_ADMIN)` 判定豁免路由。2026-09-06 改名后该族**双名均豁免**（旧名先规范化成 remote_instance_id 再本地执行，见改名章节兼容矩阵）——撞名同源隐患至此整类消除。
 
@@ -204,6 +204,42 @@ run_python({"code": "...", "remote_instance_id": "agt-192-168-1-2-8000"})   ← 
 **实测闭环**：`remote_connect("http://127.0.0.1:8000")` → auto id `agt-8000`（139 工具）→ `remote_ask("agt-8000", "你当前 session 的名字？")` → `[remote:agt-8000] 我当前 session 的名字是「在CNB上调用ComfyUI」`。替代了此前两次手写 WS 客户端场景（问环境那次、发修复通报那次——后者还得事后翻对方 events.jsonl 才拿到回答）。
 
 **三层组网通道**：**工具级**（任意调用带 remote_instance_id，零远程 LLM，远程只是「手」）/ **消息级异步**（remote_message，通报派活）/ **消息级同步**（remote_ask，问它才知道的事）。`/restart` 后工具箱即有五件套。
+
+### expect_reply：派活后对方完成时回发 answer（2026-09-17，用户提案，commit d98a36c）
+
+**用户提案**：「remote_message 有时是给对方安排了特定任务，虽然是异步的，也会期望对方在完成时通知自己——给 remote_message 加一个参数 expect_reply 吧，期望得到回复消息时，对方 answer 时可以转发给那个 agent」。定位：**异步派活 + 完成回发**——补上「消息级」通道里派活（fire-and-forget，结果去向不明）与问答（remote_ask 同步挂起等结果）之间的中间态：不阻塞等待，但对方完成时主动打回来。
+
+**签名**：`remote_message(remote_instance_id, message, expect_reply=False)`。
+
+**完整链路**：
+
+```
+发起方（9000）                                对方（8000）
+remote_message(id, 派活, expect_reply=True)
+  │ 消息头注入 ⟨expect_reply:http://192.168.1.5:9000⟩
+  └──────── WS 发送 ──────────────▶ 收到 → 剥掉协议行（模型看到干净任务文本）
+                                   挂轮元数据 _reply_to（模型不可见）
+                                   …… 异步跑任务（可能几十分钟）……
+                                   answer 生成后：connect(MY_URL)（幂等复用）
+◀──── [expect_reply 回执] 任务已完成 ──┘
+  │ 回答经 inbox 唤醒发起方继续处理
+```
+
+**三个改动点**：
+
+| 位置 | 内容 |
+|---|---|
+| `remote_tools.py` `send_message` | 加 `expect_reply` 形参——MY_URL 已设时消息头注入 `⟨expect_reply:{url}⟩` 协议行；**MY_URL 为空（CLI 裸进程无 WebUI 服务）明确报错 `[expect_reply 失败] 本机回发地址未知…` 不乱发**（收不到回执的假承诺比没这功能更糟）；返回提示带「（对方完成时将回发回答唤醒你）」 |
+| `agent.py` `run()` | 轮初正则剥 `^⟨expect_reply:(https?://[^\s⟩]+)⟩` 挂 `_reply_to`——**模型看不到协议行**；`_reply_to` 每迭代重置（只对首条消息生效，自主续跑多轮不误发）；answer 生成后 `_reply_to` 非空 → 临时 `connect` 发起方（幂等复用已有连接）+ `send_message` 回发答案（截前 3000 字） |
+| `server.py` 启动 | 设 `remote_tools.MY_URL = http://<lan_ip>:<port>`——lan ip 用 UDP connect 8.8.8.8 取本端地址（不真发包）+ 服务端口；CLI 裸进程不设 |
+
+**边界与生效注意**：
+
+- **对端也要新版**——剥协议行的代码在对端的 agent.py 里；旧版对端会把协议行当普通文本显示给它的模型（不致命但不干净）。本机 `/restart` 即用；跨实例（8000/9300）升级 agt-agent 后对它们用 `expect_reply` 才干净
+- 协议行**带内传输**（搭 WS 消息顺风车）——对端无需新端点，旧版可读不炸只是不剥
+- 回发依赖发起方 WebUI 服务在线——CLI 裸进程收不到回执，发起侧已挡（MY_URL 未设直接报错）
+
+**验证（四环节单测全绿）**：① MY_URL 未设 → `[expect_reply 失败]` 报错不乱发；② 协议行组装 `⟨expect_reply:http://192.168.1.5:9000⟩`；③ 对端剥挂：`_reply_to` 提取 + 模型只见干净消息；④ connect 返回 id 解析（幂等复用/新连两形态）。
 
 ## remote_call_tool：远端独有工具/MCP 的统一通道（2026-09-17，用户提案）
 

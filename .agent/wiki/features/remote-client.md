@@ -49,7 +49,7 @@
 
 ## 缺的一层封装（方向，未实施）
 
-**2026-08 已封装为第一等工具**（commit 398a60a）——用户提案落地：`remote_message(remote_instance_id, message)`（形参 2026-09-06 由 server_id 改名，异步 fire-and-forget，WS 送达即返）+ `remote_ask(remote_instance_id, question, timeout=120)`（同步问答，挂流收 answer 聚合返回）。两者都在 `remote_tools.py`（`_ws_send_collect` 统一 WS 客户端），与工具级直执行同属 [multi-instance 组网](../architecture/multi-instance.md) 的五件套，加入 `_REMOTE_ADMIN` 豁免路由（remote_instance_id=发给谁，管理语义）。**不再需要每次写脚本**——`remote_ask("agt-8000", "你当前 session 的名字？")` 一个工具调用即可。实现细节见 [multi-instance · 跨实例消息通信](../architecture/multi-instance.md#跨实例消息通信remote_message--remote_ask2026-08)。
+**2026-08 已封装为第一等工具**（commit 398a60a）——用户提案落地：`remote_message(remote_instance_id, message)`（形参 2026-09-06 由 server_id 改名，异步 fire-and-forget，WS 送达即返）+ `remote_ask(remote_instance_id, question, timeout=120)`（同步问答，挂流收 answer 聚合返回）。两者都在 `remote_tools.py`（`_ws_send_collect` 统一 WS 客户端），与工具级直执行同属 [multi-instance 组网](../architecture/multi-instance.md) 的五件套，加入 `_REMOTE_ADMIN` 豁免路由（remote_instance_id=发给谁，管理语义）。**不再需要每次写脚本**——`remote_ask("agt-8000", "你当前 session 的名字？")` 一个工具调用即可。实现细节见 [multi-instance · 跨实例消息通信](../architecture/multi-instance.md#跨实例消息通信remote_message--remote_ask2026-08)。**2026-09-17 追加 `expect_reply` 形参**（commit `d98a36c`，用户提案）：异步派活后期望对方完成时回发 answer——消息头 `⟨expect_reply:url⟩` 协议行（带内传输，对端无需新端点）→ 对方剥头挂轮元数据、answer 生成后临时 connect 回发 → 发起方收执经 inbox 唤醒继续。CLI 裸进程无 WebUI 服务不支持（MY_URL 未设直接报错）；对端需同为新版（剥协议行代码在对端 agent.py）。见 [multi-instance · expect_reply](../architecture/multi-instance.md#expect_reply派活后对方完成时回发-answer2026-09-17用户提案commit-d98a36c)。
 
 ## 注意事项
 

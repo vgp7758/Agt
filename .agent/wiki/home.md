@@ -990,3 +990,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **remote_call_tool + 路由参数静态化第一档（2026-09-17，用户设计，commit `73c143d`）**：①remote_* 组五件套 → **六件套**——`remote_call_tool(remote_instance_id, name, arguments)`：远端独有工具/MCP 的统一通道（本地 schema 里没有的工具靠它调；name 可传 `get_tool_schemas` 先探远端清单；arguments 误传 JSON 字符串自动反序列化为 dict、解析失败返回错误提示）；加入 `_REMOTE_ADMIN` 豁免——其 rid 是直通参数（内部自己 route_remote_call），走通用路由会把整次调用发到对端再弹回来（套娃）。②路由参数静态化——`_REMOTE_ROUTABLE` 白名单 **30 个**（文件系 12 / 进程服务 9 / 诊断 4 / 团队 2 / 调度 3）**恒定注入**（不看是否组网）——连接远端实例前后工具 schema 保持不变（前缀 byte-stable 不断缓存）；**MCP（`__mcp__` 前缀）不再注入**（远端实例的 MCP 与本地可能不同，调远端 MCP 走 remote_call_tool），中性工具 / remote_* 管理族 / 本轮状态类（plan/spec/ask_user——状态会落错实例）均不注入；无 enum（实例 id 动态），描述引导；运行时缺参教育提示保留（有组网才出现）。src/agent.py + src/remote_tools.py，/restart 生效——见 [multi-instance](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-17 · 十一 · remote_message expect_reply——派活后对方完成时回发）
+
+- **remote_message 加 expect_reply 参数（2026-09-17，用户提案，commit `d98a36c`）**：异步派活（fire-and-forget）结果去向不明、同步问答（remote_ask）要挂起等——补中间态「**异步派活 + 对方完成时回发 answer**」。机制：`expect_reply=True` → 消息头注入 `⟨expect_reply:url⟩` 协议行（**带内传输，对端无需新端点**）→ 对方 agent 轮初正则剥头挂 `_reply_to` 轮元数据（模型看不到协议行；每迭代重置只对首条消息生效）→ answer 生成后临时 connect 发起方（幂等）回发答案（截前 3000 字）→ 发起方收执经 inbox 唤醒继续处理。MY_URL（本机回发地址）由 server.py 启动时 UDP connect 8.8.8.8 探 lan ip + 端口设置；**CLI 裸进程未设直接报错不乱发**。生效注意：对端也要新版（剥协议行代码在对端 agent.py，旧版把协议行当普通文本显示）。四环节单测全绿；/restart 生效——见 [multi-instance · expect_reply](architecture/multi-instance.md)
+

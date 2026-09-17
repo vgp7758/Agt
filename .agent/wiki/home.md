@@ -957,3 +957,12 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **🔗 `[文字](本地路径)` 无感叹号链接：第四种引用形态（2026-09-17，用户问诊，commit 4ad7742）**：用户问「markdown 引用文件的 `[]()` 里是不是也可以没有 `!`」——此前不行：`inlineRich` 管线 `[!]` 资源引用 / `![alt]` 标准图片 / `[](http)` 外链三条正则都吃不下本地路径，整段 esc 后显示字面文本。修复：④ 普通外链分支后补一条——非 http(s) 的 `[文字](本地路径)` → **可点击链接**（href 走 `/api/asset`，新页签由浏览器按 Content-Type 直接播/显示，mp4 直接播、png 直接显示、不触发下载）——至此四种引用形态齐，与标准 markdown 语义对齐（带 `!` = 嵌入资产框、不带 `!` = 链接跳转）。安全边界：绝对路径与含 `..` 段不处理（保持字面，防相对路径注入；/api/asset 后端沙箱双层防护）；同步：📎 变更文件补充区「已引用」cited 收集扩为三语法（`[!名]` / `![alt]` / `[名]` 链接），链接引用过的不再被误补资产框。node 四形态单测全绿；纯前端，Ctrl+F5 生效——见 [bubble-interaction · 无感叹号链接](features/bubble-interaction.md#文字本地路径-无感叹号链接渲染为-asset-链接2026-09-17用户问诊commit-4ad7742)
 
+## 快速事实增补（2026-09-17 · 四 · sub-agent 下拉框展开期渲染残缺修复）
+
+- **sub-agent 下拉框展开期渲染残缺修复（2026-09-17，commit 696197a，用户报告）**：WebUI sub-agent 下拉框（agentSel，切换交互目标）弹出列表"只渲染前一两项、中间空白"，刷新后首点高发、不必现——根因：懒加载 select 在原生弹出层**还开着**时收到 team_list 响应、innerHTML 热替换 options，Windows Chrome/WebView2 对已展开的下拉 popup 热替换有渲染缺陷（WS 往返与首次光栅化竞态，故不必现）；修复：mousedown 打展开标记 → 展开期响应**暂存不重建** → blur（收起）后应用，应用时按当前 myTarget 重算选中态（change 先于 blur），_agentListLoading 3s 超时兜底；纯前端刷新即生效——见 [user-interaction · 下拉框渲染残缺](features/user-interaction.md#sub-agent-下拉框展开期渲染残缺team_list-暂存至收起后应用2026-09-17commit-696197a用户报告)
+
+## 快速事实增补（2026-09-17 · 五 · 团队列表推送 + 补丁导出分发）
+
+- **团队列表连接即推 + registry 变更推送（2026-09-17 · 二，commit `0f322af`）**：上轮（696197a）修了下拉框展开期热替换竞态，但列表分发仍是纯客户端拉——刷新后首点仍以 1 项旧列表展开、子 Agent 增减后不手动刷新看不到。三件：①WS 连接建立即推一次 `team_list`（刷新即完整，懒加载首点不再旧列表）；②`start_server` 订阅 registry `on_change` → 广播 `team_changed`（子 Agent 创建/注销实时推全端；registry on_change 第二个消费端，第一个是 enum 注入 commit 12d1ff4）；③前端 `team_changed` 300ms 去抖重拉（批量增减合并一次，复用展开期暂存链）。引擎层 `/restart` 生效——见 [user-interaction · 团队列表分发](features/user-interaction.md#团队列表分发连接即推--registry-变更推送-team_changed2026-09-17-二commit-0f322af)
+- **跨仓库补丁导出（patches/，2026-09-17）**：两笔 WebUI commit 经 `git format-patch HEAD~2 -o patches/` 导出标准补丁（`0001-fix-webui-sub-agent-team_list-options.patch` + `0002-feat-webui-registry.patch`）——旧版本实例（如 8000）不重装 pip 包、`git am` 直打指定 commit 的轻量升级路径（冲突可 `git am -3`）
+

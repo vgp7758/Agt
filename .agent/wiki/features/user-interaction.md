@@ -138,6 +138,54 @@ user 事件 → _broadcast 按客户端 target 分发（原有）
 
 **生效方式**：前端 Ctrl+F5 刷新；CLI 侧 chat.py 为引擎代码需 `/restart`。与上一节（target 路由）共同构成多客户端改造闭环：**事件按 Agent 分发 + user 消息多端可见**。
 
+## sub-agent 下拉框展开期渲染残缺：team_list 暂存至收起后应用（2026-09-17，commit 696197a，用户报告）
+
+> src/static/index.html（纯前端）。用户报告：WebUI 上 sub-agent 下拉框（agentSel，切换交互目标的控件）弹出的列表"经常只渲染了前一两个，中间的部分没有渲染"，刷新后第一次点击高发、且不必现。
+
+**根因——懒加载 select 与原生弹出层的展开期热替换竞态**：agentSel 是原生 `<select>` 且**懒加载**——页面 HTML 里初始只有 1 项（"🤖 主 Agent"），点击时（mousedown）才 `ws.send({action:'list_team'})` 拉最新团队列表，响应到达后 `sel.innerHTML = opts` 整体重建 options。坏就坏在时序：
+
+- 原生弹出层在 mousedown 那一刻**立刻**按旧 DOM（可能只有 1 项）打开渲染；
+- WS 往返几十 ms 后响应到达，此时弹出层**还开着**，innerHTML 热替换；
+- Windows Chrome/WebView2 对已展开的原生下拉弹出层做内容热替换渲染有缺陷：弹出窗口项数/尺寸部分更新，中间条目不重绘 → "只画出前一两项、中间空白"。
+
+**为什么刷新后首点高发**：刷新后旧列表只有 1 项，与真实团队（11 项）差异最大，重建冲击最强；第二次点击 DOM 已完整、基本正常。**为什么不必现**：WS 往返耗时（10~100ms）与弹出层首次光栅化是竞态——响应到得晚就侥幸正常，撞上中间态就残缺。
+
+**排除项**：文档内渲染（`size` 属性展开）复现不了；页面 CSS（appearance/clip-path 等）均无关——是 OS 级 popup 窗口的热替换问题，只能从"**展开期不动 options DOM**"入手。
+
+**修复五件套**：
+
+| 改动 | 说明 |
+|---|---|
+| `mousedown` 打 `_agentSelOpening` 标记 | 仅左键触发（右键不展开弹出层，不误标） |
+| `team_list` 响应逢展开期 → 暂存不重建 | 判定 `_agentSelOpening && document.activeElement===sel`；不碰 options |
+| `blur`（弹出层收起）后再应用 | `{once:true}`；收起态收到响应行为不变、直接应用 |
+| 应用时按当前 `myTarget` 重算选中态 | 展开期用户可能已 change 切换目标（**change 先于 blur**），闭包里请求时的旧值会让下拉框显示跳回旧项 |
+| `_agentListLoading` 3s 超时兜底 | 响应丢失时标记复位，防后续点击永久不再拉取 |
+
+**验证**（playwright 真页面 + WS，4 场景全过）：刷新后首次点击（旧列表 1 项）展开期 options 保持 1 项 ✓；收起后 options 变 11 项完整 ✓；收起态收到 team_list 直接应用（行为不变）✓；展开期选中旧项 → change → blur 后选中态跟随新目标 ✓。
+
+**生效方式**：纯前端（index.html 服务端每次请求都从磁盘读），刷新页面即生效，无需 /restart。模型/会话下拉框是页面加载时全量填充的，无此懒加载时序问题；自定义 div 浮层（工具选择器等）不受原生弹出层渲染缺陷影响。
+
+**关联**：[fab-dock · 控件栏](fab-dock.md#控件栏瘦身controls)（agentSel 所在控件栏）、[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（下拉切换即改 target）、[Agent 专属页 URL 路由](#agent-专属页-url-路由--agentsagent_id-直接落位2026-08-commit-5393ee4修复-c819618)（change 时 replaceState 同步 URL——"change 先于 blur"在本节修复中同样关键）。
+
+## 团队列表分发：连接即推 + registry 变更推送 team_changed（2026-09-17 · 二，commit 0f322af）
+
+> src/server.py（WS 层）+ src/static/index.html。上节修了展开期热替换的渲染竞态，但列表的**分发时机**仍是纯客户端拉——两个残留缺口：①懒加载下拉"刷新后第一次点击"仍以 1 项旧列表展开（响应要等收起后才应用，首点看到的还是残缺列表）；②子 Agent 增减（create_agent / 注销）后，已打开的页面不手动刷新永远看不到新列表。本改动把团队列表升级为**连接即推 + 变更即推**（registry `on_change` 的第二个消费端）。
+
+**三件**：
+
+| 改动 | 说明 |
+|---|---|
+| WS 连接建立即推一次 `team_list` | 客户端连上（含刷新重连）服务端主动推完整列表——刷新后 agentSel options 立即完整，懒加载首点不再展开旧列表；既有纯拉路径（手动 `list_team`）保留不变 |
+| `start_server` 订阅 registry `on_change` → 广播 `team_changed` | 子 Agent 创建/注销（registry 增减条目）实时广播 `team_changed`——无 `agent_id` 的系统级事件，按 [target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)语义**全端广播**（所有页签的下拉框都该刷新）。registry `on_change` 的第一个消费端是 [enum 动态注入](../architecture/multi-agent.md)（commit 12d1ff4），本改动是第二个 |
+| 前端 `team_changed` → 300ms 去抖重拉 | 收到变更事件不直接改 DOM，去抖 300ms 后重新 `list_team`——连续增减（批量 team_up）合并为一次拉取，且复用既有 team_list 处理链（含上节展开期暂存逻辑：展开期收到变更同样收起后再应用，不与渲染竞态修复冲突） |
+
+**生效方式**：引擎层（src/server.py 常驻进程代码），需 `/restart`。
+
+### 跨仓库补丁交付：patches/ 导出（2026-09-17）
+
+本轮两笔 commit（696197a + 0f322af）经 `git format-patch HEAD~2 -o patches/` 导出为标准补丁文件——`patches/0001-fix-webui-sub-agent-team_list-options.patch` + `patches/0002-feat-webui-registry.patch`（含完整提交信息，目标仓库 `git am` 应用；有本地改动冲突可 `git am -3` 三方合并）。适用场景：**旧版本实例（如 8000）不重装 pip 包、只挑指定 commit 升级 WebUI/引擎局部**——比整包升级轻，比手动复制代码可追溯。应用后引擎侧改动（0002 的 server.py）仍需重启进程生效。
+
 ## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
 
 > 用户报告（手机 `/restart` 场景）：① 电脑端每次无端多开一个浏览器 tab；② 新开 tab 显示「(当前对话) · Agt」，需手动刷新才见 session。两个现象是**同一条时序链上的两个 bug**（src/chat.py + src/server.py，commit 7ca6cfc）。

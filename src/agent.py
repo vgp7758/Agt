@@ -1992,6 +1992,12 @@ class Agent:
                         # .yml 声明了 fallback → 用声明的链；未声明 → 空链（显式无回退，不继承全局 settings 链——
                         # 全局链只服务钩子/工作流/补全等非 react 调用）。不改实例状态，跨轮/切模型稳定。
                         _rc = self._react_chain() or []
+                        # step UI 事件（恢复：74446e8 回退链重构时误删——前端 case 'step' 靠它
+                        # 分步建组：_hookEpoch++（after_tool 钩子组每步新建）+ _curThinkFold=null
+                        # （每步新思考组）。缺失症状（用户 2026-09-17 实测）：前两步 reasoning 不
+                        # 渲染（thinking 全追加进首组）+ 2~N 步的 [工具调用后] 钩子折进第 1 步。
+                        self._emit({"type": "step", "n": step_num, "tokens": self.cumulative_tokens,
+                                    "model": self.llm.model_name})
                         resp = self.llm.chat(msgs, tools=tool_schemas, scene=f"react·{self.agent_id}",
                                              turn=_t_num, step=_s_num, _chain=_rc)
                         _LOG.debug("step %d 累计token=%d model=%s", step_num, self.cumulative_tokens,

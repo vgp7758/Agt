@@ -975,12 +975,23 @@ function renderAnswer(text){
       var lang = s.replace(/^```/, '').trim();           // 语言标识（如 bash/python）
       var codeText = code.join('\n');
       var html = '<div class="code-wrap"><button class="copy-btn" onclick="copyCodeBtn(this)">复制</button><pre class="code"><code>'+esc(codeText)+'</code></pre></div>';
-      // bash/sh 代码块：加执行按钮（一点击发 /call run_shell）
+      // bash/sh 代码块：加执行按钮（Agent执行=逐条清理后的指令；终端执行=整块原文）
+      // 逐行清理（用户提案 2026-09-17）：多行/带 # 注释的块不能整块执行（Windows cmd
+      // 不认 # 注释——整块会炸）——每行去行尾注释（# 前有空白才算，避免误杀 URL 里的
+      // #）、去 shebang/纯注释/空行，剩下才是有效指令；多条逐条发 /call run_shell
       if(lang === 'bash' || lang === 'sh' || lang === 'shell' || lang === 'shellscript'){
-        var cmd = esc(codeText).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        var cmds = codeText.split('\n').map(function(l){
+          var t = l.trim();
+          if(t.indexOf('#!') === 0) return '';
+          t = t.replace(/\s+#.*$/, '');
+          if(t.charAt(0) === '#') return '';
+          return t.trim();
+        }).filter(Boolean);
+        var raw = esc(codeText).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        var cj = esc(JSON.stringify(cmds)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         html += '<div style="margin:4px 0 8px;display:flex;gap:6px">';
-        html += '<button class="run-btn" onclick="runShellCode(this)" data-code="'+cmd+'" title="通过 Agent 执行（结果在聊天窗口显示）">▶ Agent执行</button>';
-        html += '<button class="run-btn terminal" onclick="openTerminal(this)" data-code="'+cmd+'" title="在独立终端窗口执行">💻 终端执行</button>';
+        html += '<button class="run-btn" onclick="runShellCode(this)" data-cmds="'+cj+'" data-code="'+raw+'" title="通过 Agent 逐条执行（去注释/空行，结果在聊天窗口显示）">▶ Agent执行'+(cmds.length>1?('（'+cmds.length+'条）'):'')+'</button>';
+        html += '<button class="run-btn terminal" onclick="openTerminal(this)" data-code="'+raw+'" title="在独立终端窗口执行（整块原文——shell 原生支持 # 注释与多行）">💻 终端执行</button>';
         html += '</div>';
       }
       out.push(html);
@@ -1540,11 +1551,17 @@ function fallbackCopy(text,btn){
   document.body.removeChild(ta);
 }
 function runShellCode(btn){
-  var code = btn.dataset.code;
-  // 发送 /call run_shell({"command":"..."})，结果在聊天窗口显示
-  var cmd = '/call run_shell({"command":' + JSON.stringify(code) + '})';
-  ws.send(JSON.stringify({text: cmd, images: []}));
-  btn.disabled = true; btn.textContent = '✓ 已发送';
+  // 逐条执行（用户提案 2026-09-17）：data-cmds=清理后的指令数组（去行尾注释/shebang/
+  // 空行）；多条逐条发 /call run_shell（后端 work_q 串行——天然按序执行，每条结果独立显示）。
+  // 兜底：旧渲染无 data-cmds 时退回 data-code 整块。
+  var cmds = [];
+  try{ cmds = JSON.parse(btn.dataset.cmds || '[]'); }catch(e){}
+  if(!cmds.length && btn.dataset.code) cmds = [btn.dataset.code];
+  cmds.forEach(function(c){
+    var cmd = '/call run_shell({"command":' + JSON.stringify(c) + '})';
+    ws.send(JSON.stringify({text: cmd, images: []}));
+  });
+  btn.disabled = true; btn.textContent = cmds.length>1 ? ('✓ 已发送×'+cmds.length) : '✓ 已发送';
   setTimeout(function(){ btn.disabled = false; btn.textContent = '▶ Agent执行'; }, 2000);
 }
 function openTerminal(btn){

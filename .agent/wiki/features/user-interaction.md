@@ -186,6 +186,17 @@ user 事件 → _broadcast 按客户端 target 分发（原有）
 
 本轮两笔 commit（696197a + 0f322af）经 `git format-patch HEAD~2 -o patches/` 导出为标准补丁文件——`patches/0001-fix-webui-sub-agent-team_list-options.patch` + `patches/0002-feat-webui-registry.patch`（含完整提交信息，目标仓库 `git am` 应用；有本地改动冲突可 `git am -3` 三方合并）。适用场景：**旧版本实例（如 8000）不重装 pip 包、只挑指定 commit 升级 WebUI/引擎局部**——比整包升级轻，比手动复制代码可追溯。应用后引擎侧改动（0002 的 server.py）仍需重启进程生效。
 
+**补丁清单（2026-09-17 · 二轮，累计 4 个——两轮 format-patch 范围不同，编号各自独立）**：
+
+| 补丁 | 内容 | 提交 | 生效方式 |
+|---|---|---|---|
+| `0001-fix-webui-sub-agent-team_list-options.patch` | 下拉框展开期渲染残缺修复 | 696197a | 刷新页面 |
+| `0002-feat-webui-registry.patch` | 团队列表连接即推 + team_changed 推送 | 0f322af | /restart |
+| `0001-fix-workflow-extract_keywords-claim-pending-recheck.patch` | extract_keywords 等待循环就绪判定自包含（落 `.agent/workflows/`） | 553d2cd | 热加载即生效（工作流 XML 按需读盘） |
+| `0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch` | 播种源三工作流对齐（落 `src/workflows/`） | 5992929 | 播种/重播种时（已部署环境不自动重播种，靠补丁） |
+
+后两个的修复细节见 [pasted-log · claim 修复与播种源对齐](pasted-log.md)。**编号注意**：`patches/` 里两组 0001/0002 并存（format-patch 按各自范围从 0001 起编号）——`git am` 按文件名逐个应用即可，编号不全局唯一。
+
 ## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
 
 > 用户报告（手机 `/restart` 场景）：① 电脑端每次无端多开一个浏览器 tab；② 新开 tab 显示「(当前对话) · Agt」，需手动刷新才见 session。两个现象是**同一条时序链上的两个 bug**（src/chat.py + src/server.py，commit 7ca6cfc）。

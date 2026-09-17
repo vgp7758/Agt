@@ -37,6 +37,38 @@ document 级 `paste` 监听（与图片粘贴 addImageFile 共用同一监听器
 
 四处同源 → 缓存 hit / pending / claim 口径不会错位。工作流按需读盘——**下一轮 before_turn 即生效**，无需 /restart。
 
+## claim 等待循环修复 + 播种源三文件对齐（2026-09-17，commits 553d2cd + 5992929）
+
+### 553d2cd：等待循环就绪判定改自包含
+
+extract_keywords 的 claim 等待循环此前有个跨轮漂移判据：`ready?` 条件2 引用**上一轮的 `keywords`**（循环外变量）——pending 轮判据过期，且 pending 轮还会对 `keywords` 脏写。修复（commit 553d2cd）：
+
+- `ready?` 条件2 改引用**本轮 `recheck.hit`**——拿到值当轮即 break，判定自包含于本轮
+- 删 pending 轮对 `keywords` 的脏写
+
+工作流 XML 按需读盘，`.agent/workflows/` 改完下一轮 before_turn 即生效。
+
+### 5992929：播种源对账——src/workflows/ 三个文件落后
+
+全量对账（`diff -rq .agent/workflows/ src/workflows/`）发现随包播种源 `src/workflows/` 三个文件落后于运行版，一并 cp 对齐 + filecmp 逐字节验证：
+
+| 文件 | 播种源落后内容 |
+|---|---|
+| `extract_keywords.xml` | 还是旧 read→write-pending 模式（双 miss 窗口）——缺 claim 原子互斥版与上述 553d2cd 修复 |
+| `recap_gen.xml` | 运行版迭代未回播种源 |
+| `wiki_auto_maintenance.xml` | 同上 |
+
+无「仅播种源有」的孤儿文件。
+
+> **双层漂移通用教训**：运行版（`.agent/workflows/`）与播种源（`src/workflows/`）是两份独立文件，运行版迭代**不会自动回写**播种源——与工具层 workspace/assets 双层对账（见 [工具外置 · 双层一致性对账](tool-externalization.md)）同款问题；对账要 `diff -rq` 穷尽，不能凭上次同步的记忆。
+
+### 补丁分发（patches/ 累计 4 个）
+
+两笔 commit 已导出补丁（清单见 [user-interaction · patches/ 导出](user-interaction.md)）：
+
+- `patches/0001-fix-workflow-extract_keywords-claim-pending-recheck.patch`（553d2cd）——修的是**目标环境实际在跑的** `.agent/workflows/`，git am 后热加载即生效、无需重启
+- `patches/0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch`（5992929）——播种源对齐；已部署环境通常不自动重播种已有文件，播种源更新也靠补丁；全新安装则直接从新播种源起步
+
 ## 实测（本地 lfm 真跑）
 
 | 输入 | LLM 实际收到 | 提取结果 |

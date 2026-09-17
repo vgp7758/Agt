@@ -210,6 +210,12 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 **播种面影响**：没手改过此工作流的 repo 升级后 `/update-assets apply` 走 `seed_newer` 自动更新；手改过的跳过保护（`--force` 才覆盖）。详见 [v0.26.0 发布记录](../releases/v0.26.0.md#播种资产变更2)。
 
+## 播种源再对齐（2026-09-17，commit 5992929）
+
+对账发现 `src/workflows/wiki_auto_maintenance.xml`（随包播种源）落后于运行版 `.agent/workflows/`——运行版后续迭代未回写播种源。本轮与 extract_keywords / recap_gen 一并 cp 对齐 + filecmp 逐字节验证（详见 [pasted-log · 播种源对齐](pasted-log.md)），随补丁 `patches/0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch` 分发。
+
+> 提醒：本页「模板措辞中性化」「reuse 传参」两节的播种同步都是当年一次性动作——运行版再迭代后播种源会再次落后，发布前对账 `diff -rq .agent/workflows/ src/workflows/` 是必要工序。
+
 ## 与其他模块的关系
 
 - **工作流引擎**：`src/workflow.py` + `src/workflow_xml.py`，执行子工作流调用（type 9 节点）

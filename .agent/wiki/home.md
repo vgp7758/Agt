@@ -966,3 +966,10 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **团队列表连接即推 + registry 变更推送（2026-09-17 · 二，commit `0f322af`）**：上轮（696197a）修了下拉框展开期热替换竞态，但列表分发仍是纯客户端拉——刷新后首点仍以 1 项旧列表展开、子 Agent 增减后不手动刷新看不到。三件：①WS 连接建立即推一次 `team_list`（刷新即完整，懒加载首点不再旧列表）；②`start_server` 订阅 registry `on_change` → 广播 `team_changed`（子 Agent 创建/注销实时推全端；registry on_change 第二个消费端，第一个是 enum 注入 commit 12d1ff4）；③前端 `team_changed` 300ms 去抖重拉（批量增减合并一次，复用展开期暂存链）。引擎层 `/restart` 生效——见 [user-interaction · 团队列表分发](features/user-interaction.md#团队列表分发连接即推--registry-变更推送-team_changed2026-09-17-二commit-0f322af)
 - **跨仓库补丁导出（patches/，2026-09-17）**：两笔 WebUI commit 经 `git format-patch HEAD~2 -o patches/` 导出标准补丁（`0001-fix-webui-sub-agent-team_list-options.patch` + `0002-feat-webui-registry.patch`）——旧版本实例（如 8000）不重装 pip 包、`git am` 直打指定 commit 的轻量升级路径（冲突可 `git am -3`）
 
+## 快速事实增补（2026-09-17 · 六 · 播种源三工作流对齐 + extract_keywords 修复补丁）
+
+- **extract_keywords 等待循环修复（commit 553d2cd）**：`ready?` 条件2 从引用上轮 `keywords`（跨轮漂移判据）改为引用本轮 `recheck.hit`——拿到值当轮即 break，判定自包含；删 pending 轮对 `keywords` 的脏写
+- **播种源对账同步（commit 5992929）**：全量 `diff -rq` 发现 `src/workflows/`（随包播种源）三文件落后运行版——extract_keywords（还是旧 read→write-pending 模式，缺 claim 互斥版与 553d2cd 修复）、recap_gen、wiki_auto_maintenance（运行版迭代未回写）——cp 对齐 + filecmp 逐字节验证，无孤儿文件
+- **补丁 ×2 导出**：`patches/0001-fix-workflow-extract_keywords-claim-pending-recheck.patch` + `patches/0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch`——patches/ 累计 4 个（上轮 webui 0001/0002 + 本轮工作流 0001/0002，两组编号各自独立，git am 按文件名逐个应用）；工作流 XML 热加载即生效
+- 详见 [pasted-log · claim 修复与播种源对齐](features/pasted-log.md)、[user-interaction · patches/ 导出](features/user-interaction.md)
+

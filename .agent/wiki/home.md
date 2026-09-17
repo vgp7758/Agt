@@ -986,3 +986,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **WebIDE 滚动预热（2026-09-17 · 二轮，commit `7787f55`，用户提案 v2）**：v1 钉版本后升级要手动删缓存目录——同日追加 v2（浏览器双通道更新同款）：打开用缓存 mtime 最新版 `--commit-id` 秒起的同时，fire-and-forget 起后台 `_webide_prefetch`——默认行为 serve-web 拉最新 stable，**组件天然下到缓存目录**（无需「临时位置再移动」）→ 轮询新 hash 目录 node.exe 就绪（15s 间隔 / 10 分钟上限，慢网放弃下次再试）→ kill 预热进程 → 清理只留最近 2 版（顺手治掉 11 天 3 版 ≈2GB 累积老账）；下次打开自然选到新版（mtime 最新）再预热下一轮，无限滚动。预热端口 39990–39996 逐个试 bind（不撞工作台 +30000 潜规则区段）；版本永远比 stable 最新**晚一拍**（滚动更新固有代价），换打开永远秒起。首次无缓存不预热。四步模拟验证全过（old2 启动 → new1 落地 → old1 清理 → new1 滚动切换）——见 [webide · 滚动预热](features/webide.md#滚动预热用旧版秒起--后台预下新版--下次切换2026-09-17-同日v2commit-7787f55用户提案)
 
+## 快速事实增补（2026-09-17 · 十 · remote_call_tool + 路由参数静态化第一档）
+
+- **remote_call_tool + 路由参数静态化第一档（2026-09-17，用户设计，commit `73c143d`）**：①remote_* 组五件套 → **六件套**——`remote_call_tool(remote_instance_id, name, arguments)`：远端独有工具/MCP 的统一通道（本地 schema 里没有的工具靠它调；name 可传 `get_tool_schemas` 先探远端清单；arguments 误传 JSON 字符串自动反序列化为 dict、解析失败返回错误提示）；加入 `_REMOTE_ADMIN` 豁免——其 rid 是直通参数（内部自己 route_remote_call），走通用路由会把整次调用发到对端再弹回来（套娃）。②路由参数静态化——`_REMOTE_ROUTABLE` 白名单 **30 个**（文件系 12 / 进程服务 9 / 诊断 4 / 团队 2 / 调度 3）**恒定注入**（不看是否组网）——连接远端实例前后工具 schema 保持不变（前缀 byte-stable 不断缓存）；**MCP（`__mcp__` 前缀）不再注入**（远端实例的 MCP 与本地可能不同，调远端 MCP 走 remote_call_tool），中性工具 / remote_* 管理族 / 本轮状态类（plan/spec/ask_user——状态会落错实例）均不注入；无 enum（实例 id 动态），描述引导；运行时缺参教育提示保留（有组网才出现）。src/agent.py + src/remote_tools.py，/restart 生效——见 [multi-instance](architecture/multi-instance.md)
+

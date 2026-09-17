@@ -18,7 +18,7 @@
 | WS 文本消息 | 驱动对方 agent 跑任务（对方消耗**它自己的** token、带着**它自己** session 的上下文）——即"远程指挥干活" | `run_python` + websocket 库 |
 | WS 斜杠命令 | 即时处理不进对方 LLM：/model、/reload、/restart 甚至 **/exit（可远程关服）** | 同上 |
 | 跨电脑 | 换 url 即可 `ws://192.168.x.x:8000/ws` | 网络可达；⚠️ 服务无鉴权，公网需隧道 |
-| 工具级直执行（2026-08 已第一等化） | 本地模型在工具 arguments 带 `remote_instance_id`（2026-09-06 前名 server_id，旧名兼容）→ 远程 `POST /api/tool/exec` 直执行——不进对方 session、不跑对方 LLM | 已内建（SYSTEM 自动注入实例清单），无需写脚本——见 [multi-instance](../architecture/multi-instance.md) |
+| 工具级直执行（2026-08 已第一等化） | 本地模型在工具 arguments 带 `remote_instance_id`（2026-09-06 前名 server_id，旧名兼容）→ 远程 `POST /api/tool/exec` 直执行——不进对方 session、不跑对方 LLM；**远端独有工具/MCP 走 `remote_call_tool` 统一通道**（2026-09-17，remote_* 六件套第六件；name 可传 `get_tool_schemas` 先探远端清单，arguments 误传 JSON 字符串自动反序列化） | 已内建（第一档工具 schema 恒定注入路由参数），无需写脚本——见 [multi-instance](../architecture/multi-instance.md) |
 
 ## 演示脚本（tools/remote_client_demo.py）
 

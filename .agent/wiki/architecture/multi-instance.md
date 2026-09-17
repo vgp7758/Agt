@@ -74,6 +74,43 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 **验证**（11/11 全绿）：单机不注入+无提示 / 组网后无 required+一句话描述+enum / 增量<120 字符 / 首次缺参提示 / 同轮不重复 / 新轮重提 / 显式 self 不提示 / 管理族豁免。引擎层改动，`/restart` 生效。
 
+#### 第三轮：静态化第一档——_REMOTE_ROUTABLE 白名单恒定注入（2026-09-17，用户设计）
+
+#### 第三轮：静态化第一档——_REMOTE_ROUTABLE 白名单恒定注入（2026-09-17，用户设计）
+
+**用户裁定**：「其它工具只对第一档追加 remote_instance_id 参数（MCP 不加了，因为远端实例的 MCP 可能和本地不同，需要调用的话走 remote_call_tool），这样需要添加该参数的工具数量减少了，可以不用根据是否有 remote agent instance 去动态调整工具 schema 了——连接远端实例前后工具 schema 保持不变」。
+
+**三代演进**：
+
+| 代 | schema 注入策略 | 缓存影响 |
+|---|---|---|
+| 2026-09-06 初版 | 全工具（含 MCP）动态注入——REMOTE_SERVERS 非空才注入 + enum 填实例 id | 连接/断开瞬间 **tools schema 变化 → 全序列缓存断**（tools 尾部变化断全部，见 [DeepSeek 缓存实证](context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)） |
+| 2026-09-14 瘦身 | 一句话 + enum 压到 <120 字符，仍单机不注入 | 连接前后仍跳变 |
+| **2026-09-17 静态化（现行）** | **白名单恒定注入**（不看是否组网、无 enum） | 工具 schema 前缀跨连接 **byte-stable**，不断缓存 |
+
+**`_REMOTE_ROUTABLE` 白名单（30 个，src/agent.py 类属性）——「远端调用有实质便利」的第一档**：
+
+| 分组 | 数量 | 工具 |
+|---|---|---|
+| 文件系（远端仓库/工作区的文件操作） | 12 | read_file / write_file / edit / insert / delete / replace_lines / move / grep / glob_files / list_dir / diff_files / find_function |
+| 进程/服务系（远端机器跑命令/服务） | 9 | run_shell / run_python / start_service / stop_service / list_services / service_logs / send_to_service / check_bg_task / run_script |
+| 会话/上下文诊断（读远端实例的存档/投影） | 4 | list_tool_logs / get_tool_detail / recall_turn / cache_breakpoint |
+| 团队（远端实例的子 Agent 团队） | 2 | list_team / agent_query_events |
+| 调度（远端的定时器） | 3 | add_schedule / cancel_schedule / list_schedules |
+
+**不注入（四类）**：
+
+| 类 | 理由 |
+|---|---|
+| **MCP（`__mcp__` 前缀）** | 远端实例挂的 MCP 与本地可能不同——调远端 MCP 走 `remote_call_tool` |
+| 中性工具（纯函数/检索/记忆/wiki 等） | 远端调用无实质便利，注入纯噪声 |
+| remote_* 管理族 | 本身就是跨实例工具（且 `_REMOTE_ADMIN` 豁免路由） |
+| 本轮状态类（plan/spec/ask_user） | **状态会落错实例**——本轮上下文在本地，写进远端的 plan/回答没人读 |
+
+**注入形态**：恒定注入（单机也注入）+ 无 enum（实例 id 动态无法静态枚举）+ 一句话描述「执行实例：不填=self 本机执行；或已连接的远程实例 id（remote_list 可查）」。缺参时的实例教育仍由运行时提示承担（有实际组网才提示、单机零噪声——2026-09-14 二轮机制原样保留）；执行侧 `self`/`local` 显式归一本地（`_exec_tool`）不变。
+
+**验证**：read_file/add_schedule 有 rid ✓；sleep/remote_list/`__mcp__scnet__job` 无 ✓；schema 两次生成幂等恒定（连接前后不变）✓。引擎层改动，`/restart` 生效。远端独有工具/MCP 的调用缺口由同日 [remote_call_tool](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案) 补齐。
+
 ## 团队看板手动管理远程实例：＋添加 / ✕移除控件（2026-09-14，用户提案）
 
 **用户提案**：「团队抽屉里，可以添加 remote 实例的手动移除、添加控件」——此前组网管理只有 Agent 侧 `remote_connect/remote_disconnect` 工具（模型代劳）或手改 settings.json，用户在 WebUI 没有直接操作入口。
@@ -124,11 +161,11 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 | `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
 | `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + settings.json `remote_servers` 持久化（启动自动重连/失败标 offline）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
-| `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id（一句话描述 + enum、可选、单机不注入——2026-09-14 瘦身；remote_* 豁免、deepcopy 不污染原件）——见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案) 与 [瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定) |
+| `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id——**静态化第一档**（2026-09-17）：只认 `_REMOTE_ROUTABLE` 白名单 30 个、**恒定注入**（不看是否组网、无 enum）——连接前后 schema byte-stable 不断缓存；deepcopy 不污染原件。见 [静态化第一档章节](#第三轮静态化第一档_remote_routable-白名单恒定注入2026-09-17用户设计) |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + remote_instance_id 路由使用规则；**无连接渲染为空串不注入**（零噪声） |
-| 五件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message)`**（异步 fire-and-forget）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答） |
+| 六件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message)`**（异步 fire-and-forget）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答）/ **`remote_call_tool(remote_instance_id, name, arguments)`**（远端独有工具/MCP 的统一通道，2026-09-17——见 [remote_call_tool 章节](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案)） |
 
-**`_REMOTE_ADMIN` 豁免路由（2026-08，commit dfe9f89）**：`remote_connect/disconnect/list/message/ask` 的 id 参数是**管理语义**（想用什么 id 连接 / 发给谁），不是路由语义——实际事故：`remote_connect(server_id="cnb-agt", url=...)` 被路由拦截吃掉 → 连接注册从未本地执行 → `[未知 server_id]` 死循环（comfy session 三连败后模型放弃框架通道自己手写了 urllib 轮子）。修复：管理工具族 `name.startswith(_REMOTE_ADMIN)` 判定豁免路由。2026-09-06 改名后该族**双名均豁免**（旧名先规范化成 remote_instance_id 再本地执行，见改名章节兼容矩阵）——撞名同源隐患至此整类消除。
+**`_REMOTE_ADMIN` 豁免路由（2026-08，commit dfe9f89；2026-09-17 扩六件）**：`remote_connect/disconnect/list/message/ask/call_tool` 的 id 参数是**管理语义**（想用什么 id 连接 / 发给谁 / **调谁的工具**——remote_call_tool 内部自己 `route_remote_call`，走通用路由会把整次调用发到对端再弹回来——套娃），不是路由语义——实际事故：`remote_connect(server_id="cnb-agt", url=...)` 被路由拦截吃掉 → 连接注册从未本地执行 → `[未知 server_id]` 死循环（comfy session 三连败后模型放弃框架通道自己手写了 urllib 轮子）。修复：管理工具族 `name.startswith(_REMOTE_ADMIN)` 判定豁免路由。2026-09-06 改名后该族**双名均豁免**（旧名先规范化成 remote_instance_id 再本地执行，见改名章节兼容矩阵）——撞名同源隐患至此整类消除。
 
 ## 使用
 
@@ -167,6 +204,33 @@ run_python({"code": "...", "remote_instance_id": "agt-192-168-1-2-8000"})   ← 
 **实测闭环**：`remote_connect("http://127.0.0.1:8000")` → auto id `agt-8000`（139 工具）→ `remote_ask("agt-8000", "你当前 session 的名字？")` → `[remote:agt-8000] 我当前 session 的名字是「在CNB上调用ComfyUI」`。替代了此前两次手写 WS 客户端场景（问环境那次、发修复通报那次——后者还得事后翻对方 events.jsonl 才拿到回答）。
 
 **三层组网通道**：**工具级**（任意调用带 remote_instance_id，零远程 LLM，远程只是「手」）/ **消息级异步**（remote_message，通报派活）/ **消息级同步**（remote_ask，问它才知道的事）。`/restart` 后工具箱即有五件套。
+
+## remote_call_tool：远端独有工具/MCP 的统一通道（2026-09-17，用户提案）
+
+**动机（用户提案 2026-09-17）**：「给 remote_* 系列工具加一个 remote_call_tool，参数就是 name / arguments / remote_instance_id——语义更明确，模型调用它的欲望应该会增加」；「MCP 不加路由参数，因为远端实例的 MCP 可能和本地不同，需要调用的话走 remote_call_tool」。配合路由参数静态化第一档（见[改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)第三轮），它补上「本地 schema 里根本没有的工具怎么调」的缺口——远端实例装了本地没有的 MCP/外置工具时，唯一通道。
+
+**签名与语义**（src/remote_tools.py，remote_* 组**六件套**第六件，commit `73c143d`）：
+
+```
+remote_call_tool(remote_instance_id, name, arguments=None) -> str
+# 在远端 agt 实例上调用它的工具——远端独有工具/MCP 的统一通道
+# name 可传 "get_tool_schemas" 先探远端工具清单再调
+```
+
+**arguments 兼容层（模型写错兜底）**——「json 能不能写对就指望模型能力吧」，工具内部做一层容错：
+
+| 传入形态 | 行为 |
+|---|---|
+| dict | 直通 |
+| JSON 字符串（模型常见误写） | 自动 `json.loads` 反序列化为 dict |
+| 字符串且解析失败 | `[错误] arguments 需为 JSON 对象（dict）；收到字符串且无法反序列化：…`（截 200 字符） |
+| 其它非 dict | `[错误] arguments 需为 JSON 对象（dict），收到 {type}` |
+
+错误提示即教育——模型看到提示下一轮自行纠正。
+
+**⚠️ 必须加入 `_REMOTE_ADMIN` 豁免（套娃防护）**：remote_call_tool 的 remote_instance_id 是**直通参数**（工具内部自己 `route_remote_call`）。若走通用路由：`_exec_tool` pop 出 rid → 把**整次 remote_call_tool 调用**原样发到对端 → 对端又执行 remote_call_tool(同一个 rid) → 弹回来——无限套娃。2026-09-17 起 `_REMOTE_ADMIN` 六件套（原五件 + remote_call_tool）双名均豁免，注释写明豁免理由。
+
+**验证**：remote_tools.py 末尾 return 列表六件套；`/restart` 生效。
 
 ## 已验证（E2E 8001 mock 实例）
 
@@ -213,7 +277,8 @@ repo 级覆盖（上）落地的是「读侧自动本地优先」；本节补上
 
 ## 边界与后续
 
-- 远程工具箱以对方 `/api/status` 报告的 tools_count 为信息展示（具体工具 schema 未拉取投影——模型按通用工具语义调用，未知工具错误文案兜底；2026-09-06 起 LLM 视图注入 remote_instance_id 路由参数，见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)）
+- 远程工具箱以对方 `/api/status` 报告的 tools_count 为信息展示（具体工具 schema 未拉取投影——模型按通用工具语义调用，未知工具错误文案兜底；2026-09-06 起 LLM 视图注入 remote_instance_id 路由参数，见 [改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)；**2026-09-17 起远端独有工具/MCP 有统一通道**——`remote_call_tool` 可先 name="get_tool_schemas" 探远端清单再直调，见 [remote_call_tool 章节](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案)）
 - 消息级驱动（remote_message / remote_ask）**已实现**（2026-08，见 [跨实例消息通信](#跨实例消息通信remote_message--remote_ask2026-08)）——与工具级直执行互补：工具级=远程纯「手」（零 LLM），消息级=让对方带自己上下文干活（对方一轮 LLM）
 - 公网使用需隧道 + 鉴权（本期与全服务同信任模型）
 - **新环境探索的引导**：README「Agent 上手指引」节（2026-08 新增）——`/status` 环境盘点 → AGENTS.md → workspace 结构 → .agent/ 三件套 → models.json → remote_connect 组网 → 框架参考；新实例首轮对话前读它就知道该探索什么（CNB 云容器部署场景的实测教训，见 [v0.22.0 发布记录](../releases/v0.22.0.md)）
+

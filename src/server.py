@@ -1225,8 +1225,22 @@ async def api_ide_open(request: Request):
                 f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
     # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
     # "远程代理"会话，标签页名变成 l10n 字面量如「不受支持的断点的图标。」，用户实锤）
+    # --commit-id 钉缓存版本（用户提案 2026-09-17：重启/更新后重新下载 92MB 组件的根因——
+    # serve-web 默认拉【最新 stable commit】，VS Code 几天一更新就重下全套；本机缓存目录
+    # %USERPROFILE%\.vscode\cli\serve-web\<hash> 已堆了 09-06/09-10/09-17 三个版本实锤）。
+    # 有缓存 → 钉最新缓存版本（不再检查更新，秒起）；无缓存（首次）不加参数拉最新，下次命中。
+    _cid = ""
+    try:
+        import pathlib as _pl
+        _sd = _pl.Path.home() / ".vscode" / "cli" / "serve-web"
+        _cands = [d for d in _sd.iterdir() if d.is_dir() and (d / "node.exe").exists()]
+        if _cands:
+            _cid = max(_cands, key=lambda d: d.stat().st_mtime).name
+    except Exception:
+        pass
     cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} --without-connection-token '
-           f'--accept-server-license-terms --default-folder "{_workspace}"')
+           f'--accept-server-license-terms --default-folder "{_workspace}"'
+           + (f' --commit-id {_cid}' if _cid else ''))
     if _agent is not None:
         try:
             r = _agent.services.start("webide", cmd)

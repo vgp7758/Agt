@@ -118,7 +118,7 @@
   </node>
       <node id="1057177" type="AND" title="ready?" x="1320" y="80">
     <branch><cond op="2" left="570563.value" right="pending" left_type="any"/></branch>
-    <branch><cond op="11" left="__entry__.find" right="" left_type="boolean"/></branch>
+    <branch><cond op="11" left="570563.hit" right="" left_type="boolean"/></branch>
     <out name="result" type="boolean"/>
     <out name="results" type="list" itemType="boolean"/>
     <batch enabled="false"/>
@@ -132,7 +132,6 @@
   </node>
       <node id="413345" type="setvar" title="置变量(循环)" x="1920" y="172">
     <in name="find" left="find.find" left_type="string" right="ref:570563.hit" right_type="boolean"/>
-    <in name="keywords" left="" left_type="string" right="ref:926184.raw" right_type="list"/>
   </node>
       <node id="926184" type="plugin" title="pass_through" x="1020" y="80" toolName="pass_through">
     <in name="input" type="any" ref="570563.value"/>

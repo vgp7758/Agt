@@ -17,6 +17,6 @@ fallback:
   chain:
   - qwen
   - glm-official-flash
-  - kimi
   - local-lfm-vl
+  - deepseek
   policy: reset

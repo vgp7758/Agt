@@ -2200,10 +2200,14 @@ modelSel.addEventListener('change', ()=>{
 // ===== Agent 团队切换下拉框 =====
 const agentSel = document.getElementById('agentSel');
 let _agentListLoading = false;
+let _agentSelOpening = false;   // 原生弹出列表展开中标记（见 team_list 处理——展开期不能重建 options）
 // 点击下拉框时重新获取最新团队成员列表
-agentSel.addEventListener('mousedown', ()=>{
+agentSel.addEventListener('mousedown', (e)=>{
+  if(e.button !== 0) return;    // 仅左键（右键不展开弹出列表）
+  _agentSelOpening = true;
   if(_agentListLoading) return;
   _agentListLoading = true;
+  setTimeout(()=>{ _agentListLoading = false; }, 3000);   // 兜底：响应丢失时允许下次点击重拉
   ws.send(JSON.stringify({action:'list_team'}));
 });
 agentSel.addEventListener('change', ()=>{
@@ -3315,8 +3319,24 @@ function onWSMessage(ev){
           opts += `<option value="${id}"${isSelected}>${name} [${id}]</option>`;
         }
       });
-      sel.innerHTML = opts;
-      sel.dataset.curTarget = cur;
+      // ⚠️ 原生下拉的弹出列表展开期间不能用 innerHTML 重建 options：
+      // 首次点击时序 = mousedown → 弹出层按旧列表（刷新后常只有"主 Agent"1 项）打开 → 本响应到达 → 重建，
+      // Windows Chrome/WebView2 对已展开的原生弹出层做内容热替换会渲染残缺——只画出前一两项、中间空白。
+      // 故展开中（_agentSelOpening 且 select 持焦）先暂存，等 blur（弹出层收起）后再应用；收起态直接应用。
+      const applyTeamOpts = ()=>{
+        sel.innerHTML = opts;
+        // 应用时按【当前实际交互目标】重算选中态——展开期用户可能已 change 切换了目标
+        //（change 先于 blur），闭包里的 cur 是请求时的旧值，直接用会让下拉框显示跳回旧项
+        const curNow = myTarget || cur;
+        [...sel.options].forEach(o=>{ o.selected = (o.value === curNow); });
+        sel.dataset.curTarget = curNow;
+      };
+      if(_agentSelOpening && document.activeElement === sel){
+        sel.addEventListener('blur', ()=>{ _agentSelOpening = false; applyTeamOpts(); }, {once:true});
+      }else{
+        _agentSelOpening = false;
+        applyTeamOpts();
+      }
       break;
     case 'auto_wf_start': {
       // 钩子组折叠显示（用户设计）：同 hook 位置的多个工作流收进一个组头

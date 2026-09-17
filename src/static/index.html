@@ -752,6 +752,13 @@ function inlineRich(t){
     else hold.push(assetBoxHtml(alt||'图片', path));
     return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_,txt,url){ hold.push('<a href="'+esc(url)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ④ [文字](http) 普通外链
+  // ④' [文字](本地相对路径)——无 ! 的本地链接（用户问诊 2026-09-17：此前无规则命中，
+  // 整段显示字面文本）。语义=链接不嵌入：href 走 /api/asset，点击新页签由浏览器按
+  // Content-Type 打开（mp4 直接播/png 直接显示）；绝对路径与 .. 不安全形态不处理。
+  t=t.replace(/\[([^\]]+)\]\(((?!https?:\/\/)[^)\s]+)\)/g, function(_,txt,path){
+    if(/^[\/\\]/.test(path)||path.includes('..'))return _;
+    hold.push('<a href="/api/asset?path='+encodeURIComponent(path)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>');
+    return '\x02'+(hold.length-1)+'\x02'; });
   t=inlineCode(esc(t));
   return t.replace(/\x02(\d+)\x02/g, function(_,i){ return hold[+i]||''; });
 }
@@ -1157,7 +1164,8 @@ function unmentionedChangesHtml(answerText, changed){
   const _collect = (_, p) => { cited.add(_norm(p)); cited.add(_base(p)); return _; };
   String(answerText||'')
     .replace(/\[![^\]]*\]\(([^)\s]+)\)/g, _collect)     // [!名](path) 自定义语法
-    .replace(/!\[[^\]]*\]\(([^)\s]+)\)/g, _collect);    // ![alt](path) 标准 markdown 图片（同步认——否则图片语法引用过的文件被误补）
+    .replace(/!\[[^\]]*\]\(([^)\s]+)\)/g, _collect)    // ![alt](path) 标准 markdown 图片（同步认——否则图片语法引用过的文件被误补）
+    .replace(/\[[^\]]*\]\(([^)\s]+)\)/g, _collect);    // [名](path) 无 ! 的本地链接（2026-09-17 起渲染为 asset 链接——同样算已交代）
   const rest = changed.filter(c => c && c.file && !cited.has(_norm(c.file)) && !cited.has(_base(c.file)));
   if(!rest.length) return '';
   const ICON = {modified:'✏️', new:'➕', deleted:'🗑'};

@@ -2711,6 +2711,17 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
     _reg = getattr(agent, "registry", None)
     if _reg is not None:
         _reg.add_on_change("_webui_", lambda: _broadcast({"type": "team_changed"}))
+    # 本机回发地址（2026-09-17·expect_reply 用户提案）：remote_message(expect_reply=True) 的
+    # 回执要能打回来——lan ip 探测（UDP connect 8.8.8.8 取本端地址，不真发包）+ 服务端口。
+    try:
+        import remote_tools as _rt
+        _ip = "127.0.0.1"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
+            _s.connect(("8.8.8.8", 80))
+            _ip = _s.getsockname()[0]
+        _rt.MY_URL = f"http://{_ip}:{port}"
+    except Exception:
+        pass
     _port, _server_error = port, None
     config_obj = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
     srv = uvicorn.Server(config_obj)

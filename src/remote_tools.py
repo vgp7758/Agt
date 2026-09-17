@@ -30,6 +30,8 @@ _LOCK = threading.RLock()
 REMOTE_SERVERS: dict[str, dict] = {}   # server_id → {url, status, tools_count, session_name, model, checked_at}
 EXEC_TIMEOUT = 180                      # 工具直执行 HTTP 超时（远程可能跑长任务）
 PROBE_TIMEOUT = 5                       # 连接探测超时
+MY_URL: str = ""                        # 本机回发地址（server.py 启动时设置 http://<lan_ip>:<port>；
+                                        # 空=expect_reply 不可用——CLI 无服务时发不了回执）
 
 
 # ===================== 持久化（settings.json remote_servers） =====================
@@ -306,16 +308,26 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
             else f"[错误] {state['err']}"), answers
 
 
-def send_message(server_id: str, message: str) -> str:
+def send_message(server_id: str, message: str, expect_reply: bool = False) -> str:
     """异步消息：发给对方 agent 后立即返回（fire-and-forget）。它将带着自己的 session
-    上下文异步跑一轮处理（消耗它的 LLM）。送达确认 = 收到 user/message_queued 回执。"""
+    上下文异步跑一轮处理（消耗它的 LLM）。送达确认 = 收到 user/message_queued 回执。
+    expect_reply（2026-09-17·用户提案）：True=期望对方完成时回发 answer——消息头注入
+    ⟨expect_reply:url⟩ 协议行（对方剥头挂轮元数据，本轮 answer 生成后临时 connect 回发；
+    需本机 WebUI 服务在线——MY_URL 已设，CLI 裸进程不支持）。"""
     with _LOCK:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
         return f"[未知实例 id] '{server_id}'（remote_list 查看：{known}）"
+    note = ""
+    if expect_reply:
+        if not MY_URL:
+            return ("[expect_reply 失败] 本机回发地址未知（MY_URL 未设置——需 WebUI 服务启动；"
+                    "CLI 裸进程收不到回执，请用 remote_ask 或去掉 expect_reply）")
+        message = f"⟨expect_reply:{MY_URL}⟩\n{message}"
+        note = "（对方完成时将回发回答唤醒你）"
     status, _ = _ws_send_collect(it["url"], message, wait_done=False, timeout=10, ack_timeout=10)
-    return f"[remote:{server_id}] {status}：{message[:80]}" + ("…" if len(message) > 80 else "")
+    return f"[remote:{server_id}] {status}{note}：{message[:80]}" + ("…" if len(message) > 80 else "")
 
 
 def ask(server_id: str, question: str, timeout: int = 120) -> str:
@@ -354,11 +366,14 @@ def make_remote_tools(agent) -> list[Tool]:
         """列出已连接的远程 agt 实例（id/url/状态/工具数/session）。"""
         return list_servers()
 
-    def remote_message(remote_instance_id: str, message: str) -> str:
+    def remote_message(remote_instance_id: str, message: str, expect_reply: bool = False) -> str:
         """向远程实例的 agent 异步发一条消息（fire-and-forget）：送达即返回，它带自己的
         session 上下文异步处理（消耗它的 LLM）。适合通报/派活——如告知框架修复、
-        让它开始一个任务。要拿回答用 remote_ask。"""
-        return send_message(remote_instance_id, message)
+        让它开始一个任务。要拿回答用 remote_ask。
+        expect_reply=True（2026-09-17·用户提案）：派活后期望对方完成时回发回答——对方
+        answer 生成后将临时 connect 本机回发（本机收到回执即被唤醒继续处理）；需本机
+        WebUI 服务在线（CLI 裸进程收不到回执）。"""
+        return send_message(remote_instance_id, message, expect_reply=expect_reply)
 
     def remote_ask(remote_instance_id: str, question: str, timeout: int = 120) -> str:
         """向远程实例的 agent 提问并等待它的最终回答（挂流到本轮完成，默认 120s）。

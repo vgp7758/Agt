@@ -1888,6 +1888,14 @@ class Agent:
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
         seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
         while True:
+            # expect_reply 协议（2026-09-17·用户提案）：消息头 ⟨expect_reply:url⟩=发起方
+            # remote_message(expect_reply=True) 派活后期望回执——剥头挂轮元数据（模型看不到
+            # 协议行），本轮 answer 生成后临时 connect 回发；每迭代重置（只对首条消息生效）。
+            _reply_to = ""
+            _m_er = re.match(r"^⟨expect_reply:(https?://[^\s⟩]+)⟩\s*\n", str(msg))
+            if _m_er:
+                _reply_to = _m_er.group(1)
+                msg = str(msg)[_m_er.end():]
             self._stop_flag = False
             resumed = bool(_resume_current and self.session._current is not None)
             if resumed:
@@ -2133,6 +2141,23 @@ class Agent:
                                         "tokens": self.cumulative_tokens,
                                         "changed": _chg})
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
+                            # expect_reply 回执转发（2026-09-17·用户提案）：本轮由 remote_message
+                            # (expect_reply=True) 派发（消息头协议行已剥挂 _reply_to）——answer 生成
+                            # 后临时 connect 发起方（幂等）回发答案；本机收到的回执经 inbox 唤醒。
+                            if _reply_to:
+                                try:
+                                    from remote_tools import connect as _rconn, send_message as _rsend
+                                    _rr = _rconn("", _reply_to)
+                                    _m_sid = re.search(r"agt-[\w-]+", _rr)
+                                    if _m_sid:
+                                        _rsend(_m_sid.group(0),
+                                               f"[expect_reply 回执] 之前 expect_reply 派发的任务已完成。\n"
+                                               f"回答（截前 3000 字）：\n{resp.content[:3000]}")
+                                        _LOG.info("expect_reply 回执已发 %s", _reply_to)
+                                    else:
+                                        _LOG.warning("expect_reply 回发失败：connect 未取到 id（%s）", _rr[:120])
+                                except Exception as e:
+                                    _LOG.warning("expect_reply 回发失败: %s", e)
                             # 异步生成一句话 recap（队友可见，不进入自己上下文）：
                             # 有 recap 工作流装配在本 Agent 的 turn_end（yml hook_specs 或磁盘 meta 二者其一——
                             # 与 _hook_tasks 同源判定，此前只查磁盘 meta：yml 装配的主 Agent 判 True 却

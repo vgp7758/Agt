@@ -1225,22 +1225,25 @@ async def api_ide_open(request: Request):
                 f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
     # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
     # "远程代理"会话，标签页名变成 l10n 字面量如「不受支持的断点的图标。」，用户实锤）
-    # --commit-id 钉缓存版本（用户提案 2026-09-17：重启/更新后重新下载 92MB 组件的根因——
-    # serve-web 默认拉【最新 stable commit】，VS Code 几天一更新就重下全套；本机缓存目录
-    # %USERPROFILE%\.vscode\cli\serve-web\<hash> 已堆了 09-06/09-10/09-17 三个版本实锤）。
-    # 有缓存 → 钉最新缓存版本（不再检查更新，秒起）；无缓存（首次）不加参数拉最新，下次命中。
+    # --commit-id 钉缓存版本（用户提案 2026-09-17·v1）+ 滚动预热（同日·v2：用旧版秒起的
+    # 同时后台预热最新版，下次打开自然切到新版，旧版清理——浏览器双通道更新同款）。
+    # 重下根因：serve-web 默认拉【最新 stable commit】，VS Code 几天一更新就重下 689MB 全套。
     _cid = ""
+    _cached_now: set = set()
     try:
         import pathlib as _pl
         _sd = _pl.Path.home() / ".vscode" / "cli" / "serve-web"
         _cands = [d for d in _sd.iterdir() if d.is_dir() and (d / "node.exe").exists()]
         if _cands:
+            _cached_now = {d.name for d in _cands}
             _cid = max(_cands, key=lambda d: d.stat().st_mtime).name
     except Exception:
         pass
     cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} --without-connection-token '
            f'--accept-server-license-terms --default-folder "{_workspace}"'
            + (f' --commit-id {_cid}' if _cid else ''))
+    if _cid:   # 有缓存（秒起）→ 后台滚动预热新版（用户提案 v2：打开不受影响，下次切新版）
+        asyncio.get_event_loop().create_task(_webide_prefetch(_cached_now))
     if _agent is not None:
         try:
             r = _agent.services.start("webide", cmd)
@@ -1262,6 +1265,55 @@ async def api_ide_open(request: Request):
             return _ide_payload(True, PORT)
         await asyncio.sleep(2)
     return _ide_payload(False, PORT)
+
+
+async def _webide_prefetch(cached_hashes: set):
+    """WebIDE 组件滚动预热（用户提案 2026-09-17·v2：浏览器双通道更新同款）：
+    用缓存旧版秒起的同时，后台起一个默认行为的 serve-web（拉最新 stable 并下到缓存目录），
+    轮询缓存出现新 hash 目录（node.exe 就绪）→ kill 预热进程（组件已留在缓存）→ 清理
+    超出最近 2 个的旧版。下次打开自然选到新版（mtime 最新）→ 又预热下一轮 → 滚动循环。"""
+    import subprocess as _sp, shutil as _sh
+    import pathlib as _pl
+    import socket as _sk2
+    try:
+        sd = _pl.Path.home() / ".vscode" / "cli" / "serve-web"
+        pport = None
+        for p in range(39990, 39997):   # 预热端口：高位可 bind 的（不撞工作台潜规则口）
+            s = _sk2.socket()
+            try:
+                s.bind(("127.0.0.1", p)); pport = p; break
+            except OSError:
+                pass
+            finally:
+                s.close()
+        if pport is None:
+            return
+        pre = _sp.Popen('code serve-web --host 127.0.0.1 --port %d --without-connection-token '
+                        '--accept-server-license-terms' % pport, shell=True,
+                        creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+        t0 = time.time()
+        while time.time() - t0 < 600:   # 10 分钟上限（689MB 慢网可容；到点放弃下次再试）
+            await asyncio.sleep(15)
+            try:
+                done = any(d.is_dir() and (d / "node.exe").exists() and d.name not in cached_hashes
+                           for d in sd.iterdir())
+            except Exception:
+                done = False
+            if done:
+                break
+        try:
+            pre.kill()
+        except Exception:
+            pass
+        try:   # 清理：保留最近 2 个（当前在用 + 新预热），更旧的删（10 天堆 3 版 2GB 的治本）
+            dirs = sorted([d for d in sd.iterdir() if d.is_dir() and (d / "node.exe").exists()],
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+            for d in dirs[2:]:
+                _sh.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _ide_payload(ready: bool, port: int) -> dict:

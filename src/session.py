@@ -1707,6 +1707,9 @@ class Session:
             _LOG.info("system段 append-not-replace：v%d @t%d（前缀保持，%d 字）",
                       len(appends), cur_turn, len(cur))
             return
+        # 归一化（= system 归档点，本就断缓存）：长期记忆快照在此失效——add_memory 落盘的
+        # 新内容到点才进投影（2026-09-17·用户提案：只落盘不即时投影，保 ltm 段前缀 byte-stable）
+        self._ltm_refresh_epoch = getattr(self, "_ltm_refresh_epoch", 0) + 1
         L.update(last_text=cur, appends=[], dirty=False)
         # 摘除历史渲染循环已插入的本批 append（时序：_render_tiered_history 先读账本插入了，
         # 此处清账要同步摘掉——否则废弃版本残留一条在历史里，下次投影才消失）

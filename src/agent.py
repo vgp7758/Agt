@@ -726,6 +726,7 @@ class Agent:
         session._system_extra_provider = self._runtime_system_extra
         session._time_provider = self._runtime_time_block
         session._ltm_static_provider = self._ltm_static_block      # 长期记忆·静态层
+        self._ltm_snap = None                                        # 快照重置：换档后首投影重读（记忆库已换）
         session._ltm_episodic_provider = self._ltm_episodic_block  # 长期记忆·情境层
         session._plan_provider = self._plan_system_block            # 当前活动计划·每轮注入
         session._spec_provider = self._spec_system_block            # 当前活动 spec·每轮注入
@@ -1138,12 +1139,19 @@ class Agent:
             return ""
 
     def _ltm_static_block(self) -> str:
-        """长期记忆·静态层注入：semantic 事实 + procedural 标题（每轮始终注入）。失败静默不炸主循环。
-        顺带刷新单例上的 _origin_session（外置 add_memory 工具读它记来源会话——provider 每轮
-        必被调，add_memory 发生在轮内，一定已更新）。"""
+        """长期记忆·静态层注入：semantic 事实 + procedural 标题。失败静默不炸主循环。
+        快照缓存（2026-09-17·用户提案：add_memory 只落盘，投影沿用旧文本保 ltm 段前缀
+        byte-stable——不因记忆更新即时断缓存；到 system 归档/归一化点（session 归一化时
+        _ltm_refresh_epoch 自增，本就是断缓存的时机）才重读刷新。set_session 换档时重置）。
+        顺带刷新单例上的 _origin_session（外置 add_memory 工具读它记来源会话——provider
+        每轮必被调，add_memory 发生在轮内，一定已更新）。"""
         try:
             self.ltm._origin_session = self.session.name or ""
-            return self.ltm.static_block()
+            _ep = getattr(self.session, "_ltm_refresh_epoch", 0)
+            if getattr(self, "_ltm_snap", None) is None or getattr(self, "_ltm_snap_ep", -1) != _ep:
+                self._ltm_snap = self.ltm.static_block()
+                self._ltm_snap_ep = _ep
+            return self._ltm_snap or ""
         except Exception:
             return ""
 

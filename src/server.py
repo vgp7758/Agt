@@ -803,10 +803,22 @@ async def api_models_add_one(request: Request):
 
 # ===================== MCP 配置 API =====================
 
+def _mcp_cfg_path(scope: str):
+    """MCP 配置路径（scope=repo|global，2026-09-18·用户提案：设置页可编辑全局份）。
+    repo → workspace/.mcp.json；global → ~/.agt/mcp.json（AGT_HOME 语义）。"""
+    if (scope or "").strip().lower() == "global":
+        import os as _os
+        home = _os.environ.get("AGT_HOME", "").strip()
+        from pathlib import Path as _P
+        base = _P(home) if home else _P.home() / ".agt"
+        return base / "mcp.json"
+    return _workspace / ".mcp.json"
+
+
 @app.get("/api/mcp")
-async def api_mcp_get():
-    """读取 workspace/.mcp.json。"""
-    p = _workspace / ".mcp.json"
+async def api_mcp_get(scope: str = "repo"):
+    """读取 MCP 配置。scope=repo（默认）→ workspace/.mcp.json；global → ~/.agt/mcp.json。"""
+    p = _mcp_cfg_path(scope)
     if not p.exists():
         return {"mcpServers": {}}
     try:
@@ -819,15 +831,16 @@ async def api_mcp_get():
 @app.get("/api/mcp/status")
 async def api_mcp_status():
     """MCP server 状态概览（night_tasks #3）：配置的 server × 连接态 × 工具清单。
-    数据源：.mcp.json 配置 ∪ agent.mcp_mgr.sessions（已连接会话——含动态注入不在配置里的）。"""
+    数据源：两级配置（repo .mcp.json ∪ 全局 mcp.json）∪ agent.mcp_mgr.sessions
+    （已连接会话——含动态注入不在配置里的）。"""
     import json as _j
-    p = _workspace / ".mcp.json"
     configured = {}
-    if p.exists():
-        try:
-            configured = _j.loads(p.read_text(encoding="utf-8")).get("mcpServers", {})
-        except Exception:
-            pass
+    for p in (_workspace / ".mcp.json", _mcp_cfg_path("global")):
+        if p.exists():
+            try:
+                configured.update(_j.loads(p.read_text(encoding="utf-8")).get("mcpServers", {}))
+            except Exception:
+                pass
     mgr = getattr(_agent, "mcp_mgr", None) if _agent is not None else None
     sessions = getattr(mgr, "sessions", {}) or {}
     def _tnames(sess):
@@ -858,24 +871,25 @@ async def api_mcp_status():
 
 
 @app.put("/api/mcp")
-async def api_mcp_save(request: Request):
-    """保存 workspace/.mcp.json。"""
+async def api_mcp_save(request: Request, scope: str = "repo"):
+    """保存 MCP 配置。scope=repo（默认）→ workspace/.mcp.json；global → ~/.agt/mcp.json。
+    保存后热重载两级全量（2026-09-18·与 /reload_mcp 无参语义一致——原来只重连 repo 份，
+    保存全局份后 zai/scnet 等不生效）。"""
     try:
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
-    p = _workspace / ".mcp.json"
+    p = _mcp_cfg_path(scope)
     import json as _j
     p.write_text(_j.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
-    # 热重载：重连所有 MCP server（断开旧的，按新配置重新连）
+    # 热重载：断开全部 → 按两级配置重连（repo 先、global 后——同名后连覆盖，与启动一致）
     if _mcp_mgr:
         try:
-            # 先全部断开
             for name in list(_mcp_mgr.sessions.keys()):
                 _mcp_mgr.sessions.pop(name, None)
-            # 重新连
             _mcp_mgr.connect_from_config(str(_workspace / ".mcp.json"))
-            return {"ok": True, "reloaded": True,
+            _mcp_mgr.connect_from_config(str(_mcp_cfg_path("global")))
+            return {"ok": True, "reloaded": True, "scope": scope,
                     "servers": list(_mcp_mgr.sessions.keys())}
         except Exception as e:
             return {"ok": True, "reloaded": False, "error": f"热重载失败: {e}"}

@@ -473,12 +473,16 @@
     </div>
     </div>
     <div id="panel-mcp" class="settings-panel">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-      <h4 style="margin:0;font-size:13px">MCP Server 配置（.mcp.json）</h4>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+      <h4 style="margin:0;font-size:13px">MCP Server 配置</h4>
+      <span style="display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden">
+        <button id="mcpScopeRepo" onclick="setMcpScope('repo')" style="font-size:11px;border:none;padding:2px 10px;background:#2563eb;color:#fff">本仓库 .mcp.json</button>
+        <button id="mcpScopeGlobal" onclick="setMcpScope('global')" style="font-size:11px;border:none;padding:2px 10px;background:#fff">全局 ~/.agt/mcp.json</button>
+      </span>
       <button onclick="addMcpServer()" style="font-size:11px">+ 添加 Server</button>
       <button class="btn primary" onclick="saveMcpConfig()" style="font-size:11px">💾 保存 MCP</button>
       <button class="btn" onclick="refreshMcpStatus()" style="font-size:11px" title="刷新各 server 的连接状态与工具数">🔄 状态</button>
-      <span style="font-size:10px;color:#8a9099">保存到 workspace/.mcp.json · 重启 Agent 生效</span>
+      <span style="font-size:10px;color:#8a9099" id="mcpScopeHint">编辑本仓库配置 · 保存后两级全量热重载（同名全局覆盖本仓库）</span>
     </div>
     <div id="mcpList" style="flex:1;overflow-y:auto"></div>
     </div>
@@ -2057,9 +2061,19 @@ reconnectChk.onchange = function(){
 // ===== MCP 配置管理（设置弹窗 MCP 标签）=====
 let _mcpData = {};
 let _mcpStatus = {};
+let _mcpScope = 'repo';   // 配置来源（2026-09-18·用户提案）：repo=本仓库 .mcp.json / global=~/.agt/mcp.json
+function setMcpScope(s){
+  _mcpScope = s;
+  const b1 = document.getElementById('mcpScopeRepo'), b2 = document.getElementById('mcpScopeGlobal');
+  if(b1) b1.style.cssText = 'font-size:11px;border:none;padding:2px 10px;' + (s==='repo'?'background:#2563eb;color:#fff':'background:#fff');
+  if(b2) b2.style.cssText = 'font-size:11px;border:none;padding:2px 10px;' + (s==='global'?'background:#2563eb;color:#fff':'background:#fff');
+  const h = document.getElementById('mcpScopeHint');
+  if(h) h.textContent = s==='global' ? '编辑全局配置（本机所有 repo 共享）· 保存后两级全量热重载' : '编辑本仓库配置 · 保存后两级全量热重载（同名全局覆盖本仓库）';
+  loadMcpConfig();
+}
 async function loadMcpConfig(){
   try{
-    const [r, rs] = await Promise.all([fetch('/api/mcp'), fetch('/api/mcp/status').catch(()=>null)]);
+    const [r, rs] = await Promise.all([fetch('/api/mcp?scope='+_mcpScope), fetch('/api/mcp/status').catch(()=>null)]);
     _mcpData = await r.json();
     if(rs){ try{ _mcpStatus = (await rs.json()).servers || {}; }catch(e){ _mcpStatus = {}; } }
     renderMcpList();
@@ -2128,7 +2142,7 @@ function addMcpServer(){
 }
 async function saveMcpConfig(){
   try{
-    const r = await fetch('/api/mcp', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_mcpData)});
+    const r = await fetch('/api/mcp?scope='+_mcpScope, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_mcpData)});
     const d = await r.json();
     if(d.error) toast(d.error);
     else toast('✅ MCP 已保存' + (d.reloaded ? ' + 热重载（已连 ' + (d.servers||[]).length + ' 个 server）' : ''));

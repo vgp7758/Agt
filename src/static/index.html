@@ -2483,6 +2483,7 @@ async function renderTeamDash(){
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span title="状态 ${r.status}">${icon}</span><b style="font-size:13px">${esc(r.server_id)}</b>
         <a href="${esc(r.url||'#')}" target="_blank" rel="noopener" title="打开该实例" style="color:#7c3aed;text-decoration:underline;font-size:12px">${esc(r.url||'')}</a>
+        ${st!=='online' ? `<span title="重新探测并连接该实例（连上后转绿）" style="color:#0e7490;cursor:pointer;font-size:12px" onclick="remoteReconnect('${esc(r.server_id)}','${esc(r.url||'')}')">🔄 重连</span>` : ''}
         <span title="移除该远程实例（断开+清持久化配置）" style="margin-left:auto;color:#b91c1c;cursor:pointer;font-size:12px" onclick="remoteRemove('${esc(r.server_id)}')">✕ 移除</span>
       </div>
       <div style="margin-top:3px;font-size:11px;color:#5b6472">${esc(r.session_name||'')}${r.model?' · '+esc(r.model):''}${r.tools_count?' · '+esc(String(r.tools_count))+' 工具':''}</div>
@@ -2519,6 +2520,20 @@ async function remoteRemove(sid){
     if(!resp.ok){ toast(`❌ HTTP ${resp.status}——端点不存在：服务进程是旧版本，/restart 后重试`); return; }
     const r = await resp.json();
     toast(r.msg || (r.ok ? '✅ 已移除' : '❌ 失败'));
+  }catch(e){ toast('❌ ' + e.message); }
+  renderTeamDash();
+}
+// 重连断连的远程实例（用户提案 2026-09-18：看板红色 🔴 态给个重连按钮）——
+// 复用 /api/remote/add（connect 幂等：同 id+url 重新探测 /api/status，连上转 🟢）
+async function remoteReconnect(sid, url){
+  if(!url){ toast('⚠️ 该实例无 url 可重连'); return; }
+  toast('⏳ 重连探测中…');
+  try{
+    const resp = await fetch('/api/remote/add', {method:'POST', headers:{'Content-Type':'application/json'},
+                                                 body: JSON.stringify({url, server_id: sid})});
+    if(!resp.ok){ toast(`❌ HTTP ${resp.status}——端点不存在：服务进程是旧版本，/restart 后重试`); return; }
+    const r = await resp.json();
+    toast(r.msg || (r.ok ? '✅ 已重连' : '❌ 仍不可达（检查目标实例是否已启动）'));
   }catch(e){ toast('❌ ' + e.message); }
   renderTeamDash();
 }

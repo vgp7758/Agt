@@ -279,6 +279,36 @@ class Scheduler:
             self._by_name[name] = sch.id
         return f"✅ 定时任务「{name}」已加：每 {seconds:g}s 触发（{'循环' if repeat else '单次'}）"
 
+    def add_interval_at(self, name, seconds, at_iso, message="", action=None, repeat=True) -> str:
+        """组合模式（2026-09-18·用户提案）：every_seconds + at + repeat=True →
+        at 为【首触发相位起点】，之后每 seconds 循环一次。首次触发 = at + N*seconds 中
+        第一个未来时刻（at 已过去则自动对齐到下一个相位点；at 在未来则等到 at 到点）。"""
+        seconds = float(seconds)
+        if seconds <= 0:
+            return "[every_seconds 必须 > 0]"
+        s = (at_iso or "").strip()
+        try:
+            phase = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception as e:
+            return (f"[时间格式错误] 组合模式要求 at 为完整 ISO（如 2026-07-20T17:30:00，"
+                    f"需含日期；每日闹钟短格式 HH:MM 请单独使用不配 every_seconds）：{e}")
+        phase_ts = phase.timestamp()
+        now = time.time()
+        if phase_ts < now:   # at 已过去：对齐到下一个未来相位点（at + ceil((now-at)/sec)*sec）
+            import math
+            n = math.ceil((now - phase_ts) / seconds)
+            fire = phase_ts + n * seconds
+        else:
+            fire = phase_ts
+        sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="interval", spec=seconds,
+                       message=message, action=action, repeat=bool(repeat),
+                       next_fire=fire)
+        with self._lock:
+            self._schedules[sch.id] = sch
+            self._by_name[name] = sch.id
+        when = datetime.fromtimestamp(fire).strftime("%m-%d %H:%M:%S")
+        return f"✅ 定时任务「{name}」已加：首次 {when}（每 {seconds:g}s {'循环' if repeat else '单次'}，相位 {s}）"
+
     def add_at(self, name, dt_iso, message="", action=None, repeat=None) -> str:
         """到点任务。两种格式：
         - 完整 ISO（2026-07-20T17:30:00）→ 单次到点（repeat 不传时默认单次，显式 True 则每日该时刻循环）

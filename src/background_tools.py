@@ -87,19 +87,28 @@ def make_background_tools(agent) -> list:
                      message: str = "", tool: str = "", tool_args: dict = None,
                      repeat: bool = None) -> str:
         """添加定时/到点任务，到时自动推送一条消息触发 Agent 跑一轮。
-        触发方式二选一：every_seconds>0 = 每 N 秒（repeat 控制是否循环，默认循环）；
-        at = 完整 ISO（如 '2026-07-20T17:30:00'，单次）或短格式 'HH:MM'（如 '17:30'，每日闹钟，
-        repeat=False 则只响下一个该时刻一次；ISO + repeat=True 也可每日循环）。
+        触发方式：
+        - every_seconds>0 = 每 N 秒（repeat 控制是否循环，默认循环）
+        - at = 完整 ISO（如 '2026-07-20T17:30:00'，单次）或短格式 'HH:MM'（如 '17:30'，每日闹钟，
+          repeat=False 则只响下一个该时刻一次；ISO + repeat=True 也可每日循环）
+        - 【组合】（every_seconds + at 同给）＝ at 为首次触发时刻，之后每 every_seconds 循环一次
+          （at 要求完整 ISO——含日期；at 已过去则自动对齐到下一个相位点立即起步）
         推送内容二选一：message = 静态文本；tool(+tool_args) = 到点执行该工具（如 web_search），结果作为消息（动态消息）。
         例：每 60 秒提醒 → add_schedule('tick', every_seconds=60, message='该检查进度了')；
         每日 9 点闹钟 → add_schedule('morning', at='09:00', message='早会时间')；
+        10 点起每 5 分钟巡检 → add_schedule('watch', every_seconds=300, at='2026-09-18T10:00:00', message='巡检')；
         到点搜索 → add_schedule('news', at='2026-07-20T18:00:00', tool='web_search', tool_args={'query':'AI最新进展'})。"""
         tool_args = tool_args or {}
-        if every_seconds > 0 and at:
-            return "[只能选一种触发] every_seconds 与 at 不要同时给"
         action = {"tool": tool, "args": tool_args} if tool else None
         if not message and not action:
             return "[需提供 message 或 tool 作为推送内容]"
+        if every_seconds > 0 and at:
+            # 组合模式（2026-09-18·用户提案）：at 首触发 + 每 every_seconds 循环；at 须完整 ISO
+            if "T" not in str(at):
+                return ("[组合模式要求 at 为完整 ISO（含日期，如 2026-07-20T17:30:00）]"
+                        "——每日闹钟短格式 HH:MM 请单独使用，不要配 every_seconds")
+            return sch.add_interval_at(name, every_seconds, at, message=message, action=action,
+                                       repeat=(True if repeat is None else bool(repeat)))
         if every_seconds > 0:
             return sch.add_interval(name, every_seconds, message=message, action=action,
                                     repeat=(True if repeat is None else bool(repeat)))

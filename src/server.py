@@ -1186,6 +1186,23 @@ async def api_dash():
     return out
 
 
+@app.post("/api/open-workspace")
+async def api_open_workspace():
+    """用系统文件管理器打开 workspace 文件夹（用户提案 2026-09-18：web 交互时经常想看看
+    工作区文件）。服务端即本机 → 在跑 agt 的那台机器上弹 Explorer/Finder；从手机访问时弹的
+    也是电脑上的文件夹（常用场景）。逐平台兜底：win=os.startfile / mac=open / linux=xdg-open。"""
+    import os as _os, sys as _sys, subprocess as _sp
+    try:
+        p = str(Path(_workspace).resolve())
+        if _sys.platform.startswith("win"):
+            _os.startfile(p)                       # Windows Explorer
+        elif _sys.platform == "darwin":
+            _sp.Popen(["open", p])
+        else:
+            _sp.Popen(["xdg-open", p])
+        return {"ok": True, "path": p}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 @app.post("/api/ide/open")
 async def api_ide_open(request: Request):
     """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：dock 图标 → 新页签打开工作区。

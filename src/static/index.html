@@ -395,6 +395,7 @@
       <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" aria-label="长期记忆管理（新页签）" data-label="长期记忆">🧠</button>
       <button class="fabItem" id="btnAgents" style="background:#0d9488" onclick="window.open('/agents','_blank')" aria-label="Agent 声明管理（主 Agent + 子 Agent，新页签）" data-label="Agent 声明">🤖</button>
       <button class="fabItem" id="btnIde" style="background:#fff" onclick="openWebIde()" aria-label="用 WebIDE (VS Code·serve-web) 新页签打开工作区" data-label="WebIDE (VS Code)"><img src="/icons/vscode.png" alt="VS Code" style="width:26px;height:26px;object-fit:contain"></button>
+      <button class="fabItem" id="btnOpenDir" style="background:#ca8a04" onclick="openWorkspaceDir()" aria-label="用系统文件管理器打开 workspace 文件夹（在跑 agt 的那台机器上弹出）" data-label="打开文件夹">📁</button>
       <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" aria-label="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）" data-label="调用统计">📊</button>
       <button class="fabItem" id="btnFeedback" style="background:#16a34a" aria-label="反馈" data-label="反馈">💬</button>
       <button class="fabItem" id="btnSettings" style="background:#52525b" aria-label="设置" data-label="设置">⚙</button>
@@ -2005,6 +2006,17 @@ async function openWebIde(){
     toast('⏳ WebIDE 正在后台启动（超时乐观打开）——若页签空白请稍后刷新');
   }
   b.classList.remove('loading'); b.disabled = false;
+}
+// 用系统文件管理器打开 workspace 文件夹（用户提案 2026-09-18：web 交互时经常想看看
+// 工作区文件）。后端就是本机 → 在跑 agt 的那台机器上弹 Explorer/Finder；
+// 从手机访问时弹的也是【电脑】上的文件夹（正是常用场景）。
+async function openWorkspaceDir(){
+  try{
+    const r = await fetch('/api/open-workspace', {method:'POST'});
+    const d = await r.json();
+    if(d.ok) toast('📁 已打开工作区文件夹（在跑 agt 的那台机器上）');
+    else toast('❌ ' + (d.error || '打开失败'));
+  }catch(e){ toast('❌ 打开失败：' + e.message); }
 }
 function addModel(){
   const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;

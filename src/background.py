@@ -271,7 +271,9 @@ class Scheduler:
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        self._restore()   # session.extra_state["schedules"] 恢复（agent 已 load session 后建 Scheduler）
+        # 注：恢复不走 __init__（此时 session 还没 load——Agent.__init__ L296 建 Scheduler 早于
+        # session 装载）——由 Agent.restore_runtime_state（set_session/load 后的标准恢复点）
+        # 调 restore_state(items)（2026-09-18 修：原 _restore() 在此空跑，恢复时机错误）。
 
     def add_interval(self, name, seconds, message="", action=None, repeat=True) -> str:
         seconds = float(seconds)
@@ -332,37 +334,39 @@ class Scheduler:
         when = datetime.fromtimestamp(fire).strftime("%m-%d %H:%M:%S")
         return f"✅ 定时任务「{name}」已加：首次 {when}（每 {seconds:g}s {'循环' if repeat else '单次'}，相位 {s}）"
 
+    def export_state(self) -> list:
+        """序列化全部任务定义（capture_runtime_state 收集用——2026-09-18 修：extra_state 是
+        provider 覆盖式重建，_persist 直写的值会被任意落盘抹掉；真源=本方法从 _schedules 收）。"""
+        items = []
+        with self._lock:
+            for sch in self._schedules.values():
+                items.append({"name": sch.name, "kind": sch.kind, "spec": sch.spec,
+                              "at_origin": sch.at_origin, "message": sch.message,
+                              "action": sch.action, "repeat": sch.repeat, "daily": sch.daily})
+        return items
+
     def _persist(self):
-        """定时任务持久化到 session 的 extra_state["schedules"]（随 meta.json 落盘）。
-        存【任务定义】（at_origin 锚点）而非 next_fire（派生量）——恢复时重算相位。
-        2026-09-18·用户提案：此前 scheduler 纯内存，重启全丢。"""
+        """触发 session 落盘（meta.json 的 schedules 由 capture_runtime_state 从
+        export_state() 收集——单一真源；本方法不再直写 extra_state，写了也会被
+        provider 覆盖式重建抹掉，那是 meta.json 从未出现 schedules 的根因）。"""
         try:
             sess = getattr(self._agent, "session", None)
             if sess is None:
                 return
-            items = []
-            with self._lock:
-                for sch in self._schedules.values():
-                    items.append({"name": sch.name, "kind": sch.kind, "spec": sch.spec,
-                                  "at_origin": sch.at_origin, "message": sch.message,
-                                  "action": sch.action, "repeat": sch.repeat, "daily": sch.daily})
-            sess.extra_state["schedules"] = items
             try:
-                sess.save()   # 主动落 meta.json（小体量全量写；失败仅告警不炸调用方）
+                sess.save()   # save → _capture_state → provider 收集 schedules → meta.json
             except Exception as e:
                 _LOG.warning("schedules meta 落盘失败：%s", e)
         except Exception as e:
             _LOG.warning("schedules 持久化失败：%s", e)
 
-    def _restore(self):
-        """从 session.extra_state["schedules"] 恢复定时任务（agent 恢复 session 后
-        Scheduler 创建时读）。相位重算：interval 按 at_origin 对齐下一个未来相位点；
-        at+repeat（每日）重算 _next_daily_fire；at 单次已过去的丢弃（触发过了）。"""
+    def restore_state(self, items):
+        """从 meta.json 的 schedules 定义恢复定时任务（Agent.restore_runtime_state 在
+        set_session/load 后调——标准恢复点）。相位重算：interval 按 at_origin 对齐下一个
+        未来相位点；at+repeat（每日）重算 _next_daily_fire；at 单次已过去的丢弃（触发过了）。"""
+        if not items:
+            return
         try:
-            sess = getattr(self._agent, "session", None)
-            items = (getattr(sess, "extra_state", None) or {}).get("schedules")
-            if not items:
-                return
             n = 0
             for it in items:
                 try:

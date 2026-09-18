@@ -695,7 +695,7 @@ class Agent:
     # ========== 运行时状态的存取（随 session 落盘/恢复）==========
     def capture_runtime_state(self) -> dict:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
-        return {
+        out = {
             "plan_id": self.active_plan_id,   # 只存活动计划文件名；计划本体在 plans/<plan_id>.json
             "spec_id": self.active_spec_id,   # 只存活动 spec 文件名；spec 本体在 specs/<spec_id>.json
             "autonomous_mode": self.autonomous_mode,
@@ -704,12 +704,31 @@ class Agent:
             "goal_check_script": self.goal_check_script,
             "background_tasks": self.background_tasks,
         }
+        # 定时任务（2026-09-18 修：extra_state 是 provider 覆盖式重建——Scheduler._persist 直写
+        # extra_state 的值会被任意落盘抹掉，meta.json 从未出现 schedules，用户实锤；真源=Scheduler）
+        try:
+            sch = getattr(self, "scheduler", None)
+            if sch is not None:
+                items = sch.export_state()
+                if items:
+                    out["schedules"] = items
+        except Exception:
+            pass
+        return out
 
     def restore_runtime_state(self, state: dict):
         """从存档恢复运行时状态（resume / 切换 session 后调用）。"""
         restore_active_plan(self, state or {})   # 活动计划：按 plan_id 从文件读回；空存档→清空；旧格式自动迁移
         restore_active_spec(self, state or {})   # 活动 spec：按 spec_id 从文件读回；空存档→清空
         self.background_tasks = (state or {}).get("background_tasks") or {}  # 后台任务登记表
+        # 定时任务恢复（2026-09-18：标准恢复点——set_session/load 后 scheduler 已存在、
+        # extra_state 已从 meta.json 读入；此前 Scheduler.__init__ 里调时机太早=空跑）
+        try:
+            sch = getattr(self, "scheduler", None)
+            if sch is not None:
+                sch.restore_state((state or {}).get("schedules") or [])
+        except Exception:
+            pass
         if state:
             self.autonomous_mode = bool(state.get("autonomous_mode", False))
             end = state.get("autonomous_end_time")

@@ -714,6 +714,16 @@ class Agent:
                     out["schedules"] = items
         except Exception:
             pass
+        # 远程实例连接表（2026-09-18 二轮裁定：随 session 存档——切会话=切组网、新会话空表；
+        # 真源=remote_tools.REMOTE_SERVERS，_persist_current 触发 save 时从这里收集）
+        try:
+            import remote_tools as _rt
+            with _rt._LOCK:
+                rs = {sid: it.get("url") for sid, it in _rt.REMOTE_SERVERS.items() if it.get("url")}
+            if rs:
+                out["remote_servers"] = rs
+        except Exception:
+            pass
         return out
 
     def restore_runtime_state(self, state: dict):
@@ -727,6 +737,13 @@ class Agent:
             sch = getattr(self, "scheduler", None)
             if sch is not None:
                 sch.restore_state((state or {}).get("schedules") or [])
+        except Exception:
+            pass
+        # 远程连接表恢复（2026-09-18 二轮：随 session 存档——切会话=切组网；后台探测入表、
+        # 自连过滤；存档无键时读全局遗留份做一次性迁移）
+        try:
+            import remote_tools as _rt
+            _rt.restore_servers((state or {}).get("remote_servers") or {})
         except Exception:
             pass
         if state:

@@ -34,16 +34,9 @@ MY_URL: str = ""                        # 本机回发地址（server.py 启动�
                                         # 空=expect_reply 不可用——CLI 无服务时发不了回执）
 
 
-# ===================== 持久化（settings.json remote_servers） =====================
+# ===================== 持久化（session 存档 extra_state.remote_servers） =====================
 
-def _local_store_path() -> Path:
-    """实例级 remote_servers 存储路径（2026-09-18 修串台）：原存【全局】settings.json——
-    本机所有实例共享同一份，9000 连的 8000/director/scriptwriter 会被 director/scriptwriter
-    实例读走自动重连（其中 director 连自己是自连）——用户实锤「读取串台」。改存
-    cwd/.agent/remote_servers.json（cwd=workspace，各 repo 实例天然隔离；同 repo 多实例
-    共享可接受——通常连的也是同一批）。"""
-    from pathlib import Path
-    return Path.cwd() / ".agent" / "remote_servers.json"
+_AGENT = None   # make_remote_tools 时注入（_persist_current 要触发 session 落盘）
 
 
 def _is_self_url(url: str) -> bool:
@@ -63,43 +56,55 @@ def _is_self_url(url: str) -> bool:
 
 
 def _load_persisted() -> dict[str, str]:
-    # ① 本地份优先（实例自己的连接表）；② 兼容迁移：本地无 → 读全局 settings 旧值。
-    # 两路出口都过滤自连（2026-09-18 串台修复配套——全局份里的自连项别再进表）。
-    out: dict[str, str] = {}
+    """迁移源（旧版本遗留：全局 settings.json 的 remote_servers——串台时代所有实例共享的份）。
+    2026-09-18 二轮裁定改存【session 存档】（extra_state.remote_servers——连接表跟 session 走：
+    切会话=切组网；新会话空表开始）：读侧仅在存档无该键时做一次性迁移，写侧不再碰任何文件。"""
     try:
-        p = _local_store_path()
-        if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8")) or {}
-            out = {str(k): str(v) for k, v in data.items() if k and v}
+        import config
+        st = config.load_runtime_settings() or {}
+        rs = st.get("remote_servers") or {}
+        out = {str(k): str(v) for k, v in rs.items() if k and v}
+        return {k: v for k, v in out.items() if not _is_self_url(v)}
     except Exception:
-        out = {}
-    if not out:
-        try:
-            import config
-            st = config.load_runtime_settings() or {}
-            rs = st.get("remote_servers") or {}
-            out = {str(k): str(v) for k, v in rs.items() if k and v}
-        except Exception:
-            out = {}
-    return {k: v for k, v in out.items() if not _is_self_url(v)}
+        return {}
 
 
-def _save_persisted(servers: dict[str, str]):
-    """只写本地份（2026-09-18 起不再碰全局 settings——全局份是旧版本遗留，读侧做一次性迁移）。"""
+def _persist_current():
+    """触发 session 落盘（remote_servers 由 agent.capture_runtime_state 从 REMOTE_SERVERS
+    收集进 extra_state——与 scheduler 同款单一真源模式；本函数不再直写任何文件）。"""
+    ag = _AGENT
+    if ag is None:
+        return
     try:
-        p = _local_store_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(servers, ensure_ascii=False, indent=2), encoding="utf-8")
+        ag.session.save()
     except Exception:
         pass
 
 
-def _persist_current():
-    """把 REMOTE_SERVERS 里 online 的连接落盘（offline 的保留配置下次再试？——
-    连接失败通常是暂时的，保留配置；显式 disconnect 才删）。"""
-    with _LOCK:
-        servers = {sid: it["url"] for sid, it in REMOTE_SERVERS.items()}
-    _save_persisted(servers)
+def restore_servers(servers: dict):
+    """从 session 存档恢复连接表（Agent.restore_runtime_state 在 set_session 后调）。
+    先清表（切会话=切组网：旧 session 的连接不带到新 session）；后台线程探测入表
+    （连不上标 offline 保留配置；自连过滤）。存档无键时读全局遗留份做一次性迁移。"""
+    items = {str(k): str(v) for k, v in (servers or {}).items() if k and v}
+    if not items:
+        items = _load_persisted()
+
+    def _do():
+        with _LOCK:
+            REMOTE_SERVERS.clear()
+        for sid, url in items.items():
+            if _is_self_url(url):
+                continue
+            info = probe_server(url)
+            with _LOCK:
+                if info is not None:
+                    REMOTE_SERVERS[sid] = {**info, "checked_at": time.time()}
+                else:
+                    REMOTE_SERVERS[sid] = REMOTE_SERVERS.get(sid) or {
+                        "url": url, "status": "offline", "tools_count": 0,
+                        "session_name": "", "model": "", "checked_at": 0}
+
+    threading.Thread(target=_do, daemon=True).start()
 
 
 # ===================== 探测与路由 =====================
@@ -235,28 +240,6 @@ def route_remote_call(server_id: str, name: str, args: dict) -> str:
     return f"[remote:{server_id}] {resp.get('result')}"
 
 
-def reconnect_all(background: bool = False):
-    """启动时自动重连持久化配置（探测更新在线状态；失败标 offline 不炸启动）。
-    跳过指向本实例自己的 url（2026-09-18 串台修复配套：全局份时代各实例互相抄表，
-    其中 director/scriptwriter 会连自己——现在本地份 + 自连过滤双保险）。"""
-    def _do():
-        for sid, url in _load_persisted().items():
-            if _is_self_url(url):
-                continue
-            info = probe_server(url)
-            with _LOCK:
-                if info is not None:
-                    info_checked = {**info, "checked_at": time.time()}
-                    REMOTE_SERVERS[sid] = info_checked
-                else:
-                    # 保留已知字段，仅标 offline（url 来自持久化）
-                    REMOTE_SERVERS.setdefault(sid, {"url": url, "status": "offline", "tools_count": 0,
-                                                    "session_name": "", "model": "", "checked_at": 0})
-                    REMOTE_SERVERS[sid]["status"] = "offline"
-    if background:
-        threading.Thread(target=_do, daemon=True).start()
-    else:
-        _do()
 
 
 # ===================== 跨实例消息通信（WS 消息级——"脑"通道） =====================
@@ -393,14 +376,17 @@ def ask(server_id: str, question: str, timeout: int = 120) -> str:
 # ===================== 工具（make_remote_tools） =====================
 
 def make_remote_tools(agent) -> list[Tool]:
-    """远程实例管理三件套。agent 参数保留签名一致性（当前不需要 agent 状态）。"""
+    """远程实例工具组。agent 注入 _AGENT（_persist_current 触发 session 落盘用——
+    2026-09-18 二轮：remote_servers 存 session 存档 extra_state，与 scheduler 同款模式）。"""
+    global _AGENT
+    _AGENT = agent
 
     def remote_connect(remote_instance_id: str = "", url: str = "") -> str:
         """连接一个远程 agt 实例（remote_instance_id 工具路由的注册入口）。url 如 http://192.168.1.2:8000
         （探测 /api/status 成功才注册）。remote_instance_id 可省略——自动生成（本地 url→agt-{端口}，
         远程→agt-{host}-{端口}，重复连接同 url 幂等复用），返回消息里带最终 id。
         连接后任意工具调用的 arguments 里带 "remote_instance_id": "<id>" 即路由到该实例执行
-        （结果前缀 [remote:id]）。配置持久化到 settings.json 的 remote_servers（重启自动重连）。"""
+        （结果前缀 [remote:id]）。连接表随 session 存档持久化（读档恢复；切会话=切组网）。"""
         return connect(remote_instance_id, url)
 
     def remote_disconnect(remote_instance_id: str) -> str:

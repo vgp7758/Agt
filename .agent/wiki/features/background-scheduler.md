@@ -55,6 +55,23 @@
 
 **验证（五场景全绿）**：① at 未来 → 首触发 = at 本身；② at 过去 + 每 5min → 对齐 11:45:00（相位不漂移）；③ 短格式 HH:MM 组合 → 报错提示 ✓；④ 单独 every_seconds / 单独 at → 回归不变；⑤ 完整 ISO 组合 →「首次 09-18 11:45:00（每 300s 循环，相位 10:00:00）」。
 
+## 定时任务持久化：session.extra_state 落盘 + at_origin 相位锚（2026-09-18，commit 95649e3）
+
+**动机**：此前调度任务只存内存 `_schedules`——`/restart` 即全丢，用户设的每日闹钟 / 循环巡检重启后消失、需逐条重设。本改（commit 95649e3，随 [v0.29.4](../releases/v0.29.4.md) 发布）把定时任务落 `session.extra_state["schedules"]`（随 meta.json 持久化），任务**跨重启存活**（组合模式 / 每日闹钟 / interval 循环全覆盖）。
+
+**存什么**：任务定义 + **`at_origin` 相位锚**——**不存 `next_fire`**（存档期间时钟推进、重启耗时都会让快照过期，恢复时按锚点重算才是稳的）。
+
+| 存档内容 | 语义 |
+|---|---|
+| 任务定义 | Schedule dataclass 各字段（name/kind/spec/message/action/repeat/daily…） |
+| `at_origin` | 组合/interval 的相位起点；建任务时 at 未填 → 默认记 now（「假装第一次已在 now 触发过」） |
+
+**恢复语义**：重启读档后按 `at_origin` 重算 next_fire——`at_origin + ceil((now−at_origin)/sec)·sec`，与组合模式的相位对齐同一套算法：**栅格不漂移**（重启前每 5min 一发，重启后仍落在同一栅格上）；每日闹钟按 daily 锚点重算。
+
+**两个顺手修**：`Lock → RLock`（注册/摘旧/持久化嵌套加锁，可重入锁消死锁隐患）+ `_LOG` 补定义。
+
+**验证**：与同名摘旧（8ed09c6）联测——同名再设后持久化 `extra_state["schedules"]` 无双份。生效方式 `/restart`（引擎层改动），重启后恢复链路读 `extra_state` 重建任务。
+
 ## 同名覆盖摘旧：重复投递根因修复（2026-09-18，commit 8ed09c6，pre_post 实锤）
 
 **bug**：同名任务再设（如改触发时间重设）时，`_by_name[name]` 被新 id 覆盖，但 `_schedules[旧id]` **残留**——`_loop` 扫的是 `_schedules`，两个同名任务各自到点**各投一次** → 重复投递（commit 8ed09c6）。
@@ -134,10 +151,13 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 
 - 引擎层改动需 `/restart` 生效；随 v0.23.1 上 PyPI（`pip install -U agt-agent`）
 - 用法例：`add_schedule('morning', at='09:00', message='早会时间')`
-- 本页 2026-09-18 三连（组合模式 + 同名摘旧）随 **v0.29.4** 上 PyPI（PyPI 已上线）
+- 本页 2026-09-18 三连（组合模式 + 持久化 + 同名摘旧）随 **v0.29.4** 上 PyPI（PyPI 已上线，见 [v0.29.4 发布记录](../releases/v0.29.4.md)）
+- 定时任务已持久化（`session.extra_state["schedules"]`）——重启后自动恢复，无需重设
 
 ## 相关页面
 
 - [user-interaction · 后台通知 wake 语义](user-interaction.md) — schedule 唤醒轮的路由与语义标签
 - [v0.23.1 发布记录](../releases/v0.23.1.md) — 每日闹钟的发布收口
+- [v0.29.4 发布记录](../releases/v0.29.4.md) — 2026-09-18 scheduler 三连（组合模式/持久化/同名摘旧）发布收口
 - [api-status](api-status.md) — snapshot 中的任务展示
+

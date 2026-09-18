@@ -1010,3 +1010,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **background 同名覆盖摘旧（2026-09-18，用户问「会有重复投递？」顺藤实锤，commit `8ed09c6`）**：同名任务再设时 `_by_name` 被新 id 覆盖、`_schedules[旧id]` 残留——`_loop` 扫 `_schedules` 两任务各投一次 → **重复投递**。实证：events.jsonl 同一条 `[后台通知·pre_post]` 消息两次 turn_start（一字不差）+ 当时 list_schedules 已空（单次任务已触发完）。修复：三处注册段（add_interval / add_interval_at / add_at）统一——`_by_name` 有同名先 pop 旧条目再注册。验证：同名改时间/改间隔再设各剩 1 条 + 持久化无双份。与正常语义边界：循环任务每周期推一次是设计如此、service_exit 迟到通知只此一条——都不是 bug——见 [background-scheduler · 同名覆盖摘旧](features/background-scheduler.md)
 
+## 快速事实增补（2026-09-18 · 四 · v0.29.4 发布——scheduler 三连打包）
+
+- **v0.29.4 发布**（2026-09-18，发布提交 `3dd9a7f`，PyPI `agt-agent` 已上线）：**scheduler 专题补丁**——组合模式（commit 9a88107，见增补二）+ **定时任务持久化**（commit 95649e3，本条新增）+ 同名摘旧（commit 8ed09c6，见增补三）。持久化要点：任务落 `session.extra_state["schedules"]`（随 meta.json），存任务定义 + **`at_origin` 相位锚**（at 未填默认记 now——「假装第一次已在 now 触发过」），**不存 next_fire**、恢复时按锚点重算（与组合模式同一套相位对齐，栅格不漂移）；顺手 `Lock→RLock` + `_LOG` 补定义。价值：每日闹钟 / 循环巡检 / 组合模式任务**跨重启存活**，不再重启即丢。本机 `/restart` 一次即全部装载（连同 v0.29.3 未生效的多实例通信 / MCP 两级化）——见 [v0.29.4 发布记录](releases/v0.29.4.md)、[background-scheduler · 持久化](features/background-scheduler.md#定时任务持久化sessionextra_state-落盘--at_origin-相位锚2026-09-18commit-95649e3)
+

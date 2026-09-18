@@ -32,7 +32,15 @@
   .row.me .bubble { background:var(--me); color:#fff; border-bottom-right-radius:4px; }
 .row.sys { justify-content:flex-start; }
 .row.sys .bubble { background:#f3e8ff; border:1px solid #d8b4fe; color:#6b21a8; font-size:12.5px; cursor:pointer; white-space:pre-wrap; }
-  .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px;min-width:250px; }
+  .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px;
+    /* 最小宽度 = max(总宽 50%, 300px)（用户提案 2026-09-18：短回答的气泡太窄不好读）。
+      用 vw 而非 %：bubble 的 containing block（.turn）是 shrink-to-fit 的 flex 子项，
+       百分比 min-width 在此上下文按 0 解析不生效；50vw≈msgArea 半宽（抽屉是 fixed 浮层不占流） */
+    min-width: max(50vw, 300px); }
+  /* 表格里的播放控件给足最小尺寸（用户提案 2026-09-18：窄列里播放按钮/进度条点不到）；
+     全局面防溢出 */
+  .bubble table audio, .bubble table video { min-width: 240px; }
+  .bubble audio, .bubble video { max-width: 100%; }
   .row.sys .bubble { background:#eef2ff; border:1px solid #c7d2fe; color:#3730a3; font-size:12.5px; max-width:92%; white-space:pre-wrap; }
   .row.err .bubble { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; }
   .gal { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
@@ -1486,9 +1494,10 @@ function attachCopyBtn(host, bubble){
     if(bubble.__md_text != null && String(bubble.__md_text).trim()){
       text = String(bubble.__md_text).replace(/\u00a0/g,' ').trimEnd();
     } else {
-      // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容）
+      // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容；
+      // .ans-changed=底部"本轮变更文件"补充块，不属于 answer 正文——用户提案 2026-09-18 一并剔除）
       const clone=bubble.cloneNode(true);
-      clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn').forEach(n=>n.remove());
+      clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn,.ans-changed').forEach(n=>n.remove());
       text=(clone.innerText||'').replace(/\u00a0/g,' ').trimEnd();
     }
     if(!text.trim()){ toast('气泡无文本'); return; }

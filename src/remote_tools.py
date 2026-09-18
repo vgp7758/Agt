@@ -36,22 +36,60 @@ MY_URL: str = ""                        # 本机回发地址（server.py 启动�
 
 # ===================== 持久化（settings.json remote_servers） =====================
 
-def _load_persisted() -> dict[str, str]:
+def _local_store_path() -> Path:
+    """实例级 remote_servers 存储路径（2026-09-18 修串台）：原存【全局】settings.json——
+    本机所有实例共享同一份，9000 连的 8000/director/scriptwriter 会被 director/scriptwriter
+    实例读走自动重连（其中 director 连自己是自连）——用户实锤「读取串台」。改存
+    cwd/.agent/remote_servers.json（cwd=workspace，各 repo 实例天然隔离；同 repo 多实例
+    共享可接受——通常连的也是同一批）。"""
+    from pathlib import Path
+    return Path.cwd() / ".agent" / "remote_servers.json"
+
+
+def _is_self_url(url: str) -> bool:
+    """url 是否指向本实例自己（防自连）：用 MY_URL（server 启动时设 http://<lan_ip>:<port>）
+    的端口比对——host 为 localhost/127.0.0.1 时端口相同即自己；同 lan ip 同端口亦为自己。
+    MY_URL 空（CLI 裸进程）不过滤（单实例无自连场景）。"""
+    if not MY_URL:
+        return False
     try:
-        import config
-        st = config.load_runtime_settings() or {}
-        rs = st.get("remote_servers") or {}
-        return {str(k): str(v) for k, v in rs.items() if k and v}
+        from urllib.parse import urlparse
+        a, b = urlparse(MY_URL), urlparse(url)
+        if not a.port or not b.port:
+            return False
+        return a.port == b.port and (b.hostname in ("127.0.0.1", "localhost", a.hostname))
     except Exception:
-        return {}
+        return False
+
+
+def _load_persisted() -> dict[str, str]:
+    # ① 本地份优先（实例自己的连接表）；② 兼容迁移：本地无 → 读全局 settings 旧值。
+    # 两路出口都过滤自连（2026-09-18 串台修复配套——全局份里的自连项别再进表）。
+    out: dict[str, str] = {}
+    try:
+        p = _local_store_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8")) or {}
+            out = {str(k): str(v) for k, v in data.items() if k and v}
+    except Exception:
+        out = {}
+    if not out:
+        try:
+            import config
+            st = config.load_runtime_settings() or {}
+            rs = st.get("remote_servers") or {}
+            out = {str(k): str(v) for k, v in rs.items() if k and v}
+        except Exception:
+            out = {}
+    return {k: v for k, v in out.items() if not _is_self_url(v)}
 
 
 def _save_persisted(servers: dict[str, str]):
+    """只写本地份（2026-09-18 起不再碰全局 settings——全局份是旧版本遗留，读侧做一次性迁移）。"""
     try:
-        import config
-        st = config.load_runtime_settings() or {}
-        st["remote_servers"] = servers
-        config.save_runtime_settings(st)
+        p = _local_store_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(servers, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -128,6 +166,9 @@ def connect(server_id: str, url: str) -> str:
     """注册一个远程实例（探测成功才入表）。server_id 留空时自动生成（推荐）：
     本地 url → agt-{端口}（隧道场景）；远程 → agt-{host}-{端口}；同 url 重复连接幂等复用。"""
     server_id = (server_id or "").strip()
+    if _is_self_url(url):
+        return (f"[拒绝自连] {url} 指向本实例自己（端口与 MY_URL 相同）。"
+                "远程路由的本意是操作【另一个】实例；本机执行直接用工具（remote_instance_id 不填）")
     info = probe_server(url)
     if info is None:
         return f"[连接失败] {url} 探测无响应或 Agent 未就绪（检查 URL/端口/服务是否在跑）"
@@ -195,9 +236,13 @@ def route_remote_call(server_id: str, name: str, args: dict) -> str:
 
 
 def reconnect_all(background: bool = False):
-    """启动时自动重连持久化配置（探测更新在线状态；失败标 offline 不炸启动）。"""
+    """启动时自动重连持久化配置（探测更新在线状态；失败标 offline 不炸启动）。
+    跳过指向本实例自己的 url（2026-09-18 串台修复配套：全局份时代各实例互相抄表，
+    其中 director/scriptwriter 会连自己——现在本地份 + 自连过滤双保险）。"""
     def _do():
         for sid, url in _load_persisted().items():
+            if _is_self_url(url):
+                continue
             info = probe_server(url)
             with _LOCK:
                 if info is not None:

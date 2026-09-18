@@ -249,6 +249,7 @@
     color:#5b6472; background:#fff; border:1px solid var(--line); border-radius:6px; padding:0 6px; line-height:18px; }
   .asset-box.video .vid-open:hover { color:#2563eb; border-color:#2563eb; }
   .asset-box.err { opacity:.6; }
+.asset-box.err::after { content:'⚠️ 文件已不存在'; display:block; padding:6px 10px; font-size:11px; color:#8a9099; text-align:center; }
   /* 文本文件资产：可点击的框（📄 图标 + 标题/路径），点击在右侧预览抽屉打开内容 */
   .asset-box.file { display:inline-block; text-align:left; cursor:pointer; user-select:none;
     border:1px dashed #94a3b8; background:#fbfcfe; transition:border-color .15s, background .15s; }
@@ -794,12 +795,12 @@ function assetBoxHtml(title, path){
   }
   if(isAud){
     return '<div class="asset-box audio">'+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
-      '<audio controls preload="metadata" src="'+src+'"></audio></div>';
+      '<audio controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></audio></div>';
   }
   if(isVid){   // 视频 → 内嵌播放器（用户提案 2026-09-17：不再当文本开抽屉——mp4 走视频框；
                // 点击标题/右上角链接可新页签看原片，浏览器按 /api/asset 的 Content-Type 直接播）
     return '<div class="asset-box video">'+(cap?'<div class="asset-cap">🎬 '+cap+'</div>':'')+
-      '<video controls preload="metadata" src="'+src+'"></video>'+
+      '<video controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></video>'+
       '<a class="vid-open" href="'+src+'" target="_blank" rel="noopener" title="在新页签打开">↗</a></div>';
   }
   if(isTxt){   // 文本类 → 点击打开预览抽屉（📄）

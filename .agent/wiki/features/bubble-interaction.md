@@ -381,6 +381,24 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 **验证**：node 语法 ✓ + 三处结构断言（CSS `::after` / audio `onerror` / video `onerror`）全过。**纯前端，Ctrl+F5 即生效**。
 
+## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
+
+用户三问（2026-09-18，commit `3d38959`）：① answer 气泡最小宽度取总宽度 50%；② 表格里的音频播放条 / 视频播放器给足最小尺寸，保证播放按钮点得到；③ 复制按钮放入剪贴板的应是**原始 answer markdown**——③ 查证后为**已然实现**（见[复制内容与剪贴板降级](#复制内容与剪贴板降级)），本轮只补一处排除清单；①② 为纯 CSS 改动。
+
+**CSS 三行**（src/static/index.html）：
+
+```css
+.row.bot .bubble { min-width: max(50vw, 300px); }                /* 原 min-width:250px */
+.bubble table audio, .bubble table video { min-width: 240px; }   /* 窄列里播放键/进度条点得到 */
+.bubble audio, .bubble video { max-width: 100%; }                /* 顺带防溢出 */
+```
+
+**为什么用 `vw` 而不是 `%`（关键坑，已写进代码注释）**：bubble 的 containing block（`.turn`）是 **shrink-to-fit 的 flex 子项**——百分比 `min-width` 在此上下文**按 0 解析、不生效**（写 `min-width:50%` 等于没写）。`50vw` ≈ 消息区（msgArea）半宽——右侧 spec/🐞/文件预览等抽屉都是 `fixed` 浮层、不占文档流，故 vw 近似就是「总宽度」；`max(…, 300px)` 兜底防窄屏下 50vw 过小（短回答原来只有 250px，太窄不好读）。
+
+**媒体控件最小尺寸**：表格单元格宽度受列宽约束，音频播放条（播放键 + 进度条 + 时长）在窄列里会被挤到控件不可点/拖不动；`min-width:240px` 是能放下播放键 + 可拖进度条的最小实用宽度。仅**表格内**生效——气泡里独立引用的资产框自有尺寸规则（`.asset-box.video` max-width 560px 等，见[视频资产内嵌播放器](#视频资产内嵌播放器渲染2026-09-17用户问诊)）；后一条 `max-width:100%` 防大屏资产框撑破窄气泡。
+
+**生效**：纯前端，**Ctrl+F5 强刷即生效**（8000 实例取新静态资源走 `/update-assets`），无后端改动。
+
 ## bash 代码块执行按钮：Agent 执行改逐条指令——清理 shebang/行尾注释/空行（2026-09-17，用户提案，commit 60f3c6d）
 
 **按钮本体（此前未入册）**：answer 气泡里 ` ```bash / sh / shell / shellscript ` 代码块下渲染两个执行按钮——**▶ Agent 执行**（把代码发 `/call run_shell`，经 Agent 工具链执行）与 **💻 终端执行**（整块发独立 shell）。
@@ -439,12 +457,13 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 ### 复制内容与剪贴板降级
 
 - **复制 markdown 原文**（2026-09-09 定案，用户问询「复制的是 markdown 原文吗」后改，commit c54a004）：`renderAnswerPages` 渲染 answer 时把**当前页 markdown 原文**挂在 bubble 元素 `__md_text` expando 上（`innerHTML` 重写不清 expando）；`attachCopyBtn` 点击时优先取 `__md_text`（非空才用）——表格是 `|` 分隔、代码块带 ` ``` ` 围栏，可直接再编辑/投喂。此前取渲染后 innerText：表格变制表符对齐、代码块丢围栏，**不可再渲染**，是本次问询暴露的语义缺陷
-- **回退链**：spec/问卷/中断卡片等非 answer 渲染在重写 answer 区时各自置 `__md_text = null`——复制按钮取到 null 即回退 `innerText`（仍走克隆排除法：`cloneNode(true)` 后 remove `.ans-tabs,.copy-btn,.run-btn`，见下），不会拿到上一次 answer 的旧原文
+- **回退链**：spec/问卷/中断卡片等非 answer 渲染在重写 answer 区时各自置 `__md_text = null`——复制按钮取到 null 即回退 `innerText`（仍走克隆排除法：`cloneNode(true)` 后 remove 排除清单，见下），不会拿到上一次 answer 的旧原文
 - **多 Agent 分页**：`renderAnswerPages` 单页/多页两分支都在重渲染时挂 `__md_text = 当前激活页原文`——切页随重渲染自动更新，复制到的始终是当前页
 - **历史轮**：读档走同一条 `finishAnswer` → `renderAnswerPages` 路径，自动覆盖
 - **user 气泡**本为纯文本，复制行为不变
 - 取 `innerText` 而非 `textContent` 的回退语义保留——表格/代码块至少保留文本结构，不是一坨裸文本
 - `clipboard API` 失败自动降级 `execCommand`（兼容老浏览器）
+- **回退路径排除清单补 `.ans-changed`（2026-09-18，用户提案）**：用户再次确认「复制到剪切板的应该是原始 answer 正文 markdown」——查证：**主链路已然实现**（2026-09-09 起 `__md_text` 优先，历史轮同路径 ✓），本轮只修回退路径的细节：克隆排除清单从 `['.ans-tabs','.copy-btn','.run-btn']` 补入 **`.ans-changed`**——它是 answer 尾部的「📎 本轮变更文件」补充块（`unmentionedChangesHtml` 产出，非 answer 正文，见[本节](#本轮变更文件补充区图片音频直接内嵌渲染2026-09-06用户提案)），此前会被当作正文一起复制进剪贴板
 
 ### 与代码块级复制的层级
 

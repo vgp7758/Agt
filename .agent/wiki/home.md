@@ -1040,3 +1040,12 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - 顺带自省：误把 `\n` 写成字面两字符被 `node --check` 当场抓出 —— 改 JS 后跑语法检查是必要护栏
 - 详见 [多实例组网 · 断连态一键重连](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-18 · 十 · answer 气泡最小宽度 + 表格播放控件最小尺寸 + 复制剔除补充块）
+
+用户三问（2026-09-18，commit `3d38959`，纯前端）：① answer 气泡最小宽度取总宽 50%；② 表格里的音频播放条 / 视频播放器给足最小尺寸；③ 复制进剪贴板的应是原始 answer markdown。
+
+- **气泡最小宽度**：`.row.bot .bubble { min-width: max(50vw, 300px) }`（原 250px）。**坑**：必须用 `vw` 而非 `%`——bubble 的 containing block（`.turn`）是 **shrink-to-fit 的 flex 子项**，百分比 `min-width` 在此上下文按 0 解析、不生效；`50vw` ≈ msgArea 半宽（抽屉都是 fixed 浮层不占流）
+- **表格媒体控件**：`.bubble table audio, .bubble table video { min-width:240px }`（窄列里播放键/进度条点得到）+ `.bubble audio, .bubble video { max-width:100% }` 防溢出
+- **复制 = 原始 markdown**：查证为**已然实现**（2026-09-09 c54a004 起 `bubble.__md_text` 优先，历史轮同路径）——本轮只补回退路径的克隆排除清单 **`.ans-changed`**（「📎 本轮变更文件」补充块不算正文）
+- **生效**：纯前端 CSS/JS，`Ctrl+F5` 强刷即见——见 [气泡交互 · 气泡最小宽度与表格媒体控件最小尺寸](features/bubble-interaction.md#气泡最小宽度与表格媒体控件最小尺寸2026-09-18用户提案)、[复制内容与剪贴板降级](features/bubble-interaction.md#复制内容与剪贴板降级)
+

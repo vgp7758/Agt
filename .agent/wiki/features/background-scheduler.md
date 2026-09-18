@@ -4,9 +4,9 @@
 
 ## 职责
 
-- **src/background.py**（现 414 行）：后台调度线程，`_loop` 周期扫描 `next_fire`，到点把消息推给 Agent 触发一轮（唤醒链见 [user-interaction · 后台通知 wake 语义](user-interaction.md)）
-- **src/background_tools.py**（现 124 行）：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `send_to_service`）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
-- 两类触发：**interval**（每 N 秒）与 **at**（到点；v0.23.1 起支持每日闹钟）
+- **src/background.py**：后台调度线程，`_loop` 周期扫描 `next_fire`，到点把消息推给 Agent 触发一轮（唤醒链见 [user-interaction · 后台通知 wake 语义](user-interaction.md)）
+- **src/background_tools.py**：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `send_to_service`）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
+- 触发三类：**interval**（每 N 秒）/ **at**（到点；v0.23.1 起支持每日闹钟）/ **组合**（every_seconds + at 同给：at 相位起步、之后每 N 秒循环，2026-09-18）
 
 ## Schedule 数据结构（dataclass）
 
@@ -26,6 +26,7 @@
 - 触发方式二选一：`every_seconds>0`（repeat 控制是否循环，默认循环）；`at` 完整 ISO 或短格式
 - 推送内容二选一：`message` 静态文本；`tool`(+`tool_args`) 到点执行拿结果
 - `repeat` 参数默认 **None**：按 at 格式**语义分发**（显式传值优先）
+- **组合**（2026-09-18）：every_seconds + at 同给 = at 相位起步、之后每 N 秒循环——见[组合模式](#组合模式every_seconds--at--at-相位起步之后每-n-秒循环2026-09-18commit-9a88107用户提案)
 
 | at 写法 | repeat 缺省行为 | 显式 repeat |
 |---|---|---|
@@ -38,6 +39,39 @@
 - **`_next_daily_fire()` 同秒边界**：触发后从 daily 锚点重算下一未来时刻，候选 `<= now`（同一秒内触发也算过期）即再 +1 天——**当天绝不二次触发**，死循环根治；重算恒取下一未来时刻
 - 触发后：每日任务**保留**（重算 next_fire）；单次任务触发后**删除**
 - background.py imports 相应补 `re` / `timedelta` / `Optional`
+
+## 组合模式：every_seconds + at = at 相位起步，之后每 N 秒循环（2026-09-18，commit 9a88107，用户提案）
+
+`add_schedule` 第三类触发（`add_interval_at`，src/background.py）：**every_seconds 与 at 同给**时，at 为【首触发相位起点】，之后每 seconds 循环一次。
+
+| at 位置 | 首次触发 |
+|---|---|
+| 未来 | 等到 at 到点 |
+| 已过去 | 自动对齐到下一个相位点立即起步：`at + ceil((now−at)/sec)·sec` |
+
+**相位对齐（关键细节）**：`at=10:00` + 每 5min、现在 11:43 → 首次对齐 **11:45**（at 相位栅格的下一个点），不是「now+5min」那种会漂移的算法——固定在 at 的栅格上，多少次触发都不走偏。实现复用 `kind="interval"` 的现成循环重排，`_loop` 零改动。
+
+**边界**：组合模式 at 只收**完整 ISO**（含日期）——短格式 `HH:MM` 无日期、与「相位起点」语义冲突，明确报错「组合模式要求 at 为完整 ISO」（不静默）；`repeat=False` 组合 = 只在 at 触发一次。
+
+**验证（五场景全绿）**：① at 未来 → 首触发 = at 本身；② at 过去 + 每 5min → 对齐 11:45:00（相位不漂移）；③ 短格式 HH:MM 组合 → 报错提示 ✓；④ 单独 every_seconds / 单独 at → 回归不变；⑤ 完整 ISO 组合 →「首次 09-18 11:45:00（每 300s 循环，相位 10:00:00）」。
+
+## 同名覆盖摘旧：重复投递根因修复（2026-09-18，commit 8ed09c6，pre_post 实锤）
+
+**bug**：同名任务再设（如改触发时间重设）时，`_by_name[name]` 被新 id 覆盖，但 `_schedules[旧id]` **残留**——`_loop` 扫的是 `_schedules`，两个同名任务各自到点**各投一次** → 重复投递（commit 8ed09c6）。
+
+**实证链**：① events.jsonl 里同一条 `[后台通知·pre_post]` 消息出现两次 turn_start（一字不差）；② 当时 `list_schedules` 已空——该任务是单次且已触发完，双投只可能来自「旧条目残留」；③ 复现：`add_at("pre_post", ...)` 设第二次，`_schedules` 出现两条。故事还原：用户先后设过两次同名任务（改触发时间）——名字只指向新的，旧的还在跑，到点各推一遍同一条消息。
+
+**修复**：三处注册段（`add_interval` / `add_interval_at` / `add_at`）统一——`_by_name` 已有同名 → 先 `pop` 旧 `_schedules` 条目再注册新条目。
+
+**验证**：同名改时间再设 / 同名改间隔再设 → `_schedules` 各只剩 1 条；持久化 `extra_state["schedules"]` 无双份；py_compile ✅。
+
+**与正常语义的边界**（哪些「重复」不是 bug）：
+
+| 情况 | 性质 |
+|---|---|
+| 同名再设 → 双投（本次修的） | bug，已修 |
+| 循环任务每周期推一次（message 静态文本每次相同） | 正常语义 |
+| service_exit 退出通知迟到（如 852 轮） | 旧事件迟到投递，内容相同但只此一条 |
 
 ## 展示适配
 
@@ -100,6 +134,7 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 
 - 引擎层改动需 `/restart` 生效；随 v0.23.1 上 PyPI（`pip install -U agt-agent`）
 - 用法例：`add_schedule('morning', at='09:00', message='早会时间')`
+- 本页 2026-09-18 三连（组合模式 + 同名摘旧）随 **v0.29.4** 上 PyPI（PyPI 已上线）
 
 ## 相关页面
 

@@ -998,3 +998,15 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **zai 工具组迁独立 MCP**（2026-09-17，用户提案「改 MCP 放单独 repo，本机使用」）：原外置件 `tools/builtin/zai_tools.py`（Z.AI 联网三件套）整体迁出为独立 repo **`D:\Projects\zai-mcp`**——`zai_mcp.py`（FastMCP stdio server，三工具同源实现搬入）+ README，初始提交 `56a4150`；主仓删除外置件（`7aca791` 已推送，不在打包 manifest、wheel 不受影响）；本机 `~/.agt/mcp.json` 注册 `zai` 条目（与 scnet/lsp 同款形态）。三层验证全绿：`--selftest`（token 复用 models.json 智谱系 key ✓ + web_search 真实搜索 ✓）/ MCP stdio 握手（server zai，tools/list 三工具）✓ / 鉴权链路与旧版同源 ✓。形态差异：工具名 `zai_*` → `__mcp__zai__*`；任意 MCP 客户端（agt / Claude Code / Cursor）可用；server 独立进程热更新（免 `/reload tools`）。主 Agent 随后 `e196fab` 消除双 zai（重复注册）收尾——见 [zai-tools](features/zai-tools.md)
 
+## 快速事实增补（2026-09-18 · 一 · /reload_mcp 全量重载——两级配置重建 + 工具全量同步）
+
+- **/reload_mcp 无参数 = 全量重载两级 MCP 配置（2026-09-18，用户提案，commit `c3554c9`）**：`reload_mcp_server(name="")` 留空走全量——断开全部 sessions（旧进程待 shutdown 一起清理）→ 重读 repo `.mcp.json` + 全局 `~/.agt/mcp.json`（同名后连覆盖先连，与启动语义一致）→ 重建全部连接 → 工具全量同步（消失 server 摘 `__mcp__{server}__*` 前缀 + 清悬空 tool_groups；现存 `sync_to_toolbox` 幂等注册）；CLI 带参数仍单个重连（原行为不变）。mock 两级配置四断言全绿（含 ghost server 工具前缀摘除）。**新增/删除 MCP server 改 mcp.json 后一发 reload 生效，不再 /restart**——顺带闭环 2026-09-14 的「重连不注册工具」缺口——见 [mcp-config · 全量重载](features/mcp-config.md)
+
+## 快速事实增补（2026-09-18 · 二 · add_schedule 组合模式——at 相位起步 + 每 N 秒循环）
+
+- **add_schedule 第三类触发：every_seconds + at 同给（2026-09-18，用户提案，commit `9a88107`）**：at 为【首触发相位起点】，之后每 every_seconds 循环——at 在未来等到到点，已过去自动对齐 `at + ceil((now−at)/sec)·sec` 立即起步（**相位不漂移**：固定在 at 的栅格上，非 now+N 漂移式）。实现复用 `kind="interval"` 循环重排，`_loop` 零改动。边界：组合模式 at 只收完整 ISO（短格式 HH:MM 无日期、语义冲突，明确报错）；`repeat=False` = 只在 at 触发一次。五场景验证全绿；/restart 生效——见 [background-scheduler · 组合模式](features/background-scheduler.md)
+
+## 快速事实增补（2026-09-18 · 三 · 同名任务再设摘旧——pre_post 重复投递根因修复）
+
+- **background 同名覆盖摘旧（2026-09-18，用户问「会有重复投递？」顺藤实锤，commit `8ed09c6`）**：同名任务再设时 `_by_name` 被新 id 覆盖、`_schedules[旧id]` 残留——`_loop` 扫 `_schedules` 两任务各投一次 → **重复投递**。实证：events.jsonl 同一条 `[后台通知·pre_post]` 消息两次 turn_start（一字不差）+ 当时 list_schedules 已空（单次任务已触发完）。修复：三处注册段（add_interval / add_interval_at / add_at）统一——`_by_name` 有同名先 pop 旧条目再注册。验证：同名改时间/改间隔再设各剩 1 条 + 持久化无双份。与正常语义边界：循环任务每周期推一次是设计如此、service_exit 迟到通知只此一条——都不是 bug——见 [background-scheduler · 同名覆盖摘旧](features/background-scheduler.md)
+

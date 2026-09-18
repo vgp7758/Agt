@@ -48,6 +48,19 @@
 
 用法：工具调用 `reload_mcp_server(name)`，或 CLI `/reload_mcp <name>`（name 为 `mcpServers` 键名）。实测场景见 [SCNet 凭证用户名变更](../guides/scnet.md)。
 
+## 全量重载：/reload_mcp 无参数 = 重读两级配置重建全部（2026-09-18，commit c3554c9，用户提案）
+
+`reload_mcp_server(name="")` **留空 = 全量重载**（此前必须逐个点名，commit c3554c9）；CLI `/reload_mcp` 无参数走同款，带参数仍单个重连（原行为不变）。全量流程四步：
+
+1. **断开全部** sessions（旧进程待 shutdown 一起清理，与单连口径一致）
+2. **重读两级配置**：repo `.mcp.json` + 全局 `~/.agt/mcp.json`（按 paths 顺序连，同名**后连覆盖先连**——与启动语义一致）
+3. **工具全量同步**：配置里消失的 server → 摘除其 `__mcp__{server}__*` 工具前缀 + 清悬空 tool_groups；现存全部 → `sync_to_toolbox` 幂等注册
+4. 摘要输出：`✅ MCP 全量重载：N 个 server 在线 [...]；工具同步：摘除 X / 新增 Y / 现存 Z`
+
+**验证（mock 两级配置，四断言全绿）**：全量 5 server 在线 ✓；重连顺序 `['.mcp.json', 'mcp.json']` ✓；模拟 ghost server 从配置删除 → 其工具前缀被摘除 ✓；单 server 分支代码未动（原路径回归无虞）✓。
+
+价值闭环：新增/删除 MCP server（改 mcp.json）后 `/reload_mcp` 一发生效，**不再需要 `/restart`**（正好接住 zai 迁独立 MCP repo 后的运维场景）。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新
@@ -57,15 +70,11 @@
 
 - [配置体系与模型调优](../guides/config-and-models.md)（mcp.json 在四份配置 repo 覆盖里）
 - [多实例组网](../architecture/multi-instance.md)（每角色实例各持自己的 .agent/mcp.json）
-## 缺口：reload_mcp_server 只重连 session，不注册工具（2026-09-14 实测确认）
+## 缺口闭环：重连后工具同步进工具箱（2026-09-14 实测 → 2026-09-18 修复）
 
-`reload_mcp_server` 的语义是「**断开并重连**」——`MCPManager.reconnect_from_config_one(path, name)` 只做两件事：`sessions.pop(name)` + `_connect_one(name, cfg)`，刷新的是 `mcp_mgr.sessions[name]["tools"]`（server 侧工具清单）。
+`reload_mcp_server` 的旧语义是「**断开并重连**」——`MCPManager.reconnect_from_config_one(path, name)` 只做 `sessions.pop(name)` + `_connect_one(name, cfg)`，刷新的是 `mcp_mgr.sessions[name]["tools"]`（server 侧工具清单），**不碰 `agent.tools`（工具箱）**。装配期的注册在 `src/chat.py` 的 `build_agent` 里一次性完成（`make_mcp_tools` / `MCPTool` 注册，L326 附近），此后新增的 server 工具不会自动进工具箱。
 
-**它不碰 `agent.tools`（工具箱）**。装配期的注册在 `src/chat.py` 的 `build_agent` 里一次性完成（`make_mcp_tools` / `MCPTool` 注册，L326 附近），此后新增的 server 工具不会自动进工具箱。
+**实测后果（2026-09-14，SCNet 场景，两次踩到）**：给 `~/.agt/mcp/scnet/scnet_mcp.py` 新增工具（先是 `scnet_notebook`，后是 `scnet_monitor`）后，即使 `reload_mcp_server('scnet')` 成功重连（session 里能看到新工具），Agent 调用仍报「工具箱里没有」——当时只能 `/restart`。
 
-**实测后果（2026-09-14，SCNet 场景，两次踩到）**：给 `~/.agt/mcp/scnet/scnet_mcp.py` 新增工具（先是 `scnet_notebook`，后是 `scnet_monitor`）后，即使 `reload_mcp_server('scnet')` 成功重连（session 里能看到新工具），Agent 调用仍报「工具箱里没有」——**必须 `/restart`**。
-
-**修法方向**：重连后调 `mcp_mgr.sync_to_toolbox(agent.tools)`——该 API 已存在（`register_or_replace` 幂等，返回本次新增工具名列表），目前唯一调用方是 [ensure_lsp](../architecture/tool-externalization-criteria.md) 的 LSP 动态装配（`src/lsp_manager.py` L100）。缺口在于 `reload_mcp_server` 的闭包只绑了 `mcp_mgr` + 配置路径，**没绑 agent/toolbox**，故无法自行同步。
-
-**规避**：新增/改名 MCP 工具后一律 `/restart`（或 CLI 重启）；仅改 server 内部实现（工具名不变）时 `reload_mcp_server` 足够。
+**后记（2026-09-18，commit c3554c9，缺口闭环）**：工具箱同步已收编为 `reload_mcp_server` 的核心语义（docstring：「断开并重连 MCP server，并把工具同步进工具箱——新增/删除的工具立即生效，无需 /restart」）。全量重载（name 留空）路径完整实现：现存 server → `sync_to_toolbox` 幂等注册；消失的 server → 摘除 `__mcp__{server}__*` 工具 + 清悬空 tool_groups。当时诊断出的修法方向（`sync_to_toolbox` API 已存在、闭包没绑 agent/toolbox）即循此落地。**规避条款作废**：新增/删除 MCP 工具后 reload 即可，mock 验证含「ghost server 工具前缀被摘除」断言（见上文[全量重载](#全量重载reload_mcp-无参数--重读两级配置重建全部2026-09-18commit-c3554c9用户提案)章节）。
 

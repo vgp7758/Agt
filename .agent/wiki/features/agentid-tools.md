@@ -37,8 +37,8 @@
 
 ## 与其他模块的关系
 
-- 属 [工具外置](tool-externalization.md) 体系的用户个人外置件，**不随包播种**（与 [zai-tools](zai-tools.md) 同类，区别于 cache_tools / explore_tools 等随包副本）
-- 身份目录 `~/.agt/.agentid/` 走 AGT_HOME 路径族语义（kv_tools / zai_tools 同款）
+- 属 [工具外置](tool-externalization.md) 体系的用户个人外置件，**不随包播种**（区别于 cache_tools / explore_tools 等随包副本；原同类 [zai-tools](zai-tools.md) 已于 2026-09-17 迁独立 MCP repo）
+- 身份目录 `~/.agt/.agentid/` 走 AGT_HOME 路径族语义（kv_tools 同款；zai 迁 MCP 后其 `_zai_token` 同源实现仍保留该语义）
 
 ## 注意事项
 

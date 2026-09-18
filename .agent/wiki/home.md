@@ -994,3 +994,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **remote_message 加 expect_reply 参数（2026-09-17，用户提案，commit `d98a36c`）**：异步派活（fire-and-forget）结果去向不明、同步问答（remote_ask）要挂起等——补中间态「**异步派活 + 对方完成时回发 answer**」。机制：`expect_reply=True` → 消息头注入 `⟨expect_reply:url⟩` 协议行（**带内传输，对端无需新端点**）→ 对方 agent 轮初正则剥头挂 `_reply_to` 轮元数据（模型看不到协议行；每迭代重置只对首条消息生效）→ answer 生成后临时 connect 发起方（幂等）回发答案（截前 3000 字）→ 发起方收执经 inbox 唤醒继续处理。MY_URL（本机回发地址）由 server.py 启动时 UDP connect 8.8.8.8 探 lan ip + 端口设置；**CLI 裸进程未设直接报错不乱发**。生效注意：对端也要新版（剥协议行代码在对端 agent.py，旧版把协议行当普通文本显示）。四环节单测全绿；/restart 生效——见 [multi-instance · expect_reply](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-17 · 十二 · zai 三件套迁独立 MCP repo zai-mcp）
+
+- **zai 工具组迁独立 MCP**（2026-09-17，用户提案「改 MCP 放单独 repo，本机使用」）：原外置件 `tools/builtin/zai_tools.py`（Z.AI 联网三件套）整体迁出为独立 repo **`D:\Projects\zai-mcp`**——`zai_mcp.py`（FastMCP stdio server，三工具同源实现搬入）+ README，初始提交 `56a4150`；主仓删除外置件（`7aca791` 已推送，不在打包 manifest、wheel 不受影响）；本机 `~/.agt/mcp.json` 注册 `zai` 条目（与 scnet/lsp 同款形态）。三层验证全绿：`--selftest`（token 复用 models.json 智谱系 key ✓ + web_search 真实搜索 ✓）/ MCP stdio 握手（server zai，tools/list 三工具）✓ / 鉴权链路与旧版同源 ✓。形态差异：工具名 `zai_*` → `__mcp__zai__*`；任意 MCP 客户端（agt / Claude Code / Cursor）可用；server 独立进程热更新（免 `/reload tools`）。主 Agent 随后 `e196fab` 消除双 zai（重复注册）收尾——见 [zai-tools](features/zai-tools.md)
+

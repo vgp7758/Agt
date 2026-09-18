@@ -754,15 +754,15 @@ function inlineRich(t){
   t=t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function(_,alt,path){
     if(/^(?:https?|ftp):\/\//i.test(path))
       hold.push('<img src="'+esc(path)+'" alt="'+esc(alt)+'" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:4px 0">');
-    else hold.push(assetBoxHtml(alt||'图片', path));
+    else hold.push(assetBoxHtml('', path));   // ! 形态=隐藏名称（用户提案 2026-09-18：纯资产控件，名称只作 alt）
     return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_,txt,url){ hold.push('<a href="'+esc(url)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ④ [文字](http) 普通外链
-  // ④' [文字](本地相对路径)——无 ! 的本地链接（用户问诊 2026-09-17：此前无规则命中，
-  // 整段显示字面文本）。语义=链接不嵌入：href 走 /api/asset，点击新页签由浏览器按
-  // Content-Type 打开（mp4 直接播/png 直接显示）；绝对路径与 .. 不安全形态不处理。
+  // ④' [名称](本地相对路径)——无 ! 的本地引用（用户提案 2026-09-18：渲染为【名称 + 资产控件】
+  // ——播放条/图框/文本预览/未知后缀嗅探，名称显示为 caption；要和 [!名](path) 一致带名）。
+  // 想隐藏名称的纯资产用 ![alt](path)。绝对路径与 .. 不安全形态不处理。
   t=t.replace(/\[([^\]]+)\]\(((?!https?:\/\/)[^)\s]+)\)/g, function(_,txt,path){
     if(/^[\/\\]/.test(path)||path.includes('..'))return _;
-    hold.push('<a href="/api/asset?path='+encodeURIComponent(path)+'" target="_blank" rel="noopener" class="md-link">'+inlineCode(esc(txt))+'</a>');
+    hold.push(assetBoxHtml(txt, path));
     return '\x02'+(hold.length-1)+'\x02'; });
   t=inlineCode(esc(t));
   return t.replace(/\x02(\d+)\x02/g, function(_,i){ return hold[+i]||''; });

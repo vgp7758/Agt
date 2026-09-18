@@ -1049,3 +1049,11 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **复制 = 原始 markdown**：查证为**已然实现**（2026-09-09 c54a004 起 `bubble.__md_text` 优先，历史轮同路径）——本轮只补回退路径的克隆排除清单 **`.ans-changed`**（「📎 本轮变更文件」补充块不算正文）
 - **生效**：纯前端 CSS/JS，`Ctrl+F5` 强刷即见——见 [气泡交互 · 气泡最小宽度与表格媒体控件最小尺寸](features/bubble-interaction.md#气泡最小宽度与表格媒体控件最小尺寸2026-09-18用户提案)、[复制内容与剪贴板降级](features/bubble-interaction.md#复制内容与剪贴板降级)
 
+## 快速事实增补（2026-09-19 · OKX A2A Agent 服务店铺——claw 实例 ASP 上架 + a2a_bridge 桥接）
+
+- **OKX A2A Agent 服务店铺上线（2026-09-18 晚 ~ 09-19 凌晨，claw 实例 :50051 / `D:\AI\ClawTasks`）**：该实例以用户名义在 OKX.AI Agentic 服务市场注册 ASP 店铺 **Brick Studio #13789**（钱包 `0x8b20…63fe`，X Layer / OKX Agentic Wallet），已激活 + heartbeat 在线；**上架审核提交中**（48h 邮件通知，通过前仅可被 ID 搜索）
+- **两项研究服务已上链**（服务 id 40787）：Quick Research Flash 0.5 USDT/次（24h 单题多源研究）/ Deep Research Report 5 USDT/次（48h 深度双语报告 + 图表 + 修订）；广场行情快照 `services_all.json`（27KB，主力价 0.01~1.5 USDT，头部卖家已售 20~134 单）
+- **「daemon 绑 claude」= AI 后端换成自家 agt**：OKX 官方 okx-a2a daemon 原设计要绑 Claude Code CLI 作执行后端，claw 写垫片 `a2a_bridge.py` 把请求经 WS 注入本机 :50051 的 agt 主 Agent、回执写 `.a2a_replies/` 回传——链路双重验证全通（ai exec 直测 + daemon 真实消息「桥接成功」）；**已接 2 单**（买家 #1791，象征价 0.00001 USDT 测试单）已交付上链 `submitted`（3 天不验收自动过）；样例交付物《2024 全球新兴电动汽车市场趋势调研报告》（`report_cn.md` + `ev_chart.png`）
+- **风险**：daemon 无开机自启（关机即掉线接不到单，装自启需管理员权限）；营收未验证（真实付费单 = 0）
+- 详见 [OKX A2A Agent 服务店铺](features/okx-a2a.md)
+

@@ -264,6 +264,10 @@ run_python({"code": "...", "remote_instance_id": "agt-192-168-1-2-8000"})   ← 
 
 **三层组网通道（2026-08 定稿）**：工具级（任意调用带 remote_instance_id，远程零 LLM 成本）/ 消息级异步（`remote_message`，通报派活）/ 消息级同步（`remote_ask`，问它才知道的事）——详见 [跨实例消息通信](#跨实例消息通信remote_message--remote_ask2026-08)。
 
+### 实例战例：claw :50051——OKX A2A 服务店铺宿主（2026-09-19）
+
+**实例战例：claw :50051——OKX A2A 服务店铺宿主（2026-09-19）**：组网首个「对外营业」实例——claw（workspace `D:\AI\ClawTasks`）在 OKX.AI Agentic 服务市场注册 ASP 店铺，OKX okx-a2a daemon 的执行后端被垫片 `a2a_bridge.py` 换成本机 agt（WS 注入 + 回执文件回传）；店铺/服务/订单/链路详见 [OKX A2A Agent 服务店铺](../features/okx-a2a.md)。本轮主 Agent 经 `remote_instance_id="claw"` 路由 list_dir 巡检其 workspace **根目录正常**；但子目录路径（`D:\AI\ClawTasks\tools`）读取报「拒绝访问 workspace 外的路径」——根目录与子路径的边界判定不一致，疑似路由 workspace 解析的边界 case，待查。
+
 ## 跨实例消息通信（remote_message / remote_ask，2026-08，commit 398a60a）
 
 **用户提案**：跨实例工具调用直接调工具即可（工具级直执行），而跨实例通信（发消息让对方带上下文干活）还需要 run_python 手写 WS 客户端——为什么不做一个工具？直接传实例 id（提案时名 server_id，即今 remote_instance_id）和要发送的消息，异步继续。

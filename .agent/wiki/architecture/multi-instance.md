@@ -151,6 +151,28 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 
 「前端新、服务旧」错位从此一眼定位。顺手验收路径：`/restart` 后移除 offline 条目（如 `agt-68j4mxgibv-8000-cnb-run`）→「＋ 添加」重新探测重连，即新控件完整闭环。
 
+### ### 断连态一键重连：🔴 才出现的「🔄 重连」按钮（2026-09-18，用户提案，commit 7b2f2a9）
+
+**用户提案**：「团队抽屉里有的远端实例显示是红色断连状态，是不是应该有个重连按钮」——此前看板只给「✕ 移除」，offline 条目（对端关机/网络抖动/会话存档恢复时的 offline 兜底）唯一的复活路径是移除后重新「＋ 添加」，等于把连接记录当一次性用品。
+
+**卡片形态**（`renderTeamDash()` 远程分组，`src/static/index.html`）：
+
+```
+🟢 agt-8000   http://127.0.0.1:8000                              ✕ 移除
+🔴 director   http://localhost:8100        🔄 重连               ✕ 移除
+                                            ↑ 仅 status!=='online' 时渲染
+```
+
+- 状态图标沿用三态：`online → 🟢` / `offline → 🔴` / 其它 → `⚪`（`(r.status||'?').toLowerCase()`）
+- 按钮条件渲染 `${st !== 'online' ? '<button onclick="remoteReconnect(...)">🔄 重连</button>' : ''}`——在线的实例不出现（避免误断重探）
+- `remoteReconnect(sid, url)`：toast 提示「正在重连 …」→ 重探 → 成功 toast 出 connect 的人性化文案（工具数 / session / model）+ `renderTeamDash()`；仍不通则提示「检查目标实例是否已启动」（红态不变）
+
+**后端零改动——关键设计**：重连就是**再调一次 `POST /api/remote/add`**。`remote_tools.connect` 本身即「探测 /api/status 成功才注册」，且**幂等**（同 url 已注册 → 复用现有 id，offline → online 刷新；探测失败不改动现有表条目）——同 id 同 url 重调天然等价于「重连」，无需新端点，也不需要 disconnect→connect 两步（后者会先清表，失败即丢记录）。单源原则继续：组网管理面只有 remote_tools 一处。
+
+**踩坑自省（JS 语法护栏）**：本轮编辑中 `\n` 被误写成**字面两字符**（`const st = (r.status||'?')\n      .toLowerCase()`）→ `node --check` 当场报 `Invalid or unexpected token`，第二笔 edit 改回单行即修复。**代价极小的护栏**：每次改 `index.html` 的 JS 后跑 `node --check`（或等价语法检查），别靠肉眼。
+
+**生效**：**纯前端改动**（端点 2026-09-14 就已存在）——`Ctrl+F5` 强刷即见，后端无需 `/restart`。旧进程若报 404，走上一节「进程是旧版本」提示链。
+
 ## remote_servers 连接表串台：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit aa73942，用户实锤）
 
 **用户实锤**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例，这个读取是不是串台了？」——9000 连了 director/scriptwriter，director 实例（8100）自己启动时也自动连上了 director（其中还是**自连**）。

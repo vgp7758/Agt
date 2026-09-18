@@ -1032,3 +1032,11 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **remote_servers 二轮：连接表改存 session 存档 extra_state（2026-09-18 · 二，commit `a2cd6fc`，用户裁定「还是存到session存档里吧」）**：一轮的实例本地文件方案（`.agent/remote_servers.json`，aa73942）当轮推翻——现行与 scheduler 持久化同款模式：`REMOTE_SERVERS` 运行时真源；connect/disconnect 后 `_persist_current()` 只调 `session.save()`（`capture_runtime_state` 收集 remote_servers 进 extra_state）；恢复走 `set_session → restore_runtime_state → restore_servers`（先清表→后台探测入表，自连过滤/offline 兜底；存档无键一次性迁移全局遗留份）。**语义：切会话=切组网、新会话空表、读档连接表跟着回来**；`reconnect_all` 删除（启动重连入口收拢，恢复统一走 set_session 标准恢复点——scheduler 持久化三 bug 教训的模式复用）——见 [multi-instance](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-18 · 九 · 团队看板远程实例重连按钮）
+
+- 团队抽屉「🌐 远程实例」卡片：offline（🔴）条目新增「🔄 重连」按钮——此前只能先「✕ 移除」再「＋ 添加」（commit `7b2f2a9`，用户提案）
+- **后端零改动**：重连 = 再调一次 `POST /api/remote/add`——`connect` 本就幂等（同 url 复用 id、offline → online 刷新；探测失败不动现有条目），不需 disconnect 两步
+- **生效**：纯前端（`src/static/index.html`）——`Ctrl+F5` 即见，无需 `/restart`；旧进程 404 走「进程是旧版本」提示链
+- 顺带自省：误把 `\n` 写成字面两字符被 `node --check` 当场抓出 —— 改 JS 后跑语法检查是必要护栏
+- 详见 [多实例组网 · 断连态一键重连](architecture/multi-instance.md)
+

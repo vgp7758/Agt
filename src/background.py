@@ -284,6 +284,9 @@ class Scheduler:
                        message=message, action=action, repeat=repeat, at_origin=at_origin,
                        next_fire=time.time() + seconds)
         with self._lock:
+            old_id = self._by_name.get(name)
+            if old_id:
+                self._schedules.pop(old_id, None)   # 同名覆盖先摘旧（2026-09-18 修：残留=双任务各投一次，pre_post 重复投递实锤）
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
         self._persist()
@@ -320,6 +323,9 @@ class Scheduler:
                        message=message, action=action, repeat=bool(repeat), at_origin=s,
                        next_fire=fire)
         with self._lock:
+            old_id = self._by_name.get(name)
+            if old_id:
+                self._schedules.pop(old_id, None)   # 同名覆盖先摘旧（2026-09-18 修：残留=双任务各投一次，pre_post 重复投递实锤）
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
         self._persist()
@@ -426,6 +432,9 @@ class Scheduler:
                        message=message, action=action, repeat=rep, daily=daily,
                        at_origin=s, next_fire=when)   # at_origin=at 原始参数（恢复重算锚点）
         with self._lock:
+            old_id = self._by_name.get(name)
+            if old_id:
+                self._schedules.pop(old_id, None)   # 同名覆盖先摘旧（2026-09-18 修：残留=双任务各投一次，pre_post 重复投递实锤）
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
         self._persist()

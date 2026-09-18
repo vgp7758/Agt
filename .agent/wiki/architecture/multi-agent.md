@@ -662,8 +662,6 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 ### 播种源再对齐：recap_gen 运行版迭代回 src/workflows/（2026-09-17，commit 5992929）
 
-### 播种源再对齐：recap_gen 运行版迭代回 src/workflows/（2026-09-17，commit 5992929）
-
 上文对话式组装节断言的「`.agent/workflows/recap_gen.xml`（生效）+ `src/workflows/recap_gen.xml`（播种）双份一致」后来又被打破——运行版后续迭代未回写播种源。本轮全量对账（`diff -rq .agent/workflows/ src/workflows/`）发现 recap_gen / extract_keywords / wiki_auto_maintenance 三文件落后，一并 cp 对齐 + filecmp 逐字节验证，随补丁分发（详见 [pasted-log · 播种源对齐](../features/pasted-log.md)）。教训：双份一致只保证「当时」，不保证「以后」——发布前对账是必要工序。
 
 ## assembly DSL（上下文装配配方）

@@ -76,8 +76,6 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 #### 第三轮：静态化第一档——_REMOTE_ROUTABLE 白名单恒定注入（2026-09-17，用户设计）
 
-#### 第三轮：静态化第一档——_REMOTE_ROUTABLE 白名单恒定注入（2026-09-17，用户设计）
-
 **用户裁定**：「其它工具只对第一档追加 remote_instance_id 参数（MCP 不加了，因为远端实例的 MCP 可能和本地不同，需要调用的话走 remote_call_tool），这样需要添加该参数的工具数量减少了，可以不用根据是否有 remote agent instance 去动态调整工具 schema 了——连接远端实例前后工具 schema 保持不变」。
 
 **三代演进**：
@@ -153,13 +151,35 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 
 「前端新、服务旧」错位从此一眼定位。顺手验收路径：`/restart` 后移除 offline 条目（如 `agt-68j4mxgibv-8000-cnb-run`）→「＋ 添加」重新探测重连，即新控件完整闭环。
 
+## remote_servers 连接表串台：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit aa73942，用户实锤）
+
+**用户实锤**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例，这个读取是不是串台了？」——9000 连了 director/scriptwriter，director 实例（8100）自己启动时也自动连上了 director（其中还是**自连**）。
+
+**根因**：remote_servers 连接表持久化在【全局】`~/.agt/settings.json` 的 `remote_servers` 键——本机所有实例共享同一份，`_load_persisted` / `_save_persisted` 都读写它。后果两连：① A 实例连了谁，B 实例启动 `reconnect_all` 就自动连谁（**读取串台**）；② 表里有指向自己的 url 时造成**自连**。
+
+**修复三层**：
+
+| 层 | 内容 |
+|---|---|
+| **存储本地化** | 新增 `_local_store_path()` = `cwd/.agent/remote_servers.json`（cwd=workspace，各 repo 实例天然隔离；同 repo 多实例共享可接受——通常连的也是同一批）；`_save_persisted` 只写本地，不再碰全局 |
+| **兼容迁移** | 本地份不存在 → 一次性读全局 settings 旧值（此后独立演化）——存量连接不丢 |
+| **自连过滤** | `_is_self_url(url)`：用 `MY_URL`（server 启动时设 `http://<lan_ip>:<port>`）端口比对——host 为 localhost/127.0.0.1 时端口相同即自己，同 lan ip 同端口亦为自己；CLI 裸进程（MY_URL 空）不过滤。**三处生效**：加载两路出口都过滤（全局迁移路上的自连项别再进表）/ `reconnect_all` 跳过 / `connect()` 显式自连**直接拒绝**——文案引导「远程路由的本意是操作【另一个】实例；本机执行直接用工具（remote_instance_id 不填）」 |
+
+`.gitignore` 加 `.agent/remote_servers.json`（实例状态不提交；`.agent/` 不能整目录忽略——workflows/agents/skills/wiki 要提交，精确加单条）。
+
+与 [repo 级覆盖](#配置-repo-级覆盖角色实例认知配置双隔离的地基2026-08-31commit-10d717e)（10d717e）同族原则：**实例自己的状态存自己的 workspace，全局 `~/.agt/` 只是兜底**——组网连接表也归入这一隔离。
+
+**验证（6 例全绿）**：① 自连判定 5 例（127.0.0.1:9000 / localhost:9000 / lan:9000 = 自己；:8000 / :8100 = 否）② CLI（MY_URL 空）不过滤 ③ 本地持久化往返 ④ 本地删 → 迁移读全局旧值 ⑤ director 实例读全局遗留表 → 自连项被过滤（只剩 `{agt-8000, scriptwriter}`）⑥ connect 自连 → `[拒绝自连]` 文案。
+
+**生效**：`/restart`——本机各实例启动时各自读写自己的 `.agent/remote_servers.json`；首次启动从全局遗留表迁移（自连项迁移时即被过滤，不会再连自己）。
+
 ## 组件清单
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
 | `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
-| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + settings.json `remote_servers` 持久化（启动自动重连/失败标 offline）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
+| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **`cwd/.agent/remote_servers.json` 实例本地持久化**（启动自动重连/失败标 offline；2026-09-18 起弃全局 settings 共享——串台修复 + 自连过滤，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id——**静态化第一档**（2026-09-17）：只认 `_REMOTE_ROUTABLE` 白名单 30 个、**恒定注入**（不看是否组网、无 enum）——连接前后 schema byte-stable 不断缓存；deepcopy 不污染原件。见 [静态化第一档章节](#第三轮静态化第一档_remote_routable-白名单恒定注入2026-09-17用户设计) |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + remote_instance_id 路由使用规则；**无连接渲染为空串不注入**（零噪声） |
@@ -180,7 +200,7 @@ read_file({"path": "assets/scene.unity", "remote_instance_id": "agt-192-168-1-2-
 run_python({"code": "...", "remote_instance_id": "agt-192-168-1-2-8000"})   ← 远程 CPU/GPU
 ```
 
-连接落盘 settings.json（重启自动重连；远程关机标 offline，恢复后探测通过自动转 online）。
+连接落盘 `cwd/.agent/remote_servers.json`（2026-09-18 起实例本地存储，全局 settings 旧值仅作一次性迁移兜底——见[串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)；重启自动重连；远程关机标 offline，恢复后探测通过自动转 online）。
 
 **auto server_id（2026-08，commit 7d7d1ab）**：实例 id 可省略（`remote_connect` 的 remote_instance_id 形参），从 url 自动生成——本地 url（127.0.0.1/localhost/::1）→ `agt-{port}`（**隧道场景端口是唯一区分维度**——如 SSH 隧道 `127.0.0.1:8300 → 远端容器:8000`，一个本地端口对一远端）；远程主机 → `agt-{host}-{port}`（清洗非法字符）；冲突递增 `-2/-3`。**幂等**：同 url 已在表 → 复用现有 id（offline 恢复/重复连接不再报错）；显式改名（`remote_instance_id="comfy"` 连已注册的 url）→ 移除同 url 旧 id 条目——url 与 id **一对一**，防双 id 并存混乱。工具 schema 里 remote_instance_id 不再必填，docstring 写明「可省略——自动生成」。
 

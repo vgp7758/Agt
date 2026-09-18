@@ -1018,3 +1018,11 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 用户问诊「上一轮创建、下一轮删掉的文件，前一轮气泡里的引用怎么处理」→ 结论：气泡是事件时刻的快照不重绘，但四形态各有降级——盘点暴露缺口：音频/视频框无 onerror（404 静默空框）、图框 `.err` 灰显无文字说明。commit `deded59` 补齐：`.asset-box.err::after` 统一「⚠️ 文件已不存在」提示（图框同受益）+ `<audio>`/`<video>` onerror → 宿主 `.err` + 移除控件（视频框 ↗ 链接保留）。触发边界：live 当轮不触发，只在刷新/读档/翻页重渲染时出现。纯前端 Ctrl+F5 生效。详见 [气泡交互 · 资产框 error 降级](features/bubble-interaction.md#资产框-error-降级音频视频框-onerror--文件已不存在统一提示2026-09-18用户问诊commit-deded59)。
 
+## 快速事实增补（2026-09-18 · 六 · scheduler 持久化三 bug——extra_state 直写被覆盖式重建抹掉 + 恢复时机恒空跑）
+
+- **scheduler 持久化三 bug：meta.json 从未出现 schedules（2026-09-18 · 二，用户实锤「重启电脑后任务全没了」，commit `e22062c`）**：v0.29.4 的持久化（95649e3）实际从未生效，三 bug 叠加——①**覆盖式重建抹掉直写值**（主凶）：`_persist()` 直写 `session.extra_state["schedules"]`，但 session 每次落盘前 `_capture_state()` 用 Agent 收集清单【整体覆盖】extra_state，清单里没有 schedules → 任意落盘即抹掉（与 77 轮 _agent_meta 丢失同源：extra_state 写权归 provider）；②**恢复时机错误**：Scheduler 建于 `Agent.__init__` L296 早于 session load，`_restore()` 读到空 extra_state 恒空跑；③存量任务从未落盘、重启即沉没。修复=单一真源架构：新增 `Scheduler.export_state()`、`capture_runtime_state` 收集清单加入 schedules 键（与 background_tasks 同款）、`_persist()` 只调 `sess.save()`、恢复挂 `restore_runtime_state`（set_session/load 后标准恢复点）按 at_origin/daily 重算 next_fire。mock 全链路验证（覆盖式重建后 2 条存活 + 模拟重启相位重算）全绿；`/restart` 生效——之后新设任务才真正跨重启存活——见 [background-scheduler · 持久化后记](features/background-scheduler.md#定时任务持久化sessionextra_state-落盘--at_origin-相位锚2026-09-18commit-95649e3)
+
+## 快速事实增补（2026-09-18 · 七 · remote_servers 串台——连接表实例本地化 + 自连过滤）
+
+- **remote_servers 连接表串台修复：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit `aa73942`，用户实锤）**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例」——根因是连接表持久化在【全局】`~/.agt/settings.json` 的 `remote_servers` 键，本机所有实例共享同一份：9000 连的 director/scriptwriter 被 director 实例自己读到自动重连（其中还是自连）。修复三层：①存储改 `cwd/.agent/remote_servers.json`（各 repo 实例天然隔离；同 repo 多实例共享可接受——通常连的也是同一批）；②本地无则一次性迁移读全局旧值（存量连接不丢）；③`_is_self_url` 自连过滤（`MY_URL` 端口比对）——加载两路出口 + `reconnect_all` 跳过 + `connect()` 显式自连直接拒绝（文案引导本机执行）。`.gitignore` 加该文件（实例状态不提交，`.agent/` 不能整目录忽略）。与 repo 级覆盖（10d717e）同族原则：实例自己的状态存自己 workspace、全局只是兜底。引擎层改动 `/restart` 生效——见 [multi-instance · 串台修复](architecture/multi-instance.md)
+

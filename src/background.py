@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import collections
+import logging
 import os
 import re
 import signal
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+_LOG = logging.getLogger("agt.background")
 _LOG_CAP = 1000  # 每个服务的滚动日志行数上限
 _POLL = 0.5      # 调度器轮询间隔（秒）
 
@@ -237,6 +239,8 @@ class Schedule:
     action: Optional[dict] = None   # {"tool":..., "args":...} 到点执行拿结果
     repeat: bool = True             # interval 是否循环；at+daily 每日闹钟
     daily: str = ""                 # at 每日模式 "HH:MM[:SS]"（每日闹钟重算锚点）
+    at_origin: str = ""             # at 原始参数（ISO）；at 未填的 interval 记创建时刻——
+                                    # 持久化相位锚点（2026-09-18·用户提案：恢复时重算不漂移）
     next_fire: float = 0.0
 
 
@@ -262,22 +266,41 @@ class Scheduler:
         self._agent = agent
         self._schedules: dict = {}   # id -> Schedule
         self._by_name: dict = {}     # name -> id
-        self._lock = threading.Lock()
+        # RLock：_loop 触发删除在锁内调 _persist（自身再拿锁）——Lock 不可重入会死锁
+        self._lock = threading.RLock()
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        self._restore()   # session.extra_state["schedules"] 恢复（agent 已 load session 后建 Scheduler）
 
     def add_interval(self, name, seconds, message="", action=None, repeat=True) -> str:
         seconds = float(seconds)
         if seconds <= 0:
             return "[every_seconds 必须 > 0]"
+        # at 未填默认 now（2026-09-18·用户语义：假装第一次已在 now 触发过）——记为相位锚点，
+        # 持久化恢复时按它重算下一个未来相位点（相位不漂移）
+        at_origin = datetime.now().isoformat(timespec="seconds")
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="interval", spec=seconds,
-                       message=message, action=action, repeat=repeat,
+                       message=message, action=action, repeat=repeat, at_origin=at_origin,
                        next_fire=time.time() + seconds)
         with self._lock:
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
+        self._persist()
         return f"✅ 定时任务「{name}」已加：每 {seconds:g}s 触发（{'循环' if repeat else '单次'}）"
+
+    @staticmethod
+    def _phase_next(origin_iso: str, sec: float) -> float:
+        """at_origin（ISO）+ 周期 → 下一个未来相位点；origin 缺失/解析失败 → now+sec 兜底。"""
+        try:
+            import math
+            phase_ts = datetime.fromisoformat(str(origin_iso).replace("Z", "+00:00")).timestamp()
+            now = time.time()
+            if phase_ts < now:
+                return phase_ts + math.ceil((now - phase_ts) / sec) * sec
+            return phase_ts
+        except Exception:
+            return time.time() + sec
 
     def add_interval_at(self, name, seconds, at_iso, message="", action=None, repeat=True) -> str:
         """组合模式（2026-09-18·用户提案）：every_seconds + at + repeat=True →
@@ -288,26 +311,90 @@ class Scheduler:
             return "[every_seconds 必须 > 0]"
         s = (at_iso or "").strip()
         try:
-            phase = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            datetime.fromisoformat(s.replace("Z", "+00:00"))
         except Exception as e:
             return (f"[时间格式错误] 组合模式要求 at 为完整 ISO（如 2026-07-20T17:30:00，"
                     f"需含日期；每日闹钟短格式 HH:MM 请单独使用不配 every_seconds）：{e}")
-        phase_ts = phase.timestamp()
-        now = time.time()
-        if phase_ts < now:   # at 已过去：对齐到下一个未来相位点（at + ceil((now-at)/sec)*sec）
-            import math
-            n = math.ceil((now - phase_ts) / seconds)
-            fire = phase_ts + n * seconds
-        else:
-            fire = phase_ts
+        fire = self._phase_next(s, seconds)
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="interval", spec=seconds,
-                       message=message, action=action, repeat=bool(repeat),
+                       message=message, action=action, repeat=bool(repeat), at_origin=s,
                        next_fire=fire)
         with self._lock:
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
+        self._persist()
         when = datetime.fromtimestamp(fire).strftime("%m-%d %H:%M:%S")
         return f"✅ 定时任务「{name}」已加：首次 {when}（每 {seconds:g}s {'循环' if repeat else '单次'}，相位 {s}）"
+
+    def _persist(self):
+        """定时任务持久化到 session 的 extra_state["schedules"]（随 meta.json 落盘）。
+        存【任务定义】（at_origin 锚点）而非 next_fire（派生量）——恢复时重算相位。
+        2026-09-18·用户提案：此前 scheduler 纯内存，重启全丢。"""
+        try:
+            sess = getattr(self._agent, "session", None)
+            if sess is None:
+                return
+            items = []
+            with self._lock:
+                for sch in self._schedules.values():
+                    items.append({"name": sch.name, "kind": sch.kind, "spec": sch.spec,
+                                  "at_origin": sch.at_origin, "message": sch.message,
+                                  "action": sch.action, "repeat": sch.repeat, "daily": sch.daily})
+            sess.extra_state["schedules"] = items
+            try:
+                sess.save()   # 主动落 meta.json（小体量全量写；失败仅告警不炸调用方）
+            except Exception as e:
+                _LOG.warning("schedules meta 落盘失败：%s", e)
+        except Exception as e:
+            _LOG.warning("schedules 持久化失败：%s", e)
+
+    def _restore(self):
+        """从 session.extra_state["schedules"] 恢复定时任务（agent 恢复 session 后
+        Scheduler 创建时读）。相位重算：interval 按 at_origin 对齐下一个未来相位点；
+        at+repeat（每日）重算 _next_daily_fire；at 单次已过去的丢弃（触发过了）。"""
+        try:
+            sess = getattr(self._agent, "session", None)
+            items = (getattr(sess, "extra_state", None) or {}).get("schedules")
+            if not items:
+                return
+            n = 0
+            for it in items:
+                try:
+                    if it.get("kind") == "interval":
+                        sec = float(it.get("spec") or 0)
+                        if sec <= 0:
+                            continue
+                        origin = it.get("at_origin", "")
+                        s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
+                                     kind="interval", spec=sec, message=it.get("message", ""),
+                                     action=it.get("action"), repeat=bool(it.get("repeat", True)),
+                                     at_origin=origin, next_fire=self._phase_next(origin, sec))
+                    else:   # kind == "at"：每日（repeat+daily）或单次
+                        daily, rep = it.get("daily", ""), bool(it.get("repeat", False))
+                        if rep and daily:
+                            fire = _next_daily_fire(daily)
+                            s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
+                                         kind="at", spec=fire, message=it.get("message", ""),
+                                         action=it.get("action"), repeat=True, daily=daily,
+                                         at_origin=it.get("at_origin", ""), next_fire=fire)
+                        else:
+                            fire = float(it.get("spec") or 0)
+                            if fire <= time.time():
+                                continue   # 单次已触发过——不恢复
+                            s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
+                                         kind="at", spec=fire, message=it.get("message", ""),
+                                         action=it.get("action"), repeat=False,
+                                         at_origin=it.get("at_origin", ""), next_fire=fire)
+                    with self._lock:
+                        self._schedules[s.id] = s
+                        self._by_name[s.name] = s.id
+                    n += 1
+                except Exception:
+                    continue
+            if n:
+                _LOG.info("定时任务恢复 %d 个（meta.json extra_state.schedules）", n)
+        except Exception as e:
+            _LOG.warning("schedules 恢复失败：%s", e)
 
     def add_at(self, name, dt_iso, message="", action=None, repeat=None) -> str:
         """到点任务。两种格式：
@@ -336,10 +423,12 @@ class Scheduler:
             else:
                 daily = ""
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="at", spec=when,
-                       message=message, action=action, repeat=rep, daily=daily, next_fire=when)
+                       message=message, action=action, repeat=rep, daily=daily,
+                       at_origin=s, next_fire=when)   # at_origin=at 原始参数（恢复重算锚点）
         with self._lock:
             self._schedules[sch.id] = sch
             self._by_name[name] = sch.id
+        self._persist()
         disp = f"每天 {daily}" if rep else f"到 {s} 触发一次"
         return f"✅ 定时任务「{name}」已加：{disp}"
 
@@ -350,6 +439,7 @@ class Scheduler:
                 return f"[无此任务] {name_or_id}"
             sch = self._schedules.pop(sid)
             self._by_name.pop(sch.name, None)
+        self._persist()
         return f"🗑 已取消任务「{sch.name}」"
 
     def snapshot(self) -> list:
@@ -439,6 +529,8 @@ class Scheduler:
                     self._agent.push_message(self._produce(sch), source=sch.name)
                 except Exception:
                     pass
+            if fire:
+                self._persist()   # 单次任务触发完删除——持久化同步消失（RLock 嵌套安全）
             time.sleep(_POLL)
 
     def stop(self):

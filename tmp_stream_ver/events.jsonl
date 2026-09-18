@@ -1,0 +1,13 @@
+{"event": "turn_start", "user": "开始施工第一步", "images": []}
+{"event": "step", "reasoning": "思考1", "call_ids": ["c1"], "changes": [["c1", [{"file": "f1.py", "change": "modified"}]]]}
+{"event": "turn_end", "answer": "第1步完成", "answer_reasoning": "", "summary": "", "changed": [{"file": "f1.py", "change": "modified"}]}
+{"event": "turn_start", "user": "继续第二步", "images": []}
+{"event": "step", "reasoning": "思考2", "call_ids": ["c2"], "changes": [["c2", [{"file": "f2.py", "change": "modified"}]]]}
+{"event": "turn_end", "answer": "第2步完成", "answer_reasoning": "", "summary": "", "changed": [{"file": "f2.py", "change": "modified"}]}
+{"event": "turn_start", "user": "继续第三步", "images": []}
+{"event": "step", "reasoning": "思考3", "call_ids": ["c3"], "changes": [["c3", [{"file": "f3.py", "change": "modified"}]]]}
+{"event": "turn_end", "answer": "第3步完成（收工）", "answer_reasoning": "", "summary": "", "changed": [{"file": "f3.py", "change": "modified"}]}
+{"event": "turn_start", "user": "重启后继续第三步", "images": []}
+{"event": "turn_end", "answer": "（被中断）", "answer_reasoning": "", "summary": ""}
+{"event": "turn_start", "user": "重启后继续第三步", "images": []}
+{"event": "turn_end", "answer": "（被中断）", "answer_reasoning": "", "summary": ""}

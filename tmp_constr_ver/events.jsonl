@@ -1,0 +1,6 @@
+{"event": "turn_start", "user": "q1", "images": []}
+{"event": "turn_end", "answer": "a1", "answer_reasoning": "", "summary": "", "changed": []}
+{"event": "turn_start", "user": "继续施工第 2 步", "images": []}
+{"event": "turn_start", "user": "q1", "images": []}
+{"event": "turn_end", "answer": "a1", "answer_reasoning": "", "summary": "", "changed": []}
+{"event": "turn_start", "user": "继续施工第 2 步", "images": []}

@@ -1,0 +1,62 @@
+From 553d2cd1480665370a25619a9cbf24e7bd0c67a5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E9=A9=AC=E5=BB=BA=E5=BC=BA?= <vgp123@foxmail.com>
+Date: Thu, 17 Sep 2026 18:52:16 +0800
+Subject: [PATCH 1/2] =?UTF-8?q?fix(workflow):=20extract=5Fkeywords=20?=
+ =?UTF-8?q?=E7=AD=89=E5=BE=85=E5=BE=AA=E7=8E=AF=E5=9C=A8"claim=20=E6=97=B6?=
+ =?UTF-8?q?=20pending=E3=80=81=E9=A6=96=E8=BD=AE=20recheck=20=E5=B7=B2?=
+ =?UTF-8?q?=E6=9C=89=E5=80=BC"=E6=97=B6=E6=AD=BB=E5=BE=AA=E7=8E=AF?=
+ =?UTF-8?q?=E8=87=B3=E8=B6=85=E6=97=B6=E8=BF=94=E5=9B=9E=E7=A9=BA=E8=A1=A8?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+现象（run 5c2c6127）：cache_claim 返回 pending → wait_extract 循环 recheck 每轮都
+拿到真实关键词数组（hit=true），但 90 轮×2s 全部 continue 跑满 180s，最终
+keywords=[]。
+
+根因：ready?(AND) 条件2 引用跨轮状态变量 __entry__.find（初值 False），而置
+find=true 的 setvar(413345) 只挂在 dispatch 的 true_1 分支（recheck.value ==
+"pending" 时才走）。本例并发提取方在 claim 与首轮 recheck 之间（2s sleep 内）
+就已写回真实值——value 从未等于 "pending"，find 永远停在 False，AND 恒
+false → 永不 break。监控证据：ready?.results=[true,false]（条件1 值非 pending
+= true、条件2 find=false）；90 轮 all_outputs 全为非空数组。
+
+修复：ready? 条件2 改引用本轮 570563.hit（当轮自包含判断，不依赖跨轮置位）——
+拿到真实值的当轮即 break（value=真实数组 且 hit=true）；value 仍为 pending 时
+条件1 false 照旧继续等待。顺带删掉 413345 的 keywords 脏写（pending 轮会把
+keywords 置成 "pending" 字符串，超时路径聚合器会返回脏值而非空表）。
+
+验证（test_kw_wait 复刻循环结构，loopCount=5）：
+- 复现：首轮即真实值 → bug 版 5 轮全空转 keywords=[]；修复版第 0 轮 break 取到数组
+- 回归：先 pending 轮后有值轮 → 修复版第 1 轮 break 正常
+- 生产 claimed 路径（本地模型提取）整体无恙
+
+Co-authored-by: Agt <vgp123@foxmail.com>
+---
+ .agent/workflows/extract_keywords.xml | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/.agent/workflows/extract_keywords.xml b/.agent/workflows/extract_keywords.xml
+index ba1a3a9..628bdf0 100644
+--- a/.agent/workflows/extract_keywords.xml
++++ b/.agent/workflows/extract_keywords.xml
+@@ -118,7 +118,7 @@
+   </node>
+       <node id="1057177" type="AND" title="ready?" x="1320" y="80">
+     <branch><cond op="2" left="570563.value" right="pending" left_type="any"/></branch>
+-    <branch><cond op="11" left="__entry__.find" right="" left_type="boolean"/></branch>
++    <branch><cond op="11" left="570563.hit" right="" left_type="boolean"/></branch>
+     <out name="result" type="boolean"/>
+     <out name="results" type="list" itemType="boolean"/>
+     <batch enabled="false"/>
+@@ -132,7 +132,6 @@
+   </node>
+       <node id="413345" type="setvar" title="置变量(循环)" x="1920" y="172">
+     <in name="find" left="find.find" left_type="string" right="ref:570563.hit" right_type="boolean"/>
+-    <in name="keywords" left="" left_type="string" right="ref:926184.raw" right_type="list"/>
+   </node>
+       <node id="926184" type="plugin" title="pass_through" x="1020" y="80" toolName="pass_through">
+     <in name="input" type="any" ref="570563.value"/>
+-- 
+2.38.1.windows.1
+

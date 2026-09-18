@@ -1,0 +1,19 @@
+{
+  "name": "A轮对话完成",
+  "created_at": 1789576964.2433915,
+  "system": "sys",
+  "global_summary": "",
+  "recent_window_turns": 4,
+  "max_steps_per_turn": 80,
+  "extra_state": {
+    "constr_start_idx": 0
+  },
+  "tier_boundaries": [],
+  "fold_count": 0,
+  "system_ledger": {
+    "last_text": "sys\n\n【回答风格·必须遵守】每次完成本轮任务后，你的最终回答【必须】使用以下固定格式：\n  第一行：用一句话总结你做了什么（30 字以内，直接陈述，不加标题符号）\n  第二行：---\n  第三行起：详细的 Markdown 回答正文（表格/代码块/列表均可）\n  正文末尾再单独一行 ---\n  注: Markdown中可通过 [!名称](path/to/file) 的方式表示引用的资产（图片/音频自动渲染、文本文件点击可打开预览抽屉），或用 <https://xx.xx.xx> 的方式插入链接。\n若本轮确实执行了任务（而非无法完成），就必须以上述格式结尾——这是系统约定，不是建议。",
+    "appends": [],
+    "dirty": false
+  },
+  "saved_at": 1789576974
+}

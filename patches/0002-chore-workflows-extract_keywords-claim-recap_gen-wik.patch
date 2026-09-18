@@ -1,0 +1,342 @@
+From 5992929596fed5f57e04ba55e6b0ce96b719f8af Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E9=A9=AC=E5=BB=BA=E5=BC=BA?= <vgp123@foxmail.com>
+Date: Thu, 17 Sep 2026 18:57:37 +0800
+Subject: [PATCH 2/2] =?UTF-8?q?chore(workflows):=20=E6=92=AD=E7=A7=8D?=
+ =?UTF-8?q?=E6=BA=90=E5=90=8C=E6=AD=A5=E8=BF=90=E8=A1=8C=E7=89=88=E2=80=94?=
+ =?UTF-8?q?=E2=80=94extract=5Fkeywords(claim=20=E4=BA=92=E6=96=A5+?=
+ =?UTF-8?q?=E7=AD=89=E5=BE=85=E5=BE=AA=E7=8E=AF=E4=BF=AE=E5=A4=8D)=20/=20r?=
+ =?UTF-8?q?ecap=5Fgen=20/=20wiki=5Fauto=5Fmaintenance?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+src/workflows/ 是随包播种资产，长期落后于 .agent/workflows/ 运行版：
+- extract_keywords：旧 read→write-pending 模式（有毫秒级双 miss 窗口）→ 同步为
+  claim 原子互斥版（含本 commit 前置的 553d2cd 等待循环自包含就绪判定修复）
+- recap_gen / wiki_auto_maintenance：运行版功能迭代未回播种源，一并按运行版对齐
+
+同步后 src/ 与 .agent/ 三个文件逐字节一致（filecmp 验证）。
+
+Co-authored-by: Agt <vgp123@foxmail.com>
+---
+ src/workflows/extract_keywords.xml      | 78 ++++++++++----------
+ src/workflows/recap_gen.xml             | 95 ++++++++++++++++++++-----
+ src/workflows/wiki_auto_maintenance.xml |  4 +-
+ 3 files changed, 119 insertions(+), 58 deletions(-)
+
+diff --git a/src/workflows/extract_keywords.xml b/src/workflows/extract_keywords.xml
+index 9a7163a..628bdf0 100644
+--- a/src/workflows/extract_keywords.xml
++++ b/src/workflows/extract_keywords.xml
+@@ -1,20 +1,34 @@
+-<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + pending 互斥）：kv_cache_read 按 user_message 查缓存，命中真实值直接返回；读到 pending（并发方正在提取）→ 等待循环（2s 轮询×15 次）直到对方写回后取走（setvar→break 携带值）；未命中则写 pending 占位 → local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。同轮多个 before_turn 工作流共用，只花第一次的 LLM 调用（hidden，仅供 subworkflow 引用）" hidden="true">
++<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + claim 原子互斥）：kv_cache_claim 按 user_message 原子判定——hit（命中真实值）直接返回；pending（并发方正在提取）→ 等待循环（2s 轮询×90 次）直到对方写回后取走；claimed（本方独占提取权，已原子占位）→ local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。claim 的 check-and-set 在进程级锁内完成——同 hook 双工作流并发时恰一个提取方（旧 read→write-pending 两节点模式有毫秒级双 miss 窗口：双双打本地单并发模型必炸一个，2026-09-13 用户实测修复）；pending 带 150s TTL——提取方死亡后下一 claim 方自动接管（hidden，仅供 subworkflow 引用）" hidden="true">
+   <node id="100001" type="start" title="Entry" x="120" y="80">
+     <out name="user_message" type="string" required="true"/>
+   </node>
+-  <node id="110001" type="plugin" title="cache_read" x="414.83643865819363" y="133.7010379547859" toolName="kv_cache_read">
+-    <in name="key" type="string" ref="100001.user_message"/>
++  <node id="115001" type="code" title="strip_pasted" x="270" y="80">
++    <in name="text" type="string" ref="100001.user_message"/>
++    <code language="3"><![CDATA[async def main(args) -> dict:
++    # 大段粘贴剥离（用户提案 2026-09-13）：WebUI 往输入框粘贴大段文本（≥6 行/≥400 字符）
++    # 时自动包裹 <pasted-log>；这里剥掉这种块——大段日志不进关键词提取（本地小模型对日志
++    # 技术词敏感易带偏），user_message 原文照常归档/投影（主 Agent 看得到完整日志）。
++    import re
++    t = str(args.params.get("text") or "")
++    t = re.sub(r"<pasted-log>[\s\S]*?</pasted-log>", "", t).strip()
++    return {"text": t}]]></code>
++    <out name="text" type="string" description="剥离 pasted-log 块后的消息文本"/>
++    <batch enabled="false"/>
++  </node>
++  <node id="110001" type="plugin" title="cache_claim" x="420" y="80" toolName="kv_cache_claim">
++    <in name="key" type="string" ref="115001.text"/>
+     <in name="namespace" type="string">kw_extract_v2</in>
+-    <out name="hit" type="boolean"/>
++    <out name="state" type="string" description="claimed=本方提取/hit=命中/pending=等待"/>
+     <out name="value" type="any"/>
+     <batch enabled="false"/>
+   </node>
+-  <node id="120001" type="selector" title="cache_hit?" x="1320" y="80">
+-    <branch><cond op="11" left="1370692.result" right="pending" left_type="boolean"/></branch>
+-    <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
++  <node id="120001" type="selector" title="claim_state?" x="1320" y="80">
++    <branch><cond op="1" left="110001.state" right="hit" left_type="string"/></branch>
++    <branch><cond op="1" left="110001.state" right="pending" left_type="string"/></branch>
++    <branch><cond op="1" left="110001.state" right="claimed" left_type="string"/></branch>
+   </node>
+   <node id="130001" type="llm" title="extract" x="1920" y="80">
+-    <in name="q" type="string" ref="100001.user_message"/>
++    <in name="q" type="string" ref="115001.text"/>
+     <param name="temperature" type="string"><![CDATA[0.2]]></param>
+     <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
+     <param name="prompt" type="string"><![CDATA[{{q}}]]></param>
+@@ -44,7 +58,7 @@
+     <batch enabled="false"/>
+   </node>
+   <node id="140001" type="plugin" title="cache_write" x="2820" y="80" toolName="kv_cache_write">
+-    <in name="key" type="string" ref="100001.user_message"/>
++    <in name="key" type="string" ref="115001.text"/>
+     <in name="value" type="any" ref="130003.keywords"/>
+     <in name="namespace" type="string">kw_extract_v2</in>
+     <out name="ok" type="boolean"/>
+@@ -52,22 +66,12 @@
+   </node>
+   <node id="900001" type="end" title="Exit_hit" x="3420" y="80">
+     <out name="keywords" ref="933950.Group1" type="list"/>
+-    <out name="cached" type="boolean">True</out>
++    <out name="cached" ref="140001.ok" type="boolean"/>
+     <out name="idx" ref="933950.index" type="integer"/>
+-    <out name="kw" ref="1275951.keywords" type="list"/>
+-    <out name="nth" ref="1275951.nth_output" type="list"/>
+-    <out name="and" ref="1370692.result" type="boolean"/>
+   </node>
+   <node id="933950" type="aggregator" title="变量聚合" x="3120" y="80">
+     <group name="Group1" type="list"><var ref="1275951.keywords" type="list"/><var ref="130003.keywords" type="list"/><var ref="1275951.nth_output" type="list"/><var ref="1482263.raw" type="list"/></group>
+   </node>
+-  <node id="908175" type="plugin" title="write_pending" x="1620" y="80" toolName="kv_cache_write">
+-    <in name="key" type="string" ref="100001.user_message"/>
+-    <in name="value" type="string">pending</in>
+-    <in name="namespace" type="string">kw_extract_v2</in>
+-    <out name="result" type="object" description="工具返回值"/>
+-    <batch enabled="false"/>
+-  </node>
+   <node id="129000" type="code" title="init_kw" x="1620" y="208">
+     <in name="x" type="string">init</in>
+     <code language="3"><![CDATA[async def main(args) -> dict:
+@@ -82,7 +86,7 @@
+     <param name="loopCount" type="integer"><![CDATA[90]]></param>
+     <var name="keywords" type="list" ref="129000.empty"/>
+     <var name="find" type="boolean" literal="False"/>
+-    <in name="user" type="string" ref="100001.user_message"/>
++    <in name="user" type="string" ref="115001.text"/>
+     <out name="all_outputs" type="list" description="所有结果" itemType="list"/>
+     <out name="filtered_outputs" type="list" description="筛选结果" itemType="list"/>
+     <out name="nth_output" type="list" description="第n个结果"/>
+@@ -96,7 +100,10 @@
+       <node id="__break__" type="break" title="拿到结果退出" x="2220" y="80">
+     <in name="result" type="list" ref="926184.raw"/>
+   </node>
+-      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="154"/>
++      <node id="__continue__" type="continue" title="继续等待(本轮无输出)" x="2220" y="172">
++    <in name="result" type="list" ref="926184.raw" itemType="string"/>
++    <batch enabled="false"/>
++  </node>
+       <node id="693978" type="plugin" title="sleep" x="420" y="80" toolName="sleep">
+     <in name="seconds" type="number">2</in>
+     <out name="result" type="string" description="工具返回值"/>
+@@ -111,7 +118,7 @@
+   </node>
+       <node id="1057177" type="AND" title="ready?" x="1320" y="80">
+     <branch><cond op="2" left="570563.value" right="pending" left_type="any"/></branch>
+-    <branch><cond op="11" left="__entry__.find" right="" left_type="boolean"/></branch>
++    <branch><cond op="11" left="570563.hit" right="" left_type="boolean"/></branch>
+     <out name="result" type="boolean"/>
+     <out name="results" type="list" itemType="boolean"/>
+     <batch enabled="false"/>
+@@ -125,7 +132,6 @@
+   </node>
+       <node id="413345" type="setvar" title="置变量(循环)" x="1920" y="172">
+     <in name="find" left="find.find" left_type="string" right="ref:570563.hit" right_type="boolean"/>
+-    <in name="keywords" left="" left_type="string" right="ref:926184.raw" right_type="list"/>
+   </node>
+       <node id="926184" type="plugin" title="pass_through" x="1020" y="80" toolName="pass_through">
+     <in name="input" type="any" ref="570563.value"/>
+@@ -146,33 +152,25 @@
+     <edge source="1306597" target="1544481" sourcePort="true"/>
+     <edge source="1306597" target="413345" sourcePort="true_1"/>
+     </edges>
+-    <batch enabled="false" nth="-1"/>
++    <batch enabled="false" nth="-1"><filter logic="2"><cond op="2" left="__batch_output__" right="pending"/><cond op="1" left="__batch_output__.is_empty" right="false" left_type="boolean" right_type="boolean"/></filter></batch>
+   </node>
+   <node id="1482263" type="plugin" title="pass_through" x="720" y="80" toolName="pass_through">
+     <in name="input" type="any" ref="110001.value"/>
+     <out name="raw" type="list" description="透传值（结构与输入一致；类型可在编辑器改）"/>
+     <batch enabled="false"/>
+   </node>
+-  <node id="1370692" type="AND" title="AND" x="1020" y="80">
+-    <branch><cond op="11" left="110001.hit" right="" left_type="boolean"/></branch>
+-    <branch><cond op="1" left="110001.value" right="pending" left_type="any"/></branch>
+-    <out name="result" type="boolean" description="全部条件组满足时为 true"/>
+-    <out name="results" type="list" description="每组条件的判定结果"/>
+-    <batch enabled="false"/>
+-  </node>
+-  <edge from="100001" to="110001"/>
++  <edge from="100001" to="115001"/>
++  <edge from="115001" to="110001"/>
+   <edge from="130001" to="130002"/>
+   <edge from="130002" to="130003"/>
+   <edge from="130003" to="140001"/>
+-  <edge from="120001" to="933950" port="true_1"/>
++  <edge from="120001" to="933950" port="true"/>
+   <edge from="933950" to="900001"/>
+   <edge from="140001" to="933950"/>
+-  <edge from="120001" to="908175" port="false"/>
+-  <edge from="908175" to="130001"/>
+-  <edge from="120001" to="129000" port="true"/>
++  <edge from="120001" to="129000" port="true_1"/>
++  <edge from="120001" to="130001" port="true_2"/>
+   <edge from="129000" to="1275951"/>
+   <edge from="1275951" to="933950"/>
+   <edge from="110001" to="1482263"/>
+-  <edge from="1482263" to="1370692"/>
+-  <edge from="1370692" to="120001"/>
+-</workflow>
++  <edge from="1482263" to="120001"/>
++ </workflow>
+diff --git a/src/workflows/recap_gen.xml b/src/workflows/recap_gen.xml
+index d8bd9d8..c6bde27 100644
+--- a/src/workflows/recap_gen.xml
++++ b/src/workflows/recap_gen.xml
+@@ -1,11 +1,69 @@
+-<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·对话式三轮消息）并【在工作流内显式回写】：code 组装 user→assistant→user 三轮对话（用户提案 2026-09-02：小模型对指令模板遵循差、对对话续写遵循好——few-shot 式形态几乎不跑偏）→ llm 节点 messages 直通 → code 组装 payload → hook_write 工具写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
++<workflow name="recap_gen" description="每轮回答完成后异步生成一句话 recap（本地小模型·llm_call 对话式三轮消息）并【在工作流内显式回写】：⓪ 本轮有 git_commit → 直接取 commit message 首行作 recap（引擎 hook_ctx.commit_first_line 直供，最优先——commit 首行本就是一句话摘要约定）；① code 检查 answer 是否符合回答风格约定（首行一句话总结 + --- 分隔线）→ 符合直接取首行作 recap 跳过 LLM（省一次推理）；② 不符合则 code 组装 user→assistant→user 三轮对话（小模型对对话续写遵循好——few-shot 几乎不跑偏）→ llm_call 取 content → code 组装 payload → hook_write 写三落点（agent._recap / registry / Turn.recap）。start 的 hook_ctx(object) 是引擎注入的上下文袋（含 turn_idx/commit_first_line）。turn_end 钩子 + async + recap 三标志" hook="turn_end" hidden="true" async="true" recap="true">
+   <node id="100001" type="start" title="Entry" x="120" y="80">
+     <out name="user_message" type="string"/>
+     <out name="draft_answer" type="string"/>
+     <out name="turn_context" type="string"/>
++    <out name="commit_first_line" type="string"/>
+     <out name="hook_ctx" type="object"/>
+   </node>
+-  <node id="110001" type="code" title="build_msgs" x="270" y="80">
++  <node id="105001" type="code" title="check_style" x="320" y="80">
++    <in name="answer" type="string" ref="100001.draft_answer"/>
++    <in name="commit_first_line" type="string" ref="100001.commit_first_line"/>
++    <code language="3"><![CDATA[async def main(args):
++    # recap 优先级（用户提案 2026-09-06）：⓪ 本轮有 git_commit → 直接取 commit message
++    # 首行作 recap（commit 首行本就是"一句话摘要"约定，最精准零成本）；
++    # ① answer 符合回答风格约定（首行一句话总结≤50字 + --- 分隔线）→ 取首行；
++    # ② 都不命中 → 走 llm_call。
++    import re
++    p = args.params
++    cfl = str(p.get("commit_first_line") or "").strip()
++    if cfl:
++        return {"matched": True, "recap": cfl}
++    ans = str(p.get("answer") or "").strip()
++    lines = ans.split("\n")
++    matched = False
++    recap = ""
++    if len(lines) >= 2:
++        first = lines[0].strip()
++        second = lines[1].strip() if len(lines) > 1 else ""
++        third  = lines[2].strip() if len(lines) > 2 else ""
++        has_sep = (second == "---") or (second == "" and third == "---")
++        if first and has_sep:
++            s = re.sub(r'^[#>\-\*\s]+', '', first).strip()       # 去行首 markdown 装饰（#/->/*）
++            s = s.replace('**', '').replace('*', '').replace('`', '').strip()  # 去行内强调
++            if s and len(s) <= 50:
++                matched = True
++                recap = s
++    return {"matched": matched, "recap": recap}]]></code>
++    <out name="matched" type="boolean"/>
++    <out name="recap" type="string"/>
++  </node>
++  <node id="106001" type="selector" title="style_matched?" x="560" y="80">
++    <branch><cond op="11" left="105001.matched" left_type="boolean"/></branch>
++  </node>
++  <!-- ===== fast 路径：符合约定 → 直接取首行作 recap ===== -->
++  <node id="120002" type="code" title="build_payload_fast" x="820" y="40">
++    <in name="recap" type="string" ref="105001.recap"/>
++    <in name="hook_ctx" type="object" ref="100001.hook_ctx"/>
++    <code language="3"><![CDATA[async def main(args):
++    p = args.params
++    hc = p.get("hook_ctx") or {}
++    turn = hc.get("turn_idx", -1)
++    try: turn = int(turn)
++    except (TypeError, ValueError): turn = -1
++    return {"payload": {"action": "set_recap", "value": str(p.get("recap") or ""), "turn": turn}}]]></code>
++    <out name="payload" type="object"/>
++  </node>
++  <node id="140002" type="plugin" title="write_recap_fast" x="1120" y="40" toolName="hook_write">
++    <in name="payload" type="object" ref="120002.payload"/>
++    <out name="raw" type="string"/>
++    <out name="result" type="string" description="工具返回值"/>
++  </node>
++  <node id="910002" type="end" title="Exit_fast" x="1420" y="40">
++    <out name="result" ref="140002.raw" type="string"/>
++  </node>
++  <!-- ===== slow 路径：不符合约定 → llm_call 生成 ===== -->
++  <node id="110001" type="code" title="build_msgs" x="820" y="200">
+     <in name="user_message" type="string" ref="100001.user_message"/>
+     <in name="answer" type="string" ref="100001.draft_answer"/>
+     <code language="3"><![CDATA[async def main(args):
+@@ -18,19 +76,19 @@
+         {"role": "assistant", "content": str(p.get("answer") or "")},
+         {"role": "user", "content": "用一句话(30个token以内)总结一下近期做了什么"},
+     ]}]]></code>
+-    <out name="messages" type="array"/>
+-  </node>
+-  <node id="120001" type="llm" title="summarize" x="470" y="80">
+-    <in name="messages" type="array" ref="110001.messages"/>
+-    <param name="temperature" type="string"><![CDATA[0.3]]></param>
+-    <param name="thinking" type="string"><![CDATA[false]]></param>
+-    <param name="output_format" type="string"><![CDATA[text]]></param>
+-    <model>local-lfm</model>
+-    <out name="output" type="string"/>
++    <out name="messages" type="list"/>
++  </node>
++  <node id="120001" type="plugin" title="summarize(llm_call)" x="1120" y="200" toolName="llm_call">
++    <in name="messages" type="list" ref="110001.messages"/>
++    <in name="temperature" type="number">0.3</in>
++    <in name="enable_thinking" type="boolean">False</in>
++    <in name="model" type="string">local-lfm</in>
++    <out name="raw" type="object"/>
++    <out name="content" type="string"/>
+     <batch enabled="false"/>
+   </node>
+-  <node id="130001" type="code" title="build_payload" x="720" y="80">
+-    <in name="summary" type="string" ref="120001.output"/>
++  <node id="130001" type="code" title="build_payload" x="1420" y="200">
++    <in name="summary" type="string" ref="120001.content"/>
+     <in name="hook_ctx" type="object" ref="100001.hook_ctx"/>
+     <code language="3"><![CDATA[async def main(args):
+     p = args.params
+@@ -43,15 +101,20 @@
+     return {"payload": {"action": "set_recap", "value": str(p.get("summary") or ""), "turn": turn}}]]></code>
+     <out name="payload" type="object"/>
+   </node>
+-  <node id="140001" type="plugin" title="write_recap" x="1020" y="80" toolName="hook_write">
++  <node id="140001" type="plugin" title="write_recap" x="1720" y="200" toolName="hook_write">
+     <in name="payload" type="object" ref="130001.payload"/>
+     <out name="raw" type="string"/>
+     <out name="result" type="string" description="工具返回值"/>
+   </node>
+-  <node id="900001" type="end" title="Exit" x="1320" y="80">
++  <node id="900001" type="end" title="Exit" x="2020" y="200">
+     <out name="result" ref="140001.raw" type="string"/>
+   </node>
+-  <edge from="100001" to="110001"/>
++  <edge from="100001" to="105001"/>
++  <edge from="105001" to="106001"/>
++  <edge from="106001" to="120002" port="true"/>
++  <edge from="106001" to="110001" port="false"/>
++  <edge from="120002" to="140002"/>
++  <edge from="140002" to="910002"/>
+   <edge from="110001" to="120001"/>
+   <edge from="120001" to="130001"/>
+   <edge from="130001" to="140001"/>
+diff --git a/src/workflows/wiki_auto_maintenance.xml b/src/workflows/wiki_auto_maintenance.xml
+index 2745fa6..9f594af 100644
+--- a/src/workflows/wiki_auto_maintenance.xml
++++ b/src/workflows/wiki_auto_maintenance.xml
+@@ -10,7 +10,7 @@
+     <code language="3"><![CDATA[import json
+ async def main(args):
+     """短路检查：无文件变更 或 变更全部在 wiki 目录下（主 Agent 已维护）→ 跳过整个维护流程。
+-    纯代码零 LLM 调用——比意图识别更前置，省 local-qwen 一次调用。"""
++    纯代码零 LLM 调用——比意图识别更前置，省 local-lfm 一次调用。"""
+     calls = args.params.get("changed_calls") or []
+     if isinstance(calls, str):
+         try: calls = json.loads(calls)
+@@ -86,7 +86,7 @@ async def main(args):
+   </node>
+   <node id="682383" type="intent" title="意图识别" x="1320" y="80">
+     <in name="query" type="string" ref="1030169.output"/>
+-    <model>local-qwen</model>
++    <model>local-lfm</model>
+     <intent name="值得记录"/>
+     <intent name="不需要"/>
+   </node>
+-- 
+2.38.1.windows.1
+

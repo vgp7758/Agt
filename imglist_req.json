@@ -1,0 +1,26 @@
+#135 [POST] https://www.scnet.cn/acx/aihub/images/select-list
+
+  General
+    status:    [200] 
+    duration:  113ms
+    type:      xhr
+    mimeType:  application/json
+
+  Request headers
+    sec-ch-ua-platform: "Windows"
+    referer: https://www.scnet.cn/ui/console/index.html
+    sec-ch-ua: "Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="152"
+    sec-ch-ua-mobile: ?0
+    user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36
+    accept: application/json, text/plain, */*
+    content-type: application/json
+    version: 2.7.2
+
+  Response headers
+    date: Tue, 15 Sep 2026 11:54:12 GMT
+    content-type: application/json
+    server: nginx
+    x-trace-id: 829671232680ed14
+
+Call browser_network_request with part="request-body" to read the request body.
+Call browser_network_request with part="response-body" to read the response body.

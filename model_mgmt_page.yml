@@ -1,0 +1,256 @@
+- generic [ref=f18e2]:
+  - generic [ref=f18e4]:
+    - banner [ref=f18e6]:
+      - generic [ref=f18e7]:
+        - generic [ref=f18e8] [cursor=pointer]
+        - link [ref=f18e20] [cursor=pointer]:
+          - /url: https://www.scnet.cn/ui/mall/
+      - generic [ref=f18e21]:
+        - generic [ref=f18e22]: 控制台
+        - generic [ref=f18e31]:
+          - link "文件管理" [ref=f18e32] [cursor=pointer]:
+            - /url: "#/e-file"
+          - link "命令行「E-Shell」" [ref=f18e34] [cursor=pointer]:
+            - /url: "#/space/shell?cache=true"
+          - link [ref=f18e37] [cursor=pointer]:
+            - /url: /ui/mall/goods/cart
+          - button "费用" [ref=f18e46] [cursor=pointer]
+          - link "客户端" [ref=f18e48] [cursor=pointer]:
+            - /url: /ui/mall/client/download
+          - button "支持" [ref=f18e51] [cursor=pointer]
+          - generic [ref=f18e55] [cursor=pointer]
+          - superscript [ref=f18e65] [cursor=pointer]: "1"
+          - generic [ref=f18e66] [cursor=pointer]
+          - button "切换语言" [ref=f18e70] [cursor=pointer]
+          - button "B brick " [ref=f18e75] [cursor=pointer]:
+            - generic [ref=f18e76]:
+              - generic [ref=f18e77]: B
+              - generic [ref=f18e78]:
+                - text: brick
+                - generic [ref=f18e79]: 
+    - navigation [ref=f18e80]:
+      - generic [ref=f18e81]:
+        - generic [ref=f18e82]: 人工智能
+        - generic [ref=f18e87]:
+          - menubar [ref=f18e89]:
+            - menuitem [ref=f18e90] [cursor=pointer]:
+              - link "Notebook" [ref=f18e91]:
+                - /url: "#/notebook"
+            - menuitem [ref=f18e98] [cursor=pointer]:
+              - link "数据管理" [ref=f18e99]:
+                - /url: "#/data-management/data-set"
+            - menuitem [ref=f18e113] [cursor=pointer]:
+              - link "模型管理 NEW" [ref=f18e114]:
+                - /url: "#/model-management/list"
+                - generic [ref=f18e121]: 模型管理
+                - generic [ref=f18e122]: NEW
+            - menuitem [ref=f18e123] [cursor=pointer]:
+              - link "模型训练 NEW" [ref=f18e124]:
+                - /url: "#/model-training"
+                - generic [ref=f18e131]: 模型训练
+                - generic [ref=f18e132]: NEW
+            - menuitem [ref=f18e133] [cursor=pointer]:
+              - link "模型部署 NEW" [ref=f18e134]:
+                - /url: "#/model-deploy"
+                - generic [ref=f18e141]: 模型部署
+                - generic [ref=f18e142]: NEW
+            - menuitem [ref=f18e143] [cursor=pointer]:
+              - link "文件共享" [ref=f18e144]:
+                - /url: "#/sharing-center/algorithm"
+            - menuitem [ref=f18e152] [cursor=pointer]:
+              - link "镜像管理" [ref=f18e153]:
+                - /url: "#/image-management/list"
+            - menuitem [ref=f18e164] [cursor=pointer]:
+              - link "容器实例" [ref=f18e165]:
+                - /url: "#/container-service/container-group"
+            - menuitem [ref=f18e174] [cursor=pointer]:
+              - link "文件管理" [ref=f18e175]:
+                - /url: "#/e-file"
+          - menubar [ref=f18e192]:
+            - menuitem [ref=f18e193] [cursor=pointer]:
+              - link "AI社区" [ref=f18e194]:
+                - /url: /ui/aihub
+            - menuitem [ref=f18e204] [cursor=pointer]:
+              - link "智能体服务 NEW" [ref=f18e205]:
+                - /url: /ui/chatbot
+                - generic [ref=f18e208]: 智能体服务
+                - generic [ref=f18e209]: NEW
+            - menuitem [ref=f18e212] [cursor=pointer]:
+              - link "模型服务 NEW" [ref=f18e213]:
+                - /url: /ui/console/index.html#/llm/models
+                - generic [ref=f18e220]: 模型服务
+                - generic [ref=f18e221]: NEW
+            - menuitem [ref=f18e224] [cursor=pointer]:
+              - link "帮助手册" [ref=f18e225]:
+                - /url: /help/docs/mainsite/ai/
+      - generic [ref=f18e234] [cursor=pointer]: 收起侧边
+    - main [ref=f18e238]:
+      - generic [ref=f18e240]:
+        - generic [ref=f18e241]: 模型管理
+        - generic [ref=f18e247]:
+          - tabpanel "我的模型"
+          - generic [ref=f18e249]:
+            - generic [ref=f18e251]:
+              - generic [ref=f18e252]:
+                - generic [ref=f18e256]:
+                  - textbox "请选择" [ref=f18e257] [cursor=pointer]: 全部区域
+                  - generic: 
+                - button "创建模型" [ref=f18e266] [cursor=pointer]
+              - generic [ref=f18e267]:
+                - generic [ref=f18e271]:
+                  - textbox "按模型名称搜索" [ref=f18e272]
+                  - generic [ref=f18e274] [cursor=pointer]
+                - generic [ref=f18e280]:
+                  - textbox "请选择" [ref=f18e281] [cursor=pointer]: 全部来源
+                  - generic: 
+                - generic [ref=f18e284]:
+                  - generic [ref=f18e285] [cursor=pointer]
+                  - generic [ref=f18e288] [cursor=pointer]
+            - generic [ref=f18e292]:
+              - table [ref=f18e294]:
+                - rowgroup [ref=f18e302]:
+                  - row [ref=f18e303]:
+                    - columnheader [ref=f18e304]
+                    - columnheader "模型来源" [ref=f18e305]
+                    - columnheader "使用区域" [ref=f18e307]
+                    - columnheader "创建时间" [ref=f18e309]
+                    - columnheader "更新时间" [ref=f18e311]
+                    - columnheader [ref=f18e313]
+              - table [ref=f18e315]:
+                - rowgroup [ref=f18e323]:
+                  - row [ref=f18e324]:
+                    - cell [ref=f18e325]
+                    - cell "外部模型仓库" [ref=f18e326]
+                    - cell "华中一区【A区】" [ref=f18e330]
+                    - cell "2026-09-16 00:00:35" [ref=f18e337]
+                    - cell "2026-09-16 00:00:36" [ref=f18e339]
+                    - cell [ref=f18e341]
+                  - row [ref=f18e342]:
+                    - cell [ref=f18e343]
+                    - cell "外部模型仓库" [ref=f18e344]
+                    - cell "华中一区【A区】" [ref=f18e348]
+                    - cell "2026-09-16 00:00:33" [ref=f18e355]
+                    - cell "2026-09-16 00:00:34" [ref=f18e357]
+                    - cell [ref=f18e359]
+                  - row [ref=f18e360]:
+                    - cell [ref=f18e361]
+                    - cell "外部模型仓库" [ref=f18e362]
+                    - cell "华中一区【A区】" [ref=f18e366]
+                    - cell "2026-09-15 23:59:43" [ref=f18e373]
+                    - cell "2026-09-15 23:59:44" [ref=f18e375]
+                    - cell [ref=f18e377]
+              - generic [ref=f18e378]:
+                - table [ref=f18e380]:
+                  - rowgroup [ref=f18e388]:
+                    - row [ref=f18e389]:
+                      - columnheader "模型名称" [ref=f18e390]
+                      - columnheader [ref=f18e392]
+                      - columnheader [ref=f18e393]
+                      - columnheader [ref=f18e394]
+                      - columnheader [ref=f18e395]
+                      - columnheader [ref=f18e396]
+                - table [ref=f18e398]:
+                  - rowgroup [ref=f18e406]:
+                    - row [ref=f18e407]:
+                      - cell "IndexTTS-2.5 IndexTTS-2.5" [ref=f18e408]:
+                        - generic [ref=f18e409]:
+                          - text: IndexTTS-2.5
+                          - generic [ref=f18e410]: IndexTTS-2.5
+                      - cell [ref=f18e412]
+                      - cell [ref=f18e413]
+                      - cell [ref=f18e414]
+                      - cell [ref=f18e415]
+                      - cell [ref=f18e416]
+                    - row [ref=f18e417]:
+                      - cell "Qwen3-8B Qwen3-8B" [ref=f18e418]:
+                        - generic [ref=f18e419]:
+                          - text: Qwen3-8B
+                          - generic [ref=f18e420]: Qwen3-8B
+                      - cell [ref=f18e422]
+                      - cell [ref=f18e423]
+                      - cell [ref=f18e424]
+                      - cell [ref=f18e425]
+                      - cell [ref=f18e426]
+                    - row [ref=f18e427]:
+                      - cell "Qwen-Image-Edit Qwen-Image-Edit" [ref=f18e428]:
+                        - generic [ref=f18e429]:
+                          - text: Qwen-Image-Edit
+                          - generic [ref=f18e430]: Qwen-Image-Edit
+                      - cell [ref=f18e432]
+                      - cell [ref=f18e433]
+                      - cell [ref=f18e434]
+                      - cell [ref=f18e435]
+                      - cell [ref=f18e436]
+              - generic [ref=f18e437]:
+                - table [ref=f18e439]:
+                  - rowgroup [ref=f18e447]:
+                    - row [ref=f18e448]:
+                      - columnheader [ref=f18e449]
+                      - columnheader [ref=f18e450]
+                      - columnheader [ref=f18e451]
+                      - columnheader [ref=f18e452]
+                      - columnheader [ref=f18e453]
+                      - columnheader "操作" [ref=f18e454]
+                - table [ref=f18e457]:
+                  - rowgroup [ref=f18e465]:
+                    - row [ref=f18e466]:
+                      - cell [ref=f18e467]
+                      - cell [ref=f18e468]
+                      - cell [ref=f18e469]
+                      - cell [ref=f18e470]
+                      - cell [ref=f18e471]
+                      - cell [ref=f18e472]:
+                        - generic [ref=f18e476]:
+                          - generic [ref=f18e478] [cursor=pointer]
+                          - generic [ref=f18e484] [cursor=pointer]
+                          - generic [ref=f18e494] [cursor=pointer]
+                          - generic [ref=f18e500] [cursor=pointer]
+                    - row [ref=f18e504]:
+                      - cell [ref=f18e505]
+                      - cell [ref=f18e506]
+                      - cell [ref=f18e507]
+                      - cell [ref=f18e508]
+                      - cell [ref=f18e509]
+                      - cell [ref=f18e510]:
+                        - generic [ref=f18e514]:
+                          - generic [ref=f18e516] [cursor=pointer]
+                          - generic [ref=f18e522] [cursor=pointer]
+                          - generic [ref=f18e532] [cursor=pointer]
+                          - generic [ref=f18e538] [cursor=pointer]
+                    - row [ref=f18e542]:
+                      - cell [ref=f18e543]
+                      - cell [ref=f18e544]
+                      - cell [ref=f18e545]
+                      - cell [ref=f18e546]
+                      - cell [ref=f18e547]
+                      - cell [ref=f18e548]:
+                        - generic [ref=f18e552]:
+                          - generic [ref=f18e554] [cursor=pointer]
+                          - generic [ref=f18e560] [cursor=pointer]
+                          - generic [ref=f18e570] [cursor=pointer]
+                          - generic [ref=f18e576] [cursor=pointer]
+            - generic [ref=f18e584]:
+              - generic [ref=f18e585]: 共 3 条
+              - generic [ref=f18e588]:
+                - textbox "请选择" [ref=f18e589] [cursor=pointer]: 20条/页
+                - generic: 
+              - button "" [disabled] [ref=f18e592]
+              - list [ref=f18e594]:
+                - listitem [ref=f18e595]: "1"
+              - button "" [disabled] [ref=f18e596]
+              - generic [ref=f18e598]:
+                - text: 前往
+                - spinbutton [ref=f18e600]: "1"
+                - text: 页
+  - generic:
+    - generic [ref=f18e601]:
+      - generic [ref=f18e602]:
+        - generic [ref=f18e603]:      *
+        - generic [ref=f18e614] [cursor=pointer]
+        - generic [ref=f18e620] [cursor=pointer]
+        - generic [ref=f18e626]: 
+        - generic [ref=f18e641] [cursor=pointer]
+      - generic [ref=f18e647]: 智能体
+    - text:  
+    - generic: 
+    - text: 

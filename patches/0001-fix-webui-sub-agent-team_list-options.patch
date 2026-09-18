@@ -1,0 +1,107 @@
+From 696197a2cb8fc23cafa90ea1f80ad5bd81d1db28 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E9=A9=AC=E5=BB=BA=E5=BC=BA?= <vgp123@foxmail.com>
+Date: Thu, 17 Sep 2026 18:11:32 +0800
+Subject: [PATCH 1/2] =?UTF-8?q?fix(webui):=20sub-agent=20=E4=B8=8B?=
+ =?UTF-8?q?=E6=8B=89=E6=A1=86=E5=B1=95=E5=BC=80=E6=9C=9F=E6=94=B6=E5=88=B0?=
+ =?UTF-8?q?=20team=5Flist=20=E7=83=AD=E6=9B=BF=E6=8D=A2=20options=20?=
+ =?UTF-8?q?=E5=AF=BC=E8=87=B4=E5=BC=B9=E5=87=BA=E5=88=97=E8=A1=A8=E6=B8=B2?=
+ =?UTF-8?q?=E6=9F=93=E6=AE=8B=E7=BC=BA?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+症状：sub-agent 下拉框弹出列表只渲染前一两项、中间空白；刷新后首次点击高发、不必现。
+
+根因：agentSel 在 mousedown 时才异步拉取团队列表，原生弹出层先按旧列表（刷新后常
+只有 1 项）打开，几十 ms 后 team_list 响应用 innerHTML 整体重建 options——Windows
+Chrome/WebView2 对已展开的原生下拉弹出层做内容热替换渲染有缺陷，弹出窗口部分项
+不重绘。WS 往返与弹出层首次光栅化存在竞态，故非必现。
+
+修复：
+- mousedown 打 _agentSelOpening 标记（仅左键）；team_list 响应若逢展开期（持焦）
+  暂存不重建，等 blur（弹出层收起）后再应用；收起态行为不变
+- 应用时按当前 myTarget 重算选中态（展开期用户可能已 change 切换目标）
+- _agentListLoading 加 3s 超时兜底，防响应丢失后永久卡住不再拉取
+
+Co-authored-by: Agt <vgp123@foxmail.com>
+---
+ .agent/agents/vision.yml                     |  2 +-
+ .agent/wiki/features/tool-externalization.md |  2 +-
+ src/static/index.html                        | 26 +++++++++++++++++---
+ 3 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/.agent/agents/vision.yml b/.agent/agents/vision.yml
+index 31107e3..a23d839 100644
+--- a/.agent/agents/vision.yml
++++ b/.agent/agents/vision.yml
+@@ -17,6 +17,6 @@ fallback:
+   chain:
+   - qwen
+   - glm-official-flash
+-  - kimi
+   - local-lfm-vl
++  - deepseek
+   policy: reset
+diff --git a/.agent/wiki/features/tool-externalization.md b/.agent/wiki/features/tool-externalization.md
+index 2710724..2d93f1c 100644
+--- a/.agent/wiki/features/tool-externalization.md
++++ b/.agent/wiki/features/tool-externalization.md
+@@ -71,7 +71,7 @@ def agt_register(ctx=None):
+ |---|---|---|---|
+ | `fs_tools.py` | glob_files | 纯函数整体外置 | 首例（commit eafed25），实现+注册都在外置件，见 [glob-files](glob-files.md) |
+ | `str_tools.py` | split 等 + **length / to_uppercase / to_lowercase**（2026-08 追加） | 纯函数零状态 | 纯函数批（commit 17312eb）——LIGHT_TOOLS 纯函数迁出 |
+-| `list_tools.py` / `misc_tools.py` | 早期纯函数批（v0.19.0，15 个纯函数的一部分） | 纯函数零状态 | |
++| `list_tools.py` / `misc_tools.py` | 早期纯函数批（v0.19.0，15 个纯函数的一部分）；**sleep 2026-09-16 对 Agent 开放**（hidden=False + 上限 300→3600，commit 30fe776） | 纯函数零状态（sleep 为 inline 阻塞等待，不受 TOOL_TIMEOUT 管） | 见 [misc-tools](misc-tools.md) |
+ | `kv_tools.py`（新） | kv_cache_read / kv_cache_write / **kv_cache_claim**（2026-09-13 增） | 纯函数整体外置（**状态随外置件走**） | **`_KV_CACHE` 进程级自写自读 dict**——同轮多 before_turn 工作流对同输入 LLM 调用（如关键词提取）做 memoization；缓存键 = namespace + 内容 sha1，namespace 兼作版本号（改提示词/换模型换 namespace 即整体失效）；重启清空 = 结果缓存语义（丢失=重算，无正确性影响）；outputs 声明 `hit:boolean`。**claim 原子互斥（2026-09-13，commit 1c1c944）**：三态单次判定 hit/pending/claimed，check-and-set 收进进程级 `_KV_LOCK`——并发 claim 同 key 恰好一个 claimed，治「read→write_pending 两节点互斥」的毫秒级双 miss 竞态窗口（详见 [kv-tools](kv-tools.md)） |
+ | `diff_tools.py`（新） | diff_lines | **算法副本**（复制实现而非 import 框架） | Myers 三件套与框架 diff_files 同源副本，随机重放 200/200 回归；双份注释互指路、改动两处同步，见 [diff-lines](diff-lines.md) |
+ | `wiki_tools.py` | wiki 十件套 | 纯函数整体外置 | `.agent/wiki/*.md` 自写自读；`agt_register(ctx)` 覆盖 `_WORKSPACE`；**2026-08（commit fe590a3）六件套扩十件套——章节级维护四件套（add/update/remove/move_chapter，章节=标题+全部子树），支撑 wiki-updater 增量维护**，见 [wiki-tools](wiki-tools.md) |
+diff --git a/src/static/index.html b/src/static/index.html
+index 29481eb..bf66c94 100644
+--- a/src/static/index.html
++++ b/src/static/index.html
+@@ -2200,10 +2200,14 @@ modelSel.addEventListener('change', ()=>{
+ // ===== Agent 团队切换下拉框 =====
+ const agentSel = document.getElementById('agentSel');
+ let _agentListLoading = false;
++let _agentSelOpening = false;   // 原生弹出列表展开中标记（见 team_list 处理——展开期不能重建 options）
+ // 点击下拉框时重新获取最新团队成员列表
+-agentSel.addEventListener('mousedown', ()=>{
++agentSel.addEventListener('mousedown', (e)=>{
++  if(e.button !== 0) return;    // 仅左键（右键不展开弹出列表）
++  _agentSelOpening = true;
+   if(_agentListLoading) return;
+   _agentListLoading = true;
++  setTimeout(()=>{ _agentListLoading = false; }, 3000);   // 兜底：响应丢失时允许下次点击重拉
+   ws.send(JSON.stringify({action:'list_team'}));
+ });
+ agentSel.addEventListener('change', ()=>{
+@@ -3315,8 +3319,24 @@ function onWSMessage(ev){
+           opts += `<option value="${id}"${isSelected}>${name} [${id}]</option>`;
+         }
+       });
+-      sel.innerHTML = opts;
+-      sel.dataset.curTarget = cur;
++      // ⚠️ 原生下拉的弹出列表展开期间不能用 innerHTML 重建 options：
++      // 首次点击时序 = mousedown → 弹出层按旧列表（刷新后常只有"主 Agent"1 项）打开 → 本响应到达 → 重建，
++      // Windows Chrome/WebView2 对已展开的原生弹出层做内容热替换会渲染残缺——只画出前一两项、中间空白。
++      // 故展开中（_agentSelOpening 且 select 持焦）先暂存，等 blur（弹出层收起）后再应用；收起态直接应用。
++      const applyTeamOpts = ()=>{
++        sel.innerHTML = opts;
++        // 应用时按【当前实际交互目标】重算选中态——展开期用户可能已 change 切换了目标
++        //（change 先于 blur），闭包里的 cur 是请求时的旧值，直接用会让下拉框显示跳回旧项
++        const curNow = myTarget || cur;
++        [...sel.options].forEach(o=>{ o.selected = (o.value === curNow); });
++        sel.dataset.curTarget = curNow;
++      };
++      if(_agentSelOpening && document.activeElement === sel){
++        sel.addEventListener('blur', ()=>{ _agentSelOpening = false; applyTeamOpts(); }, {once:true});
++      }else{
++        _agentSelOpening = false;
++        applyTeamOpts();
++      }
+       break;
+     case 'auto_wf_start': {
+       // 钩子组折叠显示（用户设计）：同 hook 位置的多个工作流收进一个组头
+-- 
+2.38.1.windows.1
+

@@ -1,0 +1,17 @@
+{
+  "name": "简短问答测试",
+  "created_at": 1789574411.565634,
+  "system": "sys",
+  "global_summary": "",
+  "recent_window_turns": 4,
+  "max_steps_per_turn": 80,
+  "extra_state": {},
+  "tier_boundaries": [],
+  "fold_count": 0,
+  "system_ledger": {
+    "last_text": "",
+    "appends": [],
+    "dirty": true
+  },
+  "saved_at": 1789574416
+}

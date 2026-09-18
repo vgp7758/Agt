@@ -1,0 +1,106 @@
+From 0f322afa78afd15848fdd0ee151522404f3808e1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E9=A9=AC=E5=BB=BA=E5=BC=BA?= <vgp123@foxmail.com>
+Date: Thu, 17 Sep 2026 18:23:19 +0800
+Subject: [PATCH 2/2] =?UTF-8?q?feat(webui):=20=E5=9B=A2=E9=98=9F=E4=B8=8B?=
+ =?UTF-8?q?=E6=8B=89=E6=A1=86=E6=94=B9=E4=B8=BA=E5=90=AF=E5=8A=A8=E5=88=9D?=
+ =?UTF-8?q?=E5=A7=8B=E5=8C=96=20+=20registry=20=E5=8F=98=E5=8C=96=E6=8E=A8?=
+ =?UTF-8?q?=E9=80=81=EF=BC=8C=E6=9B=BF=E4=BB=A3=E7=82=B9=E5=87=BB=E6=87=92?=
+ =?UTF-8?q?=E5=8A=A0=E8=BD=BD?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+用户反馈：上轮展开期暂存修复后，刷新页面下拉框仍只有"主 Agent"一项（懒加载设计：
+不点击不拉取），直到打开过团队抽屉才出现完整列表。
+
+按用户方案改造为"启动初始化 + 变化推送"：
+- server.start_server：订阅 agent.registry 的 on_change 钩子（同 id 覆盖防叠），
+  sub-agent 注册/注销（成员集合变化）→ 广播 {type:team_changed}；无客户端时
+  _broadcast 直接 return，纯 CLI 零开销
+- server.ws_endpoint：WS 连接建立即推一次 team_list——刷新/重连后下拉框
+  立即有完整列表，不再等首次点击
+- 前端新增 case team_changed：300ms 去抖合并密集变化（读档恢复连续注册多个
+  entry）后发 list_team 重拉；响应复用 team_list handler（收起态直接应用 /
+  展开期暂存收起后应用，上轮竞态修复继续生效）
+- registry 状态变化（running/done 等）不触发推送——下拉框只关心成员集合，
+  不因状态抖动重拉
+
+验证：registry 钩子单测（register/unregister 触发、同 id 覆盖）；前端 Playwright
+实测 3 次连续 team_changed 去抖为 1 次请求、响应后下拉框 1→11 项。
+
+需重启 agt 进程后生效（后端改动）。
+
+Co-authored-by: Agt <vgp123@foxmail.com>
+---
+ src/server.py         | 26 ++++++++++++++++++++++++++
+ src/static/index.html | 10 ++++++++++
+ 2 files changed, 36 insertions(+)
+
+diff --git a/src/server.py b/src/server.py
+index 191abd7..b21ad7c 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -1818,6 +1818,26 @@ async def ws_endpoint(websocket: WebSocket):
+                            "names": list_sessions(workspace=_workspace)})
+     from workflow import workflows_info
+     await _send(websocket, {"type": "workflows", "items": workflows_info(_workspace)})
++    # 团队下拉框初始化（用户提案 2026-09-17）：连接即推一次完整列表——此前要等首次点击
++    # 下拉框才拉取，刷新后下拉框只有"主 Agent"一项。前端收起态直接应用，无展开期竞态。
++    _reg = getattr(agent, "registry", None)
++    if _reg is not None:
++        try:
++            await _send(websocket, {"type": "team_list",
++                                    "team": _reg.format_team(exclude_id=""),
++                                    "current_target": client["target"]})
++        except Exception:
++            pass
++    # 团队下拉框初始化（用户提案 2026-09-17）：连接即推一次完整列表——此前要等首次点击
++    # 下拉框才拉取，刷新后下拉框只有"主 Agent"一项。前端收起态直接应用，无展开期竞态。
++    _reg = getattr(agent, "registry", None)
++    if _reg is not None:
++        try:
++            await _send(websocket, {"type": "team_list",
++                                    "team": _reg.format_team(exclude_id=""),
++                                    "current_target": client["target"]})
++        except Exception:
++            pass
+ 
+     try:
+         while True:
+@@ -2619,6 +2639,12 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
+     except OSError:
+         return (False, f"端口 {port} 已占用或无权限")
+     _agent, _work_q, _mcp_mgr, _workspace, _state = agent, work_q, mcp_mgr, workspace, state
++    # 团队下拉框推送源（用户提案 2026-09-17）：sub-agent 注册/注销（成员集合变化）→
++    # 广播 team_changed 通知前端重拉团队列表。add_on_change 同 id 覆盖（/web stop 再
++    # start 不叠订阅）；无 WS 客户端时 _broadcast 直接 return，纯 CLI 零开销。
++    _reg = getattr(agent, "registry", None)
++    if _reg is not None:
++        _reg.add_on_change("_webui_", lambda: _broadcast({"type": "team_changed"}))
+     _port, _server_error = port, None
+     config_obj = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+     srv = uvicorn.Server(config_obj)
+diff --git a/src/static/index.html b/src/static/index.html
+index bf66c94..30ca263 100644
+--- a/src/static/index.html
++++ b/src/static/index.html
+@@ -3338,6 +3338,16 @@ function onWSMessage(ev){
+         applyTeamOpts();
+       }
+       break;
++    case 'team_changed': {
++      // 后端 registry 成员变化（子 Agent 创建/注销/读档恢复注册）→ 重拉最新团队列表。
++      // 密集变化去抖合并（读档恢复会连续注册多个 entry，300ms 内只发一次请求）；
++      // 响应走 case 'team_list'（收起态直接应用 / 展开期暂存、收起后再应用）。
++      clearTimeout(window._teamChgTimer);
++      window._teamChgTimer = setTimeout(()=>{
++        try{ ws.send(JSON.stringify({action:'list_team'})); }catch(e){}
++      }, 300);
++      break;
++    }
+     case 'auto_wf_start': {
+       // 钩子组折叠显示（用户设计）：同 hook 位置的多个工作流收进一个组头
+       // 「▸ [每轮开始前]钩子 ×2 (1/2) ⏳(12s)」——默认收起，点击展开看各工作流执行详情。
+-- 
+2.38.1.windows.1
+

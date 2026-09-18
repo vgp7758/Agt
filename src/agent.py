@@ -1888,7 +1888,20 @@ class Agent:
         t = s.turns[-1]
         a = (t.answer or "").strip()
         if a and not _is_interrupt_mark(a):
-            return f"[错误] 最后一轮已正常完成（answer 非中断标注），无需恢复"
+            # 降级（用户实锤 2026-09-19）：中断轮被后台轮（service_exit/schedule/bg_task/子 Agent
+            # 唤醒的新轮）顶下去——旧"继续"按钮一点就"最后一轮已正常完成"拒绝且按钮消失。
+            # 从尾往回找最后一个中断轮：入队续跑指令走新轮（中断轮的完整 steps 在历史投影里，
+            # 模型自然接续；不 pop——后续轮的 answer 保留）。
+            for i in range(len(s.turns) - 1, -1, -1):
+                ai = (s.turns[i].answer or "").strip()
+                if ai and _is_interrupt_mark(ai):
+                    self.push_message(
+                        f"[继续中断工作·系统] 第 {i + 1} 轮的任务被中断后又有新轮发生，现在继续它。"
+                        f"请从中断处接着完成原任务（该轮的完整过程已在上文，不要重做已完成的步骤）。",
+                        source="resume:fallback")
+                    _LOG.info("resume_interrupted: 中断轮(%d)被顶替——降级为续跑指令入队", i + 1)
+                    return "__queued__"
+            return "[错误] 最后一轮已正常完成，历史中也没有可继续的中断轮"
         s.turns.pop()
         t.answer = ""
         t.answer_reasoning = ""

@@ -2255,6 +2255,13 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         # 走 work_q 的 task 通道——worker 串行执行，天然与 agent.run 互斥（busy 时排队）。
         def _do_resume():
             err = agent.resume_interrupted()
+            if err == "__queued__":
+                # 降级路径（2026-09-19）：中断轮被后台轮顶替——续跑指令已入队
+                # （push_message wake=True 会触发新轮），不走 _resume_current。
+                _broadcast({"type": "system", "text":
+                            "▶ 中断轮已被后续轮顶替——续跑指令已入队（新轮接续，完整过程在上文）",
+                            "transient": True})
+                return
             if err:
                 agent.on_event({"type": "system", "text": f"⚠️ 无法恢复：{err}", "transient": True})
                 return

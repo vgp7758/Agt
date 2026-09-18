@@ -1274,7 +1274,7 @@ function continueInterrupted(btn){
   ws.send(JSON.stringify({action:'resume_interrupted'}));
   setBusy(true);
   if(el){
-    el.innerHTML = '<div class="interrupted-bar"><span>⏹ 本轮恢复中…</span></div>';
+    el.innerHTML = '<div class="interrupted-bar"><span>⏹ 本轮恢复中…（若长时间无动静请刷新页面重试）</span></div>';
     // curTurn 指向被恢复的轮：turn_resume 清空占位 / step·thinking 续进原 trace /
     // answer 写进原轮 answerEl——全程不新建轮
     const col = el.closest('.turn');

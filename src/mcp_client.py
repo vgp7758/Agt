@@ -230,10 +230,41 @@ def make_mcp_tools(mcp_mgr, config_path, agent=None) -> list:
 
     paths = [config_path] if isinstance(config_path, (str, Path)) else list(config_path)
 
-    def reload_mcp_server(name: str) -> str:
-        """断开并重连指定 MCP server，并把它的工具同步进工具箱（新增/删除的工具立即生效，
-        无需 /restart）。当该 server 的代码/凭证/工具集被修改后调用。
-        name: mcp.json（repo 或全局）中 mcpServers 下的键名（如 'agentank' / 'scnet'）。"""
+    def reload_mcp_server(name: str = "") -> str:
+        """断开并重连 MCP server，并把工具同步进工具箱（新增/删除的工具立即生效，无需 /restart）。
+        name: mcp.json（repo 或全局）中 mcpServers 下的键名（如 'agentank' / 'scnet'）；
+        【留空 = 全量重载】（2026-09-18·用户提案）：断开全部、重读两级配置
+        （repo .mcp.json + 全局 ~/.agt/mcp.json，后连覆盖先连——与启动语义一致）、
+        重建全部连接并全量同步工具——新增/删除的 server 立即生效。"""
+        if not (name or "").strip():
+            # —— 全量重载 ——
+            old_servers = set(mcp_mgr.sessions.keys())
+            mcp_mgr.sessions.clear()          # 断开全部（旧进程待 shutdown 一起清理，同单连口径）
+            loaded, errs = [], []
+            for p in paths:
+                try:
+                    before = set(mcp_mgr.sessions.keys())
+                    mcp_mgr.connect_from_config(str(p))   # 该配置里全部 server（同名后连覆盖）
+                    loaded.extend(f"{s}（{Path(p).name}）" for s in set(mcp_mgr.sessions.keys()) - before)
+                except Exception as e:
+                    errs.append(f"  · {p}: {type(e).__name__}: {e}")
+            sync = ""
+            if agent is not None:
+                dropped = 0
+                for s in old_servers - set(mcp_mgr.sessions.keys()):   # 消失的 server：摘其工具
+                    dropped += agent.tools.drop(f"__mcp__{s}__")
+                for k in [k for k in list(getattr(agent, "tool_groups", {}))
+                          if k.startswith("__mcp__") and k not in agent.tools]:
+                    del agent.tool_groups[k]
+                added = mcp_mgr.sync_to_toolbox(agent.tools)
+                for t in mcp_mgr.get_tools():
+                    if t.name.startswith("__mcp__"):
+                        agent.tool_groups[t.name] = "MCP"
+                sync = f"；工具同步：摘除 {dropped} / 新增 {len(added)} / 现存 {len(mcp_mgr.get_tools())}"
+            body = f"✅ MCP 全量重载：{len(mcp_mgr.sessions)} 个 server 在线 [{', '.join(mcp_mgr.sessions)}]{sync}"
+            if errs:
+                body += "\n失败配置：\n" + "\n".join(errs)
+            return body
         errs = []
         for p in paths:
             try:

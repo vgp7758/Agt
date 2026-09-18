@@ -482,17 +482,18 @@ def _cmd_stats(ctx: CommandContext, args):
 
 
 def _cmd_reload_mcp(ctx: CommandContext, args):
-    """断开并重连指定 MCP server，使代码修改后生效。"""
+    """断开并重连 MCP server，使代码修改后生效。无参数=全量重载两级配置。"""
     positional = _parse_args(args)[0]
-    if not positional:
-        print("用法：/reload_mcp <name>  （mcpServers 的键名；repo .mcp.json 或全局 ~/.agt/mcp.json 均可）")
-        return
-    name = positional[0]
     tool = next((t for t in ctx.agent.tools if t.name == "reload_mcp_server"), None)
     if tool is None:
         print("❌ reload_mcp_server 工具未注册（MCP 未启用）")
         return
-    print(tool.run(name=name))
+    if not positional:
+        # 全量重载（2026-09-18·用户提案）：断开全部 → 重读 repo .mcp.json + 全局 ~/.agt/mcp.json
+        # → 重建全部 → 工具全量同步（新增/删除的 server 立即生效）
+        print(tool.run(name=""))
+        return
+    print(tool.run(name=positional[0]))
 
 
 def _cmd_model(ctx: CommandContext, args):

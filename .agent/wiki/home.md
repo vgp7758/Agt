@@ -1026,3 +1026,9 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **remote_servers 连接表串台修复：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit `aa73942`，用户实锤）**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例」——根因是连接表持久化在【全局】`~/.agt/settings.json` 的 `remote_servers` 键，本机所有实例共享同一份：9000 连的 director/scriptwriter 被 director 实例自己读到自动重连（其中还是自连）。修复三层：①存储改 `cwd/.agent/remote_servers.json`（各 repo 实例天然隔离；同 repo 多实例共享可接受——通常连的也是同一批）；②本地无则一次性迁移读全局旧值（存量连接不丢）；③`_is_self_url` 自连过滤（`MY_URL` 端口比对）——加载两路出口 + `reconnect_all` 跳过 + `connect()` 显式自连直接拒绝（文案引导本机执行）。`.gitignore` 加该文件（实例状态不提交，`.agent/` 不能整目录忽略）。与 repo 级覆盖（10d717e）同族原则：实例自己的状态存自己 workspace、全局只是兜底。引擎层改动 `/restart` 生效——见 [multi-instance · 串台修复](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-18 · 八 · remote_servers 二轮——改存 session 存档，切会话=切组网）
+
+## 快速事实增补（2026-09-18 · 八 · remote_servers 二轮——改存 session 存档，切会话=切组网）
+
+- **remote_servers 二轮：连接表改存 session 存档 extra_state（2026-09-18 · 二，commit `a2cd6fc`，用户裁定「还是存到session存档里吧」）**：一轮的实例本地文件方案（`.agent/remote_servers.json`，aa73942）当轮推翻——现行与 scheduler 持久化同款模式：`REMOTE_SERVERS` 运行时真源；connect/disconnect 后 `_persist_current()` 只调 `session.save()`（`capture_runtime_state` 收集 remote_servers 进 extra_state）；恢复走 `set_session → restore_runtime_state → restore_servers`（先清表→后台探测入表，自连过滤/offline 兜底；存档无键一次性迁移全局遗留份）。**语义：切会话=切组网、新会话空表、读档连接表跟着回来**；`reconnect_all` 删除（启动重连入口收拢，恢复统一走 set_session 标准恢复点——scheduler 持久化三 bug 教训的模式复用）——见 [multi-instance](architecture/multi-instance.md)
+

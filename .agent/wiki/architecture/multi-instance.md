@@ -173,13 +173,49 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 
 **生效**：`/restart`——本机各实例启动时各自读写自己的 `.agent/remote_servers.json`；首次启动从全局遗留表迁移（自连项迁移时即被过滤，不会再连自己）。
 
+### 后记：二轮裁定——改存 session 存档 extra_state.remote_servers（2026-09-18 · 二，commit a2cd6fc，用户裁定）
+
+**用户裁定**：「还是存到session存档里吧」——一轮的实例本地文件方案（`cwd/.agent/remote_servers.json`）当轮即被推翻。未发布过、未产生过真实文件，干净回退；`.gitignore` 条目留作历史文件防护（无害）。
+
+**现行架构（与 scheduler 持久化完全同款模式）**：
+
+```
+remote_tools.REMOTE_SERVERS（运行时真源）
+   ├─ 存：connect/disconnect 后 → _persist_current() → 只调 session.save()
+   │      → capture_runtime_state 从 REMOTE_SERVERS 收集 remote_servers 进 extra_state（随 meta.json）
+   └─ 恢复：读档/切会话 → set_session → restore_runtime_state → restore_servers(items)
+          先【清表】→ 后台探测入表（自连过滤 / offline 兜底）
+```
+
+**四个触点**：
+
+| 位置 | 内容 |
+|---|---|
+| `remote_tools.py` | `_AGENT` 由 `make_remote_tools(agent)` 注入（`_persist_current` 触发 session 落盘用）；`_persist_current` 简化为只调 `session.save()`；新增 `restore_servers(items)`（清表 + 后台探测 + 自连过滤 + offline 兜底 + **存档无键时一次性迁移全局 settings 遗留份**）；一轮的 `_local_store_path`/`_save_persisted` 删除；**`reconnect_all` 删除**（chat.py 启动调用一并移除——恢复统一走 set_session 链路，不再有第二个入口） |
+| `agent.py` `capture_runtime_state` | schedules 旁新增 `remote_servers` 收集（真源=REMOTE_SERVERS） |
+| `agent.py` `restore_runtime_state` | scheduler 恢复旁新增 `remote_tools.restore_servers(...)`——复用 2026-09-18 scheduler 持久化三 bug 修复确立的「标准恢复点」（extra_state 直写会被覆盖式重建抹掉，真源必须在模块、capture/restore 挂 set_session 链路） |
+| `chat.py` | 启动 `reconnect_all` 调用删除，注释更新 |
+
+**语义变化**：
+
+| 场景 | 行为 |
+|---|---|
+| 读档恢复 | 连接表跟着回来（后台探测刷新在线状态） |
+| **切会话** | **切组网**——旧 session 连的实例不带到新 session（restore 先清表） |
+| 新会话 | 空表开始 |
+| 旧迁移 | 存档无 `remote_servers` 键 → 一次性读全局 settings 遗留份（自连过滤仍生效） |
+
+自连过滤（`_is_self_url`）、auto id/幂等（url↔id 一对一）等语义不变。
+
+**验证**（mock probe）：restore 清旧表 ✓ / 自连滤 ✓ / 在线入表 ✓ / offline 兜底 ✓；迁移读全局遗留 `{agt-8000, director, scriptwriter}`（director 实例读时自己被滤）✓；py_compile ×3 ✓。引擎层改动，`/restart` 生效——各实例重启后从各自 session 存档恢复（或旧存档无键时从全局迁移并过滤自连）。
+
 ## 组件清单
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
 | `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
-| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **`cwd/.agent/remote_servers.json` 实例本地持久化**（启动自动重连/失败标 offline；2026-09-18 起弃全局 settings 共享——串台修复 + 自连过滤，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
+| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **session 存档持久化**（`extra_state.remote_servers`——2026-09-18 二轮裁定起：capture/restore 挂 `set_session` 标准恢复点、失败标 offline、自连过滤；弃全局 settings 共享与一轮本地文件方案，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）：arguments 带 remote_instance_id → pop → 路由；显式 `self`/`local` 归一为本地；未带 → 本地执行（组网非空时每轮首次附一行缺参教育提示，2026-09-14·二轮——见[瘦身章节](#schema-瘦身--运行时缺参提示2026-09-14二轮用户裁定)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 注入 remote_instance_id——**静态化第一档**（2026-09-17）：只认 `_REMOTE_ROUTABLE` 白名单 30 个、**恒定注入**（不看是否组网、无 enum）——连接前后 schema byte-stable 不断缓存；deepcopy 不污染原件。见 [静态化第一档章节](#第三轮静态化第一档_remote_routable-白名单恒定注入2026-09-17用户设计) |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + remote_instance_id 路由使用规则；**无连接渲染为空串不注入**（零噪声） |
@@ -200,7 +236,7 @@ read_file({"path": "assets/scene.unity", "remote_instance_id": "agt-192-168-1-2-
 run_python({"code": "...", "remote_instance_id": "agt-192-168-1-2-8000"})   ← 远程 CPU/GPU
 ```
 
-连接落盘 `cwd/.agent/remote_servers.json`（2026-09-18 起实例本地存储，全局 settings 旧值仅作一次性迁移兜底——见[串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)；重启自动重连；远程关机标 offline，恢复后探测通过自动转 online）。
+连接随 **session 存档**持久化（`extra_state.remote_servers`——2026-09-18 二轮裁定起，弃全局 settings 与一轮的本地文件方案；读档/切会话经 `set_session → restore_runtime_state → restore_servers` 自动恢复连接，**切会话=切组网**、新会话空表；存档无键时一次性迁移全局 settings 遗留份——见[串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)；远程关机标 offline，恢复后探测通过自动转 online）。
 
 **auto server_id（2026-08，commit 7d7d1ab）**：实例 id 可省略（`remote_connect` 的 remote_instance_id 形参），从 url 自动生成——本地 url（127.0.0.1/localhost/::1）→ `agt-{port}`（**隧道场景端口是唯一区分维度**——如 SSH 隧道 `127.0.0.1:8300 → 远端容器:8000`，一个本地端口对一远端）；远程主机 → `agt-{host}-{port}`（清洗非法字符）；冲突递增 `-2/-3`。**幂等**：同 url 已在表 → 复用现有 id（offline 恢复/重复连接不再报错）；显式改名（`remote_instance_id="comfy"` 连已注册的 url）→ 移除同 url 旧 id 条目——url 与 id **一对一**，防双 id 并存混乱。工具 schema 里 remote_instance_id 不再必填，docstring 写明「可省略——自动生成」。
 

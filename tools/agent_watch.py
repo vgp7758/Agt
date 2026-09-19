@@ -44,7 +44,7 @@ STATIC_META = {
 }
 # 远程实例（无法自动发现，静态维护）
 REMOTE_WATCHES = [
-    {"name": "brick", "note": "Brick Studio（CNB 云容器 #13789）", "url": "https://adk2zs60ym-8000.cnb.run",
+    {"name": "brick", "note": "Brick Studio（CNB 云容器 #13789）", "url": "https://iqhxsci1es-8000.cnb.run",
      "token": "2bc435c58e08fdb3013ff84569a78659"},   # /api/status 若 401 时带 X-Cb-Token 重试
 ]
 # ═══════════════ /CONFIG ═══════════════
@@ -107,11 +107,24 @@ def local_agt_ports() -> list:
     return out
 
 
-def build_watches() -> list:
-    """每轮重建监视清单：自动发现的本地实例（附 cpolar /port-N 公网路由）+ 静态远程。"""
+def build_watches(prev_state: dict | None = None) -> list:
+    """每轮重建监视清单：自动发现的本地实例（附 cpolar /port-N 公网路由）+ 静态远程。
+    prev_state 非空时**沿用上轮发现过的端口**——netstat 偶发失败/端口瞬时抖动也不丢实例
+    （否则实例"消失一轮又出现"会被误判为「首次纳入（基线）」→ 每轮误发邮件）。
+    2026-09-20 用户实锤修复。"""
+    import re as _re
     dom = cpolar_domain()
+    ports = set(local_agt_ports())
+    for k in (prev_state or {}):
+        m = _re.match(r"^port-(\d+)$", k)
+        if m:
+            ports.add(int(m.group(1)))
+            continue
+        for _p, _meta in STATIC_META.items():
+            if _meta["name"] == k:
+                ports.add(_p)
     watches = []
-    for p in local_agt_ports():
+    for p in sorted(ports):
         meta = STATIC_META.get(p, {})
         w = {"name": meta.get("name", f"port-{p}"), "note": meta.get("note", "本地 agt 实例（自动发现）"),
              "url": f"http://127.0.0.1:{p}"}
@@ -223,7 +236,8 @@ def run_once(force_baseline: bool = False) -> bool:
     prev_state = load_state()
     lan = lan_ip()
     sections, new_state = [], {}
-    for w in build_watches():
+    watches = build_watches(prev_state)
+    for w in watches:
         cur = probe(w)
         new_state[w["name"]] = cur
         prev = prev_state.get(w["name"])
@@ -242,7 +256,19 @@ def run_once(force_baseline: bool = False) -> bool:
         lines.append(f"- 局域网：{lan_addr}")
         lines.append(f"- 公网：{pub}")
         sections.append("\n".join(lines))
+    # ★ 修复（2026-09-20 用户实锤"全实例轮数无变化仍收邮件"）：
+    #   自动发现的实例集合每轮可能不同（netstat 偶发失败/端口瞬时抖动），直接覆盖 state 会让
+    #   未探到的实例下一轮又成「首次纳入（基线）」→ 每轮误发邮件。
+    #   修法：本轮未探到的实例保留上一轮指纹（"暂时没扫到" ≠ "实例下线"）。
+    for _k, _v in prev_state.items():
+        if _k not in new_state:
+            new_state[_k] = _v
     save_state(new_state)
+    try:   # 每轮落一行诊断日志（便于排查"为什么发/没发"）
+        with open(os.path.expanduser("~/.agt/agent_watch.log"), "a", encoding="utf-8") as _f:
+            _f.write(f"[{datetime.datetime.now():%m-%d %H:%M:%S}] 探到 {len(watches)} 个 · state {len(new_state)} 条 · 事件段 {len(sections)}\n")
+    except Exception:
+        pass
     if not sections:
         print(f"[{datetime.datetime.now():%H:%M}] 无变化，跳过邮件")
         return False

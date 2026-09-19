@@ -1093,3 +1093,9 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - 监视清单（2026-09-20 实况）：main-9000（cpolar agt 隧道已写配置、待管理员重启服务生效）、agt-8000、claw-50051（**当前不可达**，未擅自拉起）、brick CNB 容器（`/api/status` 401——cnb.run 转发层鉴权问题，不影响页面浏览与聊天）。
 - 已实测闭环：remote_message 驱动 8000 产出新 answer → `--once` 检出「💬 新增 1 轮回答（778→779）」→ 邮件已发 ✓。
 
+## 快速事实增补（2026-09-20 · 二 · agent_watch 自动发现 + cpolar /port-N 路由）
+
+- **agent_watch 本地实例自动发现**（用户问「是本地在跑的实例都自动监听了，还是只监听了其中这几个」触发）：静态 `WATCHES`（手工 4 个）→ `build_watches()` **每轮重建**——`netstat` 扫 LISTENING 端口 → 逐个 `POST /api/status` 验证（响应含 `session_name` 即 agt），`STATIC_META` 降级为别名/备注表；首轮实测 **7 个本地实例**（新收编：剧组 8100-8103 导演/编剧/脚本师/程序 + 9300 SCNet算力运维——静态清单时代根本不在监视里），实例开机/关机/新端口最迟 15 分钟自动进出监视
+- **cpolar 公网地址自动读取 + /port-N 路由**（用户两条提示落地）：`cpolar_domain()` 扫 `~/.cpolar/logs/cpolar_service.log*`（mtime 新→旧 + `_safe_mtime` 防日志滚动竞态）取最新 `*.cpolar.top`（当前 `4150f500.r22`；免费版重连换域名，每轮重扫自愈）；一条隧道 `https://<域名>/port-<N>` 通本机任意端口（实测 9000/8000 ✓）——邮件每实例自动带「局域网 + 公网」地址块；cpolar.yml 此前为 9000 多加的 agt 隧道已撤（恢复原样，**无需重启 cpolar**）
+- 部署形态：独立进程 pid 19452（DETACHED）——不在 9000 服务树，9000 `/restart` 不影响监视；claw-50051 恢复在线（agt-worker，下一轮报 🟢）；brick `/api/status` 401 为 cnb.run 转发层问题（页面/聊天正常，容器重建换短链时一并修）——见 [agent_watch](features/agent-watch.md)
+

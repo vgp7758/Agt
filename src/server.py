@@ -2743,8 +2743,12 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
     if _server is not None:
         return (False, f"服务已在运行（端口 {_port}），先用 /web stop 再启动")
     # 端口探测（占用则立即失败，不进 uvicorn）
+    #   2026-09-19 修：加 SO_REUSEADDR——否则刚重启（旧进程 TIME_WAIT）预检会误判"已占用"，
+    #   表现为 setsid 重启脚本失败、实例掉线（CNB 容器实测：旧进程 kill 后 5s 内再起必报占用）。
+    #   uvicorn 自身默认也开该选项，故预检与真实监听语义自此一致。
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("0.0.0.0", port))
     except OSError:
         return (False, f"端口 {port} 已占用或无权限")

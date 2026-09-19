@@ -110,9 +110,13 @@ cpolar.yml 里此前为 9000 单独加的 agt 隧道**已删除**——一条隧
 | port-8100~8103 | 导演 70 / 编剧 8 / 脚本师 9 / 程序 49 | `:8100-8103` | `…/port-810x` | **剧组四件套——自动发现新收编**（静态清单时代不在监视里） |
 | port-9300 | SCNet算力运维（73） | `:9300` | `…/port-9300` | agt_scnet |
 | claw-50051 | agt-worker | `:50051` | `…/port-50051` | 本轮发现时不可达、后恢复在线（下一轮报 🟢）；别名 |
-| brick（远程静态） | — | — | `https://adk2zs60ym-8000.cnb.run` | `/api/status` 在 cnb.run 转发层吃 401（带 X-Cb-Token 也 401）；页面浏览与聊天正常；修复推迟到容器重建换短链时一并处理 |
+| brick（远程静态） | — | — | `https://iqhxsci1es-8000.cnb.run` | `/api/status` 转发层曾吃 401（带 X-Cb-Token 也 401）；**2026-09-21 首轮回收换 `nai0dl67kj` → 巡检首次实战再换 `iqhxsci1es`，REMOTE_WATCHES 均已同步**——401 实为容器死亡的表现（回收即转发失效），新短链恢复后待邮件验证；回收/复活全程见 [OKX A2A](okx-a2a.md) |
 
 表中 `…/port-N` 即 `https://<当前 cpolar 域名>/port-N`（域名每轮从日志重扫，当前 `4150f500.r22.cpolar.top`，见上节）。
+
+> 2026-09-21 补记：CNB 双容器被回收 → A 容器复活换新短链。brick 属**远程静态清单**（cnb.run 无法自动发现），地址要人工/巡检同步——本机保活巡检 cnb-brick-keepalive（[OKX A2A · 保活根治](okx-a2a.md)）的不通分支已把「更新 REMOTE_WATCHES」纳入标准动作。
+>
+> 2026-09-22 补记（保活巡检首次实战 → 复用验证）：03:53 巡检发现 `nai0dl67kj` → 401 + SSH 拒 → 判定容器再次被 CNB 回收 → 自动复活（新容器 + 新短链 `iqhxsci1es-8000.cnb.run`）→ **REMOTE_WATCHES 已同步新短链（本轮即 tools/agent_watch.py 的变更内容）**。注意远端重建伴随钱包登录态跨容器失效（见 [OKX A2A · 保活巡检首次实战](okx-a2a.md#保活巡检首次实战cnb-再回收--自动复活闭环2026-09-220353)），agent_watch 只能反映「alive/session/turns」变化，登录态需巡检的 wallet 检查兜底。
 
 ## 实测闭环（2026-09-20）
 

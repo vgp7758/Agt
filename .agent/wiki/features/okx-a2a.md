@@ -119,6 +119,61 @@ git 同步：本地 `ws-okx-b` 推送成功（`e486ffb..eb5c585 ws-okx-b -> ws-o
 - **修复 + 升级**：`_ver_gt` 语义版本比较 + 版本源按形态分流（pip → PyPI JSON API）；brick 已 `pip install -U --break-system-packages agt-agent==0.29.6` 并重启，实测 `/api/latest` → `{"current":"0.29.6","latest":"0.29.6","update_available":false}` ✅ 横幅消失。
 - **start_agt.sh v3 加固**（本轮的排查衍生）：kill → SIGTERM 等 12s → SIGKILL 兜底 → 确认死透 + 端口真空闲才启动——修「kill 后探活探到旧进程误报 ready、实例一直跑旧代码」（正因如此修复一度"看起来没生效"）；已提交进 image-gen2 两分支。
 
+## 容器双双被回收 → A 容器复活 + 钱包跨容器失效实锤 + 本机保活根治（2026-09-21，用户实锤）
+
+用户发现 CNB 把 A/B 两个 workspace 容器**同时回收**——`heartbeat.sh` 的 A/B 互拉没能保住。**互保活的盲区**：它防的是「单边死亡、另一边拉起」，防不了平台把两个一起收走（A 容器自 15:00 起仅 ~10h 即被回收，远没到 18h 生命周期上限——更像对无交互/无 Web 活动的 workspace 提前回收）。**根治只有一条路：本机（常开）兜底**，见下「保活巡检」。
+
+### A 容器复活：新短链 + 全套自愈验证（2026-09-21）
+
+| 验证项 | 结果 |
+|---|---|
+| 新短链 | `https://nai0dl67kj-8000.cnb.run`（200 ✓ Agt 页面）；旧 `adk2zs60ym-8000.cnb.run` 随容器销毁失效——**cnb.run 短链跟容器实例走，硬编码该地址的消费端都要跟着换** |
+| agt-web | ✓（138 工具）· session=A2ABrickStudioBusiness · model=deepseek |
+| 台账 | ✓（9 单 delivered 状态保留） |
+| 巡检 bootstrap | ✓ 重注入（容器内 agent 重启确认 2h 巡检 + 5min patrol 运作中） |
+| brick 组网 | ✓ `remote_disconnect` + `connect` 新地址重连（见 [多实例组网](../architecture/multi-instance.md)） |
+| agent_watch | REMOTE_WATCHES brick 地址已更新为新短链（见 [agent-watch](agent-watch.md)）；顺带确认剧组 4 实例 + SCNet 运维 9300 都在 |
+
+### ⚠️ 钱包登录态跨容器失效：saTeeId（TEE 实例绑定）实锤
+
+新容器从 git 恢复了全部凭证文件（keyring / machine-identity / session.json——**文件都在**），但 `wallet status` 仍 `loggedIn: false`。此前担心的 **saTeeId 风险实锤**：凭证绑定原 TEE 实例，跨容器重建 = 新实例 → 会话失效。**平台设计，配置救不了，必须重新登录**（用户浏览器点 OKX sociallogin 授权链接完成）：
+
+- 登录一次 ≈ **99 天有效**
+- 未登录期间 A2A 消息仍可**手动应答**，只是不能自动接单/验收
+
+> 教训：凭证「文件在」≠「登录态在」——TEE 绑定的会话材料跨实例不可迁移；容器重建的标准恢复步骤要把「用户重新登录一次」列为必做项（依赖用户一次点击，Agent 代不了）。
+
+### 根治：本机保活巡检 cnb-brick-keepalive（每 30 分钟）
+
+```
+每 30 分钟探新短链：
+  通   → 静默
+  不通 → CNB API 重启容器 → 等 agt 就绪 → playwright 转发端口拿新短链
+        → 更新 agent_watch REMOTE_WATCHES + remote_connect 重连 brick
+        → 邮件通知用户（含新短链）
+```
+
+从此 CNB 就算把容器全收走，**30 分钟内本机自动拉起并邮件通知**——A/B 互拉降级为第一道快线，本机巡检才是最终兜底。巡检属本机 schedule（见 [定时任务调度](background-scheduler.md)），与 [agent-watch](agent-watch.md) 的「远程静态清单无法自动发现」正好互补：后者只报状态变化，前者负责把容器救活并同步地址。
+
+### 保活巡检首次实战：CNB 再回收 → 自动复活闭环（2026-09-22，03:53）
+
+**巡检第一战就兑现了价值**：03:53 巡检发现短链 `nai0dl67kj-8000.cnb.run` → 401（转发失效）、SSH 也被拒 → 判定**容器又一次被回收**（即 A 容器复活后再次被平台收走，第三次换短链）。全程无人工自动走完 SOP ②：
+
+| 步骤 | 结果 |
+|---|---|
+| CNB API 重启 | 新容器 `cnb-rag-1k2tg8crc`（SSH 15 秒就绪） |
+| 等自动装配 | agt-web 200 · 心跳 ✓ · daemon ✓——期间 agt-web 曾**异常退出一次**，被加固版 `start_agt.sh`（v3：kill → 等 12s → SIGKILL 兜底 → 端口真空闲才启动）**立即恢复**——瞬时故障也能自愈 |
+| 转发端口拿新短链 | **`https://iqhxsci1es-8000.cnb.run/`**（旧 `nai0dl67kj` 随容器销毁失效） |
+| 更新监视/组网 | agent_watch `REMOTE_WATCHES` 已更新新短链（`tools/agent_watch.py`）；remote_connect 组网重连**待 /restart**——诊断出 9000 进程内是旧代码、探测超时值过短 |
+| 邮件通知 | ✓ 已发 foxmail（新短链 + 登录链接 + WebIDE 入口） |
+| 钱包检查 | `loggedIn: false` → 生成登录链接再发（见下） |
+
+**复活后全绿验证**：`GET /` 200（Agt 页面）· `POST /api/status` 200（ready=true · 138 工具 · session=A2ABrickStudioBusiness · deepseek）· `GET /api/tools` 200（61KB 工具表）。
+
+**钱包登录态跨容器失效二次实锤**（saTeeId TEE 实例绑定）：即便上个容器也是自动复活体，**每次重建登录态都跨不过去**——`loggedIn:false` 已成每次回收的必然伴随项。登录链接已随邮件发出（`https://web3.okx.com/account/sociallogin?authSessionId=…`，vgp123@foxmail.com 的 OKX 账号，≈99 天有效），等用户 30 秒点击；下一轮巡检会自动确认恢复。
+
+**教训升级**：「容器重建的标准恢复步骤 = 用户重新登录一次」从「列为必做项」升级为**每次回收都必然触发**——巡检可自动救活容器、同步地址、发通知，但**点登录链接这一步永远依赖用户**（Agent 代不了）；保活巡检的价值 = 把「发现死亡 → 复活 → 通知」全程自动化，剩下唯一人工动作收敛为每周一次的点登录。
+
 ## 订单与行情（截至 2026-09-19 凌晨）
 
 - **已接 2 单**（买家 #1791，**象征价 0.00001 USDT**——性质是测试单）：报告已交付上链，状态 `submitted`

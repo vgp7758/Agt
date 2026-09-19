@@ -1099,3 +1099,11 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **cpolar 公网地址自动读取 + /port-N 路由**（用户两条提示落地）：`cpolar_domain()` 扫 `~/.cpolar/logs/cpolar_service.log*`（mtime 新→旧 + `_safe_mtime` 防日志滚动竞态）取最新 `*.cpolar.top`（当前 `4150f500.r22`；免费版重连换域名，每轮重扫自愈）；一条隧道 `https://<域名>/port-<N>` 通本机任意端口（实测 9000/8000 ✓）——邮件每实例自动带「局域网 + 公网」地址块；cpolar.yml 此前为 9000 多加的 agt 隧道已撤（恢复原样，**无需重启 cpolar**）
 - 部署形态：独立进程 pid 19452（DETACHED）——不在 9000 服务树，9000 `/restart` 不影响监视；claw-50051 恢复在线（agt-worker，下一轮报 🟢）；brick `/api/status` 401 为 cnb.run 转发层问题（页面/聊天正常，容器重建换短链时一并修）——见 [agent_watch](features/agent-watch.md)
 
+## 快速事实增补（2026-09-21）
+
+- **CNB 双容器被回收 → brick 复活 + 钱包跨容器失效实锤 + 本机保活根治（2026-09-21，用户实锤）**：A/B 容器同时被回收，`heartbeat.sh` 互拉没保住（互保活防「单边死亡」，防不了平台同时收走；A 起跑 ~10h 即回收，远没到 18h 上限）。A 容器复活全套自愈验证通过：新短链 `https://nai0dl67kj-8000.cnb.run`（旧 `adk2zs60ym` 失效——cnb.run 短链跟容器实例走，硬编码消费端都要跟着换）+ agt-web 138 工具 + 台账 9 单 delivered 保留 + 巡检 bootstrap 重注入 + brick 组网重连。**钱包登录态跨容器失效**：凭证文件全在但 `loggedIn:false`——saTeeId（TEE 实例绑定）实锤，跨容器重建必须用户重新点授权登录（≈99 天/次；未登录期间可手动应答、不能自动接单）。根治：本机保活巡检 **cnb-brick-keepalive** 每 30 分钟——不通则 CNB API 重启容器 → playwright 拿新短链 → 更新 agent_watch + 重连 brick → 邮件通知——见 [OKX A2A](features/okx-a2a.md)、[agent-watch](features/agent-watch.md)
+
+## 快速事实增补（2026-09-22 · 保活巡检首次实战——CNB 再回收自动复活）
+
+- **保活巡检首次实战：CNB 再回收 → 自动复活闭环（2026-09-22，03:53）**：巡检第一战就兑现价值——03:53 发现短链 `nai0dl67kj` → 401 + SSH 拒 → 判定容器**第二次被 CNB 回收**（A 容器复活后再次被收走，第三次换短链）。全自动走完 SOP ②：CNB API 重启 → 新容器 `cnb-rag-1k2tg8crc`（SSH 15s 就绪）→ 自动装配（agt-web 曾异常退出一次，被加固版 `start_agt.sh` v3 立即恢复——瞬时故障也能自愈）→ 新短链 `https://iqhxsci1es-8000.cnb.run/` → **agent_watch `REMOTE_WATCHES` 同步新短链**（`tools/agent_watch.py`，本文件变更即为此次同步）+ 邮件（新短链 + 登录链接 + WebIDE 入口）→ 复活后全绿验证（/ 200 · /api/status ready·138 工具 · /api/tools 61KB）。**钱包登录态跨容器失效二次实锤**：每次重建都 `loggedIn:false`，登录链接再发（≈99 天/次）——「发现死亡 → 复活 → 通知」已全程无人工，唯一依赖用户=每周点一次登录链接。**遗留**：remote_connect 组网重连待 /restart（诊断出 9000 进程内是旧代码、探测超时值过短）——见 [OKX A2A · 保活巡检首次实战](features/okx-a2a.md#保活巡检首次实战cnb-再回收--自动复活闭环2026-09-220353)、[agent-watch · 补记](features/agent-watch.md)
+

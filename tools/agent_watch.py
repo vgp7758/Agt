@@ -36,17 +36,89 @@ MAIL = {
     "port": 465,
 }
 
-# 监视清单（public 留空 = 无公网隧道）
-WATCHES = [
-    {"name": "main-9000", "note": "自我迭代（本机主 Agent）", "url": "http://127.0.0.1:9000",
-     "public": "（cpolar agt 隧道已写入配置，重启 cpolar 服务后生效）"},
-    {"name": "agt-8000", "note": "多媒体专家", "url": "http://127.0.0.1:8000", "public": ""},
-    {"name": "claw-50051", "note": "ClawTasks 备用实例", "url": "http://127.0.0.1:50051", "public": ""},
+# 本地实例：自动发现（netstat 扫 LISTEN 端口 → /api/status 验证是 agt）——下表仅提供别名/备注
+STATIC_META = {
+    9000:  {"name": "main-9000", "note": "自我迭代（本机主 Agent）"},
+    8000:  {"name": "agt-8000", "note": "多媒体专家"},
+    50051: {"name": "claw-50051", "note": "ClawTasks 备用"},
+}
+# 远程实例（无法自动发现，静态维护）
+REMOTE_WATCHES = [
     {"name": "brick", "note": "Brick Studio（CNB 云容器 #13789）", "url": "https://adk2zs60ym-8000.cnb.run",
-     "public": "https://adk2zs60ym-8000.cnb.run",
      "token": "2bc435c58e08fdb3013ff84569a78659"},   # /api/status 若 401 时带 X-Cb-Token 重试
 ]
 # ═══════════════ /CONFIG ═══════════════
+
+
+def cpolar_domain() -> str:
+    """从 cpolar 服务日志提取最新公网域名（用户提示 2026-09-20：域名可从日志读）。
+    扫 ~/.cpolar/logs/cpolar_service.log*（mtime 新→旧）；免费版重连会换域名，每轮重扫。"""
+    import re as _re
+    import glob as _glob
+    def _safe_mtime(f):
+        try:
+            return os.path.getmtime(f)
+        except OSError:
+            return 0.0
+    files = [f for f in _glob.glob(os.path.expanduser("~/.cpolar/logs/cpolar_service.log*")) if os.path.exists(f)]
+    for f in sorted(files, key=_safe_mtime, reverse=True):
+        try:
+            t = open(f, encoding="utf-8", errors="replace").read()
+        except Exception:
+            continue
+        urls = _re.findall(r"https?://([\w.-]+\.cpolar\.(?:top|cn))", t)
+        if urls:
+            return urls[-1]      # 日志里最后出现≈最新一次建立
+    return ""
+
+
+def local_agt_ports() -> list:
+    """自动发现本机 agt-web 实例：netstat LISTEN 端口 → POST /api/status 验证含 session_name。"""
+    import subprocess as _sp
+    try:
+        r = _sp.run("netstat -ano", shell=True, capture_output=True, text=True, timeout=15)
+        lines = r.stdout.splitlines()
+    except Exception:
+        return []
+    ports = set()
+    for line in lines:
+        if "LISTENING" not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        local = parts[1]
+        p = local.rsplit(":", 1)[-1] if ":" in local else ""
+        if p.isdigit():
+            ports.add(int(p))
+    out = []
+    for p in sorted(ports):
+        if p in (4040, 6060, 9200, 7897):      # cpolar 自身/代理等非 agt
+            continue
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{p}/api/status", method="POST", data=b"{}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=3) as r2:
+                d = json.loads(r2.read().decode())
+            if "session_name" in d:
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def build_watches() -> list:
+    """每轮重建监视清单：自动发现的本地实例（附 cpolar /port-N 公网路由）+ 静态远程。"""
+    dom = cpolar_domain()
+    watches = []
+    for p in local_agt_ports():
+        meta = STATIC_META.get(p, {})
+        w = {"name": meta.get("name", f"port-{p}"), "note": meta.get("note", "本地 agt 实例（自动发现）"),
+             "url": f"http://127.0.0.1:{p}"}
+        # cpolar 隧道支持 /port-N 路径路由到本机任意端口（用户提示 2026-09-20，实测 9000/8000 均通）
+        w["public"] = f"https://{dom}/port-{p}" if dom else ""
+        watches.append(w)
+    return watches + REMOTE_WATCHES
 
 
 def lan_ip() -> str:
@@ -151,7 +223,7 @@ def run_once(force_baseline: bool = False) -> bool:
     prev_state = load_state()
     lan = lan_ip()
     sections, new_state = [], {}
-    for w in WATCHES:
+    for w in build_watches():
         cur = probe(w)
         new_state[w["name"]] = cur
         prev = prev_state.get(w["name"])
@@ -188,7 +260,7 @@ def main():
     if "--once" in sys.argv or force_baseline:
         run_once(force_baseline=force_baseline)
         return
-    print(f"[agent_watch] 常驻启动 · 每 {INTERVAL}s 轮询 · 监视 {len(WATCHES)} 个实例")
+    print(f"[agent_watch] 常驻启动 · 每 {INTERVAL}s 轮询 · 本地实例自动发现 + 远程静态 {len(REMOTE_WATCHES)} 个")
     while True:
         try:
             run_once()

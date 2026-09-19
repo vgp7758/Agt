@@ -1066,6 +1066,10 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **用途**：把发信能力装进容器/实例（优先级之一是 OKX 容器 worker 的掉线/接单告知，见 [OKX A2A Agent 服务店铺](features/okx-a2a.md)），重要情况自动发到 `vgp123@foxmail.com`，邮件正文带 agt 聊天界面直达链接。
 - 状态：**授权码待用户提供**（卡在「绑手机 → 开服务 → 出码」这个人操作环节）；装好后再立专页，此前容器侧无发信通道。
 
+## 快速事实增补（2026-09-19 · 三 · 版本检查双修——v0.29.6 发布）
+
+- **版本检查双修 + v0.29.6 发布（2026-09-19，commit ac6dd1d）**：容器 WebUI 误报「🆕 新版本 v0.29.4 可用（当前 v0.29.5）」——两 bug 叠加：① 版本源查 **GitHub Releases latest**（0.29.5 只推 PyPI 未建 Release → latest 停在 v0.29.4）；② 比较逻辑兜底用 **`!=`**（容器缺 packaging → `Version()` 抛异常 → except → `"0.29.4" != "0.29.5"` → True）。修复：新增 **`_ver_gt` 语义版本比较**（packaging 优先、缺失按数字段比较 1.2.10>1.2.9，**绝不用 `!=` 兜底**）+ **版本源按形态分流**（pip → PyPI JSON API、桌面 → GitHub Releases）；bump 0.29.5 → 0.29.6 发布（https://pypi.org/project/agt-agent/0.29.6/）。顺带 start_agt.sh v3 加固（kill → SIGTERM 12s → SIGKILL 兜底 → 死透 + 端口真空闲才启动，防重启探活旧进程误报 ready）。见 [v0.29.6 发布记录](releases/v0.29.6.md)、[desktop-mode · /api/latest](features/desktop-mode.md)
+
 ## 快速事实增补（2026-09-19 · 三 · 外部事件注入文档 + 自我认知指路 + callback 的 AGT_HOME 修复）
 
 用户提案（2026-09-19）：「其它实例不清楚怎么让脚本通过 api 向自己发送消息吧，应该在 github 或某处写个文档，然后在 Agent 自我认知模块引导模型去读那个文档」。三件交付，commit `523f8ba`：

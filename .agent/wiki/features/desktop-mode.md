@@ -95,11 +95,13 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 
 ### /api/latest 应用内更新检查
 
-GitHub Releases latest 比对版本号（`paths.VERSION`——版本唯一真源）的版本检查端点：**24h 缓存 + 3s 超时 + 失败静默**（`update_available=null` 时前端不渲染横幅）。
+版本检查端点（`paths.VERSION`——版本唯一真源）：**24h 缓存 + 3s 超时 + 失败静默**（`update_available=null` 时前端不渲染横幅）。
 
-- `desktop` 字段 = env `AGT_DESKTOP` 布尔（`_os.environ.get(...)` 读取，区分运行形态）
-- 前端按形态给指引：桌面版 → 下载 zip 覆盖指引；pip → `pip install -U agt-agent`
-- 实现：模块级 `_LATEST_CACHE = {"ts", "data"}` + 端点内局部惰性 `import urllib.request / time as _t / os as _os / from paths import VERSION as _VER`（不污染模块顶部导入）——版本号来源改 `paths`（平铺形态无 src 包可 import，且与桌面/pip 双形态共用唯一真源）
+- **版本源按运行形态分流（2026-09-19，commit ac6dd1d，v0.29.6 发布——修「v0.29.4 可用（当前 v0.29.5）」误报）**：pip 形态查 **PyPI JSON API**（与 `pip install -U` 同源、无需 GitHub token、不依赖 Release 是否建）；桌面版查 **GitHub Releases latest**（桌面包从那里下载 zip）。此前一律查 GitHub Releases——0.29.5 只推 PyPI、未建 GitHub Release → GitHub latest 停在 v0.29.4 → **比当前版本低的旧版本被误报为「有新版本」**
+- **语义版本比较 `_ver_gt(a, b)`**（src/server.py）：packaging 优先，缺失时按数字段比较（1.2.10 > 1.2.9）——**绝不用 `!=` 兜底**：曾因容器缺 packaging → `Version(latest) > Version(current)` 抛异常 → 走 except → `"0.29.4" != "0.29.5"` → True → 把「当前已更高」误报为「有新版本」（2026-09-19 实锤：CNB 容器无 packaging）——**教训：版本比较永远不要用 `!=` 兜底（差异 ≠ 新版本）**
+- `desktop` 字段 = env `AGT_DESKTOP` 布尔（`_os.environ.get(...)` 读取，区分运行形态）；前端按形态给指引：桌面版 → 下载 zip 覆盖指引；pip → `pip install -U agt-agent`
+- 实现：模块级 `_LATEST_CACHE = {"ts", "data"}` + 端点内局部惰性 `import urllib.request / time as _t / os as _os / from paths import VERSION as _VER`（不污染模块顶部导入）——版本号来源 `from paths import VERSION`（平铺形态无 src 包可 import，且与桌面/pip 双形态共用唯一真源）
+- **附带收益（2026-09-19）**：版本源不再依赖 GitHub Release——发布流程少一个必做项（PyPI 一发即为真源）
 
 ## Step 4：图标（PIL 生成）+ Windows 版本资源 + packaging README
 

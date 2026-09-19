@@ -111,6 +111,14 @@ git 同步：本地 `ws-okx-b` 推送成功（`e486ffb..eb5c585 ws-okx-b -> ws-o
 
 > 与 [SCNet 异步生产流水线](scnet-async-pipeline.md) 同族：外部平台容器化承载业务栈；差别是 OKX 这边容器要常驻接单（daemon 生命周期）+ 商业闭环。
 
+### 后记：brick 升 v0.29.6——版本检查双修正是从这里误报钓出来的（2026-09-19 · 三）
+
+### 后记：brick 升 v0.29.6——版本检查双修正是从这里误报钓出来的（2026-09-19 · 三）
+
+- **误报现场**：brick 的 WebUI 横幅显示「🆕 新版本 **v0.29.4** 可用（当前 v0.29.5）」——用户一眼看穿版本号倒挂。根因两连（详见 [v0.29.6 发布记录](../../.agent/wiki/releases/v0.29.6.md) / [desktop-mode · /api/latest](../../.agent/wiki/features/desktop-mode.md)）：① 版本源查 GitHub Releases latest（0.29.5 只推 PyPI 未建 Release → latest 停在 v0.29.4）；② 比较兜底 `!=`（容器缺 packaging → `Version()` 抛异常 → except → `"0.29.4" != "0.29.5"` → True）。
+- **修复 + 升级**：`_ver_gt` 语义版本比较 + 版本源按形态分流（pip → PyPI JSON API）；brick 已 `pip install -U --break-system-packages agt-agent==0.29.6` 并重启，实测 `/api/latest` → `{"current":"0.29.6","latest":"0.29.6","update_available":false}` ✅ 横幅消失。
+- **start_agt.sh v3 加固**（本轮的排查衍生）：kill → SIGTERM 等 12s → SIGKILL 兜底 → 确认死透 + 端口真空闲才启动——修「kill 后探活探到旧进程误报 ready、实例一直跑旧代码」（正因如此修复一度"看起来没生效"）；已提交进 image-gen2 两分支。
+
 ## 订单与行情（截至 2026-09-19 凌晨）
 
 - **已接 2 单**（买家 #1791，**象征价 0.00001 USDT**——性质是测试单）：报告已交付上链，状态 `submitted`

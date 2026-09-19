@@ -95,8 +95,67 @@ def _func_load_agents() -> str:
         return ""
 
 
+def _runtime_form() -> str:
+    """运行形态自我认知（用户提案 2026-09-19）：让 Agent 知道「自己在什么形态下跑、外界怎么和它说话」——
+    CLI / WebUI（服务地址、端口）/ 容器与隧道公网入口 / 消息桥接 / 数据目录。
+    直接影响行为：网页气泡场景要渲染友好（markdown/文件引用控件）、终端场景要纯文本紧凑；
+    知道被 daemon 桥接才知道回复要走回执协议。内容启动后恒定（缓存前缀友好）。"""
+    import os as _os
+    bits: list[str] = []
+    # ① 交互形态 + 服务地址
+    ui = ""
+    try:
+        import server as _srv
+        if getattr(_srv, "_server", None) is not None:
+            url = ""
+            try:
+                import remote_tools as _rt
+                url = str(getattr(_rt, "MY_URL", "") or "")
+            except Exception:
+                pass
+            if not url:
+                url = f"http://127.0.0.1:{getattr(_srv, '_port', '') or 8000}"
+            ui = (f"WebUI 模式（`agt-web`）：本地服务 {url}，外界通过该地址的网页界面 / HTTP API 与你交互；"
+                  f"你的回答渲染为网页气泡（markdown、代码块、文件引用控件均可用）")
+    except Exception:
+        pass
+    if not ui:
+        ui = ("CLI 模式：用户在终端与你对话（无 WebUI 服务在跑；需要网页/手机交互时用户可 `/web start`）")
+    bits.append(ui)
+    # ② 工作目录 / 数据目录
+    try:
+        from paths import AGT_DIR
+        bits.append(f"workspace={WORKSPACE}；数据目录(AGT_HOME)={AGT_DIR}（session 存档/配置/记忆）")
+    except Exception:
+        bits.append(f"workspace={WORKSPACE}")
+    # ③ 容器 / 隧道公网入口（CNB 容器场景：/etc/profile 注入模板）
+    try:
+        _tpl = _os.environ.get("CNB_VSCODE_PROXY_URI", "")
+        if not _tpl:
+            try:
+                import re as _re
+                _m = _re.search(r"CNB_VSCODE_PROXY_URI='([^']+)'", open("/etc/profile", encoding="utf-8").read())
+                _tpl = _m.group(1) if _m else ""
+            except Exception:
+                _tpl = ""
+        if _tpl:
+            bits.append(f"运行在云容器（CNB）中：公网入口 {_tpl.replace('{{port}}', '8000')}"
+                        f"（由容器 /etc/profile 的 CNB_VSCODE_PROXY_URI 推导，重建后自动变化）；"
+                        f"容器有约 18 小时生命周期上限，重建后由启动脚本恢复身份/配置/凭证")
+    except Exception:
+        pass
+    # ④ 消息桥接（外部平台 daemon → a2a_bridge → 本实例）
+    try:
+        if _os.environ.get("OKX_A2A_AI_CLAUDE_COMMAND"):
+            bits.append("消息桥接：外部平台（如 OKX.A2A）的 daemon 经 a2a_bridge 把消息注入本实例，"
+                        "你的回答按回执协议写入指定文件交付")
+    except Exception:
+        pass
+    return "【运行形态】" + "；".join(bits) + "。"
+
+
 def _func_runtime_env() -> str:
-    """{func:runtime_env()} —— 运行时自我认知：包名/版本/升级方式（main.yml 装配引用）。
+    """{func:runtime_env()} —— 运行时自我认知：包名/版本/升级方式 + 运行形态（main.yml 装配引用）。
     版本动态读 src/__init__.py 的 __version__（发版自动跟随，不烘焙）。
     其它 repo 的 session 由此知道自己跑在 agt-agent 里、怎么升级（用户提案）。"""
     try:   # 优先运行源码的 __version__（开发机 importlib.metadata 可能是旧安装的 0.9.0）
@@ -110,10 +169,15 @@ def _func_runtime_env() -> str:
             v = _v("agt-agent")
         except Exception:
             v = "?"
+    try:
+        _form = "\n" + _runtime_form()
+    except Exception:
+        _form = ""
     return (f"agt-agent v{v}（pip 包；CLI `agt` / WebUI `agt-web`）。"
             f"升级：`pip install -U agt-agent` 后 /restart 生效；"
             f"随包播种资产刷新：/update-assets apply。GitHub: vgp7758/Agt。"
-            f"【外部事件注入】需要让脚本/服务/其它机器（或你自己的后台任务）通过 HTTP 向本实例或队友"
+            f"{_form}"
+            f"\n【外部事件注入】需要让脚本/服务/其它机器（或你自己的后台任务）通过 HTTP 向本实例或队友"
             f"推送消息/文件/事件时，见 docs/external-injection.md"
             f"（GitHub: vgp7758/Agt/blob/main/docs/external-injection.md）——核心一句话："
             f"POST <实例地址>/api/callback + header X-Cb-Token（token=该实例 settings.json 的 callback_token）"

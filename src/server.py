@@ -194,14 +194,39 @@ async def serve_icon(name: str):
     return FileResponse(p, media_type="image/png")
 
 
+def _ver_gt(a: str, b: str) -> bool:
+    """语义版本比较 a > b（packaging 优先，缺失时按数字段比较：1.2.10 > 1.2.9）。
+    绝不用 `!=` 兜底——那会把“已是最新/更高”误报为“有新版本”
+    （2026-09-19 实锤：CNB 容器无 packaging → latest(0.29.4) != current(0.29.5) → 误提示“v0.29.4 可用”）。"""
+    try:
+        from packaging.version import Version as _V
+        return _V(str(a)) > _V(str(b))
+    except Exception:
+        pass
+    try:
+        def _k(s):
+            k = []
+            for seg in str(s).split("."):
+                d = "".join(ch for ch in seg if ch.isdigit())
+                k.append(int(d) if d else 0)
+            return k
+        ka, kb = _k(a), _k(b)
+        n = max(len(ka), len(kb))
+        return (ka + [0] * (n - len(ka))) > (kb + [0] * (n - len(kb)))
+    except Exception:
+        return False
+
+
 _LATEST_CACHE = {"ts": 0.0, "data": None}
 
 
 @app.get("/api/latest")
 async def api_latest():
-    """版本检查（spec s_d53311f8 Step 3）：GitHub Releases latest 比对 __version__。
+    """版本检查（spec s_d53311f8 Step 3；2026-09-19 修）：
+    版本源按运行形态分流——pip 形态查 **PyPI JSON API**（与 `pip install -U` 同源、无需 GitHub token）；
+    桌面版查 GitHub Releases latest（桌面版从那里下载 zip）。
     24h 缓存 + 3s 超时 + 失败静默（update_available=null——前端不渲染横幅）。
-    前端按运行形态给指引：桌面版→下载 zip；pip→pip install -U agt-agent。"""
+    比较用 _ver_gt（语义版本 >）——**绝不用 != 兜底**：曾把更高版本误报为“有新版本”（容器无 packaging 时）。"""
     import urllib.request
     import time as _t
     import os as _os
@@ -212,19 +237,22 @@ async def api_latest():
            "url": "https://github.com/vgp7758/Agt/releases/latest",
            "desktop": bool(_os.environ.get("AGT_DESKTOP", "").strip() in ("1", "true", "yes"))}
     try:
-        req = urllib.request.Request(
-            "https://api.github.com/repos/vgp7758/Agt/releases/latest",
-            headers={"User-Agent": "agt-agent", "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(req, timeout=3) as r:
-            tag = (json.loads(r.read().decode()) or {}).get("tag_name", "")
-        latest = tag.lstrip("vV").strip()
+        latest = ""
+        if out["desktop"]:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/vgp7758/Agt/releases/latest",
+                headers={"User-Agent": "agt-agent", "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                tag = (json.loads(r.read().decode()) or {}).get("tag_name", "") or ""
+            latest = tag.lstrip("vV").strip()
+        else:
+            req = urllib.request.Request("https://pypi.org/pypi/agt-agent/json",
+                                         headers={"User-Agent": "agt-agent"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                latest = str(((json.loads(r.read().decode()) or {}).get("info") or {}).get("version", "") or "")
         if latest:
             out["latest"] = latest
-            try:
-                from packaging.version import Version as _V
-                out["update_available"] = _V(latest) > _V(out["current"])
-            except Exception:
-                out["update_available"] = latest != out["current"]
+            out["update_available"] = _ver_gt(latest, out["current"])
     except Exception:
         pass
     _LATEST_CACHE.update(ts=_t.time(), data=out)

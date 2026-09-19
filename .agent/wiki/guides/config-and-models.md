@@ -387,6 +387,14 @@ def _openai_client(self) -> OpenAI:
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
+### ### callback_token 与读取口径：只走 load_runtime_settings()（2026-09-19）
+
+`callback_token`（32 位 hex）：**外部回调通道的鉴权凭据**——`POST /api/callback` 带 header `X-Cb-Token` 才能推消息/文件进本实例 inbox（未配置 = 拒绝一切回调）。**读取口径必须走 `config.load_runtime_settings()`**，不能硬编码 `~/.agt/settings.json`。
+
+**实证（2026-09-19，commit `523f8ba`）**：`api_callback` 原先直接 `expanduser("~/.agt/settings.json")`，在 **CNB 容器（`AGT_HOME=/workspace/.agent-data/agt`）** 下读不到 → 所有回调被安全策略拒掉（报「未配置 callback_token」而实例其实有）。修法即改走 `load_runtime_settings()`（AGT_HOME + repo 级覆盖全部生效），旧环境可 `ln -s $AGT_HOME ~/.agt` 兜底。
+
+**教训（通用）**：凡「读全局配置」的代码都要过 `config` 解析层——`~/.agt` 只是**默认值**，容器 / 桌面版（数据根统一）/ repo 级覆盖都可能改道。详见 [外部事件注入](../features/external-injection.md)。
+
 ## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
 
 四份配置文件（models.json / settings.json / main.yml / mcp.json）的解析统一走 `config.config_file(name)`（src/config.py，用户裁定 2026-08-31 · 多实例组网前置，commit 10d717e）：

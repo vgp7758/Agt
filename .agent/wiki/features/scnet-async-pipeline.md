@@ -60,6 +60,18 @@
 - 本地模拟回调实测：**HTTP 404**——精确命中预期（当前进程还是旧代码，路由不存在）；`/restart` 后即 200。
 - 未鉴权/错 token 行为未做额外容错：宁可 404/401 也不静默吞。
 
+### ### 配置读取修复：token 不再硬编码 ~/.agt（2026-09-19，commit `523f8ba`）
+
+**现象（brick/CNB 容器实测）**：回调一律被拒——`{"ok":false,"error":"未配置 callback_token（settings.json）——为安全考虑拒绝所有回调"}`，而该实例明明有 token。
+
+**根因**：`api_callback` 硬编码读 `~/.agt/settings.json`（`expanduser`）——**CNB 容器的 `AGT_HOME=/workspace/.agent-data/agt`**，`~/.agt` 下无 settings.json → 读不到 token → 该环境下**所有外部回调被安全策略拒掉**（凭据读错路径，不是路由问题）。
+
+**修复两层**：① `src/server.py` 改走 `config.load_runtime_settings()`（支持 `AGT_HOME` + repo 级覆盖，异常兜底回旧路径）；② 容器侧软链 `ln -s /workspace/.agent-data/agt ~/.agt` 立即绕过（不等代码升级）。
+
+**实测**：正确 token → `{"ok":true,"queued":true,"inbox_size":1}`（消息真进队列）；错 token → `{"ok":false,"error":"token 校验失败"}`（鉴权仍有效）。
+
+**同轮配套**：回调通道被写成对外文档 + Agent 自我认知指路，见 [外部事件注入](external-injection.md)。
+
 ## MCP 封装：scnet_notebook（纯 HTTP 直调控制台后端）
 
 - **凭据链**：AK/SK → 区域 token → 直接作 `token` header 调 `cancon.hpccube.com:65011/acx/containermgt/*`（与控制台共用同一 JWT，见 [SCNet 算力网 · 纯 API 通道](../guides/scnet.md)）。

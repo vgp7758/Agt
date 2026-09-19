@@ -119,6 +119,14 @@ const SEG_TYPES=['system','rules','history','ltm','user_message','steps','recent
 
 Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不用 /restart）。
 
+### ### runtime_env 输出扩容：追加【外部事件注入】指路（2026-09-19）
+
+`_func_runtime_env()`（src/agent_config.py，`FUNC_REGISTRY` 的 `runtime_env`）输出在原有「包名/版本/升级方式/GitHub」之后**追加一段【外部事件注入】**：需要让脚本/服务/其它机器（或自己的后台任务）通过 HTTP 向本实例或队友推消息/文件时，见 `docs/external-injection.md`，并附**核心一句话**（`POST <实例地址>/api/callback` + header `X-Cb-Token` + JSON `{"text":…,"source":…}` → 进对方 inbox 唤醒一轮；推文件加 `X-Cb-Type: file`）。
+
+用户提案原话：「当前其它实例并不清楚如何让脚本通过 api 向自己发送消息吧……在 Agent 自我认知模块引导模型去读那个文档」。**凡装配了 `runtime_env` 的 Agent（含子 Agent）重启后即自带这条认知**——这是「让模型自己知道框架能力」的标准姿势：文档放仓库 + 在自我认知函数里指路。
+
+同轮还修掉 `api_callback` 硬编码 `~/.agt/settings.json` 导致 AGT_HOME 非默认环境下回调全被拒的 bug。详见 [外部事件注入](external-injection.md)。
+
 ### FUNC_REGISTRY 扩容 8→13：实例状态函数 + 运行时挂点（2026-09-02，commit c7a9339）
 
 **用户报**：「func 后面的下拉框里没看到 _spec_content/spec_steps/plan_content/plan_steps/bg_services 等等这些函数可选」——**不是没显示，而是 FUNC_REGISTRY 里根本没有**。架构卡点：FUNC_REGISTRY 是**模块级无实例函数**，而 spec/plan/后台服务的数据在 **Agent 实例**上——此前只有 load_models 这类纯配置函数能做。

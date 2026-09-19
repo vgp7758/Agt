@@ -1066,3 +1066,13 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **用途**：把发信能力装进容器/实例（优先级之一是 OKX 容器 worker 的掉线/接单告知，见 [OKX A2A Agent 服务店铺](features/okx-a2a.md)），重要情况自动发到 `vgp123@foxmail.com`，邮件正文带 agt 聊天界面直达链接。
 - 状态：**授权码待用户提供**（卡在「绑手机 → 开服务 → 出码」这个人操作环节）；装好后再立专页，此前容器侧无发信通道。
 
+## 快速事实增补（2026-09-19 · 三 · 外部事件注入文档 + 自我认知指路 + callback 的 AGT_HOME 修复）
+
+用户提案（2026-09-19）：「其它实例不清楚怎么让脚本通过 api 向自己发送消息吧，应该在 github 或某处写个文档，然后在 Agent 自我认知模块引导模型去读那个文档」。三件交付，commit `523f8ba`：
+
+- **对外文档 `docs/external-injection.md`（已上 GitHub，`vgp7758/Agt`）**：① HTTP 回调通道（主角）——`POST <实例>/api/callback` + header `X-Cb-Token` + JSON `{"text":…,"source":…}` → 进对方 inbox 并**唤醒跑一轮**；文件推送加 `X-Cb-Type: file` + `X-Cb-Filename`；含 curl 与可复制的 Python `push_event()`；② Agent 侧工具通道（`remote_message` / `remote_ask` / `remote_call_tool` / `agent_prompt`）；③ 只读端点（`/api/status` `/api/tool/exec` `/api/dash` `/api/stats` `/api/wf/runs`）；④ 实战五坑
+- **自我认知指路（src/agent_config.py `_func_runtime_env`）**：`{func:runtime_env()}` 输出追加【外部事件注入】+ 文档路径（本地 + GitHub）+ 核心一句话——凡装配了 runtime_env 的实例（本机 / brick 容器 / 剧组五角色），**下一轮起模型自带这条认知**（pip 安装的实例随下次升级拿到）
+- **顺带修真 bug**：`api_callback` 硬编码读 `~/.agt/settings.json` —— **CNB 容器 `AGT_HOME=/workspace/.agent-data/agt`** 下读不到 token，**所有外部回调被安全策略拒掉**（brick 实测 `未配置 callback_token`）。修法：改走 `config.load_runtime_settings()`（支持 AGT_HOME / repo 级覆盖）+ 容器侧 `ln -s /workspace/.agent-data/agt ~/.agt` 立即绕过。实测正例 `{"ok":true,"queued":true,"inbox_size":1}` / 反例 `"token 校验失败"` 全对
+- **概念钉死**：**消息驱动 ≠ 工具路由**——`/api/callback` 进对方上下文（它自己决策）；`/api/tool/exec` 只借手脚（零 LLM，`remote_call_tool` 底层）；token 等同该实例远程控制权，不回退 query/日志；回调无内置去重（幂等键自己带）
+- 详见 [外部事件注入](features/external-injection.md)、[SCNet 异步生产流水线 · 配置读取修复](features/scnet-async-pipeline.md)、[多实例组网 · 外部脚本如何推事件给实例](architecture/multi-instance.md)
+

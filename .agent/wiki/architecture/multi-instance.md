@@ -350,6 +350,21 @@ remote_call_tool(remote_instance_id, name, arguments=None) -> str
 
 **验证**：remote_tools.py 末尾 return 列表六件套；`/restart` 生效。
 
+## ## 外部脚本如何推事件给实例：HTTP 回调通道（非 Agent 通道，2026-09-19）
+
+本节的三条通道（工具级 / `remote_message` / `remote_ask`）都是**Agent 自己**用的。**外部进程**（脚本、后台服务、定时任务、另一台机器、CI）没法调这些工具——它的入口是 **HTTP 回调**：
+
+```
+POST http://<实例地址>/api/callback
+  X-Cb-Token: <该实例 settings.json 的 callback_token>
+  {"text": "…", "source": "ci"}          → 消息进对方 inbox + 唤醒它跑一轮
+  X-Cb-Type: file + raw body              → 文件落 scnet_inbox/ + 推通知唤醒
+```
+
+三者关系速记：**回调 = 消息驱动**（进对方上下文，它自己决策）；**`/api/tool/exec` = 工具路由的落地端**（零 LLM，不进对方上下文，`remote_call_tool` 底层就是它）；**组网连接表**只决定 Agent 侧 `remote_instance_id` 能路由到谁——与外部回调互不依赖（回调只需地址 + token）。
+
+2026-09-19 配套交付：用户提案「其它实例不清楚怎么让脚本向自己推消息」→ ① 对外文档 `docs/external-injection.md`（三层通道 + 可抄的 `push_event()` + 五条实战坑）；② `{func:runtime_env()}` 追加【外部事件注入】指路（凡装配 runtime_env 的实例，重启后模型自带这条认知）；③ 修掉 `api_callback` 硬编码 `~/.agt/settings.json` 导致 **AGT_HOME 非默认环境（CNB 容器）下回调全被拒** 的 bug（改走 `config.load_runtime_settings()`，commit `523f8ba`）。详见 [外部事件注入](../features/external-injection.md)。
+
 ## 已验证（E2E 8001 mock 实例）
 
 单进程起 mock 实例（8001，避开在忙的 8000）完整链路：connect 探测注册 / 远程 read（`[remote:t8001]` 前缀 + 内容 + file_version）/ **路由标记 pop 副作用**（时名 server_id，不进远程参数）/ 远程 edit 改文件 / 复核新 version / 未知工具模型可读错误 / 本地无标记直通 / SYSTEM 注入 / disconnect 清理——全过。commit `6b5ca52`（spec 五步全绿）。

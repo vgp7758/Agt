@@ -112,7 +112,12 @@ def _func_runtime_env() -> str:
             v = "?"
     return (f"agt-agent v{v}（pip 包；CLI `agt` / WebUI `agt-web`）。"
             f"升级：`pip install -U agt-agent` 后 /restart 生效；"
-            f"随包播种资产刷新：/update-assets apply。GitHub: vgp7758/Agt")
+            f"随包播种资产刷新：/update-assets apply。GitHub: vgp7758/Agt。"
+            f"【外部事件注入】需要让脚本/服务/其它机器（或你自己的后台任务）通过 HTTP 向本实例或队友"
+            f"推送消息/文件/事件时，见 docs/external-injection.md"
+            f"（GitHub: vgp7758/Agt/blob/main/docs/external-injection.md）——核心一句话："
+            f"POST <实例地址>/api/callback + header X-Cb-Token（token=该实例 settings.json 的 callback_token）"
+            f"+ JSON {{\"text\":…, \"source\":…}} → 进对方 inbox 并唤醒一轮；推文件加 X-Cb-Type: file。")
 
 
 def _func_remote_instances() -> str:

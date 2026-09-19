@@ -1048,10 +1048,16 @@ async def api_callback(request: Request):
     import os as _os
     import time as _t
     try:
-        _cfg = _json.load(open(_os.path.expanduser("~/.agt/settings.json"), encoding="utf-8"))
-        _want = str(_cfg.get("callback_token") or "")
+        # 配置路径走 config 解析（2026-09-19 修：原来硬编码 ~/.agt/settings.json——AGT_HOME 非默认
+        # 的环境（如 CNB 容器 AGT_HOME=/workspace/.agent-data/agt）下读不到 → 所有回调被拒）
+        from config import load_runtime_settings
+        _want = str(load_runtime_settings().get("callback_token") or "")
     except Exception:
-        _want = ""
+        try:
+            _cfg = _json.load(open(_os.path.expanduser("~/.agt/settings.json"), encoding="utf-8"))
+            _want = str(_cfg.get("callback_token") or "")
+        except Exception:
+            _want = ""
     q = request.query_params
     h = request.headers
     token = str(h.get("x-cb-token") or q.get("token") or "")

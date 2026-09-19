@@ -1107,3 +1107,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **保活巡检首次实战：CNB 再回收 → 自动复活闭环（2026-09-22，03:53）**：巡检第一战就兑现价值——03:53 发现短链 `nai0dl67kj` → 401 + SSH 拒 → 判定容器**第二次被 CNB 回收**（A 容器复活后再次被收走，第三次换短链）。全自动走完 SOP ②：CNB API 重启 → 新容器 `cnb-rag-1k2tg8crc`（SSH 15s 就绪）→ 自动装配（agt-web 曾异常退出一次，被加固版 `start_agt.sh` v3 立即恢复——瞬时故障也能自愈）→ 新短链 `https://iqhxsci1es-8000.cnb.run/` → **agent_watch `REMOTE_WATCHES` 同步新短链**（`tools/agent_watch.py`，本文件变更即为此次同步）+ 邮件（新短链 + 登录链接 + WebIDE 入口）→ 复活后全绿验证（/ 200 · /api/status ready·138 工具 · /api/tools 61KB）。**钱包登录态跨容器失效二次实锤**：每次重建都 `loggedIn:false`，登录链接再发（≈99 天/次）——「发现死亡 → 复活 → 通知」已全程无人工，唯一依赖用户=每周点一次登录链接。**遗留**：remote_connect 组网重连待 /restart（诊断出 9000 进程内是旧代码、探测超时值过短）——见 [OKX A2A · 保活巡检首次实战](features/okx-a2a.md#保活巡检首次实战cnb-再回收--自动复活闭环2026-09-220353)、[agent-watch · 补记](features/agent-watch.md)
 
+## 快速事实增补（2026-09-22 · 二 · agent_watch 误报修复——自动发现抖动致基线邮件反复触发）
+
+- **agent_watch 误报修复：自动发现集合不稳定 →「首次纳入（基线）」反复触发邮件（2026-09-22，用户实锤，commit 0a7f0e5）**：现象是"所有实例轮数无变化仍收邮件"——根因链：netstat 偶发失败/端口瞬时抖动 → 只探到部分实例 → state 被整体覆盖丢弃没探到的 → 下轮又探到 → 误判「首次纳入（基线）」→ 每轮误发。三件修复：① state 合并保留（本轮未探到的沿用上轮指纹，"暂时没扫到"≠"实例下线"）② `build_watches(prev_state)` 沿用上轮发现过的端口 ③ 每轮落诊断日志 `~/.agt/agent_watch.log`。验证：连跑两轮 `--once`，第一轮 7 项变化发信（合理，state 旧 4 条）、第二轮同指纹静默 ✓。常驻进程重启 pid 31620——见 [agent-watch · 误报修复](features/agent-watch.md)
+

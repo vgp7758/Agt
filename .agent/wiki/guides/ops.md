@@ -355,6 +355,18 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **下次复发**：看 `~/.agt/restart-web-{port}.log` 最后一段，诊断行直接锁定死因——哨兵行→查信号/exit 路径；⚠️ 行→完整栈；render_loop 退出行→区分三出口。与[超时强杀 + 日志按实例分离](#restart-看门狗超时强杀兜底--日志按实例分离2026-08commit-affdb09)同属 /restart 链路排障；浏览器侧时序坑另见 [user-interaction · /restart 重启双坑](../features/user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)。
 
+## /restart 端口预检 SO_REUSEADDR：TIME_WAIT 误判占用——实例掉线根因（2026-09-19，随 v0.29.5）
+
+**现象（CNB 容器 brick 实测）**：`/restart` 后实例静默起不来、setsid 重启脚本失败——端口预检（bind 探测，**占用则立即失败、不进 uvicorn**）在**刚重启**时误报「端口已占用或无权限」：旧进程 kill 后 5s 内再起，端口处于 **TIME_WAIT** 状态，裸 `socket.bind` 报 `EADDRINUSE`。
+
+**根因**：预检没开 `SO_REUSEADDR`，与 uvicorn 真实监听语义不一致——uvicorn 自身默认开该选项，所以「预检说占用」时实际监听是能成功的（自相矛盾：预检成了新故障点）。表现为 **setsid 重启脚本失败、实例掉线**。
+
+**修复（src/server.py，commit 随 v0.29.5）**：预检 socket 加 `s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)` 再 bind——预检与真实监听语义自此一致。
+
+**配套（容器侧）**：`okx/start_agt.sh` 加固——kill 旧进程后**循环探测端口 bind 可用**再启动（实测等待 ~5s TIME_WAIT 自然释放），见 [OKX A2A · 容器更新](../features/okx-a2a.md)。
+
+**教训**：凡「预检/探测」类代码必须与目标程序的实际行为同语义（同选项、同协议栈）——预检不是独立真值源，是真实监听的提前模拟，语义漂移即新故障点。与 [callback AGT_HOME 修复](../features/external-injection.md#agt_home-读取-bug所有回调被拒2026-09-19commit-523f8ba) 同族：凡「读全局配置/探测资源」都要过**真相源的解析层**，`~/.agt` 与裸 bind 都只是默认值。
+
 ### `agt --help` / `--version`（2026-08，commit 0e186c9）
 
 **背景（用户观察）**：Agent 新环境探索时常用 `agt --help` 获取帮助——此前不支持，直接进交互。修复：`_early_argv()` 支持 `--help/-h/help`、`--version/-V`，打印能力概貌后退出（不进交互），`agt`/`agt-web` 两入口都有；无参数直通不变。与 README「Agent 上手指引」闭环（[multi-instance 边界](../architecture/multi-instance.md#边界与后续)）。

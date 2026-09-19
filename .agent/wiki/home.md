@@ -1076,3 +1076,9 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **概念钉死**：**消息驱动 ≠ 工具路由**——`/api/callback` 进对方上下文（它自己决策）；`/api/tool/exec` 只借手脚（零 LLM，`remote_call_tool` 底层）；token 等同该实例远程控制权，不回退 query/日志；回调无内置去重（幂等键自己带）
 - 详见 [外部事件注入](features/external-injection.md)、[SCNet 异步生产流水线 · 配置读取修复](features/scnet-async-pipeline.md)、[多实例组网 · 外部脚本如何推事件给实例](architecture/multi-instance.md)
 
+## 快速事实增补（2026-09-19 · 四 · v0.29.5 发布：运行形态自我认知 + 端口预检 SO_REUSEADDR）
+
+- **v0.29.5 发布（2026-09-19，PyPI + GitHub；VERSION 0.29.4 → 0.29.5）**：三件——①**运行形态自我认知**（用户提案：「环境信息里让它自己知道『当前启动了一个服务在 localhost:8000，外界通过它与自己交互』」）——`_func_runtime_env()` 重写为 `_runtime_form()`（src/agent_config.py），`runtime_env` 输出升级为五维：交互形态（CLI / WebUI 服务地址端口）/ 容器与隧道公网入口 / 消息桥接（daemon → 回复走回执协议）/ 数据目录 / 外部事件注入指路；**内容启动后恒定（缓存前缀友好）**，直接影响回答格式（网页气泡 vs 终端纯文本）——见 [运行形态自我认知](features/runtime-form.md)；②**端口预检 SO_REUSEADDR**（src/server.py）——修「重启后 TIME_WAIT 误判'已占用' → 实例起不来掉线」真 bug（CNB 容器实测 kill 后 5s 内再起必报占用；uvicorn 自身默认开该选项，预检与真实监听语义自此一致）——见 [ops · /restart 端口预检](guides/ops.md)；③**callback AGT_HOME 修复**随版公开可装（commit 523f8ba，见 [上一条增补](#快速事实增补2026-09-19--三--外部事件注入文档--自我认知指路--callback-的-agt_home-修复)）
+- **容器实例 brick 同步升级 + 镜像重烧**：`:okx` 镜像重烧（digest `d4dcfdbd…`），**Dockerfile 不带版本 pin → 18h 重建即最新**；`okx/start_agt.sh` 加固（kill 后循环探测端口 bind 可用再启动）——见 [OKX A2A · 容器更新](features/okx-a2a.md)
+- 详见 [v0.29.5 发布记录](releases/v0.29.5.md)
+

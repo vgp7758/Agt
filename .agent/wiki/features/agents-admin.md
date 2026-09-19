@@ -127,6 +127,19 @@ Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不用 /restart�
 
 同轮还修掉 `api_callback` 硬编码 `~/.agt/settings.json` 导致 AGT_HOME 非默认环境下回调全被拒的 bug。详见 [外部事件注入](external-injection.md)。
 
+## `_func_runtime_env` → `_runtime_form`：运行形态自我认知（2026-09-19 · 二，v0.29.5）
+
+**用户提案（同日二轮）**：「环境信息里是不是也应该让它自己知道，比如『当前启动了一个服务在 localhost:8000，外界是通过这个服务与自己交互的』」。
+
+`_func_runtime_env()` 重写为 `_runtime_form()`（src/agent_config.py，87 行；`/restart` 生效），`{func:runtime_env()}` 输出从「包名/版本/升级/GitHub + 外部事件注入指路」升级为**运行形态五维自我认知**：
+
+- **交互形态 + 服务地址**：CLI / WebUI（`import server` 读 `_server` + `remote_tools` 拼服务 URL——`http://localhost:{port}` 或容器公网入口）
+- **消息桥接**：被 daemon（OKX A2A 等）转发 → 回复要走回执协议
+- **数据目录**：workspace / 数据根
+- **外部事件注入指路**（上节追加的段）保留其中
+
+**直接影响行为**：网页气泡场景渲染友好（markdown/文件引用控件）、终端场景纯文本紧凑；知道被桥接才知道回执。**内容启动后恒定**（服务地址端口启动即定）——缓存前缀友好，不引入轮内字节变化。详见 [运行形态自我认知](runtime-form.md)。
+
 ### FUNC_REGISTRY 扩容 8→13：实例状态函数 + 运行时挂点（2026-09-02，commit c7a9339）
 
 **用户报**：「func 后面的下拉框里没看到 _spec_content/spec_steps/plan_content/plan_steps/bg_services 等等这些函数可选」——**不是没显示，而是 FUNC_REGISTRY 里根本没有**。架构卡点：FUNC_REGISTRY 是**模块级无实例函数**，而 spec/plan/后台服务的数据在 **Agent 实例**上——此前只有 load_models 这类纯配置函数能做。

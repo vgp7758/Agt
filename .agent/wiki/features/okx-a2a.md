@@ -89,6 +89,21 @@ git 同步：本地 `ws-okx-b` 推送成功（`e486ffb..eb5c585 ws-okx-b -> ws-o
 
 30 分钟拿不到 SSH → 退路：`docker run` 独立验证 `:okx` 镜像本身。
 
+## 容器实例升级 + 镜像重烧 + start_agt.sh 加固（2026-09-19 · 二，v0.29.5）
+
+**背景**：上一轮（本页上文）容器部署后，brick 实例跑的是**手工 patch 版**（未随正式发布走）；v0.29.5 发布（运行形态自我认知 + 端口预检 SO_REUSEADDR + callback AGT_HOME 修复）后统一换正式版：
+
+| 动作 | 内容 |
+|---|---|
+| 实例升级 | `pip install -U --break-system-packages agt-agent==0.29.5` → 已装 0.29.5；`/start_agt.sh` 重启（新加固逻辑生效：kill 后等端口真空闲再起） |
+| 镜像重烧 | `:okx` 新镜像 digest `sha256:d4dcfdbd…` 已推制品库；容器内验证三件套：agt-agent **0.29.5** ✓ / `_runtime_form` 存在 ✓ / SO_REUSEADDR 存在 ✓ |
+| start_agt.sh 加固 | kill 旧进程后**循环探测端口 bind 可用**再启动——修重启 TIME_WAIT 误判占用（见 [ops · /restart 端口预检](../guides/ops.md#restart-端口预检-soreuseaddrtime_wait-误判占用实例掉线根因2026-09-19随-v0295)）；已提交进 image-gen2 两分支 |
+| 长效机制 | Dockerfile `pip3 install agt-agent` **不带版本 pin** → **18h 重建即最新版**，无需手工升级 |
+
+- **运行形态自我认知在容器里的实际效果**：brick 的 `_runtime_form` 段描述自身为 **WebUI 服务 + 公网入口（`https://adk2zs60ym-8000.cnb.run/`）+ 容器生命周期**——用户可直连直达链接问它「你现在的运行形态是什么」验证。详见 [运行形态自我认知](runtime-form.md)。
+- **build 机已停**（省额度）；重建由 18h 生命周期自动触发。
+- 顺带清理 workspace 垃圾文件（`grep.exe.stackdump` / 截图 / 乱码目录）。
+
 ### 尚未做（本轮之后）
 
 - **身份注入 #13789**：注入前须**先停本机 daemon**（防 XMTP 同身份双实例抢消息）

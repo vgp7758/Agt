@@ -1086,3 +1086,10 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **容器实例 brick 同步升级 + 镜像重烧**：`:okx` 镜像重烧（digest `d4dcfdbd…`），**Dockerfile 不带版本 pin → 18h 重建即最新**；`okx/start_agt.sh` 加固（kill 后循环探测端口 bind 可用再启动）——见 [OKX A2A · 容器更新](features/okx-a2a.md)
 - 详见 [v0.29.5 发布记录](releases/v0.29.5.md)
 
+## 快速事实增补（2026-09-20 · agent_watch——实例状态监视 + 变化邮件通知）
+
+- 新工具 `tools/agent_watch.py`（本机常驻，pid 13852）：每 15 分钟轮询各实例 `/api/status`，对比指纹（alive/session/turns/busy/inbox），**有变化才发 QQ 邮箱邮件**（附局域网 + 公网地址）；无变化实例不出现在邮件、全员无变化整封跳过、首轮只建基线、持续离线不重复报。详见 [agent_watch 监视服务](features/agent-watch.md)。
+- 用法：`python agent_watch.py`（常驻）/ `--once`（一轮测试手发）/ `--baseline`（重建基线）。状态文件 `~/.agt/agent_watch_state.json`。
+- 监视清单（2026-09-20 实况）：main-9000（cpolar agt 隧道已写配置、待管理员重启服务生效）、agt-8000、claw-50051（**当前不可达**，未擅自拉起）、brick CNB 容器（`/api/status` 401——cnb.run 转发层鉴权问题，不影响页面浏览与聊天）。
+- 已实测闭环：remote_message 驱动 8000 产出新 answer → `--once` 检出「💬 新增 1 轮回答（778→779）」→ 邮件已发 ✓。
+

@@ -48,6 +48,7 @@
 | [server.py](../architecture/overview.md)（FastAPI 入口层） | 端点宿主，与 `/stats` `/memory` `/rag` `/wfeditor` 等页面路由并列 |
 | [运维与排障](../guides/ops.md#可观测性) | 补全了可观测性的"跨进程实时查询"拼图，与 /stats 页（统计）、llm_calls.jsonl（日志）互补 |
 | [v0.18.2 发布记录](../releases/v0.18.2.md) | 本端点为 v0.18.2 交付项之一 |
+| [agent_watch 监视服务](agent-watch.md)（`tools/agent_watch.py`，2026-09-20） | **消费端**——本机常驻，每 15 分钟对本端点取指纹（session/turns/busy/inbox/存活），有变化发 QQ 邮箱邮件通知（附局域网+公网地址） |
 
 ## 注意事项
 
@@ -65,4 +66,5 @@
 - [系统总览](../architecture/overview.md) — 模块地图与数据流
 - [v0.18.2 发布记录](../releases/v0.18.2.md) — 版本交付内容总览
 - [跨实例客户端](remote-client.md) — REST 之外的完整通道：WS 消息驱动 / 只读 action / 斜杠命令（demo 脚本 `tools/remote_client_demo.py`）
+- [agent_watch 监视服务](agent-watch.md) — 每 15 分钟轮询本端点的本机常驻消费端（变化邮件通知）
 

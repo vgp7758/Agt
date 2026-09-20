@@ -399,6 +399,8 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 **生效**：纯前端，**Ctrl+F5 强刷即生效**（8000 实例取新静态资源走 `/update-assets`），无后端改动。
 
+> **过程区同宽跟随（2026-09-20）**：`.turn` 的宽度正是由这条 min-width 撑起——「过程」trace 由此改 `width:100%` 即与气泡永远同宽（旧 `max-width:85%` 单边限宽撤销），见 [trace-fold · 过程区宽度跟随 answer 气泡](trace-fold.md#过程区宽度跟随-answer-气泡2026-09-20用户提案)。
+
 ## bash 代码块执行按钮：Agent 执行改逐条指令——清理 shebang/行尾注释/空行（2026-09-17，用户提案，commit 60f3c6d）
 
 **按钮本体（此前未入册）**：answer 气泡里 ` ```bash / sh / shell / shellscript ` 代码块下渲染两个执行按钮——**▶ Agent 执行**（把代码发 `/call run_shell`，经 Agent 工具链执行）与 **💻 终端执行**（整块发独立 shell）。

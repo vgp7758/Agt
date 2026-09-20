@@ -1121,3 +1121,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **recall_turn 升级（用户提案，commit a6e3290）**：「如果是想用通配符之类的方式主动召回，可以将被折叠为结构摘要的轮的命中轮整段 user+answer 召回」——三件事：①**query 三种写法**：多关键词 OR（`|` / 空格 / 中英文逗号 / 顿号 / 分号分隔，任一命中即命中）+ 通配符（`* ? []`，fnmatch 任意处命中，如 `replace_*`）+ 普通子串（大小写不敏感）——语义匹配兜底与 embed 语义召回自动降级并存；②**召回展示分层**：`_format_turn_full` 新 `tools="brief"` 参数（默认）——工具调用折叠成一行「🔧 工具调用 N 个: …」，只给整段 user+answer 原文（工具细节按 call_id 用 `agent_query_tool_detail` 查）；`tools="full"` 保留旧行为展开每个工具调用入参与结果；`contains_reasoning=True` 可带每步与回答的 reasoning；③**关键语义**：被折叠为结构摘要的轮命中时以**整段原文召回**——折叠只发生在投影渲染侧，user/answer 原文始终留在 turns 里。验证 8 场景全绿（OR 双分隔 / 通配符两例 / brief·full / 中文逗号 / 无命中提示）。`/restart` 生效——见 [recall_turn 召回工具](features/recall-tools.md)
 
+## 快速事实增补（2026-09-20 · 「过程」宽度跟随 answer 气泡）
+
+- **「过程」宽度跟随 answer 气泡（用户提案 2026-09-20）**：WebUI「过程」trace 区此前 `max-width:85%; min-width:300px` 是气泡 50vw 之前时代的单边限宽，气泡加宽后过程比气泡窄一截——改 `.trace { width:100% }` 一行：`.turn` 宽度由 bubble 的 `min-width: max(50vw,300px)` 撑起（2026-09-18），trace 填满父容器即与气泡永远同宽；实时 + 历史读档共用类名同生效，纯前端 Ctrl+F5 即可——见 [trace-fold · 过程区宽度跟随](features/trace-fold.md)
+

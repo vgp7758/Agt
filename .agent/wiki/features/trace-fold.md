@@ -145,6 +145,21 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 **为什么历史不渲染**：历史轮 UI 保持简洁（用户气泡 + 工具链 + answer），运行时噪声只出现在实时视图；事后可追溯靠 events.jsonl 磁盘证据（`"type":"hook_note"`）——「UI 不堆砌历史噪声、磁盘保留完整真相」。
 
+## 过程区宽度跟随 answer 气泡（2026-09-20，用户提案）
+
+用户提案：「webui 渲染的时候上面『过程』的宽度跟随 answer 气泡的宽度」。一行 CSS（src/static/index.html）：
+
+```css
+/* 旧 */ .trace { …; max-width:85%; min-width:300px; }
+/* 新 */ .trace { …; width:100%; }
+```
+
+**机制**：`.trace` 与 `.bubble` 同为 `.turn` 的块级子项——`.turn` 宽度由 bubble 的 `min-width: max(50vw, 300px)` 撑起（2026-09-18 设定，见[气泡最小宽度](bubble-interaction.md#气泡最小宽度与表格媒体控件最小尺寸2026-09-18用户提案)），`trace width:100%` 填满父容器 → **过程与气泡永远同宽**。
+
+**根因**：旧的 `max-width:85%` 是气泡还只有 250px 时代（50vw 之前）的单边限宽——气泡加宽后过程仍被压在 85% 上限里，比气泡窄一截，正是提案要修的观感。
+
+**生效**：实时渲染与历史读档（renderHistTurn）共用同一套 `.trace` 类名，一起生效；纯前端，Ctrl+F5 强刷即取新静态资源（`/update-assets`）。
+
 ## 与其他模块的关系
 
 - **后端赋能（2026-09-02 起，commit 2bd25be）**：折叠判定消费引擎真实快照 diff 结果——agent.py 快照恒开 → session.py ToolCall.changed → tool_result 事件带 changed / step 事件 changes 序列化；前端不再是纯渲染层投影（此前「后端零改动」的说法随真实 diff 驱动升级失效）。快照恒开细节见 [snapshot-diff · 快照恒开](../architecture/snapshot-diff.md#快照恒开副作用双消费2026-09-02commit-2bd25be用户请求)

@@ -6,6 +6,7 @@
 
 ## 地图
 
+| [features/skills](features/skills.md) | **技能体系**：SKILL.md 技能包（frontmatter + SOP）+ 双层寻址——repo `.agent/skills/` 本地优先（同名 shadow）→ 全局 `~/.agt/skills/` 须 repo `global-skills.json` 激活（`_resolve_skill` 统一寻址，「读」和「用」不分本地/全局）+ 技能工具五件套（read_skill / save_skill / skill_navigate 结构浏览分节读 / skill_run_code 包内脚本三道闸 / skill_evaluate 三级降级） | 可复用任务 SOP / 全局技能 / 技能脚本执行 |
 | [features/scnet-async-pipeline](features/scnet-async-pipeline.md) | **SCNet 异步生产流水线**：画布 → API 转换器（`tools/wf_canvas2api.py`，四对位坑）+ 本机 `POST /api/callback` 回调端点 + 容器侧 monitor.py(:8191) **v3 常驻版**（反代 ComfyUI + `POST /monitor/add` 纯 HTTP 加任务）+ 本机兜底轮询 `tools/scnet_watch_batch.py` + 第一单出片 + 批量打法 | 容器批量出片 / 异步收货 / 画布转 API |
 
 ## 快速事实（2026-08 状态）
@@ -1133,11 +1134,13 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 ## 快速事实增补（2026-09-22 · 五 · before_turn 检索跳过当前档命中——tier_start 档位边界下推）
 
-## 快速事实增补（2026-09-22 · 五 · before_turn 检索跳过当前档命中——tier_start 档位边界下推）
-
 - **用户提案（2026-09-20，代码注释锚定）**：「before_turn_retrieval 召回时，最后如果命中条是当前轮所在档，可以不投影」——当前档的轮完整原文已在上下文，召回再注入即重复
 - **引擎**（src/agent.py `_run_hooks`）：before_turn 位置 hook_ctx 袋新增 `tier_start` = 当前档起始轮号（1-based = `session._tier_boundaries` 最后边界+1；无边界=1）
 - **工作流**（before_turn_retrieval.xml 三处）：start 补 hook_ctx(object) 输出 / collect 补 tier_start 输入（ref dotted 解析）/ code 裁决——语义源 `tidx >= tier_start` 跳过、history 源（含 steps 工具调用）`turn >= tier_start` 跳过；tier_start=0（旧引擎）兜底不过滤
 - **裁决语义**：当前档 ❌（重复）/ 压缩档 ✅（衰减过）/ fc 结构摘要 ✅（最值得）；模拟实测：tier_start=1000 时第 1070/1068 轮命中被滤、第 500/300 轮保留 ✓；XML 良构
 - 引擎层 `/restart` 生效；详见 [长期记忆 · 当前档命中不重复注入](features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)、[workflow-hooks · hook_ctx 袋新键](architecture/workflow-hooks.md#hook_ctx-袋新键tier_start当前档起始轮下推2026-09-20用户提案)、[上下文引擎 · 档位边界下推检索钩子](architecture/context-engine.md#档位边界下推检索钩子hook_ctxtier_start--当前档命中过滤2026-09-20用户提案)
+
+## 快速事实增补（2026-09 · 技能体系双层化——全局技能目录 + repo 激活清单 + 技能工具五件套）
+
+- **技能体系双层化（2026-09，用户提案，spec s_4ac5ccb6）**：①**全局技能目录** `~/.agt/skills/`——技能包一次安装跨 repo 共享；每 repo 以 `.agent/skills/global-skills.json`（纯数组）按需激活，不存在/损坏/非数组 = 零全局（现行为零影响）；②**统一寻址 `_resolve_skill`**——repo `.agent/skills/` 优先（同名本地 shadow 全局）→ 全局须激活，**五件技能工具读写全透明走它，「读」和「用」不分本地/全局**（用户原案「混淆本地技能和全局技能的读和用」）；③**技能工具 2→5**——read_skill/save_skill（原有）+ `skill_navigate`（目录树 ≤3 层 + 章节清单，section= 分节读 12K 截断，大技能不必整读）/ `skill_run_code`（包内 .py 执行：cwd=技能目录 · 三道闸防路径逃逸 · 120s · 8K 截断）/ `skill_evaluate`（三级降级：scripts/evaluate.py stdin → EVAL.md → 明确提示）；④SYSTEM 技能段同步升级——全局技能行加 **🌐** 前缀 + 教育文案写明 read → navigate → run_code 路径；⑤**首个全局技能 yangzi-aistudio**（27 文件整包 + 壳 SKILL.md 路由表）已装 `~/.agt/skills/`，agt/Agt 两 repo 激活，navigate + run_code 实测全绿；单测 `test/test_global_skills.py` 13/13（monkeypatch 全局根隔离）。`/restart` 后 SYSTEM 生效——见 [skills](features/skills.md)
 

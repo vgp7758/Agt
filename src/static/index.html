@@ -35,8 +35,10 @@
   .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px;
     /* 最小宽度 = max(总宽 50%, 300px)（用户提案 2026-09-18：短回答的气泡太窄不好读）。
       用 vw 而非 %：bubble 的 containing block（.turn）是 shrink-to-fit 的 flex 子项，
-       百分比 min-width 在此上下文按 0 解析不生效；50vw≈msgArea 半宽（抽屉是 fixed 浮层不占流） */
-    min-width: max(50vw, 300px); }
+       百分比 min-width 在此上下文按 0 解析不生效；50vw≈msgArea 半宽（抽屉是 fixed 浮层不占流）。
+      max-width:none（2026-09-20 v2）：解除通用 .bubble 的 85% 上限——bot 气泡填满 .turn，
+      与 trace（width:100%）恒同宽；此前 .turn 被宽内容撑开时 bubble 被 85% 压住 → trace 宽出一截。 */
+    min-width: max(50vw, 300px); max-width:none; }
   /* 表格里的播放控件给足最小尺寸（用户提案 2026-09-18：窄列里播放按钮/进度条点不到）；
      全局面防溢出 */
   .bubble table audio, .bubble table video { min-width: 240px; }
@@ -46,10 +48,10 @@
   .gal { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .gal img { width:120px; height:120px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,.3); }
   .row.me .gal img { border-color:rgba(255,255,255,.4); }
-  details.trace { background:#fff; border:1px solid var(--line); border-radius:10px; padding:5px 10px; font-size:12.5px; color:#4b5158; width:100%; }
-/* 过程宽度跟随 answer 气泡（用户提案 2026-09-20）：trace 与 bubble 同为 .turn 的块级子项，
-   .turn 宽度由 bubble 的 min-width(max(50vw,300px)) 撑起 → trace width:100% 即与气泡同宽。
-   旧的 max-width:85%/min-width:300px 是单边限宽（气泡 50vw 之前的时代），造成过程比气泡窄一截。 */
+  details.trace { background:#fff; border:1px solid var(--line); border-radius:10px; padding:5px 10px; font-size:12.5px; color:#4b5158; width:100%; min-width:0; overflow-x:auto; }
+/* 过程宽度跟随 answer 气泡（用户提案 2026-09-20，v2 修「trace 宽出一截」）：
+   宽度锚定=bubble（.turn 由 bubble 的 min-width 决定）；trace 的 min-width:0 + overflow-x:auto
+   让 diff/表格等宽内容横向滚动、不参与 .turn 宽度计算。旧的 max-width:85%/min-width:300px 已废。 */
   details.trace > summary { cursor:pointer; color:var(--muted); user-select:none; }
   .ev { white-space:pre-wrap; word-break:break-word; margin:3px 0; line-height:1.5; }
   .ev.think { color:#9aa0a6; font-style:italic; }
@@ -335,7 +337,10 @@
   .row.me { position:relative; }
   .row.me:hover .bubble-copy { opacity:1; }
   .row.me .bubble-copy { right:0; }
-  .turn { position:relative; }
+  .turn { position:relative; display:flex; flex-direction:column; align-items:stretch; min-width:0; }
+    /* flex column + min-width:0（2026-09-20 v2）：.turn 自身是 .row(row flex) 的 item（主轴水平），
+       min-width:0 解除其 automatic min-content——宽内容（diff 两栏/1600px 表格）不再撑爆 .turn，
+       .turn 宽度=max(50vw,300px)（bubble min-width）；trace 内 overflow-x:auto 横向滚动收纳宽内容。 */
   .turn:hover .bubble-copy { opacity:1; }
   .turn .bubble-copy { left:0; }
   /* 历史展开条（读档时默认只渲染当前档，点击往回展开一档） */

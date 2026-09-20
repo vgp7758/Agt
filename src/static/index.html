@@ -46,7 +46,10 @@
   .gal { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .gal img { width:120px; height:120px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,.3); }
   .row.me .gal img { border-color:rgba(255,255,255,.4); }
-  details.trace { background:#fff; border:1px solid var(--line); border-radius:10px; padding:5px 10px; font-size:12.5px; color:#4b5158; max-width:85%; min-width:300px; }
+  details.trace { background:#fff; border:1px solid var(--line); border-radius:10px; padding:5px 10px; font-size:12.5px; color:#4b5158; width:100%; }
+/* 过程宽度跟随 answer 气泡（用户提案 2026-09-20）：trace 与 bubble 同为 .turn 的块级子项，
+   .turn 宽度由 bubble 的 min-width(max(50vw,300px)) 撑起 → trace width:100% 即与气泡同宽。
+   旧的 max-width:85%/min-width:300px 是单边限宽（气泡 50vw 之前的时代），造成过程比气泡窄一截。 */
   details.trace > summary { cursor:pointer; color:var(--muted); user-select:none; }
   .ev { white-space:pre-wrap; word-break:break-word; margin:3px 0; line-height:1.5; }
   .ev.think { color:#9aa0a6; font-style:italic; }

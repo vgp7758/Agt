@@ -774,6 +774,24 @@ if d.get("seg"):
 
 实现：agent_config.py `_func_team_profiles` / `resolve_assembly_func`；session.py func 项分支。全链路：`/api/agents` func 下拉（FUNC_REGISTRY 驱动）→ 声明 func 项 → 装配求值带 viewer_id → 看板注入。详见 [agents-admin · viewer_id 后补](../features/agents-admin.md) 与 [team-tools · 补记四](../features/team-tools.md)。
 
+#### 团队投影活跃窗口：SYSTEM 只列近 30 轮有交互者（2026-09-20，commit baa9ead，用户提案）
+
+**动机（用户提案 2026-09-20，清单膨胀治理，commit baa9ead，随 v0.29.7 发布）**：registry 条目只增不减——历史 vision_N / wiki-updater_N / 临时实例长期累积（发布轮实况 30 条），SYSTEM 团队块 30 行刷屏，绝大多数与当前任务无关、每条还带 recap；活跃实例往往只有 1~2 个。
+
+**机制**（src/registry.py + src/agent.py）：
+
+| 件 | 职责 |
+|---|---|
+| `AgentRegistryEntry.last_turn` | 最近一次与主 Agent 交互的轮次；0=存量/未知（视为早期 → 投影隐藏） |
+| `registry.touch(agent_id)` | 交互即刷新（agent_prompt 派活 / answer 回流 / agent_ask / agent_notify / query_events） |
+| `registry.set_turn(n)` | 主 Agent 轮次推进同步进 registry（`start_turn` 后上报）——窗口判定的基准时钟 |
+| `format_team(active_window=True)` | 默认**活跃窗口**：`running/idle`（活实例恒显）∪ `last_turn >= cur-30`（近 30 轮交互过）；`False` = 全量 |
+
+- 隐藏 >0 时收尾一行尾注：`↳ 另有 N 个实例近 30 轮无交互未列出（list_team 可查全部）`——30 行刷屏收敛为 1 行
+- **双口径分治**：SYSTEM 注入侧（`get_team_profiles` func 项，见上节）走窗口（默认 True）；三个显式查询端保持全量（显式传 `active_window=False`）——`list_team` 工具（src/multiagent.py）/ `/team` 命令（src/commands.py）/ WebUI 团队看板（src/server.py `team_list` 推送共四处）——投影瘦身不牺牲查询能力
+
+**实证（v0.29.7 发布轮，SYSTEM 实际投影）**：30 条 registry 条目 → 只列 main 一行（running 恒显 + 当前 recap）+ 尾注「另有 29 个实例近 30 轮无交互未列出」——30 行 → 2 行。`/restart` 生效。
+
 ## system_append DSL（SYSTEM 动态追加）
 
 ```yaml

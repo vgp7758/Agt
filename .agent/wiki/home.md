@@ -1113,8 +1113,6 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 ## 快速事实增补（2026-09-22 · 三 · agent_watch 邮件骚扰根因挖清——三进程并跑清场 + busy 翻转降噪）
 
-## 快速事实增补（2026-09-22 · 三 · agent_watch 邮件骚扰根因挖清——三进程并跑清场 + busy 翻转降噪）
-
 - **agent_watch 邮件骚扰根因挖清：三进程并跑互相覆盖 state + busy 翻转降噪（2026-09-22，commit 6db27fc）**：`0a7f0e5` 后仍每轮收信，深挖出三真凶叠加——① 最大真凶：**3 个监视进程并存**（pid 19064/19452/31620，历史 DETACHED 启动不清场），轮询相位错开互相覆盖 state → 指纹基准被搅乱 → 每轮"有变化"，全清杀收敛单进程 pid 4760；② **busy↔空闲翻转被当事件**——活跃实例每 15 分钟随巡检翻转是常态噪音，从事件列表移除，实质事件收敛为上下线/会话切换/轮数变化/inbox 积压；③ state 覆盖+自动发现抖动（上轮已修）。验证：两轮 `--once`——第 1 轮 1 项变化发信（真实：brick 上线 agt-web 200 · turns=22，其 daemon 未跑与本机生产 daemon 无抢单冲突）、第 2 轮静默 ✓✓。同轮保活巡检补跑三绿：claw 50051 ready（161 工具·61 轮）、daemon pid 24348、**钱包 loggedIn:true——登录态恢复**——见 [agent-watch · 根因挖清](features/agent-watch.md)、[OKX A2A](features/okx-a2a.md)
 
 ## 快速事实增补（2026-09 · recall_turn 升级——多关键词 OR + 通配符 + 整段 user+answer 召回）
@@ -1128,4 +1126,8 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 ## 快速事实增补（2026-09-20 · 二 · 「过程」宽度 v2——修 trace 宽出一截）
 
 - **「过程」宽度 v2：修「trace 有时宽出一截」——双层根因（用户复查实锤）**：v1 只拆了 trace 自己的 `max-width:85%` 单边限宽，没动另一侧——①`.turn` 是 `.row`（row flex）的 flex item，automatic min-content 未解除：当轮出现宽内容（edit 的 diff 两栏/长表格）时 `.turn`（shrink-to-fit）被撑到 1600px+（整页跟着横向溢出）；②通用 `.bubble { max-width:85% }` 残留把 bot 气泡压在 85% → `trace（width:100%）` 恒比 bubble 宽 ~15%。**修法三处 CSS**（src/static/index.html）：`.turn { display:flex; flex-direction:column; min-width:0 }`（解除 automatic min-content，宽度回归 bubble 基准 `max(50vw,300px)`）+ `.trace { min-width:0; overflow-x:auto }`（diff/表格改过程框内部横向滚动）+ `.row.bot .bubble { max-width:none }`（解除 85% 上限，bot 气泡填满 .turn 与 trace 恒同宽；右侧用户气泡 85% 保留）。**playwright 实测**（注入 1600px 定宽表格模拟最恶劣场景，viewport=1059）：turn = trace = bubble = 1012 三者完全等宽（差 <1px）、页面无横向溢出、宽表格在 trace 内滚动。纯前端 Ctrl+F5 生效——见 [trace-fold · 过程区宽度跟随 answer 气泡](features/trace-fold.md#过程区宽度跟随-answer-气泡2026-09-20用户提案)
+
+## 快速事实增补（2026-09-22 · 四 · v0.29.7 发布——团队投影活跃窗口 + 召回升级 + 宽度修收官）
+
+- **v0.29.7 发布**（2026-09-22，用户「发个补丁吧」，PyPI 已上线；发布记录见 [v0.29.7](releases/v0.29.7.md)）：①**团队投影活跃窗口**（commit baa9ead，用户提案）——SYSTEM 团队块只列近 30 轮有交互 + running/idle 实例（`registry.last_turn` + `format_team(active_window)` 双口径；`list_team` / `/team` / WebUI 看板保持全量），发布轮实证 30 条 → main 一行 + 1 行尾注——见 [multi-agent · 活跃窗口](architecture/multi-agent.md)；②**recall_turn 召回升级**（a6e3290，多关键词 OR + 通配符 + 被折叠轮整段原文召回）——见 [recall-tools](features/recall-tools.md)；③**「过程」宽度跟随气泡 v1+v2**（55bdc97 + 596b01c，trace/bubble/turn 恒同宽）——见 [trace-fold](features/trace-fold.md)；④agent_watch 双修复（0a7f0e5 + 6db27fc，repo-only 不随 wheel）——见 [agent-watch](features/agent-watch.md)
 

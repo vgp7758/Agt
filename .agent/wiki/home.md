@@ -1117,3 +1117,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **agent_watch 邮件骚扰根因挖清：三进程并跑互相覆盖 state + busy 翻转降噪（2026-09-22，commit 6db27fc）**：`0a7f0e5` 后仍每轮收信，深挖出三真凶叠加——① 最大真凶：**3 个监视进程并存**（pid 19064/19452/31620，历史 DETACHED 启动不清场），轮询相位错开互相覆盖 state → 指纹基准被搅乱 → 每轮"有变化"，全清杀收敛单进程 pid 4760；② **busy↔空闲翻转被当事件**——活跃实例每 15 分钟随巡检翻转是常态噪音，从事件列表移除，实质事件收敛为上下线/会话切换/轮数变化/inbox 积压；③ state 覆盖+自动发现抖动（上轮已修）。验证：两轮 `--once`——第 1 轮 1 项变化发信（真实：brick 上线 agt-web 200 · turns=22，其 daemon 未跑与本机生产 daemon 无抢单冲突）、第 2 轮静默 ✓✓。同轮保活巡检补跑三绿：claw 50051 ready（161 工具·61 轮）、daemon pid 24348、**钱包 loggedIn:true——登录态恢复**——见 [agent-watch · 根因挖清](features/agent-watch.md)、[OKX A2A](features/okx-a2a.md)
 
+## 快速事实增补（2026-09 · recall_turn 升级——多关键词 OR + 通配符 + 整段 user+answer 召回）
+
+- **recall_turn 升级（用户提案，commit a6e3290）**：「如果是想用通配符之类的方式主动召回，可以将被折叠为结构摘要的轮的命中轮整段 user+answer 召回」——三件事：①**query 三种写法**：多关键词 OR（`|` / 空格 / 中英文逗号 / 顿号 / 分号分隔，任一命中即命中）+ 通配符（`* ? []`，fnmatch 任意处命中，如 `replace_*`）+ 普通子串（大小写不敏感）——语义匹配兜底与 embed 语义召回自动降级并存；②**召回展示分层**：`_format_turn_full` 新 `tools="brief"` 参数（默认）——工具调用折叠成一行「🔧 工具调用 N 个: …」，只给整段 user+answer 原文（工具细节按 call_id 用 `agent_query_tool_detail` 查）；`tools="full"` 保留旧行为展开每个工具调用入参与结果；`contains_reasoning=True` 可带每步与回答的 reasoning；③**关键语义**：被折叠为结构摘要的轮命中时以**整段原文召回**——折叠只发生在投影渲染侧，user/answer 原文始终留在 turns 里。验证 8 场景全绿（OR 双分隔 / 通配符两例 / brief·full / 中文逗号 / 无命中提示）。`/restart` 生效——见 [recall_turn 召回工具](features/recall-tools.md)
+

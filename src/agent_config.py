@@ -689,10 +689,32 @@ def _md_section_text(text: str, want: str) -> str | None:
     return None
 
 
+def _find_skill_file(d: Path, file: str):
+    """技能包内文件宽松定位（用户提案 2026-09-20：file 传完整路径或文件名皆可）。
+    匹配链：① 完整相对路径 → ② 包内 rglob 同名 basename → ③ basename 去扩展名/部分包含（stem 包含）。
+    返回 Path（唯一定位）/ list[Path]（多候选，调用方列出让模型重选）/ None（找不到）。"""
+    p = d / file
+    if p.exists():
+        return p
+    name = Path(file).name
+    cands = [q for q in d.rglob(name)]
+    if len(cands) == 1:
+        return cands[0]
+    if len(cands) > 1:
+        return cands
+    stem = Path(name).stem
+    cands = [q for q in d.rglob("*")
+             if q.is_file() and q.suffix.lower() in (".md", ".txt") and stem and stem in q.stem]
+    if len(cands) == 1:
+        return cands[0]
+    return cands or None
+
+
 def skill_navigate(name: str, section: str = "", list_only: bool = False, file: str = "") -> str:
     """浏览技能包结构 / 读包内任意文件（大技能不必整读）。
-    默认：目录树 + SKILL.md 章节清单；
-    file=包内相对路径（如 专业模块/08-CINEDANCE视频提示词.md）→ 读该文件（.md 可配合 section 分节读；截断 12000 字）；
+    默认：目录树（.md 文件附带其 #/## 级标题清单——一眼看到每个文件有哪些 section）+ SKILL.md 章节清单；
+    file=文件名或相对路径（如 '08-CINEDANCE视频提示词.md' 或 '专业模块/08-CINEDANCE视频提示词.md'）→ 读该文件
+    （.md 可配合 section 分节读；同名多文件时列出候选；截断 12000 字）；
     section=章节标题 → 读 SKILL.md（或 file 指定文件）的该章节；list_only=True 只列结构。
     name: 技能名（本地/全局统一寻址）。"""
     d, scope = _resolve_skill(name)
@@ -700,7 +722,7 @@ def skill_navigate(name: str, section: str = "", list_only: bool = False, file: 
         return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
     src = "🌐 全局 ~/.agt/skills" if scope == "global" else "repo .agent/skills"
     lines = [f"📦 技能 '{name}'（{src}）", f"路径: {d}"]
-    # 目录树（≤3 层，跳过隐藏/缓存目录，防大包刷屏）
+    # 目录树（≤3 层，跳过隐藏/缓存目录；.md 附 #/## 级标题——每文件≤6 条 + …，总预算 160 行防刷屏）
     shown = 0
     for p in sorted(d.rglob("*")):
         rel = p.relative_to(d)
@@ -708,18 +730,37 @@ def skill_navigate(name: str, section: str = "", list_only: bool = False, file: 
             continue
         lines.append("  " * (len(rel.parts) - 1) + ("📁 " if p.is_dir() else "  • ") + p.name)
         shown += 1
-        if shown >= 120:
-            lines.append("  …（条目过多省略）")
+        if p.is_file() and p.suffix.lower() == ".md" and p.name != "SKILL.md":
+            try:
+                _t = p.read_text(encoding="utf-8", errors="ignore")
+                _hs = [t for lv, t, _ in _md_sections(_t) if lv <= 2]
+                _indent = "  " * len(rel.parts) + "  · "
+                lines.extend(_indent + t for t in _hs[:6])
+                if len(_hs) > 6:
+                    lines.append(_indent + f"…（共 {len(_hs)} 个标题）")
+            except Exception:
+                pass
+        if shown >= 120 or len(lines) >= 160:
+            lines.append("  …（条目过多省略；用 file= 直接读指定文件）")
             break
-    # ── file=：读包内任意文件（相对技能目录，防逃逸同 run_code）──
+    # ── file=：读包内任意文件（文件名或相对路径均可；防逃逸同 run_code）──
     if file:
         if ".." in Path(file).parts:
-            return "[非法路径] file 须为技能目录内的相对路径（禁止 .. 逃逸）"
-        fp = (d / file).resolve()
+            return "[非法路径] file 须为技能目录内的相对路径/文件名（禁止 .. 逃逸）"
+        hit = _find_skill_file(d, file)
+        if hit is None:
+            return "\n".join(lines) + f"\n[文件不存在] {file}。上方目录树可见包内文件；.md 附了标题清单"
+        if isinstance(hit, list):
+            cands = "\n".join(f"  - {str(q.relative_to(d)).replace(chr(92), '/')}'" for q in hit[:10])
+            return "\n".join(lines) + f"\n[多个同名候选] '{file}' 匹配到 {len(hit)} 个文件：\n{cands}\n请用完整相对路径重试。"
+        fp = hit
         if not (fp == d.resolve() or d.resolve() in fp.parents):
             return "[非法路径] 文件必须在技能目录内"
-        if not fp.exists():
-            return "\n".join(lines) + f"\n[文件不存在] {file}。可用 list_only=True 查看目录树"
+        disp = str(fp.relative_to(d)).replace(chr(92), "/")
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            return f"[读取失败] {disp}: {e}"
         try:
             text = fp.read_text(encoding="utf-8", errors="ignore")
         except Exception as e:
@@ -729,15 +770,15 @@ def skill_navigate(name: str, section: str = "", list_only: bool = False, file: 
                 seg = _md_section_text(text, section)
                 if seg is None:
                     avail = "\n".join(f"  {'#' * lv} {t}" for lv, t, _ in _md_sections(text)) or "（无章节标题）"
-                    return "\n".join(lines) + f"\n[未找到章节] '{section}'。{file} 可用章节：\n{avail}"
-                return "\n".join(lines) + f"\n\n📖 {file} · 章节 '{section.lstrip('#').strip()}'：\n\n{seg}"
+                    return "\n".join(lines) + f"\n[未找到章节] '{section}'。{disp} 可用章节：\n{avail}"
+                return "\n".join(lines) + f"\n\n📖 {disp} · 章节 '{section.lstrip('#').strip()}'：\n\n{seg}"
             heads = _md_sections(text)
             hdr = ("\n📑 章节：\n" + "\n".join(f"  {'  ' * (lv-1)}- {t}  (L{n})" for lv, t, n in heads)) if heads else ""
-            full = f"📄 {file}（{len(text.splitlines())} 行）{hdr}\n\n（全文 12000 字截断；section=标题 分节读）\n\n{text[:12000]}"
+            full = f"📄 {disp}（{len(text.splitlines())} 行）{hdr}\n\n（全文 12000 字截断；section=标题 分节读）\n\n{text[:12000]}"
             if len(text) > 12000:
                 full += f"\n…（截断，共 {len(text)} 字）"
             return "\n".join(lines) + "\n" + full
-        return "\n".join(lines) + f"\n\n📄 {file}：\n\n{text[:12000]}" + (f"\n…（截断，共 {len(text)} 字）" if len(text) > 12000 else "")
+        return "\n".join(lines) + f"\n\n📄 {disp}：\n\n{text[:12000]}" + (f"\n…（截断，共 {len(text)} 字）" if len(text) > 12000 else "")
     # ── 默认：SKILL.md 章节导航 ──
     md = d / "SKILL.md"
     if not md.exists():

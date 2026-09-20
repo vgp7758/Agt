@@ -401,6 +401,10 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 > **过程区同宽跟随（2026-09-20）**：`.turn` 的宽度正是由这条 min-width 撑起——「过程」trace 由此改 `width:100%` 即与气泡永远同宽（旧 `max-width:85%` 单边限宽撤销），见 [trace-fold · 过程区宽度跟随 answer 气泡](trace-fold.md#过程区宽度跟随-answer-气泡2026-09-20用户提案)。
 
+### 追记（2026-09-20 · v2）：`.row.bot .bubble` 加 `max-width:none`——bot 气泡填满 .turn 与过程区恒同宽
+
+「过程」宽度 v2（见 [trace-fold · v2](trace-fold.md#过程区宽度跟随-answer-气泡2026-09-20用户提案)）揭出通用 `.bubble { max-width:85% }` 的残留副作用：当轮出现宽内容（diff 两栏/长表格）时 `.turn` 被撑宽，bot 气泡被 85% 压住 → `trace（width:100%）` 反而比气泡宽一截。修法：`.row.bot .bubble` 在 min-width 之外加 **`max-width:none`**——解除 85% 上限，bot 气泡填满 `.turn`（其宽度=本节锚定的 `max(50vw,300px)`），与 trace 恒同宽；**右侧用户气泡（`.row.me .bubble`）的 85% 限宽保留不动**。纯前端，Ctrl+F5 生效。
+
 ## bash 代码块执行按钮：Agent 执行改逐条指令——清理 shebang/行尾注释/空行（2026-09-17，用户提案，commit 60f3c6d）
 
 **按钮本体（此前未入册）**：answer 气泡里 ` ```bash / sh / shell / shellscript ` 代码块下渲染两个执行按钮——**▶ Agent 执行**（把代码发 `/call run_shell`，经 Agent 工具链执行）与 **💻 终端执行**（整块发独立 shell）。

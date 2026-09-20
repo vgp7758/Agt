@@ -160,6 +160,33 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 
 **生效**：实时渲染与历史读档（renderHistTurn）共用同一套 `.trace` 类名，一起生效；纯前端，Ctrl+F5 强刷即取新静态资源（`/update-assets`）。
 
+### v2：修「trace 有时宽出一截」——flex automatic min-content + bubble 85% 上限双层根因（2026-09-20 · 二，用户实测）
+
+用户复查：「trace 和 bubble 的宽度还是不一致，trace 有时候会宽出来一截」。v1 只拆了 trace 自己的 `max-width:85%` 单边限宽，真正让 trace 反超 bubble 的**撑宽机制**没动——playwright 实测钉出双层根因：
+
+| # | 根因 | 机制 |
+|---|---|---|
+| ① | `.turn` 是 `.row`（row flex）的 **flex item，automatic min-content 未解除** | 当轮出现宽内容（edit 的 diff 两栏、长表格）→ `.turn`（shrink-to-fit）被撑到 1600px+ → 整页跟着横向溢出 |
+| ② | 通用 `.bubble { max-width:85% }` 残留 | `.turn` 被撑宽后 bot 气泡被 85% 上限压住 → `trace（width:100%）` 恒比 bubble 宽 ~15%——「宽出来一截」 |
+
+**修法三处 CSS**（src/static/index.html，2026-09-20 · 二）：
+
+| 改动 | 作用 |
+|---|---|
+| `.turn { display:flex; flex-direction:column; align-items:stretch; min-width:0 }` | flex item 的 min-width:0 解除 automatic min-content——宽内容撑不爆 `.turn`，其宽度回归 bubble min-width 基准（`max(50vw,300px)`，见[气泡最小宽度](bubble-interaction.md#气泡最小宽度与表格媒体控件最小尺寸2026-09-18用户提案)） |
+| `.trace { width:100%; min-width:0; overflow-x:auto }` | diff/表格等宽内容改为**过程框内部横向滚动**，不参与 `.turn` 宽度计算（旧 `max-width:85%/min-width:300px` 全废） |
+| `.row.bot .bubble { max-width:none }` | 解除 85% 上限——bot 气泡填满 `.turn`，与 trace 恒同宽（**右侧用户气泡的 85% 保留不动**） |
+
+**playwright 实测**（注入 1600px 定宽表格模拟最恶劣场景，viewport=1059）：
+
+```
+turn = trace = bubble = 1012      ← 三者完全等宽（差 <1px）
+页面横向溢出：无（此前 .turn 会被撑到 1621）
+宽表格：在 trace 内部横向滚动 ✓
+```
+
+**生效**：实时渲染与历史读档共用同一套 `.turn/.trace/.bubble` 类名，一起生效；纯前端，Ctrl+F5 强刷即取新静态资源。
+
 ## 与其他模块的关系
 
 - **后端赋能（2026-09-02 起，commit 2bd25be）**：折叠判定消费引擎真实快照 diff 结果——agent.py 快照恒开 → session.py ToolCall.changed → tool_result 事件带 changed / step 事件 changes 序列化；前端不再是纯渲染层投影（此前「后端零改动」的说法随真实 diff 驱动升级失效）。快照恒开细节见 [snapshot-diff · 快照恒开](../architecture/snapshot-diff.md#快照恒开副作用双消费2026-09-02commit-2bd25be用户请求)

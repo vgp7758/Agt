@@ -1125,3 +1125,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **「过程」宽度跟随 answer 气泡（用户提案 2026-09-20）**：WebUI「过程」trace 区此前 `max-width:85%; min-width:300px` 是气泡 50vw 之前时代的单边限宽，气泡加宽后过程比气泡窄一截——改 `.trace { width:100% }` 一行：`.turn` 宽度由 bubble 的 `min-width: max(50vw,300px)` 撑起（2026-09-18），trace 填满父容器即与气泡永远同宽；实时 + 历史读档共用类名同生效，纯前端 Ctrl+F5 即可——见 [trace-fold · 过程区宽度跟随](features/trace-fold.md)
 
+## 快速事实增补（2026-09-20 · 二 · 「过程」宽度 v2——修 trace 宽出一截）
+
+- **「过程」宽度 v2：修「trace 有时宽出一截」——双层根因（用户复查实锤）**：v1 只拆了 trace 自己的 `max-width:85%` 单边限宽，没动另一侧——①`.turn` 是 `.row`（row flex）的 flex item，automatic min-content 未解除：当轮出现宽内容（edit 的 diff 两栏/长表格）时 `.turn`（shrink-to-fit）被撑到 1600px+（整页跟着横向溢出）；②通用 `.bubble { max-width:85% }` 残留把 bot 气泡压在 85% → `trace（width:100%）` 恒比 bubble 宽 ~15%。**修法三处 CSS**（src/static/index.html）：`.turn { display:flex; flex-direction:column; min-width:0 }`（解除 automatic min-content，宽度回归 bubble 基准 `max(50vw,300px)`）+ `.trace { min-width:0; overflow-x:auto }`（diff/表格改过程框内部横向滚动）+ `.row.bot .bubble { max-width:none }`（解除 85% 上限，bot 气泡填满 .turn 与 trace 恒同宽；右侧用户气泡 85% 保留）。**playwright 实测**（注入 1600px 定宽表格模拟最恶劣场景，viewport=1059）：turn = trace = bubble = 1012 三者完全等宽（差 <1px）、页面无横向溢出、宽表格在 trace 内滚动。纯前端 Ctrl+F5 生效——见 [trace-fold · 过程区宽度跟随 answer 气泡](features/trace-fold.md#过程区宽度跟随-answer-气泡2026-09-20用户提案)
+

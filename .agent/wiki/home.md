@@ -1148,3 +1148,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **skill_navigate 加 `file=` 参数——技能包文件读取的一等通道**（2026-09，用户问句「技能里有很多文件，读取其它文件的话是什么工具」触发，commit e5b0e16a，`src/agent_config.py`）：此前包内非 SKILL.md 文件（洋子技能的 8 个专业模块、口令卡等）只能 `run_python` `open()` 绕行（`read_file` 限 workspace 内，全局技能在 `~/.agt/skills/` 读不了）。现 `skill_navigate(name, file="包内相对路径")` 直读任意文件（markdown 附章节清单 + 12K 截断，纯文本直读，可再配 `section=` 分节精读），防逃逸三道闸与 skill_run_code 同款；实测 6 项全绿。**schema 需实例 `/restart` 生效**——见 [skills · skill_navigate 后记](features/skills.md)
 
+## 快速事实增补（2026-09-20 · skill_navigate 树附各 .md 标题清单 + file 宽松定位）
+
+- **skill_navigate 两个体验升级（2026-09-20，用户两问触发，commit 88de034，`src/agent_config.py`）**：①**目录树附各 .md 标题清单**——用户问「Agent 要怎么知道文件里有哪些 section？」，现每个 .md 文件名下列出 `#/##` 级标题（每文件 ≤6 条 + `…`，全树总预算 160 行防大包刷屏），一次 navigate = 全包「文件 × 章节」地图，选准再 file+section 精读；②**file 宽松定位**——用户问「file 是完整相对路径会不会偏严格了」，新 `_find_skill_file` 三级匹配链：完整相对路径精确命中 → 包内 rglob 同名 basename → stem 部分包含（搜 .md/.txt）；唯一定位直读（输出头标实际路径）/ 多候选列出让模型重选（如两个 AGENTS.md）/ 防逃逸不变（`../` 拒 + resolve 校验）。验证 10 场景全绿——见 [skills · 后记二](features/skills.md)
+

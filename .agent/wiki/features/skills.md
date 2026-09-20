@@ -47,7 +47,28 @@ def _resolve_skill(name, workspace=None):
 
 - 默认返回：目录树（**≤3 层**，跳 `.` 开头 / `__pycache__`，120 条上限防刷屏）+ SKILL.md 章节清单（1~3 级标题带行号）
 - `section="章节标题"`（含/不含 `#` 均可，大小写不敏感）→ 只读该章节正文（**12K 字截断**）；未命中则回显全部可用章节
+- `file="包内相对路径"` → 读该文件正文（超长 **12K 字截断**；markdown 文件附章节清单，纯文本直读；可再配 `section=` 分节精读）——见下节后记
 - `list_only=True` 只列结构不附提示尾注
+
+#### 后记：file= 读包内任意文件——技能包文件读取的一等通道（2026-09，用户问句触发，commit e5b0e16a）
+
+用户问「技能里有很多文件，读取其它文件的话是什么工具」——问句实测暴露缺口：`read_file` 限 workspace 内（全局技能包在 `~/.agt/skills/`，workspace 外读不了），`skill_navigate` 原来只导航 SKILL.md 本身。结果：包内其它文件（洋子技能的 8 个专业模块、口令卡、使用说明……）**此前只能 `run_python` `open()` 绕行**——能用但不体面，且模型不一定想得到。
+
+**修复**：`skill_navigate` 加 `file=` 参数（`src/agent_config.py`；`_md_sections` / `_md_section_text` 两个 markdown 章节 helper 从 SKILL.md 专用扩展到任意包内文件）：
+
+| 用法 | 返回 |
+|---|---|
+| `skill_navigate(name)` | 目录树 + SKILL.md 章节清单（默认行为不变） |
+| `skill_navigate(name, file="专业模块/08-XXX.md")` | 该文件正文 + 章节清单（超长 12K 截断） |
+| `skill_navigate(name, file="…", section="章节名")` | 大文件分节精读 |
+| `skill_navigate(name, file="02-口令卡.txt")` | 纯文本直读 |
+
+- **防逃逸与 skill_run_code 同款**：禁 `..`、resolve 后必须落在技能目录内（统一寻址得到目录后再校验，本地/全局技能均可读）
+- 文件不存在 → 提示 `list_only=True` 查目录树纠错
+- 实测 6 项全绿：44KB 大模块章节化读取 / 分节精读 / txt 直读 / 逃逸拦截 / 不存在提示 / 默认行为不回归
+- 效果：从总控路由到 08 号模块分节精读，全程不出技能工具集，不再依赖 run_python 绕行
+
+**生效注意**：新参数进工具 schema 需实例重启（与 SYSTEM 摘要同口径，无热重载）——`/restart` 后 agent 的工具 schema 才带 `file`。
 
 ### skill_run_code · 技能包内脚本执行（安全三道闸）
 

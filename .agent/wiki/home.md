@@ -1144,3 +1144,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **技能体系双层化（2026-09，用户提案，spec s_4ac5ccb6）**：①**全局技能目录** `~/.agt/skills/`——技能包一次安装跨 repo 共享；每 repo 以 `.agent/skills/global-skills.json`（纯数组）按需激活，不存在/损坏/非数组 = 零全局（现行为零影响）；②**统一寻址 `_resolve_skill`**——repo `.agent/skills/` 优先（同名本地 shadow 全局）→ 全局须激活，**五件技能工具读写全透明走它，「读」和「用」不分本地/全局**（用户原案「混淆本地技能和全局技能的读和用」）；③**技能工具 2→5**——read_skill/save_skill（原有）+ `skill_navigate`（目录树 ≤3 层 + 章节清单，section= 分节读 12K 截断，大技能不必整读）/ `skill_run_code`（包内 .py 执行：cwd=技能目录 · 三道闸防路径逃逸 · 120s · 8K 截断）/ `skill_evaluate`（三级降级：scripts/evaluate.py stdin → EVAL.md → 明确提示）；④SYSTEM 技能段同步升级——全局技能行加 **🌐** 前缀 + 教育文案写明 read → navigate → run_code 路径；⑤**首个全局技能 yangzi-aistudio**（27 文件整包 + 壳 SKILL.md 路由表）已装 `~/.agt/skills/`，agt/Agt 两 repo 激活，navigate + run_code 实测全绿；单测 `test/test_global_skills.py` 13/13（monkeypatch 全局根隔离）。`/restart` 后 SYSTEM 生效——见 [skills](features/skills.md)
 
+## 快速事实增补（2026-09 · skill_navigate file= 参数——技能包内任意文件读取一等通道）
+
+- **skill_navigate 加 `file=` 参数——技能包文件读取的一等通道**（2026-09，用户问句「技能里有很多文件，读取其它文件的话是什么工具」触发，commit e5b0e16a，`src/agent_config.py`）：此前包内非 SKILL.md 文件（洋子技能的 8 个专业模块、口令卡等）只能 `run_python` `open()` 绕行（`read_file` 限 workspace 内，全局技能在 `~/.agt/skills/` 读不了）。现 `skill_navigate(name, file="包内相对路径")` 直读任意文件（markdown 附章节清单 + 12K 截断，纯文本直读，可再配 `section=` 分节精读），防逃逸三道闸与 skill_run_code 同款；实测 6 项全绿。**schema 需实例 `/restart` 生效**——见 [skills · skill_navigate 后记](features/skills.md)
+

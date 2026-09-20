@@ -193,8 +193,8 @@ def diff_events(prev: dict | None, cur: dict) -> list[str]:
             ev.append(f"💬 新增 {ct - pt} 轮回答（{pt} → {ct}）")
         elif ct < pt:
             ev.append(f"🔁 轮数回退（{pt} → {ct}，可能是重开会话/回溯）")
-    if prev.get("busy") != cur.get("busy"):
-        ev.append("⏳ 开始忙碌" if cur["busy"] else "✅ 空闲")
+    # busy 翻转不报（2026-09-20 降噪）：活跃实例每 15 分钟 busy↔空闲翻转是常态噪音，
+    # "在干活"的信息已由 turns 变化覆盖；实质事件 = 上下线/会话切换/轮数变化/inbox 积压。
     pi, ci = prev.get("inbox"), cur.get("inbox")
     if isinstance(pi, int) and isinstance(ci, int) and ci > pi:
         ev.append(f"📥 inbox +{ci - pi}（有排队消息）")

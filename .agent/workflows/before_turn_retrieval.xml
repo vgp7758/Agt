@@ -2,6 +2,7 @@
   <node id="100001" type="start" title="start" x="-32.841415717467584" y="108.9159435141155">
     <out name="user_message" type="string"/>
     <out name="session_id" type="string"/>
+    <out name="hook_ctx" type="object" description="引擎钩子上下文袋（含 tier_start=当前档起始轮，1-based；命中轮>=该值=已完整投影，注入即重复→collect 过滤）"/>
   </node>
   <node id="105001" type="selector" title="short_msg?" x="420" y="80">
     <branch><cond op="15" left="100001.user_message.length" right="4" left_type="integer"/></branch>
@@ -27,6 +28,7 @@
     <in name="keywords" type="list" ref="802605.keywords"/>
     <in name="semantic_hits" type="list" ref="120001.result"/>
     <in name="episodic" type="string" ref="125001.result"/>
+    <in name="tier_start" type="integer" ref="100001.hook_ctx.tier_start"/>
     <code language="3"><![CDATA[import json, re
 def _first_s(text):
     t=(text or "").strip(); m=re.search(r'[。！？\n]', t)
@@ -60,10 +62,12 @@ async def main(args) -> dict:
     kws = args.params.get("keywords") or []
     sem = args.params.get("semantic_hits") or []
     epi_txt = args.params.get("episodic") or ""
+    ts = int(args.params.get("tier_start") or 0)   # 当前档起始轮（1-based）；0=引擎未提供→不过滤
     cands = []
     # ---- 语义结果 ----
     for s in sem:
         tidx = s.get("turn_idx",0)
+        if ts and tidx >= ts: continue   # 当前档已完整投影，注入即重复（用户提案 2026-09-20）
         text = s.get("text","") or f"(语义命中 第{tidx}轮)"
         cands.append({"kind":"semantic","turn_idx":tidx,"text":text,"score":float(s.get("score",0))*3})
     # ---- Episodic记忆 ----
@@ -78,6 +82,7 @@ async def main(args) -> dict:
         kl = [k.lower() for k in kws]
         for item in reversed(history):
             tidx = item.get("turn",0)
+            if ts and tidx >= ts: continue   # 当前档已完整投影，注入即重复（用户提案 2026-09-20）
             u = item.get("user","") or ""; a = item.get("answer","") or ""
             ul=u.lower(); al=a.lower()
             hu=[k for k in kl if k in ul]; ha=[k for k in kl if k in al]

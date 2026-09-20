@@ -1526,6 +1526,14 @@ class Agent:
         context = dict(context)
         if "turn_idx" not in context:
             context["turn_idx"] = len(self.session.turns) if hook == "turn_end" else -1
+        # 当前档起始轮（1-based，用户提案 2026-09-20）：before_turn 检索钩子的命中条若落在当前档
+        # （tier_start 起的轮完整投影在上下文里），再注入即重复——工作流据此过滤（ref hook_ctx.tier_start）。
+        if hook == "before_turn" and "tier_start" not in context:
+            try:
+                _tb = getattr(self.session, "_tier_boundaries", None) or []
+                context["tier_start"] = (_tb[-1] + 1) if _tb else 1   # 0-based 边界 → 1-based 轮号
+            except Exception:
+                context["tier_start"] = 1
         # git_commit 首行直供 recap（用户提案 2026-09-06）：本轮最后一次 git_commit 的
         # message 首行——commit 首行本来就是"一句话摘要"约定，比 LLM 再总结 / answer 首行
         # 截取都精准且零成本。经 hook_ctx 整袋下发，recap_gen 的 check_style 最优先采用。

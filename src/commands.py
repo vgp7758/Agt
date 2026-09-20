@@ -1682,7 +1682,7 @@ def _cmd_agent(ctx: CommandContext, args):
     positional = _parse_args(args)[0]
     if not positional:
         # 列出所有团队成员
-        team = reg.format_team(exclude_id="")
+        team = reg.format_team(exclude_id="", active_window=False)   # 显式查询=全量
         if not team:
             print("(暂无其他活跃 Agent)")
         else:

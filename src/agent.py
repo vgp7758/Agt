@@ -1953,6 +1953,9 @@ class Agent:
                 _resume_current = False
             else:
                 self.session.start_turn(msg, imgs)
+                # 主 Agent 轮次推进 → registry（团队投影"近 30 轮活跃窗口"的基准，用户提案 2026-09-20）
+                if self.agent_id == "_main_" and getattr(self, "registry", None):
+                    self.registry.set_turn(len(self.session.turns) + 1)
                 # 行级视图白名单清零（用户裁定 2026-09-16）：replace_lines/insert/delete/move 的前置
                 # 校验只认【本轮】内带行号看过的区间；跨轮残留会让上轮的读绿本轮的写。
                 from real_tools import reset_line_views

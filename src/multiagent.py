@@ -527,7 +527,7 @@ def make_communication_tools(agent) -> list:
         用于了解当前团队构成，与队友通信时需要知道对方的 agent_id。"""
         if not reg:
             return "(多 Agent 通信未启用：无 registry)"
-        return reg.format_team(exclude_id=agent.agent_id)
+        return reg.format_team(exclude_id=agent.agent_id, active_window=False)   # 工具查询=全量（含隐藏的历史实例）
 
     def agent_ask(target_id: str, question: str) -> str:
         """向另一个活跃 Agent 发起无状态询问：用对方的上下文 + 你的问题调用其 LLM，返回回答。
@@ -538,6 +538,7 @@ def make_communication_tools(agent) -> list:
         entry = reg.lookup(target_id)
         if entry is None:
             return f"[未找到] agent_id='{target_id}' 不在注册表中（可能已退出）。用 list_team 查看当前活跃 Agent。"
+        reg.touch(target_id)   # 通信即交互（团队投影活跃窗口）
         target_agent = entry.agent
         if target_agent is None:
             return f"[错误] '{target_id}' 的 Agent 实例不可用"
@@ -559,6 +560,7 @@ def make_communication_tools(agent) -> list:
         entry = reg.lookup(target_id)
         if entry is None:
             return f"[未找到] agent_id='{target_id}' 不在注册表中。用 list_team 查看当前活跃 Agent。"
+        reg.touch(target_id)   # 通信即交互（团队投影活跃窗口）
         target_agent = entry.agent
         if target_agent is None:
             return f"[错误] '{target_id}' 的 Agent 实例不可用"
@@ -576,6 +578,8 @@ def make_communication_tools(agent) -> list:
         resolved = _resolve_target(target_id)
         if resolved is None:
             return f"[未找到或无法加载] agent_id='{target_id}'。用 list_team 查看可用 Agent。"
+        if reg:
+            reg.touch(target_id)   # 通信即交互（团队投影活跃窗口）
         target_session, _ = resolved
         try:
             turns = target_session.turns
@@ -611,6 +615,8 @@ def make_communication_tools(agent) -> list:
         resolved = _resolve_target(target_id)
         if resolved is None:
             return f"[未找到或无法加载] agent_id='{target_id}'。用 list_team 查看可用 Agent。"
+        if reg:
+            reg.touch(target_id)   # 通信即交互（团队投影活跃窗口）
         target_session, _ = resolved
         try:
             name, args, result = target_session.toollog.view(call_id)
@@ -948,6 +954,8 @@ def make_subagent_tools(agent) -> list:
 
         def _launch(_target, _aid, _name, _model, _sub_dir, _prompt, _reused):
             """通用启动：登记 background_tasks + 起 _bg 线程跑 _target.run()。新建/复用两条路径共用。"""
+            if reg:
+                reg.touch(_aid)   # 派活即交互（团队投影活跃窗口，2026-09-20）
             # context_messages 直通：投影时展开在 user 前（一次性——finish_turn 即焚，复用实例下一轮不带）
             if _ctx_msgs:
                 _ag = getattr(_target, "agent", _target)   # SubAgent 包装 or 裸 Agent（复用路径）
@@ -1045,6 +1053,7 @@ def make_subagent_tools(agent) -> list:
                                                         result=res, finished_at=time.time())
                     if reg:
                         reg.update_status(_aid, "failed" if _is_fail else "done")
+                        reg.touch(_aid)   # answer 回流即交互（活跃窗口）
                 except Exception as ex:
                     res = f"[失败] {type(ex).__name__}: {ex}"
                     # 失败也立即路由（caller 需要知道子 Agent 出错了）

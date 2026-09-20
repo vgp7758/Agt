@@ -1955,7 +1955,7 @@ async def ws_endpoint(websocket: WebSocket):
     if _reg is not None:
         try:
             await _send(websocket, {"type": "team_list",
-                                    "team": _reg.format_team(exclude_id=""),
+                                    "team": _reg.format_team(exclude_id="", active_window=False),
                                     "current_target": client["target"]})
         except Exception:
             pass
@@ -1965,7 +1965,7 @@ async def ws_endpoint(websocket: WebSocket):
     if _reg is not None:
         try:
             await _send(websocket, {"type": "team_list",
-                                    "team": _reg.format_team(exclude_id=""),
+                                    "team": _reg.format_team(exclude_id="", active_window=False),
                                     "current_target": client["target"]})
         except Exception:
             pass
@@ -2066,7 +2066,7 @@ def broadcast_session_state(agent):
     reg = getattr(agent, "registry", None)
     if reg:
         _broadcast({"type": "team_list",
-                    "team": reg.format_team(exclude_id=""),
+                    "team": reg.format_team(exclude_id="", active_window=False),
                     "current_target": getattr(agent, "_active_target", "_main_")})
     try:
         from spec_tools import check_pending_spec, _spec_event_payload
@@ -2340,7 +2340,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         if not reg:
             await _send(ws, {"type": "system", "text": "(多 Agent 通信未启用：无 registry)"})
         else:
-            team = reg.format_team(exclude_id="")
+            team = reg.format_team(exclude_id="", active_window=False)
             cur = (client or {}).get("target", "_main_")   # 本客户端自己的交互目标
             await _send(ws, {"type": "team_list", "team": team, "current_target": cur})
         return

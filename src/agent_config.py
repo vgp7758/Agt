@@ -664,9 +664,36 @@ def _skill_invalid_name(name: str) -> str:
     return f"[非法名称] '{name}'，技能名只能含字母数字、下划线、连字符"
 
 
-def skill_navigate(name: str, section: str = "", list_only: bool = False) -> str:
-    """浏览技能包结构（大技能不必整读 SKILL.md）。默认：目录树 + SKILL.md 章节清单；
-    section=章节标题（含/不含#号均可）→ 读该章节正文；list_only=True 只列结构。
+def _md_sections(text: str) -> list[tuple[int, str, int]]:
+    """markdown 标题清单：[(level, title, lineno), ...]（# ~ ###）。"""
+    heads: list[tuple[int, str, int]] = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        m = re.match(r"^(#{1,3})\s+(.+?)\s*$", ln)
+        if m:
+            heads.append((len(m.group(1)), m.group(2), i))
+    return heads
+
+
+def _md_section_text(text: str, want: str) -> str | None:
+    """取 markdown 指定章节正文（标题含/不含#均可，大小写不敏感）；未找到返回 None。"""
+    heads = _md_sections(text)
+    body = text.splitlines()
+    want = want.lstrip("#").strip()
+    for idx, (lv, title, _ln) in enumerate(heads):
+        if title == want or title.lower() == want.lower():
+            end = next((h[2] - 1 for h in heads[idx + 1:] if h[0] <= lv), len(body))
+            seg = "\n".join(body[_ln - 1:end]).strip()
+            if len(seg) > 12000:
+                seg = seg[:12000] + "\n…（截断，章节共 %d 字）" % len(seg)
+            return seg
+    return None
+
+
+def skill_navigate(name: str, section: str = "", list_only: bool = False, file: str = "") -> str:
+    """浏览技能包结构 / 读包内任意文件（大技能不必整读）。
+    默认：目录树 + SKILL.md 章节清单；
+    file=包内相对路径（如 专业模块/08-CINEDANCE视频提示词.md）→ 读该文件（.md 可配合 section 分节读；截断 12000 字）；
+    section=章节标题 → 读 SKILL.md（或 file 指定文件）的该章节；list_only=True 只列结构。
     name: 技能名（本地/全局统一寻址）。"""
     d, scope = _resolve_skill(name)
     if d is None:
@@ -684,31 +711,50 @@ def skill_navigate(name: str, section: str = "", list_only: bool = False) -> str
         if shown >= 120:
             lines.append("  …（条目过多省略）")
             break
+    # ── file=：读包内任意文件（相对技能目录，防逃逸同 run_code）──
+    if file:
+        if ".." in Path(file).parts:
+            return "[非法路径] file 须为技能目录内的相对路径（禁止 .. 逃逸）"
+        fp = (d / file).resolve()
+        if not (fp == d.resolve() or d.resolve() in fp.parents):
+            return "[非法路径] 文件必须在技能目录内"
+        if not fp.exists():
+            return "\n".join(lines) + f"\n[文件不存在] {file}。可用 list_only=True 查看目录树"
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            return f"[读取失败] {file}: {e}"
+        if fp.suffix.lower() == ".md":
+            if section:
+                seg = _md_section_text(text, section)
+                if seg is None:
+                    avail = "\n".join(f"  {'#' * lv} {t}" for lv, t, _ in _md_sections(text)) or "（无章节标题）"
+                    return "\n".join(lines) + f"\n[未找到章节] '{section}'。{file} 可用章节：\n{avail}"
+                return "\n".join(lines) + f"\n\n📖 {file} · 章节 '{section.lstrip('#').strip()}'：\n\n{seg}"
+            heads = _md_sections(text)
+            hdr = ("\n📑 章节：\n" + "\n".join(f"  {'  ' * (lv-1)}- {t}  (L{n})" for lv, t, n in heads)) if heads else ""
+            full = f"📄 {file}（{len(text.splitlines())} 行）{hdr}\n\n（全文 12000 字截断；section=标题 分节读）\n\n{text[:12000]}"
+            if len(text) > 12000:
+                full += f"\n…（截断，共 {len(text)} 字）"
+            return "\n".join(lines) + "\n" + full
+        return "\n".join(lines) + f"\n\n📄 {file}：\n\n{text[:12000]}" + (f"\n…（截断，共 {len(text)} 字）" if len(text) > 12000 else "")
+    # ── 默认：SKILL.md 章节导航 ──
     md = d / "SKILL.md"
     if not md.exists():
-        return "\n".join(lines) + "\n[注意] 该技能包没有 SKILL.md（纯资产包）"
+        return "\n".join(lines) + "\n[注意] 该技能包没有 SKILL.md（纯资产包；用 file= 读包内文件）"
     text = md.read_text(encoding="utf-8", errors="ignore")
     body = text.splitlines()
-    heads: list[tuple[int, str, int]] = []   # (level, title, lineno)
-    for i, ln in enumerate(body, 1):
-        m = re.match(r"^(#{1,3})\s+(.+?)\s*$", ln)
-        if m:
-            heads.append((len(m.group(1)), m.group(2), i))
+    heads = _md_sections(text)
     if section:
-        want = section.lstrip("#").strip()
-        for idx, (lv, title, ln) in enumerate(heads):
-            if title == want or title.lower() == want.lower():
-                end = next((h[2] - 1 for h in heads[idx + 1:] if h[0] <= lv), len(body))
-                seg = "\n".join(body[ln - 1:end]).strip()
-                if len(seg) > 12000:
-                    seg = seg[:12000] + "\n…（截断，章节共 %d 字）" % len(seg)
-                return "\n".join(lines) + f"\n\n📖 章节 '{want}'：\n\n{seg}"
+        seg = _md_section_text(text, section)
+        if seg is not None:
+            return "\n".join(lines) + f"\n\n📖 章节 '{section.lstrip('#').strip()}'：\n\n{seg}"
         avail = "\n".join(f"  {'#' * lv} {t}" for lv, t, _ in heads) or "（无章节标题）"
         return "\n".join(lines) + f"\n[未找到章节] '{section}'。可用章节：\n{avail}"
     lines.append("\n📑 SKILL.md 章节：")
     lines.extend(f"  {'  ' * (lv - 1)}- {t}  (L{n})" for lv, t, n in heads)
     if not list_only:
-        lines.append(f"（全文 {len(body)} 行：section=标题 读指定章节；read_skill 读全文）")
+        lines.append(f"（全文 {len(body)} 行：section=标题 读指定章节；file=路径 读包内其它文件；read_skill 读全文）")
     return "\n".join(lines)
 
 

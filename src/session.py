@@ -3010,14 +3010,18 @@ class Session:
                 hits.append((i, t, matched))
         return hits[:max_hits]
 
-    def recall(self, query: str, contains_reasoning: bool = False) -> str:
-        """按关键词/语义在【全部】历史轮次里搜索，返回匹配轮的完整上下文。
+    def recall(self, query: str, contains_reasoning: bool = False, tools: str = "brief") -> str:
+        """按关键词/语义在【全部】历史轮次里搜索，返回匹配轮的上下文。
         contains_reasoning=False（默认）不含思考过程；True 则带上每步 reasoning 与回答的 reasoning。
+        tools="brief"（默认）只给整段 user+answer 原文 + 工具调用折叠成一行（工具过程细节用
+        agent_query_tool_detail 查）；"full" 展开每个工具调用的入参与结果。
 
         检索策略（自动降级）：
           1. 配了 embed 模型(self.vec_store 非 None) → 语义召回 top-K 轮（换说法也能搜到）
-          2. 否则 → summary+user+answer 子串匹配（大小写不敏感，中文直接子串）
-        两条都跨当前会话全部 turns；语义路径还覆盖 reasoning 内容（密度更高）。
+          2. 否则 → summary+user+answer 匹配；query 支持多关键词（| / 空格 / 中英文逗号 / 顿号 / 分号
+             分隔，任一命中即命中；OR 语义）与通配符（* ? []，fnmatch）——用户提案 2026-09-20
+        两条都跨当前会话全部 turns（含被折叠为结构摘要的轮——其 user/answer 原文始终保留可召回）;
+        语义路径还覆盖 reasoning 内容（密度更高）。
         """
         if not self.turns:
             return "（当前会话还没有历史轮次）"
@@ -3033,7 +3037,7 @@ class Session:
             if hits:
                 out, total, CAP = [f"语义召回 {len(hits)} 轮匹配「{query}」的历史："], 0, 4000
                 for i, t, score in hits:
-                    block = self._format_turn_full(i + 1, t, contains_reasoning)
+                    block = self._format_turn_full(i + 1, t, contains_reasoning, tools)
                     tag = f" (相似度 {score:.2f})" if score else ""
                     block = f"━━━ 【第{i + 1}轮】{t.summary or '(无摘要)'}{tag}\n" + block.split("\n", 1)[1] \
                         if "\n" in block else block
@@ -3043,15 +3047,24 @@ class Session:
                     out.append(block)
                     total += len(block)
                 return "\n".join(out)
-        # —— 2) 子串兜底（没配 embed，或语义无结果）——
-        ql = q.lower()
+        # —— 2) 拆词 OR + 通配兜底（没配 embed，或语义无结果；用户提案 2026-09-20）——
+        import re as _re
+        import fnmatch as _fn
+        parts = [p for p in _re.split(r"[|\s,，、;；]+", q) if p] or [q]
+        def _hit(_part: str, _tl: str) -> bool:
+            if any(c in _part for c in "*?["):          # 通配符 → fnmatch（前后包 * = 文本内任意处命中）
+                try:
+                    return _fn.fnmatch(_tl, "*" + _part.lower() + "*")
+                except Exception:
+                    return _part.lower() in _tl
+            return _part.lower() in _tl                  # 普通词 → 子串（大小写不敏感）
         hits = [(i, t) for i, t in enumerate(self.turns)
-                if ql in (t.summary + "\n" + t.user_message + "\n" + t.answer).lower()]
+                if any(_hit(p, (t.summary + "\n" + t.user_message + "\n" + t.answer).lower()) for p in parts)]
         if not hits:
-            return f"未找到包含「{query}」的历史轮次。可用 /recall 换个关键词，或 /show 看概览。"
-        out, total, CAP = [f"找到 {len(hits)} 轮匹配「{query}」的历史："], 0, 4000
+            return f"未找到包含「{'/'.join(parts)}」的历史轮次。可用 /recall 换个关键词，或 /show 看概览。"
+        out, total, CAP = [f"找到 {len(hits)} 轮匹配「{'/'.join(parts)}」的历史："], 0, 4000
         for i, t in hits:
-            block = self._format_turn_full(i + 1, t, contains_reasoning)
+            block = self._format_turn_full(i + 1, t, contains_reasoning, tools)
             if total + len(block) > CAP:
                 out.append(f"\n…（还有 {len(hits) - len(out) + 1} 轮命中已省略）")
                 break
@@ -3074,16 +3087,30 @@ class Session:
                 hits.append((tno, self.turns[tno], r.get("score", 0)))
         return hits
 
-    def _format_turn_full(self, n: int, t: Turn, contains_reasoning: bool = False) -> str:
-        """把一轮格式化成可读文本（召回展示用）。contains_reasoning=True 时带上每步与回答的 reasoning。"""
+    def _format_turn_full(self, n: int, t: Turn, contains_reasoning: bool = False, tools: str = "brief") -> str:
+        """把一轮格式化成可读文本（召回展示用）。contains_reasoning=True 时带上每步与回答的 reasoning。
+        tools="brief"（默认）：工具调用折叠成一行「🔧 工具调用 N 个: …」——被折叠为结构摘要的轮命中时
+        以整段 user+answer 原文召回（工具过程细节用 agent_query_tool_detail 按 call_id 查）；
+        tools="full"：展开每个工具调用的入参与结果。用户提案 2026-09-20。"""
         lines = [f"━━━ 【第{n}轮】{t.summary or '(无摘要)'}", f"用户: {t.user_message}"]
-        for step in t.steps:
-            if contains_reasoning and step.reasoning:
-                lines.append(f"  💭 {step.reasoning}")
-            for tc in step.tool_calls:
-                name, a, r = self.toollog.view(tc.call_id)
-                args_s = json.dumps(a, ensure_ascii=False)
-                lines.append(f"  🔧 {name}({args_s}) → {(r or '')[:300]}")
+        if tools == "full":
+            for step in t.steps:
+                if contains_reasoning and step.reasoning:
+                    lines.append(f"  💭 {step.reasoning}")
+                for tc in step.tool_calls:
+                    name, a, r = self.toollog.view(tc.call_id)
+                    args_s = json.dumps(a, ensure_ascii=False)
+                    lines.append(f"  🔧 {name}({args_s}) → {(r or '')[:300]}")
+        else:
+            names = []
+            for step in t.steps:
+                if contains_reasoning and step.reasoning:
+                    lines.append(f"  💭 {step.reasoning}")
+                for tc in step.tool_calls:
+                    names.append(self.toollog.view(tc.call_id)[0])
+            if names:
+                shown = ", ".join(names[:15])
+                lines.append(f"  🔧 工具调用 {len(names)} 个: {shown}{'…' if len(names) > 15 else ''}")
         lines.append("回答:")
         lines.append(render_cli(t.answer))
         if contains_reasoning and t.answer_reasoning:

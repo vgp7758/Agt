@@ -85,6 +85,38 @@ episodic 召回并入统一检索流水线后，与 blog 03 的检索工作流�
 
 误注入率显著下降——旧版 top-3 检索到什么就注入什么，没有相关性裁决。原则一句话：**召回宁滥勿缺，注入宁缺勿滥**（与 wiki_auto_query 的 top1<0.5 不注入同一原则）。
 
+### 当前档命中不重复注入：hook_ctx.tier_start 档位边界下推（2026-09-20，用户提案）
+
+**用户提案（2026-09-20）**：「before_turn_retrieval 召回的时候，最后如果命中条是当前轮所在档，可以不投影」——统一检索流水线的候选里，history/语义源的命中若落在**当前档**（tier_start 起的轮以完整原文投影在上下文），再注入即重复。两层落地：
+
+**引擎侧**（src/agent.py `_run_hooks`）——before_turn 位置向 hook_ctx 袋注入档位边界：
+
+```python
+if hook == "before_turn" and "tier_start" not in context:
+    _tb = getattr(self.session, "_tier_boundaries", None) or []
+    context["tier_start"] = (_tb[-1] + 1) if _tb else 1   # 0-based 边界 → 1-based 轮号
+```
+
+`tier_start` = 当前档起始轮号（1-based）；`session._tier_boundaries` 为空（从未毕业/升档）= 1。任何 before_turn 钩子工作流均可 ref `hook_ctx.tier_start` 消费（start 声明 `hook_ctx(object)` 即整袋可取）。
+
+**工作流侧**（`before_turn_retrieval.xml` 三处）：
+
+1. start 节点补 `hook_ctx(object)` 输出；
+2. collect 节点补 `tier_start` 输入（ref `100001.hook_ctx.tier_start`，dotted 解析）；
+3. code 节点裁决：**语义源**命中 `tidx >= tier_start` → 跳过；**history 源**（含其 steps 工具调用）命中 `turn >= tier_start` → 跳过；`tier_start=0`（引擎旧版/未提供）→ 兜底不过滤。
+
+**语义边界（为什么这样切）**：
+
+| 命中来源 | 投影状态 | 该注入吗 |
+|---|---|---|
+| 当前档（≥ tier_start） | 完整原文在上下文 | ❌ 注入=重复（本次修的） |
+| 压缩档 1..N | 按档位上限衰减过 | ✅ 值得 |
+| fc 结构摘要（更早） | 只剩一行概览 | ✅ 最值得 |
+
+**验证**（模拟实测）：tier_start=1000 时当前档命中（第 1070 轮 turn 源 / 第 1068 轮语义源）被滤、老档命中（第 500/300 轮）保留；tier_start=0 不过滤（兜底安全）；XML 良构。引擎层改动 `/restart` 生效。
+
+分档投影侧视角见 [上下文引擎 · 分档投影](../architecture/context-engine.md)，hook_ctx 袋契约见 [workflow-hooks · hook_ctx](../architecture/workflow-hooks.md#hook_ctx-上下文袋--hook_write-工具回写从引擎特判移到工作流2026-08commit-91b8437)。
+
 ## embedder LRU 缓存包装层（2026-08，v0.19.2）
 
 `src/rag.py` 的 `rag.embedder.encode` 加 **LRU 缓存包装**——同文本重复 embed 直接命中缓存，不再重跑模型：

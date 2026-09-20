@@ -468,6 +468,10 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **九轮（commit `e651ebb`，真修复）**：用户以 t934_s3 分段数值钉死渲染层 bug：cached 347.7k / prompt 350k → miss 2.3k，反推应落 tail(思考链) 段内 ~9% 分位（绿区占段头），页面却画在 ~95%（红区只剩一条缝）——跨断点段 `gW = bkW × (bp/100)` 把**全局 bp 坐标**（97.09）当**段内分位**乘了整行宽；修复 `segFrac=(bp/100−segStart)/(segEnd−segStart)` 显式换算，该行绿 9%│红 91% 与反推一致。**反推算法未动**（revert 正确）。教训：坐标语义（全局↔段内）跨层传递必须显式换算。全记录见 [ops · proj 排障闭环 ⑩⑪](../guides/ops.md#llm_calls-proj-链路排障闭环三连--tooltip-内联条形-v22026-09-16)。
 
+### 档位边界下推检索钩子：hook_ctx.tier_start + 当前档命中过滤（2026-09-20，用户提案）
+
+**档位边界下推检索钩子（2026-09-20，用户提案）**：`session._tier_boundaries`（0-based 轮号数组，分档/毕业时写入）多了一个外部消费端——before_turn 钩子上下文袋 `hook_ctx.tier_start` = 当前档起始轮号（1-based = 最后边界+1，无边界=1）。首个消费方 before_turn_retrieval 检索工作流：命中条落在当前档（≥ tier_start，完整原文已在投影里）→ **跳过不注入**；压缩档 / fc 结构摘要命中照常注入——消除「召回注入与完整投影重复」的 token 浪费。两层实现与裁决语义详见 [长期记忆 · 当前档命中不重复注入](../features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)，hook_ctx 袋契约见 [workflow-hooks · hook_ctx](workflow-hooks.md#hook_ctx-上下文袋--hook_write-工具回写从引擎特判移到工作流2026-08commit-91b8437)。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

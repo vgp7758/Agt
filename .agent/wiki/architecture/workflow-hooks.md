@@ -330,6 +330,10 @@ turn_end:
 
 **验证全过**：hook_write 单元（三落点/错误过滤/JSON 串容错/turn 容错）+ recap_gen e2e（mock llm，turn=9 落点正确）+ 播种一致 + 编译 ×3。生效方式：工作流每轮重扫，不用重启。
 
+#### hook_ctx 袋新键：tier_start——当前档起始轮下推（2026-09-20，用户提案）
+
+**before_turn 位置 `_run_hooks` 上下文袋新增 `tier_start` 键（2026-09-20，用户提案）**：当前档起始轮号（1-based = `session._tier_boundaries` 最后边界+1；无边界=1；仅 before_turn 注入，engine 侧 `if hook == "before_turn"` 特判）。用途：检索型钩子据此过滤**当前档命中**——这些轮的完整原文已投影在上下文，召回再注入即重复；压缩档 / fc 结构摘要命中照常注入。消费端 ref `hook_ctx.tier_start`（start 声明 `hook_ctx(object)` 即整袋可取）；`tier_start=0`（引擎旧版未提供）由工作流兜底不过滤。实现与裁决语义详见 [长期记忆 · 当前档命中不重复注入](../features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)；`/restart` 生效。
+
 ### 钩子声明面三层：编辑器协议下拉 + 磁盘 meta 保底 + yml 挂载（2026-08，commit 9f8f085 + 628f5b1）
 
 **背景**：钩子挂载曾从编辑器迁到 /agents 管理页（批次七删了顶栏钩子下拉），但发现两件事：① 钩子工作流需要**协议 schema 规范化**（start 注入什么、end 返回什么）的编辑器特性；② 编辑器 UI 不再管理 hook/async/recap 字段后，**保存请求缺这些字段 → 每次编辑器保存逐步丢光**（实测 22 个 XML 里只剩 2 个还带 hook 标志，播种面新装机钩子全死）。

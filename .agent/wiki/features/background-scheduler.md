@@ -72,6 +72,37 @@
 
 **验证**：与同名摘旧（8ed09c6）联测——同名再设后持久化 `extra_state["schedules"]` 无双份。生效方式 `/restart`（引擎层改动），重启后恢复链路读 `extra_state` 重建任务。
 
+### 后记：三 bug 叠加——持久化从未生效，meta.json 从未出现 schedules（2026-09-18 · 二，commit e22062c，用户实锤）
+
+**触发**：用户实锤——「meta.json 里没看到 schedules，重启电脑后 scheduler 任务也全没了」。排查确认 95649e3 的持久化**实际从未生效**，三个 bug 叠加：
+
+| # | bug | 机制 |
+|---|---|---|
+| ① | **覆盖式重建抹掉直写值**（主凶） | `_persist()` 直写 `session.extra_state["schedules"]`，但 session 每次落盘前 `_capture_state()` 跑 `self.extra_state = self._state_provider() or {}`——用 Agent 收集清单（capture_runtime_state：plan/spec/autonomous/background_tasks）**整体覆盖** extra_state；清单里没有 schedules → **任意一次落盘都把直写值抹掉**，meta.json 从未出现该键（与 77 轮 `_agent_meta` 丢失同源的机制坑：extra_state 的写权归 provider） |
+| ② | **恢复时机错误** | Scheduler 在 `Agent.__init__`（L296）创建——早于 session 装载；`__init__` 里的 `_restore()` 读 extra_state 时还是空的 = **恒空跑**（即使有值也恢复不了） |
+| ③ | **旧任务沉没** | 用户旧任务创建于持久化生效前 + 直写值被抹 → 从未落过盘，重启后**无法恢复**（沉没成本，修复只保未来任务） |
+
+**修复（commit e22062c）——单一真源架构**：
+
+```
+Scheduler._schedules（真源）
+   ├─ export_state() ──→ capture_runtime_state 收集清单加入 schedules 键
+   │                      （与 background_tasks 同款模式——覆盖式重建不再抹掉）
+   ├─ _persist() ──→ 只调 sess.save()（save→capture→provider 收集→meta.json 单源落盘）
+   └─ restore_state(items) ←─ restore_runtime_state（set_session/load 后的标准恢复点）
+```
+
+- **`Scheduler.export_state()`**：从 `_schedules` 序列化全部任务定义（name/kind/spec/at_origin/message/action/repeat/daily）——采集姿势从「调度器自己写 extra_state」改为「provider 收集时来取」
+- **`capture_runtime_state`（src/agent.py）**：收集清单加入 `"schedules": self.scheduler.export_state()`——extra_state 覆盖式重建从此带着 schedules 走
+- **`_persist()`**：删掉直写，只调 `sess.save()`——落盘路径单一化，meta.json 是唯一出口
+- **恢复挂标准恢复点**：`restore_runtime_state`（set_session/load 后调用，此时 scheduler 已存在、extra_state 已从 meta.json 读入）调 `scheduler.restore_state(items)`；`__init__` 的 `_restore()` 调用删除（恢复时机 bug 消除）；恢复后按 `at_origin`/`daily` 锚点重算 next_fire（相位不漂移，与 95649e3 同一套算法）
+
+**验证（mock 全链路，复刻 session 覆盖式重建）**：① add 2 任务 → `_persist` → 覆盖式重建后 `extra_state['schedules']` = 2 条 ✓（旧行为：被抹）；② 模拟重启 restore → watch/morning 都回来、相位重算正确（5min 循环 / 每日闹钟 894min=明早 09:00）✓。
+
+**生效**：`/restart` 后——之后**新设的**定时任务才真正跨重启存活（`/restart` 一次落盘一次，meta.json 里即可见 `schedules` 键）。修复前经 v0.29.4 设置且已丢失的任务须重设。
+
+**教训**：`session.extra_state` 是 provider 覆盖式重建的领地——**引擎/工具直写必被下一次落盘抹掉**（同族案例：`_agent_meta` 丢失）；凡需随 session 持久化的运行时状态，一律走 `capture_runtime_state` 收集清单申报 + `restore_runtime_state` 标准恢复点恢复。
+
 ## 同名覆盖摘旧：重复投递根因修复（2026-09-18，commit 8ed09c6，pre_post 实锤）
 
 **bug**：同名任务再设（如改触发时间重设）时，`_by_name[name]` 被新 id 覆盖，但 `_schedules[旧id]` **残留**——`_loop` 扫的是 `_schedules`，两个同名任务各自到点**各投一次** → 重复投递（commit 8ed09c6）。
@@ -152,7 +183,7 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 - 引擎层改动需 `/restart` 生效；随 v0.23.1 上 PyPI（`pip install -U agt-agent`）
 - 用法例：`add_schedule('morning', at='09:00', message='早会时间')`
 - 本页 2026-09-18 三连（组合模式 + 持久化 + 同名摘旧）随 **v0.29.4** 上 PyPI（PyPI 已上线，见 [v0.29.4 发布记录](../releases/v0.29.4.md)）
-- 定时任务已持久化（`session.extra_state["schedules"]`）——重启后自动恢复，无需重设
+- ⚠️ 定时任务持久化的**首版（95649e3）实际从未生效**——extra_state 直写被覆盖式重建抹掉 + 恢复时机过早恒空跑，e22062c（单一真源架构）修复后才真正跨重启存活（见上方后记）；修复 `/restart` 前设置且已丢失的任务须重设
 
 ## 相关页面
 

@@ -1131,3 +1131,13 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **v0.29.7 发布**（2026-09-22，用户「发个补丁吧」，PyPI 已上线；发布记录见 [v0.29.7](releases/v0.29.7.md)）：①**团队投影活跃窗口**（commit baa9ead，用户提案）——SYSTEM 团队块只列近 30 轮有交互 + running/idle 实例（`registry.last_turn` + `format_team(active_window)` 双口径；`list_team` / `/team` / WebUI 看板保持全量），发布轮实证 30 条 → main 一行 + 1 行尾注——见 [multi-agent · 活跃窗口](architecture/multi-agent.md)；②**recall_turn 召回升级**（a6e3290，多关键词 OR + 通配符 + 被折叠轮整段原文召回）——见 [recall-tools](features/recall-tools.md)；③**「过程」宽度跟随气泡 v1+v2**（55bdc97 + 596b01c，trace/bubble/turn 恒同宽）——见 [trace-fold](features/trace-fold.md)；④agent_watch 双修复（0a7f0e5 + 6db27fc，repo-only 不随 wheel）——见 [agent-watch](features/agent-watch.md)
 
+## 快速事实增补（2026-09-22 · 五 · before_turn 检索跳过当前档命中——tier_start 档位边界下推）
+
+## 快速事实增补（2026-09-22 · 五 · before_turn 检索跳过当前档命中——tier_start 档位边界下推）
+
+- **用户提案（2026-09-20，代码注释锚定）**：「before_turn_retrieval 召回时，最后如果命中条是当前轮所在档，可以不投影」——当前档的轮完整原文已在上下文，召回再注入即重复
+- **引擎**（src/agent.py `_run_hooks`）：before_turn 位置 hook_ctx 袋新增 `tier_start` = 当前档起始轮号（1-based = `session._tier_boundaries` 最后边界+1；无边界=1）
+- **工作流**（before_turn_retrieval.xml 三处）：start 补 hook_ctx(object) 输出 / collect 补 tier_start 输入（ref dotted 解析）/ code 裁决——语义源 `tidx >= tier_start` 跳过、history 源（含 steps 工具调用）`turn >= tier_start` 跳过；tier_start=0（旧引擎）兜底不过滤
+- **裁决语义**：当前档 ❌（重复）/ 压缩档 ✅（衰减过）/ fc 结构摘要 ✅（最值得）；模拟实测：tier_start=1000 时第 1070/1068 轮命中被滤、第 500/300 轮保留 ✓；XML 良构
+- 引擎层 `/restart` 生效；详见 [长期记忆 · 当前档命中不重复注入](features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)、[workflow-hooks · hook_ctx 袋新键](architecture/workflow-hooks.md#hook_ctx-袋新键tier_start当前档起始轮下推2026-09-20用户提案)、[上下文引擎 · 档位边界下推检索钩子](architecture/context-engine.md#档位边界下推检索钩子hook_ctxtier_start--当前档命中过滤2026-09-20用户提案)
+

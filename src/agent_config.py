@@ -8,6 +8,7 @@ save_skill 让 Agent 自主把可复用任务的 SOP 沉淀成新技能(或更�
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -397,23 +398,81 @@ def load_rules(workspace: Path) -> str:
     return "\n\n".join(chunks)
 
 
+def _global_skills_root() -> Path:
+    """全局技能目录 ~/.agt/skills/（跨 repo 共享：技能包一次安装，各 repo 按 global-skills.json 按需激活）。"""
+    from paths import AGT_DIR
+    return AGT_DIR / "skills"
+
+
+def _enabled_global_skills(workspace: Path) -> list[str]:
+    """读 repo 的 .agent/skills/global-skills.json 激活清单（纯数组，元素=全局技能名）。
+    不存在/损坏 = 零全局激活（现行为不变）。"""
+    p = workspace / _AGENT_DIR / "skills" / "global-skills.json"
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return [x.strip() for x in data if isinstance(x, str) and x.strip()] if isinstance(data, list) else []
+
+
+def _resolve_skill(name: str, workspace: Path | None = None):
+    """统一寻址（本地/全局透明）：先 repo .agent/skills/<name>/（本地优先 shadow），
+    再全局 ~/.agt/skills/<name>/（须在激活清单）。返回 (技能目录|None, scope: ''|'local'|'global')。"""
+    if not _NAME_RE.match(name or ""):
+        return None, ""
+    ws = workspace or WORKSPACE
+    local = ws / _AGENT_DIR / "skills" / name
+    if (local / "SKILL.md").exists():
+        return local, "local"
+    if name in _enabled_global_skills(ws):
+        g = _global_skills_root() / name
+        if (g / "SKILL.md").exists():
+            return g, "global"
+    return None, ""
+
+
 def load_skills_index(workspace: Path) -> list[dict]:
-    """扫 .agent/skills/*/SKILL.md，返回 [{name, description, when_to_use, path}, ...]。"""
-    d = workspace / _AGENT_DIR / "skills"
+    """扫 repo .agent/skills/*/SKILL.md + 全局 ~/.agt/skills/ 中已激活技能。
+    返回 [{name, description, when_to_use, path, scope}, ...]（scope=local/global；本地同名 shadow 全局）。"""
     out = []
-    if not d.exists():
-        return out
-    for skill_md in sorted(d.glob("*/SKILL.md")):
-        try:
-            meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
-            continue
-        out.append({
-            "name": meta.get("name", skill_md.parent.name),
-            "description": meta.get("description", ""),
-            "when_to_use": meta.get("when_to_use", ""),
-            "path": str(skill_md.relative_to(workspace)).replace("\\", "/"),
-        })
+    local_dir = workspace / _AGENT_DIR / "skills"
+    local_names = set()
+    if local_dir.exists():
+        for skill_md in sorted(local_dir.glob("*/SKILL.md")):
+            try:
+                meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                continue
+            local_names.add(skill_md.parent.name)
+            out.append({
+                "name": meta.get("name", skill_md.parent.name),
+                "description": meta.get("description", ""),
+                "when_to_use": meta.get("when_to_use", ""),
+                "path": str(skill_md.relative_to(workspace)).replace("\\", "/"),
+                "scope": "local",
+            })
+    enabled = set(_enabled_global_skills(workspace))
+    if enabled:
+        g_root = _global_skills_root()
+        for name in sorted(enabled):
+            if name in local_names:  # 本地同名技能优先（shadow 全局）
+                continue
+            skill_md = g_root / name / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            try:
+                meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                continue
+            out.append({
+                "name": meta.get("name", name),
+                "description": meta.get("description", ""),
+                "when_to_use": meta.get("when_to_use", ""),
+                "path": str(skill_md).replace("\\", "/"),
+                "scope": "global",
+            })
     return out
 
 
@@ -425,7 +484,8 @@ def skills_summary(workspace: Path) -> str:
     lines = []
     for s in idx:
         when = f"（使用时机: {s['when_to_use']}）" if s["when_to_use"] else ""
-        lines.append(f"- {s['name']}: {s['description']}{when}")
+        g = "🌐 " if s.get("scope") == "global" else ""
+        lines.append(f"- {g}{s['name']}: {s['description']}{when}")
     return "\n".join(lines)
 
 
@@ -586,13 +646,137 @@ def migrate_agents_md_to_yml(workspace: Path) -> int:
 
 def read_skill(name: str) -> str:
     """读取某个技能的完整 SKILL.md（含详细 SOP）。任务匹配某技能时，先调它取执行步骤。
-    name: 技能名(即 .agent/skills/<name> 文件夹名)。"""
+    name: 技能名（repo .agent/skills/ 与已激活全局技能统一寻址，本地优先；大技能建议先 skill_navigate 浏览结构）。"""
     if not _NAME_RE.match(name or ""):
         return f"[非法名称] '{name}'，技能名只能含字母数字、下划线、连字符"
-    p = WORKSPACE / _AGENT_DIR / "skills" / name / "SKILL.md"
-    if not p.exists():
-        return f"[未找到技能] {name}（可用技能见 SYSTEM 的【可用技能】清单）"
-    return p.read_text(encoding="utf-8")
+    d, _scope = _resolve_skill(name)
+    if d is None:
+        return _skill_not_found(name)
+    return (d / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
+
+
+def _skill_not_found(name: str) -> str:
+    return (f"[未找到技能] {name}（可用技能见 SYSTEM 的【可用技能】清单；"
+            f"若是全局技能，需在本 repo 的 .agent/skills/global-skills.json 激活清单里启用）")
+
+
+def _skill_invalid_name(name: str) -> str:
+    return f"[非法名称] '{name}'，技能名只能含字母数字、下划线、连字符"
+
+
+def skill_navigate(name: str, section: str = "", list_only: bool = False) -> str:
+    """浏览技能包结构（大技能不必整读 SKILL.md）。默认：目录树 + SKILL.md 章节清单；
+    section=章节标题（含/不含#号均可）→ 读该章节正文；list_only=True 只列结构。
+    name: 技能名（本地/全局统一寻址）。"""
+    d, scope = _resolve_skill(name)
+    if d is None:
+        return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
+    src = "🌐 全局 ~/.agt/skills" if scope == "global" else "repo .agent/skills"
+    lines = [f"📦 技能 '{name}'（{src}）", f"路径: {d}"]
+    # 目录树（≤3 层，跳过隐藏/缓存目录，防大包刷屏）
+    shown = 0
+    for p in sorted(d.rglob("*")):
+        rel = p.relative_to(d)
+        if len(rel.parts) > 3 or any(pt.startswith(".") or pt == "__pycache__" for pt in rel.parts):
+            continue
+        lines.append("  " * (len(rel.parts) - 1) + ("📁 " if p.is_dir() else "  • ") + p.name)
+        shown += 1
+        if shown >= 120:
+            lines.append("  …（条目过多省略）")
+            break
+    md = d / "SKILL.md"
+    if not md.exists():
+        return "\n".join(lines) + "\n[注意] 该技能包没有 SKILL.md（纯资产包）"
+    text = md.read_text(encoding="utf-8", errors="ignore")
+    body = text.splitlines()
+    heads: list[tuple[int, str, int]] = []   # (level, title, lineno)
+    for i, ln in enumerate(body, 1):
+        m = re.match(r"^(#{1,3})\s+(.+?)\s*$", ln)
+        if m:
+            heads.append((len(m.group(1)), m.group(2), i))
+    if section:
+        want = section.lstrip("#").strip()
+        for idx, (lv, title, ln) in enumerate(heads):
+            if title == want or title.lower() == want.lower():
+                end = next((h[2] - 1 for h in heads[idx + 1:] if h[0] <= lv), len(body))
+                seg = "\n".join(body[ln - 1:end]).strip()
+                if len(seg) > 12000:
+                    seg = seg[:12000] + "\n…（截断，章节共 %d 字）" % len(seg)
+                return "\n".join(lines) + f"\n\n📖 章节 '{want}'：\n\n{seg}"
+        avail = "\n".join(f"  {'#' * lv} {t}" for lv, t, _ in heads) or "（无章节标题）"
+        return "\n".join(lines) + f"\n[未找到章节] '{section}'。可用章节：\n{avail}"
+    lines.append("\n📑 SKILL.md 章节：")
+    lines.extend(f"  {'  ' * (lv - 1)}- {t}  (L{n})" for lv, t, n in heads)
+    if not list_only:
+        lines.append(f"（全文 {len(body)} 行：section=标题 读指定章节；read_skill 读全文）")
+    return "\n".join(lines)
+
+
+def skill_run_code(name: str, script: str, args: str = "") -> str:
+    """执行技能包内的 python 脚本（脚本须在技能目录内，如 scripts/xxx.py、tools/xxx.py）。
+    name: 技能名；script: 相对技能目录的脚本路径；args: 命令行参数（空格分隔，支持引号）。
+    cwd=技能目录；超时 120s；stdout/stderr 截断 8000 字。"""
+    import shlex
+    import subprocess
+    import sys
+    d, _scope = _resolve_skill(name)
+    if d is None:
+        return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
+    if not script or not str(script).endswith(".py") or ".." in Path(str(script)).parts:
+        return "[非法脚本] script 须为技能目录内的 .py 相对路径（禁止 .. 逃逸）"
+    sp = (d / script).resolve()
+    if d.resolve() not in sp.parents:
+        return "[非法脚本路径] 脚本必须在技能目录内"
+    if not sp.exists():
+        pys = [str(p.relative_to(d)).replace("\\", "/") for p in d.rglob("*.py")]
+        listing = "\n".join(pys[:40]) if pys else "（无）"
+        return f"[脚本不存在] {script}。技能包内的 .py：\n{listing}"
+    cmd = [sys.executable, str(sp)] + (shlex.split(args) if args else [])
+    try:
+        r = subprocess.run(cmd, cwd=str(d), capture_output=True, text=True,
+                           timeout=120, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return f"[超时] python {script} 超过 120s 被终止"
+    except Exception as e:
+        return f"[执行失败] {e}"
+    out = (r.stdout or "").strip()
+    err = (r.stderr or "").strip()
+    body = (out + ("\n[stderr]\n" + err if err else "")) or "（无输出）"
+    if len(body) > 8000:
+        body = body[:8000] + f"\n…（截断，共 {len(body)} 字）"
+    return f"▶ python {script} {args}".strip() + f"  [exit={r.returncode}]\n{body}"
+
+
+def skill_evaluate(name: str, input: str = "") -> str:
+    """技能约定评测入口。优先级：① 技能包 scripts/evaluate.py 存在 → 以 input 作 stdin 执行它
+    （cwd=技能目录，超时 120s）；② 包内 EVAL.md → 返回评测说明；③ 都没有 → 明确提示未提供。
+    name: 技能名；input: 传给评测脚本的 stdin 内容（如待检产物/提示词）。"""
+    import subprocess
+    import sys
+    d, _scope = _resolve_skill(name)
+    if d is None:
+        return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
+    ev = d / "scripts" / "evaluate.py"
+    if ev.exists():
+        try:
+            r = subprocess.run([sys.executable, str(ev)], cwd=str(d), input=input or "",
+                               capture_output=True, text=True, timeout=120,
+                               encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            return "[超时] scripts/evaluate.py 超过 120s 被终止"
+        except Exception as e:
+            return f"[执行失败] {e}"
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        body = (out + ("\n[stderr]\n" + err if err else "")) or "（无输出）"
+        if len(body) > 8000:
+            body = body[:8000] + f"\n…（截断，共 {len(body)} 字）"
+        return f"🧪 evaluate '{name}'  [exit={r.returncode}]\n{body}"
+    em = d / "EVAL.md"
+    if em.exists():
+        txt = em.read_text(encoding="utf-8", errors="ignore")
+        return f"📋 技能 '{name}' 评测说明（EVAL.md）：\n\n{txt[:6000]}" + ("\n…（截断）" if len(txt) > 6000 else "")
+    return f"[无评测入口] 技能 '{name}' 未提供 scripts/evaluate.py 或 EVAL.md（技能作者未约定评测方式）"
 
 
 def save_skill(name: str, description: str, when_to_use: str, sop: str) -> str:
@@ -610,4 +794,5 @@ def save_skill(name: str, description: str, when_to_use: str, sop: str) -> str:
     return f"✅ 已保存技能 '{name}' -> {(d / 'SKILL.md').relative_to(WORKSPACE)}"
 
 
-SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill))
+SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate),
+                     Tool(skill_run_code), Tool(skill_evaluate))

@@ -531,6 +531,7 @@ def _read_image(file: str) -> str:
 
 def write_file(path: str, content: str) -> str:
     """把 content 写入 workspace 内的文件（覆盖），返回确认信息。"""
+    content = _norm_text(content)   # 数组形态按行 join 归一（防 write_text TypeError）
     target = _resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
@@ -707,6 +708,8 @@ def edit(path: str, old_string: str, new_string: str, replace_all: bool = False,
     path: workspace 内文件；old_string: 要替换的原文；new_string: 替换为；
     replace_all=True 替换全部匹配。
     start_line/end_line: 只在该行范围内搜索替换（1-based，含两端）。"""
+    old_string = _norm_text(old_string)
+    new_string = _norm_text(new_string)   # 数组形态按行 join 归一（防 in 匹配 TypeError）
     target = _resolve(path)
     if not target.exists():
         return f"[文件不存在] {path}"
@@ -770,6 +773,21 @@ def _apply_lines(target: Path, new_lines: list, path: str, action_desc: str) -> 
     return f"{action_desc}（现共 {len(new_lines)} 行）file_version={_file_version(target)}"
 
 
+def _norm_text(v) -> str:
+    """文本参数归一（用户实锤 2026-09-22·D--Programs-env session）：模型偶发把多行内容
+    写成【字符串数组】（["", "  # …", "  print(…)"]）——执行侧此前 insert/replace_lines 拒绝、
+    write_file/edit 直接 TypeError，都浪费一轮重试。归一策略还原意图：数组按行 join("\\n")；
+    str 原样；None→''；其它 JSON 序列化。"""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple)):
+        return "\n".join("" if x is None else str(x) for x in v)
+    import json as _json
+    return _json.dumps(v, ensure_ascii=False)
+
+
 def insert(path: str, entries: list, version: str) -> str:
     """按行号在文件中【一处或多处】插入文本，单次原子写入——一次插多段用它，别在 run_python 里拼字符串。
     entries: 插入点数组，每项 {"line": 1-based 行号, "content": 文本(可多行)}；在该行之前插入；
@@ -790,8 +808,7 @@ def insert(path: str, entries: list, version: str) -> str:
         ct = e.get("content")
         if not isinstance(ln, int) or isinstance(ln, bool):
             return f"[参数错误] entries[{i}].line 需为整数，收到 {ln!r}"
-        if not isinstance(ct, str):
-            return f"[参数错误] entries[{i}].content 需为字符串，收到 {type(ct).__name__}"
+        ct = _norm_text(ct)   # 数组形态按行 join 归一（宽容执行，不再拒绝浪费一轮）
         norm.append((ln, ct))
     ok, _cur, err = _check_version(target, version)
     if not ok:
@@ -918,7 +935,7 @@ def replace_lines(path: str, entries: list, version: str) -> str:
                 and all(isinstance(x, int) and not isinstance(x, bool) for x in rng)):
             return f"[参数错误] entries[{i}].range 需为两个整数 [起, 止]，收到 {rng!r}"
         if not isinstance(ct, str):
-            return f"[参数错误] entries[{i}].content 需为字符串，收到 {type(ct).__name__}"
+            ct = _norm_text(ct)   # 数组形态按行 join 归一（宽容执行，不再拒绝浪费一轮）
         if hd is not None and not isinstance(hd, str):
             return f"[参数错误] entries[{i}].expect_head 需为字符串（可选；不传则仅靠行级视图白名单校验），收到 {type(hd).__name__}"
         a, b = rng

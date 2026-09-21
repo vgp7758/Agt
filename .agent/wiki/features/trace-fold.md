@@ -119,6 +119,37 @@ function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
 - **重放恢复**：`_chm = dict(e.get("changes") or [])` → `ToolCall(call_id=c, changed=_chm.get(c) or [])`——历史轮与实时轮渲染判定完全同构
 - 引擎代码（agent.py / session.py）需 `/restart` 生效；纯前端三处（renderToolCall + 历史渲染 m.changed + tc.changed）随静态资源刷新
 
+### 读档渲染 content 归一：_cs(v)——insert entries[] 数组脏形态炸 .split 修复（2026-09-22，commit 5766147，用户实锤）
+
+**现象（用户刷新页面控制台报错）**：`WS event error: TypeError: (e.content || "").split is not a function`——调用栈 `toolCallHTML → renderToolCall → renderHistTurn`。炸点在 forEach 里，**一轮渲染整体中断**：肇事工具调用之后的步骤全部渲染不出来，且写进了历史存档，每次刷新都复现。
+
+**根因（数据实锤，非前端随机错）**：翻肇事 session 的 `toollog.jsonl`，`insert` 调用的 `entries[].content` 是**字符串数组**——
+
+```json
+"entries": [{"line": 305, "content": ["", "        # ---- 10. 模型自动发现…", "        print(...)"]}]
+```
+
+模型生成的脏数据形态：把多行插入内容写成数组（没 join 成串）。前端 `(e.content||'').split('\n')` 的 `||''` **兜不住 truthy 数组**（数组是真值，走不到兜底）→ `.split` 炸。
+
+**修复（content 归一单点函数 `_cs(v)`，三分支）**（src/static/index.html，commit `5766147`）：
+
+```js
+function _cs(v){ return (typeof v==='string') ? v : (v==null ? '' : JSON.stringify(v)); }
+```
+
+| 消费点 | 改动 |
+|---|---|
+| `insert`（报错点） | entries 循环两处 `(e.content\|\|'')` → `_cs(e.content)`（行数统计 + diff 内容展示） |
+| `run_python` | `a.code` 同款风险 → `_cs(a.code)` |
+| `write_file` | `a.content` 同款风险 → `_cs(a.content)` |
+| `replace_lines` | 此前已 `String()` 归一，不动 |
+
+数组/对象 → JSON 序列化展示（可读、不炸、forEach 不中断）；null/undefined → ''；字符串原样。
+
+**验证**：JS 语法 ✓ · 坏数据实锤 1 例 ✓ · `_cs` 四形态（str/array/object/null）实测 ✓；纯前端，Ctrl+F5 生效。
+
+**遗留观察（工具执行侧，待裁定）**：模型产出的这种数组形态如果流进工具执行侧（insert 真写文件那次未归一），目标文件可能残留 Python repr（`['', '...']`）——执行侧要不要加同款归一，待用户裁定。
+
 ## 钩子行折叠
 
 **组折叠（auto_wf_start 起，commit 4455503）**：同 hook 位置的多个工作流收进一个组头 `▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`——**默认收起**，点击展开看各工作流执行详情。组头带计数（done/total）+ 组级秒表，运行中脉冲动画、全完成/有失败停表定格；行内工作流保留观测页跳转 / 完成态。实现细节与跨轮兜底见 [用户交互 · 钩子组折叠显示](user-interaction.md#钩子组折叠显示同-hook-位置收进一个组头2026-08commit-4455503)。

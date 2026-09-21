@@ -11,6 +11,48 @@
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 
+## ⏸ 挂起：/hold on|off + WebUI 按钮 + /api/hold 三通道（2026-09-21，用户提案）
+
+> src/agent.py（`_hold`/`_hold_event` + `set_hold()` + step 循环挂起等待）+ src/commands.py（`_cmd_hold`）+ src/server.py（`POST /api/hold` + `/api/status` 加 `hold` 字段）+ src/static/index.html（⏸ 按钮）。用户提案 2026-09-21。语义：`/hold on` 让 react 在【下一步开始前】暂停（当前步照常跑完），`/hold off` 从下一步继续。
+
+**三通道控制**：
+
+| 通道 | 用法 | 说明 |
+|---|---|---|
+| CLI 命令 | `/hold on` / `/hold off` | 终端交互（命令分发，不在 react 循环内） |
+| WebUI 按钮 | 控件栏「⏸ 挂起」→ 点击变「▶ 继续」（primary 高亮） | 快捷控制（`toggleHold`/`paintHold`，后端旧版无 `_hold` 时点击弹 toast 提示需升级） |
+| HTTP | `POST /api/hold {on}` | 供脚本/其它端（`api_hold` 端点） |
+
+**核心语义**：
+
+- `on` → `agent._hold = True` + `_hold_event.clear()`——react 循环在**下一步开始前**执行 `while self._hold and not self._stop_flag: self._hold_event.wait(0.5)`（0.5s 轮询，Ctrl+C 仍可打断）
+- `off` → `set_hold(False)` → `_hold_event.set()` **即时放行**，从下一步继续；`set_hold(on)` 返回 `{"hold": bool}` 状态
+- `_hold_event` 用 `threading.Event`，初始 `set()`=不挂起
+
+**关键设计：off 必须走独立通道（work_q 死锁）**
+
+挂起时 react 阻塞在 `event.wait()`，此时 `work_q` 的消息循环不消费——若把 `/hold off` 也当普通消息塞进 `work_q`，它永远轮不到执行 → **死锁**。所以：
+
+- WebUI 按钮 / `/api/hold` 走**独立 HTTP 端点**，直接 `agent.set_hold(False)` 唤醒，绕开 `work_q`
+- CLI 的 `/hold off` 走命令分发（不在 react 循环内）
+
+**四文件改动**：
+
+| 文件 | 改动 |
+|---|---|
+| src/agent.py | `__init__` 加 `_hold`/`_hold_event`（Event 初始 set）+ `set_hold(on)->dict` + step 循环挂起等待（下一步开始前，0.5s 轮询可 Ctrl+C 打断） |
+| src/commands.py | `_cmd_hold`（on/off/1/0/true/false，空串默认挂起 + 当前态提示）+ 注册进 `/help`（`hold` 命令 + 用法说明） |
+| src/server.py | `POST /api/hold`（body `{"on": bool}`，agent 未就绪返回 error）+ `/api/status` 返回结构加 `hold` 字段（`bool(getattr(agent, "_hold", False))`） |
+| src/static/index.html | 控件栏 `btnHold` 按钮（`toggleHold`/`paintHold`，切「▶ 继续」+ primary 高亮）；后端旧版无 `_hold` 时点击弹 toast 提示需升级 |
+
+**生效方式**：引擎层三文件（agent.py / commands.py / server.py）+ index.html 均随服务进程载入 → 需 `/restart` 后生效。
+
+**验证**：后端编译 3/3 · JS 语法 1/1 · 结构断言 10/10。
+
+**应用场景**：多步任务里想让 Agent 先停一下（观察它下一步要改什么文件、或临时收手）时点 ⏸，它会在下一步开始前停住；想继续再点 ▶。
+
+**关联**：[后台通知 wake 语义](#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0.19.2)（同属用户对运行中 Agent 的控制）、[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（/api/hold 是独立 HTTP 通道，不经 WS target 路由）、[api-status](api-status.md)（`/api/status` 新增 `hold` 字段）。
+
 ## 多客户端 target 路由 · 页签级 Agent 隔离（2026-08，commit 30ac45b）
 
 > src/server.py。此前事件广播是**全端广播**——每个 WS 客户端都收到所有事件，多页签同时与不同 Agent 交互会互相串台。本改动引入**客户端级交互目标 `target`**：每个客户端只收自己正在交互的 Agent 的事件、只把自己的文本路由给该 Agent。

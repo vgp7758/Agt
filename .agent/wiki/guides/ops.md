@@ -401,6 +401,7 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 | 某端点缓存命中骤降 | per-token 驱逐：utility 与 react 共用 token → 分条目分 token |
 | 某端点命中率恒 0 | 随机路由或 provider 不支持缓存 → 链路后置 |
 | 中断轮"消失" | 已修复（start_turn 防御归档，answer=中断标注）；旧数据读档可見 |
+| 中断轮点「继续」报“最后一轮已正常完成，历史中也没有可继续的中断轮” | 已修（2026-09-22，用户实锤）：`_INTERRUPT_MARKS` 集合漏“（异常中断：xxx）”形态（run() 异常逃出路径写入的标注此前未登记）+ 前缀带尾括号对带原因后缀文案 `startswith` 恒 False → 异常中断轮被判“已正常完成”拒绝恢复；两层修复（session.py 集合补齐/去尾括号 + index.html 前端判定精确等值改前缀匹配），`/restart` + 强刷生效（见 [resume-interrupted](../features/resume-interrupted.md)） |
 | 工作流编辑后保存丢子画布 | 已修复（exitComposite 从栈顶帧父层写回）→ 强刷编辑器 |
 | Windows 闪终端窗 | 已修复（子进程统一 CREATE_NO_WINDOW）→ agt ≥ 0.18.1 |
 | 子 Agent 调用后主 Agent 不响应 | **先看下一行**：若伴随实例反复退出 rc=0 → 多为端口被旧实例占用（`netstat` 查 pid → `taskkill`） |

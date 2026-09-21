@@ -4,7 +4,7 @@
 
 ## 职责
 
-气泡交互目前有六个独立特性：
+气泡交互目前有七个独立特性：
 
 | 特性 | 前端文件 | 上线 |
 |------|---------|------|
@@ -14,6 +14,7 @@
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**无感叹号 `[文字](本地路径)` 渲染为 asset 链接**（2026-09-17，commit 4ad7742，四种引用形态齐）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件）、**资产框 error 降级**：文件已被删 → 图/音/视频框 onerror → `.err` +「⚠️ 文件已不存在」（2026-09-18，commit deded59） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 + 4ad7742 + deded59 |
 | **bash 代码块执行按钮**：` ```bash ` 块下 ▶ Agent 执行 / 💻 终端执行双按钮；2026-09-17 起 Agent 执行改**逐条指令**（逐行去 shebang/行尾注释/纯注释/空行后逐条发 `/call run_shell` 串行按序），终端执行保持整块 | `static/index.html` | 按钮早期上线；逐条化 2026-09-17，commit 60f3c6d |
 | **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited |
+| **轮收藏与收藏视角**：每轮 `.turn` 左上 ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -583,18 +584,27 @@ provider 403（flatkey 欠费）
 
 抽屉侧形态（headbar 钉顶 + 滚动区独立 + 设计概述自然撑高）见 [编辑器 UX · spec 抽屉](../features/editor-ux-improvements.md#批次十二092a0dfspec--日志抽屉布局统一标题栏钉顶--滚动区独立)。
 
-## 轮收藏与收藏视角：v0.29.8 后端预备入库，主体开发被插话暂停（2026-09，用户提案）
+## 轮收藏与收藏视角（2026-09-22 主体开发收官，commit fe1b2ac，用户提案）
 
-**用户提案**：WebUI 交互中有些轮需要经常回看——可把这样的轮**收藏**（answer 气泡 ⭐）；再做一个**「收藏视角」**，专门回看被收藏轮的上下文。
+**用户提案（2026-09-21）**：WebUI 交互中有些轮需要经常回看——可把这样的轮**收藏**（answer 气泡 ⭐）；再做一个**「收藏视角」**，专门回看被收藏轮的上下文。
 
-**进度：v0.29.8 后端预备已入库（读侧就绪、写侧未动），主体开发被 before_turn 专用超时插话暂停**（见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)）。已入库两处均为无害增量：
+**前情**：v0.29.8 已入库读侧预备——answer 事件带 `"turn": len(turns)+1`（收藏按钮 data-turn 回填，answer 发出时轮尚未归档）、session_history payload 带 `"favorites"` 收藏表（存 `session.extra_state`，见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)——主体开发曾因该插话暂停）。**2026-09-22 主体收官（commit `fe1b2ac`）：写侧端点 + ⭐ 按钮 + 视角切换三层全通。**
 
-| 文件 | 改动 |
+### 三层实现
+
+| 层 | 内容 |
 |---|---|
-| src/agent.py | answer 事件带 `"turn": len(self.session.turns) + 1`——轮号供前端收藏按钮回填 `data-turn`（answer 发出时轮尚未归档，故号 = len+1） |
-| src/server.py | session_history payload 带 `"favorites": sorted(session.extra_state.get("favorites") or [])`——收藏表（轮号列表，存 `session.extra_state`，随会话存档持久化），前端读档/翻页时据此渲染 ⭐ 状态 |
+| **持久化**（src/server.py） | `POST /api/favorite` body `{"turn": 轮号, "on": true/false}` → 写 `session.extra_state.favorites`（数组）——随 session 存档 meta.json 落盘，**重启/读档收藏随会话走** |
+| **⭐ 按钮 + 轮号贯通**（src/static/index.html） | `.fav-btn` 挂 **`.turn` 宿主**左上角（已收藏恒显 ★ 橙色 / 未收藏 hover 浮现 ☆；hover 触发区用宿主 + pointer-events 纪律——同[复制按钮挂载范式](#气泡级复制按钮indexhtml2026-08-19)）；`_favs` Set 随 `session_history` 事件初始化；**实时轮** answer 事件带 turn → bot row + 最近的 user row 成对标 `data-turn` 并 `attachFavBtn`（轮已完成正好可收藏）；**历史轮** `renderHistTurn` user/bot 成对标号 + `applyFavMarks()` 统一回填 |
+| **收藏视角**（src/static/index.html） | 控件栏「☆ 收藏」按钮 → `toggleFavView()`：`body.fav-only` CSS 过滤——未收藏轮整体隐藏（user + 过程 + answer **成对显隐**），顶部蓝字提示条「⭐ 收藏视角：显示 N 个收藏轮（点击退出）」 |
 
-**待做清单（恢复开发时从此续）**：①收藏切换写端点（`POST /api/favorite` 之类，写 `extra_state.favorites`，存档格式与读侧一致）；②answer 气泡 ⭐ 按钮（挂宿主容器防重写丢失——同[气泡复制按钮的挂载范式](#气泡级复制按钮indexhtml2026-08-19)）；③收藏视角切换 UI（只回看被收藏轮的上下文，数据源 = session_history + favorites 过滤）。
+**旧后端兜底**：`/api/favorite` 未升级（后端仍是旧版）时，点击收藏降级为**本页内存**（`_favs` 本地生效，刷新即失）+ toast「后端未升级，仅本页生效」——纯前端体验不断。
+
+**顺带**：历史用户气泡补挂同款复制按钮（`attachCopyBtn`，对齐[四处挂载清单](#四处挂载实时--历史全覆盖)）。
+
+**验证（三层全过）**：node JS 语法 1/1 + 结构断言 16/16；playwright 真实页面——控件栏「☆ 收藏」按钮存在 ✓、21 个历史轮 42 行 user/bot 全部成对标号并挂 ⭐ ✓、视角切换开（未收藏轮隐藏 + 蓝字条出现）/ 关（全恢复）✓。
+
+**生效方式**：**Ctrl+F5 立即可用**（静态资源 mtime 热更新，前端已生效）；`/restart` 后 `/api/favorite` 持久化生效。
 
 ## 与后端的关系
 
@@ -602,7 +612,7 @@ provider 403（flatkey 欠费）
 - 系统气泡 vs 用户气泡的区分依据：事件类型（`system` / `user`）——前端按类型赋默认 collapsed 状态
 - async 钩子工作流（见 [工作流引擎与钩子](../architecture/workflow-hooks.md#async-元信息字段2026-08-新)）的返回值不注入主循环，但若产生日志/副作用事件，仍以系统气泡形式展示（默认折叠）
 - 气泡级复制、answer 分页翻页均为纯前端行为（只读 innerText / 切换已存页面），不涉及后端额外改动
-- **例外：answer 行内资源渲染**（2026-09-04 起）需要后端配合——`server.py` 的 `GET /api/asset` 为图框/音频控件供文件（workspace 沙箱服务）；2026-09-09 起新增 `GET /api/file-kind`（未知后缀引用先嗅探内容类型/编码再定渲染形态，见[本节末章](#未知后缀引用按内容嗅探渲染apifile-kind--编码感知解码2026-09-09用户提案)）——是本页仅有的两个非纯前端特性
+- **例外：answer 行内资源渲染**（2026-09-04 起）需要后端配合——`server.py` 的 `GET /api/asset` 为图框/音频控件供文件（workspace 沙箱服务）；2026-09-09 起新增 `GET /api/file-kind`（未知后缀引用先嗅探内容类型/编码再定渲染形态，见[本节末章](#未知后缀引用按内容嗅探渲染apifile-kind--编码感知解码2026-09-09用户提案)）——是本页仅有的两个非纯前端特性；2026-09-22 起再加 `POST /api/favorite`（轮收藏持久化，见[轮收藏与收藏视角](#轮收藏与收藏视角2026-09-22-主体开发收官commit-fe1b2ac用户提案)）——本页共三个非纯前端特性
 
 ## 相关页面
 

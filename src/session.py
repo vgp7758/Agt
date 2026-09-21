@@ -376,7 +376,13 @@ _MIDTURN_TAG = "📨〔用户中途补充，非新一轮〕\n"
 
 # 中断轮的 answer 标注集合（abort/start_turn 防御写入；resume_interrupted/前端渲染据此识别）
 # 注："（被用户中断）" 是旧 KeyboardInterrupt 路径的文案（已统一为"（被用户停止）"），保留兼容历史存档
-_INTERRUPT_MARKS = ("（中断，本轮未完成）", "（被中断）", "（被用户停止）", "（被用户中断）")
+# "（异常中断："（用户实锤 2026-09-22·D--Programs-env session）：run() 异常逃出路径
+# abort_current_turn(f"（异常中断：{type(e).__name__}）") 写入的形态——此前集合漏了它，
+# resume_interrupted 把异常中断轮判成"已正常完成"拒绝恢复（点继续恒报错）。
+_INTERRUPT_MARKS = ("（中断，本轮未完成", "（被中断", "（被用户停止", "（被用户中断", "（异常中断：")
+#   ↑ 前缀一律不带尾括号：既匹配裸文案"（被中断）"，也匹配带原因后缀的
+#     "（中断，本轮未完成——LLM 502: ...）"/"（异常中断：RuntimeError）"（用户实锤 2026-09-22：
+#     带尾括号的前缀对后缀形态 startswith 恒 False → 异常中断轮被判"已正常完成"拒绝恢复）
 
 
 def _is_interrupt_mark(answer: str) -> bool:

@@ -1379,7 +1379,9 @@ function renderHistTurn(t, box, isLast){
   _curThinkFold = null;   // 历史渲染完复位（防污染后续实时轮的归属）
   if(curTurn.traceBox.children.length===0) det.style.display='none';
   const a=t.answer||'';
-  const isInterrupted = !a.trim() || a==='（中断，本轮未完成）' || a==='（被中断）';
+  // 中断判定与后端 _INTERRUPT_MARKS 对齐（前缀匹配——带原因后缀的文案/异常中断形态都认；
+  // 此前精确等值漏"（被用户停止）/（异常中断：RuntimeError）"等形态，用户实锤 2026-09-22）
+  const isInterrupted = !a.trim() || ['（中断，本轮未完成','（被中断','（被用户停止','（被用户中断','（异常中断：'].some(p=>a.startsWith(p));
   if(isInterrupted && isLast) finishInterrupted(t.turn);   // 最新轮中断 → 可续跑
   else if(isInterrupted){                                   // 历史中断 → 灰字标注
     ans.textContent='⏹ 本轮被中断，未完成'; ans.style.color='#8a9099';

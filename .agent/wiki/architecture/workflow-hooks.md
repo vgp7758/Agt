@@ -231,6 +231,30 @@ with ThreadPoolExecutor() as pool:
 
 > ⚠️ **并发线程共享外置件状态必须用原子工具**（2026-09-13 实战教训，commit `1c1c944`）：extract_keywords 曾因双钩子并发，在「read 判定 → 另一节点 write_pending 占位」的两节点互斥上双双 miss（read 与占位非原子）→ 同时打本地单并发模型、一个失败 + pending 永久残留（后续同消息傻等 90×2s 超时）。修复 = `kv_cache_claim` 原子互斥（check-and-set 收进进程级锁，三态 hit/pending/claimed），详见 [kv-tools · 竞态修复](../features/kv-tools.md)。
 
+## before_turn 钩子专用超时 60s（2026-09-21 用户裁定，v0.29.8 发布）
+
+**动机（用户裁定 2026-09-21，随 v0.29.8 发布）**：before_turn（检索钩子，wiki_auto_query / before_turn_retrieval）挂在主循环入口——用户发消息后**最先跑**；此前与 recap 等其它位置钩子共用 `hook_timeout`（300s），检索工作流卡住 = 用户干等 5 分钟才开始推理。裁定：入口钩子等 300s 体验太差，独立成 60s。
+
+**配置（settings.json，两键分离）**：
+
+| 键 | 默认 | 语义 |
+|---|---|---|
+| `hook_timeout` | 300 | 其它位置同步钩子（before_tool / after_tool / before_answer / turn_end）整组超时，0=不限 |
+| `hook_timeout_before_turn`（新） | **60** | before_turn 专用，0=不限；**损坏值兜底 60** |
+
+**实现（两文件）**：
+
+| 文件 | 改动 |
+|---|---|
+| src/config.py | 新增 `load_hook_timeout_before_turn()`——与既有 `load_hook_timeout()` 同款：读 `load_runtime_settings()`、clamp ≥0、异常兜底默认值（docstring 写明裁定缘由） |
+| src/agent.py `_run_hooks` | 超时取值分流：先落兜底 `_timeout_s = 60 if hook == "before_turn" else 300`，再被两个 config 读取覆盖 |
+
+**部分组装语义（保持并在此确认）**：超时到达时**组内已完成的工作流结果照常合并注入，未完成的丢弃**（发 `auto_wf_error` 标记「⏱ 超时结果已丢弃」）——Python 线程不可强杀，后台自然跑完但不再等它；async 钩子不受此限制。效果：检索慢/卡不再卡对话，主循环最多等 60s 就开始推理。
+
+**验证（6 项全过）**：默认 60/300 ✓ / settings 覆盖 45/120 ✓ / 0=不限 ✓ / 损坏值兜底 60 ✓ / agent 分流断言 ✓ / 部分组装语义保留断言 ✓。引擎层改动，`/restart` 生效。
+
+关联：[配置体系 · settings.json](../guides/config-and-models.md#settingsjson运行时)（两键全表）、[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)——「全部完成才返回」的并行语义不变，本节只是给整组等待加了上限。
+
 ## async 元信息字段（2026-08 新，v0.18.2 正式发布）
 
 钩子工作流可标记 `async=true`，使其**异步执行不阻塞主循环**。全链路读写：

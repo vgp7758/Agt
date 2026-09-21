@@ -583,6 +583,19 @@ provider 403（flatkey 欠费）
 
 抽屉侧形态（headbar 钉顶 + 滚动区独立 + 设计概述自然撑高）见 [编辑器 UX · spec 抽屉](../features/editor-ux-improvements.md#批次十二092a0dfspec--日志抽屉布局统一标题栏钉顶--滚动区独立)。
 
+## 轮收藏与收藏视角：v0.29.8 后端预备入库，主体开发被插话暂停（2026-09，用户提案）
+
+**用户提案**：WebUI 交互中有些轮需要经常回看——可把这样的轮**收藏**（answer 气泡 ⭐）；再做一个**「收藏视角」**，专门回看被收藏轮的上下文。
+
+**进度：v0.29.8 后端预备已入库（读侧就绪、写侧未动），主体开发被 before_turn 专用超时插话暂停**（见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)）。已入库两处均为无害增量：
+
+| 文件 | 改动 |
+|---|---|
+| src/agent.py | answer 事件带 `"turn": len(self.session.turns) + 1`——轮号供前端收藏按钮回填 `data-turn`（answer 发出时轮尚未归档，故号 = len+1） |
+| src/server.py | session_history payload 带 `"favorites": sorted(session.extra_state.get("favorites") or [])`——收藏表（轮号列表，存 `session.extra_state`，随会话存档持久化），前端读档/翻页时据此渲染 ⭐ 状态 |
+
+**待做清单（恢复开发时从此续）**：①收藏切换写端点（`POST /api/favorite` 之类，写 `extra_state.favorites`，存档格式与读侧一致）；②answer 气泡 ⭐ 按钮（挂宿主容器防重写丢失——同[气泡复制按钮的挂载范式](#气泡级复制按钮indexhtml2026-08-19)）；③收藏视角切换 UI（只回看被收藏轮的上下文，数据源 = session_history + favorites 过滤）。
+
 ## 与后端的关系
 
 - 气泡内容由 `agent.py` 事件流 `_emit` → WS broadcast → 前端渲染；**所有事件统一携带 `agent_id` 字段**（主=`_main_`，子 Agent=各自 id，`setdefault` 兜底）——前端 answer 分页 / trace 前缀均据此分流

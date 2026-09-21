@@ -1152,3 +1152,9 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **skill_navigate 两个体验升级（2026-09-20，用户两问触发，commit 88de034，`src/agent_config.py`）**：①**目录树附各 .md 标题清单**——用户问「Agent 要怎么知道文件里有哪些 section？」，现每个 .md 文件名下列出 `#/##` 级标题（每文件 ≤6 条 + `…`，全树总预算 160 行防大包刷屏），一次 navigate = 全包「文件 × 章节」地图，选准再 file+section 精读；②**file 宽松定位**——用户问「file 是完整相对路径会不会偏严格了」，新 `_find_skill_file` 三级匹配链：完整相对路径精确命中 → 包内 rglob 同名 basename → stem 部分包含（搜 .md/.txt）；唯一定位直读（输出头标实际路径）/ 多候选列出让模型重选（如两个 AGENTS.md）/ 防逃逸不变（`../` 拒 + resolve 校验）。验证 10 场景全绿——见 [skills · 后记二](features/skills.md)
 
+## 快速事实增补（2026-09-22 · 六 · v0.29.8 发布——before_turn 钩子专用超时 60s + 轮收藏后端预备）
+
+## 快速事实增补（2026-09-22 · 六 · v0.29.8 发布——before_turn 钩子专用超时 60s + 轮收藏后端预备）
+
+- **v0.29.8 发布**（PyPI `agt-agent` 已上线）：①⏱ **before_turn 钩子专用超时 60s**——settings 新键 `hook_timeout_before_turn`（默认 60、0=不限、损坏值兜底 60），与全局 `hook_timeout`（其它位置钩子，仍 300s）分离；用户裁定 2026-09-21「before_turn 挂在主循环入口，检索卡住等 300s 体验太差」；超时走**部分组装**（组内已完成照常注入、未完成丢弃 + auto_wf_error 标记），async 钩子不受限——见 [workflow-hooks · before_turn 专用超时](architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)、[config · settings.json](guides/config-and-models.md#settingsjson运行时)；②⭐ **轮收藏（⭐）+ 收藏视角后端预备**——用户提案「收藏需要经常回看的轮 + 收藏视角专门回看」；answer 事件带 `turn` 轮号（收藏按钮 data-turn 回填，answer 时轮未归档故号=len+1）+ session_history 带 `favorites` 收藏表（存 `session.extra_state` 随存档持久化）——**读侧就绪，写侧与前端主体（/api/favorite + ⭐ 按钮 + 视角切换）被①插话暂停待续**——见 [bubble-interaction · 轮收藏](features/bubble-interaction.md#轮收藏与收藏视角v0298-后端预备入库主体开发被插话暂停2026-09-用户提案)
+

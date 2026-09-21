@@ -376,6 +376,8 @@ def _openai_client(self) -> OpenAI:
 | utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑） |
 | detail_base | 分档基准字数(1500)——设置页显示【实际生效值】：显式配置 > 按窗口推导（400K→1500、600K→2250、60K→600）> 1500 |
 | ~~detail_step~~（已删） | **全局 settings 字段已删除**（2026-09-15，commit 4ad2812，用户裁定；t877_s51 轮内小毕业诊断收尾）：步距衰减只认 models.json 条目级 `detail_step`（clamp 0~200，**未填默认 0=不衰减**；想要衰减必须显式填，DeepSeek 类价差悬殊配 0）；`/config detail_step` 收到只提示去向不落盘。见 [全局字段删除](../architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定) |
+| hook_timeout | 同步钩子整组超时秒数（默认 300，0=不限）——超时钩子结果丢弃（`auto_wf_error` 标记），组内已完成/后续完成的其它钩子照常合并注入（**部分组装**）；async 钩子不受限 |
+| hook_timeout_before_turn | **before_turn 检索钩子专用超时**（2026-09-21 用户裁定，v0.29.8）：默认 **60**、0=不限、损坏值兜底 60——入口钩子挂在主循环入口（用户发消息后最先跑），此前共用 300s 等待体验太差；超时同走部分组装。机制见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布) |
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试） |
 
 > **回退链分层（2026-09-15 用户裁定后，两链分离）**：
@@ -386,14 +388,6 @@ def _openai_client(self) -> OpenAI:
 > | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承） | 设置页 / `/config fallback_chain` |
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
-
-### ### callback_token 与读取口径：只走 load_runtime_settings()（2026-09-19）
-
-`callback_token`（32 位 hex）：**外部回调通道的鉴权凭据**——`POST /api/callback` 带 header `X-Cb-Token` 才能推消息/文件进本实例 inbox（未配置 = 拒绝一切回调）。**读取口径必须走 `config.load_runtime_settings()`**，不能硬编码 `~/.agt/settings.json`。
-
-**实证（2026-09-19，commit `523f8ba`）**：`api_callback` 原先直接 `expanduser("~/.agt/settings.json")`，在 **CNB 容器（`AGT_HOME=/workspace/.agent-data/agt`）** 下读不到 → 所有回调被安全策略拒掉（报「未配置 callback_token」而实例其实有）。修法即改走 `load_runtime_settings()`（AGT_HOME + repo 级覆盖全部生效），旧环境可 `ln -s $AGT_HOME ~/.agt` 兜底。
-
-**教训（通用）**：凡「读全局配置」的代码都要过 `config` 解析层——`~/.agt` 只是**默认值**，容器 / 桌面版（数据根统一）/ repo 级覆盖都可能改道。详见 [外部事件注入](../features/external-injection.md)。
 
 ## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
 

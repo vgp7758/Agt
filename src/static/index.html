@@ -333,6 +333,16 @@
       重叠 2px 保证气泡→按钮路径几何连续，hover 冒泡不断。 */
   /* 仅在气泡 hover 时恢复可点击，避免透明按钮溢出到输入框上方吞掉点击 */
   .turn:hover .bubble-copy, .row.me:hover .bubble-copy { pointer-events:auto; }
+  /* ⭐ 收藏按钮（用户提案 2026-09-21）：挂在 .turn 左上，已收藏恒显、未收藏 hover 浮现 */
+  .fav-btn { position:absolute; left:6px; top:6px; padding:2px 8px; font-size:11px;
+    background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
+    opacity:0; transition:opacity .15s; z-index:6; pointer-events:none; }
+  .turn:hover .fav-btn, .row[data-fav="1"] .fav-btn { opacity:1; pointer-events:auto; }
+  .fav-btn.on { color:#d97706; border-color:#fcd34d; background:#fffbeb; }
+  /* 收藏视角（用户提案 2026-09-21）：只显示被收藏轮（user+bot 成对 data-fav），其余隐藏 */
+  body.fav-only #msgArea > *:not([data-fav="1"]):not(#favHint) { display:none; }
+  #favHint { text-align:center; color:#2563eb; cursor:pointer; padding:10px; font-size:13px;
+    border:1px dashed #bfdbfe; border-radius:8px; margin:6px 0; }
   .bubble-copy:hover { background:#f3f4f6; color:#1f2329; }
   .row.me { position:relative; }
   .row.me:hover .bubble-copy { opacity:1; }
@@ -449,6 +459,7 @@
     <select id="agentSel" title="切换直接交互的 Agent（点击时自动刷新列表）">
       <option value="_main_">🤖 主 Agent</option>
     </select>
+    <button class="btn" id="btnFavView" onclick="toggleFavView()" title="收藏视角：只显示收藏的轮（⭐ 按钮在每轮左上）">☆ 收藏</button>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
@@ -1329,17 +1340,19 @@ function renderHistTurn(t, box, isLast){
         if(nb.dataset.collapsed==='1'){ nb.dataset.collapsed='0'; nb.textContent=nb.dataset.full; }
         else{ nb.dataset.collapsed='1'; nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）'; }
       };
-      nrow.appendChild(nb); box.appendChild(nrow);
+      nrow.appendChild(nb); nrow.dataset.turn = t.turn; box.appendChild(nrow);
     } else {
       const urow=document.createElement('div'); urow.className='row me';
       const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
       urow.appendChild(ub);
+      urow.dataset.turn = t.turn;   // ⭐ 收藏：user 与 bot 成对标轮号（收藏视角成对显隐）
       attachCopyBtn(urow, ub);   // 历史用户气泡同款复制按钮
       box.appendChild(urow);
     }
   }
   // bot 回复（过程 trace + answer）
   const row=document.createElement('div'); row.className='row bot';
+  row.dataset.turn = t.turn;   // ⭐ 收藏：bot 轮号（与 user 行成对）
   const col=document.createElement('div'); col.className='turn';
   const det=document.createElement('details'); det.className='trace';
   const sum=document.createElement('summary'); sum.textContent='过程'; det.appendChild(sum);
@@ -1371,6 +1384,7 @@ function renderHistTurn(t, box, isLast){
     ans.textContent='⏹ 本轮被中断，未完成'; ans.style.color='#8a9099';
   }
    else finishAnswer(a, undefined, t.changed);
+  attachFavBtn(col, t.turn);   // ⭐ 历史轮：answer 就位后挂收藏按钮（col=.turn）
   curTurn=prev;
   return row;
 }
@@ -1384,6 +1398,7 @@ function renderHistory(turns){
   if(_histExpandFrom>0) msgArea.appendChild(makeExpandBar());
   if(!turns || !turns.length) return;
   turns.forEach((t,i)=>renderHistTurn(t, msgArea, i===turns.length-1));   // 只有最新轮可显示继续按钮
+  applyFavMarks();   // ⭐ 收藏标记统一回填（data-fav 按 _favs）
   probeUnknownAssets();   // 历史轮里未知后缀引用同样嗅探升级
   scrollBottom();
 }
@@ -1526,7 +1541,58 @@ function attachCopyBtn(host, bubble){
   };
   host.appendChild(btn);
 }
-// 用户消息前的时间分隔行（居中灰字）——仅实时发送时显示当前时间（历史轮无时间戳数据）
+// ===== ⭐ 收藏（用户提案 2026-09-21：常回看的轮可收藏 + 收藏视角专门回看）=====
+let _favs = new Set();   // 收藏轮号表（session_history 事件 favorites 初始化；/api/favorite 持久化）
+function applyFavMarks(){
+  document.querySelectorAll('#msgArea .row[data-turn]').forEach(r=>{
+    r.dataset.fav = _favs.has(+r.dataset.turn) ? '1' : '0';
+  });
+}
+function attachFavBtn(col, turnNo){
+  if(!col || !turnNo || col.querySelector('.fav-btn')) return;
+  const btn=document.createElement('button');
+  btn.className='fav-btn';
+  const paint=()=>{
+    const on = _favs.has(turnNo);
+    btn.textContent = on ? '★ 已收藏' : '☆ 收藏';
+    btn.classList.toggle('on', on);
+  };
+  paint();
+  btn.title='收藏/取消收藏这一轮（⭐ 收藏视角专门回看）';
+  btn.onclick=async()=>{
+    const on = !_favs.has(turnNo);
+    try{
+      const r = await fetch('/api/favorite',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({turn:turnNo,on})});
+      const d = await r.json();
+      if(d && d.ok){ _favs = new Set(d.favorites||[]); }
+      else { if(on)_favs.add(turnNo); else _favs.delete(turnNo); }
+    }catch(e){   // 后端未升级（旧版本）：本页内存态生效
+      if(on)_favs.add(turnNo); else _favs.delete(turnNo);
+      toast('后端未升级，收藏仅本页生效');
+    }
+    paint(); applyFavMarks(); updateFavHint();
+  };
+  col.appendChild(btn);
+}
+function toggleFavView(){
+  const on = document.body.classList.toggle('fav-only');
+  const b = document.getElementById('btnFavView');
+  if(b){ b.textContent = on ? '★ 收藏视角' : '☆ 收藏'; b.classList.toggle('primary', on); }
+  let hint = document.getElementById('favHint');
+  if(on){
+    if(!hint){ hint=document.createElement('div'); hint.id='favHint'; msgArea.prepend(hint); }
+    hint.title='点击退出收藏视角';
+    hint.onclick = toggleFavView;
+    updateFavHint();
+  } else if(hint){ hint.remove(); }
+}
+function updateFavHint(){
+  const hint = document.getElementById('favHint');
+  if(!hint) return;
+  const n = document.querySelectorAll('#msgArea .row.bot[data-fav="1"]').length;
+  hint.textContent = `⭐ 收藏视角：显示 ${n} 个收藏轮（其余已隐藏；点击此处退出）`;
+}
 function addTimeDivider(){
   const d=document.createElement('div'); d.className='time-divider';
   d.textContent=new Date().toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -3209,6 +3275,7 @@ function onWSMessage(ev){
     case 'session_history':
       _histExpandFrom = m.expand_from || 0;
       _histTotal = m.total_turns || (m.turns||[]).length;
+      _favs = new Set(m.favorites || []);   // 收藏表随会话载入（/api/favorite 持久化在 meta.json）
       renderHistory(m.turns);
       addRow('sys', _histExpandFrom > 0
         ? `✅ 已恢复会话：${m.name}（显示最新 ${(m.turns||[]).length} 轮 / 共 ${_histTotal} 轮，更早的点击上方蓝字展开）`
@@ -3319,7 +3386,20 @@ function onWSMessage(ev){
       pushLogEntry(m.level || 'warn', m.text || '', m.scene || '');
       break;
     case 'warn': addTrace('warn', '⚠️ '+m.text); break;
-    case 'answer': case 'wrap_answer': window._specBubbleActive=false; finishAnswer(m.text, m.agent_id, m.changed); break;
+    case 'answer': case 'wrap_answer': window._specBubbleActive=false;
+      // ⭐ 实时轮的收藏回填：answer 事件带轮号（引擎 answer emit len(turns)+1）——
+      // 给本轮 bot row / 最近的 user row 标 data-turn，挂收藏按钮（轮已完成正好可收藏）
+      if(m.turn && curTurn && curTurn.answerEl){
+        const _col = curTurn.answerEl.closest('.turn');
+        if(_col){
+          const _brow = _col.closest('.row');
+          if(_brow){ _brow.dataset.turn = m.turn; attachFavBtn(_col, m.turn); }
+          const _rows = document.querySelectorAll('#msgArea .row.me');
+          for(let k=_rows.length-1;k>=0;k--){ _rows[k].dataset.turn = m.turn; break; }
+        }
+        applyFavMarks();
+      }
+      finishAnswer(m.text, m.agent_id, m.changed); break;
     case 'wrap_up': addTrace('warn', '⚠️ 触达上限，强制收尾'); break;
     case 'budget_hit': addTrace('warn', '⚠️ 预算用尽'); break;
     case 'turn_resume':

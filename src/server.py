@@ -953,6 +953,32 @@ async def api_tool_exec(request: Request):
         return {"ok": False, "error": f"工具 {name} 执行失败：{type(e).__name__}: {e}"}
 
 
+@app.post("/api/favorite")
+async def api_favorite(request: Request):
+    """收藏/取消收藏某轮（用户提案 2026-09-21：常回看的轮可收藏 + 收藏视角专门回看）。
+    body: {"turn": 轮号(int), "on": true/false}；持久化到 session 存档 meta.json 的
+    extra_state.favorites（数组）——重启/读档随 session 走。"""
+    try:
+        d = await request.json()
+        turn = int(d.get("turn") or 0)
+        on = bool(d.get("on"))
+        s = _agent.session if _agent else None
+        if turn <= 0 or s is None:
+            return {"ok": False, "error": "bad turn 或 agent 未就绪"}
+        es = dict(getattr(s, "extra_state", None) or {})
+        favs = set(es.get("favorites") or [])
+        favs.add(turn) if on else favs.discard(turn)
+        es["favorites"] = sorted(favs)
+        s.extra_state = es
+        try:
+            s._autosave()   # 异步落盘（daemon 线程，不阻塞）
+        except Exception:
+            pass
+        return {"ok": True, "favorites": es["favorites"]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/status")
 async def api_status(request: Request):
     """实例运行时状态快照（POST，供跨实例/外部诊断用）。

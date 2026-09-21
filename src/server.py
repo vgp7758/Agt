@@ -2018,7 +2018,8 @@ def _history_event(agent, name_override: str = "") -> dict:
     return {"type": "session_history",
             "name": name_override or s.name or "(当前会话)",
             "turns": s.to_history(start_turn=start),
-            "expand_from": start, "total_turns": total}
+            "expand_from": start, "total_turns": total,
+            "favorites": sorted(((getattr(s, "extra_state", None) or {}).get("favorites")) or [])}
 
 
 def _current_turn_event(agent):

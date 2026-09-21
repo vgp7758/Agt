@@ -1652,13 +1652,16 @@ class Agent:
                                     "run_id": rid, "text": f"{type(e2).__name__}: {str(e2)[:200]}"})
                         return hw["name"], False, "", "", rid
                 results = {}
-                # 同步钩子整组超时（settings.json hook_timeout，默认 300s；0=不限）：
-                # 超时的钩子发 auto_wf_error + 结果丢弃（Python 线程不可强杀——后台自然跑完但不再等它），
-                # 已完成/后续完成的其它钩子结果照常合并注入。异步钩子（async=true）不受此限制。
-                _timeout_s = 300
+                # 同步钩子整组超时（settings.json hook_timeout，默认 300s；before_turn 专用
+                # hook_timeout_before_turn，默认 60s——用户裁定 2026-09-21：入口钩子等 300s 体验太差；
+                # 0=不限）：超时的钩子发 auto_wf_error + 结果丢弃（Python 线程不可强杀——后台自然跑完
+                # 但不再等它），组内已完成/后续完成的其它钩子结果照常合并注入（部分组装）。
+                # 异步钩子（async=true）不受此限制。
+                _timeout_s = 60 if hook == "before_turn" else 300
                 try:
                     import config as _cfg
-                    _timeout_s = max(0, int(_cfg.load_hook_timeout()))
+                    _timeout_s = max(0, int(_cfg.load_hook_timeout_before_turn() if hook == "before_turn"
+                                            else _cfg.load_hook_timeout()))
                 except Exception:
                     pass
                 ex = ThreadPoolExecutor(max_workers=max(1, len(sync_hws)))
@@ -2199,7 +2202,8 @@ class Agent:
                                 pass
                             self._emit({"type": "answer", "text": resp.content,
                                         "tokens": self.cumulative_tokens,
-                                        "changed": _chg})
+                                        "changed": _chg,
+                                        "turn": len(self.session.turns) + 1})   # 轮号（收藏按钮回填 data-turn 用；answer 时轮未归档，号=len+1）
                             _LOG.info("回答完成 累计token=%d %d步", self.cumulative_tokens, step_num)
                             # expect_reply 回执转发（2026-09-17·用户提案）：本轮由 remote_message
                             # (expect_reply=True) 派发（消息头协议行已剥挂 _reply_to）——answer 生成

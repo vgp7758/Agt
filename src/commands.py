@@ -1174,6 +1174,21 @@ def _cmd_hook(ctx: CommandContext, args):
         print(f"🪝 {hook} · {nm}：{'✅ 已开启' if parts[2] == 'on' else '⛔ 已禁用'}")
         return
     print("用法：/hook [位置] [工作流名] [on|off]")
+def _cmd_hold(ctx: CommandContext, args):
+    """/hold [on|off] —— 挂起/恢复 react（用户提案 2026-09-21）。
+    on：react 将在下一步开始前暂停，直到 off 后继续（0.5s 轮询，Ctrl+C 仍可打断）。"""
+    agent = ctx.agent
+    if isinstance(args, (list, tuple)):
+        args = " ".join(str(x) for x in args)
+    sub = (args or "").strip().lower()
+    if sub in ("", "on", "1", "true"):
+        agent.set_hold(True)
+        print("⏸ 已挂起：react 将在【下一步开始前】暂停，直到 /hold off 或 WebUI 按钮恢复。")
+    elif sub in ("off", "0", "false"):
+        agent.set_hold(False)
+        print("▶ 已恢复：react 继续。")
+    else:
+        print("用法：/hold on|off（当前 " + ("⏸ 挂起中" if getattr(agent, '_hold', False) else "▶ 运行中") + "）")
 
 
 def _cmd_debug(ctx: CommandContext, args):
@@ -1879,6 +1894,11 @@ def build_default_registry() -> CommandRegistry:
         "/hook before_turn off      整位禁用 before_turn 所有钩子\n"
         "/hook before_turn wiki_auto_query off   禁用单个工作流\n"
         "  运行时开关（内存不落盘），调试临时关钩子用；持久化用编辑器勾选 meta.enabled")
+    reg.register("hold", _cmd_hold,
+        "[on|off]  挂起/恢复 react（on=下一步开始前暂停，off=继续）",
+        "/hold on   ⏸ 挂起：react 将在下一步开始前暂停，直到恢复\n"
+        "/hold off  ▶ 恢复继续\n"
+        "  WebUI 控件栏也有 ⏸ 按钮快捷控制（/api/hold）")
     reg.register("debug", _cmd_debug,
         "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包\n"
         "hook <提示词>    调试用：以提示词触发 before_turn 钩子，不落盘，钩子跑完即 return",

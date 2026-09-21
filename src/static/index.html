@@ -460,6 +460,7 @@
       <option value="_main_">🤖 主 Agent</option>
     </select>
     <button class="btn" id="btnFavView" onclick="toggleFavView()" title="收藏视角：只显示收藏的轮（⭐ 按钮在每轮左上）">☆ 收藏</button>
+    <button class="btn" id="btnHold" onclick="toggleHold()" title="挂起 react：下一步开始前暂停（再点恢复）">⏸ 挂起</button>
     <button class="btn spacer" id="btnStop" style="display:none">⏹ 停止</button>
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
@@ -1593,6 +1594,23 @@ function updateFavHint(){
   const n = document.querySelectorAll('#msgArea .row.bot[data-fav="1"]').length;
   hint.textContent = `⭐ 收藏视角：显示 ${n} 个收藏轮（其余已隐藏；点击此处退出）`;
 }
+// ===== ⏸ 挂起（用户提案 2026-09-21：/hold on|off + WebUI 按钮；react 下一步前暂停）=====
+let _holdOn = false;
+function paintHold(){
+  const b = document.getElementById('btnHold');
+  if(!b) return;
+  b.textContent = _holdOn ? '▶ 继续' : '⏸ 挂起';
+  b.classList.toggle('primary', _holdOn);
+  b.title = _holdOn ? 'react 已挂起（下一步前暂停），点击恢复 /hold off' : '挂起 react：下一步开始前暂停（再点恢复）';
+}
+function toggleHold(){
+  const on = !_holdOn;
+  fetch('/api/hold',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({on})}).then(r=>r.json()).then(d=>{
+      if(d && d.ok){ _holdOn = d.hold; paintHold(); if(on) toast('⏸ 已挂起：react 将在下一步开始前暂停'); else toast('▶ 已恢复继续'); }
+    }).catch(()=>{ _holdOn = on; paintHold(); toast('后端未升级，挂起仅本页生效'); });
+}
+paintHold();
 function addTimeDivider(){
   const d=document.createElement('div'); d.className='time-divider';
   d.textContent=new Date().toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});

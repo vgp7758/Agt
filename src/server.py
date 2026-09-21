@@ -979,6 +979,21 @@ async def api_favorite(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/hold")
+async def api_hold(request: Request):
+    """挂起/恢复 react（/hold 的 WebUI 通道；用户提案 2026-09-21）。
+    body: {"on": true/false}——on 挂起（react 下一步前暂停），off 放行。"""
+    try:
+        d = await request.json()
+        on = bool(d.get("on"))
+        if _agent is None:
+            return {"ok": False, "error": "agent 未就绪"}
+        r = _agent.set_hold(on)
+        return {"ok": True, "hold": r["hold"]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/status")
 async def api_status(request: Request):
     """实例运行时状态快照（POST，供跨实例/外部诊断用）。
@@ -1006,6 +1021,7 @@ async def api_status(request: Request):
         "active_target": getattr(agent, "_active_target", "_main_"),
         "ws_clients": [{"target": c.get("target", "_main_")} for c in _clients],   # 各 WS 客户端的交互目标
         "autonomous_mode": getattr(agent, "autonomous_mode", False),
+        "hold": bool(getattr(agent, "_hold", False)),
         "utility_model": getattr(agent, "utility_model", ""),
         "server": server_status(),
     }

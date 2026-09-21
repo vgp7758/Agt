@@ -248,6 +248,11 @@ class Agent:
         self.tool_groups: dict = {}   # 工具名 -> 来源模块（build_agent 注册时标注，供 /api/tools 分组）
         self.max_steps = max_steps
         self.token_budget = token_budget
+        # ⏸ 挂起（用户提案 2026-09-21 /hold on|off + WebUI 按钮）：on 时 react 在下一步开始前暂停，
+        #   直到 off（_hold_event.set() 放行）后继续。Event 初始 set=不挂起；CLI / WebUI / /api/hold 三通道可控。
+        self._hold = False
+        self._hold_event = threading.Event()
+        self._hold_event.set()
         self.verbose = verbose
         self.on_event = on_event
         self.snapshot_manager = snapshot_manager
@@ -1333,6 +1338,13 @@ class Agent:
                 pass   # 静默失败，recap 保持上一轮的值
         threading.Thread(target=_bg, daemon=True).start()
 
+    def set_hold(self, on: bool) -> dict:
+        """设置/解除挂起（/hold on|off、/api/hold、WebUI 按钮共用）。on=True 挂起
+        （react 下一步开始前暂停），False 放行（_hold_event.set() 即时唤醒）。返回状态。"""
+        self._hold = bool(on)
+        (self._hold_event.clear() if on else self._hold_event.set())
+        return {"hold": self._hold}
+
     def shutdown(self):
         """退出时清理：停所有后台服务（防孤儿进程）+ 停调度器。供 chat/web 退出时调。"""
         try:
@@ -2066,6 +2078,12 @@ class Agent:
                             self._emit({"type": "interrupted"})
                             self.session.abort_current_turn("（被用户停止）")
                             return ""
+                        # ⏸ 挂起检查（用户提案 2026-09-21）：hold on → 下一步开始前暂停（0.5s 轮询，
+                        #   便于 Ctrl+C 打断；off 经 /api/hold 或命令 set_event 即时放行）
+                        while self._hold and not self._stop_flag:
+                            self._hold_event.wait(0.5)
+                            if self._stop_flag:
+                                break
                         # 中途插话注入（任何模式）：忙时排队的用户消息挂到"本步将生成"的 pending 位，
                         # 渲染为 user 消息(带标签)跟在上一组 tool 结果后；该步一生成就锚到其 preceding_hint、
                         # 后续步它滚入历史中部、不再每步尾部复读

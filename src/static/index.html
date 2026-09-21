@@ -1049,6 +1049,7 @@ function addTraceHTML(cls, html){
   curTurn.traceBox.appendChild(e); scrollBottom();
 }
 // edit=old/new 左右两栏对照；write_file=新建内容预览；其它返回 null（回退到默认文本）
+function _cs(v){ return (typeof v==='string') ? v : (v==null ? '' : JSON.stringify(v)); }   // content 归一（历史存档里 entries[].content 偶为数组/对象——readFile 渲染炸 .split 的根因，用户实锤 2026-09-22）
 function toolCallHTML(name, a){
   if(name==='edit' && a){
     return `<div class="diff-head">✏️ edit ${esc(a.path||'')}</div>`+
@@ -1064,8 +1065,8 @@ function toolCallHTML(name, a){
   if(name==='insert' && _entries){
     let parts=`<div class="diff-head">➕ insert ${esc(a.path||'')}（${_entries.length} 处）</div>`;
     _entries.forEach(e=>{
-      const cl=(e.content||'').split('\n').length;
-      parts+=`<div class="diff-ins"><div class="diff-ins-h">→ 第 ${esc(e.line)} 行前 · 插入 ${cl} 行</div><pre class="diff-new">${esc(e.content||'')}</pre></div>`;
+      const cl=_cs(e.content).split('\n').length;
+      parts+=`<div class="diff-ins"><div class="diff-ins-h">→ 第 ${esc(e.line)} 行前 · 插入 ${cl} 行</div><pre class="diff-new">${esc(_cs(e.content))}</pre></div>`;
     });
     return parts;
   }
@@ -1098,16 +1099,16 @@ function toolCallHTML(name, a){
       `<div class="diff-ins"><div class="diff-ins-h">第 ${esc(a.start_line)}-${esc(a.end_line)} 行 → 移到原第 ${esc(a.dst_line)} 行前</div></div>`;
   }
   if(name==='run_python' && a && (a.code||a.file)){
-    const lines=(a.code||'').split('\n');
+    const lines=_cs(a.code).split('\n');
     return `<div class="diff-head">🔧 run_python ${a.file?esc(a.file):'(inline)'}（${lines.length} 行）</div>`+
-      `<pre class="diff-new">${esc(a.code||'')}</pre>`;
+      `<pre class="diff-new">${esc(_cs(a.code))}</pre>`;
   }
   if(name==='run_shell' && a && a.command){
     return `<div class="diff-head">🖥 run_shell</div>`+
       `<pre class="diff-new">${esc(a.command||'')}</pre>`;
   }
   if(name==='write_file' && a){
-    const c=a.content||'', lines=c.split('\n');
+    const c=_cs(a.content), lines=c.split('\n');
     return `<div class="diff-head">📝 write_file ${esc(a.path||'')}（新建 · ${lines.length} 行）</div>`+
       `<pre class="diff-new">${esc(c)}</pre>`;
   }

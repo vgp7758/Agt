@@ -83,6 +83,30 @@ want_new = bool(new_instance) or (reuse is False)
 - **验证**：`test/test_agent_prompt_default_reuse.py`（mock registry 行为级测试，8 断言全过）——schema 双参数（reuse/new_instance）就位 / 默认派活撞 busy → `[忙]`（证明走了复用路径而非新建）/ `new_instance=true` 跳过复用 / `reuse=false` 同效 / 无同名落到新建 / 同名空闲 → `♻️ 已复用`
 - 需 `/restart` 生效
 
+## agent_prompt 复用竞态：并行同名调用全复用同一实例——原子复用临界区（2026-09-22，commit e49b8c0，用户实锤）
+
+**现象（8100 导演实例实锤）**：单步并行工具（ThreadPoolExecutor）下同时派多个同名 `agent_prompt("vision", …)`——toollog 13:33–13:52 实证：street 组审查 / linwan 续跑 / street 复查……**全部 ♻️ 复用 [agent_id=vision_12]**：多个组的任务书混进同一实例，审查语义串台。回溯价值：导演此前反复「续跑更正」的轮次多半就是这竞态的下游症状——不是任务书写错，是投错了信箱。
+
+**根因：复用分支的「检查-占位」不原子**——
+
+```python
+with reg._lock:  same = [...]                       # ① 查同名（有锁）
+idle  = [e for e in live if e.status != "running"]  # ② 判空闲（锁外！）
+entry = max(idle, ...)                              # ③ 选实例（锁外）
+entry.task = prompt                                 # ④ 占位（锁外）
+reg.update_status(id, "running")                    # ⑤ 标占用（锁外！）
+```
+
+并行的多个 agent_prompt 同时走到 ②——都在对方标 running 之前看到同一个「空闲」实例 → 全部选中同一 agent_id。旧锁只盖 ①，②~⑤ 的窗口对并行毫无约束。
+
+**修复：整段收进单个 `with reg._lock:` 原子临界区**（src/multiagent.py 复用分支）——查同名 / 筛活 / 判空闲 / 选实例 / 占位（`entry.task = prompt`）/ 标 running 全部锁内完成；并行的第二个调用进临界区时目标已 running → 自然落到「[忙]」提示或复活/新建分支，**各归各的实例**。registry 锁是 RLock，锁内调 `reg.update_status` 重入安全。**复活路径同款防护**：复活前先占位 `status="reviving"`，防两个并行调用同时复活同一条目（双复活）。
+
+**验证**：编译 ✓ + 临界区结构断言 5/5（锁内查同名 / 锁内标 running / 锁内占位 / 复活占位标记 / 锁外无 status 写）。pytest `test_subagent_registry_slot` 挂在 `INTERNALERROR> SystemExit: 0`——测试文件自身问题，非本修复回归。
+
+**边界（须知）**：8100 / claw 跑的是 **pip 0.22.5 旧版**，吃不到该修复（主干 0.29.9+）——统一升级窗口（`pip install -U agt-agent` + ProcessHub 重拉实例）之前，旧版实例上并行派同名活**改串行**（等一个完成再派下一个）。
+
+**关联**：[agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用语义由来）· [复活路径 NameError](#复活路径-nameerror--wiki-updater-多实例根因修复2026-08-26commit-6d396af)（复活分支上一课）· [AgentRegistry 与 answer 路由](#agentregistry-与-answer-路由修复2026-08v0182-正式发布)（registry 锁与消费端）。
+
 ## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
 
 create_agent（src/multiagent.py，程序化声明入口——[/agents 管理页](../features/agents-admin.md)的表单化对应物）从五参扩到七参（用户提案 2026-09-02）：

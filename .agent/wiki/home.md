@@ -1174,3 +1174,8 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **中断轮恢复修复（2026-09-22，用户实锤 `~/.agt/repos/D--Programs-env/sessions/20260916_093550`）**：轮中断后点「继续」恒报「最后一轮已正常完成，历史中也没有可继续的中断轮」——根因 `session._INTERRUPT_MARKS` 集合漏`（异常中断：RuntimeError）`形态（run() 异常逃出路径 `abort_current_turn` 写入的标注未登记）+ 集合前缀带尾括号对带原因后缀文案 `startswith` 恒 False（docstring 声称支持后缀形态，实际从未匹配）。两层修复：①session.py 集合补`（异常中断：`前缀 + 全部前缀去尾括号（裸文案/带后缀都匹配）；②index.html 前端 `isInterrupted` 精确等值改前缀匹配对齐（旧判定连`（被用户停止）`都不认，中断轮读档显示普通气泡）。**语义澄清**：resume 是断点续跑（pop 回 `_current`、已完成 steps 保留在投影、从断点接着做），不是重发最后一次投影（那是 `/debug prompt`）。验证 10/10；`/restart` + 强刷生效——见 [resume-interrupted](features/resume-interrupted.md)
 
+## 快速事实增补（2026-09-22 · 十 · agent_prompt 复用竞态修复——并行同名调用全复用同一实例致任务书串台）
+
+- **agent_prompt 复用竞态修复：并行同名调用全复用同一实例 → 任务书串台（2026-09-22，用户实锤，commit e49b8c0）**：8100 导演用单步并行工具（ThreadPoolExecutor）同时派多个 `agent_prompt("vision")`，toollog 实证**全部 ♻️ 复用 vision_12**——street/linwan 任务书混进同一实例（也解释了导演此前反复「续跑更正」：审查语义一直在串台）。根因：复用分支 查空闲→选实例→占位→标 running 分步执行、锁只盖第一步查询——并行调用都在对方标 running 前看到同一「空闲」实例。修复：查→选→占位→标 running 收进同一 `reg._lock` 原子临界区（RLock 重入安全）；复活路径同款防护（`status="reviving"` 占位防双复活）。验证：编译 + 临界区结构断言 5/5。⚠️ 8100/claw 跑 pip 0.22.5 旧版吃不到修复（主干 0.29.9+）——统一升级窗口前旧版上并行派同名活改串行——见 [multi-agent · 复用竞态](architecture/multi-agent.md)
+- 同轮保活巡检 **v5（5h 降频版）**第九轮三绿：50051 ready·95 轮 / daemon pid 19824 / 钱包 loggedIn=true（首轮输出截断险误判、复验即真绿）——巡检形态现状见 [okx-a2a](features/okx-a2a.md)
+

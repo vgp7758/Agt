@@ -186,6 +186,20 @@ git 同步：本地 `ws-okx-b` 推送成功（`e486ffb..eb5c585 ws-okx-b -> ws-o
 
 另两项确认：**CNB 容器仍活着**（转算力待命中，未再被回收）；brick 的 agt 在线但其 **daemon 未跑**——与本机生产 daemon 无抢消息冲突（agent_watch 修复后首封「真实邮件」报的正是 brick 上线，见 [agent-watch](agent-watch.md)）。
 
+### 巡检形态现状：v5 降频版——基础设施 5h 一巡，业务层交给 okx-order-monitor-v2（2026-09-22）
+
+「根治」节的「每 30 分钟」是初代口径；至 2026-09-22 午后，保活巡检已演进为 **v5 · 5h 降频版**，职责拆分：生产主机=本机，**本巡检只管基础设施存活**三件——
+
+| 检查 | 口径 |
+|---|---|
+| ① agt 50051（主脑） | `POST /api/status` → ready |
+| ② daemon（消息入口） | `okx-a2a daemon status`（先 `set OKX_AGENT_TASK_HOME=D:\AI\ClawTasks\.agt\okx-task`，cwd=D:\AI\ClawTasks）→ running |
+| ③ 钱包 | `onchainos.exe wallet status` → loggedIn（>120s 视为异常慢，重试一次再判） |
+
+业务层订单盯守由 **okx-order-monitor-v2 每 5 分钟**独立负责——巡检降到 5h 不影响接单时效。修复动作：50051 挂 → `wscript autostart\agtweb-50051.vbs`（等 20s 再验）；daemon 挂 → detached 跑 `autostart\daemon-50051-run.bat`；钱包掉 → init 生成登录链接（`\u0026` 转义），`~/.agt/pending_login_url.txt` mtime **<120 分钟不重复生成**，否则更新 + 邮件（smtp.qq.com:465 授权码通道）+ 当轮 answer 双通道贴链接。CNB 容器（算力待命）不通**不告警**；全绿 → 一句话三绿确认。
+
+**13:56 第九轮三绿**：50051 ready·95 轮 / daemon pid 19824 / 钱包 loggedIn=true ✓——首轮钱包输出被截断险些误判「掉登录」，复验即真绿（**巡检判读注意：长输出截断会造成假阴性，异常先复验再动手**）。
+
 ## 订单与行情（截至 2026-09-19 凌晨）
 
 - **已接 2 单**（买家 #1791，**象征价 0.00001 USDT**——性质是测试单）：报告已交付上链，状态 `submitted`

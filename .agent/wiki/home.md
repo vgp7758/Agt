@@ -1183,3 +1183,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **proxy 413 字节墙拆除：aiohttp 默认 1MB 请求体上限 → 根 app 显式 256MB（2026-09-22，repo 外基础设施 `D:\Programs\env\proxy_supervisor.py:611`）**：大投影轮 LLM 调用恒 413 `Maximum request body size 1048576 exceeded`。三层根因：①1MB 是 aiohttp `web.Application()` **框架默认值**（非谁写的逻辑）；②用户早在 `proxy_cc.py:2074` 设过 256MB，但设在 `proxy_app` 上——`/api/llm` 是 `sup_app.add_subapp()` 挂的 subapp，**request 对象由根 app `_make_request` 工厂创建、client_max_size 构造 Request 时固化根 app 值，subapp 设置从不生效**（本机 aiohttp 3.12.15 源码核对）；③上游无此墙（历史 t405 投影 187 万字符照常过智谱直连）。修复一行：根 app 构造补 `client_max_size=256*1024*1024`（备份 `.bak_20260922_bodylimit`；旧 5340 → 新 8004，主 Agent 后台服务 `proxy-supervisor-9877` 代管）。**传输层修复、投影/压缩零改动**——300k~400k tok 区间立场不受影响：win=40 万 tok ≈ 1.2MB，距 256MB 差 200 倍；折叠粘性原样。验证：t1096（直连）378,466 字符 ✅ + t1097（proxy）380,496 字符 ✅。遗留防御性待办：「字节级保命阀」spec 等用户拍板——见 [proxy-supervisor](features/proxy-supervisor.md)、[ops · 413 行](guides/ops.md#常见错误对照)
 
+## 快速事实增补（2026-09-22 · 变更文件容器限高+可折叠）
+
+- **📎 本轮变更文件容器限高 + 可折叠（2026-09-22，用户提案）**：answer 气泡「📎 本轮变更文件」补充区（`.ans-changed`）此前无高度上限——几十个变更文件的施工轮把气泡撑出屏幕、正文被列表淹没。现展开态体区 `max-height:240px` + 内部滚动（`overflow-y:auto`）；标题行点击折叠/展开（容器 toggle `folded`，箭头 ▾ `rotate(-90deg)` 旋成 ▸，150ms 过渡），折叠态只剩一行标题。原有资产内嵌/预览抽屉/灰框降级交互零变化。纯前端 Ctrl+F5 生效（src/static/index.html）——见 [bubble-interaction · 容器限高+折叠](features/bubble-interaction.md#本轮变更文件容器限高--可折叠2026-09-22用户提案)
+

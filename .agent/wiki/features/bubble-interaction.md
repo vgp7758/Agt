@@ -13,7 +13,7 @@
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**无感叹号 `[文字](本地路径)` 渲染为 asset 链接**（2026-09-17，commit 4ad7742，四种引用形态齐）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件）、**资产框 error 降级**：文件已被删 → 图/音/视频框 onerror → `.err` +「⚠️ 文件已不存在」（2026-09-18，commit deded59） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 + 4ad7742 + deded59 |
 | **bash 代码块执行按钮**：` ```bash ` 块下 ▶ Agent 执行 / 💻 终端执行双按钮；2026-09-17 起 Agent 执行改**逐条指令**（逐行去 shebang/行尾注释/纯注释/空行后逐条发 `/call run_shell` 串行按序），终端执行保持整块 | `static/index.html` | 按钮早期上线；逐条化 2026-09-17，commit 60f3c6d |
-| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited）；**容器限高 240px + 标题点击折叠**（2026-09-22，见[专节](#本轮变更文件容器限高--可折叠2026-09-22用户提案)） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited；2026-09-22 容器限高 + 折叠 |
 | **轮收藏与收藏视角**：每轮 `.turn` 左上 ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
 
 ## 系统消息展开/折叠（editor.html）
@@ -381,6 +381,35 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 **触发时机边界**：live 渲染当轮文件还在、不触发；降级只在**刷新 / 读档 / 翻页重渲染**（此时文件已被后续轮删除）时出现——与「快照不重绘」并不矛盾：气泡文本不变，重绘的是资产框内的媒体元素，媒体加载失败才走 onerror。
 
 **验证**：node 语法 ✓ + 三处结构断言（CSS `::after` / audio `onerror` / video `onerror`）全过。**纯前端，Ctrl+F5 即生效**。
+
+### 📎 本轮变更文件容器限高 + 可折叠（2026-09-22，用户提案）
+
+**用户提案（2026-09-22）**：「给 answer 气泡下面的 [本轮变更文件] 容器一个最大高度吧，然后支持折叠」——变更文件多的轮（几十个文件的施工轮典型）此前容器无高度上限，把气泡撑得老长，正文被文件列表淹没。
+
+**改动**（`unmentionedChangesHtml` + CSS，src/static/index.html，纯前端）：
+
+| 位置 | 改动 |
+|---|---|
+| 标题行 `.ac-title` | `onclick="this.parentElement.classList.toggle('folded')"`——点击在容器 `.ans-changed` 上切换 `folded` class；`cursor:pointer` + `user-select:none` + hover 变色，`title="点击折叠/展开"` |
+| 箭头 `.ac-arrow` | 标题行右侧 `▾`（`float:right`），`transition:transform .15s`；`.folded` 时 `rotate(-90deg)`——**▾ 旋成 ▸**，一个元素两态（初版 `::before` content 切换方案被同轮替换为 rotate 方案） |
+| 体区 `.ac-body` | 展开态 **`max-height:240px; overflow-y:auto`**——超限内部滚动，气泡不再被撑爆；`.folded` 时 `display:none`，只剩一行标题 |
+
+```
+┌─ answer 气泡 ──────────────────────────────┐
+│ ……正文……                                    │
+├─╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 📎 本轮变更文件（回答中未交代，共 N 个）   ▾ │ ← 标题可点击
+│ ┌─ ac-body（max-height 240px 内部滚动）────┐│
+│ │ ✏️ src/agent.py   ✏️ src/server.py  …    ││
+│ └───────────────────────────────────────┘│
+└────────────────────────────────────────────┘
+   folded 态：┌─ 📎 本轮变更文件（共 N 个）▸ ─┐（只剩标题行）
+```
+
+- **原有交互全部保留**：图片/音频/视频内嵌、文本预览抽屉、deleted 半透明灰框、「已引用」剔除——只动容器外框，不动内层资产分流
+- **实时渲染与历史读档同函数**（`renderAnswerPages` → `unmentionedChangesHtml`），一处改动两处生效；复制回退排除清单中的 `.ans-changed` 语义不变（非 answer 正文不进剪贴板，见[复制内容与剪贴板降级](#复制内容与剪贴板降级)）
+
+**验证**：JS 语法 1/1 + 6 处结构实存（toggle onclick / ac-arrow / max-height / overflow-y / folded display:none / transition）。**纯前端，Ctrl+F5 即生效**。
 
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 

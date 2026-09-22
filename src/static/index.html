@@ -273,6 +273,13 @@
   /* answer 尾部"未交代变更文件"补充区（2026-09-04 用户提案：快照 diff 补渲染） */
   .ans-changed { margin-top:10px; padding:8px 10px; border-top:1px dashed #cbd5e1;
     background:#f8fafc; border-radius:0 0 10px 10px; }
+  /* 变更文件容器：限高+可折叠（用户提案 2026-09-22）——标题点击折叠，展开时体区限高滚动 */
+  .ans-changed .ac-title { cursor:pointer; user-select:none; }
+  .ans-changed .ac-title:hover { color:#475569; }
+  .ans-changed .ac-arrow { float:right; color:#8a9099; transition:transform .15s; }
+  .ans-changed.folded .ac-arrow { transform:rotate(-90deg); }   /* ▾ 旋成 ▸ */
+  .ans-changed .ac-body { max-height:240px; overflow-y:auto; }
+  .ans-changed.folded .ac-body { display:none; }
   .ans-changed .ac-title { font-size:12px; color:#64748b; font-weight:600; margin-bottom:6px; }
   /* 文件预览抽屉（点击 markdown 里的文本资产打开——无 fab，纯点击触发） */
   #filePanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:135;
@@ -1215,7 +1222,7 @@ function unmentionedChangesHtml(answerText, changed){
   const rest = changed.filter(c => c && c.file && !cited.has(_norm(c.file)) && !cited.has(_base(c.file)));
   if(!rest.length) return '';
   const ICON = {modified:'✏️', new:'➕', deleted:'🗑'};
-  let h = '<div class="ans-changed"><div class="ac-title">📎 本轮变更文件（回答中未交代，共 '+rest.length+' 个）</div>';
+  let h = '<div class="ans-changed"><div class="ac-title" onclick="this.parentElement.classList.toggle(\'folded\')" title="点击折叠/展开">📎 本轮变更文件（回答中未交代，共 '+rest.length+' 个）<span class="ac-arrow">▾</span></div><div class="ac-body">';
   rest.forEach(c=>{
     const f = String(c.file), ic = ICON[c.change]||'✏️';
     if(c.change === 'deleted'){
@@ -1234,7 +1241,7 @@ function unmentionedChangesHtml(answerText, changed){
       }
     }
   });
-  return h + '</div>';
+  return h + '</div></div>';
 }
 function renderAnswerPages(){
   const t = curTurn; if(!t) return;

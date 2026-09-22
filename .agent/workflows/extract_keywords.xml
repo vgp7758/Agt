@@ -15,7 +15,7 @@
     <out name="text" type="string" description="剥离 pasted-log 块后的消息文本"/>
     <batch enabled="false"/>
   </node>
-  <node id="130001" type="llm" title="extract" x="398" y="209">
+  <node id="130001" type="llm" title="extract" x="720" y="80">
     <in name="q" type="string" ref="115001.text"/>
     <param name="temperature" type="string"><![CDATA[0.2]]></param>
     <param name="systemPrompt" type="string"><![CDATA[你是关键词提取器。从用户消息中提取 3~10 个可能与业务有关的关键词，保留专有名词。只输出关键词本身，用竖线|分隔，不要编号、不要空格、不要解释、不要任何其他文字。示例输出：分档投影|毕业升档|缓存命中]]></param>
@@ -25,13 +25,13 @@
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="130002" type="plugin" title="split" x="740" y="78" toolName="split">
+  <node id="130002" type="plugin" title="split" x="1020" y="80" toolName="split">
     <in name="text" type="string" ref="130001.output"/>
     <in name="separator" type="string">|</in>
     <out name="raw" type="list"/>
     <out name="result" type="any" description="工具返回值"/>
   </node>
-  <node id="130003" type="code" title="clean" x="712" y="287">
+  <node id="130003" type="code" title="clean" x="1320" y="80">
     <in name="items" type="list" ref="130002.raw"/>
     <code language="3"><![CDATA[async def main(args) -> dict:
     # 清洗：strip（模型可能在 | 两侧带空格/换行）、去空、去重（保序）、剔超长项
@@ -45,9 +45,9 @@
     <out name="keywords" type="list"/>
     <batch enabled="false"/>
   </node>
-  <node id="900001" type="end" title="Exit_hit" x="1051.3333129882812" y="149">
+  <node id="900001" type="end" title="Exit_hit" x="1620" y="80">
     <out name="keywords" ref="130003.keywords" type="list"/>
-    <out name="cached" type="boolean"></out>
+    <out name="cached" type="boolean">False</out>
     <out name="idx" type="integer"></out>
   </node>
   <edge from="100001" to="115001"/>
@@ -55,4 +55,5 @@
   <edge from="130002" to="130003"/>
   <edge from="115001" to="130001"/>
   <edge from="130003" to="900001"/>
+  <edge from="130001" to="900001" port="130001_error"/>
 </workflow>

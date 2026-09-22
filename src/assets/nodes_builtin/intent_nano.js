@@ -16,11 +16,13 @@ EdFW.register({
                        {name: "confidence", type: "number", description: "top1 置信度", fixed: true},
                        {name: "probabilities", type: "object", description: "完整概率分布", fixed: true}]},
   params: [
-    { key: "query", label: "query", widget: "input", ph: "待分类文本（ref 上游字段）",
+    // widget 契约（编辑器 switch）：custom/branches/groups/textarea/code/number/checkbox/select，
+    // 无 'input'（普通文本走 default）；占位符 key 是 tip（非 ph）——用户实测 2026-09-22
+    { key: "query", label: "query", tip: "待分类文本（ref 上游字段）",
       get(n) { return ipGet(n, "query"); }, set(n, v) { ipSet(n, "query", v); } },
-    { key: "temperature", label: "温度", widget: "input", ph: "1.0",
+    { key: "temperature", label: "温度", widget: "number", tip: "1.0",
       get(n) { return ipGet(n, "temperature"); }, set(n, v) { ipSet(n, "temperature", v); } },
-    { key: "threshold", label: "阈值", widget: "input", ph: "0.35（top1 低于它走 default）",
+    { key: "threshold", label: "阈值", widget: "number", tip: "0.35（top1 低于它走 default）",
       get(n) { return ipGet(n, "threshold"); }, set(n, v) { ipSet(n, "threshold", v); } },
     { key: "intents", label: "意图", widget: "custom",
       get(n) { return (n.data.inputs?.intents || []).map(x => x.name).join(","); },
@@ -41,12 +43,15 @@ EdFW.register({
   ],
   nodeH(n) { return Math.max(3, (n.data.inputs?.intents || []).length) * 14 + 20; },
   body(n, g) {
+    // 画布体契约 = 原生 DOM（elm + g.appendChild）——不是 d3 链式！
+    // 此前误用 g.append("text").attr(...)：DOM 的 append() 返回 undefined → .attr 炸
+    // 「Cannot read properties of undefined (reading 'attr')」（用户实锤 2026-09-22 建节点即报）
     const intents = n.data.inputs?.intents || [];
     const yBase = HDR_H + Math.max(nodeInputs(n).length, nodeOutputs(n).length) * ROW_H + 4;
     intents.forEach((it, i) => {
-      g.append("text").attr("x", 10).attr("y", yBase + 10 + i * 14)
-        .attr("font-size", 9).attr("fill", it.description ? "#475569" : "#b6bcc4")
-        .text(`${i + 1}. ${it.name || "…"}${it.description ? " — " + String(it.description).slice(0, 18) : "（无描述）"}`);
+      g.appendChild(elm('text', {x: 10, y: yBase + 10 + i * 14, class: 'sub-row',
+                                 fill: it.description ? '#475569' : '#b6bcc4'},
+        `${i + 1}. ${it.name || '…'}${it.description ? ' — ' + String(it.description).slice(0, 18) : '（无描述）'}`));
     });
   },
 });

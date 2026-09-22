@@ -396,6 +396,18 @@ def load_hook_timeout_before_turn() -> int:
         return 60
 
 
+def load_jev_config() -> dict:
+    """NanoJev 意图服务配置（settings.json 的 jev_base_url / jev_api_token；用户提案 2026-09-22：
+    intent_nano 节点通用化——用户可指自己的 Jev 兼容服务）。
+    未配置 → 空值：节点先试本机 8766（lfm_services.json 的 nanojev 默认），再降级 LLM 生成式。"""
+    try:
+        s = load_runtime_settings()
+        return {"base_url": str(s.get("jev_base_url") or "").strip(),
+                "api_token": str(s.get("jev_api_token") or "").strip()}
+    except Exception:
+        return {"base_url": "", "api_token": ""}
+
+
 def load_fold_deep_tools() -> bool:
     """超深档工具调用折叠（settings.json 的 fold_deep_tools；默认 False）。
     开启后：真实档位（未封顶 level）超过 max_level 的早期轮，工具调用过程整体折叠成

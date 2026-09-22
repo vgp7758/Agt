@@ -537,6 +537,9 @@
     </select></label>
     <label>reasoning补全模型 <select id="cfg_reasoning_completer" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"><option value="">（关闭）</option></select></label>
     <label>辅助模型 utility_model <select id="cfg_utility_model" title="所有 LLM 短调用共用的便宜模型：recap总结/RAG检索抽关键字精排/reasoning补全默认/工作流LLM与意图节点默认；留空=跟随主模型，建议配便宜非思考模型"><option value="">（跟随主模型）</option></select></label>
+    <div class="rt-group">NanoJev 意图服务（intent_nano 节点用）</div>
+    <label>jev_base_url <input id="cfg_jev_base_url" type="text" placeholder="http://your-jev:8766（留空=先试本机 8766，再降级 LLM 生成式）"></label>
+    <label>jev_api_token <input id="cfg_jev_api_token" type="password" placeholder="（服务无鉴权可留空）" title="自建 Jev 服务带鉴权时填（请求头 Authorization: Bearer）"></label>
     <div class="rt-group">执行与上下文</div>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
@@ -1860,6 +1863,8 @@ function fillSettingsForm(v){
   document.getElementById('cfg_max_steps').value = v.max_steps;
   document.getElementById('cfg_token_budget').value = v.token_budget;
   document.getElementById('cfg_max_retries').value = v.max_retries;
+  document.getElementById('cfg_jev_base_url').value = v.jev_base_url || '';
+  document.getElementById('cfg_jev_api_token').value = v.jev_api_token || '';
   document.getElementById('cfg_temperature').value = v.temperature;
   document.getElementById('cfg_dump_projections').checked = !!v.dump_projections;
   document.getElementById('cfg_enable_thinking').checked = !!v.enable_thinking;
@@ -2162,6 +2167,8 @@ function saveRuntime(){
     // detail_step：全局字段已删（2026-09-15）——步距衰减只认模型卡片的 detail_step（未填=0 不衰减）
     panic_context_window: parseInt(document.getElementById('cfg_panic_window').value)||0,
     fold_deep_tools: document.getElementById('cfg_fold_deep_tools').checked,
+    jev_base_url: document.getElementById('cfg_jev_base_url').value.trim(),
+    jev_api_token: document.getElementById('cfg_jev_api_token').value.trim(),
   };
   {const _db = document.getElementById('cfg_detail_base').value.trim();
    if(_db){ values.detail_base = parseInt(_db) || 1500; }}

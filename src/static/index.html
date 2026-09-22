@@ -280,6 +280,13 @@
   .ans-changed.folded .ac-arrow { transform:rotate(-90deg); }   /* ▾ 旋成 ▸ */
   .ans-changed .ac-body { max-height:240px; overflow-y:auto; }
   .ans-changed.folded .ac-body { display:none; }
+  /* 变更文件区域内的媒体随显示区限高（用户提案 2026-09-22）：图片框/视频播放器最大渲染高度=ac-body
+     上限 240px，宽度 auto 按 intrinsic 比例自适应（覆盖通用的 520/420 与 video 的 width:100%——后者
+     会在限高下被压扁/litterbox）；max-width:100% 防横向溢出 */
+  .ans-changed .ac-body img,
+  .ans-changed .ac-body video { max-height:240px; width:auto; max-width:100%; }
+  .ans-changed .ac-body .asset-box.video { max-width:100%; }
+  .ans-changed .ac-body .asset-box.video video { width:auto; }
   .ans-changed .ac-title { font-size:12px; color:#64748b; font-weight:600; margin-bottom:6px; }
   /* 文件预览抽屉（点击 markdown 里的文本资产打开——无 fab，纯点击触发） */
   #filePanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:135;

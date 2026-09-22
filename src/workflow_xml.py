@@ -383,9 +383,12 @@ def _node_to_json(nd) -> dict:
         # 第一个值非空分组的 0 起序号（调试观测哪个分支端口拿到值），全空=-1
         if not any(o.get("name") == "index" for o in out):
             out.append({"name": "index", "type": "integer"})
-    elif ntype == "22":     # intent：<in query/> + <intent name/> + <param/>（systemPrompt等）+ <model/>
+    elif ntype in ("22", "intent_nano"):     # intent：<in query/> + <intent name>描述体</intent> + <param/>（systemPrompt等）+ <model/>
+        # intent_nano（NanoJev 判别式加强版，2026-09-22）：同款 XML 形态；描述体作为
+        # criteria 语义描述存活往返（内置 22 的提示词也可用描述体，向后兼容——旧档无体则空）
         inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
-        inp["intents"] = [{"name": it.get("name")} for it in nd.findall("intent")]
+        inp["intents"] = [{"name": it.get("name"),
+                           "description": (it.text or "").strip()} for it in nd.findall("intent")]
         inp["mode"] = "all"
         llm_param = [{"name": p.get("name"),
                       "input": {"type": p.get("type", "string"),
@@ -750,7 +753,7 @@ def _node_to_xml(n):
                 else:
                     vs += f'<var literal={_qa(_lit_of(v.get("value", v)))} type={_qa(vt)}/>'
             inner.append(f'<group name={_qa(gname)} type={_qa(gtype)}>{vs}</group>')
-    elif ntype == "22":
+    elif ntype in ("22", "intent_nano"):
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         for p in inp.get("llmParam", []):
             if p.get("name") == "model":
@@ -758,7 +761,13 @@ def _node_to_xml(n):
             else:
                 pi = p.get("input", {}) or {}
                 inner.append(f'<param name={_qa(p.get("name",""))} type={_qa(pi.get("type","string"))}>{_cdata(_lit_of(pi))}</param>')
-        inner.extend(f'<intent name={_qa(it.get("name",""))}/>' for it in inp.get("intents", []))
+        # 意图描述体（intent_nano 的 criteria 语义描述；内置 22 旧档无描述=空体，往返不变）
+        for it in inp.get("intents", []):
+            desc = (it.get("description") or "").strip()
+            if desc:
+                inner.append(f'<intent name={_qa(it.get("name",""))}>{_xml_escape(desc)}</intent>')
+            else:
+                inner.append(f'<intent name={_qa(it.get("name",""))}/>')
     elif ntype == "9":
         attrs += f' workflowId={_qa(inp.get("workflowId", ""))}'
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))

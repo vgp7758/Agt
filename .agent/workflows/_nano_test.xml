@@ -1,0 +1,44 @@
+<workflow name="_nano_test" description="intent_nano 节点调试工作流：NanoJev 判别式意图路由">
+  <meta>
+    <param name="user_message" type="string" required="true" description="待分类文本"/>
+  </meta>
+  <node id="100001" type="start">
+    <out name="user_message" type="string" required="true"/>
+  </node>
+  <node id="160001" type="intent_nano" title="意图路由·Nano">
+    <in name="query" ref="100001.user_message"/>
+    <in name="temperature" type="number">1.0</in>
+    <in name="threshold" type="number">0.30</in>
+    <intent name="code">要求编写、修改、调试代码，如“帮我写个函数”“修一下这个bug”</intent>
+    <intent name="search">要求检索资料、查文档、搜索信息，如“帮我查一下”“搜搜”</intent>
+    <intent name="chat">闲聊、打招呼、或一般常识问答，如“你好”“今天天气如何”</intent>
+    <out name="intent" type="string"/>
+    <out name="confidence" type="number"/>
+    <out name="probabilities" type="object"/>
+  </node>
+  <node id="200001" type="text" title="code 分支">
+    <result><![CDATA[路由→code：意图=code，置信度={{160001.confidence}}]]></result>
+    <out name="output" type="string"/>
+  </node>
+  <node id="200002" type="text" title="search 分支">
+    <result><![CDATA[路由→search：意图=search，置信度={{160001.confidence}}]]></result>
+    <out name="output" type="string"/>
+  </node>
+  <node id="200003" type="text" title="chat/default 分支">
+    <result><![CDATA[路由→chat/default：意图={{160001.intent}}，分布={{160001.probabilities}}]]></result>
+    <out name="output" type="string"/>
+  </node>
+  <node id="900001" type="end">
+    <out name="result" ref="160001.intent"/>
+    <out name="confidence" ref="160001.confidence"/>
+    <out name="branch_taken" ref="200001.output"/>
+  </node>
+  <edge from="100001" to="160001"/>
+  <edge from="160001" to="200001" port="branch_0"/>
+  <edge from="160001" to="200002" port="branch_1"/>
+  <edge from="160001" to="200003" port="branch_2"/>
+  <edge from="160001" to="200003" port="default"/>
+  <edge from="200001" to="900001"/>
+  <edge from="200002" to="900001"/>
+  <edge from="200003" to="900001"/>
+</workflow>

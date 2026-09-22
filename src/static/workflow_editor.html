@@ -350,7 +350,7 @@ function flowOutPosFor(n, portID, fallbackIdx){
     total=ports.length;
     if(portID) idx=ports.indexOf(portID);
     yForIdx=(i)=>n.y + baseY + 4 + 10 + i*22;
-  } else { // '22'
+  } else { // '22' / intent_nano（判别式加强版——出口同构）
     const intents=n.data.inputs?.intents||[];
     const ports=[...intents.map((_,i)=>`branch_${i}`), 'default'];
     const startIy=baseY+8;
@@ -2220,7 +2220,7 @@ function _flowOutPortsOf(n){
     (n.data.inputs?.branches||[]).forEach((b,i)=>ports.push({port:i===0?'true':'true_'+i,label:'分支'+(i+1)}));
     ports.push({port:'false',label:'else'});
   }
-  if(n.type==='22'){
+  if(n.type==='22' || n.type==='intent_nano'){
     (n.data.inputs?.intents||[]).forEach((it,i)=>ports.push({port:'branch_'+i,label:it.name||('意图'+(i+1))}));
     ports.push({port:'default',label:'默认'});
   }

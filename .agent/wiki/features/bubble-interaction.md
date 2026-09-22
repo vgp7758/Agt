@@ -13,7 +13,7 @@
 | **answer 多 Agent 分页**：子 Agent 回应与主 answer 同轮时，气泡顶部小 tag 按钮翻页 | `static/index.html` + `src/agent.py` | 2026-08-21，commit ba0940b |
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**无感叹号 `[文字](本地路径)` 渲染为 asset 链接**（2026-09-17，commit 4ad7742，四种引用形态齐）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件）、**资产框 error 降级**：文件已被删 → 图/音/视频框 onerror → `.err` +「⚠️ 文件已不存在」（2026-09-18，commit deded59） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 + 4ad7742 + deded59 |
 | **bash 代码块执行按钮**：` ```bash ` 块下 ▶ Agent 执行 / 💻 终端执行双按钮；2026-09-17 起 Agent 执行改**逐条指令**（逐行去 shebang/行尾注释/纯注释/空行后逐条发 `/call run_shell` 串行按序），终端执行保持整块 | `static/index.html` | 按钮早期上线；逐条化 2026-09-17，commit 60f3c6d |
-| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited）；**容器限高 240px + 标题点击折叠**（2026-09-22，见[专节](#本轮变更文件容器限高--可折叠2026-09-22用户提案)） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited；2026-09-22 容器限高 + 折叠 |
+| **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited）；**容器限高 240px + 标题点击折叠 + 区内图片/视频随容器限高（240px）按 intrinsic 比例缩放**（2026-09-22，见[专节](#本轮变更文件容器限高--可折叠2026-09-22用户提案)） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited；2026-09-22 容器限高 + 折叠 + 区内媒体按比例限高 |
 | **轮收藏与收藏视角**：每轮 `.turn` 左上 ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
 
 ## 系统消息展开/折叠（editor.html）
@@ -410,6 +410,35 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 - **实时渲染与历史读档同函数**（`renderAnswerPages` → `unmentionedChangesHtml`），一处改动两处生效；复制回退排除清单中的 `.ans-changed` 语义不变（非 answer 正文不进剪贴板，见[复制内容与剪贴板降级](#复制内容与剪贴板降级)）
 
 **验证**：JS 语法 1/1 + 6 处结构实存（toggle onclick / ac-arrow / max-height / overflow-y / folded display:none / transition）。**纯前端，Ctrl+F5 即生效**。
+
+### 区内媒体随容器限高：图片/视频播放器 max-height=240px、宽度按比例（2026-09-22 · 二，用户提案）
+
+**用户提案（2026-09-22）**：「变更文件显示区有了最大高度限制，里面的图片框和视频播放器的最大渲染高度也需要缩放为显示区的高度（宽度按比例适配）」。
+
+**改动前的问题**：`.ac-body`（240px 限高、内部滚动）内的媒体仍走**通用资产规则**——`.asset-box img` max-height 520px、`.asset-box.video video { width:100%; max-height:420px }`。于是：
+
+- **高图被裁**：一张 800×1200 的图在 240px 高的可滚容器里只露出「上 240px」的半截图（滚的是容器，不是图本身）；
+- **视频被压扁**：`width:100%` 把宽度拉满，而高度被 240px 夹住 → 画面比例失真（litterbox 黑边）。
+
+**改动（CSS 四条，src/static/index.html L286-289）**：
+
+```css
+.ans-changed .ac-body img,
+.ans-changed .ac-body video { max-height:240px; width:auto; max-width:100%; }
+.ans-changed .ac-body .asset-box.video { max-width:100%; }
+.ans-changed .ac-body .asset-box.video video { width:auto; }   /* 覆盖通用 width:100% */
+```
+
+| 规则 | 作用 |
+|---|---|
+| `max-height:240px` | 高度上限 = `.ac-body` 显示区上限（**两个 240px 必须同步改**，已写进代码注释） |
+| `width:auto` | 宽度回归 intrinsic 比例自适应——`width:auto` + `max-height` 组合由浏览器保证不变形 |
+| `max-width:100%` | 防宽图/宽视频横向溢出；`.asset-box.video` 通用 560px 上限在区内放宽为 100%（改由高度+比例定宽） |
+| 选择器 `.ans-changed .ac-body …` | 作用域只限变更文件补充区，气泡正文里的资产框尺寸规则不受影响 |
+
+**行为边界**：未超限的媒体不受影响（如 300×150 视频按原尺寸渲染）；图仍可点击放大（外层 `<a target=_blank>`）、视频仍保留右上角 ↗ 新页签；容器限高 + 折叠/展开（见上文）不变。
+
+**playwright 实测**：`ac-body` computed max-height=240px ✓；注入 800×1200 窄高图 → 渲染 160×240，比例 0.667 = intrinsic 0.667（**分毫不差**）✓；300×150 视频未超限按原尺寸 ✓；超长列表容器内滚照常 ✓。**纯前端，Ctrl+F5 生效**（8000 实例取新静态资源走 `/update-assets`）。
 
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 

@@ -8,6 +8,7 @@
 
 | [features/skills](features/skills.md) | **技能体系**：SKILL.md 技能包（frontmatter + SOP）+ 双层寻址——repo `.agent/skills/` 本地优先（同名 shadow）→ 全局 `~/.agt/skills/` 须 repo `global-skills.json` 激活（`_resolve_skill` 统一寻址，「读」和「用」不分本地/全局）+ 技能工具五件套（read_skill / save_skill / skill_navigate 结构浏览分节读 / skill_run_code 包内脚本三道闸 / skill_evaluate 三级降级） | 可复用任务 SOP / 全局技能 / 技能脚本执行 |
 | [features/scnet-async-pipeline](features/scnet-async-pipeline.md) | **SCNet 异步生产流水线**：画布 → API 转换器（`tools/wf_canvas2api.py`，四对位坑）+ 本机 `POST /api/callback` 回调端点 + 容器侧 monitor.py(:8191) **v3 常驻版**（反代 ComfyUI + `POST /monitor/add` 纯 HTTP 加任务）+ 本机兜底轮询 `tools/scnet_watch_batch.py` + 第一单出片 + 批量打法 | 容器批量出片 / 异步收货 / 画布转 API |
+| [features/intent-nano](features/intent-nano.md) | **intent_nano 判别式意图路由**：内置 Intent(22) 加强版节点插件——NanoJev 0.6B 决策模型（nanojev_server@8766，lfm_proxy --managed 托管）一次前向直接输出概率分布：~1s 零 token、无解析歧义、threshold 软拒识走 default；XML 意图描述体直供模型；出口与内置 22 同构，换节点即迁移 | 零成本意图分类 / 工作流软路由 / 本地决策模型消费 |
 
 ## 快速事实（2026-08 状态）
 
@@ -1186,4 +1187,8 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 ## 快速事实增补（2026-09-22 · 变更文件容器限高+可折叠）
 
 - **📎 本轮变更文件容器限高 + 可折叠（2026-09-22，用户提案）**：answer 气泡「📎 本轮变更文件」补充区（`.ans-changed`）此前无高度上限——几十个变更文件的施工轮把气泡撑出屏幕、正文被列表淹没。现展开态体区 `max-height:240px` + 内部滚动（`overflow-y:auto`）；标题行点击折叠/展开（容器 toggle `folded`，箭头 ▾ `rotate(-90deg)` 旋成 ▸，150ms 过渡），折叠态只剩一行标题。原有资产内嵌/预览抽屉/灰框降级交互零变化。纯前端 Ctrl+F5 生效（src/static/index.html）——见 [bubble-interaction · 容器限高+折叠](features/bubble-interaction.md#本轮变更文件容器限高--可折叠2026-09-22用户提案)
+
+## 快速事实增补（2026-09-22 · 十二 · intent_nano 判别式意图路由——NanoJev 决策模型进工作流）
+
+- **intent_nano 判别式意图路由节点——NanoJev 决策模型进工作流**（2026-09-22，commit `2aabfaa`，🧭 category llm）：内置 Intent(22) 的判别式加强版。用户先行在 8090 的 `lfm_proxy.py` 服务侧接入 nanojav 决策模型（nanojev_server @8766，http-task 型、lfm_services.json 注册、lfm_proxy --managed 托管），本轮设计实现节点插件把它接进画布：**一次前向直接输出候选概率分布**——CPU ~1s、零 token、无编号解析歧义、完整 probabilities 可解释、top1 < threshold 走 default（软拒识）；XML 描述体 `<intent name="code">要求…</intent>` 直供模型作判别 criteria（内置 22 旧档自闭合向后兼容）；出口 branch_N/default 与内置 22 同构——存量工作流换节点即迁移；8766 不可达自动拉起（≤60s），仍失败 intent="" 走 default 不炸工作流。四件套：`nodes_builtin/intent_nano.py` + `.js`（新）、`workflow_xml.py`（type 分支扩 intent_nano + 描述体往返存活）、`workflow_editor.html`（出口/摘要条件并入）。端到端实测：「帮我写一个快速排序的 python 函数」→ intent=code（0.536）→ branch_0 → text → end ✓；坑：`/reload nodes` 只热载插件不含 workflow_xml.py——旧进程解析器不认新 type 显示空参，/restart 即愈；模板 `.agent/workflows/_nano_test.xml`——见 [intent-nano](features/intent-nano.md)、[node-plugins · 第四批](architecture/node-plugins.md)、[local-models · NanoJev](guides/local-models.md)
 

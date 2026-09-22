@@ -176,6 +176,17 @@ Windows 上 `importlib.util.spec_from_file_location` + `exec_module` 偶发不�
 
 发布时 wheel 内节点插件 **24 个文件（12 组 py+js 配对，含新的 AND/OR）** 已确认打包齐全——新加插件节点后建议在发布前核对 wheel 文件清单（`unzip -l`），避免「本地可用、装包缺文件」的发布事故。
 
+## 第四批：intent_nano——判别式意图路由（2026-09-22，commit 2aabfaa）
+
+「写两个文件即得新节点」路线再添成员，且首次带**本地模型服务依赖**：`intent_nano`（🧭 Intent·Nano，category llm）= 内置 Intent(22) 的判别式加强版——NanoJev 0.6B 决策模型（Qwen3-0.6B backbone + 决策头）一次前向直接输出候选概率分布，无 LLM 调用、无编号解析歧义，CPU ~1s 零 token。
+
+- **intent_nano.py**：SDK 解析输入 → HTTP 直连 nanojev_server（127.0.0.1:8766，省一层 8090 转发）→ outputs intent/confidence/probabilities；出口 branch_N + default（top1 置信度 < threshold → default，**软拒识**）；8766 不可达自动拉起（detached + 等 health ≤60s），仍失败 `intent=""` 走 default 不炸工作流
+- **intent_nano.js**：intents 双列编辑（name + 语义描述，description 直供模型判别）+ temperature/threshold 数字控件
+- **插件外框架改动（本次唯一两处）**：workflow_xml.py 读/写两侧 type 分支 `"22"` → `("22", "intent_nano")`——`<intent name="code">要求…</intent>` 描述体往返存活（内置 22 旧档自闭合无体 = 空 description，向后兼容）；workflow_editor.html 出口端口/摘要分支条件并入 intent_nano——branch_N/default 与内置 22 **同构，存量工作流换节点即迁移**
+- 坑：`/reload nodes` 只热载插件不含 workflow_xml.py——改解析层后旧进程对新 type 显示空参，需 `/restart`（详见 [intent_nano](../features/intent-nano.md#调试验证链全绿)）
+
+插件 13 → 14（py+js 28 文件）；「全景对账」结论不变——仍是业务节点外置路线的延伸。详见 [intent_nano · 判别式意图路由](../features/intent-nano.md)。
+
 ## 相关
 
 - [工作流引擎](workflow-engine.md) — 节点调度器 / `_Ctx` / `NODE_HANDLERS`

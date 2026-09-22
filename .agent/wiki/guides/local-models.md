@@ -11,6 +11,20 @@
 
 速度实测：CPU 3~5 tok/s，单次调用 **18~38s**（vs 云端毫秒级——硬伤，但零 token 成本）。
 
+## NanoJev 决策模型 · nanojev@8766（2026-09-22）
+
+本地小模型家族添新成员——与 local-lfm / local-lfm-vl 两个**生成式** llama-server 不同，NanoJev 是**判别式**决策/意图识别模型：
+
+| 项 | 值 |
+|---|---|
+| 服务 | nanojev_server（http-task 型，127.0.0.1:8766） |
+| 模型 | NanoJev 0.6B（Qwen3-0.6B backbone + 决策头） |
+| 推理 | CPU fp32 单次前向 ~1s，**零 token 费用**，直接输出候选概率分布（choice + probabilities），不生成文本 |
+| 托管 | `lfm_services.json` 注册 + `lfm_proxy --managed` 托管（`D:\Programs\env\lfm_proxy.py` @ 8090）——本地小模型出现「托管」形态，区别于三件套手工 bat |
+| 消费端 | 工作流节点插件 [intent_nano](../features/intent-nano.md)（判别式意图路由） |
+
+用途定位：意图分类这类「从候选里选一个」的 utility——无解析歧义、完整概率可解释，top1 低于阈值可软拒识走 default。
+
 ## agent 能力实测（2026-08 探针）
 
 | 维度 | 结果 | 证据 |

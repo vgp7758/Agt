@@ -15,15 +15,33 @@
 
 ## 服务链路
 
+2026-09-22 通用化（用户提案）：intent_nano 从「本机 NanoJev 专属」升级为**通用常用节点**——用户可在设置页配自己的 Jev 兼容服务，未配时三级降级保证任何环境都跑得通。
+
 ```
-nanojev_server（http-task 型）
-  127.0.0.1:8766 · lfm_services.json 注册 · lfm_proxy --managed 托管（D:\Programs\env\lfm_proxy.py @ 8090）
-        ↑ 插件直连（省一层 8090 转发）
-intent_nano 节点 handler
+① settings.jev_base_url（自建 Jev 兼容服务，配 jev_api_token → Authorization: Bearer）
+        ↓ 未配置
+② 本机 8766 默认（lfm_services.json 的 nanojev，本机装了 NanoJev 才自动拉起 ≤60s）
+        ↓ 也不可用（其它机器的自建/未装场景）
+③ LLM 生成式降级（同内置 Intent(22) 提示词；conf=-1 标记降级模式）
+   —— 任何环境都跑得通，不炸工作流
 ```
 
-- 8766 不可达时 handler **自动拉起** nanojev_server（detached + 等 health 最长 60s）
-- 仍失败/超时 → `intent=""` 走 default 分支——**服务挂了不炸工作流**
+- **远程/自建 Jev**（settings 配了 `jev_base_url`）：直连该地址，**不自动拉起**本机服务（远程环境拉本机进程无意义）
+- **本机默认**（未配 `jev_base_url`）：本机路径存在时自动拉起 nanojev_server（detached + 等 health 最长 60s）
+- **LLM 降级**（两级都不通）：走生成式分类（同内置 Intent(22) 提示词），outputs 标记 `confidence=-1` 区分降级模式——**任何环境都可用，不炸工作流**
+
+## 设置项（settings.json）
+
+2026-09-22 通用化新增——WebUI「⚙ 设置 → 运行时」面板（用户可填自己的 Jev 服务）：
+
+| 设置键 | 说明 |
+|---|---|
+| `jev_base_url` | Jev 兼容服务地址（如 `http://your-jev:8766`）；留空 = 先试本机 8766，再降级 LLM 生成式 |
+| `jev_api_token` | 自建 Jev 服务鉴权 token（请求头 `Authorization: Bearer`）；服务无鉴权可留空 |
+
+- **保存**走既有 `set_config` 通道写 `settings.json`（scope 切换同样适用——见 [config-and-models · 设置页配置来源切换](../guides/config-and-models.md#设置页配置来源切换生效份--全局--本地2026-08-31commit-ad0f385)）；前端 `fillSettingsForm` / `saveSettings` 已贯通
+- **后端读取**：`config.load_jev_config()`（src/config.py）——返回 `{base_url, api_token}` dict，未配置时 base_url 为空字符串、字段缺失兜底空值
+- **消费端**：`_jev_target()`（intent_nano.py）——有 base_url → 直连远程（Bearer 鉴权，**不拉起本机**）；无 base_url → 本机 8766 默认 + 本机路径存在时允许拉起
 
 ## 四件套实现
 
@@ -51,9 +69,16 @@ intent_nano 节点 handler
 
 ## 调试验证链（全绿）
 
+**首版三链（2026-09-22，commit 2aabfaa）**：
 1. **nanojev 原生接口实测**：choice + probabilities 分布 ✓
 2. **JS 语法 / XML 往返幂等**：描述体保留、无描述自闭合，二次转换逐字节一致 ✓
 3. **端到端**（子进程跑新代码）：「帮我写一个快速排序的 python 函数」→ intent=`code`（confidence 0.536）→ branch_0 扇出 → text 分支执行 → end 输出 ✓
+
+**通用化四链（2026-09-22 二轮）**：
+4. **JS 语法 1/1** ✓
+5. **主链**（未配 jev）→ 本机 NanoJev 判定 ✓
+6. **降级链**（假远程 jev base_url）→ **不拉起**本机服务 → LLM 降级 conf=-1 → default ✓
+7. **未配 → 本机默认 8766 + 允许拉起** ✓；XML 往返 / 端口扇出（前轮已验）✓
 
 调试中抓到的坑：**`/reload nodes` 只热载节点插件（.py/.js），不含 `workflow_xml.py`**——旧进程解析器不认识 intent_nano，`debug_workflow` 显示空参（现象像「插件没生效」，实为旧 XML 解析器在跑）；`/restart` 后即正常。测试工作流保留在 `.agent/workflows/_nano_test.xml`，可当模板抄。
 
@@ -62,6 +87,7 @@ intent_nano 节点 handler
 - threshold 建议 0.35 起调：调低会硬路由歧义样本，调高则大量走 default
 - intent name 是路由端口（branch_N 按 intents 数组序号生成），description 才是判别依据——想让模型判得准，描述体写清楚语义边界
 - 内置 22 的提示词也可用描述体（同一解析分支向后兼容），旧档不写体零影响
+- **降级模式**（2026-09-22 通用化）：未配 `jev_base_url` 且本机无 NanoJev 时自动走 LLM 生成式分类，outputs 标记 `confidence=-1`——下游 selector 可据此区分「判别式判定」与「降级生成式」；降级模式下 threshold 不生效（生成式无概率分布）
 
 ## 相关页面
 

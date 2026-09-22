@@ -389,6 +389,19 @@ def _openai_client(self) -> OpenAI:
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
+## NanoJev 意图服务配置（jev_base_url / jev_api_token，2026-09-22）
+
+2026-09-22 通用化新增（用户提案）：intent_nano 节点从「本机 NanoJev 专属」升级为通用常用节点——设置页「运行时」面板新增两个键：
+
+| 键 | 说明 |
+|---|---|
+| `jev_base_url` | Jev 兼容服务地址（如 `http://your-jev:8766`）；留空 = 先试本机 8766，再降级 LLM 生成式 |
+| `jev_api_token` | 自建 Jev 服务鉴权 token（请求头 `Authorization: Bearer`）；服务无鉴权可留空 |
+
+- 后端读取：`config.load_jev_config()`（src/config.py）——返回 `{base_url, api_token}`，字段缺失兜底空值
+- 消费端：intent_nano 节点 `_jev_target()` 三级解析（settings → 本机 8766 → LLM 降级），详见 [intent_nano · 设置项](../features/intent-nano.md#设置项settingsjson)
+- 生效：设置项走既有 `set_config` 通道，`/restart` 后设置面板可见
+
 ## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
 
 四份配置文件（models.json / settings.json / main.yml / mcp.json）的解析统一走 `config.config_file(name)`（src/config.py，用户裁定 2026-08-31 · 多实例组网前置，commit 10d717e）：

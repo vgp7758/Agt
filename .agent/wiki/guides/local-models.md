@@ -21,9 +21,11 @@
 | 模型 | NanoJev 0.6B（Qwen3-0.6B backbone + 决策头） |
 | 推理 | CPU fp32 单次前向 ~1s，**零 token 费用**，直接输出候选概率分布（choice + probabilities），不生成文本 |
 | 托管 | `lfm_services.json` 注册 + `lfm_proxy --managed` 托管（`D:\Programs\env\lfm_proxy.py` @ 8090）——本地小模型出现「托管」形态，区别于三件套手工 bat |
-| 消费端 | 工作流节点插件 [intent_nano](../features/intent-nano.md)（判别式意图路由） |
+| 消费端 | 工作流节点插件 [intent_nano](../features/intent-nano.md)（判别式意图路由）——2026-09-22 通用化后支持三级连接链：settings.jev_base_url（自建 Jev 兼容服务）→ 本机 8766 默认 → LLM 生成式降级 |
 
 用途定位：意图分类这类「从候选里选一个」的 utility——无解析歧义、完整概率可解释，top1 低于阈值可软拒识走 default。
+
+**通用化（2026-09-22 二轮）**：intent_nano 节点不再绑定本机 NanoJev——用户可在设置页配自己的 Jev 兼容服务（`jev_base_url` + `jev_api_token`），未配时先试本机 8766、再降级 LLM 生成式分类。本机 NanoJev 仍是默认最优路径（~1s 零 token），但其它机器拿到 agt 包也能用 intent_nano（填自己的 Jev 地址或走 LLM 降级）。详见 [intent_nano · 服务链路](../features/intent-nano.md#服务链路)。
 
 ## agent 能力实测（2026-08 探针）
 

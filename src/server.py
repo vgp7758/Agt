@@ -2173,7 +2173,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             note = ""
             if _scope == _act:
                 # 写的就是生效份 → 现状通道（save_runtime_settings 写生效份 + apply_config 热应用）
-                config.save_runtime_settings(values)
+                # 合并写（2026-09-22）：前端表单不含非表单键（hook_timeout_before_turn 等手改项）——
+                # 原整体覆盖会静默丢它们；读+update+写保留盘上其它键
+                _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)
                 lines = apply_config(agent, values)
             else:
                 _rs = config.save_settings_scoped(values, _scope)
@@ -2186,7 +2188,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                     note += "\n🔄 模型配置已重载（生效份）"
             await _send(ws, {"type": "system", "text": ("\n".join(lines) + "\n" + note).strip()})
             return
-        config.save_runtime_settings(values)
+        _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)   # 合并写（同 scoped 分支：保留非表单键）
         lines = apply_config(agent, values)
         await _send(ws, {"type": "system", "text": "\n".join(lines) or "（无更改）"})
         return

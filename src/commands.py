@@ -260,6 +260,15 @@ def read_config(agent) -> dict:
         cfg["fold_deep_tools"] = False
     # 统一辅助模型（存 settings.json；空=跟随主模型）：recap/RAG检索/工作流LLM默认共用
     cfg["utility_model"] = getattr(agent, "utility_model", "") or ""
+    # NanoJev 意图服务（用户提案 2026-09-22；intent_nano 节点用；读盘直取——回填设置面板）
+    try:
+        import config as _cfg3
+        _jev = _cfg3.load_jev_config()
+        cfg["jev_base_url"] = _jev.get("base_url") or ""
+        cfg["jev_api_token"] = _jev.get("api_token") or ""
+    except Exception:
+        cfg["jev_base_url"] = ""
+        cfg["jev_api_token"] = ""
     return cfg
 
 
@@ -427,6 +436,22 @@ def apply_config(agent, values: dict) -> list:
                 results.append(f"✅ {_dk} = {val}（已存 settings.json + 即时生效）")
             except Exception as e:
                 results.append(f"⚠️ {_dk} 设置失败：{e}")
+    # jev_base_url / jev_api_token：NanoJev 意图服务（用户提案 2026-09-22；intent_nano 节点用）。
+    # 读盘惰性——intent_nano._jev_target 每次实时读 config.load_jev_config()，无需 setattr 即时生效
+    # （此前两键落到下方 CONFIGURABLE 循环 → "❌ 未知配置"误报且面板重开为空，用户实锤 2026-09-22）。
+    if "jev_base_url" in values or "jev_api_token" in values:
+        try:
+            import config
+            saved = config.load_runtime_settings()
+            if "jev_base_url" in values:
+                saved["jev_base_url"] = str(values.pop("jev_base_url") or "").strip()
+            if "jev_api_token" in values:
+                saved["jev_api_token"] = str(values.pop("jev_api_token") or "").strip()
+            config.save_runtime_settings(saved)
+            _b = saved.get("jev_base_url") or "(未配 → 本机 8766 → LLM 降级)"
+            results.append(f"✅ Jev 意图服务 = {_b}（已存 settings.json；intent_nano 节点下次调用即生效）")
+        except Exception as e:
+            results.append(f"⚠️ Jev 配置保存失败：{e}")
     for k, v in values.items():
         if k not in CONFIGURABLE:
             results.append(f"❌ 未知配置 {k}（可配置：{list(CONFIGURABLE)}）")

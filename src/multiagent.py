@@ -1072,28 +1072,39 @@ def make_subagent_tools(agent) -> list:
 
         # —— reuse 复用模式：registry 中找同名实例直接派任务（不新建） ——
         if reuse and reg:
+            entry = None
+            # 原子复用临界区（用户实锤 2026-09-22·8100 并行 agent_prompt 竞态）：查空闲→选实例→
+            # 占位→标 running 必须同一临界区。此前分步加锁，单步并行工具（ThreadPoolExecutor）
+            # 下的多个 agent_prompt 都在对方标 running 前查到同一"空闲"实例 → 全部复用同一
+            # agent_id → 任务书串台（street/linwan 混进同一 vision 实例）。锁为 RLock，
+            # 锁内调 update_status 重入安全。
             with reg._lock:
                 same = [e for e in reg._agents.values()
                         if e.name == name and e.role == "subagent"]
-            live = [e for e in same if e.agent is not None]
-            hist = [e for e in same if e.agent is None]
-            if live:
-                idle = [e for e in live if e.status != "running"]
-                if not idle:
-                    busy = ", ".join(e.agent_id for e in live)
-                    return (f"[忙] '{name}' 的实例都在跑（{busy}）。"
-                            f"先 wait_subagents 等它完成，或传 reuse=no 新建独立实例。")
-                entry = max(idle, key=lambda e: e.registered_at)
+                live = [e for e in same if e.agent is not None and e.status != "reviving"]
+                hist = [e for e in same if e.agent is None and e.status != "reviving"]
+                if live:
+                    idle = [e for e in live if e.status != "running"]
+                    if not idle:
+                        busy = ", ".join(e.agent_id for e in live)
+                        return (f"[忙] '{name}' 的实例都在跑（{busy}）。"
+                                f"先 wait_subagents 等它完成，或传 reuse=no 新建独立实例。")
+                    entry = max(idle, key=lambda e: e.registered_at)
+                    entry.task = prompt
+                    entry.caller_id = caller_id
+                    reg.update_status(entry.agent_id, "running")   # 占位即标（锁内）
+                elif hist:
+                    # 复活占位（同款竞态防护）：锁内先标 reviving，并行第二个同名调用看不到它 →
+                    # 落到新建路径，不会双复活（revive 成功后 status 转正常态）
+                    _hist_entry = max(hist, key=lambda e: e.registered_at)
+                    reg.update_status(_hist_entry.agent_id, "reviving")
+            if entry is not None:
                 entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
                 entry.agent.session.set_assembly_plan(base_asm)  # assembly：声明基线清单 + 参数覆盖（本次生效）
                 if base_hooks is not None:
                     entry.agent.session.hook_specs = base_hooks
                 if base_fb is not None:   # fallback：yml 声明（改链后复用实例下一任务即生效）
                     _apply_declared_fallback(entry.agent, base_fb)
-                with reg._lock:
-                    entry.task = prompt
-                    entry.caller_id = caller_id
-                reg.update_status(entry.agent_id, "running")
                 return _launch(entry.agent, entry.agent_id, name, entry.model,
                                getattr(entry.agent.session, "session_dir", None), prompt, _reused=True) + asm_note
             if hist:

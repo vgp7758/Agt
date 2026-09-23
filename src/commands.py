@@ -1226,6 +1226,51 @@ def _cmd_hold(ctx: CommandContext, args):
         print("用法：/hold on|off（当前 " + ("⏸ 挂起中" if getattr(agent, '_hold', False) else "▶ 运行中") + "）")
 
 
+def _cmd_continue(ctx: CommandContext, args):
+    """/continue [分钟] —— 继续被中断的那一轮（断点续跑，不新增 user_message；用户提案 2026-09-23）。
+    无参数=立刻续跑（等同 WebUI「继续」按钮）；带分钟数=延时到点自动续跑。
+    延迟用进程内定时器（重启后失效，届时再敲一次即可）。"""
+    import threading
+    positional = _parse_args(args)[0]
+    delay_min = 0.0
+    if positional:
+        try:
+            delay_min = float(positional[0])
+        except Exception:
+            print("用法：/continue [分钟数]（无参数=立刻；/continue 30 = 30 分钟后）")
+            return
+        if delay_min < 0:
+            print("分钟数不能为负")
+            return
+
+    def _do():
+        try:
+            err = ctx.agent.resume_interrupted()
+        except Exception as e:
+            print(f"⚠️ 续跑失败：{type(e).__name__}: {e}")
+            return
+        print("▶️ 已触发续跑（从断点接着跑）" if not err else f"⚠️ {err}")
+
+    if delay_min <= 0:
+        _do()
+        return
+
+    def _fire():
+        # 到点经 work_q 投递（worker 串行执行——与按钮/命令同一条路径，不并发抢 run）
+        try:
+            if ctx.work_q is not None:
+                ctx.work_q.put(("task", _do))
+            else:
+                _do()
+        except Exception as e:
+            print(f"⚠️ 延时续跑触发失败：{e}")
+
+    timer = threading.Timer(delay_min * 60, _fire)
+    timer.daemon = True
+    timer.start()
+    print(f"⏰ 已安排 {delay_min:g} 分钟后续跑中断轮（进程内定时器；重启后失效，可再敲 /continue）")
+
+
 def _cmd_debug(ctx: CommandContext, args):
     """/debug prompt <提示词> —— 提示词调试：按【当前上下文投影 + 提示词】直接调 LLM，
     不落盘（不 start_turn，session/events 零写入）、不执行（回包的 tool_calls 只展示不跑），
@@ -1934,6 +1979,11 @@ def build_default_registry() -> CommandRegistry:
         "/hold on   ⏸ 挂起：react 将在下一步开始前暂停，直到恢复\n"
         "/hold off  ▶ 恢复继续\n"
         "  WebUI 控件栏也有 ⏸ 按钮快捷控制（/api/hold）")
+    reg.register("continue", _cmd_continue,
+        "[分钟]  继续被中断的轮（断点续跑，不新增消息）；带分钟数=延时执行",
+        "/continue          立刻继续（等同 WebUI 中断轮的「继续」按钮）\n"
+        "/continue 30       30 分钟后自动继续（进程内定时器，重启后失效需重设）\n"
+        "  续跑 = 从断点接着跑原轮（不新增 user_message）；已完成的步骤完整保留")
     reg.register("debug", _cmd_debug,
         "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包\n"
         "hook <提示词>    调试用：以提示词触发 before_turn 钩子，不落盘，钩子跑完即 return",

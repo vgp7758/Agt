@@ -159,18 +159,57 @@ Scheduler._schedules（真源）
 
 **验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
-## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令）
+## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 
-服务退出时是否唤醒 Agent，由启动参数逐服务声明（`start_service(name, command, cwd, on_exit_wake="never")`）；策略判定与通知注入在 src/agent.py `_on_service_exit`：
+服务退出时是否唤醒 Agent，由启动参数逐服务声明；策略判定与通知注入在 src/agent.py `_on_service_exit`。
+
+> ⚠️ **2026-09-23 起默认从 `never` 翻转为 `notify`（通知进 inbox），并新增 `on_exit_style` 注入姿势参数**——见[下节](#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)；本节保留演进史。
 
 | on_exit_wake | 语义 |
 |---|---|
-| `never`（默认）/ 空串 | 仅登记，并入下次自然轮（v0.19.2 防套娃基线） |
+| `never`（2026-08-30~09-23 旧默认）/ 空串 | 仅内存登记，并入下次自然轮（v0.19.2 防套娃基线；**无自然轮则不可见**——翻转动机） |
 | `crash` | rc≠0 唤醒一轮；同名 5 分钟内连续崩溃自动退避为登记 |
-| `always` | 任何退出都唤醒（单次任务跑完即报） |
+| `always` | 任何退出都唤醒（单次任务跑完即报；2026-09-23 起为 notify 同义别名） |
 | 非枚举任意文本 | **自定义作业指令：退出即无条件唤醒（无退避），指令原文注入通知**——2026-09-14（commit 7283f52，用户裁定）：LLM 把本参数当「退出时的返回提示」填自然语言，旧实现静默丢弃按 never；误用收编为特性。通知三处注入形态见 [user-interaction · 误用收编](user-interaction.md) |
 
 docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务建议 `always`；**退出后要 Agent 照办的事，直接把作业写进本参数**（启动时留指令、醒来照办）。
+
+## 退出通知默认进 inbox：never→notify 翻转 + on_exit_style 注入姿势（2026-09-23，用户提案，commit 275049c）
+
+**动机**：旧默认 `never` 的「并入下次自然轮」有可见性盲区——通知只进内存 `_notices`（不持久化、不触发轮），**没有自然轮就永远看不到**（agent_watch 退出通知深夜躺一整夜、次日才发现即此症状）。用户裁定翻转：**默认 `notify`——通知进 inbox**。
+
+**notify 三重保证**：
+
+| 保证 | 机制 |
+|---|---|
+| 不丢 | `inbox.jsonl` 持久化，`/restart` 不丢 |
+| 可见 | Agent 空闲时自动消费成轮（无自然轮也必有一轮） |
+| 不打断 | 忙时排队到下一步边界注入，不抢进行中的轮 |
+
+**on_exit_wake 翻转后全表**：
+
+| 值 | 行为 |
+|---|---|
+| `notify`（**新默认**） | 进 inbox（上表三重保证） |
+| `never` | 仅内存 `_notices` 登记（最安静；无自然轮则看不到）——旧默认，显式声明仍可用 |
+| `crash` | rc≠0 才进 inbox + 5 分钟同名连续崩溃退避（防套娃；常驻关键服务） |
+| `always` | notify 同义别名（历史枚举保留） |
+| 非枚举任意文本 | 自定义作业指令：退出即通知 + 指令原文注入（2026-09-14 收编语义不变） |
+
+**存量兼容**：entry 已存显式值的按启动时约定走，不受翻转影响——只有缺省值从 `never` 变 `notify`。
+
+**新参数 `on_exit_style`（注入姿势，按服务实例）**：
+
+| 值 | 形态 |
+|---|---|
+| `tool`（默认） | 合成 `stop_service` 工具记录（启动参数 + 退出码 + 尾部日志——信息最全） |
+| `text` | 纯文本通知（轻量——仅 header + 简要命令，不落工具记录） |
+
+签名：`start_service(name, command, cwd, on_exit_wake="notify", on_exit_style="tool")`；三处实现同步（background.py `start()` / background_tools.py `start_service` docstring / agent.py `_on_service_exit`），docstring 参数描述即提示词。
+
+**验证**（mock Agent 策略矩阵六项全过）：①默认=notify（wake + seed 工具记录）✓ ②never 登记不唤醒 ✓ ③crash rc0 静默 / rc1 唤醒 / 二连崩退避 ✓ ④always / 自定义文本 ✓ ⑤style=text 纯文本无 seed vs tool 合成记录 ✓ ⑥ServiceManager 签名（notify 默认 + style）✓。**生效方式**：引擎层三文件（background.py / agent.py / background_tools.py），`/restart` 后新启动的服务按新默认/新参数走。
+
+**关联**：[user-interaction · 唤醒策略化](user-interaction.md)（策略化起点）/ [user-interaction · 误用收编](user-interaction.md)（自定义文本语义）/ [user-interaction · 语义标签](user-interaction.md)（通知轮渲染）。
 
 ## 与其他模块的关系
 

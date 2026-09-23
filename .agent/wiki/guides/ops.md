@@ -434,6 +434,24 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 - **补丁版发布（v0.26.6，2026-09-11，commit `1d47b37`）**：同一条链跑通——`python release.py -y` → 版本 0.26.5 → 0.26.6（暂存 1 文件）→ 提交 → 构建 whl + tar.gz → PyPI ✅ → 推送 `origin main (a8dabf7..1d47b37)`。**补丁版不单独 tag 桌面版**（不涉桌面关键路径，攒到下个功能版本一起发）。见 [v0.26.6 发布记录](../releases/v0.26.6.md)
 - **用户侧发版三步**：`git push` → Actions 手动 Run workflow 试装（约 10-15 分钟）→ `git tag v0.26.5 && git push origin v0.26.5` 自动出 Release。本机未装 `gh`，Release 由 Actions 创建，无需 gh
 
+## git push SSH 路由：~/.ssh/config 的 443 重定向失效时 repo 级 core.sshCommand 兜底（2026-09-23，v0.30.0 发布轮）
+
+**现象**：`release.py` 发布链一路全绿（build ✓ PyPI ✓）到 `git push` 突然失败：`ssh: connect to host ssh.github.com port 443: Network is unreachable`。
+
+**根因**：`~/.ssh/config` 把 `github.com` 重定向到 `ssh.github.com:443`（历史上 22 端口被墙时代的绕行配置）。当晚网络实测**反转**——443 超时不可达、`github.com:22` 正常。
+
+**解法（不动全局 config，只改本 repo）**：
+
+```bash
+git config core.sshCommand "ssh -o HostName=github.com -p 22 -o ConnectTimeout=20"
+```
+
+之后 main 与 tag 均推送成功，且该 repo 后续 `git push` / `release.py` 自动走 22。**还原**：哪天 22 又不通、443 恢复 → `git config --unset core.sshCommand` 即回全局 config 路由。
+
+**排障口诀**：GitHub SSH 连不上先分清「走 22 还是 443」——`ssh -T git@github.com`（按全局 config）与 `ssh -T -p 22 git@github.com`（强制 22）各试一次，哪条通用哪条；repo 级 `core.sshCommand` 是零侵入的逐仓库覆盖（全局 `~/.ssh/config` 不动，其它仓库不受影响）。
+
+**关联**：[本地发布链](#本地发布链releasepy-版本真源迁移2026-09-10--十八轮)（release.py 的 push 步骤）、[桌面版 · 云构建](../features/desktop-mode.md#云构建--releasegithub-actions-流水线)（另一条发布通道）。
+
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页

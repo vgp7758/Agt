@@ -402,6 +402,16 @@ def _openai_client(self) -> OpenAI:
 - 消费端：intent_nano 节点 `_jev_target()` 三级解析（settings → 本机 8766 → LLM 降级），详见 [intent_nano · 设置项](../features/intent-nano.md#设置项settingsjson)
 - 生效：设置项走既有 `set_config` 通道，`/restart` 后设置面板可见
 
+## set_config 保存语义修复：合并替代整体覆盖——UI 保存不再抹掉非表单键（随 v0.30.0，commit 54e7eda）
+
+**触发**：v0.30.0 发布批修 jev 设置两 bug（保存报「未知配置」+ 面板重开为空，commit 54e7eda）时挖出的**同源更广的问题**：WS `set_config` 旧版对 settings 是**整体替换**——设置弹窗表单只管理一部分键，保存时以前端表单内容整体覆盖 `settings.json`，**表单不管的手改键（如 `hook_timeout_before_turn`、`hook_timeout`）会被静默抹掉**（丢回默认值），且无任何提示。
+
+**修复**：保存语义改**合并**——表单键写入新值，非表单键原样保留。jev 两字段（`jev_base_url`/`jev_api_token`）纳入表单管理后，「未知配置」报错与面板重开为空一并消除。
+
+**为什么值得单独立条**：这是 `set_config` 通道的通用语义修复，不只 jev——所有「手改 settings.json + 后来用 UI 保存过一次设置」的场景都被波及过（手改值无痕丢失）。同类「整体覆盖丢字段」家族见 [background-scheduler · 覆盖式重建抹掉直写值](background-scheduler.md)（session extra_state 版）——两处同哲学：**部分视图写回整体存储必须 merge，不得 replace**。
+
+**生效**：server.py 引擎层，`/restart`；随 v0.30.0 发布（[v0.30.0 发布记录](../releases/v0.30.0.md)）。
+
 ## 配置文件解析 config_file：repo 级覆盖（2026-08-31，commit 10d717e）
 
 四份配置文件（models.json / settings.json / main.yml / mcp.json）的解析统一走 `config.config_file(name)`（src/config.py，用户裁定 2026-08-31 · 多实例组网前置，commit 10d717e）：

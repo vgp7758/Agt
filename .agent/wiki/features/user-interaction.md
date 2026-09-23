@@ -6,7 +6,7 @@
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
-- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明 never/crash/always，crash/always 可主动唤醒；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编，见下文专节）；同日另一族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
+- **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明（crash/always 可主动唤醒）；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编）；**2026-09-23 起默认从 never 翻转为 `notify`——退出通知默认进 inbox**（持久化 + 空闲自动消费成轮 + 忙时步边界排队注入，见下文专节）；同族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
 - **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
@@ -436,6 +436,24 @@ Agent 醒来直接看到自己启动时留的作业——按指令查文件、�
 **验证**（9/9）：8000 真实场景四断言（唤醒 / header 标记 / result 注入 / reasoning 注入）+ 枚举全回归（never / crash+rc0 不唤醒 / crash+rc1 首次唤醒 / ALWAYS 大写 / 空串）。
 
 **生效方式**：引擎层（agent.py / background_tools.py），需 `/restart`。commit `7283f52` 已推送，随下个版本发布；8000 实例 `pip install -U agt-agent` 后生效。
+
+### 默认翻转：never→notify——退出通知默认进 inbox + on_exit_style 注入姿势（2026-09-23，用户提案，commit 275049c）
+
+**动机**：旧默认 `never` 的「并入下次自然轮」有可见性盲区——通知只进内存 `_notices`（不持久化、不触发轮），**没有自然轮就永远看不到**（agent_watch 退出通知深夜躺一整夜、次日才发现即此症状）。用户裁定翻转：**默认 `notify`，通知进 inbox**——`inbox.jsonl` 持久化（/restart 不丢）+ Agent 空闲时自动消费成轮（保证可见）+ 忙时排队到下一步边界注入（不打断进行中的轮）。
+
+| on_exit_wake（翻转后全表） | 行为 |
+|---|---|
+| `notify`（**新默认**） | 进 inbox（持久化 + 空闲自动消费 + 忙时步边界排队） |
+| `never`（旧默认） | 仅内存登记（最安静；无自然轮则不可见）——语义不变，按需显式声明 |
+| `crash` | rc≠0 才进 inbox + 5 分钟同名连续崩溃退避（常驻关键服务） |
+| `always` | notify 同义别名（历史枚举保留） |
+| 非枚举任意文本 | 自定义作业指令：退出即通知 + 指令原文注入（2026-09-14 收编语义不变） |
+
+存量服务 entry 已存显式值按启动时约定走，不受翻转影响（仅缺省值 never→notify）。
+
+**新参数 `on_exit_style`（注入姿势，按服务实例）**：`tool`（默认）= 合成 `stop_service` 工具记录（启动参数 + 退出码 + 尾部日志，信息最全）；`text` = 纯文本通知（轻量，仅 header + 简要命令，不落工具记录）。签名：`start_service(name, command, cwd, on_exit_wake="notify", on_exit_style="tool")`——`start_service` docstring 同步更新（参数描述即提示词）。
+
+**验证**（mock Agent 策略矩阵六项全过）：①默认=notify（wake + seed 工具记录）✓ ②never 登记不唤醒 ✓ ③crash rc0 静默 / rc1 唤醒 / 二连崩退避 ✓ ④always / 自定义文本 ✓ ⑤style=text 纯文本 vs tool 合成记录 ✓ ⑥ServiceManager 签名 ✓。引擎层三文件（background.py / agent.py / background_tools.py），`/restart` 生效——机制细节与枚举演进史见 [background-scheduler · 退出通知默认进 inbox](background-scheduler.md#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)。
 
 ### 后台任务完成自动通知：bg_task 恒唤醒（2026-08-30，commit 6460ad1）
 

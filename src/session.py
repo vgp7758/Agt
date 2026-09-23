@@ -2280,7 +2280,11 @@ class Session:
         （i ∈ [fc, b_min]，raw_level 最大的那些轮）的上界：在 b_min 处再插一个边界，
         该档整档 count+1（跨过 max_level 即整档工具折叠），而 i > b_min 的年轻轮 count 不变、
         保真度零损失。每插一个即多切一刀，直到最老未折轮 raw_level > max_level（整档已折叠）为止。
-        带 est_fn/target 时按【实际压缩收益】决策（≥2% 才动，避免推进换来零收益却断缓存）。"""
+        带 est_fn/target 时按【实际压缩收益】决策——但收益判定不阻断阶梯（用户实锤 2026-09-24：
+        此前「收益 <2% → return False」会让整个中间级被弃、压力循环直接 break 进折叠大刀，
+        文字档轮未经工具折叠直接折进结构摘要（跳级）。现改为：仍超 target 时永不因小收益
+        放弃推进——每刀推最老档跨入超深（结构正确），小收益也推；循环回来自然轮到次老档，
+        阶梯逐级渐进。达标路径由调用方循环条件保证（est ≤ target 即 break，不会多推）。"""
         if not config.load_fold_deep_tools():
             return False
         fc = self._planned_fold if fold_count is None else fold_count
@@ -2291,16 +2295,6 @@ class Session:
         seg = [b for b in self._tier_boundaries if b >= fc]
         if not seg:
             return False                     # 未折区无边界：全员 +1 是 _graduate_once 的活
-        if est_fn is not None and target:
-            before = est_fn(fc)
-            if before <= target:
-                return False                 # 已达标：不该推进（调用方的循环条件会先 break）
-            b_min = min(seg)
-            bisect.insort(self._tier_boundaries, b_min)
-            after = est_fn(fc)
-            self._tier_boundaries.pop(bisect.bisect_left(self._tier_boundaries, b_min))
-            if after > before * 0.98:
-                return False                 # 收益 <2%：不值得为此重渲染一整档 + 断前缀缓存
         # 位置取【未折区最小边界】：正好是"最老档"的上界（见 docstring）
         bisect.insort(self._tier_boundaries, min(seg))
         self._invalidate_frozen_after_graduate()
@@ -2311,6 +2305,10 @@ class Session:
         带 est_fn/target（用户裁定 2026-09-14）：被折叠的轮不再参与档位渲染，对齐 boundary 已无意义
         → 从 fold_count 起【按轮】吃，返回恰好达标（估算 ≤ target）的轮数：一次到位，既不浪费时间
         （不多吃一轮），又不产生"每刀只折 1-2 轮"的碎刀（碎刀每轮都断前缀缓存）。
+        【按轮吃的上限 = 超深段末端】（用户实锤 2026-09-24）：fold_deep_tools 开时只吃【工具折叠档】
+        的轮（fc..deep_end）——文字档轮必须先经 _deepen_oldest_tier 推进超深（阶梯顺序：升档 → 工具
+        折叠 → 才折叠进结构摘要）；吃满超深段仍不达标 → 返回 cap（示意"超深已折尽"，下轮压力循环
+        会先推进②扩大工具折叠档再折——跨触发渐进）。
         吃完全部轮仍不达标 → 返回全折（last_completed+1）；已经全折 → None。
         不带 est_fn（旧调用点）→ 旧语义：超过 fold_count 的最小 boundary+1（按整档吃）。"""
         last_completed = len(self.turns) - 1
@@ -2319,11 +2317,15 @@ class Session:
                 if b + 1 > fold_count:
                     return b + 1
             return None
-        for cand in range(fold_count + 1, last_completed + 1):
+        cap = last_completed + 1
+        if config.load_fold_deep_tools():
+            bs = sorted(self._tier_boundaries)
+            if len(bs) > self.max_level:
+                cap = bs[-self.max_level] + 1   # deep_end+1：最后一个超深轮之后（不吃文字档）
+        for cand in range(fold_count + 1, min(last_completed + 1, cap) + 1):
             if est_fn(cand) <= target:
-                return cand
-        nxt = last_completed + 1
-        return nxt if nxt > fold_count else None
+                return min(cand, cap)
+        return cap if cap > fold_count else None
 
     def _fold_leap_target(self, fc: int, est_fn=None, target: int = 0):
         """fc 大刀首折目标：至少吞掉【超深档的一半】到 fc 结构摘要（用户裁定 2026-08-28：

@@ -130,18 +130,44 @@ def main():
     check("fold_deep_tools 关 → 恒 False",
           s2._deepen_oldest_tier(est_fn=est, target=tgt) is False)
 
-    print("\n【④】达标即停：折叠不多吃一轮")
+    print("\n【④】达标即停（或吃满超深段跨触发渐进）+ 无跳级")
     s = build(win=30_000, ratio=0.5, max_level=2)
     feed(s, 60)
+    # hook 两个折叠目标函数：抓「每次折叠决策瞬间」的边界状态（外部抓不到——prune 会清 < fc 的边界）
+    _snap = []
+    _onf, _olf = s._next_fold_target, s._fold_leap_target
+    def _nf(fc, est_fn=None, target=0):
+        r = _onf(fc, est_fn, target)
+        _snap.append((list(s._tier_boundaries), fc, r))
+        return r
+    def _lf(fc, est_fn=None, target=0):
+        r = _olf(fc, est_fn, target)
+        _snap.append((list(s._tier_boundaries), fc, r))
+        return r
+    s._next_fold_target, s._fold_leap_target = _nf, _lf
     s._plan_fold()
+    s._next_fold_target, s._fold_leap_target = _onf, _olf
     fc = s._planned_fold
     tgt = s.fold_target()
     def tok(k):
         return s._estimate_tokens([{"role": "system", "content": s.system}]
                                   + s._render_tiered_history(k) + s._seg_msgs_user_message())
     if fc > 0:
-        check("fc 处达标（≤target）", tok(fc) <= tgt, f"tok({fc})={tok(fc):,} ≤ {tgt:,}")
-        check("fc-1 处未达标（不多吃）", tok(fc - 1) > tgt, f"tok({fc-1})={tok(fc-1):,} > {tgt:,}")
+        # 断言 1：fc 处达标 或 = 最后一次决策时的超深段末端（跨触发渐进——单轮不强吃到越界）
+        _bs_last = sorted(_snap[-1][0]) if _snap else []
+        _cap = (_bs_last[-s.max_level] + 1) if len(_bs_last) > s.max_level else len(s.turns)
+        check("fc 处达标 或 fc=超深段末端（跨触发渐进，用户实锤 2026-09-24）",
+              tok(fc) <= tgt or fc >= _cap, f"tok({fc})={tok(fc):,} vs tgt={tgt:,}; cap={_cap}")
+        # 断言 2（跳级检测·修复核心）：每次折叠决策返回的目标都 ≤ 当时的超深段末端（不吃文字档轮）
+        if config.load_fold_deep_tools():
+            _bad = []
+            for bs, fc0, r in _snap:
+                if r is None:
+                    continue
+                bss = sorted(bs)
+                if len(bss) > s.max_level and r > bss[-s.max_level] + 1:
+                    _bad.append((fc0, r, bss[-s.max_level] + 1))
+            check("被折轮全部来自工具折叠档（无跳级）", not _bad, f"越界决策={_bad[:3]}")
     else:
         check("本轮未折叠（无需断言）", True)
 

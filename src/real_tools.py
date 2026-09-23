@@ -611,7 +611,16 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
     # 排除 .git/__pycache__/node_modules 硬清单 + workspace .gitignore 全模式 + 嵌套 git 仓库
     # 整棵剪枝（用户提案 2026-09-02——此前 rglob 全量，__pycache__ 的 .pyc 乱码污染结果）。
     # 显式进排除区：root 自身被 gitignore 命中（如 path="blog"）→ 尊重意图只硬排（同 dir_outline 语义）。
-    _HARD = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    # 硬排除（用户实测 2026-09-23·8000 实例 grep 卡 30 分钟）：.agt 是框架快照仓库
+    # （workspace/.agt/snapshots 的 git 对象，可到数十 GB 二进制）——此前不在排除集，
+    # grep path="." 会把整个对象库逐文件 read_text（无大小上限、无二进制检测）→
+    # 单次调用跑几十分钟 + GIL 饥饿拖死 HTTP/WS（8000 /api/status 超时）。
+    _HARD = {".git", "__pycache__", "node_modules", ".venv", "venv", ".agt",
+             ".mypy_cache", ".pytest_cache", ".ruff_cache", ".cache"}
+    _MAX_FILE_BYTES = 2_000_000   # 单文件上限：>2MB 跳过（源码搜索不需要；防大媒体/对象库）
+    _GREP_DEADLINE_S = 25         # 墙钟预算：超时返回已扫部分（防无界扫盘）
+    _GREP_MAX_SCAN = 30000        # 扫描文件数上限
+    _scan_t0 = time.time()
     if root.is_file():
         candidates = [root]
     else:
@@ -648,7 +657,15 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
     # 按文件聚合：rel -> (version, lines, [命中行号])
     files, scanned, total = {}, 0, 0
     capped = False
+    skipped_big = skipped_bin = 0
+    budget_hit = ""       # 预算耗尽原因（"" = 正常扫完）
     for fp in candidates:
+        if scanned >= _GREP_MAX_SCAN:
+            budget_hit = f"扫描文件数达上限 {_GREP_MAX_SCAN}"
+            break
+        if (time.time() - _scan_t0) > _GREP_DEADLINE_S:
+            budget_hit = f"扫描耗时超预算 {_GREP_DEADLINE_S}s"
+            break
         if not fp.is_file() or (glob and not fnmatch.fnmatch(fp.name, glob)):
             continue
         text = None
@@ -658,6 +675,15 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
                 text = extracted
         else:
             try:
+                st = fp.stat()
+                if st.st_size > _MAX_FILE_BYTES:      # 大文件跳过（防媒体/对象库全读）
+                    skipped_big += 1
+                    continue
+                with open(fp, "rb") as _fh:
+                    head = _fh.read(4096)
+                if b"\x00" in head:                   # 二进制检测（git 对象/可执行/媒体）
+                    skipped_bin += 1
+                    continue
                 text = fp.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
@@ -699,6 +725,11 @@ def grep(pattern: str, path: str = ".", glob: str = None, regex: bool = True,
                 parts.append(f"> {rel}:{lineno}: {lines[lineno-1].rstrip()[:200]}")
     if capped:
         parts.append(f"...（已达 max_results={max_results}，截断；收紧 pattern 或调大 max_results）")
+    if budget_hit:
+        parts.append(f"...（扫描预算耗尽：{budget_hit}；结果可能不全——收紧 path/glob 范围后重试）")
+    elif skipped_big or skipped_bin:
+        parts.append(f"（跳过 {skipped_big} 个 >{_MAX_FILE_BYTES//1000000}MB 大文件、"
+                     f"{skipped_bin} 个二进制文件）")
     return "\n".join(parts)
 
 
@@ -1283,7 +1314,7 @@ def _file_outline(fp: Path, pad: str) -> tuple[int, list[str]]:
 # dir_outline 的固定排除（gitignore 之外的硬排除；不排 .agent——agent 定义目录本身常要列）
 _DIR_OUTLINE_HARD = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv",
                                ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-                               ".idea", ".vscode", ".next", ".cache"})
+                               ".idea", ".vscode", ".next", ".cache", ".agt"})
 
 
 def dir_outline(path: str, max_files: int = 200, max_depth: int = 6) -> str:

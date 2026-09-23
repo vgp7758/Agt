@@ -1,4 +1,4 @@
-<workflow name="scnet_status" description="SCNet 各卡组容器状态巡检：哪些容器开着/关着、开着的在跑什么任务（自带 5 分钟 TTL 缓存，供 assembly 装配到上下文）">
+<workflow name="scnet_status" description="SCNet 各区域容器状态巡检：哪些容器开着/关着、开着的在跑什么任务（自带 5 分钟 TTL 缓存，供 assembly 装配到上下文；覆盖昆山/山东/华中三区，不可达区域显式标注）">
   <!-- 100001 开始：无必需入参（装配调用会带 prompt/agent_id，多余参数忽略） -->
   <node id="100001" type="start">
     <out name="prompt" type="string" required="false"/>
@@ -7,7 +7,7 @@
   <!-- 200001 读 TTL 缓存（kv_cache_read → {hit, value}） -->
   <node id="200001" type="plugin" title="kv_cache_read" toolName="kv_cache_read">
     <in name="key" literal="scnet_status" type="string"/>
-    <in name="namespace" literal="v1" type="string"/>
+    <in name="namespace" literal="v2" type="string"/>
   </node>
 
   <!-- 300001 判缓存新鲜度（TTL 300s） -->
@@ -25,8 +25,7 @@ async def main(args):
             raw = {}
     if not isinstance(raw, dict):
         raw = {}
-    hit = raw.get("hit")
-    val = raw.get("value")
+    hit, val = raw.get("hit"), raw.get("value")
     fresh, text = False, ""
     try:
         if hit and val:
@@ -42,7 +41,7 @@ async def main(args):
     <out name="text" type="string"/>
   </node>
 
-  <!-- 400001 分流：缓存新鲜 → 直接透传；否则实查 SCNet -->
+  <!-- 400001 分流：缓存新鲜 → 直接透传；否则实查各区域 -->
   <node id="400001" type="selector" title="缓存新鲜?">
     <branch><cond op="11" left="300001.fresh"/></branch>
   </node>
@@ -57,62 +56,86 @@ async def main(args):
     <out name="text" type="string"/>
   </node>
 
-  <!-- 假分支：调 SCNet MCP 查实例列表 -->
-  <node id="600001" type="plugin" title="scnet_notebook" toolName="__mcp__scnet__scnet_notebook">
+  <!-- 假分支：三区域各自查实例列表（昆山 11250 / 山东 20057 / 华中A 20091） -->
+  <node id="600001" type="plugin" title="昆山实例" toolName="__mcp__scnet__scnet_notebook">
     <in name="action" literal="list" type="string"/>
+    <in name="cluster" literal="11250" type="string"/>
+  </node>
+  <node id="600002" type="plugin" title="山东实例" toolName="__mcp__scnet__scnet_notebook">
+    <in name="action" literal="list" type="string"/>
+    <in name="cluster" literal="20057" type="string"/>
+  </node>
+  <node id="600003" type="plugin" title="华中A实例" toolName="__mcp__scnet__scnet_notebook">
+    <in name="action" literal="list" type="string"/>
+    <in name="cluster" literal="20091" type="string"/>
   </node>
 
-  <!-- 700001 整形：卡组/开关状态/规格/任务线索 + 组缓存 payload -->
+  <!-- 700001 整形：三区合并（不可达区域显式标注）+ 组缓存 payload -->
   <node id="700001" type="code" title="整形状态文本">
-    <in name="raw" ref="600001.raw"/>
+    <in name="raw_ks" ref="600001.raw"/>
+    <in name="raw_sd" ref="600002.raw"/>
+    <in name="raw_hz" ref="600003.raw"/>
     <code language="3"><![CDATA[
 import json, time
 
 async def main(args):
-    raw = args.params.get("raw")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except Exception:
-            raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    items = raw.get("data") or []
+    REGIONS = [("华东一区【昆山】", "raw_ks"), ("华东四区【山东】", "raw_sd"),
+               ("华中一区【A区】", "raw_hz")]
     STATUS = {"Running": "🟢运行中", "Terminated": "⚫已关机", "Stopped": "⚫已关机",
               "Creating": "🟡创建中", "Starting": "🟡启动中", "Stopping": "🟡停止中"}
-    lines, running = [], 0
-    for it in items:
-        st = str(it.get("notebookStatus") or "?")
-        if st == "Running":
-            running += 1
-        mark = STATUS.get(st, "❔" + st)
-        name = it.get("notebookName") or "?"
-        img = (str(it.get("imageName") or "").split(":")[0])[:44]
-        grp = it.get("resourceGroupId") or "?"
-        acc = "%s卡/%s/%s" % (it.get("acceleratorNumber") or 1, it.get("cpuNumber") or "?",
-                              it.get("ramSize") or "?")
-        upd = str(it.get("updateTime") or "")[5:16]
-        cmd = str(it.get("command") or "").strip()
-        duty = ""
-        if "monitor.py" in cmd:
-            seg = ""
-            if "--ids" in cmd:
-                seg = cmd.split("--ids", 1)[1].split("--")[0].strip().strip(",")
-            n = len([x for x in seg.split(",") if x.strip()])
-            duty = " · 在跑 monitor（%s）" % ("监控 %d 个任务" % n if n else "常驻监控")
-        elif "comfy" in cmd.lower():
-            duty = " · 在跑 ComfyUI 服务"
-        elif cmd:
-            duty = " · 命令: " + cmd[:80]
-        lines.append("  卡组%s %s %s（%s · %s · 更新%s）%s" % (grp, mark, name, acc, img, upd, duty))
-    if not lines:
-        text = "（SCNet 当前区域无实例）"
-    else:
-        head = "[SCNet 容器状态 · %s] 共 %d 个实例，运行中 %d 个" % (
-            time.strftime("%m-%d %H:%M"), len(items), running)
-        tail = ("（有运行中实例：可用 scnet_comfy(action='stats') / scnet_monitor(action='status') "
-                "查其内部任务详情）") if running else "（当前无运行中实例）"
-        text = head + "\n" + "\n".join(lines) + "\n" + tail
+    blocks, running, total = [], 0, 0
+    for label, key in REGIONS:
+        raw = args.params.get(key)
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                blocks.append("  %s：⚠️ %s" % (label, raw[:80]))
+                continue
+        if not isinstance(raw, dict):
+            blocks.append("  %s：（无数据）" % label)
+            continue
+        if str(raw.get("code")) not in ("", "0", "None") or raw.get("msg", "success") != "success":
+            blocks.append("  %s：⚠️ %s" % (label, str(raw.get("msg") or raw.get("code"))[:80]))
+            continue
+        items = raw.get("data") or []
+        if isinstance(items, dict):
+            items = items.get("data") or []
+        if not items:
+            blocks.append("  %s：无实例" % label)
+            continue
+        total += len(items)
+        lines = []
+        for it in items:
+            st = str(it.get("notebookStatus") or "?")
+            if st == "Running":
+                running += 1
+            mark = STATUS.get(st, "❔" + st)
+            name = it.get("notebookName") or "?"
+            img = (str(it.get("imageName") or "").split(":")[0])[:40]
+            grp = it.get("resourceGroupId") or "?"
+            acc = "%s卡/%s/%s" % (it.get("acceleratorNumber") or 1, it.get("cpuNumber") or "?",
+                                  it.get("ramSize") or "?")
+            upd = str(it.get("updateTime") or "")[5:16]
+            cmd = str(it.get("command") or "").strip()
+            duty = ""
+            if "monitor.py" in cmd:
+                seg = cmd.split("--ids", 1)[1].split("--")[0].strip().strip(",") if "--ids" in cmd else ""
+                n = len([x for x in seg.split(",") if x.strip()])
+                duty = " · 在跑 monitor（%s）" % ("监控 %d 个任务" % n if n else "常驻监控")
+            elif "comfy" in cmd.lower():
+                duty = " · 在跑 ComfyUI 服务"
+            elif cmd:
+                duty = " · 命令: " + cmd[:70]
+            lines.append("    组%s %s %s（%s · %s · 更新%s）%s" % (grp, mark, name, acc, img, upd, duty))
+        blocks.append("  %s（%d 个）：\n%s" % (label, len(items), "\n".join(lines)))
+    head = "[SCNet 容器状态 · %s] 共 %d 个实例，运行中 %d 个" % (
+        time.strftime("%m-%d %H:%M"), total, running)
+    if total == 0 and all("无实例" not in b for b in blocks):
+        head = "[SCNet 容器状态 · %s] 各区域查询异常：" % time.strftime("%m-%d %H:%M")
+    tail = ("（有运行中实例：可用 scnet_comfy(action='stats') / scnet_monitor(action='status') 查其内部任务详情）"
+            if running else "")
+    text = head + "\n" + "\n".join(blocks) + (("\n" + tail) if tail else "")
     payload = json.dumps({"ts": time.time(), "text": text}, ensure_ascii=False)
     return {"status_text": text, "cache_payload": payload}
     ]]></code>
@@ -120,15 +143,15 @@ async def main(args):
     <out name="cache_payload" type="string"/>
   </node>
 
-  <!-- 710001 写回缓存 -->
+  <!-- 710001 回写缓存 -->
   <node id="710001" type="plugin" title="kv_cache_write" toolName="kv_cache_write">
     <in name="key" literal="scnet_status" type="string"/>
-    <in name="namespace" literal="v1" type="string"/>
-    <in name="value" ref="700001.cache_payload"/>
+    <in name="namespace" literal="v2" type="string"/>
+    <in name="value" ref="700001.cache_payload" type="string"/>
   </node>
 
-  <!-- 720001 透传新查文本 -->
-  <node id="720001" type="code" title="透传新查">
+  <!-- 720001 透传状态文本 -->
+  <node id="720001" type="code" title="透传状态">
     <in name="text" ref="700001.status_text" type="string"/>
     <code language="3"><![CDATA[
 async def main(args):
@@ -137,7 +160,7 @@ async def main(args):
     <out name="text" type="string"/>
   </node>
 
-  <!-- 320001 汇合两分支 -->
+  <!-- 320001 汇合两分支（取实际执行的那条） -->
   <node id="320001" type="aggregator" title="汇合">
     <group name="result">
       <var ref="500001.text"/>
@@ -154,7 +177,9 @@ async def main(args):
   <edge from="300001" to="400001"/>
   <edge from="400001" to="500001" port="true"/>
   <edge from="400001" to="600001" port="false"/>
-  <edge from="600001" to="700001"/>
+  <edge from="600001" to="600002"/>
+  <edge from="600002" to="600003"/>
+  <edge from="600003" to="700001"/>
   <edge from="700001" to="710001"/>
   <edge from="710001" to="720001"/>
   <edge from="500001" to="320001"/>

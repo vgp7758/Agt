@@ -2059,6 +2059,7 @@ def _history_event(agent, name_override: str = "") -> dict:
         start, total = 0, 0
     return {"type": "session_history",
             "name": name_override or s.name or "(当前会话)",
+            "sid": (s.session_dir.name if getattr(s, "session_dir", None) else str(int(s.created_at))),
             "turns": s.to_history(start_turn=start),
             "expand_from": start, "total_turns": total,
             "favorites": sorted(((getattr(s, "extra_state", None) or {}).get("favorites")) or [])}
@@ -2281,6 +2282,12 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         _work_q.put(("user", "/reset"))
         def _sync_new():
             _broadcast_history(agent, "(新会话)")
+            # 新会话已由 /reset 立即落盘（实体目录就绪）——广播列表让下拉框立刻出现新会话
+            try:
+                from session import list_sessions
+                _broadcast({"type": "sessions", "names": list_sessions(workspace=_workspace)})
+            except Exception:
+                pass
         _work_q.put(("task", _sync_new))
         await _send(ws, {"type": "system", "text": "🔄 新建中…"})
         return

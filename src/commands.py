@@ -193,6 +193,16 @@ def _cmd_reset(ctx: CommandContext, args):
     clear_active_plan(ctx.agent)       # 重置：连计划（id/active_plan 一并清）、自主模式一起清空
     ctx.agent.exit_autonomous_mode()
     ctx.agent.goal_check_script = ""
+    # 立即实体化新会话（用户实锤 2026-09-23：清空后发消息「并没有开一个新的 session」——新 Session
+    # 此刻无目录无名，session 列表扫不到、events/toollog 未绑路径，要等首轮 _ensure_name 才落地；
+    # 用户在下拉框看到的还是旧会话名）。此处不等首轮：建目录 + 绑持久化路径 + 落首份 meta.json
+    # （name 字段由 save 兜底为 session_<ts>，不写回 self.name——首轮 LLM 自动命名仍会生效并覆盖）。
+    try:
+        ns = ctx.agent.session
+        ns._bind_persistence_paths()
+        ns.save()
+    except Exception as e:
+        print(f"⚠️ 新会话初始落盘失败（不影响使用，首轮后会自动重试）：{e}")
     print("🔄 已重置会话（历史、计划、自主模式均清空，system 保留）。")
 
 

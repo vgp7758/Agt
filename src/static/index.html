@@ -38,7 +38,7 @@
        百分比 min-width 在此上下文按 0 解析不生效；50vw≈msgArea 半宽（抽屉是 fixed 浮层不占流）。
       max-width:none（2026-09-20 v2）：解除通用 .bubble 的 85% 上限——bot 气泡填满 .turn，
       与 trace（width:100%）恒同宽；此前 .turn 被宽内容撑开时 bubble 被 85% 压住 → trace 宽出一截。 */
-    min-width: max(50vw, 300px); max-width:none; }
+    min-width: max(50vw, 300px); max-width:90vw; }
   /* 表格里的播放控件给足最小尺寸（用户提案 2026-09-18：窄列里播放按钮/进度条点不到）；
      全局面防溢出 */
   .bubble table audio, .bubble table video { min-width: 240px; }
@@ -3301,7 +3301,8 @@ function onWSMessage(ev){
           o.textContent = `${it.name} ${turnsText}${ts?` · ${ts}`:''}`;
           sel.appendChild(o);
         });
-        if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
+        if(window._curSid && sel.querySelector(`option[value="${window._curSid}"]`)) sel.value=window._curSid;   // 当前会话选中跟随（reset/resume 后下拉框指向新会话）
+        else if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
         else if(curVal && curVal!=='__new__' && sel.querySelector(`option[value="${curVal}"]`)) sel.value=curVal;
         // 初始化标题：如果有上次的存档或当前选中的值，用其 name 字段
         if(window._lastSaved){
@@ -3318,6 +3319,7 @@ function onWSMessage(ev){
       _histExpandFrom = m.expand_from || 0;
       _histTotal = m.total_turns || (m.turns||[]).length;
       _favs = new Set(m.favorites || []);   // 收藏表随会话载入（/api/favorite 持久化在 meta.json）
+      window._curSid = m.sid || null;       // 当前会话 id（reset/resume 后 sessions 重建时选中跟随）
       renderHistory(m.turns);
       addRow('sys', _histExpandFrom > 0
         ? `✅ 已恢复会话：${m.name}（显示最新 ${(m.turns||[]).length} 轮 / 共 ${_histTotal} 轮，更早的点击上方蓝字展开）`

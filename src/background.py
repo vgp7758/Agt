@@ -42,7 +42,8 @@ class ServiceManager:
         self._lock = threading.Lock()
         self._on_exit = on_exit   # 进程自行退出回调 on_exit(name, entry, rc)，由 Agent 注入（可 None）
 
-    def start(self, name: str, command: str, cwd: str = "", on_exit_wake: str = "never") -> str:
+    def start(self, name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
+              on_exit_style: str = "tool") -> str:
         with self._lock:
             if name in self._services:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
@@ -65,7 +66,8 @@ class ServiceManager:
         logs: collections.deque = collections.deque(maxlen=_LOG_CAP)
         entry = {"proc": proc, "command": command, "cwd": cwd,
                  "started_at": time.time(), "pid": proc.pid,
-                 "logs": logs, "manual_stop": False, "on_exit_wake": on_exit_wake}
+                 "logs": logs, "manual_stop": False,
+                 "on_exit_wake": on_exit_wake, "on_exit_style": on_exit_style}
         with self._lock:
             self._services[name] = entry
 

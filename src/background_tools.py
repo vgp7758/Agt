@@ -17,17 +17,23 @@ def make_background_tools(agent) -> list:
     svc = agent.services
     sch = agent.scheduler
 
-    def start_service(name: str, command: str, cwd: str = "", on_exit_wake: str = "never") -> str:
+    def start_service(name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
+                      on_exit_style: str = "tool") -> str:
         """后台启动一个长运行的服务（不阻塞）。用于把你写的后端跑起来做联调，
         如 `python app.py` / `npm run dev` / `python -m http.server 8000`。
         启动后其状态会自动出现在每轮系统提示里；用 service_logs 看输出、stop_service 停止。
         name 自取一个易记的名字，command 是 shell 命令。
-        on_exit_wake（自行退出时是否唤醒你处理，默认 never=仅登记、下次交互时并入）：
-        crash=异常退出(rc≠0)唤醒一轮处理、5分钟内同名连续崩溃自动退避为登记（防套娃）；
-        always=任何退出都唤醒（含正常退出，如单次任务跑完即报）。常驻关键服务建议 crash。
-        也可填一段自定义指令（非枚举的任意文本）：退出即无条件唤醒，指令原文注入通知——
-        你醒来直接看到自己启动时留的作业（如"查 result.txt 终局，报用户，先报结果等指示"）。"""
-        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake)
+        on_exit_wake（自行退出时是否唤醒你处理，默认 notify=通知进 inbox——持久化、
+        空闲时自动消费成轮、忙时排队到下一步边界；不打断进行中的轮）：
+        notify=进 inbox 保证可见不丢；never=仅内存登记（最安静，无自然轮则看不到）；
+        crash=异常退出(rc≠0)才唤醒+5分钟同名连续崩溃退避（防套娃，常驻关键服务建议）；
+        always=任何退出都通知（notify 同义）。
+        也可填一段自定义指令（非枚举的任意文本）：退出即通知，指令原文注入——
+        你醒来直接看到自己启动时留的作业（如"查 result.txt 终局，报用户，先报结果等指示"）。
+        on_exit_style（通知注入姿势，按实例可改，用户提案 2026-09-23）：
+        tool(默认)=合成 stop_service 工具记录（启动参数+退出码+尾部日志，信息最全）；
+        text=纯文本通知（轻量——仅 header+简要命令，不打工具记录）。"""
+        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake, on_exit_style=on_exit_style)
 
     def stop_service(name: str) -> str:
         """停止指定的后台服务（先 terminate，3 秒不退则 kill）。

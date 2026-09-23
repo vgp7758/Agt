@@ -1079,21 +1079,26 @@ class Agent:
                           "stop_service 工具结果注入供你查阅；注意这是服务自行退出，并非你主动 stop)"),
         }
         header = f"📨〔后台服务退出〕「{name}」已自行退出（{brief}）"
-        # 唤醒策略（start_service 启动参数 on_exit_wake——调用方最清楚服务的重要性，用户提案 2026-08-30）：
-        #   never(默认)  任何退出都登记不唤醒——一次性验证服务；下次自然轮以 seed 并入（防套娃）
-        #   crash        rc≠0 唤醒一轮（服务死了要人管）+ 退避：5 分钟内同名第二次异常降级登记
+        # 唤醒策略（start_service 启动参数 on_exit_wake——调用方最清楚服务的重要性）：
+        #   notify(默认) 通知进 inbox（持久化 inbox.jsonl，Agent 空闲时自动消费成轮；忙时排队到
+        #                下一步边界注入）——保证可见不丢，且不打断进行中的轮（用户裁定 2026-09-23：
+        #                默认从 never 翻转为 notify——旧 never 只进内存 _notices，若无自然轮永远看不到）
+        #   never        仅内存登记（_notices，不触发轮、不持久化）——下次自然轮以 seed 并入；最安静
+        #   crash        rc≠0 才进 inbox（服务死了要人管）+ 退避：5 分钟内同名第二次异常降级登记
         #                ——既保住"真正需要救"的场景，又封死套娃循环（通知→重启→又崩→又通知→♾️）
-        #   always       任何退出都唤醒（无退避，调用方明确要的——如单次任务型服务跑完即报）
-        #   其它非空串   自定义提示 + 无条件唤醒（用户裁定 2026-09-14·8000 实例实测）：LLM 常把
-        #                本参数当"退出时的返回提示"填自然语言指令（如"查 result.txt 终局、报用户，
-        #                先报结果等指示"）——旧实现静默丢弃按 never，意图落空；现在按调用方本意：
-        #                退出即唤醒，提示原文注入通知（Agent 醒来看到自己启动时留的指令照做）。
+        #   always       任何退出都进 inbox（notify 同义别名，历史枚举保留）
+        #   其它非空串   自定义提示 + 无条件进 inbox（用户裁定 2026-09-14·8000 实例实测）：LLM 常把
+        #                本参数当"退出时的返回提示"填自然语言指令——按调用方本意：退出即通知，
+        #                提示原文注入（Agent 醒来看到自己启动时留的指令照做）。
+        # 注入姿势（on_exit_style，用户提案 2026-09-23 按实例可改）：
+        #   tool(默认) 合成 stop_service 工具记录（启动参数+退出码+尾部日志——信息最全，现状形态）
+        #   text       纯文本通知消息（轻量——仅 header+简要，不打工具记录）
         # rc==0 正常退出清退避状态（服务活过一次，重新计崩窗）。
-        pol_raw = str(entry.get("on_exit_wake", "never") or "never").strip()
+        pol_raw = str(entry.get("on_exit_wake") or "notify").strip()
         pol = pol_raw.lower()
         custom_note = ""
         wake = False
-        if pol == "always":
+        if pol in ("notify", "always"):
             wake = True
         elif pol == "crash":
             if rc != 0:
@@ -1101,7 +1106,7 @@ class Agent:
                 wake = (now - self._crash_wake_ts.get(name, 0.0)) >= 300
                 self._crash_wake_ts[name] = now
         elif pol not in ("never", "") and pol_raw:
-            custom_note = pol_raw          # 非枚举非空 → 自定义提示（always 语义唤醒）
+            custom_note = pol_raw          # 非枚举非空 → 自定义提示（notify 语义进 inbox）
             wake = True
         if rc == 0:
             self._crash_wake_ts.pop(name, None)
@@ -1109,7 +1114,15 @@ class Agent:
             seed["result"] += (f"\n\n—— 启动时你留下的指令（on_exit_wake）——\n{custom_note}")
             seed["reasoning"] += f"（你启动该服务时留的指令：{custom_note[:300]}）"
             header += " ·附启动指令"
-        self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
+        # 注入姿势分流：text=纯文本轻量通知（不打工具记录）；tool/其它=合成 stop_service 记录（现状）
+        style = str(entry.get("on_exit_style") or "tool").strip().lower()
+        if style == "text":
+            self.push_message(
+                header + f"\n简要：rc={rc} · 启动命令：{entry.get('command', '')[:200]}"
+                + (f"\n—— 启动指令：{custom_note}" if custom_note else ""),
+                source=f"service_exit:{name}", seed=None, wake=wake)
+        else:
+            self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
 
     def _on_bg_task_done(self, bg_id: str, name: str, rc: int):
         """后台任务（run_python/run_shell 超时转后台）完成回调（real_tools._bg_reader 触发，

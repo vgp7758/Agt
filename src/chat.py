@@ -334,6 +334,15 @@ def restore_snapshot(agent, sha, git_policy="block"):
                     f"② 手动 git reset --hard {target_head[:10]} 后再回溯；③ 放弃回溯")
             user_repo_reset_hard(agent.snapshot_manager.workspace, target_head)
     agent.snapshot_manager.restore(sha)
+    # 回溯后重扫基线（用户提案 2026-09-23）：restore（git restore/reset --hard）会重写内容
+    # 有差异的文件 → mtime 全刷新；而 agent._fs_snap 还持有回溯前的旧快照 → 下一次工具调用
+    # 的变更检测（_diff_snapshots 纯 mtime 对比）会把被恢复的文件全部误报 modified
+    # （「本轮变更文件=全仓」）。回溯完成即把当前树重扫为最新基线——下一轮从零起步。
+    try:
+        from agent import _workspace_snapshot
+        agent._fs_snap = _workspace_snapshot()
+    except Exception:
+        agent._fs_snap = None   # 兜底置空：下次工具调用现扫（语义等价）
     return agent.session.restore_to_snapshot(sha)
 
 

@@ -1,0 +1,163 @@
+<workflow name="scnet_status" description="SCNet 各卡组容器状态巡检：哪些容器开着/关着、开着的在跑什么任务（自带 5 分钟 TTL 缓存，供 assembly 装配到上下文）">
+  <!-- 100001 开始：无必需入参（装配调用会带 prompt/agent_id，多余参数忽略） -->
+  <node id="100001" type="start">
+    <out name="prompt" type="string" required="false"/>
+  </node>
+
+  <!-- 200001 读 TTL 缓存（kv_cache_read → {hit, value}） -->
+  <node id="200001" type="plugin" title="kv_cache_read" toolName="kv_cache_read">
+    <in name="key" literal="scnet_status" type="string"/>
+    <in name="namespace" literal="v1" type="string"/>
+  </node>
+
+  <!-- 300001 判缓存新鲜度（TTL 300s） -->
+  <node id="300001" type="code" title="判缓存新鲜">
+    <in name="cache_raw" ref="200001.raw"/>
+    <code language="3"><![CDATA[
+import json, time
+
+async def main(args):
+    raw = args.params.get("cache_raw")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    hit = raw.get("hit")
+    val = raw.get("value")
+    fresh, text = False, ""
+    try:
+        if hit and val:
+            d = json.loads(val) if isinstance(val, str) else val
+            ts = float((d or {}).get("ts") or 0)
+            if time.time() - ts < 300 and (d or {}).get("text"):
+                fresh, text = True, d["text"]
+    except Exception:
+        fresh = False
+    return {"fresh": fresh, "text": text}
+    ]]></code>
+    <out name="fresh" type="boolean"/>
+    <out name="text" type="string"/>
+  </node>
+
+  <!-- 400001 分流：缓存新鲜 → 直接透传；否则实查 SCNet -->
+  <node id="400001" type="selector" title="缓存新鲜?">
+    <branch><cond op="11" left="300001.fresh"/></branch>
+  </node>
+
+  <!-- 真分支：透传缓存文本 -->
+  <node id="500001" type="code" title="透传缓存">
+    <in name="text" ref="300001.text" type="string"/>
+    <code language="3"><![CDATA[
+async def main(args):
+    return {"text": args.params.get("text") or ""}
+    ]]></code>
+    <out name="text" type="string"/>
+  </node>
+
+  <!-- 假分支：调 SCNet MCP 查实例列表 -->
+  <node id="600001" type="plugin" title="scnet_notebook" toolName="__mcp__scnet__scnet_notebook">
+    <in name="action" literal="list" type="string"/>
+  </node>
+
+  <!-- 700001 整形：卡组/开关状态/规格/任务线索 + 组缓存 payload -->
+  <node id="700001" type="code" title="整形状态文本">
+    <in name="raw" ref="600001.raw"/>
+    <code language="3"><![CDATA[
+import json, time
+
+async def main(args):
+    raw = args.params.get("raw")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    items = raw.get("data") or []
+    STATUS = {"Running": "🟢运行中", "Terminated": "⚫已关机", "Stopped": "⚫已关机",
+              "Creating": "🟡创建中", "Starting": "🟡启动中", "Stopping": "🟡停止中"}
+    lines, running = [], 0
+    for it in items:
+        st = str(it.get("notebookStatus") or "?")
+        if st == "Running":
+            running += 1
+        mark = STATUS.get(st, "❔" + st)
+        name = it.get("notebookName") or "?"
+        img = (str(it.get("imageName") or "").split(":")[0])[:44]
+        grp = it.get("resourceGroupId") or "?"
+        acc = "%s卡/%s/%s" % (it.get("acceleratorNumber") or 1, it.get("cpuNumber") or "?",
+                              it.get("ramSize") or "?")
+        upd = str(it.get("updateTime") or "")[5:16]
+        cmd = str(it.get("command") or "").strip()
+        duty = ""
+        if "monitor.py" in cmd:
+            seg = ""
+            if "--ids" in cmd:
+                seg = cmd.split("--ids", 1)[1].split("--")[0].strip().strip(",")
+            n = len([x for x in seg.split(",") if x.strip()])
+            duty = " · 在跑 monitor（%s）" % ("监控 %d 个任务" % n if n else "常驻监控")
+        elif "comfy" in cmd.lower():
+            duty = " · 在跑 ComfyUI 服务"
+        elif cmd:
+            duty = " · 命令: " + cmd[:80]
+        lines.append("  卡组%s %s %s（%s · %s · 更新%s）%s" % (grp, mark, name, acc, img, upd, duty))
+    if not lines:
+        text = "（SCNet 当前区域无实例）"
+    else:
+        head = "[SCNet 容器状态 · %s] 共 %d 个实例，运行中 %d 个" % (
+            time.strftime("%m-%d %H:%M"), len(items), running)
+        tail = ("（有运行中实例：可用 scnet_comfy(action='stats') / scnet_monitor(action='status') "
+                "查其内部任务详情）") if running else "（当前无运行中实例）"
+        text = head + "\n" + "\n".join(lines) + "\n" + tail
+    payload = json.dumps({"ts": time.time(), "text": text}, ensure_ascii=False)
+    return {"status_text": text, "cache_payload": payload}
+    ]]></code>
+    <out name="status_text" type="string"/>
+    <out name="cache_payload" type="string"/>
+  </node>
+
+  <!-- 710001 写回缓存 -->
+  <node id="710001" type="plugin" title="kv_cache_write" toolName="kv_cache_write">
+    <in name="key" literal="scnet_status" type="string"/>
+    <in name="namespace" literal="v1" type="string"/>
+    <in name="value" ref="700001.cache_payload"/>
+  </node>
+
+  <!-- 720001 透传新查文本 -->
+  <node id="720001" type="code" title="透传新查">
+    <in name="text" ref="700001.status_text" type="string"/>
+    <code language="3"><![CDATA[
+async def main(args):
+    return {"text": args.params.get("text") or ""}
+    ]]></code>
+    <out name="text" type="string"/>
+  </node>
+
+  <!-- 320001 汇合两分支 -->
+  <node id="320001" type="aggregator" title="汇合">
+    <group name="result">
+      <var ref="500001.text"/>
+      <var ref="720001.text"/>
+    </group>
+  </node>
+
+  <node id="900001" type="end">
+    <out name="result" ref="320001.result"/>
+  </node>
+
+  <edge from="100001" to="200001"/>
+  <edge from="200001" to="300001"/>
+  <edge from="300001" to="400001"/>
+  <edge from="400001" to="500001" port="true"/>
+  <edge from="400001" to="600001" port="false"/>
+  <edge from="600001" to="700001"/>
+  <edge from="700001" to="710001"/>
+  <edge from="710001" to="720001"/>
+  <edge from="500001" to="320001"/>
+  <edge from="720001" to="320001"/>
+  <edge from="320001" to="900001"/>
+</workflow>

@@ -78,6 +78,25 @@
 
 **调试插曲**：① 前端 JS 误用 Python 风格 `#` 注释会炸掉整个 script 块——node --check 抓出改 `//`（py_auto_diag 只查 .py 看不到）；② 测试 stub 用 `[]` 冒充 queue → `.put_nowait` 抛 AttributeError 被 `_broadcast` 的 `except` 吞 → 事件全丢、测试假失败，换真 `queue.Queue` 后 6 场景全绿。
 
+## /reset 清空后新会话立即可见 + 会话下拉框跟随当前会话（2026-09-23，用户实锤，commit 3350a68）
+
+**用户实锤（2026-09-23）**：「点清空按钮后发送信息的时候，并没有开一个新的 session」——下拉框还显示旧会话名。
+
+**根因**：`/reset`（清空按钮背后的命令，`_cmd_reset`）构造的新 Session 此刻**无目录、无名**——events/toollog 未绑路径、meta.json 未落盘；而 session 列表是**扫目录**的 → 扫不到新会话；要等**首轮回答完成后** `_ensure_name`（LLM 自动命名）才实体化。期间下拉框显示的还是旧会话。
+
+**修复四处，全链路做实**（commit `3350a68`）：
+
+| 位置 | 改动 |
+|---|---|
+| `commands._cmd_reset` | set_session 后**立即** `_bind_persistence_paths()` + `save()`——新会话目录即刻创建、events/toollog/llm_calls 就位、meta 落盘（name 兜底 `session_<ts>`，**不写回 `self.name`**——首轮 LLM 自动命名仍会生效改名） |
+| `server._sync_new` | 补发 `sessions` 列表广播——新会话**立刻**出现在下拉框 |
+| `server._history_event` | 新增 `sid` 字段（session 目录名） |
+| `index.html` | `session_history` 存 `_curSid`；sessions 重建后**优先选中当前会话**——reset/resume 均跟随（此前下拉框从不跟随当前会话，顺手治了这个老毛病） |
+
+**效果**（`/restart` 后）：点 🚮 清空 → 会话目录实体创建（列表马上可见）→ 下拉框自动选中新会话（先显示 `session_<ts>`，首轮答完变语义名）→ 发消息 events 直接写进新目录（不再走缓冲）。
+
+**验证**：JS 语法 1/1 · 结构断言 3 项 · py 编译 ×2 全过。
+
 ## Agent 专属页 URL 路由 · /agents/&lt;agent_id&gt; 直接落位（2026-08，commit 5393ee4；修复 c819618）
 
 > src/server.py（路由）+ src/static/index.html（URL 解析与同步）。同一服务多个 Agent 各有一个专属对话页——URL 直接编码交互目标：`/agents/_main_` 主 Agent、`/agents/wiki-updater_3` 各子 Agent；裸 `/` 默认主 Agent。**刷新/分享/收藏自动落在对应视图**，不再只靠 sessionStorage（它记不住跨页签/新设备）。

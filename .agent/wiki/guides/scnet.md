@@ -681,6 +681,32 @@ pip install mcp websocket-client
 - 存储配额查询：直接组合 `scnet_jupyter(exec: df -h /public/home/<user>)`
 - 模型记录删除：平台 API/ UI 均未找到入口（文件可 SSH rm，记录留着自锁无害）
 
+## 跨全区域容器状态：网页控制台 cookie 通道 + scnet_web_status 工具（2026-09-23，用户实测，commit fea0a20）
+
+**背景（2026-09-23，用户在网页控制台 `#/notebook` 实测）**：用户看到**山东 016 组有容器在跑**（id `2102726481157640194`），而 v1/v2 状态查询工作流走的 MCP `scnet_notebook`（AK/SK 通道）**强制单区域**（clusterId）——非昆山区域一律报 `818218 计算用户不存在`，山东/华中的实例全都看不到。
+
+**根因：两条完全不同的 API 通道**（playwright 注入登录 cookie 抓页面真实请求实锤）：
+
+| 通道 | 鉴权 | 行为 |
+|---|---|---|
+| MCP `scnet_notebook`（AK/SK） | AK/SK + **必带 clusterId** | 单区域；跨区报 818218 |
+| **网页控制台 `#/notebook`** | **cookie** | `/acx/aimgt/notebook/list` **不带 clusterId → 跨全部区域** |
+
+```
+GET /acx/aimgt/notebook/list?page=1&size=N&showGroupJob=false     # 跨区域实例清单
+GET /acx/operation/resource/group/detail/list/all?clusterIds=…    # 各卡组（资源组）可用卡
+```
+
+**交付（v3，commit `fea0a20`）**：
+
+- 新工具 `tools/builtin/scnet_web_tools.py` → **`scnet_web_status()`**：直调上两接口，一次拿到全部区域容器状态 + 各卡组可用卡；cookie 来源 `$SCNET_COOKIE_FILE` → `~/.agt/scnet_cookie.json`（浏览器登录态导出）。**⚠️ cookie 登录态会过期**——过期后需重新从浏览器导出
+- **状态工作流 v3**：单 plugin 节点替代 v2 的三区 MCP 查询（更快更全），TTL 缓存 5 分钟不变
+- 用户给的 id 就在返回里：`🟢运行中 组16 2609231947145259（1gpu/7核心/245GB · jupyterlab-pytorch）`，clusterId=**20057（华东四区【山东】）**，组16=nva800normal（**A800**，当时 0/8 可租——被该实例占满）
+
+**实测输出样例**（09-23 23:36）：16 实例/运行中 1 个；山东 组16 A800 运行中；华中A 13 个（已关机/镜像拉取失败）；昆山 组15 在跑 monitor 监控；卡组可用卡（昆山 组12 L20 0/8 · 组13 4090 2/4 · 组21 DCU 4/4 · 山东 组96 A800 1/8 · 四川 组97 DCU 8/8 · 华中A 组113 BW 8/8 · **免费卡时余额 46.78**）。
+
+**部署**：8000 实例工具+工作流 v3 已拷入 + `reload_hot`（50 工具）+ 独立 debug 10 节点全绿；assembly 装配项不变（`- workflow: scnet_status / every: turn / mode: reminder`）——下一轮投影即带跨区域状态。本 repo 同样保留（其它实例可拷用）。区域 id 对照：**20057=华东四区【山东】、20091=华中A、11250=昆山**。
+
 ## 关机与生命周期 API（cookie 通道）
 
 **关机 / 开机（stop / restart）——三套路由里只有一套能用，2026-09-14 抓包实锤**

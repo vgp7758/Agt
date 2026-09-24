@@ -31,6 +31,43 @@ grep(pattern, path=".", glob="", context=0, max_results=?, regex=True)
 
 **显式进排除区 → 豁免**：默认搜索（path="."）跳过排除项；但**显式指定**（`path="blog"`、单文件路径）命中排除区时尊重意图照搜——只硬排 .git/__pycache__（本 repo 的 blog/、models.py、design/ 都在 gitignore 里，显式指定是唯一搜法）。`path` 是**文件**时也只搜该文件（显式意图不过滤）。
 
+## 扫描预算四层防护：.agt 硬排除 + 2MB 上限 + 二进制检测 + 25s/3 万文件预算（2026-09-23，用户实锤 8000 阻塞，commit bb89a97）
+
+**事件（2026-09-23，8000 实例）**：整个实例「被阻塞」——HTTP/WS 假死、`/api/status` 超时、events/llm_calls 停摆 30+ 分钟。py-spy 线程栈实锤：agent 在 explore 里调了 `grep(pattern="assembly", path=".")`，卡在逐文件读盘（`dirpath: comfy\tools\builtin`，已扫过 `.agt`）。
+
+**根因链**（四个「无」叠加）：
+
+```
+comfy\.agt\snapshots = 框架快照 git 对象库（3273 文件 / 12GB 二进制）
+  ✗ 不在 _HARD 排除集（当时只有 .git/__pycache__/node_modules/.venv/venv）
+  ✗ 无单文件大小上限 → 逐文件 read_text 全读
+  ✗ 无二进制检测 → git 对象（无扩展名）当文本读
+  ✗ 无扫描预算 → 无界扫盘
+  → 单次 grep 跑 30+ 分钟；读盘+正则持续持 GIL → 事件循环 GIL 饥饿 → HTTP/WS 假死
+```
+
+讽刺的是 `.agt` 正是本框架自己的快照仓库——gitignore 通常 ignore 它，但 `.agt` 目录内容并不受嵌套 repo 剪枝保护（快照仓库在 workspace 内部）。
+
+**修复四层防护**（src/real_tools.py，commit `bb89a97`）：
+
+| 防护 | 内容 |
+|---|---|
+| 硬排除 | `_HARD` 增 **`.agt`**（+ `.mypy_cache`/`.pytest_cache`/`.ruff_cache`/`.cache`）；`dir_outline` 硬排除集同步补 |
+| 单文件上限 | `_MAX_FILE_BYTES = 2MB`，超限跳过（源码搜索不需要大文件；防大媒体/对象库） |
+| 二进制检测 | 文件首 4KB 含 `\x00` → 跳过（git 对象/媒体一网打尽） |
+| 扫描预算 | `_GREP_MAX_SCAN = 30000` 文件 / `_GREP_DEADLINE_S = 25s` 墙钟 → 超限**返回已扫部分**（不空手而归） |
+
+结果尾部**明确披露**（不再静默截断）：
+
+```
+...（扫描预算耗尽：扫描耗时超预算 25s；结果可能不全——收紧 path/glob 范围后重试）
+（跳过 12 个 >2MB 大文件、3273 个二进制文件）
+```
+
+**验证**（临时 workspace 复刻现场）：`.agt` 二进制对象（内含 pattern 5000 次）不再进结果 ✓；3MB 大文件跳过并提示 ✓；真命中完整保留 ✓。
+
+**8000 实例处置**（同轮）：taskkill 卡死旧进程 → detached 拉起 `agt-web 8000 --resume`——858 轮会话完整恢复、`/api/status` 0.1s 响应（修复前超时）、busy 自动续跑；重启后跑的就是带防护的新代码。
+
 ## 与其他搜索能力的分工
 
 | 需求 | 工具 |

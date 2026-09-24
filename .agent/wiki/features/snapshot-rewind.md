@@ -33,6 +33,27 @@ git restore --source=<tree> --staged --worktree -- .
 
 附带收益：rewind 之后 tools 热重载、静态页 mtime 缓存、编辑器断点等一切依赖 mtime 的机制不再被整批误判失效。
 
+## 回溯后重扫变更检测基线：_fs_snap 立即刷新——「变更文件=全仓」误报根除（2026-09-23，用户提案，commit 02e6530）
+
+**用户提案（2026-09-23）**：「rewind 之后所有文件最后修改日期都更新了，下一轮对话时的变更文件会看到全部文件都变了——应该 rewind 后重新把当前 repo 状态的文件快照扫一遍作为最新状态。」
+
+前一章修复只解决了「restore 自己少碰文件」（内容没变的不再重写），但**内容有差异的文件仍会被重写 → mtime 刷新**——这是文件还原的物理必然。而下一轮「📎 本轮变更文件」的变更检测基线 `agent._fs_snap` 还持有**回溯前的旧快照**：下一次工具调用做纯 mtime 对比（`_diff_snapshots`）时，被恢复的文件全部误报 `modified` → 「本轮变更文件=全仓」。回溯多轮时尤其壮观。
+
+**修复**（src/chat.py `restore_snapshot` 统一入口，commit `02e6530`）：
+
+```python
+agent.snapshot_manager.restore(sha)
+# 回溯后重扫基线：restore 会重写内容有差异的文件 → mtime 全刷新；而 _fs_snap
+# 还持有回溯前旧快照 → 下次工具调用把被恢复文件全部误报 modified。回溯完成
+# 即把当前树重扫为最新基线——下一轮从零起步。
+agent._fs_snap = _workspace_snapshot()   # 异常兜底置 None：下次工具调用现扫（语义等价）
+return agent.session.restore_to_snapshot(sha)
+```
+
+`/rewind` 与 `/snapshot restore` 共用此入口——**一处修复全覆盖**。几百文件重扫毫秒级。
+
+**验证**（临时 workspace 复现）：改/增/删三文件后 restore → 旧基线对比误报 3 个假变更（含「f0.txt modified」——rewind 恢复它时重写了内容，正是用户看到的现象）；修复后 `restore_snapshot` 完成 → `_fs_snap` 立即刷新 → 下轮对比只报真实改动。`/restart` 生效。
+
 ## 撞车：检查点之后有 git 提交（用户提案 2026-09-06）
 
 回溯只还原工作区 + 截对话，HEAD 不受影响。若检查点之后用户真仓库有提交 →「session 在过去、git 历史在未来」分裂：之后任何 `add -A` 都会把回溯差异整笔提交。

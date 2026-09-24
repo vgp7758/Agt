@@ -429,11 +429,35 @@ _inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
 | 工具 | 语义 | 落盘 |
 |------|------|------|
 | agent_ask | 无状态询问（对方上下文快照+问题→LLM→回你） | 否 |
-| agent_notify | 有状态提示（入对方 inbox，等效用户插话） | 是 |
+| agent_notify | 有状态提示；**忙闲分流**（2026-09-24 起）：忙（running/busy）=插话入队（等效用户插话）、空闲=直接唤醒一轮 run 消费——见 [agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5) | 是 |
 | agent_query_events / _tool_detail | 只读查对方轮次/工具调用详情（历史 Agent lazy load） | — |
 | list_team | 团队清单（exclude 自己） | — |
 
 通信工具的 `target_id` 动态注入 enum（registry 当前全部 agent_id，作提示性候选）——见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)。
+
+## agent_notify 忙闲分流：空闲直接唤醒一轮（2026-09-24，用户裁定，commit cdb13c5）
+
+**用户裁定（2026-09-24，commit `cdb13c5`）**：「agent_notify 的消息在那个 sub-agent 的空闲时直接唤醒一轮 run 倒是也合理」——notify 的本意是「**让对方看到**」；空闲时没人会消费队列，唤醒一轮才是完整语义（原语义下空闲 agent 的提示要悬挂到下次被外部触发才被看到）。
+
+**新语义（忙闲分流）**：
+
+```
+agent_notify(target_id, message)
+   ├─ 忙（running/busy）→ 插话入队（原语义不变——下一步边界注入，落盘）
+   └─ 空闲            → 直接触发一轮 run 消费该提示
+                         （消息作为本轮 user_message——与 WS 直连路径
+                          _handle_user_input 空闲分支完全同构）
+```
+
+返回文案区分结果：`✅ 插话排队…` / `🔔 空闲——已唤醒一轮直接处理（不再排队悬挂）`。
+
+**实现要点**（src/multiagent.py）：
+
+- **裸线程跑子 Agent 的 run**——与 agent_prompt 的 `_bg` 同款：子 Agent 独立实例、不与主 run 共享 session，线程安全
+- **事件流临时接通**：`on_event` 挂主 broadcast 带 agent_id 分发——被唤醒轮的执行过程在对应客户端实时可见，跑完恢复
+- **registry 状态流转**：先标 running 占位防并发派单，跑完回落 done（团队看板准确）
+
+**兼容**：kefu_gate 的悬挂兜底保留为兼容层——新语义下 notify 空闲直达，兜底分支自然不再触发（忙时排队后的消费检测依然有效）。`/restart` 生效。
 
 ## wait_subagents：干等调查与诊断埋点（2026-08，commit 22cf719）
 

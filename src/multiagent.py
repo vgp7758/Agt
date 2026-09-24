@@ -552,9 +552,12 @@ def make_communication_tools(agent) -> list:
             return f"[询问失败] {type(e).__name__}: {e}"
 
     def agent_notify(target_id: str, message: str) -> str:
-        """向另一个活跃 Agent 发送有状态提示：等效于用户插话，消息插入对方的待处理队列。
-        对方会在下一步边界看到这条提示（与用户插话机制完全相同），且会被记录到其 session 中并落盘。
-        适合需要对方记住的信息（如"我改了 xxx 文件"）。target_id: 目标 agent_id；message: 提示内容。"""
+        """向另一个活跃 Agent 发送有状态提示，并保证被看到：
+        忙（running/busy）→ 插话入队，对方下一步边界看到（与用户插话同机制，落盘）；
+        空闲 → 直接触发一轮 run 消费该提示（用户裁定 2026-09-24：notify 的本意是
+                "让对方看到"——空闲时没人会消费队列，唤醒一轮才是完整语义；与 WS
+                直连路径（_handle_user_input 空闲分支）同构：消息作为本轮 user_message）。
+        target_id: 目标 agent_id；message: 提示内容。"""
         if not reg:
             return "(多 Agent 通信未启用：无 registry)"
         entry = reg.lookup(target_id)
@@ -564,11 +567,30 @@ def make_communication_tools(agent) -> list:
         target_agent = entry.agent
         if target_agent is None:
             return f"[错误] '{target_id}' 的 Agent 实例不可用"
-        try:
-            target_agent.queue_user_message(f"[来自队友 '{agent.agent_id}' 的提示] {message}")
-            return f"✅ 已向 '{target_id}' 发送提示，对方下一步边界会看到。"
-        except Exception as e:
-            return f"[发送失败] {type(e).__name__}: {e}"
+        _msg = f"[来自队友 '{agent.agent_id}' 的提示] {message}"
+        if entry.status == "running" or getattr(target_agent, "busy", False):
+            try:
+                target_agent.queue_user_message(_msg)
+                return f"✅ 已向 '{target_id}' 插话排队，对方下一步边界会看到。"
+            except Exception as e:
+                return f"[发送失败] {type(e).__name__}: {e}"
+        # 空闲 → 唤醒一轮直接消费（裸线程与 agent_prompt 的 _bg 同款：子 Agent 独立实例，
+        # 与主 Agent run 不共享；事件流临时接通 broadcast（带 agent_id 分发），跑完恢复
+        # 并回落 registry 状态）。
+        reg.update_status(target_id, "running")
+        def _run_sub(_a=target_agent, _t=_msg):
+            _old = getattr(_a, "on_event", None)
+            _a.on_event = agent.on_event
+            try:
+                _a.run(_t)
+            except Exception:
+                pass
+            finally:
+                _a.on_event = _old
+                reg.update_status(target_id, "done")
+        import threading as _th
+        _th.Thread(target=_run_sub, daemon=True).start()
+        return f"🔔 '{target_id}' 空闲——已唤醒一轮直接处理该提示（不再排队悬挂）。"
 
     def agent_query_events(target_id: str, count: int = 5) -> str:
         """查询另一个活跃 Agent 的最近 N 条对话事件（只读）：每轮的用户消息摘要 + 工具调用名 + 回答摘要。

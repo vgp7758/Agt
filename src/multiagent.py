@@ -1093,6 +1093,13 @@ def make_subagent_tools(agent) -> list:
                     _want = agent_id.strip()
                     same = [e for e in reg._agents.values()
                             if e.agent_id == _want and e.role == "subagent"]
+                    # 人设锁定（50052 淘宝店演练实锤 2026-09-24）：同一 agent_id 二次派单若换了 name
+                    # （人设），会往同一条会话线里塞进另一个人设的历史（人设串台污染）。一经创建即锁定，
+                    # 异名派单直接拒绍——SOP 之外的兜底（kefu_<cid> 必须始终用 name="kefu"）。
+                    if same and same[0].name != name:
+                        return (f"[拒绍] agent_id='{_want}' 已绑定人设 '{same[0].name}'，本次传入"
+                                f" name='{name}' 不一致——同一实例线的 name 必须恒定（防人设串台）。"
+                                f"请改用 name='{same[0].name}'，或换一个 agent_id。")
                 live = [e for e in same if e.agent is not None and e.status != "reviving"]
                 hist = [e for e in same if e.agent is None and e.status != "reviving"]
                 if live:

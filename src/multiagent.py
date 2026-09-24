@@ -864,10 +864,14 @@ def make_subagent_tools(agent) -> list:
         return f"✅ 已删除子 Agent '{name}'"
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
-                     assembly: str = "", caller: str = "", context_messages: str = "") -> str:
+                     assembly: str = "", caller: str = "", context_messages: str = "",
+                     current_turn_only: bool = True) -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
+        current_turn_only: 投影隔离（默认 True=复用模式只投影当前轮，历史轮归档不进上下文）。
+                长对话型实例（如按客户分线的客服）传 False：完整装配 history——该实例自己的
+                会话历史就是它的记忆（跨轮连续），配合显式 agent_id 定向复用即"每客户一条线"。
         context_messages: 【一次性前置上下文】JSON 数组 [{"role","content"},...]——投影时展开在
                 本轮 user_message 之前（结构化角色消息：还原的历史对话/工作记录），轮结束即焚
                 （不落 turns、复用实例下一轮不带）——适合"把一批历史记录交给子 Agent 消费"的场景
@@ -1081,6 +1085,14 @@ def make_subagent_tools(agent) -> list:
             with reg._lock:
                 same = [e for e in reg._agents.values()
                         if e.name == name and e.role == "subagent"]
+                # 定向复用（用户提案 2026-09-24·淘宝客服按客户分线）：显式 agent_id = 定向到该实例——
+                # 匹配集从「同 name 全体」收窄为「该 agent_id」，杜绝同 name 多实例（多条客户线）时
+                # 按「最近注册的空闲」复用到别的线（任务书串台）。agent_id 不在 registry 时 same 为空
+                # → 落到新建路径（_resolve_agent_id 用显式 id → 每客户一条实例线，重启后按同 id 复活）。
+                if (agent_id or "").strip():
+                    _want = agent_id.strip()
+                    same = [e for e in reg._agents.values()
+                            if e.agent_id == _want and e.role == "subagent"]
                 live = [e for e in same if e.agent is not None and e.status != "reviving"]
                 hist = [e for e in same if e.agent is None and e.status != "reviving"]
                 if live:
@@ -1099,7 +1111,7 @@ def make_subagent_tools(agent) -> list:
                     _hist_entry = max(hist, key=lambda e: e.registered_at)
                     reg.update_status(_hist_entry.agent_id, "reviving")
             if entry is not None:
-                entry.agent.session.current_turn_only = True   # 保证投影隔离（旧实例可能未设）
+                entry.agent.session.current_turn_only = bool(current_turn_only)   # 复用路径同样按参数（默认 True 保持原语义；False=完整装配 history——长对话型实例如客服）
                 entry.agent.session.set_assembly_plan(base_asm)  # assembly：声明基线清单 + 参数覆盖（本次生效）
                 if base_hooks is not None:
                     entry.agent.session.hook_specs = base_hooks
@@ -1113,6 +1125,8 @@ def make_subagent_tools(agent) -> list:
                 entry = max(hist, key=lambda e: e.registered_at)
                 revived = _revive_subagent(agent, reg, entry, caller_id, prompt)
                 if revived is not None:
+                    sub_agent, model_name, sub_dir = revived
+                    sub_agent.session.current_turn_only = bool(current_turn_only)   # _revive 内默认 True；按参数覆盖（客服线复活也要完整记忆）
                     sub_agent, model_name, sub_dir = revived
                     sub_agent.session.set_assembly_plan(base_asm)   # assembly：复活路径同样应用（声明基线 + 参数覆盖）
                     if base_hooks is not None:
@@ -1154,7 +1168,7 @@ def make_subagent_tools(agent) -> list:
             sub = SubAgent(name, model_name, system, toolbox,
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
-                           caller_id=caller_id, current_turn_only=reuse,
+                           caller_id=caller_id, current_turn_only=(reuse and bool(current_turn_only)),
                            assembly=(base_asm or None))
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks
@@ -1225,7 +1239,9 @@ def make_subagent_tools(agent) -> list:
     tools_list = [Tool(create_agent), Tool(kill_agent),
                   Tool(agent_prompt, param_schemas={
                       "reuse": {"type": "string", "enum": ["yes", "no"],
-                                "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"}}),
+                                "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"},
+                      "current_turn_only": {"type": "boolean",
+                                "description": "投影隔离：True(默认)=复用模式只投影当前轮；False=完整装配 history（长对话型实例如按客户分线的客服——传 False 且带固定 agent_id 即每客户一条记忆线）"}}),
                   Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)

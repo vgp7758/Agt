@@ -365,6 +365,21 @@ function flowOutPosFor(n, portID, fallbackIdx){
 
 // 插件节点(type4)：若 inputParameters/outputs 为空，按 AGENT_TOOLS 中该工具的 schema 补全。
 // 解决模型只写 toolName 没写输入字段、或用 MCP 工具时编辑器显示空的问题。保留已有字段（含连线）。
+// 节点插件（非 type4）：按插件注册的 params[].options 推导 enum，同步到 inputParameters 同名字段
+// ——画布内嵌控件读 p.enum 渲染 select（L879 分支）；无 options 的参数不动。存量节点打开时自动补。
+function syncPluginEnums(n){
+  const def = (typeof NODE_PLUGINS!=='undefined') && NODE_PLUGINS[n.type];
+  if(!def || !Array.isArray(def.params)) return;
+  const ps = n.data.inputs && n.data.inputs.inputParameters;
+  if(!Array.isArray(ps)) return;
+  def.params.forEach(p=>{
+    if(!Array.isArray(p.options) || !p.options.length) return;
+    const tp = ps.find(x=>x.name===p.key);
+    if(!tp) return;
+    const en = p.options.map(o=>Array.isArray(o)?String(o[0]):String(o));
+    if(en.length) tp.enum = en;
+  });
+}
 function syncToolNode(n){
   if(n.type!=='4' || !n.data.toolName) return;
   const t=AGENT_TOOLS.find(x=>x.name===n.data.toolName);
@@ -3128,6 +3143,7 @@ async function openWf(name){
   WF.edges=r.canvas.edges||[];
   WF.nodes.forEach(syncToolNode);   // 插件节点按 toolName schema 补全空输入/输出字段
   WF.nodes.forEach(syncPluginOutputs);   // 节点插件默认 outputs 补齐（手写 XML/旧存档无 <out> 声明 → 端口丢失）
+   WF.nodes.forEach(syncPluginEnums);     // 节点插件 params[].options → inputParameters[].enum（内嵌控件渲染下拉，用户实锤 agg 曾是文本框）
   // 子工作流节点按目标工作流 schema 同步输入/输出字段（保留已连的线）
   Promise.all(WF.nodes.filter(n=>n.type==='9'&&n.data.inputs?.workflowId).map(syncSubworkflowNode)).then(()=>{autoLayout(true);if(selNode)showProps();});
   document.getElementById('fileSel').value=name;

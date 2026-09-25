@@ -8,7 +8,8 @@ EdFW.register({
              inputs: {inputParameters: [
                         {name: "text", input: {type: "string", value: {type: "literal", content: ""}}},
                         {name: "group_max_chars", input: {type: "number", value: {type: "literal", content: "600"}}},
-                        {name: "agg", input: {type: "string", value: {type: "literal", content: "max"}}},
+                        {name: "agg", input: {type: "string", value: {type: "literal", content: "max"}},
+                         enum: ["max", "min", "avg"]},
                         {name: "early_threshold", input: {type: "number", value: {type: "literal", content: "0"}}},
                         {name: "temperature", input: {type: "number", value: {type: "literal", content: "1.0"}}}],
                       questions: [{name: "敏感", text: "文本中出现了敏感词。"},

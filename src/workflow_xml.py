@@ -383,6 +383,11 @@ def _node_to_json(nd) -> dict:
         # 第一个值非空分组的 0 起序号（调试观测哪个分支端口拿到值），全空=-1
         if not any(o.get("name") == "index" for o in out):
             out.append({"name": "index", "type": "integer"})
+    elif ntype == "jev_batch_judge":     # Jev 批量判断（2026-09-25）：<in text/> + <question name>命题</question>
+        inp["inputParameters"] = [_in_param(i) for i in nd.findall("in")]
+        inp["questions"] = [{"name": q.get("name") or f"q{i+1}",
+                             "text": (q.text or "").strip()}
+                            for i, q in enumerate(nd.findall("question"))]
     elif ntype in ("22", "intent_nano"):     # intent：<in query/> + <intent name>描述体</intent> + <param/>（systemPrompt等）+ <model/>
         # intent_nano（NanoJev 判别式加强版，2026-09-22）：同款 XML 形态；描述体作为
         # criteria 语义描述存活往返（内置 22 的提示词也可用描述体，向后兼容——旧档无体则空）
@@ -753,6 +758,15 @@ def _node_to_xml(n):
                 else:
                     vs += f'<var literal={_qa(_lit_of(v.get("value", v)))} type={_qa(vt)}/>'
             inner.append(f'<group name={_qa(gname)} type={_qa(gtype)}>{vs}</group>')
+    elif ntype == "jev_batch_judge":
+        # 判断题（题名 + 命题文本；空体往返为自闭合——与 intent 描述体同款约定）
+        inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
+        for q in inp.get("questions", []):
+            body = (q.get("text") or "").strip()
+            if body:
+                inner.append(f'<question name={_qa(q.get("name",""))}>{_xml_escape(body)}</question>')
+            else:
+                inner.append(f'<question name={_qa(q.get("name",""))}/>')
     elif ntype in ("22", "intent_nano"):
         inner.extend(_in_to_xml(p) for p in inp.get("inputParameters", []))
         for p in inp.get("llmParam", []):

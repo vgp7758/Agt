@@ -1,0 +1,25 @@
+<workflow name="jev_judge_test" description="Jev批量判断节点实测：长文本分组→NanoJev命题判断→聚合（全量模式）">
+  <node id="100001" type="start">
+    <out name="text" type="string" required="true"/>
+  </node>
+  <node id="170001" type="jev_batch_judge" title="Jev批量判断">
+    <in name="text" ref="100001.text"/>
+    <in name="group_max_chars" type="number">600</in>
+    <in name="agg" type="string">max</in>
+    <in name="early_threshold" type="number">0</in>
+    <question name="违规">文本中出现了违规词（如内部转让、代刷单）。</question>
+    <question name="天气">文本中讨论了天气。</question>
+    <out name="results" type="object"/>
+    <out name="max_agg" type="number"/>
+    <out name="hit" type="string"/>
+    <out name="raw" type="string"/>
+  </node>
+  <node id="900001" type="end">
+    <out name="results" ref="170001.results"/>
+    <out name="max_agg" ref="170001.max_agg"/>
+    <out name="hit" ref="170001.hit"/>
+    <out name="raw" ref="170001.raw"/>
+  </node>
+  <edge from="100001" to="170001"/>
+  <edge from="170001" to="900001"/>
+</workflow>

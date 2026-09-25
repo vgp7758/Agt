@@ -1350,7 +1350,11 @@ async def main(args: Args) -> Output:
 // 在 (x,y) 创建基本节点；x/y 为空时按序排
 function createBasicNode(type,x,y){
   const n={id:genId(),type,x:(x!=null?x:150+WF.nodes.length*25),y:(y!=null?y:120+WF.nodes.length*25),w:210,h:80,data:JSON.parse(JSON.stringify(NODE_TEMPLATES[type]||{}))};
-  WF.nodes.push(n);return n;
+  WF.nodes.push(n);
+  // 新建即同步 enum（用户实锤 2026-09-25：新建的 jev 节点仍是文本框——defaults 或
+  // 浏览器缓存的旧插件 js 可能没带 enum；从 NODE_PLUGINS 的 params[].options 现推兜底）
+  try{syncPluginEnums(n);}catch(e){}
+  return n;
 }
 
 // ============ 节点选择浮窗（拖线到空白/双击空白弹出）============
@@ -2205,6 +2209,13 @@ function _litControlHTML(f,i){
   const _eb=_effInput(f);   // type20 读 right
   const t=_eb.type||'string';
   const cur=String(_eb.value?.content ?? '');
+  // enum 参数 → 下拉（用户实锤 2026-09-25：值按钮展开的编辑控件此前恒为文本框，
+  // 与画布内嵌控件/类型无关——enum 是比 type 更精确的控件提示）
+  if(Array.isArray(f.enum)&&f.enum.length){
+    return `<select style="width:140px" onchange="updateLitVal(${i},this.value)">`
+      +f.enum.map(ev=>`<option value="${ext(String(ev))}"${String(cur)===String(ev)?' selected':''}>${ev===''?'（跟随）':ext(String(ev))}</option>`).join('')
+      +`</select>`;
+  }
   if(t==='boolean')return `<input type="checkbox"${(cur==='true'||cur===true)?' checked':''} onchange="updateLitValB(${i},this.checked)" style="width:auto"> <span style="color:#8a9099">true / false</span>`;
   if(['integer','number','float'].includes(t))return `<input type="number" value="${ext(cur)}" placeholder="数值字面量" style="width:90px" onchange="updateLitVal(${i},this.value)">`;
   return `<input value="${ext(cur)}" placeholder="字面量值" style="width:140px" onchange="updateLitVal(${i},this.value)">`;

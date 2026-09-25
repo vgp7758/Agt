@@ -1922,9 +1922,9 @@ function switchSettingsTab(name, btn){
   document.querySelectorAll('.settings-panel').forEach(p=>p.classList.remove('active'));
   const panel=document.getElementById('panel-'+name);
   if(panel) panel.classList.add('active');
-  // 底部保存按钮语义随 tab 切换：模型 tab=保存模型配置，运行时 tab=保存运行时
+  // 底部保存按钮语义随 tab 切换：模型 tab=保存模型配置，MCP tab=保存 MCP，运行时 tab=保存运行时
   const saveBtn=document.getElementById('cfgSave');
-  if(saveBtn) saveBtn.textContent = name==='models' ? '💾 保存模型配置' : '💾 保存运行时';
+  if(saveBtn) saveBtn.textContent = name==='models' ? '💾 保存模型配置' : (name==='mcp' ? '💾 保存 MCP' : '💾 保存运行时');
   // 切到 MCP 标签时加载配置+状态（此前 loadMcpConfig 无调用点——列表恒空，用户实锤：
   // playwright/python-lsp/csharp-lsp 全看不到；每次切入都刷新，读最新盘上配置）
   if(name==='mcp') loadMcpConfig();
@@ -2186,6 +2186,7 @@ function saveRuntime(){
 function saveCurrentTab(){
   const active=document.querySelector('.settings-panel.active');
   if(active && active.id==='panel-models'){ saveModels(); }
+  else if(active && active.id==='panel-mcp'){ saveMcpConfig(); }   // MCP tab → 保存 MCP（用户实锤 2026-09-25：分流漏了 MCP，恒落"保存运行时"）
   else { saveRuntime(); }
 }
 // autoReconnect 纯前端设置（localStorage），重连逻辑由 connectWS() 使用

@@ -3406,6 +3406,14 @@ function autoLayout(silent){
     toast('已自动布局：'+nl+' 层'+(no?('，孤立 '+no+' 个'):''));
   }
 }
-renderLegend();loadFileList();loadTools();loadModels();loadNodeDesc().then(()=>renderAll());renderAll();
+renderLegend();
+// ?wf= 自动加载（用户/vision_18 实锤 2026-09-25：editor 从未实现——wfdebug 有、editor 一直缺，
+// URL 带参数打开是空画布）。等列表就绪再选中并打开（下拉里没有该项则静默忽略）。
+loadFileList().then(()=>{
+  const _wf=new URLSearchParams(location.search).get('wf');
+  if(_wf){const sel=document.getElementById('fileSel');
+    if(Array.from(sel.options).some(o=>o.value===_wf)){sel.value=_wf;openWf(_wf);}}
+});
+loadTools();loadModels();loadNodeDesc().then(()=>renderAll());renderAll();
 </script>
 </body></html>

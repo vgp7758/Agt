@@ -390,6 +390,17 @@ class LLMClient:
         # append 一条 system 前缀 hit 94.3% 完整命中）。True 时 SYSTEM 段变化走 append（前缀保持），
         # False（默认）走归一化（现状）。anthropic 形态（system 为顶层参数）天然不支持。
         self.in_history_system = bool(profile.get("in_history_system"))
+        # 请求读超时（秒）：profile read_timeout > 全局 settings llm_read_timeout > 默认 240。
+        # 语义=httpx read timeout：流式=相邻 chunk 最大间隔（防"卡一下后无限 hang"），
+        # 非流式=响应体读窗。connect 恒 10s（秒级发现断网）。详见 _openai_client。
+        _rt_cfg = profile.get("read_timeout")
+        if _rt_cfg is None or str(_rt_cfg).strip() == "":
+            try:
+                _rt_cfg = config.load_runtime_settings().get("llm_read_timeout")
+            except Exception:
+                _rt_cfg = None
+        self.read_timeout = (float(_rt_cfg) if _rt_cfg is not None and str(_rt_cfg).strip() != ""
+                             else None)
         self._client = self._openai_client()
 
     def _ensure_config(self):
@@ -404,12 +415,21 @@ class LLMClient:
     def _openai_client(self) -> OpenAI:
         """构造 OpenAI SDK 客户端。OpenRouter 端点带归因头（X-Title / HTTP-Referer）——
         其公开 rankings/应用目录按这两个头把调用方识别为独立应用（Agt 消费即上榜，免费曝光）；
-        其它 provider 忽略未知头，无影响。"""
+        其它 provider 忽略未知头，无影响。
+        分级超时（用户提案 2026-09-26：家庭网络卡顿时请求 hang 十分钟没动静）——SDK 默认
+        timeout=600s 太钝：connect=10s 秒级发现断网（快速进回退链），read=相邻 chunk 最大间隔
+        （流式）/读窗（非流式），默认 240s 容忍长思考模型（DeepSeek 思考期 2-3 分钟不发 chunk）。
+        profile `read_timeout`（模型卡片，秒）> settings `llm_read_timeout` > 240。
+        max_retries=1：外层已有回退链+全链冷却，SDK 内层少重试一拍，失败更快浮上来。"""
         headers = {}
         if "openrouter.ai" in (self.base_url or ""):
             headers = {"HTTP-Referer": "https://github.com/vgp7758/Agt", "X-Title": "Agt"}
+        import httpx
+        _rt = float(self.read_timeout or 240)
         return OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured",
-                      default_headers=headers or None)
+                      default_headers=headers or None,
+                      timeout=httpx.Timeout(connect=10.0, read=_rt, write=30.0, pool=10.0),
+                      max_retries=1)
 
     def _rotate_token(self):
         """轮流切换到下一个 api_token，返回是否成功切换。"""

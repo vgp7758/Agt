@@ -452,6 +452,16 @@ git config core.sshCommand "ssh -o HostName=github.com -p 22 -o ConnectTimeout=2
 
 **关联**：[本地发布链](#本地发布链releasepy-版本真源迁移2026-09-10--十八轮)（release.py 的 push 步骤）、[桌面版 · 云构建](../features/desktop-mode.md#云构建--releasegithub-actions-流水线)（另一条发布通道）。
 
+## PyPI upload 域名 TLS 阻断：pypi.org 通、upload.pypi.org 断 + 后台自动重试（2026-09-26，v0.30.1 发布轮）
+
+v0.30.1 发布时 `twine upload` 卡住，curl 实测定性：`pypi.org:200` 正常、`upload.pypi.org:000`（0.05s 握手即断）——**分域名的针对性 TLS 阻断**，非网络整体问题。处置三件：
+
+- 构建侧：pip 源抖动 → `python -m build` 走 `--no-isolation` 绕过
+- 上传侧：**后台自动重试服务**（pypi-upload-retry）——每 3 分钟探测 upload 域名、连续 2 次通即自动 `twine upload`、成功 / 4h 窗口耗尽都会唤醒 Agent 收尾（人工零介入）
+- v0.30.2 发布时 upload 直连即通——阻断是**间歇性**的；「探测 → 自动传 → 唤醒留痕」的重试模式可复用
+
+与 git push SSH 路由（上一节）同族：发布双通道（Git / PyPI）各自都可能被网络间歇卡住，兜底思路一致——自动化重试 + 留痕唤醒，不阻塞人。
+
 ## 相关页面
 
 - [长期记忆](../features/longterm-memory.md) — memories/ 三类记忆、episodic 召回流水线、`/memory` 管理页

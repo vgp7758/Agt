@@ -1214,3 +1214,11 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **折叠阶梯跳级修复（2026-09-24，commit `0d1e7d3`，用户实锤）**：顶线毕业恒跳过工具折叠档直进结构摘要——两处缺口：①`_deepen_oldest_tier` 收益 <2% 早退（防卡死闸变跳级通道）→ 删：小收益也推，阶梯逐级渐进；②`_next_fold_target` 按轮吃无档位上限 → 上限=超深段末端，吃满跨触发渐进。selftest 17/17 + 跳级黄金断言（决策瞬间边界 hook 抓取）全绿——见 [context-engine · 后记七](architecture/context-engine.md)
 - **agent_notify 忙闲分流：空闲直接唤醒一轮（2026-09-24，commit `cdb13c5`）**：忙=插话入队（原语义）；空闲=直接触发一轮 run 消费（消息作本轮 user_message，与 WS 直连路径同构）——notify 本意是"让对方看到"，空闲时没人消费队列，唤醒才是完整语义。裸线程跑子 Agent run + 事件流临时接通 + registry 状态流转——见 [multi-agent · notify 忙闲分流](architecture/multi-agent.md)
 
+## 快速事实增补（2026-09-26 · v0.30.1 发布 + PyPI upload 域名 TLS 阻断）
+
+- **v0.30.1 发布**（2026-09-26，commit `a3a5f68` + tag `v0.30.1`；自 v0.30.0 以来 18 个实质提交，多批此前的攒批落地）：多 Agent 三件——agent_prompt **定向复用** + `current_turn_only` 暴露（`0dc9aa5`，按客户分线的引擎支撑）/ **agent_id 人设锁定**——异名派单拒绝，防同线人设串台（`3d52d90`）/ agent_notify 空闲直接唤醒（`cdb13c5`，已记档）；编辑器四件——**`jev_batch_judge` 节点三件套**（长文本分组 → NanoJev 批量命题判断 → 聚合，`b22332c`+`cc89a88`）/ enum 参数三条渲染路径全接上——存量节点/新建节点/props 值编辑统一渲染下拉（`770ee04`+`74f9db9`）/ editor `?wf=` 自动加载（此前从未实现，`0f81254`）/ 设置弹窗 MCP tab 底部保存按钮修复——此前点了实际跑「保存运行时」、MCP 配置静默丢失（`40833a1`）；另有压缩阶梯跳级修复（`0d1e7d3`）、/continue（`d90b2f2`）、退出通知默认进 inbox（`275049c`）、grep 预算（`bb89a97`）、SCNet cookie 通道（`fea0a20`）等——均已记档（09-23/24 七连）。**发布插曲**：`upload.pypi.org` 被针对性 TLS 阻断（pypi.org 200 正常 / upload 000 握手即断——分域名断）+ build 走 `--no-isolation` 绕 pip 源抖动；后台挂自动重试服务（3 分钟探测、连续 2 通即传、4h 窗口耗尽/成功均唤醒）——见 [ops · PyPI upload 阻断](guides/ops.md)
+
+## 快速事实增补（2026-09-26 · 二 · v0.30.2 发布——HTTP 型 MCP 生死修复 + 弹窗 HTTP 支持 + agent_watch 邮件收窄）
+
+- **v0.30.2 发布**（2026-09-26，commit `ed50988` + tag `v0.30.2`，PyPI 直连即通未触发重试服务；v0.30.1 → v0.30.2 共 3 笔提交）：①**HTTP 型 MCP 生死修复**（`a5432e9`——SDK 导出名 import 错：`streamable_http_client` ≠ 实际的 `streamablehttp_client`，恒 ImportError → 所有 url 型条目报「SDK 不支持」，**HTTP 型传输从未真正工作过**；连 videoclipper@18180 实锤，子进程真连验证 3 工具全链路通）；②**MCP 弹窗支持 HTTP 型**（`c06e7a1`——传输类型下拉 + url/transport/headers + `_http` 过渡标记 + 非法 headers 弹回）；③**agent_watch 邮件触发收窄**（`e5e8b7e`——只有完成轮数变化才发邮件，状态类只记状态+落日志；workspace 工具不进 wheel）——见 [mcp-config · HTTP 型双修](features/mcp-config.md)、[agent-watch · 邮件触发收窄](features/agent-watch.md)、[ops · PyPI upload 阻断](guides/ops.md)；两版均未立 releases/ 页，内容并入本节
+

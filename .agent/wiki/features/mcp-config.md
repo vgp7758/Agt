@@ -61,6 +61,38 @@
 
 价值闭环：新增/删除 MCP server（改 mcp.json）后 `/reload_mcp` 一发生效，**不再需要 `/restart`**（正好接住 zai 迁独立 MCP repo 后的运维场景）。
 
+## WebUI 弹窗支持 HTTP 型 MCP：传输类型下拉（2026-09-26，用户实锤，commit c06e7a1，随 v0.30.2）
+
+现象：后端早已支持 HTTP 型（有 `url` 的条目即按 HTTP 走），但设置弹窗只为 stdio 渲染 command / args / cwd 三字段——HTTP 型 server 只能手改 JSON（用户原话「弹窗里只有 command / args / cwd 可以填」）。补齐（commit `c06e7a1`，前端改动 Ctrl+F5 强刷生效）：
+
+- 每条 server 标题行右侧**传输类型下拉**：`stdio（本地命令）` / `HTTP（远程）`（与后端 mcp_client 的「有 url 即 HTTP」判定一致）
+- 选 HTTP 展开：**url**（如 `https://example.com/mcp`）+ **transport**（`http`=Streamable 默认 / `sse`=旧端点，下拉）+ **headers**（JSON 对象，如 `{"Authorization":"Bearer xxx"}`）；切回 stdio 回三行
+- 三件防护（playwright 实测抓出）：
+  1. **切换即清理对侧字段**——后端按「有 url 即 HTTP」判定，残留 command 造成歧义
+  2. **`_http` 过渡标记**——切到 HTTP 但 url 还没填时，空 url 判定会永远弹回 stdio（根本没法开始填）；过渡标记保持 HTTP 形态，保存时剥除、不落盘
+  3. **headers 非法 JSON 不写坏数据**——填 `not-json` → toast 提示并弹回 `{}`；合法 JSON 正常保留
+- 渲染坑：headers 的 JSON 含双引号而 `esc()` 不转义引号 → 属性内需手动 `&quot;`，否则提前闭合 value
+
+实测：切 HTTP → 三字段出现 ✓ / 填 url 保持 ✓ / 非法 headers 弹回 + 提示 ✓ / 切回 stdio 清回 ✓。保存流程不变：底部「💾 保存 MCP」→ `PUT /api/mcp` → 自动热重载两级配置。
+
+（前情：同弹窗的「保存 MCP」按钮此前点击实际执行的是「保存运行时」、MCP 配置静默丢失——v0.30.1 批内已修，commit `40833a1`。）
+
+## HTTP 型 MCP 从未工作过：SDK 导出名 import 错（2026-09-26，videoclipper@18180 实锤，commit a5432e9，随 v0.30.2）
+
+用户让 3002 实例把 MCP 服务跑在本机 18180，主实例 9000 连不上。诊断出**两层叠加**，服务端全程无问题（commit `a5432e9`）：
+
+1. **9000 没配置**——repo `.mcp.json` 与全局 `~/.agt/mcp.json` 均无 18180 条目（服务跑起来了但没人挂）。已在全局加：
+
+```json
+"videoclipper": { "url": "http://127.0.0.1:18180/mcp", "transport": "http" }
+```
+
+2. **真 bug（自项目诞生就存在）**：`src/mcp_client.py` 的 `from mcp.client.streamable_http import streamable_http_client` 恒 ImportError——mcp SDK 实际导出名是 **`streamablehttp_client`（一个词，无下划线）** → 客户端恒 None → 所有 HTTP 型一律报「当前 mcp SDK 不支持 streamable_http 传输」。**HTTP 型传输此前从未真正工作过**——一直没人用 HTTP 型所以没暴露。
+
+修复：按真实名 import + 极旧 SDK 的旧名别名兜底。验证（子进程新代码真连 18180）：`[MCP] 已连接 'videoclipper'（http），发现 3 个工具`（readme / render_submit / render_status），call readme 返回完整 README——连接 / list_tools / 实际调用全链路通。
+
+生效：`/restart` 后启动装配自动读两级配置连接，工具以 `__mcp__videoclipper__*` 前缀进工具箱（与 [全量重载](#全量重载reload_mcp-无参数--重读两级配置重建全部2026-09-18commit-c3554c9用户提案) 的工具同步语义一致）。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

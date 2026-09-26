@@ -2,9 +2,10 @@
 """
 agent_watch.py —— 本地 Agent 实例状态监视 + 变化邮件通知（2026-09-20·用户提案）
 
-作用：每 15 分钟轮询各实例 /api/status，对比指纹（session/轮数/busy/inbox/存活），
-     有变化才发邮件（附局域网 + 公网地址）；过去一轮无任何变化的实例不出现在邮件里，
-     全员无变化则整封跳过。首轮只建基线不发信。
+作用：每 15 分钟轮询各实例 /api/status，对比指纹（session/轮数/busy/inbox/存活）。
+      ★ 2026-09-26 用户裁定：状态类变化（上下线/会话切换/inbox/busy）只更新状态文件
+      并落诊断日志，**只有任意实例的完成轮数（turns）变化才发邮件**（附局域网+公网地址）；
+      全员轮数无变化则整封跳过。首轮只建基线不发信。
 
 用法：
   python agent_watch.py            # 常驻循环（默认 900s）
@@ -174,31 +175,32 @@ def fingerprint(p: dict) -> tuple:
     return (p.get("alive"), p.get("session"), p.get("turns"), p.get("busy"), p.get("inbox"))
 
 
-def diff_events(prev: dict | None, cur: dict) -> list[str]:
-    """对比上一轮指纹，产出人类可读的变化事件列表。"""
-    ev: list[str] = []
+def diff_events(prev: dict | None, cur: dict) -> tuple[list, list]:
+    """对比上一轮指纹。返回 (mail_ev, note_ev)：
+      mail_ev = 触发邮件的事件（★ 2026-09-26 用户裁定：只有完成轮数变化才发邮件）
+      note_ev = 只更新状态的事件（上下线/会话切换/inbox 积压——落诊断日志，不进邮件）"""
+    mail_ev, note_ev = [], []
     if prev is None:
-        return ["👀 首次纳入监视（基线）"]
+        return [], ["👀 首次纳入监视（基线，只记状态）"]
     if not prev.get("alive") and cur["alive"]:
-        ev.append(f"🟢 上线（此前不可达）")
+        note_ev.append("🟢 上线（此前不可达）")
     if prev.get("alive") and not cur["alive"]:
-        return [f"🔴 不可达：{cur['err']}"]
+        return [], [f"🔴 不可达：{cur['err']}"]
     if not cur["alive"]:
-        return []   # 持续离线不重复报
+        return [], []   # 持续离线不重复报
     if prev.get("session") != cur.get("session"):
-        ev.append(f"🔁 会话切换：{prev.get('session')} → {cur.get('session')}")
+        note_ev.append(f"🔁 会话切换：{prev.get('session')} → {cur.get('session')}")
     pt, ct = prev.get("turns"), cur.get("turns")
     if isinstance(pt, int) and isinstance(ct, int):
         if ct > pt:
-            ev.append(f"💬 新增 {ct - pt} 轮回答（{pt} → {ct}）")
+            mail_ev.append(f"💬 新增 {ct - pt} 轮回答（{pt} → {ct}）")
         elif ct < pt:
-            ev.append(f"🔁 轮数回退（{pt} → {ct}，可能是重开会话/回溯）")
-    # busy 翻转不报（2026-09-20 降噪）：活跃实例每 15 分钟 busy↔空闲翻转是常态噪音，
-    # "在干活"的信息已由 turns 变化覆盖；实质事件 = 上下线/会话切换/轮数变化/inbox 积压。
+            mail_ev.append(f"🔁 轮数回退（{pt} → {ct}，可能是重开会话/回溯）")
+    # busy 翻转不报（2026-09-20 降噪）：活跃实例每 15 分钟 busy↔空闲翻转是常态噪音。
     pi, ci = prev.get("inbox"), cur.get("inbox")
     if isinstance(pi, int) and isinstance(ci, int) and ci > pi:
-        ev.append(f"📥 inbox +{ci - pi}（有排队消息）")
-    return ev
+        note_ev.append(f"📥 inbox +{ci - pi}（有排队消息）")
+    return mail_ev, note_ev
 
 
 def send_mail(subject: str, body: str) -> bool:
@@ -235,20 +237,22 @@ def run_once(force_baseline: bool = False) -> bool:
     """跑一轮。返回是否发了邮件。"""
     prev_state = load_state()
     lan = lan_ip()
-    sections, new_state = [], {}
+    sections, new_state, _note_lines = [], {}, []
     watches = build_watches(prev_state)
     for w in watches:
         cur = probe(w)
         new_state[w["name"]] = cur
         prev = prev_state.get(w["name"])
-        ev = [] if force_baseline else diff_events(prev, cur)
-        if not ev:
-            continue   # 无变化：不出现在邮件里
+        mail_ev, note_ev = ([], []) if force_baseline else diff_events(prev, cur)
+        if note_ev:
+            _note_lines.append(f"  {w['name']}: " + "; ".join(note_ev))
+        if not mail_ev:
+            continue   # ★ 无轮数变化：状态已更新（new_state），但不进邮件
         # 地址块
         lan_addr = w["url"].replace("127.0.0.1", lan) if "127.0.0.1" in w["url"] else w["url"]
         pub = w.get("public") or "（无公网隧道）"
         lines = [f"### {w['name']} · {w['note']}"]
-        for e in ev:
+        for e in mail_ev:
             lines.append(f"- {e}")
         if cur["alive"]:
             lines.append(f"- 状态：session={cur.get('session')} · 轮数 {cur.get('turns')} · "
@@ -264,9 +268,11 @@ def run_once(force_baseline: bool = False) -> bool:
         if _k not in new_state:
             new_state[_k] = _v
     save_state(new_state)
-    try:   # 每轮落一行诊断日志（便于排查"为什么发/没发"）
+    try:   # 每轮落一行诊断日志（note_ev=状态类变化也在此留痕，便于排查"为什么发/没发"）
         with open(os.path.expanduser("~/.agt/agent_watch.log"), "a", encoding="utf-8") as _f:
-            _f.write(f"[{datetime.datetime.now():%m-%d %H:%M:%S}] 探到 {len(watches)} 个 · state {len(new_state)} 条 · 事件段 {len(sections)}\n")
+            _f.write(f"[{datetime.datetime.now():%m-%d %H:%M:%S}] 探到 {len(watches)} 个 · state {len(new_state)} 条 · 邮件段 {len(sections)} · 状态事件 {len(_note_lines)}\n")
+            for _nl in _note_lines:
+                _f.write(_nl + "\n")
     except Exception:
         pass
     if not sections:

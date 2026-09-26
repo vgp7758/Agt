@@ -2240,13 +2240,26 @@ function renderMcpList(){
         ? `<span style="color:#059669;font-size:11px" title="${esc((st.tools||[]).join(', ').slice(0,400))}">🟢 已连接 · ${st.tool_count} 工具</span>`
         : `<span style="color:#dc2626;font-size:11px">🔴 未连接（保存后热重载可重连）</span>`)
       : `<span style="color:#8a9099;font-size:11px">⚪ 状态未知（点 🔄 刷新）</span>`;
+    const isHttp = !!(cfg.url || cfg._http);   // 传输类型：有 url 即 HTTP 型；_http=已切到 HTTP 但还没填 url 的过渡标记（空 url 时仅凭 url 判定会永远弹回 stdio，用户没法开始填——2026-09-26 实测）
+    const typeSel = `<select onchange="setMcpTransport('${escName}',this.value)" title="传输类型" style="font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:6px">`
+      + `<option value="stdio"${isHttp?'':' selected'}>stdio（本地命令）</option>`
+      + `<option value="http"${isHttp?' selected':''}>HTTP（远程）</option></select>`;
+    // headers 的 JSON 含双引号，而 esc() 不转义引号 → 属性内需手动 &quot;，否则提前闭合 value（2026-09-26 用户实锤：弹窗只有 command/args/cwd 可填）
+    const hdrTxt = esc(JSON.stringify(cfg.headers||{})).replace(/"/g,'&quot;');
+    const body = isHttp
+      ? `<div class="mcp-row"><input value="${esc(cfg.url||'')}" placeholder="url（如 https://host/mcp）" onchange="_mcpData.mcpServers['${escName}'].url=this.value.trim()" style="flex:2"></div>`
+        + `<div class="mcp-row"><select onchange="_mcpData.mcpServers['${escName}'].transport=this.value" title="HTTP 传输形态" style="font-size:12px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;flex:1">`
+          + `<option value="http"${cfg.transport==='sse'?'':' selected'}>transport: http（Streamable·默认）</option>`
+          + `<option value="sse"${cfg.transport==='sse'?' selected':''}>transport: sse（旧端点）</option></select></div>`
+        + `<div class="mcp-row"><input value="${hdrTxt}" placeholder='headers（JSON 对象，可选，如 {"Authorization":"Bearer x"}）' onchange="setMcpHeaders('${escName}',this.value)" style="flex:2"></div>`
+      : `<div class="mcp-row"><input value="${esc(cfg.command||'')}" placeholder="command" onchange="_mcpData.mcpServers['${escName}'].command=this.value" style="flex:2"></div>`
+        + `<div class="mcp-row"><input value="${(cfg.args||[]).join(' ')}" placeholder="args（空格分隔）" onchange="_mcpData.mcpServers['${escName}'].args=this.value.split(' ').filter(Boolean)" style="flex:2"></div>`
+        + `<div class="mcp-row"><input value="${esc(cfg.cwd||'')}" placeholder="cwd（可选）" onchange="_mcpData.mcpServers['${escName}'].cwd=this.value" style="flex:1;min-width:120px"></div>`;
     return `<div class="mcp-item">
-      <div class="mcp-row"><b>${escName}</b> ${badge}
+      <div class="mcp-row"><b>${escName}</b> ${badge} ${typeSel}
         <button class="mi-del" onclick="deleteMcpServer('${escName}')" title="删除">×</button>
       </div>
-      <div class="mcp-row"><input value="${esc(cfg.command||'')}" placeholder="command" onchange="_mcpData.mcpServers['${escName}'].command=this.value" style="flex:2"></div>
-      <div class="mcp-row"><input value="${(cfg.args||[]).join(' ')}" placeholder="args（空格分隔）" onchange="_mcpData.mcpServers['${escName}'].args=this.value.split(' ').filter(Boolean)" style="flex:2"></div>
-      <div class="mcp-row"><input value="${esc(cfg.cwd||'')}" placeholder="cwd（可选）" onchange="_mcpData.mcpServers['${escName}'].cwd=this.value" style="flex:1;min-width:120px"></div>
+      ${body}
     </div>`;
   }).join('')
   // —— 动态注入 server 只读区（2026-09-02·用户报告 python-lsp/csharp-lsp 看不见）：ensure_lsp 等
@@ -2268,6 +2281,27 @@ function renderMcpList(){
     document.head.appendChild(st);
   }
 }
+function setMcpTransport(name, t){   // 传输类型切换（用户实锤 2026-09-26：此前弹窗只有 stdio 三字段，HTTP 型 MCP 无法在 UI 配置）
+  const cfg = _mcpData.mcpServers[name]; if(!cfg) return;
+  if(t==='http'){   // 切远程：清 stdio 字段（后端按 url 优先判定，残留 command 会造成歧义）
+    delete cfg.command; delete cfg.args; delete cfg.cwd;
+    cfg.url = cfg.url || ''; if(!cfg.transport) cfg.transport = 'http';
+    cfg._http = true;   // 过渡标记：url 还没填时保持 HTTP 形态（保存时剥除，不落盘）
+  }else{            // 切本地：清远程字段
+    delete cfg.url; delete cfg.transport; delete cfg.headers; delete cfg._http;
+    cfg.command = cfg.command || ''; if(!Array.isArray(cfg.args)) cfg.args = [];
+  }
+  renderMcpList();
+}
+function setMcpHeaders(name, v){
+  const cfg = _mcpData.mcpServers[name]; if(!cfg) return;
+  try{
+    const h = JSON.parse(v||'{}');
+    if(!h || typeof h!=='object' || Array.isArray(h)) throw new Error('需为对象');
+    cfg.headers = h;
+  }catch(e){ toast('⚠️ headers 需为 JSON 对象，如 {"Authorization":"Bearer xxx"}'); }
+  renderMcpList();   // 非法输入也重渲染（把非法值弹回合法 JSON）
+}
 function deleteMcpServer(name){
   if(_mcpData.mcpServers) delete _mcpData.mcpServers[name];
   renderMcpList();
@@ -2281,7 +2315,10 @@ function addMcpServer(){
 }
 async function saveMcpConfig(){
   try{
-    const r = await fetch('/api/mcp?scope='+_mcpScope, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_mcpData)});
+    // 剥除 _http 过渡标记（只用于 UI 形态保持，不应落进 .mcp.json）
+    const clean = JSON.parse(JSON.stringify(_mcpData));
+    Object.values(clean.mcpServers||{}).forEach(c=>delete c._http);
+    const r = await fetch('/api/mcp?scope='+_mcpScope, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(clean)});
     const d = await r.json();
     if(d.error) toast(d.error);
     else toast('✅ MCP 已保存' + (d.reloaded ? ' + 热重载（已连 ' + (d.servers||[]).length + ' 个 server）' : ''));

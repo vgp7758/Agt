@@ -18,10 +18,16 @@ from typing import Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+# ★ SDK 导出名是 streamablehttp_client（一个词，无下划线）——此前 import streamable_http_client
+#   恒 ImportError → None → 所有 HTTP 型 MCP 报"当前 mcp SDK 不支持 streamable_http 传输"，
+#   从未真正工作过（2026-09-26 连 videoclipper@18180 时实测抓出）
 try:
-    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.streamable_http import streamablehttp_client as streamable_http_client
 except ImportError:
-    streamable_http_client = None
+    try:   # 极旧 SDK 的别名兜底
+        from mcp.client.streamable_http import streamable_http_client
+    except ImportError:
+        streamable_http_client = None
 try:
     from mcp.client.sse import sse_client
 except ImportError:

@@ -234,6 +234,38 @@ def _extract_url(msg: str) -> str:
     return m.group(0).rstrip(".,;") if m else ""
 
 
+# —— 本机断网检测（2026-09-26 用户提案：家庭网络波动频繁，网卡时 API 失败在回退链上
+#    一个一个往后试毫无意义——换哪个 provider 都卡。先探测确认断网，等网恢复后重试
+#    同一个 provider）——
+_NET_ANCHORS = [("223.5.5.5", 443), ("www.baidu.com", 443), ("1.1.1.1", 443)]
+_net_down_until = [0.0]   # 断网判定置信窗口（30s 内复用判定，避免每个 provider 失败都探测一轮）
+
+
+def _probe_anchors() -> int:
+    """可达锚点数（TCP connect，3s/个，总计最多 ~9s）。"""
+    import socket
+    ok = 0
+    for host, port in _NET_ANCHORS:
+        try:
+            s = socket.create_connection((host, port), timeout=3)
+            s.close()
+            ok += 1
+        except Exception:
+            pass
+    return ok
+
+
+def _net_is_down() -> bool:
+    """本机是否断网（全部锚点不通）。任一通即视为网络正常（保守——避免把 provider
+    自身故障误判成断网而白等）。判定后 30s 置信窗口内直接复用。"""
+    if time.time() < _net_down_until[0]:
+        return True
+    if _probe_anchors() == 0:
+        _net_down_until[0] = time.time() + 30
+        return True
+    return False
+
+
 def _recharge_url_for(model_name: str, msg: str) -> tuple:
     """(provider名, 充值URL)。优先级：错误消息内嵌链接 > preset recharge_url > register_url。"""
     try:
@@ -475,13 +507,33 @@ class LLMClient:
         else:
             self.fallback_chain = []
 
+    def _net_wait_max(self) -> float:
+        """断网等待预算（秒）：settings `net_wait_max`，默认 300；<=0 关闭断网等待机制。"""
+        try:
+            v = config.load_runtime_settings().get("net_wait_max")
+        except Exception:
+            v = None
+        try:
+            return float(v) if v is not None else 300.0
+        except Exception:
+            return 300.0
+
+    def _wait_net_recover(self, budget: float) -> float:
+        """等网恢复循环（15s 间隔探测锚点）。返回实际等待秒数（恢复或预算耗尽都返回）。"""
+        t0 = time.time()
+        _LOG.warning("[网络] 确认本机断网（锚点全不通），暂停回退、等网恢复（本次调用预算 %.0fs）…", budget)
+        while time.time() - t0 < budget:
+            time.sleep(min(15.0, max(0.5, budget - (time.time() - t0))))
+            if _probe_anchors() > 0:
+                _LOG.warning("[网络] 已恢复（等待 %.0fs），重试 %s", time.time() - t0, self.model_name)
+                return time.time() - t0
+        _LOG.error("[网络] 等待 %.0fs 仍未恢复，交回回退链", time.time() - t0)
+        return time.time() - t0
+
     def _maybe_reset_to_head(self):
         """reset 策略：每次调用前若已偏离用户选的模型（_user_model），先切回去。
         限流常是临时波动，首选模型可能已恢复，故下一轮重新从用户选的模型尝试。
         sticky 策略时不动作（回退后保持在回退到的模型，不自动切回）。"""
-        if (self.fallback_policy == "reset"
-                and self.model_name != self._user_model):
-            self.switch_model(self._user_model)
 
     # ========== Provider 参数硬约束规则表（用户提案 2026-09-01：base_url+model 预检查） ==========
     # 已知各家 API 的硬性参数差异——请求前自动修正（用户无感知；profile 的 param_lock 是显式定制层，
@@ -739,6 +791,7 @@ class LLMClient:
         tried_tokens = [0]          # 用 list 包一层让 _advance 能修改（闭包）
         tried = [self.model_name]   # 本次调用内已试过的 model 名
         waits_left = [2]            # 全链冷却时的等待配额（防死等：至多睡两个冷却窗再真报错）
+        net_waited = [0.0]          # 本次调用累计等网秒数（上限 net_wait_max，2026-09-26）
 
         while True:
             ck = _ck()
@@ -784,6 +837,17 @@ class LLMClient:
                     _LOG.warning("限流，换 token 重试 (%d/%d) 原因=%s",
                                  tried_tokens[0] + 1, len(self.api_tokens), type(e).__name__)
                     continue
+                # ★ 断网等待（2026-09-26 用户提案）：网络类失败且锚点确认本机断网 →
+                #   换哪个 provider 都卡，回退链白烧一圈还全进冷却——等网恢复后重试
+                #   同一个 provider（不记冷却、不 _advance）。累计预算 net_wait_max
+                #   （settings，默认 300s，0=关闭）；等不回则落到下面原逻辑（冷却回退）。
+                if isinstance(e, (APITimeoutError, APIConnectionError)):
+                    _mw = self._net_wait_max()
+                    if _mw > 0 and net_waited[0] < _mw and _net_is_down():
+                        net_waited[0] += self._wait_net_recover(_mw - net_waited[0])
+                        if _probe_anchors() > 0:
+                            continue   # 网已恢复 → 原样重试当前 provider
+                        # 预算耗尽仍断 → 落到下面原逻辑（记冷却、回退链）
                 # 其它失败 → 记录冷却（model+token 签名）
                 # 401/403/404（鉴权/配额/模型不存在）也走回退（2026-09-08 用户调试 flatkey 余额 403 直接炸轮的根因）：
                 # 该 provider 不可用不代表链上其它也不可用——冷却后切下一个，保证会话不断

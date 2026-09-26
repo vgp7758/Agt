@@ -389,6 +389,18 @@ def _openai_client(self) -> OpenAI:
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
+## 网络韧性配置：模型卡片 read_timeout + settings llm_read_timeout / net_wait_max（2026-09-26）
+
+网络韧性三键（2026-09-26，用户提案「家庭网络卡顿时请求 hang 十分钟没动静」「网卡时回退链上一个一个试毫无意义」）：
+
+| 键 | 位置 | 说明 |
+|---|---|---|
+| `read_timeout` | models.json 模型卡片 | 请求读超时秒数：流式 = 相邻 chunk 最大间隔、非流式 = 响应体读窗。优先级：**模型卡片 > settings `llm_read_timeout` > 默认 240**；快端点配小、本地 CPU 慢模型配大（如 600） |
+| `llm_read_timeout` | settings.json | 全局默认读超时（默认 240） |
+| `net_wait_max` | settings.json | 断网等待预算秒数（默认 300；`<=0` 关闭断网等待机制） |
+
+connect 恒 10s（秒级发现断网）；触发条件、等网重试语义与验证见 [LLM 网络韧性](../features/llm-network-resilience.md)。`/restart` 生效。
+
 ## NanoJev 意图服务配置（jev_base_url / jev_api_token，2026-09-22）
 
 2026-09-22 通用化新增（用户提案）：intent_nano 节点从「本机 NanoJev 专属」升级为通用常用节点——设置页「运行时」面板新增两个键：

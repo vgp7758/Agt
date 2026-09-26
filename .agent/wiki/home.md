@@ -1222,3 +1222,9 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **v0.30.2 发布**（2026-09-26，commit `ed50988` + tag `v0.30.2`，PyPI 直连即通未触发重试服务；v0.30.1 → v0.30.2 共 3 笔提交）：①**HTTP 型 MCP 生死修复**（`a5432e9`——SDK 导出名 import 错：`streamable_http_client` ≠ 实际的 `streamablehttp_client`，恒 ImportError → 所有 url 型条目报「SDK 不支持」，**HTTP 型传输从未真正工作过**；连 videoclipper@18180 实锤，子进程真连验证 3 工具全链路通）；②**MCP 弹窗支持 HTTP 型**（`c06e7a1`——传输类型下拉 + url/transport/headers + `_http` 过渡标记 + 非法 headers 弹回）；③**agent_watch 邮件触发收窄**（`e5e8b7e`——只有完成轮数变化才发邮件，状态类只记状态+落日志；workspace 工具不进 wheel）——见 [mcp-config · HTTP 型双修](features/mcp-config.md)、[agent-watch · 邮件触发收窄](features/agent-watch.md)、[ops · PyPI upload 阻断](guides/ops.md)；两版均未立 releases/ 页，内容并入本节
 
+## 快速事实增补（2026-09-26 · 三 · 网络韧性三件——分级超时 + agent_watch 10061 跳过 + 断网等网重试）
+
+- **LLM 分级超时**（`c2b3d60`，用户提案「家庭网络卡顿时请求 hang 十分钟没动静」）：SDK 默认 timeout=600s 太钝 → connect=10s 秒级发现断网（快速进回退链）/ read=240s（流式=相邻 chunk 最大间隔；模型卡片 `read_timeout` > settings `llm_read_timeout` > 240，容忍 DeepSeek 类 2-3 分钟思考静默）/ max_retries=1（外层回退链接管）；断网实测 21.3s vs 旧 600s——改善 28 倍
+- **agent_watch 10061 静默跳过**（`2398498`，用户裁定）：积极拒绝 = 端口无服务在听（实例已关）→ 不进状态/不 diff/不落日志 + 清旧指纹（state 自洽收敛，复活自动重纳入）；超时/不可达仍保留记录；实测 state 18 → 8（10 个死端口清出）——见 [agent-watch · 10061 跳过](features/agent-watch.md)
+- **断网检测与等网重试**（`c5b57cd`，用户提案「网卡时回退链上一个一个往后试毫无意义——换哪个 provider 都卡」）：网络类失败（APITimeout/APIConnection）+ TCP 三锚点（223.5.5.5/baidu/1.1.1.1）全不通才触发（30s 置信窗口复用判定）→ 暂停回退等网恢复（15s 重探，预算 `net_wait_max` 默认 300s），恢复后**重试同一 provider 不记冷却不 _advance**；预算耗尽才落回退链——见 [LLM 网络韧性](features/llm-network-resilience.md)
+

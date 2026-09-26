@@ -6,6 +6,7 @@ agent_watch.py —— 本地 Agent 实例状态监视 + 变化邮件通知（202
       ★ 2026-09-26 用户裁定：状态类变化（上下线/会话切换/inbox/busy）只更新状态文件
       并落诊断日志，**只有任意实例的完成轮数（turns）变化才发邮件**（附局域网+公网地址）；
       全员轮数无变化则整封跳过。首轮只建基线不发信。
+      连接被拒（10061）的端口视为"实例不存在"，整轮静默跳过（不进状态/日志）。
 
 用法：
   python agent_watch.py            # 常驻循环（默认 900s）
@@ -239,8 +240,17 @@ def run_once(force_baseline: bool = False) -> bool:
     lan = lan_ip()
     sections, new_state, _note_lines = [], {}, []
     watches = build_watches(prev_state)
+    _skipped_refused = set()   # 10061 跳过的实例名——下方 state 补回时排除（当它不存在）
     for w in watches:
         cur = probe(w)
+        # ★ 连接被拒（WinError 10061 积极拒绝）= 端口根本没有服务在听（实例已关闭）——
+        #   直接跳过：不进状态、不 diff、不落日志，且从 state 里清除旧指纹（用户裁定
+        #   2026-09-26：这种确定性"不存在"每轮刷 URLError 没有意义）。与"超时/不可达"
+        #   区分——后者保留记录。
+        _err = cur.get("err") or ""
+        if "10061" in _err or "积极拒绝" in _err or "Connection refused" in _err:
+            _skipped_refused.add(w["name"])
+            continue
         new_state[w["name"]] = cur
         prev = prev_state.get(w["name"])
         mail_ev, note_ev = ([], []) if force_baseline else diff_events(prev, cur)
@@ -265,7 +275,7 @@ def run_once(force_baseline: bool = False) -> bool:
     #   未探到的实例下一轮又成「首次纳入（基线）」→ 每轮误发邮件。
     #   修法：本轮未探到的实例保留上一轮指纹（"暂时没扫到" ≠ "实例下线"）。
     for _k, _v in prev_state.items():
-        if _k not in new_state:
+        if _k not in new_state and _k not in _skipped_refused:
             new_state[_k] = _v
     save_state(new_state)
     try:   # 每轮落一行诊断日志（note_ev=状态类变化也在此留痕，便于排查"为什么发/没发"）

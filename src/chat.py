@@ -16,7 +16,7 @@ from pathlib import Path
 
 import config
 from agent import Agent
-from agent_config import SKILL_TOOLS, load_rules, skills_summary, agents_summary, seed_default_agents, seed_default_skills
+from agent_config import SKILL_TOOLS, load_rules, agents_summary, seed_default_agents, seed_default_skills
 from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from spec_tools import make_spec_tools
@@ -45,13 +45,9 @@ def _rules_and_skills_section(workspace=WORKSPACE) -> str:
     rules = load_rules(workspace)
     if rules:
         parts.append("=== 规则（.agent/rules/，始终生效）===\n" + rules)
-    skills = skills_summary(workspace)
-    if skills:
-        parts.append("=== 可用技能（repo .agent/skills/ + 已激活全局技能；🌐=全局）===\n"
-                     "任务匹配某技能时，先 read_skill(name) 取详细 SOP 再按它执行"
-                     "（大技能先 skill_navigate(name) 浏览结构/分节读；技能自带脚本用 skill_run_code(name, script) 执行；"
-                     "带 server.py 的技能可 skill_equip(name) 装备常驻服务、skill_use(name, '命令 --参数') 调用）：\n"
-                     + skills + "\n（完成可复用任务后可用 save_skill 沉淀新技能到本 repo）")
+    # 技能清单不再常驻 SYSTEM（token 底噪）——由 before_turn 钩子 skill_suggest 按需建议：
+    # jev/LLM 判别 user_message 与技能的匹配 → 注入 name/description + read_skill/skill_equip 引导。
+    # Agent 需要全量清单时用 /skills 命令或直接读 .agent/skills/ 各 SKILL.md。
     agents = agents_summary(workspace)
     if agents:
         parts.append("=== 可用子 Agent（.agent/agents/，一次性）===\n"

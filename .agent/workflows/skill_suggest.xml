@@ -1,62 +1,123 @@
-<workflow name="skill_suggest" description="每轮开始前根据用户消息匹配推荐技能（before_turn 钩子，默认关——需要时启用）" enabled="false" hidden="true">
-  <!-- before_turn 钩子注入的用户消息 -->
-  <node id="100001" type="start">
-    <out name="user_message" type="string"/>
+<workflow name="skill_suggest" description="技能按需建议：jev 判别 user_message 与哪个技能匹配 → 注入 name/描述 + read_skill/skill_equip 引导（短消息与无匹配静默）">
+  <node id="100001" type="start" x="100" y="200">
+    <out name="user_message" type="string" required="true"/>
   </node>
-
-  <!-- LLM1：意图识别 + 关键字提取（严格 JSON） -->
-  <node id="110001" type="llm">
-    <in name="user_message" ref="100001.user_message"/>
-    <param name="systemPrompt"><![CDATA[你是技能匹配器。根据用户消息判断是否需要调用某个已沉淀的技能 SOP。
-只输出一个 JSON 对象，不要任何解释或 markdown 代码块：
-{"need_skill": true, "skills": ["技能名 1","技能名 2"], "reason": "为何需要技能的简短说明"}
-规则：
-- need_skill：用户请求是否是可复用任务/有现成 SOP 能解决（如优化代码、调试、写测试、重构、性能分析等）。纯信息查询/闲聊 → false。
-- skills：若 need_skill=true，列出 1-3 个可能相关的技能名称（从 .agent/skills/ 目录下的文件名推断；不知道具体名字时给空数组 []）。
-- reason：一句话说明为何需要这些技能。]]></param>
-    <param name="prompt"><![CDATA[{{user_message}}]]></param>
-    <param name="temperature" type="float">0.1</param>
-    <out name="need_skill" type="boolean"/>
+  <node id="500001" type="code" x="400" y="120" title="扫技能清单">
+    <code><![CDATA[import os, json, re
+async def main(args):
+    out = []
+    cwd = os.getcwd()
+    sources = [
+        ("local", os.path.join(cwd, ".agent", "skills"), None),
+        ("global", os.path.join(os.path.expanduser("~"), ".agt", "skills"), None),
+    ]
+    act_p = os.path.join(cwd, ".agent", "skills", "global-skills.json")
+    act = []
+    try:
+        if os.path.exists(act_p):
+            act = json.load(open(act_p, encoding="utf-8"))
+    except Exception:
+        act = []
+    seen = set()
+    for scope, root, allow in sources:
+        if not os.path.isdir(root):
+            continue
+        for name in sorted(os.listdir(root)):
+            sk = os.path.join(root, name, "SKILL.md")
+            if not os.path.isfile(sk) or name in seen:
+                continue
+            if allow is not None and scope == "global" and name not in allow:
+                continue
+            seen.add(name)
+            try:
+                txt = open(sk, encoding="utf-8", errors="replace").read()
+            except Exception:
+                continue
+            m = re.match(r"^---\s*\n(.*?)\n---", txt, re.S)
+            if not m:
+                continue
+            fm = m.group(1)
+            def _g(k, fm=fm):
+                mm = re.search("^" + k + r":\s*(.+)$", fm, re.M)
+                return mm.group(1).strip().strip("\"'") if mm else ""
+            out.append({"name": _g("name") or name,
+                        "description": (_g("description") +
+                                        ("；适用：" + _g("when_to_use") if _g("when_to_use") else "")).strip("； "),
+                        "when": _g("when_to_use")})
+    # 封闭集补"无关"候选：jev choice 头必须选一个，不给 other 类任何输入都会被硬塞给某技能
+    out.append({"name": "__none__",
+                "description": "与以上任何技能都无关的普通对话、闲聊、提问或与本机工具无关的任务",
+                "when": ""})
+    return {"skills": out, "count": len(out)}]]></code>
     <out name="skills" type="list"/>
-    <out name="output" type="string"/>
+    <out name="count" type="number"/>
   </node>
-
-  <!-- selector1：仅 need_skill=true 才继续 -->
-  <node id="120001" type="selector">
-    <branch>
-      <cond op="1" left="110001.need_skill" right="true" left_type="boolean" right_type="boolean"/>
-    </branch>
+  <node id="600001" type="code" x="400" y="420" title="短路/清洗">
+    <in name="user_message" ref="100001.user_message"/>
+    <in name="skills" ref="500001.skills"/>
+    <in name="count" ref="500001.count"/>
+    <code><![CDATA[import re
+async def main(args):
+    p = args.params
+    um = p.get("user_message") or ""
+    # 大段粘贴标记：取标记外正文（标记内多为日志，不代表本轮意图）
+    um = re.sub(r"<pasted-log>[\s\S]*?</pasted-log>", " ", um)
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", um))
+    words = len(re.findall(r"[A-Za-z]{2,}", um))
+    proceed = p.get("count", 0) > 0 and (cjk + words) >= 4
+    return {"proceed": proceed, "um": um[:2000],
+            "detail": f"中文{cjk} 英文词{words} 技能{p.get('count', 0)}"}]]></code>
+    <out name="proceed" type="boolean"/>
+    <out name="um" type="string"/>
+    <out name="detail" type="string"/>
   </node>
-
-  <!-- code1：格式化建议文本 -->
-  <node id="130001" type="code">
-    <in name="skills" ref="110001.skills"/>
-    <in name="reason" ref="110001.output"/>
-    <code language="3"><![CDATA[
-import json
-async def main(args) -> dict:
-    skills = args.params.get("skills") or []
-    reason = args.params.get("reason") or ""
-    if not skills:
-        return {"suggest": "检测到可能是可复用任务，但暂无匹配技能。考虑用 save_skill 沉淀一个？"}
-    lines = ["💡 检测到可能是可复用任务：" + reason]
-    lines.append("相关技能建议：")
-    for s in skills:
-        lines.append(f"- `{s}`：可用 read_skill(\"{s}\") 查看 SOP")
-    return {"suggest": "\n".join(lines)}
-]]></code>
-    <out name="suggest" type="string"/>
+  <node id="800001" type="intent_nano" x="760" y="280" title="技能匹配(jev)">
+    <in name="query" ref="600001.um"/>
+    <in name="intents" ref="500001.skills"/>
+    <in name="route" type="boolean">false</in>
+    <in name="temperature" type="number">0.3</in>
+    <in name="threshold" type="number">0.5</in>
+    <in name="instructions" type="string">用户本轮消息最适合交给哪个技能处理？逐个对照技能描述与适用时机判断；若都不相关（普通对话/闲聊/与本机工具无关的任务）必须选 __none__</in>
+    <out name="intent" type="string"/>
+    <out name="confidence" type="number"/>
+    <out name="probabilities" type="object"/>
   </node>
-
-  <!-- 结束节点：inject=true 将 suggest 注入主 LLM -->
-  <node id="900001" type="end">
-    <out name="inject" type="boolean">true</out>
-    <out name="result" type="string" ref="130001.suggest"/>
+  <node id="810001" type="code" x="1080" y="260" title="组装建议">
+    <in name="intent" ref="800001.intent"/>
+    <in name="confidence" ref="800001.confidence"/>
+    <in name="proceed" ref="600001.proceed"/>
+    <in name="skills" ref="500001.skills"/>
+    <in name="user_message" ref="100001.user_message"/>
+    <code><![CDATA[import json
+async def main(args):
+    p = args.params
+    skills = p.get("skills") or []
+    if not p.get("proceed"):
+        return {"inject": False, "result": ""}
+    intent = (p.get("intent") or "").strip()
+    conf = float(p.get("confidence") or 0)
+    if (not intent or intent == "default" or intent == "__none__" or conf < 0.5):
+        return {"inject": False, "result": ""}
+    hit = next((s for s in skills if s.get("name") == intent), None)
+    if not hit or not (hit.get("description") or hit.get("when")):
+        return {"inject": False, "result": ""}
+    lines = [f"🎯 匹配技能：{hit['name']}（置信度 {conf:.2f}）",
+             str(hit.get("description") or "")]
+    if hit.get("when"):
+        lines.append("适用时机：" + hit["when"])
+    lines.append(f'→ 详细 SOP：read_skill("{hit["name"]}")；'
+                 f'若需其常驻服务：skill_equip("{hit["name"]}") 后按返回清单调用。')
+    return {"inject": True, "result": "\n".join(lines)}]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
   </node>
-
-  <edge from="100001" to="110001"/>
-  <edge from="110001" to="120001"/>
-  <edge from="120001" to="130001" port="true"/>
-  <edge from="130001" to="900001"/>
-  <edge from="120001" to="900001" port="false"/>
+  <node id="900001" type="end" x="1380" y="240">
+    <in name="inject" ref="810001.inject"/>
+    <in name="result" ref="810001.result"/>
+  </node>
+  <edge from="100001" to="500001"/>
+  <edge from="500001" to="600001"/>
+  <edge from="600001" to="800001"/>
+  <edge from="800001" to="810001"/>
+  <edge from="810001" to="900001"/>
 </workflow>

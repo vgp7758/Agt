@@ -42,8 +42,11 @@ def _jev_target():
 PARAMS = [
     {"key": "query", "type": "string", "required": True,
      "desc": "待分类文本（通常 ref 上游 user_message 等）"},
-    {"key": "intents", "type": "list", "required": True,
-     "desc": "意图列表：name=意图名（对应 branch_N 出口），description=语义描述（供模型判别；空则用 name）"},
+    {"key": "intents", "type": "list", "required": False,
+     "desc": "动态意图列表（ref 装填优先）：[{name, description}]；不传则用 XML <intent> 子元素"},
+    {"key": "route", "type": "boolean", "required": False, "default": True,
+     "desc": "true=branch_N/default 端口路由（兼容 intent 语义，须按意图接端口边）；false=单出口模式"
+             "（port=None，普通直连边照走——动态意图列表/只取 outputs 的场景用）"},
     {"key": "temperature", "type": "number", "required": False, "default": 1.0,
      "desc": "NanoJev 采样温度（默认 1.0；想更确定性可调低，如 0.3）"},
     {"key": "threshold", "type": "number", "required": False, "default": 0.0,
@@ -65,13 +68,17 @@ def _http_json(url, payload=None, timeout=15, token=""):
 
 
 def _ensure_server(base, token="", timeout=60, allow_launch=False):
-    """Jev 服务探活；不通且 allow_launch（本机默认且拉起命令存在）时拉起并等就绪。
-    自建远程服务（settings 配置的）不拉——探活失败由调用方降级 LLM。"""
-    try:
-        _http_json(f"{base}/api/health", timeout=4, token=token)
-        return True
-    except Exception:
-        pass
+    """Jev 服务探活（尽力而为，失败不判死——submit 才是最终裁决，提交端点形态可能没有 health）：
+    依次试 {base}/api/health（nanojev_server）与 {base} 本身（GET 有任意 HTTP 响应——含
+    404/405——即服务可达）。仍不通且 allow_launch（本机默认且拉起命令存在）时拉起并等就绪。"""
+    for u in (base.rstrip("/") + "/api/health", base):
+        try:
+            _http_json(u, timeout=4, token=token)
+            return True
+        except _urlreq.HTTPError:
+            return True          # 有 HTTP 响应（含 404/405）= 服务进程可达
+        except Exception:
+            continue
     if not allow_launch:
         return False
     import os as _os
@@ -94,8 +101,17 @@ def _ensure_server(base, token="", timeout=60, allow_launch=False):
     return False
 
 
+def _origin(base: str) -> str:
+    from urllib.parse import urlsplit
+    s = urlsplit(base)
+    return f"{s.scheme}://{s.netloc}"
+
+
 def _decide(query, criteria, instructions, temperature, base, token=""):
-    """submit → 轮询 result → 返回 answers 或 None。"""
+    """submit → 轮询 result → 返回 answers 或 None。
+    兼容两种服务形态：提交端点={base} 本身（如 lfm_proxy 的 /run/nanojev）或
+    {base}/api/submit（nanojev_server 原生）；轮询路径优先用 submit 响应的 poll 字段
+    （服务自描述，可能是相对 origin 的绝对路径），无则回落 {base}/api/result/{rid}。"""
     body = {"states": [{
         "id": "route",
         "state": str(query),
@@ -105,13 +121,28 @@ def _decide(query, criteria, instructions, temperature, base, token=""):
             "criteria": criteria,
         }}}],
         "temperature": float(temperature or 1.0)}
-    sub = _http_json(f"{base}/api/submit", body, timeout=20, token=token)
-    rid = sub.get("request_id")
+    sub, rid, poll_rel = None, None, ""
+    for submit_url in (base, base.rstrip("/") + "/api/submit"):
+        try:
+            sub = _http_json(submit_url, body, timeout=20, token=token)
+        except Exception:
+            continue
+        rid = sub.get("request_id")
+        poll_rel = sub.get("poll") or ""
+        if rid:
+            break
     if not rid:
         return None
+    if poll_rel.startswith("/"):
+        poll_url = _origin(base) + poll_rel          # 服务自描述的轮询地址（相对 origin）
+    else:
+        poll_url = base.rstrip("/") + "/api/result/" + rid
     for _ in range(60):
         _time.sleep(1.0)
-        res = _http_json(f"{base}/api/result/{rid}", timeout=10, token=token)
+        try:
+            res = _http_json(poll_url, timeout=10, token=token)
+        except Exception:
+            continue
         if res.get("status") in ("done", "failed", "error"):
             if res.get("status") != "done":
                 return None
@@ -122,7 +153,7 @@ def _decide(query, criteria, instructions, temperature, base, token=""):
     return None
 
 
-def _llm_fallback(query, intents, ctx, note=""):
+def _llm_fallback(query, intents, ctx, note="", route=True):
     """Jev 服务不可用时的降级（用户提案 2026-09-22）：LLM 生成式意图分类（与内置 intent
     同款提示词/编号解析）。输出结构对齐判别式：conf=-1 标记降级模式（无真实置信度）、
     无分布——下游按 threshold 判定时 conf=-1 < 任何非零阈值 → 天然走 default（保守安全）。"""
@@ -151,9 +182,9 @@ def _llm_fallback(query, intents, ctx, note=""):
     out = {"intent": names[idx] if idx is not None else "", "confidence": -1.0,
            "probabilities": {}, "raw": f"[llm_fallback{' · ' + note if note else ''}] {answer[:500]}",
            "error": ""}
-    if idx is not None:
+    if route and idx is not None:
         return {"outputs": out, "port": f"branch_{idx}"}
-    return {"outputs": out, "port": "default"}
+    return {"outputs": out, "port": None if not route else "default"}
 
 
 def _handle_intent_nano(node: dict, ctx) -> dict:
@@ -161,8 +192,22 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
 
     inputs = node.get("data", {}).get("inputs", {})
     params = resolve_input_params(inputs.get("inputParameters", []), ctx)
-    intents = [(i.get("name", "") or "", (i.get("description") or "").strip())
-               for i in inputs.get("intents", []) if (i.get("name") or "").strip()]
+    # intents 双来源（2026-09-27）：inputParameters 的 intents（ref 动态装填，运行时列表如技能
+    # 清单）优先；回落 XML 静态子元素 <intent name="..">…</intent>（编辑器形态）
+    dyn = params.get("intents")
+    if isinstance(dyn, list) and dyn:
+        intents = []
+        for it in dyn:
+            if isinstance(it, dict):
+                n = (it.get("name") or "").strip()
+                dd = ((it.get("description") or it.get("when") or "")).strip()
+            else:
+                n, dd = str(it).strip(), ""
+            if n:
+                intents.append((n, dd))
+    else:
+        intents = [(i.get("name", "") or "", (i.get("description") or "").strip())
+                   for i in inputs.get("intents", []) if (i.get("name") or "").strip()]
     query = params.get("query") or next((v for v in params.values() if v), "")
     try:
         temperature = float(params.get("temperature") or 1.0)
@@ -175,10 +220,12 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
 
     if not intents or not str(query).strip():
         return {"outputs": {"intent": "", "confidence": 0.0, "probabilities": {}, "raw": "",
-                            "error": "query/intents 为空"}, "port": "default"}
+                            "error": "query/intents 为空"}, "port": None}
+    _route_raw = params.get("route")
+    route = not ( _route_raw is False or str(_route_raw).strip().lower() in ("0", "false", "no", "off"))
     base, token, is_local = _jev_target()
-    if not _ensure_server(base, token, allow_launch=is_local):
-        return _llm_fallback(query, intents, ctx, note=f"Jev 不可达（{base}）")
+    _ensure_server(base, token, allow_launch=is_local)   # 尽力探活/拉起本机 8766；失败不提前降级——
+    # submit 才是最终裁决（提交端点形态可能没有 health 路由，探活 404 不代表不可用，2026-09-27 实测）
 
     criteria = {name: (desc or name) for name, desc in intents}
     instructions = str(params.get("instructions") or "判断输入文本属于哪个意图类别")
@@ -193,11 +240,11 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
            "confidence": round(conf, 4),
            "probabilities": {k: round(float(v), 4) for k, v in probs.items()},
            "raw": _json.dumps(ans, ensure_ascii=False)[:2000], "error": ""}
-    if out["intent"]:
+    if out["intent"] and route:
         idx = next((i for i, (name, _d) in enumerate(intents) if name == out["intent"]), None)
         if idx is not None:
             return {"outputs": out, "port": f"branch_{idx}"}
-    return {"outputs": out, "port": "default"}
+    return {"outputs": out, "port": None}   # 非路由模式/未命中/低置信：port=None → 普通直连边照走
 
 
 def agt_node():

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import config
 from agent import Agent
-from agent_config import SKILL_TOOLS, load_rules, skills_summary, agents_summary, seed_default_agents
+from agent_config import SKILL_TOOLS, load_rules, skills_summary, agents_summary, seed_default_agents, seed_default_skills
 from background_tools import make_background_tools
 from plan_tools import make_plan_tools
 from spec_tools import make_spec_tools

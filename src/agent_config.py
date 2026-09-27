@@ -597,6 +597,42 @@ def seed_default_agents(workspace: Path) -> int:
     return n
 
 
+def seed_default_skills(workspace: Path) -> int:
+    """首次启动把随包示例技能（src/assets/skills/ 的技能目录）播种到 .agent/skills/。
+    目前仅 test-svc（技能七件套最小范例：read/navigate/run_code/evaluate/equip/use 全覆盖）。
+    以 <技能>/SKILL.md 判定存在——已存在则整技能跳过（不覆盖用户修改）。返回播种的技能数。
+    播种时写 seed_state 基线（/update-assets 三方 hash 判定用）。"""
+    bundled = Path(__file__).resolve().parent / "assets" / "skills"
+    if not bundled.exists():
+        return 0
+    from asset_sync import _sha, _load_state, _save_state
+    st = _load_state(workspace)
+    n = 0
+    for src in sorted(bundled.iterdir()):
+        if not src.is_dir():
+            continue
+        if not (src / "SKILL.md").exists():
+            continue
+        dst = workspace / _AGENT_DIR / "skills" / src.name
+        if (dst / "SKILL.md").exists():
+            continue                     # 已有同名技能：不覆盖用户修改
+        dst.mkdir(parents=True, exist_ok=True)
+        try:
+            for f in sorted(src.rglob("*")):
+                if f.is_file() and "__pycache__" not in f.parts:
+                    rel = f.relative_to(src)
+                    tf = dst / rel
+                    tf.parent.mkdir(parents=True, exist_ok=True)
+                    tf.write_bytes(f.read_bytes())
+                    st[f"skill/{src.name}/{rel.as_posix()}"] = _sha(f)
+            n += 1
+        except Exception:
+            pass
+    if n:
+        _save_state(workspace, st)
+    return n
+
+
 def seed_dir_docs(workspace: Path) -> int:
     """把约定目录的 README.md（框架「这目录放什么/怎么扩展」一页文档）播种到位。
     覆盖：tools/builtin（脚本工具 agt_register 约定 + 任务脚本防御）、.agent/tools（覆盖层）、

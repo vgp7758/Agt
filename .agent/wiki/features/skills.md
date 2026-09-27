@@ -187,7 +187,9 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 
 ## 相关页面
 
+- [工作流执行工具](workflow-exec-tools.md)：`exec_workflow` 正式执行入口 + **技能携带工作流**（`_load_wf_canvas` 二级加载）——带 server.py 的技能配常驻服务，带 workflows/ 的技能配确定性流水线
 - [工具外置体系](tool-externalization.md)：技能工具属引擎内置（`src/agent_config.py` 注册，子 Agent 继承），不走外置件扫描
 - [run_python](run-python.md)：同为子进程执行工具，但通用工作区任意脚本 vs 技能包限定 + cwd 锚定技能目录
 - [多 Agent 体系](../architecture/multi-agent.md)：技能工具随 Agent 注入，子 Agent 自动继承
 - [运维与存档布局](../guides/ops.md)：`~/.agt/` 单一数据根（全局技能目录挂这里，多实例共享）
+

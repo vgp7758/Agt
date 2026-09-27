@@ -84,7 +84,9 @@ body/error 端口位置一律用 `_baseH`（**不含**输出框高度）：error
 
 ## 相关页面
 
+- [工作流执行工具](workflow-exec-tools.md)：`exec_workflow` 正式执行入口（同文件 `src/workflow_debug_tools.py`）——本页是 debug 侧视图（trace 四件套 + 画布白框），exec 才是正式语义（真实 client、有 llm_calls）
 - [工作流编辑器 UX 改进](editor-ux-improvements.md)：编辑器族另一页（workflow_editor.html，编辑画布）——画布渲染逻辑同源，含同步提醒
 - [工作流运行观测](wf-monitor.md)：/wf/monitor 实时甘特时间线 + 节点全文纯文本路由（与本页互补：旁观跑的过程 vs 画布上盯着改）
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：节点类型速查（`_baseH` 的类型特有高度对应各节点形态；AND/OR 新节点见该页）
 - [v0.19.2 发布记录](../releases/v0.19.2.md)：本页四项增强随该版发布
+

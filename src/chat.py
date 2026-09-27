@@ -86,6 +86,10 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     migrate_agents_md_to_yml(workspace)
     # 播种默认子 Agent 模板（.agent/agents/，目标存在则跳过——迁移产物即存在）
     seed_default_agents(workspace)
+    # 约定目录 README（tools/builtin、workflows、agents、skills、nodes…）：
+    # 框架「这目录放什么/怎么扩展」一页文档播种到位——agent 一看目录就知道能放什么、怎么写
+    from agent_config import seed_dir_docs
+    seed_dir_docs(workspace)
     # 主 agent 元信息：~/.agt/main.yml（首次播种随包 src/assets/main.yml；用户可编辑）
     from agent_config import seed_main_agent, load_agent_yml
     main_yml = seed_main_agent(workspace)

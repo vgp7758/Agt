@@ -1,5 +1,5 @@
 // Intent·Nano 节点插件（type intent_nano）：NanoJev 判别式意图路由（内置 Intent 加强版）。
-// intents 编辑器 = name + description 两列（description 直供模型判别）；temperature/threshold 数字控件。
+// intents 双来源：ref 动态列表（inputParameters.intents）或 XML 静态子元素；threshold 数字控件。
 // 出口 branch_N/default 与内置 intent 同构（workflow_editor 的端口生成条件含 intent_nano）。
 EdFW.register({
   type: "intent_nano", label: "Intent·Nano",    icon: "🧭", category: "llm",
@@ -9,7 +9,6 @@ EdFW.register({
                         {name: "query", input: {type: "string", value: {type: "literal", content: ""}}},
                         {name: "intents", input: {type: "list", value: {type: "literal", content: ""}}},
                         {name: "route", input: {type: "boolean", value: {type: "literal", content: "true"}}},
-                        {name: "temperature", input: {type: "number", value: {type: "literal", content: "1.0"}}},
                         {name: "threshold", input: {type: "number", value: {type: "literal", content: "0.35"}}}],
                       intents: [{name: "code", description: "要求编写、修改、调试代码"},
                                 {name: "search", description: "要求检索资料、查文档、搜索信息"},
@@ -32,8 +31,6 @@ EdFW.register({
       tip: "true=branch_N/default 端口路由（须按意图接端口边）；false=单出口（port=None，直连边照走——动态意图列表/只取 outputs 用）",
       get(n) { const v = ipGet(n, "route"); return v === "" || v === true || String(v).toLowerCase() !== "false"; },
       set(n, v) { ipSet(n, "route", v, "boolean"); } },
-    { key: "temperature", label: "温度", widget: "number", tip: "1.0",
-      get(n) { return ipGet(n, "temperature"); }, set(n, v) { ipSet(n, "temperature", v); } },
     { key: "threshold", label: "阈值", widget: "number", tip: "0.35（top1 低于它走 default）",
       get(n) { return ipGet(n, "threshold"); }, set(n, v) { ipSet(n, "threshold", v); } },
     { key: "intents_static", label: "静态意图（XML 子元素）", widget: "custom",

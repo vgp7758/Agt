@@ -1,24 +1,7 @@
 # .agent/agents/ — 子 Agent 声明目录
 
-子 Agent 有两种声明形态（自动识别，同名**目录形态优先**）：
-· **平铺**：`<name>.yml`（v2 主形态，frontmatter 声明）/ `<name>.md`（旧格式兼容）
-· **目录**：`<name>/<name>.yml` + `<name>.md` + `tools/`（自包含——人设/装配/专属工具整体拷贝、分发、版本化）
-
+一个文件一个子 Agent（`.md` 推荐，frontmatter 声明 + 正文人设；也兼容 `.yml`）。
 声明后自动出现在团队里：主 Agent SYSTEM 的团队清单会列出，`agent_prompt(name, 任务)` 派活。
-
-## 目录形态（2026-09-27：人设 + 装配 + 专属工具自包含）
-
-```
-.agent/agents/translator/
-├── translator.yml        # 声明（file: 可引用同目录人设，如 file: .agent/agents/translator/translator.md）
-├── translator.md         # 人设正文（yml 的 file: 装配项引用）
-└── tools/                # ★ 专属工具（仅该子 Agent 可见；agt_register 约定同 tools/builtin）
-    └── now.py
-```
-
-- `tools/*.py` 在该 Agent **被拉起/复活时**扫描挂载（同名覆盖全局工具；一次性任务脚本防御自动继承）
-- 平铺形态继续有效；两种形态并存，无需迁移
-- 全部工具的完整清单见下方「工具对照表」（read/navigate/run_code/evaluate/equip/use）
 
 ## 最小示例
 

@@ -21,5 +21,11 @@
  "agent/reviewer.yml": "70dacf529c6e9252",
  "agent/vision.md": "1a511b278bae6445",
  "agent/vision.yml": "e1b0c55dc84d6b1f",
- "agent/wiki-updater.md": "d908a6df7ac35d46"
+ "agent/wiki-updater.md": "d908a6df7ac35d46",
+ "dir_doc/tools/builtin/README.md": "e2cb37deaf54afd0",
+ "dir_doc/.agent/tools/README.md": "587b1634156e5e57",
+ "dir_doc/.agent/agents/README.md": "4acc17f9b06a44bd",
+ "dir_doc/.agent/skills/README.md": "450b54a7d90a8e25",
+ "dir_doc/nodes/README.md": "6cc6422c8fd87c4c",
+ "dir_doc/.agent/nodes/README.md": "6cc6422c8fd87c4c"
 }

@@ -139,15 +139,40 @@ def _agent_md_path(name: str):
 
 
 def _agent_def_path(name: str):
-    """子 Agent 定义文件路径：.agent/agents/<name>.yml（v2）优先，不存在回退 <name>.md（旧格式）。
+    """子 Agent 定义文件路径（三种形态，优先级从高到低）：
+    · .agent/agents/<name>/<name>.yml —— 自包含目录形态（可带 <name>.md 人设与 tools/ 专属工具，
+      用户提案 2026-09-27：一个 agent 一个目录，人设/装配/专属工具整体拷贝与分发）
+    · .agent/agents/<name>.yml —— 平铺（v2 主形态）
+    · .agent/agents/<name>.md —— 平铺（旧格式）
     名字非法返回 None。返回值不保证存在（调用方自行判 exists）。"""
     if not _NAME_RE.match(name or ""):
         return None
     d = WORKSPACE / _AGENT_DIR / "agents"
+    yml_dir = d / name / f"{name}.yml"
+    if yml_dir.exists():
+        return yml_dir
+    md_dir = d / name / f"{name}.md"
+    if md_dir.exists():
+        return md_dir
     yml = d / f"{name}.yml"
     if yml.exists():
         return yml
     return d / f"{name}.md"
+
+
+def _agent_own_tools(name: str, agent):
+    """目录形态子 Agent 的专属工具：.agent/agents/<name>/tools/*.py
+    （agt_register 约定同 tools/builtin——一次性任务脚本防御自动继承）。
+    返回 Tool 列表（无目录/扫描失败 → []）。同名工具追加在全局工具之后（Toolbox 后注册胜出）。"""
+    d = WORKSPACE / _AGENT_DIR / "agents" / name / "tools"
+    if not d.is_dir():
+        return []
+    try:
+        from script_tools import scan_script_tools
+        return list(scan_script_tools(dirs=[d], agent=agent))
+    except Exception as e:
+        _LOG.warning("子 Agent '%s' 专属工具扫描失败: %s", name, e)
+        return []
 
 
 # assembly DSL v2：有序装配清单。合法段名（8 段）：必装段 system/user_message/steps 恒装
@@ -739,7 +764,9 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         # .yml：正文为空、persona 在 assembly file: 项里 → system 传空；.md 旧格式无正文才用兜底文案
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
+        from multiagent import _agent_own_tools
         toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
+        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(entry.name, agent))   # 专属工具（同名覆盖全局）
         model_name = meta.get("model") or entry.model or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name
@@ -1182,6 +1209,7 @@ def make_subagent_tools(agent) -> list:
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
+        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent))   # 专属工具（同名覆盖全局）
         model_name = meta.get("model") or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name

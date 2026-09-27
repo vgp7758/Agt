@@ -1,0 +1,9 @@
+name: translator
+description: 中英互译助手——把用户给的中文/英文文本互译（演示目录形态子 Agent：声明+人设+专属工具同目录）
+tools: ""
+model: ""
+assembly:
+  - system
+  - file: .agent/agents/translator/translator.md
+  - user_message
+  - steps

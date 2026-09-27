@@ -47,10 +47,8 @@ PARAMS = [
     {"key": "route", "type": "boolean", "required": False, "default": True,
      "desc": "true=branch_N/default 端口路由（兼容 intent 语义，须按意图接端口边）；false=单出口模式"
              "（port=None，普通直连边照走——动态意图列表/只取 outputs 的场景用）"},
-    {"key": "temperature", "type": "number", "required": False, "default": 1.0,
-     "desc": "NanoJev 采样温度（默认 1.0；想更确定性可调低，如 0.3）"},
     {"key": "threshold", "type": "number", "required": False, "default": 0.0,
-     "desc": "置信度阈值（0-1）：top1 概率低于它 → 走 default（软拒识不确定样本）"},
+     "desc": "置信度阈值（0-1）：top1 概率低于它 → intent 置空（软拒识不确定样本）"},
 ]
 
 
@@ -107,20 +105,23 @@ def _origin(base: str) -> str:
     return f"{s.scheme}://{s.netloc}"
 
 
-def _decide(query, criteria, instructions, temperature, base, token=""):
+def _decide(query, criteria, instructions, base, token=""):
     """submit → 轮询 result → 返回 answers 或 None。
     兼容两种服务形态：提交端点={base} 本身（如 lfm_proxy 的 /run/nanojev）或
     {base}/api/submit（nanojev_server 原生）；轮询路径优先用 submit 响应的 poll 字段
-    （服务自描述，可能是相对 origin 的绝对路径），无则回落 {base}/api/result/{rid}。"""
+    （服务自描述，可能是相对 origin 的绝对路径），无则回落 {base}/api/result/{rid}。
+    （2026-09-27 实测两项：① choice 题型服务端**必填** instruct——缺失直接 HTTP 400，
+    删不得；② instructions 不进前向（响应无回显、E1/E3 概率逐位一致）——只作字段占位；
+    temperature 亦无效（确定性打分），均已从调用面移除。）"""
     body = {"states": [{
         "id": "route",
         "state": str(query),
         "questions": {"intent": {
             "type": "choice",
-            "instructions": instructions,
             "criteria": criteria,
+            "instructions": str(instructions or ""),
         }}}],
-        "temperature": float(temperature or 1.0)}
+    }
     sub, rid, poll_rel = None, None, ""
     for submit_url in (base, base.rstrip("/") + "/api/submit"):
         try:
@@ -215,10 +216,6 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
                    for i in inputs.get("intents", []) if (i.get("name") or "").strip()]
     query = params.get("query") or next((v for v in params.values() if v), "")
     try:
-        temperature = float(params.get("temperature") or 1.0)
-    except Exception:
-        temperature = 1.0
-    try:
         threshold = float(params.get("threshold") or 0.0)
     except Exception:
         threshold = 0.0
@@ -233,10 +230,10 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
     # submit 才是最终裁决（提交端点形态可能没有 health 路由，探活 404 不代表不可用，2026-09-27 实测）
 
     criteria = {name: (desc or name) for name, desc in intents}
-    instructions = str(params.get("instructions") or "判断输入文本属于哪个意图类别")
-    ans = _decide(query, criteria, instructions, temperature, base, token)
+    instruct = str(params.get("instructions") or "判断输入文本属于哪个意图类别")
+    ans = _decide(query, criteria, instruct, base, token)
     if not ans:
-        return _llm_fallback(query, intents, ctx, note="nanojev 决策失败/超时")
+        return _llm_fallback(query, intents, ctx, note="nanojev 决策失败/超时", route=route)
 
     probs = ans.get("probabilities") or {}
     choice = str(ans.get("choice") or "")

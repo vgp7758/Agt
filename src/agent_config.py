@@ -492,10 +492,18 @@ def skills_summary(workspace: Path) -> str:
 # ===== 子 Agent 声明（.agent/agents/*.yml，声明式 + 按需实例化 + 一次性；兼容旧 .md）=====
 
 def _agents_glob(d: Path):
-    """扫 .agent/agents/ 下的 *.yml 与 *.md（兼容旧格式），返回 file 列表。"""
+    """扫 .agent/agents/ 的声明文件（两种形态）：
+    · 平铺：*.yml / *.md（兼容旧格式）
+    · 目录：<name>/<name>.yml（自包含目录形态：可带 <name>.md 人设与 tools/ 专属工具）——
+      目录内 .md 不单列（由 yml 的 file: 装配引用），避免同名遮蔽误判。"""
     if not d.exists():
         return []
-    return sorted([p for p in d.glob("*.yml")] + [p for p in d.glob("*.md")])
+    out = sorted([p for p in d.glob("*.yml")] + [p for p in d.glob("*.md")])
+    for sub in sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))):
+        y = sub / f"{sub.name}.yml"
+        if y.exists():
+            out.append(y)
+    return out
 
 
 def load_agents_index(workspace: Path) -> list[dict]:

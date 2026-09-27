@@ -881,5 +881,137 @@ def save_skill(name: str, description: str, when_to_use: str, sop: str) -> str:
     return f"✅ 已保存技能 '{name}' -> {(d / 'SKILL.md').relative_to(WORKSPACE)}"
 
 
+
+# ============ 技能服务（skill_equip / skill_use，用户提案 2026-09-27）============
+# 技能包可带 server.py（类 MCP 但按需装备、不进 tools schema）：
+#   · 启动时以 cwd=技能目录拉起，stdout 先打印能力清单（自由格式，给 Agent 看）
+#     到 ===CAPS_END=== 行结束；之后循环：stdin 一行命令（CLI 风格，如 "do_sth2 --y"）
+#     → 处理 → stdout 若干行结果 → ===DONE=== 行。
+#   · 与 skill_run_code 的分工：run_code=一次性无状态执行；equip/use=常驻有状态服务
+#     （维持窗口焦点/模型加载/会话等跨调用状态）。
+_SKILL_SERVICES: dict = {}
+_CAPS_END, _USE_DONE = "===CAPS_END===", "===DONE==="   # ★ 注意：三等号——曾打成 ==DONE=== 导致 use 恒超时（真凶，实测抓出）
+
+
+def _pipe_read_until(pipe, marker: str, timeout: float):
+    """后台线程逐行读 pipe 到 marker 行。返回 (已收文本, ok)；超时 ok=False（文本为已收部分）。"""
+    import queue
+    import threading
+    import time as _t
+    q: "queue.Queue[str]" = queue.Queue()
+
+    def _pump():
+        try:
+            for ln in pipe:
+                q.put(ln.rstrip("\r\n"))
+                if ln.rstrip("\r\n") == marker:
+                    return
+        except Exception:
+            pass   # 管道断（服务退出）
+
+    th = threading.Thread(target=_pump, daemon=True)
+    th.start()
+    lines, t0 = [], _t.time()
+    while _t.time() - t0 < timeout:
+        try:
+            ln = q.get(timeout=0.4)
+        except queue.Empty:
+            if not th.is_alive() and q.empty():
+                break   # 管道已断且无积压
+            continue
+        if ln == marker:
+            return "\n".join(lines), True
+        lines.append(ln)
+    return "\n".join(lines), False
+
+
+def _svc_kill(name: str):
+    svc = _SKILL_SERVICES.pop(name, None)
+    if svc:
+        try:
+            svc["proc"].kill()
+        except Exception:
+            pass
+
+
+import atexit
+
+
+@atexit.register
+def _skill_services_cleanup():
+    for n in list(_SKILL_SERVICES):
+        _svc_kill(n)
+
+
+def skill_equip(name: str) -> str:
+    """装备技能服务：拉起技能包 server.py（cwd=技能目录），返回其打印的能力清单。
+    server.py 协议：启动后 stdout 打印能力清单（自由格式，含命令/参数说明）到
+    ===CAPS_END=== 行；此后每收到 stdin 一行命令输出结果到 ===DONE=== 行。
+    重复装备 = 杀旧起新（幂等）。与 skill_use(name, "cmd --args") 配对；
+    服务常驻到 Agent 进程退出（有状态：跨调用保持模型加载/会话等）。"""
+    import subprocess
+    import sys
+    d, _scope = _resolve_skill(name)
+    if d is None:
+        return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
+    sp = d / "server.py"
+    if not sp.exists():
+        return (f"[无服务] 技能 '{name}' 没有 server.py（装备仅适用于带常驻服务的技能；"
+                f"普通技能用 read_skill / skill_run_code）")
+    _svc_kill(name)   # 幂等：先杀旧实例
+    import os
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"   # 关键：子进程 pipe 输出无缓冲——技能作者忘写 flush 也不至于清单憋在缓冲里死锁（实测踩坑）
+    try:
+        p = subprocess.Popen([sys.executable, str(sp)], cwd=str(d),
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                             errors="replace", bufsize=1, env=env)
+    except Exception as e:
+        return f"[启动失败] {e}"
+    caps, ok = _pipe_read_until(p.stdout, _CAPS_END, timeout=30)
+    if not ok:
+        rc = p.poll()
+        p.kill()
+        if rc is not None:
+            return f"[启动即退出] server.py 退出码 {rc}。已产出输出：\n{caps or '（无）'}"
+        return f"[启动超时] 30s 内未收到 ===CAPS_END=== 能力清单结束行。已产出输出：\n{caps or '（无）'}"
+    _SKILL_SERVICES[name] = {"proc": p, "dir": str(d)}
+    return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）。能力清单：\n{caps or '（清单为空）'}\n"
+            f"用法：skill_use(name='{name}', command=\"<命令> --参数\")")
+
+
+def skill_use(name: str, command: str) -> str:
+    """向已装备的技能服务发命令执行（如 skill_use(name, "do_sth2 --y")）。
+    命令格式由服务能力清单自行约定（CLI 风格，服务内部 shlex 解析）；
+    单命令 120s 超时。未装备时自动装备（首次多 ~启动耗时）。服务退出后再次使用会
+    提示重新装备。"""
+    svc = _SKILL_SERVICES.get(name)
+    if svc is None:
+        pre = skill_equip(name)
+        if not pre.startswith("✅"):
+            return pre
+        svc = _SKILL_SERVICES[name]
+    p = svc["proc"]
+    if p.poll() is not None:
+        _SKILL_SERVICES.pop(name, None)
+        return f"[服务已退出] '{name}'（code {p.returncode}）——重新 skill_equip 后再试"
+    try:
+        p.stdin.write((command or "").strip() + "\n")
+        p.stdin.flush()
+    except Exception as e:
+        _SKILL_SERVICES.pop(name, None)
+        return f"[发送失败] {e}（服务已退出，重新 skill_equip 后再试）"
+    out, ok = _pipe_read_until(p.stdout, _USE_DONE, timeout=120)
+    if not ok:
+        if p.poll() is not None:
+            _SKILL_SERVICES.pop(name, None)
+            return f"[服务中途退出] code {p.returncode}。已产出输出：\n{out or '（无）'}"
+        return (f"[超时] '{command}' 120s 未完成（无 ===DONE=== 结束行，或服务卡死——"
+                f"必要时 skill_equip 重启）。已产出输出：\n{out or '（无）'}")
+    return out.strip() or "（无输出）"
+
+
 SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate),
-                     Tool(skill_run_code), Tool(skill_evaluate))
+                     Tool(skill_run_code), Tool(skill_evaluate),
+                     Tool(skill_equip), Tool(skill_use))

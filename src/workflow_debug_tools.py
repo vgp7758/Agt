@@ -14,6 +14,39 @@ from workflow_xml import parse_xml_fragment
 def make_workflow_debug_tools(agent) -> list:
     workspace = getattr(agent.session, "workspace", None)
 
+    def _load_wf_canvas(_name):
+        """按名加载工作流 canvas：本 repo .agent/workflows/ 优先，其次【已激活技能的 workflows/】——
+        技能携带工作流（exec_workflow / debug_workflow 专用入口；不进编辑器列表与钩子发现）。"""
+        from real_tools import WORKSPACE
+
+        def _read(p, ext):
+            if ext == ".json":
+                return json.loads(p.read_text(encoding="utf-8"))
+            from workflow_xml import xml_to_canvas
+            return xml_to_canvas(p.read_text(encoding="utf-8"))
+
+        wf_dir = (workspace or WORKSPACE) / ".agent" / "workflows"
+        for ext in (".json", ".xml"):
+            p = wf_dir / f"{_name}{ext}"
+            if p.exists():
+                return _read(p, ext)
+        try:
+            from agent_config import load_skills_index, _resolve_skill
+            for it in (load_skills_index(workspace) or []):
+                _nm = it.get("name") if isinstance(it, dict) else getattr(it, "name", None)
+                if not _nm:
+                    continue
+                d, _scope = _resolve_skill(_nm, workspace)
+                if d is None:
+                    continue
+                for ext in (".xml", ".json"):
+                    p = d / "workflows" / f"{_name}{ext}"
+                    if p.exists():
+                        return _read(p, ext)
+        except Exception:
+            pass
+        return None
+
     def debug_workflow(name: str, inputs: str = "") -> str:
         """调试执行一个工作流，返回各节点的输出摘要。name 为工作流名(不含路径)；
         inputs 可选 JSON 字符串（如 {"user_message":"你好"}），对应开始节点的入参。
@@ -22,20 +55,9 @@ def make_workflow_debug_tools(agent) -> list:
         _name = (name or "").strip()
         if not _name:
             return "[错误] 请提供工作流名"
-        from real_tools import WORKSPACE
-        wf_dir = (workspace or WORKSPACE) / ".agent" / "workflows"
-        canvas = None
-        for ext in (".json", ".xml"):
-            p = wf_dir / f"{_name}{ext}"
-            if p.exists():
-                if ext == ".json":
-                    canvas = json.loads(p.read_text(encoding="utf-8"))
-                else:
-                    from workflow_xml import xml_to_canvas
-                    canvas = xml_to_canvas(p.read_text(encoding="utf-8"))
-                break
+        canvas = _load_wf_canvas(_name)
         if canvas is None:
-            return f"[错误] 找不到工作流 {_name!r}"
+            return f"[错误] 找不到工作流 {_name!r}（.agent/workflows/ 与已激活技能 workflows/ 均无）"
         try:
             inp = json.loads(inputs) if inputs and inputs.strip() else {}
         except json.JSONDecodeError:
@@ -55,6 +77,77 @@ def make_workflow_debug_tools(agent) -> list:
             lines.append(f"  {nid}: {ks} → {preview}")
         lines.append(f"\nlist_workflow_outputs('{','.join(order[:4])}') 看指定节点输出层；eval_node_output(id,script) 过滤/投影。")
         return "\n".join(lines)
+
+    def exec_workflow(name: str, inputs: str = "", timeout: int = 0) -> str:
+        """正式执行一个工作流，返回业务结果（结束节点输出）。与 debug_workflow 的分工：
+        exec = 正式执行（结果 + 长任务超时自动转后台 + 完成通知）；debug = 调试（节点级 trace 四件套）。
+        name: 工作流名（不含路径）；inputs: JSON 字符串（开始节点入参）；
+        timeout: 超时秒数（0=用当前工具超时）；超时自动转后台，用 check_bg_task 查/收结果。"""
+        from workflow import execute_debug
+        import threading
+        import time as _time
+        _name = (name or "").strip()
+        if not _name:
+            return "[错误] 请提供工作流名"
+        canvas = _load_wf_canvas(_name)
+        if canvas is None:
+            return f"[错误] 找不到工作流 {_name!r}（.agent/workflows/ 与已激活技能 workflows/ 均无）"
+        try:
+            inp = json.loads(inputs) if inputs and inputs.strip() else {}
+        except json.JSONDecodeError:
+            inp = {"user_message": inputs or ""}
+
+        import real_tools as _rt
+        _tmo = float(timeout) if timeout and float(timeout) > 0 else float(getattr(_rt, "TOOL_TIMEOUT", 10))
+        _res: dict = {}
+
+        def _run():
+            try:
+                _llm = agent.utility_client() if getattr(agent, "utility_client", None) else agent.llm
+                exit_dict, order, trace = execute_debug(
+                    canvas, inp, tools=agent.tools, llm=_llm, on_node=lambda e: None)
+                _res["ok"] = (exit_dict, order, trace)
+            except Exception as e:
+                _res["err"] = f"{type(e).__name__}: {e}"
+
+        def _finish_out():
+            if "err" in _res:
+                return [f"[执行失败] {_res['err']}"]
+            exit_dict, order, trace = _res["ok"]
+            try:
+                body = json.dumps(exit_dict, ensure_ascii=False, indent=1)
+            except Exception:
+                body = str(exit_dict)
+            return [f"工作流 {_name!r} 执行完成（{len(order)} 个节点）。",
+                    "结果（结束节点输出）：", body[:4000]]
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(_tmo)
+        if th.is_alive():
+            # 超时 → 转后台（注册进 real_tools._bg_tasks，与 run_python/run_shell 同一张表，check_bg_task 直接可查）
+            bg_id = f"bg_{int(_time.time()*1000)}"
+            _task = {"name": f"exec_workflow:{_name}", "proc": None, "output": [],
+                     "started_at": _time.time(), "finished": False, "returncode": None}
+            _rt._bg_tasks[bg_id] = _task
+
+            def _bg_wait(_bg_id=bg_id, _task=_task, _th=th):
+                _th.join()
+                _task["output"] = _finish_out()
+                _task["returncode"] = 0 if "err" not in _res else 1
+                _task["finished"] = True
+                _task["finished_at"] = _time.time()
+                _cb = getattr(_rt, "_bg_notify_cb", None)
+                if _cb is not None:
+                    try:
+                        _cb(_bg_id, _task["name"], _task["returncode"])
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_bg_wait, daemon=True).start()
+            return (f"[工作流超过 {_tmo:.0f}s 未完成，已转后台运行（任务ID: {bg_id}）。\n"
+                    f"完成时会自动推送通知唤醒你（无需轮询）。中途可用 check_bg_task(\"{bg_id}\") 查进度与结果。]")
+        return "\n".join(_finish_out())
 
     def list_workflow_outputs(node_ids: str = "") -> str:
         """列出上一次 debug_workflow 后指定节点的输出（每节点截断 300 字，防爆上下文）。
@@ -177,5 +270,6 @@ def make_workflow_debug_tools(agent) -> list:
                 return f"[重跑失败] 配置已替换但执行报错: {type(e).__name__}: {e}"
         return f"✅ 节点 {nid} 配置已热替换（类型 {ntype} 不支持单节点重跑——可 debug_workflow 全流程验证）"
 
-    return [Tool(debug_workflow), Tool(list_workflow_outputs), Tool(eval_node_output),
+    return [Tool(exec_workflow), Tool(debug_workflow, hidden=True),
+            Tool(list_workflow_outputs), Tool(eval_node_output),
             Tool(hotswap_workflow_node)]

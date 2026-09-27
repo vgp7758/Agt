@@ -1,9 +1,10 @@
 """script_tools.py —— 外置脚本工具：扫描约定目录 → agt_register() 元信息 → 注册进 Toolbox。
 
 目录约定（信任模型与 workflows/agents 一致：目录内 .py 会被 import 执行，勿放不受信脚本）：
-  tools/            workspace 级（随仓库分发；builtin/ 子目录放原内置迁移件）
+  tools/builtin/    workspace 级用户工具（★只认 builtin 子目录——tools/ 根不再扫描，
+                    防一次性任务脚本被随手丢进来、入库即执行卡死启动，2026-09-27 实锤）
   .agent/tools/     用户/Agent 私有（实验性工具）
-扫描顺序 tools/ → .agent/tools/，同名后者覆盖前者 → 再覆盖内置（后注册胜出，
+扫描顺序 tools/builtin/ → .agent/tools/，同名后者覆盖前者 → 再覆盖内置（后注册胜出，
 同时成为用户定制覆写内置工具的机制）。
 
 脚本约定：定义 agt_register() 返回描述符列表（每项一个工具）：
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +60,39 @@ def _import_fresh(path: Path):
     sys.modules[modname] = mod      # 脚本内自引用/数据类需要
     spec.loader.exec_module(mod)
     return mod
+
+
+# —— 一次性任务脚本防御（2026-09-27 50052 实锤：tools/ 里躺着模块级 15 分钟轮询的任务脚本，
+#    scan import 即执行 → 启动卡死；且 tools/ 这类目录名容易被随手丢脚本）——
+# 特征：顶层（无缩进）出现 while/sleep/input/HTTP 调用 → 疑似任务脚本，先走子进程预检；
+# 正常工具库全函数化（顶层只有 import/def/常量），直接 import 零额外开销。
+_TASKLIKE = re.compile(r"^(while |time\.sleep\(|input\(|\w+\s*=\s*urllib|\w+\s*=\s*requests\.|\w+\s*=\s*urlopen)", re.M)
+_IMPORT_PROBE_TIMEOUT = 8.0
+
+
+def _needs_probe(path: Path) -> bool:
+    try:
+        src = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return True
+    return bool(_TASKLIKE.search(src))
+
+
+def _import_probe(path: Path):
+    """子进程预检：独立进程里 exec 该脚本，超时/报错则拒绝在本进程 import。
+    返回 (ok, detail)。import 无法中断（GIL），同进程超时不可行——子进程是唯一可靠手段。"""
+    import subprocess
+    code = (
+        "import importlib.util as _iu, sys\n"
+        f"spec = _iu.spec_from_file_location('probe_mod', r'{path}')\n"
+        "m = _iu.module_from_spec(spec); sys.modules['probe_mod'] = m; spec.loader.exec_module(m)\n"
+    )
+    try:
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=_IMPORT_PROBE_TIMEOUT, cwd=str(path.parent))
+        return r.returncode == 0, (r.stderr or "")[-200:]
+    except subprocess.TimeoutExpired:
+        return False, f"import 预检超时(>{_IMPORT_PROBE_TIMEOUT:.0f}s)——疑似一次性任务脚本（模块级长循环/阻塞 IO），不应放在工具目录"
 
 
 def _invoke_agt_register(mod, ctx: dict):
@@ -190,10 +225,11 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
 
 def default_dirs() -> list:
     """约定扫描目录（优先级从低到高，同名后扫覆盖先扫）：
-    随包 tools_builtin（pip 安装也有这批迁移件）→ tools/ → .agent/tools/（私有覆盖）。"""
+    随包 tools_builtin → tools/builtin/（★用户工具只认这个子目录——tools/ 根常被随手丢
+    一次性任务脚本，入库即执行会卡死启动，2026-09-27 实锤）→ .agent/tools/（私有覆盖）。"""
     from real_tools import WORKSPACE
     pkg = Path(__file__).parent / "assets" / "tools_builtin"
-    return [pkg, WORKSPACE / "tools", WORKSPACE / ".agent" / "tools"]
+    return [pkg, WORKSPACE / "tools" / "builtin", WORKSPACE / ".agent" / "tools"]
 
 
 def scan_script_tools(dirs=None, agent=None) -> Toolbox:
@@ -222,6 +258,15 @@ def scan_script_tools(dirs=None, agent=None) -> Toolbox:
                 if ent and ent["mtime"] == mtime:
                     tools = ent["tools"]
                 else:
+                    # ★ 一次性任务脚本防御（2026-09-27 50052 实锤）：疑似任务脚本先子进程预检，
+                    #   超时/报错则拒绝在本进程 import（import 无法中断，卡死即拖死整个启动）
+                    if _needs_probe(py):
+                        ok, detail = _import_probe(py)
+                        if not ok:
+                            failed.append(f"{py.name}: import 预检未通过——{detail}")
+                            _LOG.warning("脚本工具 %s 跳过（import 预检未通过）：%s", py.name, detail)
+                            _CACHE[abs_p] = {"mtime": mtime, "tools": []}
+                            continue
                     mod = _import_fresh(py)
                     reg = getattr(mod, "agt_register", None)
                     if reg is None:
@@ -256,7 +301,7 @@ def make_hot_reload_tools(agent):
     from tools import Tool
 
     def reload_hot(scope: str = "all") -> str:
-        """热重载脚本工具与节点插件（免 /restart）。改了 tools//.agent/tools/ 的工具脚本或
+        """热重载脚本工具与节点插件（免 /restart）。改了 tools/builtin//.agent/tools/ 的工具脚本或
         nodes//.agent/nodes/ 的节点插件后调用。scope: all(默认)/tools(仅工具)/nodes(仅节点)。"""
         parts = []
         sc = (scope or "all").strip().lower()
@@ -273,7 +318,7 @@ def make_hot_reload_tools(agent):
 
 def reload_script_tools(agent, dirs=None) -> str:
     """热加载（/reload tools）：mtime 失效重扫 + 摘除旧注册 + 重挂新工具。返回摘要文本。
-    dirs：默认 None=约定目录（tools/ + .agent/tools/）；测试/自定义场景可传目录列表。"""
+    dirs：默认 None=约定目录（tools/builtin/ + .agent/tools/）；测试/自定义场景可传目录列表。"""
     # 摘旧（改名/删除的工具不留残尸）
     gone = 0
     for nm in list(_LAST["names"]):

@@ -1279,6 +1279,24 @@ def make_subagent_tools(agent) -> list:
                 _LOG.info("wait_subagents: %s join 超时仍 running（timeout=%ds）——任务未完成而非卡死判定",
                           aid, int(timeout))
             out.append(f"[{aid}] {'⏳仍在跑（超时，稍后再 wait）' if still else f'{st}：{res}'}")
+        # 【去重】（用户实锤 2026-09-28）：上面的循环已把这些子 Agent 的结果作为本工具返回
+        # 交给本轮上下文——把 inbox 里同源（subagent:<aid>）的副本移除并同步 inbox.jsonl，
+        # 防轮结束后 inbox 出队再消费一次同一回复（wait 返回 + inbox 唤醒轮 = 双消费）。
+        # 安全性：inbox 无时间戳，但"wait 之前完成"的条目早已在之前的轮被 pop 消费（不在 inbox），
+        # 现存的 subagent:<aid> 必为本 wait 等待期间入队；aid 完成即终结，不会二次 push。
+        try:
+            import collections as _co
+            srcs = {f"subagent:{a_}" for a_ in ids}
+            with agent._inbox_lock:
+                before = len(agent.inbox)
+                if before:
+                    agent.inbox = _co.deque(it for it in agent.inbox if it[0] not in srcs)
+                    if len(agent.inbox) != before:
+                        agent._inbox_persist_rewrite()
+                        _LOG.info("wait_subagents 去重：移除 %d 条已由本工具返回的 inbox 副本",
+                                  before - len(agent.inbox))
+        except Exception:
+            pass
         return "\n\n".join(out)
 
     def list_agents() -> str:

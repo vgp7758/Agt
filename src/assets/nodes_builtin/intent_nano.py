@@ -195,6 +195,11 @@ def _handle_intent_nano(node: dict, ctx) -> dict:
     # intents 双来源（2026-09-27）：inputParameters 的 intents（ref 动态装填，运行时列表如技能
     # 清单）优先；回落 XML 静态子元素 <intent name="..">…</intent>（编辑器形态）
     dyn = params.get("intents")
+    if isinstance(dyn, str) and dyn.strip().startswith("["):
+        try:
+            dyn = json.loads(dyn)          # 手动 JSON 文本输入（textarea 字面量）兜底
+        except Exception:
+            dyn = None
     if isinstance(dyn, list) and dyn:
         intents = []
         for it in dyn:

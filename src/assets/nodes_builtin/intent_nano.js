@@ -7,6 +7,8 @@ EdFW.register({
   defaults: {nodeMeta: {title: "意图路由·Nano"},
              inputs: {inputParameters: [
                         {name: "query", input: {type: "string", value: {type: "literal", content: ""}}},
+                        {name: "intents", input: {type: "list", value: {type: "literal", content: ""}}},
+                        {name: "route", input: {type: "boolean", value: {type: "literal", content: "true"}}},
                         {name: "temperature", input: {type: "number", value: {type: "literal", content: "1.0"}}},
                         {name: "threshold", input: {type: "number", value: {type: "literal", content: "0.35"}}}],
                       intents: [{name: "code", description: "要求编写、修改、调试代码"},
@@ -20,16 +22,26 @@ EdFW.register({
     // 无 'input'（普通文本走 default）；占位符 key 是 tip（非 ph）——用户实测 2026-09-22
     { key: "query", label: "query", tip: "待分类文本（ref 上游字段）",
       get(n) { return ipGet(n, "query"); }, set(n, v) { ipSet(n, "query", v); } },
+    { key: "intents", label: "意图列表（动态/ref）", widget: "textarea",
+      tip: "★ref 连线优先（type=list，如上游技能清单 [{name,description}]）；或手填 JSON 数组。留空=用下方静态意图编辑",
+      get(n) { const p = (n.data.inputs?.inputParameters || []).find(x => x.name === "intents");
+               if (p?.input?.value?.type === "ref") { const c = p.input.value.content || {}; return "🔗 " + (c.blockID || "?") + "." + (c.name || "?"); }
+               return p?.input?.value?.content ?? ""; },
+      set(n, v) { ipSet(n, "intents", v, "list"); } },
+    { key: "route", label: "branch 路由", widget: "checkbox",
+      tip: "true=branch_N/default 端口路由（须按意图接端口边）；false=单出口（port=None，直连边照走——动态意图列表/只取 outputs 用）",
+      get(n) { const v = ipGet(n, "route"); return v === "" || v === true || String(v).toLowerCase() !== "false"; },
+      set(n, v) { ipSet(n, "route", v, "boolean"); } },
     { key: "temperature", label: "温度", widget: "number", tip: "1.0",
       get(n) { return ipGet(n, "temperature"); }, set(n, v) { ipSet(n, "temperature", v); } },
     { key: "threshold", label: "阈值", widget: "number", tip: "0.35（top1 低于它走 default）",
       get(n) { return ipGet(n, "threshold"); }, set(n, v) { ipSet(n, "threshold", v); } },
-    { key: "intents", label: "意图", widget: "custom",
+    { key: "intents_static", label: "静态意图（XML 子元素）", widget: "custom",
       get(n) { return (n.data.inputs?.intents || []).map(x => x.name).join(","); },
       set() {},
       html(n) {
         const intents = n.data.inputs?.intents || [];
-        let h = '';
+        let h = '<div style="font-size:10px;color:#8a9099;margin-bottom:2px">静态 <intent> 子元素（intents 参数留空时才生效）：</div>';
         intents.forEach((it, i) => {
           h += `<div style="display:flex;gap:3px;margin:2px 0;align-items:center"><span style="font-size:10px;color:#8a9099">${i + 1}.</span>` +
                `<input value="${ext(it.name || '')}" placeholder="意图名" onchange="NODEP_INANO_set(${i},'name',this.value)" style="width:80px;font-size:11px">` +
@@ -59,10 +71,11 @@ function ipGet(n, k) {
   const lp = n.data.inputs?.inputParameters || [];
   return lp.find(x => x.name === k)?.input?.value?.content ?? "";
 }
-function ipSet(n, k, v) {
+function ipSet(n, k, v, type) {
   let lp = n.data.inputs.inputParameters || (n.data.inputs.inputParameters = []);
   let p = lp.find(x => x.name === k);
-  if (!p) { p = { name: k, input: { type: "string", value: { type: "literal", content: "" } } }; lp.push(p); }
+  if (!p) { p = { name: k, input: { type: type || "string", value: { type: "literal", content: "" } } }; lp.push(p); }
+  if (type) p.input.type = type;   // 类型变更（string→list/boolean：端口类型与 ref 匹配）
   p.input.value.content = v;
 }
 // 意图编辑器全局（注入脚本=全局作用域；name/description 双列）

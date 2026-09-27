@@ -49,7 +49,8 @@ def _rules_and_skills_section(workspace=WORKSPACE) -> str:
     if skills:
         parts.append("=== 可用技能（repo .agent/skills/ + 已激活全局技能；🌐=全局）===\n"
                      "任务匹配某技能时，先 read_skill(name) 取详细 SOP 再按它执行"
-                     "（大技能先 skill_navigate(name) 浏览结构/分节读；技能自带脚本用 skill_run_code(name, script) 执行）：\n"
+                     "（大技能先 skill_navigate(name) 浏览结构/分节读；技能自带脚本用 skill_run_code(name, script) 执行；"
+                     "带 server.py 的技能可 skill_equip(name) 装备常驻服务、skill_use(name, '命令 --参数') 调用）：\n"
                      + skills + "\n（完成可复用任务后可用 save_skill 沉淀新技能到本 repo）")
     agents = agents_summary(workspace)
     if agents:

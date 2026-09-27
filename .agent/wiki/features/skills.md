@@ -1,4 +1,4 @@
-# 技能体系 · SKILL.md 技能包 + 双层寻址（repo 本地 / 全局 ~/.agt/skills）+ 技能工具五件套
+# 技能体系 · SKILL.md 技能包 + 双层寻址（repo 本地 / 全局 ~/.agt/skills）+ 技能工具七件套
 
 > 技能 = 「frontmatter（name/description/when_to_use）+ SOP 正文」的 `SKILL.md` 目录包，可选带脚本/资产。SYSTEM 注入一行一技能的【可用技能】清单，Agent 任务匹配时按需取 SOP 执行；完成可复用任务后 `save_skill` 沉淀。核心实现全在 `src/agent_config.py`（技能工具注册处），SYSTEM 摘要文案在 `src/chat.py`。
 
@@ -31,17 +31,19 @@ def _resolve_skill(name, workspace=None):
 - 清单里点了但包不存在/无 SKILL.md → 静默跳过（`load_skills_index` 不报错）
 - 组件：`_global_skills_root()`（`AGT_DIR/skills`，经 paths 单一数据根）+ `_enabled_global_skills(workspace)`（清单解析）+ `load_skills_index(workspace)`（本地扫 + 全局已激活合并，条目带 `scope` 字段）
 
-## 技能工具五件套（原二 + 新三）
+## 技能工具七件套（原二 + 新五）
 
-`SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate), Tool(skill_run_code), Tool(skill_evaluate))`
+`SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate), Tool(skill_run_code), Tool(skill_evaluate), Tool(skill_equip), Tool(skill_use))`
 
 | 工具 | 职责 | 关键语义 |
 |---|---|---|
 | `read_skill(name)` | 读完整 SKILL.md（含详细 SOP） | 统一寻址；找不到时 `_skill_not_found` 指路：「若是全局技能，需在本 repo 的 global-skills.json 激活清单里启用」 |
 | `save_skill(name, description, when_to_use, sop)` | 沉淀新技能 | **仍写 repo 本地** `.agent/skills/`（全局技能的维护直接编辑 `~/.agt/skills/` 文件） |
-| `skill_navigate(name, section, list_only)` | 结构浏览 / 分节读 | 见下 |
-| `skill_run_code(name, script, args)` | 执行技能包内 .py | 见下 |
+| `skill_navigate(name, section, list_only, file)` | 结构浏览 / 分节读 / 读包内文件 | 见下 |
+| `skill_run_code(name, script, args)` | 执行技能包内 .py（一次性无状态） | 见下 |
 | `skill_evaluate(name, input)` | 技能约定评测入口 | 见下 |
+| `skill_equip(name)` | 装备技能常驻服务（server.py） | 见下 |
+| `skill_use(name, command)` | 向已装备服务发命令 | 见下 |
 
 ### skill_navigate · 大技能不必整读
 
@@ -115,6 +117,39 @@ def _resolve_skill(name, workspace=None):
 2. 否则包内 `EVAL.md` → 返回评测说明（6K 截断）
 3. 都没有 → 明确提示「技能作者未约定评测方式」（不猜不编）
 
+### 技能服务 skill_equip / skill_use · 常驻有状态服务（2026-09-27，用户提案，commit b33f230）
+
+- 技能包可带 `server.py`——**类 MCP 的常驻服务**，但按需装备：不拉起 agent 时自动注册、工具不进 tools schema（零 schema 膨胀、零启动开销）
+- **与 skill_run_code 的分工**：run_code = 一次性无状态执行（每次冷启动）；equip/use = **常驻有状态服务**（模型加载、会话、窗口焦点等跨调用状态得以保持）
+- 起源：用户提案「skill 的目录里可以有个 server.py，类似 mcpServer 但不需要拉起 agent 时自动注册全部工具，而是 skill_equip 时以 cwd 拉起服务、返回能力说明，skill_use(name, "do_sth2 --y") 发命令执行」——实现 `src/agent_config.py`，demo 技能 `.agent/skills/test-svc/`
+
+**stdio 行协议**（极简，技能作者一个循环就能写）：
+
+```python
+# server.py（cwd=技能目录被拉起）
+print("do_sth1:      # 执行do_sth1操作，用来XXXXX")
+print("  --file          # 文件路径")
+print("do_sth2:      # 执行do_sth2操作，用来YYYYY")
+print("  --y             # 可选是否XXX")
+print("===CAPS_END===")          # 能力清单结束标记
+for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
+    ...处理...
+    print(结果)
+    print("===DONE===")         # 每条命令结束标记
+```
+
+**框架行为**：
+
+| 环节 | 语义 |
+|---|---|
+| `skill_equip(name)` | Popen 拉起 `server.py`（`cwd=技能目录`、`PYTHONUNBUFFERED=1`）→ 读能力清单（30s 超时）→ 返回给 Agent。重复装备 = 杀旧起新（幂等）；无 server.py → 提示走 read_skill/run_code；坏服务（启动即退/超时未出清单）→ 带已产出输出的明确诊断 |
+| `skill_use(name, command)` | 向已装备服务发一行命令 → 读结果到 `===DONE===`（120s 超时）。**未装备时自动装备**；服务退出/发送失败均有明确诊断并提示重新 equip |
+| 生命周期 | 服务常驻到 Agent 进程退出（atexit `_skill_services_cleanup` 全杀） |
+
+- **验证 9 场景全绿**：equip 清单完整 / `add 5→add 3→show = count=8`（**跨调用状态保持——核心价值实证**）/ 中文参数原样 / 幂等重启清零 / 无 server.py 提示 / 未装备自动装备 / 坏服务诊断
+- **调试中抓到的两个坑**：① 子进程 stdout pipe **全缓冲**——4 行清单憋在缓冲区父进程永远读不到（死锁）→ 框架侧 `PYTHONUNBUFFERED=1` 兜底（作者忘写 flush 也不死锁）；② `_USE_DONE` 常量误写 `==DONE===`（少一个等号）与协议 `===DONE===` 永不匹配 → use 恒超时——最小复现二分定位抓出，常量处已注释警示
+- demo：`.agent/skills/test-svc/`（32 行计数器服务，协议最小范例，可删）
+
 ## SYSTEM 摘要与使用教育（src/chat.py）
 
 装配 SYSTEM 技能段（`skills_summary`）时一行一技能，全局技能加 **🌐 前缀**：
@@ -122,12 +157,12 @@ def _resolve_skill(name, workspace=None):
 ```
 === 可用技能（repo .agent/skills/ + 已激活全局技能；🌐=全局）===
 任务匹配某技能时，先 read_skill(name) 取详细 SOP 再按它执行
-（大技能先 skill_navigate(name) 浏览结构/分节读；技能自带脚本用 skill_run_code(name, script) 执行）：
+（大技能先 skill_navigate(name) 浏览结构/分节读；技能自带脚本用 skill_run_code(name, script) 执行；带 server.py 的技能可 skill_equip(name) 装备常驻服务、skill_use(name, '命令 --参数') 调用）：
 - yangzi-aistudio: …（使用时机: …）
 （完成可复用任务后可用 save_skill 沉淀新技能到本 repo）
 ```
 
-教育文案随双层化同步升级：五件套的使用路径（read → navigate → run_code）写进 SYSTEM，模型免探索。
+教育文案随双层化同步升级：七件套的使用路径（read → navigate → run_code → equip/use）写进 SYSTEM，模型免探索。
 
 ## 首个全局技能实战：yangzi-aistudio
 
@@ -148,6 +183,7 @@ def _resolve_skill(name, workspace=None):
 - 激活清单务必保持**纯字符串数组**——dict 等其它形态被静默忽略（宁缺勿错）
 - 本地与全局同名时本地 shadow：想临时覆盖全局技能行为，在 repo 放同名技能即可，不必动全局份
 - 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
+- **equip 的服务生命周期**：常驻到 Agent 进程退出（atexit 全杀）；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定
 
 ## 相关页面
 

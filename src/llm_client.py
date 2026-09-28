@@ -234,6 +234,25 @@ def _extract_url(msg: str) -> str:
     return m.group(0).rstrip(".,;") if m else ""
 
 
+def _timeout_stage(e) -> str:
+    """识别超时发生在哪个阶段（httpx 子类名沿 __cause__/__context__ 链回找）。
+    背景（用户问诊 2026-09-28）：日志只显示"34.7s 就 APITimeoutError"，但 read 超时是 240s——
+    必然是 connect(10s)/write(30s)/pool(10s) 之一（SDK max_retries=1 → 最多两次尝试可累计）。
+    把底层阶段名带进日志与 llm_calls，一眼可辨是"连不上"还是"发不出"还是"等不到"。"""
+    cur, seen = e, 0
+    while cur is not None and seen < 5:
+        nm = type(cur).__name__
+        if nm in ("ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+                  "ConnectError", "ReadError", "WriteError", "PoolTimeout"):
+            zh = {"ConnectTimeout": "建立连接", "ReadTimeout": "等待响应",
+                  "WriteTimeout": "发送请求体", "PoolTimeout": "连接池等待",
+                  "ConnectError": "连接", "ReadError": "读", "WriteError": "写"}.get(nm, nm)
+            return f"{nm}/{zh}"
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        seen += 1
+    return ""
+
+
 # —— 本机断网检测（2026-09-26 用户提案：家庭网络波动频繁，网卡时 API 失败在回退链上
 #    一个一个往后试毫无意义——换哪个 provider 都卡。先探测确认断网，等网恢复后重试
 #    同一个 provider）——
@@ -437,6 +456,22 @@ class LLMClient:
                 _rt_cfg = None
         self.read_timeout = (float(_rt_cfg) if _rt_cfg is not None and str(_rt_cfg).strip() != ""
                              else None)
+        # connect / write 超时同样可配（2026-09-28 用户问诊：34.7s 就 APITimeoutError，而 read 是 240s
+        # ——超时必发生在 connect(默认10s)/write(默认30s)/pool 三段；家庭网络上行慢时大请求体
+        # 的 write 可能反复超时）。profile.connect_timeout / write_timeout > settings 同名键 > 默认。
+        def _tm(key: str):
+            v = profile.get(key)
+            if v is None or str(v).strip() == "":
+                try:
+                    v = config.load_runtime_settings().get(f"llm_{key}")
+                except Exception:
+                    v = None
+            try:
+                return float(v) if v is not None and str(v).strip() != "" else None
+            except (TypeError, ValueError):
+                return None
+        self.connect_timeout = _tm("connect_timeout")
+        self.write_timeout = _tm("write_timeout")
         self._client = self._openai_client()
 
     def _ensure_config(self):
@@ -462,9 +497,11 @@ class LLMClient:
             headers = {"HTTP-Referer": "https://github.com/vgp7758/Agt", "X-Title": "Agt"}
         import httpx
         _rt = float(self.read_timeout or 240)
+        _ct = float(getattr(self, "connect_timeout", None) or 10.0)
+        _wt = float(getattr(self, "write_timeout", None) or 30.0)
         return OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured",
                       default_headers=headers or None,
-                      timeout=httpx.Timeout(connect=10.0, read=_rt, write=30.0, pool=10.0),
+                      timeout=httpx.Timeout(connect=_ct, read=_rt, write=_wt, pool=10.0),
                       max_retries=1)
 
     def _rotate_token(self):
@@ -888,17 +925,19 @@ class LLMClient:
                     _prov, _rurl = _recharge_url_for(self.model_name, str(e))
                 except Exception:
                     _prov, _rurl = "", ""
+                _stg = _timeout_stage(e) if isinstance(e, (APITimeoutError, APIConnectionError)) else ""
                 self.last_failures.append({
                     "model": self.model_name, "err": type(e).__name__,
-                    "cls": _classify_err(e), "msg": str(e)[:200],
+                    "cls": _classify_err(e), "msg": str(e)[:200] + (f" [{_stg}]" if _stg else ""),
                     "provider": _prov, "url": _rurl})
                 if isinstance(e, (PermissionDeniedError, AuthenticationError, NotFoundError)):
                     _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退：%s",
                                  ck, getattr(e, "status_code", "?"), self._cooldown_seconds,
                                  str(e)[:200])
                 else:
-                    _LOG.warning("provider %s 失败，进入 %ds 冷却：%s",
-                                 ck, self._cooldown_seconds, type(e).__name__)
+                    _LOG.warning("provider %s 失败，进入 %ds 冷却：%s%s",
+                                 ck, self._cooldown_seconds, type(e).__name__,
+                                 (f"（超时阶段：{_stg}）" if _stg else ""))
                 _advance(str(e))
 
     def _record_call(self, *, messages, attempt, max_tokens, finish_reason, usage,

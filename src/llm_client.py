@@ -314,6 +314,10 @@ class LLMClient:
         # 故障端点。冷却期间该 provider 从可用链剔除；成功后自动清除冷却态（恢复即可用）。
         self._provider_cooldown: dict[str, float] = {}   # {model_name: 上次失败时间戳}
         self._cooldown_seconds: float = 300.0            # 默认 5 分钟（settings.json cooldown_seconds 可覆盖）
+        # 用户切换纪元（2026-09-28 用户实锤）：WebUI 下拉框//model 切模型时递增——进行中 chat 的
+        # 回退循环据此感知"链快照已作废"（旧循环的 _advance 会踩掉刚切的模型，或因新模型不在
+        # 旧链直接炸"当前模型不在回退链中"）。循环每圈核对纪元，变了→重建链从新链首重来。
+        self._user_switch_epoch: int = 0
         # 回退链来源（用户裁定 2026-09-15，语义干脆化）：
         #   ① agent .yml 显式声明（fallback_chain 构造参数 / set_fallback）→ owned=True，权威
         #   ② 未声明（owned=False）→ 引擎默认链 = 全局 settings（/config fallback_chain 配置的）
@@ -480,6 +484,7 @@ class LLMClient:
         self.model_name = name
         if _user_initiated:
             self._user_model = name
+            self._user_switch_epoch += 1   # 通知进行中的 chat 回退循环：链快照作废，从新链首重来
             self._rebuild_chain()
         return self
 
@@ -734,6 +739,12 @@ class LLMClient:
 
         def _advance(reason, from_cooldown=False):
             """推进到下一个可用 provider。from_cooldown=True 表示冷却跳过（无退避）。"""
+            # 用户切换检测（2026-09-28 用户实锤）：本次调用进行中用户切了模型——model_name 已是
+            # 新链首，旧链快照作废（下方 chain.index 会 ValueError；即使恰好在链中也会踩掉刚切的
+            # 模型）。不推进直接 return，让 while 循环顶部的重建逻辑接管（重建链+tried 清零+新链首试）。
+            if self._user_switch_epoch != epoch0:
+                _LOG.info("本调用进行中用户切换了模型 → 跳过 _advance，交由循环顶部重建链")
+                return
             if self.model_name not in tried:
                 tried.append(self.model_name)
             if not chain:
@@ -792,8 +803,29 @@ class LLMClient:
         tried = [self.model_name]   # 本次调用内已试过的 model 名
         waits_left = [2]            # 全链冷却时的等待配额（防死等：至多睡两个冷却窗再真报错）
         net_waited = [0.0]          # 本次调用累计等网秒数（上限 net_wait_max，2026-09-26）
+        epoch0 = self._user_switch_epoch   # 用户切换纪元快照（循环中变了=本次调用期间用户切了模型）
+
+        def _rebuild_local_chain():
+            """按当前上下文重建链（override 优先，否则实例链）——用户切换后旧链快照作废时用。"""
+            if _override is not None:
+                return [self._user_model] + [m for m in _override if m != self._user_model]
+            self._rebuild_chain()
+            return list(self.fallback_chain)
 
         while True:
+            # ★ 用户切换检测（2026-09-28 用户实锤：轮进行中 WebUI 切模型，进行中的回退循环
+            # 索引没重置、没立刻应用新链首）——旧循环的 chain 是切换前的快照：新模型不在旧链会
+            # 炸"当前模型不在回退链中"；恰好在旧链则 _advance 踩掉刚切的模型。纪元变了 →
+            # 重建链、tried 清零（旧失败成员的冷却仍在，_cooled 会正确跳过），从新链首重来。
+            if self._user_switch_epoch != epoch0:
+                epoch0 = self._user_switch_epoch
+                chain = _rebuild_local_chain()
+                tried = [self.model_name]
+                tried_tokens[0] = 0
+                net_waited[0] = 0.0
+                _LOG.info("本次调用进行中用户切换了模型 → 重建回退链，从新链首 %s 开始", self.model_name)
+                continue
+
             ck = _ck()
 
             # 冷却检查：该 model+token 组合还在冷却窗口 → 直接跳过（不走 _chat_inner）

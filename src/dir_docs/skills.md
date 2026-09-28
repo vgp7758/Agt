@@ -28,5 +28,9 @@ my-skill/
 
 ## 深入
 
-- 七件套工具：read_skill / save_skill / skill_navigate / skill_run_code / skill_evaluate / skill_equip / skill_use
+- 七件套工具：read_skill / save_skill / skill_navigate / skill_run_code / skill_evaluate / 技能携带工作流（workflows/ 子目录）：
+技能包可带 `workflows/*.xml`——`exec_workflow('<名>', {...入参})` 可直接调用（与 repo 工作流同名时 repo 侧优先；仅 exec/debug 入口可见，不进编辑器与钩子发现）。
+`read_skill` 尾部会自动列出本技能可调用工作流的**名称/描述/入参 schema**（从工作流文件现场解析，作者零负担）——技能作者只需在 XML 根标签写好 `description`、在开始节点声明好出参，Agent 即可感知这层用法。
+
+skill_equip / skill_use
 - 已有范例：`test-svc`（服务协议）、`pbridge`（服务+工作流+SOP 完整体）、`yangzi-aistudio`（全局技能）

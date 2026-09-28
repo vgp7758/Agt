@@ -730,7 +730,58 @@ def read_skill(name: str) -> str:
     d, _scope = _resolve_skill(name)
     if d is None:
         return _skill_not_found(name)
-    return (d / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
+    text = (d / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
+    brief = _skill_workflows_brief(d)
+    if brief:
+        text += brief
+    return text
+
+
+def _skill_workflows_brief(d: Path) -> str:
+    """技能包携带工作流（workflows/）的速览：名称/描述/入参 schema——read_skill 尾部自动附加。
+    机制化可发现性（用户提案 2026-09-28）：此前技能工作流只能 exec_workflow 调（_load_wf_canvas
+    已扫技能目录），但 agent 无从感知"这个技能能调哪些工作流、入参是什么"——全靠 SKILL.md 手写。
+    现在从 workflows/*.xml|json 现场解析（与执行侧同构），零负担呈现给 agent。"""
+    wf_dir = d / "workflows"
+    if not wf_dir.is_dir():
+        return ""
+    lines = []
+    for p in sorted(list(wf_dir.glob("*.xml")) + list(wf_dir.glob("*.json"))):
+        try:
+            raw = p.read_text(encoding="utf-8")
+            if p.suffix == ".json":
+                canvas = json.loads(raw)
+                name = (canvas.get("name") or p.stem)
+                desc = (canvas.get("description") or canvas.get("desc") or "").strip()
+            else:
+                from workflow_xml import xml_to_canvas
+                canvas = xml_to_canvas(raw)
+                # xml_to_canvas 顶层不带 meta（name/description 在根标签属性上）——直接从源文本抓
+                mt = re.search(r"<workflow\b([^>]*)>", raw)
+                attrs = mt.group(1) if mt else ""
+                nm = re.search(r'name="([^"]*)"', attrs)
+                ds = re.search(r'description="([^"]*)"', attrs)
+                name = (nm.group(1) if nm else "") or p.stem
+                desc = (ds.group(1) if ds else "").strip()
+        except Exception as e:
+            lines.append(f"- {p.stem}: (解析失败: {e})")
+            continue
+        inputs = []
+        for n in canvas.get("nodes", []):
+            if str(n.get("type")) == "1":   # start 节点：出参即工作流入参 schema
+                for o in ((n.get("data") or {}).get("outputs") or []):
+                    nm = o.get("name")
+                    if not nm:
+                        continue
+                    tp = o.get("type") or "string"
+                    inputs.append(f"{nm}:{tp}" + ("(必填)" if o.get("required") else ""))
+                break
+        lines.append(f"- {name}{' — ' + desc if desc else '（未写描述）'}"
+                     + (f" | 入参: {', '.join(inputs)}" if inputs else ""))
+    if not lines:
+        return ""
+    return ("\n\n---\n📦 本技能携带工作流（exec_workflow('<名>', {...入参}) 可直接调用；"
+            "与 repo 工作流同名时 repo 侧优先）：\n" + "\n".join(lines))
 
 
 def _skill_not_found(name: str) -> str:

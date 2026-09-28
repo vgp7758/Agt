@@ -2972,6 +2972,45 @@ function renderSurveyBubble(questions){
   if(curTurn.det) curTurn.det.open = false;
   scrollBottom();
 }
+// ========== 工具审批渲染（workspace 外路径 / run_shell / run_python 阻塞等用户放行） ==========
+ function renderApprovalCard(id, tool, detail){
+   if(!curTurn) newTurn();
+   const card = document.createElement('div');
+   card.id = 'approval_'+id;
+   card.style.cssText = 'border:2px solid #d97706;border-radius:10px;padding:12px;background:#fffbeb;margin:8px 0;max-width:100%';
+   const toolLabel = {file_outside:'📁 Workspace 外路径', run_python:'🐍 run_python', run_shell:'💻 run_shell'}[tool]||tool;
+   card.innerHTML =
+     '<div style="font-size:14px;font-weight:600;color:#92400e;margin-bottom:6px">🔐 '+esc(toolLabel)+' 请求审批</div>' +
+     '<div style="font-size:12.5px;color:#5b6470;background:#fff;border:1px solid #fde68a;border-radius:6px;padding:8px;margin-bottom:8px;word-break:break-all;max-height:120px;overflow:auto"><code>'+esc(detail)+'</code></div>' +
+     '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+     '<button class="btn" style="background:#059669;color:#fff;border:none;padding:6px 18px;border-radius:6px;cursor:pointer;font-size:13.5px" onclick="respondApproval(\''+id+'\',\'allow\')">✅ 同意</button>' +
+     '<button class="btn" style="background:#dc2626;color:#fff;border:none;padding:6px 18px;border-radius:6px;cursor:pointer;font-size:13.5px" onclick="respondApproval(\''+id+'\',\'deny\')">❌ 拒绝</button>' +
+     '<button class="btn" style="background:#d97706;color:#fff;border:none;padding:6px 18px;border-radius:6px;cursor:pointer;font-size:13.5px" onclick="respondApproval(\''+id+'\',\'always\')">✅✅ 一直同意</button>' +
+     '</div>';
+   curTurn.answerEl.appendChild(card);
+   scrollBottom();
+ }
+ function respondApproval(id, response){
+   ws.send(JSON.stringify({action:'approval_response', id:id, response:response}));
+   const card = document.getElementById('approval_'+id);
+   if(card){
+     card.querySelectorAll('button').forEach(b=>{b.disabled=true;b.style.opacity=0.5;});
+     card.style.borderColor = response==='deny' ? '#dc2626' : '#059669';
+     const labels = {allow:'已同意', deny:'已拒绝', always:'已设为一直同意（本会话内不再询问）'};
+     card.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:#6b7280;margin-top:6px">'+(labels[response]||response)+'</div>');
+   }
+ }
+ function resolveApprovalCard(id, result){
+   const card = document.getElementById('approval_'+id);
+   if(card && !card.dataset.done){
+     card.dataset.done = '1';
+     card.querySelectorAll('button').forEach(b=>{b.disabled=true;b.style.opacity=0.5;});
+     if(result==='timeout'){
+       card.style.borderColor='#dc2626';
+       card.insertAdjacentHTML('beforeend','<div style="font-size:12px;color:#dc2626;margin-top:6px">⏱ 超时自动拒绝（600s 无响应）</div>');
+     }
+   }
+ }
 function submitSurvey(){
   const form = curTurn.answerEl;
   if(!form) return;
@@ -3321,7 +3360,13 @@ function onWSMessage(ev){
       // commit_spec 阻塞等待用户裁定：在 answer 区域渲染交互式 spec 气泡
       renderSpecBubble(m.spec, m.spec_id, m.spec_title, m.spec_design);
       break;
-    case 'survey_pending':
+    case 'approval_request':
+       renderApprovalCard(m.id||'', m.tool||'', m.detail||'');
+       break;
+     case 'approval_resolved':
+       resolveApprovalCard(m.id||'', m.result||'');
+       break;
+     case 'survey_pending':
       renderSurveyBubble(m.questions||[]);
       break;
     case 'sessions':

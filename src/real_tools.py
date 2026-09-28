@@ -39,6 +39,21 @@ TOOL_TIMEOUT = 10
 # 工具执行进度回调（由 agent 在执行工具前设置；流式输出/心跳通过它推给 UI）
 _tool_emit = None
 
+# 工具审批回调（由 agent 注入）：(tool_key, detail) -> bool。None=无 WebUI 连接（CLI 等），默认放行。
+_approval_cb = None
+
+
+def _ask_approval(tool_key: str, detail: str) -> bool:
+    """工具执行审批（用户提案 2026-09-28）：访问 workspace 外路径 / run_shell / run_python
+    阻塞等用户在 WebUI 点同意/拒绝/一直同意。回调为 None（CLI 无 WS / 工作流 plugin 节点）→ 放行。
+    审批发生在 Popen 之前——工具超时/进度计时天然不包含审批等待段。"""
+    if _approval_cb is None:
+        return True
+    try:
+        return bool(_approval_cb(tool_key, detail))
+    except Exception:
+        return False
+
 # 后台任务表：超时未完成的 run_python/run_shell 子进程转后台后注册在此
 _bg_tasks: dict = {}
 _bg_notify_cb = None   # 后台任务完成回调（chat.py 装配时注入 agent.push_message 通知链）：一次性任务无套娃，默认唤醒
@@ -51,13 +66,15 @@ def set_bg_notify(cb):
 
 
 def _resolve(path: str) -> Path:
-    """把路径解析到 workspace 内；越界则抛 PermissionError（会被 Tool.run 转成文本）。"""
+    """把路径解析到 workspace 内；越界则走审批（用户同意则放行本 session，拒绝则抛 PermissionError）。"""
     base = WORKSPACE.resolve()
     target = (base / path).resolve()
     try:
         target.relative_to(base)  # 不在 base 下会抛 ValueError
     except ValueError:
-        raise PermissionError(f"拒绝访问 workspace 外的路径: {path}")
+        if _ask_approval("file_outside", f"文件工具访问 workspace 外路径: {path}"):
+            return target
+        raise PermissionError(f"用户拒绝访问 workspace 外的路径: {path}")
     return target
 
 
@@ -304,6 +321,8 @@ def run_python(code: str = "", file: str = "", args: str = "") -> str:
     args: 传给脚本的参数字符串（子进程经环境变量 PY_ARGS 读取：
       `import os; a = os.environ.get("PY_ARGS", "")`——可放 JSON/CSV 等任意格式，脚本自行解析）。
       file 和 code 模式都生效，让已保存脚本可参数化复用（同类脚本不同参数不必改代码）。"""
+    if not _ask_approval("run_python", f"执行 Python（{(file or '内联代码')[:200]}）"):
+        return "[用户拒绝] run_python 执行未获批准"
     env = None
     if args:
         env = dict(os.environ)
@@ -1786,6 +1805,8 @@ def query_workflow_node(type: str = "", name: str = "") -> str:
 
 def run_shell(command: str) -> str:
     """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
+    if not _ask_approval("run_shell", f"执行 shell: {command[:300]}"):
+        return "[用户拒绝] run_shell 执行未获批准"
     return _run_subprocess_streaming(command, "run_shell", shell=True)
 
 

@@ -62,12 +62,59 @@
 
 修复前：切换场景 `RuntimeError` 复现；修复后：尝试顺序 `[proxy → glm-official]`——新链首立刻接管、成功返回；无切换对照组 proxy → deepseek 普通回退行为完全不变。
 
+## 四、超时阶段诊断 + connect/write 可配（2026-09-28，用户问诊「34.7s 就 APITimeoutError」，commit 83c732d）
+
+## 四、超时阶段诊断 + connect/write 可配（2026-09-28，用户问诊「34.7s 就 APITimeoutError」，commit 83c732d）
+
+### 现象辨析：34.7s 超时 ≠ read 240s
+
+用户问诊：日志显示 34.7s 就 `APITimeoutError`，read 不是 240s 吗？——**超时不是一个数，是四段各自计时**（httpx.Timeout）：connect=10 / read=240 / write=30 / pool=10。34.7s 撞的是 connect / write / pool 之一，而非 read。且 **SDK `max_retries=1`**——单次 `chat` 内部最多两次尝试，时间可累计。34.7s 的常见构成：
+
+- **write 卡**（大请求体最常见）：上下文 324K 字符 + tools schema 3.6 万 token ≈ 数百 KB~1MB 请求体，家庭网络上行慢时**发送请求体**卡满 30s → 归零重试再来一次 ≈ 30~60s
+- **connect 卡**：10s × 2 次 + backoff ≈ 20~21s
+- 混合：connect 慢几秒 + write 30s ≈ 35s（与 34.7s 吻合）
+
+旧日志盲区：只记 `APITimeoutError` 类名，看不到阶段——「明明没到 240s」的困惑即此。
+
+### `_timeout_stage()`：沿异常链识别阶段
+
+httpx 的阶段信息在 `ConnectTimeout / WriteTimeout / PoolTimeout / ReadTimeout` 四个子类上，但被 openai SDK 包装——`_timeout_stage(e)` 沿 `__cause__ / __context__` 链回找子类名并翻译成中文阶段（连不上/发不出/等不到/等不到响应）。消费两处：
+
+- **日志 warning**：`provider xxx 失败，进入 300s 冷却：APITimeoutError（超时阶段：WriteTimeout/发送请求体）`
+- **last_failures**：msg 尾附 `[WriteTimeout/发送请求体]`——回退链中断后充值入口/失败摘要可辨阶段
+
+实测：构造四类子类 + cause 链包装全对；无 cause 链（阶段未知）不误报、留空。
+
+### connect / write 可配（read 三级取值的同款三级）
+
+```
+profile.connect_timeout / write_timeout（models.json 模型卡片）
+  > settings llm_connect_timeout / llm_write_timeout
+    > 默认 10 / 30
+```
+
+`_openai_client()` 改传完整四段：`httpx.Timeout(connect=_ct, read=_rt, write=_wt, pool=10.0)`。实测 profile 覆盖生效：`Timeout(connect=25.0, read=240.0, write=90.0, pool=10.0)`。家庭网络上行慢 / 端点抖，给该 provider 配大即可；`/restart` 生效。配置键详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md#网络韧性配置分级超时readconnectwrite--断网等网2026-09-26--09-28-扩)。
+
+### 顺带：`_extract_url()` 抽函数
+
+错误消息内嵌链接提取（flatkey 403 的 `Add credits at https://...`——充值入口三级来源的第一级，见 [配置体系 · 回退链中断一键充值](../guides/config-and-models.md#回退链中断一键充值preset-recharge_url--401403404-纳入回退2026-09-08用户提案)）抽成独立函数 `_extract_url(msg)`，供 last_failures 的 `url` 字段复用。
+
+### 排障口诀
+
+`/restart` 后等下一次 timeout 看阶段标注：**WriteTimeout** → 上行慢/请求体大 → 配 `write_timeout: 90`；**ConnectTimeout** → 网络抖 → 配 `connect_timeout: 25`（或靠[断网检测](#二断网检测与等网重试commit-c5b57cd)等网重试）；**PoolTimeout** → 并发抢连接池，另一类问题。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
+
+配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：
 
 | 键 | 位置 | 说明 |
 |---|---|---|
 | `read_timeout` | models.json 模型卡片 | 读超时秒数；快端点配小，本地慢模型配大 |
 | `llm_read_timeout` | settings.json | 全局默认读超时（默认 240） |
+| `connect_timeout` | models.json 模型卡片 | 连接超时秒数（默认 10）；端点抖/网络慢配大（如 25） |
+| `write_timeout` | models.json 模型卡片 | 发送请求体超时秒数（默认 30）；大请求体+上行慢配大（如 90） |
+| `llm_connect_timeout` | settings.json | 全局默认连接超时 |
+| `llm_write_timeout` | settings.json | 全局默认写超时 |
 | `net_wait_max` | settings.json | 断网等待预算（默认 300；0 = 关闭断网等待） |
 
 ## 验证

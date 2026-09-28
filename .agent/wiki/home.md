@@ -1248,3 +1248,10 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **intent_nano 强化**：intents ref 动态装填 / route=false 单出口 / 编辑器 in 端口（dbe846b）——见 [intent-nano](features/intent-nano.md)
 - test-svc 七件套全覆盖示例随包播种到每个 repo（16aede0）+ seed NameError 修复（ed26ac0）
 
+## 快速事实增补（2026-09-28 · 二）
+
+## 快速事实增补（2026-09-28 · 二）
+
+- **工具执行审批：workspace 外路径 / run_shell / run_python 三按钮放行（2026-09-28，用户提案，commit `4d67ba0`）**：此前访问 workspace 外路径直接 `PermissionError` 拒绝；现 `_resolve` 越界 / run_python / run_shell 在执行**前**经 `_ask_approval` 阻塞等用户在 answer 气泡区域的琥珀色审批卡片点 ✅同意 / ❌拒绝 / ✅✅一直同意（照 survey_tools 的 Event 阻塞模式；「一直同意」按 tool_key 三类粒度 session 级免问；600s 无响应自动拒绝防卡死；拒绝返回 `[用户拒绝]…` 文本不炸轮）。**审批在 Popen 之前 → TOOL_TIMEOUT/心跳计时天然不含等待段**（「阻塞期间计时暂停」零代码满足）；CLI 无 WS 连接回调 None 自动放行、行为不变。四层：real_tools（回调入口）/ agent（`_tool_approval` + `resolve_tool_approval`）/ server（`approval_response` action）/ index.html（`renderApprovalCard`/`respondApproval`/`resolveApprovalCard`）。mock agent 六场景全绿（同意/一直同意/always 免问/拒绝/越界放行/CLI 放行）；引擎层 `/restart` + 前端 Ctrl+F5 生效——见 [tool-approval](features/tool-approval.md)
+- **API 超时阶段诊断 + connect/write 可配（2026-09-28，用户问诊「日志 34.7s 就 APITimeoutError」触发，commit `83c732d`）**：超时四段各自计时（connect 10 / read 240 / write 30 / pool 10）且 SDK `max_retries=1` 两次尝试可累计——34.7s 撞的是 write（大请求体上行慢卡满 30s + 重试）或 connect 而非 read。新增 `_timeout_stage()` 沿 `__cause__` 链识别 httpx 子类，日志与 last_failures 带阶段标注（「超时阶段：WriteTimeout/发送请求体」）——一眼可辨「连不上/发不出/等不到」；connect/write 可配（read 三级取值同款）：profile `connect_timeout`/`write_timeout` > settings `llm_connect_timeout`/`llm_write_timeout` > 默认 10/30——家庭网络慢可调大（如 25/90）。顺带 `_extract_url()` 抽函数（错误消息内嵌链接提取，充值入口第一级来源的实现载体）——见 [llm-network-resilience · 四](features/llm-network-resilience.md)、[config-and-models · 网络韧性配置](guides/config-and-models.md)
+

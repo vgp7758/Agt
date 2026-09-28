@@ -91,6 +91,12 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 
 意外实证（开发验证时真调了 `sleep(600)`）：宿主 run_python 在 180s 超时转后台，sleep 本身在后台继续睡满 600s 不被掐——inline 工具不超时的直接证据；睡满后走 bg_task 完成通知（上节链路），无害。代价：inline sleep **阻塞当前 react 轮**（UI 工具运行中、插话排队），长睡（sleep 上限 2026-09-16 放宽到 3600s，commit 30fe776）期间整轮不可用——详见 [misc-tools · sleep](misc-tools.md)。
 
+## 工具执行审批：Popen 前三按钮放行（2026-09-28，用户提案，commit 4d67ba0）
+
+## 工具执行审批：Popen 前三按钮放行（2026-09-28，用户提案，commit 4d67ba0）
+
+run_python（以及 run_shell、文件工具访问 workspace 外路径）执行**前**经 `_ask_approval("run_python", detail)` 阻塞等待用户在 WebUI 审批卡片点 ✅同意 / ❌拒绝 / ✅✅一直同意——审批发生在 `_run_subprocess_streaming` 的计时起点**之前**，本页的 TOOL_TIMEOUT / 心跳 / 超时转后台全部天然不含等待段（与审批机制正交）。拒绝返回文本 `[用户拒绝] run_python 执行未获批准`（不炸轮）；CLI / 工作流 plugin 无回调自动放行。机制、三按钮语义与验证见 [工具执行审批](tool-approval.md)。
+
 ## 与其他模块的关系
 
 - 工具箱真实工具（LLM 可直接调用），也可在工作流 plugin 节点（type 4）中使用

@@ -2386,6 +2386,10 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         from survey_tools import resolve_survey
         resolve_survey(agent, _d.get("answers", {}))
         return
+    # 工具审批响应：用户在 WebUI 点击 同意/拒绝/一直同意 后，解除工具执行的阻塞
+    if isinstance(_d, dict) and _d.get("action") == "approval_response":
+        agent.resolve_tool_approval(_d.get("id", ""), _d.get("response", "deny"))
+        return
     # /agent 命令的 WebUI 支持：列出团队 / 切换交互目标
     if isinstance(_d, dict) and _d.get("action") == "list_team":
         reg = getattr(agent, "registry", None)

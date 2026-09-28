@@ -88,7 +88,7 @@ async def main(args):
   <node id="700001" type="selector" title="jev命中?" x="1320" y="80">
     <branch><cond op="11" left="810001.hit" right="" left_type="boolean"/></branch>
   </node>
-  <node id="870001" type="llm" title="二级复核(LLM·SKILL全文)" x="1620" y="80">
+  <node id="870001" type="llm" title="二级复核(LLM·SKILL全文)" x="1611" y="89">
     <in name="skills" type="string" ref="500001.skills"/>
     <in name="um" type="string" ref="500001.um"/>
     <param name="systemPrompt" type="string"><![CDATA[你是技能调度助手：把用户消息匹配到最合适的本机技能；拿不准就答 NONE。]]></param>
@@ -100,6 +100,7 @@ async def main(args):
 
 判断哪个技能匹配用户消息：只回复该技能的 name（一个单词）；都不匹配回复 NONE。不要任何解释。]]></param>
     <model>proxy</model>
+    <param name="output_format" type="string"><![CDATA[text]]></param>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

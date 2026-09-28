@@ -2390,6 +2390,11 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     if isinstance(_d, dict) and _d.get("action") == "approval_response":
         agent.resolve_tool_approval(_d.get("id", ""), _d.get("response", "deny"))
         return
+    # 人在环步骤反馈：用户提交操作结果 → 解除 human_step 的阻塞
+    if isinstance(_d, dict) and _d.get("action") == "human_step_response":
+        from survey_tools import resolve_human_step
+        resolve_human_step(agent, _d.get("id", ""), _d.get("text", ""))
+        return
     # /agent 命令的 WebUI 支持：列出团队 / 切换交互目标
     if isinstance(_d, dict) and _d.get("action") == "list_team":
         reg = getattr(agent, "registry", None)

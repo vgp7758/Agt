@@ -126,3 +126,56 @@ def make_survey_tools(agent):
             },
         }
     })]
+
+
+# ========== human_step：人在环——指挥人类完成 GUI/物理操作步骤并收取反馈 ==========
+
+def _emit_human_step(agent, event_type: str = "human_step_pending"):
+    """广播 human_step 事件（WebUI 渲染引导卡片）。"""
+    step = agent.session.extra_state.get("_pending_human_step", {})
+    if agent.on_event:
+        agent.on_event({"type": event_type, "id": step.get("id", ""),
+                        "instruction": step.get("instruction", ""),
+                        "expect": step.get("expect", "")})
+
+
+def resolve_human_step(agent, sid: str, text: str):
+    """用户提交操作结果 → 解除 human_step 的阻塞。由 server.py（WS action）调用。"""
+    entry = (getattr(agent, "_human_step_events", None) or {}).get(sid)
+    if entry:
+        entry["result"] = text
+        entry["event"].set()
+        return
+    # 无阻塞线程（重启后恢复场景）→ 以系统消息注入
+    agent.session.extra_state.pop("_pending_human_step", None)
+
+
+def get_human_step_tools(agent) -> list[Tool]:
+    """返回 [Tool(human_step)]——人在环：Agent 指挥人类完成 GUI/物理操作并收取反馈（用户提案 2026-09-29）。"""
+
+    def human_step(instruction: str, expect: str = "") -> str:
+        """指挥人类完成一个 GUI/物理操作步骤，阻塞等待其完成后收取反馈文本。
+        instruction: 给人类的操作指引——具体、有步骤感（如"扫码完成登录xxx"、"勾选最下方的同意协议，然后点击安装按钮"）。
+        expect: 期望人类回报什么（如"登录后的页面布局"、"安装进度"）——帮助人类知道该反馈什么信息。
+        返回: 人类完成操作后的反馈文本（页面描述/结果状态/截图描述等）。30 分钟无反馈自动超时。"""
+        import uuid
+        sid = uuid.uuid4().hex[:8]
+        ev = threading.Event()
+        if not hasattr(agent, "_human_step_events"):
+            agent._human_step_events = {}
+        entry = {"event": ev, "result": None}
+        agent._human_step_events[sid] = entry
+        agent.session.extra_state["_pending_human_step"] = {
+            "id": sid, "instruction": instruction, "expect": expect}
+        _emit_human_step(agent)
+        got = ev.wait(timeout=1800)
+        agent._human_step_events.pop(sid, None)
+        agent.session.extra_state.pop("_pending_human_step", None)
+        if not got or entry["result"] is None:
+            return "[超时] 30 分钟内未收到人类反馈——操作可能未完成，请决定重试或改变策略"
+        return f"人类反馈：\n{entry['result']}"
+
+    return [Tool(human_step, param_schemas={
+        "instruction": {"type": "string", "description": "给人类的操作指引——具体、有步骤感（如\"扫码完成登录xxx\"、\"勾选同意协议后点击安装按钮\"）"},
+        "expect": {"type": "string", "description": "期望人类回报什么（如\"登录后的页面布局\"、\"安装进度\"）——帮人类知道该反馈什么"},
+    })]

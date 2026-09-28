@@ -237,6 +237,8 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")
     _reg(make_survey_tools(agent), "用户交互")
+    from survey_tools import get_human_step_tools
+    _reg(get_human_step_tools(agent), "人在环")
     _reg(make_recall_tools(agent), "记忆召回")
     _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
     # ltm 五件套与 download 两件套由外置件提供（tools/builtin/ltm_tools.py / download_tools.py，

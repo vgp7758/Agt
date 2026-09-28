@@ -3000,6 +3000,33 @@ function renderSurveyBubble(questions){
      card.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:#6b7280;margin-top:6px">'+(labels[response]||response)+'</div>');
    }
  }
+ function renderHumanStepCard(sid, instruction, expect){
+  if(!curTurn) newTurn();
+  const card = document.createElement('div');
+  card.id = 'humanstep_'+sid;
+  card.style.cssText = 'border:2px solid #2563eb;border-radius:10px;padding:14px;background:#eff6ff;margin:8px 0;max-width:100%';
+  let h = '<div style="font-size:15px;font-weight:600;color:#1e40af;margin-bottom:8px">🤝 请你完成以下操作（人在环步骤）</div>';
+  h += '<div style="font-size:14px;color:#1e293b;background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:10px;margin-bottom:8px;line-height:1.5">'+esc(instruction)+'</div>';
+  if(expect) h += '<div style="font-size:12.5px;color:#475569;margin-bottom:8px">📌 完成后请回报：<b>'+esc(expect)+'</b></div>';
+  h += '<textarea id="hs_text_'+sid+'" placeholder="操作完成后，在这里描述你看到的/做到的…" style="width:100%;min-height:60px;padding:8px;border:1px solid #93c5fd;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>';
+  h += '<div style="margin-top:6px"><button class="btn" style="background:#2563eb;color:#fff;border:none;padding:6px 20px;border-radius:6px;cursor:pointer;font-size:13.5px" onclick="submitHumanStep(\''+sid+'\')">📤 提交反馈</button></div>';
+  card.innerHTML = h;
+  curTurn.answerEl.appendChild(card);
+  scrollBottom();
+ }
+ function submitHumanStep(sid){
+   const ta = document.getElementById('hs_text_'+sid);
+   if(!ta || !ta.value.trim()) return;
+   ws.send(JSON.stringify({action:'human_step_response', id:sid, text:ta.value.trim()}));
+ }
+ function resolveHumanStepCard(sid, text){
+   const card = document.getElementById('humanstep_'+sid);
+   if(card){
+     card.style.borderColor = '#16a34a'; card.style.background = '#f0fdf4';
+     card.querySelectorAll('textarea,button').forEach(el=>{el.disabled=true;el.style.opacity=0.5;});
+     card.insertAdjacentHTML('beforeend','<div style="font-size:12px;color:#16a34a;margin-top:6px">✅ 已收到反馈，Agent 继续执行中</div>');
+   }
+ }
  function resolveApprovalCard(id, result){
    const card = document.getElementById('approval_'+id);
    if(card && !card.dataset.done){
@@ -3368,6 +3395,12 @@ function onWSMessage(ev){
        break;
      case 'survey_pending':
       renderSurveyBubble(m.questions||[]);
+      break;
+    case 'human_step_pending':
+      renderHumanStepCard(m.id, m.instruction, m.expect);
+      break;
+    case 'human_step_resolved':
+      resolveHumanStepCard(m.id, m.text);
       break;
     case 'sessions':
       if(m.names && m.names.length){

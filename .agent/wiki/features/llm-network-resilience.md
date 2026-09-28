@@ -42,6 +42,26 @@
 - **恢复 → 重试同一个 provider**：不记冷却、不 `_advance`——链上其它成员不被无谓打进冷却
 - **预算耗尽**：本次调用累计等网（`net_waited`）超过 `net_wait_max`（settings，默认 300s，`<=0` 关闭机制）→ 落回原逻辑（记冷却、走回退链）
 
+## 三、轮进行中用户切换模型：_user_switch_epoch——回退循环立刻让位新链首（2026-09-28，用户实锤，commit b03fd80）
+
+### 现象与根因
+
+`_main_` 轮进行中在 WebUI 下拉框切了模型，进行中轮的回退链索引不重置——下一请求没有立刻应用切换后首位的模型。根因：`_chat_with_fallback` 持有**调用开头的链快照**（局部 `chain`），而 sticky 挂在 `self.model_name` 上；`switch_model` 虽重建实例链，旧循环对切换无感知，两种竞态：
+
+- 新模型**不在**旧链快照 → `_advance` 的 `chain.index(...)` 抛 ValueError → `RuntimeError: 当前模型 X 不在回退链中` **直接炸本次调用**（测试真实复现）
+- 新模型**恰在**旧链 → `_advance` 照常推进 `switch_model(next)` → **踩掉刚切的模型**（下一个请求又回到旧行）
+
+### 机制：纪元四件套
+
+1. `__init__`：`self._user_switch_epoch = 0`
+2. `switch_model(_user_initiated=True)`（WebUI 下拉框 / /model）：epoch += 1——回退链内部的切换不动纪元
+3. `_advance` 开头：纪元 ≠ 本次调用开头快照 → **不推进直接 return**（model_name 已是新链首，旧链 index 会炸/会踩）
+4. 循环顶部：纪元变了 → 重建链（react override 优先，否则实例链）+ `tried` 清零，从新链首重试——旧失败成员的 provider 冷却仍在，`_cooled` 照常跳过
+
+### 验证
+
+修复前：切换场景 `RuntimeError` 复现；修复后：尝试顺序 `[proxy → glm-official]`——新链首立刻接管、成功返回；无切换对照组 proxy → deepseek 普通回退行为完全不变。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 | 键 | 位置 | 说明 |

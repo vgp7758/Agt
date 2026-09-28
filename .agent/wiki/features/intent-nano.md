@@ -54,6 +54,34 @@
 
 **同构的直接红利**：存量工作流把 Intent(22) 节点换成 intent_nano 即完成迁移，下游 selector 连线零改动。
 
+## 2026-09-27/28 强化：intents 动态装填 + route 单出口 + 服务协议实锤（commits 9584309 + dbe846b + 2cec328）
+
+skill_suggest 工作流（见 [技能体系 · skill_suggest](skills.md)）的落地反向推动节点三处强化 + 一批服务协议实锤：
+
+### intents 双来源：ref 动态装填优先（用户实锤「inputParameters 传不进 intents」）
+
+`inputParameters.intents`（type=list）可从上游 ref 连线装填**运行时列表**（如技能清单 `[{name, description}]`）——执行引擎 `resolve_input_params` 解析后 `params["intents"]` **优先采用**；literal JSON 字符串（`[` 开头）`json.loads` 兜底；都没有才回落 XML 静态 `<intent>` 子元素。此前 ref 解析结果被无视、恒读静态子元素（用户实锤）。
+
+**编辑器同步**（intent_nano.js / .py）：`inputParameters` 默认补齐 `query(string) / intents(list) / route(boolean) / threshold(number)`——画布 in 端口出现、可连线（ref 绑定显示 `🔗 节点.字段`）；属性面板三块：动态列表 textarea / route checkbox（branch 路由）/ threshold number；静态 `<intent>` 编辑器回落保留；**temperature 控件删除**（见下）。
+
+### route 参数：branch 路由 ↔ 单出口（动态意图列表的死结解除）
+
+- `route=true`（默认）：branch_N/default 端口路由（兼容内置 intent 语义，须按意图接端口边）
+- `route=false`：**单出口模式**——`port=None`，普通直连边照走，outputs 照常携带 intent/confidence/probabilities/raw
+- 动机：意图列表是**运行时**数据时，branch_N 端口边根本无法预接（后继必断流）；`_llm_fallback` 降级路径同样尊重 route
+
+### threshold 参数
+
+top1 概率低于阈值 → `intent` 置空（软拒识不确定样本，编辑器默认 0.35）——从内部常量提升为可配参数。
+
+### NanoJev 服务协议实锤（2026-09-27 双端点探针：8090 lfm_proxy / nanojev_server 原生）
+
+- **choice 题型服务端必填 instruct**——缺失直接 HTTP 400（曾误删，实测打脸恢复）
+- instructions **不进前向**（响应无回显、概率逐位一致）——仅字段占位
+- temperature **无效**（确定性打分）——已从调用面与参数表移除
+- `_ensure_server` 宽松探活：`{base}/api/health` 或 `{base}` 本身（GET 有任意 HTTP 响应——**含 404/405——即服务可达**）；仍不通且本机则拉起；**失败不提前降级**——submit 才是最终裁决（8090 lfm_proxy 无 health 路由曾被误判不可用）
+- 轮询路径优先用 submit 响应的 poll 字段（服务自描述，可能是相对 origin 的绝对路径），无则回落 `{base}/api/result/{rid}`；提交端点兼容两形态（`{base}` 本身 / `{base}/api/submit`）
+
 ## XML 用法示例
 
 ```xml

@@ -11,6 +11,23 @@
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**——同名时 workspace 层覆盖 assets 层（本 repo 实际生效的是 workspace 份），两层角色与一致性对账见下节。
 
+## 工具目录收敛：用户工具只认 tools/builtin/ + 一次性任务脚本防御（2026-09-27/28，用户提案，commit 973627f）
+
+用户提案（2026-09-27/28）：`/tools` 这类目录名太容易被随手丢脚本——「要不只认 tools/builtin 里的东西吧」。落地为 `default_dirs()` 收敛（`src/script_tools.py`）：
+
+```
+随包 src/assets/tools_builtin/        （框架自带，不变）
+WORKSPACE/tools/builtin/              ★ 用户工具只认这个子目录（tools/ 根不再扫描）
+WORKSPACE/.agent/tools/               （保留——.agent/ 是显式约定目录，不会被误放）
+```
+
+- **动机（50052 实锤 2026-09-27）**：`tools/` 根躺着模块级 15 分钟轮询的任务脚本，`scan` import 即执行 → 启动卡死。根因是「目录名泛用 × 入库即执行」的组合——`tools/` 根是大家习惯性丢脚本的地方
+- **零损失盘点**（改前核对）：本 repo `tools/` 根 12 个 .py（agent_watch / clean_llm_calls / ssh_reverse_tunnel…）、50052 根 25 个 .py（qn_send / webim_* / kefu_gate / douyin_*…）——**两处有 `agt_register` 的都是 0 个**：它们全是 `run_python` 显式调用的脚本，从来不是注册工具。改后「被调脚本」与「注册工具」彻底脱钩；50052 启动顺带变快（25 个杂脚本不再被白 import）
+- **双保险 · 一次性任务脚本防御**（同 commit）：就算有人往 `tools/builtin/` 塞任务脚本——顶层出现 `while` / `time.sleep` / `input(` / HTTP 调用特征（`_needs_probe`）→ 先走 **8s 子进程 import 预检**（`_import_probe`），超时/报错则拒绝在本进程 import（import 无法中断，卡死即拖死整个启动），记入 `_scan_failed` 并 warning。正常工具库零开销直过。实测：douyin_content_v1b（15 分钟轮询）needs_probe=True → 8.0s 超时拒绝 ✓；bridge.py 正常直过 ✓
+- `/reload tools`、`reload_hot`、`reload_script_tools` 的 help/docstring 同步改为 `tools/builtin/*.py` 口径（`src/commands.py`）
+
+约定一句话：**`tools/` 根随便放脚本（不会被扫描碰），要注册成 Agent 工具的进 `tools/builtin/` 并写 `agt_register()`**。
+
 ## 双层一致性对账：workspace 层 vs assets 层（2026-09-12，commit 971535a，用户提问触发）
 
 用户提问（2026-09-12）：`tools/builtin` 里和 `src/assets/tools_builtin` 重复的文件是不是多余的——没有它们也会读 assets？**功能上对，删不得**。两层角色不同：

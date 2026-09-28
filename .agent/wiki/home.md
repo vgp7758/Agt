@@ -1228,3 +1228,23 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **agent_watch 10061 静默跳过**（`2398498`，用户裁定）：积极拒绝 = 端口无服务在听（实例已关）→ 不进状态/不 diff/不落日志 + 清旧指纹（state 自洽收敛，复活自动重纳入）；超时/不可达仍保留记录；实测 state 18 → 8（10 个死端口清出）——见 [agent-watch · 10061 跳过](features/agent-watch.md)
 - **断网检测与等网重试**（`c5b57cd`，用户提案「网卡时回退链上一个一个往后试毫无意义——换哪个 provider 都卡」）：网络类失败（APITimeout/APIConnection）+ TCP 三锚点（223.5.5.5/baidu/1.1.1.1）全不通才触发（30s 置信窗口复用判定）→ 暂停回退等网恢复（15s 重探，预算 `net_wait_max` 默认 300s），恢复后**重试同一 provider 不记冷却不 _advance**；预算耗尽才落回退链——见 [LLM 网络韧性](features/llm-network-resilience.md)
 
+## 快速事实增补（2026-09-27/28 · v0.30.3 + v0.30.4 发布）
+
+**v0.30.3**（2026-09-27 发布，网络韧性 + 工具收敛 + 技能服务）：
+
+- LLM 网络韧性：分级超时 connect 10s / read 240s（c2b3d60）+ 断网检测与等网重试（4e06819，预算 `net_wait_max`）——见 [llm-network-resilience](features/llm-network-resilience.md)
+- **工具目录收敛**：只认 `tools/builtin/`——`tools/` 根不再扫描（973627f，50052 一次性任务脚本入库即执行卡死启动的教训）+ 8s 子进程 import 预检双保险——见 [tool-externalization](features/tool-externalization.md)
+- 技能服务七件套：`skill_equip` / `skill_use` 常驻有状态服务（b33f230）
+- `exec_workflow`：工作流成为一等执行单元，超时转后台 + 完成自动通知（6fc2a89）
+- **约定目录 README 播种**（0ec4ec7，7 个约定目录随启动获得「放什么/怎么写」一页文档）——见 [workspace-seeding](features/workspace-seeding.md)
+- agent_watch 10061 死端口静默（2398498）· pbridge 全局技能激活（9633de8）
+
+**v0.30.4**（2026-09-28 发布，多 Agent / 模型切换 / 技能建议）：
+
+- **轮进行中切模型立刻生效**：`_user_switch_epoch` 纪元四件套（b03fd80，修复「当前模型 X 不在回退链中」炸调用 / 踩掉刚切的模型）——见 [llm-network-resilience](features/llm-network-resilience.md)
+- **wait_subagents 消费去重**：inbox 同源（`subagent:<aid>`）副本移除（c160348）——见 [multi-agent](architecture/multi-agent.md)
+- **子 Agent 目录形态**：`<name>/{name}.yml + {name}.md + tools/` 自包含（2cec328，专属工具同名覆盖全局、任务脚本防御继承；平铺并存零迁移）
+- **skill_suggest 技能按需建议钩子**：SYSTEM 技能清单下线，jev 快判 + LLM 全文复核两级（9584309 + v3 修正随 2cec328）——见 [skills](features/skills.md)
+- **intent_nano 强化**：intents ref 动态装填 / route=false 单出口 / 编辑器 in 端口（dbe846b）——见 [intent-nano](features/intent-nano.md)
+- test-svc 七件套全覆盖示例随包播种到每个 repo（16aede0）+ seed NameError 修复（ed26ac0）
+

@@ -26,6 +26,23 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
+## 子 Agent 目录形态：<name>/ 自包含目录（yml + md 人设 + tools/ 专属工具，2026-09-28，用户提案，commit 2cec328）
+
+用户提案（2026-09-28）：「sub-agent 的定义最好是个文件夹——里面放着 .yml 和 .md，也可以在 .agent/agents/agent-name/tools 里放一些专门给这个 sub-agent 用的工具」。动机：人设/装配/专属工具**整体拷贝、分发、版本化**——一个 agent 一个目录。
+
+### 三形态与优先级（`_agent_def_path`，同名目录形态优先）
+
+1. `.agent/agents/<name>/<name>.yml` —— **目录形态**（自包含：可带 `<name>.md` 人设——yml `file:` 装配引用 + `tools/` 专属工具）
+2. `.agent/agents/<name>.yml` —— 平铺（v2 主形态，不变）
+3. `.agent/agents/<name>.md` —— 平铺（旧格式，不变）
+
+### 扫描与专属工具挂载
+
+- `_agents_glob`（src/agent_config.py）：平铺 `*.yml`/`*.md` + 子目录 `<name>/<name>.yml`；**目录内的 .md 不单列**（由 yml 的 file: 装配引用，防同名遮蔽误判）
+- `_agent_own_tools(name, agent)`（src/multiagent.py）：**拉起/复活两条路径**扫描 `<name>/tools/*.py` 挂进工具箱——**同名覆盖全局**；一次性任务脚本防御继承（import 预检，见 [工具外置 · 目录收敛](../features/tool-externalization.md)）
+- 目录形态写进播种引导文档：`src/dir_docs/agents.md`（随启动播种到 `.agent/agents/README.md`，见 [workspace 播种](../features/workspace-seeding.md)）；translator demo 随 commit 入库
+- **平铺形态并存零迁移**——存量声明不需要动
+
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
 **背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：
@@ -507,6 +524,14 @@ res = (entry.get("result") or "").strip()
 **连带收益**：toollog 存档即全文 → `get_tool_detail` 自然完整，c119 式「查详情还是截断版」的死循环消失。
 
 **边界保留**：inbox 推送的 4000 字截断**保留**——它进的是唤醒轮开头的 user 消息（不受步距衰减保护），需要兜底；如需放开随时可议。
+
+### 消费去重：inbox 同源副本移除——wait 拿到的回复不再轮后二次消费（2026-09-28，用户实锤，commit c160348）
+
+**现象**（用户实锤 2026-09-28）：sub-agent 的回复在 wait_subagents 返回中已经拿到（进本轮上下文），轮结束后又从 inbox 出队再消费一次。**根因：双通道互不知情**——子 Agent 完成时 `_route_answer` 把回复 push 进 inbox（source=`subagent:<aid>`），而 wait 走 join 线程读 `background_tasks[aid]["result"]`——工具返回已交付本轮，inbox 里那条还在，轮结束出队 = 双消费。
+
+**修复**（commit c160348）：wait 返回前把 ids 对应同源（`subagent:<aid>`）条目从 inbox 移除并重写 inbox.jsonl。安全性论证：inbox 无时间戳，但「wait 之前完成」的条目早已在之前的轮被 pop 消费（不在 inbox），现存的 `subagent:<aid>` 必为本次 wait 等待期间入队；aid 完成即终结，不会二次 push。**超时仍 running 的不在处理范围**——还没 push、不受影响；其后续完成的消息正常走 inbox 唤醒轮（wait 没拿到，消费正当）。
+
+**验证**（mock 双 agent）：`subagent:aid_a` 移除 ✓ / 无关消息（schedule）保留 ✓ / 持久化重写 1 次 ✓ / running 的 aid_b 零影响 ✓
 
 ## recap（每轮一句话总结）
 

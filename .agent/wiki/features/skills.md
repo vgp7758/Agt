@@ -150,7 +150,48 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 - **调试中抓到的两个坑**：① 子进程 stdout pipe **全缓冲**——4 行清单憋在缓冲区父进程永远读不到（死锁）→ 框架侧 `PYTHONUNBUFFERED=1` 兜底（作者忘写 flush 也不死锁）；② `_USE_DONE` 常量误写 `==DONE===`（少一个等号）与协议 `===DONE===` 永不匹配 → use 恒超时——最小复现二分定位抓出，常量处已注释警示
 - demo：`.agent/skills/test-svc/`（32 行计数器服务，协议最小范例，可删）
 
+## skill_suggest · 技能按需建议钩子（SYSTEM 技能清单下线：jev 快判 + LLM 全文复核，2026-09-27/28，用户提案）
+
+### 动机与形态翻转
+
+技能 name/description 常驻 SYSTEM 每轮一份清单 token，而绝大多数轮根本不涉及技能。用户提案（2026-09-27）：清单不进 SYSTEM，改由 **skill_suggest 工作流挂 before_turn 钩子**逐轮检测——命中才注入 name/description/when_to_use + `read_skill` / `skill_equip` 引导，不命中**完全静默**（一行不占上下文）。`skills_summary` 注入段已从装配移除（下节「SYSTEM 摘要与使用教育」所述机制**退役**，教育文案职责转由建议注入承载）；钩子挂 `~/.agt/main.yml`，全部实例生效。
+
+### 编排（v3 两级，6 节点）
+
+```
+start → 扫技能(.agent/skills/*/SKILL.md：description + 全文各截 6000 字) → 短路(user_message < 4 中文字符/英文单词 → 静默)
+  → ① jev 快判（intent_nano，criteria=技能 name+description，~1s 零 token，route=false 单出口）
+       命中（非 __none__ 且 conf≥0.5）→ selector true 分支 → 直接组装注入
+       未命中/低置信 → ② LLM 复核（全文 + user → 只回 name 或 NONE）→ 组装注入
+  → 最终无匹配 {inject:false} 完全静默
+```
+
+两级分工：一级判别模型（NanoJev 0.6B）**宁可放过**——快路径零 token；二级 LLM 拿 SKILL.md 全文兜底——慢路径每次只花一次 utility 短调用（~1s 本地）。
+
+### 六场景实测（全绿）
+
+| 场景 | jev 一级 | 最终 |
+|---|---|---|
+| protobuf 流量解码 | conf 0.37 <0.5 未命中 → LLM 复核 | 静默（LLM 判 NONE） |
+| 写技能包 | test-svc 0.53 命中（快路径） | 注入 test-svc 建议 ✓ |
+| 代码库探索 | explore-codebase 0.81 命中（快路径） | 注入 explore 建议 ✓ |
+| "在吗" | 短路（<4 字） | 静默 ✓ |
+| 无关消息 ×2 | __none__ 且 conf<0.5 | 静默 ✓ |
+
+### v3 调试修正三处（workflow DSL 形态坑）
+
+- **selector 条件**：`<condition>` 子元素 parse 侧忽略 → branches 空 → **恒走 false**；改 `<cond op="11" left="810001.hit" left_type="boolean"/>`（before_turn_retrieval 同款验证形态）
+- **llm 节点参数**：`<prompt>` 裸元素不被 parse → llmParam 空 prompt（用户实锤）；改 `<param name="prompt">` / `<param name="systemPrompt">`
+- **criteria 不拼 when**（description 保持纯净判别语义）
+- 节点侧地基：[intent_nano](intent-nano.md) 的 intents ref 动态装填 + route=false 单出口（2026-09-27/28 强化，commits 9584309 + dbe846b + 2cec328）
+
+### 已知局限
+
+pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打平）→ 落 LLM 复核兜底，不算漏报；改善路径：技能 description 措辞迭代（补 grpc-web / 流量解码 / 逆向等高频词）或调低 threshold（放行更多模糊匹配，自行权衡）。
+
 ## SYSTEM 摘要与使用教育（src/chat.py）
+
+> **【2026-09-27/28 已下线】** `skills_summary` 注入段已从装配中移除——技能清单不再常驻 SYSTEM（每轮省一份清单 token），改为 [skill_suggest](#skill_suggest--技能按需建议钩子system-技能清单下线jev-快判--llm-全文复核2026-09-2728用户提案) 按需建议（见上节）。以下为退役前形态存档。
 
 装配 SYSTEM 技能段（`skills_summary`）时一行一技能，全局技能加 **🌐 前缀**：
 

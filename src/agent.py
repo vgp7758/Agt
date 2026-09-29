@@ -549,6 +549,13 @@ class Agent:
                     return (f"[远程执行失败] {type(e).__name__}: {e}"
                             f"\n\n🧷 [路由] 粘性实例 {rid} 不可达，粘性已清除——后续回到本地执行。")
                 return f"[远程执行失败] {type(e).__name__}: {e}"
+            # route_remote_call 的【文本形态失败】（未知实例/远端执行失败——返回错误串而非抛异常）
+            # 也按失败处理：粘性来源时清粘回本地，防"每次失败但粘性还在"的循环
+            if isinstance(r, str) and (r.startswith("[未知实例") or r.startswith("[远程执行失败]")):
+                if _from_sticky:
+                    self._remote_sticky = None
+                    return r + "\n\n🧷 [路由] 粘性实例不可用，粘性已清除——后续回到本地执行。"
+                return r
             if _explicit_rid:
                 self._remote_sticky = rid          # 显式成功 → 粘住该实例
                 r += (f"\n\n🧷 [路由] 已切换默认远端 → {rid}：后续工具调用默认在此实例执行"
@@ -557,6 +564,20 @@ class Agent:
                 r += (f"\n\n🧷 本次在 {rid} 执行（粘性路由）。执行本地工具请传 \"remote_instance_id\": \"_main_\"。")
             return r
         r = self.tools.call(name, arguments)
+        # 越界放行提示（用户补充 2026-09-29："捕获报错后作为工具结果返回"）：审批放行的
+        # workspace 外操作，提示并入工具结果——模型当步可见，防漏传 remote_instance_id
+        # 的"静默错位写入"（写进了本地而非远端）。
+        try:
+            from real_tools import _tls
+            _out = getattr(_tls, "outside", None)
+            _tls.outside = None
+            if _out and isinstance(r, str):
+                _cur = getattr(self, "_remote_sticky", None)
+                r += (f"\n\n⚠️ [越界放行] 刚才访问的 {_out} 在 workspace 外（审批已放行）。"
+                      f"若本意是操作远端实例的文件，可能是漏传了 remote_instance_id"
+                      f"（当前路由：{_cur or '本地'}）——请确认目标实例。")
+        except Exception:
+            pass
         # 组网教育提示（用户裁定 2026-09-14·二轮）：schema 精简（一句话描述+enum），
         # 实例意识改由缺参时机注入——本地执行时每轮【首次】在结果尾附一行提示
         # （有实际组网才提示；单机零噪声；一轮只提示一次不刷屏——_rid_hint_fp 轮指纹；
@@ -1935,35 +1956,43 @@ class Agent:
                     break    # 最多 3 个文件
                 order.append(key)
                 seen[key] = tc.call_id   # 逆序第一个（原序最后）锁定，忽略同文件旧者
-        # 倒回成正序（先发生的 tool 在前），逐文件拍快照
+        # 倒回成正序（先发生的 tool 在前），逐文件拍快照。
+        # 单文件失败（越界/编码/被删）→ 跳过不炸轮（50052 实锤 2026-09-29：审批放行的
+        # workspace 外文件在 relative_to 抛 ValueError → 异常逃出 → 整轮中断）。
         snapshots = {}
         for key in reversed(order):
             cid = seen[key]
-            real = __import__("pathlib").Path(key)
-            ver = _file_version(real)
-            raw = real.read_text(encoding="utf-8")
-            # 快照存原文（2026-09-13·修复）：rf 段渲染时自行行号化——快照层行号化会双前缀
-            # （t789 投影实证 '1| 1│'），且大文件 outline 对行号化文本 ast.parse 必失败
-            # （session.py 恒"(结构提取失败: IndentationError)"的根因）。md 保留 _md_snapshot
-            # （摘要态，非行号化源码）。
-            text = _md_snapshot(raw) if real.suffix.lower() in {".md", ".markdown"} else raw
-            rel = real.relative_to(WORKSPACE).as_posix()
-            snapshots[cid] = {"path": rel, "version": ver, "text": text}
-            # recent_file 完整投影 = 模型带行号看过全文 → 行级视图记账（replace_lines 前置校验用）。
-            # 阈值随投影形态（用户裁定 2026-09-16）：施工内嵌 ≤RF_MAX_CHARS(100K) 全文行号化
-            # （append-only 定型，投出去的就是模型收到的——"有视图却被拒"的误伤消除）；非施工
-            # 段式 ≤RF_SEG_MAX_CHARS(15K) 全文、超限只投 outline（函数级行号不算行级视图
-            # ——2026-09-15 事故：llm_client.py 47K 只见 outline，version 新鲜、行号过期）。
-            # md 两形态都是 _md_snapshot 摘要态（非原文行号），恒不算。防线不变：每轮清零、
-            # 写后版本变即作废（后续写同文件 → 新快照新版本重记，旧视图自然失配）。
             try:
-                from session import RF_MAX_CHARS, RF_SEG_MAX_CHARS
-                _rf_cap = (RF_MAX_CHARS if self.session._construction_mode()
-                           else RF_SEG_MAX_CHARS)
-                if real.suffix.lower() not in {".md", ".markdown"} and len(raw) <= _rf_cap:
-                    _note_view(real, 1, len(raw.splitlines()))
+                real = __import__("pathlib").Path(key)
+                ver = _file_version(real)
+                raw = real.read_text(encoding="utf-8")
+                # 快照存原文（2026-09-13·修复）：rf 段渲染时自行行号化——快照层行号化会双前缀
+                # （t789 投影实证 '1| 1│'），且大文件 outline 对行号化文本 ast.parse 必失败
+                # （session.py 恒"(结构提取失败: IndentationError)"的根因）。md 保留 _md_snapshot
+                # （摘要态，非行号化源码）。
+                text = _md_snapshot(raw) if real.suffix.lower() in {".md", ".markdown"} else raw
+                try:
+                    rel = real.relative_to(WORKSPACE).as_posix()
+                except ValueError:
+                    rel = real.as_posix()   # workspace 外（审批放行）——快照记绝对路径
+                snapshots[cid] = {"path": rel, "version": ver, "text": text}
+                # recent_file 完整投影 = 模型带行号看过全文 → 行级视图记账（replace_lines 前置校验用）。
+                # 阈值随投影形态（用户裁定 2026-09-16）：施工内嵌 ≤RF_MAX_CHARS(100K) 全文行号化
+                # （append-only 定型，投出去的就是模型收到的——"有视图却被拒"的误伤消除）；非施工
+                # 段式 ≤RF_SEG_MAX_CHARS(15K) 全文、超限只投 outline（函数级行号不算行级视图
+                # ——2026-09-15 事故：llm_client.py 47K 只见 outline，version 新鲜、行号过期）。
+                # md 两形态都是 _md_snapshot 摘要态（非行号化源码），恒不算。防线不变：每轮清零、
+                # 写后版本变即作废（后续写同文件 → 新快照新版本重记，旧视图自然失配）。
+                try:
+                    from session import RF_MAX_CHARS, RF_SEG_MAX_CHARS
+                    _rf_cap = (RF_MAX_CHARS if self.session._construction_mode()
+                               else RF_SEG_MAX_CHARS)
+                    if real.suffix.lower() not in {".md", ".markdown"} and len(raw) <= _rf_cap:
+                        _note_view(real, 1, len(raw.splitlines()))
+                except Exception:
+                    pass
             except Exception:
-                pass
+                continue   # 单文件快照失败（编码/权限/被删/越界残留）不炸轮
         return snapshots
 
     def resume_interrupted(self) -> str:
@@ -2494,7 +2523,13 @@ class Agent:
                                 self.session.toollog.record(cid, tc["name"], tc["arguments"], result)
                                 step.tool_calls.append(ToolCall(call_id=cid))
                         _rt._tool_emit = None  # 清理
-                        step.file_snapshots = self._collect_file_snapshots(step)   # recent-file 快照
+                        try:
+                            step.file_snapshots = self._collect_file_snapshots(step)   # recent-file 快照
+                        except Exception as e:
+                            # 外层双保险（50052 实锤 2026-09-29）：内层已按文件跳过，此处兜住遍历/其它意外——
+                            # recent-file 快照失败绝不炸轮
+                            step.file_snapshots = {}
+                            self._emit({"type": "warn", "text": f"recent-file 快照失败（已跳过）：{type(e).__name__}: {e}"})
                         self.session.add_step(step)
                         # 动态注册的工具（新写的工作流、ensure_lsp 装的 LSP 等）当轮即可见：
                         # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas

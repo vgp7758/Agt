@@ -66,6 +66,11 @@ def set_bg_notify(cb):
     _bg_notify_cb = cb
 
 
+_tls = threading.local()   # 越界放行标记（用户补充 2026-09-29）：_resolve 审批放行 workspace 外
+                           # 路径时置位，agent._exec_tool 读取后作为提示并入工具结果（模型当步
+                           # 可见"漏传 remote_instance_id 导致写到了本地"），读完即清。
+
+
 def _resolve(path: str) -> Path:
     """把路径解析到 workspace 内；越界则走审批（用户同意则放行本 session，拒绝则抛 PermissionError）。"""
     base = WORKSPACE.resolve()
@@ -74,6 +79,10 @@ def _resolve(path: str) -> Path:
         target.relative_to(base)  # 不在 base 下会抛 ValueError
     except ValueError:
         if _ask_approval("file_outside", f"文件工具访问 workspace 外路径: {path}"):
+            try:
+                _tls.outside = str(path)   # 标记越界放行（agent._exec_tool 读取并入工具结果）
+            except Exception:
+                pass
             return target
         raise PermissionError(f"用户拒绝访问 workspace 外的路径: {path}")
     return target

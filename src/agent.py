@@ -2355,9 +2355,10 @@ class Agent:
                         # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
                         import real_tools as _rt
                         _rt._tool_emit = self.on_event if self.on_event else (self._print_only_emit if self.verbose else None)
-                        # 工具审批回调（2026-09-28 用户提案）：有 WS 连接才阻塞等审批；CLI/无前端默认放行
+                        # 工具审批回调（2026-09-28 用户提案）：默认【关闭】（opt-in）——子 Agent/无人值守场景
+                        # 每次 run_python 都问会卡死流程。设 agent._approval_enabled = True 显式开启。
                         _rt._approval_cb = (self._tool_approval if self.on_event
-                                            and getattr(self, "_approval_enabled", True) else None)
+                                            and getattr(self, "_approval_enabled", False) else None)
                         has_tool_hooks = bool(self._active_hooks & {"before_tool", "after_tool"})
                         cur_user_msg = self.session._current.user_message if self.session._current else ""
                         if has_tool_hooks:

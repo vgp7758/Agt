@@ -781,6 +781,13 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
             return None
         loaded = Session.load(str(sub_meta), llm=agent.llm,
                               workspace=agent.session.workspace)
+        # 2cec328 重构删了这行构造、只留下面 set_session —— 复活必炸 NameError（name 'sub'
+        # is not defined），被 except 静默吞掉后落回新建路径 → 每次重启后子 Agent 重建实例
+        # （wiki-updater_2/_3 多实例的根因回归，2026-09-29 用户实测日志坐实）。
+        sub = SubAgent(entry.name, model_name, system, toolbox,
+                       session_dir=loaded.session_dir or sub_dir,
+                       registry=reg, agent_id=entry.agent_id,
+                       caller_id=caller_id, current_turn_only=True)
         sub.agent.set_session(loaded)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
         # set_session 会换掉 __init__ 里设过开关的那个 session，这里在 loaded session 上重设
         sub.agent.session.current_turn_only = True
@@ -1183,7 +1190,6 @@ def make_subagent_tools(agent) -> list:
                 if revived is not None:
                     sub_agent, model_name, sub_dir = revived
                     sub_agent.session.current_turn_only = bool(current_turn_only)   # _revive 内默认 True；按参数覆盖（客服线复活也要完整记忆）
-                    sub_agent, model_name, sub_dir = revived
                     sub_agent.session.set_assembly_plan(base_asm)   # assembly：复活路径同样应用（声明基线 + 参数覆盖）
                     if base_hooks is not None:
                         sub_agent.session.hook_specs = base_hooks

@@ -2579,13 +2579,42 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         return
     if _state is not None and _state.get("busy"):
         # Agent 正在跑：入 pending_messages，本步边界注入，不另起下一轮
-        agent.queue_user_message(text)
+        # （附图落盘 + <img> 标签进文本——插话走纯文本注入通道，2026-09-29）
+        agent.queue_user_message(text + _materialize_user_images(images))
         await _send(ws, {"type": "system", "transient": True,
                          "text": f"📥 已排队并将在下一步注入当前任务（队列 {len(agent.pending_messages)} 条）"})
     else:
-        _work_q.put(("user", text))
+        _work_q.put(("user", text, images) if images else ("user", text))
         # transient=True：前端走右下角 toast（2s 消失）而非永久气泡——瞬时状态不该留在消息流里
         await _send(ws, {"type": "system", "transient": True, "text": "✅ 已接收，处理中…"})
+
+
+def _materialize_user_images(images) -> str:
+    """把 WebUI 上传的 data URL 图片落盘到 repo images/，返回 " <img>文件名</img>" 文本后缀。
+    仅用于【插话/入队】等纯文本注入通道（投影时它们是 turn.user_message 的一部分）；
+    空闲新轮走 agent.run(images=) 原生多模态通道（投影构造 image_url 块），不走这里。
+    （2026-09-29 修：此前 server 解析出 images 后从未使用——WebUI 上传的截图被静默丢弃）"""
+    if not images:
+        return ""
+    import base64 as _b64
+    from session import repo_images_dir
+    try:
+        out_dir = repo_images_dir(_workspace)
+    except Exception:
+        return ""
+    tags = []
+    for i, durl in enumerate(images):
+        m = re.match(r"data:image/([A-Za-z0-9+.-]+);base64,(.+)", str(durl or ""), re.S)
+        if not m:
+            continue
+        ext = m.group(1).lower().replace("jpg", "jpeg")
+        fn = f"user_{int(time.time())}_{i}.{ext}"
+        try:
+            (out_dir / fn).write_bytes(_b64.b64decode(m.group(2)))
+            tags.append(f"<img>{fn}</img>")
+        except Exception:
+            pass
+    return (" " + " ".join(tags)) if tags else ""
 
 
 def _parse_client_msg(raw: str):

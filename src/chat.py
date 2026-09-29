@@ -391,7 +391,8 @@ def _worker(agent, work_q, registry, state):
                 print(f"\n[worker] 退出哨兵到达（正常退出路径：信号处理器/exit/restart 命令）。"
                       f"排队残留: {work_q.qsize()}", flush=True)
                 break
-            kind, payload = item
+            kind, payload = item[0], item[1]
+            _imgs = item[2] if len(item) > 2 else []   # 三元组 (kind, payload, images)；二元组兼容
             state["kind"] = kind
             state["started"] = time.time()
             state["busy"] = True
@@ -406,7 +407,7 @@ def _worker(agent, work_q, registry, state):
                     registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q, state=state))
                 else:
                     # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
-                    batch = [(kind, payload)]
+                    batch = [item]
                     while True:
                         try:
                             nxt = work_q.get_nowait()
@@ -415,17 +416,18 @@ def _worker(agent, work_q, registry, state):
                         if nxt is None:
                             work_q.put(None)   # 退出哨兵放回，本轮处理后退出
                             break
-                        nk, np_ = nxt
+                        nk, np_ = nxt[0], nxt[1]
                         # task / 斜杠命令不能合并进 agent.run：放回队尾停止 drain
                         if nk == "task" or (nk == "user" and np_.startswith("/")):
                             work_q.put(nxt)
                             break
                         batch.append(nxt)
-                    user_msg, seeds, first_src = _merge_batch(batch)
+                    user_msg, seeds, first_src, _batch_imgs = _merge_batch(batch)
                     if not user_msg and not seeds:
                         continue
                     state["desc"] = user_msg[:40] or "(后台事件)"
-                    agent.run(user_msg, _seeds=seeds or None, _msg_source=first_src)
+                    agent.run(user_msg, images=_batch_imgs or None, _seeds=seeds or None,
+                              _msg_source=first_src)
             except Exception as e:
                 import logging as _lg
                 print(f"\n⚠️ 执行出错：{e}")
@@ -462,11 +464,18 @@ def _merge_batch(batch):
     user 原样。多条用 --- 分隔。background 携带的 seed（后台服务退出等合成工具记录）收集进
     seeds，由 agent.run 经 _seeds 预置成 Step。
     first_src = 首个后台项的 source（纯手输批为 ""）——传给 run(_msg_source=)，user 事件
-    带 source 字段供前端渲染成系统通知气泡（默认折叠）而非蓝色 user 气泡（用户提案 2026-08-30）。"""
+    带 source 字段供前端渲染成系统通知气泡（默认折叠）而非蓝色 user 气泡（用户提案 2026-08-30）。
+    第四个返回值 images：批内首个非空的用户附图（data URL 列表）——传 agent.run(images=) 走
+    原生多模态（2026-09-29 修：此前 WebUI 上传的截图在 server 侧被丢弃，从未到达 agent）。"""
     parts = []
     seeds = []
     first_src = ""
-    for k, p in batch:
+    images: list = []
+    for item in batch:
+        k, p = item[0], item[1]
+        imgs = item[2] if len(item) > 2 else []
+        if imgs and not images:
+            images = list(imgs)
         if k == "background":
             src, msg, seed = p
             if not first_src and not parts:  # 仅当 background 排批首（parts 尚空）才记 source——
@@ -479,7 +488,7 @@ def _merge_batch(batch):
         else:  # user
             parts.append(p)
     user_msg = parts[0] if len(parts) == 1 else "\n\n---\n".join(parts)
-    return user_msg, seeds, first_src
+    return user_msg, seeds, first_src, images
 
 
 def _render_loop(agent, event_q, worker, state, work_q, threshold=10.0, interval=3.0,

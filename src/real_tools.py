@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import hashlib
 import mimetypes
 import os
@@ -196,6 +197,20 @@ def _py_child_cmd(target: str) -> list:
         return [sys.executable, "--pyrun", str(target)]
     return [sys.executable, str(target)]
 
+
+def _decode_stream(b: bytes) -> str:
+    """子进程输出自适应解码（vm-qianniu 乱码实锤 2026-09-29）：utf-8 优先（python/现代工具），
+    失败退 gbk（Windows cmd/bat 控制台默认 cp936），再失败 utf-8+replace 保底。
+    修复形态：GBK 中文按 utf-8+replace 读 → 整段 U+FFFD（"����: ��֧��..."）。"""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return b.decode("gbk")
+        except UnicodeDecodeError:
+            return b.decode("utf-8", errors="replace")
+
+
 def _run_subprocess_streaming(args, name, shell=False, env=None):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。
@@ -204,19 +219,45 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
     子进程默认各弹一个终端窗，闪退即此。"""
     proc = subprocess.Popen(
         args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, cwd=str(WORKSPACE), shell=shell, env=env,
+        cwd=str(WORKSPACE), shell=shell, env=env,
         creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-        bufsize=1, encoding="utf-8", errors="replace",
     )
     start = time.time()
 
-    # reader 线程：逐行读 stdout → queue
+    # reader 线程：逐行读 stdout（bytes → 自适应解码）→ queue。
+    # 编码探测（vm-qianniu 乱码实锤 2026-09-29）：Windows cmd/bat 控制台输出 GBK（cp936），
+    # 此前按 utf-8+replace 读 → 整段 U+FFFD。规则：缓冲行直到出现含非 ASCII 的行——
+    # utf-8 解码成功定案 utf-8（python/现代工具），失败定案 gbk（cmd/老软件）；
+    # 纯 ASCII 满 200 行默认 utf-8（两种编码下等价）。增量解码器处理跨行多字节。
     line_q: queue.Queue = queue.Queue()
 
     def _reader():
+        enc = None
+        dec = None
+        pending = []
         try:
-            for line in proc.stdout:
-                line_q.put(line)
+            for raw in proc.stdout:
+                if enc is None:
+                    try:
+                        raw.decode("utf-8")
+                        pending.append(raw)
+                        if any(b > 127 for b in raw) or len(pending) >= 200:
+                            enc = "utf-8"
+                    except UnicodeDecodeError:
+                        enc = "gbk"
+                    if enc is not None:
+                        dec = codecs.getincrementaldecoder(enc)(errors="replace")
+                        for p_ in pending:
+                            line_q.put(dec.decode(p_, final=False))
+                        pending = []
+                    continue
+                line_q.put(dec.decode(raw, final=False))
+            if dec is not None:
+                line_q.put(dec.decode(b"", final=True))
+            elif pending:
+                # 全程纯 ASCII（编码未定案）——直接按 utf-8 放行缓冲的行
+                for p_ in pending:
+                    line_q.put(p_.decode("utf-8", errors="replace"))
         except Exception:
             pass
         line_q.put(None)  # EOF
@@ -1832,17 +1873,16 @@ def run_script(script: str, payload: str = "") -> str:
         pp = pp + os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pp
     try:
-        proc = subprocess.run(_py_child_cmd(str(target)), capture_output=True, text=True,
+        proc = subprocess.run(_py_child_cmd(str(target)), capture_output=True,
                               timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
-                              encoding="utf-8", errors="replace",
                               creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
     except subprocess.TimeoutExpired:
         return f"[脚本执行超时（>{TOOL_TIMEOUT}s），可用 set_tool_timeout 调大]"
     except Exception as e:
         return f"[执行失败] {type(e).__name__}: {e}"
-    out = (proc.stdout or "").strip()
+    out = _decode_stream(proc.stdout or b"").strip()
     if proc.returncode != 0:
-        err = (proc.stderr or "").strip()
+        err = _decode_stream(proc.stderr or b"").strip()
         return f"[脚本出错 rc={proc.returncode}]\nstderr: {err[-500:]}\nstdout: {out[-500:]}"
     return out or "(无输出)"
 
@@ -1996,25 +2036,28 @@ def git_commit(message: str, files: str = "") -> str:
 
     def _git(*args, timeout=180):
         return subprocess.run(["git", *args], cwd=str(WORKSPACE), capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                              timeout=timeout,
                               creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+
+    def _gs(p):
+        return _decode_stream(p or b"")
 
     targets = [f.strip() for f in (files or "").split(",") if f.strip()]
     r_add = _git("add", *(targets if targets else ["-A"]))
     if r_add.returncode != 0:
-        return f"[git add 失败] {(r_add.stderr or '').strip()[:300]}"
+        return f"[git add 失败] {_gs(r_add.stderr).strip()[:300]}"
     r_ci = _git("commit", "-m", msg)
-    out = (r_ci.stdout or "") + (r_ci.stderr or "")
+    out = _gs(r_ci.stdout) + _gs(r_ci.stderr)
     if r_ci.returncode != 0:
         if "nothing to commit" in out or "no changes added" in out:
             return "（无变更可提交——工作区干净，已跳过 commit/push）"
         return f"[git commit 失败] {out.strip()[:300]}"
     r_push = _git("push")
     if r_push.returncode != 0:
-        return (f"✅ commit 成功但 push 失败：{(r_push.stderr or r_push.stdout).strip()[:300]}\n"
+        return (f"✅ commit 成功但 push 失败：{_gs(r_push.stderr or r_push.stdout).strip()[:300]}\n"
                 f"（网络/权限问题可稍后手动 git push；commit 已在本地）")
     r_log = _git("log", "-1", "--oneline")
-    return f"✅ 已提交并推送\n{r_log.stdout.strip()}\n（trailer: Co-authored-by: Agt）"
+    return f"✅ 已提交并推送\n{_gs(r_log.stdout).strip()}\n（trailer: Co-authored-by: Agt）"
 
 
 def _myers_diff(a_lines, b_lines):

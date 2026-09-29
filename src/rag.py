@@ -384,7 +384,7 @@ if __name__ == "__main__":
     ws = Path(__file__).resolve().parent.parent
     cfg = load_rag_config(ws)
     if not cfg.get("embed_model_path"):  # demo 兜底
-        cfg.update(embed_model_path=r"D:\models\bge-small-zh-v1.5",
+        cfg.update(embed_model_path=r"E:\AI\models\bge-small-zh-v1.5",
                    docs_dir=r"D:\Projects\BunkerProject\Docs\Liskarm",
                    exts=[".md", ".txt", ".json"], top_k=3)
     rag = LocalRAG.from_config(ws, cfg)

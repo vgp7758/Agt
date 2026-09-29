@@ -23,8 +23,8 @@ import urllib.request as _urlreq
 
 PORT = 8766
 DEFAULT_BASE = f"http://127.0.0.1:{PORT}"
-LAUNCH_CMD = ["python", r"D:\models\NanoJev\tools\nanojev_server.py",
-              "--checkpoint", r"D:\models\NanoJev", "--port", str(PORT)]
+LAUNCH_CMD = ["python", r"E:\AI\models\NanoJev\tools\nanojev_server.py",
+              "--checkpoint", r"E:\AI\models\NanoJev", "--port", str(PORT)]
 
 
 def _jev_target():

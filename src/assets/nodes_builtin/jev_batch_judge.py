@@ -68,11 +68,11 @@ def _ensure_server(base, token="", timeout=60):
         pass
     import os as _os
     import subprocess as _sub
-    cmd_path = r"D:\models\NanoJev\tools\nanojev_server.py"
+    cmd_path = r"E:\AI\models\NanoJev\tools\nanojev_server.py"
     try:
         if not _os.path.exists(cmd_path):
             return False
-        _sub.Popen(["python", cmd_path, "--checkpoint", r"D:\models\NanoJev", "--port", "8766"],
+        _sub.Popen(["python", cmd_path, "--checkpoint", r"E:\AI\models\NanoJev", "--port", "8766"],
                    creationflags=0x00000008 | 0x00000200,
                    stdout=_sub.DEVNULL, stderr=_sub.DEVNULL, stdin=_sub.DEVNULL)
     except Exception:

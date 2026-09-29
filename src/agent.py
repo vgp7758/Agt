@@ -563,9 +563,13 @@ class Agent:
             self._approval_events = {}
         entry = {"event": ev, "result": None, "tool": tool_key}
         self._approval_events[aid] = entry
+        # 持久化 pending（2026-09-29 用户实锤：刷新 WebUI 后审批卡片消失但 Agent 仍阻塞——
+        # 实时事件刷新即丢，历史恢复不渲染审批。存 extra_state → current_history 恢复后 re-emit）
+        self.session.extra_state["_pending_approval"] = {"id": aid, "tool": tool_key, "detail": detail}
         self._emit({"type": "approval_request", "id": aid, "tool": tool_key, "detail": detail})
         granted = ev.wait(timeout=600)
         self._approval_events.pop(aid, None)
+        self.session.extra_state.pop("_pending_approval", None)
         _res = entry["result"] or ("timeout" if not granted else "deny")
         self._emit({"type": "approval_resolved", "id": aid, "result": _res})
         if _res == "always":

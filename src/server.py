@@ -2273,6 +2273,12 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         if not check_pending_spec(agent) and not check_pending_survey(agent):
             if getattr(agent, "active_spec", None):
                 await _send(ws, _spec_event_payload(agent))
+        # 补发 pending 审批（2026-09-29 用户实锤：刷新后审批卡片消失但 Agent 仍阻塞——
+        # 实时事件刷新即丢，历史恢复不渲染审批。从 extra_state 读回 → re-emit）
+        _pa = (getattr(agent, "session", None) and agent.session.extra_state or {}).get("_pending_approval")
+        if isinstance(_pa, dict) and _pa.get("id"):
+            await _send(ws, {"type": "approval_request", "id": _pa.get("id"),
+                             "tool": _pa.get("tool", ""), "detail": _pa.get("detail", "")})
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         # 走 work_q：/reset 命令走和 CLI 完全相同的路径（worker dispatch → print 到 CLI）
@@ -2385,6 +2391,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     if isinstance(_d, dict) and _d.get("action") == "survey_decision":
         from survey_tools import resolve_survey
         resolve_survey(agent, _d.get("answers", {}))
+        return
+    if isinstance(_d, dict) and _d.get("action") == "approval_response":
+        agent.resolve_tool_approval(_d.get("id", ""), _d.get("response", "deny"))
         return
     # 工具审批响应：用户在 WebUI 点击 同意/拒绝/一直同意 后，解除工具执行的阻塞
     if isinstance(_d, dict) and _d.get("action") == "approval_response":

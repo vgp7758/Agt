@@ -2789,6 +2789,7 @@ async def _eval_node_output(ws, msg: dict):
             await _send(ws, {"type": "wf_debug_error", "text": f"[脚本错误] {type(e2).__name__}: {e2}"})
     except Exception as e:
         await _send(ws, {"type": "wf_debug_error", "text": f"[脚本错误] {type(e).__name__}: {e}"})
+async def _start_rag_build(ws):
     """RAG 建库：校验 → 包成 task 进 work_q（与聊天串行）→ 进度/完成事件经 broadcast 推流。"""
     inst = get_rag()
     cfg = config.load_rag_config(_workspace)

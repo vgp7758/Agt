@@ -2687,6 +2687,46 @@ class Session:
         """
         return f"<system-reminder>\n{content}\n</system-reminder>"
 
+
+
+# 视觉 API 图片白名单（2026-09-29 用户实锤：VM 里贴 webp → 智谱 400 "Unsupported image format"）
+# 智谱/多数 provider 只吃 PNG/JPEG；前端 FileReader.readAsDataURL 原样保留文件 mime（webp/gif/bmp/heic
+# 全可能），后端 _user_content 此前原样透传 → 被拒。此处统一规范化。
+_MAX_IMG_EDGE = 2048   # 与 real_tools._MAX_IMG_EDGE 同值（视觉 API 尺寸上限）
+
+
+def _norm_img_data_url(url: str) -> str:
+    """data URL 图片规范化：白名单（image/png、image/jpeg）且 ≤2048px → 原样返回；
+    否则用 PIL 重编码为 PNG（GIF/多帧取首帧）并等比缩到限内。
+    PIL 不可用 / 解析失败 / 非 data URL → 原样返回（尽力而为，不炸投影）。"""
+    if not isinstance(url, str) or not url.startswith("data:image/"):
+        return url
+    try:
+        head, _, b64 = url.partition(",")
+        mime = head[5:].split(";")[0].lower()
+        need_conv = mime not in ("image/png", "image/jpeg")
+        raw = base64.b64decode(b64)
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(raw))
+        try:
+            img.seek(0)   # GIF/多帧：首帧
+        except Exception:
+            pass
+        w, h = img.size
+        if not need_conv and w <= _MAX_IMG_EDGE and h <= _MAX_IMG_EDGE:
+            return url
+        if w > _MAX_IMG_EDGE or h > _MAX_IMG_EDGE:
+            r = min(_MAX_IMG_EDGE / w, _MAX_IMG_EDGE / h)
+            img = img.resize((max(1, int(w * r)), max(1, int(h * r))), Image.LANCZOS)
+        if img.mode in ("P", "LA", "PA"):
+            img = img.convert("RGBA")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return url
+
     def _project_imgs(self, text):
         """text 里的 <img>name</img> 占位：当前模型视觉→[text块 + image_url块]（读 repo images/ 转data URL）；
         非视觉→文字占位 str（并提示委托视觉子 agent）。无标签或空文本原样返回。"""
@@ -2710,7 +2750,8 @@ class Session:
                 p = repo_images_dir(self.workspace) / m.group(1)
                 mime = mimetypes.guess_type(str(p))[0] or "image/png"
                 b64 = base64.b64encode(p.read_bytes()).decode()
-                out.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                out.append({"type": "image_url",
+                            "image_url": {"url": _norm_img_data_url(f"data:{mime};base64,{b64}")}})
             except Exception:
                 out.append({"type": "text", "text": f"[图片 {m.group(1)} 读取失败]"})
             last = m.end()
@@ -2725,7 +2766,8 @@ class Session:
         if not turn.images:
             return text
         blocks = list(text) if isinstance(text, list) else [{"type": "text", "text": text}]
-        blocks.extend({"type": "image_url", "image_url": {"url": img}} for img in turn.images)
+        blocks.extend({"type": "image_url", "image_url": {"url": _norm_img_data_url(img)}}
+                      for img in turn.images)
         return blocks
 
     def _summarize_text(self, text: str, limit: int, call_id: str) -> str:

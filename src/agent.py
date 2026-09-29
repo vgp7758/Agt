@@ -510,6 +510,11 @@ class Agent:
         # 走通用路由会把整次调用发到对端再弹回来——套娃），非路由标记
         rid = ""                                            # server_id 是管理语义（连谁/发给谁），非路由标记
         _explicit_local = False                             # 显式选 self（已有路由意识）——不再教育提示
+        _explicit_rid = False                               # 本次显式传了路由参数
+        _switched_back = False                              # 显式 "_main_" 切回本地
+        _sticky = getattr(self, "_remote_sticky", None)     # 粘性路由状态（用户提案 2026-09-29：
+        # 成功远端调用一次后自动"粘住"该实例——后续不传参数也路由过去（LLM 反复漏传的根治）；
+        # 切回本地显式传 "remote_instance_id": "_main_"（每次远端结果尾部都带此提示）。
         if isinstance(arguments, dict):
             if name.startswith(_REMOTE_ADMIN):
                 # 旧名规范化（历史投影兼容）：管理族的 server_id → remote_instance_id（工具新签名）
@@ -518,25 +523,49 @@ class Agent:
             else:
                 if "remote_instance_id" in arguments:
                     rid = str(arguments.pop("remote_instance_id") or "").strip()
+                    _explicit_rid = True
                 elif "server_id" in arguments:
                     rid = str(arguments.pop("server_id") or "").strip()   # 旧名兼容（历史投影习惯）
+                    _explicit_rid = True
+                if not rid and _sticky:
+                    rid = _sticky                  # 粘性继承：未显式传 → 默认路由到粘住的远端实例
                 if rid.lower() in ("self", "local"):
-                    rid = ""   # 显式本机选择（enum 含 'self'）——归一为本地执行
+                    rid = ""                       # 显式本机一次（不清粘性——就这一次在本地）
                     _explicit_local = True
+                elif rid.lower() in ("_main_", "main"):
+                    rid = ""                       # "_main_"=切回本地关键字（用户提案 2026-09-29）
+                    _explicit_local = True
+                    if _sticky:
+                        self._remote_sticky = None
+                        _switched_back = True
         if rid:
+            _from_sticky = not _explicit_rid
             try:
                 from remote_tools import route_remote_call
-                return route_remote_call(rid, name, arguments)
+                r = route_remote_call(rid, name, arguments)
             except Exception as e:
+                if _from_sticky:
+                    self._remote_sticky = None     # 粘性目标不可达 → 自动清除（防连续失败死循环）
+                    return (f"[远程执行失败] {type(e).__name__}: {e}"
+                            f"\n\n🧷 [路由] 粘性实例 {rid} 不可达，粘性已清除——后续回到本地执行。")
                 return f"[远程执行失败] {type(e).__name__}: {e}"
+            if _explicit_rid:
+                self._remote_sticky = rid          # 显式成功 → 粘住该实例
+                r += (f"\n\n🧷 [路由] 已切换默认远端 → {rid}：后续工具调用默认在此实例执行"
+                      f"（无需重复传 remote_instance_id）。执行本地工具请传 \"remote_instance_id\": \"_main_\"。")
+            else:
+                r += (f"\n\n🧷 本次在 {rid} 执行（粘性路由）。执行本地工具请传 \"remote_instance_id\": \"_main_\"。")
+            return r
         r = self.tools.call(name, arguments)
         # 组网教育提示（用户裁定 2026-09-14·二轮）：schema 精简（一句话描述+enum），
         # 实例意识改由缺参时机注入——本地执行时每轮【首次】在结果尾附一行提示
-        # （有实际组网才提示；单机零噪声；一轮只提示一次不刷屏——_rid_hint_fp 轮指纹）。
+        # （有实际组网才提示；单机零噪声；一轮只提示一次不刷屏——_rid_hint_fp 轮指纹；
+        # 粘性期间不再提示——模型已处于远端模式，提示语义由粘性提示接管）。
         try:
             from remote_tools import REMOTE_SERVERS as _RS
             _fp = id(self.session._current)
-            if _RS and not _explicit_local and isinstance(r, str) and getattr(self, "_rid_hint_fp", None) != _fp:
+            if _RS and not _explicit_local and not getattr(self, "_remote_sticky", None) \
+                    and isinstance(r, str) and getattr(self, "_rid_hint_fp", None) != _fp:
                 self._rid_hint_fp = _fp
                 _ids = "、".join(sorted(_RS))
                 r += (f"\n\n[提示] 本次在本机执行。已组网实例：{_ids}——操作它们那边的"
@@ -544,6 +573,8 @@ class Agent:
                       f"（self=显式本机）。")
         except Exception:
             pass
+        if _switched_back:
+            r += "\n\n🧷 [路由] 已切回本地执行。"
         return r
 
     # —— 工具审批（2026-09-28 用户提案）：workspace 外路径 / run_shell / run_python

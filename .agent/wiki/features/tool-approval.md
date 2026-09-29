@@ -67,9 +67,51 @@
 - 审批只在**引擎注入回调**的工具路径生效；Agent 自己用 run_python 写 subprocess 的等价物不受管（黑盒执行器本就无法完全拦截，与 mtime 快照 diff 兜底同一哲学，见 [系统总览](../architecture/overview.md)）
 - 生效需 `/restart`（引擎层 + 前端 Ctrl+F5）
 
+## 审批默认【关闭】：opt-in 开关（2026-09-29，commit 24ee874，50052 实锤）
+
+
+**现象（50052 实例实锤，2026-09-29）**：用户报「50052 调 run_python 时进程就挂了」。同轮真根因是 **D 盘 0GB**（写文件全失败），但审批层暴露了更严重的使用问题：**run_python 每次调用都弹审批、无人值守没人点 → 阻塞 600s → 流程卡死**（子 Agent / 后台/巡检场景尤其致命）。
+
+**修复（src/agent.py，回调注入点）**：从「有 WS 连接才阻塞等审批」收紧为 **默认关闭的 opt-in**——
+
+```python
+_rt._approval_cb = (self._tool_approval if self.on_event
+                    and getattr(self, "_approval_enabled", False) else None)
+```
+
+| `_approval_enabled` | 行为 |
+|---|---|
+| 未设（默认） | `_approval_cb = None` → **完全旧行为**：越界直接 `PermissionError` 拒绝、run_python / run_shell 直接执行不询问 |
+| `True`（显式开） | 三段触发点照旧阻塞等用户在卡片上决定（含 600s 超时兜底） |
+
+**动机**：审批是**可选的安全层**，不是默认路径——默认开着会把「无人值守/子 Agent/工作流」这些没有人在场的场景全变成一次 600s 挂起。要用时显式开启（`agent._approval_enabled = True`，或后续接 `settings.enable_tool_approval`），开启后刷新恢复也一并生效（见下节）。
+
+**排查提示**：「实例调某工具后整个进程挂着不动」先分清两类根因——① 审批阻塞等不到人（看 answer 区有无审批卡片 / 600s 是否自动解除）② 磁盘满等环境级故障（本轮 50052 的真凶，见 [ops 常见错误对照](../guides/ops.md)）。
+
+## 刷新恢复：pending 审批重发（2026-09-29，commit 7bdaa7a，用户实锤）
+
+
+**现象（用户实锤，2026-09-29）**：审批卡片出现时按 `Ctrl+Shift+R` 刷新 WebUI → 页面转为**历史渲染**，审批卡片消失，但 Agent 侧 `Event` 仍在阻塞——**用户既看不到也点不了**，只能干等 600s 超时。
+
+**根因**：审批卡片由**实时事件** `approval_request` 驱动，刷新即丢；历史渲染路径（`current_history`）只重放 turns/steps，不产出审批卡。
+
+**修复（照 `_pending_survey` / `check_pending_spec` 同款模式）**：
+
+| 层 | 改动 |
+|---|---|
+| `src/agent.py` `_tool_approval` | 发起时写 `session.extra_state["_pending_approval"] = {"id", "tool", "detail"}`（**随 session 落盘**）；resolve / 超时解除后 `pop` |
+| `src/server.py` `current_history` | 历史发送完、spec/survey 补发之后，检查 `_pending_approval` → **re-emit** `{"type":"approval_request", id, tool, detail}` → 前端重新渲染卡片 |
+
+**效果**：刷新后卡片复现，点击照常解除阻塞（与 spec 面板补发、survey 补发同址同哲学——**实时事件必须有持久化的补发源**）。
+
+**边界**：`human_step` 的 pending（`_pending_human_step`）已同样落 extra_state，但 `current_history` 的补发目前只覆盖审批卡——见 [human_step · 注意事项](human-step.md)。
+
 ## 相关页面
 
+
 - [run_python](run-python.md) — TOOL_TIMEOUT / 超时转后台（审批段在计时之外，两机制正交）
+- [human_step 人在环](human-step.md) — 同款 Event 阻塞 + WS action + pending 落 extra_state（安全门 vs 任务步骤）
 - [LLM 网络韧性](llm-network-resilience.md) — 同日另一问诊批（API 超时阶段诊断）
-- [用户交互](user-interaction.md) — WS action 通道（survey_decision / approval_response 同款）
-- [运维与排障](../guides/ops.md) — PermissionError 常见错误对照
+- [用户交互](user-interaction.md) — WS action 通道（survey_decision / approval_response / human_step_response 同款）
+- [运维与排障](../guides/ops.md) — PermissionError / 磁盘满常见错误对照
+

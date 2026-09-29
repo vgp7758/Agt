@@ -828,8 +828,13 @@ if(!ws || ws.readyState !== 1){ toast('⚠️ WebSocket 未连接（页面刷新
 
 ## 相关页面
 
+
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 快照检测闭环
 - [工作流运行观测](wf-monitor.md)：执行中行点击后的观测页（run registry、节点甘特时间线，与本页秒表计时对照）
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制（+ pending_messages 盲区补全）/ 子 Agent 唤醒
+- [human_step 人在环](human-step.md)：Agent 指挥人类操作 GUI/物理界面（WS action `human_step_response` + Event 阻塞，同款交互底座）
+- [工具执行审批](tool-approval.md)：审批卡片的 WS action 通道 + 刷新后 pending 重发
+- [图片输入链路](image-input.md)：WebUI 贴图的两条注入通道（空闲原生多模态 / 忙碌落盘 + `<img>` 引用）
 - [wiki_auto_query](../features/wiki-auto-query.md)：before_turn 自动检索实例（默认关闭）
 - [v0.19.2 发布记录](../releases/v0.19.2.md)：本页 wake 语义修复随该版发布
+

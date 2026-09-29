@@ -183,6 +183,17 @@ create_agent(name, description, system, tools="", model="",
 
 **最终验收（2026-08 末，随 Agent 专属页 URL 路由同批）**：闭环达成——wiki-updater_3 从 ❌ 复活为 running、消化完堆积的 21 条 pending（攒批队列轮转清空）、看板回 ✅ 带新 recap——「❌ 判忙 → 永不入队 → 永不消费」的死锁链彻底断开。
 
+### 复发二（2026-09-29，commit e2c0b24，v0.30.6）：SubAgent 构造被目录形态重构误删——复活同样静默落回新建
+
+
+**现象**：`/restart` 后子 Agent 全部变成**新建实例**（同名历史条目形同虚设、`_N` 编号就又长出来）——与 6d396af 那轮**同症状、不同根因**。
+
+**根因**：`2cec328`（子 Agent 目录形态重构，2026-09-28）在 `_revive_subagent` 里删掉了 `sub = SubAgent(...)` 构造行，只留下后续的 `sub.agent.set_session(loaded)` → 每次复活必炸 `NameError: name 'sub' is not defined` → 被外层 `except` **静默吞掉** → 调用方落回新建路径（auto-numbering 造 `_N` 实例）。
+
+**修复（commit `e2c0b24`，v0.30.6）**：恢复构造行 `SubAgent(entry.name, model_name, system, toolbox, session_dir=…, registry=reg, agent_id=entry.agent_id, caller_id=caller_id, current_turn_only=True)`，并在该行之上留注释标注误删史（src/multiagent.py L784-790）——与 6d396af 的教训同款：**重构删代码时，复活路径的「静默落回新建」兜底会把它变成无声的行为漂移**（表面一切正常，只是实例数在涨）。
+
+**排查口诀（两次复发通用）**：见「重启后实例数变多 / 历史没接上」→ 第一步看复活路径有没有 NameError（被 except 吞掉不会报给用户）。
+
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 
 声明里的 `fallback` 键决定该 Agent 的 LLM 回退链。三形态（`_parse_agent_fallback`，src/multiagent.py）：

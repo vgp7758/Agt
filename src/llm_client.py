@@ -298,6 +298,20 @@ def _recharge_url_for(model_name: str, msg: str) -> tuple:
     return prov, url
 
 
+class ImageUnsupportedError(Exception):
+    """端点拒图（messages.content.type 只允许 text 等）——llm_client 检测到且
+    vision_supported=True 时置 False 并上抛：agent 捕获后重刷投影（文字占位）
+    同模型重试，而非进回退链换模型（用户实锤 2026-09-30·glm-5.3 端点 1210）。"""
+
+
+def _is_img_reject(e) -> bool:
+    """识别「端点不支持图片输入」类错误（各 provider 措辞不一，按已实测特征匹配）。"""
+    s = str(e)
+    return ("1210" in s and "content.type" in s) or "取值范围 ['text']" in s \
+        or "image_url" in s and ("not supported" in s or "unsupported" in s.lower()) \
+        or "invalid image" in s.lower() and "type" in s.lower()
+
+
 class LLMClient:
     def __init__(
         self,
@@ -926,6 +940,12 @@ class LLMClient:
                 except Exception:
                     _prov, _rurl = "", ""
                 _stg = _timeout_stage(e) if isinstance(e, (APITimeoutError, APIConnectionError)) else ""
+                # 端点拒图自愈（用户实锤 2026-09-30·glm-5.3 端点 1210）：卡片 vision=True
+                # 但端点不支持 image_url → 降 vision 位并上抛 ImageUnsupportedError——
+                # agent 捕获后重刷投影（文字占位）同模型重试，不进回退链换模型。
+                if self.vision_supported and _is_img_reject(e):
+                    self.vision_supported = False
+                    raise ImageUnsupportedError(str(e)) from e
                 self.last_failures.append({
                     "model": self.model_name, "err": type(e).__name__,
                     "cls": _classify_err(e), "msg": str(e)[:200] + (f" [{_stg}]" if _stg else ""),

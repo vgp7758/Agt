@@ -2565,6 +2565,18 @@ class Agent:
                             continue
                     return self._wrap_up()
 
+            except ImageUnsupportedError as e:
+                # 端点拒图自愈（llm_client 已降 vision_supported）：投影重刷后按文字占位
+                # 重试同模型——用户要的是该模型的文本能力，而非回退链换模型
+                # （glm-5.3 端点 1210 实锤 2026-09-30）。计数上限 3 防异常循环。
+                self._img_degrade_count = getattr(self, "_img_degrade_count", 0) + 1
+                self.session.invalidate_projection(f"端点拒图自动降级（{self.llm.model_name}）")
+                self._emit({"type": "warn",
+                            "text": f"⚠️ {self.llm.model_name} 端点不支持图片输入，已降级为文字占位"
+                                    f"并重试（第 {self._img_degrade_count} 次）；图片内容可委托视觉子 agent 查看"})
+                if self._img_degrade_count >= 3:
+                    return f"[模型 {self.llm.model_name} 端点不支持图片输入，降级重试仍未成功：{e}]"
+                continue
             except KeyboardInterrupt:
                 self._emit({"type": "interrupted"})
                 self.session.abort_current_turn("（被用户停止）")   # 与 stop_flag 路径统一文案（旧"（被用户中断）"不在 _INTERRUPT_MARKS，resume 会拒绝）

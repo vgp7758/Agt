@@ -67,9 +67,9 @@ return agent.session.restore_to_snapshot(sha)
 
 **验证**（临时 workspace 复现）：改/增/删三文件后 restore → 旧基线对比误报 3 个假变更（含「f0.txt modified」——rewind 恢复它时重写了内容，正是用户看到的现象）；修复后 `restore_snapshot` 完成 → `_fs_snap` 立即刷新 → 下轮对比只报真实改动。`/restart` 生效。
 
-## 回溯与投影边界：tier_boundaries 截断后全量重算（2026-09-30，commit 73809ea）
+## 回溯与投影边界：tier_boundaries 增量过滤（2026-09-30 回滚 recalc-only）
 
-`restore_to_snapshot()`（src/session.py）截断 turns 后，投影毕业边界不再做**增量过滤**（旧：`[b for b in _tier_boundaries if b < i]`——依赖存档边界数组），而是随 [边界不持久化](../architecture/context-engine.md#边界不持久化重启rewind-后按现行规则全量重算2026-09-30用户提案commit-73809ea) 一并改为 `_recompute_tier_boundaries()` **按当前代码卫生性规则全量重算**——回溯到的时点边界由规则推导定型，而非旧运行态裁剪。与本页 `_fs_snap` 基线重扫同属「回溯后引擎态归位」：文件树基线 + 投影边界都在回溯完成时按当前状态重建。
+`restore_to_snapshot()`（src/session.py）截断 turns 后，投影毕业边界做**增量过滤** `[b for b in _tier_boundaries if b < i]`（截断点之后的边界裁掉、之前的保留）。曾随 [边界不持久化](../architecture/context-engine.md#边界不持久化73809ea当日回滚存档优先缺失才-recalc-兜底2026-09-30t1231-事故) 一并改为 `_recompute_tier_boundaries()` 全量重算（commit 73809ea），**同日因 t1231 重启折叠螺旋事故回滚**：规则重算无法复现运行期演化出的末端密集边界（压力毕业/deepen 多重集），丢失后 L0 窗口暴涨、`_plan_fold` 碎刀折叠每刀全量重渲染——首请求前即卡死。现行为 = **存档边界优先 + 截断后裁剪**（保结构），规则重算只作缺失/旧存档的兜底。与本页 `_fs_snap` 基线重扫同属「回溯后引擎态归位」，但边界走**存档保真**而非规则重建——回溯可比它年轻的只有文件树基线。
 
 ## 撞车：检查点之后有 git 提交（用户提案 2026-09-06）
 

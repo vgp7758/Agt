@@ -1289,3 +1289,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **全局工作流目录**（`a1d4184`，用户提案「挂在钩子上的那几个放全局，多个 repo 共享同一份」）：工作流发现改**双层**——repo `<ws>/.agent/workflows/` 优先 + 全局 `~/.agt/workflows/`（`paths.AGT_DIR`）追加，**同名 repo 覆盖全局**（本地定制语义），条目带 `scope`（repo|global）标注来源层；三个发现入口全接线（`scan_workflows` 双层扫描 / `_find_local_workflow` 子工作流 repo 未命中降级全局 / `_wf_canvas_index` mtime stamp 纳入两层——任一层改动下一轮钩子即生效，免 /restart）。本 repo 三个通用钩子工作流迁全局：recap_gen（turn_end）/ extract_keywords（before_turn 提词）/ before_turn_retrieval（before_turn 检索）；**wiki_auto_query 留 repo**（依赖 repo 级 wiki 工具与 `.agent/wiki/`）。其它 repo 钩子直接引用同名工作流即落全局份——见 [workflow-hooks · 全局工作流目录](architecture/workflow-hooks.md)
 
+## 快速事实增补（2026-09-30 · 五 · t1231 折叠螺旋事故——tier_boundaries 回滚存档优先）
+
+- **t1231 重启折叠螺旋事故——`73809ea` recalc-only 当日回滚**（2026-09-30，用户实锤「重启后发消息没反应」）：1230 轮长会话重启后卡死在首请求之前的 `_plan_fold`——卫生性规则重算无法复现运行期演化出的**末端密集边界**（压力毕业/deepen 多重集）→ L0 全量窗口 4→26 轮 → 估算超线 → 逐轮碎刀折叠、每刀全量重渲染 1200+ 轮；fc 从 1185 被吃到 1230（**近期 45 轮上下文全进摘要**）。回滚三层：代码恢复边界持久化（存档优先、缺失才 recalc 兜底、rewind 恢复增量过滤）+ `test/repair_meta_t1231.py` 存档侧写回 `fold_count=1185 + 末端阶梯 [1189,1199,1209,1219]` + 存档保真末端结构后螺旋无触发条件。教训：末端密集结构只有存档能保真，「重算确定性复现运行期演化」对压力毕业多重集不成立——证据链与螺旋机制详见 [context-engine · 回滚后记](architecture/context-engine.md#边界不持久化73809ea当日回滚存档优先缺失才-recalc-兜底2026-09-30t1231-事故)（v0.30.11 发布记录里的 ③ 即此项，发布当日即撤）
+

@@ -1236,6 +1236,13 @@ async def api_dash():
     if reg:
         with reg._lock:
             for e in reg._agents.values():
+                _k = "a:" + e.agent_id
+                _rc = (e.recap or e.task or "")[:200]
+                try:
+                    agent.recap_observe(_k, _rc)   # 观察→变化标脏（用户提案 2026-09-30）
+                    _re = (agent._recap_seen or {}).get(_k) or {}
+                except Exception:
+                    _re = {}
                 out["team"].append({
                     "agent_id": e.agent_id,
                     "name": e.name,
@@ -1243,7 +1250,9 @@ async def api_dash():
                     "model": e.model,
                     "status": e.status,
                     "caller_id": e.caller_id,
-                    "recap": (e.recap or e.task or "")[:200],
+                    "recap": _rc,
+                    "recap_dirty": bool(_re.get("dirty")),
+                    "recap_prev": (_re.get("seen") or "")[:120],
                     "url": "" if e.agent_id in ("_main_", "main") else f"/agents/{e.agent_id}",
                 })
     # —— 远程 agt 实例（remote_tools.REMOTE_SERVERS 内存态）——
@@ -1259,8 +1268,16 @@ async def api_dash():
                     "session_name": it.get("session_name", ""),
                     "model": it.get("model", ""),
                     "recap": it.get("recap", ""),   # 实例级 recap（远端看板展示，2026-09-30）
+                    "recap_dirty": bool(((agent._recap_seen or {}).get("r:" + sid) or {}).get("dirty")),
+                    "recap_prev": (((agent._recap_seen or {}).get("r:" + sid) or {}).get("seen") or "")[:120],
                     "checked_at": it.get("checked_at"),
                 })
+        # 远端观察→变化标脏（用户提案 2026-09-30）
+        for _it in out["remotes"]:
+            try:
+                agent.recap_observe("r:" + _it["server_id"], _it.get("recap") or "")
+            except Exception:
+                pass
         # 惰性补探（用户提案 2026-09-30）：在线实例 >90s 未探测 → 后台补一次刷新 recap/状态
         # （/api/dash 3s 轮询，不能每次都同步探测；单飞标志防堆积——补完下一轮自然带上新值）
         try:

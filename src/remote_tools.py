@@ -405,12 +405,20 @@ def make_remote_tools(agent) -> list[Tool]:
         expect_reply=True（2026-09-17·用户提案）：派活后期望对方完成时回发回答——对方
         answer 生成后将临时 connect 本机回发（本机收到回执即被唤醒继续处理）；需本机
         WebUI 服务在线（CLI 裸进程收不到回执）。"""
+        try:
+            agent.recap_interact("r:" + remote_instance_id)
+        except Exception:
+            pass
         return send_message(remote_instance_id, message, expect_reply=expect_reply)
 
     def remote_ask(remote_instance_id: str, question: str, timeout: int = 120) -> str:
         """向远程实例的 agent 提问并等待它的最终回答（挂流到本轮完成，默认 120s）。
         消耗对方一次 LLM 调用。适合问"只有它才知道"的事（它的环境/它的进度）。
         对方正忙时消息进它的插话队列，回答可能超时——可加大 timeout 或改用 remote_message。"""
+        try:
+            agent.recap_interact("r:" + remote_instance_id)
+        except Exception:
+            pass
         return ask(remote_instance_id, question, timeout)
 
     def remote_call_tool(remote_instance_id: str, name: str, arguments: dict = None) -> str:
@@ -427,6 +435,10 @@ def make_remote_tools(agent) -> list[Tool]:
                         f"{arguments[:200]!r}")
         if not isinstance(arguments, dict):
             return f"[错误] arguments 需为 JSON 对象（dict），收到 {type(arguments).__name__}"
+        try:
+            agent.recap_interact("r:" + remote_instance_id)
+        except Exception:
+            pass
         return route_remote_call(remote_instance_id, name, arguments)
 
     return [Tool(remote_connect), Tool(remote_disconnect), Tool(remote_list),

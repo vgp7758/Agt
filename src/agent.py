@@ -267,6 +267,13 @@ class Agent:
                              temperature=temperature, enable_thinking=enable_thinking)
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
                                max_steps_per_turn=max_steps_per_turn, session_dir=session_dir)
+        # —— 队友 recap 已读表（用户提案 2026-09-30）：观察到的队友 recap 变化 → 标脏
+        # （看板/团队投影提示"从什么变成什么"），与该队友互动（agent_prompt/ask/notify/query、
+        # remote_*）时清脏。挂在 session.extra_state 上随档持久化（重启延续已读状态）。
+        try:
+            self._recap_seen = self.session.extra_state.setdefault("recap_seen", {})
+        except Exception:
+            self._recap_seen = {}
         # assembly DSL v2：workflow 装配项求值用的工具引用（session._asm_evaluate 消费）
         self.session._asm_workflow_tools = self.tools
         self.session._state_provider = self.capture_runtime_state  # session 落盘时收集 plan/自主模式状态
@@ -364,6 +371,34 @@ class Agent:
             except Exception:
                 pass
         self.session._teammates_provider = self._teammates_block
+
+    def recap_observe(self, key: str, cur: str) -> None:
+        """观察到某队友（key: 'a:<agent_id>' / 'r:<server_id>'）的最新 recap——变化则标脏。
+        基线 seen 只在互动时推进（recap_interact）；首次观察只记基线不标脏（防历史差误报）。"""
+        try:
+            tbl = getattr(self, "_recap_seen", None)
+            if not tbl or not cur:
+                return
+            cur = cur[:200]
+            e = tbl.get(key)
+            if e is None:
+                tbl[key] = {"seen": cur, "cur": cur, "dirty": False}
+                return
+            if (e.get("cur") or "") != cur:
+                e["cur"] = cur
+                e["dirty"] = True
+        except Exception:
+            pass
+
+    def recap_interact(self, key: str) -> None:
+        """与该队友互动（通信/派活/询问等）——清脏并把基线推进到当前值（recap 从此重新计变化）。"""
+        try:
+            e = (getattr(self, "_recap_seen", None) or {}).get(key)
+            if e is not None and e.get("dirty"):
+                e["seen"] = e.get("cur") or ""
+                e["dirty"] = False
+        except Exception:
+            pass
 
     # ========== 事件输出 ==========
     def _print_only_emit(self, event: dict):

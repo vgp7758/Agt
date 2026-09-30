@@ -536,6 +536,23 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **对 t877_s51 类断点的效果**：proxy 卡片未填 → 衰减恒 0 → 轮内组边界**永不回缩** → 轮内小毕业的触发源消失（此前 s50→s51「断点在当前轮第 0 步、前缀 559K 全保」的场景变为完全命中）。
 
+## 手动切模型 → 投影全量重刷：invalidate_projection（2026-09-30，用户提案，commit ce8ed57）
+
+**提案原话**：手动换模型时，「按照 event.jsonl 和该 provider 的 profile 条件把投影按照新规则整个重新刷一遍」。
+
+**实现**（session.py `invalidate_projection(reason)`）：投影真相源本就是内存 turns/steps（events.jsonl 的回放态），历史轮「可变部分」全在几层惰性/冻结缓存里——**清空缓存，下次 messages_for_llm 自然按新 profile 全量重定型**。等效于按 events 重放，但零 IO。四类惰性态一次失效：
+
+| 惰性态 | 为什么必须清 |
+|---|---|
+| `_system_ledger` 置 dirty | 旧模型的 append 形态（system 段 append-not-replace，见下文专章）不再延续到新端点——下次投影归一化收敛。切模型必然断 provider 前缀缓存 → 断点处归一化**零额外成本**（与毕业/折叠同哲学） |
+| `_frozen_renders` 冻结轮渲染 | key=turn_idx **不含模型**——冻结块按旧模型 vision 定型（image_url/文字占位），不清则切到非视觉模型后冻结档照发图片（vision 400 在冻结档复发） |
+| `_constr_buf` / `_constr_stream` 施工定型 msgs | 同按旧 vision 定型——清空后 `_constr_sync`/`_constr_rebuild` 按 turns/steps 重新定型回填 |
+| `_proj_stats` 段统计 | /context 分段口径按新投影重记 |
+
+**接线**（agent.py `switch_model`）：仅 `_user_initiated=True`（WebUI 下拉框 / `/model` 命令）联动调用；**回退路径的自动切换不触发**（轮中频繁切不重刷）。此前的窗口/衰减/detail_base 同步逻辑保留——一次切换五项全同步。
+
+**验证**：五态全失效（dirty/frozen/buf/stream/stats）、重复调用容错、switch_model(user=True) 联动 + vision 位随新 profile 变化。
+
 ## recent-file 跟屁虫快照：注入三版演进 + rf 免疫收拢单源 + 源头收缩（2026-08-29，dd7fd81 + 39e7115 + 348adfc + 983c417 + 22eaa04）
 
 **机制是什么**：react 每步工具调用读写 repo 文件时，把文件快照记进 `step.file_snapshots`（call_id → {path, version, structure, content…}），投影装配时以 `<recent-file file='…' version='…'>` 块注入——让模型看到自己「刚操作的是什么版本的文件」，同文件连续操作不必反复 read（跟屁虫语义）。
@@ -719,6 +736,18 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 #### 后记二：快照层行号化污染——rf 双前缀 + outline 恒失败（2026-09-13，随施工模式实测抓到）
 
 段式化后 rf 渲染全走 `_seg_msgs_recent_file`（小文件行号化全文），但快照收集层（src/agent.py `_collect_file_snapshots`）存进 `file_snapshots` 的非 md 文件**已是行号化文本**——渲染层再行号化 → `1| 1│` 双前缀；大文件 outline 拿行号化文本 `ast.parse` → 恒 IndentationError（`session.py` 结构提取一直失败的根因，t789 投影实证）。修复（随施工模式收官 `f375483`）：**快照存原文、行号化归展示层**——数据层存事实（原文+版本），渲染姿势归投影层。详见 [施工模式 · 顺带修复](#顺带修复同轮实测抓到)。
+
+#### 后记三：越界文件快照不炸轮——relative_to ValueError 双层容错（2026-09-29，v0.30.10，50052 实锤）
+
+#### 后记三：越界文件快照不炸轮——relative_to ValueError 双层容错（2026-09-29，v0.30.10，50052 实锤）
+
+50052 实锤：write_file 写 workspace 外文件（漏传 remote_instance_id，审批放行）→ 步骤收尾 `_collect_file_snapshots` 对越界文件 `relative_to(WORKSPACE)` 抛 ValueError → 异常逃出 → **整轮中断**。工具本体与审批层都接住了，炸的是快照采集层——它对「审批放行的越界文件」零防御。
+
+双层修复（agent.py）：
+- **内层**：`relative_to` 失败（越界）→ 改记**绝对路径**（workspace 外文件照常拍快照，语义合理）；单文件读取失败（编码/权限/被删）→ try/except 跳过
+- **外层**：两处调用点整体 try → 失败则 `file_snapshots={}` + warn 事件（「recent-file 快照失败（已跳过）」）——快照失败**绝不炸轮**
+
+同轮配套：越界放行提示并入工具结果（见[工具执行审批](../features/tool-approval.md)），模型当步可见漏传；路由侧见[粘性路由](multi-instance.md)。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

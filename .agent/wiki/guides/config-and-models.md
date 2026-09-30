@@ -389,6 +389,12 @@ def _openai_client(self) -> OpenAI:
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
+### enable_snapshots：回溯快照开关（2026-09-30，用户提案）
+
+### enable_snapshots：回溯快照开关（2026-09-30，用户提案）
+
+`false` = 每轮不打影子 git 快照（`.agt/snapshots` 不再增长，/rewind 不可用）——大仓库/低配环境省每轮 `add -A` 全量扫描与磁盘增长。默认 True；**每轮读盘，改完下一轮生效**（免重启）。字符串 "false"/"0"/"off"/"no" 均视为关。机制与行为详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
+
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 
 网络韧性键（2026-09-26 三键；2026-09-28 用户问诊「34.7s 就 APITimeoutError」后扩至七键，commit 83c732d）：

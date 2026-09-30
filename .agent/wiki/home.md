@@ -1264,3 +1264,12 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **v0.30.5 / v0.30.6 发布（2026-09-29）**：v0.30.5 = 图片格式规范化（`d13adca`）+ 本地模型路径迁移 D:\models → E:\AI\models（`643d803`）+ 审批刷新恢复（`7bdaa7a`）+ 审批默认关闭（`24ee874`）+ human_step（`02cb2bd`）+ 超时阶段诊断（`83c732d`）；v0.30.6 = 三层启动级修复（`e2c0b24`：session 图片函数缩进 NameError → 会话拉不起 / 复活路径 SubAgent 构造误删 → 子 Agent 全重建实例 / 图片传参断链）——两版均未立 releases/ 页，内容并入本节
 - **顺带记档：D 盘满盘事故处置（2026-09-29）**：`Errno 28 No space left on device` → 工具失败 + `edit` 把源文件写成 0 字节 + `git checkout` 因 `index.lock` 写不进也失败；处置=查空间 → 清 `dist/build/packaging/dist/packaging/build`（2.4GB）+ `__pycache__` → 清 `index.lock` → `git checkout --` 恢复并校验（磁盘满会把环境故障伪装成代码 bug）——见 [ops · 磁盘满](guides/ops.md)
 
+## 快速事实增补（2026-09-29/30 · v0.30.8–0.30.10 三连发 + 粘性路由/投影重刷/快照开关）
+
+- **v0.30.8**（f04f9c1）：pyproject 显式声明 httpx——VM 全新环境 pip 装完启动即崩 ModuleNotFoundError: No module named 'httpx'（llm_client 延迟 import，此前只靠 openai 传递依赖）
+- **v0.30.9**：子进程输出自适应解码 utf-8→gbk 探测——GBK 控制台输出整段 U+FFFD 乱码根治（vm-qianniu remote_call_tool 实锤，`_decode_stream` + 流式 reader 编码探测）
+- **v0.30.10**：漏传 remote_instance_id 炸轮根治——recent-file 快照对越界文件 relative_to ValueError 双层容错 + 越界放行提示并入工具结果（50052 实锤）
+- **粘性路由**（ff00b75，用户提案）：远端成功调用一次后自动粘住该实例，不传参默认路由过去；`"_main_"` 切回本地；失败自动清粘
+- **手动切模型投影全量重刷**（ce8ed57，用户提案）：invalidate_projection 清四类惰性态（账本/冻结轮/施工缓冲/段统计），按新 provider profile 重定型
+- **enable_snapshots 开关**（用户提案）：回溯快照可配置关闭——每轮读盘下轮生效，/rewind 提示明确化
+

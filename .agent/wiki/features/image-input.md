@@ -49,6 +49,12 @@
 
 ③ 的修复链：`_work_q` 三点元组 `("user", text, images)` → chat `_worker` 取 `item[2]`（二元组兼容）→ `_merge_batch` 第四返回值 `_batch_imgs` → `agent.run(images=…)`；插话路径新增 `_materialize_user_images()`（落盘 + `<img>` 标签指路 vision 子 agent）。
 
+### 实战首验（2026-09-29）：用户截图贯通读取
+
+### 实战首验（2026-09-29）：用户截图贯通读取
+
+用户贴入 WebP 截图（VM 启动报错堆栈），完整读出内容——规范化链路（v0.30.5 `d13adca`）+ v0.30.6 三层修复后的**首次真实场景验证**（此前只有探针/单测）。同轮顺带产出 httpx 依赖修复（v0.30.8，pyproject 显式声明——VM 全新环境启动即崩 ModuleNotFoundError，见 [home](../home.md) 快速事实增补）。
+
 ## 排障速查
 
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）

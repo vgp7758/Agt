@@ -106,6 +106,23 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 **边界**：`human_step` 的 pending（`_pending_human_step`）已同样落 extra_state，但 `current_history` 的补发目前只覆盖审批卡——见 [human_step · 注意事项](human-step.md)。
 
+## 越界放行 → 工具结果内提示：漏传 remote_instance_id 的当步可见（2026-09-29，用户补充，v0.30.10）
+
+**场景**（50052 实锤）：write_file("C:\ProgramData\frida_spawn_hook.py") 漏传 remote_instance_id → 本地执行 → 路径越界 → 审批放行 → **静默写进本地**。模型当步毫无感知，错位写入既成事实。
+
+**机制**（real_tools.py + agent.py，用户补充「捕获报错后作为工具结果返回」）：
+- `_resolve` 审批放行 workspace 外路径时置 `_tls.outside = str(path)`（threading.local 越界放行标记）
+- `agent._exec_tool` 工具返回后读取并**清位**，结果尾部追加：
+
+```
+⚠️ [越界放行] 刚才访问的 C:\ProgramData\frida_spawn_hook.py 在 workspace 外（审批已放行）。
+若本意是操作远端实例的文件，可能是漏传了 remote_instance_id（当前路由：taobao）——请确认目标实例。
+```
+
+- 「当前路由」显示粘性实例（若有）——与[粘性路由](../architecture/multi-instance.md)联动，模型**下一笔即可自纠**，而不是静默错位写入。
+
+**设计取舍**：提示走**工具结果通道**（模型当步可见），而非 warn 事件（只有人看得到，模型看不见）；不阻断执行——放行了就执行，只是让模型知道发生了什么。
+
 ## 相关页面
 
 

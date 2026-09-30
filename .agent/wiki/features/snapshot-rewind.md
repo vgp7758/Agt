@@ -10,6 +10,19 @@
 - `snapshot()` 每轮开始打点；`restore(sha)` 还原文件树（`git restore`，只重写内容有差异的文件）+ `clean -fd -e .agt` 删快照之后新建的文件
 - 回溯**不动用户真仓库 `.git`**——这是撞车问题的根源（见下）
 
+## 快照开关：enable_snapshots=false——每轮不打影子快照（2026-09-30，用户提案）
+
+每轮影子 git 快照对大仓库/低配环境（VM）是持续开销：`add -A` 全量扫描 + `.agt/snapshots` 只增不减。新增开关可关（用户提案 2026-09-30）：
+
+- **配置**：settings.json `"enable_snapshots": false`（两级配置本地优先——只影响该实例）；或 `/config enable_snapshots false`；WebUI 设置弹窗「回溯快照（/rewind 依赖）」复选框
+- **读盘时机**：config.py `load_enable_snapshots()` **每轮读盘**——改完下一轮生效，免重启
+- **关闭后**：跳过 `snapshot()` 调用（checkpoint 事件不再发出，前端计数不受干扰）；`/rewind` 被现有校验拦截且提示明确化：`❌ 倒数第 N 轮没有快照点，无法回溯（回溯快照已在设置中关闭：enable_snapshots=false）`；**已有历史快照保留**不删（想彻底清理手动删 `.agt/snapshots`）
+- **默认**：True（未配置 / 非法值 / 读盘异常都回落开启）
+
+**验证**：隔离 AGT_HOME 四态——默认 True / false / 字符串 "false" / 删键恢复 True。
+
+配置键详见 [配置体系](../guides/config-and-models.md)。
+
 ## mtime 全量刷新修复：checkout-index -f → git restore（2026-09，commit a08e967）
 
 用户观察到 `/rewind` 会刷新所有文件的最后修改时间（mtime）。根因在 `restore()` 老实现用的 git plumbing 组合：

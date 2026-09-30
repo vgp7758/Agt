@@ -91,6 +91,18 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 
 意外实证（开发验证时真调了 `sleep(600)`）：宿主 run_python 在 180s 超时转后台，sleep 本身在后台继续睡满 600s 不被掐——inline 工具不超时的直接证据；睡满后走 bg_task 完成通知（上节链路），无害。代价：inline sleep **阻塞当前 react 轮**（UI 工具运行中、插话排队），长睡（sleep 上限 2026-09-16 放宽到 3600s，commit 30fe776）期间整轮不可用——详见 [misc-tools · sleep](misc-tools.md)。
 
+## 子进程输出自适应解码：utf-8 → gbk 探测——GBK 控制台乱码根治（2026-09-29，vm-qianniu 实锤，v0.30.9）
+
+**实锤**（vm-qianniu，2026-09-29）：remote_call_tool 返回 `����: ��֧��...`——每 2 个 U+FFFD 对应一个中文字，GBK 双字节被按 UTF-8 解码失败的典型形态。链路：Windows cmd/bat 控制台程序输出 GBK（cp936）→ 读侧三处固定 `encoding="utf-8", errors="replace"` → 逐字节替换成 U+FFFD → 乱码进 tool result 原样传回。
+
+**修复**（real_tools.py）：
+- **`_decode_stream(b)`**：解码链 utf-8 → gbk → utf-8+replace 保底；`run_script` / `git_commit` 改 bytes 捕获后过此函数（`_git` 去 text=True）
+- **`_run_subprocess_streaming`**（run_shell / run_python）：Popen 改 **bytes 模式**，reader 线程做**编码探测**——缓冲输出行直到出现含非 ASCII 的行：utf-8 解码成功定案 utf-8（python/现代工具），失败定案 gbk（cmd/老软件）；增量解码器处理跨行多字节；纯 ASCII 满 200 行默认 utf-8（两种编码下等价）；EOF flush 纯 ASCII 缓冲
+
+**验证**（五场景全绿）：GBK echo（正是实锤场景）✓ / UTF-8 python ✓ / 纯 ASCII ✓ / ASCII 首行+中文后续（探测定案后正确）✓ / 无输出 ✓
+
+**边界**：乱码产生在**远端执行侧**——remote_call_tool 场景须升级**远端实例**的 agt（≥0.30.9）才生效；本地 /restart 只修本地 run_shell 遇 GBK 输出的程序。
+
 ## 工具执行审批：Popen 前三按钮放行（2026-09-28，用户提案，commit 4d67ba0）
 
 ## 工具执行审批：Popen 前三按钮放行（2026-09-28，用户提案，commit 4d67ba0）

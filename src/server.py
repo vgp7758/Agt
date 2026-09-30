@@ -1071,6 +1071,19 @@ async def api_status(request: Request):
     else:
         st["registry"] = []
 
+    # —— 实例级 recap（远端团队看板展示，用户提案 2026-09-30）：registry _main_ 的最新
+    # recap（recap_gen turn_end 维护）；兜底最近归档轮的 recap ——
+    _rec = ""
+    if reg:
+        with reg._lock:
+            for e in reg._agents.values():
+                if e.agent_id in ("_main_", "main"):
+                    _rec = (e.recap or "")[:200]
+                    break
+    if not _rec and getattr(agent.session, "turns", None):
+        _rec = (getattr(agent.session.turns[-1], "recap", "") or "")[:200]
+    st["recap"] = _rec
+
     # —— 后台任务 ——
     bt = getattr(agent, "background_tasks", {})
     st["background_tasks"] = [
@@ -1245,8 +1258,32 @@ async def api_dash():
                     "tools_count": it.get("tools_count", "?"),
                     "session_name": it.get("session_name", ""),
                     "model": it.get("model", ""),
+                    "recap": it.get("recap", ""),   # 实例级 recap（远端看板展示，2026-09-30）
                     "checked_at": it.get("checked_at"),
                 })
+        # 惰性补探（用户提案 2026-09-30）：在线实例 >90s 未探测 → 后台补一次刷新 recap/状态
+        # （/api/dash 3s 轮询，不能每次都同步探测；单飞标志防堆积——补完下一轮自然带上新值）
+        try:
+            import time as _tt, threading as _th
+            _now = _tt.time()
+            _stale = [s for s, it in _rt.REMOTE_SERVERS.items()
+                      if it.get("status") == "online" and _now - (it.get("checked_at") or 0) > 90]
+            if _stale and not getattr(api_dash, "_probing", False):
+                api_dash._probing = True
+
+                def _bg_probe():
+                    try:
+                        for s in _stale:
+                            info = _rt.probe_server(_rt.REMOTE_SERVERS[s].get("url", ""))
+                            if info:
+                                with _rt._LOCK:
+                                    if s in _rt.REMOTE_SERVERS:
+                                        _rt.REMOTE_SERVERS[s].update(info)
+                    finally:
+                        api_dash._probing = False
+                _th.Thread(target=_bg_probe, daemon=True).start()
+        except Exception:
+            pass
     except Exception:
         pass
     # —— 后台服务（ServiceManager 结构化快照）——

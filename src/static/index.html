@@ -2645,6 +2645,9 @@ async function renderTeamDash(){
   remotes.forEach(r => {
     const st = (r.status||'?').toLowerCase();
     const icon = st==='online' ? '🟢' : st==='offline' ? '🔴' : '⚪';
+    const rec = r.recap || '';
+    const key = 'r:'+r.server_id;
+    const open = !!_teamExpanded[key];
     h += `<div style="border:1px solid #ddd3f0;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span title="状态 ${r.status}">${icon}</span><b style="font-size:13px">${esc(r.server_id)}</b>
@@ -2653,6 +2656,8 @@ async function renderTeamDash(){
         <span title="移除该远程实例（断开+清持久化配置）" style="margin-left:auto;color:#b91c1c;cursor:pointer;font-size:12px" onclick="remoteRemove('${esc(r.server_id)}')">✕ 移除</span>
       </div>
       <div style="margin-top:3px;font-size:11px;color:#5b6472">${esc(r.session_name||'')}${r.model?' · '+esc(r.model):''}${r.tools_count?' · '+esc(String(r.tools_count))+' 工具':''}</div>
+      ${rec ? `<div style="margin-top:4px;font-size:11.5px;color:#374151;line-height:1.5">${open ? esc(rec) : esc(rec.slice(0,80)) + (rec.length>80?'…':'')}
+        <span style="color:#7c3aed;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap——对方实例较旧未上报，🔄 重连后可见）</div>'}
     </div>`;
   });
   if(!locals.length && !remotes.length) h += '<div style="color:#8a9099;font-size:12px;padding:2px 0 10px">（无本地活跃 Agent）</div>';

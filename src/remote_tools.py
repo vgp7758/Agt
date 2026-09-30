@@ -141,6 +141,7 @@ def probe_server(url: str) -> dict | None:
             "tools_count": st.get("tools_count") or 0,
             "session_name": st.get("session_name") or "",
             "model": st.get("model") or "",
+            "recap": (st.get("recap") or "")[:200],   # 实例级 recap（远端看板展示，2026-09-30）
             "checked_at": time.time()}
 
 

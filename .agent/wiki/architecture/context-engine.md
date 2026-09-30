@@ -553,6 +553,25 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **验证**：五态全失效（dirty/frozen/buf/stream/stats）、重复调用容错、switch_model(user=True) 联动 + vision 位随新 profile 变化。
 
+## 重启后首次请求 → profile 指纹分流重刷（2026-09-30·二，用户提案，commit b245364）
+
+**提案原话**：「重启以后的第一次请求也按照当前 profile 整个重刷一遍吧」——补上投影重定型的第三个时机，与手动切模型重刷对称。
+
+**为什么不能无脑重刷**：同模型重启必须延续端点缓存——账本（last_text 快照）随存档持久化，重启后新渲染 == last_text → 前缀逐字节一致 → 缓存 TTL 内命中（508 轮专门做的持久化优化的前提；无脑全刷会退回 t506 式 12.7% 命中的事故）。所以用**指纹分流**：
+
+- **指纹**（session.py `_profile_fingerprint()`）：`模型名|vision位|有效上下文窗口` 三元拼接——投影形态的全部决定项（vision 门控图片投影 / per-provider 窗口与衰减）。
+- **save**：`profile_fp` 落 meta.json 顶层（与 system_ledger 同层，绕开 extra_state 全量替换——账本的落盘姿势）。
+- **load**（session.py 存档恢复处）：对比存档指纹 vs 当前指纹：
+  - **不一致**（重启期间换过模型/能力位/窗口变）→ 账本置 dirty，下次投影归一化收敛；冻结渲染/施工缓冲/段统计本就是内存态、重启后为空 → 首次投影自动按新 profile 全量重算。**首次请求即当前 profile 全量定型**。
+  - **一致**（同模型重启）→ 账本延续，byte-stable → 缓存命中 ✓。
+  - 旧存档无 `profile_fp` 键 → 保守延续，不误伤存量会话。
+
+**重启后各惰性态归宿**（全链核查）：`_frozen_renders` / `_constr_buf|_stream` / `_proj_stats` 均为内存态，重启自动空 → 首次投影免决策重算；**账本是唯一随存档恢复的惰性态** → 唯一需要指纹决策的。`invalidate_projection` docstring 同步补了重启路径的交叉引用。
+
+**验证**：五场景全绿——save 落盘指纹 / 同 profile 重启账本延续 / 模型·vision 位变 dirty / 窗口变 dirty / 旧存档无指纹不误伤。`/restart` 一次生效。
+
+**语义总结**：「投影形态 = 当前 profile 的完整重定型」三时机齐备——手动切模型（无条件重刷，commit ce8ed57）/ 重启异 profile（指纹分流重刷，本节）/ 重启同 profile（延续缓存命中，不浪费）。
+
 ## recent-file 跟屁虫快照：注入三版演进 + rf 免疫收拢单源 + 源头收缩（2026-08-29，dd7fd81 + 39e7115 + 348adfc + 983c417 + 22eaa04）
 
 **机制是什么**：react 每步工具调用读写 repo 文件时，把文件快照记进 `step.file_snapshots`（call_id → {path, version, structure, content…}），投影装配时以 `<recent-file file='…' version='…'>` 块注入——让模型看到自己「刚操作的是什么版本的文件」，同文件连续操作不必反复 read（跟屁虫语义）。

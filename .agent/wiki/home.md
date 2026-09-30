@@ -1273,3 +1273,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 - **手动切模型投影全量重刷**（ce8ed57，用户提案）：invalidate_projection 清四类惰性态（账本/冻结轮/施工缓冲/段统计），按新 provider profile 重定型
 - **enable_snapshots 开关**（用户提案）：回溯快照可配置关闭——每轮读盘下轮生效，/rewind 提示明确化
 
+## 快速事实增补（2026-09-30 · 二 · 重启异 profile 指纹分流重刷）
+
+- **重启后首次请求按 profile 指纹分流重刷**（`b245364`，用户提案「重启后的第一次请求也按当前 profile 整个重刷一遍」）：meta.json 落 `profile_fp`（模型名|vision位|窗口，`_profile_fingerprint`），load 时对比——不一致 → 账本置 dirty 归一化，冻结渲染/施工缓冲（内存态本就为空）首次投影按新 profile 全量定型；一致 → 账本延续 byte-stable → 同模型重启缓存命中不浪费。与手动切模型重刷（ce8ed57）对称，「投影=当前 profile 重定型」三时机齐备——见 [context-engine](architecture/context-engine.md)
+

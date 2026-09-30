@@ -134,14 +134,23 @@ async def _send(ws: WebSocket, obj: dict):
     await ws.send_text(json.dumps(obj, ensure_ascii=False))
 
 
-def _safe_wf_path(name: str) -> Path:
-    """解析工作流文件名，防越界。自动补 .json 后缀。"""
+def _wf_dir_for(scope: str = "") -> Path:
+    """工作流目录（用户提案 2026-09-30·双层目录）：scope='global' → ~/.agt/workflows/（多 repo 共享）；
+    否则 repo <cwd>/.agent/workflows/（_WF_DIR）。"""
+    if (scope or "").strip().lower() == "global":
+        from paths import AGT_DIR
+        return Path(AGT_DIR) / "workflows"
+    return _WF_DIR
+
+
+def _safe_wf_path(name: str, scope: str = "") -> Path:
+    """解析工作流文件名，防越界。自动补 .json 后缀。scope 决定目录（repo/global）。"""
     safe = Path(name).name
     if safe != name or not safe:
         raise ValueError(f"非法文件名: {name!r}")
     if not safe.endswith(".json"):
         safe = safe + ".json"
-    return _WF_DIR / safe
+    return _wf_dir_for(scope) / safe
 
 
 # ===================== 静态页 =====================
@@ -390,7 +399,8 @@ async def api_wf_list():
     items = []
     for it in workflows_info(_workspace):
         items.append({"name": it["name"], "tool": it["tool"], "status": it["status"],
-                       "detail": it["detail"], "description": it["description"], "coze_url": it["coze_url"]})
+                       "detail": it["detail"], "description": it["description"], "coze_url": it["coze_url"],
+                       "scope": it.get("scope", "repo")})
     return {"items": items}
 
 
@@ -490,63 +500,67 @@ async def api_tools():
 
 
 @app.get("/api/wf/{name}")
-async def api_wf_get(name: str):
-    """获取单个工作流画布 JSON + meta。优先 .json，否则 .xml（转 JSON）。"""
+async def api_wf_get(name: str, scope: str = ""):
+    """获取单个工作流画布 JSON + meta。优先 .json，否则 .xml（转 JSON）。
+    scope='global' 读全局 ~/.agt/workflows/（用户提案 2026-09-30：编辑器可编辑全局工作流）；
+    scope 留空 → repo 优先、未命中降级全局（返回体带 scope 标注实际来源层）。"""
     import json as _j
     import xml.etree.ElementTree as ET
-    from workflow_xml import parse_xml_fragment
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_") or "workflow"
-    jf = _WF_DIR / f"{safe}.json"
-    xf = _WF_DIR / f"{safe}.xml"
-    if jf.exists():
-        canvas = _j.loads(jf.read_text(encoding="utf-8"))
-        meta = {}
-        mp = jf.with_name(jf.name + ".meta")
-        if mp.exists():
-            try:
-                meta = _j.loads(mp.read_text(encoding="utf-8")) or {}
-            except Exception:
-                meta = {}
-        meta.setdefault("name", safe)
-        return {"name": safe, "canvas": canvas, "meta": meta, "format": "json"}
-    if xf.exists():
-        from workflow_xml import xml_to_canvas, WorkflowXmlError
-        try:
-            xml_text = xf.read_text(encoding="utf-8")
-            root = ET.fromstring(xml_text)
-            meta = {"name": root.get("name") or safe,
-                    "description": root.get("description", ""),
-                    "coze_url": root.get("coze_url", ""),
-                    "enabled": root.get("enabled", "true") != "false"}
-            if root.get("auto"):
-                meta["auto"] = root.get("auto") == "true"
-            if root.get("auto_param"):
-                meta["auto_param"] = root.get("auto_param")
-            if root.get("hook"):
-                meta["hook"] = root.get("hook")
-            # hidden 默认 true（与 workflow._scan_xml_workflows 同语义）：只有显式 hidden="false" 才注册为工具
-            meta["hidden"] = root.get("hidden", "true") != "false"
-            if root.get("async") is not None:
-                meta["async"] = root.get("async") == "true"
-            if root.get("recap") is not None:
-                meta["recap"] = root.get("recap") == "true"
-            xmp = xf.with_name(xf.name + ".meta")
-            if xmp.exists():
+    layers = ([(scope.strip().lower(), _wf_dir_for(scope))] if scope.strip()
+              else [("repo", _WF_DIR), ("global", _wf_dir_for("global"))])
+    for _sc, _d in layers:
+        jf = _d / f"{safe}.json"
+        xf = _d / f"{safe}.xml"
+        if jf.exists():
+            canvas = _j.loads(jf.read_text(encoding="utf-8"))
+            meta = {}
+            mp = jf.with_name(jf.name + ".meta")
+            if mp.exists():
                 try:
-                    meta = {**meta, **(_j.loads(xmp.read_text(encoding="utf-8")) or {})}
+                    meta = _j.loads(mp.read_text(encoding="utf-8")) or {}
                 except Exception:
-                    pass
-            canvas = xml_to_canvas(xml_text)
-        except (WorkflowXmlError, ET.ParseError) as e:
-            return {"error": f"XML 解析失败：{e}"}
-        meta.setdefault("name", safe)
-        return {"name": safe, "canvas": canvas, "meta": meta, "format": "xml"}
+                    meta = {}
+            meta.setdefault("name", safe)
+            return {"name": safe, "canvas": canvas, "meta": meta, "format": "json", "scope": _sc}
+        if xf.exists():
+            from workflow_xml import xml_to_canvas, WorkflowXmlError
+            try:
+                xml_text = xf.read_text(encoding="utf-8")
+                root = ET.fromstring(xml_text)
+                meta = {"name": root.get("name") or safe,
+                        "description": root.get("description", ""),
+                        "coze_url": root.get("coze_url", ""),
+                        "enabled": root.get("enabled", "true") != "false"}
+                if root.get("auto"):
+                    meta["auto"] = root.get("auto") == "true"
+                if root.get("auto_param"):
+                    meta["auto_param"] = root.get("auto_param")
+                if root.get("hook"):
+                    meta["hook"] = root.get("hook")
+                meta["hidden"] = root.get("hidden", "true") != "false"
+                if root.get("async") is not None:
+                    meta["async"] = root.get("async") == "true"
+                if root.get("recap") is not None:
+                    meta["recap"] = root.get("recap") == "true"
+                xmp = xf.with_name(xf.name + ".meta")
+                if xmp.exists():
+                    try:
+                        meta = {**meta, **(_j.loads(xmp.read_text(encoding="utf-8")) or {})}
+                    except Exception:
+                        pass
+                canvas = xml_to_canvas(xml_text)
+            except (WorkflowXmlError, ET.ParseError) as e:
+                return {"error": f"XML 解析失败：{e}"}
+            meta.setdefault("name", safe)
+            return {"name": safe, "canvas": canvas, "meta": meta, "format": "xml", "scope": _sc}
     return {"error": f"工作流 {name!r} 不存在"}
 
 
 @app.put("/api/wf/{name}")
 async def api_wf_save(name: str, request: Request):
-    """保存工作流画布 + meta。format='xml' 转 XML；否则 Coze JSON + .meta。"""
+    """保存工作流画布 + meta。format='xml' 转 XML；否则 Coze JSON + .meta。
+    body.scope：'global' → 写 ~/.agt/workflows/（多 repo 共享）；默认 'repo'（用户提案 2026-09-30）。"""
     import json as _j
     try:
         body = await request.json()
@@ -555,12 +569,14 @@ async def api_wf_save(name: str, request: Request):
     canvas = body.get("canvas") or {}
     meta = body.get("meta") or {}
     fmt = (body.get("format") or "json").lower()
+    scope = (body.get("scope") or "repo").strip().lower()
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_") or "workflow"
     meta.setdefault("name", safe)
-    _WF_DIR.mkdir(parents=True, exist_ok=True)
+    d = _wf_dir_for(scope)
+    d.mkdir(parents=True, exist_ok=True)
     if fmt == "xml":
         from workflow_xml import canvas_to_xml
-        xf = _WF_DIR / f"{safe}.xml"
+        xf = d / f"{safe}.xml"
         # 钩子根属性保底：编辑器 UI 已不管理 hook/async/recap/enabled（钩子挂载统一走 /agents 声明面），
         # 保存请求缺这些字段时从磁盘现有 XML 根属性合并——防编辑器每次保存逐步丢光
         # （实际发生过：22 个 XML 里只剩 2 个还带 hook 标志，播种面新装机钩子全死）
@@ -577,7 +593,7 @@ async def api_wf_save(name: str, request: Request):
             xf.write_text(canvas_to_xml(canvas, meta), encoding="utf-8")
         except Exception as e:
             return {"error": f"转 XML 失败：{type(e).__name__}: {e}"}
-        for old in (_WF_DIR / f"{safe}.json", _WF_DIR / f"{safe}.json.meta", _WF_DIR / f"{safe}.xml.meta"):
+        for old in (d / f"{safe}.json", d / f"{safe}.json.meta", d / f"{safe}.xml.meta"):
             if old.exists():
                 try:
                     old.unlink()
@@ -585,11 +601,11 @@ async def api_wf_save(name: str, request: Request):
                     pass
         saved_name = safe
     else:
-        jf = _WF_DIR / f"{safe}.json"
+        jf = d / f"{safe}.json"
         mp = jf.with_name(jf.name + ".meta")
         jf.write_text(_j.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
         mp.write_text(_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        xo = _WF_DIR / f"{safe}.xml"
+        xo = d / f"{safe}.xml"
         if xo.exists():
             try:
                 xo.unlink()
@@ -602,12 +618,12 @@ async def api_wf_save(name: str, request: Request):
             refresh_workflow_tools(_agent.tools, _workspace, _agent)
         except Exception:
             pass
-    return {"ok": True, "name": saved_name, "format": fmt}
+    return {"ok": True, "name": saved_name, "format": fmt, "scope": scope}
 
 
 @app.post("/api/wf/create")
 async def api_wf_create(request: Request):
-    """创建新工作流。请求体: {name}。"""
+    """创建新工作流。请求体: {name, scope?}（scope='global' → ~/.agt/workflows/）。"""
     import json as _j
     try:
         body = await request.json()
@@ -616,10 +632,12 @@ async def api_wf_create(request: Request):
     wname = (body.get("name") or "").strip()
     if not wname:
         return {"error": "name 不能为空"}
+    scope = (body.get("scope") or "repo").strip().lower()
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", wname).strip("_") or "new_workflow"
-    jf = _WF_DIR / f"{safe}.json"
+    d = _wf_dir_for(scope)
+    jf = d / f"{safe}.json"
     mp = jf.with_name(jf.name + ".meta")
-    _WF_DIR.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     default_canvas = {"nodes": [
         {"id": "100001", "type": "1", "data": {"outputs": [], "trigger_parameters": []}},
         {"id": "900001", "type": "2", "data": {"inputs": {"terminatePlan": "returnVariables", "inputParameters": []}}}
@@ -627,23 +645,30 @@ async def api_wf_create(request: Request):
     default_meta = {"name": safe, "description": "", "enabled": True, "coze_url": ""}
     jf.write_text(_j.dumps(default_canvas, ensure_ascii=False, indent=2), encoding="utf-8")
     mp.write_text(_j.dumps(default_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"ok": True, "name": safe}
+    return {"ok": True, "name": safe, "scope": scope}
 
 
 @app.delete("/api/wf/{name}")
-async def api_wf_delete(name: str):
-    """删除工作流文件 + meta。"""
-    try:
-        jf = _safe_wf_path(name)
-        mp = jf.with_name(jf.name + ".meta")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not jf.exists():
+async def api_wf_delete(name: str, scope: str = ""):
+    """删除工作流（.json/.xml 及其 .meta 全清；scope='global' 删全局层）。
+    ⚠ 此前用 _safe_wf_path（只认 .json）→ XML 工作流永远删不掉（用户实测 2026-09-30）。"""
+    safe = Path(name).name
+    if safe != name or not safe:
+        return {"error": f"非法文件名: {name!r}"}
+    stem = safe[:-5] if safe.endswith((".json", ".xml")) else safe
+    d = _wf_dir_for(scope)
+    killed = []
+    for f in (f"{stem}.json", f"{stem}.json.meta", f"{stem}.xml", f"{stem}.xml.meta"):
+        p = d / f
+        if p.exists():
+            try:
+                p.unlink()
+                killed.append(f)
+            except OSError:
+                pass
+    if not killed:
         return {"error": f"工作流 {name!r} 不存在"}
-    jf.unlink()
-    if mp.exists():
-        mp.unlink()
-    return {"ok": True}
+    return {"ok": True, "deleted": killed}
 
 
 # ===================== 模型配置 API =====================

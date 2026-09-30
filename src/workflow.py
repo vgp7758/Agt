@@ -2147,6 +2147,7 @@ def workflows_info(workspace=None) -> list[dict]:
             "detail": detail,
             "description": meta.get("description", ""),
             "coze_url": meta.get("coze_url", ""),
+            "scope": it.get("scope", "repo"),   # repo|global（编辑器标注来源，用户提案 2026-09-30）
         })
     return out
 

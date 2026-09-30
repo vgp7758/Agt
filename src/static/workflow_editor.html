@@ -127,6 +127,50 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
 <!-- 图例浮标（画布右下角） -->
 <div id="legendFloat"></div>
 <div id="toast" style="opacity:0"></div>
+<!-- 保存弹窗（用户提案 2026-09-30）：元信息表单 + 保存位置（本地/全局）选择 -->
+<style>
+#saveModal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9999}
+#saveModal .sv-card{background:#0f3460;color:#dbe4ff;border:1px solid #3b4a7a;border-radius:10px;padding:18px 22px;width:min(560px,92vw);max-height:88vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+#saveModal h3{margin:0 0 10px;font-size:15px}
+#saveModal label{display:block;margin:9px 0 3px;font-size:12px;color:#9fb0d8}
+#saveModal input[type=text],#saveModal textarea,#saveModal select{width:100%;box-sizing:border-box;background:#0d1b3e;color:#dbe4ff;border:1px solid #3b4a7a;border-radius:6px;padding:6px 8px;font-size:13px}
+#saveModal textarea{min-height:54px;resize:vertical}
+#saveModal .sv-row{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;color:#dbe4ff}
+#saveModal .sv-row input{width:auto}
+#saveModal fieldset{border:1px solid #3b4a7a;border-radius:8px;margin:14px 0 0;padding:8px 12px}
+#saveModal legend{font-size:12px;color:#9fb0d8;padding:0 6px}
+#saveModal .sv-scope{display:flex;align-items:center;gap:6px;margin:6px 0;font-size:13px;color:#dbe4ff}
+#saveModal .sv-scope input{width:auto}
+#saveModal code{background:#0d1b3e;padding:1px 5px;border-radius:4px;font-size:11px}
+#saveModal .sv-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+#saveModal .sv-actions button{padding:7px 18px;border-radius:6px;border:1px solid #3b4a7a;background:#16294f;color:#dbe4ff;cursor:pointer;font-size:13px}
+#saveModal .sv-actions button.primary{background:#533483;border-color:#7b52c9}
+</style>
+<div id="saveModal">
+  <div class="sv-card">
+    <h3>💾 保存工作流</h3>
+    <label>名称（改动=另存为新工作流）</label>
+    <input id="sv_name" type="text" placeholder="英文名，如 my_flow">
+    <label>描述</label>
+    <textarea id="sv_desc" placeholder="一句话说明这个工作流做什么"></textarea>
+    <label>Coze 链接（可选）</label>
+    <input id="sv_coze" type="text" placeholder="https://…">
+    <label class="sv-row"><input id="sv_enabled" type="checkbox"> 启用（取消勾选=disabled）</label>
+    <label class="sv-row"><input id="sv_hidden" type="checkbox"> 隐藏（不注册为 Agent 工具；钩子/子工作流建议勾选）</label>
+    <label class="sv-row"><input id="sv_async" type="checkbox"> 异步钩子（不阻塞主循环，推理耗时长的钩子用）</label>
+    <label>保存格式</label>
+    <select id="sv_fmt"><option value="xml">XML（推荐，代码块免转义）</option><option value="json">Coze JSON</option></select>
+    <fieldset>
+      <legend>保存位置</legend>
+      <label class="sv-scope"><input type="radio" name="sv_scope" value="repo"> 本地（本 repo <code>.agent/workflows/</code>）</label>
+      <label class="sv-scope"><input type="radio" name="sv_scope" value="global"> 🌐 全局（<code>~/.agt/workflows/</code>，多 repo 共享）</label>
+    </fieldset>
+    <div class="sv-actions">
+      <button onclick="WE.hideSaveModal()">取消</button>
+      <button class="primary" onclick="WE.confirmSave()">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ============ 常量 ============
@@ -144,7 +188,7 @@ const svg=document.getElementById('svgCanvas');
 let WF={name:'',nodes:[
   {id:'100001',type:'1',x:80,y:100,w:200,data:{nodeMeta:{title:'开始'},outputs:[],trigger_parameters:[]}},
   {id:'900001',type:'2',x:500,y:100,w:200,data:{nodeMeta:{title:'结束'},inputs:{terminatePlan:'returnVariables',inputParameters:[]}}}
-],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
+],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''},scope:'repo'};
 let selNode=null,selEdge=null;     // selEdge: {kind:'flow',i} 或 {kind:'var',tgtNode,tgtField}
 let dragNode=null,dragDX=0,dragDY=0,dragStartX=0,dragStartY=0;   // dragStart：mousedown 起点，mouseup 判定点击 vs 拖拽
 let edgeFrom=null;                 // {kind:'flow'|'var', nodeId, port, x, y, color}
@@ -3140,16 +3184,17 @@ async function loadFileList(){
   const cur=sel.value;   // 保留当前选中（保存后不丢失）
   WFLIST=r.items||[];
   sel.innerHTML='<option value="">选择工作流…</option>';
-  WFLIST.forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
+  WFLIST.forEach(it=>{const o=document.createElement('option');o.value=it.name;o.textContent=(it.scope==='global'?'🌐 ':'')+it.name+(it.description?` — ${it.description.slice(0,30)}`:'');sel.appendChild(o);});
   if(cur && Array.from(sel.options).some(o=>o.value===cur)) sel.value=cur;
 }
 async function openWf(name){
-  const r=await api('GET','/api/wf/'+name);if(r.error){toast(r.error);return;}
+  const _rec=(WFLIST||[]).find(x=>x.name===name);   // 列表记录来源层（全局/本地）
+  const r=await api('GET','/api/wf/'+name+(_rec&&_rec.scope==='global'?'?scope=global':''));if(r.error){toast(r.error);return;}
   if(!AGENT_TOOLS.length) await loadTools();   // syncToolNode 依赖工具 schema，确保已加载
   _compositeStack=[]; _currentParent=null;
   document.getElementById('breadcrumb').style.display='none';
   document.getElementById('btnExitComp').style.display='none';
-  WF.name=r.name;WF.meta=r.meta||{};
+  WF.name=r.name;WF.meta=r.meta||{};WF.scope=r.scope||'repo';   // scope：保存弹窗默认位置（用户提案 2026-09-30）
   WF.nodes=(r.canvas.nodes||[]).map((n,i)=>{n.data.nodeMeta=n.data.nodeMeta||{title:TYPE_LABEL[n.type]};if(n.x==null)n.x=120+i*30;if(n.y==null)n.y=100+i*30;n.w=n.w||210;n.h=80;return n;});
   WF.edges=r.canvas.edges||[];
   WF.nodes.forEach(syncToolNode);   // 插件节点按 toolName schema 补全空输入/输出字段
@@ -3222,17 +3267,48 @@ function onHookChange(v){
   toast('已按 '+(HOOK_LABELS[v]||v)+' 钩子初始化输入/输出 schema（挂载由 agent 的 .yml 声明）');
 }
 async function saveWf(){
-  // 子画布中：先退出所有层级
+  // 子画布中：先退出所有层级；再弹保存弹窗（元信息表单 + 保存位置，用户提案 2026-09-30）
   while(_currentParent)exitComposite();
-  let name=WF.name;if(!name){const n=prompt('工作流名称：');if(!n)return;name=n;}
+  showSaveModal();
+}
+function showSaveModal(){
+  if(!WF.name){const n=prompt('工作流名称（英文）：');if(!n)return;WF.name=n;}
+  document.getElementById('sv_name').value=WF.name||'';
+  document.getElementById('sv_desc').value=document.getElementById('fdesc').value||WF.meta.description||'';
+  document.getElementById('sv_coze').value=document.getElementById('fcoze').value||WF.meta.coze_url||'';
+  document.getElementById('sv_enabled').checked=document.getElementById('fenabled').checked;
+  document.getElementById('sv_hidden').checked=document.getElementById('fhidden').checked;
+  document.getElementById('sv_async').checked=document.getElementById('fasync').checked;
+  document.getElementById('sv_fmt').value=(document.getElementById('saveFormat')||{}).value||'json';
+  const _sc=(WF.scope==='global')?'global':'repo';
+  const _rd=document.querySelector('#saveModal input[name="sv_scope"][value="'+_sc+'"]');
+  if(_rd)_rd.checked=true;
+  document.getElementById('saveModal').style.display='flex';
+}
+function hideSaveModal(){document.getElementById('saveModal').style.display='none';}
+async function confirmSave(){
+  const name=(document.getElementById('sv_name').value||'').trim();
+  if(!name){toast('名称不能为空');return;}
+  if(name!==WF.name && !confirm('名称已改变，将保存为新的工作流 "'+name+'"（原 "'+WF.name+'" 保留）。继续？'))return;
+  // 弹窗值回写顶栏（UI 一致，下次打开预填正确）
+  document.getElementById('fdesc').value=document.getElementById('sv_desc').value;
+  document.getElementById('fcoze').value=document.getElementById('sv_coze').value;
+  document.getElementById('fenabled').checked=document.getElementById('sv_enabled').checked;
+  document.getElementById('fhidden').checked=document.getElementById('sv_hidden').checked;
+  document.getElementById('fasync').checked=document.getElementById('sv_async').checked;
+  const _sf=document.getElementById('saveFormat'); if(_sf)_sf.value=document.getElementById('sv_fmt').value;
+  const scope=(document.querySelector('#saveModal input[name="sv_scope"]:checked')||{}).value||'repo';
+  hideSaveModal();
+  await _doSave(name,scope);
+}
+async function _doSave(name,scope){
   document.getElementById('fstatus').textContent='保存中…';
   WF.meta.description=document.getElementById('fdesc').value;
   WF.meta.coze_url=document.getElementById('fcoze').value;
    WF.meta.enabled=document.getElementById('fenabled').checked;   // 默认 true，取消则 enabled=false
    WF.meta.hidden=document.getElementById('fhidden').checked;      // 勾=hidden（默认）；取消勾选+保存=注册为 wf_* 工具
    WF.meta.async=document.getElementById('fasync').checked;
- WF.meta.hook=document.getElementById('fhook').value||'';   // 协议声明（空=清除；挂载归 /agents yml）
-   // meta.hook 不动（原值透传——钩子挂载已迁 Agent 声明管理页 /agents，旧值保字段不丢）
+  WF.meta.hook=document.getElementById('fhook').value||'';   // 协议声明（空=清除；挂载归 /agents yml）
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   // blocks/edges 是复合节点(21/28)的【节点级】子画布属性（与 data 平级，不在 data 里）——
   // 必须显式带上，否则保存时子画布被静默丢弃（编辑后保存"乱套"的根因）
@@ -3243,23 +3319,24 @@ async function saveWf(){
     return c;
   }),edges:WF.edges.filter(e=>e.sourceNodeID&&e.targetNodeID),versions:{}};   // 过滤空边（入口段的未选占位）
   const fmt=(document.getElementById('saveFormat')||{}).value||'json';
-  const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt});
+  const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt,scope});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}
-  WF.name=r.name||name;document.getElementById('fileSel').value=WF.name;
-  document.getElementById('fstatus').textContent='✅ 已保存 ('+(r.format||fmt).toUpperCase()+')';
+  WF.name=r.name||name;WF.scope=r.scope||scope;document.getElementById('fileSel').value=WF.name;
+  document.getElementById('fstatus').textContent='✅ 已保存 ('+(r.format||fmt).toUpperCase()+' · '+(WF.scope==='global'?'🌐全局':'本地')+')';
   setTimeout(()=>document.getElementById('fstatus').textContent='',3000);
   await loadFileList();
 }
 async function createWf(){
   const n=prompt('新工作流名称（英文）：');if(!n)return;
-  const r=await api('POST','/api/wf/create',{name:n});if(r.error){toast(r.error);return;}
+  const scope=confirm('保存到全局（~/.agt/workflows/，多 repo 共享）？\n\n确定 = 全局 ／ 取消 = 本地（本 repo）')?'global':'repo';
+  const r=await api('POST','/api/wf/create',{name:n,scope});if(r.error){toast(r.error);return;}
   await loadFileList();openWf(r.name);
 }
 async function deleteWf(){
   const name=WF.name||document.getElementById('fileSel').value;if(!name){toast('请先选择工作流');return;}
-  if(!confirm(`确定删除 "${name}"？`))return;
-  const r=await api('DELETE','/api/wf/'+name);if(r.error){toast(r.error);return;}
-  WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''}};
+  if(!confirm(`确定删除 "${name}"${WF.scope==='global'?'（🌐 全局层）':''}？`))return;
+  const r=await api('DELETE','/api/wf/'+name+(WF.scope==='global'?'?scope=global':''));if(r.error){toast(r.error);return;}
+  WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''},scope:'repo'};
   selNode=null;showProps();renderAll();document.getElementById('fileSel').value='';
   document.getElementById('fdesc').value='';document.getElementById('fcoze').value='';await loadFileList();toast('已删除 '+name);
 }
@@ -3330,7 +3407,7 @@ document.addEventListener('keyup',(e)=>{
     if(was&&!_editing(e))renderAll();   // 编辑中松开 Ctrl 不重绘（否则粘贴刚完成焦点就被打断）
   }
 });
-window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList};
+window.WE={openWf,saveWf,createWf,deleteWf,renderAll,loadFileList,showSaveModal,hideSaveModal,confirmSave};
 // 全局错误捕获——JS 报错弹出 toast 便于定位
 window.onerror=function(msg,url,line,col,err){
   toast('⚠️ JS错误: '+(msg||'').toString().slice(0,120)+' (行'+line+')');

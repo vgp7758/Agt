@@ -1644,6 +1644,33 @@ class Session:
             L["dirty"] = True
             _LOG.info("system账本置dirty（下次投影归一化）：%s", reason)
 
+    def invalidate_projection(self, reason: str) -> None:
+        """投影惰性状态全失效，下次 messages_for_llm 按新 profile 全量重定型
+        （用户提案 2026-09-30：手动切模型时把投影按投影规则整个重刷一遍）。
+
+        原理：投影真相源 = 内存 turns/steps（events.jsonl 的回放态），历史轮/冻结块
+        的可变部分都在这几层惰性缓存里——清空后下次投影自动按新模型能力（含
+        vision 门控的图片投影、per-provider 窗口/衰减）全量重算，等效 events 重放，零 IO。
+        时机：模型切换本身必然断 provider 前缀缓存 → 断点免费清账（与毕业/折叠同哲学）。
+
+        覆盖四类惰性/冻结态：
+        - system 账本置 dirty：下次投影归一化，旧模型的 append 形态不延续到新端点
+        - _frozen_renders：冻结轮渲染（key=turn_idx 不含模型，含旧 vision 定型的
+          image_url/占位——不清则切非视觉模型后冻结块照发图片再炸 400）
+        - _constr_buf / _constr_stream：施工步定型 msgs（同样按旧 vision 定型）——
+          清空后 _constr_sync/_constr_rebuild 按 turns/steps 重定型回填
+        - _proj_stats：分段统计按新投影重记（/context 读到的是新口径）"""
+        self.mark_system_dirty(f"投影全量重刷（{reason}）")
+        try:
+            self._frozen_renders.clear()
+            self._constr_buf = []
+            if self._constr_stream:
+                self._constr_stream = []   # 施工中→下次投影 _constr_rebuild 按 turns[start:] 重建
+            self._proj_stats = None
+            _LOG.info("投影惰性状态已全量失效（%s）——下次投影按新 profile 重定型", reason)
+        except Exception as e:
+            _LOG.warning("invalidate_projection 部分失败（忽略）：%s", e)
+
     def _apply_system_ledger(self, msgs: list) -> None:
         """system 段 append-not-replace 后处理（spec s_eb14a8fd；2026-09-12 用户提案；形态 A 修正）。
 

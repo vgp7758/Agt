@@ -739,6 +739,11 @@ class Agent:
             self.session.fold_target_ratio = getattr(self.llm, "fold_target_ratio", None)
             self.session.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
             self.session.invalidate_detail_base()   # 窗口变 → base 重推导（显式配置除外）
+            if _user_initiated:
+                # 投影全量重刷（用户提案 2026-09-30）：按新 profile 重定型全部惰性/
+                # 冻结投影——账本归一化、冻结轮渲染、施工缓冲、图片 vision 门控随新
+                # 模型能力重算。切模型本就断 provider 缓存 → 断点免费清账。
+                self.session.invalidate_projection(f"模型切换→{name}")
         except Exception:
             pass
 

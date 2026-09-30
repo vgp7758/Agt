@@ -1281,3 +1281,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **投影毕业边界退役出存档**（`73809ea`，用户提案「meta 里不保留 tier_boundaries，启动时全量重新算一版」）：`load()` 不读存档数组、events 回放就绪后 `_recompute_tier_boundaries()` 按当前代码卫生性毕业规则（触发线 30 / 每刀 15）从零模拟定型；`restore_to_snapshot` 截断后同样重算（替代增量过滤）；`save()` 不再写该字段。语义：**投影规则唯一真源 = 当前代码**——规则/参数演化后重启即按新规则定型（旧边界是多代规则沉积、曾积 183 个含 fc 前死重，首次投影形态变一次之后稳定）；压力毕业不重放（依赖历史 profile 估算），重启后体积由首次投影 `_plan_fold` 现算兜底；同规则重启确定性同结果、缓存不白断；`fold_count` 照旧持久化。验证五场景全绿——见 [context-engine · 边界不持久化](architecture/context-engine.md)
 
+## 快速事实增补（2026-09-30 · v0.30.11 发布）
+
+- **v0.30.11 发布**（2026-09-30，PyPI 已上线；自 v0.30.10 以来 6 笔实质提交——09-30 投影/图片攒批打包，build/twine/push 一次过；PyPI 首查命中 CDN 延迟仍报 0.30.10，重查即 ✓）：①**端点拒图自愈**（`5c852fc`——ImageUnsupportedError 降 vision 位 + 投影重刷 + 同模型重试不进回退链，glm-5.3 拒图 400 根除——见 [image-input](features/image-input.md) / [llm-network-resilience](features/llm-network-resilience.md)）；②**图片按视觉能力门控投影**（`3591683`——`turn.images` 非视觉模型投影时即降文字占位（事前门控）+ `_project_imgs` 嵌套占位递归放大修复）；③**tier_boundaries 不持久化**（`73809ea`——投影边界退役出存档，重启/rewind 按当前代码全量重算，见 [context-engine](architecture/context-engine.md)）；④**重启 profile 指纹分流重刷**（`b245364`——异 profile 全量重定型 / 同 profile byte-stable 延续缓存）；⑤**手动切模型投影全量重刷**（`ce8ed57`——invalidate_projection 清四类惰性态）；⑥**enable_snapshots 快照开关**（`488e19c`——回溯快照可配置关闭，每轮读盘下轮生效，见 [snapshot-rewind](features/snapshot-rewind.md) / [config-and-models](guides/config-and-models.md)）。至此「投影 = 当前 profile 重定型」三时机齐备（手动切模型 / 重启异指纹 / 拒图降级）
+

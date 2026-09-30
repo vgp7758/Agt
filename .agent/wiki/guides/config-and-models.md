@@ -391,8 +391,6 @@ def _openai_client(self) -> OpenAI:
 
 ### enable_snapshots：回溯快照开关（2026-09-30，用户提案）
 
-### enable_snapshots：回溯快照开关（2026-09-30，用户提案）
-
 `false` = 每轮不打影子 git 快照（`.agt/snapshots` 不再增长，/rewind 不可用）——大仓库/低配环境省每轮 `add -A` 全量扫描与磁盘增长。默认 True；**每轮读盘，改完下一轮生效**（免重启）。字符串 "false"/"0"/"off"/"no" 均视为关。机制与行为详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
 
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）

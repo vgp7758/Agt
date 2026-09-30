@@ -119,7 +119,7 @@ profile.connect_timeout / write_timeout（models.json 模型卡片）
 
 结论：**glm-5.3 的 openai 兼容 chat completions 端点就是不收图**（`content.type` 只允许 `['text']`；视觉是 glm-4v / glm-4.5v 系列的活）。卡片 vision=True 只是让门控放行了图片，端点照样拒收——门控/投影重刷层怎么修都无解。
 
-### 双层修复（v0.30.10+，commit 5c852fc）
+### 双层修复（随 v0.30.11，commit 5c852fc）
 
 | 层 | 内容 |
 |---|---|

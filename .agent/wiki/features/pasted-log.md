@@ -24,7 +24,7 @@ document 级 `paste` 监听（与图片粘贴 addImageFile 共用同一监听器
 
 **生效**：WebUI **Ctrl+F5** 强刷（纯前端监听，后端零改动）。
 
-## 工作流：链头 strip_pasted 剥离（.agent/workflows/extract_keywords.xml）
+## 工作流：链头 strip_pasted 剥离（extract_keywords，2026-09-30 起在全局 ~/.agt/workflows/）
 
 链头插入 strip_pasted 节点：`100001 → 115001(strip_pasted) → claim`，正则剥掉 `<pasted-log>…</pasted-log>` 块，之后**剥离后文本**贯穿四处、全部同源：
 
@@ -35,7 +35,9 @@ document 级 `paste` 监听（与图片粘贴 addImageFile 共用同一监听器
 | kv_cache_write 的 key | 写回与读取同键 |
 | 等待循环 recheck 的 key | pending 轮询同键 |
 
-四处同源 → 缓存 hit / pending / claim 口径不会错位。工作流按需读盘——**下一轮 before_turn 即生效**，无需 /restart。
+四处同源 → 缓存 hit / pending / claim 口径不会错位。
+
+**位置（2026-09-30 起）**：extract_keywords 随「全局工作流目录」迁到 `~/.agt/workflows/`（与 recap_gen / before_turn_retrieval 同批——多 repo 共享的通用钩子工作流放全局层，repo 同名可覆盖），repo 层不再放副本——见 [workflow-hooks · 全局工作流目录](../architecture/workflow-hooks.md)。工作流按需读盘——改完下一轮 before_turn 即生效，无需 /restart。
 
 ## claim 等待循环修复 + 播种源三文件对齐（2026-09-17，commits 553d2cd + 5992929）
 

@@ -748,6 +748,10 @@ finish_turn 后异步生成（utility_client，scene=recap）——不进自己�
 
 上文对话式组装节断言的「`.agent/workflows/recap_gen.xml`（生效）+ `src/workflows/recap_gen.xml`（播种）双份一致」后来又被打破——运行版后续迭代未回写播种源。本轮全量对账（`diff -rq .agent/workflows/ src/workflows/`）发现 recap_gen / extract_keywords / wiki_auto_maintenance 三文件落后，一并 cp 对齐 + filecmp 逐字节验证，随补丁分发（详见 [pasted-log · 播种源对齐](../features/pasted-log.md)）。教训：双份一致只保证「当时」，不保证「以后」——发布前对账是必要工序。
 
+#### 后记：recap_gen 运行版迁全局目录（2026-09-30，commit a1d4184）
+
+recap_gen 运行版随「全局工作流目录」迁出 repo `.agent/workflows/`，现从 `~/.agt/workflows/recap_gen.xml` 加载（与 extract_keywords / before_turn_retrieval 同批——多 repo 共享的通用钩子工作流放全局层；同名 repo 覆盖全局，mtime 缓存两层纳入，改动下一轮钩子即生效）——机制详见 [workflow-hooks · 全局工作流目录](workflow-hooks.md)。本节「播种源 vs 运行版」叙事中的**运行版位置**自此指全局层。
+
 ## assembly DSL（上下文装配配方）
 
 ```yaml

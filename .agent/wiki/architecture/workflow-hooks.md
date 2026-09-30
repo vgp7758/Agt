@@ -11,6 +11,34 @@
 - **type3 LLM 节点的 model 序列化为独立 `<model>` 标签**（workflow_xml.py 写侧），不是 `<param name="model">`——grep param 形态搜不到 ≠ model 未设置。误诊实例（2026-08-30，commit e8ef64a 修复）：曾据 param 搜不到错判 recap_gen「model 未设置→utility 兜底」，真实是 `<model>proxy</model>` → proxy 路由 → glm（bigmodel）429 余额不足（319 条失败）；同批清掉播种源 `src/workflows/recap_gen.xml` 的新老形态**双声明**残留（老 `<param name="model">local-qwen</param>`——该 provider 键已不存在，若生效会报未知模型 + 新标签并存，删旧留新）
 - **编辑器里改模型不点保存不落盘**：「日志还在用旧模型」先读磁盘 XML 核实再怀疑刷新（recap_gen 案例：用户选了 local-lfm 但没点保存，磁盘一直 proxy）；反向同理——改完 XML **当轮即生效**（每轮重扫，下轮钩子触发就走新模型，无需 /restart）
 
+## 全局工作流目录：双层发现 repo 优先 + 同名覆盖（2026-09-30，用户提案，commit a1d4184）
+
+**动机（用户提案 2026-09-30，commit `a1d4184`）**：工作流此前只能放 `<workspace>/.agent/workflows/`——recap_gen / extract_keywords / before_turn_retrieval 这类挂在钩子上的**通用**工作流，每个 repo 都得放一份副本，多 repo 之间无法共享。补一个**全局层** `~/.agt/workflows/`：跨 repo 共享同一份，repo 层保留给项目专属工作流。本节是对上节 [双格式与热加载](#双格式与热加载) 目录语义的扩展。
+
+**双层语义**：
+
+| 维度 | 规则 |
+|---|---|
+| 发现顺序 | repo `<ws>/.agent/workflows/` 先扫，全局 `~/.agt/workflows/`（`paths.AGT_DIR`）追加在后 |
+| 同名冲突 | **repo 覆盖全局**（本地定制语义：想定制某个全局工作流，往 repo 放同名文件即可） |
+| 条目标注 | `scope` 字段（`repo|global`）——编辑器/消费方可显示来源层 |
+
+**三个发现入口全部接线**（src/workflow.py + src/agent.py）：
+
+| 入口 | 消费场景 | 改动 |
+|---|---|---|
+| `scan_workflows` | 钩子发现 / 编辑器列表 / wf_* 工具注册 / exec_workflow | repo 层扫完追加全局层（同名跳过）；条目带 `scope`；`_scan_xml_workflows` 同步加 scope 参数 |
+| `_find_local_workflow` | **subworkflow 节点**解析子工作流 | repo 未命中降级全局层查找（同名语义与 scan 一致：repo 覆盖全局） |
+| `_wf_canvas_index`（mtime 缓存，src/agent.py） | 每轮扫描的增量跳过 | stamp 纳入**两层目录** mtime——任一层增删改都重扫，全局工作流改动**下一轮钩子触发即生效，无需 /restart** |
+
+**已迁移的三个（本 repo）**：recap_gen.xml（turn_end recap）/ extract_keywords.xml（before_turn 提词）/ before_turn_retrieval.xml（before_turn 检索）→ `~/.agt/workflows/`，repo 层删原副本。**wiki_auto_query 留在 repo**——它依赖 repo 级基础设施（wiki_read/wiki_search 外置工具 + `.agent/wiki/` 内容），搬全局会在没有这套设施的 repo 炸钩子。
+
+**验证（五场景全绿）**：全局发现 scope=global ✓ / repo 同名覆盖（仅一份）✓ / 两层共存 ✓ / 子工作流全局降级解析 ✓ / 同名时 repo 版优先 ✓。
+
+**用法**：其它 repo 的 `main.yml` 钩子直接引用同名工作流（如 `turn_end: [recap_gen]`）即自动落全局份；repo 定制 = 往该 repo `.agent/workflows/` 放同名文件覆盖。
+
+关联：[pasted-log · extract_keywords 位置](../features/pasted-log.md)（迁移后的运行位置）、[multi-agent · recap_gen 播种源](multi-agent.md#播种源再对齐recap_gen-运行版迭代回-srcworkflows2026-09-17commit-5992929)、[wiki-auto-query · 留 repo 裁定](../features/wiki-auto-query.md)。
+
 ## `_get_llm` 静默 fallback 加日志与 MODELS 惰性重载根因修复（2026-08）
 
 **背景（recap_gen 三轮排障收官，续 e8ef64a）**：recap_gen.xml 已改成 `<model>local-lfm</model>`，用户仍见「调的是 utility 然后走回退链」，怀疑反序列化读的是旧 `<param name="model">local-qwen</param>` 残留、`<model>` 标签没读。

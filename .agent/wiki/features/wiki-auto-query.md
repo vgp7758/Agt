@@ -6,6 +6,8 @@
 
 每轮用户消息到达后、主循环开始前，自动在 repo-wiki（`.agent/wiki/`）检索相关知识并注入——主 Agent 不调 wiki_search 也能自带项目知识。默认关闭：启用改 meta `enabled=true`（或编辑器开启），避免开发期每轮都跑、白烧 utility 调用。
 
+**位置（2026-09-30）**：wiki_auto_query **留在 repo 层** `.agent/workflows/`，不随 recap_gen / extract_keywords / before_turn_retrieval 迁全局 `~/.agt/workflows/`——它依赖 repo 级基础设施（wiki_read/wiki_search 外置工具 + `.agent/wiki/` 内容），放全局会在没有这套设施的 repo 炸钩子。见 [workflow-hooks · 全局工作流目录](../architecture/workflow-hooks.md)。
+
 ## v4 流水线（2026-08-21，commit 952b801）
 
 > **架构变更**：从「LLM 意图识别 + LLM 精排」改为「本地 LLM 提关键词 + embedding 余弦重排 + 阈值裁决」。核心洞察：本地 3B 模型做相关性打分区分度差（相关 0.1、无关 0.2、全 0.5），不如 embedding 模型余弦计算（0.69 / 0.42 / 0.16 判别力碾压）。本地 LLM 只负责提关键词。

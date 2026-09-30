@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Callable, Optional, List
 
 from background import ServiceManager, Scheduler
-from llm_client import LLMClient
+from llm_client import LLMClient, ImageUnsupportedError
 from log import configure_logging
 from longterm_memory import ensure_ltm
 from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block

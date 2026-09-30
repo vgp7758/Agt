@@ -1229,20 +1229,61 @@ def _cmd_hook(ctx: CommandContext, args):
         return
     print("用法：/hook [位置] [工作流名] [on|off]")
 def _cmd_hold(ctx: CommandContext, args):
-    """/hold [on|off] —— 挂起/恢复 react（用户提案 2026-09-21）。
-    on：react 将在下一步开始前暂停，直到 off 后继续（0.5s 轮询，Ctrl+C 仍可打断）。"""
+    """/hold [on [分钟]|off] —— 挂起/恢复 react（用户提案 2026-09-21；定时恢复 2026-09-30）。
+    on：react 在下一步开始前暂停，直到 off 后继续（0.5s 轮询，Ctrl+C 仍可打断）；
+    on <分钟>：到点【自动恢复】（进程内定时器——重启失效则保持挂起，需手动 /hold off）。"""
+    import threading
     agent = ctx.agent
     if isinstance(args, (list, tuple)):
         args = " ".join(str(x) for x in args)
-    sub = (args or "").strip().lower()
+    parts = (args or "").strip().split()
+    sub = parts[0].lower() if parts else ""
     if sub in ("", "on", "1", "true"):
+        delay_min = 0.0
+        if len(parts) > 1:
+            try:
+                delay_min = float(parts[1])
+            except Exception:
+                print("用法：/hold on [分钟] | /hold off")
+                return
+            if delay_min <= 0:
+                print("分钟数需 > 0（/hold on 30 = 30 分钟后自动恢复）")
+                return
+        _old = getattr(agent, "_hold_timer", None)   # 重复设置：取消旧定时器（防多个定时器互相覆盖状态）
+        if _old is not None:
+            try:
+                _old.cancel()
+            except Exception:
+                pass
+            agent._hold_timer = None
         agent.set_hold(True)
-        print("⏸ 已挂起：react 将在【下一步开始前】暂停，直到 /hold off 或 WebUI 按钮恢复。")
+        if delay_min > 0:
+            def _auto():
+                try:
+                    agent.set_hold(False)
+                    agent._hold_timer = None
+                    print(f"▶ 挂起已到 {delay_min:g} 分钟，自动恢复 react。")
+                except Exception:
+                    pass
+            t = threading.Timer(delay_min * 60, _auto)
+            t.daemon = True
+            t.start()
+            agent._hold_timer = t
+            print(f"⏸ 已挂起：react 将在【下一步开始前】暂停；{delay_min:g} 分钟后自动恢复（也可 /hold off 提前恢复）。")
+        else:
+            print("⏸ 已挂起：react 将在【下一步开始前】暂停，直到 /hold off 或 WebUI 按钮恢复。")
     elif sub in ("off", "0", "false"):
+        _t = getattr(agent, "_hold_timer", None)   # 手动恢复：取消挂起的自动恢复定时器
+        if _t is not None:
+            try:
+                _t.cancel()
+            except Exception:
+                pass
+            agent._hold_timer = None
         agent.set_hold(False)
         print("▶ 已恢复：react 继续。")
     else:
-        print("用法：/hold on|off（当前 " + ("⏸ 挂起中" if getattr(agent, '_hold', False) else "▶ 运行中") + "）")
+        print("用法：/hold on [分钟] | /hold off（当前 " + ("⏸ 挂起中" if getattr(agent, '_hold', False) else "▶ 运行中") + "）")
 
 
 def _cmd_continue(ctx: CommandContext, args):
@@ -1994,10 +2035,13 @@ def build_default_registry() -> CommandRegistry:
         "/hook before_turn wiki_auto_query off   禁用单个工作流\n"
         "  运行时开关（内存不落盘），调试临时关钩子用；持久化用编辑器勾选 meta.enabled")
     reg.register("hold", _cmd_hold,
-        "[on|off]  挂起/恢复 react（on=下一步开始前暂停，off=继续）",
-        "/hold on   ⏸ 挂起：react 将在下一步开始前暂停，直到恢复\n"
-        "/hold off  ▶ 恢复继续\n"
-        "  WebUI 控件栏也有 ⏸ 按钮快捷控制（/api/hold）")
+        "[on [分钟]|off]  挂起/恢复 react（on=下一步开始前暂停；on <分钟>=到点自动恢复）",
+        "/hold on       ⏸ 挂起：react 将在下一步开始前暂停，直到恢复\n"
+        "/hold on 30    ⏸ 挂起并在 30 分钟后【自动恢复】（进程内定时器；重启失效则保持挂起，需手动 off）\n"
+        "/hold off      ▶ 立即恢复（同时取消自动恢复定时器）\n"
+        "  WebUI 控件栏也有 ⏸ 按钮快捷控制（/api/hold）\n"
+        "  与 /continue 的区别：/hold 暂【进行中】的轮（阻塞在轮内，不中断）；\n"
+        "  /continue 续跑【已中断】的轮（轮已结束无 answer）——两者不可互换")
     reg.register("continue", _cmd_continue,
         "[分钟]  继续被中断的轮（断点续跑，不新增消息）；带分钟数=延时执行",
         "/continue          立刻继续（等同 WebUI 中断轮的「继续」按钮）\n"

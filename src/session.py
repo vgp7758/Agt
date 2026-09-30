@@ -1644,22 +1644,25 @@ class Session:
             L["dirty"] = True
             _LOG.info("system账本置dirty（下次投影归一化）：%s", reason)
 
+    def _profile_fingerprint(self) -> str:
+        """投影相关 profile 指纹（模型名|vision 位|窗口）：save 落盘、load 对比——
+        变了才置 dirty 全量重刷（重启后首次请求按当前 profile 定型，用户提案
+        2026-09-30）；一致则延续账本（同模型重启 byte-stable → 端点缓存命中）。"""
+        llm = getattr(self, "llm", None)
+        return "|".join(str(x) for x in (
+            getattr(llm, "model_name", None),
+            bool(getattr(llm, "vision_supported", False)),
+            getattr(self, "max_effective_context_window", None)))
+
     def invalidate_projection(self, reason: str) -> None:
         """投影惰性状态全失效，下次 messages_for_llm 按新 profile 全量重定型
         （用户提案 2026-09-30：手动切模型时把投影按投影规则整个重刷一遍）。
-
         原理：投影真相源 = 内存 turns/steps（events.jsonl 的回放态），历史轮/冻结块
-        的可变部分都在这几层惰性缓存里——清空后下次投影自动按新模型能力（含
-        vision 门控的图片投影、per-provider 窗口/衰减）全量重算，等效 events 重放，零 IO。
-        时机：模型切换本身必然断 provider 前缀缓存 → 断点免费清账（与毕业/折叠同哲学）。
-
-        覆盖四类惰性/冻结态：
-        - system 账本置 dirty：下次投影归一化，旧模型的 append 形态不延续到新端点
-        - _frozen_renders：冻结轮渲染（key=turn_idx 不含模型，含旧 vision 定型的
-          image_url/占位——不清则切非视觉模型后冻结块照发图片再炸 400）
-        - _constr_buf / _constr_stream：施工步定型 msgs（同样按旧 vision 定型）——
-          清空后 _constr_sync/_constr_rebuild 按 turns/steps 重定型回填
-        - _proj_stats：分段统计按新投影重记（/context 读到的是新口径）"""
+        的可变部分都在惰性缓存里——清空后下次投影自动按新模型能力全量重算（含
+        vision 门控的图片投影、per-provider 窗口/衰减），等效 events 重放零 IO。
+        时机：模型切换必然断 provider 前缀缓存 → 断点免费清账（与毕业/折叠同哲学）。
+        覆盖：账本置 dirty / _frozen_renders（旧 vision 定型）/ _constr_buf+
+        _constr_stream（施工定型重回填）/ _proj_stats（段统计新口径）。"""
         self.mark_system_dirty(f"投影全量重刷（{reason}）")
         try:
             self._frozen_renders.clear()
@@ -3240,6 +3243,7 @@ class Session:
                 "tier_boundaries": self._tier_boundaries,  # 分档毕业边界（持久化；_frozen_renders 内存重算）
                 "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
                 "system_ledger": self._system_ledger,       # system append-not-replace 账本（last_text 快照字节——重启后前缀仍稳定）
+                "profile_fp": self._profile_fingerprint(),  # 投影相关 profile 指纹（load 时对比——变了才全量重刷，保住同模型重启的缓存延续）
                 "saved_at": int(time.time()),
             }
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件。
@@ -3303,6 +3307,18 @@ class Session:
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
         s._system_ledger = data.get("system_ledger") or {"last_text": "", "count": 0, "dirty": True}
+        # 投影 profile 指纹对比（用户提案 2026-09-30·对称切模型重刷）：存档与当前 profile
+        # 不一致（重启期间换过模型/能力位/窗口变）→ 账本置 dirty 归一化 + 冻结渲染等惰性态
+        # 本就为空会按新 profile 重算——首次请求即当前 profile 全量定型。一致 → 延续账本
+        # （同模型重启：新渲染==last_text → byte-stable，端点缓存 TTL 内命中——508 轮优化的前提）。
+        try:
+            _fp_now = s._profile_fingerprint()
+            if data.get("profile_fp") and data.get("profile_fp") != _fp_now:
+                s._system_ledger["dirty"] = True
+                _LOG.info("重启后 profile 变化（存档 %s → 当前 %s）——账本置 dirty，首次投影全量重刷",
+                          data.get("profile_fp"), _fp_now)
+        except Exception as e:
+            _LOG.warning("profile 指纹对比失败（跳过）：%s", e)
         s._tier_boundaries = data.get("tier_boundaries", []) or []
         # 折叠计划恢复（缓存稳定，用户裁定 2026-08-31）：重启后沿用旧折叠形态——历史段头部
         # （fc 摘要）与重启前逐字节一致，前缀缓存不断。曾因 fc 不持久化 + _plan_fold 未顶窗清零，

@@ -443,6 +443,19 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 3. 清残留锁 `.git/index.lock` → `git checkout -- <被写坏的文件>` 恢复
 4. **校验恢复**：文件大小 / 行数 + 关键指纹 grep（本轮 `agent.py` 恢复为 165177 字节 / 2576 行）
 
+### `python src/chat.py` 直跑 = CLI 无端口——「发消息无响应」第一疑点排除（2026-09-30）
+
+两种入口分流（2026-09-30 实测澄清）：
+
+| 入口 | 代码路径 | 行为 |
+|---|---|---|
+| `python src/chat.py` | `__main__` → `main()` | **CLI 交互 REPL**（等价 `agt` 命令）——消息在终端里敲；**不起 Web 服务、不监听任何端口** |
+| `agt-web` | `web_main()` | WebUI：起服务 + 开浏览器 |
+
+想直跑 workspace 代码开 WebUI：`pip install -e .` 后 `agt-web 9000`（或不装包直接 `python -c "import sys; sys.path.insert(0,'<src 路径>'); sys.argv=['agt-web','9600']; from chat import web_main; web_main()"`）。
+
+当次「WebUI 发消息无响应」的真因是另一个 bug（直跑实例每轮钩子解析 NameError）：[workflow-hooks · 全局工作流目录后记](../architecture/workflow-hooks.md)。
+
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 
 - **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)

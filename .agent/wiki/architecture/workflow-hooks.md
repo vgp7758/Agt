@@ -39,6 +39,23 @@
 
 关联：[pasted-log · extract_keywords 位置](../features/pasted-log.md)（迁移后的运行位置）、[multi-agent · recap_gen 播种源](multi-agent.md#播种源再对齐recap_gen-运行版迭代回-srcworkflows2026-09-17commit-5992929)、[wiki-auto-query · 留 repo 裁定](../features/wiki-auto-query.md)。
 
+### 后记：_wf_canvas_index 漏局部 Path 导入——直跑实例每轮钩子解析必炸（2026-09-30 · 二，用户实测阻塞抓到）
+
+**现象（用户实测报告，2026-09-30 · 二）**：`python src/chat.py` 直跑实例，发消息后阻塞、无任何响应。
+
+**两层定性**：
+
+| 层 | 结论 |
+|---|---|
+| 使用姿势（第一层） | `python src/chat.py` = **CLI 交互 REPL**（等价 `agt` 命令）——消息在终端里敲，**不起 Web 服务、不监听任何端口**（netstat 实证零监听）；WebUI 要走 `agt-web` / `web_main()` |
+| 真 bug（真凶） | 隔离环境起直跑实例发消息**秒死**：`_wf_canvas_index`（src/agent.py）里 `gd = Path(_AD) / "workflows"` 抛 `NameError: name 'Path' is not defined`——本节（a1d4184）引入的代码**漏了局部导入** |
+
+**根因**：agent.py 全文的 `Path` 都是**函数内局部导入**（L1036/1400/1961 同款），a1d4184 给 `_wf_canvas_index` 加全局目录 stamp 时没带上——该函数在**每轮开头解析钩子**时必经 → NameError → turn 启动即中断，即「发消息没反应」。`agt-web` 实例跑的是 site-packages 0.30.11（不含这段代码），所以线上实例没事。
+
+**修复与验证**：补局部 `from pathlib import Path` → 重启直跑实例 → 发消息钩子正常执行（🔍 before_turn_retrieval / skill_suggest 均从 `~/.agt/workflows/` 解析到）→ 消息进入处理不再 NameError 秒死 ✓——**顺带实证：空 workspace 下全局工作流也能被发现**（本节核心语义的直跑路径闭环）。commit 已在本地，push 挂重试（GitHub SSH 又拒）。
+
+**教训（同类三犯）**：ImageUnsupportedError（[端点拒图自愈](../features/image-input.md)）、本次 Path、更早一次——都是「外科手术式编辑漏了名字定义」。engine 层改动后续一律带 `py_diag` + 隔离实例实跑验证，不再只靠语法检查。
+
 ## `_get_llm` 静默 fallback 加日志与 MODELS 惰性重载根因修复（2026-08）
 
 **背景（recap_gen 三轮排障收官，续 e8ef64a）**：recap_gen.xml 已改成 `<model>local-lfm</model>`，用户仍见「调的是 utility 然后走回退链」，怀疑反序列化读的是旧 `<param name="model">local-qwen</param>` 残留、`<model>` 标签没读。

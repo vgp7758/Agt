@@ -971,8 +971,8 @@ class Session:
             if t.snapshot_sha == sha:
                 target_msg = t.user_message
                 self.turns = self.turns[:i]
-                # 边界不持久化（用户提案 2026-09-30）：截断后按当前规则全量重算（非增量过滤）
-                self._tier_boundaries = self._recompute_tier_boundaries()
+                # 截断后增量过滤（回滚 2026-09-30：保结构——recalc 会丢末端密集边界引发折叠螺旋）
+                self._tier_boundaries = [b for b in self._tier_boundaries if b < i]
                 self._frozen_renders.clear()
                 self._current = None
                 self._rewrite_persistence(i)   # 重写 events/toollog 文件（含 restore 标记）
@@ -3264,9 +3264,11 @@ class Session:
                 "recent_window_turns": self.recent_window_turns,
                 "max_steps_per_turn": self.max_steps_per_turn,
                 "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
-                # tier_boundaries 不再持久化（用户提案 2026-09-30）：边界是投影规则的派生态，
-                # 唯一真源=当前代码+events 回放的 turns——load 时按卫生性规则全量重算
-                # （_recompute_tier_boundaries），存档字段自然废弃（旧 meta 里的残留被忽略）
+                # tier_boundaries 恢复持久化（2026-09-30 回滚——recalc-only 方案在长会话重启时
+                # 引发 _plan_fold 折叠螺旋：运行期演化出的"末端密集边界"（压力毕业/deepen 的多重集）
+                # 无法被卫生性规则复现 → 重启后 L0 窗口暴涨 → 逐步碎刀+全量重渲染 → 数分钟无响应 +
+                # fc 一路吃到 len(turns)（近期上下文全进摘要）。存档优先、缺失才 recalc 兜底）
+                "tier_boundaries": self._tier_boundaries,
                 "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
                 "system_ledger": self._system_ledger,       # system append-not-replace 账本（last_text 快照字节——重启后前缀仍稳定）
                 "profile_fp": self._profile_fingerprint(),  # 投影相关 profile 指纹（load 时对比——变了才全量重刷，保住同模型重启的缓存延续）
@@ -3345,11 +3347,9 @@ class Session:
                           data.get("profile_fp"), _fp_now)
         except Exception as e:
             _LOG.warning("profile 指纹对比失败（跳过）：%s", e)
-        # tier_boundaries 不读存档（用户提案 2026-09-30：边界不持久化——投影规则的唯一
-        # 真源是当前代码；events 回放完成后按卫生性规则全量重算，见下方 _recompute 调用。
-        # 好处：规则/参数演化后重启即按新规则定型，不再被旧存档边界钉死；
-        # 同规则下重算结果与运行期演化确定性一致 → 正常重启缓存形态不变）
-        s._tier_boundaries = []
+        # tier_boundaries：存档优先（2026-09-30 回滚 recalc-only）；缺失/空（旧存档或首次）才
+        # 按卫生性规则重算兜底。运行期演化的末端密集边界（压力毕业多重集）只有存档能保真。
+        s._tier_boundaries = list(data.get("tier_boundaries") or [])
         # 折叠计划恢复（缓存稳定，用户裁定 2026-08-31）：重启后沿用旧折叠形态——历史段头部
         # （fc 摘要）与重启前逐字节一致，前缀缓存不断。曾因 fc 不持久化 + _plan_fold 未顶窗清零，
         # restart 后投影重算归零 → 历史段头部重排 → t506·s0 实测 12.7% 命中（300K tok 全价）。
@@ -3414,9 +3414,10 @@ class Session:
             s.turns = []
         s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
-        # tier_boundaries 全量重算（用户提案 2026-09-30）：turns 已由 events 回放就绪，
-        # 按当前代码的卫生性毕业规则从零模拟定型（不读存档数组——见上方 load 读取处注释）
-        s._tier_boundaries = s._recompute_tier_boundaries()
+        # tier_boundaries 兜底（2026-09-30 回滚）：存档缺失/空（旧存档/异常）才按卫生性规则重算；
+        # 正常路径存档优先——运行期演化的末端密集边界只有存档能保真（recalc-only 曾致折叠螺旋）
+        if not s._tier_boundaries:
+            s._tier_boundaries = s._recompute_tier_boundaries()
         s._plan_fold()       # 读档即计划（首个投影前 _planned_fold 就绪；turns/boundaries 已恢复）
         return s
 

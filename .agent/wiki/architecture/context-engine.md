@@ -490,6 +490,31 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **档位边界下推检索钩子（2026-09-20，用户提案）**：`session._tier_boundaries`（0-based 轮号数组，分档/毕业时写入）多了一个外部消费端——before_turn 钩子上下文袋 `hook_ctx.tier_start` = 当前档起始轮号（1-based = 最后边界+1，无边界=1）。首个消费方 before_turn_retrieval 检索工作流：命中条落在当前档（≥ tier_start，完整原文已在投影里）→ **跳过不注入**；压缩档 / fc 结构摘要命中照常注入——消除「召回注入与完整投影重复」的 token 浪费。两层实现与裁决语义详见 [长期记忆 · 当前档命中不重复注入](../features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)，hook_ctx 袋契约见 [workflow-hooks · hook_ctx](workflow-hooks.md#hook_ctx-上下文袋--hook_write-工具回写从引擎特判移到工作流2026-08commit-91b8437)。
 
+### 边界不持久化：重启/rewind 后按现行规则全量重算（2026-09-30，用户提案，commit 73809ea）
+
+**用户提案**：「meta 里面就不保留 tier_boundaries 字段了，代码在启动的时候第一次请求不读这个数组而是全量重新算一版」——毕业边界数组从 meta.json 退役：**投影规则的唯一真源 = 当前代码 + events 回放的 turns**，存档里的边界只是运行期演化态（且是多代旧规则的沉积——本 session 曾积 183 个边界，大量是 fc 之前的死重）。
+
+**三处改动（src/session.py，commit `73809ea`）**：
+
+| 位置 | 改动 |
+|---|---|
+| `load()` | 不再读存档数组（旧 meta 残留字段**被忽略**）；events 回放就绪后 `_recompute_tier_boundaries()` 按卫生性规则从零模拟定型，再进 `_plan_fold` |
+| `restore_to_snapshot()` | rewind 截断 turns 后由「增量过滤 `b < i`」改为全量重算（回溯时点的边界也由规则推导，而非旧态裁剪） |
+| `save()` | 不再写 `tier_boundaries` 字段——存档字段自然废弃 |
+
+**`_recompute_tier_boundaries()`**：纯结构、确定性——当前档 >`GRADUATE_FORCE_TURNS`(30) 触发、每刀升前 `GRADUATE_FORCE_BATCH`(15) 轮（30/15 参数见[后记：卫生毕业参数修正](#后记卫生毕业参数用户裁定修正--触发线-30--每刀-152026-09-16二轮commit-82f6265)），逐刀语义与 `_graduate_once(batch=15)` 对齐（边界 = `seg_start+14`）。顺带 `_last_boundary()` 由 `[-1]` 裸取改 `max()`：`_tier_boundaries` 是**多重集**（`_deepen_oldest_tier` 在老位置插重复边界承载「多切一刀」的档位深度），取法必须按值不按位置。
+
+**语义边界（如实说明）**：
+
+- **压力毕业不重放**：它依赖历史时点的 profile 体积估算（顶窗判断），无法从 events 重放。重算版 = 纯结构理想边界；重启后的体积压力由首次投影 `_plan_fold` 按当前体积现算兜底（fc 折叠吃轮）。规则/参数演化后**重启即按新规则定型**——旧边界沉积的 session（如本 session 历经多代规则）首次投影形态会变一次、断一次缓存点，之后按新形态稳定
+- **同规则确定性一致**：模拟与运行期卫生性演化逐刀对齐——参数没动过的正常重启，重算结果与重启前相同，缓存形态不变
+- **`fold_count`（fc 折叠计划）照旧持久化**：508 轮缓存优化的载体，与边界独立（fc 引用的是轮次序号，重算后依然有效）
+- 附带：meta.json 不再被边界数组无界膨胀
+
+**验证**（五场景全绿）：① save 后无 `tier_boundaries` 字段；② load 忽略旧残留 + 100 轮重算 = `[14,29,44,59,74]`；③ 两次 load 确定性同结果；④ rewind 截 60 轮重算 = `[14,29]`；⑤ 20 轮短会话无毕业边界。`/restart` 生效。
+
+与同日 [重启 profile 指纹分流重刷](#重启后首次请求--profile-指纹分流重刷2026-09-30二用户提案commit-b245364)互补——重启定型从「按当前 profile」扩展到「按当前规则 + 当前 profile」。边界的外部消费端 [hook_ctx.tier_start](#档位边界下推检索钩子hook_ctxtier_start--当前档命中过滤2026-09-20用户提案) 语义不变（1-based = 最后边界+1，重算版同样成立）；rewind 侧联动见 [snapshot-rewind](../features/snapshot-rewind.md)。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

@@ -1277,3 +1277,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **重启后首次请求按 profile 指纹分流重刷**（`b245364`，用户提案「重启后的第一次请求也按当前 profile 整个重刷一遍」）：meta.json 落 `profile_fp`（模型名|vision位|窗口，`_profile_fingerprint`），load 时对比——不一致 → 账本置 dirty 归一化，冻结渲染/施工缓冲（内存态本就为空）首次投影按新 profile 全量定型；一致 → 账本延续 byte-stable → 同模型重启缓存命中不浪费。与手动切模型重刷（ce8ed57）对称，「投影=当前 profile 重定型」三时机齐备——见 [context-engine](architecture/context-engine.md)
 
+## 快速事实增补（2026-09-30 · 三 · tier_boundaries 不持久化——重启/rewind 全量重算）
+
+- **投影毕业边界退役出存档**（`73809ea`，用户提案「meta 里不保留 tier_boundaries，启动时全量重新算一版」）：`load()` 不读存档数组、events 回放就绪后 `_recompute_tier_boundaries()` 按当前代码卫生性毕业规则（触发线 30 / 每刀 15）从零模拟定型；`restore_to_snapshot` 截断后同样重算（替代增量过滤）；`save()` 不再写该字段。语义：**投影规则唯一真源 = 当前代码**——规则/参数演化后重启即按新规则定型（旧边界是多代规则沉积、曾积 183 个含 fc 前死重，首次投影形态变一次之后稳定）；压力毕业不重放（依赖历史 profile 估算），重启后体积由首次投影 `_plan_fold` 现算兜底；同规则重启确定性同结果、缓存不白断；`fold_count` 照旧持久化。验证五场景全绿——见 [context-engine · 边界不持久化](architecture/context-engine.md)
+

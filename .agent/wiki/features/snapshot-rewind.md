@@ -67,6 +67,10 @@ return agent.session.restore_to_snapshot(sha)
 
 **验证**（临时 workspace 复现）：改/增/删三文件后 restore → 旧基线对比误报 3 个假变更（含「f0.txt modified」——rewind 恢复它时重写了内容，正是用户看到的现象）；修复后 `restore_snapshot` 完成 → `_fs_snap` 立即刷新 → 下轮对比只报真实改动。`/restart` 生效。
 
+## 回溯与投影边界：tier_boundaries 截断后全量重算（2026-09-30，commit 73809ea）
+
+`restore_to_snapshot()`（src/session.py）截断 turns 后，投影毕业边界不再做**增量过滤**（旧：`[b for b in _tier_boundaries if b < i]`——依赖存档边界数组），而是随 [边界不持久化](../architecture/context-engine.md#边界不持久化重启rewind-后按现行规则全量重算2026-09-30用户提案commit-73809ea) 一并改为 `_recompute_tier_boundaries()` **按当前代码卫生性规则全量重算**——回溯到的时点边界由规则推导定型，而非旧运行态裁剪。与本页 `_fs_snap` 基线重扫同属「回溯后引擎态归位」：文件树基线 + 投影边界都在回溯完成时按当前状态重建。
+
 ## 撞车：检查点之后有 git 提交（用户提案 2026-09-06）
 
 回溯只还原工作区 + 截对话，HEAD 不受影响。若检查点之后用户真仓库有提交 →「session 在过去、git 历史在未来」分裂：之后任何 `add -A` 都会把回溯差异整笔提交。

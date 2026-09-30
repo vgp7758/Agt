@@ -1,4 +1,4 @@
-# LLM 网络韧性 · 分级超时 + 断网检测与等网重试（src/llm_client.py，2026-09-26，用户提案）
+# LLM 客户端韧性 · 分级超时 / 断网等网 / 切换纪元 / 超时诊断 / 端点拒图自愈（src/llm_client.py）
 
 ## 职责与背景
 
@@ -102,6 +102,37 @@ profile.connect_timeout / write_timeout（models.json 模型卡片）
 ### 排障口诀
 
 `/restart` 后等下一次 timeout 看阶段标注：**WriteTimeout** → 上行慢/请求体大 → 配 `write_timeout: 90`；**ConnectTimeout** → 网络抖 → 配 `connect_timeout: 25`（或靠[断网检测](#二断网检测与等网重试commit-c5b57cd)等网重试）；**PoolTimeout** → 并发抢连接池，另一类问题。
+
+## 五、端点拒图自愈：ImageUnsupportedError——vision 卡片配置错不再炸轮（2026-09-30，glm-5.3 实锤，commit 5c852fc）
+
+### 现象与定性
+
+用户切 glm-5.3（glm-official）后，历史轮含图片的会话持续 400：`Error code: 400 - {'error': {'code': '1210', 'message': "messages.content.type 参数非法，取值范围 ['text']"}}`。llm_calls 时间线钉死定性：
+
+```
+08:58  t1217 s0  400（vision=False 时代，当时误判为别的问题）
+09:27  t1219 s5  success / s6 400    ← 上轮误改卡片 vision=True 后
+09:41  t1221 s0  400
+09:53  t1222 s0  success / s1 400
+10:24  t1223 s0  400                 ← 重启 + 投影全量重刷后依然炸
+```
+
+结论：**glm-5.3 的 openai 兼容 chat completions 端点就是不收图**（`content.type` 只允许 `['text']`；视觉是 glm-4v / glm-4.5v 系列的活）。卡片 vision=True 只是让门控放行了图片，端点照样拒收——门控/投影重刷层怎么修都无解。
+
+### 双层修复（v0.30.10+，commit 5c852fc）
+
+| 层 | 内容 |
+|---|---|
+| 配置纠正 | models.json `glm-official` vision **改回 False**——门控立即生效：历史图降级文字占位，glm-5.3 文本能力正常用 |
+| 框架自愈（防配置错/端点能力未知再炸轮） | llm_client 失败时 `_is_img_reject(e)` 识别拒图特征 → 降 `vision_supported` 位 + 抛 `ImageUnsupportedError`（**跳过回退链**、不记冷却）→ agent 捕获：`invalidate_projection`（历史图降为文字占位重投影）→ **同模型重试**（非换模型），计数上限 3 防异常循环 |
+
+`_is_img_reject` 特征匹配（各 provider 措辞不一，按已实测 + 常见形态）：`1210` + `content.type` / `取值范围 ['text']` / `image_url` + `not supported|unsupported` / `invalid image` + `type`。普通错误不误伤。
+
+### 语义：与回退链的分工
+
+回退链解决「**模型坏了**换一个」；本机制解决「**模型好但不吃图**」——不换模型，换图片形态（图 → `[图片 文件名]` 文字占位 + WebUI 提示「⚠️ xx 端点不支持图片输入，已降级为文字占位」，需要看图由 Agent 委托 vision 子 agent）。用户选 glm-5.3 要的是它的文本能力，不被一张历史图踢去 deepseek。
+
+用户侧表现与全链路图见 [图片输入链路 · 端点拒图自动降级](image-input.md)；`invalidate_projection` 机制见 [上下文引擎 · 手动切模型投影重刷](../architecture/context-engine.md)。
 
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 

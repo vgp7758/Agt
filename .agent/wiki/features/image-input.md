@@ -55,10 +55,26 @@
 
 用户贴入 WebP 截图（VM 启动报错堆栈），完整读出内容——规范化链路（v0.30.5 `d13adca`）+ v0.30.6 三层修复后的**首次真实场景验证**（此前只有探针/单测）。同轮顺带产出 httpx 依赖修复（v0.30.8，pyproject 显式声明——VM 全新环境启动即崩 ModuleNotFoundError，见 [home](../home.md) 快速事实增补）。
 
+## 端点拒图自动降级：历史轮图片 × 非视觉模型不再 400（2026-09-30，glm-5.3 实锤，commit `5c852fc`，v0.30.10+）
+
+**场景**：会话历史里已有图片（投影含 `image_url` 块），切到非视觉模型——或 vision 卡片配置错（glm-5.3 曾被误标 true）——端点 400 `1210 messages.content.type 参数非法，取值范围 ['text']`，每轮必炸（glm-5.3 的 chat completions 端点不收图，视觉是 glm-4v / glm-4.5v 系列的活）。
+
+**机制链**（src/llm_client.py + src/agent.py，v0.30.10+）：
+
+```
+端点拒图（_is_img_reject：1210+content.type / image_url not supported / invalid image+type…）
+  → llm_client：vision_supported 自动降 False + 抛 ImageUnsupportedError（跳过回退链、不记冷却）
+  → agent：invalidate_projection（历史图降为文字占位重投影）→ 同模型重试（上限 3 次防循环）
+  → WebUI：⚠️ xx 端点不支持图片输入，已降级为文字占位（需要看图 → Agent 委托 vision 子 agent）
+```
+
+**语义**：图降级为 `[图片 文件名]` 文字占位，**模型不换**——用户选它要的是文本能力，不被一张历史图踢进回退链换模型。粘性路由 / 等网重试等既有韧性机制不受影响。机制细节与 llm_calls 定性时间线见 [LLM 客户端韧性 · 端点拒图自愈](llm-network-resilience.md)。
+
 ## 排障速查
 
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）
 - `image data N failed: invalid image data` —— base64 损坏或超尺寸上限
+- `1210 messages.content.type 参数非法，取值范围 ['text']` —— **端点不收图**（glm-5.3 等 chat completions 无视觉通道，视觉是 glm-4v/4.5v 系的活）；< 0.30.10 且卡片 vision 卡错时每轮 400，升级后自愈（拒图自动降级：图降文字占位同模型重试，见上节）
 - **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② 走的是 busy 插话路径（图变 `<img>` 引用，须委托 vision 子 Agent 看）
 - 本地模型（llama-server）不走 provider 白名单校验，但同样受 2048 边长经验约束
 

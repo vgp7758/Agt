@@ -2696,11 +2696,12 @@ class Session:
         if not matches:
             return text
         vision = getattr(getattr(self, "llm", None), "vision_supported", False)
+        vision = getattr(getattr(self, "llm", None), "vision_supported", False)
         if not vision:
             def _sub(m):
                 n = m.group(1)
-                return (f'[图片 {n}，你无法直接查看；如需理解其内容请委托视觉子 agent：'
-                        f'agent_prompt("vision", "请描述 <img>{n}</img> 的内容")]')
+                return (f'[图片 {n}，当前模型无视觉能力无法查看；'
+                        f'如需理解图片内容，可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]')
             return _IMG_TAG_RE.sub(_sub, text)
         out, last = [], 0
         for m in matches:
@@ -2720,14 +2721,21 @@ class Session:
         return out
 
     def _user_content(self, turn: "Turn"):
-        """构造 user 消息内容。turn.images(用户贴图 data URL)→image_url 块(现状)；
-        user_message 里的 <img>name</img>(工具图/子agent委托)按当前模型 vision 投影。"""
+        """构造 user 消息内容。turn.images(用户贴图 data URL)→image_url 块(仅视觉模型)；
+        user_message 里的  [图片 name 读取失败] (工具图/子agent委托)按当前模型 vision 投影。
+        非视觉模型收到贴图 → 文字占位（防 provider 400: content.type 只允许 text）。"""
         text = self._project_imgs(turn.user_message)
         if not turn.images:
             return text
+        vision = getattr(getattr(self, "llm", None), "vision_supported", False)
         blocks = list(text) if isinstance(text, list) else [{"type": "text", "text": text}]
-        blocks.extend({"type": "image_url", "image_url": {"url": _norm_img_data_url(img)}}
-                      for img in turn.images)
+        if vision:
+            blocks.extend({"type": "image_url", "image_url": {"url": _norm_img_data_url(img)}}
+                          for img in turn.images)
+        else:
+            blocks.append({"type": "text", "text":
+                           f"[用户贴图 {len(turn.images)} 张，当前模型无视觉能力无法查看；"
+                           "如需理解图片内容，可委托视觉子 agent（agent_prompt('vision', ...) 并在 prompt 中带 <img>标签）]"})
         return blocks
 
     def _summarize_text(self, text: str, limit: int, call_id: str) -> str:

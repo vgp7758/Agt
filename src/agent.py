@@ -2143,19 +2143,25 @@ class Agent:
             self._reload_main_dsl()   # main.yml mtime 惰性热重载：改主 Agent DSL 当轮生效（子 Agent 声明本就即读即用）
             if self.snapshot_manager is not None:
                 try:
-                    sha = self.snapshot_manager.snapshot()
-                    # 顺带记录用户真仓库 HEAD（rewind 撞车检测：检查点后有 git 提交则回溯会被拦，
-                    # 除非 --git reset 把 HEAD 一并退回——用户提案 2026-09-06）
-                    _gh = ""
+                    from config import load_enable_snapshots
+                    _snap_on = load_enable_snapshots()
+                except Exception:
+                    _snap_on = True
+                if _snap_on:
                     try:
-                        from snapshots import user_repo_head
-                        _gh = user_repo_head(self.snapshot_manager.workspace)
-                    except Exception:
-                        pass
-                    self.session.record_snapshot(sha, git_head=_gh)   # 设 _current.snapshot_sha/git_head + 记事件
-                    self._emit({"type": "checkpoint", "sha": sha})
-                except Exception as e:
-                    self._emit({"type": "warn", "text": f"快照失败：{type(e).__name__}: {e}"})
+                        sha = self.snapshot_manager.snapshot()
+                        # 顺带记录用户真仓库 HEAD（rewind 撞车检测：检查点后有 git 提交则回溯会被拦，
+                        # 除非 --git reset 把 HEAD 一并退回——用户提案 2026-09-06）
+                        _gh = ""
+                        try:
+                            from snapshots import user_repo_head
+                            _gh = user_repo_head(self.snapshot_manager.workspace)
+                        except Exception:
+                            pass
+                        self.session.record_snapshot(sha, git_head=_gh)   # 设 _current.snapshot_sha/git_head + 记事件
+                        self._emit({"type": "checkpoint", "sha": sha})
+                    except Exception as e:
+                        self._emit({"type": "warn", "text": f"快照失败：{type(e).__name__}: {e}"})
             # 每轮扫描 .agent/workflows/，把工作流刷新成工具（新增/改动的工作流即时生效）
             try:
                 from real_tools import WORKSPACE as _ws

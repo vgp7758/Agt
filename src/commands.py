@@ -263,6 +263,7 @@ def read_config(agent) -> dict:
         cfg["panic_context_window"] = _cfg2.load_panic_window()
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
         cfg["fold_deep_tools"] = _cfg2.load_fold_deep_tools()
+        cfg["enable_snapshots"] = _cfg2.load_enable_snapshots()
     except Exception:
         cfg["detail_base"] = 1500
         cfg["panic_context_window"] = 0
@@ -293,6 +294,17 @@ def apply_config(agent, values: dict) -> list:
             results.append(real_tools.set_tool_timeout(int(v)))
         except Exception as e:
             results.append(f"❌ tool_timeout 值非法：{v}（{e}）")
+    # enable_snapshots 特殊处理（用户提案 2026-09-30）：回溯快照开关，存 settings.json（每轮读盘，改完下轮生效）
+    if "enable_snapshots" in values:
+        v = values.pop("enable_snapshots")
+        try:
+            import config as _cfg_es
+            _on = bool(v) if not isinstance(v, str) else str(v).strip().lower() not in ("false", "0", "off", "no")
+            saved = _cfg_es.load_runtime_settings(); saved["enable_snapshots"] = _on; _cfg_es.save_runtime_settings(saved)
+            results.append("✅ enable_snapshots = " + str(_on)
+                           + ("" if _on else "（每轮不再打回溯快照，/rewind 不可用）"))
+        except Exception as e:
+            results.append(f"❌ enable_snapshots 保存失败：{e}")
     # fallback_chain 特殊处理（用户裁定 2026-09-15「职责分开」）：
     #   • 这条链是【非 react 调用的实例链】：工作流 LLM/llm_call 节点、补全（reasoning_completer）、
     #     以及 utility_model 相关的短调用——它们的 client 就是从 settings 继承链的实例。
@@ -969,7 +981,14 @@ def _cmd_rewind(ctx: CommandContext, args):
     target = turns[n - count]               # 倒数第 count 轮 = 撤销起点
     sha = getattr(target, "snapshot_sha", "") or ""
     if not sha:
-        print(f"❌ 倒数第 {count} 轮没有快照点，无法回溯")
+        _hint = ""
+        try:
+            from config import load_enable_snapshots
+            if not load_enable_snapshots():
+                _hint = "（回溯快照已在设置中关闭：enable_snapshots=false）"
+        except Exception:
+            pass
+        print(f"❌ 倒数第 {count} 轮没有快照点，无法回溯{_hint}")
         return
     try:
         restore_snapshot(ctx.agent, sha, git_policy=git_policy)

@@ -421,6 +421,20 @@ def load_fold_deep_tools() -> bool:
 
 
 
+def load_enable_snapshots() -> bool:
+    """回溯快照开关（settings.json 的 enable_snapshots；默认 True）。
+    false = 每轮不打影子 git 快照（.agt/snapshots 不再增长，/rewind 不可用）——
+    大仓库/低配环境省每轮 add -A 的全量扫描与磁盘增长。改完下一轮生效（每轮读盘）。"""
+    try:
+        v = load_runtime_settings().get("enable_snapshots")
+        if v is None:
+            return True
+        return bool(v) if not isinstance(v, str) else str(v).strip().lower() not in ("false", "0", "off", "no")
+    except Exception:
+        return True
+
+
+
 # === RAG 配置持久化（全局 embed + per-repo 索引策略） ===
 # 全局：~/.agt/rag.json 只存 embed 相关（provider/model_path/api_*），供所有 repo 共用。
 # Per-repo：~/.agt/repos/<hash>/rag.json 存 enabled/docs_dir/exts/top_k 等索引策略 +

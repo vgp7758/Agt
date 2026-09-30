@@ -1593,6 +1593,16 @@ class Agent:
                          if not p.name.endswith(".meta")), default=0)
         except OSError:
             stamp = 0
+        # 全局层 mtime 纳入 stamp（用户提案 2026-09-30：~/.agt/workflows/ 双层目录——任一层变化都重扫）
+        try:
+            from paths import AGT_DIR as _AD
+            gd = Path(_AD) / "workflows"
+            if gd.resolve() != d.resolve():
+                g2 = max((p.stat().st_mtime_ns for p in gd.iterdir()
+                          if not p.name.endswith(".meta")), default=0)
+                stamp = max(stamp, g2)
+        except OSError:
+            pass
         cache = getattr(self, "_wf_idx_cache", None)
         if cache is not None and cache[0] == stamp:
             return cache[1]

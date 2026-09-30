@@ -1029,23 +1029,30 @@ def _try_parse(s):
 
 
 def _find_local_workflow(ctx, wf_id: str):
-    """按 workflowId 在 .agent/workflows/ 找本地工作流（匹配 meta.name 或文件名）。
-    支持 .json 与 .xml（XML 读入时转 JSON）。"""
+    """按 workflowId 找本地工作流（匹配 meta.name 或文件名）；支持 .json 与 .xml（XML 转换）。
+    双层目录（用户提案 2026-09-30）：repo .agent/workflows/ 优先，未命中降级全局 ~/.agt/workflows/
+    （同名语义与 scan_workflows 一致：repo 覆盖全局）。"""
     d = ctx.workspace / ".agent" / "workflows"
-    if not d.exists():
-        return None
-    # 收集候选：{path, stem, name}
+    canvas = _find_wf_in_dir(d, wf_id) if d.exists() else None
+    if canvas is None:
+        from paths import AGT_DIR
+        g = Path(AGT_DIR) / "workflows"
+        if g.exists() and g.resolve() != d.resolve():
+            canvas = _find_wf_in_dir(g, wf_id)
+    return canvas
+
+
+def _find_wf_in_dir(d: Path, wf_id: str):
+    """在单个目录内按 workflowId 匹配（文件名 stem 或 meta.name）。"""
     cands = []
     for jf in sorted(d.glob("*.json")):
         if jf.name.endswith(".meta"):
             continue
-        name = _read_meta_name(jf, jf.stem)
-        cands.append((jf, jf.stem, name))
+        cands.append((jf, jf.stem, _read_meta_name(jf, jf.stem)))
     for xf in sorted(d.glob("*.xml")):
         if xf.name.endswith(".meta"):
             continue
-        name = _read_meta_name(xf, xf.stem)
-        cands.append((xf, xf.stem, name))
+        cands.append((xf, xf.stem, _read_meta_name(xf, xf.stem)))
     for path, stem, name in cands:
         if wf_id in (stem, name):
             return _load_canvas(path)
@@ -1989,19 +1996,30 @@ def make_workflow_tool(meta: dict, canvas: dict, path: Path, agent) -> Tool:
 
 
 def scan_workflows(workspace: Path = None) -> list[dict]:
-    """扫描 .agent/workflows/ 下 *.json 与 *.xml，返回 [{name, path, meta_path, meta, canvas, error}]。
-    .xml（模型友好格式，代码块用 CDATA 免转义）在扫描时转成 Coze JSON canvas。"""
+    """扫描工作流目录，返回 [{name, path, meta_path, meta, canvas, error, scope}]。
+    .xml（模型友好格式，代码块用 CDATA 免转义）在扫描时转成 Coze JSON canvas。
+    双层目录（用户提案 2026-09-30）：repo <ws>/.agent/workflows/ 优先 + 全局 ~/.agt/workflows/
+    （多 repo 共享同一份——钩子上挂的通用工作流放全局）；同名以 repo 为准（本地覆盖），
+    条目带 scope（repo|global）供编辑器标注来源。"""
+    from paths import AGT_DIR
     d = (workspace or WORKSPACE) / ".agent" / "workflows"
-    if not d.exists():
-        return []
+    out = _scan_wf_dir(d, "repo") if d.exists() else []
+    g = Path(AGT_DIR) / "workflows"
+    if g.exists() and g.resolve() != d.resolve():
+        have = {it["name"] for it in out}
+        out.extend(it for it in _scan_wf_dir(g, "global") if it["name"] not in have)
+    return out
+
+
+def _scan_wf_dir(d: Path, scope: str) -> list[dict]:
+    """扫单个目录的 *.json + *.xml（scan_workflows 的层内实现，scope 标注来源）。"""
     out = []
-    # JSON 工作流
     for jf in sorted(d.glob("*.json")):
         if jf.name.endswith(".meta"):
             continue
         meta_path = jf.with_name(jf.name + ".meta")
         item = {"name": jf.stem, "path": jf, "meta_path": meta_path,
-                "meta": None, "canvas": None, "error": None, "warnings": []}
+                "meta": None, "canvas": None, "error": None, "warnings": [], "scope": scope}
         try:
             item["canvas"] = json.loads(jf.read_text(encoding="utf-8"))
         except Exception as e:
@@ -2022,13 +2040,13 @@ def scan_workflows(workspace: Path = None) -> list[dict]:
         except WorkflowError as e:
             item["error"] = str(e)
         out.append(item)
-    # XML 工作流（转 JSON；meta 从根属性读，可被 .xml.meta 覆盖）
-    out.extend(_scan_xml_workflows(d))
+    out.extend(_scan_xml_workflows(d, scope))
     return out
 
 
-def _scan_xml_workflows(d: Path) -> list[dict]:
-    """扫描 *.xml（排除 .meta），转成 Coze JSON canvas。meta 优先根属性，.xml.meta 可覆盖。"""
+def _scan_xml_workflows(d: Path, scope: str = "repo") -> list[dict]:
+    """扫描 *.xml（排除 .meta），转成 Coze JSON canvas。meta 优先根属性，.xml.meta 可覆盖。
+    scope 标注来源层（repo|global——scan_workflows 双层目录，用户提案 2026-09-30）。"""
     import xml.etree.ElementTree as ET
     from workflow_xml import xml_to_canvas, WorkflowXmlError
     out = []
@@ -2037,7 +2055,7 @@ def _scan_xml_workflows(d: Path) -> list[dict]:
             continue
         meta_path = xf.with_name(xf.name + ".meta")
         item = {"name": xf.stem, "path": xf, "meta_path": meta_path,
-                "meta": None, "canvas": None, "error": None, "warnings": []}
+                "meta": None, "canvas": None, "error": None, "warnings": [], "scope": scope}
         try:
             xml_text = xf.read_text(encoding="utf-8")
             root = ET.fromstring(xml_text)

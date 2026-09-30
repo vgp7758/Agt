@@ -1630,6 +1630,7 @@ class Agent:
             stamp = 0
         # 全局层 mtime 纳入 stamp（用户提案 2026-09-30：~/.agt/workflows/ 双层目录——任一层变化都重扫）
         try:
+            from pathlib import Path
             from paths import AGT_DIR as _AD
             gd = Path(_AD) / "workflows"
             if gd.resolve() != d.resolve():

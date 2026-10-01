@@ -312,6 +312,27 @@ def _is_img_reject(e) -> bool:
         or "invalid image" in s.lower() and "type" in s.lower()
 
 
+def _estimate_body_size(obj) -> int:
+    """粗估请求体序列化字节数（messages/tools 体积——write 超时自适应用）。"""
+    try:
+        import json as _j
+        return len(_j.dumps(obj, ensure_ascii=False, default=str))
+    except Exception:
+        return 0
+
+
+def _adaptive_write_timeout(kwargs: dict, cfg_wt: float) -> float:
+    """write 超时按请求体自适应（用户问诊 2026-10-01：50052 大上下文切 kimi 后
+    WriteTimeout 30s 反复撞墙——0.4~0.8MB 请求体 × 家宽上行波动，发送期单次写阻塞超窗）。
+    公式：body ≤256KB 用配置值；否则 max(cfg_wt, 60, size/32KBps)——按 32KB/s 保底
+    上行带宽估算也要能发完（6MB 请求体 ≈ 187s 写窗）。"""
+    size = (_estimate_body_size(kwargs.get("messages") or [])
+            + _estimate_body_size(kwargs.get("tools") or []))
+    if size <= 256 * 1024:
+        return float(cfg_wt)
+    return max(float(cfg_wt), 60.0, size / (32 * 1024))
+
+
 class LLMClient:
     def __init__(
         self,
@@ -512,7 +533,9 @@ class LLMClient:
         import httpx
         _rt = float(self.read_timeout or 240)
         _ct = float(getattr(self, "connect_timeout", None) or 10.0)
-        _wt = float(getattr(self, "write_timeout", None) or 30.0)
+        # write 默认 120s（2026-10-01 上调，原 30s：大上下文请求体 0.4~0.8MB × 家宽上行
+        # 波动时发送期反复撞窗）；>256KB 的请求体另在 _build_kwargs 按体积自适应再放大。
+        _wt = float(getattr(self, "write_timeout", None) or 120.0)
         return OpenAI(base_url=self.base_url or "unconfigured://", api_key=self.api_key or "unconfigured",
                       default_headers=headers or None,
                       timeout=httpx.Timeout(connect=_ct, read=_rt, write=_wt, pool=10.0),
@@ -676,6 +699,17 @@ class LLMClient:
             kwargs.pop(k, None)
             if isinstance(kwargs.get("extra_body"), dict):
                 kwargs["extra_body"].pop(k, None)
+        # write 超时按请求体自适应放大（>256KB 才介入；显式 timeout override / 硬约束优先——
+        # 上面的 kwargs.update(overrides) 与 rules fix 已先落位，这里只补"没有显式设置"的场景）
+        if "timeout" not in kwargs:
+            _wt_cfg = float(getattr(self, "write_timeout", None) or 120.0)
+            _wt_eff = _adaptive_write_timeout(kwargs, _wt_cfg)
+            if _wt_eff > _wt_cfg:
+                import httpx
+                kwargs["timeout"] = httpx.Timeout(
+                    connect=float(getattr(self, "connect_timeout", None) or 10.0),
+                    read=float(self.read_timeout or 240),
+                    write=_wt_eff, pool=10.0)
         return kwargs
 
     def _backoff(self, attempt: int) -> float:

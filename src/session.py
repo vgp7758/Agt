@@ -586,6 +586,11 @@ class Session:
         self._last_fold_count: int = 0   # 最近一次分档 build 的折叠轮数（to_history 用它折叠前端历史）
         self._planned_fold: int = 0      # 轮边界折叠计划（start_turn 时算好折到 75%；轮内 _build 以它为起点，不再轮内折叠）
         self._planned_graduates: int = 0 # 轮边界毕业计划（start_turn 时算好升几档；轮内 _build 以它为起点，不再轮内升档）
+        # sos（summary of summary，用户提案 2026-10-02）：折半到全折仍超预算时的终极压缩——
+        # fc 结构摘要清单的前 _sos_count 轮由 LLM 浓缩成一份叙事摘要（_sos_text）替代，
+        # 清单只保留次早期段。内容跨模型通用（切模型不重生成）；持久化到 meta。
+        self._sos_text: str = ""
+        self._sos_count: int = 0
         # —— 实测 token 校准（react 每次成功回包 observe_llm_usage 喂入）——
         # _estimate_tokens 的除数由此取代写死的 chars/4（中文 ≈1.5 字/token，chars/4 可低估 2~3 倍）
         self._chars_per_token: float = 4.0    # 实测字符/token 比率（EMA 平滑；初值 4=旧行为）
@@ -695,6 +700,9 @@ class Session:
             data["tier_boundaries"] = list(self._tier_boundaries)
             data["fold_count"] = self._last_fold_count
             data["max_level"] = self.max_level
+            if self._sos_count and self._sos_text:      # sos 档（用户提案 2026-10-02）：LLM 浓缩摘要
+                data["sos_count"] = self._sos_count
+                data["sos_summary"] = self._sos_text
             data["chars_per_token"] = self._chars_per_token
             # 窗口快照（诊断盲点补齐）：触发毕业/折叠时的 win 与目标线直接可查——
             # "投影 200K 为何每轮毕业"这类问题不再需要从行为反推 live 窗口值
@@ -1736,7 +1744,31 @@ class Session:
                 fc = fc_try                  # 不达标：这半已进摘要，对剩余再折半
                 if hi - fc < 1:
                     break                    # 全折仍不达标（极端）：兜底停
+        # ②b sos（summary of summary，用户提案 2026-10-02）：折半到头（全折/刀数上限）
+        #    仍超预算——真的压不动了。fc 清单前半（fc//2 轮）由 LLM 浓缩成一份叙事摘要
+        #    替代（sos 档），清单只留次早期段。内容跨模型通用（切模型不重生成）；
+        #    LLM 失败/仍超则降级接受（warning 记录，纯清单形态可用）。
+        sos_done = 0
+        if fc and _est(fc) > target:
+            lo = int(getattr(self, "_sos_count", 0) or 0)   # 已有 sos 段续接（内容跨模型通用）
+            for _ in range(3):   # sos 递进 ≤3 段（半→再半→再半），达标即停；输入恒为原始清单段
+                end = min(fc, lo + max(1, (fc - lo) // 2))
+                if end <= lo:
+                    break
+                _LOG.info("sos 浓缩第 %d~%d 轮清单（est=%d > 预算 %d）", lo + 1, end, _est(fc), target)
+                part = self._generate_sos(lo, end)
+                if not part:
+                    break
+                self._sos_text = (self._sos_text + "\n\n" + part).strip() if self._sos_text else part
+                self._sos_count, lo, sos_done = end, end, sos_done + 1
+                if _est(fc) <= target or end >= fc:
+                    break
+            if _est(fc) > target:
+                _LOG.warning("sos 后仍超预算（est=%d > %d）——近窗全量披露天生占宽，接受或调窗",
+                             _est(fc), target)
         # ③ 落位（与 _plan_fold 尾段同款：fc 之前的边界是死重，清掉）
+        if fc <= int(getattr(self, "_sos_count", 0) or 0):   # fc 过小时 sos 不适用（rewind 等场景）
+            self._sos_text, self._sos_count = "", 0
         if fc > 0:
             self._tier_boundaries = [b for b in self._tier_boundaries if b >= fc]
         self._planned_fold = fc
@@ -2493,13 +2525,12 @@ class Session:
             s = answer[:100]                    # 无 markdown → 回退字符截断
         return s[:150]
 
-    def _folded_summary(self, fold_count: int) -> str:
-        """被折叠的早期轮次概览：每轮 user + (已折叠N次工具调用) + recap/answer摘要/中断(未回答)。
-        纯结构信息、无需 LLM。tail 优先级：recap（turn_end 本地小模型生成的一句话——语义密度高于
-        answer 代码摘要的"首行+标题"，后者常是"完成并推送"类横幅文案）→ answer 代码摘要 → 中断标注。
-        逐字原文用 recall 召回。"""
+    def _folded_summary_lines(self, start: int, end: int) -> list:
+        """fc 清单的逐轮行生成（[_folded_summary 的内部实现，sos 分段用]）。
+        start/end 为轮索引区间 [start, end)。"""
         lines = []
-        for i, t in enumerate(self.turns[:fold_count]):
+        for i in range(start, min(end, len(self.turns))):
+            t = self.turns[i]
             n = sum(len(s.tool_calls) for s in t.steps)
             u = (t.user_message or "").strip().replace("\n", " ")[:80]
             mid = f" (已折叠{n}次工具调用) " if n else " "
@@ -2507,7 +2538,47 @@ class Session:
                     or self._summarize_answer(t.answer)
                     or "中断(未回答)")
             lines.append(f"[第{i + 1}轮] {u}{mid}→ {tail}")
-        return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + "\n".join(lines)
+        return lines
+
+    def _folded_summary(self, fold_count: int) -> str:
+        """被折叠的早期轮次概览：每轮 user + (已折叠N次工具调用) + recap/answer摘要/中断(未回答)。
+        纯结构信息、无需 LLM。tail 优先级：recap（turn_end 本地小模型生成的一句话——语义密度高于
+        answer 代码摘要的"首行+标题"，后者常是"完成并推送"类横幅文案）→ answer 代码摘要 → 中断标注。
+        逐字原文用 recall 召回。
+        sos 形态（用户提案 2026-10-02）：_sos_count>0 且 fold_count>_sos_count 时，前段由
+        LLM 浓缩摘要（_sos_text）替代，清单只保留次早期段（轮号保持真实——recall 按轮号召回）。"""
+        sos_n = int(getattr(self, "_sos_count", 0) or 0)
+        sos_t = (getattr(self, "_sos_text", "") or "").strip()
+        if sos_n > 0 and fold_count > sos_n and sos_t:
+            tail_lines = self._folded_summary_lines(sos_n, fold_count)
+            return ("【早期轮次 sos 浓缩摘要（LLM 总结，覆盖第1~%d轮；逐字原文用 recall 召回）】\n%s\n\n"
+                    "【次早期轮次清单（第%d~%d轮）】\n%s") % (
+                        sos_n, sos_t, sos_n + 1, fold_count, "\n".join(tail_lines))
+        return "【已折叠的早期轮次（逐字原文用 recall 召回）】\n" + \
+               "\n".join(self._folded_summary_lines(0, fold_count))
+
+    def _generate_sos(self, start: int, end: int) -> str:
+        """sos（summary of summary，用户提案 2026-10-02）：把 fc 清单 [start, end) 轮交给
+        LLM 浓缩成一份叙事摘要（保留关键事实/决策/踩坑/版本/路径，≤1200 字）。
+        折半到全折仍超预算时的终极压缩；输入恒为原始清单段（非再压缩，信息保真）。
+        失败返回 ""（降级纯清单，不阻塞投影）。"""
+        try:
+            src_lines = self._folded_summary_lines(start, end)
+            if not src_lines:
+                return ""
+            prompt = ("以下是一个长期开发会话中第 %d~%d 轮的逐轮流水清单（每轮：用户诉求 → 一句话结果）。"
+                      "请把它浓缩成一份【叙事摘要】，供新接手的 AI 继续这个会话时作为这段时期的背景记忆。\n"
+                      "要求：保留关键事实与决策（做了什么/为什么）、重要踩坑与教训、涉及的项目/文件/版本号/"
+                      "服务端口等具体锚点、随时间演进的主线脉络；丢弃一次性琐事与重复模式；"
+                      "不超过 1200 字，直接输出摘要正文（不要开头结尾客套）。\n\n清单：\n%s"
+                      % (start + 1, end, "\n".join(src_lines)))
+            resp = (self.utility_llm or self.llm).chat(
+                [{"role": "user", "content": prompt}], scene="sos")
+            txt = (getattr(resp, "content", "") or "").strip()
+            return txt[:4000]
+        except Exception as e:
+            _LOG.warning("sos 浓缩失败（降级纯清单）：%s", e)
+            return ""
 
     def set_turn_recap(self, idx: int, recap: str) -> None:
         """回写某轮的 recap（turn_end 异步生成完成时调用）：Turn.recap + 追加 recaps.jsonl。
@@ -3344,6 +3415,8 @@ class Session:
                 "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
                 "system_ledger": self._system_ledger,       # system append-not-replace 账本（last_text 快照字节——重启后前缀仍稳定）
                 "profile_fp": self._profile_fingerprint(),  # 投影相关 profile 指纹（load 时对比——变了才全量重刷，保住同模型重启的缓存延续）
+                "sos_count": self._sos_count,                # sos 档（用户提案 2026-10-02）：LLM 浓缩摘要覆盖的轮数
+                "sos_summary": self._sos_text,               # sos 叙事摘要（内容跨模型通用——切模型不重生成）
                 "saved_at": int(time.time()),
             }
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件。
@@ -3428,6 +3501,8 @@ class Session:
         # restart 后投影重算归零 → 历史段头部重排 → t506·s0 实测 12.7% 命中（300K tok 全价）。
         s._planned_fold = int(data.get("fold_count") or 0)
         s._last_fold_count = s._planned_fold
+        s._sos_count = int(data.get("sos_count") or 0)      # sos 档恢复（用户提案 2026-10-02）
+        s._sos_text = str(data.get("sos_summary") or "")
         # 判断是新文件夹结构还是旧扁平结构
         is_new_structure = path.name == "meta.json"
         if is_new_structure:

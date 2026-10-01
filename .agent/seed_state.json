@@ -1,5 +1,5 @@
 {
- "workflow/before_turn_retrieval.xml": "12b3ee3275e4b6b7",
+ "workflow/before_turn_retrieval.xml": "e3d73b63b5257081",
  "workflow/cs_auto_diag.xml": "f79f1d838cbffcc8",
  "workflow/custom_tool_demo.xml": "10de5f7a538fc4e5",
  "workflow/diff_snapshots.xml": "7d075f0edca8310a",
@@ -7,9 +7,9 @@
  "workflow/py_auto_diag.xml": "4e5400addb1141c6",
  "workflow/react_agent_demo.xml": "f95fa42cd7943d03",
  "workflow/reload_hot.xml": "447d5b2c8d1fc95f",
- "workflow/rerank_topk.xml": "b3fcddb629e304f2",
+ "workflow/rerank_topk.xml": "8acc3a2f48e441b5",
  "workflow/score_rerank.xml": "404653e9fbda34a9",
- "workflow/skill_suggest.xml": "420baa12d71733ab",
+ "workflow/skill_suggest.xml": "3ff44b00456e7ab6",
  "workflow/stock_query.xml": "cb57f2f9fbc4d605",
  "workflow/wiki_auto_query.xml": "de7019dd9207a635",
  "workflow/wiki_auto_query_react_demo.xml": "4732f802b215a9a3",
@@ -28,6 +28,7 @@
  "dir_doc/.agent/skills/README.md": "450b54a7d90a8e25",
  "dir_doc/nodes/README.md": "6cc6422c8fd87c4c",
  "dir_doc/.agent/nodes/README.md": "6cc6422c8fd87c4c",
- "workflow/extract_keywords.xml": "8d5f7fcb52679404",
- "workflow/recap_gen.xml": "b2be85960a7f7611"
+ "workflow/extract_keywords.xml": "002bbe80eac25537",
+ "workflow/recap_gen.xml": "80c416012d5b3a48",
+ "workflow/wiki_auto_maintenance.xml": "52a5e295a7fd3c4a"
 }

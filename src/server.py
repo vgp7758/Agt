@@ -572,6 +572,7 @@ async def api_wf_save(name: str, request: Request):
     scope = (body.get("scope") or "repo").strip().lower()
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_") or "workflow"
     meta.setdefault("name", safe)
+    meta.pop("seed_scope", None)   # 编辑器保存产物不带播种标记（层位置即事实；标记只属于随包源文件）
     d = _wf_dir_for(scope)
     d.mkdir(parents=True, exist_ok=True)
     if fmt == "xml":
@@ -618,7 +619,28 @@ async def api_wf_save(name: str, request: Request):
             refresh_workflow_tools(_agent.tools, _workspace, _agent)
         except Exception:
             pass
-    return {"ok": True, "name": saved_name, "format": fmt, "scope": scope}
+    # ── 跨层保存语义（用户裁定 2026-10-01）──
+    stem = safe[:-5] if safe.endswith(".json") else (safe[:-4] if safe.endswith(".xml") else safe)
+    note = ""
+    if scope == "global":
+        # repo→global：移动语义——写完全局后删 repo 层同名（.xml/.json/.meta），防旧副本遮蔽全局
+        removed = []
+        for suf in (".xml", ".json"):
+            for f in (stem + suf, stem + suf + ".meta"):
+                p = _WF_DIR / f
+                if p.exists():
+                    try:
+                        p.unlink()
+                        removed.append(f)
+                    except OSError:
+                        pass
+        if removed:
+            note = "已保存到 🌐全局 并移除本地副本（repo→global 移动）"
+    else:
+        # global→repo：变体语义——本地存一份（全局原件不动；repo 同名覆盖生效）
+        if any((_wf_dir_for("global") / (stem + suf)).exists() for suf in (".xml", ".json")):
+            note = "已在本地保存变体（🌐全局原件不动）"
+    return {"ok": True, "name": saved_name, "format": fmt, "scope": scope, "note": note}
 
 
 @app.post("/api/wf/create")

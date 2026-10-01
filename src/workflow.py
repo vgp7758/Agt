@@ -24,6 +24,7 @@ from pathlib import Path
 import config as _config
 from llm_client import LLMClient
 from real_tools import WORKSPACE
+from paths import AGT_DIR
 from tools import Tool, Toolbox
 
 _LOG = logging.getLogger("agt.workflow")   # 0d852a0 引入 _LOG.warning 时漏了定义——NameError 让钩子链静默
@@ -2001,7 +2002,6 @@ def scan_workflows(workspace: Path = None) -> list[dict]:
     双层目录（用户提案 2026-09-30）：repo <ws>/.agent/workflows/ 优先 + 全局 ~/.agt/workflows/
     （多 repo 共享同一份——钩子上挂的通用工作流放全局）；同名以 repo 为准（本地覆盖），
     条目带 scope（repo|global）供编辑器标注来源。"""
-    from paths import AGT_DIR
     d = (workspace or WORKSPACE) / ".agent" / "workflows"
     out = _scan_wf_dir(d, "repo") if d.exists() else []
     g = Path(AGT_DIR) / "workflows"
@@ -2076,6 +2076,8 @@ def _scan_xml_workflows(d: Path, scope: str = "repo") -> list[dict]:
                 meta["async"] = root.get("async") == "true"
             if root.get("recap") is not None:
                 meta["recap"] = root.get("recap") == "true"   # recap 工作流：结果写回 agent._recap（队友可见）
+            if root.get("seed_scope"):
+                meta["seed_scope"] = root.get("seed_scope")   # 播种归属（global=只播 ~/.agt/workflows）
             if meta_path.exists():
                 try:
                     meta = {**meta, **(json.loads(meta_path.read_text(encoding="utf-8")) or {})}
@@ -2235,9 +2237,11 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id:
 
 
 def seed_default_workflows(workspace: Path = None) -> int:
-    """把随包附带的默认工作流（src/workflows/*.xml）播种到 workspace/.agent/workflows/。
+    """把随包附带的默认工作流（src/workflows/*.xml）播种到 workspace/.agent/workflows/；
+    根标记 seed_scope="global" 的（多 repo 共享的通用钩子工作流）只播 ~/.agt/workflows/，
+    【不再播 repo 层】（用户裁定 2026-10-01）——并顺手移除 repo 层未被改过的旧播种副本
+    （否则同名 repo 副本会遮蔽全局层；用户改过的保留——本地覆盖全局语义）。
     仅在目标不存在时拷贝（用户改动过的同名文件不会被覆盖）。返回播种数量。
-    用于让"默认行为类"工作流（如 cs_auto_diag 自动诊断）对 pip 安装的用户也开箱即用。
     播种时写 seed_state 基线（asset_sync 的 /update-assets 依赖三方 hash 判定可否安全更新）。"""
     workspace = workspace or WORKSPACE
     try:
@@ -2246,15 +2250,38 @@ def seed_default_workflows(workspace: Path = None) -> int:
             return 0
         target_dir = workspace / ".agent" / "workflows"
         target_dir.mkdir(parents=True, exist_ok=True)
-        from asset_sync import _sha, _load_state, _save_state
+        from asset_sync import _sha, _load_state, _save_state, is_global_seed_workflow
+        global_dir = Path(AGT_DIR) / "workflows"   # 模块级引用（可测试 patch）
         st = _load_state(workspace)
         n = 0
         for src in sorted(bundled_dir.glob("*.xml")):
+            key = f"workflow/{src.name}"
+            if is_global_seed_workflow(src):
+                # 全局类：只播全局层（所有 repo 共享同一份）
+                global_dir.mkdir(parents=True, exist_ok=True)
+                dst = global_dir / src.name
+                if not dst.exists():
+                    try:
+                        dst.write_bytes(src.read_bytes())
+                        st[key] = _sha(src)
+                        n += 1
+                    except Exception:
+                        pass
+                # repo 层旧播种副本：未被改过（==随包 或 ==基线）则移除，让位全局层
+                rep = target_dir / src.name
+                if rep.exists():
+                    rep_h = _sha(rep)
+                    if rep_h == _sha(src) or st.get(key) == rep_h:
+                        try:
+                            rep.unlink()
+                        except Exception:
+                            pass
+                continue
             dst = target_dir / src.name
             if not dst.exists():
                 try:
                     dst.write_bytes(src.read_bytes())   # 字节级：write_text 行尾转换会让 /update-assets 的 hash 对不上
-                    st[f"workflow/{src.name}"] = _sha(src)   # 基线：随包 hash
+                    st[key] = _sha(src)   # 基线：随包 hash
                     n += 1
                 except Exception:
                     pass

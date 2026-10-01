@@ -1,62 +1,161 @@
-<workflow name="skill_suggest" description="每轮开始前根据用户消息匹配推荐技能（before_turn 钩子，默认关——需要时启用）" enabled="false" hidden="true">
-  <!-- before_turn 钩子注入的用户消息 -->
-  <node id="100001" type="start">
-    <out name="user_message" type="string"/>
+<workflow name="skill_suggest" description="技能按需建议两级编排：①jev 基于 description 快判（~1s 零 token）命中即回；②未命中 → 各技能 SKILL.md 全文+user_message 交 LLM 复核。短消息与最终无匹配静默" hidden="true" seed_scope="global">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="user_message" type="string" required="true"/>
   </node>
-
-  <!-- LLM1：意图识别 + 关键字提取（严格 JSON） -->
-  <node id="110001" type="llm">
-    <in name="user_message" ref="100001.user_message"/>
-    <param name="systemPrompt"><![CDATA[你是技能匹配器。根据用户消息判断是否需要调用某个已沉淀的技能 SOP。
-只输出一个 JSON 对象，不要任何解释或 markdown 代码块：
-{"need_skill": true, "skills": ["技能名 1","技能名 2"], "reason": "为何需要技能的简短说明"}
-规则：
-- need_skill：用户请求是否是可复用任务/有现成 SOP 能解决（如优化代码、调试、写测试、重构、性能分析等）。纯信息查询/闲聊 → false。
-- skills：若 need_skill=true，列出 1-3 个可能相关的技能名称（从 .agent/skills/ 目录下的文件名推断；不知道具体名字时给空数组 []）。
-- reason：一句话说明为何需要这些技能。]]></param>
-    <param name="prompt"><![CDATA[{{user_message}}]]></param>
-    <param name="temperature" type="float">0.1</param>
-    <out name="need_skill" type="boolean"/>
+  <node id="500001" type="code" title="扫技能+全文+短路" x="541" y="138">
+    <in name="user_message" type="string" ref="100001.user_message"/>
+    <code language="3"><![CDATA[import os, json, re
+async def main(args):
+    um_raw = args.params.get("user_message") or ""
+    um = re.sub(r"<pasted-log>[\s\S]*?</pasted-log>", "", um_raw).strip()
+    cn = len(re.findall(r"[\u4e00-\u9fff]", um))
+    en = len(re.findall(r"[A-Za-z]{2,}", um))
+    proceed = (cn + en) >= 4
+    out, descs = [], []
+    cwd = os.getcwd()
+    act = []
+    try:
+        act = json.load(open(os.path.join(cwd, ".agent", "skills", "global-skills.json"), encoding="utf-8"))
+    except Exception:
+        act = []
+    seen = set()
+    for root, is_global in ((os.path.join(cwd, ".agent", "skills"), False),
+                            (os.path.join(os.path.expanduser("~"), ".agt", "skills"), True)):
+        if not os.path.isdir(root):
+            continue
+        for name in sorted(os.listdir(root)):
+            sk = os.path.join(root, name, "SKILL.md")
+            if not os.path.isfile(sk) or name in seen:
+                continue
+            if is_global and name not in act:
+                continue
+            seen.add(name)
+            try:
+                txt = open(sk, encoding="utf-8", errors="replace").read()
+            except Exception:
+                continue
+            m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", txt, re.S)
+            if not m:
+                continue
+            fm, body = m.group(1), m.group(2).strip()
+            def g(k, fm=fm):
+                mm = re.search("^" + k + r":\s*(.+)$", fm, re.M)
+                return mm.group(1).strip().strip("\"'") if mm else ""
+            desc = (g("description") + ("；适用：" + g("when_to_use") if g("when_to_use") else "")).strip("； ")
+            out.append({"name": g("name") or name, "description": desc,
+                        "when": g("when_to_use"), "full": body[:6000]})
+            # jev 一级 criteria 用短 description（实测拼 when 会让 0.6B 打分变平坦、全部 <0.5 漏报——
+            # 长信息留给二级 LLM 的 SKILL.md 全文，两级正好分工）
+            descs.append({"name": g("name") or name, "description": g("description")})
+    descs.append({"name": "__none__",
+                  "description": "与以上任何技能都无关的普通对话、闲聊、提问或与本机工具无关的任务"})
+    return {"um": um, "proceed": proceed, "skills": out, "descs": descs, "count": len(out)}]]></code>
+    <out name="um" type="string"/>
+    <out name="proceed" type="boolean"/>
     <out name="skills" type="list"/>
+    <out name="descs" type="list"/>
+    <out name="count" type="number"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="800001" type="intent_nano" title="一级快判(jev·description)" x="825" y="258">
+    <in name="query" type="string" ref="500001.um"/>
+    <in name="intents" type="string" ref="500001.descs"/>
+    <in name="route" type="boolean">False</in>
+    <in name="threshold" type="number">0.5</in>
+    <batch enabled="false"/>
+  </node>
+  <node id="810001" type="code" title="快判结果" x="1139" y="205">
+    <in name="intent" type="string" ref="800001.intent"/>
+    <in name="confidence" type="string" ref="800001.confidence"/>
+    <in name="skills" type="string" ref="500001.skills"/>
+    <in name="um" type="string" ref="500001.um"/>
+    <in name="proceed" type="string" ref="500001.proceed"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    intent, conf = p.get("intent") or "", float(p.get("confidence") or 0)
+    skills, um, proceed = p.get("skills") or [], p.get("um") or "", bool(p.get("proceed"))
+    hit = proceed and intent and intent != "__none__" and conf >= 0.5
+    skill = next((s for s in skills if s.get("name") == intent), None)
+    if hit and skill:
+        result = ("🎯 匹配技能：" + skill["name"] + "（jev 置信度 " + format(conf, ".2f") + "）\n"
+                  + (skill.get("description") or "")
+                  + "\n→ 详细 SOP：read_skill(\"" + skill["name"] + "\")"
+                  + "；若需其常驻服务：skill_equip(\"" + skill["name"] + "\")")
+        return {"hit": True, "inject": True, "result": result}
+    return {"hit": False, "inject": False, "result": ""}]]></code>
+    <out name="hit" type="boolean"/>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+  </node>
+  <node id="700001" type="selector" title="jev命中?" x="1320" y="80">
+    <branch><cond op="11" left="810001.hit" right="" left_type="boolean"/></branch>
+  </node>
+  <node id="870001" type="llm" title="二级复核(LLM·SKILL全文)" x="1669" y="145">
+    <in name="skills" type="string" ref="500001.skills"/>
+    <in name="um" type="string" ref="500001.um"/>
+    <param name="systemPrompt" type="string"><![CDATA[你是技能调度助手：把用户消息匹配到最合适的本机技能；拿不准就答 NONE。]]></param>
+    <param name="prompt" type="string"><![CDATA[以下是本机可用技能的 SKILL.md 内容（JSON 数组，字段：name/description/when/full）：
+
+{{skills}}
+
+用户消息：{{um}}
+
+判断哪个技能匹配用户消息：只回复该技能的 name（一个单词）；都不匹配回复 NONE。不要任何解释。]]></param>
+    <param name="output_format" type="string"><![CDATA[text]]></param>
+    <model>proxy</model>
     <out name="output" type="string"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- selector1：仅 need_skill=true 才继续 -->
-  <node id="120001" type="selector">
-    <branch>
-      <cond op="1" left="110001.need_skill" right="true" left_type="boolean" right_type="boolean"/>
-    </branch>
+  <node id="880001" type="code" title="二级解析" x="1920" y="80">
+    <in name="answer" type="string" ref="870001.output"/>
+    <in name="skills" type="string" ref="500001.skills"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    ans = (p.get("answer") or "").strip()
+    skills = p.get("skills") or []
+    name = ans.split()[0] if ans else ""
+    skill = next((s for s in skills if s.get("name") == name), None)
+    if name and name.upper() != "NONE" and skill:
+        result = ("🎯 匹配技能：" + skill["name"] + "（LLM 复核）\n"
+                  + (skill.get("description") or "")
+                  + "\n→ 详细 SOP：read_skill(\"" + skill["name"] + "\")"
+                  + "；若需其常驻服务：skill_equip(\"" + skill["name"] + "\")")
+        return {"inject": True, "result": result}
+    return {"inject": False, "result": ""}]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- code1：格式化建议文本 -->
-  <node id="130001" type="code">
-    <in name="skills" ref="110001.skills"/>
-    <in name="reason" ref="110001.output"/>
-    <code language="3"><![CDATA[
-import json
-async def main(args) -> dict:
-    skills = args.params.get("skills") or []
-    reason = args.params.get("reason") or ""
-    if not skills:
-        return {"suggest": "检测到可能是可复用任务，但暂无匹配技能。考虑用 save_skill 沉淀一个？"}
-    lines = ["💡 检测到可能是可复用任务：" + reason]
-    lines.append("相关技能建议：")
-    for s in skills:
-        lines.append(f"- `{s}`：可用 read_skill(\"{s}\") 查看 SOP")
-    return {"suggest": "\n".join(lines)}
-]]></code>
-    <out name="suggest" type="string"/>
+  <node id="990001" type="code" title="合并" x="2220" y="80">
+    <in name="f_inj" type="string" ref="810001.inject"/>
+    <in name="f_res" type="string" ref="810001.result"/>
+    <in name="s_inj" type="string" ref="880001.inject"/>
+    <in name="s_res" type="string" ref="880001.result"/>
+    <code language="3"><![CDATA[async def main(args):
+    p = args.params
+    if p.get("f_inj"):
+        return {"inject": True, "result": p.get("f_res") or ""}
+    return {"inject": bool(p.get("s_inj")), "result": p.get("s_res") or ""}]]></code>
+    <out name="inject" type="boolean"/>
+    <out name="result" type="string"/>
+    <batch enabled="false"/>
   </node>
-
-  <!-- 结束节点：inject=true 将 suggest 注入主 LLM -->
-  <node id="900001" type="end">
-    <out name="inject" type="boolean">true</out>
-    <out name="result" type="string" ref="130001.suggest"/>
+  <node id="900001" type="end" title="end" x="2520" y="80">
+    <out name="inject" ref="990001.inject" type="string"/>
+    <out name="result" ref="990001.result" type="string"/>
   </node>
-
-  <edge from="100001" to="110001"/>
-  <edge from="110001" to="120001"/>
-  <edge from="120001" to="130001" port="true"/>
-  <edge from="130001" to="900001"/>
-  <edge from="120001" to="900001" port="false"/>
+  <node id="829475" type="selector" title="shot_msg?" x="1555.7625248065783" y="482.2755017045026">
+    <branch><cond op="16" left="100001.user_message.length" right="4" left_type="integer" right_type="integer"/></branch>
+  </node>
+  <edge from="500001" to="800001"/>
+  <edge from="800001" to="810001"/>
+  <edge from="810001" to="700001"/>
+  <edge from="700001" to="990001" port="true"/>
+  <edge from="700001" to="870001" port="false"/>
+  <edge from="870001" to="880001"/>
+  <edge from="880001" to="990001"/>
+  <edge from="990001" to="900001"/>
+  <edge from="100001" to="829475"/>
+  <edge from="829475" to="500001" port="true"/>
+  <edge from="829475" to="900001" port="false"/>
 </workflow>

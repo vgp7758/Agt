@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
+from paths import AGT_DIR
 from real_tools import WORKSPACE
 
 _STATE_NAME = "seed_state.json"
@@ -60,6 +62,24 @@ def _save_state(workspace: Path, st: dict) -> None:
         pass
 
 
+def is_global_seed_workflow(p: Path) -> bool:
+    """随包工作流根标记 seed_scope="global"（全局类：多 repo 共享，只播 ~/.agt/workflows/，
+    不播 repo 层——用户裁定 2026-10-01）。"""
+    try:
+        head = p.read_bytes()[:4096].decode("utf-8", "replace")   # 根标签含长 description，取 4K 保险
+        return re.search(r'<workflow\b[^>]*\bseed_scope="global"', head) is not None
+    except Exception:
+        return False
+
+
+def _seed_dst(kind: str, sp: Path, dst_dir: Path) -> Path:
+    """种子文件的实际播种目的地：全局类工作流 → ~/.agt/workflows/，其余 → 各类别默认目录。"""
+    if kind == "workflow" and sp.suffix == ".xml" and is_global_seed_workflow(sp):
+        g = Path(AGT_DIR) / "workflows"
+        return g / sp.name
+    return dst_dir / sp.name
+
+
 def _seed_dirs(pkg_root: Path, workspace: Path = None) -> list[tuple[str, Path, Path]]:
     """[(类别, 随包源目录, 本地目标目录)]——随包没有的类别自动缺席（老版本 pip 包）。
     本地目录随 workspace 参数走（默认全局 WORKSPACE）。"""
@@ -91,7 +111,7 @@ def diff_seed_assets(workspace: Path = None, pkg_root: Path = None) -> tuple[lis
                        and "__pycache__" not in p.parts and not p.name.endswith(".meta"))
         for sp in seeds:
             rel = sp.relative_to(src_dir).as_posix()
-            dst = dst_dir / rel
+            dst = _seed_dst(kind, sp, dst_dir) if kind == "workflow" else (dst_dir / rel)
             seed_h = _sha(sp)
             if not dst.exists():
                 items.append({"kind": kind, "name": rel, "rel": rel, "status": "missing",
@@ -171,6 +191,8 @@ def update_seed_assets(apply: bool = False, force: bool = False, workspace: Path
     dirmap = {kind: (s, d) for kind, s, d in _seed_dirs(pkg_root, workspace)}
     for i in actionable:
         s, d = dirmap[i["kind"]]
+        if i["kind"] == "workflow":
+            d = (_seed_dst("workflow", s / i["rel"], d)).parent
         try:
             _copy(i["kind"], s, i["rel"], d)
             done.append(i)
@@ -181,6 +203,8 @@ def update_seed_assets(apply: bool = False, force: bool = False, workspace: Path
     if force:
         for i in protected:
             s, d = dirmap[i["kind"]]
+            if i["kind"] == "workflow":
+                d = (_seed_dst("workflow", s / i["rel"], d)).parent
             try:
                 _copy(i["kind"], s, i["rel"], d)   # 覆盖 + 基线刷新 → 回到正常生命周期
                 forced.append(i)

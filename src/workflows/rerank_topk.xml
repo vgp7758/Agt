@@ -1,4 +1,4 @@
-<workflow name="rerank_topk" description="通用重排子工作流：输入 items(数组)+scores(number数组)+k → zip 降序排序取 topk。输出 topk(数组)/indices(原下标数组)。供检索/精排类工作流复用（subworkflow 节点调用）" hidden="true">
+<workflow name="rerank_topk" description="通用重排子工作流：输入 items(数组)+scores(number数组)+k → zip 降序排序取 topk。输出 topk(数组)/indices(原下标数组)。供检索/精排类工作流复用（subworkflow 节点调用）" hidden="true" seed_scope="global">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="items" type="list"/>
     <out name="scores" type="list" itemType="number"/>
@@ -32,11 +32,12 @@
     <out name="topk" type="list"/>
     <out name="indices" type="list" itemType="integer"/>
     <out name="scores_topk" type="list" itemType="number"/>
+    <batch enabled="false"/>
   </node>
   <node id="900001" type="end" title="Exit" x="720" y="80">
     <out name="topk" ref="110001.topk" type="list"/>
-    <out name="indices" ref="110001.indices" type="list" itemType="integer"/>
-    <out name="scores_topk" ref="110001.scores_topk" type="list" itemType="number"/>
+    <out name="indices" ref="110001.indices" type="list"/>
+    <out name="scores_topk" ref="110001.scores_topk" type="list"/>
   </node>
   <edge from="100001" to="110001"/>
   <edge from="110001" to="900001"/>

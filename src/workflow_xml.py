@@ -890,6 +890,8 @@ def canvas_to_xml(canvas: dict, meta: dict = None) -> str:
         attrs += ' async="true"'
     if meta.get("recap") is True:
         attrs += ' recap="true"'
+    if meta.get("seed_scope"):
+        attrs += f' seed_scope={_qa(meta["seed_scope"])}'
     lines = [f"<workflow {attrs}>"]
     for n in canvas.get("nodes", []):
         lines.append(_node_to_xml(n))

@@ -94,15 +94,11 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
   <select id="fileSel"><option value="">选择工作流…</option></select>
   <button onclick="WE.createWf()">➕ 新建</button>
   <button onclick="WE.saveWf()">💾 保存</button>
-  <select id="saveFormat" title="保存格式（XML：代码/提示词 CDATA 免转义，适合手写）"><option value="json">存为 JSON</option><option value="xml">存为 XML</option></select>
   <button class="danger" onclick="WE.deleteWf()">🗑 删除</button>
   <button onclick="focusEntry()" title="聚焦到开始节点">📍 聚焦</button>
   <button onclick="autoLayout()" title="按流程方向分层自动布局，孤立节点纵向罗列">📐 自动布局</button>
   <button onclick="addNodeBtn()" title="在画布中心弹出节点选择浮窗（手机/触屏无双击，加节点用这个）">🧩 节点</button>
   <button onclick="location.href=(WF.name?('/wfdebug?wf='+encodeURIComponent(WF.name)):'/wfdebug')" title="跳转到调试页运行此工作流">▶ 调试</button>
-  <input id="fdesc" placeholder="描述" style="flex:1;min-width:120px">
-  <input id="fcoze" placeholder="Coze URL（可选）" style="width:220px">
-  <label style="font-size:11px;color:#8a9099"><input type="checkbox" id="fenabled" onchange="WF.meta.enabled=this.checked"> 启用</label>
   <label style="font-size:11px;color:#8a9099" title="目标钩子（协议声明）：选择后自动按钩子约定规范化 start 输入/end 输出(inject+result) schema。仅声明本工作流实现什么钩子协议——最终挂载到哪些 Agent 由各 agent 的 .yml hooks 声明决定">钩子 <select id="fhook" onchange="onHookChange(this.value)" style="font-size:11px;background:#0f3460;color:#fff;border:1px solid #533">
     <option value="">（无）</option>
     <option value="before_turn">每轮开始前</option>
@@ -111,8 +107,6 @@ body{font:13px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:
     <option value="before_answer">最终回答前</option>
     <option value="turn_end">本轮完成后</option>
   </select></label>
-  <label style="font-size:11px;color:#8a9099" title="hidden 默认开：不注册成 Agent 工具（钩子/子工作流/demo 专用）。想给 Agent 用（wf_* 工具）：取消勾选并保存"><input type="checkbox" id="fhidden" onchange="WF.meta.hidden=this.checked"> hidden</label>
-  <label style="font-size:11px;color:#8a9099" title="async=钩子工作流后台异步执行，不阻塞主循环（如 wiki 维护等推理长但无需等结果注入的钩子）"><input type="checkbox" id="fasync" onchange="WF.meta.async=this.checked"> async</label>
   <span style="color:#8a9099;font-size:11px" id="fstatus"></span>
   <span id="breadcrumb" style="color:#7b2ff7;font-weight:600;font-size:12px;display:none"></span>
   <button id="btnExitComp" style="display:none" onclick="exitComposite()">◀ 退出子画布</button>
@@ -3203,18 +3197,13 @@ async function openWf(name){
   // 子工作流节点按目标工作流 schema 同步输入/输出字段（保留已连的线）
   Promise.all(WF.nodes.filter(n=>n.type==='9'&&n.data.inputs?.workflowId).map(syncSubworkflowNode)).then(()=>{autoLayout(true);if(selNode)showProps();});
   document.getElementById('fileSel').value=name;
-  document.getElementById('fdesc').value=WF.meta.description||'';
-  document.getElementById('fcoze').value=WF.meta.coze_url||'';
   // 向后兼容：旧 auto:true → 迁移为 enabled+钩子
   if(WF.meta.auto && !WF.meta.enabled) WF.meta.enabled=true;
   if(WF.meta.auto && !WF.meta.hook) WF.meta.hook='before_turn';
-  document.getElementById('fenabled').checked=WF.meta.enabled!==false;   // 默认 true
-  document.getElementById('fhidden').checked=WF.meta.hidden!==false;      // 默认 hidden（勾=不注册为工具；取消勾选+保存=注册）
-  document.getElementById('fasync').checked=WF.meta.async===true;
  document.getElementById('fhook').value=WF.meta.hook||'';   // 协议声明回显（挂载归 /agents yml）
   // hook 已迁 Agent 声明管理（/agents 的 hooks 编辑）——编辑器不再提供设置入口；
   // meta.hook 原样保留（已有钩子工作流保存后不丢字段，读侧 get_hook_workflows 继续生效）
-  const _sf=document.getElementById('saveFormat'); if(_sf) _sf.value=r.format||'json';  // 同步当前文件格式
+   WF.fmt=r.format||'json';   // 当前文件格式（顶栏控件已删，2026-10-01——元信息只在保存弹窗）
   document.getElementById('fstatus').textContent='';
   WF.nodes.forEach(_uncollapseNode);  // 打开时展开所有 object 字段（默认折叠看不到子字段）
   selNode=null;autoLayout(true);toast('已打开 '+name+(r.format==='xml'?' [XML]':''));
@@ -3274,12 +3263,12 @@ async function saveWf(){
 function showSaveModal(){
   if(!WF.name){const n=prompt('工作流名称（英文）：');if(!n)return;WF.name=n;}
   document.getElementById('sv_name').value=WF.name||'';
-  document.getElementById('sv_desc').value=document.getElementById('fdesc').value||WF.meta.description||'';
-  document.getElementById('sv_coze').value=document.getElementById('fcoze').value||WF.meta.coze_url||'';
-  document.getElementById('sv_enabled').checked=document.getElementById('fenabled').checked;
-  document.getElementById('sv_hidden').checked=document.getElementById('fhidden').checked;
-  document.getElementById('sv_async').checked=document.getElementById('fasync').checked;
-  document.getElementById('sv_fmt').value=(document.getElementById('saveFormat')||{}).value||'json';
+   document.getElementById('sv_desc').value=WF.meta.description||'';
+   document.getElementById('sv_coze').value=WF.meta.coze_url||'';
+   document.getElementById('sv_enabled').checked=WF.meta.enabled!==false;
+   document.getElementById('sv_hidden').checked=WF.meta.hidden!==false;
+   document.getElementById('sv_async').checked=WF.meta.async===true;
+   document.getElementById('sv_fmt').value=WF.fmt||'json';
   const _sc=(WF.scope==='global')?'global':'repo';
   const _rd=document.querySelector('#saveModal input[name="sv_scope"][value="'+_sc+'"]');
   if(_rd)_rd.checked=true;
@@ -3291,23 +3280,18 @@ async function confirmSave(){
   if(!name){toast('名称不能为空');return;}
   if(name!==WF.name && !confirm('名称已改变，将保存为新的工作流 "'+name+'"（原 "'+WF.name+'" 保留）。继续？'))return;
   // 弹窗值回写顶栏（UI 一致，下次打开预填正确）
-  document.getElementById('fdesc').value=document.getElementById('sv_desc').value;
-  document.getElementById('fcoze').value=document.getElementById('sv_coze').value;
-  document.getElementById('fenabled').checked=document.getElementById('sv_enabled').checked;
-  document.getElementById('fhidden').checked=document.getElementById('sv_hidden').checked;
-  document.getElementById('fasync').checked=document.getElementById('sv_async').checked;
-  const _sf=document.getElementById('saveFormat'); if(_sf)_sf.value=document.getElementById('sv_fmt').value;
+   WF.meta.description=document.getElementById('sv_desc').value;
+   WF.meta.coze_url=document.getElementById('sv_coze').value;
+   WF.meta.enabled=document.getElementById('sv_enabled').checked;
+   WF.meta.hidden=document.getElementById('sv_hidden').checked;
+   WF.meta.async=document.getElementById('sv_async').checked;
+   WF.fmt=document.getElementById('sv_fmt').value;
   const scope=(document.querySelector('#saveModal input[name="sv_scope"]:checked')||{}).value||'repo';
   hideSaveModal();
   await _doSave(name,scope);
 }
 async function _doSave(name,scope){
   document.getElementById('fstatus').textContent='保存中…';
-  WF.meta.description=document.getElementById('fdesc').value;
-  WF.meta.coze_url=document.getElementById('fcoze').value;
-   WF.meta.enabled=document.getElementById('fenabled').checked;   // 默认 true，取消则 enabled=false
-   WF.meta.hidden=document.getElementById('fhidden').checked;      // 勾=hidden（默认）；取消勾选+保存=注册为 wf_* 工具
-   WF.meta.async=document.getElementById('fasync').checked;
   WF.meta.hook=document.getElementById('fhook').value||'';   // 协议声明（空=清除；挂载归 /agents yml）
   // 保留 x/y（画布布局位置，自动布局/拖拽后重开能还原）；w/h 由渲染重算故不存
   // blocks/edges 是复合节点(21/28)的【节点级】子画布属性（与 data 平级，不在 data 里）——
@@ -3318,7 +3302,7 @@ async function _doSave(name,scope){
     if(n.edges&&n.edges.length)c.edges=n.edges;
     return c;
   }),edges:WF.edges.filter(e=>e.sourceNodeID&&e.targetNodeID),versions:{}};   // 过滤空边（入口段的未选占位）
-  const fmt=(document.getElementById('saveFormat')||{}).value||'json';
+   const fmt=WF.fmt||'json';
   const r=await api('PUT','/api/wf/'+name,{canvas,meta:WF.meta,format:fmt,scope});
   if(r.error){toast(r.error);document.getElementById('fstatus').textContent='❌';return;}
   WF.name=r.name||name;WF.scope=r.scope||scope;document.getElementById('fileSel').value=WF.name;
@@ -3338,7 +3322,7 @@ async function deleteWf(){
   const r=await api('DELETE','/api/wf/'+name+(WF.scope==='global'?'?scope=global':''));if(r.error){toast(r.error);return;}
   WF={name:'',nodes:[],edges:[],meta:{name:'',description:'',enabled:true,coze_url:''},scope:'repo'};
   selNode=null;showProps();renderAll();document.getElementById('fileSel').value='';
-  document.getElementById('fdesc').value='';document.getElementById('fcoze').value='';await loadFileList();toast('已删除 '+name);
+  await loadFileList();toast('已删除 '+name);
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2000);}
 

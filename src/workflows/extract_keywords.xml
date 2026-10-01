@@ -1,4 +1,4 @@
-<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + claim 原子互斥）：kv_cache_claim 按 user_message 原子判定——hit（命中真实值）直接返回；pending（并发方正在提取）→ 等待循环（2s 轮询×90 次）直到对方写回后取走；claimed（本方独占提取权，已原子占位）→ local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。claim 的 check-and-set 在进程级锁内完成——同 hook 双工作流并发时恰一个提取方（旧 read→write-pending 两节点模式有毫秒级双 miss 窗口：双双打本地单并发模型必炸一个，2026-09-13 用户实测修复）；pending 带 150s TTL——提取方死亡后下一 claim 方自动接管（hidden，仅供 subworkflow 引用）" hidden="true">
+<workflow name="extract_keywords" description="关键词提取子工作流（应用级 KV 缓存 + claim 原子互斥）：kv_cache_claim 按 user_message 原子判定——hit（命中真实值）直接返回；pending（并发方正在提取）→ 等待循环（2s 轮询×90 次）直到对方写回后取走；claimed（本方独占提取权，已原子占位）→ local-lfm-vl 提取 3~10 个关键词（纯文本 | 分隔）→ split → 清洗 → 写回缓存。claim 的 check-and-set 在进程级锁内完成——同 hook 双工作流并发时恰一个提取方（旧 read→write-pending 两节点模式有毫秒级双 miss 窗口：双双打本地单并发模型必炸一个，2026-09-13 用户实测修复）；pending 带 150s TTL——提取方死亡后下一 claim 方自动接管（hidden，仅供 subworkflow 引用）" hidden="true" seed_scope="global">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>

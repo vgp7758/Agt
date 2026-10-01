@@ -1675,6 +1675,78 @@ class Session:
         except Exception as e:
             _LOG.warning("invalidate_projection 部分失败（忽略）：%s", e)
 
+    def apply_simple_tiering(self, near_turns: int = 10) -> int:
+        """切模型/异 profile 重启时的简化分层一次定型（用户提案 2026-10-02）。
+
+        全量精确收敛（_plan_fold/_history_tiered_msgs 的迭代 × 每步全量渲染）对新
+        provider 接手性价比低——切模型/换端点必然断前缀缓存，旧形态连续性没有缓存
+        价值。简化一次定型（O(1) 决策 + 极少渲染步）：
+          ① 档1 = 近 near_turns 轮（全量披露窗口）；
+          ② 更早轮每 GRADUATE_FORCE_BATCH(15) 轮一刀升档 → 最老段 raw>max_level
+             自动落入工具折叠档（阶梯中间档自然形成，渲染器原生处理）；
+          ③ 估算超预算（win×ratio）→ 复用应急收敛件：大刀(_fold_leap_target) 1 次 +
+             微调(_next_fold_target) ≤6 步，把最老轮折叠进结构摘要；
+          ④ 结果写入 _planned_fold/_last_fold_count——后续轮以它为起点零调整
+             （_plan_fold 未顶窗路径），byte-stable 从新 provider 第一步重新积累。
+        返回 fold_count。"""
+        if not self.max_effective_context_window:
+            return self._planned_fold
+        n = len(self.turns)
+        target = self.fold_target()
+        prefix = [{"role": "system", "content": self.system}]
+        if self._task_guidance_provider:
+            try:
+                _tg = self._task_guidance_provider()
+                if _tg:
+                    prefix.append({"role": "system", "content": _tg})
+            except Exception:
+                pass
+        if self._ltm_static_provider:
+            try:
+                _b = self._ltm_static_provider()
+                if _b:
+                    prefix.append({"role": "system", "content": _b})
+            except Exception:
+                pass
+        # ① 边界一次铺好（ascending 多重集；new_b 语义与 _graduate_once 对齐）
+        bs: list = []
+        if n > near_turns:
+            b = (n - near_turns) - 1
+            while b >= 0:
+                bs.append(b)
+                b -= GRADUATE_FORCE_BATCH
+            bs.reverse()
+        self._tier_boundaries = bs
+        self._frozen_renders.clear()   # 档位全变 → 冻结渲染必须重算
+        # ② fc：预算判定 + 折半大刀收敛（用户提案 2026-10-02：每次把工具折叠档的
+        #    【一半】折进结构摘要，达标即停；否则对剩余轮数再折半——步数 log2 级，
+        #    单调无震荡，比碎刀微调少一个数量级的渲染次数）
+        _est = lambda k: self._estimate_tokens(prefix + self._render_tiered_history(k))
+        fc = 0
+        cuts = 0
+        hi = max(0, n - near_turns)          # 可折区间 [0, hi)：近窗永不折
+        if _est(0) > target and hi > 0:
+            while cuts < 12:
+                half = max(1, (hi - fc) // 2)
+                fc_try = fc + half
+                cuts += 1
+                if _est(fc_try) <= target:
+                    fc = fc_try              # 这一半已达标——收刀（宁略多折，摘要+recall 兜底）
+                    break
+                fc = fc_try                  # 不达标：这半已进摘要，对剩余再折半
+                if hi - fc < 1:
+                    break                    # 全折仍不达标（极端）：兜底停
+        # ③ 落位（与 _plan_fold 尾段同款：fc 之前的边界是死重，清掉）
+        if fc > 0:
+            self._tier_boundaries = [b for b in self._tier_boundaries if b >= fc]
+        self._planned_fold = fc
+        self._planned_graduates = 0
+        self._last_fold_count = fc
+        self.mark_system_dirty(f"简化分层定型（fc={fc}，档位重排）")
+        _LOG.info("简化分层定型：轮=%d 近窗=%d 边界=%d fc=%d est≈%d/预算%d（折半%d刀）",
+                  n, near_turns, len(self._tier_boundaries), fc, _est(fc), target, cuts)
+        return fc
+
     def _apply_system_ledger(self, msgs: list) -> None:
         """system 段 append-not-replace 后处理（spec s_eb14a8fd；2026-09-12 用户提案；形态 A 修正）。
 
@@ -3343,6 +3415,7 @@ class Session:
             _fp_now = s._profile_fingerprint()
             if data.get("profile_fp") and data.get("profile_fp") != _fp_now:
                 s._system_ledger["dirty"] = True
+                s._simple_pending = True   # 异 profile 重启：load 完成后走简化分层定型（用户提案 2026-10-02）
                 _LOG.info("重启后 profile 变化（存档 %s → 当前 %s）——账本置 dirty，首次投影全量重刷",
                           data.get("profile_fp"), _fp_now)
         except Exception as e:
@@ -3418,6 +3491,12 @@ class Session:
         # 正常路径存档优先——运行期演化的末端密集边界只有存档能保真（recalc-only 曾致折叠螺旋）
         if not s._tier_boundaries:
             s._tier_boundaries = s._recompute_tier_boundaries()
+        if getattr(s, "_simple_pending", False):
+            s._simple_pending = False
+            try:
+                s.apply_simple_tiering()   # 异 profile 重启：简化分层一次定型（用户提案 2026-10-02）
+            except Exception as e:
+                _LOG.warning("简化分层定型失败（忽略，走 _plan_fold 常规路径）：%s", e)
         s._plan_fold()       # 读档即计划（首个投影前 _planned_fold 就绪；turns/boundaries 已恢复）
         return s
 

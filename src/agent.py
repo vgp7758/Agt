@@ -779,6 +779,13 @@ class Agent:
                 # 冻结投影——账本归一化、冻结轮渲染、施工缓冲、图片 vision 门控随新
                 # 模型能力重算。切模型本就断 provider 缓存 → 断点免费清账。
                 self.session.invalidate_projection(f"模型切换→{name}")
+                # 简化分层定型（用户提案 2026-10-02）：新 provider 接手冷启动不做全量
+                # 精确收敛（迭代×全量渲染费时费力且形态连续性无缓存价值）——近10轮=档1、
+                # 更早轮入工具折叠档、超预算部分折进结构摘要，一次定型后 byte-stable 重新积累。
+                try:
+                    self.session.apply_simple_tiering()
+                except Exception as e:
+                    _LOG.warning("简化分层定型失败（忽略，走常规投影）：%s", e)
         except Exception:
             pass
 

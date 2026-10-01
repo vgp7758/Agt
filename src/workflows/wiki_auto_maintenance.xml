@@ -1,4 +1,4 @@
-<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki（攒批队列模式）：值得记录→list_team 查 wiki-updater 忙闲——忙则本轮摘录入 .agent/wiki_queue/pending.jsonl 短路（攒批）；空闲则 pending 全量转 context_messages（结构化历史，投影展开在 wiki-updater 的 user 前一次性消费）派活（reuse+caller=user）→wait(900s)→队列轮转（pending→events 留档）→快照 diff→git_commit。批间上下文即焚不滚雪球" hook="before_answer" hidden="true" async="true">
+<workflow name="wiki_auto_maintenance" description="最终回答前自动维护 wiki（攒批队列模式）：值得记录→list_team 查 wiki-updater 忙闲——忙则本轮摘录入 .agent/wiki_queue/pending.jsonl 短路（攒批）；空闲则 pending 全量转 context_messages（结构化历史，投影展开在 wiki-updater 的 user 前一次性消费）派活（reuse+caller=user）→wait(900s)→队列轮转（pending→events 留档）→快照 diff→git_commit。批间上下文即焚不滚雪球" hook="before_answer" hidden="true" async="true" seed_scope="global">
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string"/>
     <out name="draft_answer" type="string"/>

@@ -1,4 +1,4 @@
-<workflow name="score_rerank" description="相似度+重排子工作流（带降级）：emb_probe 探测 embedding 可用性——可用→cosine_sim 批处理语义打分；不可用→kv_cache_read 拿 query 关键词→kw_score 批处理命中数评分（量纲对齐 0~1）；聚合两路 scores→rerank_topk 取 topk。输出 topk/indices/scores_topk/mode" hidden="true">
+<workflow name="score_rerank" description="相似度+重排子工作流（带降级）：emb_probe 探测 embedding 可用性——可用→cosine_sim 批处理语义打分；不可用→kv_cache_read 拿 query 关键词→kw_score 批处理命中数评分（量纲对齐 0~1）；聚合两路 scores→rerank_topk 取 topk。输出 topk/indices/scores_topk/mode" hidden="true" seed_scope="global">
   <node id="100001" type="start" title="Entry" x="120" y="80">
     <out name="query" type="string" description="查询原文（embedding 路径做 text2；降级路径做 kv_cache key）"/>
     <out name="items" type="list" description="候选文本数组（逐个打分）"/>

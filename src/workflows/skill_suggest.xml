@@ -2,7 +2,7 @@
   <node id="100001" type="start" title="start" x="120" y="80">
     <out name="user_message" type="string" required="true"/>
   </node>
-  <node id="500001" type="code" title="扫技能+全文+短路" x="541" y="138">
+  <node id="500001" type="code" title="扫技能+全文+短路" x="720" y="80">
     <in name="user_message" type="string" ref="100001.user_message"/>
     <code language="3"><![CDATA[import os, json, re
 async def main(args):
@@ -57,14 +57,14 @@ async def main(args):
     <out name="count" type="number"/>
     <batch enabled="false"/>
   </node>
-  <node id="800001" type="intent_nano" title="一级快判(jev·description)" x="825" y="258">
+  <node id="800001" type="intent_nano" title="一级快判(jev·description)" x="1020" y="80">
     <in name="query" type="string" ref="500001.um"/>
     <in name="intents" type="string" ref="500001.descs"/>
     <in name="route" type="boolean">False</in>
     <in name="threshold" type="number">0.5</in>
     <batch enabled="false"/>
   </node>
-  <node id="810001" type="code" title="快判结果" x="1139" y="205">
+  <node id="810001" type="code" title="快判结果" x="1320" y="80">
     <in name="intent" type="string" ref="800001.intent"/>
     <in name="confidence" type="string" ref="800001.confidence"/>
     <in name="skills" type="string" ref="500001.skills"/>
@@ -87,10 +87,10 @@ async def main(args):
     <out name="inject" type="boolean"/>
     <out name="result" type="string"/>
   </node>
-  <node id="700001" type="selector" title="jev命中?" x="1320" y="80">
+  <node id="700001" type="selector" title="jev命中?" x="1620" y="80">
     <branch><cond op="11" left="810001.hit" right="" left_type="boolean"/></branch>
   </node>
-  <node id="870001" type="llm" title="二级复核(LLM·SKILL全文)" x="1669" y="145">
+  <node id="870001" type="llm" title="二级复核(LLM·SKILL全文)" x="1920" y="80">
     <in name="skills" type="string" ref="500001.skills"/>
     <in name="um" type="string" ref="500001.um"/>
     <param name="systemPrompt" type="string"><![CDATA[你是技能调度助手：把用户消息匹配到最合适的本机技能；拿不准就答 NONE。]]></param>
@@ -102,11 +102,11 @@ async def main(args):
 
 判断哪个技能匹配用户消息：只回复该技能的 name（一个单词）；都不匹配回复 NONE。不要任何解释。]]></param>
     <param name="output_format" type="string"><![CDATA[text]]></param>
-    <model>proxy</model>
+    <model>local-lfm-vl</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="880001" type="code" title="二级解析" x="1920" y="80">
+  <node id="880001" type="code" title="二级解析" x="2220" y="80">
     <in name="answer" type="string" ref="870001.output"/>
     <in name="skills" type="string" ref="500001.skills"/>
     <code language="3"><![CDATA[async def main(args):
@@ -126,7 +126,7 @@ async def main(args):
     <out name="result" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="990001" type="code" title="合并" x="2220" y="80">
+  <node id="990001" type="code" title="合并" x="2520" y="80">
     <in name="f_inj" type="string" ref="810001.inject"/>
     <in name="f_res" type="string" ref="810001.result"/>
     <in name="s_inj" type="string" ref="880001.inject"/>
@@ -140,12 +140,12 @@ async def main(args):
     <out name="result" type="string"/>
     <batch enabled="false"/>
   </node>
-  <node id="900001" type="end" title="end" x="2520" y="80">
+  <node id="900001" type="end" title="end" x="2820" y="80">
     <out name="inject" ref="990001.inject" type="string"/>
     <out name="result" ref="990001.result" type="string"/>
   </node>
-  <node id="829475" type="selector" title="shot_msg?" x="1555.7625248065783" y="482.2755017045026">
-    <branch><cond op="16" left="100001.user_message.length" right="4" left_type="integer" right_type="integer"/></branch>
+  <node id="829475" type="selector" title="shot_msg?" x="420" y="80">
+    <branch><cond op="13" left="100001.user_message.length" right="4" left_type="integer" right_type="integer"/></branch>
   </node>
   <edge from="500001" to="800001"/>
   <edge from="800001" to="810001"/>

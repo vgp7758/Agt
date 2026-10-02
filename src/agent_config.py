@@ -354,6 +354,44 @@ def _func_bg_services() -> str:
     return ("【后台服务状态】当前服务：\n" + "\n".join(svc)) if svc else ""
 
 
+def _func_git_diff() -> str:
+    """{func:git_diff()} —— 工作区未提交改动注入（git diff HEAD + untracked 清单，8K 截断）。
+    用户提案 2026-10-02（Claude Code 同款环境感知）：模型无需 read_file 即知相对上次提交
+    改了什么。非 git repo / 工作区干净 → 空（内插空判：整段不注入，不占 token）。"""
+    try:
+        import subprocess
+        from pathlib import Path
+
+        ws = Path.cwd()
+
+        def _sh(*a, t=15):
+            return subprocess.run(["git", *a], cwd=ws, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=t)
+
+        if _sh("rev-parse", "--is-inside-work-tree").returncode != 0:
+            return ""                      # 非 git 仓库 → 不注入
+        lines = [l for l in (_sh("status", "--porcelain").stdout or "").splitlines() if l.strip()]
+        if not lines:
+            return ""                      # 工作区干净（与 HEAD 无差异）→ 不注入
+        untracked = [l[3:].strip() for l in lines if l.startswith("??")]
+        stat = _sh("diff", "HEAD", "--stat").stdout.strip()
+        body = _sh("diff", "HEAD").stdout or ""
+        cut = ""
+        if len(body) > 8000:               # 长期未提交的兜底：截断 + 自取指引
+            body = body[:8000]
+            cut = "\n…（diff 超限截断；完整 diff 可 run_shell: git diff HEAD）"
+        parts = ["【工作区未提交改动（vs HEAD）】"]
+        if stat:
+            parts.append(stat)
+        if untracked:
+            parts.append("未跟踪新文件（无 HEAD 基线，diff 不含）：\n"
+                         + "\n".join("  " + u for u in untracked[:30]))
+        parts.append(body + cut)
+        return "\n".join(p for p in parts if p.strip())
+    except Exception as e:
+        return f"【git-diff】读取失败：{e}"
+
+
 FUNC_REGISTRY = {
     "load_models": _func_load_models,
     "load_workflows": _func_load_workflows,
@@ -368,6 +406,7 @@ FUNC_REGISTRY = {
     "plan_content": _func_plan_content,
     "plan_steps": _func_plan_steps,
     "bg_services": _func_bg_services,
+    "git_diff": _func_git_diff,
 }
 
 

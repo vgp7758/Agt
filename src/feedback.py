@@ -6,7 +6,8 @@
   - enabled=false 时只落盘不上报（隐私可关，用户在 ~/.agt/feedback.json 改）
 
 与 download.py 对称：纯函数 + 命令/工具/前端共用。
-配置在 ~/.agt/feedback.json：{webhook_url, enabled}。webhook_url 留空则用随包 DEFAULT_WEBHOOK_URL。
+配置在 ~/.agt/feedback.json：{webhook_url, enabled}。随包【不内置】URL（防扫描器滥用）——
+作者在本机配置自己的 webhook_url，其它机器默认静默只落盘。
 """
 from __future__ import annotations
 
@@ -24,10 +25,12 @@ from paths import AGT_DIR as _AGT_DIR
 _FEEDBACK_DIR = _AGT_DIR / "feedback"
 _FEEDBACK_CONFIG = _AGT_DIR / "feedback.json"
 
-# 作者的飞书 incoming webhook（随包默认）。用户可在 ~/.agt/feedback.json 覆盖或 enabled:false 关闭。
-# 发布前填入自己的飞书机器人 webhook：
-#   https://open.feishu.cn → 自建应用 → 添加「机器人」→ 复制 webhook 地址
-DEFAULT_WEBHOOK_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/b2eb1a8e-3311-4cb3-b13c-3943837366b0"
+# 作者的飞书 incoming webhook：【不再随包内置】（2026-10-02 用户裁定）——
+# wheel 是公开分发的，内置 URL 等于把作者收件箱挂成公开留言板：供应链 fuzz 扫描器
+# 订阅 PyPI 新版本 → 沙箱跑包 → 命中 /feedback 即探测到外发通道，每次发布都被骚扰
+# （t625 首次发现，t13176 二次进化绕过启发式）。现在：作者在本机 ~/.agt/feedback.json
+# 配置自己的 webhook_url（enabled:true），其它机器默认静默只落盘。
+DEFAULT_WEBHOOK_URL = ""
 
 # 作者联系方式（反馈流程里展示给用户，方便深入交流）。留空项不显示。
 # 发布前填入：让用户提完反馈知道怎么直接找你（群/微信/邮箱/GitHub）。
@@ -54,13 +57,21 @@ _KIND_EMOJI = {"bug": "🐞", "建议": "💡", "问题": "❓", "赞美": "❤�
 
 
 def _agent_version() -> str:
-    """读 src/__init__.py 的 __version__（文件解析，不依赖 import 机制，和 download 读 manifest 同思路）。"""
+    """版本解析（文件解析不依赖 import 机制，和 download 读 manifest 同思路）：
+    优先 __init__.py 显式 __version__="x.y.z"；版本真源迁 paths.py 后 __init__ 是
+    re-import 形态（`from paths import VERSION as __version__`）→ 回落解析 paths.py
+    的 VERSION 常量。都失败返回 "unknown"（沙箱环境的探针信号之一）。"""
     try:
-        init = Path(__file__).resolve().parent / "__init__.py"
-        for line in init.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if s.startswith("__version__") and "=" in s:
-                return s.split("=", 1)[1].strip().strip('"').strip("'")
+        pkg = Path(__file__).resolve().parent
+        import re as _re
+        m = _re.search(r'__version__\s*=\s*["\']([^"\']+)',
+                       (pkg / "__init__.py").read_text(encoding="utf-8", errors="replace"))
+        if m:
+            return m.group(1)
+        m = _re.search(r'^VERSION\s*=\s*["\']([^"\']+)',
+                       (pkg / "paths.py").read_text(encoding="utf-8", errors="replace"), _re.M)
+        if m:
+            return m.group(1)
     except Exception:
         pass
     return "unknown"
@@ -165,21 +176,22 @@ def _post_feishu(webhook_url: str, payload: dict) -> tuple[bool, str]:
 
 
 def _looks_like_probe(content: str, contact: str) -> bool:
-    """疑似自动化扫描器探针（PyPI 新版本会触发批量 fuzz——实测 gvisor 沙箱跑 agt
-    调 /feedback /tmp/pp-fuzz/probe 探测外发通道，飞书每次发布后被骚扰）：
-    无空格纯路径 / 超短无语义 + 未留联系方式 → 判探针。保守：留了联系方式或
-    含空格/非路径文本一律当真人（误伤也只是不推送，本地仍落盘）。"""
+    """疑似自动化扫描器探针（供应链 fuzz：订阅 PyPI 新版本 → gvisor 沙箱跑包 →
+    命中 /feedback 探测外发通道，飞书每次发布后被骚扰）。
+    判据（2026-10-02 强化——扫描器二次进化填 "name" 4 字符单词绕过了旧 len<4 规则）：
+    留联系方式 → 真人；含空格 → 真人（英文句子必空格分词）；含 CJK → 真人
+    （中文反馈无空格是常态）；其余（无空格纯 ASCII：单词/路径/hash）→ 探针。
+    保守取舍：误伤真人也只是不推送，本地仍落盘。"""
     c = (content or "").strip()
     if (contact or "").strip():
         return False
     if not c:
         return True
     if " " in c:
-        return False                  # 有空格 = 有语义句子 → 真人
-    if "/" in c:
-        return True                   # 无空格含 / = 纯路径探针（真人谈路径一般带说明文字）
-    # 无路径无空格：ASCII 超短碎片拦（机器人特征）；中文短反馈（"很好用"）放行
-    return len(c) < 4 and not any("\u4e00" <= ch <= "\u9fff" for ch in c)
+        return False
+    if any("\u4e00" <= ch <= "\u9fff" for ch in c):
+        return False
+    return True
 
 
 def submit_feedback(kind: str, content: str, contact: str = "",

@@ -35,7 +35,7 @@ agt-web      # WebUI → http://localhost:8000
 | **Agentic RAG** | 工作流设 `auto:true`，消息自动预取注入 |
 | **批处理** | 任意节点对数组逐元素执行，输出 all/filtered/nth |
 | **随包资产** | `/download` 按需取用内置工作流 / MCP / 脚本 |
-| **反馈通道** | `/feedback` 一键提交，直达作者（飞书实时推送） |
+| **反馈通道** | `/feedback` 一键提交（本地存档） + GitHub Issues |
 
 ---
 
@@ -166,17 +166,11 @@ pip install -e .
 
 ## 反馈与联系
 
-用着顺手、遇到 bug、或有想法，都欢迎反馈 —— **提交即直达作者手机**：
+用着顺手、遇到 bug、或有想法，都欢迎反馈：
 
-- **WebUI**：顶栏「💬 反馈」按钮 → 类型 / 内容 / 联系方式 → 提交
-- **CLI**：`/feedback [类型] <内容>`（类型 `bug` / `建议` / `问题` / `赞美`，省略默认「建议」）
-
-  ```
-  /feedback bug 工作流调试页白屏
-  /feedback 希望支持 Mermaid 图渲染
-  ```
-
-反馈本地保存并实时推送到作者，可勾选附上环境信息（版本 / 模型 / 系统）便于定位问题。
+- **GitHub Issues**（推荐，公开可追踪）：[提一个 Issue](https://github.com/vgp7758/Agt/issues)
+- **WebUI**：顶栏「💬 反馈」按钮 → 类型 / 内容 / 联系方式 → 提交（存档 `~/.agt/feedback/`）
+- **CLI**：`/feedback [类型] <内容>`
 
 **联系作者**：微信 `mrbrick123` · 邮箱 `vgp123@foxmail.com` · GitHub [@vgp7758](https://github.com/vgp7758) · [Issues](https://github.com/vgp7758/Agt/issues)
 

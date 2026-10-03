@@ -2712,6 +2712,9 @@ def _materialize_user_images(images) -> str:
         fn = f"user_{int(time.time())}_{i}.{ext}"
         try:
             (out_dir / fn).write_bytes(_b64.b64decode(m.group(2)))
+            # <img> 标签形态（用户裁定 2026-10-03：插话原生看图）：投影层 _project_imgs
+            # 按当前模型 vision 门控展开——视觉模型直接 image_url 块看像素、非视觉模型
+            # 才降级文字占位（旧的固定"无视觉能力"文案对视觉模型是误导）。
             tags.append(f"<img>{fn}</img>")
         except Exception:
             pass

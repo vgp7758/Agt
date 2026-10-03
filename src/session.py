@@ -1258,7 +1258,8 @@ class Session:
         快照文本在此一次定型——append 后字节冻结，后续文件变化/步数增长均不影响已定型的块。"""
         msgs: list[dict] = []
         if step.preceding_hint:
-            msgs.append({"role": "user", "content": _MIDTURN_TAG + step.preceding_hint})
+            # 插话原生看图（2026-10-03）：hint 内 <img> 标签按 vision 门控展开（无标签时原样 str，byte-stable 不破坏）
+            msgs.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + step.preceding_hint)})
         if not step.tool_calls:
             return msgs
         a_tool_calls = []
@@ -1355,7 +1356,7 @@ class Session:
                                                full_window=RECENT_FULL_STEPS))
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
-            out.append({"role": "user", "content": _MIDTURN_TAG + _psh})
+            out.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + _psh)})
         return out
 
     def _seg_msgs_recent_file(self) -> list[dict]:
@@ -2988,7 +2989,7 @@ class Session:
                 continue
             # 本步之前的"用户中途补充"（user 角色，带标签）：插在上一组 tool 结果之后、本步 assistant 之前
             if step.preceding_hint:
-                msgs.append({"role": "user", "content": _MIDTURN_TAG + step.preceding_hint})
+                msgs.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + step.preceding_hint)})
             group_diff = cur_group - (idx // GROUP_STEPS)   # 本步组与当前组的组号差（0=同组）
             if group_diff <= 1 and base is None:
                 full = True        # 当前轮：当前组 + 上一组全量

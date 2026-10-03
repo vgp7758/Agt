@@ -109,6 +109,12 @@
 
 **关联**：[vision 门控投影](#图片按视觉能力门控投影非视觉模型投影时即降文字占位2026-09-30commit-3591683随-v03011)（基建来源，`Turn.images` 通道）· [端点拒图自愈](llm-network-resilience.md)（响应侧兜底）· [用户交互 · 插话](user-interaction.md)（插话队列与步边界注入）
 
+### 实战翻车：`<img>` 发 vision 子 Agent 三占位全「读取失败」（2026-10）
+
+**现象**（2026-10 求职视频校验实战，机制上线后首次真用即翻车）：主 Agent 给 vision 子 Agent 的任务文本带三个 `<img>probe_qN.png</img>` 占位（视频抽帧图），对方展开时**全部报「读取失败」**、未看到像素，改用 YuNet 人脸检测 + 像素统计兜底完成校验（全过程见 [job-hunt · 视频校验管线](job-hunt.md)）。
+
+**根因**未程序化实锤，但与上节验证插曲的契约完全吻合：**`<img>` 展开只认 `repo_images_dir()` 落盘位置**——抽帧产物当时落在 workspace 根（`D:\AI_Usings\Agt\probe_q1.png`），投影解析端按 `repo_images_dir` 真源找不到文件。教训：**给子 Agent 发 `<img>` 前，图必须先落 `repo_images_dir()`**；工具产物默认落 workspace 根 ≠ 契约位置。
+
 ## 排障速查
 
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）

@@ -4,5 +4,5 @@
 
 ## 快速事实增补（2026-10 · 求职投递管线启动：岗位雷达 + playwright 代投 + 邮件互动通道）
 
-- **求职投递管线启动（2026-10，用户委托）**：用户把「投递 + 与招聘方邮件互动」全权委托给 Agent，只在真有机会时出面细聊。四件套已就位：①岗位雷达 job-radar 每 2h 巡逻 + 邮件通知（首批 162 条 → 地理过滤后 158 条对中国候选人可行）；②IMAP 读信通道验证通过（代管邮件互动的前提）；③英文投递 playwright 代投——Tether 90% 卡在 3 个必填**视频题**（DOM 无文本替代通道，逐字稿已备好，等用户自录或跳过），Enveritas 为下一目标；④英文简历 `resume_en.docx` 定稿并复制进 workspace。详情与待办见 [job-hunt](features/job-hunt.md)
+- **求职投递管线（2026-10，用户委托）**：用户把「投递 + 与招聘方邮件互动」全权委托给 Agent，只在真有机会时出面细聊。进展：①**首封已投**——Enveritas（Python 后端 $135-155k Worldwide）官方邮箱直投 jobs@enveritas.org（resume_en.docx + 个性化 cover letter），IMAP 盯 bounce 中；②**Tether 视频题攻坚完成**——用户照逐字稿自录三段（53s/54s/51s，首录即控时），经 ffmpeg 校验 + 抽帧 + YuNet 人脸检测兜底（`<img>` 发 vision 注入失败）+ 720p 压缩（100MB→2.2MB），Ziggeo 上传转码全 READY，**唯一卡点剩 Send 前组件状态机**（逐题 Trim/Skip 确认）；③岗位雷达每 2h 巡逻（162→158 条地理过滤后可行）；④IMAP 读信通道已验证，回复跟踪待挂。详情见 [job-hunt](features/job-hunt.md)
 

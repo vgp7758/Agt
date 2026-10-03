@@ -45,16 +45,17 @@
 
 **出镜质量校验的兜底**：vision 子 Agent 侧 `<img>` 插话注入失败（三占位均报「读取失败」，未看到像素，根因见 [image-input · 实战翻车](image-input.md)）——当轮改**程序化检测**：YuNet 人脸检测（yunet.onnx）+ 亮度/相关性像素统计，结论三段均有人出镜（conf 0.88-0.92）、同人同场景大特写、光线良好、无遮挡。该兜底不依赖看图通道，可复用。
 
-**卫生纪律**：探针产物（probe_*.png / _face_check.py / yunet.onnx / 表单状态截图）用完即清；workspace 只留投递仍要用的材料（三段视频副本保留——Tether 提交可能还用）。
+**卫生纪律**：探针产物（probe_*.png / _face_check.py / yunet.onnx / 表单状态截图）用完即清；投递材料同样不常驻 workspace——2026-10 随 v0.31.3 发版清场后已全部撤出（三段视频 + 简历副本均删，正本收口 `D:\AI_Usings\resume\`，见 [物料](#物料)），此后用前临时复制、用完即清。
 
 ## 物料
 
 | 物料 | 位置 | 状态 |
 |---|---|---|
-| 英文简历 | `D:\AI_Usings\Agt\resume_en.docx`（源：`D:\AI_Usings\resume\resume_en.docx`，已复制进 workspace） | 用户已确认定稿 ✓ |
+| 英文简历 | `D:\AI_Usings\resume\resume_en.docx`（workspace 副本已删，见下清场后记） | 用户已确认定稿 ✓ |
 | Cover letters 首批两封 | `D:\AI_Usings\resume\cover_letters_batch1.md` | Enveritas + Tether ✓ |
+| Tether 三段视频 | Ziggeo 服务端（转码 READY ✓）；本地正本 `D:\AI_Usings\resume\`（720p 压缩件） | 已上传 ✓ |
 
-简历复制进 Agt workspace 的意义：投递管线（playwright 上传附件）可直接从 workspace 取文件，不必跨盘找源。
+**清场后记（2026-10，随 v0.31.3 发版）**：workspace 根目录的投递产物副本（`resume_en.docx` + 三段 `tether_q*.mp4`）已全部删除——发版打包不应携带投递二进制，清完发版 commit 只剩版本号一行（见 [v0.31.3 发布记录](../releases/v0.31.3.md)）。早前「简历复制进 workspace 供 playwright 取件」的做法随之退役：投递脚本改为**用前临时从 `D:\AI_Usings\resume\` 复制、用完即清**，与探针产物同一卫生纪律口径。
 
 ## 待办
 

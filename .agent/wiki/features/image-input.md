@@ -1,6 +1,6 @@
 # 图片输入链路 · WebUI 贴图 → 视觉 API
 
-> src/static/index.html（readAsDataURL + WS）+ src/server.py（解析 / 落盘 / 传参）+ src/chat.py（`_merge_batch` 第四返回值）+ src/session.py（`Turn.images` + 投影 `image_url` 块 + 格式规范化）。2026-09-29 两轮（commits `d13adca` v0.30.5 / `e2c0b24` v0.30.6）。
+> src/static/index.html（readAsDataURL + WS）+ src/server.py（解析 / 落盘 / 传参）+ src/chat.py（`_merge_batch` 第四返回值）+ src/session.py（`Turn.images` + 投影 `image_url` 块 + 格式规范化 + 插话 `<img>` 标签门控展开）。2026-09-29 两轮（commits `d13adca` v0.30.5 / `e2c0b24` v0.30.6）；2026-10-03 插话原生看图（commit `e5398f2`）。
 
 ## 全链路
 
@@ -13,14 +13,14 @@
    │     → agent.run(user_msg, images=_batch_imgs)             【原生多模态通道】
    │     → session Turn.images → 投影 image_url 块
    └─ 忙碌（busy 插话）→ agent.queue_user_message(text + _materialize_user_images(images))
-         data URL 落盘 repo `images/`，文本追加
-         「 [图片 <文件名>，你无法直接查看；如需理解其内容请委托视觉子 agent：
-            agent_prompt("vision", "请描述 <img>文件名</img> 的内容")]」
+         data URL 落盘 repo images/，文本嵌 <img>文件名</img> 标签（2026-10-03 起）
+         → 步边界注入〔用户中途补充〕user 消息
+         → 投影时 _project_imgs 按 vision 门控展开（见下节「插话原生看图」）
 [投影] session `_user_content` / `_project_imgs`
    → {"type":"image_url","image_url":{"url": _norm_img_data_url(data_url)}}
 ```
 
-两条通道的分工是关键：**空闲新轮走原生多模态**（投影构造 `image_url` 块）；**插话走纯文本注入**（图片只能落盘 + `<img>` 引用，理解交给 vision 子 Agent）。
+两条通道殊途同归（2026-10-03 起）：**空闲新轮走原生多模态**（`Turn.images` 直投 `image_url` 块）；**busy 插话经 `<img>` 标签 + 投影门控展开**——视觉模型同样直接看图，不再强制委托 vision 子 Agent 中转（历史形态曾是纯文本注入 + 固定「无视觉能力」文案，见下节）。
 
 ## 图片格式规范化 `_norm_img_data_url`（2026-09-29，commit `d13adca`，v0.30.5）
 
@@ -80,12 +80,41 @@
 
 **双层分工**：门控挡在投影侧（事前，正常路径零请求浪费）；自愈兜在响应侧（事后，覆盖门控拦不住的形态——如卡片 vision 位置信、端点收图但格式拒）。两者同批随 v0.30.11 发布，自愈侧细节见 [LLM 客户端韧性 · 端点拒图自愈](llm-network-resilience.md)。
 
+## 插话原生看图：`<img>` 标签按 vision 门控展开（2026-10-03，用户裁定，commit `e5398f2`）
+
+**动机**：2026-09-29 插话丢图修复（`e2c0b24` ③）的形态是**纯文本注入**——图片落盘后插话文本追加固定文案「[图片 xxx，当前模型无视觉能力无法查看…请委托视觉子 agent]」。这条文案对**视觉模型是误导**：当前模型明明能看图（如 glm），却被声明"无法查看"，想看一张插话里的截图还得派 vision 子 Agent 中转。用户裁定（2026-10-03）：**插话原生看图**——按当前模型 vision 门控展开，与原生贴图（`agent.run(images=)`）同语义。
+
+**机制**（最小改动，复用 `3591683` 的 vision 门控基建，四处接线）：
+
+| 位置 | 改动 |
+|---|---|
+| src/server.py `_materialize_user_images`（L2713 起） | 固定误导文案 → append `<img>文件名</img>` 标签（纯标记，不带任何能力断言，能力判断交给投影层） |
+| src/session.py 当前轮 steps 注入位（L1260） | `preceding_hint` → `self._project_imgs(_MIDTURN_TAG + hint)` |
+| src/session.py pending hint 注入位（L1357） | `_pending_step_hint` 同款包裹 |
+| src/session.py 历史档滚入（L2989） | 同款包裹——插话的图滚入历史后**依然按门控展开**，与 `Turn.images` 通道历史行为一致 |
+
+**三态门控**（`_project_imgs` 对插话文本内的 `<img>` 标签）：
+
+| 模型 | 展开形态 |
+|---|---|
+| 视觉模型 | `[text 块 + image_url 块]`——读盘转 data URL，模型当步直接看像素 |
+| 非视觉模型 | 文字占位（提示可委托 vision 子 Agent） |
+| 插话无 `<img>` 标签 | **原样 str，byte-stable**——不带图的插话投影逐字节不变，缓存前缀零扰动 |
+
+**验证**（五通道全绿，真 1×1 png 探针）：`_project_imgs` 三态直测 ✓ / 当前轮 steps 通道 ✓ / pending hint 通道 ✓ / 历史档通道 ✓ / byte-stable ✓。插曲：探针图须落 `repo_images_dir()`（与 server `_materialize_user_images` 同目录），放 repo 根 `images/` 会 FAIL——**落盘位置是投影解析的契约**，两端必须同一 `repo_images_dir` 真源。
+
+**生效方式**：引擎层两文件（server.py / session.py），需 `/restart`。
+
+**同批顺带**：`_aid` 缩进断裂（三天潜伏 bug，用户实际使用撞出）修复一并推送。
+
+**关联**：[vision 门控投影](#图片按视觉能力门控投影非视觉模型投影时即降文字占位2026-09-30commit-3591683随-v03011)（基建来源，`Turn.images` 通道）· [端点拒图自愈](llm-network-resilience.md)（响应侧兜底）· [用户交互 · 插话](user-interaction.md)（插话队列与步边界注入）
+
 ## 排障速查
 
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）
 - `image data N failed: invalid image data` —— base64 损坏或超尺寸上限
 - `1210 messages.content.type 参数非法，取值范围 ['text']` —— **端点不收图**（glm-5.3 等 chat completions 无视觉通道，视觉是 glm-4v/4.5v 系的活）；< 0.30.10 且卡片 vision 卡错时每轮 400，升级后自愈（拒图自动降级：图降文字占位同模型重试，见上节）
-- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② 走的是 busy 插话路径（图变 `<img>` 引用，须委托 vision 子 Agent 看）
+- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（视觉模型 2026-10-03 起原生看图，见上上节；此前一律须委托 vision 子 Agent）
 - 本地模型（llama-server）不走 provider 白名单校验，但同样受 2048 边长经验约束
 
 ## 相关页面

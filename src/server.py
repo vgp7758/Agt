@@ -113,6 +113,12 @@ def _broadcast(ev: dict):
     if loop is None:
         return
     aid = str(ev.get("agent_id") or "")
+    # answer 已发 = 对用户而言本轮完成（用户实测 2026-10-03：answer 气泡出来后秒发的
+    # "做"被 busy 误判成插话滞留成〔用户中途补充〕）：answer 后的收尾期（wrap_up/turn_end
+    # 钩子/落盘，秒级窗口）里跟进的消息应走 work_q 开新轮（worker 串行，收尾完自动消费，
+    # 无并发风险）——busy 判定据此放宽（chat.py run 开始时清 answered）。
+    if _state is not None and ev.get("type") in ("answer", "wrap_answer") and aid in ("", "_main_"):
+        _state["answered"] = True
     for c in _clients:
         if aid and c.get("target", "_main_") != aid:
             # answer 特例：同步工具型子 Agent 的回应需要进主视图的
@@ -2678,7 +2684,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     if _work_q is None:
         await _send(ws, {"type": "system", "text": "⚠️ 服务未接入主循环（work_q 缺失）"})
         return
-    if _state is not None and _state.get("busy"):
+    if _state is not None and _state.get("busy") and not _state.get("answered"):
         # Agent 正在跑：入 pending_messages，本步边界注入，不另起下一轮
         # （附图落盘 + <img> 标签进文本——插话走纯文本注入通道，2026-09-29）
         agent.queue_user_message(text + _materialize_user_images(images))

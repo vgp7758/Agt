@@ -396,6 +396,7 @@ def _worker(agent, work_q, registry, state):
             state["kind"] = kind
             state["started"] = time.time()
             state["busy"] = True
+            state["answered"] = False   # answer 后收尾期不再误判插话（server._broadcast 置 True）
             try:
                 if kind == "task":
                     # task（工作流调试/RAG 建库）单独跑，不合并

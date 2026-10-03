@@ -7,12 +7,12 @@
 用户反馈提交（CLI / WebUI / Agent 三入口共用，与 download.py 对称：纯函数 + 命令/工具/前端共用）：
 
 1. **本地落盘（永远做）**：`~/.agt/feedback/<时间戳>_<类型>.json`——兜底，绝不丢
-2. **飞书 webhook 推送（可选）**：webhook 启用且配了 URL 时，组装交互卡片 POST 推送，实时到作者手机
+2. **飞书 webhook 推送（可选）**：webhook 启用且配了 URL 时，组装交互卡片 POST 推送（v0.31.2 起随包默认 URL 已撤，需用户自配才推送）
 3. **探针过滤（2026-09 新增）**：推送前判 `_looks_like_probe`，疑似自动化扫描器探针只落盘不推送（详见下文）
 
 ## 配置
 
-- `~/.agt/feedback.json`：`{webhook_url, enabled}`；`webhook_url` 留空用随包 `DEFAULT_WEBHOOK_URL`（作者飞书 incoming 机器人）；`enabled: false` 只落盘不上报（隐私可关）
+- `~/.agt/feedback.json`：`{webhook_url, enabled}`；**随包 `DEFAULT_WEBHOOK_URL` 已撤（v0.31.2）**——`webhook_url` 留空 = 只落盘不推送，要推送需用户自行配置 webhook URL；`enabled: false` 只落盘不上报（隐私可关）
 - `AUTHOR_CONTACT`：作者联系方式（微信/邮箱/GitHub），`author_contact_str()` 拼接后附在反馈成功文案尾部，方便用户后续直接联系
 
 ## 关键函数
@@ -75,9 +75,15 @@ def _looks_like_probe(content: str, contact: str) -> bool:
 - **闭环的讽刺**：下次发版 → 扫描器拉新版探测 → 新版自带过滤把它拦了——发版触发的骚扰，被发出去的版本自己治好
 - 作者侧无需清理：本机 `~/.agt/feedback/` 只有 7 月联调的 5 条，探针落盘都在扫描器自己的一次性沙箱里
 
+## 随包 webhook 撤销（v0.31.2）+ README 反馈章节诚实化（2026-10-03）
+
+- **随包 `DEFAULT_WEBHOOK_URL` 撤销（v0.31.2）**：反馈默认行为收敛为「只落盘」——不再默认 POST 到作者飞书；探针骚扰源头 + 用户数据默认外发两条顾虑一并消掉。上节探针过滤保留为纵深防御（用户自配 webhook 时仍有意义）
+- **README 反馈章节改版（2026-10-03，awesome-openrouter PR #132 复盘顺手修）**：撤掉过时承诺「提交即直达作者手机（飞书实时推送）」——随包 webhook 撤销后该宣传已不成立；**GitHub Issues 置顶为推荐通道**（公开可追踪），WebUI 💬 / CLI `/feedback` 保留为本地存档通道，作者联系方式（微信 `mrbrick123` / 邮箱 `vgp123@foxmail.com` / GitHub Issues）明列；README 特性表「反馈通道」行同步改写
+- 定位：本地 `/feedback` = 匿名快速存档（永远不丢），Issues = 公开反馈与追踪——互补关系。背景与渠道策略见 [项目推广与冷启动](../guides/promotion.md)
+
 ## 注意事项
 
-- `webhook_url` 随包默认指向作者飞书机器人——**这是探针能骚扰到作者的原因**；用户可在 `~/.agt/feedback.json` 覆盖或关 `enabled`
+- 随包默认 webhook 已撤（v0.31.2）——探针骚扰到作者的源头已从包内移除；用户若自行配置 webhook，可在 `~/.agt/feedback.json` 覆盖 URL 或关 `enabled`
 - 推送失败不抛错：返回文案带失败原因（HTTP code / 异常类型），数据已落盘
 - 探针判定永不丢数据：只拦推送链路，落盘在前、判定在后
 

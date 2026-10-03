@@ -280,13 +280,20 @@ async def api_asset(path: str = ""):
     安全约束：相对 workspace 根解析 + resolve 后必须仍在 workspace 内（防路径穿越/任意文件泄露）；
     media_type 按扩展名（图/音/文）；后缀未识别时读文件头 magic bytes 嗅探兜底（用户提案
     2026-09-09——无扩展名/冷门扩展的图片视频也能在新页签被浏览器正确渲染，而非触发下载）。"""
-    import mimetypes
-    if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
-        return HTMLResponse("not found", status_code=404)
+    import mimetypes, re as _re
+    # 绝对路径放行（用户实测 2026-10-04：Agent 引用 workspace 外完整路径渲染为"文件不存在"）：
+    # 读侧与 read_file/diff_files 的越界读同语义（t1195：读放行、写拦截）——本地 WebUI 场景，
+    # 仅限盘上真实存在文件的可读响应，不列目录不写。UNC（\\server\share）同样属绝对路径。
+    _is_abs = bool(_re.match(r"^[A-Za-z]:[\\/]", path) or path.startswith("\\\\"))
     base = Path(_workspace).resolve()
     try:
-        p = (base / path).resolve()
-        p.relative_to(base)   # 越界抛 ValueError
+        if _is_abs:
+            p = Path(path).resolve()
+        else:
+            if path.startswith("/") or ".." in path.replace("\\", "/").split("/"):
+                return HTMLResponse("not found", status_code=404)
+            p = (base / path).resolve()
+            p.relative_to(base)   # 越界抛 ValueError
     except (ValueError, OSError):
         return HTMLResponse("not found", status_code=404)
     if not p.is_file():
@@ -359,12 +366,19 @@ async def api_file_kind(path: str = ""):
     """后缀未识别文件的类型嗅探（前端渲染方式判定，用户提案 2026-09-09）：
     {kind: image/audio/text/binary, encoding}。text 带编码（utf-8/gbk/utf-16…）——
     预览抽屉用 TextDecoder 按此解码，避免 gbk 文本乱码。安全约束同 /api/asset。"""
-    if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
-        return {"error": "bad path"}
+    import re as _re
+    # 绝对路径放行（与 /api/asset 同步，2026-10-04）：盘符/UNC → 直接 resolve；
+    # 相对路径仍限 workspace 内（防穿越）。
+    _is_abs = bool(_re.match(r"^[A-Za-z]:[\\/]", path) or path.startswith("\\\\"))
     base = Path(_workspace).resolve()
     try:
-        p = (base / path).resolve()
-        p.relative_to(base)
+        if _is_abs:
+            p = Path(path).resolve()
+        else:
+            if not path or path.startswith("/") or ".." in path.replace("\\", "/").split("/"):
+                return {"error": "bad path"}
+            p = (base / path).resolve()
+            p.relative_to(base)
     except (ValueError, OSError):
         return {"error": "bad path"}
     if not p.is_file():

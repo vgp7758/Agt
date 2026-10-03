@@ -375,6 +375,10 @@ def _func_git_diff() -> str:
             return ""                      # 工作区干净（与 HEAD 无差异）→ 不注入
         untracked = [l[3:].strip() for l in lines if l.startswith("??")]
         stat = _sh("diff", "HEAD", "--stat").stdout.strip()
+        stat_lines = stat.splitlines()
+        if len(stat_lines) > 40:           # 文件数爆炸兜底（批量重排/生成代码场景）：折统计行
+            stat = ("\n".join(stat_lines[:40])
+                    + f"\n…（还有 {len(stat_lines) - 41} 个文件的统计行已省略）\n{stat_lines[-1]}")
         body = _sh("diff", "HEAD").stdout or ""
         cut = ""
         if len(body) > 8000:               # 长期未提交的兜底：截断 + 自取指引

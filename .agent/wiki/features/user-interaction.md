@@ -379,6 +379,40 @@ if item:
 | ⑤⑥ | answer 后插话滞留队列、不触发下一轮 | 🔴 核心引擎 bug，已修（本节 pending_messages 兜底） |
 | ⑦⑧ | 下条消息发出后旧插话才被注入 | ⑤ 的直接后果，随 ⑤ 闭环 |
 
+## busy 误判插话修复：answer 后收尾期秒跟进开新轮（2026-10-03，用户实锤，commit 3e0714a）
+
+**现象**：answer 气泡已经出来（对用户而言本轮已结束），紧接着发的「做」却被判成插话——UI 提示「📥 已排队」，消息滞留插话队列，直到下一轮开新轮才以〔用户中途补充〕降级注入。用户疑问：「结束了我才发的，为啥发的时候判定为 busy？」
+
+**根因——busy 标志的生命周期缺口**：`state["busy"]` 在 `_worker` 从 work_q 取任务时置 True、`agent.run()` **完全返回**后的 finally 才清 False；但 `answer` 事件发出 ≠ run 返回——中间还有**秒级收尾窗口**：
+
+```
+answer 事件（气泡出来，用户视角 = 轮已结束）
+  → ① wrap_up（finish_turn 轮归档 + autosave 落盘）
+  → ② turn_end 钩子（本轮正是 wiki_auto_maintenance 派活了 wiki-updater_9）
+  → ③ events flush + _done 事件
+  → run() 返回 → finally: busy=False
+```
+
+用户在此窗口发消息 → server 查 `busy=True` → 误判插话；而上一轮已无下一步边界可注入 → 滞留成〔用户中途补充〕。
+
+**修复——`answered` 标志三处接线**（commit 3e0714a）：
+
+| 处 | 改动 |
+|---|---|
+| src/server.py `_broadcast` | 主 Agent 的 `answer`/`wrap_answer` 事件广播时置 `_state["answered"]=True`——**agent_id 过滤**（`aid in ("", "_main_")`），子 Agent 的 answer（wiki-updater 等）不影响主循环判定 |
+| src/server.py busy 判定 | `busy and not answered` 才走插话队列——answer 后的快速跟进改走 **work_q 开新轮**（worker 串行，收尾完自动消费，无并发风险） |
+| src/chat.py `_worker` | 每轮 run 开始时清 `answered=False` |
+
+**边界语义（三不变）**：
+
+- **answer 前插话**（长任务中改向 / 补充）→ 仍走插话注入 ✓
+- **中断轮**（无 answer）→ `answered` 恒 False → 仍可插话 ✓
+- **子 Agent 的 answer** → 不影响主循环 ✓
+
+**可观测差异**：修复后 answer 一出来立刻跟进 → 提示「✅ 已接收，处理中…」（开新轮）；旧行为 → 「📥 已排队」（误判插话）。生效需 `/restart`。
+
+**与本页其它章节的关系**：[插话全生命周期](#插话全生命周期2026-08-19-修复闭环commit-fb115aa)（fb115aa）修的是「该触发的没触发」（插话滞留不消费）；本节修的是「不该判插话的被判了插话」——两者共同拼出插话 vs 新轮的完整判定边界：**answer 发出前 = 插话；answer 发出后 = 新轮**。
+
 ## 后台通知 wake 语义：service_exit 不再独立触发轮（2026-08，v0.19.2）
 
 **修复前（套娃循环）**：后台事件通知（如 `service_exit`）各自**独立唤醒一轮**——这轮没有用户消息、只有通知本身，但 before_turn 钩子照常全量跑一遍（空转），answer 也照常生成；若钩子/流程本身又产生后台事件（如 async 钩子完成、后台任务退出），则再次唤醒——「一通知一轮、一轮又一通知」，循环套娃，token 在无人对话时持续燃烧。

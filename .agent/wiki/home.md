@@ -1293,3 +1293,7 @@ commit `bb3a4d4`：施工模式投影新增「【上一轮施工摘要】」独�
 
 - **t1231 重启折叠螺旋事故——`73809ea` recalc-only 当日回滚**（2026-09-30，用户实锤「重启后发消息没反应」）：1230 轮长会话重启后卡死在首请求之前的 `_plan_fold`——卫生性规则重算无法复现运行期演化出的**末端密集边界**（压力毕业/deepen 多重集）→ L0 全量窗口 4→26 轮 → 估算超线 → 逐轮碎刀折叠、每刀全量重渲染 1200+ 轮；fc 从 1185 被吃到 1230（**近期 45 轮上下文全进摘要**）。回滚三层：代码恢复边界持久化（存档优先、缺失才 recalc 兜底、rewind 恢复增量过滤）+ `test/repair_meta_t1231.py` 存档侧写回 `fold_count=1185 + 末端阶梯 [1189,1199,1209,1219]` + 存档保真末端结构后螺旋无触发条件。教训：末端密集结构只有存档能保真，「重算确定性复现运行期演化」对压力毕业多重集不成立——证据链与螺旋机制详见 [context-engine · 回滚后记](architecture/context-engine.md#边界不持久化73809ea当日回滚存档优先缺失才-recalc-兜底2026-09-30t1231-事故)（v0.30.11 发布记录里的 ③ 即此项，发布当日即撤）
 
+## 快速事实增补（2026-10-03 · 一 · busy 误判插话修复——answered 标志）
+
+- **answer 后收尾期秒跟进不再误判插话**（2026-10-03，用户实锤「结束了我才发的，为啥判定为 busy」，commit `3e0714a`）：answer 事件发出 ≠ `agent.run()` 返回——中间有秒级收尾窗口（wrap_up 归档 / turn_end 钩子如 wiki_auto_maintenance 派活 / events flush），此间 `busy` 仍 True → 用户秒发的消息被误判插话 → 上一轮已无步边界 → 滞留成〔用户中途补充〕。修复 = `answered` 标志三处接线：`_broadcast` 收到主 Agent（`agent_id in ("", "_main_")`）answer/wrap_answer 时置 True；busy 判定改 `busy and not answered`（answer 后跟进走 work_q 开新轮，worker 串行无并发风险）；`_worker` 每轮开始清 False。边界三不变：answer 前插话仍注入 / 中断轮（无 answer）仍可插话 / 子 Agent answer 不影响主循环。判定边界收口成一句话：**answer 发出前 = 插话，发出后 = 新轮**——见 [user-interaction · busy 误判修复](features/user-interaction.md)
+

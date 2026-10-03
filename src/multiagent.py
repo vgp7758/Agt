@@ -1028,10 +1028,10 @@ def make_subagent_tools(agent) -> list:
             """通用启动：登记 background_tasks + 起 _bg 线程跑 _target.run()。新建/复用两条路径共用。"""
             if reg:
                 reg.touch(_aid)   # 派活即交互（团队投影活跃窗口，2026-09-20）
-        try:
-            agent.recap_interact("a:" + _aid)   # 互动清脏（用户提案 2026-09-30）
-        except Exception:
-            pass
+            try:
+                agent.recap_interact("a:" + _aid)   # 互动清脏（用户提案 2026-09-30）
+            except Exception:
+                pass
             # context_messages 直通：投影时展开在 user 前（一次性——finish_turn 即焚，复用实例下一轮不带）
             if _ctx_msgs:
                 _ag = getattr(_target, "agent", _target)   # SubAgent 包装 or 裸 Agent（复用路径）

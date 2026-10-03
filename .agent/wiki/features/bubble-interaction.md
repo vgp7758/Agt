@@ -93,7 +93,8 @@
 
 workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 
-- **安全约束**：路径按相对 workspace 根解析；拒绝绝对路径 / `/`、`\` 开头 / 含 `..` 段；`(base/path).resolve()` 后 `relative_to(base)` 不在 workspace 内 → 404（防路径穿越 / 任意文件泄露）
+- **安全约束（初版）**：路径按相对 workspace 根解析；拒绝绝对路径 / `/`、`\` 开头 / 含 `..` 段；`(base/path).resolve()` 后 `relative_to(base)` 不在 workspace 内 → 404（防路径穿越 / 任意文件泄露）
+- **绝对路径放行（2026-10-04，commit 552a1e6）**：盘符/UNC 完整路径改判为绝对路径直接 resolve 读——见[绝对路径放行](#绝对路径放行workspace-外完整路径引用可渲染2026-10-04用户实测commit-552a1e6)；相对路径防护不变
 - media_type 按 `mimetypes` 扩展名判定；不存在 / 越界统一 404
 
 **意义**：Agent 把产物（示意图 / 生成音频 / 截图等）写进 workspace 后，即可在回答里用 `[!标题](相对路径)` 引用——多模态产出有了呈现通道（回答文字 + 内嵌资产一体交付）。
@@ -276,7 +277,7 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 | `video` | `ftyp`(mp4/mov) / `\x1aE\xdf\xa3`(mkv/webm) / `RIFF....AVI` |
 | `text` | BOM → `utf-8-sig` / `utf-16`；utf-8 试解码 → gbk 试解码；NUL 或控制字符 >10% → `binary` |
 
-- **`GET /api/file-kind?path=`**（新端点）：workspace 沙箱取文件头 → `_sniff_kind` → `{kind, encoding, media_type}`（与 /api/asset 同款路径穿越防护）
+- **`GET /api/file-kind?path=`**（新端点）：取文件头 → `_sniff_kind` → `{kind, encoding, media_type}`（路径防护初版与 /api/asset 同款相对 workspace 沙箱；2026-10-04 起绝对路径同步放行，见下文[绝对路径放行](#绝对路径放行workspace-外完整路径引用可渲染2026-10-04用户实测commit-552a1e6)）
 - **`GET /api/asset` 增强**：后缀未识别或只猜出 `application/octet-stream` 时读文件头嗅探修正 Content-Type——`.bin` 后缀的 mp4 也能被浏览器直接渲染而非触发下载（端到端实测）
 
 **前端（src/static/index.html）**：
@@ -439,6 +440,25 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 **行为边界**：未超限的媒体不受影响（如 300×150 视频按原尺寸渲染）；图仍可点击放大（外层 `<a target=_blank>`）、视频仍保留右上角 ↗ 新页签；容器限高 + 折叠/展开（见上文）不变。
 
 **playwright 实测**：`ac-body` computed max-height=240px ✓；注入 800×1200 窄高图 → 渲染 160×240，比例 0.667 = intrinsic 0.667（**分毫不差**）✓；300×150 视频未超限按原尺寸 ✓；超长列表容器内滚照常 ✓。**纯前端，Ctrl+F5 生效**（8000 实例取新静态资源走 `/update-assets`）。
+
+### 绝对路径放行：workspace 外完整路径引用可渲染（2026-10-04，用户实测，commit 552a1e6）
+
+**用户实测（2026-10-04）**：Agent 在 answer 里用**完整路径**引用 workspace 外的文件（如 `D:\AI_Usings\resume\xx.docx`，求职材料等产物常落在 repo 外目录）——点击恒报「文件不存在」。
+
+**根因**：`/api/asset` 与 `/api/file-kind` 把一切 path 当 **workspace 相对路径**处理——`(base / path)` 在 pathlib 规则下，右侧是盘符路径时直接得到目标绝对路径，随后 `relative_to(base)` 越界抛错 → 404 → 前端降级显示「文件不存在」。前端 `encodeURIComponent` 一直正确，纯粹是后端拒收。
+
+**修复（src/server.py 两端点同步，commit 552a1e6）**：
+
+| 分支 | 处理 |
+|---|---|
+| 绝对路径（`^[A-Za-z]:[\\/]` 盘符 或 `\\server\share` UNC） | 判为绝对路径 → `Path(path).resolve()` 直接读 |
+| 相对路径 | 原防护不变——`..` 穿越 / `/` 前缀 / 越出 workspace 仍 404 |
+
+- **读侧语义对齐**：与工具侧 read_file / [diff_files 读写不对称](diff-files.md#读写不对称越界路径放行2026-08-新)同语义（t1195 裁定：**读放行、写拦截**）——本地 WebUI 场景，仅限盘上真实存在文件的可读响应，不列目录、不写。
+
+**回归（TestClient 8 组全过）**：绝对路径 docx/xml → 200 + 正确 mime（office/xml）；正斜杠盘符 `D:/...` → 200；绝对路径不存在 → 404；相对路径存在 → 200（原行为不变）；`../../` 穿越 → 404 仍拦截；`/etc/passwd` → 404；file-kind 绝对路径嗅探 → kind/encoding 正常。
+
+**生效方式**：后端改动——`/restart`。
 
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 

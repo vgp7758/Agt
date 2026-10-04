@@ -449,6 +449,20 @@
   <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（回退 / 限流 / 截断 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
   <div id="teamPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fbfdff;border-left:1px solid #a5d8e8;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #d0ebf3;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#0e7490">👥 Agent 团队</div><button onclick="toggleTeamPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#d0ebf3;color:#0e7490;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="teamList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+  <!-- 远程实例添加弹窗（用户提案 2026-10-04：内联表单会被看板 3s 自动刷新重置——弹窗挂 body 级，
+       不在 teamList 重渲染区内，填一半也不会被刷掉） -->
+  <div id="remoteAddModal" style="display:none;position:fixed;inset:0;z-index:220;background:rgba(0,0,0,.35);align-items:center;justify-content:center" onclick="if(event.target===this)remoteAddToggle()">
+    <div style="background:#fff;border-radius:12px;padding:18px 20px;width:min(440px,90vw);box-shadow:0 12px 40px #0004">
+      <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:12px">🌐 添加远程实例</div>
+      <input id="raUrl" placeholder="url（必填，如 http://192.168.1.5:8000）" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;margin-bottom:8px" onkeydown="if(event.key==='Enter')remoteAddSubmit()">
+      <input id="raId" placeholder="id（可空=自动生成）" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;margin-bottom:10px" onkeydown="if(event.key==='Enter')remoteAddSubmit()">
+      <div style="font-size:11px;color:#8a9099;margin-bottom:12px">探测 /api/status 成功才注册（与 remote_connect 工具同链）· Enter 提交</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="remoteAddToggle()">取消</button>
+        <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490" onclick="remoteAddSubmit()">连接</button>
+      </div>
+    </div>
+  </div>
   <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
   <div id="svcPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fcfaff;border-left:1px solid #ddd3f0;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #e9e0f7;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#7c3aed">🛠 后台（服务 + 定时）</div><button onclick="toggleSvcPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e9e0f7;color:#7c3aed;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="svcList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- 文件预览抽屉（点击气泡 markdown 里的文本资产 [!名](路径) 打开——无 fab 图标按钮，纯点击触发） -->
@@ -2607,42 +2621,12 @@ async function renderTeamDash(){
   const list = document.getElementById('teamList');
   if(!list) return;
   let h = '';
-  // 本地 Agent（registry：主 + 子，含 recap/状态/url）
-  const locals = d.team || [];
-  if(locals.length){
-    h += '<div style="font-size:11px;color:#0e7490;font-weight:700;margin:2px 0 6px">🧑 本机 Agent</div>';
-    locals.forEach(e => {
-      const icon = _AGENT_ICON[e.status] || '❓';
-      const name = e.agent_id==='_main_' ? '主 Agent' : `${e.name} [${e.agent_id}]`;
-      const url = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" title="打开该 Agent 专属页（新页签）" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
-      const rec = e.recap || '';
-      const key = e.agent_id;
-      const open = !!_teamExpanded[key];
-      h += `<div style="border:1px solid #d0ebf3;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span title="状态">${icon}</span><b style="font-size:13px">${esc(name)}</b>
-          ${e.recap_dirty ? `<span title="新动态：${esc((e.recap_prev||'（无）'))} → ${esc((rec||''))}" style="font-size:11px;color:#b45309;cursor:help">🔄 有新动态（悬停看变化）</span>` : ''}
-          <span style="font-size:11px;color:#5b6472">${esc(e.model||'')}</span>
-          ${url}
-        </div>
-        ${rec ? `<div style="margin-top:4px;font-size:11.5px;color:#374151;line-height:1.5">${open ? esc(rec) : esc(rec.slice(0,80)) + (rec.length>80?'…':'')}${rec.length>80?'':' '}
-          <span style="color:#0e7490;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap）</div>'}
-      </div>`;
-    });
-  }
+  // 顺序：远程实例组在上、本机 Agent 组在下（用户裁定 2026-10-04）；
+  // 「＋ 添加」改弹窗（body 级 remoteAddModal——不在 teamList 重渲染区，填一半不会被 3s 刷新重置）
   const remotes = d.remotes || [];
-  // 远程实例分组恒渲染（含空态——用户提案 2026-09-14：看板手动添加/移除控件）
-  h += `<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px;display:flex;align-items:center;gap:8px">
+  h += `<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:2px 0 6px;display:flex;align-items:center;gap:8px">
     🌐 远程实例
     <span id="remoteAddBtn" style="color:#0e7490;cursor:pointer;font-weight:400;font-size:11.5px" onclick="remoteAddToggle()">＋ 添加</span>
-  </div>
-  <div id="remoteAddForm" style="display:none;border:1px dashed #b197fc;border-radius:8px;padding:8px;margin-bottom:6px;background:#faf7ff">
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <input id="raUrl" placeholder="url（必填，如 http://192.168.1.5:8000）" style="flex:2;min-width:160px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
-      <input id="raId" placeholder="id（可空=自动生成）" style="flex:1;min-width:100px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
-      <button class="btn" style="padding:5px 12px;font-size:12px" onclick="remoteAddSubmit()">连接</button>
-    </div>
-    <div style="font-size:10.5px;color:#8a9099;margin-top:4px">探测 /api/status 成功才注册（与 remote_connect 工具同链）</div>
   </div>`;
   remotes.forEach(r => {
     const st = (r.status||'?').toLowerCase();
@@ -2663,12 +2647,39 @@ async function renderTeamDash(){
         <span style="color:#7c3aed;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap——对方实例较旧未上报，🔄 重连后可见）</div>'}
     </div>`;
   });
+  // 本地 Agent（registry：主 + 子，含 recap/状态/url）
+  const locals = d.team || [];
+  if(locals.length){
+    h += '<div style="font-size:11px;color:#0e7490;font-weight:700;margin:10px 0 6px">🧑 本机 Agent</div>';
+    locals.forEach(e => {
+      const icon = _AGENT_ICON[e.status] || '❓';
+      const name = e.agent_id==='_main_' ? '主 Agent' : `${e.name} [${e.agent_id}]`;
+      const url = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" title="打开该 Agent 专属页（新页签）" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
+      const rec = e.recap || '';
+      const key = e.agent_id;
+      const open = !!_teamExpanded[key];
+      h += `<div style="border:1px solid #d0ebf3;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span title="状态">${icon}</span><b style="font-size:13px">${esc(name)}</b>
+          ${e.recap_dirty ? `<span title="新动态：${esc((e.recap_prev||'（无）'))} → ${esc((rec||''))}" style="font-size:11px;color:#b45309;cursor:help">🔄 有新动态（悬停看变化）</span>` : ''}
+          <span style="font-size:11px;color:#5b6472">${esc(e.model||'')}</span>
+          ${url}
+        </div>
+        ${rec ? `<div style="margin-top:4px;font-size:11.5px;color:#374151;line-height:1.5">${open ? esc(rec) : esc(rec.slice(0,80)) + (rec.length>80?'…':'')}${rec.length>80?'':' '}
+          <span style="color:#0e7490;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap）</div>'}
+      </div>`;
+    });
+  }
   if(!locals.length && !remotes.length) h += '<div style="color:#8a9099;font-size:12px;padding:2px 0 10px">（无本地活跃 Agent）</div>';
   list.innerHTML = h;
 }
 function remoteAddToggle(){
-  const f = document.getElementById('remoteAddForm');
-  if(f) f.style.display = f.style.display === 'none' ? 'block' : 'none';
+  // 弹窗开关（2026-10-04：内联表单被 3s 看板刷新重置——改 body 级弹窗，用户提案）
+  const m = document.getElementById('remoteAddModal');
+  if(!m) return;
+  const show = m.style.display === 'none';
+  m.style.display = show ? 'flex' : 'none';
+  if(show){ const u = document.getElementById('raUrl'); if(u) u.focus(); }
 }
 async function remoteAddSubmit(){
   const url = (document.getElementById('raUrl')?.value || '').trim();
@@ -2682,7 +2693,7 @@ async function remoteAddSubmit(){
     const r = await resp.json();
     toast(r.msg || (r.ok ? '✅ 已连接' : '❌ 失败'));
     if(r.ok){ document.getElementById('raUrl').value=''; document.getElementById('raId').value='';
-              document.getElementById('remoteAddForm').style.display='none'; }
+              remoteAddToggle(); }
   }catch(e){ toast('❌ ' + e.message); }
   renderTeamDash();
 }

@@ -237,8 +237,13 @@ class Schedule:
     name: str
     kind: str                       # "interval" | "at"
     spec: float                     # interval=秒；at=触发时间戳
-    message: str = ""               # 静态推送文本（与 action 二选一）
+    message: str = ""               # 静态推送文本（与 action/code 三选一）
     action: Optional[dict] = None   # {"tool":..., "args":...} 到点执行拿结果
+    code: str = ""                  # 触发时跑的 Python 代码（2026-10-04·用户提案：autonomous 融合）——
+                                    # stdout 尾部 + result 变量作为消息；空产物=该次静默
+    deadline: float = 0.0           # 截止时间戳（2026-10-04）：过期任务自动删除（取代 autonomous 的 end_time）
+    mode: str = "idle"              # 注入方式（2026-10-04）：idle=排队等空闲（默认，现状）|
+                                    # immediate=busy 时打断当前轮（步边界插话）| skip=busy 时放弃本次
     repeat: bool = True             # interval 是否循环；at+daily 每日闹钟
     daily: str = ""                 # at 每日模式 "HH:MM[:SS]"（每日闹钟重算锚点）
     at_origin: str = ""             # at 原始参数（ISO）；at 未填的 interval 记创建时刻——
@@ -277,7 +282,7 @@ class Scheduler:
         # session 装载）——由 Agent.restore_runtime_state（set_session/load 后的标准恢复点）
         # 调 restore_state(items)（2026-09-18 修：原 _restore() 在此空跑，恢复时机错误）。
 
-    def add_interval(self, name, seconds, message="", action=None, repeat=True) -> str:
+    def add_interval(self, name, seconds, message="", action=None, repeat=True, code="", deadline=0.0, mode="idle") -> str:
         seconds = float(seconds)
         if seconds <= 0:
             return "[every_seconds 必须 > 0]"
@@ -286,6 +291,7 @@ class Scheduler:
         at_origin = datetime.now().isoformat(timespec="seconds")
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="interval", spec=seconds,
                        message=message, action=action, repeat=repeat, at_origin=at_origin,
+                       code=code, deadline=float(deadline or 0), mode=mode,
                        next_fire=time.time() + seconds)
         with self._lock:
             old_id = self._by_name.get(name)
@@ -309,7 +315,7 @@ class Scheduler:
         except Exception:
             return time.time() + sec
 
-    def add_interval_at(self, name, seconds, at_iso, message="", action=None, repeat=True) -> str:
+    def add_interval_at(self, name, seconds, at_iso, message="", action=None, repeat=True, code="", deadline=0.0, mode="idle") -> str:
         """组合模式（2026-09-18·用户提案）：every_seconds + at + repeat=True →
         at 为【首触发相位起点】，之后每 seconds 循环一次。首次触发 = at + N*seconds 中
         第一个未来时刻（at 已过去则自动对齐到下一个相位点；at 在未来则等到 at 到点）。"""
@@ -325,6 +331,7 @@ class Scheduler:
         fire = self._phase_next(s, seconds)
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="interval", spec=seconds,
                        message=message, action=action, repeat=bool(repeat), at_origin=s,
+                       code=code, deadline=float(deadline or 0), mode=mode,
                        next_fire=fire)
         with self._lock:
             old_id = self._by_name.get(name)
@@ -344,7 +351,8 @@ class Scheduler:
             for sch in self._schedules.values():
                 items.append({"name": sch.name, "kind": sch.kind, "spec": sch.spec,
                               "at_origin": sch.at_origin, "message": sch.message,
-                              "action": sch.action, "repeat": sch.repeat, "daily": sch.daily})
+                              "action": sch.action, "repeat": sch.repeat, "daily": sch.daily,
+                              "code": sch.code, "deadline": sch.deadline, "mode": sch.mode})
         return items
 
     def _persist(self):
@@ -380,7 +388,9 @@ class Scheduler:
                         s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
                                      kind="interval", spec=sec, message=it.get("message", ""),
                                      action=it.get("action"), repeat=bool(it.get("repeat", True)),
-                                     at_origin=origin, next_fire=self._phase_next(origin, sec))
+                                     at_origin=origin, next_fire=self._phase_next(origin, sec),
+                                     code=it.get("code", ""), deadline=float(it.get("deadline") or 0),
+                                     mode=it.get("mode") or "idle")
                     else:   # kind == "at"：每日（repeat+daily）或单次
                         daily, rep = it.get("daily", ""), bool(it.get("repeat", False))
                         if rep and daily:
@@ -388,7 +398,9 @@ class Scheduler:
                             s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
                                          kind="at", spec=fire, message=it.get("message", ""),
                                          action=it.get("action"), repeat=True, daily=daily,
-                                         at_origin=it.get("at_origin", ""), next_fire=fire)
+                                         at_origin=it.get("at_origin", ""), next_fire=fire,
+                                         code=it.get("code", ""), deadline=float(it.get("deadline") or 0),
+                                         mode=it.get("mode") or "idle")
                         else:
                             fire = float(it.get("spec") or 0)
                             if fire <= time.time():
@@ -396,7 +408,9 @@ class Scheduler:
                             s = Schedule(id=uuid.uuid4().hex[:8], name=it.get("name", "task"),
                                          kind="at", spec=fire, message=it.get("message", ""),
                                          action=it.get("action"), repeat=False,
-                                         at_origin=it.get("at_origin", ""), next_fire=fire)
+                                         at_origin=it.get("at_origin", ""), next_fire=fire,
+                                         code=it.get("code", ""), deadline=float(it.get("deadline") or 0),
+                                         mode=it.get("mode") or "idle")
                     with self._lock:
                         self._schedules[s.id] = s
                         self._by_name[s.name] = s.id
@@ -408,7 +422,7 @@ class Scheduler:
         except Exception as e:
             _LOG.warning("schedules 恢复失败：%s", e)
 
-    def add_at(self, name, dt_iso, message="", action=None, repeat=None) -> str:
+    def add_at(self, name, dt_iso, message="", action=None, repeat=None, code="", deadline=0.0, mode="idle") -> str:
         """到点任务。两种格式：
         - 完整 ISO（2026-07-20T17:30:00）→ 单次到点（repeat 不传时默认单次，显式 True 则每日该时刻循环）
         - 短格式 HH:MM[:SS]（17:30）→ 每日闹钟（repeat 默认 True；显式 False 只响下一个该时刻一次）"""
@@ -436,6 +450,7 @@ class Scheduler:
                 daily = ""
         sch = Schedule(id=uuid.uuid4().hex[:8], name=name, kind="at", spec=when,
                        message=message, action=action, repeat=rep, daily=daily,
+                       code=code, deadline=float(deadline or 0), mode=mode,
                        at_origin=s, next_fire=when)   # at_origin=at 原始参数（恢复重算锚点）
         with self._lock:
             old_id = self._by_name.get(name)
@@ -510,8 +525,25 @@ class Scheduler:
                             f" (还有{left}s) 单次 | {payload[:50]}")
         return "\n".join(rows)
 
-    def _produce(self, sch: Schedule) -> str:
-        """产生消息：静态 message，或执行 action 工具拿结果（动态消息）。"""
+    def _produce(self, sch: Schedule):
+        """产生消息：静态 message / action 工具结果 / code 执行产物（2026-10-04·autonomous 融合）。
+        code 分支：exec 沙箱（agent 变量可用），stdout 尾部 + result 变量作为消息；
+        空产物 → 返回 None（本次触发静默，不注入）。"""
+        if sch.code:
+            import io as _io, contextlib as _cl
+            buf, g = _io.StringIO(), {"agent": self._agent, "result": None}
+            try:
+                with _cl.redirect_stdout(buf):
+                    exec(sch.code, {"__builtins__": __builtins__}, g)
+            except Exception as e:
+                return f"[定时任务「{sch.name}」code 失败] {type(e).__name__}: {e}"
+            out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
+                str(g["result"]).strip() if g.get("result") is not None else "")
+            tail = buf.getvalue().strip()[-2000:]
+            parts = [x for x in (out, tail) if x]
+            if not parts:
+                return None   # 静默：code 无 stdout 且 result 空
+            return f"[定时任务「{sch.name}」code 结果]\n" + "\n".join(parts)
         if sch.action:
             tool = sch.action.get("tool", "")
             args = sch.action.get("args", {}) or {}
@@ -530,6 +562,11 @@ class Scheduler:
             fire = []
             with self._lock:
                 for sid, sch in list(self._schedules.items()):
+                    if sch.deadline and now > sch.deadline:   # 过期（2026-10-04·取代 autonomous end_time）
+                        self._schedules.pop(sid, None)
+                        self._by_name.pop(sch.name, None)
+                        _LOG.info("定时任务「%s」已过 deadline，自动删除", sch.name)
+                        continue
                     if sch.next_fire <= now:
                         fire.append(sch)
                         if sch.kind == "interval" and sch.repeat:
@@ -541,7 +578,19 @@ class Scheduler:
                             self._by_name.pop(sch.name, None)
             for sch in fire:
                 try:
-                    self._agent.push_message(self._produce(sch), source=sch.name)
+                    text = self._produce(sch)
+                    if text is None:
+                        continue   # 静默（code 空产物）
+                    busy = getattr(getattr(self._agent, "session", None), "_current", None) is not None
+                    if sch.mode == "skip" and busy:
+                        continue   # busy 时放弃本次注入
+                    if sch.mode == "immediate" and busy:
+                        # 打断当前轮：塞插话队列（步边界注入，与用户插话同款——autonomous 原语义）
+                        pm = getattr(self._agent, "pending_messages", None)
+                        if pm is not None:
+                            pm.append(text)
+                            continue
+                    self._agent.push_message(text, source=sch.name)   # idle（默认）：排队等空闲
                 except Exception:
                     pass
             if fire:

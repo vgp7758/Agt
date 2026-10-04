@@ -28,7 +28,7 @@
 
 - **autonomous → schedule 融合收官（2026-10-04，用户提案，commits `0716fc0` + `01edc18`，净 -318 行）**：早期「纯自主模式」（打断 answer 续跑当前轮）实际应用中渐渐被 schedule 替代，用户裁定整体融合——`add_schedule` 新增三参数：`code`（触发时跑 Python，`result`+stdout 尾部为消息，**空产物该次静默**=自主循环「有话才说」）、`deadline`（过期自动删除，取代 end_time）、`mode`（busy 时注入三分岔：`immediate` 步边界插话打断 / `idle` 排队等空闲（默认）/ `skip` 放弃）。自主循环退化为「一个带 code+immediate 的循环任务」。autonomous 全家退役：五工具 + `/autonomous` 命令组 + agent 状态机 + WebUI 开关（7 文件，pending_messages 保留与 immediate 共用）。七项语义单测 + 持久化往返 + L2 隔离实跑全绿；重启后生效，历史 meta.json 的 `autonomous_*` 键变无害冗余。详见 [background-scheduler · autonomous 融合](features/background-scheduler.md)
 
-## 快速事实增补（2026-10-05 · schedule 三通道组合语义：message/action/code 同给 = 独立执行、产物拼接）
+## 快速事实增补（2026-10-05 · schedule 推送主从语义：code/action 主通道 + message 附言，主通道全空=全静默）
 
-- **schedule 推送语义：互斥三选一 → 三通道组合（2026-10-05，用户问询触发，commit `458475c`）**：用户问「同时传 message / code / tool 是都执行并注入吗」问出旧实现两暗坑——互斥三选一（`code > action > message` 只执行第一个，其余忽略）+ code 静默连 message/action 一起吞（「心跳 + 有事才说话」做不到）。初版为三通道组合（任一非空即拼接）；用户随即裁定 v2 **主从语义**：code/action 是主通道、message 是附言——**主通道产物全空 → 全静默（message 不单独发）**，有产物 → 按 code → action → message 拼接注入；只传 message 正常发。七场景验证全过；site-packages 已同步，重启生效，**已存在任务无需重建**。详见 [background-scheduler · 三通道组合语义](features/background-scheduler.md)
+- **schedule 推送语义：互斥三选一 → 三通道组合 → 主从收敛（2026-10-05，用户问询触发 + 两轮裁定，commits `458475c` + `6c3f770`）**：用户问「同时传 message / code / tool 是都执行并注入吗」问出旧实现两暗坑——互斥三选一（`code > action > message` 只执行第一个，其余忽略）+ code 静默连 message/action 一起吞（「心跳 + 有事才说话」做不到）。v1 初版改三通道独立拼接；用户随即裁定 v2 **主从语义**：code/action 是主通道、message 是附言——**主通道产物全空 → 全静默（message 不单独发）**，有产物 → 按 code → action → message 拼接注入；只传 message 正常发。七场景验证全过；site-packages 已同步，重启生效，**已存在任务无需重建**。详见 [background-scheduler · 三通道主从语义](features/background-scheduler.md)
 

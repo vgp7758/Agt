@@ -526,9 +526,13 @@ class Scheduler:
         return "\n".join(rows)
 
     def _produce(self, sch: Schedule):
-        """产生消息：静态 message / action 工具结果 / code 执行产物（2026-10-04·autonomous 融合）。
-        code 分支：exec 沙箱（agent 变量可用），stdout 尾部 + result 变量作为消息；
-        空产物 → 返回 None（本次触发静默，不注入）。"""
+        """产生消息：message / action 工具 / code 三通道【独立执行、产物拼接】（2026-10-05·组合语义，用户问询裁定）。
+        - code：exec（agent 变量可用），stdout 尾部 + result 变量；
+        - action：到点调工具拿结果；
+        - message：静态文本。
+        三者任一非空即注入（按 code → tool → message 顺序拼接）；全部为空 → None（该次触发静默）。
+        注意：code 静默不再吞掉 message/message/tool——需要“有事才发”就把判定写进 code。"""
+        parts = []
         if sch.code:
             import io as _io, contextlib as _cl
             buf, g = _io.StringIO(), {"agent": self._agent, "result": None}
@@ -536,23 +540,27 @@ class Scheduler:
                 with _cl.redirect_stdout(buf):
                     exec(sch.code, {"__builtins__": __builtins__}, g)
             except Exception as e:
-                return f"[定时任务「{sch.name}」code 失败] {type(e).__name__}: {e}"
-            out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
-                str(g["result"]).strip() if g.get("result") is not None else "")
-            tail = buf.getvalue().strip()[-2000:]
-            parts = [x for x in (out, tail) if x]
-            if not parts:
-                return None   # 静默：code 无 stdout 且 result 空
-            return f"[定时任务「{sch.name}」code 结果]\n" + "\n".join(parts)
+                parts.append(f"[{sch.name} · code 失败] {type(e).__name__}: {e}")
+            else:
+                out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
+                    str(g["result"]).strip() if g.get("result") is not None else "")
+                tail = buf.getvalue().strip()[-2000:]
+                seg = "\n".join(x for x in (out, tail) if x)
+                if seg:
+                    parts.append(f"[{sch.name} · code 结果]\n" + seg)
         if sch.action:
             tool = sch.action.get("tool", "")
             args = sch.action.get("args", {}) or {}
             try:
                 result = self._agent.tools.call(tool, args)
-                return f"[定时任务「{sch.name}」执行 {tool} 的结果]\n{result}"
+                parts.append(f"[{sch.name} · {tool} 结果]\n{result}")
             except Exception as e:
-                return f"[定时任务「{sch.name}」工具 {tool} 失败] {type(e).__name__}: {e}"
-        return sch.message or f"[定时任务「{sch.name}」触发]"
+                parts.append(f"[{sch.name} · 工具 {tool} 失败] {type(e).__name__}: {e}")
+        if sch.message:
+            parts.append(sch.message)
+        if not parts:
+            return None   # 全空 → 静默
+        return "\n\n".join(parts)
 
     def _loop(self):
         """后台轮询：到点 produce → push_message；interval 循环重算 next_fire；

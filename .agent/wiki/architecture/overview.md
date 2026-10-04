@@ -84,6 +84,7 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
 
 ## 相关页面
 
+
 - [长期记忆](../features/longterm-memory.md) — 三类记忆注入 / episodic 召回流水线（before_turn 检索工作流）/ `/memory` 管理页
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 运行观测 / 快照检测闭环
 - [工作流运行观测](../features/wf-monitor.md)：run registry + /wf/monitor 实时节点轨迹
@@ -92,4 +93,5 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
 - [多实例组网](multi-instance.md)：remote_instance_id 工具路由（2026-09-06 前名 server_id，旧名兼容）/ /api/tool/exec 工具级直执行 / 远程连接管理（与 WS 消息驱动的"脑"互补的"手"）
 - [上下文引擎与缓存优化](../architecture/context-engine.md)：投影装配 / 分档投影 / 前缀缓存三层优化
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：before_turn 典型实例（默认关闭）
+- [WebUI 界面国际化](../features/i18n.md)：中英双向字典引擎（一份字典 zh2en/en2zh 双索引）/ 语言链与切换 / 渐进翻译 fallback（2026-10-04）
 

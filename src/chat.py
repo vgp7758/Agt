@@ -34,7 +34,7 @@ from mcp_client import MCPManager, make_mcp_tools
 from lsp_manager import make_lsp_tools
 from multiagent import make_subagent_tools
 from registry import AgentRegistry
-from real_tools import REAL_TOOLS, LIGHT_TOOLS, WORKSPACE, make_autonomous_tools
+from real_tools import REAL_TOOLS, LIGHT_TOOLS, WORKSPACE
 from updater import start_background_check
 from workflow import refresh_workflow_tools, make_workflow_mgmt_tools
 from snapshots import SnapshotManager
@@ -253,7 +253,6 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # update_wiki 已删除——wiki_auto_maintenance 工作流用 agent_prompt 直接派 wiki-updater
     # rag_query 由外置件 tools/builtin/rag_tools.py 提供（attach_script_tools 已注册，
     # group=rag）；其 agt_register 触发模型后台预热
-    _reg(make_autonomous_tools(agent), "自主模式")
     _reg(make_workflow_mgmt_tools(workspace), "工作流管理")
     ok, broken = refresh_workflow_tools(agent.tools, workspace, agent)
     for t in agent.tools:                         # refresh 注册的 wf_* 标"工作流"

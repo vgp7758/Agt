@@ -190,9 +190,7 @@ def _cmd_reset(ctx: CommandContext, args):
     ctx.agent.set_session(Session(
         system=ctx.agent.base_system, llm=ctx.agent.llm,
         recent_window_turns=ctx.agent.session.recent_window_turns))
-    clear_active_plan(ctx.agent)       # 重置：连计划（id/active_plan 一并清）、自主模式一起清空
-    ctx.agent.exit_autonomous_mode()
-    ctx.agent.goal_check_script = ""
+    clear_active_plan(ctx.agent)       # 重置：连计划（id/active_plan 一并清）
     # 立即实体化新会话（用户实锤 2026-09-23：清空后发消息「并没有开一个新的 session」——新 Session
     # 此刻无目录无名，session 列表扫不到、events/toollog 未绑路径，要等首轮 _ensure_name 才落地；
     # 用户在下拉框看到的还是旧会话名）。此处不等首轮：建目录 + 绑持久化路径 + 落首份 meta.json
@@ -563,98 +561,6 @@ def _cmd_model(ctx: CommandContext, args):
     chain = getattr(ctx.agent.llm, "fallback_chain", [])
     if chain:
         print(f"  有效回退链：{' → '.join(chain)}")
-
-
-def _cmd_autonomous(ctx: CommandContext, args):
-    """纯自主模式控制：/autonomous on <时间> /autonomous off /autonomous status"""
-    from datetime import datetime, timedelta
-
-    if not args:
-        # 显示状态
-        if not ctx.agent.autonomous_mode:
-            print("纯自主模式：未开启（输入 /autonomous on <时间> 开启；详细用法见 /help）")
-        elif ctx.agent.is_autonomous_active():
-            print(f"纯自主模式：已开启，持续到 {ctx.agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}")
-            print(f"自动提示词：{ctx.agent.autonomous_prompt}")
-            print(f"待处理消息队列：{len(ctx.agent.pending_messages)} 条")
-        else:
-            print("纯自主模式：已超时（自动关闭）")
-        return
-
-    cmd = args[0].lower()
-    if cmd in ("on", "start"):
-        if len(args) < 2:
-            print("❌ 请指定结束时间，如：/autonomous on 17:30")
-            return
-        time_str = args[1]
-        try:
-            # 尝试解析 "YYYY-MM-DD HH:MM"
-            try:
-                target = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-            except ValueError:
-                # 尝试解析 "HH:MM"（今天）
-                today = datetime.now().date()
-                target = datetime.strptime(f"{today} {time_str}", "%Y-%m-%d %H:%M")
-                if target < datetime.now():
-                    target += timedelta(days=1)
-            ctx.agent.set_autonomous_mode(target)
-            print(f"✅ 纯自主模式已开启，持续到 {target.strftime('%Y-%m-%d %H:%M')}")
-        except Exception as e:
-            print(f"❌ 开启失败：{type(e).__name__}: {e}")
-
-    elif cmd in ("off", "stop", "exit"):
-        ctx.agent.exit_autonomous_mode()
-        print("✅ 纯自主模式已关闭")
-
-    elif cmd == "duration":
-        if len(args) < 2:
-            print("❌ 请指定持续分钟数，如：/autonomous duration 30")
-            return
-        try:
-            minutes = int(args[1])
-            target = datetime.now() + timedelta(minutes=minutes)
-            ctx.agent.set_autonomous_mode(target)
-            print(f"✅ 纯自主模式已开启，持续 {minutes} 分钟（到 {target.strftime('%Y-%m-%d %H:%M')}）")
-        except Exception as e:
-            print(f"❌ 开启失败：{type(e).__name__}: {e}")
-
-    elif cmd == "status":
-        if not ctx.agent.autonomous_mode:
-            print("纯自主模式：未开启")
-        elif ctx.agent.is_autonomous_active():
-            print(f"纯自主模式：已开启，持续到 {ctx.agent.autonomous_end_time.strftime('%Y-%m-%d %H:%M')}")
-            print(f"自动提示词：{ctx.agent.autonomous_prompt}")
-            print(f"待处理消息队列：{len(ctx.agent.pending_messages)} 条")
-        else:
-            print("纯自主模式：已超时（自动关闭）")
-
-    elif cmd == "prompt":
-        if len(args) < 2:
-            print(f"当前自动提示词：{ctx.agent.autonomous_prompt}")
-            print("用法：/autonomous prompt <新的提示词>")
-            return
-        new_prompt = " ".join(args[1:])
-        ctx.agent.autonomous_prompt = new_prompt
-        print(f"✅ 自动提示词已更新：{new_prompt}")
-
-    elif cmd == "goal":
-        print("用法：/autonomous goal <Python脚本内容>")
-        print("  脚本须在目标达成时 print('PASS')，否则输出当前状态（如分数）")
-        print("  自主循环每轮结束后自动跑该脚本检查")
-        print("示例：")
-        print('  /autonomous goal "print(\\"PASS\\") if score >= 3000 else print(score)"')
-        return
-
-    elif cmd == "check":
-        if not ctx.agent.goal_check_script:
-            print("(未设置目标验证脚本，用 /autonomous goal 设置)")
-            return
-        print("🔍 运行目标验证脚本…")
-        result = ctx.agent.run_goal_check()
-        print(f"结果：{result}")
-
-    else:
-        print(f"❌ 未知子命令：{cmd}，输入 /autonomous 查看用法")
 
 
 def _cmd_workflows(ctx: CommandContext, args):
@@ -1938,17 +1844,6 @@ def build_default_registry() -> CommandRegistry:
     reg.register("reload_mcp", _cmd_reload_mcp,
         "<name>  重连指定 MCP server（代码修改后生效）",
         "/reload_mcp python-lsp     （mcpServers 键名；repo .mcp.json 与全局 ~/.agt/mcp.json 都查）")
-    reg.register("autonomous", _cmd_autonomous,
-        "纯自主模式：任务完成后自动继续工作，直到时间到或目标达成",
-        "/autonomous                    查看状态\n"
-        "/autonomous on 17:30           到今天 17:30 自动停\n"
-        "/autonomous on 2026-08-14 10:00  到指定日期时间停\n"
-        "/autonomous duration 30        持续 30 分钟\n"
-        "/autonomous off                手动关闭\n"
-        "/autonomous status             查看状态\n"
-        "/autonomous prompt <文字>       修改自动继续时的提示词\n"
-        "/autonomous goal <Python脚本>    设目标验证脚本（print('PASS')=达成→自动停）\n"
-        "/autonomous check              手动运行一次目标验证脚本")
     reg.register("workflows", _cmd_workflows,
         "[reload]  列出/重载 .agent/workflows/ 工作流",
         "/workflows          列出所有工作流（含状态/描述/Coze链接）\n"

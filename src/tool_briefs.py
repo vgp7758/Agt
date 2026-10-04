@@ -176,11 +176,6 @@ TOOL_BRIEFS = {
     "list_schedules": "列出所有定时任务",
 
     # ===== 自主模式 =====
-    "set_autonomous_mode": "开启纯自主模式持续干活直到目标达成",
-    "exit_autonomous_mode": "退出纯自主模式",
-    "autonomous_status": "看自主模式当前状态",
-    "set_goal_check": "设置目标达成验证脚本",
-    "check_goal": "手动跑一次目标验证",
 
     # ===== 其它 =====
     "reload_hot": "改了工具/节点插件后热重载，免重启",

@@ -1148,7 +1148,6 @@ async def api_status(request: Request):
         "pending_messages": len(getattr(agent, "pending_messages", [])),
         "active_target": getattr(agent, "_active_target", "_main_"),
         "ws_clients": [{"target": c.get("target", "_main_")} for c in _clients],   # 各 WS 客户端的交互目标
-        "autonomous_mode": getattr(agent, "autonomous_mode", False),
         "hold": bool(getattr(agent, "_hold", False)),
         "utility_model": getattr(agent, "utility_model", ""),
         "server": server_status(),
@@ -2547,11 +2546,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()
-        if text and agent.autonomous_mode and agent.is_autonomous_active():
+        if text:
             agent.queue_user_message(text)
             await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})
-        else:
-            await _send(ws, {"type": "system", "text": "⚠️ 自主模式未开启"})
         return
     if isinstance(_d, dict) and _d.get("action") == "list_workflows":
         from workflow import workflows_info
@@ -2746,12 +2743,6 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
         if out:
             await _send(ws, {"type": "system", "text": out})
-        return
-
-    # 自主模式下插消息（即时入队，不进 work_q）
-    if agent.autonomous_mode and agent.is_autonomous_active():
-        agent.queue_user_message(text)
-        await _send(ws, {"type": "system", "text": "✅ 消息已入队"})
         return
 
     # 普通对话：忙时走"中途注入"（下一步边界模型即可见、可改向），闲时正常入队下一轮。

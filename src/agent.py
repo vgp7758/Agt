@@ -313,12 +313,8 @@ class Agent:
         # —— 施工方案（spec）状态 ——
         self.active_spec_id: Optional[str] = None    # 当前活动 spec id（= 文件名 stem）；None=无活动 spec
         self.active_spec: Optional[dict] = None      # 当前活动 spec 完整 dict（单一事实源）
-        # 纯自主模式状态
-        self.autonomous_mode: bool = False
-        self.autonomous_end_time: Optional[datetime] = None
-        self.autonomous_prompt: str = "当前为纯自主模式，请继续按照要求完成更多工作"
-        self.pending_messages: List[str] = []  # 用户插入的消息队列
-        self.goal_check_script: str = ""       # 目标达成验证脚本(Python，输出 PASS=达成)
+        self.pending_messages: List[str] = []  # 用户插入的消息队列（忙时插话 + schedule immediate 的步边界打断通道）
+
         # —— 工作流生命周期钩子（每轮 run 开头重置）——
         self._hook_notes: list[dict] = []       # 待注入的 system 旁注（before_tool/after_tool/before_answer），每项 {hook, name, result}
         self._answer_redo_draft: Optional[str] = None   # before_answer 重跑时上一次草稿（临时 assistant 续接）
@@ -487,15 +483,6 @@ class Agent:
             print("\n\n⏹ 已中断（已完成的轮次保留在会话中，可用 /save 保存）。")
             for h in (e.get("recharge") or []):   # 配额/鉴权类失败 → 一键充值入口
                 print(f"   💰 {h.get('provider')} 充值入口: {h.get('url')}")
-        elif t == "autonomous_status":
-            if e.get("active"):
-                print(f"\n🔁 纯自主模式已开启，持续到 {e['end_time']}")
-            else:
-                print("\n🔁 纯自主模式已关闭")
-        elif t == "autonomous_continue":
-            print(f"\n{GRAY}🔁 自主继续：{e['text']}{RESET}")
-        elif t == "autonomous_next":
-            print(f"{GRAY}🔁 准备自主继续：{e['text']}{RESET}")
         elif t == "tool_stream":
             # CLI 模式：流式输出直接 print，不加换行（全靠子进程自己控制）
             pass  # _print_only_emit 已在流式回调中处理
@@ -843,10 +830,6 @@ class Agent:
         out = {
             "plan_id": self.active_plan_id,   # 只存活动计划文件名；计划本体在 plans/<plan_id>.json
             "spec_id": self.active_spec_id,   # 只存活动 spec 文件名；spec 本体在 specs/<spec_id>.json
-            "autonomous_mode": self.autonomous_mode,
-            "autonomous_end_time": self.autonomous_end_time.isoformat() if self.autonomous_end_time else None,
-            "autonomous_prompt": self.autonomous_prompt,
-            "goal_check_script": self.goal_check_script,
             "background_tasks": self.background_tasks,
         }
         # 定时任务（2026-09-18 修：extra_state 是 provider 覆盖式重建——Scheduler._persist 直写
@@ -891,14 +874,6 @@ class Agent:
             _rt.restore_servers((state or {}).get("remote_servers") or {})
         except Exception:
             pass
-        if state:
-            self.autonomous_mode = bool(state.get("autonomous_mode", False))
-            end = state.get("autonomous_end_time")
-            self.autonomous_end_time = datetime.fromisoformat(end) if end else None
-            if "autonomous_prompt" in state:
-                self.autonomous_prompt = state["autonomous_prompt"]
-            if "goal_check_script" in state:
-                self.goal_check_script = state["goal_check_script"]
         self._emit_plan_if_any()
         self._emit_spec_if_any()
 
@@ -1509,66 +1484,12 @@ class Agent:
         except Exception:
             pass
 
-    def set_autonomous_mode(self, end_time: datetime, prompt: str = None):
-        """设置纯自主模式：到 end_time 之前，任务完成后自动继续。
-        prompt: 自动继续时使用的提示词（默认使用预设提示）。"""
-        self.autonomous_mode = True
-        self.autonomous_end_time = end_time
-        if prompt:
-            self.autonomous_prompt = prompt
-        self._emit({"type": "autonomous_status", "active": True, "end_time": end_time.isoformat(),
-                    "prompt": self.autonomous_prompt})
-
-    def exit_autonomous_mode(self):
-        """退出纯自主模式。"""
-        self.autonomous_mode = False
-        self.autonomous_end_time = None
-        self._emit({"type": "autonomous_status", "active": False})
-
-    def is_autonomous_active(self) -> bool:
-        """检查纯自主模式是否仍有效（未超时且未被手动关闭）。"""
-        if not self.autonomous_mode:
-            return False
-        if self.autonomous_end_time and datetime.now() > self.autonomous_end_time:
-            self.exit_autonomous_mode()
-            return False
-        return True
-
     def queue_user_message(self, text: str):
         """将用户消息加入队列（等下一步边界注入当前任务上下文；任何模式均可用）。
         供 web/CLI 忙时插话：消息会在当前轮的下一步作为 user_hint 注入，模型当步可见、可改向。"""
         self.pending_messages.append(text)
         self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
         return True
-
-    def get_next_message(self) -> Optional[str]:
-        """获取下一条要处理的消息（优先队列中的用户消息，否则用自主提示）。"""
-        if self.pending_messages:
-            return self.pending_messages.pop(0)
-        if self.is_autonomous_active():
-            return self.autonomous_prompt
-        return None
-
-    def run_goal_check(self) -> str:
-        """运行目标验证脚本（独立子进程），返回输出。'PASS' 表示目标达成。"""
-        if not self.goal_check_script:
-            return ""
-        import subprocess, sys, tempfile, os
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
-            f.write(self.goal_check_script)
-            tmp = f.name
-        try:
-            proc = subprocess.run([sys.executable, tmp], capture_output=True,
-                                  text=True, timeout=30, cwd=os.getcwd(),
-                                  creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
-            return (proc.stdout or "").strip()
-        except subprocess.TimeoutExpired:
-            return "[目标检查超时]"
-        finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
     # ========== 工作流生命周期钩子 ==========
     def _hook_tasks(self, hook: str, _apply_switch: bool = True) -> list[dict]:
@@ -2460,19 +2381,6 @@ class Agent:
                                     resp.content,
                                     [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None,
                                     turn_idx=len(self.session.turns) - 1)   # finish 后 turns[-1]=本轮（Turn.recap 供 fc 折叠摘要）
-                            # 目标检查：跑验证脚本，PASS 则结束自主模式
-                            if self.goal_check_script:
-                                result = self.run_goal_check()
-                                if result and result.startswith("PASS"):
-                                    self._emit({"type": "system", "text": f"🎯 目标达成：{result}"})
-                                    self.exit_autonomous_mode()
-                            # 纯自主模式：完成后检查是否继续
-                            if self.is_autonomous_active():
-                                next_msg = self.get_next_message()
-                                if next_msg:
-                                    self._emit({"type": "autonomous_next", "text": next_msg})
-                                    msg, auto_flag, imgs, continue_loop = next_msg, True, None, True
-                                    break
                             # 后台推送（调度器/服务）：消费 inbox 触发下一轮
                             item = self.pop_inbox()
                             if item:
@@ -2639,12 +2547,6 @@ class Agent:
                     if continue_loop:
                         continue
                     self._emit({"type": "wrap_up"})
-                    if self.is_autonomous_active():
-                        next_msg = self.get_next_message()
-                        if next_msg:
-                            self._emit({"type": "autonomous_next", "text": next_msg})
-                            msg, auto_flag, imgs, continue_loop = next_msg, True, None, True
-                            continue
                     return self._wrap_up()
 
             except ImageUnsupportedError as e:

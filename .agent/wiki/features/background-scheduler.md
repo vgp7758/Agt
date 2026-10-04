@@ -15,8 +15,11 @@
 | id / name | 任务标识与名字 |
 | kind | `"interval"` \| `"at"` |
 | spec | interval=秒数；at=触发时间戳 |
-| message | 静态推送文本（与 action 二选一） |
+| message | 静态推送文本（与 action/code **三选一**） |
 | action | `{"tool":..., "args":...}` 到点执行该工具拿结果（动态消息，如 web_search） |
+| code | 触发时跑的 Python 代码（2026-10-04 · [autonomous 融合](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)）——stdout 尾部 + `result` 变量作为消息；**空产物=该次静默** |
+| deadline | 截止时间戳（2026-10-04）——`_loop` 扫描时过期任务自动删除（取代 autonomous 的 end_time） |
+| mode | 注入策略（2026-10-04）：`immediate` \| `idle`（默认）\| `skip`，busy 时三分岔 |
 | repeat | interval 是否循环；at+daily 每日闹钟 |
 | daily | at 每日模式锚点 `"HH:MM[:SS]"`（每日闹钟触发后据此重算） |
 | next_fire | 下次触发时间戳 |
@@ -24,14 +27,56 @@
 ## add_schedule 语义（v0.23.1 起）
 
 - 触发方式二选一：`every_seconds>0`（repeat 控制是否循环，默认循环）；`at` 完整 ISO 或短格式
-- 推送内容二选一：`message` 静态文本；`tool`(+`tool_args`) 到点执行拿结果
+- 推送内容**三选一**（2026-10-04 起）：`message` 静态文本；`action`(+`action.tool`/`action.args`) 到点执行拿结果；`code` 触发时跑 Python 代码拿 stdout 尾部 + `result` 变量（空产物该次静默）
+- `deadline`（2026-10-04）：ISO 截止时间，过期任务 `_loop` 扫描时自动删除
+- `mode`（2026-10-04）：注入策略 `immediate` \| `idle`（默认）\| `skip`——agent busy 时三分岔（打断 / 排队 / 放弃），详见[下节](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)
 - `repeat` 参数默认 **None**：按 at 格式**语义分发**（显式传值优先）
 - **组合**（2026-09-18）：every_seconds + at 同给 = at 相位起步、之后每 N 秒循环——见[组合模式](#组合模式every_seconds--at--at-相位起步之后每-n-秒循环2026-09-18commit-9a88107用户提案)
 
-| at 写法 | repeat 缺省行为 | 显式 repeat |
+## autonomous 融合：code / deadline / mode 三参数 + 旧纯自主模式整体退役（2026-10-04，用户提案，commits 0716fc0 + 01edc18）
+
+**动机**：早期「纯自主模式」（autonomous：`set_autonomous` 开启后打断 answer、续跑当前轮 react loop）实际应用中渐渐被 schedule 定时唤醒替代——用户裁定（2026-10-04）把自主能力**融合进 add_schedule**：自主循环退化为「一个带 code + immediate 的循环任务」，autonomous 全家（工具五件 + /autonomous 命令 + agent 状态机 + WebUI 开关）整体退役。两段提交 `0716fc0` + `01edc18` 已推送，净 **-318 行**。
+
+**三个新参数**：
+
+| 参数 | 语义 | 取代的旧物 |
 |---|---|---|
-| 短格式 `'09:00'`（`HH:MM[:SS]`） | **每日闹钟**（True） | False → 只响下一个该时刻一次 |
-| 完整 ISO `'2026-07-20T17:30:00'` | **单次到点**（兼容不变） | True → 每日循环（取时刻部分做锚点） |
+| `code` | 触发时执行一段 Python（`agent` 变量可用），`result` 变量 + stdout 尾部作为消息推送；**空产物 = 该次触发静默**——自主循环「有话要说才说话」的等价物 | goal_check（PASS 才停 → code 返回空即不发声） |
+| `deadline` | ISO 截止时间；`_loop` 扫描时 `now > deadline` 自动删除任务 | end_time / duration_minutes |
+| `mode` | agent busy 时注入三分岔（见下表） | autonomous 的打断语义收敛为其中一态 |
+
+**mode 三态**：
+
+| 值 | busy 时 | 空闲时 |
+|---|---|---|
+| `immediate` | 塞 `pending_messages` 步边界插话（打断当前轮——原 autonomous 行为） | 正常唤醒一轮 |
+| `idle`（默认） | 排队，等轮结束后再注入（原 schedule 行为） | 正常唤醒一轮 |
+| `skip` | 直接放弃本次注入 | 正常唤醒一轮 |
+
+**自主循环等价用法**：
+
+```python
+add_schedule(name="auto-loop", every_seconds=300, deadline="2026-10-04T22:00",
+             mode="immediate", code="done = 检查目标(); result = '' if not done else '目标达成，汇报收尾'")
+```
+
+**删除清单（7 文件）**：
+
+| 文件 | 删了什么 |
+|---|---|
+| real_tools | `make_autonomous_tools` 五工具（set / exit / status / set_goal_check / check_goal） |
+| agent.py | autonomous 状态字段 + 方法 + run loop 两处续轮块 + CLI 三事件（-102 行；**`pending_messages` 保留**——忙时插话与 schedule immediate 共用通道） |
+| commands | `/autonomous` 命令组 + 注册块 + `/clear` 调用点 |
+| server.py | status 字段 + insert_message 门控（busy 插话改**无条件入队**）+ 炸点分支 |
+| index.html | autonomousMode / setAutonomousMode / case 三事件（12 处清零） |
+| tool_briefs | 五条简报 |
+| background.py / background_tools.py | （增侧）Schedule 三新字段 + 三 add 方法签名扩展 + deadline 扫描删除 + restore/export 透传 + 工具参数校验 |
+
+**验证**：①七项语义单测全过（code 产物 / 空静默 / 异常回显 / idle 排队 / immediate 插话 / skip 放弃 / deadline 到期删除）；②持久化往返——export/restore 三分支全带新字段（重启存活）；③L2 隔离实跑——旁路实例 3s 就绪 + callback 注入真实一轮健康运行 190s+ 无 NameError。
+
+**生效与存量兼容**：引擎层改动，`/restart` 后新工具面可用（`add_schedule(code=..., deadline=..., mode=...)`）、旧五工具消失；历史 meta.json 里的 `autonomous_*` 键变**无害冗余**（restore 不再读）。
+
+**关联**：[user-interaction · 后台通知 wake 语义](user-interaction.md)（idle 排队复用 inbox/唤醒链）· [气泡交互 · 插话机制](user-interaction.md)（immediate 的 pending_messages 步边界通道）。
 
 ## 每日闹钟实现要点（src/background.py）
 
@@ -223,6 +268,7 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 - 用法例：`add_schedule('morning', at='09:00', message='早会时间')`
 - 本页 2026-09-18 三连（组合模式 + 持久化 + 同名摘旧）随 **v0.29.4** 上 PyPI（PyPI 已上线，见 [v0.29.4 发布记录](../releases/v0.29.4.md)）
 - ⚠️ 定时任务持久化的**首版（95649e3）实际从未生效**——extra_state 直写被覆盖式重建抹掉 + 恢复时机过早恒空跑，e22062c（单一真源架构）修复后才真正跨重启存活（见上方后记）；修复 `/restart` 前设置且已丢失的任务须重设
+- ⚠️ 2026-10-04 起 **autonomous 已整体退役**：五工具 + `/autonomous` 命令 + agent 状态机 + WebUI 开关全删——等价能力用 `add_schedule(code=..., deadline=..., mode=...)` 表达（见[融合章节](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)）；历史 meta.json 里的 `autonomous_*` 键为无害冗余，无需清理
 
 ## 相关页面
 

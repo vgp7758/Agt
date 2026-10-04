@@ -684,7 +684,7 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
    批首是谁，这轮就是谁的轮
 ```
 
-**通知气泡形态**（`renderNotifyBubble`，index.html）：`row sys` + 默认折叠一行摘要、点击展开全文——与 autonomous 系统消息同款交互（见 [气泡交互](bubble-interaction.md)）；图标按 source 前缀取：📪 service_exit / 📨 bg_task / ⏰ schedule / 🤝 subagent / 🔔 其它，标题形如「后台通知（bg_task:x1）」。
+**通知气泡形态**（`renderNotifyBubble`，index.html）：`row sys` + 默认折叠一行摘要、点击展开全文——与（已退役的）autonomous 系统消息同款交互（autonomous 已于 2026-10-04 融合进 [schedule](background-scheduler.md)，交互形态同款保留于通知气泡）（见 [气泡交互](bubble-interaction.md)）；图标按 source 前缀取：📪 service_exit / 📨 bg_task / ⏰ schedule / 🤝 subagent / 🔔 其它，标题形如「后台通知（bg_task:x1）」。
 
 **修复③的根因**（用户实测抓到的瑕疵）：旧代码 `if not first_src:` 只看「是否已记过」——**手输在先**的混合批（批序 user → background）里，后到的 background 项仍会抢走 first_src → 整轮被渲染成通知气泡，**用户的话被折进通知气泡**。修复加 `and not parts`（批首判别）；搭车的通知不丢——文本自带 `[后台通知·<source>]` 前缀，在气泡内自识别，历史路径②同前缀判别。
 

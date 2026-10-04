@@ -24,3 +24,7 @@
 
 - **v0.31.4 发布（2026-10，发布提交 `ba2f4e6` + tag `v0.31.4`）**：自 0.31.3 以来 6 个 feature 提交一次打包，主打 **WebUI i18n 双语体系**（双向字典引擎 zh/en/bi 三模式 · 8 页共享引擎零漂移 · 字典 765 条/翻 491 条 · bi 三处体验修复），同批：钩子开关进设置面板「其它」页签 + repo 级持久化（`.agent/hooks_state.json`）/ 团队看板远程实例添加弹窗化 + 列表顺序换位 / ⭐ 收藏按钮挪右上 / answer 引用 workspace 外绝对路径渲染（读侧对齐 t1195）。PyPI 已上线，桌面版 CI 巡检确认。详见 [v0.31.4 发布记录](releases/v0.31.4.md)、[i18n](features/i18n.md)
 
+## 快速事实增补（2026-10-04 · 四 · autonomous 融合进 schedule：code/deadline/mode 三参数，纯自主模式退役）
+
+- **autonomous → schedule 融合收官（2026-10-04，用户提案，commits `0716fc0` + `01edc18`，净 -318 行）**：早期「纯自主模式」（打断 answer 续跑当前轮）实际应用中渐渐被 schedule 替代，用户裁定整体融合——`add_schedule` 新增三参数：`code`（触发时跑 Python，`result`+stdout 尾部为消息，**空产物该次静默**=自主循环「有话才说」）、`deadline`（过期自动删除，取代 end_time）、`mode`（busy 时注入三分岔：`immediate` 步边界插话打断 / `idle` 排队等空闲（默认）/ `skip` 放弃）。自主循环退化为「一个带 code+immediate 的循环任务」。autonomous 全家退役：五工具 + `/autonomous` 命令组 + agent 状态机 + WebUI 开关（7 文件，pending_messages 保留与 immediate 共用）。七项语义单测 + 持久化往返 + L2 隔离实跑全绿；重启后生效，历史 meta.json 的 `autonomous_*` 键变无害冗余。详见 [background-scheduler · autonomous 融合](features/background-scheduler.md)
+

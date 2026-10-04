@@ -15,9 +15,9 @@
 | id / name | 任务标识与名字 |
 | kind | `"interval"` \| `"at"` |
 | spec | interval=秒数；at=触发时间戳 |
-| message | 静态推送文本（与 action/code **三选一**） |
-| action | `{"tool":..., "args":...}` 到点执行该工具拿结果（动态消息，如 web_search） |
-| code | 触发时跑的 Python 代码（2026-10-04 · [autonomous 融合](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)）——stdout 尾部 + `result` 变量作为消息；**空产物=该次静默** |
+| message | 静态推送文本（2026-10-05 起与 action/code 可**同给**——三通道独立执行、产物拼接，见[下节](#三通道组合语义message--action--code-同给--独立执行产物拼接2026-10-05用户问询触发commit-458475c)） |
+| action | `{"tool":..., "args":...}` 到点执行该工具拿结果（动态消息，如 web_search）——同给时产物参与拼接（顺序居中） |
+| code | 触发时跑的 Python 代码（2026-10-04 · [autonomous 融合](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)）——stdout 尾部 + `result` 变量作为消息；空产物=code 自身静默（2026-10-05 起不再吞掉 message/action） |
 | deadline | 截止时间戳（2026-10-04）——`_loop` 扫描时过期任务自动删除（取代 autonomous 的 end_time） |
 | mode | 注入策略（2026-10-04）：`immediate` \| `idle`（默认）\| `skip`，busy 时三分岔 |
 | repeat | interval 是否循环；at+daily 每日闹钟 |
@@ -27,7 +27,7 @@
 ## add_schedule 语义（v0.23.1 起）
 
 - 触发方式二选一：`every_seconds>0`（repeat 控制是否循环，默认循环）；`at` 完整 ISO 或短格式
-- 推送内容**三选一**（2026-10-04 起）：`message` 静态文本；`action`(+`action.tool`/`action.args`) 到点执行拿结果；`code` 触发时跑 Python 代码拿 stdout 尾部 + `result` 变量（空产物该次静默）
+- 推送内容三通道（2026-10-05 起可**同给**：独立执行、产物拼接，见[三通道组合语义](#三通道组合语义message--action--code-同给--独立执行产物拼接2026-10-05用户问询触发commit-458475c)；10-04 融合版曾为互斥三选一）：`message` 静态文本；`action`(+`action.tool`/`action.args`) 到点执行拿结果；`code` 触发时跑 Python 代码拿 stdout 尾部 + `result` 变量（空产物=code 自身静默，但不再吞掉其它通道）
 - `deadline`（2026-10-04）：ISO 截止时间，过期任务 `_loop` 扫描时自动删除
 - `mode`（2026-10-04）：注入策略 `immediate` \| `idle`（默认）\| `skip`——agent busy 时三分岔（打断 / 排队 / 放弃），详见[下节](#autonomous-融合code--deadline--mode-三参数--旧纯自主模式整体退役2026-10-04用户提案commits-0716fc0--01edc18)
 - `repeat` 参数默认 **None**：按 at 格式**语义分发**（显式传值优先）
@@ -77,6 +77,36 @@ add_schedule(name="auto-loop", every_seconds=300, deadline="2026-10-04T22:00",
 **生效与存量兼容**：引擎层改动，`/restart` 后新工具面可用（`add_schedule(code=..., deadline=..., mode=...)`）、旧五工具消失；历史 meta.json 里的 `autonomous_*` 键变**无害冗余**（restore 不再读）。
 
 **关联**：[user-interaction · 后台通知 wake 语义](user-interaction.md)（idle 排队复用 inbox/唤醒链）· [气泡交互 · 插话机制](user-interaction.md)（immediate 的 pending_messages 步边界通道）。
+
+## 三通道主从语义：code/action 主通道 + message 附言（2026-10-05，用户两轮裁定，commits 458475c + 本提交）
+
+**动机**：用户问询「同时传了 message / code / tool，是都执行并注入吗？」——问出融合版实现两处暗坑：
+
+1. **互斥三选一**：优先级 `code > action > message`，只有第一个非空通道被执行并注入，其余静默忽略——「心跳 code + 固定 message」这类组合无法表达；
+2. **code 静默吞掉一切**：code 空产物（该次静默）时 message / action 一并被吞，code 异常同理——「有事才说 + 没事报平安」做不到。
+
+**新语义（`_produce` 重写，src/background.py）——三通道独立执行、产物拼接**：
+
+| 通道 | 执行 | 产物 |
+|---|---|---|
+| `code` | exec（`agent` 变量可用） | stdout 尾部 + `result` 变量 |
+| `action` | 到点调工具拿结果 | 工具返回 |
+| `message` | 静态文本 | 原文 |
+
+- **主从裁定（v2，用户）**：code/action 是【主通道】（干活/判定），message 是【附言】——传了主通道且其产物全空 → **该次全静默（message 不单独发）**；有产物 → 按 **code → action → message** 顺序拼接注入；只传 message → 正常注入（心跳场景）。
+- code 失败算「有产物」（错误段入拼接，不静默）；tool 空返回不算产物（与 code 静默对齐）。
+
+| 场景 | 行为 |
+|---|---|
+| 只传一个 | 与旧版完全一致（向后兼容） |
+| code 静默 + message | **全静默**（v2：message 是附言不单独发） |
+| code 失败 + message | 错误段照常入拼接，message 仍发出（不短路） |
+| tool 空返回 + message | **全静默**（空返回不算产物，v2） |
+| 三全（都有产物） | code 结果 → action 结果 → message 依次拼接注入 |
+
+**验证**（七场景全过）：仅 message → 发；仅 code 静默 → None；code 静默+message → 全静默；code 有产物+message → 产物+附言；tool 空返回+message → 全静默；tool 有产物+message → 产物+附言；code 失败 → 错误+附言。
+
+**生效**：site-packages 已同步，重启实例后新语义生效；**已存在任务无需重建**（持久化的是参数本身，语义在代码侧）。
 
 ## 每日闹钟实现要点（src/background.py）
 

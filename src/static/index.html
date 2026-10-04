@@ -522,6 +522,7 @@
       <button class="tab-btn active" onclick="switchSettingsTab('models',this)">模型管理</button>
       <button class="tab-btn" onclick="switchSettingsTab('mcp',this)">MCP</button>
       <button class="tab-btn" onclick="switchSettingsTab('runtime',this)">运行时</button>
+      <button class="tab-btn" onclick="switchSettingsTab('other',this)">其它</button>
     </div>
     <div id="panel-models" class="settings-panel active">
     <div id="modelList" style="flex:1;overflow-y:auto;margin:4px 0"></div>
@@ -573,6 +574,11 @@
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
     <label title="关闭后：LLM 日志（成功/回退/限流/截断/毕业折叠等）只累计进前端内存（_logEntries，上限200条），不真正渲染到 🐞 面板 DOM——面板保持隐藏，省去枯燥调试信息的渲染开销。开启后：实时追加到面板。"><input id="cfg_show_log_panel" type="checkbox" onchange="setShowLogPanel(this.checked)"> 显示日志面板（🐞）</label>
+    </div>
+    <div id="panel-other" class="settings-panel">
+    <div class="rt-group">钩子开关（repo 级 · 持久化到 .agent/hooks_state.json）</div>
+    <div id="hookSwitchList" style="max-height:52vh;overflow-y:auto"></div>
+    <div style="font-size:10.5px;color:#8a9099;margin-top:6px">开关即时生效并持久化（重启保留）；与 /hook 命令同状态源，运行时开关优先。此页为 repo 级设置区——后续更多 repo 级配置放这里。</div>
     </div>
     <div class="modal-btns">
       <button class="btn" id="cfgCancel">取消</button>
@@ -1945,6 +1951,52 @@ function switchSettingsTab(name, btn){
   // 切到 MCP 标签时加载配置+状态（此前 loadMcpConfig 无调用点——列表恒空，用户实锤：
   // playwright/python-lsp/csharp-lsp 全看不到；每次切入都刷新，读最新盘上配置）
   if(name==='mcp') loadMcpConfig();
+  if(name==='other'){ loadHookSwitches(); if(saveBtn) saveBtn.style.display='none'; }
+  else { const sb=document.getElementById('cfgSave'); if(sb) sb.style.display=''; }
+}
+
+// —— 钩子开关（设置·其它页签，2026-10-04 用户提案）：repo 级持久化 .agent/hooks_state.json ——
+async function loadHookSwitches(){
+  const box = document.getElementById('hookSwitchList');
+  if(!box) return;
+  box.innerHTML = '<div style="color:#8a9099;font-size:12px">加载中…</div>';
+  let data;
+  try {
+    const r = await fetch('/api/hooks');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    data = await r.json();
+  } catch(e) {
+    box.innerHTML = '<div style="color:#b91c1c;font-size:12px">⚠️ 无法获取钩子清单（'+e.message+'）——旧进程无此端点，重启实例后可用</div>';
+    return;
+  }
+  const hooks = data.hooks || [];
+  if(!hooks.length){ box.innerHTML = '<div style="color:#8a9099;font-size:12px">（无钩子——main.yml hooks 未声明且 workflows/ 无 meta.hook）</div>'; return; }
+  let h = '', lastHook = '';
+  hooks.forEach(k => {
+    if(k.hook !== lastHook){
+      lastHook = k.hook;
+      h += '<div class="rt-group" style="margin-top:8px">'+esc(k.hook)+'</div>';
+    }
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:3px 2px;font-size:12.5px">'
+      + '<input type="checkbox" '+(k.enabled?'checked':'')+' onchange="toggleHook(\''+k.hook+'\',\''+esc(k.name)+'\',this)" style="cursor:pointer">'
+      + '<span style="'+(k.enabled?'':'color:#9ca3af;text-decoration:line-through')+'">'+esc(k.name)+'</span>'
+      + '<span style="font-size:10.5px;color:#8a9099">'+esc(k.kind||'')+(k.async?' · async':'')+'</span>'
+      + (k.position_off?'<span style="font-size:10.5px;color:#b91c1c">整位禁用中</span>':'')
+      + '</div>';
+  });
+  box.innerHTML = h;
+}
+async function toggleHook(hook, name, el){
+  el.disabled = true;
+  try {
+    const r = await fetch('/api/hooks/toggle', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hook: hook, name: name, on: el.checked})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    await loadHookSwitches();   // 重渲染（反映整位禁用等联动）
+  } catch(e) {
+    alert('切换失败：'+e.message); el.disabled = false;
+  }
 }
 function fillModelSelect(id, emptyLabel){
   const sel=document.getElementById(id); if(!sel) return;

@@ -392,6 +392,47 @@ async def api_file_kind(path: str = ""):
     return {"kind": kind, "encoding": enc}
 
 
+@app.get("/api/hooks")
+async def api_hooks():
+    """钩子清单 + 开关状态（设置面板「其它」页签，2026-10-04 用户提案）：
+    {hooks: [{hook, name, kind, async, enabled, position_off}]}。enabled 与 /hook 命令
+    同状态源（repo 级 .agent/hooks_state.json，重启保留）。"""
+    if _agent is None:
+        return {"hooks": []}
+    HOOKS = ("before_turn", "before_tool", "after_tool", "before_answer", "turn_end")
+    if getattr(_agent, "_hook_disabled", None) is None:
+        try:
+            _agent._hook_tasks(HOOKS[0])   # 触发惰性加载（与运行时过滤同源）
+        except Exception:
+            pass
+    d = getattr(_agent, "_hook_disabled", None) or set()
+    out = []
+    for h in HOOKS:
+        try:
+            tasks = _agent._hook_tasks(h, _apply_switch=False)
+        except Exception:
+            tasks = []
+        whole_off = f"{h}::*" in d
+        for t in tasks:
+            out.append({"hook": h, "name": t.get("name"), "kind": t.get("kind"),
+                        "async": bool(t.get("async")),
+                        "enabled": (not whole_off) and f"{h}::{t.get('name')}" not in d,
+                        "position_off": whole_off})
+    return {"hooks": out}
+
+
+@app.post("/api/hooks/toggle")
+async def api_hooks_toggle(req: dict):
+    """切换钩子开关（唯一写口 _set_hook_switch——内部落盘 .agent/hooks_state.json）"""
+    hook = str(req.get("hook") or "")
+    name = str(req.get("name") or "")
+    on = bool(req.get("on"))
+    if not _agent or not hook or not name:
+        return {"error": "bad args"}
+    _agent._set_hook_switch(hook, name, on)
+    return {"ok": True, "hook": hook, "name": name, "on": on}
+
+
 @app.get("/manifest.json")
 async def manifest():
     """PWA manifest。"""

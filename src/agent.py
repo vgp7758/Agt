@@ -1571,19 +1571,21 @@ class Agent:
                 pass
 
     # ========== 工作流生命周期钩子 ==========
-    def _hook_tasks(self, hook: str) -> list[dict]:
+    def _hook_tasks(self, hook: str, _apply_switch: bool = True) -> list[dict]:
         """解析本 agent 某 hook 位置的任务清单：yml hook_specs 优先（v2），
         未声明时回退旧 workflow meta.hook 扫描（兼容期）。返回 [{kind, name, canvas?, async, recap, meta}]。
-        kind: workflow / cmd / emit。workflow 项经 _wf_canvas_index（每轮 run 开始时刷新）取画布。"""
+        kind: workflow / cmd / emit。workflow 项经 _wf_canvas_index（每轮 run 开始时刷新）取画布。
+        _apply_switch=False → 返回全量不过滤（设置面板 API 拿「清单+开关状态」用，2026-10-04）。"""
         from real_tools import WORKSPACE as _ws
         from workflow import get_hook_workflows
         specs = getattr(self.session, "hook_specs", None)
         if specs is None:
             hws = get_hook_workflows(_ws, hook)
-            return self._filter_hook_tasks([{"kind": "workflow", "name": hw["name"], "canvas": hw["canvas"],
+            tasks = [{"kind": "workflow", "name": hw["name"], "canvas": hw["canvas"],
                       "async": bool((hw.get("meta") or {}).get("async")),
                       "recap": bool((hw.get("meta") or {}).get("recap")),
-                      "meta": hw.get("meta") or {}} for hw in hws], hook)
+                      "meta": hw.get("meta") or {}} for hw in hws]
+            return self._filter_hook_tasks(tasks, hook) if _apply_switch else tasks
         tasks = []
         for item in specs.get(hook, []):
             kind = item.get("kind")
@@ -1598,20 +1600,46 @@ class Agent:
                     _LOG.warning("hooks 声明的工作流 '%s' 未找到（.agent/workflows/），跳过", name)
                     continue
             tasks.append(entry)
-        return self._filter_hook_tasks(tasks, hook)
+        return self._filter_hook_tasks(tasks, hook) if _apply_switch else tasks
 
     def _filter_hook_tasks(self, tasks: list, hook: str) -> list:
         """运行时钩子开关（/hook 命令，2026-09-01 用户提案）：_hook_disabled 存「位置::名」或
-        「位置::*」。'*' 整位禁用；否则按名过滤。默认空 = 全开。"""
-        d = getattr(self, "_hook_disabled", None) or set()
+        「位置::*」。'*' 整位禁用；否则按名过滤。默认空 = 全开。
+        持久化（2026-10-04 用户提案）：开关状态存 repo 级 .agent/hooks_state.json，重启保留——
+        此处惰性加载（首用时读盘），/hook 命令与设置面板共用同一状态源。"""
+        d = getattr(self, "_hook_disabled", None)
+        if d is None:
+            from json import loads as _loads
+            try:
+                from real_tools import WORKSPACE as _ws
+                from pathlib import Path as _P
+                raw = (_P(_ws) / ".agent" / "hooks_state.json").read_text(encoding="utf-8")
+                d = set(_loads(raw).get("disabled") or [])
+            except Exception:
+                d = set()
+            self._hook_disabled = d
         if not d or not tasks:
             return tasks
         if f"{hook}::*" in d:
             return []
         return [t for t in tasks if f"{hook}::{t.get('name')}" not in d]
 
+    def _save_hooks_state(self):
+        """钩子开关状态落盘 .agent/hooks_state.json（repo 级持久化，2026-10-04 用户提案）"""
+        from json import dumps as _dumps
+        try:
+            from real_tools import WORKSPACE as _ws
+            from pathlib import Path as _P
+            p = _P(_ws) / ".agent" / "hooks_state.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(_dumps({"disabled": sorted(getattr(self, "_hook_disabled", None) or [])},
+                                ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as e:
+            _LOG.warning("hooks_state 落盘失败：%s", e)
+
     def _set_hook_switch(self, hook: str, name: str, on: bool):
-        """/hook 命令的开关写口：on=移除禁用项，off=加入。name='*' 表示整位开关（on 时连带清掉该位所有单项禁用）。"""
+        """钩子开关唯一写口（/hook 命令 + 设置面板共用）：on=移除禁用项，off=加入。
+        name='*' 表示整位开关（on 时连带清掉该位所有单项禁用）。每次变更即落盘（repo 级持久化）。"""
         d = getattr(self, "_hook_disabled", None)
         if d is None:
             self._hook_disabled = d = set()
@@ -1624,6 +1652,7 @@ class Agent:
                 d.discard(key)
         else:
             d.add(key)
+        self._save_hooks_state()   # repo 级持久化（2026-10-04）
 
     def _wf_canvas_index(self) -> dict:
         """工作流名 → canvas 索引（钩子声明解析用）。带 mtime 缓存：目录没变不重扫。"""

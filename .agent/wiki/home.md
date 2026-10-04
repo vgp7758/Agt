@@ -18,3 +18,9 @@
 
 - **WebUI i18n 修复轮三连（2026-10-04 · 三，用户实锤，commit `6d95611`）**：①**看板闪烁根治**——团队看板 3s 自动重渲染撞 MutationObserver 150ms 节流，每次先闪一帧中文再变双语；防抖窗归零（0ms 立即翻译）后中文中间态消失；②**动态 tooltip 漏翻根治**——observer 加 attributes 监听（title/placeholder/aria-label/data-label），渲染函数事后 `el.title='中文'` 的动态设置即时翻；③**补批 55 条**——fabDock 图标标签 + 顶栏按钮 + 动态 tooltips，字典 **765 条 · 已翻 491**，site-packages 同步、刷新即见。留白：模型卡片 tooltip（`models.preset.json` 数据侧，preset 更新会失效）归下版渲染函数 `_t()` 化。详见 [i18n](features/i18n.md)
 
+## 快速事实增补（2026-10 · v0.31.4 发布：WebUI i18n 双语体系打包上线）
+
+## 快速事实增补（2026-10 · v0.31.4 发布：WebUI i18n 双语体系打包上线）
+
+- **v0.31.4 发布（2026-10，发布提交 `ba2f4e6` + tag `v0.31.4`）**：自 0.31.3 以来 6 个 feature 提交一次打包，主打 **WebUI i18n 双语体系**（双向字典引擎 zh/en/bi 三模式 · 8 页共享引擎零漂移 · 字典 765 条/翻 491 条 · bi 三处体验修复），同批：钩子开关进设置面板「其它」页签 + repo 级持久化（`.agent/hooks_state.json`）/ 团队看板远程实例添加弹窗化 + 列表顺序换位 / ⭐ 收藏按钮挪右上 / answer 引用 workspace 外绝对路径渲染（读侧对齐 t1195）。PyPI 已上线，桌面版 CI 巡检确认。详见 [v0.31.4 发布记录](releases/v0.31.4.md)、[i18n](features/i18n.md)
+

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 import config
 from commands import CommandContext, apply_config, build_default_registry, read_config
@@ -390,6 +390,16 @@ async def api_file_kind(path: str = ""):
         return {"error": "read fail"}
     kind, enc, _ = _sniff_kind(head)
     return {"kind": kind, "encoding": enc}
+
+
+@app.get("/api/i18n")
+async def api_i18n():
+    """前端 i18n 双向字典（中文 key → 英文 value；引擎运行时建反向索引，2026-10-04）"""
+    p = Path(__file__).parent / "static" / "i18n" / "dict.json"
+    if not p.is_file():
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(json.loads(p.read_text(encoding="utf-8")),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/hooks")

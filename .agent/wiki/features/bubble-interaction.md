@@ -14,7 +14,7 @@
 | **answer 行内富文本与资源渲染**：autolink 可点、`[!标题](路径)` 图框/音频框内嵌、**标准 markdown 图片 `![alt](路径)` 同链渲染**（2026-09-14，commit 6215ed1）、**无感叹号 `[文字](本地路径)` 渲染为 asset 链接**（2026-09-17，commit 4ad7742，四种引用形态齐）、**文本文件 → 点击开预览抽屉**（抽屉内 hlCode 语法高亮；后端 `/api/asset` 供文件）、**资产框 error 降级**：文件已被删 → 图/音/视频框 onerror → `.err` +「⚠️ 文件已不存在」（2026-09-18，commit deded59） | `static/index.html` + `src/server.py` | 2026-09-04，commits 4baa66a + fe44b5a + cb01d70 + 6215ed1 + 4ad7742 + deded59 |
 | **bash 代码块执行按钮**：` ```bash ` 块下 ▶ Agent 执行 / 💻 终端执行双按钮；2026-09-17 起 Agent 执行改**逐条指令**（逐行去 shebang/行尾注释/纯注释/空行后逐条发 `/call run_shell` 串行按序），终端执行保持整块 | `static/index.html` | 按钮早期上线；逐条化 2026-09-17，commit 60f3c6d |
 | **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited）；**容器限高 240px + 标题点击折叠 + 区内图片/视频随容器限高（240px）按 intrinsic 比例缩放**（2026-09-22，见[专节](#本轮变更文件容器限高--可折叠2026-09-22用户提案)） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited；2026-09-22 容器限高 + 折叠 + 区内媒体按比例限高 |
-| **轮收藏与收藏视角**：每轮 `.turn` 左上 ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
+| **轮收藏与收藏视角**：每轮 `.turn` **右上** ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现；2026-10-04 起右上、原左上易误点「过程」，commit ab0cc35，见[后记](#后记-按钮移右上角左上盖着过程易误点2026-10-04用户提案commit-ab0cc35)）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -673,7 +673,7 @@ provider 403（flatkey 欠费）
 | 层 | 内容 |
 |---|---|
 | **持久化**（src/server.py） | `POST /api/favorite` body `{"turn": 轮号, "on": true/false}` → 写 `session.extra_state.favorites`（数组）——随 session 存档 meta.json 落盘，**重启/读档收藏随会话走** |
-| **⭐ 按钮 + 轮号贯通**（src/static/index.html） | `.fav-btn` 挂 **`.turn` 宿主**左上角（已收藏恒显 ★ 橙色 / 未收藏 hover 浮现 ☆；hover 触发区用宿主 + pointer-events 纪律——同[复制按钮挂载范式](#气泡级复制按钮indexhtml2026-08-19)）；`_favs` Set 随 `session_history` 事件初始化；**实时轮** answer 事件带 turn → bot row + 最近的 user row 成对标 `data-turn` 并 `attachFavBtn`（轮已完成正好可收藏）；**历史轮** `renderHistTurn` user/bot 成对标号 + `applyFavMarks()` 统一回填 |
+| **⭐ 按钮 + 轮号贯通**（src/static/index.html） | `.fav-btn` 挂 **`.turn` 宿主**右上角（2026-10-04 起；原左上，已收藏恒显 ★ 橙色 / 未收藏 hover 浮现 ☆；hover 触发区用宿主 + pointer-events 纪律——同[复制按钮挂载范式](#气泡级复制按钮indexhtml2026-08-19)）；`_favs` Set 随 `session_history` 事件初始化；**实时轮** answer 事件带 turn → bot row + 最近的 user row 成对标 `data-turn` 并 `attachFavBtn`（轮已完成正好可收藏）；**历史轮** `renderHistTurn` user/bot 成对标号 + `applyFavMarks()` 统一回填 |
 | **收藏视角**（src/static/index.html） | 控件栏「☆ 收藏」按钮 → `toggleFavView()`：`body.fav-only` CSS 过滤——未收藏轮整体隐藏（user + 过程 + answer **成对显隐**），顶部蓝字提示条「⭐ 收藏视角：显示 N 个收藏轮（点击退出）」 |
 
 **旧后端兜底**：`/api/favorite` 未升级（后端仍是旧版）时，点击收藏降级为**本页内存**（`_favs` 本地生效，刷新即失）+ toast「后端未升级，仅本页生效」——纯前端体验不断。
@@ -683,6 +683,22 @@ provider 403（flatkey 欠费）
 **验证（三层全过）**：node JS 语法 1/1 + 结构断言 16/16；playwright 真实页面——控件栏「☆ 收藏」按钮存在 ✓、21 个历史轮 42 行 user/bot 全部成对标号并挂 ⭐ ✓、视角切换开（未收藏轮隐藏 + 蓝字条出现）/ 关（全恢复）✓。
 
 **生效方式**：**Ctrl+F5 立即可用**（静态资源 mtime 热更新，前端已生效）；`/restart` 后 `/api/favorite` 持久化生效。
+
+### 后记：⭐ 按钮移右上角——左上盖着「过程」易误点（2026-10-04，用户提案，commit ab0cc35）
+
+**用户反馈（2026-10-04）**：⭐ 收藏按钮原挂 `.turn` **左上**角，正好压在「过程」两个字上方——想点「展开/折叠过程」时容易误点成收藏。裁定挪到 answer 区右上角。
+
+**改动**（src/static/index.html 两处，commit `ab0cc35`，纯前端）：
+
+| 位置 | 改动 |
+|---|---|
+| `.fav-btn` CSS | `left:6px` → **`right:8px`**（`top:6px` 不变）——按钮移到 `.turn` 右上角；与「过程」文字（左上）相隔整行宽，点击区完全分离（实测几何：按钮 x≈910+ vs「过程」x≈27-60） |
+| 「☆ 收藏」按钮 tooltip | 「⭐ 按钮在每轮左上」→「每轮右上」 |
+
+- **挂载范式不变**：仍挂 `.turn` 宿主、hover 触发区连成一片（[复制按钮挂载范式](#气泡级复制按钮indexhtml2026-08-19)），只动定位——已收藏恒显 ★ / 未收藏 hover 浮现 ☆ 语义不变
+- **生效**：纯前端，Ctrl+F5 即生效（静态资源 mtime 热更新），无需 /restart
+
+**环境层顺带澄清**：本轮改动一度「磁盘改了页面不变」——排查发现本机 pip 安装实例跑的是 **site-packages 实体包**而非 repo（editable 装不上：三个 agt-web.exe 互相锁 exe），已把 repo 最新代码同步回 site-packages 收口，见 [ops · site-packages 实体](../guides/ops.md#磁盘改了但页面不生效pip-实例跑的是-site-packages-实体不是-repo2026-10-04)。
 
 ## 与后端的关系
 

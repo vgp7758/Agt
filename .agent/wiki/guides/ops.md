@@ -456,6 +456,23 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 当次「WebUI 发消息无响应」的真因是另一个 bug（直跑实例每轮钩子解析 NameError）：[workflow-hooks · 全局工作流目录后记](../architecture/workflow-hooks.md)。
 
+### 「磁盘改了但页面不生效」：pip 实例跑的是 site-packages 实体，不是 repo（2026-10-04）
+
+**现象链（2026-10-04 收藏按钮位置改动轮暴露）**：repo 里改了前端代码，9000 实例页面刷不出来；同期 `pip install -e .` 多次尝试**每次都在卸载旧包阶段失败**。
+
+**根因（两层叠加）**：
+
+1. **exe 文件锁打断 pip**：三个 `agt-web.exe` 实例同时在跑（9000 本尊 + 50052 + 9888），都锁着 `Scripts\agt-web.exe`——pip 换装（先卸载旧 distribution）阶段被文件占用直接中断，editable 永远装不上；
+2. **实例 import 的根本不是 repo**：三个实例加载的都是 Roaming 用户 site-packages 的**实体 src 包**——不是 editable、也不是 workspace repo。repo 磁盘改动与运行进程零关联，「磁盘改了但页面不生效」由此而来。
+
+> ⚠️ 口径修正：此前发布记录普遍写「本机 editable 安装，`/restart` 即生效」——对本机这三个 web 实例**不成立**（它们跑 site-packages 实体）。`/restart` 生效的前提是**进程 import 的那份代码已更新**，不是 repo 更新了。
+
+**处置（当日）**：把 repo 最新代码（含绝对路径放行、收藏按钮等全部本地补丁）**完整复制回 site-packages 实体包**——三实例与 repo 语义等价，重启安全。静态资源（index.html 等）服务端按 mtime 判新 → 改完 **Ctrl+F5 即生效、无需 /restart**（这也是纯前端改动一贯免重启生效的机制基础）。
+
+**遗留与计划**：真 editable 安装需要三实例都释放 exe 的窗口期（如集体重启时）；下版发版流程补一步「发版后同步 site-packages」（或挑窗口 `pip install -e .`）。
+
+**排障口诀**：「改了没生效」先查**进程 import 的是哪份代码**——repo / site-packages / editable 三份并存时，改错一份=零效果。`pip show -f <包名>` 看 Location 是否 editable；Python 侧打印模块 `__file__` 一击定位实体路径。
+
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 
 - **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)

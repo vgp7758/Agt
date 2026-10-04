@@ -554,6 +554,8 @@ class Scheduler:
             args = sch.action.get("args", {}) or {}
             try:
                 result = str(self._agent.tools.call(tool, args) or "").strip()
+                if result in ("(无输出)", "(no output)"):
+                    result = ""   # 工具层空输出占位符（real_tools L364/L1896）不算产物（用户实锤 2026-10-05）
                 if result:   # 空返回不算产物（与 code 静默对齐，用户裁定 v2）
                     primary.append(f"[{sch.name} · {tool} 结果]\n{result}")
             except Exception as e:

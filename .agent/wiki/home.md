@@ -30,5 +30,5 @@
 
 ## 快速事实增补（2026-10-05 · schedule 推送主从语义：code/action 主通道 + message 附言，主通道全空=全静默）
 
-- **schedule 推送语义：互斥三选一 → 三通道组合 → 主从收敛（2026-10-05，用户问询触发 + 两轮裁定，commits `458475c` + `6c3f770`）**：用户问「同时传 message / code / tool 是都执行并注入吗」问出旧实现两暗坑——互斥三选一（`code > action > message` 只执行第一个，其余忽略）+ code 静默连 message/action 一起吞（「心跳 + 有事才说话」做不到）。v1 初版改三通道独立拼接；用户随即裁定 v2 **主从语义**：code/action 是主通道、message 是附言——**主通道产物全空 → 全静默（message 不单独发）**，有产物 → 按 code → action → message 拼接注入；只传 message 正常发。七场景验证全过；site-packages 已同步，重启生效，**已存在任务无需重建**。详见 [background-scheduler · 三通道主从语义](features/background-scheduler.md)
+- **schedule 推送语义：互斥三选一 → 三通道组合 → 主从收敛（2026-10-05，用户问询触发 + 两轮裁定，commits `458475c` + `6c3f770`）**：用户问「同时传 message / code / tool 是都执行并注入吗」问出旧实现两暗坑——互斥三选一（`code > action > message` 只执行第一个，其余忽略）+ code 静默连 message/action 一起吞（「心跳 + 有事才说话」做不到）。v1 初版改三通道独立拼接；用户随即裁定 v2 **主从语义**：code/action 是主通道、message 是附言——**主通道产物全空 → 全静默（message 不单独发）**，有产物 → 按 code → action → message 拼接注入；只传 message 正常发。七场景验证全过；site-packages 已同步，重启生效，**已存在任务无需重建**。同日 · 三：用户实锤 run_python/run_shell 空输出返回占位符**「(无输出)」**（非空串）击穿 tool 静默——tool 产物归一化补占位符识别（commit `9d6cadd`），三通道静默语义闭环（code 空 / tool 空串或占位符 / 主通道全空）。详见 [background-scheduler · 三通道主从语义](features/background-scheduler.md)
 

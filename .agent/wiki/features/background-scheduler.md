@@ -94,19 +94,37 @@ add_schedule(name="auto-loop", every_seconds=300, deadline="2026-10-04T22:00",
 | `message` | 静态文本 | 原文 |
 
 - **主从裁定（v2，用户）**：code/action 是【主通道】（干活/判定），message 是【附言】——传了主通道且其产物全空 → **该次全静默（message 不单独发）**；有产物 → 按 **code → action → message** 顺序拼接注入；只传 message → 正常注入（心跳场景）。
-- code 失败算「有产物」（错误段入拼接，不静默）；tool 空返回不算产物（与 code 静默对齐）。
+- code 失败算「有产物」（错误段入拼接，不静默）；tool 空返回不算产物（与 code 静默对齐；**工具层空输出占位符「(无输出)」同样归一化为空**——v2 漏的口子，见[下方后记](#后记无输出占位符击穿-tool-静默归一化补齐2026-10-05--三用户实锤commit-9d6cadd)）。
 
 | 场景 | 行为 |
 |---|---|
 | 只传一个 | 与旧版完全一致（向后兼容） |
 | code 静默 + message | **全静默**（v2：message 是附言不单独发） |
 | code 失败 + message | 错误段照常入拼接，message 仍发出（不短路） |
-| tool 空返回 + message | **全静默**（空返回不算产物，v2） |
+| tool 空返回 + message | **全静默**（空返回/「(无输出)」占位符都不算产物，v2 + 后记） |
 | 三全（都有产物） | code 结果 → action 结果 → message 依次拼接注入 |
 
-**验证**（七场景全过）：仅 message → 发；仅 code 静默 → None；code 静默+message → 全静默；code 有产物+message → 产物+附言；tool 空返回+message → 全静默；tool 有产物+message → 产物+附言；code 失败 → 错误+附言。
+**验证**（七场景全过）：仅 message → 发；仅 code 静默 → None；code 静默+message → 全静默；code 有产物+message → 产物+附言；tool 空返回+message → 全静默；tool 有产物+message → 产物+附言；code 失败 → 错误+附言。同日 · 三 v3 补验三场景（占位符/空串/有产物）全过，见后记。
 
 **生效**：site-packages 已同步（commit `6c3f770`），重启实例后新语义生效；**已存在任务无需重建**（持久化的是参数本身，语义在代码侧）。
+
+### 后记：「(无输出)」占位符击穿 tool 静默——归一化补齐（2026-10-05 · 三，用户实锤，commit 9d6cadd）
+
+**触发**：用户实锤——run_python / run_shell 这类工具在输出为空时，工具层返回的不是空串而是占位符 **「(无输出)」**（real_tools 两处：`return out or "(无输出)"`）。对 v2 的判空来说它是**非空字符串** → 被当产物 → 「tool 空返回 + message → 全静默」被击穿：明明啥都没干却照常注入一段「(无输出)」+ 附言。
+
+**修复（src/background.py `_produce` tool 分支，commit `9d6cadd`，site-packages 已同步）**：tool 产物归一化时把占位符视为空：
+
+```python
+result = str(self._agent.tools.call(tool, args) or "").strip()
+if result in ("(无输出)", "(no output)"):
+    result = ""   # 工具层空输出占位符（real_tools L364/L1896）不算产物（用户实锤 2026-10-05）
+if result:   # 空返回不算产物（与 code 静默对齐，用户裁定 v2）
+    primary.append(f"[{sch.name} · {tool} 结果]\n{result}")
+```
+
+**验证（三场景全过）**：tool 返回「(无输出)」+ message → 全静默（★修复点）✓；tool 空串 + message → 全静默（回归）✓；tool 有产物 + message → 产物+附言（不受影响）✓。
+
+**至此三条静默通道闭环**：code 空产物 → 静默；tool 空串/占位符 → 静默；主通道全空 → message 附言一并静默。重启实例后生效。
 
 ## 每日闹钟实现要点（src/background.py）
 

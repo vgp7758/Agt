@@ -13,3 +13,7 @@
 
 - **WebUI i18n 全链路落地（2026-10-04，用户提案「中英互为 key」，commit 9a982e7）**：字典单文件 `src/static/i18n/dict.json`（中文 key → 英文 value），引擎运行时建 zh2en/en2zh **双向索引**——en 模式中文→英文、zh 模式英文→中文（Agent 双语环境写代码，UI 文案写哪侧都能被归一），缺翻译 fallback 原文；语言链 `?lang=` > localStorage > 浏览器语言，切换即 reload。交付四件：index.html 引擎（TreeWalker 文本节点/属性扫描 + MutationObserver 动态区 150ms 节流 + `_t()` 渐进包裹）/ `GET /api/i18n` 端点 / 设置·其它页语言下拉 / 字典 349 条骨架 + PoC 26 条（Playwright `?lang=en` 实测全绿：Send 按钮 / placeholder / en2zh 互查 ✓）。待办：323 条待翻 + 97 条拼接串 `_t()` 包裹。详见 [i18n](features/i18n.md)
 
+## 快速事实增补（2026-10-04 · 二 · i18n 第 2 步：全量翻译 8 页铺开 + 引擎共享单源 + bi 双语模式）
+
+- **WebUI i18n 第 2 步收官（2026-10-04 · 二，用户「一次性翻译完」）**：①**引擎共享单源化**——index.html 内嵌块抽为 `src/static/i18n/engine.js`，8 页（index/agents/memory/rag/stats/wf_monitor/workflow_debug/workflow_editor）统一 `<script src="/i18n/engine.js">` 引入，server.py 增 `GET /i18n/engine.js` 引擎端点（与 /api/i18n 双通道 no-store）；②**文案抽取扩到 8 页**——去重 765 条 → 新增待翻 416，分批直译后字典 **759 条 · 已翻 436**（高频 UI 全覆盖，323 条骨架低频空值保留）；③**bi 双语模式**——中文主 + 英文副灰字（下拉「中文 + English（双语）」，`?lang=bi`）；④bi 实测全绿（9635 旁路：按钮/placeholder/下拉双语 + en2zh 反向命中），9000 实例刷新即见。遗留：97 条拼接串 `_t()` 包裹 + 6 条抽取噪音。详见 [i18n](features/i18n.md)
+

@@ -2546,6 +2546,17 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()
+        if text.startswith("/"):   # 斜杠命令兜底（2026-10-05 用户实锤：/hold on 190 曾被当插话注入 messages）
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    registry.dispatch(text, CommandContext(agent=agent, work_q=_work_q, state=_state))
+                out = buf.getvalue().strip()
+            except Exception as e:
+                out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
+            if out:
+                await _send(ws, {"type": "system", "text": out})
+            return
         if text:
             agent.queue_user_message(text)
             await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})

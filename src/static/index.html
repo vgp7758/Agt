@@ -1658,8 +1658,9 @@ function addTimeDivider(){
 function send(){
   const t=inp.value.trim();
   if(!t && !attachments.length) return;
-  // 自主模式且 busy 时，插入消息到队列
-  if(busy){
+  // busy 时的插话通道（不含斜杠命令——命令必须走 WS 文本进后端 dispatch，
+  // 2026-10-05 用户实锤：/hold on 190 被当插话注入 messages）
+  if(busy && !t.startsWith('/')){
     const imgs=attachments.slice();
     sendInsertMessage(t, imgs);
     // 插话不渲染右侧 user 气泡：内容进 message_queued 队列气泡（连续插话原地更新，注入时变形）

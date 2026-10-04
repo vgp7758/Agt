@@ -8,12 +8,13 @@
 
 ## 快速事实增补（2026-10-04 · WebUI 界面国际化 i18n 第 1 步：中英双向字典引擎）
 
-
-## 快速事实增补（2026-10-04 · WebUI 界面国际化 i18n 第 1 步：中英双向字典引擎）
-
 - **WebUI i18n 全链路落地（2026-10-04，用户提案「中英互为 key」，commit 9a982e7）**：字典单文件 `src/static/i18n/dict.json`（中文 key → 英文 value），引擎运行时建 zh2en/en2zh **双向索引**——en 模式中文→英文、zh 模式英文→中文（Agent 双语环境写代码，UI 文案写哪侧都能被归一），缺翻译 fallback 原文；语言链 `?lang=` > localStorage > 浏览器语言，切换即 reload。交付四件：index.html 引擎（TreeWalker 文本节点/属性扫描 + MutationObserver 动态区 150ms 节流 + `_t()` 渐进包裹）/ `GET /api/i18n` 端点 / 设置·其它页语言下拉 / 字典 349 条骨架 + PoC 26 条（Playwright `?lang=en` 实测全绿：Send 按钮 / placeholder / en2zh 互查 ✓）。待办：323 条待翻 + 97 条拼接串 `_t()` 包裹。详见 [i18n](features/i18n.md)
 
 ## 快速事实增补（2026-10-04 · 二 · i18n 第 2 步：全量翻译 8 页铺开 + 引擎共享单源 + bi 双语模式）
 
 - **WebUI i18n 第 2 步收官（2026-10-04 · 二，用户「一次性翻译完」）**：①**引擎共享单源化**——index.html 内嵌块抽为 `src/static/i18n/engine.js`，8 页（index/agents/memory/rag/stats/wf_monitor/workflow_debug/workflow_editor）统一 `<script src="/i18n/engine.js">` 引入，server.py 增 `GET /i18n/engine.js` 引擎端点（与 /api/i18n 双通道 no-store）；②**文案抽取扩到 8 页**——去重 765 条 → 新增待翻 416，分批直译后字典 **759 条 · 已翻 436**（高频 UI 全覆盖，323 条骨架低频空值保留）；③**bi 双语模式**——中文主 + 英文副灰字（下拉「中文 + English（双语）」，`?lang=bi`）；④bi 实测全绿（9635 旁路：按钮/placeholder/下拉双语 + en2zh 反向命中），9000 实例刷新即见。遗留：97 条拼接串 `_t()` 包裹 + 6 条抽取噪音。详见 [i18n](features/i18n.md)
+
+## 快速事实增补（2026-10-04 · 三 · i18n 修复轮三连：看板闪烁 / 按钮 / tooltips）
+
+- **WebUI i18n 修复轮三连（2026-10-04 · 三，用户实锤，commit `6d95611`）**：①**看板闪烁根治**——团队看板 3s 自动重渲染撞 MutationObserver 150ms 节流，每次先闪一帧中文再变双语；防抖窗归零（0ms 立即翻译）后中文中间态消失；②**动态 tooltip 漏翻根治**——observer 加 attributes 监听（title/placeholder/aria-label/data-label），渲染函数事后 `el.title='中文'` 的动态设置即时翻；③**补批 55 条**——fabDock 图标标签 + 顶栏按钮 + 动态 tooltips，字典 **765 条 · 已翻 491**，site-packages 同步、刷新即见。留白：模型卡片 tooltip（`models.preset.json` 数据侧，preset 更新会失效）归下版渲染函数 `_t()` 化。详见 [i18n](features/i18n.md)
 

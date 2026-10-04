@@ -24,7 +24,7 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 import config
@@ -400,6 +400,16 @@ async def api_i18n():
         return JSONResponse({}, headers={"Cache-Control": "no-store"})
     return JSONResponse(json.loads(p.read_text(encoding="utf-8")),
                         headers={"Cache-Control": "no-store"})
+
+
+@app.get("/i18n/engine.js")
+async def i18n_engine_js():
+    """i18n 共享引擎（各页面 <script src="/i18n/engine.js"> 引入）"""
+    p = Path(__file__).parent / "static" / "i18n" / "engine.js"
+    if not p.is_file():
+        return PlainTextResponse("// engine.js missing", media_type="application/javascript")
+    return Response(p.read_text(encoding="utf-8"), media_type="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/hooks")

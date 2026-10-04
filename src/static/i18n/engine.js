@@ -62,10 +62,14 @@ let _i18nT = null;
 function _i18nObserve(){
   if (_i18nT) return;
   const mo = new MutationObserver(() => {
+    // 2026-10-04 用户实锤：3s 重渲染面板 150ms 延迟窗内先闪中文再变双语（"来回切"）——
+    // 改为立即翻译（微任务批次内同步），零中间态；attributes 一并监听（动态 title
+    // 即时翻——渲染函数事后 el.title='中文' 的场景此前全漏）
     clearTimeout(_i18nT);
-    _i18nT = setTimeout(() => applyI18n(document.body), 150);
+    _i18nT = setTimeout(() => applyI18n(document.body), 0);
   });
-  mo.observe(document.body, {childList:true, subtree:true, characterData:false});
+  mo.observe(document.body, {childList:true, subtree:true, characterData:false,
+    attributes:true, attributeFilter:['title','placeholder','aria-label','data-label']});
 }
 function _t(s, params){
   let out = s;

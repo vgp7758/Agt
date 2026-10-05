@@ -146,6 +146,18 @@ desktop-operator 目录化（见[多 Agent 体系](../architecture/multi-agent.m
 
 隔离冒烟五场景全绿：目录落盘 / file 原位无双插（首项仍 seg:system）/ services 行式解析 / image_feed 项保留 / persona 写入。commit 2c63133（site-packages 已同步），生效需 `/restart`。声明引擎侧语义见 [多 Agent 体系](../architecture/multi-agent.md)（目录形态后记二 + services 依赖声明）。
 
+## README.md 不再列为伪 agent +「📖 目录说明」只读渲染入口（2026-10-06 · 三，commit e0d0060）
+
+**用户补充实锤**：「还有那个 README.md 会显示在 /agents 页面里」——`.agent/agents/README.md` 是 [seed_dir_docs 播种](workspace-seeding.md)的目录说明文档（`src/dir_docs/agents.md`，无 frontmatter、非 agent 声明），但 `load_agents_index` 的 `*.md` 平铺扫描把它当成 name=README 的旧格式伪 agent 列进了管理页。
+
+| 文件 | 改动 |
+|---|---|
+| src/agent_config.py（`load_agents_index`） | 扫描循环显式跳过 `README.md`——列表不再出现伪 agent，agent_prompt / kill_agent 的动态 enum 也随之干净；定性注释：目录说明文档不是 agent，走只读渲染入口 |
+| src/server.py | 新端点 `GET /api/agents/readme-doc`：读 `.agent/agents/README.md` → `python-markdown` 渲染（tables + fenced_code 扩展，表格/代码块都出）；**注册在 `/{name}` 路由之前**——防路径参数把固定路由吞掉 |
+| src/static/agents.html | 按钮区加「📖 目录说明」（⟲ 刷新旁）→ `showReadme()`：覆盖式只读面板（fixed inset:0）+ 渲染 HTML 直插 + 暗色代码块样式 + `← 返回`；**不走编辑器**——编辑器只属于真 agent |
+
+commit `e0d0060`，site-packages 已同步，`/restart` 后生效。播种侧闭环见 [workspace 播种](workspace-seeding.md)；声明扫描语义见 [多 Agent 体系](../architecture/multi-agent.md)。
+
 ## `_func_runtime_env` → `_runtime_form`：运行形态自我认知（2026-09-19 · 二，v0.29.5）
 
 **用户提案（同日二轮）**：「环境信息里是不是也应该让它自己知道，比如『当前启动了一个服务在 localhost:8000，外界是通过这个服务与自己交互的』」。

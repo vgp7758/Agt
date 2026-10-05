@@ -39,6 +39,7 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 ### 扫描与专属工具挂载
 
 - `_agents_glob`（src/agent_config.py）：平铺 `*.yml`/`*.md` + 子目录 `<name>/<name>.yml`；**目录内的 .md 不单列**（由 yml 的 file: 装配引用，防同名遮蔽误判）
+- **`.agent/agents/README.md` 不入索引**（2026-10-06 · 三，commit e0d0060）：`load_agents_index` 显式跳过——它是 [seed_dir_docs 播种](../features/workspace-seeding.md)的目录说明（非 agent 声明），此前被平铺扫描当 name=README 的伪 agent 列出；管理页另提供「📖 目录说明」只读渲染入口，见 [Agent 管理页](../features/agents-admin.md)
 - `_agent_own_tools(name, agent)`（src/multiagent.py）：**拉起/复活两条路径**扫描 `<name>/tools/*.py` 挂进工具箱——**同名覆盖全局**；一次性任务脚本防御继承（import 预检，见 [工具外置 · 目录收敛](../features/tool-externalization.md)）
 - 目录形态写进播种引导文档：`src/dir_docs/agents.md`（随启动播种到 `.agent/agents/README.md`，见 [workspace 播种](../features/workspace-seeding.md)）；translator demo 随 commit 入库
 - **平铺形态并存零迁移**——存量声明不需要动

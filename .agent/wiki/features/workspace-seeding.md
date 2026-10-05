@@ -8,6 +8,7 @@
 - **播种目标（7 个约定目录）**：`tools/builtin/`、`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`nodes/`、`.agent/nodes/`
 - **语义**：目录不存在 → 创建目录 + 播种（引导价值：一眼看到全部可扩展点）；`README.md` 已存在 → 跳过——**用户改动永不覆盖**
 - **写入**：字节级 + `seed_state` 基线——接入 /update-assets 三方 hash 判定管道（框架升级后文档可安全更新）
+- **`.agent/agents/README.md` 的消费端闭环**（2026-10-06 · 三，commit e0d0060）：该目录说明此前会被 [/agents 管理页](agents-admin.md)当 name=README 的伪 agent 列出（平铺 `*.md` 扫描）——现 `load_agents_index` 显式跳过，页面改提供「📖 目录说明」只读渲染入口（`GET /api/agents/readme-doc`，python-markdown 渲染）
 
 ## seed_default_skills · test-svc 示例技能（2026-09-28，用户提案「最小实现播种给每一个 repo」）
 

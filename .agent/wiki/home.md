@@ -50,3 +50,7 @@
 
 - **ask_user 问卷宽容归一（2026-10-05 · 四，20048 实例实锤）**：跨实例问卷两处渲染翻车——agent 把 options 传成**对象数组**（前端 `String(对象)` → 全部 `[object Object]`）+ **整句逐词拆成上百个单词选项**，旧版 ask_user 对 options 零校验直接透传。修复三件：①后端 `_normalize_survey` 宽容归一（对象项提 text/label/value 等 7 键转字符串；整段字符串按分隔符拆；>10 项且均长<6 判疑似逐词拆分；缺题面补占位）；②前端 `renderSurveyBubble` 对象选项直接 JSON.stringify（永不再 [object Object]，双保险）；③归一警告附在 ask_user 返回值尾部——agent 答完卷即看到，下次调用自愈。四态测试全绿；site-packages 已同步（20048 重启生效后端，前端刷新即见）。详见 [ask_user](features/ask-user.md)
 
+## 快速事实增补（2026-10-05 · 五 · ask_user 归一提升模块级：重启恢复路径也过归一，存档自愈闭环）
+
+- **ask_user 归一提升模块级 + 恢复路径补刀（2026-10-05 · 五，用户追问「重启再加载能渲染吗」暴露）**：归一原只挂 `ask_user` 入口，pending 问卷是**存档态**——旧坏问卷重启后 `check_pending_survey` re-emit 时绕过归一原样渲染。两处闭合：①`_normalize_survey` 从 `make_survey_tools` 嵌套提升**模块级**（src/survey_tools.py L30）；②恢复路径 re-emit 前过归一并**写回** extra_state（坏形态只修一次，此后读档即净）。重启后两题命运对照：对象选项题**存档自愈**；百词选项题存档里已是合法字符串数组，归一不猜意图合并、需 agent 重发——分界线：归一救「形态错」不救「语义错」。site-packages 已同步。详见 [ask_user · 修复三](features/ask-user.md)
+

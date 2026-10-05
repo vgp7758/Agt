@@ -15,10 +15,10 @@ answers:   {"q1": "Python", "q2": ["日志", "监控"]}
 
 | 层 | 位置 | 内容 |
 |---|---|---|
-| 阻塞 | src/survey_tools.py `ask_user` L122-153 | pending 落 `session.extra_state["_pending_survey"]`（持久化，重启后 `check_pending_survey` re-emit 恢复）→ `Event().wait()` 无限等待 → `resolve_survey` 置 result + `event.set()` |
+| 阻塞 | src/survey_tools.py `ask_user` | pending 落 `session.extra_state["_pending_survey"]`（持久化，重启后 `check_pending_survey` re-emit 恢复）→ `Event().wait()` 无限等待 → `resolve_survey` 置 result + `event.set()` |
 | 事件 | `_emit_survey` | `survey_pending` 广播（questions 随事件下发）；WS action `survey_decision`（server.py，与 approval/human_step 同址）回传 answers |
 | 前端 | src/static/index.html `renderSurveyBubble`（L3032） | 青色问卷卡片：单选/多选 + 可自定义输入，提交发 WS |
-| 归一 | `_normalize_survey`（L73-119，嵌套在 `make_survey_tools` 内） | **2026-10-05 新增**——发问卷前宽容归一，见下节 |
+| 归一 | `_normalize_survey`（模块级，L30） | **2026-10-05 新增**——新问卷入口与重启恢复路径共用的宽容归一单源，见下节 |
 
 ## 20048 实锤：两种坏形态一路绿灯（2026-10-05）
 
@@ -55,6 +55,26 @@ return _j.dumps(result, ensure_ascii=False, indent=2) + ('\n⚠️ 归一警告�
 
 用户答完卷 Agent 拿到结果时**连警告一起看到**——「啊我上次的 options 传成对象了」，下次调用自愈（自愈闭环靠工具结果反馈，不靠用户骂）。`[错误] 用户未提供任何回答` 分支同样附警告。
 
+## 修复三：归一提升模块级 + 恢复路径（重启 re-emit）也过归一（2026-10-05 · 二）
+
+修复一的补刀：归一只挂在 `ask_user` **入口**，而 pending 问卷是**存档态**——坏问卷以原样躺在 `extra_state["_pending_survey"]`，重启后 `check_pending_survey` re-emit 时**绕过归一**原样渲染。用户追问「那我重启再加载能渲染吗」暴露的缺口，两处改动闭合：
+
+1. **`_normalize_survey` 提升模块级**（src/survey_tools.py L30，原嵌套在 `make_survey_tools` 内）——恢复路径（模块级 `check_pending_survey`）与新问卷入口同用一份归一，单源坐实。
+2. **恢复路径过归一并写回**：`check_pending_survey` re-emit 前 `sid, _w = _normalize_survey(sid)` → 归一结果**存回** `extra_state["_pending_survey"]`（坏形态只修一次，此后读档即净）→ try/except 容错，归一异常不阻塞恢复。
+
+### 重启后两题的不同命运（20048 对照）
+
+| 题 | 重启后 | 原因 |
+|---|---|---|
+| 第 4 问（`[object Object]`） | ✅ **存档自愈** | 对象选项在读档 re-emit 时提取文本键转字符串——归一救得了的「形态错」，重启即净 |
+| 第 5 问（百词选项） | ⚠️ 照旧 | 存档里已是**合法**字符串数组（每词一项）——归一不猜意图合并，需让 agent 重发问卷 |
+
+分界线：归一救「形态错」（对象 / 整段字符串），不救「语义错」（真把单词当选项）——后者靠修复二的警告回注让 agent 自觉重发。
+
+### 验证
+
+模块级直调 `['甲','乙']` 原样通过零警告 ✓；site-packages 已同步，20048 重启即三层齐活（入口归一 + 恢复归一 + 前端兜底）。commit 已落本地（GitHub 推送当晚被网络卡住，push-retry 定时重试中，不影响本机功能）。
+
 ## 验证：四态全绿
 
 | # | 场景 | 预期 | 结果 |
@@ -66,9 +86,9 @@ return _j.dumps(result, ensure_ascii=False, indent=2) + ('\n⚠️ 归一警告�
 
 ## 注意事项
 
-- **生效方式**：后端归一需 `/restart`（site-packages 已同步）；前端 JSON 化防御刷新页面即见。20048 那份坏问卷本身让 agent 重新发一次即正常。
+- **生效方式**：后端归一需 `/restart`（site-packages 已同步）；前端 JSON 化防御刷新页面即见。20048 旧问卷两题命运不同：对象选项题重启**存档自愈**（恢复路径归一），百词选项题数据本身已合法、需让 agent 重发。
 - **警告只进工具返回值**（给 Agent 复盘自愈），不进问卷卡片——用户看到的已是归一后的正常问卷。
-- `_normalize_survey` 是 `make_survey_tools` 的**嵌套函数**（闭包引用 `agent` 无关，纯函数逻辑）；施工时曾两次因顶层定义缩进不符被 ast.parse 拦截——工具工厂模式文件里新函数记得嵌进 factory。
+- `_normalize_survey` 现为**模块级函数**（2026-10-05 · 二从 `make_survey_tools` 内整块提升、去一层缩进）——恢复路径 `check_pending_survey` 也要调它；施工时曾两次因缩进不符被 ast.parse 拦截，提升时一次到位。
 - 与 [human_step](human-step.md) 同文件（survey_tools.py）同阻塞底座：human_step 30 分钟超时兜底，ask_user **无超时**（问卷可以放一晚上）。
 
 ## 相关页面

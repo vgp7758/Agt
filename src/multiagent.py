@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -862,7 +863,10 @@ def make_subagent_tools(agent) -> list:
             return f"[非法名称] '{name}'，只能含字母数字、下划线、连字符"
         if model and model not in config.MODELS:
             return f"[未知模型] '{model}'，可用：{list(config.MODELS)}"
+        # 2026-10-06 用户裁定：create_agent 默认目录形态——<name>/<name>.yml + <name>.md + tools/
+        d = d / name
         d.mkdir(parents=True, exist_ok=True)
+        (d / "tools").mkdir(exist_ok=True)   # 专属工具占位目录（desktop-tools 式 agent 直接放脚本）
         p = d / f"{name}.yml"
         # 装配清单：system 大段抽 .md（file: 装配）；assembly 参数解析段名（|optional）；默认补必需段
         asm = []
@@ -870,7 +874,7 @@ def make_subagent_tools(agent) -> list:
         if len(_sys) > 2000:
             md = d / f"{name}.md"
             md.write_text(_sys, encoding="utf-8")
-            asm.append({"file": f".agent/agents/{name}.md"})
+            asm.append({"file": f".agent/agents/{name}/{name}.md"})
         else:
             asm.append({"text": _sys})
         if assembly.strip():
@@ -921,6 +925,10 @@ def make_subagent_tools(agent) -> list:
             return f"[非法名称] '{name}'，只能含字母数字、下划线、连字符"
         d = WORKSPACE / _AGENT_DIR / "agents"
         gone = False
+        # 目录形态优先（2026-10-06）：整目录移除（yml+md+tools）；平铺兜底（存量）
+        if (d / name).is_dir():
+            shutil.rmtree(d / name, ignore_errors=True)
+            gone = True
         for ext in (".yml", ".md"):
             p = d / f"{name}{ext}"
             if p.exists():

@@ -1,57 +1,14 @@
 # .agent/agents/ — 子 Agent 声明目录
 
-子 Agent 有两种声明形态（自动识别，同名**目录形态优先**）：
-· **平铺**：`<name>.yml`（v2 主形态，frontmatter 声明）/ `<name>.md`（旧格式兼容）
-· **目录**：`<name>/<name>.yml` + `<name>.md` + `tools/`（自包含——人设/装配/专属工具整体拷贝、分发、版本化）
-
-声明后自动出现在团队里：主 Agent SYSTEM 的团队清单会列出，`agent_prompt(name, 任务)` 派活。
-
-## 目录形态（2026-09-27：人设 + 装配 + 专属工具自包含）
+**一个子 Agent 一个目录**（2026-10-06 起）：
 
 ```
-.agent/agents/translator/
-├── translator.yml        # 声明（file: 可引用同目录人设，如 file: .agent/agents/translator/translator.md）
-├── translator.md         # 人设正文（yml 的 file: 装配项引用）
-└── tools/                # ★ 专属工具（仅该子 Agent 可见；agt_register 约定同 tools/builtin）
-    └── now.py
+<name>/
+  <name>.yml    # 声明：name/description/model/tools/assembly/hooks/fallback
+  <name>.md     # 人设（persona，assembly 用 file: 引用）
+  tools/        # 专属工具（agt_register 约定，同 tools/builtin）
 ```
 
-- `tools/*.py` 在该 Agent **被拉起/复活时**扫描挂载（同名覆盖全局工具；一次性任务脚本防御自动继承）
-- 平铺形态继续有效；两种形态并存，无需迁移
-- 全部工具的完整清单见下方「工具对照表」（read/navigate/run_code/evaluate/equip/use）
-
-## 最小示例
-
-```markdown
----
-name: translator
-description: 中英互译。何时调用：需要高质量中英翻译时
-model: deepseek
-fallback: glm, deepseek-flash
-assembly:
-  - user_message
-  - history
-  - skills
----
-
-你是专业译者……（SYSTEM 人设正文）
-```
-
-## 常用字段
-
-| 字段 | 说明 |
-|---|---|
-| model / fallback | 主模型 / 回退链（逗号分隔，空=显式关闭） |
-| assembly | SYSTEM 装配清单：user_message / history / skills / ltm / team_board / remote_instances / steps / recent_file / plan …；`段名\|optional` 默认关闭、按需开启；`//` 后为注释 |
-| hooks | 钩子挂工作流：`before_turn: [wf名]`、`turn_end: …`，可加 `async: true` |
-| tools | 限制工具集（默认继承全部） |
-
-## 调用与恢复
-
-- `agent_prompt("translator", "翻译：…")` —— `reuse: yes/no` 控制复用/新建；`current_turn_only: true` 让它只看本轮
-- WebUI 下拉框可切到子 Agent 视角；实例与 session 一起持久化恢复
-
-## 深入
-
-- 管理页：`/agents`（可视化编辑声明/装配/钩子）
-- 装配 DSL 细节：wiki「子 Agent 与 assembly」页
+目录形态自包含（声明+人设+专属工具整体拷贝即分发）；平铺 `<name>.yml` 旧形态仍兼容读取。
+create_agent 默认按此结构创建；随包默认子 Agent 播种也按目录结构。
+声明后自动出现在团队（agent_prompt 派活；kill_agent 删整个目录）。

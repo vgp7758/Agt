@@ -4,7 +4,7 @@ description: 看懂图片并给出文字描述。何时调用：工具返回 <im
 tools: ''
 model: glm-official-flash
 assembly:
-- file: .agent/agents/vision.md
+- file: .agent/agents/vision/vision.md
 - history|optional // 连续看图任务或需要对比之前看过的图片时打开
 - user_message
 - steps
@@ -17,6 +17,6 @@ fallback:
   chain:
   - qwen
   - glm-official-flash
-  - kimi
   - local-lfm-vl
+  - deepseek
   policy: reset

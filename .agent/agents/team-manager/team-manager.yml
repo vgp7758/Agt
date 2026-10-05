@@ -4,7 +4,7 @@ description: 团队管理 Agent——自动拉起团队成员、恢复各自 ses
 tools: ''
 model: fk-ds-flash
 assembly:
-- file: .agent/agents/team-manager.md
+- file: .agent/agents/team-manager/team-manager.md
 - history|optional // 巡检连续性：需要对照此前拉起/巡检记录时打开
 - user_message
 - steps

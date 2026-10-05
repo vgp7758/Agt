@@ -3,7 +3,7 @@ description: 只读搜索/定位代码。何时调用：需要在多个文件/�
 tools: read_file,grep,list_dir,glob,glob_files
 model: glm-official-flash
 assembly:
-- file: .agent/agents/explorer.md
+- file: .agent/agents/explorer/explorer.md
 - history|optional // 需要结合此前搜索发现继续排查时打开
 - user_message
 - steps

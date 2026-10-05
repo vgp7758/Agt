@@ -633,13 +633,23 @@ def seed_default_agents(workspace: Path) -> int:
     from asset_sync import _sha, _load_state, _save_state
     st = _load_state(workspace)
     n = 0
-    for src in sorted(list(bundled.glob("*.yml")) + list(bundled.glob("*.md"))):
-        target = dst / src.name
+    # 2026-10-06 目录化播种（用户裁定）：源目录形态（<name>/<name>.yml+md）整目录播；
+    # 平铺源（旧 wheel 兼容）也播到 <name>/ 目录——目标结构一律目录形态
+    items = []
+    for sub in sorted(bundled.iterdir()):
+        if sub.is_dir():
+            for f in sorted(sub.iterdir()):
+                if f.suffix in (".yml", ".md"):
+                    items.append((f, dst / sub.name / f.name))
+        elif sub.suffix in (".yml", ".md"):
+            items.append((sub, dst / sub.stem / sub.name))
+    for src, target in items:
         if target.exists():
             continue
         try:
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(src.read_bytes())   # 字节级：write_text 行尾转换会让 /update-assets 的 hash 对不上
-            st[f"agent/{src.name}"] = _sha(src)
+            st[f"agent/{target.relative_to(dst).as_posix()}"] = _sha(src)
             n += 1
         except Exception:
             pass

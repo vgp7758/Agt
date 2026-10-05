@@ -3,7 +3,7 @@ description: 审查代码找问题。何时调用：改动后要审查（bug/质
 tools: read_file,grep,list_dir
 model: glm-official-flash
 assembly:
-- file: .agent/agents/reviewer.md
+- file: .agent/agents/reviewer/reviewer.md
 - history|optional // 对照之前的审查结论复查时打开
 - user_message
 - steps

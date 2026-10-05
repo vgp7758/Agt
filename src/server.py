@@ -1918,13 +1918,17 @@ def _persona_from_decl(meta: dict, system: str) -> str:
     ② 首项 text:（v2 迁移产物，内嵌）→ text 内容；
     ③ 兜底 load_agent_yml 的 system。"""
     asm = meta.get("assembly")
-    if isinstance(asm, list) and asm and isinstance(asm[0], dict):
-        if asm[0].get("file"):
-            p = _read_persona_md(str(asm[0]["file"]))
-            if p:
-                return p
-        if asm[0].get("text"):
-            return str(asm[0]["text"])
+    if isinstance(asm, list) and asm:
+        # 2026-10-06 修：扫描制（原版只看 asm[0]——目录形态 assembly 首项常是 seg:system，
+        # persona 的 file:/text: 在其后 → persona 显示空，用户 agents#edit 页实锤）
+        for _it in asm:
+            if isinstance(_it, dict):
+                if _it.get("file"):
+                    p = _read_persona_md(str(_it["file"]))
+                    if p:
+                        return p
+                if _it.get("text"):
+                    return str(_it["text"])
     return system or ""
 
 

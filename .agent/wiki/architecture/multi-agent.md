@@ -93,6 +93,32 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 - **读写对称**（src/server.py）：GET 返回行式文本（textarea 直读回显）→ PUT 解析回 `[{名: 命令}]` 列表写进 yml——**保存不再丢声明**
 - 声明引擎侧语义（实例化幂等拉起 / kill 同步停服）不变，见上
 
+### 主 Agent 对称补齐：main.yml services 启动期拉起（2026-10-06 · 三，用户问诊，commit ee4f4e9）
+
+用户问诊「services 装配对主 agent 也有效对吧」——**原本不是**：`_ensure_agent_services` 只挂在子 Agent 实例化路径（agent_prompt → load_agent_yml 之后，见上节行为链），主 Agent 的 `build_agent` 启动链路没接。补齐（src/chat.py `build_agent` 尾部、`return agent` 之前）：
+
+```python
+# main.yml services：主 Agent 依赖服务（2026-10-06 用户问诊补齐——与子 Agent 实例化拉起对称）。
+# 幂等（ServiceManager 同名温和拒绝）；启动期拉起，进程生命周期内常驻。
+try:
+    from multiagent import _ensure_agent_services
+    from agent_config import seed_main_agent, load_agent_yml
+    _mm, _ = load_agent_yml(seed_main_agent(workspace))
+    _ensure_agent_services(_mm, agent)
+except Exception:
+    pass
+```
+
+| 项 | 语义 |
+|---|---|
+| 声明源 | `~/.agt/main.yml`（全局）或 workspace `.agent/main.yml`——`seed_main_agent` 定位，与主 Agent DSL 同源 |
+| 幂等 | 与子 Agent 走**同一个** `_ensure_agent_services`——同名在跑温和跳过，多实例共享服务不重复拉起 |
+| 容错 | 声明缺失 / 解析失败 / 单项 start 抛异常全吞，**不阻断启动**（与子 Agent 路径同口径） |
+| 时序（有意差异） | 主 Agent 服务在【实例启动时】拉起，子 Agent 在【派发实例化时】——对齐两者生命周期差异（主进程常驻 vs 子 Agent 按需） |
+| 生效 | `/restart` 一次（启动期代码；chat.py 已同步 50052 site-packages 实例） |
+
+至此 services 语义全体系统一：**主 Agent 启动拉 / 子 Agent 实例化拉 / kill_agent 同停**——三类生命周期各得其所。
+
 ### 验证
 
 四场景单测全绿：列表/dict 两种声明形态、无声明零调用、start 抛异常不炸实例化。

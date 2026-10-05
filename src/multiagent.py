@@ -181,7 +181,7 @@ def _agent_own_tools(name: str, agent):
 # 动作项：file/dir/cmd/text 默认每轮求值（mtime 热改生效），workflow 默认 once 实例固化。
 _ASSEMBLY_SEGS = {"system", "rules", "history", "ltm", "user_message", "hooks", "steps", "recent_file", "tail"}
 _ASSEMBLY_TOGGLES = {"rules", "history", "ltm", "hooks", "tail"}
-_ASSEMBLY_ACTIONS = ("file", "dir", "cmd", "workflow", "text", "func", "tool")
+_ASSEMBLY_ACTIONS = ("file", "dir", "cmd", "workflow", "text", "func", "tool", "image_feed")
 _ASSEMBLY_MUST = ("system", "user_message", "steps")
 # 段的默认相对顺序（必装段自动补插的位置基准；= session._DEFAULT_ASSEMBLY_PLAN 的段序）
 _ASSEMBLY_SEG_ORDER = ("system", "rules", "history", "ltm", "user_message", "steps", "tail")

@@ -1515,6 +1515,33 @@ class Session:
                 if not out:
                     return ""
                 return out[:32_000]
+            if kind == "image_feed":
+                # 实时画面装配段（2026-10-06·用户提案）：每步从画面服务取最新帧 → base64 挂投影末尾。
+                # src 支持 http(s)://（内存流，零落盘——推荐）与文件路径（workspace 相对）。
+                # vision 门控：非视觉模型整段静默跳过；失联/空帧降级一行文字（不炸轮）。
+                # 哨兵返回：@@IMGFEED@@data:<mime>;base64,<b64>@@——桶收集处抽进图片通道，不进文本桶。
+                _src = str(item.get("image_feed") or item.get("src") or "").strip()
+                if not _src:
+                    return ""
+                if not getattr(getattr(self, "llm", None), "vision_supported", False):
+                    return ""   # 非视觉模型：静默跳过（不注入 base64，省 token + 防 400）
+                import urllib.request as _ur, base64 as _b64
+                try:
+                    if _src.lower().startswith(("http://", "https://")):
+                        with _ur.urlopen(_src, timeout=3) as _r:
+                            data = _r.read(6_000_000)
+                            mime = (_r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+                    else:
+                        _p = Path(_src)
+                        if not _p.is_absolute():
+                            _p = Path(self.workspace) / _p
+                        data = _p.read_bytes()
+                        mime = mimetypes.guess_type(str(_p))[0] or "image/jpeg"
+                except Exception as _e:
+                    return f"[image_feed 不可用：{type(_e).__name__}——画面服务未启动或不可达（{_src}）]"
+                if not data:
+                    return f"[image_feed 空帧：{_src}]"
+                return f"@@IMGFEED@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
             if kind == "workflow":
                 return _eval_assembly_workflow(str(item.get("name") or ""), self)
             if kind == "tool":
@@ -1881,6 +1908,8 @@ class Session:
         self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
         run: list[dict] = []                # 系统信息 run 缓冲（各段 0/1 条消息）
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
+        tail_images: list = []              # 区3 图片桶（image_feed 哨兵抽取，2026-10-06·用户提案）：
+                                            # merge 段组装成 image_url 块挂末条（瞬态：不落 events/存档）
         tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项·默认/reminder posture）：
                                             # 装配后统一包裹并入末条 content
         tail_stat_text: str = ""            # 统计专用镜像桶（2026-09-16·用户抓到重复计算）：与
@@ -2036,6 +2065,12 @@ class Session:
                         # · 默认/reminder → tail_merge_text（装配后包裹并入末条 content）
                         _pose = str(item.get("mode") or "").strip().lower()
                         _b = "\n".join(str(m.get("content") or "") for m in own)
+                        # image_feed 哨兵抽取（2026-10-06）：@@IMGFEED@@data:...@@ 不进文本桶——
+                        # 抽进 tail_images（merge 段组装 image_url 挂末条；base64 不进统计文本桶）
+                        _imgs = re.findall(r"@@IMGFEED@@(.+?)@@", _b)
+                        if _imgs:
+                            tail_images.extend(u for u in _imgs if u.startswith("data:"))
+                            _b = re.sub(r"@@IMGFEED@@.+?@@", "", _b).strip()
                         if _pose == "reasoning":
                             reasoning_merge_text = (reasoning_merge_text + "\n\n" + _b) if reasoning_merge_text else _b
                             _sec(f"{nm}（尾部·思考链）", own, meta + "·注入思考链(reasoning)", msgs_n=0)
@@ -2044,6 +2079,9 @@ class Session:
                             tail_stat_text = (tail_stat_text + "\n\n" + _b) if tail_stat_text else _b
                             _sec(f"{nm}（尾部）", own, meta + "·并入末条(reminder)", msgs_n=0)
                     else:
+                        if any("@@IMGFEED@@" in str(m.get("content") or "") for m in own):
+                            _LOG.warning("assembly image_feed 项应声明在 steps 段之后（区3 尾部）——图片不进 system run，已跳过")
+                            continue
                         run.extend(own)
                         run_secs.append((nm, own, meta))
         # —— 区3 统一 merge（三区重构 2026-09-01，双桶演进 2026-09-03）——
@@ -2131,6 +2169,31 @@ class Session:
                 _apply_reasoning_bucket(tail_merge_text, _ai, _why, stat_text=tail_stat_text)
             else:
                 _apply_reminder_bucket(tail_merge_text, tail_stat_text)
+
+        # —— image_feed 通道（2026-10-06·用户提案：实时画面装配段）——
+        # tail_images 的 data URL 组装成 image_url 块：末条 user → content 数组化追加；
+        # 末条 assistant → 独立 user 消息承载（部分端点不允许 assistant 挂图）。
+        # 瞬态语义：组装层注入（不落 events.jsonl/step 存档）；每步求值 = 每步最新帧。
+        if tail_images:
+            if msgs and msgs[-1].get("role") == "user":
+                _last = msgs[-1]
+                _m2 = {**_last}   # 浅拷贝——绝不就地改共享引用
+                _c = _m2.get("content")
+                if isinstance(_c, str):
+                    _blocks = [{"type": "text", "text": _c}] if _c else []
+                elif isinstance(_c, list):
+                    _blocks = list(_c)
+                else:
+                    _blocks = []
+                _m2["content"] = _blocks + [{"type": "image_url", "image_url": {"url": u}}
+                                            for u in tail_images]
+                msgs[-1] = _m2
+            else:
+                msgs.append({"role": "user",
+                             "content": [{"type": "image_url", "image_url": {"url": u}}
+                                         for u in tail_images]})
+            _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
+                 "末条追加image_url（瞬态·不落档）", msgs_n=0)
 
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):

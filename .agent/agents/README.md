@@ -31,6 +31,11 @@ assembly:
   # - image_feed: http://127.0.0.1:8765/frame  # 实时画面段（视觉模型）
 # services:                      # 依赖服务（实例化幂等拉起，kill 时同停）
 #   - my-frame: python .agent/agents/my-agent/tools/frame.py 8765
+# fallback: [proxy, glm-official]   # 声明级回退链（主请求失败按序回退；引擎三路径均应用）
+# fallback_policy: sticky           # sticky=回退后停在新模型直到手动切；reset=每轮从链首重试
+# hooks:                            # 钩子挂载（位置=工作流，|async 后缀）
+#   before_turn: wiki_auto_query
+#   turn_end: [recap_gen|async]
 ```
 
 人设 md（可选）、专属工具 `tools/*.py`（agt_register 约定）放同目录。

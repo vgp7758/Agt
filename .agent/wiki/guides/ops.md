@@ -473,6 +473,24 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **排障口诀**：「改了没生效」先查**进程 import 的是哪份代码**——repo / site-packages / editable 三份并存时，改错一份=零效果。`pip show -f <包名>` 看 Location 是否 editable；Python 侧打印模块 `__file__` 一击定位实体路径。
 
+### 实例假死（busy 无输出）：MCP server hang 拖死 worker——py-spy 抓栈定位（2026-10-06，50052 实锤）
+
+**症状（50052 用户报告）**：实例阻塞——WebUI busy、但 `llm_calls.jsonl` 最后一条 05:24 后零新记录；进程 06:00 仍存活、无崩溃日志。**判别口诀：进程死 ≠ 假死**——「进程活着 + 流水停摆」才是假死标志。
+
+**诊断：py-spy 抓栈**（`py-spy dump --pid <pid>`）——worker 线程钉死在 `call_tool_sync → future.result()`：对端业务 MCP server（千牛/抖音系）hang 不回，`_run_coro` 有 timeout 形参但调用侧恒不传（「防误杀长任务」旧取舍）→ 无限等。诊断细节与修复见 [mcp-config · 600s 兜底](../features/mcp-config.md)。
+
+**处置**：kill 旧进程 + `agt-web 50052 --resume` 重拉；卡住的轮是中断态，`/continue` 续跑不丢上下文（见 [中断轮恢复](../features/resume-interrupted.md)）。
+
+**「实例没响应」三态排查顺序**：
+
+| 形态 | 特征 | 手段 |
+|---|---|---|
+| ① 进程死 | 端口不通 | restart 日志（`~/.agt/restart-web-{port}.log`）看死因 |
+| ② 假死（进程活、流水停） | llm_calls 无新记录 + 端口通 | **py-spy dump 抓栈**——卡在哪一行一目了然 |
+| ③ 慢（流水在动） | llm_calls 有记录但 elapsed 巨大 | /stats 看端点耗时，多为 LLM 端点侧问题 |
+
+**防御落地**：`call_tool_sync` 600s 兜底（commit `fc8d2c0`）——此后 MCP 单点 hang 最多拖 10 分钟即转为工具错误消息，轮继续。
+
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 
 - **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)

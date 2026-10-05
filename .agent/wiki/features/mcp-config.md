@@ -93,6 +93,22 @@
 
 生效：`/restart` 后启动装配自动读两级配置连接，工具以 `__mcp__videoclipper__*` 前缀进工具箱（与 [全量重载](#全量重载reload_mcp-无参数--重读两级配置重建全部2026-09-18commit-c3554c9用户提案) 的工具同步语义一致）。
 
+## MCP 工具调用 600s 兜底：call_tool_sync 无超时——业务 server hang 拖死 worker（2026-10-06，50052 实锤，commit fc8d2c0）
+
+现象（2026-10-06，50052 实例）：实例 busy 但 llm_calls 最后一条 05:24 后零新记录，进程 06:00 仍活着——全程空转 35 分钟+。py-spy 抓栈铁证：worker 线程钉死在
+
+```
+Thread-8 (worker)：_exec_tool → tools.call → call_tool_sync → future.result()   ← 无超时，无限等
+```
+
+**根因**：`src/mcp_client.py` 的 `call_tool_sync` 内部 `self._run_coro(self._call(server, name, args))` **不传 timeout**——`_run_coro` 本有 timeout 形参，但调用侧恒不传，旧取舍是「工具调用不传超时——防误杀长任务」。对端业务 MCP server（千牛/抖音系）hang 不回时，单次工具调用 = 整个实例假死：轮不推进、不报错、无日志，只能靠外部观测发现。
+
+**修复（commit `fc8d2c0`）**：`call_tool_sync` 加 **600s 兜底**——超时 raise → react 捕获为工具错误消息，轮继续、不 hang。语义取舍随之明确：真超长任务应走后台（run_python 超时转后台那套语义），不该靠 MCP 同步调用无限等。
+
+**事故处置**：kill 旧进程 + `agt-web 50052 --resume` 重拉（探活 busy=false），卡住轮为中断态 `/continue` 续跑（当时在跑 vision 子 Agent 底图质检 + EP2 视频生产线，上下文未丢）。
+
+**生效注意**：修复已同步 site-packages，但 50052 是修复**后**重拉、跑的还是旧代码——**下次重启**才带上该防御（与 [「磁盘改了但页面不生效」](../guides/ops.md) 同族：pip 实例跑的是 site-packages 实体）。排障全记录见 [ops · 实例假死](../guides/ops.md)。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

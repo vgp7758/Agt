@@ -127,6 +127,14 @@ Ctrl+F5 刷新 /agents 即生效（静态页 mtime 热更新，不用 /restart�
 
 同轮还修掉 `api_callback` 硬编码 `~/.agt/settings.json` 导致 AGT_HOME 非默认环境下回调全被拒的 bug。详见 [外部事件注入](external-injection.md)。
 
+## 声明目录化配套：persona 正文读写 + ACT_TYPES 增 image_feed + kill 整目录移除（2026-10-06）
+
+desktop-operator 目录化（见[多 Agent 体系](../architecture/multi-agent.md)）同轮的管理页配套三件：
+
+- **persona 正文读写走 file: 项**：`_read_persona_md`（src/server.py）从 assembly `file:` 项指向的 md 直读正文、剥 frontmatter（yml 存在时 md 是纯 persona 载体，不再带声明头）；路径基于 `server._workspace`，与 `_dump_agent_yml` 写盘同源——**读写对称**
+- **ACT_TYPES 增 image_feed**（src/static/agents.html）：装配动作类型下拉可直接选「实时画面」项，值 = 画面服务 URL（如 `http://127.0.0.1:8765/frame`，详见 [image_feed](image-feed.md)）
+- **kill_agent 删声明整目录移除**：目录形态（`<name>/`）删 yml 时连 md 人设 + tools/ 一起移除；平铺存量兜底只删单文件
+
 ## `_func_runtime_env` → `_runtime_form`：运行形态自我认知（2026-09-19 · 二，v0.29.5）
 
 **用户提案（同日二轮）**：「环境信息里是不是也应该让它自己知道，比如『当前启动了一个服务在 localhost:8000，外界是通过这个服务与自己交互的』」。

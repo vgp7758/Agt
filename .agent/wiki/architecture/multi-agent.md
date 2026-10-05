@@ -43,6 +43,38 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 目录形态写进播种引导文档：`src/dir_docs/agents.md`（随启动播种到 `.agent/agents/README.md`，见 [workspace 播种](../features/workspace-seeding.md)）；translator demo 随 commit 入库
 - **平铺形态并存零迁移**——存量声明不需要动
 
+## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
+
+**动机**——desktop-operator 依赖 desktop-frame 画面服务（见 [image_feed 实时画面段](../features/image-feed.md)），此前要靠人记得手工 start；一次 rc=1 崩溃后忘了拉起，Agent 直接「睁眼瞎」。用户提案：「yml 里声明依赖服务，agent 实例化时拉起」——把服务生命周期挂到声明上。
+
+### 声明形态（desktop-operator.yml）
+
+```yaml
+services:
+  - desktop-frame: python tools/image_feed_poc.py 8765
+```
+
+列表 of 单键映射；裸 dict 形态也认（`services: {名: 命令}` 包成单元素列表）。
+
+### 行为链（src/multiagent.py `_ensure_agent_services`）
+
+1. **接线点**：`agent_prompt` 实例化路径，`load_agent_yml` 之后、`_resolve_tools` 之前调用
+2. 逐项 `agent.services.start(服务名, 命令, cwd=workspace)`——相对路径命令可用；**幂等**：同名服务已在跑 → ServiceManager 跳过（多实例共享同一服务，不重复拉起）
+3. 单项失败 → `_LOG.warning` 吞掉，**不阻断实例化**（服务挂 ≠ Agent 不能建；挂了另有 on_exit_wake 兜底通知）
+
+### 生命周期同步（kill_agent）
+
+kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）——**服务随声明生灭**。顺带：删声明时目录形态优先整目录移除（yml+md+tools），平铺存量兜底只删单文件。
+
+### 验证
+
+四场景单测全绿：列表/dict 两种声明形态、无声明零调用、start 抛异常不炸实例化。
+
+### 关联
+
+- [image_feed 实时画面段](../features/image-feed.md) —— 首个消费端 desktop-operator 的画面来源
+- [Agent 管理页](../features/agents-admin.md) —— 编辑器与 persona 读写配套
+
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
 **背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：

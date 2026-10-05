@@ -54,3 +54,7 @@
 
 - **ask_user 归一提升模块级 + 恢复路径补刀（2026-10-05 · 五，用户追问「重启再加载能渲染吗」暴露）**：归一原只挂 `ask_user` 入口，pending 问卷是**存档态**——旧坏问卷重启后 `check_pending_survey` re-emit 时绕过归一原样渲染。两处闭合：①`_normalize_survey` 从 `make_survey_tools` 嵌套提升**模块级**（src/survey_tools.py L30）；②恢复路径 re-emit 前过归一并**写回** extra_state（坏形态只修一次，此后读档即净）。重启后两题命运对照：对象选项题**存档自愈**；百词选项题存档里已是合法字符串数组，归一不猜意图合并、需 agent 重发——分界线：归一救「形态错」不救「语义错」。site-packages 已同步。详见 [ask_user · 修复三](features/ask-user.md)
 
+## 快速事实增补（2026-10-06 · desktop-operator 桌面操作 Agent 全链路：image_feed 实时画面段 + services 依赖声明）
+
+- **desktop-operator 桌面操作 Agent 全链路（2026-10-06，深夜四连发）**：①**image_feed 装配段**——assembly 新动作项，每步从画面服务取最新帧挂投影末尾（vision 门控/失联降级不炸轮/瞬态不落档，`@@IMGFEED@@` 哨兵抽取进图片桶、不进文本统计）；服务端 `tools/image_feed_poc.py`（PIL.ImageGrab 全屏 → 1280 宽 JPEG q70 内存缓存，0.5s 节流零落盘）；②**desktop-operator 三件套实测全过**（看帧/工具/剪切板，glm-official-flash）；③**声明目录化配套**——agents 页 persona 正文改从 file: 项 md 直读（剥 frontmatter、读写对称）+ ACT_TYPES 增 image_feed + kill_agent 删声明整目录移除；④**services 依赖声明**（commit 2b621b4）——yml `services: [{名: 命令}]`，实例化幂等拉起（同名在跑跳过、失败 warning 不阻断），kill_agent 同步停服（治了 desktop-frame rc=1 崩溃后忘手工拉起的「睁眼瞎」）。详见 [image_feed](features/image-feed.md) + [services 章节](architecture/multi-agent.md)
+

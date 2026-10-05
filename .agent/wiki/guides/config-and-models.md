@@ -391,7 +391,9 @@ def _openai_client(self) -> OpenAI:
 
 ### enable_snapshots：回溯快照开关（2026-09-30，用户提案）
 
-`false` = 每轮不打影子 git 快照（`.agt/snapshots` 不再增长，/rewind 不可用）——大仓库/低配环境省每轮 `add -A` 全量扫描与磁盘增长。默认 True；**每轮读盘，改完下一轮生效**（免重启）。字符串 "false"/"0"/"off"/"no" 均视为关。机制与行为详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
+`false` = 每轮不打影子 git 快照（`.agt/snapshots` 不再增长，/rewind 不可用）——大仓库/低配环境省每轮 `add -A` 全量扫描与磁盘增长。默认 True；**每轮读盘，改完下一轮生效**（免重启）。字符串 "false"/"0"/"off"/"no" 均视为关。
+
+**2026-10 起开关 repo 级化（用户提案）**：主源改为 `<cwd>/.agent/snapshots_state.json` `{"enabled": bool}`——设置弹窗「其它」页签「回溯快照」控件即时保存（原「模型」页签复选框已移除）；settings.json 的 `enable_snapshots` 降为旧位置**兼容源**（优先级 ②，新写侧保存时顺手清理旧键）。为何不进 repo 级 settings.json：该文件是 `config_file()` **文件级整体覆盖**语义——单键写入会遮蔽全局 settings 其余全部键，故照 `.agent/hooks_state.json` 范式用独立文件。三源优先级与接线详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
 
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 

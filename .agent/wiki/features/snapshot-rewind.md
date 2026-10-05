@@ -14,7 +14,7 @@
 
 每轮影子 git 快照对大仓库/低配环境（VM）是持续开销：`add -A` 全量扫描 + `.agt/snapshots` 只增不减。新增开关可关（用户提案 2026-09-30）：
 
-- **配置**：settings.json `"enable_snapshots": false`（两级配置本地优先——只影响该实例）；或 `/config enable_snapshots false`；WebUI 设置弹窗「回溯快照（/rewind 依赖）」复选框
+- **配置**：主源 = repo 级 `.agent/snapshots_state.json`（2026-10 起，见下节后记）；settings.json `"enable_snapshots": false` 降为**旧位置兼容源**（老配置不丢，新写侧会顺手清掉）；或 `/config enable_snapshots false`；WebUI 设置弹窗「其它」页签「回溯快照」复选框（原「模型」页签控件已移除）
 - **读盘时机**：config.py `load_enable_snapshots()` **每轮读盘**——改完下一轮生效，免重启
 - **关闭后**：跳过 `snapshot()` 调用（checkpoint 事件不再发出，前端计数不受干扰）；`/rewind` 被现有校验拦截且提示明确化：`❌ 倒数第 N 轮没有快照点，无法回溯（回溯快照已在设置中关闭：enable_snapshots=false）`；**已有历史快照保留**不删（想彻底清理手动删 `.agt/snapshots`）
 - **默认**：True（未配置 / 非法值 / 读盘异常都回落开启）
@@ -22,6 +22,42 @@
 **验证**：隔离 AGT_HOME 四态——默认 True / false / 字符串 "false" / 删键恢复 True。
 
 配置键详见 [配置体系](../guides/config-and-models.md)。
+
+### 后记：开关 repo 级化 + 设置「其它」页签——.agent/snapshots_state.json 主源（2026-10，用户提案，commit 04c37d6）
+
+**用户提案（2026-10）**：「回溯快照的开关设置也放在 Other 里保存在 repo 吧，这个一般是跟着 repo 设置的」——两个诉求：① 控件从设置弹窗「模型」页签挪到「其它」页签；② 配置持久化到 **repo 级**（快照开销本质是 per-repo 属性：大仓库关、小仓库开，跟着工作区走而非跟着实例走）。
+
+**关键设计选择：为什么不用 `.agent/settings.json`**——repo 级 settings.json 走 `config_file()` 是**文件级整体覆盖**语义（本地存在即整份生效）：把单键写进去会**连带遮蔽全局 settings 的所有其它键**（回退链 / utility_model / hook_timeout… 全部丢回默认）。所以照钩子开关范式（`.agent/hooks_state.json`，见 [workflow-hooks](../architecture/workflow-hooks.md)）用**独立小文件**：
+
+```jsonc
+// <cwd>/.agent/snapshots_state.json
+{ "enabled": false }
+```
+
+**三源读取优先级（向后兼容）**（src/config.py `load_enable_snapshots()`）：
+
+| 级 | 来源 | 说明 |
+|---|---|---|
+| ① | `.agent/snapshots_state.json` 的 `enabled` | repo 级主源（新） |
+| ② | settings.json `enable_snapshots` | 旧位置，老配置不丢 |
+| ③ | 默认 True | 未配置 / 非法值 / 读盘异常 |
+
+**写侧唯一入口** `config.save_enable_snapshots()`：WebUI 端点与 `/config` 共用——写新文件时**顺手清掉 settings.json 旧键**，避免双源歧义。
+
+**接线四件**：
+
+| 文件 | 变更 |
+|---|---|
+| src/config.py | `load_enable_snapshots()` 三源优先级 + `save_enable_snapshots()` 唯一写口（含旧键清理） |
+| src/server.py | `GET/POST /api/snapshots/setting`（POST 即时保存，免整表提交） |
+| src/commands.py | `/config enable_snapshots` 改走 repo 级写口 |
+| src/static/index.html | 「模型」页签旧复选框删除（控件/回填/收集三处）；「其它」页签新增组「回溯快照（repo 级 · 持久化到 .agent/snapshots_state.json）」+ **即时保存** |
+
+`.gitignore` 同步加 `.agent/snapshots_state.json`（repo 级运行状态不入库，同 hooks_state）。
+
+**验证**：后端七项单测全过（默认 True / repo 落盘 / 主源优先 / **repo 源压过 settings 旧键** / 旧键清理 / 回读 / 删源回落）+ JS 语法 0 错。**生效**：前端刷新即见新控件（静态页 mtime 热更新）；写侧端点需 `/restart`——旧进程无此端点时控件保持默认勾选、不报错。
+
+**关联**：config_file 文件级覆盖语义见 [配置体系](../guides/config-and-models.md#配置文件解析-config_filerepo-级覆盖2026-08-31commit-10d717e)；钩子开关同款独立文件范式见 [workflow-hooks · 设置面板入口 + repo 级持久化](../architecture/workflow-hooks.md)。
 
 ## mtime 全量刷新修复：checkout-index -f → git restore（2026-09，commit a08e967）
 

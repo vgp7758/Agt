@@ -32,3 +32,7 @@
 
 - **schedule 推送语义：互斥三选一 → 三通道组合 → 主从收敛（2026-10-05，用户问询触发 + 两轮裁定，commits `458475c` + `6c3f770`）**：用户问「同时传 message / code / tool 是都执行并注入吗」问出旧实现两暗坑——互斥三选一（`code > action > message` 只执行第一个，其余忽略）+ code 静默连 message/action 一起吞（「心跳 + 有事才说话」做不到）。v1 初版改三通道独立拼接；用户随即裁定 v2 **主从语义**：code/action 是主通道、message 是附言——**主通道产物全空 → 全静默（message 不单独发）**，有产物 → 按 code → action → message 拼接注入；只传 message 正常发。七场景验证全过；site-packages 已同步，重启生效，**已存在任务无需重建**。同日 · 三：用户实锤 run_python/run_shell 空输出返回占位符**「(无输出)」**（非空串）击穿 tool 静默——tool 产物归一化补占位符识别（commit `9d6cadd`），三通道静默语义闭环（code 空 / tool 空串或占位符 / 主通道全空）。详见 [background-scheduler · 三通道主从语义](features/background-scheduler.md)
 
+## 快速事实增补（2026-10 · 回溯快照开关 repo 级化：设置「其它」页签 + .agent/snapshots_state.json）
+
+- **回溯快照开关 repo 级化（2026-10，用户提案「跟着 repo 设置」，commit `04c37d6`）**：enable_snapshots 主源从 settings.json 迁到 `<cwd>/.agent/snapshots_state.json`（`{"enabled": bool}`）——快照开销是 per-repo 属性，跟着工作区走；设置控件从「模型」页签挪到「其它」页签（即时保存，`GET/POST /api/snapshots/setting`）。刻意不进 repo 级 `.agent/settings.json`：那是文件级整体覆盖语义，单键写入会遮蔽全局 settings 其余全部键——照 `.agent/hooks_state.json` 范式用独立文件。读取三源优先级（snapshots_state > settings 旧键 > 默认 True），写侧 `save_enable_snapshots()` 唯一入口并顺手清理旧键，老配置零迁移。详见 [snapshot-rewind · 开关 repo 级化](features/snapshot-rewind.md)
+

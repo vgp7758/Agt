@@ -61,6 +61,7 @@ textarea{width:100%;resize:vertical}
     <div class="rowbar">
       <button class="btn pri" onclick="createAgent()">＋ 新建子 Agent</button>
       <button class="btn" onclick="loadList()">⟲ 刷新</button>
+  <button class="btn" onclick="showReadme()">📖 目录说明</button>
       <span id="cnt" class="sub" style="margin:0"></span>
     </div>
     <div class="grid" id="cards"></div>
@@ -155,6 +156,17 @@ async function createAgent(){
   const d=await api('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
   if(d.ok){toast('✅ 已创建 '+d.name);location.hash='edit='+encodeURIComponent(d.name);}
   else toast(d.error||'创建失败',false);
+}
+
+async function showReadme(){
+  const v=document.getElementById('readmeView'), b=document.getElementById('readmeBody');
+  v.style.display='block'; b.textContent='加载中…';
+  try{
+    const d=await api('/api/agents/readme-doc');
+    b.innerHTML=d.html||('⚠️ '+(d.error||'渲染失败'));
+    b.querySelectorAll('pre').forEach(p=>{p.style.cssText='background:#1b1f27;color:#d5d8dd;padding:12px;border-radius:8px;overflow:auto'});
+    b.querySelectorAll('code').forEach(c=>{if(!c.parentElement.closest('pre'))c.style.cssText='background:#1b1f27;padding:2px 6px;border-radius:4px'});
+  }catch(e){b.textContent='⚠️ '+e.message}
 }
 
 /* ---------- 编辑 ---------- */
@@ -377,5 +389,9 @@ window.addEventListener('hashchange',route);
 })();
 </script>
 <script src="/i18n/engine.js"></script>
+<div id="readmeView" style="display:none;position:fixed;inset:0;z-index:50;background:var(--bg,#111);overflow:auto;padding:32px 8%">
+  <button class="btn" onclick="document.getElementById('readmeView').style.display='none'">← 返回</button>
+  <div id="readmeBody" class="md-doc" style="max-width:860px;margin:16px auto 80px;line-height:1.75"></div>
+</div>
 </body>
 </html>

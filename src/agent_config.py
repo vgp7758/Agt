@@ -554,6 +554,8 @@ def load_agents_index(workspace: Path) -> list[dict]:
     d = workspace / _AGENT_DIR / "agents"
     out = []
     for f in _agents_glob(d):
+        if f.name == "README.md":
+            continue   # 目录说明文档（非 agent 声明）——agents 页不列，走只读渲染入口
         # 同名 .yml 与 .md 同时存在时，.yml 优先（迁移期两格式并存）
         if f.suffix.lower() == ".md" and (f.with_suffix(".yml").exists()):
             continue

@@ -1962,6 +1962,21 @@ def _fb_yaml_value(body: dict):
     return chain
 
 
+@app.get("/api/agents/readme-doc")
+async def api_agents_readme_doc():
+    """目录说明 README.md 的只读渲染（python-markdown）——agents 页「📖 目录说明」入口。
+    文档非 agent 声明（index 已跳过），点开走此渲染而非编辑器（用户提案 2026-10-06）。"""
+    import markdown as _md
+    p = _workspace / ".agent" / "agents" / "README.md"
+    if not p.exists():
+        return {"error": "README.md 不存在", "html": ""}
+    try:
+        return {"html": _md.markdown(p.read_text(encoding="utf-8", errors="replace"),
+                                     extensions=["tables", "fenced_code"])}
+    except Exception as e:
+        return {"error": f"渲染失败：{type(e).__name__}", "html": ""}
+
+
 @app.get("/api/agents/{name}")
 async def api_agents_get(name: str):
     """单个 Agent 完整声明。_main_ 特判（~/.agt/main.yml，is_main=True）。"""

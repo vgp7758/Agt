@@ -20,8 +20,6 @@
 
 ## 快速事实增补（2026-10 · v0.31.4 发布：WebUI i18n 双语体系打包上线）
 
-## 快速事实增补（2026-10 · v0.31.4 发布：WebUI i18n 双语体系打包上线）
-
 - **v0.31.4 发布（2026-10，发布提交 `ba2f4e6` + tag `v0.31.4`）**：自 0.31.3 以来 6 个 feature 提交一次打包，主打 **WebUI i18n 双语体系**（双向字典引擎 zh/en/bi 三模式 · 8 页共享引擎零漂移 · 字典 765 条/翻 491 条 · bi 三处体验修复），同批：钩子开关进设置面板「其它」页签 + repo 级持久化（`.agent/hooks_state.json`）/ 团队看板远程实例添加弹窗化 + 列表顺序换位 / ⭐ 收藏按钮挪右上 / answer 引用 workspace 外绝对路径渲染（读侧对齐 t1195）。PyPI 已上线，桌面版 CI 巡检确认。详见 [v0.31.4 发布记录](releases/v0.31.4.md)、[i18n](features/i18n.md)
 
 ## 快速事实增补（2026-10-04 · 四 · autonomous 融合进 schedule：code/deadline/mode 三参数，纯自主模式退役）
@@ -35,4 +33,8 @@
 ## 快速事实增补（2026-10 · 回溯快照开关 repo 级化：设置「其它」页签 + .agent/snapshots_state.json）
 
 - **回溯快照开关 repo 级化（2026-10，用户提案「跟着 repo 设置」，commit `04c37d6`）**：enable_snapshots 主源从 settings.json 迁到 `<cwd>/.agent/snapshots_state.json`（`{"enabled": bool}`）——快照开销是 per-repo 属性，跟着工作区走；设置控件从「模型」页签挪到「其它」页签（即时保存，`GET/POST /api/snapshots/setting`）。刻意不进 repo 级 `.agent/settings.json`：那是文件级整体覆盖语义，单键写入会遮蔽全局 settings 其余全部键——照 `.agent/hooks_state.json` 范式用独立文件。读取三源优先级（snapshots_state > settings 旧键 > 默认 True），写侧 `save_enable_snapshots()` 唯一入口并顺手清理旧键，老配置零迁移。详见 [snapshot-rewind · 开关 repo 级化](features/snapshot-rewind.md)
+
+## 快速事实增补（2026-10-05 · i18n 第四轮补批 71 条：设置页 / agents 长段 / 模型卡片 tooltips）
+
+- **WebUI i18n 第四轮补批 71 条（2026-10-05，用户实锤切 en 后仍有大段中文，commit `3610714`）**：字典 **765 → 836 条 · 已翻 562**，覆盖六区域——设置页三区块（钩子开关组+回溯快照组 / 模型与回退+**模型卡片全部字段长 tooltips** / MCP 配置+热重载说明）、agents 管理页（🤖 子 Agent 管理标题+「段名/注入姿势」完整长段）、团队抽屉（👥 Agent 团队等）、零散按钮与错误前缀（▶ Agent执行 / 💭回答推理 / ✅⚠️✓ 系列完整串）。site-packages 已同步，刷新即见。留白 ~26 条 **JS 模板拼装串**（`✓ 已发送×`+变量、`」卡片`等）——全串匹配引擎够不着，归渲染处 `_t()` 渐进改造（与 `_needs_t.json` 97 条同批）。详见 [i18n](features/i18n.md)
 

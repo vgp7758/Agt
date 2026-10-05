@@ -58,3 +58,5 @@
 
 - **desktop-operator 桌面操作 Agent 全链路（2026-10-06，深夜四连发）**：①**image_feed 装配段**——assembly 新动作项，每步从画面服务取最新帧挂投影末尾（vision 门控/失联降级不炸轮/瞬态不落档，`@@IMGFEED@@` 哨兵抽取进图片桶、不进文本统计）；服务端 `tools/image_feed_poc.py`（PIL.ImageGrab 全屏 → 1280 宽 JPEG q70 内存缓存，0.5s 节流零落盘）；②**desktop-operator 三件套实测全过**（看帧/工具/剪切板，glm-official-flash）；③**声明目录化配套**——agents 页 persona 正文改从 file: 项 md 直读（剥 frontmatter、读写对称）+ ACT_TYPES 增 image_feed + kill_agent 删声明整目录移除；④**services 依赖声明**（commit 2b621b4）——yml `services: [{名: 命令}]`，实例化幂等拉起（同名在跑跳过、失败 warning 不阻断），kill_agent 同步停服（治了 desktop-frame rc=1 崩溃后忘手工拉起的「睁眼瞎」）。详见 [image_feed](features/image-feed.md) + [services 章节](architecture/multi-agent.md)
 
+- **编辑页两洞补齐（2026-10-06 · 二，commit 2c63133，用户实锤）**：用户发现 `/agents#edit=` 保存有两个洞——①声明**仍落平铺**（目录化只改了读侧/扫描侧，写侧 `_dump_agent_yml` 漏网）；②页面无 services 字段，`services:` 声明**一保存就丢**。修复：保存写入路径改目录形态 `<name>/<name>.yml + md`；file 项改**扫描原位替换**（首项 seg:system 式声明不再长出双 file）；编辑页新增 services textarea（每行 `名: 命令`，GET 行式回显 / PUT 解析回列表）；POST 判重认目录形态。冒烟五场景全绿，site-packages 已同步，/restart 生效。详见 [agents-admin](features/agents-admin.md)
+

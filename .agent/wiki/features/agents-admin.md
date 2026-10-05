@@ -135,6 +135,17 @@ desktop-operator 目录化（见[多 Agent 体系](../architecture/multi-agent.m
 - **ACT_TYPES 增 image_feed**（src/static/agents.html）：装配动作类型下拉可直接选「实时画面」项，值 = 画面服务 URL（如 `http://127.0.0.1:8765/frame`，详见 [image_feed](image-feed.md)）
 - **kill_agent 删声明整目录移除**：目录形态（`<name>/`）删 yml 时连 md 人设 + tools/ 一起移除；平铺存量兜底只删单文件
 
+## 编辑页保存目录化 + services 编辑字段（2026-10-06 · 二，commit 2c63133，用户实锤）
+
+用户实锤两个洞——编辑 desktop-operator 后点保存：① 声明**仍落平铺** `.agent/agents/<name>.yml`（目录化重构 2cec328 只改了读侧/扫描侧，写侧 `_dump_agent_yml` 漏网）；② 页面没有 services 字段，`services:` 声明**一保存就丢**（PUT 按表单字段重建 yml）。
+
+| 文件 | 改动 |
+|---|---|
+| src/server.py（`_dump_agent_yml`） | 写入路径改**目录形态** `<name>/<name>.yml + <name>.md`；file 项从「强制插首项」改**扫描原位替换**（首项 `seg:system`、file 在第二项的 desktop-operator 式 assembly 不再长出双 file 项）；POST create 判重同步认目录形态 |
+| src/static/agents.html | persona 区下新增「依赖服务（services）」textarea——每行 `服务名: 命令`（`#` 注释/无冒号行忽略）；GET 行式回显 → PUT 解析回 `[{名: 命令}]` 列表写 yml，**保存不再丢声明** |
+
+隔离冒烟五场景全绿：目录落盘 / file 原位无双插（首项仍 seg:system）/ services 行式解析 / image_feed 项保留 / persona 写入。commit 2c63133（site-packages 已同步），生效需 `/restart`。声明引擎侧语义见 [多 Agent 体系](../architecture/multi-agent.md)（目录形态后记二 + services 依赖声明）。
+
 ## `_func_runtime_env` → `_runtime_form`：运行形态自我认知（2026-09-19 · 二，v0.29.5）
 
 **用户提案（同日二轮）**：「环境信息里是不是也应该让它自己知道，比如『当前启动了一个服务在 localhost:8000，外界是通过这个服务与自己交互的』」。

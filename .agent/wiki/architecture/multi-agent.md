@@ -47,6 +47,20 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 
 `src/agents/`（随包播种源，6 个 agent）与 workspace 声明同构目录化；**desktop-operator 成首个自包含播种**——yml + md 人设 + `tools/`（专属工具 desktop_tools.py + 画面服务 image_feed_poc.py）整目录随 wheel 分发，新 repo 开箱即得「拉起 Agent 即自带眼睛」。配套两改：seed 拷贝改 `rglob` 递归（此前只扫一层，tools/*.py 不随行）；pyproject 打包 glob 增 `agents/*/tools/*.py`（此前平铺 glob `agents/*.yml` 在源目录化后一个都匹配不到——6 个 agent 全进不了 wheel）。详见 [workspace 播种](../features/workspace-seeding.md)。
 
+### 后记二：编辑页保存补齐目录化 + file 项原位替换（2026-10-06 · 二，commit 2c63133，用户实锤）
+
+用户实锤两个洞：① `/agents#edit=` 页点保存**仍按平铺落** `.agent/agents/<name>.yml`——2cec328 目录化只改了读侧/扫描侧，写侧 `_dump_agent_yml` 漏网，编辑页保存的声明永远回不到目录形态；② 连带 bug：写侧「assembly 首项统一转 file: 引用」的旧逻辑遇 desktop-operator 式声明（首项 `seg:system`、`file:` 在第二项）会把 file 项**再插到首项**——保存一次长出一个双 file 项。
+
+修复（src/server.py `_dump_agent_yml`，commit 2c63133，site-packages 已同步）：
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| 写入路径 | 平铺 `<name>.yml + <name>.md` | **目录形态** `<name>/<name>.yml + <name>.md` |
+| file 项 | 强制插首项 → 首项非 file 的 assembly 长出双 file | **扫描原位替换**：已有 file 项 → 原位改写指向 `<name>.md`；没有才追加首项 |
+| POST create 判重 | 只认平铺路径 | 同步认目录形态（`<name>/<name>.yml` 已存在即拒绝） |
+
+隔离冒烟五场景全绿：目录落盘 / file 原位无双插（首项仍 `seg:system`）/ services 行式解析 / image_feed 项保留 / persona 写入。管理页视角见 [Agent 管理页](../features/agents-admin.md)；同批 services 编辑字段见下节。
+
 ## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
 
 **动机**——desktop-operator 依赖 desktop-frame 画面服务（见 [image_feed 实时画面段](../features/image-feed.md)），此前要靠人记得手工 start；一次 rc=1 崩溃后忘了拉起，Agent 直接「睁眼瞎」。用户提案：「yml 里声明依赖服务，agent 实例化时拉起」——把服务生命周期挂到声明上。
@@ -69,6 +83,14 @@ services:
 ### 生命周期同步（kill_agent）
 
 kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）——**服务随声明生灭**。顺带：删声明时目录形态优先整目录移除（yml+md+tools），平铺存量兜底只删单文件。
+
+### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
+
+用户实锤：[/agents 编辑页](../features/agents-admin.md)没有 services 字段——desktop-operator 的 `services:` 声明**一保存就丢**（PUT 按表单字段重建 yml，表单没有的键自然不写）。补齐（与目录化保存同 commit 2c63133）：
+
+- **编辑区**（src/static/agents.html）：persona 区下方新增「依赖服务（services）」textarea——每行一条 `服务名: 命令`（如 `desktop-frame: python tools/image_feed_poc.py 8765`）；`#` 注释行与无冒号行忽略；留空 = 不声明
+- **读写对称**（src/server.py）：GET 返回行式文本（textarea 直读回显）→ PUT 解析回 `[{名: 命令}]` 列表写进 yml——**保存不再丢声明**
+- 声明引擎侧语义（实例化幂等拉起 / kill 同步停服）不变，见上
 
 ### 验证
 

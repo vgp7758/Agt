@@ -43,6 +43,10 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 目录形态写进播种引导文档：`src/dir_docs/agents.md`（随启动播种到 `.agent/agents/README.md`，见 [workspace 播种](../features/workspace-seeding.md)）；translator demo 随 commit 入库
 - **平铺形态并存零迁移**——存量声明不需要动
 
+### 后记：bundled 播种源同步目录化 + tools/ 随行（2026-10-06，commit 789d88e）
+
+`src/agents/`（随包播种源，6 个 agent）与 workspace 声明同构目录化；**desktop-operator 成首个自包含播种**——yml + md 人设 + `tools/`（专属工具 desktop_tools.py + 画面服务 image_feed_poc.py）整目录随 wheel 分发，新 repo 开箱即得「拉起 Agent 即自带眼睛」。配套两改：seed 拷贝改 `rglob` 递归（此前只扫一层，tools/*.py 不随行）；pyproject 打包 glob 增 `agents/*/tools/*.py`（此前平铺 glob `agents/*.yml` 在源目录化后一个都匹配不到——6 个 agent 全进不了 wheel）。详见 [workspace 播种](../features/workspace-seeding.md)。
+
 ## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
 
 **动机**——desktop-operator 依赖 desktop-frame 画面服务（见 [image_feed 实时画面段](../features/image-feed.md)），此前要靠人记得手工 start；一次 rc=1 崩溃后忘了拉起，Agent 直接「睁眼瞎」。用户提案：「yml 里声明依赖服务，agent 实例化时拉起」——把服务生命周期挂到声明上。

@@ -46,6 +46,10 @@ services:
 - **崩溃治理闭环**：desktop-frame 曾 rc=1 挂掉（无输出，疑似抓屏偶发异常）→ 服务化前忘了手工 start 就「睁眼瞎」；services 声明后派活自动拉起（幂等），挂了有 on_exit_wake 通知兜底
 - model glm-official-flash（vision）；`tools: ""`——只带目录内专属工具
 
+## 进包播种：新 repo 开箱即得（2026-10-06 · 二，commit 789d88e）
+
+desktop-operator 四件（yml + md 人设 + desktop_tools.py + image_feed_poc.py）进 bundled 播种源 `src/agents/desktop-operator/`，随 wheel 分发；seed 改递归拷贝让 `tools/` 随行，services 命令同步自包含化（指向 `.agent/agents/desktop-operator/tools/`）。通用环境两个前提：**视觉模型**（非 vision 则本段门控静默跳过——agent 可起但看不到桌面）+ `pip install pyautogui pyperclip`（缺依赖仅 warning 空工具箱，不炸实例化）。详见 [workspace 播种](workspace-seeding.md)。
+
 ## 编辑器支持
 
 agents 管理页类型下拉 `ACT_TYPES` 增 `image_feed`（src/static/agents.html）——装配动作可直接选型，值 = 画面服务 URL。见 [Agent 管理页](agents-admin.md)。

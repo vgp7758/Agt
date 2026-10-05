@@ -1,6 +1,6 @@
-# workspace 播种 · 约定目录 README + 示例技能（seed_dir_docs / seed_default_skills，2026-09-27/28）
+# workspace 播种 · 约定目录 README + 示例技能 + 自包含 agents（seed_dir_docs / seed_default_skills / seed_default_agents）
 
-> 挂点：`src/chat.py build_agent()` 播种序列——`seed_default_agents`（子 Agent 模板，既有）→ `seed_dir_docs`（commit 0ec4ec7）→ `seed_default_skills`（commit 16aede0）。随每次启动检查，幂等，让每个 repo（含新装用户）的约定目录「开箱即懂」。
+> 挂点：`src/chat.py build_agent()` 播种序列——`seed_default_agents`（bundled agents 目录播种；2026-10-06 起 desktop-operator 以自包含四件加入，见下文专节）→ `seed_dir_docs`（commit 0ec4ec7）→ `seed_default_skills`（commit 16aede0）。随每次启动检查，幂等，让每个 repo（含新装用户）的约定目录「开箱即懂」。
 
 ## seed_dir_docs · 约定目录 README（用户提案：把框架那一页文档以 README.md 播种到目录位置）
 
@@ -23,6 +23,17 @@
 | `scripts/evaluate.py` | skill_evaluate | 验收入口：三项自检 → `EVAL PASS` |
 
 Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包的哪个文件练、怎么调，全在里头。
+
+## seed_default_agents · bundled agents：desktop-operator 自包含四件（2026-10-06，用户提案「把 desktop-operator 也添加到播种吧」，commit 789d88e）
+
+- **源 → 目标**：`src/agents/<name>/`（随包 bundled）→ `.agent/agents/<name>/`；判存在跳过 + seed_state 基线。当前 6 个：coder / desktop-operator / explorer / reviewer / vision / wiki-updater
+- **desktop-operator 四件（自包含）**：`desktop-operator.yml`（services 已改自包含路径）+ `desktop-operator.md` 人设 + `tools/desktop_tools.py`（10 个键鼠/剪切板/窗口专属工具）+ `tools/image_feed_poc.py`（桌面画面服务）——[目录形态](../architecture/multi-agent.md)整目录随包，新 repo 开箱即得「拉起 Agent 即自带眼睛」（[image_feed](image-feed.md)）
+- **services 命令自包含化**：通用 repo 没有本 repo 的 `tools/image_feed_poc.py`，声明命令改为 `.agent/agents/desktop-operator/tools/image_feed_poc.py`（workspace 相对路径，[services 拉起 cwd=workspace](../architecture/multi-agent.md)直接可用）
+- **顺带两修（不做这轮就等于白播）**：
+  1. **pyproject 打包 glob 失配**：`agents/*.md` / `agents/*.yml`（平铺 glob）在源目录化后匹配不到任何文件——目录化后 6 个 agent 全都不会进 wheel；改 `agents/*/*.md` + `agents/*/*.yml` + `agents/*/tools/*.py`
+  2. **seed 只扫一层**：原实现 `sub.iterdir()` 只收 `.yml`/`.md`，自包含 agent 的 `tools/*.py` 不随行（首轮验证 12 文件断言 False 抓到）；改 `rglob` 递归 → 重播 14 文件、desktop-operator 四件自包含 ✅
+- **通用环境两个前提**（播出去≠能用）：① 需**视觉模型**——无 glm key 回退主模型，非 vision 则 image_feed 门控静默跳过（agent 可起但看不到桌面）；② `pip install pyautogui pyperclip`——缺依赖 import 失败仅 warning 空工具箱，**不炸实例化**
+- **验证**：重播 14 文件（coder / explorer / reviewer / vision / wiki-updater 各 2 件 + desktop-operator 4 件）；site-packages 已同步，本机其它 repo 下次播种即得
 
 ## 验证
 

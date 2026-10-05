@@ -638,9 +638,11 @@ def seed_default_agents(workspace: Path) -> int:
     items = []
     for sub in sorted(bundled.iterdir()):
         if sub.is_dir():
-            for f in sorted(sub.iterdir()):
-                if f.suffix in (".yml", ".md"):
-                    items.append((f, dst / sub.name / f.name))
+            # 递归（2026-10-06：自包含 agent 的 tools/*.py 专属工具/服务脚本随行——
+            # 播出目录结构与源一致；.pyc/__pycache__ 跳过
+            for f in sorted(sub.rglob("*")):
+                if f.is_file() and f.suffix in (".yml", ".md", ".py"):
+                    items.append((f, dst / sub.name / f.relative_to(sub)))
         elif sub.suffix in (".yml", ".md"):
             items.append((sub, dst / sub.stem / sub.name))
     for src, target in items:

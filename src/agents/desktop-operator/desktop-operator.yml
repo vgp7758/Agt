@@ -1,0 +1,12 @@
+name: desktop-operator
+description: 桌面操作 Agent——实时看到桌面（image_feed 每步注入画面）+ 键鼠模拟/剪切板/窗口切换。何时调用：需要操作本机 GUI（点击/输入/切窗/读屏定位元素/自动化桌面流程）时；看桌面不要用 vision（它没有操作能力）。
+model: glm-official-flash
+tools: ""
+assembly:
+  - system
+  - file: .agent/agents/desktop-operator/desktop-operator.md
+  - user_message
+  - steps
+  - image_feed: http://127.0.0.1:8765/frame
+services:
+  - desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765

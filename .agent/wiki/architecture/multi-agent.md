@@ -185,6 +185,8 @@ reg.update_status(id, "running")                    # ⑤ 标占用（锁外！�
 
 ## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
 
+> ⚠️ **2026-10-06 该工具已退役**（用户裁定：DSL 字段越来越多，参数面板跟不上声明演进——`hidden=True` 退出投影，工具箱保留向后兼容）：官方创建路径改为**直接 `write_file` yml**，见下节 [create_agent 退役](#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)。
+
 create_agent（src/multiagent.py，程序化声明入口——[/agents 管理页](../features/agents-admin.md)的表单化对应物）从五参扩到七参（用户提案 2026-09-02）：
 
 ```python
@@ -205,6 +207,46 @@ create_agent(name, description, system, tools="", model="",
 - 声明后 `_inject_agent_enums` 重注入——agent_prompt 节点的 name 下拉立刻出现新 Agent（见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 - 写 `.agent/agents/<name>.yml` 不建实例；kill_agent 清理
 - **2026-09-02（commit 504a518，用户裁定）**：生成形态从 `{seg:}` dict 改为**裸字符串段**（`'user_message'` / `'history|optional'`——与手写声明同形，所见即所装）；示例装配里的 `tail.time` 回落 `tail`（tail.* 拆段同日撤销，见下方「段形态简化定稿」节）
+
+## create_agent 退役：官方路径=直接 write_file yml（2026-10-06，用户裁定，commit f3f983c）
+
+用户裁定（2026-10-06）：「目前 sub-agent 的 dsl 其实越来越多，create_agent 这个工具感觉可以退役了，让 agent 自己写 .yml 文件得了」——动机成立：声明 DSL 持续富化（assembly 段形态 / hooks / fallback / services / image_feed …），工具的**参数面板永远追不上声明演进**；而声明本来就是纯 yml 文件，Agent 直接 `write_file` 即创建——**声明即真相，DSL 加多少字段都不用改工具**。
+
+### 处置（commit f3f983c）
+
+| 项 | 处置 |
+|---|---|
+| `create_agent` | `hidden=True` 退出投影（src/multiagent.py `tools_list`）——SYSTEM 不再列、不占 schema 描述位；**工具箱保留**（plugin / 旧会话向后兼容，仍可手动调） |
+| 官方创建路径 | **`write_file .agent/agents/<name>/<name>.yml`**（目录形态，见上文）——最小模板已写进 agents.md 目录说明（`src/dir_docs/agents.md` 现场 + 播种源同步，见 [workspace 播种](../features/workspace-seeding.md)），照抄改两个必填字段即建 |
+| `kill_agent` | **保留**（删除是破坏性操作，工具化审批合理） |
+
+```yaml
+# .agent/agents/<name>/<name>.yml —— 最小模板（同 agents.md 播种文档）
+name: my-agent
+description: 一句话作用 + 何时调用（投影给主 Agent 决定何时派活）
+model: glm-official-flash        # 留空=主 Agent 当前模型
+tools: ""                        # 留空=继承全部；或逗号分隔白名单
+assembly:
+  - file: .agent/agents/my-agent/my-agent.md   # 人设（可选，也可用 text: 内嵌）
+  - user_message
+  - steps
+  # - image_feed: http://127.0.0.1:8765/frame  # 实时画面段（视觉模型）
+# services:
+#   - my-frame: python .agent/agents/my-agent/tools/frame.py 8765  # 依赖服务（实例化幂等拉起）
+```
+
+### enum 即时刷新：write_file 触发 `_agents_changed_cb`
+
+退役顺带断掉的刷新源：「create_agent 声明变化后重注入 enum」没有调用方了。补新通道（src/real_tools.py）：`write_file` 落点在 `.agent/agents/` 下（yml/md）→ 触发 `_agents_changed_cb`（multiagent 装配时注入，回调=`_inject_agent_enums`）→ agent_prompt / kill_agent 的 name enum 与编辑器下拉**即时刷新**。
+
+**零 restart 闭环**：写完 yml → 下一步 `agent_prompt` 即可派活——子 Agent 声明每次派活现场读（本就即时生效，见 [main.yml 热重载](#mainyml-热重载改主-agent-dsl-免-restart2026-09-07用户提案)一节的主/子对照表），下一轮 SYSTEM 自动列出、name 下拉同步出现。
+
+### 关联
+
+- [create_agent 传参拓展](#create_agent-传参拓展assembly--hooks--system-自动抽-md2026-09-02commit-9ddaf63)——退役前最后一次扩容（七参），其参数→DSL 语义对照仍是手写声明的参考
+- [_inject_agent_enums：动态 enum 注入](#_inject_agent_enums动态-enum-注入)——刷新通道与本次新增触发源
+- [子 Agent 目录形态](#子-agent-目录形态name-自包含目录yml--md-人设--tools-专属工具2026-09-28用户提案commit-2cec328)——write_file 落的目录形态（yml + md 人设 + tools/ 专属工具）
+- [workspace 播种](../features/workspace-seeding.md)——agents.md 播种文档（创建模板载体，随包分发）
 
 ## 复活路径 NameError · wiki-updater 多实例根因修复（2026-08-26，commit 6d396af）
 
@@ -477,7 +519,7 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 | `agent_prompt` 的 `caller` | `['', 'user']`（显式 agent_id 仍可手填） |
 | 通信工具（agent_ask/notify/query_*）的 `target_id` | registry 当前全部 agent_id（动态性强，提示性候选） |
 
-**刷新时机**：`make_subagent_tools` 装配时注入一次；**create_agent / kill_agent 声明变化后重注入**——新建一个子 Agent，agent_prompt 节点的 name 下拉里立刻出现它。enum 是**提示性的**（不在列表内的值仍可传），过期无害。
+**刷新时机**：`make_subagent_tools` 装配时注入一次；**create_agent（2026-10-06 起 hidden 退役）/ kill_agent 声明变化后重注入**；**write_file 落 `.agent/agents/` 下 yml/md 同样触发**（`_agents_changed_cb`，退役后的接替刷新源，见 [create_agent 退役](#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)）——新建一个子 Agent，agent_prompt 节点的 name 下拉里立刻出现它。enum 是**提示性的**（不在列表内的值仍可传），过期无害。
 
 #### enum 快照过时 → registry on_change 订阅（2026-09-04，commit 12d1ff4）
 

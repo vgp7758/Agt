@@ -4,7 +4,7 @@
 
 ## seed_dir_docs · 约定目录 README（用户提案：把框架那一页文档以 README.md 播种到目录位置）
 
-- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)）、`agent_tools.md`、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）
+- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)）、`agent_tools.md`、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态 + [直接写 yml 创建最小模板](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)，2026-10-06）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）
 - **播种目标（7 个约定目录）**：`tools/builtin/`、`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`nodes/`、`.agent/nodes/`
 - **语义**：目录不存在 → 创建目录 + 播种（引导价值：一眼看到全部可扩展点）；`README.md` 已存在 → 跳过——**用户改动永不覆盖**
 - **写入**：字节级 + `seed_state` 基线——接入 /update-assets 三方 hash 判定管道（框架升级后文档可安全更新）

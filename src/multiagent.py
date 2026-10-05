@@ -161,6 +161,25 @@ def _agent_def_path(name: str):
     return d / f"{name}.md"
 
 
+def _ensure_agent_services(meta: dict, agent) -> None:
+    """yml 声明的依赖服务（2026-10-06 用户提案）：子 Agent 实例化时幂等拉起。
+    形态：services: [{服务名: 命令}, ...]（列表 of 单键映射；dict 形态也认）。
+    已存在同名服务（在跑）→ 跳过；命令 cwd=workspace（相对路径可用）。"""
+    svcs = meta.get("services") or []
+    if isinstance(svcs, dict):
+        svcs = [svcs]
+    for it in svcs:
+        if not isinstance(it, dict):
+            continue
+        for sname, cmd in it.items():
+            try:
+                r = agent.services.start(str(sname), str(cmd), str(agent.session.workspace)
+                                         if getattr(agent.session, "workspace", "") else "")
+                _LOG.info("子 Agent 依赖服务 %s: %s", sname, str(r)[:80])
+            except Exception as e:
+                _LOG.warning("子 Agent 依赖服务 '%s' 拉起失败: %s", sname, e)
+
+
 def _agent_own_tools(name: str, agent):
     """目录形态子 Agent 的专属工具：.agent/agents/<name>/tools/*.py
     （agt_register 约定同 tools/builtin——一次性任务脚本防御自动继承）。
@@ -925,6 +944,24 @@ def make_subagent_tools(agent) -> list:
             return f"[非法名称] '{name}'，只能含字母数字、下划线、连字符"
         d = WORKSPACE / _AGENT_DIR / "agents"
         gone = False
+        # 停声明里拉起的依赖服务（2026-10-06）：kill 与服务生命周期同步
+        try:
+            from agent_config import load_agent_yml
+            _p = _agent_def_path(name)
+            if _p and _p.exists():
+                _meta, _ = load_agent_yml(_p)
+                _svcs = _meta.get("services") or []
+                if isinstance(_svcs, dict):
+                    _svcs = [_svcs]
+                for _it in _svcs:
+                    if isinstance(_it, dict):
+                        for _sn in _it:
+                            try:
+                                agent.services.stop(str(_sn))
+                            except Exception:
+                                pass
+        except Exception:
+            pass
         # 目录形态优先（2026-10-06）：整目录移除（yml+md+tools）；平铺兜底（存量）
         if (d / name).is_dir():
             shutil.rmtree(d / name, ignore_errors=True)
@@ -1238,6 +1275,7 @@ def make_subagent_tools(agent) -> list:
         # .yml：正文为空、persona 在 assembly text: 项里 → system 传空；.md 旧格式无正文才用兜底文案
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
+        _ensure_agent_services(meta, agent)   # 依赖服务幂等拉起（2026-10-06 用户提案）
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
         toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent))   # 专属工具（同名覆盖全局）
         model_name = meta.get("model") or agent.model_name

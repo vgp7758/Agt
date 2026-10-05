@@ -58,6 +58,8 @@ def _ask_approval(tool_key: str, detail: str) -> bool:
 # 后台任务表：超时未完成的 run_python/run_shell 子进程转后台后注册在此
 _bg_tasks: dict = {}
 _bg_notify_cb = None   # 后台任务完成回调（chat.py 装配时注入 agent.push_message 通知链）：一次性任务无套娃，默认唤醒
+_agents_changed_cb = None   # 子 Agent 声明变化回调（multiagent 装配时注入 _inject_agent_enums）：
+                            # write_file 落 .agent/agents/ 下 yml/md 后触发——name enum/下拉即时刷新
 
 
 def set_bg_notify(cb):
@@ -604,6 +606,13 @@ def write_file(path: str, content: str) -> str:
     target = _resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    # 子 Agent 声明目录写入 → 刷新 agent_prompt/kill_agent 的 name enum（create_agent 退役后
+    # 官方创建路径=直接写 yml，2026-10-06；real_tools 平铺无 agent 引用——回调注入模式）
+    try:
+        if ".agent" in target.parts and "agents" in target.parts and _agents_changed_cb:
+            _agents_changed_cb()
+    except Exception:
+        pass
     return f"已写入 {len(content)} 字符到 {path}"
 
 

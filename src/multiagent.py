@@ -1379,7 +1379,10 @@ def make_subagent_tools(agent) -> list:
 
     # 通信工具由 make_communication_tools 统一生成（绑定到正确的 agent 实例）
     reg = getattr(agent, "registry", None)
-    tools_list = [Tool(create_agent), Tool(kill_agent),
+    # create_agent 退役（2026-10-06 用户裁定：DSL 字段越来越多，参数面板跟不上——
+    # 官方路径=直接 write_file .agent/agents/<name>/<name>.yml（README 有最小模板）；
+    # hidden 保留：工具箱可调（plugin/旧会话），不再投影给 LLM
+    tools_list = [Tool(create_agent, hidden=True), Tool(kill_agent),
                   Tool(agent_prompt, param_schemas={
                       "reuse": {"type": "string", "enum": ["yes", "no"],
                                 "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"},
@@ -1394,4 +1397,10 @@ def make_subagent_tools(agent) -> list:
         _self_id = str(getattr(agent, "agent_id", "") or "_main_")
         reg.add_on_change(_self_id, lambda: _inject_agent_enums(agent, list(agent.tools)))
     _inject_agent_enums(agent, tools_list)   # name/caller/target_id 动态 enum（编辑器下拉 + LLM schema）
+    # 声明变化回调注入（2026-10-06）：write_file 落 .agent/agents/ 后刷新 name enum
+    try:
+        import real_tools as _rt
+        _rt._agents_changed_cb = lambda: _inject_agent_enums(agent, tools_list)
+    except Exception:
+        pass
     return tools_list

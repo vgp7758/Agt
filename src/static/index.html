@@ -3037,7 +3037,7 @@ function renderSurveyBubble(questions){
     const qid = q.id||('q'+(i+1));
     const multi = q.multi_select;
     const custom = q.allow_custom;
-    const opts = q.options||[];
+    const opts = (q.options||[]).map(o => (typeof o === 'object' && o !== null) ? JSON.stringify(o) : String(o));
     h += '<div style="margin:10px 0;padding:8px;border:1px solid #cffafe;border-radius:6px;background:#fff">';
     h += '<div style="font-weight:600;font-size:14px;color:#164e63;margin-bottom:6px">'+(i+1)+'. '+esc(q.title||q.question||q.prompt||q.label||'');
     h += ' <span style="font-size:11px;color:#8a9099">'+(multi?'多选':'单选')+(custom?' · 可自定义':'')+'</span></div>';

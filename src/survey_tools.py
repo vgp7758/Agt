@@ -70,6 +70,55 @@ def resolve_survey(agent, answers: dict):
 def make_survey_tools(agent):
     """返回 [Tool(ask_user)]。"""
     
+    def _normalize_survey(questions):
+        """问卷宽容归一（2026-10-05·20048 实例实锤：对象选项渲染成 [object Object] / 整句逐词拆成百个选项）。
+        - options 对象项：提取 text/label/value/name/option/content/title 键 → 字符串
+        - options 整段字符串：按常见分隔符（、,，;；/|换行）拆；拆不动按单选项并警告
+        - 疑似逐词拆分（>10 项且平均长度<6）：警告（LLM 把整句拆成单词数组的常见失误）
+        返回 (归一后的 questions, warnings)；warnings 会附在题面顶部给用户看。"""
+        import json as _j, re as _re
+        warns = []
+
+        def _norm_opts(opts, qid):
+            if isinstance(opts, str):
+                parts = [x.strip() for x in _re.split(r"[、,，;；/|\n]", opts) if x.strip()]
+                if len(parts) > 1:
+                    warns.append(f"第{qid}题 options 传了整段字符串，已按分隔符拆成 {len(parts)} 项")
+                    return parts
+                warns.append(f"第{qid}题 options 只有一个字符串选项（多选项请传字符串数组）")
+                return [opts]
+            if isinstance(opts, list):
+                out = []
+                for o in opts:
+                    if isinstance(o, str):
+                        out.append(o)
+                    elif isinstance(o, dict):
+                        for k in ("text", "label", "value", "name", "option", "content", "title"):
+                            if isinstance(o.get(k), str) and o[k].strip():
+                                out.append(o[k]); break
+                        else:
+                            out.append(_j.dumps(o, ensure_ascii=False))
+                    else:
+                        out.append(str(o))
+                if len(out) > 10 and out and sum(len(x) for x in out) / len(out) < 6:
+                    warns.append(f"第{qid}题 options 有 {len(out)} 项且平均长度过短——疑似整句被逐词拆开，请检查")
+                return out
+            return []
+
+        out = []
+        for i, q in enumerate(questions, 1):
+            if not isinstance(q, dict):
+                continue
+            nq = dict(q)
+            nq["options"] = _norm_opts(q.get("options") or [], i)
+            t_ = q.get("title") or q.get("question") or q.get("prompt") or q.get("label") or ""
+            if not t_:
+                t_ = f"（第{i}题未提供题面）"
+            nq["title"] = str(t_)
+            out.append(nq)
+        return out, warns
+
+
     def ask_user(questions: list) -> str:
         """向用户发起问卷（阻塞等待用户完成全部题目后继续）。
         
@@ -86,6 +135,7 @@ def make_survey_tools(agent):
         import json as _j
         if not questions or not isinstance(questions, list):
             return "[错误] questions 需为非空数组"
+        questions, _warns = _normalize_survey(questions)
         # 记录 pending survey 到 extra_state（持久化：程序关了读档后能恢复等待状态）
         agent.session.extra_state["_pending_survey"] = questions
         # 阻塞等待用户裁定（无超时——一直等到用户回应或程序关闭）
@@ -98,9 +148,9 @@ def make_survey_tools(agent):
         # 清除 pending 标记
         agent.session.extra_state.pop("_pending_survey", None)
         if result is None:
-            return "[错误] 用户未提供任何回答"
-        # 返回 answers 的 JSON 字符串（Agent 可 parse 后使用）
-        return _j.dumps(result, ensure_ascii=False, indent=2)
+            return "[错误] 用户未提供任何回答" + ('\n⚠️ 归一警告：' + '；'.join(_warns) if _warns else '')
+        # 返回 answers 的 JSON 字符串（Agent 可 parse 后使用）；附归一警告供 agent 复盘自愈
+        return _j.dumps(result, ensure_ascii=False, indent=2) + ('\n⚠️ 归一警告：' + '；'.join(_warns) if _warns else '')
     
     ask_user.__doc__ += "\n\n示例：\n" + """```json
 [

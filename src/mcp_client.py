@@ -202,7 +202,9 @@ class MCPManager:
     def call_tool_sync(self, server: str, name: str, args: dict) -> str:
         if server not in self.sessions:
             return f"[MCP] 未知 server '{server}'"
-        return self._run_coro(self._call(server, name, args))
+        # 600s 兜底（2026-10-06·50052 实锤：MCP server 侧 hang 时 future.result() 无限等，
+        # react worker 卡死 35min+ 只能杀进程——超长任务应转后台而非靠 MCP 无限等）
+        return self._run_coro(self._call(server, name, args), timeout=600)
 
     async def _call(self, server: str, name: str, args: dict) -> str:
         session = self.sessions[server]["session"]

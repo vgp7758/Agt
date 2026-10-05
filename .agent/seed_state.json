@@ -30,5 +30,6 @@
  "dir_doc/.agent/nodes/README.md": "6cc6422c8fd87c4c",
  "workflow/extract_keywords.xml": "c9cb9ba29a2d1bdb",
  "workflow/recap_gen.xml": "80c416012d5b3a48",
- "workflow/wiki_auto_maintenance.xml": "7505537e633a3b1c"
+ "workflow/wiki_auto_maintenance.xml": "7505537e633a3b1c",
+ "agent/desktop-operator/tools/image_feed_poc.py": "b6e9bdd7fa827872"
 }

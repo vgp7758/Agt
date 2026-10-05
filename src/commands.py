@@ -297,10 +297,11 @@ def apply_config(agent, values: dict) -> list:
         v = values.pop("enable_snapshots")
         try:
             import config as _cfg_es
-            _on = bool(v) if not isinstance(v, str) else str(v).strip().lower() not in ("false", "0", "off", "no")
-            saved = _cfg_es.load_runtime_settings(); saved["enable_snapshots"] = _on; _cfg_es.save_runtime_settings(saved)
+            _on = _cfg_es._to_bool_setting(v)
+            _cfg_es.save_enable_snapshots(_on)   # 唯一写口：repo 级 .agent/snapshots_state.json
             results.append("✅ enable_snapshots = " + str(_on)
-                           + ("" if _on else "（每轮不再打回溯快照，/rewind 不可用）"))
+                           + ("" if _on else "（每轮不再打回溯快照，/rewind 不可用）")
+                           + "（已存 .agent/snapshots_state.json，repo 级）")
         except Exception as e:
             results.append(f"❌ enable_snapshots 保存失败：{e}")
     # fallback_chain 特殊处理（用户裁定 2026-09-15「职责分开」）：

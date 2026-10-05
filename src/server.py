@@ -453,6 +453,28 @@ async def api_hooks_toggle(req: dict):
     return {"ok": True, "hook": hook, "name": name, "on": on}
 
 
+@app.get("/api/snapshots/setting")
+async def api_snap_setting():
+    """回溯快照开关读（设置「其它」页签，repo 级 .agent/snapshots_state.json，2026-10-05 用户裁定）"""
+    from config import load_enable_snapshots
+    try:
+        return {"enabled": bool(load_enable_snapshots())}
+    except Exception as e:
+        return {"enabled": True, "error": str(e)[:200]}
+
+
+@app.post("/api/snapshots/setting")
+async def api_snap_setting_set(req: dict):
+    """回溯快照开关写（唯一写口 config.save_enable_snapshots——repo 级落盘）"""
+    from config import save_enable_snapshots
+    on = bool(req.get("on"))
+    try:
+        save_enable_snapshots(on)
+        return {"ok": True, "enabled": on}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
 @app.get("/manifest.json")
 async def manifest():
     """PWA manifest。"""

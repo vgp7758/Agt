@@ -421,17 +421,54 @@ def load_fold_deep_tools() -> bool:
 
 
 
+def _to_bool_setting(v) -> bool:
+    """配置布尔归一：非字符串直接 bool()；字符串认 false/0/off/no 为假。"""
+    return bool(v) if not isinstance(v, str) else str(v).strip().lower() not in ("false", "0", "off", "no")
+
+
+def _snapshots_state_path() -> Path:
+    """repo 级快照开关状态文件（<cwd>/.agent/snapshots_state.json）。
+    用户裁定 2026-10-05：回溯快照开关跟 repo 走（与钩子开关 .agent/hooks_state.json 同范式）。"""
+    return Path.cwd() / ".agent" / "snapshots_state.json"
+
+
 def load_enable_snapshots() -> bool:
-    """回溯快照开关（settings.json 的 enable_snapshots；默认 True）。
-    false = 每轮不打影子 git 快照（.agt/snapshots 不再增长，/rewind 不可用）——
-    大仓库/低配环境省每轮 add -A 的全量扫描与磁盘增长。改完下一轮生效（每轮读盘）。"""
+    """回溯快照开关（默认 True）。读取优先级（用户裁定 2026-10-05「跟 repo」）：
+    ① <cwd>/.agent/snapshots_state.json 的 enabled（repo 级主源）；
+    ② settings.json 的 enable_snapshots（旧位置，向后兼容）；
+    ③ 默认 True。
+    false = 每轮不打影子 git 快照（.agt/snapshots 不再增长，/rewind 不可用）。
+    改完下一轮生效（每轮读盘）。"""
+    try:
+        p = _snapshots_state_path()
+        if p.exists():
+            v = json.loads(p.read_text(encoding="utf-8")).get("enabled")
+            if v is not None:
+                return _to_bool_setting(v)
+    except Exception:
+        pass
     try:
         v = load_runtime_settings().get("enable_snapshots")
         if v is None:
             return True
-        return bool(v) if not isinstance(v, str) else str(v).strip().lower() not in ("false", "0", "off", "no")
+        return _to_bool_setting(v)
     except Exception:
         return True
+
+
+def save_enable_snapshots(on: bool) -> None:
+    """写 repo 级快照开关（唯一写口：WebUI 设置「其它」页签 + /config 命令共用）。
+    同步清理 settings.json 旧键（值已迁移到 repo 级，避免双源歧义）。"""
+    p = _snapshots_state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"enabled": bool(on)}, ensure_ascii=False, indent=1), encoding="utf-8")
+    try:
+        s = load_runtime_settings()
+        if "enable_snapshots" in s:
+            s.pop("enable_snapshots", None)
+            save_runtime_settings(s)
+    except Exception:
+        pass
 
 
 

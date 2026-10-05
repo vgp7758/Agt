@@ -27,12 +27,69 @@ def _emit_survey(agent, event_type: str = "survey_pending"):
         })
 
 
+def _normalize_survey(questions):
+    """问卷宽容归一（2026-10-05·20048 实例实锤：对象选项渲染成 [object Object] / 整句逐词拆成百个选项）。
+    - options 对象项：提取 text/label/value/name/option/content/title 键 → 字符串
+    - options 整段字符串：按常见分隔符（、,，;；/|换行）拆；拆不动按单选项并警告
+    - 疑似逐词拆分（>10 项且平均长度<6）：警告（LLM 把整句拆成单词数组的常见失误）
+    返回 (归一后的 questions, warnings)；warnings 会附在题面顶部给用户看。"""
+    import json as _j, re as _re
+    warns = []
+
+    def _norm_opts(opts, qid):
+        if isinstance(opts, str):
+            parts = [x.strip() for x in _re.split(r"[、,，;；/|\n]", opts) if x.strip()]
+            if len(parts) > 1:
+                warns.append(f"第{qid}题 options 传了整段字符串，已按分隔符拆成 {len(parts)} 项")
+                return parts
+            warns.append(f"第{qid}题 options 只有一个字符串选项（多选项请传字符串数组）")
+            return [opts]
+        if isinstance(opts, list):
+            out = []
+            for o in opts:
+                if isinstance(o, str):
+                    out.append(o)
+                elif isinstance(o, dict):
+                    for k in ("text", "label", "value", "name", "option", "content", "title"):
+                        if isinstance(o.get(k), str) and o[k].strip():
+                            out.append(o[k]); break
+                    else:
+                        out.append(_j.dumps(o, ensure_ascii=False))
+                else:
+                    out.append(str(o))
+            if len(out) > 10 and out and sum(len(x) for x in out) / len(out) < 6:
+                warns.append(f"第{qid}题 options 有 {len(out)} 项且平均长度过短——疑似整句被逐词拆开，请检查")
+            return out
+        return []
+
+    out = []
+    for i, q in enumerate(questions, 1):
+        if not isinstance(q, dict):
+            continue
+        nq = dict(q)
+        nq["options"] = _norm_opts(q.get("options") or [], i)
+        t_ = q.get("title") or q.get("question") or q.get("prompt") or q.get("label") or ""
+        if not t_:
+            t_ = f"（第{i}题未提供题面）"
+        nq["title"] = str(t_)
+        out.append(nq)
+    return out, warns
+
+
+
 def check_pending_survey(agent) -> bool:
     """检测是否有 pending survey（committed 态）。有则 re-emit survey_pending 事件。
     用于启动/重连/读档后恢复等待状态。返回是否有 pending survey。"""
     sid = agent.session.extra_state.get("_pending_survey", None)
     if not sid:
         return False
+    # 恢复路径同归一（2026-10-05·20048 实锤：旧存档的坏问卷重启后原样渲染）——
+    # 对象选项提文本/整段字符串拆分，存回后再 emit
+    try:
+        sid, _w = _normalize_survey(sid)
+        agent.session.extra_state["_pending_survey"] = sid
+    except Exception:
+        pass
     _emit_survey(agent, "survey_pending")
     return True
 
@@ -70,55 +127,6 @@ def resolve_survey(agent, answers: dict):
 def make_survey_tools(agent):
     """返回 [Tool(ask_user)]。"""
     
-    def _normalize_survey(questions):
-        """问卷宽容归一（2026-10-05·20048 实例实锤：对象选项渲染成 [object Object] / 整句逐词拆成百个选项）。
-        - options 对象项：提取 text/label/value/name/option/content/title 键 → 字符串
-        - options 整段字符串：按常见分隔符（、,，;；/|换行）拆；拆不动按单选项并警告
-        - 疑似逐词拆分（>10 项且平均长度<6）：警告（LLM 把整句拆成单词数组的常见失误）
-        返回 (归一后的 questions, warnings)；warnings 会附在题面顶部给用户看。"""
-        import json as _j, re as _re
-        warns = []
-
-        def _norm_opts(opts, qid):
-            if isinstance(opts, str):
-                parts = [x.strip() for x in _re.split(r"[、,，;；/|\n]", opts) if x.strip()]
-                if len(parts) > 1:
-                    warns.append(f"第{qid}题 options 传了整段字符串，已按分隔符拆成 {len(parts)} 项")
-                    return parts
-                warns.append(f"第{qid}题 options 只有一个字符串选项（多选项请传字符串数组）")
-                return [opts]
-            if isinstance(opts, list):
-                out = []
-                for o in opts:
-                    if isinstance(o, str):
-                        out.append(o)
-                    elif isinstance(o, dict):
-                        for k in ("text", "label", "value", "name", "option", "content", "title"):
-                            if isinstance(o.get(k), str) and o[k].strip():
-                                out.append(o[k]); break
-                        else:
-                            out.append(_j.dumps(o, ensure_ascii=False))
-                    else:
-                        out.append(str(o))
-                if len(out) > 10 and out and sum(len(x) for x in out) / len(out) < 6:
-                    warns.append(f"第{qid}题 options 有 {len(out)} 项且平均长度过短——疑似整句被逐词拆开，请检查")
-                return out
-            return []
-
-        out = []
-        for i, q in enumerate(questions, 1):
-            if not isinstance(q, dict):
-                continue
-            nq = dict(q)
-            nq["options"] = _norm_opts(q.get("options") or [], i)
-            t_ = q.get("title") or q.get("question") or q.get("prompt") or q.get("label") or ""
-            if not t_:
-                t_ = f"（第{i}题未提供题面）"
-            nq["title"] = str(t_)
-            out.append(nq)
-        return out, warns
-
-
     def ask_user(questions: list) -> str:
         """向用户发起问卷（阻塞等待用户完成全部题目后继续）。
         

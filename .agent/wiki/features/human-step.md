@@ -42,11 +42,11 @@ human_step(
 
 | 工具 | 形态 | 用途 |
 |---|---|---|
-| `ask_user` | 结构化问卷（题目 + 选项，`survey_pending`） | 让用户**选 / 填**——Agent 已知道要问什么 |
+| [`ask_user`](ask-user.md) | 结构化问卷（题目 + 选项，`survey_pending`；2026-10-05 起入口宽容归一防坏形态透传） | 让用户**选 / 填**——Agent 已知道要问什么 |
 | **`human_step`** | 自由指令 + 自由文本反馈 | **指挥人类操作 GUI / 物理世界**，取其对现场的观察 |
 | 审批卡片（[tool-approval](tool-approval.md)） | 是 / 否 放行（安全门） | 敏感操作的**授权**，不是任务步骤 |
 
-三者的共同底座：都走 WS action 通道 + `threading.Event` 阻塞 + **pending 落 `session.extra_state`**（同款模式，互相参照修复）。
+三者的共同底座：都走 WS action 通道 + `threading.Event` 阻塞 + **pending 落 `session.extra_state`**（同款模式，互相参照修复）。差异点：ask_user 无超时、human_step 30 分钟超时、审批卡随 pending 审批重发机制刷新恢复。
 
 ## 注意事项
 
@@ -57,7 +57,9 @@ human_step(
 
 ## 相关页面
 
+- [ask_user · 结构化问卷](ask-user.md) — 同文件同阻塞模式（结构化问卷 vs 自由指令；入口宽容归一）
 - [工具执行审批](tool-approval.md) — 同款 Event 阻塞 + WS action + pending 持久化（安全门 vs 任务步骤）
 - [用户交互](user-interaction.md) — WS action 通道与插话机制
 - [气泡交互](bubble-interaction.md) — 卡片渲染所在的气泡区
 - [多 Agent 体系](../architecture/multi-agent.md) — 子 Agent 同样带 human_step（"人在环"组随工具箱装配）
+

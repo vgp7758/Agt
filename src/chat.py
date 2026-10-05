@@ -294,6 +294,15 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
                      _a._emit({"type": "llm_log", "level": lvl, "text": txt, "scene": scene or ""}))
     except Exception:
         pass
+    # main.yml services：主 Agent 依赖服务（2026-10-06 用户问诊补齐——与子 Agent 实例化拉起对称）。
+    # 幂等（ServiceManager 同名温和拒绝）；启动期拉起，进程生命周期内常驻。
+    try:
+        from multiagent import _ensure_agent_services
+        from agent_config import seed_main_agent, load_agent_yml
+        _mm, _ = load_agent_yml(seed_main_agent(workspace))
+        _ensure_agent_services(_mm, agent)
+    except Exception:
+        pass
     return agent
 
 

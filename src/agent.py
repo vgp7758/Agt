@@ -672,7 +672,7 @@ class Agent:
         "move", "grep", "glob_files", "list_dir", "diff_files", "find_function",
         # 进程/服务系（远端机器上跑命令/服务）
         "run_shell", "run_python", "start_service", "stop_service", "list_services",
-        "service_logs", "send_to_service", "check_bg_task", "run_script",
+        "service_logs", "service_stdin", "send_to_service", "check_bg_task", "run_script",
         # 会话/上下文诊断（读远端实例的存档/投影）
         "list_tool_logs", "get_tool_detail", "recall_turn", "cache_breakpoint",
         # 团队（远端实例的子 Agent 团队）

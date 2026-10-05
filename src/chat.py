@@ -802,7 +802,7 @@ def web_main(port=None):
     def _stdin_thread():
         """stdin 消费线程：仅当 stdin 非 tty（被 start_service 以管道启动 / 输入重定向）时启动。
         每读一行作为 user 消息进 work_q（与 WS 文本同流串行）——外部 Agent 可用
-        send_to_service 驱动本实例（发任务 / 发 /restart 等命令）。tty（用户手动跑）不启动，
+        service_stdin 驱动本实例（发任务 / 发 /restart 等命令）。tty（用户手动跑）不启动，
         终端保持只读日志，原行为不变。"""
         import sys as _sys
         try:

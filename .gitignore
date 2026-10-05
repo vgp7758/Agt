@@ -65,3 +65,4 @@ scnet_outputs/
 nb_create*.png
 qr_*.txt
 sim_*.csv
+.agent/hooks_state.json

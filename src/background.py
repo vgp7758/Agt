@@ -48,7 +48,7 @@ class ServiceManager:
             if name in self._services:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
         popen_kwargs = dict(shell=True, cwd=cwd or None,
-                            stdin=subprocess.PIPE,    # 保留 stdin：send_to_service 可向服务写指令（REPL 型服务）
+                            stdin=subprocess.PIPE,    # 保留 stdin：service_stdin 可向服务写指令（REPL 型服务）
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1, encoding="utf-8", errors="replace")
         # 绑独立进程组/会话：stop 时能整树杀，避免 shell=True 下 terminate 只杀 shell、

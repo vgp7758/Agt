@@ -170,7 +170,7 @@ TOOL_BRIEFS = {
     "stop_service": "停掉指定的后台服务",
     "list_services": "看所有后台服务的运行状态",
     "service_logs": "看某个后台服务最近的输出日志",
-    "send_to_service": "给 REPL 型后台服务的 stdin 发一行指令",
+    "service_stdin": "给 REPL 型后台服务的 stdin 发一行指令（旧名 send_to_service 仍可用）",
     "add_schedule": "加定时/到点任务，到时自动触发一轮",
     "cancel_schedule": "取消一个定时任务",
     "list_schedules": "列出所有定时任务",

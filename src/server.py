@@ -2000,8 +2000,16 @@ async def api_agents_get(name: str):
     persona = _persona_from_decl(meta, system)
     _fb, _fbp = _fb_of(meta)
     persona_file = ""
-    if isinstance(asm_raw, list) and asm_raw and isinstance(asm_raw[0], dict) and asm_raw[0].get("file"):
-        persona_file = str(asm_raw[0]["file"])
+    if isinstance(asm_raw, list):
+        for _it in asm_raw:   # 扫描制（同 persona：首项常是 seg:system）
+            if isinstance(_it, dict) and _it.get("file"):
+                persona_file = str(_it["file"])
+                break
+    _svcs = meta.get("services") or []
+    if isinstance(_svcs, dict):
+        _svcs = [_svcs]
+    services_text = "\n".join(f"{k}: {v}" for it in _svcs if isinstance(it, dict)
+                               for k, v in it.items())
     return {
         "name": meta.get("name") or safe,
         "description": meta.get("description", ""),
@@ -2012,6 +2020,7 @@ async def api_agents_get(name: str):
         "persona_file": persona_file,   # 非空=persona 走独立 md（file: 引用形态）
         "assembly": asm_raw if isinstance(asm_raw, list) else None,
         "hooks": meta.get("hooks") if isinstance(meta.get("hooks"), dict) else {},
+        "services": services_text,   # 行式 "名字: 命令"（textarea 直读直写）
         "file": str(p),
     }
 
@@ -2022,17 +2031,22 @@ def _dump_agent_yml(body: dict, safe: str) -> Path:
     引用同名 .md（每次投影重读——编辑 md 即时生效；yml 保持纯配置不臃肿），
     persona 正文写该 md。同名 .md 与旧格式声明不冲突（yml 存在时 .md 被声明扫描跳过）。"""
     import yaml
-    d = _workspace / ".agent" / "agents"
+    # 目录形态（2026-10-06 用户裁定）：保存写 <name>/<name>.yml + <name>.md
+    d = _workspace / ".agent" / "agents" / safe
     d.mkdir(parents=True, exist_ok=True)
     asm = body.get("assembly")
     if not (isinstance(asm, list) and asm):
         asm = []
     persona = (body.get("persona") or "").strip()
-    # 首项统一为 file: 引用（读侧对 text: 内嵌兼容，写侧统一新形态）
-    rel = f".agent/agents/{safe}.md"
-    if asm and isinstance(asm[0], dict) and ("text" in asm[0] or "file" in asm[0]):
-        asm[0] = {"file": rel}
-    else:
+    # persona file 引用统一目录内路径。更新制（2026-10-06）：扫描已有 file:/text: 项
+    # 原位替换（desktop-operator 式 assembly 首项是 seg:system，旧"改首项"会插出双 file）
+    rel = f".agent/agents/{safe}/{safe}.md"
+    _done = False
+    for _it in asm:
+        if isinstance(_it, dict) and ("file" in _it or "text" in _it):
+            _it.clear(); _it["file"] = rel; _done = True
+            break
+    if not _done:
         asm.insert(0, {"file": rel})
     data = {
         "name": safe,
@@ -2044,6 +2058,21 @@ def _dump_agent_yml(body: dict, safe: str) -> Path:
     hooks = body.get("hooks")
     if isinstance(hooks, dict) and hooks:
         data["hooks"] = hooks
+    # 依赖服务声明（2026-10-06 用户提案）：行式文本 "名字: 命令"/行 或结构化列表
+    svcs_in = body.get("services")
+    svcs = []
+    if isinstance(svcs_in, str):
+        for ln in svcs_in.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            n, _, c = ln.partition(":")
+            if n.strip() and c.strip():
+                svcs.append({n.strip(): c.strip()})
+    elif isinstance(svcs_in, list):
+        svcs = [it for it in svcs_in if isinstance(it, dict) and it]
+    if svcs:
+        data["services"] = svcs
     # 声明级回退链：非空才写（list / {chain,policy}——与 _parse_agent_fallback 读形态对齐）；
     # 留空不写键 = 继承全局 settings 配置（管理页语义；「显式关回退」手写 yml 空串实现）
     _fbv = _fb_yaml_value(body)
@@ -2103,7 +2132,7 @@ async def api_agents_save(name: str, request: Request):
     asm = body.get("assembly")
     p = _dump_agent_yml(body, safe)
     return {"ok": True, "name": safe, "file": str(p),
-            "persona_file": f".agent/agents/{safe}.md"}
+            "persona_file": f".agent/agents/{safe}/{safe}.md"}
 
 
 @app.post("/api/agents")
@@ -2119,7 +2148,7 @@ async def api_agents_create(request: Request):
     if (body.get("name") or "").strip() in ("_main_", "main"):
         return {"error": "'_main_' 是主 Agent 保留名，不能用作子 Agent"}
     d = _workspace / ".agent" / "agents"
-    if (d / f"{safe}.yml").exists() or (d / f"{safe}.md").exists():
+    if (d / f"{safe}.yml").exists() or (d / f"{safe}.md").exists() or (d / safe).is_dir():
         return {"error": f"已存在同名声明 '{safe}'"}
     p = _dump_agent_yml({
         "description": "（新子 Agent：一句话作用 + 何时调用）",

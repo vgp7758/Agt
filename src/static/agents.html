@@ -94,6 +94,9 @@ textarea{width:100%;resize:vertical}
       <h3>SYSTEM 正文（persona）</h3>
       <textarea id="fPersona" rows="8" placeholder="你是 xxx，一个……的子 Agent。规则：…"></textarea>
       <div class="hint">保存时写回 assembly 首个 text: 项（v2.1 起存为独立 .md，每轮投影重读）。</div>
+<h3>依赖服务（services）</h3>
+<textarea id="fServices" rows="3" placeholder="每行一个：服务名: 命令&#10;如 desktop-frame: python tools/image_feed_poc.py 8765"></textarea>
+<div class="hint">子 Agent 实例化时幂等拉起这些服务（同名已在跑则跳过）；kill_agent 时一并停止。留空=不声明。每行「服务名: 命令」，# 开头行忽略。</div>
     </div>
 
     <div class="fgroup">
@@ -326,6 +329,7 @@ async function loadEdit(name){
   $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
   $('fFallback').value=d.fallback||'';$('fFbPolicy').value=d.fallback_policy||'';
   $('fPersona').value=d.persona||'';
+    $('fServices').value=d.services||'';
   asmData=(d.assembly||[]).map(asmToRow);
   if(!asmData.length)asmData=[{kind:'seg',name:'system',opt:false}];
   hkData=hkToRows(d.hooks);
@@ -337,7 +341,7 @@ async function saveAgent(){
   const body={
     description:$('fDesc').value,tools:$('fTools').value.trim(),model:$('fModel').value,
     fallback:$('fFallback').value.trim(),fallback_policy:$('fFbPolicy').value,
-    persona:$('fPersona').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
+    persona:$('fPersona').value,services:$('fServices').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
   };
   const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(d.ok)toast(d.note||'✅ 已保存（新派活生效；reuse 实例下一任务生效）');

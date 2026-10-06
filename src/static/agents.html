@@ -115,7 +115,10 @@ textarea{width:100%;resize:vertical}
     </div>
 
     <div class="rowbar">
-      <button class="btn pri" onclick="saveAgent()">💾 保存</button>
+      <button class="btn pri" onclick="saveAgent()" id="btnSaveSub">💾 保存</button>
+  <button class="btn pri" onclick="saveAgent('local')" id="btnMainLocal" style="display:none">💾 保存到本地</button>
+  <button class="btn" onclick="saveAgent('global')" id="btnMainGlobal" style="display:none">⬆ 应用到全局</button>
+  <button class="btn danger" onclick="delMainLocal()" id="btnMainDelLocal" style="display:none">🗑 删除本地</button>
       <button class="btn" onclick="loadEdit(curName)">⟲ 放弃修改</button>
       <button class="btn danger" onclick="delAgent()">🗑 删除此声明</button>
     </div>
@@ -338,6 +341,11 @@ async function loadEdit(name){
   $('toolChips').style.display=isMain?'none':'';
   $('toolsHint').style.display=isMain?'none':'';
   document.querySelector('button.btn.danger').style.display=isMain?'none':'';
+  // 主 Agent 三态保存钮（2026-10-06 用户提案）：保存到本地/应用到全局/删除本地
+  $('btnSaveSub').style.display=isMain?'none':'';
+  $('btnMainLocal').style.display=isMain?'':'none';
+  $('btnMainGlobal').style.display=isMain?'':'none';
+  $('btnMainDelLocal').style.display=(isMain&&d.has_local)?'':'none';
   $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
   $('fFallback').value=d.fallback||'';$('fFbPolicy').value=d.fallback_policy||'';
   $('fPersona').value=d.persona||'';
@@ -349,15 +357,22 @@ async function loadEdit(name){
   location.hash='edit='+encodeURIComponent(d.name);
 }
 
-async function saveAgent(){
+async function saveAgent(saveTo){
   const body={
     description:$('fDesc').value,tools:$('fTools').value.trim(),model:$('fModel').value,
     fallback:$('fFallback').value.trim(),fallback_policy:$('fFbPolicy').value,
     persona:$('fPersona').value,services:$('fServices').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
   };
+  if(saveTo)body.save_to=saveTo;   // _main_ 三态：local=写 .agent/main.yml（无则全局为底稿）/global=改全局
   const d=await api('/api/agents/'+encodeURIComponent(curName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(d.ok)toast(d.note||'✅ 已保存（新派活生效；reuse 实例下一任务生效）');
+  if(d.ok){toast(d.note||'✅ 已保存');if(curName==='_main_')loadEdit('_main_');}
   else toast(d.error||'保存失败',false);
+}
+async function delMainLocal(){
+  if(!confirm('删除本地 .agent/main.yml？删除后此 repo 回退使用全局配置。'))return;
+  const d=await api('/api/agents/_main_/local',{method:'DELETE'});
+  if(d.ok){toast('🗑 '+d.note);loadEdit('_main_');}
+  else toast(d.error||'删除失败',false);
 }
 async function delAgent(){
   if(!confirm(`删除子 Agent 声明「${curName}」？此操作不可恢复。`))return;

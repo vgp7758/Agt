@@ -1968,6 +1968,7 @@ async def api_agents_list():
             "hooks_positions": sorted(mhooks.keys()) if isinstance(mhooks, dict) else [],
             "file": str(mp),
             "is_main": True,
+            "has_local": (_workspace / ".agent" / "main.yml").exists(),
         })
     except Exception:
         out.append({"name": "_main_", "description": "主 Agent（main.yml 读取失败）", "model": "",
@@ -2215,15 +2216,28 @@ async def api_agents_save(name: str, request: Request):
     except Exception:
         return {"error": "请求体需为 JSON"}
     if name == "_main_":
-        # 主 Agent 保存：写 config_file 解析的 main.yml（repo 级覆盖：<cwd>/.agent/main.yml
-        # 存在则读写本地——多实例组网的角色实例独立主声明；否则全局 ~/.agt/main.yml）——
-        # assembly 原样保留（多 text 段与动作交错是完整配方，不做 persona 拆分），
-        # 保留未识别字段；不写 .md。生效需 /restart（启动时装配）。
+        # 主 Agent 保存（2026-10-06 用户提案：三态保存）——save_to:
+        #   local  = 强制写 <cwd>/.agent/main.yml（repo 级；不存在时以全局份为底稿——
+        #            "基于全局配置修改并存本地"，之后本地覆盖优先）；
+        #   global = 强制写全局 ~/.agt/main.yml（改动应用到所有 repo 默认）；
+        #   auto（缺省）= seed_main_agent 现状（repo 有本地写本地，否则写全局）。
+        # assembly 原样保留（多 text 段与动作交错是完整配方），保留未识别字段；不写 .md。
         import yaml
         from agent_config import seed_main_agent
-        p = seed_main_agent(_workspace)
+        from pathlib import Path as _P
+        save_to = str(body.get("save_to") or "auto").strip().lower()
+        global_p = _P.home() / ".agt" / "main.yml"
+        if save_to == "local":
+            p = _workspace / ".agent" / "main.yml"
+            base_p = p if p.exists() else global_p   # 本地已有→增量改；没有→以全局为底稿
+        elif save_to == "global":
+            p = global_p
+            base_p = global_p
+        else:
+            p = seed_main_agent(_workspace)
+            base_p = p
         try:
-            base = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            base = yaml.safe_load(base_p.read_text(encoding="utf-8")) or {}
         except Exception:
             base = {}
         if "description" in body:
@@ -2244,9 +2258,12 @@ async def api_agents_save(name: str, request: Request):
                 base["hooks"] = hooks
             else:
                 base.pop("hooks", None)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        _where = "本地 .agent/main.yml（仅当前 repo 生效）" if p == _workspace / ".agent" / "main.yml" \
+                 else "全局 ~/.agt/main.yml（所有 repo 默认）"
         return {"ok": True, "name": "_main_", "file": str(p),
-                "note": f"已写 {p}；/restart 后生效（主 Agent 装配在启动时读取）"}
+                "note": f"已保存到{_where}；主 Agent 装配启动时读取（mt 变化惰性重载亦跟）"}
     safe = _agent_safe_name(name)
     if not safe:
         return {"error": "name 非法"}
@@ -2256,6 +2273,19 @@ async def api_agents_save(name: str, request: Request):
     p = _dump_agent_yml(body, safe)
     return {"ok": True, "name": safe, "file": str(p),
             "persona_file": f".agent/agents/{safe}/{safe}.md"}
+
+
+@app.delete("/api/agents/_main_/local")
+async def api_main_local_delete():
+    """删除本地 main.yml（2026-10-06 用户提案）：回退用全局配置。
+    全局份必须存在（兜底）——删除后 config_file/main.yml 的 mtime 惰性重载自动跟随全局。"""
+    p = _workspace / ".agent" / "main.yml"
+    if not p.exists():
+        return {"ok": False, "error": "本地 main.yml 不存在（当前已在用全局配置）"}
+    if not (Path.home() / ".agt" / "main.yml").exists():
+        return {"ok": False, "error": "全局 main.yml 缺失，拒绝删除本地份（会失去主声明）"}
+    p.unlink()
+    return {"ok": True, "note": "已删除本地 main.yml，回退使用全局配置（惰性重载自动跟随）"}
 
 
 @app.post("/api/agents")

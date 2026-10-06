@@ -95,9 +95,12 @@ textarea{width:100%;resize:vertical}
       <h3>SYSTEM 正文（persona）</h3>
       <textarea id="fPersona" rows="8" placeholder="你是 xxx，一个……的子 Agent。规则：…"></textarea>
       <div class="hint">保存时写回 assembly 首个 text: 项（v2.1 起存为独立 .md，每轮投影重读）。</div>
-<h3>依赖服务（services）</h3>
-<textarea id="fServices" rows="3" placeholder="每行一个：服务名: 命令&#10;如 desktop-frame: python tools/image_feed_poc.py 8765"></textarea>
-<div class="hint">子 Agent 实例化时幂等拉起这些服务（同名已在跑则跳过）；kill_agent 时一并停止。留空=不声明。每行「服务名: 命令」，# 开头行忽略。</div>
+    </div>
+
+    <div class="fgroup" id="gServices">
+      <h3>依赖服务（services）</h3>
+      <textarea id="fServices" rows="3" placeholder="每行一个：服务名: 命令&#10;如 desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765"></textarea>
+      <div class="hint">主 Agent：启动期拉起（进程内常驻）；子 Agent：实例化时幂等拉起（同名已在跑则跳过），kill_agent 时一并停止。留空=不声明。每行「服务名: 命令」，# 开头行忽略。</div>
     </div>
 
     <div class="fgroup">

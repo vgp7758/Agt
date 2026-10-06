@@ -2102,11 +2102,16 @@ async def api_agents_get(name: str):
             return {"error": f"main.yml 解析失败：{type(e).__name__}: {e}"}
         asm_raw = meta.get("assembly")
         _fb, _fbp = _fb_of(meta)
+        _msv = meta.get("services") or []
+        if isinstance(_msv, dict):
+            _msv = [_msv]
+        _msv_txt = "\n".join(f"{k}: {v}" for it in _msv if isinstance(it, dict) for k, v in it.items())
         return {
             "name": "_main_", "is_main": True,
             "description": meta.get("description", ""),
             "model": meta.get("model") or "",
             "tools": "", "persona": "",
+            "services": _msv_txt,
             "fallback": _fb, "fallback_policy": _fbp,
             "assembly": asm_raw if isinstance(asm_raw, list) else None,
             "hooks": meta.get("hooks") if isinstance(meta.get("hooks"), dict) else {},
@@ -2258,6 +2263,20 @@ async def api_agents_save(name: str, request: Request):
                 base["hooks"] = hooks
             else:
                 base.pop("hooks", None)
+        _svtxt = str(body.get("services") or "")
+        if _svtxt.strip():
+            _sv = []
+            for _ln in _svtxt.splitlines():
+                _ln = _ln.strip()
+                if not _ln or _ln.startswith("#"):
+                    continue
+                _n, _sep, _c = _ln.partition(":")
+                if _sep and _c.strip():
+                    _sv.append({_n.strip(): _c.strip()})
+            if _sv:
+                base["services"] = _sv
+        elif "services" in body:   # 显式清空 → 删键（回退不声明）
+            base.pop("services", None)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
         _where = "本地 .agent/main.yml（仅当前 repo 生效）" if p == _workspace / ".agent" / "main.yml" \

@@ -27,7 +27,7 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 
 ## seed_default_agents · bundled agents：desktop-operator 自包含四件（2026-10-06，用户提案「把 desktop-operator 也添加到播种吧」，commit 789d88e）
 
-- **源 → 目标**：`src/agents/<name>/`（随包 bundled）→ `.agent/agents/<name>/`；判存在跳过 + seed_state 基线。当前 6 个：coder / desktop-operator / explorer / reviewer / vision / wiki-updater
+- **源 → 目标**：`src/agents/<name>/`（随包 bundled）→ `.agent/agents/<name>/`；判存在跳过 + seed_state 基线。当前 8 个：coder / **coder-py** / **coder-cs** / desktop-operator / explorer / reviewer / vision / wiki-updater（2026-10-07 增两个 coder 语言变体，commit `55abf87`——各挂语言专属 after_tool 诊断钩子 + LSP 工具，yml+md 两件、无 tools/，见 [coder 语言变体](../architecture/multi-agent.md#coder-语言变体coder-py--coder-cs按语言挂检查钩子--配-lsp-工具2026-10-07用户提案commit-55abf87)；本 repo 两侧直接落盘，其它 repo 升级后下次播种即得）
 - **desktop-operator 四件（自包含）**：`desktop-operator.yml`（services 已改自包含路径）+ `desktop-operator.md` 人设 + `tools/desktop_tools.py`（10 个键鼠/剪切板/窗口专属工具）+ `tools/image_feed_poc.py`（桌面画面服务）——[目录形态](../architecture/multi-agent.md)整目录随包，新 repo 开箱即得「拉起 Agent 即自带眼睛」（[image_feed](image-feed.md)）
 - **services 命令自包含化**：通用 repo 没有本 repo 的 `tools/image_feed_poc.py`，声明命令改为 `.agent/agents/desktop-operator/tools/image_feed_poc.py`（workspace 相对路径，[services 拉起 cwd=workspace](../architecture/multi-agent.md)直接可用）
 - **顺带两修（不做这轮就等于白播）**：

@@ -305,6 +305,64 @@ assembly:
 - [子 Agent 目录形态](#子-agent-目录形态name-自包含目录yml--md-人设--tools-专属工具2026-09-28用户提案commit-2cec328)——write_file 落的目录形态（yml + md 人设 + tools/ 专属工具）
 - [workspace 播种](../features/workspace-seeding.md)——agents.md 播种文档（创建模板载体，随包分发）
 
+## coder 语言变体：coder-py / coder-cs——按语言挂检查钩子 + 配 LSP 工具（2026-10-07，用户提案，commit 55abf87）
+
+用户提案（2026-10-07）：「coder 可能应该按照语言有一些变体——不同语言的 coder 挂不同的检查钩子，配不同的 lsp 工具」。落地（commit `55abf87`，repo `.agent/agents/` 与随包播种源 `src/agents/` 双份同步）：**coder-py / coder-cs** 两个语言变体就位，**通用 coder 保留**——三档并存：杂语言/混合场景仍派 coder，Python/C# 工作按 description 路由到对应变体。
+
+### 变体对照
+
+| | **coder-py** | **coder-cs** |
+|---|---|---|
+| 检查钩子（after_tool） | `py_auto_diag` | `cs_auto_diag` |
+| LSP 工具 | py_diag / py_syms / py_def / py_ref | cs_diag / cs_syms / cs_def / cs_ref / cs_wsym / cs_hover |
+| LSP 装配指引（persona） | `ensure_lsp('python')` | `ensure_lsp('csharp')`（注明 OmniSharp 需索引几十秒） |
+| 语言纪律（persona） | 类型注解 / docstring / 异常兜底 / 不引新依赖先说 | `dotnet build` 零错误交付 / async 传播 / nullable / using·IDisposable |
+| 声明位置 | `.agent/agents/coder-py/`（yml + md，目录形态） | `.agent/agents/coder-cs/`（同构） |
+
+### 声明形态：胖工具、瘦装配（与通用 coder 的有意差异）
+
+```yaml
+# .agent/agents/coder-py/coder-py.yml
+name: coder-py
+description: Python 编码 Agent——py_auto_diag 检查闭环 + py-lsp 语义导航。何时调用：Python 代码的实现/修改/重构…
+model: ""        # 继承主 Agent 当前模型（通用 coder 钉 glm-official-flash）
+tools: ""        # 继承全部（含 py-lsp 系列）——yml 注释附硬白名单样例：
+                 # "__mcp__python-lsp__py_diag,__mcp__python-lsp__py_syms,…,read_file,edit,write_file,replace_lines,grep,run_shell"
+assembly:
+  - file: .agent/agents/coder-py/coder-py.md
+  - user_message
+  - steps
+  - recent_file|optional
+hooks:
+  after_tool:
+    - workflow: py_auto_diag
+```
+
+对照通用 coder（`tools: run_python, write_file, edit, read_file, grep` 白名单 + recap_gen/fallback/history 全套）：变体**工具改继承全部**（LSP MCP 工具必须可见，想收紧用注释里的全名白名单——LSP 工具注册名带 `__mcp__<server>__` 前缀）；**不挂 recap_gen / 不声明 fallback / 无 history 段 / 无团队看板 func**——单任务「改→查→再改」场景，无长期记忆与回退需求。
+
+### 诊断闭环（after_tool × 快照 diff × LSP diag）
+
+两个 diag 工作流**本轮之前已存在**（bundled `src/workflows/py_auto_diag.xml` / `cs_auto_diag.xml`，v0.22.0 起修过钩子根属性；repo 侧 seed_state 基线在案）——本轮做的是**把它们按语言挂到变体声明的 `hooks.after_tool` 上**。骨架：
+
+- **py_auto_diag**（零 code 节点，loop 全遍历）：`changed_files` 逐项 `ends_with .py` 且非 deleted → 逐文件调 `__mcp__python-lsp__py_diag` 拼接 → **含 `[ERROR]` 才注入**（`🐍 Python 诊断发现问题（请修复后再继续）`），否则注入 `✅ Python 自动校验语法通过（import/运行仍需另测）`
+- **cs_auto_diag**（code 节点版）：筛 .cs 的 new/modified（多文件按字典序取首个 + `另有 N 个未诊断` 注记）→ `__mcp__csharp-lsp__cs_diag` → 含错误注入 `⚠️ OmniSharp 诊断 …`
+
+**触发面与改法无关**：`changed_files` 来自工具调用前后 workspace mtime 快照 diff 的真实副作用——edit/write_file/run_python/MCP 改文件都触发（快照恒开机制见 [trace-fold](../features/trace-fold.md)）。主 Agent 派活后coder 改完文件，**下一步自动收到诊断反馈**，形成改→查→再改闭环。
+
+### 路由与生效
+
+- **description 即路由依据**：两条 description 各带「Python/C# 代码的实现/修改/重构 + 检查闭环」——主 Agent SYSTEM 清单照此派活（用户提案的三个诉求——语言变体 / 专属检查钩子 / 专属 LSP 工具——全收在一条 description 里）
+- **零 restart**：子 Agent 声明每次派活现场读（本就即时生效，见 [main.yml 热重载](#mainyml-热重载改主-agent-dsl-免-restart2026-09-07用户提案)的主/子对照表）
+- **播种源同步**：`src/agents/` bundled agents 6 → 8——其它 repo 升级后下次播种即得（见 [workspace 播种 · seed_default_agents](../features/workspace-seeding.md)）
+- **加新语言变体 = 照抄模式**：yml 改 name/description/钩子工作流名/LSP 工具全名 + persona 写语言纪律 +（如需）新 diag 工作流改过滤后缀与 plugin toolName
+
+### 关联
+
+- [工作流引擎与钩子](workflow-hooks.md) —— after_tool 注入形态与 hook_note
+- [workspace 播种 · seed_default_agents](../features/workspace-seeding.md) —— bundled 播种源（8 agents 清单）
+- [配置体系](../guides/config-and-models.md) —— `ensure_lsp` 持久化写全局 `~/.agt/mcp.json` 的 repo 级覆盖注意（本地整份遮蔽全局时后装 LSP 条目读不到）
+- [工具外置 · 判别标准](tool-externalization-criteria.md) —— LSP 属运行时管理器族（引擎侧，不外置）
+
 ## 复活路径 NameError · wiki-updater 多实例根因修复（2026-08-26，commit 6d396af）
 
 **现象**：团队看板出现 `wiki-updater` / `wiki-updater_2` / `wiki-updater_3` 多个同 name 实例，各自带着同样的攒批任务 recap——"不是检查忙就攒批短路了吗，为什么还建新实例？"

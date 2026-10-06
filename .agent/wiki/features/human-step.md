@@ -38,6 +38,22 @@ human_step(
 | WS | src/server.py L2402-2406 | `action: "human_step_response"` → `resolve_human_step(agent, id, text)`（与 `approval_response` / `survey_decision` 同款同址） |
 | 前端 | src/static/index.html | `human_step_pending` → `renderHumanStepCard(id, instruction, expect)`；`human_step_resolved` → `resolveHumanStepCard(id, text)`；`submitHumanStep(sid)` 读 `#hs_text_<sid>` 发 WS action（卡片 DOM `#humanstep_<sid>`） |
 
+## 提交后只读化：控件移除 + 回报文字渲染（2026-10，用户提案）
+
+用户提案（2026-10）：提交后的卡片是「半残留」观感——旧实现 `resolveHumanStepCard` 只把 `textarea/button` 置 `disabled + opacity 0.5`：按钮还看得见、文本框还占着位，像没提交干净。
+
+新形态（src/static/index.html，前端改动**刷新页面即生效**）：
+
+| 项 | 行为 |
+|---|---|
+| 控件 | 提交后 `textarea / button / input` **直接移除**（不是灰掉） |
+| 卡片 | 边框转绿 + 浅绿底（保留） |
+| 回执 | `✅ 已完成，Agent 继续执行中` + `📌 我的回报：<原文>` 绿色文字卡 |
+| 文本 | `esc()` 转义 + `white-space:pre-wrap` 保留换行 |
+| 幂等 | 重复回执（刷新补发等）不叠加文字卡 |
+
+同轮顺带：survey 卡片同款只读化——提交后答案摘要保留可回看，见 [ask_user · 提交后答案摘要](ask-user.md)。
+
 ## 与既有交互工具的三角分工
 
 | 工具 | 形态 | 用途 |

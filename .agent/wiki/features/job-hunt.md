@@ -47,6 +47,10 @@
 
 **卫生纪律**：探针产物（probe_*.png / _face_check.py / yunet.onnx / 表单状态截图）用完即清；投递材料同样不常驻 workspace——2026-10 随 v0.31.3 发版清场后已全部撤出（三段视频 + 简历副本均删，正本收口 `D:\AI_Usings\resume\`，见 [物料](#物料)），此后用前临时复制、用完即清。
 
+### 后记：tether_q*.mp4 入 .gitignore（2026-10，commit 132e6f2）
+
+投递时视频副本会临时复制进 workspace（见上节卫生纪律）——这些 `tether_q*.mp4` 每次都以未跟踪文件刷 git 状态。commit `132e6f2` 给 `.gitignore` 加条目 + 注释「Tether 投递视频（历史轮回看副本，非源码）」，临时副本不再污染 git 状态；工作区残留的历史副本（tether_q1_why / q2_p2p / q3_deadline）已随本次清掉。
+
 ## 物料
 
 | 物料 | 位置 | 状态 |

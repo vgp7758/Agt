@@ -2360,16 +2360,18 @@ async def ws_endpoint(websocket: WebSocket):
                                     "current_target": client["target"]})
         except Exception:
             pass
-    # 团队下拉框初始化（用户提案 2026-09-17）：连接即推一次完整列表——此前要等首次点击
-    # 下拉框才拉取，刷新后下拉框只有"主 Agent"一项。前端收起态直接应用，无展开期竞态。
-    _reg = getattr(agent, "registry", None)
-    if _reg is not None:
-        try:
-            await _send(websocket, {"type": "team_list",
-                                    "team": _reg.format_team(exclude_id="", active_window=False),
-                                    "current_target": client["target"]})
-        except Exception:
-            pass
+    # plan 面板初始化（用户实锤 2026-10-06）：plan 事件只在 create/update 工具变更时广播，
+    # 页面刷新后前端收不到 → 顶部步骤列表面板空。连接建立即补推当前 active plan
+    # （与上方 team_list 同款修法——刷新即恢复）。
+    try:
+        _ag = _state.get("agent") or agent
+        if _ag is not None and getattr(_ag, "active_plan", None):
+            await _send(websocket, {"type": "plan",
+                                    "plan": [dict(s) for s in (_ag.plan or [])],
+                                    "plan_id": _ag.active_plan_id,
+                                    "plan_title": (_ag.active_plan or {}).get("title", "")})
+    except Exception:
+        pass
 
     try:
         while True:

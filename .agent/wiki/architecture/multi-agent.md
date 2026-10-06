@@ -119,6 +119,23 @@ except Exception:
 
 至此 services 语义全体系统一：**主 Agent 启动拉 / 子 Agent 实例化拉 / kill_agent 同停**——三类生命周期各得其所。
 
+### 看板收藏⭐：收藏写 repo main.yml——收藏=开机自启 + Stop/Start（2026-10-06 · 四，用户提案，commit 9a039c5）
+
+用户提案：WebUI「后台/服务」抽屉的服务卡片展开后，底部加三按钮——**☆ 收藏**（点击把服务名 + 启动指令自动写进当前 repo 的 main.yml；repo 没有 main.yml 则把全局 `~/.agt/main.yml` 复制一份过来再写；已收藏再点=取消）、运行中显示 **⏹ Stop**、已退出显示 **▶ Start**（原 command+cwd 重启）。commit `9a039c5`（src/server.py + src/static/index.html，+113 行）。
+
+**后端两新端点（src/server.py）**：
+
+| 端点 | 职责 |
+|---|---|
+| `POST /api/svc_fav` | 收藏/取消双向：repo 无 main.yml → 先从全局份复制；services 段按服务名增删（yaml 写侧） |
+| `POST /api/svc_op` | stop / start——start 复用进程内服务条目登记的 command+cwd；**进程重启过 → 登记丢失**，明确提示改走收藏路径（先收藏，启动期自动拉起） |
+
+dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——**⭐态读侧与写侧同源**（读 repo main.yml services 段，非前端自存状态），顺带清掉 server.py 未用 import（`config_file`）。
+
+**启动指令取法（收藏写入的数据源）**：优先进程内登记（`svc.list()` 连已退出的条目都留着 command）；DOM 兜底取卡片上显示的命令——command span 加 `class="cmd"` + `title` 悬浮全文；兜底定位 = 按钮排 div 的 `parentElement`（服务卡片）内取 `.cmd`（首版 `closest('div')` 撞在按钮排自己身上，同轮当场修正）。
+
+**闭环意义——收藏 = 开机自启**：收藏即写 main.yml `services:` 声明 → 主 Agent 启动期 `_ensure_agent_services` 自动拉起（上一节机制）；取消收藏 = 从声明摘除。至此 services 的**写侧三入口**凑齐：声明手写 / 管理页 services textarea（上上节）/ **看板一键收藏**——读侧恒走 `_ensure_agent_services` 单源，不因入口多而分叉。看板交互视角见 [background-scheduler · 服务看板交互三件套](../features/background-scheduler.md)。
+
 ### 验证
 
 四场景单测全绿：列表/dict 两种声明形态、无声明零调用、start 抛异常不炸实例化。

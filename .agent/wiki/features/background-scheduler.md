@@ -252,6 +252,20 @@ Scheduler._schedules（真源）
 
 **验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
+## 服务看板交互三件套：⭐收藏写 main.yml / ⏹Stop / ▶Start（2026-10-06，用户提案，commit 9a039c5）
+
+服务卡片展开区（日志 pre 下方）新增按钮排（commit `9a039c5`，src/static/index.html + src/server.py）：
+
+| 按钮 | 条件 | 行为 |
+|---|---|---|
+| ☆ 收藏 / ★ 已收藏 | 恒显示（⭐态读 dashboard 快照 `fav_services` 名单） | `svcFav()` → POST `/api/svc_fav`：服务名 + 启动指令写**当前 repo 的 main.yml** services 段（无 main.yml 先从全局复制）；已收藏再点=取消（从声明移除） |
+| ⏹ Stop | 运行中 | `svcOp('stop')` → POST `/api/svc_op` |
+| ▶ Start | 已退出 | `svcOp('start')`：用条目登记的 command+cwd 重启；进程重启过登记丢失 → 明确提示改走收藏路径（收藏后启动期自动拉起） |
+
+- 工具侧（本页 list_services / start_service / stop_service）零改动——本轮纯 WebUI 交互 + server.py 端点层
+- 启动指令取法：优先进程内登记，DOM 兜底取卡片 `.cmd` span（带 title 悬浮全文）
+- **收藏 = 开机自启闭环**（写 main.yml services → 主 Agent 启动期拉起）、后端端点职责表：见 [multi-agent · 看板收藏](../architecture/multi-agent.md)
+
 ## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 
 服务退出时是否唤醒 Agent，由启动参数逐服务声明；策略判定与通知注入在 src/agent.py `_on_service_exit`。

@@ -3117,11 +3117,16 @@ function renderSurveyBubble(questions){
  }
  function resolveHumanStepCard(sid, text){
    const card = document.getElementById('humanstep_'+sid);
-   if(card){
-     card.style.borderColor = '#16a34a'; card.style.background = '#f0fdf4';
-     card.querySelectorAll('textarea,button').forEach(el=>{el.disabled=true;el.style.opacity=0.5;});
-     card.insertAdjacentHTML('beforeend','<div style="font-size:12px;color:#16a34a;margin-top:6px">✅ 已收到反馈，Agent 继续执行中</div>');
-   }
+   if(!card || card.dataset.done) return;
+   card.dataset.done = '1';
+   card.style.borderColor = '#16a34a'; card.style.background = '#f0fdf4';
+   // 提交后只读化（用户提案 2026-10-06）：控件直接移除（不再半透明残留），
+   // 用户回报以文字渲染回看
+   card.querySelectorAll('textarea,button,input').forEach(el=>el.remove());
+   let extra = '<div style="font-size:12px;color:#16a34a;margin-top:6px">✅ 已完成，Agent 继续执行中</div>';
+   const _t = (text||'').trim();
+   if(_t) extra += '<div style="font-size:13px;color:#166534;background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap;line-height:1.5">📌 我的回报：'+esc(_t)+'</div>';
+   card.insertAdjacentHTML('beforeend', extra);
  }
  function resolveApprovalCard(id, result){
    const card = document.getElementById('approval_'+id);
@@ -3166,7 +3171,15 @@ function submitSurvey(){
     else if(multi) answers[qid]=vals;
     else answers[qid]=vals[0];
   });
-  form.innerHTML = '<div style="color:#059669;padding:12px">✅ 已提交，等待 Agent 继续…</div>';
+  // 提交后只读化（用户提案 2026-10-06）：按钮隐藏 + 答案文字渲染（可回看）
+  let _sum = '<div style="color:#059669;padding:6px 2px;font-weight:600">✅ 已提交，等待 Agent 继续…</div>';
+  _sum += '<div style="font-size:13px;color:#166534;line-height:1.7;margin-top:4px">';
+  Object.keys(answers).forEach(k2=>{
+    const v = Array.isArray(answers[k2]) ? answers[k2].join('、') : answers[k2];
+    _sum += '· '+esc(k2)+'：'+esc(String(v))+'<br>';
+  });
+  _sum += '</div>';
+  form.innerHTML = _sum;
   ws.send(JSON.stringify({action:'survey_decision', answers: answers}));
 }
 

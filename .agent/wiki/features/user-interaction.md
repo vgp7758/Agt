@@ -743,6 +743,12 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 
 **生效方式**：引擎层（chat.py / agent.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效（Ctrl+F5 强刷兜底）。
 
+### 新消费端：before_turn 检索钩子短路（2026-10-07，用户提案，commit 3d5fb42）
+
+### 新消费端：before_turn 检索钩子短路（2026-10-07，用户提案，commit 3d5fb42）
+
+`_msg_source` 的第二个引擎消费端：`agent.py run()` 在钩子触发点判别——**非空（后台来源）整组短路 before_turn 检索钩子**（wiki_auto_query / before_turn_retrieval / skill_suggest），检索只服务人类直输轮；空串照跑；短路时 info 日志留痕。混合批判定沿用本节批首归属（first_src），无需新逻辑。详见 [workflow-hooks · 后台来源短路](../architecture/workflow-hooks.md)。
+
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 
 **问题**：两个 before_turn 钩子并行执行时，第二个「执行中」UI 覆盖第一个的引用 → 第一个永远闪烁不消失

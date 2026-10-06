@@ -300,6 +300,39 @@ with ThreadPoolExecutor() as pool:
 
 关联：[配置体系 · settings.json](../guides/config-and-models.md#settingsjson运行时)（两键全表）、[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)——「全部完成才返回」的并行语义不变，本节只是给整组等待加了上限。
 
+## before_turn 后台来源短路：_msg_source 非空不跑检索（2026-10-07，用户提案，commit 3d5fb42）
+
+**提案（用户 2026-10-07）**：before_turn 检索钩子此前**每轮都跑**——包括 inbox 唤醒的后台轮。钩子本是为人类直接输入服务的，后台通知（如服务退出）开一轮也去检索「服务退出」这段通知文本纯属浪费（本地提词 LLM + embedding 全白烧）。裁定：标记一下用户直接发送的消息，钩子只处理有标记的，其它情况短路静默。
+
+**标记现成，无需新增**：`run()` 本就带 `_msg_source`——**空串 = 用户直接发送**；非空 = 后台来源（bg_task 完成 / schedule 到点 / 子 Agent 反馈 / 服务退出等，chat.py `_merge_batch` 批合并时透传，即 first_src，见 [user-interaction · 语义标签](../features/user-interaction.md)）。短路落在钩子触发点：
+
+```python
+# src/agent.py run()
+bt_notes = []   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走 _run_hooks
+if not resumed:
+    if _msg_source:
+        # 后台来源（bg_task/schedule/子Agent反馈等）短路 before_turn 检索钩子
+        # （用户提案 2026-10-07：钩子只服务人类直接输入——检索"服务退出"文本纯属浪费）
+        _LOG.info("后台来源（%s）短路 before_turn 检索钩子", _msg_source)
+    else:
+        bt_notes = self._run_hooks("before_turn", self._before_turn_ctx(msg))
+```
+
+**短路范围**：
+
+| 轮形态 | before_turn 钩子组 |
+|---|---|
+| 人类直输轮（`_msg_source=""`） | 三个检索钩子（wiki_auto_query / before_turn_retrieval / skill_suggest）正常跑 |
+| 后台来源轮（bg_task / schedule / 子 Agent 反馈 / service_exit） | 整组短路，info 日志留痕，连本地提词 LLM 都不发 |
+| resume 续跑轮 | 原本就跳过（首轮已检索过，不叠加） |
+| turn_end（recap）等其它位置钩子 | 不受影响 |
+
+**混合批沿用批首归属**：手输 + 搭车通知合进一批时，`_msg_source` = first_src——批首是手输 → 为空 → 钩子照跑（搭车的通知文本自带 `[后台通知·` 前缀，模型侧照常可见）；批首是通知 → 短路。无需新判别逻辑。
+
+**生效**：引擎层改动，`/restart` 生效；commit `3d5fb42` 已推送，site-packages 已同步。
+
+关联：[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)（短路的是整组并行执行）、[60s 专用超时](#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)（只对实际执行的轮生效）、[wiki_auto_query](../features/wiki-auto-query.md)、[skill_suggest](../features/skills.md)。
+
 ## async 元信息字段（2026-08 新，v0.18.2 正式发布）
 
 钩子工作流可标记 `async=true`，使其**异步执行不阻塞主循环**。全链路读写：

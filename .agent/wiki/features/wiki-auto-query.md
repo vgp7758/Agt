@@ -8,6 +8,10 @@
 
 **位置（2026-09-30）**：wiki_auto_query **留在 repo 层** `.agent/workflows/`，不随 recap_gen / extract_keywords / before_turn_retrieval 迁全局 `~/.agt/workflows/`——它依赖 repo 级基础设施（wiki_read/wiki_search 外置工具 + `.agent/wiki/` 内容），放全局会在没有这套设施的 repo 炸钩子。见 [workflow-hooks · 全局工作流目录](../architecture/workflow-hooks.md)。
 
+## 触发范围收窄：只服务人类直输轮（2026-10-07，commit 3d5fb42）
+
+**触发范围收窄（2026-10-07，用户提案，commit 3d5fb42）**：引擎侧钩子触发点新增 `_msg_source` 判别——后台来源轮（bg_task / schedule / 子 Agent 反馈 / service_exit 等 inbox 唤醒轮）**整组短路 before_turn 检索钩子**，不再为「服务退出」这类通知文本跑本地提词 + embedding 检索；人类直接输入的轮照常触发。本工作流自身无改动，机制详见 [workflow-hooks · 后台来源短路](../architecture/workflow-hooks.md)。
+
 ## v4 流水线（2026-08-21，commit 952b801）
 
 > **架构变更**：从「LLM 意图识别 + LLM 精排」改为「本地 LLM 提关键词 + embedding 余弦重排 + 阈值裁决」。核心洞察：本地 3B 模型做相关性打分区分度差（相关 0.1、无关 0.2、全 0.5），不如 embedding 模型余弦计算（0.69 / 0.42 / 0.16 判别力碾压）。本地 LLM 只负责提关键词。

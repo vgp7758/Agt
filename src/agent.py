@@ -2134,7 +2134,12 @@ class Agent:
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
             bt_notes = []   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走 _run_hooks
             if not resumed:
-                bt_notes = self._run_hooks("before_turn", self._before_turn_ctx(msg))
+                if _msg_source:
+                    # 后台来源（bg_task/schedule/子Agent反馈等）短路 before_turn 检索钩子
+                    # （用户提案 2026-10-07：钩子只服务人类直接输入——检索"服务退出"文本纯属浪费）
+                    _LOG.info("后台来源（%s）短路 before_turn 检索钩子", _msg_source)
+                else:
+                    bt_notes = self._run_hooks("before_turn", self._before_turn_ctx(msg))
             if bt_notes and not auto_flag:
                 # before_turn 对 user_message 做意图识别/预检索等预处理，结果作为【user 之后的补充】注入
                 # （不拼进 user 文本）：多个钩子合并成一组挂到当前 turn，session 投影时在 user 消息后渲染

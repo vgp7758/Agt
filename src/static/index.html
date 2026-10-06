@@ -2846,6 +2846,7 @@ async function renderSvcDash(){
       ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>
       <div style="padding:6px 9px;border-top:1px solid #eee;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <button onclick="svcFav('${esc(s.name)}',${(window._favSvcs||[]).includes(s.name)?'false':'true'})" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid ${(window._favSvcs||[]).includes(s.name)?'#f59e0b':'#d8d2e8'};background:${(window._favSvcs||[]).includes(s.name)?'#fef3c7':'#fff'};color:#6d28d9;cursor:pointer">${(window._favSvcs||[]).includes(s.name)?'★ 已收藏（点击取消）':'☆ 收藏（写进 main.yml）'}</button>
+        <button onclick="window.open('/api/svc_log?name='+encodeURIComponent('${esc(s.name)}'),'_blank')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #d8d2e8;background:#fff;color:#6d28d9;cursor:pointer">📄 完整日志</button>
         ${s.running
           ? `<button onclick="svcOp('${esc(s.name)}','stop')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c;cursor:pointer">⏹ Stop</button>`
           : `<button onclick="svcOp('${esc(s.name)}','start')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;cursor:pointer">▶ Start</button>`}

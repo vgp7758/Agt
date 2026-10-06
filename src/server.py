@@ -1850,6 +1850,31 @@ def _agent_safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_")
 
 
+@app.get("/api/svc_log")
+async def api_svc_log(name: str):
+    """服务完整日志页（2026-10-06 用户提案）：新页签查看，5s 自刷新，全量环形缓冲。"""
+    from fastapi.responses import HTMLResponse
+    _agent = _state.get("agent")
+    ent = ((_agent.services._services or {}).get(name)) if _agent else None
+    if not ent:
+        return HTMLResponse(f"<body style='font-family:system-ui;padding:24px;color:#b91c1c'>"
+                            f"服务 '{name}' 不在当前进程登记（可能实例重启过）</body>", status_code=404)
+    logs = list(ent.get("logs") or [])
+    body = "\n".join(logs[-3000:])   # 上限 3000 行防爆
+    esc = (body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    running = bool(ent.get("proc") and ent["proc"].poll() is None)
+    _h = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return HTMLResponse(
+        "<meta http-equiv='refresh' content='5'>"
+        "<meta charset='utf-8'>"
+        f"<title>{_h(name)} · 服务日志</title>"
+        "<body style='margin:0;background:#0b1220'>"
+        f"<div style='position:sticky;top:0;background:#1e293b;color:#c7d2fe;padding:8px 14px;"
+        f"font:13px system-ui'>🛠 <b>{_h(name)}</b> · {'● 运行中' if running else '○ 已退出'}"
+        f" · {len(logs)} 行（环形缓冲）· 5s 自刷新 · 命令：{_h(ent.get('command',''))}</div>"
+        f"<pre style='margin:0;padding:14px;color:#c7d2fe;font:12px ui-monospace,Consolas,monospace;"
+        f"white-space:pre-wrap;word-break:break-all'>{esc or '（暂无输出）'}</pre></body>")
+
 @app.post("/api/svc_fav")
 async def api_svc_fav(body: dict):
     """服务收藏 toggle（2026-10-06 用户提案）：写/删当前 repo main.yml 的 services 段。

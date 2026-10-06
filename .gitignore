@@ -67,3 +67,5 @@ qr_*.txt
 sim_*.csv
 .agent/hooks_state.json
 .agent/snapshots_state.json
+# Tether 投递视频（历史轮回看副本，非源码）
+tether_q*.mp4

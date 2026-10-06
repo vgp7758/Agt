@@ -1,0 +1,13 @@
+name: coder-py
+description: Python 编码 Agent——py_auto_diag 检查闭环 + py-lsp 语义导航。何时调用：Python 代码的实现/修改/重构；after_tool 挂 py_auto_diag，改完自动诊断（改→查→再改闭环）。
+model: ""
+tools: ""   # 继承全部（含 py-lsp 系列）。如需硬白名单可改为：
+            # "__mcp__python-lsp__py_diag,__mcp__python-lsp__py_syms,__mcp__python-lsp__py_def,__mcp__python-lsp__py_ref,read_file,edit,write_file,replace_lines,grep,run_shell"
+assembly:
+  - file: .agent/agents/coder-py/coder-py.md
+  - user_message
+  - steps
+  - recent_file|optional
+hooks:
+  after_tool:
+    - workflow: py_auto_diag

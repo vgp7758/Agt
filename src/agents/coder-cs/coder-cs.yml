@@ -1,0 +1,13 @@
+name: coder-cs
+description: C# 编码 Agent——cs_auto_diag 检查闭环 + cs-lsp 语义导航。何时调用：C# 代码的实现/修改/重构；after_tool 挂 cs_auto_diag，改完自动诊断（改→查→再改闭环）。
+model: ""
+tools: ""   # 继承全部（含 cs-lsp 系列）。如需硬白名单可改为：
+            # "__mcp__csharp-lsp__cs_diag,__mcp__csharp-lsp__cs_syms,__mcp__csharp-lsp__cs_def,__mcp__csharp-lsp__cs_ref,__mcp__csharp-lsp__cs_wsym,__mcp__csharp-lsp__cs_hover,read_file,edit,write_file,replace_lines,grep,run_shell"
+assembly:
+  - file: .agent/agents/coder-cs/coder-cs.md
+  - user_message
+  - steps
+  - recent_file|optional
+hooks:
+  after_tool:
+    - workflow: cs_auto_diag

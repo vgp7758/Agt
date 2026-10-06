@@ -452,7 +452,7 @@ def config_file(name: str) -> Path:
 | 写侧跟随 | 读到哪份就写哪份：本地被读 → 保存写本地；全局被读 → 写全局（配置自治，不会「读 A 写 B」） |
 | cwd 锚定 | import 时锚定（进程启动目录 = workspace，与 mcp_client 的 WORKSPACE 语义一致） |
 
-**接入点**：`_AGT_MODELS` / `_AGT_SETTINGS` 两常量改走 `config_file`（加载 / 保存 / mtime 惰性重载全部自动跟随）；`seed_main_agent` 返回值（读侧本地优先，**播种仍写全局**、不覆盖本地独立主声明）；chat.py 两处 mcp 连接（`.mcp.json` 项目级原有职责不变——repo 覆盖是新增一层）；/agents 管理页 `_main_` 保存（写跟随读，note 动态显示实际路径，见 [agents-admin](../features/agents-admin.md)）。
+**接入点**：`_AGT_MODELS` / `_AGT_SETTINGS` 两常量改走 `config_file`（加载 / 保存 / mtime 惰性重载全部自动跟随）；`seed_main_agent` 返回值（读侧本地优先，**播种仍写全局**、不覆盖本地独立主声明）；chat.py 两处 mcp 连接（`.mcp.json` 项目级原有职责不变——repo 覆盖是新增一层）；/agents 管理页 `_main_` 保存（缺省 auto=写跟随读；**2026-10-06 三态化**——PUT `save_to` local/global 显式选落点 + `DELETE /api/agents/_main_/local` 删本地份回退全局，note 动态标注落点，见 [agents-admin · 三态保存](../features/agents-admin.md)）。
 
 **用途：多实例角色化的配置隔离**——每个角色实例（游戏组网的导演 / 多媒体等 repo）各持自己的四件套，认知（persona/assembly）与配置（模型/参数/MCP）双隔离，`~/.agt/` 全局只是无本地时的兜底。详见 [multi-instance · 配置 repo 级覆盖](../architecture/multi-instance.md)。
 

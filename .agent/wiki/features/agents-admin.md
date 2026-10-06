@@ -4,7 +4,7 @@
 
 ## 职责
 
-Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）名称/描述/模型/回退链/工具/assembly/hooks 全部表单化编辑**，不再手写 YAML；**主 Agent（main.yml）置顶纳入**——直接编辑原始 assembly 清单（2026-08-31 起 repo 级覆盖：`<cwd>/.agent/main.yml` 存在则读写本地，见 [config_file 解析](../guides/config-and-models.md)）。顺带定稿 **v2.1 声明格式**（用户插话设计）：persona 拆独立 md，yml 回归纯配置。
+Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）名称/描述/模型/回退链/工具/assembly/hooks 全部表单化编辑**，不再手写 YAML；**主 Agent（main.yml）置顶纳入**——直接编辑原始 assembly 清单（2026-08-31 起 repo 级覆盖：`<cwd>/.agent/main.yml` 存在则读写本地；**2026-10-06 起保存钮三态化**——💾 保存到本地 / ⬆ 应用到全局 / 🗑 删除本地，见 [config_file 解析](../guides/config-and-models.md) 与 `_main_` 节下「三态保存」）。顺带定稿 **v2.1 声明格式**（用户插话设计）：persona 拆独立 md，yml 回归纯配置。
 
 ## 页面：/agents（agents.html）
 
@@ -52,13 +52,46 @@ Agent 声明的可视化管理：**子 Agent（`.agent/agents/`，v2.1 格式）
 
 | 项 | 行为 |
 |---|---|
-| list | `_main_` 置顶（读 main.yml，返回 assembly 段数 + hooks 位置） |
+| list | `_main_` 置顶（读 main.yml，返回 assembly 段数 + hooks 位置；**2026-10-06 增 `has_local` 字段**——本地 main.yml 是否存在，三态保存删除钮的显隐依据，见下节） |
 | get | `is_main=True`；**不含 persona/tools 字段**（不适用）；assembly 原样返回 |
-| 保存 | `yaml.safe_load` 现有 main.yml 为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；**写 `config_file` 解析的那份 main.yml**（repo 级覆盖、写侧跟随读到的那份，2026-08-31 commit 10d717e——本地存在则读写本地，多实例角色实例独立主声明）；提示 `/restart` 后生效（启动时装配）——**2026-09-07 起 main.yml mtime 热重载，改 DSL 当轮生效**，见 [multi-agent · main.yml 热重载](../architecture/multi-agent.md) |
+| 保存 | `yaml.safe_load` 现有份为 base，仅覆盖提交字段（description/model/assembly/hooks…），**保留未识别字段**（如 fallback 声明）；**不写 .md**；落点 **2026-10-06 起三态**——PUT 带 `save_to`（local/global/auto）：local=写 `.agent/main.yml`（本地没有以全局为底稿）/ global=写全局 / 缺省 auto=原「写 `config_file` 解析的那份」（写跟随读，repo 级覆盖 2026-08-31 commit 10d717e 语义不变），详见下节；生效见 [multi-agent · main.yml 热重载](../architecture/multi-agent.md) |
 | create | 拒绝 `_main_`/`main` 保留名作子 Agent 名 |
-| delete | 拒绝——主 Agent 声明不可删除 |
+| delete | 通用 delete 拒绝——主 Agent 声明不可删除；**本地份删除走专用 `DELETE /api/agents/_main_/local`**（2026-10-06，见下节） |
 
-前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 隐藏删除按钮；保存 toast 显示后端 note（主 Agent：`/restart` 后生效 + **实际写入路径**（`已写 {p}；/restart 后生效`，动态而非硬编码 `~/.agt`；**2026-09-07 起热重载生效、提示降级为「已热重载」**）；子 Agent：新派活生效，reuse 实例下一任务生效）。
+前端 `loadEdit` 对应：is_main 时隐藏 persona 组（gPersona）+ 工具组（fTools/toolChips/toolsHint）+ 通用删除按钮，**保存钮换三态**（💾 保存到本地 / ⬆ 应用到全局 / 🗑 删除本地，见下节）；保存 toast 显示后端 note（主 Agent：落点动态标注「已保存到本地 .agent/main.yml（仅当前 repo 生效）/ 全局 ~/.agt/main.yml（所有 repo 默认）」+「主 Agent 装配启动时读取（mt 变化惰性重载亦跟）」；子 Agent：新派活生效，reuse 实例下一任务生效）。
+
+### 三态保存：本地 / 全局 / 删除本地——main.yml 双份管理（2026-10-06 深夜，用户提案，commit 45400c3）
+
+**用户提案（原话）**：「我在 /agents#edit=_main_ 页面保存时会保存在全局 main.yml 中，然而很多时候会希望基于全局的 main.yml 配置修改并保存本地版本」——此前 PUT 只认 `config_file` 解析的那份（本地存在写本地、否则写全局，写跟随读），**没有「以全局为底稿给当前 repo 建本地份」的入口**：全局跑着的实例想给某个 repo 定制主声明，只能手写 yml。改为三态：
+
+| 动作 | 请求 | 语义 |
+|---|---|---|
+| 💾 保存到本地 | PUT + `save_to:"local"` | 写 `<cwd>/.agent/main.yml`（repo 级，之后本地覆盖优先）；**本地不存在时以全局份为底稿**——先拷全局全部字段、再叠加页面改动，正是「基于全局配置修改并存本地」 |
+| ⬆ 应用到全局 | PUT + `save_to:"global"` | 改写 `~/.agt/main.yml`——所有 repo 的默认主声明 |
+| 🗑 删除本地 | `DELETE /api/agents/_main_/local` | 删 `.agent/main.yml` 回退用全局；**全局份缺失时拒绝删除**（不会失去主声明）；删后 mtime 惰性重载自动跟随全局 |
+| （缺省） | PUT 不带 `save_to` | auto = `seed_main_agent` 现状：repo 有本地写本地，否则写全局 |
+
+关键实现（server.py PUT `_main_` 分支）——**底稿与落点解耦**是核心改动：
+
+```python
+save_to = str(body.get("save_to") or "auto").strip().lower()
+global_p = Path.home() / ".agt" / "main.yml"
+if save_to == "local":
+    p = _workspace / ".agent" / "main.yml"
+    base_p = p if p.exists() else global_p   # 本地已有→增量改；没有→以全局为底稿
+elif save_to == "global":
+    p = base_p = global_p
+else:                                        # auto
+    p = base_p = seed_main_agent(_workspace)
+```
+
+base 之上的字段覆盖逻辑不变（仅覆盖提交字段 + 保留未识别字段如 fallback）——变的只是 base 取哪份、写往哪份。
+
+- GET `/api/agents` 的 `_main_` 条目新增 `has_local`：删除钮只在本地份存在时显示；保存/删除成功后前端 `loadEdit('_main_')` 重载，三钮态自动跟随
+- 前端（agents.html）：`saveAgent(saveTo)` 带参重载（无参 = 子 Agent 原路径不变），`delMainLocal()` confirm 后 DELETE、toast 显后端 note；子 Agent 的「💾 保存」钮（btnSaveSub）不受影响，`isMain` 时换显三态钮（btnMainLocal / btnMainGlobal 恒显、btnMainDelLocal 按 has_local 显隐）
+- 生效语义不变：主 Agent 装配启动时读取 + main.yml mtime 惰性重载（当轮生效），见 [multi-agent · main.yml 热重载](../architecture/multi-agent.md)；repo 级覆盖解析语义见 [config-and-models · config_file](../guides/config-and-models.md)
+
+与设置页「配置来源切换」（models/settings 的 local/global 显式选择，commit ad0f385，见 [config-and-models](../guides/config-and-models.md)）同族——三态保存把 main.yml 的**写侧**也补进了这层显式选份 UI，读侧 auto 语义保持不动。
 
 ## 编辑器 assembly 往返增强（agents.html，同 commit）
 

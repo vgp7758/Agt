@@ -10,6 +10,7 @@
 - **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
+- **连接即推视图态**：新连接（刷新 / 新开页签 / 手机端重连）不再依赖「等下一次事件」——WS 建立即补推 `team_list`（2026-09-17）、`current_turn` 正在进行轮（2026-09-02）、**`plan` 活动计划步骤列表（2026-10-06，commit d573e1e）**；半成品时期各对应一个「刷新后空白」的实锤（见下文各自专节）
 
 ## ⏸ 挂起：/hold on|off + WebUI 按钮 + /api/hold 三通道（2026-09-21，用户提案）
 
@@ -257,6 +258,45 @@ user 事件 → _broadcast 按客户端 target 分发（原有）
 | `0002-chore-workflows-extract_keywords-claim-recap_gen-wik.patch` | 播种源三工作流对齐（落 `src/workflows/`） | 5992929 | 播种/重播种时（已部署环境不自动重播种，靠补丁） |
 
 后两个的修复细节见 [pasted-log · claim 修复与播种源对齐](pasted-log.md)。**编号注意**：`patches/` 里两组 0001/0002 并存（format-patch 按各自范围从 0001 起编号）——`git am` 按文件名逐个应用即可，编号不全局唯一。
+
+## plan 面板刷新恢复：WS 连接即推活动 plan（2026-10-06，用户实锤，commit d573e1e）
+
+> src/server.py（`ws_endpoint` 连接建立后的初始推送区）+ src/static/index.html（`case 'plan'` → `renderPlan(m.plan, m.plan_id, m.plan_title)`，**前端零改动**）。用户实锤（2026-10-06）：「刷新网页以后，web 顶部的 plan 的 step 列表就不显示了」。
+
+**现象**：Agent 有活动计划（顶部 `#planPanel` 步骤列表已有内容）时按 F5 刷新 → 面板变空；要等下一次 plan 变更事件（create_plan / update_plan / add_step / edit_plan / join_plan / exit_plan）才重新出现。
+
+**根因——纯推送制 + 无拉取端点**：plan 面板内容只由 `plan` 事件驱动，来源两处——
+
+| 来源 | 时机 |
+|---|---|
+| `plan_tools._emit_plan` | 7 个计划工具每次变更时 emit（改 `active_plan` → `_flush` 落盘 → emit） |
+| `agent._emit_plan_if_any` | **只在 set_session（resume / 切换会话）路径推一次**——覆盖 /restart 恢复后的同步 |
+
+WS 遇刷新 = **新连接**，两条都不触发 → 前端 `case 'plan'` 永远等不到消息，panel 停在初始空态；且没有 `/api/plan` 之类的拉取口子可退（纯推送制）。**与 2026-09-17 团队下拉框（team_list 只在首次点击时拉）是同一个病**。
+
+**修法（12 行，与旁边 team_list 同款处方并排）**：连接建立后的初始推送区补推当前活动 plan——
+
+```python
+_ag = _state.get("agent") or agent
+if _ag is not None and getattr(_ag, "active_plan", None):
+    await _send(websocket, {"type": "plan",
+                            "plan": [dict(s) for s in (_ag.plan or [])],
+                            "plan_id": _ag.active_plan_id,
+                            "plan_title": (_ag.active_plan or {}).get("title", "")})
+```
+
+四处设计点：
+
+- **事件形态与工具变更时逐字段同形**（`plan` / `plan_id` / `plan_title`，同 `_emit_plan`）→ 前端 `case 'plan'` 直接吃，不需要新增分支或事件类型
+- **判空即跳过**：无活动计划（`active_plan is None`——exit_plan / /reset 之后）不推 → 刷新后保持空面板，与真实状态一致，不会用陈旧 steps 画出已退出的计划
+- **steps 经 `dict(s)` 拷贝**（与 `_emit_plan` 同款）：WS 序列化不共享可变对象，后续工具改 steps 不串改已发快照
+- **`_state.get("agent") or agent` + try/except 全包**：兼容两条取 agent 的路径（`_state` 未挂载时退回闭包里的 agent）；推送失败不影响后续连接流程
+
+**顺带治理：team_list 推送块去重**——初始推送区里 2026-09-17 的 team_list 推送**存在两份重复**（历史编辑遗留），edit 匹配时报「匹配 2 处」才暴露；本次以新 plan 块**替换掉重复那份**，现只剩一份（行为不变，少一次冗余 `format_team`）。
+
+**生效方式**：引擎层（src/server.py），需 `/restart`。此后刷新 / 新开页签 / 手机端重连都能立即看到当前计划及各步状态（含 `active_window=False` 全量语义的 team_list 同批）。
+
+**关联**：[团队列表分发 · 连接即推](#团队列表分发连接即推--registry-变更推送-team_changed2026-09-17--二commit-0f322af)（同款修法，本节的直接参照）、[连接补发进行中轮 · current_turn](#连接补发进行中轮--current_turn-事件2026-09-02用户提案)（新连接补发「正在进行态」的另一半：轮）、[/restart 重启双坑](#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)（`broadcast_session_state` 补推 session_history + team_list + pending spec——plan 面板当时漏在门外）、[上下文引擎 · 施工模式投影](../architecture/context-engine.md)（同一个 `active_plan` 状态在 LLM 侧投影里的另一副面孔）。
 
 ## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
 

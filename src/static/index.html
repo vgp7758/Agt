@@ -2831,6 +2831,7 @@ async function renderSvcDash(){
   if(svcs.length){
     h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🛠 服务（点击展开实时日志）</div>';
   }
+  window._favSvcs = d.fav_services || [];   // 收藏名单（main.yml services）
   svcs.forEach(s => {
     const icon = s.running ? _SVC_ICON.running : _SVC_ICON.exited;
     const stTxt = s.running ? `运行中 pid=${s.pid} · ${s.uptime}s` : `已退出 rc=${s.rc}`;
@@ -2840,9 +2841,15 @@ async function renderSvcDash(){
       <div style="padding:6px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;flex-wrap:wrap" onclick="_svcExpanded['${esc(s.name)}']=!_svcExpanded['${esc(s.name)}'];renderSvcDash()">
         <span>${open?'▼':'▶'}</span><span>${icon}</span><b style="font-size:12.5px">${esc(s.name)}</b>
         <span style="font-size:11px;color:${s.running?'#047857':'#b91c1c'}">${stTxt}</span>
-        <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.command||'')}</span>
+        <span class="cmd" style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.command||'')}">${esc(s.command||'')}</span>
       </div>
-      ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>` : ''}
+      ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>
+      <div style="padding:6px 9px;border-top:1px solid #eee;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <button onclick="svcFav('${esc(s.name)}',${(window._favSvcs||[]).includes(s.name)?'false':'true'})" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid ${(window._favSvcs||[]).includes(s.name)?'#f59e0b':'#d8d2e8'};background:${(window._favSvcs||[]).includes(s.name)?'#fef3c7':'#fff'};color:#6d28d9;cursor:pointer">${(window._favSvcs||[]).includes(s.name)?'★ 已收藏（点击取消）':'☆ 收藏（写进 main.yml）'}</button>
+        ${s.running
+          ? `<button onclick="svcOp('${esc(s.name)}','stop')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c;cursor:pointer">⏹ Stop</button>`
+          : `<button onclick="svcOp('${esc(s.name)}','start')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;cursor:pointer">▶ Start</button>`}
+      </div>` : ''}
     </div>`;
   });
   // —— 后台任务（run_python/run_shell 超时转后台；2026-09-06 用户提案并入看板）——
@@ -3139,6 +3146,26 @@ function renderSurveyBubble(questions){
      }
    }
  }
+
+async function svcFav(name, on){
+  try{
+    const r = await fetch('/api/svc_fav', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, on, command: (document.querySelector('[onclick*="svcFav(\''+name+'\'"]')||{}).closest?.('div')?.parentElement?.querySelector('.cmd')?.textContent || ''})});
+    const d = await r.json();
+    toast(d.note || d.error || '?', !!d.ok);
+    renderSvcDash();
+  }catch(e){ toast('收藏操作失败：'+e, false); }
+}
+async function svcOp(name, op){
+  try{
+    const r = await fetch('/api/svc_op', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, op})});
+    const d = await r.json();
+    toast(d.note || d.error || '?', !!d.ok);
+    setTimeout(renderSvcDash, 600);
+  }catch(e){ toast('操作失败：'+e, false); }
+}
+
 function submitSurvey(){
   const form = curTurn.answerEl;
   if(!form) return;

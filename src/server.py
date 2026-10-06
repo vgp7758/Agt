@@ -1351,7 +1351,8 @@ async def api_dash():
     bg_tasks: run_python/run_shell 超时转后台的一次性任务（real_tools._bg_tasks，2026-09-06 用户
     提案并入看板）：bg_id/工具名/运行态/rc/时长/输出行数/尾部输出——运行中排前、组内新的在前。
     无 Agent 时返回空结构（服务未接入时前端显示空态）。"""
-    out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": []}
+    out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": [],
+           "fav_services": []}   # main.yml services 收藏名单（看板⭐态，2026-10-06）
     if _agent is None:
         return out
     agent = _agent
@@ -1441,6 +1442,16 @@ async def api_dash():
             out["schedules"] = sch.snapshot() or []
         except Exception:
             out["schedules"] = []
+    # —— 收藏服务（main.yml services 名单；repo 覆盖优先，读侧与写侧同源）——
+    try:
+        from agent_config import seed_main_agent, load_agent_yml
+        _mm, _ = load_agent_yml(seed_main_agent(_workspace))
+        _sv = _mm.get("services") or []
+        if isinstance(_sv, dict):
+            _sv = [_sv]
+        out["fav_services"] = [k for it in _sv if isinstance(it, dict) for k in it]
+    except Exception:
+        pass
     # —— 后台任务（run_python/run_shell 超时转后台，real_tools._bg_tasks；2026-09-06 并入看板）——
     try:
         import time as _t
@@ -1837,6 +1848,78 @@ async def agent_chat_page(agent_id: str):
 
 def _agent_safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_")
+
+
+@app.post("/api/svc_fav")
+async def api_svc_fav(body: dict):
+    """服务收藏 toggle（2026-10-06 用户提案）：写/删当前 repo main.yml 的 services 段。
+    repo 无 main.yml → 全局份拷贝过来再写（声明跟着 repo 走）。
+    command 优先取进程内登记（含已退出条目），兜底用前端传值（进程重启过登记丢失场景）。"""
+    import yaml
+    from agent_config import seed_main_agent, load_agent_yml
+    name = str(body.get("name") or "").strip()
+    on = bool(body.get("on"))
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    cmd = str(body.get("command") or "").strip()
+    try:
+        _agent = _state.get("agent")
+        _ent = (_agent.services._services or {}).get(name) if _agent else None
+        if _ent:
+            cmd = str(_ent.get("command") or cmd)
+    except Exception:
+        pass
+    if on and not cmd:
+        return {"ok": False, "error": "拿不到启动指令（服务不在当前进程登记且未传 command）"}
+    dst = _workspace / ".agent" / "main.yml"
+    if not dst.exists():
+        src = Path.home() / ".agt" / "main.yml"
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text("", encoding="utf-8")
+    try:
+        meta, _ = load_agent_yml(dst)
+        meta = meta or {}
+    except Exception:
+        meta = {}
+    svcs = meta.get("services") or []
+    if isinstance(svcs, dict):
+        svcs = [svcs]
+    svcs = [it for it in svcs if isinstance(it, dict)]
+    if on:
+        if any(name in it for it in svcs):
+            return {"ok": True, "note": f"已收藏（{name} 已在 services）"}
+        svcs.append({name: cmd})
+    else:
+        svcs = [it for it in svcs if name not in it]
+    meta["services"] = svcs
+    dst.write_text(yaml.safe_dump(meta, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return {"ok": True, "note": ("已收藏，写进 " + str(dst.relative_to(_workspace))
+                                 if on else "已取消收藏") + "（重启后启动期拉起）"}
+
+
+@app.post("/api/svc_op")
+async def api_svc_op(body: dict):
+    """看板服务操作（2026-10-06）：op=stop 停运行中服务；op=start 用原启动参数重启已退出服务。"""
+    name = str(body.get("name") or "").strip()
+    op = str(body.get("op") or "").strip()
+    _agent = _state.get("agent")
+    if not _agent or not name:
+        return {"ok": False, "error": "缺少 agent/name"}
+    svc = _agent.services
+    if op == "stop":
+        r = svc.stop(name)
+    elif op == "start":
+        ent = (svc._services or {}).get(name)
+        if not ent:
+            return {"ok": False, "error": "服务不在登记（进程重启过）——用收藏→重启实例拉起"}
+        r = svc.start(name, str(ent.get("command") or ""), str(ent.get("cwd") or ""))
+    else:
+        return {"ok": False, "error": "op 仅 stop|start"}
+    return {"ok": True, "note": str(r)[:200]}
 
 
 @app.get("/api/agents")

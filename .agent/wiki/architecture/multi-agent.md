@@ -134,7 +134,21 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 **启动指令取法（收藏写入的数据源）**：优先进程内登记（`svc.list()` 连已退出的条目都留着 command）；DOM 兜底取卡片上显示的命令——command span 加 `class="cmd"` + `title` 悬浮全文；兜底定位 = 按钮排 div 的 `parentElement`（服务卡片）内取 `.cmd`（首版 `closest('div')` 撞在按钮排自己身上，同轮当场修正）。
 
-**闭环意义——收藏 = 开机自启**：收藏即写 main.yml `services:` 声明 → 主 Agent 启动期 `_ensure_agent_services` 自动拉起（上一节机制）；取消收藏 = 从声明摘除。至此 services 的**写侧三入口**凑齐：声明手写 / 管理页 services textarea（上上节）/ **看板一键收藏**——读侧恒走 `_ensure_agent_services` 单源，不因入口多而分叉。看板交互视角见 [background-scheduler · 服务看板交互三件套](../features/background-scheduler.md)。
+**闭环意义——收藏 = 开机自启**：收藏即写 main.yml `services:` 声明 → 主 Agent 启动期 `_ensure_agent_services` 自动拉起（上一节机制）；取消收藏 = 从声明摘除。至此 services 的**写侧三入口**凑齐：声明手写 / 管理页 services textarea（上上节）/ **看板一键收藏**——读侧恒走 `_ensure_agent_services` 单源，不因入口多而分叉。看板交互视角见 [background-scheduler · 服务看板四件套](../features/background-scheduler.md)（📄 完整日志新页签为同日 · 五补件，见[下节](#看板📄完整日志新页签全量日志页2026-10-06--五用户提案commit-d22bd34)）。
+
+### 看板📄完整日志：新页签全量日志页（2026-10-06 · 五，用户提案，commit d22bd34）
+
+收藏/Stop/Start 落地同日，用户提案「点击时从浏览器打开一个新页签查看更完整的日志」——服务卡片内嵌日志 pre 只有尾部视图，全量回看此前要回终端翻文件。commit `d22bd34`（src/server.py + src/static/index.html，+26 行）。
+
+**新端点（src/server.py）**：
+
+| 端点 | 职责 |
+|---|---|
+| `GET /api/svc_log` | 服务完整日志**独立 HTML 页**（非 JSON）：全量环形缓冲（≤3000 行防爆）+ 暗色 sticky 头部（运行态/行数/启动命令）+ `<meta refresh>` 5s 自刷新；name/command/正文全 HTML 转义（同轮二补严谨化）；服务不在进程内登记 → 明确提示页（非裸 404） |
+
+**前端**：服务卡按钮排插 📄 完整日志（恒显示）——新页签 `window.open` 打开。至此服务看板按钮四件套（⭐收藏 / 📄 完整日志 / ⏹Stop / ▶Start），看板端点四件（`svc_fav` / `svc_op` / `svc_log` + dashboard 快照 `fav_services`）。
+
+**与 `service_logs` 工具的分工**：同源数据两种消费端——端点面向人眼（独立页签自刷新），工具面向模型（JSON 返回）。交互视角详见 [background-scheduler · 服务看板四件套](../features/background-scheduler.md)。
 
 ### 验证
 

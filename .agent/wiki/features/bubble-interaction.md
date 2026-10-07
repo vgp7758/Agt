@@ -57,6 +57,8 @@
 
 **配套关系**：/context 展示侧输出 markdown 表格（3ae7a76，引擎侧）+ 系统气泡渲染 markdown（fdfc28a，前端侧）——两段合起来才让「段落构成表」真正以表格呈现；若只改后端不接前端，看到的仍是纯文本（本 bug 即此断点）。
 
+**后记（2026-10-08，commit 9343107）**：系统气泡的**内容源**也有了噪音清洗——WS 斜杠命令回显用 `redirect_stdout` 捕获输出，但它是进程级全局：busy 时其它线程（CLI spinner/进度刷新）的 print 会混进回显、原样渲染进系统气泡。server.py 新增 `_clean_console_noise`（剥 ANSI 转义 + 剔 spinner 行）统一清洗后回显，见 [用户交互 · WS 斜杠命令回显清洗](user-interaction.md#ws-斜杠命令回显清洗系统气泡混入-cli-spinneransi-噪音redirect_stdout-进程级全局2026-10-08用户实锤commit-9343107)。
+
 ## answer 气泡行内富文本与资源渲染（2026-09-04，用户提案，commit 4baa66a）
 
 用户提案：agent 回答时在 answer 气泡中解析渲染 markdown 引用——链接可点、图片成框、音频成播放控件。此前 answer 的行内文本只有 `` `code` `` 高亮（`inlineCode`），其余全裸文本；这是 answer 气泡从「纯文本+表格+代码块」走向多模态呈现的一步。

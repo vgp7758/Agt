@@ -117,6 +117,27 @@
 
 **关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义的消费端再加一个——此前已有事件广播过滤 / 文本路由 / 会话视图隔离，本次把**命令绑定**也纳入）、[Agent 专属页 URL 路由](#agent-专属页-url-路由--agentsagent_id-直接落位2026-08-commit-5393ee4修复-c819618)（子 Agent 页面的入口，下拉框错位在其上最刺眼）、[配置体系与模型调优](../guides/config-and-models.md)（模型档案与能力位本身在 models.json / settings 配置）。
 
+## WS 斜杠命令回显清洗：系统气泡混入 CLI spinner/ANSI 噪音——redirect_stdout 进程级全局（2026-10-08，用户实锤，commit 9343107）
+
+> src/server.py（`_ANSI_RE` + `_clean_console_noise` helper，紧挨 `_target_agent`；两处 dispatch 调用点同改）。用户实锤（2026-10-08）：busy 时在 WebUI 顶栏切模型，`/model` 回显的系统气泡里混进了 CLI spinner 与 ANSI 转义碎片——`[A[2K`、`⠦ 处理中「[后台通知·service_exit:…] · 2247s · 队列 0（Ctrl+C 停止）」`等控制台噪音原样渲染。
+
+**根因——`redirect_stdout` 是进程级全局**：WS 斜杠命令回显用 `contextlib.redirect_stdout(buf)` 捕获命令输出；这个重定向换的是 **`sys.stdout` 本身（进程级）**，不是线程局部——捕获窗口内**其它线程**的 print 同样落进这一个 buf。busy 时切模型正好撞上：dispatch 打开捕获窗口的瞬间，CLI 轮进度刷新线程也在打 spinner 行（`⠦ 处理中「…」· Ns`，且带 `\x1b[A\x1b[2K` 光标上移/清行转义）——全被收进 buf，随 system 事件渲染进系统气泡。
+
+**修复：回显前统一过一遍 `_clean_console_noise`**：
+
+| 件 | 说明 |
+|---|---|
+| `_ANSI_RE` | CSI 序列 `\x1b\[[0-9;?]*[A-Za-z]`（`\x1b[2K` 清行 / `\x1b[A` 光标上移等）+ OSC 序列 `\x1b\][^\x07]*\x07`——剥 ANSI 转义 |
+| spinner 行剔除 | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` 开头或含「处理中「的行整行丢弃 |
+| 两处 dispatch 调用点同改 | `out = _clean_console_noise(buf.getvalue().strip())`——沿袭 `_target_agent` 的「两处同改」纪律（见上节） |
+| 顺带收窄另一处行过滤正则 | 字符类去掉 `-` 与 `✅`——防误杀正常列表行与命令回执 |
+
+**实测效果**（用用户贴的原始输出验证）：清洗后只剩命令真回执两行——「✅ 已切换到 glm-official-flash: glm-5.3-flash @ …」+「有效回退链：glm-official-flash → proxy → deepseek」；spinner/ANSI 噪音消失。清洗有意**不动正常回执行**（字符类不含 `✅`/`-` 即此意）。
+
+**生效方式**：引擎层（src/server.py），需 `/restart`；commit `9343107` 已推送，site-packages 已同步。
+
+**关联**：[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（`_target_agent` + 两处 dispatch 调用点的出处——本节清洗正挂在这两处）、[气泡交互 · 系统气泡 markdown 渲染](bubble-interaction.md#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)（渲染端；本次治理的是它的内容源）、[后台通知 wake 语义](#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192)（混进来的 spinner 行内容正是「处理中「[后台通知·service_exit:…]」」）。
+
 ## /reset 清空后新会话立即可见 + 会话下拉框跟随当前会话（2026-09-23，用户实锤，commit 3350a68）
 
 **用户实锤（2026-09-23）**：「点清空按钮后发送信息的时候，并没有开一个新的 session」——下拉框还显示旧会话名。
@@ -875,8 +896,6 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 - **background_trigger 事件行**（📭/⏰ 行）与通知气泡并存——事件行标注触发来源，气泡承载消息全文
 
 **生效方式**：引擎层（chat.py / agent.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效（Ctrl+F5 强刷兜底）。
-
-### 新消费端：before_turn 检索钩子短路（2026-10-07，用户提案，commit 3d5fb42）
 
 ### 新消费端：before_turn 检索钩子短路（2026-10-07，用户提案，commit 3d5fb42）
 

@@ -95,6 +95,10 @@ services:
 
 kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）——**服务随声明生灭**。顺带：删声明时目录形态优先整目录移除（yml+md+tools），平铺存量兜底只删单文件。
 
+### 后记：死服务重拉撞名被拒——start 同名已退出改覆盖重建（2026-10-08，20048 实锤，commit 839f445）
+
+**声明服务的死而复拉**：依赖服务自行崩掉后，下次实例化 `_ensure_agent_services` 重新拉起会撞 `start()` 的同名拒绝——stop 保留 entry 做退出复盘 × start 只查登记不看死活，「已存在同名服务」恒拒。已修（20048 实锤，commit `839f445`）：**同名仍在跑 → 拒（幂等防双实例，本节行为链语义不变）；同名已退出 → 覆盖重建**。详见 [background-scheduler · start_service 撞死服务被拒](../features/background-scheduler.md#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)。
+
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 
 用户实锤：[/agents 编辑页](../features/agents-admin.md)没有 services 字段——desktop-operator 的 `services:` 声明**一保存就丢**（PUT 按表单字段重建 yml，表单没有的键自然不写）。补齐（与目录化保存同 commit 2c63133）：

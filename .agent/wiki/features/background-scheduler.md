@@ -425,6 +425,39 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同段两种状态投影：watch_tail=stdout 日志尾部零协议 / repl:=协议摘要，repl: 服务自动豁免尾部模式）· [service_stdin](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（复用其 expect 往返机制）· [multi-agent · services 依赖声明](../architecture/multi-agent.md)（yml services 段落盘处）· [image-feed](image-feed.md)（每步实况注入家族）。
 
+## start_service 撞死服务被拒：stop 保留 entry × start 只查登记——stop→start 重启路径断裂（2026-10-08，20048 实锤，commit 839f445）
+
+**现象（20048 实锤，用户粘贴日志）**：`stop_service("unity-repl")` → 「已停止」；紧接 `start_service(...)` → 「[已存在同名服务] unity-repl，先 stop_service 再启动」——第 16/17 步原样重试仍被拒。**刚 stop 过的服名 start 不回来，stop→start 重启路径断裂**，glm-official-flash 卡在循环里。
+
+**根因（状态机不对称，两个各自正确的语义撞车）**：
+
+- `stop_service` 是**有意保留 entry** 的——退出复盘、on_exit_wake 通知注入（合成 stop_service 工具记录要 command）、watch_tail 日志尾部都依赖 entry 留存；
+- 但 `start()` 的同名检查**只看「登记在不在」**，不看 `proc` 死活。
+
+于是 `stop（进程死、entry 留）→ start 撞名被拒 → 永远起不来`。
+
+**修复**（src/background.py `Scheduler.start`，锁内）：
+
+```python
+old = self._services.get(name)
+if old is not None and old["proc"].poll() is None:
+    return f"[已存在同名服务] {name}，先 stop_service 再启动"   # 同名且仍在跑 → 维持拒绝（防双实例）
+# 同名但已退出（stop 过 / 自行崩过）→ 覆盖重建；保险补杀 _kill_tree（try/except pass，防僵尸占位）
+```
+
+| 同名状态 | 旧行为 | 新行为 |
+|---|---|---|
+| 进程仍在跑 | 拒绝 | **拒绝（不变）**——幂等防双实例语义保留 |
+| 已退出（stop 过 / 崩过） | 拒绝（**bug**） | **覆盖重建** + 保险 `_kill_tree` |
+
+**连带修复**：声明了 `services:` 的依赖服务**自行崩掉**后，下次实例化 `_ensure_agent_services` 重新拉起同样撞这个拒绝——同一根因一并解决（见 [multi-agent · services 后记](../architecture/multi-agent.md#后记死服务重拉撞名被拒start-同名已退出改覆盖重建2026-10-0820048-实锤commit-839f445)）。WebUI 服务看板的 **▶ Start** 按钮（原 command+cwd 重启）同受此惠及。
+
+**冒烟**：start → stop → start，新 pid 正常起来 ✓。
+
+**生效**：commit `839f445` 已推送 + site-packages 已同步，20048 `/restart` 后 unity-repl 正常重启闭环。
+
+**关联**：[服务看板交互四件套](#服务看板交互四件套收藏--📄-完整日志--stop--start2026-10-06用户提案commits-9a039c5--d22bd34)（▶ Start 消费端）· [on_exit_wake 退出唤醒](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（stop 保留 entry 的动机侧）· [watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同因依赖 entry 留存）。
+
 ## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 
 服务退出时是否唤醒 Agent，由启动参数逐服务声明；策略判定与通知注入在 src/agent.py `_on_service_exit`。

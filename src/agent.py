@@ -2467,6 +2467,13 @@ class Agent:
                                             "result_preview": (result or "")[:800],
                                             "changed_files": changed,
                                         })
+                                        # 生成图自动可视（2026-10-07 用户提案）：本轮新增图片转
+                                        # data URL 进投影瞬态队列——视觉模型下一步直接看到像素，
+                                        # 省一次 read_file；瞬态不落 event.jsonl/step 存档。
+                                        try:
+                                            self.session.collect_generated_images(changed)
+                                        except Exception:
+                                            pass
                                     if "after_tool" in self._active_hooks:
                                         self._hook_notes += self._run_hooks("after_tool", {
                                             "user_message": cur_user_msg, "tool_name": tc["name"],

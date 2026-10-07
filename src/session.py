@@ -56,6 +56,7 @@ RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
 _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
+_GEN_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}   # 生成图自动可视的扩展白名单（2026-10-07）
 # recent-file 段（2026-09-07·第四版：独立装配段 _seg_msgs_recent_file，不再内嵌 tool result）：
 # _RE_RF_BLOCK/_rf_stripped/_rf_in_msgs 保留旧内嵌形态的兜底（剥离/诊断口径）
 _RE_RF_BLOCK = re.compile(r"\n<recent-file[\s\S]*?</recent-file>")
@@ -543,6 +544,11 @@ class Session:
         self.utility_llm: Optional[LLMClient] = None
         self.recent_window_turns = recent_window_turns
         self.max_steps_per_turn = max_steps_per_turn  # 0/None = 不限
+        # 生成图自动可视（2026-10-07 用户提案）：after_tool 收集本轮新增图片 → 投影尾部
+        # 伪造「read_file 调用+结果(带 image_url)」对——视觉模型"以为"自己调用过 read_file。
+        # 瞬态：组装层注入，不落 event.jsonl/step 存档。
+        self._gen_images_pending: list = []   # [{path, call_id, data(dataURL), kb}]
+        self._gen_images_done: set = set()    # 去重记账（同文件一次任务只注入一次）
         self.workspace = Path(workspace) if workspace else Path.cwd()
         self.turns: list[Turn] = []
         self.global_summary = ""
@@ -2195,6 +2201,22 @@ class Session:
             _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
                  "末条追加image_url（瞬态·不落档）", msgs_n=0)
 
+        # —— 生成图自动可视（2026-10-07 用户提案：step 生成图片自动带 image_url）——
+        # 伪造「read_file 调用+结果」对插在投影末尾：视觉模型"以为"自己调用过 read_file
+        # 看图（叙事连贯），实际是框架自动注入——省一次真实 read_file。
+        # 瞬态：组装层注入（不落 events.jsonl/step 存档）；vision 门控（非视觉不注入）。
+        if self._gen_images_pending and getattr(getattr(self, "llm", None), "vision_supported", False):
+            for gi in self._gen_images_pending:
+                msgs.append({"role": "assistant", "content": None,
+                             "tool_calls": [{"id": gi["call_id"], "type": "function",
+                                             "function": {"name": "read_file",
+                                                          "arguments": json.dumps({"path": gi["path"]}, ensure_ascii=False)}}]})
+                msgs.append({"role": "tool", "tool_call_id": gi["call_id"],
+                             "content": [{"type": "text", "text": f"✅ 已读取 {gi['path']}（{gi['kb']}KB 图片，像素级内容见下图）"},
+                                         {"type": "image_url", "image_url": {"url": gi["data"]}}]})
+            _sec("gen_images(生成图自动可视)", [{"role": "user", "content": f"[{len(self._gen_images_pending)} 张生成图]"}],
+                 "伪造read_file对·瞬态不落档", msgs_n=0)
+
     # ========== 分档上下文投影（max_effective_context_window 启用）==========
     def _collect_ambient(self, blocks: list, provider, *args):
         """收集一个背景 provider 的返回（不包标签），追加到 blocks 列表。用于 tail 合并。"""
@@ -3658,6 +3680,39 @@ class Session:
             n_tools = sum(len(s.tool_calls) for s in t.steps)
             lines.append(f"  {i}. 「{t.user_message[:30]}」→ {n_tools}次工具调用 →「{t.answer[:30]}」")
         return "\n".join(lines)
+
+    def collect_generated_images(self, changed: list) -> None:
+        """本轮新增图片 → 伪造 read_file 对暂存（2026-10-07 用户提案）：投影尾部附加
+        「read_file 调用+结果(带 image_url)」——视觉模型"以为"自己调用过 read_file 看图，
+        省一次真实调用；瞬态不落 event.jsonl/step 存档。上限：单图 ≤1.5MB、一次 ≤4 张。"""
+        import base64, hashlib
+        for rel in changed:
+            try:
+                p = Path(rel) if Path(rel).is_absolute() else (self.workspace / rel)
+            except Exception:
+                continue
+            key = str(p).lower()
+            if key in self._gen_images_done:
+                continue
+            if p.suffix.lower() not in _GEN_IMG_EXTS:
+                continue
+            try:
+                if not p.is_file() or p.stat().st_size > 1_572_864:   # 1.5MB 上限
+                    continue
+                b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+            except OSError:
+                continue
+            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "webp": "image/webp", "gif": "image/gif"}.get(p.suffix.lower().lstrip("."), "image/png")
+            self._gen_images_pending.append({
+                "path": str(p),
+                "call_id": "genimg_" + hashlib.md5(key.encode()).hexdigest()[:10],
+                "data": f"data:{mime};base64,{b64}",
+                "kb": p.stat().st_size // 1024,
+            })
+            self._gen_images_done.add(key)
+            if len(self._gen_images_pending) >= 4:
+                break
 
     def __repr__(self):
         return f"Session(name={self.name!r}, turns={len(self.turns)}, summary={'yes' if self.global_summary else 'no'})"

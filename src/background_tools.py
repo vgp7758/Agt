@@ -31,6 +31,9 @@ def make_background_tools(agent) -> list:
         （/status 返回一行摘要，多行信息请压缩成一行），过程日志写文件（--log xxx
         或服务内自行落盘）不污染 stdout；配 watch_tail>0，每步投影的 bg_services
         段自动发 /status 并投影首行摘要（5s 节流缓存）。
+        yml services 段落盘写法：键含冒号，建议引号包裹（- "repl:名字": 命令）——
+        不加引号 YAML 也能解析（分隔判定是"冒号+空格"），但部分编辑器高亮会歧义；
+        ⚠️ 禁止写成 repl: 名字（冒号后带空格会把键截断成 repl，直接 ScannerError）。
         on_exit_wake（自行退出时是否唤醒你处理，默认 notify=通知进 inbox——持久化、
         空闲时自动消费成轮、忙时排队到下一步边界；不打断进行中的轮）：
         notify=进 inbox 保证可见不丢；never=仅内存登记（最安静，无自然轮则看不到）；

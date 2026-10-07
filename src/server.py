@@ -2411,6 +2411,22 @@ async def api_agents_delete(name: str):
 
 # ===================== WebSocket 端点 =====================
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def _clean_console_noise(text: str) -> str:
+    """dispatch 输出清洗（用户实锤 2026-10-08）：redirect_stdout 是进程级全局，
+    捕获窗口内其它线程（CLI spinner/进度刷新）的 print 也会混进 buf——剥 ANSI
+    转义（\x1b[2K 清行/\x1b[A 光标上移等）+ 剔除 spinner/进度类行（⠦⠙⠹ 处理中…）。"""
+    if not text:
+        return text
+    t2 = _ANSI_RE.sub("", text)
+    lines = [l for l in t2.splitlines()
+             if l.strip() and not re.match(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", l.strip())
+             and "处理中「" not in l]
+    return "\n".join(lines).strip()
+
+
 def _target_agent(client: dict, agent):
     """客户端 target 感知的 agent 选择（2026-10-07 用户实锤）：/model 等 agent 绑定命令
     应作用于【本页签正在交互的对象】——此前恒绑主 Agent，子 Agent 页面切模型读写错位。"""
@@ -2851,7 +2867,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             try:
                 with contextlib.redirect_stdout(buf):
                     registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
-                out = buf.getvalue().strip()
+                out = _clean_console_noise(buf.getvalue().strip())
             except Exception as e:
                 out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
             if out:
@@ -3079,7 +3095,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         try:
             with contextlib.redirect_stdout(buf):
                 registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
-            out = buf.getvalue().strip()
+            out = _clean_console_noise(buf.getvalue().strip())
         except Exception as e:
             out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
         if out:

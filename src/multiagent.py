@@ -594,7 +594,10 @@ def make_communication_tools(agent) -> list:
         try:
             msgs = list(target_agent.session.messages_for_llm())
             msgs.append({"role": "user", "content": f"[来自队友 '{agent.agent_id}' 的询问] {question}"})
-            resp = target_agent.llm.chat(msgs)
+            # 不装配工具（用户提案 2026-10-08）：agent_ask 是纯询问立刻要进展——克隆对方
+            # 历史发 LLM 请求时带工具会诱导它想调工具（本调用无执行环境，调了也是空转）。
+            # tools=[] 透传 _build_kwargs 覆盖实例工具表，纯对话问答。
+            resp = target_agent.llm.chat(msgs, tools=[])
             answer = resp.content or "(对方返回空回答)"
             return f"[{target_id} 回答] {answer}"
         except Exception as e:

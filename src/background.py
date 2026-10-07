@@ -100,9 +100,12 @@ class ServiceManager:
         threading.Thread(target=_reader, daemon=True).start()
         return f"✅ 后台服务「{name}」已启动 (pid={proc.pid})：{command}"
 
-    def send(self, name: str, text: str) -> str:
+    def send(self, name: str, text: str, expect: str = "", timeout: float = 10.0) -> str:
         """向服务的 stdin 写一行文本（服务须是 REPL 型、会读 stdin——如 agt-web 的 stdin 模式 /
-        python REPL / 交互式 CLI）。非 REPL 服务（纯 HTTP server 等）会忽略，无副作用。"""
+        python REPL / 交互式 CLI）。非 REPL 服务（纯 HTTP server 等）会忽略，无副作用。
+        expect（用户提案 2026-10-07）：非空时等 stdout 出现该【正则】才返回——工具结果=
+        写入后的新增输出（REPL 往返：写入后等响应，不再盲目立即返回）；timeout=等待上限秒
+        （默认 10，超时返回已有新增输出并标注未匹配）。expect 为空=旧行为（立即返回）。"""
         with self._lock:
             e = self._services.get(name)
         if not e:
@@ -113,12 +116,27 @@ class ServiceManager:
         stdin = getattr(proc, "stdin", None)
         if stdin is None:
             return f"[stdin 未开] {name} 启动时未接管道（旧版本启动的实例），重启服务后可用"
+        logs = e["logs"]
+        before = len(logs)   # deque 增量基准（写入前已有行数）
         try:
             stdin.write((text or "") + "\n")
             stdin.flush()
-            return f"📤 已发送到「{name}」stdin：{(text or '')[:80]}"
         except (BrokenPipeError, OSError) as ex:
             return f"[发送失败] {name}: {type(ex).__name__}（进程可能已关闭 stdin）"
+        if not expect:
+            return f"📤 已发送到「{name}」stdin：{(text or '')[:80]}"
+        import re as _re, itertools as _it
+        deadline = time.time() + max(0.5, float(timeout))
+        new_lines = []
+        while time.time() < deadline:
+            time.sleep(0.15)
+            with self._lock:
+                new_lines = list(_it.islice(logs, before, None))
+            if _re.search(expect, "\n".join(new_lines)):
+                return (f"✅ 已发送并匹配到 /{expect}/（新增 {len(new_lines)} 行）：\n"
+                        + ("\n".join(new_lines)[-4000:] or "(空)"))
+        return (f"⏱ {timeout}s 内未匹配 /{expect}/（可加大 timeout 或确认服务真的回显）。"
+                f"期间新增 {len(new_lines)} 行：\n" + ("\n".join(new_lines)[-4000:] or "(无新增输出)"))
 
     def status_lines(self) -> list:
         """供 system prompt 注入：每个服务一行 name(状态, pid, 已跑 Ns)。已退出标'需重启'。"""

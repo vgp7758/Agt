@@ -218,6 +218,51 @@ Scheduler._schedules（真源）
 
 - `list_schedules` / `/api/status` snapshot：每日任务展示「每天 09:00 (还有Ns)」，单次任务带「单次」标注
 - 后台看板的定时任务分组同步可见每日任务
+- （2026-10-07 起）抽屉定时任务组头部「＋ 添加」+ 每行 ✏ 编辑 / 🗑 删除——CRUD 见下一节
+
+## 抽屉定时任务 CRUD：reschedule 部分更新 + 手动添加/编辑/删除弹窗（2026-10-07，用户提案，commits 5118753 + 25c23e3）
+
+**动机（用户提案）**：schedule 创建后「下次触发时间 / every_seconds / deadline」就改不了了（只能 cancel 再重建，任务 id 也跟着换）——提案：抽屉里可以直接改；并支持手动添加日程（弹窗填表单）。
+
+### 后端：Scheduler.reschedule 部分更新（src/background.py）
+
+```python
+def reschedule(self, name, every_seconds=None, at=None, deadline=None,
+               repeat=None, message=None) -> str
+```
+
+| 参数 | 更新语义 |
+|---|---|
+| `every_seconds` | 改间隔：`kind=interval` + **新相位锚 `at_origin=now`** + `_phase_next` 重算 next_fire；≤0 拒绝 |
+| `at` | 改首触发/下次触发时刻：interval 任务以 at 为新相位锚重算 next_fire；非 interval 转 `kind=at` 单次到点 |
+| `deadline` / `repeat` / `message` | 直接覆盖 |
+
+关键设计：**未提供的字段保持原值；任务 id 不变**（进行中的对 id 的引用不断）——与 add 的「同名覆盖摘旧」（换 id）形成对照。无此任务返回 `[无此任务] name`；成功返回新 next_fire 摘要。改完 `_persist()` 落盘（extra_state 真源 `export_state` 自动带上新值）。
+
+### 三端点（src/server.py）
+
+| 端点 | body | 行为 |
+|---|---|---|
+| `POST /api/sched_upd` | `{name, every_seconds?, at?, deadline?, repeat?, message?}` | → `scheduler.reschedule`（部分更新） |
+| `POST /api/sched_add` | `{name, every_seconds?, at?, deadline?, repeat?, message?}` | at 有值 → `add_interval_at`；否则 → `add_interval`；两者都没填明确报错 |
+| `POST /api/sched_del` | `{name}` | → `scheduler.cancel` |
+
+### 前端：弹窗表单（src/static/index.html）
+
+后台看板抽屉定时任务组：
+
+- 组头部「⏰ 定时任务 **[＋ 添加]**」→ `schedModal()` 空表单
+- 每行下方「**✏ 编辑**」「**🗑**」→ `schedModal(name)` 预填 / `schedDel(name)`（confirm 后取消）
+
+`schedModal` 弹窗六字段：任务名（编辑态 readonly）/ 间隔秒（every_seconds）/ 首触发 at（ISO）/ 截止 deadline（ISO，留空=不限）/ 循环触发勾选 / 推送消息（到点注入给 Agent）。`schedSave` 按有无原名分流 `/api/sched_upd` vs `/api/sched_add`；成功 → toast + 关弹窗 + `renderSvcDash()` 即时刷新（该函数因此改 async）。回填数据源：渲染时 `window._dashSchedules` 暂存 schedules。
+
+**边界**：表单只覆盖 message + 时间参数族（every_seconds/at/deadline/repeat）；action/code 类复杂任务（三通道主从语义见上）仍走 `add_schedule` 工具——弹窗新增走的是 `add_interval(_at)` 真实管线，与 Agent 创建完全同源。
+
+**插曲**：弹窗代码插入时锚点误吞了 `renderSvcDash` 的 `async` 前缀——JS 语法自检（node --check）当场抓到并修复（commit `25c23e3`）。
+
+**生效**：commits `5118753` + `25c23e3`；site-packages 已同步，`/restart` 后生效。
+
+**关联**：同名覆盖摘旧（add 的换 id 语义对照，见上）· 服务看板交互四件套（同抽屉服务组的按钮排，见下）。
 
 ## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
 

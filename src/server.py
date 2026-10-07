@@ -2352,6 +2352,18 @@ async def api_agents_delete(name: str):
 
 # ===================== WebSocket 端点 =====================
 
+def _target_agent(client: dict, agent):
+    """客户端 target 感知的 agent 选择（2026-10-07 用户实锤）：/model 等 agent 绑定命令
+    应作用于【本页签正在交互的对象】——此前恒绑主 Agent，子 Agent 页面切模型读写错位。"""
+    ct = (client or {}).get("target", "_main_")
+    if ct != "_main_":
+        reg = getattr(agent, "registry", None)
+        e = reg.lookup(ct) if reg else None
+        if e is not None and e.agent is not None:
+            return e.agent
+    return agent
+
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     global _main_loop
@@ -2779,7 +2791,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             buf = io.StringIO()
             try:
                 with contextlib.redirect_stdout(buf):
-                    registry.dispatch(text, CommandContext(agent=agent, work_q=_work_q, state=_state))
+                    registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
                 out = buf.getvalue().strip()
             except Exception as e:
                 out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
@@ -2856,6 +2868,14 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 return
             _busy = entry.status == "running"   # 允许切换 busy 实例——观测正在跑的过程正是价值所在；
             #   向它发文本走插话队列（_handle_user_input 已有路径），不会并发 run
+        # 回推目标 Agent 的当前模型（2026-10-07 用户实锤：模型下拉框此前恒读主 Agent——
+        # 切换交互对象后前端据此回显下拉框；注意用【切换后】的 target_id 而非 client 现值）
+        _ta = agent if target_id == "_main_" else None
+        if _ta is None:
+            _e2 = reg.lookup(target_id)
+            _ta = _e2.agent if (_e2 is not None and _e2.agent is not None) else agent
+        await _send(ws, {"type": "target_model",
+                         "target": target_id, "current_model": getattr(_ta, "model_name", "")})
         # —— 客户端级切换：只改本客户端的 target（多页签各与不同 Agent 交互互不干扰）——
         # agent._active_target 保留为"最后被切换的目标"（CLI 输入路由 / /api/status 全局视角用）
         if client is not None:
@@ -2985,7 +3005,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                registry.dispatch(text, CommandContext(agent=agent, work_q=_work_q, state=_state))
+                registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
             out = buf.getvalue().strip()
         except Exception as e:
             out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"

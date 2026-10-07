@@ -3914,6 +3914,9 @@ function onWSMessage(ev){
     }
     case '_ping':
       break;  // 心跳，不渲染
+    case 'target_model':
+      if(m.current_model){ modelSel.value=m.current_model; modelSel.dataset.cur=m.current_model; }
+      break;
     case '_done':
       if(curTurn && !curTurn.answerEl.textContent){
         // 实时中断（无最终回答）：渲染继续按钮（与读档渲染一致）

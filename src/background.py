@@ -130,6 +130,8 @@ class ServiceManager:
         try:
             stdin.write((text or "") + "\n")
             stdin.flush()
+            e["repl_seen"] = True   # 交互即判定 REPL（用户提案 2026-10-08）：能接 stdin 的
+                                    # 服务下轮投影 bg_services 段自动发 /status 带上输出
         except (BrokenPipeError, OSError) as ex:
             return f"[发送失败] {name}: {type(ex).__name__}（进程可能已关闭 stdin）"
         if not expect:
@@ -157,18 +159,38 @@ class ServiceManager:
         hit = cache.get(name)
         if hit and now - hit[0] < 5.0:
             return hit[1]
+        # 多行响应收集（用户提案 2026-10-08：前 N 行，不只首行）——发 /status 后等
+        # 「静默窗口」（0.4s 无新行=响应收完）或 2s 上限，取前 N 行（N=watch_tail，默认 5）。
+        proc = e.get("proc")
+        stdin = getattr(proc, "stdin", None) if proc is not None else None
+        if stdin is None:
+            return ""
+        logs = e["logs"]
+        before = len(logs)
         try:
-            out = self.send(name, "/status", expect=r"\S", timeout=2.0)
-        except Exception:
+            stdin.write("/status\n")
+            stdin.flush()
+        except (BrokenPipeError, OSError):
             return ""
-        # send 返回格式："✅ 已发送并匹配...（新增 N 行）：\n<输出>"——取新增输出部分
-        body = out.split("）：\n", 1)[-1] if "）：\n" in out else ""
-        first = next((l.strip() for l in body.splitlines()
-                      if l.strip() and not l.strip().startswith(">")), "")
-        if not first:
+        import itertools as _it
+        n_max = min(int(e.get("watch_tail") or 5) or 5, 5)   # 用户口径：前 5 行封顶
+        deadline = time.time() + 2.0
+        last_change = time.time()
+        got = []
+        while time.time() < deadline:
+            time.sleep(0.12)
+            cur = list(_it.islice(logs, before, None))
+            if len(cur) != len(got):
+                got = cur
+                last_change = time.time()
+            elif got and time.time() - last_change > 0.4:
+                break   # 静默窗口：响应收完
+        lines = [l.strip() for l in got if l.strip() and not l.strip().startswith(">")][:n_max]
+        if not lines:
             return ""
-        cache[name] = (now, first)
-        return first
+        joined = "\n".join(lines)
+        cache[name] = (now, joined)
+        return joined
 
     def status_lines(self) -> list:
         """供 system prompt 注入：每个服务一行 name(状态, pid, 已跑 Ns)。已退出标'需重启'。"""
@@ -183,22 +205,23 @@ class ServiceManager:
                     lines.append(f"  {name}(运行中, pid={e['proc'].pid}, 已跑 {up}s)")
                 else:
                     lines.append(f"  {name}(已退出 rc={rc}, 需重启)")
-                # repl: 前缀服务（用户提案 2026-10-08：MCP 式请求-响应协议）——每步投影
-                # 自动发 /status 收一行摘要（L=watch_tail 截取前 L 行）；5s 节流缓存。
-                # 潜规则：repl: 服务的 stdout 仅用于协议响应，过程日志写文件不污染 stdout。
-                if name.startswith("repl:") and rc is None and int(e.get("watch_tail") or 0) > 0:
+                # repl 服务（用户提案 2026-10-08）：① 命名声明：repl: 前缀；② 交互自动判定：
+                # 曾被 service_stdin 发过参数（repl_seen）——能接 stdin 的即 REPL 语义。
+                # 每步投影自动发 /status 收前 N 行；5s 节流缓存。
+                # 潜规则：repl 服务的 stdout 仅用于协议响应，过程日志写文件不污染 stdout。
+                if (name.startswith("repl:") or e.get("repl_seen")) and rc is None:
                     repl_marks.append((len(lines), name))   # 占位，锁外轮询填充
                     lines.append(None)
                 # watch_tail>0（用户提案 2026-10-07）：附日志尾部 N 行——每步投影可见服务实况
                 # （零协议：不要求服务实现 /status，stdout 日志 deque 天然即状态）
                 wt = int(e.get("watch_tail") or 0)
-                if wt > 0 and not name.startswith("repl:"):
+                if wt > 0 and not (name.startswith("repl:") or e.get("repl_seen")):
                     tail = list(e["logs"])[-wt:]
                     lines.extend("    │ " + l for l in tail) if tail else lines.append("    │ (暂无输出)")
         # 锁外做 repl 协议轮询——send/_repl_status 自己要拿 _lock（Lock 不可重入，锁内调用会死锁）
         for pos, name in repl_marks:
             line = self._repl_status(name, self._services.get(name, {}), time.time())
-            lines[pos] = ("    │ " + line) if line else None
+            lines[pos] = ("    │ " + line.replace("\n", "\n    │ ")) if line else None
         return [l for l in lines if l is not None]
 
     def list(self) -> str:

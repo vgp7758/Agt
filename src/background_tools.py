@@ -26,11 +26,11 @@ def make_background_tools(agent) -> list:
         watch_tail（用户提案 2026-10-07）：>0 时 bg_services 装配段对该服务额外附
         【最近 N 行 stdout 日志】——关键服务（帧服务/监控器）设 3~5，每步投影可见实况；
         0（默认）只显示状态行。零协议：不要求服务实现任何 /status，stdout 即状态。
-        repl: 前缀服务（命名潜规则，用户提案 2026-10-08）＝REPL 协议服务：MCP 式
-        请求-响应（一次 stdin 对应一次 stdout）。约定：stdout 仅用于协议响应
-        （/status 返回一行摘要，多行信息请压缩成一行），过程日志写文件（--log xxx
-        或服务内自行落盘）不污染 stdout；配 watch_tail>0，每步投影的 bg_services
-        段自动发 /status 并投影首行摘要（5s 节流缓存）。
+        repl 服务判定（用户提案 2026-10-08，两种，或关系）：① 命名声明 repl: 前缀；
+        ② 交互自动判定——任何服务只要被 service_stdin 发过参数（repl_seen），即视为
+        REPL 语义。REPL 约定：MCP 式请求-响应（一次 stdin 对应一次 stdout），stdout
+        仅用于协议响应（/status 输出前 5 行封顶，多行请压紧），过程日志写文件不污染
+        stdout；每步投影的 bg_services 段自动发 /status 收前 N 行（5s 节流缓存）。
         yml services 段落盘写法：键含冒号，建议引号包裹（- "repl:名字": 命令）——
         不加引号 YAML 也能解析（分隔判定是"冒号+空格"），但部分编辑器高亮会歧义；
         ⚠️ 禁止写成 repl: 名字（冒号后带空格会把键截断成 repl，直接 ScannerError）。

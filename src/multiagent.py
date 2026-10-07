@@ -978,11 +978,13 @@ def make_subagent_tools(agent) -> list:
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
                      assembly: str = "", caller: str = "", context_messages: str = "",
-                     current_turn_only: bool = True) -> str:
+                     current_turn_only: bool = True, max_steps: int = 0) -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
         current_turn_only: 投影隔离（默认 True=复用模式只投影当前轮，历史轮归档不进上下文）。
+        max_steps: 本任务的 react 步数上限（用户提案 2026-10-07：默认 0=用声明值/50）。
+        长任务（多文件重构/大范围测试）建议显式给大（如 150）——50 步强制收尾对它们不够。
                 长对话型实例（如按客户分线的客服）传 False：完整装配 history——该实例自己的
                 会话历史就是它的记忆（跨轮连续），配合显式 agent_id 定向复用即"每客户一条线"。
         context_messages: 【一次性前置上下文】JSON 数组 [{"role","content"},...]——投影时展开在
@@ -1294,6 +1296,7 @@ def make_subagent_tools(agent) -> list:
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
                            caller_id=caller_id, current_turn_only=(reuse and bool(current_turn_only)),
+                           max_steps=int(max_steps or meta.get("max_steps") or 50),
                            assembly=(base_asm or None))
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks

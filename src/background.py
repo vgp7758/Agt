@@ -43,7 +43,7 @@ class ServiceManager:
         self._on_exit = on_exit   # 进程自行退出回调 on_exit(name, entry, rc)，由 Agent 注入（可 None）
 
     def start(self, name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
-              on_exit_style: str = "tool") -> str:
+              on_exit_style: str = "tool", watch_tail: int = 0) -> str:
         with self._lock:
             if name in self._services:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
@@ -67,7 +67,8 @@ class ServiceManager:
         entry = {"proc": proc, "command": command, "cwd": cwd,
                  "started_at": time.time(), "pid": proc.pid,
                  "logs": logs, "manual_stop": False,
-                 "on_exit_wake": on_exit_wake, "on_exit_style": on_exit_style}
+                 "on_exit_wake": on_exit_wake, "on_exit_style": on_exit_style,
+                 "watch_tail": max(0, int(watch_tail))}   # >0：投影的 bg_services 段附日志尾部 N 行
         with self._lock:
             self._services[name] = entry
 
@@ -131,6 +132,12 @@ class ServiceManager:
                     lines.append(f"  {name}(运行中, pid={e['proc'].pid}, 已跑 {up}s)")
                 else:
                     lines.append(f"  {name}(已退出 rc={rc}, 需重启)")
+                # watch_tail>0（用户提案 2026-10-07）：附日志尾部 N 行——每步投影可见服务实况
+                # （零协议：不要求服务实现 /status，stdout 日志 deque 天然即状态）
+                wt = int(e.get("watch_tail") or 0)
+                if wt > 0:
+                    tail = list(e["logs"])[-wt:]
+                    lines.extend("    │ " + l for l in tail) if tail else lines.append("    │ (暂无输出)")
             return lines
 
     def list(self) -> str:

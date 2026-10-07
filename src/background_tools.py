@@ -18,11 +18,14 @@ def make_background_tools(agent) -> list:
     sch = agent.scheduler
 
     def start_service(name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
-                      on_exit_style: str = "tool") -> str:
+                      on_exit_style: str = "tool", watch_tail: int = 0) -> str:
         """后台启动一个长运行的服务（不阻塞）。用于把你写的后端跑起来做联调，
         如 `python app.py` / `npm run dev` / `python -m http.server 8000`。
         启动后其状态会自动出现在每轮系统提示里；用 service_logs 看输出、stop_service 停止。
         name 自取一个易记的名字，command 是 shell 命令。
+        watch_tail（用户提案 2026-10-07）：>0 时 bg_services 装配段对该服务额外附
+        【最近 N 行 stdout 日志】——关键服务（帧服务/监控器）设 3~5，每步投影可见实况；
+        0（默认）只显示状态行。零协议：不要求服务实现任何 /status，stdout 即状态。
         on_exit_wake（自行退出时是否唤醒你处理，默认 notify=通知进 inbox——持久化、
         空闲时自动消费成轮、忙时排队到下一步边界；不打断进行中的轮）：
         notify=进 inbox 保证可见不丢；never=仅内存登记（最安静，无自然轮则看不到）；
@@ -33,7 +36,8 @@ def make_background_tools(agent) -> list:
         on_exit_style（通知注入姿势，按实例可改，用户提案 2026-09-23）：
         tool(默认)=合成 stop_service 工具记录（启动参数+退出码+尾部日志，信息最全）；
         text=纯文本通知（轻量——仅 header+简要命令，不打工具记录）。"""
-        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake, on_exit_style=on_exit_style)
+        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake, on_exit_style=on_exit_style,
+                         watch_tail=watch_tail)
 
     def stop_service(name: str) -> str:
         """停止指定的后台服务（先 terminate，3 秒不退则 kill）。

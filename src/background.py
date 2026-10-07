@@ -45,8 +45,17 @@ class ServiceManager:
     def start(self, name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
               on_exit_style: str = "tool", watch_tail: int = 0) -> str:
         with self._lock:
-            if name in self._services:
+            old = self._services.get(name)
+            if old is not None and old["proc"].poll() is None:
                 return f"[已存在同名服务] {name}，先 stop_service 再启动"
+            # 同名但已退出（stop 过/自行崩过）→ 覆盖重建（用户实锤 2026-10-08：stop 保留
+            # entry 做退出复盘，start 撞名被拒——stop→start 重启路径断了；声明 services 的
+            # 死服务也无法在下次实例化时被 _ensure_agent_services 重新拉起）。保险补杀。
+            if old is not None:
+                try:
+                    self._kill_tree(old["proc"])
+                except Exception:
+                    pass
         popen_kwargs = dict(shell=True, cwd=cwd or None,
                             stdin=subprocess.PIPE,    # 保留 stdin：service_stdin 可向服务写指令（REPL 型服务）
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

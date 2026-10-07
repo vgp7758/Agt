@@ -125,7 +125,10 @@
 
 ## 相关页面
 
+
 - [气泡交互](bubble-interaction.md) — 变更文件区的图片/音频内嵌渲染（**展示侧**，与输入侧相对）
 - [多 Agent 体系](../architecture/multi-agent.md) — vision 子 Agent 委托看图 / 复活路径复发
 - [工具执行审批](tool-approval.md) — 同批 2026-09-29 修复（审批默认关闭 + 刷新恢复）
 - [运维与排障](../guides/ops.md) — 常见错误对照
+- [生成图自动可视](image-autoview.md) — 反向通道（2026-10-07）：工具生成的新增图片自动挂投影（伪造 read_file 对，`vision_supported` 门控）——与本页共用 vision 门控与 image_url 块基建
+

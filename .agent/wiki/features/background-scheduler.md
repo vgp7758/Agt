@@ -5,7 +5,7 @@
 ## 职责
 
 - **src/background.py**：后台调度线程，`_loop` 周期扫描 `next_fire`，到点把消息推给 Agent 触发一轮（唤醒链见 [user-interaction · 后台通知 wake 语义](user-interaction.md)）
-- **src/background_tools.py**：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `send_to_service`）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
+- **src/background_tools.py**：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `service_stdin`；旧名 `send_to_service` 保留为 hidden 别名，只透传 name+message）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
 - 触发三类：**interval**（每 N 秒）/ **at**（到点；v0.23.1 起支持每日闹钟）/ **组合**（every_seconds + at 同给：at 相位起步、之后每 N 秒循环，2026-09-18）
 
 ## Schedule 数据结构（dataclass）
@@ -311,6 +311,35 @@ Scheduler._schedules（真源）
 **生效方式**：引擎层改动，`/restart` 后生效；`watch_tail` 是启动期参数（`start_service` 时按服务声明），需要看实况的关键服务在启动时带上即可。
 
 **关联**：[image-feed](image-feed.md)（姊妹特性：每步实时画面——image_feed 走 tail_images 画面通道、watch_tail 走文本通道，帧服务可同用）· [agents-admin · FUNC_REGISTRY](agents-admin.md)（bg_services() 装配函数）· [本页 on_exit_wake](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（start_service 的另一族逐服务参数）。
+
+## service_stdin 往返语义：expect 正则 + timeout——写入后等 stdout 响应才返回（2026-10-07，用户提案，commit b1fbfe6）
+
+**动机（用户提案）**：`service_stdin` 旧行为是「写入即返回」——发一行指令立刻拿到 📤 回执，服务的响应得再调一次 `service_logs` 才能看见。用户指出：一般用 stdin 驱动服务时，预期就是能拿到 stdout 的结果，应该有个参数声明「**stdout 出现怎样的输出后，这次工具调用才算完成**」。
+
+**签名与语义**（src/background.py `ServiceManager.send` + src/background_tools.py `service_stdin`，commit `b1fbfe6`）：
+
+```python
+service_stdin(name, message, expect="", timeout=10.0)
+```
+
+| 参数 | 语义 |
+|---|---|
+| `expect` | 非空 = 【正则】：写入后**轮询 stdout 新增输出**（0.15s 间隔），命中才返回——**工具结果 = 写入后的新增输出**（尾部 ≤4000 字，REPL 往返语义：发代码等 `>>>` 或结果回显）；空 = 旧行为（立即返回 📤 回执） |
+| `timeout` | 等待上限秒（默认 10，下限 0.5）；**超时不空手**：返回已收到的新增输出 + 「未匹配 /expect/（可加大 timeout 或确认服务真的回显）」标注——agent 可自行加大重试 |
+
+**三个实现要点**（src/background.py `send`）：
+
+- **增量基准**：`before = len(logs)`（写入前的 deque 行数）——正则只对**本次交互产生的新行**匹配，返回也只含新增行，不混旧日志
+- **断管防御**：stdin 已关（BrokenPipeError/OSError）→ `[发送失败] name: BrokenPipeError（进程可能已关闭 stdin）`
+- **兼容**：`expect` 空 = 完全旧行为，存量调用零感知；旧名 `send_to_service` 别名只透传 name+message（不带新参）
+
+**REPL 往返语义的价值**：驱动另一个 agt 实例（发任务 prompt 等回答）、python REPL、交互式 CLI 时，一次调用直接拿到响应——省掉「send → 猜时长 → service_logs 二次查询」的两步往返。被驱动侧配套：src/chat.py `_stdin_thread`——stdin 非 tty（被 start_service 以管道启动）时逐行消费进 work_q，外部 Agent 才能用 service_stdin 驱动本实例。
+
+**冒烟验证**（python -i REPL 真跑，两路径全过）：① 发 `print('pong-12345')` + `expect=r"pong"` → ✅ 匹配返回响应行；② 发无回显赋值语句 + 永不匹配的 expect → ⏱ 超时如实返回「期间新增 0 行」。
+
+**生效**：commit `b1fbfe6` 已推送；**site-packages 待同步**（pip 实例跑 site-packages 实体，见 [运维排障](../guides/ops.md)），同步后 `/restart` 生效。
+
+**关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同日姊妹——watch_tail 管 stdout「看得见」（每步投影）、expect 管「等得到」（调用内往返），一个读通道一个写通道）· [user-interaction · 后台通知 wake 语义](user-interaction.md)（服务退出通知链）。
 
 ## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 

@@ -45,6 +45,15 @@ PATH 无独立 ffmpeg，探测到剪映安装位自带 ffmpeg——但它是裁�
 
 **冒烟链**：SVG 1920×1080 → 3 帧 PNG（msedge 渲染，16~19KB/帧）→ smoke.mp4（h264_mf 编码 ✓，13KB）。
 
+#### 后记：h264_mf 实战段错误——`_ffmpeg` 升级候选位探测 + crf 18（2026-10-07，pv-producer 工作区，未提交）
+
+**冒烟结论被实战推翻**：冒烟 3 帧（13KB）能过的 h264_mf，到了片头段真规模（1080p / 840 帧 PNG 序列）**直接段错误**——比「无 libx264」更狠，Windows Media Foundation 编码器对大批量帧序列输入不稳。pv-producer 自查自修：
+
+- `_ffmpeg()` 再升级：**候选位逐个探测带 libx264 的构建**（PATH → 剪映安装位 → imageio_ffmpeg 随包二进制），`-encoders` 探到 libx264 才定——不再依赖单点
+- 编码参数加 `crf 18`（防渐变色带）
+
+**状态**：修复在 pv-producer 工作区 tools/svg_tools.py，**未提交**——主 Agent 裁定留给它随里程碑一起提交；片头段渲染中，完成后回推验收。
+
 ## 任务纪律（写进人设五条）
 
 1. 先管线后内容——管线不通不做分镜（主 Agent 已代踩三坑，人设直接写死结论）

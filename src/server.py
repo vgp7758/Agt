@@ -1132,14 +1132,16 @@ async def api_favorite(request: Request):
 @app.post("/api/hold")
 async def api_hold(request: Request):
     """挂起/恢复 react（/hold 的 WebUI 通道；用户提案 2026-09-21）。
-    body: {"on": true/false}——on 挂起（react 下一步前暂停），off 放行。"""
+    body: {"on": true/false, "target": "agent_id"}——on 挂起（react 下一步前暂停），off 放行。
+    target（2026-10-07 用户问诊补齐）：缺省=主 Agent；指定子 Agent 的 agent_id 则作用于它。"""
     try:
         d = await request.json()
         on = bool(d.get("on"))
         if _agent is None:
             return {"ok": False, "error": "agent 未就绪"}
-        r = _agent.set_hold(on)
-        return {"ok": True, "hold": r["hold"]}
+        _ta = _target_agent({"target": d.get("target")}, _agent)
+        r = _ta.set_hold(on)
+        return {"ok": True, "hold": r["hold"], "target": d.get("target") or "_main_"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

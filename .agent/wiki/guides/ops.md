@@ -491,6 +491,10 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **防御落地**：`call_tool_sync` 600s 兜底（commit `fc8d2c0`）——此后 MCP 单点 hang 最多拖 10 分钟即转为工具错误消息，轮继续。
 
+### 插话死信假 busy：空闲态消息走插话通道永不消费（2026-10-07，20048 实锤）
+
+**与上条 50052 同症不同根**——实例结束一轮后恒 busy、发消息无响应，但这里 worker 没堵（py-spy 无卡点、`/api/status` busy=false 真态空闲），死的是**消息**：前端 busy 变量陈旧（WS 断线重连/事件丢失）→ 消息走插话通道入 pending → 空闲 agent 无下一轮可注入 = 永久死信（「插话已入队」却永不开轮）。修复：src/server.py insert_message 分支后端权威真态兜底，空闲直接转 work_q 开新轮（commit 1c0d2f9）；存量死信随手发一条新消息即随批合并全清。**诊断口诀：busy 假死先分两侧**——后端 busy=false + 页面 busy → 前端态漂移（本条）；后端 busy=true + py-spy 有卡点 → worker 阻塞（上条）。详见 [用户交互 · 插话死信修复](../features/user-interaction.md)。
+
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 
 - **本地发布链 `release.py` 版本真源迁移（2026-09-10 · 十八轮，v0.26.5）**：桌面平铺打包把版本号唯一真源收到 `src/paths.py`（`src/__init__.py` 反向导入、**无静态 `__version__` 字面量**）后，`release.py` 老正则扫 `__init__.py` 匹配 0 处 → 发布链失效。修复 = 读/写 `PATHS = src/paths.py` 的 `VERSION` + 同步 `packaging/version_file.txt`（exe 版本资源）——与 CI 的 `tools/ci_stamp_version.py` **同源同语义**。同轮修 `src/__init__.py` 导入顺序（`from paths import VERSION` 必须在 sys.path hack **之后**，否则 PyPI sdist 构建后端 import src 即崩）。见 [桌面版 · 发布链修复](../features/desktop-mode.md#发布链修复releasepy-版本真源迁移--src__init__py-导入顺序2026-09-10--十八轮v0265-发版)、[v0.26.5 发布记录](../releases/v0.26.5.md)

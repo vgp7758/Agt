@@ -79,6 +79,26 @@
 
 **调试插曲**：① 前端 JS 误用 Python 风格 `#` 注释会炸掉整个 script 块——node --check 抓出改 `//`（py_auto_diag 只查 .py 看不到）；② 测试 stub 用 `[]` 冒充 queue → `.put_nowait` 抛 AttributeError 被 `_broadcast` 的 `except` 吞 → 事件全丢、测试假失败，换真 `queue.Queue` 后 6 场景全绿。
 
+## 模型下拉框 target 感知：/model 读写跟随本页签交互对象——子 Agent 页面不再错切主 Agent（2026-10-07，用户实锤，commit 38b3b46）
+
+> src/server.py（`_target_agent` helper + 两处 dispatch 调用点 + `switch_agent` 回推）+ src/static/index.html（`case 'target_model'`）。用户实锤（2026-10-07）：「sub-agent 的 ui 页面里选模型的下拉框看起来读写的还是主 agent 的模型」——页签已切到子 Agent，模型下拉框显示与切换的对象却仍是 `_main_`。
+
+**根因**：WebUI 顶部模型下拉框的切换走 `/model <名>` 斜杠命令，`registry.dispatch` **恒绑定主 Agent**——不管当前页签交互的是谁，切的永远是 `_main_`；读取侧（回显 `current_model`）同理，读的也是主 Agent 的模型。
+
+**修复三件**：
+
+| 改动 | 说明 |
+|---|---|
+| `_target_agent(client, agent)` 新 helper | 按 `client["target"]`（缺省 `_main_`）解析目标：非 `_main_` 时 `registry.lookup(ct)` 取对应实例（`e.agent`），查不到回退主 Agent。**两处 dispatch 调用点同改**——`/model` 等 agent 绑定命令作用于【本页签正在交互的对象】 |
+| `switch_agent` 回推 `target_model` 事件 | 切换成功后 `_send` `{"type":"target_model","target":target_id,"current_model":...}`——前端据此回显下拉框。**注意用【切换后】的 target_id 查目标，而非 client 现值**——避免「从子 Agent 切回主 Agent」时读成旧对象的模型（`_ta = agent if target_id == "_main_" else ...`，lookup 失败再回退主 Agent） |
+| 前端 `case 'target_model'` | 下拉框 value + 选中态同步回显（切回 `_main_` 也能正确显示主 Agent 模型） |
+
+**效果**：切到子 Agent 页 → 下拉框显示它的模型 → 切换只作用于它 → 切回主页面恢复主 Agent 模型，互不串台。顺带理清了此前「切到 qwen 回不来」的体验困惑——切换语义归位后，模型归属清晰。
+
+**生效方式**：引擎层（server.py）+ index.html 均随服务进程载入 → 需 `/restart`；site-packages 已同步。
+
+**关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义的消费端再加一个——此前已有事件广播过滤 / 文本路由 / 会话视图隔离，本次把**命令绑定**也纳入）、[Agent 专属页 URL 路由](#agent-专属页-url-路由--agentsagent_id-直接落位2026-08-commit-5393ee4修复-c819618)（子 Agent 页面的入口，下拉框错位在其上最刺眼）、[配置体系与模型调优](../guides/config-and-models.md)（模型档案与能力位本身在 models.json / settings 配置）。
+
 ## /reset 清空后新会话立即可见 + 会话下拉框跟随当前会话（2026-09-23，用户实锤，commit 3350a68）
 
 **用户实锤（2026-09-23）**：「点清空按钮后发送信息的时候，并没有开一个新的 session」——下拉框还显示旧会话名。

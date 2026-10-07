@@ -62,6 +62,16 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 
 隔离冒烟五场景全绿：目录落盘 / file 原位无双插（首项仍 `seg:system`）/ services 行式解析 / image_feed 项保留 / persona 写入。管理页视角见 [Agent 管理页](../features/agents-admin.md)；同批 services 编辑字段见下节。
 
+### 后记三：pv-producer——目录形态全量实战实例（2026-10-07，用户提案，commits 2fd9ce7 + c64c910）
+
+### 后记三：pv-producer——目录形态全量实战实例（2026-10-07，用户提案，commits 2fd9ce7 + c64c910）
+
+制片 Agent 落地为首个「yml + 人设 md + tools/ 专属工具」三件齐全的实战实例：
+
+- `tools/svg_tools.py` 四专属工具只挂进本 agent schema（svg_to_png 双后端 / pngs_to_video / concat_videos / mix_audio），引擎零改动
+- 创建走 write_file yml 官方路径（create_agent 退役后的实战印证）
+- 详见 [pv-producer](../features/pv-producer.md)
+
 ## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
 
 **动机**——desktop-operator 依赖 desktop-frame 画面服务（见 [image_feed 实时画面段](../features/image-feed.md)），此前要靠人记得手工 start；一次 rc=1 崩溃后忘了拉起，Agent 直接「睁眼瞎」。用户提案：「yml 里声明依赖服务，agent 实例化时拉起」——把服务生命周期挂到声明上。

@@ -54,6 +54,24 @@
 
 **关联**：[后台通知 wake 语义](#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0.19.2)（同属用户对运行中 Agent 的控制）、[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（/api/hold 是独立 HTTP 通道，不经 WS target 路由）、[api-status](api-status.md)（`/api/status` 新增 `hold` 字段）。
 
+### 子 Agent 挂起支持：/api/hold 增 target 参数——挂哪个 Agent 按交互对象路由（2026-10-07，用户问诊，commit bc3804c）
+
+**用户问诊（2026-10-07）**：「还有我们现在 /hold 的时候对 sub-agent 生效吗？」——答案**分层**：
+
+| 层 | 现状 |
+|---|---|
+| 闸门机制 | ✅ **天然支持**——子 Agent 是独立 Agent 实例，各自有 `_hold` + `_hold_event`，react step 循环开始前的挂起检查是同一段代码（每实例独立挂起） |
+| `/hold` 命令 | ✅ 本日 [模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（commit 38b3b46）已**顺带修好**——页签切到子 Agent 后发 `/hold on` 即作用于它 |
+| `/api/hold` | ✅ 本轮补上（commit bc3804c）——body 从 `{on}` 扩为 `{on, target}`：`_target_agent({"target": d.get("target")}, _agent)` 解析目标后 `set_hold`；**缺省 = 主 Agent**，指定子 Agent 的 agent_id 则作用于它 |
+
+**用法**：`POST /api/hold {"on": true, "target": "unity-tester"}` 挂起指定子 Agent；脚本/外部通道此前只能挂主 Agent，现在可逐实例控制。
+
+**残留（有意留白）**：顶栏 ⏸ 按钮仍只控制主 Agent——它发 `/api/hold` 不带 target；语义上「顶栏按钮 = 总闸」也说得通。若希望按钮跟随当前页签（挂谁看切到谁），改前端一处即可，待用户裁定。
+
+**生效方式**：引擎层（src/server.py），需 `/restart`。
+
+**关联**：[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（`_target_agent` 路由的又一消费端——/hold 命令是它的顺带受益者，/api/hold 是显式接入）、[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义总纲）。
+
 ## 多客户端 target 路由 · 页签级 Agent 隔离（2026-08，commit 30ac45b）
 
 > src/server.py。此前事件广播是**全端广播**——每个 WS 客户端都收到所有事件，多页签同时与不同 Agent 交互会互相串台。本改动引入**客户端级交互目标 `target`**：每个客户端只收自己正在交互的 Agent 的事件、只把自己的文本路由给该 Agent。

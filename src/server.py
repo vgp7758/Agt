@@ -2787,8 +2787,16 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 await _send(ws, {"type": "system", "text": out})
             return
         if text:
-            agent.queue_user_message(text)
-            await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})
+            # 真态兜底（2026-10-07·20048 实锤）：前端 busy 变量可能陈旧（WS 断线重连/事件丢失），
+            # 导致空闲态的消息走了插话通道——入 pending 后无下一轮消费 = 死信（"插话已入队"
+            # 却始终不开新轮）。后端权威判定：agent 实际空闲 → 直接转 work_q 开新轮（同正常发送）。
+            if not (_state is not None and _state.get("busy") and not _state.get("answered")) and _work_q is not None:
+                _work_q.put(("user", text))
+                await _send(ws, {"type": "system", "transient": True,
+                                 "text": "✅ 已接收（agent 空闲，转入新一轮处理）…"})
+            else:
+                agent.queue_user_message(text)
+                await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})
         return
     if isinstance(_d, dict) and _d.get("action") == "list_workflows":
         from workflow import workflows_info

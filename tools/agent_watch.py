@@ -24,11 +24,14 @@ import ssl
 import sys
 import time
 import datetime
+import subprocess
 import urllib.request
+from pathlib import Path
 
 # ═══════════════ CONFIG ═══════════════
 INTERVAL = 900          # 轮询间隔（秒）
 STATE_FILE = os.path.expanduser("~/.agt/agent_watch_state.json")
+PID_FILE = os.path.expanduser("~/.agt/agent_watch.pid")   # 单例接管标记（2026-10-08）
 
 MAIL = {
     "from": "vgp123@foxmail.com",
@@ -297,11 +300,37 @@ def run_once(force_baseline: bool = False) -> bool:
     return ok
 
 
+def _ensure_singleton() -> None:
+    """单例接管（用户提案 2026-10-08）：常驻启动时发现已有 agent-watch 在跑 → 杀掉旧的，
+    自己接管（写新 PID）。防多份并跑（重复邮件/状态互踩——2026-09-20 三进程并跑实锤）。
+    --once/--baseline 一次性任务不抢占。"""
+    pid_path = Path(PID_FILE)
+    try:
+        if pid_path.exists():
+            old_pid = int(pid_path.read_text(encoding="utf-8").strip() or 0)
+            if old_pid and old_pid != os.getpid():
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/PID", str(old_pid), "/T", "/F"],
+                                       capture_output=True, timeout=8)
+                    else:
+                        os.kill(old_pid, 15)   # SIGTERM
+                    time.sleep(0.6)   # 旧进程收尸（状态文件/端口释放）
+                    print(f"[agent-watch] 单例接管：已终止旧实例 pid={old_pid}", flush=True)
+                except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+                    print(f"[agent-watch] 旧实例 pid={old_pid} 已不在（清理陈旧标记）", flush=True)
+    except (ValueError, OSError) as e:
+        print(f"[agent-watch] PID 文件异常（忽略重写）: {e}", flush=True)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+
 def main():
     force_baseline = "--baseline" in sys.argv
     if "--once" in sys.argv or force_baseline:
         run_once(force_baseline=force_baseline)
         return
+    _ensure_singleton()   # 常驻模式单例接管（杀旧启新）
     print(f"[agent_watch] 常驻启动 · 每 {INTERVAL}s 轮询 · 本地实例自动发现 + 远程静态 {len(REMOTE_WATCHES)} 个")
     while True:
         try:

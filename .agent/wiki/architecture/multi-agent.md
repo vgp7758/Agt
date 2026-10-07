@@ -682,12 +682,40 @@ _inject_agent_enums（multiagent.py；装配 / create / kill 时刷新）
 
 | 工具 | 语义 | 落盘 |
 |------|------|------|
-| agent_ask | 无状态询问（对方上下文快照+问题→LLM→回你） | 否 |
+| agent_ask | 无状态询问（对方上下文快照+问题→LLM→回你）；**不装配工具**（2026-10-08 起 `tools=[]`，克隆历史纯对话问答）——见 [agent_ask 不装配工具](#agent_ask-不装配工具克隆历史纯对话问答2026-10-08用户提案commit-16c1708) | 否 |
 | agent_notify | 有状态提示；**忙闲分流**（2026-09-24 起）：忙（running/busy）=插话入队（等效用户插话）、空闲=直接唤醒一轮 run 消费——见 [agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5) | 是 |
 | agent_query_events / _tool_detail | 只读查对方轮次/工具调用详情（历史 Agent lazy load） | — |
 | list_team | 团队清单（exclude 自己） | — |
 
 通信工具的 `target_id` 动态注入 enum（registry 当前全部 agent_id，作提示性候选）——见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)。
+
+## agent_ask 不装配工具：克隆历史纯对话问答（2026-10-08，用户提案，commit 16c1708）
+
+**用户提案（2026-10-08）**：「agent-ask 的时候一般都是纯询问立刻要进展，克隆该实例历史信息发送 LLM 请求的时候可以考虑不装配工具，省的它瞎忙活」。
+
+**问题**：agent_ask 的实现是克隆对方 session 历史（`messages_for_llm()`）+ 追加问题 → 直接调对方 LLM。旧实现沿用对方实例的完整工具表——模型看到一堆工具 schema 容易「手痒」想先调工具（读文件/查状态）再回答；而 **agent_ask 是无状态调用，本就没有执行环境**——工具真调了也没人执行，纯空转（还可能诱发多轮工具规划，拖慢甚至跑偏回答）。
+
+**修复（src/multiagent.py，commit `16c1708`，一行核心改动）**：
+
+```python
+msgs = list(target_agent.session.messages_for_llm())
+msgs.append({"role": "user", "content": f"[来自队友 '{agent.agent_id}' 的询问] {question}"})
+# 不装配工具（用户提案 2026-10-08）：agent_ask 是纯询问立刻要进展——克隆对方
+# 历史发 LLM 请求时带工具会诱导它想调工具（本调用无执行环境，调了也是空转）。
+# tools=[] 透传 _build_kwargs 覆盖实例工具表，纯对话问答。
+resp = target_agent.llm.chat(msgs, tools=[])
+```
+
+**机制**：`tools=[]`（空列表 ≠ None）经 `llm.chat` 透传 `_build_kwargs` 覆盖实例工具表——`_build_kwargs` docstring 本就声明「tools / tool_choice 等可通过 overrides 透传」，**零框架改动**。
+
+| 通信工具 | 有无执行环境 | 工具装配 |
+|---|---|---|
+| agent_ask | 无（无状态快照调用） | **tools=[] 不装**（2026-10-08 起） |
+| agent_notify 空闲唤醒 | 有（完整 run 一轮） | 正常装配（它真的能干活） |
+
+部署：commit `16c1708` 已推送，50052 site-packages 已同步。
+
+**关联**：[agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5)（姊妹语义——notify 的空闲唤醒是真 run，装配工具天经地义）· [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)
 
 ## agent_notify 忙闲分流：空闲直接唤醒一轮（2026-09-24，用户裁定，commit cdb13c5）
 

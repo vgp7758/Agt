@@ -58,6 +58,8 @@ agents 管理页类型下拉 `ACT_TYPES` 增 `image_feed`（src/static/agents.ht
 
 bg_services 装配段同日增 `start_service(watch_tail=N)`：服务 stdout 日志尾部 N 行随每步投影注入——与本段同属「每步实况注入」家族。分工：本段走**画面**通道（tail_images，vision 投影，看帧服务的画面）；watch_tail 走**文本**通道（零协议，stdout 日志即状态，看服务运行实况）——帧服务两者可同用。详见 [background-scheduler · watch_tail](background-scheduler.md)。
 
+2026-10-08 家族再添协议成员：`repl:` 前缀服务 = 每步自动发 `/status` 取**首行协议摘要**（stdout 只归协议响应、日志写文件），文本通道的第二种形态——详见 [background-scheduler · repl: 协议服务](background-scheduler.md)。
+
 ## 同投影尾部家族：生成图自动可视——工具产物新增图伪造 read_file 对（2026-10-07，commit 218a757）
 
 同投影尾部家族再添一员（2026-10-07，commit 218a757）：工具 changed_files 里的新增图片（png/jpg/jpeg/webp/gif，单图 ≤1.5MB、一次 ≤4 张）→ 投影尾部伪造「read_file 调用+结果(image_url)」对——视觉模型"以为"自己读过图，省一次真实调用。与本段同在投影尾部注入、同 `vision_supported` 门控；分工：本特性**事件驱动**（本轮有新图才有）、瞬态不落档，image_feed **每步恒注**（最新帧）。详见 [生成图自动可视](image-autoview.md)。

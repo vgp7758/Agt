@@ -355,6 +355,8 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **生效方式**：引擎层改动，`/restart` 后生效；`watch_tail` 是启动期参数（`start_service` 时按服务声明），需要看实况的关键服务在启动时带上即可。
 
+**补记（2026-10-08，commit 174131f）**：`repl:` 前缀服务**不适用本模式**——stdout 只归协议响应（`/status` 一行摘要），`status_lines` 改走每步自动协议轮询（`wt > 0 and not name.startswith("repl:")` 显式豁免尾部模式），见 [repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f)。初版「放弃 stdin /status」的裁定由此部分回摆：**不强迫、但也不禁止**——普通服务继续零协议走日志尾部，愿意实现 `/status` 的 repl: 服务升级为协议摘要。
+
 **关联**：[image-feed](image-feed.md)（姊妹特性：每步实时画面——image_feed 走 tail_images 画面通道、watch_tail 走文本通道，帧服务可同用）· [agents-admin · FUNC_REGISTRY](agents-admin.md)（bg_services() 装配函数）· [本页 on_exit_wake](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（start_service 的另一族逐服务参数）。
 
 ## service_stdin 往返语义：expect 正则 + timeout——写入后等 stdout 响应才返回（2026-10-07，用户提案，commit b1fbfe6）
@@ -385,6 +387,43 @@ service_stdin(name, message, expect="", timeout=10.0)
 **生效**：commit `b1fbfe6` 已推送；**site-packages 待同步**（pip 实例跑 site-packages 实体，见 [运维排障](../guides/ops.md)），同步后 `/restart` 生效。
 
 **关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同日姊妹——watch_tail 管 stdout「看得见」（每步投影）、expect 管「等得到」（调用内往返），一个读通道一个写通道）· [user-interaction · 后台通知 wake 语义](user-interaction.md)（服务退出通知链）。
+
+## repl: 协议服务：命名潜规则 + 每步投影自动 /status（2026-10-08，用户提案，commit 174131f）
+
+**动机（用户提案）**：watch_tail 是「零协议」方案（stdout 日志即状态），但常驻业务服务的实况日志是过程性的——真正有状态价值的是**协议级摘要**（任务数 / fps / 队列深度）。提案：要一个 repl 类的服务通道，像 MCP 那样**一次 stdin 对应一次 stdout**；每轮 bg_services 投影时自动发 `/status` 拿输出、截取前 L 行投影；日志写文件不污染 stdout；服务是否支持 repl 用**命名潜规则**判定（名称匹配某格式），规则写进 `start_service` 提示词。
+
+**命名潜规则**：服务名带 **`repl:` 前缀** = REPL 协议服务。约定（已写进 `start_service` docstring 即提示词）：
+
+- stdout **仅用于协议响应**——`/status` 返回**一行摘要**（多行信息压成一行）；
+- 过程日志写文件（`--log xxx` 或服务内自行落盘），**不污染 stdout**；
+- 配 `watch_tail>0`：每步投影的 bg_services 段自动发 `/status` 并投影**首行摘要**（5s 节流）。
+
+**机制**（src/background.py + src/background_tools.py，commit `174131f`，site-packages 已同步）：
+
+| 触点 | 改动 |
+|---|---|
+| `ServiceManager._repl_status()`（新） | 协议轮询：复用 [service_stdin](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6) 的 expect 往返——`send(name, "/status", expect=r"\S", timeout=2.0)`；从返回中剥出新增输出、挑**首个非空且非 `>` 开头**的行（回显过滤）作摘要；超时/异常返回空串（不投影摘要行，不炸投影） |
+| `status_lines()` | 判定 `repl:` 前缀 + 运行中 + `watch_tail>0` → 摘要行 `│ ` 前缀缀在状态行下。**repl: 服务不再走 watch_tail 日志尾部**（stdout 只归协议，尾部模式只会看到「暂无输出」假象） |
+| 节流缓存 | `_repl_cache[name] = (时刻, 响应行)`——投影每步求值，5s 内连续步进不重复打 stdin 往返 |
+| `start_service` 提示词 | docstring 增潜规则约定段 + yml 冒号键写法警示（见下） |
+
+投影形态示例：
+
+```
+【后台服务状态】当前服务：
+  repl:unity-frame(运行中, pid=12052, 已跑 3600s)
+    │ STATUS ok uptime=99 tasks=3 fps=24    ← 框架自动发 /status 收的首行摘要
+```
+
+**锁外轮询（自查抓到的雷）**：协议轮询内部要调 `send()`——它自己要拿 `_lock`（写 stdin + 读 logs），而 `status_lines` 本身持锁遍历服务表；`threading.Lock` **不可重入**，锁内直接调 = 必死锁。修法：锁内只记占位符（`lines.append(None)` + `repl_marks` 位置清单），**锁外**逐服务轮询回填，空摘要占位行最后过滤掉。
+
+**yml services 段写法警示**（提示词同步带上，落盘 main.yml 时适用）：`repl:` 名字含冒号，建议引号包裹（`- "repl:名字": 命令`）——不加引号 YAML 也能解析（键值分隔判定是「冒号+空格」），但编辑器高亮易歧义；⚠️ **禁止写成 `repl: 名字`**（冒号后带空格会把键截断成 `repl`，直接 ScannerError）。
+
+**冒烟验证**：真 REPL 服务（stdin 收 `/status` 回一行摘要、其它输入写日志文件）→ `status_lines` 正确渲染出摘要行 ✓；非 repl 服务行为不变（watch_tail 日志尾部模式）✓。
+
+**生效**：commit `174131f` 已推送 + site-packages 已同步，`/restart` 后生效。`repl:` 是启动期命名约定——常驻业务服务（如 unity-frame）起名加前缀 + 实现 `/status`，每步投影即得协议级实时状态。
+
+**关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同段两种状态投影：watch_tail=stdout 日志尾部零协议 / repl:=协议摘要，repl: 服务自动豁免尾部模式）· [service_stdin](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（复用其 expect 往返机制）· [multi-agent · services 依赖声明](../architecture/multi-agent.md)（yml services 段落盘处）· [image-feed](image-feed.md)（每步实况注入家族）。
 
 ## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 

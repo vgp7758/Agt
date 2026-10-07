@@ -26,6 +26,11 @@ def make_background_tools(agent) -> list:
         watch_tail（用户提案 2026-10-07）：>0 时 bg_services 装配段对该服务额外附
         【最近 N 行 stdout 日志】——关键服务（帧服务/监控器）设 3~5，每步投影可见实况；
         0（默认）只显示状态行。零协议：不要求服务实现任何 /status，stdout 即状态。
+        repl: 前缀服务（命名潜规则，用户提案 2026-10-08）＝REPL 协议服务：MCP 式
+        请求-响应（一次 stdin 对应一次 stdout）。约定：stdout 仅用于协议响应
+        （/status 返回一行摘要，多行信息请压缩成一行），过程日志写文件（--log xxx
+        或服务内自行落盘）不污染 stdout；配 watch_tail>0，每步投影的 bg_services
+        段自动发 /status 并投影首行摘要（5s 节流缓存）。
         on_exit_wake（自行退出时是否唤醒你处理，默认 notify=通知进 inbox——持久化、
         空闲时自动消费成轮、忙时排队到下一步边界；不打断进行中的轮）：
         notify=进 inbox 保证可见不丢；never=仅内存登记（最安静，无自然轮则看不到）；

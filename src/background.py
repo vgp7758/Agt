@@ -138,8 +138,32 @@ class ServiceManager:
         return (f"⏱ {timeout}s 内未匹配 /{expect}/（可加大 timeout 或确认服务真的回显）。"
                 f"期间新增 {len(new_lines)} 行：\n" + ("\n".join(new_lines)[-4000:] or "(无新增输出)"))
 
+    def _repl_status(self, name: str, e: dict, now: float) -> str:
+        """repl: 服务的协议状态轮询：stdin 发 /status，收一行响应（用户提案 2026-10-08）。
+        MCP 式请求-响应：一次 stdin 对应一次 stdout；响应截前 watch_tail 行取首行摘要。
+        5s 节流：连续步进投影不重复打（_repl_cache[name] = (时刻, 响应行)）。"""
+        cache = getattr(self, "_repl_cache", None)
+        if cache is None:
+            cache = self._repl_cache = {}
+        hit = cache.get(name)
+        if hit and now - hit[0] < 5.0:
+            return hit[1]
+        try:
+            out = self.send(name, "/status", expect=r"\S", timeout=2.0)
+        except Exception:
+            return ""
+        # send 返回格式："✅ 已发送并匹配...（新增 N 行）：\n<输出>"——取新增输出部分
+        body = out.split("）：\n", 1)[-1] if "）：\n" in out else ""
+        first = next((l.strip() for l in body.splitlines()
+                      if l.strip() and not l.strip().startswith(">")), "")
+        if not first:
+            return ""
+        cache[name] = (now, first)
+        return first
+
     def status_lines(self) -> list:
         """供 system prompt 注入：每个服务一行 name(状态, pid, 已跑 Ns)。已退出标'需重启'。"""
+        repl_marks = []
         with self._lock:
             now = time.time()
             lines = []
@@ -150,13 +174,23 @@ class ServiceManager:
                     lines.append(f"  {name}(运行中, pid={e['proc'].pid}, 已跑 {up}s)")
                 else:
                     lines.append(f"  {name}(已退出 rc={rc}, 需重启)")
+                # repl: 前缀服务（用户提案 2026-10-08：MCP 式请求-响应协议）——每步投影
+                # 自动发 /status 收一行摘要（L=watch_tail 截取前 L 行）；5s 节流缓存。
+                # 潜规则：repl: 服务的 stdout 仅用于协议响应，过程日志写文件不污染 stdout。
+                if name.startswith("repl:") and rc is None and int(e.get("watch_tail") or 0) > 0:
+                    repl_marks.append((len(lines), name))   # 占位，锁外轮询填充
+                    lines.append(None)
                 # watch_tail>0（用户提案 2026-10-07）：附日志尾部 N 行——每步投影可见服务实况
                 # （零协议：不要求服务实现 /status，stdout 日志 deque 天然即状态）
                 wt = int(e.get("watch_tail") or 0)
-                if wt > 0:
+                if wt > 0 and not name.startswith("repl:"):
                     tail = list(e["logs"])[-wt:]
                     lines.extend("    │ " + l for l in tail) if tail else lines.append("    │ (暂无输出)")
-            return lines
+        # 锁外做 repl 协议轮询——send/_repl_status 自己要拿 _lock（Lock 不可重入，锁内调用会死锁）
+        for pos, name in repl_marks:
+            line = self._repl_status(name, self._services.get(name, {}), time.time())
+            lines[pos] = ("    │ " + line) if line else None
+        return [l for l in lines if l is not None]
 
     def list(self) -> str:
         with self._lock:

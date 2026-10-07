@@ -254,6 +254,16 @@ reg.update_status(id, "running")                    # ⑤ 标占用（锁外！�
 
 **关联**：[agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用语义由来）· [复活路径 NameError](#复活路径-nameerror--wiki-updater-多实例根因修复2026-08-26commit-6d396af)（复活分支上一课）· [AgentRegistry 与 answer 路由](#agentregistry-与-answer-路由修复2026-08v0182-正式发布)（registry 锁与消费端）。
 
+## 子 Agent 步数上限三级取值：派活 max_steps → 声明 max_steps → 默认 50（2026-10-07，用户提案）
+
+- **背景**：Agent 基座 `max_steps` 默认 50（src/agent.py），到步数即打「⚠️ 达到最大步数，强制收尾」——多文件重构 / 大范围测试类长任务经常不够，unity-tester_2 被 50 步强制收尾误伤是直接导火索（用户提案 2026-10-07）。
+- **三级取值链**（src/multiagent.py 构造 SubAgent 处：`int(max_steps or meta.get("max_steps") or 50)`）：
+  1. **派活参数**：`agent_prompt(max_steps=N)` 仅本次任务生效（默认 0=不指定）；长任务建议显式给大（如 150）
+  2. **声明级**：agent yml 写 `max_steps:`，对该 Agent 的所有派活生效
+  3. **兜底 50**
+- 主 Agent 自身步数早有 `/config max_steps` 运行时通道（src/commands.py）；本提案把同等能力下放到子 Agent 的声明与派活两侧。
+- 随 [v0.33.0](../releases/v0.33.0.md) 发布。
+
 ## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
 
 > ⚠️ **2026-10-06 该工具已退役**（用户裁定：DSL 字段越来越多，参数面板跟不上声明演进——`hidden=True` 退出投影，工具箱保留向后兼容）：官方创建路径改为**直接 `write_file` yml**，见下节 [create_agent 退役](#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)。

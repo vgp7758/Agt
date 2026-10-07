@@ -60,3 +60,7 @@
 
 - **编辑页两洞补齐（2026-10-06 · 二，commit 2c63133，用户实锤）**：用户发现 `/agents#edit=` 保存有两个洞——①声明**仍落平铺**（目录化只改了读侧/扫描侧，写侧 `_dump_agent_yml` 漏网）；②页面无 services 字段，`services:` 声明**一保存就丢**。修复：保存写入路径改目录形态 `<name>/<name>.yml + md`；file 项改**扫描原位替换**（首项 seg:system 式声明不再长出双 file）；编辑页新增 services textarea（每行 `名: 命令`，GET 行式回显 / PUT 解析回列表）；POST 判重认目录形态。冒烟五场景全绿，site-packages 已同步，/restart 生效。详见 [agents-admin](features/agents-admin.md)
 
+## 快速事实增补（2026-10-08 · v0.33.0 发布：10-07 全天 41 笔提交打包上线）
+
+- **v0.33.0 发布（2026-10-08，版本提交 `371b18b` + tag）**：版本 0.32.1 → 0.33.0，10-07 全天 41 笔提交一次打包。五大块：①**服务系统协议化**（`repl:` 前缀 MCP 式请求-响应 + 每步投影自动 /status + watch_tail 日志尾投影 + service_stdin expect + start 覆盖已退出同名）；②**Agent 体系增强**（coder-py/coder-cs 语言变体、子 Agent 步数三级取值 max_steps、agent_ask 纯问答、pv-producer 制片 Agent、agent_watch 单例接管）；③**交互修复·target 路由三部曲**（模型下拉/斜杠命令/文本插话全按本页签交互对象路由 + 插话死信兜底 + plan 面板刷新恢复）；④**上下文工程**（生成图自动可视伪造 read_file 对、before_turn 钩子只服务人类直输轮）；⑤**WebUI**（服务看板四按钮、定时任务 CRUD 弹窗、_main_ 三态保存、human_step/survey 只读化）。发布轮收编 pv-producer 自改 yml（`85ecf45`——它自己把模型切 proxy 避 glm-official 配额窗口，子 Agent 声明自治首例）；twine 一次 rc=0（对照 v0.30.1 TLS 阻断轮）。详见 [v0.33.0 发布记录](releases/v0.33.0.md)
+

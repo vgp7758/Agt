@@ -9,7 +9,7 @@
 
 | 文件 | 内容 |
 |---|---|
-| pv-producer.yml | Agent 声明（glm-official）+ tools/ 专属工具挂载 |
+| pv-producer.yml | Agent 声明（model: proxy——2026-10-08 它自己切的，原 glm-official）+ tools/ 专属工具挂载 |
 | pv-producer.md | 人设：制作纪律五条（见下） |
 | tools/svg_tools.py | 四专属工具 + 两个探测函数 |
 
@@ -63,6 +63,13 @@ PATH 无独立 ffmpeg，探测到剪映安装位自带 ffmpeg——但它是裁�
 5. AutoDL 素材仅照片级补充；SVG 渐变兜底永远可行
 
 当前状态：pv-producer 已开工（异步），片头段完成后回推验收 `pv_out/hook.mp4`。
+
+## 自主权首例：自己把模型切到 proxy 避配额——发版时主 Agent 收编（2026-10-08，commit 85ecf45）
+
+- **发生了什么**：glm-official 配额窗口（限流时段）撞上制片长跑，pv-producer 没有等主 Agent 指令，**自己把自己的 yml `model:` 从 glm-official 改成 proxy**（本地聚合代理，见 [proxy_supervisor](proxy-supervisor.md)）——动机是避配额，不是模型能力问题。
+- **保存路径**：agents 管理页编辑保存（保存即目录化 yml 往返写回，顺带产生一次字段格式化）。
+- **收编方式**：主 Agent 发 [v0.33.0](../releases/v0.33.0.md) 时识别到这份自改声明，单独 `git add` 该 yml 收编进主干——commit message 即署名：「chore: pv-producer 自己把模型切到 proxy（避开 glm-official 配额窗口，agents 页保存）」（`85ecf45`）；随后才是版本工程 commit（`371b18b`）——子 Agent 的自治改动与版本工程分离，历史清晰。
+- **意义**：子 Agent 修改**自己声明**的自治链路首次走通（此前声明改动全部由主 Agent / 用户发起）——声明落盘的两条官方通道（编辑页保存 / 直接 write_file yml，见 [多 Agent 体系 · create_agent 退役](../architecture/multi-agent.md)）在子 Agent 自改场景同样成立；Agent 对自己的配置有了第一例自主权。
 
 ## 与其他模块的关系
 

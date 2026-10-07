@@ -2858,6 +2858,20 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 await _send(ws, {"type": "system", "text": out})
             return
         if text:
+            # target 路由（2026-10-07 用户实锤：子 Agent 页面发的"继续"被插话给了主 Agent）：
+            # 插话按本客户端交互对象路由——子 Agent 的 run 同样在步边界消费 pending。
+            _tgt = (client or {}).get("target", "_main_")
+            _tgt_ag = None
+            if _tgt != "_main_":
+                _reg2 = getattr(agent, "registry", None)
+                _e2 = _reg2.lookup(_tgt) if _reg2 else None
+                if _e2 is not None and _e2.agent is not None:
+                    _tgt_ag = _e2.agent
+            if _tgt_ag is not None:
+                _tgt_ag.queue_user_message(text)
+                await _send(ws, {"type": "system", "transient": True,
+                                 "text": f"📥 已排队并将在下一步注入 '{_tgt}' 的当前任务"})
+                return
             # 真态兜底（2026-10-07·20048 实锤）：前端 busy 变量可能陈旧（WS 断线重连/事件丢失），
             # 导致空闲态的消息走了插话通道——入 pending 后无下一轮消费 = 死信（"插话已入队"
             # 却始终不开新轮）。后端权威判定：agent 实际空闲 → 直接转 work_q 开新轮（同正常发送）。

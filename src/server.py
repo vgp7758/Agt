@@ -1850,6 +1850,63 @@ def _agent_safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", Path(name).name).strip("_")
 
 
+@app.post("/api/sched_upd")
+async def api_sched_upd(body: dict):
+    """定时任务部分更新（用户提案 2026-10-07）：{name, every_seconds?, at?, deadline?, repeat?, message?}。
+    每次触发/下次触发时刻/截止/循环/消息——未提供的字段保持原值。"""
+    ag = _state.get("agent")
+    if ag is None:
+        return {"ok": False, "error": "Agent 未就绪"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    kw = {}
+    for k in ("every_seconds", "at", "deadline", "message"):
+        if body.get(k) is not None:
+            kw[k] = body[k]
+    if body.get("repeat") is not None:
+        kw["repeat"] = bool(body["repeat"])
+    msg = ag.scheduler.reschedule(name, **kw)
+    return {"ok": msg.startswith("✅"), "text": msg}
+
+
+@app.post("/api/sched_add")
+async def api_sched_add(body: dict):
+    """手动添加定时任务（抽屉弹窗表单）：{name, every_seconds?, at?, deadline?, repeat?, message?}。"""
+    ag = _state.get("agent")
+    if ag is None:
+        return {"ok": False, "error": "Agent 未就绪"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    at = str(body.get("at") or "").strip()
+    msg_text = str(body.get("message") or "")
+    deadline = float(body.get("deadline") or 0)
+    repeat = bool(body.get("repeat", True))
+    if at:
+        msg = ag.scheduler.add_interval_at(name, float(body.get("every_seconds") or 60), at,
+                                           message=msg_text, repeat=repeat, deadline=deadline)
+    elif body.get("every_seconds"):
+        msg = ag.scheduler.add_interval(name, float(body["every_seconds"]), message=msg_text,
+                                        repeat=repeat, deadline=deadline)
+    else:
+        return {"ok": False, "error": "every_seconds 与 at 至少填一个"}
+    return {"ok": msg.startswith("✅"), "text": msg}
+
+
+@app.post("/api/sched_del")
+async def api_sched_del(body: dict):
+    """取消定时任务（抽屉弹窗删除钮）。"""
+    ag = _state.get("agent")
+    if ag is None:
+        return {"ok": False, "error": "Agent 未就绪"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    msg = ag.scheduler.cancel(name)
+    return {"ok": not msg.startswith("["), "text": msg}
+
+
 @app.get("/api/svc_log")
 async def api_svc_log(name: str):
     """服务完整日志页（2026-10-06 用户提案）：新页签查看，5s 自刷新，全量环形缓冲。"""

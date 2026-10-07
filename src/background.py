@@ -368,6 +368,44 @@ class Scheduler:
         when = datetime.fromtimestamp(fire).strftime("%m-%d %H:%M:%S")
         return f"✅ 定时任务「{name}」已加：首次 {when}（每 {seconds:g}s {'循环' if repeat else '单次'}，相位 {s}）"
 
+    def reschedule(self, name, every_seconds=None, at=None, deadline=None,
+                   repeat=None, message=None) -> str:
+        """部分更新已存在的定时任务（用户提案 2026-10-07：抽屉可改下次触发/every_seconds/
+        deadline 等）——未提供的字段保持原值；id 不变（进行中的引用不断）。"""
+        with self._lock:
+            s = next((x for x in self._schedules.values() if x.name == name), None)
+            if s is None:
+                return f"[无此任务] {name}"
+            if every_seconds is not None:
+                sec = float(every_seconds)
+                if sec <= 0:
+                    return "[every_seconds 必须 > 0]"
+                s.spec = sec
+                s.kind = "interval"
+                s.at_origin = datetime.now().isoformat(timespec="seconds")   # 新相位锚
+                s.next_fire = self._phase_next(s.at_origin, sec)
+            if at is not None and str(at).strip():
+                s.at_origin = str(at).strip()
+                if s.kind == "interval" and s.spec > 0:
+                    s.next_fire = self._phase_next(s.at_origin, s.spec)
+                else:
+                    try:
+                        s.kind = "at"
+                        s.spec = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+                        s.next_fire = s.spec
+                    except Exception as e:
+                        return f"[时间格式错误] {e}"
+            if deadline is not None:
+                s.deadline = float(deadline or 0)
+            if repeat is not None:
+                s.repeat = bool(repeat)
+            if message is not None:
+                s.message = str(message)
+        self._persist()
+        return (f"✅ 「{name}」已更新：下次触发 "
+                f"{datetime.fromtimestamp(s.next_fire).strftime('%m-%d %H:%M:%S')}"
+                f"{('，每 ' + str(s.spec) + 's') if s.kind == 'interval' else ''}")
+
     def export_state(self) -> list:
         """序列化全部任务定义（capture_runtime_state 收集用——2026-09-18 修：extra_state 是
         provider 覆盖式重建，_persist 直写的值会被任意落盘抹掉；真源=本方法从 _schedules 收）。"""

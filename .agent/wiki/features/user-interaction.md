@@ -531,6 +531,61 @@ if text:
 
 **生效方式**：引擎层（src/server.py），需 `/restart`。
 
+## 插话 target 路由：子 Agent 页面发的"继续"被插话给主 Agent（2026-10-07，用户实锤，commit 42f70e3）
+
+> src/server.py（`insert_message` WS 分支）。用户实锤（2026-10-07）：「我在 sub-agent 页面发送的`继续`被以插话发送给了主 agent」——页签已切到子 Agent，插话却注入了主 Agent 的 pending。
+
+**根因**：`insert_message`（WS 插话通道）此前**恒写主 Agent 的 pending**——`agent.queue_user_message(text)` 里的 `agent` 永远是主 Agent 实例，完全没有 target 感知：
+
+```
+子 Agent 页面发「继续」→ 前端 busy 判定 → 插话通道 insert_message
+  → agent.queue_user_message(text)   ← 这个 agent 永远是主 Agent
+```
+
+至此三条消息通道里两条早有 target 路由：**正常发送**（2026-08 [多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b) 改造即有，直达子 Agent work_q）、**斜杠命令**（同日 [模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)，`_target_agent` 顺带覆盖 /model / /hold 等）——**唯独文本插话一直漏着**，本节补齐。
+
+**修复**（`if text:` 块加 target 解析，commit `42f70e3`）：
+
+```python
+if text:
+    # target 路由（2026-10-07 用户实锤：子 Agent 页面发的"继续"被插话给了主 Agent）：
+    # 插话按本客户端交互对象路由——子 Agent 的 run 同样在步边界消费 pending。
+    _tgt = (client or {}).get("target", "_main_")
+    _tgt_ag = None
+    if _tgt != "_main_":
+        _reg2 = getattr(agent, "registry", None)
+        _e2 = _reg2.lookup(_tgt) if _reg2 else None
+        if _e2 is not None and _e2.agent is not None:
+            _tgt_ag = _e2.agent
+    if _tgt_ag is not None:
+        _tgt_ag.queue_user_message(text)
+    # …（后半段主 Agent 原路径不变，含真态兜底）
+```
+
+三态语义：
+
+| client.target | 行为 |
+|---|---|
+| `_main_`（缺省） | 原路径不变——含 [插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9) 的真态兜底（空闲转 work_q 开新轮） |
+| 子 Agent 且 registry 有实例（`e.agent is not None`） | `_tgt_ag.queue_user_message(text)`——进**它自己的** pending；busy 则步边界消费（`message_injected` 当步可见 / 赶不上则轮后注入），不再旁落主 Agent |
+| 子 Agent 但 registry 无实例（重启后磁盘恢复条目 `e.agent is None` / 已注销） | `_tgt_ag=None` → 落回主 Agent 原路径，消息不丢 |
+
+子 Agent **不在跑**时的插话语义：消息排队在它自己的 pending 里，等它下次被派活开轮时**首先消费**——比旧行为（插进主 Agent、污染主上下文且子 Agent 永远看不到）语义正确且不丢。
+
+**三通道 target 路由全景**（至此补齐，页签间互不串台——在子 Agent 页面发的任何消息都只进它的上下文）：
+
+| 通道 | 路由点 | 补齐 |
+|---|---|---|
+| 正常发送（空闲 / answer 后跟进） | `_handle_user_input` 按目标 work_q | 30ac45b（2026-08 即有） |
+| 斜杠命令（/model / /hold 等） | `_target_agent(client, agent)` dispatch | 38b3b46（2026-10-07 早） |
+| 文本插话（busy 期间 insert_message） | `if text:` 按 client.target 选实例 | **本轮 42f70e3** |
+
+**与上节（1c0d2f9）的关系**：同通道（insert_message）同日姊妹修复——上节修「判错**时机**」（空闲态消息被当插话 → 死信），本轮修「判错**对象**」（子 Agent 页面的插话插给主 Agent）；上节给出的存量死信救济动作恰是「随手发一条『继续』」——用户照做时踩中本 bug，救济消息插错了门。两条修完后该救济动作才真正点到正确的门。
+
+**生效方式**：引擎层（src/server.py），需 `/restart`；commit `42f70e3` 已推送 + site-packages 已同步（20048 实例 restart 后生效）。
+
+**关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义总纲——本节把最后一条通道纳入）、[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（命令侧姊妹修复，`_target_agent` 模式参照）、[插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)（同通道时机侧姊妹修复）、[多 Agent 体系](../architecture/multi-agent.md)（`registry.lookup` 与 Agent 实例挂载——`e.agent is None` 的磁盘恢复条目形态）。
+
 ## 后台通知 wake 语义：service_exit 不再独立触发轮（2026-08，v0.19.2）
 
 **修复前（套娃循环）**：后台事件通知（如 `service_exit`）各自**独立唤醒一轮**——这轮没有用户消息、只有通知本身，但 before_turn 钩子照常全量跑一遍（空转），answer 也照常生成；若钩子/流程本身又产生后台事件（如 async 钩子完成、后台任务退出），则再次唤醒——「一通知一轮、一轮又一通知」，循环套娃，token 在无人对话时持续燃烧。

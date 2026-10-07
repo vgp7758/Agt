@@ -357,6 +357,8 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **补记（2026-10-08，commit 174131f）**：`repl:` 前缀服务**不适用本模式**——stdout 只归协议响应（`/status` 一行摘要），`status_lines` 改走每步自动协议轮询（`wt > 0 and not name.startswith("repl:")` 显式豁免尾部模式），见 [repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f)。初版「放弃 stdin /status」的裁定由此部分回摆：**不强迫、但也不禁止**——普通服务继续零协议走日志尾部，愿意实现 `/status` 的 repl: 服务升级为协议摘要。
 
+**豁免条件随判定扩展升级（2026-10-08 同日续 `c0e9768`）**：repl 判定已从「命名前缀」扩为 **`repl:` 前缀 或 交互自动 `repl_seen`**（任何服务被 `service_stdin` 发过一次参数即打标）——上文 `wt > 0 and not name.startswith("repl:")` 应读作「解析后的 repl 判定」：被 stdin 交互过的服务同样自动让位日志尾部模式，改投影 `/status` **前 N 行（≤5）**。详见 [repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f) 章节后记。
+
 **关联**：[image-feed](image-feed.md)（姊妹特性：每步实时画面——image_feed 走 tail_images 画面通道、watch_tail 走文本通道，帧服务可同用）· [agents-admin · FUNC_REGISTRY](agents-admin.md)（bg_services() 装配函数）· [本页 on_exit_wake](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（start_service 的另一族逐服务参数）。
 
 ## service_stdin 往返语义：expect 正则 + timeout——写入后等 stdout 响应才返回（2026-10-07，用户提案，commit b1fbfe6）
@@ -394,9 +396,11 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **命名潜规则**：服务名带 **`repl:` 前缀** = REPL 协议服务。约定（已写进 `start_service` docstring 即提示词）：
 
+> ⚠️ 本节两条口径（判定=**仅** `repl:` 前缀；摘要=**首行**）已在同日被本章末的[后记](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f)扩展为「**前缀 或 交互自动 `repl_seen`**」+「**前 N 行（≤5）**」——以该后记为准。
+
 - stdout **仅用于协议响应**——`/status` 返回**一行摘要**（多行信息压成一行）；
 - 过程日志写文件（`--log xxx` 或服务内自行落盘），**不污染 stdout**；
-- 配 `watch_tail>0`：每步投影的 bg_services 段自动发 `/status` 并投影**首行摘要**（5s 节流）。
+- 配 `watch_tail>0`：每步投影的 bg_services 段自动发 `/status` 并投影摘要（5s 节流）——首版取**首行**，后记扩为**前 N 行（≤5）**。
 
 **机制**（src/background.py + src/background_tools.py，commit `174131f`，site-packages 已同步）：
 
@@ -424,6 +428,53 @@ service_stdin(name, message, expect="", timeout=10.0)
 **生效**：commit `174131f` 已推送 + site-packages 已同步，`/restart` 后生效。`repl:` 是启动期命名约定——常驻业务服务（如 unity-frame）起名加前缀 + 实现 `/status`，每步投影即得协议级实时状态。
 
 **关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同段两种状态投影：watch_tail=stdout 日志尾部零协议 / repl:=协议摘要，repl: 服务自动豁免尾部模式）· [service_stdin](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（复用其 expect 往返机制）· [multi-agent · services 依赖声明](../architecture/multi-agent.md)（yml services 段落盘处）· [image-feed](image-feed.md)（每步实况注入家族）。
+
+### 后记：交互即判定（repl_seen）+ 多行 /status 静默窗口——前 5 行封顶（2026-10-08 · 二，用户提案，commit c0e9768）
+
+**动机（用户提案）**：「调用了 `service_stdin` 向服务发送参数之后，也可以判定这个服务是 repl 的，所以下一轮投影时的 bg_services 里该服务可以拿一下 `/status`，比如前 5 行输出」。两点升级：① 判定不再只靠起名，**交互即判定**；② 输出不只是首行，**要前 N 行**。
+
+**改动一：判定双路（或关系）**
+
+```python
+# src/background.py status_lines()
+if (name.startswith("repl:") or e.get("repl_seen")) and rc is None:
+    repl_marks.append((len(lines), name))   # 占位，锁外轮询填充
+```
+
+`ServiceManager.send()` **成功写入 stdin**（`stdin.write/flush` 未抛 BrokenPipeError/OSError）即给条目打 `repl_seen = True`——**能接 stdin 的即 REPL 语义**。任何普通服务只要被 `service_stdin` 发过一次参数，下轮投影自动升级为协议服务，**不用起名、不用改 yml**。
+
+**改动二：多行 /status（静默窗口收集）**
+
+`_repl_status` 从「expect 往返挑首个非空行」改为**多行收集**：
+
+| 项 | 语义 |
+|---|---|
+| 发送 | **直操 stdin/logs，不经 `send`**——规避 `_lock` 不可重入（原章节锁外轮询）+ 嵌套等待 |
+| 收集 | 发 `/status` 后等**静默窗口**：0.4s 无新行 = 响应收完；**2s 封顶** |
+| 行数 | 取前 **N 行**（N = 该服务 `watch_tail`，**上限 5 行**） |
+| 渲染 | 每行 `│ ` 缩进缀在状态行下；`> ` 回显行过滤（含首行摘要判定） |
+| 失败 | 超时/异常 → 空摘要（不投影、不炸投影） |
+
+**形态对照**：
+
+```
+  auto-repl(运行中, pid=20792, 已跑 1s)          ← 交互前：只有状态行
+  auto-repl(运行中, pid=20792, 已跑 1s)          ← service_stdin 交互一次后（自动判定生效）：
+    │ STATUS ok uptime=120
+    │ tasks=3 running=1
+    │ fps=24 queue=0
+```
+
+**配套两处**：
+
+- `status_lines()` 的 `watch_tail` **日志尾部模式排除 repl 服务**（防同份输出渲染两遍）——判定扩展后该豁免条件随之升级为「解析后的 repl 判定」（`repl:` 前缀 **或** `repl_seen`）；原章节 watch_tail 正文补记里写的 `name.startswith("repl:")` 按此理解；
+- `start_service` docstring（提示词）同步改写：两种判定并列为或关系 + `/status` 口径（**前 5 行封顶、多行请压紧**）+ REPL 约定（一次 stdin 对一次 stdout、过程日志写文件不污染 stdout）+ yml 冒号键写法警示（原样保留）。
+
+**冒烟（真跑）**：无前缀的普通服务 `auto-repl`，`service_stdin("auto-repl", "hello")` 交互一次 → 下轮 `status_lines` 自动带上 3 行 `/status` 输出 ✅。（同轮脚本里那个 ❌ 是断言写成「数列表元素」的误报——三行 `│` 全部渲染出来了。）
+
+**生效**：commit `c0e9768` 已推送 + site-packages 已同步，`/restart` 后生效。
+
+**关联**：原章节（命名前缀路，判定收敛为「前缀 **或** `repl_seen`」）· [service_stdin 往返语义](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（`repl_seen` 打标点 = 发射端；本节的收集语义同源）· [watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（N 行上限来源 + 尾部模式互斥）。
 
 ## start_service 撞死服务被拒：stop 保留 entry × start 只查登记——stop→start 重启路径断裂（2026-10-08，20048 实锤，commit 839f445）
 

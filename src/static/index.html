@@ -2839,7 +2839,7 @@ async function schedDel(name){
   if(d.ok){ toast('🗑 '+(d.text||'已取消')); renderSvcDash(); }
   else toast('❌ '+(d.text||d.error||'失败'), false);
 }
-function renderSvcDash(){
+async function renderSvcDash(){
   const d = await _dashFetch();
   if(!d) return;
   const list = document.getElementById('svcList');

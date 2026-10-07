@@ -6,17 +6,30 @@ from pathlib import Path
 
 
 def _ffmpeg() -> str:
-    """探测 ffmpeg：PATH 优先，其次常见安装位（含剪映自带——够用且免安装）。"""
+    """探测 ffmpeg：PATH 优先；否则在候选位里挑【带 libx264】的构建（画质/兼容最佳）。
+    候选含 imageio_ffmpeg 随包二进制与常见安装位（含剪映自带）。
+    （剪映版 ffmpeg 无 libx264 且其 h264_mf 对 1080p PNG 序列会段错误——2026-10-08 实锤）"""
     w = shutil.which("ffmpeg")
     if w:
         return w
+    cands = []
+    try:
+        import imageio_ffmpeg
+        cands.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
     for pat in (r"D:\Programs\JianyingPro\*\ffmpeg.exe", r"C:\ffmpeg*\bin\ffmpeg.exe",
                 r"C:\Program Files\ffmpeg*\bin\ffmpeg.exe",
                 r"C:\Users\vgp77\AppData\Local\Microsoft\WinGet\**\ffmpeg.exe"):
-        hits = glob.glob(pat, recursive=True)
-        if hits:
-            return hits[0]
-    return ""
+        cands += glob.glob(pat, recursive=True)
+    for c in cands:                      # 优先带 libx264 的构建
+        try:
+            r = subprocess.run([c, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30)
+            if "libx264" in r.stdout:
+                return c
+        except Exception:
+            continue
+    return cands[0] if cands else ""
 
 
 def _vcodec(ff: str) -> str:
@@ -69,11 +82,14 @@ def pngs_to_video(png_dir: str, out_mp4: str, fps: int = 24, audio: str = "") ->
     d = Path(png_dir); out = Path(out_mp4); out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [_ff, "-y", "-framerate", str(fps), "-i", str(d / "frame_%04d.png")]
     _vc = _vcodec(_ff)
-    if audio:
-        cmd += ["-i", audio, "-c:v", _vc, "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-shortest", "-movflags", "+faststart"]
+    if _vc == "libx264":                 # 深色渐变防色带，crf 18 视觉近无损
+        cmd += ["-c:v", _vc, "-crf", "18", "-preset", "medium"]
     else:
-        cmd += ["-c:v", _vc, "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        cmd += ["-c:v", _vc]
+    if audio:
+        cmd += ["-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart"]
+    else:
+        cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     cmd.append(str(out))
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     return f"✅ {out}（{out.stat().st_size//1024}KB）" if r.returncode == 0 else f"[ffmpeg 失败] {r.stderr[-400:]}"

@@ -54,6 +54,10 @@ desktop-operator 四件（yml + md 人设 + desktop_tools.py + image_feed_poc.py
 
 agents 管理页类型下拉 `ACT_TYPES` 增 `image_feed`（src/static/agents.html）——装配动作可直接选型，值 = 画面服务 URL。见 [Agent 管理页](agents-admin.md)。
 
+## 姊妹特性：bg_services watch_tail——服务日志尾部每步投影（2026-10-07，commit 9e1d523）
+
+bg_services 装配段同日增 `start_service(watch_tail=N)`：服务 stdout 日志尾部 N 行随每步投影注入——与本段同属「每步实况注入」家族。分工：本段走**画面**通道（tail_images，vision 投影，看帧服务的画面）；watch_tail 走**文本**通道（零协议，stdout 日志即状态，看服务运行实况）——帧服务两者可同用。详见 [background-scheduler · watch_tail](background-scheduler.md)。
+
 ## 注意事项
 
 - 每步一帧有 token 代价：服务端 1280 宽 + JPEG q70 是经济档，更高清改启动第二参（MAX_W）

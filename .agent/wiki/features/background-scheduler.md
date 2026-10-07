@@ -281,6 +281,37 @@ Scheduler._schedules（真源）
 
 与 `service_logs` 工具（LLM 侧，JSON 给模型消费）的分工：同源数据、两种消费端——本端点面向人眼（独立页签 + 自刷新），工具面向模型。
 
+## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
+
+**动机**：image_feed 段已让 Agent 每步看到实时画面（[姊妹特性](image-feed.md)），而后台服务的实况还停在「按需查」——状态行只有 pid + 已跑时长，stdout 里的运行实况每步投影不可见，想知道就得多调一次 `list_services`/`service_logs`。用户提案：仿 image_feed 的每步注入思路，让 bg_services 装配段也带上服务状态信息。
+
+**设计取舍：零协议，放弃 stdin `/status`**：初版设想「`start_service` 带行数参数，投影前向服务 stdin 传 `/status`、取返回前 N 行」——要求每个服务配合实现协议、且必须是 REPL 型常驻 stdin，负担大不通用。最终按用户中途补充方向裁定：**stdout 日志 deque 天然即状态**——服务只要正常打日志（谁不打呢），`watch_tail` 一参数即达；零协议、零改造，存量服务无需任何配合。
+
+**机制**（src/background.py + src/background_tools.py，commit `9e1d523`，site-packages 已同步）：
+
+| 触点 | 改动 |
+|---|---|
+| `ServiceManager.start()` | 新参 `watch_tail: int = 0`；服务条目登记该值（`max(0, int(...))` 负数防御） |
+| 装配段 `func:bg_services()` | 每服务状态行下：`watch_tail>0` 时附 `list(logs)[-N:]` 日志尾部（`│` 前缀缩进行）；=0 只状态行——**存量消费方零感知** |
+| `start_service` 工具 | schema 新参 `watch_tail`（int），docstring 即提示词：关键服务（帧服务/监控器）设 3~5，每步投影可见实况；透传 `svc.start()` |
+
+投影形态示例：
+
+```
+【后台服务状态】当前服务：
+  watch-demo(运行中, pid=xxx, 已跑 Ns)
+    │ log line 4
+    │ log line 5
+    │ log line 6          ← watch_tail=3 的服务附日志尾部三行
+  quiet-demo(运行中, pid=yyy, 已跑 1s)   ← 未 watch 的服务只状态行
+```
+
+**冒烟验证**：watch-demo（watch_tail=3）正确渲染日志尾部三行；quiet-demo（未 watch）无尾部——**按服务粒度 opt-in** ✓。
+
+**生效方式**：引擎层改动，`/restart` 后生效；`watch_tail` 是启动期参数（`start_service` 时按服务声明），需要看实况的关键服务在启动时带上即可。
+
+**关联**：[image-feed](image-feed.md)（姊妹特性：每步实时画面——image_feed 走 tail_images 画面通道、watch_tail 走文本通道，帧服务可同用）· [agents-admin · FUNC_REGISTRY](agents-admin.md)（bg_services() 装配函数）· [本页 on_exit_wake](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（start_service 的另一族逐服务参数）。
+
 ## start_service 的 on_exit_wake：退出唤醒策略（2026-08-30 策略化 → 2026-09-14 自定义指令 → 2026-09-23 默认翻转 notify）
 
 服务退出时是否唤醒 Agent，由启动参数逐服务声明；策略判定与通知注入在 src/agent.py `_on_service_exit`。

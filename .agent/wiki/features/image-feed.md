@@ -31,8 +31,25 @@ services:
 
 - **必须声明在 steps 段之后**（区3 尾部）：段产出的哨兵由 merge 桶抽取进 `tail_images`；写进 system run 的会被 warning 跳过（「image_feed 项应声明在 steps 段之后」）
 - base64 **不进统计文本桶**（token 统计不含图）
-- 组装层把 data URL 变 `image_url` 块：末条 user → content **数组化追加**；末条 assistant → **独立 user 消息承载**（部分端点不允许 assistant 挂图）
+- 组装层把 data URL 变 `image_url` 块，图块前统一附**帧前说明块** `[image_feed · 实时画面 · HH:MM:SS]`：末条 user → content **数组化追加**（原内容保序在前，说明块+图块跟后）；末条 assistant → **独立 user 消息承载**（部分端点不允许 assistant 挂图，说明块打头）——详见下节
 - **瞬态语义**：组装层注入，不落 events.jsonl / step 存档；每步求值 = 每步最新帧
+
+## 帧前说明块：[image_feed · 实时画面 · HH:MM:SS]（2026-10-08，用户裁定「带上吧」）
+
+image_url 块裸注入时模型可能把这帧误当成自己历史操作的截图——注入前统一补一个**文字说明块**（src/session.py 组装层 tail_images 通道，2026-10-08 落地）：
+
+```json
+{"role": "user", "content": [
+  {"type": "text", "text": "[image_feed · 实时画面 · 10:52:31]"},
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+]}
+```
+
+- **两条承载路径同改**：末条 user → content 数组化（原内容保序在前）+ 说明块 + 图块；末条 assistant → 独立 user 消息，说明块打头 + 图块
+- **浅拷贝纪律**：末条 user 分支 `{**_last}` 复制后重组 content——绝不就地改共享引用（该消息对象被投影多段共享）
+- 说明块带**捕获时刻**（`time.strftime('%H:%M:%S')`），模型可区分新旧帧、明确知道这是 image_feed 喂的实时画面
+- token 代价一行文字可忽略；口径与失联/空帧降级行（`[image_feed 不可用：...]`）一致
+- 瞬态语义不变：不落 events.jsonl / step 存档
 
 ## 画面服务：tools/image_feed_poc.py
 

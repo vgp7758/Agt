@@ -112,7 +112,8 @@ sessions/<主线ts>/
 
 - 37 项场景测试全绿（v1 28 项含写隔离字节级比对、四场景定位链；v2 加场景⑥ 链式嵌套分叉：`branch_of` 相对路径 + `display_chain` 完整链 + 二级支线 recall 跨级命中主线与一级支线内容）
 - L2 隔离实跑（regr-9678）：分支实例启动 + 钩子 + react 全程无 traceback
-- commits `dc92c32`（v1）+ `b37709e`（v2 链式嵌套）已推送；site-packages 已同步（**pip 实例需 /restart 生效**）
+- commits `dc92c32`（v1）+ `b37709e`（v2 链式嵌套）+ `3598be3`（is_branch 钩子短路）已推送；site-packages 已同步（**pip 实例需 /restart 生效**）
+- **随 v0.34.0 发布（2026-10-08）**：本机制为该版主打——PyPI wheel 上传 + git tag 推送双通道全绿，`pip install -U agt-agent` 即得；9000 本机实例 restart 后生效
 
 ## 与其它模块的关系
 

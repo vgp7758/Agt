@@ -196,7 +196,7 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 > **恢复状态修正（同 commit，引擎侧防谎报）**：`_restore_subagents` 读档时 meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ busy_parse 判忙 → 同款死锁。堆积的 pending 不用手动清：/restart 后下一轮触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活消费 → 队列轮转清空（该路径已被 v0.22.1 发布轮活验收证实）。
 
-## 分支会话短路：is_branch 判据——支线干活 wiki 维护静默（2026-10-08，用户提案）
+## 分支会话短路：is_branch 判据——支线干活 wiki 维护静默（2026-10-08，用户提案，commit 3598be3）
 
 **用户提案**：wiki 维护这类事只有主线工作时才有必要——支线上的代码改动不该进主线 wiki。工作流需要拿到 session 分支元信息确认主线/支线，是支线就直接短路。
 

@@ -71,6 +71,12 @@ PATH 无独立 ffmpeg，探测到剪映安装位自带 ffmpeg——但它是裁�
 - **收编方式**：主 Agent 发 [v0.33.0](../releases/v0.33.0.md) 时识别到这份自改声明，单独 `git add` 该 yml 收编进主干——commit message 即署名：「chore: pv-producer 自己把模型切到 proxy（避开 glm-official 配额窗口，agents 页保存）」（`85ecf45`）；随后才是版本工程 commit（`371b18b`）——子 Agent 的自治改动与版本工程分离，历史清晰。
 - **意义**：子 Agent 修改**自己声明**的自治链路首次走通（此前声明改动全部由主 Agent / 用户发起）——声明落盘的两条官方通道（编辑页保存 / 直接 write_file yml，见 [多 Agent 体系 · create_agent 退役](../architecture/multi-agent.md)）在子 Agent 自改场景同样成立；Agent 对自己的配置有了第一例自主权。
 
+### 后记：第二次收编——model 升级为主+回退链（2026-10-08 · 二，commit 36057d5，随 v0.34.0）
+
+- **又自改了**：model 配置从单点 `proxy` 升级为 **`glm-official-flash` 主 + fallback 回退链 `proxy` / `deepseek` 兜底**——不再单模型裸奔（配额窗口 / 端点异常都有退路）。
+- **收编方式变化**：这次没有单独 commit——与版本号 bump 合并为一个 commit（`36057d5`「版本号 + pv-producer 模型配置」）随 v0.34.0 进版（对照首例的「收编单独 commit + 版本工程 commit 分离」）。
+- 意义：子 Agent 自改声明的**第二例**，且配置成熟度升级（单点 → 主+兜底回退链）；「编辑页保存 → 目录化 yml → 发版收编」自治链路沉淀为可复用惯例。
+
 ## 与其他模块的关系
 
 - [多 Agent 体系](../architecture/multi-agent.md)：目录形态 + tools/ 随行专属工具的实战实例

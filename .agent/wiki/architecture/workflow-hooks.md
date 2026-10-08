@@ -436,7 +436,7 @@ turn_end:
 
 **before_turn 位置 `_run_hooks` 上下文袋新增 `tier_start` 键（2026-09-20，用户提案）**：当前档起始轮号（1-based = `session._tier_boundaries` 最后边界+1；无边界=1；仅 before_turn 注入，engine 侧 `if hook == "before_turn"` 特判）。用途：检索型钩子据此过滤**当前档命中**——这些轮的完整原文已投影在上下文，召回再注入即重复；压缩档 / fc 结构摘要命中照常注入。消费端 ref `hook_ctx.tier_start`（start 声明 `hook_ctx(object)` 即整袋可取）；`tier_start=0`（引擎旧版未提供）由工作流兜底不过滤。实现与裁决语义详见 [长期记忆 · 当前档命中不重复注入](../features/longterm-memory.md#当前档命中不重复注入hook_ctxtier_start-档位边界下推2026-09-20用户提案)；`/restart` 生效。
 
-#### hook context 新键：is_branch——分支会话标记（2026-10-08，用户提案）
+#### hook context 新键：is_branch——分支会话标记（2026-10-08，用户提案，commit 3598be3）
 
 **`before_answer` / `turn_end` 钩子 context 新增 `is_branch` 键（2026-10-08，用户提案）**：`bool(getattr(session, "branch_meta", None))`——当前会话是否为分支（v2 链式分支同样带标记，见 [session 分支机制](../features/session-branching.md)）。与 tier_start 的两点差异：**跨两个钩子位置通用注入**（非单位置 engine 特判）；**直挂 context 顶层**（start 声明 `is_branch(boolean)` 即可 ref，不经 hook_ctx 袋）。首个消费者 wiki_auto_maintenance：`check_changes` 节点据此短路——支线干活 wiki 维护静默，详见 [wiki_auto_maintenance · 分支会话短路](../features/wiki-auto-maintenance.md#分支会话短路is_branch-判据支线干活-wiki-维护静默2026-10-08用户提案)。`/restart` 生效。
 

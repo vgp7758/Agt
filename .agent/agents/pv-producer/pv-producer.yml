@@ -2,9 +2,12 @@ name: pv-producer
 description: PV 制片 Agent——动态 PPT 式宣传片（SVG 动画帧 → PNG → ffmpeg 串视频 + TTS 旁白），必要时调 AutoDL
   API 生成图片/视频素材。何时调用：需要把脚本/分镜做成宣传片、演示视频时。
 tools: ''
-model: proxy
+model: glm-official-flash
 assembly:
 - file: .agent/agents/pv-producer/pv-producer.md
 - user_message
 - steps
 - recent_file
+fallback:
+- proxy
+- deepseek

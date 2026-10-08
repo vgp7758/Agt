@@ -157,10 +157,101 @@ def _cmd_list(ctx: CommandContext, args):
         first = s.get("first")
         created = s.get("created_at")
         ts_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(created)) if created else ""
-        print(f"  {name_display[:26]:<26} | {ts_str:<12} | {turns:>3}轮 | /resume {sid}")
+        mark = "⇢ " if s.get("branch") else ""
+        print(f"  {mark}{name_display[:26]:<26} | {ts_str:<12} | {turns:>3}轮 | /resume {sid}")
         if first:
             print(f"  {'':<26} | 首轮：「{first}」")
     print("-" * 72)
+
+
+def _cmd_branch(ctx: CommandContext, args):
+    """从当前主线会话的某一轮分出记忆支线（用户提案 2026-10-08）。
+    /branch <分支名> [轮号]——带主线前 N 轮的记忆做支线任务（B站视频/简历/其它repo协助等），
+    支线新轮只写分支目录，不污染主线。/resume 主线名 回主线。"""
+    from session import Session as _S, _read_events, _events_fingerprint
+    positional = _parse_args(args)[0]
+    if not positional:
+        print("用法：/branch <分支名> [轮号]   （不带轮号=继承主线全部记忆）\n"
+              "例：/branch 项目社交卡片制作        —— 带主线全部记忆做支线\n"
+              "    /branch 协助写简历 15           —— 只带主线前 15 轮的记忆")
+        return
+    # 最后一个参数是纯数字 → 轮号；其余拼成分支名（分支名可含空格）
+    keep_turns = None
+    if len(positional) >= 2 and positional[-1].isdigit():
+        keep_turns = int(positional[-1])
+        positional = positional[:-1]
+    branch_name_raw = " ".join(positional).strip()
+    branch_name = _S._sanitize_session_name(branch_name_raw)
+    if not branch_name:
+        print("❌ 分支名不能为空")
+        return
+    sess = ctx.session
+    if getattr(sess, "branch_meta", None):
+        print("❌ 当前已在分支上——v1 不支持嵌套分支。先 /resume <主线名> 回主线再分叉")
+        return
+    sdir = getattr(sess, "session_dir", None)
+    if not sdir or not (sdir / "meta.json").exists():
+        print("❌ 当前会话尚未落盘（无主线存档），先完成一轮对话再分叉")
+        return
+    main_events_p = sdir / "events.jsonl"
+    if not main_events_p.exists():
+        print("❌ 主线无 events.jsonl，无法分叉")
+        return
+    events = _read_events(main_events_p)
+    total_turns = sum(1 for e in events if e.get("event") == "turn_end")
+    if total_turns == 0:
+        print("❌ 主线还没有已完成的轮次，无可继承记忆")
+        return
+    if keep_turns is None or keep_turns >= total_turns:
+        keep_turns = total_turns   # 不带轮号=全部（≥ 则钳到全部）
+    # 轮号→行号：第 keep_turns 个 turn_end 所在行（1-based，含）
+    n_lines = 0
+    seen = 0
+    for i, e in enumerate(events, 1):
+        if e.get("event") == "turn_end":
+            seen += 1
+            if seen >= keep_turns:
+                n_lines = i
+                break
+    base_events = events[:n_lines]
+    # 建分支目录 + meta.json（基础字段拷贝自主线 meta，保真 system/窗口配置）
+    bdir = sdir / "branches" / branch_name
+    if bdir.exists():
+        print(f"❌ 分支「{branch_name}」已存在：{bdir}")
+        return
+    try:
+        bdir.mkdir(parents=True)
+        main_meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"❌ 创建分支失败：{e}")
+        return
+    import time as _t
+    bmeta = {
+        "name": branch_name,
+        "created_at": _t.time(),
+        "system": main_meta.get("system", ""),
+        "recent_window_turns": main_meta.get("recent_window_turns", 4),
+        "max_steps_per_turn": main_meta.get("max_steps_per_turn", 80),
+        "branch": {
+            "branch_of": sdir.name,
+            "inherit_lines": n_lines,
+            "base_hash": _events_fingerprint(base_events),
+        },
+        "saved_at": int(_t.time()),
+    }
+    (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"✅ 分支已创建：主线「{sess.name or sdir.name}」前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
+          f"→ 分支「{branch_name}」")
+    # 立即加载分支并切换（同 /resume 路径——toollog 合载恢复 counter，新 call_id 自然续号）
+    try:
+        new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,
+                              workspace=sess.workspace)
+    except Exception as e:
+        print(f"❌ 分支加载失败：{e}")
+        return
+    ctx.agent.set_session(new_session)
+    print(f"🌿 已切到分支：{branch_name}（基底 {keep_turns} 轮 + 分支 0 轮）")
+    print("   支线新内容只写分支目录；/resume <主线名> 随时回主线")
 
 
 def _cmd_recall(ctx: CommandContext, args):
@@ -1801,11 +1892,18 @@ def build_default_registry() -> CommandRegistry:
         "/rename 调试工作流\n"
         "/rename 我的 项目 笔记     （可含空格）")
     reg.register("resume", _cmd_resume,
-        "<name>  恢复指定会话到内存（历史/计划/自主模式/子Agent 全部恢复）",
+        "<name>  恢复指定会话到内存（历史/计划/自主模式/子Agent 全部恢复；支持分支名或 主线名/分支名）",
         "/resume 我的项目\n"
-        "/resume 20260811_013200   （用 /list 查看可用会话 ID）")
+        "/resume 20260811_013200   （用 /list 查看可用会话 ID）\n"
+        "/resume 协助写简历        （恢复分支：分支名，或 主线名/分支名 精确指定）")
     reg.register("list", _cmd_list,
-        "列出所有已保存会话（按创建时间倒序）")
+        "列出所有已保存会话（按创建时间倒序；⇢ 前缀=分支）")
+    reg.register("branch", _cmd_branch,
+        "<分支名> [轮号]  从当前主线某一轮分出记忆支线（带主线上下文做无关任务，不污染主线）",
+        "/branch 项目社交卡片制作        带主线全部记忆开支线\n"
+        "/branch 协助写简历 15           只带主线前 15 轮记忆开支线\n"
+        "  分支目录 <主线>/branches/<分支名>/；支线新内容只写分支，不稀释主线\n"
+        "  /resume <主线名> 随时回主线；/resume <分支名> 再回支线")
     reg.register("show", _cmd_show,
         "[name]  查看会话详情摘要（不传=当前会话）",
         "/show               查看当前会话摘要\n"

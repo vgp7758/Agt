@@ -573,6 +573,12 @@ class Session:
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
         self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
         self.llm_calls = LLMCallLog()  # LLM 调用流水（可观测性）：每次调用追加一条，供 /stats 聚合
+        # 分支元数据（用户提案 2026-10-08）：None=主线/普通会话；分支会话为
+        # {branch_of: 主线目录名(时间戳文件夹名), inherit_lines: 继承主线 events.jsonl 前 N 行,
+        #  base_hash: 主线前N行内容 sha256[:16]（加载时校验基底漂移）}
+        # 分支的 events/toollog/llm_calls 只写自己目录（写侧天然隔离）；读侧 Session.load
+        # 合成「主线前N行 + 分支行」完整事件流喂重放器——投影/tier/折叠引擎零感知。
+        self.branch_meta: Optional[dict] = None
         self._event_path = None   # 事件日志路径 <name>.events.jsonl；None 时事件 buffer 在内存（name 未就绪）
         self._event_buffer: list[dict] = []  # name 就绪前缓冲的事件（turn_start/step/snapshot/...）
         # —— 分档上下文投影（provider 设 max_effective_context_window 才启用，否则走原 recent_window+summary）——
@@ -3513,6 +3519,10 @@ class Session:
                 "sos_summary": self._sos_text,               # sos 叙事摘要（内容跨模型通用——切模型不重生成）
                 "saved_at": int(time.time()),
             }
+            # 分支元数据（用户提案 2026-10-08）：分支会话才写——load 时据此合成
+            # 「主线前N行 + 分支行」完整事件流重放；主线/普通会话不写该字段（零侵入）。
+            if self.branch_meta:
+                data["branch"] = self.branch_meta
             # 原子写：先写 .tmp 再 os.replace，避免 autosave(daemon 线程) 与 load 并发时读到半个文件。
             # 落盘容错（night_tasks #1）：写失败仅告警——内存 session 仍是真相，autosave/主循环不炸
             try:
@@ -3573,6 +3583,9 @@ class Session:
         s.created_at = data.get("created_at") or _ts_from_dirname(path.parent) or time.time()
         s.global_summary = data.get("global_summary", "")
         s.extra_state = data.get("extra_state", {})
+        # 分支元数据（用户提案 2026-10-08）：meta 带 branch 字段的会话 = 从某主线某一轮分出的支线
+        # （仅新文件夹结构支持——旧扁平迁移路径无主线可指）
+        s.branch_meta = data.get("branch") if (isinstance(data.get("branch"), dict) and path.name == "meta.json") else None
         s._system_ledger = data.get("system_ledger") or {"last_text": "", "count": 0, "dirty": True}
         # 投影 profile 指纹对比（用户提案 2026-09-30·对称切模型重刷）：存档与当前 profile
         # 不一致（重启期间换过模型/能力位/窗口变）→ 账本置 dirty 归一化 + 冻结渲染等惰性态
@@ -3624,15 +3637,49 @@ class Session:
                 shutil.copy2(old_toollog, toollog_path)
             if old_llm_calls.exists():
                 shutil.copy2(old_llm_calls, llm_calls_path)
+        # —— 分支基底合成（用户提案 2026-10-08，在 events 判断之前：新建分支无自己的
+        # events.jsonl，首次 load 也要有基底记忆）——meta 带 branch 字段 → 读主线前 N 行，
+        # 与分支事件流拼接后喂重放器（投影/tier/折叠引擎零感知）；写侧句柄全绑分支目录（隔离）。
+        # main_dir 定位：分支目录形如 <repo>/sessions/<主线ts>/branches/<分支名>——
+        # sessions 根 = 分支目录上三级，主线目录 = sessions 根下按 branch_of 名定位
+        # （不用相对上级——主线目录可能整体被挪动/改名，按名从根解析最稳）。
+        base_events = []
+        _lc_base = []
+        main_dir = (sdir.parents[2] / str(s.branch_meta.get("branch_of") or "")) if s.branch_meta else None
+        if s.branch_meta and main_dir:
+            main_events_p = main_dir / "events.jsonl"
+            n_lines = int(s.branch_meta.get("inherit_lines") or 0)
+            if main_events_p.exists() and n_lines > 0:
+                base_events = _read_events(main_events_p)[:n_lines]
+                fp_now = _events_fingerprint(base_events)
+                if s.branch_meta.get("base_hash") and fp_now != s.branch_meta.get("base_hash"):
+                    _LOG.warning("分支基底漂移：主线 %s 前 %d 行指纹 %s ≠ 创建时 %s（主线可能被回溯重写）——"
+                                 "继续合成基底，个别 call_id 可能解析不到",
+                                 s.branch_meta.get("branch_of"), n_lines, fp_now, s.branch_meta.get("base_hash"))
+            else:
+                _LOG.warning("分支基底缺失 %s（inherit_lines=%d）——降级为纯分支流", main_events_p, n_lines)
+            # 基底 toollog/llm_calls 合载（先主线后分支：ToolLog.load_from_jsonl 不清空 _data
+            # 为合载语义、counter 取全局最大续号；LLMCallLog 清空——先留基底再拼回）
+            main_tl = main_dir / "toollog.jsonl"
+            if main_tl.exists():
+                s.toollog.load_from_jsonl(main_tl)
+            main_lc = main_dir / "llm_calls.jsonl"
+            if main_lc.exists():
+                s.llm_calls.load_from_jsonl(main_lc)
+                _lc_base = s.llm_calls.all_records()
         if events_path.exists():
             # —— 新格式：重放事件流重建 turns（未完成 turn 进 turns，不丢弃）——
-            s.turns = _replay_events(_read_events(events_path))
+            s.turns = _replay_events(base_events + _read_events(events_path))
             if toollog_path.exists():
                 s.toollog.load_from_jsonl(toollog_path)
             s.toollog.set_path(toollog_path)
             if llm_calls_path.exists():
                 s.llm_calls.load_from_jsonl(llm_calls_path)
+                if _lc_base:
+                    s.llm_calls._records = _lc_base + s.llm_calls._records   # 基底在前、分支在后
             s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
+            if base_events and main_dir:
+                s._load_recaps(main_dir)          # 基底轮 recap（idx 与合成流对齐）
             s._load_recaps(sdir)              # 恢复各轮 recap（异步产物不进事件流，sidecar 持久化）
         elif "turns" in data:
             # —— 旧格式迁移：meta.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
@@ -3653,7 +3700,15 @@ class Session:
                                "answer_reasoning": t.answer_reasoning, "summary": t.summary})
             s.turns = old_turns
         else:
-            s.turns = []
+            # 无自己的事件流（普通新会话 / 刚 /branch 创建的分支）——分支时基底即全部记忆
+            if base_events:
+                s.turns = _replay_events(base_events)
+                s.toollog.set_path(toollog_path)      # 绑分支路径（文件不存在则 flush 基底合载，自包含）
+                s._bind_event_path(events_path)       # 绑 events 路径（分支首轮写直接落分支目录）
+                if main_dir:
+                    s._load_recaps(main_dir)
+            else:
+                s.turns = []
         s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
         # tier_boundaries 兜底（2026-09-30 回滚）：存档缺失/空（旧存档/异常）才按卫生性规则重算；
@@ -3782,6 +3837,16 @@ def _turn_from_dict(d: dict, toollog) -> Turn:
     return t
 
 
+def _events_fingerprint(events: list) -> str:
+    """基底事件指纹（用户提案 2026-10-08 分支机制）：sha256(逐事件 sort_keys 规范序列化)[:16]。
+    /branch 创建时对主线前 N 行算出写进 meta.branch.base_hash；Session.load 校验同一函数——
+    主线被 rewind 重写后指纹漂移即告警（仍继续合成，记忆尽力保留）。"""
+    h = hashlib.sha256()
+    for e in events:
+        h.update((json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 def _read_events(path) -> list:
     """流式读 events.jsonl 全部事件（每行一个 JSON）。"""
     events = []
@@ -3865,6 +3930,52 @@ def _find_session_dir_by_name(workspace, name: str) -> Optional[Path]:
     return None
 
 
+def _find_branch_dir_by_name(workspace, name: str) -> Optional[Path]:
+    """按分支名查找 branches/<分支名>/ 目录（用户提案 2026-10-08 分支机制）。
+    支持两种形式：
+      - '主线名/分支名'（或 '主线时间戳/分支名'）——精确路径形式，先定位主线再下钻；
+      - 纯分支名——遍历所有主线的 branches/，匹配分支 meta 的 name。
+    找不到返回 None。"""
+    repo_dir = _repo_sessions_dir(workspace)
+    if "/" in name:
+        main_name, br_name = name.split("/", 1)
+        main_name, br_name = main_name.strip(), br_name.strip()
+        if not main_name or not br_name:
+            return None
+        # 主线定位：meta.name 显示名 → 时间戳目录名直查
+        main_dir = _find_session_dir_by_name(workspace, main_name)
+        if main_dir is None:
+            m2 = repo_dir / main_name
+            main_dir = m2 if (m2 / "meta.json").exists() else None
+        if main_dir is not None:
+            cand = main_dir / "branches" / br_name
+            if (cand / "meta.json").exists():
+                return cand
+        return None
+    # 纯分支名：遍历各主线的 branches/（重名取最新创建的——分支名建议全局唯一）
+    found = None
+    found_ct = 0
+    for ts_dir in repo_dir.iterdir():
+        broot = ts_dir / "branches"
+        if not broot.is_dir():
+            continue
+        for bd in broot.iterdir():
+            if not bd.is_dir():
+                continue
+            mp = bd / "meta.json"
+            if not mp.exists():
+                continue
+            try:
+                bdata = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if bdata.get("name") == name:
+                ct = bdata.get("created_at") or 0
+                if found is None or ct >= found_ct:
+                    found, found_ct = bd, ct
+    return found
+
+
 def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
     """查找会话 meta.json 文件：
     1. 如果 path_or_name 是绝对路径且存在，直接返回其 meta.json
@@ -3898,6 +4009,11 @@ def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
     if found:
         return found / "meta.json"
 
+    # 3.5 分支（用户提案 2026-10-08）：branches/<名>/meta.json——'主线/分支' 精确形式或纯分支名
+    br = _find_branch_dir_by_name(ws, path_or_name)
+    if br:
+        return br / "meta.json"
+
     # 4. 回退旧扁平结构
     for cand in (Path(path_or_name), legacy_dir / path_or_name, legacy_dir / (path_or_name + ".json")):
         if cand.exists():
@@ -3920,23 +4036,67 @@ def list_sessions(workspace=None) -> list[dict]:
         if not ts_dir.is_dir():
             continue
         meta_path = ts_dir / "meta.json"
-        if not meta_path.exists():
+        main_name = None
+        if meta_path.exists():
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+                main_name = data.get("name") or ts_dir.name
+                turns_count = len(data.get("turns", []))  # 旧格式兼容
+                first = ""
+                if turns_count > 0 and "turns" in data:
+                    first = (data["turns"][0].get("user_message", "") or "")[:30]
+                results.append({
+                    "id": ts_dir.name,
+                    "name": main_name,
+                    "created_at": data.get("created_at"),
+                    "turns": turns_count,
+                    "first": first,
+                })
+            except Exception:
+                continue
+        # 分支（用户提案 2026-10-08）：各主线目录下的 branches/<名>/ 顺带列出——
+        # 显示名 '主线名 ⇢ 分支名'；id 复合 '主线时间戳/分支名'（/resume 与 WebUI 同链定位）。
+        broot = ts_dir / "branches"
+        if not broot.is_dir():
             continue
-        try:
-            data = json.loads(meta_path.read_text(encoding="utf-8"))
-            turns_count = len(data.get("turns", []))  # 旧格式兼容
-            first = ""
-            if turns_count > 0 and "turns" in data:
-                first = (data["turns"][0].get("user_message", "") or "")[:30]
+        for bd in sorted(broot.iterdir()):
+            if not bd.is_dir():
+                continue
+            bmp = bd / "meta.json"
+            if not bmp.exists():
+                continue
+            try:
+                bdata = json.loads(bmp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            # 分支自身轮数：数 events.jsonl 的 turn_end（快且不重放）
+            b_turns = 0
+            b_first = ""
+            try:
+                for line in (bd / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except Exception:
+                        continue
+                    if e.get("event") == "turn_end":
+                        b_turns += 1
+                        if not b_first and e.get("answer"):
+                            b_first = (e.get("answer") or "")[:30]
+                    elif e.get("event") == "turn_start" and not b_first:
+                        b_first = (e.get("user") or "")[:30]
+            except Exception:
+                pass
             results.append({
-                "id": ts_dir.name,
-                "name": data.get("name") or ts_dir.name,
-                "created_at": data.get("created_at"),
-                "turns": turns_count,
-                "first": first,
+                "id": f"{ts_dir.name}/{bd.name}",
+                "name": f"{main_name or ts_dir.name} ⇢ {bdata.get('name') or bd.name}",
+                "created_at": bdata.get("created_at"),
+                "turns": b_turns,
+                "first": b_first,
+                "branch": True,   # 分支标记（前端可样式区分；后端无需分支处理）
             })
-        except Exception:
-            continue
 
     # 旧扁平结构兼容：*.json
     if legacy_dir.exists():

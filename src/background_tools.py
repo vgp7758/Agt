@@ -164,7 +164,10 @@ def make_background_tools(agent) -> list:
         name 是 start_service 时起的名字；message 是要发送的一行文本。
         expect（用户提案 2026-10-07）：非空时等 stdout 出现该【正则】才返回——工具结果=写入后的
         新增输出（REPL 往返语义：写入后等响应，如发 Python 代码等 ">>>" 或结果文本回显）；
-        timeout=等待上限秒（默认 10，超时也返回已收到的输出）。空=旧行为（立即返回）。"""
+        timeout=等待上限秒（默认 10，超时也返回已收到的输出）。空=旧行为（立即返回）。
+        ⚠️ REPL 服务的"done 尾标"只代表命令受理/返回——长任务（如启动引擎）真正的完成标记
+        是命令专属的（如 unity_repl 的 /launch → LAUNCH-READY）——读命令响应正文找专属标记，
+        别惯性 expect='done'（它会在命令受理瞬间就匹配上，你却以为任务完成了）。"""
         return svc.send(name, message, expect=expect, timeout=timeout)
 
     def send_to_service(name: str, message: str) -> str:

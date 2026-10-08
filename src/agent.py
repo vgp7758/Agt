@@ -2297,7 +2297,9 @@ class Agent:
                             ba_notes = self._run_hooks("before_answer",
                                                        {"user_message": cur_user_msg, "draft_answer": draft,
                                                         "turn_context": turn_context,
-                                                        "changed_calls": self._turn_changed_calls})   # 变更调用原文数组（工作流 ref 原样透传）
+                                                        "changed_calls": self._turn_changed_calls,   # 变更调用原文数组（工作流 ref 原样透传）
+                                                        # 分支会话标记（用户提案 2026-10-08）：wiki 维护等主线专属钩子据此短路
+                                                        "is_branch": bool(getattr(self.session, "branch_meta", None))})
                             if ba_notes and draft != self._last_answer_draft \
                                     and self._answer_inject_count < 5:
                                 self._last_answer_draft = draft
@@ -2316,6 +2318,8 @@ class Agent:
                                                   if self.session._current else msg),
                                 "draft_answer": resp.content,
                                 "turn_context": self._turn_context_str(),
+                                # 分支会话标记（用户提案 2026-10-08）：wiki 维护等主线专属钩子据此短路
+                                "is_branch": bool(getattr(self.session, "branch_meta", None)),
                             })
                             if te_notes and self._turn_end_inject_count < 3:
                                 self._turn_end_inject_count += 1

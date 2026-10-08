@@ -348,12 +348,18 @@
   /* 仅在气泡 hover 时恢复可点击，避免透明按钮溢出到输入框上方吞掉点击 */
   .turn:hover .bubble-copy, .row.me:hover .bubble-copy { pointer-events:auto; }
   /* ⭐ 收藏按钮（用户提案 2026-09-21；位置改右上 2026-10-04：原左上盖在「过程」上易误点），
-     已收藏恒显、未收藏 hover 浮现 */
-  .fav-btn { position:absolute; right:8px; top:6px; padding:2px 8px; font-size:11px;
-    background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470;
-    opacity:0; transition:opacity .15s; z-index:6; pointer-events:none; }
-  .turn:hover .fav-btn, .row[data-fav="1"] .fav-btn { opacity:1; pointer-events:auto; }
+     已收藏恒显、未收藏 hover 浮现；2026-10-08 v2：按钮组容器化（收藏+分支并列，flex 排布） */
+  .turn-actions { position:absolute; right:8px; top:6px; display:flex; gap:4px; z-index:6;
+    opacity:0; transition:opacity .15s; pointer-events:none; }
+  .turn:hover .turn-actions, .row[data-fav="1"] .turn-actions { opacity:1; pointer-events:auto; }
+  .fav-btn { padding:2px 8px; font-size:11px;
+    background:#fff; border:1px solid var(--line); border-radius:4px; cursor:pointer; color:#5b6470; }
+  .row[data-fav="1"] .fav-btn { opacity:1; }
   .fav-btn.on { color:#d97706; border-color:#fcd34d; background:#fffbeb; }
+  /* 🌿 分支按钮（用户提案 2026-10-08）：与收藏并列，绿色系区分 */
+  .branch-btn { padding:2px 8px; font-size:11px;
+    background:#fff; border:1px solid #a7f3d0; border-radius:4px; cursor:pointer; color:#059669; }
+  .branch-btn:hover { background:#ecfdf5; }
   /* 收藏视角（用户提案 2026-09-21）：只显示被收藏轮（user+bot 成对 data-fav），其余隐藏 */
   body.fav-only #msgArea > *:not([data-fav="1"]):not(#favHint) { display:none; }
   #favHint { text-align:center; color:#2563eb; cursor:pointer; padding:10px; font-size:13px;
@@ -1591,7 +1597,9 @@ function applyFavMarks(){
   });
 }
 function attachFavBtn(col, turnNo){
-  if(!col || !turnNo || col.querySelector('.fav-btn')) return;
+  if(!col || !turnNo || col.querySelector('.turn-actions')) return;
+  // 按钮组容器（2026-10-08 v2）：⭐ 收藏 + 🌿 分支并列（hover 浮现；已收藏时组恒显）
+  const wrap=document.createElement('div'); wrap.className='turn-actions';
   const btn=document.createElement('button');
   btn.className='fav-btn';
   const paint=()=>{
@@ -1615,7 +1623,48 @@ function attachFavBtn(col, turnNo){
     }
     paint(); applyFavMarks(); updateFavHint();
   };
-  col.appendChild(btn);
+  wrap.appendChild(btn);
+  // 🌿 分支按钮（用户提案 2026-10-08）：从此轮创建记忆分支——继承到本轮为止的全部记忆
+  const bb=document.createElement('button');
+  bb.className='branch-btn';
+  bb.textContent='🌿 分支';
+  bb.title='从此轮创建记忆分支：带本轮为止的全部记忆去做支线任务（B站视频/简历/协助其它repo等），不稀释主线';
+  bb.onclick=()=>branchModal(turnNo);
+  wrap.appendChild(bb);
+  col.appendChild(wrap);
+}
+// ===== 🌿 分支弹窗（用户提案 2026-10-08：填名确认 → /api/branch → 广播自动刷 UI）=====
+function branchModal(turnNo){
+  const old=document.getElementById('branchModal'); if(old) old.remove();
+  const ov=document.createElement('div'); ov.id='branchModal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:12px;padding:20px 22px;width:min(420px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.18)">
+    <div style="font-weight:700;font-size:15px;margin-bottom:6px">🌿 从第 ${turnNo} 轮创建记忆分支</div>
+    <div style="font-size:12.5px;color:#6b7280;line-height:1.6;margin-bottom:10px">
+      新分支继承本会话<b>到第 ${turnNo} 轮为止</b>的全部记忆，用于支线任务（如 B 站视频、简历、协助其它项目）——
+      支线新内容只写分支，<b>不稀释主线的上下文注意力</b>。/resume 主线名 随时回主线。</div>
+    <input id="branchNameInput" placeholder="分支名称，如：项目社交卡片制作" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;box-sizing:border-box"/>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" id="branchCancel">取消</button>
+      <button class="btn primary" id="branchGo">🌿 创建并切换</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  document.getElementById('branchCancel').onclick=close;
+  const inp=document.getElementById('branchNameInput'); inp.focus();
+  inp.onkeydown=e=>{ if(e.key==='Enter') document.getElementById('branchGo').click(); };
+  document.getElementById('branchGo').onclick=async()=>{
+    const name=inp.value.trim();
+    if(!name){ inp.style.borderColor='#f87171'; inp.placeholder='分支名不能为空'; return; }
+    try{
+      const r=await fetch('/api/branch',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name, turn:turnNo})});
+      const d=await r.json();
+      if(d && d.ok){ close(); toast(`🌿 分支「${name}」创建中（继承到第 ${turnNo} 轮），完成后自动切换…`, true); }
+      else { toast(d.error || '创建失败', false); }
+    }catch(e){ toast('创建失败：'+e, false); }
+  };
 }
 function toggleFavView(){
   const on = document.body.classList.toggle('fav-only');

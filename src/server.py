@@ -1103,6 +1103,29 @@ async def api_tool_exec(request: Request):
         return {"ok": False, "error": f"工具 {name} 执行失败：{type(e).__name__}: {e}"}
 
 
+@app.post("/api/branch")
+async def api_branch(request: Request):
+    """气泡分支按钮（用户提案 2026-10-08）：从指定轮创建记忆分支。
+    body: {"name": 分支名, "turn": 轮号}——/branch 命令走 work_q 串行执行（与运行中轮互斥，
+    set_session 不能与 run 并发），完成后 _sync 广播 session_history + sessions（前端自动刷新）。"""
+    try:
+        d = await request.json()
+    except Exception:
+        d = {}
+    name = str(d.get("name") or "").strip()
+    if not name or _agent is None or _work_q is None:
+        return {"ok": False, "error": "缺少 name 或服务未就绪"}
+    turn = d.get("turn")
+    cmd = f"/branch {name}" + (f" {int(turn)}" if turn else "")
+    _work_q.put(("user", cmd))          # 串行执行：/branch 里 set_session 不能与运行中的轮并发
+    def _sync():
+        broadcast_session_state(_agent)
+        from session import list_sessions
+        _broadcast({"type": "sessions", "names": list_sessions(workspace=_workspace)})
+    _work_q.put(("task", _sync))
+    return {"ok": True}
+
+
 @app.post("/api/favorite")
 async def api_favorite(request: Request):
     """收藏/取消收藏某轮（用户提案 2026-09-21：常回看的轮可收藏 + 收藏视角专门回看）。

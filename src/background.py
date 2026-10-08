@@ -168,18 +168,30 @@ class ServiceManager:
                                     # 服务下轮投影 bg_services 段自动发 /status 带上输出
         except (BrokenPipeError, OSError) as ex:
             return f"[发送失败] {name}: {type(ex).__name__}（进程可能已关闭 stdin）"
-        # REPL 服务默认往返（用户实锤 2026-10-09）：被交互过（repl_seen，含本次刚置的）的 REPL
-        # 服务发指令而未传 expect → 自动等 stdout 响应（一次 stdin 对应一次 stdout 的协议本义）——
-        # 否则立即返回只有发送回执一行（unity-repl 的响应要等命令完成才打出），agent 看不到
-        # 命令的实际结果一脸懵逼。timeout 自动抬到 ≥30s（REPL 命令常带 -wait 参数）。
+        # REPL 服务默认往返（用户实锤 2026-10-09；窗口口径用户裁定同日）：被交互过（repl_seen，
+        # 含本次刚置的）的 REPL 服务发指令而未传 expect → 固定 5s 收集窗口：窗口内 stdout 全量
+        # 带回（unity-repl 的响应+done 尾标几秒内打出）；窗口内已出过输出且 0.6s 静默=响应收完，
+        # 提前返回（/status 类秒回命令不傻等）。要更长等待请显式传 expect+timeout。
         _auto_repl = bool(e.get("repl_seen")) and not expect
-        if _auto_repl:
-            expect = r"\S"
-            if timeout < 30.0:
-                timeout = 30.0
-        if not expect:
+        if not expect and not _auto_repl:
             return f"📤 已发送到「{name}」stdin：{(text or '')[:80]}"
         import re as _re, itertools as _it
+        if _auto_repl:
+            deadline = time.time() + 5.0
+            got = []
+            last_change = time.time()
+            while time.time() < deadline:
+                time.sleep(0.12)
+                with self._lock:
+                    cur = list(_it.islice(logs, before, None))
+                if len(cur) != len(got):
+                    got = cur
+                    last_change = time.time()
+                elif got and time.time() - last_change > 0.6:
+                    break   # 已有输出且静默 0.6s：响应收完，提前返回
+            return (f"✅ 已发送（REPL 默认往返 5s 窗口，收集 {len(got)} 行）：\n"
+                    + ("\n".join(got)[-4000:]
+                       or "(窗口内无输出——命令可能耗时较长，请传 expect=完成标记 + 更长 timeout)"))
         deadline = time.time() + max(0.5, float(timeout))
         new_lines = []
         while time.time() < deadline:
@@ -187,27 +199,8 @@ class ServiceManager:
             with self._lock:
                 new_lines = list(_it.islice(logs, before, None))
             if _re.search(expect, "\n".join(new_lines)):
-                if _auto_repl:
-                    # 默认往返的静默收尾：首行命中后再等 0.6s 无新行（REPL 多行响应收完才返回，
-                    # 与 _repl_status 同款静默窗口——unity_repl 的响应+done 尾标一次带全）
-                    _last_change = time.time()
-                    while time.time() < deadline:
-                        time.sleep(0.12)
-                        with self._lock:
-                            cur = list(_it.islice(logs, before, None))
-                        if len(cur) != len(new_lines):
-                            new_lines = cur
-                            _last_change = time.time()
-                        elif time.time() - _last_change > 0.6:
-                            break
-                    return (f"✅ 已发送（REPL 默认往返——未传 expect，自动等响应，共 {len(new_lines)} 行）：\n"
-                            + ("\n".join(new_lines)[-4000:] or "(空)"))
                 return (f"✅ 已发送并匹配到 /{expect}/（新增 {len(new_lines)} 行）：\n"
                         + ("\n".join(new_lines)[-4000:] or "(无输出)"))
-        if _auto_repl:
-            return (f"⏱ REPL 默认往返 {timeout}s 内未见响应（期间新增 {len(new_lines)} 行）：\n"
-                    + ("\n".join(new_lines)[-4000:] or "(无新增输出)")
-                    + "\n提示：长命令（如 /launch）请显式传 expect=该命令的完成标记 + 更长 timeout")
         return (f"⏱ {timeout}s 内未匹配 /{expect}/（可加大 timeout 或确认服务真的回显）。"
                 f"期间新增 {len(new_lines)} 行：\n" + ("\n".join(new_lines)[-4000:] or "(无新增输出)"))
 

@@ -2181,6 +2181,7 @@ class Session:
         # 末条 assistant → 独立 user 消息承载（部分端点不允许 assistant 挂图）。
         # 瞬态语义：组装层注入（不落 events.jsonl/step 存档）；每步求值 = 每步最新帧。
         if tail_images:
+            _feed_note = f"[image_feed · 实时画面 · {time.strftime('%H:%M:%S')}]"
             if msgs and msgs[-1].get("role") == "user":
                 _last = msgs[-1]
                 _m2 = {**_last}   # 浅拷贝——绝不就地改共享引用
@@ -2191,13 +2192,15 @@ class Session:
                     _blocks = list(_c)
                 else:
                     _blocks = []
-                _m2["content"] = _blocks + [{"type": "image_url", "image_url": {"url": u}}
-                                            for u in tail_images]
+                _m2["content"] = _blocks + [{"type": "text", "text": _feed_note}] \
+                                       + [{"type": "image_url", "image_url": {"url": u}}
+                                          for u in tail_images]
                 msgs[-1] = _m2
             else:
                 msgs.append({"role": "user",
-                             "content": [{"type": "image_url", "image_url": {"url": u}}
-                                         for u in tail_images]})
+                             "content": [{"type": "text", "text": _feed_note}]
+                                        + [{"type": "image_url", "image_url": {"url": u}}
+                                           for u in tail_images]})
             _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
                  "末条追加image_url（瞬态·不落档）", msgs_n=0)
 

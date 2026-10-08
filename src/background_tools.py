@@ -26,14 +26,10 @@ def make_background_tools(agent) -> list:
         watch_tail（用户提案 2026-10-07）：>0 时 bg_services 装配段对该服务额外附
         【最近 N 行 stdout 日志】——关键服务（帧服务/监控器）设 3~5，每步投影可见实况；
         0（默认）只显示状态行。零协议：不要求服务实现任何 /status，stdout 即状态。
-        repl 服务判定（用户提案 2026-10-08，两种，或关系）：① 命名声明 repl: 前缀；
-        ② 交互自动判定——任何服务只要被 service_stdin 发过参数（repl_seen），即视为
-        REPL 语义。REPL 约定：MCP 式请求-响应（一次 stdin 对应一次 stdout），stdout
-        仅用于协议响应（/status 输出前 5 行封顶，多行请压紧），过程日志写文件不污染
-        stdout；每步投影的 bg_services 段自动发 /status 收前 N 行（5s 节流缓存）。
-        yml services 段落盘写法：键含冒号，建议引号包裹（- "repl:名字": 命令）——
-        不加引号 YAML 也能解析（分隔判定是"冒号+空格"），但部分编辑器高亮会歧义；
-        ⚠️ 禁止写成 repl: 名字（冒号后带空格会把键截断成 repl，直接 ScannerError）。
+        repl 服务判定（两种，或关系）：① 命名声明 repl: 前缀；② 交互自动判定——任何服务
+        只要被 service_stdin 发过参数，即视为 REPL 语义。REPL 约定：MCP 式请求-响应
+        （一次 stdin 对应一次 stdout），stdout 仅用于协议响应且保持简短，过程日志写文件
+        不污染 stdout；每步投影会自动附带该服务的最新状态。
         on_exit_wake（自行退出时是否唤醒你处理，默认 notify=通知进 inbox——持久化、
         空闲时自动消费成轮、忙时排队到下一步边界；不打断进行中的轮）：
         notify=进 inbox 保证可见不丢；never=仅内存登记（最安静，无自然轮则看不到）；
@@ -167,9 +163,8 @@ def make_background_tools(agent) -> list:
         timeout=等待上限秒（默认 10，超时也返回已收到的输出）。空=立即返回——**但 REPL 服务
         （曾被交互过的）自动走默认往返**：固定 5s 收集窗口，窗口内 stdout 全量带回（已出过
         输出且 0.6s 静默=响应收完则提前返回，秒回命令不傻等）。
-        ⚠️ REPL 服务的"done 尾标"只代表命令受理/返回——长任务（如启动引擎）真正的完成标记
-        是命令专属的（如 unity_repl 的 /launch → LAUNCH-READY）——读命令响应正文找专属标记，
-        别惯性 expect='done'（它会在命令受理瞬间就匹配上，你却以为任务完成了）。"""
+        ⚠️ 通用提醒：REPL 命令的"受理回执"≠"任务完成"——长耗时命令真正的完成标记是
+        命令专属的（读命令响应正文可找到），等长任务请显式传 expect=该标记 + 更长 timeout。"""
         return svc.send(name, message, expect=expect, timeout=timeout)
 
     def send_to_service(name: str, message: str) -> str:

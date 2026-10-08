@@ -522,7 +522,7 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **锁外轮询（自查抓到的雷）**：协议轮询内部要调 `send()`——它自己要拿 `_lock`（写 stdin + 读 logs），而 `status_lines` 本身持锁遍历服务表；`threading.Lock` **不可重入**，锁内直接调 = 必死锁。修法：锁内只记占位符（`lines.append(None)` + `repl_marks` 位置清单），**锁外**逐服务轮询回填，空摘要占位行最后过滤掉。
 
-**yml services 段写法警示**（提示词同步带上，落盘 main.yml 时适用）：`repl:` 名字含冒号，建议引号包裹（`- "repl:名字": 命令`）——不加引号 YAML 也能解析（键值分隔判定是「冒号+空格」），但编辑器高亮易歧义；⚠️ **禁止写成 `repl: 名字`**（冒号后带空格会把键截断成 `repl`，直接 ScannerError）。
+**yml services 段写法警示**（落盘 main.yml 时适用；2026-10-09 起 docstring 不再携带此细节，以本页为准）：`repl:` 名字含冒号，建议引号包裹（`- "repl:名字": 命令`）——不加引号 YAML 也能解析（键值分隔判定是「冒号+空格」），但编辑器高亮易歧义；⚠️ **禁止写成 `repl: 名字`**（冒号后带空格会把键截断成 `repl`，直接 ScannerError）。
 
 **冒烟验证**：真 REPL 服务（stdin 收 `/status` 回一行摘要、其它输入写日志文件）→ `status_lines` 正确渲染出摘要行 ✓；非 repl 服务行为不变（watch_tail 日志尾部模式）✓。
 
@@ -570,6 +570,8 @@ if (name.startswith("repl:") or e.get("repl_seen")) and rc is None:
 
 - `status_lines()` 的 `watch_tail` **日志尾部模式排除 repl 服务**（防同份输出渲染两遍）——判定扩展后该豁免条件随之升级为「解析后的 repl 判定」（`repl:` 前缀 **或** `repl_seen`）；原章节 watch_tail 正文补记里写的 `name.startswith("repl:")` 按此理解；
 - `start_service` docstring（提示词）同步改写：两种判定并列为或关系 + `/status` 口径（**前 5 行封顶、多行请压紧**）+ REPL 约定（一次 stdin 对一次 stdout、过程日志写文件不污染 stdout）+ yml 冒号键写法警示（原样保留）。
+
+> **docstring 通用化原则（2026-10-09 用户裁定）**：工具 schema 的 description 必须通用——本地工程专有细节（具体服务名/命令标记如 LAUNCH-READY、yml 冒号键写法警示、/status 行数口径）只进 wiki 不进 docstring。两处 docstring 已精简：repl 判定保留通用语义、具体示例抽象化；专有细节以本 wiki 各章节为准。检索钩子会把 wiki 命中带进投影——知识分层：docstring=通用用法，wiki=工程细节。
 
 **冒烟（真跑）**：无前缀的普通服务 `auto-repl`，`service_stdin("auto-repl", "hello")` 交互一次 → 下轮 `status_lines` 自动带上 3 行 `/status` 输出 ✅。（同轮脚本里那个 ❌ 是断言写成「数列表元素」的误报——三行 `│` 全部渲染出来了。）
 

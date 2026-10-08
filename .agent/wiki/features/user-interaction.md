@@ -357,6 +357,8 @@ if _ag is not None and getattr(_ag, "active_plan", None):
 
 **关联**：[团队列表分发 · 连接即推](#团队列表分发连接即推--registry-变更推送-team_changed2026-09-17--二commit-0f322af)（同款修法，本节的直接参照）、[连接补发进行中轮 · current_turn](#连接补发进行中轮--current_turn-事件2026-09-02用户提案)（新连接补发「正在进行态」的另一半：轮）、[/restart 重启双坑](#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)（`broadcast_session_state` 补推 session_history + team_list + pending spec——plan 面板当时漏在门外）、[上下文引擎 · 施工模式投影](../architecture/context-engine.md)（同一个 `active_plan` 状态在 LLM 侧投影里的另一副面孔）。
 
+**模式推广（2026-10-08，commit 2ecc6f4）**：`_state.get("agent") or agent` 兜底自此推广到服务看板/定时任务家族**六端点**（`svc_op` / `svc_log` / `svc_fav` / `sched_upd` / `sched_add` / `sched_del`）——20048 实锤「Stop 恒报缺少agent/name」（缺的其实是 agent 不是 name）后统一收编，详见 [background-scheduler · 服务看板四件套后记](background-scheduler.md)。
+
 ## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
 
 > 用户报告（手机 `/restart` 场景）：① 电脑端每次无端多开一个浏览器 tab；② 新开 tab 显示「(当前对话) · Agt」，需手动刷新才见 session。两个现象是**同一条时序链上的两个 bug**（src/chat.py + src/server.py，commit 7ca6cfc）。

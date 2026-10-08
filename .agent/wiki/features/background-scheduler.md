@@ -341,6 +341,38 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **插曲（except 静默降级教训）**：首版冒烟失败——try 块里笔误 `_re.sub`（import 的是 `re`），NameError 被 except 兜底吞掉、静默降级 `_lf=None`，读取侧永远走不到兜底。修为 `re.sub` 后全绿。教训：**兜底 except 块里的名字错误会无声降级，冒烟必须盯结果，不能只看「没报错」**。
 
+### 后记：Stop 恒报「缺少agent/name」——svc/sched 六端点统一 or agent 兜底（2026-10-08，20048 实锤，commit 2ecc6f4）
+
+**现象（用户实锤）**：服务看板点 ⏹Stop 恒报 `缺少agent/name`——name 明明传了。直测复现定责：POST `{"name":"unity-repl","op":"stop"}` 直打 `/api/svc_op` 仍报同款 → **排除前端丢参，是端点自身的取值判定挂了**。
+
+**根因——agent 的两条注入路径**：部分启动形态（20048）下，`agent` 经**模块级全局变量**注入，`_state` dict 里根本没有 `"agent"` 键；而 svc/sched 系端点只查 `_state`：
+
+```python
+_agent = _state.get("agent")            # 旧：None
+if not _agent or not name: ...          # 「缺少 agent/name」判定必炸
+```
+
+报错文案把 agent / name 两个判定**合并成一句** → 强误导性（缺的其实是 agent，不是 name）。
+
+**为什么 📄 完整日志此前一直正常**：`/api/svc_log` 先查服务登记、未登记才 404——**不走 agent 判定路径**。同一家族端点里症状分叉（Stop/Start 恒撞缺参 vs 日志页恒能弹）正是这个差别。
+
+**修复（commit 2ecc6f4，src/server.py，6 处）**：统一补 `or agent` fallback（对齐 plan 推送端点 L2524 的既有写法）：
+
+```python
+_agent = _state.get("agent") or agent   # 部分端点用短名 ag = ...，同理
+```
+
+| 覆盖端点 | 家族 |
+|---|---|
+| `svc_op` / `svc_log` / `svc_fav` | 服务看板三件（Stop/Start · 完整日志 · ⭐收藏） |
+| `sched_upd` / `sched_add` / `sched_del` | [抽屉定时任务 CRUD](#抽屉定时任务-crudreschedule-部分更新--手动添加编辑删除弹窗2026-10-07用户提案commits-5118753--25c23e3) 三端点 |
+
+**生效**：已推送 + site-packages 已同步（20048 / 9000 同批），实例 `/restart` 后生效。
+
+**顺带辨析（restart 遗留孤儿服务）**：修复生效后，对 restart 前启动的服务点 Stop 会转报「无此服务」——**登记在 ServiceManager 内存里，新进程是空的**（这不是缺参 bug，是登记生命周期）。正解已备：▶ Start 走[死服务覆盖重建](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)；历史日志看 [tee 持久化兜底](#后记restart-后完整日志-404日志-tee-持久化到-agtservice_logs2026-10-0820048-实锤commit-b948a01)；常要跨重启可用的服务走 ⭐ 收藏（main.yml services 启动期拉起）。
+
+**关联**：[user-interaction · plan 面板连接即推](user-interaction.md)——`_state.get("agent") or agent` 模式的**首例**（d573e1e，注释即「兼容两条取 agent 的路径」）；本节是该模式在 svc/sched 家族的推广收编。
+
 ## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
 
 **动机**：image_feed 段已让 Agent 每步看到实时画面（[姊妹特性](image-feed.md)），而后台服务的实况还停在「按需查」——状态行只有 pid + 已跑时长，stdout 里的运行实况每步投影不可见，想知道就得多调一次 `list_services`/`service_logs`。用户提案：仿 image_feed 的每步注入思路，让 bg_services 装配段也带上服务状态信息。

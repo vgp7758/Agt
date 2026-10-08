@@ -121,6 +121,14 @@ def agt_register(ctx=None):
 4. factory kind 机制：D 类（进程内状态组）外置也甩不掉 agent 注入，但描述热改收益仍在
 5. memory_tools / toollog **不迁**——events.jsonl/toollog.jsonl 是引擎写的，它们是引擎的可观测性出口（重放拿到数据 ≠ 独立，格式契约耦合更危险）
 
+## docstring 通用化：schema description 只写通用用法，专有细节进 wiki（2026-10-09，用户裁定，commit 38b2ab7）
+
+**裁定原文场景（2026-10-09，用户）**：`start_service` / `service_stdin`（src/background_tools.py）的 schema description 里积了本地工程专有细节（unity_repl 的 `LAUNCH-READY` 命令标记、yml 冒号键写法警示、`/status` 行数口径），用户要求清出：「别在 docstring 里放这么多本地工程专有的提示词吧」。
+
+**原则**：工具 schema 的 description 会进**每一次投影、每一个用户、每一个模型**的上下文——只写对所有用户有效的通用用法；本地工程专有细节进 wiki（[wiki_auto_query](wiki-auto-query.md) 检索钩子按需带进投影）。知识分层：**docstring=通用用法，wiki=工程细节**。写工具时的自检一句话：「这段话对一个用别的项目的用户有意义吗？」——没有就进 wiki。
+
+首例处置与删/留明细见 [background-scheduler · docstring 通用化原则](background-scheduler.md)（commit `38b2ab7`）。
+
 ## 相关页面
 
 - [glob_files](glob-files.md) —— 首个外置工具（纯函数整体外置）

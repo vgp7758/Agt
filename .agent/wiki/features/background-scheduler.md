@@ -453,6 +453,35 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **生效**：框架层 docstring（commit `4a47dbc`，/restart 后进投影）；服务层响应文案 + /help（backend commit `92878a7`，unity-repl 服务重启后生效）。
 
+### 后记：REPL 服务默认往返——未传 expect 自动等响应（2026-10-09，20048 实锤，commit c5a7f33）
+
+**触发（20048 实锤，用户委托诊断）**：20048 通过 stdin 向 unity-repl 发指令时**没传 expect** → 走旧行为「写入即返回」，工具结果只有一行 `📤 已发送到「unity-repl」stdin：/click...`。而 unity-repl 的协议是**命令处理完才打印响应**（`/click -wait 6` 要等 6s+）——agent 立即拿到的回执里**零响应内容**，看不到命令的实际结果一脸懵逼，只能再调 /status 或翻日志找结果，白费轮次。
+
+**根因**：expect 的「空 = 立即返回」默认对 REPL 型服务是**语义缺口**——REPL 的协议本义就是**一次 stdin 对应一次 stdout**（与 [repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f) 的约定同源），发指令必然期待响应；「立即返回」只该适用于 fire-and-forget 型服务（往 daemon 喂命令）。
+
+**修复**（src/background.py `ServiceManager.send` + src/background_tools.py docstring，commit `c5a7f33`，site-packages 已同步，`/restart` 后生效）：
+
+| 项 | 行为 |
+|---|---|
+| 判定 | `repl_seen`（**含本次调用刚置的**——发一次就算交互过，首次发送也自动往返）且未传 expect → 自动往返 |
+| expect | 自动取 `\S`（等首个非空输出行） |
+| timeout | 自动抬到 **≥30s**（REPL 命令常带 -wait 参数，默认 10s 不够） |
+| 多行收尾 | 首行命中后 0.6s 静默窗口收尾——多行响应 + done 尾标一次带全 |
+| 非 REPL 服务 | 从未被交互过且不传 expect → 仍旧行为立即返回（fire-and-forget 场景零感知） |
+
+**冒烟实证**（模拟 20048 场景，无 expect 发 `/click`）：
+
+```
+✅ 已发送（REPL 默认往返——未传 expect，自动等响应，共 3 行）：
+click ok at (960,540)
+engine delta: scene=title
+[repl] done /click
+```
+
+**与上文口径的关系**：expect 参数表中「空 = 旧行为（立即返回）」自本改起应读作「空**且非 repl_seen 服务** = 立即返回」。docstring 同步改写：expect 参数描述带自动往返说明，[done 尾标警告](#后记expectdone-惯性假阳性done-尾标只代表受理长任务完成标记是命令专属2026-10-08框架-commit-4a47dbc--backend-92878a7) 并入其中——模型从工具描述即知此行为；超时文案引导长命令传命令专属完成标记（如 /launch → LAUNCH-READY，见上节）。
+
+**关联**：[后记 · 交互即判定（repl_seen）](#后记交互即判定repl_seen--多行-status静默窗口前-5-行封顶2026-10-08--二用户提案commit-c0e9768)——`repl_seen` 的**第二个消费端**（① 投影自动 /status，② 本节 stdin 默认往返）· [expect 往返语义](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（本节默认化的基础）。
+
 ## repl: 协议服务：命名潜规则 + 每步投影自动 /status（2026-10-08，用户提案，commit 174131f）
 
 **动机（用户提案）**：watch_tail 是「零协议」方案（stdout 日志即状态），但常驻业务服务的实况日志是过程性的——真正有状态价值的是**协议级摘要**（任务数 / fps / 队列深度）。提案：要一个 repl 类的服务通道，像 MCP 那样**一次 stdin 对应一次 stdout**；每轮 bg_services 投影时自动发 `/status` 拿输出、截取前 L 行投影；日志写文件不污染 stdout；服务是否支持 repl 用**命名潜规则**判定（名称匹配某格式），规则写进 `start_service` 提示词。

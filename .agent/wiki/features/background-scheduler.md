@@ -322,9 +322,24 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 | 页面形态 | 暗色全屏 + sticky 头部（钉顶不随滚动）：运行态 / 行数 / 启动命令 |
 | 自刷新 | `<meta http-equiv='refresh' content='5'>`——5s 自动重载，盯日志不用手动刷 |
 | 安全 | title / header / 正文全部 HTML 转义（服务名与命令回显进 HTML 的注入面；服务名自取低危，同轮二补严谨化，commit `d22bd34`） |
-| 容错 | 服务不在当前进程登记（实例重启过、条目丢失）→ 明确提示页，非裸 404 |
+| 容错 | 服务不在当前进程登记 → 读持久化日志尾部兜底（[后记 2026-10-08](#后记restart-后完整日志-404日志-tee-持久化到-agtservice_logs2026-10-0820048-实锤commit-b948a01)）；文件也没有才 404 提示页 |
 
 与 `service_logs` 工具（LLM 侧，JSON 给模型消费）的分工：同源数据、两种消费端——本端点面向人眼（独立页签 + 自刷新），工具面向模型。
+
+#### 后记：restart 后完整日志 404——日志 tee 持久化到 ~/.agt/service_logs/（2026-10-08，20048 实锤，commit b948a01）
+
+用户实锤：20048 restart 后点 unity-repl 的完整日志，恒提示「服务不在当前进程登记」。根因：本端点读的是 `ServiceManager` **内存环形缓冲**（deque）——新进程的登记表是空的，旧服务的历史日志随旧进程蒸发。commit `b948a01`（src/background.py + src/server.py，site-packages 已同步）两层修复：
+
+| 层 | 机制 |
+|---|---|
+| **tee 持久化**（src/background.py `start()`） | 每个服务启动即开 `~/.agt/service_logs/<name>.log` 挂进 entry（名字 sanitize `[^A-Za-z0-9_.-]→_`，`repl:` 的冒号同样归下划线）；reader 线程逐行 tee 落盘（行缓冲）；启动写分隔头 `===== start 时刻 · pid · 命令 =====`——多次重启的历史在一个文件里分段可辨；同名覆盖重建（[839f445 死服务重拉](../architecture/multi-agent.md) 路径）先关旧句柄再开新 |
+| **读取兜底**（src/server.py `/api/svc_log`） | 进程未登记 → 读持久化文件尾部 3000 行渲染，头部标注「○ 进程未登记（实例重启过）· 显示持久化日志尾部 N 行」；文件也没有才 404 提示页 |
+
+**边界**：投影侧 [watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523) 仍读**内存** deque——重启后旧日志磁盘有但不投影（watch_tail 只看本进程运行期的实况）；持久化兜底只接在人眼端点 `/api/svc_log`。
+
+**冒烟**：persist-demo 服务跑 5 行输出 → stop 后日志文件在、`line-4` 已落盘 ✓。
+
+**插曲（except 静默降级教训）**：首版冒烟失败——try 块里笔误 `_re.sub`（import 的是 `re`），NameError 被 except 兜底吞掉、静默降级 `_lf=None`，读取侧永远走不到兜底。修为 `re.sub` 后全绿。教训：**兜底 except 块里的名字错误会无声降级，冒烟必须盯结果，不能只看「没报错」**。
 
 ## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
 

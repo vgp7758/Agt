@@ -99,6 +99,10 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 
 **声明服务的死而复拉**：依赖服务自行崩掉后，下次实例化 `_ensure_agent_services` 重新拉起会撞 `start()` 的同名拒绝——stop 保留 entry 做退出复盘 × start 只查登记不看死活，「已存在同名服务」恒拒。已修（20048 实锤，commit `839f445`）：**同名仍在跑 → 拒（幂等防双实例，本节行为链语义不变）；同名已退出 → 覆盖重建**。详见 [background-scheduler · start_service 撞死服务被拒](../features/background-scheduler.md#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)。
 
+### 后记二：restart 后完整日志 404——服务日志 tee 持久化（2026-10-08 · 二，20048 实锤，commit b948a01）
+
+同一 20048 事故的第二拍：`839f445` 修了「死服务同名覆盖重建」，用户随即实锤——restart 后点 [📄 完整日志](#看板📄完整日志新页签全量日志页2026-10-06--五用户提案commit-d22bd34) 恒 404：日志读 `ServiceManager` **内存 deque**，新进程登记表空、旧历史随旧进程蒸发。修复（commit `b948a01`，src/background.py + src/server.py）：服务启动即 tee 到 `~/.agt/service_logs/<name>.log`（分隔头分段多次重启历史），`/api/svc_log` 进程未登记时兜底读该文件尾部 3000 行——历史日志跨进程存活。机制细节与 except 静默降级教训见 [background-scheduler · 完整日志页后记](../features/background-scheduler.md)。
+
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 
 用户实锤：[/agents 编辑页](../features/agents-admin.md)没有 services 字段——desktop-operator 的 `services:` 声明**一保存就丢**（PUT 按表单字段重建 yml，表单没有的键自然不写）。补齐（与目录化保存同 commit 2c63133）：
@@ -158,7 +162,7 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 | 端点 | 职责 |
 |---|---|
-| `GET /api/svc_log` | 服务完整日志**独立 HTML 页**（非 JSON）：全量环形缓冲（≤3000 行防爆）+ 暗色 sticky 头部（运行态/行数/启动命令）+ `<meta refresh>` 5s 自刷新；name/command/正文全 HTML 转义（同轮二补严谨化）；服务不在进程内登记 → 明确提示页（非裸 404） |
+| `GET /api/svc_log` | 服务完整日志**独立 HTML 页**（非 JSON）：全量环形缓冲（≤3000 行防爆）+ 暗色 sticky 头部（运行态/行数/启动命令）+ `<meta refresh>` 5s 自刷新；name/command/正文全 HTML 转义（同轮二补严谨化）；服务不在进程内登记 → 读持久化日志尾部兜底（2026-10-08 · 二，[tee 持久化后记](#后记二restart-后完整日志-404服务日志-tee-持久化2026-10-08--二20048-实锤commit-b948a01)）；文件也没有才提示页 |
 
 **前端**：服务卡按钮排插 📄 完整日志（恒显示）——新页签 `window.open` 打开。至此服务看板按钮四件套（⭐收藏 / 📄 完整日志 / ⏹Stop / ▶Start），看板端点四件（`svc_fav` / `svc_op` / `svc_log` + dashboard 快照 `fav_services`）。
 

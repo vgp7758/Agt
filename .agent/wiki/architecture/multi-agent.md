@@ -87,9 +87,9 @@ services:
 
 ### 行为链（src/multiagent.py `_ensure_agent_services`）
 
-1. **接线点**：`agent_prompt` 实例化路径，`load_agent_yml` 之后、`_resolve_tools` 之前调用
-2. 逐项 `agent.services.start(服务名, 命令, cwd=workspace)`——相对路径命令可用；**幂等**：同名服务已在跑 → ServiceManager 跳过（多实例共享同一服务，不重复拉起）
-3. 单项失败 → `_LOG.warning` 吞掉，**不阻断实例化**（服务挂 ≠ Agent 不能建；挂了另有 on_exit_wake 兜底通知）
+1. **接线点**：`agent_prompt` 实例化路径，`load_agent_yml` 之后、`_resolve_tools` 之前调用（main.yml 主 Agent 启动期为对称补齐的第二接线点，见下文 [主 Agent 对称补齐](#主-agent-对称补齐mainyml-services-启动期拉起2026-10-06--三用户问诊commit-ee4f4e9)）
+2. 逐项 `agent.services.start(服务名, 命令, cwd=workspace)`——相对路径命令可用；**幂等**：同名服务已在跑 → ServiceManager 跳过（多实例共享同一服务，不重复拉起）；**2026-10-08 起（commit 86e36f9）带 `quiet_secs=120` 启动蜜月**——重启/实例化拉起后 2 分钟内服务退出静默、不触发 on_exit「服务异常崩溃」通知（启动期抖动 ≠ 真崩溃，见下方[后记三](#后记三启动蜜月-quiet_secs重启拉起的声明服务秒退不吓醒-agent2026-10-08--三commit-86e36f9)）
+3. 单项失败 → `_LOG.warning` 吞掉，**不阻断实例化**（服务挂 ≠ Agent 不能建；挂了另有 on_exit_wake 兜底通知——启动蜜月窗口内除外）
 
 ### 生命周期同步（kill_agent）
 
@@ -102,6 +102,21 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 ### 后记二：restart 后完整日志 404——服务日志 tee 持久化（2026-10-08 · 二，20048 实锤，commit b948a01）
 
 同一 20048 事故的第二拍：`839f445` 修了「死服务同名覆盖重建」，用户随即实锤——restart 后点 [📄 完整日志](#看板📄完整日志新页签全量日志页2026-10-06--五用户提案commit-d22bd34) 恒 404：日志读 `ServiceManager` **内存 deque**，新进程登记表空、旧历史随旧进程蒸发。修复（commit `b948a01`，src/background.py + src/server.py）：服务启动即 tee 到 `~/.agt/service_logs/<name>.log`（分隔头分段多次重启历史），`/api/svc_log` 进程未登记时兜底读该文件尾部 3000 行——历史日志跨进程存活。机制细节与 except 静默降级教训见 [background-scheduler · 完整日志页后记](../features/background-scheduler.md)。
+
+### 后记三：启动蜜月 quiet_secs——重启拉起的声明服务秒退不吓醒 agent（2026-10-08 · 三，commit 86e36f9）
+
+**现象（用户实锤）**：带 `services:` 声明的实例 /restart 后，agent 被「服务异常崩溃」的提醒吓一跳，自动开始处理——一个其实只是启动期抖动的假崩溃。
+
+**根因链**：restart → 声明服务重新拉起 → **旧孤儿进程还占着端口**（或环境未就绪）→ 新服务**秒退**（rc≠0）→ `on_exit_wake` 默认 `notify` → 「服务异常崩溃」通知进 inbox 唤醒 agent → agent 一脸懵地开始"排查崩溃"。
+
+**修复**（commit `86e36f9`）：`ServiceManager.start()` 新参 **`quiet_secs`（启动蜜月窗口）**——窗口内退出（含 rc≠0）→ on_exit 回调静默（不通知、不唤醒）；`_ensure_agent_services` 逐项拉起统一带 **`quiet_secs=120`**——重启拉起后 2 分钟内退出不算崩溃，真崩（2 分钟后）才值得叫人。子 Agent 实例化与 main.yml 主 Agent 启动期同走此函数（agent.py 无独立 services.start 调用点，单一真源），一条改法两路生效。
+
+| 启动路径 | quiet_secs | 理由 |
+|---|---|---|
+| 声明服务（`_ensure_agent_services`） | **120** | restart 拉起后的秒退=启动期抖动（端口被旧进程占等），不值得叫醒 |
+| `start_service` 工具（LLM 主动起） | 0（默认不传） | LLM 起的服务崩了照常通知——它自己的运维责任，蜜月会掩盖真故障 |
+
+机制细节与冒烟（quiet-demo 蜜月 3s 秒退零回调 / loud-demo 无蜜月秒退正常回调）见 [background-scheduler · 启动蜜月](../features/background-scheduler.md)。
 
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 

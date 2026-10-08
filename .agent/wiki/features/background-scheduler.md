@@ -608,6 +608,34 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 
 **关联**：[user-interaction · 唤醒策略化](user-interaction.md)（策略化起点）/ [user-interaction · 误用收编](user-interaction.md)（自定义文本语义）/ [user-interaction · 语义标签](user-interaction.md)（通知轮渲染）。
 
+## 启动蜜月 quiet_secs：窗口内退出静默——重启拉起的声明服务秒退不再吓醒 agent（2026-10-08，用户实锤，commit 86e36f9）
+
+**动机（用户实锤）**：带 `services:` 声明的实例 /restart 后，agent 被「[服务异常崩溃]」提醒吓一跳、自动开始处理。根因链：restart → 声明服务重新拉起 → **旧孤儿进程还占着端口**（或环境未就绪）→ 新服务秒退（rc≠0）→ `on_exit_wake` 默认 `notify` → 通知进 inbox 唤醒 agent——**启动期抖动被当真崩溃**。
+
+**机制**（src/background.py `ServiceManager.start()`，commit `86e36f9`，site-packages 已同步）：
+
+```python
+ServiceManager.start(name, command, cwd=..., on_exit_wake="notify",
+                     on_exit_style="tool", watch_tail=0, quiet_secs=0.0)
+```
+
+| 项 | 语义 |
+|---|---|
+| `quiet_secs` | **启动蜜月窗口**（秒，默认 0=不蜜月）——服务启动后 `quiet_secs` 秒内退出（含 rc≠0）→ **on_exit 回调静默**：不通知、不唤醒（on_exit 链路整体跳过）；窗口外退出照常走 [on_exit_wake](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify) 全套 |
+
+**谁带蜜月（分工）**：
+
+| 启动路径 | quiet_secs | 理由 |
+|---|---|---|
+| 声明服务——`_ensure_agent_services`（src/multiagent.py，子 Agent 实例化 + main.yml 主 Agent 启动期两路共用，单一真源） | **120** | restart 拉起后 2 分钟内退出=启动期抖动，静默；真崩溃（2 分钟后）才值得叫人 |
+| `start_service` 工具（LLM 主动起的服务） | 0（不传） | LLM 起的服务崩了照常通知——它自己的运维责任，蜜月会掩盖真故障 |
+
+**冒烟对照**：quiet-demo（蜜月 3s）启动即退 rc=1 → **零回调**；loud-demo（无蜜月）启动即退 → **正常回调** ✓——精确只静默蜜月窗口内的退出。
+
+**生效**：commit `86e36f9` 已推送 + site-packages 已同步，`/restart` 后生效。声明侧落点见 [multi-agent · services 后记三](../architecture/multi-agent.md)。
+
+**关联**：[on_exit_wake 策略](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（蜜月只管「何时静默」，策略管「通知去哪/注入什么」——两者正交）· [退出通知默认进 inbox](#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)（notify 的注入姿势，上一节）· [start_service 撞死服务被拒](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)（同 restart 语义族：死服务覆盖重建）
+
 ## 与其他模块的关系
 
 - [user-interaction](user-interaction.md)：schedule 唤醒的轮走 inbox；通知语义标签体系给 ⏰ `schedule:` source（通知气泡形态 + 混合批批首归属 `schedule:z` 判定）；service_exit / bg_task / schedule 三族唤醒全景表见该页

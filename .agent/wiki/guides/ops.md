@@ -12,12 +12,13 @@
 <fixed-cwd>/            # cwd 斜线替换为'-'（D:\A\Agt → D--A-Agt；旧 hash 目录启动自动迁移）
   sessions/<ts>/        # events.jsonl / toollog.jsonl / llm_calls.jsonl / meta.json
     agents/<子id>/      # 子 Agent 嵌套 session（meta.json 含 _agent_meta）
+    branches/<分支名>/  # session 分支（meta.branch: branch_of/inherit_lines/base_hash；2026-10-08）
     projections/        # 投影转储（/config dump_projections true 时）
   memories/             # 长期记忆三类（semantic 常驻 / episodic 按召回 / procedural 标题+按需）
   plans/  specs/  images/  rag/
 ```
 
-memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长期记忆](../features/longterm-memory.md)。
+memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长期记忆](../features/longterm-memory.md)。branches/ 分支目录（`/branch` 从主线任意轮带记忆开支线，读侧引用式合成、写侧隔离）见 [session 分支机制](../features/session-branching.md)。
 
 ## 存档写盘容错：session 落盘失败不再阻塞 react（2026-09-02，commit e5f2733）
 

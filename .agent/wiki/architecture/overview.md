@@ -76,6 +76,7 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
 | XML 工作流格式 | CDATA 免转义，LLM 写起来远比 JSON 不易出错 |
 | mtime 快照 diff 检测副作用 | 按工具名猜测不可靠（run_python 绕过）；gitignore+嵌套仓库剪枝后 124 文件 51ms |
 | 事件流 events.jsonl append-only | 读档重放即恢复（含中断轮兜底），无需手写序列化 |
+| session 分支=引用式合成（读侧拼流、写侧隔离） | 支线继承主线架构认知做无关任务，不稀释主线注意力——load 时「主线前 N 行+分支行」喂现有重放器（投影引擎零感知），base_hash 校验主线 rewind 漂移（2026-10-08，[session 分支](../features/session-branching.md)） |
 | before_turn 钩子并行执行 | 同一 hook 多工作流并发跑，ThreadPoolExecutor + as_completed 确保全部完成才进入主循环，避免「一个钩子未完成就开始第1步」 |
 | 插话队列（pending_messages）+ 后台触发 | answer 完成后检查 inbox + pending_messages，确保插话不滞留，自动开新一轮处理（2026-08-19 修复） |
 | UI 并行钩子状态 Map 索引 | 避免多个并行钩子的「执行中」状态互相覆盖，按 hook::name 独立跟踪（2026-08-19 修复） |
@@ -84,7 +85,6 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
 
 ## 相关页面
 
-
 - [长期记忆](../features/longterm-memory.md) — 三类记忆注入 / episodic 召回流水线（before_turn 检索工作流）/ `/memory` 管理页
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：before_turn 并行执行 / async 钩子 / 运行观测 / 快照检测闭环
 - [工作流运行观测](../features/wf-monitor.md)：run registry + /wf/monitor 实时节点轨迹
@@ -92,6 +92,7 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
 - [多 Agent 体系](../architecture/multi-agent.md)：inbox 路由 / 三层消费机制 / 子 Agent 唤醒
 - [多实例组网](multi-instance.md)：remote_instance_id 工具路由（2026-09-06 前名 server_id，旧名兼容）/ /api/tool/exec 工具级直执行 / 远程连接管理（与 WS 消息驱动的"脑"互补的"手"）
 - [上下文引擎与缓存优化](../architecture/context-engine.md)：投影装配 / 分档投影 / 前缀缓存三层优化
+- [session 分支机制](../features/session-branching.md)：/branch 从主线任意轮带记忆开支线——引用式合成 + 写侧隔离，投影引擎零感知（2026-10-08）
 - [wiki_auto_query · before_turn 自动 wiki 检索](../features/wiki-auto-query.md)：before_turn 典型实例（默认关闭）
 - [WebUI 界面国际化](../features/i18n.md)：中英双向字典引擎（一份字典 zh2en/en2zh 双索引）/ 语言链与切换 / 渐进翻译 fallback（2026-10-04）
 

@@ -174,7 +174,8 @@ def _ensure_agent_services(meta: dict, agent) -> None:
         for sname, cmd in it.items():
             try:
                 r = agent.services.start(str(sname), str(cmd), str(agent.session.workspace)
-                                         if getattr(agent.session, "workspace", "") else "")
+                                         if getattr(agent.session, "workspace", "") else "",
+                                         quiet_secs=120)   # 启动蜜月：秒退不吓 agent
                 _LOG.info("子 Agent 依赖服务 %s: %s", sname, str(r)[:80])
             except Exception as e:
                 _LOG.warning("子 Agent 依赖服务 '%s' 拉起失败: %s", sname, e)

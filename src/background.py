@@ -43,7 +43,7 @@ class ServiceManager:
         self._on_exit = on_exit   # 进程自行退出回调 on_exit(name, entry, rc)，由 Agent 注入（可 None）
 
     def start(self, name: str, command: str, cwd: str = "", on_exit_wake: str = "notify",
-              on_exit_style: str = "tool", watch_tail: int = 0) -> str:
+              on_exit_style: str = "tool", watch_tail: int = 0, quiet_secs: float = 0.0) -> str:
         with self._lock:
             old = self._services.get(name)
             if old is not None and old["proc"].poll() is None:
@@ -82,7 +82,10 @@ class ServiceManager:
                  "started_at": time.time(), "pid": proc.pid,
                  "logs": logs, "manual_stop": False,
                  "on_exit_wake": on_exit_wake, "on_exit_style": on_exit_style,
-                 "watch_tail": max(0, int(watch_tail))}   # >0：投影的 bg_services 段附日志尾部 N 行
+                 "watch_tail": max(0, int(watch_tail)),
+                 # 启动蜜月（用户实锤 2026-10-08）：quiet_secs 窗口内的退出不通知——
+                 # restart 拉起的服务若秒退（旧孤儿占端口等），不再把 agent 吓一跳。
+                 "quiet_until": time.time() + max(0.0, float(quiet_secs))}
         # 日志持久化（用户实锤 2026-10-08：restart 后完整日志 404——deque 是内存的）：
         # reader 线程 tee 到 ~/.agt/service_logs/<name>.log，实例重启后仍可读历史。
         try:
@@ -129,6 +132,8 @@ class ServiceManager:
             with self._lock:
                 if name not in self._services:   # 退出期间被移除 → 不通知
                     return
+            if time.time() < float(entry.get("quiet_until") or 0):
+                return   # 启动蜜月期内的退出：静默（restart 场景秒退不唤醒 agent）
             if self._on_exit is not None:
                 try:
                     self._on_exit(name, entry, rc)

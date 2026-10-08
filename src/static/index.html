@@ -3602,7 +3602,10 @@ function onWSMessage(ev){
           o.textContent = `${it.name} ${turnsText}${ts?` · ${ts}`:''}`;
           sel.appendChild(o);
         });
-        if(window._curSid && sel.querySelector(`option[value="${window._curSid}"]`)) sel.value=window._curSid;   // 当前会话选中跟随（reset/resume 后下拉框指向新会话）
+        // 当前会话选中跟随：精确 id 优先，miss 时分支 sid 后缀匹配（分支项 id 是复合 '主线ts/分支名'）
+        let sidOpt = (window._curSid && sel.querySelector(`option[value="${window._curSid}"]`)) || null;
+        if(!sidOpt && window._curSid) sidOpt = [...sel.options].find(o=>o.value.endsWith('/'+window._curSid)) || null;
+        if(sidOpt) sel.value=sidOpt.value;
         else if(window._lastSaved && sel.querySelector(`option[value="${window._lastSaved}"]`)) sel.value=window._lastSaved;
         else if(curVal && curVal!=='__new__' && sel.querySelector(`option[value="${curVal}"]`)) sel.value=curVal;
         // 初始化标题：如果有上次的存档或当前选中的值，用其 name 字段

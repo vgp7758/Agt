@@ -2639,6 +2639,20 @@ def broadcast_session_state(agent):
         pass
 
 
+def _refresh_ui_if_session_switched(agent, pre_sess_id: int):
+    """dispatch 后会话实例身份变化（/branch /resume /reset 等切了 session）→ 自动刷新前端：
+    session_history + team_list + spec（broadcast_session_state）+ sessions 列表（新分支进下拉）。
+    用户提案 2026-10-08：/branch 创建即切换，UI 不刷新让人以为没生效。"""
+    if id(agent.session) == pre_sess_id:
+        return
+    try:
+        broadcast_session_state(agent)
+        from session import list_sessions
+        _broadcast({"type": "sessions", "names": list_sessions(workspace=_workspace)})
+    except Exception:
+        pass
+
+
 async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None):
     """处理一条用户输入（文本/命令/action）。client=来源客户端 dict（含 target——
     文本按其交互目标路由：主 Agent 走 work_q；子 Agent 按忙闲插话/task 直达）。"""
@@ -2885,6 +2899,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         text = (_d.get("text") or "").strip()
         if text.startswith("/"):   # 斜杠命令兜底（2026-10-05 用户实锤：/hold on 190 曾被当插话注入 messages）
             buf = io.StringIO()
+            _pre_sess = id(agent.session)
             try:
                 with contextlib.redirect_stdout(buf):
                     registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
@@ -2893,6 +2908,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
             if out:
                 await _send(ws, {"type": "system", "text": out})
+            _refresh_ui_if_session_switched(agent, _pre_sess)   # /branch /resume /reset 切了会话 → 自动刷 UI
             return
         if text:
             # target 路由（2026-10-07 用户实锤：子 Agent 页面发的"继续"被插话给了主 Agent）：
@@ -3113,6 +3129,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     # 斜杠命令（即时处理，不进 work_q）
     if text.startswith("/"):
         buf = io.StringIO()
+        _pre_sess = id(agent.session)
         try:
             with contextlib.redirect_stdout(buf):
                 registry.dispatch(text, CommandContext(agent=_target_agent(client, agent), work_q=_work_q, state=_state))
@@ -3121,6 +3138,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             out = f"⚠️ 命令执行出错：{type(e).__name__}: {e}"
         if out:
             await _send(ws, {"type": "system", "text": out})
+        _refresh_ui_if_session_switched(agent, _pre_sess)   # /branch /resume /reset 切了会话 → 自动刷 UI
         return
 
     # 普通对话：忙时走"中途注入"（下一步边界模型即可见、可改向），闲时正常入队下一轮。

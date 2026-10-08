@@ -116,10 +116,12 @@ sessions/<主线ts>/
 
 ## 与其它模块的关系
 
+
 - [检查点快照与回溯](snapshot-rewind.md)：主线 rewind 重写 events → base_hash 漂移告警（校验即为此设计）
 - [中断轮恢复](resume-interrupted.md)：/resume 体系入口，分支名/主线名均可解析（解析顺序：路径 → id → name → 分支名 → 旧扁平回退）
 - [recall_turn](recall-tools.md)：基底轮召回依赖 toollog call_id 全局续号（链式多级同样续号）
 - [上下文引擎](../architecture/context-engine.md)：投影/tier/折叠零感知——分支只是「另一份事件流」喂进同一重放器
+- [wiki 自动维护](wiki-auto-maintenance.md)：`before_answer`/`turn_end` 钩子 context 注入 `is_branch` → check_changes 节点短路——**支线干活 wiki 维护静默**（只有主线轮触发）；支线产出的 wiki 知识回主线后由主线轮自然维护
 
 ## 注意事项
 

@@ -196,6 +196,23 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 > **恢复状态修正（同 commit，引擎侧防谎报）**：`_restore_subagents` 读档时 meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ busy_parse 判忙 → 同款死锁。堆积的 pending 不用手动清：/restart 后下一轮触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活消费 → 队列轮转清空（该路径已被 v0.22.1 发布轮活验收证实）。
 
+## 分支会话短路：is_branch 判据——支线干活 wiki 维护静默（2026-10-08，用户提案）
+
+**用户提案**：wiki 维护这类事只有主线工作时才有必要——支线上的代码改动不该进主线 wiki。工作流需要拿到 session 分支元信息确认主线/支线，是支线就直接短路。
+
+**双层实现**：
+
+| 层 | 改动 |
+|---|---|
+| **引擎（src/agent.py）** | `before_answer` 与 `turn_end` 两个钩子 context 通用注入 `"is_branch": bool(getattr(self.session, "branch_meta", None))`——工作流 start 节点声明 `<out name="is_branch" type="boolean"/>` 即可 ref。注入机制详见 [workflow-hooks · hook context 新键 is_branch](../architecture/workflow-hooks.md#hook-context-新键is_branch分支会话标记2026-10-08用户提案) |
+| **工作流（wiki_auto_maintenance.xml）** | `check_changes` code 节点**首个短路判据**：`if args.params.get("is_branch"): return {"has_code_changes": False, "wiki_touched": False, "reason": "分支会话——wiki 维护只在主线进行（短路）"}`（与该节点既有的②无文件变更/全 wiki 变更短路并列，判据①最前置） |
+
+**短路路径**：`has_code_changes=False` → 复用现有 `worth_running?` selector 直接 end——**零 LLM 调用、零节点新增**，比判官意图识别还前置。支线上干活这条钩子链在最前面就掐断：不派 wiki-updater、不攒批入队，支线改一天文件 wiki-updater 完全静默。
+
+**为什么做成通用注入而非 wiki 专用**：`is_branch` 挂在钩子 context 层（引擎提供），而不是让每个工作流自己去读磁盘 meta——以后任何「只应在主线发生」的钩子（主线级巡检、commit 整理、定时业务等）都能一个 `if` 接入。wiki 只是第一个消费者。
+
+**播种同步**：`sync_workflow_sources` 回灌 global 层 → 种源 `src/workflows/wiki_auto_maintenance.xml`（±10 行）。生效需 `/restart`（agent.py 引擎侧改动）。支线里真产出了值得进 wiki 的知识，回主线后正常轮次自然会维护到（主线记忆含支线经历——[链式基底合成](session-branching.md)的价值正在这里）。
+
 ## 模板措辞中性化（2026-08，commit 17312eb）
 
 **问题**：拼接模板（`336423` text 节点）此前把判官输入以 `user message: ... assistant answer: ...` 的**判官口吻裸转储**拼进任务文本——wiki-updater 收到的 update_wiki 任务 prompt 也是这个开头（团队看板里 wiki-updater 的 recap 复述出 `user message:` 开头而暴露）。

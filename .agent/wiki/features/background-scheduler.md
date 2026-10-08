@@ -453,32 +453,41 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **生效**：框架层 docstring（commit `4a47dbc`，/restart 后进投影）；服务层响应文案 + /help（backend commit `92878a7`，unity-repl 服务重启后生效）。
 
-### 后记：REPL 服务默认往返——未传 expect 自动等响应（2026-10-09，20048 实锤，commit c5a7f33）
+### 后记：REPL 服务默认往返——未传 expect 固定 5s 收集窗口 + 静默提前返回（2026-10-09，20048 实锤，commits c5a7f33 + 739305e）
 
 **触发（20048 实锤，用户委托诊断）**：20048 通过 stdin 向 unity-repl 发指令时**没传 expect** → 走旧行为「写入即返回」，工具结果只有一行 `📤 已发送到「unity-repl」stdin：/click...`。而 unity-repl 的协议是**命令处理完才打印响应**（`/click -wait 6` 要等 6s+）——agent 立即拿到的回执里**零响应内容**，看不到命令的实际结果一脸懵逼，只能再调 /status 或翻日志找结果，白费轮次。
 
 **根因**：expect 的「空 = 立即返回」默认对 REPL 型服务是**语义缺口**——REPL 的协议本义就是**一次 stdin 对应一次 stdout**（与 [repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f) 的约定同源），发指令必然期待响应；「立即返回」只该适用于 fire-and-forget 型服务（往 daemon 喂命令）。
 
-**修复**（src/background.py `ServiceManager.send` + src/background_tools.py docstring，commit `c5a7f33`，site-packages 已同步，`/restart` 后生效）：
+**两步演进（同日 2026-10-09）**：
+
+| 版本 | commit | 口径 | 为什么改 |
+|---|---|---|---|
+| 初版 | `c5a7f33` | 自动 expect=`\S` + timeout 抬到 **≥30s**（REPL 命令常带 -wait，怕默认 10s 不够） | 用户裁定：30s 对秒回命令是傻等，要「一个小的时间窗口」 |
+| **终版（现行）** | `739305e` | **固定 5s 收集窗口**：窗口内 stdout 全量带回 + 静默提前返回 | 秒回不傻等、慢命令能收全、超慢有指引 |
+
+**终版语义**（src/background.py `ServiceManager.send`，commit `739305e`，site-packages 已同步，`/restart` 后生效）：
 
 | 项 | 行为 |
 |---|---|
-| 判定 | `repl_seen`（**含本次调用刚置的**——发一次就算交互过，首次发送也自动往返）且未传 expect → 自动往返 |
-| expect | 自动取 `\S`（等首个非空输出行） |
-| timeout | 自动抬到 **≥30s**（REPL 命令常带 -wait 参数，默认 10s 不够） |
-| 多行收尾 | 首行命中后 0.6s 静默窗口收尾——多行响应 + done 尾标一次带全 |
+| 判定 | `repl_seen`（**含本次调用刚置的**——发一次就算交互过，首次发送也自动往返）且未传 expect → 默认往返 |
+| 窗口 | **固定 5s**：窗口内 stdout 新增输出**全量带回**（unity-repl 的响应 + done 尾标几秒内打出，5s 足够） |
+| 提前返回 | 窗口内**已出过输出且 0.6s 无新行** = 响应收完，立即返回——秒回命令不傻等（0.6s 静默判据与 [交互即判定 · /status 多行收集](#后记交互即判定repl_seen--多行-status静默窗口前-5-行封顶2026-10-08--二用户提案commit-c0e9768) 同源） |
+| 窗口耗尽 | 到点返回已收输出；窗口内**零输出** → 提示「窗口内无输出——命令可能耗时较长，请传 expect=完成标记 + 更长 timeout」（超时文案自带下一步指引） |
+| 更长等待 | 显式传 `expect` + `timeout`（如 /launch → expect=LAUNCH-READY，见 [done 尾标后记](#后记expectdone-惯性假阳性done-尾标只代表受理长任务完成标记是命令专属2026-10-08框架-commit-4a47dbc--backend-92878a7)） |
 | 非 REPL 服务 | 从未被交互过且不传 expect → 仍旧行为立即返回（fire-and-forget 场景零感知） |
 
-**冒烟实证**（模拟 20048 场景，无 expect 发 `/click`）：
+**冒烟实证（三场景全绿，模拟 20048 场景）**：
 
-```
-✅ 已发送（REPL 默认往返——未传 expect，自动等响应，共 3 行）：
-click ok at (960,540)
-engine delta: scene=title
-[repl] done /click
-```
+| 场景 | 耗时 | 结果 |
+|---|---|---|
+| 快命令（秒回 + done 尾标） | **0.7s** | 静默提前返回，响应 2 行全带 ✓ |
+| 慢命令（2s 后响应） | 2.6s | 0.6s 静默窗口收尾，窗口内收全 ✓ |
+| 超慢命令（8s 才响应） | 5.1s | 窗口截断 + 指引文案（教 agent 显式传 expect 重试）✓ |
 
-**与上文口径的关系**：expect 参数表中「空 = 旧行为（立即返回）」自本改起应读作「空**且非 repl_seen 服务** = 立即返回」。docstring 同步改写：expect 参数描述带自动往返说明，[done 尾标警告](#后记expectdone-惯性假阳性done-尾标只代表受理长任务完成标记是命令专属2026-10-08框架-commit-4a47dbc--backend-92878a7) 并入其中——模型从工具描述即知此行为；超时文案引导长命令传命令专属完成标记（如 /launch → LAUNCH-READY，见上节）。
+**docstring 同步**（src/background_tools.py）：expect 参数描述改为「空=立即返回——**但 REPL 服务（曾被交互过的）自动走默认往返**：固定 5s 收集窗口，窗口内 stdout 全量带回（已出过输出且 0.6s 静默=响应收完则提前返回，秒回命令不傻等）；要更长等待请显式传 expect+timeout」；[done 尾标警告](#后记expectdone-惯性假阳性done-尾标只代表受理长任务完成标记是命令专属2026-10-08框架-commit-4a47dbc--backend-92878a7) 并入其中——模型从工具描述即知此行为。
+
+**与上文口径的关系**：expect 参数表中「空 = 旧行为（立即返回）」自本改起应读作「空**且非 repl_seen 服务** = 立即返回」。
 
 **关联**：[后记 · 交互即判定（repl_seen）](#后记交互即判定repl_seen--多行-status静默窗口前-5-行封顶2026-10-08--二用户提案commit-c0e9768)——`repl_seen` 的**第二个消费端**（① 投影自动 /status，② 本节 stdin 默认往返）· [expect 往返语义](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（本节默认化的基础）。
 

@@ -1856,7 +1856,7 @@ def _agent_safe_name(name: str) -> str:
 async def api_sched_upd(body: dict):
     """定时任务部分更新（用户提案 2026-10-07）：{name, every_seconds?, at?, deadline?, repeat?, message?}。
     每次触发/下次触发时刻/截止/循环/消息——未提供的字段保持原值。"""
-    ag = _state.get("agent")
+    ag = _state.get("agent") or agent
     if ag is None:
         return {"ok": False, "error": "Agent 未就绪"}
     name = str(body.get("name") or "").strip()
@@ -1875,7 +1875,7 @@ async def api_sched_upd(body: dict):
 @app.post("/api/sched_add")
 async def api_sched_add(body: dict):
     """手动添加定时任务（抽屉弹窗表单）：{name, every_seconds?, at?, deadline?, repeat?, message?}。"""
-    ag = _state.get("agent")
+    ag = _state.get("agent") or agent
     if ag is None:
         return {"ok": False, "error": "Agent 未就绪"}
     name = str(body.get("name") or "").strip()
@@ -1899,7 +1899,7 @@ async def api_sched_add(body: dict):
 @app.post("/api/sched_del")
 async def api_sched_del(body: dict):
     """取消定时任务（抽屉弹窗删除钮）。"""
-    ag = _state.get("agent")
+    ag = _state.get("agent") or agent
     if ag is None:
         return {"ok": False, "error": "Agent 未就绪"}
     name = str(body.get("name") or "").strip()
@@ -1913,7 +1913,7 @@ async def api_sched_del(body: dict):
 async def api_svc_log(name: str):
     """服务完整日志页（2026-10-06 用户提案）：新页签查看，5s 自刷新，全量环形缓冲。"""
     from fastapi.responses import HTMLResponse
-    _agent = _state.get("agent")
+    _agent = _state.get("agent") or agent
     ent = ((_agent.services._services or {}).get(name)) if _agent else None
     if not ent:
         # 兜底（用户实锤 2026-10-08：restart 后点完整日志 404）：进程未登记（实例重启过）
@@ -1968,7 +1968,7 @@ async def api_svc_fav(body: dict):
         return {"ok": False, "error": "缺少 name"}
     cmd = str(body.get("command") or "").strip()
     try:
-        _agent = _state.get("agent")
+        _agent = _state.get("agent") or agent
         _ent = (_agent.services._services or {}).get(name) if _agent else None
         if _ent:
             cmd = str(_ent.get("command") or cmd)
@@ -2011,7 +2011,7 @@ async def api_svc_op(body: dict):
     """看板服务操作（2026-10-06）：op=stop 停运行中服务；op=start 用原启动参数重启已退出服务。"""
     name = str(body.get("name") or "").strip()
     op = str(body.get("op") or "").strip()
-    _agent = _state.get("agent")
+    _agent = _state.get("agent") or agent
     if not _agent or not name:
         return {"ok": False, "error": "缺少 agent/name"}
     svc = _agent.services

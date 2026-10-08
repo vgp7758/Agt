@@ -186,21 +186,26 @@ def _cmd_branch(ctx: CommandContext, args):
         print("❌ 分支名不能为空")
         return
     sess = ctx.session
-    if getattr(sess, "branch_meta", None):
-        print("❌ 当前已在分支上——v1 不支持嵌套分支。先 /resume <主线名> 回主线再分叉")
-        return
     sdir = getattr(sess, "session_dir", None)
     if not sdir or not (sdir / "meta.json").exists():
-        print("❌ 当前会话尚未落盘（无主线存档），先完成一轮对话再分叉")
+        print("❌ 当前会话尚未落盘（无存档），先完成一轮对话再分叉")
         return
-    main_events_p = sdir / "events.jsonl"
-    if not main_events_p.exists():
-        print("❌ 主线无 events.jsonl，无法分叉")
+    # v2（2026-10-08 用户提案：支线上再分叉）——以当前会话（主线或支线）的记忆为新基底：
+    #   主线上：branch_of=<主线ts>，继承主线 events 前 N 行（v1 原语义）；
+    #   支线上：branch_of=<主线ts>/branches/<支线名>（相对 sessions 根），继承该支线自己
+    #           events 前 M 行（load 链式合成自动带上主线基底——记忆全量）。
+    #   新分支目录一律平铺在【顶层主线】的 branches/ 下（不嵌套目录树）。
+    is_branch = bool(getattr(sess, "branch_meta", None))
+    sessions_root = sdir.parents[2] if is_branch else sdir.parent
+    top_dir = sdir.parents[1] if is_branch else sdir          # 顶层主线目录
+    base_events_p = sdir / "events.jsonl"                      # 继承源 = 当前会话自己的事件流
+    if not base_events_p.exists():
+        print("❌ 当前会话无 events.jsonl，无法分叉")
         return
-    events = _read_events(main_events_p)
+    events = _read_events(base_events_p)
     total_turns = sum(1 for e in events if e.get("event") == "turn_end")
     if total_turns == 0:
-        print("❌ 主线还没有已完成的轮次，无可继承记忆")
+        print("❌ 当前会话还没有已完成的轮次（支线上分叉需支线至少完成一轮），无可继承记忆")
         return
     if keep_turns is None or keep_turns >= total_turns:
         keep_turns = total_turns   # 不带轮号=全部（≥ 则钳到全部）
@@ -214,35 +219,41 @@ def _cmd_branch(ctx: CommandContext, args):
                 n_lines = i
                 break
     base_events = events[:n_lines]
-    # 建分支目录 + meta.json（基础字段拷贝自主线 meta，保真 system/窗口配置）
-    bdir = sdir / "branches" / branch_name
+    # 建分支目录 + meta.json（基础字段拷贝自当前 meta，保真 system/窗口配置）
+    bdir = top_dir / "branches" / branch_name
     if bdir.exists():
         print(f"❌ 分支「{branch_name}」已存在：{bdir}")
         return
     try:
         bdir.mkdir(parents=True)
-        main_meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
+        cur_meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
     except Exception as e:
         print(f"❌ 创建分支失败：{e}")
         return
     import time as _t
+    branch_of = (f"{top_dir.name}/branches/{sdir.name}" if is_branch else sdir.name)
+    # 显示链（list_sessions 用）：父链 ⇢ 当前会话名——支线分叉时完整链可见
+    parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or top_dir.name)
+    display_chain = f"{parent_chain} ⇢ {sess.name or sdir.name}" if is_branch else str(parent_chain)
     bmeta = {
         "name": branch_name,
         "created_at": _t.time(),
-        "system": main_meta.get("system", ""),
-        "recent_window_turns": main_meta.get("recent_window_turns", 4),
-        "max_steps_per_turn": main_meta.get("max_steps_per_turn", 80),
+        "system": cur_meta.get("system", ""),
+        "recent_window_turns": cur_meta.get("recent_window_turns", 4),
+        "max_steps_per_turn": cur_meta.get("max_steps_per_turn", 80),
         "branch": {
-            "branch_of": sdir.name,
+            "branch_of": branch_of,
             "inherit_lines": n_lines,
             "base_hash": _events_fingerprint(base_events),
+            "display_chain": display_chain,
         },
         "saved_at": int(_t.time()),
     }
     (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"✅ 分支已创建：主线「{sess.name or sdir.name}」前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
+    src_desc = f"分支「{sess.name or sdir.name}」（链：{display_chain}）" if is_branch else f"主线「{sess.name or sdir.name}」"
+    print(f"✅ 分支已创建：{src_desc} 前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
           f"→ 分支「{branch_name}」")
-    # 立即加载分支并切换（同 /resume 路径——toollog 合载恢复 counter，新 call_id 自然续号）
+    # 立即加载分支并切换（同 /resume 路径——链式合载恢复全链记忆，counter 全局续号）
     try:
         new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,
                               workspace=sess.workspace)
@@ -250,7 +261,7 @@ def _cmd_branch(ctx: CommandContext, args):
         print(f"❌ 分支加载失败：{e}")
         return
     ctx.agent.set_session(new_session)
-    print(f"🌿 已切到分支：{branch_name}（基底 {keep_turns} 轮 + 分支 0 轮）")
+    print(f"🌿 已切到分支：{branch_name}（基底链 {len(new_session.turns)} 轮 + 分支 0 轮）")
     print("   支线新内容只写分支目录；/resume <主线名> 随时回主线")
 
 

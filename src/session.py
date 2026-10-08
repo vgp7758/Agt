@@ -3637,36 +3637,31 @@ class Session:
                 shutil.copy2(old_toollog, toollog_path)
             if old_llm_calls.exists():
                 shutil.copy2(old_llm_calls, llm_calls_path)
-        # —— 分支基底合成（用户提案 2026-10-08，在 events 判断之前：新建分支无自己的
-        # events.jsonl，首次 load 也要有基底记忆）——meta 带 branch 字段 → 读主线前 N 行，
-        # 与分支事件流拼接后喂重放器（投影/tier/折叠引擎零感知）；写侧句柄全绑分支目录（隔离）。
-        # main_dir 定位：分支目录形如 <repo>/sessions/<主线ts>/branches/<分支名>——
-        # sessions 根 = 分支目录上三级，主线目录 = sessions 根下按 branch_of 名定位
-        # （不用相对上级——主线目录可能整体被挪动/改名，按名从根解析最稳）。
+        # —— 分支基底链合成（用户提案 2026-10-08；v2 支持支线上再分叉：链式逐层收集）——
+        # 在 events 判断之前（新建分支无自己的 events.jsonl，首次 load 也要有基底记忆）。
+        # meta.branch 沿 branch_of 链逐层收集基底（根→叶）：主线层=主线 events 前N；支线层=支线
+        # 自己 events 前M——拼接即完整记忆流，喂重放器（投影/tier/折叠引擎零感知）。
+        # branch_of 支持 "<主线ts>"（一级）或 "<主线ts>/branches/<支线名>"（二级+，相对 sessions 根）。
+        # 写侧句柄全绑分支目录（隔离）；每层指纹独立校验（漂移→警告仍合成）。
         base_events = []
         _lc_base = []
-        main_dir = (sdir.parents[2] / str(s.branch_meta.get("branch_of") or "")) if s.branch_meta else None
-        if s.branch_meta and main_dir:
-            main_events_p = main_dir / "events.jsonl"
-            n_lines = int(s.branch_meta.get("inherit_lines") or 0)
-            if main_events_p.exists() and n_lines > 0:
-                base_events = _read_events(main_events_p)[:n_lines]
-                fp_now = _events_fingerprint(base_events)
-                if s.branch_meta.get("base_hash") and fp_now != s.branch_meta.get("base_hash"):
-                    _LOG.warning("分支基底漂移：主线 %s 前 %d 行指纹 %s ≠ 创建时 %s（主线可能被回溯重写）——"
-                                 "继续合成基底，个别 call_id 可能解析不到",
-                                 s.branch_meta.get("branch_of"), n_lines, fp_now, s.branch_meta.get("base_hash"))
-            else:
-                _LOG.warning("分支基底缺失 %s（inherit_lines=%d）——降级为纯分支流", main_events_p, n_lines)
-            # 基底 toollog/llm_calls 合载（先主线后分支：ToolLog.load_from_jsonl 不清空 _data
-            # 为合载语义、counter 取全局最大续号；LLMCallLog 清空——先留基底再拼回）
-            main_tl = main_dir / "toollog.jsonl"
-            if main_tl.exists():
-                s.toollog.load_from_jsonl(main_tl)
-            main_lc = main_dir / "llm_calls.jsonl"
-            if main_lc.exists():
-                s.llm_calls.load_from_jsonl(main_lc)
-                _lc_base = s.llm_calls.all_records()
+        _chain_dirs = []      # 根→叶各层目录（toollog/llm_calls/recaps 逐层合载）
+        if s.branch_meta:
+            _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, sdir.parents[2])
+            for layer_dir, lay_ev, lay_hash in _layers:
+                if lay_hash and _events_fingerprint(lay_ev) != lay_hash:
+                    _LOG.warning("分支基底漂移：%s 前 %d 行指纹不符（该层可能被回溯重写）——继续合成，"
+                                 "个别 call_id 可能解析不到", layer_dir.name, len(lay_ev))
+                base_events.extend(lay_ev)
+                _chain_dirs.append(layer_dir)
+                # 各层 toollog 合载（不清空 dict，counter 全局续号）
+                lay_tl = layer_dir / "toollog.jsonl"
+                if lay_tl.exists():
+                    s.toollog.load_from_jsonl(lay_tl)
+                lay_lc = layer_dir / "llm_calls.jsonl"
+                if lay_lc.exists():
+                    s.llm_calls.load_from_jsonl(lay_lc)
+                    _lc_base.extend(s.llm_calls.all_records())   # 逐层取走拼接（LLMCallLog 清空语义）
         if events_path.exists():
             # —— 新格式：重放事件流重建 turns（未完成 turn 进 turns，不丢弃）——
             s.turns = _replay_events(base_events + _read_events(events_path))
@@ -3676,10 +3671,10 @@ class Session:
             if llm_calls_path.exists():
                 s.llm_calls.load_from_jsonl(llm_calls_path)
                 if _lc_base:
-                    s.llm_calls._records = _lc_base + s.llm_calls._records   # 基底在前、分支在后
+                    s.llm_calls._records = _lc_base + s.llm_calls._records   # 基底链在前、分支在后
             s._bind_event_path(events_path)   # 绑定（缓冲为空，不覆盖已有）
-            if base_events and main_dir:
-                s._load_recaps(main_dir)          # 基底轮 recap（idx 与合成流对齐）
+            for _ld in _chain_dirs:
+                s._load_recaps(_ld)             # 各层基底轮 recap（idx 与合成流对齐）
             s._load_recaps(sdir)              # 恢复各轮 recap（异步产物不进事件流，sidecar 持久化）
         elif "turns" in data:
             # —— 旧格式迁移：meta.json 里有 turns（+ 可能 toollog 字段），一次性转成事件流 ——
@@ -3700,13 +3695,13 @@ class Session:
                                "answer_reasoning": t.answer_reasoning, "summary": t.summary})
             s.turns = old_turns
         else:
-            # 无自己的事件流（普通新会话 / 刚 /branch 创建的分支）——分支时基底即全部记忆
+            # 无自己的事件流（普通新会话 / 刚 /branch 创建的分支）——分支时基底链即全部记忆
             if base_events:
                 s.turns = _replay_events(base_events)
                 s.toollog.set_path(toollog_path)      # 绑分支路径（文件不存在则 flush 基底合载，自包含）
                 s._bind_event_path(events_path)       # 绑 events 路径（分支首轮写直接落分支目录）
-                if main_dir:
-                    s._load_recaps(main_dir)
+                for _ld in _chain_dirs:
+                    s._load_recaps(_ld)                 # 各层基底轮 recap（链式，idx 对齐）
             else:
                 s.turns = []
         s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
@@ -3845,6 +3840,37 @@ def _events_fingerprint(events: list) -> str:
     for e in events:
         h.update((json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
     return h.hexdigest()[:16]
+
+
+def _branch_chain_bases(root_meta: dict, sessions_root: Path) -> list:
+    """分支基底链解析（2026-10-08 v2·用户提案：支线上再分叉）。
+    沿 branch_of 链从叶到根逐层收集，返回根→叶有序 [(层目录, 该层events[:N], 该层base_hash)]。
+    - branch_of 形如 "<主线ts>"（一级分支）或 "<主线ts>/branches/<支线名>"（二级+，相对 sessions 根）；
+    - 每层的 inherit_lines 语义 = 该层基底文件自己的前 N 行（主线层=主线 events 前N；支线层=支线
+      自己 events 前M——链式拼接即为完整记忆流）；
+    - 某层缺失 → 该层降级为空（警告），不断链；
+    - 环/超深（>8 层）截断。"""
+    layers_rev = []
+    cur = dict(root_meta or {})
+    for _ in range(8):
+        bo = str(cur.get("branch_of") or "").replace("\\", "/").strip("/")
+        if not bo:
+            break
+        layer_dir = sessions_root / bo
+        ev_p = layer_dir / "events.jsonl"
+        n = int(cur.get("inherit_lines") or 0)
+        if ev_p.exists() and n > 0:
+            layers_rev.append((layer_dir, _read_events(ev_p)[:n], cur.get("base_hash") or ""))
+        else:
+            _LOG.warning("分支基底缺失 %s（inherit_lines=%d）——该层降级为空", ev_p, n)
+            layers_rev.append((layer_dir, [], cur.get("base_hash") or ""))
+        # 上一层：读该层 meta 的 branch 字段（顶层主线无 → 终止）
+        try:
+            cur = json.loads((layer_dir / "meta.json").read_text(encoding="utf-8")).get("branch") or {}
+        except Exception:
+            break
+    layers_rev.reverse()
+    return layers_rev
 
 
 def _read_events(path) -> list:
@@ -4091,7 +4117,8 @@ def list_sessions(workspace=None) -> list[dict]:
                 pass
             results.append({
                 "id": f"{ts_dir.name}/{bd.name}",
-                "name": f"{main_name or ts_dir.name} ⇢ {bdata.get('name') or bd.name}",
+                # 显示链（v2）：meta.branch.display_chain 优先（支线上再分叉时完整链可见），缺省 '主线名 ⇢ 分支名'
+                "name": f"{(bdata.get('branch') or {}).get('display_chain') or (main_name or ts_dir.name)} ⇢ {bdata.get('name') or bd.name}",
                 "created_at": bdata.get("created_at"),
                 "turns": b_turns,
                 "first": b_first,

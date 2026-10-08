@@ -166,13 +166,43 @@ def main():
             check("id 复合可定位", it["id"] == "20260101_120000/测试分支", it["id"])
             check("turns=分支自身1轮", it["turns"] == 1, str(it.get("turns")))
 
-        # ===== 嵌套分支拦截 =====
-        print("\n[附加] 分支上再分叉拦截")
+        # ===== 场景⑥ 链式嵌套分叉（v2：支线上再分叉） =====
+        print("\n[场景⑥] 支线上再分叉——链式记忆合成")
+        # bs2 = 场景②load 的分支会话（基底主线2轮 + 分支1轮 = 3轮）；在它上面再分叉
         ctx2 = SimpleNamespace(agent=ctx.agent, session=bs2)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            _cmd_branch(ctx2, ["嵌套", "1"])
-        check("嵌套分支被拦截", "不支持嵌套" in buf.getvalue() and not (bdir / "branches").exists())
+            _cmd_branch(ctx2, ["二级支线"])
+        b2dir = ts_dir / "branches" / "二级支线"
+        check("二级分支已创建（平铺在顶层主线 branches/）", b2dir.exists() and (b2dir / "meta.json").exists())
+        b2meta = json.loads((b2dir / "meta.json").read_text(encoding="utf-8")) if (b2dir / "meta.json").exists() else {}
+        check("branch_of 指向一级支线目录", b2meta.get("branch", {}).get("branch_of") == "20260101_120000/branches/测试分支",
+              str(b2meta.get("branch", {}).get("branch_of")))
+        check("display_chain 完整链", "主线测试 ⇢ 测试分支" in str(b2meta.get("branch", {}).get("display_chain", "")),
+              str(b2meta.get("branch", {}).get("display_chain")))
+        # 已切到二级分支：记忆 = 主线基底2 + 一级支线1 = 3 轮
+        bs3 = ctx2.agent.set_session_calls[-1] if hasattr(ctx2.agent, "set_session_calls") else None
+        # set_session 是 mock：场景①的 ctx.agent 捕获列表——直接重 load 验证链式合成
+        bs3 = Session.load(str(b2dir / "meta.json"), llm=_FakeLLM(), workspace=tmpws)
+        check("链式合成：3 轮（主线2+支线1）", len(bs3.turns) == 3, f"实际 {len(bs3.turns)}")
+        check("主线内容可 recall（跨两级）", "session.py" in bs3.recall("Session.load"))
+        check("一级支线内容可 recall", "写简历" in bs3.recall("写简历"))
+        # list_sessions：二级分支显示完整链
+        items2 = list_sessions(tmpws)
+        b2 = [it for it in items2 if it.get("name", "").endswith("二级支线")]
+        check("list 显示完整链（主线 ⇢ 一级 ⇢ 二级）",
+              b2 and b2[0]["name"] == "主线测试 ⇢ 测试分支 ⇢ 二级支线", b2[0]["name"] if b2 else "未列出")
+        # 二级分支写隔离：新增轮只写二级目录
+        m2_before = (ts_dir / "events.jsonl").read_text(encoding="utf-8")
+        b1_before = (ts_dir / "branches" / "测试分支" / "events.jsonl").read_text(encoding="utf-8")
+        bs3.start_turn("二级支线任务")
+        bs3.finish_turn("二级完成")
+        time.sleep(0.3)
+        bs3.save()
+        check("二级写隔离：主线不变", (ts_dir / "events.jsonl").read_text(encoding="utf-8") == m2_before)
+        check("二级写隔离：一级支线不变", (ts_dir / "branches" / "测试分支" / "events.jsonl").read_text(encoding="utf-8") == b1_before)
+        b2ev = (b2dir / "events.jsonl")
+        check("二级写隔离：只写二级目录", b2ev.exists() and "二级完成" in b2ev.read_text(encoding="utf-8"))
 
     finally:
         shutil.rmtree(tmpws, ignore_errors=True)

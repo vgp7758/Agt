@@ -103,6 +103,26 @@ sessions/<主线ts>/
 
 创建时写入真值（父链 + `⇢` + 本分支名，如 `主线测试 ⇢ 测试分支 ⇢ 二级支线`）；`list_sessions` 优先读它（缺失回退 `主线名 ⇢ 分支名`），WebUI 会话下拉同链可见——支线上再分叉不再只看到最后一段。
 
+## WebUI 切会话 UI 自动刷新：会话身份检测 → 广播（2026-10-08，用户提案，commit 0192d33）
+
+**用户提案**：WebUI 输入 `/branch 社交卡片设计` 创建分支后，UI 毫无变化——「切分支的时候要不就自动刷一下浏览器吧」。
+
+**根因——前端对会话切换零感知**：`/branch` 的 `set_session` 在 WS 斜杠命令 dispatch 里同步执行，跑完只 `_send` 命令回显文本——`session_history`（历史区）与 `sessions`（会话下拉）都没有广播，前端停留在主线视图，看起来像命令没生效。
+
+**修复：会话身份检测 → 自动刷**（src/server.py + src/static/index.html）：
+
+| 件 | 说明 |
+|---|---|
+| `_refresh_ui_if_session_switched(agent, pre_sess_id)` 新 helper | dispatch 前后对比 **session 实例身份**（`id(agent.session)`）——变了 = `set_session` 换了实例：`broadcast_session_state`（session_history + team_list + spec）+ 广播 `sessions` 列表（`list_sessions`，新分支即刻进下拉） |
+| 两处 dispatch 接线 | 插话兜底路径 + 主路径两处 dispatch 前捕获 `_pre_sess = id(agent.session)`，dispatch 与回显之后调用刷新 helper——沿袭「两处同改」纪律（见 [WS 斜杠命令回显清洗](user-interaction.md#ws-斜杠命令回显清洗系统气泡混入-cli-spinneransi-噪音redirect_stdout-进程级全局2026-10-08用户实锤commit-9343107)） |
+| 前端下拉后缀匹配 fallback | 分支 history 事件的 `sid` 是分支目录名（`社交卡片设计`），下拉里分支项 id 是复合形态（`主线ts/社交卡片设计`）——精确匹配 miss 落回旧主线。补 suffix 匹配（`o.value.endsWith('/'+_curSid)`），切分支后下拉自动选中并指向新分支项 |
+
+**通用性**：机制不认具体命令——自动覆盖 `/branch`、`/resume`、`/reset` 等所有切会话命令；在分支上正常聊天时 session 实例不变（`id` 恒定），不会多余广播。且不走浏览器 reload——纯 WS 广播：`/branch` 一敲，历史区切到分支视图（基底合成 + 新轮）+ 下拉自动选中分支 + 系统气泡显示创建回执，三件套齐活。
+
+**生效方式**：引擎层（src/server.py）+ index.html，需 `/restart`；commit `0192d33` 已推送，site-packages 已同步。
+
+**关联**：[用户交互 · /reset 清空后新会话立即可见](user-interaction.md#reset-清空后新会话立即可见--会话下拉框跟随当前会话2026-09-23用户实锤commit-3350a68)（同族「切会话 → 列表/下拉可见性」，本节是其泛化）、[用户交互 · /restart 重启双坑](user-interaction.md#restart-重启双坑电脑无端多开-tab--早连页签空白2026-08commit-7ca6cfc)（`broadcast_session_state` 自该处提取公共化，本节是第三条消费路径）。
+
 ## 调试中抓到的两个坑
 
 1. **新分支首载零基底**：基底合成最初写在 `if events_path.exists()` 分支内——新分支**还没有自己的 events.jsonl**，条件恒假 → 首次 load 记忆全空（场景②测试抓的）。修复：基底合成提为无条件前置步骤（v2 的链式合成同样在 events 判断之前）。

@@ -157,6 +157,10 @@
 
 **验证**：JS 语法 1/1 · 结构断言 3 项 · py 编译 ×2 全过。
 
+### 泛化：所有切会话命令统一「会话身份检测 → 广播」（2026-10-08，用户提案，commit 0192d33）
+
+本节修的 /reset 可见性如今泛化为通用机制：两处 dispatch（插话兜底 + 主路径）前后对比 `id(agent.session)`，session 实例身份变化（切了会话）即 `broadcast_session_state` + 广播 `sessions` 列表——`/branch`、`/resume`、`/reset` 全覆盖，无需逐命令特判；前端会话下拉同时补了分支复合 id（`主线ts/分支名`）的**后缀匹配**选中。触发场景与完整机制见 [session 分支机制 · WebUI 切会话 UI 自动刷新](session-branching.md#webui-切会话-ui-自动刷新会话身份检测--广播2026-10-08用户提案commit-0192d33)。
+
 ## Agent 专属页 URL 路由 · /agents/&lt;agent_id&gt; 直接落位（2026-08，commit 5393ee4；修复 c819618）
 
 > src/server.py（路由）+ src/static/index.html（URL 解析与同步）。同一服务多个 Agent 各有一个专属对话页——URL 直接编码交互目标：`/agents/_main_` 主 Agent、`/agents/wiki-updater_3` 各子 Agent；裸 `/` 默认主 Agent。**刷新/分享/收藏自动落在对应视图**，不再只靠 sessionStorage（它记不住跨页签/新设备）。

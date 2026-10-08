@@ -56,6 +56,11 @@ class ServiceManager:
                     self._kill_tree(old["proc"])
                 except Exception:
                     pass
+                try:   # 旧句柄回收（防泄漏）
+                    if old.get("_lf"):
+                        old["_lf"].close()
+                except Exception:
+                    pass
         popen_kwargs = dict(shell=True, cwd=cwd or None,
                             stdin=subprocess.PIPE,    # 保留 stdin：service_stdin 可向服务写指令（REPL 型服务）
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -78,15 +83,39 @@ class ServiceManager:
                  "logs": logs, "manual_stop": False,
                  "on_exit_wake": on_exit_wake, "on_exit_style": on_exit_style,
                  "watch_tail": max(0, int(watch_tail))}   # >0：投影的 bg_services 段附日志尾部 N 行
+        # 日志持久化（用户实锤 2026-10-08：restart 后完整日志 404——deque 是内存的）：
+        # reader 线程 tee 到 ~/.agt/service_logs/<name>.log，实例重启后仍可读历史。
+        try:
+            from pathlib import Path as _P
+            _lf_dir = _P.home() / ".agt" / "service_logs"
+            _lf_dir.mkdir(parents=True, exist_ok=True)
+            logfile = _lf_dir / (re.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".log")
+            entry["logfile"] = str(logfile)
+            entry["_lf"] = open(logfile, "a", encoding="utf-8", errors="replace", buffering=1)
+            entry["_lf"].write(f"\n===== start {time.strftime('%Y-%m-%d %H:%M:%S')} · pid={proc.pid} · {command[:200]} =====\n")
+        except Exception:
+            entry["_lf"] = None
         with self._lock:
             self._services[name] = entry
 
         def _reader():
+            _lf = entry.get("_lf")   # tee 到持久化文件（restart 后完整日志可读）
             try:
                 for line in proc.stdout:
                     logs.append(line.rstrip("\n"))
+                    if _lf is not None:
+                        try:
+                            _lf.write(line)
+                        except Exception:
+                            _lf = None
             except Exception:
                 pass
+            finally:
+                if _lf is not None:
+                    try:
+                        _lf.close()
+                    except Exception:
+                        pass
             # stdout 关闭 ≈ 进程已退出。手动 stop_service 时 stop() 已先置 manual_stop=True，
             # 这里直接跳过（那次是 Agent 主动调的工具、它已知，不再被动通知，避免双重处理）。
             if entry.get("manual_stop"):

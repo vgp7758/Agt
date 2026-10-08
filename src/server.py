@@ -1916,8 +1916,29 @@ async def api_svc_log(name: str):
     _agent = _state.get("agent")
     ent = ((_agent.services._services or {}).get(name)) if _agent else None
     if not ent:
+        # 兜底（用户实锤 2026-10-08：restart 后点完整日志 404）：进程未登记（实例重启过）
+        # → 读持久化日志文件 ~/.agt/service_logs/<name>.log（reader 线程 tee 落盘的）。
+        import re as _re2
+        from pathlib import Path as _P2
+        _lf = _P2.home() / ".agt" / "service_logs" / (_re2.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".log")
+        if _lf.exists():
+            try:
+                _lines = _lf.read_text(encoding="utf-8", errors="replace").splitlines()[-3000:]
+            except OSError:
+                _lines = []
+            if _lines:
+                _e2 = "\n".join(_lines).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                _n2 = (lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))(name)
+                return HTMLResponse(
+                    "<meta charset='utf-8'>"
+                    f"<title>{_n2} · 服务日志</title>"
+                    "<body style='margin:0;background:#0b1220'>"
+                    f"<div style='background:#1e293b;color:#fbbf24;padding:8px 14px;font:13px system-ui'>"
+                    f"🛠 <b>{_n2}</b> · ○ 进程未登记（实例重启过）· 显示持久化日志尾部 {len(_lines)} 行</div>"
+                    f"<pre style='margin:0;padding:14px;color:#c7d2fe;font:12px ui-monospace,Consolas,monospace;"
+                    f"white-space:pre-wrap;word-break:break-all'>{_e2}</pre></body>")
         return HTMLResponse(f"<body style='font-family:system-ui;padding:24px;color:#b91c1c'>"
-                            f"服务 '{name}' 不在当前进程登记（可能实例重启过）</body>", status_code=404)
+                            f"服务 '{name}' 不在当前进程登记且无持久化日志</body>", status_code=404)
     logs = list(ent.get("logs") or [])
     body = "\n".join(logs[-3000:])   # 上限 3000 行防爆
     esc = (body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))

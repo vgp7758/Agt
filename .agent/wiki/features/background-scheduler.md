@@ -437,6 +437,22 @@ service_stdin(name, message, expect="", timeout=10.0)
 
 **关联**：[watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（同日姊妹——watch_tail 管 stdout「看得见」（每步投影）、expect 管「等得到」（调用内往返），一个读通道一个写通道）· [user-interaction · 后台通知 wake 语义](user-interaction.md)（服务退出通知链）。
 
+### 后记：expect='done' 惯性假阳性——done 尾标只代表受理，长任务完成标记是命令专属（2026-10-08，框架 commit 4a47dbc + backend 92878a7）
+
+**触发（用户实锤）**：消费端 agent（20048 驱动 unity-repl 场景）对 `/launch` 惯性传 `expect="done"`——unity-repl 每条命令响应都以 `[repl] done /launch` 尾标收尾，agent 记住了尾标。但该尾标只代表**命令受理/返回**：`/launch`（启动 Unity 引擎）秒回 done 之后引擎还在导入/编译（分钟级）——expect="done" 会在受理瞬间就匹配返回，agent 误以为 Unity 已就绪。**假阳性比超时更隐蔽**：agent 拿着「成功」结果继续往下走。
+
+**处置：不迁就、三层引导**。设计上不给 done 做特判兼容（expect 正则语义本身没错，错的是标记选错），而是让 agent 读到响应后下一轮自己换正确标记：
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| ① 响应正文 | unity_repl `/launch` 输出 | 「⏳ 本命令已受理即返回（上面这行 done 只代表受理）。真正 ready 的完成标记是 **LAUNCH-READY**——expect 请用它」 |
+| ② /help | 命令清单 | `/launch …（真正 ready 的完成标记=LAUNCH-READY，expect 用它而非 done）` |
+| ③ 工具 docstring | `service_stdin`（src/background_tools.py） | 通用警告：REPL 服务的 done 尾标只代表命令受理/返回——长任务真正的完成标记是命令专属的，读命令响应正文找专属标记，别惯性 expect='done' |
+
+**为什么引导有效**：agent 行为模式是「读响应再行动」——命中 done 后必然读到响应里的引导文案，下次调用自然换成 `expect="LAUNCH-READY", timeout=960` 一等到底；docstring 层的通用警告则覆盖**所有未来 REPL 服务**（不只 unity_repl）。
+
+**生效**：框架层 docstring（commit `4a47dbc`，/restart 后进投影）；服务层响应文案 + /help（backend commit `92878a7`，unity-repl 服务重启后生效）。
+
 ## repl: 协议服务：命名潜规则 + 每步投影自动 /status（2026-10-08，用户提案，commit 174131f）
 
 **动机（用户提案）**：watch_tail 是「零协议」方案（stdout 日志即状态），但常驻业务服务的实况日志是过程性的——真正有状态价值的是**协议级摘要**（任务数 / fps / 队列深度）。提案：要一个 repl 类的服务通道，像 MCP 那样**一次 stdin 对应一次 stdout**；每轮 bg_services 投影时自动发 `/status` 拿输出、截取前 L 行投影；日志写文件不污染 stdout；服务是否支持 repl 用**命名潜规则**判定（名称匹配某格式），规则写进 `start_service` 提示词。

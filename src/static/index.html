@@ -1358,6 +1358,7 @@ function continueInterrupted(btn){
 // —— 历史展开（读档默认只渲染当前档位，点蓝字往回展开一档）——
 let _histExpandFrom = 0;   // 当前渲染起点（0=已全部展开；>0=还有更早的档）
 let _histTotal = 0;
+let _expandTimer = null;    // 展开请求超时句柄（8s 无回包恢复 bar 可点态，防卡死）
 function makeExpandBar(){
   const d=document.createElement('div'); d.className='expand-bar';
   const remain = _histExpandFrom;
@@ -1370,6 +1371,18 @@ function expandHistory(){
   // bar 显示加载态
   const bars=document.querySelectorAll('.expand-bar');
   bars.forEach(b=>{ b.textContent='加载更早的对话…'; b.onclick=null; });
+  if(_expandTimer) clearTimeout(_expandTimer);
+  // 兜底（2026-10-09 分支失链实锤）：服务器回 turns=[] 或 WS 断连时，旧代码把 bar 留在
+  // “加载更早的对话…”且 onclick 已置空——永远卡死。8s 无回包恢复可点状态。
+  _expandTimer=setTimeout(()=>{
+    _expandTimer=null;
+    document.querySelectorAll('.expand-bar').forEach(b=>{
+      if(b.onclick===null){
+        b.textContent=`⬆ 展开更早的对话（还有 ${_histExpandFrom} 轮）`;
+        b.onclick=expandHistory;
+      }
+    });
+  }, 8000);
   ws.send(JSON.stringify({action:'expand_history', from:_histExpandFrom}));
 }
 // 单轮历史渲染（读档 + 展开复用；追加到指定容器）
@@ -1455,15 +1468,19 @@ function renderHistory(turns){
 }
 // 展开返回：前置插入更早一档的轮次（不重绘已有内容）
 function prependHistory(turns){
-  if(!turns || !turns.length) return;
-  // 移除旧展开条
+  // 先移除旧展开条（含"加载更早的对话…"加载态）再判断空——空回复（服务器切片失败/
+  // 陈旧 expand_from 越界）也把死条清掉，_histExpandFrom>0 时补一条可点的新条（2026-10-09
+  // 分支失链实锤：旧代码空回复早 return，加载态 bar 的 onclick 已置空 → 永远卡死）。
   document.querySelectorAll('.expand-bar').forEach(b=>b.remove());
-  // 借助临时容器按序构建，再整体插到最前
-  const frag=document.createDocumentFragment();
-  turns.forEach(t=>renderHistTurn(t, frag, false));   // 展开的都是更早的轮次——永不是最新（无继续按钮）
-  msgArea.insertBefore(frag, msgArea.firstChild);
+  if(_expandTimer){ clearTimeout(_expandTimer); _expandTimer=null; }
+  if(turns && turns.length){
+    // 借助临时容器按序构建，再整体插到最前
+    const frag=document.createDocumentFragment();
+    turns.forEach(t=>renderHistTurn(t, frag, false));   // 展开的都是更早的轮次——永不是最新（无继续按钮）
+    msgArea.insertBefore(frag, msgArea.firstChild);
+    probeUnknownAssets();   // 展开的更早轮次里未知后缀引用同样嗅探升级
+  }
   if(_histExpandFrom>0) msgArea.insertBefore(makeExpandBar(), msgArea.firstChild);
-  probeUnknownAssets();   // 展开的更早轮次里未知后缀引用同样嗅探升级
 }
 
 // —— 图片附件 ——

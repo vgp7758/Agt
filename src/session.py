@@ -3684,6 +3684,23 @@ class Session:
                 s.toollog = ToolLog(prefix=_cpfx)
                 s.toollog._data = _saved
             _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, sdir.parents[2])
+            # 失链自愈回填（2026-10-09）：branch_of 指向的目录已被改名（时间戳名→字母 id）时，
+            # 解析层按 created_at 反查命中了新目录——把 meta.branch.branch_of 刷成现路径，
+            # 下次 load 走直连（不再依赖每次反查）。失败只警告（运行期已按反查结果合成，不阻塞）。
+            try:
+                _bo = str((s.branch_meta or {}).get("branch_of") or "")
+                if _bo and _layers:
+                    _canon = _layers[-1][0].relative_to(sdir.parents[2]).as_posix()
+                    if _canon != _bo:
+                        _meta_p = sdir / "meta.json"
+                        _m = json.loads(_meta_p.read_text(encoding="utf-8"))
+                        _m.setdefault("branch", {})["branch_of"] = _canon
+                        _meta_p.write_text(json.dumps(_m, ensure_ascii=False, indent=2),
+                                           encoding="utf-8")
+                        s.branch_meta = _m.get("branch") or s.branch_meta
+                        _LOG.info("branch_of 失链自愈回填：%s → %s", _bo, _canon)
+            except Exception as e:
+                _LOG.warning("branch_of 回填失败（忽略，本次已按反查解析）：%s", e)
             for layer_dir, lay_ev, lay_hash in _layers:
                 if lay_hash and _events_fingerprint(lay_ev) != lay_hash:
                     _LOG.warning("分支基底漂移：%s 前 %d 行指纹不符（该层可能被回溯重写）——继续合成，"
@@ -3742,6 +3759,22 @@ class Session:
                 s.turns = []
         s.llm_calls.set_path(llm_calls_path)  # 绑定 llm_calls（老存档无此文件则空建）
         s._summary_sig = ()  # 让首次 _refresh_summary_cache 重算
+        # 陈旧 tier/fold 状态修剪（2026-10-09 分支失链实锤）：基底链断（branch_of 指向被改名的
+        # 旧时间戳目录、解析失败降级为空）时 turns 会缩水，而存档里的 tier_boundaries/fold_count
+        # 还是基底齐全时的值——边界(1430) ≥ 轮数(6) → 读档渲染 0 轮、前端"展开更早"永远切空且
+        # 卡死在加载态。此处按实际轮数裁剪；失链自愈基底恢复后由 _plan_fold 正常重定。
+        _nt = len(s.turns)
+        if s._tier_boundaries and max(s._tier_boundaries) >= _nt:
+            _kept = [b for b in s._tier_boundaries if 0 < b < _nt]
+            _LOG.warning("tier_boundaries 越界修剪：%s → %s（turns=%d，疑似基底链断裂缩水）",
+                         s._tier_boundaries, _kept, _nt)
+            s._tier_boundaries = _kept
+        if s._planned_fold > _nt:
+            _LOG.warning("fold_count 越界修剪：%d → %d（turns=%d）", s._planned_fold, _nt, _nt)
+            s._planned_fold = _nt
+            s._last_fold_count = min(s._last_fold_count, _nt)
+        if s._sos_count > _nt:
+            s._sos_count = _nt
         # tier_boundaries 兜底（2026-09-30 回滚）：存档缺失/空（旧存档/异常）才按卫生性规则重算；
         # 正常路径存档优先——运行期演化的末端密集边界只有存档能保真（recalc-only 曾致折叠螺旋）
         if not s._tier_boundaries:
@@ -3878,6 +3911,43 @@ def _events_fingerprint(events: list) -> str:
     return h.hexdigest()[:16]
 
 
+def _resolve_base_dir(sessions_root: Path, bo: str) -> Optional[Path]:
+    """基底层目录解析（2026-10-09 失链自愈）：bo 形如 "<主线id>" 或 "<主线id>/branches/<支线id>"。
+    逐段解析：段目录存在→直用；不存在且形如旧时间戳目录名（YYYYMMDD_HHMMSS，letter-id
+    改名前的形态——2026-10-09「目录名即 id」改造会改名既有目录，但 branch_of 字符串
+    还指着旧名）→ 按 meta.created_at 反查现目录（目录名会改，创建时间不会）。
+    解析失败返回 None（调用方降级为空基底，不断链）。"""
+    cur = sessions_root
+    for seg in [p for p in str(bo).replace("\\", "/").split("/") if p]:
+        if seg == "branches":
+            cur = cur / "branches"
+            continue
+        cand = cur / seg
+        if cand.exists():
+            cur = cand
+            continue
+        if re.fullmatch(r"\d{8}_\d{6}", seg):        # 旧时间戳目录名 → created_at 反查
+            try:
+                _cands = list(cur.iterdir())
+            except Exception:
+                return None
+            for d in _cands:
+                if not d.is_dir():
+                    continue
+                try:
+                    m = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                    if _timestamp_dir_name(float(m.get("created_at") or 0)) == seg:
+                        cur = d
+                        break
+                except Exception:
+                    continue
+            else:
+                return None
+            continue
+        return None
+    return cur if cur != sessions_root else None
+
+
 def _branch_chain_bases(root_meta: dict, sessions_root: Path) -> list:
     """分支基底链解析（2026-10-08 v2·用户提案：支线上再分叉）。
     沿 branch_of 链从叶到根逐层收集，返回根→叶有序 [(层目录, 该层events[:N], 该层base_hash)]。
@@ -3892,7 +3962,9 @@ def _branch_chain_bases(root_meta: dict, sessions_root: Path) -> list:
         bo = str(cur.get("branch_of") or "").replace("\\", "/").strip("/")
         if not bo:
             break
-        layer_dir = sessions_root / bo
+        layer_dir = _resolve_base_dir(sessions_root, bo)
+        if layer_dir is None:
+            layer_dir = sessions_root / bo   # 保持旧警告路径（缺目录时给出可读位置）
         ev_p = layer_dir / "events.jsonl"
         n = int(cur.get("inherit_lines") or 0)
         if ev_p.exists() and n > 0:

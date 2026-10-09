@@ -2596,6 +2596,10 @@ def _history_event(agent, name_override: str = "") -> dict:
         bounds = sorted(getattr(s, "_tier_boundaries", None) or [])
         start = bounds[-1] if bounds else 0
         total = len(s.turns)
+        # 钳制（2026-10-09 分支失链实锤）：存档边界可能 ≥ 实际轮数（基底链断导致 turns 缩水，
+        # load 侧已修剪，此处再兜一层——start≥total 会渲染 0 轮且"展开更早"永远切空）
+        if start >= total:
+            start = max(0, total - 1)
     except Exception:
         start, total = 0, 0
     return {"type": "session_history",
@@ -2892,8 +2896,14 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             e0 = reg0.lookup(tgt) if reg0 else None
             if e0 is not None and e0.agent is not None:
                 s = e0.agent.session
+        # 钳制（2026-10-09）：陈旧 expand_from（>实际轮数，读档边界越界的孳生品）会把
+        # [cur-15, cur) 切成空 → 前端收到 turns=[] 且进度不减，看起来像"永远加载中"。
+        cur = max(0, min(cur, len(s.turns)))
         new_start = max(0, cur - 15)
-        turns = s.to_history(start_turn=new_start, end_turn=cur)
+        try:
+            turns = s.to_history(start_turn=new_start, end_turn=cur)
+        except Exception:
+            turns = []   # 切片异常兜底：回空列表（前端空回复/超时均不再卡死）
         await _send(ws, {"type": "history_expand", "turns": turns,
                          "expand_from": new_start, "total_turns": len(s.turns)})
         return

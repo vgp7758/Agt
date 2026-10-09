@@ -2920,6 +2920,15 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()
+        _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save")
+        if getattr(agent.session, "_current", None) is not None and text.split() and text.split()[0] in _SWITCH_CMDS:
+            # 轮进行中的会话切换类命令：set_session 会换写入目标（events/toollog 落盘路径）——
+            # 与运行中的轮并发 = 写入分流（2026-10-09 实锤：/branch 轮中切换 → 后半轮 toollog 记进分支，
+            # 主线 steps 引用的 call_id 失联 → 重启后"(详情已失效)"）。排队到轮结束串行执行。
+            _work_q.put(("user", text))
+            await _send(ws, {"type": "system", "transient": True,
+                             "text": f"⏳ 当前轮进行中——{text.split()[0]} 已排队，本轮结束后自动执行"})
+            return
         if text.startswith("/"):   # 斜杠命令兜底（2026-10-05 用户实锤：/hold on 190 曾被当插话注入 messages）
             buf = io.StringIO()
             _pre_sess = id(agent.session)
@@ -3149,6 +3158,15 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             return
     # _tgt == "_main_"（或已复位）：走原有主 Agent 路径
 
+    _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save")
+    if getattr(agent.session, "_current", None) is not None and text.split() and text.split()[0] in _SWITCH_CMDS:
+        # 轮进行中的会话切换类命令：set_session 会换写入目标（events/toollog 落盘路径）——
+        # 与运行中的轮并发 = 写入分流（2026-10-09 实锤：/branch 轮中切换 → 后半轮 toollog 记进分支，
+        # 主线 steps 引用的 call_id 失联 → 重启后"(详情已失效)"）。排队到轮结束串行执行。
+        _work_q.put(("user", text))
+        await _send(ws, {"type": "system", "transient": True,
+                         "text": f"⏳ 当前轮进行中——{text.split()[0]} 已排队，本轮结束后自动执行"})
+        return
     # 斜杠命令（即时处理，不进 work_q）
     if text.startswith("/"):
         buf = io.StringIO()

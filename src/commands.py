@@ -232,6 +232,40 @@ def _cmd_branch(ctx: CommandContext, args):
         return
     import time as _t
     branch_of = (f"{top_dir.name}/branches/{sdir.name}" if is_branch else sdir.name)
+    # —— 分支 id + call_id 前缀（用户提案 2026-10-09）——
+    # branch_id：字母序 a/b/c/…/z/aa/ab/…，同主线 branches/ 内唯一（创建时取最小未占用）。
+    # call_prefix：一级 = m{主线锚行}（分支调用 id = m1000-c1…）；二级+ = 父前缀-父id父轮
+    # （m1000-b15-c1 = 主线1000行分出→分支b第15轮再分出）——锚点链可从 id 直接读出，
+    # 跨线物理不撞（根治主线/分支 counter 撞号导致记录归属混乱）。
+    def _next_branch_id(existing: set) -> str:
+        def _inc(s: str) -> str:   # a→b…z→aa→ab…（字母进位）
+            if not s:
+                return "a"
+            if s[-1] < "z":
+                return s[:-1] + chr(ord(s[-1]) + 1)
+            return _inc(s[:-1]) + "a"
+        cand = "a"
+        while cand in existing:
+            cand = _inc(cand)
+        return cand
+    _existing_ids = set()
+    try:
+        for _bm in (top_dir / "branches").glob("*/meta.json"):
+            try:
+                _existing_ids.add((json.loads(_bm.read_text(encoding="utf-8"))
+                                   .get("branch") or {}).get("branch_id") or "")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    bid = _next_branch_id(_existing_ids)
+    if is_branch:
+        pbm = sess.branch_meta or {}
+        parent_prefix = pbm.get("call_prefix") or f"m{len(base_events)}"
+        parent_bid = pbm.get("branch_id") or "b"
+        call_prefix = f"{parent_prefix}-{parent_bid}{keep_turns}"
+    else:
+        call_prefix = f"m{n_lines}"
     # 显示链（list_sessions 用）：父链 ⇢ 当前会话名——支线分叉时完整链可见
     parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or top_dir.name)
     display_chain = f"{parent_chain} ⇢ {sess.name or sdir.name}" if is_branch else str(parent_chain)
@@ -246,6 +280,8 @@ def _cmd_branch(ctx: CommandContext, args):
             "inherit_lines": n_lines,
             "base_hash": _events_fingerprint(base_events),
             "display_chain": display_chain,
+            "branch_id": bid,           # 字母序分支 id（a/b/c/…/aa/ab…，同主线 branches 内唯一）
+            "call_prefix": call_prefix, # 本分支调用 id 前缀（m1000 / m1000-b15 …）
         },
         "saved_at": int(_t.time()),
     }
@@ -263,6 +299,96 @@ def _cmd_branch(ctx: CommandContext, args):
     ctx.agent.set_session(new_session)
     print(f"🌿 已切到分支：{branch_name}（基底链 {len(new_session.turns)} 轮 + 分支 0 轮）")
     print("   支线新内容只写分支目录；/resume <主线名> 随时回主线")
+
+
+def _cmd_merge(ctx: CommandContext, args):
+    """/merge [count] —— 把当前分支的最后 count 轮（默认全部自己轮）合并回顶层主线。
+    记忆合流：轮 + 标准事件 + toollog 记录 append 到主线文件（call_id 带分支前缀
+    m1000-c1…，全局唯一不撞主线）；工作区文件不动（分支改的就是当前盘面）；
+    分支保留不删。主线 /resume 重载即见。"""
+    from session import Session as _S, _read_events
+    import json as _json, time as _t
+    sess = ctx.session
+    bm = getattr(sess, "branch_meta", None)
+    if not bm:
+        print("❌ 当前在主线（无分支）——/merge 只在分支上执行")
+        return
+    sdir = sess.session_dir
+    own_ev_p = sdir / "events.jsonl"
+    if not own_ev_p.exists():
+        print("❌ 分支没有自己的轮（刚创建/未完成一轮），无可合并")
+        return
+    own = sum(1 for e in _read_events(own_ev_p) if e.get("event") == "turn_end")
+    if own == 0:
+        print("❌ 分支没有已完成轮，无可合并")
+        return
+    # 增量语义：branch.merged_turns = 已合回主线的自己轮数——本次从该处连续补齐
+    # （不跳轮不留洞；重跑= 无新轮可合，天然幂等）。count = 本次最多合几轮（默认剩余全部）。
+    merged_before = int((bm.get("merged_turns") or 0))
+    remaining = own - merged_before
+    if remaining <= 0:
+        print(f"✅ 无新轮可合并（分支 {own} 轮已全部合回主线）")
+        return
+    count = int(args[0]) if args and args[0].isdigit() else remaining
+    n = min(count, remaining)
+    start = len(sess.turns) - own + merged_before     # 合成 turns 里本批起点
+    sel = list(sess.turns[start:start + n])
+    # 顶层主线目录（branch_of 首段 = 主线时间戳目录名）
+    sessions_root = sdir.parents[2]
+    top_ts = (bm.get("branch_of") or "").split("/")[0]
+    top_dir = sessions_root / top_ts
+    if not (top_dir / "events.jsonl").exists():
+        print(f"❌ 找不到主线目录：{top_dir}")
+        return
+    # ① 主线 events append 标准事件（与 _rewrite_persistence 同款生成逻辑）
+    lines = []
+    for t in sel:
+        lines.append(_json.dumps({"event": "turn_start", "user": t.user_message,
+                                  "images": t.images or []}, ensure_ascii=False))
+        if t.snapshot_sha:
+            lines.append(_json.dumps({"event": "snapshot", "sha": t.snapshot_sha,
+                                      "git_head": getattr(t, "git_head", "") or ""},
+                                     ensure_ascii=False))
+        for st in t.steps:
+            lines.append(_json.dumps({"event": "step", "reasoning": st.reasoning or "",
+                                      "call_ids": [tc.call_id for tc in st.tool_calls],
+                                      "changes": [[tc.call_id, tc.changed] for tc in st.tool_calls if tc.changed]},
+                                     ensure_ascii=False))
+        lines.append(_json.dumps({"event": "turn_end", "answer": t.answer or "",
+                                  "answer_reasoning": t.answer_reasoning or "",
+                                  "summary": t.summary or "", "changed": t.changed or [],
+                                  "merged_from": sess.name or sdir.name}, ensure_ascii=False))
+    with open(top_dir / "events.jsonl", "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    # ② 主线 toollog append：sel 引用的记录（幂等——主线已有的跳过）
+    want = {tc.call_id for t in sel for st in t.steps for tc in st.tool_calls}
+    have = set()
+    mt = top_dir / "toollog.jsonl"
+    if mt.exists():
+        for l in mt.read_text(encoding="utf-8", errors="replace").strip().splitlines():
+            try:
+                have.add(_json.loads(l).get("call_id"))
+            except Exception:
+                pass
+    moved = [sess.toollog._data[cid] for cid in want if cid in sess.toollog._data and cid not in have]
+    if moved:
+        with open(mt, "a", encoding="utf-8") as f:
+            for e in moved:
+                f.write(_json.dumps(e, ensure_ascii=False) + "\n")
+    # ③ merged_turns 写回分支 meta（增量续合锚点——重跑无新轮，天然幂等）
+    merged_now = merged_before + n
+    bm["merged_turns"] = merged_now
+    try:
+        mp = sdir / "meta.json"
+        _m = _json.loads(mp.read_text(encoding="utf-8"))
+        _m.setdefault("branch", {})["merged_turns"] = merged_now
+        _m["saved_at"] = int(_t.time())
+        mp.write_text(_json.dumps(_m, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _e:
+        print(f"⚠️ merged_turns 写回分支 meta 失败（{_e}）——重跑可能重复合并，请手动检查")
+    print(f"✅ 已合并 {n}/{own} 轮回主线「{top_ts}」（事件 {len(lines)} 行 · toollog 记录 {len(moved)} 条，"
+          f"call_id 带前缀不撞主线）。\n   工作区文件未动（分支改的就是当前盘面）；分支保留。"
+          f"→ /resume {top_ts} 重载主线即见")
 
 
 def _cmd_recall(ctx: CommandContext, args):
@@ -1914,7 +2040,14 @@ def build_default_registry() -> CommandRegistry:
         "/branch 项目社交卡片制作        带主线全部记忆开支线\n"
         "/branch 协助写简历 15           只带主线前 15 轮记忆开支线\n"
         "  分支目录 <主线>/branches/<分支名>/；支线新内容只写分支，不稀释主线\n"
-        "  /resume <主线名> 随时回主线；/resume <分支名> 再回支线")
+        "  /resume <主线名> 随时回主线；/resume <分支名> 再回支线\n"
+        "  分支调用 id 带锚点前缀（m1000-c1…），与主线物理不撞")
+    reg.register("merge", _cmd_merge,
+        "[count]  把当前分支最后 count 轮（默认全部）合并回顶层主线（记忆合流，文件不动）",
+        "/merge               分支全部自己轮合回主线\n"
+        "/merge 3             只合最后 3 轮\n"
+        "  轮+事件+toollog 记录 append 到主线（call_id 带分支前缀不撞）；分支保留\n"
+        "  工作区文件不动（分支改的就是当前盘面）；主线 /resume 重载即见")
     reg.register("show", _cmd_show,
         "[name]  查看会话详情摘要（不传=当前会话）",
         "/show               查看当前会话摘要\n"

@@ -3658,6 +3658,14 @@ class Session:
         _lc_base = []
         _chain_dirs = []      # 根→叶各层目录（toollog/llm_calls/recaps 逐层合载）
         if s.branch_meta:
+            # 分支 ToolLog 前缀化（用户提案 2026-10-09）：call_prefix 存在 → 重建带前缀的
+            # ToolLog（分支自己的调用 id = m1000-c1…，前缀内续号；基底合载不顶 counter）。
+            # 旧分支（meta 无 call_prefix）保持无前缀旧行为，完全兼容。
+            _cpfx = (s.branch_meta or {}).get("call_prefix") or ""
+            if _cpfx:
+                _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
+                s.toollog = ToolLog(prefix=_cpfx)
+                s.toollog._data = _saved
             _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, sdir.parents[2])
             for layer_dir, lay_ev, lay_hash in _layers:
                 if lay_hash and _events_fingerprint(lay_ev) != lay_hash:

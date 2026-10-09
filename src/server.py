@@ -2920,7 +2920,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         return
     if isinstance(_d, dict) and _d.get("action") == "insert_message":
         text = (_d.get("text") or "").strip()
-        _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save")
+        _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save", "/merge")
         if getattr(agent.session, "_current", None) is not None and text.split() and text.split()[0] in _SWITCH_CMDS:
             # 轮进行中的会话切换类命令：set_session 会换写入目标（events/toollog 落盘路径）——
             # 与运行中的轮并发 = 写入分流（2026-10-09 实锤：/branch 轮中切换 → 后半轮 toollog 记进分支，
@@ -3158,7 +3158,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             return
     # _tgt == "_main_"（或已复位）：走原有主 Agent 路径
 
-    _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save")
+    _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save", "/merge")
     if getattr(agent.session, "_current", None) is not None and text.split() and text.split()[0] in _SWITCH_CMDS:
         # 轮进行中的会话切换类命令：set_session 会换写入目标（events/toollog 落盘路径）——
         # 与运行中的轮并发 = 写入分流（2026-10-09 实锤：/branch 轮中切换 → 后半轮 toollog 记进分支，

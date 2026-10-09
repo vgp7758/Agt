@@ -53,15 +53,29 @@ class ToolLog:
       _path 已绑定：record 进内存 + append 一行；set_path 时文件不存在则先 flush 全量建立
     """
 
-    def __init__(self):
+    def __init__(self, prefix: str = ""):
         self._data: dict[str, dict] = {}
         self._counter = 0
         self._path: Optional[Path] = None   # 绑定的 jsonl 路径；None 时只 buffer
+        # 分支前缀（用户提案 2026-10-09）：分支自己的调用 id 形如 m1000-c1 / m1000-b15-c3——
+        # 锚点链可从 id 直接读出（m1000=主线第1000行分出，b15=父分支b的第15轮再分出），
+        # 与主线/其它分支物理不撞（杜绝跨线同 id 记录归属混乱）。主线 prefix=""（c1/c2/…）。
+        self._prefix = (prefix or "").strip()
 
     def next_id(self) -> str:
-        """生成会话内自增 id：c1 / c2 / …（load 后继续自增不撞旧 id）。"""
+        """生成会话内自增 id：主线 c1/c2/…；分支 {prefix}-c1/{prefix}-c2/…（前缀内续号）。"""
         self._counter += 1
-        return f"c{self._counter}"
+        return f"{self._prefix}-c{self._counter}" if self._prefix else f"c{self._counter}"
+
+    def _own_counter_from(self, call_id: str) -> int:
+        """提取本前缀的本地序号（不匹配返回 -1）：分支只数自己的 id——合载进来的基底
+        记录（主线 c1…/其它分支前缀）不顶分支 counter（前缀内续号）。"""
+        cid = call_id or ""
+        if self._prefix:
+            head = self._prefix + "-c"
+            tail = cid[len(head):]
+            return int(tail) if cid.startswith(head) and tail.isdigit() else -1
+        return int(cid[1:]) if cid.startswith("c") and cid[1:].isdigit() else -1
 
     def record(self, call_id: str, name: str, arguments: dict,
                result: str, step: Optional[int] = None,
@@ -108,11 +122,20 @@ class ToolLog:
 
     # ========== JSONL 落盘 ==========
     def set_path(self, path: Path):
-        """绑定 jsonl 路径。文件不存在 → flush 当前内存全量建立；存在 → 假定已 load，不重写。"""
+        """绑定 jsonl 路径。文件不存在 → flush 建立；存在 → 假定已 load，不重写。
+        分支（有 prefix）：只物化本前缀的记录——基底合载留在内存供投影/召回查询，
+        不写进分支文件（数据主权在基底各层自己的文件）。"""
         self._path = Path(path)
         if not self._path.exists():
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._flush_all()
+
+    def _mine(self, call_id: str) -> bool:
+        """记录是否归属本 ToolLog（落盘判定）：分支=本前缀开头；主线=非任何分支前缀形态
+        （c 纯数字——合载场景主线文件本就只含自己的）。"""
+        if not self._prefix:
+            return True
+        return (call_id or "").startswith(self._prefix + "-c")
 
     def _append_line(self, entry: dict):
         try:
@@ -122,10 +145,12 @@ class ToolLog:
             pass   # 落盘失败不影响主循环（内存里仍有）
 
     def _flush_all(self):
-        """把内存全部 entry 写入文件（建立或重建）。"""
+        """把内存 entry 写入文件（建立或重建）。分支只写本前缀的（见 set_path 注释）。"""
         try:
             with open(self._path, "w", encoding="utf-8") as f:
                 for e in self._data.values():
+                    if not self._mine(e.get("call_id", "")):
+                        continue
                     f.write(json.dumps(e, ensure_ascii=False) + "\n")
         except Exception:
             pass
@@ -149,8 +174,9 @@ class ToolLog:
                     if not cid:
                         continue
                     self._data[cid] = e
-                    if cid.startswith("c") and cid[1:].isdigit():
-                        self._counter = max(self._counter, int(cid[1:]))
+                    n = self._own_counter_from(cid)
+                    if n > 0:
+                        self._counter = max(self._counter, n)
         except Exception:
             pass
 
@@ -161,8 +187,9 @@ class ToolLog:
             if not cid:
                 continue
             self._data[cid] = e
-            if cid.startswith("c") and cid[1:].isdigit():
-                self._counter = max(self._counter, int(cid[1:]))
+            n = self._own_counter_from(cid)
+            if n > 0:
+                self._counter = max(self._counter, n)
 
 
 def make_tool_log_tools(agent) -> list:

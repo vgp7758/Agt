@@ -111,11 +111,12 @@ prev_x = trace[d - 1].get(prev_k, 0)   # ❌ 取了 d-1 层快照
 | 能力 | 粒度 | 用途 |
 |------|------|------|
 | [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md) | 目录 · mtime | 哪些文件变了（files/count/changed） |
+| **diff_paths**（[专页](diff-paths.md)，2026-10 起，commit c486c06） | 两路径（目录/文件） · 存在性 + 内容指纹 | 哪些文件多了/少了/改了（只列清单不进内容；任意两路径即时盘点，不依赖快照体系） |
 | **diff_files**（本页） | 单文件 · 行级内容（可分段） | 具体改了什么 |
 | **diff_lines**（外置件 diff_tools.py，2026-08 起） | 内存文本块 · 行级内容 | 两个文本块按行 Myers diff（无需落盘；算法为本页实现的同源副本） |
 | 引擎 `_workspace_snapshot` / `_diff_snapshots` | 目录 · mtime | after_tool 副作用检测 → changed_files |
 
-典型组合：diff_snapshots 定位变更清单 → diff_files 逐个看内容；或工作流节点间文本对比直接用 diff_lines。
+典型组合：diff_paths 盘点两份代码树的差异清单 → diff_files 逐文件看内容；diff_snapshots 定位会话快照间的变更 → diff_files 逐个看内容；工作流节点间文本对比直接用 diff_lines。
 
 ## 读写不对称：越界路径放行（2026-08 新）
 
@@ -133,6 +134,7 @@ prev_x = trace[d - 1].get(prev_k, 0)   # ❌ 取了 d-1 层快照
 
 ## 相关页面
 
+- [diff_paths 工具](diff-paths.md)：路径级差异盘点（哪边多了/少了/改了哪些文件，不进内容）——「diff_paths 盘点 → 本工具审计」上下游组合
 - [diff_lines 工具](diff-lines.md)：文本级 Myers Diff（2026-08 起外置 diff_tools.py，同源算法副本，无需落盘）——本页算法是原件
 - [run_python 工具](run-python.md)：file 模式严格沙箱 vs 本工具读放行
 - [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md)：目录级 mtime 快照对比，与本工具互补

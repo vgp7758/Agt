@@ -32,6 +32,9 @@
   .row.me .bubble { background:var(--me); color:#fff; border-bottom-right-radius:4px; }
 .row.sys { justify-content:flex-start; }
 .row.sys .bubble { background:#f3e8ff; border:1px solid #d8b4fe; color:#6b21a8; font-size:12.5px; cursor:pointer; white-space:pre-wrap; }
+/* 同轮相同系统提示的重复计数徽标（用户提案 2026-10-10）：挂在 row 级，bubble 重写不影响 */
+.rep-count { margin-left:6px; align-self:center; font-size:11px; color:#7c3aed;
+  background:#ede9fe; border:1px solid #ddd6fe; border-radius:8px; padding:0 6px; }
   .row.bot .bubble { background:var(--bot); border:1px solid var(--line); border-bottom-left-radius:4px;
     /* 最小宽度 = max(总宽 50%, 300px)（用户提案 2026-09-18：短回答的气泡太窄不好读）。
       用 vw 而非 %：bubble 的 containing block（.turn）是 shrink-to-fit 的 flex 子项，
@@ -735,7 +738,21 @@ function setSessionTitle(title){
 }
 
 function addRow(cls, text, opts){
+  // —— 同轮相同系统提示合并（用户提案 2026-10-10）：相邻 sys 行内容相同 → 计数+1 ——
+  // tail ambient / hook 注入每步重复的相同提示只显示一条 ×N，不再刷屏。
+  // 徽标挂在 row（bubble 的兄弟）——bubble 的 innerHTML 重写（折叠/展开/markdown）不影响。
+  if(cls==='sys' && text){
+    const _last = msgArea.lastElementChild;
+    if(_last && _last.classList.contains('sys') && _last._sig===text){
+      _last._cnt=(_last._cnt||1)+1;
+      let _bd=_last.querySelector(':scope > .rep-count');
+      if(!_bd){ _bd=document.createElement('span'); _bd.className='rep-count'; _last.appendChild(_bd); }
+      _bd.textContent='×'+_last._cnt;
+      scrollBottom(); return _last;
+    }
+  }
   const row=document.createElement('div'); row.className='row '+cls;
+  if(cls==='sys' && text){ row._sig=text; row._cnt=1; }
   const b=document.createElement('div'); b.className='bubble';
   const isAuto = opts && opts.auto;
   if(isAuto && text){

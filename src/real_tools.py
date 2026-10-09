@@ -2241,6 +2241,75 @@ def diff_files(file1: str, file2: str, context: int = 2,
 
 
 
+def diff_paths(path_a: str, path_b: str, max_items: int = 200) -> str:
+    """对比两个路径（目录或文件），返回有差异的文件清单（只列差异，不做内容 diff——
+    内容级对比用 diff_files）。典型用途：两份代码树/备份/版本的差异盘点。
+    path_a/path_b: 两个路径（相对 workspace 或绝对路径；目录递归对比、目录↔文件亦可）。
+    分三组：只在A有 / 只在B有 / 内容不同（size 快筛 + sha1 精判，二进制同样适用）。
+    自动跳过 .git / __pycache__ / node_modules 等目录；相对路径对齐（A/src/x.py ↔ B/src/x.py）。
+    max_items: 每组列出上限（默认 200，超出折叠为计数）。"""
+    import hashlib as _hl
+    import time as _time
+    from pathlib import Path as _P
+    _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".idea", ".vs", ".agt", ".venv"}
+
+    def _resolve(q):
+        q = _P(q)
+        return q if q.is_absolute() else (_P(WORKSPACE) / q)
+
+    A, B = _resolve(path_a), _resolve(path_b)
+    if not A.exists():
+        return f"[不存在] {A}"
+    if not B.exists():
+        return f"[不存在] {B}"
+
+    def _walk(root: _P):
+        out = {}
+        if root.is_file():
+            out[root.name] = root
+            return out
+        for f in root.rglob("*"):
+            if not f.is_file():
+                continue
+            if any(part in _SKIP_DIRS for part in f.relative_to(root).parts):
+                continue
+            out[str(f.relative_to(root)).replace("\\", "/")] = f
+        return out
+
+    t0 = _time.time()
+    fa, fb = _walk(A), _walk(B)
+    ka, kb = set(fa), set(fb)
+    only_a, only_b = sorted(ka - kb), sorted(kb - ka)
+    differ = []
+    for rel in sorted(ka & kb):
+        try:
+            s1, s2 = fa[rel].stat().st_size, fb[rel].stat().st_size
+            if s1 != s2:
+                differ.append(rel)
+                continue
+            if s1 == 0:
+                continue
+            if _hl.sha1(fa[rel].read_bytes()).hexdigest() != _hl.sha1(fb[rel].read_bytes()).hexdigest():
+                differ.append(rel)
+        except OSError:
+            differ.append(rel + " (读取出错)")
+
+    def _grp(title, items):
+        if not items:
+            return f"{title}: 0 项"
+        head = "\n".join("  " + i for i in items[:max_items])
+        more = f"\n  …(还有 {len(items) - max_items} 项未列)" if len(items) > max_items else ""
+        return f"{title}: {len(items)} 项\n{head}{more}"
+
+    dt = _time.time() - t0
+    n_diff = len(only_a) + len(only_b) + len(differ)
+    return (f"对比 {path_a} ↔ {path_b}（A 侧 {len(fa)} 文件 / B 侧 {len(fb)} 文件 · {dt:.2f}s）\n\n"
+            + _grp("仅在 A 有", only_a) + "\n\n"
+            + _grp("仅在 B 有", only_b) + "\n\n"
+            + _grp("内容不同", differ) + "\n\n"
+            + ("✅ 两路径完全一致" if n_diff == 0 else f"共 {n_diff} 处差异"))
+
+
 # web_search 的结构化输出（success 作为字段，供工作流 plugin 节点引用判断成功与否）
 WEB_SEARCH_OUTPUTS = [
     {"name": "success", "type": "boolean", "description": "搜索是否成功"},
@@ -2300,6 +2369,9 @@ REAL_TOOLS = Toolbox(
     Tool(run_script),
     Tool(set_tool_timeout),
     Tool(get_tool_timeout),
+    Tool(diff_paths, param_descriptions={
+        "max_items": "每组列出上限（默认 200，超出折叠为计数）",
+    }),
     Tool(diff_files, param_descriptions={
         "context": "每个 hunk 前后的上下文行数（默认 2）",
         "range_a": "file1 的行范围 [起,止]（1-based 含两端，如 [100,200]）——大文件分段对比用；不传=全文",

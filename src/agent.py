@@ -669,7 +669,7 @@ class Agent:
     _REMOTE_ROUTABLE = {
         # 文件系（远端仓库/工作区的文件操作）
         "read_file", "write_file", "edit", "insert", "delete", "replace_lines",
-        "move", "grep", "glob_files", "list_dir", "diff_files", "find_function",
+        "move", "grep", "glob_files", "list_dir", "diff_files", "diff_paths", "find_function",
         # 进程/服务系（远端机器上跑命令/服务）
         "run_shell", "run_python", "start_service", "stop_service", "list_services",
         "service_logs", "service_stdin", "send_to_service", "check_bg_task", "run_script",

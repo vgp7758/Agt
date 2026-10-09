@@ -167,17 +167,39 @@ def _repo_sessions_dir(workspace) -> Path:
 
 def _sessions_root_of(sdir: Path) -> Path:
     """从任意 session 目录反查 sessions 根（2026-10-09 平铺化 + 四轮共享 toollog）。
-    形态可能有三种：
+    形态可能有多层：
       主线/平铺分支：<root>/<id>/                    → parent
       旧 branches 嵌套：<root>/<主线>/branches/<id>/  → parents[2]
       子 Agent：<root>/<主线>/agents/<agent_id>/     → parents[2]
-    判据取最稳的一条：沿父链向上找【名为 sessions 的目录】（repo sessions 根固定叫这个）。"""
+      子 Agent 再派子 Agent：<root>/<主线>/agents/<a1>/agents/<a2>/（多层）
+    判据取最稳的一条：沿父链向上找【名为 sessions 的目录】（repo sessions 根固定叫这个）；
+    层数放宽到 12（嵌套 agents 也够），找不到才退旧行为兜底。"""
     p = sdir
-    for _ in range(5):
+    for _ in range(12):
         if p.name == "sessions":
             return p
+        if p.parent == p:
+            break
         p = p.parent
     return sdir.parents[1] if sdir.parent.name == "branches" else sdir.parent   # 兜底（旧行为）
+
+
+def _call_prefix_of(sdir: Path) -> str:
+    """call_id 前缀（2026-10-09 五轮定稿）＝相对 sessions 根的路径去掉容器段
+    （agents / branches）后以 "-" 连接——同一 repo 内全局唯一：
+      主线/平铺分支  <id>                → "<id>"（a / b / aa）
+      子 Agent       <主线>/agents/<aid> → "<主线>-<aid>"（a-coder / a-wiki-updater_2）
+      旧嵌套         <主线>/branches/<b> → "<主线>-<b>"
+    实锤背景：子 Agent 直接用 agent_id 作前缀时，不同主线的同名子 Agent（a/agents/coder
+    与 b/agents/coder）撞同一 call_id（coder-1），共享 toollog 下后者覆盖前者、counter 互顶。
+    sdir 是纯字母会话目录时不含 "-"，故 sid 段可从拼接串唯一还原，无需反向解析。"""
+    root = _sessions_root_of(sdir)
+    try:
+        rel = sdir.relative_to(root)
+    except Exception:
+        return sdir.name
+    segs = [p for p in rel.parts if p not in ("agents", "branches")]
+    return "-".join(segs) if segs else sdir.name
 
 
 def _shared_toollog_path(sdir: Path) -> Path:
@@ -3295,7 +3317,7 @@ class Session:
         self._bind_event_path(sdir / "events.jsonl")
         # 共享 toollog（2026-10-09 二轮定稿）：repo 级一份 + 本 session 前缀（call_id=<sid>-N）
         if not self.toollog._prefix:
-            self.toollog._prefix = sdir.name
+            self.toollog._prefix = _call_prefix_of(sdir)
         self.toollog.set_path(_shared_toollog_path(sdir))
         self.llm_calls.set_path(sdir / "llm_calls.jsonl")
         if self._log_handler is not None:
@@ -3752,7 +3774,7 @@ class Session:
         # 主线/分支统一（漏设则退化 cN，与共享文件里的历史形态混用）。
         # 必须早于 load_from_jsonl（counter 恢复用前缀判定）。
         if sdir and not s.toollog._prefix:
-            s.toollog._prefix = sdir.name
+            s.toollog._prefix = _call_prefix_of(sdir)
         # —— 分支基底链合成（用户提案 2026-10-08；v2 支持支线上再分叉：链式逐层收集）——
         # 在 events 判断之前（新建分支无自己的 events.jsonl，首次 load 也要有基底记忆）。
         # meta.branch 沿 branch_of 链逐层收集基底（根→叶）：主线层=主线 events 前N；支线层=支线
@@ -3766,7 +3788,7 @@ class Session:
             # ToolLog 前缀 = 本 session 目录名（2026-10-09 二轮定稿）：call_id = "<sid>-N"，
             # 共享 toollog 下别的 session 记录不顶本 counter、也无需任何合载/归属过滤。
             _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
-            s.toollog = ToolLog(prefix=sdir.name)
+            s.toollog = ToolLog(prefix=_call_prefix_of(sdir))
             s.toollog._data = _saved
             _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, _sessions_root_of(sdir))
             # 失链自愈回填（2026-10-09）：branch_of 指向的目录已被改名（时间戳名→字母 id）时，

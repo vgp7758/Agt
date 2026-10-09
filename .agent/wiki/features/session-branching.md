@@ -195,6 +195,13 @@ sessions/
 
 **消费端不变**：`get_tool_detail` / `agent_query_tool_detail` / [recall_turn](recall-tools.md) / 折叠摘要都按 call_id 直查同一份文件；旧 `c1` / `c3309` 式 id 兼容可查。完整机制见 [toollog · 工具调用详情库](toollog.md)。
 
+## v0.34.1 收尾配套：历史展开卡死三连修 + 越界 tier 状态修剪（2026-10-09，随 v0.34.1 发布）
+
+与平铺化 / 共享 toollog 同批打包的两件收尾（发布摘要口径，详见 [v0.34.1 发布记录](../releases/v0.34.1.md)）：
+
+- **历史展开卡死三连修**：大 session / 分支链的历史展开偶发卡死，三处合围——①**失链自愈**（`_resolve_base_dir` 按 `created_at` 反查回填，见上文基底指纹与 v3 章）；②**钳制**（异常超大批次的钳制防护，不再拖死展开）；③**前端死条超时**（加载占位行超时自动释放，不再永久转圈）
+- **越界 tier 状态修剪**：分支基底降级 / 失链后，持久化的 tier 状态可能越界（指向超出实际合成事件流的位置）——load 时修剪越界项，投影边界与真实事件流重新对齐
+
 ## WebUI 切会话 UI 自动刷新：会话身份检测 → 广播（2026-10-08，用户提案，commit 0192d33）
 
 **用户提案**：WebUI 输入 `/branch 社交卡片设计` 创建分支后，UI 毫无变化——「切分支的时候要不就自动刷一下浏览器吧」。
@@ -227,7 +234,7 @@ sessions/
 - **v3 平铺化 e2e 七场景全绿（2026-10-09，commit 19d0c4e）**：一级/二级分支平铺、链式合成（根4轮+一级2轮=6轮）、`list_sessions` 三条平铺、`/resume` 三形态、`/merge` 二级分支轮 append 根主线、根下无 `branches/`（详见 v3 章）
 - **共享 toollog 验证（2026-10-09，commit 1c320c8）**：e2e 四项（共享路径 / 形态 `a-1`·`a-2`·`b-1` / counter 各数各的——重载后 `a-3`、`b-2` / list 只列本 session）+ 真实库（主线 prefix=`a`、分支 prefix=`b`、旧 id `c1`/`c3309` 可查、投影 4241 msgs 正常、两 session 同指 `sessions/toollog.jsonl`）
 - commits `dc92c32`（v1）+ `b37709e`（v2 链式嵌套）+ `3598be3`（is_branch 钩子短路）+ `19d0c4e`（v3 平铺化）+ `1c320c8` / `f0d1e92`（共享 toollog）已推送；site-packages 已同步（**pip 实例需 /restart 生效**）
-- **随 v0.34.0 发布（2026-10-08）**：本机制为该版主打——PyPI wheel 上传 + git tag 推送双通道全绿，`pip install -U agt-agent` 即得；9000 本机实例 restart 后生效（v3/共享 toollog 为 0.34.0 之后的版本）
+- **发布通道**：v1/v2 + is_branch 随 v0.34.0 发布（2026-10-08）；**v3 平铺化 + 共享 toollog + 收尾配套随 v0.34.1 发布（2026-10-09，commit 720f64a，[发布记录](../releases/v0.34.1.md)）**——`pip install -U agt-agent` 即得，pip 实例 /restart 生效
 
 ## 与其它模块的关系
 

@@ -64,3 +64,7 @@
 
 - **v0.33.0 发布（2026-10-08，版本提交 `371b18b` + tag）**：版本 0.32.1 → 0.33.0，10-07 全天 41 笔提交一次打包。五大块：①**服务系统协议化**（`repl:` 前缀 MCP 式请求-响应 + 每步投影自动 /status + watch_tail 日志尾投影 + service_stdin expect + start 覆盖已退出同名）；②**Agent 体系增强**（coder-py/coder-cs 语言变体、子 Agent 步数三级取值 max_steps、agent_ask 纯问答、pv-producer 制片 Agent、agent_watch 单例接管）；③**交互修复·target 路由三部曲**（模型下拉/斜杠命令/文本插话全按本页签交互对象路由 + 插话死信兜底 + plan 面板刷新恢复）；④**上下文工程**（生成图自动可视伪造 read_file 对、before_turn 钩子只服务人类直输轮）；⑤**WebUI**（服务看板四按钮、定时任务 CRUD 弹窗、_main_ 三态保存、human_step/survey 只读化）。发布轮收编 pv-producer 自改 yml（`85ecf45`——它自己把模型切 proxy 避 glm-official 配额窗口，子 Agent 声明自治首例）；twine 一次 rc=0（对照 v0.30.1 TLS 阻断轮）。详见 [v0.33.0 发布记录](releases/v0.33.0.md)
 
+## 快速事实增补（2026-10-09 · v0.34.1 发布：分支 v3 平铺 + 共享 toollog + 启动性能根治打包上线）
+
+- **v0.34.1 发布（2026-10-09，版本提交 `720f64a`，whl + sdist 双文件就位）**：0.34.0 → 0.34.1 patch，10-09 分支二轮重构主线一次打包。五大块：①**分支 v3 目录平铺化**（`sessions/b/` 与主线平级 + `branch_of` 单段父引用 + `/merge` 合回根主线 + 失链自愈 + 越界 tier 状态修剪）；②**toollog 改 repo 共享单文件**（`sessions/toollog.jsonl` + `call_id=<session_id>-N` 层级前缀，40MB×N 分支拷贝清零，旧 per-session 文件 load 时自动并入）；③**启动性能根治**（`Session.load` 188s → 2.8s：收敛期 0 渲染 + sos 预检跳过注定无效的 LLM 浓缩）；④**修复**（reset 回退策略空壳补实现 / 历史展开卡死三连修 / `/resume <目录名>` 直查）；⑤**健壮性**（rewind 不再重写共享 toollog、llm_calls 基底合载保留）。多实例部署（如 20048）务必同步升级——toollog 落盘路径已迁移，旧代码按 per-session 路径找不到新文件。详见 [v0.34.1 发布记录](releases/v0.34.1.md)、[session 分支机制](features/session-branching.md)、[toollog](features/toollog.md)
+

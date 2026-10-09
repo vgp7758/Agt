@@ -557,12 +557,17 @@ class Scheduler:
     def restore_state(self, items):
         """从 meta.json 的 schedules 定义恢复定时任务（Agent.restore_runtime_state 在
         set_session/load 后调——标准恢复点）。相位重算：interval 按 at_origin 对齐下一个
-        未来相位点；at+repeat（每日）重算 _next_daily_fire；at 单次已过去的丢弃（触发过了）。"""
-        if not items:
-            return
+        未来相位点；at+repeat（每日）重算 _next_daily_fire；at 单次已过去的丢弃（触发过了）。
+
+        全量替换语义（2026-10-09 修：session 切换残留——UI 下拉框切 session 实锤：旧
+        session 的 schedule 继续在跑、新 session 又建同名任务 → 双投+消息串到新 session。
+        调度器内容整体跟 active session 走：先清空再恢复；空列表 = 纯清空（新会话无任务）。"""
         try:
+            with self._lock:
+                self._schedules.clear()
+                self._by_name.clear()
             n = 0
-            for it in items:
+            for it in (items or []):
                 try:
                     if it.get("kind") == "interval":
                         sec = float(it.get("spec") or 0)
@@ -602,7 +607,7 @@ class Scheduler:
                 except Exception:
                     continue
             if n:
-                _LOG.info("定时任务恢复 %d 个（meta.json extra_state.schedules）", n)
+                _LOG.info("定时任务恢复 %d 个（meta.json extra_state.schedules·替换语义）", n)
         except Exception as e:
             _LOG.warning("schedules 恢复失败：%s", e)
 

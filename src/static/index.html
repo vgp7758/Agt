@@ -650,6 +650,9 @@ function connectWS(){
   // 本客户端正在交互的 agent_id（多页签各自独立；sessionStorage 记住——刷新/重连后恢复视图）
   try{ myTarget = sessionStorage.getItem('agt_target') || '_main_'; }catch(e){ myTarget = '_main_'; }
   ws.onopen = ()=>{
+  // 重连/首连对账（2026-10-09）：断线窗口里 turn_end 可能丢失——连上即核一次真实忙闲，
+  // 后端空闲则复位 busy（防 stuck busy 把后续消息全判成插话）
+  try{ _verifyBusy().then(rb=>{ if(!rb && busy){ setBusy(false); curTurn=null; } }); }catch(e){}
     setOnline(true);
     // 无论首次连接还是断线重连，都请求当前内存中的 session 历史——
     // 新设备/新浏览器连上来时也能看到正在进行的会话。
@@ -1706,9 +1709,29 @@ function addTimeDivider(){
   d.textContent=new Date().toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
   msgArea.appendChild(d);
 }
-function send(){
+// busy 状态与后端对账（2026-10-09 用户提案）：turn_end 事件丢失（断线/重启/异常轮）时
+// 前端 stuck busy → 普通消息被误判为插话入队。发送前主动 POST /api/status 确认真实忙闲；
+// 查询失败时保守返回当前前端态（不改变行为）。
+async function _verifyBusy(){
+  try{
+    const r = await fetch(location.origin + '/api/status', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const s = await r.json();
+    if(!s || !s.ready) return busy;
+    if(!myTarget || myTarget === '_main_')
+      return !!(s.busy || s.current_turn_active);
+    const ent = (s.registry||[]).find(a => a.agent_id === myTarget);
+    if(!ent) return busy;   // 目标不在册（可能已结束）→ 保守沿用
+    return ent.status === 'busy' || ent.status === 'running';
+  }catch(e){ return busy; }
+}
+async function send(){
   const t=inp.value.trim();
   if(!t && !attachments.length) return;
+  // 插话前先对账：前端 busy 但后端实际空闲 → 复位按新消息正常发送（不再误入插话队列）
+  if(busy && !t.startsWith('/')){
+    const rb = await _verifyBusy();
+    if(!rb){ setBusy(false); curTurn=null; _queueBubbleRow=null; _queuedTexts=[]; }
+  }
   // busy 时的插话通道（不含斜杠命令——命令必须走 WS 文本进后端 dispatch，
   // 2026-10-05 用户实锤：/hold on 190 被当插话注入 messages）
   if(busy && !t.startsWith('/')){

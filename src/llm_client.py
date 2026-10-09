@@ -612,7 +612,19 @@ class LLMClient:
     def _maybe_reset_to_head(self):
         """reset 策略：每次调用前若已偏离用户选的模型（_user_model），先切回去。
         限流常是临时波动，首选模型可能已恢复，故下一轮重新从用户选的模型尝试。
-        sticky 策略时不动作（回退后保持在回退到的模型，不自动切回）。"""
+        sticky 策略时不动作（回退后保持在回退到的模型，不自动切回）。
+        （2026-10-09 实锤修复：本方法此前只有 docstring 没有实现体——reset 从未生效，
+        回退后永远停在后备模型，表现为"选了 reset 却一直不重置回来"。）"""
+        if self.fallback_policy != "reset":
+            return
+        if self.model_name == self._user_model:
+            return
+        _LOG.info("[reset] 回退策略 reset 生效：%s → 切回用户首选 %s（若临时故障已过即恢复）",
+                  self.model_name, self._user_model)
+        try:
+            self.switch_model(self._user_model, _user_initiated=False)
+        except Exception as e:
+            _LOG.warning("[reset] 切回 %s 失败（保持 %s）：%s", self._user_model, self.model_name, e)
 
     # ========== Provider 参数硬约束规则表（用户提案 2026-09-01：base_url+model 预检查） ==========
     # 已知各家 API 的硬性参数差异——请求前自动修正（用户无感知；profile 的 param_lock 是显式定制层，

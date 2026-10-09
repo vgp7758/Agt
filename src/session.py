@@ -1804,7 +1804,46 @@ class Session:
         # ② fc：预算判定 + 折半大刀收敛（用户提案 2026-10-02：每次把工具折叠档的
         #    【一半】折进结构摘要，达标即停；否则对剩余轮数再折半——步数 log2 级，
         #    单调无震荡，比碎刀微调少一个数量级的渲染次数）
-        _est = lambda k: self._estimate_tokens(prefix + self._render_tiered_history(k))
+        #    2026-10-09 启动慢根治（实测 1441 轮 apply_simple_tiering 185s，98% 在收敛期的
+        #    全量渲染）：每刀 _est 都是 _render_tiered_history 全量渲染 1441 轮（40MB toollog
+        #    实测单次 ~13s）× ~14 刀。改用 O(n) 体量预扫描的代理估算做收敛判定（折半/sos
+        #    迭代 0 次渲染），真渲染只在 sos 入口校准一次——不达标仍走既有 sos 补刀。
+        import bisect as _bisect
+        _cpt = max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))
+        _fold_deep = config.load_fold_deep_tools()
+
+        def _cap_at(lv: int) -> int:
+            return max(self.detail_base >> max(0, lv - 1), DETAIL_FLOOR)
+
+        _w_sum = [0] * (n + 1)    # 轮 i 折进结构摘要段的体量（字符近似）
+        _w_tier = [0] * (n + 1)   # 轮 i 在阶梯档（raw / 折深按 bs 档位）的体量
+        for i in range(n):
+            _t = self.turns[i]
+            _bn = len(_t.user_message or "") + len(_t.answer or "") + len(_t.answer_reasoning or "")
+            _w_sum[i + 1] = _w_sum[i] + _bn + 60          # 摘要块包装
+            _lv = (_bisect.bisect_right(bs, i) + 1) if bs else 1
+            _cap = _cap_at(_lv)
+            _deep = _fold_deep and _lv > self.max_level
+            _tn = _bn
+            for _st in _t.steps:
+                _tn += len(_st.reasoning or "")
+                for _tc in _st.tool_calls:
+                    if _deep:
+                        _tn += 24                          # 折成一行标注
+                    else:
+                        _e = self.toollog.get(_tc.call_id)
+                        _tn += min(len((_e or {}).get("result") or ""), _cap) + 80
+            _w_tier[i + 1] = _w_tier[i] + _tn
+        _pre_chars = sum(len(str(m.get("content") or "")) for m in prefix)
+
+        def _est_fast(k: int) -> int:
+            k = max(0, min(int(k), n))
+            _chars = _pre_chars + (_w_sum[k] - _w_sum[0]) + (_w_tier[n] - _w_tier[k])
+            _schema = self._tools_schema_chars if getattr(self, "_tools_schema_chars", None) else 0
+            return int((_chars + _schema) / _cpt)
+
+        _est_real = lambda k: self._estimate_tokens(prefix + self._render_tiered_history(k))
+        _est = _est_fast
         fc = 0
         cuts = 0
         hi = max(0, n - near_turns)          # 可折区间 [0, hi)：近窗永不折
@@ -1819,28 +1858,38 @@ class Session:
                 fc = fc_try                  # 不达标：这半已进摘要，对剩余再折半
                 if hi - fc < 1:
                     break                    # 全折仍不达标（极端）：兜底停
+        # （收敛全程 0 次渲染；下方 sos 段的判定/日志沿用 fast 口径，最终 fc 为估算收敛值——
+        #   若代理与渲染口径有偏差，由既有"sos 后仍超预算——接受"降级日志兜底）
         # ②b sos（summary of summary，用户提案 2026-10-02）：折半到头（全折/刀数上限）
         #    仍超预算——真的压不动了。fc 清单前半（fc//2 轮）由 LLM 浓缩成一份叙事摘要
         #    替代（sos 档），清单只留次早期段。内容跨模型通用（切模型不重生成）；
         #    LLM 失败/仍超则降级接受（warning 记录，纯清单形态可用）。
         sos_done = 0
         if fc and _est(fc) > target:
-            lo = int(getattr(self, "_sos_count", 0) or 0)   # 已有 sos 段续接（内容跨模型通用）
-            for _ in range(3):   # sos 递进 ≤3 段（半→再半→再半），达标即停；输入恒为原始清单段
-                end = min(fc, lo + max(1, (fc - lo) // 2))
-                if end <= lo:
-                    break
-                _LOG.info("sos 浓缩第 %d~%d 轮清单（est=%d > 预算 %d）", lo + 1, end, _est(fc), target)
-                part = self._generate_sos(lo, end)
-                if not part:
-                    break
-                self._sos_text = (self._sos_text + "\n\n" + part).strip() if self._sos_text else part
-                self._sos_count, lo, sos_done = end, end, sos_done + 1
-                if _est(fc) <= target or end >= fc:
-                    break
-            if _est(fc) > target:
-                _LOG.warning("sos 后仍超预算（est=%d > %d）——近窗全量披露天生占宽，接受或调窗",
-                             _est(fc), target)
+            # sos 预检（2026-10-09 启动慢二轮实锤）：全折后【摘要段体量】仍远超预算（>3×）时，
+            # sos 的 ≤半量浓缩注定到不了预算——3 段 LLM 浓缩（实测阻塞启动 ~3min）纯浪费，
+            # 直接接受现状（结构摘要清单 + 近窗），日志说明。触发场景：巨量会话异 profile 重启
+            # （全量 170 万 tok vs 预算 20 万——怎么浓缩都差一个数量级）。
+            if _est(n) > target * 3:
+                _LOG.info("sos 预检：全折摘要体量 %d 仍 > 3×预算 %d——sos 注定不达标，跳过（接受现状，省 3 段 LLM）",
+                          _est(n), target)
+            else:
+                lo = int(getattr(self, "_sos_count", 0) or 0)   # 已有 sos 段续接（内容跨模型通用）
+                for _ in range(3):   # sos 递进 ≤3 段（半→再半→再半），达标即停；输入恒为原始清单段
+                    end = min(fc, lo + max(1, (fc - lo) // 2))
+                    if end <= lo:
+                        break
+                    _LOG.info("sos 浓缩第 %d~%d 轮清单（est=%d > 预算 %d）", lo + 1, end, _est(fc), target)
+                    part = self._generate_sos(lo, end)
+                    if not part:
+                        break
+                    self._sos_text = (self._sos_text + "\n\n" + part).strip() if self._sos_text else part
+                    self._sos_count, lo, sos_done = end, end, sos_done + 1
+                    if _est(fc) <= target or end >= fc:
+                        break
+                if _est(fc) > target:
+                    _LOG.warning("sos 后仍超预算（est=%d > %d）——近窗全量披露天生占宽，接受或调窗",
+                                 _est(fc), target)
         # ③ 落位（与 _plan_fold 尾段同款：fc 之前的边界是死重，清掉）
         if fc <= int(getattr(self, "_sos_count", 0) or 0):   # fc 过小时 sos 不适用（rewind 等场景）
             self._sos_text, self._sos_count = "", 0

@@ -1274,8 +1274,14 @@ class Session:
             msgs.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + step.preceding_hint)})
         if not step.tool_calls:
             return msgs
+        # 失联调用不进投影（用户裁定 2026-10-09）：toollog 无记录的 call_id 成对剔除
+        # （tool_calls + 对应 tool result），整步失联则只留 preceding_hint——
+        # 避免 LLM 看到 name="(详情已失效)" 的空调用对更蒙。
+        live_tcs = [tc for tc in step.tool_calls if self.toollog.get(tc.call_id)]
+        if not live_tcs:
+            return msgs
         a_tool_calls = []
-        for i, tc in enumerate(step.tool_calls):
+        for i, tc in enumerate(live_tcs):
             name, args, _r = self.toollog.view(tc.call_id)
             a_tool_calls.append({
                 "id": tc.call_id or str(i), "type": "function",
@@ -1286,7 +1292,7 @@ class Session:
         if step.reasoning:
             a_msg["reasoning_content"] = step.reasoning   # 思考原样，不压缩（与 full 分支一致）
         msgs.append(a_msg)
-        for i, tc in enumerate(step.tool_calls):
+        for i, tc in enumerate(live_tcs):
             _n, _a, result = self.toollog.view(tc.call_id)
             content = self._cap_full_result(result, tc.call_id)
             content = self._project_imgs(content)
@@ -3096,7 +3102,12 @@ class Session:
                 limit = max(eff_base - GROUP_STEPS * self.detail_step * group_diff,
                             DETAIL_FLOOR)
             a_tool_calls = []
-            for i, tc in enumerate(step.tool_calls):
+            # 失联调用不进投影（用户裁定 2026-10-09，与 _current_turn_msgs 同款）：
+            # toollog 无记录的 call_id 成对剔除；整步失联则跳过该 step（reasoning 一并跳）
+            live_tcs = [tc for tc in step.tool_calls if self.toollog.get(tc.call_id)]
+            if not live_tcs:
+                continue
+            for i, tc in enumerate(live_tcs):
                 name, args, _r = self.toollog.view(tc.call_id)
                 args_str = (json.dumps(args, ensure_ascii=False) if full
                             else self._summarize_args(args, limit, tc.call_id))
@@ -3108,7 +3119,7 @@ class Session:
             if step.reasoning:
                 a_msg["reasoning_content"] = step.reasoning   # 思考原样，不压缩
             msgs.append(a_msg)
-            for i, tc in enumerate(step.tool_calls):
+            for i, tc in enumerate(live_tcs):
                 _n, _a, result = self.toollog.view(tc.call_id)
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))

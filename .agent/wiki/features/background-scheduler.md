@@ -196,6 +196,25 @@ Scheduler._schedules（真源）
 
 **教训**：`session.extra_state` 是 provider 覆盖式重建的领地——**引擎/工具直写必被下一次落盘抹掉**（同族案例：`_agent_meta` 丢失）；凡需随 session 持久化的运行时状态，一律走 `capture_runtime_state` 收集清单申报 + `restore_runtime_state` 标准恢复点恢复。
 
+### 后记二：session 切换残留——restore_state 追加语义改全量替换（2026-10-09，commit f168e4c，用户实锤）
+
+**触发（用户实锤）**：WebUI 下拉框切换 session 后，旧 session 的 schedule **还在跑**；新 session 里又建了同名任务——双份并存 + 到点消息串进新 session。
+
+**根因：restore_state 是追加语义**。切 session 时 `restore_runtime_state`（标准恢复点，见[后记一](#后记三-bug-叠加持久化从未生效metajson-从未出现-schedules2026-09-18--二commit-e22062c用户实锤)）调 `scheduler.restore_state(items)`，但旧实现只往调度器里**添**新 session 的任务，旧 session 的任务一个不清。对比同一条恢复链路的其余项——plan / spec / background_tasks / remote_servers——**全是替换语义**（切会话即切换），唯独 scheduler 漏了这层。帮凶：`if not items: return` 早退——连「切到无任务会话」也不清旧任务。
+
+**修复（src/background.py `restore_state`，commit f168e4c，/restart 后生效）**：
+
+| 改动 | 语义 |
+|---|---|
+| 全量替换 | 先 `_schedules.clear()` + `_by_name.clear()` 再恢复读档任务——调度器内容整体跟 active session 走：**切走即停旧、切入即恢复新** |
+| 空列表 = 纯清空 | 切到无任务的会话，旧任务同样不残留（早退分支删除） |
+| 相位重算不变 | interval 按 `at_origin` 对齐下一未来相位点；at+repeat 重算 `_next_daily_fire`；at 单次已过去的丢弃（触发过了） |
+| 幂等 | 同一 session 恢复两次结果一致（`/restart` 同会话不重复建） |
+
+**验证（四场景）**：① session A 恢复 2 任务 → 切 session B（1 任务）→ 只剩 `['巡检B']`（A 的任务随切换清掉）✓；② 切到无任务 session C → 0 任务 ✓；③ 同 session 恢复两次 → 任务 ×1（幂等）✓。
+
+**教训**：`restore_runtime_state` 恢复链上的每一家族（plan / spec / background_tasks / schedules / remote_servers…）语义必须统一为**替换**——追加式恢复只对「永不切会话」的进程成立，而切会话是常态入口。
+
 ## 同名覆盖摘旧：重复投递根因修复（2026-09-18，commit 8ed09c6，pre_post 实锤）
 
 **bug**：同名任务再设（如改触发时间重设）时，`_by_name[name]` 被新 id 覆盖，但 `_schedules[旧id]` **残留**——`_loop` 扫的是 `_schedules`，两个同名任务各自到点**各投一次** → 重复投递（commit 8ed09c6）。

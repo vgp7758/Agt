@@ -68,3 +68,9 @@
 
 - **v0.34.1 发布（2026-10-09，版本提交 `720f64a`，whl + sdist 双文件就位）**：0.34.0 → 0.34.1 patch，10-09 分支二轮重构主线一次打包。五大块：①**分支 v3 目录平铺化**（`sessions/b/` 与主线平级 + `branch_of` 单段父引用 + `/merge` 合回根主线 + 失链自愈 + 越界 tier 状态修剪）；②**toollog 改 repo 共享单文件**（`sessions/toollog.jsonl` + `call_id=<session_id>-N` 层级前缀，40MB×N 分支拷贝清零，旧 per-session 文件 load 时自动并入）；③**启动性能根治**（`Session.load` 188s → 2.8s：收敛期 0 渲染 + sos 预检跳过注定无效的 LLM 浓缩）；④**修复**（reset 回退策略空壳补实现 / 历史展开卡死三连修 / `/resume <目录名>` 直查）；⑤**健壮性**（rewind 不再重写共享 toollog、llm_calls 基底合载保留）。多实例部署（如 20048）务必同步升级——toollog 落盘路径已迁移，旧代码按 per-session 路径找不到新文件。详见 [v0.34.1 发布记录](releases/v0.34.1.md)、[session 分支机制](features/session-branching.md)、[toollog](features/toollog.md)
 
+## 快速事实增补（2026-10-09 · 二 · scheduler 切会话残留：restore_state 追加→全量替换）
+
+## 快速事实增补（2026-10-09 · 二 · scheduler 切会话残留：restore_state 追加→全量替换）
+
+- **定时任务切会话残留修复（2026-10-09，用户实锤，commit `f168e4c`）**：UI 下拉框切 session 后旧 session 的 schedule 还在跑、新 session 再建同名任务 → 双投 + 消息串台。根因：`Scheduler.restore_state` 是**追加语义**——`restore_runtime_state` 恢复链上 plan/spec/background_tasks/remote_servers 全是替换语义，唯独 scheduler 只添不清。修复：先 clear `_schedules`/`_by_name` 再恢复（**空列表 = 纯清空**，`if not items: return` 早退删除）；相位重算与幂等语义不变。四场景验证全绿，`/restart` 后生效。详见 [background-scheduler · 后记二](features/background-scheduler.md)
+

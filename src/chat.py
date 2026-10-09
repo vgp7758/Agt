@@ -9,10 +9,23 @@
 跑法：python chat.py
 退出：quit / Ctrl+D ；运行中 Ctrl+C 第一次停当前任务（保留会话回到输入），第二次才退出。
 """
+import os
 import queue
+import sys
 import threading
 import time
 from pathlib import Path
+
+# --- 包内扁平绝对导入自愈（2026-10-09 用户实锤：pip install -e . 后启动报
+#     ModuleNotFoundError: No module named 'config'）---
+# src/ 下模块互相用「扁平绝对导入」（import config / agent / paths …），平时靠
+# src/__init__.py 把 src 目录注入 sys.path 兜住；但 src 以 namespace package /
+# meta-path finder（pip 的 editable finder）等形态被加载、__init__.py 未被执行
+# 时，这层注入缺席 → 入口第一行 import config 就断链。
+# 入口自带一层幂等注入，启动不再依赖 __init__.py 是否被执行（任何安装形态通吃）。
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 import config
 from agent import Agent

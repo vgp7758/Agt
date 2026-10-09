@@ -1633,18 +1633,19 @@ class Agent:
         return '<system-reminder pos="before_turn">\n' + "\n".join(parts) + '\n</system-reminder>'
 
     def _run_hooks(self, hook: str, context: dict) -> list[dict]:
-        """运行所有声明在 hook 位置触发的任务（工作流 / 命令 / 事件），返回需注入的旁注列表。
-        context: 该钩子位置的上下文（key 对应工作流开始节点 <out> 声明）。
-        工作流约定返回 {inject, result, message}：
-          - inject=True 且 result 非空 → 加入返回列表 {hook, name, result}（作 system 旁注喂主 LLM）；
-          - message 非空 → 发 workflow_message 事件到 UI（不进主 LLM，用于静默通知类钩子）。
-        cmd 项：执行命令，stdout 非空则注入。emit 项：发 emit 事件（不进主 LLM）。
-        失败仅发 auto_wf_error 事件，绝不炸主循环。
-        assembly DSL：hooks=off（子 Agent 声明/agent_prompt 参数）时本 Agent 不跑任何钩子工作流。
-        子 Agent 未显式声明装配时 hooks_default_on=False（Session 构造代码置位）——默认不跑钩子。"""
+        """运行所有声明在 hook 位置触发的任务，返回需注入的旁注列表（start + collect 组合）。
+        before_answer / turn_end / before_tool / after_tool 等照旧同步；
+        before_turn 用 _start_hooks（不等）+ _collect_hooks（投影后收割）两段并行（用户提案 2026-10-09）。"""
+        return self._collect_hooks(self._start_hooks(hook, context), 0)
+
+    def _start_hooks(self, hook: str, context: dict) -> dict:
+        """启动钩子批次：立即提交全部工作流到线程池，返回句柄（【不等待收割】）。
+        before_turn 专用路径——与投影装配并行：投影期间钩子已在后台跑，注入点
+        （渲染 hint 时）才 _collect_hooks，90s deadline 从投影完成后起算。
+        handle: {hook, hws, futs, ex, results, notes, context}。"""
         if not getattr(self.session, "assembly", {}).get("hooks",
-                                                         getattr(self.session, "hooks_default_on", True)):
-            return []
+                                                          getattr(self.session, "hooks_default_on", True)):
+            return {"hook": hook, "hws": [], "futs": {}, "ex": None, "results": {}, "notes": []}
         from real_tools import WORKSPACE as _ws
         from workflow import run_hook
         # 钩子上下文袋（用户提案）：start 声明 hook_ctx(object) 输入时整袋可取——
@@ -1661,7 +1662,7 @@ class Agent:
             except Exception:
                 context["tier_start"] = 1
         # git_commit 首行直供 recap（用户提案 2026-09-06）：本轮最后一次 git_commit 的
-        # message 首行——commit 首行本来就是"一句话摘要"约定，比 LLM 再总结 / answer 首行
+        # message 首行——commit 首行本来就是“一句话摘要”约定，比 LLM 再总结 / answer 首行
         # 截取都精准且零成本。经 hook_ctx 整袋下发，recap_gen 的 check_style 最优先采用。
         if hook == "turn_end" and "commit_first_line" not in context:
             try:
@@ -1741,7 +1742,7 @@ class Agent:
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
                         # 【recap 回写已移到工作流数据流】：钩子工作流经 hook_ctx 拿 turn_idx，
-                        # 组装 {"action":"set_recap","value":...,"turn":N} 调 hook_write 工具回写
+                        # 组装 {"action":"set_recap","value":...,"turn":N} 调 hook_write 工具回写。
                         # 三落点（multiagent.make_hook_side_effects）——多个 turn_end 钩子共存时
                         # "以谁为准"由工作流显式决定（谁调 hook_write 谁负责），引擎不再特判。
                         if message.strip():
@@ -1751,9 +1752,9 @@ class Agent:
                         _agent_ref._emit({"type": "auto_wf_error", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": str(e2)[:200]})
                 threading.Thread(target=_async_hook, daemon=True).start()
-            # —— 同步钩子：并发执行 + 按声明序收集注入 ——
+            # —— 同步钩子：并发提交（收割在 _collect_hooks）——
             if sync_hws:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
+                from concurrent.futures import ThreadPoolExecutor
                 from workflow import new_wf_run
                 def _run_one(hw):
                     rid = new_wf_run(hw["name"], hook, canvas=hw.get("canvas"))   # 观测注册
@@ -1777,12 +1778,41 @@ class Agent:
                         self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
                                     "run_id": rid, "text": f"{type(e2).__name__}: {str(e2)[:200]}"})
                         return hw["name"], False, "", "", rid
-                results = {}
-                # 同步钩子整组超时（settings.json hook_timeout，默认 300s；before_turn 专用
-                # hook_timeout_before_turn，默认 60s——用户裁定 2026-09-21：入口钩子等 300s 体验太差；
-                # 0=不限）：超时的钩子发 auto_wf_error + 结果丢弃（Python 线程不可强杀——后台自然跑完
-                # 但不再等它），组内已完成/后续完成的其它钩子结果照常合并注入（部分组装）。
-                # 异步钩子（async=true）不受此限制。
+                ex = ThreadPoolExecutor(max_workers=max(1, len(sync_hws)))
+                futs = {hw["name"]: ex.submit(_run_one, hw) for hw in sync_hws}
+                return {"hook": hook, "hws": sync_hws, "futs": futs, "ex": ex,
+                        "results": {}, "notes": notes, "context": dict(context)}
+        except Exception as e:
+            _LOG.error("钩子机制异常 (%s): %s", hook, e)
+        return {"hook": hook, "hws": [], "futs": {}, "ex": None, "results": {}, "notes": notes}
+
+    def _collect_hooks(self, handle: dict, extra_timeout: float = 0) -> list[dict]:
+        """收割钩子批次（deadline = 本调用时刻 + extra_timeout）。投影装配与钩子并行时
+        （before_turn），投影耗时已消耗掉钩子的前半程，deadline 从投影完成后起算
+        （用户提案 2026-10-09：90s 不再含投影时间）。合并 notes → hook_note 落盘 → 返回。
+        超时钩子：发 auto_wf_error + 结果丢弃（线程不可强杀，后台自然跑完不再等它）。"""
+        hook = handle.get("hook")
+        hws = handle.get("hws") or []
+        futs = handle.get("futs") or {}
+        ex = handle.get("ex")
+        results = handle.get("results") or {}
+        notes = handle.get("notes") or []
+        if not hws:
+            for n in notes:
+                try:
+                    self.session._emit_event({"type": "hook_note", "hook": n.get("hook"),
+                                              "name": n.get("name"), "run_id": str(n.get("rid") or ""),
+                                              "result": str(n.get("result", ""))[:2000]})
+                except Exception:
+                    pass
+            return notes
+        try:
+            # 钩子专用超时（settings hook_timeout_before_turn / hook_timeout；0=不限）：
+            # deadline 从【本调用时刻】起算——投影已完成，额外等待不再含投影时间；
+            # 投影并行路径传 extra_timeout（run 主循环已读好 config），直接采用
+            if extra_timeout and extra_timeout > 0:
+                _timeout_s = int(extra_timeout)
+            else:
                 _timeout_s = 60 if hook == "before_turn" else 300
                 try:
                     import config as _cfg
@@ -1790,30 +1820,27 @@ class Agent:
                                             else _cfg.load_hook_timeout()))
                 except Exception:
                     pass
-                ex = ThreadPoolExecutor(max_workers=max(1, len(sync_hws)))
-                try:
-                    futs = {hw["name"]: ex.submit(_run_one, hw) for hw in sync_hws}
-                    import concurrent.futures as _cf
-                    _deadline = time.time() + (_timeout_s if _timeout_s else 1e18)
-                    for hw in sync_hws:   # 按声明序等结果（注入顺序稳定；单 fut 按剩余 deadline 等待）
-                        nm = hw["name"]
-                        try:
-                            _r = futs[nm].result(timeout=max(0.05, _deadline - time.time()))
-                            # _run_one 返回五元组 (name, inject, result, message, rid)——剥掉 name 存四元组，
-                            # 与下方合并段解包对齐（此前整存五元组 → 解包错位：inject=name/result=bool）
-                            results[nm] = (_r[1], _r[2], _r[3], _r[4])
-                        except _cf.TimeoutError:
-                            futs[nm].cancel()
-                            _LOG.warning("钩子工作流 %s 超时（>%ss）结果丢弃", nm, _timeout_s)
-                            self._emit({"type": "auto_wf_error", "name": nm, "hook": hook,
-                                        "run_id": "", "text": f"⏱ 超时（>{_timeout_s}s）结果已丢弃，主循环继续"})
-                        except Exception as e3:
-                            _LOG.warning("钩子 %s 收集异常: %s", nm, e3)
-                finally:
+            import concurrent.futures as _cf
+            _deadline = time.time() + (_timeout_s if _timeout_s else 1e18)
+            try:
+                for hw in hws:   # 按声明序等结果（注入顺序稳定；单 fut 按剩余 deadline 等待）
+                    nm = hw["name"]
+                    try:
+                        _r = futs[nm].result(timeout=max(0.05, _deadline - time.time()))
+                        results[nm] = (_r[1], _r[2], _r[3], _r[4])
+                    except _cf.TimeoutError:
+                        futs[nm].cancel()
+                        _LOG.warning("钩子工作流 %s 超时（%ss）结果丢弃", nm, _timeout_s)
+                        self._emit({"type": "auto_wf_error", "name": nm, "hook": hook,
+                                    "run_id": "", "text": f"⏱ 超时（投影并行+{_timeout_s}s）结果已丢弃，主循环继续"})
+                    except Exception as e3:
+                        _LOG.warning("钩子 %s 收集异常: %s", nm, e3)
+            finally:
+                if ex is not None:
                     ex.shutdown(wait=False, cancel_futures=True)   # 不等超时线程（结果已丢弃）
                 # 按声明序合并（注入顺序稳定）
                 try:
-                    for hw in sync_hws:
+                    for hw in hws:
                         nm = hw["name"]
                         inject, result, message, rid = results.get(nm, (False, "", "", ""))
                         self._emit({"type": "auto_wf", "name": nm, "hook": hook,
@@ -1822,18 +1849,15 @@ class Agent:
                             self._emit({"type": "workflow_message", "name": nm, "hook": hook,
                                     "text": message, "auto": True})
                         if inject and result.strip():
-                            # rid（run registry id）随结果带进 notes——注入溯源（用户提案 2026-08-31）：
-                            # 注入标签 <hook name run="..."> 带 run id，观测页 /wf/monitor?run=<rid>
-                            # 可回溯该次执行的完整 canvas（llmParam 的 model 原值等现场证据）
+                            # rid（run registry id）随结果带进 notes——注入溯源（用户提案 2026-08-31）
                             notes.append({"hook": hook, "name": nm, "result": result.strip(), "rid": rid})
                 except Exception as e2:
-                    self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
+                    self._emit({"type": "auto_wf_error", "name": (hws[0]["name"] if hws else "?"), "hook": hook,
                                 "text": str(e2)[:200]})
         except Exception as e:
             _LOG.error("钩子机制异常 (%s): %s", hook, e)
         # 钩子触发落盘（2026-09-01·Step 4）：inject 结果作为 hook_note 事件写入 events.jsonl——
-        # 事后审查（当轮模型看到了什么注入）与读档回放可见；不进投影历史（时效性内容不重复喂——
-        # 之前"只有当轮 react 看得到"的观测缺口补上：注入内容可追溯，行为可复盘）
+        # 事后审查（当轮模型看到了什么注入）与读档回放可见；不进投影历史（时效性内容不重复喂）
         for n in notes:
             try:
                 self.session._emit_event({"type": "hook_note", "hook": n.get("hook"),
@@ -2132,18 +2156,27 @@ class Agent:
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
             # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。
-            bt_notes = []   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走 _run_hooks
+            bt_handle = None   # resume 时跳过（该轮首轮已检索过，重跑浪费）——首跑才走钩子
             if not resumed:
                 if _msg_source:
                     # 后台来源（bg_task/schedule/子Agent反馈等）短路 before_turn 检索钩子
                     # （用户提案 2026-10-07：钩子只服务人类直接输入——检索"服务退出"文本纯属浪费）
                     _LOG.info("后台来源（%s）短路 before_turn 检索钩子", _msg_source)
                 else:
-                    bt_notes = self._run_hooks("before_turn", self._before_turn_ctx(msg))
-            if bt_notes and not auto_flag:
+                    # 钩子与投影并行（用户提案 2026-10-09）：_start_hooks 立即提交后台跑，
+                    # hint 挂【惰性句柄】——投影渲染到注入点才收割，90s 超时从投影完成后起算
+                    bt_handle = self._start_hooks("before_turn", self._before_turn_ctx(msg))
+            if bt_handle is not None and not auto_flag:
                 # before_turn 对 user_message 做意图识别/预检索等预处理，结果作为【user 之后的补充】注入
                 # （不拼进 user 文本）：多个钩子合并成一组挂到当前 turn，session 投影时在 user 消息后渲染
-                self.session._current._before_turn_hint = self.render_before_turn_hint(bt_notes)
+                try:
+                    import config as _cfg
+                    _bt_tmo = max(0.0, float(_cfg.load_hook_timeout_before_turn()))
+                except Exception:
+                    _bt_tmo = 90.0
+                self.session._current._before_turn_hint = (
+                    lambda h=bt_handle, tmo=_bt_tmo:
+                        self.render_before_turn_hint(self._collect_hooks(h, tmo)))
             if not resumed:   # 中断轮续跑：首轮已发过 user/autonomous_continue 事件，不重发（否则前端误判为新轮）
                 if not auto_flag:
                     # source 非空 = 后台通知唤醒（service_exit/bg_task/schedule/子Agent反馈）——

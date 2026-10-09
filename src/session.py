@@ -1300,6 +1300,17 @@ class Session:
             return []
         _c = self._user_content(self._current)
         _bt = getattr(self._current, "_before_turn_hint", None)
+        if callable(_bt):
+            # before_turn 钩子惰性收割（2026-10-09 用户提案）：投影装配与钩子并行——
+            # 渲染到本注入点才收割，deadline 从此刻起算（投影耗时不再叠加钩子等待）；
+            # 收割后固化为字符串（投影每步重建，二次渲染直接用，不重复等）
+            try:
+                _bt = _bt()
+            except Exception as e:
+                from session import _LOG as _slog
+                _slog.warning("before_turn hint 收割失败（跳过注入）：%s", e)
+                _bt = None
+            self._current._before_turn_hint = _bt or ""
         if _bt:
             # 钩子注入 merge 化（2026-09-01·三区重构）：before_turn hint 不再独立成条——
             # merge 到 user 消息 content 末尾（触发位置的上一条 = 当前轮 user）；跨轮变化

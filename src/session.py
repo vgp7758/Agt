@@ -4151,6 +4151,14 @@ def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
     if found:
         return found / "meta.json"
 
+    # 3.1 目录名直查（2026-10-09 letter-id 补）：新 session 目录名是字母 id（a/b/aa…），
+    # name 只是 meta 显示名——/resume a 应直达 sessions/a/（实测曾 FileNotFoundError：
+    # 目录名与显示名脱钩后此通路缺失）。只接受无分隔符的单段名（防路径穿越）。
+    if path_or_name and not re.search(r"[\\/]", path_or_name) and ".." not in path_or_name:
+        dir_cand = repo_dir / path_or_name
+        if (dir_cand / "meta.json").exists():
+            return dir_cand / "meta.json"
+
     # 3.5 分支（用户提案 2026-10-08）：branches/<名>/meta.json——'主线/分支' 精确形式或纯分支名
     br = _find_branch_dir_by_name(ws, path_or_name)
     if br:

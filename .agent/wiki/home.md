@@ -76,3 +76,7 @@
 
 - **before_turn 钩子与投影装配并行（2026-10-09，用户提案，commit `5591648`）**：此前串行 = 投影装配完 → 再跑检索钩子 → 再请求，钩子耗时全叠加在用户首 token 等待里。`_run_hooks` 拆两段：`_start_hooks` 启动钩子批次立即返回句柄（实测 0.003s），投影装配并行进行；渲染到 user 注入点才 `_collect_hooks` 惰性收割，**90s（hook_timeout_before_turn）从投影完成后起算**——首请求等待从 `投影+钩子` 变 `max(投影, 钩子+90s 封顶)`。其它钩子位置（before_answer/turn_end/before_tool/after_tool）走同步组合语义不变；顺带修复 `extra_timeout` 传参被忽略。e2e 四场景全绿（6s 钩子 + 2s 投影：总 6.00s 而非串行 8s）。详见 [workflow-hooks · before_turn 钩子与投影装配并行](architecture/workflow-hooks.md)
 
+## 快速事实增补（2026-10-10 · 系统提示气泡同轮相同提示合并计数：×N 徽标）
+
+- **系统气泡相同提示合并计数（2026-10-10，用户提案，commit `3b378ac`）**：用户提案「同一轮下相同的提示信息合并为一条加计数」——tail ambient / 钩子注入每步重复的同一段提示此前每步落一个紫色系统气泡，同轮内刷屏。修法：`addRow('sys', text)` 入口判 `msgArea` 末行是 `.sys` 且 `_sig===text` → 计数 +1 更新 `×N` 徽标，否则新开一条（**只合并相邻**，中间隔开则各一条；不相邻即不合并）；**徽标挂 row 级**（bubble 的兄弟）——系统气泡 innerHTML 会被折叠/展开/markdown 重写反复刷，挂 row 级才不被冲掉（同「控件挂不被重写的祖先」范式）。playwright 真页面实测：连调 5 次只落 3 行 ✓。**纯前端，Ctrl+F5 即生效**。详见 [气泡交互 · 同轮相同系统提示合并计数](features/bubble-interaction.md#同轮相同系统提示合并计数n-徽标2026-10-10用户提案commit-3b378ac)
+

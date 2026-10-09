@@ -4,7 +4,7 @@
 
 ## 职责
 
-气泡交互目前有七个独立特性：
+气泡交互目前有八个独立特性：
 
 | 特性 | 前端文件 | 上线 |
 |------|---------|------|
@@ -15,6 +15,7 @@
 | **bash 代码块执行按钮**：` ```bash ` 块下 ▶ Agent 执行 / 💻 终端执行双按钮；2026-09-17 起 Agent 执行改**逐条指令**（逐行去 shebang/行尾注释/纯注释/空行后逐条发 `/call run_shell` 串行按序），终端执行保持整块 | `static/index.html` | 按钮早期上线；逐条化 2026-09-17，commit 60f3c6d |
 | **📎 本轮变更文件补充区**：answer 尾部自动补渲染「回答中未交代」的变更文件（快照 diff 直供）；modified/new 图片/音频/视频**直接内嵌渲染**（视频 2026-09-17 补）、文本/代码走预览抽屉，deleted 灰框只读；「已引用」剔除走路径归一化口径（`\`→`/` + basename 小写，2026-09-13 修复反斜杠/大小写漏判；2026-09-14 起同步认 `[!名]`、标准图片双语法，2026-09-17 起再认 `[文字](本地路径)` 链接——三语法 cited）；**容器限高 240px + 标题点击折叠 + 区内图片/视频随容器限高（240px）按 intrinsic 比例缩放**（2026-09-22，见[专节](#本轮变更文件容器限高--可折叠2026-09-22用户提案)） | `static/index.html` | 2026-09-04 引入；2026-09-06 图片/音频内嵌化；2026-09-13 路径归一化；2026-09-14 双语法 cited；2026-09-17 视频内嵌播放器 + 三语法 cited；2026-09-22 容器限高 + 折叠 + 区内媒体按比例限高 |
 | **轮收藏与收藏视角**：每轮 `.turn` **右上** ⭐ 收藏/取消（已收藏恒显/未收藏 hover 浮现；2026-10-04 起右上、原左上易误点「过程」，commit ab0cc35，见[后记](#后记-按钮移右上角左上盖着过程易误点2026-10-04用户提案commit-ab0cc35)）；控件栏「☆ 收藏」切换收藏视角只回看收藏轮（成对显隐 + 蓝字提示条）；`POST /api/favorite` 持久化 `extra_state.favorites` | `static/index.html` + `src/server.py` | 2026-09-22，commit fe1b2ac（v0.29.8 读侧预备先行） |
+| **同轮相同系统提示合并计数**：相邻的同文本系统气泡合并为一条 + `×N` 紫色徽标（徽标挂 row 级，bubble 重写不丢；只合并相邻，隔开则各一条），见[专节](#同轮相同系统提示合并计数n-徽标2026-10-10用户提案commit-3b378ac) | `static/index.html` | 2026-10-10，commit 3b378ac |
 
 ## 系统消息展开/折叠（editor.html）
 
@@ -58,6 +59,67 @@
 **配套关系**：/context 展示侧输出 markdown 表格（3ae7a76，引擎侧）+ 系统气泡渲染 markdown（fdfc28a，前端侧）——两段合起来才让「段落构成表」真正以表格呈现；若只改后端不接前端，看到的仍是纯文本（本 bug 即此断点）。
 
 **后记（2026-10-08，commit 9343107）**：系统气泡的**内容源**也有了噪音清洗——WS 斜杠命令回显用 `redirect_stdout` 捕获输出，但它是进程级全局：busy 时其它线程（CLI spinner/进度刷新）的 print 会混进回显、原样渲染进系统气泡。server.py 新增 `_clean_console_noise`（剥 ANSI 转义 + 剔 spinner 行）统一清洗后回显，见 [用户交互 · WS 斜杠命令回显清洗](user-interaction.md#ws-斜杠命令回显清洗系统气泡混入-cli-spinneransi-噪音redirect_stdout-进程级全局2026-10-08用户实锤commit-9343107)。
+
+## 同轮相同系统提示合并计数：×N 徽标（2026-10-10，用户提案，commit 3b378ac）
+
+**用户提案（2026-10-10）**：「Web 上渲染的那个系统提示气泡，同一轮下相同的提示信息就合并为一条加一个计数吧」——tail ambient / 钩子注入等**每步重复的同一段提示**（见 [context-engine · 投影分段](../architecture/context-engine.md) 与 [workflow-hooks · hook_note 落盘](../architecture/workflow-hooks.md)）此前每来一条就落一个紫色系统气泡，同轮内刷屏挤走正文。
+
+### 合并规则（`addRow` sys 分支，src/static/index.html）
+
+```javascript
+if(cls==='sys' && text){
+  const _last = msgArea.lastElementChild;
+  if(_last && _last.classList.contains('sys') && _last._sig===text){
+    _last._cnt = (_last._cnt||1) + 1;
+    // 首条不加徽标；第二次命中才 append <span class="rep-count">×N</span>
+  }
+  // 否则正常新开一条（row 记 _sig = text、_cnt = 1）
+}
+```
+
+| 场景 | 结果 |
+|---|---|
+| 连续 3 条同文本 | 1 条气泡 + `×3` |
+| 同文本中间隔了不同文本 | 各显示一条（**只合并相邻**） |
+| 中间隔了工具调用 / answer | 同上——不相邻即不合并 |
+
+- **「相邻」≈「同轮」的近似**：同一轮内连续注入的重复提示才有刷屏问题，用末行判定即覆盖；实现零查找、O(1)
+- 文本完全相同（`_sig === text` 严格等）才合并，不做归一化/模糊匹配
+
+### 关键设计：徽标挂 row 级（bubble 的兄弟）
+
+```html
+<!-- _sig/_cnt 是 JS expando（非真属性），此处只为示意挂载位置 -->
+<div class="row sys" _sig="…" _cnt="3">
+  ├─ <div class="bubble">…提示文本…</div>   ← 会被反复重写
+  └─ <span class="rep-count">×3</span>      ← 稳定，不受重写影响
+</div>
+```
+
+系统气泡的 `.bubble` innerHTML 会被多次重写——[自动折叠/展开](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)（`b.innerHTML = renderAnswer(...)`）、markdown 重渲染都走 innerHTML。计数徽标若挂在 bubble 内部会被这些重写冲掉；挂 row 级（bubble 的兄弟）则恒定保留——与[气泡级复制按钮挂宿主 row/col 而非 bubble](#关键设计按钮挂在宿主rowcol上而非-bubble-里)是同一个「DOM 会被整体重写的容器，控件挂不被重写的祖先」范式。
+
+### CSS（`.rep-count`）
+
+```css
+.rep-count { margin-left:6px; align-self:center; font-size:11px; color:#7c3aed;
+  background:#ede9fe; border:1px solid #ddd6fe; border-radius:8px; padding:0 6px; }
+```
+
+与 sys 气泡（`#f3e8ff` 紫底 `#6b21a8` 紫字）同色系的小圆角徽标；`align-self:center` 让短气泡与多行气泡的徽标都居中对齐。
+
+### 边界与可选加强
+
+- **只合并相邻同类**：同轮内两条相同提示若被其它内容隔开 → 各一条。用户已知悉，如要「整轮范围内相同文本一律合并」，改法是把判定从 `msgArea.lastElementChild` 换成「在本轮 row 集合中查找同 `_sig`」——改动小，尚未实施
+- `_cnt` / `_sig` 是 DOM expando（非 data 属性）——刷新重渲染即丢，历史读档轮不参与合并（读档本就按存档事件序列重放）
+- 徽标只增不减：删除/回溯不回收（气泡本就不可删）
+
+### 验证（playwright 真页面）
+
+连调 5 次 `addRow('sys', 文本)`（含一次不同文本）→ 实际落 **3 行**（同文本连续合并成 `×N`、不同文本另起一条），DOM 里 `.rep-count` 文本 = `×N` ✓。
+
+### 生效
+
+纯前端（`addRow` + CSS 一处，src/static/index.html），**Ctrl+F5 刷新即生效**，无需 `/restart`（与[系统气泡 markdown 渲染](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)同属纯前端层）。
 
 ## answer 气泡行内富文本与资源渲染（2026-09-04，用户提案，commit 4baa66a）
 

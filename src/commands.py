@@ -219,11 +219,29 @@ def _cmd_branch(ctx: CommandContext, args):
                 n_lines = i
                 break
     base_events = events[:n_lines]
-    # 建分支目录 + meta.json（基础字段拷贝自当前 meta，保真 system/窗口配置）
-    bdir = top_dir / "branches" / branch_name
-    if bdir.exists():
-        print(f"❌ 分支「{branch_name}」已存在：{bdir}")
-        return
+    # —— 分支 id + call_id 前缀（用户提案 2026-10-09）——
+    # 分支 id：字母序 a/b/c/…/z/aa/ab…（_next_letter_id 最小未占用）——2026-10-09 二轮裁定：
+    # **分支目录名即 id**（branches/a/、branches/b/…），name 退为 meta.json 显示字段
+    # （身份≠名称；/rename 不动目录）。call_prefix 同轮设计：一级 = m{主线锚行}；
+    # 二级+ = 父前缀-父id父轮（m1000-b15-c1 = 主线1000行分出→分支b第15轮再分出）。
+    from session import _next_letter_id as _nli
+    _existing_ids = set()
+    try:
+        for _bm in (top_dir / "branches").iterdir():
+            if _bm.is_dir():
+                _existing_ids.add(_bm.name)   # 目录名即 id
+    except Exception:
+        pass
+    bid = _nli(_existing_ids)
+    if is_branch:
+        pbm = sess.branch_meta or {}
+        parent_prefix = pbm.get("call_prefix") or f"m{len(base_events)}"
+        parent_bid = pbm.get("branch_id") or "b"
+        call_prefix = f"{parent_prefix}-{parent_bid}{keep_turns}"
+    else:
+        call_prefix = f"m{n_lines}"
+    # 建分支目录（目录名=字母 id，生成保证唯一）+ meta.json（name 只做显示字段）
+    bdir = top_dir / "branches" / bid
     try:
         bdir.mkdir(parents=True)
         cur_meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
@@ -232,40 +250,6 @@ def _cmd_branch(ctx: CommandContext, args):
         return
     import time as _t
     branch_of = (f"{top_dir.name}/branches/{sdir.name}" if is_branch else sdir.name)
-    # —— 分支 id + call_id 前缀（用户提案 2026-10-09）——
-    # branch_id：字母序 a/b/c/…/z/aa/ab/…，同主线 branches/ 内唯一（创建时取最小未占用）。
-    # call_prefix：一级 = m{主线锚行}（分支调用 id = m1000-c1…）；二级+ = 父前缀-父id父轮
-    # （m1000-b15-c1 = 主线1000行分出→分支b第15轮再分出）——锚点链可从 id 直接读出，
-    # 跨线物理不撞（根治主线/分支 counter 撞号导致记录归属混乱）。
-    def _next_branch_id(existing: set) -> str:
-        def _inc(s: str) -> str:   # a→b…z→aa→ab…（字母进位）
-            if not s:
-                return "a"
-            if s[-1] < "z":
-                return s[:-1] + chr(ord(s[-1]) + 1)
-            return _inc(s[:-1]) + "a"
-        cand = "a"
-        while cand in existing:
-            cand = _inc(cand)
-        return cand
-    _existing_ids = set()
-    try:
-        for _bm in (top_dir / "branches").glob("*/meta.json"):
-            try:
-                _existing_ids.add((json.loads(_bm.read_text(encoding="utf-8"))
-                                   .get("branch") or {}).get("branch_id") or "")
-            except Exception:
-                pass
-    except Exception:
-        pass
-    bid = _next_branch_id(_existing_ids)
-    if is_branch:
-        pbm = sess.branch_meta or {}
-        parent_prefix = pbm.get("call_prefix") or f"m{len(base_events)}"
-        parent_bid = pbm.get("branch_id") or "b"
-        call_prefix = f"{parent_prefix}-{parent_bid}{keep_turns}"
-    else:
-        call_prefix = f"m{n_lines}"
     # 显示链（list_sessions 用）：父链 ⇢ 当前会话名——支线分叉时完整链可见
     parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or top_dir.name)
     display_chain = f"{parent_chain} ⇢ {sess.name or sdir.name}" if is_branch else str(parent_chain)
@@ -288,7 +272,7 @@ def _cmd_branch(ctx: CommandContext, args):
     (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
     src_desc = f"分支「{sess.name or sdir.name}」（链：{display_chain}）" if is_branch else f"主线「{sess.name or sdir.name}」"
     print(f"✅ 分支已创建：{src_desc} 前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
-          f"→ 分支「{branch_name}」")
+          f"→ 分支「{branch_name}」（id={bid}，目录 branches/{bid}，调用前缀 {call_prefix}-c*）")
     # 立即加载分支并切换（同 /resume 路径——链式合载恢复全链记忆，counter 全局续号）
     try:
         new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,

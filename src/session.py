@@ -183,20 +183,37 @@ def _ts_from_dirname(name: str) -> Optional[float]:
         return None
 
 
+def _next_letter_id(existing: set) -> str:
+    """字母序短 id（用户提案 2026-10-09）：a/b/c/…/z/aa/ab/…——最小未占用（跳空复用）。
+    session 目录名 / 分支目录名共用（身份≠名称：name 是 meta.json 的显示字段，目录名即 id）。"""
+    def _inc(s: str) -> str:
+        if not s:
+            return "a"
+        if s[-1] < "z":
+            return s[:-1] + chr(ord(s[-1]) + 1)
+        return _inc(s[:-1]) + "a"
+    cand = "a"
+    while cand in existing:
+        cand = _inc(cand)
+    return cand
+
+
 def _new_session_dir(workspace, created_ts: float) -> Path:
-    """为一个新 session 创建以时间戳命名的专属文件夹并返回路径。
-    同秒并发冲突时尾部追加 _2/__3（极少见，进程内串行 + 秒级粒度足够）。"""
-    base = _repo_sessions_dir(workspace) / _timestamp_dir_name(created_ts)
-    if not base.exists():
-        base.mkdir(parents=True, exist_ok=True)
-        return base
-    # 同秒冲突：追加 _2/_3… 直到不撞
-    for i in range(2, 999):
-        cand = base.with_name(f"{base.name}_{i}")
-        if not cand.exists():
-            cand.mkdir(parents=True, exist_ok=True)
-            return cand
-    return base  # 兜底（999 个同名几乎不可能）
+    """为一个新 session 创建以字母 id 命名的专属文件夹（a/b/c/…/z/aa/ab…，最小未占用）。
+    用户提案 2026-10-09：目录名即 session_id（反正都是字符串）；name 只做 meta.json 显示
+    字段（/rename 不动目录）。旧时间戳目录（YYYYMMDD_HHMMSS）共存，互不影响——解析层
+    （_resolve_session_path）按 meta.name 搜索，对两种形态天然兼容。
+    created_at 语义不变（存 meta，目录名不再承载时间信息）。"""
+    repo_dir = _repo_sessions_dir(workspace)
+    try:
+        existing = {d.name for d in repo_dir.iterdir()
+                    if d.is_dir() and re.fullmatch(r"[a-z]+", d.name)}
+    except Exception:
+        existing = set()
+    sid = _next_letter_id(existing)
+    base = repo_dir / sid
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 def repo_memories_dir(workspace) -> Path:
     """该工作区的【长期记忆】目录：~/.agt/repos/<fixed-cwd>/memories/。与 sessions/ 同根，互相隔离。
@@ -3996,6 +4013,14 @@ def _find_branch_dir_by_name(workspace, name: str) -> Optional[Path]:
             cand = main_dir / "branches" / br_name
             if (cand / "meta.json").exists():
                 return cand
+            # 分支名形式（目录名=字母 id，name 在 meta——用户提案 2026-10-09 二轮）：
+            # 按分支 meta.name 扫该主线 branches/ 兜底
+            for bd in (main_dir / "branches").glob("*/meta.json"):
+                try:
+                    if json.loads(bd.read_text(encoding="utf-8")).get("name") == br_name:
+                        return bd.parent
+                except Exception:
+                    continue
         return None
     # 纯分支名：遍历各主线的 branches/（重名取最新创建的——分支名建议全局唯一）
     found = None

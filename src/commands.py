@@ -190,14 +190,13 @@ def _cmd_branch(ctx: CommandContext, args):
     if not sdir or not (sdir / "meta.json").exists():
         print("❌ 当前会话尚未落盘（无存档），先完成一轮对话再分叉")
         return
-    # v2（2026-10-08 用户提案：支线上再分叉）——以当前会话（主线或支线）的记忆为新基底：
-    #   主线上：branch_of=<主线ts>，继承主线 events 前 N 行（v1 原语义）；
-    #   支线上：branch_of=<主线ts>/branches/<支线名>（相对 sessions 根），继承该支线自己
-    #           events 前 M 行（load 链式合成自动带上主线基底——记忆全量）。
-    #   新分支目录一律平铺在【顶层主线】的 branches/ 下（不嵌套目录树）。
+    # v3（2026-10-09 用户裁定：分支平铺化）——分支目录直接建在 sessions/ 根下（与主线平级，
+    # 字母 id 全局唯一），分支关系只由 meta.branch.branch_of（单段父目录名）表达：
+    #   一级分支：branch_of=<主线目录名>；支线上再分叉：branch_of=<父分支目录名>（链式逐层）。
+    #   记忆合成（load 链式）不变；旧复合形态 "<主线>/branches/<名>" 由解析层兼容（迁移前残留）。
     is_branch = bool(getattr(sess, "branch_meta", None))
-    sessions_root = sdir.parents[2] if is_branch else sdir.parent
-    top_dir = sdir.parents[1] if is_branch else sdir          # 顶层主线目录
+    from session import _sessions_root_of
+    sessions_root = _sessions_root_of(sdir)
     base_events_p = sdir / "events.jsonl"                      # 继承源 = 当前会话自己的事件流
     if not base_events_p.exists():
         print("❌ 当前会话无 events.jsonl，无法分叉")
@@ -220,16 +219,15 @@ def _cmd_branch(ctx: CommandContext, args):
                 break
     base_events = events[:n_lines]
     # —— 分支 id + call_id 前缀（用户提案 2026-10-09）——
-    # 分支 id：字母序 a/b/c/…/z/aa/ab…（_next_letter_id 最小未占用）——2026-10-09 二轮裁定：
-    # **分支目录名即 id**（branches/a/、branches/b/…），name 退为 meta.json 显示字段
-    # （身份≠名称；/rename 不动目录）。call_prefix 同轮设计：一级 = m{主线锚行}；
-    # 二级+ = 父前缀-父id父轮（m1000-b15-c1 = 主线1000行分出→分支b第15轮再分出）。
+    # 分支 id：字母序 a/b/c/…/z/aa/ab…（_next_letter_id 最小未占用）——三轮裁定：
+    # **分支目录名即 id 且平铺在根下**（sessions/b/、sessions/c/…），name 退为 meta 显示字段。
+    # call_prefix：一级 = m{锚行}；二级+ = 父前缀-父id父轮（m1000-b15-c1）。
     from session import _next_letter_id as _nli
     _existing_ids = set()
     try:
-        for _bm in (top_dir / "branches").iterdir():
-            if _bm.is_dir():
-                _existing_ids.add(_bm.name)   # 目录名即 id
+        for _d in sessions_root.iterdir():
+            if _d.is_dir():
+                _existing_ids.add(_d.name)   # 目录名即 id（含主线自己的）
     except Exception:
         pass
     bid = _nli(_existing_ids)
@@ -240,8 +238,8 @@ def _cmd_branch(ctx: CommandContext, args):
         call_prefix = f"{parent_prefix}-{parent_bid}{keep_turns}"
     else:
         call_prefix = f"m{n_lines}"
-    # 建分支目录（目录名=字母 id，生成保证唯一）+ meta.json（name 只做显示字段）
-    bdir = top_dir / "branches" / bid
+    # 建分支目录（根平铺，目录名=字母 id，生成保证唯一）+ meta.json（name 只做显示字段）
+    bdir = sessions_root / bid
     try:
         bdir.mkdir(parents=True)
         cur_meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
@@ -249,9 +247,9 @@ def _cmd_branch(ctx: CommandContext, args):
         print(f"❌ 创建分支失败：{e}")
         return
     import time as _t
-    branch_of = (f"{top_dir.name}/branches/{sdir.name}" if is_branch else sdir.name)
+    branch_of = sdir.name   # 单段父引用（平铺：父目录名即分支关系）
     # 显示链（list_sessions 用）：父链 ⇢ 当前会话名——支线分叉时完整链可见
-    parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or top_dir.name)
+    parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or sdir.name)
     display_chain = f"{parent_chain} ⇢ {sess.name or sdir.name}" if is_branch else str(parent_chain)
     bmeta = {
         "name": branch_name,
@@ -272,7 +270,7 @@ def _cmd_branch(ctx: CommandContext, args):
     (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
     src_desc = f"分支「{sess.name or sdir.name}」（链：{display_chain}）" if is_branch else f"主线「{sess.name or sdir.name}」"
     print(f"✅ 分支已创建：{src_desc} 前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
-          f"→ 分支「{branch_name}」（id={bid}，目录 branches/{bid}，调用前缀 {call_prefix}-c*）")
+          f"→ 分支「{branch_name}」（id={bid}，目录 sessions/{bid}，调用前缀 {call_prefix}-c*）")
     # 立即加载分支并切换（同 /resume 路径——链式合载恢复全链记忆，counter 全局续号）
     try:
         new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,
@@ -317,12 +315,25 @@ def _cmd_merge(ctx: CommandContext, args):
     n = min(count, remaining)
     start = len(sess.turns) - own + merged_before     # 合成 turns 里本批起点
     sel = list(sess.turns[start:start + n])
-    # 顶层主线目录（branch_of 首段 = 主线时间戳目录名）
-    sessions_root = sdir.parents[2]
-    top_ts = (bm.get("branch_of") or "").split("/")[0]
-    top_dir = sessions_root / top_ts
-    if not (top_dir / "events.jsonl").exists():
-        print(f"❌ 找不到主线目录：{top_dir}")
+    # 根主线目录（2026-10-09 平铺化）：branch_of 单段=父目录名（可能是分支）——沿链向上
+    # 走到 meta 无 branch 字段的层即根主线；旧复合形态由 _resolve_base_dir 兼容。
+    from session import _sessions_root_of, _resolve_base_dir
+    sessions_root = _sessions_root_of(sdir)
+    top_dir = _resolve_base_dir(sessions_root, bm.get("branch_of") or "")
+    _hops = 0
+    while top_dir is not None and _hops < 8:
+        try:
+            _m = json.loads((top_dir / "meta.json").read_text(encoding="utf-8"))
+        except Exception:
+            break
+        if not (_m.get("branch") or {}):
+            break   # 无 branch 字段 = 根主线
+        _nxt = _resolve_base_dir(sessions_root, (_m.get("branch") or {}).get("branch_of") or "")
+        if _nxt is None:
+            break
+        top_dir, _hops = _nxt, _hops + 1
+    if top_dir is None or not (top_dir / "events.jsonl").exists():
+        print("❌ 找不到根主线目录（branch_of 链解析失败）")
         return
     # ① 主线 events append 标准事件（与 _rewrite_persistence 同款生成逻辑）
     lines = []
@@ -370,9 +381,9 @@ def _cmd_merge(ctx: CommandContext, args):
         mp.write_text(_json.dumps(_m, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _e:
         print(f"⚠️ merged_turns 写回分支 meta 失败（{_e}）——重跑可能重复合并，请手动检查")
-    print(f"✅ 已合并 {n}/{own} 轮回主线「{top_ts}」（事件 {len(lines)} 行 · toollog 记录 {len(moved)} 条，"
+    print(f"✅ 已合并 {n}/{own} 轮回主线「{top_dir.name}」（事件 {len(lines)} 行 · toollog 记录 {len(moved)} 条，"
           f"call_id 带前缀不撞主线）。\n   工作区文件未动（分支改的就是当前盘面）；分支保留。"
-          f"→ /resume {top_ts} 重载主线即见")
+          f"→ /resume {top_dir.name} 重载主线即见")
 
 
 def _cmd_recall(ctx: CommandContext, args):

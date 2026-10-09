@@ -165,6 +165,13 @@ def _repo_sessions_dir(workspace) -> Path:
     return d
 
 
+def _sessions_root_of(sdir: Path) -> Path:
+    """从会话目录反查 sessions 根（2026-10-09 平铺化，用户裁定：分支不再嵌 branches/）。
+    新形态：分支与主线平级直接在根下（<root>/<id>/）→ parent 即根；
+    旧形态（迁移前残留）：分支嵌在主线 branches/ 下（<root>/<主线>/branches/<id>/）→ parents[2]。"""
+    return sdir.parents[1] if sdir.parent.name == "branches" else sdir.parent
+
+
 def _timestamp_dir_name(ts: float) -> str:
     """把创建时间戳格式化成文件夹名 YYYYMMDD_HHMMSS（文件系统安全、可排序、可读）。"""
     return time.strftime("%Y%m%d_%H%M%S", time.localtime(ts))
@@ -3683,14 +3690,14 @@ class Session:
                 _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
                 s.toollog = ToolLog(prefix=_cpfx)
                 s.toollog._data = _saved
-            _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, sdir.parents[2])
+            _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, _sessions_root_of(sdir))
             # 失链自愈回填（2026-10-09）：branch_of 指向的目录已被改名（时间戳名→字母 id）时，
             # 解析层按 created_at 反查命中了新目录——把 meta.branch.branch_of 刷成现路径，
             # 下次 load 走直连（不再依赖每次反查）。失败只警告（运行期已按反查结果合成，不阻塞）。
             try:
                 _bo = str((s.branch_meta or {}).get("branch_of") or "")
                 if _bo and _layers:
-                    _canon = _layers[-1][0].relative_to(sdir.parents[2]).as_posix()
+                    _canon = _layers[-1][0].relative_to(_sessions_root_of(sdir)).as_posix()
                     if _canon != _bo:
                         _meta_p = sdir / "meta.json"
                         _m = json.loads(_meta_p.read_text(encoding="utf-8"))
@@ -4065,18 +4072,48 @@ def _find_session_dir_by_name(workspace, name: str) -> Optional[Path]:
 
 
 def _find_branch_dir_by_name(workspace, name: str) -> Optional[Path]:
-    """按分支名查找 branches/<分支名>/ 目录（用户提案 2026-10-08 分支机制）。
-    支持两种形式：
-      - '主线名/分支名'（或 '主线时间戳/分支名'）——精确路径形式，先定位主线再下钻；
-      - 纯分支名——遍历所有主线的 branches/，匹配分支 meta 的 name。
+    """按分支名查找分支目录（2026-10-09 平铺化：分支与主线同级直接在 sessions/ 根下，
+    分支关系由 meta.branch.branch_of 相对路径表达——定位不再关心嵌套）。
+    支持形式：
+      - 纯分支名——根下按 meta.name 全局搜（重名取最新创建）
+      - '主线名/分支名'——主线段仅用于消歧的旧习惯写法，分支段仍是根下 meta.name 匹配
+      - '主线id/分支id' 旧嵌套写法——兼容迁移前残留（branches/ 直查）
     找不到返回 None。"""
     repo_dir = _repo_sessions_dir(workspace)
+
+    def _by_display_name(disp: str) -> Optional[Path]:
+        """根下按 meta.name 全局搜（平铺分支天然被覆盖；重名取最新创建）。"""
+        found, found_ct = None, 0
+        try:
+            it = repo_dir.iterdir()
+        except Exception:
+            return None
+        for d in it:
+            if not d.is_dir():
+                continue
+            mp = d / "meta.json"
+            if not mp.exists():
+                continue
+            try:
+                data = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if data.get("name") == disp and data.get("branch"):   # 必须确是分支
+                ct = data.get("created_at") or 0
+                if found is None or ct >= found_ct:
+                    found, found_ct = d, ct
+        return found
+
     if "/" in name:
         main_name, br_name = name.split("/", 1)
         main_name, br_name = main_name.strip(), br_name.strip()
         if not main_name or not br_name:
             return None
-        # 主线定位：meta.name 显示名 → 时间戳目录名直查
+        # 分支段（平铺）：按 meta.name 根下全局搜
+        hit = _by_display_name(br_name)
+        if hit is not None:
+            return hit
+        # 旧嵌套残留兼容：主线/branches/分支（迁移前的目录）
         main_dir = _find_session_dir_by_name(workspace, main_name)
         if main_dir is None:
             m2 = repo_dir / main_name
@@ -4085,37 +4122,9 @@ def _find_branch_dir_by_name(workspace, name: str) -> Optional[Path]:
             cand = main_dir / "branches" / br_name
             if (cand / "meta.json").exists():
                 return cand
-            # 分支名形式（目录名=字母 id，name 在 meta——用户提案 2026-10-09 二轮）：
-            # 按分支 meta.name 扫该主线 branches/ 兜底
-            for bd in (main_dir / "branches").glob("*/meta.json"):
-                try:
-                    if json.loads(bd.read_text(encoding="utf-8")).get("name") == br_name:
-                        return bd.parent
-                except Exception:
-                    continue
         return None
-    # 纯分支名：遍历各主线的 branches/（重名取最新创建的——分支名建议全局唯一）
-    found = None
-    found_ct = 0
-    for ts_dir in repo_dir.iterdir():
-        broot = ts_dir / "branches"
-        if not broot.is_dir():
-            continue
-        for bd in broot.iterdir():
-            if not bd.is_dir():
-                continue
-            mp = bd / "meta.json"
-            if not mp.exists():
-                continue
-            try:
-                bdata = json.loads(mp.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if bdata.get("name") == name:
-                ct = bdata.get("created_at") or 0
-                if found is None or ct >= found_ct:
-                    found, found_ct = bd, ct
-    return found
+    # 纯分支名
+    return _by_display_name(name)
 
 
 def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
@@ -4181,31 +4190,85 @@ def list_sessions(workspace=None) -> list[dict]:
     legacy_dir = SESSIONS_DIR / _repo_hash(ws)
     results = []
 
-    # 新结构：扫描时间戳文件夹
+    # 新结构：扫描根下全部目录（主线 + 平铺分支，2026-10-09 平铺化：分支不再嵌 branches/）
     for ts_dir in repo_dir.iterdir():
         if not ts_dir.is_dir():
             continue
         meta_path = ts_dir / "meta.json"
-        main_name = None
-        if meta_path.exists():
-            try:
-                data = json.loads(meta_path.read_text(encoding="utf-8"))
-                main_name = data.get("name") or ts_dir.name
-                turns_count = len(data.get("turns", []))  # 旧格式兼容
-                first = ""
-                if turns_count > 0 and "turns" in data:
-                    first = (data["turns"][0].get("user_message", "") or "")[:30]
-                results.append({
-                    "id": ts_dir.name,
-                    "name": main_name,
-                    "created_at": data.get("created_at"),
-                    "turns": turns_count,
-                    "first": first,
-                })
-            except Exception:
-                continue
-        # 分支（用户提案 2026-10-08）：各主线目录下的 branches/<名>/ 顺带列出——
-        # 显示名 '主线名 ⇢ 分支名'；id 复合 '主线时间戳/分支名'（/resume 与 WebUI 同链定位）。
+        if not meta_path.exists():
+            continue
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        # 轮数/首条：meta.turns（旧格式）或数 events.jsonl 的 turn_end（分支/新格式）
+        turns_count = len(data.get("turns", []))
+        first = ""
+        if turns_count > 0 and "turns" in data:
+            first = (data["turns"][0].get("user_message", "") or "")[:30]
+        binfo = data.get("branch") or {}
+        if not binfo:
+            # 主线条目
+            if not turns_count:
+                try:
+                    for line in (ts_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            e = json.loads(line)
+                        except Exception:
+                            continue
+                        if e.get("event") == "turn_end":
+                            turns_count += 1
+                            if not first and e.get("answer"):
+                                first = (e.get("answer") or "")[:30]
+                        elif e.get("event") == "turn_start" and not first:
+                            first = (e.get("user") or "")[:30]
+                except Exception:
+                    pass
+            results.append({
+                "id": ts_dir.name,
+                "name": data.get("name") or ts_dir.name,
+                "created_at": data.get("created_at"),
+                "turns": turns_count,
+                "first": first,
+            })
+            continue
+        # 平铺分支条目：id = 单段目录名（/resume 直接用）；显示链 display_chain 优先
+        b_turns, b_first = 0, ""
+        try:
+            for line in (ts_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if e.get("event") == "turn_end":
+                    b_turns += 1
+                    if not b_first and e.get("answer"):
+                        b_first = (e.get("answer") or "")[:30]
+                elif e.get("event") == "turn_start" and not b_first:
+                    b_first = (e.get("user") or "")[:30]
+        except Exception:
+            pass
+        # 显示名：display_chain = 父自己的链（一级分支=主线名，二级=主线⇢一级…）——
+        # 拼 上 当前分支名；display_chain 缺失（旧存档）时退单名（2026-10-09 平铺化实锤：
+        # 直接用 display_chain 会显示成父的名字，分支名丢失）
+        _disp = (binfo.get("display_chain") or "").strip()
+        _bname = data.get("name") or ts_dir.name
+        b_name = f"{_disp} ⇢ {_bname}" if _disp and _disp != _bname else _bname
+        results.append({
+            "id": ts_dir.name,
+            "name": b_name,
+            "created_at": data.get("created_at"),
+            "turns": b_turns,
+            "first": b_first,
+            "branch": True,   # 分支标记（前端样式区分；/resume 用 id 或 name 均可定位）
+        })
+        # 旧嵌套残留兼容（迁移前的主线）：branches/<名>/ 顺带列出
         broot = ts_dir / "branches"
         if not broot.is_dir():
             continue
@@ -4219,9 +4282,7 @@ def list_sessions(workspace=None) -> list[dict]:
                 bdata = json.loads(bmp.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            # 分支自身轮数：数 events.jsonl 的 turn_end（快且不重放）
-            b_turns = 0
-            b_first = ""
+            b_turns, b_first = 0, ""
             try:
                 for line in (bd / "events.jsonl").read_text(encoding="utf-8").splitlines():
                     line = line.strip()
@@ -4240,13 +4301,12 @@ def list_sessions(workspace=None) -> list[dict]:
             except Exception:
                 pass
             results.append({
-                "id": f"{ts_dir.name}/{bd.name}",
-                # 显示链（v2）：meta.branch.display_chain 优先（支线上再分叉时完整链可见），缺省 '主线名 ⇢ 分支名'
-                "name": f"{(bdata.get('branch') or {}).get('display_chain') or (main_name or ts_dir.name)} ⇢ {bdata.get('name') or bd.name}",
+                "id": f"{ts_dir.name}/{bd.name}",   # 旧复合 id（/resume 兼容解析）
+                "name": f"{(bdata.get('branch') or {}).get('display_chain') or (data.get('name') or ts_dir.name)} ⇢ {bdata.get('name') or bd.name}",
                 "created_at": bdata.get("created_at"),
                 "turns": b_turns,
                 "first": b_first,
-                "branch": True,   # 分支标记（前端可样式区分；后端无需分支处理）
+                "branch": True,
             })
 
     # 旧扁平结构兼容：*.json

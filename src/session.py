@@ -166,10 +166,18 @@ def _repo_sessions_dir(workspace) -> Path:
 
 
 def _sessions_root_of(sdir: Path) -> Path:
-    """从会话目录反查 sessions 根（2026-10-09 平铺化，用户裁定：分支不再嵌 branches/）。
-    新形态：分支与主线平级直接在根下（<root>/<id>/）→ parent 即根；
-    旧形态（迁移前残留）：分支嵌在主线 branches/ 下（<root>/<主线>/branches/<id>/）→ parents[2]。"""
-    return sdir.parents[1] if sdir.parent.name == "branches" else sdir.parent
+    """从任意 session 目录反查 sessions 根（2026-10-09 平铺化 + 四轮共享 toollog）。
+    形态可能有三种：
+      主线/平铺分支：<root>/<id>/                    → parent
+      旧 branches 嵌套：<root>/<主线>/branches/<id>/  → parents[2]
+      子 Agent：<root>/<主线>/agents/<agent_id>/     → parents[2]
+    判据取最稳的一条：沿父链向上找【名为 sessions 的目录】（repo sessions 根固定叫这个）。"""
+    p = sdir
+    for _ in range(5):
+        if p.name == "sessions":
+            return p
+        p = p.parent
+    return sdir.parents[1] if sdir.parent.name == "branches" else sdir.parent   # 兜底（旧行为）
 
 
 def _shared_toollog_path(sdir: Path) -> Path:

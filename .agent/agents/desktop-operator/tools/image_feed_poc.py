@@ -73,10 +73,18 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    srv = HTTPServer(("127.0.0.1", PORT), H)
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     print(f"🖼️ image_feed 桌面画面服务 http://127.0.0.1:{PORT}/frame "
-          f"(宽≤{MAX_W} · 节流{THROTTLE}s · 内存帧零落盘)")
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
+          f"(宽≤{MAX_W} · 节流{THROTTLE}s · 内存帧零落盘)", flush=True)
+    # serve_forever 层异常（如睡眠唤醒后 winsock 10038）不退出：打 traceback 后继续服务
+    while True:
+        try:
+            srv.serve_forever(poll_interval=0.5)
+        except KeyboardInterrupt:
+            break
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            sys.stderr.flush()
+            time.sleep(1)

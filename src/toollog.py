@@ -57,24 +57,26 @@ class ToolLog:
         self._data: dict[str, dict] = {}
         self._counter = 0
         self._path: Optional[Path] = None   # 绑定的 jsonl 路径；None 时只 buffer
-        # 分支前缀（用户提案 2026-10-09）：分支自己的调用 id 形如 m1000-c1 / m1000-b15-c3——
-        # 锚点链可从 id 直接读出（m1000=主线第1000行分出，b15=父分支b的第15轮再分出），
-        # 与主线/其它分支物理不撞（杜绝跨线同 id 记录归属混乱）。主线 prefix=""（c1/c2/…）。
+        # session 前缀（用户提案 2026-10-09 二轮定稿）：call_id = "<session_id>-N"（如 a-1024 /
+        # b-35）——session_id 就是会话目录名（字母 id），归属从 id 直读、跨 session 物理不撞。
+        # 一个 repo 共用一份 toollog.jsonl（sessions 根下），各 session 只 append + 只数自己的 N。
         self._prefix = (prefix or "").strip()
 
     def next_id(self) -> str:
-        """生成会话内自增 id：主线 c1/c2/…；分支 {prefix}-c1/{prefix}-c2/…（前缀内续号）。"""
+        """生成调用 id：<session_id>-N（如 a-1024）；无前缀（旧路径/未绑定）退 cN 兼容。"""
         self._counter += 1
-        return f"{self._prefix}-c{self._counter}" if self._prefix else f"c{self._counter}"
+        return f"{self._prefix}-{self._counter}" if self._prefix else f"c{self._counter}"
 
     def _own_counter_from(self, call_id: str) -> int:
-        """提取本前缀的本地序号（不匹配返回 -1）：分支只数自己的 id——合载进来的基底
-        记录（主线 c1…/其它分支前缀）不顶分支 counter（前缀内续号）。"""
+        """提取本前缀的序号（不匹配返回 -1）：共享 toollog 里别的 session 的记录不顶本 counter。
+        兼容旧存档 id 形态：c1/c2…（2026-10-09 前的主线）、m1000-c1…（分支锚点前缀时代）。"""
         cid = call_id or ""
         if self._prefix:
-            head = self._prefix + "-c"
+            head = self._prefix + "-"
             tail = cid[len(head):]
-            return int(tail) if cid.startswith(head) and tail.isdigit() else -1
+            if cid.startswith(head) and tail.isdigit():
+                return int(tail)
+            return -1
         return int(cid[1:]) if cid.startswith("c") and cid[1:].isdigit() else -1
 
     def record(self, call_id: str, name: str, arguments: dict,
@@ -123,19 +125,12 @@ class ToolLog:
     # ========== JSONL 落盘 ==========
     def set_path(self, path: Path):
         """绑定 jsonl 路径。文件不存在 → flush 建立；存在 → 假定已 load，不重写。
-        分支（有 prefix）：只物化本前缀的记录——基底合载留在内存供投影/召回查询，
-        不写进分支文件（数据主权在基底各层自己的文件）。"""
+        （2026-10-09 二轮定稿：一个 repo 共用一份 toollog.jsonl（sessions 根下），
+        各 session 的 record 都 append 进去——不再有分支物化/合载/过滤那套。）"""
         self._path = Path(path)
         if not self._path.exists():
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._flush_all()
-
-    def _mine(self, call_id: str) -> bool:
-        """记录是否归属本 ToolLog（落盘判定）：分支=本前缀开头；主线=非任何分支前缀形态
-        （c 纯数字——合载场景主线文件本就只含自己的）。"""
-        if not self._prefix:
-            return True
-        return (call_id or "").startswith(self._prefix + "-c")
 
     def _append_line(self, entry: dict):
         try:
@@ -145,12 +140,11 @@ class ToolLog:
             pass   # 落盘失败不影响主循环（内存里仍有）
 
     def _flush_all(self):
-        """把内存 entry 写入文件（建立或重建）。分支只写本前缀的（见 set_path 注释）。"""
+        """把内存 entry 全量写入文件（建立或重建）。共享文件下各 session 记录并存——
+        文件不存在（新 repo 首次）时内存里也只有本 session 的，直接写即可。"""
         try:
             with open(self._path, "w", encoding="utf-8") as f:
                 for e in self._data.values():
-                    if not self._mine(e.get("call_id", "")):
-                        continue
                     f.write(json.dumps(e, ensure_ascii=False) + "\n")
         except Exception:
             pass
@@ -200,8 +194,8 @@ def make_tool_log_tools(agent) -> list:
 
     def get_tool_detail(call_id: str) -> str:
         """拉取工具调用的【完整】详情（工具名 / 完整入参 / 完整结果）。
-        call_id 可传单个(如 c7)或多个(逗号/空格分隔，如 c7,c8,c9)，一次返回多条；
-        id 见历史工具结果摘要末尾的标注，不确定有哪些时先 list_tool_logs 看清单。"""
+        call_id 可传单个（如 a-1024）或多个（逗号/空格分隔，如 a-1024,a-1031），一次返回多条；
+        id 形态 = <session_id>-N（见历史工具结果摘要末尾标注）；不确定有哪些时先 list_tool_logs。"""
         tl = _toollog()
         if tl is None:
             return "[无详情库] 当前会话未启用工具详情记录。"
@@ -226,7 +220,10 @@ def make_tool_log_tools(agent) -> list:
         tl = _toollog()
         if tl is None:
             return "[无详情库]"
-        items = tl.to_list()
+        # 共享 toollog（一个 repo 一份）里含其它 session 的记录——只列本 session 前缀的
+        _pfx = getattr(tl, "_prefix", "") or ""
+        items = [e for e in tl.to_list()
+                 if not _pfx or str(e.get("call_id") or "").startswith(_pfx + "-")]
         if not items:
             return "(尚无工具调用记录)"
         lines = [f"共 {len(items)} 条工具调用详情："]

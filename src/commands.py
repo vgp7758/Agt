@@ -218,10 +218,10 @@ def _cmd_branch(ctx: CommandContext, args):
                 n_lines = i
                 break
     base_events = events[:n_lines]
-    # —— 分支 id + call_id 前缀（用户提案 2026-10-09）——
+    # —— 分支 id（用户提案 2026-10-09）——
     # 分支 id：字母序 a/b/c/…/z/aa/ab…（_next_letter_id 最小未占用）——三轮裁定：
     # **分支目录名即 id 且平铺在根下**（sessions/b/、sessions/c/…），name 退为 meta 显示字段。
-    # call_prefix：一级 = m{锚行}；二级+ = 父前缀-父id父轮（m1000-b15-c1）。
+    # call_id 形态 = "<session_id>-N"（2026-10-09 四轮定稿）——目录名即前缀，无需另算。
     from session import _next_letter_id as _nli
     _existing_ids = set()
     try:
@@ -231,13 +231,6 @@ def _cmd_branch(ctx: CommandContext, args):
     except Exception:
         pass
     bid = _nli(_existing_ids)
-    if is_branch:
-        pbm = sess.branch_meta or {}
-        parent_prefix = pbm.get("call_prefix") or f"m{len(base_events)}"
-        parent_bid = pbm.get("branch_id") or "b"
-        call_prefix = f"{parent_prefix}-{parent_bid}{keep_turns}"
-    else:
-        call_prefix = f"m{n_lines}"
     # 建分支目录（根平铺，目录名=字母 id，生成保证唯一）+ meta.json（name 只做显示字段）
     bdir = sessions_root / bid
     try:
@@ -262,15 +255,14 @@ def _cmd_branch(ctx: CommandContext, args):
             "inherit_lines": n_lines,
             "base_hash": _events_fingerprint(base_events),
             "display_chain": display_chain,
-            "branch_id": bid,           # 字母序分支 id（a/b/c/…/aa/ab…，同主线 branches 内唯一）
-            "call_prefix": call_prefix, # 本分支调用 id 前缀（m1000 / m1000-b15 …）
+            "branch_id": bid,           # 字母序分支 id = 目录名（call_id 前缀 <sid>-N 即用它）
         },
         "saved_at": int(_t.time()),
     }
     (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
     src_desc = f"分支「{sess.name or sdir.name}」（链：{display_chain}）" if is_branch else f"主线「{sess.name or sdir.name}」"
     print(f"✅ 分支已创建：{src_desc} 前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
-          f"→ 分支「{branch_name}」（id={bid}，目录 sessions/{bid}，调用前缀 {call_prefix}-c*）")
+          f"→ 分支「{branch_name}」（id={bid}，目录 sessions/{bid}，调用 id {bid}-N）")
     # 立即加载分支并切换（同 /resume 路径——链式合载恢复全链记忆，counter 全局续号）
     try:
         new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,
@@ -355,21 +347,9 @@ def _cmd_merge(ctx: CommandContext, args):
                                   "merged_from": sess.name or sdir.name}, ensure_ascii=False))
     with open(top_dir / "events.jsonl", "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    # ② 主线 toollog append：sel 引用的记录（幂等——主线已有的跳过）
-    want = {tc.call_id for t in sel for st in t.steps for tc in st.tool_calls}
-    have = set()
-    mt = top_dir / "toollog.jsonl"
-    if mt.exists():
-        for l in mt.read_text(encoding="utf-8", errors="replace").strip().splitlines():
-            try:
-                have.add(_json.loads(l).get("call_id"))
-            except Exception:
-                pass
-    moved = [sess.toollog._data[cid] for cid in want if cid in sess.toollog._data and cid not in have]
-    if moved:
-        with open(mt, "a", encoding="utf-8") as f:
-            for e in moved:
-                f.write(_json.dumps(e, ensure_ascii=False) + "\n")
+    # ② toollog（2026-10-09 四轮：repo 共享单文件）无需搬运——分支轮的工具调用
+    # 本就 append 在同一个共享 toollog.jsonl 里，events 合流即可解析全部 call_id。
+    moved = []
     # ③ merged_turns 写回分支 meta（增量续合锚点——重跑无新轮，天然幂等）
     merged_now = merged_before + n
     bm["merged_turns"] = merged_now
@@ -381,7 +361,7 @@ def _cmd_merge(ctx: CommandContext, args):
         mp.write_text(_json.dumps(_m, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _e:
         print(f"⚠️ merged_turns 写回分支 meta 失败（{_e}）——重跑可能重复合并，请手动检查")
-    print(f"✅ 已合并 {n}/{own} 轮回主线「{top_dir.name}」（事件 {len(lines)} 行 · toollog 记录 {len(moved)} 条，"
+    print(f"✅ 已合并 {n}/{own} 轮回主线「{top_dir.name}」（事件 {len(lines)} 行 · toollog 共享文件免搬运，"
           f"call_id 带前缀不撞主线）。\n   工作区文件未动（分支改的就是当前盘面）；分支保留。"
           f"→ /resume {top_dir.name} 重载主线即见")
 

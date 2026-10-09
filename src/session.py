@@ -172,6 +172,14 @@ def _sessions_root_of(sdir: Path) -> Path:
     return sdir.parents[1] if sdir.parent.name == "branches" else sdir.parent
 
 
+def _shared_toollog_path(sdir: Path) -> Path:
+    """repo 共享 toollog 路径（用户提案 2026-10-09 二轮定稿）：sessions 根下一份
+    toollog.jsonl，所有 session（主线+各分支）的工具调用都 append 进去——
+    call_id = "<session_id>-N" 自带归属（a-1024 / b-35），跨 session 物理不撞，
+    不再有分支物化/合载/40MB 拷贝那套。"""
+    return _sessions_root_of(sdir) / "toollog.jsonl"
+
+
 def _timestamp_dir_name(ts: float) -> str:
     """把创建时间戳格式化成文件夹名 YYYYMMDD_HHMMSS（文件系统安全、可排序、可读）。"""
     return time.strftime("%Y%m%d_%H%M%S", time.localtime(ts))
@@ -1048,23 +1056,14 @@ class Session:
 
         if self._event_path is None:
             self._event_buffer = events
-            kept = {tc.call_id for t in self.turns[:keep] for s in t.steps for tc in s.tool_calls}
-            self.toollog._data = {k: v for k, v in self.toollog._data.items() if k in kept}
             return
 
         sd = self._event_path.parent
-        name = self.name
         self._atomic_write_lines(self._event_path, events)
-        # toollog.jsonl：仅留 kept turns 用到的 call_id，重写后重载（恢复 counter，新 id 不撞旧）
-        tl_path = sd / f"{name}.toollog.jsonl"
-        kept_ids, seen = [], set()
-        for t in self.turns[:keep]:
-            for s in t.steps:
-                for tc in s.tool_calls:
-                    if tc.call_id and tc.call_id not in seen:
-                        seen.add(tc.call_id); kept_ids.append(tc.call_id)
-        kept_entries = [e for e in (self.toollog.get(c) for c in kept_ids) if e]
-        self._atomic_write_lines(tl_path, kept_entries)
+        # toollog.jsonl（2026-10-09 二轮定稿：一个 repo 共用一份共享文件）不再重写——
+        # append-only 是共享契约，rewind 只截 events；被回退轮的多余记录留着无害
+        # （call_id 全局不撞 <sid>-N，get 直查仍可用）。旧实现对每 session 文件重写，
+        # 共享后重写会误删别的 session 记录，故删除该段。
         # recaps.jsonl 同步裁剪：idx >= keep 的 recap 若不删，rewind 后新轮会长到这些 idx
         # 而被旧 recap 张冠李戴（load 侧按 idx 盲配）。内存 Turn.recap 顺带清（pop 的轮已不在）。
         rp_path = sd / "recaps.jsonl"
@@ -1074,9 +1073,6 @@ class Session:
                 if (t.recap or "").strip():
                     kept_recs.append({"idx": self.turns.index(t), "recap": t.recap, "ts": int(time.time())})
             self._atomic_write_lines(rp_path, kept_recs)
-        self.toollog = ToolLog()
-        if tl_path.exists():
-            self.toollog.load_from_jsonl(tl_path)   # 加载 clean 数据 + 绑 path + 恢复 counter
         # 注：llm_calls.jsonl 是可观测流水（无 turn 索引），保留不动——不影响 replay/render
 
     @staticmethod
@@ -3289,7 +3285,10 @@ class Session:
         （否则 _ensure_name 因 self.name 已设而跳过 → events 不落盘）。"""
         sdir = self._ensure_session_dir()
         self._bind_event_path(sdir / "events.jsonl")
-        self.toollog.set_path(sdir / "toollog.jsonl")
+        # 共享 toollog（2026-10-09 二轮定稿）：repo 级一份 + 本 session 前缀（call_id=<sid>-N）
+        if not self.toollog._prefix:
+            self.toollog._prefix = sdir.name
+        self.toollog.set_path(_shared_toollog_path(sdir))
         self.llm_calls.set_path(sdir / "llm_calls.jsonl")
         if self._log_handler is not None:
             try:
@@ -3697,11 +3696,12 @@ class Session:
         # 判断是新文件夹结构还是旧扁平结构
         is_new_structure = path.name == "meta.json"
         if is_new_structure:
-            # —— 新文件夹结构：<timestamp>/meta.json + events.jsonl + toollog.jsonl + llm_calls.jsonl ——
+            # —— 新文件夹结构：<id>/meta.json + events.jsonl + llm_calls.jsonl ——
+            # toollog 自 2026-10-09 二轮起为 repo 共享单文件（sessions 根下）
             sdir = path.parent
             s.session_dir = sdir
             events_path = sdir / "events.jsonl"
-            toollog_path = sdir / "toollog.jsonl"
+            toollog_path = _shared_toollog_path(sdir)
             llm_calls_path = sdir / "llm_calls.jsonl"
         else:
             # —— 旧扁平结构：<name>.json + <name>.events.jsonl + ...（一次性迁移成新结构）——
@@ -3709,18 +3709,42 @@ class Session:
             sdir = _new_session_dir(ws, s.created_at)
             s.session_dir = sdir
             events_path = sdir / "events.jsonl"
-            toollog_path = sdir / "toollog.jsonl"
+            toollog_path = _shared_toollog_path(sdir)
             llm_calls_path = sdir / "llm_calls.jsonl"
             old_events = path.parent / f"{stem}.events.jsonl"
             old_toollog = path.parent / f"{stem}.toollog.jsonl"
             old_llm_calls = path.parent / f"{stem}.llm_calls.jsonl"
-            # 旧文件存在则复制到新文件夹（后续按新路径读写）
+            # 旧文件存在则并入新位置（migrate：toollog 现在并入共享文件——追加而非覆盖）
             if old_events.exists():
                 shutil.copy2(old_events, events_path)
             if old_toollog.exists():
-                shutil.copy2(old_toollog, toollog_path)
+                try:
+                    _have = set()
+                    if toollog_path.exists():
+                        for _ln in toollog_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                            try:
+                                _have.add(json.loads(_ln).get("call_id"))
+                            except Exception:
+                                pass
+                    with open(toollog_path, "a", encoding="utf-8") as _f:
+                        for _ln in old_toollog.read_text(encoding="utf-8", errors="replace").splitlines():
+                            if not _ln.strip():
+                                continue
+                            try:
+                                if json.loads(_ln).get("call_id") in _have:
+                                    continue
+                            except Exception:
+                                continue
+                            _f.write(_ln.rstrip("\n") + "\n")
+                except Exception as e:
+                    _LOG.warning("旧 toollog 迁移并入共享文件失败（忽略）：%s", e)
             if old_llm_calls.exists():
                 shutil.copy2(old_llm_calls, llm_calls_path)
+        # ToolLog 前缀 = 本会话目录名（2026-10-09 四轮定稿）：call_id = "<sid>-N"——
+        # 主线/分支统一（漏设则退化 cN，与共享文件里的历史形态混用）。
+        # 必须早于 load_from_jsonl（counter 恢复用前缀判定）。
+        if sdir and not s.toollog._prefix:
+            s.toollog._prefix = sdir.name
         # —— 分支基底链合成（用户提案 2026-10-08；v2 支持支线上再分叉：链式逐层收集）——
         # 在 events 判断之前（新建分支无自己的 events.jsonl，首次 load 也要有基底记忆）。
         # meta.branch 沿 branch_of 链逐层收集基底（根→叶）：主线层=主线 events 前N；支线层=支线
@@ -3731,14 +3755,11 @@ class Session:
         _lc_base = []
         _chain_dirs = []      # 根→叶各层目录（toollog/llm_calls/recaps 逐层合载）
         if s.branch_meta:
-            # 分支 ToolLog 前缀化（用户提案 2026-10-09）：call_prefix 存在 → 重建带前缀的
-            # ToolLog（分支自己的调用 id = m1000-c1…，前缀内续号；基底合载不顶 counter）。
-            # 旧分支（meta 无 call_prefix）保持无前缀旧行为，完全兼容。
-            _cpfx = (s.branch_meta or {}).get("call_prefix") or ""
-            if _cpfx:
-                _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
-                s.toollog = ToolLog(prefix=_cpfx)
-                s.toollog._data = _saved
+            # ToolLog 前缀 = 本 session 目录名（2026-10-09 二轮定稿）：call_id = "<sid>-N"，
+            # 共享 toollog 下别的 session 记录不顶本 counter、也无需任何合载/归属过滤。
+            _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
+            s.toollog = ToolLog(prefix=sdir.name)
+            s.toollog._data = _saved
             _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, _sessions_root_of(sdir))
             # 失链自愈回填（2026-10-09）：branch_of 指向的目录已被改名（时间戳名→字母 id）时，
             # 解析层按 created_at 反查命中了新目录——把 meta.branch.branch_of 刷成现路径，
@@ -3763,10 +3784,7 @@ class Session:
                                  "个别 call_id 可能解析不到", layer_dir.name, len(lay_ev))
                 base_events.extend(lay_ev)
                 _chain_dirs.append(layer_dir)
-                # 各层 toollog 合载（不清空 dict，counter 全局续号）
-                lay_tl = layer_dir / "toollog.jsonl"
-                if lay_tl.exists():
-                    s.toollog.load_from_jsonl(lay_tl)
+                # toollog 不再逐层合载（2026-10-09 二轮：repo 共享单文件，本文件已含全部层记录）
                 lay_lc = layer_dir / "llm_calls.jsonl"
                 if lay_lc.exists():
                     s.llm_calls.load_from_jsonl(lay_lc)

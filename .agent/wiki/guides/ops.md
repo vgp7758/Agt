@@ -474,6 +474,53 @@ scene 格式与 [llm_calls.jsonl](#llm_callsjsonl-每条记录) 同源：react/r
 
 **排障口诀**：「改了没生效」先查**进程 import 的是哪份代码**——repo / site-packages / editable 三份并存时，改错一份=零效果。`pip show -f <包名>` 看 Location 是否 editable；Python 侧打印模块 `__file__` 一击定位实体路径。
 
+### pip install -e . 后 ModuleNotFoundError: config——包内扁平导入的自愈（2026-10-09）
+
+**现象（2026-10-09 用户实锤）**：`pip install -e .` 后启动 `agt-web` 直接崩在入口：
+
+```
+File "D:\AI_Usings\Agt\src\chat.py", line 17, in <module>
+    import config
+ModuleNotFoundError: No module named 'config'
+```
+
+注意迷惑点：**src 包找到了、chat.py 也加载了**（traceback 能指到具体行），只在「入口第一条包内 import」那一刻断链——看着像 config.py 丢了，其实文件好端端在 `src/config.py`。
+
+**根因**：`src/` 下模块互相用**扁平绝对导入**（`import config` / `agent` / `paths` …），不写成包内相对导入；这层能成立**完全依赖 `src/__init__.py` 把 src 目录 insert 进 sys.path**。当 `src` 以「**不执行 __init__.py**」的形态被加载时，注入缺席 → 断链。能触发它的形态：
+
+- `src` 被当作 **namespace package**（目录里 `__init__.py` 缺失 / 被半途卸载删掉）；
+- `src` 由 **meta-path finder**（pip editable finder）等外部机制提供规格；
+- 任何 `__init__.py` 未被执行、而 sys.path 又没有 src 目录的场景。
+
+**一行复现**（cwd 别在 repo 下）：
+
+```python
+import sys, types
+m = types.ModuleType("src"); m.__path__ = [r"D:\AI_Usings\Agt\src"]; sys.modules["src"] = m
+import src.chat          # → 与用户 traceback 逐行一致
+```
+
+**修复（commit a3b3c0a）**：`src/chat.py` 入口在**任何包内 import 之前**自带一层幂等注入——启动不再依赖 `__init__.py` 是否被执行，pip editable / site-packages 实体 / 桌面平铺三种形态通吃：
+
+```python
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+```
+
+**验证**：同场景复跑 → `src.chat OK` / `config OK`；`py_diag` 无问题；隔离工作区起 WebUI（9623）→ `ready=true`、tools 163、无 traceback。
+
+## 顺带两条 editable 落地关键机制（排查“-e 装了却不生效/装不上”用）
+
+| 机制 | 含义 | 处置 |
+|---|---|---|
+| editable finder 装到 sys.meta_path **末尾** | 而 `PathFinder` 在它前面 → **只要 site-packages 里还存在实体 `src` 目录，PathFinder 先命中实体副本，editable 完全不生效** | 必须**删除/改名** `site-packages\src`，editable 才接管（这是“改了 repo 页面不刷新”的机制层原因） |
+| `pip install -e .` 会**卸载旧版 + 重写 `Scripts\agt-web.exe`** | Windows 锁运行中的映像文件：只要有 `agt-web.exe` / `agt.exe` 实例在跑，卸载/写脚本阶段 PermissionError → pip 中止 | 需**实例停机窗口**才能装；或走“免 pip 手工放 pth+finder”的等价路径 |
+
+**免 pip 的等价 editable 落地**（不碰被锁的 exe）：把 editable wheel 里的 `__editable___agt_agent_<ver>_finder.py` + `__editable__.agt_agent-<ver>.pth` 放进 site-packages（解释器启动时由 .pth 加载），再把实体 `src` 目录改名/删除。⚠️ **pth 只在进程启动时读取 → 必须重启实例才生效**。
+
+**排障口诀**：`ModuleNotFoundError: 同级模块` 但入口文件能加载 → 先打印 `src.__file__` 和 `src.__path__`，再查 src 目录在不在 `sys.path`；**报错点与文件是否真的缺失无关，问题在“包内绝对导入靠谁兜底”**。
+
 ### 实例假死（busy 无输出）：MCP server hang 拖死 worker——py-spy 抓栈定位（2026-10-06，50052 实锤）
 
 **症状（50052 用户报告）**：实例阻塞——WebUI busy、但 `llm_calls.jsonl` 最后一条 05:24 后零新记录；进程 06:00 仍存活、无崩溃日志。**判别口诀：进程死 ≠ 假死**——「进程活着 + 流水停摆」才是假死标志。

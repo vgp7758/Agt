@@ -4070,6 +4070,9 @@ def _branch_chain_bases(root_meta: dict, sessions_root: Path) -> list:
     - 每层的 inherit_lines 语义 = 该层基底文件自己的前 N 行（主线层=主线 events 前N；支线层=支线
       自己 events 前M——链式拼接即为完整记忆流）；
     - 某层缺失 → 该层降级为空（警告），不断链；
+    - inherit_lines = -1（用户提案 2026-10-09 六轮）：【永远继承该层全部历史】——动态语义，
+      每次 load 读父 events 当前全量（父增长自动跟上，非创建时快照）；该层 meta 不写
+      base_hash 即天然跳过指纹漂移校验（漂移是预期而非异常）；
     - 环/超深（>8 层）截断。"""
     layers_rev = []
     cur = dict(root_meta or {})
@@ -4082,8 +4085,9 @@ def _branch_chain_bases(root_meta: dict, sessions_root: Path) -> list:
             layer_dir = sessions_root / bo   # 保持旧警告路径（缺目录时给出可读位置）
         ev_p = layer_dir / "events.jsonl"
         n = int(cur.get("inherit_lines") or 0)
-        if ev_p.exists() and n > 0:
-            layers_rev.append((layer_dir, _read_events(ev_p)[:n], cur.get("base_hash") or ""))
+        if ev_p.exists() and (n > 0 or n == -1):
+            _ev = _read_events(ev_p) if n == -1 else _read_events(ev_p)[:n]
+            layers_rev.append((layer_dir, _ev, cur.get("base_hash") or ""))
         else:
             _LOG.warning("分支基底缺失 %s（inherit_lines=%d）——该层降级为空", ev_p, n)
             layers_rev.append((layer_dir, [], cur.get("base_hash") or ""))

@@ -510,6 +510,22 @@ if _SRC_DIR not in sys.path:
 
 **验证**：同场景复跑 → `src.chat OK` / `config OK`；`py_diag` 无问题；隔离工作区起 WebUI（9623）→ `ready=true`、tools 163、无 traceback。
 
+## 同 repo 单实例约束（2026-10-09 明确）
+
+## 同 repo 单实例约束（2026-10-09 明确）
+
+**一个 repo（同一 workspace 路径）只支持单实例运行**；要多实例请用不同 workspace。背景：用户确认「一个 repo 不支持两个实例并发对吧」——结论成立且随共享 toollog 落地变得更硬：
+
+| 场景 | 结论 |
+|---|---|
+| 同 repo 同 workspace 双实例 | ❌ **互踩**——events.jsonl / meta.json / 共享 toollog.jsonl 是同一批文件，**无跨进程锁**：autosave 原子写互相覆盖、toollog append 的大 result 行理论可交错劈开（小行 append 基本安全，无契约保证） |
+| 不同 repo（不同 workspace） | ✅ 天然隔离——存档在 `~/.agt/repos/<key>/sessions/` 各一套（见上文存档布局） |
+| 跨机实例（如 9000 与 20048） | ✅ 不同机器不同 repo，无影响 |
+
+**要多实例 = 多开 workspace**（每个 workspace 自动一套独立存档目录）。真要支持同 repo 多实例需引入跨进程文件锁（meta/events 原子写互斥 + toollog 追加锁）——独立课题，按需再做。2026-10-09 toollog 改 **repo 共享单文件**（[toollog · 共享单文件](../features/toollog.md#repo-共享单文件2026-10-09-二轮定稿commits-1c320c8--f0d1e92)）后，不同 session 的写入耦合进同一文件，双实例风险面进一步集中。
+
+关联：[session 分支机制 · 注意事项](../features/session-branching.md)、[toollog · 注意事项](../features/toollog.md)。
+
 ## 顺带两条 editable 落地关键机制（排查“-e 装了却不生效/装不上”用）
 
 | 机制 | 含义 | 处置 |

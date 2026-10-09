@@ -1,4 +1,4 @@
-# LLM 客户端韧性 · 分级超时 / 断网等网 / 切换纪元 / 超时诊断 / 端点拒图自愈（src/llm_client.py）
+# LLM 客户端韧性 · 分级超时 / 断网等网 / 切换纪元 / 超时诊断 / 端点拒图自愈 / 回退策略落地（src/llm_client.py）
 
 ## 职责与背景
 
@@ -133,6 +133,36 @@ profile.connect_timeout / write_timeout（models.json 模型卡片）
 回退链解决「**模型坏了**换一个」；本机制解决「**模型好但不吃图**」——不换模型，换图片形态（图 → `[图片 文件名]` 文字占位 + WebUI 提示「⚠️ xx 端点不支持图片输入，已降级为文字占位」，需要看图由 Agent 委托 vision 子 agent）。用户选 glm-5.3 要的是它的文本能力，不被一张历史图踢去 deepseek。
 
 用户侧表现与全链路图见 [图片输入链路 · 端点拒图自动降级](image-input.md)；`invalidate_projection` 机制见 [上下文引擎 · 手动切模型投影重刷](../architecture/context-engine.md)。
+
+## 六、回退策略 reset 落地：_maybe_reset_to_head 空壳方法补实现（2026-10-09，用户实锤，commit cea4d09）
+
+### 现象与根因
+
+用户实锤：「模型回退策略选的是 reset，但发生过回退之后看上去一直没有重置回来」——回退到后备模型后永远停在那，reset 语义从未生效。
+
+**根因（相当离谱）**：`_maybe_reset_to_head()` 是个**空壳方法**——只有 docstring、没有实现体；而 `chat()` 与 `chat_stream()` **每次请求前都在调它**。空函数调了等于没调：无论用户选 reset 还是 sticky，实际行为都恒等于 sticky（回退后停在后备模型，永不切回）。
+
+### 实现（补上的方法体）
+
+| 条件 | 行为 |
+|---|---|
+| 策略 = reset 且 当前 `model_name` ≠ `_user_model` | `switch_model(切回用户首选, _user_initiated=False)`——只换 profile，**不动回退链 / 不动切换纪元** |
+| 策略 = sticky，或未偏离首选 | 不动作 |
+| 切回失败 | 保持现状（warning，不炸轮） |
+
+- **与 provider 冷却的配合**：首选模型刚失败时仍在冷却期（默认 300s，链上继续剔除它）→ 冷却期间照常用后备、不白撞故障端点；**冷却过期后每次调用都先试首选**，成功即恢复——「下一轮重新从首选尝试」的 reset 语义由此成立
+- **可观测**：切回时打 `[reset] 回退策略 reset 生效：{旧模型} → 切回用户首选 {新模型}` 一行（日志面板可追溯）
+
+### 验证（真实 config 四场景全绿）
+
+```
+① reset 偏离后：deepseek → qwen ✅ 切回首选
+② sticky 偏离后：deepseek → deepseek ✅ 保持不动（sticky 语义未破坏）
+③ reset 未偏离：qwen → qwen ✅ 幂等无动作
+④ 链首=qwen · _user_model=qwen ✅（链结构不被扰动）
+```
+
+`/restart` 生效。**教训**：docstring 写满行为的空壳方法比没有这个方法更隐蔽——调用点看起来防线齐全（两个主调用路径都调了），实际什么都不做；审查时「方法被调用」≠「方法生效」，行为承诺必须对着实现体核一遍。
 
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 

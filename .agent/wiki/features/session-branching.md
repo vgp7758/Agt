@@ -150,7 +150,7 @@ sessions/
 
 | 件 | 说明 |
 |---|---|
-| `_sessions_root_of(sdir)`（src/session.py） | 从任意 session 目录反查 sessions 根：**沿父链向上找名为 `sessions` 的目录**（≤5 层），兜底旧行为。四形态统一——主线 / 平铺分支 / 旧 branches 嵌套 / **子 Agent**（`<主线>/agents/<agent_id>/`）。共享 toollog 定位的基石 |
+| `_sessions_root_of(sdir)`（src/session.py） | 从任意 session 目录反查 sessions 根：**沿父链向上找名为 `sessions` 的目录**（初版 ≤5 层，共享 toollog 五轮放宽到 **≤12 层**——多层嵌套子 Agent 目录也够得到），兜底旧行为。四形态统一——主线 / 平铺分支 / 旧 branches 嵌套 / **子 Agent**（`<主线>/agents/<agent_id>/`）。共享 toollog 定位的基石 |
 | `_resolve_base_dir(sessions_root, bo)` | 基底层目录解析 + **失链自愈**：逐段解析 `bo`；某段不存在且形如旧时间戳目录名（`YYYYMMDD_HHMMSS`）→ 按 `meta.created_at` 反查现目录（「目录名即 id」改造会改名既有目录，`branch_of` 字符串还指着旧名）；解析失败返回 None → 调用方降级为空基底、不断链 |
 | `commands._cmd_branch` | 新分支建在 sessions 根下（`branch_of = sdir.name` 单段）；回执 `→ 分支「X」（id=b，目录 sessions/b，调用 id b-N）` |
 | `commands._cmd_merge` | 沿 `branch_of` 链（`_resolve_base_dir` + 跳数上限 8）上溯到「meta 无 `branch` 字段」的根主线再 append |

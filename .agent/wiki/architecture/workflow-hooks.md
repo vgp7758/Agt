@@ -300,6 +300,8 @@ with ThreadPoolExecutor() as pool:
 
 关联：[配置体系 · settings.json](../guides/config-and-models.md#settingsjson运行时)（两键全表）、[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)——「全部完成才返回」的并行语义不变，本节只是给整组等待加了上限。
 
+> **修订（2026-10-09，commit `5591648`）**：deadline 基准点从「`_run_hooks` 本调用时刻」移到「投影注入点收割时刻」——钩子先启动、投影装配并行进行，**投影期间不计时**；配置值语义不变（用户实例现配 90s），只是起算点后移。详见 [before_turn 钩子与投影装配并行](#before_turn-钩子与投影装配并行startcollect-两段--投影点惰性收割2026-10-09用户提案commit-5591648)。
+
 ## before_turn 后台来源短路：_msg_source 非空不跑检索（2026-10-07，用户提案，commit 3d5fb42）
 
 **提案（用户 2026-10-07）**：before_turn 检索钩子此前**每轮都跑**——包括 inbox 唤醒的后台轮。钩子本是为人类直接输入服务的，后台通知（如服务退出）开一轮也去检索「服务退出」这段通知文本纯属浪费（本地提词 LLM + embedding 全白烧）。裁定：标记一下用户直接发送的消息，钩子只处理有标记的，其它情况短路静默。
@@ -556,6 +558,26 @@ start(1)/end(2)/llm(3)/plugin(4)/code(5)/selector(8)/subworkflow(9)/text(15)/loo
 **① setvar(20) 的 left 支持 XML 简写（commit ace13b2）**：手写/编辑器保存的 `<in left="__entry__.keywords" right="ref:926184.raw"/>` 转成 canvas 后 left 是**字符串**，而旧引擎只认编辑器结构化形态（`{value:{content:{name}}}`）→ `var_name=None` → **setvar 执行了但一个字都没写**（观测显示 done 却是空转——最难的静默失败）。修复：`_setvar_left_name` 多形态解析（`__entry__.keywords` 点号路径取尾段 / 裸名 / 结构化 dict / round-trip 变体）+ `_setvar_right_value` 支持 `ref:节点.字段` 字符串简写。解析失败返回 None（调用方静默跳过——不炸循环体）。
 
 **② 循环变量终值无条件并入 outputs（同 commit）**：`loop_vars` 只在声明了原生输出时才 merge——wait_extract 只声明 all/filtered/nth 三个约定输出 → `1275951.keywords` 恒 None → 聚合器四变量全空 → fallback 到 var3 的 `"pending"`（index=3 正是 var3 的序号——观测与代码互证）。修复：`loop_vars` **setdefault 无条件并入**——「复合节点.变量名」是一等输出引用面（编辑器 `__entry__` 的变量端口一直暴露着它），约定输出（all/filtered/nth）与显式原生输出优先不覆盖。
+
+**③ Break(19) 携带值（commit 8bc6c66，await 语义）**：旧实现恒 `return "break", None` 且 break 轮 round_out 直接丢弃 → 就绪轮 set_keywords 拿到值后 `__break__` 退出，值死在退出瞬间。修复：与 Continue 同款解析唯一 result 字段——break 携带值退出（就绪轮终值进 all_outputs 末位；未连 result → None 不占位，保持纯退出语义）。批处理体内 break 同款修复（此前 break 信号被静默忽略——继续跑完剩余元素）。
+
+**④ yield 节点（用户提案，同 commit）**：`ntype in ("29","2","yield")`——yield ≡ continue(result)，「本轮产出该值」的语义化一等节点；编辑器 TYPE_LABEL/TYPE_CATEGORY/流程出口排除同步注册。
+
+**e2e 验证（复刻 wait_extract 结构）**：count 循环 + selector 分支（未就绪轮 continue(无 result) / 就绪轮 setvar→break(带 result)）→ `all_outputs=[null×4, kw]`、`filtered_outputs=[kw]`、`nth_output=kw`、`keywords 变量=kw`——用户期望三元组精确达成。extract_keywords.xml 配套：`__break__` 连上 `result ← 926184.raw`、`__continue__` 移除坏引用 `926184.raw.list`（引擎无 `.list` 派生属性）。
+
+### llm(3) 节点 per-node thinking 档位（2026-08-31，commit 99f3bca）
+
+llm(3) 节点的 per-node `thinking` 参数从纯 bool 扩为**三态**（用户提案 · GLM 思考档位，commit 99f3bca，配套 models.json profile 侧同款三态）：值 ∈ `low/medium/high/max` 时走 overrides `thinking_tier`（client 侧转 `extra_body={"thinking":{"type":档位}}`，**不发 enable_thinking**——GLM 类「始终思考」模型发该参数 400 code 1210「该模型始终思考，不支持关闭思考」）；其余值仍按 `true/1/yes/on` 布尔转 `enable_thinking`。
+
+**节点 schema enum 已同步扩为 7 值**（`["", "true", "false", "low", "medium", "high", "max"]`，desc 注明「true/false=思考开关；low/medium/high/max=GLM 档位（不发 enable_thinking 改发 thinking:type）；空=跟随默认」）——编辑器 llmParam 的 thinking 下拉直接可选档位，枚举透传见 [editor-ux · enum 渲染下拉](../features/editor-ux-improvements.md#附enum-参数渲染为下拉框通用机制)。
+
+发射优先级（src/llm_client.py `_build_kwargs`）：**per-node 档位 > profile 档位（models.json `"thinking": "low"` 等）> enable_thinking**——档位模式下 enable_thinking（实例默认 / 全局 `/config enable_thinking` / per-node bool）全部被忽略；非档位模型（profile 无档位）也可被节点单独指定档位。此前 per-node thinking 统一 bool 转换、档位字符串会被吃掉——本修复补齐。
+
+背景、配置矩阵与操作见 [config-and-models · thinking 三态](../guides/config-and-models.md#thinking-三态bool-开关与档位字符串glm-始终思考模型2026-08-31commit-99f3bca)。
+
+> **排查关联（同批，local-qwen 悬案）**：thinking 档位落地后，若 LLM 节点选了档位仍见「utility 400 始终思考」第一跳——大概率不是 thinking 配置问题，而是节点 model 被换/取空导致的回退链（观测链见 [最后一击](#最后一击llmparam-执行现场观测2026-08-31commit-8bc4838)）。
+
+75951.keywords` 恒 None → 聚合器四变量全空 → fallback 到 var3 的 `"pending"`（index=3 正是 var3 的序号——观测与代码互证）。修复：`loop_vars` **setdefault 无条件并入**——「复合节点.变量名」是一等输出引用面（编辑器 `__entry__` 的变量端口一直暴露着它），约定输出（all/filtered/nth）与显式原生输出优先不覆盖。
 
 **③ Break(19) 携带值（commit 8bc6c66，await 语义）**：旧实现恒 `return "break", None` 且 break 轮 round_out 直接丢弃 → 就绪轮 set_keywords 拿到值后 `__break__` 退出，值死在退出瞬间。修复：与 Continue 同款解析唯一 result 字段——break 携带值退出（就绪轮终值进 all_outputs 末位；未连 result → None 不占位，保持纯退出语义）。批处理体内 break 同款修复（此前 break 信号被静默忽略——继续跑完剩余元素）。
 

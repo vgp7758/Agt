@@ -70,7 +70,9 @@
 
 ## 快速事实增补（2026-10-09 · 二 · scheduler 切会话残留：restore_state 追加→全量替换）
 
-## 快速事实增补（2026-10-09 · 二 · scheduler 切会话残留：restore_state 追加→全量替换）
-
 - **定时任务切会话残留修复（2026-10-09，用户实锤，commit `f168e4c`）**：UI 下拉框切 session 后旧 session 的 schedule 还在跑、新 session 再建同名任务 → 双投 + 消息串台。根因：`Scheduler.restore_state` 是**追加语义**——`restore_runtime_state` 恢复链上 plan/spec/background_tasks/remote_servers 全是替换语义，唯独 scheduler 只添不清。修复：先 clear `_schedules`/`_by_name` 再恢复（**空列表 = 纯清空**，`if not items: return` 早退删除）；相位重算与幂等语义不变。四场景验证全绿，`/restart` 后生效。详见 [background-scheduler · 后记二](features/background-scheduler.md)
+
+## 快速事实增补（2026-10-09 · 三 · before_turn 钩子与投影装配并行：投影不计时，90s 从投影后起算）
+
+- **before_turn 钩子与投影装配并行（2026-10-09，用户提案，commit `5591648`）**：此前串行 = 投影装配完 → 再跑检索钩子 → 再请求，钩子耗时全叠加在用户首 token 等待里。`_run_hooks` 拆两段：`_start_hooks` 启动钩子批次立即返回句柄（实测 0.003s），投影装配并行进行；渲染到 user 注入点才 `_collect_hooks` 惰性收割，**90s（hook_timeout_before_turn）从投影完成后起算**——首请求等待从 `投影+钩子` 变 `max(投影, 钩子+90s 封顶)`。其它钩子位置（before_answer/turn_end/before_tool/after_tool）走同步组合语义不变；顺带修复 `extra_timeout` 传参被忽略。e2e 四场景全绿（6s 钩子 + 2s 投影：总 6.00s 而非串行 8s）。详见 [workflow-hooks · before_turn 钩子与投影装配并行](architecture/workflow-hooks.md)
 

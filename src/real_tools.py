@@ -2320,14 +2320,18 @@ WEB_SEARCH_OUTPUTS = [
 
 REAL_TOOLS = Toolbox(
     Tool(run_python, param_descriptions={
-        "code": "内联 Python 代码（多行，写临时文件再跑）。和 file 二选一。适合一次性验证/分析（1 次调用搞定）；预计要反复调试改跑的脚本，先 write_file 落盘再 run_python(file=...)，后续 edit 改+重跑——整段代码重发比 edit 差量贵得多",
+        "code": "内联 Python 代码（多行，写临时文件再跑）。和 file 二选一。适合一次性验证/分析（1 次调用搞定）；预计要反复调试改跑的脚本，先 write_file 落盘再 run_python(file=...)，后续 edit 改+重跑——整段代码重发比 edit 差量贵得多。支持 @file:相对路径 整值引用（值恰好为 @file:xxx 时自动读该文件全文填入）",
         "file": "已存在的 .py 文件路径（跑已保存的脚本传这个，别再用 subprocess 包壳）。和 code 二选一。调试迭代场景首选：edit 精确改文件后重跑，不用整段重发",
     }),
     Tool(read_file, param_descriptions={
         "line_numbers": "默认 True=每行前加行号(宽度按本段最大行号自适应对齐)，便于接下来用 insert/delete/move 按行号编辑；False=纯文本",
     }),
-    Tool(write_file),
-    Tool(edit),
+    Tool(write_file, param_descriptions={
+        "content": "写入的完整内容。支持 @file:相对路径 整值引用（值恰好为 @file:xxx 时读该文件全文填入——从模板文件复制内容时用）",
+    }),
+    Tool(edit, param_descriptions={
+        "new_string": "替换后的文本（支持 @file:相对路径 整值引用——值恰好为 @file:xxx 时读该文件全文填入）",
+    }),
     Tool(insert, param_descriptions={
         "entries": "插入点数组，每项 {line: 1-based行号, content: 文本(可多行)}；在该行之前插入；line<=0或超过总行数=追加末尾",
         "version": "read_file/grep 返回的 file_version；不匹配说明文件已改、需重读",

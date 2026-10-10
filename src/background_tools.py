@@ -179,7 +179,7 @@ def make_background_tools(agent) -> list:
                      "name": "任务名（唯一键，同名覆盖；cancel/list 用它索引）",
                      "every_seconds": "每 N 秒循环一次（与 at 同给=组合：at 为首触发相位起点）",
                      "at": "完整 ISO（2026-07-20T17:30:00，单次/组合首触发）或短格式 HH:MM（17:30，每日闹钟）",
-                     "message": "推送内容①静态文本：到点注入给 Agent 的这条消息",
+                     "message": "推送内容①静态文本：到点注入给 Agent 的这条消息。支持 @file:相对路径 整值引用（读文件全文填入）",
                      "tool": "推送内容②到点执行工具：工具名（如 web_search）",
                      "tool_args": "推送内容②的参数对象（如 {\"query\": \"AI最新进展\"}）",
                      "code": "推送内容③Python 代码：触发时执行，stdout 尾部+result 变量作为消息；空产物该次静默",

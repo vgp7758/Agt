@@ -223,6 +223,46 @@ def _render_run_python_cli(code: str) -> str:
     return "🔧 run_python:\n   " + "\n   ".join(preview) + more
 
 
+
+# —— @file: 文件引用展开（用户提案 2026-10-11）——
+# 内容型字符串参数的值若【整值】匹配 @file:<path>：读该文件全文替换（代码块/message/prompt 等
+# 长文本场景——先 write_file 存内容再引用，免长文进 JSON 的转义/体积痛）。相对路径基于 workspace
+# （绝对路径亦可）；读失败原值透传并附警告。白名单参数——path/name 等路径/标识类参数不展开。
+_FILE_REF_PARAMS = {"code", "message", "content", "prompt", "text",
+                    "new_string", "old_string", "system"}
+
+
+def _expand_file_refs(name: str, arguments) -> list:
+    """@file:<path> 整值引用展开：返回附注清单（prepend 到工具结果；空清单=无展开）。
+    整值匹配（strip 后完全形如 @file:xxx）——文本中 merely 出现 @file: 不触发，零歧义。"""
+    if not isinstance(arguments, dict):
+        return []
+    import re as _re
+    notes = []
+    for k in list(arguments.keys()):
+        if k not in _FILE_REF_PARAMS or not isinstance(arguments[k], str):
+            continue
+        m = _re.match(r"^@file:(.+)$", arguments[k].strip(), _re.S)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        from pathlib import Path as _P
+        p = _P(raw)
+        if not p.is_absolute():
+            try:
+                from real_tools import WORKSPACE as _WS
+                p = _WS / raw
+            except Exception:
+                pass
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+            arguments[k] = content
+            notes.append(f"📎 {k} = @file:{raw}（已展开 {len(content)} 字）")
+        except Exception as e:
+            notes.append(f"⚠️ {k} = @file:{raw} 读取失败（{type(e).__name__}）——参数按原值传")
+    return notes
+
+
 class Agent:
     def __init__(
         self,
@@ -560,6 +600,10 @@ class Agent:
                     if _sticky:
                         self._remote_sticky = None
                         _switched_back = True
+        # @file: 文件引用展开（用户提案 2026-10-11）：在远程路由【之前】——引用的是本地
+        # 上下文的文件（模型 read_file/write_file 操作过的），展开成完整文本再发/再执行。
+        _fr = _expand_file_refs(name, arguments)
+        _fr_prefix = ("\n".join(_fr) + "\n\n") if _fr else ""
         if rid:
             _from_sticky = not _explicit_rid
             try:
@@ -584,8 +628,10 @@ class Agent:
                       f"（无需重复传 remote_instance_id）。执行本地工具请传 \"remote_instance_id\": \"_main_\"。")
             else:
                 r += (f"\n\n🧷 本次在 {rid} 执行（粘性路由）。执行本地工具请传 \"remote_instance_id\": \"_main_\"。")
-            return r
+            return (_fr_prefix + r) if _fr_prefix else r
         r = self.tools.call(name, arguments)
+        if _fr_prefix and isinstance(r, str):
+            r = _fr_prefix + r
         # 越界放行提示（用户补充 2026-09-29："捕获报错后作为工具结果返回"）：审批放行的
         # workspace 外操作，提示并入工具结果——模型当步可见，防漏传 remote_instance_id
         # 的"静默错位写入"（写进了本地而非远端）。

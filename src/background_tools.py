@@ -174,4 +174,20 @@ def make_background_tools(agent) -> list:
     return [Tool(start_service), Tool(stop_service), Tool(list_services),
             Tool(service_logs), Tool(service_stdin), Tool(check_bg_task),
             Tool(send_to_service, hidden=True),
-            Tool(add_schedule), Tool(cancel_schedule), Tool(list_schedules)]
+            Tool(add_schedule,
+                 param_descriptions={
+                     "name": "任务名（唯一键，同名覆盖；cancel/list 用它索引）",
+                     "every_seconds": "每 N 秒循环一次（与 at 同给=组合：at 为首触发相位起点）",
+                     "at": "完整 ISO（2026-07-20T17:30:00，单次/组合首触发）或短格式 HH:MM（17:30，每日闹钟）",
+                     "message": "推送内容①静态文本：到点注入给 Agent 的这条消息",
+                     "tool": "推送内容②到点执行工具：工具名（如 web_search）",
+                     "tool_args": "推送内容②的参数对象（如 {\"query\": \"AI最新进展\"}）",
+                     "code": "推送内容③Python 代码：触发时执行，stdout 尾部+result 变量作为消息；空产物该次静默",
+                     "repeat": "是否循环（every_seconds 默认 True；at 短格式默认 True、ISO 默认单次）",
+                     "deadline": "截止（ISO 如 2026-10-05T18:00）：过期任务自动删除",
+                     "mode": "注入方式：idle（默认，Agent 忙时排队等空闲）/ immediate（忙时打断当前轮，步边界插话注入）/ skip（忙时放弃本次）",
+                 },
+                 param_schemas={
+                     "mode": {"type": "string", "enum": ["idle", "immediate", "skip"]},
+                 }),
+            Tool(cancel_schedule), Tool(list_schedules)]

@@ -2909,6 +2909,7 @@ function schedModal(name){
     <div style="font-size:12px;margin-bottom:8px">截止 deadline（ISO，留空=不限）<br><input id="smDl" value="${esc(dl)}" placeholder="2026-12-31T23:59:59" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px"></div>
     <div style="font-size:12px;margin-bottom:8px"><label><input id="smRep" type="checkbox" ${rep?'checked':''}> 循环触发</label></div>
     <div style="font-size:12px;margin-bottom:10px">推送消息（到点注入给 Agent）<br><textarea id="smMsg" rows="3" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px">${esc(msg)}</textarea></div>
+    ${s && s.tool ? `<div style="font-size:11px;color:#8a9099;margin:-4px 0 8px;padding:6px 8px;background:#fafbfc;border:1px solid var(--line);border-radius:6px">🔧 该任务携带工具调用：<b>${esc(s.tool)}</b>(${esc(JSON.stringify(s.tool_args||{}))})——编辑不会丢失，保存后保留</div>` : ''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="document.getElementById('schedModal').remove()" style="padding:5px 14px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer">取消</button>
       <button onclick="schedSave('${esc(s?s.name:'')}')" style="padding:5px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;cursor:pointer">保存</button>

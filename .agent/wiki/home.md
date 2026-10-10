@@ -84,3 +84,7 @@
 
 - **v0.34.4 发布（2026-10-10，发布提交 `77c5536`，whl + sdist 双文件就位）**：0.34.3 → 0.34.4 patch。主打 **steps 分档模式**（settings `"tiering_mode": "steps"` 显式开启，**默认空 = 现行算法不受影响**）——轮间分档改按步数的确定性阶梯（五档 500/600/1200/2400/4800 可配，档位边界由步数守恒唯一决定、与 token 估算无关，1500 轮对拍增量≡重算）；三笔演进：本体 `ed6ab2d` → 顶窗三级级联 `08b4758`（fc→sos → 工具折叠档→fc → 档2/3/4→工具折叠档，每级下压一格）→ fc→sos 三段并行 `5d3f3df`（0.46s vs 串行 1.2s，失败前缀落账 + 每段实例级回退链）。同批 **RAG 首启冻结修复** `ac753c0`（USE_TORCH=1 阻断 transformers TF 连带 import + 预热单飞/延迟 15s，fresh 实例页面加载冻死根治、对照实测秒开）。镜像同步滞后 10~30 分钟，急用加 `-i https://pypi.org/simple`。详见 [v0.34.4 发布记录](releases/v0.34.4.md)、[context-engine · steps 分档模式](architecture/context-engine.md)、[rag](features/rag.md)
 
+## 快速事实增补（2026-10-10 · 三 · schedule 编辑弹窗两问双修：tool/args 不丢实证 + add_schedule 参数描述补全）
+
+- **schedule 编辑弹窗两问双修（2026-10-10 · 三，用户问诊，commit `e758270`）**：①「编辑弹窗保存后 tool 和 args 是不是就没了？」——实证**没丢**：`reschedule` 部分更新只碰表单字段（every_seconds / at / deadline / repeat / message），action(tool+args) / code / mode / daily 一概不动，持久化 `export_state` 全字段落盘；编辑弹窗对带工具调用的任务补一行只读提示「🔧 该任务携带工具调用：tool(args)——编辑不会丢失，保存后保留」（纯前端，刷新即见）。②「mode 字段是干嘛的？看起来没有 description」——mode = busy 时注入三分岔（`idle` 排队默认 / `immediate` 插话打断 / `skip` 放弃），语义原本只在 docstring（LLM 看得到）而参数级 schema 为空（🔧 工具表单弹窗 placeholder 读的正是后者）；`add_schedule` 十参补全 `param_descriptions` + `mode` 加 enum 三值（弹窗渲染为下拉框），`/restart` 后生效。详见 [background-scheduler](features/background-scheduler.md)
+

@@ -2843,6 +2843,10 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         if isinstance(_pa, dict) and _pa.get("id"):
             await _send(ws, {"type": "approval_request", "id": _pa.get("id"),
                              "tool": _pa.get("tool", ""), "detail": _pa.get("detail", "")})
+        # 补发 pending 人在环步骤（2026-10-11 用户实锤：human_step 卡片是实时事件渲染，
+        # 刷新/重连即丢——Agent 却仍阻塞在 human_step 上，用户看不到卡片只能干等超时）
+        from survey_tools import check_pending_human_step
+        check_pending_human_step(agent)
         return
     if isinstance(_d, dict) and _d.get("action") == "new_session":
         # 走 work_q：/reset 命令走和 CLI 完全相同的路径（worker dispatch → print 到 CLI）

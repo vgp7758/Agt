@@ -3263,7 +3263,19 @@ function renderSurveyBubble(questions){
  function submitHumanStep(sid){
    const ta = document.getElementById('hs_text_'+sid);
    if(!ta || !ta.value.trim()) return;
-   ws.send(JSON.stringify({action:'human_step_response', id:sid, text:ta.value.trim()}));
+   const text = ta.value.trim();
+   ws.send(JSON.stringify({action:'human_step_response', id:sid, text:text}));
+   // 乐观终态（2026-10-11 用户实锤：提交后按钮仍在/文本框可编辑，看起来像没提交成功）——
+   // 提交即只读化；广播 human_step_resolved 到达后由 resolveHumanStepCard 走完整终态
+   const card = document.getElementById('humanstep_'+sid);
+   if(card && !card.dataset.done){
+     const btn = card.querySelector('button');
+     if(btn){ btn.disabled = true; btn.style.opacity = 0.55; btn.textContent = '✅ 已提交，等待 Agent 继续…'; }
+     if(ta) ta.readOnly = true;
+     card.dataset.done = '1';
+     card.style.borderColor = '#16a34a'; card.style.background = '#f0fdf4';
+     card.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:#16a34a;margin-top:6px">✅ 已提交，Agent 继续执行中</div>');
+   }
  }
  function resolveHumanStepCard(sid, text){
    const card = document.getElementById('humanstep_'+sid);

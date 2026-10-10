@@ -78,6 +78,26 @@ add_schedule(name="auto-loop", every_seconds=300, deadline="2026-10-04T22:00",
 
 **关联**：[user-interaction · 后台通知 wake 语义](user-interaction.md)（idle 排队复用 inbox/唤醒链）· [气泡交互 · 插话机制](user-interaction.md)（immediate 的 pending_messages 步边界通道）。
 
+### 后记：add_schedule 参数级描述补全——十参 param_descriptions + mode enum 下拉（2026-10-10 · 三，用户问诊，commit e758270）
+
+**触发（用户问诊，与[编辑弹窗 tool/args 之问](#后记三编辑弹窗不丢-toolargs-实证--带工具任务只读提示行2026-10-10--三用户问诊commit-e758270)同轮）**：「mode 字段是干嘛的？看起来没有 description」。
+
+**mode 语义**（busy 时注入三分岔，详见上表 mode 三态）——`idle`（默认）到点产出后 `push_message` **排队等空闲**、轮间隙消费；`immediate` Agent 忙时**打断当前轮**（塞插话队列步边界注入，与用户插话同款，即旧 autonomous 语义）；`skip` 忙时**放弃本次**注入。
+
+**为什么「看起来没有 description」——两层描述只补了一层**：
+
+| 层 | 此前状态 | 谁消费 | 缺了会怎样 |
+|---|---|---|---|
+| 函数 docstring | ✅ 一直有（mode 三态语义写在里面） | LLM 的工具 schema | 模型侧其实知道怎么用 |
+| 参数级 `param_descriptions` | ❌ 空 | 🔧 [工具表单弹窗](tool-form.md)的 placeholder / description | 人眼在弹窗里只看到光秃秃的参数名，无从判断 mode 填什么 |
+
+**修复（commit `e758270`，src/background_tools.py）**：
+
+1. `add_schedule` **全部 10 个参数**补 `param_descriptions`（name / every_seconds / at / message / code / action / deadline / mode / repeat / daily）——工具表单弹窗 placeholder 与 LLM schema 双受益；
+2. `mode` 额外加 **enum** `["idle", "immediate", "skip"]`——工具表单弹窗渲染成**下拉框**（合法值约束双保险，用户不用猜字面量）。
+
+**生效**：引擎侧 schema 改动，`/restart` 后生效（重启后弹窗 placeholder 与 mode 下拉同步出现）。
+
 ## 三通道主从语义：code/action 主通道 + message 附言（2026-10-05，用户两轮裁定，commits 458475c + 6c3f770）
 
 **动机**：用户问询「同时传了 message / code / tool，是都执行并注入吗？」——问出融合版实现两处暗坑：

@@ -188,24 +188,45 @@ def make_survey_tools(agent):
 
 # ========== human_step：人在环——指挥人类完成 GUI/物理操作步骤并收取反馈 ==========
 
-def _emit_human_step(agent, event_type: str = "human_step_pending"):
-    """广播 human_step 事件（WebUI 渲染引导卡片）。"""
-    step = agent.session.extra_state.get("_pending_human_step", {})
-    if agent.on_event:
+def _emit_human_step(agent, event_type: str = "human_step_pending",
+                     sid: str = "", text: str = ""):
+    """广播 human_step 事件（WebUI 渲染引导卡片 / 收尾置终态）。
+    pending：payload 取 extra_state._pending_human_step；resolved：payload 由调用方给（sid/text）。"""
+    if not getattr(agent, "on_event", None):
+        return
+    if event_type == "human_step_pending":
+        step = (getattr(agent.session, "extra_state", None) or {}).get("_pending_human_step", {}) or {}
         agent.on_event({"type": event_type, "id": step.get("id", ""),
                         "instruction": step.get("instruction", ""),
                         "expect": step.get("expect", "")})
+    else:
+        agent.on_event({"type": event_type, "id": sid, "text": text})
+
+
+def check_pending_human_step(agent) -> bool:
+    """重连/刷新恢复：有 pending human_step 时 re-emit 引导卡片。
+    （2026-10-11 用户实锤：人在环卡片是实时事件渲染，刷新即丢；Agent 却仍阻塞在
+    human_step 上——不补发的话用户看不到卡片，只能干等 30 分钟超时。）返回是否补发。"""
+    step = (getattr(agent, "session", None) and agent.session.extra_state or {}).get("_pending_human_step")
+    if not isinstance(step, dict) or not step.get("id"):
+        return False
+    _emit_human_step(agent, "human_step_pending")
+    return True
 
 
 def resolve_human_step(agent, sid: str, text: str):
-    """用户提交操作结果 → 解除 human_step 的阻塞。由 server.py（WS action）调用。"""
+    """用户提交操作结果 → 解除 human_step 的阻塞。由 server.py（WS action）调用。
+    两条路径都广播 human_step_resolved（2026-10-11 用户实锤：此前只 set event 不广播，
+    WebUI 卡片永远停在 pending 态——按钮仍在、文本框可编辑，看起来像没提交成功）。"""
     entry = (getattr(agent, "_human_step_events", None) or {}).get(sid)
     if entry:
         entry["result"] = text
         entry["event"].set()
+        _emit_human_step(agent, "human_step_resolved", sid, text)
         return
-    # 无阻塞线程（重启后恢复场景）→ 以系统消息注入
+    # 无阻塞线程（重启后恢复场景）→ 清挂起态 + 广播终态（卡片置只读）
     agent.session.extra_state.pop("_pending_human_step", None)
+    _emit_human_step(agent, "human_step_resolved", sid, text)
 
 
 def get_human_step_tools(agent) -> list[Tool]:
@@ -230,6 +251,8 @@ def get_human_step_tools(agent) -> list[Tool]:
         agent._human_step_events.pop(sid, None)
         agent.session.extra_state.pop("_pending_human_step", None)
         if not got or entry["result"] is None:
+            # 超时也要广播终态（2026-10-11）：否则卡片停在 pending，用户以为还在等他回报
+            _emit_human_step(agent, "human_step_resolved", sid, "（30 分钟超时未收到反馈）")
             return "[超时] 30 分钟内未收到人类反馈——操作可能未完成，请决定重试或改变策略"
         return f"人类反馈：\n{entry['result']}"
 

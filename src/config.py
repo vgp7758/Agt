@@ -419,6 +419,36 @@ def load_fold_deep_tools() -> bool:
         return False
 
 
+def load_tiering_mode() -> str:
+    """分档算法模式（settings.json 的 tiering_mode；默认空 = 现行「轮数卫生毕业 + 体积压力收敛」算法）。
+    "steps" = 按步数分档的确定性阶梯（用户提案 2026-10-10）：档1≤500步（溢出划最早 ≤300 步给档2）/
+    档2≤600（全档→档3）/ 档3≤1200（→档4）/ 档4≤2400（→工具折叠档）/ 工具折叠档≤4800（→fc 结构摘要）；
+    resp 实测 total 顶窗 → 档2/3/4 一次性划入工具折叠档 + fc→sos。"""
+    try:
+        return str(load_runtime_settings().get("tiering_mode", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def load_tier_steps() -> dict:
+    """steps 分档模式的阶梯参数（settings.json 的 tier_steps[5] / tier1_flush_steps）。
+    caps = [档1, 档2, 档3, 档4, 工具折叠档] 步数上限；flush = 档1 溢出时单刀划走的步数预算（至少 1 轮）。
+    默认值即用户提案数字；工具折叠档上限 4800 = 阶梯倍增规律的下一级（提案未指定，可配）。"""
+    s = load_runtime_settings()
+    caps = [500, 600, 1200, 2400, 4800]
+    try:
+        v = s.get("tier_steps")
+        if isinstance(v, list) and len(v) == 5:
+            caps = [max(1, int(x)) for x in v]
+    except Exception:
+        pass
+    try:
+        flush = max(1, int(s.get("tier1_flush_steps", 300) or 300))
+    except Exception:
+        flush = 300
+    return {"caps": caps, "flush": flush}
+
+
 
 
 def _to_bool_setting(v) -> bool:

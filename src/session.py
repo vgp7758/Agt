@@ -655,6 +655,13 @@ class Session:
         self.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
         self._detail_base = None   # 惰性缓存（detail_base property；/config / switch_model / /context 时失效重读）
         self.max_level = config.load_max_level()
+        # steps 分档模式（用户提案 2026-10-10）：按步数的确定性阶梯替代「卫生性毕业+体积压力收敛」。
+        # 固定 4 个文字档（档1..档4 = level 1..4）+ 工具折叠档（raw_level > 4）+ fc 结构摘要 + sos。
+        # max_level 钉 4：阶梯位置固定（档k = level k），工具折叠档 = 第 5 级起。
+        self.tiering_mode = config.load_tiering_mode()
+        if self.tiering_mode == "steps" and self.max_level != 4:
+            _LOG.info("steps 分档模式：max_level %d → 4（阶梯位置固定）", self.max_level)
+            self.max_level = 4
         self._tier_boundaries: list[int] = []                    # 已毕业的 turn 索引边界，如 [5,10]
         self._frozen_renders: dict[int, tuple[int, list]] = {}   # turn_idx -> (level, msgs) 冻结渲染缓存
         self._last_fold_count: int = 0   # 最近一次分档 build 的折叠轮数（to_history 用它折叠前端历史）
@@ -1263,6 +1270,12 @@ class Session:
                 panic_mode = True                           # 首次超线 → 应急模式（此后回落目标 settle）
                 _LOG.info("保命阀触发：投影 est=%d 超 panic=%d（win=%d），回落至 ≤%d",
                           est, panic_win, win, settle)
+                if getattr(self, "tiering_mode", "") == "steps":
+                    # steps 模式的轮内应急：只做档2/3/4→工具折叠档的坍缩（零 LLM，毫秒级）；
+                    # sos 转置（含 LLM）留给下一轮边界/resp 触发——投影路径里不发 LLM 调用
+                    self._steps_window_flush(with_sos=False)
+                    fold_count = self._planned_fold
+                    continue
             if est <= settle:
                 break                                       # 已回落到位
             if self._graduate_once():                       # ① 先升档（无损：只降文字档上限）止血
@@ -1809,6 +1822,12 @@ class Session:
           ④ 结果写入 _planned_fold/_last_fold_count——后续轮以它为起点零调整
              （_plan_fold 未顶窗路径），byte-stable 从新 provider 第一步重新积累。
         返回 fold_count。"""
+        if getattr(self, "tiering_mode", "") == "steps":
+            # steps 阶梯与 profile 无关（步数是结构事实）：切模型不重排档位——
+            # 只按新窗口做一次「顶窗口径」收敛（等价把切换当作一次顶窗事实：2/3/4→工具折叠+fc→sos）
+            self._over_window_mark = True
+            self._plan_fold_steps()
+            return self._planned_fold
         if not self.max_effective_context_window:
             return self._planned_fold
         n = len(self.turns)
@@ -2473,6 +2492,8 @@ class Session:
         未触发区间（target~win）零动作纯追加，前缀缓存最优（轮内 _build 以计划结果为起点不再调整）。
         无窗口配置时计划为 0（现状）。估算用近似前缀（system+指引+静态记忆）+ 完整 body——
         与 _build 的真实估算差个动态 tail，余量下可忽略。"""
+        if getattr(self, "tiering_mode", "") == "steps":
+            return self._plan_fold_steps()
         if not self.max_effective_context_window:
             self._planned_fold = 0
             self._planned_graduates = 0
@@ -2580,6 +2601,212 @@ class Session:
                 self._tier_boundaries = _kept
         self._planned_fold = fc
         self._planned_graduates = g
+
+    # ================= steps 分档模式（用户提案 2026-10-10）=================
+    # 按步数的确定性阶梯，替代现行「轮数卫生毕业 + 体积压力收敛」：
+    #   档1 ≤caps[0]=500步：溢出 → 把档1 最早、累计 ≤flush=300 步的若干轮划给档2（至少 1 轮）；
+    #   档2 ≤caps[1]=600：溢出 → 全档并入档3；档3 ≤caps[2]=1200：→ 档4；档4 ≤caps[3]=2400：→ 工具折叠档；
+    #   工具折叠档 ≤caps[4]=4800：溢出 → 全部折进 fc 结构摘要；
+    #   resp 实测 total 顶窗（_over_window_mark / panic）→ 档2/3/4 一次性划入工具折叠档 + fc→sos。
+    # 边界代数（与现有渲染器原生兼容）：档k = level k = count(边界 ≥ i)+1；
+    #   「档1 划前 N 轮给档2」= 最高边界下移；「档k 全档并入档 k+1」= 第 k 个边界槽位上移到第 k-1 个
+    #   （重复边界不占位但计 level——引擎原生支持，_deepen_oldest_tier 同款）；「全档→fc」= fc 推进 + 边界剔除。
+
+    def _steps_state(self, fc: int):
+        """当前状态 → （slots 降序4槽， 各档步数和， 工具折叠步数， 区间端点， 轮数）。
+        slots[k] = 第 k+1 高边界（缺位 = fc-1，即空档）；档k = (edges[k], edges[k-1]]，工具折叠 = [fc, edges[4]]。"""
+        n = len(self.turns)
+        bs = sorted([b for b in self._tier_boundaries if b >= fc])   # 升序多重集（重复保留）
+        if len(bs) > 4:
+            _LOG.warning("steps 阶梯：边界 %d 条 > 4 槽——截取最高 4 条（旧算法残留/模式切换），其余舍弃",
+                         len(bs))
+            bs = bs[-4:]
+        slots = list(bs[::-1]) + [fc - 1] * (4 - len(bs))   # 降序 [b1, b2, b3, b4]
+        edges = [n - 1] + slots + [fc - 1]                   # 档k = (edges[k], edges[k-1]]
+        pre = [0] * (n + 1)                                  # 步数前缀和（O(n) 一次）
+        for i, t in enumerate(self.turns):
+            pre[i + 1] = pre[i] + len(t.steps or [])
+        def span(lo_excl, hi_incl):
+            return pre[hi_incl + 1] - pre[lo_excl + 1] if hi_incl > lo_excl else 0
+        sums = [0] * 5
+        for k in range(1, 5):
+            sums[k] = span(edges[k], edges[k - 1])
+        return slots, sums, span(fc - 1, edges[4]), edges, n
+
+    def _plan_fold_steps(self):
+        """steps 模式的轮边界计划（每轮 start_turn 调；observe_llm_usage 的 panic 路径也到这）：
+        ① 顶窗大动作（先于阶梯巡检——resp 事实优先）：档2/3/4 一次性划入工具折叠档 + fc→sos；
+        ② 阶梯巡检（级联到稳定，≤12 轮）：五个档位上限逐一检查、逐级下溢。"""
+        if not self.max_effective_context_window:
+            return
+        cfg = config.load_tier_steps()
+        caps, flush = cfg["caps"], cfg["flush"]
+        if getattr(self, "_over_window_mark", False):
+            self._over_window_mark = False
+            self._steps_window_flush(with_sos=True)
+        for _round in range(12):
+            fc = self._planned_fold
+            slots, sums, deep, edges, n = self._steps_state(fc)
+            changed = False
+            if sums[1] > caps[0]:
+                # 档1 溢出：从档1 最早（edges[1]+1）向后累计 ≤flush 步（至少 1 轮）划给档2
+                start = edges[1] + 1
+                cum = 0
+                last = None
+                for i in range(start, n):
+                    s = len(self.turns[i].steps or [])
+                    if cum + s <= flush:
+                        cum += s
+                        last = i
+                    else:
+                        break
+                if last is None:
+                    last = start   # 单轮即超 flush：也划 1 轮（防死循环）
+                slots[0] = last   # b1 := 划走段末轮
+                changed = True
+            if sums[2] > caps[1]:
+                slots[1] = slots[0]   # 档2 全档→档3：b2 := b1
+                changed = True
+            if sums[3] > caps[2]:
+                slots[2] = slots[1]   # 档3 全档→档4
+                changed = True
+            if sums[4] > caps[3]:
+                slots[3] = slots[2]   # 档4 全档→工具折叠档
+                changed = True
+            if deep > caps[4]:
+                # 工具折叠档全部 → fc 结构摘要：fc 推进到该档顶（边界随 fc 剔除）
+                self._planned_fold = max(self._planned_fold, edges[4] + 1)
+                self._last_fold_count = self._planned_fold
+                changed = True
+            if not changed:
+                break
+            new_fc = self._planned_fold
+            new_bs = sorted([s for s in slots if s >= new_fc])
+            if new_bs != self._tier_boundaries:
+                self._frozen_renders.clear()   # 档位变 → 冻结渲染重算
+                self.mark_system_dirty("steps 阶梯下溢（边界重排）")
+            self._tier_boundaries = new_bs
+        self._planned_graduates = 0
+
+    def _steps_window_flush(self, with_sos: bool):
+        """顶窗大动作（用户裁定）：档2/3/4 一次性划入工具折叠档（4 边界全钉 b1——其下所有轮
+        raw_level=5，工具调用折叠渲染）+ fc 结构摘要转置 sos（LLM 浓缩，≤3 段，失败降级保留清单）。"""
+        fc = self._planned_fold
+        bs = sorted([b for b in self._tier_boundaries if b >= fc])
+        if bs:
+            b1 = bs[-1]
+            self._tier_boundaries = [b1, b1, b1, b1]
+            self._frozen_renders.clear()
+            self.mark_system_dirty("steps 顶窗 flush（档2/3/4→工具折叠档）")
+            _LOG.info("steps 顶窗：档2/3/4 一次性划入工具折叠档（b1=%d，其下全部 raw_level=5）", b1)
+        if with_sos:
+            self._steps_fc_to_sos()
+
+    def _steps_fc_to_sos(self):
+        """fc 结构摘要 → sos 转置（顶窗动作之二）：清单前半逐半浓缩 ≤3 段，达标即停；
+        LLM 失败/预检注定不达标 → 降级保留清单（与 apply_simple_tiering ②b 同款语义）。"""
+        fc = int(self._planned_fold or 0)
+        if fc <= int(getattr(self, "_sos_count", 0) or 0):
+            return
+        target = self.fold_target()
+        try:
+            est = self._estimate_tokens([{"role": "system", "content": self.system}]
+                                        + self._render_tiered_history(fc))
+        except Exception:
+            est = 0
+        if est <= target:
+            return
+        if est > target * 3:
+            _LOG.info("steps fc→sos 预检：est=%d > 3×预算 %d——sos 注定不达标，跳过（接受现状）", est, target)
+            return
+        lo = int(getattr(self, "_sos_count", 0) or 0)   # 已有 sos 段续接（内容跨模型通用）
+        for _ in range(3):
+            end = min(fc, lo + max(1, (fc - lo) // 2))
+            if end <= lo:
+                break
+            _LOG.info("steps fc→sos：浓缩第 %d~%d 轮清单（est=%d > 预算 %d）", lo + 1, end, est, target)
+            part = self._generate_sos(lo, end)
+            if not part:
+                break
+            self._sos_text = (self._sos_text + "\n\n" + part).strip() if self._sos_text else part
+            self._sos_count = lo = end
+            if end >= fc:
+                break
+
+    def _recompute_steps_boundaries(self) -> list:
+        """从零按 steps 阶梯规则模拟到当前轮数（确定性；顶窗事件不可重放——由首次顶窗 flush 兜底）。
+        用于：模式切换存量 session / 存档缺失兑底。与运行期 _plan_fold_steps 的转移同构。"""
+        cfg = config.load_tier_steps()
+        caps, flush = cfg["caps"], cfg["flush"]
+        n = len(self.turns)
+        steps = [len(t.steps or []) for t in self.turns]
+        lo = [None] * 6   # lo[k]/hi[k] = 档 k 轮区间（闭区间；None=空档）；k=1..5（5=工具折叠）
+        hi = [None] * 6
+        sums = [0] * 6
+        fc = 0
+        for i in range(n):
+            s = steps[i]
+            if lo[1] is None:
+                lo[1] = i
+            hi[1] = i
+            sums[1] += s
+            if sums[1] > caps[0]:
+                cum = 0
+                last = None
+                for j in range(lo[1], hi[1] + 1):
+                    if cum + steps[j] <= flush:
+                        cum += steps[j]
+                        last = j
+                    else:
+                        break
+                if last is None:
+                    last = lo[1]
+                    cum = steps[last]
+                if lo[2] is None:
+                    lo[2] = lo[1]
+                hi[2] = last
+                sums[2] += cum
+                lo[1] = last + 1
+                sums[1] -= cum
+                if lo[1] > hi[1]:
+                    lo[1] = hi[1] = None
+                    sums[1] = 0
+            if sums[2] > caps[1] and lo[2] is not None:
+                if lo[3] is None:
+                    lo[3] = lo[2]
+                hi[3] = hi[2]
+                sums[3] += sums[2]
+                lo[2] = hi[2] = None
+                sums[2] = 0
+            if sums[3] > caps[2] and lo[3] is not None:
+                if lo[4] is None:
+                    lo[4] = lo[3]
+                hi[4] = hi[3]
+                sums[4] += sums[3]
+                lo[3] = hi[3] = None
+                sums[3] = 0
+            if sums[4] > caps[3] and lo[4] is not None:
+                if lo[5] is None:
+                    lo[5] = lo[4]
+                hi[5] = hi[4]
+                sums[5] += sums[4]
+                lo[4] = hi[4] = None
+                sums[4] = 0
+            if sums[5] > caps[4] and lo[5] is not None:
+                fc = hi[5] + 1   # 工具折叠档全部 → fc
+                lo[5] = hi[5] = None
+                sums[5] = 0
+        # 终态 → 边界多重集：b_k = 档k.lo - 1（空档 = 复用上一档边界，维持位置语义）
+        bs = []
+        prev = n - 1
+        for k in range(1, 5):
+            b = (lo[k] - 1) if lo[k] is not None else prev
+            if b >= 0:
+                bs.append(b)
+            prev = b
+        bs = sorted([b for b in bs if b >= fc])
+        self._planned_fold = fc
+        return bs
 
     def _graduate_once(self, batch: int = None) -> bool:
         """毕业一批 turn：append 新边界到 _tier_boundaries（边界之前的轮 level+1=顺移），
@@ -3084,6 +3311,10 @@ class Session:
         if hit_panic:
             _LOG.warning("实测 token=%d 超 panic=%d：立即紧急压缩（升档+折叠，下一步投影生效）",
                          total, panic)
+            # steps 分档模式：panic 路径同样走「顶窗大动作」（档2/3/4→工具折叠档+fc→sos）——
+            # _plan_fold_steps 只认 _over_window_mark，这里置位复用同一条链
+            if getattr(self, "tiering_mode", "") == "steps":
+                self._over_window_mark = True
             self._plan_fold()
         elif over:
             _LOG.info("实测 token=%d（刨 recent-file %d 估算后仍超 win=%d）：标记下轮边界重规划",
@@ -3893,7 +4124,9 @@ class Session:
         # tier_boundaries 兜底（2026-09-30 回滚）：存档缺失/空（旧存档/异常）才按卫生性规则重算；
         # 正常路径存档优先——运行期演化的末端密集边界只有存档能保真（recalc-only 曾致折叠螺旋）
         if not s._tier_boundaries:
-            s._tier_boundaries = s._recompute_tier_boundaries()
+            s._tier_boundaries = (s._recompute_steps_boundaries()
+                                  if getattr(s, "tiering_mode", "") == "steps"
+                                  else s._recompute_tier_boundaries())
         if getattr(s, "_simple_pending", False):
             s._simple_pending = False
             try:

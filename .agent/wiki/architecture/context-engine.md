@@ -523,6 +523,53 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **教训**：提案动机（规则演化后不被旧档钉死）依然成立，但「同规则下重算能确定性复现运行期演化」的前提对**压力毕业/deepen 多重集不成立**——末端密集结构只有存档能保真，recalc-only 的验证场景（短会话/规则内毕业）没覆盖长会话的演化态。规则演化的清理交给毕业/折叠机制自然收敛，不再用重启硬切；上方「语义边界」一节的「同规则确定性一致」表述按此修正。rewind 侧同步回滚见 [snapshot-rewind · 回溯与投影边界](../features/snapshot-rewind.md#回溯与投影边界tier_boundaries-增量过滤2026-09-30-回滚-recalc-only)。
 
+### steps 分档模式：按步数的确定性阶梯（2026-10-10，用户提案，commit ed6ab2d）
+
+**一句话**：settings `"tiering_mode": "steps"` 开启后，轮间分档从现行「轮数卫生毕业 + 体积压力收敛」（本节及以上全部机制，见 [压缩阶梯三改](#压缩阶梯三改--投影模拟器先升档推老档按轮吃2026-09-14用户提案)）整体切换为**按步数的确定性阶梯**——档位边界由步数守恒唯一决定，与 token 估算无关；**默认空 = 现行算法完全不受影响**。
+
+**阶梯规则**（= 提案原文；caps 可配，src/session.py `_plan_fold_steps`）：
+
+| 档 | 上限（步） | 溢出动作 |
+|---|---|---|
+| 档1 | 500 | 把档1 **最早、累计 ≤300 步**的若干轮划给档2（单轮即超也至少划 1 轮——防死循环） |
+| 档2 | 600 | **全档**并入档3 |
+| 档3 | 1200 | 全档并入档4 |
+| 档4 | 2400 | 全档进**工具折叠档**（raw_level=5） |
+| 工具折叠档 | 4800* | 全部折进 **fc 结构摘要**（fc 推进到该档顶 + 边界剔除） |
+| —（resp 事实） | 实测 total 顶窗 | **顶窗大动作**：档2/3/4 一次性划入工具折叠档（4 边界全钉 b1）+ fc→sos 转置 |
+
+*提案未给数——取倍增规律下一级 4800，`tier_steps` 可配。
+
+**配置键**（src/config.py `load_tiering_mode` / `load_tier_steps`）：`tiering_mode`（默认空）、`tier_steps: [500,600,1200,2400,4800]`（**长度必须 5** 才认）、`tier1_flush_steps: 300`。steps 模式下 **max_level 钉 4**（`__init__` 处不符即改 + log——阶梯位置固定：档k = level k，工具折叠档 = 第 5 级起）。详见 [config-and-models · tiering_mode](../guides/config-and-models.md#tiering_modesteps-确定性阶梯开关2026-10-10用户提案commit-ed6ab2d)。
+
+**三个触发时机**：
+
+| 时机 | 行为 |
+|---|---|
+| 轮边界（start_turn） | `_plan_fold` 头部分派 `_plan_fold_steps`：先顶窗大动作（`_over_window_mark` 置位时，resp 事实优先）再阶梯巡检（五档逐一检查、级联到稳定，≤12 轮安全上限）；`_planned_graduates` 恒 0（无卫生毕业概念） |
+| resp 实测（observe_llm_usage） | hit_panic → steps 模式置 `_over_window_mark` 复用同一条链**立即**大动作（`_plan_fold_steps` 只认标记，panic 路径置位即可）；超 win 未 panic → 只置标记，下轮边界执行（与现行语义同款） |
+| 轮内保命阀（_build panic_mode） | steps 模式只做**档2/3/4→工具折叠档坍缩**（`_steps_window_flush(with_sos=False)`，零 LLM 毫秒级）；sos 转置（含 LLM）留给下一轮边界/resp 触发——**投影路径里不发 LLM 调用** |
+
+**边界代数（零新概念，渲染器原生兼容）**：档k = level k = count(边界 ≥ i)+1——4 个边界槽位多重集。「档1 划前 N 轮给档2」= 最高边界下移；「档k 全档并入档 k+1」= 第 k 槽位上移到第 k-1 槽（**重复边界不占位但计 level**——引擎原生支持，`_deepen_oldest_tier` 同款）；「全档→fc」= fc 推进 + `< fc` 边界剔除。渲染/冻结缓存/fc/sos 全部复用现有机器；档位变即清 `_frozen_renders` + `mark_system_dirty`。`_steps_state` 一次 O(n) 步数前缀和给出 4 槽降序（缺位 = fc-1 空档）+ 各档步数和；**边界 >4 条（旧算法残留/模式切换）截取最高 4 条 + warning**——存量 session 切 steps 首轮 tick 即收敛到纯 steps 形态。
+
+**fc→sos 转置**（`_steps_fc_to_sos`）：清单前半逐半浓缩 ≤3 段（复用 `_generate_sos`，已有 sos 段续接、内容跨模型通用），达标即停；LLM 失败 / 预检 est > 3×预算（注定不达标）→ 降级保留清单——与 apply_simple_tiering 的 sos 预检同款语义。
+
+**确定性**：`_recompute_steps_boundaries()` 从零按同构转移规则模拟到当前轮数，与逐轮增量**完全一致**（1500 轮随机步数对拍相等）——挂进读档兜底分支（[边界不持久化、缺失才 recalc](#边界不持久化73809ea当日回滚存档优先缺失才-recalc-兜底2026-09-30t1231-事故) 哲学延续；steps 模式分派 steps 重算）。顶窗事件不可重放——由首次顶窗 flush 兜底。
+
+**切模型不重排**：`apply_simple_tiering` 头部分派——steps 阶梯与 profile 无关（步数是结构事实），切模型**不重排档位**，只按新窗口做一次「顶窗口径」收敛（置 `_over_window_mark` + `_plan_fold_steps`，等价把切换当作一次顶窗事实：2/3/4→工具折叠+fc→sos）。
+
+**验证**（隔离环境全绿，commit `ed6ab2d`）：
+
+| # | 场景 | 结果 |
+|---|---|---|
+| ① | 均匀 10步×900轮 | 稳态 sums=[300,600,900,0]、各档 ≤ caps ✓、level 分布 {1:30, 2:60, 3:90} ✓ |
+| ② | 大轮 200步×12轮 | 档1=400/档2=400 ✓（重复边界 = 档2→档3 合并的正确形态） |
+| ③ | 随机 1500 轮 | 全程不变量成立 ✓、增量 vs 从零重算完全一致 ✓ |
+| ④ | 顶窗坍缩 | bs=[b1]×4、档2/3/4 清空 ✓、后续 60 轮重新从档1 累积、档2 重建 ✓ |
+| ⑤ | 渲染冒烟 | `_history_tiered_msgs` 真渲染 63 msgs、fc 摘要段 ✓、panic 坍缩分支 ✓ |
+
+**注意**：建议 `fold_deep_tools` 保持开启（工具折叠档的折叠渲染靠它）；需 `/restart` 生效。
+
 ## 分组衰减（轮内，2026-08 新）
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。

@@ -395,6 +395,17 @@ def _openai_client(self) -> OpenAI:
 
 **2026-10 起开关 repo 级化（用户提案）**：主源改为 `<cwd>/.agent/snapshots_state.json` `{"enabled": bool}`——设置弹窗「其它」页签「回溯快照」控件即时保存（原「模型」页签复选框已移除）；settings.json 的 `enable_snapshots` 降为旧位置**兼容源**（优先级 ②，新写侧保存时顺手清理旧键）。为何不进 repo 级 settings.json：该文件是 `config_file()` **文件级整体覆盖**语义——单键写入会遮蔽全局 settings 其余全部键，故照 `.agent/hooks_state.json` 范式用独立文件。三源优先级与接线详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
 
+### tiering_mode：steps 确定性阶梯开关（2026-10-10，用户提案，commit ed6ab2d）
+
+`"tiering_mode": "steps"` 开启**按步数分档的确定性阶梯**（默认空 = 现行「轮数卫生毕业 + 体积压力收敛」算法完全不变）。配套两键（`config.load_tier_steps`，**长度/类型不对静默回默认**）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `tier_steps` | `[500,600,1200,2400,4800]` | 五档步数上限：档1/档2/档3/档4/工具折叠档（**list 长度必须 5** 才认） |
+| `tier1_flush_steps` | `300` | 档1 溢出时单刀划给档2 的步数预算（至少 1 轮） |
+
+开启后 max_level 钉 4（阶梯位置固定）；顶窗大动作、确定性重算等机制详见 [context-engine · steps 分档模式](../architecture/context-engine.md#steps-分档模式按步数的确定性阶梯2026-10-10用户提案commit-ed6ab2d)。`/restart` 生效（session 构造时读取）；存量 session 切换首轮自动收敛（旧边界截取最高 4 条 + warning）。
+
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 
 网络韧性键（2026-09-26 三键；2026-09-28 用户问诊「34.7s 就 APITimeoutError」后扩至七键，commit 83c732d）：

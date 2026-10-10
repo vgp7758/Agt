@@ -34,6 +34,35 @@ _LOG_CAP = 1000  # 每个服务的滚动日志行数上限
 _POLL = 0.5      # 调度器轮询间隔（秒）
 
 
+def _compact_json_status(text: str, max_lines: int = 8) -> str:
+    """REPL 服务 /status 输出是 JSON 时的字段筛选（用户提案 2026-10-10）：
+    只渲染基本类型字段（str/int/float/bool/None → `k: v`），[] / {} 及非空容器
+    一律不渲染（空容器是纯噪音，非空容器的结构化内容在投影 bg_services 段不值当）。
+    非 JSON / 顶层数组 / 标量 → 原样返回；超 max_lines 字段折叠计数。"""
+    s = text.strip()
+    if not s.startswith("{"):
+        return text
+    try:
+        import json as _json
+        d = _json.loads(s)
+    except Exception:
+        return text   # 不是合法 JSON（多行拼接的半截响应/纯文本状态）——原样
+    if not isinstance(d, dict):
+        return text
+    kv = []
+    for k, v in d.items():
+        if v is None or isinstance(v, (str, int, float, bool)):
+            sv = str(v)
+            if len(sv) > 60:
+                sv = sv[:57] + "..."
+            kv.append(f"{k}: {sv}")
+    if not kv:
+        return "(JSON 无基本类型字段)"
+    if len(kv) > max_lines:
+        kv = kv[:max_lines] + [f"…(+{len(kv) - max_lines} 字段)"]
+    return "\n".join(kv)
+
+
 class ServiceManager:
     """后台长进程管理：Popen 不等待，后台线程收日志，可查状态/停止。"""
 
@@ -244,6 +273,7 @@ class ServiceManager:
         if not lines:
             return ""
         joined = "\n".join(lines)
+        joined = _compact_json_status(joined)   # JSON 状态字段筛选（用户提案 2026-10-10）
         cache[name] = (now, joined)
         return joined
 

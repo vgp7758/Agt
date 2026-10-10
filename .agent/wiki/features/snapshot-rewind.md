@@ -137,6 +137,26 @@ return agent.session.restore_to_snapshot(sha)
 
 真仓库若没 ignore `.agt/`，`add -A` 会把**快照仓库本身**（`.agt/snapshots/`）提交进去 → 之后 `reset --hard` 会把整个快照仓库当「新增跟踪文件」**连带删除**，回溯能力当场报废。修复：`user_repo_reset_hard` reset 前先 `git rm -r --cached .agt`（变 untracked，`--hard` 不动 untracked，工作区保留）。
 
+## /rewind -soft：只回滚会话不回滚仓库（2026-10-11，用户提案，commit 7c898ba）
+
+**用户提案（2026-10-11）**：「/rewind 可以支持带一个 -soft 参数，只回滚会话不回滚仓库」——场景：该轮 agent 把代码/文件改得不错，但对话方向想推倒重来——**改动留下，讨论重开**。
+
+## 实现（src/chat.py `restore_snapshot(agent, sha, git_policy="block", soft=False)`）
+
+soft 模式跳过三件事：
+
+1. **git 撞车检测 / reset**——不碰 git，无撞车可言
+2. `snapshot_manager.restore(sha)`——不做文件树恢复
+3. `_fs_snap` 基线重扫——文件没变，置空待下次现扫
+
+**对话截断（`restore_to_snapshot`）、events 落盘、前端广播与常规路径完全一致**——WebUI 回溯后的视图同步照旧工作。
+
+入口解析（src/commands.py `_cmd_rewind`）：`soft = "-soft" in args`；注册帮助文本同步补 `[--soft]` 与 `/rewind -soft` 示例行。
+
+## 验证（隔离环境真 Session 三场景，2026-10-11）
+
+① soft 回溯 → 对话截到目标轮 + 工作区产物文件保留 + `snapshot_manager.restore` 零调用 + `_fs_snap` 置空；② 常规对照 → restore 照常调用、文件恢复执行（撤产物）；③ 互斥提示 → `/rewind -soft --git reset` 提示「已按 soft 执行」。
+
 ## git init 挂死修复：快照链路唯一无 timeout 的 git 调用补上兜底（2026-09-16，commit d39c033）
 
 用户报告 9300 实例（agt_scnet，start_service 拉起）「任务卡住：无落盘、也不像在推理」。py-spy 线程栈实锤：`_worker` 线程挂死 13 分钟于 `subprocess.run ← ensure_repo (src/snapshots.py:40)` 的 **`git init --bare`**——它是快照系统里**唯一没设 timeout 的 git 调用**（`_run()` 内其余 git 调用都有 120s），`agent.run` 卡在每轮开头的快照步骤 → 无 LLM 调用、无任何落盘（正是用户看到的现象）。进程链 `cmd → git.exe` 自启动起不退，属「无 console 服务进程上下文」的偶发行为；本地三变体复现失败，不深挖，以超时兜底。

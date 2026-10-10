@@ -293,23 +293,40 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
         elif t == "message_queued":          # 对方正忙：消息进了它的插话队列（也算送达）
             state["ack"] = True
 
-    ws_app = websocket.WebSocketApp(
-        _ws_endpoint(url), on_message=_on_msg,
-        on_error=lambda w, e: (state.update(err=str(e)), done_ev.set()))
-
-    _th.Thread(target=ws_app.run_forever, daemon=True,
-               kwargs={"ping_interval": 20}).start()
-    # 等连接建立（初始事件到达）——用短轮询近似
-    deadline = time.time() + 5
-    while time.time() < deadline and not state["err"]:
+    # 连接建立（带退避重试，2026-10-11 用户实锤：20048→tabletools:9014 偶发 WinError 10013——
+    # 每条消息新建 WS 用完即断 → 主动关闭方堆积 TIME_WAIT（netstat 实测 25+ 条），
+    # 新连接的四元组撞上 TIME_WAIT 时 Windows 报 WSAEACCES(10013)。瞬态错误，重试即愈：
+    # 3 次退避（0.3/0.8/2s），对端真挂时总开销仅多 ~3s）
+    ws_app = None
+    _last_err = ""
+    for _attempt in range(3):
+        state["err"] = ""
+        ws_app = websocket.WebSocketApp(
+            _ws_endpoint(url), on_message=_on_msg,
+            on_error=lambda w, e: (state.update(err=str(e)), done_ev.set()))
+        _th.Thread(target=ws_app.run_forever, daemon=True,
+                   kwargs={"ping_interval": 20}).start()
+        deadline = time.time() + 5
+        while time.time() < deadline and not state["err"]:
+            try:
+                if ws_app.sock and ws_app.sock.connected:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+        if not state["err"] and ws_app.sock and ws_app.sock.connected:
+            break
+        _last_err = state["err"] or "超时"
         try:
-            if ws_app.sock and ws_app.sock.connected:
-                break
+            ws_app.close()
         except Exception:
             pass
-        time.sleep(0.1)
-    if state["err"] or not (ws_app.sock and ws_app.sock.connected):
-        return f"[连接失败] {url}/ws（{state['err'] or '超时'}）", []
+        done_ev.clear()
+        if _attempt < 2:
+            time.sleep((0.3, 0.8, 2.0)[_attempt])
+    else:
+        return (f"[连接失败] {url}/ws（{_last_err}；已重试 3 次——若为 WinError 10013 系"
+                f"短连接撞 TIME_WAIT 的瞬态错误，稍后再试或减少并发消息）"), []
     try:
         ws_app.send(json.dumps({"text": text, "images": []}))
     except Exception as e:

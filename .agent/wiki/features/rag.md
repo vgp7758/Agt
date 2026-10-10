@@ -13,7 +13,7 @@
 | 入口 | 语义 |
 |---|---|
 | `ensure_rag(workspace=None, force=False)` | **线程安全惰性构建**：未构建且未尝试过（或 force）→ seed + from_config + set_rag；返回实例（配置缺失/加载失败 → None）。锁内幂等——预热中的并发调用等锁后拿已完成结果，不重复加载 |
-| `preload_async(workspace)` | **后台预热**：daemon 线程跑 ensure_rag——模型加载（bge-small-zh 实测 22.8s，含 torch import）不阻塞启动 |
+| `preload_async(workspace)` | **后台预热**：daemon 线程跑 ensure_rag——模型加载（bge-small-zh 实测 22.8s，含 torch import）不阻塞启动。**单飞**（此前多触发点实测同进程 3 条 rag-preload 线程各自跑，2026-10-10 修）+ 默认延迟 15s 启动（`warmup_delay`） |
 | `get_rag()` | 只读取单例（不构建）——session_vec `_build_embedder` 探测共享用 |
 
 关键状态 `_init_attempted`：首次尝试后置 True，配置缺失场景 `rag_query` 不必每次重试加载；配置变更走 `init_rag → ensure_rag(force=True)` 强制重建（`src/chat.py` 的 `init_rag` 保留，专供 `/rag` 页面保存配置后 server.py 调用）。`make_rag_tools` 已删除。
@@ -30,6 +30,44 @@ rag_query / cosine_sim / emb_probe 被调用时
 ```
 
 **启动时序收益**：以前 build_agent 同步加载 RAG 模型（每次启动白等 22.8s）且 session_vec 再建一份；现在 `/restart` 后立即就能对话，模型后台预热，session_vec 线程排队等它完成后共享同一 embedder。预热完成前的最初几轮 session recall 走子串匹配（vec_store=None 既有降级路径），随后自动升级语义召回。
+
+**2026-10-10 行为变化**（TF 冻死修复轮，commit `ac753c0`）：预热默认**延迟 15s** 启动（`rag.json "warmup_delay"` 可调，0=立即）——避开「服务就绪→页面加载」冷启动最敏感窗口；`preload_async` **单飞**（此前实测 3 条 rag-preload 线程各自跑）；预热完成打一行耗时（`[rag] 预热完成（X.Xs）：N 向量`）——再冻一眼定位在哪个阶段。背景见下节。
+
+## 环境隔离 `_hf_local_offline`：transformers TF 连带 import 冻死进程（2026-10-10，commit ac753c0）
+
+本地模型（SentenceTransformer）加载前的环境隔离函数（`src/rag.py`），三层全部 `setdefault` 不覆盖用户显式配置。session_vec 独立装配路径从 rag import 同款（2026-10-10 补齐，不留旁路）。
+
+| 层 | 环境变量 | 防什么 |
+|---|---|---|
+| ① | `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE`（2026-09 实锤） | HF 库即使给本地路径仍联网探测 huggingface.co 检查更新——国内网络该域名 DNS 黑洞，请求**无限挂起**（非快速失败），装配卡死几十分钟（`/restart` 看门狗 90s 等不到就绪的根因）。本地路径加载不需要网 |
+| ② | `USE_TORCH=1`（2026-10-10，commit `ac753c0`） | transformers 默认 `USE_TF=AUTO` → import 时探测并**连带加载 tensorflow**。钉 torch 后端跳过 TF 探测：导入 **20.5s→12.2s**，tensorflow/tf_keras 完全不加载（`import tensorflow` 实测本身就要 20s+ 且是 GIL 大户） |
+
+## ② 的根因：进程冻死 py-spy 实锤
+
+```
+冻死现场：无名【原生线程】active + gil 永持 → 所有 Python 线程（含事件循环）饿死
+根因链：transformers 默认 USE_TF=AUTO → import 连带加载 tensorflow
+        → TF/oneDNN/tf_keras 原生初始化（GIL 长持 + 原生线程池）
+触发条件：fresh 实例 RAG 预热导入期 × 页面加载并发 → 冻死数分钟不自愈
+```
+
+复现完全稳定：旧代码下浏览器页面加载必冻（导航 60s+ 超时、curl 全 000）；修复后同场景秒开。
+
+## 同轮配套修复
+
+- `preload_async` **单飞**——此前多触发点实测同进程 3 条 rag-preload 线程各自跑
+- 预热默认**延迟 15s** 启动（`rag.json "warmup_delay"` 可调，0=立即）——避开「服务就绪→页面加载」冷启动最敏感窗口
+- 预热完成打一行耗时（`[rag] 预热完成（X.Xs）：N 向量`）——可观测，再冻一眼定位阶段
+- `session_vec._build_embedder` 补同款隔离（`from rag import _hf_local_offline`）——本链独立装配时同样可能撞 TF 连带 import
+
+## 对照验证（2026-10-10）
+
+| 场景 | 旧代码 | 新代码 |
+|---|---|---|
+| fresh 实例 + 页面加载压在导入窗口正中 | 导航冻死 60s+、curl 全 000、**不自愈** | playwright **秒开** |
+| 后续 63s 连续 API 探测（覆盖延迟+导入全程） | — | 14/14 全 200 |
+
+排障速查另见[运维排障](../guides/ops.md)。
 
 ## 共享 embedder（修双份内存旧疾）
 

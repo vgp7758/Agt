@@ -518,6 +518,14 @@ if _SRC_DIR not in sys.path:
 
 **教训**：包目录不是只读领地——**运行时进程可能往 site-packages 里写东西**（日志 / 数据 / 误写入的模块），长出一个「看起来像包」的劫持目录；「装了 editable 却跑别的代码」这类悬案，`ls site-packages/src` 看内容里有没有**非包产物**即可定性。机制层补充见[下方 editable 落地关键机制](#顺带两条-editable-落地关键机制排查-e-装了却不生效装不上用)。
 
+### 进程冻死不自愈：transformers TF 连带 import（2026-10-10，commit ac753c0）
+
+**现象**：fresh 实例启动期整个进程冻死数分钟不自愈——页面导航 60s+ 超时、curl 全 000、`/restart` 看门狗等不到就绪。
+
+**根因（py-spy 实锤，不是猜的）**：transformers 默认 `USE_TF=AUTO` → import 时探测并**连带加载 tensorflow**（oneDNN/tf_keras 原生初始化：GIL 长持 + 原生线程池）——无名原生线程 active+gil 永持，所有 Python 线程（含事件循环）饿死。触发条件：RAG 预热导入期 × 页面加载并发。
+
+**修复**（commit `ac753c0`）：`_hf_local_offline()` 钉 `USE_TORCH=1` 跳过 TF 探测（导入 20.5s→12.2s，tensorflow 完全不加载）+ 预热延迟 15s 错峰 + 单飞。全貌见 [RAG · 环境隔离](../features/rag.md)。
+
 ## 同 repo 单实例约束（2026-10-09 明确）
 
 ## 同 repo 单实例约束（2026-10-09 明确）

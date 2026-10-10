@@ -536,7 +536,7 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 | 档3 | 1200 | 全档并入档4 |
 | 档4 | 2400 | 全档进**工具折叠档**（raw_level=5） |
 | 工具折叠档 | 4800* | 全部折进 **fc 结构摘要**（fc 推进到该档顶 + 边界剔除） |
-| —（resp 事实） | 实测 total 顶窗 | **顶窗大动作**：档2/3/4 一次性划入工具折叠档（4 边界全钉 b1）+ fc→sos 转置 |
+| —（resp 事实） | 实测 total 顶窗 | **顶窗大动作**（2026-10-10 · 二起改**三级级联**，见本节后记）：① fc 旧内容→sos 增量浓缩 → ② 工具折叠档全档→fc → ③ 档2/3/4→工具折叠档（4 边界全钉 b1） |
 
 *提案未给数——取倍增规律下一级 4800，`tier_steps` 可配。
 
@@ -548,7 +548,7 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 |---|---|
 | 轮边界（start_turn） | `_plan_fold` 头部分派 `_plan_fold_steps`：先顶窗大动作（`_over_window_mark` 置位时，resp 事实优先）再阶梯巡检（五档逐一检查、级联到稳定，≤12 轮安全上限）；`_planned_graduates` 恒 0（无卫生毕业概念） |
 | resp 实测（observe_llm_usage） | hit_panic → steps 模式置 `_over_window_mark` 复用同一条链**立即**大动作（`_plan_fold_steps` 只认标记，panic 路径置位即可）；超 win 未 panic → 只置标记，下轮边界执行（与现行语义同款） |
-| 轮内保命阀（_build panic_mode） | steps 模式只做**档2/3/4→工具折叠档坍缩**（`_steps_window_flush(with_sos=False)`，零 LLM 毫秒级）；sos 转置（含 LLM）留给下一轮边界/resp 触发——**投影路径里不发 LLM 调用** |
+| 轮内保命阀（_build panic_mode） | steps 模式只做级联 ②③（工具折叠档→fc + 档2/3/4→工具折叠档，`_steps_window_flush(with_sos=False)`，零 LLM 毫秒级）；① fc→sos（含 LLM）留给下一轮边界/resp 触发——**投影路径里不发 LLM 调用** |
 
 **边界代数（零新概念，渲染器原生兼容）**：档k = level k = count(边界 ≥ i)+1——4 个边界槽位多重集。「档1 划前 N 轮给档2」= 最高边界下移；「档k 全档并入档 k+1」= 第 k 槽位上移到第 k-1 槽（**重复边界不占位但计 level**——引擎原生支持，`_deepen_oldest_tier` 同款）；「全档→fc」= fc 推进 + `< fc` 边界剔除。渲染/冻结缓存/fc/sos 全部复用现有机器；档位变即清 `_frozen_renders` + `mark_system_dirty`。`_steps_state` 一次 O(n) 步数前缀和给出 4 槽降序（缺位 = fc-1 空档）+ 各档步数和；**边界 >4 条（旧算法残留/模式切换）截取最高 4 条 + warning**——存量 session 切 steps 首轮 tick 即收敛到纯 steps 形态。
 
@@ -556,7 +556,7 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 
 **确定性**：`_recompute_steps_boundaries()` 从零按同构转移规则模拟到当前轮数，与逐轮增量**完全一致**（1500 轮随机步数对拍相等）——挂进读档兜底分支（[边界不持久化、缺失才 recalc](#边界不持久化73809ea当日回滚存档优先缺失才-recalc-兜底2026-09-30t1231-事故) 哲学延续；steps 模式分派 steps 重算）。顶窗事件不可重放——由首次顶窗 flush 兜底。
 
-**切模型不重排**：`apply_simple_tiering` 头部分派——steps 阶梯与 profile 无关（步数是结构事实），切模型**不重排档位**，只按新窗口做一次「顶窗口径」收敛（置 `_over_window_mark` + `_plan_fold_steps`，等价把切换当作一次顶窗事实：2/3/4→工具折叠+fc→sos）。
+**切模型不重排**：`apply_simple_tiering` 头部分派——steps 阶梯与 profile 无关（步数是结构事实），切模型**不重排档位**，只按新窗口做一次「顶窗口径」收敛（置 `_over_window_mark` + `_plan_fold_steps`，等价把切换当作一次顶窗事实，走同一三级级联 flush）。
 
 **验证**（隔离环境全绿，commit `ed6ab2d`）：
 
@@ -569,6 +569,20 @@ llm_calls 附投影分布（本节三项之一）首日即被用户实测抓出*
 | ⑤ | 渲染冒烟 | `_history_tiered_msgs` 真渲染 63 msgs、fc 摘要段 ✓、panic 坍缩分支 ✓ |
 
 **注意**：建议 `fold_deep_tools` 保持开启（工具折叠档的折叠渲染靠它）；需 `/restart` 生效。
+
+#### 后记：顶窗大动作三级级联——每级下压一格（2026-10-10 · 二，用户裁定，commit 08b4758）
+
+用户裁定顶窗 flush（`_steps_window_flush`，src/session.py）从原「2/3/4→工具折叠 + fc→sos 转置」两级形态改**三级级联、每级下压一格，梯度保持**：
+
+| 级 | 流向 | 要点 |
+|---|---|---|
+| ① fc→sos | fc 结构摘要**旧内容** → sos | 增量浓缩（`_sos_count`→fc），**在 fc 吸收新轮之前**做——每次顶窗的 LLM 浓缩量适中；新入 fc 的轮保持结构清单形态，下次顶窗再续接浓缩 |
+| ② 工具折叠档→fc | 工具折叠档全部轮 → fc 结构摘要 | fc 推进到 b4+1；空档时无变化（旧版要等阶梯巡检才折入） |
+| ③ 档2/3/4→工具折叠档 | 4 边界钉 b1 | 其下全部 raw_level=5 工具折叠渲染 |
+
+`with_sos=False`（轮内保命阀路径）只做 ②③ 零 LLM 坍缩，① sos 留给下轮边界/resp 触发——「投影路径里不发 LLM 调用」红线不变。sos 顺序的价值实证：增量两刀 1278→1438 无缝续接，单次浓缩量恒定适中。
+
+**验证**（隔离环境 ALL PASS，commit `08b4758`）：增量 sos 两刀续接 ✓ / 工具折叠档非空时全量折入 fc（51 轮实拍）✓ / 档2/3/4 坍缩 ✓ / panic 零 LLM ✓ / flush 后阶梯恢复累积照常 ✓。
 
 ## 分组衰减（轮内，2026-08 新）
 

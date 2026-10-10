@@ -406,6 +406,8 @@ def _openai_client(self) -> OpenAI:
 
 开启后 max_level 钉 4（阶梯位置固定）；顶窗大动作、确定性重算等机制详见 [context-engine · steps 分档模式](../architecture/context-engine.md#steps-分档模式按步数的确定性阶梯2026-10-10用户提案commit-ed6ab2d)。`/restart` 生效（session 构造时读取）；存量 session 切换首轮自动收敛（旧边界截取最高 4 条 + warning）。
 
+**手改键不会被 UI 保存洗掉（2026-10-10 · 二确认）**：手改 `~/.agt/settings.json` 加 `"tiering_mode": "steps"` 后，WebUI 设置弹窗照常保存**不会覆盖掉它**——三条保存路径（设置弹窗生效份 / 指定本地·全局份 `save_settings_scoped` / `apply_config` 热应用）全部是「读 → update 表单键 → 写回」的**合并写**，只动表单里出现的键（[set_config 合并语义](#set_config-保存语义修复合并替代整体覆盖ui-保存不再抹掉非表单键随-v0300commit-54e7eda) 的延续确认）。
+
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 
 网络韧性键（2026-09-26 三键；2026-09-28 用户问诊「34.7s 就 APITimeoutError」后扩至七键，commit 83c732d）：

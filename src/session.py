@@ -2689,18 +2689,37 @@ class Session:
         self._planned_graduates = 0
 
     def _steps_window_flush(self, with_sos: bool):
-        """顶窗大动作（用户裁定）：档2/3/4 一次性划入工具折叠档（4 边界全钉 b1——其下所有轮
-        raw_level=5，工具调用折叠渲染）+ fc 结构摘要转置 sos（LLM 浓缩，≤3 段，失败降级保留清单）。"""
+        """顶窗大动作（用户裁定 2026-10-10 顺序：每级下压一格，梯度保持）：
+        ① fc 结构摘要旧内容 → sos（增量浓缩：_sos_count→fc，在 fc 吸收新轮【之前】做——每次顶窗的
+           LLM 浓缩量适中，新入 fc 的轮保持结构清单形态，下次顶窗再浓缩）；
+        ② 工具折叠档全部轮 → fc 结构摘要（fc 推进到 b4+1；空档时无变化）；
+        ③ 档2/3/4 → 工具折叠档（4 边界钉 b1，其下全部 raw_level=5 工具折叠渲染）。
+        with_sos=False（轮内保命阀路径）：只做 ②③ 零 LLM 坍缩，sos 留给下轮边界/resp 触发。"""
         fc = self._planned_fold
-        bs = sorted([b for b in self._tier_boundaries if b >= fc])
-        if bs:
-            b1 = bs[-1]
+        slots, sums, deep, edges, n = self._steps_state(fc)
+        b1, b4 = slots[0], slots[3]
+        acted = False
+        # ① fc 旧内容 → sos（LLM；仅边界/resp 路径）
+        if with_sos and fc > int(getattr(self, "_sos_count", 0) or 0):
+            self._steps_fc_to_sos()
+            acted = True
+        # ② 工具折叠档 → fc：b4=fc-1（空档）时无变化；fc 推进后剔除失效边界
+        if b4 + 1 > fc:
+            self._planned_fold = fc = b4 + 1
+            _kept = [b for b in self._tier_boundaries if b >= fc]
+            if len(_kept) != len(self._tier_boundaries):
+                self._tier_boundaries = _kept
+            self._last_fold_count = fc
+            acted = True
+            _LOG.info("steps 顶窗：工具折叠档 → fc 结构摘要（fc=%d）", fc)
+        # ③ 档2/3/4 → 工具折叠档（b1 < fc 时无文字档可坍缩，跳过）
+        if b1 >= fc:
             self._tier_boundaries = [b1, b1, b1, b1]
             self._frozen_renders.clear()
-            self.mark_system_dirty("steps 顶窗 flush（档2/3/4→工具折叠档）")
+            acted = True
             _LOG.info("steps 顶窗：档2/3/4 一次性划入工具折叠档（b1=%d，其下全部 raw_level=5）", b1)
-        if with_sos:
-            self._steps_fc_to_sos()
+        if acted:
+            self.mark_system_dirty("steps 顶窗 flush（fc→sos·工具折叠→fc·档2/3/4→工具折叠）")
 
     def _steps_fc_to_sos(self):
         """fc 结构摘要 → sos 转置（顶窗动作之二）：清单前半逐半浓缩 ≤3 段，达标即停；

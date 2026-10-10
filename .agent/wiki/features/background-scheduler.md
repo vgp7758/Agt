@@ -663,6 +663,44 @@ if (name.startswith("repl:") or e.get("repl_seen")) and rc is None:
 
 **关联**：原章节（命名前缀路，判定收敛为「前缀 **或** `repl_seen`」）· [service_stdin 往返语义](#service_stdin-往返语义expect-正则--timeout写入后等-stdout-响应才返回2026-10-07用户提案commit-b1fbfe6)（`repl_seen` 打标点 = 发射端；本节的收集语义同源）· [watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（N 行上限来源 + 尾部模式互斥）。
 
+### 后记：JSON /status 字段筛选——基本类型渲染、容器隐去（2026-10-10，用户提案，commit 2fb8039）
+
+**动机（用户提案）**：REPL 服务的 `/status` 输出若是 JSON，投影里不该整坨照搬——空容器 `[]` / `{}` 是纯噪音，非空容器的结构化内容在 bg_services 段也不值当；提案：**字段简单筛选一下，基本类型字段渲染，`[]` / `{}` 不渲染**。
+
+**实现（`_compact_json_status(text, max_lines=8)`，src/background.py，commit `2fb8039`）**：
+
+| 输入形态 | 处理 |
+|---|---|
+| 基本类型字段（str / int / float / bool / null） | 渲染为 `k: v`——长值 **60 字截断**；字段超 **8 个**折叠为 `…(+N 字段)` |
+| `[]` / `{}` | 不渲染（空容器=纯噪音） |
+| 非空容器（`[1,2]` / `{"a":1}`） | **同样不渲染**——口径是「只渲染基本类型」，非与或 |
+| 非 JSON（纯文本状态）/ 顶层数组 | 原样返回，**零影响**（含被行数上限截断的半截 pretty JSON——解析失败原样，不丢信息） |
+| JSON 但全是容器 | 一行 `(JSON 无基本类型字段)` 兜底（知道 /status 回了但没内容可展） |
+
+**接线位置（关键）**：`_repl_status()` **收集出口**——回显过滤 + `[:n_max]` 截行 + join 之后、写入 **5s 节流缓存之前**：
+
+```python
+joined = _compact_json_status(joined)   # JSON 状态字段筛选（用户提案 2026-10-10）
+cache[name] = (now, joined)
+```
+
+缓存**存筛选后形态**——bg_services 投影段与 `status_lines` 两条消费路径同时受益，筛选每节流窗口只做一次。
+
+**形态示例**（服务返回含 `queue:[]`、`errors:[]`、`backends:{...}` 噪音字段的 JSON）：
+
+```
+  repl:json-demo(运行中, pid=32572, 已跑 2s)
+    │ uptime: 42
+    │ state: healthy
+    │ requests: 17        ← 噪音字段全部隐去
+```
+
+**验证**：单元 7 场景全过（混合字段 / 纯容器 / 非 JSON / 顶层数组 / pretty 多行 JSON / 长值截断 / 折叠计数）；集成实测真起一个回 JSON `/status` 的 REPL 服务 → `status_lines` 只剩 `uptime/state/requests` 三行 ✓。
+
+**生效**：引擎代码，`/restart` 生效；现有 REPL 服务在重启后的下一次 `/status` 轮询（5s 缓存过期后）即呈现新形态。
+
+**关联**：[repl: 协议服务](#repl-协议服务命名潜规则--每步投影自动-status2026-10-08用户提案commit-174131f)（本节所属主章——协议轮询与 5s 节流缓存机制）· [上一后记：多行 /status 前 5 行封顶](#后记交互即判定repl_seen--多行-status静默窗口前-5-行封顶2026-10-08--二用户提案commit-c0e9768)（行收集与回显过滤——本节筛选排在其后）· [watch_tail](#watch_tailbg_services-投影段附服务日志尾部-n-行2026-10-07用户提案commit-9e1d523)（普通服务日志尾部模式不受影响）。
+
 ## start_service 撞死服务被拒：stop 保留 entry × start 只查登记——stop→start 重启路径断裂（2026-10-08，20048 实锤，commit 839f445）
 
 **现象（20048 实锤，用户粘贴日志）**：`stop_service("unity-repl")` → 「已停止」；紧接 `start_service(...)` → 「[已存在同名服务] unity-repl，先 stop_service 再启动」——第 16/17 步原样重试仍被拒。**刚 stop 过的服名 start 不回来，stop→start 重启路径断裂**，glm-official-flash 卡在循环里。

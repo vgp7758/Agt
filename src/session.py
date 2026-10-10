@@ -2722,8 +2722,11 @@ class Session:
             self.mark_system_dirty("steps 顶窗 flush（fc→sos·工具折叠→fc·档2/3/4→工具折叠）")
 
     def _steps_fc_to_sos(self):
-        """fc 结构摘要 → sos 转置（顶窗动作之二）：清单前半逐半浓缩 ≤3 段，达标即停；
-        LLM 失败/预检注定不达标 → 降级保留清单（与 apply_simple_tiering ②b 同款语义）。"""
+        """fc 结构摘要 → sos 转置（顶窗动作之一）。三段并行（用户裁定 2026-10-10）：
+        区间可预计算（剩余折半）→ 一次并发发出，耗时 ≈ 单段（串行是 3×）；
+        按序落账【首个失败段之前】的成功前缀——_sos_text 覆盖 [0,_sos_count) 必须连续无洞，
+        中间段失败时其后成功段弃用（那些轮仍在清单里，信息不丢，下次顶窗续接）。
+        预检注定不达标（est > 3×预算）→ 跳过；每段调用自带实例级回退链（冷却/断网等待）。"""
         fc = int(self._planned_fold or 0)
         if fc <= int(getattr(self, "_sos_count", 0) or 0):
             return
@@ -2739,18 +2742,35 @@ class Session:
             _LOG.info("steps fc→sos 预检：est=%d > 3×预算 %d——sos 注定不达标，跳过（接受现状）", est, target)
             return
         lo = int(getattr(self, "_sos_count", 0) or 0)   # 已有 sos 段续接（内容跨模型通用）
+        segs = []                                         # 区间预计算：剩余折半（N/2、N/4、N/8）
+        cur = lo
         for _ in range(3):
-            end = min(fc, lo + max(1, (fc - lo) // 2))
-            if end <= lo:
+            end = min(fc, cur + max(1, (fc - cur) // 2))
+            if end <= cur:
                 break
-            _LOG.info("steps fc→sos：浓缩第 %d~%d 轮清单（est=%d > 预算 %d）", lo + 1, end, est, target)
-            part = self._generate_sos(lo, end)
-            if not part:
-                break
-            self._sos_text = (self._sos_text + "\n\n" + part).strip() if self._sos_text else part
-            self._sos_count = lo = end
+            segs.append((cur, end))
+            cur = end
             if end >= fc:
                 break
+        if not segs:
+            return
+        _LOG.info("steps fc→sos：%d 段并行浓缩（%s，est=%d > 预算 %d）",
+                  len(segs), "、".join(f"{a + 1}~{b}" for a, b in segs), est, target)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(segs)) as ex:
+            parts = list(ex.map(lambda seg: self._generate_sos(seg[0], seg[1]), segs))
+        new_text = []
+        reached = lo
+        for (a, b), part in zip(segs, parts):   # 按序落账：成功前缀
+            if not part:
+                _LOG.warning("steps fc→sos：第 %d~%d 轮段浓缩失败——保留清单（下次顶窗续接）", a + 1, b)
+                break
+            new_text.append(part)
+            reached = b
+        if new_text:
+            self._sos_text = ((self._sos_text + "\n\n" if self._sos_text else "")
+                              + "\n\n".join(new_text)).strip()
+            self._sos_count = reached
 
     def _recompute_steps_boundaries(self) -> list:
         """从零按 steps 阶梯规则模拟到当前轮数（确定性；顶窗事件不可重放——由首次顶窗 flush 兜底）。

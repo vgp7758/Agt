@@ -1,14 +1,16 @@
-# WebUI 工具表单模式 · 🔧 手动调用工具（按钮 + 工具箱浮窗）
+# WebUI 工具表单模式 · 🔧 手动调用工具（两级弹窗：工具箱 → schema 动态表单）
 
-> src/static/index.html（底部工具表单 #toolForm）。手动调用工具的表单模式：选工具 → 填参数 → 发送。2026-09-01（commit 7010d66）工具选择从下拉框改为**按钮 + 工具箱浮窗**（参照工作流编辑器 nodePicker）——工具多了下拉列表巨长难找，浮窗带搜索/分组/描述卡片。
+> src/static/index.html（两级弹窗 `#toolPickModal` / `#toolCallModal`）+ src/server.py（/api/tools 补 required）。手动调用工具：点 🔧 → ①工具箱弹窗（搜索/分组/卡片）→ 选工具关①开 ②该工具 schema 动态生成的参数表单弹窗（工具描述全文 + 参数控件 + description 小字占位）→ 执行发 `/call`。**消息输入框全程不被顶替**（2026-10-10，commit c6732b1，用户提案——此前表单内嵌顶替输入框，历史见下文各节）。
 
 ## 职责
 
-- 底部工具栏「🔧 工具」按钮 → 工具表单模式（`_toolFormMode`）：选择工具 + 填参数 + 发送工具调用（`sendToolCall`）
-- 工具选择：按钮 + 浮窗（替代旧 `<select id="toolSel">` 下拉框）
-- 参数输入：description 作为 placeholder（用户明确「不介意各参数输入控件布局稍微占点位置」）
+- 底部工具栏「🔧 工具」按钮 → ①工具箱弹窗（`openToolPick`：搜索/分组/卡片）→ 点卡片 → ②schema 动态表单弹窗（`openToolCallForm`：工具描述全文 + 参数控件）→ 执行（`sendToolCall` 构造 `/call` 走 ws 发送）
+- 两级都是居中模态（点遮罩空白关闭）——**无「表单模式」状态**：输入框全程可见可用（`_toolFormMode` / `exitToolForm` 已随 2026-10-10 重构删除）
+- 参数控件按 schema 分型：enum → 下拉 / boolean → 勾选 / integer·number → 数字输入 / 其余文本框；description 作 placeholder 或控件下小字；required 参数带红星
 
 ## 工具选择：下拉框 → 按钮 + 工具箱浮窗（2026-09-01，commit 7010d66）
+
+> 历史节：本节的「页面内浮窗 + 表单展开」形态已被 2026-10-10 两级弹窗取代（工具箱交互本身——搜索/分组/卡片——延续至今，见下文「两级弹窗重构」）。
 
 **形态**：
 
@@ -56,34 +58,80 @@ self.brief = brief or TOOL_BRIEFS.get(self.name) or _brief_from_desc(first_line)
 
 **生效**：/restart + Ctrl+F5。关联：卡片形态见上节「工具选择」、placeholder 机制见下节。
 
+### 后记（2026-10-10，随两级弹窗重构实测对账）：卡片简介行从未亮过——t.desc 恒空，改读 t.description
+
+代码对账推翻本节「消费接线」的记载：`/api/tools` 工具级字段**只有 `description`（schema docstring），从未输出过 `desc`（brief 解析结果）**——src/server.py 全文 0 处引用 brief，`Tool.brief`（tools.py 三级解析）至今没有任何消费端。前端卡片渲染条件读 `t.desc` → 恒空 → 卡片第二行简介与搜索第三路自 2026-09-01 起一直是死的（卡片简介从未显示过）。
+
+本轮修复（前端侧改读真实字段）：卡片描述改读 `t.description`（空白折叠、截 110 字），搜索第三路同步改 `t.description`——卡片描述行实测已出现。Tool.brief / tool_briefs.py 三级体系保留在 tools.py（未来真接线时启用）；工具箱简介现行口径 = **schema description 截断**，brief 词典暂不参与 /api/tools。
+
 ## 参数 description → placeholder
 
-参数输入控件 placeholder 用**参数的 description（无则参数名）**：
+表单弹窗的参数小字说明按控件分型落位（2026-10-10 弹窗版；旧内联表单只支持 input placeholder，已随重构删除）：
 
-```javascript
-const ph = esc(String(p.desc || nm));   // 描述优先，无则参数名
-`<input id="tp_${nm}" placeholder="${ph}" title="${ph}" ...>`
-```
+- **input（文本/数字）**：placeholder = 参数 description（无则参数名），`title` 同值 hover 看全
+- **select（enum）**：select 无处放 placeholder → description 作控件下方 11px 灰字 + title
+- **checkbox（boolean）**：description 作勾选框 label 文本（无则「启用」）+ title
 
-- 输入框宽度 120px → 190px（path/query 类 260px）——描述能显示更多内容
-- `title` 同值（hover 悬停看全描述）
+数据源：`/api/tools` 的 `params[].desc`（schema properties 的 description 透传，src/server.py）——2026-09-02 补齐的参数级透传延续至今。输入控件全宽（`width:100%`），不再用旧版 190/260px 定宽。
 
 ## 发送即退表单模式（2026-09-04，commit fd3d465，用户提案）
 
-`sendToolCall()` 发出 `/call`、清空参数后，**直接调 `exitToolForm()`**——工具表单收起、普通输入框恢复，发完即可继续打字对话（2026-09-04，commit fd3d465，用户提案）。
+> **历史（旧内联表单模式）**：`sendToolCall()` 发出 `/call`、清空参数后**直接调 `exitToolForm()`**——表单收起、输入框恢复，发完即可继续打字对话。动机：手动工具调用低频，发完滞留表单还得手动点 ✕ 才回得了对话。
 
-- **动机**：手动工具调用是低频动作，发完滞留在表单模式还得手动点 ✕ 才回得了对话——发完即回，交互闭环
-- 清参数逻辑在先、退出在后同帧完成；下次进入表单仍是干净态（与既有「每次打开自动复位」双保险）
-- ✕ 按钮（`exitToolForm`）保留——中途放弃仍可手动退出；快捷发送后不再需要它
+2026-10-10 两级弹窗重构后该语义**天然成立**：输入框从未被顶替，`sendToolCall()` 末尾 `closeToolCallForm()` 执行即关弹窗回对话（见下文「两级弹窗重构」）。`exitToolForm` 已随内联表单删除；中途放弃用表单弹窗的 [取消] 按钮或点遮罩空白处。
+
+## 两级弹窗重构：表单不再顶替消息输入框（2026-10-10，commit c6732b1，用户提案）
+
+**动机（用户提案）**：旧模式点 🔧 后表单**顶替消息输入框**（`#toolForm` 内嵌展开 + `_toolFormMode`），选工具、填参数期间不能打字；且选完工具参数表单直接铺开，工具描述只有卡片上两行。改为两级弹窗，输入框全程可见可用：
+
+```
+点 🔧 工具
+  → ① 工具箱弹窗（toolPickModal：搜索 + 分组卡片）
+  → 点某个工具卡片 → ①关闭 → ② 该工具 schema 动态表单弹窗（toolCallModal）
+  → [执行] 发送 /call 并关弹窗
+```
+
+**① 工具箱弹窗 `toolPickModal`**（z-index 220，全屏遮罩 + 居中面板）：
+
+- 复用 `renderToolPicker`（搜索 名/显示名/描述 三路实时过滤、分组卡片、分组内卡片宽度自适应）——容器从页面内浮窗换成居中模态；打开自动聚焦搜索框（`#tpkFilter`）
+- 点遮罩空白处 / 选中工具后关闭（`closeToolPick`）
+- 顺手修复：卡片描述悬空（前端读 `t.desc`，后端实为 `description`）——改读 `t.description`（截 110 字），见上文「工具卡片简介补齐」后记
+
+**② schema 动态表单弹窗 `toolCallModal`**（z-index 221，560px 白卡，超高滚动；结构由 `openToolCallForm` 按工具 schema 现场生成）：
+
+| 区 | 内容 |
+|---|---|
+| 标题行 | 🔧 工具显示名 + 分组徽章 |
+| 描述区 | 工具 description **全文**（pre-wrap，超 110px 内滚） |
+| 参数区 | 逐参数渲染控件（见下表）；无参数工具显示「（无参数——直接点执行）」 |
+| 底部 | [取消]（关弹窗）/ [执行]（sendToolCall） |
+
+参数控件分型（description 落点见上文「参数 description → placeholder」）：
+
+| schema 形态 | 控件 |
+|---|---|
+| enum 非空 | `<select>`（非必填首位加「（不填）」空选项） |
+| boolean | checkbox（label = desc 或「启用」） |
+| integer / number | `<input type=number>` |
+| 其余（含 any） | `<input type=text>`（全宽） |
+
+- **required 红星**：`/api/tools` 新增 `required` 数组输出（src/server.py，schema `parameters.required` 透传），必填参数名后标 `*`；**旧进程无该字段 → 无红星优雅降级，/restart 一次后出现**
+- 打开自动聚焦第一个输入控件；点遮罩空白关闭
+
+**执行链（`sendToolCall`）**：逐控件收集参数（select 空 = 不填；boolean 勾选才送；integer/number 转 int/float）→ 构造 `/call 工具名(JSON参数)` → ws 发送 + sys 行回显 → **执行即关弹窗**（旧「发送即退」语义天然成立，见上文）。WS 未连接时 toast 拦截，防 `null.send` 级联报错。
+
+**删除清单**：内联 `#toolForm`、`_toolFormMode`、`exitToolForm`（✕ 按钮）、drawer-push 样式中 `#toolForm` 引用——「表单模式」作为页面状态不复存在。
+
+**生效**：前端改动（弹窗 HTML + JS 块重写）Ctrl+F5 即生效；`required` 红星需 /restart（后端 /api/tools 改动）。playwright 真页面（用户实例 9013）实测：工具箱 → 表单 → placeholder/小字 → 执行回显全链路 ✓。
 
 ## 与后端的关系
 
-- **2026-09-01 首版纯前端**（index.html）——Ctrl+F5 强刷即生效；**2026-09-02 起卡片简介有后端数据源**（Tool.brief 三级解析在 tools.py 构造期 + /api/tools 透传 desc，见上文「工具卡片简介补齐」），改 tool_briefs.py / Tool 构造后需 /restart + Ctrl+F5
-- `sendToolCall` 读 `_pickedTool`（旧读 `toolSel.value`）；`_toolFormMode` 打开时若 `_toolList` 未加载先 `loadToolListForForm()`
-- 工具列表来自既有 schema（`_toolList` ← fetch `/api/tools`），浮窗展示复用其 name/desc/group——与工具箱/编辑器 nodePicker 同一注册面
+- `/api/tools`（src/server.py）是唯一数据源：工具级输出 `name/display/group/description/params/outputs/required`——工具箱弹窗吃 name/display/group/description，表单弹窗吃 description/params/required；`required` 为 2026-10-10 新增（必填红星），旧进程缺字段时优雅降级
+- params[] 逐参数透传 `desc`（参数 description → placeholder/小字）与 `enum`（下拉值域）；llm_call.model 特判附加 models.json provider 列表
+- 生效口径：前端（index.html）改动 Ctrl+F5 即生效；/api/tools 字段改动需 /restart
 
 ## 相关页面
 
-- [工具外置](tool-externalization.md)：tools/builtin 工具体系（浮窗里列的工具来自同一注册面）
-- [编辑器 UX 改进](editor-ux-improvements.md)：工具箱浮窗参照的编辑器 nodePicker 模式
+- [工具外置](tool-externalization.md)：tools/builtin 工具体系（弹窗里列的工具来自同一注册面）
+- [编辑器 UX 改进](editor-ux-improvements.md)：工具箱弹窗参照的编辑器 nodePicker 模式
 - [用户交互](user-interaction.md)：WebUI 底部栏其它交互（toast 遮罩坑同款「透明元素吃点击」教训）

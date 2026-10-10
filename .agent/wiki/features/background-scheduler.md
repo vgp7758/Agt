@@ -341,6 +341,27 @@ ag = _state.get("agent") or agent   # ← NameError: name 'agent' is not defined
 
 **关联**：[Stop 恒报缺参后记](#后记stop-恒报缺少agentname--svcsched-六端点统一-or-agent-兜底2026-10-0820048-实锤commit-2ecc6f4)（本节勘误其 fallback 无效）· [编辑弹窗保存 500 后记](#后记编辑弹窗保存-500deadline-iso-字符串撞-float---at-回填展示格式2026-10-10用户实锤commit-a516ce7)（被挡住的 deadline 修复本体）· [ops · site-packages/src 遗留目录劫持](../guides/ops.md#pip-install--e--后-modulenotfounderror-config包内扁平导入的自愈2026-10-09)（同轮顺手隔离的 import src 劫持真凶）。
 
+### 后记三：编辑弹窗不丢 tool/args 实证 + 带工具任务只读提示行（2026-10-10 · 三，用户问诊，commit e758270）
+
+**触发（用户问诊）**：抽屉编辑弹窗表单只有六字段（名/间隔/at/deadline/循环/message）——带工具调用的任务（如 `action={"tool": "web_search", "args": {...}}`）在弹窗里完全看不见，用户问「保存后 tool 和 args 是不是就没了？」
+
+**答案：没丢（实证）**。两层保证：
+
+| 层 | 机制 |
+|---|---|
+| 更新侧 | `reschedule` 是**部分更新**——只碰表单提供的字段（every_seconds / at / deadline / repeat / message），`action`（含 tool+args）/ `code` / `mode` / `daily` 一概不动；端点入参 schema 也压根不含 tool/args，**没有任何路径能覆盖它们** |
+| 持久化侧 | `export_state` 序列化**全字段**（action / at_origin / code / daily / deadline / kind / …），保存即随 `_persist()` 落 meta.json |
+
+即「表单里看不到」只是**没显示**，不是丢了——与[后记一](#后记编辑弹窗保存-500deadline-iso-字符串撞-float---at-回填展示格式2026-10-10用户实锤commit-a516ce7)的 ④（周期未变不重置相位）同属「部分更新不动无名之域」的语义家族。
+
+**消疑补丁（commit `e758270`，src/static/index.html）**：编辑弹窗对带工具调用的任务显示一行**只读提示**（不在表单里、不可编辑、不参与保存）：
+
+> 🔧 该任务携带工具调用：**web_search**({"query": "…"})——编辑不会丢失，保存后保留
+
+渲染条件 `s.tool` 非空（纯 message/code 型任务无此行）；tool_args `JSON.stringify` 原样回显。用户打开弹窗即见任务携带着什么，不再疑心丢字段。
+
+**生效**：纯前端改动，刷新即见（后端零改动）。
+
 ## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
 
 **背景**：后台进程只有「服务」没有「任务」——run_python / run_shell 超时自动转后台的一次性任务（`_bg_tasks` 登记）此前只能靠返回文案里的 bg_id 单独查；且 **check_bg_task 自 v0.17.1 起只有提示文本承诺它、工具本体从未注册**（空头支票：模型按 docstring 调它 → 未知工具报错）。本次两件事一起补齐（src/background_tools.py，commit e72c0e1）。

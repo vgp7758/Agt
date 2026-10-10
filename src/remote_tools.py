@@ -109,8 +109,27 @@ def restore_servers(servers: dict):
 
 # ===================== 探测与路由 =====================
 
+def _norm_loopback(url: str) -> str:
+    """localhost → 127.0.0.1 归一（2026-10-11 用户实锤）：
+    Windows 的 getaddrinfo('localhost') 优先返回 IPv6 ::1，而 websocket-client 只连接
+    【第一个解析地址】——不是双栈回落（裸 socket.create_connection 会回落，它不会）；
+    对端 agt server 绑 0.0.0.0（仅 IPv4）→ 连 [::1]:9014 → 立即 WinError 10013
+    （WSAEACCES，非 10061），表现为 remote_message/ask 100% 持续失败（重试无用）。
+    统一在传输层把 localhost 换成 127.0.0.1；其它 host 原样返回。"""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        sp = urlsplit(url if "://" in url else "ws://" + url)
+        if (sp.hostname or "").lower() == "localhost":
+            netloc = "127.0.0.1" + (f":{sp.port}" if sp.port else "")
+            return urlunsplit((sp.scheme, netloc, sp.path, sp.query, sp.fragment))
+    except Exception:
+        pass
+    return url
+
+
 def _http_json(url: str, payload: dict | None, timeout: float) -> tuple[bool, dict | str]:
     """POST JSON → (ok, parsed)。GET 探测传 payload=None。异常转 (False, 错误文案)。"""
+    url = _norm_loopback(url)
     try:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else b"{}"
         req = urllib.request.Request(url, data=data, method="POST",
@@ -250,7 +269,7 @@ def route_remote_call(server_id: str, name: str, args: dict) -> str:
 
 def _ws_endpoint(url: str) -> str:
     """http(s) url → ws(s) 端点（/ws）。"""
-    u = url.strip().rstrip("/")
+    u = _norm_loopback(url).strip().rstrip("/")
     if u.startswith("https://"):
         u = "wss://" + u[8:]
     elif u.startswith("http://"):

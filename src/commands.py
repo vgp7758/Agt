@@ -464,6 +464,7 @@ def read_config(agent) -> dict:
         cfg["panic_context_window"] = _cfg2.load_panic_window()
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
         cfg["fold_deep_tools"] = _cfg2.load_fold_deep_tools()
+        cfg["tiering_mode"] = _cfg2.load_tiering_mode()
         cfg["enable_snapshots"] = _cfg2.load_enable_snapshots()
     except Exception:
         cfg["detail_base"] = 1500
@@ -549,6 +550,36 @@ def apply_config(agent, values: dict) -> list:
             results.append(f"✅ max_level = {ml}（分档最高级别；已存 settings.json）")
         except Exception:
             results.append(f"❌ max_level 值非法：{v}")
+    # tiering_mode：分档算法（用户提案 2026-10-10：默认空=保守压缩；steps=按步数固定阶梯）。
+    # 切到 steps：max_level 钉 4（阶梯位置固定）+ 按阶梯规则从零重建当前 session 档位
+    # （存量边界是旧算法形态，截断有警告不如重建干净）；切回保守：保留当前档位续跑
+    # （边界是引擎通用状态）。两者都清冻结缓存。
+    if "tiering_mode" in values:
+        v = values.pop("tiering_mode")
+        mode = str(v).strip().lower()
+        if mode not in ("", "steps"):
+            mode = ""
+        try:
+            import config
+            saved = config.load_runtime_settings(); saved["tiering_mode"] = mode
+            config.save_runtime_settings(saved)
+            se = agent.session
+            if mode == "steps":
+                se.tiering_mode = "steps"
+                se.max_level = 4
+                se._tier_boundaries = se._recompute_steps_boundaries()   # 从零重建（fc 同步内置推进）
+            else:
+                se.tiering_mode = ""
+                se.max_level = config.load_max_level()
+            se._frozen_renders.clear()
+            try:
+                se.mark_system_dirty(f"tiering_mode → {mode or '默认'}")
+            except Exception:
+                pass
+            results.append(f"✅ 分档算法 = {mode or '保守压缩（默认）'}（已存 settings.json + 即时生效；"
+                           + ("当前 session 已按 steps 阶梯重建档位）" if mode == "steps" else "保留当前档位续跑）"))
+        except Exception as e:
+            results.append(f"⚠️ tiering_mode 设置失败：{e}")
     # max_effective_context_window：分档投影窗口（当前模型 llm+session + 存 models.json；0/空=关闭分档）
     if "max_effective_context_window" in values:
         v = values.pop("max_effective_context_window")

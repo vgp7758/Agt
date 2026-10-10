@@ -574,6 +574,7 @@
     <div class="rt-group">执行与上下文</div>
     <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
+    <label title="投影分档算法：保守压缩（默认）= 轮数卫生毕业 + 体积压力收敛（现行算法）；steps 固定阶梯 = 按步数的确定性分档（档1≤500步·溢出划前≤300步 / 档2≤600→档3 / 档3≤1200→档4 / 档4≤2400→工具折叠档 / ≤4800→结构摘要；顶窗时三级级联下压 fc→sos·工具折叠→fc·档2/3/4→工具折叠）。切到 steps 按阶梯规则从零重建当前 session 档位；切回保守压缩保留当前档位续跑。">分档算法 <select id="cfg_tiering_mode"><option value="">保守压缩（默认）</option><option value="steps">steps 固定阶梯</option></select></label>
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" placeholder="自动（按窗口推导）" title="工具结果摘要的初始字数上限（档1 base）。留空=按 max_effective_context_window 自动推导（400K→1500、600K→2250、60K→600，主流配置行为不变）；填写则显式固定"></label>
     <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠并一次压回计划水位（分档窗口的75%，与轮边界计划对齐）"></label>
     <label title="超深档（真实档位超过 max_level）的早期轮：工具调用过程整体折叠成一行「---- 已折叠共N次工具调用 ----」，保留最终回复原文与 reasoning 原文——替代按 max_level(187字/步) 的逐调用残缺摘要。完整过程仍在存档可 recall。"><input id="cfg_fold_deep_tools" type="checkbox"> 折叠早期工具调用（超深档轮只留结论）</label>
@@ -1995,6 +1996,7 @@ function fillSettingsForm(v){
   fillModelSelect('cfg_utility_model','（跟随主模型）');
   document.getElementById('cfg_tool_timeout').value = v.tool_timeout || '';
   document.getElementById('cfg_max_level').value = v.max_level || '';
+  document.getElementById('cfg_tiering_mode').value = v.tiering_mode || '';
   document.getElementById('cfg_detail_base').value = v.detail_base_source === '显式' ? (v.detail_base || '') : '';
   document.getElementById('cfg_panic_window').value = v.panic_context_window ?? 0;
   document.getElementById('cfg_fold_deep_tools').checked = !!v.fold_deep_tools;
@@ -2352,6 +2354,7 @@ function saveRuntime(){
     utility_model: document.getElementById('cfg_utility_model').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
+    tiering_mode: document.getElementById('cfg_tiering_mode').value,
     // detail_base：空 = 不传（走窗口推导；传死 1500 会把显式通道污染，/context 恒显 1500）
     // detail_step：全局字段已删（2026-09-15）——步距衰减只认模型卡片的 detail_step（未填=0 不衰减）
     panic_context_window: parseInt(document.getElementById('cfg_panic_window').value)||0,

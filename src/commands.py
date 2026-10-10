@@ -1101,8 +1101,9 @@ def _cmd_snapshot(ctx: CommandContext, args):
 
 
 def _cmd_rewind(ctx: CommandContext, args):
-    """/rewind [count] —— 回溯到 count 个 turn 之前：撤销最近 count 轮（对话 + 文件改动），count 默认 1。
-    依赖每轮自动打的工作区快照；回到指定轮【发送前】的状态。"""
+    """/rewind [count] [--soft] [--git reset] —— 回溯到 count 个 turn 之前，count 默认 1。
+    默认：撤销对话 + 工作区文件改动（依赖每轮自动打的工作区快照，回到指定轮【发送前】状态）。
+    -soft：只回滚会话，不回滚仓库——该轮产生的代码/文件改动全部保留（对话截断，仓库/HEAD 不动）。"""
     from chat import restore_snapshot
     if ctx.agent.snapshot_manager is None:
         print("（快照未启用，无法回溯）")
@@ -1111,10 +1112,14 @@ def _cmd_rewind(ctx: CommandContext, args):
     if not turns:
         print("（暂无对话轮，无可回溯）")
         return
+    soft = "-soft" in args
     count = 1
     if args and args[0].isdigit():
         count = max(1, int(args[0]))
-    git_policy = "reset" if ("--git" in args and "reset" in args) or "--git-reset" in args else "block"
+    if soft and (("--git" in args and "reset" in args) or "--git-reset" in args):
+        print("⚠️ -soft 与 --git reset 互斥：soft 本来就不动仓库（文件与 HEAD 都保留），已按 soft 执行")
+    git_policy = ("reset" if (("--git" in args and "reset" in args) or "--git-reset" in args)
+                  else "block") if not soft else "none"
     n = len(turns)
     if count > n:
         print(f"⚠️ 共 {n} 轮，回溯全部（回到最初）")
@@ -1132,12 +1137,13 @@ def _cmd_rewind(ctx: CommandContext, args):
         print(f"❌ 倒数第 {count} 轮没有快照点，无法回溯{_hint}")
         return
     try:
-        restore_snapshot(ctx.agent, sha, git_policy=git_policy)
+        restore_snapshot(ctx.agent, sha, git_policy=git_policy, soft=soft)
     except Exception as e:
         print(f"❌ 回溯失败：{e}")
         return
     remain = len(ctx.session.turns)
-    print(f"✅ 已回溯（撤销最近 {count} 轮的对话 + 文件改动），剩余 {remain} 轮")
+    _what = "对话；文件改动/仓库保留——soft" if soft else "对话 + 文件改动"
+    print(f"✅ 已回溯（撤销最近 {count} 轮的{_what}），剩余 {remain} 轮")
 
 
 # ========== RAG 文档库（/rag） ==========
@@ -2135,10 +2141,11 @@ def build_default_registry() -> CommandRegistry:
         "/snapshot restore 3 --git reset   检查点后有 git 提交时：真仓库 HEAD 一并退到\n"
         "                                  检查点时刻（默认拦截防撞车；被退提交 reflog 可找回）")
     reg.register("rewind", _cmd_rewind,
-        "[count] [--git reset]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）",
+        "[count] [--soft] [--git reset]  回溯到 count 个 turn 之前（撤销最近 count 轮，默认1）",
         "/rewind            撤销最近 1 轮（对话+文件改动）\n"
         "/rewind 3          撤销最近 3 轮\n"
-        "/rewind --git reset  检查点后有 git 提交时一并退 HEAD（否则默认拦截并提示")
+        "/rewind -soft      只回滚会话：对话截断，该轮产生的文件改动/代码全保留\n"
+        "/rewind --git reset  检查点后有 git 提交时一并退 HEAD（否则默认拦截并提示）")
     reg.register("rag", _cmd_rag,
         "build | config [k v] | stats | query <词>  RAG 文档库管理",
         "/rag stats                         查看索引状态\n"

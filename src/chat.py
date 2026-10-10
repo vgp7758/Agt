@@ -333,11 +333,16 @@ def get_snapshot_list(session):
     return items
 
 
-def restore_snapshot(agent, sha, git_policy="block"):
+def restore_snapshot(agent, sha, git_policy="block", soft=False):
     """检查点回溯：还原工作区文件树 + 截断对话。
     返回被截那轮的 user_message；snapshot_manager 未装或 sha 不存在返回 None。
 
-    撞车检测（用户提案 2026-09-06）：目标轮记录的用户真仓库 HEAD ≠ 当前 HEAD
+    soft=True（用户提案 2026-10-11）：只回滚会话（对话截断），不动工作区文件、不动 git——
+    该轮产生的代码/文件改动全部保留（改动是好的、只是对话想换个思路重来时用）。
+    soft 模式跳过：git 撞车检测（不碰 git 无撞车可言）、snapshot_manager.restore（文件恢复）、
+    fs 基线重扫（文件没变）。对话截断（restore_to_snapshot）与广播/落盘与常规路径完全一致。
+
+    撞车检测（用户提案 2026-09-06，soft 时不适用）：目标轮记录的用户真仓库 HEAD ≠ 当前 HEAD
     = 检查点之后有 git 提交。回溯会造成「session 在过去、git 历史在未来」——
     之后任何 add -A 提交都会把回溯差异整笔提交。git_policy：
       block（默认）→ 抛 RuntimeError（带提交清单与处置指引），回溯不生效
@@ -345,30 +350,37 @@ def restore_snapshot(agent, sha, git_policy="block"):
                      若已 push 过，之后需 push --force），随后正常回溯"""
     if agent.snapshot_manager is None:
         return None
-    target_head = agent.session.git_head_at_snapshot(sha)
-    if target_head:
-        from snapshots import user_repo_head, git_log_between, user_repo_reset_hard
-        cur_head = user_repo_head(agent.snapshot_manager.workspace)
-        if cur_head and cur_head != target_head:
-            log = git_log_between(agent.snapshot_manager.workspace, target_head, cur_head)
-            n = len([l for l in log.splitlines() if l.strip()])
-            if git_policy != "reset":
-                raise RuntimeError(
-                    f"检查点之后有 {n} 笔 git 提交，回溯会与 git 历史撞车（session 回到过去、"
-                    f"HEAD 还在未来——之后 add -A 会把回溯差异整笔提交）：\n{log}\n"
-                    f"处置：① 重新执行并带 --git reset（真仓库 HEAD 一并退到 {target_head[:10]}）；"
-                    f"② 手动 git reset --hard {target_head[:10]} 后再回溯；③ 放弃回溯")
-            user_repo_reset_hard(agent.snapshot_manager.workspace, target_head)
-    agent.snapshot_manager.restore(sha)
-    # 回溯后重扫基线（用户提案 2026-09-23）：restore（git restore/reset --hard）会重写内容
-    # 有差异的文件 → mtime 全刷新；而 agent._fs_snap 还持有回溯前的旧快照 → 下一次工具调用
-    # 的变更检测（_diff_snapshots 纯 mtime 对比）会把被恢复的文件全部误报 modified
-    # （「本轮变更文件=全仓」）。回溯完成即把当前树重扫为最新基线——下一轮从零起步。
-    try:
-        from agent import _workspace_snapshot
-        agent._fs_snap = _workspace_snapshot()
-    except Exception:
-        agent._fs_snap = None   # 兜底置空：下次工具调用现扫（语义等价）
+    if not soft:
+        target_head = agent.session.git_head_at_snapshot(sha)
+        if target_head:
+            from snapshots import user_repo_head, git_log_between, user_repo_reset_hard
+            cur_head = user_repo_head(agent.snapshot_manager.workspace)
+            if cur_head and cur_head != target_head:
+                log = git_log_between(agent.snapshot_manager.workspace, target_head, cur_head)
+                n = len([l for l in log.splitlines() if l.strip()])
+                if git_policy != "reset":
+                    raise RuntimeError(
+                        f"检查点之后有 {n} 笔 git 提交，回溯会与 git 历史撞车（session 回到过去、"
+                        f"HEAD 还在未来——之后 add -A 会把回溯差异整笔提交）：\n{log}\n"
+                        f"处置：① 重新执行并带 --git reset（真仓库 HEAD 一并退到 {target_head[:10]}）；"
+                        f"② 手动 git reset --hard {target_head[:10]} 后再回溯；③ 放弃回溯")
+                user_repo_reset_hard(agent.snapshot_manager.workspace, target_head)
+        agent.snapshot_manager.restore(sha)
+        # 回溯后重扫基线（用户提案 2026-09-23）：restore（git restore/reset --hard）会重写内容
+        # 有差异的文件 → mtime 全刷新；而 agent._fs_snap 还持有回溯前的旧快照 → 下一次工具调用
+        # 的变更检测（_diff_snapshots 纯 mtime 对比）会把被恢复的文件全部误报 modified
+        # （「本轮变更文件=全仓」）。回溯完成即把当前树重扫为最新基线——下一轮从零起步。
+        try:
+            from agent import _workspace_snapshot
+            agent._fs_snap = _workspace_snapshot()
+        except Exception:
+            agent._fs_snap = None   # 兜底置空：下次工具调用现扫（语义等价）
+    else:
+        try:
+            from agent import _workspace_snapshot
+            agent._fs_snap = None   # soft 不动文件：置空让下次工具调用现扫（基线语义不变，防误报 modified）
+        except Exception:
+            pass
     return agent.session.restore_to_snapshot(sha)
 
 

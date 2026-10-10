@@ -510,6 +510,14 @@ if _SRC_DIR not in sys.path:
 
 **验证**：同场景复跑 → `src.chat OK` / `config OK`；`py_diag` 无问题；隔离工作区起 WebUI（9623）→ `ready=true`、tools 163、无 traceback。
 
+#### 后记：真凶闭环——site-packages/src 运行时遗留目录劫持 import src（2026-10-10，v0.34.3 轮隔离）
+
+**2026-10-10 真凶闭环（v0.34.3 发布轮顺手隔离）**：昨天（10-09）editable 启动崩 `No module named 'config'`，今天挖到了底层根源——**site-packages 里存在一个运行时写进去的 `src` 遗留目录**（此前 pip 在线版实例运行时把孤儿模块 + 数据文件写进了 site-packages 的 src 包目录，不是 pip 安装产物）。加载链：PathFinder 先命中这个实体目录 → `src` 以**不执行 `__init__.py`** 的 namespace package 形态加载 → 上一节的包内扁平导入断链（正是 traceback 形态）→ 而 editable finder 在 meta_path **末位**，永远轮不到——editable 装了等于没装。
+
+**处置**：遗留目录隔离改名 `src.__stale_bak_20261010`（非删除，留证可查）。验证：双 cwd（repo 内 / repo 外）`import src.chat` 均干净解析到 repo 源码——editable 自此真正接管。
+
+**教训**：包目录不是只读领地——**运行时进程可能往 site-packages 里写东西**（日志 / 数据 / 误写入的模块），长出一个「看起来像包」的劫持目录；「装了 editable 却跑别的代码」这类悬案，`ls site-packages/src` 看内容里有没有**非包产物**即可定性。机制层补充见[下方 editable 落地关键机制](#顺带两条-editable-落地关键机制排查-e-装了却不生效装不上用)。
+
 ## 同 repo 单实例约束（2026-10-09 明确）
 
 ## 同 repo 单实例约束（2026-10-09 明确）
@@ -533,31 +541,11 @@ if _SRC_DIR not in sys.path:
 | editable finder 装到 sys.meta_path **末尾** | 而 `PathFinder` 在它前面 → **只要 site-packages 里还存在实体 `src` 目录，PathFinder 先命中实体副本，editable 完全不生效** | 必须**删除/改名** `site-packages\src`，editable 才接管（这是“改了 repo 页面不刷新”的机制层原因） |
 | `pip install -e .` 会**卸载旧版 + 重写 `Scripts\agt-web.exe`** | Windows 锁运行中的映像文件：只要有 `agt-web.exe` / `agt.exe` 实例在跑，卸载/写脚本阶段 PermissionError → pip 中止 | 需**实例停机窗口**才能装；或走“免 pip 手工放 pth+finder”的等价路径 |
 
+**遗留目录的第三种来源（2026-10-10 实锤闭环）**：上表「实体 `src` 目录」甚至**不需要 pip 装出来**——pip 在线版实例的运行时写盘（孤儿模块、数据/日志误写进包目录）就能在 site-packages 里长出一个 `src` 遗留目录。当日实锤：正是这样一个运行时遗留目录以 namespace package 形态劫持 `import src`（[ModuleNotFoundError: config 真凶闭环](#pip-install--e--后-modulenotfounderror-config包内扁平导入的自愈2026-10-09)），editable 恒被 PathFinder 压住。鉴别法：`ls site-packages/src` 里出现**非包产物**（数据文件 / 日志 / 孤儿模块）= 运行时遗留，隔离改名即净。
+
 **免 pip 的等价 editable 落地**（不碰被锁的 exe）：把 editable wheel 里的 `__editable___agt_agent_<ver>_finder.py` + `__editable__.agt_agent-<ver>.pth` 放进 site-packages（解释器启动时由 .pth 加载），再把实体 `src` 目录改名/删除。⚠️ **pth 只在进程启动时读取 → 必须重启实例才生效**。
 
 **排障口诀**：`ModuleNotFoundError: 同级模块` 但入口文件能加载 → 先打印 `src.__file__` 和 `src.__path__`，再查 src 目录在不在 `sys.path`；**报错点与文件是否真的缺失无关，问题在“包内绝对导入靠谁兜底”**。
-
-### 实例假死（busy 无输出）：MCP server hang 拖死 worker——py-spy 抓栈定位（2026-10-06，50052 实锤）
-
-**症状（50052 用户报告）**：实例阻塞——WebUI busy、但 `llm_calls.jsonl` 最后一条 05:24 后零新记录；进程 06:00 仍存活、无崩溃日志。**判别口诀：进程死 ≠ 假死**——「进程活着 + 流水停摆」才是假死标志。
-
-**诊断：py-spy 抓栈**（`py-spy dump --pid <pid>`）——worker 线程钉死在 `call_tool_sync → future.result()`：对端业务 MCP server（千牛/抖音系）hang 不回，`_run_coro` 有 timeout 形参但调用侧恒不传（「防误杀长任务」旧取舍）→ 无限等。诊断细节与修复见 [mcp-config · 600s 兜底](../features/mcp-config.md)。
-
-**处置**：kill 旧进程 + `agt-web 50052 --resume` 重拉；卡住的轮是中断态，`/continue` 续跑不丢上下文（见 [中断轮恢复](../features/resume-interrupted.md)）。
-
-**「实例没响应」三态排查顺序**：
-
-| 形态 | 特征 | 手段 |
-|---|---|---|
-| ① 进程死 | 端口不通 | restart 日志（`~/.agt/restart-web-{port}.log`）看死因 |
-| ② 假死（进程活、流水停） | llm_calls 无新记录 + 端口通 | **py-spy dump 抓栈**——卡在哪一行一目了然 |
-| ③ 慢（流水在动） | llm_calls 有记录但 elapsed 巨大 | /stats 看端点耗时，多为 LLM 端点侧问题 |
-
-**防御落地**：`call_tool_sync` 600s 兜底（commit `fc8d2c0`）——此后 MCP 单点 hang 最多拖 10 分钟即转为工具错误消息，轮继续。
-
-### 插话死信假 busy：空闲态消息走插话通道永不消费（2026-10-07，20048 实锤）
-
-**与上条 50052 同症不同根**——实例结束一轮后恒 busy、发消息无响应，但这里 worker 没堵（py-spy 无卡点、`/api/status` busy=false 真态空闲），死的是**消息**：前端 busy 变量陈旧（WS 断线重连/事件丢失）→ 消息走插话通道入 pending → 空闲 agent 无下一轮可注入 = 永久死信（「插话已入队」却永不开轮）。修复：src/server.py insert_message 分支后端权威真态兜底，空闲直接转 work_q 开新轮（commit 1c0d2f9）；存量死信随手发一条新消息即随批合并全清。**诊断口诀：busy 假死先分两侧**——后端 busy=false + 页面 busy → 前端态漂移（本条）；后端 busy=true + py-spy 有卡点 → worker 阻塞（上条）。详见 [用户交互 · 插话死信修复](../features/user-interaction.md)。
 
 ## 本地发布链：release.py 版本真源迁移（2026-09-10 · 十八轮）
 

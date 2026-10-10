@@ -306,6 +306,41 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **关联**：[同名覆盖摘旧](#同名覆盖摘旧重复投递根因修复2026-09-18commit-8ed09c6pre_post-实锤)（add 换 id vs reschedule 保 id 的对照语义不变）· [组合模式相位对齐](#组合模式every_seconds--at--at-相位起步之后每-n-秒循环2026-09-18commit-9a88107用户提案)（④ 保护的正是 at_origin 相位锚）· [Stop 恒报缺参后记](#后记stop-恒报缺少agentname--svcsched-六端点统一-or-agent-兜底2026-10-0820048-实锤commit-2ecc6f4)（sched_upd 同族端点的上一轮修复）。
 
+### 后记二：500 真凶反转——端点第一行 NameError，0.34.2 的 deadline 修复从未被执行（2026-10-10 · 二，用户实锤，commit ad87fd3，v0.34.3）
+
+**触发（用户实锤）**：新启动的 9013 实例仍报同款 500（`POST /api/sched_upd → 500 Internal Server Error` + 前端 `Unexpected token 'I', "Internal S"... is not valid JSON`）——上一节 a516ce7（v0.34.2）的修复**没有生效**。
+
+**真凶（隔离新实例抓完整 traceback 才钉死）**：500 源头不在 deadline 解析（那是第二层），而在**端点函数第一行**就 NameError：
+
+```python
+ag = _state.get("agent") or agent   # ← NameError: name 'agent' is not defined
+```
+
+两个叠加错：
+
+1. `_state` 是 chat 主循环的 `{"busy", "started", "desc", "kind"}`——**从来没有 `"agent"` 键**，`.get("agent")` 恒 None；
+2. `or agent` 的裸名 `agent` **不是模块全局**（全局单例叫 `_agent`）——表达式求值到第二个操作数即炸 NameError → 裸 500。
+
+即：这批端点**从出生就没跑通过第一行**，只要请求进来必 500。两段前史就此反转：
+
+- 2ecc6f4（[Stop 恒报缺参后记](#后记stop-恒报缺少agentname--svcsched-六端点统一-or-agent-兜底2026-10-0820048-实锤commit-2ecc6f4)）加的 `or agent` fallback **本身就是 NameError 源头**——当时「对齐」的 plan 推送端点（d573e1e）同款写法是没跑通过的先例，同族复制把死代码复制成了 6+1 处；
+- a516ce7 修的 deadline 解析排在第一行之后，**从未被执行到**——「修了 A，但执行流根本到不了 A」，v0.34.2 的包对这批端点等效于没修。
+
+**修复（commit ad87fd3，src/server.py，随 v0.34.3 发布）**：
+
+| # | 改动 | 覆盖 |
+|---|---|---|
+| ① | 7 处 `… = _state.get("agent") or agent` → **`ag = _agent`**（模块全局，start_server 注入的单例） | sched_upd / sched_add / sched_del ×3 + svc_log / svc_fav / svc_op ×3 + ws plan 推送 ×1 |
+| ② | 3 处死赋值清理：svc_log / svc_fav / svc_op 函数体直接用 `_agent`，删冗余局部 `ag = _agent` | 同三 svc 端点 |
+
+**验证（隔离新起实例全链实测，全 200 JSON 零 500）**：sched_add（ISO deadline）✓ / sched_upd（ISO）✓ / 垃圾 deadline → `[deadline 无法解析…]` 明确文案 ✓ / sched_upd 无此任务 → `[无此任务]` ✓ / sched_del ✓——a516ce7 的四件修复（`_parse_deadline` 容错 / try-except 兜底 / `fire_at_iso` 回填 / 相位保持）至此**真正生效**。
+
+**部署（分叉口径不变、版本下限上调）**：9013 等 editable 实例 `/restart` 即生效；**20048 等在线版必须 `pip install -U agt-agent` ≥ 0.34.3**——0.34.2 包里 500 还在。发布记录见 [v0.34.3](../releases/v0.34.3.md)。
+
+**教训**：① 排障先拿**完整 traceback** 再动手——「现象相同」≠「根因相同」，500 的第一嫌疑人是栈顶那一行，本轮前两轮都在修栈顶以下的层；② 端点第一行的取值模式是全部后续逻辑的**前置门**，门坏了后面修什么都白修；③ 「对齐既有写法」前先确认先例本身跑通过——同族复制会把死代码复制成 N 份。
+
+**关联**：[Stop 恒报缺参后记](#后记stop-恒报缺少agentname--svcsched-六端点统一-or-agent-兜底2026-10-0820048-实锤commit-2ecc6f4)（本节勘误其 fallback 无效）· [编辑弹窗保存 500 后记](#后记编辑弹窗保存-500deadline-iso-字符串撞-float---at-回填展示格式2026-10-10用户实锤commit-a516ce7)（被挡住的 deadline 修复本体）· [ops · site-packages/src 遗留目录劫持](../guides/ops.md#pip-install--e--后-modulenotfounderror-config包内扁平导入的自愈2026-10-09)（同轮顺手隔离的 import src 劫持真凶）。
+
 ## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
 
 **背景**：后台进程只有「服务」没有「任务」——run_python / run_shell 超时自动转后台的一次性任务（`_bg_tasks` 登记）此前只能靠返回文案里的 bg_id 单独查；且 **check_bg_task 自 v0.17.1 起只有提示文本承诺它、工具本体从未注册**（空头支票：模型按 docstring 调它 → 未知工具报错）。本次两件事一起补齐（src/background_tools.py，commit e72c0e1）。
@@ -383,7 +418,9 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **插曲（except 静默降级教训）**：首版冒烟失败——try 块里笔误 `_re.sub`（import 的是 `re`），NameError 被 except 兜底吞掉、静默降级 `_lf=None`，读取侧永远走不到兜底。修为 `re.sub` 后全绿。教训：**兜底 except 块里的名字错误会无声降级，冒烟必须盯结果，不能只看「没报错」**。
 
-### 后记：Stop 恒报「缺少agent/name」——svc/sched 六端点统一 or agent 兜底（2026-10-08，20048 实锤，commit 2ecc6f4）
+### 后记：Stop 恒报「缺少agent/name」——svc/sched 六端点统一 or agent 兜底（2026-10-08，20048 实锤，commit 2ecc6f4；⚠️ 后记二已反转：fallback 本身是 NameError）
+
+> ⚠️ **勘误（2026-10-10 · 二，commit ad87fd3，v0.34.3）**：本节补的 `or agent` fallback 本身就是 NameError 源头——裸名 `agent` 不是模块全局（真全局是 `_agent`），全部 7 处该写法**从未跑通过第一行**（请求进来必 500，「生效」记载不成立）；同日 a516ce7 修的 deadline 解析排在其后、从未被执行到。真修复与反转全过程见[后记二](#后记二500-真凶反转端点第一行-nameerror0342-的-deadline-修复从未被执行2026-10-10--二用户实锤commit-ad87fd3v0343)。
 
 **现象（用户实锤）**：服务看板点 ⏹Stop 恒报 `缺少agent/name`——name 明明传了。直测复现定责：POST `{"name":"unity-repl","op":"stop"}` 直打 `/api/svc_op` 仍报同款 → **排除前端丢参，是端点自身的取值判定挂了**。
 
@@ -409,11 +446,9 @@ _agent = _state.get("agent") or agent   # 部分端点用短名 ag = ...，同�
 | `svc_op` / `svc_log` / `svc_fav` | 服务看板三件（Stop/Start · 完整日志 · ⭐收藏） |
 | `sched_upd` / `sched_add` / `sched_del` | [抽屉定时任务 CRUD](#抽屉定时任务-crudreschedule-部分更新--手动添加编辑删除弹窗2026-10-07用户提案commits-5118753--25c23e3) 三端点 |
 
-**生效**：已推送 + site-packages 已同步（20048 / 9000 同批），实例 `/restart` 后生效。
+**顺带辨析（restart 遗留孤儿服务）**：对 restart 前启动的服务点 Stop 会报「无此服务」——**登记在 ServiceManager 内存里，新进程是空的**（这不是缺参 bug，是登记生命周期）。正解已备：▶ Start 走[死服务覆盖重建](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)；历史日志看 [tee 持久化兜底](#后记restart-后完整日志-404日志-tee-持久化到-agtservice_logs2026-10-0820048-实锤commit-b948a01)；常要跨重启可用的服务走 ⭐ 收藏（main.yml services 启动期拉起）。
 
-**顺带辨析（restart 遗留孤儿服务）**：修复生效后，对 restart 前启动的服务点 Stop 会转报「无此服务」——**登记在 ServiceManager 内存里，新进程是空的**（这不是缺参 bug，是登记生命周期）。正解已备：▶ Start 走[死服务覆盖重建](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)；历史日志看 [tee 持久化兜底](#后记restart-后完整日志-404日志-tee-持久化到-agtservice_logs2026-10-0820048-实锤commit-b948a01)；常要跨重启可用的服务走 ⭐ 收藏（main.yml services 启动期拉起）。
-
-**关联**：[user-interaction · plan 面板连接即推](user-interaction.md)——`_state.get("agent") or agent` 模式的**首例**（d573e1e，注释即「兼容两条取 agent 的路径」）；本节是该模式在 svc/sched 家族的推广收编。
+**关联**：[user-interaction · plan 面板连接即推](user-interaction.md)——`_state.get("agent") or agent` 模式的**首例**（d573e1e，注释即「兼容两条取 agent 的路径」——该先例本身即死代码）；本节曾将该模式推广到 svc/sched 家族（已被后记二反转收编）。
 
 ## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
 

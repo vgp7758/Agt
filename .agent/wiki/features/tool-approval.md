@@ -125,7 +125,10 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 ## 相关页面
 
+## 相关页面
 
+
+- [@file: 文件引用](file-ref-params.md) — 同在 `_exec_tool` 调用管线上的参数预处理（展开在路由/执行之前）；「工具结果通道」附注同哲学（2026-10-11）
 - [run_python](run-python.md) — TOOL_TIMEOUT / 超时转后台（审批段在计时之外，两机制正交）
 - [human_step 人在环](human-step.md) — 同款 Event 阻塞 + WS action + pending 落 extra_state（安全门 vs 任务步骤）
 - [LLM 网络韧性](llm-network-resilience.md) — 同日另一问诊批（API 超时阶段诊断）

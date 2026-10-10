@@ -123,7 +123,11 @@ run_python（以及 run_shell、文件工具访问 workspace 外路径）执行*
 
 ## 相关页面
 
+## 相关页面
+
+- [@file: 文件引用](file-ref-params.md)：`code` 参数整值引用落盘脚本——inline 迭代重发浪费的又一缓解（2026-10-11，commit 557805a）
 - [工作流引擎与钩子](../architecture/workflow-hooks.md)：plugin 节点调用工具 / LIGHT_TOOLS 隐藏工具
 - [diff_files](diff-files.md) / [diff_lines](diff-lines.md)：文件级 / 文本级 Myers Diff
 - [运维排障](../guides/ops.md)：子进程 CREATE_NO_WINDOW 与流式输出观测
 - [系统总览](../architecture/overview.md)：能力层 real_tools.py
+

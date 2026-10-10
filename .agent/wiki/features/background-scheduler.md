@@ -871,6 +871,9 @@ ServiceManager.start(name, command, cwd=..., on_exit_wake="notify",
 
 ## 相关页面
 
+## 相关页面
+
+- [@file: 文件引用](file-ref-params.md) — `message` 参数整值引用：定时推送长文案先 write_file 再 `@file:路径`（2026-10-11，commit 557805a）
 - [user-interaction · 后台通知 wake 语义](user-interaction.md) — schedule 唤醒轮的路由与语义标签
 - [v0.23.1 发布记录](../releases/v0.23.1.md) — 每日闹钟的发布收口
 - [v0.29.4 发布记录](../releases/v0.29.4.md) — 2026-09-18 scheduler 三连（组合模式/持久化/同名摘旧）发布收口

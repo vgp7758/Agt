@@ -283,6 +283,29 @@ def reschedule(self, name, every_seconds=None, at=None, deadline=None,
 
 **关联**：同名覆盖摘旧（add 的换 id 语义对照，见上）· 服务看板交互四件套（同抽屉服务组的按钮排，见下）。
 
+### 后记：编辑弹窗保存 500——deadline ISO 字符串撞 float() + at 回填展示格式（2026-10-10，用户实锤，commit a516ce7）
+
+**触发（用户实锤）**：抽屉编辑弹窗点保存恒报 `POST /api/sched_upd 500`，前端跟着炸 `Unexpected token 'I', "Internal S"... is not valid JSON`——**两个报错是同一件事**：后端裸 500 的响应体是 HTML，前端 `r.json()` 解析必炸。
+
+**根因——deadline 前后端类型不匹配**：编辑弹窗的 deadline 输入框预填的就是 ISO 字符串（`new Date(...).toISOString().slice(0,16)` → `"2026-12-31T23:59"`），保存时原样 POST；而 `reschedule` 后端直接 `float(deadline or 0)` → `float("2026-12-31T23:59")` → ValueError 未捕获 → 500。**10-07 落地时只测了「新填」，没测「预填值原样回存」的往返**。
+
+**修复（四件，commit `a516ce7`，src/background.py + src/server.py + src/static/index.html）**：
+
+| # | 改动 | 效果 |
+|---|---|---|
+| ① | 新增 `Scheduler._parse_deadline` 静态方法：数字时间戳 / ISO 字符串（`Z`→`+00:00` 后 fromisoformat）/ 空串三形态容错，解析失败抛 ValueError | `reschedule` + `/api/sched_add` 统一改用它——ISO deadline 正常保存；垃圾输入返回 `[deadline 无法解析: …]` 明确文案（不炸 500） |
+| ② | `/api/sched_upd` 整体包 try/except → `{ok: false, error: …}` | 任何异常不再裸 500（连带治好前端 JSON 解析炸） |
+| ③ | `snapshot()` 补 `fire_at_iso` 字段，弹窗 at 回填改用它（原来是 `%m-%d %H:%M:%S` 展示格式） | at 型任务原回填展示格式——编辑后直接保存必报 `[时间格式错误]`（第二颗同源雷，顺手拆掉）；现在回填→保存往返 ✓ |
+| ④ | `reschedule` 周期**未变**时不再重置相位锚（`at_origin` / `next_fire` 保持） | 修「只改消息/deadline 也把 next_fire 拍到 now+sec」的静默漂移 |
+
+**验证（全过）**：① interval 任务只改 message 保存 → 间隔 3599s→3599s、next_fire 相位保持 ✓；真改周期（7200s→7199s）才重算 ✓；② at 型任务编辑弹窗打开→直接保存 → 通过 ✓（修复前必报时间格式错误）；③ 垃圾 deadline（如「明天」）→ `{ok:false}` 带明确文案，不再 500 ✓。
+
+**口径变更**：上方后端参数表「deadline / repeat / message 直接覆盖」自本改起应读作 **deadline 先过 `_parse_deadline` 容错解析**；「every_seconds → 新相位锚 at_origin=now」自 ④ 起应读作 **周期真变了才重置相位**。
+
+**部署（双实例分叉）**：9000（editable 安装）`/restart` 即生效；20048（在线版 0.34.0）跑的是自己的 site-packages 实体，修复需补丁分发或 pip 升级后再 `/restart`——同款部署形态判别见 [运维排障](../guides/ops.md)。
+
+**关联**：[同名覆盖摘旧](#同名覆盖摘旧重复投递根因修复2026-09-18commit-8ed09c6pre_post-实锤)（add 换 id vs reschedule 保 id 的对照语义不变）· [组合模式相位对齐](#组合模式every_seconds--at--at-相位起步之后每-n-秒循环2026-09-18commit-9a88107用户提案)（④ 保护的正是 at_origin 相位锚）· [Stop 恒报缺参后记](#后记stop-恒报缺少agentname--svcsched-六端点统一-or-agent-兜底2026-10-0820048-实锤commit-2ecc6f4)（sched_upd 同族端点的上一轮修复）。
+
 ## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
 
 **背景**：后台进程只有「服务」没有「任务」——run_python / run_shell 超时自动转后台的一次性任务（`_bg_tasks` 登记）此前只能靠返回文案里的 bg_id 单独查；且 **check_bg_task 自 v0.17.1 起只有提示文本承诺它、工具本体从未注册**（空头支票：模型按 docstring 调它 → 未知工具报错）。本次两件事一起补齐（src/background_tools.py，commit e72c0e1）。

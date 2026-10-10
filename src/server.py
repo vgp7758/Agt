@@ -598,7 +598,8 @@ async def api_tools():
             group = groups_map.get(name) or _infer_tool_group(name)
             display = name
         out.append({"name": name, "display": display, "group": group,
-                    "description": s.get("description", ""), "params": params, "outputs": outputs})
+                    "description": s.get("description", ""), "params": params, "outputs": outputs,
+                    "required": s.get("parameters", {}).get("required", []) or []})
     return {"tools": out, "schema": True}   # schema=True 告诉前端带完整参数信息
 
 

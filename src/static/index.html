@@ -389,14 +389,15 @@
   .ans-tab.active { background:var(--me); color:#fff; border-color:var(--me); }
    /* 抽屉 push 布局（用户提案 2026-08-30）：抽屉打开时主区右移让位（聊天区往左挤），
       不再覆盖聊天区。竖屏（抽屉全屏覆盖模式）不挤。 */
-   body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
-   body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
-   body.drawer-push #toolForm, body.drawer-push #inputBar {
-     margin-right: 40%; transition: margin-right .25s ease; }
-   @media (orientation: portrait) {
-     body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
-      body.drawer-push #toolForm, body.drawer-push #inputBar { margin-right: 0; }
-    }
+    body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
+    body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
+    body.drawer-push #inputBar {
+      margin-right: 40%; transition: margin-right .25s ease; }
+    @media (orientation: portrait) {
+      body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
+       body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
+       body.drawer-push #inputBar { margin-right: 0; }
+     }
     /* 工具选择浮窗（工具表单模式——用户提案 2026-09-01：下拉框→按钮+工具箱，参照编辑器 nodePicker） */
     #toolPicker{width:460px;max-width:90vw;max-height:min(800px,85vh);overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;box-shadow:0 4px 24px #0003}
     #toolPicker .tpk-filter{width:100%;margin-bottom:6px;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:#fafbfc;box-sizing:border-box}
@@ -503,15 +504,13 @@
     <input type="file" id="fileInput" accept="image/*" multiple style="display:none" />
   </div>
 
-  <div id="toolForm" style="display:none;background:#fff;border-top:1px solid var(--line);padding:8px 12px;flex-wrap:wrap;align-items:center;gap:6px">
-    <div style="position:relative">
-      <button class="btn" id="toolPickerBtn" onclick="toggleToolPicker(event)" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🔧 选择工具…</button>
-      <div id="toolPicker" style="display:none;position:absolute;bottom:calc(100% + 6px);left:0;z-index:80"></div>
+  <!-- 工具调用两级弹窗（2026-10-10 用户提案：表单不再顶替消息输入框）——①工具箱浮窗 ②schema 动态表单 -->
+  <div id="toolPickModal" style="display:none;position:fixed;inset:0;z-index:220;background:rgba(0,0,0,.35)" onclick="if(event.target===this)closeToolPick()">
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">
+      <div id="toolPicker" style="position:static;display:block"></div>
     </div>
-    <span id="toolParams" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"></span>
-    <button class="btn primary" id="toolSend" onclick="sendToolCall()">发送</button>
-    <button class="btn" id="toolClose" onclick="exitToolForm()" style="font-size:16px;padding:4px 10px" title="返回普通输入">✕</button>
   </div>
+  <div id="toolCallModal" style="display:none;position:fixed;inset:0;z-index:221;background:rgba(0,0,0,.35)" onclick="if(event.target===this)closeToolCallForm()"></div>
   <div id="inputBar">
     <textarea id="inp" placeholder="输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片"></textarea>
     <button id="sendBtn">发送</button>
@@ -1826,46 +1825,49 @@ function openTerminal(btn){
   btn.disabled = true; btn.textContent = '✓ 已打开';
   setTimeout(function(){ btn.disabled = false; btn.textContent = '💻 终端执行'; }, 2000);
 }
-// ===== 工具调用表单模式 =====
-let _toolList = [];   // [{name, display, group, params, description}]
-let _toolFormMode = false;
+// ===== 工具调用：两级弹窗模式（2026-10-10 用户提案——表单不再顶替消息输入框：
+//      点🔧 → ①工具箱弹窗（搜索+分组卡片）→ 选工具关①开② schema 动态表单弹窗
+//      （工具描述全文 + 参数控件 + description 小字占位）→ 执行发送 /call）=====
+let _toolList = [];   // [{name, display, group, params, description, required}]
 async function loadToolListForForm(){
   try{ const r = await fetch('/api/tools'); const d = await r.json(); _toolList = d.tools||[]; }catch(e){}
 }
-let _pickedTool = "";   // 工具箱选中的工具名（下拉框退役——按钮+浮窗模式，用户提案 2026-09-01）
-function toggleToolPicker(ev){
-  ev.stopPropagation();
-  const p = document.getElementById('toolPicker');
-  const open = p.style.display === 'none';
-  p.style.display = open ? 'block' : 'none';
-  if(open){ renderToolPicker(); const f = document.getElementById('tpkFilter'); if(f) f.focus(); }
+let _pickedTool = "";   // 当前弹窗选中的工具名
+async function openToolPick(){
+  if(!_toolList.length) await loadToolListForForm();
+  document.getElementById('toolPickModal').style.display = 'block';
+  renderToolPicker();
+  setTimeout(()=>{ const f = document.getElementById('tpkFilter'); if(f) f.focus(); }, 0);
+}
+function closeToolPick(){
+  document.getElementById('toolPickModal').style.display = 'none';
 }
 function renderToolPicker(){
-  // 工具箱浮窗（参照编辑器 nodePicker）：搜索过滤（名/显示名/描述）+ 分组 + 卡片带描述。
-  // 输入框与列表分离（2026-09-01 修复：整块 innerHTML 重建会吃掉输入框的值和焦点——
-  // 每敲一个字符框就被清空，"输入不了字符"的根因）：首次建结构，后续只更新列表区。
+  // 工具箱弹窗内容（搜索过滤：名/显示名/描述 + 分组 + 卡片带描述）。
+  // 输入框与列表分离（2026-09-01 修复：整块 innerHTML 重建会吃掉输入框的值和焦点）：首次建结构，后续只更新列表区。
   const box = document.getElementById('toolPicker');
+  if(!box) return;
   let fv = document.getElementById('tpkFilter');
   if(!fv){
-    box.innerHTML = `<input id="tpkFilter" class="tpk-filter" placeholder="🔍 搜索工具名/描述…" oninput="renderToolPicker()" onclick="event.stopPropagation()"><div id="tpkList"></div>`;
+    box.innerHTML = `<input id="tpkFilter" class="tpk-filter" placeholder="🔍 搜索工具名/描述…" oninput="renderToolPicker()"><div id="tpkList"></div>`;
     fv = document.getElementById('tpkFilter');
   }
   const q = ((fv && fv.value) || '').toLowerCase();
   const groups = {};
   _toolList.filter(t => !q || t.name.toLowerCase().includes(q)
-    || (t.display||'').toLowerCase().includes(q) || (t.desc||'').toLowerCase().includes(q))
+    || (t.display||'').toLowerCase().includes(q) || (t.description||'').toLowerCase().includes(q))
     .forEach(t => { (groups[t.group||'其它'] = groups[t.group||'其它'] || []).push(t); });
+  // 工具名宽度估算（分组内自适应——短名组窄卡多列、长名组（如 __mcp__ 前缀）宽卡不截断）
   let h = '';
-  // 工具名宽度估算（分组内自适应——用户提案 2026-09-01：每组卡片宽度按该组最长名单独算，
-  // 短名组窄卡多列、长名组（如 __mcp__ 前缀）宽卡不截断）
   const estW = s => { let w = 0; for(const ch of String(s||'')) w += ch.charCodeAt(0) > 0x2E80 ? 13 : 7.5; return w; };
   for(const [g, tools] of Object.entries(groups)){
     const mw = Math.round(Math.max(110, Math.min(280, Math.max(...tools.map(t => estW(t.display||t.name))) + 34)));
     h += `<div class="tpk-group">${esc(g)}</div><div class="tpk-row" style="--tpk-min:${mw}px">`;
     tools.forEach(t => {
+      const d = String(t.description||'').replace(/\s+/g,' ').slice(0, 110);   // 后端字段是 description（原 t.desc 悬空修复）
       h += `<div class="tpk-item" data-name="${esc(t.name)}" onclick="pickTool(this.dataset.name)">` +
            `<div class="tpk-name">${esc(t.display||t.name)}</div>` +
-           (t.desc ? `<div class="tpk-desc">${esc(t.desc)}</div>` : '') + `</div>`;
+           (d ? `<div class="tpk-desc">${esc(d)}</div>` : '') + `</div>`;
     });
     h += '</div>';
   }
@@ -1874,51 +1876,58 @@ function renderToolPicker(){
 }
 function pickTool(name){
   _pickedTool = name;
-  const t = _toolList.find(x => x.name === name);
-  document.getElementById('toolPickerBtn').textContent = '🔧 ' + ((t && (t.display||t.name)) || name);
-  document.getElementById('toolPicker').style.display = 'none';
-  renderToolParamsFor(t);
+  closeToolPick();
+  openToolCallForm(_toolList.find(x => x.name === name));
 }
-function renderToolParamsFor(t){
-  const box = document.getElementById('toolParams');
-  if(!t){ box.innerHTML = ''; return; }
-  // 参数控件：description 优先作 placeholder（用户提案——布局稍占位置不介意，信息优先）
-  let h = '';
+// ② schema 动态表单弹窗：工具描述全文 + 各参数控件（enum→下拉/boolean→勾选/数字→number）+
+//    description 小字占位（input 用 placeholder；select/checkbox 无处放 placeholder → 控件下方小字）
+function openToolCallForm(t){
+  const m = document.getElementById('toolCallModal');
+  if(!t){ m.style.display = 'none'; return; }
+  const req = new Set(t.required || []);
+  let ph = '';
   (t.params||[]).forEach(p => {
-    const nm = p.name; const tp = p.type || 'string';
-    const ph = esc(String(p.desc || nm));
-    if(tp === 'boolean'){
-      h += `<label style="font-size:12px" title="${ph}">${nm}: <input type="checkbox" id="tp_${nm}" style="width:auto"></label>`;
-    }else if(tp === 'integer' || tp === 'number'){
-      h += `<input id="tp_${nm}" type="number" placeholder="${ph}" title="${ph}" style="width:130px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
-    }else{
-      const w = nm === 'path' || nm === 'query' ? 260 : 190;
-      h += `<input id="tp_${nm}" type="text" placeholder="${ph}" title="${ph}" style="width:${w}px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
+    const nm = p.name; const tp = p.type || 'string'; const d = p.desc ? String(p.desc) : '';
+    const reqMark = req.has(nm) ? ' <span style="color:#e11">*</span>' : '';
+    ph += `<div style="margin-bottom:10px">` +
+      `<div style="font-size:12px;font-weight:600;margin-bottom:3px">${esc(nm)} <span style="color:#8a9099;font-weight:400">(${esc(tp)})</span>${reqMark}</div>`;
+    if(Array.isArray(p.enum) && p.enum.length){
+      ph += `<select id="tp_${esc(nm)}" title="${esc(d)}" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#fff">` +
+        (req.has(nm) ? '' : `<option value="">（不填）</option>`) +
+        p.enum.map(v => `<option value="${esc(String(v))}">${esc(String(v))}</option>`).join('') + `</select>` +
+        (d ? `<div style="font-size:11px;color:#8a9099;margin-top:2px">${esc(d)}</div>` : '');
+    } else if(tp === 'boolean'){
+      ph += `<label style="font-size:12px" title="${esc(d)}"><input type="checkbox" id="tp_${esc(nm)}" style="width:auto;margin-right:5px">${d ? esc(d) : '启用'}</label>`;
+    } else {
+      const inputTp = (tp === 'integer' || tp === 'number') ? 'number' : 'text';
+      ph += `<input id="tp_${esc(nm)}" type="${inputTp}" placeholder="${esc(d || nm)}" title="${esc(d)}" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">`;
     }
+    ph += `</div>`;
   });
-  if(!t.params || !t.params.length) h = '<span style="font-size:11px;color:#8a9099">（无参数）</span>';
-  box.innerHTML = h;
+  if(!t.params || !t.params.length) ph = '<div style="font-size:12px;color:#8a9099;margin:4px 0 10px">（无参数——直接点执行）</div>';
+  m.innerHTML = `<div style="background:#fff;border-radius:12px;padding:16px 18px;width:min(560px,92vw);max-height:88vh;overflow:auto;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">` +
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">` +
+      `<div style="font-weight:700;color:#7c3aed;font-size:14px">🔧 ${esc(t.display||t.name)}</div>` +
+      `<span style="font-size:11px;color:#8a9099;border:1px solid var(--line);border-radius:10px;padding:1px 8px">${esc(t.group||'')}</span>` +
+    `</div>` +
+    (t.description ? `<div style="font-size:12px;color:#555;white-space:pre-wrap;max-height:110px;overflow-y:auto;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px">${esc(String(t.description))}</div>` : '') +
+    ph +
+    `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">` +
+      `<button onclick="closeToolCallForm()" style="padding:5px 14px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer">取消</button>` +
+      `<button onclick="sendToolCall()" style="padding:5px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;cursor:pointer">执行</button>` +
+    `</div></div>`;
+  m.style.display = 'block';
+  const first = m.querySelector('input,select'); if(first) first.focus();
 }
-// 点浮窗外部关闭（工具箱模式）
-document.addEventListener('click', e => {
-  const p = document.getElementById('toolPicker');
-  if(p && p.style.display !== 'none' && !e.target.closest('#toolPicker,#toolPickerBtn')) p.style.display = 'none';
-});
-function exitToolForm(){
-  _toolFormMode = false;
-  document.getElementById('toolForm').style.display = 'none';
-  document.getElementById('inputBar').style.display = 'flex';
-  const btn = document.getElementById('btnToolCall');
-  btn.textContent = '🔧 工具';
-  btn.title = '工具调用表单：选工具→填参数→生成 /call 命令发送';
-  inp.focus();
+function closeToolCallForm(){
+  document.getElementById('toolCallModal').style.display = 'none';
 }
 function sendToolCall(){
-  if(!ws || ws.readyState !== 1){ toast('⚠️ WebSocket 未连接（页面刷新可重连）——消息发不出去'); return; }   // 防 null.send（WS 被反代协议挡断时的级联报错，2026-09-13 CNB 实测）
+  if(!ws || ws.readyState !== 1){ toast('⚠️ WebSocket 未连接（页面刷新可重连）——消息发不出去'); return; }   // 防 null.send（WS 被反代协议挡断时的级联报错）
   const toolName = _pickedTool;
   if(!toolName){ toast('⚠️ 请选择工具'); return; }
   const t = _toolList.find(x => x.name === toolName);
-  // 收集参数
+  // 收集参数（select：空=不填；boolean：勾选才送）
   const args = {};
   (t.params||[]).forEach(p => {
     const el = document.getElementById('tp_'+p.name);
@@ -1929,40 +1938,15 @@ function sendToolCall(){
     else if(tp === 'number' && v !== '') v = parseFloat(v);
     if(v !== '' && v !== false || (tp === 'boolean' && el.checked)) args[p.name] = v;
   });
-  // 构造 /call 命令
+  // 构造 /call 命令（和普通消息一样走 ws 发送）
   const argsStr = Object.keys(args).length ? JSON.stringify(args) : '';
   const cmd = `/call ${toolName}(${argsStr})`;
-  // 发送（和普通消息一样走 sendRaw）
   ws.send(JSON.stringify({text: cmd, images: []}));
-  addRow('sys', `🔧 已发送：${cmd.replace(/call /, 'call ')}`);
-  // 清空参数
-  (t.params||[]).forEach(p => { const el = document.getElementById('tp_'+p.name); if(el) el.value = el.type==='checkbox' ? false : ''; });
-  exitToolForm();   // 发送即退表单模式，恢复普通输入框（2026-09-04 用户提案：手动调用是低频动作，发完该回对话）
+  addRow('sys', `🔧 已发送：${cmd}`);
+  closeToolCallForm();   // 执行即关弹窗回对话（输入框从未被顶替）
 }
-document.getElementById('btnToolCall').onclick = async ()=>{
-  _toolFormMode = !_toolFormMode;
-  const form = document.getElementById('toolForm');
-  const bar = document.getElementById('inputBar');
-  const btn = document.getElementById('btnToolCall');
-  if(_toolFormMode){
-    if(!_toolList.length) await loadToolListForForm();
-    // 按钮复位（工具箱模式——选中态清空，等用户从浮窗挑选）
-    _pickedTool = '';
-    const pkBtn = document.getElementById('toolPickerBtn');
-    if(pkBtn) pkBtn.textContent = '🔧 选择工具…';
-    renderToolParamsFor(null);
-    form.style.display = 'flex';
-    bar.style.display = 'none';
-    btn.textContent = '💬 普通';
-    btn.title = '切回普通输入框';
-  } else {
-    form.style.display = 'none';
-    bar.style.display = 'flex';
-    btn.textContent = '🔧 工具';
-    btn.title = '工具调用表单：选工具→填参数→生成 /call 命令发送';
-    inp.focus();
-  }
-};
+document.getElementById('btnToolCall').onclick = openToolPick;
+document.getElementById('btnToolCall').title = '手动工具调用：选工具→填参数→生成 /call 命令发送';
 document.getElementById('btnClear').onclick=()=>{ msgArea.innerHTML=''; curTurn=null; };
 document.getElementById('btnStop').onclick=()=>{ ws.send(JSON.stringify({action:'stop'})); };
 document.getElementById('sessionSel').addEventListener('change',e=>{

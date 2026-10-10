@@ -231,4 +231,31 @@ def make_tool_log_tools(agent) -> list:
             lines.append(f"  {e['call_id']} · {e['name']} · 结果{len(e.get('result', ''))}字 · step={e.get('step')}")
         return "\n".join(lines)
 
-    return [Tool(get_tool_detail), Tool(list_tool_logs)]
+    def call_again(call_id: str) -> str:
+        """重复执行某次历史工具调用：同一工具、同一组参数原样重跑（用户提案 2026-10-11）。
+        适用：再跑一次刚才的检索/查询拿最新结果、重试时好时坏的外部调用、以相同输入验证修复效果。
+        call_id 见历史工具结果旁的 id 标注（如 a-1024）或你自己刚发起的调用；不确定时先 list_tool_logs。
+        本次结果作为 call_again 自己的返回与记录（get_tool_detail 可查）；走标准执行管线（审批/截断照常）。
+        注：远程执行的旧调用重跑为本地（remote_instance_id 不在存档参数里，需要远程请直接调原工具）。"""
+        tl = _toollog()
+        e = tl.get(call_id) if tl else None
+        if not e:
+            return f"[无此 id] {call_id}（笔误或不在详情库；list_tool_logs 查清单）"
+        name = str(e.get("name") or "")
+        args = dict(e.get("arguments") or {})
+        if not name:
+            return f"[记录缺损] {call_id} 无工具名"
+        if name == "call_again":
+            return "[不支持] 重复 call_again 自身——请用原工具的 call_id"
+        if not hasattr(agent, "_exec_tool"):
+            return "[不可用] 执行入口未就绪"
+        try:
+            result = agent._exec_tool(name, args)
+            return f"[重跑 {call_id} → {name}（参数与原次一致）]\n{result}"
+        except Exception as ex:
+            return f"[重跑失败] {call_id} → {name}：{type(ex).__name__}: {ex}"
+
+    return [Tool(get_tool_detail), Tool(list_tool_logs),
+            Tool(call_again, param_descriptions={
+                "call_id": "要重跑的历史调用 id（如 a-1024）——见历史工具结果旁的 id 标注或你自己刚发起的调用；不确定时先 list_tool_logs",
+            })]

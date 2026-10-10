@@ -50,9 +50,40 @@
 |---|---|
 | `Session._steps_to_messages` | 投影按 call_id 召回工具结果 + 距离衰减摘要 |
 | `get_tool_detail` / `agent_query_tool_detail` | Agent 自查某次调用的完整入参/结果 |
+| `call_again` | 按 id 取原次 `{name, arguments}` 同参重跑（见下节） |
 | [recall_turn](recall-tools.md) | 历史轮召回 |
 | 折叠摘要 / 超深档投影 | [上下文引擎](../architecture/context-engine.md) |
 | `search()` | 关键字初筛（无 LLM 的 Agentic RAG 第一阶段） |
+
+## call_again · 同参重跑历史工具调用（2026-10-11，用户提案，commit 8a9cc8f）
+
+**用户提案（2026-10-11）**：「加一个工具 call_again，agent 想以同一组参数重复某一次工具调用，直接 call_again(call_id) 就可以了，不过 llm 知道每一次工具调用的 call_id 吗？」
+
+## LLM 如何拿到 call_id（提案疑问的答案：三渠道天然就位）
+
+| 渠道 | 说明 |
+|---|---|
+| tool_use 回传 id | OpenAI 协议原生：模型发起 tool_call 时引擎分配 id 并在 assistant 消息回传——模型上下文里**每次调用都带着自己的 id**（它「刚做过」的调用 id 可见） |
+| 衰减摘要末尾标注 | 历史工具结果按步距衰减后被截断的，末尾标注 id（如 `a-1024`）——SYSTEM 里 get_tool_detail 说明就写着「需要完整内容时按 id 拉取」 |
+| `list_tool_logs` 兜底 | 不确定 id 时列清单（id · 工具名 · 结果字数 · 步号） |
+
+## 机制（src/toollog.py `call_again`）
+
+```
+call_again(call_id)   # 如 call_again("a-1024")
+```
+
+- 查共享 toollog 取原次 `{name, arguments}` → `agent._exec_tool(name, args)` **标准管线重跑**（审批 / 结果截断照常）→ 返回 `[重跑 a-1024 → <工具名>（参数与原次一致）]` + 结果
+- **本次结果作为 call_again 自己的返回与记录**（`get_tool_detail` 可查）——重跑不额外落一条被重跑工具的记录
+- **适用场景**（写进工具描述，模型自行判断）：再跑一次检索/查询拿最新结果、重试时好时坏的外部调用、以相同输入验证修复效果
+
+**四类兜底**（全部返回文案、不炸轮）：无此 id（提示先 `list_tool_logs` 查清单）/ 记录缺损（无工具名）/ **套娃拒绝**（重跑 call_again 自身——请用原工具的 call_id）/ 执行入口未就绪；重跑异常包成 `[重跑失败] <类型>: <信息>`。
+
+**已知边界**：远程执行的旧调用重跑为**本地**——`remote_instance_id` 是路由元数据、不进存档参数；需要远程请直接调原工具（描述里已注明）。
+
+**验证**（单测四场景全绿，commit 8a9cc8f）：① 正常重跑——参数原样透传 `_exec_tool`（`{"path":"src/x.py","line_numbers":true}` 一字不差）；② 无此 id → 明确文案；③ 套娃拒绝；④ 记录缺损兜底。注册处带 `param_descriptions`（call_id 的指引与工具描述同款）。
+
+**关联**：call_id 形态与衰减机制见本页上文；与 [工具外置](tool-externalization.md) 无关——toollog 是「引擎写、工具读」的可观测性出口，call_again 属引擎内置工具。
 
 ## 与 rewind / merge 的关系
 

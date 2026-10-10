@@ -156,7 +156,9 @@ def probe_server(url: str) -> dict | None:
     ok, st = _http_json(f"{url}/api/status", None, PROBE_TIMEOUT)
     if not ok or not isinstance(st, dict) or not st.get("ready"):
         return None
-    return {"url": url, "status": "online",
+    # url 以归一形态存表（2026-10-11）：localhost → 127.0.0.1——remote_list 显示直观，
+    # 且任何后续直接用 it['url'] 拼请求的代码（team_tools 等）自动避开 IPv6 ::1 陷阱
+    return {"url": _norm_loopback(url), "status": "online",
             "tools_count": st.get("tools_count") or 0,
             "session_name": st.get("session_name") or "",
             "model": st.get("model") or "",

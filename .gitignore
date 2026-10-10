@@ -38,6 +38,7 @@ resume/
 
 # === 设计草稿 / 临时验证（不入版本） ===
 design/
+docs/branch_files/
 # wiki 维护攒批队列（运行时状态，勿提交）
 .agent/wiki_queue/
 .agent/remote_servers.json

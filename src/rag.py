@@ -26,12 +26,17 @@ from pathlib import Path
 
 
 def _hf_local_offline():
-    """本地模型强制离线加载：HF 库（sentence-transformers/transformers）即使给本地路径，
-    默认仍联网探测 huggingface.co 检查组件更新——国内网络对该域名是 DNS 黑洞，请求
-    无限挂起（不是快速失败），装配卡死几十分钟，/restart 看门狗 90s 等不到就绪的根因。
-    本地路径加载不需要网，设环境变量让 HF 跳过探测；setdefault 不覆盖用户显式配置。"""
+    """本地模型加载前的环境隔离（三层，全部 setdefault 不覆盖用户显式配置）：
+    ① HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE：HF 库即使给本地路径仍联网探测 huggingface.co
+       检查更新——国内网络对该域名是 DNS 黑洞，请求无限挂起（不是快速失败），装配卡死几十分钟，
+       /restart 看门狗 90s 等不到就绪的根因（2026-09 实锤）。本地路径加载不需要网。
+    ② USE_TORCH=1（2026-10-10 冻结修复）：transformers 默认 USE_TF=AUTO → 探测并连带 import
+       tensorflow（oneDNN/tf_keras 原生初始化：GIL 长持 + TF 原生线程池）。实测与页面加载并发时
+       整个进程被冻死（py-spy 实锤：无名原生线程 active+gil 永持，所有 Python 线程饿死）。
+       本链只走 torch 后端 → 钉 USE_TORCH=1 跳过 TF 探测：导入 20.5s→12.2s，tensorflow 完全不加载。"""
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("USE_TORCH", "1")
 
 
 class _CachedEmbedder:
@@ -329,12 +334,37 @@ def ensure_rag(workspace=None, force=False) -> "LocalRAG | None":
         return inst
 
 
-def preload_async(workspace=None):
-    """后台预热（外置件 agt_register / build_agent 启动时调）：模型加载秒级~十秒级，
-    不阻塞启动/装配线程。幂等（ensure 内部锁 + attempted 标志）；配置缺失时快速结束。"""
+_warmup_started = False   # 单飞标志：多调用点（外置件注册×N、build_agent）各自起线程
+                          # → 同进程 3 个 rag-preload（修前实锤）——锁内虽串行，无谓线程 + 难排障
+
+
+def preload_async(workspace=None, delay=None):
+    """后台预热（外置件 agt_register / build_agent 启动时调）：
+    - 单飞：本进程只起一条预热线程（重复调用直接返回）。
+    - delay：延迟启动（秒，默认 15）：让服务先就绪、页面先加载完——避开冷启动最敏感的窗口
+      （rag.json "warmup_delay" 可调，0=立即）。
+    - 配置缺失/未启用时快速结束；完成时打一行耗时（下次再冻可一眼定位在哪个阶段）。"""
+    global _warmup_started
+    if _warmup_started:
+        return
+    _warmup_started = True
+    if delay is None:
+        try:
+            from config import load_rag_config
+            delay = float(load_rag_config(Path(workspace) if workspace else Path.cwd()).get("warmup_delay", 15))
+        except Exception:
+            delay = 15
+
     def _go():
         try:
-            ensure_rag(workspace)
+            if delay and delay > 0:
+                time.sleep(delay)
+            t0 = time.time()
+            inst = ensure_rag(workspace)
+            if inst is not None:
+                print(f"[rag] 预热完成（{time.time()-t0:.1f}s）：{inst.index.ntotal} 向量")
+            else:
+                print(f"[rag] 预热结束：未启用/配置缺失（{time.time()-t0:.1f}s）")
         except Exception as e:
             print(f"[rag] 预热失败：{e}")
     threading.Thread(target=_go, daemon=True, name="rag-preload").start()

@@ -50,6 +50,8 @@ def _build_embedder(cfg: dict):
         # local：必须有模型路径
         if not cfg.get("embed_model_path"):
             return None
+        from rag import _hf_local_offline   # 同款环境隔离（USE_TORCH=1 跳过 TF 探测——本链独立装配时
+        _hf_local_offline()                 # 也可能撞 transformers 的 TF 连带 import，见 rag.py 2026-10-10 注释）
         from sentence_transformers import SentenceTransformer
         return SentenceTransformer(cfg["embed_model_path"])
     except Exception:

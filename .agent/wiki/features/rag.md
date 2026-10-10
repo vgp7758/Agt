@@ -69,6 +69,10 @@ rag_query / cosine_sim / emb_probe 被调用时
 
 排障速查另见[运维排障](../guides/ops.md)。
 
+## 随 v0.34.4 发布（2026-10-10）
+
+TF 冻结修复（`ac753c0`）随 **v0.34.4** 打包上线（发布提交 `77c5536`）——pip 在线版（20048 等）`pip install -U agt-agent` ≥ 0.34.4 同样根治首启冻死；editable 实例 `/restart` 即生效。发布记录见 [v0.34.4](../releases/v0.34.4.md)。
+
 ## 共享 embedder（修双份内存旧疾）
 
 `src/session_vec.py` `_build_embedder` 优先 `rag.get_rag().embedder`：

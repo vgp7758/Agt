@@ -80,3 +80,7 @@
 
 - **系统气泡相同提示合并计数（2026-10-10，用户提案，commit `3b378ac`）**：用户提案「同一轮下相同的提示信息合并为一条加计数」——tail ambient / 钩子注入每步重复的同一段提示此前每步落一个紫色系统气泡，同轮内刷屏。修法：`addRow('sys', text)` 入口判 `msgArea` 末行是 `.sys` 且 `_sig===text` → 计数 +1 更新 `×N` 徽标，否则新开一条（**只合并相邻**，中间隔开则各一条；不相邻即不合并）；**徽标挂 row 级**（bubble 的兄弟）——系统气泡 innerHTML 会被折叠/展开/markdown 重写反复刷，挂 row 级才不被冲掉（同「控件挂不被重写的祖先」范式）。playwright 真页面实测：连调 5 次只落 3 行 ✓。**纯前端，Ctrl+F5 即生效**。详见 [气泡交互 · 同轮相同系统提示合并计数](features/bubble-interaction.md#同轮相同系统提示合并计数n-徽标2026-10-10用户提案commit-3b378ac)
 
+## 快速事实增补（2026-10-10 · v0.34.4 发布：steps 分档模式 + RAG 首启冻结修复打包上线）
+
+- **v0.34.4 发布（2026-10-10，发布提交 `77c5536`，whl + sdist 双文件就位）**：0.34.3 → 0.34.4 patch。主打 **steps 分档模式**（settings `"tiering_mode": "steps"` 显式开启，**默认空 = 现行算法不受影响**）——轮间分档改按步数的确定性阶梯（五档 500/600/1200/2400/4800 可配，档位边界由步数守恒唯一决定、与 token 估算无关，1500 轮对拍增量≡重算）；三笔演进：本体 `ed6ab2d` → 顶窗三级级联 `08b4758`（fc→sos → 工具折叠档→fc → 档2/3/4→工具折叠档，每级下压一格）→ fc→sos 三段并行 `5d3f3df`（0.46s vs 串行 1.2s，失败前缀落账 + 每段实例级回退链）。同批 **RAG 首启冻结修复** `ac753c0`（USE_TORCH=1 阻断 transformers TF 连带 import + 预热单飞/延迟 15s，fresh 实例页面加载冻死根治、对照实测秒开）。镜像同步滞后 10~30 分钟，急用加 `-i https://pypi.org/simple`。详见 [v0.34.4 发布记录](releases/v0.34.4.md)、[context-engine · steps 分档模式](architecture/context-engine.md)、[rag](features/rag.md)
+

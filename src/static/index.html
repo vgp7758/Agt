@@ -2908,7 +2908,7 @@ function schedModal(name){
   const scheds = (window._dashSchedules||[]);
   const s = name ? scheds.find(x=>x.name===name) : null;
   const iv = s && s.kind==='interval' ? s.interval_secs : '';
-  const at = s && s.fire_at ? s.fire_at : '';
+  const at = s && s.fire_at_iso ? s.fire_at_iso : '';
   const msg = s ? (s.message||'') : '';
   const rep = s ? !!s.repeat : true;
   const dl = s && s.deadline ? new Date(s.deadline*1000).toISOString().slice(0,16) : '';

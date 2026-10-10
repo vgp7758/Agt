@@ -489,6 +489,24 @@ class Scheduler:
         when = datetime.fromtimestamp(fire).strftime("%m-%d %H:%M:%S")
         return f"✅ 定时任务「{name}」已加：首次 {when}（每 {seconds:g}s {'循环' if repeat else '单次'}，相位 {s}）"
 
+    @staticmethod
+    def _parse_deadline(v):
+        """deadline 容错解析（2026-10-10 修：编辑弹窗送来 ISO 字符串，float() 直接炸 500）：
+        数字时间戳 / ISO 字符串 / 空串 → float 时间戳；0=不限。解析失败抛 ValueError。"""
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+        sv = str(v if v is not None else "").strip().replace("Z", "+00:00")
+        if not sv:
+            return 0.0
+        try:
+            return float(sv)
+        except ValueError:
+            pass
+        try:
+            return datetime.fromisoformat(sv).timestamp()
+        except Exception:
+            raise ValueError(f"deadline 无法解析: {v!r}（填数字时间戳或 ISO 时间）")
+
     def reschedule(self, name, every_seconds=None, at=None, deadline=None,
                    repeat=None, message=None) -> str:
         """部分更新已存在的定时任务（用户提案 2026-10-07：抽屉可改下次触发/every_seconds/
@@ -501,10 +519,12 @@ class Scheduler:
                 sec = float(every_seconds)
                 if sec <= 0:
                     return "[every_seconds 必须 > 0]"
-                s.spec = sec
-                s.kind = "interval"
-                s.at_origin = datetime.now().isoformat(timespec="seconds")   # 新相位锚
-                s.next_fire = self._phase_next(s.at_origin, sec)
+                # 周期未变时不重置相位（修：只改消息/截止等也把 next_fire 拍到 now+sec，触发时刻静默漂移）
+                if s.kind != "interval" or s.spec != sec:
+                    s.spec = sec
+                    s.kind = "interval"
+                    s.at_origin = datetime.now().isoformat(timespec="seconds")   # 新相位锚
+                    s.next_fire = self._phase_next(s.at_origin, sec)
             if at is not None and str(at).strip():
                 s.at_origin = str(at).strip()
                 if s.kind == "interval" and s.spec > 0:
@@ -517,7 +537,10 @@ class Scheduler:
                     except Exception as e:
                         return f"[时间格式错误] {e}"
             if deadline is not None:
-                s.deadline = float(deadline or 0)
+                try:
+                    s.deadline = self._parse_deadline(deadline)
+                except ValueError as e:
+                    return f"[{e}]"
             if repeat is not None:
                 s.repeat = bool(repeat)
             if message is not None:
@@ -688,6 +711,7 @@ class Scheduler:
                 item["daily"] = s.daily                 # 每日闹钟 HH:MM[:SS]
             else:
                 item["fire_at"] = datetime.fromtimestamp(s.spec).strftime("%m-%d %H:%M:%S")
+                item["fire_at_iso"] = datetime.fromtimestamp(s.spec).isoformat(timespec="seconds")  # 编辑弹窗回填用（fire_at 是 %m-%d 展示格式，回填后保存必炸时间格式）
             out.append(item)
         return out
 

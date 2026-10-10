@@ -1891,7 +1891,11 @@ async def api_sched_upd(body: dict):
             kw[k] = body[k]
     if body.get("repeat") is not None:
         kw["repeat"] = bool(body["repeat"])
-    msg = ag.scheduler.reschedule(name, **kw)
+    msg = ""
+    try:
+        msg = ag.scheduler.reschedule(name, **kw)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     return {"ok": msg.startswith("✅"), "text": msg}
 
 
@@ -1906,7 +1910,10 @@ async def api_sched_add(body: dict):
         return {"ok": False, "error": "缺少 name"}
     at = str(body.get("at") or "").strip()
     msg_text = str(body.get("message") or "")
-    deadline = float(body.get("deadline") or 0)
+    try:
+        deadline = ag.scheduler._parse_deadline(body.get("deadline")) or 0
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     repeat = bool(body.get("repeat", True))
     if at:
         msg = ag.scheduler.add_interval_at(name, float(body.get("every_seconds") or 60), at,

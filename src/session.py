@@ -1372,7 +1372,11 @@ class Session:
             content = self._project_imgs(content)
             snap = (step.file_snapshots or {}).get(tc.call_id)
             if isinstance(snap, dict) and snap.get("path"):
-                content += self._rf_inline_block(snap)
+                _rf_blk = self._rf_inline_block(snap)
+                if isinstance(content, list):   # _project_imgs 转数组（工具结果带图）——append text 块
+                    content.append({"type": "text", "text": _rf_blk})
+                else:
+                    content += _rf_blk
             msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 
@@ -2317,13 +2321,35 @@ class Session:
             else:
                 _apply_reminder_bucket(tail_merge_text, tail_stat_text)
 
-        # —— image_feed 通道（2026-10-06·用户提案：实时画面装配段）——
-        # tail_images 的 data URL 组装成 image_url 块：末条 user → content 数组化追加；
-        # 末条 assistant → 独立 user 消息承载（部分端点不允许 assistant 挂图）。
+        # —— image_feed 通道（2026-10-06·用户提案：实时画面装配段；2026-10-11 挂载点迁移）——
+        # tail_images 的 data URL 组装成 image_url 块。挂载优先级（用户裁定 2026-10-11）：
+        #   ① 最后一条 tool result（画面与该次调用结果/reminder 同条 content 数组——
+        #      叙事“调用了X → 结果+当前画面”；实测 glm/deepseek 的 tool content 数组带图真实可看）
+        #   ② 末条 user → content 数组化追加（无 tool result 的纯文本步）
+        #   ③ 独立 user 消息承载（末条 assistant——部分端点不允许 assistant 挂图）。
         # 瞬态语义：组装层注入（不落 events.jsonl/step 存档）；每步求值 = 每步最新帧。
         if tail_images:
             _feed_note = f"[image_feed · 实时画面 · {time.strftime('%H:%M:%S')}]"
-            if msgs and msgs[-1].get("role") == "user":
+            _ti = None
+            for _k in range(len(msgs) - 1, -1, -1):
+                if msgs[_k].get("role") == "tool":
+                    _ti = _k
+                    break
+            if _ti is not None:
+                _t2 = {**msgs[_ti]}   # 浅拷贝——tool result 可能来自冻结渲染缓存，绝不就地改共享引用
+                _c = _t2.get("content")
+                if isinstance(_c, str):
+                    _blocks = [{"type": "text", "text": _c}] if _c else []
+                elif isinstance(_c, list):
+                    _blocks = list(_c)
+                else:
+                    _blocks = []
+                _t2["content"] = _blocks + [{"type": "text", "text": _feed_note}] \
+                                       + [{"type": "image_url", "image_url": {"url": u}} for u in tail_images]
+                msgs[_ti] = _t2
+                _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
+                     "并入末条 tool result（瞬态·不落档）", msgs_n=0)
+            elif msgs and msgs[-1].get("role") == "user":
                 _last = msgs[-1]
                 _m2 = {**_last}   # 浅拷贝——绝不就地改共享引用
                 _c = _m2.get("content")
@@ -3512,7 +3538,11 @@ class Session:
                 if constr:
                     snap = (step.file_snapshots or {}).get(tc.call_id)
                     if isinstance(snap, dict) and snap.get("path"):
-                        content += self._rf_inline_block(snap)
+                        _rf_blk = self._rf_inline_block(snap)
+                        if isinstance(content, list):   # _project_imgs 转数组（工具结果带图）——append text 块
+                            content.append({"type": "text", "text": _rf_blk})
+                        else:
+                            content += _rf_blk
                 msgs.append({"role": "tool", "tool_call_id": tc.call_id or str(i), "content": content})
         return msgs
 

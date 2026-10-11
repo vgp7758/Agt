@@ -70,6 +70,8 @@ r = self.tools.call(name, arguments)              # 本地路径同样 prepend �
 ③ 不存在文件 → 原值透传 + ⚠️ 附注 ✓              ⑥ _exec_tool 集成：tools.call 收到展开后全文、返回带 📎 头 ✓
 ```
 
+**发布**：随 v0.34.5 发布（2026-10-11，release commit `a2cddd1`）——与 call_again（[toollog](toollog.md)）、trace 内部滚动（[trace-fold](trace-fold.md)）同批进版。
+
 ## 施工插曲
 
 模块级函数首版插错定点——落进了 `Agent` 类体中间，把类拦腰截断（后续所有方法脱离类作用域）。当轮发现后整段摘出、验证类恢复完整，再重新落位到 `class Agent:` 之前的模块级位置（现行 L227-263）。教训：往大文件插模块级代码，定点锚要用**类定义边界**而不是方法行号。

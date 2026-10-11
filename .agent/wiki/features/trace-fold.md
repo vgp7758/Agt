@@ -234,11 +234,13 @@ details.trace > div { max-height: 80vh; overflow-y: auto; }
 - **summary 常驻顶部**：限高打在 `details.trace > div`（内容区，summary 的兄弟节点）上，折叠标题钉在框顶随时可点
 - **滚到头交还滚轮**（当日裁定，见下）：滚轮滚到内部顶/底后自然穿透继续滚页面主区
 
-### 后记：overscroll-behavior: contain 是反的——当日撤销（2026-10-11，commit 543ac76）
+### 后记：overscroll-behavior: contain 是反的——当日撤销（2026-10-11，commit 543ac76 → b72437c）
 
-初版实现顺手加了 `overscroll-behavior: contain`（意图「滚动不穿透页面」），恰好与提案诉求相反：`contain` 会在滚到内部边界时**拦断滚动链**，滚轮被「卡死」在过程区里——到顶/到底后继续滚页面必须把光标挪出框外。去掉后回到默认 `auto`：滚动链正常传播，「滚到头交还滚轮给页面」本来就是浏览器默认行为，无需声明。
+初版实现（commit `543ac76`）顺手加了 `overscroll-behavior: contain`（意图「滚动不穿透页面」），恰好与提案诉求相反：`contain` 会在滚到内部边界时**拦断滚动链**，滚轮被「卡死」在过程区里——到顶/到底后继续滚页面必须把光标挪出框外。撤销（commit `b72437c`）：去掉声明回到默认 `auto`——滚动链正常传播，「滚到头交还滚轮给页面」本来就是浏览器默认行为，无需声明。
 
-最终形态（commit `543ac76`）：`{ max-height: 80vh; overflow-y: auto; }`——不含任何 overscroll-behavior。
+最终形态（commit `b72437c`）：`{ max-height: 80vh; overflow-y: auto; }`——不含任何 overscroll-behavior。
+
+**发布**：随 v0.34.5 发布（2026-10-11，release commit `a2cddd1`）。
 
 **生效**：纯前端 CSS，Ctrl+F5 强刷即生效；实时渲染与历史读档共用 `details.trace` 结构，一起生效。
 

@@ -55,7 +55,7 @@
 | 折叠摘要 / 超深档投影 | [上下文引擎](../architecture/context-engine.md) |
 | `search()` | 关键字初筛（无 LLM 的 Agentic RAG 第一阶段） |
 
-## call_again · 同参重跑历史工具调用（2026-10-11，用户提案，commit 8a9cc8f）
+## call_again · 同参重跑历史工具调用（2026-10-11，用户提案，commit 8a9cc8f，随 v0.34.5 发布）
 
 **用户提案（2026-10-11）**：「加一个工具 call_again，agent 想以同一组参数重复某一次工具调用，直接 call_again(call_id) 就可以了，不过 llm 知道每一次工具调用的 call_id 吗？」
 

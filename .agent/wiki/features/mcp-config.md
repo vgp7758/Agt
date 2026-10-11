@@ -109,6 +109,45 @@ Thread-8 (worker)：_exec_tool → tools.call → call_tool_sync → future.resu
 
 **生效注意**：修复已同步 site-packages，但 50052 是修复**后**重拉、跑的还是旧代码——**下次重启**才带上该防御（与 [「磁盘改了但页面不生效」](../guides/ops.md) 同族：pip 实例跑的是 site-packages 实体）。排障全记录见 [ops · 实例假死](../guides/ops.md)。
 
+## agt mcp CLI 子命令：add / list / get / remove——无需手编 mcp.json（2026-10-11，用户提案，Claude Code 风格对齐）
+
+用户问「有类似 Claude Code 的 `claude mcp add` 的命令吗，之前有吗」——确认**此前没有**，随即实现（用户「加吧」）。CLI 是 [WebUI 弹窗](#webui-弹窗支持-http-型-mcp传输类型下拉2026-09-26用户实锤commit-c06e7a1随-v0302) 之外的第三条 MCP 配置通道：命令行快捷增删查，不必手编 JSON。
+
+**落点**：`src/mcp_client.py` 的 `run_mcp_cli`（新段，约 200 行）+ `src/chat.py` `main()` 入口第一行路由（`agt mcp ...` → `run_mcp_cli(sys.argv[2:])`）。
+
+### 四个子命令与语义
+
+| 命令 | 形态 | 语义 |
+|---|---|---|
+| `add` | `agt mcp add <name> <command> [args...]`（stdio）<br>`agt mcp add --transport sse <name> <url> --header Authorization=Bearer_x` | 默认 stdio；`--env K=V` = stdio 子进程环境变量；`--header K=V` = http/sse 鉴权头；`--scope project`（默认，写 `workspace/.mcp.json`）/ `--scope user`（写 `~/.agt/mcp.json`） |
+| `list` | `agt mcp list` | **两级配置合并视图**（标注来源 project/user）；同名时 **project 覆盖 user**——与 `connect_from_config` 连接顺序一致 |
+| `get` | `agt mcp get <name>` | 查看某 server 的配置 JSON |
+| `remove` | `agt mcp remove <name> [--scope project\|user]` | 从对应文件删除；二次删报未找到 → rc=1 |
+
+写侧为**合并写**：只动目标 server，现有 servers 不受影响。退出码约定：成功 0 / 业务失败（未找到等）1 / 缺参 2。
+
+### add 后真实连接验证一次（失败不回滚）
+
+add 成功后**真实连接一次**：✅ 打印发现的工具数与清单；❌ 打印失败原因但**配置不回滚**——配置已就位，agent 启动装配或 [/reload_mcp 全量重载](#全量重载reload_mcp-无参数--重读两级配置重建全部2026-09-18commit-c3554c9用户提案) 会再连。语义与 WebUI 弹窗一致：连接失败 ≠ 配置错误，server 未就绪时先放着。
+
+### 语义澄清：SSE 场景的 `--env` vs `--header`
+
+用户原话「`agt mcp add --transport sse test http://xxx --env sk-xxxxx`」——SSE/HTTP 的鉴权在引擎语义里对应 **`--header`**（`Authorization: Bearer ...` 走 headers）；`--env` 是 stdio 子进程的进程环境变量。两种都实现，SSE 用 `--header`。
+
+### 调试插曲（三连）
+
+1. **list 同名优先级初版写反**——先写成了「user 覆盖 project」，与连接顺序（project 覆盖 user）矛盾；修正为 project 优先、同名 user 让位。
+2. **参数解析循环重写**——初版索引推进错位，`--env sk-xxx` 的值被误当位置参数（报「缺 name / commandOrUrl」）；插桩定位后重写为完整索引、flag+值成对推进（`--transport/--scope` 消费 1 值，`--env/--header` 消费 `K=V`，其余进位置参数）。
+3. 清理重复声明段（变量初始化写了两遍）。
+
+### 验证（隔离 AGT_HOME + 临时 workspace，子进程实测 11 项 ALL PASS）
+
+usage / add stdio / add sse+header / add --env / list / get / remove（二次删 rc=1）/ `--scope user` 落 `~/.agt/mcp.json` / project 同名覆盖 user / 缺参 rc=2 / 配置保留（remove 后其余 server 不动）。
+
+### 生效
+
+CLI 子命令走 `src/chat.py` main() 入口——`/restart` 后即可使用。配置写入后 server 生效路径同既有机制：重启装配自动连，或 `/reload_mcp` 热生效。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

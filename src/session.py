@@ -611,6 +611,9 @@ class Session:
         # 瞬态：组装层注入，不落 event.jsonl/step 存档。
         self._gen_images_pending: list = []   # [{path, call_id, data(dataURL), kb}]
         self._gen_images_done: set = set()    # 去重记账（同文件一次任务只注入一次）
+        self._imgfeed_prev = None             # image_feed 上一步帧 (data_url, ts)：跨组装缓存，
+                                              # 双帧对比（2026-10-11）——本步帧挂最后一步 tool result、
+                                              # 此帧挂倒数第二步，视觉模型对比即可判断画面是否变化
         self.workspace = Path(workspace) if workspace else Path.cwd()
         self.turns: list[Turn] = []
         self.global_summary = ""
@@ -1615,7 +1618,8 @@ class Session:
                 # 实时画面装配段（2026-10-06·用户提案）：每步从画面服务取最新帧 → base64 挂投影末尾。
                 # src 支持 http(s)://（内存流，零落盘——推荐）与文件路径（workspace 相对）。
                 # vision 门控：非视觉模型整段静默跳过；失联/空帧降级一行文字（不炸轮）。
-                # 哨兵返回：@@IMGFEED@@data:<mime>;base64,<b64>@@——桶收集处抽进图片通道，不进文本桶。
+                # 哨兵返回：@@IMGFEED@@<ts>@@data:<mime>;base64,<b64>@@（ts=抓取时刻，双帧对比标注用）
+                # ——桶收集处抽进图片通道，不进文本桶。
                 _src = str(item.get("image_feed") or item.get("src") or "").strip()
                 if not _src:
                     return ""
@@ -1637,7 +1641,7 @@ class Session:
                     return f"[image_feed 不可用：{type(_e).__name__}——画面服务未启动或不可达（{_src}）]"
                 if not data:
                     return f"[image_feed 空帧：{_src}]"
-                return f"@@IMGFEED@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
+                return f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
             if kind == "workflow":
                 return _eval_assembly_workflow(str(item.get("name") or ""), self)
             if kind == "tool":
@@ -2059,8 +2063,10 @@ class Session:
         self._hist_marks = []               # history 子段标记（_render_tiered_history/_history_window_msgs 填充）
         run: list[dict] = []                # 系统信息 run 缓冲（各段 0/1 条消息）
         run_secs: list[tuple[str, list, str]] = []   # run 内各段 (段名, own msgs, meta)
-        tail_images: list = []              # 区3 图片桶（image_feed 哨兵抽取，2026-10-06·用户提案）：
-                                            # merge 段组装成 image_url 块挂末条（瞬态：不落 events/存档）
+        tail_frames: list = []              # 区3 图片桶（image_feed 帧 (data_url, ts)；2026-10-06 引入，
+                                            # 2026-10-11 双帧对比：本步帧挂最后一步 tool result、
+                                            # 上一步帧挂倒数第二步——视觉模型可判断画面是否变化。
+                                            # 瞬态：不落 events/存档）
         tail_merge_text: str = ""           # 区3 收集桶（tail.* + steps 后的 asm 项·默认/reminder posture）：
                                             # 装配后统一包裹并入末条 content
         tail_stat_text: str = ""            # 统计专用镜像桶（2026-09-16·用户抓到重复计算）：与
@@ -2216,12 +2222,13 @@ class Session:
                         # · 默认/reminder → tail_merge_text（装配后包裹并入末条 content）
                         _pose = str(item.get("mode") or "").strip().lower()
                         _b = "\n".join(str(m.get("content") or "") for m in own)
-                        # image_feed 哨兵抽取（2026-10-06）：@@IMGFEED@@data:...@@ 不进文本桶——
-                        # 抽进 tail_images（merge 段组装 image_url 挂末条；base64 不进统计文本桶）
-                        _imgs = re.findall(r"@@IMGFEED@@(.+?)@@", _b)
+                        # image_feed 哨兵抽取（2026-10-06；2026-10-11 带 ts）：@@IMGFEED@@<ts>@@data:...@@
+                        # 不进文本桶——抽进 tail_frames（merge 段组装 image_url 挂 tool result；
+                        # base64 不进统计文本桶）
+                        _imgs = re.findall(r"@@IMGFEED@@(\d+)@@(.+?)@@", _b)
                         if _imgs:
-                            tail_images.extend(u for u in _imgs if u.startswith("data:"))
-                            _b = re.sub(r"@@IMGFEED@@.+?@@", "", _b).strip()
+                            tail_frames.extend((u, int(ts)) for ts, u in _imgs if u.startswith("data:"))
+                            _b = re.sub(r"@@IMGFEED@@\d+@@.+?@@", "", _b).strip()
                         if _pose == "reasoning":
                             reasoning_merge_text = (reasoning_merge_text + "\n\n" + _b) if reasoning_merge_text else _b
                             _sec(f"{nm}（尾部·思考链）", own, meta + "·注入思考链(reasoning)", msgs_n=0)
@@ -2321,37 +2328,25 @@ class Session:
             else:
                 _apply_reminder_bucket(tail_merge_text, tail_stat_text)
 
-        # —— image_feed 通道（2026-10-06·用户提案：实时画面装配段；2026-10-11 挂载点迁移）——
-        # tail_images 的 data URL 组装成 image_url 块。挂载优先级（用户裁定 2026-10-11）：
+        # —— image_feed 通道（2026-10-06·用户提案：实时画面装配段；2026-10-11 双帧对比）——
+        # tail_frames 的 (data_url, ts) 组装成 image_url 块。挂载优先级（用户裁定 2026-10-11）：
         #   ① 最后一条 tool result（画面与该次调用结果/reminder 同条 content 数组——
         #      叙事“调用了X → 结果+当前画面”；实测 glm/deepseek 的 tool content 数组带图真实可看）
         #   ② 末条 user → content 数组化追加（无 tool result 的纯文本步）
         #   ③ 独立 user 消息承载（末条 assistant——部分端点不允许 assistant 挂图）。
+        # 双帧对比（2026-10-11）：上一步帧（self._imgfeed_prev 跨组装缓存）挂倒数第二条
+        # tool result——与上一步组装时的挂载点是同一条消息（每步投影重建，幂等重挂），
+        # 视觉模型对比两帧即可判断画面是否变化，省一次 read/截图。两帧字节级相同 →
+        # 文本替代对比帧（“画面无变化”），不白花一份图片 token。
         # 瞬态语义：组装层注入（不落 events.jsonl/step 存档）；每步求值 = 每步最新帧。
-        if tail_images:
-            _feed_note = f"[image_feed · 实时画面 · {time.strftime('%H:%M:%S')}]"
-            _ti = None
-            for _k in range(len(msgs) - 1, -1, -1):
-                if msgs[_k].get("role") == "tool":
-                    _ti = _k
-                    break
-            if _ti is not None:
-                _t2 = {**msgs[_ti]}   # 浅拷贝——tool result 可能来自冻结渲染缓存，绝不就地改共享引用
-                _c = _t2.get("content")
-                if isinstance(_c, str):
-                    _blocks = [{"type": "text", "text": _c}] if _c else []
-                elif isinstance(_c, list):
-                    _blocks = list(_c)
-                else:
-                    _blocks = []
-                _t2["content"] = _blocks + [{"type": "text", "text": _feed_note}] \
-                                       + [{"type": "image_url", "image_url": {"url": u}} for u in tail_images]
-                msgs[_ti] = _t2
-                _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
-                     "并入末条 tool result（瞬态·不落档）", msgs_n=0)
-            elif msgs and msgs[-1].get("role") == "user":
-                _last = msgs[-1]
-                _m2 = {**_last}   # 浅拷贝——绝不就地改共享引用
+        if tail_frames:
+            _frames = sorted(tail_frames, key=lambda x: x[1])   # 按 ts 升序，末位 = 本步最新帧
+            _newest_u, _newest_ts = _frames[-1]
+            _feed_note = f"[image_feed · 实时画面 · {time.strftime('%H:%M:%S', time.localtime(_newest_ts))}]"
+            _tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+
+            def _attach(_idx: int, _note: str, _urls: list) -> None:
+                _m2 = {**msgs[_idx]}   # 浅拷贝——可能来自冻结渲染缓存，绝不就地改共享引用
                 _c = _m2.get("content")
                 if isinstance(_c, str):
                     _blocks = [{"type": "text", "text": _c}] if _c else []
@@ -2359,17 +2354,38 @@ class Session:
                     _blocks = list(_c)
                 else:
                     _blocks = []
-                _m2["content"] = _blocks + [{"type": "text", "text": _feed_note}] \
-                                       + [{"type": "image_url", "image_url": {"url": u}}
-                                          for u in tail_images]
-                msgs[-1] = _m2
+                _m2["content"] = (_blocks + [{"type": "text", "text": _note}]
+                                  + [{"type": "image_url", "image_url": {"url": _u}} for _u in _urls])
+                msgs[_idx] = _m2
+
+            if _tool_idx:
+                _attach(_tool_idx[-1], _feed_note, [u for u, _ in _frames])
+                _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(_frames)} 帧实时画面]"}],
+                     "并入末条 tool result（瞬态·不落档）", msgs_n=0)
+            elif msgs and msgs[-1].get("role") == "user":
+                _attach(len(msgs) - 1, _feed_note, [u for u, _ in _frames])
+                _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(_frames)} 帧实时画面]"}],
+                     "并入末条 user（瞬态·不落档）", msgs_n=0)
             else:
                 msgs.append({"role": "user",
                              "content": [{"type": "text", "text": _feed_note}]
                                         + [{"type": "image_url", "image_url": {"url": u}}
-                                           for u in tail_images]})
-            _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(tail_images)} 帧实时画面]"}],
-                 "末条追加image_url（瞬态·不落档）", msgs_n=0)
+                                           for u, _ in _frames]})
+                _sec("image_feed(实时画面)", [{"role": "user", "content": f"[{len(_frames)} 帧实时画面]"}],
+                     "独立 user 消息（瞬态·不落档）", msgs_n=0)
+            # 上一步帧挂倒数第二条 tool result（双帧对比）；无第二挂载点（首步/纯文本步）则跳过
+            _prev = getattr(self, "_imgfeed_prev", None)
+            if _prev and len(_tool_idx) >= 2:
+                _pu, _pts = _prev
+                if _pu == _newest_u:
+                    _attach(_tool_idx[-2], "[image_feed · 上一步画面：与本帧字节级相同——画面无变化]", [])
+                else:
+                    _attach(_tool_idx[-2],
+                            f"[image_feed · 上一步画面 · {time.strftime('%H:%M:%S', time.localtime(_pts))}（对比帧）]",
+                            [_pu])
+                _sec("image_feed(上步画面·双帧对比)", [{"role": "user", "content": "[对比帧]"}],
+                     "并入倒数第二条 tool result（瞬态·不落档）", msgs_n=0)
+            self._imgfeed_prev = (_newest_u, _newest_ts)   # 跨组装缓存：本步最新帧 → 下一步的对比帧
 
         # —— 生成图自动可视（2026-10-07 用户提案：step 生成图片自动带 image_url）——
         # 伪造「read_file 调用+结果」对插在投影末尾：视觉模型"以为"自己调用过 read_file
@@ -3952,7 +3968,11 @@ class Session:
             try:
                 tmp_path = path.with_suffix(path.suffix + ".tmp")
                 tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                os.replace(tmp_path, path)
+                try:
+                    os.replace(tmp_path, path)
+                except PermissionError:
+                    time.sleep(0.2)   # WinError 5：杀软/搜索索引瞬时锁住 meta.json（2026-10-11 实测）——短退避重试一次
+                    os.replace(tmp_path, path)
             except Exception as e:
                 _LOG.warning("meta.json 落盘失败（内存继续，不阻塞）：%s", e)
         return path

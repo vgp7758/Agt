@@ -120,6 +120,13 @@ async def main(args) -> dict:
                                       "text":" | ".join(parts),"score":s})
     cands.sort(key=lambda x:-x["score"])
 
+    # —— 低相关抑制·层1（2026-10-12 用户裁定：跑题召回不注入）——
+    # 候选全是 tc（工具流水字面命中）、无任何 semantic/epi/turn 命中 → 纯跑题特征，清空。
+    # 依据（20048 实锤）：grep args/schema 文件名等字面命中与当前话题无语义关联，注入后
+    # 模型把无关 reminder 当"输出被 system-reminder 干扰"——宁缺勿滥。
+    if cands and {c.get("kind") for c in cands} == {"tc"}:
+        cands = []
+
     # ========== 核心改造：生成统一字典，value 即为最终显示文本 ==========
     candidates = []
     candidates_display = []
@@ -185,6 +192,20 @@ async def main(args) -> dict:
 ]]></result>
     <batch enabled="false"/>
   </node>
+  <node id="311294" type="code" title="low_score_gate" x="3270" y="80">
+    <in name="scores_topk" type="list" ref="760876.scores_topk"/>
+    <in name="hits" type="string" ref="772715.result"/>
+    <code language="3"><![CDATA[async def main(args) -> dict:
+    scores = args.params.get("scores_topk") or []
+    # 层2（2026-10-12 用户裁定）：rerank top1 分数 < 0.35 → 判低相关不注入
+    # （cosine 语义相似度与 kw 命中比例同量纲 0~1；宁可漏掉弱相关，不注入跑题内容——
+    #   20048 实锤：跑题注入被模型当成"输出被 system-reminder 干扰"。分数为空同样不注入）
+    ok = bool(scores) and float(scores[0]) >= 0.35
+    return {"gate_pass": ok, "hits_out": args.params.get("hits") or ""}]]></code>
+    <out name="gate_pass" type="boolean"/>
+    <out name="hits_out" type="string"/>
+    <batch enabled="false"/>
+  </node>
   <node id="311293" type="selector" title="选择器" x="3120" y="80">
     <branch><cond op="13" left="760876.scores_topk.length" right="0" left_type="integer"/></branch>
   </node>
@@ -222,8 +243,10 @@ async def main(args) -> dict:
   <edge from="150001" to="760876" port="true"/>
   <edge from="1385233" to="772715"/>
   <edge from="772715" to="311293"/>
-  <edge from="311293" to="413316" port="true"/>
+  <edge from="311293" to="311294" port="true"/>
   <edge from="311293" to="900001" port="false"/>
+  <edge from="311294" to="413316" port="true"/>
+  <edge from="311294" to="900001" port="false"/>
   <edge from="413316" to="1657367"/>
   <edge from="1657367" to="900001"/>
   <edge from="760876" to="1031138"/>

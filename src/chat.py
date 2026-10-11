@@ -917,6 +917,9 @@ def _early_argv():
 
 def main():
     import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        from mcp_client import run_mcp_cli
+        sys.exit(run_mcp_cli(sys.argv[2:]))   # agt mcp add|list|remove|get（用户提案 2026-10-11）
     _early_argv()
     _apply_resume_arg(sys.argv[1:], WORKSPACE)   # --resume [名字]：CLI 同款（与 agt-web 行为一致）
     _ensure_utf8_stdout()

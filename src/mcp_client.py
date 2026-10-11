@@ -295,3 +295,205 @@ def make_mcp_tools(mcp_mgr, config_path, agent=None) -> list:
         return f"[重连失败] 未在任何配置中找到 server '{name}'\n" + "\n".join(errs)
 
     return [Tool(reload_mcp_server)]
+
+
+# ================= CLI 子命令（用户提案 2026-10-11，Claude Code 风格对齐）=================
+# agt mcp add|list|remove|get —— 无需手编 mcp.json 的快捷通道。
+# 配置写 workspace/.mcp.json（repo 级，跟随 agt 启动目录；--scope user 写 ~/.agt/mcp.json），
+# 合并写（保留现有 servers）；add 后尝试真实连接一次并打印发现的工具数（失败不回滚——
+# 配置已就位，可 /reload_mcp 或重启后再试）。完整能力（两级配置/编辑器/热重载）在 WebUI 设置。
+
+def _mcp_cli_paths(workspace):
+    """两级 mcp.json 路径：(project 路径, user 路径)。"""
+    from pathlib import Path as _P
+    try:
+        from config import _AGT_DIR
+        user = _AGT_DIR / "mcp.json"
+    except Exception:
+        user = _P.home() / ".agt" / "mcp.json"
+    return _P(workspace or _P.cwd()) / ".mcp.json", user
+
+
+def _mcp_cli_usage() -> str:
+    return (
+        "用法：\n"
+        "  agt mcp add [--transport http|sse|stdio] [--env K=V] [--header K=V] [--scope project|user] "
+        "<name> <commandOrUrl> [args...]\n"
+        "  agt mcp list                              两级配置合并视图\n"
+        "  agt mcp get <name>                        查看某 server 的配置 JSON\n"
+        "  agt mcp remove <name> [--scope project|user]   删除（缺 scope 时自动找有配置的那份）\n\n"
+        "示例：\n"
+        "  agt mcp add ping python D:/AI/mcp/ping.py\n"
+        "  agt mcp add --transport sse test http://xxx/mcp --header Authorization=Bearer_sk-x\n"
+        "  agt mcp add --env KEY=v worker node D:/AI/mcp/worker.js\n\n"
+        "说明：commandOrUrl 以 http(s):// 开头 → 远程传输（默认 http）；否则 stdio 本地进程。\n"
+        "远程鉴权用 --header（如 Authorization=Bearer_xxx）；--env 是 stdio 子进程的环境变量。\n"
+        "写入后自动尝试连接一次并打印发现的工具数（失败不回滚——配置已就位，可再试）。")
+
+
+def _mcp_cli_load(path) -> dict:
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        return {"mcpServers": {}}
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) or {"mcpServers": {}}
+    except Exception:
+        return {"mcpServers": {}}
+
+
+def _mcp_cli_save(path, data: dict) -> None:
+    from pathlib import Path as _P
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def _mcp_cli_verify_one(name: str, cfg: dict):
+    """独立连接验证（不动 MCPManager 全局状态）：返回 (ok, 描述, 工具名清单)。"""
+    try:
+        from contextlib import AsyncExitStack
+        stack = AsyncExitStack()
+        if cfg.get("url"):
+            transport = (cfg.get("transport") or "http").lower()
+            if transport == "sse":
+                if sse_client is None:
+                    return False, "mcp 库缺 sse 支持", []
+                ctx = sse_client(cfg["url"], headers=cfg.get("headers"))
+            else:
+                if streamable_http_client is None:
+                    return False, "mcp 库缺 streamable_http 支持", []
+                ctx = streamable_http_client(cfg["url"], headers=cfg.get("headers"))
+            transport_label = transport
+        else:
+            params = StdioServerParameters(
+                command=cfg["command"], args=cfg.get("args", []),
+                env=cfg.get("env"), cwd=cfg.get("cwd") or None)
+            ctx = stdio_client(params)
+            transport_label = "stdio"
+        read, write = (await stack.enter_async_context(ctx))[:2]
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        tools = (await session.list_tools()).tools
+        names = [t.name for t in tools]
+        await stack.aclose()
+        return True, f"{transport_label} · {len(tools)} 个工具", names
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:140]}", []
+
+
+def run_mcp_cli(argv, workspace=None) -> int:
+    """agt mcp <add|list|remove|get> 子命令入口（chat.main 拦截分发）。返回进程退出码。"""
+    from pathlib import Path as _P
+    sub = (argv[0] if argv else "").lower()
+    if sub in ("", "-h", "--help", "help"):
+        print(_mcp_cli_usage())
+        return 0
+    ws = _P(workspace or _P.cwd())
+    proj, user = _mcp_cli_paths(ws)
+
+    if sub == "add":
+        pos = []
+        env, headers = {}, {}
+        transport = None
+        scope = "project"
+        i = 1                                  # argv[0]="add"，从 1 起（完整索引，无切片/推进叠加错位）
+        n = len(argv)
+        while i < n:
+            a = argv[i]
+            if a in ("--transport", "--scope"):
+                if i + 1 >= n:
+                    print(f"❌ {a} 缺值"); return 2
+                if a == "--transport": transport = argv[i + 1]
+                else: scope = argv[i + 1]
+                i += 2
+            elif a in ("--env", "--header"):
+                if i + 1 >= n:
+                    print(f"❌ {a} 缺值"); return 2
+                k, _, v = argv[i + 1].partition("=")
+                if not k.strip():
+                    print(f"❌ {a} 值须为 K=V 形式"); return 2
+                (env if a == "--env" else headers)[k.strip()] = v
+                i += 2
+            elif a.startswith("--"):
+                print(f"❌ 未知选项 {a}"); print(_mcp_cli_usage()); return 2
+            else:
+                pos.append(a)
+                i += 1
+        if len(pos) < 2:
+            print("❌ 缺 name / commandOrUrl"); print(_mcp_cli_usage()); return 2
+        name, first = pos[0], pos[1]
+        if first.startswith(("http://", "https://")):
+            cfg = {"url": first, "transport": (transport or "http").lower()}
+            if headers:
+                cfg["headers"] = headers
+        else:
+            cfg = {"command": first, "args": pos[2:]}
+            if env:
+                cfg["env"] = env
+        path = user if scope == "user" else proj
+        data = _mcp_cli_load(path)
+        existed = name in data.get("mcpServers", {})
+        data.setdefault("mcpServers", {})[name] = cfg
+        _mcp_cli_save(path, data)
+        print(f"✅ 已{'覆盖更新' if existed else '添加'} server '{name}' → {path}")
+        print(f"   {json.dumps(cfg, ensure_ascii=False)[:160]}")
+        ok, desc, names = asyncio.run(_mcp_cli_verify_one(name, cfg))
+        print((f"{'✅' if ok else '❌'} 连接验证：{desc}") if ok
+              else (f"❌ 连接验证失败：{desc}\n   （配置已写入；服务未就绪/网络不通时先放着，" 
+                    "agent 启动或 /reload_mcp 时会再连）"))
+        if names:
+            print("   工具：" + "、".join(names[:10]) + (f" …共 {len(names)} 个" if len(names) > 10 else ""))
+        return 0
+
+    if sub == "list":
+        merged, src_of = {}, {}
+        for src, p in (("project", proj), ("user", user)):
+            for name, cfg in (_mcp_cli_load(p).get("mcpServers") or {}).items():
+                if name in src_of and src == "user":
+                    continue   # project（repo）优先：与 connect_from_config 路径顺序一致，同名 user 让位
+                merged[name] = cfg; src_of[name] = src
+        # 修正优先级：project 覆盖 user（与 connect_from_config 的路径顺序一致：repo 在前）
+        if not merged:
+            print("（两级配置均无 mcpServers）")
+            return 0
+        print(f"{'名称':<16} {'来源':<9} 传输/命令")
+        for name, cfg in merged.items():
+            desc = cfg.get("url") or " ".join([cfg.get("command", "")] + cfg.get("args", []))
+            print(f"  {name:<14} {src_of.get(name, ''):<8} {desc[:70]}")
+        return 0
+
+    if sub == "get":
+        name = argv[1] if len(argv) > 1 else ""
+        for src, p in (("project", proj), ("user", user)):
+            cfg = (_mcp_cli_load(p).get("mcpServers") or {}).get(name)
+            if cfg is not None:
+                print(f"[{src}] {p}")
+                print(json.dumps(cfg, ensure_ascii=False, indent=2))
+                return 0
+        print(f"[无此 server] {name}")
+        return 1
+
+    if sub in ("remove", "rm"):
+        name = argv[1] if len(argv) > 1 else ""
+        scope = "auto"
+        if "--scope" in argv:
+            scope = argv[argv.index("--scope") + 1]
+        removed = False
+        for src, p in (("project", proj), ("user", user)):
+            if scope != "auto" and src != scope:
+                continue
+            servers = _mcp_cli_load(p).get("mcpServers") or {}
+            if name in servers:
+                del servers[name]
+                _mcp_cli_save(p, {"mcpServers": servers})
+                print(f"✅ 已从 {src} 配置删除 '{name}'（{p}）")
+                removed = True
+        if not removed:
+            print(f"[未找到] {name}")
+            return 1
+        return 0
+
+    print(f"❌ 未知子命令 {sub}")
+    print(_mcp_cli_usage())
+    return 2

@@ -36,6 +36,14 @@ memories/ 三类记忆、episodic 召回流水线与 `/memory` 管理页见 [长
 
 **原则**：落盘是持久化增强，内存 session 才是运行时真相——写失败绝不阻塞主循环。
 
+## meta.json 原子写撞锁重试：WinError 5 短退避（2026-10-11，随 v0.34.6 发布）
+
+`save()` 的 meta.json 原子写（写 `.tmp` → `os.replace`）在 Windows 上偶发 `PermissionError`（WinError 5）——杀毒软件/搜索索引器瞬时锁住目标文件的窗口期恰与 autosave 撞上。此前直接落进外层告警分支：meta.json 那次写入整体丢失（name / schedules 等 extra_state 要等下次 save 才补上）。
+
+**修复（src/session.py save()）**：`os.replace` 捕获 `PermissionError` → `time.sleep(0.2)` 短退避 → **重试一次**；再失败才落外层「meta.json 落盘失败（内存继续，不阻塞）」告警。瞬时锁 200ms 内几乎必释放，重试成功率近 100%；真被长期占用时开销仅 0.2s，语义不回退。随 v0.34.6 发布（2026-10-11 实测抓到）。
+
+与 [存档写盘容错](#存档写盘容错session-落盘失败不再阻塞-react2026-09-02commit-e5f2733)（2026-09-02）分工：那次是「写失败不炸轮」（容错放行），这次是「瞬时锁抢救」（重试）——两级叠加：先重试，救不回再告警放行，内存 session 始终是真相。
+
 ## 可观测性
 
 ### /wf/monitor 工作流运行观测页（2026-08-20 新，commit 8aeb21a）

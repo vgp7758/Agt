@@ -148,6 +148,10 @@ usage / add stdio / add sse+header / add --env / list / get / remove（二次删
 
 CLI 子命令走 `src/chat.py` main() 入口——`/restart` 后即可使用。配置写入后 server 生效路径同既有机制：重启装配自动连，或 `/reload_mcp` 热生效。
 
+### 随 v0.34.6 发布（2026-10-11，commit 38b2a3f）
+
+随 v0.34.6 发布上 PyPI（2026-10-11，发布提交 38b2a3f）——已装旧版的实例 `pip install -U agt-agent` 即得，无需手编 mcp.json 的 CLI 通道开箱可用。
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

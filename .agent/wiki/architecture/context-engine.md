@@ -978,6 +978,10 @@ spec s_e1804804 四步全部完成（16+3 场景测试全绿），commit `f37548
 
 **用户裁定（2026-09-13·施工中两次插话）**：「施工期的 recent-file 还是和之前一样跟在具体的工具调用后面吧，施工期不用去重，不用限制文件数量」+「工具调用后面贴的应该是**当时的文件快照**」——施工语义要的是**因果上下文**：每次操作时文件长什么样（施工在文件上连续推进，看当时的版本才知道每步改了什么），而不是第四版段式的"最新版集中投影"。
 
+### 后记：内嵌块改数组感知追加——工具结果数组化后的 TypeError（2026-10-11）
+
+内嵌两处构造点（`_constr_step_msgs` + `_steps_to_messages` 的 constr 分支）此前写 `content += self._rf_inline_block(snap)`——而工具结果经 `_project_imgs` 转成**块数组**后（视觉模型 × 结果文本带 `<img>`）该拼接抛 `TypeError: can only concatenate list (not "str") to list`，**施工模式 + 带图工具结果组合必炸**。修复：`isinstance(content, list)` 时 `content.append({"type":"text","text":_rf_blk})`（独立 text 块保序追加），否则原字符串拼接——口径等价、快照内容与 `_RE_RF_BLOCK` 剥离不变，非施工路径不受影响。同批 image_feed 挂载点迁入末条 tool result（见 [image_feed](../features/image-feed.md)），同属「在 tool result content 上追加内容须先判类型」的教训；类型契约详见 [image-input · 投影返回类型契约](../features/image-input.md)。
+
 ## 行为（施工模式特例）
 
 - `_steps_to_messages`：施工模式按 call_id 命中 `step.file_snapshots`，把该次调用【当时】的快照以 `\n<recent-file file version>` 块附加在该次 tool result content 尾部——**不去重**（同文件多次编辑各挂各的当时版本）、**不限数量**（每个写调用都挂）；块构造 `_rf_inline_block`（小文件行号化全文 / 超大文件 >RF_MAX_CHARS 走 outline + 省略提示，与段式同口径）

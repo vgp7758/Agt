@@ -41,6 +41,10 @@
 - **可观测**：投影段统计有对应计段 `gen_images(生成图自动可视)`（sample=`[N 张生成图]`，备注「伪造read_file对·瞬态不落档」，msgs_n=0 不计消息数），/context 段落表可见
 - 门控键小插曲：初版写 `getattr(self.llm, "vision", False)`，当场纠正为 **`vision_supported`**（与 [image_feed](image-feed.md) 求值同键；该键是视觉能力位真源，见 [LLM 客户端韧性](llm-network-resilience.md)），并加双层 getattr 防 self.llm 缺失
 
+### 与 image_feed 的执行顺序（2026-10-11 挂载点迁移后核对）
+
+同一装配函数里，**image_feed 块先执行、本块后执行**（src/session.py `messages_for_llm` 尾部，顺序固定）：image_feed 把帧挂到**当时**最后一条真实 tool result 的 content 数组上，随后本块才 append 伪造 read_file 对——即画面不会被挂到伪造对上，伪造对也不会破坏"画面与结果同条"的叙事。同轮既生成图又配了 image_feed 时，投影顺序为：真实 steps（末条 tool result 带帧）→ 伪造 read_file 对（带生成图）。
+
 ## 验证（冒烟四场景全绿，2026-10-07）
 
 - png 产物收录 ✓（伪造对形态正确：tool_calls + text/image_url 双块）
@@ -54,7 +58,7 @@
 |---|---|---|---|
 | [图片输入](image-input.md) | 用户 → 模型 | `Turn.images` 原生多模态 / 插话 `<img>` 标签按 vision 展开 | Turn 存档 |
 | `<img>` 标签指路 | 发标签方 → 模型 | ` [图片 name 读取失败] ` 标签 + 图须落 `repo_images_dir()` 契约位置（job-hunt 实战翻车即栽在落盘位置） | 随消息文本存档 |
-| [image_feed](image-feed.md) | 画面服务 → 模型 | 每步最新帧挂投影尾部（tail_images 通道） | 瞬态 |
+| [image_feed](image-feed.md) | 画面服务 → 模型 | 每步最新帧并入**末条 tool result 的 content 数组**（与 system-reminder 同条；tail_images 通道） | 瞬态 |
 | **本特性** | 工具产物 → 模型 | changed_files 新增图伪造 read_file 对——**工具零配合**（不用发标签、图落 workspace 任意位置） | 瞬态 |
 
 ## 注意事项

@@ -115,6 +115,22 @@
 
 **根因**未程序化实锤，但与上节验证插曲的契约完全吻合：**`<img>` 展开只认 `repo_images_dir()` 落盘位置**——抽帧产物当时落在 workspace 根（`D:\AI_Usings\Agt\probe_q1.png`），投影解析端按 `repo_images_dir` 真源找不到文件。教训：**给子 Agent 发 `<img>` 前，图必须先落 `repo_images_dir()`**；工具产物默认落 workspace 根 ≠ 契约位置。
 
+## 投影返回类型契约：_project_imgs 返回 str | 块数组（2026-10-11，数组感知消费）
+
+**契约**：`_project_imgs(text)`（src/session.py）按上文门控有**三种返回形态**——调用方不能假设它总是 str：
+
+| 输入/模型 | 返回 |
+|---|---|
+| 无 `<img>` 标签 / 空文本 | **原样 str**（引用不变，byte-stable） |
+| 有标签 + 非视觉模型 | 代换后的 **str 占位** |
+| 有标签 + 视觉模型 | **块数组** `[text块…, image_url块…]` |
+
+**后果与修复（2026-10-11）**：投影链上凡是「拿到结果再拼字符串」的下游都必须**数组感知**。实测炸点：施工模式 recent-file 内嵌 `content += self._rf_inline_block(snap)` 撞上块数组 → `TypeError: can only concatenate list (not "str") to list`（**视觉模型 × 工具结果带 `<img>` × 施工快照**三条件同时成立必炸）；两处构造点（`_constr_step_msgs` / `_steps_to_messages` 的 constr 分支）改 `isinstance(content, list)` 分支 → `append({"type":"text","text":_rf_blk})`。详见 [image_feed · 顺手修复](image-feed.md)。
+
+**同构参考**：`_user_content` 早已是这套写法（`isinstance(text, list)` 归一为 blocks 再挂 `turn.images`）——新消费点照抄即可。
+
+**检查清单**（任何在 tool result content 上追加内容的代码先判类型）：施工快照内嵌 · 审批/越界提示行 · 钩子旁注 · [image_feed 挂载](image-feed.md)（已三态归一）。
+
 ## 排障速查
 
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）

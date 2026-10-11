@@ -1,8 +1,8 @@
-# image_feed · 实时画面装配段（每步最新帧挂投影末尾，2026-10-06，用户提案）
+# image_feed · 实时画面装配段（每步最新帧；2026-10-11 起挂载点迁入末条 tool result 的 content 数组）
 
 ## 职责
 
-让 Agent（典型：子 Agent desktop-operator）**每步实时看到画面源**：assembly 里声明 `image_feed:` 动作项，每次装配都从画面服务取**最新帧** → base64 挂投影末尾。与 [services 依赖声明](../architecture/multi-agent.md)（yml 声明依赖服务、实例化幂等拉起）配合 = 声明自包含：拉起 Agent 即自带眼睛。
+让 Agent（典型：子 Agent desktop-operator）**每步实时看到画面源**：assembly 里声明 `image_feed:` 动作项，每次装配都从画面服务取**最新帧** → base64 组装成 `image_url` 块并入**末条 tool result 的 content 数组**（2026-10-11 前为投影末尾的 user 消息）。与 [services 依赖声明](../architecture/multi-agent.md)（yml 声明依赖服务、实例化幂等拉起）配合 = 声明自包含：拉起 Agent 即自带眼睛。
 
 ## 声明形态（首个实例 desktop-operator）
 
@@ -31,7 +31,7 @@ services:
 
 - **必须声明在 steps 段之后**（区3 尾部）：段产出的哨兵由 merge 桶抽取进 `tail_images`；写进 system run 的会被 warning 跳过（「image_feed 项应声明在 steps 段之后」）
 - base64 **不进统计文本桶**（token 统计不含图）
-- 组装层把 data URL 变 `image_url` 块，图块前统一附**帧前说明块** `[image_feed · 实时画面 · HH:MM:SS]`：末条 user → content **数组化追加**（原内容保序在前，说明块+图块跟后）；末条 assistant → **独立 user 消息承载**（部分端点不允许 assistant 挂图，说明块打头）——详见下节
+- 组装层把 data URL 变 `image_url` 块，图块前统一附**帧前说明块** `[image_feed · 实时画面 · HH:MM:SS]`；挂载点**三级优先**（2026-10-11 用户裁定迁移，见下节）：① **最后一条 tool result** 的 content 数组（与工具结果 / system-reminder 同条）→ ② 末条 user content 数组化追加（无 tool result 的纯文本步）→ ③ 独立 user 消息承载（末条 assistant）
 - **瞬态语义**：组装层注入，不落 events.jsonl / step 存档；每步求值 = 每步最新帧
 
 ## 帧前说明块：[image_feed · 实时画面 · HH:MM:SS]（2026-10-08，用户裁定「带上吧」）
@@ -45,11 +45,77 @@ image_url 块裸注入时模型可能把这帧误当成自己历史操作的截�
 ]}
 ```
 
-- **两条承载路径同改**：末条 user → content 数组化（原内容保序在前）+ 说明块 + 图块；末条 assistant → 独立 user 消息，说明块打头 + 图块
-- **浅拷贝纪律**：末条 user 分支 `{**_last}` 复制后重组 content——绝不就地改共享引用（该消息对象被投影多段共享）
+- **三条承载路径同改**（2026-10-11 起：末条 tool result → 末条 user → 独立 user 消息，见下节）：说明块恒紧邻在图块**之前**，顺序 = 原内容（保序在前）+ 说明块 + 图块
+- **浅拷贝纪律**：所有分支都 `{**原消息}` 复制后重组 content——绝不就地改共享引用（tool result 可能来自冻结渲染缓存，末条 user 被投影多段共享）
 - 说明块带**捕获时刻**（`time.strftime('%H:%M:%S')`），模型可区分新旧帧、明确知道这是 image_feed 喂的实时画面
 - token 代价一行文字可忽略；口径与失联/空帧降级行（`[image_feed 不可用：...]`）一致
 - 瞬态语义不变：不落 events.jsonl / step 存档
+
+## 挂载点迁移：画面并入末条 tool result 的 content 数组（2026-10-11，用户提案，commit fa28d13）
+
+**动机（用户提案）**：原挂载点（末条 user / 独立 user 消息）在有工具结果的步里把画面挂在**工具结果之后的新消息**上——模型读到的是「工具结果 → 又一个 user（画面）」，叙事被切成两段；且与同轮 system-reminder 分居两条消息。用户裁定：「投影到 tool result 里吧，和 system-reminder 在同一条 message 的 content 数组里」——一条消息读完「调用了 X → 结果 + reminder + 当前画面」。
+
+**三级挂载优先级（src/session.py `messages_for_llm` 装配尾部，image_feed 块）**：
+
+| 优先级 | 落点 | 适用 | 分段统计文案 |
+|---|---|---|---|
+| ① | **最后一条 tool 消息**（content 数组追加） | 有工具调用的步（绝大多数） | 并入末条 tool result（瞬态·不落档） |
+| ② | 末条 user（content 数组化追加） | 无 tool result 的纯文本步 | 末条追加image_url（瞬态·不落档） |
+| ③ | 独立 user 消息 | 末条 assistant（或 msgs 为空）——部分端点不允许 assistant 挂图 | 同上 |
+
+实现要点（①）：
+
+- 倒序扫 `msgs` 找 `role == "tool"` 的最后一条；命中即改写该条，未命中回落 ②/③
+- **浅拷贝**：`_t2 = {**msgs[_ti]}`——tool result 可能来自冻结渲染缓存（施工缓冲 / 分段定型渲染），**绝不就地改共享引用**
+- content **三态归一**：`str` → `[{"type":"text","text":原内容}]`（空串 → 空列表）；`list`（工具结果带图时 `_project_imgs` 已转块数组）→ 原样复制；其它 → 空
+- 拼接：`原 blocks + [帧前说明块] + [image_url 块…]`
+
+**实测投影形态**（真 Session 全装配路径）：
+
+```json
+{"role": "tool", "tool_call_id": "a-1",
+ "content": [
+   {"type": "text", "text": "点击执行完毕（远程）\n<system-reminder>…git_diff…</system-reminder>"},
+   {"type": "text", "text": "[image_feed · 实时画面 · 18:0x:xx]"},
+   {"type": "image_url", "image_url": {"url": "data:image/png;base64,…"}}
+ ]}
+```
+
+瞬态语义不变（组装层注入，不落 events.jsonl / step 存档）；byte-stable 影响面 = 当前轮 steps 段（本就在未命中区）。
+
+### 后记：kimi「content 必须数组」记忆实测不成立——五形态探针全 200（2026-10-11）
+
+用户提约束「kimi 必须按 content 数组样式发送，不支持 content 字符串」。当日对 kimi 端点五形态探针实测，**全部 200 通过**：
+
+| 形态 | 结果 |
+|---|---|
+| user content **字符串** | ✅ |
+| user content text 数组 | ✅ |
+| tool content 字符串 | ✅ |
+| tool content text 数组 | ✅ |
+| tool content 数组 + image_url | ✅ |
+
+结论：该约束可能来自**旧版 kimi API 或特定端点**；不据此建 per-model 分支，统一走「能数组则数组、否则字符串」的形态归一（即上表三态归一逻辑）。日后若真遇 400 再按报错原文定向处理；本轮一并校准了此前按该记忆写的 provider 差异相关注释。详见 [LLM 客户端韧性](llm-network-resilience.md)。
+
+## 顺手修复：工具结果数组化后的 content += str TypeError（2026-10-11）
+
+**炸点组合**：视觉模型 × 工具结果文本带 `<img>` 标签（`_project_imgs` 把 content 转成**块数组**）× 施工模式 recent-file 内嵌（`content += self._rf_inline_block(snap)`）→ `TypeError: can only concatenate list (not "str") to list`——该投影路径**必炸**，此前无测试覆盖（三个条件同时成立的实战形态稀缺，但真实存在）。
+
+**修复（src/session.py 两处构造点，数组感知追加）**：
+
+```python
+_rf_blk = self._rf_inline_block(snap)
+if isinstance(content, list):   # _project_imgs 转数组（工具结果带图）——append text 块
+    content.append({"type": "text", "text": _rf_blk})
+else:
+    content += _rf_blk
+```
+
+- 命中点：`_constr_step_msgs`（施工投影缓冲的定型渲染单元）+ `_steps_to_messages` 的 `constr` 分支（历史/档位渲染路径）——两处必须同改，否则半通
+- 口径等价：数组形态下快照块作为**独立 text 块**保序追加在结果文本块之后（不合并、不改快照内容，`_RE_RF_BLOCK` 剥离口径照旧命中）
+- 非施工模式不受影响（走独立 `recent_file` 段，不内嵌）；详见 [image-input · 投影返回类型契约](image-input.md)
+
+**同类风险清单**（凡在 tool result content 上追加内容的代码都须先判类型）：施工快照内嵌、审批/越界提示行、钩子旁注、`image_feed` 挂载本身（已三态归一）。
 
 ## 画面服务：tools/image_feed_poc.py
 
@@ -91,3 +157,6 @@ bg_services 装配段同日增 `start_service(watch_tail=N)`：服务 stdout 日
 
 - [services 依赖声明](../architecture/multi-agent.md) —— 服务生命周期随声明走
 - [Agent 管理页](agents-admin.md) —— ACT_TYPES 编辑器支持
+- [图片输入链路](image-input.md) —— `_project_imgs` 返回类型契约（str | 块数组）与数组感知消费
+- [上下文引擎 · 施工模式投影](../architecture/context-engine.md) —— 施工期 recent-file 内嵌块的数组感知追加
+- [生成图自动可视](image-autoview.md) —— 同投影尾部家族（工具产物新增图）

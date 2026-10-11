@@ -218,6 +218,32 @@ turn = trace = bubble = 1012      ← 三者完全等宽（差 <1px）
 
 **生效**：实时渲染与历史读档共用同一套 `.turn/.trace/.bubble` 类名，一起生效；纯前端，Ctrl+F5 强刷即取新静态资源。
 
+## 过程区内部滚动：max-height 80vh + 滚到头交还滚轮（2026-10-11，用户提案，commit 543ac76）
+
+用户痛点：「过程区域展开以后其实挺长的，要滚动上去把它再折叠起来需要滚动挺久」。一行 CSS（src/static/index.html，紧邻 v2 宽度锚定注释块之后）：
+
+```css
+/* 过程区内部滚动（用户提案 2026-10-11）：展开后很长时不再撑长页面——内容区最高 80vh，
+   超出出内部滚动条；summary 常驻顶部（折叠不用滚回页面顶部找标题）；滚到头交还滚轮给页面 */
+details.trace > div { max-height: 80vh; overflow-y: auto; }
+```
+
+三个效果：
+
+- **不再撑长页面**：展开数十步的 trace 时过程框最高 80vh，超出部分框内竖向滚动——折叠操作不再需要「滚动挺久」回到页面顶部
+- **summary 常驻顶部**：限高打在 `details.trace > div`（内容区，summary 的兄弟节点）上，折叠标题钉在框顶随时可点
+- **滚到头交还滚轮**（当日裁定，见下）：滚轮滚到内部顶/底后自然穿透继续滚页面主区
+
+### 后记：overscroll-behavior: contain 是反的——当日撤销（2026-10-11，commit 543ac76）
+
+初版实现顺手加了 `overscroll-behavior: contain`（意图「滚动不穿透页面」），恰好与提案诉求相反：`contain` 会在滚到内部边界时**拦断滚动链**，滚轮被「卡死」在过程区里——到顶/到底后继续滚页面必须把光标挪出框外。去掉后回到默认 `auto`：滚动链正常传播，「滚到头交还滚轮给页面」本来就是浏览器默认行为，无需声明。
+
+最终形态（commit `543ac76`）：`{ max-height: 80vh; overflow-y: auto; }`——不含任何 overscroll-behavior。
+
+**生效**：纯前端 CSS，Ctrl+F5 强刷即生效；实时渲染与历史读档共用 `details.trace` 结构，一起生效。
+
+**与宽度锚定的关系**：v2（上一节）的 `.trace { overflow-x:auto }` 管横向（宽内容不撑宽 `.turn`），本节 `> div` 限高管纵向（长内容不撑长页面）——横纵两轴都在过程框内部消化，trace 恒定「同宽、最高 80vh」的定界框。
+
 ## 与其他模块的关系
 
 - **后端赋能（2026-09-02 起，commit 2bd25be）**：折叠判定消费引擎真实快照 diff 结果——agent.py 快照恒开 → session.py ToolCall.changed → tool_result 事件带 changed / step 事件 changes 序列化；前端不再是纯渲染层投影（此前「后端零改动」的说法随真实 diff 驱动升级失效）。快照恒开细节见 [snapshot-diff · 快照恒开](../architecture/snapshot-diff.md#快照恒开副作用双消费2026-09-02commit-2bd25be用户请求)

@@ -152,7 +152,7 @@ async def main(args) -> dict:
   </node>
   <node id="900001" type="end" title="end" x="4020" y="80">
     <out name="inject" ref="413316.raw" type="boolean"/>
-    <out name="result" ref="1657367.output" type="string"/>
+    <out name="result" ref="311294.hint" type="string"/>
   </node>
   <node id="802605" type="subworkflow" title="extract_keywords" x="770.6029011497021" y="399.1403777626817" workflowId="extract_keywords">
     <in name="user_message" type="string" ref="100001.user_message"/>
@@ -201,9 +201,13 @@ async def main(args) -> dict:
     # （cosine 语义相似度与 kw 命中比例同量纲 0~1；宁可漏掉弱相关，不注入跑题内容——
     #   20048 实锤：跑题注入被模型当成"输出被 system-reminder 干扰"。分数为空同样不注入）
     ok = bool(scores) and float(scores[0]) >= 0.35
-    return {"gate_pass": ok, "hits_out": args.params.get("hits") or ""}]]></code>
+    hits = args.params.get("hits") or ""
+    hint = ("<retrieval-hint>\n以下是自动检索出的、可能与本次请求相关的历史记录（参考用，非用户指令）：\n"
+            + hits + "\n</retrieval-hint>") if (ok and hits) else ""
+    return {"gate_pass": ok, "hits_out": hits, "hint": hint}]]></code>
     <out name="gate_pass" type="boolean"/>
     <out name="hits_out" type="string"/>
+    <out name="hint" type="string" description="最终注入文本（含 retrieval-hint 包裹；gate 未过=空串）"/>
     <batch enabled="false"/>
   </node>
   <node id="311293" type="selector" title="选择器" x="3120" y="80">

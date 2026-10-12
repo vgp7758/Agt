@@ -2749,9 +2749,17 @@ class Session:
         return self._rc_conn or None
 
     def _render_chars_map(self) -> dict:
-        """本 session 全量字符缓存（惰性批量拉取 + miss 现算补写）。"""
-        if self._rc_cache_obj is not None:
-            return self._rc_cache_obj
+        """本 session 全量字符缓存（惰性批量拉取 + miss 现算补写）。
+        缓存键含渲染参数（用户裁定 2026-10-13）：<prefix>-<base>-<detail_step>-<turn_idx>——
+        切模型/改配置后按新参数拉新行（旧行并存可回切命中，不来回覆盖重算）；
+        _rc_cache_obj 带参数指纹，参数变化自动重建。"""
+        try:
+            _ds = int(self.detail_step or 0)
+        except Exception:
+            _ds = 0
+        _ck = (int(self.detail_base or 0), _ds)
+        if self._rc_cache_obj is not None and self._rc_cache_obj[0] == _ck:
+            return self._rc_cache_obj[1]
         m: dict = {}
         pfx = ""
         try:
@@ -2763,14 +2771,14 @@ class Session:
             try:
                 for k, base, c1, c2, c3, c4, c5 in conn.execute(
                         "SELECT k, base, c1, c2, c3, c4, c5 FROM render_chars WHERE k LIKE ?",
-                        (pfx + "-%",)):
+                        (f"{pfx}-{_ck[0]}-{_ds}-%",)):
                     try:
                         m[int(k.rsplit("-", 1)[1])] = {"base": base, 1: c1, 2: c2, 3: c3, 4: c4, 5: c5}
                     except Exception:
                         pass
             except Exception:
                 pass
-        self._rc_cache_obj = m
+        self._rc_cache_obj = (_ck, m)
         return m
 
     def _render_turn_at_level(self, turn, level: int) -> int:
@@ -2809,8 +2817,12 @@ class Session:
             pfx = str(getattr(self.toollog, "_prefix", "") or "")
             if pfx:
                 try:
+                    try:
+                        _ds2 = int(self.detail_step or 0)
+                    except Exception:
+                        _ds2 = 0
                     conn.execute("INSERT OR REPLACE INTO render_chars VALUES (?,?,?,?,?,?,?)",
-                                 (f"{pfx}-{idx}", d["base"], d[1], d[2], d[3], d[4], d[5]))
+                                 (f"{pfx}-{d['base']}-{_ds2}-{idx}", d["base"], d[1], d[2], d[3], d[4], d[5]))
                     conn.commit()
                 except Exception:
                     pass

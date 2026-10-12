@@ -134,6 +134,17 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 机制本身（`_tls.outside` 越界标记 → 工具结果尾附提示）不变；「当前路由」显示粘性实例的联动照旧。
 
+### 后记二：「当前路由」粘性显示一并移除（2026-10-12，commit eee624f）
+
+粘性路由整体退役（见 [multi-instance · 粘性路由 · 后记三](../architecture/multi-instance.md)）后，「当前路由：X」失去来源——它显示的正是粘性实例。文案收敛为：
+
+```
+⚠️ [越界放行] 刚才访问的 … 在 workspace 外（审批已放行）。
+若本意是操作远端实例的文件，请改用 remote_call_tool——请确认目标实例。
+```
+
+机制本身（`_tls.outside` 越界标记 → 工具结果尾附提示、不阻断执行）不变。
+
 ## 相关页面
 
 ## 相关页面

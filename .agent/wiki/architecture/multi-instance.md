@@ -166,9 +166,30 @@ edit({"remote_instance_id":"comfy",   ──────▶  {name:"edit", argum
 
 上游[普通工具路由参数退役](#统一走-remote_call_tool普通工具路由参数退役2026-10-11用户裁定commit-212f33a)后，粘性的触发源（显式传 rid 且成功）近乎消失——schema 已不带该参数，模型不再传。粘性机制**原样保留为兼容层**（显式传成功仍粘 / `_main_` 切回 / 异常与文本失败清粘），历史投影里的旧形态调用、模型旧习惯不炸。是否彻底删除待观察后裁定；删除点：`_exec_tool` 粘性分支，一行。
 
+### 后记三：整体退役（2026-10-12，用户裁定「退役吧」，commit eee624f）
+
+后记二的「降级为兼容层」观察期一天即结束——用户裁定：「退役吧」。`_exec_tool` 粘性分支整体摘除（净 -37 行，agent.py `_exec_tool` 路由段重写为 57 行），路由回到**无状态**：
+
+| 摘除 | 保留（兼容层） |
+|---|---|
+| 未传 rid → 自动路由到粘性实例（粘性继承） | 显式带 `remote_instance_id`（或旧名 `server_id`）仍路由——历史投影/模型旧习惯不炸 |
+| 显式远端成功 → 粘住 + `🧷 已切换默认远端` 提示 | 显式 `self` / `local` / `_main_` / `main` 归一本地（`_main_` 留作旧粘性时代切回关键字的同义词，无提示） |
+| 粘性目标不可达 → 自动清粘 + 提示 | 组网教育提示（每轮首次，引导 remote_call_tool） |
+| `_main_` 切回本地提示 / 成功与失败的各粘性文案 | 越界放行提示（「当前路由」粘性显示一并移除，见[工具审批后记二](../features/tool-approval.md)） |
+
+**现行路由语义**（一张表说清）：
+
+```
+远端调用 → remote_call_tool(remote_instance_id, name, arguments)   ← 唯一正规入口
+普通工具（无标记）→ 本地执行（无任何隐藏路由态）
+普通工具显式带标记 → 仍路由（兼容层：无状态、无提示尾注）
+```
+
+**验证**（L3 真调五断言）：① 带 rid 路由成功且无粘性提示尾注 ✓；② 成功后不带 rid → **本地执行（不再粘走）**——测试故意预置旧 `_remote_sticky` 状态同样不生效（退役核心断言）✓；③ `_main_` → 本地 ✓；④ `self` → 本地 ✓；⑤ 远程失败返回无粘性清除文案 ✓。（输出中第⑥项 FAIL 系用例设计失误：② 已消耗当轮首次组网提示——轮指纹去重是设计行为，非缺陷。）引擎层改动，`/restart` 生效。
+
 ### 关联
 
-- [工具执行审批](../features/tool-approval.md)：越界放行提示带当前路由状态（粘性在 → 显示粘性实例），模型当步可自纠
+- [工具执行审批](../features/tool-approval.md)：越界放行提示与路由状态联动——粘性时代曾显示当前粘性实例助模型当步自纠；粘性退役（2026-10-12）后「当前路由」显示一并移除，文案直接引导 remote_call_tool
 - [上下文引擎](context-engine.md)：recent-file 快照对越界文件的容错（漏传写本地后快照不再炸轮）
 
 ## 团队看板手动管理远程实例：＋添加 / ✕移除控件（2026-09-14，用户提案）
@@ -317,7 +338,7 @@ remote_tools.REMOTE_SERVERS（运行时真源）
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
 | `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
 | `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **session 存档持久化**（`extra_state.remote_servers`——2026-09-18 二轮裁定起：capture/restore 挂 `set_session` 标准恢复点、失败标 offline、自连过滤；弃全局 settings 共享与一轮本地文件方案，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
-| `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）。**2026-10-11 起远端调用统一走 `remote_call_tool`**——普通工具 schema 不再暴露路由参数；**兼容层保留**：arguments 带 remote_instance_id 仍 pop 路由（历史投影/模型旧习惯不炸）、显式 `self`/`local` 归一本地、粘性路由照旧（见[退役章节](#统一走-remote_call_tool普通工具路由参数退役2026-10-11用户裁定commit-212f33a)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
+| `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）。**远端调用统一走 `remote_call_tool`**（2026-10-11 起普通工具 schema 不再暴露路由参数）；**兼容层保留**：arguments 显式带 remote_instance_id（或旧名 server_id）仍 pop 路由（历史投影/模型旧习惯不炸）、显式 `self`/`local`/`_main_` 归一本地；**粘性路由已退役**（2026-10-12，commit eee624f——无状态路由，见[粘性路由章节](#粘性路由远端成功一次后自动粘住漏传根治2026-09-29用户提案commit-ff00b75)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 构造。**2026-10-11 起不再注入 remote_instance_id**——普通工具 schema 回归干净参数（`_REMOTE_ROUTABLE` 白名单退役留注记）；deepcopy 不污染原件。历史：2026-09-06 全工具注入 → 09-14 瘦身 → 09-17 白名单恒定注入（见[改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)） |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + 远端调用使用规则（2026-10-11 起引导走 `remote_call_tool`）；**无连接渲染为空串不注入**（零噪声） |
 | 六件套工具 | remote_tools.py | `remote_connect(remote_instance_id?, url)`（探测+注册+落盘，id 可省略自动生成）/ `remote_disconnect` / `remote_list` / **`remote_message(remote_instance_id, message, expect_reply=False)`**（异步 fire-and-forget；expect_reply=True=派活后期望对方完成时回发 answer——见 [expect_reply 章节](#expect_reply派活后对方完成时回发-answer2026-09-17用户提案commit-d98a36c)）/ **`remote_ask(remote_instance_id, question, timeout=120)`**（同步问答）/ **`remote_call_tool(remote_instance_id, name, arguments)`**（**远端调用统一通道**——2026-09-17 起远端独有工具/MCP、2026-10-11 起所有远端工具调用，见 [remote_call_tool 章节](#remote_call_tool远端独有工具mcp-的统一通道2026-09-17用户提案)） |

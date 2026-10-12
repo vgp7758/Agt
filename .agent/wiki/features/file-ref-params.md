@@ -35,7 +35,7 @@ run_python(code="@file:scripts/analyze_v2.py")
 
 ## 接线点：`_exec_tool` 统一入口——远程路由【之前】
 
-`Agent._exec_tool`（src/agent.py）在解析完 remote_instance_id / 粘性路由参数之后、真正执行之前：
+`Agent._exec_tool`（src/agent.py）在解析完 remote_instance_id 路由标记（兼容层；粘性路由已退役 2026-10-12）之后、真正执行之前：
 
 ```python
 _fr = _expand_file_refs(name, arguments)          # 就地改写 arguments，返回附注清单

@@ -204,15 +204,21 @@ def _make_explore(agent):
         if not schemas:
             return "[explore] 无可用只读工具（白名单 " + ", ".join(sorted(_READ_ONLY)) + " 均未注册）"
 
-        if model:
-            try:
-                from llm_client import LLMClient
-                llm = LLMClient(model_name=model, enable_thinking=False, max_retries=2)
-                llm.call_recorder = agent.session.llm_calls.record
-            except Exception as e:
-                return f"[explore] 模型 {model} 初始化失败：{e}"
-        else:
-            llm = agent.utility_client()
+        # 每次调用 new 独立 LLMClient（用户提案 2026-10-12：并行 explore 共用单例 client
+        # → 同 api_key 的并发请求在 provider 侧被限流排队——半串行；独立 client 各自带
+        # 连接池，多 token 池起始位随机分散——并行 explore 各走各的 key，不叠在同一把锁上）
+        from llm_client import LLMClient
+        _m = model or getattr(agent, "utility_model", "") or agent.model_name
+        try:
+            llm = LLMClient(model_name=_m, enable_thinking=False, max_retries=2)
+            llm.call_recorder = agent.session.llm_calls.record
+            if len(llm.api_tokens) > 1:
+                import random as _rnd
+                llm._token_idx = _rnd.randrange(len(llm.api_tokens))
+                llm.api_key = llm.api_tokens[llm._token_idx]
+                llm._client = llm._openai_client()
+        except Exception as e:
+            return f"[explore] 模型 {_m} 初始化失败：{e}"
 
         # 文件树预注入（用户提案 2026-09-09）：system 尾部附树（已排除 gitignore/构建产物）——
         # 探索 agent 免 list_dir 开局，扫树直读可疑文件。树生成失败不阻塞探索（降级无树）。

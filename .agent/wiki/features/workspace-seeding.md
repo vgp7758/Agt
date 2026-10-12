@@ -9,6 +9,7 @@
 - **语义**：目录不存在 → 创建目录 + 播种（引导价值：一眼看到全部可扩展点）；`README.md` 已存在 → 跳过——**用户改动永不覆盖**
 - **写入**：字节级 + `seed_state` 基线——接入 /update-assets 三方 hash 判定管道（框架升级后文档可安全更新）
 - **`.agent/agents/README.md` 的消费端闭环**（2026-10-06 · 三，commit e0d0060）：该目录说明此前会被 [/agents 管理页](agents-admin.md)当 name=README 的伪 agent 列出（平铺 `*.md` 扫描）——现 `load_agents_index` 显式跳过，页面改提供「📖 目录说明」只读渲染入口（`GET /api/agents/readme-doc`，python-markdown 渲染）
+- **种源协议纠错（2026-10-12，9013 实例反馈，commit aae2f69）**：`tools_builtin.md` 种源示例此前教的是引擎不认的描述符字段（`parameters` 字段表 + `run` lambda）——真实协议是 `"func": 函数引用`，schema 从签名+类型注解自动推断、描述读 docstring。种源已修正 + 本 repo `tools/builtin/README.md` 同步覆盖（旧版为播种原版、非用户改动，覆盖安全）；其余 5 份 dir_docs 同日扫描无同款问题。**扩散路径**：其它实例删旧 README 重启重播种，或 `/update-assets`（三方 hash：未改过的播种原版被新版覆盖）。明细见 [工具外置 · 播种 README 协议纠错](tool-externalization.md)
 
 ## seed_default_skills · test-svc 示例技能（2026-09-28，用户提案「最小实现播种给每一个 repo」）
 

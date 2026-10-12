@@ -129,6 +129,51 @@ def agt_register(ctx=None):
 
 首例处置与删/留明细见 [background-scheduler · docstring 通用化原则](background-scheduler.md)（commit `38b2ab7`）。
 
+## 播种 README 协议纠错：种源教了引擎不认的字段——func 函数引用才是真协议（2026-10-12，9013 实例反馈，commit aae2f69）
+
+触发：9013 实例反馈 `tools/builtin/README.md` 里的写法描述是错误的，与实际外置工具约定不符。
+
+**根因在播种种源**：`src/dir_docs/tools_builtin.md`（seed_dir_docs 播到各 repo `tools/builtin/README.md` 的那一页）的示例描述符是**凭空捏造的字段**——
+
+```python
+{"name": "my_tool", "description": "…",
+ "parameters": [{"name": "path", "type": "string", …}],   # ❌ 引擎不认的字段
+ "run": lambda path, count=1: …}                          # ❌ 引擎不认的字段
+```
+
+而引擎 `_tool_from_desc` 只认 **`"func": 可调用对象`**——照旧 README 从零写一个工具，注册时必然报 `inline 模式需要 func=可调用对象`。错误长期没暴露，是因为存量外置件全是对的 func 写法，README 属于没人照着走过一遍的「死文档」。
+
+**修正后的种源示例（真实协议）**：
+
+```python
+# tools/builtin/my_tools.py
+def my_tool(path: str, count: int = 1) -> str:
+    """一句话说明这个工具做什么（模型靠它决定要不要调用）。"""
+    return f"处理了 {path} × {count}"
+
+def agt_register():
+    return [{"name": "my_tool", "func": my_tool, "group": "my"}]   # ★ func = 函数引用
+```
+
+工具实现就是**普通函数**：schema 从函数签名 + 类型注解自动推断、描述从 docstring 读取——不存在手写 `parameters` 表和 `run` 体这回事。
+
+新版种源同时补齐三件：
+
+- **描述符字段一览表**：`func`（必填）/ `name` / `description`（缺省回退 docstring）/ `params`（参数级描述，键=参数名）/ `group` / `hidden` / `outputs` / `subprocess` 模式
+- **明示「没有 run / parameters 字段」**——把最容易想当然的点直接写成反例
+- **真实范例指路**：`src/assets/tools_builtin/` 随包外置件全部用此协议，照抄结构即可
+
+**落地两处**（commit aae2f69）：
+
+| 位置 | 操作 |
+|---|---|
+| 种源 `src/dir_docs/tools_builtin.md` | 已修正（真实协议：func 函数引用 + 签名推断 schema） |
+| 本 repo `tools/builtin/README.md` | 同步覆盖——旧版为播种原版、非用户改动，直接覆盖安全 |
+
+其余 5 份 dir_docs（agents / skills / workflows / nodes / agent_tools）同日扫描——无同款「字段想当然」问题。
+
+**其它实例拿新版**（如 9013）：删掉旧 README → 重启（自动重播种）；或跑 `/update-assets`——三方 hash 判定下，未改过的播种原版会被新版安全覆盖。播种管道语义见 [workspace 播种](workspace-seeding.md)。
+
 ## 相关页面
 
 - [glob_files](glob-files.md) —— 首个外置工具（纯函数整体外置）
@@ -139,3 +184,5 @@ def agt_register(ctx=None):
 - [zai-tools](zai-tools.md) —— Z.AI 联网三件套（2026-09-17 迁独立 MCP repo zai-mcp，本机 ~/.agt/mcp.json 注册）
 - [agentid-tools](agentid-tools.md) —— AgentID 身份协议二件套（魔搭个人身份，不随包）
 - [节点插件化](../architecture/node-plugins.md) —— 同构模式（节点侧，更完整的三级目录/覆盖机制）
+- [workspace 播种](workspace-seeding.md) —— seed_dir_docs：dir_docs 种源播种到约定目录 README（tools_builtin.md 种源协议纠错的扩散管道）
+

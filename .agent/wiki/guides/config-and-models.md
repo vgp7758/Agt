@@ -395,16 +395,17 @@ def _openai_client(self) -> OpenAI:
 
 **2026-10 起开关 repo 级化（用户提案）**：主源改为 `<cwd>/.agent/snapshots_state.json` `{"enabled": bool}`——设置弹窗「其它」页签「回溯快照」控件即时保存（原「模型」页签复选框已移除）；settings.json 的 `enable_snapshots` 降为旧位置**兼容源**（优先级 ②，新写侧保存时顺手清理旧键）。为何不进 repo 级 settings.json：该文件是 `config_file()` **文件级整体覆盖**语义——单键写入会遮蔽全局 settings 其余全部键，故照 `.agent/hooks_state.json` 范式用独立文件。三源优先级与接线详见 [回溯快照与回溯](../features/snapshot-rewind.md)。
 
-### tiering_mode：steps 确定性阶梯开关（2026-10-10，用户提案，commit ed6ab2d）
+### tiering_mode：steps 确定性阶梯开关（2026-10-10，用户提案，commit ed6ab2d；2026-10-13 口径改字符）
 
-`"tiering_mode": "steps"` 开启**按步数分档的确定性阶梯**（默认空 = 现行「轮数卫生毕业 + 体积压力收敛」算法完全不变）。配套两键（`config.load_tier_steps`，**长度/类型不对静默回默认**）：
+`"tiering_mode": "steps"` 开启**确定性阶梯分档**（默认空 = 现行「轮数卫生毕业 + 体积压力收敛」算法完全不变）。**2026-10-13 起触发口径为渲染字符数**（用户裁定，commit 26bdfb2；初版按步数，caps 已退役），配套键（**长度/类型不对静默回默认**）：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `tier_steps` | `[500,600,1200,2400,4800]` | 五档步数上限：档1/档2/档3/档4/工具折叠档（**list 长度必须 5** 才认） |
-| `tier1_flush_steps` | `300` | 档1 溢出时单刀划给档2 的步数预算（至少 1 轮） |
+| `tier_char_ratio` | `0.4` | 字符判阈系数（下限 0.05）：各档**渲染字符数** > `max_effective_context_window × 此值` → 触发升档（2026-10-13 起，`load_tier_char_ratio`） |
+| `tier_steps` | `[500,600,1200,2400,4800]` | ⚠️ **2026-10-13 起不再参与触发**（配置保留兼容不读）——初版（ed6ab2d）步数 caps |
+| `tier1_flush_steps` | `300` | ⚠️ 同上，随步数口径退役 |
 
-开启后 max_level 钉 4（阶梯位置固定）；顶窗大动作、确定性重算等机制详见 [context-engine · steps 分档模式](../architecture/context-engine.md#steps-分档模式按步数的确定性阶梯2026-10-10用户提案commit-ed6ab2d)。`/restart` 生效（session 构造时读取）；存量 session 切换首轮自动收敛（旧边界截取最高 4 条 + warning）。
+开启后 max_level 钉 4（阶梯位置固定）；字符口径阶梯规则（级联下移 / 档1 留 1 轮 / 工具折叠档折进 fc）、渲染字符缓存（`sessions/render_chars.db` 异步预计算）、档2+ reasoning 截断等机制详见 [context-engine · steps 分档模式](../architecture/context-engine.md)。`/restart` 生效（session 构造时读取）；存量 session 切换首轮自动收敛（旧边界截取最高 4 条 + warning）。
 
 **手改键不会被 UI 保存洗掉（2026-10-10 · 二确认）**：手改 `~/.agt/settings.json` 加 `"tiering_mode": "steps"` 后，WebUI 设置弹窗照常保存**不会覆盖掉它**——三条保存路径（设置弹窗生效份 / 指定本地·全局份 `save_settings_scoped` / `apply_config` 热应用）全部是「读 → update 表单键 → 写回」的**合并写**，只动表单里出现的键（[set_config 合并语义](#set_config-保存语义修复合并替代整体覆盖ui-保存不再抹掉非表单键随-v0300commit-54e7eda) 的延续确认）。
 

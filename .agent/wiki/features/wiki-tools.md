@@ -49,6 +49,12 @@
 - ctx 注入：`agt_register(ctx)` 覆盖 `_WORKSPACE`（引擎扫描时传真实 workspace，见 [tool-externalization](tool-externalization.md)）
 - ⚠️ ctx 只作用于扫描器加载的模块实例；别处直接 `import wiki_tools` 拿到的是新实例（开发期误报多源于此）
 
+### 维护坑两则：根章节 update 疑似整页清空 + 同文件连发 add_chapter 假失败（2026-10-11 实测）
+
+**⚠️ 维护轮实测坑（2026-10-11，commit 212f33a 当轮维护）：**
+1. **对页面根章节（`#` 主标题）用 wiki_update_chapter 疑似整页清空**——更新 multi-instance.md 根章节引言（正文仅 2 行）后，整页只剩引言 5 行，其余 ~460 行全丢（靠维护上下文里的完整旧文 + wiki_write 整页重建恢复）。纪律：**不拿根章节做 update_chapter**；页面引言要改，随下一次实质变更整页重写，或把引言降级为子章节。
+2. **同文件连续多次 add_chapter 可能中途报「现有章节: （无）」**——第三次插入时报锚点未找到，原样重试即成功。纪律：同文件章节操作后遇异常先 read_file 核对现场再重试，别盲目连发。
+
 ## 相关页面
 
 - [工具外置体系](tool-externalization.md) —— wiki_tools 是外置件清单成员（纯函数整体外置形态）

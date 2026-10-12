@@ -123,6 +123,17 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 **设计取舍**：提示走**工具结果通道**（模型当步可见），而非 warn 事件（只有人看得到，模型看不见）；不阻断执行——放行了就执行，只是让模型知道发生了什么。
 
+### 后记：提示文案随路由参数退役改引导（2026-10-11，commit 212f33a）
+
+普通工具 schema 不再注入 `remote_instance_id`（远端调用统一走 remote_call_tool，见 [multi-instance · 路由参数退役](../architecture/multi-instance.md)）后，越界放行提示的引导文案同步改——从「可能是漏传了 remote_instance_id」改为指向 `remote_call_tool`：
+
+```
+⚠️ [越界放行] 刚才访问的 … 在 workspace 外（审批已放行）。
+若本意是操作远端实例的文件，请用 remote_call_tool(remote_instance_id, name, arguments) 显式调用（当前路由：taobao）。
+```
+
+机制本身（`_tls.outside` 越界标记 → 工具结果尾附提示）不变；「当前路由」显示粘性实例的联动照旧。
+
 ## 相关页面
 
 ## 相关页面

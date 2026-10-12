@@ -430,6 +430,16 @@ def load_tiering_mode() -> str:
         return ""
 
 
+def load_tier_char_ratio() -> float:
+    """steps 分档模式的字符阈值系数（settings.json 的 tier_char_ratio；默认 0.4）。
+    触发口径（用户裁定 2026-10-13）：各档【渲染字符数】> max_effective_context_window × 此系数
+    → 该档触发升档（每档独立判断；从最高超阈档起级联下移一格，档1 至少留 1 轮）。"""
+    try:
+        return max(0.05, float(load_runtime_settings().get("tier_char_ratio", 0.4) or 0.4))
+    except Exception:
+        return 0.4
+
+
 def load_tier_steps() -> dict:
     """steps 分档模式的阶梯参数（settings.json 的 tier_steps[5] / tier1_flush_steps）。
     caps = [档1, 档2, 档3, 档4, 工具折叠档] 步数上限；flush = 档1 溢出时单刀划走的步数预算（至少 1 轮）。

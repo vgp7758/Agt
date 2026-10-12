@@ -1004,6 +1004,11 @@ class Session:
         except Exception:
             self._current.summary = ""
         self.turns.append(self._current)
+        # 渲染字符预计算（用户提案 2026-10-13）：轮归档即后台算五级字符写缓存——下轮巡检零 miss
+        try:
+            self._precompute_turn_chars_async(len(self.turns) - 1)
+        except Exception:
+            pass
         finished = self._current
         self._constr_migrate_turn(finished)   # 跨轮施工流：施工中 → 本轮 [user + steps 定型] 入流
         self._current = None
@@ -2529,12 +2534,16 @@ class Session:
             msgs.append(a_msg)
         else:
             base = max(self.detail_base >> (level - 1), DETAIL_FLOOR)
+            rcap = None if level == 1 else max(base * 3 // 4, 120)   # 档2+ reasoning 压缩（2026-10-13）
             msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
-                                                 base=base, full_window=(1 if level == 1 else 0)))
+                                                 base=base, full_window=(1 if level == 1 else 0), rcap=rcap))
             if turn.answer:
                 a_msg = {"role": "assistant", "content": turn.answer}
                 if turn.answer_reasoning:
-                    a_msg["reasoning_content"] = turn.answer_reasoning
+                    _ar = turn.answer_reasoning
+                    if rcap and len(_ar) > rcap:
+                        _ar = _ar[:rcap] + f"…(+{len(turn.answer_reasoning) - rcap}字，完整可 recall)"
+                    a_msg["reasoning_content"] = _ar
                 msgs.append(a_msg)
         self._frozen_renders[turn_idx] = (key, msgs)
         return msgs
@@ -2720,9 +2729,108 @@ class Session:
     #   「档1 划前 N 轮给档2」= 最高边界下移；「档k 全档并入档 k+1」= 第 k 个边界槽位上移到第 k-1 个
     #   （重复边界不占位但计 level——引擎原生支持，_deepen_oldest_tier 同款）；「全档→fc」= fc 推进 + 边界剔除。
 
+    # —— 渲染字符缓存（用户提案 2026-10-13）：各轮在 5 个渲染档位下的字符数，SQLite 持久 ——
+    _rc_cache_obj = None   # 惰性 {idx: {"base": b, 1: n1, ..., 5: n5}}
+
+    def _render_chars_db(self):
+        """SQLite 连接（repo 共享：sessions 根/render_chars.db；键前缀 = 本 session 层级 id）。
+        键 <prefix>-<turn_idx> → {base, c1..c5}；base（渲染参数）不匹配则视为 miss 自愈重算。"""
+        import sqlite3
+        if getattr(self, "_rc_conn", None) is None:
+            try:
+                root = _sessions_root_of(self.session_dir)
+                conn = sqlite3.connect(str(root / "render_chars.db"), check_same_thread=False)
+                conn.execute("CREATE TABLE IF NOT EXISTS render_chars"
+                             "(k TEXT PRIMARY KEY, base INTEGER, c1 INTEGER, c2 INTEGER,"
+                             " c3 INTEGER, c4 INTEGER, c5 INTEGER)")
+                self._rc_conn = conn
+            except Exception:
+                self._rc_conn = False   # 建库失败：纯内存模式（每次现算，不落盘）
+        return self._rc_conn or None
+
+    def _render_chars_map(self) -> dict:
+        """本 session 全量字符缓存（惰性批量拉取 + miss 现算补写）。"""
+        if self._rc_cache_obj is not None:
+            return self._rc_cache_obj
+        m: dict = {}
+        pfx = ""
+        try:
+            pfx = str(getattr(self.toollog, "_prefix", "") or "")
+        except Exception:
+            pass
+        conn = self._render_chars_db()
+        if conn is not None and pfx:
+            try:
+                for k, base, c1, c2, c3, c4, c5 in conn.execute(
+                        "SELECT k, base, c1, c2, c3, c4, c5 FROM render_chars WHERE k LIKE ?",
+                        (pfx + "-%",)):
+                    try:
+                        m[int(k.rsplit("-", 1)[1])] = {"base": base, 1: c1, 2: c2, 3: c3, 4: c4, 5: c5}
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        self._rc_cache_obj = m
+        return m
+
+    def _render_turn_at_level(self, turn, level: int) -> int:
+        """现算一轮渲染为 level 的消息总字符（不动 frozen 缓存、不依赖当前边界）。
+        level 5 = 工具折叠档（fold_deep 形态）；1..4 = 文字档（base 衰减 + reasoning 档位压缩）。"""
+        msgs = [{"role": "user", "content": self._user_content(turn)}]
+        if level >= 5:
+            n_calls = sum(len(s.tool_calls) for s in (turn.steps or []))
+            content = (f"---- 已折叠共{n_calls}次工具调用 ----\n\n{turn.answer}" if n_calls
+                       else (turn.answer or ""))
+            msgs.append({"role": "assistant", "content": content})
+        else:
+            base = max(self.detail_base >> (level - 1), DETAIL_FLOOR)
+            rcap = None if level == 1 else max(base * 3 // 4, 120)
+            msgs.extend(self._steps_to_messages(turn.steps, self.max_steps_per_turn,
+                                                 base=base, full_window=(1 if level == 1 else 0), rcap=rcap))
+            if turn.answer:
+                a = {"role": "assistant", "content": turn.answer}
+                ar = (turn.answer_reasoning or "")
+                if ar:
+                    if rcap and len(ar) > rcap:
+                        ar = ar[:rcap] + f"…(+{len(turn.answer_reasoning) - rcap}字，完整可 recall)"
+                    a["reasoning_content"] = ar
+                msgs.append(a)
+        return sum(self._count_chars([m]) for m in msgs)
+
+    def _compute_turn_chars(self, idx: int) -> dict:
+        """现算第 idx 轮的五级渲染字符数并写缓存（miss 自愈 / rewind 重算共用）。"""
+        turn = self.turns[idx]
+        d = {"base": int(self.detail_base)}
+        for lv in range(1, 6):
+            d[lv] = self._render_turn_at_level(turn, lv)
+        self._render_chars_map()[idx] = d
+        conn = self._render_chars_db()
+        if conn is not None:
+            pfx = str(getattr(self.toollog, "_prefix", "") or "")
+            if pfx:
+                try:
+                    conn.execute("INSERT OR REPLACE INTO render_chars VALUES (?,?,?,?,?,?,?)",
+                                 (f"{pfx}-{idx}", d["base"], d[1], d[2], d[3], d[4], d[5]))
+                    conn.commit()
+                except Exception:
+                    pass
+        return d
+
+    def _precompute_turn_chars_async(self, idx: int):
+        """轮完成后的异步预计算（用户提案 2026-10-13）：后台算该轮五级字符写缓存——
+        下轮 start_turn 巡检直接查表零 miss。"""
+        def _go():
+            try:
+                self._compute_turn_chars(idx)
+            except Exception:
+                pass
+        threading.Thread(target=_go, daemon=True, name=f"render-chars-{idx}").start()
+
     def _steps_state(self, fc: int):
-        """当前状态 → （slots 降序4槽， 各档步数和， 工具折叠步数， 区间端点， 轮数）。
-        slots[k] = 第 k+1 高边界（缺位 = fc-1，即空档）；档k = (edges[k], edges[k-1]]，工具折叠 = [fc, edges[4]]。"""
+        """当前状态 → （slots 降序4槽， 各档渲染字符和， 工具折叠字符和， 区间端点， 轮数）。
+        slots[k] = 第 k+1 高边界（缺位 = fc-1，即空档）；档k = (edges[k], edges[k-1]]，工具折叠 = [fc, edges[4]]。
+        字符口径（用户裁定 2026-10-13）：各档按其档位级别的渲染字符数（查 SQLite 缓存，
+        miss/base 不匹配现算补写——自愈）。"""
         n = len(self.turns)
         bs = sorted([b for b in self._tier_boundaries if b >= fc])   # 升序多重集（重复保留）
         if len(bs) > 4:
@@ -2731,69 +2839,70 @@ class Session:
             bs = bs[-4:]
         slots = list(bs[::-1]) + [fc - 1] * (4 - len(bs))   # 降序 [b1, b2, b3, b4]
         edges = [n - 1] + slots + [fc - 1]                   # 档k = (edges[k], edges[k-1]]
-        pre = [0] * (n + 1)                                  # 步数前缀和（O(n) 一次）
-        for i, t in enumerate(self.turns):
-            pre[i + 1] = pre[i] + len(t.steps or [])
-        def span(lo_excl, hi_incl):
-            return pre[hi_incl + 1] - pre[lo_excl + 1] if hi_incl > lo_excl else 0
+        cm = self._render_chars_map()
+        cur_base = int(self.detail_base)
+        pre = [[0] * (n + 1) for _ in range(6)]              # 每级字符前缀和（O(n)）
+        for i, turn in enumerate(self.turns):
+            d = cm.get(i)
+            if d is None or d.get("base") != cur_base:
+                d = self._compute_turn_chars(i)              # miss/失真自愈
+            for lv in range(1, 6):
+                pre[lv][i + 1] = pre[lv][i] + d.get(lv, 0)
+        def span(lo_excl, hi_incl, lv):
+            return pre[lv][hi_incl + 1] - pre[lv][lo_excl + 1] if hi_incl > lo_excl else 0
         sums = [0] * 5
         for k in range(1, 5):
-            sums[k] = span(edges[k], edges[k - 1])
-        return slots, sums, span(fc - 1, edges[4]), edges, n
+            sums[k] = span(edges[k], edges[k - 1], k)
+        return slots, sums, span(fc - 1, edges[4], 5), edges, n
 
     def _plan_fold_steps(self):
-        """steps 模式的轮边界计划（每轮 start_turn 调；observe_llm_usage 的 panic 路径也到这）：
-        ① 顶窗大动作（先于阶梯巡检——resp 事实优先）：档2/3/4 一次性划入工具折叠档 + fc→sos；
-        ② 阶梯巡检（级联到稳定，≤12 轮）：五个档位上限逐一检查、逐级下溢。"""
+        """steps 模式的轮边界计划（每轮 start_turn 调；observe_llm_usage 的 panic 路径也到这）。
+        ① 顶窗大动作（先于阶梯巡检——resp 事实优先）：panic_window 实测触发 → 三级级联
+           （fc→sos → 工具折叠→fc → 档2/3/4→工具折叠档，_steps_window_flush）；
+        ② 阶梯巡检（用户裁定 2026-10-13 字符口径）：各档【渲染字符数】独立判断，
+           > max_effective_context_window × tier_char_ratio（默认 0.4）即触发——
+           从最高超阈档起，该档及以下每一档整体下移一格（边界代数 = 在该档上边界处插入
+           重复边界：≤该值的所有轮统 +1 级——原档4 自动落入工具折叠档；原工具折叠档内容
+           显式折进 fc 结构摘要）；档1 触发时至少保留 1 轮（单轮超阈则不动，panic 兜底）。
+           级联 ≤12 轮到稳定。"""
         if not self.max_effective_context_window:
             return
-        cfg = config.load_tier_steps()
-        caps, flush = cfg["caps"], cfg["flush"]
         if getattr(self, "_over_window_mark", False):
             self._over_window_mark = False
             self._steps_window_flush(with_sos=True)
+        thresh = self.max_effective_context_window * config.load_tier_char_ratio()
         for _round in range(12):
             fc = self._planned_fold
             slots, sums, deep, edges, n = self._steps_state(fc)
-            changed = False
-            if sums[1] > caps[0]:
-                # 档1 溢出：从档1 最早（edges[1]+1）向后累计 ≤flush 步（至少 1 轮）划给档2
-                start = edges[1] + 1
-                cum = 0
-                last = None
-                for i in range(start, n):
-                    s = len(self.turns[i].steps or [])
-                    if cum + s <= flush:
-                        cum += s
-                        last = i
-                    else:
-                        break
-                if last is None:
-                    last = start   # 单轮即超 flush：也划 1 轮（防死循环）
-                slots[0] = last   # b1 := 划走段末轮
-                changed = True
-            if sums[2] > caps[1]:
-                slots[1] = slots[0]   # 档2 全档→档3：b2 := b1
-                changed = True
-            if sums[3] > caps[2]:
-                slots[2] = slots[1]   # 档3 全档→档4
-                changed = True
-            if sums[4] > caps[3]:
-                slots[3] = slots[2]   # 档4 全档→工具折叠档
-                changed = True
-            if deep > caps[4]:
-                # 工具折叠档全部 → fc 结构摘要：fc 推进到该档顶（边界随 fc 剔除）
-                self._planned_fold = max(self._planned_fold, edges[4] + 1)
-                self._last_fold_count = self._planned_fold
-                changed = True
-            if not changed:
+            trig = [k for k in range(1, 5) if sums[k] > thresh]
+            if deep > thresh:
+                trig.append(5)
+            if not trig:
                 break
-            new_fc = self._planned_fold
-            new_bs = sorted([s for s in slots if s >= new_fc])
-            if new_bs != self._tier_boundaries:
-                self._frozen_renders.clear()   # 档位变 → 冻结渲染重算
-                self.mark_system_dirty("steps 阶梯下溢（边界重排）")
-            self._tier_boundaries = new_bs
+            k = max(trig)                      # 最高超阈档 = 级联起点
+            if k == 5:
+                # 仅工具折叠档超阈：内容全部折进 fc（无边界动作——level 数字变化渲染相同）
+                if edges[4] + 1 > fc:
+                    self._planned_fold = fc = edges[4] + 1
+                    self._last_fold_count = fc
+                    self.mark_system_dirty("steps 字符阶梯：工具折叠档 → fc（字符超阈）")
+                continue
+            if k == 1:
+                if n - 1 <= edges[1]:
+                    break                      # 档1 仅 1 轮且超阈：留 1 轮规则优先（panic 兜底）
+                insert_b = n - 2               # 档1 整体下移、保留最后一轮
+            else:
+                insert_b = slots[k - 2]        # 档 k 的上边界 b_{k-1}：插入重复边界 → 级联下移
+            new_fc = edges[4] + 1 if edges[4] >= fc else fc   # 原工具折叠档非空 → 内容折进 fc
+            bs = sorted([b for b in self._tier_boundaries if b >= new_fc] + [insert_b])   # 多重集（重复边界合法——level 计数需要）
+            bs = [b for b in bs if b >= new_fc][-4:]
+            if bs != self._tier_boundaries or new_fc != self._planned_fold:
+                self._frozen_renders.clear()
+                self.mark_system_dirty(f"steps 字符阶梯级联（档{k} 超阈 {sums[k]}>{int(thresh)}）")
+            self._tier_boundaries = bs
+            self._planned_fold = new_fc
+            if new_fc != fc:
+                self._last_fold_count = new_fc
         self._planned_graduates = 0
 
     def _steps_window_flush(self, with_sos: bool):
@@ -2881,79 +2990,18 @@ class Session:
             self._sos_count = reached
 
     def _recompute_steps_boundaries(self) -> list:
-        """从零按 steps 阶梯规则模拟到当前轮数（确定性；顶窗事件不可重放——由首次顶窗 flush 兜底）。
-        用于：模式切换存量 session / 存档缺失兑底。与运行期 _plan_fold_steps 的转移同构。"""
-        cfg = config.load_tier_steps()
-        caps, flush = cfg["caps"], cfg["flush"]
-        n = len(self.turns)
-        steps = [len(t.steps or []) for t in self.turns]
-        lo = [None] * 6   # lo[k]/hi[k] = 档 k 轮区间（闭区间；None=空档）；k=1..5（5=工具折叠）
-        hi = [None] * 6
-        sums = [0] * 6
-        fc = 0
-        for i in range(n):
-            s = steps[i]
-            if lo[1] is None:
-                lo[1] = i
-            hi[1] = i
-            sums[1] += s
-            if sums[1] > caps[0]:
-                cum = 0
-                last = None
-                for j in range(lo[1], hi[1] + 1):
-                    if cum + steps[j] <= flush:
-                        cum += steps[j]
-                        last = j
-                    else:
-                        break
-                if last is None:
-                    last = lo[1]
-                    cum = steps[last]
-                if lo[2] is None:
-                    lo[2] = lo[1]
-                hi[2] = last
-                sums[2] += cum
-                lo[1] = last + 1
-                sums[1] -= cum
-                if lo[1] > hi[1]:
-                    lo[1] = hi[1] = None
-                    sums[1] = 0
-            if sums[2] > caps[1] and lo[2] is not None:
-                if lo[3] is None:
-                    lo[3] = lo[2]
-                hi[3] = hi[2]
-                sums[3] += sums[2]
-                lo[2] = hi[2] = None
-                sums[2] = 0
-            if sums[3] > caps[2] and lo[3] is not None:
-                if lo[4] is None:
-                    lo[4] = lo[3]
-                hi[4] = hi[3]
-                sums[4] += sums[3]
-                lo[3] = hi[3] = None
-                sums[3] = 0
-            if sums[4] > caps[3] and lo[4] is not None:
-                if lo[5] is None:
-                    lo[5] = lo[4]
-                hi[5] = hi[4]
-                sums[5] += sums[4]
-                lo[4] = hi[4] = None
-                sums[4] = 0
-            if sums[5] > caps[4] and lo[5] is not None:
-                fc = hi[5] + 1   # 工具折叠档全部 → fc
-                lo[5] = hi[5] = None
-                sums[5] = 0
-        # 终态 → 边界多重集：b_k = 档k.lo - 1（空档 = 复用上一档边界，维持位置语义）
-        bs = []
-        prev = n - 1
-        for k in range(1, 5):
-            b = (lo[k] - 1) if lo[k] is not None else prev
-            if b >= 0:
-                bs.append(b)
-            prev = b
-        bs = sorted([b for b in bs if b >= fc])
-        self._planned_fold = fc
-        return bs
+        """从零按 steps 字符阶梯规则重建（用户裁定 2026-10-13 字符口径）：清空边界/fc →
+        循环调用与运行期完全同款的巡检逻辑（_plan_fold_steps 内核）到稳定。
+        用于：模式切换存量 session / 存档缺失兜底。窗口事件不可重放——由首次 panic 兜底。"""
+        self._tier_boundaries = []
+        self._planned_fold = 0
+        self._frozen_renders.clear()
+        for _ in range(24):
+            bs_before, fc_before = list(self._tier_boundaries), self._planned_fold
+            self._plan_fold_steps()
+            if list(self._tier_boundaries) == bs_before and self._planned_fold == fc_before:
+                break
+        return self._tier_boundaries
 
     def _graduate_once(self, batch: int = None) -> bool:
         """毕业一批 turn：append 新边界到 _tier_boundaries（边界之前的轮 level+1=顺移），
@@ -3550,7 +3598,7 @@ class Session:
         return json.dumps(_trunc(args or {}), ensure_ascii=False)
 
     def _steps_to_messages(self, steps: list[Step], max_steps: int = 0,
-                           base: int = None, full_window: int = None) -> list[dict]:
+                           base: int = None, full_window: int = None, rcap: int = None) -> list[dict]:
         """把一组 Step 还原成 role 消息：assistant(tool_calls + reasoning_content) + 各 tool 结果。
         工具名/入参/结果从 toollog 按 call_id 召回。step 级策略（分组投影，缓存友好）：
         - 每 GROUP_STEPS 步一组，组内所有步 limit 一致 → byte-stable（利于前缀缓存）；
@@ -3605,7 +3653,10 @@ class Session:
                 })
             a_msg = {"role": "assistant", "content": None, "tool_calls": a_tool_calls}
             if step.reasoning:
-                a_msg["reasoning_content"] = step.reasoning   # 思考原样，不压缩
+                _r = step.reasoning
+                if rcap and len(_r) > rcap:   # 档2+ 的 reasoning 按档位压缩（用户提案 2026-10-13：
+                    _r = _r[:rcap] + f"…(+{len(step.reasoning) - rcap}字，完整可 recall)"  # 只压工具压不动）
+                a_msg["reasoning_content"] = _r   # 档1（rcap=None）原样；档2+ 按 rcap 截断
             msgs.append(a_msg)
             for i, tc in enumerate(live_tcs):
                 _n, _a, result = self.toollog.view(tc.call_id)

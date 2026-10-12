@@ -1395,12 +1395,31 @@ class Session:
             self._constr_buf.append(
                 self._constr_step_msgs(self._current.steps[len(self._constr_buf)]))
 
+    def _construction_origin_idx(self) -> int:
+        """向前回搜施工源头轮（用户裁定 2026-10-12）：最近一个调用了
+        create_plan / commit_spec【或 create_spec】的已完成轮——该轮 user_message 即任务来源
+        （用户"帮我做 X"的原话），施工流以它为起点，模型能看到任务是怎么被提出的。
+        找不到（plan 由旧途径建立/记录已清理）→ 退回最后一轮（现行为）。
+        名字经 toollog 查（Step 只存 call_id）；查不到记录的调用跳过不误判。"""
+        for i in range(len(self.turns) - 1, -1, -1):
+            for _s in (self.turns[i].steps or []):
+                for _tc in (_s.tool_calls or []):
+                    try:
+                        _e = self.toollog.get(_tc.call_id) or {}
+                    except Exception:
+                        _e = {}
+                    if (_e.get("name") or "") in ("create_plan", "commit_spec", "create_spec"):
+                        return i
+        return max(0, len(self.turns) - 1)
+
     def _constr_migrate_turn(self, turn: "Turn") -> None:
         """跨轮施工流迁移（2026-09-17·用户裁定：从施工开始的轮全部保留）：本轮归档时若 plan 仍在
         施工中 → 把 [本轮 user + 各 step 定型 msgs] 追加进 _constr_stream（投影在 user_message 段
         位置整体输出——连续聊天记录，append-only 跨轮）。plan 全完成（收工）/无 plan → 清空流
         （恢复常规历史装配，形态跳变一次）。同步记 extra_state['constr_start_idx']（起始轮号）——
-        重启后按 turns 惰性重建。中断归档同口径（abort_current_turn 也调本方法）。"""
+        重启后按 turns 惰性重建。中断归档同口径（abort_current_turn 也调本方法）。
+        起始轮号（2026-10-12 用户裁定）：首次置值走 _construction_origin_idx() 回搜
+        create_plan/commit_spec 轮——流起点=任务来源轮的 user_message。"""
         try:
             if not self._construction_mode():
                 if self._constr_stream:
@@ -1412,27 +1431,35 @@ class Session:
             for _grp in self._constr_buf:
                 self._constr_stream.extend(_grp)
             if self.extra_state.get("constr_start_idx") is None:
-                self.extra_state["constr_start_idx"] = len(self.turns) - 1   # 起始轮号
+                self.extra_state["constr_start_idx"] = self._construction_origin_idx()   # 源头轮
             self._constr_buf = []
         except Exception as e:
             _LOG.warning("施工流迁移失败（跳过）：%s", e)
 
     def _constr_rebuild(self) -> None:
-        """重启后施工流惰性重建（同裁定）：_constr_stream 为内存，重启丢失——施工中且
-        extra_state 有起始轮号时，用 turns[start:] 重定型每轮 [user + steps]（与 _constr_step_msgs
-        同定型器；归档轮 file_snapshots 不持久化→无内嵌快照块，形态从重建时刻重新 byte-stable）。"""
-        if self._constr_stream:
-            return          # 已有流（轮内由 _constr_migrate_turn 逐轮累积）
+        """施工流惰性校准（重启重建 + 源头轮回搜，用户裁定 2026-10-12）：
+        ① 起点 = min(已存起始轮, 向前回搜 create_plan/commit_spec 轮)——任务来源轮的
+           user_message 起算，模型能看到"这个任务是怎么被提出的"；
+        ② 流为空 或 起点发生变化（回搜到更早源头，如存量存档的激活轮号晚于源头）→
+           按 turns[start:] 全量重定型一次（与 _constr_step_msgs 同定型器；归档轮
+           file_snapshots 不持久化→无内嵌快照块，形态从重建时刻重新 byte-stable）；
+        ③ 起点稳定且流已在 → 零重建（保持增量流 append-only，不破坏跨轮缓存收益）。"""
+        if not self._construction_mode():
+            return
         try:
-            _st = self.extra_state.get("constr_start_idx")
-            if not isinstance(_st, int) or not self._construction_mode():
-                return
-            # 只重建【已归档】轮（turns[_st:]）；当前进行中的轮不进流（其 user/steps 走常规段）
-            for _t in self.turns[_st:]:
+            _stored = self.extra_state.get("constr_start_idx")
+            _src = self._construction_origin_idx()
+            _start = _src if not isinstance(_stored, int) else min(int(_stored), _src)
+            if self._constr_stream and isinstance(_stored, int) and _stored == _start:
+                return          # 起点稳定、流已就绪 → 不重建（增量流保持）
+            # 只重建【已归档】轮（turns[_start:]）；当前进行中的轮不进流（其 user/steps 走常规段）
+            self._constr_stream = []
+            for _t in self.turns[_start:]:
                 self._constr_stream.append({"role": "user", "content": _t.user_message or ""})
                 for _s in _t.steps:
                     self._constr_stream.extend(self._constr_step_msgs(_s))
             self._constr_buf = []
+            self.extra_state["constr_start_idx"] = _start
         except Exception as e:
             _LOG.warning("施工流重建失败（跳过）：%s", e)
 

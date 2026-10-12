@@ -723,6 +723,8 @@ class Session:
         # steps 段输出当前轮 buf——序列 = 完整施工聊天记录。plan 全完成（收工）即清空。
         # 持久化：extra_state["constr_start_idx"]（起始轮号）——重启后按 turns 惰性重建。
         self._constr_stream: list[dict] = []
+        self._proj_lock = threading.RLock()     # 投影重定型互斥（异步重算线程 vs React 装配入口，2026-10-12）
+        self._proj_rebuild_needed = False       # 重定型待办（invalidate 置位；后台线程/装配入口消化）
 
     # ========== 步距衰减基数（显式配置 > 窗口推导 > 1500） ==========
     @property
@@ -1694,6 +1696,19 @@ class Session:
             return False
 
     def messages_for_llm(self) -> list[dict]:
+        """（2026-10-12 异步重定型）与后台重定型线程互斥：重算中则阻塞到完成再组装——
+        React 在 llm.chat 前经此处等装配算完（用户提案：切模型不再同步卡 REPL/React）；
+        后台失败留下的待办标记在此同步兜底消化。"""
+        with self._proj_lock:
+            if self._proj_rebuild_needed:
+                self._proj_rebuild_needed = False
+                try:
+                    self.apply_simple_tiering()
+                except Exception as e:
+                    _LOG.warning("重定型同步兜底失败（忽略，走常规投影）：%s", e)
+            return self._messages_for_llm_impl()
+
+    def _messages_for_llm_impl(self) -> list[dict]:
         """投影 = assembly 清单驱动：按 self.assembly_plan 的顺序装配段/动作项（走查看 _walk_plan——
         连续系统信息段合并成一条 system）；无声明走默认清单（与历史版硬编码顺序一致）。
         current_turn_only（子 Agent reuse）：history/ltm 段强制跳过——每次任务上下文干净、
@@ -1823,7 +1838,7 @@ class Session:
             bool(getattr(llm, "vision_supported", False)),
             getattr(self, "max_effective_context_window", None)))
 
-    def invalidate_projection(self, reason: str) -> None:
+    def invalidate_projection(self, reason: str, async_rebuild: bool = False) -> None:
         """投影惰性状态全失效，下次 messages_for_llm 按新 profile 全量重定型
         （用户提案 2026-09-30：手动切模型时把投影按投影规则整个重刷一遍）。
         原理：投影真相源 = 内存 turns/steps（events.jsonl 的回放态），历史轮/冻结块
@@ -1831,17 +1846,41 @@ class Session:
         vision 门控的图片投影、per-provider 窗口/衰减），等效 events 重放零 IO。
         时机：模型切换必然断 provider 前缀缓存 → 断点免费清账（与毕业/折叠同哲学）。
         覆盖：账本置 dirty / _frozen_renders（旧 vision 定型）/ _constr_buf+
-        _constr_stream（施工定型重回填）/ _proj_stats（段统计新口径）。"""
-        self.mark_system_dirty(f"投影全量重刷（{reason}）")
+        _constr_stream（施工定型重回填）/ _proj_stats（段统计新口径）。
+        async_rebuild=True（用户提案 2026-10-12：重定型异步化）：apply_simple_tiering
+        放后台 daemon 线程——切模型命令立即返回（不再同步卡 REPL/React）；React 在
+        下次 messages_for_llm（llm.chat 前）经 _proj_lock 等待重定型完成后才组装发送；
+        后台失败保留待办标记，装配入口同步兜底消化。"""
+        with self._proj_lock:
+            self.mark_system_dirty(f"投影全量重刷（{reason}）")
+            try:
+                self._frozen_renders.clear()
+                self._constr_buf = []
+                if self._constr_stream:
+                    self._constr_stream = []   # 施工中→下次投影 _constr_rebuild 按 turns[start:] 重建
+                self._proj_stats = None
+                _LOG.info("投影惰性状态已全量失效（%s）——下次投影按新 profile 重定型", reason)
+            except Exception as e:
+                _LOG.warning("invalidate_projection 部分失败（忽略）：%s", e)
+            self._proj_rebuild_needed = True
+        if async_rebuild:
+            threading.Thread(target=self._proj_rebuild_thread, args=(reason,),
+                             daemon=True, name="proj-rebuild").start()
+
+    def _proj_rebuild_thread(self, reason: str) -> None:
+        """异步重定型线程（invalidate_projection(async_rebuild=True) 拉起）：
+        持 _proj_lock 跑 apply_simple_tiering——期间 React 的 messages_for_llm 在锁上
+        等待（等到即已定型，不阻塞命令返回）。失败保留待办标记走同步兜底。"""
         try:
-            self._frozen_renders.clear()
-            self._constr_buf = []
-            if self._constr_stream:
-                self._constr_stream = []   # 施工中→下次投影 _constr_rebuild 按 turns[start:] 重建
-            self._proj_stats = None
-            _LOG.info("投影惰性状态已全量失效（%s）——下次投影按新 profile 重定型", reason)
+            with self._proj_lock:
+                if not self._proj_rebuild_needed:
+                    return          # 已被装配入口同步消化
+                self._proj_rebuild_needed = False
+                self.apply_simple_tiering()
+            _LOG.info("投影重定型完成（异步·%s）——React 装配已解除等待", reason)
         except Exception as e:
-            _LOG.warning("invalidate_projection 部分失败（忽略）：%s", e)
+            self._proj_rebuild_needed = True
+            _LOG.warning("异步重定型失败（%s）：%s——保留待办标记，下次装配时同步执行", reason, e)
 
     def apply_simple_tiering(self, near_turns: int = 10) -> int:
         """切模型/异 profile 重启时的简化分层一次定型（用户提案 2026-10-02）。

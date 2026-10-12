@@ -427,6 +427,8 @@ UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4
 
 **注意**：`release.py --desktop` **不 bump 版本、不上传 PyPI**（桌面 zip 与 pip 包两条独立通道）；本机未装 `gh`，正式 Release 由 Actions 自己创建，不需要 gh。
 
+**发版工具化（2026-10-12，commit a70b991）**：本地 pip 发布链已编排成一次工具调用 [release_publish](release-publish.md)——其步骤 ③ 即 `packaging/version_file.txt` 同步提交推送（本文档[云构建流水线](#云构建--releasegithub-actions-流水线2026-09-10--十三轮spec-决策云构建为主)的 CI 版本戳源），跳过它下次云构建就会用旧版本号。
+
 ### 用户侧下一步（需 GitHub 账号，Agent 无法代做）
 
 **排障入口**：Actions 页面看 job 日志——崩在版本戳步骤先查编码（`PYTHONIOENCODING` 是否就位）；崩在 selftest 门禁即产物坏（漏收集 / 缓存旧字节码），本地 `--clean` 重打包复现；**selftest 步骤被 canceled / 超时**先查是否又引入了 GUI 依赖（见 [selftest 去 GUI 化](#selftest-去-gui-化ci-挂死根因与双层修复2026-09-10-十六轮)）；**门禁只报 `SELFTEST_FAIL` 看不到 ❌ 明细**→ 看 `selftest_result.txt`（门禁已 cat，见 [十七轮](#selftest-明细落文件--门禁改-start-process-重定向2026-09-10--十七轮commit-待推)），再按「本机绿 CI 红 = 环境遮蔽（CI 缺依赖 → 漏收集）」排查。

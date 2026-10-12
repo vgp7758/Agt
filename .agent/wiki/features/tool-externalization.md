@@ -6,8 +6,8 @@
 
 | 位置 | 角色 |
 |------|------|
-| `tools/builtin/*.py` | 工具源文件（开发处，现 15 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/cache/**explore**/**zai**/**agentid**） |
-| `src/assets/tools_builtin/*.py` | 随包副本 = **发布真源**（pip 安装即有，与 nodes_builtin 同思路；现 12 个、与 workspace 层 12 文件重合——2026-09-12 md5 对账全一致（commit 971535a），角色划分与漂移修复见[下节](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版；**team_tools / agentid_tools 两件不随包**（本地私有工具层，2026-09-12 对账定档；原第三件 zai_tools 2026-09-17 迁独立 MCP，见 [zai-tools](zai-tools.md)） |
+| `tools/builtin/*.py` | 工具源文件（开发处，现 16 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/cache/**explore**/**zai**/**agentid**/**release**） |
+| `src/assets/tools_builtin/*.py` | 随包副本 = **发布真源**（pip 安装即有，与 nodes_builtin 同思路；现 12 个、与 workspace 层 12 文件重合——2026-09-12 md5 对账全一致（commit 971535a），角色划分与漂移修复见[下节](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版；**team_tools / agentid_tools / release_tools 三件不随包**（本地私有工具层；前两件 2026-09-12 对账定档，release_tools 2026-10-12 加入——发版编排只属于本 repo，见 [release-publish](release-publish.md)；原第三件 zai_tools 2026-09-17 迁独立 MCP，见 [zai-tools](zai-tools.md)） |
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**——同名时 workspace 层覆盖 assets 层（本 repo 实际生效的是 workspace 份），两层角色与一致性对账见下节。
 
@@ -82,7 +82,7 @@ def agt_register(ctx=None):
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。
 
-## 外置件清单（14 文件；真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组 + 探索组 + 身份协议组——Z.AI 联网组 2026-09-17 迁独立 MCP）
+## 外置件清单（15 文件；真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组 + 探索组 + 身份协议组 + 发布组——Z.AI 联网组 2026-09-17 迁独立 MCP）
 
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
@@ -100,6 +100,7 @@ def agt_register(ctx=None):
 | `explore_tools.py`（新，2026-09-09，commit 4bcd144，spec s_54a1eb86） | explore | 工厂工具外置（**agent 注入 ctx**） | **工作流式 react 探索**：小上下文循环（只读白名单 grep/read_file/glob_files/find_function/list_dir）定位代码，工具调用嫁接回主 agent steps（`agent._seed_steps`：toollog.record + Step + add_step，events.jsonl/读档重放/步距衰减走既有管线，reasoning 标注 `[外置探索]`），主 agent 只拿结构化摘要；**system 尾部预注入 workspace 文件树**（2026-09-09 同日二轮：workspace_tree() 缩进树 + gitignore 过滤 + 每层限宽 + TTL 60s 缓存，规则 0 先扫树直读可疑文件、免 list_dir 开局，树失败降级无树）——见 [spec-tools · 文件树预注入](spec-tools.md)；单结果 6000 字截断；终止=模型收口/步数/墙钟预算；无 agent 引用降级不注册；随包副本已同步；e2e 四场景（嫁接落盘/读档重放/超时降级/白名单双闸）；见 [spec-tools · explore](spec-tools.md) |
 | ~~`zai_tools.py`~~（2026-09-11 建，**2026-09-17 迁出**） | zai_web_search / zai_web_reader / zai_file_parser | **迁独立 MCP repo** `D:\Projects\zai-mcp`（commit 56a4150；主仓删外置件 7aca791） | 用户裁定「改 MCP 放单独 repo，本机使用」——FastMCP stdio server，三工具同源实现搬入；`~/.agt/mcp.json` 注册 `zai` 条目；工具名变 `__mcp__zai__*`；实现细节（端点/鉴权/27 种类型）见 [zai-tools](zai-tools.md) |
 | `agentid_tools.py`（新，2026-09-11，用户个人工具） | agentid_status / agentid_get_token | 纯函数整体外置（**不随包播种**） | **AgentID 身份协议（ModelScope Agent Identity Protocol）**：Ed25519 密钥对（`~/.agt/.agentid/modelscope/agents/agt/` 官方目录约定）对 `agent_id\|kid\|audience\|timestamp` 签名（base64url 无 padding），POST `{idp}/agent_id/token` 换目标应用（audience）短期 JWT——协议与官方 agent-id-client-sdk 源码**逐字节比对一致**（2026-09-11 报错驱动破解）；`_TOKEN_CACHE` 缓存自动续签；DojoZero SDK 已接线（客户端已装 / api.dojozero.live 已配 / discover 连通，audience 待 contest operator、当前无比赛）；`agt_register` **无参**（身份读 ~/.agt，不依赖 workspace，无需 ctx）；依赖 cryptography + requests；`/reload tools` 实测 52 个（50 旧 + 2 新）；见 [agentid-tools](agentid-tools.md) |
+| `release_tools.py`（新，2026-10-12，commit a70b991） | release_publish | 纯函数（编排 release.py + git + PyPI HTTP） | **一键发布**：工作区检查 → release.py（bump/build/upload/push）→ version_file.txt 同步提交 → PyPI 上线验证（20s×3 重试）；任一步失败即中断如实报告；dry_run 预览分支（版本号与暂存还原）；`agt_register()` 无参 + `params` 参数级描述——**README 标准协议活范例**；**不随包**（本 repo 自用，本地私有工具层第三件）；见 [release-publish](release-publish.md) |
 
 工厂清理：`make_ltm_tools` / `make_download_tools` 已删，chat.py 装配线同步清理（ltm/download 改由 attach_script_tools 扫描注册）。explore_tools 的 agent 引用走 attach_script_tools 透传（`ctx["agent"]`），chat.py 装配线加 `agent=agent`。
 

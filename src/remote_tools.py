@@ -460,10 +460,11 @@ def make_remote_tools(agent) -> list[Tool]:
         return ask(remote_instance_id, question, timeout)
 
     def remote_call_tool(remote_instance_id: str, name: str, arguments: dict = None) -> str:
-        """在远端 agt 实例上调用它的工具（2026-09-17·用户提案：远端独有工具/MCP 的统一通道——
-        本地 schema 里没有的工具就靠它调）。remote_instance_id: 目标实例（remote_list 查）；
-        name: 远端工具名（远端独有的 MCP/外置工具可先探清单：本工具 name="get_tool_schemas"）；
-        arguments: 工具参数 dict——误传 JSON 字符串会自动反序列化为 dict，解析失败则报错提示。"""
+        """在远端 agt 实例上调用它的工具——【远端调用统一通道】（2026-10-12·用户裁定：普通工具
+        不再带 remote_instance_id 路由参数，调远端一律走本工具）。remote_instance_id: 目标实例
+        （remote_list 查）；name: 远端工具名（任意——文件/命令/服务/诊断/远端独有 MCP/外置工具；
+        可先 name="get_tool_schemas" 探远端全量工具清单）；arguments: 工具参数 dict——误传 JSON
+        字符串会自动反序列化为 dict，解析失败则报错提示。"""
         if isinstance(arguments, str):
             try:
                 import json as _json

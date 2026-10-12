@@ -642,7 +642,7 @@ class Agent:
             if _out and isinstance(r, str):
                 _cur = getattr(self, "_remote_sticky", None)
                 r += (f"\n\n⚠️ [越界放行] 刚才访问的 {_out} 在 workspace 外（审批已放行）。"
-                      f"若本意是操作远端实例的文件，可能是漏传了 remote_instance_id"
+                      f"若本意是操作远端实例的文件，请改用 remote_call_tool"
                       f"（当前路由：{_cur or '本地'}）——请确认目标实例。")
         except Exception:
             pass
@@ -657,9 +657,8 @@ class Agent:
                     and isinstance(r, str) and getattr(self, "_rid_hint_fp", None) != _fp:
                 self._rid_hint_fp = _fp
                 _ids = "、".join(sorted(_RS))
-                r += (f"\n\n[提示] 本次在本机执行。已组网实例：{_ids}——操作它们那边的"
-                      f"文件/命令时，在工具参数里带 remote_instance_id 即可路由过去执行"
-                      f"（self=显式本机）。")
+                r += (f"\n\n[提示] 本次在本机执行。已组网实例：{_ids}——要操作它们那边的"
+                      f"文件/命令/工具，用 remote_call_tool（参数：remote_instance_id/name/arguments）。")
         except Exception:
             pass
         if _switched_back:
@@ -707,50 +706,17 @@ class Agent:
             entry["event"].set()
 
 
-    # —— 第一档路由白名单（2026-09-17·用户裁定）：远端调用有实质便利的工具才注入
-    # remote_instance_id 路由参数，且【恒定注入】（不看是否组网）——连接前后 schema 不变
-    # （工具 schema 前缀跨连接 byte-stable，不断缓存）。中性工具（纯函数/检索/记忆/wiki）
-    # 与 MCP（__mcp__ 前缀——远端实例挂的 MCP 与本地可能不同，调远端 MCP 走 remote_call_tool）、
-    # remote_* 管理族、本轮状态类（plan/spec/ask_user——状态会落错实例）均不注入。
-    _REMOTE_ROUTABLE = {
-        # 文件系（远端仓库/工作区的文件操作）
-        "read_file", "write_file", "edit", "insert", "delete", "replace_lines",
-        "move", "grep", "glob_files", "list_dir", "diff_files", "diff_paths", "find_function",
-        # 进程/服务系（远端机器上跑命令/服务）
-        "run_shell", "run_python", "start_service", "stop_service", "list_services",
-        "service_logs", "service_stdin", "send_to_service", "check_bg_task", "run_script",
-        # 会话/上下文诊断（读远端实例的存档/投影）
-        "list_tool_logs", "get_tool_detail", "recall_turn", "cache_breakpoint",
-        # 团队（远端实例的子 Agent 团队）
-        "list_team", "agent_query_events",
-        # 调度（远端的定时器）
-        "add_schedule", "cancel_schedule", "list_schedules",
-    }
+    # （历史）第一档路由白名单 _REMOTE_ROUTABLE 已随 2026-10-12 统一化退役：
+    # 普通工具不再注入 remote_instance_id，远端调用统一走 remote_call_tool。
 
     def _llm_tool_schemas(self) -> list:
-        """发给 LLM 的工具 schema 视图：第一档工具恒定注入 remote_instance_id 路由参数。
-        【恒定注入】（用户裁定 2026-09-17）：不再按是否组网动态调整——连接前后 schema 不变
-        （前缀 byte-stable，不断缓存）；只注入 _REMOTE_ROUTABLE 清单（远端调用有实质便利的
-        第一档）；调远端独有工具/MCP 走 remote_call_tool。无 enum（实例 id 动态无法静态
-        枚举）——描述引导；执行侧 self/local 归一为本地（_exec_tool）；缺参时的实例教育
-        仍由运行时提示承担（有实际组网才提示，单机零噪声）。"""
+        """发给 LLM 的工具 schema 视图（2026-10-12·用户裁定：统一走 remote_call_tool）：
+        普通工具【不再注入】remote_instance_id 路由参数——schema 干净、模型不会再漏传/误传；
+        调远端实例的任意工具（含普通工具/远端独有工具/MCP）统一走 remote_call_tool（显式动作，
+        语义清晰）。remote_* 管理族自带的 remote_instance_id 是管理语义（连谁/发给谁），保留。
+        执行侧兼容保留（_exec_tool 收到带路由参数的调用仍路由——历史投影/模型旧习惯不炸）。"""
         import copy
-        RID = "remote_instance_id"
-        PROP = {"type": "string",
-                "description": "执行实例：不填=self 本机执行；或已连接的远程实例 id（remote_list 可查）"}
-        out = []
-        for s in self.tools.schemas():
-            s = copy.deepcopy(s)
-            fname = (s.get("function") or {}).get("name", "")
-            if fname in self._REMOTE_ROUTABLE:
-                try:
-                    props = s["function"]["parameters"].setdefault("properties", {})
-                    if RID not in props:
-                        props[RID] = PROP
-                except Exception:
-                    pass
-            out.append(s)
-        return out
+        return [copy.deepcopy(s) for s in self.tools.schemas()]
 
     def _run_tools_parallel(self, calls: list) -> list:
         """并行执行一组工具调用，按原顺序返回结果。

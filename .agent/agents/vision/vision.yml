@@ -1,8 +1,8 @@
 name: vision
-description: 看懂图片并给出文字描述。何时调用：工具返回 <img>图片</img> 占位、或需理解/分析图片内容时。⚠️ 派活时务必在 prompt
-  里带上 <img>文件名</img> 标签引用，否则子 Agent 看不到图片。
-tools: ''
-model: glm-official-flash
+description: 看懂图片并给出文字描述。何时调用：工具返回 <img>图片</img> 占位、或需理解/分析图片内容时。推荐
+  用 agent_prompt 的 images 参数直接附图（框架自动搬运 + 路径自适应）；也可在 prompt 里手写 <img>文件名或路径</img> 标签。
+tools: read_file,list_dir,grep,agent_ask,agent_notify,agent_query_events,agent_query_tool_detail
+model: qwen
 assembly:
 - file: .agent/agents/vision/vision.md
 - history|optional // 连续看图任务或需要对比之前看过的图片时打开

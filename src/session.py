@@ -3591,7 +3591,6 @@ class Session:
         if not matches:
             return text
         vision = getattr(getattr(self, "llm", None), "vision_supported", False)
-        vision = getattr(getattr(self, "llm", None), "vision_supported", False)
         if not vision:
             def _sub(m):
                 n = m.group(1)
@@ -3603,7 +3602,23 @@ class Session:
             if m.start() > last:
                 out.append({"type": "text", "text": text[last:m.start()]})
             try:
-                p = repo_images_dir(self.workspace) / m.group(1)
+                _nm = (m.group(1) or "").strip().strip('"').strip("'")
+                # 候选三级（用户实测 2026-10-14：模型手写 workspace 相对路径此前一律「读取失败」）：
+                #   ① repo images/ 下的裸文件名（工具图 / agent_prompt images 的落点）
+                #   ② 绝对路径  ③ workspace 相对路径
+                _cands = []
+                try:
+                    _cands.append(repo_images_dir(self.workspace) / _nm)
+                except Exception:
+                    pass
+                _np = Path(_nm)
+                if _np.is_absolute():
+                    _cands.append(_np)
+                elif getattr(self, "workspace", None):
+                    _cands.append(Path(self.workspace) / _nm)
+                p = next((c for c in _cands if c.is_file()), None)
+                if p is None:
+                    raise FileNotFoundError(_nm)
                 mime = mimetypes.guess_type(str(p))[0] or "image/png"
                 b64 = base64.b64encode(p.read_bytes()).decode()
                 out.append({"type": "image_url",

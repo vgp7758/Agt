@@ -982,12 +982,15 @@ def make_subagent_tools(agent) -> list:
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
                      assembly: str = "", caller: str = "", context_messages: str = "",
-                     current_turn_only: bool = True, max_steps: int = 0) -> str:
+                     current_turn_only: bool = True, max_steps: int = 0, images=None) -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
         current_turn_only: 投影隔离（默认 True=复用模式只投影当前轮，历史轮归档不进上下文）。
         max_steps: 本任务的 react 步数上限（用户提案 2026-10-07：默认 0=用声明值/50）。
+        images: 附图路径数组（workspace 相对或绝对；也兼容逗号分隔字符串）——框架把图复制进
+                 repo 图片目录后以 <img> 标签追加到 prompt 尾部；子 Agent 是视觉模型时直接看像素，
+                 非视觉模型降级文字占位（与 <img> 机制同源，免手写标签 + 路径自适应）（用户提案 2026-10-14）。
         长任务（多文件重构/大范围测试）建议显式给大（如 150）——50 步强制收尾对它们不够。
                 长对话型实例（如按客户分线的客服）传 False：完整装配 history——该实例自己的
                 会话历史就是它的记忆（跨轮连续），配合显式 agent_id 定向复用即"每客户一条线"。
@@ -1039,6 +1042,31 @@ def make_subagent_tools(agent) -> list:
                 _ctx_msgs = None
         elif isinstance(context_messages, list) and context_messages:
             _ctx_msgs = context_messages
+        # images 附图（用户提案 2026-10-14）：复制进 repo images 目录 → <img>文件名</img> 追加到 prompt。
+        # 子 Agent 侧投影按其模型 vision 门控展开（_project_imgs 只认 images 目录内的文件名——
+        # 直接传 workspace 路径会「读取失败」，这里统一搬运后引用，两条根因一起堵住）。
+        if images:
+            from pathlib import Path as _P
+            import shutil as _sh
+            from session import repo_images_dir as _rid
+            _paths = images if isinstance(images, (list, tuple)) else [
+                x.strip() for x in str(images).replace("\n", ",").split(",") if x.strip()]
+            _tags, _miss = [], []
+            for _p in _paths:
+                _fp = _P(_p) if _P(_p).is_absolute() else _P(WORKSPACE) / _p
+                if not _fp.exists():
+                    _miss.append(str(_p)); continue
+                try:
+                    _dst = _rid(WORKSPACE) / _fp.name
+                    if not _dst.exists():
+                        _sh.copy2(_fp, _dst)
+                    _tags.append(f"<img>{_fp.name}</img>")
+                except Exception:
+                    _miss.append(str(_p))
+            if _miss:
+                return f"[图片不存在] images 里的这些路径未找到（相对路径基于 workspace）：{'、'.join(_miss)}"
+            if _tags:
+                prompt = (prompt or "") + "\n" + "\n".join(_tags)
         # 'user'/'system' = fire-and-forget：answer 不路由（现有 caller_id == "user" 判断天然处理），
         # 派发信息段同样跳过（子 Agent 无法反查 user 的上下文）；其它显式 id 校验存在性
         if caller_id in ("user", "system"):
@@ -1136,6 +1164,9 @@ def make_subagent_tools(agent) -> list:
                     try:
                         import json
                         meta_path = _sub_dir / "meta.json"
+                        # 首次派发该子 Agent：agents/<id>/ 目录可能尚未建立（用户实测 2026-10-14 告警
+                        # "写 _agent_meta 失败: No such file or directory ... agents/vision/meta.json"）
+                        meta_path.parent.mkdir(parents=True, exist_ok=True)
                         meta = {}
                         if meta_path.exists():
                             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -1394,7 +1425,9 @@ def make_subagent_tools(agent) -> list:
                       "reuse": {"type": "string", "enum": ["yes", "no"],
                                 "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"},
                       "current_turn_only": {"type": "boolean",
-                                "description": "投影隔离：True(默认)=复用模式只投影当前轮；False=完整装配 history（长对话型实例如按客户分线的客服——传 False 且带固定 agent_id 即每客户一条记忆线）"}}),
+                                "description": "投影隔离：True(默认)=复用模式只投影当前轮；False=完整装配 history（长对话型实例如按客户分线的客服——传 False 且带固定 agent_id 即每客户一条记忆线）"},
+                      "images": {"type": "array", "items": {"type": "string"},
+                                "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}}),
                   Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)

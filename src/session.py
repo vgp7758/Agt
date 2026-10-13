@@ -1402,12 +1402,30 @@ class Session:
             self._constr_buf.append(
                 self._constr_step_msgs(self._current.steps[len(self._constr_buf)]))
 
+    def _active_plan_id(self) -> str:
+        """当前活动计划 id（与 _construction_mode 同判定源 _RUNTIME_AGENT；绑定 session 同一性）。"""
+        try:
+            from agent_config import _RUNTIME_AGENT
+            if _RUNTIME_AGENT is None or getattr(_RUNTIME_AGENT, "session", None) is not self:
+                return ""
+            return str(getattr(_RUNTIME_AGENT, "active_plan_id", "") or "")
+        except Exception:
+            return ""
+
     def _construction_origin_idx(self) -> int:
-        """向前回搜施工源头轮（用户裁定 2026-10-12）：最近一个调用了
-        create_plan / commit_spec【或 create_spec】的已完成轮——该轮 user_message 即任务来源
-        （用户"帮我做 X"的原话），施工流以它为起点，模型能看到任务是怎么被提出的。
-        找不到（plan 由旧途径建立/记录已清理）→ 退回最后一轮（现行为）。
-        名字经 toollog 查（Step 只存 call_id）；查不到记录的调用跳过不误判。"""
+        """向前回搜施工源头轮（用户裁定 2026-10-13 修正版）：最近一个 create_plan / commit_spec /
+        join_plan 调用【产出的 plan_id 与当前活动计划一致】的轮——该轮 user_message 即任务来源。
+        plan_id 提取：join_plan 取 arguments.plan_id（显式参数最可靠）；create_plan / commit_spec
+        从结果文本正则（"已创建计划 p_x…" / "已生成 plan p_x…"，commit_spec 的 approve 分支才含）。
+        严格匹配治旧病灶：换新计划后投影仍从【旧计划的源头轮】起算（constr_start_idx 跨计划粘滞
+        + 回搜不辨计划归属）。无匹配（toollog 记录已清/读档恢复路径建 plan/计划来自其它 session 且
+        本 session 未 join）→ 退回最后一轮（施工激活轮，现行为）。"""
+        import re as _re
+        _pid = self._active_plan_id()
+        _fallback = max(0, len(self.turns) - 1)
+        if not _pid:
+            return _fallback
+        _rx = _re.compile(r"(?:已创建计划|已生成计划|已生成 plan|已加入计划)\s+(p_[0-9a-fA-F]+)")
         for i in range(len(self.turns) - 1, -1, -1):
             for _s in (self.turns[i].steps or []):
                 for _tc in (_s.tool_calls or []):
@@ -1415,9 +1433,21 @@ class Session:
                         _e = self.toollog.get(_tc.call_id) or {}
                     except Exception:
                         _e = {}
-                    if (_e.get("name") or "") in ("create_plan", "commit_spec", "create_spec"):
+                    _n = (_e.get("name") or "")
+                    if _n not in ("create_plan", "commit_spec", "join_plan"):
+                        continue
+                    _id = ""
+                    if _n == "join_plan":
+                        try:
+                            _id = str((_e.get("arguments") or {}).get("plan_id") or "").strip()
+                        except Exception:
+                            _id = ""
+                    if not _id:
+                        _m = _rx.search(str(_e.get("result") or ""))
+                        _id = _m.group(1) if _m else ""
+                    if _id == _pid:
                         return i
-        return max(0, len(self.turns) - 1)
+        return _fallback
 
     def _constr_migrate_turn(self, turn: "Turn") -> None:
         """跨轮施工流迁移（2026-09-17·用户裁定：从施工开始的轮全部保留）：本轮归档时若 plan 仍在
@@ -1425,39 +1455,53 @@ class Session:
         位置整体输出——连续聊天记录，append-only 跨轮）。plan 全完成（收工）/无 plan → 清空流
         （恢复常规历史装配，形态跳变一次）。同步记 extra_state['constr_start_idx']（起始轮号）——
         重启后按 turns 惰性重建。中断归档同口径（abort_current_turn 也调本方法）。
-        起始轮号（2026-10-12 用户裁定）：首次置值走 _construction_origin_idx() 回搜
-        create_plan/commit_spec 轮——流起点=任务来源轮的 user_message。"""
+        起始轮号（2026-10-12 用户裁定；2026-10-13 修正绑定计划）：首次置值或【活动计划变更】时
+        走 _construction_origin_idx() 回搜 plan_id 匹配轮——换新计划后流起点跟随新计划重算，
+        不再从旧计划的源头轮起算（旧版 constr_start_idx 跨计划粘滞病灶）。"""
         try:
             if not self._construction_mode():
                 if self._constr_stream:
                     self._constr_stream = []                     # 收工/非施工：清流
                 self.extra_state.pop("constr_start_idx", None)
+                self.extra_state.pop("constr_plan_id", None)
                 return
             self._constr_sync()   # 保证 buf 覆盖本轮全部 steps（定型器与投影同路径）
             self._constr_stream.append({"role": "user", "content": turn.user_message or ""})
             for _grp in self._constr_buf:
                 self._constr_stream.extend(_grp)
-            if self.extra_state.get("constr_start_idx") is None:
+            _pid = self._active_plan_id()
+            _pid_changed = bool(_pid) and self.extra_state.get("constr_plan_id") != _pid
+            if _pid_changed:
+                self.extra_state["constr_plan_id"] = _pid
+                self.extra_state["constr_start_idx"] = self._construction_origin_idx()   # 换计划→重算源头
+            elif self.extra_state.get("constr_start_idx") is None:
                 self.extra_state["constr_start_idx"] = self._construction_origin_idx()   # 源头轮
             self._constr_buf = []
         except Exception as e:
             _LOG.warning("施工流迁移失败（跳过）：%s", e)
 
     def _constr_rebuild(self) -> None:
-        """施工流惰性校准（重启重建 + 源头轮回搜，用户裁定 2026-10-12）：
-        ① 起点 = min(已存起始轮, 向前回搜 create_plan/commit_spec 轮)——任务来源轮的
-           user_message 起算，模型能看到"这个任务是怎么被提出的"；
-        ② 流为空 或 起点发生变化（回搜到更早源头，如存量存档的激活轮号晚于源头）→
-           按 turns[start:] 全量重定型一次（与 _constr_step_msgs 同定型器；归档轮
-           file_snapshots 不持久化→无内嵌快照块，形态从重建时刻重新 byte-stable）；
-        ③ 起点稳定且流已在 → 零重建（保持增量流 append-only，不破坏跨轮缓存收益）。"""
+        """施工流惰性校准（重启重建 + 源头轮回搜，用户裁定 2026-10-12；2026-10-13 修正绑定计划）：
+        ① 活动计划变更（extra_state['constr_plan_id'] ≠ 当前 active_plan_id）→ 丢弃旧起点
+            重新回搜（不 min——旧起点属于上一个计划，与新任务无关）；
+        ② 计划未变：起点 = min(已存起始轮, 回搜值)——同一计划内回搜到更早源头时向前扩；
+        ③ 流为空 或 起点变化 → 按 turns[start:] 全量重定型一次（与 _constr_step_msgs 同定型器；
+            归档轮 file_snapshots 不持久化→无内嵌快照块，形态从重建时刻重新 byte-stable）；
+        ④ 起点稳定且流已在 → 零重建（保持增量流 append-only，不破坏跨轮缓存收益）。"""
         if not self._construction_mode():
             return
         try:
+            _pid = self._active_plan_id()
             _stored = self.extra_state.get("constr_start_idx")
+            _stored_pid = self.extra_state.get("constr_plan_id")
+            _pid_changed = bool(_pid) and _stored_pid != _pid
             _src = self._construction_origin_idx()
-            _start = _src if not isinstance(_stored, int) else min(int(_stored), _src)
-            if self._constr_stream and isinstance(_stored, int) and _stored == _start:
+            if _pid_changed:
+                _start = _src                                   # 换计划：旧起点作废，重新回搜
+                self.extra_state["constr_plan_id"] = _pid
+            else:
+                _start = _src if not isinstance(_stored, int) else min(int(_stored), _src)
+            if self._constr_stream and isinstance(_stored, int) and _stored == _start and not _pid_changed:
                 return          # 起点稳定、流已就绪 → 不重建（增量流保持）
             # 只重建【已归档】轮（turns[_start:]）；当前进行中的轮不进流（其 user/steps 走常规段）
             self._constr_stream = []

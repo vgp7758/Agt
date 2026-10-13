@@ -3222,7 +3222,9 @@ def _materialize_user_images(images) -> str:
     """把 WebUI 上传的 data URL 图片落盘到 repo images/，返回 " <img>文件名</img>" 文本后缀。
     仅用于【插话/入队】等纯文本注入通道（投影时它们是 turn.user_message 的一部分）；
     空闲新轮走 agent.run(images=) 原生多模态通道（投影构造 image_url 块），不走这里。
-    （2026-09-29 修：此前 server 解析出 images 后从未使用——WebUI 上传的截图被静默丢弃）"""
+    （2026-09-29 修：此前 server 解析出 images 后从未使用——WebUI 上传的截图被静默丢弃；
+    2026-10-14 修：注释早已声明 <img> 形态（用户裁定 2026-10-03 插话原生看图），但代码
+    一直在写死文本括号形态——括号不被 _IMG_TAG_RE 命中，视觉模型永远看不到插话附图。）"""
     if not images:
         return ""
     import base64 as _b64

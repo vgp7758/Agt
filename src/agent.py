@@ -459,8 +459,12 @@ class Agent:
             self._print_event(event)
 
     def _materialize_tool_result(self, result, tool_name, args, cid) -> str:
-        """工具结果里的 data-URL 图片段落盘到 repo images/，用 <img>name</img> 占位替换。
-        base64 不进 toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。"""
+        """工具结果里的 data-URL 图片段落盘到 repo images/，用 <img>name</img> 标签替换。
+        base64 不进 toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。
+        （2026-10-14 修：此前写成死文本"[图片 name，当前模型无视觉能力…]"——括号形态
+        不被投影层 _IMG_TAG_RE 命中，视觉模型永远无法回看 read_file 的图，vision 子
+        Agent 只见占位文案（用户实锤）。<img> 形态由 _project_imgs 按当前模型 vision
+        门控展开：视觉模型→image_url 看像素；非视觉模型→文字占位+委托 vision 提示。）"""
         result = result or ""
         matches = list(_DATA_URL_RE.finditer(result))
         if not matches:

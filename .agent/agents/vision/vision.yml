@@ -1,6 +1,7 @@
 name: vision
-description: 看懂图片并给出文字描述。何时调用：工具返回 <img>图片</img> 占位、或需理解/分析图片内容时。推荐
-  用 agent_prompt 的 images 参数直接附图（框架自动搬运 + 路径自适应）；也可在 prompt 里手写 <img>文件名或路径</img> 标签。
+description: 看懂图片并给出文字描述。何时调用：工具返回图片占位、或需理解/分析图片内容时。
+  推荐用 agent_prompt 的 images 参数直接附图（框架自动搬运 + 三级路径解析）；
+  也可在 prompt 里手写 img 标签（尖括号形式，内容为 workspace 相对路径 / 绝对路径 / repo images 裸文件名）。
 tools: read_file,list_dir,grep,agent_ask,agent_notify,agent_query_events,agent_query_tool_detail
 model: qwen
 assembly:

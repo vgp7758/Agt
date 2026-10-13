@@ -72,3 +72,5 @@ sim_*.csv
 tether_q*.mp4
 # PV 制作产物（帧/视频/音频）
 pv_out/
+# BP/PPT/PV 宣传物料（本地产物，不入版本）
+bp/

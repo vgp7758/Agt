@@ -750,6 +750,10 @@ resp = target_agent.llm.chat(msgs, tools=[])
 
 **关联**：[agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5)（姊妹语义——notify 的空闲唤醒是真 run，装配工具天经地义）· [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)
 
+### 后记：会话侧姊妹命令 /ask——同款语义给用户（2026-10-14，用户提案）
+
+同款语义的**用户侧姊妹命令**：[/ask 旁路询问指令](../features/ask-command.md)（2026-10-14，用户提案）——对象=当前会话自己，`-turn N` 附近 N 轮 user/answer 纯文本对（默认零上下文），同样 `tools=[]` 不装工具、不产生对话轮、不写 events.jsonl，回答显示即弃。
+
 ## agent_notify 忙闲分流：空闲直接唤醒一轮（2026-09-24，用户裁定，commit cdb13c5）
 
 **用户裁定（2026-09-24，commit `cdb13c5`）**：「agent_notify 的消息在那个 sub-agent 的空闲时直接唤醒一轮 run 倒是也合理」——notify 的本意是「**让对方看到**」；空闲时没人会消费队列，唤醒一轮才是完整语义（原语义下空闲 agent 的提示要悬挂到下次被外部触发才被看到）。

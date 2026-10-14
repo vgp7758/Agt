@@ -769,6 +769,19 @@ def web_main(port=None):
     端口可由命令行参数指定：`agt-web` → 8000，`agt-web 9000` → 9000。"""
     import sys
     _early_argv()   # --help / --version（打印后退出，不起服务）
+    # --dashboard [端口]：多实例统一看板（纯管理面：不装配 Agent / 不起 start_server）——
+    # 尽早分流（spec s_95425415 Step6）：dashboard 崩了不影响任何被管实例。
+    if any(a in ("--dashboard", "-dashboard") for a in sys.argv[1:]):
+        dash_port = port
+        for a in sys.argv[1:]:
+            if a in ("--dashboard", "-dashboard"):
+                continue
+            if a.isdigit():
+                dash_port = int(a)
+                break
+        from dashboard import serve as dash_serve, DEFAULT_PORT as _DP
+        dash_serve(dash_port or _DP)
+        return
     _apply_resume_arg(sys.argv[1:], WORKSPACE)   # --resume [名字]：启动自动恢复 session（转 env，_recover_restart_env 消费）
     _ensure_utf8_stdout()
     if port is None:
@@ -903,6 +916,7 @@ def _early_argv():
         print("用法：")
         print("  agt          交互式 CLI 模式（终端对话；进入后 /help 查看全部命令）")
         print("  agt-web      WebUI 服务（浏览器/手机访问；--port 指定端口，默认 8000）")
+        print("  agt-web --dashboard [端口]  多实例统一看板（状态/启停/拉线/互动流；默认 9100）")
         print()
         print("  两端通用：--resume [名字]  启动即自动恢复 session（无值=本 repo 最近活跃；")
         print("            默认不自动恢复，新开对话）")

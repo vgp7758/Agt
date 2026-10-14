@@ -97,6 +97,31 @@ agt          # CLI
 agt-web      # WebUI（浏览器打开 http://localhost:8000）
 ```
 
+### 4. 多实例统一看板（dashboard）
+
+```bash
+agt-web --dashboard          # http://localhost:9100（端口可跟在后面：agt-web --dashboard 9100）
+```
+
+一张页面管多台 agt 实例（本机多端口 / 局域网 / cpolar 公网隧道）：
+
+- **状态总览**：🟢空闲 / 🟡忙碌 / 🔴离线，model·session·轮数、recap（最近在干嘛）
+- **本地实例启停**：dashboard 直接拉起（detached Popen）/ 停止（杀进程树，含 MCP 子进程）
+- **发现一键导入**：netstat 扫本机 LISTEN → `/api/status` 含 session_name 判定 agt，勾选导入
+- **拉网线**：卡片间连线 = 对 A 调 `/api/remote/add`（复用组网端点，零改动）；拓扑显示在卡片 chips
+- **互动群聊流**：旁听各实例 WS 事件，采集 `remote_*` / `notify` 调用（发送方视角），飞书式时间线
+- **远程实例**：kind 选「远程」填 url（局域网地址或 `https://xxx.cpolar.top/port-N`）；开了
+  callback_token 的实例在条目里填 token，dashboard 探测/拉线自动带 `X-Cb-Token`
+
+纯管理面：不装配 Agent、不占 session、不消耗 LLM，崩了不影响被管实例。数据文件：
+`~/.agt/dashboard.json`（实例注册表）、`~/.agt/dashboard_interactions.jsonl`（互动流追加日志，
+重启不丢）。旧版实例无互动历史回填端点（`GET /api/interactions`）时自动降级——只从 dashboard
+启动起积累。
+
+端到端冒烟（隔离 AGT_HOME 起 2 实例 + dashboard → 发现导入 → 拉线 → 真发跨实例消息 →
+验证互动流 → 启停 → 清理）见 `smoke/smoke_launch.py` / `smoke_drive.py`（`python smoke/smoke_launch.py
+&& python smoke/smoke_drive.py`，清理 `python smoke/smoke_cleanup.py`）。
+
 ---
 
 ## Agent 上手指引（新环境探索）

@@ -1389,6 +1389,58 @@ def api_remote_remove(body: dict):
     return {"ok": msg.startswith("✅"), "msg": msg}
 
 
+@app.get("/api/interactions")
+def api_interactions(limit: int = 500):
+    """互动历史回填（dashboard 拉取，只读；spec s_95425415 Step10）：读共享 toollog.jsonl
+    尾部 N 条，过滤 remote_*/notify/prompt 调用 → [{ts,from,to,to_kind,text}]。
+    toollog 行无时间戳 → ts=0（dashboard 侧恒最先给齐、UI 标「更早」）。
+    旧版实例无此端点 → dashboard 侧 404 静默降级，语义兼容。"""
+    from pathlib import Path as _P
+    import json as _j
+    items: list = []
+    self_name = ""
+    try:
+        if _agent is None:
+            return {"ok": True, "items": [], "self": ""}
+        sess = getattr(_agent, "session", None)
+        self_name = str(getattr(sess, "name", "") or "")
+        path = getattr(getattr(sess, "toollog", None), "_path", None)
+        if path is None:
+            return {"ok": True, "items": [], "self": self_name}
+        path = _P(path)
+        if not path.exists():
+            return {"ok": True, "items": [], "self": self_name}
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        n = max(1, min(int(limit or 500), 2000))
+        for ln in lines[-n:]:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                e = _j.loads(ln)
+            except Exception:
+                continue
+            name = str(e.get("name") or "")
+            if name not in ("remote_message", "remote_ask", "remote_call_tool",
+                            "agent_notify", "agent_prompt"):
+                continue
+            args = e.get("arguments") or {}
+            to = (args.get("remote_instance_id") or args.get("target_id")
+                  or args.get("name") or "")
+            text = (args.get("message") or args.get("question")
+                    or args.get("prompt") or "")
+            if not text and name == "remote_call_tool":
+                text = (f"{args.get('name', '')} "
+                        f"{_j.dumps(args.get('arguments') or {}, ensure_ascii=False)}")
+            items.append({"ts": 0, "from": self_name, "to": str(to)[:120],
+                          "to_kind": name, "text": str(text)[:2000]})
+        return {"ok": True, "items": items, "self": self_name}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "items": items, "self": self_name}
+
+
 @app.get("/api/dash")
 async def api_dash():
     """WebUI 看板数据（团队 + 后台）：右侧抽屉的两个看板一次拿全——

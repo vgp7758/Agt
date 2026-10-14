@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:," />
+<title>agt dashboard</title>
+<style>
+  :root { --bg:#f5f6f8; --line:#e2e5ea; --muted:#8a9099; --dark:#1f2329; --accent:#2563eb;
+          --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:#1f2329; display:flex; flex-direction:column; }
+  /* —— 顶栏（深色，同 index.html header 风格）—— */
+  header { padding:10px 16px; background:var(--dark); color:#fff; display:flex;
+           align-items:center; gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .tag { font-size:11px; color:#9aa0a6; background:#33373d; border-radius:10px; padding:2px 8px; }
+  header .sub { font-size:12px; color:#9aa0a6; margin-left:auto; }
+  header button, .btn { border:0; border-radius:8px; padding:6px 12px; font-size:12.5px;
+           cursor:pointer; background:#2f3339; color:#e8eaed; }
+  header button:hover, .btn:hover { background:#3d424a; }
+  .btn.primary { background:var(--accent); color:#fff; }
+  .btn.primary:hover { background:#1d4fd8; }
+  .btn.danger { background:#fee2e2; color:#b91c1c; }
+  .btn.danger:hover { background:#fecaca; }
+  .btn.ghost { background:#eef2f7; color:#374151; }
+  .btn.mini { padding:3px 8px; font-size:11.5px; border-radius:6px; }
+  main { flex:1; overflow-y:auto; padding:14px 16px 0; display:flex; flex-direction:column; min-height:0; }
+  /* —— 实例卡片网格 —— */
+  #cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px;
+          box-shadow:0 1px 2px rgba(0,0,0,.05); display:flex; flex-direction:column; gap:7px; }
+  .card.off { opacity:.62; }
+  .card .row1 { display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .dot.idle { background:var(--ok); box-shadow:0 0 4px var(--ok); }
+  .dot.busy { background:var(--warn); box-shadow:0 0 4px var(--warn); }
+  .dot.off  { background:var(--bad); }
+  .card .name { font-size:14.5px; font-weight:600; }
+  .badge { font-size:10.5px; border-radius:8px; padding:1px 7px; background:#eef2f7; color:#4b5563; }
+  .badge.local { background:#e0f2fe; color:#075985; }
+  .badge.remote { background:#f3e8ff; color:#6b21a8; }
+  .card .meta { font-size:12px; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 10px; }
+  .card .meta a { color:var(--accent); text-decoration:none; word-break:break-all; }
+  .card .meta a:hover { text-decoration:underline; }
+  .recap { font-size:12px; color:#4b5158; background:#f8f9fb; border:1px solid var(--line);
+           border-radius:8px; padding:5px 8px; max-height:58px; overflow:hidden; cursor:pointer; }
+  .recap.open { max-height:280px; overflow-y:auto; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+  .chips .lbl { font-size:11.5px; color:var(--muted); }
+  .chip { font-size:11px; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46;
+          border-radius:9px; padding:1px 4px 1px 8px; display:inline-flex; align-items:center; gap:3px; }
+  .chip .x { cursor:pointer; color:#059669; font-weight:700; padding:0 3px; }
+  .chip .x:hover { color:#b91c1c; }
+  .ops { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+  .err { font-size:11.5px; color:#b91c1c; background:#fef2f2; border-radius:6px; padding:3px 8px; }
+  /* —— 互动群聊流 —— */
+  #chatSec { margin-top:14px; background:#fff; border:1px solid var(--line); border-radius:12px;
+             display:flex; flex-direction:column; min-height:320px; flex:1; }
+  .chatHead { padding:9px 14px; border-bottom:1px solid var(--line); display:flex; gap:8px;
+              align-items:center; flex-wrap:wrap; }
+  .chatHead b { font-size:13.5px; }
+  .chatHead select, .chatHead input { font-size:12px; border:1px solid var(--line); border-radius:7px;
+              padding:3px 6px; color:#1f2329; background:#fff; }
+  .chatHead input { width:150px; }
+  .chatHead .hint { font-size:11px; color:var(--muted); margin-left:auto; }
+  #chatFlow { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .msg { display:flex; gap:9px; max-width:86%; }
+  .ava { width:30px; height:30px; border-radius:50%; color:#fff; font-size:13px; font-weight:700;
+         display:flex; align-items:center; justify-content:center; flex:none; margin-top:2px; }
+  .msg .body { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .msg .title { font-size:11.5px; color:var(--muted); display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; }
+  .msg .title .fn { font-weight:600; color:#374151; }
+  .msg .title .arrow { color:#9ca3af; }
+  .msg .title .kind { background:#eef2ff; color:#3730a3; border-radius:7px; padding:0 6px; font-size:10.5px; }
+  .msg .title .ts2 { font-size:10.5px; }
+  .msg .bub { background:#f3f4f6; border:1px solid var(--line); border-radius:11px;
+              border-top-left-radius:4px; padding:7px 11px; font-size:13px; line-height:1.5;
+              white-space:pre-wrap; word-break:break-word; }
+  .msg .bub.folded { cursor:pointer; }
+  .msg.hist .bub { background:#fbfbf7; border-style:dashed; }
+  .empty { color:var(--muted); font-size:12.5px; text-align:center; margin:auto; }
+  /* —— 弹窗 —— */
+  .mask { position:fixed; inset:0; background:rgba(15,18,25,.45); display:none;
+          align-items:flex-start; justify-content:center; z-index:50; padding:60px 16px 16px; }
+  .mask.show { display:flex; }
+  .dlg { background:#fff; border-radius:14px; padding:18px 20px; width:520px; max-width:96vw;
+         max-height:80vh; overflow-y:auto; box-shadow:0 8px 30px rgba(0,0,0,.18); }
+  .dlg h3 { margin:0 0 12px; font-size:15px; }
+  .dlg .frow { display:flex; gap:10px; margin-bottom:9px; }
+  .dlg label { font-size:12px; color:#4b5158; width:88px; flex:none; padding-top:7px; text-align:right; }
+  .dlg input[type=text], .dlg input[type=password], .dlg select {
+         flex:1; border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:13px; min-width:0; }
+  .dlg .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+  .dlg .tip { font-size:11.5px; color:var(--muted); margin:2px 0 10px 98px; }
+  .drow { display:flex; align-items:center; gap:8px; padding:7px 4px; border-bottom:1px dashed var(--line); font-size:12.5px; }
+  .drow .u { color:var(--accent); }
+  #toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--dark);
+           color:#fff; border-radius:10px; padding:9px 18px; font-size:13px; opacity:0;
+           pointer-events:none; transition:opacity .25s; z-index:99; max-width:80vw; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 agt dashboard</h1>
+  <span class="tag" id="portTag">…</span>
+  <button onclick="modalAdd()">＋ 添加实例</button>
+  <button onclick="modalDiscover()">🔍 发现实例</button>
+  <span class="sub" id="subInfo"></span>
+</header>
+
+<main>
+  <section id="cards"></section>
+
+  <section id="chatSec">
+    <div class="chatHead">
+      <b>💬 互动群聊流</b>
+      <select id="fFrom" onchange="refilter()"><option value="">全部发送方</option></select>
+      <span style="color:#9ca3af;font-size:12px">→</span>
+      <select id="fTo" onchange="refilter()"><option value="">全部接收方</option></select>
+      <input id="fKw" placeholder="关键字…" oninput="refilter()" />
+      <button class="btn mini ghost" onclick="clearChat()">清屏</button>
+      <span class="hint" id="chatHint">自 dashboard 启动起积累；更早记录视实例版本回填</span>
+    </div>
+    <div id="chatFlow"><div class="empty">暂无互动记录——实例间 remote_*/notify 调用会实时出现在这里</div></div>
+  </section>
+</main>
+
+<!-- 添加/编辑弹窗 -->
+<div class="mask" id="mAdd">
+  <div class="dlg">
+    <h3 id="mAddTitle">添加实例</h3>
+    <div class="frow"><label>类型</label>
+      <select id="fKind" onchange="kindSwitch()"><option value="local">本地实例</option><option value="remote">远程实例</option></select></div>
+    <div class="frow"><label>名称</label><input type="text" id="fName" placeholder="agt-9000" /></div>
+    <div class="frow localOnly"><label>repo 目录</label><input type="text" id="fRepo" placeholder="D:\path\to\agt-repo（启动 cwd）" /></div>
+    <div class="frow localOnly"><label>端口</label><input type="text" id="fPort" placeholder="9000" /></div>
+    <div class="frow localOnly"><label>启动参数</label><input type="text" id="fArgs" placeholder="额外 agt-web 参数（可空）" /></div>
+    <div class="frow"><label>url</label><input type="text" id="fUrl" placeholder="http://127.0.0.1:9000（远程必填；本地可覆盖）" /></div>
+    <div class="frow"><label>公网 url</label><input type="text" id="fPub" placeholder="https://xxx.cpolar.top/port-9000（可空）" /></div>
+    <div class="frow"><label>token</label><input type="text" id="fToken" placeholder="callback_token（公网实例需要时填）" /></div>
+    <div class="frow"><label>备注</label><input type="text" id="fNote" placeholder="" /></div>
+    <div class="foot">
+      <button class="btn ghost" onclick="hide('mAdd')">取消</button>
+      <button class="btn primary" onclick="saveInstance()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 发现弹窗 -->
+<div class="mask" id="mDisc">
+  <div class="dlg">
+    <h3>🔍 本机发现</h3>
+    <div class="tip" id="discTip" style="margin-left:0">netstat 扫描本机 LISTEN 端口 → /api/status 含 session_name 判定 agt 实例</div>
+    <div id="discList"><div class="empty">扫描中…</div></div>
+    <div class="foot">
+      <button class="btn ghost" onclick="hide('mDisc')">关闭</button>
+      <button class="btn primary" onclick="importDiscovered()">导入勾选</button>
+    </div>
+  </div>
+</div>
+
+<!-- 拉线弹窗 -->
+<div class="mask" id="mWire">
+  <div class="dlg">
+    <h3 id="mWireTitle">拉网线</h3>
+    <div class="tip" style="margin-left:0" id="wireTip"></div>
+    <div class="frow"><label>目标实例</label><select id="wireTo"></select></div>
+    <div class="foot">
+      <button class="btn ghost" onclick="hide('mWire')">取消</button>
+      <button class="btn primary" onclick="doWire()">连线 A → B</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ============================== 状态 ============================== */
+let ST = { instances: [], hub: {} };      // /api/state 快照
+let sinceTs = 0;                          // 互动游标（ts==0 的历史条目恒重发 → 指纹去重）
+let seenFp = new Set();                   // 已渲染互动指纹（历史回填 ts=0 每轮重发，必须去重）
+let chatAll = [];                         // 已加载的全部互动（前端过滤渲染）
+let editId = null;                        // 编辑中的实例 id（null=新增）
+let wireFrom = null;                      // 拉线发起方 id
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function toast(t) { const el = $("toast"); el.textContent = t; el.style.opacity = 1;
+  clearTimeout(el._t); el._t = setTimeout(() => el.style.opacity = 0, 2600); }
+function hide(id) { $(id).classList.remove("show"); }
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json";
+    opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  return await r.json();
+}
+
+/* ============================== 实例卡片 ============================== */
+function nameOf(id) { const e = ST.instances.find(x => x.id === id); return e ? e.name : id; }
+function idOf(name) { const e = ST.instances.find(x => x.name === name); return e ? e.id : null; }
+
+function render() {
+  $("portTag").textContent = "port " + (ST.port || "?");
+  const lis = ST.hub.listening || [];
+  $("subInfo").textContent = ST.instances.length
+    ? `${ST.instances.length} 实例 · 互动旁听 ${lis.length} 条线 · 记录 ${ST.hub.records || 0}` : "尚无实例——点「发现」或「添加」开始";
+  const grid = $("cards");
+  if (!ST.instances.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:30px 0">空注册表：🔍 发现实例 一键导入本机 agt，或 ＋ 添加实例</div>';
+  } else {
+    grid.innerHTML = ST.instances.map(cardHtml).join("");
+  }
+  fillFilters();
+}
+
+function cardHtml(e) {
+  const p = e.probe || {};
+  const alive = !!p.alive;
+  const st = !alive ? "off" : (p.busy ? "busy" : "idle");
+  const lamp = st === "idle" ? "🟢 空闲" : st === "busy" ? "🟡 忙碌" : "🔴 离线";
+  const urls = [];
+  if (e.url) urls.push(`<a href="${esc(e.url)}" target="_blank">${esc(e.url)}</a>`);
+  if (e.public_url) urls.push(`<a href="${esc(e.public_url)}" target="_blank">公网↗</a>`);
+  else if (e.cpolar_public) urls.push(`<a href="${esc(e.cpolar_public)}" target="_blank">cpolar↗</a>`);
+  const badges = [p.model ? esc(p.model) : "", p.session_name ? "📁 " + esc(p.session_name) : "",
+    (p.session_turns != null && p.session_turns !== "") ? p.session_turns + " 轮" : ""]
+    .filter(Boolean).map(x => `<span class="badge">${x}</span>`).join(" ");
+  const recap = p.recap ? `<div class="recap" onclick="this.classList.toggle('open')" title="点击展开/收起">${esc(p.recap)}</div>` : "";
+  const err = (!alive && p.error) ? `<div class="err">${esc(p.error)}</div>` : "";
+  const chips = (e.wired || []).map(n => {
+    const bid = idOf(n);
+    return `<span class="chip">${esc(n)}${bid ? `<span class="x" title="拆线" onclick="unwire('${e.id}','${bid}')">✕</span>` : ""}</span>`;
+  }).join("");
+  const ops = [];
+  if (!alive && e.kind === "local") ops.push(`<button class="btn mini primary" onclick="startInst('${e.id}')">▶ 启动</button>`);
+  if (alive && e.kind === "local") ops.push(`<button class="btn mini danger" onclick="stopInst('${e.id}')">■ 停止</button>`);
+  if (alive && (e.url || e.public_url)) ops.push(`<button class="btn mini ghost" onclick="openUI('${e.id}')">打开 WebUI↗</button>`);
+  ops.push(`<button class="btn mini ghost" onclick="modalWire('${e.id}')">+ 拉线</button>`);
+  ops.push(`<button class="btn mini ghost" onclick="modalEdit('${e.id}')">编辑</button>`);
+  ops.push(`<button class="btn mini ghost" onclick="delInst('${e.id}')">删除</button>`);
+  return `<div class="card ${alive ? "" : "off"}">
+    <div class="row1"><span class="dot ${st}"></span><span class="name">${esc(e.name)}</span>
+      <span class="badge ${esc(e.kind)}">${e.kind === "local" ? "本地" : "远程"}</span>
+      <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">${lamp}</span></div>
+    <div class="meta">${e.repo ? `<span title="${esc(e.repo)}">📂 ${esc(shortPath(e.repo))}</span>` : ""}${urls.join("")}</div>
+    <div class="meta">${badges || '<span style="color:#c3c7cd">—</span>'}</div>
+    ${recap}${err}
+    <div class="chips"><span class="lbl">已连:</span>${chips || '<span class="lbl">（无）</span>'}</div>
+    <div class="ops">${ops.join("")}</div>
+  </div>`;
+}
+function shortPath(p) { p = String(p); return p.length > 34 ? "…" + p.slice(-33) : p; }
+
+function fillFilters() {
+  for (const [sel, attr] of [["fFrom", "from"], ["fTo", "to"]]) {
+    const el = $(sel), cur = el.value;
+    const names = new Set(chatAll.map(r => r[attr]).filter(Boolean));
+    el.innerHTML = `<option value="">${sel === "fFrom" ? "全部发送方" : "全部接收方"}</option>` +
+      [...names].sort().map(n => `<option${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+}
+
+/* ============================== 操作 ============================== */
+async function poll() {
+  try {
+    const d = await api("GET", "/api/state");
+    if (d && d.ok) { ST = d; render(); }
+  } catch (e) { /* 瞬断静默 */ }
+}
+
+async function startInst(id) { const r = await api("POST", "/api/start", { id });
+  toast(r.ok ? `启动中 pid=${r.pid}…` : `❌ ${r.error || "失败"}`); poll(); }
+async function stopInst(id) { if (!confirm("停止该实例（杀进程树，含其 MCP 子进程）？")) return;
+  const r = await api("POST", "/api/stop", { id }); toast(r.ok ? `已停止 (${r.msg || ""})` : `❌ ${r.error || r.msg || "失败"}`); poll(); }
+async function delInst(id) { const e = ST.instances.find(x => x.id === id); if (!e) return;
+  if (!confirm(`删除实例「${e.name}」？（仅移出看板注册表，不停止进程）`)) return;
+  await api("DELETE", "/api/instances/" + id); toast("已删除"); poll(); }
+function openUI(id) { const e = ST.instances.find(x => x.id === id); if (!e) return;
+  window.open(e.url || e.public_url, "_blank"); }
+async function unwire(a, b) { const r = await api("POST", "/api/unwire", { a, b });
+  toast(r.ok ? r.msg : `❌ ${r.error}`); poll(); }
+
+/* —— 添加 / 编辑 —— */
+function kindSwitch() {
+  const remote = $("fKind").value === "remote";
+  document.querySelectorAll(".localOnly").forEach(el => el.style.display = remote ? "none" : "flex");
+}
+function modalAdd() { editId = null; $("mAddTitle").textContent = "添加实例";
+  ["fName","fRepo","fPort","fArgs","fUrl","fPub","fToken","fNote"].forEach(i => $(i).value = "");
+  $("fKind").value = "local"; kindSwitch(); $("mAdd").classList.add("show"); }
+function modalEdit(id) { const e = ST.instances.find(x => x.id === id); if (!e) return;
+  editId = id; $("mAddTitle").textContent = "编辑实例 · " + e.name;
+  $("fKind").value = e.kind || "local";
+  $("fName").value = e.name || ""; $("fRepo").value = e.repo || "";
+  $("fPort").value = e.port || ""; $("fArgs").value = e.start_args || "";
+  $("fUrl").value = e.url || ""; $("fPub").value = e.public_url || "";
+  $("fToken").value = e.token || ""; $("fNote").value = e.note || "";
+  kindSwitch(); $("mAdd").classList.add("show"); }
+async function saveInstance() {
+  const body = { kind: $("fKind").value, name: $("fName").value.trim(), repo: $("fRepo").value.trim(),
+    port: parseInt($("fPort").value) || 0, start_args: $("fArgs").value.trim(),
+    url: $("fUrl").value.trim(), public_url: $("fPub").value.trim(),
+    token: $("fToken").value.trim(), note: $("fNote").value.trim() };
+  if (!body.name && body.port) body.name = "agt-" + body.port;
+  let r;
+  if (editId) r = await api("PUT", "/api/instances/" + editId, body);
+  else r = await api("POST", "/api/instances", body);
+  if (r.ok) { hide("mAdd"); toast(editId ? "已更新" : "已添加（后台探测接管中）"); poll(); }
+  else toast("❌ " + (r.error || "失败"));
+}
+
+/* —— 发现 —— */
+async function modalDiscover() {
+  $("mDisc").classList.add("show");
+  $("discList").innerHTML = '<div class="empty">扫描中…</div>';
+  const r = await api("POST", "/api/discover");
+  if (!r.ok) { $("discList").innerHTML = '<div class="empty">扫描失败</div>'; return; }
+  const dom = r.cpolar_domain;
+  $("discTip").textContent = dom ? `本机 cpolar 隧道域名：${dom}（导入时自动填公网 url）`
+                                 : "未检出 cpolar 隧道域名（纯本地组网不受影响）";
+  if (!r.candidates.length) { $("discList").innerHTML = '<div class="empty">未发现新的 agt 实例（已纳管的不再列出）</div>'; return; }
+  $("discList").innerHTML = r.candidates.map((c, i) =>
+    `<label class="drow"><input type="checkbox" class="discCk" data-i="${i}" checked />
+      <b>${esc(c.session_name || "agt-" + c.port)}</b>
+      <span class="u">${esc(c.url)}</span>
+      <span class="badge">${esc(c.model || "?")}</span>
+      <span style="margin-left:auto;color:var(--muted)">${c.ready ? "🟢 ready" : "⏳ 装配中"}</span></label>`).join("");
+  modalDiscover._cand = r.candidates;
+}
+async function importDiscovered() {
+  const cks = [...document.querySelectorAll(".discCk:checked")];
+  if (!cks.length) { toast("未勾选任何实例"); return; }
+  let n = 0;
+  for (const ck of cks) {
+    const c = (modalDiscover._cand || [])[+ck.dataset.i]; if (!c) continue;
+    const r = await api("POST", "/api/instances", { kind: "local", name: c.session_name || ("agt-" + c.port),
+      url: c.url, port: c.port, public_url: c.public_url || "" });
+    if (r.ok) n++;
+  }
+  hide("mDisc"); toast(`已导入 ${n} 个实例`); poll();
+}
+
+/* —— 拉线 —— */
+function modalWire(id) {
+  wireFrom = id;
+  const others = ST.instances.filter(x => x.id !== id);
+  $("wireTip").textContent = `对「${nameOf(id)}」调 /api/remote/add，把它连到目标实例（探测成功才入表）`;
+  $("wireTo").innerHTML = others.map(o => `<option value="${o.id}">${esc(o.name)}（${esc(o.public_url || o.url || "?")}）</option>`).join("");
+  if (!others.length) $("wireTo").innerHTML = '<option value="">（没有其它实例）</option>';
+  $("mWire").classList.add("show");
+}
+async function doWire() {
+  const b = $("wireTo").value;
+  if (!b || !wireFrom) { toast("没有可连的目标"); return; }
+  const r = await api("POST", "/api/wire", { a: wireFrom, b });
+  toast(r.ok ? "✅ " + r.msg : "❌ " + (r.error || "失败"));
+  hide("mWire"); poll();
+}
+
+/* ============================== 互动群聊流 ============================== */
+function fp(r) { return [r.ts, r.from, r.to, r.kind, String(r.text || "").slice(0, 100)].join("|"); }
+function colorOf(name) { let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `hsl(${h % 360},52%,44%)`; }
+function fmtTs(ts) {
+  if (!ts) return "更早";           // 历史回填（toollog 无时间戳）
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+const KIND_LABEL = { remote_message: "消息", remote_ask: "提问", remote_call_tool: "工具调用",
+                     agent_notify: "通知", agent_prompt: "驱动" };
+
+function renderChat() {
+  const fFrom = $("fFrom").value, fTo = $("fTo").value,
+        kw = $("fKw").value.trim().toLowerCase();
+  const items = chatAll.filter(r =>
+    (!fFrom || r.from === fFrom) && (!fTo || r.to === fTo) &&
+    (!kw || String(r.text || "").toLowerCase().includes(kw)));
+  const flow = $("chatFlow");
+  if (!items.length) {
+    flow.innerHTML = '<div class="empty">暂无匹配的互动记录——实例间 remote_*/notify 调用会实时出现在这里</div>';
+    return;
+  }
+  flow.innerHTML = items.map(r => {
+    const fold = String(r.text || "").length > 400;
+    const txt = fold ? String(r.text).slice(0, 400) + " …（点击展开）" : r.text;
+    return `<div class="msg ${r.hist ? "hist" : ""}" title="${r.hist ? "历史回填" : ""}">
+      <div class="ava" style="background:${colorOf(r.from)}">${esc(String(r.from || "?").slice(0, 1).toUpperCase())}</div>
+      <div class="body">
+        <div class="title"><span class="fn">${esc(r.from)}</span><span class="arrow">→</span>
+          <span class="fn">${esc(r.to || "?")}</span>
+          <span class="kind">${esc(KIND_LABEL[r.kind] || r.kind || "?")}</span>
+          <span class="ts2">${fmtTs(r.ts)}</span></div>
+        <div class="bub${fold ? " folded" : ""}" ${fold ? 'onclick="this.classList.remove(\'folded\');this.textContent=this.dataset.full"' : ""} data-full="${esc(r.text)}">${esc(txt)}</div>
+      </div></div>`;
+  }).join("");
+  flow.scrollTop = flow.scrollHeight;   // 跟随最新（观感：群聊流）
+  fillFilters();
+}
+
+async function pollChat() {
+  try {
+    const r = await api("GET", `/api/interactions?since=${sinceTs}&limit=300`);
+    if (r && r.ok) {
+      let fresh = 0;
+      for (const it of (r.items || [])) {
+        const k = fp(it);
+        if (seenFp.has(k)) continue;
+        seenFp.add(k);
+        chatAll.push(it);
+        if (it.ts > sinceTs) sinceTs = it.ts;
+        fresh++;
+      }
+      if (chatAll.length > 3000) chatAll = chatAll.slice(-2500);   // 前端防爆
+      if (fresh) renderChat();
+    }
+  } catch (e) { /* 瞬断静默 */ }
+}
+function refilter() { renderChat(); }
+function clearChat() { chatAll = []; $("fFrom").value = ""; $("fTo").value = ""; $("fKw").value = ""; renderChat(); }
+
+/* ============================== 启动 ============================== */
+poll(); pollChat();
+setInterval(poll, 3000);
+setInterval(pollChat, 3000);
+</script>
+</body>
+</html>

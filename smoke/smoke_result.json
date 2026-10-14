@@ -1,0 +1,89 @@
+{
+ "steps": {
+  "dashboard_ready": {
+   "ok": true,
+   "detail": "{'ok': True, 'now': 1792011219.9674218, 'port': 19100, 'instances': [], 'hub': {'listening': [], 'records': 0}}"
+  },
+  "instA_ready": {
+   "ok": true,
+   "detail": "{'model': 'glm-official-flash', 'session_name': '(未命名)'}"
+  },
+  "instB_ready": {
+   "ok": true,
+   "detail": "{'model': 'glm-official-flash', 'session_name': '(未命名)'}"
+  },
+  "instA_greet": {
+   "ok": true,
+   "detail": "就绪"
+  },
+  "instB_greet": {
+   "ok": true,
+   "detail": "就绪"
+  },
+  "sessions_named": {
+   "ok": true,
+   "detail": "A='就绪两字回复测试' B='就绪回复测试'"
+  },
+  "discover": {
+   "ok": true,
+   "detail": "ports=[2048, 9000, 9013, 9014, 9888, 18001, 18002, 20048, 50052] diag={'err': '', 'lines': 471, 'listening': 67, 'probed': 45} cpolar='r21.cpolar.top'"
+  },
+  "import_18001": {
+   "ok": true,
+   "detail": "{'ok': True, 'entry': {'id': '4b429b63', 'name': '就绪两字回复测试', 'kind': 'local', 'url': 'http://127.0.0.1:18001', 'public_url': '', 'repo': 'D:\\\\AI_Usings\\\\Agt\\\\smoke\\\\ws_a', 'port': 18001, 'start_args': '', 'token': '', 'note': 'smoke'}}"
+  },
+  "import_18002": {
+   "ok": true,
+   "detail": "{'ok': True, 'entry': {'id': 'fb6d6425', 'name': '就绪回复测试', 'kind': 'local', 'url': 'http://127.0.0.1:18002', 'public_url': '', 'repo': 'D:\\\\AI_Usings\\\\Agt\\\\smoke\\\\ws_b', 'port': 18002, 'start_args': '', 'token': '', 'note': 'smoke'}}"
+  },
+  "probe_alive": {
+   "ok": true,
+   "detail": "alive={'4b429b63': True, 'fb6d6425': True} hub_listening=['4b429b63', 'fb6d6425']"
+  },
+  "hub_attached": {
+   "ok": true,
+   "detail": "listening=['4b429b63', 'fb6d6425']"
+  },
+  "wire": {
+   "ok": true,
+   "detail": "{'ok': True, 'msg': '✅ 已连接 \\'就绪回复测试\\' → http://127.0.0.1:18002（140 工具 · session=就绪回复测试 · model=glm-official-flash）。现在可在任意工具调用的 arguments 里带 \"remote_instance_id\": \"就绪回复测试\" 路由执行。'}"
+  },
+  "wire_visible_on_A": {
+   "ok": true,
+   "detail": "A.remotes=['就绪回复测试']"
+  },
+  "topology_adjacency": {
+   "ok": true,
+   "detail": "adj={'4b429b63': ['就绪回复测试'], 'fb6d6425': []}"
+  },
+  "drive_A_remote_message": {
+   "ok": true,
+   "detail": "tools=['remote_message'] answer=已发送。"
+  },
+  "interaction_captured": {
+   "ok": true,
+   "detail": "{'ts': 1792011310.5877585, 'from': '就绪两字回复测试', 'to': '就绪回复测试', 'kind': 'remote_message', 'text': 'hello-from-A-smoke'}"
+  },
+  "interaction_filter": {
+   "ok": true,
+   "detail": "filtered_n=1"
+  },
+  "unwire": {
+   "ok": true,
+   "detail": "{'ok': True, 'msg': '就绪两字回复测试 ✕ 就绪回复测试 已拆线'}"
+  },
+  "stop_instance": {
+   "ok": true,
+   "detail": "{'ok': True, 'pid': 29896, 'msg': 'SUCCESS: The process with PID 29896 (child process of PID 10268) has been terminated.'} port_dead=True"
+  },
+  "start_accepted": {
+   "ok": true,
+   "detail": "{'ok': True, 'pid': 34160}"
+  },
+  "start_ready_again": {
+   "ok": true,
+   "detail": "{'model': 'glm-official-flash', 'session_name': '(未命名)', 'error': None}"
+  }
+ },
+ "ok": true
+}

@@ -39,6 +39,11 @@ resume/
 # === 设计草稿 / 临时验证（不入版本） ===
 design/
 docs/branch_files/
+# dashboard 冒烟运行时产物（隔离 AGT_HOME 含 models.json 副本，勿提交）
+smoke/home_*/
+smoke/ws_*/
+smoke/*.log
+smoke/pids.json
 # wiki 维护攒批队列（运行时状态，勿提交）
 .agent/wiki_queue/
 .agent/remote_servers.json

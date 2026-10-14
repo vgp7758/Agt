@@ -193,3 +193,23 @@ git init 加三件套：`timeout=120`（超时抛 RuntimeError 明确文案）+ 
 - [系统总览 · 一轮对话数据流](../architecture/overview.md)——② 快照 workspace（回溯检查点）
 - [diff_files](diff-files.md)——典型用途含「快照回溯点 vs 当前」对比
 - [dir_snapshot / diff_snapshots](../architecture/snapshot-diff.md)——目录级 mtime 快照（工作流子能力，与本页检查点机制是两回事）
+## /clean 清空快照仓库从 0 开始（2026-10-14，用户提案）
+
+**用户提案（2026-10-14）**：「需要一个 /clean 指令能够对 `<cwd>/.agt/snapshots/` 里的快照记录进行清理从 0 开始」——快照仓库随轮数增长（大仓库可达数十 GB），旧快照的回溯价值随会话推进递减；一刀清空释放磁盘，下一轮起自动重建重新累积。
+
+**实现**（两件）：
+
+| 件 | 说明 |
+|---|---|
+| `SnapshotManager.clean()`（src/snapshots.py） | 拿与 snapshot/restore 同一把锁（防与进行中 git 操作并发）→ rglob 统计字节 → rmtree 整个 `.agt/snapshots`。返回释放字节数；目录不存在返回 0（幂等）。**下一轮 `snapshot()` 经 `ensure_repo` 自动重建**（HEAD 不存在即重新 init） |
+| `/clean` 命令（commands.py `_cmd_clean` + 注册） | CLI/Web 斜杠两入口自动可用（dispatch 表）；`snapshot_manager` 未装配时按 workspace 临时构造。打印释放 MB + 后果提示 |
+
+**⚠️ Windows read-only 踩坑（单测实锤）**：git 对象文件是只读属性，裸 `shutil.rmtree(ignore_errors=True)` 报 PermissionError 被**静默吞掉**——目录残留（对象文件全在），clean 假成功。修复：`onerror` 回调先 `os.chmod(p, stat.S_IWRITE)` 再重删（Linux 无只读障碍不触发）。
+
+**后果（命令输出显式提示）**：session 各 turn 记录的 `snapshot_sha` 随 git 对象一并消失——**清理前各轮的 `/rewind` / `/snapshot restore` 失效**（`cat-file -t sha` 校验抛错）；清理后的轮照常可回溯。这是"从 0 开始"的固有代价，用户显式接受。
+
+**验证**（隔离 workspace 单测 5 步全过）：①建仓打两个快照 ✓ → ②clean 释放 24.5KB、目录消失 ✓ → ③幂等 clean 返回 0 ✓ → ④再 snapshot() 自动重建、新对象可查 ✓ → ⑤旧 sha cat-file 报错（对象已删，符合预期）✓。
+
+**生效方式**：引擎层（snapshots.py / commands.py / chat.py），需 `/restart`；本 repo 已 commit，push 由定时任务兜底重试。
+
+

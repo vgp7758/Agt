@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -85,6 +86,37 @@ class SnapshotManager:
                 self._run(["checkout-index", "-a", "-f"])
             # 删除快照之后新建的文件（快照仓库视角下的未跟踪文件；.agt/.git 已在 exclude）
             self._run(["clean", "-fd", "-e", ".agt"])
+
+    def clean(self) -> int:
+        """删除整个快照仓库（workspace/.agt/snapshots），从 0 开始。返回释放字节数（估算）。
+
+        用户提案 2026-10-14（/clean 命令）：快照仓库随轮数增长（大仓库可达数十 GB），
+        旧快照的回溯价值随会话推进递减——一刀清空、下一轮 snapshot() 经 ensure_repo 自动
+        重建，重新累积。与 snapshot/restore 拿同一把锁（防与正在进行的 git 操作并发）。
+
+        后果（调用方须提示用户）：session 各 turn 记录的 snapshot_sha 随 git 对象一并
+        消失——/rewind 到清理前的轮会失败（快照点不存在）；清理后的轮照常可回溯。"""
+        with self._lock:
+            if not self.git_dir.exists():
+                return 0
+            total = 0
+            for f in self.git_dir.rglob("*"):
+                try:
+                    if f.is_file():
+                        total += f.stat().st_size
+                except OSError:
+                    pass
+            # Windows：git 对象文件是 read-only 属性，裸 rmtree 报 PermissionError 静默残留——
+            # onerror 先 chmod 可写再重试（Linux 无只读障碍，回调不触发）。
+            import stat as _stat
+            def _rm_onerr(func, p, _exc):
+                try:
+                    os.chmod(p, _stat.S_IWRITE)
+                    func(p)
+                except Exception:
+                    pass
+            shutil.rmtree(self.git_dir, onerror=_rm_onerr)
+            return total
 
 
 # ---------- 用户真仓库 HEAD 工具（rewind 撞车检测，用户提案 2026-09-06）----------

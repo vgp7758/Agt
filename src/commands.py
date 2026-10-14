@@ -1146,6 +1146,26 @@ def _cmd_rewind(ctx: CommandContext, args):
     print(f"✅ 已回溯（撤销最近 {count} 轮的{_what}），剩余 {remain} 轮")
 
 
+def _cmd_clean(ctx: CommandContext, args):
+    """/clean —— 清空工作区快照仓库（<workspace>/.agt/snapshots），从 0 开始（用户提案 2026-10-14）。
+
+    快照仓库随轮数增长（大仓库可达数十 GB）；旧快照的回溯价值随会话推进递减——
+    一刀清空释放磁盘，下一轮起自动重建快照仓库、重新累积。
+    ⚠️ 后果：清理前各轮的 /rewind 失效（快照对象已删，回溯到那些轮会报"快照点不存在"）。"""
+    from snapshots import SnapshotManager
+    sm = getattr(ctx.agent, "snapshot_manager", None)
+    ws = ctx.session.workspace
+    if sm is None:
+        sm = SnapshotManager(ws)   # 未装配（罕见）——按路径临时构造，clean 逻辑同款
+    freed = sm.clean()
+    mb = freed / 1024 / 1024
+    if freed <= 0 and not (Path(ws) / ".agt" / "snapshots").exists():
+        print(f"（快照仓库不存在：{Path(ws) / '.agt' / 'snapshots'}——无事可做）")
+        return
+    print(f"✅ 已清空快照仓库 {Path(ws) / '.agt' / 'snapshots'}（从 0 开始）")
+    print(f"   释放 {mb:.1f} MB；⚠️ 清理前各轮的 /rewind 失效，下一轮起自动重建快照继续累积")
+
+
 # ========== RAG 文档库（/rag） ==========
 
 def _cmd_rag(ctx: CommandContext, args):
@@ -2146,6 +2166,10 @@ def build_default_registry() -> CommandRegistry:
         "/rewind 3          撤销最近 3 轮\n"
         "/rewind -soft      只回滚会话：对话截断，该轮产生的文件改动/代码全保留\n"
         "/rewind --git reset  检查点后有 git 提交时一并退 HEAD（否则默认拦截并提示）")
+    reg.register("clean", _cmd_clean,
+        "清空工作区快照仓库（.agt/snapshots）从 0 开始——释放磁盘；清理前各轮的 /rewind 失效",
+        "/clean             删除整个快照仓库（下一轮起自动重建、重新累积）\n"
+        "  ⚠️ 清理前各轮的 /rewind /snapshot restore 失效（快照对象已删）")
     reg.register("rag", _cmd_rag,
         "build | config [k v] | stats | query <词>  RAG 文档库管理",
         "/rag stats                         查看索引状态\n"

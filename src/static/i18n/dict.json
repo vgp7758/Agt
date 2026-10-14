@@ -841,6 +841,5 @@
  "点模型 chip 快速增删回退链（声明级：该 Agent 的 llm 独立生效；留空=继承全局）。": "Click model chips to add/remove fallback chain entries (declaration-level: this agent's llm applies independently; empty = inherit global).",
  "点工具 chip 快速增删；留空=继承全部（除管理工具）。": "Click tool chips to add/remove; empty = inherit all (except management tools).",
  "位置：before_turn / after_tool / before_answer / turn_end。类型：workflow=工作流名 / cmd=命令 / emit=事件。async=后台执行不阻塞。": "Positions: before_turn / after_tool / before_answer / turn_end. Types: workflow=workflow name / cmd=command / emit=event. async=run in background without blocking.",
- "🐞 日志（后台事件 / 回退 / 限流 / 错误）": "🐞 Logs (background events / fallback / rate-limit / errors)",
- "通知正文在 🐞 日志抽屉（点击打开）": "Full notice text is in the 🐞 log drawer (click to open)"
+ "🐞 日志（后台事件 / 回退 / 限流 / 错误）": "🐞 Logs (background events / fallback / rate-limit / errors)"
 }

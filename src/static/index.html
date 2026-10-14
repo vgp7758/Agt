@@ -1410,16 +1410,20 @@ function expandHistory(){
 // 历史中断轮 → 灰字标注（不可恢复）
 function renderHistTurn(t, box, isLast){
   // 用户气泡（右侧）；后台通知轮（user_message 带 [后台通知· 前缀——历史轮 source 未持久化，
-  // 以文本前缀判别）：通知正文移入日志抽屉（带轮号），对话区只留极简来源标记（用户提案 2026-10-13）
+  // 以文本前缀判别）渲染成系统通知气泡而非蓝色 user 气泡（与实时 source 分流同语义；
+  // 2026-10-14 时机语义：历史回放的正是“消费时刻的显示”，恢复同款折叠气泡）
   if(t.user){
     const _tu = t.user || '';
-    const _bgM = _tu.match(/^\[后台(?:通知|触发)·([^\]]*)\]\s*([\s\S]*)$/);
-    if(_bgM){
-      const _src = _bgM[1] || '';
-      pushLogEntry('bg', `📭 [历史轮#${t.turn||'?'}·${_src}] ${(_bgM[2]||'').trim()}`);
+    if(_tu.startsWith('[后台通知·') || _tu.startsWith('[后台触发·')){
       const nrow=document.createElement('div'); nrow.className='row sys';
-      nrow.appendChild(_bgMark(_src));
-      nrow.dataset.turn = t.turn; box.appendChild(nrow);
+      const nb=document.createElement('div'); nb.className='bubble';
+      nb.dataset.collapsed='1'; nb.dataset.full=_tu;
+      nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）';
+      nb.onclick=function(){
+        if(nb.dataset.collapsed==='1'){ nb.dataset.collapsed='0'; nb.textContent=nb.dataset.full; }
+        else{ nb.dataset.collapsed='1'; nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）'; }
+      };
+      nrow.appendChild(nb); nrow.dataset.turn = t.turn; box.appendChild(nrow);
     } else {
       const urow=document.createElement('div'); urow.className='row me';
       const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
@@ -3104,29 +3108,6 @@ function pushLogEntry(level, text, scene){
   }
 }
 
-// ===== 后台触发/通知 → 日志抽屉（用户提案 2026-10-13）=====
-// 此前这两类系统消息在对话区渲染成 ⏰ sys 行 + 折叠通知气泡，长正文铺在对话流里喧宾夺主。
-// 现在：完整正文进 🐞 日志抽屉（bg 青绿行），对话区只留一行极简来源标记（_bgMark）。
-// 系统来源白名单——user_insert 是用户的插话（用户内容），不在此列，保持原通知气泡渲染。
-const _BG_SYS_SOURCES = ['service_exit','bg_task','schedule','subagent','resume','background'];
-function _isBgSysSource(src){
-  src = String(src||'');
-  return _BG_SYS_SOURCES.some(p => src === p || src.startsWith(p + ':'));
-}
-function _bgLog(kind, source, text){
-  // 写日志抽屉一条（正文全文）：kind='触发'|'登记'——登记=wake=false 通知，下次自然轮并入
-  pushLogEntry('bg', `⏰ [后台${kind}·${source||''}] ${text||''}` + (kind==='登记' ? '（下次交互时并入，不单独触发处理）' : ''));
-}
-function _bgMark(source){
-  // 对话区极简来源标记：一行小灰字（非气泡、无正文），点击打开日志抽屉看全文
-  const tag=document.createElement('div');
-  tag.style.cssText='font-size:11px;color:#6b7280;background:#f9fafb;border:1px solid #eef0f3;'
-    +'border-radius:6px;padding:2px 10px;cursor:pointer;display:inline-block';
-  tag.textContent=`📭 后台触发 · ${source||''}`;
-  tag.title='通知正文在 🐞 日志抽屉（点击打开）';
-  tag.onclick=function(){ toggleLogPanel(true); };
-  return tag;
-}
 
 // commit_spec 阻塞时，在 answer 区域渲染交互式 spec 气泡
 window._specBubbleActive = false;   // answer 区被 spec 气泡占用标记（approved 后收起用，用户提案 2026-09-08）
@@ -3552,12 +3533,11 @@ function onWSMessage(ev){
   try{
   switch(m.type){
     case 'background_trigger':
-      // 后台触发/通知 → 日志抽屉（用户提案 2026-10-13）：对话区不再铺系统行——
-      // 登记形态（wake=false，不会再来 user 事件）由本事件写入日志抽屉全文；
-      // 唤醒形态（wake=true）正文由随后的 user 事件（带全文）写入，这里丢弃避免双写。
-      if(m.wake === false){
-        _bgLog('登记', m.source || '', m.text || '');
-      }
+      // 收到即写日志抽屉（用户裁定 2026-10-14·时机语义）：到达时刻只登记（🐞 青绿行），
+      // 不在对话区渲染——真正的显示发生在 inbox 出队消费时（user 事件带 source → 通知气泡）；
+      // 登记型（wake=false，不会开轮）附尾注说明下次自然轮并入。消费时不重复写日志（此处已记）。
+      pushLogEntry('bg', `⏰ [后台${m.wake === false ? '登记' : '到达'}·${m.source||''}] ${m.text||''}`
+        + (m.wake === false ? '（下次交互时并入，不单独触发处理）' : ''));
       break;
     case 'system':
       if(m.models){
@@ -3794,19 +3774,13 @@ function onWSMessage(ev){
       if(m.name) setSessionTitle(m.name);
       break;
     case 'user': {
-      // 语义标签分流：source 非空 = 后台唤醒/系统通知轮（inbox 的 service_exit/
-      // bg_task/schedule/子Agent反馈经 _merge_batch → run(_msg_source=) 透传）。
-      // 系统来源 → 通知正文移入 🐞 日志抽屉 + 对话区极简来源标记（用户提案 2026-10-13）；
-      // 非系统来源（user_insert 用户插话等）→ 保持通知气泡渲染；无标签 = 真用户消息 → 蓝色气泡。
+      // 语义标签分流（时机语义 2026-10-14）：source 非空 = inbox 出队专轮消费（_merge_batch
+      // 批首为 background → first_src → run(_msg_source=) 透传）→ **对话区显示通知气泡**——
+      // 消费时刻是“Agent 开始处理它”的可见信号；混合批批首为用户手输时 source 为空（通知文本带
+      // [后台通知· 前缀并入正文），属“搭车消费”不显示（到达时已写日志抽屉）。
+      // 无标签 = 真用户消息 → 蓝色气泡（下方原逻辑不变）。
       if(m.source){
-        if(_isBgSysSource(m.source)){
-          _bgLog('触发', m.source, m.text || '');
-          const mrow=document.createElement('div'); mrow.className='row sys';
-          mrow.appendChild(_bgMark(m.source));
-          msgArea.appendChild(mrow);
-        } else {
-          renderNotifyBubble(m.source, m.text || '');
-        }
+        renderNotifyBubble(m.source, m.text || '');
         if(!busy){ setBusy(true); curTurn = null; }
         _hookEpoch++;   // 通知唤醒轮：新轮新 epoch
         break;

@@ -7,7 +7,7 @@
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）；带图插话 2026-10-03 起原生看图——`<img>` 标签按当前模型 vision 门控展开（见 [图片输入链路 · 插话原生看图](image-input.md)）
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明（crash/always 可主动唤醒）；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编）；**2026-09-23 起默认从 never 翻转为 `notify`——退出通知默认进 inbox**（持久化 + 空闲自动消费成轮 + 忙时步边界排队注入，见下文专节）；同族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
-- **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）
+- **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）；**2026-10-13 起系统来源正文迁 🐞 日志抽屉**（对话区只留一行来源标记，见下文专节）
 - **并行钩子 UI 状态**：同 hook 位置的多个工作流收进**组折叠头**（`▸ [每轮开始前]钩子 ×2 (1/2) ⏳ 12s`，默认收起点击展开，commit 4455503）；组头带计数 + 组级秒表，行内保留观测页跳转/完成态
 - **重启恢复广播**：/restart 看门狗重启后自动 /resume 并广播完整视图态（session_history + team_list + pending spec），早连页签/手机端重连立即渲染，不再多开浏览器 tab（commit 7ca6cfc，见下文专节）
 - **连接即推视图态**：新连接（刷新 / 新开页签 / 手机端重连）不再依赖「等下一次事件」——WS 建立即补推 `team_list`（2026-09-17）、`current_turn` 正在进行轮（2026-09-02）、**`plan` 活动计划步骤列表（2026-10-06，commit d573e1e）**；半成品时期各对应一个「刷新后空白」的实锤（见下文各自专节）
@@ -906,6 +906,33 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 ### 新消费端：before_turn 检索钩子短路（2026-10-07，用户提案，commit 3d5fb42）
 
 `_msg_source` 的第二个引擎消费端：`agent.py run()` 在钩子触发点判别——**非空（后台来源）整组短路 before_turn 检索钩子**（wiki_auto_query / before_turn_retrieval / skill_suggest），检索只服务人类直输轮；空串照跑；短路时 info 日志留痕。混合批判定沿用本节批首归属（first_src），无需新逻辑。详见 [workflow-hooks · 后台来源短路](../architecture/workflow-hooks.md)。
+
+## 后台通知渲染迁日志抽屉：正文进 🐞 抽屉，对话区只留一行来源标记（2026-10-13，用户提案）
+
+**用户提案（2026-10-13）**：「我觉得把后台触发 / 后台通知这些系统消息改成发到日志抽屉里吧」——此前两类消息在对话区渲染成 ⏰ sys 行（`background_trigger` 事件，100 字截断）+ 折叠通知气泡（`renderNotifyBubble`，user 事件带 source），服务退出/任务完成的长正文（含尾部日志）铺在对话流里喧宾夺主。
+
+**新形态**（纯前端 `src/static/index.html`，后端事件流/唤醒语义零改动）：
+
+| 通道 | 旧 | 新 |
+|---|---|---|
+| `background_trigger` 事件 | ⏰ sys 行（截断摘要） | 唤醒型不再渲染（防与 user 事件双写）；**登记型**（wake=false，不会再有 user 事件）由它写日志抽屉一条（含「下次交互时并入」尾注） |
+| user 事件带系统 source | `renderNotifyBubble` 折叠气泡 | 正文全文 → `pushLogEntry('bg')`（🐞 日志抽屉青绿行）；对话区只留一行极简标记 `_bgMark`（`📭 后台触发 · <source>`，点击打开日志抽屉） |
+| 历史轮 `[后台通知·`/`[后台触发·` 前缀 | 折叠系统气泡（renderHistTurn） | 正文推入日志抽屉（带轮号 `📭 [历史轮#N·source]`）+ 同款极简标记行 |
+
+**关键设计**：
+
+- **系统来源白名单** `_isBgSysSource`：`service_exit / bg_task / schedule / subagent / resume / background`（前缀精确匹配，`schedulex:` 陷阱排除）；**`user_insert` 是用户插话（用户内容），不在白名单**——保持 `renderNotifyBubble` 气泡渲染，不被藏进日志。
+- **防双写**：唤醒型通知先后产生两条事件（background_trigger 入队摘要 + user 开轮全文）——只有 user 事件写日志；登记型只有 background_trigger 一条——由它写。
+- **状态逻辑保留**：user 事件分流处的 `busy/curTurn/_hookEpoch` 更新原样保留——通知唤醒轮的 UI 驱动语义不变（过程区照常开新轮渲染）。
+- **日志面板**：`pushLogEntry` 新增 `level='bg'` 配色（青绿 `#0f766e/#f0fdfa`）；标题改「🐞 日志（后台事件 / 回退 / 限流 / 错误）」；`showLogPanel` 关闭时照旧只累计不渲染（关闭即不可见，尊重用户开关）；badge 仍只计 error。
+- **历史轮读档即回灌**：renderHistTurn 把前缀轮正文推入日志抽屉（内存面板、带轮号可溯源）——刷新页面后日志抽屉能看到本档历史的后台事件；对话区这些轮只剩标记行 + 过程 + 回答，不再被通知气泡刷屏。
+- **i18n**：面板标题条目 key 更新、`_bgMark` hover 提示新条目（dict.json）；动态拼接串（`📭 后台触发 · source`）不进字典（fallback 中文安全）。
+
+**验证**：node --check（1 个内联 script 块）通过；**32 项函数级 mock 断言全过**（白名单 8 / 文本组装 5 / 渲染分支 4 / 标记 DOM 4 / 历史正则提取 5 / 源码结构 6）。Playwright MCP 的 navigate 对 localhost http 有强制 https 拼接的解析 bug（`https://http//…` ERR_NAME_NOT_RESOLVED），浏览器级实测降级为 mock 断言替代。
+
+**生效方式**：纯前端静态文件，**Ctrl+F5 强刷即生效**（无需 /restart）。
+
+**取舍说明**：对话区保留了**一行极简来源标记**（非气泡、无正文）——完全隐去会让历史轮变成"凭空出现的回答"，丢失「这轮从哪来」的线索；若连标记也想去掉，删 `_bgMark` 相关三行即可。
 
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 

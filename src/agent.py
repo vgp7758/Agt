@@ -570,6 +570,15 @@ class Agent:
         （remote_* 管理族的 server_id 是【管理语义】——remote_connect(server_id=..., url=...)
         被路由拦截吃掉曾致 "[未知 server_id]" 死循环）；新名 remote_instance_id 不撞名、
         全工具生效；旧名仅对非 remote_* 工具兼容保留。"""
+        # 后台任务发起者标记（用户裁定 2026-10-15）：run_python/run_shell 超时转后台时，
+        # real_tools 从线程局部取 owner 记进 _bg_tasks，完成回执按 owner 路由——谁起的谁收。
+        # 设位放这里是因为并行工具走线程池（_run_tools_parallel）：线程局部只在"真正执行工具的
+        # 那个线程"里有效，统一入口逐个设位才能覆盖串行/并行/主/子 Agent 全路径。
+        try:
+            import real_tools as _rt_owner
+            _rt_owner.set_bg_owner(self)
+        except Exception:
+            pass
         _REMOTE_ADMIN = ("remote_connect", "remote_disconnect", "remote_list",
                          "remote_message", "remote_ask", "remote_call_tool")   # 管理族双名均豁免：其 remote_instance_id/
         # 是管理语义（连谁/发给谁/调谁的工具——remote_call_tool 内部自己 route_remote_call，
@@ -1318,13 +1327,14 @@ class Agent:
         else:
             self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
 
-    def _on_bg_task_done(self, bg_id: str, name: str, rc: int):
+    def _on_bg_task_done(self, bg_id: str, name: str, rc: int, owner=None):
         """后台任务（run_python/run_shell 超时转后台）完成回调（real_tools._bg_reader 触发，
         chat.py 装配时经 set_bg_notify 注入）。包成一条 check_bg_task 合成工具记录推 inbox 唤醒——
         转后台任务本来是同步等待（超时被迫转后台），结果通常是决策链一环，需要收到通知
         （用户提案 2026-08-30）；一次性任务跑完即报、无套娃循环，故 wake=True。
         忙时 push_message 的 inbox 机制天然排队到下一步边界注入，闲时立即唤醒。
-        注意：set_bg_notify 是模块级全局——多 Agent 场景下由最后装配者接收（当前主 Agent）。"""
+        路由（用户裁定 2026-10-15）：owner = 发起者 Agent 实例——回执投给发起者本人（子 Agent 起
+        的信号不再打给主 Agent）；owner 为 None 或不可用 → 本回调持有者自收（兜底，不失联）。"""
         try:
             from real_tools import _bg_tasks
             task = _bg_tasks.get(bg_id, {})
@@ -1339,6 +1349,16 @@ class Agent:
         # 消费侧 _seed_steps 的 sd.get() 崩唤醒轮（AttributeError），是 11:23 bg_task 唤醒崩溃的产地。
         # 三层防御（push 入口/drain/seed_steps）兜住后仍降级显示为 notice——产地修正后恢复标准
         # check_bg_task 合成记录（通知轮工具名/参数正确，不再依赖降级包装）。
+        # 路由（用户裁定 2026-10-15）：谁发起的任务回执给谁——子 Agent 施工时跑的长任务
+        # 不再把完成通知误推给围观的主 Agent（此前只推主 Agent：子 Agent 永远等不到自己那笔，
+        # 主 Agent 却被不属于它的任务唤醒一轮）。owner 实例不可用/已销毁 → 兜底自己收，不失联。
+        if owner is not None and owner is not self:
+            try:
+                from multiagent import deliver_notice
+                if deliver_notice(owner, header, seed=rec, on_event=self.on_event):
+                    return
+            except Exception as _e:
+                _LOG.debug("bg 回执按 owner 路由失败，回落本 Agent：%s", _e)
         self.push_message(header, source=f"bg_task:{bg_id}", seed=rec, wake=True)
 
     @staticmethod

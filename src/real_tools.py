@@ -58,12 +58,15 @@ def _ask_approval(tool_key: str, detail: str) -> bool:
 # 后台任务表：超时未完成的 run_python/run_shell 子进程转后台后注册在此
 _bg_tasks: dict = {}
 _bg_notify_cb = None   # 后台任务完成回调（chat.py 装配时注入 agent.push_message 通知链）：一次性任务无套娃，默认唤醒
+                       # 签名 cb(bg_id, name, rc, owner=发起者 Agent 实例|None)——owner 非 None 时由回调按 owner 路由
+                       # （用户裁定 2026-10-15：子 Agent 起的长任务回执不再一律打给主 Agent）；None 走原路（主 Agent 自收）
 _agents_changed_cb = None   # 子 Agent 声明变化回调（multiagent 装配时注入 _inject_agent_enums）：
                             # write_file 落 .agent/agents/ 下 yml/md 后触发——name enum/下拉即时刷新
 
 
 def set_bg_notify(cb):
-    """注册后台任务完成回调 cb(bg_id, name, returncode)。cb 抛异常仅记日志，不影响读线程。"""
+    """注册后台任务完成回调 cb(bg_id, name, returncode, owner=None)。cb 抛异常仅记日志，不影响读线程。
+    owner = 发起者 Agent 实例（线程局部采集，见 set_bg_owner）——回调据此把回执投给"谁起的谁收"。"""
     global _bg_notify_cb
     _bg_notify_cb = cb
 
@@ -71,6 +74,24 @@ def set_bg_notify(cb):
 _tls = threading.local()   # 越界放行标记（用户补充 2026-09-29）：_resolve 审批放行 workspace 外
                            # 路径时置位，agent._exec_tool 读取后作为提示并入工具结果（模型当步
                            # 可见"漏传 remote_instance_id 导致写到了本地"），读完即清。
+
+
+# —— 后台任务发起者（用户裁定 2026-10-15）——
+# run_python/run_shell 超时转后台时记 owner，完成回执按 owner 路由：谁起的任务回执给谁。
+# 此前 _bg_notify_cb 是单一全局（只有主实例装配链注入）→ 子 Agent 起的任务回执也打给主 Agent，
+# 子 Agent 反而永远等不到自己那笔（施工委托下最明显：worker 的长构建回执误推给围观的主 Agent）。
+def set_bg_owner(agent) -> None:
+    """标记“当前线程正在执行工具的是哪个 Agent”（线程局部：主 Agent 在主线程/子 Agent 各在自己
+    派发线程，天然隔离不串；并行工具池线程由 agent._exec_tool 入口逐个设位）。"""
+    try:
+        _tls.bg_owner = agent
+    except Exception:
+        pass
+
+
+def get_bg_owner():
+    """当前线程的发起者 Agent 实例（无 → None）。"""
+    return getattr(_tls, "bg_owner", None)
 
 
 def _resolve(path: str) -> Path:
@@ -323,6 +344,9 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
             _bg_tasks[bg_id] = {
                 "name": name, "proc": proc, "output": output_lines[:],
                 "started_at": start, "finished": False, "returncode": None,
+                # 发起者（用户裁定 2026-10-15）：完成回执按 owner 路由（谁起的谁收）。
+                # 取值走线程局部——此处仍在执行工具的那个线程里（daemon 读线程只消费这个引用）。
+                "owner": get_bg_owner(),
             }
             def _bg_reader(_bg_id=bg_id, _line_q=line_q, _task=_bg_tasks[bg_id]):
                 while True:
@@ -347,7 +371,7 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
                 # 到下一步边界注入、闲时立即唤醒。cb 异常不炸读线程。
                 if _bg_notify_cb is not None:
                     try:
-                        _bg_notify_cb(_bg_id, name, _task["returncode"])
+                        _bg_notify_cb(_bg_id, name, _task["returncode"], _task.get("owner"))
                     except Exception as _e:
                         try:
                             import logging; logging.getLogger("agt.real_tools").warning("bg 完成回调失败: %s", _e)

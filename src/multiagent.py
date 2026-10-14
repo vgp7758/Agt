@@ -60,6 +60,61 @@ def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:
     return aid
 
 
+def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool:
+    """把一条系统提示投给【指定 Agent 实例】并保证被看到（用户裁定 2026-10-15 从 agent_notify 抽出
+    复用）：bg_task 完成回执按 owner 路由时调它——谁起的后台任务，回执投给谁。
+    忙（run 中）→ 有 seed 走 push_message（保留 check_bg_task 合成工具记录，与主线同口径），
+    否则 queue_user_message；空闲 → 起裸线程跑一轮直接消费（与 agent_notify 的空闲分支同款）。
+    返回 True=已投递 / False=实例不可用（调用方兜底自收）。不抛异常。"""
+    if target_agent is None or getattr(target_agent, "session", None) is None:
+        return False
+    aid = getattr(target_agent, "agent_id", "") or ""
+    reg = getattr(target_agent, "registry", None)
+    try:
+        if getattr(target_agent, "busy", False):
+            try:
+                if isinstance(seed, dict):
+                    target_agent.push_message(message, source="bg_task", seed=seed, wake=True)
+                else:
+                    target_agent.queue_user_message(message)
+            except Exception:
+                target_agent.queue_user_message(message)   # 兜底：至少把文本排进插话队列
+            return True
+        # 空闲唤醒：这条路没有 seed 通道 → 把种子里的结果正文并进消息（否则只有一句标题）
+        _msg = message
+        if isinstance(seed, dict):
+            _res = str(seed.get("result", "") or "")
+            if _res:
+                _msg = f"{message}\n\n{_res}"
+        if reg is not None and aid:
+            try:
+                reg.update_status(aid, "running")
+            except Exception:
+                pass
+
+        def _run_sub(_a=target_agent, _t=_msg):
+            _old = getattr(_a, "on_event", None)
+            if on_event is not None:
+                _a.on_event = on_event
+            try:
+                _a.run(_t)
+            except Exception:
+                pass
+            finally:
+                _a.on_event = _old
+                if reg is not None and aid:
+                    try:
+                        reg.update_status(aid, "done")
+                    except Exception:
+                        pass
+
+        import threading as _th
+        _th.Thread(target=_run_sub, daemon=True).start()
+        return True
+    except Exception:
+        return False
+
+
 class SubAgent:
     """一次性子 Agent：建实例 → prompt 跑一次 → 丢弃（不存任何 dict）。
     on_event 接主 Agent 的事件流，输出经主线程 _render_loop 渲染（CLI）/ broadcast（Web）。"""

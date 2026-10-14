@@ -16,7 +16,7 @@
 
 - **配置**：主源 = repo 级 `.agent/snapshots_state.json`（2026-10 起，见下节后记）；settings.json `"enable_snapshots": false` 降为**旧位置兼容源**（老配置不丢，新写侧会顺手清掉）；或 `/config enable_snapshots false`；WebUI 设置弹窗「其它」页签「回溯快照」复选框（原「模型」页签控件已移除）
 - **读盘时机**：config.py `load_enable_snapshots()` **每轮读盘**——改完下一轮生效，免重启
-- **关闭后**：跳过 `snapshot()` 调用（checkpoint 事件不再发出，前端计数不受干扰）；`/rewind` 被现有校验拦截且提示明确化：`❌ 倒数第 N 轮没有快照点，无法回溯（回溯快照已在设置中关闭：enable_snapshots=false）`；**已有历史快照保留**不删（想彻底清理手动删 `.agt/snapshots`）
+- **关闭后**：跳过 `snapshot()` 调用（checkpoint 事件不再发出，前端计数不受干扰）；`/rewind` 被现有校验拦截且提示明确化：`❌ 倒数第 N 轮没有快照点，无法回溯（回溯快照已在设置中关闭：enable_snapshots=false）`；**已有历史快照保留**不删（想彻底清理用 [`/clean`](#clean-清空快照仓库从-0-开始2026-10-14用户提案)——清空快照仓库从 0 开始，见下文专节）
 - **默认**：True（未配置 / 非法值 / 读盘异常都回落开启）
 
 **验证**：隔离 AGT_HOME 四态——默认 True / false / 字符串 "false" / 删键恢复 True。
@@ -210,6 +210,6 @@ git init 加三件套：`timeout=120`（超时抛 RuntimeError 明确文案）+ 
 
 **验证**（隔离 workspace 单测 5 步全过）：①建仓打两个快照 ✓ → ②clean 释放 24.5KB、目录消失 ✓ → ③幂等 clean 返回 0 ✓ → ④再 snapshot() 自动重建、新对象可查 ✓ → ⑤旧 sha cat-file 报错（对象已删，符合预期）✓。
 
-**生效方式**：引擎层（snapshots.py / commands.py / chat.py），需 `/restart`；本 repo 已 commit，push 由定时任务兜底重试。
+**生效方式**：引擎层（snapshots.py / commands.py），需 `/restart`；本 repo 已 commit，push 由定时任务兜底重试。
 
 

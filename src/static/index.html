@@ -459,7 +459,7 @@
   </div>
   <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
        有日志才显示 🐞 入口（badge=未读 error 数，在 fabDock 内）；打开即已读清零 -->
-  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（回退 / 限流 / 截断 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（后台事件 / 回退 / 限流 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
   <div id="teamPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fbfdff;border-left:1px solid #a5d8e8;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #d0ebf3;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#0e7490">👥 Agent 团队</div><button onclick="toggleTeamPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#d0ebf3;color:#0e7490;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="teamList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
   <!-- 远程实例添加弹窗（用户提案 2026-10-04：内联表单会被看板 3s 自动刷新重置——弹窗挂 body 级，
@@ -1410,19 +1410,16 @@ function expandHistory(){
 // 历史中断轮 → 灰字标注（不可恢复）
 function renderHistTurn(t, box, isLast){
   // 用户气泡（右侧）；后台通知轮（user_message 带 [后台通知· 前缀——历史轮 source 未持久化，
-  // 以文本前缀判别）渲染成系统通知气泡而非蓝色 user 气泡（与实时 source 分流同语义）
+  // 以文本前缀判别）：通知正文移入日志抽屉（带轮号），对话区只留极简来源标记（用户提案 2026-10-13）
   if(t.user){
     const _tu = t.user || '';
-    if(_tu.startsWith('[后台通知·') || _tu.startsWith('[后台触发·')){
+    const _bgM = _tu.match(/^\[后台(?:通知|触发)·([^\]]*)\]\s*([\s\S]*)$/);
+    if(_bgM){
+      const _src = _bgM[1] || '';
+      pushLogEntry('bg', `📭 [历史轮#${t.turn||'?'}·${_src}] ${(_bgM[2]||'').trim()}`);
       const nrow=document.createElement('div'); nrow.className='row sys';
-      const nb=document.createElement('div'); nb.className='bubble';
-      nb.dataset.collapsed='1'; nb.dataset.full=_tu;
-      nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）';
-      nb.onclick=function(){
-        if(nb.dataset.collapsed==='1'){ nb.dataset.collapsed='0'; nb.textContent=nb.dataset.full; }
-        else{ nb.dataset.collapsed='1'; nb.textContent=_tu.split('\n')[0].slice(0,140)+' …（点击展开）'; }
-      };
-      nrow.appendChild(nb); nrow.dataset.turn = t.turn; box.appendChild(nrow);
+      nrow.appendChild(_bgMark(_src));
+      nrow.dataset.turn = t.turn; box.appendChild(nrow);
     } else {
       const urow=document.createElement('div'); urow.className='row me';
       const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
@@ -3096,6 +3093,7 @@ function pushLogEntry(level, text, scene){
     row.style.cssText = 'padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11.5px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all'
       + (level === 'error' ? ';color:#b91c1c;background:#fef2f2'
          : level === 'info' ? ';color:#3730a3;background:#eef2ff'   // 消息级（info）：蓝灰底——毕业/折叠等上下文工程事件
+         : level === 'bg'   ? ';color:#0f766e;background:#f0fdfa'   // 后台事件（bg）：青绿底——后台触发/通知（正文全文在此）
          : ';color:#92400e;background:#fffbeb');
     // 行尾小括号附场景（哪个 agent/工作流发起的这次调用——限流/回退时一眼定位来源）
     row.textContent = `[${_logEntries[_logEntries.length-1].ts.toLocaleTimeString('sv-SE')}] ${text}`
@@ -3104,6 +3102,30 @@ function pushLogEntry(level, text, scene){
     while(list.children.length > 200) list.removeChild(list.firstChild);
     list.scrollTop = list.scrollHeight;
   }
+}
+
+// ===== 后台触发/通知 → 日志抽屉（用户提案 2026-10-13）=====
+// 此前这两类系统消息在对话区渲染成 ⏰ sys 行 + 折叠通知气泡，长正文铺在对话流里喧宾夺主。
+// 现在：完整正文进 🐞 日志抽屉（bg 青绿行），对话区只留一行极简来源标记（_bgMark）。
+// 系统来源白名单——user_insert 是用户的插话（用户内容），不在此列，保持原通知气泡渲染。
+const _BG_SYS_SOURCES = ['service_exit','bg_task','schedule','subagent','resume','background'];
+function _isBgSysSource(src){
+  src = String(src||'');
+  return _BG_SYS_SOURCES.some(p => src === p || src.startsWith(p + ':'));
+}
+function _bgLog(kind, source, text){
+  // 写日志抽屉一条（正文全文）：kind='触发'|'登记'——登记=wake=false 通知，下次自然轮并入
+  pushLogEntry('bg', `⏰ [后台${kind}·${source||''}] ${text||''}` + (kind==='登记' ? '（下次交互时并入，不单独触发处理）' : ''));
+}
+function _bgMark(source){
+  // 对话区极简来源标记：一行小灰字（非气泡、无正文），点击打开日志抽屉看全文
+  const tag=document.createElement('div');
+  tag.style.cssText='font-size:11px;color:#6b7280;background:#f9fafb;border:1px solid #eef0f3;'
+    +'border-radius:6px;padding:2px 10px;cursor:pointer;display:inline-block';
+  tag.textContent=`📭 后台触发 · ${source||''}`;
+  tag.title='通知正文在 🐞 日志抽屉（点击打开）';
+  tag.onclick=function(){ toggleLogPanel(true); };
+  return tag;
 }
 
 // commit_spec 阻塞时，在 answer 区域渲染交互式 spec 气泡
@@ -3530,14 +3552,13 @@ function onWSMessage(ev){
   try{
   switch(m.type){
     case 'background_trigger':
-      // wake=false（通知登记）：不触发新一轮——service_exit 等"告知即可"的系统事件，
-      // 下次自然轮开始时以 seed 并入；显示为灰色备注（区别于唤醒型触发的蓝色）
+      // 后台触发/通知 → 日志抽屉（用户提案 2026-10-13）：对话区不再铺系统行——
+      // 登记形态（wake=false，不会再来 user 事件）由本事件写入日志抽屉全文；
+      // 唤醒形态（wake=true）正文由随后的 user 事件（带全文）写入，这里丢弃避免双写。
       if(m.wake === false){
-        addRow('sys', `📭 [通知登记·${m.source||''}] ${m.text||''}（下次交互时并入，不单独触发处理）`);
-      } else {
-        addRow('sys', `⏰ [后台触发·${m.source||''}] ${m.text||''}`);
+        _bgLog('登记', m.source || '', m.text || '');
       }
-      scrollBottom(); break;
+      break;
     case 'system':
       if(m.models){
         // 分组渲染（spec s_d4241d58）：已配置 optgroup + 预设 provider 分组（🎁free trial / 🔑require key）。
@@ -3773,11 +3794,19 @@ function onWSMessage(ev){
       if(m.name) setSessionTitle(m.name);
       break;
     case 'user': {
-      // 语义标签分流（用户提案）：source 非空 = 后台通知唤醒（inbox 的 service_exit/
-      // bg_task/schedule/子Agent反馈经 _merge_batch → run(_msg_source=) 透传）→
-      // 系统通知气泡（默认折叠）；无标签 = 真用户消息 → 蓝色气泡（下方原逻辑不变）。
+      // 语义标签分流：source 非空 = 后台唤醒/系统通知轮（inbox 的 service_exit/
+      // bg_task/schedule/子Agent反馈经 _merge_batch → run(_msg_source=) 透传）。
+      // 系统来源 → 通知正文移入 🐞 日志抽屉 + 对话区极简来源标记（用户提案 2026-10-13）；
+      // 非系统来源（user_insert 用户插话等）→ 保持通知气泡渲染；无标签 = 真用户消息 → 蓝色气泡。
       if(m.source){
-        renderNotifyBubble(m.source, m.text || '');
+        if(_isBgSysSource(m.source)){
+          _bgLog('触发', m.source, m.text || '');
+          const mrow=document.createElement('div'); mrow.className='row sys';
+          mrow.appendChild(_bgMark(m.source));
+          msgArea.appendChild(mrow);
+        } else {
+          renderNotifyBubble(m.source, m.text || '');
+        }
         if(!busy){ setBusy(true); curTurn = null; }
         _hookEpoch++;   // 通知唤醒轮：新轮新 epoch
         break;

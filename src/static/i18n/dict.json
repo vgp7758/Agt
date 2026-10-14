@@ -305,7 +305,6 @@
  "🌐 添加远程实例": "🌐 Add remote instance",
  "🌐 远程实例": "🌐 Remote instances",
  "🎁 该 provider 提供免费额度——点下方按钮打开页面，登录后复制你的 Access Token 粘贴到输入框即可启用。": "🎁 This provider offers free quota — click the button below, log in, copy your Access Token and paste it here to enable.",
- "🐞 日志（回退 / 限流 / 截断 / 错误）": "🐞 Logs (fallback / rate-limit / truncation / errors)",
  "💡 同一 provider 一把 key 通用——保存后将自动用此 key 一并配置该 provider 的": "💡 One key per provider — on save, this key is also applied to the provider's ",
  "💬 提交反馈": "💬 Submit feedback",
  "💬 普通": "💬 Normal",
@@ -841,5 +840,7 @@
  "补reasoning占位": "Fill reasoning placeholder",
  "点模型 chip 快速增删回退链（声明级：该 Agent 的 llm 独立生效；留空=继承全局）。": "Click model chips to add/remove fallback chain entries (declaration-level: this agent's llm applies independently; empty = inherit global).",
  "点工具 chip 快速增删；留空=继承全部（除管理工具）。": "Click tool chips to add/remove; empty = inherit all (except management tools).",
- "位置：before_turn / after_tool / before_answer / turn_end。类型：workflow=工作流名 / cmd=命令 / emit=事件。async=后台执行不阻塞。": "Positions: before_turn / after_tool / before_answer / turn_end. Types: workflow=workflow name / cmd=command / emit=event. async=run in background without blocking."
+ "位置：before_turn / after_tool / before_answer / turn_end。类型：workflow=工作流名 / cmd=命令 / emit=事件。async=后台执行不阻塞。": "Positions: before_turn / after_tool / before_answer / turn_end. Types: workflow=workflow name / cmd=command / emit=event. async=run in background without blocking.",
+ "🐞 日志（后台事件 / 回退 / 限流 / 错误）": "🐞 Logs (background events / fallback / rate-limit / errors)",
+ "通知正文在 🐞 日志抽屉（点击打开）": "Full notice text is in the 🐞 log drawer (click to open)"
 }

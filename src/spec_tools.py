@@ -271,12 +271,12 @@ def _step_to_plan_desc(step: dict, idx: int) -> str:
     if anchor:
         parts.append(f"@ {anchor}")
     head = " ".join(parts)
-    # 内容只摘前 150 字进 description（完整内容 spec 文件里有，且可通过 recall_spec 查）
+    # content/rationale 全文进 description（用户裁定 2026-10-15）：plan_content() 按全文装配注入
+    # ——施工 worker 每轮直接看到完整图纸，不再依赖 recall_spec；轻量进度视图（plan_steps）自行截断。
     if content:
-        c_preview = content if len(content) <= 150 else content[:150] + "…"
-        head += f"：{c_preview}"
+        head += f"：{content}"
     if rat:
-        head += f"（{rat[:100]}）"
+        head += f"（{rat}）"
     return head
 
 

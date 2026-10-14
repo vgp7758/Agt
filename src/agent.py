@@ -1025,8 +1025,8 @@ class Agent:
         `func: plan_content()` / `func: plan_steps()` 每轮把计划设计与步骤清单喂给 worker，
         所以代码里不再重复拼【施工牌】全文（此前一版把 plan+spec 全文塞进 prompt，重复且
         与装配口径打架）。这里只留一句：接的是哪条计划 + 汇报要求。
-        spec 细则（file/anchor/content 全文）plan 里只摘了 150 字，但 design 带
-        "[由 spec xxx 生成]" 标记——worker 需要时自己 recall_spec 取。"""
+        spec 细则全文在 plan 步骤描述里（2026-10-15 用户裁定：spec→plan 不再截 150 字），
+        经 worker.yml 的 func:plan_content() 每轮装配注入；recall_spec 仅兜底。"""
         p = getattr(self, "active_plan", None) or {}
         pid = str(p.get("id", "") or "")
         title = str(p.get("title", "") or "")

@@ -302,29 +302,36 @@ def _func_spec_steps() -> str:
 
 
 def _func_plan_content() -> str:
-    """{func:plan_content()} —— 当前活动计划的设计概述（id/标题/design）。
-    无活动计划返回空；**全部步骤完成后只留一行标题**（2026-09-13·用户裁定——
-    design 全文每步注入是纯浪费，完成态仅需可见性：知道有 plan 挂着、可 exit_plan 收尾）。
-    **施工模式返回空**（spec s_e1804804）：存在未完成步时 design 全文已前移到头部施工牌
-    （第二条 system·byte-stable 前缀）——此处再注入就是双份。"""
+    """{func:plan_content()} —— 当前活动计划的完整图纸（id/标题/design + 每步全文描述）。
+    用户裁定 2026-10-15：**详细内容 + 每步完整内容**——施工 worker（或主 Agent 自施工）每轮
+    装配即见全图。此前步骤描述在 spec→plan 时被截 150 字、施工模式又整体让位旧施工牌，
+    worker 拿不到图纸，被迫满世界找细则（实锤：worker 找不到 recall_spec 而绕路）。
+    轻量进度视图由 plan_steps() 承担（截断版）。
+    全部步骤完成后只留一行标题（2026-09-13·用户裁定维持——完成态仅需可见性）。"""
     p = _active_plan_dict()
     if not p:
         return ""
     steps = p.get("steps") or []
     done = sum(1 for x in steps if x.get("status") == "completed")
-    if steps and done < len(steps):
-        return ""   # 施工模式：内容已前移施工牌（防双份）
     title = p.get("title", "")
     head = f"【当前计划】{p.get('id', '')}" + (f" · {title}" if title else "")
     if steps and done == len(steps):
         return f"{head}（已完成 {done}/{len(steps)} 步——细节已消化；确认收尾可 exit_plan 退出）"
     design = (p.get("design") or "").strip()
-    return head + f"\n设计：{design or '（无）'}"
+    if not steps:
+        return head + f"\n设计：{design or '（无）'}"
+    from plan_tools import _PLAN_ICON   # 延迟 import：防顶层循环
+    lines = [head + f"（进度 {done}/{len(steps)}）",
+             "设计：" + (design or "（无）"), "步骤全文（图纸，以此为准）："]
+    for i, x in enumerate(steps):
+        lines.append(f"  {_PLAN_ICON.get(x.get('status'), '?')} {i + 1}. {x.get('description', '')}")
+    return "\n".join(lines)
 
 
 def _func_plan_steps() -> str:
-    """{func:plan_steps()} —— 当前活动计划的步骤进度清单（☐/▶/✅ + 描述 + 状态 + 推进提示行）。
-    全部完成后返回空（plan_content 的一行摘要已含进度——步骤全文不再注入）。"""
+    """{func:plan_steps()} —— 当前活动计划的步骤进度清单（☐/▶/✅ + 状态）。
+    轻量视图：描述截断（全文在 plan_content 装配——用户裁定 2026-10-15 分工）。
+    全部完成后返回空（plan_content 的一行摘要已含进度）。"""
     p = _active_plan_dict()
     if not p:
         return ""
@@ -336,7 +343,10 @@ def _func_plan_steps() -> str:
     lines = [f"进度（共 {len(steps)} 步，已完成 {done}）："]
     for i, x in enumerate(steps):
         st = x.get("status")
-        lines.append(f"  {_PLAN_ICON.get(st, '?')} {i + 1}. {x.get('description', '')} ({_PLAN_LABEL.get(st, '')})")
+        d = x.get('description', '')
+        if len(d) > 80:
+            d = d[:80] + "…（全文见 plan_content 装配）"
+        lines.append(f"  {_PLAN_ICON.get(st, '?')} {i + 1}. {d} ({_PLAN_LABEL.get(st, '')})")
     lines.append("推进时用 update_plan 更新状态、add_step 追加步骤、edit_plan 改标题/设计、exit_plan 退出。")
     return "\n".join(lines)
 

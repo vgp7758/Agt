@@ -3531,6 +3531,8 @@ function onWSMessage(ev){
     if(!_am) return;
   }
   try{
+  // 插件事件分发（AgtPlugin SDK）：订阅者先吃（不拦截）；卡片渲染器命中即渲染并终止默认处理
+  if(window.AgtPlugin && AgtPlugin._dispatch(m)===false) return;
   switch(m.type){
     case 'background_trigger':
       // 收到即写日志抽屉（用户裁定 2026-10-14·时机语义）：到达时刻只登记（🐞 青绿行），
@@ -4112,6 +4114,112 @@ function renderWorkflows(items){
            ` <a href="/wfdebug?wf=${encodeURIComponent(it.name)}" target="_blank" class="wfDebug" style="margin-left:8px">调试 ↗</a></div>`;
   }).join('');
 }
+
+// ===================== 插件前端 SDK（AgtPlugin，2026-10-14 用户提案）=====================
+// 协议：插件 manifest.yml 声明 frontend: frontend.js → 本页启动时经 /api/plugins 发现并按序注入
+// <script>（/plugins-assets/<name>/frontend.js，no-cache）。frontend.js 里直接用全局 AgtPlugin
+// 注册 UI / 订阅事件。信任模型同 tools/builtin：本机自装代码全信任，不做 JS 沙箱。
+window.AgtPlugin = (function(){
+  const _wsSubs = {};      // type -> [fn(m)]
+  const _chatCards = {};   // type -> fn(bubble, m)（自定义聊天卡片渲染器）
+  const _esc = (s)=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  function _toast(m){ try{ window.toast && window.toast(m); }catch(e){} }
+
+  function _dispatch(m){
+    // onWSMessage 前置分发：订阅者全部执行（异常各自吞）；卡片渲染器命中 → 渲染并返回 false（终止默认处理）
+    const t = m && m.type;
+    if(!t) return true;
+    const subs = _wsSubs[t];
+    if(subs) for(const f of subs){ try{ f(m); }catch(e){ console.error('[AgtPlugin] ws.on', t, e); } }
+    const card = _chatCards[t];
+    if(card){
+      try{
+        const row = addRow('sys', '');            // 空白行，bubble 交插件自绘
+        const b = row.querySelector('.bubble');
+        b.innerHTML = ''; b.dataset.pluginCard = t;
+        card(b, m);
+        scrollBottom();
+      }catch(e){ console.error('[AgtPlugin] addChatCard', t, e); }
+      return false;
+    }
+    return true;
+  }
+
+  const api = {
+    // —— 事件 ——
+    ws: { on(type, fn){ ( _wsSubs[type] = _wsSubs[type] || []).push(fn); } },
+    // —— UI 席位 ——
+    ui: {
+      // dock 按钮（右侧工具坞，随 fabDock 展开显示）：{icon, label, onClick, background, badge}
+      addButton(spec){
+        const menu = document.getElementById('fabDockMenu');
+        if(!menu) return null;
+        let col = menu.querySelectorAll('.fabCol')[1] || menu.querySelector('.fabCol');
+        if(!col){ col = document.createElement('div'); col.className='fabCol'; menu.appendChild(col); }
+        const btn = document.createElement('button');
+        btn.className = 'fabItem';
+        btn.style.background = spec.background || '#334155';
+        btn.innerHTML = (spec.icon || '🔌') + (spec.badge ? `<span class="badge" style="position:absolute;top:-4px;right:-4px">${_esc(spec.badge)}</span>` : '');
+        btn.setAttribute('aria-label', spec.label || spec.title || '插件按钮');
+        if(spec.label || spec.title) btn.setAttribute('data-label', spec.label || spec.title);
+        btn.onclick = function(){ try{ (spec.onClick || function(){})(); }catch(e){ console.error('[AgtPlugin] button', e); } };
+        col.appendChild(btn);
+        return btn;
+      },
+      // 侧滑面板（与日志/团队抽屉同款）：{icon, title, render(el)}——render 首次打开时渲染内容
+      addPanel(spec){
+        const p = document.createElement('div');
+        p.style.cssText = 'display:none;position:fixed;top:0;right:0;bottom:0;width:40%;min-width:300px;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px';
+        p.innerHTML = `<div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px">
+            <div style="flex:1;font-weight:600;color:#334155">${_esc(spec.icon || '🔌')} ${_esc(spec.title || '插件面板')}</div>
+            <button title="收起" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button>
+          </div><div class="agtpl-body" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div>`;
+        document.body.appendChild(p);
+        p.querySelector('button').onclick = ()=>{ p.style.display='none'; };
+        const body = p.querySelector('.agtpl-body');
+        let rendered = false;
+        const toggle = (open)=>{
+          p.style.display = (open===undefined ? p.style.display==='none' : open) ? 'flex' : 'none';
+          if(p.style.display==='flex' && !rendered && spec.render){
+            rendered = true;
+            try{ spec.render(body); }catch(e){ body.textContent = '[插件面板渲染失败] ' + e; }
+          }
+        };
+        api.ui.addButton({ icon: spec.icon, label: spec.title, background: spec.background, onClick: ()=>toggle() });
+        return { el: body, toggle };
+      },
+      // 自定义聊天卡片：type 命中的 WS 事件由 fn(bubble, m) 自绘（默认处理终止）
+      addChatCard(type, fn){ _chatCards[type] = fn; },
+    },
+    // —— 后端调用（插件 register_route 注册的路由 / 内置 API）——
+    api: {
+      async get(path){ const r = await fetch(path); return r.json(); },
+      async post(path, body){
+        const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'},
+                                      body: JSON.stringify(body || {}) });
+        return r.json();
+      },
+    },
+    util: { esc: _esc, toast: _toast },
+    _dispatch,
+  };
+  return api;
+})();
+
+// 插件注入器：发现启用插件的 frontend.js 并按序注入（_v 防缓存；失败仅 console.warn 不炸页面）
+(function _injectPlugins(){
+  fetch('/api/plugins').then(r=>r.json()).then(d=>{
+    const list = (d.plugins || []).filter(p=>p.enabled && p.frontend_js);
+    list.forEach(p=>{
+      const s = document.createElement('script');
+      s.src = p.frontend_js + '?_v=' + Date.now();
+      s.dataset.agtPlugin = p.name;
+      s.onerror = ()=>console.warn('[AgtPlugin] 插件前端加载失败：', p.name, p.frontend_js);
+      document.head.appendChild(s);
+    });
+    if(list.length) console.info('[AgtPlugin] 已注入前端插件：', list.map(p=>p.name).join(', '));
+  }).catch(()=>{ /* 服务未就绪/无插件：静默 */ });
+})();
 
 inp.focus();
 </script>

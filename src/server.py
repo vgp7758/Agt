@@ -545,6 +545,29 @@ async def api_wf_run_node(run_id: str, node_id: str):
     return PlainTextResponse(full, media_type="text/plain; charset=utf-8")
 
 
+@app.get("/api/plugins")
+async def api_plugins():
+    """插件清单（前端注入器消费）：发现目录内全部插件 + 启用态 + frontend.js 入口 URL。
+    前端 index.html 启动时 fetch 本端点，为每个启用的 frontend.js 注 <script>。"""
+    import plugins as _plugins
+    return {"plugins": _plugins.plugins_view(_workspace)}
+
+
+@app.get("/plugins-assets/{name}/{file_path:path}")
+async def plugins_assets(name: str, file_path: str):
+    """插件静态资产（frontend.js 及包内文件）。安全：resolve 后必须仍在该插件目录内
+    （防 ../ 穿越）；no-cache（改 frontend.js 刷新页面即生效）。"""
+    import plugins as _plugins
+    from fastapi.responses import FileResponse
+    target = _plugins.plugin_asset(_workspace, name, file_path)
+    if target is None:
+        return PlainTextResponse(f"[不存在] 插件 {name} 无资产 {file_path}", status_code=404)
+    mime = "application/javascript" if target.suffix == ".js" else (
+        "text/css" if target.suffix == ".css" else "application/octet-stream")
+    return FileResponse(str(target), media_type=mime,
+                        headers={"Cache-Control": "no-cache"})
+
+
 def _infer_tool_group(name: str) -> str:
     """工具名 → 模块分组（前缀推断；build_agent 标注优先）。"""
     if name.startswith("wf_"):
@@ -3515,6 +3538,15 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
     except OSError:
         return (False, f"端口 {port} 已占用或无权限")
     _agent, _work_q, _mcp_mgr, _workspace, _state = agent, work_q, mcp_mgr, workspace, state
+    # 插件 HTTP 路由挂载（插件 SDK）：插件 register_route 注册的路由在 server 启动时统一
+    # 挂上（CLI 模式无 server 时挂起，起服务时挂——/web 后起的服务同样吃到）。
+    try:
+        import plugins as _plugins
+        _n = _plugins.attach_routes(app)
+        if _n and state is not None:
+            print(f"[plugins] 已挂载 {_n} 条插件路由")
+    except Exception:
+        pass
     # 团队下拉框推送源（用户提案 2026-09-17）：sub-agent 注册/注销（成员集合变化）→
     # 广播 team_changed 通知前端重拉团队列表。add_on_change 同 id 覆盖（/web stop 再
     # start 不叠订阅）；无 WS 客户端时 _broadcast 直接 return，纯 CLI 零开销。

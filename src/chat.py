@@ -281,6 +281,16 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     _reg(make_workflow_debug_tools(agent), "工作流调试")
     from restart_tools import make_restart_tools
     _reg(make_restart_tools(agent), "生命周期")
+    # 引擎级插件（插件 SDK，2026-10-14 用户提案）：.agent/plugins/ + ~/.agt/plugins/ 的
+    # backend.py setup(api) 注册工具/命令/路由/钩子；失败隔离（单插件异常不炸启动）。
+    try:
+        import plugins as _plugins
+        _pl_msg = _plugins.load_plugins(agent, workspace)
+        if verbose and _pl_msg:
+            print(_pl_msg)
+    except Exception as _e:
+        if verbose:
+            print(f"[plugins] 加载失败（跳过）：{_e}")
     if verbose:
         if ok:
             print(f"已加载工作流 {len(ok)} 个：{', '.join(ok)}")
@@ -920,6 +930,9 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "mcp":
         from mcp_client import run_mcp_cli
         sys.exit(run_mcp_cli(sys.argv[2:]))   # agt mcp add|list|remove|get（用户提案 2026-10-11）
+    if len(sys.argv) > 1 and sys.argv[1] == "plugin":
+        from plugins import run_plugin_cli
+        sys.exit(run_plugin_cli(sys.argv[2:]))   # agt plugin list|enable|disable|install|remove
     _early_argv()
     _apply_resume_arg(sys.argv[1:], WORKSPACE)   # --resume [名字]：CLI 同款（与 agt-web 行为一致）
     _ensure_utf8_stdout()

@@ -1675,10 +1675,44 @@ def _debug_hook(ctx: CommandContext, text: str):
     print("（运行轨迹已注册观测页 wf runs（节点级执行明细）；钩子内 LLM 调用记入 llm_calls.jsonl；session 未受影响）")
 
 
+def _cmd_plugins(ctx: CommandContext, args):
+    """插件管理：/plugins（清单）/ enable|disable <名> / reload。"""
+    from real_tools import WORKSPACE
+    import plugins as _plugins
+    sub = args[0].lower() if args else "list"
+    rest = args[1:]
+    if sub == "enable" and rest:
+        print(_plugins.set_enabled(WORKSPACE, rest[0], True))
+        return
+    if sub == "disable" and rest:
+        print(_plugins.set_enabled(WORKSPACE, rest[0], False))
+        return
+    if sub == "reload":
+        print(_plugins.reload_plugins(ctx.agent, WORKSPACE))
+        return
+    view = _plugins.plugins_view(WORKSPACE)
+    if not view:
+        print("(未发现插件。目录：<repo>/.agent/plugins/<name>/ 或 ~/.agt/plugins/<name>/，含 manifest.yml)")
+    else:
+        print(f"发现 {len(view)} 个插件：")
+        for p in view:
+            flags = []
+            flags.append("启用" if p["enabled"] else "禁用")
+            if p["loaded"]:
+                flags.append("已加载")
+            fe = " + 前端" if p["frontend_js"] else ""
+            print(f"  · {p['name']} v{p['version']} [{p['scope']}|{'/'.join(flags)}]{fe}"
+                  f"  {p['description'][:50]}")
+    print("用法：/plugins enable <名>   启用（reload 后生效）")
+    print("      /plugins disable <名>  禁用")
+    print("      /plugins reload        全量重载（改 backend.py 后热生效）")
+
+
 def _cmd_reload(ctx: CommandContext, args):
-    """/reload models|tools —— 热重载。
+    """/reload models|tools|plugins —— 热重载。
     models：重读 ~/.agt/models.json 并热应用（主 llm 同名 profile / utility 通道重建）；
-    tools：重扫 tools/ 与 .agent/tools/ 的脚本工具（改 agt_register 脚本后秒级生效，免重启）。"""
+    tools：重扫 tools/ 与 .agent/tools/ 的脚本工具（改 agt_register 脚本后秒级生效，免重启）；
+    plugins：重载引擎级插件（.agent/plugins/ 与 ~/.agt/plugins/，改 backend.py 后免重启）。"""
     sub = args[0].lower() if args else ""
     if sub == "tools":
         from script_tools import reload_script_tools, _LAST
@@ -1686,9 +1720,15 @@ def _cmd_reload(ctx: CommandContext, args):
         for nm in _LAST["names"]:
             ctx.agent.tool_groups[nm] = "脚本"
         return
+    if sub == "plugins":
+        import plugins as _plugins
+        from real_tools import WORKSPACE
+        print(_plugins.reload_plugins(ctx.agent, WORKSPACE))
+        return
     if sub != "models":
         print("用法：/reload models   —— 重读模型配置并热应用（改 models.json 后免重启生效）")
         print("      /reload tools    —— 重扫脚本工具目录并热应用（改 tools/builtin/*.py 后免重启生效）")
+        print("      /reload plugins  —— 重载引擎插件（改 .agent/plugins/*/backend.py 后免重启生效）")
         return
     import config
     config.reload_models()
@@ -2258,12 +2298,21 @@ def build_default_registry() -> CommandRegistry:
         '  不加 yes = 结果仅显示，不影响 Agent')
     reg.register("update", _cmd_update,
         "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
+    reg.register("plugins", _cmd_plugins,
+        "[enable|disable <名>|reload]  插件管理（发现/启用/禁用/热重载）",
+        "/plugins                    列出全部插件（版本/来源/启停状态）\n"
+        "/plugins enable <名>        启用（/plugins reload 后生效）\n"
+        "/plugins disable <名>       禁用\n"
+        "/plugins reload             全量重载（改 backend.py 后热生效）\n"
+        "  插件目录：<repo>/.agent/plugins/<名>/ 或 ~/.agt/plugins/<名>/（repo 级覆盖全局同名）")
     reg.register("reload", _cmd_reload,
-        "models|tools  热重载：模型配置(models.json) / 脚本工具(tools/builtin/*.py)改后免重启生效",
+        "models|tools|plugins  热重载：模型配置/脚本工具/引擎插件 改后免重启生效",
         "/reload models\n"
         "  改 models.json / 修 model id / 换 token 后执行；主 llm 同名刷新 + utility 通道重建\n"
         "/reload tools\n"
-        "  改 tools/builtin/ 或 .agent/tools/ 的 agt_register 脚本后执行；重扫 + 摘旧挂新，秒级生效")
+        "  改 tools/builtin/ 或 .agent/tools/ 的 agt_register 脚本后执行；重扫 + 摘旧挂新，秒级生效\n"
+        "/reload plugins\n"
+        "  改 .agent/plugins/*/backend.py 后执行；全卸重装（工具/命令/路由/钩子注册表重建）")
     reg.register("restart", _cmd_restart,
         "[消息]  看门狗式重启：退出→自动重启→恢复session/端口→推送消息（改完源码生效用）",
         "/restart                     重启并恢复当前会话\n"
@@ -2328,4 +2377,10 @@ def build_default_registry() -> CommandRegistry:
     reg.register("quit", _cmd_exit, "同 /exit（别名）")
     # /help 需要访问 reg 自身，单独绑
     reg.register("help", lambda ctx, args: reg.print_help(), "显示本帮助")
+    # 插件注册的命令追加（plugins.load_plugins 时记入运行时表；三处构建点自动生效）
+    try:
+        import plugins as _plugins_mod
+        _plugins_mod.append_commands(reg)
+    except Exception:
+        pass
     return reg

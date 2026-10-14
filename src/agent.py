@@ -603,7 +603,23 @@ class Agent:
             except Exception as e:
                 return f"[远程执行失败] {type(e).__name__}: {e}"
             return (_fr_prefix + r) if _fr_prefix else r
+        # 插件工具执行管线钩子（插件 SDK，2026-10-14 用户提案）：pre 可拒（deny 即不执行）、
+        # post 可改写结果。无插件时两函数首行即返回（零开销）；钩子异常不炸管线。
+        try:
+            from plugins import run_pre_hooks as _pl_pre
+            _deny = _pl_pre(name, arguments)
+        except Exception:
+            _deny = None
+        if _deny:
+            return f"[插件 {_deny.get('plugin', '')} 拒绝] {name} 未执行：{_deny.get('deny', '')}"
         r = self.tools.call(name, arguments)
+        try:
+            from plugins import run_post_hooks as _pl_post
+            _r2 = _pl_post(name, arguments, r)
+            if _r2 is not None:
+                r = _r2
+        except Exception:
+            pass
         if _fr_prefix and isinstance(r, str):
             r = _fr_prefix + r
         # 越界放行提示（用户补充 2026-09-29）：审批放行的 workspace 外操作，提示并入工具结果——

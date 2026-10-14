@@ -35,7 +35,10 @@ from tools import Tool, Toolbox
 # 会话工具（get_session_history/semantic_search_history/rename_session）同理：闭包绑定
 # 主 session——钩子工作流（before_turn_retrieval 等）在子 Agent 里跑时必须查子自己的历史
 _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents",
-                     "create_plan", "update_plan",
+                     "create_plan",
+                     # update_plan 例外保留（2026-10-15 施工委托实锤）：施工 worker 靠它标记计划
+                     # 进度——与主 Agent 共享同一 plan 文件（worker 标、双方面板同步见）。
+                     # create_plan 仍排除（worker 只推进度不建计划）。
                      "list_team", "agent_ask", "agent_notify",
                      "agent_query_events", "agent_query_tool_detail", "wait_subagents",
                      "get_session_history", "semantic_search_history", "rename_session",

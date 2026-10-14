@@ -306,7 +306,9 @@ def _func_plan_content() -> str:
     用户裁定 2026-10-15：**详细内容 + 每步完整内容**——施工 worker（或主 Agent 自施工）每轮
     装配即见全图。此前步骤描述在 spec→plan 时被截 150 字、施工模式又整体让位旧施工牌，
     worker 拿不到图纸，被迫满世界找细则（实锤：worker 找不到 recall_spec 而绕路）。
-    轻量进度视图由 plan_steps() 承担（截断版）。
+    轻量进度视图由 plan_steps() 承担。**每步不标状态**（用户裁定 2026-10-15·二轮：
+    plan_content=每步原始完整信息、byte-stable；状态标记归 plan_steps）——worker 标进度
+    不再扰动本段，装配前缀缓存不被施工推进打断。
     全部步骤完成后只留一行标题（2026-09-13·用户裁定维持——完成态仅需可见性）。"""
     p = _active_plan_dict()
     if not p:
@@ -320,11 +322,10 @@ def _func_plan_content() -> str:
     design = (p.get("design") or "").strip()
     if not steps:
         return head + f"\n设计：{design or '（无）'}"
-    from plan_tools import _PLAN_ICON   # 延迟 import：防顶层循环
-    lines = [head + f"（进度 {done}/{len(steps)}）",
-             "设计：" + (design or "（无）"), "步骤全文（图纸，以此为准）："]
+    lines = [head,
+             "设计：" + (design or "（无）"), "步骤全文（图纸，以此为准；各步状态见 plan_steps 进度视图）："]
     for i, x in enumerate(steps):
-        lines.append(f"  {_PLAN_ICON.get(x.get('status'), '?')} {i + 1}. {x.get('description', '')}")
+        lines.append(f"  {i + 1}. {x.get('description', '')}")
     return "\n".join(lines)
 
 

@@ -1191,6 +1191,29 @@ t1150_s27 → t1151_s0：rf 块清零、投影回到 70 条 ≈40K token——�
 
 > **后记（2026-10-15 用户裁定）**：流里的归档轮**不带内嵌 `<recent-file>` 快照**——recent-file 只对当前轮投影，`_constr_rebuild` / `_constr_migrate_turn` 一律按 `inline_snapshots=False` 重新定型进流（上方「与 `_constr_buf` 同定型器，字节形态一致」仅对 tool result 正文成立，快照块是一个**有意的不一致**）；回搜范围同时补上当前进行中的轮，本轮新建 plan 时流为空。见 [裁定与落地节](#裁定与落地内嵌快照只对当前轮起点回搜补当前轮--归档轮不内嵌2026-10-15用户裁定)。
 
+## 后记：施工委托让位——委托后主 Agent 退出施工视图（2026-10-15，用户提案，commit 3dc3f7b）
+
+**背景**：施工模式自 2026-09-13 起一直是「主 Agent 自己进施工视图干」——施工期投影形态随 plan 状态在「施工视图 ↔ 常规视图」间来回切换。用户 2026-10-15 提案把施工**委托给 worker 子 Agent**（「这样主 agent 的状态也别换来换去了」，全貌见 [施工委托](../features/construction-delegation.md)）。
+
+**判定增补（src/session.py `_construction_mode()`）**：既有两条（活动 plan 有未完成步 + session 同一性）之上再加一条出口——本 session 活动 plan 已被委托（`extra_state["_plan_dispatch"]` 的 `plan_id` 等于活动 plan id 且 `agent_id` 非空）→ `return False`。
+
+**让位面（全部由同一判定派生，零额外分支）**：
+
+| 位置 | 委托后行为 |
+|---|---|
+| history 段 | **恢复装配**（不再标 `跳过(施工模式——plan 未完成…)`） |
+| 头部第二条 system | 施工牌不注入；尾部「上一轮施工摘要」也不注入 |
+| `_seg_msgs_recent_file` | 恢复**段式**（施工期的内嵌形态 + 不去重/不限数量口径不触发） |
+| `_steps_to_messages` / `_constr_buf` | 不走进施工定型分支（内嵌快照挂载只属施工路径） |
+| `_rf_hit_cids` / `_rf_stripped` / `_rf_in_msgs` | 诊断口径回非施工集合（与附加口径同源，自动一致） |
+| `/context` 顶部 `⚙️ 施工模式` 标注 | 消失（判定同源，标注条件即 `_construction_mode()`） |
+
+**施工细节搬到 worker 侧**：plan 归属主 Agent，worker 的 session 里没有活动 plan → **worker 自己不触发施工模式**，按常规子 Agent 投影（人设 + user_message + steps 当前轮），施工期那些大体积快照/施工流都吃在 worker 的上下文里。
+
+**缓存账（权衡）**：主 Agent 失去施工期的 byte-stable 前缀福利（history 恢复装配 = 前缀随历史增长），换来**投影形态稳定**——不再每轮随 plan 进度在两种形态间跳变（形态跳变本身就是一次缓存全断）。**机制全保留**：未委托 / 关闭委托（`_construction_delegate=False`）/ 场景无 `_prompt_subagent`（纯引擎）时，主 Agent 照旧进施工视图自己施工。
+
+**验证（2026-10-15 开发轮）**：让位三分支断言（已委托 → False / 未委托 → True / 别的 plan 的标记不影响本 plan）+ L2 隔离实跑轮启动无异常；`plan_dispatch` 标记随 `capture_runtime_state` / `restore_state` 往返（重启后仍让位、不重复派发）——`/restart` 生效。
+
 # —— system 段 append-not-replace：缓存连续时追加、毕业断点处归一化（2026-09-12，spec s_eb14a8fd，用户提案+裁定） ——
 
 ## 动机

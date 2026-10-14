@@ -192,6 +192,18 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 - [image_feed 实时画面段](../features/image-feed.md) —— 首个消费端 desktop-operator 的画面来源
 - [Agent 管理页](../features/agents-admin.md) —— 编辑器与 persona 读写配套
 
+## 施工委托 worker：引擎程序化派发子 Agent（2026-10-15，用户提案，commit 3dc3f7b）
+
+用户提案（2026-10-15）：「添加一个施工 sub-agent——一进入施工状态自动 `agent_prompt` 把施工牌发送给 worker 开一个 session 进行施工」（细节见 [施工委托](../features/construction-delegation.md)）。这是**引擎主动派活**的第一个常规用例：此前子 Agent 一律由 LLM 工具调用（`agent_prompt`）或工作流节点（`create_agent`，已退役）触发。
+
+- **声明**：`src/agents/worker/`（随包播种源，bundled 第 9 个）→ `.agent/agents/worker/`，目录形态 `worker.yml` + `worker.md` 人设；`tools: ''` 继承工具箱、`model: glm-official-flash`、`max_steps: 150`、assembly = `file(人设) + user_message + steps`（**无 history**——worker 只认施工牌 + 当前轮）、`turn_end: recap_gen(async)`、fallback 两级。人设 = 按牌施工 / 不重复调研 / 小步可回滚 / 不转包 / 验证通过后再提交 + **四段式汇报**（完成情况 · 改动清单 · 验证结果 · 遗留风险）
+- **引擎程序化派发通道**：`_resolve_tools`（src/multiagent.py）尾部 `agent._prompt_subagent = agent_prompt`——把 prompt 实现挂到 agent 实例上，引擎不经 LLM 工具调用即可起子 Agent。派发参数 `agent_prompt("worker", 施工牌, agent_id="worker-<plan_id>", reuse="yes", caller=主 Agent, current_turn_only=True)`——**显式 agent_id** 让一个计划绑定一条 worker 线（可定向续派），`caller` 让汇报按既有 inbox 链回到主 Agent
+- **发起侧**：`Agent._maybe_dispatch_construction()`（两个调用点：每步工具执行后 = `create_plan` 当步即派；每轮 `run()` 开头 = 续跑/重启后补派），幂等标记 `session.extra_state["_plan_dispatch"]` 随存档往返；plan 全完成 / 无 plan / `exit_plan` → 标记清空（新计划重新委托）。派发后投 `_hook_notes` 旁注 + 系统事件，主 Agent 当轮就知道"别自己动手"
+- **手动续派同一施工线**（失败不自动重派，防死循环）：`agent_prompt(name="worker", agent_id="worker-<plan_id>", prompt="从第 N 步继续…")`——这是「具名 agent_id + reuse」在施工场景的常规用法
+- **记账仍在主 Agent**：worker 无 `update_plan`（防子 Agent 与主 Agent 并发写 plan 状态），汇报须带「完成到第几步」
+- 主 Agent 侧：委托后 [退出施工视图](context-engine.md#后记施工委托让位委托后主-agent-退出施工视图2026-10-15用户提案commit-3dc3f7b)（`session._construction_mode()` 让位）+ [计划注入块](../features/construction-delegation.md)加「施工：已委托 …」行
+- **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常
+
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
 **背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：

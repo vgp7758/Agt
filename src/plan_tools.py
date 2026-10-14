@@ -201,6 +201,14 @@ def _format_plan_block(agent) -> str:
     title = p.get("title", "")
     design = (p.get("design") or "").strip()
     lines = [f"【当前计划】{p.get('id', '')}" + (f" · {title}" if title else "")]
+    # 施工委托提示（用户提案 2026-10-15）：计划已派给 worker → 主 Agent 只需等汇报 + 记账
+    try:
+        _d = (getattr(getattr(agent, "session", None), "extra_state", None) or {}).get("_plan_dispatch") or {}
+        if _d.get("agent_id") and str(_d.get("plan_id") or "") == str(p.get("id") or ""):
+            lines.append(f"施工：已委托 {_d.get('agent_id')}（施工细节在其 session；完成会自动汇报——"
+                         f"收到汇报后用 update_plan 记账）")
+    except Exception:
+        pass
     lines.append("设计：" + (design or "（无）"))
     lines.append(f"进度（共 {total} 步，已完成 {done}）：")
     for i, s in enumerate(steps):

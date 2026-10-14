@@ -1,0 +1,17 @@
+name: worker
+description: 施工 worker（施工委托）——主 Agent 创建/接手计划后由引擎自动派活，按【施工牌】执行多步施工并汇报。用户通常无需手动调用；要续派同一施工线时用 agent_prompt(name="worker",
+  agent_id="worker-<plan_id>", prompt="从第N步继续…")。
+tools: ''
+model: glm-official-flash
+max_steps: 150
+assembly:
+- file: .agent/agents/worker/worker.md
+- user_message
+- steps
+hooks:
+  turn_end:
+  - workflow: recap_gen
+    async: true
+fallback:
+- glm-official
+- deepseek

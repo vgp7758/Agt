@@ -823,6 +823,9 @@ class Agent:
             "plan_id": self.active_plan_id,   # 只存活动计划文件名；计划本体在 plans/<plan_id>.json
             "spec_id": self.active_spec_id,   # 只存活动 spec 文件名；spec 本体在 specs/<spec_id>.json
             "background_tasks": self.background_tasks,
+            # 施工委托标记（用户提案 2026-10-15）：plan_id→worker agent_id——重启/读档后
+            # 不重复派发（幂等），也让 _construction_mode 继续让位于 worker。
+            "plan_dispatch": (self.session.extra_state or {}).get("_plan_dispatch") or {},
         }
         # 定时任务（2026-09-18 修：extra_state 是 provider 覆盖式重建——Scheduler._persist 直写
         # extra_state 的值会被任意落盘抹掉，meta.json 从未出现 schedules，用户实锤；真源=Scheduler）
@@ -851,6 +854,13 @@ class Agent:
         restore_active_plan(self, state or {})   # 活动计划：按 plan_id 从文件读回；空存档→清空；旧格式自动迁移
         restore_active_spec(self, state or {})   # 活动 spec：按 spec_id 从文件读回；空存档→清空
         self.background_tasks = (state or {}).get("background_tasks") or {}  # 后台任务登记表
+        # 施工委托标记恢复（用户提案 2026-10-15）：读档后本计划不重复派发（幂等）
+        try:
+            _pd = (state or {}).get("plan_dispatch") or {}
+            if _pd:
+                self.session.extra_state["_plan_dispatch"] = dict(_pd)
+        except Exception:
+            pass
         # 定时任务恢复（2026-09-18：标准恢复点——set_session/load 后 scheduler 已存在、
         # extra_state 已从 meta.json 读入；此前 Scheduler.__init__ 里调时机太早=空跑）
         try:
@@ -992,6 +1002,98 @@ class Agent:
             return _format_spec_block(self)
         except Exception:
             return ""
+
+    # ========== 施工委托（用户提案 2026-10-15）==========
+    # 一进入施工状态（create_plan / spec approve 建 plan）→ 把【施工牌】自动派给
+    # worker-<plan_id>（具名子 Agent 实例，一个计划一条独立施工线）：施工细节活在 worker
+    # 自己的 session 里，主 Agent 的投影只剩"我建了计划 → 委托给 worker 了"，
+    # 状态不再随施工来回切换（施工态投影/施工流/recent-file 内嵌都让位，见
+    # session._construction_mode）。
+    def _construction_brief(self) -> str:
+        """施工牌文本（派给 worker 的 prompt）：计划（id/title/design/进度/steps）+ 源 spec 详情。
+        spec 每步含 file/action/anchor/content/rationale，而 plan 的 step description 只摘了前 150 字
+        （spec_tools._step_to_plan_desc）——这里把全文给足，worker 才不用重新探索一遍。"""
+        p = getattr(self, "active_plan", None) or {}
+        lines = [f"【施工牌】计划 {p.get('id', '')} · {p.get('title', '未命名计划')}",
+                 "",
+                 "设计 / 目标：",
+                 (p.get("design") or "（无）").strip(),
+                 "",
+                 "步骤："]
+        for i, s in enumerate(p.get("steps") or [], 1):
+            icon = {"pending": "☐", "in_progress": "▶", "completed": "✅"}.get(str(s.get("status")), "?")
+            lines.append(f"  {icon} {i}. {s.get('description', '')}")
+        src = str(p.get("source_spec") or "").strip()
+        if src:
+            try:
+                from spec_tools import _load_spec
+                sp = _load_spec(self.session.workspace, src) or {}
+                sp_steps = sp.get("steps") or []
+                if sp_steps:
+                    lines += ["", f"施工详情（源 spec {src}）："]
+                    for i, st in enumerate(sp_steps, 1):
+                        _f = st.get("file", "") or "(无文件)"
+                        _a = f" @ {st.get('anchor')}" if st.get("anchor") else ""
+                        lines.append(f"  {i}. [{st.get('action', '')}] {_f}{_a}")
+                        if (st.get("rationale") or "").strip():
+                            lines.append(f"     理由：{st.get('rationale')}")
+                        c = (st.get("content") or "").strip()
+                        if c:
+                            lines += ["     内容：", "```", c[:6000], "```"]
+            except Exception:
+                pass
+        lines += ["", "分工：这条计划已全部委托给你执行——主 Agent 只做汇总与用户沟通，不再重复施工。",
+                  "完成后按你的汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。"]
+        return "\n".join(lines)
+
+    def _maybe_dispatch_construction(self) -> None:
+        """施工委托派发（用户提案 2026-10-15）：活动计划有未完成步且尚未委托 → agent_prompt 把
+        施工牌发给 worker-<plan_id>（显式 agent_id = 具名实例：一个计划一条 worker 线，可定向续派）。
+        幂等：session.extra_state['_plan_dispatch'] 记 plan_id→agent_id（随 capture_runtime_state 落盘）；
+        plan 全完成 / 换计划 / exit_plan → 标记清掉（新计划重新委托）。
+        调用点：每步工具执行后（create_plan 建好即派）+ 每轮 run 开头（续跑/重启后补派）。"""
+        try:
+            if not getattr(self, "_construction_delegate", True):
+                return
+            pid = str(getattr(self, "active_plan_id", "") or "")
+            p = getattr(self, "active_plan", None) or {}
+            steps = p.get("steps") or []
+            _d = self.session.extra_state.setdefault("_plan_dispatch", {})   # setdefault：原地改，防覆盖式重建抹键
+            if not isinstance(_d, dict):
+                _d = {}
+                self.session.extra_state["_plan_dispatch"] = _d
+            _done_all = bool(steps) and all(str(x.get("status")) == "completed" for x in steps)
+            if not pid or not steps or _done_all:
+                if _d:
+                    _d.clear()      # 计划完成/无计划：委托标记失效（下次新计划重新委托）
+                return
+            if str(_d.get("plan_id") or "") == pid and str(_d.get("agent_id") or ""):
+                return              # 本计划已委托（幂等——本方法每步/每轮都会被调）
+            prompt_fn = getattr(self, "_prompt_subagent", None)
+            if prompt_fn is None:
+                return              # 未装配 multiagent（纯引擎/外置脚本场景）：静默跳过
+            aid = f"worker-{pid}"
+            res = prompt_fn("worker", self._construction_brief(), agent_id=aid,
+                            reuse="yes", caller=self.agent_id, current_turn_only=True)
+            _d.update({"plan_id": pid, "agent_id": aid, "ts": time.time(),
+                       "result": str(res or "")[:300]})
+            # 同轮即告（用户提案 2026-10-15）：派发发生在 create_plan 那一步之后，主 Agent 的
+            # 后续步骤若没有这条旁注会继续自己施工 → 浪费 + 与 worker 打架。旁注随投影注入
+            # （plan 注入块每轮都给"已委托"行，这里是同一轮内的即时通知）。
+            try:
+                self._hook_notes.append({
+                    "hook": "construction_dispatch", "name": "delegate",
+                    "result": (f"施工已委托 {aid}（计划 {pid} · {len(steps)} 步）：这条计划由 worker 执行，"
+                               f"你不必再自己动手。worker 完成会自动汇报进你的 inbox——"
+                               f"收到后用 update_plan 记账并向用户汇总；期间可正常响应用户。")})
+            except Exception:
+                pass
+            self._emit({"type": "system",
+                        "text": f"🏗️ 施工已委托 {aid}（计划 {pid} · {len(steps)} 步）——"
+                                f"施工在 worker 侧进行，完成会自动汇报。"})
+            _LOG.info("施工委托：plan=%s → %s | %s", pid, aid, str(res)[:120])
+        except Exception as e:
+            _LOG.warning("施工委托派发失败（跳过，不影响本轮）：%s", e)
 
     def _emit_spec_if_any(self):
         """把当前 spec 推给 UI（resume 后让前端 spec 面板同步）。"""
@@ -2219,6 +2321,7 @@ class Agent:
                     self._active_hooks = {hw["hook"] for hw in get_hook_workflows(_ws)}
             except Exception:
                 self._active_hooks = set()
+            self._maybe_dispatch_construction()   # 施工委托：续跑/重启后补派未委托的计划（幂等）
             tool_schemas = self._llm_tool_schemas()   # LLM 视图：注入 remote_instance_id 路由参数
             # tools schema 随请求计费进 prompt_tokens 但不在投影 msgs 里：每轮算一次其字符数，
             # observe_llm_usage 拿它修正 chars/token 校准分子（否则比率系统性估高 → 过早压缩）
@@ -2573,6 +2676,7 @@ class Agent:
                             step.file_snapshots = {}
                             self._emit({"type": "warn", "text": f"recent-file 快照失败（已跳过）：{type(e).__name__}: {e}"})
                         self.session.add_step(step)
+                        self._maybe_dispatch_construction()   # 施工委托：create_plan 建好即派给 worker
                         # 动态注册的工具（新写的工作流、ensure_lsp 装的 LSP 等）当轮即可见：
                         # 仍扫描新写的工作流/工具脚本（注册进 toolbox）+ 每步无条件重算 schemas
                         # （schemas 无缓存，只是 dict 遍历，成本低）

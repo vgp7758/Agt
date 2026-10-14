@@ -1443,4 +1443,8 @@ def make_subagent_tools(agent) -> list:
         _rt._agents_changed_cb = lambda: _inject_agent_enums(agent, tools_list)
     except Exception:
         pass
+    # 引擎程序化派发入口（用户提案 2026-10-15·施工委托）：把 prompt 实现挂到 agent 实例上，
+    # 引擎（Agent._maybe_dispatch_construction）不经 LLM 工具调用即可起子 Agent——
+    # 施工牌由 create_plan/commit_spec 触发自动派给 worker-<plan_id>。
+    agent._prompt_subagent = agent_prompt
     return tools_list

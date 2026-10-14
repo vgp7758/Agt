@@ -1756,14 +1756,24 @@ class Session:
         """施工模式（2026-09-13·spec s_e1804804，用户提案）：活动 plan 存在未完成步时投影切换
         施工视图——history 不装配 + 头部施工牌（plan design）。判定源 agent_config._RUNTIME_AGENT
         （与 plan_content() 同源，无第二份状态）；绑定 session 同一性——子 Agent 的 session 不是
-        活动 plan 所属 agent 的 session，不受主 Agent 施工影响（其装配的 history 段照常）。"""
+        活动 plan 所属 agent 的 session，不受主 Agent 施工影响（其装配的 history 段照常）。
+        施工已委托 worker（用户裁定 2026-10-15）：主 Agent 退出施工视图——施工细节活在 worker
+        自己的 session 里，主 Agent 回常规历史装配（状态不再随施工来回切换）。"""
         try:
             from agent_config import _RUNTIME_AGENT
             if _RUNTIME_AGENT is None or getattr(_RUNTIME_AGENT, "session", None) is not self:
                 return False
             p = getattr(_RUNTIME_AGENT, "active_plan", None)
             steps = (p or {}).get("steps") or []
-            return bool(steps) and any(str(x.get("status")) != "completed" for x in steps)
+            if not (bool(steps) and any(str(x.get("status")) != "completed" for x in steps)):
+                return False
+            try:
+                _d = (self.extra_state or {}).get("_plan_dispatch") or {}
+                if _d.get("agent_id") and str(_d.get("plan_id") or "") == str((p or {}).get("id") or ""):
+                    return False    # 已委托 worker → 施工视图让位
+            except Exception:
+                pass
+            return True
         except Exception:
             return False
 

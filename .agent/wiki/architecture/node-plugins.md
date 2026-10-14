@@ -9,12 +9,12 @@
 | 目录 | 用途 | 扫描序 |
 |---|---|---|
 | `src/assets/nodes_builtin/` | 随包核心插件（pip 安装即有） | 1（最低优先） |
-| `.agent/nodes/` | ★**默认用户/Agent 私有**（扩展面：写两个文件即得全新节点类型；2026-10-15 收编） | 2 |
-| `nodes/` | 旧 workspace 级——**仅当目录存在时**才追加扫描（存量 repo 不炸）；新 workspace 不再创建 | 3（末尾） |
+| `nodes/` | 旧 workspace 级——**仅当目录存在时**才追加扫描（存量 repo 不炸）；新 workspace 不再创建 | 2（兼容层，被 .agent 覆盖） |
+| `.agent/nodes/` | ★**默认用户/Agent 私有**（扩展面：写两个文件即得全新节点类型；2026-10-15 收编） | 3（**末位 = 同名胜出**） |
 
 同名 type 后扫覆盖先扫——用户在 `.agent/nodes/` 放同名文件即定制覆写内置节点。
 
-⚠️ **覆盖方向与代码注释口径相反**（2026-10-15 迁移实测）：legacy `nodes/` 被 append 在**末尾**，而扫描是「后扫胜出」（`handlers[t] = desc` / js payload 按 type 去重留后）——旧目录与 `.agent/nodes/` 同名时**旧目录份反而胜出**。迁移后请删除旧目录，别指望两处并存时 `.agent/` 生效。历史口径：2026-10-15 前为 `nodes/`（中）→ `.agent/nodes/`（最高）。收编动因与配套见 [工具外置 · 默认目录收编](../features/tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)。
+✅ **覆盖方向：`.agent/nodes/` 胜出**（2026-10-15 `ba0b876` 修正后）：legacy `nodes/` **先扫**、`.agent/nodes/` 在**末位**；扫描是「后扫胜出」（`handlers[t] = desc` / js payload 按 type 去重留后）。修正前（收编初版）legacy 被 append 在末尾，方向恰好相反——旧目录反而覆盖 `.agent/`，与文档承诺不符；已用**同名 type 冲突实测**校正（节点侧与工具侧同款修复，详见 [工具外置 · 后记：扫描序反转修复](../features/tool-externalization.md#后记扫描序反转修复legacy-前置agenttools-末位胜出2026-10-15commit-ba0b876)）。⚠️ 迁移后仍建议删除旧目录，避免「改的那份不生效」的困惑重现。历史口径：2026-10-15 前为 `nodes/`（中）→ `.agent/nodes/`（最高）。收编动因与配套见 [工具外置 · 默认目录收编](../features/tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)。
 
 **已迁移清单**（src/assets/nodes_builtin/，共 12 组）：
 - 第一批：text(15) / tojson(58) / fromjson(59)

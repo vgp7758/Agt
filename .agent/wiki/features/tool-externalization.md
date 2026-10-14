@@ -11,7 +11,7 @@
 | `tools/builtin/*.py` | **旧 workspace 级目录**——仅当目录存在时才追加扫描（存量 repo 不炸）；新 workspace 不再创建。见[默认目录收编章](#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1) |
 | `tools/` 根 | **永不扫描**（防一次性任务脚本被随手丢进来，2026-09-27 50052 实锤，见[目录收敛章](#工具目录收敛tools-根永不扫描--一次性任务脚本防御2026-092728用户提案commit-973627f)） |
 
-**扫描顺序**（`src/script_tools.py default_dirs()`）：随包 `tools_builtin` → `.agent/tools/` →（存在才追加）`tools/builtin/` → 同名后扫胜出，再覆盖内置（后注册胜出，同时成为用户定制覆写内置工具的机制）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版。
+**扫描顺序**（`src/script_tools.py default_dirs()`）：随包 `tools_builtin` →（存在才追加）**旧 `tools/builtin/`** → `.agent/tools/`（末位）→ 同名后扫胜出，再覆盖内置（后注册胜出，同时成为用户定制覆写内置工具的机制）。**legacy 前置是刻意的**（2026-10-15 `ba0b876` 修正，见[后记](#后记扫描序反转修复legacy-前置agenttools-末位胜出2026-10-15commit-ba0b876)）：先扫旧目录、`.agent/tools/` 末位 → 同名时 `.agent/` 胜出，与新默认目录的直觉一致。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版。
 
 约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**随包件改完必须同步 `src/assets/tools_builtin/` 副本**——同名时上层覆盖 assets 层。**不随包的有 5 件**（本地私有工具层）：team_tools / agentid_tools / release_tools / scnet_web_tools / workflow_source_tools（前两件 2026-09-12 对账定档；release_tools 2026-10-12 加入，见 [release-publish](release-publish.md)；原第三件 zai_tools 2026-09-17 迁独立 MCP，见 [zai-tools](zai-tools.md)）。
 
@@ -39,17 +39,53 @@
 
 - 老 repo（存量 `tools/builtin/`、`nodes/`）**无需任何操作**：目录存在即被追加扫描，工具/节点照常加载，只是不再推荐往里放新东西
 - 新 repo 不再创建旧目录——新装一律 `.agent/`
-- ⚠️ **同名覆盖方向与代码注释口径相反**：legacy 目录被 append 在**末尾**，而扫描是「后扫覆盖先扫」（`register_or_replace` / `handlers[t] = desc`）——所以两处同名时**旧目录份反而胜出**。从旧目录迁到 `.agent/` 后务必删/改旧目录，否则改的可能是不生效的那份（script_tools 与 node_plugins 两处同理）
+- ✅ **同名覆盖方向 = `.agent/` 胜出**（`ba0b876` 修正后）：legacy 目录**先扫**、`.agent/` 在**末位**，而扫描是「后扫覆盖先扫」（`register_or_replace` / `handlers[t] = desc`）——两处同名时新默认目录生效。⚠️ 但迁移后**仍建议删/改旧目录**：留着旧份会让「改的那份不生效」的困惑重现（只不过方向是反的）
+
+### 后记：扫描序反转修复——legacy 前置、`.agent/tools/` 末位胜出（2026-10-15，commit ba0b876）
+
+**问题（收编当轮就埋下，wiki-updater 自查抓到）**：收编章初版把 legacy `tools/builtin/`、`nodes/` **append 在扫描列表末尾**，而引擎是「后扫覆盖先扫」——于是**旧目录反而覆盖 `.agent/`**，与本页文档承诺的「`.agent/` 是覆盖份」完全相反（文档写对了、代码注释写反了、实现也跟着注释做反了）。
+
+**修复（commit `ba0b876`，两处 `default_dirs()`）**：legacy 改为**前置**，`.agent/` 挪到末位——
+
+```python
+# src/script_tools.py default_dirs()
+dirs = [pkg]                                   # 随包 tools_builtin（最低优先）
+legacy = WORKSPACE / "tools" / "builtin"
+if legacy.is_dir():
+    dirs.append(legacy)                        # 兼容读：老 repo 存量目录仍生效（先扫 = 被覆盖）
+dirs.append(WORKSPACE / ".agent" / "tools")    # ★默认用户工具目录（末位 = 同名胜出）
+
+# src/node_plugins.py default_dirs()
+dirs = [pkg]                                   # 随包 nodes_builtin
+legacy = WORKSPACE / "nodes"
+if legacy.is_dir():
+    dirs.append(legacy)
+dirs.append(WORKSPACE / ".agent" / "nodes")
+```
+
+| 序 | 目录（工具侧） | 优先级 |
+|---|---|---|
+| 1 | `src/assets/tools_builtin/` | 最低（随包） |
+| 2 | `tools/builtin/`（存在才追加） | 兼容层，被 .agent 覆盖 |
+| 3 | `.agent/tools/` | **最高**（同名胜出） |
+
+节点侧同构：随包 `nodes_builtin` → `nodes/`（兼容）→ `.agent/nodes/`（最高）。
+
+**验证**：造同名冲突（同一工具名/同一节点 type 分别放两份，内容可区分）实跑扫描 → 工具与节点**均 `.agent/` 版胜出** ✓；本 repo 旧目录已删的路径不受影响。
+
+**教训（可复用）**：目录优先级语义不能只写在文档/注释里——「append 顺序」与「后扫胜出」是两个独立事实，凑在一起才决定成败；凡涉及覆盖方向，落地后必须用**同名冲突实测**验证，而不是读代码推断。同类口径检查点：`.agent/` 收编、节点插件覆盖、`src/assets` 与 workspace 双层覆盖（[双层对账](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。
 
 ### 验证（5 组全绿，2026-10-15 开发轮）
 
 | # | 场景 | 结果 |
 |---|---|---|
 | 1 | 本 repo 新序（旧目录已删 → 不追加） | ✅ 2 个目录 |
-| 2 | 老 repo 兼容（旧目录存在 → 追加末位） | ✅ |
+| 2 | 老 repo 兼容（旧目录存在 → 以 legacy 位置追加） | ✅ 工具/节点照常加载 |
 | 3 | **scan 实跑** | 53 工具零失败，7 迁移件全从 `.agent/tools/` 注册（含 explore 工厂型带 agent 注入） |
 | 4 | 节点插件 | 15 类正常，timestamp 来自 `.agent/nodes/` |
 | 5 | 新 workspace 播种 | 只建 5 个 `.agent/` 目录 |
+
+（`ba0b876` 追加一组：同名冲突实测——见[后记](#后记扫描序反转修复legacy-前置agenttools-末位胜出2026-10-15commit-ba0b876)。）
 
 **生效**：引擎侧三文件（script_tools / node_plugins / agent_config）需 `/restart`；**改工具/节点脚本本身仍走 `/reload tools`、`/reload nodes` 热加载**（路径口径随之）。
 

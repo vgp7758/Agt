@@ -1,10 +1,10 @@
-# 插件 SDK · 引擎级全栈插件方案（草案 v0 · 2026-10-14 · 未实施）
+# 插件 SDK · 引擎级全栈插件方案（P0+P1 已落地，2026-10-14 提案当日实装）
 
 > 2026-10-14 用户提案：「支持更多引擎层的可拓展插件，允许用户只需要追加一些自己的代码放在指定位置，
 > 就可以给引擎添加一些 DIY 功能（比如在前端加个按钮？给后端增加某种规则？），可能需要定义 install
 > 版可用于动态处理的 SDK」。
 > 参照系：DeepSeek Harness（dsh，tmp/deepseek-harness 本地源码调研）。
-> **状态：设计草案，4 个开放问题待用户裁定后开工**（见文末）。设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)。
+> **状态：P0+P1 已实装落地（提案当日收官，2026-10-14）**——见文末「落地」节；四问已全裁定。设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)。
 
 ## 定位：不重写内核，加聚合层
 
@@ -99,30 +99,101 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 
 `define_plugin` 工具（写 backend.py 源码 → 人审批 → 临时挂载，进程内、重启即失）——DSH `cordis_define` 的保守版，待 P0/P1 协议稳定后引入。
 
-## 实施切分（5 步 ~1200 行，每步独立可交付）
+## 实施切分（5 步 ~1200 行）→ 实际落地对照（一轮交付）
 
-| 步 | 内容 | 规模 |
-|---|---|---|
-| 1 | 插件发现器 + manifest 解析 + plugins_state + 启动装配（provides 静态资产聚合） | ~200 行 |
-| 2 | PluginAPI：register_tool/command/route + on_tool_pre/post_execute + emit；注册表可逆撤销 | ~300 行 |
-| 3 | /api/plugins + 静态服务 + 前端 AgtPlugin 注入器 + addButton/addPanel/addChatCard | ~250 行 |
-| 4 | `agt plugin` CLI 子命令 + 设置页插件 tab | ~200 行 |
-| 5 | 插件开发指南 + 模板插件 example/ + wiki | 文档 |
+原切分 5 步收敛为提案当日一轮交付（2026-10-14）：
 
-依赖 1→2→3→4；每步后均有可验证交付（示例插件随步构建）。
+| 原 5 步 | 落地 |
+|---|---|
+| 1 发现器 + manifest + plugins_state + 启动装配 | ✅ src/plugins.py（473 行，含 2~3 步的 PluginAPI） |
+| 2 PluginAPI + 可逆撤销 | ✅ 同上单文件；接线 src/agent.py / chat.py / commands.py |
+| 3 /api/plugins + 静态服务 + 前端注入器 + 三席位 | ✅ src/server.py + src/static/index.html |
+| 4 CLI 子命令 + 设置页 tab | ✅ `agt plugin` CLI 落地；设置页 tab 未做（`/plugins` 命令先行） |
+| 5 开发指南 + 模板插件 + wiki | ✅ docs/plugins.md + demo [.agent/plugins/example-hello/](../../.agent/plugins/example-hello/manifest.yml) + 本页 |
 
-## 开放问题（待用户裁定，裁定后开工）
+规模：引擎层 6 文件（新增 src/plugins.py + 5 处接线）+ 前端 SDK + demo + 文档；`/restart` 生效。
 
-1. **工具投影污染**：register_tool 默认进 LLM 工具表会占 SYSTEM token——要不要 `exposed_to_llm: false` 选项（只给前端/命令用）？
-2. **repo 级 vs 全局级优先级**：同名插件谁赢（建议 repo 覆盖全局，同 main.yml 双份管理语义）？
-3. **插件文案 i18n**：frontend.js 文案是否纳入 dict.json 体系（建议先不纳，插件自带）？
-4. **信任模型显式化**：backend.py 有全部引擎权限，要不要 SAFETY.md 式显式安全声明？
+## 开放问题 → 四问全裁定（2026-10-14 提案当日，随实装收官）
+
+四个开放问题提案当日全部按推荐裁定，随实装一并落地：
+
+1. **工具投影污染** → ✅ 裁定：manifest 增 `exposed_to_llm` 键——`false` 时注册工具 hidden（不进 LLM 工具投影，不占 SYSTEM token，只给前端/命令用）
+2. **repo 级 vs 全局级优先级** → ✅ 裁定：**repo 级覆盖全局级**（同名插件），同 main.yml 双份管理语义
+3. **插件文案 i18n** → ✅ 裁定：**不纳入** dict.json 体系，frontend.js 文案插件自带
+4. **信任模型显式化** → ✅ 裁定：**全信任**（同 tools/builtin、Obsidian）——目录内代码被 import 执行，不做 JS 沙箱、manifest 不设权限声明；在 [docs/plugins.md](../../docs/plugins.md) 显式写明安全模型
+
+## 落地：P0+P1 全链路实装（2026-10-14，提案当日收官）
+
+> 本页状态已从「设计草案」翻转为**已落地**。以下为实装记录；上方设计章节保留作历史依据，与实装差异见本节末「差异对账」。
+
+### 交付件
+
+| 件 | 内容 |
+|---|---|
+| src/plugins.py（核心单文件，473 行） | 发现 + PluginAPI + 可逆撤销 + 钩子链 + 启停管理 |
+| src/agent.py | `_exec_tool` 统一入口注入 pre/post 钩子 |
+| src/chat.py | 启动装配 `load_plugins(agent, workspace)`（失败隔离） |
+| src/commands.py | `/plugins` 命令 + `/reload plugins` + `append_commands` 插件命令并入 registry |
+| src/server.py | `GET /api/plugins` 清单 + `/plugins-assets/{name}/{path}` 静态资产 |
+| src/static/index.html | 前端 SDK `window.AgtPlugin` + 启动注入器 |
+| .agent/plugins/example-hello/ | demo 插件（manifest.yml + backend.py + frontend.js，全 seam 演示） |
+| docs/plugins.md | 开发指南（含安全模型声明） |
+
+### src/plugins.py 职责面
+
+- **发现**：repo `<repo>/.agent/plugins/<name>/` + 全局 `~/.agt/plugins/<name>/`，**同名 repo 覆盖全局**；manifest.yml 唯一必需（name/version/description/backend/frontend/exposed_to_llm）；一次性任务脚本形态目录拒载（防御）
+- **PluginAPI（`setup(api)` 唯一约定）**：`register_tool / register_command / register_route / on_tool_pre_execute / on_tool_post_execute / emit` + `api.agent / api.workspace`
+- **注册即副作用可逆（DSH 同款）**：每次注册记 owner=插件名并附 undo 闭包，disable/reload 按插件粒度整组撤销
+- **失败隔离**：单插件 setup 抛异常 → warn + 跳过，绝不炸启动
+- **钩子链**：`run_pre_hooks`（返回 deny 即拒）/ `run_post_hooks`（可改写结果）；无插件时懒 import 首行即返回（**零开销**）
+
+### 引擎接线五处
+
+1. **工具执行管线**（src/agent.py `_exec_tool`，远程路由之前）：pre 钩子 deny → 返回 `[插件 X 拒绝] <tool> 未执行：原因`，不执行；post 钩子可改写工具结果；钩子自身异常吞掉，不炸管线
+2. **启动装配**（src/chat.py）：restart_tools 注册之后 `load_plugins(agent, workspace)`，异常时打印「加载失败（跳过）」
+3. **斜杠命令**（src/commands.py）：`/plugins [enable|disable <名>|reload]`；`/reload` 扩 `plugins` 子命令；registry 构建尾部 `append_commands(reg)` 把插件注册的命令并入——**CLI / WebUI / WS 三处构建点自动生效**
+4. **HTTP 面**（src/server.py）：`/api/plugins` 返回全部插件 + 启用态 + frontend.js 入口 URL（前端注入器消费）；`/plugins-assets/{name}/{path}` 静态资产——resolve 后必须仍在该插件目录内（防 `../` 穿越，含绝对路径注入），**no-cache**（改 frontend.js 刷新页面即生效）；`register_route` 支持进程运行中即时挂载（`_RT.attached_app` 已附着时 `_attach_one` 直挂 + undo 记录）
+5. **前端注入器**（index.html）：启动 fetch `/api/plugins` → 为每个启用插件的 frontend.js 注 `<script>`；宿主在插件脚本前注入极小 SDK
+
+### 前端 SDK（window.AgtPlugin）
+
+- `AgtPlugin.ui.addButton / addPanel / addChatCard`——fabDock 席位 / 侧滑抽屉 tab / WS 事件自定义聊天卡片（DSH ConversationNode 同款）
+- `AgtPlugin.ws.on(type, handler)` 订阅任意 WS 广播；`AgtPlugin.api.post(url, data)` 带 token 的后端调用
+- `AgtPlugin.util.esc / toast` 工具件
+- 插件文案不进 i18n dict（自带，见裁定 3）
+
+### demo 插件 example-hello
+
+`.agent/plugins/example-hello/`：工具 2 个 + `/phello` 命令 + 插件路由 + deny 钩子（拦一个演示工具名）+ emit 事件 → 前端卡片 + 按钮/面板。`/restart` 后自动加载——WebUI fabDock 出现 👋 按钮，会话内可试 `/phello`。
+
+### 管理面
+
+- 会话内：`/plugins`（清单：版本/来源/启停）/ `enable|disable <名>` / `reload`（改 backend.py 热生效）；`/reload plugins` 同款
+- CLI：`agt plugin list|enable|disable|install|remove`
+- 启停状态持久化，disable 后 reload 不复活
+
+### 与设计的差异对账
+
+- `exposed_to_llm` 为实装新增 manifest 键（对应裁定 1）
+- `provides` 静态资产聚合（tools/ workflows/ agents/ skills/ 目录扫描）**当前未扫**——目录存在即忽略，预留扩展点
+- `register_route` 实装强于设计：运行中 app 即时挂载 + 插件粒度可逆撤销
+- 设置页「插件」tab 未做（`/plugins` 命令先行，自举 addPanel 实现留待后续）
+
+### 验证
+
+- **单测 11 组全 PASS**：发现与同名覆盖 / 失败隔离 / 工具注册与调用 / 命令经三处 registry 构建点追加 / pre deny 拒调 / post 改写 / **零插件零开销** / 注册撤销 / disable 生效 / 静态路由防穿越（含绝对路径注入）/ FastAPI 路由挂载幂等（重复 load 不双挂）+ demo 插件真实加载
+- L2 隔离实例：新代码启动 + Agent 装配 + before_turn 钩子链正常
+- node --check：index.html 注入器 script 块 + demo frontend.js
+- 生效方式：`/restart`（引擎层装配，改 backend.py 后 `/plugins reload` 热生效）
 
 ## 关联
 
-- 设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
+- 实装核心：src/plugins.py（引擎层接线 5 处：agent.py / chat.py / commands.py / server.py / index.html，见上文「落地」节）
+- 开发指南：[docs/plugins.md](../../docs/plugins.md)（插件目录约定 + PluginAPI + AgtPlugin + 安全模型声明）；设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
+- demo 插件：[.agent/plugins/example-hello/](../../.agent/plugins/example-hello/manifest.yml)
 - [节点插件化](node-plugins.md) — 单切面先行示范（工作流节点「写两个文件即得」）；本方案是聚合层推广
-- [工具外置](../features/tool-externalization.md) — tools/builtin 协议被插件 provides.tools 原样复用
+- [工具外置](../features/tool-externalization.md) — tools/builtin 协议被插件 register_tool 同款复用
 - [工作流引擎与钩子](workflow-hooks.md) — 钩子=固定挂点的工作流；插件 on_tool_pre/post=代码级 waterfall 拦截链
-- [fabDock](../features/fab-dock.md) — P1 addButton 的首个挂载席位
+- [fabDock](../features/fab-dock.md) — addButton 的首个挂载席位；[WebUI 工具表单](../features/tool-form.md) — 插件 register_tool 的工具箱消费端
 - [架构总览](overview.md)
+

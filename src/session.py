@@ -1346,12 +1346,15 @@ class Session:
                 _c = _bt
         return [{"role": "user", "content": _c}]
 
-    def _constr_step_msgs(self, step: Step) -> list[dict]:
+    def _constr_step_msgs(self, step: Step, inline_snapshots: bool = True) -> list[dict]:
         """单个 step 的 full 形态定型渲染（施工投影缓冲 _constr_buf 的 append 单元）：
         preceding_hint + assistant(tool_calls 全量 args + reasoning) + 各 tool result
         （_cap_full_result 截断 + _project_imgs + 施工内嵌 <recent-file> 快照块）。
         与 _steps_to_messages 的 full 分支（base=None/组差0）同口径；行号宽度、version、
-        快照文本在此一次定型——append 后字节冻结，后续文件变化/步数增长均不影响已定型的块。"""
+        快照文本在此一次定型——append 后字节冻结，后续文件变化/步数增长均不影响已定型的块。
+        inline_snapshots（2026-10-15 用户裁定）：只有【当前轮】内嵌快照；归档轮（施工流
+        重建 _constr_rebuild / 归档迁移 _constr_migrate_turn）传 False——旧轮快照跨轮复活
+        既挤占投影又无增量信息。"""
         msgs: list[dict] = []
         if step.preceding_hint:
             # 插话原生看图（2026-10-03）：hint 内 <img> 标签按 vision 门控展开（无标签时原样 str，byte-stable 不破坏）
@@ -1380,7 +1383,8 @@ class Session:
             _n, _a, result = self.toollog.view(tc.call_id)
             content = self._cap_full_result(result, tc.call_id)
             content = self._project_imgs(content)
-            snap = (step.file_snapshots or {}).get(tc.call_id)
+            # 内嵌快照只对当前轮（inline_snapshots=True）；归档轮传 False → 不带块
+            snap = ((step.file_snapshots or {}).get(tc.call_id) if inline_snapshots else None)
             if isinstance(snap, dict) and snap.get("path"):
                 _rf_blk = self._rf_inline_block(snap)
                 if isinstance(content, list):   # _project_imgs 转数组（工具结果带图）——append text 块
@@ -1413,21 +1417,29 @@ class Session:
             return ""
 
     def _construction_origin_idx(self) -> int:
-        """向前回搜施工源头轮（用户裁定 2026-10-13 修正版）：最近一个 create_plan / commit_spec /
-        join_plan 调用【产出的 plan_id 与当前活动计划一致】的轮——该轮 user_message 即任务来源。
+        """向前回搜施工源头轮（用户裁定 2026-10-13 修正版 + 2026-10-15 补当前轮）：最近一个
+        create_plan / commit_spec / join_plan 调用【产出的 plan_id 与当前活动计划一致】的轮——
+        该轮 user_message 即任务来源。
         plan_id 提取：join_plan 取 arguments.plan_id（显式参数最可靠）；create_plan / commit_spec
         从结果文本正则（"已创建计划 p_x…" / "已生成 plan p_x…"，commit_spec 的 approve 分支才含）。
         严格匹配治旧病灶：换新计划后投影仍从【旧计划的源头轮】起算（constr_start_idx 跨计划粘滞
-        + 回搜不辨计划归属）。无匹配（toollog 记录已清/读档恢复路径建 plan/计划来自其它 session 且
-        本 session 未 join）→ 退回最后一轮（施工激活轮，现行为）。"""
+        + 回搜不辨计划归属）。
+        【回搜范围含当前进行中的轮】（2026-10-15 修）：本轮建的 plan 尚未归档，旧版只扫
+        self.turns → 漏掉它 → fallback 落到最后一个归档轮（=上一轮）→ 施工起点跨轮前移，
+        重建流时把上一轮全部写调用快照复活内嵌（t1150 实测：起点被判成上一轮 → 21 块上一轮
+        快照 556K 字符 ≈ +145K token 全量进投影）。命中当前轮 → 返回 len(self.turns)
+        （流起点在已归档轮之外 = 施工起点即本轮，流为空）。
+        无匹配（toollog 记录已清/读档恢复路径建 plan/计划来自其它 session 且本 session 未 join）
+        → 退回最后一轮（施工激活轮，现行为）。"""
         import re as _re
         _pid = self._active_plan_id()
         _fallback = max(0, len(self.turns) - 1)
         if not _pid:
             return _fallback
         _rx = _re.compile(r"(?:已创建计划|已生成计划|已生成 plan|已加入计划)\s+(p_[0-9a-fA-F]+)")
-        for i in range(len(self.turns) - 1, -1, -1):
-            for _s in (self.turns[i].steps or []):
+
+        def _hit(steps) -> bool:
+            for _s in (steps or []):
                 for _tc in (_s.tool_calls or []):
                     try:
                         _e = self.toollog.get(_tc.call_id) or {}
@@ -1446,7 +1458,14 @@ class Session:
                         _m = _rx.search(str(_e.get("result") or ""))
                         _id = _m.group(1) if _m else ""
                     if _id == _pid:
-                        return i
+                        return True
+            return False
+
+        for i in range(len(self.turns) - 1, -1, -1):
+            if _hit(self.turns[i].steps):
+                return i
+        if self._current is not None and _hit(self._current.steps):
+            return len(self.turns)   # 源头=当前轮：流起点在已归档轮之外 → 流为空（只投影当前轮）
         return _fallback
 
     def _constr_migrate_turn(self, turn: "Turn") -> None:
@@ -1467,8 +1486,10 @@ class Session:
                 return
             self._constr_sync()   # 保证 buf 覆盖本轮全部 steps（定型器与投影同路径）
             self._constr_stream.append({"role": "user", "content": turn.user_message or ""})
-            for _grp in self._constr_buf:
-                self._constr_stream.extend(_grp)
+            # 归档轮不带内嵌快照（用户裁定 2026-10-15·只有当前轮投影 recent-file）：按 steps
+            # 重新定型（inline_snapshots=False）进流，不再复用含块的 _constr_buf。
+            for _s in (turn.steps or []):
+                self._constr_stream.extend(self._constr_step_msgs(_s, inline_snapshots=False))
             _pid = self._active_plan_id()
             _pid_changed = bool(_pid) and self.extra_state.get("constr_plan_id") != _pid
             if _pid_changed:
@@ -1505,10 +1526,12 @@ class Session:
                 return          # 起点稳定、流已就绪 → 不重建（增量流保持）
             # 只重建【已归档】轮（turns[_start:]）；当前进行中的轮不进流（其 user/steps 走常规段）
             self._constr_stream = []
+            # 归档轮不带内嵌快照（用户裁定 2026-10-15·只有当前轮投影 recent-file）；
+            # 归档轮 file_snapshots 运行时仍可能在内存（不持久化≠已清）——必须显式关掉。
             for _t in self.turns[_start:]:
                 self._constr_stream.append({"role": "user", "content": _t.user_message or ""})
                 for _s in _t.steps:
-                    self._constr_stream.extend(self._constr_step_msgs(_s))
+                    self._constr_stream.extend(self._constr_step_msgs(_s, inline_snapshots=False))
             self._constr_buf = []
             self.extra_state["constr_start_idx"] = _start
         except Exception as e:
@@ -1743,6 +1766,18 @@ class Session:
             return bool(steps) and any(str(x.get("status")) != "completed" for x in steps)
         except Exception:
             return False
+
+    def _is_current_steps(self, steps) -> bool:
+        """这批 steps 是否来自【当前进行中的轮】（2026-10-15 用户裁定的配套判定）：
+        施工内嵌 <recent-file> 只对当前轮生效——归档轮（分档历史渲染 / 施工流重建与迁移）即便
+        file_snapshots 运行时仍在内存，也不内嵌（旧轮快照跨轮复活既挤占投影又无增量信息：
+        t1150 实测起点误判到上一轮 → 21 块上一轮快照 556K 字符全量内嵌）。
+        判定用对象同一性（id 集合），支持传入当前轮 steps 的子集/截断切片。"""
+        cur = self._current.steps if self._current is not None else None
+        if not cur or not steps:
+            return False
+        idset = {id(s) for s in cur}
+        return all(id(s) in idset for s in steps)
 
     def messages_for_llm(self) -> list[dict]:
         """（2026-10-12 异步重定型）与后台重定型线程互斥：重算中则阻塞到完成再组装——
@@ -3681,9 +3716,14 @@ class Session:
         施工模式（2026-09-13·用户裁定）：recent-file 快照回内嵌——该次写调用【当时】的快照贴在
         该次 tool result 尾部（不去重/不限数量：每个写调用各挂各的，施工要"每次操作时文件长什么样"
         的因果上下文）；非施工模式不内嵌（第四版段式 _seg_msgs_recent_file 走装配）。
-        max_steps>0 只保留最近 max_steps 步。"""
+        max_steps>0 只保留最近 max_steps 步。
+        内嵌快照（2026-10-15 用户裁定）：<recent-file> 内嵌只对【当前轮】生效——归档轮
+        （分档历史 / 施工流重建与迁移）不内嵌，故此处用 _is_current_steps 收窄 constr 判定。
+        只有当前轮投影 recent-file ⇒ 本轮内不去重（同文件多次编辑各挂当时版本）口径不变。"""
         msgs = []
-        constr = self._construction_mode()
+        # 施工内嵌快照只对【当前轮】生效（用户裁定 2026-10-15）：归档轮即使 file_snapshots
+        # 仍残留在内存也不内嵌（见 _is_current_steps）。
+        constr = self._construction_mode() and self._is_current_steps(steps)
         if max_steps and len(steps) > max_steps:
             skipped = len(steps) - max_steps
             steps = steps[-max_steps:]

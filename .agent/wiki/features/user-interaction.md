@@ -884,6 +884,8 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
    批首是谁，这轮就是谁的轮
 ```
 
+> ⚠️ **2026-10-13 起呈现端已演进**：系统来源（`user_insert` 除外）的通知正文不再渲染为折叠气泡，改迁 🐞 日志抽屉 + 对话区一行来源标记（见下节[后台通知渲染迁日志抽屉](#后台通知渲染迁日志抽屉正文进--抽屉对话区只留一行来源标记2026-10-13用户提案)）。本节的**判别机制**（source 打标 / 前缀判别 / 批首归属）完全不变，仅消费端（渲染形态）改变；`user_insert` 用户插话仍走本节描述的通知气泡。下文「通知气泡形态」等段落按 2026-08~10-12 形态描述，`user_insert` 路径至今有效。
+
 **通知气泡形态**（`renderNotifyBubble`，index.html）：`row sys` + 默认折叠一行摘要、点击展开全文——与（已退役的）autonomous 系统消息同款交互（autonomous 已于 2026-10-04 融合进 [schedule](background-scheduler.md)，交互形态同款保留于通知气泡）（见 [气泡交互](bubble-interaction.md)）；图标按 source 前缀取：📪 service_exit / 📨 bg_task / ⏰ schedule / 🤝 subagent / 🔔 其它，标题形如「后台通知（bg_task:x1）」。
 
 **修复③的根因**（用户实测抓到的瑕疵）：旧代码 `if not first_src:` 只看「是否已记过」——**手输在先**的混合批（批序 user → background）里，后到的 background 项仍会抢走 first_src → 整轮被渲染成通知气泡，**用户的话被折进通知气泡**。修复加 `and not parts`（批首判别）；搭车的通知不丢——文本自带 `[后台通知·<source>]` 前缀，在气泡内自识别，历史路径②同前缀判别。
@@ -899,7 +901,7 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 
 - **唤醒端 vs 呈现端**：上两节通知 wake 语义（service_exit 策略化 / bg_task 恒唤醒）管「该不该醒」，本节管「醒了长什么样」——通知轮不再伪装成用户轮
 - **`[后台通知·` 前缀一键三用**：LLM 侧来源标注（`_merge_batch` 组装时打，让模型识别是哪个调度任务/进程发的）+ 历史渲染判别（路径②）+ 多端同步对账过滤（`_pendingLocalEcho` / `_cli_echo` 跳过通知文本，见[多端消息同步](#多端消息同步--user-事件渲染到同-agent-的其它客户端cli2026-08-commit-1168ea9)）
-- **background_trigger 事件行**（📭/⏰ 行）与通知气泡并存——事件行标注触发来源，气泡承载消息全文
+- **background_trigger 事件行**（📭/⏰ 行）与通知气泡并存——事件行标注触发来源，气泡承载消息全文（**2026-10-13 起两者均已退役**——事件行不再渲染、气泡正文迁日志抽屉，见下节）
 
 **生效方式**：引擎层（chat.py / agent.py）需 `/restart`；index.html 随服务启动载入内存，重启一并生效（Ctrl+F5 强刷兜底）。
 
@@ -933,6 +935,10 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 **生效方式**：纯前端静态文件，**Ctrl+F5 强刷即生效**（无需 /restart）。
 
 **取舍说明**：对话区保留了**一行极简来源标记**（非气泡、无正文）——完全隐去会让历史轮变成"凭空出现的回答"，丢失「这轮从哪来」的线索；若连标记也想去掉，删 `_bgMark` 相关三行即可。
+
+**关联**：[user 消息语义标签](#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)（判别机制出处——本节是其呈现端的演进，机制三件套原样消费）；[fab-dock](fab-dock.md)（🐞 logFab 入口：有日志才显示，badge 仍只计 error，`bg` 级别不计徽标）；[编辑器 UX · 批次十二](editor-ux-improvements.md#批次十二092a0dfspec--日志抽屉布局统一标题栏钉顶--滚动区独立)（日志抽屉骨架：标题钉顶 + 滚动区独立 + 200 条滚动上限不变）；[i18n](i18n.md)（面板标题 key 换文案 + hover 提示新条目，字典 843 → 844）。
+
+**commit 状态**：本地 2 笔已落（index.html + dict.json），**push 暂被网络拦**（SSH 443 refused + HTTPS reset，三次重试均败）——已挂定时任务每 10 分钟自动重推，commit 待推。
 
 ## 并行钩子「执行中」状态跟踪修复（2026-08-19）
 

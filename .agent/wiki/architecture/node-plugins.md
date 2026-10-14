@@ -196,3 +196,5 @@ Windows 上 `importlib.util.spec_from_file_location` + `exec_module` 偶发不�
 - [工作流编辑器 UX](../features/editor-ux-improvements.md) — EdFW 咨询点的渲染细节
 - [v0.19.2 发布记录](../releases/v0.19.2.md) — AND/OR 随该版发布
 - [工具外置](../features/tool-externalization.md) — 同构的扫描/装配模式
+- [插件 SDK 设计](plugin-sdk.md) — 引擎级全栈插件方案（草案）：节点插件是「工作流节点」单切面的先行示范，插件包聚合层把思路推广到前端+后端
+

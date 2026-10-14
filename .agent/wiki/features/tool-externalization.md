@@ -186,4 +186,5 @@ def agt_register():
 - [agentid-tools](agentid-tools.md) —— AgentID 身份协议二件套（魔搭个人身份，不随包）
 - [节点插件化](../architecture/node-plugins.md) —— 同构模式（节点侧，更完整的三级目录/覆盖机制）
 - [workspace 播种](workspace-seeding.md) —— seed_dir_docs：dir_docs 种源播种到约定目录 README（tools_builtin.md 种源协议纠错的扩散管道）
+- [插件 SDK 设计](../architecture/plugin-sdk.md) —— 引擎级全栈插件方案（草案）：插件包 `provides.tools` 原样复用 tools/builtin 协议；工具外置是「单切面」扩展的先行范式
 

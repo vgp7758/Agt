@@ -1,24 +1,77 @@
-# 工具外置 · tools/builtin 脚本工具体系
+# 工具外置 · tools/ 脚本工具体系（默认目录 `.agent/tools/`）
 
 > 把工具从框架代码外置为「一个 .py 文件」——写一个文件即得新工具，零框架改动。与[节点插件化](../architecture/node-plugins.md)同构的扫描/装配模式，但更轻：只有 .py，无前端件。
 
-## 目录与装配
+## 目录与装配（2026-10-15 起默认 `.agent/tools/`）
 
 | 位置 | 角色 |
 |------|------|
-| `tools/builtin/*.py` | 工具源文件（开发处，现 16 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/team/cache/**explore**/**zai**/**agentid**/**release**） |
-| `src/assets/tools_builtin/*.py` | 随包副本 = **发布真源**（pip 安装即有，与 nodes_builtin 同思路；现 12 个、与 workspace 层 12 文件重合——2026-09-12 md5 对账全一致（commit 971535a），角色划分与漂移修复见[下节](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版；**team_tools / agentid_tools / release_tools 三件不随包**（本地私有工具层；前两件 2026-09-12 对账定档，release_tools 2026-10-12 加入——发版编排只属于本 repo，见 [release-publish](release-publish.md)；原第三件 zai_tools 2026-09-17 迁独立 MCP，见 [zai-tools](zai-tools.md)） |
+| `.agent/tools/*.py` | ★**默认用户工具目录**（用户裁定 2026-10-15「本地自定义统一收进 `.agent/`」）——开发处 + 覆盖份 |
+| `src/assets/tools_builtin/*.py` | 随包副本 = **发布真源**（pip 安装即有，与 nodes_builtin 同思路；现 12 个：fs/str/list/misc/kv/diff/wiki/rag/ltm/download/cache/explore——2026-09-12 md5 对账全一致（commit 971535a），角色划分与漂移修复见[双层对账章](#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)） |
+| `tools/builtin/*.py` | **旧 workspace 级目录**——仅当目录存在时才追加扫描（存量 repo 不炸）；新 workspace 不再创建。见[默认目录收编章](#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1) |
+| `tools/` 根 | **永不扫描**（防一次性任务脚本被随手丢进来，2026-09-27 50052 实锤，见[目录收敛章](#工具目录收敛tools-根永不扫描--一次性任务脚本防御2026-092728用户提案commit-973627f)） |
 
-约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**改完必须同步随包副本**——同名时 workspace 层覆盖 assets 层（本 repo 实际生效的是 workspace 份），两层角色与一致性对账见下节。
+**扫描顺序**（`src/script_tools.py default_dirs()`）：随包 `tools_builtin` → `.agent/tools/` →（存在才追加）`tools/builtin/` → 同名后扫胜出，再覆盖内置（后注册胜出，同时成为用户定制覆写内置工具的机制）。kv/diff 为 2026-08 纯函数批新增（commit 17312eb）；cache_tools.py（2026-09-02）/ explore_tools.py（2026-09-09）新建即同步；list_tools.py 2026-09-12 对账补齐 `get_list_items` 批量版。
 
-## 工具目录收敛：用户工具只认 tools/builtin/ + 一次性任务脚本防御（2026-09-27/28，用户提案，commit 973627f）
+约定：模块暴露 `agt_register(ctx=None)` 返回工具描述符列表，`src/script_tools.py` 扫描注册（`rglob("*.py")` 支持子目录组织、`_` 开头跳过、mtime 缓存）。**随包件改完必须同步 `src/assets/tools_builtin/` 副本**——同名时上层覆盖 assets 层。**不随包的有 5 件**（本地私有工具层）：team_tools / agentid_tools / release_tools / scnet_web_tools / workflow_source_tools（前两件 2026-09-12 对账定档；release_tools 2026-10-12 加入，见 [release-publish](release-publish.md)；原第三件 zai_tools 2026-09-17 迁独立 MCP，见 [zai-tools](zai-tools.md)）。
+
+## 默认目录收编：本地自定义统一进 `.agent/`（2026-10-15，用户裁定，commit 21351b1）
+
+**用户提案（原文口语）**：本地自定义工作流节点 `nodes/` 与本地工具 `tools/builtin/` 两个目录，默认也改到 `.agent/` 里。落地为「`.agent/` 是默认可扩展面，旧目录降级为兼容读」。
+
+### 落地五处
+
+| 位置 | 改动 |
+|---|---|
+| `src/script_tools.py default_dirs()` | `[随包 tools_builtin, .agent/tools]` + 旧 `tools/builtin/` **仅存在时**追加；模块 docstring 与 `/reload tools` 帮助文本（`src/commands.py`）同步改 `.agent/tools/` 口径 |
+| `src/node_plugins.py default_dirs()` | `[随包 nodes_builtin, .agent/nodes]` + 旧 `nodes/` 仅存在时追加；顶部目录约定注释同步 |
+| `src/agent_config.py seed_dir_docs()` | 播种清单 7 → **5 目录**（`.agent/tools` / `.agent/workflows` / `.agent/agents` / `.agent/skills` / `.agent/nodes`）；旧 `tools/builtin`、`nodes` **不再创建/播种**（扫描侧仍兼容存量） |
+| `src/dir_docs/tools_builtin.md` | 重写为主目录视角（扫描序 + 「函数 + 描述符」真实协议范例 + 「目录内脚本会被 import 执行」警示）；种源 `agent_tools.md` 删除（内容并入 tools_builtin.md） |
+| `src/plugins.py` docstring | 信任模型口径改为「同 `.agent/tools/`、Obsidian」 |
+
+### 本 repo 迁移实况
+
+- **7 件 `git mv` → `.agent/tools/`**（保留 git 历史）：agentid / cache / explore / release / **scnet_web** / team / **workflow_source**——后两件是 wiki 此前未记录的本地私有件：`scnet_web_tools.py` = SCNet 网页 API 直调（cookie 鉴权，跨全部区域容器状态 + 卡组可用卡，绕开 MCP scnet_notebook 的单区域 AK/SK 限制）、`workflow_source_tools.py` = 工作流运行时副本回灌种源（repo > global 层序找生效版 → 归一化 seed_scope 后比对 → 有差异写回 `src/workflows/`）
+- **10 件删除**（与随包 `src/assets/tools_builtin/` 重复的副本）：diff / download / fs / kv / list / ltm / misc / rag / str / wiki——这 10 件本 repo 从此**由 assets 层单源生效**（「双层 md5 必须一致」的漂移风险在这批文件上消失）
+- **`nodes/` 删除**（原本只剩 README；本 repo 的 timestamp 节点一直在 `.agent/nodes/`）；两份旧 README 删除；`.agent/tools/README.md` 换为新版协议文档（字节级同步种源，`/update-assets` 三方 hash 可识别）
+
+### 兼容语义
+
+- 老 repo（存量 `tools/builtin/`、`nodes/`）**无需任何操作**：目录存在即被追加扫描，工具/节点照常加载，只是不再推荐往里放新东西
+- 新 repo 不再创建旧目录——新装一律 `.agent/`
+- ⚠️ **同名覆盖方向与代码注释口径相反**：legacy 目录被 append 在**末尾**，而扫描是「后扫覆盖先扫」（`register_or_replace` / `handlers[t] = desc`）——所以两处同名时**旧目录份反而胜出**。从旧目录迁到 `.agent/` 后务必删/改旧目录，否则改的可能是不生效的那份（script_tools 与 node_plugins 两处同理）
+
+### 验证（5 组全绿，2026-10-15 开发轮）
+
+| # | 场景 | 结果 |
+|---|---|---|
+| 1 | 本 repo 新序（旧目录已删 → 不追加） | ✅ 2 个目录 |
+| 2 | 老 repo 兼容（旧目录存在 → 追加末位） | ✅ |
+| 3 | **scan 实跑** | 53 工具零失败，7 迁移件全从 `.agent/tools/` 注册（含 explore 工厂型带 agent 注入） |
+| 4 | 节点插件 | 15 类正常，timestamp 来自 `.agent/nodes/` |
+| 5 | 新 workspace 播种 | 只建 5 个 `.agent/` 目录 |
+
+**生效**：引擎侧三文件（script_tools / node_plugins / agent_config）需 `/restart`；**改工具/节点脚本本身仍走 `/reload tools`、`/reload nodes` 热加载**（路径口径随之）。
+
+### wiki 路径口径换算（本文及关联页面通用）
+
+| 旧写法 | 本 repo 现读作 |
+|---|---|
+| `tools/builtin/<7 件>` | `.agent/tools/<同名>` |
+| `tools/builtin/<与随包同名的 10 件>` | `src/assets/tools_builtin/<同名>`（本地副本已删，assets 单源生效） |
+| `nodes/` | `.agent/nodes/` |
+
+其它 repo 里这些旧路径各自的含义不变——只是**新装时播下的目录是 `.agent/`**。
+
+## 工具目录收敛：`tools/` 根永不扫描 + 一次性任务脚本防御（2026-09-27/28，用户提案，commit 973627f）
 
 用户提案（2026-09-27/28）：`/tools` 这类目录名太容易被随手丢脚本——「要不只认 tools/builtin 里的东西吧」。落地为 `default_dirs()` 收敛（`src/script_tools.py`）：
 
 ```
 随包 src/assets/tools_builtin/        （框架自带，不变）
-WORKSPACE/tools/builtin/              ★ 用户工具只认这个子目录（tools/ 根不再扫描）
-WORKSPACE/.agent/tools/               （保留——.agent/ 是显式约定目录，不会被误放）
+WORKSPACE/tools/builtin/              ★ 当时口径「用户工具只认这个子目录」——2026-10-15 收编后降为
+                                        兼容读（仅存在才扫描），默认目录改 .agent/tools/，见上节
+WORKSPACE/.agent/tools/               （当时写「保留」——2026-10-15 升为★默认用户工具目录）
 ```
 
 - **动机（50052 实锤 2026-09-27）**：`tools/` 根躺着模块级 15 分钟轮询的任务脚本，`scan` import 即执行 → 启动卡死。根因是「目录名泛用 × 入库即执行」的组合——`tools/` 根是大家习惯性丢脚本的地方
@@ -26,7 +79,7 @@ WORKSPACE/.agent/tools/               （保留——.agent/ 是显式约定目�
 - **双保险 · 一次性任务脚本防御**（同 commit）：就算有人往 `tools/builtin/` 塞任务脚本——顶层出现 `while` / `time.sleep` / `input(` / HTTP 调用特征（`_needs_probe`）→ 先走 **8s 子进程 import 预检**（`_import_probe`），超时/报错则拒绝在本进程 import（import 无法中断，卡死即拖死整个启动），记入 `_scan_failed` 并 warning。正常工具库零开销直过。实测：douyin_content_v1b（15 分钟轮询）needs_probe=True → 8.0s 超时拒绝 ✓；bridge.py 正常直过 ✓
 - `/reload tools`、`reload_hot`、`reload_script_tools` 的 help/docstring 同步改为 `tools/builtin/*.py` 口径（`src/commands.py`）
 
-约定一句话：**`tools/` 根随便放脚本（不会被扫描碰），要注册成 Agent 工具的进 `tools/builtin/` 并写 `agt_register()`**。
+约定一句话（2026-10-15 收编后更新）：**`tools/` 根随便放脚本（不会被扫描碰），要注册成 Agent 工具的进 `.agent/tools/`（旧 `tools/builtin/` 兼容读）并写 `agt_register()`**。
 
 ## 双层一致性对账：workspace 层 vs assets 层（2026-09-12，commit 971535a，用户提问触发）
 
@@ -47,6 +100,8 @@ WORKSPACE/.agent/tools/               （保留——.agent/ 是显式约定目�
 **2 个有意不随包**（只存在于 workspace 层，「本地私有工具」层的正确用法，别动）：`agentid_tools.py`（本机身份）/ `team_tools.py`（VideoGameTeam 专用）。原第三个 `zai_tools.py`（用户裁定不播种）已于 2026-09-17 迁出外置件体系、独立为 MCP repo（见 [zai-tools](zai-tools.md)）。
 
 **防再犯两条路**：①本 repo 是 editable 安装——只写 assets 那份**同样即时生效**（workspace 层不放同名文件就不会被覆盖，可考虑以后单源维护）；②发布流程加一步 12 文件 md5 一致性检查，不一致即拦。
+
+**后记（2026-10-15 收编，commit 21351b1）**：本 repo 的 `tools/builtin/` 已整体迁走——7 件进 `.agent/tools/`，**与随包重复的 10 件（diff/download/fs/kv/list/ltm/misc/rag/str/wiki）直接删除**，这批文件在本 repo 从此由 assets 层单源生效，双层漂移风险自然消失。仍与随包同名的只剩 `.agent/tools/cache_tools.py` / `explore_tools.py` 两份并存（本 repo 旧目录已删 → 生效的是 `.agent` 份，改完记得同步 assets 份）。
 
 ## ctx 通用上下文注入（2026-08，commit fd06c48）
 
@@ -82,7 +137,9 @@ def agt_register(ctx=None):
 
 改完 .py 用 `/reload tools` 即生效，**不需要重启**——比 src 内注册的工具（需 `/restart`，见 [diff-files](diff-files.md)/[get-list-item](get-list-item.md) 注意事项）轻一档。
 
-## 外置件清单（15 文件；真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组 + 探索组 + 身份协议组 + 发布组——Z.AI 联网组 2026-09-17 迁独立 MCP）
+## 外置件清单（随包 12 文件；本地私有 5 件在 `.agent/tools/`——真限界上下文四组 + 纯函数批 + 团队管理组 + 缓存分析组 + 探索组 + 身份协议组 + 发布组——Z.AI 联网组 2026-09-17 迁独立 MCP）
+
+> **路径口径（2026-10-15 收编后）**：下表首列写的 `tools/builtin/*.py`——另 7 件读作 `.agent/tools/`，其余与随包同名的 10 件读作 `src/assets/tools_builtin/`（本 repo 本地副本已删，assets 单源生效）。换算表见[收编章](#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)。另有两件本地私有件 wiki 尚未单开页：`scnet_web_tools.py`（SCNet 网页 API cookie 鉴权直调，跨区域容器/卡组状态）、`workflow_source_tools.py`（运行时工作流副本回灌 `src/workflows/` 种源）。
 
 | 外置件 | 注册的工具 | 形态 | 要点 |
 |---|---|---|---|
@@ -109,7 +166,7 @@ def agt_register(ctx=None):
 | | 节点插件（nodes_builtin） | 工具外置（tools_builtin） |
 |---|---|---|
 | 文件 | `.py` + `.js` 配对（后端逻辑 + EdFW 前端表单） | 仅 `.py` |
-| 注册入口 | SDK（`workflow_node_api.py`）+ 节点目录三级扫描 | `agt_register(ctx)` 描述符列表 + script_tools.py 扫描 |
+| 注册入口 | SDK（`workflow_node_api.py`）+ 节点目录扫描（`.agent/nodes/` 默认 + 旧 `nodes/` 兼容） | `agt_register(ctx)` 描述符列表 + script_tools.py 扫描 |
 | 生效方式 | 节点热加载 | `/reload tools` |
 
 ## 迁移收官（判别标准驱动；真限界上下文四组 + 纯函数批双收官）
@@ -184,7 +241,7 @@ def agt_register():
 - [工具外置判别标准](../architecture/tool-externalization-criteria.md) —— 哪些能迁哪些不能（四象限盘点 + rag/ltm 边界裁剪）
 - [zai-tools](zai-tools.md) —— Z.AI 联网三件套（2026-09-17 迁独立 MCP repo zai-mcp，本机 ~/.agt/mcp.json 注册）
 - [agentid-tools](agentid-tools.md) —— AgentID 身份协议二件套（魔搭个人身份，不随包）
-- [节点插件化](../architecture/node-plugins.md) —— 同构模式（节点侧，更完整的三级目录/覆盖机制）
+- [节点插件化](../architecture/node-plugins.md) —— 同构模式（节点侧，更完整的目录约定/覆盖机制；默认 `.agent/nodes/`）
 - [workspace 播种](workspace-seeding.md) —— seed_dir_docs：dir_docs 种源播种到约定目录 README（tools_builtin.md 种源协议纠错的扩散管道）
-- [插件 SDK 设计](../architecture/plugin-sdk.md) —— 引擎级全栈插件方案（草案）：插件包 `provides.tools` 原样复用 tools/builtin 协议；工具外置是「单切面」扩展的先行范式
+- [插件 SDK 设计](../architecture/plugin-sdk.md) —— 引擎级全栈插件方案（草案）：插件包 `provides.tools` 原样复用 `.agent/tools/` 协议；工具外置是「单切面」扩展的先行范式
 

@@ -20,7 +20,7 @@ cache_breakpoint(turn=582, step=2, session_dir="", context_chars=120) -> str
 - `context_chars`：变化前后对比窗口字符数（默认 120；字符 diff 半径 = `max(30, context_chars//2)`）
 - 返回纯文本报告，工具 schema 声明 `outputs: raw:string`
 
-## 关键实现（tools/builtin/cache_tools.py，303 行）
+## 关键实现（`.agent/tools/cache_tools.py`，303 行）
 
 - **定位 `_find_projections_dir`**：session_dir 显式优先；否则数据根 `repos` 全局扫最近活跃——数据根经 `AGT_HOME`/`AGT_DESKTOP` 环境变量解析、缺省 `~/.agt`（桌面版统一数据根适配；此前仅随包份有，2026-09-12 md5 对账同步进本 repo 份，commit 971535a）——**零框架依赖** → `agt_register()` 无参即可（不消费 ctx），见 [ctx 注入](tool-externalization.md#ctx-通用上下文注入2026-08commit-fd06c48) 的无参向后兼容形态
 - **比对**：`_msg_sig` = `json.dumps(sort_keys)` 全消息签名逐条对比；命中前缀字符量累加进 `cached_chars`
@@ -57,7 +57,7 @@ cache_breakpoint(turn=582, step=2, session_dir="", context_chars=120) -> str
 
 - **消费方**：projections 转储——[上下文引擎 · 投影转储文件名与 t/s 标记](../architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)（JSON 化格式，commit 2dc64f2 起）；t/s 命名与 [/stats 页](../guides/ops.md#stats-页webui-统计按钮) 折线 tooltip 同源，排障闭环（stats 看到异常点 → 打开 dump → cache_breakpoint 对拍）
 - **语义支撑**：[前缀缓存三层优化](../architecture/context-engine.md#前缀缓存三层优化详见-blog03) 与 [DeepSeek v4 缓存实证（system/tools 变化全断三铁律）](../architecture/context-engine.md#deepseek-缓存行为实证v3-位置敏感--v4-system-规范化2026-08-两代后端)——本工具把「缓存断了」从抽象结论变成可定位的**段位坐标**
-- **装配**：tools/builtin 外置件，`/reload tools` 热加载即用；随包副本已同步 `src/assets/tools_builtin/cache_tools.py`（2026-09-12 md5 双层对账确认双向一致——此前本 repo 份缺桌面数据根适配、随包份先行，已补齐，见 [双层一致性对账](tool-externalization.md#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）
+- **装配**：`.agent/tools/` 外置件（2026-10-15 收编前为 `tools/builtin/`），`/reload tools` 热加载即用；随包副本已同步 `src/assets/tools_builtin/cache_tools.py`（2026-09-12 md5 双层对账确认双向一致——此前本 repo 份缺桌面数据根适配、随包份先行，已补齐，见 [双层一致性对账](tool-externalization.md#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）
 
 ## 注意事项
 

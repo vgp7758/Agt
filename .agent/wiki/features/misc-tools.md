@@ -1,6 +1,6 @@
 # misc_tools · 杂项纯函数组 + sleep 等待工具（外置件 misc_tools.py）
 
-> 源码：`tools/builtin/misc_tools.py`（开发份）+ `src/assets/tools_builtin/misc_tools.py`（播种份，双层 md5 同步，见[工具外置 · 双层对账](tool-externalization.md#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）
+> 源码：`src/assets/tools_builtin/misc_tools.py`（开发份）+ `src/assets/tools_builtin/misc_tools.py`（播种份，双层 md5 同步，见[工具外置 · 双层对账](tool-externalization.md#双层一致性对账workspace-层-vs-assets-层2026-09-12commit-971535a用户提问触发)）
 > 组内工具：add / divide / kw_score 等纯函数 + **sleep**（2026-09-16 起对 Agent 开放）
 > 定位：早期纯函数批（v0.19.0，15 个纯函数的一部分），纯函数零状态——全组唯一有非平凡执行语义的是 sleep
 
@@ -24,7 +24,7 @@ sleep(seconds: float) -> str   # 秒数，现上限 3600
 | 上限 | 0~300 | **0~3600**（覆盖 sleep(600) 场景） |
 | docstring | 只写 wait 节点用途 | 写明 inline 执行行为（见下） |
 
-- 同步改两份：`tools/builtin/misc_tools.py` + 播种版 `src/assets/tools_builtin/misc_tools.py`（防双层漂移）
+- 同步改两份：`src/assets/tools_builtin/misc_tools.py` + 播种版 `src/assets/tools_builtin/misc_tools.py`（防双层漂移）
 - `src/real_tools.py` 两处工具文案同步更新：「add/split/sleep 等」→「add/divide/kw_score 等（**sleep 已对 Agent 开放**）」
 - `py_compile ×3` 全过；commit `30fe776`，`/reload tools` 生效
 

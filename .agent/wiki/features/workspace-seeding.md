@@ -4,8 +4,8 @@
 
 ## seed_dir_docs · 约定目录 README（用户提案：把框架那一页文档以 README.md 播种到目录位置）
 
-- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)）、`agent_tools.md`、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态 + [直接写 yml 创建最小模板](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)，2026-10-06）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）
-- **播种目标（7 个约定目录）**：`tools/builtin/`、`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`nodes/`、`.agent/nodes/`
+- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效，2026-10-15 收编后 **5 份**）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)，收编后重写为主目录视角）、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态 + [直接写 yml 创建最小模板](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)，2026-10-06）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）；原 `agent_tools.md` 已删（内容并入 tools_builtin.md）
+- **播种目标（5 个约定目录，2026-10-15 收编后）**：`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`.agent/nodes/`——**旧 `tools/builtin/`、`nodes/` 不再播种/创建**（扫描侧仍兼容存量，见 [默认目录收编](tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)）
 - **语义**：目录不存在 → 创建目录 + 播种（引导价值：一眼看到全部可扩展点）；`README.md` 已存在 → 跳过——**用户改动永不覆盖**
 - **写入**：字节级 + `seed_state` 基线——接入 /update-assets 三方 hash 判定管道（框架升级后文档可安全更新）
 - **`.agent/agents/README.md` 的消费端闭环**（2026-10-06 · 三，commit e0d0060）：该目录说明此前会被 [/agents 管理页](agents-admin.md)当 name=README 的伪 agent 列出（平铺 `*.md` 扫描）——现 `load_agents_index` 显式跳过，页面改提供「📖 目录说明」只读渲染入口（`GET /api/agents/readme-doc`，python-markdown 渲染）
@@ -39,9 +39,9 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 
 ## 验证
 
-- 临时 workspace：首次播种 7/7 → 幂等（二次 0）→ 手改 README 后 seed 不覆盖
+- 临时 workspace：首次播种 7/7 → 幂等（二次 0）→ 手改 README 后 seed 不覆盖（**2026-10-15 收编后为 5/5**：`.agent/tools` + `.agent/workflows` + `.agent/agents` + `.agent/skills` + `.agent/nodes`，旧 `tools/builtin`、`nodes` 不再创建）
 - test-svc 九项全绿：read / navigate（树+标题大纲）/ run_code（greet 两行问候）/ evaluate（EVAL PASS）/ equip（能力清单）/ use `add 5`→`add 3` = count 8（**跨调用状态保持**）
-- 本 repo 实测：6 份 README + test-svc 落位
+- 本 repo 实测：6 份 README + test-svc 落位（收编后本 repo 目录说明为 5 份，`tools/builtin/README.md`、`nodes/README.md` 已删）
 
 ## 注意事项
 
@@ -53,4 +53,4 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 - [技能体系](skills.md) —— 七件套与 skill_equip/use 协议（test-svc 是它的活教材）
 - [工具外置体系](tool-externalization.md) —— tools/builtin 目录收敛与任务脚本防御（README 内容来源之一）
 - [多 Agent 体系](../architecture/multi-agent.md) —— 子 Agent 目录形态（agents.md 播种内容之一）
-- [节点插件化](../architecture/node-plugins.md) —— nodes/ 目录约定（nodes.md 播种内容来源）
+- [节点插件化](../architecture/node-plugins.md) —— `.agent/nodes/` 目录约定（nodes.md 播种内容来源）

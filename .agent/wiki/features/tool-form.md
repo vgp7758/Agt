@@ -132,6 +132,6 @@ self.brief = brief or TOOL_BRIEFS.get(self.name) or _brief_from_desc(first_line)
 
 ## 相关页面
 
-- [工具外置](tool-externalization.md)：tools/builtin 工具体系（弹窗里列的工具来自同一注册面）
+- [工具外置](tool-externalization.md)：`.agent/tools/` 工具体系（弹窗里列的工具来自同一注册面）
 - [编辑器 UX 改进](editor-ux-improvements.md)：工具箱弹窗参照的编辑器 nodePicker 模式
 - [用户交互](user-interaction.md)：WebUI 底部栏其它交互（toast 遮罩坑同款「透明元素吃点击」教训）

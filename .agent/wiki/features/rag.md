@@ -1,6 +1,6 @@
 # RAG · 本地文档语义检索 + 共享 embedder 单例
 
-> 核心 `src/rag.py`（LocalRAG）；注册外置件 `tools/builtin/rag_tools.py`（+随包副本 `src/assets/tools_builtin/`）；配置 `<workspace>/.agent/rag.json`，WebUI `/rag` 管理页。2026-08 commit 71e0b90 重构为**异步预热 + 惰性单例**架构。
+> 核心 `src/rag.py`（LocalRAG）；注册外置件 `src/assets/tools_builtin/rag_tools.py`（+随包副本 `src/assets/tools_builtin/`）；配置 `<workspace>/.agent/rag.json`，WebUI `/rag` 管理页。2026-08 commit 71e0b90 重构为**异步预热 + 惰性单例**架构。
 
 ## 职责
 
@@ -21,7 +21,7 @@
 ## 预热时序（谁触发、谁等待）
 
 ```
-agt_register()（tools/builtin/rag_tools.py，扫描注册时）
+agt_register()（src/assets/tools_builtin/rag_tools.py，扫描注册时）
   → rag.preload_async()         ← 注册即异步预热（用户提议的设计）
 build_agent()（src/chat.py）
   → preload_async(workspace)    ← 显式兜底外置件缺失场景（ensure 内部锁+attempted，双触发不重复加载）

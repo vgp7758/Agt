@@ -1,4 +1,4 @@
-# release_publish · 一键发布工具（tools/builtin/release_tools.py，本 repo 自用）
+# release_publish · 一键发布工具（`.agent/tools/release_tools.py`，本 repo 自用）
 
 > 用户提问触发（2026-10-12）：「我们现在发布补丁的时候好像需要进行好几步 run_python 什么的是为啥，我记得做成本地工具了吧」——记忆偏差澄清：主体 `release.py` 早已一步化（bump + build + upload + push 一条命令），但**外围三步**（工作区检查 / version_file 同步提交 / PyPI 上线验证）此前一直靠 run_shell / run_python 手工串联。本工具把外围三步与 release.py 主体串成**一次工具调用**（commit `a70b991`）。
 
@@ -32,7 +32,7 @@ dry_run 分支：跳过 ①（允许脏工作区）、② 传 `--dry-run`、③�
 ## 实现要点
 
 - 纯 subprocess + urllib，**零框架依赖**——与外置件「不 import 框架」约定一致（同 [diff_tools 算法副本](diff-lines.md)思路）
-- `Path(__file__).resolve().parent.parent.parent` 反推 repo 根（tools/builtin/ 上三级）；`_sh()` 统一封装 subprocess（cwd=repo 根、utf-8 + errors=replace，stdout+stderr 合流判错）
+- `Path(__file__).resolve().parent.parent.parent` 反推 repo 根（`.agent/tools/` 上三级；旧 `tools/builtin/` 同为三级，2026-10-15 迁移未影响此逻辑）；`_sh()` 统一封装 subprocess（cwd=repo 根、utf-8 + errors=replace，stdout+stderr 合流判错）
 - `agt_register()` **无参**——本 repo 自用工具，操作对象是 repo 自身而非 workspace 数据，无需 ctx（同 [agentid_tools](agentid-tools.md) 形态）
 
 ## 注册形态：README 标准协议活范例

@@ -1,6 +1,6 @@
 # wiki 工具集 · wiki_tools.py 十件套（页面级六件套 + 章节级四件套）
 
-> 载体：`tools/builtin/wiki_tools.py`（外置件，纯函数整体外置；随包副本 `src/assets/tools_builtin/wiki_tools.py`）。
+> 载体：`src/assets/tools_builtin/wiki_tools.py`（外置件，纯函数整体外置；随包副本 `src/assets/tools_builtin/wiki_tools.py`）。
 > 数据主权：`.agent/wiki/*.md` **自写自读**——真限界上下文，外置完全自洽（见 [判别标准](../architecture/tool-externalization-criteria.md)）。
 > 主要消费者：wiki-updater 子 Agent（[wiki_auto_maintenance](wiki-auto-maintenance.md) 工作流调 update_wiki 触发）。
 
@@ -44,7 +44,7 @@
 
 ## 注意事项
 
-- 改完 `tools/builtin/wiki_tools.py` **必须同步随包副本**（`src/assets/tools_builtin/wiki_tools.py`，本次已同步）
+- 改完 `src/assets/tools_builtin/wiki_tools.py` **必须同步随包副本**（`src/assets/tools_builtin/wiki_tools.py`，本次已同步）
 - `/reload tools` 热加载生效（无需 /restart）
 - ctx 注入：`agt_register(ctx)` 覆盖 `_WORKSPACE`（引擎扫描时传真实 workspace，见 [tool-externalization](tool-externalization.md)）
 - ⚠️ ctx 只作用于扫描器加载的模块实例；别处直接 `import wiki_tools` 拿到的是新实例（开发期误报多源于此）

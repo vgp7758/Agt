@@ -1,6 +1,6 @@
 # glob_files · 文件名模式查找工具（外置工具首例）
 
-> `tools/builtin/fs_tools.py`（+ 随包副本 `src/assets/tools_builtin/fs_tools.py`）。2026-08 新增（commit eafed25），补齐文件查找缺口：`list_dir` 只列单层、`grep` 只搜内容——此前**没有文件名模式查找工具**。hidden=False，主 Agent 直接可见。
+> `src/assets/tools_builtin/fs_tools.py`（+ 随包副本 `src/assets/tools_builtin/fs_tools.py`）。2026-08 新增（commit eafed25），补齐文件查找缺口：`list_dir` 只列单层、`grep` 只搜内容——此前**没有文件名模式查找工具**。hidden=False，主 Agent 直接可见。
 
 ## 职责与用法
 
@@ -49,7 +49,7 @@ fs_tools.py 是[工具外置](tool-externalization.md)体系的第一个实例�
 
 ## 相关页面
 
-- [工具外置](tool-externalization.md) —— tools/builtin 体系（本工具的载体，多文件多形态）
+- [工具外置](tool-externalization.md) —— `.agent/tools/` 外置工具体系（本工具的载体，多文件多形态）
 - [rag](rag.md) —— 外置第二例（注册外置 + 实现留框架）
 - [diff_lines](diff-lines.md)（2026-08 起外置 diff_tools.py）/ [get_list-item](get-list-item.md) —— 同族工作流配套工具（隐藏、仅工作流可用；本工具相反，hidden=False 主 Agent 可见）
 

@@ -4,7 +4,7 @@
 
 ## 背景
 
-工具外置（`tools/builtin` + `agt_register()`）与节点插件化（`nodes_builtin` + py/js 配对）完成后，
+工具外置（`.agent/tools/`，2026-10-15 前为 `tools/builtin/`；`agt_register()`）与节点插件化（`nodes_builtin` + py/js 配对）完成后，
 一个自然的延伸问题：**plan/spec 这类"有状态的系统"是否也能外置成插件**（.py 执行层 + .js 前端渲染控件）？
 难点被明确定位为：引擎需要定义一个可拓展多种自定义系统的 SDK。
 

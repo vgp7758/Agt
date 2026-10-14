@@ -54,11 +54,11 @@ feedback（纯 HTTP 上报）、agent_config（settings.json 约定读写）、r
 
 ## rag 外置的边界裁剪（混合形态，2026-08 commit 71e0b90）
 
-rag 组数据主权（向量 `.db` 自写自读）达标可外置，但 **embedder 是被 cosine_sim/session_vec/emb_probe 共享的进程内单例**——按本标准属 🔒"纯进程内状态"。落地取折中：**外置注册与预热触发（`tools/builtin/rag_tools.py` 的 `agt_register` 触发 `preload_async` + 注册 rag_query），函数本体留在框架 `src/rag.py`**——外置件里 `import rag` 主进程零成本，复制实现反而破坏共享。标准在边界情况下的正确裁剪：数据主权侧外置、共享态留框架。详见 [rag](../features/rag.md)。
+rag 组数据主权（向量 `.db` 自写自读）达标可外置，但 **embedder 是被 cosine_sim/session_vec/emb_probe 共享的进程内单例**——按本标准属 🔒"纯进程内状态"。落地取折中：**外置注册与预热触发（`src/assets/tools_builtin/rag_tools.py` 的 `agt_register` 触发 `preload_async` + 注册 rag_query），函数本体留在框架 `src/rag.py`**——外置件里 `import rag` 主进程零成本，复制实现反而破坏共享。标准在边界情况下的正确裁剪：数据主权侧外置、共享态留框架。详见 [rag](../features/rag.md)。
 
 ## ltm 外置的边界裁剪（2026-08，commit fd06c48，rag 同款）
 
-ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemory 是带内存缓存的实例、Agent 的两个注入 provider 也持有它**——各持一份会缓存分裂（工具写一条，provider 下一轮看不到）。落地同 rag：**外置的只有注册（`tools/builtin/ltm_tools.py` 五件套），函数本体留在框架 `src/longterm_memory.py`，经 `ensure_ltm` per-workspace 模块级单例共享同一实例**；`origin_session` 元数据由 provider（`_ltm_static_block`，每轮必被调）刷新到单例上，外置 add_memory 读取。详见 [longterm-memory](../features/longterm-memory.md)。
+ltm 数据主权（`memories/*.jsonl` 自写自读）达标，但 **LongTermMemory 是带内存缓存的实例、Agent 的两个注入 provider 也持有它**——各持一份会缓存分裂（工具写一条，provider 下一轮看不到）。落地同 rag：**外置的只有注册（`src/assets/tools_builtin/ltm_tools.py` 五件套），函数本体留在框架 `src/longterm_memory.py`，经 `ensure_ltm` per-workspace 模块级单例共享同一实例**；`origin_session` 元数据由 provider（`_ltm_static_block`，每轮必被调）刷新到单例上，外置 add_memory 读取。详见 [longterm-memory](../features/longterm-memory.md)。
 
 外置的通用配套：**ctx 通用上下文注入**——引擎扫描时把 `{"cwd": workspace 绝对路径, "version": 1}` 签名兼容传给 `agt_register`（外置件不再依赖 import 时 `Path.cwd()` 猜 workspace，os.chdir 等场景不漂移；无参存量外置件原样兼容），见 [tool-externalization · ctx](../features/tool-externalization.md#ctx-通用上下文注入2026-08commit-fd06c48)。
 

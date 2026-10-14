@@ -38,7 +38,7 @@ members:
 
 ## 注册与实现
 
-- 载体 `tools/builtin/team_tools.py`（外置件，`agt_register(ctx)` 注册 `team_up` / `team_status`，group="团队"）；`/reload tools` 热加载。⚠️ **随包副本 `src/assets/tools_builtin/` 待同步**（2026-09-02 只写了 tools/builtin/）
+- 载体 `.agent/tools/team_tools.py`（外置件，2026-10-15 收编前在 `tools/builtin/`；`agt_register(ctx)` 注册 `team_up` / `team_status`，group="团队"）；`/reload tools` 热加载。**不随包**——2026-09-12 对账定档为本地私有件（与 agentid / [release](release-publish.md) 同类），**无需同步 assets 副本**（旧「随包副本待同步」告示作废）
 - 复用引擎 remote_* 基础设施：`remote_tools.probe_server` / `connect` / `send_message`
 - 配套声明：`.agent/agents/team-manager.md`——team-manager 子 Agent（local-lfm 巡检省 token）；`agent_prompt("team-manager", "把团队拉起来")` 即可让它运营
 

@@ -8,7 +8,7 @@
 
 ## 定位：不重写内核，加聚合层
 
-agt 已有 7 类「放对位置即生效」的扩展资产——[工具外置](../features/tool-externalization.md)（tools/builtin）/ 工作流+钩子 / 技能 / 子 Agent / 规则 / 服务 / MCP，另有[节点插件化](node-plugins.md)的「写两个文件即得新节点」路线——但都是**单切面**扩展。三个结构性缺口：
+agt 已有 7 类「放对位置即生效」的扩展资产——[工具外置](../features/tool-externalization.md)（`.agent/tools/`）/ 工作流+钩子 / 技能 / 子 Agent / 规则 / 服务 / MCP，另有[节点插件化](node-plugins.md)的「写两个文件即得新节点」路线——但都是**单切面**扩展。三个结构性缺口：
 
 1. **前端零扩展点**——无法加按钮/卡片/面板（用户点名需求）
 2. **无统一插件包**——想同时提供「前端按钮 + 后端路由 + 一个工具」要散落 4 个目录，无清单、无生命周期、无分发
@@ -120,7 +120,7 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 1. **工具投影污染** → ✅ 裁定：manifest 增 `exposed_to_llm` 键——`false` 时注册工具 hidden（不进 LLM 工具投影，不占 SYSTEM token，只给前端/命令用）
 2. **repo 级 vs 全局级优先级** → ✅ 裁定：**repo 级覆盖全局级**（同名插件），同 main.yml 双份管理语义
 3. **插件文案 i18n** → ✅ 裁定：**不纳入** dict.json 体系，frontend.js 文案插件自带
-4. **信任模型显式化** → ✅ 裁定：**全信任**（同 tools/builtin、Obsidian）——目录内代码被 import 执行，不做 JS 沙箱、manifest 不设权限声明；在 [docs/plugins.md](../../docs/plugins.md) 显式写明安全模型
+4. **信任模型显式化** → ✅ 裁定：**全信任**（同 `.agent/tools/`、Obsidian）——目录内代码被 import 执行，不做 JS 沙箱、manifest 不设权限声明；在 [docs/plugins.md](../../docs/plugins.md) 显式写明安全模型
 
 ## 落地：P0+P1 全链路实装（2026-10-14，提案当日收官）
 
@@ -192,7 +192,7 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 - 开发指南：[docs/plugins.md](../../docs/plugins.md)（插件目录约定 + PluginAPI + AgtPlugin + 安全模型声明）；设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
 - demo 插件：[.agent/plugins/example-hello/](../../.agent/plugins/example-hello/manifest.yml)
 - [节点插件化](node-plugins.md) — 单切面先行示范（工作流节点「写两个文件即得」）；本方案是聚合层推广
-- [工具外置](../features/tool-externalization.md) — tools/builtin 协议被插件 register_tool 同款复用
+- [工具外置](../features/tool-externalization.md) — `.agent/tools/` 协议被插件 register_tool 同款复用
 - [工作流引擎与钩子](workflow-hooks.md) — 钩子=固定挂点的工作流；插件 on_tool_pre/post=代码级 waterfall 拦截链
 - [fabDock](../features/fab-dock.md) — addButton 的首个挂载席位；[WebUI 工具表单](../features/tool-form.md) — 插件 register_tool 的工具箱消费端
 - [架构总览](overview.md)

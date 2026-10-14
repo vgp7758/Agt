@@ -18,7 +18,7 @@ WebUI 层   static/（index.html 编辑器 + editor.html 画布 + agents/setting
            session.py（历史/投影 messages_for_llm、分档折叠、recent-file 注入）
            config.py（MODELS/SETTINGS 加载与 repo 级覆盖、agent 声明装配 _asm_evaluate）
 ─────────────────────────────────────────────────────
-能力层     real_tools.py（edit/read/grep/run_python…） + tools/builtin/ 外置工具
+能力层     real_tools.py（edit/read/grep/run_python…） + `.agent/tools/` 外置工具（旧 tools/builtin/ 兼容读）
            memory_tools / plan_tools / spec_tools / background_tools / wiki_tools / team_tools / remote_tools / mcp
            remote_tools.py（多实例组网：remote_instance_id 路由 + 远程连接管理，见 [architecture/multi-instance](multi-instance.md)）
            background.py（后台服务）  restart_watchdog.py  updater.py

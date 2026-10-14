@@ -1,6 +1,6 @@
 # 长期记忆 · 三类记忆 × episodic 召回三代演进 × ensure_ltm 共享单例
 
-> 存储/检索核心 `src/longterm_memory.py`（支撑层，见 [系统总览](../architecture/overview.md)）；Agent 工具面五件套（外置件 `tools/builtin/ltm_tools.py` 注册）；WebUI `/memory` 管理页（`src/server.py` 路由）。
+> 存储/检索核心 `src/longterm_memory.py`（支撑层，见 [系统总览](../architecture/overview.md)）；Agent 工具面五件套（外置件 `src/assets/tools_builtin/ltm_tools.py` 注册）；WebUI `/memory` 管理页（`src/server.py` 路由）。
 > **blog 04（记忆系统篇，2026-08-21 扩写完成 ~4000 字，结构：问题 → 三类框架 → 最难一类深度演进 → 写入侧设计 → 存储 → 边界 → 收尾）的三类×三种注入框架仍成立，但写于 provider 直调时代**——本页记录其后的架构演进，校对/续写 blog 04 以此为准。
 
 ## 职责：三类记忆 × 三种注入
@@ -18,7 +18,7 @@ Agent 工具五件套：`add_memory` / `search_memory` / `read_procedure` / `upd
 `src/longterm_memory.py` 顶层 `_ltm_instance` + `Lock`，`ensure_ltm(workspace=None)` **线程安全惰性单例（双 checked locking）**：
 
 - **per-workspace**：同 workspace 全进程共享一个实例；workspace 变化时重建；省略 → 沿用现实例的 workspace（无实例则 `Path.cwd()`）
-- **谁在共享**：`Agent.__init__` 走 `ensure_ltm(self.session.workspace)`——**主/子 Agent 同实例**；外置工具 `tools/builtin/ltm_tools.py` 注册的五件套也走它
+- **谁在共享**：`Agent.__init__` 走 `ensure_ltm(self.session.workspace)`——**主/子 Agent 同实例**；外置工具 `src/assets/tools_builtin/ltm_tools.py` 注册的五件套也走它
 - **为什么必须单例**：LongTermMemory 带内存缓存，注入 provider 与工具各持一份会**缓存分裂**——工具写了一条记忆，provider 下一轮看不到
 - **origin_session 元数据的轻量握手**：`_ltm_static_block`（provider，每轮必被调）顺带刷新单例的 `_origin_session = self.session.name or ""`；外置 add_memory 发生在轮内，读到的必是当前会话——不用把 session 名塞进工具参数
 

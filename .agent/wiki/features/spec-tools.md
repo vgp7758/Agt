@@ -1,6 +1,6 @@
 # spec 工具集 · spec 施工五件套 + 探索前置（explore 外置接管）
 
-> `src/spec_tools.py`（支撑层模块）。spec 施工流程的工具集，现为五件套：create_spec / commit_spec / regenerate_spec / list_specs / recall_spec。流程第一步「探索（可选）」**不再是 spec 工具的一部分**——2026-09-09 起由外置探索工具 explore（`tools/builtin/explore_tools.py`）承担（原内置同步工具 explore_subagent 同日删除，见下）。
+> `src/spec_tools.py`（支撑层模块）。spec 施工流程的工具集，现为五件套：create_spec / commit_spec / regenerate_spec / list_specs / recall_spec。流程第一步「探索（可选）」**不再是 spec 工具的一部分**——2026-09-09 起由外置探索工具 explore（`.agent/tools/explore_tools.py`）承担（原内置同步工具 explore_subagent 同日删除，见下）。
 
 ## 探索入口演进：explorer / explore_subagent / explore（2026-09-09 收敛为二）
 
@@ -8,7 +8,7 @@
 
 | | **explorer**（声明式子 Agent） | ~~explore_subagent~~（spec 工具，**2026-09-09 已删**） | **explore**（外置探索工具） |
 |---|---|---|---|
-| 身份 | `.agent/agents/` 里的声明，`agent_prompt("explorer", ...)` 派活 | ~~`spec_tools.py` 里的同步工具~~（已删除，见下节） | `tools/builtin/explore_tools.py` 工厂工具（经 `ctx["agent"]` 注入主 Agent 引用） |
+| 身份 | `.agent/agents/` 里的声明，`agent_prompt("explorer", ...)` 派活 | ~~`spec_tools.py` 里的同步工具~~（已删除，见下节） | `.agent/tools/explore_tools.py` 工厂工具（经 `ctx["agent"]` 注入主 Agent 引用） |
 | 同步性 | **异步**——answer 入 inbox 唤醒主 Agent | ~~同步阻塞~~（报告作为工具结果返回） | **同步**——主 Agent 直接调工具，小上下文 react 循环探索 |
 | 用途 | 通用只读搜索定位 | ~~spec 流程前置探索~~（从未被实际调用） | 找相关代码的多轮 grep/read 外包 + 嫁接回上下文；spec 施工前摸模块同样适用 |
 | 团队可见 | registry 注册（看板可见） | 不注册——一次性实例用完即弃 | 不注册（无子 Agent 实例） |
@@ -33,7 +33,7 @@
 
 ## explore（外置探索工具，2026-09-09）—— spec 前置探索的现行入口
 
-2026-09-09（spec s_54a1eb86，commit 4bcd144，用户提案）新增**通用外置探索工具** `explore(goal, max_steps=8, budget_seconds=120, model='')`（`tools/builtin/explore_tools.py`，经 `ctx["agent"]` 注入主 Agent 引用；实现细节见 [工具外置 · explore 行](tool-externalization.md)）——探索职责的现行承载：
+2026-09-09（spec s_54a1eb86，commit 4bcd144，用户提案）新增**通用外置探索工具** `explore(goal, max_steps=8, budget_seconds=120, model='')`（`.agent/tools/explore_tools.py`，经 `ctx["agent"]` 注入主 Agent 引用；实现细节见 [工具外置 · explore 行](tool-externalization.md)）——探索职责的现行承载：
 
 | | explore（外置探索工具） |
 |---|---|
@@ -53,7 +53,7 @@ e2e 四场景全绿（test/test_explore_tool.py）：嫁接 2 步落盘 + `_repl
 
 explore_subagent 删除的同时确立并行语义——docstring 补明：**在【同一步】发起多个 explore（各查不同目标）即多路并行探索**——比逐个串行调用快得多；SYSTEM 引导句同步此说法。
 
-实现配套（`tools/builtin/explore_tools.py`）：
+实现配套（`.agent/tools/explore_tools.py`）：
 
 ```python
 _RESULT_CAP = 6000   # 单次工具结果进探索上下文/嫁接记录的字符上限（防投影膨胀）
@@ -72,7 +72,7 @@ _SEED_LOCK = threading.Lock()
 
 **用户提案**：「对于 explore 的 agent 是不是有必要直接把文件树一开始就交给他，省的它还要去 list_dir 什么的了，在文件树中看到与 goal 相关的可疑文件时，它也可能会直接去查看」→ explore 的 system 尾部预注入 workspace 文件树（已排除 .gitignore/构建产物），`_SYSTEM` 规则 0 改为**先扫树**——看到可疑文件直接 read_file，无需 list_dir 摸结构；树被截断时用 glob_files 补充。
 
-**实现**（tools/builtin/explore_tools.py）：
+**实现**（.agent/tools/explore_tools.py）：
 
 ```python
 # agt_register(ctx) 时 _WORKSPACE = Path(ctx["cwd"])——树根=引擎视角真实 workspace

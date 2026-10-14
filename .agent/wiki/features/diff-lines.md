@@ -1,6 +1,6 @@
 # diff_lines · 文本级 Myers Diff 工具（外置件 diff_tools.py）
 
-> 源码：`tools/builtin/diff_tools.py`（+ 随包副本 `src/assets/tools_builtin/`）——2026-08 纯函数批从 LIGHT_TOOLS 外置（commit 17312eb）：本体与注册整体迁入外置件，Myers 三件套是框架 `diff_files` 实现的**同源副本**（复制实现而非 import 框架，外置件零框架依赖约定；随机重放 200/200 回归）。
+> 源码：`src/assets/tools_builtin/diff_tools.py`（+ 随包副本 `src/assets/tools_builtin/`）——2026-08 纯函数批从 LIGHT_TOOLS 外置（commit 17312eb）：本体与注册整体迁入外置件，Myers 三件套是框架 `diff_files` 实现的**同源副本**（复制实现而非 import 框架，外置件零框架依赖约定；随机重放 200/200 回归）。
 > 职责：对比两个文本块，Myers Diff 最优编辑脚本 + unified 风格 hunk 输出，无需落盘。2026-08 落地（commit 9fb00de）。
 
 ## 职责与用法

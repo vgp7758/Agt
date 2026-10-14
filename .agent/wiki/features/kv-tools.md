@@ -1,6 +1,6 @@
 # kv_cache 三件套 · 应用级 KV 结果缓存（外置件 kv_tools.py）
 
-> `tools/builtin/kv_tools.py`——纯函数批第五批外置（2026-08，commit 17312eb 新建）；2026-09-13（commit `1c1c944`）增 **kv_cache_claim 原子互斥**（用户实测竞态修复）。外置体系定位见 [工具外置](tool-externalization.md)，判别标准见 [判别标准](../architecture/tool-externalization-criteria.md)。
+> `src/assets/tools_builtin/kv_tools.py`——纯函数批第五批外置（2026-08，commit 17312eb 新建）；2026-09-13（commit `1c1c944`）增 **kv_cache_claim 原子互斥**（用户实测竞态修复）。外置体系定位见 [工具外置](tool-externalization.md)，判别标准见 [判别标准](../architecture/tool-externalization-criteria.md)。
 
 ## 职责
 

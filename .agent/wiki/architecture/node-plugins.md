@@ -4,15 +4,17 @@
 > 首批迁移：text(15)/tojson(58)/fromjson(59)；验收节点：timestamp(N1)；新节点示范：AND / OR 逻辑节点（v0.19.2）。
 > 打包现状（v0.19.2 wheel 实测）：节点插件共 **12 组（24 个文件：12 py + 12 js）**，pip 安装即有。
 
-## 目录约定（三级，同名 type 后扫覆盖先扫）
+## 目录约定（2026-10-15 起默认 `.agent/nodes/`）
 
-| 目录 | 用途 | 优先级 |
+| 目录 | 用途 | 扫描序 |
 |---|---|---|
-| `src/assets/nodes_builtin/` | 随包核心插件（pip 安装即有） | 最低 |
-| `nodes/` | workspace 级 | 中 |
-| `.agent/nodes/` | 用户/Agent 私有（扩展面） | 最高 |
+| `src/assets/nodes_builtin/` | 随包核心插件（pip 安装即有） | 1（最低优先） |
+| `.agent/nodes/` | ★**默认用户/Agent 私有**（扩展面：写两个文件即得全新节点类型；2026-10-15 收编） | 2 |
+| `nodes/` | 旧 workspace 级——**仅当目录存在时**才追加扫描（存量 repo 不炸）；新 workspace 不再创建 | 3（末尾） |
 
 同名 type 后扫覆盖先扫——用户在 `.agent/nodes/` 放同名文件即定制覆写内置节点。
+
+⚠️ **覆盖方向与代码注释口径相反**（2026-10-15 迁移实测）：legacy `nodes/` 被 append 在**末尾**，而扫描是「后扫胜出」（`handlers[t] = desc` / js payload 按 type 去重留后）——旧目录与 `.agent/nodes/` 同名时**旧目录份反而胜出**。迁移后请删除旧目录，别指望两处并存时 `.agent/` 生效。历史口径：2026-10-15 前为 `nodes/`（中）→ `.agent/nodes/`（最高）。收编动因与配套见 [工具外置 · 默认目录收编](../features/tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)。
 
 **已迁移清单**（src/assets/nodes_builtin/，共 12 组）：
 - 第一批：text(15) / tojson(58) / fromjson(59)
@@ -64,7 +66,7 @@ def agt_node():
 - **核心 11 条**留在 real_tools（start/end/loop/batch/subworkflow/plugin/output 等调度器协议层节点 + Break/Continue/Comment 循环体协议节点）
 - **10 个已迁移节点**（llm/code/selector/intent/aggregator/assigner/http/text/tojson/fromjson）的目录条目从 real_tools 搬进各自 .py——改插件 handler 与目录示例同文件维护
 - **AND/OR/timestamp** 目录条目新写（此前正是进不了目录的三类）
-- **用户级 `.agent/nodes/`** 的 catalog 声明同样生效（三级目录扫描天然支持——用户定制节点也能被 list_workflow_nodes 看到）
+- **用户级 `.agent/nodes/`** 的 catalog 声明同样生效（目录扫描天然支持——用户定制节点也能被 list_workflow_nodes 看到）
 
 **验证**：聚合 13 条插件条目（10 搬运 + 3 新增）全覆盖；`query_workflow_node("AND")` / `("N1")` / `("3")` 实测命中；xml 示例完整性检查通过。
 

@@ -1,6 +1,6 @@
 # AgentID 身份工具 · agentid_tools（ModelScope Agent Identity Protocol）
 
-> 个人身份工具（**不随包播种**）：`tools/builtin/agentid_tools.py`，改完 `/reload tools` 热加载。为 agt 提供正式魔搭（ModelScope）数字身份——Ed25519 密钥对签发短期 JWT，进任何接入 Agent Identity Protocol 的应用（DojoZero 比赛、PawFriends 社区等）。
+> 个人身份工具（**不随包播种**）：`.agent/tools/agentid_tools.py`，改完 `/reload tools` 热加载。为 agt 提供正式魔搭（ModelScope）数字身份——Ed25519 密钥对签发短期 JWT，进任何接入 Agent Identity Protocol 的应用（DojoZero 比赛、PawFriends 社区等）。
 
 ## 身份与存储
 

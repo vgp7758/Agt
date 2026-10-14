@@ -1166,6 +1166,68 @@ def _cmd_clean(ctx: CommandContext, args):
     print(f"   释放 {mb:.1f} MB；⚠️ 清理前各轮的 /rewind 失效，下一轮起自动重建快照继续累积")
 
 
+def _cmd_ask(ctx: CommandContext, args):
+    """/ask -prompt <问题> [-turn N] —— 无状态旁路询问（用户提案 2026-10-14，效果同 agent_ask，
+    对象是当前会话自己）：不产生对话轮、不写 events.jsonl/历史、不触发工具循环——
+    直接用（近 N 轮）上下文 + 问题调 LLM 一次，回答显示即弃。
+    -turn N   附带最近 N 轮对话上下文（user/answer 纯文本对）；不传 = 零上下文纯问
+    -prompt   询问内容（其后所有参数拼为全文）"""
+    n_turns = 0
+    prompt = ""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-turn", "--turn") and i + 1 < len(args) and str(args[i + 1]).isdigit():
+            n_turns = int(args[i + 1]); i += 2; continue
+        if a in ("-prompt", "--prompt"):
+            prompt = " ".join(str(x) for x in args[i + 1:]); break
+        i += 1
+    if not prompt.strip():
+        print("用法：/ask -prompt <问题> [-turn N]   （-turn N=附带最近 N 轮上下文；不传=零上下文纯问）")
+        print("示例：/ask -turn 3 -prompt 刚才改的渲染缓存键是什么格式？")
+        return
+    # 上下文：近 N 轮 (user_message, answer) 纯文本对——旁路问答不走完整投影（分档/工具细节
+    # 是给主循环的，这里要的是轻量对话语境）；只读 turns（append-only，并发读安全）
+    msgs = []
+    if n_turns > 0:
+        for t in ctx.session.turns[-n_turns:]:
+            u = (getattr(t, "user_message", "") or "").strip()
+            ans = (getattr(t, "answer", "") or "").strip()
+            if u:
+                msgs.append({"role": "user", "content": u})
+            if ans:
+                msgs.append({"role": "assistant", "content": ans})
+    msgs.append({"role": "user", "content": prompt})
+
+    agent = ctx.agent
+    header = f"💬 /ask 回答（旁路，不进历史{'，含近 ' + str(n_turns) + ' 轮上下文' if n_turns else ''}）："
+
+    def _do_ask():
+        try:
+            resp = agent.llm.chat(msgs, tools=[], scene="ask")
+            text = (getattr(resp, "content", "") or "").strip() or "(空回答)"
+        except Exception as e:
+            text = f"❌ 询问失败：{type(e).__name__}: {e}"
+        # CLI：worker 线程里直接 print；Web：on_event=broadcast（内部 call_soon_threadsafe，
+        # 线程安全）以 system 事件回显——不落 events.jsonl，刷新即消失（"只回应不进历史"）
+        if getattr(agent, "on_event", None):
+            agent._emit({"type": "system", "text": header + "\n" + text})
+        else:
+            print(header)
+            print(text)
+
+    if ctx.work_q is not None:
+        # Web 模式：dispatch 在 async handler 里同步跑——LLM 调用（数十秒）会阻塞事件循环，
+        # 起 daemon 线程旁路执行，完成即 emit 回显；立即回受理提示（redirect_stdout 捕获）
+        import threading as _th
+        _th.Thread(target=_do_ask, daemon=True, name="cmd-ask").start()
+        print(f"⏳ /ask 已受理（含近 {n_turns} 轮上下文" if n_turns else "⏳ /ask 已受理（零上下文",
+              "），回答稍后以系统消息送达")
+    else:
+        # CLI：worker 线程串行，同步执行直接显示
+        _do_ask()
+
+
 # ========== RAG 文档库（/rag） ==========
 
 def _cmd_rag(ctx: CommandContext, args):
@@ -2170,6 +2232,11 @@ def build_default_registry() -> CommandRegistry:
         "清空工作区快照仓库（.agt/snapshots）从 0 开始——释放磁盘；清理前各轮的 /rewind 失效",
         "/clean             删除整个快照仓库（下一轮起自动重建、重新累积）\n"
         "  ⚠️ 清理前各轮的 /rewind /snapshot restore 失效（快照对象已删）")
+    reg.register("ask", _cmd_ask,
+        "-prompt <问题> [-turn N]  无状态旁路询问（同 agent_ask，对象=当前会话）：只回应不进历史、不触发工具循环",
+        "/ask -prompt 这个正则什么意思？           零上下文纯问\n"
+        "/ask -turn 3 -prompt 刚才改的缓存键格式？  附最近 3 轮对话上下文（user/answer 纯文本对）\n"
+        "  回答以系统消息显示即弃（不写 events.jsonl，刷新后消失）")
     reg.register("rag", _cmd_rag,
         "build | config [k v] | stats | query <词>  RAG 文档库管理",
         "/rag stats                         查看索引状态\n"

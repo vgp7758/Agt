@@ -224,15 +224,16 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
 
 def default_dirs() -> list:
     """约定扫描目录（优先级从低到高，同名后扫覆盖先扫）：
-    随包 tools_builtin → .agent/tools/（★默认用户工具目录——2026-10-15 用户裁定：本地自定义
-    统一收进 .agent/）→ 旧 tools/builtin/ 仅在存在时兼容追加（老 repo 不炸，新 repo 不再创建）。
-    tools/ 根永不扫描（防一次性任务脚本被随手丢进来，2026-09-27 实锤）。"""
+    随包 tools_builtin → 旧 tools/builtin/ 仅在存在时兼容（老 repo 不炸）→ .agent/tools/
+    （★默认用户工具目录——2026-10-15 用户裁定：本地自定义统一收进 .agent/；先扫旧目录，
+    故同名时 .agent/tools/ 胜出）。tools/ 根永不扫描（防一次性任务脚本被随手丢进来，2026-09-27 实锤）。"""
     from real_tools import WORKSPACE
     pkg = Path(__file__).parent / "assets" / "tools_builtin"
-    dirs = [pkg, WORKSPACE / ".agent" / "tools"]
+    dirs = [pkg]
     legacy = WORKSPACE / "tools" / "builtin"
     if legacy.is_dir():
-        dirs.append(legacy)   # 兼容读：老 repo 存量目录仍生效（.agent/tools 同名可覆盖它）
+        dirs.append(legacy)          # 兼容读：老 repo 存量目录仍生效（先扫，被 .agent/tools 同名覆盖）
+    dirs.append(WORKSPACE / ".agent" / "tools")
     return dirs
 
 

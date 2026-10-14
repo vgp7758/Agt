@@ -57,11 +57,12 @@ def default_dirs() -> list:
     from real_tools import WORKSPACE
     pkg = Path(__file__).parent / "assets" / "nodes_builtin"
     # .agent/nodes 为默认（2026-10-15 用户裁定：本地自定义统一收进 .agent/）；
-    # 旧 nodes/ 仅在存在时兼容追加（老 repo 不炸；.agent/nodes 同名覆盖它）
-    dirs = [pkg, WORKSPACE / ".agent" / "nodes"]
+    # 旧 nodes/ 仅在存在时兼容（先扫，故同名时 .agent/nodes 胜出）
+    dirs = [pkg]
     legacy = WORKSPACE / "nodes"
     if legacy.is_dir():
         dirs.append(legacy)
+    dirs.append(WORKSPACE / ".agent" / "nodes")
     return dirs
 
 

@@ -2,8 +2,8 @@
 
 目录约定（信任模型与 tools/workflows 一致；同名 type 后扫覆盖先扫）：
   src/assets/nodes_builtin/   随包核心插件（最低优先级）
-  nodes/                      workspace 级
-  .agent/nodes/               用户/Agent 私有（扩展面：写两个文件即得全新节点类型）
+  .agent/nodes/               ★默认用户/Agent 目录（2026-10-15 收编：写两个文件即得全新节点类型）
+  nodes/                      旧 workspace 级（仅存在时兼容扫描；.agent/nodes 同名覆盖它）
 
 .py 约定：def agt_node() -> 描述符：
   {"type": "58",                 # Coze type code（新类型自编 "N1","N2"... 段）
@@ -56,7 +56,13 @@ def _import_fresh(path: Path):
 def default_dirs() -> list:
     from real_tools import WORKSPACE
     pkg = Path(__file__).parent / "assets" / "nodes_builtin"
-    return [pkg, WORKSPACE / "nodes", WORKSPACE / ".agent" / "nodes"]
+    # .agent/nodes 为默认（2026-10-15 用户裁定：本地自定义统一收进 .agent/）；
+    # 旧 nodes/ 仅在存在时兼容追加（老 repo 不炸；.agent/nodes 同名覆盖它）
+    dirs = [pkg, WORKSPACE / ".agent" / "nodes"]
+    legacy = WORKSPACE / "nodes"
+    if legacy.is_dir():
+        dirs.append(legacy)
+    return dirs
 
 
 def _read_js(path: Path) -> str:

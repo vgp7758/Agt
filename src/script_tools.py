@@ -1,11 +1,10 @@
 """script_tools.py —— 外置脚本工具：扫描约定目录 → agt_register() 元信息 → 注册进 Toolbox。
 
 目录约定（信任模型与 workflows/agents 一致：目录内 .py 会被 import 执行，勿放不受信脚本）：
-  tools/builtin/    workspace 级用户工具（★只认 builtin 子目录——tools/ 根不再扫描，
-                    防一次性任务脚本被随手丢进来、入库即执行卡死启动，2026-09-27 实锤）
-  .agent/tools/     用户/Agent 私有（实验性工具）
-扫描顺序 tools/builtin/ → .agent/tools/，同名后者覆盖前者 → 再覆盖内置（后注册胜出，
-同时成为用户定制覆写内置工具的机制）。
+  .agent/tools/     ★默认用户工具目录（2026-10-15 收编：本地自定义统一进 .agent/）
+  tools/builtin/    旧 workspace 级目录（仅存在时兼容扫描；.agent/tools 同名覆盖它）
+扫描顺序 随包 tools_builtin → .agent/tools/ →（存在才追加）tools/builtin/，同名后扫覆盖先扫
+→ 再覆盖内置（后注册胜出，同时成为用户定制覆写内置工具的机制）。
 
 脚本约定：定义 agt_register() 返回描述符列表（每项一个工具）：
   {"name": "kw_score",
@@ -225,11 +224,16 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
 
 def default_dirs() -> list:
     """约定扫描目录（优先级从低到高，同名后扫覆盖先扫）：
-    随包 tools_builtin → tools/builtin/（★用户工具只认这个子目录——tools/ 根常被随手丢
-    一次性任务脚本，入库即执行会卡死启动，2026-09-27 实锤）→ .agent/tools/（私有覆盖）。"""
+    随包 tools_builtin → .agent/tools/（★默认用户工具目录——2026-10-15 用户裁定：本地自定义
+    统一收进 .agent/）→ 旧 tools/builtin/ 仅在存在时兼容追加（老 repo 不炸，新 repo 不再创建）。
+    tools/ 根永不扫描（防一次性任务脚本被随手丢进来，2026-09-27 实锤）。"""
     from real_tools import WORKSPACE
     pkg = Path(__file__).parent / "assets" / "tools_builtin"
-    return [pkg, WORKSPACE / "tools" / "builtin", WORKSPACE / ".agent" / "tools"]
+    dirs = [pkg, WORKSPACE / ".agent" / "tools"]
+    legacy = WORKSPACE / "tools" / "builtin"
+    if legacy.is_dir():
+        dirs.append(legacy)   # 兼容读：老 repo 存量目录仍生效（.agent/tools 同名可覆盖它）
+    return dirs
 
 
 def scan_script_tools(dirs=None, agent=None) -> Toolbox:
@@ -301,8 +305,8 @@ def make_hot_reload_tools(agent):
     from tools import Tool
 
     def reload_hot(scope: str = "all") -> str:
-        """热重载脚本工具与节点插件（免 /restart）。改了 tools/builtin//.agent/tools/ 的工具脚本或
-        nodes//.agent/nodes/ 的节点插件或 .agent/plugins/ 的引擎插件后调用。
+        """热重载脚本工具与节点插件（免 /restart）。改了 .agent/tools/（或旧 tools/builtin/）的工具脚本或
+        .agent/nodes/ 的节点插件或 .agent/plugins/ 的引擎插件后调用。
         scope: all(默认)/tools(仅工具)/nodes(仅节点)/plugins(仅引擎插件)。"""
         parts = []
         sc = (scope or "all").strip().lower()

@@ -8,7 +8,7 @@
         frontend.js     可选：前端入口（浏览器 AgtPlugin SDK：addButton/addPanel/addChatCard）
         tools/ workflows/ agents/ skills/  可选静态资产（未来 provides 扩展点，当前未扫）
 
-信任模型（同 tools/builtin、Obsidian）：目录内代码会被 import 执行，勿装不受信插件。
+信任模型（同 .agent/tools/、Obsidian）：目录内代码会被 import 执行，勿装不受信插件。
 
 生命周期（可逆副作用，DSH 同款语义）：setup 时每次注册都记 undo → unload/reload
 按插件粒度撤销全部注册（工具摘除/命令删表/路由摘挂/钩子摘链）。单个插件 setup 抛异常

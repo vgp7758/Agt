@@ -700,10 +700,11 @@ def seed_default_skills(workspace: Path) -> int:
 
 def seed_dir_docs(workspace: Path) -> int:
     """把约定目录的 README.md（框架「这目录放什么/怎么扩展」一页文档）播种到位。
-    覆盖：tools/builtin（脚本工具 agt_register 约定 + 任务脚本防御）、.agent/tools（覆盖层）、
+    覆盖：.agent/tools（脚本工具 agt_register 约定 + 任务脚本防御——2026-10-15 收编为默认工具目录）、
     .agent/workflows（XML 骨架/exec_workflow/钩子）、.agent/agents（子 Agent 声明/装配 DSL）、
-    .agent/skills（技能包结构/server.py 协议/双层激活）、nodes 与 .agent/nodes（节点插件 .py+.js）。
+    .agent/skills（技能包结构/server.py 协议/双层激活）、.agent/nodes（节点插件 .py+.js）。
     目录不存在则创建（引导价值：看到目录+README 即知可扩展点）；README.md 已存在则跳过（用户改动永不覆盖）。
+    旧 tools/builtin、nodes 目录不再播种/创建（扫描侧仍兼容存量，见 script_tools/node_plugins.default_dirs）。
     文档源：src/dir_docs/。播种时写 seed_state 基线（/update-assets 三方 hash 判定用）。"""
     bundled = Path(__file__).resolve().parent / "dir_docs"
     if not bundled.exists():
@@ -711,9 +712,9 @@ def seed_dir_docs(workspace: Path) -> int:
     from asset_sync import _sha, _load_state, _save_state
     st = _load_state(workspace)
     n = 0
-    for sub, doc in [("tools/builtin", "tools_builtin"), (".agent/tools", "agent_tools"),
+    for sub, doc in [(".agent/tools", "tools_builtin"),
                      (".agent/workflows", "workflows"), (".agent/agents", "agents"),
-                     (".agent/skills", "skills"), ("nodes", "nodes"), (".agent/nodes", "nodes")]:
+                     (".agent/skills", "skills"), (".agent/nodes", "nodes")]:
         d = workspace / sub
         d.mkdir(parents=True, exist_ok=True)
         src = bundled / f"{doc}.md"

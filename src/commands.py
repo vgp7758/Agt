@@ -1727,7 +1727,7 @@ def _cmd_reload(ctx: CommandContext, args):
         return
     if sub != "models":
         print("用法：/reload models   —— 重读模型配置并热应用（改 models.json 后免重启生效）")
-        print("      /reload tools    —— 重扫脚本工具目录并热应用（改 tools/builtin/*.py 后免重启生效）")
+        print("      /reload tools    —— 重扫脚本工具目录并热应用（改 .agent/tools/*.py 后免重启生效）")
         print("      /reload plugins  —— 重载引擎插件（改 .agent/plugins/*/backend.py 后免重启生效）")
         return
     import config
@@ -2310,7 +2310,7 @@ def build_default_registry() -> CommandRegistry:
         "/reload models\n"
         "  改 models.json / 修 model id / 换 token 后执行；主 llm 同名刷新 + utility 通道重建\n"
         "/reload tools\n"
-        "  改 tools/builtin/ 或 .agent/tools/ 的 agt_register 脚本后执行；重扫 + 摘旧挂新，秒级生效\n"
+        "  改 .agent/tools/（默认目录；旧 tools/builtin/ 兼容）的 agt_register 脚本后执行；重扫 + 摘旧挂新，秒级生效\n"
         "/reload plugins\n"
         "  改 .agent/plugins/*/backend.py 后执行；全卸重装（工具/命令/路由/钩子注册表重建）")
     reg.register("restart", _cmd_restart,

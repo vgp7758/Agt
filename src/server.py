@@ -2308,16 +2308,28 @@ def _dump_agent_yml(body: dict, safe: str) -> Path:
             break
     if not _done:
         asm.insert(0, {"file": rel})
-    data = {
-        "name": safe,
-        "description": body.get("description", ""),
-        "tools": body.get("tools", ""),
-        "model": body.get("model") or None,
-        "assembly": asm,
-    }
+    # —— 以已有声明为底稿增量改（2026-10-15 用户实锤修）——
+    # 此前是"从零重建 data"，面板不认识的字段会被静默丢掉：worker.yml 经编辑器保存后
+    # max_steps: 150 消失即此因。改为主 Agent 保存路径（api_agents_save 的 _main_ 分支：
+    # 读 base + 只覆盖面板给的键）同款增量语义——未识别字段原样保留。
+    p = d / f"{safe}.yml"
+    try:
+        base = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:
+        base = {}
+    if not isinstance(base, dict):
+        base = {}
+    base["name"] = safe
+    base["description"] = body.get("description", "")
+    base["tools"] = body.get("tools", "")
+    base["model"] = body.get("model") or None
+    base["assembly"] = asm
     hooks = body.get("hooks")
-    if isinstance(hooks, dict) and hooks:
-        data["hooks"] = hooks
+    if isinstance(hooks, dict):
+        if hooks:
+            base["hooks"] = hooks
+        else:
+            base.pop("hooks", None)     # 面板显式清空 → 删键（回退不声明）
     # 依赖服务声明（2026-10-06 用户提案）：行式文本 "名字: 命令"/行 或结构化列表
     svcs_in = body.get("services")
     svcs = []
@@ -2332,14 +2344,17 @@ def _dump_agent_yml(body: dict, safe: str) -> Path:
     elif isinstance(svcs_in, list):
         svcs = [it for it in svcs_in if isinstance(it, dict) and it]
     if svcs:
-        data["services"] = svcs
+        base["services"] = svcs
+    elif "services" in body:
+        base.pop("services", None)
     # 声明级回退链：非空才写（list / {chain,policy}——与 _parse_agent_fallback 读形态对齐）；
     # 留空不写键 = 继承全局 settings 配置（管理页语义；「显式关回退」手写 yml 空串实现）
     _fbv = _fb_yaml_value(body)
     if _fbv is not None:
-        data["fallback"] = _fbv
-    p = d / f"{safe}.yml"
-    p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        base["fallback"] = _fbv
+    elif "fallback" in body:
+        base.pop("fallback", None)
+    p.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
     (d / f"{safe}.md").write_text(persona + ("\n" if persona else ""), encoding="utf-8")
     return p
 

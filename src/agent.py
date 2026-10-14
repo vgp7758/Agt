@@ -1004,47 +1004,28 @@ class Agent:
             return ""
 
     # ========== 施工委托（用户提案 2026-10-15）==========
-    # 一进入施工状态（create_plan / spec approve 建 plan）→ 把【施工牌】自动派给
-    # worker-<plan_id>（具名子 Agent 实例，一个计划一条独立施工线）：施工细节活在 worker
-    # 自己的 session 里，主 Agent 的投影只剩"我建了计划 → 委托给 worker 了"，
-    # 状态不再随施工来回切换（施工态投影/施工流/recent-file 内嵌都让位，见
-    # session._construction_mode）。
-    def _construction_brief(self) -> str:
-        """施工牌文本（派给 worker 的 prompt）：计划（id/title/design/进度/steps）+ 源 spec 详情。
-        spec 每步含 file/action/anchor/content/rationale，而 plan 的 step description 只摘了前 150 字
-        （spec_tools._step_to_plan_desc）——这里把全文给足，worker 才不用重新探索一遍。"""
+    # 一进入施工状态（create_plan / spec approve 建 plan）→ 自动派给 worker-<plan_id>
+    # （具名子 Agent 实例，一个计划一条独立施工线）：施工细节活在 worker 自己的 session 里，
+    # 主 Agent 的投影只剩"我建了计划 → 委托给 worker 了"，状态不再随施工来回切换
+    # （施工态投影/施工流/recent-file 内嵌都让位，见 session._construction_mode）。
+    # 计划信息走【装配】注入（用户裁定 2026-10-15）：worker.yml 的 func: plan_content() /
+    # func: plan_steps() 每轮把计划设计与步骤清单喂给 worker——派发 prompt 只留一句指令，
+    # 代码里不再重复拼【施工牌】全文。
+    def _construction_dispatch_prompt(self) -> str:
+        """派发指令（用户裁定 2026-10-15）：计划信息走【装配】注入——worker.yml 里
+        `func: plan_content()` / `func: plan_steps()` 每轮把计划设计与步骤清单喂给 worker，
+        所以代码里不再重复拼【施工牌】全文（此前一版把 plan+spec 全文塞进 prompt，重复且
+        与装配口径打架）。这里只留一句：接的是哪条计划 + 汇报要求。
+        spec 细则（file/anchor/content 全文）plan 里只摘了 150 字，但 design 带
+        "[由 spec xxx 生成]" 标记——worker 需要时自己 recall_spec 取。"""
         p = getattr(self, "active_plan", None) or {}
-        lines = [f"【施工牌】计划 {p.get('id', '')} · {p.get('title', '未命名计划')}",
-                 "",
-                 "设计 / 目标：",
-                 (p.get("design") or "（无）").strip(),
-                 "",
-                 "步骤："]
-        for i, s in enumerate(p.get("steps") or [], 1):
-            icon = {"pending": "☐", "in_progress": "▶", "completed": "✅"}.get(str(s.get("status")), "?")
-            lines.append(f"  {icon} {i}. {s.get('description', '')}")
-        src = str(p.get("source_spec") or "").strip()
-        if src:
-            try:
-                from spec_tools import _load_spec
-                sp = _load_spec(self.session.workspace, src) or {}
-                sp_steps = sp.get("steps") or []
-                if sp_steps:
-                    lines += ["", f"施工详情（源 spec {src}）："]
-                    for i, st in enumerate(sp_steps, 1):
-                        _f = st.get("file", "") or "(无文件)"
-                        _a = f" @ {st.get('anchor')}" if st.get("anchor") else ""
-                        lines.append(f"  {i}. [{st.get('action', '')}] {_f}{_a}")
-                        if (st.get("rationale") or "").strip():
-                            lines.append(f"     理由：{st.get('rationale')}")
-                        c = (st.get("content") or "").strip()
-                        if c:
-                            lines += ["     内容：", "```", c[:6000], "```"]
-            except Exception:
-                pass
-        lines += ["", "分工：这条计划已全部委托给你执行——主 Agent 只做汇总与用户沟通，不再重复施工。",
-                  "完成后按你的汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。"]
-        return "\n".join(lines)
+        pid = str(p.get("id", "") or "")
+        title = str(p.get("title", "") or "")
+        n = len(p.get("steps") or [])
+        return (f"开始施工：【当前计划】{pid}（{title} · {n} 步）——计划设计与步骤清单见你的装配注入"
+                f"（plan_content / plan_steps）；源 spec 细则用 recall_spec 查。\n"
+                f"按你的角色约定推进，完成后按汇报格式给结论"
+                f"（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
 
     def _maybe_dispatch_construction(self) -> None:
         """施工委托派发（用户提案 2026-10-15）：活动计划有未完成步且尚未委托 → agent_prompt 把
@@ -1073,8 +1054,12 @@ class Agent:
             if prompt_fn is None:
                 return              # 未装配 multiagent（纯引擎/外置脚本场景）：静默跳过
             aid = f"worker-{pid}"
-            res = prompt_fn("worker", self._construction_brief(), agent_id=aid,
-                            reuse="yes", caller=self.agent_id, current_turn_only=True)
+            # current_turn_only=False（用户实锤 2026-10-15）：worker 声明里列了 history 段
+            # （跨轮施工要记得自己做过什么），而 True 会让 history/ltm 段被强制跳过——
+            # 传 False 尊重声明意图。不会无限膨胀：一个计划一条 worker 线（agent_id 带 plan_id），
+            # 计划做完这条线就闲置，新计划起新实例。
+            res = prompt_fn("worker", self._construction_dispatch_prompt(), agent_id=aid,
+                            reuse="yes", caller=self.agent_id, current_turn_only=False)
             _d.update({"plan_id": pid, "agent_id": aid, "ts": time.time(),
                        "result": str(res or "")[:300]})
             # 同轮即告（用户提案 2026-10-15）：派发发生在 create_plan 那一步之后，主 Agent 的

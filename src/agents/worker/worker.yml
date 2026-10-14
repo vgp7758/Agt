@@ -6,12 +6,17 @@ model: glm-official-flash
 max_steps: 150
 assembly:
 - file: .agent/agents/worker/worker.md
+- func: plan_content()
+- history
 - user_message
 - steps
+- func: plan_steps()
 hooks:
   turn_end:
   - workflow: recap_gen
     async: true
+  after_tool:
+  - workflow: py_auto_diag
 fallback:
 - glm-official
 - deepseek

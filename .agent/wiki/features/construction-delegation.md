@@ -29,17 +29,21 @@
         → 主 Agent update_plan 记账 + 向用户汇总
 ```
 
-## 施工牌：`Agent._construction_brief()`（src/agent.py）
+## 施工牌 → 一句派发指令：`_construction_brief()` → `_construction_dispatch_prompt()`（src/agent.py）
 
-派给 worker 的 prompt 文本，四段：
+> **2026-10-15 · 二轮瘦身（用户裁定）**：施工牌全文版已被拆解——计划信息改走【装配注入】（worker.yml `func: plan_content()` / `func: plan_steps()` 每轮喂），prompt 只留一句派发指令。原四段全文版与装配口径打架且重复（图纸断链之一），同日弃用；下表保留作历史对照。
 
-| 段 | 内容 |
+原 `_construction_brief()`（src/agent.py）派给 worker 的 prompt 四段：
+
+| 段 | 内容（历史版） |
 |---|---|
 | 头部 | `【施工牌】计划 <id> · <标题>` |
 | 设计 / 目标 | `active_plan["design"]` 全文 |
 | 步骤 | 每步 `☐/▶/✅`（pending/in_progress/completed）+ 描述——worker 一上来就知道干到哪 |
-| 施工详情 | **源 spec 结构化全文**（`file` / `action` / `anchor` / `content`（截 6000 字）/ `rationale`）——plan 的 step description 由 `spec_tools._step_to_plan_desc` 只摘前 150 字，这里给足全文，**worker 才不用重新探索一遍** |
-| 结尾 | 分工声明（「这条计划已全部委托给你执行——主 Agent 只做汇总与用户沟通」）+ 要求按 worker 的汇报格式给结论 |
+| 施工详情 | **源 spec 结构化全文**（`file` / `action` / `anchor` / `content`（截 6000 字）/ `rationale`） |
+| 结尾 | 分工声明 + 要求按 worker 的汇报格式给结论 |
+
+现行 `_construction_dispatch_prompt()`：只留「接的是哪条计划（id · 标题 · 步数）+ 图纸见你的装配注入（plan_content / plan_steps）+ 源 spec 细则用 recall_spec 兜底查 + 完成后按汇报格式给结论」——**代码不再拼全文**，图纸唯一真源是装配段（见[后记](#后记图纸全程可见--worker-工具面2026-10-15--二三连-commits-446c7d1--7ca0aa5dashboard-施工线实锤)）。
 
 ## 派发：`Agent._maybe_dispatch_construction()`（幂等）
 
@@ -76,7 +80,7 @@
 
 ## 记账、续派与开关
 
-- **记账仍在主 Agent**：worker **没有** `update_plan`——避免子 Agent 与主 Agent 并发写同一份 plan 状态；因此 worker 汇报必须带「完成到第几步」，主 Agent 据此 `update_plan`
+- **记账已下放 worker（2026-10-15 · 二翻转，commit 7ca0aa5，dashboard 施工线实锤推翻原设计）**：`update_plan` 从子 Agent 排除集移出——worker 直接标**共享 plan 文件**的进度（主/子双方面板同步），主 Agent 不再凭汇报代记；`create_plan` 仍排除（worker 只推进度不建计划）。详见[后记](#后记图纸全程可见--worker-工具面2026-10-15--二三连-commits-446c7d1--7ca0aa5dashboard-施工线实锤)
 - **失败不自动重派**（防死循环）：worker 汇报失败 / 半途中断时，主 Agent 手动续派**同一施工线**（显式 `agent_id` 保证接在同一实例、同一 session 上）：
   `agent_prompt(name="worker", agent_id="worker-<plan_id>", prompt="从第 N 步继续…")`
 - **关掉委托**：主 Agent 实例设 `_construction_delegate = False`（默认 True）——回到「主 Agent 自己进施工视图施工」的老行为
@@ -87,6 +91,36 @@
 - **L3 六组断言全绿**：施工牌文本 / 派发 + 幂等（重复调不重派、`agent_id=worker-<plan_id>`、caller 正确）/ plan 完成清标记 / 三分支（开关关 · 无 multiagent · 无计划）/ 施工态让位（已委托 False、未委托 True、别的 plan 不影响）/ plan 注入块委托行
 - **worker 声明解析**：路径命中、yml 解析、assembly/hooks/fallback 正常、`tools=''` 继承工具箱且排除 `create_plan` / `agent_prompt`
 - **L2 隔离实跑**（临时 workspace 直跑最新源码）：启动 → 收消息 → before_turn 三钩子执行 → 轮启动**无 NameError / traceback**（新调用点每轮每步都走到）
+
+## 后记：图纸全程可见 + worker 工具面（2026-10-15 · 二/三连，commits 446c7d1 + 7ca0aa5，dashboard 施工线实锤）
+
+首个实战施工线（**dashboard 看板**，plan `p_c0542ede`）三次断点续跑暴露出**图纸三层断链**——worker 拿不到完整施工依据，被迫满世界找细则（实锤：worker 找不到 `recall_spec` 而绕路）。两连修齐（commit `446c7d1` + `7ca0aa5`）：
+
+| 层 | 断链 | 修复 |
+|---|---|---|
+| spec→plan 转换 | `_step_to_plan_desc`（src/spec_tools.py）把 spec 结构化 step 压成 plan 描述时 **content/rationale 截 150 字** | **全文进 description**——plan 步骤自带完整细则，worker 不必回查 spec（`446c7d1`） |
+| 装配注入 | 施工牌全文塞 prompt——与装配口径打架、重复 | worker.yml 装配段增 **`func: plan_content()`**（id/标题/design + 每步全文）与 **`func: plan_steps()`**（轻量进度视图，自行截断）；prompt 瘦身成一句派发指令（见上章） |
+| worker 工具面 | `update_plan` / `recall_spec` 均在 `_AGENT_TOOL_NAMES`（src/multiagent.py）排除集——worker 标不了进度、查不了 spec | **`update_plan` 下放**（worker 直接标共享 plan 文件，主/子双方面板同步；`create_plan` 仍排除）+ **`recall_spec` 例外保留**（纯只读查 spec 全文，兜底通道——主路径=plan_content 装配）（`7ca0aa5`） |
+
+**byte-stable（缓存断点治理·二连，commit `7ca0aa5`，用户裁定）**：`plan_content()` **每步不标状态**（✅/☐ 状态标记归 `plan_steps()`）——worker 用 update_plan 推进进度不再扰动 plan_content 段的字节，worker 装配前缀缓存不被施工推进打断；全部步骤完成后整段收敛为一行标题（2026-09-13 完成态瘦身口径延续）。
+
+**实证（2026-10-15 当日）**：dashboard 施工线 worker 用 `update_plan` 标满 10/10（工具面修复生效实测）；三断点（进程波动 ×2 + /restart）后每轮 run 开头自动补派接续，无一丢线。
+
+**连带对账（以本节为准）**：worker.yml 现行 assembly = `file(人设) + func:plan_content() + history + user_message + steps + func:plan_steps()`，hooks = `turn_end: recap_gen(async)` + `after_tool: py_auto_diag`——本文上文「无 history」「仅 recap_gen」为初版形态的历史描述；worker 自带 history 后断点续跑的记忆接续不再依赖施工牌重述。
+
+## 后记二：首例回执丢失——完工正落数据根 FS 抖动窗（2026-10-16，plan p_d721b263，未闭环）
+
+**首个框架施工线交付 + 首例回执事故**：plan `p_d721b263`（[explore 重写](explore-tool.md)：嫁接改投影层内插 + run_id 旁车断点续跑）派 `worker-p_d721b263`，worker 独立 session 全 8 步完成、单测+真 LLM 冒烟全过、本地 commit `ba2ede1`——但 caller=`_main_` 的 answer **没进主 Agent inbox**，用户先发现（「你传的是 _main_ 啊，answer 没有 inbox 吗？」）。
+
+**排除项（路由机制无罪）**：派发时 caller 传参正确、[answer 按 caller 路由回主 Agent inbox 的链路](../architecture/multi-agent.md) 本轮零代码变更；worker answer 本身已产出（看板/其页面可见）。
+
+**时间线高度吻合的根因假设**：worker 完工 11:06，正落 **11:04–11:08 FS 抖动窗**——`.agt` 数据根子目录 `repos\D--AI_Usings-Agt` 间歇性不可见：Python `exists()` 连续 False，**cmd 原生 `dir` 同报 File Not Found**（排除 Python 视角问题），随后全域 rglob 又找回；`specs/s_7edebd56.json` 完好（mtime 10:05）、回收站无 agt 痕迹、双盘 SMART Healthy、无 NTFS/disk 系统错误事件、非 junction、无 pytest/smoke 残留进程；当日同目录已闪 6 次（04:1x sessions/aa、04:2x plans、11:0x 连环）。
+
+**定性**：非委托/路由代码 bug——回执链（worker 完成 → push_message → 主 Agent inbox → 唤醒）中某落盘/事件环节撞上抖动抛异常被吞，通知静默丢失。直接代价：唤醒轮未发生 → `update_plan` 记账与向用户汇总均未自动进行（本次由用户指出后人工介入）。
+
+**损失盘点**：代码零损失（commit 在 git）；主 Agent 内存 session 完整，autosave 随轮末趁目录可见窗口重落盘。
+
+**根因方向与待办**：文件系统层行为，主嫌疑**杀毒实时防护 / 索引服务**对目录的间歇独占；建议 `.agt` 数据根（`C:\Users\vgp77\.agt`）加杀毒白名单，长期可考虑数据根挪非系统盘。worker 侧自查（其冒烟数据写在临时独立 repos 条目）回复待回，闭环后在此补记。
 
 ## 注意事项
 
@@ -102,3 +136,6 @@
 - [spec 工具集](spec-tools.md) —— spec 通过 → 建 plan 的上游
 - [workspace 播种](workspace-seeding.md) —— bundled agents 播种（worker 随包）
 - [用户交互](user-interaction.md) —— 后台通知/唤醒与系统气泡渲染
+- [dashboard](dashboard.md) —— 首个实战施工线（plan p_c0542ede：worker 三断点续跑 + update_plan 标满 10/10，即上文后记的实锤来源）
+- [后台任务完成回执按发起者路由](background-scheduler.md) —— worker 施工期间起的后台任务，完成回执归 worker 不再吵主 Agent
+

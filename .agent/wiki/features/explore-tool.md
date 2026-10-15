@@ -45,3 +45,10 @@
 
 - 单测 `test/test_explore_tool.py`（FakeLLM+临时真 Session）：旁车结构/events 零嫁接/内插投影/下轮消失/续跑 seq 接续/损坏截断/scan/超时降级/白名单——全 PASS。
 - 冒烟（真 LLM、隔离 workspace）：①explore 真跑 ②旁车落盘 ③当前轮内插+events 干净 ④下轮只剩两条 ⑤半截→load 扫描→轮首提示→**模型自主 resume 至 done** ⑥resume 直调（返回头/seeds/投影）——18/18 PASS。
+## 施工收官：委托线全 8 步交付（2026-10-16，plan p_d721b263）
+
+s_7edebd56 已由 [施工委托](construction-delegation.md) 线落地：worker-p_d721b263（独立 session）按牌施工，**8/8 步完成**，单测 + 真 LLM 冒烟全过（冒烟跑在 worker 隔离 workspace），worker 侧本地 commit `ba2ede1`。
+
+- **触达文件**：`src/session.py`（投影内插 + `_scan_pending_explores`）、`src/agent.py`（轮首恢复提示 + 摘除 explore 的 `_seed_steps` 调用方）、`explore_tools.py` 双份同构（运行时 `.agent/tools/` + 种源 `src/assets/tools_builtin/`）、`test/test_explore_tool.py`。
+- **插曲**：worker 完工时刻正落 .agt 数据根 FS 抖动窗，caller=`_main_` 的 answer 未进主 Agent inbox——首例回执丢失事故详见 [施工委托 · 后记二](construction-delegation.md)；代码零损失（commit 在 git），主 Agent 侧复核待闭环。
+

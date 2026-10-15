@@ -5,37 +5,10 @@
 
 ## 职责与用法
 
-`diff_files(file1, file2, context=2, range_a=None, range_b=None)`：
-
-- **file1 / file2**：支持完整路径或相对路径，经 `_resolve_read` 沙箱解析——越出 workspace 放行（可对比 workspace 外的备份/参照文件），写操作仍走严格沙箱（读写不对称：读放行、写拦截）。
+- **file1 / file2**：支持完整路径或相对路径，经 `_resolve_read` 沙箱解析——**2026-10-16 起越界同样需审批**（读放行退役，见[下方专节的后记](#读写不对称越界路径放行2026-08-新)；此前越界直接放行，可对比 workspace 外的备份/参照文件）
 - **context**：每个 hunk 前后的上下文行数（默认 2）
 - **range_a / range_b**：分段对比的行范围（2026-08-20 新增，详见[下文专节](#分段对比range_arange_b2026-08-20新commit-096fcbe)）
 - **典型用途**：对比「快照回溯点 vs 当前」「备份 vs 改后」——配合 snapshots 的 `/rewind` 或外部生成的备份文件，一眼看清改了什么
-
-**输出（unified 风格）**：
-
-- 头部：`[diff a (N行) vs b (M行) | -x +y | h 处差异]`（分段对比时头部带段范围标注，见下文）
-- hunk 头：`@@ -起,数 +起,数 @@`
-- 变更行：`-N│ ...`（A 侧删除）/ `+N│ ...`（B 侧行插入），**行号语义与 read_file 一致**
-- 上下文行：两空格前缀（不带行号）
-- 相同文件 → `[无差异] ...`；文件不存在 → `[文件不存在] <path>`；输出超 20k 截断（此时用 range_a 分段精比）
-
-实测输出示例：
-
-```
-[diff _d1.py (7行) vs _d2.py (7行) | -3 +3 | 1 处差异]
-@@ -1,7 +1,7 @@
--1│ def add(a, b):
--2│     return a + b
-+1│ def add(a, b, c=0):
-+2│     return a + b + c
-  
-  
-  def main():
-      print(add(1, 2))
--7│     print('done')
-+7│     print('bye')
-```
 
 ## 分段对比：range_a / range_b（2026-08-20 新，commit 096fcbe）
 
@@ -123,6 +96,8 @@ prev_x = trace[d - 1].get(prev_k, 0)   # ❌ 取了 d-1 层快照
 新增 `_resolve_read`：先按 workspace 沙箱解析，**越界（绝对路径 / `../` 逃逸）放行为直接路径**——现在可以对比 workspace 外的备份/参照文件。写操作仍走 `_resolve` 严格沙箱，**读写不对称**：读放行、写拦截。
 
 注意边界：仅纯只读工具用 `_resolve_read`；`run_python(file=...)` 的 file 参数仍走 `_resolve` 严格沙箱（workspace 外脚本须经 code 模式或 args 间接传入，见 [run_python](run-python.md)）。
+
+> **后记（2026-10-16，t1195 读写不对称就此终结）**：读放行退役——越界审批改 fail-closed 默认（见 [工具执行审批 · 越界放行默认改需审批](tool-approval.md)），`_resolve_read` 越界同样走 `_ask_outside_approval`：UI 在场弹卡、无人可问 = 拒绝。读越界与写越界自此同一审批门槛。
 
 ## 注意事项
 

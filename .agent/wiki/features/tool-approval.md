@@ -45,8 +45,8 @@
 
 ## 边界与默认
 
-- **CLI / 无前端连接**：`_approval_cb = None` → `_ask_approval` 直接 True，CLI 行为完全不变
-- **工作流 plugin 节点**调用 run_python / run_shell：同上（无 Agent 注入回调），不阻塞工作流
+- **CLI / 无前端连接**：`_approval_cb = None` → `_ask_approval` 直接 True，CLI 行为完全不变——**仅指 run_python / run_shell 的 opt-in 审批**；file_outside（越界文件）2026-10-16 起走**独立 fail-closed 通道**（`_outside_approval_cb`），无人可问 = 拒绝，见下方专节
+- **工作流 plugin 节点**调用 run_python / run_shell：同上（无 Agent 注入回调），不阻塞工作流；但**文件越界访问**同条 fail-closed 拒绝
 - **600s 超时**：自动拒绝并回填结果——审批卡片不会永久挂着（agent 侧 Event 超时兜底 + 前端标注）
 - **拒绝不炸轮**：文件类 PermissionError 会进工具错误通道（Agent 可见），shell/python 类返回拒绝文本——Agent 能理解「用户不让」并换路
 
@@ -145,7 +145,33 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 机制本身（`_tls.outside` 越界标记 → 工具结果尾附提示、不阻断执行）不变。
 
-## 相关页面
+## 越界放行默认改需审批：file_outside 独立 fail-closed 通道 + 子 Agent 弹卡可达（2026-10-16，用户提案，commit 待推）
+
+**动机（用户提案）**：file_outside（越界文件访问）此前**跟随 run_python/run_shell 的 opt-in 开关**——`_approval_enabled` 未开（默认）时 `_approval_cb=None` → `_ask_approval` 直接 True：**越界访问静默放行**；即使开关打开，WS 响应也只达主 Agent 实例，子 Agent 弹的卡无人能解。语义错位：run_python/run_shell 是主动执行类操作，opt-in 合理；而**访问 workspace 外的文件本身就是敏感越界**——默认应该「不问不给」（fail-closed），UI 在场才弹卡交给人裁决。
+
+**改动三层**：
+
+| 层 | 改动 |
+|---|---|
+| **real_tools.py** | 新增 `_outside_approval_cb`——**仅管 file_outside**，与 run_python/run_shell 的 opt-in `_approval_cb` 分离互不干扰；`_resolve` 越界改走 `_ask_outside_approval`——**fail-closed**：UI 同意才放行并登记 `_approved_paths`；拒绝 / 无人可问（CLI、`on_event=None` 的子 Agent、工作流节点）→ `PermissionError「越界未获审批，拒绝访问 workspace 外的路径」`；`_resolve_read` 的「读放行」退役（**diff_files 越界同样需审批**）；新增 `_resolve_quiet` 供簿记纯解析（不弹卡） |
+| **agent.py** | 装配点注入 `_outside_approval_cb`（**有 on_event 即注入**——不与 run_* 共用 `_approval_enabled` 开关）；`_APPROVAL_ROUTES` 全局注册表：WS `approval_response` 按审批 id 路由到**发起弹卡的 Agent 实例**——子 Agent 弹的卡也能解除（原先只达主 Agent）；`_collect_file_snapshots` 改 `_resolve_quiet` + **仅拍 `_approved_paths` 内的越界文件** |
+| **server.py / 前端** | `approval_response` 处理改查 `_APPROVAL_ROUTES`（卡片三按钮交互不变） |
+
+**行为矩阵（改后）**：
+
+| 场景 | file_outside（越界文件） | run_python / run_shell |
+|---|---|---|
+| WebUI（有 on_event） | **默认弹卡**（原默认静默放行） | opt-in 不变（显式 `_approval_enabled` 才弹） |
+| CLI / 无人值守 / 无 on_event 的子 Agent / 工作流节点 | **默认拒绝**（fail-closed） | 直接执行不变 |
+
+**两处旧语义就此终结**：
+
+- **读写不对称终结（t1195）**：`_resolve_read` 此前对读操作越界直接放行——退役后 diff_files 等读工具越界同样需审批
+- **快照侧信道堵死**：拒绝后越界文件不再进 recent-file 快照——「文件工具被拒、内容却经快照进投影」的旁路消失（[context-engine · recent-file 后记三](../architecture/context-engine.md) 的 relative_to 双层容错退居纯兜底）；同时簿记解析改 `_resolve_quiet`，快照采集不再二次弹卡
+
+**验证**：`.agent/tmp/verify_oob_approval.py` **15/15 绿**；`verify_edit_tools` 两条「跨 workspace 被拒」由基线红转绿（其余 7 处 ❌ 为改动前已存在的行级视图门基线失败，与本改动无关）。
+
+**注意事项**：无人值守场景（定时任务 / 后台服务 / 施工 worker）访问 workspace 外路径将直接拒绝——需要越界的任务要么在 WebUI 在场时人工放行，要么把所需文件挪进 workspace。
 
 ## 相关页面
 

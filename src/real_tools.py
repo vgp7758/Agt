@@ -9,7 +9,7 @@
 
 安全策略：
   - 代码/命令在独立子进程中执行，带超时，超时即终止，不会卡死 Agent。
-  - 文件操作限定在 workspace/ 目录，越界拒绝，防误伤系统文件。
+  - 文件操作限定在 workspace/ 目录，越界需审批（用户同意才放行；无人可问/被拒 → PermissionError）。
   - 任何工具出错都转成文本回传模型（不抛异常炸流程）。
 """
 from __future__ import annotations
@@ -41,12 +41,35 @@ TOOL_TIMEOUT = 10
 _tool_emit = None
 
 # 工具审批回调（由 agent 注入）：(tool_key, detail) -> bool。None=无 WebUI 连接（CLI 等），默认放行。
+# 仅管 run_python / run_shell（opt-in：agent._approval_enabled=True 才注入，见 agent.py 装配点——
+# 50052 教训：无人值守场景每次弹卡 600s 挂起）。
 _approval_cb = None
+
+# 越界审批回调（2026-11 用户提案「越界放行默认改需审批」）：仅管 file_outside——与 _approval_cb
+# 分开注入，使「workspace 外路径需审批」默认生效而不牵连 run_python/run_shell 的 opt-in 语义。
+# None=无人可问（CLI / on_event=None 的子 Agent / 工作流节点）→ _resolve 直接拒绝（fail-closed）。
+_outside_approval_cb = None
+
+# 本进程内已审批放行的 workspace 外路径（str(abs_path)）：_resolve 放行时登记。
+# 快照采集等内部簿记据此免二次弹卡、且拒绝过的路径不得经快照侧信道读入（见 agent._collect_file_snapshots）。
+_approved_paths: set = set()
+
+
+def _ask_outside_approval(detail: str) -> bool:
+    """越界审批（默认需审批，fail-closed）：回调 None（CLI/无 UI 子 Agent/工作流节点）→ 无人可问
+    → 拒绝；回调抛异常 → 拒绝（宁拒不放）。同意 → True（调用方负责登记 _approved_paths）。"""
+    if _outside_approval_cb is None:
+        return False
+    try:
+        return bool(_outside_approval_cb("file_outside", detail))
+    except Exception:
+        return False
 
 
 def _ask_approval(tool_key: str, detail: str) -> bool:
-    """工具执行审批（用户提案 2026-09-28）：访问 workspace 外路径 / run_shell / run_python
-    阻塞等用户在 WebUI 点同意/拒绝/一直同意。回调为 None（CLI 无 WS / 工作流 plugin 节点）→ 放行。
+    """run_python / run_shell 的执行审批（用户提案 2026-09-28，opt-in）：Popen 前阻塞等用户在 WebUI
+    点同意/拒绝/一直同意。回调为 None（CLI 无 WS / 工作流 plugin 节点 / 未开 _approval_enabled）→
+    放行（无人值守不能卡流程——与 file_outside 的 fail-closed 语义相反，见 _ask_outside_approval）。
     审批发生在 Popen 之前——工具超时/进度计时天然不包含审批等待段。"""
     if _approval_cb is None:
         return True
@@ -95,20 +118,29 @@ def get_bg_owner():
 
 
 def _resolve(path: str) -> Path:
-    """把路径解析到 workspace 内；越界则走审批（用户同意则放行本 session，拒绝则抛 PermissionError）。"""
+    """把路径解析到 workspace 内；越界需审批（默认需审批，2026-11 用户提案）：同意 → 放行并登记
+    _approved_paths（快照簿记免二次弹卡）；拒绝/无人可问（CLI、无 UI 子 Agent、工作流节点）→
+    PermissionError——不再默认静默放行。"""
     base = WORKSPACE.resolve()
     target = (base / path).resolve()
     try:
         target.relative_to(base)  # 不在 base 下会抛 ValueError
     except ValueError:
-        if _ask_approval("file_outside", f"文件工具访问 workspace 外路径: {path}"):
+        if _ask_outside_approval(f"文件工具访问 workspace 外路径: {path}"):
             try:
                 _tls.outside = str(path)   # 标记越界放行（agent._exec_tool 读取并入工具结果）
             except Exception:
                 pass
+            _approved_paths.add(str(target))
             return target
-        raise PermissionError(f"用户拒绝访问 workspace 外的路径: {path}")
+        raise PermissionError(f"越界未获审批，拒绝访问 workspace 外的路径（需在 UI 上同意放行）: {path}")
     return target
+
+
+def _resolve_quiet(path: str) -> Path:
+    """纯路径解析（不做沙箱强制、不触发审批）：快照采集等内部簿记用。是否放行由调用方结合
+    _approved_paths 自行裁定——拒绝过的越界路径不得借簿记侧信道读入。"""
+    return (WORKSPACE.resolve() / path).resolve()
 
 
 # ===== 文件版本（乐观锁）=====
@@ -2161,14 +2193,10 @@ def _myers_backtrack(trace, A, B, D):
 
 
 def _resolve_read(path: str) -> Path:
-    """只读场景的路径解析：先按 workspace 沙箱解析；越界（绝对路径或 ../ 逃逸）时放行为
-    直接路径——diff_files 等纯只读工具用（对比 workspace 外的备份/参照文件）。
-    写操作仍走 _resolve 严格沙箱（读写不对称：读放行、写拦截）。"""
-    try:
-        return _resolve(path)
-    except PermissionError:
-        p = Path(path)
-        return p if p.is_absolute() else (WORKSPACE / path).resolve()
+    """只读场景的路径解析：与写侧同走 _resolve 审批门——「读放行」已退役（2026-11 用户提案
+    「越界放行默认改需审批」）：diff_files 等只读工具访问 workspace 外路径同样需审批，
+    拒绝/无人可问 → PermissionError（Tool.run 兜底转错误文本，不炸轮）。"""
+    return _resolve(path)
 
 
 def _render_unified_diff(A, B, ops, label1, label2, context, a_offset=0, b_offset=0):
@@ -2234,7 +2262,7 @@ def _parse_range(rng, total, label):
 def diff_files(file1: str, file2: str, context: int = 2,
                range_a: list = None, range_b: list = None) -> str:
     """Myers Diff 对比两个文件，返回 unified diff 风格的差异（@@ hunk 头 + -/+ 行）。
-    file1/file2: 路径（相对 workspace 或绝对路径；只读放行——可对比 workspace 外的备份/参照文件）。
+    file1/file2: 路径（相对 workspace 或绝对路径；越界需审批——workspace 外文件须用户同意才可对比）。
     context: 每个 hunk 前后的上下文行数（默认 2）。
     range_a/range_b: 分段对比——各自文件的行范围 [起, 止]（1-based 含两端；如 [100, 200]）。
       两个文件行号错位时各传各的（file1 取 100-200 行 vs file2 取 120-220 行也行）；

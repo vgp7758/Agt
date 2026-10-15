@@ -52,6 +52,11 @@ _FILE_SNAP_TOOLS = frozenset({"edit", "insert", "delete", "move", "write_file", 
 _FILE_SNAP_MAX = 3         # 每步最多快照几个不同文件（防膨胀；同文件后面覆盖前面）
 _SERVICE_EXIT_LOG_LINES = 50   # 后台服务退出时，tool 结果里附带的尾部日志行数
 
+# 审批等待路由表（越界审批默认化配套，2026-11）：aid -> (Agent实例, entry)。WS 的 approval_response
+# 只打到主 Agent 实例上，子 Agent（如 agent_notify 空闲唤起时借到主 Agent on_event）弹的审批卡
+# 原本永远等不到解除、只能 600s 超时——按 id 查此表路由到真正等待的 Agent。
+_APPROVAL_ROUTES: dict = {}
+
 # 工具结果里的 data-URL 图片段（MCP ImageContent 经 mcp_client._extract_text 转来 / 普通工具返回）：
 # _materialize_tool_result 把它落盘到 repo images/ 并替换成 <img>name</img> 标签（base64 不进存档）。
 _DATA_URL_RE = re.compile(r"data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)", re.I)
@@ -596,7 +601,6 @@ class Agent:
         # 走通用路由会把整次调用发到对端再弹回来——套娃），非路由标记
         rid = ""                                            # 路由标记（兼容层：普通工具带 remote_instance_id 仍路由——
         # 历史投影/模型旧习惯不炸；正常远端调用统一走 remote_call_tool，2026-10-12 用户裁定）
-        _explicit_local = False                             # 显式选 self/_main_（已有路由意识）——不再教育提示
         if isinstance(arguments, dict):
             if name.startswith(_REMOTE_ADMIN):
                 # 旧名规范化（历史投影兼容）：管理族的 server_id → remote_instance_id（工具新签名）
@@ -609,7 +613,6 @@ class Agent:
                     rid = str(arguments.pop("server_id") or "").strip()   # 旧名兼容（历史投影习惯）
                 if rid.lower() in ("self", "local", "_main_", "main"):
                     rid = ""                       # 显式本机（"_main_" 为旧粘性时代的切回关键字，兼容保留同义）
-                    _explicit_local = True
         # @file: 文件引用展开（用户提案 2026-10-11）：在远程路由【之前】——引用的是本地
         # 上下文的文件（模型 read_file/write_file 操作过的），展开成完整文本再发/再执行。
         _fr = _expand_file_refs(name, arguments)
@@ -653,19 +656,6 @@ class Agent:
                       f"若本意是操作远端实例的文件，请改用 remote_call_tool——请确认目标实例。")
         except Exception:
             pass
-        # 组网教育提示：本地执行时每轮【首次】在结果尾附一行提示（有实际组网才提示；单机
-        # 零噪声；一轮只提示一次不刷屏——_rid_hint_fp 轮指纹）。
-        try:
-            from remote_tools import REMOTE_SERVERS as _RS
-            _fp = id(self.session._current)
-            if _RS and not _explicit_local \
-                    and isinstance(r, str) and getattr(self, "_rid_hint_fp", None) != _fp:
-                self._rid_hint_fp = _fp
-                _ids = "、".join(sorted(_RS))
-                r += (f"\n\n[提示] 本次在本机执行。已组网实例：{_ids}——要操作它们那边的"
-                      f"文件/命令/工具，用 remote_call_tool（参数：remote_instance_id/name/arguments）。")
-        except Exception:
-            pass
         return r
 
     # —— 工具审批（2026-09-28 用户提案）：workspace 外路径 / run_shell / run_python
@@ -674,7 +664,8 @@ class Agent:
     def _tool_approval(self, tool_key: str, detail: str) -> bool:
         """工具执行审批（阻塞等待用户响应）。tool_key: 粒度键（file_outside / run_python /
         run_shell——"一直同意"按此粒度记忆 session 级免问）。detail: 操作描述（路径/命令/代码预览）。
-        600s 无响应自动拒绝（防 Agent 永久卡死）。无 WS 连接时 real_tools 侧已短路放行。"""
+        600s 无响应自动拒绝（防 Agent 永久卡死）。file_outside 默认需审批（回调注入点在工具执行
+        装配处）；run_python / run_shell 仍 opt-in（_approval_enabled，50052 教训）。"""
         _always = getattr(self, "_approval_always", None)
         if _always and tool_key in _always:
             return True
@@ -685,13 +676,20 @@ class Agent:
             self._approval_events = {}
         entry = {"event": ev, "result": None, "tool": tool_key}
         self._approval_events[aid] = entry
-        # 持久化 pending（2026-09-29 用户实锤：刷新 WebUI 后审批卡片消失但 Agent 仍阻塞——
-        # 实时事件刷新即丢，历史恢复不渲染审批。存 extra_state → current_history 恢复后 re-emit）
-        self.session.extra_state["_pending_approval"] = {"id": aid, "tool": tool_key, "detail": detail}
-        self._emit({"type": "approval_request", "id": aid, "tool": tool_key, "detail": detail})
-        granted = ev.wait(timeout=600)
-        self._approval_events.pop(aid, None)
-        self.session.extra_state.pop("_pending_approval", None)
+        _APPROVAL_ROUTES[aid] = (self, entry)   # id 路由：WS 应答只达主 Agent，子 Agent 卡片靠此表解除
+        try:
+            # 持久化 pending（2026-09-29 用户实锤：刷新 WebUI 后审批卡片消失但 Agent 仍阻塞——
+            # 实时事件刷新即丢，历史恢复不渲染审批。存 extra_state → current_history 恢复后 re-emit）
+            self.session.extra_state["_pending_approval"] = {"id": aid, "tool": tool_key, "detail": detail}
+            self._emit({"type": "approval_request", "id": aid, "tool": tool_key, "detail": detail})
+            granted = ev.wait(timeout=600)
+        finally:
+            self._approval_events.pop(aid, None)
+            _APPROVAL_ROUTES.pop(aid, None)
+            try:
+                self.session.extra_state.pop("_pending_approval", None)
+            except Exception:
+                pass
         _res = entry["result"] or ("timeout" if not granted else "deny")
         self._emit({"type": "approval_resolved", "id": aid, "result": _res})
         if _res == "always":
@@ -702,8 +700,12 @@ class Agent:
         return _res == "allow"
 
     def resolve_tool_approval(self, aid: str, response: str):
-        """WS action approval_response 入口：解除阻塞中的审批等待。response: allow/deny/always。"""
+        """WS action approval_response 入口：解除阻塞中的审批等待。response: allow/deny/always。
+        本实例等不到该 id 时查全局路由表（子 Agent 弹的卡片由主 Agent 的 WS 应答解除）。"""
         entry = (getattr(self, "_approval_events", None) or {}).get(aid)
+        if not entry:
+            pair = _APPROVAL_ROUTES.get(aid)
+            entry = pair[1] if pair else None
         if entry:
             entry["result"] = response
             entry["event"].set()
@@ -2076,7 +2078,8 @@ class Agent:
         """扫本步所有 tool_calls，收集涉及的文件路径（最多 3 个；同路径后面覆盖前面）。
         对每个文件读当前快照（>4000 行首尾截断），返回 {call_id: {path,version,text}}。
         run_python/run_script 的处理：run_python 有 file= 时捕获该路径（但 code= 内打开文件是黑盒，漏过可接受）"""
-        from real_tools import _resolve, _file_version, WORKSPACE, _number_lines, _md_snapshot, _note_view
+        from real_tools import (_resolve_quiet, _approved_paths, _file_version,
+                                WORKSPACE, _number_lines, _md_snapshot, _note_view)
         seen = {}      # resolved_key -> call_id
         order = []     # ordered resolved_key list (most recent first)
         for tc in reversed(step.tool_calls):
@@ -2087,9 +2090,16 @@ class Agent:
             if not path:
                 continue
             try:
-                target = _resolve(path)
+                target = _resolve_quiet(path)   # 纯解析：簿记不弹审批卡（_resolve 会因越界阻塞问询）
             except Exception:
                 continue
+            # 越界文件仅审批放行过的才拍（2026-11 越界默认需审批配套）：被拒/无人可问的路径
+            # 若照拍快照，等于借簿记侧信道读到了用户拒绝的内容。
+            try:
+                target.relative_to(WORKSPACE.resolve())
+            except ValueError:
+                if str(target) not in _approved_paths:
+                    continue
             if not target.is_file():
                 continue   # 目录 / 不存在 → 不拍
             key = str(target.resolve())
@@ -2589,10 +2599,15 @@ class Agent:
                         # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
                         import real_tools as _rt
                         _rt._tool_emit = self.on_event if self.on_event else (self._print_only_emit if self.verbose else None)
-                        # 工具审批回调（2026-09-28 用户提案）：默认【关闭】（opt-in）——子 Agent/无人值守场景
-                        # 每次 run_python 都问会卡死流程。设 agent._approval_enabled = True 显式开启。
+                        # 工具审批回调（2026-09-28 用户提案）：run_python/run_shell 保持 opt-in——
+                        # 子 Agent/无人值守场景每次 run_python 都问会卡死流程（50052 教训）。
+                        # 设 agent._approval_enabled = True 显式开启。
                         _rt._approval_cb = (self._tool_approval if self.on_event
                                             and getattr(self, "_approval_enabled", False) else None)
+                        # 越界审批回调（2026-11 用户提案「越界放行默认改需审批」）：有 UI（on_event）
+                        # 即默认注入——workspace 外路径的文件操作默认弹卡，无人可问（CLI / on_event=None
+                        # 的子 Agent / 工作流节点）由 real_tools 侧 fail-closed 直接拒绝。
+                        _rt._outside_approval_cb = (self._tool_approval if self.on_event else None)
                         has_tool_hooks = bool(self._active_hooks & {"before_tool", "after_tool"})
                         cur_user_msg = self.session._current.user_message if self.session._current else ""
                         if has_tool_hooks:

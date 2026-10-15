@@ -954,8 +954,6 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 
 #### 后记三：越界文件快照不炸轮——relative_to ValueError 双层容错（2026-09-29，v0.30.10，50052 实锤）
 
-#### 后记三：越界文件快照不炸轮——relative_to ValueError 双层容错（2026-09-29，v0.30.10，50052 实锤）
-
 50052 实锤：write_file 写 workspace 外文件（漏传 remote_instance_id，审批放行）→ 步骤收尾 `_collect_file_snapshots` 对越界文件 `relative_to(WORKSPACE)` 抛 ValueError → 异常逃出 → **整轮中断**。工具本体与审批层都接住了，炸的是快照采集层——它对「审批放行的越界文件」零防御。
 
 双层修复（agent.py）：
@@ -963,6 +961,8 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 - **外层**：两处调用点整体 try → 失败则 `file_snapshots={}` + warn 事件（「recent-file 快照失败（已跳过）」）——快照失败**绝不炸轮**
 
 同轮配套：越界放行提示并入工具结果（见[工具执行审批](../features/tool-approval.md)），模型当步可见漏传；路由侧见[粘性路由](multi-instance.md)。
+
+> **后记（2026-10-16，越界改需审批后回看）**：本例「审批放行」是旧口径（opt-in / 静默放行）下的行为；越界访问 2026-10-16 起**默认 fail-closed 需审批**（file_outside 独立通道，见 [工具执行审批 · 越界放行默认改需审批](../features/tool-approval.md)），且 `_collect_file_snapshots` 改 `_resolve_quiet` + **只拍 `_approved_paths` 内的越界文件**——「拒绝的文件经快照侧信道进投影」已不可能，relative_to 双层容错退居纯兜底。
 
 ## 折叠摘要 tail 优先级（recap → answer 代码摘要 → 中断标注，2026-08）
 

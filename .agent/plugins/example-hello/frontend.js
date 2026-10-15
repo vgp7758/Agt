@@ -12,7 +12,8 @@
       '</div>';
   });
 
-  // ② 侧滑面板：点开时调插件路由 POST /api/example-hello/ping 显示统计
+  // ② 侧滑面板（唯一 dock 入口——用户裁定 2026-10-15：演示插件留一个图标即可）：
+  //    点开时调插件路由 POST /api/example-hello/ping 显示统计
   const panel = AgtPlugin.ui.addPanel({
     icon: '🔌', title: 'example-hello 面板', background: '#0f766e',
     render: async (el) => {
@@ -33,16 +34,11 @@
     },
   });
 
-  // ③ dock 按钮：toast + 打开面板
-  AgtPlugin.ui.addButton({
-    icon: '👋', label: '插件打招呼', background: '#0f766e',
-    onClick: () => { AgtPlugin.util.toast('👋 来自插件 example-hello 的问候！'); panel.toggle(); },
-  });
-
-  // ④ 事件订阅（不渲染，仅观察）：answer 事件到达时 console 记录
+  // ③ 事件订阅（不渲染，仅观察）：answer 事件到达时 console 记录
+  // （dock 入口只留 ② 面板一个——用户裁定 2026-10-15：演示插件留一个图标即可）
   AgtPlugin.ws.on('answer', (m) => {
     console.info('[example-hello] 观察到一条 answer，长度', (m.text || '').length);
   });
 
-  console.info('[example-hello] 前端已装配（卡片1/面板1/按钮1/订阅1）');
+  console.info('[example-hello] 前端已装配（卡片1/面板1/订阅1）');
 })();

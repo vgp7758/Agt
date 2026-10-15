@@ -87,7 +87,8 @@ def _seed_dirs(pkg_root: Path, workspace: Path = None) -> list[tuple[str, Path, 
     out = []
     wf = (pkg_root / "workflows", workspace / ".agent" / "workflows")
     ag = (pkg_root / "agents", workspace / ".agent" / "agents")
-    for kind, (src, dst) in (("workflow", wf), ("agent", ag)):
+    pl = (pkg_root / "assets" / "plugins", workspace / ".agent" / "plugins")
+    for kind, (src, dst) in (("workflow", wf), ("agent", ag), ("plugin", pl)):
         if src.is_dir():
             out.append((kind, src, dst))
     return out
@@ -105,9 +106,11 @@ def diff_seed_assets(workspace: Path = None, pkg_root: Path = None) -> tuple[lis
     items: list[dict] = []
 
     for kind, src_dir, dst_dir in _seed_dirs(pkg_root, workspace):
-        # 播种面 = 随包全部文件（yml/md/xml；排除 __pycache__ 与 meta）
+        # 播种面 = 随包全部文件（排除 __pycache__ 与 meta）；插件类额外收 .py/.js
+        # （backend.py/frontend.js 是插件本体——2026-10-15 插件播种纳管）
+        _exts = (".yml", ".py", ".js") if kind == "plugin" else (".xml", ".yml", ".md", ".json")
         seeds = sorted(p for p in src_dir.rglob("*")
-                       if p.is_file() and p.suffix in (".xml", ".yml", ".md", ".json")
+                       if p.is_file() and p.suffix in _exts
                        and "__pycache__" not in p.parts and not p.name.endswith(".meta"))
         for sp in seeds:
             rel = sp.relative_to(src_dir).as_posix()

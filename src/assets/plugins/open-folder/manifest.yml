@@ -1,0 +1,6 @@
+name: open-folder
+version: 1.0.0
+description: 打开 workspace 文件夹（原内置 dock 功能插件化——插件路由 + 前端按钮全链路示例）
+backend: backend.py
+frontend: frontend.js
+exposed_to_llm: false

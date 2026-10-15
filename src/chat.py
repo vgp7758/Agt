@@ -97,6 +97,13 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     seed_default_agents(workspace)
     # 播种示例技能（.agent/skills/test-svc/——技能七件套最小范例，已存在则跳过）
     seed_default_skills(workspace)
+    # 播种示例插件（.agent/plugins/——open-folder/feedback/example-hello，2026-10-15 用户提案：
+    # 实用功能作为插件 SDK 真实示例随包分发；已装同名插件不覆盖）
+    try:
+        from plugins import seed_default_plugins
+        seed_default_plugins(workspace)
+    except Exception:
+        pass
     # 约定目录 README（tools/builtin、workflows、agents、skills、nodes…）：
     # 框架「这目录放什么/怎么扩展」一页文档播种到位——agent 一看目录就知道能放什么、怎么写
     from agent_config import seed_dir_docs

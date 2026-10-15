@@ -1,0 +1,6 @@
+name: feedback
+version: 1.0.0
+description: 用户反馈（原内置 dock 功能插件化——面板表单 + 插件路由全链路示例；落盘 + 可选飞书推送）
+backend: backend.py
+frontend: frontend.js
+exposed_to_llm: false

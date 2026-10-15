@@ -100,7 +100,6 @@ def set_enabled(workspace: Path, name: str, enabled: bool) -> str:
 
 
 def discover(workspace: Path) -> list[PluginManifest]:
-    """扫描两级插件目录 → manifest 列表（repo 级覆盖全局级同名；坏 manifest 跳过并 warn）。"""
     found: dict[str, PluginManifest] = {}
     global_dir = Path.home() / ".agt" / "plugins"
     repo_dir = Path(workspace) / ".agent" / "plugins"
@@ -463,6 +462,44 @@ def plugin_asset(workspace: Path, name: str, rel: str) -> Path | None:
 def reload_plugins(agent, workspace=None) -> str:
     """/reload plugins 入口：全卸重装。返回人话摘要。"""
     return load_plugins(agent, workspace)
+
+
+def seed_default_plugins(workspace: Path) -> int:
+    """随包示例插件播种（用户提案 2026-10-15：open-folder / feedback / example-hello 作为
+    插件 SDK 实用示例随包分发）：src/assets/plugins/<名>/ → .agent/plugins/<名>/。
+    以 manifest.yml 判定存在——已装则整插件跳过（用户改动永不覆盖）。返回播种数。
+    播种时写 seed_state 基线（key plugin/<名>/<rel>——/update-assets 三方 hash 纳管）。"""
+    try:
+        bundled = Path(__file__).resolve().parent / "assets" / "plugins"
+        if not bundled.is_dir():
+            return 0
+        from asset_sync import _sha, _load_state, _save_state
+        st = _load_state(workspace)
+        n = 0
+        for src in sorted(bundled.iterdir()):
+            if not src.is_dir() or not (src / "manifest.yml").is_file():
+                continue
+            dst = Path(workspace) / ".agent" / "plugins" / src.name
+            if (dst / "manifest.yml").exists():
+                continue                      # 已装同名插件：不覆盖
+            dst.mkdir(parents=True, exist_ok=True)
+            try:
+                for f in sorted(src.rglob("*")):
+                    if not f.is_file() or "__pycache__" in f.parts:
+                        continue
+                    rel = f.relative_to(src)
+                    tf = dst / rel
+                    tf.parent.mkdir(parents=True, exist_ok=True)
+                    tf.write_bytes(f.read_bytes())
+                    st[f"plugin/{src.name}/{rel.as_posix()}"] = _sha(f)
+                n += 1
+            except Exception:
+                pass
+        if n:
+            _save_state(workspace, st)
+        return n
+    except Exception:
+        return 0
 
 
 def stats() -> dict:

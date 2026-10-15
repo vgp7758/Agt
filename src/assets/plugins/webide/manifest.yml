@@ -1,0 +1,6 @@
+name: webide
+version: 1.0.0
+description: 打开 WebIDE（VS Code serve-web 新页签直开工作区；原内置 dock 功能插件化——含端口潜规则/组件缓存钉版/滚动预热全链路）
+backend: backend.py
+frontend: frontend.js
+exposed_to_llm: false

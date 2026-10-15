@@ -448,11 +448,9 @@
       <button class="fabItem" id="btnRag" style="background:#b45309" onclick="window.open('/rag','_blank')" aria-label="RAG 文档库管理（新页签）" data-label="RAG 文档库">📚</button>
       <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" aria-label="长期记忆管理（新页签）" data-label="长期记忆">🧠</button>
       <button class="fabItem" id="btnAgents" style="background:#0d9488" onclick="window.open('/agents','_blank')" aria-label="Agent 声明管理（主 Agent + 子 Agent，新页签）" data-label="Agent 声明">🤖</button>
-      <button class="fabItem" id="btnIde" style="background:#fff" onclick="openWebIde()" aria-label="用 WebIDE (VS Code·serve-web) 新页签打开工作区" data-label="WebIDE (VS Code)"><img src="/icons/vscode.png" alt="VS Code" style="width:26px;height:26px;object-fit:contain"></button>
-      <button class="fabItem" id="btnOpenDir" style="background:#ca8a04" onclick="openWorkspaceDir()" aria-label="用系统文件管理器打开 workspace 文件夹（在跑 agt 的那台机器上弹出）" data-label="打开文件夹">📁</button>
-      <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" aria-label="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）" data-label="调用统计">📊</button>
-      <button class="fabItem" id="btnFeedback" style="background:#16a34a" aria-label="反馈" data-label="反馈">💬</button>
-      <button class="fabItem" id="btnSettings" style="background:#52525b" aria-label="设置" data-label="设置">⚙</button>
+       <!-- WebIDE 按钮已插件化（2026-10-15）：由随包播种插件 webide 提供（VS Code 图标经 /plugins-assets/webide/vscode.png） -->
+       <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" aria-label="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）" data-label="调用统计">📊</button>
+       <button class="fabItem" id="btnSettings" style="background:#52525b" aria-label="设置" data-label="设置">⚙</button>
       <button class="fabItem" id="btnClear" style="background:#b91c1c" aria-label="清空消息区" data-label="清空">🚮</button>
       </div>
     </div>
@@ -609,27 +607,7 @@
   </div>
 </div>
 
-<div id="feedbackModal" class="modal-overlay">
-  <div class="modal" style="max-width:460px;width:92%">
-    <h3>💬 提交反馈</h3>
-    <label>类型
-      <select id="fbKind" style="padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px"></select>
-    </label>
-    <textarea id="fbContent" rows="4" placeholder="说说你遇到的问题、建议或感受…"
-      style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;outline:none"></textarea>
-    <label>联系方式（可选，方便作者回你）
-      <input id="fbContact" type="text" placeholder="微信/邮箱"
-        style="width:160px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
-    </label>
-    <label style="justify-content:flex-start;gap:6px"><input id="fbEnv" type="checkbox" checked> 附上环境信息（便于定位问题）</label>
-    <div id="fbEnvPreview" style="font-size:11px;color:#8a9099;padding:0 2px"></div>
-    <div id="fbContactLine" style="font-size:12px;color:#5b6470;padding:2px;white-space:pre-wrap;display:none"></div>
-    <div class="modal-btns">
-      <button class="btn" id="fbCancel">取消</button>
-      <button class="btn primary" id="fbSubmit">提交反馈</button>
-    </div>
-  </div>
-</div>
+ 
 
 <script src="/i18n/engine.js"></script>
 <script>
@@ -2009,28 +1987,12 @@ function fillSettingsForm(v){
   document.getElementById('cfg_show_log_panel').checked = showLogPanel;   // 纯前端状态：回填报表当前开关（localStorage）
 }
 document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
-// —— 反馈 ——
-const feedbackModal = document.getElementById('feedbackModal');
-document.getElementById('btnFeedback').onclick=()=>{
-  feedbackModal.style.display='flex';
-  ws.send(JSON.stringify({action:'feedback_meta'}));
-  document.getElementById('fbContent').value='';
-  document.getElementById('fbContact').value='';
-  setTimeout(()=>document.getElementById('fbContent').focus(), 50);
-};
-document.getElementById('fbCancel').onclick=()=>{ feedbackModal.style.display='none'; };
+document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='none'; };
+// —— 反馈已插件化（2026-10-15 用户提案）：dock 💬 按钮与提交表单由随包播种插件 feedback 提供
+// （.agent/plugins/feedback/：addPanel 表单 + POST /api/feedback/*）。——
 
 // —— 统计已迁移到独立页面 /stats（btnStats 用 inline onclick 打开新标签）——
-document.getElementById('fbSubmit').onclick=()=>{
-  const content=document.getElementById('fbContent').value.trim();
-  if(!content){ toast('⚠️ 请先写点内容'); return; }
-  ws.send(JSON.stringify({
-    action:'feedback', kind:document.getElementById('fbKind').value, content,
-    contact:document.getElementById('fbContact').value.trim(),
-    include_env:document.getElementById('fbEnv').checked,
-  }));
-  feedbackModal.style.display='none';
-};
+ 
 let _modelData={};
 // 两个模型下拉框（reasoning_completer / retrieval_model）想要选中的值；
 // 用对象存是因为 config 回填与模型列表加载是并行的——谁先到都要能正确选中
@@ -2289,48 +2251,9 @@ function toggleFabDock(force){
   const open = (typeof force === 'boolean') ? force : !d.classList.contains('open');
   d.classList.toggle('open', open);
 }
-// 用 WebIDE（VS Code serve-web）新页签打开工作区（用户提案 2026-09-06）
-async function openWebIde(){
-  const b = document.getElementById('btnIde');
-  if(!b) return;
-  b.disabled = true; b.classList.add('loading');   // 图标已是 <img>，loading 用 opacity 而非覆盖 textContent
-  // 端口潜规则前端同款（fetch 超时/失败时的退回口——正常路径用后端返回的实际口，可能因端口被占偏移 +1..+5）
-  const curPort = parseInt(location.port || '8000', 10);
-  const fallbackUrl = `http://${location.hostname}:${curPort + 30000}/`;
-  // 12s 超时（后端等待上限同为 12s——此前 150s 长轮询把按钮卡成沙漏两分半，用户实锤）
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 12000);
-  try{
-    const r = await fetch('/api/ide/open', {method:'POST', signal: ctl.signal});
-    const d = await r.json();
-    clearTimeout(timer);
-    if(d.ok){
-      const url = `http://${location.hostname}:${d.port}/`;
-      window.open(url, '_blank');
-      toast(d.ready ? '📝 已打开 WebIDE（新页签）。界面文字/图标若显示异常：Ctrl+Shift+P → Configure Display Language → English（一次即好）'
-                    : '⏳ ' + (d.hint || 'VS Code Server 组件初始化中，页签会自动刷新'));
-    } else {
-      toast('❌ ' + (d.error || '无法启动 WebIDE'));
-    }
-  }catch(e){
-    clearTimeout(timer);
-    // 超时/网络异常：退回潜规则口乐观打开（后端可能仍在拉起）
-    window.open(fallbackUrl, '_blank');
-    toast('⏳ WebIDE 正在后台启动（超时乐观打开）——若页签空白请稍后刷新');
-  }
-  b.classList.remove('loading'); b.disabled = false;
-}
-// 用系统文件管理器打开 workspace 文件夹（用户提案 2026-09-18：web 交互时经常想看看
-// 工作区文件）。后端就是本机 → 在跑 agt 的那台机器上弹 Explorer/Finder；
-// 从手机访问时弹的也是【电脑】上的文件夹（正是常用场景）。
-async function openWorkspaceDir(){
-  try{
-    const r = await fetch('/api/open-workspace', {method:'POST'});
-    const d = await r.json();
-    if(d.ok) toast('📁 已打开工作区文件夹（在跑 agt 的那台机器上）');
-    else toast('❌ ' + (d.error || '打开失败'));
-  }catch(e){ toast('❌ 打开失败：' + e.message); }
-}
+// —— WebIDE 已插件化（2026-10-15 用户提案）：dock 图标与拉起逻辑由随包播种插件 webide 提供
+// （.agent/plugins/webide/：VS Code 图标 + 12s 超时乐观退回 + 端口潜规则/组件预热全链路）——
+
 function addModel(){
   const name=prompt('模型名（如 glm, qwen, deepseek）：');if(!name)return;
   _modelData.models=_modelData.models||{};
@@ -3658,23 +3581,7 @@ function onWSMessage(ev){
         setSessionTitle(m.name);
       }
       break;
-    case 'feedback_meta':
-      if(m.kinds){
-        const sel=document.getElementById('fbKind'); sel.innerHTML='';
-        m.kinds.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o); });
-      }
-      if(m.env){
-        document.getElementById('fbEnvPreview').textContent =
-          '将附上：' + Object.entries(m.env).map(([k,v])=>k+'='+v).join(' · ');
-      }
-      if(m.contact){
-        const cl=document.getElementById('fbContactLine');
-        cl.textContent='直接联系作者：'+m.contact; cl.style.display='block';
-      }
-      break;
-    case 'feedback_result':
-      toast(m.text || (m.ok ? '✅ 已提交' : '❌ 提交失败'));
-      break;
+     // —— 反馈面板已插件化（2026-10-15）：feedback_meta/feedback_result 事件由插件前端处理 ——
     case 'plan':
       renderPlan(m.plan, m.plan_id, m.plan_title);
       break;
@@ -4165,7 +4072,7 @@ window.AgtPlugin = (function(){
         btn.innerHTML = (spec.icon || '🔌') + (spec.badge ? `<span class="badge" style="position:absolute;top:-4px;right:-4px">${_esc(spec.badge)}</span>` : '');
         btn.setAttribute('aria-label', spec.label || spec.title || '插件按钮');
         if(spec.label || spec.title) btn.setAttribute('data-label', spec.label || spec.title);
-        btn.onclick = function(){ try{ (spec.onClick || function(){})(); }catch(e){ console.error('[AgtPlugin] button', e); } };
+        btn.onclick = function(e){ try{ (spec.onClick || function(){}).call(this, e); }catch(e2){ console.error('[AgtPlugin] button', e2); } };
         col.appendChild(btn);
         return btn;
       },

@@ -1577,178 +1577,10 @@ async def api_dash():
     return out
 
 
-@app.post("/api/open-workspace")
-async def api_open_workspace():
-    """用系统文件管理器打开 workspace 文件夹（用户提案 2026-09-18：web 交互时经常想看看
-    工作区文件）。服务端即本机 → 在跑 agt 的那台机器上弹 Explorer/Finder；从手机访问时弹的
-    也是电脑上的文件夹（常用场景）。逐平台兜底：win=os.startfile / mac=open / linux=xdg-open。"""
-    import os as _os, sys as _sys, subprocess as _sp
-    try:
-        p = str(Path(_workspace).resolve())
-        if _sys.platform.startswith("win"):
-            _os.startfile(p)                       # Windows Explorer
-        elif _sys.platform == "darwin":
-            _sp.Popen(["open", p])
-        else:
-            _sp.Popen(["xdg-open", p])
-        return {"ok": True, "path": p}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-@app.post("/api/ide/open")
-async def api_ide_open(request: Request):
-    """拉起/复用 WebIDE（VS Code serve-web，用户提案 2026-09-06）：dock 图标 → 新页签打开工作区。
-    端口潜规则：当前 WebUI 端口 + 30000；被占（WinNAT 隐形保留 / serve-web 孤儿进程——code-tunnel
-    启动器被杀后 node 子进程继承 socket，bind 10048 且 netstat owner 指向已退 pid，实锤
-    2026-09-06：39000 被 pid 21512「幽灵 LISTENING」占住）时向后扫 +1..+5 选可 bind 口。
-    等待上限 12s（首次下载组件不阻塞交互——返回 ready=false + hint，组件缓存后秒起；
-    此前 150s 长轮询导致按钮卡⌛两分半、页签迟迟不弹——用户实锤）。"""
-    import urllib.request as _ur
-    import socket as _sk
-    try:
-        _host = request.headers.get("host") or ""
-        base_port = int(_host.rsplit(":", 1)[1]) + 30000 if ":" in _host else 38000
-    except Exception:
-        base_port = 38000
-
-    # alive=端口在（能建立 HTTP 连接，无论 202 下载页还是 200 工作台）；ready=组件就绪（工作台>500 字符）
-    def _alive(port):
-        try:
-            with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
-                r.read()
-                return True
-        except Exception:
-            return False
-
-    def _ready(port):
-        try:
-            with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
-                return len(r.read() or b"") > 500   # 下载占位页仅 146 字符
-        except Exception:
-            return False
-
-    def _bindable(port):
-        s = _sk.socket()
-        try:
-            s.bind(("0.0.0.0", port))
-            return True
-        except OSError:
-            return False
-        finally:
-            s.close()
-
-    # ① 潜规则口「端口还在」→ 直接复用打开页签（用户提案 2026-09-06：不纠结组件是否就绪，
-    #    下载中(202)/工作台(200)都算“服务在”，页签自己等下载自动刷新；避免重复起新实例）
-    if _alive(base_port):
-        return _ide_payload(_ready(base_port), base_port)
-    # ② 端口没服务（连接拒绝/幽灵占位）→ 选口：潜规则口可 bind 用它；被占向后扫 +1..+5
-    PORT = next((p for p in [base_port + i for i in range(6)] if _bindable(p)), None)
-    if PORT is None:
-        return {"ok": False, "error": f"端口 {base_port}..{base_port + 5} 均被占用且无可复用服务"
-                f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
-    # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
-    # "远程代理"会话，标签页名变成 l10n 字面量如「不受支持的断点的图标。」，用户实锤）
-    # --commit-id 钉缓存版本（用户提案 2026-09-17·v1）+ 滚动预热（同日·v2：用旧版秒起的
-    # 同时后台预热最新版，下次打开自然切到新版，旧版清理——浏览器双通道更新同款）。
-    # 重下根因：serve-web 默认拉【最新 stable commit】，VS Code 几天一更新就重下 689MB 全套。
-    _cid = ""
-    _cached_now: set = set()
-    try:
-        import pathlib as _pl
-        _sd = _pl.Path.home() / ".vscode" / "cli" / "serve-web"
-        _cands = [d for d in _sd.iterdir() if d.is_dir() and (d / "node.exe").exists()]
-        if _cands:
-            _cached_now = {d.name for d in _cands}
-            _cid = max(_cands, key=lambda d: d.stat().st_mtime).name
-    except Exception:
-        pass
-    cmd = (f'code serve-web --host 0.0.0.0 --port {PORT} --without-connection-token '
-           f'--accept-server-license-terms --default-folder "{_workspace}"'
-           + (f' --commit-id {_cid}' if _cid else ''))
-    if _cid:   # 有缓存（秒起）→ 后台滚动预热新版（用户提案 v2：打开不受影响，下次切新版）
-        asyncio.get_event_loop().create_task(_webide_prefetch(_cached_now))
-    if _agent is not None:
-        try:
-            r = _agent.services.start("webide", cmd)
-            if "已存在" in str(r):   # 同名条目但探测不活（上次失败已退/端口已变）——重建
-                try:
-                    _agent.services.stop("webide")
-                    _agent.services.start("webide", cmd)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    else:
-        import subprocess as _sp
-        _sp.Popen(cmd, shell=True,
-                  creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-    t0 = time.time()
-    while time.time() - t0 < 12:   # 12s 上限：非首次秒起；首次下载交给页签自动刷新，不阻塞按钮
-        if _ready(PORT):
-            return _ide_payload(True, PORT)
-        await asyncio.sleep(2)
-    return _ide_payload(False, PORT)
-
-
-async def _webide_prefetch(cached_hashes: set):
-    """WebIDE 组件滚动预热（用户提案 2026-09-17·v2：浏览器双通道更新同款）：
-    用缓存旧版秒起的同时，后台起一个默认行为的 serve-web（拉最新 stable 并下到缓存目录），
-    轮询缓存出现新 hash 目录（node.exe 就绪）→ kill 预热进程（组件已留在缓存）→ 清理
-    超出最近 2 个的旧版。下次打开自然选到新版（mtime 最新）→ 又预热下一轮 → 滚动循环。"""
-    import subprocess as _sp, shutil as _sh
-    import pathlib as _pl
-    import socket as _sk2
-    try:
-        sd = _pl.Path.home() / ".vscode" / "cli" / "serve-web"
-        pport = None
-        for p in range(39990, 39997):   # 预热端口：高位可 bind 的（不撞工作台潜规则口）
-            s = _sk2.socket()
-            try:
-                s.bind(("127.0.0.1", p)); pport = p; break
-            except OSError:
-                pass
-            finally:
-                s.close()
-        if pport is None:
-            return
-        pre = _sp.Popen('code serve-web --host 127.0.0.1 --port %d --without-connection-token '
-                        '--accept-server-license-terms' % pport, shell=True,
-                        creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-        t0 = time.time()
-        while time.time() - t0 < 600:   # 10 分钟上限（689MB 慢网可容；到点放弃下次再试）
-            await asyncio.sleep(15)
-            try:
-                done = any(d.is_dir() and (d / "node.exe").exists() and d.name not in cached_hashes
-                           for d in sd.iterdir())
-            except Exception:
-                done = False
-            if done:
-                break
-        try:
-            pre.kill()
-        except Exception:
-            pass
-        try:   # 清理：保留最近 2 个（当前在用 + 新预热），更旧的删（10 天堆 3 版 2GB 的治本）
-            dirs = sorted([d for d in sd.iterdir() if d.is_dir() and (d / "node.exe").exists()],
-                          key=lambda d: d.stat().st_mtime, reverse=True)
-            for d in dirs[2:]:
-                _sh.rmtree(d, ignore_errors=True)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-
-def _ide_payload(ready: bool, port: int) -> dict:
-    """WebIDE 打开参数：前端拼 http://{location.hostname}:{port}/ 新页签打开（工作区由
-    serve-web 的 --default-folder 直开，URL 无需参数）。host 用前端 location.hostname——
-    手机/其它设备访问时 127.0.0.1 不可达，serve-web 监听 0.0.0.0 局域网可进。
-    hint：中文语言包的 web 资源经 vscode-unpkg.net 代理 403 时 UI 会泄漏 l10n 字面量
-    （标签名/图标描述串）——切显示语言为 English 一次即治（Ctrl+Shift+P → Configure
-    Display Language → English，serve-web 自己的 profile 记住，不影响桌面版）。"""
-    out = {"ok": True, "port": port, "ready": ready}
-    if not ready:
-        out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
-    return out
+# —— 打开文件夹已插件化（2026-10-15 用户提案）：POST /api/open-workspace 退役，
+#    由随包播种插件 open-folder 提供（POST /api/open-folder/open，逻辑同款）——
+# —— WebIDE 已插件化（2026-10-15 用户提案）：POST /api/ide/open 与 _webide_prefetch/_ide_payload 退役，
+#    由随包播种插件 webide 提供（POST /api/webide/open，逻辑同款搬迁；图标走 /plugins-assets/webide/vscode.png）——
 
 
 @app.get("/wf/monitor")
@@ -3206,22 +3038,9 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     if isinstance(_d, dict) and _d.get("action") == "rag_build":
         await _start_rag_build(ws)
         return
-    if isinstance(_d, dict) and _d.get("action") == "feedback_meta":
-        from feedback import VALID_KINDS, author_contact_str, _gather_env
-        await _send(ws, {"type": "feedback_meta",
-                         "kinds": VALID_KINDS,
-                         "contact": author_contact_str(),
-                         "env": _gather_env(None, agent=agent)})
-        return
-    if isinstance(_d, dict) and _d.get("action") == "feedback":
-        from feedback import submit_feedback
-        kind = (_d.get("kind") or "建议").strip()
-        content = (_d.get("content") or "").strip()
-        contact = (_d.get("contact") or "").strip()
-        env_info = None if _d.get("include_env", True) else {}
-        msg = submit_feedback(kind, content, contact, env_info=env_info, agent=agent)
-        await _send(ws, {"type": "feedback_result", "ok": msg.startswith("✅"), "text": msg})
-        return
+    # —— 反馈已插件化（2026-10-15 用户提案）：feedback_meta/feedback 两个 WS action 退役，
+#    由随包播种插件 feedback 提供（POST /api/feedback/meta + /api/feedback/submit，
+#    逻辑同源 import feedback.py）——
 
     # 文本消息
     text, images = _parse_client_msg(raw)

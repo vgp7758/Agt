@@ -100,7 +100,15 @@
   .thumb img { width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
   .thumb .rm { position:absolute; top:-6px; right:-6px; background:#ef4444; color:#fff; width:18px; height:18px;
                border-radius:50%; font-size:12px; line-height:18px; text-align:center; cursor:pointer; }
-  #inputBar { display:flex; gap:10px; padding:10px 12px; background:#fff; border-top:1px solid var(--line); }
+   #inputBar { display:flex; gap:10px; padding:10px 12px; background:#fff; border-top:1px solid var(--line); }
+   /* 插件输入区按钮行（addButton position:'input'，用户提案 2026-10-15）——输入框上方横排小按钮 */
+   #pluginInputBar { display:flex; gap:6px; padding:6px 12px 0; background:#fff; border-top:1px solid var(--line);
+                     flex-wrap:wrap; align-items:center; }
+   .pluginInputBtn { display:inline-flex; align-items:center; gap:5px; padding:4px 12px; font-size:12.5px;
+                     border:1px solid var(--line); border-radius:16px; background:#fafbfc; color:#1f2329;
+                     cursor:pointer; transition:all .15s ease; }
+   .pluginInputBtn:hover { border-color:#94a3b8; background:#f1f5f9; }
+   .pluginInputBtn:disabled { opacity:.5; cursor:wait; }
   #inp { flex:1; resize:none; height:46px; max-height:140px; padding:9px 12px; border:1px solid var(--line); border-radius:10px;
          font-size:14px; font-family:inherit; outline:none; }
   #inp:focus { border-color:var(--me); }
@@ -394,12 +402,12 @@
       不再覆盖聊天区。竖屏（抽屉全屏覆盖模式）不挤。 */
     body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
     body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
-    body.drawer-push #inputBar {
+    body.drawer-push #pluginInputBar, body.drawer-push #inputBar {
       margin-right: 40%; transition: margin-right .25s ease; }
     @media (orientation: portrait) {
       body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
        body.drawer-push #msgArea, body.drawer-push #attBar, body.drawer-push #controls,
-       body.drawer-push #inputBar { margin-right: 0; }
+       body.drawer-push #pluginInputBar, body.drawer-push #inputBar { margin-right: 0; }
      }
     /* 工具选择浮窗（工具表单模式——用户提案 2026-09-01：下拉框→按钮+工具箱，参照编辑器 nodePicker） */
     #toolPicker{width:460px;max-width:90vw;max-height:min(800px,85vh);overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;box-shadow:0 4px 24px #0003}
@@ -511,8 +519,11 @@
       <div id="toolPicker" style="position:static;display:block"></div>
     </div>
   </div>
-  <div id="toolCallModal" style="display:none;position:fixed;inset:0;z-index:221;background:rgba(0,0,0,.35)" onclick="if(event.target===this)closeToolCallForm()"></div>
-  <div id="inputBar">
+   <div id="toolCallModal" style="display:none;position:fixed;inset:0;z-index:221;background:rgba(0,0,0,.35)" onclick="if(event.target===this)closeToolCallForm()"></div>
+   <!-- 插件输入区按钮行（用户提案 2026-10-15：addButton position:'input' 挂这——输入框上方工具条；
+        无插件按钮时隐藏，有则显示。与右侧 dock（position:'fab' 缺省）同一 API 两位置） -->
+   <div id="pluginInputBar" style="display:none"></div>
+   <div id="inputBar">
     <textarea id="inp" placeholder="输入消息（Enter 发送 / Shift+Enter 换行）；可粘贴或上传图片"></textarea>
     <button id="sendBtn">发送</button>
   </div>
@@ -4060,8 +4071,22 @@ window.AgtPlugin = (function(){
     ws: { on(type, fn){ ( _wsSubs[type] = _wsSubs[type] || []).push(fn); } },
     // —— UI 席位 ——
     ui: {
-      // dock 按钮（右侧工具坞，随 fabDock 展开显示）：{icon, label, onClick, background, badge}
+      // dock 按钮（右侧工具坞，随 fabDock 展开显示）：{icon, label, onClick, background, badge, position}
       addButton(spec){
+        // position:'input'（用户提案 2026-10-15）→ 挂输入框上方工具条（icon+文字横排小按钮，
+        // 更贴消息流/更醒目）；缺省 'fab' → 右侧 dock 图标。同一 API 两位置。
+        if(spec.position === 'input'){
+          const bar = document.getElementById('pluginInputBar');
+          if(!bar) return null;
+          const btn = document.createElement('button');
+          btn.className = 'pluginInputBtn';
+          btn.innerHTML = (spec.icon || '🔌') + ' <span>' + _esc(spec.label || spec.title || '插件') + '</span>';
+          btn.setAttribute('aria-label', spec.label || spec.title || '插件按钮');
+          btn.onclick = function(e){ try{ (spec.onClick || function(){}).call(this, e); }catch(e2){ console.error('[AgtPlugin] inputBtn', e2); } };
+          bar.appendChild(btn);
+          bar.style.display = 'flex';
+          return btn;
+        }
         const menu = document.getElementById('fabDockMenu');
         if(!menu) return null;
         let col = menu.querySelectorAll('.fabCol')[1] || menu.querySelector('.fabCol');

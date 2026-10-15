@@ -53,8 +53,10 @@ class CommandRegistry:
             print(f"❌ 未知命令 /{name}，输入 /help 查看可用命令")
             return True
         # /call 参数含 JSON（双引号/括号），shlex 会破坏引号 → 传原始字符串；
-        # /cmd 同理（shell 命令的引号/管道/重定向须原样保真；且 shlex.join 的 POSIX 单引号
-        # 在 Windows cmd.exe 是字面字符——2026-10-15 实测 echo 'x' 原样带引号输出）
+        # "cmd"（插件 cmd 提供，register_command 示例）同理：shell 命令的引号/管道/
+        # 重定向须原样保真（且 shlex 的 POSIX 单引号在 Windows cmd.exe 是字面字符——
+        # 2026-10-15 实测 echo 'x' 原样带引号输出）。特例按命令名匹配——插件命令同名
+        # 同样命中；插件禁用后 dispatch 找不到命令自然报"未知命令"，特例无害
         if name == "call" or name == "cmd":
             rest = line[1:].split(None, 1)
             args = rest[1] if len(rest) > 1 else ""
@@ -813,45 +815,6 @@ def _cmd_stats(ctx: CommandContext, args):
         records = ctx.agent.session.llm_calls.all_records()
         title = f"LLM 调用统计（当前 session：{ctx.agent.session.name or '(未命名)'}）"
     print(format_stats(records, title))
-
-def _cmd_cmd(ctx: CommandContext, args):
-    """/cmd <shell 命令>——在 workspace 里直接执行（用户提案 2026-10-15）。
-    免开终端/文件夹：pip install -e . / git status / dir 等短命令直接在消息框敲。
-
-    安全边界：/cmd 只经 ("user",…) 队列形态触达（CLI/WebUI 输入框手敲）；
-    callback/调度/子Agent 注入一律走 ("background",…) → 只会成为消息文本给 Agent，
-    不会被分发为命令——外部注入无法借道执行 shell（与 /api/tool_call 同信任级：
-    仅限能连到本实例输入通道的人）。
-
-    行为：cwd=workspace；复用 real_tools._run_subprocess_streaming（流式输出/编码
-    自适应/超时转后台不杀进程+完成自动通知）。跳过 run_shell 的审批门：用户在输入框
-    亲手敲的命令即显式授权，无需二次确认。"""
-    from real_tools import _run_subprocess_streaming, WORKSPACE
-    if isinstance(args, str):
-        line = args.strip()   # dispatch 对 /cmd 传原始行（引号/管道/重定向原样保真，见 dispatch 注释）
-    else:
-        # list 兜底（不经 dispatch 直接调本函数时）：Windows cmd 只认双引号——
-        # shlex.join 的 POSIX 单引号在 cmd.exe 是字面字符（echo 'x' 原样带引号输出，2026-10-15 实测）
-        import os as _os, subprocess as _sp
-        argv = [str(x) for x in (args or [])]
-        line = (_sp.list2cmdline(argv) if _os.name == "nt" else shlex.join(argv)).strip()
-    if not line:
-        print("用法：/cmd <shell 命令>——在 workspace 直接执行：")
-        print('  /cmd pip install -e .          # 本地装为 editable')
-        print("  /cmd git status -sb            # 看仓库状态")
-        print('  /cmd dir /b dist\\*.whl        # 找文件')
-        print("  /cmd start .                   # 打开资源管理器（真想开窗口时）")
-        return
-    print(f"💻 $ {line}    (cwd={WORKSPACE})")
-    try:
-        out = _run_subprocess_streaming(line, "cmd", shell=True)
-    except Exception as e:
-        print(f"❌ 执行失败：{type(e).__name__}: {e}")
-        return
-    # 长输出截断（前 6000 + 后 2000，中间省略标注——防屏爆）
-    if len(out) > 9000:
-        out = out[:6000] + f"\n…（中间省略 {len(out) - 8000} 字符）…\n" + out[-2000:]
-    print(out)
 
 
 def _cmd_reload_mcp(ctx: CommandContext, args):
@@ -2313,13 +2276,6 @@ def build_default_registry() -> CommandRegistry:
         "/model           列出所有可用模型（← 标记当前）\n"
         "/model glm       切换到 glm\n"
         "/model deepseek  切换到 deepseek")
-    reg.register("cmd", _cmd_cmd,
-        "<shell 命令>  在 workspace 直接执行（免开终端：pip install -e . / git status / dir …）",
-        "/cmd pip install -e .\n"
-        "/cmd git status -sb\n"
-        "/cmd dir /b *.whl\n"
-        "  cwd=workspace；超过工具超时（默认 10s）自动转后台不中断，完成时推送通知；\n"
-        "  只能从输入框手敲触发（callback/后台注入不会当命令执行）")
     reg.register("reload_mcp", _cmd_reload_mcp,
         "<name>  重连指定 MCP server（代码修改后生效）",
         "/reload_mcp python-lsp     （mcpServers 键名；repo .mcp.json 与全局 ~/.agt/mcp.json 都查）")

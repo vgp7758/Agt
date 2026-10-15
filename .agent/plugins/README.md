@@ -1,6 +1,6 @@
 # .agent/plugins/ —— 引擎级插件（P1 SDK）
 
-给 WebUI/引擎加自定义能力的**最高层扩展点**：一个文件夹 = 一个插件，可含后端（HTTP 路由/工具/命令/钩子）+ 前端（dock 按钮/侧滑面板/聊天卡片）+ 静态资产（图标等）。随包已播种三个实用示例：`open-folder`（打开文件夹）、`feedback`（用户反馈）、`webide`（VS Code 工作台）+ 演示件 `example-hello`。
+给 WebUI/引擎加自定义能力的**最高层扩展点**：一个文件夹 = 一个插件，可含后端（HTTP 路由/工具/命令/钩子）+ 前端（dock 按钮/侧滑面板/聊天卡片）+ 静态资产（图标等）。随包已播种四个实用示例：`open-folder`（打开文件夹）、`feedback`（用户反馈）、`webide`（VS Code 工作台）、`cmd`（`/cmd <shell 命令>` 消息框直接执行——register_command 用法示例）+ 演示件 `example-hello`。
 
 ## 目录结构（最小三件）
 

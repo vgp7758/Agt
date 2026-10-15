@@ -1,0 +1,4 @@
+name: cmd
+version: 0.1.0
+description: /cmd <shell 命令> 消息框直接执行（register_command 插件化示例：WS+CLI 两入口）
+backend: backend.py

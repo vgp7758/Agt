@@ -64,8 +64,6 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 
 ### 后记三：pv-producer——目录形态全量实战实例（2026-10-07，用户提案，commits 2fd9ce7 + c64c910）
 
-### 后记三：pv-producer——目录形态全量实战实例（2026-10-07，用户提案，commits 2fd9ce7 + c64c910）
-
 制片 Agent 落地为首个「yml + 人设 md + tools/ 专属工具」三件齐全的实战实例：
 
 - `tools/svg_tools.py` 四专属工具只挂进本 agent schema（svg_to_png 双后端 / pngs_to_video / concat_videos / mix_audio），引擎零改动
@@ -196,13 +194,13 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 用户提案（2026-10-15）：「添加一个施工 sub-agent——一进入施工状态自动 `agent_prompt` 把施工牌发送给 worker 开一个 session 进行施工」（细节见 [施工委托](../features/construction-delegation.md)）。这是**引擎主动派活**的第一个常规用例：此前子 Agent 一律由 LLM 工具调用（`agent_prompt`）或工作流节点（`create_agent`，已退役）触发。
 
-- **声明**：`src/agents/worker/`（随包播种源，bundled 第 9 个）→ `.agent/agents/worker/`，目录形态 `worker.yml` + `worker.md` 人设；`tools: ''` 继承工具箱、`model: glm-official-flash`、`max_steps: 150`、assembly = `file(人设) + user_message + steps`（**无 history**——worker 只认施工牌 + 当前轮）、`turn_end: recap_gen(async)`、fallback 两级。人设 = 按牌施工 / 不重复调研 / 小步可回滚 / 不转包 / 验证通过后再提交 + **四段式汇报**（完成情况 · 改动清单 · 验证结果 · 遗留风险）
-- **引擎程序化派发通道**：`_resolve_tools`（src/multiagent.py）尾部 `agent._prompt_subagent = agent_prompt`——把 prompt 实现挂到 agent 实例上，引擎不经 LLM 工具调用即可起子 Agent。派发参数 `agent_prompt("worker", 施工牌, agent_id="worker-<plan_id>", reuse="yes", caller=主 Agent, current_turn_only=True)`——**显式 agent_id** 让一个计划绑定一条 worker 线（可定向续派），`caller` 让汇报按既有 inbox 链回到主 Agent
+- **声明**：`src/agents/worker/`（随包播种源，bundled 第 9 个）→ `.agent/agents/worker/`，目录形态 `worker.yml` + `worker.md` 人设；`tools: ''` 继承工具箱、`model: glm-official-flash`、`max_steps: 150`、assembly = `file(人设) + func:plan_content() + history + user_message + steps + func:plan_steps()`（图纸走装配逐轮注入 + 自带 history 支撑断点续跑——同日二/三连调整，见 [施工委托 · 后记](../features/construction-delegation.md)）、hooks `turn_end: recap_gen(async)` + `after_tool: py_auto_diag`、fallback 两级。人设 = 按牌施工 / 不重复调研 / 小步可回滚 / 不转包 / 验证通过后再提交 + **四段式汇报**（完成情况 · 改动清单 · 验证结果 · 遗留风险）
+- **引擎程序化派发通道**：`_resolve_tools`（src/multiagent.py）尾部 `agent._prompt_subagent = agent_prompt`——把 prompt 实现挂到 agent 实例上，引擎不经 LLM 工具调用即可起子 Agent。派发参数 `agent_prompt("worker", 派发指令, agent_id="worker-<plan_id>", reuse="yes", caller=主 Agent, current_turn_only=True)`——**显式 agent_id** 让一个计划绑定一条 worker 线（可定向续派），`caller` 让汇报按既有 inbox 链回到主 Agent
 - **发起侧**：`Agent._maybe_dispatch_construction()`（两个调用点：每步工具执行后 = `create_plan` 当步即派；每轮 `run()` 开头 = 续跑/重启后补派），幂等标记 `session.extra_state["_plan_dispatch"]` 随存档往返；plan 全完成 / 无 plan / `exit_plan` → 标记清空（新计划重新委托）。派发后投 `_hook_notes` 旁注 + 系统事件，主 Agent 当轮就知道"别自己动手"
 - **手动续派同一施工线**（失败不自动重派，防死循环）：`agent_prompt(name="worker", agent_id="worker-<plan_id>", prompt="从第 N 步继续…")`——这是「具名 agent_id + reuse」在施工场景的常规用法
-- **记账仍在主 Agent**：worker 无 `update_plan`（防子 Agent 与主 Agent 并发写 plan 状态），汇报须带「完成到第几步」
+- **记账下放 worker（2026-10-15 · 二翻转，commit 7ca0aa5，dashboard 施工线实锤推翻原设计）**：`update_plan` 从排除集移出——worker 直接标共享 plan 文件进度（主/子双方面板同步），不再「worker 无 update_plan、主 Agent 据汇报代记」；`create_plan` 仍排除（worker 只推进度不建计划）。图纸断链三层修复与 byte-stable 缓存治理详见 [施工委托 · 后记](../features/construction-delegation.md)
 - 主 Agent 侧：委托后 [退出施工视图](context-engine.md#后记施工委托让位委托后主-agent-退出施工视图2026-10-15用户提案commit-3dc3f7b)（`session._construction_mode()` 让位）+ [计划注入块](../features/construction-delegation.md)加「施工：已委托 …」行
-- **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常
+- **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常；**实战**：dashboard 施工线（plan p_c0542ede）worker 三断点续跑 + update_plan 标满 10/10，全链路实证
 
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
@@ -614,6 +612,35 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 **验证（8/8，test/test_subagent_registry_slot.py）**：主 Agent 注册 `_main_`（agent=自身，role=main）/ 子 Agent 注册 `vision_x`（agent=自身，role=subagent）/ 【核心】子 Agent 构造后 `_main_` 槽仍指向主 Agent（未被抢注）/ 重复 `_main_` 构造不覆盖原主 Agent（防覆盖仍生效）/ 无 agent_id 时兜底 name，不落 `_main_`。
 
 **排障速查补丁**：上节「注意事项」第 2 步（answer 推错门）加一问——**谁注册成了 `_main_`**（幽灵条目场景与 533d64c 的活体覆盖场景表象同、根因分支不同）。vision_10~15 到处长的同源症状（wiki-updater_2/3 也是亲戚）一并治愈。`/restart` 后生效。
+
+### 再发（2026-10-15 · worker-p_d721b263）：registry 条目缺失静默丢通知——`_route_answer` 闭包兜底
+
+### 再发（2026-10-15 · worker-p_d721b263）：registry 条目缺失静默丢通知——`_route_answer` 闭包兜底
+
+**第三种丢通知分支**：与前两次同表象（子 Agent 完成主 Agent 不醒）、又是一种新根因——不是条目被覆盖（2026-09-02），也不是被抢注（2026-09-07），而是 **registry 里干脆没有 `_main_` 活条目**，`_route_answer` 的 lookup 落入「条目缺失」分支后**静默蒸发**（无日志、无动作、无兜底）。
+
+**证据链（首个框架施工线回执丢失事故，详见 [施工委托 · 后记二](../features/construction-delegation.md)）**：
+
+| 证据 | 结论 |
+|---|---|
+| worker meta.json：`status=done` + `caller_id=_main_` | `_bg` 线程跑完且路由代码**必然执行过**（路由在写 done 之前） |
+| 主 Agent inbox=0、inbox.jsonl 不存在 | `push_message` **从未成功** |
+| `/api/dash`：registry 无 `_main_` 活条目 | `reg.lookup("_main_")` 落入条目缺失分支 |
+| 原代码该分支行为 | **静默蒸发**：answer 产出了但 caller 永远收不到，无任何痕迹 |
+
+**修复（src/multiagent.py `_route_answer`，闭包兜底三层防御）**：
+
+1. registry 命中且条目 agent 有效 → 走原路（不变）
+2. 条目缺失 / 条目 `agent=None`，且 **caller=派发者自身**（施工委托 `caller=self.agent_id` 的形态）→ **闭包里的 agent 实例直推**——派发时闭包持有的实例引用才是真源，registry 只是加速索引；caller 就是派发者自己时闭包手里就有它，不需要问 registry
+3. 跨 Agent 显式 caller 查不到 → 只告警**不硬推**（推错比丢更糟，推错会污染无辜 Agent 的 inbox）
+
+三条路径全部补日志——**不再有任何无声分支**。commit 本地已落（push 时网络中断，hash 待推）。
+
+**悬案待深挖**：registry 为何丢了 `_main_`？疑似 `/restart` 后主 Agent 的注册/恢复路径在某分支漏注册——「谁注册成了 `_main_`」（2026-09-07 补丁的问题）要再往前追一步「**`_main_` 为何压根没注册上**」。兜底修复已把丢失面堵死，根因另开一轮。
+
+**排障速查再补一问**（接上节第 2/3 步）：`lookup(caller_id)` 返回空/条目 `agent=None` 时旧版会无声跳过——修复后该分支有日志且自身派发场景走闭包直推；若再现「answer 出了但收不到」，除查推错门、查 None 外，还要查 **registry 条目是否干脆缺失**（`/api/dash` 或 `/api/status` 对照全量 agent_id）。
+
+**排查手法教训（同轮）**：跟进后台 worker 的进度**不要用 agent_ask**——它是纯模型调用（克隆对方历史直问 LLM，不真执行），worker 回复的「自查计划」只是嘴上说说不会落地；要看真实进度应读其 meta.json / 用 agent_notify 催 / 查 `/api/dash`。见 [agent_ask 不装配工具](#agent_ask-不装配工具克隆历史纯对话问答2026-10-08用户提案commit-16c1708)。
 
 ### 注意事项
 

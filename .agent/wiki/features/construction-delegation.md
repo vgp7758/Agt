@@ -108,19 +108,34 @@
 
 **连带对账（以本节为准）**：worker.yml 现行 assembly = `file(人设) + func:plan_content() + history + user_message + steps + func:plan_steps()`，hooks = `turn_end: recap_gen(async)` + `after_tool: py_auto_diag`——本文上文「无 history」「仅 recap_gen」为初版形态的历史描述；worker 自带 history 后断点续跑的记忆接续不再依赖施工牌重述。
 
-## 后记二：首例回执丢失——完工正落数据根 FS 抖动窗（2026-10-16，plan p_d721b263，未闭环）
+## 后记二：首例回执丢失——根因反转：`_route_answer` registry 静默丢通知，闭包兜底修复（2026-10-16，plan p_d721b263）
 
-**首个框架施工线交付 + 首例回执事故**：plan `p_d721b263`（[explore 重写](explore-tool.md)：嫁接改投影层内插 + run_id 旁车断点续跑）派 `worker-p_d721b263`，worker 独立 session 全 8 步完成、单测+真 LLM 冒烟全过、本地 commit `ba2ede1`——但 caller=`_main_` 的 answer **没进主 Agent inbox**，用户先发现（「你传的是 _main_ 啊，answer 没有 inbox 吗？」）。
+**首个框架施工线交付 + 首例回执事故（已闭环·根因反转）**：plan `p_d721b263`（[explore 重写](explore-tool.md)：嫁接改投影层内插 + run_id 旁车断点续跑）派 `worker-p_d721b263`，worker 独立 session 全 8 步完成、单测+真 LLM 冒烟全过、本地 commit `ba2ede1`——但 caller=`_main_` 的 answer **没进主 Agent inbox**，用户先发现（「你传的是 _main_ 啊，answer 没有 inbox 吗？」）。
 
-**排除项（路由机制无罪）**：派发时 caller 传参正确、[answer 按 caller 路由回主 Agent inbox 的链路](../architecture/multi-agent.md) 本轮零代码变更；worker answer 本身已产出（看板/其页面可见）。
+### 根因反转：FS 抖动是伪因——真凶是 `_route_answer` registry 静默丢通知
 
-**时间线高度吻合的根因假设**：worker 完工 11:06，正落 **11:04–11:08 FS 抖动窗**——`.agt` 数据根子目录 `repos\D--AI_Usings-Agt` 间歇性不可见：Python `exists()` 连续 False，**cmd 原生 `dir` 同报 File Not Found**（排除 Python 视角问题），随后全域 rglob 又找回；`specs/s_7edebd56.json` 完好（mtime 10:05）、回收站无 agt 痕迹、双盘 SMART Healthy、无 NTFS/disk 系统错误事件、非 junction、无 pytest/smoke 残留进程；当日同目录已闪 6 次（04:1x sessions/aa、04:2x plans、11:0x 连环）。
+上轮定性「完工正落 FS 抖动窗、回执链某环节撞异常被吞」**被推翻**——用户两句话点破：① 落盘/事件环节有异常也不该阻塞通知（两者本就解耦）；② 跟进 worker 用 agent_ask 是纯模型调用不真执行（此前靠 worker「三路自查」拿到的线索全部作废）。重新取证：
 
-**定性**：非委托/路由代码 bug——回执链（worker 完成 → push_message → 主 Agent inbox → 唤醒）中某落盘/事件环节撞上抖动抛异常被吞，通知静默丢失。直接代价：唤醒轮未发生 → `update_plan` 记账与向用户汇总均未自动进行（本次由用户指出后人工介入）。
+| 证据 | 结论 |
+|---|---|
+| worker meta.json：`status=done` + `caller_id=_main_` | `_bg` 线程跑完且路由代码**必然执行过**（`_route_answer` 在写 done 之前），通知与落盘解耦、异常独立捕获——丢的不是落盘 |
+| 主 Agent inbox=0、inbox.jsonl 不存在 | `push_message` **从未成功** |
+| `/api/dash`：registry **无 `_main_` 活条目** | `reg.lookup("_main_")` 落入条目缺失分支 |
+| 原代码该分支 | **静默蒸发**：无日志、无动作、无兜底——answer 出来了但 caller 永远收不到 |
 
-**损失盘点**：代码零损失（commit 在 git）；主 Agent 内存 session 完整，autosave 随轮末趁目录可见窗口重落盘。
+即：**registry 索引失效（查不到 `_main_`）→ 通知无声丢弃**。registry 为何丢了 `_main_`（疑似 `/restart` 后注册/恢复路径问题）——悬案待深挖，修复已堵死丢失面，详见 [多 Agent 体系 · 再发：registry 条目缺失静默丢通知](../architecture/multi-agent.md#再发2026-10-15--worker-p_d721b263registry-条目缺失静默丢通知_route_answer-闭包兜底)。
 
-**根因方向与待办**：文件系统层行为，主嫌疑**杀毒实时防护 / 索引服务**对目录的间歇独占；建议 `.agt` 数据根（`C:\Users\vgp77\.agt`）加杀毒白名单，长期可考虑数据根挪非系统盘。worker 侧自查（其冒烟数据写在临时独立 repos 条目）回复待回，闭环后在此补记。
+### 修复：`_route_answer` 闭包兜底三层防御（src/multiagent.py，本地 commit 待推）
+
+1. registry 命中 → 走原路；2. 条目缺失/`agent=None` 且 **caller=派发者自身**（施工委托 `caller=self.agent_id` 正是此形态）→ **闭包 agent 实例直推**——派发时闭包持有的引用才是真源，registry 只是加速索引；3. 跨 Agent 显式 caller 查不到 → 只告警不硬推（推错比丢更糟）。三条路径全补日志，不再有无声分支。**需 `/restart` 生效**。
+
+### FS 抖动的定性收尾（伴生现象，非本案根因）
+
+cmd（及部分 Python 调用）看不见 `.agt` 数据根子目录、**PowerShell/robocopy 可靠访问**——数据全程无损（已用 robocopy 拷出证据完成上述分析），疑似**杀毒实时防护/索引服务**对目录的间歇扫描独占。建议：`C:\Users\vgp77\.agt` 加杀毒白名单；后续再现可先换 PowerShell 探一遍再定性。
+
+### 损失盘点与待办
+
+代码零损失（`ba2ede1` 在 git）；主 Agent 内存 session 完整。直接代价是唤醒轮未发生 → `update_plan` 记账与向用户汇总未自动进行（本次由用户指出后人工介入）。**待办**：① worker 施工成果验收（explore 重写 `ba2ede1`，见 [explore-tool.md](explore-tool.md)）；② registry 丢 `_main_` 根因（另开一轮）；③ `/restart` 后新代码生效再跑一条施工线实测回执闭环。
 
 ## 注意事项
 

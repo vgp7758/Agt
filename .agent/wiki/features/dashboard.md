@@ -55,6 +55,16 @@ WATCHED_TOOLS = {remote_message, remote_ask, remote_call_tool, agent_notify, age
 
 旁听者无话可说时 recv 长时间无数据属**正常静默**；最初短超时把它当断开处理 → 反复重连，**事件采集占空比仅 1/3，漏采大量互动**。修复（现行）：`ws.settimeout(30)`——30s 静默 → `ws.ping()` 探活（对端死连接这里会抛 → 才真断线走重连），活着就 continue 继续听。
 
+### 后记：hub 旁听全连 cpolar 隧道——互动流 15h 零实时记录，_ws_url 按 kind 分流（2026-10-16，用户实测抓到，commit 7982445）
+
+同一张注册表、两条路径、URL 优先级不同——probe_instance 用 `entry.url` 优先（127.0.0.1 本地直连 → 状态灯全绿），hub 的 `_ws_url` 走 `_entry_url` **public_url 优先** → 八个线程全去连 cpolar 隧道（`wss://r21.cpolar.top/port-N/ws`），WS 握手失败 → 卡 10s 重连循环。`public_url` 优先本是给跨机 remote 实例设计的，但没按 kind 区分，本机实例也被送去隧道。
+
+修复（src/dashboard.py `_ws_url`，commit 7982445，probe 语义不动）：**按 kind 分流**——`kind=local` 直连 `entry.url`（与 probe 同款优先级）；只有 `kind=remote`（真跨机）才走 `public_url` 隧道。
+
+验证（重启 dashboard 后全链路实测）：实时派 `agent_prompt(translator)` → jsonl **秒增**且 ts 非零（此前 4 条全是 `ts=0.0` 的回填条目、mtime 停在 15h 前）；hub.records 11→12；启动 backfill 从各实例拉回互动史（含 20048 侧 `AVG-Main → AVG-Unity · remote_message` 交接通知——用户最初观察到「群聊空」所指的那类交互）。
+
+顺带收尾：dashboard 进程改由 `start_service` 托管（名 `dashboard`，端口 9100）——不再是多层 cmd 挂着，日志可在服务抽屉/watch_tail 看；WS 探针临时脚本已清理。
+
 ## API 端点（create_app）
 
 | 端点 | 说明 |

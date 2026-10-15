@@ -2390,6 +2390,14 @@ class Agent:
                         # 中途插话注入（任何模式）：忙时排队的用户消息挂到"本步将生成"的 pending 位，
                         # 渲染为 user 消息(带标签)跟在上一组 tool 结果后；该步一生成就锚到其 preceding_hint、
                         # 后续步它滚入历史中部、不再每步尾部复读
+                        if self.session._current is None:
+                            # 竞态防御（coder 子 Agent 实锤 2026-10-16：'NoneType' has no
+                            # '_pending_step_hint'）：轮锚在步边界丢失——session 在轮中被切换
+                            # （/branch /resume /reset）或恢复的实例无未完成轮。本轮无法继续投影，
+                            # 走 stop 同款收尾；用户消息不丢（已在 pending_messages/队列，新轮接管）。
+                            self._emit({"type": "warn",
+                                        "text": "⚠️ 会话锚点已变更（可能被切换/恢复）——本轮提前收尾"})
+                            return ""
                         if self.pending_messages:
                             inject = "；".join(self.pending_messages)
                             self.pending_messages.clear()
@@ -2595,7 +2603,8 @@ class Agent:
                         step = Step(reasoning=resp.reasoning)
                         # 锚定本步 pending 的中途插话 → 渲染在 assistant 前(随本步滚入历史)；清 pending 防 wrap_up 重复
                         step.preceding_hint = getattr(self.session._current, "_pending_step_hint", "") or ""
-                        self.session._current._pending_step_hint = None
+                        if self.session._current is not None:
+                            self.session._current._pending_step_hint = None
                         # 设置流式回调（run_python/run_shell 通过它推 tool_stream/tool_progress）
                         import real_tools as _rt
                         _rt._tool_emit = self.on_event if self.on_event else (self._print_only_emit if self.verbose else None)

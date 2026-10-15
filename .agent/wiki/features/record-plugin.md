@@ -47,6 +47,35 @@ SDK 当前未暴露 toast 工具件，前端自绘 toast 实现——顺带演�
 
 start → pause → resume → stop（2.5s / 0.09MB / **mp4** 容器）→ save（落盘 **92,042 字节**）→「🎥 录制已保存」聊天卡片 → flush。commit `6443993` 已推送。
 
+## 后记：save 被误判「未知子命令」——_HINT 文案表兼职当判据（2026-10-16，用户实锤）
+
+用户实锤：`/record save tmp/myRecord.mp4` 回报 `❌ 未知子命令 /record save`——用法提示里明明写着这条。
+
+根因是**判据误用文案表**的低级耦合：`_cmd_record` 判断子命令合法性用的是 `_HINT` 字典的成员资格——但 `_HINT` 只是**提示文案表**，只有 5 个键（start/pause/resume/stop/flush）；**save 的文案在下方 elif 分支单独处理**（它带路径参数所以单独打印），不在 `_HINT` 里。判定与文案两处不同步，`save` 就被漏判成未知子命令。
+
+修复：引入显式合法集，与文案表彻底解耦——
+
+```python
+_VALID_ACTIONS = {"start", "pause", "resume", "stop", "save", "flush", "status"}
+# 判据用显式合法集——_HINT 只是"提示文案表"，save 的文案在 elif 单独处理
+if action not in _VALID_ACTIONS:
+    print(f"❌ 未知子命令 /record {action}\n{_USAGE}")
+```
+
+顺带把 `action` 默认值、路径参数解析收敛到同一入口（无参 = status 查询）。
+
+单测六场景全绿：
+
+| 输入 | 行为 |
+|---|---|
+| `save tmp/myRecord.mp4`（list 形态） | 正常发令落盘 ✅ |
+| `"save tmp/x.mp4"`（字符串形态） | 同上 ✅ |
+| `save`（缺路径） | 报错提示带示例路径 |
+| `start` / 无参 | 正常发令 / 状态查询 |
+| `bogus` | 仍正确拦截「未知子命令」 |
+
+种源与现场两份同步改，`/reload plugins` 热重载即生效。修复 commit 随本地积压由 push-retry 后台任务顺带推送。
+
 ## 注意事项
 
 - **save 路由未防路径穿越**：实测 `path=tmp/../evil.webm` 成功写到 workspace 根（`{"ok":true,"abs":"D:\...\evil.webm"}`，测试产物已删）。与[静态资产路由](../architecture/plugin-sdk.md)的防 `../` 穿越**不是一回事**——落盘类路由本来就持有全 workspace 写权，但 HTTP 端点无鉴权直达，内网本机信任模型下暂未收窄；若日后暴露公网需补 resolve-in-workspace 校验

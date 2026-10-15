@@ -1,4 +1,4 @@
-# 右侧工具 dock（fabDock）· 非对话按钮收进可折叠图标列（双列布局）
+# 右侧工具 dock（fabDock）· 非对话按钮收进可折叠图标列（自动分列：列上限 10）
 
 > src/static/index.html。用户提案 2026-09-06「消息输入框上面的按钮越来越多——把和对话交互不直接相关的按钮都收到右侧那一竖排 icon 里；icon 也越来越多，折叠到一个 icon，点击时打开/折叠所有」。
 
@@ -21,62 +21,51 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 
 原先散排在控件栏/浮动位的管理按钮（设置/反馈/统计/团队/后台/编辑器/记忆/RAG/Agent 管理/清空/WebIDE）全部移出。
 
-## dock 结构：双列布局（L361 起）
+## dock 结构：按钮平铺 + 自动分列（_layoutFabCols，列上限 10）
 
 ```html
 <div id="fabDock">
   <button id="fabDockBtn" aria-label="工具面板（点击展开/收起全部）" data-label="工具面板" onclick="toggleFabDock()">🧰</button>
   <div id="fabDockMenu">
-    <!-- 第一列（贴右缘）：原右侧独立 fab 4 个——主按钮正下方 -->
-    <div class="fabCol">
-      <button id="specFab" aria-label="施工方案（点击展开）" data-label="施工方案">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
-      <button id="logFab" class="fabItem" aria-label="日志（回退/限流/错误，点击展开）" data-label="日志">🐞<span id="logFabBadge">0</span></button>
-      <button id="teamFab" class="fabItem" aria-label="Agent 团队看板（子 Agent + 远程实例，点击展开）" data-label="团队看板">👥</button>
-      <button id="svcFab" class="fabItem" aria-label="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" data-label="后台看板">🛠</button>
-    </div>
-    <!-- 第二列：原消息框上方控件栏收进的 9 个 -->
-    <div class="fabCol">
-      <button id="btnEditor" ... data-label="工作流编辑器">🧩</button>
-      ... 📚 🧠 🤖 <img src="/icons/vscode.png" alt="VS Code"> 📊 💬 ⚙ 🚮
-    </div>
+    <!-- 按钮平铺（原生顺序 = 看板 fab + 控件栏按钮 + 插件动态按钮）：_layoutFabCols() 开合时自动分列 -->
+    <button id="specFab" ...>📐</button> <button id="logFab" ...>🐞</button> ...（11 个原生平铺，插件动态追加）
   </div>
 </div>
 ```
 
-- `#fabDock`：`position:fixed; top:64px; right:16px; z-index:120`；`align-items:flex-end`——**主按钮贴右缘，展开两列时不横跳**（改自 align-items:center）；
-- `#fabDockBtn`：42px 圆（深灰 #1f2937），默认**折叠态唯一可见元素**；
-- `#fabDockMenu`：默认 `display:none`，`.open` 时 `display:flex; flex-direction:row`（**多列容器**）gap:8px；
-- `.fabCol`：每列内部 `flex-direction:column; gap:8px; align-items:center`（2026-09-07 双列化新增）；
-- 每个 `.fabItem`：42px 圆 + 各自背景色区分。
+- `#fabDock`：`position:fixed; top:64px; right:16px; z-index:120`；`align-items:flex-end`——**主按钮贴右缘，多列展开时不横跳**；
+- `#fabDockMenu`：默认 `display:none`；`.open` 显示为 flex，**`flex-direction:row-reverse`（2026-10-15 由 row 改）**——**DOM 首列渲染在最右 = 主按钮正下方**，溢出列依次往左；
+- `.fabCol`：列容器**由 `_layoutFabCols()` 自动构建，HTML 不再手写**。
+
+**自动分列机制（2026-10-15，用户提案「一列最多 10 个图标，超出往左侧增加一列」）**：`const FAB_COL_MAX = 10`；`_layoutFabCols()` 收集 menu 下全部按钮（平铺直属子节点 + 已在旧 `.fabCol` 里的 + 插件动态追加的）→ 清掉旧列重建 → 每 10 个一组包一个 `.fabCol` 追加回去，末列取余；**幂等可重入**。触发点 = dock 打开时 + 插件 `addButton` 之后（详见[后记四](#后记四自动分列列上限-10fab_col_max溢出往左加列2026-10-15用户提案commit-e7b6e92)）。
 
 **按钮属性换代（2026-09-06，用户提案 hover 标签）**：全部按钮 `title` 移除 → `aria-label`（无障碍完整语义）+ `data-label`（hover 文字标签渲染源）——hover 机制见下文「hover 文字标签」章节。
 
-**双列分组（2026-09-07，用户裁定「原本在消息框上面的那些图标一列，其余放在第二列」）**：
+**分列方式演进**：
 
-| 列 | 图标（id） | 来源 |
+| 时期 | 分法 |
+|---|---|
+| 2026-09-07 ~ 2026-10-15 | 手写双列：第一列（贴右缘）= 原右侧独立 fab 4（📐🐞👥🛠），第二列 = 原控件栏 9——起因是单列 13 个纵向超出小视口（~490px 内收） |
+| 2026-10-15 起（现行） | **平铺 + 自动分列**：16 个图标（11 原生 + 5 插件）自动两列 10+6；插件再增 → 自动往左开新列 |
+
+**当前清单**（功能与 id 不变，仅列位自动化；📁open-folder / 💬feedback / VS Code 三个内置已插件化退役见后记，🔴record / 📸screenshot 为后续插件播种新增）：
+
+| 图标 | id / 来源 | 功能 |
 |---|---|---|
-| 第一列（贴右缘，主按钮正下方） | 📐specFab / 🐞logFab / 👥teamFab / 🛠svcFab | 原右侧独立 fab（badge 红点原位保留） |
-| 第二列（左侧） | 🧩btnEditor / 📚btnRag / 🧠btnMemory / 🤖btnAgents / VS Code logo btnIde / 📊btnStats / 💬btnFeedback / ⚙btnSettings / 🚮btnClear | 原消息框上方控件栏收进 |
+| 📐 | `specFab` | 施工方案（展开 spec 抽屉；红点 badge 原位保留） |
+| 🐞 | `logFab` | 日志抽屉；**有日志才显示**，badge=未读 error 数 |
+| 👥 | `teamFab` | Agent 团队看板抽屉 |
+| 🛠 | `svcFab` | 后台看板抽屉（服务/定时/后台任务 + 实时日志） |
+| 🧩 | `btnEditor` | 工作流编辑器（新页签 /editor） |
+| 📚 | `btnRag` | RAG 文档库（新页签 /rag） |
+| 🧠 | `btnMemory` | 记忆管理（新页签 /memory） |
+| 🤖 | `btnAgents` | Agent 声明管理（新页签 /agents） |
+| 📊 | `btnStats` | 统计（新页签 /stats） |
+| ⚙ | `btnSettings` | 设置弹窗 |
+| 🚮 | `btnClear` | 清空消息区（危险红） |
+| 插件 ×5 | open-folder / feedback / webide / record / screenshot | 见各自页面 |
 
-**为什么双列**：单列 13 个 ≈ 13×50px 纵向排布超出小视口（用户反馈「图标还是有点超出范围」）；双列把高度砍半——展开总高约 490px，实测 818px 视口内 ✅ 不再超出。
-
-**13 个图标完整清单**（功能不变，仅布局分列）：
-
-| 图标 | id | 功能 | 动作 |
-|---|---|---|---|
-| 📐 | `specFab` | 施工方案 | 展开 spec 抽屉（**id/onclick/badge 原样保留**，原独立 floating fab 改 relative 进 dock） |
-| 🐞 | `logFab` | 日志 | 展开日志抽屉；**有日志才显示**，badge=未读 error 数 |
-| 👥 | `teamFab` | Agent 团队看板 | 展开团队抽屉（子 Agent + 远程实例） |
-| 🛠 | `svcFab` | 后台看板 | 展开后台抽屉（服务/定时/后台任务 + 实时日志） |
-| 🧩 | `btnEditor` | 工作流编辑器 | 新页签 /editor |
-| 📚 | `btnRag` | RAG 文档库 | 新页签 /rag |
-| 🧠 | `btnMemory` | 记忆管理 | 新页签 /memory |
-| 🤖 | `btnAgents` | Agent 声明管理 | 新页签 /agents |
-| VS Code logo | `btnIde` | WebIDE | `openWebIde()` 新页签开 VS Code serve-web（见 [webide](webide.md)）——**2026-09-06 由 📝 换为 `<img src="/icons/vscode.png">`** |
-| 📊 | `btnStats` | 统计 | 新页签 /stats |
-| 💬 | `btnFeedback` | 反馈 | 反馈弹窗 |
-| ⚙ | `btnSettings` | 设置 | 设置弹窗 |
-| 🚮 | `btnClear` | 清空消息区 | 危险红 |
+**隐藏按钮也占位**：`logFab` 隐藏态（display:none）仍占列位——展开收起时列序稳定不跳动（2026-10-15 明确语义）。
 
 ## hover 文字标签：data-label 左侧浮现（2026-09-06，用户提案）
 
@@ -111,7 +100,8 @@ function toggleFabDock(force){
 ```
 
 - 纯 class 切换，无显隐状态变量：`.open` → `#fabDockBtn` `transform:rotate(45°)`（主按钮旋转作 ✕ 收起暗示）+ `#fabDockMenu` 显示；
-- `force` 可选参数支持强制开/关（`toggleFabDock(true/false)`），为后续程序化联动留口。
+- `force` 可选参数支持强制开/关（`toggleFabDock(true/false)`），为后续程序化联动留口；
+- **2026-10-15 自动分列加挂**：打开时触发 `_layoutFabCols()` 重排（见上文「dock 结构」/后记四）——插件新增按钮在每次展开前按列上限归组完毕；关闭仍是纯 class 切换、零副作用。
 
 ## 关键设计：id 原样保留
 
@@ -193,6 +183,27 @@ function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }  // 薄�
 
 - playwright 真页面两轮：第一轮抓到「open 时忘藏 fab」漏项 → 修复 → 第二轮全绿（DrawerCtl 加载 / 7 个 .agtdrawer 在位=5 业务+2 插件 / 开合 / 互斥 / push 让位与解除 / fab 藏与恢复 / 插件面板联动）；node --check 内联 JS 通过
 - 纯前端改动（commit b380fd3），**浏览器刷新即生效**，无需 /restart
+
+## 后记四：自动分列——列上限 10（FAB_COL_MAX），溢出往左加列（2026-10-15，用户提案，commit e7b6e92）
+
+> 用户提案：「右侧抽屉里的按钮越来越多了，我觉得一列最多10个图标吧，超出的图标往左侧增加一列」
+
+**背景**：三内置插件化退役（后记）+ 插件陆续播种（record / screenshot）后，dock 图标达 **16 个 = 原生 11 + 插件 5**——2026-09-07 的手写双列装不下了，插件 `addButton`「硬找第二列追加」的做法也失去前提。
+
+**四处改动、一处统一**：
+
+| 层 | 改动 |
+|---|---|
+| HTML | `fabDockMenu` 按钮**平铺**（删手工 `.fabCol` 包装——「看板列 4 + 控件列 9」静态分法退役） |
+| CSS | `#fabDockMenu` `row` → **`row-reverse`**——DOM 首列渲染在最右 = 主按钮正下方，溢出列往左长 |
+| JS | 新增 `const FAB_COL_MAX = 10` + `_layoutFabCols()`：收集全部按钮（平铺 / 旧列内 / 插件动态）→ 清旧列重建，每 10 个一列，**幂等可重入** |
+| SDK | `AgtPlugin.ui.addButton` 不再硬找「第二列」——平铺 append 后触发 `_layoutFabCols()` 重排（插件按钮与原生同权参与分列） |
+
+- **触发时机**：dock 打开 + 插件 `addButton` 之后——增删按钮自动适应，无需刷新
+- **隐藏按钮也占列位**：logFab 隐藏态仍占位——列序稳定，展开收起不跳动
+- **列生长方向**：第一列贴右缘（主按钮正下方），第 N+1 列在 N 列左侧——契合「溢出往左加列」；16 图标实测两列 10+6
+- **验证（playwright 真页面）**：两列 10+6、`firstColIsRightmost=true`、开合正常、5 个插件按钮全部就位；node --check 内联 JS 通过
+- 纯前端（commit e7b6e92），**浏览器刷新即生效**，无需 /restart
 
 ## 相关页面
 

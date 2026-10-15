@@ -191,7 +191,7 @@
      justify-content:center; transition:transform .18s; }
    #fabDockBtn:hover { transform:scale(1.08); }
    #fabDock.open #fabDockBtn { transform:rotate(45deg); }   /* 展开态主按钮旋转 45°（✕ 收起暗示） */
-   #fabDockMenu { display:none; flex-direction:row; gap:8px; align-items:flex-start; }
+   #fabDockMenu { display:none; flex-direction:row-reverse; gap:8px; align-items:flex-start; }
    #fabDock.open #fabDockMenu { display:flex; }
    .fabCol { display:flex; flex-direction:column; gap:8px; align-items:center; }
    .fabItem { width:42px; height:42px; border-radius:50%; color:#fff; border:none; font-size:19px;
@@ -443,26 +443,22 @@
   <!-- 右侧工具 dock（用户提案 2026-09-06）：非对话交互按钮全部收进一列 fab，折叠态只显示 🧰 主按钮，点击展开/收起整列 -->
   <div id="fabDock">
     <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
-    <div id="fabDockMenu">
-      <!-- 第一列（贴右缘）：原右侧 fab（看板/抽屉 4 个）——主按钮正下方 -->
-      <div class="fabCol">
-      <button id="specFab" aria-label="施工方案（点击展开）" data-label="施工方案">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
-      <button id="logFab" class="fabItem" style="background:#4b5563;display:none" aria-label="日志（回退/限流/错误，点击展开）" data-label="日志" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
-      <button id="teamFab" class="fabItem" style="background:#0e7490" aria-label="Agent 团队看板（子 Agent + 远程实例，点击展开）" data-label="团队看板" onclick="toggleTeamPanel(true)">👥</button>
-      <button id="svcFab" class="fabItem" style="background:#7c3aed" aria-label="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" data-label="后台看板" onclick="toggleSvcPanel(true)">🛠</button>
-      </div>
-      <!-- 第二列（左侧）：原控件栏收进的按钮（9 个） -->
-      <div class="fabCol">
-      <button class="fabItem" id="btnEditor" style="background:#2563eb" onclick="window.open('/editor','_blank')" aria-label="可视化工作流编辑器（新页签）" data-label="工作流编辑器">🧩</button>
-      <button class="fabItem" id="btnRag" style="background:#b45309" onclick="window.open('/rag','_blank')" aria-label="RAG 文档库管理（新页签）" data-label="RAG 文档库">📚</button>
-      <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" aria-label="长期记忆管理（新页签）" data-label="长期记忆">🧠</button>
-      <button class="fabItem" id="btnAgents" style="background:#0d9488" onclick="window.open('/agents','_blank')" aria-label="Agent 声明管理（主 Agent + 子 Agent，新页签）" data-label="Agent 声明">🤖</button>
-       <!-- WebIDE 按钮已插件化（2026-10-15）：由随包播种插件 webide 提供（VS Code 图标经 /plugins-assets/webide/vscode.png） -->
-       <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" aria-label="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）" data-label="调用统计">📊</button>
-       <button class="fabItem" id="btnSettings" style="background:#52525b" aria-label="设置" data-label="设置">⚙</button>
-      <button class="fabItem" id="btnClear" style="background:#b91c1c" aria-label="清空消息区" data-label="清空">🚮</button>
-      </div>
-    </div>
+     <div id="fabDockMenu">
+       <!-- 按钮平铺（原顺序=看板 fab + 控件栏按钮 + 插件动态按钮）：_layoutFabCols() 开合时自动分列——
+            每列最多 10 个（FAB_COL_MAX），第一列贴右缘=主按钮正下方，溢出往左侧加列（用户提案 2026-10-15） -->
+       <button id="specFab" aria-label="施工方案（点击展开）" data-label="施工方案">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>
+       <button id="logFab" class="fabItem" style="background:#4b5563;display:none" aria-label="日志（回退/限流/错误，点击展开）" data-label="日志" onclick="toggleLogPanel(true)">🐞<span id="logFabBadge" style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#dc2626;color:#fff;font-size:10px;line-height:16px;text-align:center;padding:0 3px;display:none">0</span></button>
+       <button id="teamFab" class="fabItem" style="background:#0e7490" aria-label="Agent 团队看板（子 Agent + 远程实例，点击展开）" data-label="团队看板" onclick="toggleTeamPanel(true)">👥</button>
+       <button id="svcFab" class="fabItem" style="background:#7c3aed" aria-label="后台看板（服务/定时/后台任务，运行/退出、实时日志，点击展开）" data-label="后台看板" onclick="toggleSvcPanel(true)">🛠</button>
+       <button class="fabItem" id="btnEditor" style="background:#2563eb" onclick="window.open('/editor','_blank')" aria-label="可视化工作流编辑器（新页签）" data-label="工作流编辑器">🧩</button>
+       <button class="fabItem" id="btnRag" style="background:#b45309" onclick="window.open('/rag','_blank')" aria-label="RAG 文档库管理（新页签）" data-label="RAG 文档库">📚</button>
+       <button class="fabItem" id="btnMemory" style="background:#7e22ce" onclick="window.open('/memory','_blank')" aria-label="长期记忆管理（新页签）" data-label="长期记忆">🧠</button>
+       <button class="fabItem" id="btnAgents" style="background:#0d9488" onclick="window.open('/agents','_blank')" aria-label="Agent 声明管理（主 Agent + 子 Agent，新页签）" data-label="Agent 声明">🤖</button>
+        <!-- WebIDE 按钮已插件化（2026-10-15）：由随包播种插件 webide 提供（VS Code 图标经 /plugins-assets/webide/vscode.png） -->
+        <button class="fabItem" id="btnStats" style="background:#0369a1" onclick="window.open('/stats','_blank')" aria-label="LLM 调用统计：缓存命中率折线图 + 各模型概览（新页签）" data-label="调用统计">📊</button>
+        <button class="fabItem" id="btnSettings" style="background:#52525b" aria-label="设置" data-label="设置">⚙</button>
+       <button class="fabItem" id="btnClear" style="background:#b91c1c" aria-label="清空消息区" data-label="清空">🚮</button>
+     </div>
   </div>
    <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
         有日志才显示 🐞 入口（badge=未读 error 数，在 fabDock 内）；打开即已读清零 -->
@@ -2264,11 +2260,28 @@ function locateModelCard(name){
   card.classList.add('flash');
   setTimeout(()=>card.classList.remove('flash'), 2000);
 }
-// 右侧工具 dock 开合（用户提案 2026-09-06）：折叠态只显示 🧰，点击展开整列
+// 右侧工具 dock 开合（用户提案 2026-09-06）：折叠态只显示 🧰，点击展开整列。
+// 自动分列（用户提案 2026-10-15）：一列最多 FAB_COL_MAX(10) 个图标，溢出往左侧加列——
+// 按钮在 fabDockMenu 里平铺（原生 + 插件动态 append 到末尾），打开时与插件 addButton
+// 后调 _layoutFabCols() 重排；menu 为 row-reverse → DOM 首列渲染在最右=主按钮正下方。
+const FAB_COL_MAX = 10;
+function _layoutFabCols(){
+  const menu = document.getElementById('fabDockMenu');
+  if(!menu) return;
+  const btns = [...menu.querySelectorAll(':scope > button, :scope > .fabCol > button')];
+  if(!btns.length) return;
+  menu.querySelectorAll('.fabCol').forEach(c => c.remove());
+  for(let i = 0; i < btns.length; i += FAB_COL_MAX){
+    const col = document.createElement('div'); col.className = 'fabCol';
+    btns.slice(i, i + FAB_COL_MAX).forEach(b => col.appendChild(b));
+    menu.appendChild(col);
+  }
+}
 function toggleFabDock(force){
   const d = document.getElementById('fabDock');
   if(!d) return;
   const open = (typeof force === 'boolean') ? force : !d.classList.contains('open');
+  if(open) _layoutFabCols();   // 打开时重排（插件按钮增删自动适应）
   d.classList.toggle('open', open);
 }
 // —— WebIDE 已插件化（2026-10-15 用户提案）：dock 图标与拉起逻辑由随包播种插件 webide 提供
@@ -4100,8 +4113,6 @@ window.AgtPlugin = (function(){
         }
         const menu = document.getElementById('fabDockMenu');
         if(!menu) return null;
-        let col = menu.querySelectorAll('.fabCol')[1] || menu.querySelector('.fabCol');
-        if(!col){ col = document.createElement('div'); col.className='fabCol'; menu.appendChild(col); }
         const btn = document.createElement('button');
         btn.className = 'fabItem';
         btn.style.background = spec.background || '#334155';
@@ -4109,7 +4120,8 @@ window.AgtPlugin = (function(){
         btn.setAttribute('aria-label', spec.label || spec.title || '插件按钮');
         if(spec.label || spec.title) btn.setAttribute('data-label', spec.label || spec.title);
         btn.onclick = function(e){ try{ (spec.onClick || function(){}).call(this, e); }catch(e2){ console.error('[AgtPlugin] button', e2); } };
-        col.appendChild(btn);
+        menu.appendChild(btn);   // 平铺追加（不再手找第二列）——分列交给统一布局
+        if(window._layoutFabCols) _layoutFabCols();
         return btn;
       },
       // 侧滑面板（统一容器 .agtdrawer + DrawerCtl 托管，用户提案 2026-10-15）：{icon, title, render(el)}

@@ -197,7 +197,7 @@ workspace 内资产文件服务——图框/音频控件的 src 都指这里：
 - **无 fab 图标按钮**——与 spec/🐞日志/团队/后台四个抽屉不同，它**纯由气泡 markdown 资产点击触发**（低频入口不占图标位）
 - **渲染演进**：初版 `textContent` 纯文本（防 HTML 注入，与 answer 转义同安全模型）→ 同日·四升级为 [hlCode 轻量语法高亮](#预览抽屉轻量语法高亮组合交替正则单遍扫描2026-09-04--四commit-cb01d70用户提问)（token 全 esc 后拼 span，安全模型等价）；>300k 字符截断提示 + >200k 降级纯文本双护栏（防超大文件卡渲染）
 - 文件内容经既有 `GET /api/asset`（workspace 沙箱）拉取——**后端零改动**，纯前端
-- **双向互斥**：打开它时关掉 spec/🐞/团队/后台四抽屉（drawer-push 40% 只让一份）；反向四个抽屉打开时也 `closeFilePreview()`；✕ / ESC 关闭，竖屏全屏
+- **双向互斥**：与 spec/🐞日志/团队/后台四抽屉互斥（drawer-push 40% 只让一份）——初版手写 4 个 if 双向清理，2026-10-15 起收编进 [DrawerCtl 统一调度](fab-dock.md)（`DrawerCtl.open/close` 各一行，互斥 + push 全局兜底）；✕ / ESC 关闭，竖屏全屏
 
 **验证（playwright 真页面全链路）**：写 demo md → 回答里引用它 → 📄 资产框出现 → 点击 → 抽屉打开、标题=路径、内容经 /api/asset 加载显示 → ✕/ESC 均可关 → drawer-push 正确清除 → 与其它抽屉互斥正常。
 

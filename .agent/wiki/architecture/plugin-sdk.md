@@ -233,6 +233,14 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - server.py **-177 行**：`/api/open-workspace`、`POST /api/ide/open`（`_ide_payload` / serve-web 拉起 / 滚动预热）、WS 反馈提交分支全删
 - 同一功能从此只有插件一份实现——`/plugins disable feedback` 反馈面板即消失（**启停管理对内置功能同样成立**）
 
+### SDK 增强：addPanel 收编右侧抽屉统一容器——.agtdrawer + DrawerCtl 托管（2026-10-15，用户提案，commit b380fd3）
+
+用户提案「右侧抽屉统一为通用容器」的插件侧落地：`AgtPlugin.ui.addPanel` 旧实现是 JS `cssText` 手写的**第 6 份抽屉骨架**，且「三不管」——不参与内置抽屉互斥、不动 drawer-push 主区让位、关闭不恢复现场。现内部改复用统一的 `.agtdrawer` 容器 + `DrawerCtl` 调度（机制详见 [fabDock · 右侧抽屉统一容器](../features/fab-dock.md)）：
+
+- **插件面板与内置抽屉同骨架**：40% 右侧覆盖 + head/body 结构 + 主题色变量，竖屏全屏规则自动继承
+- **开合语义对齐内置**：open = 互斥关其它抽屉 + push 主区让位；close = 恢复现场——插件面板不再游离于布局体系外
+- **API 面零变化**：仍是 `{ title, render(el) }`，插件作者无感；已上线插件（example-hello 🔌 面板 / feedback 💬 面板）自动受益
+
 ### 验证
 
 - 8 份 JS 语法 node --check 全过（四插件 frontend.js + index.html 注入器等）

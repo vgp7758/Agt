@@ -146,6 +146,54 @@ function toggleFabDock(force){
 
 `AgtPlugin.ui.addButton` 增 `position` 参数：**`'fab'`（缺省）= 本页右侧 dock 图标**（现有插件不动）/**`'input'` = 输入框上方工具条**——`#pluginInputBar`（`#inputBar` 之前的横排容器，icon+文字胶囊小按钮；无按钮时隐藏，有则显示，flex wrap）。dock 仍是插件按钮的缺省席位，`input` 席位适合对话高频操作类按钮（更贴消息流、更醒目）；抽屉 push 布局（横竖屏两组选择器）同步纳入新容器防错位。机制与验证详见 [插件 SDK](../architecture/plugin-sdk.md)「SDK 增强：addButton position:'input'」节。
 
+## 后记三：右侧抽屉统一容器 .agtdrawer + DrawerCtl 调度器（2026-10-15，用户提案，commit b380fd3）
+
+> 用户提案：「右侧抽屉的实现逻辑现在是各实现各的，每一个面板自己在各自管理面板的布局；能不能统一一下，比如 spec 面板的那种布局方式提取为一个容器，然后所有抽屉的逻辑统一为在这个容器里添加一个特定的业务面板。」
+
+**旧状：六处各写各的**——📐spec 有正式 CSS 类（spec-headbar/spec-scroll/spec-close），🐞log / 👥team / 🛠svc 用**内联 style 硬编码**同一套骨架，📄文件预览独立 CSS 块（fp- 前缀），插件 addPanel 用 JS `cssText` 复刻第 6 份。互斥逻辑写了 5 遍且互不对称：spec 开时关 3 个、filePreview 手写 4 个 if、插件面板**三不管**（零互斥、不 push、关闭不恢复）。
+
+### CSS 层：.agtdrawer 通用骨架 + 主题色变量
+
+```css
+.agtdrawer      { position:fixed; top:0; right:0; bottom:0; width:40%; display:none;
+                  flex-direction:column; overflow:hidden; }
+.agtdrawer.open { display:flex; }
+.agtdrawer-head { flex:0 0 auto + 底边线 }          /* .agtdw-title 标题 + .agtdw-close ✕ 圆钮 */
+.agtdrawer-body { flex:1 1 auto; overflow-y:auto }   /* 业务滚动区 */
+/* 各面板只挂 id 级主题变量，骨架零重复： */
+#specPanel { --dw-bg:#fafbff; --dw-line:#c7d2fe; --dw-accent:#4338ca; }
+#teamPanel { --dw-bg:#fbfdff; --dw-accent:#0e7490; }
+```
+
+竖屏 `width:100%` 媒体查询从「逐面板枚举」收敛为 `.agtdrawer` 一条（editor-ux 批次十二那种「portrait 只写了 specPanel、logPanel 漏段」的坑此后结构性不可能）。
+
+### JS 层：DrawerCtl 注册表统一调度
+
+```javascript
+DrawerCtl.register('teamPanel', { fab:'teamFab',
+  onOpen(){ renderTeamDash(); _dashPoll('teamPanel'); },   // 开=拉数据+起轮询
+  onClose(){ _dashStop('teamPanel'); } });                 // 关=停轮询
+function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }  // 薄包装
+```
+
+- **open** = 互斥关其它抽屉 + `body.drawer-push` 主区让位 + 藏自己的 fab（记住开前原态）
+- **close** = 恢复 fab 原态 + 按**全局开态**解除 push
+- 业务面板只管内容（onOpen / onClose 两个生命周期钩子），布局与开合全由本层负责——互斥 / push / fab 恢复从此**单源一份实现**
+
+### 迁移结果
+
+| 面板 | 迁移后 |
+|---|---|
+| 📐 spec / 🐞 log / 👥 team / 🛠 svc / 📄 file 五业务抽屉 | 全部 `.agtdrawer` 结构；旧 toggle 函数保留为**薄包装**（HTML onclick 零改动）；轮询挂 onOpen/onClose；log 面板「开即已读」清 badge + 滚底并入薄包装 |
+| 📄 文件预览（filePreview） | 手写 4-if 互斥与 anyOpen push 清理 → `DrawerCtl.open/close` 各一行（见[气泡交互 · 文本文件预览抽屉](bubble-interaction.md)） |
+| 🔌 插件 addPanel（example-hello / feedback） | 内部改用 `.agtdrawer` + DrawerCtl 托管——**三不管彻底修复**：插件面板从此参与互斥、push 让位、关闭正确收场（API 面不变，见[插件 SDK](../architecture/plugin-sdk.md)） |
+| ⚙ 设置 / 💬 dashboard 群聊 | **不迁**——范式不同（居中模态弹窗 / 独立页面推挤并排），强迁破坏其语义 |
+
+### 实测与生效
+
+- playwright 真页面两轮：第一轮抓到「open 时忘藏 fab」漏项 → 修复 → 第二轮全绿（DrawerCtl 加载 / 7 个 .agtdrawer 在位=5 业务+2 插件 / 开合 / 互斥 / push 让位与解除 / fab 藏与恢复 / 插件面板联动）；node --check 内联 JS 通过
+- 纯前端改动（commit b380fd3），**浏览器刷新即生效**，无需 /restart
+
 ## 相关页面
 
 - [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）

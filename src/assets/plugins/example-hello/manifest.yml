@@ -1,6 +1,0 @@
-name: example-hello
-version: 0.1.0
-description: 插件 SDK 全链路演示（工具/命令/钩子/路由/前端按钮+面板+聊天卡片）
-backend: backend.py
-frontend: frontend.js
-exposed_to_llm: true

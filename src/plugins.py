@@ -481,7 +481,7 @@ def reload_plugins(agent, workspace=None) -> str:
 
 
 def seed_default_plugins(workspace: Path) -> int:
-    """随包示例插件播种（用户提案 2026-10-15：open-folder / feedback / example-hello 作为
+    """随包示例插件播种（用户提案 2026-10-15：open-folder / feedback 等作为
     插件 SDK 实用示例随包分发）：src/assets/plugins/<名>/ → .agent/plugins/<名>/。
     以 manifest.yml 判定存在——已装则整插件跳过（用户改动永不覆盖）。返回播种数。
     播种时写 seed_state 基线（key plugin/<名>/<rel>——/update-assets 三方 hash 纳管）。"""

@@ -58,7 +58,7 @@
   details.trace > summary { cursor:pointer; color:var(--muted); user-select:none; }
   /* 过程区内部滚动（用户提案 2026-10-11）：展开后很长时不再撑长页面——内容区最高 80vh，
      超出出内部滚动条；summary 常驻顶部（折叠不用滚回页面顶部找标题）；滚到头交还滚轮给页面 */
-  details.trace > div { max-height: 60vh; overflow-y: auto; }
+  details.trace > div { max-height: 60vh; max-width:85vw; overflow-y: auto; }
   .ev { white-space:pre-wrap; word-break:break-word; margin:3px 0; line-height:1.5; }
   .ev.think { color:#9aa0a6; font-style:italic; }
   .ev.tool { color:#1f6feb; }

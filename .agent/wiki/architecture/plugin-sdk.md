@@ -246,6 +246,37 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 内容：六个扩展目录各配一句「放什么 + 入口在哪」——`.agent/plugins/`（引擎级插件：dock 按钮/侧滑面板/HTTP 路由/工具/钩子；随包示例 open-folder·feedback·webide）、`.agent/agents/`（子 Agent 声明）、`.agent/workflows/`（工作流 XML）、`.agent/skills/`（技能包）、`.agent/tools/`（脚本工具）、`.agent/nodes/`（工作流节点插件）
 - 效果：新 repo 的主 Agent 从 SYSTEM 就知道「给引擎/界面加能力前，先读对应目录的 README」——扩展点发现从「靠文件系统漫游碰运气」变成「声明式索引」；生效：当前实例 /restart 后生效，种源对新 repo 天然生效
 
+## 插件路由 422 根治：future annotations × FastAPI 注解 resolve（2026-10-15/16，隔离实例实锤）
+
+> 播种 + 文档收官后的**端到端首验**（隔离实例真跑四插件）暴露：三个插件的 HTTP 路由 POST **一律 422 Unprocessable Content**（detail `loc: ["query","request"]`）。本地复现三层剥根因，真凶是一个隐蔽的 Python 语义组合拳。至此插件化全链路（种源/播种/路由/前端/图标/文档/main.yml 索引）端到端闭环。
+
+### 三层剥根因
+
+1. **表层**：包装层 `async def _handler(request):` 无类型注解 → FastAPI 把 request 当**必填 query 参数**，POST 无此参数一律 422。第一直觉修复：函数体内 `from fastapi import Request` + `request: Request` 补注解。
+2. **二层打脸**：补了注解**仍 422**（本地最小复现锁定——不是隔离实例环境问题，是写法本身有问题）。
+3. **真凶**：src/plugins.py 顶部有 `from __future__ import annotations`——全文件注解**字符串化**。FastAPI 用 `get_type_hints` 按函数所属**模块 globals** resolve 字符串注解，而 Request 是在**函数体内** import 的——名字不在模块 globals，resolve 失败被**静默吞掉** → 注解等于没写 → 照旧当 query 参数。对照实验：裸 FastAPI 文件（无 future import）同款「函数体内 import + 注解」写法 200——差异变量唯一锁定。
+
+### 修复（两层）
+
+| 层 | 改动 | 说明 |
+|---|---|---|
+| 引擎（根治） | `from fastapi import Request as _FastAPIRequest` 提**模块级**；包装层注解改 `request: "_FastAPIRequest"` | 字符串注解按模块 globals resolve——模块级 import 的名字**可达**。SDK 契约不要求插件懂 FastAPI：引擎包装层统一补注解，插件侧 `fn(request)` 无注解照写 |
+| 种源插件（防御） | open-folder / feedback / webide 三个 backend.py 补 `request: 'Request'` + 各自文件内 import | 双保险：即使引擎旧版（不补注解）也工作 |
+
+### 终验（隔离实例五项全绿）
+
+- `/api/plugins` 清单 4 enabled（example-hello / open-folder / feedback / webide）
+- feedback meta + submit 双 200（submit **真提交成功**——真推了一条「冒烟测试」反馈到飞书，用户可见）
+- webide 图标 vscode.png 200（静态资产路由）
+- open-folder 200
+- 本机 9000 实例 `/restart` 后：dock 上 📁/💬/VS Code 三图标均来自插件注入——内置退役 + 插件承载实机闭环
+
+### 注意事项
+
+- **future annotations × 框架运行时读注解是通用坑**：任何运行时 `get_type_hints` 解析注解的框架（FastAPI / Pydantic / typer 等）都有同款雷——字符串注解的 resolve 只看模块 globals，函数体内 import 不可达
+- 插件作者无感知：SDK 契约是 `fn(request)` 裸写，注解由引擎包装层负责；种源插件里的注解纯属防御
+- 与「验证」节中既有 11 组单测的互补：单测覆盖路由挂载幂等，但当时未覆盖 POST 真调用——端到端首验的价值正在于此
+
 ## 关联
 
 

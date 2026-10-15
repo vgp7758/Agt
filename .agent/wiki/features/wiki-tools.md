@@ -62,6 +62,56 @@
 - `/reload tools` 热重载即生效（当轮重载 55 个工具：摘旧 55 / 载新 55，随包内置件 `src/assets/tools_builtin/wiki_tools.py` 本人）
 - 意义：**所有 wiki 写者（含 wiki-updater 子 Agent）按直觉写 `##` 即可**，不会再因「忘记 +1 层级」破坏页面结构——[维护坑两则](#维护坑两则根章节-update-疑似整页清空--同文件连发-add_chapter-假失败2026-10-11-实测)的纪律照旧，另少一类人为陷阱
 
+## 写类工具即消费攒批队列：_mark_queue_consumed（2026-10-15，用户提案，commit f4c49f4）
+
+**动机（用户问诊「轮内手派 wiki-updater 后，轮末钩子会再更新一遍吧？」——判断成立）**：主 Agent 在轮内亲自派 wiki-updater 归档（或任何 Agent 直接写 wiki 页）时，`before_answer` 钩子的 [wiki_auto_maintenance](wiki-auto-maintenance.md) **不知道这批改动已被归档**——它消费的定义是「`.agent/wiki_queue/pending.jsonl` 里的全部条目」，而队列轮转（pending → events）**只发生在工作流内部的 `cleanup_queue` 节点**。手动派活绕过它 → 队列没动 → 轮末钩子又派一次 wiki-updater → **同一批轮次被消费两次**（浪费 token，可能重复写页面）。
+
+**2026-10-15 实测**：pending 里 3 条，其中 2 条的主 Agent 侧归档**已在早些时候手动派活完成** → 工作流紧接着又派了一次（`wiki-updater_2` 带着同样几条轮次）——重复消费得到实证。
+
+**语义**：**wiki 有写入 = 归档动作已发生 = 队列可消费**（与工作流 `cleanup_queue` 同一套轮转）。
+
+### 接线：装饰器包写类工具（`_consume_queue_on_write`）
+
+```python
+def _consume_queue_on_write(fn):
+    @functools.wraps(fn)
+    def _w(*a, **kw):
+        out = fn(*a, **kw)
+        if isinstance(out, str) and out.startswith("✅"):
+            out += _mark_queue_consumed()      # 追加 "｜攒批队列已消费（N 条 pending → events）"
+        return out
+    return _w
+```
+
+判定只看**返回值**：`str` 且 `✅` 开头（工具既有成功约定）→ 触发消费；其余（失败返回、异常）一律不动队列。`_mark_queue_consumed` 全流程 try/except 兜底，任何异常返回空串——**绝不因队列侧问题让 wiki 写入失败**。
+
+### 哪些工具消费队列
+
+| 工具 | 消费队列 |
+|---|---|
+| `wiki_write` / `wiki_add_chapter` / `wiki_update_chapter` / `wiki_remove_chapter` / `wiki_move_chapter` | ✅ 是（返回串尾追加消费条数） |
+| `wiki_read` / `wiki_list` / `wiki_tree` / `wiki_search` | ❌ 否（读不算归档） |
+| `wiki_delete` | ❌ 否（删除 ≠ 归档完成，保守不消费） |
+| 任何非 `✅` 返回（失败/异常） | ❌ 否 |
+
+### 消费的副作用：落 `last_consumed.json`（供工作流侧冷却）
+
+每次消费除轮转外还写 `.agent/wiki_queue/last_consumed.json`：
+
+```json
+{"ts": 1760000000, "source": "writer", "items": 3}
+```
+
+**写侧（source=writer）与工作流侧（source=workflow）都记**——谁消费都算，工作流 `busy_parse` 据此做冷却（见 [wiki_auto_maintenance · 消费冷却窗](wiki-auto-maintenance.md#重复消费修复写侧即消费--消费冷却窗2026-10-15用户提案commit-f4c49f4)）。时间戳写失败被吞掉（不影响轮转语义）。
+
+### 边界
+
+- **轮转覆盖当前 pending 全部条目**（含子 Agent 跑动期间新攒的极少数轮次）——影响可忽略，下一次带代码变更的轮次会重新入队
+- **`events.jsonl` 是覆写不是追加**：`unlink` + `os.replace`（只留最近一批的审计留档，与工作流 `cleanup_queue` 同款）
+- ⚠️ **测试别碰生产队列目录**：本轮开发期为验证行为误删过 `.agent/wiki_queue/events.jsonl`（上一批已消费轮次的历史留档）——无功能影响但数据丢了就是丢了，后续测试改在临时目录跑
+
+**验证（五场景全绿）**：读类不动 ✓ / 写类轮转 ✓ / 章节类轮转 ✓ / `wiki_delete` 不轮转 ✓ / 失败返回不轮转 ✓。`/reload tools` 热重载即生效（当轮 55 个工具）。
+
 ## 增量维护优先（wiki-updater 约定，同 commit）
 
 - **persona 原则**：已有页面优先用章节四件套做小改（不动页面其余部分）；`wiki_write` 整页覆盖只用于**新建页面 / 整页大重构**——直接针对上次 home.md 整页重写中断留 PLACEHOLDER 的教训（整页重写的脆弱性）

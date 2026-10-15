@@ -196,6 +196,37 @@ is_busy = bool(lines) and any("✅" not in l for l in lines)      # 任一行非
 
 > **恢复状态修正（同 commit，引擎侧防谎报）**：`_restore_subagents` 读档时 meta 存 `status="running"`（进程被杀时任务在跑，`_bg` 没来得及写终态）→ **修正为 `failed`**——重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑；不修正的话看板谎报「忙」→ busy_parse 判忙 → 同款死锁。堆积的 pending 不用手动清：/restart 后下一轮触发 → 判空闲 → 全量读批次 → wiki-updater_3 复活消费 → 队列轮转清空（该路径已被 v0.22.1 发布轮活验收证实）。
 
+## 重复消费修复：写侧即消费 + 消费冷却窗（2026-10-15，用户提案，commit f4c49f4）
+
+**问题（用户问诊）**：主 Agent 在轮内亲自派 wiki-updater 归档后，轮末本工作流（`before_answer`，async）**并不知道改动历史已被消费过**——它读到的 `pending.jsonl` 里还躺着同样的轮次 → 又派一次 wiki-updater → **重复归档**。
+
+**根因**：本工作流对"自上次维护以来"的定义 = **`pending.jsonl` 里的全部条目**，而**消费动作只发生在工作流内部的 `cleanup_queue` 节点**。任何绕过该节点的归档（主 Agent 手动 `agent_prompt("wiki-updater", …)`、其他 Agent 直接写 wiki 页）都不轮转队列。2026-10-15 实测：pending 3 条中 2 条已手动归档 → 钩子又派了一次（`wiki-updater_2` 复述同样轮次）。
+
+**修复双层**：
+
+| 层 | 改动 | 位置 |
+|---|---|---|
+| ① **写 wiki 即消费队列** | 写类 wiki 工具（`wiki_write` / 章节四件套）成功后自动把 pending 轮转为 events + 落 `last_consumed.json`（`source="writer"`）——语义「wiki 有写入 = 归档动作已发生 = 队列可消费」，与 `cleanup_queue` 同一套轮转 | `src/assets/tools_builtin/wiki_tools.py` `_mark_queue_consumed` / `_consume_queue_on_write`（详见 [wiki 工具集 · 写类工具即消费攒批队列](wiki-tools.md#写类工具即消费攒批队列_mark_queue_consumed2026-10-15用户提案commit-f4c49f4)） |
+| ② **消费冷却窗** | `busy_parse` 增第三判据：读 `.agent/wiki_queue/last_consumed.json`，距上次消费 **< `COOLDOWN`(600s)** → **按「忙」处理 → 走【入队不派活】分支**；消费时落时间戳（写侧/workflow 侧都记，`source` 区分） | `.agent/workflows/wiki_auto_maintenance.xml` `busy_parse` 节点 |
+
+**更新后的入口判定**（替换本节上方流程图里的两分支）：
+
+```
+值得记录 → list_team 看板 → busy_parse
+  ├─ 忙（有真运行态行）  ─┐
+  ├─ 冷却窗内（< 600s）  ─┴→ 本轮摘录入 .agent/wiki_queue/pending.jsonl 短路（攒批，下批一起消费）
+  └─ 空闲 → pending 全量转 context_messages → agent_prompt 派 wiki-updater 消费
+             → cleanup_queue（pending → events 轮转 + 落 last_consumed.json source=workflow）→ diff → git_commit
+```
+
+**关键设计：冷却期内不丢弃、照常入队**——内容不丢，等窗过了下批一起归档。这样「连续几轮都有代码变更」时不会反复唤醒 wiki-updater，也不会漏记。
+
+**实测三态**：无 `last_consumed.json` → 不冷却 ✓；刚消费 → `is_busy=True, left=599s`（冷却生效）✓；700s 前消费 → 窗已过、可派活 ✓；300s 前 → `left=299s` 仍在窗内 ✓。
+
+**调参**：`COOLDOWN = 600` 是 `busy_parse` 里的常量，觉长/觉短改一行即可。
+
+**生效与播种**：`wiki_tools.py` `/reload tools` 热重载即生效；工作流 XML 运行时 + 种源同改（`/workflows reload` 已注入）。`sync_workflow_sources` 回灌种源 `src/workflows/wiki_auto_maintenance.xml`（±39 行）——**提交前 `git diff src/workflows/` 核对**（本工具不改运行时副本）。
+
 ## 分支会话短路：is_branch 判据——支线干活 wiki 维护静默（2026-10-08，用户提案，commit 3598be3）
 
 **用户提案**：wiki 维护这类事只有主线工作时才有必要——支线上的代码改动不该进主线 wiki。工作流需要拿到 session 分支元信息确认主线/支线，是支线就直接短路。

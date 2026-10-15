@@ -1,0 +1,5 @@
+name: screenshot
+version: 0.1.0
+description: /screenshot <路径> 前端页面截图落盘（「后端命令触发、前端 JS 干活」的插件范式示例）
+backend: backend.py
+frontend: frontend.js

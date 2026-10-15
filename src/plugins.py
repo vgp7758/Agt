@@ -289,7 +289,9 @@ def load_plugins(agent, workspace=None) -> str:
         if workspace is None:
             workspace = getattr(agent, "workspace", None) or Path.cwd()
         unload_all()
-        _RT = _Runtime()
+        _old_app = getattr(_RT, "attached_app", None)   # 重建不丢 server 挂载点——否则 reload 后
+        _RT = _Runtime()                                 # 新 register_route 全部悬空不挂 FastAPI
+        _RT.attached_app = _old_app                      # （2026-10-15 实锤：reload 后 screenshot 路由 404）
         _RT.agent = agent
         _RT.workspace = Path(workspace)
         ok, failed = [], []

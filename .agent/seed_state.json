@@ -60,5 +60,9 @@
  "plugin/webide/manifest.yml": "f734aefa7ca75cb8",
  "dir_doc/.agent/plugins/README.md": "d0a2c48b9ec768c0",
  "plugin/cmd/backend.py": "f6927323236734f4",
- "plugin/cmd/manifest.yml": "9ff416b2e5f17b0a"
+ "plugin/cmd/manifest.yml": "9ff416b2e5f17b0a",
+ "plugin/screenshot/backend.py": "30e7504c073cbb1c",
+ "plugin/screenshot/frontend.js": "c9cad07a67be99f5",
+ "plugin/screenshot/manifest.yml": "443e63a8514bc588",
+ "plugin/screenshot/vendor/html2canvas.min.js": "b987dc0cc6cfcdc2"
 }

@@ -64,5 +64,8 @@
  "plugin/screenshot/backend.py": "30e7504c073cbb1c",
  "plugin/screenshot/frontend.js": "c9cad07a67be99f5",
  "plugin/screenshot/manifest.yml": "443e63a8514bc588",
- "plugin/screenshot/vendor/html2canvas.min.js": "b987dc0cc6cfcdc2"
+ "plugin/screenshot/vendor/html2canvas.min.js": "b987dc0cc6cfcdc2",
+ "plugin/record/backend.py": "fa316f57c09b60e8",
+ "plugin/record/frontend.js": "2bb2c2a5cf37803a",
+ "plugin/record/manifest.yml": "f2d9d9f7264c1ca9"
 }

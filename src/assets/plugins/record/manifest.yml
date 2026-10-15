@@ -1,0 +1,5 @@
+name: record
+version: 0.1.0
+description: /record <start|pause|resume|stop|save|flush> WebUI 页面录屏（复杂三桥示例：子命令状态机 + 用户激活 + 大文件回传）
+backend: backend.py
+frontend: frontend.js

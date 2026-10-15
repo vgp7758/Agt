@@ -40,11 +40,16 @@ _HINT = {
 }
 
 
+_VALID_ACTIONS = {"start", "pause", "resume", "stop", "save", "flush", "status"}
+
+
 def _cmd_record(ctx, args):
     argv = args if isinstance(args, list) else str(args or "").split()
     action = (argv[0] if argv else "status").lower()
     path = (argv[1] if len(argv) > 1 else "").strip()
-    if action not in _HINT and action != "status":
+    # 判据用显式合法集（2026-10-15 用户实锤：save 不在 _HINT 键里——_HINT 只是"提示文案
+    # 表"，save 的文案在下方 elif 单独处理——按 _HINT 成员资格判定会把 save 误报未知子命令）
+    if action not in _VALID_ACTIONS:
         print(f"❌ 未知子命令 /record {action}\n{_USAGE}")
         return
     if action == "save" and not path:

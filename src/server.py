@@ -3086,6 +3086,49 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             return
     # _tgt == "_main_"（或已复位）：走原有主 Agent 路径
 
+    # @name <任务>：直接派活子 Agent（用户提案 2026-10-15，Slack 式 @ 提及）——
+    # 复用 agent_prompt 工具全链路（声明解析/实例化/异步派发/回执路由）；caller=user →
+    # fire-and-forget：完成通知直推用户（后台通知卡片），不打扰主 Agent。与主 Agent
+    # busy 无关（子 Agent 独立异步跑），不进 work_q；行首 @ 才匹配（邮箱/正文不误触）。
+    _at = re.match(r"^@([\w\-]+)\s+(.+)", text, re.S)
+    if _at:
+        _name, _prompt = _at.group(1), _at.group(2).strip()
+        # 该声明已有【正在跑】的实例 → 直接插话注入（同子 Agent 页面语义）：用户在对话流里
+        # 连发 @ 不会撞 agent_prompt 的"[忙] 先 wait_subagents"拒绝，而是接着当前任务追加。
+        _reg = getattr(agent, "registry", None)
+        _busy = None
+        if _reg is not None:
+            try:
+                with _reg._lock:
+                    for _e in list(_reg._agents.values()):
+                        # 忙判据与 agent_prompt 内一致：entry.status == "running"（占位即标，
+                        # 实例刚创建就命中）——只看 agent.busy 会漏（那标志进 run 循环才置，
+                        # 2026-10-15 旁路实测：r2 落回 agent_prompt 的"[忙]"拒绝即此因）
+                        if _e.name == _name and (_e.status == "running"
+                                                 or getattr(_e.agent, "busy", False)):
+                            _busy = _e
+                            break
+            except Exception:
+                _busy = None
+        if _busy is not None:
+            try:
+                _busy.agent.queue_user_message(f"@用户：{_prompt}")
+                await _send(ws, {"type": "system", "transient": True,
+                                 "text": f"📥 '{_busy.agent_id}' 正在跑——已注入当前任务（下一步边界生效）"})
+            except Exception as e:
+                await _send(ws, {"type": "system", "text": f"⚠️ @{_name} 注入失败：{type(e).__name__}: {e}"})
+            return
+        try:
+            # assembly="history=on"（用户提案 2026-10-15）：用户直派默认接续该子 Agent 的历史
+            # （复用同名活实例时装配完整 history——"@coder 接着上次那件事"的自然预期）；
+            # 新建实例无历史，此参数无害。主 Agent 派活仍默认关（自己按需显式传）。
+            _rv = agent.tools.call("agent_prompt", {"name": _name, "prompt": _prompt,
+                                                    "caller": "user", "assembly": "history=on"})
+            await _send(ws, {"type": "system", "text": f"📨 {str(_rv)[:400]}"})
+        except Exception as e:
+            await _send(ws, {"type": "system", "text": f"⚠️ @{_name} 派活失败：{type(e).__name__}: {e}"})
+        return
+
     _SWITCH_CMDS = ("/branch", "/resume", "/reset", "/save", "/merge")
     if getattr(agent.session, "_current", None) is not None and text.split() and text.split()[0] in _SWITCH_CMDS:
         # 轮进行中的会话切换类命令：set_session 会换写入目标（events/toollog 落盘路径）——

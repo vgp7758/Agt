@@ -97,6 +97,43 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；`pip install -e .` 的本机生产实例改的就是本 repo 代码，配合 `/reload tools`（wiki 工具）/ `/reload plugins`（webide 插件）即可免重启吃到修复。
 
+## 第三次实战：v0.35.2（2026-10-16，part=patch）——② 第三次半成功（git push 断网），tag 由 Agent 补打待推
+
+第三次生产运行，用户侧仍只是一句「发补丁吧」。结果与 v0.35.0 同型（② 半成功）、与 v0.35.1（全绿）不同：
+
+| 步骤 | 结果 |
+|---|---|
+| ① 工作区检查 | ✅ 干净 |
+| ② release.py 主体 | ⚠️ **半成功**——build ✓ / upload ✓（`agt_agent-0.35.2-py3-none-any.whl` + `.tar.gz`，<https://pypi.org/project/agt-agent/0.35.2/>）/ **push ✗**：`ssh: connect to host ssh.github.com port 443: Connection timed out`（本机 SSH 443 重定向当日不可用，与 [v0.30.0 发布插曲](../releases/v0.30.0.md) 同属网络面） |
+| ③ version_file.txt 同步 | ❌ 未执行（② 失败即中断，符合设计）→ 人工补 |
+| ④ PyPI 上线验证 | ❌ 未执行 → 人工核验端点两件就位 |
+
+**收尾（逐项补尾，不是重发）**：
+
+- 本地 commit：`86b005b chore(release): v0.35.2`（release.py 的 bump 提交）+ `35623ae`（`packaging/version_file.txt` 字段级同步 0.35.2，四处，见上文结构坑）
+- tag `v0.35.2` 手工打到**含 version_file 同步的那个 commit**（正是 CI 构建需要的状态）——**待随 push 一起上**
+- push 仍不通 → 挂**静默重试**（每 30 分钟，成功才吱声）；推送落地后 main + tag 一并上去，桌面版 CI 自动触发
+
+### 缺口第三次出现：tag 依旧不在链路里
+
+区别只在形态——v0.35.1 那次是网络通、纯手工补 tag；本次是网络不通、tag 只能先打在本地等推送。**改进方向仍同 v0.35.1（未做）**：release_publish 加 ⑤（`git ls-remote --tags` 核验，缺则 `git push origin HEAD:refs/tags/v{ver}`），或 release.py 内部直接打 tag。在此之前**正式发布收尾必核远端 tag**（`git ls-remote --tags origin`）。
+
+**口诀（三次实战沉淀）**：② 半成功 ≠ 发布失败——PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按失败报告逐项补尾即可：验端点 → 补 version_file 提交 → 补 tag → 重试 push。
+
+### 本版收录清单（自 v0.35.1）
+
+| 内容 | 详情页 |
+|---|---|
+| WebUI 抽屉统一容器 `.agtdrawer` + `DrawerCtl` 调度器（互斥/让位/fab 恢复收归单一实现，插件面板「三不管」一并修掉） | [fab-dock](fab-dock.md) · [plugin-sdk](../architecture/plugin-sdk.md) |
+| fabDock 自动分列（列上限 10 `FAB_COL_MAX`，溢出往左加列） | [fab-dock](fab-dock.md) |
+| `@name <任务>` 直接派活子 Agent（默认带 history、无活实例自动实例化、忙则插话注入） | [user-interaction](user-interaction.md) · [多 Agent 体系](../architecture/multi-agent.md) |
+| 插件三件：`cmd`（register_command 用法示例）/ `screenshot`（三桥范式）/ `record`（三桥进阶：状态机 + user activation + 大文件）；删 `example-hello`；修插件 reload 后路由丢失（`attached_app` 继承） | [plugin-sdk](../architecture/plugin-sdk.md) · [cmd-command](cmd-command.md) · [record-plugin](record-plugin.md) |
+| 写 wiki 即消费攒批队列 + 消费冷却窗（根治轮内归档后仍被钩子重复派活） | [wiki-tools](wiki-tools.md) · [wiki_auto_maintenance](wiki-auto-maintenance.md) |
+
+**口径注**：末条与 [v0.35.1 收录清单](#本版收录清单自-v0350-的四处修复) 重叠——本页按各版「打包时实际上报的清单」记录，重叠条目以实际打包版本为准。
+
+**生效提示**：pip 索引约 20s 延迟；`pip install -e .` 的本机生产实例改的就是本 repo 代码，`/restart` 即可吃到新功能（旁路实例已验证新代码可跑）。桌面版等 tag 推上后由 GitHub Actions 出包。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)
@@ -109,5 +146,6 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 - ① 的脏检查只在非 dry_run 生效：正式发版前保持工作区干净是硬约束（release.py 会 bump src/paths.py，混合未提交改动发出去不可控）
 - ③ 失败只警告不阻断（⚠️）：version_file 推送异常需人工补，否则下次桌面版云构建用旧版本号
 - ④ 三连失败大概率只是索引同步延迟——按提示稍后手动确认即可，不代表发布失败
-- **tag 不归本工具管**（v0.35.0 / v0.35.1 两次实战实证）：② 只推 **main 分支**，tag 需事后手工补打 → **正式发布收尾必须核验远端 tag**（`git ls-remote --tags origin`）——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）。补法与改进方向见上文 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)
+- **② 半成功 ≠ 发布失败**（v0.35.0 / v0.35.2 两次实证，均在 push 段断网）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可）
+- **tag 不归本工具管**（v0.35.0 / v0.35.1 / v0.35.2 三次实战实证）：② 只推 **main 分支**，tag 需事后手工补打 → **正式发布收尾必须核验远端 tag**（`git ls-remote --tags origin`）——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）。补法见 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)，第三次重现见 [v0.35.2 一节](#第三次实战v03522026-10-16partpatch-第三次半成功git-push-断网tag-由-agent-补打待推)
 

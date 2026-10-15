@@ -35,8 +35,19 @@ async def _open(request: 'Request'):
                 ours = any(m in low for m in _SW_MARKS)
                 ready = len(body) > 500 and "unauthorized" not in low
                 return True, ready, ours
-        except _ur.HTTPError:          # 4xx/5xx：服务在，但不是我们的 serve-web
-            return True, False, False
+        except _ur.HTTPError as e:     # 4xx/5xx：读 body 判特征，别一律当"别人的服务"
+            # serve-web CLI 自己在【启动中】时会返回 503 "Error connecting to server:
+            # hyper::Error(IncompleteMessage)"（server 子进程还在起）——这是我们的服务！
+            # 而 Unity Hub 占口是 401 "Unauthorized access"→ 才算别人的（用户实锤 2026-10-15）。
+            body = ""
+            try:
+                body = (e.read() or b"").decode("utf-8", "ignore")
+            except Exception:
+                pass
+            low = body.lower()
+            ours = (any(m in low for m in _SW_MARKS)
+                    or "hyper::error" in low or "connecting to server" in low)
+            return True, False, ours
         except Exception:              # 拒绝连接/断连：口空
             return False, False, False
 
@@ -191,6 +202,7 @@ def _payload(ready: bool, port: int):
         out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
     return 200, out
 
+
 # ---- serve-web 缓存/进程工具（2026-10-15 事故修复）----
 _PREFETCHING = False
 
@@ -243,6 +255,7 @@ def _cli_exe():
         except Exception:
             pass
     return None
+
 
 _WS = None
 _AGENT = None

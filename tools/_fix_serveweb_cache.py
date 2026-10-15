@@ -5,10 +5,11 @@
   → 多进程并发安装同一 commit → "保留最近 2 个"的 rmtree 删到正在使用/被占用的目录
   → 目录被删成只剩 node.exe + node_modules（node.exe 被占用删不掉）→ 之后的 CLI
     spawn "bin\..\out\server-main.js" 找不到路径 → 无限重试（用户看到的循环 panic）。
-本脚本从微软 CDN 拉完整 server 包解压覆盖，补齐该目录。
+本脚本从微软 CDN 拉完整 server 包解压覆盖，补齐该目录（幂等，可重复跑）。
+注：zip 顶层带 vscode-server-win32-x64-web/ 壳目录 → 自动剥掉，直接铺到 <commit>/ 根。
 """
 import pathlib
-import sys
+import shutil
 import time
 import urllib.request
 import zipfile
@@ -45,14 +46,35 @@ def unzip():
     DEST.mkdir(parents=True, exist_ok=True)
     ok = skip = 0
     with zipfile.ZipFile(ZIP) as z:
+        names = z.namelist()
+        tops = {n.split("/")[0] for n in names if n.strip("/")}
+        prefix = ""
+        if len(tops) == 1:
+            t = list(tops)[0] + "/"
+            if all(n == t[:-1] or n.startswith(t) for n in names):
+                prefix = t          # 剥壳：zip 顶层统一目录（vscode-server-win32-x64-web/）
+                print("  剥壳:", t, flush=True)
         for info in z.infolist():
+            name = info.filename
+            if prefix:
+                if name == prefix[:-1] or not name.startswith(prefix):
+                    continue
+                name = name[len(prefix):]
+            if not name:
+                continue
+            tgt = DEST / name
             try:
-                z.extract(info, DEST)
+                if name.endswith("/"):
+                    tgt.mkdir(parents=True, exist_ok=True)
+                else:
+                    tgt.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(info) as src, open(tgt, "wb") as out:
+                        shutil.copyfileobj(src, out)
                 ok += 1
-            except Exception as e:          # node.exe 被占用等 → 跳过（已存在）
+            except Exception as e:      # node.exe 被占用等 → 跳过（已存在，同版本）
                 skip += 1
                 if skip <= 5:
-                    print(f"  跳过 {info.filename}: {type(e).__name__}", flush=True)
+                    print(f"  跳过 {name}: {type(e).__name__}", flush=True)
     print(f"解压完成：{ok} 项写入，{skip} 项跳过", flush=True)
     sm = DEST / "out" / "server-main.js"
     print("完整性:", "✅ out/server-main.js 在位" if sm.exists() else "❌ 仍缺 server-main.js", flush=True)

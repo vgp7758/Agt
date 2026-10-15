@@ -65,6 +65,10 @@ web_main 原有两条路径（`open_browser(port)` / `_render_loop(...)`）各�
 
 **历史（已废弃方案，留作教训）**：曾按桌面惯例 `%APPDATA%\Agt` + 首启全量迁移 `~/.agt`，并因此踩过 [迁移判定被 launcher 预建目录短路](#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)（迁移判定改看「用户数据存在性」）——该轮修复的 `_USER_DATA` 判据随本轮回退一并作废，但「目录存在 ≠ 已初始化」的通用教训仍成立。
 
+### 后记：repos 数据根可重定向（2026-10-15）
+
+数据根（AGT_DIR）两级解析不变；其下 **`repos/` 子树新增重定向支持**（2026-10-15，用户提案）——settings.json 的 `repos_dir`（绝对路径才认）优先，`paths.repos_root()` **启动时求值一次、重启生效、只改指向不搬数据**。动机（C 盘系统区排除杀毒/索引干扰）、实现与迁移流程详见 [repos 数据根重定向](repos-dir-redirect.md)。
+
 ## 打包基建：packaging/Agt.spec + desktop_entry.py（Step 2）
 
 ### Agt.spec（PyInstaller onedir）

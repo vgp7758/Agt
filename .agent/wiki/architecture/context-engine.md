@@ -167,6 +167,21 @@ t{轮号}_s{步号}_{微秒戳}.json
 
 **与 /stats tooltip 对齐**：从 `/stats` 折线图 hover 获取 `· t206 · s6` 标记 → 直接打开 `projections/t206_s6_*.json` 查看当时完整投影，快速定位升档/折叠等事件断点（详见 [运维与排障](../guides/ops.md#stats-页webui-统计按钮)）。
 
+### 后记：子 Agent dump_projections 跟随——构造时读 settings 全局开关（2026-10-15，用户实锤）
+
+**现象**（用户实锤 2026-10-15）：worker 施工几十步，`agents/<子id>/projections/` 一无所有——「sub-agent 的投影转储文件没有生成了」。
+
+**考古实证（非回归）**：全仓库扫描子 Agent 存档目录，**从未有过 projections**——不是分支机制的回归，是开关从引入起就带「实例属性孤岛」问题：`dump_projections` 挂在 Agent 实例上，`/config`/设置页只 setattr 主 Agent，**SubAgent 新建实例恒 False**。用户「分支以后才注意到」的时间感，源于那时期开始密集用 worker 施工才让缺转储变得扎眼。
+
+**修复（两处，主/子同源）**：
+
+| 层 | 改动 |
+|---|---|
+| `Agent.__init__`（src/agent.py） | 构造时读 settings.json 的 `dump_projections`——主/子 Agent 同源；主 Agent 运行中 `/config` 覆盖仍即时生效（实例属性优先） |
+| `apply_config`（src/commands.py） | `dump_projections` 从 CONFIGURABLE 通用 setattr 表挪出为**特殊段双写**：实例值 + settings.json 持久化——子 Agent 构造时读的就是这份 |
+
+验证：5 场景自测全过。设置键登记见 [配置体系 · settings.json](../guides/config-and-models.md#settingsjson运行时)。
+
 ## 投影分段统计：/context 改读真实投影缓存（commit 4212f65）
 
 `/context` 的分段统计从「发指令时现算」改为「真实投影装配时顺手记录」——看到的是**事实**（真实发给模型的口径），不是事后模拟；两者在特殊路径（reuse、保命阀触发的轮）本来就可能不一致。

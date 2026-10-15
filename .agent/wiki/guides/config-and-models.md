@@ -378,7 +378,8 @@ def _openai_client(self) -> OpenAI:
 | ~~detail_step~~（已删） | **全局 settings 字段已删除**（2026-09-15，commit 4ad2812，用户裁定；t877_s51 轮内小毕业诊断收尾）：步距衰减只认 models.json 条目级 `detail_step`（clamp 0~200，**未填默认 0=不衰减**；想要衰减必须显式填，DeepSeek 类价差悬殊配 0）；`/config detail_step` 收到只提示去向不落盘。见 [全局字段删除](../architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定) |
 | hook_timeout | 同步钩子整组超时秒数（默认 300，0=不限）——超时钩子结果丢弃（`auto_wf_error` 标记），组内已完成/后续完成的其它钩子照常合并注入（**部分组装**）；async 钩子不受限 |
 | hook_timeout_before_turn | **before_turn 检索钩子专用超时**（2026-09-21 用户裁定，v0.29.8）：默认 **60**、0=不限、损坏值兜底 60——入口钩子挂在主循环入口（用户发消息后最先跑），此前共用 300s 等待体验太差；超时同走部分组装。机制见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布) |
-| 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试） |
+| 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试；**2026-10-15 起子 Agent 构造时同读此键跟随**，见下方双特殊段） |
+| repos_dir | **repos 数据根重定向**（2026-10-15）：`~/.agt/repos/` 整棵数据树可指到其它盘（仅认绝对路径）；**启动时求值一次、重启生效**，只改指向不搬数据。详见 [repos 数据根重定向](../features/repos-dir-redirect.md) |
 
 > **回退链分层（2026-09-15 用户裁定后，两链分离）**：
 >
@@ -408,6 +409,14 @@ def _openai_client(self) -> OpenAI:
 开启后 max_level 钉 4（阶梯位置固定）；字符口径阶梯规则（级联下移 / 档1 留 1 轮 / 工具折叠档折进 fc）、渲染字符缓存（`sessions/render_chars.db` 异步预计算）、档2+ reasoning 截断等机制详见 [context-engine · steps 分档模式](../architecture/context-engine.md)。`/restart` 生效（session 构造时读取）；存量 session 切换首轮自动收敛（旧边界截取最高 4 条 + warning）。
 
 **手改键不会被 UI 保存洗掉（2026-10-10 · 二确认）**：手改 `~/.agt/settings.json` 加 `"tiering_mode": "steps"` 后，WebUI 设置弹窗照常保存**不会覆盖掉它**——三条保存路径（设置弹窗生效份 / 指定本地·全局份 `save_settings_scoped` / `apply_config` 热应用）全部是「读 → update 表单键 → 写回」的**合并写**，只动表单里出现的键（[set_config 合并语义](#set_config-保存语义修复合并替代整体覆盖ui-保存不再抹掉非表单键随-v0300commit-54e7eda) 的延续确认）。
+
+### dump_projections 子 Agent 跟随 + repos_dir 数据根重定向（2026-10-15，双特殊段）
+
+两键都走 `apply_config` **特殊段**（不走 CONFIGURABLE 通用 setattr 表，src/commands.py，2026-10-15）：
+
+**dump_projections（子 Agent 跟随）**：此前 `/config`/设置页只 setattr 主 Agent 实例，SubAgent 新建实例恒 False——worker 施工几十步零转储文件（实例属性孤岛）。修复后**双写**：实例值 + settings.json 持久化，`Agent.__init__` 构造时读 settings——主/子同源；主 Agent 运行中 `/config` 覆盖仍即时生效（实例属性优先）。机制与考古详见 [context-engine · 投影转储后记](../architecture/context-engine.md#投影转储文件名与-t/s-标记commit-4aced81)。
+
+**repos_dir（repos 数据根重定向）**：`~/.agt/repos/` 整棵数据树（sessions/specs/plans/memories/rag…）可重定向到其它盘——C 盘系统区排除杀毒/索引干扰的根治手段。仅认绝对路径（相对路径拒绝保存）；`paths.repos_root()` **启动时求值一次**，重启生效、只改指向不搬数据。实现与迁移流程详见 [repos 数据根重定向](../features/repos-dir-redirect.md)。
 
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 

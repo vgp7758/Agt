@@ -4,6 +4,8 @@
 
 数据目录解析唯一真源在 `src/paths.py`（2026-09-10，spec s_d53311f8）：**两级——`AGT_HOME` env（测试/多实例隔离）> `~/.agt`（默认，含桌面模式）**。桌面版与 CLI/pip 版、多桌面实例、Launcher 打开的不同 workspace **全部读写同一份数据**（与 VS Code 插件/CLI 共用 `~/.claude` 同构；用户裁定 2026-09-10，commit 8ed30f6）。此前 `Path.home()/".agt"` 散落在 config/session/lsp_manager/restart_watchdog/spec_tools/updater/feedback **七处独立定义**，已全部收编 `from paths import AGT_DIR`（外置工具各自轻量复制同款逻辑）。详见 [桌面版 · 数据目录唯一真源](../features/desktop-mode.md#数据目录唯一真源paths-py单一数据根用户裁定-2026-09-10)。
 
+**repos 子树可重定向（2026-10-15，用户提案）**：settings.json 的 `repos_dir`（**绝对路径才认**）可把 `<根>/repos/` 整棵指到其它盘——C 盘系统区排除杀毒/索引干扰的根治手段。`paths.repos_root()` **启动时求值一次**（`session.REPOS_DIR` 唯一真源，config/log/rag/session_vec/spec_tools 等 import 跟随；外置件 cache_tools 轻量复制同款），**重启生效、只改指向不搬数据**（迁移用户自理：停实例 → robocopy 整棵 repos → 设新路径 → 启动）。详见 [repos 数据根重定向](../features/repos-dir-redirect.md)——下文目录树中的 `~/.agt/repos/` 在重定向后读作 `<repos_dir>/`。
+
 **历史（已回退）**：曾按桌面惯例把根迁到 `%APPDATA%\Agt` + 首启全量拷贝 `~/.agt`——用户实测裁定为错（每台装到别处的机器、每次 CI 云构建都要复制 GB 级存档；且与 CLI 版数据分叉）。现 `resolve_agt_home()` 桌面分支只调 `_reclaim_legacy_appdata()`：把迁出去的产物**搬回** `~/.agt`（只搬缺失项、从不覆盖、失败静默），`%APPDATA%\Agt` 仅保留系统侧产物（Launcher 的 `recent_workspaces.json`、桌面 `logs/desktop.log`、实例锁 `instance.lock`）。
 
 **通用教训（迁移判定，2026-09-10 · 七轮）**：初始化/迁移的判据必须是**业务数据存在性**，不能用目录 `exists()`——launcher / 日志 / 缓存会预先建目录，用 `exists()` 必被短路（该轮案例见 [桌面版 · 迁移判定 bug](../features/desktop-mode.md#迁移判定-bug目录存在--已初始化launcher-预建目录短路迁移2026-09-10--七轮)）。
@@ -13,7 +15,7 @@
   sessions/<ts>/        # events.jsonl / toollog.jsonl / llm_calls.jsonl / meta.json
     agents/<子id>/      # 子 Agent 嵌套 session（meta.json 含 _agent_meta）
     branches/<分支名>/  # session 分支（meta.branch: branch_of/inherit_lines/base_hash；2026-10-08）
-    projections/        # 投影转储（/config dump_projections true 时）
+    projections/        # 投影转储（/config dump_projections true 时；2026-10-15 起子 Agent 构造时同读 settings 跟随）
   memories/             # 长期记忆三类（semantic 常驻 / episodic 按召回 / procedural 标题+按需）
   plans/  specs/  images/  rag/
 ```

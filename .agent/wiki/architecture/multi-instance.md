@@ -521,3 +521,7 @@ repo 级覆盖（上）落地的是「读侧自动本地优先」；本节补上
 - 消息级驱动（remote_message / remote_ask）**已实现**（2026-08，见 [跨实例消息通信](#跨实例消息通信remote_message--remote_ask2026-08)）——与工具级直执行互补：工具级=远程纯「手」（零 LLM），消息级=让对方带自己上下文干活（对方一轮 LLM）
 - 公网使用需隧道 + 鉴权（本期与全服务同信任模型）
 - **新环境探索的引导**：README「Agent 上手指引」节（2026-08 新增）——`/status` 环境盘点 → AGENTS.md → workspace 结构 → .agent/ 三件套 → models.json → remote_connect 组网 → 框架参考；新实例首轮对话前读它就知道该探索什么（CNB 云容器部署场景的实测教训，见 [v0.22.0 发布记录](../releases/v0.22.0.md)）
+## 统一看板：dashboard 管理面（2026-10-15，spec s_95425415，commit 99addf8）
+
+**`agt-web --dashboard [port]`（默认 9100）**——不装配 Agent 的纯管理面，把本机/局域网/cpolar 公网的多实例收进一张卡片区：状态轮询（🟢🟡🔴）、本地实例启停（杀树/接管）、自动发现（netstat + cpolar 域名推断）、拉线（对 A 调 `/api/remote/add`）、互动群聊流（InteractionHub 旁听 remote_* 调用）。组网端点**零改动**——dashboard 只是它们的批量消费端；拉线状态跟随 A 的 session 存档（`extra_state.remote_servers`，见[串台后记二](#后记二轮裁定改存-session-存档-extra_stateremote_servers2026-09-18--二commit-a2cd6fc用户裁定)），**A 重启后需重拉网线**（既有设计非 bug）。机制、端点与冒烟套件详见 [dashboard](../features/dashboard.md)。
+

@@ -415,6 +415,22 @@ ag = _state.get("agent") or agent   # ← NameError: name 'agent' is not defined
 
 **验证**：空任务 / 运行中+已结束混合 / 单任务详情 / 不存在的 id（报错并列出当前登记）/ 服务+任务拼接换行——五场景全过，py_compile ✅。**生效方式**：`/restart` 后新进程注册该工具；`real_tools.py` 的转后台提示文本无需改——它承诺的 check_bg_task 现在真的存在了（提示文本与工具本体终于对得上）。
 
+## 后台任务完成回执按发起者路由：谁起的谁收（2026-10-15，用户裁定，commit 45369c8）
+
+**用户裁定（2026-10-15，commit `45369c8`）**：超时转后台任务的完成回执按**发起者**路由——谁起的谁收。
+
+**动机**：施工委托（[construction-delegation](construction-delegation.md)）落地后，worker 子 Agent 施工时会跑 `run_python`/`run_shell` 长任务（超时转后台）；而完成回执此前恒推主 Agent——子 Agent 永远等不到自己那笔任务的结果（决策链断在半空），主 Agent 却被不属于它的任务唤醒一轮（围观者被吵醒）。
+
+**三层实现**（src/agent.py + real_tools.py + multiagent.py）：
+
+| 触点 | 内容 |
+|---|---|
+| `real_tools` | 线程局部 owner 记进 `_bg_tasks`（`set_bg_owner`）——任务条目自带发起者 |
+| `Agent._exec_tool` 统一入口 | 每次执行前 `set_bg_owner(self)` 设位。**设位放统一入口的原因**：并行工具走线程池（`_run_tools_parallel`），线程局部只在「真正执行工具的那个线程」里有效——统一入口逐个设位才能覆盖串行/并行/主/子 Agent 全路径 |
+| `Agent._on_bg_task_done(owner=…)` | owner 非空且非 self → `multiagent.deliver_notice(owner, header, seed=rec)` 路由（2026-10-15 从 agent_notify 忙闲分流抽出的复用件：忙 → 有 seed 走 push_message 保合成记录，否则 queue_user_message；空闲 → 裸线程立即消费一轮）；owner 为 None / 不可用 / 已销毁 → **兜底回调持有者自收，不失联** |
+
+回执内容不变：仍是 `[后台任务完成·自动通知]` 的 check_bg_task 合成工具记录（工具名/参数正确、尾部输出 4000 字），只换了投递对象。
+
 ## 服务看板交互四件套：⭐收藏 / 📄 完整日志 / ⏹Stop / ▶Start（2026-10-06，用户提案，commits 9a039c5 + d22bd34）
 
 服务卡片展开区（日志 pre 下方）按钮排（commit `9a039c5` 三件 + `d22bd34` 补 📄，src/static/index.html + src/server.py）：

@@ -1,5 +1,5 @@
 {
- "workflow/before_turn_retrieval.xml": "e3d73b63b5257081",
+ "workflow/before_turn_retrieval.xml": "75da73643dd26a50",
  "workflow/cs_auto_diag.xml": "f79f1d838cbffcc8",
  "workflow/custom_tool_demo.xml": "10de5f7a538fc4e5",
  "workflow/diff_snapshots.xml": "e7b7039c34415d45",
@@ -9,7 +9,7 @@
  "workflow/reload_hot.xml": "447d5b2c8d1fc95f",
  "workflow/rerank_topk.xml": "8acc3a2f48e441b5",
  "workflow/score_rerank.xml": "de5f31b8c81e2003",
- "workflow/skill_suggest.xml": "3ff44b00456e7ab6",
+ "workflow/skill_suggest.xml": "93166ac616f8995b",
  "workflow/stock_query.xml": "cb57f2f9fbc4d605",
  "workflow/wiki_auto_query.xml": "9ae9849207b84fce",
  "workflow/wiki_auto_query_react_demo.xml": "4732f802b215a9a3",
@@ -30,6 +30,6 @@
  "dir_doc/.agent/nodes/README.md": "6cc6422c8fd87c4c",
  "workflow/extract_keywords.xml": "c9cb9ba29a2d1bdb",
  "workflow/recap_gen.xml": "80c416012d5b3a48",
- "workflow/wiki_auto_maintenance.xml": "7505537e633a3b1c",
+ "workflow/wiki_auto_maintenance.xml": "f87b2c51d053f124",
  "agent/desktop-operator/tools/image_feed_poc.py": "b6e9bdd7fa827872"
 }

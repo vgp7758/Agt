@@ -85,6 +85,10 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 - **`list_services` 合并视图**（2026-09-06 同批，background_tools.py）：【后台服务】+【后台任务】（bg_id/工具名/状态/已跑时长）一处看全——详见 [background-scheduler](background-scheduler.md#后台进程一览与任务查询list_services-合并视图--check_bg_task-真工具2026-09-06commit-e72c0e1)
 - 唤醒理由（与 service_exit 策略化对照）：转后台任务本来是**同步等待**（超时被迫转），结果通常是决策链一环；一次性任务跑完即报、无套娃循环——恒唤醒天然安全，不需要策略参数。三族通知语义全景见 [用户交互 · 后台任务完成自动通知](user-interaction.md#后台任务完成自动通知bg_task-恒唤醒2026-08-30commit-6460ad1)
 
+### 后记：完成回执按发起者路由——谁起的谁收（2026-10-15，commit 45369c8）
+
+`_on_bg_task_done` 新增 `owner` 参数（用户裁定 2026-10-15，commit `45369c8`）：real_tools 任务登记时记发起者（`set_bg_owner`——`_exec_tool` 统一入口逐个设位，线程局部只在真正执行工具的线程里有效，覆盖串行/并行/主/子 Agent 全路径）；完成时 owner 非本实例 → `multiagent.deliver_notice(owner, …)` 投给发起者（忙 → push_message 保合成记录，空闲 → 立即消费），owner 不可用兜底自收不失联。动机 = 施工委托：worker 起的长任务完成通知此前误推主 Agent（子 Agent 等不到自己那笔、主 Agent 被无关任务吵醒）。详见 [background-scheduler · 回执路由](background-scheduler.md#后台任务完成回执按发起者路由谁起的谁收2026-10-15用户裁定commit-45369c8)。
+
 ## TOOL_TIMEOUT 边界：只管 subprocess 系——inline 工具不受管（2026-09-16，commit 30fe776）
 
 用户问句钉死的执行模型边界：「tool_timeout 比 sleep(t) 短时，sleep 会在 timeout 提前结束吗？」——**不会**。转后台/超时机制挂在 `_run_subprocess_streaming`，只覆盖 **subprocess 系**（run_python / run_shell / run_script / subprocess 模式外置工具）；**inline 模式工具（进程内直调函数，如 misc_tools 的 sleep）没有这层包装，会真实睡满**。

@@ -27,7 +27,9 @@
   .btn.danger:hover { background:#fecaca; }
   .btn.ghost { background:#eef2f7; color:#374151; }
   .btn.mini { padding:3px 8px; font-size:11.5px; border-radius:6px; }
-  main { flex:1; overflow-y:auto; padding:14px 16px 0; display:flex; flex-direction:column; min-height:0; }
+  main { flex:1; overflow:hidden; padding:14px 16px; display:flex; flex-direction:row; gap:12px; min-height:0; }
+  /* 左侧实例卡片区（滚动独立，右抽屉打开时让位变窄——左右布局） */
+  #leftPane { flex:1; min-width:0; overflow-y:auto; display:flex; flex-direction:column; }
   /* —— 实例卡片网格 —— */
   #cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
   .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px;
@@ -56,9 +58,33 @@
   .chip .x:hover { color:#b91c1c; }
   .ops { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
   .err { font-size:11.5px; color:#b91c1c; background:#fef2f2; border-radius:6px; padding:3px 8px; }
-  /* —— 互动群聊流 —— */
-  #chatSec { margin-top:14px; background:#fff; border:1px solid var(--line); border-radius:12px;
-             display:flex; flex-direction:column; min-height:320px; flex:1; }
+  /* —— 互动群聊流：右侧抽屉（用户提案 2026-10-15）——默认收起藏进右下 fab，
+     打开时与卡片区左右并排（推挤不遮挡）；宽度动画推入，内层定宽防挤压变形 */
+  #chatSec { background:#fff; border:1px solid var(--line); border-radius:12px;
+             display:flex; flex-direction:column; min-height:0; height:100%;
+             width:0; min-width:0; flex:none; overflow:hidden;
+             transition:width .22s ease, min-width .22s ease; }
+  #chatSec.open { width:424px; }
+  #chatSec .chatInner { width:424px; min-width:424px; height:100%; display:flex;
+             flex-direction:column; }
+  /* —— 群聊浮动按钮（fab，抽屉收起时可见）—— */
+  #chatFab { position:fixed; right:20px; bottom:20px; width:46px; height:46px; border-radius:50%;
+             background:var(--dark); color:#fff; border:0; cursor:pointer; font-size:20px;
+             box-shadow:0 4px 14px rgba(0,0,0,.28); z-index:40;
+             display:flex; align-items:center; justify-content:center; transition:transform .15s; }
+  #chatFab:hover { background:#2f3339; transform:scale(1.07); }
+  #chatFab .fb { position:absolute; top:-4px; right:-4px; min-width:18px; height:18px; border-radius:9px;
+             background:var(--bad); color:#fff; font-size:11px; font-weight:700;
+             display:flex; align-items:center; justify-content:center; padding:0 4px;
+             border:2px solid var(--bg); }
+  /* 窄屏（手机）：左右并排放不下 → 抽屉改右侧覆盖层 */
+  @media (max-width:880px) {
+    main { flex-direction:column; }
+    #chatSec { position:fixed; top:52px; right:0; bottom:0; z-index:30; width:min(424px,92vw);
+               box-shadow:-6px 0 24px rgba(0,0,0,.16); display:none; }
+    #chatSec.open { display:flex; width:min(424px,92vw); }
+    #chatSec .chatInner { width:100%; min-width:0; }
+  }
   .chatHead { padding:9px 14px; border-bottom:1px solid var(--line); display:flex; gap:8px;
               align-items:center; flex-wrap:wrap; }
   .chatHead b { font-size:13.5px; }
@@ -112,21 +138,29 @@
 </header>
 
 <main>
-  <section id="cards"></section>
+  <section id="leftPane">
+    <section id="cards"></section>
+  </section>
 
   <section id="chatSec">
-    <div class="chatHead">
-      <b>💬 互动群聊流</b>
-      <select id="fFrom" onchange="refilter()"><option value="">全部发送方</option></select>
-      <span style="color:#9ca3af;font-size:12px">→</span>
-      <select id="fTo" onchange="refilter()"><option value="">全部接收方</option></select>
-      <input id="fKw" placeholder="关键字…" oninput="refilter()" />
-      <button class="btn mini ghost" onclick="clearChat()">清屏</button>
-      <span class="hint" id="chatHint">自 dashboard 启动起积累；更早记录视实例版本回填</span>
+    <div class="chatInner">
+      <div class="chatHead">
+        <b>💬 互动群聊流</b>
+        <select id="fFrom" onchange="refilter()"><option value="">全部发送方</option></select>
+        <span style="color:#9ca3af;font-size:12px">→</span>
+        <select id="fTo" onchange="refilter()"><option value="">全部接收方</option></select>
+        <input id="fKw" placeholder="关键字…" oninput="refilter()" />
+        <button class="btn mini ghost" onclick="clearChat()">清屏</button>
+        <span class="hint" id="chatHint">自 dashboard 启动起积累；更早记录视实例版本回填</span>
+        <button class="btn mini ghost" onclick="toggleChat(false)" title="收起到右下角图标">➔ 收起</button>
+      </div>
+      <div id="chatFlow"><div class="empty">暂无互动记录——实例间 remote_*/notify 调用会实时出现在这里</div></div>
     </div>
-    <div id="chatFlow"><div class="empty">暂无互动记录——实例间 remote_*/notify 调用会实时出现在这里</div></div>
   </section>
 </main>
+
+<!-- 群聊 fab（抽屉收起时可见；badge=抽屉关闭期间的未读互动数） -->
+<button id="chatFab" onclick="toggleChat(true)" title="互动群聊流">💬<span class="fb" id="chatFabBadge" style="display:none">0</span></button>
 
 <!-- 添加/编辑弹窗 -->
 <div class="mask" id="mAdd">
@@ -421,14 +455,33 @@ async function pollChat() {
         fresh++;
       }
       if (chatAll.length > 3000) chatAll = chatAll.slice(-2500);   // 前端防爆
-      if (fresh) renderChat();
+      if (fresh) {
+        if ($("chatSec").classList.contains("open")) renderChat();
+        else { unreadChat += fresh; updFabBadge(); }   // 抽屉收着：fab 记未读
+      }
     }
   } catch (e) { /* 瞬断静默 */ }
 }
 function refilter() { renderChat(); }
 function clearChat() { chatAll = []; $("fFrom").value = ""; $("fTo").value = ""; $("fKw").value = ""; renderChat(); }
 
+/* —— 群聊抽屉开关（用户提案 2026-10-15）：默认收起藏 fab，打开时与卡片区左右并排；
+   未读计数挂在 fab badge（收起期间的新互动），打开即清零；开合偏好记 localStorage —— */
+let unreadChat = 0;
+function toggleChat(open) {
+  $("chatSec").classList.toggle("open", open);
+  $("chatFab").style.display = open ? "none" : "flex";
+  try { localStorage.setItem("dashChatOpen", open ? "1" : "0"); } catch (e) {}
+  if (open) { unreadChat = 0; updFabBadge(); if (chatAll.length) renderChat(); }
+}
+function updFabBadge() {
+  const b = $("chatFabBadge");
+  b.style.display = unreadChat > 0 ? "flex" : "none";
+  b.textContent = unreadChat > 99 ? "99+" : unreadChat;
+}
+
 /* ============================== 启动 ============================== */
+toggleChat(localStorage.getItem("dashChatOpen") !== "0");   // 首访默认开（可见性），关过则记忆关
 poll(); pollChat();
 setInterval(poll, 3000);
 setInterval(pollChat, 3000);

@@ -1197,23 +1197,46 @@ def make_subagent_tools(agent) -> list:
                 def _route_answer(answer_text: str):
                     """路由 answer 到 caller 的 inbox——run() 返回后立即调用。
                     放在 recap/meta/background_tasks 之前：即使后续步骤被 /restart 杀进程，
-                    answer 已在 inbox → inbox_thread → work_q → worker → run → 唤醒 caller。"""
+                    answer 已在 inbox → inbox_thread → work_q → worker → run → 唤醒 caller。
+                    闭包兜底（用户实锤 2026-10-15·worker-p_d721b263）：registry 条目缺失/条目
+                    agent=None 时此前【静默丢通知】（answer 出来了但 caller 收不到）——caller 就是
+                    派发者自身（施工委托 caller=self.agent_id）时 registry 只是加速索引，闭包里的
+                    agent 才是真源，直接退回它推；跨 Agent 显式 caller 仍依赖 registry（查不到只告警）。"""
                     if not caller_id or caller_id == "user":
                         return
                     try:
+                        routed = False
                         if reg:
                             caller_entry = reg.lookup(caller_id)
                             if caller_entry and caller_entry.agent:
-                                body = answer_text if len(answer_text) <= 4000 else (
-                                    answer_text[:4000] + f"\n…（已截断 {len(answer_text) - 4000} 字，"
-                                                 f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
-                                caller_entry.agent.push_message(
-                                    f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
-                                    source=f"subagent:{_aid}")
-                                _LOG.info("子Agent %s answer 已入队 caller %s 的 inbox（len=%d）",
-                                          _aid, caller_id, len(caller_entry.agent.inbox))
+                                target = caller_entry.agent
                             else:
-                                _LOG.warning("子 Agent %s 完成但找不到 caller %s 的 registry 条目", _aid, caller_id)
+                                target = None
+                                _LOG.warning("子 Agent %s 完成时 registry 无 %s 的活条目"
+                                             "（缺失或 agent=None）%s", _aid, caller_id,
+                                             "——caller=派发者自身，走闭包兜底直推"
+                                             if caller_id == agent.agent_id else "——跨 Agent 委托，无法兜底")
+                        else:
+                            target = agent if caller_id == agent.agent_id else None
+                            if target is None:
+                                _LOG.warning("子 Agent %s 完成但无 registry 且 caller %s 非派发者，通知丢弃", _aid, caller_id)
+                        if target is not None:
+                            body = answer_text if len(answer_text) <= 4000 else (
+                                answer_text[:4000] + f"\n…（已截断 {len(answer_text) - 4000} 字，"
+                                             f"完整回复用 agent_query_events(\"{_aid}\", 1) 查看）")
+                            target.push_message(
+                                f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{body}",
+                                source=f"subagent:{_aid}")
+                            routed = True
+                            _LOG.info("子Agent %s answer 已入队 caller %s 的 inbox（len=%d）",
+                                      _aid, caller_id, len(target.inbox))
+                        if not routed and caller_id == agent.agent_id:
+                            # registry 路径全失败但 caller 就是派发者：闭包直推（终极兜底——
+                            # 真源永远是派发时的 agent 实例，本工具组就是绑定它构建的）
+                            agent.push_message(
+                                f"📨〔子 Agent '{_name}' [{_aid}] 完成〕{answer_text[:4000]}",
+                                source=f"subagent:{_aid}")
+                            _LOG.info("子Agent %s answer 经闭包兜底直推派发者 %s", _aid, caller_id)
                     except Exception as route_err:
                         _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
 

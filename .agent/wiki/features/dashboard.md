@@ -83,6 +83,10 @@ WATCHED_TOOLS = {remote_message, remote_ask, remote_call_tool, agent_notify, age
 - 自动发现只扫本机 LISTEN 端口；远程实例用「添加」手工录入（url + token）
 - cpolar 域名会漂移（见 [agent-watch ⚠️](agent-watch.md)）——发现结果里的 public_url 只在当次有效
 
+## 随 v0.35.0 发布（2026-10-16）
+
+随 **v0.35.0** 进包（2026-10-16，本版主打件）。同版还有 [explore 投影层内插/断点续跑](explore-tool.md) 与 [repos 数据根重定向](repos-dir-redirect.md)；本次发版本身即 [release_publish 首次实战](release-publish.md)——② 半成功（PyPI 已上线、git push 网络中断）的处置实录在该页。
+
 ## 相关页面
 
 - [多 agt 实例组网](../architecture/multi-instance.md) —— wire/unwire 复用的组网端点与注册表语义

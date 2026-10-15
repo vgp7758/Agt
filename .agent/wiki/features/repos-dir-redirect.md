@@ -42,6 +42,10 @@
 - `AGT_HOME` / `AGT_DESKTOP` 解析的 AGT_DIR 不受影响——重定向只动 `repos/` 子树，models.json / settings.json / mcp.json 等仍住 AGT_DIR
 - 本文同轮姊妹修复：dump_projections 子 Agent 跟随，见 [上下文引擎 · 投影转储后记](../architecture/context-engine.md#投影转储文件名与-t/s-标记commit-4aced81)
 
+## 随 v0.35.0 发布（2026-10-16）
+
+repos_dir + 同轮姊妹修复 dump_projections 子 Agent 跟随随 **v0.35.0** 进包（2026-10-16）。同版还有 [dashboard 多实例看板](dashboard.md) 与 [explore 投影层内插/断点续跑](explore-tool.md)。
+
 ## 相关页面
 
 - [运维 · 存档布局](../guides/ops.md)——目录树总览（重定向后 `~/.agt/repos/` 读作 `<repos_dir>/`）

@@ -52,6 +52,21 @@ dry_run 分支：跳过 ①（允许脏工作区）、② 传 `--dry-run`、③�
 
 正式发布入口：`/reload tools` 确认工具在列后，一句话「发吧」→ Agent 一次 `release_publish` 调用 + 贴结果，不再四连手工。
 
+## 首次实战发版：v0.35.0（2026-10-16，part=minor）——② 半成功处置 + version_file 结构坑
+
+dry-run 之后的首个生产运行，一次调用走完 ①，卡在 ② 内部末段——工具的失败报告按设计如实带回内部三段状态：
+
+- **✅ 构建完成**：`agt_agent-0.35.0` whl + tar.gz；**✅ 已上传 PyPI**（人工端点三连验证过：`pypi.org/pypi/agt-agent/0.35.0/json`；国内镜像滞后 10~30 分钟属正常）
+- **❌ git push 失败**：`ssh.github.com:443` 当日持续超时 → ② 整体判失败，**③④ 未执行**（符合「失败即中断」语义，输出明示「后续步骤未执行」）
+- **部分成功粒度**：② 内部是 bump→build→upload→push 串联，push 挂在末段时 PyPI 其实已上线、bump commit（`897556c`）已落本地——按失败报告逐项补尾即可，**不要误判发布失败而重发**（PyPI 同版本号重复 upload 会被拒）
+- **② 半成功的收尾清单**：人工验证 PyPI 端点 → 本地 commit+tag 重试 push（本次挂后台每 10 分钟重试；tag 上去自动触发 GitHub Actions 桌面版云构建）→ 补 ③ 的 version_file 提交
+
+### 坑：version_file.txt 是 VSVersionInfo 结构文件，不是裸版本号（本次先踩后恢复）
+
+- `packaging/version_file.txt` 是 pyinstaller `--version-file` 消费的 **Python VSVersionInfo 字面量**——版本号要在 **filevers/prodvers 元组 + FileVersion/ProductVersion 字符串共四处**字段级同步；整文件覆写成 `"0.35.0\n"` 会炸掉结构（本次实操先踩：原结构从调用记录原文捞回，字段级重写 + 语法校验过）
+- **它长期无人编辑**：③ 的「同步」只是 git 层面的提交搬运、从不改文件内容，版本字段更新历来靠人工——而自 v0.26.4 后没人做过，其间所有版本的桌面包 Windows 资源元数据都停在 0.26.4（仅影响文件属性显示，不影响功能）
+- **改进方向**（未做）：release.py bump 时顺带字段级同步 version_file.txt，或 ③ 改为「版本一致才提交」的校验式提交
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)

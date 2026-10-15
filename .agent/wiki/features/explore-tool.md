@@ -52,3 +52,7 @@ s_7edebd56 已由 [施工委托](construction-delegation.md) 线落地：worker-
 - **触达文件**：`src/session.py`（投影内插 + `_scan_pending_explores`）、`src/agent.py`（轮首恢复提示 + 摘除 explore 的 `_seed_steps` 调用方）、`explore_tools.py` 双份同构（运行时 `.agent/tools/` + 种源 `src/assets/tools_builtin/`）、`test/test_explore_tool.py`。
 - **插曲**：worker 完工时刻正落 .agt 数据根 FS 抖动窗，caller=`_main_` 的 answer 未进主 Agent inbox——首例回执丢失事故详见 [施工委托 · 后记二](construction-delegation.md)；代码零损失（commit 在 git），主 Agent 侧复核待闭环。
 
+## 随 v0.35.0 发布（2026-10-16）
+
+s_7edebd56 全量（投影层内插 + run_id 旁车 + 断点续跑）随 **v0.35.0** 进包（2026-10-16）。同版主打 [dashboard 多实例看板](dashboard.md)，姊妹件 [repos 数据根重定向](repos-dir-redirect.md)。
+

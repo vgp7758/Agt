@@ -229,10 +229,29 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - seed_state 基线 12 条落盘（`/update-assets` 可对账）
 - 生效方式：`/restart`
 
+## 开发文档播种 + main.yml 扩展点索引：新 repo 开箱即懂（2026-10-16，用户中途补充提案）
+
+
+> 用户中途补充（随示例插件播种同轮）：「如何开发这些插件的文档 README.md 也需要播种一下……默认 main.yml 里最好要提一下所有这些特殊目录中的 README.md，以便在新的 repo 中 agent 能发现这些拓展方式」——两件都落在**新 repo 开箱链路**上：① 文档给「想写插件的人和 Agent」，② 索引给「运行中的 Agent」。
+
+### ① 插件开发 README：src/dir_docs/plugins.md → .agent/plugins/README.md
+
+- 84 行一页通，七块内容：目录三件结构（manifest.yml 必需 + backend.py / frontend.js / 静态资产可选）、manifest 字段表、**backend 装配协议**（`setup(api)`：register_tool · register_command · register_route · on_tool_pre/post_execute · emit 全带示例）、**前端 AgtPlugin SDK**（addButton · addPanel · addChatCard · ws.on · api.post 全带示例）、**自定义图标机制**（图标放插件目录，经 `/plugins-assets/<名>/<文件>` 引用，同 css/字体等任意资产）、开发调试（backend `/reload plugins` 热生效、frontend 刷新即生效）、自己的插件进随包分发的路径（`src/assets/plugins`）
+- 接线：src/agent_config.py `seed_dir_docs` 目录循环加 `(".agent/plugins", "plugins")`——六个扩展目录凑齐，**新 repo 首启自动播种**；本 repo 已播种 + seed_state 基线记账（/update-assets 可对账）
+- 播种管道语义见 [workspace 播种](../features/workspace-seeding.md)；与 docs/plugins.md（引擎侧开发指南 + 安全模型声明）双文档并存：README 面向新 repo 入门，docs 面向协议细节
+
+### ② main.yml 扩展点索引：SYSTEM 注入【扩展点·特殊目录】段
+
+- 种源 src/assets/main.yml + 当前全局 main.yml **双份同步**（双份均过 YAML 结构校验）；插在【随包资产】段之后
+- 内容：六个扩展目录各配一句「放什么 + 入口在哪」——`.agent/plugins/`（引擎级插件：dock 按钮/侧滑面板/HTTP 路由/工具/钩子；随包示例 open-folder·feedback·webide）、`.agent/agents/`（子 Agent 声明）、`.agent/workflows/`（工作流 XML）、`.agent/skills/`（技能包）、`.agent/tools/`（脚本工具）、`.agent/nodes/`（工作流节点插件）
+- 效果：新 repo 的主 Agent 从 SYSTEM 就知道「给引擎/界面加能力前，先读对应目录的 README」——扩展点发现从「靠文件系统漫游碰运气」变成「声明式索引」；生效：当前实例 /restart 后生效，种源对新 repo 天然生效
+
 ## 关联
+
 
 - 实装核心：src/plugins.py（引擎层接线 5 处：agent.py / chat.py / commands.py / server.py / index.html，见上文「落地」节）
 - 开发指南：[docs/plugins.md](../../docs/plugins.md)（插件目录约定 + PluginAPI + AgtPlugin + 安全模型声明）；设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
+- [workspace 播种](../features/workspace-seeding.md) — seed_dir_docs 播种管道：随包插件 README（src/dir_docs/plugins.md，见上文「开发文档播种」节）与其余 5 份目录说明同管道分发到各 repo；main.yml【扩展点·特殊目录】索引同见上文
 - demo 插件：[.agent/plugins/example-hello/](../../.agent/plugins/example-hello/manifest.yml)
 - [节点插件化](node-plugins.md) — 单切面先行示范（工作流节点「写两个文件即得」）；本方案是聚合层推广
 - [工具外置](../features/tool-externalization.md) — `.agent/tools/` 协议被插件 register_tool 同款复用

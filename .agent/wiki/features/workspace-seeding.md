@@ -4,10 +4,12 @@
 
 ## seed_dir_docs · 约定目录 README（用户提案：把框架那一页文档以 README.md 播种到目录位置）
 
-- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效，2026-10-15 收编后 **5 份**）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)，收编后重写为主目录视角）、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态 + [直接写 yml 创建最小模板](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)，2026-10-06）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）；原 `agent_tools.md` 已删（内容并入 tools_builtin.md）
-- **播种目标（5 个约定目录，2026-10-15 收编后）**：`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`.agent/nodes/`——**旧 `tools/builtin/`、`nodes/` 不再播种/创建**（扫描侧仍兼容存量，见 [默认目录收编](tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)）
+
+- **文档源**：`src/dir_docs/`（随包分发，pip 用户同样生效，2026-10-16 起 **6 份**）——`tools_builtin.md`（脚本工具 agt_register 约定 + [任务脚本防御](tool-externalization.md)，收编后重写为主目录视角）、`workflows.md`（XML 骨架 / exec_workflow·debug·钩子）、`agents.md`（含子 Agent 目录形态 + [直接写 yml 创建最小模板](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)，2026-10-06）、`skills.md`（技能包结构 / 双层激活 / 七件套）、`nodes.md`（节点插件 .py+.js）、`plugins.md`（引擎级插件开发一页通，2026-10-16）；原 `agent_tools.md` 已删（内容并入 tools_builtin.md）
+- **播种目标（6 个约定目录，2026-10-16 起；前 5 个为 2026-10-15 收编形态）**：`.agent/tools/`、`.agent/workflows/`、`.agent/agents/`、`.agent/skills/`、`.agent/nodes/`、`.agent/plugins/`——**旧 `tools/builtin/`、`nodes/` 不再播种/创建**（扫描侧仍兼容存量，见 [默认目录收编](tool-externalization.md#默认目录收编本地自定义统一进-agent2026-10-15用户裁定commit-21351b1)）
 - **语义**：目录不存在 → 创建目录 + 播种（引导价值：一眼看到全部可扩展点）；`README.md` 已存在 → 跳过——**用户改动永不覆盖**
 - **写入**：字节级 + `seed_state` 基线——接入 /update-assets 三方 hash 判定管道（框架升级后文档可安全更新）
+- **plugins.md 种源加入（2026-10-16，用户中途补充提案）**：随[随包播种示例插件](../architecture/plugin-sdk.md)扩散——示例插件只有成品没有开发文档，新 repo 用户/Agent 想自己写插件没有入口。一页通（84 行）覆盖：目录三件结构（manifest.yml 必需 + backend.py / frontend.js / 静态资产可选）、manifest 字段、**backend `setup(api)` 装配协议**（register_tool / register_command / register_route / on_tool_pre·post_execute / emit 全带示例）、**前端 AgtPlugin SDK**（addButton / addPanel / addChatCard / ws.on / api.post）、自定义图标（放插件目录 + `/plugins-assets/<名>/<文件>` 引用）、开发调试（backend `/reload plugins` 热生效、frontend 刷新即生效）、自己的插件进随包分发的路径（`src/assets/plugins`）。接线：src/agent_config.py `seed_dir_docs` 目录循环加 `(".agent/plugins", "plugins")`——六个扩展目录凑齐；明细见 [插件 SDK · 开发文档播种](../architecture/plugin-sdk.md)
 - **`.agent/agents/README.md` 的消费端闭环**（2026-10-06 · 三，commit e0d0060）：该目录说明此前会被 [/agents 管理页](agents-admin.md)当 name=README 的伪 agent 列出（平铺 `*.md` 扫描）——现 `load_agents_index` 显式跳过，页面改提供「📖 目录说明」只读渲染入口（`GET /api/agents/readme-doc`，python-markdown 渲染）
 - **种源协议纠错（2026-10-12，9013 实例反馈，commit aae2f69）**：`tools_builtin.md` 种源示例此前教的是引擎不认的描述符字段（`parameters` 字段表 + `run` lambda）——真实协议是 `"func": 函数引用`，schema 从签名+类型注解自动推断、描述读 docstring。种源已修正 + 本 repo `tools/builtin/README.md` 同步覆盖（旧版为播种原版、非用户改动，覆盖安全）；其余 5 份 dir_docs 同日扫描无同款问题。**扩散路径**：其它实例删旧 README 重启重播种，或 `/update-assets`（三方 hash：未改过的播种原版被新版覆盖）。明细见 [工具外置 · 播种 README 协议纠错](tool-externalization.md)
 
@@ -39,9 +41,10 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 
 ## 验证
 
-- 临时 workspace：首次播种 7/7 → 幂等（二次 0）→ 手改 README 后 seed 不覆盖（**2026-10-15 收编后为 5/5**：`.agent/tools` + `.agent/workflows` + `.agent/agents` + `.agent/skills` + `.agent/nodes`，旧 `tools/builtin`、`nodes` 不再创建）
+
+- 临时 workspace：首次播种 7/7 → 幂等（二次 0）→ 手改 README 后 seed 不覆盖（**2026-10-15 收编后为 5/5**，**2026-10-16 加 plugins 后为 6/6**：前述 5 目录 + `.agent/plugins`，旧 `tools/builtin`、`nodes` 不再创建）
 - test-svc 九项全绿：read / navigate（树+标题大纲）/ run_code（greet 两行问候）/ evaluate（EVAL PASS）/ equip（能力清单）/ use `add 5`→`add 3` = count 8（**跨调用状态保持**）
-- 本 repo 实测：6 份 README + test-svc 落位（收编后本 repo 目录说明为 5 份，`tools/builtin/README.md`、`nodes/README.md` 已删）
+- 本 repo 实测：6 份 README + test-svc 落位（收编后 5 份；**2026-10-16 播种 `.agent/plugins/README.md` 后本 repo 目录说明为 6 份**，`tools/builtin/README.md`、`nodes/README.md` 已删）
 
 ## 注意事项
 

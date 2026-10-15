@@ -162,9 +162,9 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 - `AgtPlugin.util.esc / toast` 工具件
 - 插件文案不进 i18n dict（自带，见裁定 3）
 
-### demo 插件 example-hello
+### demo 插件 example-hello（2026-10-16 精简：只留 🔌 面板入口，并入随包种源）
 
-`.agent/plugins/example-hello/`：工具 2 个 + `/phello` 命令 + 插件路由 + deny 钩子（拦一个演示工具名）+ emit 事件 → 前端卡片 + 按钮/面板。`/restart` 后自动加载——WebUI fabDock 出现 👋 按钮，会话内可试 `/phello`。
+`.agent/plugins/example-hello/`（2026-10-16 起同时入随包种源 `src/assets/plugins/example-hello/`，manifest + backend.py + frontend.js 三件）：`/phello` 命令 + 插件路由 + deny 钩子（拦一个演示工具名）+ emit 事件 → 前端卡片 + **🔌 面板一个入口**（卡片/面板/订阅演示能力保留；原 👋「插件打招呼」按钮按用户裁定删除——按钮席位让给 open-folder / feedback / webide 三个实用插件）。`/restart` 后自动加载。
 
 ### 管理面
 
@@ -185,6 +185,49 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 - L2 隔离实例：新代码启动 + Agent 装配 + before_turn 钩子链正常
 - node --check：index.html 注入器 script 块 + demo frontend.js
 - 生效方式：`/restart`（引擎层装配，改 backend.py 后 `/plugins reload` 热生效）
+
+## 随包播种示例插件 + 内置 dock 功能插件化收官（2026-10-15/16，用户提案）
+
+> 用户提案（2026-10-15）：「我觉得把 Open Folder 和 Feedback 作为示例功能播种吧」——把两个实用功能做成插件 SDK 的真实示例随包分发。落地时扩散成**四例播种 + 内置 dock 功能全面退役**（2026-10-16 收官）：插件体系从「新增扩展点」升级为「框架自身功能的承载形态」——dock 上 📁 打开文件夹 / 💬 反馈 / VS Code logo 三个内置按钮全部改由插件注入，引擎与前端的对应实现全删。
+
+### seed_default_plugins()：种源 → 本地，已装不覆盖
+
+src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），src/chat.py 启动装配时紧跟技能播种之后调用：
+
+- **种源**：`src/assets/plugins/<名>/`（随包分发，打包装箱）→ **播种**：`.agent/plugins/<名>/`（本 repo 生效）
+- **幂等**：以 `manifest.yml` 判定存在——**已装则整插件跳过**（用户对已播种插件的任何改动永不覆盖）
+- **/update-assets 纳管**：播种时写 seed_state 基线（key `plugin/<名>/<rel>`，.py/.js 后缀）——升级时对已播种插件的覆盖判定走三方 hash 比对（与技能/静态资产同款）
+
+### 四个示例插件
+
+| 插件 | 席位 | 要点 |
+|---|---|---|
+| open-folder | addButton 📁 | `POST /api/open-folder/open`——在跑 agt 的机器上弹文件管理器（win=`os.startfile` / mac=`open` / linux=`xdg-open` 三平台兜底）；`exposed_to_llm: false`（纯前端功能，不占 LLM 投影） |
+| feedback | addPanel 💬 | 两条插件路由：`POST /api/feedback/meta`（类型选项/作者联系方式/环境预览）+ `POST /api/feedback/submit`；**核心逻辑零复制**——backend.py 直接 `import feedback`，落盘/飞书推送/探针过滤全继承（见 [feedback](../features/feedback.md)） |
+| webide | addButton（VS Code logo） | serve-web 全链路搬迁：端口潜规则 / 复用优先 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限 / 乐观退页签原样入插件 backend.py（见 [webide](../features/webide.md)） |
+| example-hello | 面板 + 命令/钩子/卡片 | demo 精简版（见上文），首次入种源 |
+
+### 插件本地静态资产：图标随插件分发
+
+- 既有静态路由 `/plugins-assets/<插件名>/<文件>`（`plugins_assets` → `plugin_asset`：resolve 后必须仍在该插件目录内，防 `../` 穿越）首次派上真实用场：**webide 的 vscode.png（9511B）放插件目录内随播种分发**，不再依赖 `src/static/icons/`
+- `AgtPlugin.ui.addButton` 的 `icon` 字段收 HTML——`icon: '<img src="/plugins-assets/webide/vscode.png" ...>'` 即任意自定义图标；插件自带 css/字体/图片同理（放插件目录、走同一路由）
+
+### SDK 增强：addButton onClick 事件透传
+
+`addButton` 的 `onClick` 由无参升级为**透传事件对象**——插件可拿按钮元素引用做 loading 态（webide 沿用内置版 `.loading` class 手法：半透明 + progress 光标，避免 textContent 覆盖 `<img>` 图标的旧坑，见 [fab-dock](../features/fab-dock.md)）。
+
+### 内置全面退役：单一实现源收敛到插件
+
+- index.html **-93 行**：📁/💬/VS Code logo 三按钮 DOM + `openWebIde()` + 反馈弹窗 DOM/JS + open-workspace fetch
+- server.py **-177 行**：`/api/open-workspace`、`POST /api/ide/open`（`_ide_payload` / serve-web 拉起 / 滚动预热）、WS 反馈提交分支全删
+- 同一功能从此只有插件一份实现——`/plugins disable feedback` 反馈面板即消失（**启停管理对内置功能同样成立**）
+
+### 验证
+
+- 8 份 JS 语法 node --check 全过（四插件 frontend.js + index.html 注入器等）
+- 干净 workspace 冷启动：自动播种 4 插件（含 vscode.png 图标资产）；重跑幂等不覆盖
+- seed_state 基线 12 条落盘（`/update-assets` 可对账）
+- 生效方式：`/restart`
 
 ## 关联
 

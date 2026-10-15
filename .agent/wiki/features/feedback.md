@@ -81,6 +81,14 @@ def _looks_like_probe(content: str, contact: str) -> bool:
 - **README 反馈章节改版（2026-10-03，awesome-openrouter PR #132 复盘顺手修）**：撤掉过时承诺「提交即直达作者手机（飞书实时推送）」——随包 webhook 撤销后该宣传已不成立；**GitHub Issues 置顶为推荐通道**（公开可追踪），WebUI 💬 / CLI `/feedback` 保留为本地存档通道，作者联系方式（微信 `mrbrick123` / 邮箱 `vgp123@foxmail.com` / GitHub Issues）明列；README 特性表「反馈通道」行同步改写
 - 定位：本地 `/feedback` = 匿名快速存档（永远不丢），Issues = 公开反馈与追踪——互补关系。背景与渠道策略见 [项目推广与冷启动](../guides/promotion.md)
 
+## WebUI 反馈面板插件化（2026-10-16，用户提案「播种示例」）
+
+dock 💬 按钮与反馈弹窗从 index.html 内置改为 **feedback 插件**（2026-10-16，用户提案「把实用功能作为插件示例播种」，随包播种四例之一，见 [插件 SDK](../architecture/plugin-sdk.md)）：
+
+- **frontend.js**：`AgtPlugin.ui.addPanel` 侧滑表单——类型下拉（meta.kinds）/ 内容 / 联系方式（预填作者联系方式）/ 附环境勾选（env 预览）；提交走插件路由
+- **backend.py 两条路由**：`POST /api/feedback/meta`（`VALID_KINDS` + `author_contact_str()` + `_gather_env` 环境预览）+ `POST /api/feedback/submit`（转调 `submit_feedback`，返回结果文案）——**核心逻辑零复制，backend.py 直接 `import feedback`**（引擎同源 `/feedback` 命令与 Agent 工具）：本地落盘 / 飞书推送 / 探针过滤 / 成功文案全部同源继承，本页上述语义不变
+- 内置弹窗 DOM/JS 与 server.py WS 提交分支退役；`/plugins disable feedback` 即隐藏面板（启停管理生效）
+
 ## 注意事项
 
 - 随包默认 webhook 已撤（v0.31.2）——探针骚扰到作者的源头已从包内移除；用户若自行配置 webhook，可在 `~/.agt/feedback.json` 覆盖 URL 或关 `enabled`

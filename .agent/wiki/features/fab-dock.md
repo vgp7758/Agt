@@ -126,6 +126,20 @@ function toggleFabDock(force){
 
 **生效方式**：纯前端（index.html 磁盘 serve），**Ctrl+F5 刷新即生效**，无需 /restart。
 
+## 后记：三图标插件化退役（2026-10-16，用户提案「播种示例」扩散）
+
+**2026-10-16 后记：三图标插件化退役（用户提案「播种示例」扩散）**——dock 图标来源分化为**内置 10 + 插件 3**（插件经 `AgtPlugin.ui.addButton` 动态挂 fabDock 席位，见 [插件 SDK](../architecture/plugin-sdk.md) 播种章节）：
+
+| 图标 | 原内置 | 现由插件提供 | 说明 |
+|---|---|---|---|
+| 📁 打开文件夹 | `btnOpenDir` + `POST /api/open-workspace` | open-folder | 弹的是**跑 agt 那台机器**的文件夹（手机/远程访问同一场景） |
+| 💬 反馈 | `btnFeedback` + 反馈弹窗 | feedback | 弹窗改 addPanel 侧滑表单（见 [feedback](feedback.md)） |
+| VS Code logo | `btnIde` + `openWebIde()` | webide | icon=`<img src="/plugins-assets/webide/vscode.png">`（**插件本地资产**，随播种分发）；`.loading` 加载态经 onClick 事件透传实现（见 [webide](webide.md)） |
+
+- 上文「13 个图标完整清单」中此三行转历史记录；插件按钮由插件 JS 自行创建（无内置固定 id），hover 文案由 addButton 的 label 字段承载
+- 内置对应实现全删：index.html **-93 行**（三按钮 DOM / `openWebIde()` / 反馈弹窗 / open-workspace fetch）、server.py **-177 行**（`/api/open-workspace`、`/api/ide/open`、`_ide_payload`、WS 反馈分支）——单一实现源收敛到插件
+- `/plugins disable <名>` 可单独关掉任一图标；重启用 `/plugins enable`
+
 ## 相关页面
 
 - [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）

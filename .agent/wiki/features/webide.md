@@ -4,6 +4,17 @@
 
 控件栏一个按钮把整个工作区用浏览器版 VS Code 打开（`code serve-web`，VS Code 1.134+ **自带**，非 code-server、零额外安装）——代码即看即改，手机/局域网设备也可用（serve-web 监听 0.0.0.0）。用户提案 2026-09-06「点一个按钮用 WebIDE 打开工作区」。
 
+**2026-10-16 起实现形态为 webide 插件**（随包播种四例之一）：按钮与端点全在插件内，`src/server.py` 内置端点 + index.html 内置按钮已退役——见下文[插件化搬迁](#插件化搬迁按钮--端点全链路迁入-webide-插件2026-10-16用户提案播种示例扩散)章节；以下各节描述的端口潜规则 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限等逻辑**全部原样保留**在插件 backend.py，语义零变化。
+
+## 插件化搬迁：按钮 + 端点全链路迁入 webide 插件（2026-10-16，用户提案「播种示例」扩散）
+
+随「把实用功能作为插件 SDK 示例播种」提案扩散（2026-10-16，随包播种四例之一，见 [插件 SDK](../architecture/plugin-sdk.md)），WebIDE 成为第三个插件化收官的内置功能：
+
+- **backend.py**：原 server.py 端点逻辑**原样照搬**——端口潜规则（WebUI+30000，Host 头解析）/ 复用优先（`_alive` 判定）/ 端口 bind 实测向后扫 +1..+5 / `--commit-id` 钉缓存 + 滚动预热（预热口 39990–39996、保留最近 2 版）/ `agent.services` 纳管独立进程组 / 12s 等待上限。插件路由替代 `POST /api/ide/open`
+- **frontend.js**：`addButton` 挂 dock 席位，`icon: '<img src="/plugins-assets/webide/vscode.png">'`——**图标是插件本地资产**（9511B，随播种分发，不再放 `src/static/icons/`）；`onClick` 事件透传拿按钮引用维持 `.loading` class 加载态；12s 超时乐观退回潜规则页签逻辑随迁
+- **内置退役**：server.py 端点 + `_ide_payload`、index.html `btnIde` + `openWebIde()` 全删
+- 语义零变化：老用户无感，只是实现搬家；`/plugins disable webide` 可关
+
 ## 端点：POST /api/ide/open（src/server.py）
 
 拉起/复用 WebIDE，语义按序：
@@ -74,8 +85,8 @@ v1 钉住后版本停在当前 commit，想升级得手动删缓存目录回落�
 
 ## 与其他模块的关系
 
-- 后端 `src/server.py`（端点 + `_ide_payload`）+ 前端 `src/static/index.html`（按钮 + `openWebIde()`）两处改动。
-- `agent.services` 后台服务纳管——与 [background-scheduler](background-scheduler.md) 的后台服务管理同族（看板可见/可停止）。
+- **2026-10-16 起实现收敛到 webide 插件**（backend.py 端点逻辑 + frontend.js 按钮一处承载，见上文「插件化搬迁」；原 server.py / index.html 两处内置实现已删）——插件路由/资产/启停见 [插件 SDK](../architecture/plugin-sdk.md)。
+- `agent.services` 后台服务纳管保留在插件 backend.py 内——与 [background-scheduler](background-scheduler.md) 的后台服务管理同族（看板可见/可停止）。
 - 无框架耦合：纯 HTTP 探测 + 子进程拉起。
 
 ## 注意事项
@@ -90,5 +101,8 @@ v1 钉住后版本停在当前 commit，想升级得手动删缓存目录回落�
 
 ## 相关页面
 
+- [插件 SDK](../architecture/plugin-sdk.md)：随包播种四例之一 + 插件路由/本地静态资产（vscode.png）/ addButton onClick 事件透传的实战范例
+- [fab-dock](fab-dock.md)：VS Code logo 按钮所在 dock（2026-10-16 起该按钮由本插件注入）
 - [background-scheduler](background-scheduler.md)（agent.services 服务纳管同族）
 - [ops · /restart 看门狗](../guides/ops.md)（服务生命周期）
+

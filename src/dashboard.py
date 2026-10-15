@@ -619,7 +619,15 @@ class InteractionHub:
 
     @staticmethod
     def _ws_url(entry: dict) -> str:
-        url = _entry_url(entry)
+        # WS 旁听地址（2026-10-16 修复）：local 实例直连 url（127.0.0.1——与 probe 同款优先级）；
+        # 只有 kind=remote（真跨机）才走 public_url 隧道。原实现无差别 public_url 优先——hub
+        # 八个线程全去连 cpolar 公网隧道（wss://r21.cpolar.top/port-N/ws），WS 握手失败 →
+        # 卡 10s 重连循环（py-spy 实锤：全线程停在 L666 stop.wait），互动流 15h 零实时记录；
+        # 而 probe 走 url 优先直连本地，状态灯全绿——同表两路、优先级不同所致。
+        if entry.get("kind") != "remote":
+            url = (entry.get("url") or entry.get("public_url") or "").rstrip("/")
+        else:
+            url = _entry_url(entry)
         if url.startswith("https://"):
             return "wss://" + url[len("https://"):] + "/ws"
         if url.startswith("http://"):

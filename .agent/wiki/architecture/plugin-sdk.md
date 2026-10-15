@@ -198,7 +198,9 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - **幂等**：以 `manifest.yml` 判定存在——**已装则整插件跳过**（用户对已播种插件的任何改动永不覆盖）
 - **/update-assets 纳管**：播种时写 seed_state 基线（key `plugin/<名>/<rel>`，.py/.js 后缀）——升级时对已播种插件的覆盖判定走三方 hash 比对（与技能/静态资产同款）
 
-### 四个示例插件
+### 示例插件五例（2026-10-16 /cmd 迁入前为四例）
+
+> 表格按播种顺序；2026-10-16 `/cmd` 内置命令迁入后为**五例**（四实用 + demo），cmd 是最后一个——补齐了 `register_command` 这条扩展点的实物示例。
 
 | 插件 | 席位 | 要点 |
 |---|---|---|
@@ -206,6 +208,7 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 | feedback | addPanel 💬 | 两条插件路由：`POST /api/feedback/meta`（类型选项/作者联系方式/环境预览）+ `POST /api/feedback/submit`；**核心逻辑零复制**——backend.py 直接 `import feedback`，落盘/飞书推送/探针过滤全继承（见 [feedback](../features/feedback.md)） |
 | webide | addButton（VS Code logo） | serve-web 全链路搬迁：端口潜规则 / 复用优先 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限 / 乐观退页签原样入插件 backend.py（见 [webide](../features/webide.md)）；2026-10-15 缓存误删事故（孤儿 code-tunnel 并发安装 → rmtree 删到在用版本 → spawn 死循环）四修见该页「serve-web 缓存被删致无限 panic」专节（含救场脚本 tools/_fix_serveweb_cache.py）；同日另一案：潜规则口被 Unity Hub 固定占（回 401 `Unauthorized access`）→ `_probe` 升三态 `(alive, ready, ours)`、复用只认自家 serve-web，见该页「Unauthorized access」专节 |
 | example-hello | 面板 + 命令/钩子/卡片 | demo 精简版（见上文），首次入种源 |
+| cmd | 斜杠命令（无前端） | `/cmd <shell 命令>` 消息框直接执行——**`register_command` 的最小真实用例**：一条斜杠命令从插件挂进系统，WS+CLI 两入口自动生效、`/help` 自动列出、插件禁用/卸载自动摘除。从内置 src/commands.py 整体迁入（语义零变化，含 dispatch 原始行直通特例的保留方式），见 [cmd](../features/cmd-command.md)「同日三迁的第三步」节；commit b3fb607 |
 
 ### 插件本地静态资产：图标随插件分发
 

@@ -205,19 +205,31 @@
       transition:opacity .12s ease; box-shadow:0 2px 10px #0005; z-index:140; }
     #fabDock [data-label]:hover::after { opacity:1; }
     .fabItem.loading { opacity:.55; cursor:progress; }
-  #specPanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:130; max-height:none;
-    background:#fafbff; border-left:1px solid #c7d2fe; box-shadow:-4px 0 24px #0003;
-    flex-direction:column; overflow:hidden; padding:12px 14px; }
-  /* 标题栏固定在抽屉顶部（flex 0 0 auto），下方 .spec-scroll 才是滚动区 */
-  #specPanel .spec-headbar { flex:0 0 auto; display:flex; align-items:center; gap:8px;
-    padding:2px 0 8px; border-bottom:1px solid #e0e7ff; margin-bottom:8px; }
-  #specPanel .spec-headbar .spec-title { flex:1; font-weight:600; color:#4338ca; min-width:0; }
-  #specPanel .spec-scroll { flex:1 1 auto; overflow-y:auto; min-height:0; padding-right:2px; }
-  #specPanel .spec-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
-    border:none; background:#e0e7ff; color:#4338ca; font-size:14px; cursor:pointer; line-height:1; }
-  #specPanel .spec-close:hover { background:#c7d2fe; }
-  @media (orientation: portrait) { #specPanel, #logPanel, #teamPanel, #svcPanel { width:100% !important; border-left:none !important; } }
-  #specPanel summary { color:#4338ca; padding-right:30px; }
+    /* —— 右侧抽屉统一容器（用户提案 2026-10-15）：spec 面板布局提取为通用骨架，
+       各业务抽屉 = .agtdrawer 容器 + 主题色变量(--dw-*) + 业务内容；
+       开合/互斥/push 由 DrawerCtl 统一调度（见 script 段）—— 面板只管内容不再自管布局 —— */
+    .agtdrawer { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:130; display:none;
+      flex-direction:column; overflow:hidden; padding:12px 14px;
+      background:var(--dw-bg,#fff); border-left:1px solid var(--dw-line,#e5e7eb);
+      box-shadow:-4px 0 24px #0003; }
+    .agtdrawer.open { display:flex; }
+    .agtdrawer-head { flex:0 0 auto; display:flex; align-items:center; gap:8px;
+      padding:2px 0 8px; border-bottom:1px solid var(--dw-line2,#f3f4f6); margin-bottom:8px; }
+    .agtdrawer-head .agtdw-title { flex:1; font-weight:600; color:var(--dw-accent,#374151);
+      min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .agtdrawer-head .agtdw-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+      border:none; background:var(--dw-close-bg,#e5e7eb); color:var(--dw-accent,#374151);
+      font-size:14px; cursor:pointer; line-height:1; }
+    .agtdrawer-head .agtdw-close:hover { filter:brightness(.93); }
+    .agtdrawer-body { flex:1 1 auto; overflow-y:auto; min-height:0; }
+    @media (orientation: portrait) { .agtdrawer { width:100% !important; border-left:none !important; } }
+    /* 各业务抽屉的主题色（挂 id，只声明变量不动骨架） */
+    #specPanel { --dw-bg:#fafbff; --dw-line:#c7d2fe; --dw-line2:#e0e7ff; --dw-accent:#4338ca; --dw-close-bg:#e0e7ff; }
+    #logPanel  { --dw-bg:#fff;    --dw-line:#d1d5db; --dw-line2:#f3f4f6; --dw-accent:#374151; --dw-close-bg:#e5e7eb; }
+    #teamPanel { --dw-bg:#fbfdff; --dw-line:#a5d8e8; --dw-line2:#d0ebf3; --dw-accent:#0e7490; --dw-close-bg:#d0ebf3; }
+    #svcPanel  { --dw-bg:#fcfaff; --dw-line:#ddd3f0; --dw-line2:#e9e0f7; --dw-accent:#7c3aed; --dw-close-bg:#e9e0f7; }
+    #filePanel { z-index:135; --dw-bg:#fbfdff; --dw-line:#bfdbfe; --dw-line2:#dbeafe; --dw-accent:#1d4ed8; --dw-close-bg:#dbeafe; }
+   #specPanel summary { color:#4338ca; padding-right:30px; }
   .spec-item { padding:4px 0; border-left:3px solid #c7d2fe; padding-left:8px; margin:2px 0; }
   .spec-item .spec-head { font-weight:600; color:#4338ca; }
   .spec-item .spec-file { color:#7c3aed; font-size:12px; }
@@ -302,28 +314,17 @@
   .ans-changed .ac-body .asset-box.video { max-width:100%; }
   .ans-changed .ac-body .asset-box.video video { width:auto; }
   .ans-changed .ac-title { font-size:12px; color:#64748b; font-weight:600; margin-bottom:6px; }
-  /* 文件预览抽屉（点击 markdown 里的文本资产打开——无 fab，纯点击触发） */
-  #filePanel { position:fixed; top:0; right:0; bottom:0; width:40%; z-index:135;
-    background:#fbfdff; border-left:1px solid #bfdbfe; box-shadow:-4px 0 24px #0003;
-    flex-direction:column; overflow:hidden; padding:12px 14px; }
-  #filePanel .fp-headbar { flex:0 0 auto; display:flex; align-items:center; gap:8px;
-    padding:2px 0 8px; border-bottom:1px solid #dbeafe; margin-bottom:8px; }
-  #filePanel .fp-headbar .fp-title { flex:1; font-weight:600; color:#1d4ed8; min-width:0;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
-  #filePanel .fp-headbar .fp-close { flex:0 0 auto; width:26px; height:26px; border-radius:50%;
-    border:none; background:#dbeafe; color:#1d4ed8; font-size:14px; cursor:pointer; line-height:1; }
-  #filePanel .fp-headbar .fp-close:hover { background:#bfdbfe; }
-  #filePanel .fp-load { color:#8a9099; font-size:12px; padding:20px 4px; }
-  #filePanel .fp-scroll { flex:1 1 auto; overflow:auto; min-height:0; }
-  #filePanel pre.fp-pre { margin:0; font:12px ui-monospace,Menlo,Consolas,monospace; line-height:1.5;
-    white-space:pre-wrap; word-break:break-word; color:#1f2937; }
+   /* 文件预览抽屉：容器/头部/关闭钮走 .agtdrawer 通用骨架（主题色见 #filePanel 变量），此处只留内容样式 */
+   #filePanel .agtdw-title { font-size:13px; }
+   #filePanel .fp-load { color:#8a9099; font-size:12px; padding:20px 4px; }
+   #filePanel pre.fp-pre { margin:0; font:12px ui-monospace,Menlo,Consolas,monospace; line-height:1.5;
+     white-space:pre-wrap; word-break:break-word; color:#1f2937; }
    /* 轻量语法高亮（VS Code Light 配色）——hlCode 注入 */
    #filePanel .hl-c { color:#6a9955; }   /* 注释 */
    #filePanel .hl-s { color:#a31515; }   /* 字符串 */
    #filePanel .hl-n { color:#098658; }   /* 数字 */
    #filePanel .hl-k { color:#0033b3; }   /* 关键字 */
    #filePanel .hl-t { color:#0e7490; }   /* 标签（青——冷色，与字符串暗红、关键字蓝拉开距离） */
-  @media (orientation: portrait) { #filePanel { width:100% !important; border-left:none !important; } }
   .bubble table { border-collapse:collapse; margin:8px 0; font-size:13px; max-width:100%; }
   .bubble th,.bubble td { border:1px solid var(--line); padding:4px 8px; text-align:left; white-space:normal; }
   .bubble thead th { background:#f0f2f5; }
@@ -432,13 +433,13 @@
   </header>
 
   <div id="planPanel" class="plan-panel" style="display:none"><details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details></div>
-  <div id="specPanel" class="plan-panel" style="display:none">
-    <div class="spec-headbar">
-      <div class="spec-title" id="specSummary">📐 施工方案</div>
-      <button class="spec-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button>
-    </div>
-    <div class="spec-scroll"><div id="specList"></div></div>
-  </div>
+   <div id="specPanel" class="agtdrawer">
+     <div class="agtdrawer-head">
+       <div class="agtdw-title" id="specSummary">📐 施工方案</div>
+       <button class="agtdw-close" onclick="toggleSpecPanel(false)" title="收起到图标">✕</button>
+     </div>
+     <div class="agtdrawer-body"><div id="specList"></div></div>
+   </div>
   <!-- 右侧工具 dock（用户提案 2026-09-06）：非对话交互按钮全部收进一列 fab，折叠态只显示 🧰 主按钮，点击展开/收起整列 -->
   <div id="fabDock">
     <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
@@ -463,11 +464,23 @@
       </div>
     </div>
   </div>
-  <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
-       有日志才显示 🐞 入口（badge=未读 error 数，在 fabDock 内）；打开即已读清零 -->
-  <div id="logPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#374151">🐞 日志（后台事件 / 回退 / 限流 / 错误）</div><button onclick="toggleLogPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="logList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
-  <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
-  <div id="teamPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fbfdff;border-left:1px solid #a5d8e8;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #d0ebf3;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#0e7490">👥 Agent 团队</div><button onclick="toggleTeamPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#d0ebf3;color:#0e7490;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="teamList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
+   <!-- 日志面板：类似 spec 抽屉——LLM 回退/限流/截断等 warning/error 日志（此前只进 log 文件，用户看不到）。
+        有日志才显示 🐞 入口（badge=未读 error 数，在 fabDock 内）；打开即已读清零 -->
+   <div id="logPanel" class="agtdrawer">
+     <div class="agtdrawer-head">
+       <div class="agtdw-title">🐞 日志（后台事件 / 回退 / 限流 / 错误）</div>
+       <button class="agtdw-close" onclick="toggleLogPanel(false)" title="收起到图标">✕</button>
+     </div>
+     <div id="logList" class="agtdrawer-body"></div>
+   </div>
+   <!-- Agent 团队看板：sub-agent（registry）+ 远程实例（REMOTE_SERVERS）——id/recap/状态/url（可点击） -->
+   <div id="teamPanel" class="agtdrawer">
+     <div class="agtdrawer-head">
+       <div class="agtdw-title">👥 Agent 团队</div>
+       <button class="agtdw-close" onclick="toggleTeamPanel(false)" title="收起到图标">✕</button>
+     </div>
+     <div id="teamList" class="agtdrawer-body"></div>
+   </div>
   <!-- 远程实例添加弹窗（用户提案 2026-10-04：内联表单会被看板 3s 自动刷新重置——弹窗挂 body 级，
        不在 teamList 重渲染区内，填一半也不会被刷掉） -->
   <div id="remoteAddModal" style="display:none;position:fixed;inset:0;z-index:220;background:rgba(0,0,0,.35);align-items:center;justify-content:center" onclick="if(event.target===this)remoteAddToggle()">
@@ -482,16 +495,22 @@
       </div>
     </div>
   </div>
-  <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
-  <div id="svcPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:40%;z-index:130;background:#fcfaff;border-left:1px solid #ddd3f0;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px"><div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #e9e0f7;padding-bottom:8px"><div style="flex:1;font-weight:600;color:#7c3aed">🛠 后台（服务 + 定时）</div><button onclick="toggleSvcPanel(false)" title="收起到图标" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e9e0f7;color:#7c3aed;font-size:14px;cursor:pointer;line-height:1">✕</button></div><div id="svcList" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div></div>
-  <!-- 文件预览抽屉（点击气泡 markdown 里的文本资产 [!名](路径) 打开——无 fab 图标按钮，纯点击触发） -->
-  <div id="filePanel" style="display:none">
-    <div class="fp-headbar">
-      <div class="fp-title" id="fpTitle">📄 文件预览</div>
-      <button class="fp-close" onclick="closeFilePreview()" title="关闭">✕</button>
-    </div>
-    <div class="fp-scroll" id="fpScroll"><div class="fp-load" id="fpLoading">加载中…</div><pre class="fp-pre" id="fpBody" style="display:none"></pre></div>
-  </div>
+   <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
+   <div id="svcPanel" class="agtdrawer">
+     <div class="agtdrawer-head">
+       <div class="agtdw-title">🛠 后台（服务 + 定时）</div>
+       <button class="agtdw-close" onclick="toggleSvcPanel(false)" title="收起到图标">✕</button>
+     </div>
+     <div id="svcList" class="agtdrawer-body"></div>
+   </div>
+   <!-- 文件预览抽屉（点击气泡 markdown 里的文本资产 [!名](路径) 打开——无 fab 图标按钮，纯点击触发） -->
+   <div id="filePanel" class="agtdrawer">
+     <div class="agtdrawer-head">
+       <div class="agtdw-title" id="fpTitle">📄 文件预览</div>
+       <button class="agtdw-close" onclick="closeFilePreview()" title="关闭">✕</button>
+     </div>
+     <div class="agtdrawer-body" id="fpScroll"><div class="fp-load" id="fpLoading">加载中…</div><pre class="fp-pre" id="fpBody" style="display:none"></pre></div>
+   </div>
   <div id="queueStatus">📨 已有 <span id="queueCount">0</span> 条消息在队列中，将在当前任务完成后处理</div>
 
   <div id="msgArea"></div>
@@ -991,13 +1010,7 @@ function openFilePreview(path){
   document.getElementById('fpTitle').textContent='📄 '+(path||'');
   body.style.display='none'; body.textContent='';
   load.style.display='block'; load.textContent='加载中…';
-  panel.style.display='flex';
-  // 互斥：关掉其它右侧抽屉（走各自 toggle 关闭——停轮询/恢复 fab，避免残留状态）
-  if(typeof toggleSpecPanel==='function' && document.getElementById('specPanel').style.display!=='none') toggleSpecPanel(false);
-  if(typeof toggleLogPanel==='function' && document.getElementById('logPanel').style.display!=='none') toggleLogPanel(false);
-  if(typeof toggleTeamPanel==='function' && document.getElementById('teamPanel').style.display!=='none') toggleTeamPanel(false);
-  if(typeof toggleSvcPanel==='function' && document.getElementById('svcPanel').style.display!=='none') toggleSvcPanel(false);
-  document.body.classList.add('drawer-push');   // push 布局：主区右移让位（竖屏 CSS 覆盖为 0）
+  DrawerCtl.open('filePanel');   // 统一开合：互斥关其它抽屉 + push 主区（替代手写 4 if + body class）
   var ext = (String(path).split('.').pop()||'').toLowerCase();   // 扩展名 → 语言表（语法高亮用）
   // 编码感知解码（用户提案 2026-09-09）：未知后缀经 /api/file-kind 嗅探的 encoding（gbk/utf-16…）
   // 用 TextDecoder 按编码解码——r.text() 恒按 utf-8，gbk 文本会乱码。已知文本后缀默认 utf-8。
@@ -1018,11 +1031,7 @@ function openFilePreview(path){
   });
 }
 function closeFilePreview(){
-  var panel=document.getElementById('filePanel');
-  if(panel) panel.style.display='none';
-  // 若有其它抽屉开着则保留 push，否则解除
-  var anyOpen=['specPanel','logPanel','teamPanel','svcPanel'].some(function(id){ var p=document.getElementById(id); return p&&p.style.display!=='none'; });
-  if(!anyOpen) document.body.classList.remove('drawer-push');
+  DrawerCtl.close('filePanel');   // 幂等；push 由 DrawerCtl 按全局开态统一解除
 }
 // ESC 关闭预览抽屉
 document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeFilePreview(); });
@@ -2653,22 +2662,56 @@ function renderPlan(plan, planId, planTitle){
   });
 }
 
+// ========== 右侧抽屉统一调度 DrawerCtl（用户提案 2026-10-15）==========
+// spec 面板布局提取为 .agtdrawer 通用骨架后，所有右侧抽屉在此注册：
+// 开 = 互斥关其它 + push 主区让位 + 藏自己的 fab；关 = 恢复 fab 开前原态 + 按需解除 push。
+// 业务面板只管内容（onOpen 拉数据/起轮询，onClose 停轮询），布局与开合全由本层负责。
+const DrawerCtl = (() => {
+  const _reg = new Map();   // id -> {panel, fab, onOpen, onClose, fabWasShown}
+  function _isOpen(id){ const d = _reg.get(id); return !!(d && d.panel.classList.contains('open')); }
+  function _syncPush(){
+    let any = false;
+    _reg.forEach(d => { if(d.panel.classList.contains('open')) any = true; });
+    document.body.classList.toggle('drawer-push', any);
+  }
+  function close(id){
+    const d = _reg.get(id);
+    if(!d || !d.panel.classList.contains('open')) return;
+    d.panel.classList.remove('open');
+    if(d.fab) d.fab.style.display = d.fabWasShown ? 'flex' : 'none';   // 恢复开前原态（如 logFab 无日志时本就隐藏）
+    try{ d.onClose && d.onClose(); }catch(e){ console.error('[DrawerCtl] onClose '+id, e); }
+    _syncPush();
+  }
+  function open(id){
+    const d = _reg.get(id);
+    if(!d || _isOpen(id)) return;
+    _reg.forEach((_, k) => { if(k !== id) close(k); });   // 互斥：push 只让一份 40%
+    if(d.fab){ d.fabWasShown = d.fab.style.display !== 'none'; d.fab.style.display = 'none'; }   // 藏图标（面板自身有 ✕）
+    d.panel.classList.add('open');
+    try{ d.onOpen && d.onOpen(); }catch(e){ console.error('[DrawerCtl] onOpen '+id, e); }
+    _syncPush();
+  }
+  function toggle(id, force){
+    const f = (typeof force === 'boolean') ? force : !_isOpen(id);
+    f ? open(id) : close(id);
+  }
+  function register(id, spec){
+    const panel = document.getElementById(id);
+    if(!panel){ console.warn('[DrawerCtl] 面板不存在：'+id); return null; }
+    _reg.set(id, { panel,
+                   fab: (spec && spec.fab) ? document.getElementById(spec.fab) : null,
+                   onOpen: (spec && spec.onOpen) || null, onClose: (spec && spec.onClose) || null,
+                   fabWasShown: false });
+    return _reg.get(id);
+  }
+  return { register, open, close, toggle, isOpen: _isOpen };
+})();
+
 // ========== 施工方案 spec 渲染 ==========
 let _specActions = { approve: null, reject: null };
-// —— spec 浮层抽屉：默认折叠成右上角 📐 图标（有 spec 时显示），点击展开——
-// 横屏=窗口右侧 40% 宽抽屉（CSS @media orientation），竖屏=占满；✕ 收起回图标
-function toggleSpecPanel(open){
-  const panel = document.getElementById('specPanel');
-  const fab = document.getElementById('specFab');
-  if(!panel || !fab) return;
-  if(open){
-    toggleLogPanel(false); toggleTeamPanel(false); toggleSvcPanel(false);   // 互斥：两个抽屉不同时开（push 只让一份 40%）
-    closeFilePreview();                                                       // 文本预览抽屉也互斥
-  }
-  panel.style.display = open ? 'flex' : 'none';
-  fab.style.display = open ? 'none' : 'flex';   // 展开时藏图标（面板自身有 ✕），收起时恢复
-  document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）
-}
+// —— spec 抽屉走统一容器 .agtdrawer + DrawerCtl（开合/互斥/push 全托管）；✕ 收起回 📐 图标 ——
+DrawerCtl.register('specPanel', { fab: 'specFab' });
+function toggleSpecPanel(open){ DrawerCtl.toggle('specPanel', open); }
 document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 
 // ===== Agent 团队看板 + 后台服务看板（抽屉，用户提案 2026-09-04）=====
@@ -2692,36 +2735,14 @@ function _dashStop(panelId){
 const _AGENT_ICON = {running:'🏃', idle:'💤', done:'✅', failed:'❌'};
 const _SVC_ICON   = {running:'🟢', exited:'🔴', '?':'⚪'};
 
-function toggleTeamPanel(open){
-  const panel = document.getElementById('teamPanel');
-  const fab = document.getElementById('teamFab');
-  if(!panel || !fab) return;
-  if(open){
-    toggleSpecPanel(false); toggleLogPanel(false); toggleSvcPanel(false);   // 互斥
-    closeFilePreview();
-    renderTeamDash(); _dashPoll('teamPanel');
-  }else{
-    _dashStop('teamPanel');
-  }
-  panel.style.display = open ? 'flex' : 'none';
-  fab.style.display = open ? 'none' : 'flex';
-  document.body.classList.toggle('drawer-push', open);
-}
-function toggleSvcPanel(open){
-  const panel = document.getElementById('svcPanel');
-  const fab = document.getElementById('svcFab');
-  if(!panel || !fab) return;
-  if(open){
-    toggleSpecPanel(false); toggleLogPanel(false); toggleTeamPanel(false);   // 互斥
-    closeFilePreview();
-    renderSvcDash(); _dashPoll('svcPanel');
-  }else{
-    _dashStop('svcPanel');
-  }
-  panel.style.display = open ? 'flex' : 'none';
-  fab.style.display = open ? 'none' : 'flex';
-  document.body.classList.toggle('drawer-push', open);
-}
+// —— 团队/服务看板抽屉：统一容器 + DrawerCtl 托管开合；onOpen 渲染+3s 轮询，onClose 停轮询 ——
+DrawerCtl.register('teamPanel', { fab: 'teamFab',
+  onOpen(){ renderTeamDash(); _dashPoll('teamPanel'); }, onClose(){ _dashStop('teamPanel'); } });
+DrawerCtl.register('svcPanel', { fab: 'svcFab',
+  onOpen(){ renderSvcDash(); _dashPoll('svcPanel'); }, onClose(){ _dashStop('svcPanel'); } });
+DrawerCtl.register('filePanel', {});   // 文件预览：无 fab（点击资产触发），只托管互斥/push
+function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }
+function toggleSvcPanel(open){ DrawerCtl.toggle('svcPanel', open); }
 // —— 团队看板渲染：主 + 子 Agent（registry）+ 远程实例分组 ——
 async function renderTeamDash(){
   const d = await _dashFetch();
@@ -2990,24 +3011,15 @@ function setShowLogPanel(v){
     }
     if(_logEntries.length){
       const fab = document.getElementById('logFab');
-      const panel = document.getElementById('logPanel');
-      if(fab && panel && panel.style.display !== 'flex') fab.style.display = 'flex';
+      if(fab && !DrawerCtl.isOpen('logPanel')) fab.style.display = 'flex';   // 面板关着才亮 fab（开着时它本被 DrawerCtl 藏了）
     }
   }
 }
 
+DrawerCtl.register('logPanel', { fab: 'logFab' });
 function toggleLogPanel(open){
-  const panel = document.getElementById('logPanel');
-  const fab = document.getElementById('logFab');
-  if(!panel || !fab) return;
-  if(open){
-    toggleSpecPanel(false); toggleTeamPanel(false); toggleSvcPanel(false);   // 互斥
-    closeFilePreview();
-  }
-  panel.style.display = open ? 'flex' : 'none';
-  fab.style.display = open ? 'none' : 'flex';
-  document.body.classList.toggle('drawer-push', open);   // push 布局：主区右移让位（竖屏 CSS 已覆盖为 0）
-  if(open){   // 打开即已读：清 badge；滚到底（最新在下）
+  DrawerCtl.toggle('logPanel', open);
+  if(DrawerCtl.isOpen('logPanel')){   // 打开即已读：清 badge；滚到底（最新在下）
     _logUnreadErr = 0;
     const bd = document.getElementById('logFabBadge');
     if(bd){ bd.style.display = 'none'; bd.textContent = '0'; }
@@ -3317,10 +3329,9 @@ function renderSpec(spec, specId, reviewState, specTitle, specDesign){
   if (oldBar) oldBar.remove();
   list.innerHTML = '';
   if (!spec || !spec.length) {
-    panel.style.display = 'none';
+    DrawerCtl.close('specPanel');   // 幂等；push 由 DrawerCtl 统一解除
     const fab = document.getElementById('specFab');
-    if (fab) fab.style.display = 'none';
-    document.body.classList.remove('drawer-push');   // spec 清空时若抽屉开着，解除主区挤压
+    if (fab) fab.style.display = 'none';   // spec 清空 → 图标也隐藏（不受 DrawerCtl 的 fab 恢复影响）
     if (sum) sum.textContent = '📐 施工方案';
     return;
   }
@@ -4101,21 +4112,26 @@ window.AgtPlugin = (function(){
         col.appendChild(btn);
         return btn;
       },
-      // 侧滑面板（与日志/团队抽屉同款）：{icon, title, render(el)}——render 首次打开时渲染内容
+      // 侧滑面板（统一容器 .agtdrawer + DrawerCtl 托管，用户提案 2026-10-15）：{icon, title, render(el)}
+      // ——render 首次打开时渲染内容；互斥/push/藏图标全接入统一体系（此前各写各的、三不管）
       addPanel(spec){
         const p = document.createElement('div');
-        p.style.cssText = 'display:none;position:fixed;top:0;right:0;bottom:0;width:40%;min-width:300px;z-index:130;background:#fff;border-left:1px solid #d1d5db;box-shadow:-4px 0 24px #0003;flex-direction:column;overflow:hidden;padding:12px 14px';
-        p.innerHTML = `<div style="flex:0 0 auto;display:flex;align-items:center;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:8px">
-            <div style="flex:1;font-weight:600;color:#334155">${_esc(spec.icon || '🔌')} ${_esc(spec.title || '插件面板')}</div>
-            <button title="收起" style="flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:#e5e7eb;color:#374151;font-size:14px;cursor:pointer;line-height:1">✕</button>
-          </div><div class="agtpl-body" style="flex:1 1 auto;overflow-y:auto;min-height:0"></div>`;
+        p.className = 'agtdrawer';
+        p.style.minWidth = '300px';
+        p.innerHTML = `<div class="agtdrawer-head">
+            <div class="agtdw-title">${_esc(spec.icon || '🔌')} ${_esc(spec.title || '插件面板')}</div>
+            <button class="agtdw-close" title="收起">✕</button>
+          </div><div class="agtpl-body agtdrawer-body"></div>`;
         document.body.appendChild(p);
-        p.querySelector('button').onclick = ()=>{ p.style.display='none'; };
+        const pid = '_plugdw' + (window._plugSeq = (window._plugSeq || 0) + 1);
+        p.id = pid;
         const body = p.querySelector('.agtpl-body');
         let rendered = false;
+        DrawerCtl.register(pid, {});   // 互斥/push/fab 联动全接入
+        p.querySelector('button').onclick = ()=>DrawerCtl.close(pid);
         const toggle = (open)=>{
-          p.style.display = (open===undefined ? p.style.display==='none' : open) ? 'flex' : 'none';
-          if(p.style.display==='flex' && !rendered && spec.render){
+          DrawerCtl.toggle(pid, open);
+          if(DrawerCtl.isOpen(pid) && !rendered && spec.render){
             rendered = true;
             try{ spec.render(body); }catch(e){ body.textContent = '[插件面板渲染失败] ' + e; }
           }

@@ -195,6 +195,35 @@ def _no_such(title, spans, what="章节"):
     return f"[未找到{what}] {title}（现有章节: {names or '（无）'}）"
 
 
+def _demote_headings(body: str, parent_level: int) -> str:
+    """把正文内的 markdown 标题整体降级，保证最小层级 > parent_level（相对关系不变）。
+    动机（2026-10-15 wiki-updater 实战）：调用方常按 `##` 书写子节 → 与 level=2 的父章节
+    同级，破坏页面结构（写完整页得再手改）。这里就地归一，调用方无需自己算层级。
+    代码围栏（``` / ~~~）内的 # 不动；`#tag` 这类无空格的也不算标题。"""
+    import re as _re
+    lines = body.split("\n")
+    hits, fence = [], False
+    for i, ln in enumerate(lines):
+        s = ln.lstrip()
+        if s.startswith("```") or s.startswith("~~~"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        m = _re.match(r"^(#{1,6})[ \t]+\S", ln)
+        if m:
+            hits.append((i, len(m.group(1))))
+    if not hits:
+        return body
+    minl = min(l for _, l in hits)
+    if minl > parent_level:
+        return body                       # 已经合法：原样返回
+    shift = parent_level + 1 - minl
+    for i, l in hits:
+        lines[i] = "#" * min(6, l + shift) + lines[i][l:]
+    return "\n".join(lines)
+
+
 def wiki_add_chapter(path: str, title: str, content: str, level: int = 2, after: str = "") -> str:
     """向 wiki 页面【新增一个章节】（按标题边界插入，不动页面其余部分）。
     level=标题层级 1~6（章节通常 2）；after=空 → 追加页面末尾；after=锚点章节标题 → 插到该章节【子树之后】
@@ -212,6 +241,7 @@ def wiki_add_chapter(path: str, title: str, content: str, level: int = 2, after:
         return f"[章节已存在] {title}（更新请用 wiki_update_chapter）"
     block = ["#" * lv + " " + str(title).strip() + "\n", "\n"]
     body = str(content or "").rstrip("\n")
+    body = _demote_headings(body, lv)     # 子节标题自动降级：保证 > 父级 lv（调用方不用算层级）
     if body:
         block += [l + "\n" for l in body.split("\n")]
         block.append("\n")
@@ -252,7 +282,7 @@ def wiki_update_chapter(path: str, title: str, content: str = None, new_title: s
         lines[ln] = "#" * lv + " " + nt + "\n"
         changed.append(f"标题『{ti}』→『{nt}』")
     if content is not None:
-        body = str(content).rstrip("\n")
+        body = _demote_headings(str(content).rstrip("\n"), lv)   # 同 add：子节标题自动降级
         new_body = ["\n"]
         if body:
             new_body += [l + "\n" for l in body.split("\n")]

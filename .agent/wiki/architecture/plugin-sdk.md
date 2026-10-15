@@ -288,6 +288,26 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 插件作者无感知：SDK 契约是 `fn(request)` 裸写，注解由引擎包装层负责；种源插件里的注解纯属防御
 - 与「验证」节中既有 11 组单测的互补：单测覆盖路由挂载幂等，但当时未覆盖 POST 真调用——端到端首验的价值正在于此
 
+## 插件路由返回值宽容解析：裸 dict/list/str 不再炸 _handler（2026-10-16，webide 首个实战报错）
+
+> 继 422 注解坑之后的**第二例**「内置端点写法照搬进插件」风格错配——webide 搬迁后用户点图标报 `too many values to unpack (expected 2)`。
+
+**根因**：插件路由约定返回 **`(status, body)` 元组**（`_handler` 包装层解包后自构响应）；FastAPI 原生端点则**裸 `return dict` 合法**。webide backend 搬迁时照搬了裸 dict 风格 → `status, body = fn(...)` 把 dict 展开成键流（4 个键 > 2）→ 炸。
+
+**修复两层**：
+
+| 层 | 改动 |
+|---|---|
+| webide backend（本案病灶） | `_payload` 与端口全占分支统一 `return 200, {...}`（src/assets/plugins/webide/backend.py） |
+| **SDK 治本**（src/plugins.py `_handler`） | 返回值**宽容解析**：`isinstance(rv, tuple) and len(rv)==2 and isinstance(rv[0], int)` 才按 `(status, body)` 解；**其余一律当 body、status=200**——插件作者漏包元组不再炸，裸 dict/list/str 全收 |
+
+**生效分工**：插件侧 `/reload plugins` 热生效；SDK 属引擎侧，`/restart` 生效。
+
+### 注意事项
+
+- 与 422 同款教训：**FastAPI 端点语义 ≠ 插件路由语义**——注解（422 坑）与返回值（本案）都要过 SDK 包装层的约定，不能照搬内置写法
+- 宽容解析的边界：若 body 本身是「首元素为 int 的二元组」会被误判成 (status, body)——极端情况按约定包成 `(200, rv)` 规避
+
 ## 关联
 
 

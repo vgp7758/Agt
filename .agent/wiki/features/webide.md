@@ -15,6 +15,21 @@
 - **内置退役**：server.py 端点 + `_ide_payload`、index.html `btnIde` + `openWebIde()` 全删
 - 语义零变化：老用户无感，只是实现搬家；`/plugins disable webide` 可关
 
+## 首个实战报错：too many values to unpack——裸 dict 返回漏包路由元组（2026-10-16，用户实锤）
+
+> 搬迁后的**首个实战报错**（用户点 WebIDE 图标即触发）：`too many values to unpack (expected 2)`——「内置端点写法直接照搬进插件」的第二例风格错配（第一例是 422 注解坑，见 [插件 SDK · 插件路由 422 根治](../architecture/plugin-sdk.md)）。
+
+**根因**：原 server.py 端点是 FastAPI 路由——**裸 `return dict` 合法**（FastAPI 自动包 JSONResponse）；而插件路由约定返回 **`(status, body)` 元组**（SDK 包装层 `_handler` 做 `status, body = fn(...)` 后自构响应）。搬迁时照搬了裸 dict 风格 → `_handler` 把 dict 当可迭代解包成**键流**（ok/port/ready/hint 共 4 个 > 2）→ `too many values to unpack`。
+
+**修复（src/assets/plugins/webide/backend.py，两处）**：
+
+- `_payload(ready, port)`：改 `return 200, {...}`（docstring 注明本次教训：插件路由约定 (status, body)，裸 dict 会炸解包）
+- 端口全占分支：`return 200, {"ok": False, "error": ...}`
+
+**SDK 治本（同轮，src/plugins.py `_handler`）**：返回值**宽容解析**——仅「首元素是 int 的二元组」才按 `(status, body)` 解；裸 dict/list/str 一律当 body（status=200）。后续任何插件作者再犯同款错不再炸。详见 [插件 SDK · 插件路由返回值宽容解析](../architecture/plugin-sdk.md)。
+
+**生效**：插件侧改动 `/reload plugins` 热生效即修好（免重启）；SDK 宽容解析属引擎侧，随下次 `/restart` 生效。
+
 ## 端点：POST /api/ide/open（src/server.py）
 
 拉起/复用 WebIDE，语义按序：

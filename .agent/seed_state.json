@@ -57,5 +57,6 @@
  "plugin/open-folder/manifest.yml": "7dbfc4efeb913057",
  "plugin/webide/backend.py": "4c9c09b68e29f641",
  "plugin/webide/frontend.js": "e90397d233a9ae87",
- "plugin/webide/manifest.yml": "f734aefa7ca75cb8"
+ "plugin/webide/manifest.yml": "f734aefa7ca75cb8",
+ "dir_doc/.agent/plugins/README.md": "d0a2c48b9ec768c0"
 }

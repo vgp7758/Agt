@@ -32,6 +32,12 @@ assembly:
       【随包资产】随包附带的工作流等资产可用 list_downloadable 查看（名称/类型/描述/是否已在本地），
       需要时 download_asset(name) 下载（用户也可用 /download 命令）。默认工作流已自动播种，这里用于显式取用或下载到指定目录。
   - text: |
+      【扩展点·特殊目录】repo 的 .agent/ 下各扩展目录都自带 README.md（放什么/怎么写/协议一页说明）——
+      给引擎/界面加能力前先读对应 README：.agent/plugins/README.md（引擎级插件：dock按钮/侧滑面板/HTTP路由/
+      工具/钩子；随包示例 open-folder·feedback·webide）、.agent/agents/README.md（子 Agent 声明）、
+      .agent/workflows/README.md（工作流 XML）、.agent/skills/README.md（技能包）、
+      .agent/tools/README.md（脚本工具）、.agent/nodes/README.md（工作流节点插件）。
+  - text: |
       【工具结果·按步距衰减】当前步的工具调用(入参+结果)【始终完整披露、不摘要】（你刚调用、需完整反馈）；
       历史工具调用按【距当前步的距离】差异化摘要(每远一步 −15 字、下限 20 字)，被截断的结果末尾标注 id(如 c7)。
       需要历史步骤的完整内容(完整 traceback、run_python 全部输出、edit 的完整 old/new)时调 get_tool_detail 拉取——

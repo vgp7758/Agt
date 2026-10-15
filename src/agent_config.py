@@ -725,7 +725,8 @@ def seed_dir_docs(workspace: Path) -> int:
     n = 0
     for sub, doc in [(".agent/tools", "tools_builtin"),
                      (".agent/workflows", "workflows"), (".agent/agents", "agents"),
-                     (".agent/skills", "skills"), (".agent/nodes", "nodes")]:
+                     (".agent/skills", "skills"), (".agent/nodes", "nodes"),
+                     (".agent/plugins", "plugins")]:
         d = workspace / sub
         d.mkdir(parents=True, exist_ok=True)
         src = bundled / f"{doc}.md"

@@ -613,6 +613,50 @@ if text:
 
 **关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义总纲——本节把最后一条通道纳入）、[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（命令侧姊妹修复，`_target_agent` 模式参照）、[插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)（同通道时机侧姊妹修复）、[多 Agent 体系](../architecture/multi-agent.md)（`registry.lookup` 与 Agent 实例挂载——`e.agent is None` 的磁盘恢复条目形态）。
 
+## busy 恒亮双层根因：worker 永卡（快照 git 超时不杀树）× 斜杠命令自标忙（2026-10-16，用户实锤·9634/9635/9637）
+
+
+**现象**：实例 `answer` 已经发出、会话也归档了，前端「处理中」灯不灭；`/api/status` 报 `busy=True`。排障时一度以为是单因，实为**两层独立成因叠加**——修完第一层后第二层才露出来（9637 终验坐实）。
+
+### 层① 真忙不灭：worker 永卡在快照 git 子进程
+
+`chat._worker` 是 `busy=True` 置位、`finally: busy=False` 复位；而 `agent.run()` 每轮开头的 `snapshot()` 调用若**永卡**，finally 永远轮不到执行。根因在 `src/snapshots.py`：`subprocess.run(timeout=120)` 超时只 kill git 本进程、随后**无超时**的 `communicate()` 收尸，git 孙进程继承 stdout 句柄致管道永不 EOF。py-spy 栈即 `_worker → threading.join → subprocess._communicate → snapshots._run`。
+
+修复（`_run_cmd` Popen + `communicate(timeout)` + 超时**杀进程树** + 快照仓 exclude 自噬自愈）与完整证据链见 [snapshot-rewind · git 超时不杀树 → worker 永卡](snapshot-rewind.md#git-超时不杀树--worker-永卡-busy-恒亮_run_cmd-杀树--快照仓-exclude-自噬自愈2026-10-16用户实锤96349635)。worker 不再永卡后，`agent.run` 必然返回 → busy 必然复位。
+
+### 层② 显示假象：斜杠命令自标忙 → `/status` 恒报 busy=True
+
+第一层修完后终验仍见矛盾：`/status` 报 `busy=True`，而 py-spy 显示 worker **停在 `work_q.get()` 等活**（轮早跑完、busy 已复位）。真凶在 `src/chat.py` `_worker`——`state["busy"] = True` 原先是对**所有** item 无条件设置，**包括 `/status` 这类斜杠命令**：命令执行时自读 `state["busy"]`，读到的是刚被自己设上的 True。
+
+```python
+# src/chat.py _worker（2026-10-16 修复）
+_is_cmd = (kind == "user" and isinstance(payload, str) and payload.startswith("/"))
+if not _is_cmd:
+    state["busy"] = True          # busy 只标「真跑任务」的项
+state["answered"] = False
+```
+
+斜杠命令是瞬时的（进 dispatch、不进 agent.run），本就不该把实例置为「处理中」——修正后 `/status` 报的是真态。
+
+### 终验（隔离实例 9637，三轮迭代）
+
+| 判据 | 结果 |
+|---|---|
+| 轮跑通 | ✅ `🤖 最终回答：pong`，会话归档 |
+| `/status` 权威读数 | ✅ **busy=False**、work_q / inbox / pending 全 0 |
+| 页面 | ✅ answer 正常渲染、状态灯熄灭 |
+| 杂项 | ✅ 验证实例全停、临时文件清理、无 traceback |
+
+### 排障口诀
+
+**「灯不灭先 py-spy」**——worker 栈若停在 `work_q.get()`，是真态空闲（显示层问题，查 `/status` 的命令自标忙路径）；若停在 `snapshots._run → subprocess.join`（或其它工具/LLM 调用），是真卡死（查该链路超时兜底）。**只看 `/status` 的 busy 字段分不清这两层**。
+
+### 关联
+
+- [snapshot-rewind · git 超时不杀树](snapshot-rewind.md#git-超时不杀树--worker-永卡-busy-恒亮_run_cmd-杀树--快照仓-exclude-自噬自愈2026-10-16用户实锤96349635)——层① 的完整根因与修复
+- [api-status · busy 字段口径](api-status.md)——`busy` 的来源与本节修正
+- [busy 误判插话修复（3e0714a）](#busy-误判插话修复answer-后收尾期秒跟进开新轮2026-10-03用户实锤commit-3e0714a) / [插话死信修复（1c0d2f9）](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)——同族：busy 标志的置位/复位时机每错一处就多一种误判，**判定只信后端真态**
+
 ## @name 直派子 Agent：主输入框 Slack 式提及——用户跳过主 Agent 直接派活（2026-10-15，用户提案）
 
 > src/server.py（`_handle_user_input` 的 WS 文本分支，紧接 target 路由块之后）。用户提案（2026-10-15）：「user 有时候也会需要通过 `@coder <prompt>` 这种方式直接唤醒一个 sub-agent 实例派活」。前端**零改动**——纯 WS 文本解析，复用 `agent_prompt` 工具全链路（声明解析 / 实例化 / 异步派发 / 回执路由），不新造一套派活机制。

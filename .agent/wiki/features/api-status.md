@@ -61,6 +61,18 @@
 - **排障首选**：若再现"子 Agent 完成后主 Agent 未唤醒"症状，首先 POST `/api/status` 检查 registry 字段是否为 None——根因在入队端而非消费端
 - **mock 测试坑（2026-08，server_id 组网 E2E 实测）**：手写 mock 的 /api/status 相继因缺 `_current`、缺 `_lock` 连续 500 两次——字段面比想象宽（依赖 AgentRegistry 内部状态），mock 请直接继承真 `AgentRegistry`；对照 `/api/tool/exec` 只依赖 `agent.tools`，mock 成本低得多（详见 [multi-instance · 已验证](../architecture/multi-instance.md)）
 
+## busy 字段口径修正：斜杠命令不再自标忙（2026-10-16，9637 终验实锤）
+
+
+**来源**：`busy` 取自 `chat.py` 主循环的 `state["busy"]`（worker 置位/复位）。**2026-10-16 修正**：`_worker` 原先对**所有** work_q item 无条件 `busy=True`——包括 `/status` 这类**斜杠命令**（瞬时 dispatch、不进 `agent.run`），命令执行时自读 `state["busy"]` 得到刚被自己设上的 True → **`/status` 恒报 `busy=True`**（9637 实例实锤：py-spy 显示 worker 明明停在 `work_q.get()` 等活）。现按 `_is_cmd = kind=="user" and payload.startswith("/")` 判定，斜杠命令不再置忙。
+
+**判读提醒**：`busy=True` 有两种可能，需配合 py-spy 区分——
+
+| worker 栈 | 定性 | 处置 |
+|---|---|---|
+| `work_q.get()` / 空闲等活，但 `busy=True` | 显示层假象（旧代码的命令自标忙）→ 升级 + `/restart` | 见 [user-interaction · busy 恒亮双层根因](user-interaction.md#busy-恒亮双层根因worker-永卡快照-git-超时不杀树--斜杠命令自标忙2026-10-16用户实锤963496359637) |
+| `snapshots._run → subprocess.join` 等子进程栈 | **真卡死**（快照 git 超时未杀树） | [snapshot-rewind · git 超时不杀树](snapshot-rewind.md#git-超时不杀树--worker-永卡-busy-恒亮_run_cmd-杀树--快照仓-exclude-自噬自愈2026-10-16用户实锤96349635) |
+
 ## 相关页面
 
 - [运维与排障](../guides/ops.md) — 可观测性总览、常见错误、生命周期命令

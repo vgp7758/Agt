@@ -174,6 +174,61 @@ git init 加三件套：`timeout=120`（超时抛 RuntimeError 明确文案）+ 
 - 挂死 init 留下的空壳 `.agt/snapshots` 目录（无 HEAD）：重试快照时 `git init --bare` 幂等，会补齐初始化（这次带超时）——无需手动清理
 - 验证：9300 解卡后 events / llm_calls 持续落盘，busy 干活中
 
+## git 超时不杀树 → worker 永卡 busy 恒亮：_run_cmd 杀树 + 快照仓 exclude 自噬自愈（2026-10-16，用户实锤·9634/9635）
+
+
+> src/snapshots.py（新增 `_GIT_TIMEOUT` / `_CmdTimeout` / `_kill_tree` / `_run_cmd`；改造 `_run` / `ensure_repo` / `_user_git`）。**现象**：实例 `answer` 已发出、会话已归档，前端「处理中」灯不灭——`/api/status` 恒报 `busy=True`、events 停在 `turn_end` 之后无后续。py-spy 栈（`_diag/pyspy_9634_010239.txt`）钉死卡点：
+
+```
+Thread-6 (_worker)
+  join (threading.py:1094)
+  _communicate (subprocess.py:1644) → communicate → run
+  _run (src/snapshots.py:30)          ← 每轮开头打快照的 git 调用
+  snapshot (src/snapshots.py:66) → run (src/agent.py:2334)
+```
+
+### 两条叠加的根因
+
+| # | 根因 | 机制 |
+|---|---|---|
+| ① | `subprocess.run(timeout=120)` 的超时路径**只 kill git 本进程**，随后又调**无超时**的 `communicate()` 收尸 | git 偶发拉起的孙进程（credential helper / auto maintenance）继承了 stdout 句柄 → 父进程死后管道也不 EOF → reader 线程永等 → `_worker` 卡死在 `threading.join` → `chat._worker` 的 `finally: busy=False` **永不执行**（busy 恒亮的那块拼图） |
+| ② | **快照仓自噬**（让 ① 必然撞上超时） | `_regr_ws` 是「HEAD 已存在即早退」的半成品仓：`info/exclude` 里**没有 `.agt/`** → `add -A` 把快照对象库自身也跟踪进去（index 实测 **11,084 条 `.agt/snapshots/*`**）→ 每轮全量扫对象库（实测 6.8~7.6s，随对象数持续膨胀）；`restore` 还把对象库文件当工作区文件还原（自覆盖报错） |
+
+### 修复四件（均在 src/snapshots.py）
+
+| 位置 | 改动 |
+|---|---|
+| `_run_cmd(cmd, timeout, cwd)`（新） | Popen + `communicate(timeout)`；超时 `_kill_tree(proc)` **杀整棵进程树**（Windows `taskkill /T /F`，其余平台杀进程组）释放孙进程句柄 → 抛 `_CmdTimeout` 快速失败。`stdin=DEVNULL`（沿用 [git init 挂死](#git-init-挂死修复快照链路唯一无-timeout-的-git-调用补上兜底2026-09-16commit-d39c033) 的已验证药方）；`text=True, encoding="utf-8", errors="replace"`；**显式 `cwd=worktree 根`**——git 的 `.agt` / `.` 等 pathspec 按**调用进程 cwd** 解析，诊断脚本换 cwd 调进来会静默打偏（本轮验证实锤） |
+| `_run` | 弃 `subprocess.run`，改走 `_run_cmd`，超时抛 `_CmdTimeout` |
+| `ensure_repo` | **不再拿 HEAD 存在当「已初始化」**——每次调用都校验/补写 exclude；补写时（= 半成品仓修复路径）连带 `git rm -r --cached -f -q .agt` 自愈被误跟踪的 index（`-f` 必须带：个别条目 staged 内容与工作区/HEAD 都不同时 git 会拒绝摘除、残留自噬条目；`--cached` 下 `-f` 只动 index，工作区文件不动） |
+| `_user_git` | 同款 Popen + 超时 + 杀树（timeout=60），覆盖 `user_repo_head` / `user_repo_reset_hard` 一系 |
+
+`chat._worker` 的 try/finally 一直都在（chat.py:450-504），**无需加层**——worker 不再永卡 → `agent.run` 必然返回 → busy 必然复位。最坏情况 = 单轮快照失败 + 一条 warn 事件（`agent.py:2334` 的 `except Exception → warn`），轮照常走完。
+
+### 验证（隔离脚本四组全绿）
+
+| 场景 | 结果 |
+|---|---|
+| 污染仓 `_regr_ws` | index 摘除 **11078 条** `.agt`；`snapshot()` **6.8~7.6s → 0.52s**；`restore` 不再自覆盖报错 |
+| 干净仓 | `snapshot`×2 + `restore`（内容回退 / 新文件删除）+ `user_repo_head` + `clean()` 全过 |
+| 挂死模拟（假 git 睡 600s） | `_GIT_TIMEOUT=3` → **3.6s 抛 `_CmdTimeout`**，残留子进程 **0**（杀树干净） |
+
+### 诊断脚本的坑（那次"复现无效"的教训）
+
+`busy_repro_9636.py` 全程 `busy=None` 看似「复现不出」，实为**实例根本没起来**：`sys.path` 插的是仓库根而非 `src/`（boot 即挂）、stdout 进了无人读的 PIPE、`python -m py_spy` 用的解释器没装 py-spy（产物只有 49B 的 "No module named py_spy"）；尾部每秒刷屏是 fixture 去重比较 bug（`"None " != "False"`）的纯噪音。真要旁路复现：`sys.path.insert(REPO/src)` + `from chat import web_main`、status 用 `POST + X-Cb-Token`、`py-spy.exe` 走 PATH、stdout 落盘到日志文件。**「复现失败」先怀疑装置，别先怀疑结论**。
+
+### 遗留提示
+
+- **已卡死的旧实例救不活**：worker 死在 `subprocess.join`，只能杀掉重启才吃到修复（9635 即属此类）。
+- 引擎层改动，需 `/restart` 生效。
+
+### 关联
+
+- [git init 挂死修复](#git-init-挂死修复快照链路唯一无-timeout-的-git-调用补上兜底2026-09-16commit-d39c033)——同一族（快照链路 git 子进程无兜底 → 卡死整轮），本节把兜底从「单点 timeout」升级为「统一 `_run_cmd` + 杀树」
+- [快照机制](#快照机制srcsnapshotspy)——`.agt` 自排除的原始约定；本节把它从「init 时写一次」升级为「每次校验 + 误跟踪自愈」
+- [user-interaction · busy 恒亮双层根因](user-interaction.md#busy-恒亮双层根因worker-永卡快照-git-超时不杀树--斜杠命令自标忙2026-10-16用户实锤963496359637)——本节解的是第一层「真忙不灭」，第二层显示假象在那边
+- [api-status](api-status.md)——`busy` 字段正是暴露本症状的观测口
+
 ## 顺带修复：WebUI 回溯失败广播
 
 此前 WebUI 回溯失败只 print 到 CLI（前端只看到「回溯中…」后无声失败）→ 现在失败原因 `_broadcast` 成 system 消息（src/server.py）。

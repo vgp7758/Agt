@@ -426,6 +426,7 @@ def _str_or_none(v):
 
 
 # 可配置项：名字 -> (设在 agent 还是 agent.llm 上，类型转换)
+# dump_projections 走特殊段（apply_config 内持久化 settings.json——子 Agent 构造时同读它跟随）
 CONFIGURABLE = {
     "max_steps": ("agent", int),
     "token_budget": ("agent", int),
@@ -453,6 +454,12 @@ def read_config(agent) -> dict:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
     cfg["max_effective_context_window"] = agent.llm.max_effective_context_window or 0
+    # repos_dir（重定向只读展示——改法走 /config repos_dir <path> 或设置页；重启生效）
+    try:
+        import config as _cfg_rd
+        cfg["repos_dir"] = str((_cfg_rd.load_runtime_settings() or {}).get("repos_dir") or "")
+    except Exception:
+        cfg["repos_dir"] = ""
     # 步距衰减参数（detail_base 存 settings.json；detail_step 全局字段已删——用户裁定 2026-09-15，
     # per-provider 只认模型卡片 detail_step，未填默认 0 不衰减）；detail_base 显示【实际生效值】——
     # 显式配置 > 窗口推导 > 1500，只显示 load_detail_base() 会把推导值误报成 1500
@@ -488,6 +495,51 @@ def read_config(agent) -> dict:
 def apply_config(agent, values: dict) -> list:
     """应用一组配置（key->value），返回每项的结果文案列表。"""
     results = []
+    # dump_projections 特殊段（2026-10-15）：实例值 + settings.json 双写——子 Agent 构造时读
+    # settings 跟随（用户实锤：worker 施工几十步零转储文件——实例属性孤岛问题）。
+    if "dump_projections" in values:
+        v = values.pop("dump_projections")
+        try:
+            on = _to_bool(v)
+            agent.dump_projections = on
+            try:
+                import config
+                saved = config.load_runtime_settings(); saved["dump_projections"] = on
+                config.save_runtime_settings(saved)
+            except Exception as e:
+                results.append(f"⚠️ dump_projections = {on}（实例已生效，settings 持久化失败：{e}）")
+            else:
+                results.append(f"✅ dump_projections = {on}（已存 settings.json；新建子 Agent 同步跟随）")
+        except Exception:
+            results.append(f"❌ dump_projections 值非法：{v}")
+    # repos_dir 特殊段（用户提案 2026-10-15）：repos 数据根重定向（C 盘系统区 → 其它盘）。
+    # 只改指向不搬家（迁移用户自理 robocopy）；运行中已开句柄不换根——重启后生效。
+    if "repos_dir" in values:
+        v = str(values.pop("repos_dir") or "").strip()
+        try:
+            if v:
+                from pathlib import Path as _P
+                p = _P(v)
+                if not p.is_absolute():
+                    results.append(f"❌ repos_dir 需绝对路径：{v}（未保存，原值不变）")
+                else:
+                    p.mkdir(parents=True, exist_ok=True)
+                    import config
+                    saved = config.load_runtime_settings()
+                    saved["repos_dir"] = v
+                    config.save_runtime_settings(saved)
+                    from session import REPOS_DIR
+                    results.append(f"✅ repos_dir = {v}（已存 settings.json；**重启后生效**——"
+                                   f"当前进程根仍 {REPOS_DIR}；数据迁移：先停实例，robocopy 搬 "
+                                   f"sessions/specs/plans/memories/rag 等子目录到新根，再启动）")
+            else:
+                import config
+                saved = config.load_runtime_settings()
+                saved["repos_dir"] = ""
+                config.save_runtime_settings(saved)
+                results.append("✅ repos_dir 已清空（回默认 ~/.agt/repos；重启后生效）")
+        except Exception as e:
+            results.append(f"❌ repos_dir 保存失败：{e}")
     # tool_timeout 特殊处理（real_tools 全局，不在 agent/llm）
     if "tool_timeout" in values:
         v = values.pop("tool_timeout")
@@ -2206,7 +2258,9 @@ def build_default_registry() -> CommandRegistry:
         "/config hook_timeout 300    同步钩子工作流超时秒数（超时结果丢弃不卡主循环；0=不限；async钩子不受限）\n"
         "/config fold_deep_tools true  超深档(超过max_level)轮的工具调用整体折叠成一行标注，保留回复+reasoning原文\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"
-        "/config dump_projections true  投影转储（调试用）")
+        "/config dump_projections true  投影转储（调试用；子 Agent 构造时读 settings 同步跟随）\n"
+        "/config repos_dir D:\\data\\agt_repos   repos 数据根重定向（绝对路径；空串=回默认 ~/.agt/repos。"
+        "只改指向不搬数据；重启生效——迁移：停实例→robocopy 搬 sessions/specs/plans/memories 等→切指向→启动）")
     reg.register("budget", _cmd_budget,
         "查看本次运行 token 消耗（已用 / 预算）")
     reg.register("stats", _cmd_stats,

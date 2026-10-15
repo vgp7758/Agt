@@ -30,6 +30,19 @@ def _find_projections_dir(session_dir: str = "") -> Path:
              (Path(_os.environ["APPDATA"]) / "Agt" if _os.environ.get("AGT_DESKTOP") in ("1", "true") and _os.environ.get("APPDATA")
               else Path.home() / ".agt"))
     root = _base / "repos"
+    # 重定向支持（2026-10-15，与 paths.repos_root 同款轻量复制——外置件不 import src）：
+    # settings.json 的 repos_dir（绝对路径）优先。
+    try:
+        import json as _json
+        _st = _base / "settings.json"
+        if _st.exists():
+            _v = str((_json.loads(_st.read_text(encoding="utf-8")) or {}).get("repos_dir") or "").strip()
+            if _v:
+                _p = Path(_v)
+                if _p.is_absolute():
+                    root = _p
+    except Exception:
+        pass
     best_mtime, best = 0, None
     for repo in root.iterdir():
         if not repo.is_dir():

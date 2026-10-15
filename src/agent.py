@@ -365,7 +365,18 @@ class Agent:
         self.agent_id: str = agent_id or "_main_"   # 本 Agent 在 registry 中的 id（子 Agent 创建时显式传入，默认主 _main_）
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
-        self.dump_projections: bool = False  # 投影转储开关（运行时设置）
+        self.dump_projections: bool = False  # 投影转储开关（设置页/斜杠改；2026-10-15 起子 Agent 同步跟随）
+        # 子 Agent 跟随（用户实锤 2026-10-15：worker 施工几十步无一转储文件——/config 只设
+        # 主 Agent 实例，SubAgent 新建实例恒 False。改为构造时读 settings.json 全局开关，
+        # 主/子 Agent 同源；主 Agent 运行中 /config 覆盖仍即时生效（实例属性优先）。
+        try:
+            import json as _json
+            _st = __import__("paths").AGT_DIR / "settings.json"
+            if _st.exists():
+                self.dump_projections = bool(
+                    (_json.loads(_st.read_text(encoding="utf-8")) or {}).get("dump_projections"))
+        except Exception:
+            pass
         self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
         self._turn_changed_calls: list = []   # 本轮产生文件变更的工具调用原文 [{call_id,name,arguments,result_preview,changed_files}]——before_answer 钩子（wiki 维护等）直接消费，免子 Agent read_file
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——

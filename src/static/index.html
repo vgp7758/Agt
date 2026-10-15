@@ -581,7 +581,8 @@
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" placeholder="自动（按窗口推导）" title="工具结果摘要的初始字数上限（档1 base）。留空=按 max_effective_context_window 自动推导（400K→1500、600K→2250、60K→600，主流配置行为不变）；填写则显式固定"></label>
     <label>保命窗口 panic <input id="cfg_panic_window" type="number" min="0" step="10000" title="轮内保命阀阈值（token）。0=跟随分档窗口 max_effective_context_window；设高如 160000（总窗口200K的80%）→ 轮内 75%×分档窗口~此线之间纯追加（缓存最优），超线才应急折叠并一次压回计划水位（分档窗口的75%，与轮边界计划对齐）"></label>
     <label title="超深档（真实档位超过 max_level）的早期轮：工具调用过程整体折叠成一行「---- 已折叠共N次工具调用 ----」，保留最终回复原文与 reasoning 原文——替代按 max_level(187字/步) 的逐调用残缺摘要。完整过程仍在存档可 recall。"><input id="cfg_fold_deep_tools" type="checkbox"> 折叠早期工具调用（超深档轮只留结论）</label>
-    <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
+     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/<name>/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
+     <label title="把 repos 数据根（sessions/长期记忆/计划/specs/RAG 索引等 per-repo 数据树）从默认 ~/.agt/repos 重定向到其它目录（如 D:\\agt_data\\repos——绕开 C 盘系统区的杀毒/索引干扰）。只改指向不搬数据：先停实例 → robocopy 搬子目录 → 设置新路径 → 重启生效；清空=回默认。"><input id="cfg_repos_dir" type="text" style="width:220px" placeholder="默认 ~/.agt/repos（留空）"> repos 数据根重定向（重启生效）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对左侧勾了 thinking 能力的模型生效（不支持思考的模型此项无							效）。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
     <label title="WS 断开后自动重连（3秒间隔），重连后自动恢复当前对话历史"><input id="cfg_auto_reconnect" type="checkbox"> 断线自动重连</label>
     <label title="关闭后：LLM 日志（成功/回退/限流/截断/毕业折叠等）只累计进前端内存（_logEntries，上限200条），不真正渲染到 🐞 面板 DOM——面板保持隐藏，省去枯燥调试信息的渲染开销。开启后：实时追加到面板。"><input id="cfg_show_log_panel" type="checkbox" onchange="setShowLogPanel(this.checked)"> 显示日志面板（🐞）</label>
@@ -1990,7 +1991,8 @@ function fillSettingsForm(v){
   document.getElementById('cfg_jev_base_url').value = v.jev_base_url || '';
   document.getElementById('cfg_jev_api_token').value = v.jev_api_token || '';
   document.getElementById('cfg_temperature').value = v.temperature;
-  document.getElementById('cfg_dump_projections').checked = !!v.dump_projections;
+   document.getElementById('cfg_dump_projections').checked = !!v.dump_projections;
+   const _rdEl = document.getElementById('cfg_repos_dir'); if (_rdEl) _rdEl.value = v.repos_dir || '';
   document.getElementById('cfg_enable_thinking').checked = !!v.enable_thinking;
   document.getElementById('cfg_fallback_chain').value = v.fallback_chain || '';
   document.getElementById('cfg_fallback_policy').value = v.fallback_policy || 'sticky';
@@ -2352,6 +2354,7 @@ function saveRuntime(){
     temperature: parseFloat(document.getElementById('cfg_temperature').value),
     enable_thinking: document.getElementById('cfg_enable_thinking').checked,
     dump_projections: document.getElementById('cfg_dump_projections').checked,
+    repos_dir: (document.getElementById('cfg_repos_dir') || {}).value || '',
     fallback_chain: document.getElementById('cfg_fallback_chain').value,
     fallback_policy: document.getElementById('cfg_fallback_policy').value,
     reasoning_completer: document.getElementById('cfg_reasoning_completer').value,

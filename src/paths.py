@@ -58,6 +58,28 @@ def resolve_agt_home() -> Path:
 
 AGT_DIR = resolve_agt_home()
 
+
+def repos_root() -> Path:
+    """repos 数据根（用户提案 2026-10-15：可重定向出 C 盘系统区）。
+    优先 settings.json 的 repos_dir（绝对路径才认，相对/不存在值一律回退默认）；
+    默认 AGT_DIR/repos。**进程启动时求值一次**（session.REPOS_DIR import 即快照）——
+    运行中改设置不换根（防半途撕裂），重启后生效。迁移由用户自理（robocopy 后切指向），
+    函数不搬家只指路。"""
+    try:
+        import json
+        _s = AGT_DIR / "settings.json"
+        if _s.exists():
+            v = str((json.loads(_s.read_text(encoding="utf-8")) or {}).get("repos_dir") or "").strip()
+            if v:
+                p = Path(v)
+                if p.is_absolute():
+                    p.mkdir(parents=True, exist_ok=True)
+                    return p
+    except Exception:
+        pass   # settings 损坏/读失败 → 默认根，不阻塞启动
+    return AGT_DIR / "repos"
+
+
 # 版本号唯一真源（桌面平铺打包形态没有 src 包——server.api_latest 等处从这取；
 # src/__init__.py 反向导入保持 pip 侧 __version__ 一致）
 VERSION = "0.34.7"

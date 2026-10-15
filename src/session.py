@@ -64,8 +64,12 @@ _RE_RF_BLOCK = re.compile(r"\n<recent-file[\s\S]*?</recent-file>")
 # 会话存档放用户主目录：~/.agt/repos/<repo-hash>/sessions/。每个 repo 一棵目录树
 # （sessions/ + 未来可加其它子目录），互相隔离。放包目录会在 pip 安装后写进
 # site-packages（不可写/难找），故统一到 ~/.agt，与 models.json/settings.json 同惯例。
-from paths import AGT_DIR
-REPOS_DIR = AGT_DIR / "repos"
+# 2026-10-15 重定向（用户提案）：REPOS_DIR 改从 paths.repos_root() 启动时求值——
+# settings.json 的 repos_dir 可把整棵数据树指到其它盘（C 盘系统区排除杀毒/索引干扰的
+# 根治手段）。所有消费方（config/log/rag/session_vec/spec_tools…）都 from session import
+# REPOS_DIR，此处是唯一真源；运行中改 settings 不生效（防半途撕裂），重启后新根。
+from paths import AGT_DIR, repos_root
+REPOS_DIR = repos_root()
 # 实测 token 用量流水（react 每次成功回包 observe_llm_usage 追加一条）：既是超窗观察日志，
 # 也是 chars/token 校准比率的持久化源——新 session init 回读末尾同模型记录作比率初值。
 TOKEN_USAGE_FILE = AGT_DIR / "token_usage.jsonl"

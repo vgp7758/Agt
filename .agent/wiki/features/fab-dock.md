@@ -140,6 +140,12 @@ function toggleFabDock(force){
 - 内置对应实现全删：index.html **-93 行**（三按钮 DOM / `openWebIde()` / 反馈弹窗 / open-workspace fetch）、server.py **-177 行**（`/api/open-workspace`、`/api/ide/open`、`_ide_payload`、WS 反馈分支）——单一实现源收敛到插件
 - `/plugins disable <名>` 可单独关掉任一图标；重启用 `/plugins enable`
 
+## 后记二：插件按钮第二席位——输入框上方工具条（2026-10-15，用户提案，commit 106c049）
+
+> 用户提问：「只能是右侧的图标抽屉里的按钮吗？可以是消息窗口上面的按钮吗？」
+
+`AgtPlugin.ui.addButton` 增 `position` 参数：**`'fab'`（缺省）= 本页右侧 dock 图标**（现有插件不动）/**`'input'` = 输入框上方工具条**——`#pluginInputBar`（`#inputBar` 之前的横排容器，icon+文字胶囊小按钮；无按钮时隐藏，有则显示，flex wrap）。dock 仍是插件按钮的缺省席位，`input` 席位适合对话高频操作类按钮（更贴消息流、更醒目）；抽屉 push 布局（横竖屏两组选择器）同步纳入新容器防错位。机制与验证详见 [插件 SDK](../architecture/plugin-sdk.md)「SDK 增强：addButton position:'input'」节。
+
 ## 相关页面
 
 - [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）

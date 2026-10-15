@@ -216,6 +216,17 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 
 `addButton` 的 `onClick` 由无参升级为**透传事件对象**——插件可拿按钮元素引用做 loading 态（webide 沿用内置版 `.loading` class 手法：半透明 + progress 光标，避免 textContent 覆盖 `<img>` 图标的旧坑，见 [fab-dock](../features/fab-dock.md)）。
 
+### SDK 增强：addButton position:'input'——输入框上方工具条席位（2026-10-15，用户提案，commit 106c049）
+
+> 用户提问：「只能是右侧的图标抽屉里的按钮吗？可以是消息窗口上面的按钮吗？」——按钮席位从一个变两个：同一 API、`position` 参数选位。
+
+- **`position: 'fab'`（缺省）**：右侧 dock 图标（原行为，向后兼容——现有插件不动，想挪入输入条改一行即可）
+- **`position: 'input'`**：**输入框上方工具条**——新容器 `#pluginInputBar`（src/static/index.html，DOM 顺序在 `#inputBar` 之前），icon + 文字**横排胶囊小按钮**（`.pluginInputBtn`：圆角 16px、浅底细边框、12.5px），更贴消息流、更醒目；容器默认 `display:none`，有插件注册按钮即 flex 显示（wrap 可换行）
+- API 形态：`AgtPlugin.ui.addButton({ position:'input', icon:'📁', label:'打开文件夹', onClick(){...} })`——其余字段（onClick 事件透传、icon 收自定义 HTML）与 fab 位完全一致
+- 布局配套：drawer-push（侧滑抽屉推开内容）横竖屏两组选择器同步纳入 `#pluginInputBar`——抽屉打开时不错位
+- 验证（隔离实例 Playwright 实测 + 截图）：注册两按钮 → 容器自动显示、DOM 顺序 `[pluginInputBar, inputBar]`（确在输入框上方）、胶囊文本/样式正确
+- 生效方式：纯前端（index.html 磁盘 serve），Ctrl+F5 即生效
+
 ### 内置全面退役：单一实现源收敛到插件
 
 - index.html **-93 行**：📁/💬/VS Code logo 三按钮 DOM + `openWebIde()` + 反馈弹窗 DOM/JS + open-workspace fetch

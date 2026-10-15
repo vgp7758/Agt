@@ -346,6 +346,56 @@ def wiki_move_chapter(path: str, title: str, after: str = "") -> str:
     return f"✅ 已移动 {path} 章节『{ti}』到 {where}"
 
 
+def _mark_queue_consumed():
+    """wiki 写入成功 → 把攒批队列标记为「已消费」（pending.jsonl → events.jsonl 轮转）。
+
+    动机（用户提案 2026-10-15）：主 Agent 在轮内亲自派 wiki-updater 归档（或任何 Agent 直接
+    写 wiki）时，before_answer 钩子的 wiki_auto_maintenance 并不知道这批改动已被归档——它读到的
+    pending.jsonl 里还躺着同样的轮次 → 又派一次 wiki-updater → 重复归档（浪费 token，可能重复写）。
+    语义：**wiki 有写入 = 归档动作已发生 = 队列可消费**（与工作流 cleanup_queue 同一套轮转）。
+    边界：轮转覆盖当前 pending 全部条目（含子 Agent 跑动期间新攒的极少数轮次）——影响可忽略，
+    下一次带代码变更的轮次会重新入队。"""
+    import os as _os
+    import json as _json
+    import time as _time
+    try:
+        qd = _WORKSPACE / ".agent" / "wiki_queue"
+        pf = qd / "pending.jsonl"
+        if not pf.exists():
+            return ""
+        n = len([l for l in pf.read_text(encoding="utf-8").splitlines() if l.strip()])
+        (qd / "events.jsonl").unlink(missing_ok=True)
+        _os.replace(str(pf), str(qd / "events.jsonl"))
+        # 记消费时刻（用户提案 2026-10-15）：工作流侧据此做【冷却】——刚消费完的短时间内的
+        # 轮次只入队不派活，避免连续几轮反复唤醒 wiki-updater（内容不丢，等下批一起消费）。
+        try:
+            (qd / "last_consumed.json").write_text(
+                _json.dumps({"ts": int(_time.time()), "source": "writer", "items": n},
+                            ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        return f"｜攒批队列已消费（{n} 条 pending → events）"
+    except Exception:
+        return ""
+
+
+def _consume_queue_on_write(fn):
+    """包装写类 wiki 工具：成功（返回 ✅ 开头）时顺手消费攒批队列（见 _mark_queue_consumed）。"""
+    import functools as _ft
+
+    @_ft.wraps(fn)
+    def _w(*a, **kw):
+        out = fn(*a, **kw)
+        try:
+            if isinstance(out, str) and out.startswith("✅"):
+                out += _mark_queue_consumed()
+        except Exception:
+            pass
+        return out
+
+    return _w
+
+
 def agt_register(ctx=None):
     """ctx: {"cwd": "<workspace 绝对路径>", ...}——引擎扫描时按位置传入（签名兼容：无 ctx 也工作，
     回退 import 时的 Path.cwd()）。模块级 _WORKSPACE 用 ctx 覆盖（global）。"""
@@ -356,7 +406,10 @@ def agt_register(ctx=None):
         {"name": n, "func": f, "hidden": False, "group": "wiki", "version": 1}
         for n, f in [("wiki_read", wiki_read), ("wiki_list", wiki_list),
                      ("wiki_tree", wiki_tree), ("wiki_search", wiki_search),
-                     ("wiki_write", wiki_write), ("wiki_delete", wiki_delete),
-                     ("wiki_add_chapter", wiki_add_chapter), ("wiki_update_chapter", wiki_update_chapter),
-                     ("wiki_remove_chapter", wiki_remove_chapter), ("wiki_move_chapter", wiki_move_chapter)]
+                     ("wiki_write", _consume_queue_on_write(wiki_write)),
+                     ("wiki_delete", wiki_delete),
+                     ("wiki_add_chapter", _consume_queue_on_write(wiki_add_chapter)),
+                     ("wiki_update_chapter", _consume_queue_on_write(wiki_update_chapter)),
+                     ("wiki_remove_chapter", _consume_queue_on_write(wiki_remove_chapter)),
+                     ("wiki_move_chapter", _consume_queue_on_write(wiki_move_chapter))]
     ]

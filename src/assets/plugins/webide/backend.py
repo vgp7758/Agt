@@ -1,4 +1,3 @@
-from fastapi import Request
 """webide —— 插件后端：POST /api/webide/open（拉起/复用 VS Code serve-web 工作台）。
 原 server.py 内置 /api/ide/open 的插件化搬迁（用户提案 2026-10-15）。逻辑照搬：
 - 端口潜规则：WebUI 端口 + 30000；被占（WinNAT 隐形保留/serve-web 孤儿）向后扫 +1..+5 选可 bind 口
@@ -7,6 +6,7 @@ from fastapi import Request
 依赖适配：_workspace → api.workspace；_agent.services → api.agent.services。
 图标资产：插件目录内 vscode.png，前端经 /plugins-assets/webide/vscode.png 引用
 （plugins.plugin_asset 安全解析：resolve 后必须在插件目录内——任意 png/svg/css 同机制）。"""
+from fastapi import Request
 import asyncio
 import time
 
@@ -51,8 +51,8 @@ async def _open(request: 'Request'):
     # ② 选口：潜规则口可 bind 用它；被占向后扫 +1..+5
     PORT = next((p for p in [base_port + i for i in range(6)] if _bindable(p)), None)
     if PORT is None:
-        return {"ok": False, "error": f"端口 {base_port}..{base_port + 5} 均被占用且无可复用服务"
-                f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
+        return 200, {"ok": False, "error": f"端口 {base_port}..{base_port + 5} 均被占用且无可复用服务"
+                     f"（疑似 serve-web 孤儿进程或 Windows 动态保留——重启系统可重置）"}
     # --default-folder 直开工作区（勿用 ?folder= URL 参数——serve-web 1.134 会误路由成
     # "远程代理"会话，标签页名变成 l10n 字面量，用户实锤）+ --commit-id 钉缓存版本
     _cid = ""
@@ -141,11 +141,14 @@ async def _prefetch(cached_hashes: set):
         pass
 
 
-def _payload(ready: bool, port: int) -> dict:
+def _payload(ready: bool, port: int):
+    """路由返回值（元组修复 2026-10-15 用户实锤）：插件路由约定 (status, body)——
+    原搬迁时照搬了内置端点的裸 dict 风格（FastAPI 端点可直接 return dict），漏包元组，
+    _handler 的 `status, body = fn(...)` 把 dict 解包成键流 → too many values to unpack。"""
     out = {"ok": True, "port": port, "ready": ready}
     if not ready:
         out["hint"] = "VS Code Server 组件首次下载中（一次性）——页签保持打开会自动刷新，或稍后再点"
-    return out
+    return 200, out
 
 
 _WS = None

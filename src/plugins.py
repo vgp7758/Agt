@@ -409,7 +409,14 @@ def _attach_one(app, route: dict):
     # （本文件有 from __future__ import annotations：字符串注解按模块 globals resolve）。
     async def _handler(request: "_FastAPIRequest"):
         try:
-            status, body = await fn(request) if _is_coro(fn) else fn(request)
+            rv = await fn(request) if _is_coro(fn) else fn(request)
+            # 返回值宽容解析（2026-10-15 webide 实锤 too many values to unpack）：
+            # 约定 (status, body) 元组；插件作者漏包元组裸返回 dict/list/str 时不再炸——
+            # 直接当 body（status=200）。仅首元素是 int 的二元组才按 (status, body) 解。
+            if isinstance(rv, tuple) and len(rv) == 2 and isinstance(rv[0], int):
+                status, body = rv
+            else:
+                status, body = 200, rv
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
         from fastapi.responses import JSONResponse

@@ -2252,6 +2252,22 @@ class Agent:
                     "result": ("本轮此前因进程退出/异常而中断，现在已从断点恢复继续。"
                                "已完成的工具调用及其结果都完整保留在上下文中；"
                                "请从中断处继续完成原任务，不要重复已完成的步骤。")})
+            # 外置探索中断恢复提示（spec s_7edebd56）：读档时 Session._scan_pending_explores 扫出的
+            # 未完成旁车 run，轮首注入一次——模型可 explore_resume(run_id) 从断点续跑，也可忽略
+            # （旁车不投影进上下文，无副作用）。pop 消费保证不重复注入（resumed/自然轮都提示）。
+            _pex = self.session.extra_state.pop("_pending_explores", None)
+            if _pex:
+                try:
+                    _lines = [f"- run:{it.get('run')}（已完成 {it.get('steps', 0)} 步）"
+                              f" goal={str(it.get('goal', ''))[:60]}" for it in _pex]
+                    self._hook_notes.append({
+                        "hook": "resume", "name": "interrupted_explore",
+                        "result": ("检测到上次进程退出时未完成的外置探索（旁车文件存在、无完成终行）：\n"
+                                   + "\n".join(_lines)
+                                   + "\n如需继续，调 explore_resume(run_id) 从断点续跑（已完成步骤自动拼回，"
+                                     "不会重复）；若原目标已不再需要，忽略本提示即可。")})
+                except Exception:
+                    pass
             # —— before_turn 钩子（旧 auto:true ≡ before_turn）：用当前消息作输入预执行 ——
             # 注入方式：挂到 _current._before_turn_hint（session 投影时在 user 后渲染）。
             # 传 session_id 供工作流当上下文/日志标识；真正检索靠工具节点直接访问 session。

@@ -469,6 +469,10 @@ class Turn:
     recap: str = ""                                  # 一句话 recap（turn_end 异步生成：队友看板 + fc 折叠摘要行）
     changed: list = field(default_factory=list)      # 本轮文件变更清单 [{"file","change"}]（各步快照 diff 按
                                                      # 文件去重后写覆盖——webui answer 下补充渲染用）
+    _explore_seeds: list = field(default_factory=list)  # 外置探索旁车 seeds（spec s_7edebd56·运行时属性）：
+                                                     # explore 过程不再 _seed_steps 落 events，改由投影组装时
+                                                     # 内插（_explore_seeds_to_msgs，仅当前轮）——Turn 持久化
+                                                     # 走 events 重放，本字段天然不落盘，下轮/读档自然消失。
 
 
 def _eval_assembly_workflow(name: str, session) -> str:
@@ -1554,10 +1558,37 @@ class Session:
         else:
             out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
                                                full_window=RECENT_FULL_STEPS))
+        # 外置探索旁车内插（spec s_7edebd56）：seeds 渲染成 assistant(tool_calls)+tool 消息组，
+        # 插在 steps 之后、pending hint 之前——与原 _seed_steps 嫁接顺序等价（过程先于 explore
+        # 调用步，因外层调用步归档前旁车恰在末尾）。仅当前轮：字段不持久化，下轮自然消失。
+        _seeds = getattr(self._current, "_explore_seeds", None)
+        if _seeds:
+            out.extend(self._explore_seeds_to_msgs(_seeds))
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + _psh)})
         return out
+
+    def _explore_seeds_to_msgs(self, seeds: list) -> list[dict]:
+        """外置探索旁车 seeds → assistant(tool_calls)+tool 消息组（投影层内插，spec s_7edebd56）。
+        与 _steps_to_messages 同形态（标准协议：assistant(tool_calls) 紧跟各 tool 结果成对）；
+        tool_call_id = exp-<run>-<seq>（生成时已定，旁车/投影/续跑三处一致）；reasoning 挂
+        reasoning_content（[外置探索] 前缀在生成时已带上）。衰减：seeds 全部在轮内末尾
+        （组号差 0 ≤1）→ 全量披露（生成时已按 _RESULT_CAP=6000 截断，不再二次衰减）；
+        不查 toollog（内容直出——seeds 不进 toollog，旁车文件自带 run_id 空间与主线 cid 零耦合）。"""
+        msgs = []
+        for i, sd in enumerate(seeds):
+            cid = f"exp-{sd.get('run', 'x')}-{sd.get('seq', i)}"
+            a = {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": cid, "type": "function",
+                                 "function": {"name": str(sd.get("tool", "")),
+                                              "arguments": json.dumps(sd.get("args", {}),
+                                                                       ensure_ascii=False)}}]}
+            if sd.get("reasoning"):
+                a["reasoning_content"] = sd["reasoning"]
+            msgs.append(a)
+            msgs.append({"role": "tool", "tool_call_id": cid, "content": str(sd.get("result", ""))})
+        return msgs
 
     def _seg_msgs_recent_file(self) -> list[dict]:
         """recent-file 段（2026-09-07·用户提案·第四版）：当前轮改过的文件快照以独立段投影
@@ -3865,6 +3896,50 @@ class Session:
             return self.global_summary[-GLOBAL_SUMMARY_CAP:]  # 兜底：截断保留最近部分
 
     # ========== 会话文件夹 ==========
+    def _scan_pending_explores(self) -> None:
+        """读档后扫旁车 explore/*.jsonl：无 done 终行 = 进程退出时中断的未完成探索（spec s_7edebd56）
+        → 记 extra_state['_pending_explores']=[{run,goal,steps}...]；agent.run 轮首消费注入一次
+        恢复提示（模型可用 explore_resume(run_id) 续跑，也可忽略）。扫描失败静默（旁车是增强，
+        绝不影响读档）。session_dir 未就绪直接跳过。"""
+        try:
+            sdir = getattr(self, "session_dir", None)
+            if not sdir:
+                return
+            exp_dir = Path(sdir) / "explore"
+            if not exp_dir.is_dir():
+                return
+            pend = []
+            for f in sorted(exp_dir.glob("*.jsonl")):
+                try:
+                    meta, steps, done = None, 0, False
+                    for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                        if not ln.strip():
+                            continue
+                        try:
+                            obj = json.loads(ln)
+                        except Exception:
+                            continue          # 损坏行跳过（explore_resume 端会截断处理）
+                        ev = obj.get("ev")
+                        if ev == "meta":
+                            meta = obj
+                        elif ev == "assistant":
+                            steps += 1
+                        elif ev == "done":
+                            done = True
+                    if done or meta is None:  # 已完成 / 纯损坏文件（无 meta）不算待续跑
+                        continue
+                    pend.append({"run": f.stem, "goal": str(meta.get("goal", "")), "steps": steps})
+                except Exception:
+                    continue
+            if pend:
+                self.extra_state["_pending_explores"] = pend
+            else:
+                self.extra_state.pop("_pending_explores", None)   # 无待续跑：清残留标记（扫描=权威重算）
+                _LOG.info("发现 %d 个未完成外置探索旁车（下轮轮首提示续跑）：%s",
+                          len(pend), [p["run"] for p in pend])
+        except Exception as e:
+            _LOG.warning("旁车 explore 扫描失败（跳过）：%s", e)
+
     def _ensure_session_dir(self):
         """创建 session 专属文件夹并返回路径。预设了 session_dir（子 agent）直接建它；否则按时间戳现算。"""
         if self.session_dir is not None:
@@ -4461,6 +4536,7 @@ class Session:
             except Exception as e:
                 _LOG.warning("简化分层定型失败（忽略，走 _plan_fold 常规路径）：%s", e)
         s._plan_fold()       # 读档即计划（首个投影前 _planned_fold 就绪；turns/boundaries 已恢复）
+        s._scan_pending_explores()   # 旁车扫描：无 done 终行的探索 run → 轮首提示续跑（spec s_7edebd56）
         return s
 
     # ========== 展示 ==========

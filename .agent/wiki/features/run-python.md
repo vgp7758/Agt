@@ -75,6 +75,7 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 - 经 `_tool_emit` 回调推送 tool_stream / tool_progress 事件（前端气泡实时可见）
 - `cwd` 固定 WORKSPACE
 - Windows 加 CREATE_NO_WINDOW：detached（/restart 看门狗拉起）进程无控制台时，子进程默认各弹一个终端窗，闪退即此（见 [ops 常见错误对照](../guides/ops.md#常见错误对照)）
+- 消费方：run_python / run_shell（本页）、run_script；2026-10-15 起 **/cmd 斜杠命令**（src/commands.py）也复用它——用户在消息框手敲 shell 命令免开终端，见 [/cmd](cmd-command.md)
 
 ## 超时转后台与完成自动通知（2026-08-30，commit 6460ad1）
 

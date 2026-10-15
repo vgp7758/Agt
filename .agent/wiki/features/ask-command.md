@@ -48,3 +48,5 @@ Web 端斜杠命令在 async handler 里**同步执行**——LLM 调用动辄�
 - [agent_ask 不装配工具](../architecture/multi-agent.md#agent_ask-不装配工具克隆历史纯对话问答2026-10-08用户提案commit-16c1708) —— 语义同源：Agent 间无状态询问（克隆对方完整历史 + `tools=[]`）
 - [recall_turn · 会话历史轮次召回](recall-tools.md) —— 对照：进历史的检索式召回（含 tools 细节，消费在轮内）
 - [用户交互 · 插话机制](user-interaction.md) —— 插话是进历史的；/ask 是不进历史的旁路
+- [/cmd · 消息框直接执行 shell](cmd-command.md) —— 姊妹斜杠命令（同为命令表注册、/restart 生效）；/cmd 有意不装审批门，/ask 天然无副作用
+

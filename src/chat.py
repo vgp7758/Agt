@@ -445,7 +445,12 @@ def _worker(agent, work_q, registry, state):
             _imgs = item[2] if len(item) > 2 else []   # 三元组 (kind, payload, images)；二元组兼容
             state["kind"] = kind
             state["started"] = time.time()
-            state["busy"] = True
+            # busy 只标"真跑任务"的项（2026-10-16 修复）：斜杠命令是瞬时的，若在 dispatch 前
+            # 设 busy=True，命令自身读 state["busy"] 会读到 True（/status 恒显示 busy=True 的
+            # 假象——9637 终验实锤：worker 已空闲等活、/status 仍报 busy=True）。
+            _is_cmd = (kind == "user" and isinstance(payload, str) and payload.startswith("/"))
+            if not _is_cmd:
+                state["busy"] = True
             state["answered"] = False   # answer 后收尾期不再误判插话（server._broadcast 置 True）
             try:
                 if kind == "task":

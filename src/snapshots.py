@@ -18,6 +18,61 @@ import time
 from pathlib import Path
 
 
+_GIT_TIMEOUT = 120               # 单条快照 git 命令墙钟上限（秒）
+
+
+class _CmdTimeout(TimeoutError):
+    """快照 git 子命令超时（进程树已杀）——调用方捕获转译/直接当快照失败（agent.run 的
+    except 会 emit warn，轮照常收尾，busy 复位），绝不再无限挂。"""
+
+
+def _kill_tree(proc) -> None:
+    """杀子进程【树】：git 偶发拉起孙进程（auto maintenance/credential helper 等）并被子进程
+    继承 stdout 句柄——只 kill 父进程管道不关，communicate() 的 reader 线程永等。"""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _run_cmd(cmd, timeout=120, cwd=None):
+    """跑子命令 → (returncode, stdout, stderr)。
+
+    为什么不用 subprocess.run(timeout=...)：run 的超时路径是「kill 父进程 → 再 communicate()
+    （无超时）」——子进程若拉起过孙进程（继承 stdout 句柄），父死后管道永不 EOF，
+    第二次 communicate() 永等（2026-10-16 9634/9635 实例 py-spy 实锤：worker 卡死在
+    snapshots._run → subprocess join，busy 恒真，前端灯不灭）。这里显式
+    communicate(timeout) + 超时杀树释放句柄 → 抛 _CmdTimeout 快速失败。
+    stdin 恒 DEVNULL（2026-09-16 9300 实例 git init 挂死的已验证药方：防读继承管道）；
+    文本按 UTF-8 解（sha/报错含仓库文件名，locale 解码会乱）。cwd 必须传 worktree 根：
+    git 的路径参数（.agt、. 等 pathspec）按「调用进程 cwd」解析——服务进程 cwd 一般就是
+    workspace 所以从未炸过，但诊断脚本/其它 cwd 调进来会静默打偏（2026-10-16 验证实锤：
+    rm --cached .agt 在仓库根 cwd 下 pathspec 不匹配被 check=False 吞掉）。"""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                            errors="replace", cwd=cwd,
+                            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:
+            out, err = "", ""
+        raise _CmdTimeout(f"{' '.join(cmd[:2])} … 超时（{timeout}s，进程树已杀）: "
+                          f"{(err or out or '').strip()[:200]}") from None
+    return proc.returncode, (out or ""), (err or "")
+
+
 class SnapshotManager:
     def __init__(self, workspace):
         self.workspace = Path(workspace).resolve()
@@ -27,37 +82,43 @@ class SnapshotManager:
     def _run(self, args, check=True) -> str:
         cmd = ["git", "--git-dir", str(self.git_dir),
                "--work-tree", str(self.workspace), *args]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
-                           creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
-        if check and r.returncode != 0:
-            raise RuntimeError(f"git {args[0]} 失败: {r.stderr.strip() or r.stdout.strip()}")
-        return r.stdout.strip()
+        code, out, err = _run_cmd(cmd, timeout=_GIT_TIMEOUT, cwd=str(self.workspace))
+        if check and code != 0:
+            raise RuntimeError(f"git {args[0]} 失败: {(err or out).strip()}")
+        return (out or "").strip()
 
     def ensure_repo(self):
-        """首次使用时初始化快照仓库（bare + 指定 worktree），并排除自身/用户 .git。"""
-        if (self.git_dir / "HEAD").exists():
-            return
-        self.git_dir.mkdir(parents=True, exist_ok=True)
-        # timeout + DEVNULL（2026-09-16 9300 实例实测挂死：git init 在无 console 的服务进程
-        # 上下文里偶发不退——与 _run 对齐 120s 超时兜底，stdin 显式断开防继承管道）
-        try:
-            subprocess.run(["git", "init", "--bare", str(self.git_dir)],
-                           check=True, capture_output=True, timeout=120,
-                           stdin=subprocess.DEVNULL,
-                           creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("git init --bare 超时（120s）——快照仓库初始化受阻，检查磁盘/杀毒")
-        self._run(["config", "core.bare", "false"])
-        self._run(["config", "core.worktree", str(self.workspace)])
-        self._run(["config", "user.name", "Agt Snapshots"])          # commit-tree 需要
-        self._run(["config", "user.email", "snapshots@agt.local"])
+        """首次使用时初始化快照仓库（bare + 指定 worktree），并排除自身/用户 .git。
+        HEAD 存在 ≠ 初始化完整（2026-10-16 _regr_ws 实锤：init 后 exclude 未落盘的半成品仓
+        会在此永久早退——.agt/ 被 add -A 整体跟踪（index 11k 条目，含快照对象库自身），
+        每轮 add -A 全量扫对象库（秒级且随对象数膨胀），restore 又把 .agt/snapshots 内部
+        文件当 tracked 还原 → 自覆盖报错）。排除块缺失时补写，并摘除 index 里的历史误跟踪。"""
         exclude = self.git_dir / "info" / "exclude"
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if not (self.git_dir / "HEAD").exists():
+            self.git_dir.mkdir(parents=True, exist_ok=True)
+            # timeout + DEVNULL（2026-09-16 9300 实例实测挂死：git init 在无 console 的服务进程
+            # 上下文里偶发不退——_run_cmd 统一超时兜底 + 杀树 + stdin 显式断开防继承管道）
+            try:
+                _run_cmd(["git", "init", "--bare", str(self.git_dir)], timeout=120)
+            except _CmdTimeout as e:
+                raise RuntimeError("git init --bare 超时（120s）——快照仓库初始化受阻，检查磁盘/杀毒") from e
+            self._run(["config", "core.bare", "false"])
+            self._run(["config", "core.worktree", str(self.workspace)])
+            self._run(["config", "user.name", "Agt Snapshots"])          # commit-tree 需要
+            self._run(["config", "user.email", "snapshots@agt.local"])
+        old = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        existing = old
         for p in (".agt/", ".git/"):                                 # 不快照自身 & 用户的 .git
             if p not in existing:
                 existing += f"\n{p}"
-        exclude.write_text(existing.strip() + "\n", encoding="utf-8")
+        if existing != old:   # 本次有补写 = 半成品/旧仓修复路径
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude.write_text(existing.strip() + "\n", encoding="utf-8")
+            # exclude 只拦「未跟踪」；已被误跟踪的 .agt 仍会被每轮 add -A 扫描/提交，须显式摘除
+            # （-f 必须带：个别条目 staged 内容与工作区/HEAD 均不同时会拒绝部分摘除，残留
+            #   .agt/snapshots/index 等自噬条目——2026-10-16 _regr_ws 验证实锤。--cached 下
+            #   -f 只动 index，工作区文件不动）
+            self._run(["rm", "-r", "--cached", "-f", "-q", ".agt"], check=False)
 
     def snapshot(self) -> str:
         """对当前工作区打快照，返回 commit SHA。"""
@@ -125,11 +186,11 @@ class SnapshotManager:
 # （之后 add -A 会把回溯差异整笔提交）。三个小工具给 chat.restore_snapshot 用。
 
 def _user_git(workspace, args, check=True) -> str:
-    r = subprocess.run(["git", "-C", str(workspace), *args], capture_output=True, text=True,
-                       timeout=60, creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
-    if check and r.returncode != 0:
-        raise RuntimeError(f"git {args[0]} 失败: {r.stderr.strip() or r.stdout.strip()}")
-    return r.stdout.strip()
+    code, out, err = _run_cmd(["git", "-C", str(workspace), *args], timeout=60,
+                              cwd=str(workspace))
+    if check and code != 0:
+        raise RuntimeError(f"git {args[0]} 失败: {(err or out).strip()}")
+    return (out or "").strip()
 
 def user_repo_head(workspace) -> str:
     """用户真仓库当前 HEAD sha；非 git 仓库/失败返回空串（=不启用撞车检测）。"""

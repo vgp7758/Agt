@@ -202,6 +202,30 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 - 主 Agent 侧：委托后 [退出施工视图](context-engine.md#后记施工委托让位委托后主-agent-退出施工视图2026-10-15用户提案commit-3dc3f7b)（`session._construction_mode()` 让位）+ [计划注入块](../features/construction-delegation.md)加「施工：已委托 …」行
 - **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常；**实战**：dashboard 施工线（plan p_c0542ede）worker 三断点续跑 + update_plan 标满 10/10，全链路实证
 
+## 用户直派通道：`@name <任务>` ——第三条派活入口（2026-10-15，用户提案）
+
+派活**发起方**至今有三种，走的都是同一个 `agent_prompt` 实现（声明解析 / 新建·复用·复活 / 回退链 / 专属工具装配全同源，差异只在参数与路由）：
+
+| 入口 | 触发者 | 代码 | 特征 |
+|---|---|---|---|
+| LLM 工具调用 | 主 Agent 自己 | `agent_prompt` 工具 schema | 默认复用、不装配 history（按需显式传） |
+| 引擎程序化派发 | 引擎（施工委托） | `agent._prompt_subagent = agent_prompt`（`_resolve_tools` 尾部） | 幂等、具名 `agent_id=worker-<plan_id>`、断点续跑 |
+| **用户直派 `@name`** | **用户在 WebUI 主输入框** | `src/server.py` `_handle_user_input` → `agent.tools.call("agent_prompt", {name, prompt, caller: "user", assembly: "history=on"})` | **`caller="user"` + 默认接续历史 + 忙时插话注入** |
+
+**用户直派的三个语义差异**（与前两者对照）：
+
+- **`caller="user"`**：子 Agent 完成通知**直推用户**（后台通知卡片），fire-and-forget——不唤醒主 Agent、不烧它一轮 token（`caller` 语义见 [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)）。用户要的是「我派活、我收结果」，主 Agent 不必经手
+- **`assembly="history=on"`**：用户直派**默认接续该子 Agent 的历史**（复用同名活实例时装完整 history——`@coder 接着上次那件事` 的自然预期）；主 Agent 派活保持默认关
+- **同名实例 running → 插话注入**（不撞 `agent_prompt` 的 `[忙] 先 wait_subagents` 拒绝）：用户在对话流里连发 `@` 是「接着追加」，不是「另起一单」——与切到子 Agent 页面发文本同款语义
+
+**声明面零改动**：`@` 后面的名字就是 `.agent/agents/` 的声明名（与 `agent_prompt` 的 `name` enum 同源）；**无声明名字不自动实例化**（不凭空造无人设/无工具配置的 Agent），提示先 `create_agent` 或写 yml。
+
+**判据坑（实测）**：忙判定不能只看 `agent.busy`——该标志进 run 循环才置，实例刚创建（派活占位）时仍是 False，会让第二条 `@` 落回 `agent_prompt` 内部拒绝。改用 `entry.status == "running"`（占位即标）或 `agent.busy` 双条件，与 `agent_prompt` 内部判据对齐。
+
+**生效方式**：引擎层（src/server.py）需 `/restart`；前端零改动（纯 WS 文本）。完整语法 / 五分支回执文案 / 验证见 [用户交互 · @name 直派子 Agent](../features/user-interaction.md#name-直派子-agent主输入框-slack-式提及用户跳过主-agent-直接派活2026-10-15用户提案)。
+
+**关联**：[施工委托 worker](#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（另一条非 LLM 派活入口——引擎侧）· [agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用语义出处）· [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)（`caller="user"` 的完整语义）· [多客户端 target 路由](../features/user-interaction.md#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（`@` 只在主 Agent 视图解析）。
+
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
 **背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：

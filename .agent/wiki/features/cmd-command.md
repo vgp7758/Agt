@@ -68,4 +68,6 @@ CLI / WebUI 输入框里直接执行 shell 命令，输出立即回显——`pip
 - [run_python · Python 子进程执行](run-python.md) —— `_run_subprocess_streaming` 的产地：流式输出 / 编码自适应 / 超时转后台 + 完成自动通知 全部同源
 - [工具执行审批](tool-approval.md) —— run_shell / run_python 的三按钮放行；/cmd 有意绕过（亲手敲=已授权）
 - [/ask · 无状态旁路询问](ask-command.md) —— 姊妹斜杠命令先例（同为命令表注册，但仍是内置）
+- [用户交互 · @name 直派子 Agent](user-interaction.md) —— 输入框的另一个「直给」入口：`/cmd` 执行命令、`@name <任务>` 派活子 Agent（同为「用户亲手敲 = 显式授权/显式派活」，不走 LLM 转手）
 - [外部事件注入](external-injection.md) —— background 队列形态的来源；正是它进不了命令分发才保住 /cmd 的安全边界
+

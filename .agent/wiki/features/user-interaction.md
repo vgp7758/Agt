@@ -613,6 +613,65 @@ if text:
 
 **关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义总纲——本节把最后一条通道纳入）、[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（命令侧姊妹修复，`_target_agent` 模式参照）、[插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)（同通道时机侧姊妹修复）、[多 Agent 体系](../architecture/multi-agent.md)（`registry.lookup` 与 Agent 实例挂载——`e.agent is None` 的磁盘恢复条目形态）。
 
+## @name 直派子 Agent：主输入框 Slack 式提及——用户跳过主 Agent 直接派活（2026-10-15，用户提案）
+
+> src/server.py（`_handle_user_input` 的 WS 文本分支，紧接 target 路由块之后）。用户提案（2026-10-15）：「user 有时候也会需要通过 `@coder <prompt>` 这种方式直接唤醒一个 sub-agent 实例派活」。前端**零改动**——纯 WS 文本解析，复用 `agent_prompt` 工具全链路（声明解析 / 实例化 / 异步派发 / 回执路由），不新造一套派活机制。
+
+### 语法与匹配位置
+
+```
+@coder 把 utils.py 的日志改成 loguru
+@translator 把 "hello world" 翻译成中文
+@reviewer 看看刚才那笔 commit 有没有问题
+```
+
+- **正则** `^@([\w\-]+)\s+(.+)`（`re.S`，多行任务正文一路吃下）——**行首 `@` 才匹配**：邮箱 `a@b.com`、正文中缀提及不误触；名字取 `.agent/agents/` 的**声明名**（`wiki-updater` 这类带 `-` 的也命中）
+- **只在主 Agent 视图生效**：解析块位于 [target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b) 的 `_tgt != "_main_"` 分支**之后**——页签已切到某子 Agent 时，文本（含带 `@` 的）仍直达该子 Agent，`@` 不作解析
+- 走的是**普通 WS 文本**而非斜杠命令，故 `@` 与 `/` 互不干扰（`/` 命令先经 dispatch；`@` 在文本分支里处理）
+
+### 五分支行为（实测口径）
+
+| 情形 | 行为 | 用户看到的回执 |
+|---|---|---|
+| 无活实例（但**有声明**） | **实例化并派活**（`agent_prompt` 新建分支，异步裸线程，不阻塞） | `📨 🚀 已启动子 Agent 'translator' [agent_id=translator]（异步，不阻塞）` |
+| 有活实例、空闲 | **复用**该实例派活（`agent_prompt` 默认复用语义） | 同上形态 |
+| 同名实例**正在跑**（running） | **插话注入**——`_busy.agent.queue_user_message(f"@用户：{_prompt}")`，下一步边界生效 | `📥 '<agent_id>' 正在跑——已注入当前任务（下一步边界生效）` |
+| 跑过但已卸载（有历史存档） | **复活**该实例线（`agent_prompt` 复活分支，带历史） | 复活回执 |
+| **完全没有声明**（如 `@nosuchagent`） | 不自动造无名 Agent，提示先建声明 | `[不存在] 没有名为 'nosuchagent' 的子 Agent，先 create_agent` |
+
+> **有意的留白**：无声明名字**不自动实例化**——没有 yml 声明 = 无人设 / 无工具配置，"凭空造一个无名 Agent"没有意义；正确姿势是 `create_agent` 或直接 `write_file` 写 `.agent/agents/*.yml`（见 [create_agent 退役](../architecture/multi-agent.md#create_agent-退役官方路径直接-write_file-yml2026-10-06用户裁定commit-f3f983c)）。
+
+### 四处关键设计
+
+| 设计点 | 说明 |
+|---|---|
+| **复用 `agent_prompt` 全链路** | `agent.tools.call("agent_prompt", {...})`——声明解析 / 新建 / 复用 / 复活 / 回退链 / 专属工具装配全部同源；`@` 只是**第三个发起入口**（前两个：LLM 工具调用、引擎程序化 `_prompt_subagent`），语义见 [多 Agent 体系 · 用户直派](../architecture/multi-agent.md) |
+| **`caller="user"` → fire-and-forget** | 子 Agent 完成通知**直推用户**（后台通知卡片），不唤醒主 Agent、不烧它一轮 token——用户要的是「我派活、我收结果」，主 Agent 不必经手 |
+| **`assembly="history=on"`（用户中途补充）** | 用户直派**默认接续该子 Agent 的历史**——复用同名活实例时装配完整 history（`@coder 接着上次那件事` 的自然预期）；新建实例无历史，此参数无害。**主 Agent 派活仍默认关**（它按需显式传） |
+| **与主 Agent busy 解耦、不进 work_q** | 子 Agent 独立异步跑：主 Agent 正在忙也能 @ 派活，互不排队（对比：切到子 Agent 页面发文本走 work_q / 插话队列） |
+
+### 实测暴露的坑：忙判据不能只看 `agent.busy`
+
+首轮旁路测试（隔离实例 9633）暴露：连发两条 `@` 给同一名字时，第二条落回 `agent_prompt` 内部的 `[忙] 先 wait_subagents…` 拒绝——**因为 `agent.busy` 要进 run 循环才置 True**，实例刚创建（派活占位）时它仍是 False，「看着空闲」→ 没走插话注入分支。
+
+修复：忙判据改为 **`entry.status == "running"` 或 `agent.busy` 双条件**（`registry._lock` 内遍历 `_agents` 按 `entry.name` 命中），与 `agent_prompt` 内部判据对齐——派活时占位即标 running，实例刚创建就命中。
+
+**顺带确立的语义**：用户直派路径上连发 `@` **不再撞 `[忙]` 拒绝**，而是像子 Agent 页面那样「接着当前任务追加」——两条提示文案分别是 `🚀 已启动` 与 `📥 正在跑——已注入当前任务`。
+
+### 生效方式与验证
+
+- **生效方式**：引擎层（src/server.py）→ 需 **`/restart`**。`index.html` 无需改（纯 WS 文本，刷新即可），故这也是少见的「前端零改动」入口类特性。
+- **验证**（L2 旁路：隔离实例独立 workspace + 新代码，playwright 发真实 WS 消息）**五分支全绿**：无活实例自动实例化 ✅ / running → 插话注入 ✅ / 未知名字提示 ✅ / 回显文案 ✅ / 页面无 console 错误 ✅。隔离实例已停。
+
+### 关联
+
+- [多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（解析块就挂在它的主 Agent 分支之后——target 语义总纲）
+- [多 Agent 体系 · 用户直派通道](../architecture/multi-agent.md)（`agent_prompt` 的三条发起入口对照、`caller="user"` 回执路由）
+- [插话 target 路由](#插话-target-路由子-agent-页面发的继续被插话给主-agent2026-10-07用户实锤commit-42f70e3)（「忙 → 插话注入」的同款语义出处）
+- [caller 汇报对象与动态 enum 注入](../architecture/multi-agent.md#caller-汇报对象与动态-enum-注入2026-08)（`caller="user"` 的完整语义）
+- [background-scheduler · 后台任务完成回执按发起者路由](background-scheduler.md)（同类思想：谁起的谁收）
+- [/cmd · 消息框直接执行 shell 命令](cmd-command.md)（输入框「直给」入口的另一个姊妹：`/cmd` 执行命令、`@` 派活子 Agent）
+
 ## 后台通知 wake 语义：service_exit 不再独立触发轮（2026-08，v0.19.2）
 
 **修复前（套娃循环）**：后台事件通知（如 `service_exit`）各自**独立唤醒一轮**——这轮没有用户消息、只有通知本身，但 before_turn 钩子照常全量跑一遍（空转），answer 也照常生成；若钩子/流程本身又产生后台事件（如 async 钩子完成、后台任务退出），则再次唤醒——「一通知一轮、一轮又一通知」，循环套娃，token 在无人对话时持续燃烧。

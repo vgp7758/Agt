@@ -67,6 +67,36 @@ dry-run 之后的首个生产运行，一次调用走完 ①，卡在 ② 内部
 - **它长期无人编辑**：③ 的「同步」只是 git 层面的提交搬运、从不改文件内容，版本字段更新历来靠人工——而自 v0.26.4 后没人做过，其间所有版本的桌面包 Windows 资源元数据都停在 0.26.4（仅影响文件属性显示，不影响功能）
 - **改进方向**（未做）：release.py bump 时顺带字段级同步 version_file.txt，或 ③ 改为「版本一致才提交」的校验式提交
 
+## 第二次实战：v0.35.1（2026-10-16，part=patch）——主链路一次全绿，但 tag 不在链路里（手工补打）
+
+dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、零手工补尾**（对照上文 v0.35.0 的 ② 半成功），用户侧只有一句「发补丁吧」。
+
+| 步骤 | 结果 |
+|---|---|
+| ① 工作区检查 | ✅ 干净 |
+| ② release.py 主体 | ✅ 0.35.0 → 0.35.1；产物 `agt_agent-0.35.1-py3-none-any.whl` + `.tar.gz`；upload ✓；push ✓ `origin main (2f03ccc..2b6f7e6)` |
+| ③ version_file.txt 同步 | ✅ 字段级同步 0.35.1 并提交推送（FileVersion / ProductVersion 四处，见上文结构坑） |
+| ④ PyPI 上线验证 | ✅ 两件就位 <https://pypi.org/project/agt-agent/0.35.1/> |
+
+### 缺口：release.py 只推分支、不打 tag——桌面版 CI 不会触发
+
+发布完成后核对远端 tag，结果**只有 `v0.29.0` / `v0.35.0`，没有 `v0.35.1`**——② 的 push 只推 **main 分支**，**tag 从来不在链路里**（v0.35.0 的 tag 也是当日 push 失败后人工补的，见上文 ② 半成功收尾清单：**同款缺口第二次出现**）。
+
+- **危害不在「发布失败」，而在「桌面版静默不发」**：Windows Release 由 tag 触发 GitHub Actions 云构建（见 [desktop-mode · 云构建](desktop-mode.md)）——不补 tag 这版桌面版永远不会出，且没有任何报错提示
+- **本次手工补法**：`git push origin <含 version_file 同步的 commit>:refs/tags/v0.35.1` → `v0.35.1 -> a68a9fb`（打在含 version_file 同步的那个 commit 上，正是 CI 构建需要的状态）
+- **改进方向（未做）**：把「打 tag + 推 tag + 远端核验」纳入链路——或 release_publish 在 ④ 之后加一步 ⑤（`git ls-remote --tags` 核验，缺则 `git push origin HEAD:refs/tags/v{ver}`），或 release.py 内部直接打 tag。在此之前，**正式发布收尾必须手工核验远端 tag**——口诀：**PyPI 上线 ≠ 桌面版会出包**（`git ls-remote --tags origin` 一眼见分晓）
+
+### 本版收录清单（自 v0.35.0 的四处修复）
+
+| 修复 | 详情页 |
+|---|---|
+| serve-web 缓存半残致无限 panic 三层根治（`_dir_ok` 完整性判据 / `_drop_dir` 先 rename 探测占用 / `_prefetch` 单例锁 + 全路径直起 + `--port 0`）+ 救场脚本 `tools/_fix_serveweb_cache.py` | [webide](webide.md) |
+| `_probe` 4xx/5xx 分支读 body 判特征——serve-web「启动中」的 503 不再误报「被其他程序占用」 | [webide](webide.md) |
+| 章节工具内标题自动降级（content 里写 `##` 不再与父级撞层级） | [wiki 工具集](wiki-tools.md) |
+| 写 wiki 即消费攒批队列（pending → events 轮转）+ 消费冷却窗（`last_consumed.json` 距上次消费 < 600s 走「入队不派活」） | [wiki 工具集](wiki-tools.md) · [wiki_auto_maintenance](wiki-auto-maintenance.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；`pip install -e .` 的本机生产实例改的就是本 repo 代码，配合 `/reload tools`（wiki 工具）/ `/reload plugins`（webide 插件）即可免重启吃到修复。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)
@@ -79,3 +109,5 @@ dry-run 之后的首个生产运行，一次调用走完 ①，卡在 ② 内部
 - ① 的脏检查只在非 dry_run 生效：正式发版前保持工作区干净是硬约束（release.py 会 bump src/paths.py，混合未提交改动发出去不可控）
 - ③ 失败只警告不阻断（⚠️）：version_file 推送异常需人工补，否则下次桌面版云构建用旧版本号
 - ④ 三连失败大概率只是索引同步延迟——按提示稍后手动确认即可，不代表发布失败
+- **tag 不归本工具管**（v0.35.0 / v0.35.1 两次实战实证）：② 只推 **main 分支**，tag 需事后手工补打 → **正式发布收尾必须核验远端 tag**（`git ls-remote --tags origin`）——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）。补法与改进方向见上文 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)
+

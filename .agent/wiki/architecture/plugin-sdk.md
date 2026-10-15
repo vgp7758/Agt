@@ -162,9 +162,11 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 - `AgtPlugin.util.esc / toast` 工具件
 - 插件文案不进 i18n dict（自带，见裁定 3）
 
-### demo 插件 example-hello（2026-10-16 精简：只留 🔌 面板入口，并入随包种源）
+### demo 插件 example-hello（2026-10-16 精简并入种源 → 当日退役删除）
 
-`.agent/plugins/example-hello/`（2026-10-16 起同时入随包种源 `src/assets/plugins/example-hello/`，manifest + backend.py + frontend.js 三件）：`/phello` 命令 + 插件路由 + deny 钩子（拦一个演示工具名）+ emit 事件 → 前端卡片 + **🔌 面板一个入口**（卡片/面板/订阅演示能力保留；原 👋「插件打招呼」按钮按用户裁定删除——按钮席位让给 open-folder / feedback / webide 三个实用插件）。`/restart` 后自动加载。
+（历史）`.agent/plugins/example-hello/`（2026-10-16 起同时入随包种源 `src/assets/plugins/example-hello/`，manifest + backend.py + frontend.js 三件）：`/phello` 命令 + 插件路由 + deny 钩子（拦一个演示工具名）+ emit 事件 → 前端卡片 + **🔌 面板一个入口**（卡片/面板/订阅演示能力保留；原 👋「插件打招呼」按钮按用户裁定删除——按钮席位让给 open-folder / feedback / webide 三个实用插件）。`/restart` 后自动加载。
+
+**后记（2026-10-16 · 三，用户补充「example-hello 也删了吧」）：整体退役删除**——理由：全 seam「演示」教学职责已被三个**实用**示例接管（cmd=`register_command` 用法 / screenshot=三桥范式 / record=三桥进阶），实用示例既是教学样本又每天在用，纯 demo 无存在价值。清理范围（commit b0357bc，本地待推）：种源 `src/assets/plugins/example-hello/` + 现场 `.agent/plugins/example-hello/` 两份目录、seed_state.json 基线 3 条、src/chat.py / src/plugins.py 播种注释、两份 README（src/dir_docs/plugins.md 与 .agent/plugins/README.md）清单行（「六个实用示例 + 演示件」→「六个实用示例」）；磁盘与 git 双重验证 0 残留。reload 后插件清单：cmd / feedback / open-folder / record / screenshot / webide 六例——`/phello` 命令与工具随 undo 自动摘除，dock 🔌 图标刷新页面后消失。两点无害残留：① `register_route` 挂载一次永久（`/api/example-hello/ping` 空壳路由进程存活期不摘，引擎既有设计）；② wiki 归档由 wiki_auto_maintenance 自动处理。
 
 ### 管理面
 
@@ -325,7 +327,7 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 实装核心：src/plugins.py（引擎层接线 5 处：agent.py / chat.py / commands.py / server.py / index.html，见上文「落地」节）
 - 开发指南：[docs/plugins.md](../../docs/plugins.md)（插件目录约定 + PluginAPI + AgtPlugin + 安全模型声明）；设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
 - [workspace 播种](../features/workspace-seeding.md) — seed_dir_docs 播种管道：随包插件 README（src/dir_docs/plugins.md，见上文「开发文档播种」节）与其余 5 份目录说明同管道分发到各 repo；main.yml【扩展点·特殊目录】索引同见上文
-- demo 插件：[.agent/plugins/example-hello/](../../.agent/plugins/example-hello/manifest.yml)
+- 示例插件进阶档 [record · 页面录屏](../features/record-plugin.md)（2026-10-16，三桥进阶：状态机 + user activation + 大 blob 回传）；其余五例见上文「示例插件六实用例」表
 - [节点插件化](node-plugins.md) — 单切面先行示范（工作流节点「写两个文件即得」）；本方案是聚合层推广
 - [工具外置](../features/tool-externalization.md) — `.agent/tools/` 协议被插件 register_tool 同款复用
 - [工作流引擎与钩子](workflow-hooks.md) — 钩子=固定挂点的工作流；插件 on_tool_pre/post=代码级 waterfall 拦截链

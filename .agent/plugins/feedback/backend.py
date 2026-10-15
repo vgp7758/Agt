@@ -1,16 +1,17 @@
+from fastapi import Request
 """feedback —— 插件后端：反馈元信息 + 提交两条路由（原 server.py WS action 的插件化搬迁）。
 - POST /api/feedback/meta    → {kinds, contact, env}（下拉选项/作者联系方式/环境预览）
 - POST /api/feedback/submit  → submit_feedback 结果文案（本地必落盘 ~/.agt/feedback/，可选 webhook 推送）
 核心逻辑零复制：直接 import 引擎 feedback.py（同源 /feedback 命令与 Agent 工具）。"""
 
 
-async def _meta(request):
+async def _meta(request: 'Request'):
     from feedback import VALID_KINDS, author_contact_str, _gather_env
     return 200, {"kinds": VALID_KINDS, "contact": author_contact_str(),
                  "env": _gather_env(None, agent=_AGENT())}
 
 
-async def _submit(request):
+async def _submit(request: 'Request'):
     from feedback import submit_feedback
     try:
         body = await request.json()

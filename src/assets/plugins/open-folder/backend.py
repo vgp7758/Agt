@@ -1,3 +1,4 @@
+from fastapi import Request
 """open-folder —— 插件后端：POST /api/open-folder/open（在跑 agt 的机器上弹文件管理器）。
 原 server.py 内置端点 /api/open-workspace 的插件化搬迁（用户提案 2026-10-15：
 内置 dock 功能抽成随包播种示例）。逻辑照搬：win=os.startfile / mac=open / linux=xdg-open。"""
@@ -6,7 +7,7 @@ import sys
 import subprocess
 
 
-async def _open(request):
+async def _open(request: 'Request'):
     """打开 workspace 文件夹（三平台兜底）。"""
     try:
         p = str(_WS.resolve())

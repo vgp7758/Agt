@@ -28,6 +28,9 @@ import re
 import sys
 import threading
 from dataclasses import dataclass, field
+from fastapi import Request as _FastAPIRequest   # 模块级：future-annotations 字符串化注解的
+# resolve 依赖模块 globals（函数体内 import 的名字 get_type_hints 找不到——插件路由 422
+# 实锤 2026-10-15：request 注解被当 query 参数）
 from pathlib import Path
 
 _LOG = logging.getLogger("agt.plugins")
@@ -400,7 +403,11 @@ def _attach_one(app, route: dict):
         return
     fn = route["fn"]
 
-    async def _handler(request):
+    # 注解修复（2026-10-15 隔离实例实锤 422）：request 参数必须带 fastapi.Request 注解——
+    # 无注解时 FastAPI 把它当必填 query 参数，POST 一律 422。插件侧 fn(request) 无注解照写
+    # （SDK 契约不要求懂 FastAPI），引擎包装层统一补。注解引用模块级 _FastAPIRequest
+    # （本文件有 from __future__ import annotations：字符串注解按模块 globals resolve）。
+    async def _handler(request: "_FastAPIRequest"):
         try:
             status, body = await fn(request) if _is_coro(fn) else fn(request)
         except Exception as e:

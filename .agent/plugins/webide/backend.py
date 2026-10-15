@@ -1,3 +1,4 @@
+from fastapi import Request
 """webide —— 插件后端：POST /api/webide/open（拉起/复用 VS Code serve-web 工作台）。
 原 server.py 内置 /api/ide/open 的插件化搬迁（用户提案 2026-10-15）。逻辑照搬：
 - 端口潜规则：WebUI 端口 + 30000；被占（WinNAT 隐形保留/serve-web 孤儿）向后扫 +1..+5 选可 bind 口
@@ -10,7 +11,7 @@ import asyncio
 import time
 
 
-async def _open(request):
+async def _open(request: 'Request'):
     import urllib.request as _ur
     import socket as _sk
     try:

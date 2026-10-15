@@ -20,20 +20,31 @@ async def _open(request: 'Request'):
     except Exception:
         base_port = 38000
 
-    def _alive(port):
+    _SW_MARKS = ("visual studio code", "serve-web", "vscode", "code-server")
+
+    def _probe(port):
+        """返回 (alive, ready, ours)：alive=口上有 HTTP 服务；ready=工作台就绪；
+        ours=疑似我们的 serve-web（202 下载页/200 工作台都含 vscode 特征）。
+        用户实锤 2026-10-15："Unauthorized access"——Unity Hub 固定占 39000，
+        与「WebUI+30000」潜规则口撞车；192.x 上 401 也曾在 urllib 侧表现为断连。
+        判据不能只看"连得上"：非 serve-web 的服务（401/403/无特征页）不算 ours → 不复用。"""
         try:
             with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
-                r.read()
-                return True
-        except Exception:
-            return False
+                body = (r.read() or b"").decode("utf-8", "ignore")
+                low = body.lower()
+                ours = any(m in low for m in _SW_MARKS)
+                ready = len(body) > 500 and "unauthorized" not in low
+                return True, ready, ours
+        except _ur.HTTPError:          # 4xx/5xx：服务在，但不是我们的 serve-web
+            return True, False, False
+        except Exception:              # 拒绝连接/断连：口空
+            return False, False, False
+
+    def _alive(port):
+        return _probe(port)[0]
 
     def _ready(port):
-        try:
-            with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
-                return len(r.read() or b"") > 500   # 下载占位页仅 146 字符
-        except Exception:
-            return False
+        return _probe(port)[1]
 
     def _bindable(port):
         s = _sk.socket()
@@ -45,9 +56,11 @@ async def _open(request: 'Request'):
         finally:
             s.close()
 
-    # ① 潜规则口「端口还在」→ 直接复用（下载中(202)/工作台(200)都算服务在，页签自己等）
-    if _alive(base_port):
-        return _payload(_ready(base_port), base_port)
+    # ① 潜规则口「有我们的 serve-web 在」→ 直接复用（下载中(202)/工作台(200)都算服务在，页签自己等）
+    #    —— 仅当确认是本插件（或同款 serve-web）的服务才复用；别的程序占口（如 Unity Hub 401）→ 走 ② 扫口
+    _a, _rd, _ours = _probe(base_port)
+    if _a and _ours:
+        return _payload(_rd, base_port)
     # ② 选口：潜规则口可 bind 用它；被占向后扫 +1..+5
     PORT = next((p for p in [base_port + i for i in range(6)] if _bindable(p)), None)
     if PORT is None:
@@ -91,6 +104,13 @@ async def _open(request: 'Request'):
         if _ready(PORT):
             return _payload(True, PORT)
         await asyncio.sleep(2)
+    # 超时：口空着 = 首次下载中（正常，页签自己等下载完刷新）；
+    #       口上却是别的程序的服务 = 拉起的 serve-web 没起来、口被抢（如 Unity Hub 固定占）→ 报错，
+    #       别让前端打开一个别人的页面（用户实锤 2026-10-15 "Unauthorized access"）
+    _a2, _, _ours2 = _probe(PORT)
+    if _a2 and not _ours2:
+        return 200, {"ok": False, "error": f"端口 {PORT} 上的服务不是 VS Code（被其他程序占用）——"
+                     f"常见于 Unity Hub 固定占用 {base_port}，请关闭该程序或更换 WebUI 端口后重试"}
     return _payload(False, PORT)
 
 

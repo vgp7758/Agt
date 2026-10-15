@@ -30,6 +30,93 @@
 
 **生效**：插件侧改动 `/reload plugins` 热生效即修好（免重启）；SDK 宽容解析属引擎侧，随下次 `/restart` 生效。
 
+## serve-web 缓存被删致「无限 panic」：三层根因 + 插件四修 + 救场脚本（2026-10-15，commit abcc03c）
+
+> 用户实锤症状：WebIDE 页签无限刷 panic 日志 / `RecvError`，缓存目录 `~/.vscode/cli/serve-web/<commit>/` 被删成只剩 `node.exe + node_modules`。这是**插件搬迁之后、SDK 之上**的一起运行期事故——代码全在 `src/assets/plugins/webide/backend.py`（`_prefetch` / `_dir_ok` / `_drop_dir` / `_cli_exe` / `_probe`），与 SDK 层无关。
+
+### 根因链（三层，逐层实测）
+
+1. **孤儿进程层**：`_prefetch` 用 `subprocess.Popen(cmd, shell=True)` 起预热，结束时 `pre.kill()` —— 只杀掉 `cmd.exe` 本身，它拉起的 **`code-tunnel.exe` 变孤儿**（实测堆了 **6 个**，各自都在下载组件、抢占**同一个缓存目录**）。
+2. **并发安装层**：多进程同时往同一 commit 目录里装/清组件 → 「保留最近 2 个版本」的清理 `rmtree` **删到一个正在使用中的版本** → 目录被删剩 `node.exe + node_modules`（`node.exe` 被占用删不掉，活下来当"残骸"）。
+3. **死循环层**：下一次 CLI 扫缓存时把这个半残目录当成可用版本，拿它当 `--commit-id` → spawn `bin\..\out\server-main.js` 报 **"The system cannot find the path specified."** → 无限重试 → 用户看到的就是循环 panic + `RecvError`。
+
+併发诱因（同轮用户实锤）：**Unity Hub 固定占 39000**（正是「WebUI + 30000」潜规则口），回 401 `Unauthorized access` —— 旧 `_probe` 把 4xx/5xx 一律当"别人的服务"，而 serve-web **自己在启动中**也回 503，于是误报"被 Unity Hub 占用"。
+
+### 插件修复（`src/assets/plugins/webide/backend.py`，四处）
+
+| 位置 | 旧行为 | 修复 |
+|---|---|---|
+| `_dir_ok(d)` | 「完整安装」只判 `node.exe` 存在 | 判据升级为 **`node.exe` 且 `out/server-main.js`** ——半残目录不再被当完整版本（预热完成检测、候选挑选、清理三处全用它） |
+| `_drop_dir(d)` | 直接 `rmtree` 硬删 | 先 `rename` 成 `.名.deleting`（被占用即失败）再 rmtree，失败就跳过留给下一轮——**绝不硬删正在使用的版本**；`.` 前缀同时让残留不会被 `_dirs` 当候选 |
+| `_prefetch` | 无锁 + `shell=True` + 固定口 39990–39996 | ① 模块级**单例锁 `_PREFETCHING`**（同时只允许一路预热，防并发互踩）；② `_cli_exe()` 取全路径**直起、不经 shell**（kill/taskkill 才杀得干净，孤儿根除）；③ 预热口改 **`--port 0`**（随机口，不再扫 39990+ 固定段）；④ 清理只保留最近 2 个**完整**版本 + 顺手清半残目录 |
+| `_probe` 的 4xx/5xx 分支 | 一律判"不是我们的服务" | **读 body 判特征**：serve-web 启动中的 `503 "Error connecting to server: hyper::Error(IncompleteMessage)"` → `ours=True`（不再误报"被 Unity Hub 占用"）；Unity Hub 的 `401 Unauthorized access` 仍判别人的服务 → 走扫口逻辑 |
+
+### 救场工具 `tools/_fix_serveweb_cache.py`（一次性、幂等）
+
+事故当场缓存已毁，光改代码救不回——脚本直接把损坏目录补回完整版：
+
+- 从微软 CDN 拉 `vscode-server-win32-x64-web.zip`（**213MB**），URL 形如
+  `https://vscode.download.prss.microsoft.com/dbazure/download/stable/<commit>/vscode-server-win32-x64-web.zip`
+- **剥顶层壳目录** `vscode-server-win32-x64-web/`（判定"namelist 顶层只有唯一目录前缀"才剥）→ **逐文件覆盖**解压到 `~/.vscode/cli/serve-web/<commit>/`；zip 已存在且 >200MB 则跳过下载（可重复跑）
+- **踩过的坑（必看）**：首版只做"一层目录合并"，漏补 `node_modules/@vscode/*/index.js` → 启动报 `ERR_MODULE_NOT_FOUND` ——**必须逐文件覆盖**，不能只并目录
+
+### 实测闭环（2026-10-15）
+
+- `POST /api/webide/open` → `{"ok":true,"port":39000,"ready":true}`（**3.0s**）
+- `GET :39000/` → **HTTP 200**（6304B 工作台页）
+
+### 教训
+
+- **杀进程要杀干净**：`shell=True` + `kill()` 在 Windows 上只杀 shell 壳，真正的 `.exe` 会变孤儿——凡"起进程并要能停掉"的地方（预热/后台任务）都要全路径直起 + 独立进程组（同一课在 [background-scheduler](background-scheduler.md) 的服务纳管里也出现过）。
+- **"删缓存"必须先证明不是正在用的**：rename 探测占用是零成本、跨平台可用的"能不能删"判据；硬 rmtree 换来的是一条难查的 spawn 死循环。
+- **"安装完成"判据要覆盖真正的入口文件**：只判一个占位符（`node.exe`）会被半残状态骗过。
+- **判"是不是我们的服务"不能只看状态码**：自己的服务启动中也会 5xx，要读 body 特征（见上表 `_probe`）。
+
+### 关联
+
+- [插件 SDK](../architecture/plugin-sdk.md)：webide 插件（本事故代码所在，插件路由/资产/启停）
+- [background-scheduler](background-scheduler.md)：后台服务纳管与进程组/孤儿同类教训
+
+## 「Unauthorized access」撞口误复用：Unity Hub 固定占潜规则口 + _probe 三态判据（2026-10-15，用户实锤）
+
+> 用户实锤（2026-10-15 第一轮）：点 WebIDE 图标，页签打开后显示 **`Unauthorized access`**（不是 VS Code 工作台）。与同日[缓存事故](#serve-web-缓存被删致无限-panic三层根因--插件四修--救场脚本2026-10-15commit-abcc03c)是**两个独立病灶**，共用同一天的一次 `_probe` 判据升级。
+
+### 实测证据：撞口 + 误复用
+
+| 检查 | 结果 |
+|---|---|
+| `netstat` 查 39000 | **Unity Hub.exe（pid 18808）** 在监听 |
+| `curl :39000` | **HTTP 401** + body `Unauthorized access`（19 字节——与用户看到的文案逐字一致） |
+| 端口来源 | WebUI 9000 → 潜规则口 9000+30000 = **39000** ← 与 Unity Hub 的**固定口正面冲突** |
+
+**链路**：点图标 → 后端判定 39000「可用」→ 把 `port: 39000` 返给前端 → 浏览器打开 39000 → 实际是 Unity Hub 的 401 页面。
+
+### 根因：复用判据只看「连得上」
+
+旧代码 `if _alive(base_port): return _payload(_ready(base_port), base_port)`——`_alive` 语义仅为「口上能建立 HTTP 连接」，**不区分是不是我们的 serve-web**。Unity Hub 的 401 口同样「连得上」（192.x 上 401 在 urllib 侧还曾表现为断连）→ 直接复用别人的口。
+
+### 修复三处（src/assets/plugins/webide/backend.py）
+
+| 位置 | 旧 | 新 |
+|---|---|---|
+| `_probe(port)` | 返回布尔「活着吗」 | **三态 `(alive, ready, ours)`**——`ours` = body 含 serve-web 特征（`_SW_MARKS`：`visual studio code` / `serve-web` / `vscode` / `code-server`）；401/403/无特征页一律**不算 ours** |
+| 复用分支（①） | `_alive(base_port)` 即复用 | `_a and _ours` 才复用 → 别家程序占口自动落到 ② 扫口（`_bindable` +1..+5） |
+| 12s 超时兜底 | 未就绪一律返回 `ready=false` | 再探一次：`_a2 and not _ours2` → `{"ok": false, "error": "端口 X 上的服务不是 VS Code（被其他程序占用）——常见于 Unity Hub 固定占用 39000，请关闭该程序或更换 WebUI 端口后重试"}`——**不再把别人的页面丢给浏览器** |
+
+`ready` 判据同时排除 body 含 `unauthorized`（401 页长 > 500 字符，不能被当就绪）。
+
+### 验证（复现用户现场）
+
+- (a) 用 401 诱饵页占 39020（Unity Hub 同款行为）→ 返回 `port=39021` ✅ **跳口、未复用**
+- (b) 真 serve-web 在 39003 → 正常复用返回 39003 ✅
+
+生效：插件侧 `/reload plugins`（免重启）。
+
+### 教训
+
+- **「口上有服务」≠「是我们的服务」**：复用判定必须带**身份特征**，否则会把别人的 401/404 页面当自己的工作台返给浏览器。
+- **端口潜规则会撞固定口**：`WebUI + 30000` 是约定、不是保留段——撞上 Unity Hub（固定 39000）这类程序是迟早的事；探测到「不是自家的」要**自动跳口 + 明确报错**，不能静默复用，也不能静默空白。
+
 ## 端点：POST /api/ide/open（src/server.py）
 
 拉起/复用 WebIDE，语义按序：
@@ -108,7 +195,8 @@ v1 钉住后版本停在当前 commit，想升级得手动删缓存目录回落�
 
 - 首次启动要下载 server 组件（一次性 ~1 分钟）；此后 **`--commit-id` 用缓存秒起 + 滚动预热自动跟进新版**（2026-09-17 v1 钉版本 + 同日 v2 滚动预热：打开永远秒起、旧版自动清理、版本比 stable 最新晚一拍跟进，见下方专节及「滚动预热」小节）；12s 等待上限返回 `ready=false` **不是失败**——下载页自带自动刷新，页签开着等即可。
 - **幽灵端口占位 / 孤儿进程教训（2026-09-06 用户实锤「点 IDE 变沙漏两分半不弹页签」）**：`code serve-web` 的启动器（code-tunnel）被杀后，其 spawn 的 node 子进程**继承 LISTEN socket 存活**成孤儿——`netstat` 显示 `39000 LISTENING owner=pid 21512`（该 pid 已不存在，`bind` 报 10048、连接报 10061）。旧端点 150s 长轮询 + 单 `_probe` 判定（body>500）→ 误判「无服务」→ 可能再起一个实例。治本三件：① `_agent.services.start` 绑**独立进程组**、stop 整树杀（杀启动器不漏子进程）；② 端口 **bind 实测 + 向后扫 +1..+5**（被占自动滚到可用口，不依赖人工清理）；③ 前端 fetch **12s 超时 + 乐观开页签**（不再干等）。清理命令参考：`netstat -ano | findstr 3900` 定位 owner 为已退 pid 的 LISTENING 后按 pid 清 node/cmd。
-- **端口是潜规则（WebUI 端口 + 30000），不是 settings 可配**；命令固定 `code serve-web`（可选增强：命令可配、支持 code-server）。**端口可能偏移 +1..+5**（被幽灵占用时）——正常路径前端用后端返回的实际口；乐观开页签用了潜规则口而实际口偏移时，页签内刷新一下即落到实际口。
+- **缓存目录 `~/.vscode/cli/serve-web/<commit>/` 是共享资源，也是事故高发点**：2026-10-15 曾因孤儿 `code-tunnel.exe` 并发安装 + `rmtree` 删到**正在使用**的版本 → 目录只剩 `node.exe` → 之后 CLI spawn 报 `The system cannot find the path specified.` 无限重试（页签循环 panic）。排障第一动作：列该缓存目录，找「有 `node.exe` 却无 `out/server-main.js`」的半残目录（删除或跑 `tools/_fix_serveweb_cache.py` 补全），见上文[事故专节](#serve-web-缓存被删致无限-panic三层根因--插件四修--救场脚本2026-10-15commit-abcc03c)。
+- **端口是潜规则（WebUI 端口 + 30000），不是 settings 可配**；命令固定 `code serve-web`（可选增强：命令可配、支持 code-server）。**端口可能偏移 +1..+5**（被幽灵占用时）——正常路径前端用后端返回的实际口；乐观开页签用了潜规则口而实际口偏移时，页签内刷新一下即落到实际口。**潜规则口也可能被别家程序固定占用**（实锤：Unity Hub 固定占 39000 → 回 401 `Unauthorized access`，用户点图标看到的就是这句）——`_probe` 三态判据下不复用别人的口、自动向后扫口；若拉起后口仍被抢，端点返回 `ok:false` + 明确报错，不再打开别人的页面（见上文「Unauthorized access」专节）。
 - **手机现状维持**（用户 2026-09-06 裁定「手机就忍了吧，能打开能看就不错了」）：serve-web 监听 0.0.0.0 局域网可达，但竖屏触屏体验受 VS Code Web 本身限制（VS Code 侧的事，不做额外适配）。
 - 端口从 Host 头解析：本实例 9000 → WebIDE 39000；改 `agt-web --port` 后自动跟随，多实例互不抢口。
 - **勿用 `?folder=` URL 参数（serve-web 1.134 的坑，2026-09-06 用户实锤「不受支持的断点图标 + 怪弹窗」）**：`?folder=` 会被误路由成「远程代理」会话——弹「选择要管理的远程代理」面板、标签页名变成 l10n 字面量（如「不受支持的断点的图标。」）、编辑区渲染出翻译串拼的假帮助文档、文件树图标显示异常。修复：服务端 `--default-folder` 直开工作区，URL 零参数；旧进程需 `/restart` 生效。

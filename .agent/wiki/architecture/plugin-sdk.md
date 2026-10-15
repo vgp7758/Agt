@@ -204,7 +204,7 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 |---|---|---|
 | open-folder | addButton 📁 | `POST /api/open-folder/open`——在跑 agt 的机器上弹文件管理器（win=`os.startfile` / mac=`open` / linux=`xdg-open` 三平台兜底）；`exposed_to_llm: false`（纯前端功能，不占 LLM 投影） |
 | feedback | addPanel 💬 | 两条插件路由：`POST /api/feedback/meta`（类型选项/作者联系方式/环境预览）+ `POST /api/feedback/submit`；**核心逻辑零复制**——backend.py 直接 `import feedback`，落盘/飞书推送/探针过滤全继承（见 [feedback](../features/feedback.md)） |
-| webide | addButton（VS Code logo） | serve-web 全链路搬迁：端口潜规则 / 复用优先 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限 / 乐观退页签原样入插件 backend.py（见 [webide](../features/webide.md)） |
+| webide | addButton（VS Code logo） | serve-web 全链路搬迁：端口潜规则 / 复用优先 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限 / 乐观退页签原样入插件 backend.py（见 [webide](../features/webide.md)）；2026-10-15 缓存误删事故（孤儿 code-tunnel 并发安装 → rmtree 删到在用版本 → spawn 死循环）四修见该页「serve-web 缓存被删致无限 panic」专节（含救场脚本 tools/_fix_serveweb_cache.py）；同日另一案：潜规则口被 Unity Hub 固定占（回 401 `Unauthorized access`）→ `_probe` 升三态 `(alive, ready, ours)`、复用只认自家 serve-web，见该页「Unauthorized access」专节 |
 | example-hello | 面板 + 命令/钩子/卡片 | demo 精简版（见上文），首次入种源 |
 
 ### 插件本地静态资产：图标随插件分发

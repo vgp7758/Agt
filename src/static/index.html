@@ -399,6 +399,11 @@
     background:#fff; cursor:pointer; color:#5b6470; user-select:none; }
   .ans-tab:hover { background:#f3f4f6; }
   .ans-tab.active { background:var(--me); color:#fff; border-color:var(--me); }
+  /* sub-agent 快捷按钮行（2026-10-16 用户提案）：本轮 agent_prompt 派活的子 Agent，一行 ▸ 按钮 */
+  .ans-subagents { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 2px; }
+  .ans-sub-btn { font-size:11px; padding:2px 10px; border-radius:10px; border:1px solid var(--line);
+    background:#fff; cursor:pointer; color:#5b6470; user-select:none; }
+  .ans-sub-btn:hover { background:#f3f4f6; color:#1f2329; }
    /* 抽屉 push 布局（用户提案 2026-08-30）：抽屉打开时主区右移让位（聊天区往左挤），
       不再覆盖聊天区。竖屏（抽屉全屏覆盖模式）不挤。 */
     body.drawer-push header, body.drawer-push #planPanel, body.drawer-push #queueStatus,
@@ -1300,12 +1305,37 @@ function unmentionedChangesHtml(answerText, changed){
   });
   return h + '</div></div>';
 }
+// —— sub-agent 快捷按钮（2026-10-16 用户提案）：本轮 tool_use 里有 agent_prompt 派活时，
+// answer 正文与 changed-files 折叠区之间渲染一行 `▸ <name>` 按钮，点击新标签打开 /agents/<agent_id>。
+// agent_id 解析（最简可靠）：派活结果首行形如「🚀 已启动子 Agent 'coder' [agent_id=coder-ab12]（异步…）」
+// ——入参 agent_id 优先，无则从结果文本正则提取；启动失败的调用无 id，零渲染。
+// 同一 agent_id 多次派活只渲染一个按钮；数据前端就地解析（历史 t.steps.tool_calls 与实时 tool_result
+// 事件都带 name+result，无需后端加字段——改动最小路线）。
+function _parseSubagent(tcName, resultText){
+  if(tcName && tcName !== 'agent_prompt') return null;
+  const m = /子 Agent '([^']+)' \[agent_id=([^\]'"]+)\]/.exec(String(resultText||''));
+  return m ? {name: m[1], agent_id: m[2]} : null;
+}
+function collectSubagent(tcName, resultText){
+  const sa = _parseSubagent(tcName, resultText);
+  if(!sa || !curTurn) return;
+  curTurn.subagents = curTurn.subagents || [];
+  if(!curTurn.subagents.some(x => x.agent_id === sa.agent_id)) curTurn.subagents.push(sa);
+}
+function subagentsBarHtml(subs){
+  if(!Array.isArray(subs) || !subs.length) return '';   // 无 subagents 的轮零渲染（不占位）
+  let h = '<div class="ans-subagents">';
+  subs.forEach(s=>{
+    h += `<button class="ans-sub-btn" title="打开 sub-agent 页面" onclick="window.open('/agents/${esc(s.agent_id)}','_blank')">▸ ${esc(s.name)}</button>`;
+  });
+  return h + '</div>';
+}
 function renderAnswerPages(){
   const t = curTurn; if(!t) return;
   const ids = Object.keys(t.pages);
   const cur = t.activePage && t.pages[t.activePage]!==undefined ? t.activePage : ids[ids.length-1];
   t.activePage = cur;
-  const tail = (cur === '_main_') ? unmentionedChangesHtml(t.pages[cur], t.changed) : '';
+  const tail = (cur === '_main_') ? subagentsBarHtml(t.subagents) + unmentionedChangesHtml(t.pages[cur], t.changed) : '';
   if(ids.length <= 1){   // 单页：无 tabs（保持原视觉）
     t.answerEl.innerHTML = renderAnswer(t.pages[cur] || '') + tail;
     t.answerEl.__md_text = t.pages[cur] || '';   // 复制按钮取 markdown 原文（历史轮同走此路径）
@@ -1449,6 +1479,7 @@ function renderHistTurn(t, box, isLast){
     (s.tool_calls||[]).forEach(tc=>{
       renderToolCall(tc.name, tc.arguments, tc.changed);
       if(tc.result) appendToolResult(tc.result);   // 折叠组的 result 进 body（历史与实时同构）
+      if(tc.name==='agent_prompt' && tc.result) collectSubagent(tc.name, tc.result);   // ▸ sub-agent 快捷按钮（历史读档同渲染）
     });
   });
   if(t.answer_reasoning){
@@ -1606,7 +1637,7 @@ function attachCopyBtn(host, bubble){
       // 克隆排除 UI 元素后取文本（tabs 按钮字/复制按钮字不混进复制内容；
       // .ans-changed=底部"本轮变更文件"补充块，不属于 answer 正文——用户提案 2026-09-18 一并剔除）
       const clone=bubble.cloneNode(true);
-      clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn,.ans-changed').forEach(n=>n.remove());
+      clone.querySelectorAll('.ans-tabs,.copy-btn,.run-btn,.ans-subagents,.ans-changed').forEach(n=>n.remove());
       text=(clone.innerText||'').replace(/\u00a0/g,' ').trimEnd();
     }
     if(!text.trim()){ toast('气泡无文本'); return; }
@@ -3707,6 +3738,7 @@ function onWSMessage(ev){
         if(s.reasoning) renderThinking(s.reasoning, '💭 思考');
         (s.tool_calls || []).forEach(tc => {
           renderToolCall(tc.name, tc.arguments, tc.changed);
+          if(tc.name==='agent_prompt' && tc.result) collectSubagent(tc.name, tc.result);   // ▸ sub-agent 快捷按钮（刷新后补发轮同渲染）
         });
       });
       _curThinkFold = null;   // 复位（后续实时事件建新组）
@@ -3788,6 +3820,7 @@ function onWSMessage(ev){
         _curToolFold.head.innerHTML = '▾ ' + esc(_curToolFold.head.textContent.slice(2))
           + ` <span style="color:#d97706;font-size:11px">📝 ${m.changed.length} 文件变更</span>`;
       }
+      if(m.name==='agent_prompt') collectSubagent(m.name, m.result);   // ▸ sub-agent 快捷按钮（实时轮：answer 到达前收集完）
       appendToolResult(m.result); break;
     case 'llm_log':
       // LLM 运行日志（回退/限流/截断/空响应/链耗尽等——此前只进 log 文件，用户看不到）

@@ -159,8 +159,19 @@ class MCPManager:
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         tools_resp = await session.list_tools()
+        # server 级工具白名单（可选）：tools: ["A", "B"] 只注册列出的工具——
+        # 有些 server（如 claude mcp serve）一次吐 20+ 个工具，与本地工具语义撞车，按需收窄。
+        allow = cfg.get("tools")
+        if allow:
+            allow_set = set(allow)
+            before = len(tools_resp.tools)
+            tools_resp.tools = [t for t in tools_resp.tools if t.name in allow_set]
+            skipped = before - len(tools_resp.tools)
+        else:
+            skipped = 0
         self.sessions[name] = {"session": session, "tools": tools_resp.tools}
-        print(f"[MCP] 已连接 '{name}'（{transport_label}），发现 {len(tools_resp.tools)} 个工具")
+        extra = f"（白名单收窄：{len(tools_resp.tools)}/{before}，跳过 {skipped}）" if skipped else ""
+        print(f"[MCP] 已连接 '{name}'（{transport_label}），发现 {len(tools_resp.tools)} 个工具{extra}")
 
     # —— 重连 ——
     def reconnect_from_config_one(self, path: str, name: str) -> None:

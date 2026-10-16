@@ -150,6 +150,28 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 - **调试中抓到的两个坑**：① 子进程 stdout pipe **全缓冲**——4 行清单憋在缓冲区父进程永远读不到（死锁）→ 框架侧 `PYTHONUNBUFFERED=1` 兜底（作者忘写 flush 也不死锁）；② `_USE_DONE` 常量误写 `==DONE===`（少一个等号）与协议 `===DONE===` 永不匹配 → use 恒超时——最小复现二分定位抓出，常量处已注释警示
 - demo：`.agent/skills/test-svc/`（32 行计数器服务，协议最小范例，可删）
 
+## 技能自带装配清单（assemblies:）
+
+### 技能自带装配清单（SKILL.md `assemblies:` 字段，2026-10-16）
+
+技能从"工具+SOP"升级为**自带装配清单**的能力单元（plan p_76f6623b）：装备时把装配段/钩子/帧提供者插进宿主。
+
+```yaml
+assemblies:
+  - position: after:steps        # 装备时往宿主装配清单 steps 段之后插入
+    ass:
+      - text: 【注入段】          # ass 复用 yml assembly 段语法（file:/cmd:/text:/workflow:…）
+      - image_feed: {tool: screen_frame()}   # 帧提供者抽象：每步取帧=调工具/技能服务
+  - position: hook:turn_end      # 技能 workflows/ 下的工作流自动挂到钩子位
+                                 # （缺省 ass = 技能包 workflows/ 全部；可显式 ass: ["wf名|async"]）
+```
+
+- **两个装备口共用一套声明**：静态口（子 Agent yml `skills:` 装备链读 frontmatter）与动态口（`skill_equip` 时技能服务 caps 上报 `EXTRA_ASSEMBLIES: <json>` 单行）。
+- **position**：`before:<段名>` / `after:<段名>`（锚=宿主装配清单现有段名；锚不存在→装备时报错清单化，不静默丢弃）/ `hook:<钩子位>`（before_turn/before_tool/after_tool/before_answer/turn_end）。
+- **两条铁律**：①装备时冻结——声明解析后作为静态清单快照进宿主 session（set_assembly_plan），逐轮不再重算（缓存安全）；②作用域对称——子 Agent（`multiagent._agent_skill_gear`）与主 Agent（`skill_equip` → `agent_config.apply_extras_to_session`）共用同一插入逻辑 `multiagent._apply_extra_assemblies`，不写两份。
+- 多技能同位置按装备顺序稳定追加（先装备的先插）；装备是一次性动作，不做卸载还原。
+- 首个真实用户：`desktop-ops`——SKILL.md 声明 `image_feed: {tool: screen_frame()}`，desktop-operator.yml 不再手写 image_feed 段、不再拉 8765 帧服务（瘦身为最小声明）；配套 `image_feed` 段 `tool:` 前缀解析（`session._asm_image_feed_from_tool`：data URL / 文件路径 / 双参工具位置映射，http/file 源零回归）。
+
 ## skill_suggest · 技能按需建议钩子（SYSTEM 技能清单下线：jev 快判 + LLM 全文复核，2026-09-27/28，用户提案）
 
 ### 动机与形态翻转

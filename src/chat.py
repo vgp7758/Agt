@@ -253,6 +253,11 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # 回写从引擎特判移到工作流数据流（用户提案：多钩子共存时"以谁为准"由工作流显式决定）
     from multiagent import make_hook_side_effects
     _reg(make_hook_side_effects(agent), "钩子")
+    # doctor 诊断工具族（2026-10-16 用户裁定）：BadRequest 数据诊断修复 Agent 'doctor' 专用——
+    # 挂主 Agent 工具箱，tools:"" 的子 Agent 自动继承（doctor 由此获得）；_bg 失败分支按
+    # "回退链不可用"特征自动派 doctor。四件套 req_inspect/req_probe/req_patch/req_resume。
+    from multiagent import make_doctor_tools
+    _reg(make_doctor_tools(agent), "诊断")
     _reg(SKILL_TOOLS, "技能")
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")

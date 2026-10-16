@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import shutil
@@ -1093,6 +1094,355 @@ def _make_service_watch_router(agent):
     return _route
 
 
+# ═══ doctor 诊断工具族（2026-10-16 用户裁定） ═══
+# BadRequest 数据诊断：子 Agent 的 LLM 请求因坏数据（坏图/超长/畸形消息）连锁 400 打穿
+# 回退链时，_bg 失败分支自动派 doctor（.agent/agents/doctor/）按其人设工作循环诊断修复。
+# 四件套：req_inspect 体检 / req_probe 试修 / req_patch 落盘 / req_resume 恢复。
+# 数据源：llm_client._chat_with_fallback 的存档点（回退链耗尽 raise 前冻结
+# self.last_failed_messages）。挂主 Agent 工具箱（chat.py），tools:"" 的子 Agent 自动继承。
+
+_DOCTOR_PROBE_CAP = 5        # 每 agent 试修上限：穷尽仍败 → 判定非数据问题（人设安全阀同款）
+_DOCTOR_LONG_LIMIT = 50000   # 单条消息正文超长可疑阈值（字）
+
+
+def _doctor_normalize_patch(patch):
+    """patch 入参归一化：LLM 可能传 JSON 字符串 → dict。返回 (patch|None, 错误文本)。"""
+    if patch is None:
+        return {}, ""
+    if isinstance(patch, str):
+        import json as _json
+        try:
+            patch = _json.loads(patch)
+        except Exception as e:
+            return None, f"[patch 解析失败] {type(e).__name__}: {e}——应为 JSON 对象，如 {{\"strip_images\":[3]}}"
+    if not isinstance(patch, dict):
+        return None, f"[patch 类型错] 应为 dict/JSON 对象，收到 {type(patch).__name__}"
+    return patch, ""
+
+
+def _doctor_msg_len(content) -> int:
+    """消息正文总长（str 直取；list 累加 text 部件；None=0）。"""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
+    return 0
+
+
+def _doctor_image_parts(msg) -> list:
+    """消息里的 image_url 部件清单（list content 才可能有）。"""
+    c = msg.get("content")
+    if not isinstance(c, list):
+        return []
+    return [p for p in c if isinstance(p, dict) and p.get("type") == "image_url"]
+
+
+def _doctor_apply_patch(msgs: list, patch: dict) -> list:
+    """修Data patch 应用到一份 messages（就地修改——probe 传深拷贝、patch 落盘传存档本体）。
+    patch 键（全部可选）：strip_images=[i,...] 剔 image_url 部件；truncate={i: 保留长度}
+    （list 内容按 text 部件顺序累计截）；drop=[i,...] 整条删；replace_text={i: "新文本"} 整条换文。
+    drop 最后统一执行（索引一律按 patch 前编号）。返回应用摘要 list[str]。"""
+    notes = []
+    if not patch:
+        return notes
+    for k in patch:
+        if k not in ("strip_images", "truncate", "drop", "replace_text"):
+            notes.append(f"⚠️ 未知 patch 键 '{k}' 已忽略")
+
+    def _idx_ok(i) -> bool:
+        return isinstance(i, int) and 0 <= i < len(msgs)
+
+    for i in (patch.get("strip_images") or []):
+        if not _idx_ok(i):
+            continue
+        parts = _doctor_image_parts(msgs[i])
+        if parts:
+            msgs[i]["content"] = [p for p in msgs[i]["content"]
+                                  if not (isinstance(p, dict) and p.get("type") == "image_url")]
+            notes.append(f"strip_images[{i}] 剔除 {len(parts)} 个 image_url 部件")
+        else:
+            notes.append(f"strip_images[{i}] 无 image_url 部件（未动）")
+    for k, n in (patch.get("truncate") or {}).items():
+        try:
+            i, n = int(k), int(n)
+        except Exception:
+            continue
+        if not (0 <= i < len(msgs)) or n < 0:
+            continue
+        c = msgs[i].get("content")
+        before = _doctor_msg_len(c)
+        if isinstance(c, str):
+            msgs[i]["content"] = c[:n]
+        elif isinstance(c, list):
+            left = n
+            for p in c:
+                if isinstance(p, dict) and "text" in p:
+                    t = p.get("text") or ""
+                    if len(t) > left:
+                        p["text"] = t[:max(left, 0)]
+                    left -= len(t)
+            msgs[i]["content"] = [p for p in c
+                                  if not (isinstance(p, dict) and p.get("type") == "text"
+                                          and not (p.get("text") or ""))]
+        notes.append(f"truncate[{i}] {before:,}→{_doctor_msg_len(msgs[i].get('content')):,} 字")
+    for k, txt in (patch.get("replace_text") or {}).items():
+        try:
+            i = int(k)
+        except Exception:
+            continue
+        if not _idx_ok(i):
+            continue
+        before = _doctor_msg_len(msgs[i].get("content"))
+        msgs[i]["content"] = str(txt)
+        notes.append(f"replace_text[{i}] {before:,}→{len(str(txt)):,} 字")
+    drops = [i for i in (patch.get("drop") or []) if _idx_ok(i)]
+    if drops:
+        ds = set(drops)
+        msgs[:] = [m for i, m in enumerate(msgs) if i not in ds]
+        notes.append(f"drop 共删 {len(ds)} 条（索引按 patch 前编号）")
+    return notes
+
+
+def _doctor_fix_session_source(target, patched_msgs: list, patch: dict) -> tuple:
+    """把 patch 同步修到 session 源头（2026-10-16）。范围=_current.steps 引用的 tool 结果
+    （toollog 条目——投影经 _cap_full_result/_project_imgs 由它定型进存档）。
+    特征匹配：strip_images → 剔 toollog result 里的 <img> 标签（image_url 部件的源头）；
+    truncate → 截断 toollog result；经 record() 重记（内存替换 + jsonl 追加修正行，
+    重放按 call_id 后写胜出）。drop/replace_text/user 消息无安全对应 → 只修缓存。
+    返回 (已修清单, 修不了清单)。"""
+    fixed, skip = [], []
+
+    def _to_ints(v):
+        out = []
+        for x in (v or []):
+            try:
+                out.append(int(x))
+            except Exception:
+                pass
+        return out
+    strip = set(_to_ints(patch.get("strip_images")))
+    trunc = {}
+    for k, n in (patch.get("truncate") or {}).items():
+        try:
+            trunc[int(k)] = int(n)
+        except Exception:
+            pass
+    if not strip and not trunc:
+        return fixed, skip
+    sess = getattr(target, "session", None)
+    cur = getattr(sess, "_current", None)
+    toollog = getattr(sess, "toollog", None)
+    if cur is None or toollog is None:
+        return fixed, ["目标无进行中的轮（可能已归档）——历史档消息不回改，只修了缓存"]
+    # 存档内 tool 消息索引 → tool_call_id 映射（patch 索引一律按存档编号）
+    idx_call = {i: m.get("tool_call_id") for i, m in enumerate(patched_msgs)
+                if m.get("role") == "tool" and m.get("tool_call_id")}
+    cur_callids = {tc.call_id for s in (cur.steps or []) for tc in (s.tool_calls or [])}
+    for i in sorted(strip | set(trunc)):
+        cid = idx_call.get(i)
+        if not cid or cid not in cur_callids:
+            skip.append(f"[{i}] 非当前轮 tool 结果（历史档/user 消息）——不回改")
+            continue
+        e = toollog.get(cid)
+        if not e:
+            skip.append(f"[{i}] toollog 无 {cid} 记录")
+            continue
+        r = e.get("result") or ""
+        if i in strip and "<img" in r:
+            n_img = len(re.findall(r"<img\b", r))
+            r = re.sub(r"<img\b[^>]*>", "", r)
+            fixed.append(f"[{i}] {cid} 剔除 {n_img} 个 <img> 标签")
+        if i in trunc and len(r) > trunc[i]:
+            r = r[:trunc[i]]
+            fixed.append(f"[{i}] {cid} 截断到 {trunc[i]:,} 字")
+        if r != (e.get("result") or ""):
+            toollog.record(cid, e.get("name") or "", e.get("arguments") or {},
+                           r, step=e.get("step"), turn=e.get("turn"))
+    return fixed, skip
+
+
+def make_doctor_tools(agent) -> list:
+    """生成绑定到主 Agent 的诊断工具族（BadRequest 诊断修复 Agent 'doctor' 专用，
+    2026-10-16 用户裁定）。目标定位：agent.registry.lookup(agent_id).agent；
+    agent_id 留空 = doctor 自己（主 Agent）。probe 计数：每 agent 内存 dict，
+    上限 5 次（穷尽 → 判定非数据问题）；req_patch 落盘成功即清零（下次事件新预算）。"""
+
+    probe_counts: dict = {}   # {agent_id: 已 probe 次数}
+
+    def _find_target(agent_id: str):
+        """按 id 找目标 Agent 实例。返回 (实例|None, 解析后的 aid, 错误文本)。"""
+        aid = (agent_id or "").strip()
+        if not aid or aid == getattr(agent, "agent_id", ""):
+            return agent, aid or getattr(agent, "agent_id", ""), ""
+        reg = getattr(agent, "registry", None)
+        entry = reg.lookup(aid) if reg is not None else None
+        if entry is None or getattr(entry, "agent", None) is None:
+            return None, aid, f"[目标不存在] agent_id='{aid}' 不在注册表或实例已销毁（list_team 查看）"
+        return entry.agent, aid, ""
+
+    def _load_archive(target):
+        """目标 llm 的失败请求存档。返回 (llm, msgs|None)。"""
+        llm = getattr(target, "llm", None)
+        msgs = getattr(llm, "last_failed_messages", None)
+        return llm, (msgs if isinstance(msgs, list) and msgs else None)
+
+    def req_inspect(agent_id: str = "") -> str:
+        """体检目标 agent 最近一次失败请求，逐条报告：role/content形态/长度/image_url(base64头60字)/tool_calls形态/可疑标记（空content数组、超长、图但模型非视觉）。
+        agent_id: 目标实例 id（留空=自己）。数据源 llm.last_failed_messages——回退链耗尽抛错前由引擎冻结。"""
+        target, aid, err = _find_target(agent_id)
+        if err:
+            return err
+        llm, msgs = _load_archive(target)
+        if msgs is None:
+            return (f"[无存档] '{aid}' 的 llm 没有失败请求现场（last_failed_messages 空）——"
+                    f"只有回退链耗尽抛错前才冻结；或该 agent 从未失败过")
+        vision = getattr(llm, "vision_supported", None)
+        lines = [f"📋 '{aid}' 失败请求体检：{len(msgs)} 条消息；模型={getattr(llm, 'model_name', '?')}；"
+                 f"vision_supported={vision}"]
+        suspicious = []
+        for i, m in enumerate(msgs):
+            role = m.get("role", "?")
+            c = m.get("content")
+            shape = "str" if isinstance(c, str) else (f"list({len(c)})" if isinstance(c, list) else "None")
+            clen = _doctor_msg_len(c)
+            imgs = _doctor_image_parts(m)
+            flags = []
+            if isinstance(c, list) and not c:
+                flags.append("空content数组")
+            if clen > _DOCTOR_LONG_LIMIT:
+                flags.append(f"超长({clen:,}>5万)")
+            if imgs and vision is False:
+                flags.append(f"图但模型非视觉(×{len(imgs)})")
+            tc = m.get("tool_calls")
+            tc_desc = ""
+            if tc:
+                names, malformed = [], False
+                for t in tc:
+                    t = t or {}
+                    fn = t.get("function") or {}
+                    nm = fn.get("name", "")
+                    names.append(nm or "?")
+                    if not t.get("id") or not nm:
+                        malformed = True
+                tc_desc = f" | tool_calls×{len(tc)}[{', '.join(names)}]"
+                if malformed:
+                    flags.append("畸形tool_calls(缺id/name)")
+            img_desc = ""
+            if imgs:
+                iu0 = imgs[0].get("image_url") or {}
+                u0 = iu0.get("url", "") if isinstance(iu0, dict) else str(iu0)
+                img_desc = f" | image_url×{len(imgs)}({u0[:60]})"
+            line = f"[{i}] {role} | content={shape} 长度={clen:,}{img_desc}{tc_desc}"
+            if flags:
+                line += f" ⚠️{'/'.join(flags)}"
+                suspicious.append(i)
+            lines.append(line)
+        if suspicious:
+            lines.append(f"—— ⚠️ 可疑消息：{suspicious}。建议 req_probe(agent_id='{aid}', "
+                         f"patch={{'strip_images':[...], 'truncate':{{i:2000}}, 'drop':[...], "
+                         f"'replace_text':{{i:'占位'}}}}) 迭代试修")
+        else:
+            lines.append("—— 未发现明显坏数据特征；若仍 400 考虑 replace_text 首条历史浓缩块，"
+                         "或穷尽后按安全阀判定非数据问题")
+        return "\n".join(lines)
+
+    def req_probe(agent_id: str = "", patch=None) -> str:
+        """试修验证：深拷贝失败存档→应用 patch→同模型最小探测（max_tokens=16）。200=修法有效可落盘；400=看新错误调整 patch。每 agent 上限 5 次，穷尽判定非数据问题。存档本体不动。"""
+        patch, perr = _doctor_normalize_patch(patch)
+        if perr:
+            return perr
+        target, aid, err = _find_target(agent_id)
+        if err:
+            return err
+        cnt = probe_counts.get(aid, 0)
+        if cnt >= _DOCTOR_PROBE_CAP:
+            return (f"[probe 上限] '{aid}' 已试修 {cnt} 次仍失败——判定非数据问题"
+                    f"（模型端/账号/配额），按 doctor.md 安全阀如实上报，禁止继续 probe。")
+        llm, msgs = _load_archive(target)
+        if msgs is None:
+            return f"[无存档] '{aid}' 没有失败请求现场可试修"
+        fn = getattr(llm, "_chat_inner", None)
+        if not callable(fn):
+            return f"[不支持] '{aid}' 的 llm 无 _chat_inner（非标准 LLMClient），无法探测"
+        probe_msgs = copy.deepcopy(msgs)
+        notes = _doctor_apply_patch(probe_msgs, patch)
+        probe_counts[aid] = cnt + 1
+        try:
+            fn(probe_msgs, max_tokens=16)
+        except Exception as e:
+            return (f"❌ probe 失败（第 {cnt + 1}/{_DOCTOR_PROBE_CAP} 次）：{type(e).__name__}: "
+                    f"{str(e)[:400]}\n应用摘要：{'; '.join(notes) if notes else '(无操作)'}\n"
+                    f"——调整 patch（加大力度/极简模式只留 system+末条）再 probe；存档未被改动")
+        return (f"✅ probe 通过（第 {cnt + 1} 次，max_tokens=16 最小探测）——patch 有效，"
+                f"可 req_patch 落盘。应用摘要：{'; '.join(notes) if notes else '(无操作)'}")
+
+    def req_patch(agent_id: str = "", patch=None) -> str:
+        """落盘修复：内部先自动 probe 验证同 patch（未通过拒绝落盘）；通过则 in-place 修 llm 失败存档 + 同步修 session 源头（当前轮 tool 结果）并 _autosave。历史档消息修不了只修缓存并说明。"""
+        patch, perr = _doctor_normalize_patch(patch)
+        if perr:
+            return perr
+        target, aid, err = _find_target(agent_id)
+        if err:
+            return err
+        llm, msgs = _load_archive(target)
+        if msgs is None:
+            return f"[无存档] '{aid}' 没有失败请求现场可修"
+        fn = getattr(llm, "_chat_inner", None)
+        # 强制验证门：同 patch 先 probe 一遍（不计试修预算——门禁非探索）
+        gate_msgs = copy.deepcopy(msgs)
+        notes = _doctor_apply_patch(gate_msgs, patch)
+        if callable(fn):
+            try:
+                fn(gate_msgs, max_tokens=16)
+            except Exception as e:
+                return (f"🚫 拒绝落盘：验证 probe 未通过（{type(e).__name__}: {str(e)[:300]}）——"
+                        f"req_patch 前必须 probe 200，先 req_probe 迭代修法。"
+                        f"应用摘要：{'; '.join(notes) if notes else '(无操作)'}")
+        # ① 修存档本体（in-place——resume 重试若复用冻结投影，用的就是这份）
+        _doctor_apply_patch(msgs, patch)
+        # ② 修 session 源头：当前轮 steps 引用的 tool 结果（toollog 条目）+ 持久化
+        sess_fixed, sess_skip = _doctor_fix_session_source(target, msgs, patch)
+        try:
+            target.session.invalidate_projection("doctor req_patch：session 源头已修，重投影")
+        except Exception:
+            pass
+        saved = ""
+        try:
+            target.session._autosave()
+            saved = "；session 已 _autosave"
+        except Exception as e:
+            saved = f"；⚠️ _autosave 失败: {type(e).__name__}: {e}"
+        probe_counts[aid] = 0   # 落盘成功 → 预算清零（下次事件新预算）
+        parts = [f"✅ 已落盘到 '{aid}'：{'; '.join(notes) if notes else '(无操作)'}{saved}",
+                 f"session 源头修复：{'; '.join(sess_fixed) if sess_fixed else '(无)'}"]
+        if sess_skip:
+            parts.append("session 侧未修（只修了缓存）：" + "；".join(sess_skip))
+        return "\n".join(parts)
+
+    def req_resume(agent_id: str = "") -> str:
+        """恢复目标 agent：清其 llm 回退链冷却（修复有效后冷却无意义，不清则白等 300s）+ 续跑其中断轮（resume_interrupted，返回状态透传）。"""
+        target, aid, err = _find_target(agent_id)
+        if err:
+            return err
+        llm = getattr(target, "llm", None)
+        cleared = 0
+        cd = getattr(llm, "_provider_cooldown", None)
+        if isinstance(cd, dict):
+            cleared = len(cd)
+            cd.clear()
+        try:
+            r = target.resume_interrupted()
+        except Exception as e:
+            return f"[恢复异常] {type(e).__name__}: {e}（冷却已清 {cleared} 项）"
+        if r == "":
+            return f"✅ '{aid}' 已恢复：冷却清 {cleared} 项；中断轮已复位续跑"
+        if r == "__queued__":
+            return f"✅ '{aid}' 冷却已清 {cleared} 项；中断轮被更新轮顶替 → 续跑指令已入队其 inbox"
+        return f"[恢复返回] {r}（冷却已清 {cleared} 项）"
+
+    return [Tool(req_inspect), Tool(req_probe), Tool(req_patch), Tool(req_resume)]
+
+
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
     # 服务退出多播路由注入（用户提案 2026-10-16）：主 Agent 的 services 池是全实例共享的，
@@ -1512,6 +1862,27 @@ def make_subagent_tools(agent) -> list:
                     _sa_ex = getattr(_target, "agent", _target)
                     res = (f"[失败] {type(ex).__name__}: {ex}\n\n"
                            f"── 近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}")
+                    # doctor 自动派发（2026-10-16 用户裁定）：失败原因是"回退链不可用"
+                    # （多模型连锁失败，典型为请求数据问题 400 打穿全链）且失败者非 doctor
+                    # 自身 → 派 doctor 按其人设工作循环诊断修复+恢复；doctor 自己失败不
+                    # 递归（_name 判断即熔断）。主 Agent 自身的回退链耗尽不在此接
+                    # （不能自己派自己——doctor.md 人设已有说明）。
+                    if (_name != "doctor" and isinstance(ex, RuntimeError)
+                            and "回退链不可用" in str(ex)):
+                        try:
+                            _doc_prompt = (
+                                f"[自动派发·BadRequest 诊断] 子 Agent '{_name}' [agent_id={_aid}] "
+                                f"的 LLM 请求刚因回退链耗尽失败（多模型连锁失败，疑似请求数据问题）。\n\n"
+                                f"错误全文：\n{type(ex).__name__}: {ex}\n\n"
+                                f"── 目标近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}\n\n"
+                                f"请按 doctor.md 工作循环处理：req_inspect(agent_id='{_aid}') 体检 → "
+                                f"req_probe 试修 → req_patch 落盘 → req_resume(agent_id='{_aid}') 恢复，"
+                                f"完成后向派发者汇报坏在哪/怎么修的/根因建议。")
+                            _doc_r = agent_prompt("doctor", _doc_prompt)
+                            _LOG.warning("子 Agent %s 回退链耗尽 → 已自动派 doctor 诊断: %s",
+                                         _aid, str(_doc_r)[:120])
+                        except Exception as doc_err:
+                            _LOG.warning("子 Agent %s 派 doctor 失败: %s", _aid, doc_err)
                     # 失败也立即路由（caller 需要知道子 Agent 出错了）+ 主 Agent 兜底
                     # （同中断分支 2026-10-16：施工委托 worker 的 caller 非主 Agent 时
                     #  失败也会静默——主 Agent 必须知道才能重派）

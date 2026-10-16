@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -901,6 +902,13 @@ class LLMClient:
                     tried_tokens[0] = 0
                     self.switch_model(near[0])
                     return
+                # 存档点（doctor 工具族 2026-10-16 用户裁定）：回退链耗尽、异常即将抛出前
+                # 冻结本次失败请求全文 → self.last_failed_messages。req_inspect/req_probe
+                # 据此逐条体检/试修；成功调用不清除——保留最近一次失败现场（诊断价值 > 内存）。
+                try:
+                    self.last_failed_messages = copy.deepcopy(messages)
+                except Exception:
+                    pass
                 _LOG.error("回退链耗尽 tried=%s 原因=%s 冷却=%s", tried, reason, cd_detail or "无")
                 raise RuntimeError(
                     f"回退链不可用（已试: {', '.join(tried)}）：{reason}"

@@ -205,6 +205,12 @@ function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }  // 薄�
 - **验证（playwright 真页面）**：两列 10+6、`firstColIsRightmost=true`、开合正常、5 个插件按钮全部就位；node --check 内联 JS 通过
 - 纯前端（commit e7b6e92），**浏览器刷新即生效**，无需 /restart
 
+## 后记五：🛒 插件市场入口入列首位（2026-10-16，用户实锤缺口，commit 2a93c96）
+
+`fabDockMenu` 首位静态插入 `#marketFab`（`fabItem` 类）——`onclick` 新标签打开 `/market` 独立市场页（[marketplace](marketplace.md)）。纯 HTML 插入、零 JS 依赖、零 SDK 时序问题；分列交给既有 `_layoutFabCols` 自动收纳。
+
+生效两段式：按钮走 index.html mtime 热更（**刷新即见**）；`/market` 路由在引擎侧 server.py，随 `/restart` 生效（此前点击 404）。
+
 ## 相关页面
 
 - [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）

@@ -67,6 +67,16 @@
 - **HTTP e2e**（真 server + Playwright 页面）：GET 34 条 + type 过滤；POST install 落位+装态翻转；WebUI 点「安装」→ toast + 徽章 + 按钮态翻转 + 文件落位（rerank_topk 实测）；点「卸载」→ 还原；未知名/缺参 `ok:false`
 - **重启往返**：stop+start server 后 GET installed 态与重启前完全一致（installed 以文件存在性为源，天然持久）
 
+## 后记：主 WebUI 入口缺失——fabDock 🛒 补位（2026-10-16，用户实锤，commit 2a93c96）
+
+**用户实锤**：施工交付了完整的 `/market` 独立页（路由 + market.html + API 三件），但主 WebUI（index.html）里**一个引用都没有**——入口断裂，用户只能手敲 URL。
+
+**修复（src/static/index.html，commit `2a93c96`）**：`fabDockMenu` **首位**插入 🛒 按钮（`#marketFab`，`fabItem` 类与既有 dock 按钮同款）——`onclick` 新标签打开 `/market`；纯 HTML 静态插入，零 JS 依赖、零 SDK 时序问题，分列随 [fabDock 自动分列](fab-dock.md) 自收纳。
+
+**生效两段式**：按钮改的是 index.html——mtime 热更，**浏览器刷新即见**；`/market` 路由在引擎侧（server.py）——**随 `/restart` 生效**（此前点击 404）。
+
+**教训**：独立页交付 ≠ 可达——「入口在主界面」是交付验收的一部分，新页面落成时应同步检查主 WebUI 的入口面（fabDock / 抽屉 / 命令）。
+
 ## 注意事项
 
 - e2e 期间抓出一个 API 缺陷并当场修复：install/uninstall handler 起初对 `[未找到]` 失败文案也返回 `ok:true`，前端红 toast 路径死路——已按文案前缀判 ok

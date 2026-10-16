@@ -5,7 +5,7 @@
 ## 职责
 
 - **src/background.py**：后台调度线程，`_loop` 周期扫描 `next_fire`，到点把消息推给 Agent 触发一轮（唤醒链见 [user-interaction · 后台通知 wake 语义](user-interaction.md)）
-- **src/background_tools.py**：工具入口九件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `service_stdin`；旧名 `send_to_service` 保留为 hidden 别名，只透传 name+message）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
+- **src/background_tools.py**：工具入口十一件——服务管理五件（`start_service` / `stop_service` / `list_services` / `service_logs` / `service_stdin`；旧名 `send_to_service` 保留为 hidden 别名，只透传 name+message）+ 服务监听两件（`service_watch` / `service_unwatch`，2026-10-16 注册，见[服务退出通知监听者](#服务退出通知监听者watchers-名单谁启的服务谁收任意实例可挂摘监听2026-10-16用户提案commit-e0e7150)）+ 后台任务查询（`check_bg_task`，2026-09-06 注册）+ 调度三件（`add_schedule` / `cancel_schedule` / `list_schedules`），LLM 可直接调用
 - 触发三类：**interval**（每 N 秒）/ **at**（到点；v0.23.1 起支持每日闹钟）/ **组合**（every_seconds + at 同给：at 相位起步、之后每 N 秒循环，2026-09-18）
 
 ## Schedule 数据结构（dataclass）
@@ -870,6 +870,26 @@ ServiceManager.start(name, command, cwd=..., on_exit_wake="notify",
 **生效**：commit `86e36f9` 已推送 + site-packages 已同步，`/restart` 后生效。声明侧落点见 [multi-agent · services 后记三](../architecture/multi-agent.md)。
 
 **关联**：[on_exit_wake 策略](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（蜜月只管「何时静默」，策略管「通知去哪/注入什么」——两者正交）· [退出通知默认进 inbox](#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)（notify 的注入姿势，上一节）· [start_service 撞死服务被拒](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)（同 restart 语义族：死服务覆盖重建）
+
+## 服务退出通知监听者：watchers 名单——谁启的服务谁收，任意实例可挂/摘监听（2026-10-16，用户提案，commit e0e7150）
+
+**动机（用户提案，动机当轮即有实锤）**：marketplace 施工线里 worker 起的 e2e 验证服务崩溃退出，通知恒推**主 Agent**——服务是 worker 起的，围观者被吵醒、干活者蒙在鼓里（与[后台任务完成回执按发起者路由](#后台任务完成回执按发起者路由谁起的谁收2026-10-15用户裁定commit-45369c8)同款痛点，从 bg task 扩展到服务退出通知）。用户提案：给后台服务加监听——**默认谁启的服务谁收通知**，其它实例也可添加/移除对某服务的监听。
+
+**机制三层**：
+
+| 层 | 实现 |
+|---|---|
+| `ServiceManager`（src/background.py） | 服务 entry 新增 `watchers` 名单（agent_id 字符串列表）；`add_watcher` / `remove_watcher`（幂等、锁内）；snapshot 暴露监听面 |
+| 自动登记（src/background_tools.py `start_service`） | 启动成功即把**启动者**（复用 bg owner 线程局部 `get_bg_owner`，同 45369c8 引入的发起者记账）写进名单——子 Agent 起的服务从此它自己收；**本实例（_main_）启动不登记**（名单空 → 回退原行为通知持有者，存量零感知） |
+| 退出多播（src/background.py 退出回调） | 服务退出时逐个 watcher 路由：registry 找实例 → `deliver_notice` 进其 inbox；**路由失败 / 名单为空 → 持有者兜底自收，通知不丢** |
+
+**新工具两件**：`service_watch(name)` / `service_unwatch(name)`——任意 Agent 实例把自己加进/移出某服务的退出通知名单（工具绑定层接线：src/agent.py + src/multiagent.py）。
+
+**验证（单测 4 组全过，commit e0e7150）**：① 增删幂等 ✓；② watchers 穿线程到达退出回调 ✓；③ 子 Agent 启动自动登记（`watchers=['worker-p_test']`）✓；④ 本实例启动不登记（回退自收）+ 任意实例增补/移除（`['_main_']` 增删往返）✓。
+
+**生效**：引擎层改动，`/restart` 后生效。
+
+**与既有退出通知参数的分工**：[on_exit_wake / on_exit_style](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify) 管通知**怎么发**（策略与注入姿势）；`watchers` 管**发给谁**（受众）——两维正交，可组合。
 
 ## 与其他模块的关系
 

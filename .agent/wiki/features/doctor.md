@@ -13,6 +13,20 @@ BadRequest → 回退链耗尽（RuntimeError）→ 引擎派 doctor
   → 穷尽 5 次仍 400 → 判定非数据问题（模型端 / 账号）→ 上报，不再瞎试
 ```
 
+## 三层自愈定位：L1 引擎剔除 / L2 doctor 四件套 / L3 主 Agent 上报（2026-10-16）
+
+BadRequest（数据问题：坏图 / 超长 / 畸形消息）三层防线，越往下越贵、越靠近根治：
+
+| 层 | 谁 | 手段 | 性质 |
+|---|---|---|---|
+| **L1 引擎自愈** | src/llm_client.py | 端点拒图 → 历史轮图片投影即降文字占位（`ImageUnsupportedError`）；400 图解码失败 → `_strip_image_parts` 剥图重试 | **绕过**——不修数据，先把这一轮保住（[LLM 客户端韧性 · 五/七](llm-network-resilience.md)） |
+| **L2 doctor** | `make_doctor_tools` 四件套 | `req_inspect` 定位嫌疑 → `req_probe` 最小请求验证修法（cap 5）→ `req_patch` 过验证门后落盘（存档消息 + 当前轮 toollog 结果）→ `req_resume` **清 `_provider_cooldown`**（修好了不该白等 300s 冷却）+ `resume_interrupted()` 续跑 | **根治**——坏数据在哪、修在源头、恢复原流程（本页） |
+| **L3 上报人** | 主 Agent 轮异常出口 | doctor 穷尽 5 次仍 400（判非数据问题：模型端 / 账号）或派单失败 → 中断事件 + 一键充值/重试入口，交用户决策；**派单失败只告警、不掩盖原异常** | 止损——自愈层承认修不动，交给人的上下文（[气泡交互 · 中断轮充值入口](bubble-interaction.md)） |
+
+- **层间关系**：L1 不产出诊断信息（只让轮不炸）→ L2 消费 L1 留下的失败现场（`last_failed_messages` 存档点在回退链耗尽处深拷贝落档）→ L3 是 L2 的兜底报告面。三层共用同一个触发前缀特征串「回退链不可用」。
+- **不套娃铁律**：L2 永不自派 doctor（`_bg` 侧 `_name != "doctor"` 熔断 + 主 Agent 出口判据 `agent_id ∈ {"", "_main_"}`）——自愈层不能把自己递归进去。
+- **冷却与自愈的咬合**：数据坏 → 回退链上每个 provider 都 400 → 全进 `_provider_cooldown`（默认 300s）→ 整链耗尽抛 RuntimeError；修好后 `req_resume` 清冷却，否则「改对了也得干等 5 分钟」。
+
 ## 四件套（src/multiagent.py `make_doctor_tools(agent)` 闭包）
 
 | 工具 | 职责 | 关键语义 |
@@ -48,9 +62,22 @@ BadRequest → 回退链耗尽（RuntimeError）→ 引擎派 doctor
 - **验证**：mock 工具面三断言（派单参数 = `agent_prompt("doctor", …)` / 派单异常兜底不炸 / `agent.run` 接线特征存在）+ 全量回归 **26 passed**。
 - **生效/发布**：引擎代码，`/restart` 生效；同日随 push-retry 推远端（`ad64506..96c2fda`）。
 
+## 后记：四件套收敛为 doctor 专属（2026-10-17，用户裁定）
+
+用户裁定（2026-10-17）：「doctor 的那几个工具只作为 doctor 自己的工具就可以了，它也只需要调用那几个工具」。四件套从「主 Agent 工具箱注册 + doctor.yml 继承」收敛为**实例化专属注入**：
+
+- **chat.py 撤注册**：`_reg(make_doctor_tools(agent), "诊断")` 及 import 一并移除——主 Agent 工具箱不再带 4 个诊断工具。核心理由：**工具 schema 是全局公共负载**（每会话每轮投影都携带），诊断工具只有诊断 Agent 用得上，不该向所有会话征噪音税。
+- **实例化注入**：multiagent 的 doctor 分支改 `Toolbox(*make_doctor_tools(agent))`——doctor 的工具面板 = **纯四件套**（req_inspect / req_probe / req_patch / req_resume），与 doctor.md 人设的「工作循环」约束双重对齐：只见诊断工具 + 只按循环行事。
+- **派单链不变**：`dispatch_doctor` / `_bg` 自动派单走 agent_prompt 工具面（引擎程序化通道，不经 LLM 工具决策）——收敛对自动派单零副作用。
+- **doctor.yml `tools: ""` 留空无碍**：实例化路径对 doctor 有专属分支，工具箱恒为四件套。
+
+**验证**：四件套断言（req_inspect / req_patch / req_probe / req_resume 四名齐）· chat.py 活性引用清零（全仓 src 剩 multiagent 定义 + doctor 分支两处）· import 冒烟 · test_doctor_tools 8 passed。commit 本地（push 网络抖动，重试任务在岗）。
+
+**语义收获**：工具跟着角色走——角色专属工具收敛进实例化路径，通用工具箱只留跨角色能力。
+
 ## 声明（.agent/agents/doctor/，目录形态）
 
-- `doctor.yml`：`tools: ""` 继承 / `model: glm-official-flash` / 最小装配（system + file 人设 + user_message + steps）
+- `doctor.yml`：`tools: ""`（留空无碍——2026-10-17 起实例化路径对 doctor 有专属分支，工具箱恒为四件套）/ `model: glm-official-flash` / 最小装配（system + file 人设 + user_message + steps）
 - `doctor.md` 人设四段：**工作循环**（inspect → probe → patch → resume → 汇报，严格按序）/ **安全阀**（probe 上限 5、patch 必过验证门、只修消息数据不碰引擎代码与 session 结构、自己失败不派另一个 doctor）/ **实战案例**（worker 坏图三连炸内置）/ **常见坏数据模式**（坏图截断 base64 / 工具结果几十万字符 / 空 content 数组与 role 序列错乱 / 首条历史浓缩块损坏）
 
 ## 安全阀汇总

@@ -1,4 +1,4 @@
-# 技能体系 · SKILL.md 技能包 + 双层寻址（repo 本地 / 全局 ~/.agt/skills）+ 技能工具七件套
+# 技能体系 · SKILL.md 技能包 + 双层寻址（repo 本地 / 全局 ~/.agt/skills）+ 技能工具九件套（含装卸闭环 + 命令口）
 
 > 技能 = 「frontmatter（name/description/when_to_use）+ SOP 正文」的 `SKILL.md` 目录包，可选带脚本/资产。SYSTEM 注入一行一技能的【可用技能】清单，Agent 任务匹配时按需取 SOP 执行；完成可复用任务后 `save_skill` 沉淀。核心实现全在 `src/agent_config.py`（技能工具注册处），SYSTEM 摘要文案在 `src/chat.py`。
 
@@ -31,9 +31,9 @@ def _resolve_skill(name, workspace=None):
 - 清单里点了但包不存在/无 SKILL.md → 静默跳过（`load_skills_index` 不报错）
 - 组件：`_global_skills_root()`（`AGT_DIR/skills`，经 paths 单一数据根）+ `_enabled_global_skills(workspace)`（清单解析）+ `load_skills_index(workspace)`（本地扫 + 全局已激活合并，条目带 `scope` 字段）
 
-## 技能工具七件套（原二 + 新五）
+## 技能工具九件套（原二 + 新五 + 装卸配对 skill_unequip + 命令口 skill_command）
 
-`SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate), Tool(skill_run_code), Tool(skill_evaluate), Tool(skill_equip), Tool(skill_use))`
+`SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate), Tool(skill_run_code), Tool(skill_evaluate), Tool(skill_equip), Tool(skill_use), Tool(skill_unequip), Tool(skill_command))`
 
 | 工具 | 职责 | 关键语义 |
 |---|---|---|
@@ -44,6 +44,8 @@ def _resolve_skill(name, workspace=None):
 | `skill_evaluate(name, input)` | 技能约定评测入口 | 见下 |
 | `skill_equip(name)` | 装备技能常驻服务（server.py） | 见下 |
 | `skill_use(name, command)` | 向已装备服务发命令 | 见下 |
+| `skill_unequip(name)` | 卸载技能（撤插段/钩子 + 停自有服务 + 清登记） | 装备/卸载配对语义见「技能装卸生命周期」节 |
+| `skill_command(name, command)` | 轻量命令口：command 首词路由到技能命令脚本执行 | 白名单闸门 + 自带发现性，见「skill_command · 轻量命令口」节 |
 
 ### skill_navigate · 大技能不必整读
 
@@ -150,6 +152,87 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 - **调试中抓到的两个坑**：① 子进程 stdout pipe **全缓冲**——4 行清单憋在缓冲区父进程永远读不到（死锁）→ 框架侧 `PYTHONUNBUFFERED=1` 兜底（作者忘写 flush 也不死锁）；② `_USE_DONE` 常量误写 `==DONE===`（少一个等号）与协议 `===DONE===` 永不匹配 → use 恒超时——最小复现二分定位抓出，常量处已注释警示
 - demo：`.agent/skills/test-svc/`（32 行计数器服务，协议最小范例，可删）
 
+## 技能装卸生命周期：skill_unequip + replace 幂等 + 装备登记（2026-10-16，用户裁定，commit e5a74f5）
+
+> **装备 = 临时能力**：进程生命周期 = 装备生命周期（登记纯内存，重启即隐式全卸）；**卸载 = 按来源标记精确撤除**（只删该技能插进去的项，不重跑整体装配、不碰宿主与其它技能）。实现全在 `src/agent_config.py`（`_equipped_table` / `_revoke_equipped` / `skill_equip` / `skill_unequip`）+ `src/multiagent.py`（`_apply_extra_assemblies` 打标 / `_revoke_skill_items` 撤销）。
+
+### 一次装备的三个落点（各自有独立的撤销语义）
+
+| 落点 | 装备时 | 卸载/重装时 |
+|---|---|---|
+| 技能服务 `server.py`（进程表 `_SKILL_SERVICES`） | `_svc_kill` 幂等先杀旧实例 → Popen 拉起（`cwd=技能目录`、`PYTHONUNBUFFERED=1`）→ 读能力清单到 `===CAPS_END===` | `_svc_kill(name)` 杀进程 + 从表移除 |
+| 依赖服务（SKILL.md frontmatter `services:`，同子 Agent yml 语法 `- 名: 命令 \| reuse=URL`） | 复用 `multiagent._ensure_agent_services`（单一真源）：探测活 → **复用不拥有**（不进登记、卸载不停）／死 → 拉起并记入 `started` | 只停登记里 `services`（= 自己拉起的那些）；复用来的**不拥有不停** |
+| 装配插段 / 钩子（`session.assembly_plan` / `hook_specs` 快照） | `_apply_extra_assemblies` 给每个插入项打 `_skill_src=<技能名>` 标记（+ `_xsrc` 位置） | `_revoke_skill_items(plan, hooks, name)` 只删标记匹配项；快照就地更新（`set_assembly_plan` 同时清 once 缓存），**不重跑整体装配** |
+
+- **`_skill_src` 是唯一真源**：撤销不依赖登记表内容——登记丢了照样按快照标记撤净（登记只用来定位「哪些服务是我拉起的」）。
+- **装备登记 `session._equipped_skills`**（`_equipped_table`）：`{技能名: {"services": [自己拉起的], "item_keys": ["after:steps×1", …]}}`——**纯内存、不进 meta 持久层**（Session 不预声明该属性，无/坏型就地初始化空表，避免污染持久化路径）。
+- **前提**：技能包必须带 `server.py` 才能装备（纯 SOP / 只声明 `assemblies:` 的技能无法动态装备，返回 `[无服务]` 引导 read_skill / run_code）；插段应用与声明服务拉起都需主 Agent 运行时挂点 `_RUNTIME_AGENT`（未挂 → 明确告警、不静默）。
+
+### skill_unequip(name)：三件事 + 两处容错
+
+1. **撤插段/钩子**（`_revoke_equipped` → `_revoke_skill_items`）——异常也「容错继续」（`撤销插段异常（容错继续）`），不影响后续停服务
+2. **停自有服务**：`server.py` 实例 + 登记里 `services`（复用来的跳过；单个停失败记进 notes 不中断）
+3. **清登记** → 报告 `✅ 已卸载技能 'x'（撤销插段 N 项 / 钩子 N 项；停自有服务 …）`
+
+- **登记丢失容错**（进程重启过）：`⚠️ 装备登记丢失（进程重启过？）——已按插段标记尽力撤销；声明服务无从追溯未停`
+- **未装备**：`[未装备] 技能 'x' 当前未装备（无登记、装配快照也无其插段/钩子）`
+- 非法名先在入口被 `_NAME_RE` 拦（`[非法名称]`）；报告尾注统一：装配快照已剔除该项、其余装备与宿主段不动、重启即隐式全卸
+- **斜杠命令等价入口**：`/skill_equip <名>` / `/skill_unequip <名>`（`src/commands.py`，无参数时打印用法提示）
+
+### replace 幂等：重复 `skill_equip` 同名 = 撤旧 + 装新
+
+`skill_equip` 开头 `pop` 旧登记 → `_revoke_equipped`（撤旧插段 + 停旧自有服务）→ `_svc_kill` 杀旧 `server.py` → 重新拉起 / 应用 / 登记，返回值带 `（replace：撤旧装备——…）` 或 `（replace：旧装备无插段/自有服务，直接重装）`。
+
+**幂等实证**（`test/test_skill_lifecycle.py::test_replace_idempotent`）：二次装备后 `_skill_src` 插段数**不变**、钩子位条目数不变、旧自有服务被 stop 一次、新登记指向新实例（停旧→拉新各一次）。
+
+### 注册与验证
+
+- 工具面从七件套升为**八件套**（`SKILL_TOOLS` 尾部增 `Tool(skill_unequip)`；新工具进 schema 需 `/restart`）；§技能工具九件套 表内一行对应本节（2026-10-17 再增 `skill_command` 为九件套）。
+- `test/test_skill_lifecycle.py` 9 例：装备登记 + `_skill_src` 标记 / `services:` 复用不拥有 · 死则拉起并登记 / unequip 撤净且**不吞宿主项与他技能项** / 未装备提示 / replace 不重复插段 + 停旧服务 / 登记丢失尽力撤且不停服务 / `_apply_extra_assemblies` 稳定追加 + `_revoke_skill_items` 精确撤销（含 plan·hooks 传 None 与无匹配的纯函数边界）/ `_ensure_agent_services` 的 `started` vs `reused` 语义。
+- **作用域**：`skill_equip` / `skill_unequip` 走 `_RUNTIME_AGENT` → 作用于**主 Agent 运行时会话**；子 Agent 的装备发生在派活链（`multiagent._agent_skill_gear`），随实例退出自然消失，无卸载配对需求。
+
+### 注意事项
+
+- **/restart 生效**：SYSTEM 技能摘要在 agent 构建时装配——新装全局技能 / 改激活清单后需重启实例（无热重载）
+- `save_skill` 永远写 repo 本地；全局技能的沉淀/更新直接编辑 `~/.agt/skills/`（跨实例共享一份）
+- 激活清单务必保持**纯字符串数组**——dict 等其它形态被静默忽略（宁缺勿错）
+- 本地与全局同名时本地 shadow：想临时覆盖全局技能行为，在 repo 放同名技能即可，不必动全局份
+- 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
+- **equip 的服务生命周期**：常驻到 Agent 进程退出（atexit 全杀）；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定
+- **装卸配对（2026-10-16）**：`skill_unequip(name)`（或重复 equip = replace）按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存、**重启即隐式全卸**——没有持久「已卸载」清单，卸载是会话内语义（详见 §技能装卸生命周期）
+- **命令口（2026-10-17）**：`skill_command` 只认技能包内实际存在的命令脚本（`scripts/commands/<名>.py` 或 `scripts/<名>.py`），**不接受任意 shell**——防注入；未知命令回显可用清单（详见 §skill_command · 轻量命令口）
+
+## skill_command · 轻量命令口（2026-10-17，用户提案）
+
+用户提案（2026-10-17）：以 command 形式调用技能能力更轻量——`skill_command(name="desktop-ops", command="mouse_click -x 500 -y 300 -button left")`，指令说明写在 SKILL.md 里，装备时 SOP 注入 system（模型直接可见指令表），`read_skill` 都可省。`SKILL_TOOLS` 升为**九件套**（新工具进 schema 需 `/restart`）。实现：src/agent_config.py `skill_command(name, command, timeout=60)`。
+
+### 约定与语义
+
+| 环节 | 语义 |
+|---|---|
+| 命令注册 | 技能包 `scripts/commands/<首词>.py`（约定位置，优先）或 `scripts/<首词>.py`——**加命令 = 放一个脚本 + SKILL.md 写一行说明，零注册样板** |
+| 参数 | 首词后的 token 经 shlex 分词（引号安全）作为命令行参数传入；`cwd=技能目录`；stdout 即回执（带 `[exit=N]`） |
+| 白名单闸门 | 首词必须是包内实际存在的命令脚本——**不接受任意 shell**（防注入）；未知命令 → 列出全部可用命令清单（**自带发现性**，模型不用猜） |
+| 异常形态 | exit≠0 → ✗ + stderr；超时 → 终止 + 明确标注；空命令 → 回显用法示例 |
+
+- **发现性闭环**：SKILL.md 写指令说明 → 装备时 SOP 注入 system（模型天然可见指令表）→ 命令口自报可用清单兜底——三层发现性
+- 命令实现统一 `.py`（跨平台 + 参数解析一致；`.bat` 不做——要跑批处理走 `run_shell`）
+
+### 验证
+
+五态冒烟全绿（命中回执 / 白名单列清单 / 失败回执 / 超时终止 / 空命令）+ `test/test_skill_command.py` 4 例 + 技能域回归 **35 passed**。
+
+### 与 tools/ 的双轨定案
+
+用户判断「command 形式更轻量」有实证支撑：强模型时代拼命令行准确率已不输 schema 防呆，而 **schema 膨胀是每轮实付的全局成本**；但 tools/（schema 工具）也有真优势——结构化校验前置挡错、进程内执行快。定案**双轨并存**：
+
+| 轨道 | 适用 |
+|---|---|
+| `tools/`（schema 工具） | 高频、参数复杂、要前置校验的能力（desktop-ops 的 drag 四参数这种） |
+| 命令口 `skill_command` | 指令式简单操作、想快速加能力不想写工具样板 |
+
+同一技能可双轨并存；desktop-ops 已实战验证的 tools/ 形态**不动**，命令口给将来技能多一个选项。
+
 ## 技能自带装配清单（assemblies:）
 
 ### 技能自带装配清单（SKILL.md `assemblies:` 字段，2026-10-16）
@@ -169,7 +252,7 @@ assemblies:
 - **两个装备口共用一套声明**：静态口（子 Agent yml `skills:` 装备链读 frontmatter）与动态口（`skill_equip` 时技能服务 caps 上报 `EXTRA_ASSEMBLIES: <json>` 单行）。
 - **position**：`before:<段名>` / `after:<段名>`（锚=宿主装配清单现有段名；锚不存在→装备时报错清单化，不静默丢弃）/ `hook:<钩子位>`（before_turn/before_tool/after_tool/before_answer/turn_end）。
 - **两条铁律**：①装备时冻结——声明解析后作为静态清单快照进宿主 session（set_assembly_plan），逐轮不再重算（缓存安全）；②作用域对称——子 Agent（`multiagent._agent_skill_gear`）与主 Agent（`skill_equip` → `agent_config.apply_extras_to_session`）共用同一插入逻辑 `multiagent._apply_extra_assemblies`，不写两份。
-- 多技能同位置按装备顺序稳定追加（先装备的先插）；装备是一次性动作，不做卸载还原。
+- 多技能同位置按装备顺序稳定追加（先装备的先插）；装备的产物是**冻结快照**（逐轮不重算）——**2026-10-16 起有了撤销通道**：`skill_unequip` / 重复装备（replace）按 `_skill_src` 标记撤旧项，快照就地更新（见 §技能装卸生命周期）
 - 首个真实用户：`desktop-ops`——SKILL.md 声明 `image_feed: {tool: screen_frame()}`，desktop-operator.yml 不再手写 image_feed 段、不再拉 8765 帧服务（瘦身为最小声明）；配套 `image_feed` 段 `tool:` 前缀解析（`session._asm_image_feed_from_tool`：data URL / 文件路径 / 双参工具位置映射，http/file 源零回归）。
 
 ### 落地链：解析 / 插段 / 钩子 / 帧提供者（plan p_76f6623b，commit 3609d97）
@@ -185,7 +268,7 @@ worker 施工线 7 步交付，上节语义落到四个文件：
 
 **验证**：test/test_skill_assemblies.py 18 例（解析 / 插段锚定位 / 钩子挂载 / 冻结性 / 两作用域对称 / tool: 帧源 / 未知段名报错）+ 真实链路 e2e（desktop-operator 声明 + 真实技能包 → 11 技能工具在箱含 screen_frame → extras 合并后 image_feed 紧贴 steps → **真实截屏 @@IMGFEED@@ 哨兵帧注入 ✓**）。
 
-**遗留**：①动态口端到端（真服务进程 caps 上报 `EXTRA_ASSEMBLIES`）未做子进程级 e2e，仅函数级覆盖——首个服务形态技能接入时可补；②装配为一次性动作无卸载还原（spec 既定语义），多次装备同一技能会重复插段——装备幂等性待裁定。
+**遗留**：①动态口端到端（真服务进程 caps 上报 `EXTRA_ASSEMBLIES`）未做子进程级 e2e，仅函数级覆盖——首个服务形态技能接入时可补；②装配为一次性动作无卸载还原（spec 既定语义），多次装备同一技能会重复插段——装备幂等性待裁定。**两项均于 2026-10-16 收口**：`skill_unequip` + replace 幂等落地（按 `_skill_src` 标记精确撤销、不重跑整体装配）——见 §技能装卸生命周期。
 
 ## skill_suggest · 技能按需建议钩子（SYSTEM 技能清单下线：jev 快判 + LLM 全文复核，2026-09-27/28，用户提案）
 
@@ -262,6 +345,7 @@ pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打�
 - 本地与全局同名时本地 shadow：想临时覆盖全局技能行为，在 repo 放同名技能即可，不必动全局份
 - 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
 - **equip 的服务生命周期**：常驻到 Agent 进程退出（atexit 全杀）；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定
+- **装卸配对（2026-10-16）**：`skill_unequip(name)`（或重复 equip = replace）按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存、**重启即隐式全卸**——没有持久「已卸载」清单，卸载是会话内语义（详见 §技能装卸生命周期）
 
 ## 相关页面
 
@@ -270,4 +354,5 @@ pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打�
 - [run_python](run-python.md)：同为子进程执行工具，但通用工作区任意脚本 vs 技能包限定 + cwd 锚定技能目录
 - [多 Agent 体系](../architecture/multi-agent.md)：技能工具随 Agent 注入，子 Agent 自动继承
 - [运维与存档布局](../guides/ops.md)：`~/.agt/` 单一数据根（全局技能目录挂这里，多实例共享）
+- [doctor · BadRequest 诊断修复 Agent](doctor.md)：坏图 / 超长 / 畸形消息 400 的 L2 诊断修复线（典型案例源头即 worker 施工线坏图三连炸）
 

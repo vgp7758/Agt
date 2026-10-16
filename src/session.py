@@ -580,6 +580,96 @@ def _eval_assembly_tool(item: dict, session) -> str:
         return ""
 
 
+def _imgfeed_argsplit(s: str) -> list:
+    """tool: 帧提供者的实参串按逗号分割（尊重引号——参数值可含逗号），去包裹引号。"""
+    out, cur, q = [], "", None
+    for ch in s:
+        if q:
+            cur += ch
+            if ch == q:
+                q = None
+        elif ch in "'\"":
+            q = ch
+            cur += ch
+        elif ch == ",":
+            out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return [a[1:-1] if len(a) > 1 and a[:1] in "'\"" and a[-1:] == a[:1] else a for a in out]
+
+
+def _imgfeed_coerce(val: str, typ) -> object:
+    """帧提供者实参按 schema 类型转换（int/float/bool；其余原样）。"""
+    t = str(typ or "").lower()
+    try:
+        if t == "integer" or t == "int":
+            return int(float(val))
+        if t == "number" or t == "float":
+            return float(val)
+        if t == "boolean" or t == "bool":
+            return val.lower() in ("1", "true", "yes", "on")
+    except Exception:
+        pass
+    return val
+
+
+def _asm_image_feed_from_tool(expr: str, session) -> str:
+    """image_feed tool: 帧提供者（2026-10-16 plan p_76f6623b）：调工具箱工具取帧。
+    expr 形如 skill_use('desktop-ops','frame') / screen_frame()——位置实参按工具 schema
+    的必填参数顺序映射（双参工具 skill_use 因此可用；装配 tool: 项的单参管线不适用）。
+    工具输出提取帧：① data:image/*;base64 内联（服务直接回 data URL）；
+    ② 输出文本里的图片文件路径（相对 workspace）。
+    失败降级一行文字（与 http/file 失联同语义，不炸投影）。"""
+    from multiagent import _parse_tool_expr
+    parsed = _parse_tool_expr(expr or "")
+    if not parsed:
+        return f"[image_feed 帧提供者表达式无效：{expr}]"
+    tname, targs_raw = parsed
+    tools = session._asm_workflow_tools
+    from real_tools import LIGHT_TOOLS as _LT
+    box = tools if (tools is not None and tname in tools) else _LT
+    if tname not in box:
+        return f"[image_feed 帧提供者工具 '{tname}' 不在工具箱（装备了吗？）]"
+    kwargs = {}
+    if targs_raw:
+        args = _imgfeed_argsplit(targs_raw)
+        try:
+            t = box._tools.get(tname)
+            params = t.schema.get("function", {}).get("parameters", {})
+            req = list(params.get("required") or [])
+            props = params.get("properties") or {}
+        except Exception:
+            req, props = [], {}
+        opt = [k for k in props if k not in req]
+        for i, a in enumerate(args):
+            pname = req[i] if i < len(req) else (opt[i - len(req)] if 0 <= i - len(req) < len(opt) else None)
+            if pname is None:
+                break
+            kwargs[pname] = _imgfeed_coerce(a, (props.get(pname) or {}).get("type"))
+    try:
+        out = str(box.call(tname, kwargs) or "").strip()
+    except Exception as e:
+        _LOG.warning("image_feed 帧提供者 %s 执行失败：%s", tname, e)
+        return f"[image_feed 帧提供者 {tname} 执行失败：{type(e).__name__}]"
+    m = re.search(r"data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)", out)
+    if m:
+        b64 = re.sub(r"\s+", "", m.group(2))
+        return f"@@IMGFEED@@{int(time.time())}@@data:{m.group(1)};base64,{b64}@@"
+    for cand in re.findall(r"[^\s`'\"]+\.(?:png|jpe?g|gif|webp|bmp)", out, re.IGNORECASE)[:5]:
+        p = Path(cand)
+        if not p.is_absolute():
+            p = Path(session.workspace) / cand
+        if p.exists() and p.is_file():
+            data = p.read_bytes()
+            mime = mimetypes.guess_type(str(p))[0] or "image/png"
+            return f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{base64.b64encode(data).decode()}@@"
+    return (f"[image_feed 帧提供者未返回图像（{tname}）：{out[:120]}]" if out
+            else f"[image_feed 帧提供者 {tname} 无输出]")
+
+
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
                  recent_window_turns: int = 4, max_steps_per_turn: int = 80,
@@ -1752,15 +1842,22 @@ class Session:
                 return out[:32_000]
             if kind == "image_feed":
                 # 实时画面装配段（2026-10-06·用户提案）：每步从画面服务取最新帧 → base64 挂投影末尾。
-                # src 支持 http(s)://（内存流，零落盘——推荐）与文件路径（workspace 相对）。
+                # src 支持 http(s)://（内存流，零落盘——推荐）、文件路径（workspace 相对）、
+                # tool: 前缀（2026-10-16 plan p_76f6623b 帧提供者抽象——调工具箱工具取帧，
+                # 如 {tool: skill_use('desktop-ops','frame')} 或装备的外置工具 screen_frame()）。
                 # vision 门控：非视觉模型整段静默跳过；失联/空帧降级一行文字（不炸轮）。
                 # 哨兵返回：@@IMGFEED@@<ts>@@data:<mime>;base64,<b64>@@（ts=抓取时刻，双帧对比标注用）
                 # ——桶收集处抽进图片通道，不进文本桶。
-                _src = str(item.get("image_feed") or item.get("src") or "").strip()
+                _raw = item.get("image_feed") if item.get("image_feed") is not None else item.get("src")
+                if isinstance(_raw, dict):
+                    _raw = "tool: " + str(_raw.get("tool") or "")   # {tool: expr} 形态（spec 示例语法）
+                _src = str(_raw or "").strip()
                 if not _src:
                     return ""
                 if not getattr(getattr(self, "llm", None), "vision_supported", False):
                     return ""   # 非视觉模型：静默跳过（不注入 base64，省 token + 防 400）
+                if _src.lower().startswith("tool:"):
+                    return _asm_image_feed_from_tool(_src[5:].strip(), self)
                 import urllib.request as _ur, base64 as _b64
                 try:
                     if _src.lower().startswith(("http://", "https://")):

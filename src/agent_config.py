@@ -487,6 +487,118 @@ def _resolve_skill(name: str, workspace: Path | None = None):
     return None, ""
 
 
+# ===== 技能自带装配清单（extra_assemblies，plan p_76f6623b 2026-10-16）=====
+# 技能从"工具+SOP"升级为自带装配清单的能力单元。两个装备口共用一套声明：
+#   静态口：SKILL.md frontmatter `assemblies:` 字段（子 Agent yml skills: 装备链读取）
+#   动态口：skill_equip 时技能服务 caps 上报 `EXTRA_ASSEMBLIES: <json>` 单行（服务形态技能）
+# 声明形态：[{position: before:<段名>|after:<段名>|hook:<钩子位>, ass: [...]}, ...]
+# position 语义（映射现有机制，不发明新体系）：before/after = 装备时往宿主装配清单插段
+# （定位锚 = 现有段名）；hook = 钩子项挂到钩子位（缺省 ass 时由聚合方扫技能包 workflows/）。
+# ass 复用 yml assembly 段语法（file:/func:/text:/image_feed:/tool:…）。
+# 两条铁律：①装备时冻结——装配声明解析后作为静态清单快照进宿主 session，逐轮不再重算；
+# ②作用域对称——子 Agent（multiagent._agent_skill_gear）与主 Agent（skill_equip）走同一插入逻辑。
+
+_HOOK_PFX = ("before", "after", "hook")
+
+
+def parse_extra_assemblies(decl, skill_name: str = "") -> tuple:
+    """frontmatter `assemblies:` 字段 → (extras, errors)。extras 元素：
+    {position: 原样, action: before|after|hook, anchor: 段名/钩子位, items: [已解析引擎项]}。
+    ass 复用 yml assembly 段语法（multiagent._asm_item_from_dict/_str 解析）；
+    hook: 位置的 ass 走钩子项语法（workflow:/cmd:/emit: 或裸工作流名，multiagent._hook_item_from_str
+    解析）；缺省 = 技能包 workflows/ 全部（聚合方补，不在此展开）。
+    宽松校验：position 三前缀 + 钩子位白名单（multiagent._HOOK_POSITIONS）+ 锚段名白名单
+    （multiagent._ASSEMBLY_SEGS 去 hooks——hooks 不占投影位置，锚它无意义）；
+    锚在宿主清单中的【存在性】由应用侧校验（解析层看不到宿主清单）。
+    errors 非空 = 声明坏：装备方清单化报错给装备者，不静默丢弃。"""
+    from multiagent import (_HOOK_POSITIONS, _ASSEMBLY_SEGS,
+                            _asm_item_from_dict, _asm_item_from_str, _hook_item_from_str)
+    tag = f"技能 '{skill_name}' " if skill_name else ""
+    if not decl:
+        return [], []
+    if not isinstance(decl, list):
+        return [], [f"{tag}assemblies 字段须为列表（[{{position: ..., ass: [...]}}] 形态），"
+                    f"得到 {type(decl).__name__}"]
+    extras, errors = [], []
+    for i, it in enumerate(decl):
+        if not isinstance(it, dict) or not str(it.get("position") or "").strip():
+            errors.append(f"{tag}assemblies[{i}] 须为 {{position: ..., ass: [...]}} 映射且 position 非空")
+            continue
+        pos = str(it["position"]).strip()
+        pfx, _, rest = pos.partition(":")
+        pfx, rest = pfx.strip().lower(), rest.strip()
+        if pfx not in _HOOK_PFX or not rest:
+            errors.append(f"{tag}assemblies[{i}] position '{pos}' 非法"
+                          f"（合法：before:<段名> / after:<段名> / hook:<钩子位>）")
+            continue
+        if pfx == "hook":
+            if rest not in _HOOK_POSITIONS:
+                errors.append(f"{tag}assemblies[{i}] 未知钩子位 '{rest}'"
+                              f"（合法：{'/'.join(_HOOK_POSITIONS)}）")
+                continue
+            raw = it.get("ass")
+            items = []
+            for h in (raw if isinstance(raw, list) else [raw]) if raw is not None else []:
+                if isinstance(h, dict):
+                    hv = next((f"{k}: {v}" for k, v in h.items() if k in ("workflow", "cmd", "emit")), None)
+                    h = _hook_item_from_str(hv if hv else str(h.get("value") or (next(iter(h.values())) if h else "")))
+                else:
+                    h = _hook_item_from_str(h)
+                if h.get("value"):
+                    items.append(h)
+            extras.append({"position": pos, "action": "hook", "anchor": rest, "items": items})
+        else:
+            if rest not in _ASSEMBLY_SEGS or rest == "hooks":
+                errors.append(f"{tag}assemblies[{i}] 未知锚段名 '{rest}'"
+                              f"（合法：{', '.join(sorted(_ASSEMBLY_SEGS - {'hooks'}))}）")
+                continue
+            raw = it.get("ass")
+            if raw is None or (isinstance(raw, list) and not raw) or (isinstance(raw, str) and not raw.strip()):
+                errors.append(f"{tag}assemblies[{i}] position '{pos}' 缺 ass（要插入的装配段）")
+                continue
+            items = []
+            for a in raw if isinstance(raw, list) else [raw]:
+                x = _asm_item_from_dict(a) if isinstance(a, dict) else _asm_item_from_str(a)
+                if x:
+                    items.append(x)
+            if not items:
+                errors.append(f"{tag}assemblies[{i}] ass 无可解析装配项")
+                continue
+            extras.append({"position": pos, "action": pfx, "anchor": rest, "items": items})
+    return extras, errors
+
+
+def load_skill_assemblies(name: str, workspace: Path | None = None) -> tuple:
+    """静态口装配声明读取：_resolve_skill 定位 + SKILL.md frontmatter assemblies 解析。
+    返回 (技能目录|None, extras, errors)——目录 None = 技能不存在（调用方按未知技能处理）。
+    注：不改 _resolve_skill 签名（11 处调用点按二元组解包，改三元组=全量回归）；
+    装配声明经本配套函数附带返回，零回归达成同一效果。"""
+    d, _scope = _resolve_skill(name, workspace)
+    if d is None:
+        return None, [], []
+    try:
+        fm, _ = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:
+        return d, [], [f"技能 '{name}' SKILL.md 读取失败: {e}"]
+    extras, errors = parse_extra_assemblies(fm.get("assemblies"), skill_name=name)
+    return d, extras, errors
+
+
+def parse_caps_extra_assemblies(caps_text: str, skill_name: str = "") -> tuple:
+    """动态口装配声明读取：技能服务 caps 输出里的 `EXTRA_ASSEMBLIES: <json>` 单行
+    → (extras, errors)。无该行 = 服务未上报（零声明，非错误）；JSON 坏/结构不对 = 清单化报错。
+    与静态口共用 parse_extra_assemblies 校验（两个装备口同一套声明结构）。"""
+    m = re.search(r"^EXTRA_ASSEMBLIES:\s*(.+)$", caps_text or "", re.MULTILINE)
+    if not m:
+        return [], []
+    tag = f"技能 '{skill_name}' " if skill_name else ""
+    try:
+        data = json.loads(m.group(1).strip())
+    except Exception as e:
+        return [], [f"{tag}服务上报 EXTRA_ASSEMBLIES JSON 解析失败: {e}"]
+    return parse_extra_assemblies(data, skill_name=skill_name)
+
+
 def load_skills_index(workspace: Path) -> list[dict]:
     """扫 repo .agent/skills/*/SKILL.md + 全局 ~/.agt/skills/ 中已激活技能。
     返回 [{name, description, when_to_use, path, scope}, ...]（scope=local/global；本地同名 shadow 全局）。"""
@@ -1142,6 +1254,51 @@ def _skill_services_cleanup():
         _svc_kill(n)
 
 
+def fill_default_hook_items(extras: list, skill_dir) -> None:
+    """hook: 声明缺省 ass 的补全：扫技能包 workflows/ 下的工作流（.json/.xml）挂上
+    （装备时冻结成 dir+名清单——plan p_76f6623b）。两个装备口共用（子 Agent 聚合与
+    skill_equip 同调此函数，作用域对称不写两份）。原地修改 extras。"""
+    wfd = Path(skill_dir) / "workflows"
+    if not wfd.is_dir():
+        return
+    for ex in extras or []:
+        if ex.get("action") == "hook" and not ex.get("items"):
+            ex["items"] = [{"kind": "workflow", "value": p.stem, "dir": str(wfd)}
+                           for p in sorted(wfd.iterdir())
+                           if p.is_file() and p.suffix.lower() in (".json", ".xml")]
+
+
+def apply_extras_to_session(session, extras: list, workspace=None) -> list:
+    """extra_assemblies 应用到宿主 session（主 Agent skill_equip 口；2026-10-16 plan p_76f6623b）。
+    装备时一次性重建 assembly_plan/hook_specs 快照——【冻结铁律】：此后逐轮投影只读快照，
+    不再重算装配声明（缓存安全）。与子 Agent 派活链共用 multiagent._apply_extra_assemblies
+    同一插入逻辑（作用域对称铁律②，不写两份）。返回 errors（非空 = 锚缺失等，调用方报装备方）。
+    hook_specs 为 None（主 Agent 未声明过钩子）且本次有 hook: 声明时，先物化旧式
+    .agent/workflows/ meta.hook 声明再合并——装备不吞既有钩子。"""
+    from multiagent import _apply_extra_assemblies
+    base_hooks = getattr(session, "hook_specs", None)
+    if base_hooks is None and any(e.get("action") == "hook" for e in extras or []):
+        try:
+            from multiagent import _HOOK_POSITIONS
+            from workflow import get_hook_workflows
+            from real_tools import WORKSPACE as _ws
+            base_hooks = {}
+            for hp in _HOOK_POSITIONS:
+                hws = get_hook_workflows(workspace or _ws, hp)
+                if hws:
+                    base_hooks[hp] = [{"kind": "workflow", "value": hw["name"],
+                                       "async": bool((hw.get("meta") or {}).get("async")),
+                                       "recap": bool((hw.get("meta") or {}).get("recap"))}
+                                      for hw in hws]
+        except Exception:
+            base_hooks = None
+    plan, hooks, errors = _apply_extra_assemblies(getattr(session, "assembly_plan", None),
+                                                  base_hooks, extras)
+    session.set_assembly_plan(plan)   # 静态快照（同时清 once 缓存——重算幂等）
+    session.hook_specs = hooks
+    return errors
+
+
 def skill_equip(name: str) -> str:
     """装备技能服务：拉起技能包 server.py（cwd=技能目录），返回其打印的能力清单。
     server.py 协议：启动后 stdout 打印能力清单（自由格式，含命令/参数说明）到
@@ -1176,8 +1333,41 @@ def skill_equip(name: str) -> str:
             return f"[启动即退出] server.py 退出码 {rc}。已产出输出：\n{caps or '（无）'}"
         return f"[启动超时] 30s 内未收到 ===CAPS_END=== 能力清单结束行。已产出输出：\n{caps or '（无）'}"
     _SKILL_SERVICES[name] = {"proc": p, "dir": str(d)}
+    # extra_assemblies（plan p_76f6623b）：静态口（SKILL.md frontmatter assemblies:）+
+    # 动态口（caps 的 EXTRA_ASSEMBLIES: <json> 单行）双口收集，应用到主 Agent session
+    # （装备时冻结快照）。声明坏/锚缺失 → 清单化报错（不静默丢弃），服务保留。
+    asm_note = ""
+    extras, asm_errors = [], []
+    _d, ex1, er1 = load_skill_assemblies(name)
+    if _d is not None:
+        extras.extend(ex1)
+        asm_errors.extend(er1)
+    ex2, er2 = parse_caps_extra_assemblies(caps, name)
+    extras.extend(ex2)
+    asm_errors.extend(er2)
+    if extras:
+        fill_default_hook_items(extras, d)   # hook: 缺省 ass → 技能包 workflows/（装备时冻结）
+        a = _RUNTIME_AGENT
+        sess = getattr(a, "session", None) if a is not None else None
+        if sess is None or not hasattr(sess, "set_assembly_plan"):
+            asm_note = (f"\n⚠️ 装配清单声明了 {len(extras)} 项但无主 Agent 引擎挂点（_RUNTIME_AGENT 未挂），"
+                        f"本次未应用：{'; '.join(e['position'] for e in extras)}")
+        elif asm_errors:
+            asm_note = "\n⚠️ 装配清单未应用（声明校验失败）：" + "；".join(asm_errors)
+        else:
+            try:
+                aerr = apply_extras_to_session(sess, extras)
+                if aerr:
+                    asm_note = "\n⚠️ 装配清单部分未应用：" + "；".join(aerr)
+                else:
+                    asm_note = ("\n🔗 已应用装配清单（装备时冻结快照）：" +
+                                "；".join(f"{e['position']} ← {len(e['items'])} 项" for e in extras))
+            except Exception as e:
+                asm_note = f"\n⚠️ 装配清单应用异常（服务已装备）：{type(e).__name__}: {e}"
+    elif asm_errors:
+        asm_note = "\n⚠️ 装配清单未应用（声明校验失败）：" + "；".join(asm_errors)
     return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）。能力清单：\n{caps or '（清单为空）'}\n"
-            f"用法：skill_use(name='{name}', command=\"<命令> --参数\")")
+            f"用法：skill_use(name='{name}', command=\"<命令> --参数\")" + asm_note)
 
 
 def skill_use(name: str, command: str) -> str:

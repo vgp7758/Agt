@@ -1645,9 +1645,23 @@ class Agent:
             entry = {"kind": kind, "name": name, "value": name, "async": bool(item.get("async")),
                      "recap": bool(item.get("recap")), "meta": {}}
             if kind == "workflow":
-                entry["canvas"] = (self._wf_canvas_index() or {}).get(name)
+                if item.get("dir"):
+                    # 技能包 workflows/（extra_assemblies hook: 挂载，plan p_76f6623b）：装备时冻结的
+                    # 目录路径，直接扫该目录取画布（不进 workspace 级索引——技能包不污染全局命名空间）
+                    from pathlib import Path as _P
+                    try:
+                        from workflow import _scan_wf_dir
+                        _cands = [it for it in _scan_wf_dir(_P(item["dir"]), "skill")
+                                  if it.get("name") == name and it.get("canvas") is not None and not it.get("error")]
+                        entry["canvas"] = _cands[0]["canvas"] if _cands else None
+                    except Exception as e:
+                        _LOG.warning("钩子工作流 '%s'（技能目录 %s）扫描失败: %s", name, item["dir"], e)
+                        entry["canvas"] = None
+                else:
+                    entry["canvas"] = (self._wf_canvas_index() or {}).get(name)
                 if entry["canvas"] is None:
-                    _LOG.warning("hooks 声明的工作流 '%s' 未找到（.agent/workflows/），跳过", name)
+                    _LOG.warning("hooks 声明的工作流 '%s' 未找到（%s），跳过",
+                                 name, item.get("dir") or ".agent/workflows/")
                     continue
             tasks.append(entry)
         return self._filter_hook_tasks(tasks, hook) if _apply_switch else tasks

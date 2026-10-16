@@ -1,12 +1,18 @@
 ---
 name: desktop-ops
-description: 桌面键鼠操作能力——鼠标点击/移动/拖拽、键盘按键/输入/组合键、剪切板读写、窗口列表/切换（pyautogui + pygetwindow）
+description: 桌面键鼠操作能力——鼠标点击/移动/拖拽、键盘按键/输入/组合键、剪切板读写、窗口列表/切换、画面帧截取（pyautogui + pygetwindow）
 when_to_use: 需要操作本机 GUI（点击/输入/切窗/自动化桌面流程）的 Agent 装备；配合画面帧注入（image_feed）实现"看着屏幕操作"
+assemblies:
+  - position: after:steps
+    ass:
+      - image_feed: {tool: screen_frame()}
 ---
 
 # 桌面键鼠操作 SOP
 
-本技能提供 10 个外置工具：`mouse_click` / `mouse_move` / `mouse_drag` / `key_press` / `key_type` / `key_hotkey` / `clipboard_read` / `clipboard_write` / `window_list` / `window_focus`。操作对象是本机真实 GUI——键鼠动作会影响真实桌面。
+本技能提供 11 个外置工具：`mouse_click` / `mouse_move` / `mouse_drag` / `key_press` / `key_type` / `key_hotkey` / `clipboard_read` / `clipboard_write` / `window_list` / `window_focus` / `screen_frame`。操作对象是本机真实 GUI——键鼠动作会影响真实桌面。
+
+本技能自带装配清单（SKILL.md `assemblies:`）：装备时自动往宿主装配清单 `after:steps` 插入画面帧段（`image_feed: {tool: screen_frame()}`，帧提供者抽象）——视觉宿主每步自动看到最新画面（装备时冻结快照），无需宿主 yml 手写 image_feed 段或拉起画面服务。
 
 ## 坐标规范（重要）
 

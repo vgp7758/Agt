@@ -300,32 +300,39 @@ def _agent_own_tools(name: str, agent):
         _LOG.warning("子 Agent '%s' 专属工具扫描失败: %s", name, e)
         return []
 def _agent_skill_gear(name: str, meta: dict, agent):
-    """yml `skills:` 字段装备（2026-10-16 用户裁定）：一个字段双效果——
+    """yml `skills:` 字段装备（2026-10-16 用户裁定）：一个字段三效果——
     ① 技能包 tools/*.py 外置工具注册进子 Agent 工具箱（复用 agent 目录 tools/ 的发现管线，
        来源改为技能目录，工具协议不变）；
     ② SKILL.md 的 SOP 正文注入子 Agent system 尾（子 Agent 带着作业规程上岗，
-       skill_* 工具族的手动 read_skill 流程免掉）。
-    返回 (extra_tools, sop_text, error)；error 非空 = 声明了不存在的技能名（清晰报错，调用方中断派活）。
+       skill_* 工具族的手动 read_skill 流程免掉）；
+    ③ SKILL.md frontmatter `assemblies:`/`services:` 声明聚合（plan p_76f6623b）——
+       extras=[{position, action, anchor, items}]（装备时插段/挂钩子的静态口声明），
+       services=[{名: 命令}]（技能自带依赖服务，调用方并入 _ensure_agent_services）。
+    返回 dict(tools, sop, extras, services, error)；error 非空 = 声明了不存在的技能名
+    或装配声明坏（清晰报错，调用方中断派活，不静默丢弃）。
     技能寻址走 _resolve_skill（本地 .agent/skills/ 优先，全局 ~/.agt/skills/ 已激活的也认）。"""
     names = meta.get("skills") or []
     if isinstance(names, str):   # 宽松：skills: "a,b" 字符串形态也认
         names = [x.strip() for x in names.split(",") if x.strip()]
     names = [str(x).strip() for x in names if str(x).strip()]
+    empty = {"tools": [], "sop": "", "extras": [], "services": [], "error": ""}
     if not names:
-        return [], "", ""
-    from agent_config import _resolve_skill, _split_frontmatter, load_skills_index
-    tools, chunks, missing = [], [], []
+        return empty
+    from agent_config import (_resolve_skill, _split_frontmatter, load_skills_index,
+                              load_skill_assemblies, fill_default_hook_items)
+    tools, chunks, missing, extras, services = [], [], [], [], []
     for sn in names:
         d, _scope = _resolve_skill(sn, WORKSPACE)
         if d is None:
             missing.append(sn)
             continue
         try:
-            _fm, sop = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
+            fm, sop = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
             if (sop or "").strip():
                 chunks.append(f"## 装备技能：{sn}\n\n{sop.strip()}")
         except Exception as e:
             _LOG.warning("子 Agent '%s' 装备技能 '%s' SKILL.md 读取失败: %s", name, sn, e)
+            fm = {}
         td = d / "tools"
         if td.is_dir():
             try:
@@ -333,10 +340,57 @@ def _agent_skill_gear(name: str, meta: dict, agent):
                 tools.extend(scan_script_tools(dirs=[td], agent=agent))
             except Exception as e:
                 _LOG.warning("子 Agent '%s' 装备技能 '%s' tools/ 扫描失败: %s", name, sn, e)
+        # ③ 装配声明（静态口）+ 钩子缺省 ass = 技能包 workflows/（fill_default_hook_items 共用补全）
+        _, d_ex, d_err = load_skill_assemblies(sn, WORKSPACE)
+        if d_err:
+            return {**empty, "error": f"技能 '{sn}' 装配声明错误：" + "；".join(d_err)}
+        fill_default_hook_items(d_ex, d)
+        extras.extend(d_ex)
+        svcs = fm.get("services")
+        if svcs:
+            services.extend(svcs if isinstance(svcs, list) else [svcs])
     if missing:
         known = ", ".join(s["name"] for s in load_skills_index(WORKSPACE)) or "(无已安装技能)"
-        return [], "", f"未知技能: {', '.join(missing)}（已安装: {known}）——检查 .agent/skills/<名>/SKILL.md 是否存在"
-    return tools, ("\n\n".join(chunks) if chunks else ""), ""
+        return {**empty, "error": f"未知技能: {', '.join(missing)}（已安装: {known}）——检查 .agent/skills/<名>/SKILL.md 是否存在"}
+    return {"tools": tools, "sop": ("\n\n".join(chunks) if chunks else ""),
+            "extras": extras, "services": services, "error": ""}
+
+
+def _apply_extra_assemblies(base_plan, base_hooks, extras):
+    """extra_assemblies 统一应用（plan p_76f6623b 铁律②：子 Agent 与主 Agent 走同一插入逻辑）。
+    base_plan/base_hooks：宿主装配基线（plan None = 默认清单物化副本——动作项原位插入需要实体清单）。
+    返回 (plan, hooks, errors)：errors 非空 = 锚段不在宿主清单（清晰报错给装备方，不静默丢弃）。
+    插段语义：锚段前/后插入 ass 项；多技能同锚按装备顺序稳定追加（先装备的先插）。
+    钩子语义：hook:<位> 的项并入宿主 hook_specs[位]（workflow 项带 dir=技能包 workflows/，
+    装备时冻结路径），并确保 hooks 段开关打开（hook_specs 才会被 _run_hooks 消费）。
+    冻结铁律：本函数只在装备时（派活链/ skill_equip）调用一次，产物作为静态清单快照
+    set_assembly_plan 进宿主 session，逐轮不再重算。"""
+    from session import Session   # 延迟 import（session 不依赖 multiagent，安全）
+    plan = list(base_plan) if base_plan else [dict(it) for it in Session._DEFAULT_ASSEMBLY_PLAN]
+    hooks = {k: list(v) for k, v in (base_hooks or {}).items()}
+    errors = []
+    for ex in extras or []:
+        action, anchor, items = ex["action"], ex["anchor"], ex["items"]
+        pos = ex.get("position") or f"{action}:{anchor}"
+        if action in ("before", "after"):
+            idx = next((i for i, it in enumerate(plan)
+                        if it.get("kind") == "seg" and it.get("name") == anchor), None)
+            if idx is None:
+                errors.append(f"锚段 '{anchor}' 不在宿主装配清单（{pos}）——锚必须是宿主已装配的段名")
+                continue
+            if action == "after":
+                at = idx + 1
+                while at < len(plan) and plan[at].get("_xsrc") == pos:
+                    at += 1   # 跳过同锚簇（先装备的先插——稳定追加，不插到已装备技能前面）
+            else:
+                at = idx   # before 紧贴锚插入：锚位置随每次插入后移，后装备的自然排在前装备之后（稳定）
+            plan[at:at] = [dict(dict(it), _xsrc=pos) for it in items]
+        elif action == "hook":
+            if items:
+                hooks.setdefault(anchor, []).extend(dict(it) for it in items)
+            if not any(it.get("kind") == "seg" and it.get("name") == "hooks" for it in plan):
+                plan.append({"kind": "seg", "name": "hooks"})   # hooks 段开关打开（与 yml hooks 声明同款派生）
+    return plan, hooks, errors
 
 
 # assembly DSL v2：有序装配清单。合法段名（8 段）：必装段 system/user_message/steps 恒装
@@ -549,7 +603,10 @@ def _asm_item_from_dict(d: dict):
         return _asm_item_from_str(str(d["seg"]))
     for k in _ASSEMBLY_ACTIONS:
         if k in d and d[k]:
-            val = str(d[k]).strip()
+            raw_val = d[k]
+            val = raw_val.strip() if isinstance(raw_val, str) else raw_val
+            # 非 str 值原样保留（2026-10-16 image_feed: {tool: expr} dict 形态——帧提供者抽象，
+            # plan p_76f6623b）；str 值 strip 行为与历史一致，零回归。
             if k == "func":
                 # {func: load_models()} → 剥掉尾随 ()
                 val = val.rstrip("()").strip()
@@ -595,7 +652,6 @@ def _normalize_assembly_plan(items: list) -> list:
         plan.insert(pos, {"kind": "seg", "name": seg})
         present.add(seg)
     return plan
-
 
 def _parse_assembly(meta: dict) -> list:
     """frontmatter 的 assembly 字段 → 有序装配清单（v2）。
@@ -944,10 +1000,12 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
         from multiagent import _agent_own_tools
-        sk_tools, sk_sop, sk_err = _agent_skill_gear(entry.name, meta, agent)
-        if sk_err:   # 复活遇未知技能名 → 落回新建路径（同样会报错给派发方，不静默吞）
-            _LOG.warning("子 Agent '%s' 复活：skills 装备失败（%s）→ 落回新建", entry.name, sk_err)
+        _sk_bundle = _agent_skill_gear(entry.name, meta, agent)
+        if _sk_bundle["error"]:   # 复活遇未知技能名/装配声明坏 → 落回新建路径（同样会报错给派发方，不静默吞）
+            _LOG.warning("子 Agent '%s' 复活：skills 装备失败（%s）→ 落回新建", entry.name, _sk_bundle["error"])
             return None
+        sk_tools, sk_sop = _sk_bundle["tools"], _sk_bundle["sop"]
+        # extras 不在此应用：调用方派活链已在基线处合并（base_asm/base_hooks 一处合并三路生效）
         toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
         toolbox = Toolbox(*list(toolbox), *_agent_own_tools(entry.name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
         if sk_sop:   # 技能 SOP 注入 system 尾（与新建路径同源）
@@ -1254,6 +1312,7 @@ def make_subagent_tools(agent) -> list:
         base_asm = None
         base_hooks = None
         base_fb = None
+        _meta = {}
         if p_md is not None and p_md.exists():
             try:
                 from agent_config import load_agent_yml
@@ -1263,6 +1322,16 @@ def make_subagent_tools(agent) -> list:
                 base_fb = _parse_agent_fallback(_meta)
             except Exception:
                 pass
+        # skills 装备（工具+SOP+装配声明）在基线读取处一次聚合（plan p_76f6623b）：
+        # extras 在此并入 base_asm/base_hooks——复用/复活/新建三条路径共用同一合并产物（一处合并三路生效，
+        # 复用路径 set_assembly_plan 才不会把装备的插段冲掉）；声明坏/锚缺失在此中断派活（装备时报错，不静默）。
+        sk_bundle = _agent_skill_gear(name, _meta, agent)
+        if sk_bundle["error"]:
+            return f"[skills 装备失败] {sk_bundle['error']}"
+        if sk_bundle["extras"]:
+            base_asm, base_hooks, sk_aerr = _apply_extra_assemblies(base_asm, base_hooks, sk_bundle["extras"])
+            if sk_aerr:
+                return "[skills 装配失败] " + "；".join(sk_aerr)
         # 子 Agent 默认装 recap_gen（turn_end·async）：队友看板里的 recap 由本地小模型生成（零 token）。
         # yml 未声明 hooks → 注入默认；已声明 turn_end 但缺 recap_gen → 追加；显式关（assembly 参数 hooks=off）→ 不注入。
         if base_hooks is None:
@@ -1547,10 +1616,13 @@ def make_subagent_tools(agent) -> list:
         # .yml：正文为空、persona 在 assembly text: 项里 → system 传空；.md 旧格式无正文才用兜底文案
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
-        _ensure_agent_services(meta, agent)   # 依赖服务幂等拉起（2026-10-06 用户提案）
-        sk_tools, sk_sop, sk_err = _agent_skill_gear(name, meta, agent)
-        if sk_err:   # 声明了不存在的技能名 → 清晰报错，不派活（2026-10-16 skills 字段）
-            return f"[skills 装备失败] {sk_err}"
+        # 技能自带 services（plan p_76f6623b）：SKILL.md frontmatter services: 声明并入拉起清单
+        # （yml services 同构形态：list of {名: 命令}；dict 形态包一层）。一次调用合并清单（_ensure 幂等）。
+        _decl_svcs = meta.get("services") or []
+        _all_svcs = ([_decl_svcs] if isinstance(_decl_svcs, dict) else list(_decl_svcs)) + sk_bundle["services"]
+        if _all_svcs:
+            _ensure_agent_services({**meta, "services": _all_svcs}, agent)
+        sk_tools, sk_sop = sk_bundle["tools"], sk_bundle["sop"]   # 装备已在基线处聚合（extras 已并入 base_asm/base_hooks）
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
         toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
         if sk_sop:   # 技能 SOP 注入 system 尾（yml v2 场景 persona 在 assembly file 项，system 段只装 SOP）

@@ -158,14 +158,21 @@ def test_e2e_reuse_then_restart(tmp_path, fake_frame_server):
     assert len(ag2.services.started) == 1                 # 死 → 重拉
 
 
-# ── ⑤ desktop-operator 声明形态（行式兼容 WebUI）──────────
+# ── ⑤ desktop-operator 声明形态（extra_assemblies 迁移后，2026-10-16 p_76f6623b）──
 
 def test_desktop_operator_svc_line_parses():
+    """迁移后 yml 无 services/image_feed 段（画面帧收进 desktop-ops SKILL.md 装配声明，
+    帧提供者=screen_frame 工具，不再拉 8765 帧服务）。行式解析语义（WebUI 兼容）用字面行保测。"""
     from agent_config import load_agent_yml
     root = Path(__file__).resolve().parent.parent
     meta, _ = load_agent_yml(root / ".agent" / "agents" / "desktop-operator" / "desktop-operator.yml")
-    (val,) = list(meta["services"][0].values())
-    assert isinstance(val, str), "行式单值（WebUI textarea 直读直写兼容）"
-    cmd, url = ma._svc_spec(val)
-    assert cmd.endswith("image_feed_poc.py 8765")
-    assert url == "http://127.0.0.1:8765/frame"
+    assert not meta.get("services"), "yml services 已收进技能装配（迁移后不声明）"
+    cmd, url = ma._svc_spec("python x.py 8765 | reuse=http://127.0.0.1:8765/frame")
+    assert cmd == "python x.py 8765" and url == "http://127.0.0.1:8765/frame"   # 行式解析语义不变
+    skill_md = (root / ".agent" / "skills" / "desktop-ops" / "SKILL.md").read_text(encoding="utf-8")
+    assert "server.py" not in skill_md and "services:" not in skill_md   # desktop-ops 纯工具形态（无服务）
+    from agent import Agent
+    from tools import Toolbox
+    main = Agent(system="t", tools=Toolbox(), model_name=None, verbose=False)
+    sk = ma._agent_skill_gear("desktop-operator", meta, main)
+    assert sk["services"] == [] and sk["error"] == ""                     # 技能聚合 services 为空

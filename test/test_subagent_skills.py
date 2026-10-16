@@ -59,16 +59,16 @@ def _mk_skill(ws_root, name, script=None, body="SOP body"):
 
 def test_skill_tools_registered(ws):
     _mk_skill(ws, "pack-a", script=SKILL_SCRIPT)
-    tools, sop, err = ma._agent_skill_gear("x", {"skills": ["pack-a"]}, None)
-    assert err == ""
-    assert [t.name for t in tools] == ["hello_tool"]      # 外置工具协议不变（函数+docstring→Tool）
-    assert sop.startswith("## 装备技能：pack-a") and "SOP body" in sop
+    b = ma._agent_skill_gear("x", {"skills": ["pack-a"]}, None)
+    assert b["error"] == ""
+    assert [t.name for t in b["tools"]] == ["hello_tool"]      # 外置工具协议不变（函数+docstring→Tool）
+    assert b["sop"].startswith("## 装备技能：pack-a") and "SOP body" in b["sop"]
 
 
 def test_skill_without_tools_dir_only_sop(ws):
     _mk_skill(ws, "pack-doc")
-    tools, sop, err = ma._agent_skill_gear("x", {"skills": ["pack-doc"]}, None)
-    assert (tools, err) == ([], "") and "SOP body" in sop
+    b = ma._agent_skill_gear("x", {"skills": ["pack-doc"]}, None)
+    assert (b["tools"], b["error"]) == ([], "") and "SOP body" in b["sop"]
 
 
 # ── ② SOP 注入（system 尾拼接语义，与两处调用点同式）──────
@@ -84,28 +84,29 @@ def test_sop_merge_semantics():
 # ── ③ 未知技能名清晰报错 ────────────────────────────────
 
 def test_unknown_skill_error(ws):
-    tools, sop, err = ma._agent_skill_gear("x", {"skills": ["ghost"]}, None)
-    assert (tools, sop) == ([], "")
-    assert "ghost" in err and "已安装" in err              # 报错含名字 + 已装清单
+    b = ma._agent_skill_gear("x", {"skills": ["ghost"]}, None)
+    assert (b["tools"], b["sop"]) == ([], "")
+    assert "ghost" in b["error"] and "已安装" in b["error"]              # 报错含名字 + 已装清单
 
 
 def test_unknown_mixed_with_known(ws):
     _mk_skill(ws, "pack-a", script=SKILL_SCRIPT)
-    tools, sop, err = ma._agent_skill_gear("x", {"skills": ["pack-a", "ghost"]}, None)
-    assert (tools, sop) == ([], "") and "ghost" in err     # 有未知 → 整体拒绝（不半装备）
+    b = ma._agent_skill_gear("x", {"skills": ["pack-a", "ghost"]}, None)
+    assert (b["tools"], b["sop"]) == ([], "") and "ghost" in b["error"]     # 有未知 → 整体拒绝（不半装备）
 
 
 # ── ④ 无 skills 字段零影响 / 字符串形态兼容 ──────────────
 
 def test_no_skills_noop():
-    assert ma._agent_skill_gear("x", {}, None) == ([], "", "")
-    assert ma._agent_skill_gear("x", {"skills": []}, None) == ([], "", "")
+    empty = {"tools": [], "sop": "", "extras": [], "services": [], "error": ""}
+    assert ma._agent_skill_gear("x", {}, None) == empty
+    assert ma._agent_skill_gear("x", {"skills": []}, None) == empty
 
 
 def test_string_form(ws):
     _mk_skill(ws, "pack-a", script=SKILL_SCRIPT)
-    tools, _, err = ma._agent_skill_gear("x", {"skills": "pack-a"}, None)
-    assert err == "" and len(tools) == 1
+    b = ma._agent_skill_gear("x", {"skills": "pack-a"}, None)
+    assert b["error"] == "" and len(b["tools"]) == 1
 
 
 # ── ⑤ desktop-operator 实例化 e2e（真实声明+真实技能包）──
@@ -118,21 +119,26 @@ def test_desktop_operator_instantiation():
     assert system == ""                                    # yml v2：persona 在 assembly
 
     main = Agent(system="t", tools=Toolbox(), model_name=None, verbose=False)
-    sk_tools, sk_sop, sk_err = ma._agent_skill_gear("desktop-operator", meta, main)
-    assert sk_err == ""
+    sk = ma._agent_skill_gear("desktop-operator", meta, main)
+    assert sk["error"] == ""
     toolbox, _ = ma._resolve_tools(main, meta.get("tools", ""))
-    toolbox = Toolbox(*list(toolbox), *ma._agent_own_tools("desktop-operator", main), *sk_tools)
-    system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
+    toolbox = Toolbox(*list(toolbox), *ma._agent_own_tools("desktop-operator", main), *sk["tools"])
+    system = ((system or "").rstrip() + "\n\n" + sk["sop"]).strip()
 
     sub = ma.SubAgent("desktop-operator", None, system, toolbox, registry=None, agent_id="do_e2e_1")
     names = {t.name for t in sub.agent.tools}
     assert KEY_MOUSE_TOOLS <= names, f"键鼠工具缺: {KEY_MOUSE_TOOLS - names}"   # 键鼠 10 工具在箱
     assert "坐标规范" in sub.agent.base_system and "操作纪律" in sub.agent.base_system   # SOP 在 system
 
-    plan = ma._parse_assembly(meta)                        # image_feed 装配照常
-    feeds = [it for it in plan if it.get("kind") == "image_feed"]
-    assert feeds and feeds[0].get("image_feed") == "http://127.0.0.1:8765/frame"
-    assert any(it.get("kind") == "file" and "desktop-operator.md" in json.dumps(it) for it in plan)
+    plan = ma._parse_assembly(meta)                        # yml 基线：image_feed 段已迁进技能 SKILL.md
+    assert not [it for it in plan if it.get("kind") == "image_feed"]   # yml 不再手写 image_feed（瘦身）
+    assert meta.get("services") in (None, [], {}), "yml services 声明已收进技能（不再有 8765 帧服务）"
+    # 技能自带装配声明合并 → image_feed 段回来（tool: 帧提供者，装备时冻结）
+    plan2, _, errs = ma._apply_extra_assemblies(plan, None, sk["extras"])
+    assert errs == [] and sk["extras"], f"desktop-ops 应带装配声明: {sk['extras']}"
+    feeds = [it for it in plan2 if it.get("kind") == "image_feed"]
+    assert feeds and "screen_frame" in str(feeds[0].get("image_feed")), f"帧提供者应为 screen_frame: {feeds}"
+    assert any(it.get("kind") == "file" and "desktop-operator.md" in json.dumps(it) for it in plan2)
 
 
 def test_desktop_operator_tools_dir_no_stray_tools():

@@ -6,6 +6,8 @@
 
 ## 声明形态（首个实例 desktop-operator）
 
+### 声明形态（首个实例 desktop-operator）
+
 ```yaml
 # .agent/agents/desktop-operator/desktop-operator.yml（节选）
 assembly:
@@ -15,8 +17,10 @@ assembly:
   - steps
   - image_feed: http://127.0.0.1:8765/frame   # 必须在 steps 之后（区3 尾部）
 services:
-  - desktop-frame: python tools/image_feed_poc.py 8765
+  - desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765
 ```
+
+> services 命令 2026-10-16 起指 agent 目录真身（`_ensure_agent_services` 按 **workspace 相对路径**执行命令；旧 `tools/…` 写法靠 workspace 根巧合同名文件才能跑、**播种必坏**，commit 0c9033e，详见 [multi-agent · services 声明 · 路径坑](../architecture/multi-agent.md)）。
 
 ## 求值语义（src/session.py，`kind == "image_feed"`）
 

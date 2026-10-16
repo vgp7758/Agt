@@ -100,7 +100,7 @@ yml: skills: [desktop-ops]
 | md 人设 | 1200 字含坐标规范/操作纪律全套 | 瘦身为角色定位 + 工作循环 + 职责边界（操作细则归 SKILL.md） |
 | 工具来源 | agent 目录专属工具 | 技能装备（`group: desktop` 不变） |
 
-**image_feed 装配段与 services 声明零回归**：画面能力（desktop-frame 服务 + image_feed 装配）与键鼠能力（技能）解耦后照常——`_parse_assembly` 解析 image_feed 段、`_ensure_agent_services` 拉起帧服务均原样（服务复用见[后记四](#后记四跨实例服务复用reuse-探测-url帧服务全局单例2026-10-16用户补充提案施工中)）。
+**image_feed 装配段与 services 声明零回归**：画面能力（desktop-frame 服务 + image_feed 装配）与键鼠能力（技能）解耦后照常——`_parse_assembly` 解析 image_feed 段、`_ensure_agent_services` 拉起帧服务均原样（服务复用见[后记四](#后记四跨实例服务复用reuse-探测-url帧服务全局单例2026-10-16用户补充提案commit-3f0bf0d)；services 命令路径坑见[路径坑](#路径坑services-命令相对路径本机能跑纯属巧合播种必坏2026-10-16--二commit-0c9033e)）。
 
 ### 分发三件套
 
@@ -112,7 +112,7 @@ yml: skills: [desktop-ops]
 
 test/test_subagent_skills.py 九例全绿：技能 tools 注册（外置工具协议不变）/ 仅 SOP 无 tools/、SOP 拼接语义（persona 空/非空两态）/ 未知技能报错（含已安装清单）/ 未知+已知混合（已知照常装备）/ 无 skills 零影响 / 字符串形态 / **desktop-operator 实例化 e2e**（真实声明+真实技能包→键鼠 10 工具在箱、SOP 在 system、image_feed 装配段在）/ tools/ 目录干净（只剩服务脚本，扫不出工具）。既有回归：test_global_skills + test_market 37 过、test_script_tools 12 过 3 失败（HEAD 基线复验为既有失败，与本次无关）。
 
-**关联**：[技能体系](../features/skills.md)（寻址与七件套协议）· [desktop-operator 与 image_feed](../features/image-feed.md)（画面能力解耦后不变）· [子 Agent 目录形态](#子-agent-目录形态name-自包含目录yml--md-人设--tools-专属工具2026-09-28用户提案commit-2cec328)（专属工具管线——技能装备复用其扫描器）· [workspace 播种](../features/workspace-seeding.md)（seed_default_skills）
+**主 Agent 验收轮（2026-10-16 · 二）**：worker 交付后复跑 test_subagent_skills + test_agent_services_reuse → **19 passed**；函数级直测真实声明 + 真实技能包：`_agent_skill_gear` → 键鼠 10 工具全注册 + SOP 注入 ✓，`_svc_spec` → 剥后缀干净 ✓。**e2e 实战首验「失败」定性为旧进程跑旧代码（非代码 bug）**：派 desktop-operator 复验报「画面不可达 + 工具不在箱」，服务日志 `'reuse' is not recognized` 铁证——该实例进程还是 3f0bf0d 之前的代码（旧代码无 `_svc_spec`，把 `… 8765 | reuse=http://…` 整串当命令跑，`\|` 被 cmd.exe 当管道 → rc=255 秒退；工具不挂载同理——旧代码不识别 `skills:` 字段）。`/restart` 加载新代码后已派装备链复验（画面 / 工具 / SOP 三问）。验收轮顺带抓到并修掉 services 命令相对路径坑（0c9033e，见[后记四 · 路径坑](#路径坑services-命令相对路径本机能跑纯属巧合播种必坏2026-10-16--二commit-0c9033e)）。
 
 ## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
 
@@ -120,12 +120,14 @@ test/test_subagent_skills.py 九例全绿：技能 tools 注册（外置工具�
 
 ### 声明形态（desktop-operator.yml）
 
+#### 声明形态（desktop-operator.yml）
+
 ```yaml
 services:
-  - desktop-frame: python tools/image_feed_poc.py 8765
+  - desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765
 ```
 
-列表 of 单键映射；裸 dict 形态也认（`services: {名: 命令}` 包成单元素列表）。
+列表 of 单键映射；裸 dict 形态也认（`services: {名: 命令}` 包成单元素列表）。**命令按 workspace 相对路径执行**——agent 专属服务一律指 `.agent/agents/<name>/tools/…` 真身（早期 `tools/…` 写法靠 workspace 根巧合同名文件才能跑、播种必坏，见[路径坑](#路径坑services-命令相对路径本机能跑纯属巧合播种必坏2026-10-16--二commit-0c9033e)；跨实例复用后缀见[后记四](#后记四跨实例服务复用reuse-探测-url帧服务全局单例2026-10-16用户补充提案commit-3f0bf0d)）。
 
 ### 行为链（src/multiagent.py `_ensure_agent_services`）
 
@@ -160,7 +162,7 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 
 机制细节与冒烟（quiet-demo 蜜月 3s 秒退零回调 / loud-demo 无蜜月秒退正常回调）见 [background-scheduler · 启动蜜月](../features/background-scheduler.md)。
 
-### 后记四：跨实例服务复用——reuse 探测 URL，帧服务全局单例（2026-10-16，用户补充提案，施工中）
+### 后记四：跨实例服务复用——reuse 探测 URL，帧服务全局单例（2026-10-16，用户补充提案，commit 3f0bf0d）
 
 **用户补充提案（2026-10-16，desktop-ops 技能化施工线中途追加）**：desktop-frame 帧服务应【全局单例】——多 agt 实例并开时，实例 A 装备技能把服务拉起来，实例 B 装备时不重复拉起而是**复用已活服务**。现状的幂等拉起只看本实例服务池，跨实例无感知——每实例各起一份服务进程，抢同一 GUI/端口。
 
@@ -168,7 +170,7 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 
 ```yaml
 services:
-  - desktop-frame: python tools/image_feed_poc.py 8765 | reuse=http://127.0.0.1:8765/frame
+  - desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765 | reuse=http://127.0.0.1:8765/frame
 ```
 
 三件套（src/multiagent.py）：
@@ -190,7 +192,18 @@ services:
 | kill_agent 停服循环（只取键名） | 零改动 |
 | 旧形态声明（无后缀） | `_svc_spec` 返回空 reuse_url → 不探测直接拉起，行为与从前一致 |
 
-**验证**：test/test_agent_services_reuse.py 十例全绿——`_svc_spec` 旧/新/无空格三形态、`_probe_alive` 真 socket 三态（200 image / 404 text 判特征 / 连接拒绝）、`_ensure_agent_services` 探测活→start 未调、探测死→start 被调、无 reuse 不探测；e2e 往返：真起假帧服务→装备复用（start 零调用），`server_close()` 杀掉等端口释放→装备重拉。测试坑：`_probe_alive` 吞异常返回 `(False, reason)` 从不抛——断言要看返回值不能 `pytest.raises`。
+**验证**：test/test_agent_services_reuse.py 十例全绿——`_svc_spec` 旧/新/无空格三形态、`_probe_alive` 真 socket 三态（200 image / 404 text 判特征 / 连接拒绝）、`_ensure_agent_services` 探测活→start 未调、探测死→start 被调、无 reuse 不探测；e2e 往返：真起假帧服务→装备复用（start 零调用），`server_close()` 杀掉等端口释放→装备重拉。测试坑：`_probe_alive` 吞异常返回 `(False, reason)` 从不抛——断言要看返回值不能 `pytest.raises`。主 Agent 验收轮（2026-10-16 · 二）复跑 19 passed + `_svc_spec` 函数级直测剥后缀干净（见上文[技能装备机制 · 验证](#验证)）。
+
+#### 路径坑：services 命令相对路径——本机能跑纯属巧合，播种必坏（2026-10-16 · 二，commit 0c9033e）
+
+**顺手抓到的真 bug（主 Agent 验收轮，commit `0c9033e`）**：repo 生效版 desktop-operator.yml 的 services 命令写作 `python tools/image_feed_poc.py 8765`——`_ensure_agent_services` 以 cwd=workspace 执行，本机一直能跑的真相是：**workspace 根的 `tools/` 里躺着本 repo 826 轮时代的历史遗留同名文件**，命令碰巧命中它。通用 repo 播种后 workspace 根没有这个文件 → desktop-frame 永远拉不起（播种源自 789d88e 起已写对自包含路径，repo 生效版漏改——两层声明同构对账漏了一处）。
+
+| 层 | 修复前 | 修复后 |
+|---|---|---|
+| repo 生效版 `.agent/agents/desktop-operator/desktop-operator.yml` | `python tools/image_feed_poc.py 8765`（靠 workspace 根巧合文件） | `python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765`（0c9033e，主 Agent 修） |
+| 播种源 `src/agents/desktop-operator/desktop-operator.yml` | — | 自包含路径（worker 落地时已写对） |
+
+**教训**：services 命令按 **workspace 相对路径**执行——agent 专属服务的命令一律指 `.agent/agents/<name>/tools/…` 真身，绝不依赖 workspace 根的巧合同名文件（与 [workspace 播种 · services 命令自包含化](../features/workspace-seeding.md) 同口径）。
 
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 

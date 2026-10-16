@@ -121,6 +121,28 @@ if(cls==='sys' && text){
 
 纯前端（`addRow` + CSS 一处，src/static/index.html），**Ctrl+F5 刷新即生效**，无需 `/restart`（与[系统气泡 markdown 渲染](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)同属纯前端层）。
 
+## answer 气泡下渲染「本轮拉起的 sub-agent」快捷按钮（2026-10-16，用户提案，施工中）
+
+**用户提案（2026-10-16）**：有拉起 sub-agent 的轮，answer 气泡的「📎 本轮变更文件框」和正文之间渲染该 sub-agent 的快捷按钮——点击**新标签打开对方页面**。两个场景：
+
+1. **手动派活轮**：主 Agent 某轮调 `agent_prompt(name="coder", …)` 派活 → 该轮气泡渲染 `▸ coder` 按钮，点击打开 `/agents/<agent_id>`；
+2. **施工自动派发轮**：create_plan / spec approved 触发施工钩子自动 `agent_prompt(name="worker", agent_id="worker-p_<plan_id>")` → 同轮气泡渲染 `▸ worker` 按钮——**钩子触发的派发同样记 events.jsonl**（走同一 agent_prompt 通道，该轮 tool_use 里扫得到），两个场景同一数据源覆盖。
+
+### 设计要点（已派 coder 施工，2026-10-16）
+
+| 环节 | 设计 |
+|---|---|
+| 数据源 | events.jsonl 按轮扫 tool_use 中工具名=`agent_prompt` 的调用；解析入参 `name` + **实际 agent_id**（从工具结果 `agent_id=xxx` 取——registry 命名 `name` / `name-<hash>`，施工线 `worker-p_<plan_id>`） |
+| 去重 | 同一 agent 同轮多次派活只渲染一个按钮 |
+| 渲染位置 | answer 气泡内、正文与「📎 本轮变更文件」框之间一行按钮；无派活的轮零渲染不占位 |
+| 点击 | `window.open('/agents/<agent_id>')` 新标签打开子 Agent 页面（路由既有） |
+
+### 状态
+
+已派 coder 施工中（2026-10-16，coder_2）。撞车规避：worker-p_76f6623b（技能中间件施工线）也在改 server.py——任务书明确 coder 只动轮数据/历史 API 区。天然活体验证：派工这轮本身（coder 完工后，该轮 answer 气泡应出现 `▸ coder` 按钮）。
+
+**关联**：[answer 多 Agent 分页](#answer-多-agent-分页indexhtml--agentpy2026-08-21)（同轮子 Agent 输出的另一呈现）· [用户直派 @name](../architecture/multi-agent.md#用户直派通道name-任务第三条派活入口2026-10-15用户提案)（同样走 agent_prompt 通道）· [施工委托 worker](../architecture/multi-agent.md#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（场景 ② 的派发源）
+
 ## answer 气泡行内富文本与资源渲染（2026-09-04，用户提案，commit 4baa66a）
 
 用户提案：agent 回答时在 answer 气泡中解析渲染 markdown 引用——链接可点、图片成框、音频成播放控件。此前 answer 的行内文本只有 `` `code` `` 高亮（`inlineCode`），其余全裸文本；这是 answer 气泡从「纯文本+表格+代码块」走向多模态呈现的一步。

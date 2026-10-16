@@ -119,9 +119,13 @@ def _do_focus(a):
         return f"[未找到窗口] 标题不含 {kw!r}"
     w = cands[0]
     try:
+        if w.isMinimized:
+            w.restore()   # 最小化窗口 activate() 静默无效——先还原再激活
+            time.sleep(0.3)
         w.activate()
     except Exception:
         w.minimize(); w.restore()
+    time.sleep(0.3)   # 等前台切换稳定
     return f"✅ 已切换窗口：{w.title[:60]}"
 
 

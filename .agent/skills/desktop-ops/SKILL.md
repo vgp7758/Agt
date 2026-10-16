@@ -5,7 +5,7 @@ when_to_use: 需要操作本机 GUI（点击/输入/切窗/自动化桌面流程
 assemblies:
   - position: after:steps
     ass:
-      - image_feed: {tool: skill_command(name="desktop-ops", command="screen_capture")}
+      - image_feed: {tool: 'skill_command(name="desktop-ops", command="screen_capture")'}
 ---
 
 # 桌面键鼠操作 SOP

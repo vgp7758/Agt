@@ -164,6 +164,31 @@ profile.connect_timeout / write_timeout（models.json 模型卡片）
 
 `/restart` 生效。**教训**：docstring 写满行为的空壳方法比没有这个方法更隐蔽——调用点看起来防线齐全（两个主调用路径都调了），实际什么都不做；审查时「方法被调用」≠「方法生效」，行为承诺必须对着实现体核一遍。
 
+## 七、坏图自愈：_strip_image_parts——400 图解码失败剥图重试（2026-10-16，worker 施工线实锤）
+
+### 事故背景
+
+worker-p_76f6623b（技能中间件施工线）**连续 3 轮起步即断**：请求被端点以 `400 BadRequest: image data 0 failed: Unable to decode the image … corrupted or incomplete` 拒绝 → 回退链 glm-official-flash → glm-official → deepseek 三模型**连锁记冷却**（各 ~300s）→ 施工派发钩子重派 → 撞同一张坏图 → 再冷却……重派循环空转（400 不扣费，代价是通知噪音 + 节奏被 300s 冷却拖慢）。
+
+**定性**：这不是「端点不支持图」（那走本页第五章端点拒图自愈——图是好的、端点能力位错，重刷投影即可降级），而是**图片数据本身坏了**——重刷投影也没用，图还是那张坏图，剥掉才能通。
+
+### 机制（src/llm_client.py，commit 本地 · /restart 生效）
+
+| 环节 | 设计 |
+|---|---|
+| 触发 | 400 且错误文本含图解码失败特征（`decode the image` / `image data` + `corrupt`/`incomplete`） |
+| 动作 | `_strip_image_parts(messages)` 剔除消息里**全部 image_url 部件**（文本部件保留；全图 content 退空串）→ **同模型重试** |
+| 三不 | 不记冷却、不回退、不换 token——模型没毛病，坏的是请求里携带的图 |
+| 防循环 | 每次 chat 调用最多自愈一次 |
+| 可观测 | 自愈时打日志「剔除 N 个 image_url 部件」——**N 就是根因线索**：worker 施工请求本不该带任何图，N>0 即装配源头混入了图，顺 N 追溯 |
+
+单测四例全绿：剔除计数 3 ✓ / 纯文本消息原样保留 ✓ / 全图 content 退空串 ✓ / 触发特征正负例 ✓。
+
+### 注意
+
+- 自愈是**绕过不是根治**：坏图根因（谁往 worker 请求里塞了坏图）未定位——重启后若日志出现自愈行，顺 N 查装配源头
+- 与第五章的分工：**拒图 = 能力位错 → 重刷投影降文字；坏图 = 数据坏 → 剥图重试**。触发特征不同（InvalidParameter 图解码 vs 能力拒图），两条路径不重叠、互不抢
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：

@@ -121,7 +121,7 @@ if(cls==='sys' && text){
 
 纯前端（`addRow` + CSS 一处，src/static/index.html），**Ctrl+F5 刷新即生效**，无需 `/restart`（与[系统气泡 markdown 渲染](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)同属纯前端层）。
 
-## answer 气泡下渲染「本轮拉起的 sub-agent」快捷按钮（2026-10-16，用户提案，施工中）
+## answer 气泡下渲染「本轮拉起的 sub-agent」快捷按钮（2026-10-16，用户提案，commit 9f8982d 首版落地 · 历史轮渲染修复中）
 
 **用户提案（2026-10-16）**：有拉起 sub-agent 的轮，answer 气泡的「📎 本轮变更文件框」和正文之间渲染该 sub-agent 的快捷按钮——点击**新标签打开对方页面**。两个场景：
 
@@ -139,9 +139,27 @@ if(cls==='sys' && text){
 
 ### 状态
 
-已派 coder 施工中（2026-10-16，coder_2）。撞车规避：worker-p_76f6623b（技能中间件施工线）也在改 server.py——任务书明确 coder 只动轮数据/历史 API 区。天然活体验证：派工这轮本身（coder 完工后，该轮 answer 气泡应出现 `▸ coder` 按钮）。
+首版已落地（2026-10-16，commit 9f8982d，coder_2 施工 · 主 Agent 代为 commit）：纯前端 +35 行，index.html 七处 hunk，**零后端改动**——agent_id 改由前端从派活工具结果首行正则就地提取（`🚀 已启动子 Agent 'coder' [agent_id=coder-ab12]（异步…）`，multiagent.py L1566 确认格式；`to_history` 结果截 500 字、id 恒在首行），避开了 worker-p_76f6623b 施工线正在改的 server.py。
 
-**关联**：[answer 多 Agent 分页](#answer-多-agent-分页indexhtml--agentpy2026-08-21)（同轮子 Agent 输出的另一呈现）· [用户直派 @name](../architecture/multi-agent.md#用户直派通道name-任务第三条派活入口2026-10-15用户提案)（同样走 agent_prompt 通道）· [施工委托 worker](../architecture/multi-agent.md#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（场景 ② 的派发源）
+**验收打回（主 Agent playwright 实测，2026-10-16）**：实时轮路径代码上通，但**刷新后历史轮 0 按钮**——嫌疑收敛到初次加载的轮数据流（renderHistory 的 turns 若不走 `to_history` 构造，`t.steps.tool_calls` 形态不符/为空，收集空转）。已带四条实锤打回 coder_2 修复；修复自测（刷新后按钮出现 + 点击跳转）通过后再做最终页面验收——天然活体：派工那轮自身气泡应长出 `▸ coder` 按钮。
+
+## 首版落地清单（2026-10-16，commit 9f8982d，纯前端 +35 行）
+
+落地形态 = 改动最小路线：**前端就地正则解析工具结果，后端零改动**（agent_id 不走 registry 查询，直接从 `agent_prompt` 结果首行提取——`to_history` 已带 name/arguments/result，id 恒在首行）。
+
+| 位置（src/static/index.html） | 改动 |
+|---|---|
+| L402-406 | `.ans-subagents` / `.ans-sub-btn` 样式（贴 `.ans-tab` 胶囊风：圆角、hover 变灰） |
+| L1308-1329 | 三函数：`_parseSubagent()`（正则解析 `子 Agent 'xxx' [agent_id=<id>]`，仅认 tool_name=agent_prompt）· `collectSubagent()`（按 agent_id 去重进 `curTurn.subagents`）· `subagentsBarHtml()`（`▸ <name>` 按钮行 + hover 提示，`window.open('/agents/<agent_id>')`；空列表零渲染不占位） |
+| L1338 | `renderAnswerPages()` tail = `subagentsBarHtml(...) + unmentionedChangesHtml(...)`——按钮行插在【正文与 📎 变更文件折叠区之间】 |
+| L1482 | `renderHistTurn` 历史轮：扫 `t.steps.tool_calls` 中 `name==='agent_prompt'` 的调用收集（读档/展开更早轮均渲染） |
+| L3741 | `current_turn` 补发轮同款收集（刷新后进行中轮 answer 完成时不丢按钮） |
+| L3823 | 实时 `tool_result` 事件收集（场景①手动派活轮即时生效） |
+| L1640 | 复制气泡的克隆剔除列表追加 `.ans-subagents`（按钮字不混进复制内容） |
+
+**与原设计的差异**：原设想读档层解析「入参 name + 结果 agent_id」，落地改为前端正则解析结果文本（见上）；场景②（施工钩子派发）无实时 tool_result 事件，靠已记入 events.jsonl 的 tool_calls 在读档渲染时补出按钮——刷新/重连即见。
+
+**单测**（node 模拟结果文本四形态）14/14：新建/复用解析、启动失败与无关工具零误触、同 id 去重、空列表零渲染、跳转 URL/hover 提示/XSS 转义；`node --check` 全页 inline script 通过。
 
 ## answer 气泡行内富文本与资源渲染（2026-09-04，用户提案，commit 4baa66a）
 

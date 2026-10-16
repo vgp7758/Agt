@@ -2181,7 +2181,10 @@ class Agent:
             # 唤醒的新轮）顶下去——旧"继续"按钮一点就"最后一轮已正常完成"拒绝且按钮消失。
             # 从尾往回找最后一个中断轮：入队续跑指令走新轮（中断轮的完整 steps 在历史投影里，
             # 模型自然接续；不 pop——后续轮的 answer 保留）。
-            for i in range(len(s.turns) - 1, -1, -1):
+            # 【近窗限制】（2026-10-16·两次实锤 1161/1165 + 今日）：只回看最近 3 轮——
+            # 第 954 轮那种陈年中断标注（已被 288+ 轮顶替）永远没有续跑价值（上下文早稀释），
+            # 却让每次 worker 中断+continue 的连带触发都误命中，向 inbox 灌无效续跑指令。
+            for i in range(len(s.turns) - 1, max(-1, len(s.turns) - 4), -1):
                 ai = (s.turns[i].answer or "").strip()
                 if ai and _is_interrupt_mark(ai):
                     self.push_message(
@@ -2190,7 +2193,7 @@ class Agent:
                         source="resume:fallback")
                     _LOG.info("resume_interrupted: 中断轮(%d)被顶替——降级为续跑指令入队", i + 1)
                     return "__queued__"
-            return "[错误] 最后一轮已正常完成，历史中也没有可继续的中断轮"
+            return "[错误] 最后一轮已正常完成，近 3 轮内也没有可继续的中断轮（更早的中断已过期，不再触发续跑）"
         s.turns.pop()
         t.answer = ""
         t.answer_reasoning = ""

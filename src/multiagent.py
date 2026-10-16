@@ -1194,6 +1194,29 @@ def make_subagent_tools(agent) -> list:
                         f"或用 agent_ask(\"{caller_id}\", \"你的问题\") 直接向派发者提问。"
                     )
 
+                def _interrupt_ctx(sa, task_text: str) -> str:
+                    """中断/失败通知的近期上下文（用户提案 2026-10-16）：任务头 + 最后一步 +
+                    倒数第二步 + recap——让主 Agent 不用 agent_query_events 就能判断怎么重派。"""
+                    try:
+                        cur = getattr(getattr(sa, "session", None), "_current", None)
+                        steps = list(getattr(cur, "steps", []) or []) if cur else []
+                        lines = [f"任务头: {' '.join((task_text or '').split())[:150]}"]
+                        for idx, st in enumerate(steps[-2:]):
+                            try:
+                                s = str(st)
+                                # Step 的 repr 兜底：取头 260 字（含 tool_use 名/参数或文本片段）
+                                lines.append(f"倒数第{2 - idx}步: {' '.join(s.split())[:260]}")
+                            except Exception:
+                                pass
+                        if not steps:
+                            lines.append("(无已落步骤——可能起步即断)")
+                        recap = (getattr(sa, "_recap", "") or "").strip()
+                        if recap:
+                            lines.append(f"recap: {recap[:120]}")
+                        return "\n".join(lines)
+                    except Exception as e:
+                        return f"(上下文提取失败: {type(e).__name__})"
+
                 def _route_answer(answer_text: str):
                     """路由 answer 到 caller 的 inbox——run() 返回后立即调用。
                     放在 recap/meta/background_tasks 之前：即使后续步骤被 /restart 杀进程，
@@ -1278,7 +1301,15 @@ def make_subagent_tools(agent) -> list:
                     _cur = getattr(getattr(_sa, "session", None), "_current", None)
                     if _cur is not None and not (_cur.answer or "").strip():
                         res = (f"[中断] 子 Agent 轮未正常完成（已完成 {len(_cur.steps)} 步、"
-                               f"可能被停止或收尾失败）。\n部分结果可 agent_query_events(\"{_aid}\", 3) 查看")
+                               f"可能被停止或收尾失败）。\n部分结果可 agent_query_events(\"{_aid}\", 3) 查看\n\n"
+                               f"── 近期上下文 ──\n{_interrupt_ctx(_sa, enriched)}")
+                        # 主 Agent 兜底（用户提案 2026-10-16）：caller 非主 Agent（施工委托
+                        # worker 的 caller 是系统）时 _route_answer 送达不了主 Agent——中断
+                        # 就静默了，主 Agent 无从重派。中断/失败必须让 _main_ 知道。
+                        if caller_id != agent.agent_id:
+                            agent.push_message(
+                                f"📨〔子 Agent '{_name}' [{_aid}] 中断〕{res[:2000]}",
+                                source=f"subagent:interrupted:{_aid}")
 
                     # 立即路由 answer（在 recap/meta 之前——即使后续被杀，answer 已在 inbox）
                     _route_answer(res)
@@ -1296,9 +1327,17 @@ def make_subagent_tools(agent) -> list:
                         reg.update_status(_aid, "failed" if _is_fail else "done")
                         reg.touch(_aid)   # answer 回流即交互（活跃窗口）
                 except Exception as ex:
-                    res = f"[失败] {type(ex).__name__}: {ex}"
-                    # 失败也立即路由（caller 需要知道子 Agent 出错了）
+                    _sa_ex = getattr(_target, "agent", _target)
+                    res = (f"[失败] {type(ex).__name__}: {ex}\n\n"
+                           f"── 近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}")
+                    # 失败也立即路由（caller 需要知道子 Agent 出错了）+ 主 Agent 兜底
+                    # （同中断分支 2026-10-16：施工委托 worker 的 caller 非主 Agent 时
+                    #  失败也会静默——主 Agent 必须知道才能重派）
                     _route_answer(res)
+                    if caller_id != agent.agent_id:
+                        agent.push_message(
+                            f"📨〔子 Agent '{_name}' [{_aid}] 失败〕{res[:2000]}",
+                            source=f"subagent:interrupted:{_aid}")
                     _write_meta("failed")
                     agent.background_tasks[_aid].update(status="failed", result=res, finished_at=time.time())
                     if reg:

@@ -137,6 +137,24 @@ cmd（及部分 Python 调用）看不见 `.agt` 数据根子目录、**PowerShe
 
 代码零损失（`ba2ede1` 在 git）；主 Agent 内存 session 完整。直接代价是唤醒轮未发生 → `update_plan` 记账与向用户汇总未自动进行（本次由用户指出后人工介入）。**待办**：① worker 施工成果验收（explore 重写 `ba2ede1`，见 [explore-tool.md](explore-tool.md)）；② registry 丢 `_main_` 根因（另开一轮）；③ `/restart` 后新代码生效再跑一条施工线实测回执闭环。
 
+## 后记三：中断/失败静默——caller 非主 Agent 时主 Agent 兜底直推 + 通知附近期上下文（2026-10-16，marketplace 施工线实锤，commit 1c6d7b0）
+
+**现象**：marketplace 施工线（plan `p_1945c5a0`）的 worker 中断——用户在看板看到 ❌，主 Agent 却**零感知**（inbox 无任何通知），续跑只能靠用户手动点「继续」；worker 随后一次 RuntimeError 异常同样无声。
+
+**根因（第二种静默，与[后记二](#后记二首例回执丢失根因反转_route_answer-registry-静默丢通知闭包兜底修复2026-10-16plan-p_d721b263)互补）**：`_bg` 完成路径的通知只对 **caller** 路由（`_route_answer`）——后记二是 caller=`_main_` 但 registry 条目缺失导致静默丢；本案是 **caller 压根不是主 Agent**（marketplace 施工委托链的 caller 记为系统侧）——主 Agent 天然不在通知路径，中断/失败信号没有任何消费端。正常完成回执有调用方接管，**中断/失败却是「需要有人接管重派」的信号**，静默即失控。
+
+**修复（src/multiagent.py，commit `1c6d7b0` 已推送）三层**：
+
+| 层 | 改动 |
+|---|---|
+| 上下文袋 `_interrupt_ctx(sa, task_text)` | 中断/失败通知附近期上下文：**任务头 150 字 + 最后两步各 260 字 + recap**——主 Agent 不用 `agent_query_events` 翻事件就能判断怎么重派 |
+| 中断分支 | 原 2026-09-02 中断检测（caller 收中断通知 + registry 标 failed）叠加 `_interrupt_ctx` |
+| 异常分支 | `res = [失败] <异常类型>: <信息> + 近期上下文`——**失败也立即路由**（旧版失败不通知 caller）；同样走主 Agent 兜底 |
+
+**主 Agent 兜底**：caller 非主 Agent 时，中断/失败**额外直推 `_main_` inbox**（`source=subagent:interrupted`）——施工委托、用户 `@name` 派活、跨 Agent 委托全覆盖；**完成回执仍按 caller 路由不变**（兜底只针对中断/失败这两个接管信号）。以后 worker 再断，主 Agent 收到的通知自带「中断原因 + 正在干什么 + 干到哪了」，可直接带上下文重派。
+
+**生效**：需 `/restart`（与同日 ccs / marketplace 改动一起重启生效）。
+
 ## 注意事项
 
 - **需 `/restart` 生效**；重启后**若有活动 plan 会自动派 worker**（正是设计意图）

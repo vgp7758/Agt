@@ -639,8 +639,6 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 
 ### 再发（2026-10-15 · worker-p_d721b263）：registry 条目缺失静默丢通知——`_route_answer` 闭包兜底
 
-### 再发（2026-10-15 · worker-p_d721b263）：registry 条目缺失静默丢通知——`_route_answer` 闭包兜底
-
 **第三种丢通知分支**：与前两次同表象（子 Agent 完成主 Agent 不醒）、又是一种新根因——不是条目被覆盖（2026-09-02），也不是被抢注（2026-09-07），而是 **registry 里干脆没有 `_main_` 活条目**，`_route_answer` 的 lookup 落入「条目缺失」分支后**静默蒸发**（无日志、无动作、无兜底）。
 
 **证据链（首个框架施工线回执丢失事故，详见 [施工委托 · 后记二](../features/construction-delegation.md)）**：
@@ -665,6 +663,18 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 **排障速查再补一问**（接上节第 2/3 步）：`lookup(caller_id)` 返回空/条目 `agent=None` 时旧版会无声跳过——修复后该分支有日志且自身派发场景走闭包直推；若再现「answer 出了但收不到」，除查推错门、查 None 外，还要查 **registry 条目是否干脆缺失**（`/api/dash` 或 `/api/status` 对照全量 agent_id）。
 
 **排查手法教训（同轮）**：跟进后台 worker 的进度**不要用 agent_ask**——它是纯模型调用（克隆对方历史直问 LLM，不真执行），worker 回复的「自查计划」只是嘴上说说不会落地；要看真实进度应读其 meta.json / 用 agent_notify 催 / 查 `/api/dash`。见 [agent_ask 不装配工具](#agent_ask-不装配工具克隆历史纯对话问答2026-10-08用户提案commit-16c1708)。
+
+### 第四种静默（2026-10-16 · marketplace 施工线）：中断/失败不在通知路径——caller 非主 Agent 兜底直推
+
+**与前三种不同类**：覆盖（2026-09-02）/ 抢注（2026-09-07）/ 缺失（2026-10-15）三案丢的都是「完成回执」（caller=`_main_` 却没送达）；本案是**路由设计缺口**——`_bg` 完成路径的通知只对 caller 路由（`_route_answer`），marketplace 施工委托链的 worker caller 记为系统（非 `_main_`），主 Agent 天然不在通知路径，**中断/失败信号零消费端**（看板 ❌ 只有用户能看见，主 Agent 零感知）。
+
+**修复（src/multiagent.py，commit `1c6d7b0`，详见 [施工委托 · 后记三](../features/construction-delegation.md)）**：
+
+- 中断/失败通知附近期上下文 `_interrupt_ctx`（任务头 150 字 + 最后两步各 260 字 + recap）——主 Agent 不必 `agent_query_events` 即可判断怎么重派
+- 异常分支补立即路由（旧版失败不通知 caller）
+- **caller 非主 Agent 时中断/失败额外直推 `_main_` inbox**（`source=subagent:interrupted`）；完成回执仍按 caller 路由不变
+
+**排障速查再补一问**（接上节 1~5 步）：「子 Agent 中断/失败后主 Agent 零感知」≠ 完成回执丢失——先分清信号类（完成 vs 中断/失败），后者查 caller 是否非 `_main_`（修复后中断/失败应有 `subagent:interrupted` 源的兜底通知）。
 
 ### 注意事项
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""desktop-operator 专属工具——键鼠模拟 / 剪切板 / 窗口操作（pyautogui + pygetwindow）。
+"""desktop-ops 技能外置工具——键鼠模拟 / 剪切板 / 窗口操作（pyautogui + pygetwindow）。
 
-配套：桌面画面由装配段 image_feed 每步注入（tools/image_feed_poc.py 起在 8765），
-坐标基准即该画面帧（默认缩放到宽 1280——点击坐标按画面像素给即可，
-mouse_* 会自动换算到真实屏幕坐标）。
+配套：桌面画面由子 Agent 的装配段 image_feed 每步注入（如 desktop-operator 的
+tools/image_feed_poc.py 起在 8765），坐标基准即该画面帧（默认缩放到宽 1280——
+点击坐标按画面像素给即可，mouse_* 会自动换算到真实屏幕坐标）。
 """
 import time
 
-# 画面服务宽度（与 tools/image_feed_poc.py 的 MAX_W 一致）：坐标换算用
+# 画面服务宽度（与 image_feed_poc.py 的 MAX_W 一致）：坐标换算用
 _FRAME_W = 1280
 
 
@@ -131,7 +131,7 @@ def window_focus(title_contains: str) -> str:
     return f"✅ 已切换到「{w.title[:50]}」"
 
 def agt_register():
-    """专属工具注册（同 tools/builtin 约定——scan_script_tools 消费）。"""
+    """外置工具注册（同 tools/builtin 约定——scan_script_tools 消费）。"""
     specs = [
         ("mouse_click", mouse_click), ("mouse_move", mouse_move), ("mouse_drag", mouse_drag),
         ("key_press", key_press), ("key_type", key_type), ("key_hotkey", key_hotkey),

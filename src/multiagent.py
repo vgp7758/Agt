@@ -221,19 +221,64 @@ def _agent_def_path(name: str):
     return d / f"{name}.md"
 
 
+def _svc_spec(v) -> tuple[str, str]:
+    """services 声明值规范化：'命令'（旧形态）或 '命令 | reuse=<探测URL>'（2026-10-16 跨实例复用）。
+    返回 (cmd, reuse_url)。行式单值保持 WebUI 编辑器/收藏全链路兼容（textarea 直读直写）。"""
+    s = str(v).strip()
+    for sep in ("| reuse=", "|reuse="):
+        if sep in s:
+            cmd, _, rest = s.partition("|")
+            return cmd.strip(), rest.strip()[len("reuse="):].strip()
+    return s, ""
+
+
+def _probe_alive(url: str, timeout: float = 2.0) -> tuple[bool, str]:
+    """服务存活探测（GET，2s 超时；参照 WebIDE 三态探测经验）：
+    - 2xx/3xx = 活；
+    - 4xx/5xx = 端口有人但非 2xx——判特征防复用"别人的服务"：响应 Content-Type 为 image/*
+      （desktop-frame 帧端点特征）才算自己人；否则视为他人服务不复用；
+    - 连接拒绝/超时/其它异常 = 死（拉起）。"""
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return True, f"HTTP {r.status}"
+    except urllib.error.HTTPError as e:
+        ct = ""
+        try:
+            ct = (e.headers or {}).get("Content-Type", "") or ""
+        except Exception:
+            pass
+        if "image" in ct.lower():
+            return True, f"HTTP {e.code} + image 特征"
+        return False, f"HTTP {e.code} 非本服务特征（Content-Type={ct or '未知'}）"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 def _ensure_agent_services(meta: dict, agent) -> None:
     """yml 声明的依赖服务（2026-10-06 用户提案）：子 Agent 实例化时幂等拉起。
     形态：services: [{服务名: 命令}, ...]（列表 of 单键映射；dict 形态也认）。
-    已存在同名服务（在跑）→ 跳过；命令 cwd=workspace（相对路径可用）。"""
+    已存在同名服务（在跑）→ 跳过；命令 cwd=workspace（相对路径可用）。
+    跨实例复用（2026-10-16 用户补充）：命令可带 "| reuse=<探测URL>" 后缀——拉起前先
+    GET 探测（2s 超时）：已活 → 跳过拉起只复用（desktop-frame 帧服务全局单例：多 agt
+    实例不重复拉；复用方不注册服务池条目——不拥有不 stop，只使用）；死才真拉起。"""
     svcs = meta.get("services") or []
     if isinstance(svcs, dict):
         svcs = [svcs]
     for it in svcs:
         if not isinstance(it, dict):
             continue
-        for sname, cmd in it.items():
+        for sname, val in it.items():
+            cmd, reuse_url = _svc_spec(val)
             try:
-                r = agent.services.start(str(sname), str(cmd), str(agent.session.workspace)
+                if reuse_url:
+                    alive, detail = _probe_alive(reuse_url)
+                    if alive:
+                        _LOG.info("子 Agent 依赖服务 %s: 复用已活服务 %s（%s）——不重复拉起", sname, reuse_url, detail)
+                        continue
+                    _LOG.info("子 Agent 依赖服务 %s: 探测不可复用（%s）→ 拉起", sname, detail)
+                r = agent.services.start(str(sname), cmd, str(agent.session.workspace)
                                          if getattr(agent.session, "workspace", "") else "",
                                          quiet_secs=120)   # 启动蜜月：秒退不吓 agent
                 _LOG.info("子 Agent 依赖服务 %s: %s", sname, str(r)[:80])
@@ -254,6 +299,44 @@ def _agent_own_tools(name: str, agent):
     except Exception as e:
         _LOG.warning("子 Agent '%s' 专属工具扫描失败: %s", name, e)
         return []
+def _agent_skill_gear(name: str, meta: dict, agent):
+    """yml `skills:` 字段装备（2026-10-16 用户裁定）：一个字段双效果——
+    ① 技能包 tools/*.py 外置工具注册进子 Agent 工具箱（复用 agent 目录 tools/ 的发现管线，
+       来源改为技能目录，工具协议不变）；
+    ② SKILL.md 的 SOP 正文注入子 Agent system 尾（子 Agent 带着作业规程上岗，
+       skill_* 工具族的手动 read_skill 流程免掉）。
+    返回 (extra_tools, sop_text, error)；error 非空 = 声明了不存在的技能名（清晰报错，调用方中断派活）。
+    技能寻址走 _resolve_skill（本地 .agent/skills/ 优先，全局 ~/.agt/skills/ 已激活的也认）。"""
+    names = meta.get("skills") or []
+    if isinstance(names, str):   # 宽松：skills: "a,b" 字符串形态也认
+        names = [x.strip() for x in names.split(",") if x.strip()]
+    names = [str(x).strip() for x in names if str(x).strip()]
+    if not names:
+        return [], "", ""
+    from agent_config import _resolve_skill, _split_frontmatter, load_skills_index
+    tools, chunks, missing = [], [], []
+    for sn in names:
+        d, _scope = _resolve_skill(sn, WORKSPACE)
+        if d is None:
+            missing.append(sn)
+            continue
+        try:
+            _fm, sop = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
+            if (sop or "").strip():
+                chunks.append(f"## 装备技能：{sn}\n\n{sop.strip()}")
+        except Exception as e:
+            _LOG.warning("子 Agent '%s' 装备技能 '%s' SKILL.md 读取失败: %s", name, sn, e)
+        td = d / "tools"
+        if td.is_dir():
+            try:
+                from script_tools import scan_script_tools
+                tools.extend(scan_script_tools(dirs=[td], agent=agent))
+            except Exception as e:
+                _LOG.warning("子 Agent '%s' 装备技能 '%s' tools/ 扫描失败: %s", name, sn, e)
+    if missing:
+        known = ", ".join(s["name"] for s in load_skills_index(WORKSPACE)) or "(无已安装技能)"
+        return [], "", f"未知技能: {', '.join(missing)}（已安装: {known}）——检查 .agent/skills/<名>/SKILL.md 是否存在"
+    return tools, ("\n\n".join(chunks) if chunks else ""), ""
 
 
 # assembly DSL v2：有序装配清单。合法段名（8 段）：必装段 system/user_message/steps 恒装
@@ -861,8 +944,14 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
         from multiagent import _agent_own_tools
+        sk_tools, sk_sop, sk_err = _agent_skill_gear(entry.name, meta, agent)
+        if sk_err:   # 复活遇未知技能名 → 落回新建路径（同样会报错给派发方，不静默吞）
+            _LOG.warning("子 Agent '%s' 复活：skills 装备失败（%s）→ 落回新建", entry.name, sk_err)
+            return None
         toolbox, _ = _resolve_tools(agent, meta.get("tools", ""))
-        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(entry.name, agent))   # 专属工具（同名覆盖全局）
+        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(entry.name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
+        if sk_sop:   # 技能 SOP 注入 system 尾（与新建路径同源）
+            system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
         model_name = meta.get("model") or entry.model or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name
@@ -1459,8 +1548,13 @@ def make_subagent_tools(agent) -> list:
         if not (system or "").strip() and not (meta.get("assembly") or []) and p.suffix.lower() == ".md":
             system = "你是一个自主子 Agent，用工具完成任务。"
         _ensure_agent_services(meta, agent)   # 依赖服务幂等拉起（2026-10-06 用户提案）
+        sk_tools, sk_sop, sk_err = _agent_skill_gear(name, meta, agent)
+        if sk_err:   # 声明了不存在的技能名 → 清晰报错，不派活（2026-10-16 skills 字段）
+            return f"[skills 装备失败] {sk_err}"
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
-        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent))   # 专属工具（同名覆盖全局）
+        toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
+        if sk_sop:   # 技能 SOP 注入 system 尾（yml v2 场景 persona 在 assembly file 项，system 段只装 SOP）
+            system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
         model_name = meta.get("model") or agent.model_name
         if model_name not in config.MODELS:
             model_name = agent.model_name

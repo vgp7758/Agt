@@ -269,13 +269,24 @@
     {
       "name": "desktop-operator",
       "type": "agent_decl",
-      "desc": "桌面操作 Agent——实时看到桌面（image_feed）+ 键鼠模拟/剪切板/窗口切换，GUI 自动化",
-      "version": "1.0",
+      "desc": "桌面操作 Agent——实时看到桌面（image_feed）+ 键鼠模拟/剪切板/窗口切换，GUI 自动化；依赖 desktop-ops 技能（需一并安装，键鼠工具与 SOP 来自技能）",
+      "version": "1.1",
       "tags": ["子Agent", "桌面"],
       "source": "builtin",
       "dir": "agents/desktop-operator",
       "install_dir": ".agent/agents",
       "installed": ".agent/agents/desktop-operator/desktop-operator.yml"
+    },
+    {
+      "name": "desktop-ops",
+      "type": "skill",
+      "desc": "桌面键鼠操作技能——点击/拖拽/键盘/剪切板/窗口切换 10 工具 + 看→定位→操作 SOP；配合 image_feed 画面注入实现看着屏幕操作",
+      "version": "1.0",
+      "tags": ["技能", "桌面", "键鼠"],
+      "source": "builtin",
+      "dir": "assets/skills/desktop-ops",
+      "install_dir": ".agent/skills",
+      "installed": ".agent/skills/desktop-ops/SKILL.md"
     },
     {
       "name": "wiki-updater",

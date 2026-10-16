@@ -1424,7 +1424,8 @@ class Agent:
                 d = (r or {}).get("desc") or ""
                 lines.append(f"  · {n}" + (f"——{d}" if d else ""))
             parts.append("【技能装备中】\n" + "\n".join(lines) +
-                         "\n技能装备是临时能力：暂时不需要时记得 skill_unequip('技能名') 卸载释放（进程重启也会隐式全卸）。")
+                         "\n技能是本轮临时能力：轮结束自动卸载；不需要时可提前 skill_unequip('技能名') 卸；"
+                         "跨轮使用由 skill_use 自动重装备（服务重启秒级）。")
         board = self._format_subagent_board()
         if board:
             parts.append(board)
@@ -2610,6 +2611,24 @@ class Agent:
                                     resp.content,
                                     [tc["name"] for tc in resp.tool_calls] if resp.tool_calls else None,
                                     turn_idx=len(self.session.turns) - 1)   # finish 后 turns[-1]=本轮（Turn.recap 供 fc 折叠摘要）
+                            # 轮结束自动卸载技能（用户裁定 2026-10-17）：技能=轮内临时能力，
+                            # skill_use 自动装备兜底重装——跨轮使用场景每轮重装备（服务重启秒级）。
+                            # 容错：单个卸载失败不炸轮（warning 记录），其余照卸。
+                            try:
+                                _eq = getattr(self.session, "_equipped_skills", None) or {}
+                                if _eq:
+                                    from agent_config import skill_unequip as _su
+                                    _un = []
+                                    for _n in list(_eq.keys()):
+                                        try:
+                                            _un.append(f"{_n}: {_su(_n).splitlines()[0]}")
+                                        except Exception as _e1:
+                                            _un.append(f"{_n}: 卸载异常 {type(_e1).__name__}")
+                                    self._emit({"type": "auto_wf", "name": "skill_auto_unequip",
+                                                "hook": "turn_end", "run_id": "",
+                                                "text": "🧹 轮结束自动卸载技能——" + "；".join(_un)})
+                            except Exception as _e:
+                                _LOG.warning("轮结束自动卸载技能异常: %s", _e)
                             # 后台推送（调度器/服务）：消费 inbox 触发下一轮
                             item = self.pop_inbox()
                             if item:

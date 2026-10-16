@@ -1500,7 +1500,7 @@ def skill_equip(name: str) -> str:
             "item_keys": [f"{e['position']}×{len(e['items'])}" for e in extras],
             "desc": desc,
         }
-        life_note = f"\n📌 已登记装备（用完可 skill_unequip('{name}') 卸载；重启即全卸）"
+        life_note = f"\n📌 已登记装备（轮结束自动卸载；不需要可提前 skill_unequip('{name}')；重启即全卸）"
     return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）{replace_note}。能力清单：\n{caps or '（清单为空）'}\n"
             f"用法：skill_use(name='{name}', command=\"<命令> --参数\")" + svc_note + asm_note + life_note)
 

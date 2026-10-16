@@ -658,7 +658,7 @@ agent_prompt("vision", ...) → SubAgent 包装（src/multiagent.py）
 2. 条目缺失 / 条目 `agent=None`，且 **caller=派发者自身**（施工委托 `caller=self.agent_id` 的形态）→ **闭包里的 agent 实例直推**——派发时闭包持有的实例引用才是真源，registry 只是加速索引；caller 就是派发者自己时闭包手里就有它，不需要问 registry
 3. 跨 Agent 显式 caller 查不到 → 只告警**不硬推**（推错比丢更糟，推错会污染无辜 Agent 的 inbox）
 
-三条路径全部补日志——**不再有任何无声分支**。commit 本地已落（push 时网络中断，hash 待推）。
+三条路径全部补日志——**不再有任何无声分支**。commit 已随 v0.35.3 发布推送落远端（修复当日网络中断仅落本地）。
 
 **悬案待深挖**：registry 为何丢了 `_main_`？疑似 `/restart` 后主 Agent 的注册/恢复路径在某分支漏注册——「谁注册成了 `_main_`」（2026-09-07 补丁的问题）要再往前追一步「**`_main_` 为何压根没注册上**」。兜底修复已把丢失面堵死，根因另开一轮。
 

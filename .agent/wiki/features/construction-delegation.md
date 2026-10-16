@@ -125,7 +125,7 @@
 
 即：**registry 索引失效（查不到 `_main_`）→ 通知无声丢弃**。registry 为何丢了 `_main_`（疑似 `/restart` 后注册/恢复路径问题）——悬案待深挖，修复已堵死丢失面，详见 [多 Agent 体系 · 再发：registry 条目缺失静默丢通知](../architecture/multi-agent.md#再发2026-10-15--worker-p_d721b263registry-条目缺失静默丢通知_route_answer-闭包兜底)。
 
-### 修复：`_route_answer` 闭包兜底三层防御（src/multiagent.py，本地 commit 待推）
+### 修复：`_route_answer` 闭包兜底三层防御（src/multiagent.py，已随 v0.35.3 推送落远端）
 
 1. registry 命中 → 走原路；2. 条目缺失/`agent=None` 且 **caller=派发者自身**（施工委托 `caller=self.agent_id` 正是此形态）→ **闭包 agent 实例直推**——派发时闭包持有的引用才是真源，registry 只是加速索引；3. 跨 Agent 显式 caller 查不到 → 只告警不硬推（推错比丢更糟）。三条路径全补日志，不再有无声分支。**需 `/restart` 生效**。
 

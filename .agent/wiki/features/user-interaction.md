@@ -1043,7 +1043,7 @@ rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
 
 **关联**：[user 消息语义标签](#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)（判别机制出处——本节是其呈现端的演进，机制三件套原样消费）；[fab-dock](fab-dock.md)（🐞 logFab 入口：有日志才显示，badge 仍只计 error，`bg` 级别不计徽标）；[编辑器 UX · 批次十二](editor-ux-improvements.md#批次十二092a0dfspec--日志抽屉布局统一标题栏钉顶--滚动区独立)（日志抽屉骨架：标题钉顶 + 滚动区独立 + 200 条滚动上限不变）；[i18n](i18n.md)（面板标题 key 换文案 + hover 提示新条目，字典 843 → 844）。
 
-**commit 状态**：本地 2 笔已落（index.html + dict.json），**push 暂被网络拦**（SSH 443 refused + HTTPS reset，三次重试均败）——已挂定时任务每 10 分钟自动重推，commit 待推。
+**commit 状态**：本地 2 笔（index.html + dict.json）——曾因网络中断挂每 10 分钟定时重推，**现已推送落远端**（随 v0.35.3 发布窗口 push 恢复一并落地）。
 
 ## 通知时机语义精修：收到→日志抽屉，inbox 出队消费→通知气泡（2026-10-14，用户裁定）
 

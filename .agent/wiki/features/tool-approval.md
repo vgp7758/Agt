@@ -145,7 +145,7 @@ _rt._approval_cb = (self._tool_approval if self.on_event
 
 机制本身（`_tls.outside` 越界标记 → 工具结果尾附提示、不阻断执行）不变。
 
-## 越界放行默认改需审批：file_outside 独立 fail-closed 通道 + 子 Agent 弹卡可达（2026-10-16，用户提案，commit 待推）
+## 越界放行默认改需审批：file_outside 独立 fail-closed 通道 + 子 Agent 弹卡可达（2026-10-16，用户提案，commit 5dcbed6，随 v0.35.3 发布）
 
 **动机（用户提案）**：file_outside（越界文件访问）此前**跟随 run_python/run_shell 的 opt-in 开关**——`_approval_enabled` 未开（默认）时 `_approval_cb=None` → `_ask_approval` 直接 True：**越界访问静默放行**；即使开关打开，WS 响应也只达主 Agent 实例，子 Agent 弹的卡无人能解。语义错位：run_python/run_shell 是主动执行类操作，opt-in 合理；而**访问 workspace 外的文件本身就是敏感越界**——默认应该「不问不给」（fail-closed），UI 在场才弹卡交给人裁决。
 

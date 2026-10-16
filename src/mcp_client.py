@@ -214,8 +214,50 @@ class MCPManager:
         if server not in self.sessions:
             return f"[MCP] 未知 server '{server}'"
         # 600s 兜底（2026-10-06·50052 实锤：MCP server 侧 hang 时 future.result() 无限等，
-        # react worker 卡死 35min+ 只能杀进程——超长任务应转后台而非靠 MCP 无限等）
-        return self._run_coro(self._call(server, name, args), timeout=600)
+        # react worker 卡死 35min+ 只能杀进程——超长任务应转后台而非靠 MCP 无限等）。
+        # 【超时不再取消】（2026-10-16·用户实锤）：claude mcp serve 的 Agent 这类长调用被
+        # cancel 后 = 孤儿 server 进程 + 内部任务白跑（MCP 无取消传播，结果写进没人读的管道）。
+        # 改学 run_shell 的转后台语义：协程照跑、结果照收、完成时经 _bg_notify_cb 唤醒（谁起的谁收）。
+        fut = asyncio.run_coroutine_threadsafe(self._call(server, name, args), self.loop)
+        try:
+            return fut.result(600)
+        except TimeoutError:
+            return self._defer_to_bg(fut, server, name)
+
+    def _defer_to_bg(self, fut, server: str, name: str) -> str:
+        """MCP 长调用转后台：future 继续等（不取消），注册进 real_tools._bg_tasks，
+        完成时走统一的 _bg_notify_cb 通知链（check_bg_task 可中途查状态）。"""
+        import time as _time
+        try:
+            from real_tools import _bg_tasks, _bg_notify_cb, get_bg_owner
+        except Exception:
+            fut.cancel()
+            return f"[MCP 调用 {server}.{name} 超过 600s，且后台任务机制不可用——已取消。建议拆小任务。"
+        bg_id = f"bg_{int(_time.time()*1000)}"
+        task = {
+            "name": f"mcp:{server}.{name}", "proc": None,   # proc=None：非子进程型任务
+            "output": [f"[MCP {server}.{name} 调用超过 600s，转后台继续等待——调用未取消，结果照收]"],
+            "started_at": _time.time(), "finished": False, "returncode": None,
+            "owner": get_bg_owner(),
+        }
+        _bg_tasks[bg_id] = task
+        def _wait():
+            try:
+                task["output"].append(str(fut.result()))
+                task["returncode"] = 0
+            except Exception as e:
+                task["output"].append(f"[失败] {type(e).__name__}: {e}")
+                task["returncode"] = 1
+            task["finished"] = True
+            try:
+                if _bg_notify_cb:
+                    _bg_notify_cb(bg_id, task["name"], task["returncode"], task.get("owner"))
+            except Exception:
+                pass
+        threading.Thread(target=_wait, daemon=True).start()
+        return (f"[MCP 调用 {server}.{name} 超过 600s，已转后台（任务ID: {bg_id}）。\n"
+                f"调用未取消、server 进程继续执行、结果照收；完成时会自动推送通知唤醒。"
+                f"中途可用 check_bg_task(\"{bg_id}\") 查状态。")
 
     async def _call(self, server: str, name: str, args: dict) -> str:
         session = self.sessions[server]["session"]

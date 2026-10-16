@@ -121,7 +121,7 @@ if(cls==='sys' && text){
 
 纯前端（`addRow` + CSS 一处，src/static/index.html），**Ctrl+F5 刷新即生效**，无需 `/restart`（与[系统气泡 markdown 渲染](#系统气泡-markdown-渲染indexhtml2026-08-31commit-fdfc28a)同属纯前端层）。
 
-## answer 气泡下渲染「本轮拉起的 sub-agent」快捷按钮（2026-10-16，用户提案，commit 9f8982d 首版落地 · 历史轮渲染修复中）
+## answer 气泡下渲染「本轮拉起的 sub-agent」快捷按钮（2026-10-16，用户提案，commit 9f8982d · 同日验收终审通过）
 
 **用户提案（2026-10-16）**：有拉起 sub-agent 的轮，answer 气泡的「📎 本轮变更文件框」和正文之间渲染该 sub-agent 的快捷按钮——点击**新标签打开对方页面**。两个场景：
 
@@ -141,7 +141,15 @@ if(cls==='sys' && text){
 
 首版已落地（2026-10-16，commit 9f8982d，coder_2 施工 · 主 Agent 代为 commit）：纯前端 +35 行，index.html 七处 hunk，**零后端改动**——agent_id 改由前端从派活工具结果首行正则就地提取（`🚀 已启动子 Agent 'coder' [agent_id=coder-ab12]（异步…）`，multiagent.py L1566 确认格式；`to_history` 结果截 500 字、id 恒在首行），避开了 worker-p_76f6623b 施工线正在改的 server.py。
 
-**验收打回（主 Agent playwright 实测，2026-10-16）**：实时轮路径代码上通，但**刷新后历史轮 0 按钮**——嫌疑收敛到初次加载的轮数据流（renderHistory 的 turns 若不走 `to_history` 构造，`t.steps.tool_calls` 形态不符/为空，收集空转）。已带四条实锤打回 coder_2 修复；修复自测（刷新后按钮出现 + 点击跳转）通过后再做最终页面验收——天然活体：派工那轮自身气泡应长出 `▸ coder` 按钮。
+**验收打回（主 Agent playwright 实测，2026-10-16）**：实时轮路径代码上通，但**刷新后历史轮 0 按钮**——嫌疑收敛到初次加载的轮数据流（renderHistory 的 turns 若不走 `to_history` 构造，`t.steps.tool_calls` 形态不符/为空，收集空转）。已带四条实锤打回 coder_2 修复。
+
+**验收终审通过（重启后复测，2026-10-16）——大反转：历史轮渲染本就无 bug，打回的「嫌疑」是测试方法踩的坑**，三轮排查闭环：
+
+1. **第一次误判的根因**：探针 `querySelector('[data-turn=N]')` 撞上的是 **user 行**——user/bot 同轮号成对渲染且 user 在前，first-match 恒返回 user 行，而按钮渲染在 **bot 行**里。改用 `.bot` 行过滤后立现：手造 99997/99998 两个假轮重放，`▸ coder` / `▸ w` 全部渲染、点击跳转正常；
+2. **19:49/20:16 两次 find 没找到**：那几轮在**未展开的档位区**——分档渲染默认只显示当前档（最后边界之后只剩 1-2 轮），轮不在 DOM 属正常渲染行为，不是按钮缺失；
+3. **全链探针通过**：collectSubagent → renderAnswerPages → subagentsBarHtml 三环 monkey-patch 均按预期被调（bar_calls=1），console 0 error。
+
+coder_2 无罪且立功——首版实现即正确（它 20:12 前的修复轮大概率就是在确认这一点，被重启打断汇报）。**教训入册：按 data-turn 查历史轮元素必须过滤行类型（.user/.bot），同轮号成对渲染下 first-match 语义会骗人**。天然活体验证交用户：刷新页面展开更早轮，派工轮气泡应长出 `▸ coder` / `▸ worker` 按钮。
 
 ## 首版落地清单（2026-10-16，commit 9f8982d，纯前端 +35 行）
 

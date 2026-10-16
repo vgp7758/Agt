@@ -70,6 +70,50 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 - 创建走 write_file yml 官方路径（create_agent 退役后的实战印证）
 - 详见 [pv-producer](../features/pv-producer.md)
 
+## 子 Agent skills: 字段——技能装备机制：键鼠操作抽成 desktop-ops 技能（2026-10-16，用户裁定，commit 3f0bf0d）
+
+**动机（用户提案 2026-10-16，plan p_922370a8）**：desktop-operator 的键鼠操作（mouse_click/key_press/clipboard 等 10 工具）此前是「agent 目录专属工具」——`tools/desktop_tools.py` 只服务这一个 agent。而「会操作桌面」本质是一种**可装备的能力**：别的 agent 声明里加一行就该有；同时 1200 行的操作细则（坐标换算/操作纪律）烤在人设 md 里，与工具分离维护。用户裁定：**抽成 desktop-ops 技能 + 子 Agent 声明新增 `skills:` 字段**——一个字段双效果：
+
+1. 技能包 `tools/` 下的外置工具脚本注册进子 Agent 工具箱（复用 agent 目录 `tools/` 的发现管线，**工具协议不变**——`agt_register` 约定）
+2. `SKILL.md` 的 SOP 注入子 Agent system 尾（坐标规范/操作纪律跟着工具走，人设只留角色定位）
+
+### 装备链（src/multiagent.py `_agent_skill_gear`）
+
+```
+yml: skills: [desktop-ops]
+  → agent_prompt 新建/复活路径，load_agent_yml 之后调用
+  → _resolve_skill(名)（[技能体系](../features/skills.md) 统一寻址：.agent/skills 优先 shadow 全局）
+  → scan_script_tools(dirs=[技能目录/tools/])  ← 与 .agent/tools 同一扫描器，agt_register 协议原样
+  → _split_frontmatter(SKILL.md) 提取正文 SOP
+  → 返回 (tools, sop, err)；调用方拼装：system 尾 + "\n\n## 装备技能：<名>\n\n<SOP>"、工具箱 Toolbox(*继承, *own, *技能)
+```
+
+- **未知技能名**：`_resolve_skill` 找不到 → 返回清晰报错（列出已安装技能名清单），**不静默忽略**——声明写错要当场暴露
+- **`skills:` 值宽容**：列表 `["a", "b"]` 或字符串 `"a,b"` 均认；无该字段 = 零影响（现有声明不用动）
+- 两条路径（新建 + 复活）都挂了装备——复活实例技能同样生效
+
+### desktop-operator 改造（首个消费端）
+
+| 项 | 改造前 | 改造后 |
+|---|---|---|
+| yml | `tools: ""`，tools/ 目录双脚本 | `skills: [desktop-ops]`，tools/ **只留 image_feed_poc.py**（帧服务属服务不属技能） |
+| md 人设 | 1200 字含坐标规范/操作纪律全套 | 瘦身为角色定位 + 工作循环 + 职责边界（操作细则归 SKILL.md） |
+| 工具来源 | agent 目录专属工具 | 技能装备（`group: desktop` 不变） |
+
+**image_feed 装配段与 services 声明零回归**：画面能力（desktop-frame 服务 + image_feed 装配）与键鼠能力（技能）解耦后照常——`_parse_assembly` 解析 image_feed 段、`_ensure_agent_services` 拉起帧服务均原样（服务复用见[后记四](#后记四跨实例服务复用reuse-探测-url帧服务全局单例2026-10-16用户补充提案施工中)）。
+
+### 分发三件套
+
+- **技能源**：`src/assets/skills/desktop-ops/`（SKILL.md + tools/desktop_tools.py）——`seed_default_skills` 自动扫目录即播（新 repo 开箱即得）
+- **播种源**：`src/agents/desktop-operator/` 同构更新（yml 加 skills 行、md 瘦身、tools/ 移除 desktop_tools.py）
+- **市场**：`src/assets/market/index.json` 新增 `desktop-ops` skill 条目；desktop-operator 条目升 1.1、desc 注明「依赖 desktop-ops 技能需一并安装」（无级联安装机制，`needs` 字段设想被否——没人消费的字段不造）
+
+### 验证
+
+test/test_subagent_skills.py 九例全绿：技能 tools 注册（外置工具协议不变）/ 仅 SOP 无 tools/、SOP 拼接语义（persona 空/非空两态）/ 未知技能报错（含已安装清单）/ 未知+已知混合（已知照常装备）/ 无 skills 零影响 / 字符串形态 / **desktop-operator 实例化 e2e**（真实声明+真实技能包→键鼠 10 工具在箱、SOP 在 system、image_feed 装配段在）/ tools/ 目录干净（只剩服务脚本，扫不出工具）。既有回归：test_global_skills + test_market 37 过、test_script_tools 12 过 3 失败（HEAD 基线复验为既有失败，与本次无关）。
+
+**关联**：[技能体系](../features/skills.md)（寻址与七件套协议）· [desktop-operator 与 image_feed](../features/image-feed.md)（画面能力解耦后不变）· [子 Agent 目录形态](#子-agent-目录形态name-自包含目录yml--md-人设--tools-专属工具2026-09-28用户提案commit-2cec328)（专属工具管线——技能装备复用其扫描器）· [workspace 播种](../features/workspace-seeding.md)（seed_default_skills）
+
 ## services 依赖声明：yml 声明依赖服务，实例化幂等拉起（2026-10-06，用户提案，commit 2b621b4）
 
 **动机**——desktop-operator 依赖 desktop-frame 画面服务（见 [image_feed 实时画面段](../features/image-feed.md)），此前要靠人记得手工 start；一次 rc=1 崩溃后忘了拉起，Agent 直接「睁眼瞎」。用户提案：「yml 里声明依赖服务，agent 实例化时拉起」——把服务生命周期挂到声明上。
@@ -120,22 +164,33 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 
 **用户补充提案（2026-10-16，desktop-ops 技能化施工线中途追加）**：desktop-frame 帧服务应【全局单例】——多 agt 实例并开时，实例 A 装备技能把服务拉起来，实例 B 装备时不重复拉起而是**复用已活服务**。现状的幂等拉起只看本实例服务池，跨实例无感知——每实例各起一份服务进程，抢同一 GUI/端口。
 
-**设计**（并入施工线计划第 6 步，施工中，待完工回填 commit）：
+**落地（2026-10-16，commit 3f0bf0d，plan p_922370a8 第 6 步）**——设计定稿时声明形态从设想的嵌套 dict 收敛为**行内后缀**（YAML 值仍是单字符串，WebUI services textarea 直读直写全链路零改动；也绕开嵌套 YAML 的双冒号坑）：
 
-- **声明形态**：`services` 条目加可选 `reuse:` 探测 URL 字段，YAML 写法保持简单（一个 URL，不做探测策略 DSL）：
+```yaml
+services:
+  - desktop-frame: python tools/image_feed_poc.py 8765 | reuse=http://127.0.0.1:8765/frame
+```
 
-  ```yaml
-  services:
-    - name: desktop-frame
-      cmd: ...
-      reuse: http://127.0.0.1:8765/frame
-  ```
+三件套（src/multiagent.py）：
 
-- **探测语义**（`_ensure_agent_services` 拉起前）：GET 探测（2s 超时）——收到 HTTP 响应 = 已活 → **跳过拉起**并日志注明复用；连接拒绝 / 超时 = 自己拉起
-- **防误复用**：4xx 不能直接当"活着"——端口可能被无关进程占用（WebIDE 三态探测的老经验），需判 body 特征确认是自家服务才复用
-- **权属分离**：复用方**不注册服务池条目**——不拥有、不能 stop、只使用；避免 B 实例 stop 把 A 正在用的服务杀掉的跨实例语义混乱
+| 件 | 职责 |
+|---|---|
+| `_svc_spec(v)` | 值规范化 → `(cmd, reuse_url)`：无后缀=旧形态零回归；`\| reuse=` / `\|reuse=` 两变体均认 |
+| `_probe_alive(url, timeout=2.0)` | GET 探测三态：2xx/3xx=活；**4xx/5xx 判 Content-Type 特征**（`image/*`=desktop-frame 帧端点特征才算自己人，text/html=别人的服务不复用——WebIDE 三态探测老经验）；连接拒绝/超时=死 |
+| `_ensure_agent_services` 改造 | 拉起前探测：活 → **跳过拉起只复用**（日志注明 `复用已活服务`+探测细节）；死 → 照常拉起 |
 
-**验证计划**：单测两态（探测活→跳过 / 探测死→拉起）；e2e（手动起假帧服务→装备不重复拉；杀掉→装备重拉）；播种源同步。
+**权属分离（关键语义）**：复用方不注册服务池条目——**不拥有、不能 stop、只使用**。B 实例 kill 时它的 kill_agent 停服循环按声明服务名 stop，但服务池里没有它的条目 → 温和跳过 → 不会杀掉 A 正在用的服务。
+
+**兼容性对账**：
+
+| 消费点 | 兼容 |
+|---|---|
+| WebUI services textarea（行式 `名: 值` 直读直写） | 零改动——`partition(":")` 只切第一个冒号，URL 里的冒号与 `\|` 完整保留 |
+| 看板收藏 ⭐（svc_fav 行式写入 main.yml） | 零改动 |
+| kill_agent 停服循环（只取键名） | 零改动 |
+| 旧形态声明（无后缀） | `_svc_spec` 返回空 reuse_url → 不探测直接拉起，行为与从前一致 |
+
+**验证**：test/test_agent_services_reuse.py 十例全绿——`_svc_spec` 旧/新/无空格三形态、`_probe_alive` 真 socket 三态（200 image / 404 text 判特征 / 连接拒绝）、`_ensure_agent_services` 探测活→start 未调、探测死→start 被调、无 reuse 不探测；e2e 往返：真起假帧服务→装备复用（start 零调用），`server_close()` 杀掉等端口释放→装备重拉。测试坑：`_probe_alive` 吞异常返回 `(False, reason)` 从不抛——断言要看返回值不能 `pytest.raises`。
 
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 

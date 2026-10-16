@@ -2,11 +2,13 @@
 
 ## 职责
 
+
 把随包分发的资产（工作流/子Agent声明/插件/技能/工具）做成【显式可控】的市场：
 
 - **看得见清单**：策展索引 `src/assets/market/index.json`（repo 内维护，随 wheel 分发），34 条含 name/type/desc/version/tags/source/落位路径
-- **装得上**：CLI `/install <name> [--force]`、HTTP `POST /api/marketplace/install`、WebUI `/market` 页安装按钮
+- **装得上**：CLI `/install <name> [--force] [--global]`、HTTP `POST /api/marketplace/install`（`scope` 参数）、WebUI `/market` 页「安装」/「安装到全局」按钮
 - **卸得掉**：`/uninstall <name>` / `POST /api/marketplace/uninstall` / WebUI 卸载按钮——只删索引声明的落位路径，不碰用户其它文件
+- **两层可选**（2026-10-17 增补）：`workflow/skill/plugin` 支持 **repo 层**（`.agent/<dir>/`，随项目走）与 **全局层**（`~/.agt/<dir>/`，跨项目生效，与 982/985 轮 `seed_scope="global"` 播种位置同源）；`agent_decl/tool` 无全局约定（repo-only）
 
 与 seed（asset_sync / seed_default_skills）的分工：seed 是【隐式自动】首启播种；market 是【显式可控】市场。两者都"已存在不覆盖"。
 
@@ -39,26 +41,47 @@
 
 ### CLI（src/commands.py）
 
+
 ```
-/marketplace [--type T]     全部条目按类型分组 + ✓已装标记
-/install <name> [--force]   安装（已存在不覆盖；--force 覆盖重装）
-/uninstall <name>           卸载
+/marketplace [--type T]              全部条目按类型分组 + 已装徽章（✅已装·repo / 已装·全局 / 已装·双层）
+/install <name> [--force] [--global] 安装（已存在不覆盖；--force 覆盖重装；--global 落 ~/.agt 全局层）
+/uninstall <name>                    卸载（卸 installed_scope 实际存在的层；both 两层都卸）
 ```
+
+- `--global` 仅对 workflow/skill/plugin 有效，其余类型返回 `[不支持] …（无全局层约定，仅支持安装到 repo）`
+- 全局层落位：workflow→`~/.agt/workflows/`、skill→`~/.agt/skills/<name>/`、plugin→`~/.agt/plugins/<name>/`（目录型整目录复制，`install_dir` 在全局语义下忽略）
+- `/marketplace` 分组标题对支持全局的类型标注「（支持 --global）」
 
 ### HTTP API（src/server.py）
 
+
 | 端点 | 说明 |
 |---|---|
-| `GET /api/marketplace?type=` | 索引 + installed/available 运行时态，返回 `{updated,total,installed_count,items[]}` |
-| `POST /api/marketplace/install` | `{name, force?}` → `{ok,name,message}`；`[未找到]/[缺失]` 失败文案 → `ok:false` |
-| `POST /api/marketplace/uninstall` | `{name}` → 同上 |
+| `GET /api/marketplace?type=` | 索引 + installed/available 运行时态，返回 `{updated,total,installed_count,items[]}`；每项带 `installed_scope`（`repo`/`global`/`both`/`""`） |
+| `POST /api/marketplace/install` | `{name, force?, scope?}`（scope 默认 `repo`，可 `global`）→ `{ok,name,message}`；失败文案前缀 `[未找到]/[缺失]/[不支持]/[参数]` → `ok:false` |
+| `POST /api/marketplace/uninstall` | `{name, scope?}`（省略/空 = 卸实际已装层；`repo`/`global` 只卸指定层）→ 同上 |
 | `GET /market` | WebUI 市场页（market.html） |
 
 幂等语义：重复安装返回 `ok:true` + 「⏭ 已安装（未动）」（幂等成功，不报错）。
 
 ### WebUI（src/static/market.html，路由 /market）
 
-分类 tab（全部/工作流/子Agent/插件/技能/工具）+ 搜索框（名称/描述/标签）+ 条目卡片（类型徽章/版本/标签/落位路径）+ 动作按钮：未装→「安装」；已装→「重装(confirm)/卸载(confirm)」+ ✓已安装徽章；toast 反馈 + `load()` 刷新重渲染。
+
+分类 tab（全部/工作流/子Agent/插件/技能/工具）+ 搜索框（名称/描述/标签）+ 条目卡片（类型徽章/版本/标签/落位路径）+ 动作按钮；toast 反馈 + `load()` 刷新重渲染。
+
+装态徽章按 `installed_scope` 三态着色：`✓ 已装·repo`（绿）/`✓ 已装·全局`（蓝）/`✓ 已装·双层`（紫）；落位路径行对全局态追加「｜已装于 ~/.agt」（both 为「｜repo + ~/.agt」）。
+
+动作按钮随装态展开（`actions(x)`，`GLOBAL_TYPES = [workflow, skill, plugin]`）：
+
+| 装态 | 按钮 |
+|---|---|
+| 未装（支持全局类型） | 「安装」（repo，主色）+「安装到全局」 |
+| 未装（tool/agent_decl） | 「安装」 |
+| 已装·repo | 「重装」+「+ 全局」+「卸载」 |
+| 已装·全局 | 「重装」+「+ 项目」+「卸载」 |
+| 已装·双层 | 「重装」（作用于 repo 层）+「卸载」（两层都卸） |
+
+「重装/卸载」均带 confirm，文案标明作用层（repo 工作区 / 全局层 ~/.agt / 两层）；覆盖重装提示"可能丢失本地修改"。
 
 ## 验证（2026-10-17 施工轮，plan p_1945c5a0 步骤 5）
 
@@ -76,6 +99,30 @@
 **生效两段式**：按钮改的是 index.html——mtime 热更，**浏览器刷新即见**；`/market` 路由在引擎侧（server.py）——**随 `/restart` 生效**（此前点击 404）。
 
 **教训**：独立页交付 ≠ 可达——「入口在主界面」是交付验收的一部分，新页面落成时应同步检查主 WebUI 的入口面（fabDock / 抽屉 / 命令）。
+
+## 后记二：双层装态（repo + ~/.agt 全局层）——检测漏全局 & 无全局通道（2026-10-17，用户实锤）
+
+
+**用户实锤的两个缺口**（首版交付后一天）：①市场把 11 个全局类工作流全显示"未安装"——它们由 `seed_scope="global"` 播种在 `~/.agt/workflows/`，但 installed 检测只扫 repo 层（`.agent/...`），点"安装"还会重复装一份到 repo；②根本没有"安装到全局"的通道——`install_dir` 是 workspace 相对路径，安装只会落 repo。
+
+**改法（三通道同步）**：
+
+- **src/market.py**：新增 `_GLOBAL_DIRS = {"workflow": "workflows", "skill": "skills", "plugin": "plugins"}` 与 `_GLOBAL_ROOT = Path.home()/".agt"`（可注入，测试用）；`installed_scope(item, workspace)` 双层检测返回 `repo/global/both/""`，`item` 透出该字段；`install(name, force, workspace, scope="repo")` 全局分支统一由本模块 `shutil.copytree/copy2` 复制（**不走 download_asset**——它固定落 workspace）；`uninstall` 按 `installed_scope` 对实际存在的层逐个清理（both 两层都卸），嵌套空目录清理**止步 `~/.agt/<dir>`**（不越界删 `~/.agt`）
+- **src/commands.py**：`/install <name> [--force] [--global]`；`/marketplace` 徽章三态 + 分组标题标「（支持 --global）」
+- **src/server.py**：install API 接 `scope`（默认 repo）；uninstall API 接 `scope`（省略=卸实际已装层）；`ok` 判据扩到 `[未找到]/[缺失]/[不支持]/[参数]` 四前缀
+- **src/static/market.html**：徽章三态着色 + 按钮组随装态展开（见上节）
+- **test/test_market.py**：+9 例 → 24 例（双层检测 / scope 映射 / 全局文件装卸往返 / 目录型全局装卸 + 嵌套清理 / `--global` 拒装无全局约定类型 / API scope 传参与非法 scope / 未装条目不误报）
+
+**验证（2026-10-17 增补轮）**：
+
+- 单测 24/24 过（含原 15 例回归）
+- **现实核对（缺口① 直接验证）**：真实环境跑 `marketplace_items()`，本机 `~/.agt/workflows/` 的 11 个播种工作流全部识别 `installed_scope="global"`（此前全显示未装）
+- **CLI 往返**（真实 `~/.agt` + 临时 workspace 隔离 repo 层）：`/install custom_tool_demo --global` → 落 `~/.agt/workflows/` → scope=global → `--force` 覆盖重装 → `/uninstall` → 文件与 scope 双双还原，`~/.agt/workflows/` 回到初始 11 个；目录型 `test-svc --global` → `~/.agt/skills/test-svc/SKILL.md` → 卸载后已有全局技能（pbridge/yangzi-aistudio）不受影响
+- **WebUI e2e**（真 server + Playwright，临时 workspace 构造未装态）：徽章/按钮四态全对 → 点「安装到全局」→ toast + 徽章翻「已装·全局」+ 真实文件落位 → 点「+ 全局」（repo→both）→ 徽章「已装·双层」+ 路径注「repo + ~/.agt」→ 点「卸载」→ 两层全清 + 卡片回未装态（[安装][安装到全局]）；tool 型（ccs）只出「安装」一个按钮
+
+**设计取舍**：全局层不做 `install_dir` 映射（按类型定目录，简单可预期）；不引入"全局优先/遮蔽"语义——两层同时存在即 both，卸载一并清；`agent_decl/tool` 明确 repo-only（避免为两种类型发明未经验证的全局约定）。
+
+**教训**：资产有多个落位层时，**检测/安装/卸载三处必须对同一份层映射表取真**——首版只实现 repo 层就让整个市场对全局播种资产"瞎"了，而这种"瞎"在只看 repo 的测试里完全测不出来（需要拿真实 `~/.agt` 或注入全局根核对）。
 
 ## 注意事项
 

@@ -576,8 +576,9 @@ async def api_marketplace(type: str = ""):
 
 @app.post("/api/marketplace/install")
 async def api_marketplace_install(request: Request):
-    """安装市场条目：{name, force?} → {ok, message}。工作流走 /download 同通道；
-    插件/技能/子Agent目录型整目录落位。安装后已装态下次 GET /api/marketplace 即见。"""
+    """安装市场条目：{name, force?, scope?} → {ok, message}。scope="repo"（默认）落工作区
+    （工作流走 /download 同通道）；scope="global" 落用户级全局层 ~/.agt/<dir>/（仅限
+    workflow/skill/plugin）。安装后已装态下次 GET /api/marketplace 即见。"""
     from fastapi.concurrency import run_in_threadpool
     from market import install
     try:
@@ -588,15 +589,18 @@ async def api_marketplace_install(request: Request):
     if not name:
         return {"ok": False, "error": "缺少 name"}
     force = bool(body.get("force"))
-    msg = await run_in_threadpool(lambda: install(name, force=force, workspace=_workspace))
-    # 失败文案（[未找到]/[缺失]）→ ok=false，前端红 toast 展示 message
-    ok = not msg.startswith(("[未找到]", "[缺失]"))
+    scope = str(body.get("scope") or "repo").strip().lower()   # repo（默认）| global
+    msg = await run_in_threadpool(
+        lambda: install(name, force=force, workspace=_workspace, scope=scope))
+    # 失败文案（[未找到]/[缺失]/[不支持]/[参数]）→ ok=false，前端红 toast 展示 message
+    ok = not msg.startswith(("[未找到]", "[缺失]", "[不支持]", "[参数]"))
     return {"ok": ok, "name": name, "message": msg} if ok else {"ok": False, "error": msg}
 
 
 @app.post("/api/marketplace/uninstall")
 async def api_marketplace_uninstall(request: Request):
-    """卸载市场条目：{name} → {ok, message}。只删市场声明的落位文件/目录。"""
+    """卸载市场条目：{name, scope?} → {ok, message}。scope 省略=卸 installed_scope
+    实际存在的层（both 两层都卸）；"repo"/"global" 只卸指定层。"""
     from fastapi.concurrency import run_in_threadpool
     from market import uninstall
     try:
@@ -606,8 +610,9 @@ async def api_marketplace_uninstall(request: Request):
     name = str(body.get("name") or "").strip()
     if not name:
         return {"ok": False, "error": "缺少 name"}
-    msg = await run_in_threadpool(lambda: uninstall(name, workspace=_workspace))
-    ok = not msg.startswith("[未找到]")
+    scope = str(body.get("scope") or "").strip().lower() or None
+    msg = await run_in_threadpool(lambda: uninstall(name, workspace=_workspace, scope=scope))
+    ok = not msg.startswith(("[未找到]", "[参数]"))
     return {"ok": ok, "name": name, "message": msg} if ok else {"ok": False, "error": msg}
 
 

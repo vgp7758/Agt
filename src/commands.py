@@ -1014,7 +1014,7 @@ def _cmd_download(ctx: CommandContext, args):
 
 def _cmd_marketplace(ctx: CommandContext, args):
     """/marketplace [--type T]  官方精选市场清单（按类型分组 + 已装态）。"""
-    from market import marketplace_items, _TYPE_LABELS
+    from market import marketplace_items, _TYPE_LABELS, _GLOBAL_DIRS
     _, flags = _parse_args(args)
     t = flags.get("type")
     items = marketplace_items(workspace=ctx.session.workspace)
@@ -1026,30 +1026,33 @@ def _cmd_marketplace(ctx: CommandContext, args):
     total = len(items)
     done = sum(1 for x in items if x.get("installed"))
     print(f"🛒 官方精选市场（{total} 项，已装 {done}）")
+    marks = {"repo": "✅已装·repo", "global": "✅已装·全局", "both": "✅已装·双层"}
     order = list(_TYPE_LABELS.items())
     for type_key, label in order:
         group = [x for x in items if x.get("type") == type_key]
         if not group:
             continue
-        print(f"\n【{label}】{len(group)} 项")
+        gtag = "（支持 --global）" if type_key in _GLOBAL_DIRS else ""
+        print(f"\n【{label}】{len(group)} 项{gtag}")
         for x in group:
-            mark = "✅已装" if x.get("installed") else "⬇ "
+            mark = marks.get(x.get("installed_scope", ""), "⬇ ")
             miss = " ⚠随包缺失" if not x.get("available") else ""
             print(f"  [{mark}] {x['name']} v{x.get('version', '1.0')} — {x['desc']}{miss}")
-    print("\n用法：/install <name> [--force]  安装（已存在不覆盖）")
-    print("      /uninstall <name>           卸载（只删市场声明的落位文件）")
+    print("\n用法：/install <name> [--force] [--global]  安装（已存在不覆盖；--global 落 ~/.agt 用户级）")
+    print("      /uninstall <name>           卸载（卸实际已装层；双层全卸）")
     print("      /marketplace --type workflow  只看某类（workflow/agent_decl/plugin/skill/tool）")
 
 
 def _cmd_install(ctx: CommandContext, args):
-    """/install <name> [--force]  从市场安装（工作流走 /download 同通道落位）。"""
+    """/install <name> [--force] [--global]  从市场安装（默认 repo；--global 落 ~/.agt）。"""
     from market import install
     positional, flags = _parse_args(args)
     if not positional:
-        print("用法：/install <name> [--force]   （/marketplace 查看清单）")
+        print("用法：/install <name> [--force] [--global]   （/marketplace 查看清单）")
         return
+    scope = "global" if flags.get("global") else "repo"
     print(install(positional[0], force=bool(flags.get("force")),
-                  workspace=ctx.session.workspace))
+                  workspace=ctx.session.workspace, scope=scope))
 
 
 def _cmd_uninstall(ctx: CommandContext, args):
@@ -2358,12 +2361,13 @@ def build_default_registry() -> CommandRegistry:
         "/marketplace                    全部条目（工作流/子Agent/插件/技能/工具）\n"
         "/marketplace --type plugin      只看某类（workflow/agent_decl/plugin/skill/tool）")
     reg.register("install", _cmd_install,
-        "<name> [--force]  从市场安装（已存在不覆盖）",
-        "/install reload_hot             安装市场条目（落位到默认目录）\n"
-        "/install feedback --force       已安装时覆盖重装")
+        "<name> [--force] [--global]  从市场安装（默认 repo；--global 落 ~/.agt）",
+        "/install reload_hot             安装市场条目（落位到 .agent/ 默认目录）\n"
+        "/install feedback --force       已安装时覆盖重装\n"
+        "/install reload_hot --global    装到用户级全局层 ~/.agt/workflows/（workflow/skill/plugin 支持）")
     reg.register("uninstall", _cmd_uninstall,
-        "<name>  卸载市场条目（只删市场声明的落位文件/目录）",
-        "/uninstall reload_hot           卸载并清理落位文件")
+        "<name>  卸载市场条目（卸实际已装层：repo/global/both 全卸）",
+        "/uninstall reload_hot           卸载并清理落位文件（repo+全局两层）")
     reg.register("feedback", _cmd_feedback,
         "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）",
         "/feedback 工作流编辑器连线不太灵敏        （默认类型=建议）\n"

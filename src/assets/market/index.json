@@ -1,6 +1,6 @@
 {
   "updated": "2026-10-17",
-  "note": "agt 官方精选市场索引（随包分发，策展于 repo）。字段约定：file=随包路径（相对 site-packages/src/，与 assets/manifest.json 同约定，str|list）；dir=目录型资产（插件/技能，整目录复制）；install_dir=workspace 相对落位目录；installed=已装检测路径（相对 workspace，str|list，全部存在才算已装）；source=分发通道（builtin=随包，预留 git/pypi 扩展）。安装通道：文件型且 manifest.json 唯一名 → 复用 download_asset；其余 market.install 统一复制（已存在不覆盖，--force 覆盖）。",
+  "note": "agt 官方精选市场索引（随包分发，策展于 repo）。字段约定：file=随包路径（相对 site-packages/src/，与 assets/manifest.json 同约定，str|list）；dir=目录型资产（插件/技能，整目录复制）；install_dir=workspace 相对落位目录（全局层语义下映射到 ~/.agt/<type 目录>）；installed=已装检测路径（相对 workspace，str|list，全部存在才算已装）；source=分发通道（builtin=随包，预留 git/pypi 扩展）。双层语义（2026-10-17 增补）：workflow/skill/plugin 有用户级全局层 ~/.agt/{workflows,skills,plugins}/，检测返回 installed_scope=repo|global|both|空串，install --global 落全局层；agent_decl/tool 无全局约定（repo-only）。安装通道：文件型且 manifest.json 唯一名 → 复用 download_asset（repo 层）；其余 market.install 统一复制（已存在不覆盖，--force 覆盖）。",
   "items": [
     {
       "name": "before_turn_retrieval",

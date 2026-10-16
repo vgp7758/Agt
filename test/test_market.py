@@ -1,11 +1,14 @@
-"""插件市场（marketplace）单测（plan p_1945c5a0）。
+"""插件市场（marketplace）单测（plan p_1945c5a0 + 全局层缺口增补）。
 
 覆盖：索引加载与完整性（条目字段/随包文件真实存在）、install 三通道
 （manifest 唯一名转 download_asset / 多文件 / 目录型）、重复装跳过、
 --force 覆盖、installed 态判定、uninstall（整目录删/空父目录清理/落位根保留）、
-未知名与 HTTP API（GET /api/marketplace + POST install/uninstall）。
+未知名与 HTTP API（GET /api/marketplace + POST install/uninstall）；
+双层检测与全局装卸（installed_scope=repo/global/both、install --global、
+uninstall 卸实际存在层、无全局约定类型拒装全局）。
 
-install 落位全部隔离到 tmp_path，不碰真实 workspace。
+install 落位全部隔离到 tmp_path；全局层根经 autouse fixture 注入 tmp_path
+（monkeypatch market._GLOBAL_ROOT），不碰真实 ~/.agt 与 workspace。
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -14,6 +17,15 @@ import pytest
 from pathlib import Path
 
 import market
+
+
+@pytest.fixture(autouse=True)
+def ghome(tmp_path, monkeypatch):
+    """隔离全局层根：所有测试的全局读写都落在 tmp 下的假 ~/.agt。"""
+    g = tmp_path / "home" / ".agt"
+    g.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(market, "_GLOBAL_ROOT", g)
+    return g
 
 
 @pytest.fixture
@@ -173,9 +185,126 @@ def test_api_marketplace(ws, monkeypatch):
         w = [x for x in d["items"] if x["name"] == "webide"][0]
         assert w["installed"] is True
 
+
+        # scope=global：装到全局层（隔离根），repo 层不动
+        r = c.post("/api/marketplace/install",
+                   json={"name": "reload_hot", "scope": "global"})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert (market._GLOBAL_ROOT / "workflows" / "reload_hot.xml").exists()
+        assert not (ws / ".agent/workflows/reload_hot.xml").exists()
+        d = c.get("/api/marketplace").json()
+        w = [x for x in d["items"] if x["name"] == "reload_hot"][0]
+        assert w["installed_scope"] == "global"
+
+        # uninstall 默认卸全部实际已装层
+        r = c.post("/api/marketplace/uninstall", json={"name": "reload_hot"})
+        assert r.json()["ok"] is True
+        assert not (market._GLOBAL_ROOT / "workflows" / "reload_hot.xml").exists()
+
+        # 非法 scope → ok=false
+        assert c.post("/api/marketplace/install",
+                      json={"name": "reload_hot", "scope": "nope"}).json()["ok"] is False
         r = c.post("/api/marketplace/uninstall", json={"name": "webide"})
         assert r.json()["ok"] is True
         assert not (ws / ".agent/plugins/webide").exists()
 
         assert c.post("/api/marketplace/install", json={}).json()["ok"] is False
         assert c.post("/api/marketplace/install", content=b"x").json()["ok"] is False
+
+# ---------- 双层检测与全局装卸（缺口①②：~/.agt 全局层） ----------
+
+def test_index_global_types():
+    """全局映射约定：workflow/skill/plugin 有全局层，agent_decl/tool 无。"""
+    assert market._GLOBAL_DIRS == {"workflow": "workflows", "skill": "skills",
+                                   "plugin": "plugins"}
+
+
+def test_global_layer_detection(ws, ghome):
+    """全局播种的工作流（seed_scope=global 产物）→ 市场显示已装（global）。"""
+    gwf = ghome / "workflows"
+    gwf.mkdir(parents=True)
+    (gwf / "reload_hot.xml").write_text("<wf/>", encoding="utf-8")
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["reload_hot"]["installed"] is True
+    assert items["reload_hot"]["installed_scope"] == "global"
+    assert items["ccs"]["installed"] is False              # tool 无全局层约定
+    assert items["ccs"]["installed_scope"] == ""
+    # repo 层补装 → both
+    market.install("reload_hot", workspace=ws)
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["reload_hot"]["installed_scope"] == "both"
+
+
+def test_install_global_workflow(ws, ghome):
+    """--global：工作流落 ~/.agt/workflows/，repo 层不动。"""
+    out = market.install("reload_hot", scope="global", workspace=ws)
+    assert "全局" in out
+    assert (ghome / "workflows" / "reload_hot.xml").exists()
+    assert not (ws / ".agent/workflows/reload_hot.xml").exists()
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["reload_hot"]["installed_scope"] == "global"
+
+
+def test_install_global_skill_and_plugin_dir(ws, ghome):
+    """--global：目录型（技能/插件）整目录落 ~/.agt/skills|plugins/<name>/。"""
+    out = market.install("test-svc", scope="global", workspace=ws)
+    assert (ghome / "skills" / "test-svc" / "SKILL.md").exists()
+    assert not (ws / ".agent/skills/test-svc").exists()
+    out = market.install("webide", scope="global", workspace=ws)
+    assert (ghome / "plugins" / "webide" / "backend.py").exists()
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["test-svc"]["installed_scope"] == "global"
+    assert items["webide"]["installed_scope"] == "global"
+
+
+def test_install_global_skip_existing_and_force(ws, ghome):
+    out = market.install("reload_hot", scope="global", workspace=ws)
+    (ghome / "workflows" / "reload_hot.xml").write_text("# user edit", encoding="utf-8")
+    out = market.install("reload_hot", scope="global", workspace=ws)
+    assert "未动" in out
+    assert (ghome / "workflows" / "reload_hot.xml").read_text(encoding="utf-8") == "# user edit"
+    out = market.install("reload_hot", scope="global", force=True, workspace=ws)
+    assert (ghome / "workflows" / "reload_hot.xml").read_text(encoding="utf-8") != "# user edit"
+
+
+def test_install_global_rejects_repo_only_types(ws, ghome):
+    """agent_decl/tool 无全局约定 → 拒装全局，不落任何文件。"""
+    for name in ("coder", "ccs"):
+        out = market.install(name, scope="global", workspace=ws)
+        assert "不支持" in out, out
+    assert not (ghome / "agents").exists() and not (ghome / "tools").exists()
+    assert not (ws / ".agent").exists()
+
+
+def test_install_bad_scope(ws):
+    assert "参数" in market.install("reload_hot", scope="home", workspace=ws)
+    assert not (ws / ".agent").exists()
+
+
+def test_uninstall_by_scope_and_both(ws, ghome):
+    """uninstall：默认卸实际存在层（both 两层都卸）；scope 限层。"""
+    market.install("reload_hot", workspace=ws)
+    market.install("reload_hot", scope="global", workspace=ws)
+    out = market.uninstall("reload_hot", scope="repo", workspace=ws)
+    assert not (ws / ".agent/workflows/reload_hot.xml").exists()
+    assert (ghome / "workflows" / "reload_hot.xml").exists()      # 全局层未动
+    out = market.uninstall("reload_hot", workspace=ws)
+    assert "global" in out and "已卸载" in out
+    assert not (ghome / "workflows" / "reload_hot.xml").exists()
+
+    market.install("reload_hot", workspace=ws)
+    market.install("reload_hot", scope="global", workspace=ws)
+    out = market.uninstall("reload_hot", workspace=ws)             # 默认 both 全卸
+    assert "repo+global" in out
+    assert not (ws / ".agent/workflows/reload_hot.xml").exists()
+    assert not (ghome / "workflows" / "reload_hot.xml").exists()
+    # 卸不存在的层 → 明确提示
+    assert "未安装" in market.uninstall("reload_hot", scope="global", workspace=ws)
+    assert "参数" in market.uninstall("reload_hot", scope="home", workspace=ws)
+
+
+def test_uninstall_global_dir_cleans_nested_parent(ws, ghome):
+    """全局目录型卸载整目录删；文件型空父目录清理止步全局落位根。"""
+    market.install("test-svc", scope="global", workspace=ws)
+    market.uninstall("test-svc", scope="global", workspace=ws)
+    assert not (ghome / "skills" / "test-svc").exists()

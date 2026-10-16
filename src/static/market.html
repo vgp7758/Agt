@@ -30,6 +30,8 @@ header a:hover{text-decoration:underline}
 .mk-card .type.skill{background:#23863633;color:#3fb950}
 .mk-card .type.tool{background:#da363333;color:#ff7b72}
 .mk-card .installed-badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#23863633;color:#3fb950;font-weight:600}
+.mk-card .installed-badge.global{background:#1f6feb33;color:#58a6ff}
+.mk-card .installed-badge.both{background:#bc8cff33;color:#bc8cff}
 .mk-card .desc{color:#c9d1d9;font-size:13px}
 .mk-card .foot{margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .mk-card .path{font-family:monospace;font-size:11px;color:#484f58}
@@ -70,6 +72,33 @@ header a:hover{text-decoration:underline}
 
 <script>
 let ALL = [], TYPE = '';
+const GLOBAL_TYPES = ['workflow', 'skill', 'plugin'];   // 有全局层 ~/.agt 约定的类型
+const SCOPE_BADGE = {repo: ['✓ 已装·repo', ''], global: ['✓ 已装·全局', 'global'], both: ['✓ 已装·双层', 'both']};
+
+function badge(x){
+  const b = SCOPE_BADGE[x.installed_scope || ''];
+  return b ? `<span class="installed-badge ${b[1]}">${b[0]}</span>` : '';
+}
+
+function actions(x){
+  const n = x.name, scope = x.installed_scope || '';
+  const canGlobal = GLOBAL_TYPES.includes(x.type);
+  const btns = [];
+  if(!scope){
+    btns.push(`<button class="btn small primary" id="btn-${n}" onclick="install('${n}','repo')">安装</button>`);
+    if(canGlobal)
+      btns.push(`<button class="btn small" id="btn-g-${n}" onclick="install('${n}','global')">安装到全局</button>`);
+  }else{
+    const main = scope === 'global' ? 'global' : 'repo';   // 重装作用于已装那层
+    btns.push(`<button class="btn small ghost" onclick="reinstall('${n}','${main}')">重装</button>`);
+    if(scope === 'repo' && canGlobal)
+      btns.push(`<button class="btn small ghost" onclick="install('${n}','global')">+ 全局</button>`);
+    if(scope === 'global' && canGlobal)
+      btns.push(`<button class="btn small ghost" onclick="install('${n}','repo')">+ 项目</button>`);
+    btns.push(`<button class="btn small danger" onclick="uninstall('${n}','${scope}')">卸载</button>`);
+  }
+  return btns.join('');
+}
 
 async function load(){
   try{
@@ -100,18 +129,13 @@ function render(){
         <span class="name">${x.name}</span>
         <span class="ver">v${x.version||'1.0'}</span>
         <span class="type ${x.type}">${x.type_label||x.type}</span>
-        ${x.installed ? '<span class="installed-badge">✓ 已安装</span>' : ''}
+        ${badge(x)}
         ${x.tags && x.tags.length ? x.tags.map(t=>`<span class="tag">${t}</span>`).join('') : ''}
       </div>
       <div class="desc">${x.desc||''}</div>
       <div class="foot">
-        <span class="path">→ ${x.install_dir}</span>
-        <div class="actions">
-          ${x.installed
-            ? `<button class="btn small ghost" onclick="reinstall('${x.name}')">重装</button>
-               <button class="btn small danger" onclick="uninstall('${x.name}')">卸载</button>`
-            : `<button class="btn small primary" id="btn-${x.name}" onclick="install('${x.name}')">安装</button>`}
-        </div>
+        <span class="path">→ ${x.install_dir}${x.installed_scope === 'global' ? ' ｜ 已装于 ~/.agt' : x.installed_scope === 'both' ? ' ｜ repo + ~/.agt' : ''}</span>
+        <div class="actions">${actions(x)}</div>
       </div>
     </div>`).join('');
 }
@@ -124,26 +148,31 @@ function toast(msg, err){
   t._h = setTimeout(() => t.className = 'toast' + (err ? ' err' : ''), 4200);
 }
 
-async function install(name, force){
-  const btn = document.getElementById('btn-' + name);
-  if(btn) btn.disabled = true;
+async function install(name, scope, force){
+  ['btn-' + name, 'btn-g-' + name].forEach(id => {
+    const b = document.getElementById(id);
+    if(b) b.disabled = true;
+  });
   try{
     const r = await fetch('/api/marketplace/install', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, force: !!force})});
+      body: JSON.stringify({name, scope: scope || 'repo', force: !!force})});
     const d = await r.json();
     if(d.ok){ toast(d.message); await load(); }
     else toast(d.error || '安装失败', true);
   }catch(e){ toast('请求失败：' + e, true); }
 }
 
-async function reinstall(name){
-  if(!confirm(`「${name}」已安装，覆盖重装可能丢失你的本地修改。继续？`)) return;
-  await install(name, true);
+async function reinstall(name, scope){
+  const where = scope === 'global' ? '全局层（~/.agt）' : 'repo 工作区';
+  if(!confirm(`「${name}」已安装于${where}，覆盖重装可能丢失你的本地修改。继续？`)) return;
+  await install(name, scope, true);
 }
 
-async function uninstall(name){
-  if(!confirm(`卸载「${name}」？只删除市场声明的落位文件。`)) return;
+async function uninstall(name, scope){
+  const where = scope === 'both' ? '（repo 与全局两层都会删除）'
+              : scope === 'global' ? '（全局层 ~/.agt）' : '（repo 工作区）';
+  if(!confirm(`卸载「${name}」${where}？只删除市场声明的落位文件。`)) return;
   try{
     const r = await fetch('/api/marketplace/uninstall', {
       method: 'POST', headers: {'Content-Type': 'application/json'},

@@ -172,6 +172,21 @@ assemblies:
 - 多技能同位置按装备顺序稳定追加（先装备的先插）；装备是一次性动作，不做卸载还原。
 - 首个真实用户：`desktop-ops`——SKILL.md 声明 `image_feed: {tool: screen_frame()}`，desktop-operator.yml 不再手写 image_feed 段、不再拉 8765 帧服务（瘦身为最小声明）；配套 `image_feed` 段 `tool:` 前缀解析（`session._asm_image_feed_from_tool`：data URL / 文件路径 / 双参工具位置映射，http/file 源零回归）。
 
+### 落地链：解析 / 插段 / 钩子 / 帧提供者（plan p_76f6623b，commit 3609d97）
+
+worker 施工线 7 步交付，上节语义落到四个文件：
+
+| 文件 | 件 |
+|---|---|
+| src/agent_config.py | `parse_extra_assemblies`（frontmatter 解析：position 三前缀 + 锚段名/钩子位白名单，坏声明清单化报错）· `load_skill_assemblies` · `parse_caps_extra_assemblies`（动态口 caps 单行 JSON）· `fill_default_hook_items`（hook 缺省 ass = 技能包 workflows/ 全部）· `apply_extras_to_session`（主 Agent 应用点；hook_specs=None 时先物化旧式 meta.hook 再合并——不吞既有钩子）；`skill_equip` 双口收集 + 清单透出 |
+| src/multiagent.py | `_agent_skill_gear` 返回值 tuple→**dict**（tools/sop/extras/services/error）；`_apply_extra_assemblies` 统一插段——after 跳同簇、before 紧贴锚（装备顺序稳定追加，宿主原有项不吞并，锚缺失清单化报错）+ 钩子挂载 + hooks 段开关；派活**新建/复用/复活三路径**基线处一处合并、三路生效；`_asm_item_from_dict` 非 str 值原样保留 |
+| src/session.py | image_feed `tool:` 帧提供者 `_asm_image_feed_from_tool`：data URL / 文件路径 / 双参工具按 schema 位置映射；http/file 源零回归；非视觉模型静默门控保留 |
+| src/agent.py | `_hook_tasks` workflow 项支持 `dir=`——装备时冻结的技能包 workflows/ 路径（不污染 workspace 命名空间） |
+
+**验证**：test/test_skill_assemblies.py 18 例（解析 / 插段锚定位 / 钩子挂载 / 冻结性 / 两作用域对称 / tool: 帧源 / 未知段名报错）+ 真实链路 e2e（desktop-operator 声明 + 真实技能包 → 11 技能工具在箱含 screen_frame → extras 合并后 image_feed 紧贴 steps → **真实截屏 @@IMGFEED@@ 哨兵帧注入 ✓**）。
+
+**遗留**：①动态口端到端（真服务进程 caps 上报 `EXTRA_ASSEMBLIES`）未做子进程级 e2e，仅函数级覆盖——首个服务形态技能接入时可补；②装配为一次性动作无卸载还原（spec 既定语义），多次装备同一技能会重复插段——装备幂等性待裁定。
+
 ## skill_suggest · 技能按需建议钩子（SYSTEM 技能清单下线：jev 快判 + LLM 全文复核，2026-09-27/28，用户提案）
 
 ### 动机与形态翻转

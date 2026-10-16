@@ -190,6 +190,20 @@ worker-p_76f6623b（技能中间件施工线）**连续 3 轮起步即断**：�
 - 与第五章的分工：**拒图 = 能力位错 → 重刷投影降文字；坏图 = 数据坏 → 剥图重试**。触发特征不同（InvalidParameter 图解码 vs 能力拒图），两条路径不重叠、互不抢
 - **重启后护航生效（2026-10-16 /restart 后首验）**：worker-p_76f6623b 施工线重启后起步正常（此前连续 3 轮起步即断于坏图 400），推进 4/7 步未见 400 再炸、未见回退链连锁冷却——自愈解套成立。根因（坏图来源）仍未定位，「剔除 N 个」的 N 值线索保留待用
 
+## 八、失败现场存档点：last_failed_messages——doctor 的数据源（2026-10-16，commit 656193a）
+
+回退链整链耗尽、`raise RuntimeError` 之前：
+
+```python
+self.last_failed_messages = copy.deepcopy(messages)   # 冻结副本
+```
+
+- **深拷贝冻结**：后续任何重试 / 改动不污染现场
+- **成功后不清除**：保留最近一次失败现场（[doctor](doctor.md) 随时可查；再次失败自然覆盖）
+- 普通单次失败（还有后备可退）不写——只有整链耗尽才产生现场
+- 消费端：doctor 的 req_inspect / req_probe / req_patch 全部读它——**上两章 L1 自愈是绕过，doctor 是根治线**：定位坏数据所在轮次/步骤、修在源头（存档消息 + 当前轮 toollog 结果）、恢复原流程（顺带清 provider 冷却）
+- 单测：真实 LLMClient + patched `_chat_inner` 验证冻结性与深拷贝隔离（test_doctor_tools.py）
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：
@@ -221,3 +235,5 @@ worker-p_76f6623b（技能中间件施工线）**连续 3 轮起步即断**：�
 - [多 Agent 体系](../architecture/multi-agent.md) — 回退链职责分离（react 认 .yml / 非 react 认 settings）
 - [运维与排障](../guides/ops.md) — llm_calls 观测、网络类故障定位
 - [agent_watch](agent-watch.md) — 同日网络韧性批：10061 静默跳过
+- [doctor](doctor.md) — BadRequest 诊断修复 Agent：消费本页存档点 `last_failed_messages`；L1 自愈（本页五/七章）的根治搭档
+

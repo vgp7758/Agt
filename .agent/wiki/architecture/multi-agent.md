@@ -92,6 +92,10 @@ yml: skills: [desktop-ops]
 - **`skills:` 值宽容**：列表 `["a", "b"]` 或字符串 `"a,b"` 均认；无该字段 = 零影响（现有声明不用动）
 - 两条路径（新建 + 复活）都挂了装备——复活实例技能同样生效
 
+#### 后记：返回值升级 dict + extra_assemblies 三路生效（2026-10-16，commit 3609d97）
+
+`_agent_skill_gear` 返回值从 `(tools, sop, err)` 升级为 **dict**（tools / sop / extras / services / error）——技能可自带装配清单（`assemblies:`）与依赖服务，随装备一并进场。配套新增 `_apply_extra_assemblies` 统一插段（after 跳同簇 / before 紧贴锚 = 装备顺序稳定追加；锚缺失清单化报错）+ 钩子挂载；**派活新建 / 复用 / 复活三路径**基线处一处合并、三路生效（主 Agent 动态口 `skill_equip` 走 `agent_config.apply_extras_to_session` 同一插入逻辑）。声明语法与全部语义详见 [技能体系 · 技能自带装配清单](../features/skills.md)。
+
 ### desktop-operator 改造（首个消费端）
 
 | 项 | 改造前 | 改造后 |
@@ -290,6 +294,12 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 - **记账下放 worker（2026-10-15 · 二翻转，commit 7ca0aa5，dashboard 施工线实锤推翻原设计）**：`update_plan` 从排除集移出——worker 直接标共享 plan 文件进度（主/子双方面板同步），不再「worker 无 update_plan、主 Agent 据汇报代记」；`create_plan` 仍排除（worker 只推进度不建计划）。图纸断链三层修复与 byte-stable 缓存治理详见 [施工委托 · 后记](../features/construction-delegation.md)
 - 主 Agent 侧：委托后 [退出施工视图](context-engine.md#后记施工委托让位委托后主-agent-退出施工视图2026-10-15用户提案commit-3dc3f7b)（`session._construction_mode()` 让位）+ [计划注入块](../features/construction-delegation.md)加「施工：已委托 …」行
 - **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常；**实战**：dashboard 施工线（plan p_c0542ede）worker 三断点续跑 + update_plan 标满 10/10，全链路实证
+
+## doctor 自动派单：回退链耗尽 → 引擎派诊断修复（2026-10-16，用户提案，commit 656193a）
+
+第四条派活入口（前三条：LLM 工具调用 / 引擎施工派发 / 用户 `@name` 直派，见上文对照），特征是**失败触发**：`_bg` 异常分支识别「`RuntimeError` + 回退链不可用」特征且失败者非 doctor 时，直接 `agent_prompt("doctor", target agent_id + 错误全文 + "按 doctor.md 工作循环处理")` 派诊断修复。**熔断**：doctor 自身失败（`_name != "doctor"` 判定）即短路——不递归派 doctor，自愈层永不自我派单。
+
+四件套工具（req_inspect / req_probe / req_patch / req_resume）由 `make_doctor_tools` 闭包生成、经 chat.py 挂主 Agent 工具箱，doctor.yml `tools: ""` 自动继承——doctor 无自有工具目录，与 worker 同为「纯人设 + 继承工具箱」的轻声明。完整闭环见 [doctor](../features/doctor.md)。
 
 ## 用户直派通道：`@name <任务>` ——第三条派活入口（2026-10-15，用户提案）
 

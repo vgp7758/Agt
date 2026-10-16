@@ -1,6 +1,6 @@
 # doctor · BadRequest 诊断修复 Agent——四件套工具族 + 失败现场存档 + 回退链耗尽自动派单（2026-10-16，用户提案，commit 656193a）
 
-> 子 Agent 的 LLM 请求因【数据问题】（坏图 / 超长 / 畸形消息）400、回退链整链冷却仍救不活时，引擎自动派 doctor 诊断修复。定位 = BadRequest 自愈的 **L2**：[L1 引擎自愈](llm-network-resilience.md)（拒图降投影 / 坏图剥图重试）是绕过，doctor 是「找到坏数据在哪、修在源头、恢复流程」的根治线。实现：src/multiagent.py `make_doctor_tools` + src/llm_client.py 存档点 + src/chat.py 注册 + `.agent/agents/doctor/` 声明。
+> LLM 请求因【数据问题】（坏图 / 超长 / 畸形消息）400、回退链整链冷却仍救不活时，引擎自动派 doctor 诊断修复——**子 Agent 走 `_bg` 异常分支，主 Agent 走轮异常出口 `dispatch_doctor`**（2026-10-16 · 二补齐，见「主 Agent 分支」节）。定位 = BadRequest 自愈的 **L2**：[L1 引擎自愈](llm-network-resilience.md)（拒图降投影 / 坏图剥图重试）是绕过，doctor 是「找到坏数据在哪、修在源头、恢复流程」的根治线。实现：src/multiagent.py `make_doctor_tools` + src/llm_client.py 存档点 + src/chat.py 注册 + `.agent/agents/doctor/` 声明。
 
 ## 职责与设计（用户提案 2026-10-16）
 
@@ -28,13 +28,25 @@ BadRequest → 回退链耗尽（RuntimeError）→ 引擎派 doctor
 
 回退链整链耗尽、`raise RuntimeError` 之前 `self.last_failed_messages = copy.deepcopy(messages)`——**深拷贝冻结**（后续重试不污染现场）且**成功后不清除**（保留最近一次失败现场，再次失败自然覆盖）。机制详见 [LLM 客户端韧性 · 八](llm-network-resilience.md)。
 
-## 接线三处
+## 接线四处
 
 | 处 | 内容 |
 |---|---|
-| 自动派单 | `_bg` 异常分支：`RuntimeError` +「回退链不可用」特征 **且失败者非 doctor** → `agent_prompt("doctor", …)`（prompt 含 target agent_id + 错误全文 +「按 doctor.md 工作循环处理」） |
+| 自动派单（子 Agent） | `_bg` 异常分支：`RuntimeError` +「回退链不可用」特征 **且失败者非 doctor** → `agent_prompt("doctor", …)`（prompt 含 target agent_id + 错误全文 +「按 doctor.md 工作循环处理」） |
+| 自动派单（主 Agent，2026-10-16 · 二） | `Agent.run()` 轮异常统一出口（emit `interrupted` 处）：同款特征 **且 `agent_id` 空/`_main_`** → `multiagent.dispatch_doctor(agent, reason)`——详见下一节 |
 | 熔断 | doctor 自身失败（`_name != "doctor"` 判定）即短路——**不递归派 doctor**，自愈层永不自我派单 |
 | 注册 | src/chat.py `_reg(make_doctor_tools(agent), "诊断")`——挂主 Agent 工具箱；doctor.yml `tools: ""` 自动继承 |
+
+## 主 Agent 分支：轮异常出口 dispatch_doctor 程序化派单（2026-10-16 · 二，用户裁定）
+
+用户裁定（2026-10-16）：「主 Agent 出现 BadRequest 也可以触发 doctor」。此前 `_bg` 自愈网只覆盖子 Agent 的 `agent_prompt` 线程——主 Agent 回退链耗尽时只有中断事件 + 充值按钮，全靠人点。
+
+- **接线点**：`Agent.run()` 的轮异常统一出口（emit `interrupted` 事件处）——异常特征含「回退链不可用」**且** `agent_id` 为空/`_main_`（主 Agent 判据）→ 自动派 doctor。派单失败只告警、不掩盖原异常（代码本身跑在异常路径里）。
+- **`dispatch_doctor(agent, reason)`**（src/multiagent.py 模块级函数）：程序化派单——`agent.tools.run("agent_prompt", {...})` 直接进既有工具实现，**复用 agent_prompt 完整管线**（registry 登记 / answer 通知回流 / `_bg` 线程 / enum 快照），不经 LLM 决策；prompt 自带目标（`_main_`）+「按 doctor.md 工作循环处理」指引。与 `_prompt_subagent`（施工委托）同属「引擎程序化派发」家族。
+- **不双派**：子 Agent 场景仍走 `_bg` 接线——那里带 caller 上下文更全，两条路径互斥。
+- **防套娃三层**：① 主 Agent 出口判据 `agent_id ∈ {"", "_main_"}` → doctor 自身失败（agent_id=`doctor`）此处不派；② `_bg` 侧 `_name != "doctor"` 熔断；③ probe 上限 5，穷尽即上报。
+- **验证**：mock 工具面三断言（派单参数 = `agent_prompt("doctor", …)` / 派单异常兜底不炸 / `agent.run` 接线特征存在）+ 全量回归 **26 passed**。
+- **生效/发布**：引擎代码，`/restart` 生效；同日随 push-retry 推远端（`ad64506..96c2fda`）。
 
 ## 声明（.agent/agents/doctor/，目录形态）
 
@@ -45,8 +57,9 @@ BadRequest → 回退链耗尽（RuntimeError）→ 引擎派 doctor
 
 - probe 上限 **5 次/agent**——穷尽判非数据问题，如实上报不瞎试
 - req_patch 落盘前强制 probe 验证门（工具内部实现，人设明令不可绕过）
-- doctor 失败熔断，不递归
+- **防套娃三层**：主 Agent 出口判据排除 doctor（`agent_id ∈ {"", "_main_"}`）× `_bg` 侧 `_name != "doctor"` 熔断 × probe 上限 5 快速失败——自愈层永不自我派单、不递归
 - probe 是最小请求（max_tokens=16 级）——穷尽 5 次也烧不了几个 token
+- 主 Agent 派单失败只告警：异常路径里不掩盖原中断原因（2026-10-16 · 二）
 
 ## 验证（commit 656193a）
 

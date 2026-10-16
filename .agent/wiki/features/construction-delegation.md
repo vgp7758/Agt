@@ -56,7 +56,7 @@
 
 ## 引擎程序化派发通道：`agent._prompt_subagent`
 
-`_resolve_tools` 尾部（src/multiagent.py）把 `agent_prompt` 实现挂到 agent 实例上（`agent._prompt_subagent = agent_prompt`）——**引擎不经 LLM 工具调用即可起子 Agent** 的通用入口，当前唯一消费端就是施工委托。`agent_prompt` 其余语义（复用/复活/新建、`caller` 路由、registry 登记、`[忙]` 提示）照旧应验。
+`_resolve_tools` 尾部（src/multiagent.py）把 `agent_prompt` 实现挂到 agent 实例上（`agent._prompt_subagent = agent_prompt`）——**引擎不经 LLM 工具调用即可起子 Agent** 的通用入口，当前唯一消费端就是施工委托。`agent_prompt` 其余语义（复用/复活/新建、`caller` 路由、registry 登记、`[忙]` 提示）照旧应验。（程序化派发家族第二个成员是 doctor：[`dispatch_doctor`](doctor.md) 直接 `agent.tools.run("agent_prompt", …)` 走工具面，不占此挂点。）
 
 ## worker 声明
 

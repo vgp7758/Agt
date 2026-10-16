@@ -297,7 +297,14 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 ## doctor 自动派单：回退链耗尽 → 引擎派诊断修复（2026-10-16，用户提案，commit 656193a）
 
-第四条派活入口（前三条：LLM 工具调用 / 引擎施工派发 / 用户 `@name` 直派，见上文对照），特征是**失败触发**：`_bg` 异常分支识别「`RuntimeError` + 回退链不可用」特征且失败者非 doctor 时，直接 `agent_prompt("doctor", target agent_id + 错误全文 + "按 doctor.md 工作循环处理")` 派诊断修复。**熔断**：doctor 自身失败（`_name != "doctor"` 判定）即短路——不递归派 doctor，自愈层永不自我派单。
+第四条派活入口（前三条：LLM 工具调用 / 引擎施工派发 / 用户 `@name` 直派，见上文对照），特征是**失败触发** + **两个触发面**：
+
+| 触发面 | 接线 | 判据与动作 |
+|---|---|---|
+| 子 Agent | `_bg` 异常分支 | `RuntimeError` +「回退链不可用」特征 且失败者非 doctor → `agent_prompt("doctor", target agent_id + 错误全文 + "按 doctor.md 工作循环处理")` |
+| 主 Agent（2026-10-16 · 二，用户裁定「主 Agent 出现 badrequest 也可以触发」） | `Agent.run()` 轮异常统一出口（emit interrupted 处）→ `multiagent.dispatch_doctor(agent, reason)` | 同款特征 且 `agent_id` 空/`_main_` → 程序化派单（prompt 自带目标 `_main_`） |
+
+`dispatch_doctor` 为模块级函数：`agent.tools.run("agent_prompt", …)` 直接进既有实现、复用完整管线（registry 登记 / answer 通知回流 / `_bg` 线程），不经 LLM 决策——与 `_prompt_subagent` 同属引擎程序化派发家族；派单失败只告警不掩盖原异常。**熔断（防套娃三层）**：`_bg` 侧 `_name != "doctor"` 判定短路 + 主 Agent 出口判据排除 doctor → 不递归派 doctor；probe 上限 5 穷尽即上报。
 
 四件套工具（req_inspect / req_probe / req_patch / req_resume）由 `make_doctor_tools` 闭包生成、经 chat.py 挂主 Agent 工具箱，doctor.yml `tools: ""` 自动继承——doctor 无自有工具目录，与 worker 同为「纯人设 + 继承工具箱」的轻声明。完整闭环见 [doctor](../features/doctor.md)。
 

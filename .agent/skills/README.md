@@ -22,6 +22,21 @@ my-skill/
 进程内执行，如 desktop-ops 的键鼠工具）；scripts/ = 「按需跑一次拿 stdout」的任务脚本
 （skill_run_code / skill_evaluate）。两者由装备口与 skill_run_code 各自消费，互不混用。
 
+## 命令口（skill_command，轻量形态，2026-10-17 用户提案）
+
+技能可把常用操作做成**命名命令**：`scripts/commands/<名>.py`（或 `scripts/<名>.py`），
+指令说明写在 SKILL.md（装备时 SOP 注入，模型直接可见）。调用：
+
+```
+skill_command(name="desktop-ops", command="click --x 500 --y 300 --button left")
+```
+
+- 首词=命令名，其余 token 为参数（shlex 解析，支持引号）；cwd=技能目录；stdout 即回执
+- **白名单**：首词必须是包内实际存在的命令脚本——不存在则列出全部可用命令（自带发现性）
+- 超时默认 60s（可传 timeout，上限 300s）；exit≠0 回执带 ✗ 与 stderr
+- 与 tools/ 的选型：高频/参数复杂/要 schema 校验 → tools/ 外置工具；指令式简单操作、
+  想免注册样板快速加能力 → 命令口。同一技能可双轨并存
+
 ## server.py 行协议（常驻服务）
 
 启动后 stdout 打印能力清单到 `===CAPS_END===`；之后每读 stdin 一行命令，

@@ -1145,6 +1145,57 @@ def skill_run_code(name: str, script: str, args: str = "") -> str:
     return f"▶ python {script} {args}".strip() + f"  [exit={r.returncode}]\n{body}"
 
 
+
+def skill_command(name: str, command: str, timeout: int = 60) -> str:
+    """技能命令口（轻量形态，2026-10-17 用户提案）：command 首词路由到技能命令脚本执行。
+    约定：技能包 scripts/commands/<首词>.py（优先）或 scripts/<首词>.py 为命令实现，
+    其余 token 作为命令行参数传入（shlex 解析，支持引号）；cwd=技能目录；stdout 即回执。
+    白名单：首词必须是技能包内实际存在的命令脚本——不存在则列出全部可用命令（自带发现性），
+    不接受任意 shell。指令说明写在技能 SKILL.md（装备时 SOP 注入，模型直接可见）。"""
+    import shlex
+    import subprocess
+    import sys
+    d, _scope = _resolve_skill(name)
+    if d is None:
+        return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
+    toks = shlex.split(command or "")
+    if not toks:
+        return "[空命令] 用法：skill_command(name, \"mouse_click --x 500 --y 300\")"
+    cmd_name, cmd_args = toks[0], toks[1:]
+    if not _NAME_RE.match(cmd_name) or ".." in cmd_name:
+        return f"[非法命令名] {cmd_name!r}"
+    cand = [d / "scripts" / "commands" / f"{cmd_name}.py", d / "scripts" / f"{cmd_name}.py"]
+    sp = next((c for c in cand if c.exists()), None)
+    if sp is None:
+        found = set()
+        cd = d / "scripts" / "commands"
+        if cd.is_dir():
+            found |= {p2.stem for p2 in cd.glob("*.py")}
+        sd = d / "scripts"
+        if sd.is_dir():
+            found |= {p2.stem for p2 in sd.glob("*.py")}
+        found.discard("evaluate")
+        cmds = sorted(found)
+        listing = "\n".join(f"  - {c}" for c in cmds) or "  （无——技能未提供命令）"
+        return f"[未知命令] {cmd_name}。可用命令：\n{listing}\n（命令实现放 scripts/commands/<名>.py）"
+    cmd = [sys.executable, str(sp)] + cmd_args
+    try:
+        r = subprocess.run(cmd, cwd=str(d), capture_output=True, text=True,
+                           timeout=max(5, min(int(timeout or 60), 300)),
+                           encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return f"[超时] {command} 超过 {timeout}s 被终止"
+    except Exception as e:
+        return f"[执行失败] {e}"
+    out = (r.stdout or "").strip()
+    err = (r.stderr or "").strip()
+    body = (out + ("\n[stderr]\n" + err if err else "")) or "（无输出）"
+    if len(body) > 8000:
+        body = body[:8000] + f"\n…（截断，共 {len(body)} 字）"
+    ok = "✓" if r.returncode == 0 else "✗"
+    return f"{ok} {name}:{cmd_name} {' '.join(cmd_args)}  [exit={r.returncode}]\n{body}"
+
+
 def skill_evaluate(name: str, input: str = "") -> str:
     """技能约定评测入口。优先级：① 技能包 scripts/evaluate.py 存在 → 以 input 作 stdin 执行它
     （cwd=技能目录，超时 120s）；② 包内 EVAL.md → 返回评测说明；③ 都没有 → 明确提示未提供。
@@ -1524,5 +1575,5 @@ def skill_use(name: str, command: str) -> str:
 
 
 SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate),
-                     Tool(skill_run_code), Tool(skill_evaluate),
+                     Tool(skill_run_code), Tool(skill_evaluate), Tool(skill_command),
                      Tool(skill_equip), Tool(skill_use), Tool(skill_unequip))

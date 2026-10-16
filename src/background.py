@@ -227,7 +227,12 @@ class ServiceManager:
             time.sleep(0.15)
             with self._lock:
                 new_lines = list(_it.islice(logs, before, None))
-            if _re.search(expect, "\n".join(new_lines)):
+            joined = "\n".join(new_lines)
+            # expect 恒为【字面子串】匹配（2026-10-16·ccs 接入实锤）：此前 _re.search
+            # 把 "[done]" 当正则字符类——[session] 行里任意 d/o/n/e 字母秒中，假阳性
+            # 提前返回。标记语义（[done]/DONE/complete）就是字面；正则需求属极少数，
+            # 如真需要再加 expect_re 参数，不为假想需求保留误伤面。
+            if expect in joined:
                 return (f"✅ 已发送并匹配到 /{expect}/（新增 {len(new_lines)} 行）：\n"
                         + ("\n".join(new_lines)[-4000:] or "(无输出)"))
         return (f"⏱ {timeout}s 内未匹配 /{expect}/（可加大 timeout 或确认服务真的回显）。"

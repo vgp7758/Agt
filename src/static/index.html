@@ -444,6 +444,8 @@
   <div id="fabDock">
     <button id="fabDockBtn" title="工具面板（点击展开/收起全部）" onclick="toggleFabDock()">🧰</button>
      <div id="fabDockMenu">
+       <!-- 插件市场入口（2026-10-16 用户实锤前端入口缺失）：fabDock 第一位——/market 独立页新标签打开（index 内嵌抽屉版可后续升级） -->
+       <button id="marketFab" class="fabItem" aria-label="插件市场" data-label="插件市场" title="插件市场（/market）" onclick="window.open('/market','_blank')">🛒</button>
        <!-- 按钮平铺（原顺序=看板 fab + 控件栏按钮 + 插件动态按钮）：_layoutFabCols() 开合时自动分列——
             每列最多 10 个（FAB_COL_MAX），第一列贴右缘=主按钮正下方，溢出往左侧加列（用户提案 2026-10-15） -->
        <button id="specFab" aria-label="施工方案（点击展开）" data-label="施工方案">📐<span class="badge" id="specFabBadge" style="display:none">!</span></button>

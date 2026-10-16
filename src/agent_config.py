@@ -1299,12 +1299,52 @@ def apply_extras_to_session(session, extras: list, workspace=None) -> list:
     return errors
 
 
+def _equipped_table(sess) -> dict:
+    """session 装备登记表（2026-10-16 装卸闭环）：sess._equipped_skills——
+    {技能名: {"services": [自己拉起的声明服务名], "item_keys": [插段概览]}}。
+    纯内存不进 meta 持久层——进程生命周期 = 装备生命周期，重启即隐式全卸。
+    无/坏型就地初始化空表（Session 不预声明该属性，避免污染持久化路径）。"""
+    eq = getattr(sess, "_equipped_skills", None)
+    if not isinstance(eq, dict):
+        eq = {}
+        try:
+            sess._equipped_skills = eq
+        except Exception:
+            pass
+    return eq
+
+
+def _revoke_equipped(sess, agent, name: str, reg: dict) -> list:
+    """撤销一次装备的落点（skill_unequip 与 skill_equip 的 replace 幂等共用）：
+    ① 按 _skill_src 标记从 assembly_plan/hook_specs 快照摘除该技能的插段/钩子（只删对应项，
+    其余不动——快照仍冻结有效，不重跑整体装配，未装备技能的项原样保留）；
+    ② 停登记里【自己拉起】的声明服务（复用复用的不拥有不停）。返回撤销摘要 notes。"""
+    from multiagent import _revoke_skill_items
+    notes = []
+    plan, hooks, n_seg, n_hook = _revoke_skill_items(
+        getattr(sess, "assembly_plan", None), getattr(sess, "hook_specs", None), name)
+    if n_seg or n_hook:
+        if plan is not None:
+            sess.set_assembly_plan(plan)   # 冻结快照更新（同时清 once 缓存）
+        sess.hook_specs = hooks
+        notes.append(f"撤销插段 {n_seg} 项 / 钩子 {n_hook} 项")
+    for sn in (reg or {}).get("services", []):
+        try:
+            agent.services.stop(str(sn))
+            notes.append(f"停自有服务 {sn}")
+        except Exception as e:
+            notes.append(f"停服务 {sn} 失败: {type(e).__name__}: {e}")
+    return notes
+
+
 def skill_equip(name: str) -> str:
-    """装备技能服务：拉起技能包 server.py（cwd=技能目录），返回其打印的能力清单。
+    """装备技能（临时能力）：拉起技能包 server.py + 按 frontmatter services: 声明拉依赖服务
+    （探测活→复用不拥有；死→拉起并记入装备登记）+ 应用装配清单（装备时冻结快照），
+    登记进 session._equipped_skills（纯内存——重启即隐式全卸）。
     server.py 协议：启动后 stdout 打印能力清单（自由格式，含命令/参数说明）到
     ===CAPS_END=== 行；此后每收到 stdin 一行命令输出结果到 ===DONE=== 行。
-    重复装备 = 杀旧起新（幂等）。与 skill_use(name, "cmd --args") 配对；
-    服务常驻到 Agent 进程退出（有状态：跨调用保持模型加载/会话等）。"""
+    重复装备 = replace（先按标记撤旧插段 + 停旧自有服务，再装新——幂等，其它来源不碰）。
+    卸载配对 skill_unequip(name)；与 skill_use(name, "cmd --args") 配对。"""
     import subprocess
     import sys
     d, _scope = _resolve_skill(name)
@@ -1314,6 +1354,17 @@ def skill_equip(name: str) -> str:
     if not sp.exists():
         return (f"[无服务] 技能 '{name}' 没有 server.py（装备仅适用于带常驻服务的技能；"
                 f"普通技能用 read_skill / skill_run_code）")
+    a = _RUNTIME_AGENT
+    sess = getattr(a, "session", None) if a is not None else None
+    # —— replace 幂等：重复装备同名 = 先撤旧（插段 + 自有声明服务），再装新 ——
+    # （server.py 旧实例 _svc_kill 照旧杀；撤销只按 _skill_src 标记，其它来源不碰）
+    replace_note = ""
+    if sess is not None and hasattr(sess, "set_assembly_plan"):
+        old = _equipped_table(sess).pop(name, None)
+        if old:
+            notes = _revoke_equipped(sess, a, name, old)
+            replace_note = (f"（replace：撤旧装备——{'；'.join(notes)}）" if notes
+                            else "（replace：旧装备无插段/自有服务，直接重装）")
     _svc_kill(name)   # 幂等：先杀旧实例
     import os
     env = dict(os.environ)
@@ -1336,6 +1387,7 @@ def skill_equip(name: str) -> str:
     # extra_assemblies（plan p_76f6623b）：静态口（SKILL.md frontmatter assemblies:）+
     # 动态口（caps 的 EXTRA_ASSEMBLIES: <json> 单行）双口收集，应用到主 Agent session
     # （装备时冻结快照）。声明坏/锚缺失 → 清单化报错（不静默丢弃），服务保留。
+    # 每项打 _skill_src 来源标记——skill_unequip / replace 按标记撤销（装卸闭环）。
     asm_note = ""
     extras, asm_errors = [], []
     _d, ex1, er1 = load_skill_assemblies(name)
@@ -1345,10 +1397,31 @@ def skill_equip(name: str) -> str:
     ex2, er2 = parse_caps_extra_assemblies(caps, name)
     extras.extend(ex2)
     asm_errors.extend(er2)
+    for _ex in extras:
+        _ex.setdefault("_skill_src", name)
+    # —— frontmatter services: 声明拉起（同子 Agent yml 语法：- 服务名: 命令 | reuse=URL）——
+    # _ensure_agent_services 同款逻辑（单一真源）：探测活→复用不拥有；死→拉起记入装备登记。
+    svc_note = ""
+    started, reused = [], []
+    try:
+        fm, _ = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
+        svcs = fm.get("services") or []
+    except Exception:
+        svcs = []
+    if svcs:
+        if isinstance(svcs, dict):
+            svcs = [svcs]
+        if a is not None and hasattr(a, "services"):
+            from multiagent import _ensure_agent_services
+            r = _ensure_agent_services({"services": svcs}, a)
+            started, reused = r["started"], r["reused"]
+            svc_note = ("\n🔌 依赖服务：拉起 " + ", ".join(started) if started else "\n🔌 依赖服务：无新拉起")
+            if reused:
+                svc_note += f"；复用已活（不停）：{', '.join(reused)}"
+        else:
+            svc_note = "\n⚠️ 声明了依赖服务但无主 Agent 挂点（_RUNTIME_AGENT 未挂），未拉起"
     if extras:
         fill_default_hook_items(extras, d)   # hook: 缺省 ass → 技能包 workflows/（装备时冻结）
-        a = _RUNTIME_AGENT
-        sess = getattr(a, "session", None) if a is not None else None
         if sess is None or not hasattr(sess, "set_assembly_plan"):
             asm_note = (f"\n⚠️ 装配清单声明了 {len(extras)} 项但无主 Agent 引擎挂点（_RUNTIME_AGENT 未挂），"
                         f"本次未应用：{'; '.join(e['position'] for e in extras)}")
@@ -1366,8 +1439,57 @@ def skill_equip(name: str) -> str:
                 asm_note = f"\n⚠️ 装配清单应用异常（服务已装备）：{type(e).__name__}: {e}"
     elif asm_errors:
         asm_note = "\n⚠️ 装配清单未应用（声明校验失败）：" + "；".join(asm_errors)
-    return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）。能力清单：\n{caps or '（清单为空）'}\n"
-            f"用法：skill_use(name='{name}', command=\"<命令> --参数\")" + asm_note)
+    # —— 装备登记（纯内存；item_keys=插段概览，撤除按 _skill_src 标记——同源不漂移）——
+    life_note = ""
+    if sess is not None and hasattr(sess, "set_assembly_plan"):
+        _equipped_table(sess)[name] = {
+            "services": list(started),
+            "item_keys": [f"{e['position']}×{len(e['items'])}" for e in extras],
+        }
+        life_note = f"\n📌 已登记装备（用完可 skill_unequip('{name}') 卸载；重启即全卸）"
+    return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）{replace_note}。能力清单：\n{caps or '（清单为空）'}\n"
+            f"用法：skill_use(name='{name}', command=\"<命令> --参数\")" + svc_note + asm_note + life_note)
+
+
+def skill_unequip(name: str) -> str:
+    """卸载技能（skill_equip 配对，2026-10-16 用户裁定）：① 按登记从 assembly_plan/hook_specs
+    撤销该技能的插段/钩子（按 _skill_src 标记——只删对应项，其余不动，快照仍冻结有效，
+    不重跑整体装配）；② 停自有服务（server.py + 登记里自己拉起的声明服务；复用复用的跳过）；
+    ③ 清装备登记。登记丢失（进程重启过）→ 尽力按标记撤 + 提示（声明服务无从追溯不停）；
+    未装备 → 明确提示。登记纯内存不入持久层——重启即隐式全卸。"""
+    if not _NAME_RE.match(name or ""):
+        return f"[非法名称] '{name}'，技能名只能含字母数字、下划线、连字符"
+    a = _RUNTIME_AGENT
+    sess = getattr(a, "session", None) if a is not None else None
+    notes = []
+    reg = _equipped_table(sess).pop(name, None) if sess is not None else None
+    # ① 撤插段/钩子（标记扫描——登记在不在都尽力；只删 _skill_src 匹配项）
+    if sess is not None and hasattr(sess, "set_assembly_plan"):
+        try:
+            notes.extend(_revoke_equipped(sess, a, name, reg or {}))
+        except Exception as e:
+            notes.append(f"撤销插段异常（容错继续）: {type(e).__name__}: {e}")
+    # ② 停自有服务：server.py 实例（_SKILL_SERVICES）+ 登记里自己拉起的声明服务
+    if name in _SKILL_SERVICES:
+        _svc_kill(name)
+        notes.append("停 server.py 服务")
+    if reg:
+        for sn in reg.get("services", []):
+            if a is not None and hasattr(a, "services"):
+                try:
+                    a.services.stop(str(sn))
+                    notes.append(f"停自有服务 {sn}")
+                except Exception as e:
+                    notes.append(f"停服务 {sn} 失败: {type(e).__name__}: {e}")
+    # ③ 判定与报告
+    if not reg and not notes:
+        return (f"[未装备] 技能 '{name}' 当前未装备（无登记、装配快照也无其插段/钩子）——"
+                f"先 skill_equip('{name}') 再卸")
+    head = f"✅ 已卸载技能 '{name}'（{'；'.join(notes) if notes else '无残留落点'}）"
+    if reg is None and notes:
+        head += "\n⚠️ 装备登记丢失（进程重启过？）——已按插段标记尽力撤销；声明服务无从追溯未停"
+    head += "\n（装配快照已剔除该技能项，其余装备与宿主段不动；重启即隐式全卸）"
+    return head
 
 
 def skill_use(name: str, command: str) -> str:
@@ -1403,4 +1525,4 @@ def skill_use(name: str, command: str) -> str:
 
 SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate),
                      Tool(skill_run_code), Tool(skill_evaluate),
-                     Tool(skill_equip), Tool(skill_use))
+                     Tool(skill_equip), Tool(skill_use), Tool(skill_unequip))

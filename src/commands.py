@@ -1065,6 +1065,27 @@ def _cmd_uninstall(ctx: CommandContext, args):
     print(uninstall(positional[0], workspace=ctx.session.workspace))
 
 
+def _cmd_skill_equip(ctx: CommandContext, args):
+    """/skill_equip <技能名>  装备技能（server.py 常驻服务 + services 依赖拉起 + 装配清单冻结应用）。
+    与 agent_config.skill_equip 同源（模型工具口 / 斜杠命令口双入口同一实现）。"""
+    from agent_config import skill_equip
+    positional, _ = _parse_args(args)
+    if not positional:
+        print("用法：/skill_equip <技能名>   （重复装备=replace；卸载 /skill_unequip <名>）")
+        return
+    print(skill_equip(positional[0]))
+
+
+def _cmd_skill_unequip(ctx: CommandContext, args):
+    """/skill_unequip <技能名>  卸载技能（撤插段/钩子 + 停自有服务 + 清登记；重启即全卸）。"""
+    from agent_config import skill_unequip
+    positional, _ = _parse_args(args)
+    if not positional:
+        print("用法：/skill_unequip <技能名>   （装备登记纯内存——重启即隐式全卸，无持久清单）")
+        return
+    print(skill_unequip(positional[0]))
+
+
 def _cmd_feedback(ctx: CommandContext, args):
     """/feedback [类型] <内容>  提交反馈给作者（bug/建议/问题/赞美），类型可选默认「建议」。
     不带参数显示用法 + 作者联系方式。反馈本地保存，作者配了 webhook 则同时推送到飞书。"""
@@ -2368,6 +2389,12 @@ def build_default_registry() -> CommandRegistry:
     reg.register("uninstall", _cmd_uninstall,
         "<name>  卸载市场条目（卸实际已装层：repo/global/both 全卸）",
         "/uninstall reload_hot           卸载并清理落位文件（repo+全局两层）")
+    reg.register("skill_equip", _cmd_skill_equip,
+        "<技能名>  装备技能（server.py 服务 + services 依赖 + 装配清单冻结应用；重复=replace）",
+        "/skill_equip test-svc       装备（能力清单 + 装配应用 + 登记内存）\n"
+        "/skill_unequip test-svc     卸载（撤插段/停自有服务/清登记）")
+    reg.register("skill_unequip", _cmd_skill_unequip,
+        "<技能名>  卸载技能（撤销插段/钩子 + 停自有服务 + 清登记；重启即隐式全卸）")
     reg.register("feedback", _cmd_feedback,
         "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）",
         "/feedback 工作流编辑器连线不太灵敏        （默认类型=建议）\n"

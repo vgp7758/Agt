@@ -40,6 +40,30 @@ assemblies:
 - 装备时冻结：声明解析后作为静态快照进宿主 session，逐轮不再重算；多技能同位置按
   装备顺序稳定追加。范例：`desktop-ops`（画面帧 `image_feed: {tool: screen_frame()}`）。
 
+## 装卸生命周期（skill_equip / skill_unequip，2026-10-16 用户裁定）
+
+技能装备 = **需要就装、用一阵子、不需要就卸的临时能力**（不做持久声明；重启即隐式全卸）。
+
+```
+skill_equip("x")     → ①extra_assemblies 中间件带上（插段/钩子/帧提供者，带 _skill_src 来源标记）
+                       ②frontmatter services: 默认拉起（见下）③登记进 session._equipped_skills（纯内存）
+                       ④重复 equip = replace（先撤旧再装新，不重复插段）
+skill_unequip("x")   → 按标记撤插段/钩子 → 停自有服务（reuse 复用的不拥有、不停）→ 清登记
+```
+
+`services:` 声明（frontmatter，同子 Agent yml 语法，`| reuse=<探测URL>` 支持跨实例复用）：
+
+```yaml
+services:
+  - desktop-frame: python tools/frame.py 8765 | reuse=http://127.0.0.1:8765/frame
+```
+
+- **拉起语义**：探测活 → 复用（不拥有、unequip 不停）；连接拒绝 → 自己拉起（记入登记，unequip 时停）
+- **重启语义**：登记纯内存——进程结束装备即失（临时定位）。重启后再 unequip 走容错：
+  尽力按标记撤 + 提示登记丢失；自有服务因无从追溯不停（已提示）
+- **三句话义对齐**：市场层 /install（文件安装）→ 装备层 skill_equip（临时能力装卸）→
+  实例层 yml `skills:`（子 Agent 声明式，实例死即卸）
+
 ## 双层与激活
 
 - repo 本地 `.agent/skills/` 直接可用；全局 `~/.agt/skills/` 需在本 repo
@@ -48,5 +72,5 @@ assemblies:
 
 ## 深入
 
-- 七件套工具：read_skill / save_skill / skill_navigate / skill_run_code / skill_evaluate / skill_equip / skill_use
+- 八件套工具：read_skill / save_skill / skill_navigate / skill_run_code / skill_evaluate / skill_equip / skill_unequip / skill_use
 - 已有范例：`test-svc`（服务协议）、`pbridge`（服务+工作流+SOP 完整体）、`yangzi-aistudio`（全局技能）

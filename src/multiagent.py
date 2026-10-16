@@ -257,16 +257,20 @@ def _probe_alive(url: str, timeout: float = 2.0) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
-def _ensure_agent_services(meta: dict, agent) -> None:
+def _ensure_agent_services(meta: dict, agent) -> dict:
     """yml 声明的依赖服务（2026-10-06 用户提案）：子 Agent 实例化时幂等拉起。
     形态：services: [{服务名: 命令}, ...]（列表 of 单键映射；dict 形态也认）。
     已存在同名服务（在跑）→ 跳过；命令 cwd=workspace（相对路径可用）。
     跨实例复用（2026-10-16 用户补充）：命令可带 "| reuse=<探测URL>" 后缀——拉起前先
     GET 探测（2s 超时）：已活 → 跳过拉起只复用（desktop-frame 帧服务全局单例：多 agt
-    实例不重复拉；复用方不注册服务池条目——不拥有不 stop，只使用）；死才真拉起。"""
+    实例不重复拉；复用方不注册服务池条目——不拥有不 stop，只使用）；死才真拉起。
+    返回 {"started": [...], "reused": [...]}（2026-10-16 技能装卸闭环：started=本次真拉起的
+    ——skill_equip 记入装备登记，unload 只停自己拉起的；reused=探测复用的不拥有不停。
+    子 Agent 调用点忽略返回值，零回归）。"""
     svcs = meta.get("services") or []
     if isinstance(svcs, dict):
         svcs = [svcs]
+    started, reused = [], []
     for it in svcs:
         if not isinstance(it, dict):
             continue
@@ -277,14 +281,20 @@ def _ensure_agent_services(meta: dict, agent) -> None:
                     alive, detail = _probe_alive(reuse_url)
                     if alive:
                         _LOG.info("子 Agent 依赖服务 %s: 复用已活服务 %s（%s）——不重复拉起", sname, reuse_url, detail)
+                        reused.append(str(sname))
                         continue
                     _LOG.info("子 Agent 依赖服务 %s: 探测不可复用（%s）→ 拉起", sname, detail)
                 r = agent.services.start(str(sname), cmd, str(agent.session.workspace)
                                          if getattr(agent.session, "workspace", "") else "",
                                          quiet_secs=120)   # 启动蜜月：秒退不吓 agent
+                if str(r).startswith("[已存在同名服务]"):
+                    pass   # 服务池里同名条目在跑（别人拉起的）——不拥有，不记 started
+                else:
+                    started.append(str(sname))
                 _LOG.info("子 Agent 依赖服务 %s: %s", sname, str(r)[:80])
             except Exception as e:
                 _LOG.warning("子 Agent 依赖服务 '%s' 拉起失败: %s", sname, e)
+    return {"started": started, "reused": reused}
 
 
 def _agent_own_tools(name: str, agent):
@@ -346,6 +356,8 @@ def _agent_skill_gear(name: str, meta: dict, agent):
         if d_err:
             return {**empty, "error": f"技能 '{sn}' 装配声明错误：" + "；".join(d_err)}
         fill_default_hook_items(d_ex, d)
+        for _ex in d_ex:
+            _ex["_skill_src"] = sn   # 来源标记（2026-10-16 装卸闭环）——插段/钩子项据此撤销
         extras.extend(d_ex)
         svcs = fm.get("services")
         if svcs:
@@ -364,6 +376,8 @@ def _apply_extra_assemblies(base_plan, base_hooks, extras):
     插段语义：锚段前/后插入 ass 项；多技能同锚按装备顺序稳定追加（先装备的先插）。
     钩子语义：hook:<位> 的项并入宿主 hook_specs[位]（workflow 项带 dir=技能包 workflows/，
     装备时冻结路径），并确保 hooks 段开关打开（hook_specs 才会被 _run_hooks 消费）。
+    来源标记（2026-10-16 装卸闭环）：extra 声明可带 _skill_src=技能名（聚合方/装备方打标），
+    落到每个插入项上——skill_unequip / replace 幂等按标记撤销（_revoke_skill_items）。
     冻结铁律：本函数只在装备时（派活链/ skill_equip）调用一次，产物作为静态清单快照
     set_assembly_plan 进宿主 session，逐轮不再重算。"""
     from session import Session   # 延迟 import（session 不依赖 multiagent，安全）
@@ -373,6 +387,8 @@ def _apply_extra_assemblies(base_plan, base_hooks, extras):
     for ex in extras or []:
         action, anchor, items = ex["action"], ex["anchor"], ex["items"]
         pos = ex.get("position") or f"{action}:{anchor}"
+        src = ex.get("_skill_src") or ""
+        tag = {"_xsrc": pos, **({"_skill_src": src} if src else {})}
         if action in ("before", "after"):
             idx = next((i for i, it in enumerate(plan)
                         if it.get("kind") == "seg" and it.get("name") == anchor), None)
@@ -385,13 +401,40 @@ def _apply_extra_assemblies(base_plan, base_hooks, extras):
                     at += 1   # 跳过同锚簇（先装备的先插——稳定追加，不插到已装备技能前面）
             else:
                 at = idx   # before 紧贴锚插入：锚位置随每次插入后移，后装备的自然排在前装备之后（稳定）
-            plan[at:at] = [dict(dict(it), _xsrc=pos) for it in items]
+            plan[at:at] = [dict(dict(it), **tag) for it in items]
         elif action == "hook":
             if items:
-                hooks.setdefault(anchor, []).extend(dict(it) for it in items)
+                htag = {"_skill_src": src} if src else {}
+                hooks.setdefault(anchor, []).extend(dict(dict(it), **htag) for it in items)
             if not any(it.get("kind") == "seg" and it.get("name") == "hooks" for it in plan):
                 plan.append({"kind": "seg", "name": "hooks"})   # hooks 段开关打开（与 yml hooks 声明同款派生）
     return plan, hooks, errors
+
+
+def _revoke_skill_items(plan, hooks, skill_name: str):
+    """按 _skill_src 标记从装配快照撤销某技能的插段/钩子（skill_unequip 与 replace 幂等共用）。
+    plan/hooks 传 None（宿主未物化快照）合法——对应侧原样返回、计数 0。
+    只删标记匹配项：宿主原有项与其它技能/来源的插段不碰（'正在服务的其它来源不碰'）。
+    钩子位撤空则删位（空位无消费语义）。返回 (plan2, hooks2, 撤段数, 撤钩子数)。
+    注意：返回的 plan 需经 set_assembly_plan 重新冻结（清 once 缓存）——不重跑整体装配，
+    未装备技能的其余项原样保留（快照仍冻结有效）。"""
+    n_seg = n_hook = 0
+    if plan is not None:
+        keep = [it for it in plan
+                if not (isinstance(it, dict) and it.get("_skill_src") == skill_name)]
+        n_seg = len(plan) - len(keep)
+        plan = keep
+    if hooks:
+        hooks2 = {}
+        for pos, items in hooks.items():
+            items = items or []
+            keep = [it for it in items
+                    if not (isinstance(it, dict) and it.get("_skill_src") == skill_name)]
+            n_hook += len(items) - len(keep)
+            if keep:
+                hooks2[pos] = keep
+        hooks = hooks2
+    return plan, hooks, n_seg, n_hook
 
 
 # assembly DSL v2：有序装配清单。合法段名（8 段）：必装段 system/user_message/steps 恒装

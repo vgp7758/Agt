@@ -114,7 +114,11 @@ class ServiceManager:
                  "watch_tail": max(0, int(watch_tail)),
                  # 启动蜜月（用户实锤 2026-10-08）：quiet_secs 窗口内的退出不通知——
                  # restart 拉起的服务若秒退（旧孤儿占端口等），不再把 agent 吓一跳。
-                 "quiet_until": time.time() + max(0.0, float(quiet_secs))}
+                 "quiet_until": time.time() + max(0.0, float(quiet_secs)),
+                  # 监听者（用户提案 2026-10-16）：服务退出通知的受众——start 时由工具层自动
+                  # 登记启动者（谁启的服务谁监听），其它 agent 实例可经 service_watch/
+                  # service_unwatch 增删；为空时回退现行为（通知持有者/主 Agent）。
+                  "watchers": []}
         # 日志持久化（用户实锤 2026-10-08：restart 后完整日志 404——deque 是内存的）：
         # reader 线程 tee 到 ~/.agt/service_logs/<name>.log，实例重启后仍可读历史。
         try:
@@ -347,6 +351,7 @@ class ServiceManager:
                     "command": e.get("command", ""),
                     "cwd": e.get("cwd", ""),
                     "on_exit_wake": e.get("on_exit_wake", ""),
+                    "watchers": list(e.get("watchers") or []),
                     "logs": list(e["logs"])[-max(1, int(tail)):],
                 })
             return out
@@ -360,6 +365,30 @@ class ServiceManager:
         if not tail:
             return f"【{name}】暂无输出"
         return f"【{name} 最近 {len(tail)} 行】\n" + "\n".join(tail)
+
+    def add_watcher(self, name: str, agent_id: str) -> str:
+        """把 agent 实例加入服务监听名单（service_watch 工具入口，用户提案 2026-10-16）。"""
+        with self._lock:
+            e = self._services.get(name)
+            if not e:
+                return f"[无此服务] {name}（先 start_service）"
+            ws = e.setdefault("watchers", [])
+            if agent_id in ws:
+                return f"已监听「{name}」（{agent_id} 无需重复添加）。当前监听: {ws}"
+            ws.append(agent_id)
+            return f"✅ {agent_id} 已监听「{name}」——退出通知将多播给它。当前监听: {ws}"
+
+    def remove_watcher(self, name: str, agent_id: str) -> str:
+        """移除监听（service_unwatch 工具入口）。移除后只剩自己时仍会自收（兜底不失联）。"""
+        with self._lock:
+            e = self._services.get(name)
+            if not e:
+                return f"[无此服务] {name}"
+            ws = e.setdefault("watchers", [])
+            if agent_id in ws:
+                ws.remove(agent_id)
+                return f"✅ {agent_id} 已移除对「{name}」的监听。剩余监听: {ws or '(空→回退持有者自收)'}"
+            return f"{agent_id} 本就未监听「{name}」。当前监听: {ws}"
 
     def stop(self, name: str) -> str:
         with self._lock:

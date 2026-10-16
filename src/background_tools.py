@@ -40,8 +40,23 @@ def make_background_tools(agent) -> list:
         on_exit_style（通知注入姿势，按实例可改，用户提案 2026-09-23）：
         tool(默认)=合成 stop_service 工具记录（启动参数+退出码+尾部日志，信息最全）；
         text=纯文本通知（轻量——仅 header+简要命令，不打工具记录）。"""
-        return svc.start(name, command, cwd, on_exit_wake=on_exit_wake, on_exit_style=on_exit_style,
-                         watch_tail=watch_tail)
+        ret = svc.start(name, command, cwd, on_exit_wake=on_exit_wake, on_exit_style=on_exit_style,
+                        watch_tail=watch_tail)
+        # 监听自动登记（用户提案 2026-10-16）：谁启的服务谁监听——子 Agent 起的服务退出时
+        # 通知不再恒打主 Agent（marketplace 施工 worker 的 market-e2e-web 崩溃实锤）。
+        # 主 Agent 启动（owner 空/即本实例）不登记——回退现行为自收。
+        if ret.startswith("✅"):
+            try:
+                # get_bg_owner 返回 Agent【实例】（real_tools._tls.bg_owner）——取其 agent_id
+                from real_tools import get_bg_owner
+                _owner_agent = get_bg_owner()
+                _owner_id = getattr(_owner_agent, "agent_id", "") if _owner_agent else ""
+                # 本实例起的（owner 无/即自身）不登记——回退现行为自收
+                if _owner_id and _owner_id != getattr(agent, "agent_id", "_main_"):
+                    ret += "\n" + svc.add_watcher(name, _owner_id)
+            except Exception:
+                pass
+        return ret
 
     def stop_service(name: str) -> str:
         """停止指定的后台服务（先 terminate，3 秒不退则 kill）。
@@ -171,8 +186,20 @@ def make_background_tools(agent) -> list:
         """[旧名别名] 见 service_stdin。"""
         return service_stdin(name, message)
 
+    def service_watch(name: str) -> str:
+        """把当前实例加入某后台服务的监听名单（用户提案 2026-10-16）：服务退出时通知
+        多播给所有监听者。默认谁启的服务谁监听（start_service 自动登记启动者）——
+        本工具让其它 agent 实例也能关注别人起的关键服务（如子 Agent 监听主 Agent 的
+        联调服务、主 Agent 监听子 Agent 起的临时服务）。"""
+        return svc.add_watcher(name, getattr(agent, "agent_id", "_main_"))
+
+    def service_unwatch(name: str) -> str:
+        """移除当前实例对某服务的监听（见 service_watch）。全部监听移除后回退持有者自收。"""
+        return svc.remove_watcher(name, getattr(agent, "agent_id", "_main_"))
+
     return [Tool(start_service), Tool(stop_service), Tool(list_services),
             Tool(service_logs), Tool(service_stdin), Tool(check_bg_task),
+            Tool(service_watch), Tool(service_unwatch),
             Tool(send_to_service, hidden=True),
             Tool(add_schedule,
                  param_descriptions={

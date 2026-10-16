@@ -350,6 +350,9 @@ class Agent:
         self._crash_wake_ts: dict = {}   # 服务异常退出唤醒退避表 {name: last_wake_ts}——5 分钟内同名第二次异常降级登记
         self._inbox_lock = threading.Lock()
         self.services = ServiceManager(on_exit=self._on_service_exit)
+        # 服务退出多播路由（用户提案 2026-10-16）：watcher(agent_id) → 该实例 inbox。
+        # 由 multiagent 装配时注入（registry 在那侧）；None = 单播现行为。
+        self._watch_router = None
         self.scheduler = Scheduler(self)
         self.cumulative_tokens = 0
         self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
@@ -1333,12 +1336,26 @@ class Agent:
         # 注入姿势分流：text=纯文本轻量通知（不打工具记录）；tool/其它=合成 stop_service 记录（现状）
         style = str(entry.get("on_exit_style") or "tool").strip().lower()
         if style == "text":
-            self.push_message(
-                header + f"\n简要：rc={rc} · 启动命令：{entry.get('command', '')[:200]}"
-                + (f"\n—— 启动指令：{custom_note}" if custom_note else ""),
-                source=f"service_exit:{name}", seed=None, wake=wake)
+            msg_text = (header + f"\n简要：rc={rc} · 启动命令：{entry.get('command', '')[:200]}"
+                        + (f"\n—— 启动指令：{custom_note}" if custom_note else ""))
+            seed_out = None
         else:
-            self.push_message(header, source=f"service_exit:{name}", seed=seed, wake=wake)
+            msg_text, seed_out = header, seed
+        # 多播（用户提案 2026-10-16）：watchers 非空 → 逐个路由到对应 agent 实例 inbox
+        # （_watch_router 由 multiagent 注入，registry lookup）；本实例在名单里则自收。
+        # 名单空/路由全失败 → 回退现行为（持有者自收，通知不丢）。
+        watchers = [w for w in (entry.get("watchers") or []) if w]
+        my_id = getattr(self, "agent_id", "_main_")
+        routed = []
+        if watchers and self._watch_router:
+            for wid in watchers:
+                if wid == my_id:
+                    self.push_message(msg_text, source=f"service_exit:{name}", seed=seed_out, wake=wake)
+                    routed.append(wid)
+                elif self._watch_router(wid, msg_text, seed_out, wake, f"service_exit:{name}"):
+                    routed.append(wid)
+        if not routed:
+            self.push_message(msg_text, source=f"service_exit:{name}", seed=seed_out, wake=wake)
 
     def _on_bg_task_done(self, bg_id: str, name: str, rc: int, owner=None):
         """后台任务（run_python/run_shell 超时转后台）完成回调（real_tools._bg_reader 触发，

@@ -928,8 +928,32 @@ def _inject_agent_enums(agent, tools_list):
             props["caller"]["enum"] = ["", "user"]   # 空=自动捕获 / user=fire-and-forget（显式 agent_id 也可手填）
 
 
+def _make_service_watch_router(agent):
+    """服务退出通知按 watcher 路由（用户提案 2026-10-16）：registry 查 watcher 实例 →
+    deliver_notice 推送；查不到/异常返回 False——调用方（agent._on_service_exit）兜底自收，
+    通知不丢。"""
+    def _route(agent_id, text, seed, wake, source):
+        try:
+            reg = getattr(agent, "registry", None)
+            entry = reg.lookup(agent_id) if reg else None
+            target = getattr(entry, "agent", None) if entry else None
+            if target is None:
+                _LOG.warning("service_exit 多播：registry 无 %s 活条目——该 watcher 由持有者兜底", agent_id)
+                return False
+            return bool(deliver_notice(target, text, seed=seed))
+        except Exception:
+            return False
+    return _route
+
+
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
+    # 服务退出多播路由注入（用户提案 2026-10-16）：主 Agent 的 services 池是全实例共享的，
+    # _on_service_exit 在主 Agent 身上——watcher 路由经 registry 找到对应子 Agent 实例投递。
+    try:
+        agent._watch_router = _make_service_watch_router(agent)
+    except Exception:
+        pass
 
     def create_agent(name: str, description: str, system: str, tools: str = "", model: str = "",
                      assembly: str = "", hooks: str = "") -> str:

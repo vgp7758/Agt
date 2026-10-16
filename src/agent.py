@@ -1411,12 +1411,20 @@ class Agent:
         return "\n".join(lines)
 
     def _runtime_system_extra(self) -> str:
-        """动态注入 system prompt 的运行时段：后台服务清单 + 子 Agent 任务看板。
-        两者皆空返回空串（不注入）；有则 Agent 每步都能看到哪些在跑/已完成，不必自己查。"""
+        """动态注入 system prompt 的运行时段：后台服务清单 + 技能装备提醒 + 子 Agent 任务看板。
+        三者皆空返回空串（不注入）；有则 Agent 每步都能看到哪些在跑/已完成，不必自己查。"""
         parts = []
         svc = self.services.status_lines()
         if svc:
             parts.append("【后台服务状态】当前服务：\n" + "\n".join(svc))
+        eq = getattr(self.session, "_equipped_skills", None) or {}
+        if eq:
+            lines = []
+            for n, r in eq.items():
+                d = (r or {}).get("desc") or ""
+                lines.append(f"  · {n}" + (f"——{d}" if d else ""))
+            parts.append("【技能装备中】\n" + "\n".join(lines) +
+                         "\n技能装备是临时能力：暂时不需要时记得 skill_unequip('技能名') 卸载释放（进程重启也会隐式全卸）。")
         board = self._format_subagent_board()
         if board:
             parts.append(board)

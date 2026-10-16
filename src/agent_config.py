@@ -1454,9 +1454,11 @@ def skill_equip(name: str) -> str:
     # _ensure_agent_services 同款逻辑（单一真源）：探测活→复用不拥有；死→拉起记入装备登记。
     svc_note = ""
     started, reused = [], []
+    desc = ""   # SKILL.md description——装备提醒段（agent._runtime_system_extra）展示用
     try:
         fm, _ = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8", errors="ignore"))
         svcs = fm.get("services") or []
+        desc = str(fm.get("description") or "")
     except Exception:
         svcs = []
     if svcs:
@@ -1496,6 +1498,7 @@ def skill_equip(name: str) -> str:
         _equipped_table(sess)[name] = {
             "services": list(started),
             "item_keys": [f"{e['position']}×{len(e['items'])}" for e in extras],
+            "desc": desc,
         }
         life_note = f"\n📌 已登记装备（用完可 skill_unequip('{name}') 卸载；重启即全卸）"
     return (f"✅ 技能服务 '{name}' 已装备（pid {p.pid}）{replace_note}。能力清单：\n{caps or '（清单为空）'}\n"

@@ -5,14 +5,14 @@ when_to_use: 需要操作本机 GUI（点击/输入/切窗/自动化桌面流程
 assemblies:
   - position: after:steps
     ass:
-      - image_feed: {tool: screen_frame()}
+      - image_feed: {tool: skill_command(name="desktop-ops", command="screen_capture")}
 ---
 
 # 桌面键鼠操作 SOP
 
-本技能提供 11 个外置工具：`mouse_click` / `mouse_move` / `mouse_drag` / `key_press` / `key_type` / `key_hotkey` / `clipboard_read` / `clipboard_write` / `window_list` / `window_focus` / `screen_frame`。操作对象是本机真实 GUI——键鼠动作会影响真实桌面。
+本技能提供 10 个外置工具：`mouse_click` / `mouse_move` / `mouse_drag` / `key_press` / `key_type` / `key_hotkey` / `clipboard_read` / `clipboard_write` / `window_list` / `window_focus`；另有命令口帧源 `screen_capture`（截屏存盘返回路径，供 image_feed 与手动取帧）。操作对象是本机真实 GUI——键鼠动作会影响真实桌面。
 
-本技能自带装配清单（SKILL.md `assemblies:`）：装备时自动往宿主装配清单 `after:steps` 插入画面帧段（`image_feed: {tool: screen_frame()}`，帧提供者抽象）——视觉宿主每步自动看到最新画面（装备时冻结快照），无需宿主 yml 手写 image_feed 段或拉起画面服务。
+本技能自带装配清单（SKILL.md `assemblies:`）：装备时自动往宿主装配清单 `after:steps` 插入画面帧段（`image_feed: {tool: skill_command(name="desktop-ops", command="screen_capture")}`，帧提供者抽象）——视觉宿主每步自动看到最新画面（装备时冻结快照），无需宿主 yml 手写 image_feed 段或拉起画面服务。
 
 ## 坐标规范（重要）
 

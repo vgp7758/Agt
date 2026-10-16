@@ -644,8 +644,13 @@ def _asm_image_feed_from_tool(expr: str, session) -> str:
         except Exception:
             req, props = [], {}
         opt = [k for k in props if k not in req]
-        for i, a in enumerate(args):
-            pname = req[i] if i < len(req) else (opt[i - len(req)] if 0 <= i - len(req) < len(opt) else None)
+        for a in args:
+            kv = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.+)$", a.strip())
+            if kv and kv.group(1) in props:            # 命名参数（2026-10-17：skill_command(name=…) 造型）
+                kwargs[kv.group(1)] = _imgfeed_coerce(kv.group(2).strip().strip("\"'"), (props.get(kv.group(1)) or {}).get("type"))
+                continue
+            i = sum(1 for _ in kwargs.values())
+            pname = req[i] if i < len(req) else None
             if pname is None:
                 break
             kwargs[pname] = _imgfeed_coerce(a, (props.get(pname) or {}).get("type"))

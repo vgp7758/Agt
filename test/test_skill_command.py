@@ -2,6 +2,15 @@
 import sys, pathlib, tempfile, shutil
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 import agent_config as ac
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_resolve():
+    """_resolve_skill patch 必须还原——全局污染会打穿后续测试文件（实测 5 failed 教训）"""
+    saved = ac._resolve_skill
+    yield
+    ac._resolve_skill = saved
 
 
 def _mk_skill(tmp, cmds=("echo",)):

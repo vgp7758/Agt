@@ -130,24 +130,6 @@ def window_focus(title_contains: str) -> str:
     time.sleep(0.3)
     return f"✅ 已切换到「{w.title[:50]}」"
 
-def screen_frame() -> str:
-    """截取当前桌面画面帧（等比缩放到宽 1280——与坐标基准一致），存临时 PNG 并返回文件路径。
-    既是 image_feed 装配段 tool: 帧提供者（SKILL.md assemblies: {tool: screen_frame()}，
-    每步自动注入画面），也可手动调它看屏。pyautogui 截图即真实屏幕（DPI 缩放已含）。"""
-    import io
-    import os
-    import tempfile
-    import pyautogui
-    pyautogui.FAILSAFE = False
-    shot = pyautogui.screenshot()
-    if shot.width > _FRAME_W:
-        h = max(1, round(shot.height * _FRAME_W / shot.width))
-        shot = shot.resize((_FRAME_W, h))
-    d = os.path.join(tempfile.gettempdir(), "agt_screen_frame.png")
-    shot.save(d, format="PNG")
-    return d
-
-
 def agt_register():
     """外置工具注册（同 tools/builtin 约定——scan_script_tools 消费）。"""
     specs = [

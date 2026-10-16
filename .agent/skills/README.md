@@ -51,7 +51,8 @@ assemblies:
   - position: after:steps        # before:<段名> / after:<段名>：往宿主装配清单锚段前/后插
     ass:
       - text: 【注入段】          # ass 复用 yml assembly 段语法（file:/cmd:/text:/workflow:…）
-      - image_feed: {tool: screen_frame()}   # 帧提供者：每步取帧=调工具表达式
+      - image_feed: {tool: screen_frame()}   # 帧提供者：每步取帧=调工具/命令表达式
+      - image_feed: {tool: skill_command(name="x", command="screen_capture")}  # 命令口帧源（支持命名参数）
   - position: hook:turn_end      # 技能 workflows/ 下全部工作流挂到钩子位
                                  #（或显式 ass: ["wf名|async"]）
 ```

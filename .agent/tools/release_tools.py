@@ -51,6 +51,18 @@ def release_publish(part: str = "patch", message: str = "", dry_run: bool = Fals
     vfile_note = ("✅ version_file 同步提交并推送" if rc3 == 0 and rc4 == 0
                   else f"⚠️ version_file 提交/推送异常（rc={rc3}/{rc4}）：{ (out3 + out4).strip()[:200]}")
 
+    # ③.5 打 tag 并推（2026-10-16 收口：桌面版 CI 靠 tag 触发，此前 release.py 只推 main、
+    # tag 一直靠手补——v0.35.2 断网漏推、v0.35.3 手工补打。指向 version_file 同步后的最终
+    # commit；tag 已存在（重跑场景）rc!=0 时仍尝试推，推送失败不中断发布（PyPI 已上线）。）
+    tag = f"v{ver}"
+    if ver:
+        _sh(["git", "tag", tag])                       # 已存在则 rc!=0，无害
+        tag_rc, tag_out = _sh(["git", "push", "origin", tag])
+        tag_note = (f"✅ tag {tag} 已打并推送（桌面版 CI 将触发）" if tag_rc == 0
+                    else f"⚠️ tag {tag} 推送失败（补推：git push origin {tag}）：{tag_out.strip()[:160]}")
+    else:
+        tag_note = "⏭ tag 跳过（版本号未解析到）"
+
     # ④ PyPI 上线验证（索引生效有 ~20s 延迟，三连重试）
     vnote = "⏭ 跳过（版本号未解析到）"
     if ver:
@@ -66,7 +78,7 @@ def release_publish(part: str = "patch", message: str = "", dry_run: bool = Fals
                 else:
                     time.sleep(20)
 
-    return ("✅ 发布完成\n" + "\n".join(tail) + "\n" + vfile_note + "\n" + vnote)
+    return ("✅ 发布完成\n" + "\n".join(tail) + "\n" + vfile_note + "\n" + tag_note + "\n" + vnote)
 
 
 def agt_register():

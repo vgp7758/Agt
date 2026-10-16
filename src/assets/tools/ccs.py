@@ -18,21 +18,37 @@
   /status              REPL 协议状态查询（最近事件 + 是否在跑）
   /quit                退出
 
-配置（环境变量，均有默认——与 cc.ps1 同款指向本地 proxy）：
-  CCS_CLAUDE / CCS_BASE_URL / CCS_API_KEY / CCS_MODEL / CCS_CWD
+配置（环境变量，2026-10-17 通用化——缺关键项打印指引，不再默认连作者本机 proxy）：
+  CCS_CLAUDE（claude 可执行路径，默认 PATH 探测）/ CCS_BASE_URL（第三方后端，可选——
+  官方 key 用户不用设）/ CCS_API_KEY（或继承 ANTHROPIC_API_KEY）/ CCS_MODEL / CCS_CWD
+接入文档：docs/claude-code-bridge.md（任何 MCP 宿主通用 + 各宿主注册命令）
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 
-# ---- 配置 ----
-CLAUDE = os.environ.get("CCS_CLAUDE", r"C:\Users\vgp77\AppData\Roaming\npm\claude.cmd")
-ENV = {**os.environ,
-       "ANTHROPIC_BASE_URL": os.environ.get("CCS_BASE_URL", "http://127.0.0.1:9877/api/llm"),
-       "ANTHROPIC_API_KEY": os.environ.get("CCS_API_KEY", "proxy-fallback"),
+# ---- 配置（2026-10-17 通用化：优先探测/继承环境，缺关键项打印指引——不再默认连作者本机 proxy） ----
+CLAUDE = (os.environ.get("CCS_CLAUDE") or shutil.which("claude")
+          or shutil.which("claude.cmd") or shutil.which("claude.exe")
+          or r"C:\Users\vgp77\AppData\Roaming\npm\claude.cmd")   # 兜底：作者本机路径
+if not os.path.exists(CLAUDE):
+    print("[ccs] 未找到 claude CLI——先安装：npm i -g @anthropic-ai/claude-code\n"
+          "      已装但不在 PATH？用 CCS_CLAUDE=<claude 可执行文件路径> 指定。", flush=True)
+    sys.exit(2)
+_base = os.environ.get("CCS_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+_key = os.environ.get("CCS_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+if not _key:
+    print("[ccs] ⚠️ 未检测到 API key（CCS_API_KEY / ANTHROPIC_API_KEY 均未设）。\n"
+          "      三选一：① 官方 key：set ANTHROPIC_API_KEY=sk-ant-...\n"
+          "             ② 第三方后端：CCS_BASE_URL=<中转地址> + CCS_API_KEY=<对应key>\n"
+          "             ③ 订阅登录态：先在终端跑一次 claude 完成登录（OAuth），本服务可复用。\n"
+          "      继续尝试启动（登录态可用则正常；否则将连接失败）。", flush=True)
+ENV = {**os.environ, **({"ANTHROPIC_BASE_URL": _base} if _base else {}),
+       "ANTHROPIC_API_KEY": _key or "",
        "ANTHROPIC_DEFAULT_OPUS_MODEL": os.environ.get("CCS_MODEL", "glm-5.2")}
 CWD = os.environ.get("CCS_CWD", os.getcwd())
 

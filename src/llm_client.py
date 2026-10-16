@@ -304,6 +304,25 @@ class ImageUnsupportedError(Exception):
     同模型重试，而非进回退链换模型（用户实锤 2026-09-30·glm-5.3 端点 1210）。"""
 
 
+def _strip_image_parts(messages) -> int:
+    """剔除消息里全部 image_url 部件（坏图自愈用）。返回剔除数；全图的 content 退空串。"""
+    n = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            keep = [p for p in c if not (isinstance(p, dict) and p.get("type") == "image_url")]
+            if len(keep) != len(c):
+                n += len(c) - len(keep)
+                m["content"] = keep or ""
+    return n
+
+
+def _img_decode_reject(e) -> bool:
+    """400 坏图特征：解码失败/数据损坏（区别于端点不支持图——那走 ImageUnsupportedError 路径）。"""
+    s = str(e)
+    return "decode the image" in s or ("image data" in s and ("corrupt" in s or "incomplete" in s))
+
+
 def _is_img_reject(e) -> bool:
     """识别「端点不支持图片输入」类错误（各 provider 措辞不一，按已实测特征匹配）。"""
     s = str(e)
@@ -897,6 +916,7 @@ class LLMClient:
             self.switch_model(next_m)
 
         tried_tokens = [0]          # 用 list 包一层让 _advance 能修改（闭包）
+        healed_img = [False]         # 坏图自愈已用标记（同 chat 调用最多一次，用户提案 2026-10-16）
         tried = [self.model_name]   # 本次调用内已试过的 model 名
         waits_left = [2]            # 全链冷却时的等待配额（防死等：至多睡两个冷却窗再真报错）
         net_waited = [0.0]          # 本次调用累计等网秒数（上限 net_wait_max，2026-09-26）
@@ -977,6 +997,17 @@ class LLMClient:
                         if _probe_anchors() > 0:
                             continue   # 网已恢复 → 原样重试当前 provider
                         # 预算耗尽仍断 → 落到下面原逻辑（记冷却、回退链）
+                # 坏图剔除自愈（用户提案 2026-10-16）：400 且错误文本含图解码失败特征 →
+                # 剔除消息里全部 image_url 部件后【同模型】重试（不记冷却、不回退、不换 token）。
+                # 实锤场景：worker 施工三连炸——装配里混入坏图，glm-flash/glm/deepseek 全 400
+                # 连锁冷却 → dispatch 钩子无限重派。图剔除后请求即正常（图本来就不该在那）。
+                if isinstance(e, BadRequestError) and not healed_img[0] and _img_decode_reject(e):
+                    healed_img[0] = True   # 每次调用最多自愈一次（防坏数据循环）
+                    _n = _strip_image_parts(messages)
+                    if _n:
+                        _LOG.warning("坏图自愈：剔除 %d 个 image_url 部件，同模型重试（%s）", _n, str(e)[:110])
+                        continue
+
                 # 其它失败 → 记录冷却（model+token 签名）
                 # 401/403/404（鉴权/配额/模型不存在）也走回退（2026-09-08 用户调试 flatkey 余额 403 直接炸轮的根因）：
                 # 该 provider 不可用不代表链上其它也不可用——冷却后切下一个，保证会话不断

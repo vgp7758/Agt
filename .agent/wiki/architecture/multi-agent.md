@@ -94,7 +94,7 @@ yml: skills: [desktop-ops]
 
 #### 后记：返回值升级 dict + extra_assemblies 三路生效（2026-10-16，commit 3609d97）
 
-`_agent_skill_gear` 返回值从 `(tools, sop, err)` 升级为 **dict**（tools / sop / extras / services / error）——技能可自带装配清单（`assemblies:`）与依赖服务，随装备一并进场。配套新增 `_apply_extra_assemblies` 统一插段（after 跳同簇 / before 紧贴锚 = 装备顺序稳定追加；锚缺失清单化报错）+ 钩子挂载；**派活新建 / 复用 / 复活三路径**基线处一处合并、三路生效（主 Agent 动态口 `skill_equip` 走 `agent_config.apply_extras_to_session` 同一插入逻辑）。声明语法与全部语义详见 [技能体系 · 技能自带装配清单](../features/skills.md)。
+`_agent_skill_gear` 返回值从 `(tools, sop, err)` 升级为 **dict**（tools / sop / extras / services / error）——技能可自带装配清单（`assemblies:`）与依赖服务，随装备一并进场。配套新增 `_apply_extra_assemblies` 统一插段（after 跳同簇 / before 紧贴锚 = 装备顺序稳定追加；锚缺失清单化报错）+ 钩子挂载；**派活新建 / 复用 / 复活三路径**基线处一处合并、三路生效（主 Agent 动态口 `skill_equip` 走 `agent_config.apply_extras_to_session` 同一插入逻辑）。**主 Agent 侧 2026-10-16 补齐装卸闭环**：`skill_unequip` / 重复装备（replace 幂等）走同一 `_skill_src` 标记体系（`_revoke_skill_items` 精确撤销插段·钩子 + 只停自己拉起的声明服务）——见 [技能体系 · 技能装卸生命周期](../features/skills.md)。声明语法与全部语义详见 [技能体系 · 技能自带装配清单](../features/skills.md)。
 
 ### desktop-operator 改造（首个消费端）
 

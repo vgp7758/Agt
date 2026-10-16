@@ -10,7 +10,7 @@ my-skill/
 ├── SKILL.md              # ---\nname/description/when_to_use\n--- + SOP（markdown）
 ├── tools/                # 外置工具（可选）：装备（yml skills: / skill_equip）时经 scan_script_tools
 │   │                     #   注册进实例工具箱——成为一等工具直接调用（不是 skill_run_code 脚本！）
-│   └── desktop_tools.py  #   协议：顶层函数=工具（签名/docstring 转 schema，引擎进程内执行）
+│   └── my_tool.py        #   协议：顶层函数=工具（签名/docstring 转 schema，引擎进程内执行）
 ├── scripts/              # skill_run_code("my-skill", "scripts/x.py", "--args") 可执行
 │   └── evaluate.py       # 技能约定评测：skill_evaluate("my-skill", input) 时以 input 为 stdin 执行
 ├── server.py             # 常驻服务（可选）：skill_equip 拉起、skill_use(name, "cmd --args") 调用
@@ -19,8 +19,10 @@ my-skill/
 ```
 
 **tools/ vs scripts/ 分工**：tools/ = 「agent 每步高频直接调用」的能力（结构化参数 schema、
-进程内执行，如 desktop-ops 的键鼠工具）；scripts/ = 「按需跑一次拿 stdout」的任务脚本
+进程内执行）；scripts/ = 「按需跑一次拿 stdout」的任务脚本
 （skill_run_code / skill_evaluate）。两者由装备口与 skill_run_code 各自消费，互不混用。
+另有 server.py stdin 服务形态（`skill_use(name, "cmd --args")`）——能力全量走命令行的技能
+推荐此形态（schema 投影为零，范例：desktop-ops 2026-10-17 迁移）。三种形态按需选，不混用。
 
 ## 命令口（skill_command，轻量形态，2026-10-17 用户提案）
 

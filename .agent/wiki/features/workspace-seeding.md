@@ -53,7 +53,7 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 
 ## 相关页面
 
-- [技能体系](skills.md) —— 七件套与 skill_equip/use 协议（test-svc 是它的活教材）
+- [技能体系](skills.md) —— 八件套与 skill_equip/use/unequip 协议（test-svc 是它的活教材）
 - [工具外置体系](tool-externalization.md) —— tools/builtin 目录收敛与任务脚本防御（README 内容来源之一）
 - [多 Agent 体系](../architecture/multi-agent.md) —— 子 Agent 目录形态（agents.md 播种内容之一）
 - [节点插件化](../architecture/node-plugins.md) —— `.agent/nodes/` 目录约定（nodes.md 播种内容来源）

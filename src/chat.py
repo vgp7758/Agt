@@ -256,8 +256,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # doctor 诊断工具族（2026-10-16 用户裁定）：BadRequest 数据诊断修复 Agent 'doctor' 专用——
     # 挂主 Agent 工具箱，tools:"" 的子 Agent 自动继承（doctor 由此获得）；_bg 失败分支按
     # "回退链不可用"特征自动派 doctor。四件套 req_inspect/req_probe/req_patch/req_resume。
-    from multiagent import make_doctor_tools
-    _reg(make_doctor_tools(agent), "诊断")
+    # doctor 四件套已收敛为 doctor 专属（实例化注入，用户裁定 2026-10-16）
     _reg(SKILL_TOOLS, "技能")
     _reg(make_plan_tools(agent), "计划")
     _reg(make_spec_tools(agent), "施工方案")

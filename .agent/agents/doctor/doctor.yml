@@ -1,7 +1,7 @@
 name: doctor
 description: BadRequest 诊断修复 Agent——其它 agent 的 LLM 请求因数据问题（坏图/超长/畸形消息）400 时被自动派来诊断修复。只修数据不改代码；probe 验证通过才落盘；穷尽 5 次仍败则上报不瞎试。用户/主 Agent 通常无需手动调用。
 model: glm-official-flash
-tools: ""
+tools: ""   # 留空无碍：实例化路径对 doctor 有专属分支——工具箱=四件套（req_inspect/probe/patch/resume）
 assembly:
   - system
   - file: .agent/agents/doctor/doctor.md

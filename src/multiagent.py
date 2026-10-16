@@ -2054,6 +2054,10 @@ def make_subagent_tools(agent) -> list:
         sk_tools, sk_sop = sk_bundle["tools"], sk_bundle["sop"]   # 装备已在基线处聚合（extras 已并入 base_asm/base_hooks）
         toolbox, _ = _resolve_tools(agent, tools or meta.get("tools", ""))
         toolbox = Toolbox(*list(toolbox), *_agent_own_tools(name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
+        if name == "doctor":
+            # doctor 专属四件套（用户裁定 2026-10-16）：req_inspect/probe/patch/resume 不进
+            # 主 Agent 工具箱（schema 膨胀），只在 doctor 实例化时注入——它也只需要这几个工具。
+            toolbox = Toolbox(*make_doctor_tools(agent))   # 覆盖：诊断 Agent 面板=纯四件套
         if sk_sop:   # 技能 SOP 注入 system 尾（yml v2 场景 persona 在 assembly file 项，system 段只装 SOP）
             system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
         model_name = meta.get("model") or agent.model_name

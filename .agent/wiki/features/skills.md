@@ -165,7 +165,7 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 | 装配插段 / 钩子（`session.assembly_plan` / `hook_specs` 快照） | `_apply_extra_assemblies` 给每个插入项打 `_skill_src=<技能名>` 标记（+ `_xsrc` 位置） | `_revoke_skill_items(plan, hooks, name)` 只删标记匹配项；快照就地更新（`set_assembly_plan` 同时清 once 缓存），**不重跑整体装配** |
 
 - **`_skill_src` 是唯一真源**：撤销不依赖登记表内容——登记丢了照样按快照标记撤净（登记只用来定位「哪些服务是我拉起的」）。
-- **装备登记 `session._equipped_skills`**（`_equipped_table`）：`{技能名: {"services": [自己拉起的], "item_keys": ["after:steps×1", …]}}`——**纯内存、不进 meta 持久层**（Session 不预声明该属性，无/坏型就地初始化空表，避免污染持久化路径）。
+- **装备登记 `session._equipped_skills`**（`_equipped_table`）：`{技能名: {"services": [自己拉起的], "item_keys": ["after:steps×1", …], "desc": "SKILL.md description"}}`——三键；`desc` 为 2026-10-17 新增（装备时从 frontmatter 捎带，供每轮【技能装备中】提醒段展示，见下节）。**纯内存、不进 meta 持久层**（Session 不预声明该属性，无/坏型就地初始化空表，避免污染持久化路径）。
 - **前提**：技能包必须带 `server.py` 才能装备（纯 SOP / 只声明 `assemblies:` 的技能无法动态装备，返回 `[无服务]` 引导 read_skill / run_code）；插段应用与声明服务拉起都需主 Agent 运行时挂点 `_RUNTIME_AGENT`（未挂 → 明确告警、不静默）。
 
 ### skill_unequip(name)：三件事 + 两处容错
@@ -184,6 +184,19 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 `skill_equip` 开头 `pop` 旧登记 → `_revoke_equipped`（撤旧插段 + 停旧自有服务）→ `_svc_kill` 杀旧 `server.py` → 重新拉起 / 应用 / 登记，返回值带 `（replace：撤旧装备——…）` 或 `（replace：旧装备无插段/自有服务，直接重装）`。
 
 **幂等实证**（`test/test_skill_lifecycle.py::test_replace_idempotent`）：二次装备后 `_skill_src` 插段数**不变**、钩子位条目数不变、旧自有服务被 stop 一次、新登记指向新实例（停旧→拉新各一次）。
+
+### 装备提醒段【技能装备中】：每轮 system-reminder 可见 + unequip 提醒（2026-10-17，用户提案）
+
+用户提案：装备期间 system-reminder 里需要有提醒——「当前装备了 xx 技能，暂时不需要使用了记得 unequip 卸」。落地两处（commit 本地）：
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent_config.py` | `skill_equip` 装备时从 SKILL.md frontmatter 捎带 `description` 存进装备登记——登记升三键 `{services, item_keys, desc}`（desc 供提醒段展示，见上节登记结构） |
+| `src/agent.py` | `_runtime_system_extra`（动态 system 注入点，与【后台服务状态】【子 Agent 任务看板】同族）新增第三段【技能装备中】——遍历装备登记列 `· 名字——描述` + 尾注：「技能装备是临时能力：暂时不需要时记得 skill_unequip('技能名') 卸载释放（进程重启也会隐式全卸）」 |
+
+- **零开销**：服务清单 / 装备登记 / 子 Agent 看板三者皆空不注入（无装备不占一字节）
+- **老登记容错**：无 `desc` 的旧条目只显示技能名（重启隐式全卸后，下次装备即带描述）
+- **验证**：L3 stub 三态（空→不注入 / 带 desc→名字+描述 / 无 desc→只名字）+ L2 隔离实跑（旁路实例直跑新代码：六钩子链完整注册、无异常）全绿；注入点属引擎代码，**`/restart` 生效**——重启后装备需重新拉起（下次 `skill_use` 自动拉起）
 
 ### 注册与验证
 

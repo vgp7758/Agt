@@ -161,6 +161,8 @@ CLI 子命令走 `src/chat.py` main() 入口——`/restart` 后即可使用。�
 
 - [配置体系与模型调优](../guides/config-and-models.md)（mcp.json 在四份配置 repo 覆盖里）
 - [多实例组网](../architecture/multi-instance.md)（每角色实例各持自己的 .agent/mcp.json）
+- [Claude Code 桥接](claude-code-bridge.md)（`claude mcp serve` 作为 MCP server 接入 agt 的完整案例 + ccs.py REPL 包装 + 跨宿主接入文档）
+
 ## 缺口闭环：重连后工具同步进工具箱（2026-09-14 实测 → 2026-09-18 修复）
 
 `reload_mcp_server` 的旧语义是「**断开并重连**」——`MCPManager.reconnect_from_config_one(path, name)` 只做 `sessions.pop(name)` + `_connect_one(name, cfg)`，刷新的是 `mcp_mgr.sessions[name]["tools"]`（server 侧工具清单），**不碰 `agent.tools`（工具箱）**。装配期的注册在 `src/chat.py` 的 `build_agent` 里一次性完成（`make_mcp_tools` / `MCPTool` 注册，L326 附近），此后新增的 server 工具不会自动进工具箱。

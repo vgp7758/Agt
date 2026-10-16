@@ -26,10 +26,25 @@ services:
 
 | 维度 | 行为 |
 |---|---|
-| src | `http(s)://`（内存流零落盘，推荐）或文件路径（workspace 相对） |
+| src | `http(s)://`（内存流零落盘，推荐）/ 文件路径（workspace 相对）/ **`tool:` 表达式**（调用工具或技能命令口取帧；2026-10-17 起支持命名参数，见下节） |
 | 视觉门控 | 非视觉模型（`vision_supported=False`）整段**静默跳过** |
 | 失联/空帧 | 降级一行文字（`[image_feed 不可用：...]` / `[image_feed 空帧：...]`），**不炸轮** |
 | 哨兵 | 命中返回 `@@IMGFEED@@data:<mime>;base64,<b64>@@`——桶收集处抽走，不进文本桶 |
+
+## 帧源 `tool:` 表达式：技能命令口造型 + 命名参数（2026-10-17，用户提案）
+
+src 三形态中最年轻的一支：`tool:` 表达式最初随技能装配清单落地（双参工具按 schema 位置映射，见 [skills · assemblies](skills.md)）；2026-10-17 用户提案两补：
+
+1. **命令口造型**：`image_feed: '{tool: skill_command(name="desktop-ops", command="screen_capture")}'`——帧源 = 技能命令口执行。画面能力与键鼠操作解耦（帧源走命令口、键鼠走 stdin 服务），换帧源不动装配结构
+2. **求值器命名参数**（src/session.py `_asm_image_feed_from_tool`）：`k="v"` token 优先按命名映射到 schema props（`_imgfeed_coerce` 类型强转），剩余 token 按位置——被调函数签名演化不再破坏声明；位置实参原语义保留
+
+**desktop-ops 帧源命令** `scripts/commands/screen_capture.py`：PIL 截屏 → **覆盖写固定文件**（`~/.agt/snapshots/` 下，无临时文件堆积）→ 打印路径；未知命令优雅降级（回显可用命令清单，不炸投影）。实测命名/位置两造型均产出真帧（451K base64 实截屏）。
+
+### ⚠️ YAML 坑：flow mapping 里的逗号
+
+声明 `image_feed: {tool: skill_command(name="x", command="y")}` **裸写**时，YAML 把逗号当 flow mapping 的**键值分隔符**——帧提供者拿到半截表达式（`tool: skill_command(name="desktop-ops"`）报「无效」。**修法：值整体加单引号**。
+
+旧形态 `{tool: screen_frame()}` 无逗号所以从未暴露；换带逗号的表达式**首装才踩**（端到端实测抓到，commit 5e80326）——首装链路（解析→插段→求值）必须在真装时过一遍，函数级测试测不出 YAML 解析这层。
 
 ## 位置约束与图片通道（tail_images，src/session.py 装配）
 

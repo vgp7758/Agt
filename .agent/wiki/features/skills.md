@@ -233,6 +233,42 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 
 同一技能可双轨并存；desktop-ops 已实战验证的 tools/ 形态**不动**，命令口给将来技能多一个选项。
 
+## desktop-ops 形态三步演进：11 工具 → 命令口帧源 → stdin 全量服务（2026-10-17，用户三连提案）
+
+desktop-ops 一日内完成能力形态整体迁移，最终定型「**画面走命令口、键鼠走 stdin 服务**」的零 schema 形态（commit 本地 + 5e80326）：
+
+| 步 | 用户定调 | 落地 |
+|---|---|---|
+| ① 帧源迁命令口 | 「image_feed 就可以装成 `skill_command(name=…, command=…)` 的造型」 | `screen_frame` 工具退役 → `scripts/commands/screen_capture.py`（截屏→**覆盖写固定文件**→打印路径，无临时文件堆积）；SKILL.md 装配声明改 `{tool: skill_command(...)}`；session.py 求值器补**命名参数**支持（见 [image-feed · tool: 表达式](image-feed.md)） |
+| ② 键鼠全量迁 stdin | 「把 click drag key 什么的都弄到 stdin 里」「避免装配为工具，stdin 就挺好的」 | `tools/desktop_tools.py` **退役**；`server.py` stdin 行协议承载全部 10 命令（click/move/drag/key/type/hotkey/clip_r/clip_w/wins/focus） |
+| ③ 端到端实测 | 「装备后立刻在工具返回中发现可用指令；打开 ProcessHub 看一眼再最小化，告诉我选中进程」 | 全链路通过：equip 返回即带 CAPS 清单 → focus 前置 → image_feed 识帧（选中=LiteDrop-Agt）→ `hotkey win down` 最小化 → 新帧二次确认（不盲信返回值） |
+
+### stdin 服务形态：全量命令化
+
+- 调用形态：`skill_use("desktop-ops", "click --x 500 --y 300")`——`--k v` 传参（shlex 引号安全、类型强转、必填校验）；未知命令回执可用清单不炸
+- CAPS 能力清单开局即报（10 命令 + 参数说明）——**装备后工具返回里立即可发现**，无需读 SKILL.md（③ 的实测验收点）
+- 坐标规范保留：k=屏宽/1280 自动换算不变
+- **schema 投影 11 个 → 0 个**——动机即上节双轨定案认的账：schema 是每轮实付的全局成本，指令式操作交给强模型的命令行准确率
+
+### 能力面三形态选型（定稿；技能包 README 范例同步三形态说明）
+
+| 形态 | 适用 | desktop-ops 归属 |
+|---|---|---|
+| `tools/` schema 工具 | 参数复杂、要前置强校验 | （已清空） |
+| `scripts/commands/` 命令口 | 指令式、低频、要进 image_feed 等表达式 | screen_capture |
+| `server.py` stdin 服务 | 常驻状态、高频交互、零投影 | 键鼠 10 命令 |
+
+新技能按性质选型，desktop-ops 成为 stdin 形态的完整体范例；播种源 `src/assets/skills/desktop-ops/` 已同步全套 stdin 版（robocopy /MIR）。
+
+### 实测揪出的两个坑（commit 5e80326）
+
+1. **YAML 逗号截断表达式**：`assemblies:` 里 `{tool: skill_command(name="x", command="y")}` 裸写时逗号被 YAML flow mapping 当键值分隔符——帧提供者拿到半截表达式报「无效」。**首装才暴露**（旧声明 `{tool: screen_frame()}` 无逗号没踩到），修法：值整体加单引号（详见 [image-feed · YAML 坑](image-feed.md)）
+2. **focus 对最小化窗口静默无效**：pygetwindow `activate()` 不抛异常但也不生效——desktop-ops server.py 补 `isMinimized → restore()` 再激活
+
+### 顺手修：测试全局卫生
+
+test_skill_command 的 `_resolve_skill` patch 泄漏，污染后续测试文件（合跑 5 failed）——改 autouse fixture 还原（patch 必还愿，测试文件间全局卫生立规矩）。回归：test_skill_assemblies 18 + 合跑 31 passed + subagent_skills rc=0。
+
 ## 技能自带装配清单（assemblies:）
 
 ### 技能自带装配清单（SKILL.md `assemblies:` 字段，2026-10-16）
@@ -269,6 +305,11 @@ worker 施工线 7 步交付，上节语义落到四个文件：
 **验证**：test/test_skill_assemblies.py 18 例（解析 / 插段锚定位 / 钩子挂载 / 冻结性 / 两作用域对称 / tool: 帧源 / 未知段名报错）+ 真实链路 e2e（desktop-operator 声明 + 真实技能包 → 11 技能工具在箱含 screen_frame → extras 合并后 image_feed 紧贴 steps → **真实截屏 @@IMGFEED@@ 哨兵帧注入 ✓**）。
 
 **遗留**：①动态口端到端（真服务进程 caps 上报 `EXTRA_ASSEMBLIES`）未做子进程级 e2e，仅函数级覆盖——首个服务形态技能接入时可补；②装配为一次性动作无卸载还原（spec 既定语义），多次装备同一技能会重复插段——装备幂等性待裁定。**两项均于 2026-10-16 收口**：`skill_unequip` + replace 幂等落地（按 `_skill_src` 标记精确撤销、不重跑整体装配）——见 §技能装卸生命周期。
+
+### 后记：YAML 逗号截断 + desktop-ops 声明迁移（2026-10-17，实测 commit 5e80326）
+
+- desktop-ops 声明迁为命令口造型：`image_feed: '{tool: skill_command(name="desktop-ops", command="screen_capture")}'`——**值必须整体加单引号**：YAML flow mapping 把裸值里的逗号当键值分隔符，帧提供者拿到半截表达式（`tool: skill_command(name="desktop-ops"`）报「无效」。旧示例 `{tool: screen_frame()}` 无逗号，换带逗号表达式**首装才踩**（端到端实测抓到，commit 5e80326）
+- 求值器同步升级**命名参数**：`k="v"` token 按 schema 命名映射（类型强转），函数签名演化不破坏声明；desktop-ops 实测命名/位置两造型均产出真帧。帧源侧详见 [image-feed · tool: 表达式](image-feed.md)
 
 ## skill_suggest · 技能按需建议钩子（SYSTEM 技能清单下线：jev 快判 + LLM 全文复核，2026-09-27/28，用户提案）
 

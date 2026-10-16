@@ -10,4 +10,4 @@ assembly:
   - steps
   - image_feed: http://127.0.0.1:8765/frame
 services:
-  - desktop-frame: python tools/image_feed_poc.py 8765 | reuse=http://127.0.0.1:8765/frame
+  - desktop-frame: python .agent/agents/desktop-operator/tools/image_feed_poc.py 8765 | reuse=http://127.0.0.1:8765/frame

@@ -2823,6 +2823,16 @@ class Agent:
                 if hints:
                     ev["recharge"] = hints
                 self._emit(ev)
+                # 回退链耗尽 → 自动派 doctor（用户提案 2026-10-16·主 Agent 也触发）：
+                # 子 Agent 场景由 multiagent._bg 的接线派（带 caller 上下文更全，且此处
+                # 派会造成双 doctor）；这里只兜主 Agent（agent_id 空/_main_）——引擎直调
+                # 工具面 agent_prompt（无 LLM 决策），doctor 失败熔断在 _bg 侧。
+                if "回退链不可用" in str(e) and getattr(self, "agent_id", "_main_") in ("", "_main_"):
+                    try:
+                        from multiagent import dispatch_doctor
+                        dispatch_doctor(self, f"主 Agent 回退链耗尽：{str(e)[:600]}")
+                    except Exception as _de:
+                        _LOG.warning("派 doctor 失败（不掩盖原异常）: %s", _de)
                 try:
                     self.session.abort_current_turn(f"（异常中断：{type(e).__name__}）")
                 except Exception:

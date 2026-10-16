@@ -1443,6 +1443,21 @@ def make_doctor_tools(agent) -> list:
     return [Tool(req_inspect), Tool(req_probe), Tool(req_patch), Tool(req_resume)]
 
 
+def dispatch_doctor(agent, reason: str) -> str:
+    """程序化派 doctor（引擎侧直调工具面，不经 LLM 决策——用户提案 2026-10-16 主 Agent 也触发）。
+    复用 agent_prompt 完整管线（registry 登记/通知回流/_bg 线程）；doctor 不存在时返回提示
+    （不炸调用方——agent.py 的异常路径里调用，失败只告警）。"""
+    try:
+        return agent.tools.run("agent_prompt", {
+            "name": "doctor",
+            "prompt": f"〔引擎自动派单〕{reason}\n\n目标 agent_id 留空（即 _main_ 主 Agent）。"
+                      f"用 req_inspect 体检其最近失败请求，按 doctor.md 工作循环处理："
+                      f"req_probe 验证修法 → req_patch 落盘 → req_resume（冷却清零+续跑）→ 汇报。",
+        })
+    except Exception as e:
+        return f"[派 doctor 失败] {type(e).__name__}: {e}"
+
+
 def make_subagent_tools(agent) -> list:
     """生成绑定到指定主 Agent 的子 Agent 管理工具（声明式 + 一次性）。"""
     # 服务退出多播路由注入（用户提案 2026-10-16）：主 Agent 的 services 池是全实例共享的，

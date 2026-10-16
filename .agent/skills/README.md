@@ -8,12 +8,19 @@ SYSTEM 常驻一行摘要（name + description + when_to_use），任务匹配�
 ```
 my-skill/
 ├── SKILL.md              # ---\nname/description/when_to_use\n--- + SOP（markdown）
+├── tools/                # 外置工具（可选）：装备（yml skills: / skill_equip）时经 scan_script_tools
+│   │                     #   注册进实例工具箱——成为一等工具直接调用（不是 skill_run_code 脚本！）
+│   └── desktop_tools.py  #   协议：顶层函数=工具（签名/docstring 转 schema，引擎进程内执行）
 ├── scripts/              # skill_run_code("my-skill", "scripts/x.py", "--args") 可执行
 │   └── evaluate.py       # 技能约定评测：skill_evaluate("my-skill", input) 时以 input 为 stdin 执行
 ├── server.py             # 常驻服务（可选）：skill_equip 拉起、skill_use(name, "cmd --args") 调用
 ├── workflows/            # 技能自带工作流：exec_workflow("…") 可直接执行
 └── EVAL.md               # 无 evaluate.py 时的评测说明
 ```
+
+**tools/ vs scripts/ 分工**：tools/ = 「agent 每步高频直接调用」的能力（结构化参数 schema、
+进程内执行，如 desktop-ops 的键鼠工具）；scripts/ = 「按需跑一次拿 stdout」的任务脚本
+（skill_run_code / skill_evaluate）。两者由装备口与 skill_run_code 各自消费，互不混用。
 
 ## server.py 行协议（常驻服务）
 

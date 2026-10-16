@@ -100,7 +100,7 @@
 
 **教训**：独立页交付 ≠ 可达——「入口在主界面」是交付验收的一部分，新页面落成时应同步检查主 WebUI 的入口面（fabDock / 抽屉 / 命令）。
 
-## 后记二：双层装态（repo + ~/.agt 全局层）——检测漏全局 & 无全局通道（2026-10-17，用户实锤）
+## 后记二：双层装态（repo + ~/.agt 全局层）——检测漏全局 & 无全局通道（2026-10-17，用户实锤，commit 8e30b3f）
 
 
 **用户实锤的两个缺口**（首版交付后一天）：①市场把 11 个全局类工作流全显示"未安装"——它们由 `seed_scope="global"` 播种在 `~/.agt/workflows/`，但 installed 检测只扫 repo 层（`.agent/...`），点"安装"还会重复装一份到 repo；②根本没有"安装到全局"的通道——`install_dir` 是 workspace 相对路径，安装只会落 repo。
@@ -119,6 +119,8 @@
 - **现实核对（缺口① 直接验证）**：真实环境跑 `marketplace_items()`，本机 `~/.agt/workflows/` 的 11 个播种工作流全部识别 `installed_scope="global"`（此前全显示未装）
 - **CLI 往返**（真实 `~/.agt` + 临时 workspace 隔离 repo 层）：`/install custom_tool_demo --global` → 落 `~/.agt/workflows/` → scope=global → `--force` 覆盖重装 → `/uninstall` → 文件与 scope 双双还原，`~/.agt/workflows/` 回到初始 11 个；目录型 `test-svc --global` → `~/.agt/skills/test-svc/SKILL.md` → 卸载后已有全局技能（pbridge/yangzi-aistudio）不受影响
 - **WebUI e2e**（真 server + Playwright，临时 workspace 构造未装态）：徽章/按钮四态全对 → 点「安装到全局」→ toast + 徽章翻「已装·全局」+ 真实文件落位 → 点「+ 全局」（repo→both）→ 徽章「已装·双层」+ 路径注「repo + ~/.agt」→ 点「卸载」→ 两层全清 + 卡片回未装态（[安装][安装到全局]）；tool 型（ccs）只出「安装」一个按钮
+
+**生效（两段式，同 🛒 先例）**：`market.html` 是静态文件——浏览器刷新即见；`market.py`/`commands.py`/`server.py` 在引擎侧——**需 /restart 生效**（未重启的常驻实例跑旧代码，响应无 `installed_scope` 字段，市场页仍是旧行为）。
 
 **设计取舍**：全局层不做 `install_dir` 映射（按类型定目录，简单可预期）；不引入"全局优先/遮蔽"语义——两层同时存在即 both，卸载一并清；`agent_decl/tool` 明确 repo-only（避免为两种类型发明未经验证的全局约定）。
 

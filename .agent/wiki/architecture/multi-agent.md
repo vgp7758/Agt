@@ -116,6 +116,27 @@ kill 子 Agent 时重读声明 → 逐名 `agent.services.stop`（异常 pass）
 
 机制细节与冒烟（quiet-demo 蜜月 3s 秒退零回调 / loud-demo 无蜜月秒退正常回调）见 [background-scheduler · 启动蜜月](../features/background-scheduler.md)。
 
+### 后记四：跨实例服务复用——reuse 探测 URL，帧服务全局单例（2026-10-16，用户补充提案，施工中）
+
+**用户补充提案（2026-10-16，desktop-ops 技能化施工线中途追加）**：desktop-frame 帧服务应【全局单例】——多 agt 实例并开时，实例 A 装备技能把服务拉起来，实例 B 装备时不重复拉起而是**复用已活服务**。现状的幂等拉起只看本实例服务池，跨实例无感知——每实例各起一份服务进程，抢同一 GUI/端口。
+
+**设计**（并入施工线计划第 6 步，施工中，待完工回填 commit）：
+
+- **声明形态**：`services` 条目加可选 `reuse:` 探测 URL 字段，YAML 写法保持简单（一个 URL，不做探测策略 DSL）：
+
+  ```yaml
+  services:
+    - name: desktop-frame
+      cmd: ...
+      reuse: http://127.0.0.1:8765/frame
+  ```
+
+- **探测语义**（`_ensure_agent_services` 拉起前）：GET 探测（2s 超时）——收到 HTTP 响应 = 已活 → **跳过拉起**并日志注明复用；连接拒绝 / 超时 = 自己拉起
+- **防误复用**：4xx 不能直接当"活着"——端口可能被无关进程占用（WebIDE 三态探测的老经验），需判 body 特征确认是自家服务才复用
+- **权属分离**：复用方**不注册服务池条目**——不拥有、不能 stop、只使用；避免 B 实例 stop 把 A 正在用的服务杀掉的跨实例语义混乱
+
+**验证计划**：单测两态（探测活→跳过 / 探测死→拉起）；e2e（手动起假帧服务→装备不重复拉；杀掉→装备重拉）；播种源同步。
+
 ### 管理页编辑字段补齐：services textarea——保存不再丢声明（2026-10-06 · 二，commit 2c63133）
 
 用户实锤：[/agents 编辑页](../features/agents-admin.md)没有 services 字段——desktop-operator 的 `services:` 声明**一保存就丢**（PUT 按表单字段重建 yml，表单没有的键自然不写）。补齐（与目录化保存同 commit 2c63133）：

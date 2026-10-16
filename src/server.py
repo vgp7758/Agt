@@ -195,6 +195,12 @@ async def stats_page():
     return HTMLResponse(_serve_html("stats.html"))
 
 
+@app.get("/market")
+async def market_page():
+    """插件市场页：官方精选索引分类列表 + 安装/卸载。"""
+    return HTMLResponse(_serve_html("market.html"))
+
+
 @app.get("/icons/{name}")
 async def serve_icon(name: str):
     """站点图标（favicon / logo）—— 仅允许 static/icons/ 下的文件。"""
@@ -551,6 +557,58 @@ async def api_plugins():
     前端 index.html 启动时 fetch 本端点，为每个启用的 frontend.js 注 <script>。"""
     import plugins as _plugins
     return {"plugins": _plugins.plugins_view(_workspace)}
+
+
+@app.get("/api/marketplace")
+async def api_marketplace(type: str = ""):
+    """市场清单（市场页消费）：索引 30+ 条 + installed/available 运行时态。
+    ?type=workflow 过滤某类（workflow/agent_decl/plugin/skill/tool）。"""
+    from fastapi.concurrency import run_in_threadpool
+    from market import load_index, marketplace_items
+    items = await run_in_threadpool(marketplace_items, _workspace)
+    if type:
+        items = [x for x in items if x.get("type") == type]
+    idx = load_index()
+    return {"updated": idx.get("updated", ""),
+            "total": len(items), "installed_count": sum(1 for x in items if x.get("installed")),
+            "items": items}
+
+
+@app.post("/api/marketplace/install")
+async def api_marketplace_install(request: Request):
+    """安装市场条目：{name, force?} → {ok, message}。工作流走 /download 同通道；
+    插件/技能/子Agent目录型整目录落位。安装后已装态下次 GET /api/marketplace 即见。"""
+    from fastapi.concurrency import run_in_threadpool
+    from market import install
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"请求体不是合法 JSON：{e}"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    force = bool(body.get("force"))
+    msg = await run_in_threadpool(lambda: install(name, force=force, workspace=_workspace))
+    # 失败文案（[未找到]/[缺失]）→ ok=false，前端红 toast 展示 message
+    ok = not msg.startswith(("[未找到]", "[缺失]"))
+    return {"ok": ok, "name": name, "message": msg} if ok else {"ok": False, "error": msg}
+
+
+@app.post("/api/marketplace/uninstall")
+async def api_marketplace_uninstall(request: Request):
+    """卸载市场条目：{name} → {ok, message}。只删市场声明的落位文件/目录。"""
+    from fastapi.concurrency import run_in_threadpool
+    from market import uninstall
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"请求体不是合法 JSON：{e}"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    msg = await run_in_threadpool(lambda: uninstall(name, workspace=_workspace))
+    ok = not msg.startswith("[未找到]")
+    return {"ok": ok, "name": name, "message": msg} if ok else {"ok": False, "error": msg}
 
 
 @app.get("/plugins-assets/{name}/{file_path:path}")

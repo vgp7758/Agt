@@ -1012,6 +1012,56 @@ def _cmd_download(ctx: CommandContext, args):
     print(download_asset(name, target_dir=target, force=force, workspace=ctx.session.workspace))
 
 
+def _cmd_marketplace(ctx: CommandContext, args):
+    """/marketplace [--type T]  官方精选市场清单（按类型分组 + 已装态）。"""
+    from market import marketplace_items, _TYPE_LABELS
+    _, flags = _parse_args(args)
+    t = flags.get("type")
+    items = marketplace_items(workspace=ctx.session.workspace)
+    if t:
+        items = [x for x in items if x.get("type") == t]
+    if not items:
+        print("(市场清单为空或类型无匹配)")
+        return
+    total = len(items)
+    done = sum(1 for x in items if x.get("installed"))
+    print(f"🛒 官方精选市场（{total} 项，已装 {done}）")
+    order = list(_TYPE_LABELS.items())
+    for type_key, label in order:
+        group = [x for x in items if x.get("type") == type_key]
+        if not group:
+            continue
+        print(f"\n【{label}】{len(group)} 项")
+        for x in group:
+            mark = "✅已装" if x.get("installed") else "⬇ "
+            miss = " ⚠随包缺失" if not x.get("available") else ""
+            print(f"  [{mark}] {x['name']} v{x.get('version', '1.0')} — {x['desc']}{miss}")
+    print("\n用法：/install <name> [--force]  安装（已存在不覆盖）")
+    print("      /uninstall <name>           卸载（只删市场声明的落位文件）")
+    print("      /marketplace --type workflow  只看某类（workflow/agent_decl/plugin/skill/tool）")
+
+
+def _cmd_install(ctx: CommandContext, args):
+    """/install <name> [--force]  从市场安装（工作流走 /download 同通道落位）。"""
+    from market import install
+    positional, flags = _parse_args(args)
+    if not positional:
+        print("用法：/install <name> [--force]   （/marketplace 查看清单）")
+        return
+    print(install(positional[0], force=bool(flags.get("force")),
+                  workspace=ctx.session.workspace))
+
+
+def _cmd_uninstall(ctx: CommandContext, args):
+    """/uninstall <name>  卸载市场条目（只删索引声明的 installed 路径）。"""
+    from market import uninstall
+    positional, _ = _parse_args(args)
+    if not positional:
+        print("用法：/uninstall <name>   （/marketplace 查看清单）")
+        return
+    print(uninstall(positional[0], workspace=ctx.session.workspace))
+
+
 def _cmd_feedback(ctx: CommandContext, args):
     """/feedback [类型] <内容>  提交反馈给作者（bug/建议/问题/赞美），类型可选默认「建议」。
     不带参数显示用法 + 作者联系方式。反馈本地保存，作者配了 webhook 则同时推送到飞书。"""
@@ -2303,6 +2353,17 @@ def build_default_registry() -> CommandRegistry:
         "/download before_turn_retrieval     下载指定资产到默认目录\n"
         "/download my_workflow .agent/workflows/   下载到指定目录\n"
         "/download my_wf --force     覆盖已有同名文件")
+    reg.register("marketplace", _cmd_marketplace,
+        "[--type T]  官方精选市场清单（按类型分组 + 已装态）",
+        "/marketplace                    全部条目（工作流/子Agent/插件/技能/工具）\n"
+        "/marketplace --type plugin      只看某类（workflow/agent_decl/plugin/skill/tool）")
+    reg.register("install", _cmd_install,
+        "<name> [--force]  从市场安装（已存在不覆盖）",
+        "/install reload_hot             安装市场条目（落位到默认目录）\n"
+        "/install feedback --force       已安装时覆盖重装")
+    reg.register("uninstall", _cmd_uninstall,
+        "<name>  卸载市场条目（只删市场声明的落位文件/目录）",
+        "/uninstall reload_hot           卸载并清理落位文件")
     reg.register("feedback", _cmd_feedback,
         "[类型] <内容>  提交反馈给作者（bug/建议/问题/赞美）",
         "/feedback 工作流编辑器连线不太灵敏        （默认类型=建议）\n"

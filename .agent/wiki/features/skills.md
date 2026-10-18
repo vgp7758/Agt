@@ -185,18 +185,45 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 
 **幂等实证**（`test/test_skill_lifecycle.py::test_replace_idempotent`）：二次装备后 `_skill_src` 插段数**不变**、钩子位条目数不变、旧自有服务被 stop 一次、新登记指向新实例（停旧→拉新各一次）。
 
-### 装备提醒段【技能装备中】：每轮 system-reminder 可见 + unequip 提醒（2026-10-17，用户提案）
+### 装备提醒段【技能装备中】：每轮 system-reminder 可见（2026-10-17，用户提案；同日随轮卸载改文案）
 
 用户提案：装备期间 system-reminder 里需要有提醒——「当前装备了 xx 技能，暂时不需要使用了记得 unequip 卸」。落地两处（commit 本地）：
 
 | 文件 | 改动 |
 |---|---|
 | `src/agent_config.py` | `skill_equip` 装备时从 SKILL.md frontmatter 捎带 `description` 存进装备登记——登记升三键 `{services, item_keys, desc}`（desc 供提醒段展示，见上节登记结构） |
-| `src/agent.py` | `_runtime_system_extra`（动态 system 注入点，与【后台服务状态】【子 Agent 任务看板】同族）新增第三段【技能装备中】——遍历装备登记列 `· 名字——描述` + 尾注：「技能装备是临时能力：暂时不需要时记得 skill_unequip('技能名') 卸载释放（进程重启也会隐式全卸）」 |
+| `src/agent.py` | `_runtime_system_extra`（动态 system 注入点，与【后台服务状态】【子 Agent 任务看板】同族）新增第三段【技能装备中】——遍历装备登记列 `· 名字——描述`；尾注初版「暂时不需要时记得 skill_unequip 卸载释放」，同日轮结束自动卸载落地后改为「技能是本轮临时能力：轮结束自动卸载；不需要时可提前 skill_unequip('技能名') 卸；跨轮使用由 skill_use 自动重装备（服务重启秒级）」（见下节） |
 
 - **零开销**：服务清单 / 装备登记 / 子 Agent 看板三者皆空不注入（无装备不占一字节）
 - **老登记容错**：无 `desc` 的旧条目只显示技能名（重启隐式全卸后，下次装备即带描述）
-- **验证**：L3 stub 三态（空→不注入 / 带 desc→名字+描述 / 无 desc→只名字）+ L2 隔离实跑（旁路实例直跑新代码：六钩子链完整注册、无异常）全绿；注入点属引擎代码，**`/restart` 生效**——重启后装备需重新拉起（下次 `skill_use` 自动拉起）
+- **验证**：L3 stub 三态（空→不注入 / 带 desc→名字+描述 / 无 desc→只名字）+ L2 隔离实跑（旁路实例直跑新代码：六钩子链完整注册、无异常）全绿；注入点属引擎代码，**`/restart` 生效**
+
+### 轮结束自动卸载：装备=轮内临时能力（2026-10-17，用户裁定）
+
+用户裁定：「既然 skill_use 有自动装备技能的逻辑，技能在一轮结束的时候就自动 unequip 吧」——装备生命周期从「进程级」（2026-10-16 口径：进程生命周期 = 装备生命周期）**收窄为「轮级」**：主 Agent 每轮收尾（recap 生成之后、inbox 消费之前）遍历装备登记 `session._equipped_skills`，逐个走 `skill_unequip` 全套撤销（撤插段/钩子 + 停自有服务 + 清登记），事件流可见「🧹 轮结束自动卸载技能」。实现：`src/agent.py` 轮收尾处（commit 本地）。
+
+#### 设计要点
+
+| 点 | 内容 |
+|---|---|
+| 位置选择 | recap 之后、inbox 消费之前——后台推送/插话触发的「下一轮」开跑前先卸净；turn_end 钩子打回重做的路径在 finish_turn 之前，不会被误卸（重做轮的装备保留） |
+| 单失败容错 | 某个技能卸载失败只记容错不炸轮，继续卸下一个 |
+| 零串台 | 自动卸挂 `_RUNTIME_AGENT`（主 Agent 专属）；子 Agent 的装备登记本就挂主 Agent session（skill_equip 既有语义），主 Agent 轮收尾统一卸即可 |
+| 经济账 | 跨轮连续用某技能 = 每轮重装备一次（服务重启秒级）——`skill_use` 未装备时自动装备对 Agent 透明，正是本裁定的成立前提 |
+
+#### 配套文案三处归一（commit 本地）
+
+| 位置 | 新文案 |
+|---|---|
+| 装备提醒段【技能装备中】尾注（`src/agent.py`） | 「技能是本轮临时能力：轮结束自动卸载；不需要时可提前 skill_unequip('技能名') 卸；跨轮使用由 skill_use 自动重装备（服务重启秒级）」 |
+| `skill_equip` 返回 life_note（`src/agent_config.py`） | 「📌 已登记装备（轮结束自动卸载；不需要可提前 skill_unequip；重启即全卸）」 |
+| 语义口径 | 本文多处「服务常驻到 Agent 进程退出（atexit 全杀）」为旧口径——atexit 保留为兜底，主动边界已是轮收尾自动卸 + 显式 unequip |
+
+顺带修：中间版 life_note 双赋值（后一处赋值会覆盖前一处新文案）——归一为登记成功后的单一赋值点。
+
+#### 验证
+
+L2 隔离实跑（旁路实例直跑新代码完整一轮：轮结束路径含自动卸块执行无异常、六钩子链完整注册、服务正常退出）+ L0/L1 py_diag 双绿。生效需 `/restart`（引擎代码）。
 
 ### 注册与验证
 
@@ -204,15 +231,15 @@ for line in sys.stdin:          # 每行一条命令（自己 shlex 解析）
 - `test/test_skill_lifecycle.py` 9 例：装备登记 + `_skill_src` 标记 / `services:` 复用不拥有 · 死则拉起并登记 / unequip 撤净且**不吞宿主项与他技能项** / 未装备提示 / replace 不重复插段 + 停旧服务 / 登记丢失尽力撤且不停服务 / `_apply_extra_assemblies` 稳定追加 + `_revoke_skill_items` 精确撤销（含 plan·hooks 传 None 与无匹配的纯函数边界）/ `_ensure_agent_services` 的 `started` vs `reused` 语义。
 - **作用域**：`skill_equip` / `skill_unequip` 走 `_RUNTIME_AGENT` → 作用于**主 Agent 运行时会话**；子 Agent 的装备发生在派活链（`multiagent._agent_skill_gear`），随实例退出自然消失，无卸载配对需求。
 
-### 注意事项
+### 注意事项（技能装卸生命周期）
 
 - **/restart 生效**：SYSTEM 技能摘要在 agent 构建时装配——新装全局技能 / 改激活清单后需重启实例（无热重载）
 - `save_skill` 永远写 repo 本地；全局技能的沉淀/更新直接编辑 `~/.agt/skills/`（跨实例共享一份）
 - 激活清单务必保持**纯字符串数组**——dict 等其它形态被静默忽略（宁缺勿错）
 - 本地与全局同名时本地 shadow：想临时覆盖全局技能行为，在 repo 放同名技能即可，不必动全局份
 - 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
-- **equip 的服务生命周期**：常驻到 Agent 进程退出（atexit 全杀）；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定
-- **装卸配对（2026-10-16）**：`skill_unequip(name)`（或重复 equip = replace）按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存、**重启即隐式全卸**——没有持久「已卸载」清单，卸载是会话内语义（详见 §技能装卸生命周期）
+- **装备生命周期（2026-10-17 轮级化）**：装备默认**轮收尾自动卸载**（走 `skill_unequip` 全套撤销，recap 后、inbox 消费前）——跨轮使用由 `skill_use` 未装备自动装备兜住（服务重启秒级）；atexit 全杀保留为进程退出兜底；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定（详见 §轮结束自动卸载）
+- **装卸配对（2026-10-16）**：`skill_unequip(name)` / 重复 equip（replace）/ 轮收尾自动卸——三者同走一条撤销链：按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存——没有持久「已卸载」清单
 - **命令口（2026-10-17）**：`skill_command` 只认技能包内实际存在的命令脚本（`scripts/commands/<名>.py` 或 `scripts/<名>.py`），**不接受任意 shell**——防注入；未知命令回显可用清单（详见 §skill_command · 轻量命令口）
 
 ## skill_command · 轻量命令口（2026-10-17，用户提案）
@@ -398,8 +425,8 @@ pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打�
 - 激活清单务必保持**纯字符串数组**——dict 等其它形态被静默忽略（宁缺勿错）
 - 本地与全局同名时本地 shadow：想临时覆盖全局技能行为，在 repo 放同名技能即可，不必动全局份
 - 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
-- **equip 的服务生命周期**：常驻到 Agent 进程退出（atexit 全杀）；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定
-- **装卸配对（2026-10-16）**：`skill_unequip(name)`（或重复 equip = replace）按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存、**重启即隐式全卸**——没有持久「已卸载」清单，卸载是会话内语义（详见 §技能装卸生命周期）
+- **装备生命周期（2026-10-17 轮级化）**：装备默认**轮收尾自动卸载**（走 `skill_unequip` 全套撤销，recap 后、inbox 消费前）——跨轮使用由 `skill_use` 未装备自动装备兜住（服务重启秒级）；atexit 全杀保留为进程退出兜底；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定（详见 §轮结束自动卸载）
+- **装卸配对（2026-10-16）**：`skill_unequip(name)` / 重复 equip（replace）/ 轮收尾自动卸——三者同走一条撤销链：按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存——没有持久「已卸载」清单
 
 ## 相关页面
 

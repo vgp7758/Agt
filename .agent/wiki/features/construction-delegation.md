@@ -29,13 +29,13 @@
         → 主 Agent update_plan 记账 + 向用户汇总
 ```
 
-## 施工牌 → 一句派发指令：`_construction_brief()` → `_construction_dispatch_prompt()`（src/agent.py）
+## 施工牌 → 派发 prompt：`_construction_brief()` → `_construction_dispatch_prompt()`（src/agent.py）
 
-> **2026-10-15 · 二轮瘦身（用户裁定）**：施工牌全文版已被拆解——计划信息改走【装配注入】（worker.yml `func: plan_content()` / `func: plan_steps()` 每轮喂），prompt 只留一句派发指令。原四段全文版与装配口径打架且重复（图纸断链之一），同日弃用；下表保留作历史对照。
+> **形态三变**：① 初版（2026-10-15）四段全文直接进 prompt → ② 同日二轮瘦身（用户裁定）：全文拆解，计划信息改走【装配注入】（worker.yml `func: plan_content()` / `func: plan_steps()` 每轮喂），prompt 只留一句派发指令 → ③ **2026-10-18 回归全文（用户裁定，现行）**：「把设计和步骤原文完整作为 prompt 发送给 worker，这样也不用额外装配 plan_content 了」。③ 与 ① 的差异：spec 细则此时已全文进步骤描述（2026-10-15，见[后记](#后记图纸全程可见--worker-工具面2026-10-15--二三连-commits-446c7d1--7ca0aa5dashboard-施工线实锤)），步骤原文自带 file/action/anchor/content/rationale，无需再嵌 spec 结构化段；装配侧 plan_content 退役后，**图纸唯一真源=施工牌 prompt**。
 
-原 `_construction_brief()`（src/agent.py）派给 worker 的 prompt 四段：
+原 ① 版 `_construction_brief()` 派给 worker 的 prompt 四段（历史对照）：
 
-| 段 | 内容（历史版） |
+| 段 | 内容（① 历史版） |
 |---|---|
 | 头部 | `【施工牌】计划 <id> · <标题>` |
 | 设计 / 目标 | `active_plan["design"]` 全文 |
@@ -43,7 +43,7 @@
 | 施工详情 | **源 spec 结构化全文**（`file` / `action` / `anchor` / `content`（截 6000 字）/ `rationale`） |
 | 结尾 | 分工声明 + 要求按 worker 的汇报格式给结论 |
 
-现行 `_construction_dispatch_prompt()`：只留「接的是哪条计划（id · 标题 · 步数）+ 图纸见你的装配注入（plan_content / plan_steps）+ 源 spec 细则用 recall_spec 兜底查 + 完成后按汇报格式给结论」——**代码不再拼全文**，图纸唯一真源是装配段（见[后记](#后记图纸全程可见--worker-工具面2026-10-15--二三连-commits-446c7d1--7ca0aa5dashboard-施工线实锤)）。
+现行 `_construction_dispatch_prompt()`（src/agent.py，③ 版 2026-10-18）：【施工牌】头部（计划 id · 标题）+ `## 设计` 全文 + `## 步骤` 逐条原文（spec 细则含其中）+ 汇报格式要求。**prompt 是派发时刻快照**（含步骤初始状态）——续派/补派不重发全文，由主 Agent 另行手写指令（如「从第 N 步继续」）；`recall_spec` 降为兜底查询通道（主路径=prompt 全文，2026-10-18 口径）。
 
 ## 派发：`Agent._maybe_dispatch_construction()`（幂等）
 
@@ -66,8 +66,8 @@
 | 目录形态 | `<name>/` 自包含：`worker.yml` + `worker.md` 人设（yml `file:` 装配引用） |
 | 工具 | `tools: ''`——继承引擎工具箱（自动排除管理工具）+ 目录 `tools/` 专属工具 |
 | 模型 / 步数 | `glm-official-flash` / `max_steps: 150`（长施工够用，见 [步数上限三级取值](../architecture/multi-agent.md)） |
-| 装配 | `file: .agent/agents/worker/worker.md` + `user_message` + `steps`——**无 history**：worker 只认施工牌 + 当前轮，一次性施工线不需历史记忆 |
-| 钩子 / 回退 | `turn_end: recap_gen(async)` / `fallback: [glm-official, deepseek]` |
+| 装配 | `file: .agent/agents/worker/worker.md` + `history` + `user_message` + `steps` + `func: plan_steps()`——**2026-10-18 起 `plan_content` 装配退役**：计划设计与步骤全文走施工牌 prompt（首轮即得全图），`plan_steps()` 只留轻量进度视图（☐/▶/✅，截断提示「全文见你的施工牌 prompt」）；`history` 为 2026-10-15 · 三增补（断点续跑记忆接续） |
+| 钩子 / 回退 | `turn_end: recap_gen(async)` + `after_tool: py_auto_diag` / `fallback: [glm-official, deepseek]` |
 | 人设要点（worker.md） | 按牌施工（一步一自检）· 不重复调研（牌里没写清才探索）· 小步可回滚 · 不转包 · 验证通过后再 `git_commit`；**四段式汇报**：完成情况 / 改动清单 / 验证结果 / 遗留风险 |
 
 ## 主 Agent 侧三处配套
@@ -100,13 +100,13 @@
 |---|---|---|
 | spec→plan 转换 | `_step_to_plan_desc`（src/spec_tools.py）把 spec 结构化 step 压成 plan 描述时 **content/rationale 截 150 字** | **全文进 description**——plan 步骤自带完整细则，worker 不必回查 spec（`446c7d1`） |
 | 装配注入 | 施工牌全文塞 prompt——与装配口径打架、重复 | worker.yml 装配段增 **`func: plan_content()`**（id/标题/design + 每步全文）与 **`func: plan_steps()`**（轻量进度视图，自行截断）；prompt 瘦身成一句派发指令（见上章） |
-| worker 工具面 | `update_plan` / `recall_spec` 均在 `_AGENT_TOOL_NAMES`（src/multiagent.py）排除集——worker 标不了进度、查不了 spec | **`update_plan` 下放**（worker 直接标共享 plan 文件，主/子双方面板同步；`create_plan` 仍排除）+ **`recall_spec` 例外保留**（纯只读查 spec 全文，兜底通道——主路径=plan_content 装配）（`7ca0aa5`） |
+| worker 工具面 | `update_plan` / `recall_spec` 均在 `_AGENT_TOOL_NAMES`（src/multiagent.py）排除集——worker 标不了进度、查不了 spec | **`update_plan` 下放**（worker 直接标共享 plan 文件，主/子双方面板同步；`create_plan` 仍排除）+ **`recall_spec` 例外保留**（纯只读查 spec 全文，兜底通道——主路径=施工牌 prompt 全文，2026-10-18 口径更新）（`7ca0aa5`） |
 
-**byte-stable（缓存断点治理·二连，commit `7ca0aa5`，用户裁定）**：`plan_content()` **每步不标状态**（✅/☐ 状态标记归 `plan_steps()`）——worker 用 update_plan 推进进度不再扰动 plan_content 段的字节，worker 装配前缀缓存不被施工推进打断；全部步骤完成后整段收敛为一行标题（2026-09-13 完成态瘦身口径延续）。
+**byte-stable（缓存断点治理·二连，commit `7ca0aa5`，用户裁定）**：`plan_content()` **每步不标状态**（✅/☐ 状态标记归 `plan_steps()`）——worker 用 update_plan 推进进度不再扰动 plan_content 段的字节，worker 装配前缀缓存不被施工推进打断；全部步骤完成后整段收敛为一行标题（2026-09-13 完成态瘦身口径延续）。*（2026-10-18 起 plan_content 装配退役，本段治理随之失效——整段直接没了。）*
 
 **实证（2026-10-15 当日）**：dashboard 施工线 worker 用 `update_plan` 标满 10/10（工具面修复生效实测）；三断点（进程波动 ×2 + /restart）后每轮 run 开头自动补派接续，无一丢线。
 
-**连带对账（以本节为准）**：worker.yml 现行 assembly = `file(人设) + func:plan_content() + history + user_message + steps + func:plan_steps()`，hooks = `turn_end: recap_gen(async)` + `after_tool: py_auto_diag`——本文上文「无 history」「仅 recap_gen」为初版形态的历史描述；worker 自带 history 后断点续跑的记忆接续不再依赖施工牌重述。
+**连带对账（本节装配口径已被[后记四](#后记四施工牌回归全文派发worker-装配退役-plan_content2026-10-18用户裁定)取代）**：本节时期 worker.yml assembly = `file(人设) + func:plan_content() + history + user_message + steps + func:plan_steps()`，hooks = `turn_end: recap_gen(async)` + `after_tool: py_auto_diag`——本文上文「无 history」「仅 recap_gen」为初版形态的历史描述；worker 自带 history 后断点续跑的记忆接续不再依赖施工牌重述。**2026-10-18 起装配段退役 plan_content**（计划全文走施工牌 prompt），现行 assembly 见[后记四](#后记四施工牌回归全文派发worker-装配退役-plan_content2026-10-18用户裁定)。
 
 ## 后记二：首例回执丢失——根因反转：`_route_answer` registry 静默丢通知，闭包兜底修复（2026-10-16，plan p_d721b263）
 
@@ -154,6 +154,25 @@ cmd（及部分 Python 调用）看不见 `.agt` 数据根子目录、**PowerShe
 **主 Agent 兜底**：caller 非主 Agent 时，中断/失败**额外直推 `_main_` inbox**（`source=subagent:interrupted`）——施工委托、用户 `@name` 派活、跨 Agent 委托全覆盖；**完成回执仍按 caller 路由不变**（兜底只针对中断/失败这两个接管信号）。以后 worker 再断，主 Agent 收到的通知自带「中断原因 + 正在干什么 + 干到哪了」，可直接带上下文重派。
 
 **生效**：需 `/restart`（与同日 ccs / marketplace 改动一起重启生效）。
+
+## 后记四：施工牌回归全文派发——worker 装配退役 plan_content（2026-10-18，用户裁定）
+
+**用户提案（2026-10-18）**：「我想 create_plan/commit_spec 开始施工的时候，把设计和步骤原文完整作为 prompt 发送给 worker 吧，这样也不用额外装配 plan_content 了」——对[后记](#后记图纸全程可见--worker-工具面2026-10-15--二三连-commits-446c7d1--7ca0aa5dashboard-施工线实锤)「装配注入」路线的再翻转：图纸从【装配逐轮注入】改回【派发 prompt 一次性携带】。worker 首轮即得全图，装配侧少一段随计划演进的全图维护（后记的 byte-stable 治理随之失效——整段直接没了，比治理更省）。
+
+四文件改动：
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent.py _construction_dispatch_prompt()` | 重写回全文版：【施工牌】头部（计划 id · 标题）+ `## 设计` 全文 + `## 步骤` 逐条原文 + 汇报格式要求——**prompt 是派发时刻快照**（含步骤初始状态），续派/补派由主 Agent 另行手写指令（如「从第 N 步继续」），不重发全文 |
+| `src/agents/worker/worker.yml` | 装配段移除 `func: plan_content()` → 现行 assembly = `file(人设) + history + user_message + steps + func: plan_steps()`——plan_steps 轻量进度视图保留（☐/▶/✅ 状态归它） |
+| `src/agent_config.py` | `plan_steps()` 截断提示改「…（全文见你的施工牌 prompt）」（原指 plan_content 装配） |
+| `src/multiagent.py` | `recall_spec` 兜底注释同步（主路径=施工牌 prompt 全文，2026-10-18 裁定）——兜底通道本身不变 |
+
+与 ① 初版全文牌的差异：spec 细则自 2026-10-15 起**全文进步骤描述**（`_step_to_plan_desc` 不截断），步骤原文已含 file/action/anchor/content/rationale——无需再嵌 spec 结构化段。`plan_content()` 函数本身保留（FUNC_REGISTRY 通用函数，其他声明仍可引用），只是 worker 不再装配。
+
+**验证（四绿，2026-10-18 开发轮）**：L3 双态渲染断言（spec 型 = design + 3 步全文 + 汇报格式；轻量型 = 无 design 单步）/ worker.yml 真实 `_parse_assembly` 解析（段序 `[file, history, user_message, steps, plan_steps]` 合法、plan_content 零残留）/ worker.md 双份（repo + 播种源）无 plan_content 引用 / py_diag 双文件绿。
+
+**生效**：`/restart`（引擎代码 + worker.yml 播种源同需）；commit 本地待网补推。下次 `create_plan` / spec 通过派 worker 即用新施工牌。
 
 ## 注意事项
 

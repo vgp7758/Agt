@@ -318,6 +318,41 @@ def _strip_image_parts(messages) -> int:
     return n
 
 
+def _mask_image_parts(messages):
+    """vision=false 出口保险（用户实锤 2026-10-19·20048 t243）：把 content 数组里的
+    image_url 块替换为文本占位。投影层 vision 门控（_project_imgs）只覆盖 <img> 标签
+    转换路径，冻结渲染缓存 / toollog 召回等历史形态可能残留带图消息——此处发送前
+    统一兜底：任何路径漏网的图都到不了非视觉端点（治 glm-5.3 端点 1210 连环冷却，
+    该场景两道自愈防线均不触发：_img_decode_reject 不匹配文案、vision_supported
+    已是 False 使 L1031 条件短路）。不动共享消息对象：仅含图消息做浅拷贝替换。"""
+    _has = False
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+            _has = True
+            break
+    if not _has:
+        return messages
+    out, n = [], 0
+    for m in messages:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+            nc = []
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "image_url":
+                    n += 1
+                    nc.append({"type": "text", "text": "[图片内容已省略：当前模型无视觉能力]"})
+                else:
+                    nc.append(p)
+            out.append({**m, "content": nc})
+        else:
+            out.append(m)
+    _LOG.warning("vision=false 出口保险：掩码 %d 个 image_url 块（非视觉端点防 400）", n)
+    return out
+
+
 def _img_decode_reject(e) -> bool:
     """400 坏图特征：解码失败/数据损坏（区别于端点不支持图——那走 ImageUnsupportedError 路径）。"""
     s = str(e)
@@ -692,6 +727,10 @@ class LLMClient:
                     m = dict(m)  # 浅拷贝，不修改原始
                     m["reasoning_content"] = ""
                 msgs.append(m)
+        if not self.vision_supported:
+            # 出口保险（20048 t243 实锤）：非视觉模型发送前掩码残留的 image_url 块
+            # （冻结渲染缓存/召回路径漏网）——防 glm-5.3 端点 1210 连环冷却回退。
+            msgs = _mask_image_parts(msgs)
         kwargs = {
             "model": self.model,
             "messages": msgs,

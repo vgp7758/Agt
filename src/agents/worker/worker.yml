@@ -6,7 +6,6 @@ model: glm-official-flash
 max_steps: 150
 assembly:
 - file: .agent/agents/worker/worker.md
-- func: plan_content()
 - history
 - user_message
 - steps

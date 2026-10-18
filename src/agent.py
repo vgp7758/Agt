@@ -1033,24 +1033,28 @@ class Agent:
     # （具名子 Agent 实例，一个计划一条独立施工线）：施工细节活在 worker 自己的 session 里，
     # 主 Agent 的投影只剩"我建了计划 → 委托给 worker 了"，状态不再随施工来回切换
     # （施工态投影/施工流/recent-file 内嵌都让位，见 session._construction_mode）。
-    # 计划信息走【装配】注入（用户裁定 2026-10-15）：worker.yml 的 func: plan_content() /
-    # func: plan_steps() 每轮把计划设计与步骤清单喂给 worker——派发 prompt 只留一句指令，
-    # 代码里不再重复拼【施工牌】全文。
+    # 计划信息走【派发 prompt】（用户裁定 2026-10-18）：设计与步骤原文完整进施工牌 prompt——
+    # worker 首轮即得全图，worker.yml 不再装配 plan_content（进度轻量视图仍走 plan_steps）。
     def _construction_dispatch_prompt(self) -> str:
-        """派发指令（用户裁定 2026-10-15）：计划信息走【装配】注入——worker.yml 里
-        `func: plan_content()` / `func: plan_steps()` 每轮把计划设计与步骤清单喂给 worker，
-        所以代码里不再重复拼【施工牌】全文（此前一版把 plan+spec 全文塞进 prompt，重复且
-        与装配口径打架）。这里只留一句：接的是哪条计划 + 汇报要求。
-        spec 细则全文在 plan 步骤描述里（2026-10-15 用户裁定：spec→plan 不再截 150 字），
-        经 worker.yml 的 func:plan_content() 每轮装配注入；recall_spec 仅兜底。"""
+        """派发施工牌（用户裁定 2026-10-18）：设计与步骤原文完整进 prompt——worker 首轮即得全图，
+        worker.yml 不再装配 plan_content（进度轻量视图仍走 plan_steps 每轮注入）。
+        spec 细则全文在步骤描述里（2026-10-15：spec→plan 不截断）；recall_spec 仅兜底。
+        prompt 是派发时刻快照（含初始状态），续派/补派由主 Agent 另行手写指令。"""
         p = getattr(self, "active_plan", None) or {}
         pid = str(p.get("id", "") or "")
         title = str(p.get("title", "") or "")
-        n = len(p.get("steps") or [])
-        return (f"开始施工：【当前计划】{pid}（{title} · {n} 步）——计划设计与步骤清单见你的装配注入"
-                f"（plan_content / plan_steps）；源 spec 细则用 recall_spec 查。\n"
-                f"按你的角色约定推进，完成后按汇报格式给结论"
-                f"（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
+        steps = p.get("steps") or []
+        design = str(p.get("design", "") or "").strip()
+        parts = [f"开始施工：【施工牌】{pid}（{title} · {len(steps)} 步）——设计与步骤原文如下："]
+        if design:
+            parts.append(f"\n## 设计\n{design}")
+        if steps:
+            parts.append(f"\n## 步骤（共 {len(steps)} 步，逐项推进）")
+            for i, s in enumerate(steps):
+                parts.append(f"{i + 1}. {s.get('description', '')}")
+        parts.append("\n按你的角色约定推进，用 update_plan 标进度（状态轻量视图每轮装配注入）。"
+                     "完成后按汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
+        return "\n".join(parts)
 
     def _maybe_dispatch_construction(self) -> None:
         """施工委托派发（用户提案 2026-10-15）：活动计划有未完成步且尚未委托 → agent_prompt 把

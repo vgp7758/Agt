@@ -346,7 +346,7 @@ def _func_plan_steps() -> str:
         st = x.get("status")
         d = x.get('description', '')
         if len(d) > 80:
-            d = d[:80] + "…（全文见 plan_content 装配）"
+            d = d[:80] + "…（全文见你的施工牌 prompt）"
         lines.append(f"  {_PLAN_ICON.get(st, '?')} {i + 1}. {d} ({_PLAN_LABEL.get(st, '')})")
     lines.append("推进时用 update_plan 更新状态、add_step 追加步骤、edit_plan 改标题/设计、exit_plan 退出。")
     return "\n".join(lines)

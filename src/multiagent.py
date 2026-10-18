@@ -48,7 +48,7 @@ _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"
                      # spec 工具：闭包绑定创建时的 agent（主 Agent）——被子 Agent 继承会
                      # 跨 agent 串写状态（子 Agent 建 spec 会挂到主 Agent、气泡弹到主会话）。
                      # recall_spec 例外保留（2026-10-15 施工委托实锤）：纯只读查 spec 全文，
-                     # 施工 worker 的兑底查询通道（主路径=plan_content 全文装配，同日裁定）。
+                     # 施工 worker 的兜底查询通道（主路径=施工牌 prompt 全文，2026-10-18 裁定）。
                      "create_spec", "commit_spec", "regenerate_spec", "list_specs"}
 
 

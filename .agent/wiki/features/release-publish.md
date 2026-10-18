@@ -168,6 +168,37 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后重启生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码，`/reload tools` 即吃到新版 release_publish。
 
+## 第五次实战：v0.35.5（2026-10-18，part=patch）——② 半成功重现（push 又断网），tag 手工补打待推
+
+第五次生产运行，用户侧仍只是一句「发补丁吧」。结果与 v0.35.2 同型（② 半成功、push 段断网）：
+
+| 步骤 | 结果 |
+|---|---|
+| ① 工作区检查 | ✅ 干净 |
+| ② release.py 主体 | ⚠️ **半成功**——build ✓（`agt_agent-0.35.5-py3-none-any.whl` + `.tar.gz`）/ upload ✓（<https://pypi.org/project/agt-agent/0.35.5/>）/ **push ✗**：`ssh: connect to host ssh.github.com port 443: Connection timed out`（出站反复——v0.35.3 当日刚通，本次又断） |
+| ③ version_file 同步 / ③.5 tag / ④ 端点验证 | ❌ 均未执行（② 失败即中断链，输出明示「后续步骤未执行」） |
+
+**口径修正（本版最重要的收获）**：③.5 tag 环节排在 push **之后**——**② 半成功时 tag 依旧漏打、仍靠手工补**。v0.35.3 的「tag 缺口收口」只覆盖**主链路全绿**路径，失败路径回落到 v0.35.2 形态；即「下次发版起 tag 零手工」仅在主链路全绿时成立。
+
+**收尾（逐项补尾，不是重发）**：
+
+- tag `v0.35.5` 手工补打（本地）——与 v0.35.2 同款形态：tag 先落本地，等 push 一起上
+- 挂**后台重试任务** `push-retry-v0355`（每 10 分钟 `git push --follow-tags`，静默失败、成功才汇报；间隔较 v0.35.2 的 30 分钟收紧）
+- push 上岸后 main + tag 一并上去，桌面版 GitHub Actions 自动触发——在那之前 **PyPI 已上线即发布事实成立**，桌面版静默不出包（口诀仍适用）
+
+### 本版收录清单（自 v0.35.4，4 笔提交）
+
+| 内容 | 详情页 |
+|---|---|
+| 装备提醒段【技能装备中】——装备期间每轮 system-reminder 可见（技能名 + desc + unequip 提示，三者皆空不注入） | [skills · 装备提醒段](skills.md) |
+| **轮结束自动卸载全部装备技能**——装备生命周期收窄为轮级：recap 后、inbox 消费前走 full `skill_unequip` 撤销；`skill_use` 未装备自动装备兜底重装，单技能失败容错不炸轮 | [skills · 轮结束自动卸载](skills.md) |
+| **施工牌回归全文派发**——create_plan / spec 通过派 worker 时设计与步骤原文完整进 prompt；worker 装配退役 `plan_content`（进度轻量视图仍走 `plan_steps`） | [construction-delegation · 后记四](construction-delegation.md) |
+| chore：`packaging/version_file.txt` 补提交（③ 的人工补尾转正）+ wiki 技能生命周期增量 | — |
+
+**口径注**：v0.35.4 的发版记录本页缺档（前轮已发、未留档），本节以 v0.35.4 为基线记录收录清单；末条 version_file 补提交即此前 ③ 人工补尾从「纪律」转为「常态提交」。
+
+**生效提示**：pip 索引约 20s 延迟；skills 两笔 + 施工牌一笔均为引擎/声明改动，本机 `pip install -e .` 生产实例 `/restart` 即生效（worker.yml 播种源同步改，新 repo 得新施工牌）。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)

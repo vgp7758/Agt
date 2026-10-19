@@ -57,6 +57,13 @@ _SERVICE_EXIT_LOG_LINES = 50   # 后台服务退出时，tool 结果里附带的
 # 原本永远等不到解除、只能 600s 超时——按 id 查此表路由到真正等待的 Agent。
 _APPROVAL_ROUTES: dict = {}
 
+# ⏸ 进程级挂起状态（用户提案 2026-10-19：/hold 对 _main_ 与所有 sub-agent 同生效——
+# 同一 agt 应用实例共享一把锁：CLI /hold、WebUI ⏸、/api/hold 三通道写这里，
+# 所有 Agent（main + 子 Agent）的 react 步间等待同一个 event。Event set=放行 / clear=挂起，
+# off 时 set() 广播唤醒全部等待者。每 agt 进程独立——"同一应用实例"即进程边界。）
+_PROC_HOLD = {"on": False, "event": threading.Event()}
+_PROC_HOLD["event"].set()   # 初始：不挂起
+
 # 工具结果里的 data-URL 图片段（MCP ImageContent 经 mcp_client._extract_text 转来 / 普通工具返回）：
 # _materialize_tool_result 把它落盘到 repo images/ 并替换成 <img>name</img> 标签（base64 不进存档）。
 _DATA_URL_RE = re.compile(r"data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)", re.I)
@@ -293,11 +300,9 @@ class Agent:
         self.tool_groups: dict = {}   # 工具名 -> 来源模块（build_agent 注册时标注，供 /api/tools 分组）
         self.max_steps = max_steps
         self.token_budget = token_budget
-        # ⏸ 挂起（用户提案 2026-09-21 /hold on|off + WebUI 按钮）：on 时 react 在下一步开始前暂停，
-        #   直到 off（_hold_event.set() 放行）后继续。Event 初始 set=不挂起；CLI / WebUI / /api/hold 三通道可控。
-        self._hold = False
-        self._hold_event = threading.Event()
-        self._hold_event.set()
+        # ⏸ 挂起：进程级共享（用户提案 2026-10-19）——_hold 是 property 读全局 _PROC_HOLD，
+        #   _main_ 与所有 sub-agent 同一把锁；不再 per-instance 初始化（此处赋值会走 setter
+        #   意外解除全局挂起，必须不碰）。
         self.verbose = verbose
         self.on_event = on_event
         self.snapshot_manager = snapshot_manager
@@ -1608,11 +1613,27 @@ class Agent:
                 pass   # 静默失败，recap 保持上一轮的值
         threading.Thread(target=_bg, daemon=True).start()
 
+    @property
+    def _hold(self) -> bool:
+        """进程级挂起态（用户提案 2026-10-19：/hold 对 _main_ 与所有 sub-agent 同生效——
+        同一 agt 应用实例共享一把锁；读全局 _PROC_HOLD）。旧读点（getattr(agent,'_hold')）兼容。"""
+        return bool(_PROC_HOLD["on"])
+
+    @_hold.setter
+    def _hold(self, on: bool):
+        # 兼容旧写点（若有直接赋值者）：路由到全局，与 set_hold 同语义
+        if bool(on):
+            _PROC_HOLD["on"] = True
+            _PROC_HOLD["event"].clear()
+        else:
+            _PROC_HOLD["on"] = False
+            _PROC_HOLD["event"].set()      # set() 广播唤醒所有等待中的 agent
+
     def set_hold(self, on: bool) -> dict:
         """设置/解除挂起（/hold on|off、/api/hold、WebUI 按钮共用）。on=True 挂起
-        （react 下一步开始前暂停），False 放行（_hold_event.set() 即时唤醒）。返回状态。"""
+        （所有 agent 的 react 下一步开始前暂停），False 放行（全局 event.set() 即时唤醒全部）。
+        进程级：_main_ 与所有 sub-agent 共享同一状态（用户提案 2026-10-19）。返回状态。"""
         self._hold = bool(on)
-        (self._hold_event.clear() if on else self._hold_event.set())
         return {"hold": self._hold}
 
     def shutdown(self):
@@ -2430,8 +2451,8 @@ class Agent:
                             return ""
                         # ⏸ 挂起检查（用户提案 2026-09-21）：hold on → 下一步开始前暂停（0.5s 轮询，
                         #   便于 Ctrl+C 打断；off 经 /api/hold 或命令 set_event 即时放行）
-                        while self._hold and not self._stop_flag:
-                            self._hold_event.wait(0.5)
+                        while self._hold and not self._stop_flag:      # 进程级锁（所有 agent 同一状态）
+                            _PROC_HOLD["event"].wait(0.5)
                             if self._stop_flag:
                                 break
                         # 中途插话注入（任何模式）：忙时排队的用户消息挂到"本步将生成"的 pending 位，

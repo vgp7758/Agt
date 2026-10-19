@@ -43,6 +43,9 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
+STEP_HOLD = 20          # 步数窗口折叠滞回余量（2026-10-20）：超 max_steps_per_turn 时一次折到
+                        # max_steps - STEP_HOLD，此后余量内 append-only 稳定前缀，再超窗才折
+                        # （治滚动截断每步断缓存：20048 t266·s81 命中 95%→40% 实锤）
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
 GRADUATE_FORCE_TURNS = 30  # 卫生性强档触发线：当前档超过此轮数时，无窗口压力也强制分批毕业（防档1 无限膨胀——
@@ -3871,10 +3874,16 @@ class Session:
         # 施工内嵌快照只对【当前轮】生效（用户裁定 2026-10-15）：归档轮即使 file_snapshots
         # 仍残留在内存也不内嵌（见 _is_current_steps）。
         constr = self._construction_mode() and self._is_current_steps(steps)
+        # 步数窗口折叠（滞回批量·2026-10-20 用户报障 t266·s81 命中 95%→40%）：原滚动截断
+        # （每步保留 [-80:] + 计数文案"N 个早期步骤已省略"）双重断缓存——文案每步变 +
+        # 窗口每步前滚错位一条 → 超窗后每步全断。改为：超 max_steps 时一次折到
+        # max_steps - STEP_HOLD（留滞回余量），此后余量内步数 append-only 前缀稳定，
+        # 再次超窗才折——断点从每步一次 → 每 STEP_HOLD+1 步一次；文案固定无计数。
         if max_steps and len(steps) > max_steps:
-            skipped = len(steps) - max_steps
-            steps = steps[-max_steps:]
-            msgs.append({"role": "system", "content": f"（本轮的 {skipped} 个早期步骤已省略，仅保留最近 {max_steps} 步）"})
+            keep = max(max_steps - STEP_HOLD, 1)
+            steps = steps[-keep:]
+            msgs.append({"role": "system",
+                         "content": f"（本轮早期部分步骤已省略，仅保留最近 {keep} 步）"})
         total = len(steps)
         cur_group = (total - 1) // GROUP_STEPS if total else 0   # 当前步所在组（0-based）
         eff_base = base if base is not None else self.detail_base   # 当前轮 base=None → 用统一 base（显式配置/窗口推导）

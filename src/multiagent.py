@@ -1713,7 +1713,11 @@ def make_subagent_tools(agent) -> list:
                 _ctx_msgs = None
         elif isinstance(context_messages, list) and context_messages:
             _ctx_msgs = context_messages
-        # images 附图（用户提案 2026-10-14）：复制进 repo images 目录 → <img>文件名</img> 追加到 prompt。
+        # images 附图（用户提案 2026-10-14）：复制进 repo images 目录 → <img> 标签追加到 prompt
+        # （2026-10-21 修复：此前误写成方括号占位文案——_project_imgs 只认 <img> 尖括号标签，
+        # 方括号文案在短路行原样返回，视觉子 Agent 永远只看到占位文字、看不到像素；
+        # 20048 vision_2 t16 实锤。改回 <img>name</img> 形态：视觉→image_url 看像素，
+        # 非视觉→投影层自动降级方括号占位文案，两种模型都正确）。
         # 子 Agent 侧投影按其模型 vision 门控展开（_project_imgs 只认 images 目录内的文件名——
         # 直接传 workspace 路径会「读取失败」，这里统一搬运后引用，两条根因一起堵住）。
         if images:

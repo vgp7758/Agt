@@ -172,7 +172,7 @@ cmd（及部分 Python 调用）看不见 `.agt` 数据根子目录、**PowerShe
 
 **验证（四绿，2026-10-18 开发轮）**：L3 双态渲染断言（spec 型 = design + 3 步全文 + 汇报格式；轻量型 = 无 design 单步）/ worker.yml 真实 `_parse_assembly` 解析（段序 `[file, history, user_message, steps, plan_steps]` 合法、plan_content 零残留）/ worker.md 双份（repo + 播种源）无 plan_content 引用 / py_diag 双文件绿。
 
-**生效**：`/restart`（引擎代码 + worker.yml 播种源同需）；commit 本地待网补推。下次 `create_plan` / spec 通过派 worker 即用新施工牌。
+**生效**：`/restart`（引擎代码 + worker.yml 播种源同需）；改动已随 v0.35.5 上 PyPI（当日 push 又断，远端由 `push-retry-v0355` 后台任务补推）。下次 `create_plan` / spec 通过派 worker 即用新施工牌。
 
 ## 注意事项
 

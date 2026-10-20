@@ -327,10 +327,28 @@ def _react(agent, llm, schemas, messages, max_steps: int, deadline: float, sc: _
                 if name not in _READ_ONLY:
                     result = f"[explore 白名单拒绝] {name} 不可用（探索只读）"
                 else:
-                    try:
-                        result = str(agent._exec_tool(name, args))
-                    except Exception as e:
-                        result = f"[执行出错] {type(e).__name__}: {e}"
+                    # 越界预检（2026-10-21 用户提案）：workspace 外路径直接拒绝，不进 _exec_tool——
+                    # 否则触发 file_outside 审批（ev.wait 600s）：审批卡虽能渲染（on_event 线程无关）
+                    # 且点了可解除，但 explore 的预算/超时不含审批段，没人点卡=白等 10 分钟。
+                    # 预检即时返回，探索模型当步改道（换相对路径或放弃）。
+                    _p = args.get("path")
+                    _outside = False
+                    if isinstance(_p, str) and _p.strip():
+                        try:
+                            _rp = Path(_p)
+                            if not _rp.is_absolute():
+                                _rp = _WORKSPACE / _rp
+                            _outside = not _rp.resolve().is_relative_to(_WORKSPACE.resolve())
+                        except Exception:
+                            _outside = False
+                    if _outside:
+                        result = (f"[explore 越界拒绝] {_p} 在 workspace 外——探索范围仅限当前仓库；"
+                                  f"请改用仓库内相对路径，或放弃该目标")
+                    else:
+                        try:
+                            result = str(agent._exec_tool(name, args))
+                        except Exception as e:
+                            result = f"[执行出错] {type(e).__name__}: {e}"
                 if len(result) > _RESULT_CAP:
                     result = result[:_RESULT_CAP] + "\n…[explore 截断]"
                 # reasoning 置空 + 标注来源（[外置探索] 前缀在投影时挂 reasoning_content）

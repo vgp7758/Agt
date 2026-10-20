@@ -102,15 +102,30 @@ def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool
             _old = getattr(_a, "on_event", None)
             if on_event is not None:
                 _a.on_event = on_event
+            _dead = None
             try:
                 _a.run(_t)
-            except Exception:
-                pass
+            except Exception as e:
+                # 静默失败黑洞修复（2026-10-20 · 20049 worker-p_1b7df7e7 实锤）：线程异常死
+                # 原被 except:pass 吞掉 + finally 标 done——主 Agent/用户完全无从得知"worker 消失"
+                # 的真因。三路留痕：日志 + 主 Agent 事件流（WebUI 弹 error）+ registry 标 failed。
+                _dead = e
+                import traceback as _tb
+                _err = (f"⚠️ 子 Agent 线程异常死亡（{getattr(_a, 'agent_id', '?')}）: "
+                        f"{type(e).__name__}: {e}\n" + "\n".join(_tb.format_exc().splitlines()[-6:]))
+                try:
+                    _LOG.error(_err)
+                except Exception:
+                    pass
+                try:
+                    _a._emit({"type": "error", "text": _err})
+                except Exception:
+                    pass
             finally:
                 _a.on_event = _old
                 if reg is not None and aid:
                     try:
-                        reg.update_status(aid, "done")
+                        reg.update_status(aid, "failed" if _dead is not None else "done")
                     except Exception:
                         pass
 
@@ -877,13 +892,30 @@ def make_communication_tools(agent) -> list:
         def _run_sub(_a=target_agent, _t=_msg):
             _old = getattr(_a, "on_event", None)
             _a.on_event = agent.on_event
+            _dead = None
             try:
                 _a.run(_t)
-            except Exception:
-                pass
+            except Exception as e:
+                # 静默失败黑洞修复（2026-10-20 · 20049 worker-p_1b7df7e7 实锤）：与 deliver_notice
+                # 同款——吞异常 + 标 done 让"worker 消失"无从追因。三路留痕 + failed 状态。
+                _dead = e
+                import traceback as _tb
+                _err = (f"⚠️ 子 Agent 线程异常死亡（{getattr(_a, 'agent_id', target_id)}）: "
+                        f"{type(e).__name__}: {e}\n" + "\n".join(_tb.format_exc().splitlines()[-6:]))
+                try:
+                    _LOG.error(_err)
+                except Exception:
+                    pass
+                try:
+                    _a._emit({"type": "error", "text": _err})
+                except Exception:
+                    pass
             finally:
                 _a.on_event = _old
-                reg.update_status(target_id, "done")
+                try:
+                    reg.update_status(target_id, "failed" if _dead is not None else "done")
+                except Exception:
+                    pass
         import threading as _th
         _th.Thread(target=_run_sub, daemon=True).start()
         return f"🔔 '{target_id}' 空闲——已唤醒一轮直接处理该提示（不再排队悬挂）。"

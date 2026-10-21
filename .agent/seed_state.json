@@ -64,5 +64,6 @@
  "plugin/screenshot/vendor/html2canvas.min.js": "b987dc0cc6cfcdc2",
  "plugin/record/backend.py": "fa316f57c09b60e8",
  "plugin/record/frontend.js": "2bb2c2a5cf37803a",
- "plugin/record/manifest.yml": "f2d9d9f7264c1ca9"
+ "plugin/record/manifest.yml": "f2d9d9f7264c1ca9",
+ "workflow/construction_dispatch.xml": "59b69eff0256c2df"
 }

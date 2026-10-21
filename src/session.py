@@ -1907,8 +1907,9 @@ class Session:
             steps = (p or {}).get("steps") or []
             if not (bool(steps) and any(str(x.get("status")) != "completed" for x in steps)):
                 return False
-            try:
-                _d = (self.extra_state or {}).get("_plan_dispatch") or {}
+            try:    # 2026-10-22 标记真源迁至文件级（引擎硬编码退役，钩子工作流 construction_dispatch 写入）
+                _mf = self.workspace / ".agent" / "construction_dispatch.json"
+                _d = json.loads(_mf.read_text(encoding="utf-8")) if _mf.exists() else {}
                 if _d.get("agent_id") and str(_d.get("plan_id") or "") == str((p or {}).get("id") or ""):
                     return False    # 已委托 worker → 施工视图让位
             except Exception:

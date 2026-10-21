@@ -1,0 +1,174 @@
+<workflow name="construction_dispatch" description="施工委托（用户提案 2026-10-15 · 引擎退役版 2026-10-22）：主 Agent 调 create_plan/commit_spec(approve)/join_plan 建好计划后，after_tool 钩子同步接管派发——从 tool_result 提取 plan_id → 文件级幂等标记（.agent/construction_dispatch.json，repo 级跨 session）→ 读 plans 目录下计划文件装配施工牌（设计+步骤全文）→ agent_prompt 派给 worker-「pid」具名实例（一个计划一条施工线）→ end inject=True 同轮注入旁注提醒主 Agent 别自己动手。替代原引擎硬编码 Agent._maybe_dispatch_construction（可 inspect 可禁用可改：删/禁用本文件即关闭委托）。同步非 async：派发秒级且 inject 需同轮生效" hook="after_tool" hidden="true" seed_scope="global">
+  <node id="100001" type="start" title="start" x="120" y="80">
+    <out name="user_message" type="string"/>
+    <out name="tool_name" type="string"/>
+    <out name="tool_args" type="string"/>
+    <out name="tool_result" type="string" description="工具执行结果文本（提取 plan_id 的来源）"/>
+    <out name="changed_files" type="list" description="工具调用前后 workspace 快照 diff 的变化文件清单"/>
+  </node>
+  <node id="500001" type="code" title="gate_and_extract" x="420" y="80">
+    <in name="tool_name" type="string" ref="100001.tool_name"/>
+    <in name="tool_result" type="string" ref="100001.tool_result"/>
+    <code language="3"><![CDATA[import json, re, time, os
+from pathlib import Path
+
+# 触发集：只有三个建计划工具才可能产生"新计划待委托"（worker 自身调 update_plan 等天然短路）
+TRIGGERS = {"create_plan", "commit_spec", "join_plan"}
+# plan_id 提取正则：覆盖三种文案（与 session.py 施工源头回搜同源）
+#   create_plan  → "已创建计划 p_xxxxxxxx（N 步）："
+#   commit_spec  → "✅ 用户已批准 spec s_xxx！已生成 plan p_xxxxxxxx（N 步）并设为活动计划"
+#   join_plan    → "已加入计划 p_xxxxxxxx（当前 N 步）："
+_RX_PID = re.compile(r"(?:已创建计划|已生成\s+plan|已加入计划)\s+(p_[0-9a-fA-F]+)")
+
+
+def _mark_path() -> Path:
+    """幂等标记文件（repo 级，跨 session 共享）：join_plan 进来的其它 session 不会对已委托计划重复派发；
+    重启不丢（替代旧 session.extra_state['_plan_dispatch']——残留无消费者，无害不迁移）。"""
+    return Path(".agent/construction_dispatch.json")
+
+
+def _plan_path(pid: str) -> Path:
+    """计划文件真源：repos_root/_repo_key(cwd)/plans/<pid>.json——与 plan_tools 走的 repo_plans_dir
+    同源。公式内联（code 节点是独立子进程跑的，subprocess 纯解释器 sys.path 无 src，import 引擎
+    模块 session/paths 会 ModuleNotFoundError → 一律只用标准库）：①AGT_HOME 环境变量 or ~/.agt；
+    ②settings.json 的 repos_dir（绝对路径才认，与 paths.repos_root 同规则）；③_repo_key 斜杠替换。"""
+    agt = os.environ.get("AGT_HOME", "").strip()
+    base = Path(agt) if agt else Path.home() / ".agt"
+    root = base / "repos"
+    try:
+        _s = base / "settings.json"
+        if _s.exists():
+            v = str((json.loads(_s.read_text(encoding="utf-8")) or {}).get("repos_dir") or "").strip()
+            if v and Path(v).is_absolute():
+                root = Path(v)
+    except Exception:
+        pass
+    key = str(Path.cwd().resolve()).replace("\\", "-").replace("/", "-").replace(":", "-")
+    return root / key / "plans" / f"{pid}.json"
+
+
+def _build_dispatch_prompt(plan: dict) -> str:
+    """装配施工牌（移植原引擎 _construction_dispatch_prompt，格式逐字一致——worker 首轮即得全图）：
+    设计 + 步骤原文完整进 prompt；prompt 是派发时刻快照（含初始状态），续派/补派由主 Agent 手写指令。"""
+    pid = str(plan.get("id", "") or "")
+    title = str(plan.get("title", "") or "")
+    steps = plan.get("steps") or []
+    design = str(plan.get("design", "") or "").strip()
+    parts = [f"开始施工：【施工牌】{pid}（{title} · {len(steps)} 步）——设计与步骤原文如下："]
+    if design:
+        parts.append(f"\n## 设计\n{design}")
+    if steps:
+        parts.append(f"\n## 步骤（共 {len(steps)} 步，逐项推进）")
+        for i, s in enumerate(steps):
+            parts.append(f"{i + 1}. {s.get('description', '')}")
+    parts.append("\n按你的角色约定推进，用 update_plan 标进度（状态轻量视图每轮装配注入）。"
+                 "完成后按汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
+    return "\n".join(parts)
+
+
+async def main(args):
+    """闸门：①tool_name ∈ 触发集否则短路；②正则提取 plan_id（结果文本无 id=失败/拒绝→短路）；
+    ③读计划文件——无步骤/全 completed → 清幂等标记短路（新计划重新委托，同旧引擎语义）；
+    ④同 plan_id 已委托（文件级标记）→ 幂等短路；⑤装配施工牌全文输出。
+    任何短路只影响本钩子（inject=False 不注入），绝不影响主流程。"""
+    tn = str(args.params.get("tool_name") or "")
+    tr = str(args.params.get("tool_result") or "")
+    _short = {"should_dispatch": False, "prompt_text": "", "plan_id": "",
+              "agent_id": "", "n_steps": 0, "note": ""}
+    if tn not in TRIGGERS:
+        return {**_short, "reason": f"工具 {tn} 非建计划工具（短路）"}
+    m = _RX_PID.search(tr)
+    if not m:
+        return {**_short, "reason": f"{tn} 结果未含 plan_id（建计划失败/被拒绝，短路）"}
+    pid = m.group(1)
+    aid = f"worker-{pid}"
+    mp = _mark_path()
+    try:
+        mark = json.loads(mp.read_text(encoding="utf-8")) if mp.exists() else {}
+    except Exception:
+        mark = {}
+    # 计划本体：读不到=保守不派发（新进程首拍目录未建等瞬时态，下次触发自然重试）
+    try:
+        plan = json.loads(_plan_path(pid).read_text(encoding="utf-8"))
+    except Exception as e:
+        return {**_short, "reason": f"读计划 {pid}.json 失败: {type(e).__name__}: {e}（短路）"}
+    steps = plan.get("steps") or []
+    done_all = bool(steps) and all(str(s.get("status")) == "completed" for s in steps)
+    if not pid or not steps or done_all:
+        # 计划完成/无计划：委托标记失效（下次新计划重新委托）——同旧引擎 _d.clear() 语义
+        if mark:
+            try:
+                mp.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return {**_short, "reason": f"{pid} 无步骤或已全完成（标记已清，短路）"}
+    if str(mark.get("plan_id") or "") == pid and str(mark.get("agent_id") or ""):
+        return {**_short, "reason": f"{pid} 已委托给 {mark.get('agent_id')}（幂等短路）"}
+    note = (f"🏗️ 施工已委托 {aid}（计划 {pid} · {len(steps)} 步）：这条计划由 worker 执行，"
+            f"你不必再自己动手。worker 完成会自动汇报进你的 inbox——"
+            f"收到后用 update_plan 记账并向用户汇总；期间可正常响应用户。")
+    return {"should_dispatch": True, "prompt_text": _build_dispatch_prompt(plan),
+            "plan_id": pid, "agent_id": aid, "n_steps": len(steps),
+            "note": note, "reason": f"待派发 {aid}"}]]></code>
+    <out name="should_dispatch" type="boolean" description="是否需要派发（false=各短路分支）"/>
+    <out name="prompt_text" type="string" description="施工牌全文（设计+步骤）"/>
+    <out name="plan_id" type="string"/>
+    <out name="agent_id" type="string" description="worker-&lt;plan_id&gt;"/>
+    <out name="n_steps" type="integer"/>
+    <out name="note" type="string" description="主 Agent 防打架旁注文案"/>
+    <out name="reason" type="string" description="判定结果说明（观测用）"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="800001" type="selector" title="should_dispatch?" x="720" y="80">
+    <branch><cond op="11" left="500001.should_dispatch" right="" left_type="boolean"/></branch>
+  </node>
+  <node id="600001" type="plugin" title="agent_prompt" x="1020" y="80" toolName="agent_prompt">
+    <in name="name" type="string">worker</in>
+    <in name="prompt" type="string" ref="500001.prompt_text"/>
+    <in name="agent_id" type="string" ref="500001.agent_id"/>
+    <in name="reuse" type="string">yes</in>
+    <in name="caller" type="string">_main_</in>
+    <in name="current_turn_only" type="boolean">False</in>
+    <out name="raw" type="string" description="工具原始返回（派发确认文本）"/>
+    <out name="result" type="string" description="工具返回值"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="700001" type="code" title="mark_done" x="1320" y="80">
+    <in name="plan_id" type="string" ref="500001.plan_id"/>
+    <in name="agent_id" type="string" ref="500001.agent_id"/>
+    <in name="n_steps" type="integer" ref="500001.n_steps"/>
+    <in name="note" type="string" ref="500001.note"/>
+    <code language="3"><![CDATA[import json, time
+from pathlib import Path
+async def main(args):
+    """派发成功：写 repo 级幂等标记文件（.agent/construction_dispatch.json）——
+    跨 session 防重复派发；重启不丢（替代旧 extra_state['_plan_dispatch']）。
+    写失败不阻断（最坏情况=重启后对同计划重派一次，worker 复用实例接续，幂等兜底可接受）。"""
+    pid = str(args.params.get("plan_id") or "")
+    aid = str(args.params.get("agent_id") or "")
+    note = str(args.params.get("note") or "")
+    try:
+        d = Path(".agent"); d.mkdir(parents=True, exist_ok=True)
+        (d / "construction_dispatch.json").write_text(
+            json.dumps({"plan_id": pid, "agent_id": aid, "ts": time.time()},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return {"injected": True, "result": note, "message": note}]]></code>
+    <out name="injected" type="boolean" description="恒 true（end inject 的数据源——短路分支未执行此节点→None→不注入）"/>
+    <out name="result" type="string" description="注入主 LLM 的旁注文本"/>
+    <out name="message" type="string" description="UI workflow_message 事件文本"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="900001" type="end" title="end" x="1620" y="80">
+    <out name="inject" ref="700001.injected" type="boolean" description="true=旁注注入主 LLM；短路分支未执行 mark_done → None → 不注入"/>
+    <out name="result" ref="700001.result" type="string"/>
+    <out name="message" ref="700001.message" type="string"/>
+  </node>
+  <edge from="100001" to="500001"/>
+  <edge from="500001" to="800001"/>
+  <edge from="800001" to="600001" port="true"/>
+  <edge from="800001" to="900001" port="false"/>
+  <edge from="600001" to="700001"/>
+  <edge from="700001" to="900001"/>
+</workflow>

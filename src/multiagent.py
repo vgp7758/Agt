@@ -1699,6 +1699,15 @@ def make_subagent_tools(agent) -> list:
         else:
             return (f"[参数错误] reuse 只接受 yes/no（收到 '{reuse}'）。"
                     f"yes=复用同名活实例（默认，不传即是），no=新建独立实例。")
+        # current_turn_only 宽松解析（2026-10-22 随施工委托工作流化补）：工作流 plugin 节点的
+        # boolean 传参历史上以字符串形态到达过（上方 reuse 兼容注释佐证）——bool('False') 恒 True，
+        # 会误裁 worker 的 history 段（违背 2026-10-15 用户裁定：施工 worker 声明了 history 段
+        # 就要完整装配）。与 reuse 同款 str→bool：'false'/'0'/'no' → False，'true'/'1'/'yes' → True。
+        if isinstance(current_turn_only, str):
+            _ctv = current_turn_only.strip().lower()
+            current_turn_only = _ctv in ("true", "1", "yes", "y")
+        elif not isinstance(current_turn_only, bool):
+            current_turn_only = bool(current_turn_only)
         caller_id = (caller or "").strip().lower() or agent.agent_id   # 汇报对象：显式指定 > 自动捕获
         # context_messages 直通：JSON 串 → list（plugin 节点传参恒为字符串）；非法输入静默忽略
         import json as _json
@@ -2224,8 +2233,4 @@ def make_subagent_tools(agent) -> list:
         _rt._agents_changed_cb = lambda: _inject_agent_enums(agent, tools_list)
     except Exception:
         pass
-    # 引擎程序化派发入口（用户提案 2026-10-15·施工委托）：把 prompt 实现挂到 agent 实例上，
-    # 引擎（Agent._maybe_dispatch_construction）不经 LLM 工具调用即可起子 Agent——
-    # 施工牌由 create_plan/commit_spec 触发自动派给 worker-<plan_id>。
-    agent._prompt_subagent = agent_prompt
     return tools_list

@@ -1660,12 +1660,34 @@ class Session:
         else:
             out = list(self._steps_to_messages(self._current.steps, self.max_steps_per_turn,
                                                full_window=RECENT_FULL_STEPS))
-        # 外置探索旁车内插（spec s_7edebd56）：seeds 渲染成 assistant(tool_calls)+tool 消息组，
-        # 插在 steps 之后、pending hint 之前——与原 _seed_steps 嫁接顺序等价（过程先于 explore
-        # 调用步，因外层调用步归档前旁车恰在末尾）。仅当前轮：字段不持久化，下轮自然消失。
+        # 外置探索旁车内插（spec s_7edebd56）：seeds 渲染成 assistant(tool_calls)+tool 消息组。
+        # 仅当前轮：字段不持久化，下轮自然消失。
         _seeds = getattr(self._current, "_explore_seeds", None)
         if _seeds:
-            out.extend(self._explore_seeds_to_msgs(_seeds))
+            _seed_msgs = self._explore_seeds_to_msgs(_seeds)
+            # 插入位置（2026-10-22 缓存修复·20048 t276 实锤）：原恒挂全部步骤之后——真实步骤
+            # 每步增长 → seeds 段每步后移 → explore 完成后每步断前缀（s49→s50 在 messages[425]
+            # 处断，命中 76%=231K/304K，锚点丢失后每步 ~73K 全价）。改为锚定第一个 explore/
+            # explore_resume 调用步的 tool result 之后：位置一次定型，后续步骤自然 append 在
+            # seeds 段之后 → 前缀稳定（explore 完成时刻仅断一次）。锚点找不到（调用步已被
+            # 折叠/淘汰）→ 回退挂尾部（原行为）。
+            _anchor = None
+            for i, m in enumerate(out):
+                for t in (m.get("tool_calls") or []):
+                    if (t.get("function") or {}).get("name") in ("explore", "explore_resume"):
+                        _cid = t.get("id")
+                        for j in range(i + 1, len(out)):
+                            if (out[j].get("role") == "tool"
+                                    and out[j].get("tool_call_id") == _cid):
+                                _anchor = j + 1
+                                break
+                        break
+                if _anchor is not None:
+                    break
+            if _anchor is not None:
+                out[_anchor:_anchor] = _seed_msgs
+            else:
+                out.extend(_seed_msgs)
         _psh = getattr(self._current, "_pending_step_hint", None)
         if _psh:
             out.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + _psh)})

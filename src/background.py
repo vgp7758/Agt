@@ -815,8 +815,12 @@ class Scheduler:
             import io as _io, contextlib as _cl
             buf, g = _io.StringIO(), {"agent": self._agent, "result": None}
             try:
+                # 单 dict 形态（globals=locals）——三参数形态（globals≠locals）时顶层 import
+                # 进 locals，而用户 code 里定义的函数体只查 globals → NameError（2026-10-22
+                # push-retry-ask-commit 实锤：code 内 def _push_ssh 引用顶层 import 的 subprocess 即炸）。
+                # 单 dict 下顶层 import 与函数定义同住 g，函数体经 globals 正常可见。
                 with _cl.redirect_stdout(buf):
-                    exec(sch.code, {"__builtins__": __builtins__}, g)
+                    exec(sch.code, g)
             except Exception as e:
                 primary.append(f"[{sch.name} · code 失败] {type(e).__name__}: {e}")
             else:

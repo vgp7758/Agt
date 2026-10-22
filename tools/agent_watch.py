@@ -32,6 +32,7 @@ from pathlib import Path
 INTERVAL = 900          # 轮询间隔（秒）
 STATE_FILE = os.path.expanduser("~/.agt/agent_watch_state.json")
 PID_FILE = os.path.expanduser("~/.agt/agent_watch.pid")   # 单例接管标记（2026-10-08）
+CPOLAR_TOKEN = "brick"    # 公网链接 query token（用户提示 2026-10-22：链接末尾需带 ?token= 才能免登录直访）
 
 MAIL = {
     "from": "vgp123@foxmail.com",
@@ -134,7 +135,8 @@ def build_watches(prev_state: dict | None = None) -> list:
         w = {"name": meta.get("name", f"port-{p}"), "note": meta.get("note", "本地 agt 实例（自动发现）"),
              "url": f"http://127.0.0.1:{p}"}
         # cpolar 隧道支持 /port-N 路径路由到本机任意端口（用户提示 2026-09-20，实测 9000/8000 均通）
-        w["public"] = f"https://{dom}/port-{p}" if dom else ""
+        # ?token= 由用户提示追加（2026-10-22）：公网访问需带 query token 才能通过网关校验
+        w["public"] = f"https://{dom}/port-{p}?token={CPOLAR_TOKEN}" if dom else ""
         watches.append(w)
     return watches + REMOTE_WATCHES
 

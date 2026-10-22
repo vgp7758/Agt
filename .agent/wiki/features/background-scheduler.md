@@ -146,6 +146,36 @@ if result:   # 空返回不算产物（与 code 静默对齐，用户裁定 v2�
 
 **至此三条静默通道闭环**：code 空产物 → 静默；tool 空串/占位符 → 静默；主通道全空 → message 附言一并静默。重启实例后生效。
 
+### 后记：schedule code 通道 exec 双 dict 坑——顶层 import 进 locals、函数体只查 globals 必 NameError（2026-10-22，push-retry-ask-commit 实锤）
+
+**触发**：后台任务 `push-retry-ask-commit`（SSH 推送重试，code 通道）到点失败：`NameError: name 'subprocess' is not defined`——code 里明明顶层 `import subprocess` 了。
+
+**根因（`_produce` code 分支，src/background.py，约 L819）**：旧写法是三参数 exec：
+
+```python
+exec(sch.code, {"__builtins__": __builtins__}, g)   # globals ≠ locals
+```
+
+三参数形态（globals≠locals）下，code **顶层 `import` 绑定落进 locals(g)**，而用户 code 里 `def` 出的函数体执行时**只查 globals** → 函数内引用顶层 import 的名字必炸 NameError（2026-10-22 `push-retry-ask-commit` 实锤：code 内 `def _push_ssh` 引用顶层 import 的 `subprocess` 即炸；最小实验复现一致）。
+
+**修复（单 dict，globals=locals 同一个）**：
+
+```python
+g = {"agent": self._agent, "result": None}
+exec(sch.code, g)   # 顶层 import 与函数定义同住 g，函数体经 globals 正常可见
+```
+
+`with _cl.redirect_stdout(buf)` 的 stdout 捕获包裹保持不变——code 通道「stdout 尾部 + `result` 变量」产物语义不动。
+
+**施工插曲**：首笔 edit 误把 `redirect_stdout` 包裹行删掉（new_string 只含 exec 行）——第二笔当场补回，最终形态如上。多行替换时新串务必带全被替换段的每一行。
+
+**兼容与生效**：
+
+- 引擎代码改动，`/restart` 后 schedule code 通道支持「顶层 import + 函数定义」的常规写法；
+- **旧进程在岗期间**：任务侧用平铺写法（不 `def` 函数、顶层顺序执行）立即绕开，无需等重启——本次重试任务已重建为平铺版 `push-retry-ask2`（每 10 分钟），在旧代码上也立即可跑。
+
+**验证**：修复后最小实验——顶层 `import subprocess` + `def` 内引用 + `result=` 变量 + stdout 双段捕获，全过 ✅。
+
 ## 每日闹钟实现要点（src/background.py）
 
 - `_DAILY_RE = ^\d{1,2}:\d{1,2}(:\d{1,2})?$` 判短格式；短格式校验时/分范围（`25:00` 报时间格式错误），ISO 已过时报「时间已过」，at 空串同样报格式错误（不静默吞任务）

@@ -282,8 +282,11 @@ def _ws_endpoint(url: str) -> str:
 
 
 def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
-                     ack_timeout: float = 10.0) -> tuple[str, list[str]]:
+                     ack_timeout: float = 10.0, payload: dict = None) -> tuple[str, list[str]]:
     """WS 客户端：发一条消息；wait_done=True 时挂流收 answer 直到 _done（或 timeout）。
+    payload: 自定义发送体（None=普通文本 {"text","images"}）。ask 用它发 JSON action
+    （{"action":"ask",...}）——远端据此走 ask 消费端（临时 agent/只读工具可用/不写它历史），
+    而不是当普通用户消息跑一整轮 agent.run。
     返回 (状态说明, answer 文本段列表)。异常转错误文案不抛。"""
     try:
         import websocket   # websocket-client（run_python 沙箱已验证环境可用）
@@ -348,8 +351,9 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
     else:
         return (f"[连接失败] {url}/ws（{_last_err}；已重试 3 次——若为 WinError 10013 系"
                 f"短连接撞 TIME_WAIT 的瞬态错误，稍后再试或减少并发消息）"), []
+    _payload = payload if isinstance(payload, dict) else {"text": text, "images": []}
     try:
-        ws_app.send(json.dumps({"text": text, "images": []}))
+        ws_app.send(json.dumps(_payload, ensure_ascii=False))
     except Exception as e:
         return f"[发送失败] {type(e).__name__}: {e}", []
     if not wait_done:
@@ -398,14 +402,21 @@ def send_message(server_id: str, message: str, expect_reply: bool = False) -> st
 
 
 def ask(server_id: str, question: str, timeout: int = 120) -> str:
-    """同步问答：发消息并挂流等对方跑完本轮，聚合它的最终回答返回。
-    消耗对方一次 LLM 调用（带它的全量投影）。适合"问它一个它才知道的问题"。"""
+    """同步问答：发 WS JSON action=ask，挂流等对方【ask 消费端】回答（2026-10-22 统一语义：
+    对方拷贝上下文 + 临时 agent——只读/召回类工具可用、写类拒绝、60s 无答则清空工具直答）。
+    它是旁路询问：不写对方 session/events/历史，也不改动对方环境。
+    适合"问它一个它才知道的问题"（它的环境/进度/配置）。"""
     with _LOCK:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
         return f"[未知实例 id] '{server_id}'（remote_list 查看：{known}）"
-    status, answers = _ws_send_collect(it["url"], question, wait_done=True, timeout=timeout)
+    _asker = f"远程实例 {MY_URL}" if MY_URL else "远程实例"
+    # 新版对端：action=ask → ask 消费端（不跑 agent.run、不写历史）；
+    # 旧版对端：不识别该 action → 落到 _parse_client_msg 取 text 当普通消息（行为降级但可用）。
+    status, answers = _ws_send_collect(
+        it["url"], question, wait_done=True, timeout=timeout,
+        payload={"action": "ask", "text": question, "asker": _asker})
     body = "\n".join(a for a in answers if a).strip()
     if body:
         return f"[remote:{server_id}] {body}"
@@ -450,9 +461,11 @@ def make_remote_tools(agent) -> list[Tool]:
         return send_message(remote_instance_id, message, expect_reply=expect_reply)
 
     def remote_ask(remote_instance_id: str, question: str, timeout: int = 120) -> str:
-        """向远程实例的 agent 提问并等待它的最终回答（挂流到本轮完成，默认 120s）。
-        消耗对方一次 LLM 调用。适合问"只有它才知道"的事（它的环境/它的进度）。
-        对方正忙时消息进它的插话队列，回答可能超时——可加大 timeout 或改用 remote_message。"""
+        """向远程实例的 agent 提问并等待它的最终回答（挂流到回答完成，默认 120s）。
+        对端按【ask 消费端】统一语义处理（2026-10-22）：拷贝它的上下文 + 临时 agent——
+        只读/召回类工具可用（它能自查自己的文件/记忆），run_shell/run_python/写类工具拒绝，
+        60s 内没收敛出回答则清空工具直接作答；**不写对方 session/events/历史**、不改动其环境。
+        适合问"只有它才知道"的事（它的环境/它的进度/它的配置）。"""
         try:
             agent.recap_interact("r:" + remote_instance_id)
         except Exception:

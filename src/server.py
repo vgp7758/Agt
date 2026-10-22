@@ -2746,6 +2746,25 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         agent._stop_flag = True
         await _send(ws, {"type": "system", "text": "⏹ 已请求停止…"})
         return
+    if isinstance(_d, dict) and _d.get("action") == "ask":
+        # ask 消费端（用户提案 2026-10-22）：remote_ask 的对端处理——与被问方 agent_ask 同一套语义
+        # （ask_consumer.answer_ask：拷贝上下文 + 临时 agent——只读/召回类工具可用、写类拒绝、
+        # 60s 无答清空工具直答）。纯旁路：不写 session/events、不进 toollog、不当用户消息跑
+        # agent.run（旧实现即是后者——会污染对端历史且带全工具真去干活）。
+        # LLM 调用可能数十秒 → to_thread 跑，不阻塞事件循环（WS 心跳/其它客户端不受影响）。
+        _q = str(_d.get("text") or "").strip()
+        _asker = str(_d.get("asker") or "远程实例").strip()
+        if not _q:
+            await _send(ws, {"type": "_done"})
+            return
+        from ask_consumer import answer_ask
+        try:
+            _ans = await asyncio.to_thread(answer_ask, agent, _q, _asker)
+        except Exception as e:
+            _ans = f"[询问失败] {type(e).__name__}: {e}"
+        await _send(ws, {"type": "answer", "text": _ans})
+        await _send(ws, {"type": "_done"})
+        return
     if isinstance(_d, dict) and _d.get("action") == "open_terminal":
         import subprocess
         cmd = (_d.get("command") or "").strip()

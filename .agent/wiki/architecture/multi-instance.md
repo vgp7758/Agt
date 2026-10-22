@@ -389,7 +389,7 @@ remote_call_tool({"remote_instance_id": "agt-192-168-1-2-8000",
 | 工具 | 语义 | 成本 |
 |---|---|---|
 | `remote_message(remote_instance_id, message)` | **异步 fire-and-forget**——WS 送达即返（`user`/`message_queued` 回执），对方带自己的 session 上下文异步处理 | 对方异步跑一轮 |
-| `remote_ask(remote_instance_id, question, timeout=120)` | **同步问答**——挂流收 answer 到 `_done`，聚合最终回答返回 | 对方一轮 LLM |
+| `remote_ask(remote_instance_id, question, timeout=120)` | **同步问答**——发 `{"action":"ask"}` 走对端 ask 消费端（拷贝上下文+临时 agent：只读/召回工具可用、写类拒绝、60s 无答清空工具直答），挂流收 answer 到 `_done` | 对方一次侧路 LLM（**不写对端历史**） |
 
 **实现**（remote_tools.py `_ws_send_collect`）：http→ws 端点转换、送达回执（对方正忙时 `message_queued` 进它的插话队列也算送达）、answer 聚合、超时降级文案（「对方在忙长任务——加大 timeout 或改用 remote_message」）。两工具加入 `_REMOTE_ADMIN` 豁免（remote_instance_id=发给谁，管理语义，防路由拦截——同 remote_connect 的坑）。
 
@@ -434,6 +434,26 @@ remote_message(id, 派活, expect_reply=True)
 - 回发依赖发起方 WebUI 服务在线——CLI 裸进程收不到回执，发起侧已挡（MY_URL 未设直接报错）
 
 **验证（四环节单测全绿）**：① MY_URL 未设 → `[expect_reply 失败]` 报错不乱发；② 协议行组装 `⟨expect_reply:http://192.168.1.5:9000⟩`；③ 对端剥挂：`_reply_to` 提取 + 模型只见干净消息；④ connect 返回 id 解析（幂等复用/新连两形态）。
+
+### ask 消费端统一：remote_ask 改走 WS action=ask（2026-10-22，用户提案）
+
+**背景**：旧 `remote_ask` 发的是**普通 WS 文本**（`{"text": …}`）——对端与「用户打字」走同一条链：进 `_work_q` → 跑一整轮 `agent.run`。三个后果：① 询问写进对端 session/events（污染它的历史）；② 对端带全工具，真的会去执行动作（这不是「问」）；③ 无降级收敛，对方在工具链里绕就一路烧下去。
+
+**统一（用户提案 2026-10-22）**：与同进程 `agent_ask` 共用 `src/ask_consumer.py` 的 `answer_ask`——拷贝对端上下文 + 临时 `AskAgent`（只读/召回类工具可用；`run_shell`/`run_python`/写类拒绝；60s 无答清空工具直答），**不写对端 session/events/toollog**。
+
+**协议**（remote_tools.py `ask()` → `_ws_send_collect(..., payload=…)`）：
+
+```json
+{"action": "ask", "text": "<问题>", "asker": "远程实例 http://…"}
+```
+
+远端（server.py `_handle_user_input`）识别 `action=="ask"` → `asyncio.to_thread(answer_ask, agent, text, asker)`（LLM 数十秒，不能阻塞事件循环）→ `await _send(ws, {"type":"answer","text":…})` + `{"type":"_done"}`。`_ws_send_collect` 的 `_on_msg` 原本就收 `answer`/`_done`，客户端侧零改动。
+
+**兼容**：旧版对端不识别该 action → 落到 `_parse_client_msg` 取 `text` 当普通消息（退化为旧行为，能用但不旁路）。新版对旧版、旧版对新版都不断链。
+
+**验证**（plan p_36c08c00，隔离实例 9633）：remote_ask 问 `probe.txt` 内容 → 对端 `read_file` 真读并答出标记串（55.6s）；remote_ask 让 `run_shell` 建文件 → 拒绝文案回传、文件确未创建（26.5s）；两次询问后隔离工作区**零 session 目录生成**（旧实现必建目录+写 events）。工具三分类 / 60s 降级 / 异常兜底单测全绿。全量语义见 [多 Agent 体系 · ask 消费端统一](multi-agent.md#ask-消费端统一临时-agent只读工具可用写类拒绝60s-无答清空工具2026-10-22用户提案)。
+
+**关联**：[三层组网通道](#跨实例消息通信remote_message--remote_ask2026-08)（remote_ask 定位不变——问它才知道的事，只是处理方式从「跑一轮」改成「旁路问」）· [工具执行审批](../features/tool-approval.md)（ask 场景不触发审批：写类在分流层就被拒绝）
 
 ## remote_call_tool：远端独有工具/MCP 的统一通道（2026-09-17，用户提案）
 

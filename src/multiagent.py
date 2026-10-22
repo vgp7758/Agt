@@ -834,8 +834,11 @@ def make_communication_tools(agent) -> list:
         return reg.format_team(exclude_id=agent.agent_id, active_window=False)   # 工具查询=全量（含隐藏的历史实例）
 
     def agent_ask(target_id: str, question: str) -> str:
-        """向另一个活跃 Agent 发起无状态询问：用对方的上下文 + 你的问题调用其 LLM，返回回答。
-        被询问的 Agent 不会记录这次询问（其 session 不变），适合快速获取信息而不打扰对方。
+        """向另一个活跃 Agent 发起无状态询问：拷贝对方的上下文，用一个【临时 agent】回答。
+        临时 agent 只读/召回类工具可正常调用（它能自查文件/记忆/知识库），
+        run_shell / run_python / 写类工具会被拒绝（无状态旁路，不改动它的环境/历史）；
+        60s 内没收敛出回答则清空工具再问一次，逼它直接作答。
+        被询问的 Agent 不记录这次询问（其 session 不变），适合快速获取信息而不打扰对方。
         target_id: 目标 Agent 的 agent_id（用 list_team 查看）；question: 要问的问题。"""
         if not reg:
             return "(多 Agent 通信未启用：无 registry)"
@@ -851,13 +854,10 @@ def make_communication_tools(agent) -> list:
         if target_agent is None:
             return f"[错误] '{target_id}' 的 Agent 实例不可用"
         try:
-            msgs = list(target_agent.session.messages_for_llm())
-            msgs.append({"role": "user", "content": f"[来自队友 '{agent.agent_id}' 的询问] {question}"})
-            # 不装配工具（用户提案 2026-10-08）：agent_ask 是纯询问立刻要进展——克隆对方
-            # 历史发 LLM 请求时带工具会诱导它想调工具（本调用无执行环境，调了也是空转）。
-            # tools=[] 透传 _build_kwargs 覆盖实例工具表，纯对话问答。
-            resp = target_agent.llm.chat(msgs, tools=[])
-            answer = resp.content or "(对方返回空回答)"
+            # 统一 ask 消费端（用户提案 2026-10-22）：拷贝上下文 + 临时 agent（只读工具可用/
+            # 写类拒绝/60s 无答清空工具降级）——与 remote_ask 对端同一实现（ask_consumer）。
+            from ask_consumer import answer_ask
+            answer = answer_ask(target_agent, question, asker=f"队友 '{agent.agent_id}'")
             return f"[{target_id} 回答] {answer}"
         except Exception as e:
             return f"[询问失败] {type(e).__name__}: {e}"

@@ -1339,6 +1339,41 @@ assembly:
 
 **与白名单坑同源同教训**：白名单类机制（列什么装什么 / 集合里才算合法）新增成员时，**前端枚举 + 后端校验集 + 默认装配序三处同查**，且修一端要排查另一端。
 
+### workflow 动作项 name 键缺失：装配工作流从未执行 + 每步告警（2026-10-23，8000 实锤）
+
+**现象（用户贴日志，8000 = comfy repo）**：t1022 每一步稳定出现 3 条
+
+```
+assembly workflow 项 '' 未找到（.agent/workflows/），跳过
+```
+
+**名字是空串**——这就是「键没取到」的直接证据（不是工作流真的不存在）。
+
+**根因：产出侧与消费侧读的是两个不同的键**
+
+| 侧 | 代码 | 实际行为 |
+|---|---|---|
+| 产出（解析） | `_asm_item_from_dict`（src/multiagent.py，`_ASSEMBLY_ACTIONS` 循环）统一构造 `{"kind": k, k: val, ...}` | workflow 项的值只落在 **`item["workflow"]`** |
+| 消费（求值） | `_asm_action_msgs` → `_asm_evaluate` 的 workflow 分支 | 取 **`item["name"]`** → 恒 `''` |
+| 求值兜底 | `_eval_assembly_workflow(name, session)`（src/session.py）——`.agent/workflows/`（+ 全局目录）扫同名执行，入参 `{prompt, agent_id}` | 空名扫不到 → warning + 返回 `''` → 该段跳过 |
+
+**后果不止是告警噪声**：声明里的装配工作流**从未注入过投影**。8000 `main.yml` 的三条 `- workflow: scnet_status / container_check / order_check`（`every: turn`）全程空转——每步各求值一次（故 ×3/步），每次都返回空串。
+
+**修复（两处，双键兼容）**：
+
+| 侧 | 文件 | 改动 |
+|---|---|---|
+| 产出 | src/multiagent.py `_asm_item_from_dict` | `if k == "workflow": item["name"] = val`——补 `name` 键，同时对齐 once 缓存键（`_asm_action_msgs` 的 key 取 `kind/path/file/dir/cmd/name/text`）与 `_walk_plan` 的段名标注（`item.get("name")`）。顺带消掉一个隐性副作用：修复前 once 缓存键里**不含 workflow 值**，同清单多个 workflow 项键完全相同 → 第一项的求值结果被其余项直接复用（跨项串味） |
+| 消费 | src/session.py `_asm_evaluate` | `item.get("name") or item.get("workflow") or ""`——**双键兼容**：技能装备期冻结的存量清单快照（`_apply_extra_assemblies` 产出）里旧形态 item 只有 `workflow` 键 |
+
+**验证**：`_parse_assembly` 实测——三条 workflow 项 `name` 均正确就位；空值项（8000 main.yml 里那行 `- func: ''`）本就因 `if k in d and d[k]` falsy 被丢弃，**不是**该告警来源。
+
+**注意事项**：
+
+- **生效方式**：`/restart`（解析层在启动/派活路径读声明）。重启后这三条工作流会**首次真正执行**并注入投影——8000 的投影内容会因此变化
+- **与 timing 的耦合**：workflow 项默认 `timing=once`（`_asm_timing`：非 file/dir/cmd/text 即 once），once 缓存按项内容去重；声明 `every: turn` 才是每步重求值——8000 那三条正是 `every: turn`，所以「每步 ×3 条」而非只告警一次
+- **同类教训（第三例）**：「解析端写入的键」与「消费端读取的键」是两份名单，改动/新增键必须两端对账——前两例为 `{seg: x}` dict 形态被静默丢弃（[段形态简化定稿](#段形态简化定稿seg-dict-兼容--tail-拆段补全2effa73--当日撤销504a518用户裁定)）与 `_ASSEMBLY_SEGS` 漏 `recent_file`（[上文](#合法段名校验集合-_assembly_segs-漏-recent_file2026-09-10commit-1c4aaa7)）。本案的好消息是**消费端有告警**——正因为没静默吞，才能在用户日志里一眼看出
+
 ### 段形态简化定稿：`seg:` dict 兼容 + tail.* 拆段补全（2effa73）→ 当日撤销（504a518，用户裁定）
 
 **前史（commit 2effa73，2026-09-02 上午）**：用户复盘抓到装配项 dict 形态的静默丢弃——`- seg: user_message`（段名做值）与 create_agent 生成的 `{"seg": ...}` 都匹配不上 `_asm_item_from_dict`（此前只认动作键 + 段名做键）→ 返回 None **静默丢弃**（连告警都没有），team-manager.md / wf-calibrator.yml / wf-designer.yml 里的段项全是哑弹。修复两层：加 `seg:` 键分支（值复用字符串解析全语义）+ `_ASSEMBLY_SEGS` / toggles / 段序三集合补 `tail.*` 六拆段白名单。验证三声明文件「写→读→解析」全链通过。

@@ -61,6 +61,12 @@
 | [image_feed](image-feed.md) | 画面服务 → 模型 | 每步最新帧并入**末条 tool result 的 content 数组**（与 system-reminder 同条；tail_images 通道） | 瞬态 |
 | **本特性** | 工具产物 → 模型 | changed_files 新增图伪造 read_file 对——**工具零配合**（不用发标签、图落 workspace 任意位置） | 瞬态 |
 
+## 缓存代价参照：本通道封顶 4 张，其它图片通道是累积的（2026-10-23）
+
+本通道单会话封顶 4 张（单图 ≤1.5MB），对投影体积的贡献有限；但**其它图片通道是累积的**——尤其 [image_feed](image-feed.md) 每步一帧挂进 tool result，长轮里会在投影里累积十几张图。实测（2026-10-23，8000/comfy t1022，投影 43 张图 / 99.2% 字符量）：断点之后的老图每步全部重算 → 命中率钉在 86%。
+
+**判断口诀**：长轮 + 命中率固定在 85~90%（而非归零或抖动）→ 先怀疑「断点后的图片数」，不是缓存被清；用投影 dump diff 找首个差异下标即可量化。详见 [context-engine · 长轮多图投影的缓存代价](../architecture/context-engine.md#长轮多图投影的缓存代价命中-86-归因与投影-dump-diff-排查法2026-10-23-8000-实锤)。
+
 ## 注意事项
 
 - **暂存队列无清空逻辑**（当前形态）：`_gen_images_pending` 随 session 生命周期持续注入，封顶 4 张后收满不再收新图——同一会话后续每步投影都带这几张。若后续要"只跟本轮"语义，可参照 [recent-file](../architecture/context-engine.md) 的轮尾去重口径迭代

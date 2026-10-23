@@ -824,13 +824,17 @@ class Scheduler:
             except Exception as e:
                 primary.append(f"[{sch.name} · code 失败] {type(e).__name__}: {e}")
             else:
+                # code 通道只认 result（2026-10-23 三连实锤根治）：redirect_stdout 是进程级，
+                # 调度器执行期间并发 CLI 输出（spinner / 🔧 工具调用 trace / [思考] 块 / 🔍 钩子
+                # 工作流日志）全会落进 buf——穷举过滤追不上（两次修复仍漏 trace 块）。
+                # stdout 降级为调试日志（不入产物）：result 有 → 只发 result；result 空 → 静默。
+                # print 型任务想看输出去 🐞 日志面板查 agt.scheduler。
                 out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
                     str(g["result"]).strip() if g.get("result") is not None else "")
-                # result 优先（2026-10-23）：code 显式设置 result（权威产物）后，stdout 仅作调试
-                # 不再外发——根治"并发日志被 redirect_stdout 捕获当产物"整类噪音（spinner 实锤
-                # 之外，🔍 自动工作流日志行也会被卷进来；穷举过滤永远追不上噪音形态）。
-                tail = "" if out else _clean_code_tail(buf.getvalue())[-2000:]
-                seg = "\n".join(x for x in (out, tail) if x)
+                if not out and buf.getvalue().strip():
+                    _LOG.debug("[schedule %s] code stdout（不入产物）：%s", sch.name,
+                               _clean_code_tail(buf.getvalue())[-1500:])
+                seg = out
                 if seg:
                     primary.append(f"[{sch.name} · code 结果]\n" + seg)
         if sch.action:

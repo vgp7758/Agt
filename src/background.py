@@ -826,7 +826,9 @@ class Scheduler:
             else:
                 out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
                     str(g["result"]).strip() if g.get("result") is not None else "")
-                tail = buf.getvalue().strip()[-2000:]
+                # stdout 尾巴清洗（2026-10-23）：redirect_stdout 是进程级的，并发 CLI spinner
+                # 会被一起捕获（push-retry-thinking 实锤：任务零输出却刷了一屏「处理中…」）
+                tail = _clean_code_tail(buf.getvalue())[-2000:]
                 seg = "\n".join(x for x in (out, tail) if x)
                 if seg:
                     primary.append(f"[{sch.name} · code 结果]\n" + seg)
@@ -895,3 +897,24 @@ class Scheduler:
 
     def stop(self):
         self._stop = True
+
+
+def _clean_code_tail(s: str) -> str:
+    """调度器 code 的 stdout 尾巴清洗（2026-10-23，push-retry-thinking 实锤）：
+    contextlib.redirect_stdout 是【进程级】——调度器触发时，CLI 主循环的 spinner 行
+    （`⠋ 处理中「…」· 275s · 队列 0（Ctrl+C 停止）`、含 \r 覆盖刷新/\x1b 控制序列的进度）
+    会被一并截进 buf，当成"产物"推送出去（任务本身零输出却刷了一屏 spinner）。
+    清洗：剥 ANSI 序列 → 含 \r 的行取末段 → 丢 spinner 字符行与进度行。"""
+    import re as _re
+    s = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
+    keep = []
+    for ln in s.split("\n"):
+        if "\r" in ln:
+            ln = ln.split("\r")[-1]
+        if any(c in ln for c in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽"):
+            continue
+        if "处理中「" in ln and "队列" in ln:
+            continue
+        if ln.strip():
+            keep.append(ln.rstrip())
+    return "\n".join(keep)

@@ -826,9 +826,10 @@ class Scheduler:
             else:
                 out = (g.get("result") or "").strip() if isinstance(g.get("result"), str) else (
                     str(g["result"]).strip() if g.get("result") is not None else "")
-                # stdout 尾巴清洗（2026-10-23）：redirect_stdout 是进程级的，并发 CLI spinner
-                # 会被一起捕获（push-retry-thinking 实锤：任务零输出却刷了一屏「处理中…」）
-                tail = _clean_code_tail(buf.getvalue())[-2000:]
+                # result 优先（2026-10-23）：code 显式设置 result（权威产物）后，stdout 仅作调试
+                # 不再外发——根治"并发日志被 redirect_stdout 捕获当产物"整类噪音（spinner 实锤
+                # 之外，🔍 自动工作流日志行也会被卷进来；穷举过滤永远追不上噪音形态）。
+                tail = "" if out else _clean_code_tail(buf.getvalue())[-2000:]
                 seg = "\n".join(x for x in (out, tail) if x)
                 if seg:
                     primary.append(f"[{sch.name} · code 结果]\n" + seg)

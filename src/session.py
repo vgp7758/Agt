@@ -1906,7 +1906,9 @@ class Session:
                     return f"[image_feed 空帧：{_src}]"
                 return f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
             if kind == "workflow":
-                return _eval_assembly_workflow(str(item.get("name") or ""), self)
+                # name or workflow 双键兼容（2026-10-23）：存量冻结快照（apply_extras 装备期冻结）
+                # 里旧形态 item 只有 workflow 键——与新版产出的 name 键都认。
+                return _eval_assembly_workflow(str(item.get("name") or item.get("workflow") or ""), self)
             if kind == "tool":
                 return _eval_assembly_tool(item, self)
             return ""

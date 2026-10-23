@@ -670,6 +670,11 @@ def _asm_item_from_dict(d: dict):
                 # {func: load_models()} → 剥掉尾随 ()
                 val = val.rstrip("()").strip()
             item = {"kind": k, k: val, "timing": _asm_timing(k, d)}
+            if k == "workflow":
+                # 补 name 键（2026-10-23 修复）：_asm_evaluate 的 workflow 分支取 item["name"]——
+                # 此前只存 item["workflow"]，字符串形态 `- workflow: xxx` 全部解析成名 ''，
+                # 装配项从未执行 + 每步告警「workflow 项 '' 未找到」（8000 实锤 ×3/步）。
+                item["name"] = val
             if k == "tool":
                 parsed = _parse_tool_expr(val)
                 if parsed:

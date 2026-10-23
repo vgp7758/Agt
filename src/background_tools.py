@@ -134,6 +134,14 @@ def make_background_tools(agent) -> list:
         10 点起每 5 分钟巡检 → add_schedule('watch', every_seconds=300, at='2026-09-18T10:00:00', message='巡检')；
         到点搜索 → add_schedule('news', at='2026-07-20T18:00:00', tool='web_search', tool_args={'query':'AI最新进展'})。"""
         tool_args = tool_args or {}
+        if isinstance(tool_args, str):
+            # 字符串宽容（2026-10-23 手动工具表单编辑路径：object 参数在表单里是 text 输入，
+            # 提交的是 JSON 文本；LLM 偶尔也送字符串形态）——尝试解析，坏 JSON 降级空 dict
+            import json as _json
+            try:
+                tool_args = _json.loads(tool_args) if tool_args.strip() else {}
+            except Exception:
+                tool_args = {}
         action = {"tool": tool, "args": tool_args} if tool else None
         if not message and not action and not code:
             return "[需提供 message / tool / code 之一作为推送内容]"

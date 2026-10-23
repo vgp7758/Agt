@@ -1920,9 +1920,33 @@ async function addSvcByForm(){
   if(!t){ toast('⚠️ 未找到 start_service 工具（工具箱加载失败？）'); return; }
   pickTool('start_service');
 }
+// 定时任务添加/编辑 → 复用 add_schedule 工具表单（用户提案 2026-10-23：退役手写特殊弹窗——
+// 工具表单本就有全部参数控件 + enum 下拉，且同名覆盖即更新；编辑带初始值回填）
+async function _schedToolForm(iv){
+  if(!_toolList.length) await loadToolListForForm();
+  const t = _toolList.find(x => x.name === 'add_schedule');
+  if(!t){ toast('⚠️ 未找到 add_schedule 工具（工具箱加载失败？）'); return; }
+  _pickedTool = 'add_schedule';
+  openToolCallForm(t, iv);
+}
+async function addSchedByForm(){ await _schedToolForm(null); }
+async function editSchedByForm(name){
+  const s = (window._dashSchedules||[]).find(x => x.name === name);
+  if(!s){ toast('⚠️ 看板里找不到任务 '+name+'（刷新后重试）'); return; }
+  const iv = { name: s.name, repeat: !!s.repeat };
+  if(s.kind === 'interval' && s.interval_secs) iv.every_seconds = s.interval_secs;
+  else if(s.fire_at_iso) iv.at = s.fire_at_iso;
+  else if(s.fire_at) iv.at = s.fire_at;
+  if(s.mode) iv.mode = s.mode;
+  if(s.message) iv.message = s.message;
+  if(s.tool){ iv.tool = s.tool; if(s.tool_args) iv.tool_args = JSON.stringify(s.tool_args); }
+  if(s.code) iv.code = s.code;
+  if(s.deadline) iv.deadline = new Date(s.deadline*1000).toISOString().slice(0,16);
+  await _schedToolForm(iv);
+}
 // ② schema 动态表单弹窗：工具描述全文 + 各参数控件（enum→下拉/boolean→勾选/数字→number）+
 //    description 小字占位（input 用 placeholder；select/checkbox 无处放 placeholder → 控件下方小字）
-function openToolCallForm(t){
+function openToolCallForm(t, iv){
   const m = document.getElementById('toolCallModal');
   if(!t){ m.style.display = 'none'; return; }
   const req = new Set(t.required || []);
@@ -1958,6 +1982,17 @@ function openToolCallForm(t){
       `<button onclick="sendToolCall()" style="padding:5px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;cursor:pointer">执行</button>` +
     `</div></div>`;
   m.style.display = 'block';
+  // 编辑回填（用户提案 2026-10-23：表单弹窗复用为编辑器——add_schedule 同名覆盖即更新，
+  // 服务/定时任务的编辑按钮带初始值直开工具表单，退役各自的手写特殊弹窗）
+  if(iv && typeof iv === 'object'){
+    (t.params||[]).forEach(p => {
+      const el = document.getElementById('tp_'+p.name);
+      if(!el || !(p.name in iv)) return;
+      const v = iv[p.name];
+      if((p.type||'string') === 'boolean'){ el.checked = !!v; return; }
+      if(v !== null && v !== undefined && v !== '') el.value = String(v);
+    });
+  }
   const first = m.querySelector('input,select'); if(first) first.focus();
 }
 function closeToolCallForm(){
@@ -2906,42 +2941,8 @@ async function remoteReconnect(sid, url){
   renderTeamDash();
 }
 // —— 后台看板渲染：定时任务组（⏰ 无日志只有时间线）+ 服务组（行点击展开实时日志）——
-// —— 定时任务添加/编辑弹窗（用户提案 2026-10-07）——
-function schedModal(name){
-  const scheds = (window._dashSchedules||[]);
-  const s = name ? scheds.find(x=>x.name===name) : null;
-  const iv = s && s.kind==='interval' ? s.interval_secs : '';
-  const at = s && s.fire_at_iso ? s.fire_at_iso : '';
-  const msg = s ? (s.message||'') : '';
-  const rep = s ? !!s.repeat : true;
-  const dl = s && s.deadline ? new Date(s.deadline*1000).toISOString().slice(0,16) : '';
-  const m = document.createElement('div');
-  m.id='schedModal'; m.style.cssText='position:fixed;inset:0;z-index:230;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center';
-  m.innerHTML = `<div style="background:#fff;border-radius:12px;padding:18px 20px;width:min(430px,92vw);max-height:88vh;overflow:auto">
-    <div style="font-weight:700;color:#7c3aed;margin-bottom:10px">${s?'✏ 编辑定时任务':'＋ 手动添加定时任务'}</div>
-    <div style="font-size:12px;margin-bottom:8px">任务名<br><input id="smName" value="${esc(s?s.name:'')}" ${s?'readonly':''} style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px"></div>
-    <div style="font-size:12px;margin-bottom:8px">间隔秒（every_seconds）<br><input id="smIv" type="number" min="1" value="${esc(iv)}" placeholder="如 3600" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px"></div>
-    <div style="font-size:12px;margin-bottom:8px">首触发时刻 at（ISO，留空=立即开始循环）<br><input id="smAt" value="${esc(at)}" placeholder="2026-07-20T17:30:00" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px"></div>
-    <div style="font-size:12px;margin-bottom:8px">截止 deadline（ISO，留空=不限）<br><input id="smDl" value="${esc(dl)}" placeholder="2026-12-31T23:59:59" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px"></div>
-    <div style="font-size:12px;margin-bottom:8px"><label><input id="smRep" type="checkbox" ${rep?'checked':''}> 循环触发</label></div>
-    <div style="font-size:12px;margin-bottom:10px">推送消息（到点注入给 Agent）<br><textarea id="smMsg" rows="3" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #ddd;border-radius:6px">${esc(msg)}</textarea></div>
-    ${s && s.tool ? `<div style="font-size:11px;color:#8a9099;margin:-4px 0 8px;padding:6px 8px;background:#fafbfc;border:1px solid var(--line);border-radius:6px">🔧 该任务携带工具调用：<b>${esc(s.tool)}</b>(${esc(JSON.stringify(s.tool_args||{}))})——编辑不会丢失，保存后保留</div>` : ''}
-    <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button onclick="document.getElementById('schedModal').remove()" style="padding:5px 14px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer">取消</button>
-      <button onclick="schedSave('${esc(s?s.name:'')}')" style="padding:5px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;cursor:pointer">保存</button>
-    </div></div>`;
-  document.body.appendChild(m);
-}
-async function schedSave(origName){
-  const g = id => document.getElementById(id).value;
-  const body = { name: g('smName').trim() || origName, every_seconds: g('smIv')?parseFloat(g('smIv')):null,
-                 at: g('smAt').trim(), deadline: g('smDl').trim(), repeat: document.getElementById('smRep').checked,
-                 message: g('smMsg') };
-  const r = await fetch('/api/sched_'+(origName?'upd':'add'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const d = await r.json();
-  if(d.ok){ toast('✅ '+(d.text||'已保存')); document.getElementById('schedModal').remove(); renderSvcDash(); }
-  else toast('❌ '+(d.text||d.error||'失败'), false);
-}
+// （定时任务添加/编辑弹窗已退役 2026-10-23 用户提案：复用 add_schedule 工具表单——
+//   addSchedByForm/editSchedByForm 直开同款弹窗，初始值回填，同名覆盖即更新）
 async function schedDel(name){
   if(!confirm('取消定时任务「'+name+'」？')) return;
   const r = await fetch('/api/sched_del', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
@@ -2960,7 +2961,7 @@ async function renderSvcDash(){
   window._dashSchedules = scheds;   // 编辑弹窗回填用
   if(scheds.length){
     h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:2px 0 6px;display:flex;align-items:center;gap:6px">⏰ 定时任务' +
-      '<button onclick="schedModal()" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">＋ 添加</button></div>';
+      '<button onclick="addSchedByForm()" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">＋ 添加</button></div>';
     scheds.forEach(s => {
       const when = s.kind==='interval'
         ? `每 ${s.interval_secs}s${s.repeat?'':'（单次）'}`
@@ -2974,7 +2975,7 @@ async function renderSvcDash(){
         </div>
         <div style="margin-top:2px;font-size:11px;color:#5b6472;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(payload)}</div>
         <div style="margin-top:4px;display:flex;gap:6px">
-          <button onclick="schedModal('${esc(s.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">✏ 编辑</button>
+          <button onclick="editSchedByForm('${esc(s.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">✏ 编辑</button>
           <button onclick="schedDel('${esc(s.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #f3c1c1;background:#fff;color:#b91c1c;cursor:pointer">🗑</button>
         </div>
       </div>`;

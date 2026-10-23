@@ -1606,14 +1606,16 @@ async def api_dash():
             out["schedules"] = sch.snapshot() or []
         except Exception:
             out["schedules"] = []
-    # —— 收藏服务（main.yml services 名单；repo 覆盖优先，读侧与写侧同源）——
+    # —— 收藏服务（session 存档 services.json；用户裁定 2026-10-23 从 main.yml 迁出——
+    #     收藏跟 session 走，main.yml services 段回归纯声明依赖）——
     try:
-        from agent_config import seed_main_agent, load_agent_yml
-        _mm, _ = load_agent_yml(seed_main_agent(_workspace))
-        _sv = _mm.get("services") or []
-        if isinstance(_sv, dict):
-            _sv = [_sv]
-        out["fav_services"] = [k for it in _sv if isinstance(it, dict) for k in it]
+        import json as _json
+        _sd = getattr(_agent.session, "session_dir", None)
+        _sf = Path(_sd) / "services.json" if _sd else None
+        if _sf and _sf.exists():
+            out["fav_services"] = [str(it.get("name")) for it in
+                                   (_json.loads(_sf.read_text(encoding="utf-8")) or [])
+                                   if isinstance(it, dict) and it.get("name")]
     except Exception:
         pass
     # —— 后台任务（run_python/run_shell 超时转后台，real_tools._bg_tasks；2026-09-06 并入看板）——
@@ -1957,52 +1959,55 @@ async def api_svc_log(name: str):
 
 @app.post("/api/svc_fav")
 async def api_svc_fav(body: dict):
-    """服务收藏 toggle（2026-10-06 用户提案）：写/删当前 repo main.yml 的 services 段。
-    repo 无 main.yml → 全局份拷贝过来再写（声明跟着 repo 走）。
-    command 优先取进程内登记（含已退出条目），兜底用前端传值（进程重启过登记丢失场景）。"""
-    import yaml
-    from agent_config import seed_main_agent, load_agent_yml
+    """服务收藏 toggle（2026-10-06 用户提案；2026-10-23 用户裁定改存 session 存档）：
+    写/删 <session_dir>/services.json——收藏跟 session 走，不再写 main.yml（那是 agent
+    定义/装配文件，不被运行时服务条目污染；换 session 换服务集）。
+    完整启动参数（command/cwd/on_exit_wake/on_exit_style/watch_tail）从进程内登记保全
+    （治 20048 实锤：旧版只写 `name: cmd` 丢 cwd → 重启拉起时 npm run dev 在 workspace
+    根跑不起来）；进程重启过登记丢失时兜底用前端传值（cwd 缺失即退化无 cwd 形态）。"""
+    import json
     name = str(body.get("name") or "").strip()
     on = bool(body.get("on"))
     if not name:
         return {"ok": False, "error": "缺少 name"}
+    s = _agent.session if _agent else None
+    if s is None or not getattr(s, "session_dir", None):
+        return {"ok": False, "error": "session 未就绪（无存档目录）"}
     cmd = str(body.get("command") or "").strip()
+    entry = {"name": name, "command": cmd}
     try:
-        _ent = (_agent.services._services or {}).get(name) if _agent else None
+        _ent = (_agent.services._services or {}).get(name)
         if _ent:
-            cmd = str(_ent.get("command") or cmd)
+            entry = {"name": name, "command": str(_ent.get("command") or cmd)}
+            if str(_ent.get("cwd") or "").strip():
+                entry["cwd"] = str(_ent["cwd"]).strip()
+            for k in ("on_exit_wake", "on_exit_style"):
+                if str(_ent.get(k) or "").strip():
+                    entry[k] = str(_ent[k]).strip()
+            if _ent.get("watch_tail"):
+                try:
+                    entry["watch_tail"] = int(_ent["watch_tail"])
+                except Exception:
+                    pass
     except Exception:
         pass
-    if on and not cmd:
+    if on and not entry.get("command"):
         return {"ok": False, "error": "拿不到启动指令（服务不在当前进程登记且未传 command）"}
-    dst = _workspace / ".agent" / "main.yml"
-    if not dst.exists():
-        src = Path.home() / ".agt" / "main.yml"
-        if src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text("", encoding="utf-8")
-    try:
-        meta, _ = load_agent_yml(dst)
-        meta = meta or {}
-    except Exception:
-        meta = {}
-    svcs = meta.get("services") or []
-    if isinstance(svcs, dict):
-        svcs = [svcs]
-    svcs = [it for it in svcs if isinstance(it, dict)]
+    f = Path(s.session_dir) / "services.json"
+    items = []
+    if f.exists():
+        try:
+            items = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            items = []
+    if not isinstance(items, list):
+        items = []
+    items = [it for it in items if isinstance(it, dict) and it.get("name") != name]
     if on:
-        if any(name in it for it in svcs):
-            return {"ok": True, "note": f"已收藏（{name} 已在 services）"}
-        svcs.append({name: cmd})
-    else:
-        svcs = [it for it in svcs if name not in it]
-    meta["services"] = svcs
-    dst.write_text(yaml.safe_dump(meta, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    return {"ok": True, "note": ("已收藏，写进 " + str(dst.relative_to(_workspace))
-                                 if on else "已取消收藏") + "（重启后启动期拉起）"}
+        items.append(entry)
+    f.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "note": (("已收藏 → " + str(f)) if on else "已取消收藏")
+            + "（跟 session 走，重启/恢复时自动拉起）"}
 
 
 @app.post("/api/svc_op")

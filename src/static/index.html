@@ -1912,6 +1912,14 @@ function pickTool(name){
   closeToolPick();
   openToolCallForm(_toolList.find(x => x.name === name));
 }
+// 「＋ 服务」直开 start_service 表单（用户提案 2026-10-23：服务看板手动添加服务——
+// 复用手动工具调用同款弹窗：填 name/command/cwd… 执行即入板，可再点收藏⭐存进 session）
+async function addSvcByForm(){
+  if(!_toolList.length) await loadToolListForForm();
+  const t = _toolList.find(x => x.name === 'start_service');
+  if(!t){ toast('⚠️ 未找到 start_service 工具（工具箱加载失败？）'); return; }
+  pickTool('start_service');
+}
 // ② schema 动态表单弹窗：工具描述全文 + 各参数控件（enum→下拉/boolean→勾选/数字→number）+
 //    description 小字占位（input 用 placeholder；select/checkbox 无处放 placeholder → 控件下方小字）
 function openToolCallForm(t){
@@ -2974,12 +2982,13 @@ async function renderSvcDash(){
   }
   // —— 后台服务 ——
   const svcs = d.services || [];
+  // 组头恒渲染：「＋ 服务」直开 start_service 手动表单（用户提案 2026-10-23——复用手动
+  // 工具调用同款弹窗：填 name/command/cwd… 执行即入板，可再点收藏⭐存进 session services.json）
+  h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px;display:flex;align-items:center;gap:6px">🛠 服务（点击展开实时日志）' +
+    '<button onclick="addSvcByForm()" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">＋ 服务</button></div>';
   if(!svcs.length && !scheds.length && !(d.bg_tasks||[]).length){
-    list.innerHTML = '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务/定时任务/后台任务——start_service / add_schedule 启动的、run_python 超时转后台的都会显示在这里）</div>';
+    list.innerHTML = h + '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务/定时任务/后台任务——start_service / add_schedule 启动的、run_python 超时转后台的都会显示在这里）</div>';
     return;
-  }
-  if(svcs.length){
-    h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px">🛠 服务（点击展开实时日志）</div>';
   }
   window._favSvcs = d.fav_services || [];   // 收藏名单（main.yml services）
   svcs.forEach(s => {
@@ -2995,7 +3004,7 @@ async function renderSvcDash(){
       </div>
       ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(logs.join('\n')||'（暂无输出）')}</pre>
       <div style="padding:6px 9px;border-top:1px solid #eee;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <button onclick="svcFav('${esc(s.name)}',${(window._favSvcs||[]).includes(s.name)?'false':'true'})" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid ${(window._favSvcs||[]).includes(s.name)?'#f59e0b':'#d8d2e8'};background:${(window._favSvcs||[]).includes(s.name)?'#fef3c7':'#fff'};color:#6d28d9;cursor:pointer">${(window._favSvcs||[]).includes(s.name)?'★ 已收藏（点击取消）':'☆ 收藏（写进 main.yml）'}</button>
+        <button onclick="svcFav('${esc(s.name)}',${(window._favSvcs||[]).includes(s.name)?'false':'true'})" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid ${(window._favSvcs||[]).includes(s.name)?'#f59e0b':'#d8d2e8'};background:${(window._favSvcs||[]).includes(s.name)?'#fef3c7':'#fff'};color:#6d28d9;cursor:pointer">${(window._favSvcs||[]).includes(s.name)?'★ 已收藏（点击取消）':'☆ 收藏（跟 session 走）'}</button>
         <button onclick="window.open('/api/svc_log?name='+encodeURIComponent('${esc(s.name)}'),'_blank')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #d8d2e8;background:#fff;color:#6d28d9;cursor:pointer">📄 完整日志</button>
         ${s.running
           ? `<button onclick="svcOp('${esc(s.name)}','stop')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c;cursor:pointer">⏹ Stop</button>`

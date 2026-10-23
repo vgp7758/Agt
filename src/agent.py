@@ -896,6 +896,13 @@ class Agent:
             _rt.restore_servers((state or {}).get("remote_servers") or {})
         except Exception:
             pass
+        # session 服务收藏拉起（用户裁定 2026-10-23：收藏从 main.yml 迁到 session 存档
+        # <session_dir>/services.json——跟会话走；恢复点与 scheduler/remote 同位，保全 cwd 等完整参数）
+        try:
+            from multiagent import _ensure_session_services
+            _ensure_session_services(self)
+        except Exception:
+            pass
         self._emit_plan_if_any()
         self._emit_spec_if_any()
 

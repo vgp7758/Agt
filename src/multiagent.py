@@ -310,6 +310,59 @@ def _ensure_agent_services(meta: dict, agent) -> dict:
             except Exception as e:
                 _LOG.warning("子 Agent 依赖服务 '%s' 拉起失败: %s", sname, e)
     return {"started": started, "reused": reused}
+def _ensure_session_services(agent) -> list:
+    """session 级服务收藏拉起（用户裁定 2026-10-23：服务收藏不进 main.yml——那是 agent
+    定义/装配文件，不该被运行时服务条目污染；收藏跟 session 走）。
+    存储：<session_dir>/services.json（JSON 数组，每项 {name, command, cwd, on_exit_wake,
+    on_exit_style, watch_tail}——保全完整启动参数；治 20048 实锤：收藏只写 `name: cmd`
+    丢 cwd → 重启拉起时 npm run dev 在 workspace 根跑不起来）。
+    挂 Agent.restore_runtime_state（标准恢复点：启动恢复 / /resume / 切 session 都过，
+    与 scheduler 恢复同位）。幂等：ServiceManager 同名在跑温和拒绝；新 session 无文件空跑。
+    返回本次真拉起的服务名列表（诊断/测试用）。"""
+    import json as _json
+    from pathlib import Path as _P
+    sd = getattr(agent.session, "session_dir", None)
+    if not sd:
+        return []
+    f = _P(sd) / "services.json"
+    if not f.exists():
+        return []
+    try:
+        items = _json.loads(f.read_text(encoding="utf-8"))
+    except Exception as e:
+        _LOG.warning("session 服务收藏 services.json 解析失败（%s）：%s", f, e)
+        return []
+    started = []
+    for it in items if isinstance(items, list) else []:
+        try:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip()
+            cmd = str(it.get("command") or "").strip()
+            if not name or not cmd:
+                continue
+            kw = {}
+            if str(it.get("cwd") or "").strip():
+                kw["cwd"] = str(it["cwd"]).strip()
+            for k in ("on_exit_wake", "on_exit_style"):
+                if str(it.get(k) or "").strip():
+                    kw[k] = str(it[k]).strip()
+            if it.get("watch_tail"):
+                try:
+                    wt = int(it["watch_tail"])
+                    if wt > 0:
+                        kw["watch_tail"] = wt
+                except Exception:
+                    pass
+            r = agent.services.start(name, cmd, quiet_secs=120, **kw)
+            if not str(r).startswith("[已存在同名服务]"):
+                started.append(name)
+            _LOG.info("session 收藏服务 %s: %s", name, str(r)[:80])
+        except Exception as e:
+            _LOG.warning("session 收藏服务 '%s' 拉起失败: %s", (it or {}).get("name", "?"), e)
+    return started
+
+
 
 
 def _agent_own_tools(name: str, agent):

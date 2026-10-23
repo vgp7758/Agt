@@ -60,6 +60,10 @@ RECENT_FULL_STEPS = GROUP_STEPS   # 兼容旧引用（组号差≤1 = 当前组+
 FULL_STEP_CAP_CHARS = 32000   # 全量步的单步上限（≈8000 token；超过则截断标注 call_id，可 get_tool_detail 取完整）
 # <img>name</img> 标签：工具图片落盘后的占位（投影时按模型 vision 能力转 image_url 或文字占位）
 _IMG_TAG_RE = re.compile(r"<img>([^<]+)</img>")
+# 图片展开步数门控（2026-10-23 8000 t1025·s54 413 EntryTooBig 修复）：图片 base64 不受 token
+# 计量管辖（十几张图 token 只算几十 K，body 里却是几十 MB）——归档轮一律降级占位，当前轮仅最近
+# N 步展开 base64（近期工作图可见，旧图省略可重读），防历史图累积顶爆 provider 请求体上限。
+_IMG_EXPAND_STEPS = 12
 _GEN_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}   # 生成图自动可视的扩展白名单（2026-10-07）
 # recent-file 段（2026-09-07·第四版：独立装配段 _seg_msgs_recent_file，不再内嵌 tool result）：
 # _RE_RF_BLOCK/_rf_stripped/_rf_in_msgs 保留旧内嵌形态的兜底（剥离/诊断口径）
@@ -3793,20 +3797,28 @@ class Session:
         """
         return f"<system-reminder>\n{content}\n</system-reminder>"
 
-    def _project_imgs(self, text):
+    def _project_imgs(self, text, allow_img: bool = True):
         """text 里的 <img>name</img> 占位：当前模型视觉→[text块 + image_url块]（读 repo images/ 转data URL）；
-        非视觉→文字占位 str（并提示委托视觉子 agent）。无标签或空文本原样返回。"""
+        非视觉→文字占位 str（并提示委托视觉子 agent）。无标签或空文本原样返回。
+
+        allow_img=False（2026-10-23 8000 t1025·s54 413 EntryTooBig 修复）：即使视觉模型也
+        【不展开】base64，降级为省略占位——图片 base64 不受 token 计量管辖（十几张图 token 上
+        只算几十 K，body 里却是几十 MB），历史图累积会顶爆 provider 请求体上限（ModelScope 实测
+        约 67MB：t1025 68.5MB 被拒）。门控由渲染层按位置传（归档轮全降级 / 当前轮仅最近 N 步）。"""
         if not text or "<img>" not in text:
             return text
         matches = list(_IMG_TAG_RE.finditer(text))
         if not matches:
             return text
         vision = getattr(getattr(self, "llm", None), "vision_supported", False)
-        if not vision:
+        if not vision or not allow_img:
             def _sub(m):
                 n = m.group(1)
-                return (f'[图片 {n}，当前模型无视觉能力无法查看；'
-                        f'如需理解图片内容，可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]')
+                if not vision:
+                    return (f'[图片 {n}，当前模型无视觉能力无法查看；'
+                            f'如需理解图片内容，可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]')
+                return (f'[图片 {n}，早期图片已省略以控制请求体体积（模型可看图，但历史图累积会超 '
+                        f'provider 请求上限）；如需重看请重新读取/生成该图]')
             return _IMG_TAG_RE.sub(_sub, text)
         out, last = [], 0
         for m in matches:
@@ -3920,12 +3932,18 @@ class Session:
         total = len(steps)
         cur_group = (total - 1) // GROUP_STEPS if total else 0   # 当前步所在组（0-based）
         eff_base = base if base is not None else self.detail_base   # 当前轮 base=None → 用统一 base（显式配置/窗口推导）
+        # 图片展开门控（2026-10-23 8000 t1025·s54 413 EntryTooBig 修复，见 _IMG_EXPAND_STEPS）：
+        # 归档轮全降级为文字占位；当前轮仅最近 N 步展开 base64——历史图 base64 不受 token 计量
+        # 约束，累积会顶爆 provider 请求体上限（68.5MB body vs 220K token 的错位）。
+        _is_cur = self._is_current_steps(steps)
         for idx, step in enumerate(steps):
             if not step.tool_calls:
                 continue
+            _allow_img = _is_cur and (total - idx) <= _IMG_EXPAND_STEPS
             # 本步之前的"用户中途补充"（user 角色，带标签）：插在上一组 tool 结果之后、本步 assistant 之前
             if step.preceding_hint:
-                msgs.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + step.preceding_hint)})
+                msgs.append({"role": "user", "content": self._project_imgs(_MIDTURN_TAG + step.preceding_hint,
+                                                                          allow_img=_allow_img)})
             group_diff = cur_group - (idx // GROUP_STEPS)   # 本步组与当前组的组号差（0=同组）
             if group_diff <= 1 and base is None:
                 full = True        # 当前轮：当前组 + 上一组全量
@@ -3962,7 +3980,7 @@ class Session:
                 _n, _a, result = self.toollog.view(tc.call_id)
                 content = (self._cap_full_result(result, tc.call_id) if full
                            else self._summarize_text(result, limit, tc.call_id))
-                content = self._project_imgs(content)
+                content = self._project_imgs(content, allow_img=_allow_img)
                 # recent-file 挂载点：2026-09-07 起改独立段走装配（_seg_msgs_recent_file）；
                 # 施工模式（2026-09-13·用户裁定）回内嵌形态——该次调用【当时】的快照贴在该次
                 # tool result 尾部：不去重（同文件多次编辑各挂当时的版本）、不限数量（每个写

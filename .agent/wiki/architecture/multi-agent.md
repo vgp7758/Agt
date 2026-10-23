@@ -260,6 +260,15 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 **闭环意义——收藏 = 开机自启**：收藏即写 main.yml `services:` 声明 → 主 Agent 启动期 `_ensure_agent_services` 自动拉起（上一节机制）；取消收藏 = 从声明摘除。至此 services 的**写侧三入口**凑齐：声明手写 / 管理页 services textarea（上上节）/ **看板一键收藏**——读侧恒走 `_ensure_agent_services` 单源，不因入口多而分叉。看板交互视角见 [background-scheduler · 服务看板四件套](../features/background-scheduler.md)（📄 完整日志新页签为同日 · 五补件，见[下节](#看板📄完整日志新页签全量日志页2026-10-06--五用户提案commit-d22bd34)）。
 
+#### 后记：收藏迁出 main.yml——services 段回归纯声明依赖（2026-10-23，用户裁定）
+
+20048 实锤：看板收藏只把 `web-dev: npm run dev` 写进 main.yml（cwd 等启动参数全丢），重启后启动期拉起时服务跑不起来（npm run dev 落在 workspace 根）。用户裁定（2026-10-23）：收藏**整体迁出 main.yml**——那是 agent 定义/装配文件，不被运行时服务条目污染。
+
+- **新存储**：`<session_dir>/services.json`（JSON 数组，`{name, command, cwd, on_exit_wake, on_exit_style, watch_tail}` 全参保全）——收藏跟 session 走，换 session 换服务集
+- **拉起**：`Agent.restore_runtime_state` 尾部接 `_ensure_session_services`（src/multiagent.py，src/agent.py 接线）——启动恢复 / /resume / 切 session 三条路都过，与 scheduler / remote 连接表恢复同位；幂等（同名在跑温和拒绝）、无文件空跑
+- **main.yml `services:` 段回归纯声明依赖**单一职责：`_ensure_agent_services` 读侧消费不变，写侧只剩声明手写 / 管理页 services textarea 两入口（上文「写侧三入口」中的看板一键收藏已退役出 main.yml）
+- 看板侧配套：`/api/svc_fav` 改写删 services.json、dashboard 快照 `fav_services` 改读 session 存档、服务组头新增「＋ 服务」直开 `start_service` 手动表单——交互与端点细节见 [background-scheduler · 收藏迁 session 后记](../features/background-scheduler.md)
+
 ### 看板📄完整日志：新页签全量日志页（2026-10-06 · 五，用户提案，commit d22bd34）
 
 收藏/Stop/Start 落地同日，用户提案「点击时从浏览器打开一个新页签查看更完整的日志」——服务卡片内嵌日志 pre 只有尾部视图，全量回看此前要回终端翻文件。commit `d22bd34`（src/server.py + src/static/index.html，+26 行）。

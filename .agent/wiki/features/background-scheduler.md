@@ -567,6 +567,34 @@ _agent = _state.get("agent") or agent   # 部分端点用短名 ag = ...，同�
 
 **关联**：[user-interaction · plan 面板连接即推](user-interaction.md)——`_state.get("agent") or agent` 模式的**首例**（d573e1e，注释即「兼容两条取 agent 的路径」——该先例本身即死代码）；本节曾将该模式推广到 svc/sched 家族（已被后记二反转收编）。
 
+### 后记：收藏整体迁出 main.yml——session 存档 services.json 保全全参 + 「＋ 服务」按钮（2026-10-23，用户裁定）
+
+**20048 实锤**：`start_service({"command":"npm run dev","cwd":"E:\\Project\\GameFramework\\Project\\web","name":"web-dev"})` 拉起的服务，收藏后 main.yml 里只有 `web-dev: npm run dev`——**cwd 丢了**，重启 agent 后启动期拉起时 `npm run dev` 跑在 workspace 根，服务起不来。根因：旧收藏写 main.yml 时只落 `name: command` 两字段，cwd / on_exit_wake / watch_tail 全弃。
+
+**用户三连裁定（2026-10-23）**：
+
+1. **收藏不进 main.yml**——那是 agent 定义/装配文件，不该被运行时服务条目污染；收藏跟 session 走
+2. **完整启动参数保全**——重启拉起必须能在原 cwd 复现
+3. main.yml `services:` 段回归**纯声明依赖**单一职责
+
+**新存储**：`<session_dir>/services.json`——JSON 数组，每项 `{name, command, cwd, on_exit_wake, on_exit_style, watch_tail}`；换 session 换服务集。
+
+**拉起挂标准恢复点**（src/multiagent.py `_ensure_session_services` + src/agent.py `restore_runtime_state`）：与 scheduler 恢复、remote 连接表恢复同位——**启动恢复 / /resume / 切 session 三条路都过**；幂等（ServiceManager 同名在跑温和拒绝）；新 session 无文件空跑；返回本次真拉起的服务名列表（诊断/测试用）。
+
+**写/读侧三件改动**：
+
+| 处 | 改动 |
+|---|---|
+| `POST /api/svc_fav`（src/server.py） | 写/删 `<session_dir>/services.json`（不再碰 main.yml）；完整参数优先进程内登记保全，进程重启过登记丢失 → 兜底用前端传值（cwd 缺失即退化无 cwd 形态） |
+| dashboard 快照 `fav_services`（`/api/dashboard`） | 改读 services.json 的 name 名单 |
+| 服务组头「＋ 服务」按钮 | 恒渲染（空态也有）——`addSvcByForm()` 直开**手动工具调用同款弹窗**（预选 `start_service`：填 name/command/cwd… 执行即入板），跑起来再点 ⭐ 收藏 |
+
+收藏按钮 tooltip 同步改「☆ 收藏（跟 session 走）」。
+
+**20048 存量迁移（就地完成）**：main.yml 移除坏条目 `web-dev`（`web-backend` / `review-dub` 两条声明依赖保留不动）；活跃 session services.json 写入（**cwd 已补上**——重启后 web-dev 会在正确目录自动拉起）。
+
+**验证**：后端单测 13 项全绿（cwd/on_exit_wake/watch_tail 保全传递、坏条目跳过、无文件空跑、同名不重复、收藏写/删往返 TestClient 实测 `/api/svc_fav`）+ 前端 JS 语法与 5 项结构断言。commit 本地待推（GitHub 断网，push-retry-steps 在岗恢复即自动上岸）。
+
 ## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
 
 **动机**：image_feed 段已让 Agent 每步看到实时画面（[姊妹特性](image-feed.md)），而后台服务的实况还停在「按需查」——状态行只有 pid + 已跑时长，stdout 里的运行实况每步投影不可见，想知道就得多调一次 `list_services`/`service_logs`。用户提案：仿 image_feed 的每步注入思路，让 bg_services 装配段也带上服务状态信息。

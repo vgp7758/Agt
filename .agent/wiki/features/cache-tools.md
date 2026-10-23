@@ -72,6 +72,8 @@ cache_breakpoint(turn=582, step=2, session_dir="", context_chars=120) -> str
 
 **速判补充**：抓相邻两步投影做**错位对齐**（把后者的窗口头错开若干条再与前者比对）——若错位对齐后大段**逐字节相同**，则 miss 属「位置漂移型」，**修折叠/窗口游标**（治本）而非限图；若对齐后仍有实质差异，才是「内容真变型」，走本节限图/降采样路线。取证脚本与完整结论见 [context-engine · 长轮多图投影的缓存代价](../architecture/context-engine.md#长轮多图投影的缓存代价命中-86-归因与投影-dump-diff-排查法2026-10-23-8000-实锤)。
 
+**后续（2026-10-23 · 三）**：位置漂移型已按「修折叠」治本——折叠语义重做（首窗 200 / 每次折 100 / 触发线递进 200→300→400…，`folded` 由步数确定性推导），断点频率从**每步**降到**每 100 步一次**，预期命中 86% → ~99%（见 [context-engine · 折叠语义重做](../architecture/context-engine.md#后记二折叠语义重做首窗-200--每次折-100--触发线递进2026-10-23--三用户裁定已落地)）。本例的教训对诊断口诀的补充：**「结构性 miss」要先做错位对齐判型再给修法**——本轮同页两条分流口诀至此闭合（归零→查 system/tools；恒定+大体积→查内容；恒定+错位即中→查折叠游标）。
+
 ## 与其他模块的关系
 
 - **消费方**：projections 转储——[上下文引擎 · 投影转储文件名与 t/s 标记](../architecture/context-engine.md#投影转储文件名与-ts-标记commit-4aced81)（JSON 化格式，commit 2dc64f2 起）；t/s 命名与 [/stats 页](../guides/ops.md#stats-页webui-统计按钮) 折线 tooltip 同源，排障闭环（stats 看到异常点 → 打开 dump → cache_breakpoint 对拍）

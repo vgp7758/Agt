@@ -27,6 +27,13 @@ _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+# Windows 全进程树禁弹控制台窗（2026-10-23 用户报障：detached 实例下 git/taskkill/netstat
+# 等控制台子程序周期弹黑窗）——最早安装（早于一切可能 spawn 的 import），幂等。
+try:
+    import nowin as _nowin  # noqa: F401
+except Exception:
+    pass
+
 import config
 from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, agents_summary, seed_default_agents, seed_default_skills

@@ -2435,10 +2435,11 @@ class Agent:
                             self._emit({"type": "warn", "text": "⚠️ 预算已用 80%+，即将触顶收尾"})
 
                         if resp.reasoning:
-                            snippet = resp.reasoning[:200].replace("\n", " ")
-                            if len(resp.reasoning) > 200:
-                                snippet += "..."
-                            self._emit({"type": "thinking", "text": snippet})
+                            # 全文 emit（用户问诊 2026-10-23）：此前 [:200]+"..." 摘要——实时只有
+                            # 203 字、刷新读档却是全文（events 存的是 Step.reasoning 原文），两路不一致。
+                            # 前端 thinking 折叠 UI 本就默认收起、点击展开全文（t1635 裁定"打开不截断"），
+                            # WS 传全文与读档渲染（session_history 同样带全文）体量一致，无新增负担。
+                            self._emit({"type": "thinking", "text": resp.reasoning})
 
                         # 不再调用工具 → 最终答案
                         if not resp.tool_calls:

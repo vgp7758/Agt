@@ -2761,7 +2761,17 @@ const DrawerCtl = (() => {
   function _syncPush(){
     let any = false;
     _reg.forEach(d => { if(d.panel.classList.contains('open')) any = true; });
+    // push 布局变化（主区变窄/变宽）会重排消息流——scrollTop 保持但相对位置漂移，
+    // 原本贴底的聊天流在开抽屉后不再贴底（用户实锤 2026-10-23）。开合【前】记录
+    // "是否在底部"（阈值 80px），布局切换后 rAF + transition 结束（~340ms）各吸底一次。
+    const changing = document.body.classList.contains('drawer-push') !== any;
+    const ma = (typeof msgArea !== 'undefined' && msgArea) ? msgArea : document.getElementById('msgArea');
+    const wasBottom = ma ? (ma.scrollHeight - ma.scrollTop - ma.clientHeight) < 80 : false;
     document.body.classList.toggle('drawer-push', any);
+    if(changing && wasBottom && ma){
+      requestAnimationFrame(()=>{ ma.scrollTop = ma.scrollHeight; });
+      setTimeout(()=>{ ma.scrollTop = ma.scrollHeight; }, 340);
+    }
   }
   function close(id){
     const d = _reg.get(id);

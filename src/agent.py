@@ -379,6 +379,7 @@ class Agent:
         self._active_target: str = "_main_"  # 当前用户直接交互的目标 agent_id（/agent 切换）
         self._recap: str = ""           # 最近一轮的 recap（队友可见，不进入自己的上下文）
         self.dump_projections: bool = False  # 投影转储开关（设置页/斜杠改；2026-10-15 起子 Agent 同步跟随）
+        self._boot_ts: float = time.time()   # 本进程启动时刻——inbox 恢复时判定"陈旧 service_exit"用（2026-10-23）
         # 子 Agent 跟随（用户实锤 2026-10-15：worker 施工几十步无一转储文件——/config 只设
         # 主 Agent 实例，SubAgent 新建实例恒 False。改为构造时读 settings.json 全局开关，
         # 主/子 Agent 同源；主 Agent 运行中 /config 覆盖仍即时生效（实例属性优先）。
@@ -1086,22 +1087,36 @@ class Agent:
             pass
 
     def _inbox_restore(self):
-        """启动/set_session 时从 inbox.jsonl 恢复未消费的消息到 deque。"""
+        """启动/set_session 时从 inbox.jsonl 恢复未消费的消息到 deque。
+        陈旧 service_exit 过滤（用户实锤 2026-10-23：杀进程重开收到上个生命周期的服务
+        退出推送）——杀进程瞬间服务与主进程同死，退出回调在死前把通知写进 inbox.jsonl；
+        新进程恢复时这些通知描述的事件已随进程重置（session 服务会重新拉起），行动价值
+        为零且吓人一跳。启动蜜月（quiet_secs）管不到这条路径——它管的是拉起后窗口内
+        退出静默，这里管的是跨进程的陈旧通知。判定：ts < 本进程启动时刻的
+        service_exit:* 条目直接跳过（其余类不滤——bg_task/subagent 等可能仍有跨重启价值）。"""
         try:
             p = self._inbox_path()
             if not p or not p.exists():
                 return
             import json as _j
-            count = 0
+            boot = getattr(self, "_boot_ts", 0) or 0
+            count = skipped = 0
             with open(p, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
                         continue
                     rec = _j.loads(line)
+                    src = str(rec.get("source") or "")
+                    ts = float(rec.get("ts") or 0)
+                    if boot and ts and ts < boot and src.startswith("service_exit:"):
+                        skipped += 1
+                        continue
                     with self._inbox_lock:
                         self.inbox.append((rec.get("source", ""), rec.get("msg", ""), rec.get("seed")))
                     count += 1
+            if skipped:
+                _LOG.info("inbox 恢复：跳过 %d 条陈旧 service_exit（上个进程生命周期，已随重开失效）", skipped)
             if count:
                 _LOG.info("inbox 恢复了 %d 条未消费消息（从 %s）", count, p)
         except Exception as e:

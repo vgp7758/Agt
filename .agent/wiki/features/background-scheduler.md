@@ -442,6 +442,31 @@ ag = _state.get("agent") or agent   # ← NameError: name 'agent' is not defined
 
 **生效**：纯前端改动，刷新即见（后端零改动）。
 
+### 后记四：手动弹窗退役——添加/编辑复用 add_schedule 工具表单 + 初始值回填（2026-10-23，用户提案）
+
+**用户提案（2026-10-23）**：手动添加 scheduled task 的弹窗直接复用手动调用工具 add_schedule 的弹窗——「不用像现在这样渲染一份特殊的弹窗」。与同日「＋ 服务」按钮复用 start_service 工具表单同一套范式。
+
+**对照**：
+
+| 项 | 旧（schedModal 手写弹窗） | 新（复用工具表单） |
+|---|---|---|
+| ＋ 添加 | 7 个专用输入框 | 直开 **add_schedule 工具表单**（全参数控件 + enum 下拉 + 参数说明） |
+| ✏ 编辑 | 六字段，**tool/code 任务只能「保留不动」**（只读提示行） | 工具表单 + **初始值回填**——name/every_seconds/at/repeat/mode/message/**tool/tool_args/code/deadline 全部可编辑** |
+| 保存 | `/api/sched_add\|upd` 专用端点 → reschedule（**保 id** 部分更新） | **走 `/call` 通道调 add_schedule → 同名覆盖摘旧（换 id）**（name 本就是唯一键，见[同名覆盖摘旧](#同名覆盖摘旧重复投递根因修复2026-09-18commit-8ed09c6pre_post-实锤)） |
+
+**实现四件**：
+
+1. **`openToolCallForm(t, iv)` 新增初始值参数**——boolean 回填 checkbox、其余回填 value；编辑按钮从看板 snapshot 构造 `iv`（deadline unix 秒 → ISO、tool_args → JSON 文本）。
+2. **`addSchedByForm()` / `editSchedByForm(name)` / `_schedToolForm(iv)`**：加载工具箱 → 找 `add_schedule` → `pickTool`；`editSchedByForm` 能力强于旧弹窗（tool/code 任务真正可编辑）。
+3. **引擎侧顺带：`tool_args` 字符串宽容**（src/background_tools.py）——object 参数在工具表单里是 text 输入、提交的是 **JSON 文本**：`add_schedule` 自动 `json.loads`（坏 JSON 降级空 dict；LLM 偶发字符串形态同样受益）。
+4. **退役清单**：`schedModal` / `schedSave` 与全部 onclick 引用移除；**🗑 删除按钮保留**（cancel_schedule 语义，单参数不值得开表单）；`/api/sched_add|upd` 后端端点**保留（API 兼容）**，reschedule 的保 id 部分更新语义仍在，只是前端不再消费。
+
+**口径变更**：上一节[后记三](#后记三编辑弹窗不丢-toolargs-实证--带工具任务只读提示行2026-10-10--三用户问诊commit-e758270)的「🔧 该任务携带工具调用…编辑不会丢失」只读提示行——那是旧弹窗的消疑补丁，**随 schedModal 一并退役**（如今直接可编辑，无需提示）。
+
+**验证**：JS 语法 ✓ + 9 项结构断言全过（特殊弹窗零残留、新函数就位、回填逻辑在位、onclick 全部切换）。
+
+**生效**：弹窗部分纯前端 **Ctrl+F5 刷新即生效**；`tool_args` 宽容在 Python 侧，`/restart` 后生效。
+
 ## 后台进程一览与任务查询（list_services 合并视图 + check_bg_task 真工具，2026-09-06，commit e72c0e1）
 
 **背景**：后台进程只有「服务」没有「任务」——run_python / run_shell 超时自动转后台的一次性任务（`_bg_tasks` 登记）此前只能靠返回文案里的 bg_id 单独查；且 **check_bg_task 自 v0.17.1 起只有提示文本承诺它、工具本体从未注册**（空头支票：模型按 docstring 调它 → 未知工具报错）。本次两件事一起补齐（src/background_tools.py，commit e72c0e1）。
@@ -958,6 +983,34 @@ ServiceManager.start(name, command, cwd=..., on_exit_wake="notify",
 **生效**：commit `86e36f9` 已推送 + site-packages 已同步，`/restart` 后生效。声明侧落点见 [multi-agent · services 后记三](../architecture/multi-agent.md)。
 
 **关联**：[on_exit_wake 策略](#start_service-的-on_exit_wake退出唤醒策略2026-08-30-策略化--2026-09-14-自定义指令--2026-09-23-默认翻转-notify)（蜜月只管「何时静默」，策略管「通知去哪/注入什么」——两者正交）· [退出通知默认进 inbox](#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)（notify 的注入姿势，上一节）· [start_service 撞死服务被拒](#start_service-撞死服务被拒stop-保留-entry--start-只查登记stopstart-重启路径断裂2026-10-0820048-实锤commit-839f445)（同 restart 语义族：死服务覆盖重建）
+
+### 后记：杀进程重开收到服务退出推送——_inbox_restore 过滤跨进程陈旧 service_exit（2026-10-23，用户实锤）
+
+**触发（用户实锤 2026-10-23）**：「现在我杀进程重开以后 agent 会收到服务退出的推送，我记得是不是做过一个启动蜜月窗口？」——蜜月确实在（120s），但这次撞的是**它管不到的另一条路径**。
+
+**两条路径的分工**：
+
+| 路径 | 管谁 | 机制 |
+|---|---|---|
+| 启动蜜月（quiet_secs=120，86e36f9，上一节） | **拉起后窗口内**秒退 | on_exit 回调在窗口内整体静默 |
+| 本次修的：**跨进程陈旧通知**（src/agent.py，2026-10-23） | **上个进程生命周期**遗留的通知 | 蜜月是回调期过滤，管不到 inbox 恢复 |
+
+**真凶链**：杀进程 → 服务与主进程同死 → **死前几十毫秒，退出回调把通知写进 inbox.jsonl（持久化）** → 重开 → 新进程 `_inbox_restore` 恢复 inbox → 消费到「上个生命周期」的服务退出推送 → 吓一跳。
+
+**修复（src/agent.py）**：
+
+| 触点 | 内容 |
+|---|---|
+| `Agent.__init__` | 记 `self._boot_ts = time.time()`——本进程启动时刻 |
+| `_inbox_restore` | 恢复时 **`ts < _boot_ts` 的 `service_exit:*` 条目直接跳过**——陈旧判定单源=进程启动时刻 |
+
+**为什么只滤 service_exit**：服务状态已随新进程重置（session 收藏服务会重新拉起），这些通知**行动价值为零**；其余类（bg_task / subagent / schedule 回执等）**不滤**——可能仍有跨重启价值。
+
+**验证（单测四项全过）**：旧 service_exit 跳过 ✓ / 旧 bg_task 保留 ✓ / 新进程拉起后真实的 service_exit 保留 ✓ / 计数正确 ✓。
+
+**生效**：引擎代码，`/restart` 后生效。
+
+**关联**：[服务退出通知监听者](#服务退出通知监听者watchers-名单谁启的服务谁收任意实例可挂摘监听2026-10-16用户提案commit-e0e7150)（通知受众维度，正交）· [退出通知默认进 inbox](#退出通知默认进-inboxnevernotify-翻转--on_exit_style-注入姿势2026-09-23用户提案commit-275049c)（通知为何会进 inbox.jsonl 被持久化——正是本bug 的前提）。
 
 ## 服务退出通知监听者：watchers 名单——谁启的服务谁收，任意实例可挂/摘监听（2026-10-16，用户提案，commit e0e7150）
 

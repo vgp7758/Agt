@@ -211,6 +211,22 @@ function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }  // 薄�
 
 生效两段式：按钮走 index.html mtime 热更（**刷新即见**）；`/market` 路由在引擎侧 server.py，随 `/restart` 生效（此前点击 404）。
 
+## 后记六：抽屉开合主区贴底修复——push 布局重排的滚动漂移（2026-10-23，用户实锤）
+
+**用户实锤（2026-10-23）**：打开右侧任意抽屉面板后，左侧历史记录区域的滚动条就不在消息流最底部了，要手动用滚轮滚回去。
+
+**根因——push 布局重排的滚动漂移**：抽屉打开 → `body.drawer-push` → 主区**变窄**（让位 40%）→ 消息流重排 → `scrollTop` 数值保持但**相对位置上移**，原本贴底的聊天流不再贴底；关闭变宽同理。
+
+**修复（`DrawerCtl._syncPush`，src/static/index.html）**：
+
+| 步骤 | 语义 |
+|---|---|
+| 布局切换【前】 | 记录「是否在底部」（距底 < 80px 阈值） |
+| 切换后 | `rAF` + transition 结束（~340ms）**各吸底一次**——开、关抽屉都保持贴底 |
+| 不在底部 | **不拽**——用户正在看历史时，开抽屉不会强行拉回最新消息 |
+
+纯前端改动，**Ctrl+F5 刷新即生效**（无需 /restart）。属[后记三](#后记三右侧抽屉统一容器-agtdrawer--drawerctl-调度器2026-10-15用户提案commit-b380fd3)统一容器范式内的一处补丁——push 布局由 DrawerCtl 单源管理，吸底逻辑自然也落在 `_syncPush` 一处。
+
 ## 相关页面
 
 - [webide](webide.md)：VS Code logo 按钮入口（原控件栏，收进 dock；2026-09-06 图标 📝 → VS Code logo）

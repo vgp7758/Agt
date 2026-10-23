@@ -253,7 +253,7 @@ def _cmd_branch(ctx: CommandContext, args):
         "created_at": _t.time(),
         "system": cur_meta.get("system", ""),
         "recent_window_turns": cur_meta.get("recent_window_turns", 4),
-        "max_steps_per_turn": cur_meta.get("max_steps_per_turn", 80),
+        "max_steps_per_turn": cur_meta.get("max_steps_per_turn", 200),
         "branch": {
             "branch_of": branch_of,
             "inherit_lines": n_lines,

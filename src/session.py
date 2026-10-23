@@ -43,9 +43,10 @@ _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import 
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
 GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
-STEP_HOLD = 20          # 步数窗口折叠滞回余量（2026-10-20）：超 max_steps_per_turn 时一次折到
-                        # max_steps - STEP_HOLD，此后余量内 append-only 稳定前缀，再超窗才折
-                        # （治滚动截断每步断缓存：20048 t266·s81 命中 95%→40% 实锤）
+STEP_HOLD = 100         # 步数窗口折叠粒度（用户裁定 2026-10-23，替代 2026-10-20 的滞回余量版）：
+                        # 首个顶窗线 = max_steps_per_turn（默认 200）；每次顶窗【折叠掉此前全部、
+                        # 保留最近 STEP_HOLD 步】；触发线随折叠次数 +STEP_HOLD（200 → 300 → 400…）。
+                        # 折叠点之后 append-only 稳定前缀 → 断点频率从"每步"降到"每 STEP_HOLD 步"。
 FOLD_TARGET_RATIO = 0.75  # 折叠目标比例：轮边界计划与轮内保命阀共用（panic 触发即一次压回计划水位）
 GRADUATE_BATCH_TURNS = 30  # 大档分批毕业：当前档超过此轮数时一次只升【前 N 轮】，近期轮保持 level1（保真）
 GRADUATE_FORCE_TURNS = 30  # 卫生性强档触发线：当前档超过此轮数时，无窗口压力也强制分批毕业（防档1 无限膨胀——
@@ -680,7 +681,7 @@ def _asm_image_feed_from_tool(expr: str, session) -> str:
 
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
-                 recent_window_turns: int = 4, max_steps_per_turn: int = 80,
+                 recent_window_turns: int = 4, max_steps_per_turn: int = 200,
                  workspace=None, session_dir=None, current_turn_only: bool = False):
         self.system = system
         # 复用模式投影开关（子 Agent agent_prompt 默认复用 / reuse=no 显式新建时 False）：True 时历史轮一律不投影，
@@ -3891,7 +3892,9 @@ class Session:
         施工模式（2026-09-13·用户裁定）：recent-file 快照回内嵌——该次写调用【当时】的快照贴在
         该次 tool result 尾部（不去重/不限数量：每个写调用各挂各的，施工要"每次操作时文件长什么样"
         的因果上下文）；非施工模式不内嵌（第四版段式 _seg_msgs_recent_file 走装配）。
-        max_steps>0 只保留最近 max_steps 步。
+        max_steps 语义（用户裁定 2026-10-23）：首个顶窗线 = max_steps（默认 200）；每次顶窗折叠掉
+        此前全部、保留最近 STEP_HOLD(100) 步，触发线 +STEP_HOLD 递进（200 → 300 → 400…），
+        折叠点后 append-only（前缀稳定）——断点从"每步"降到"每 100 步一次"。0/None = 不限。
         内嵌快照（2026-10-15 用户裁定）：<recent-file> 内嵌只对【当前轮】生效——归档轮
         （分档历史 / 施工流重建与迁移）不内嵌，故此处用 _is_current_steps 收窄 constr 判定。
         只有当前轮投影 recent-file ⇒ 本轮内不去重（同文件多次编辑各挂当时版本）口径不变。"""
@@ -3899,16 +3902,21 @@ class Session:
         # 施工内嵌快照只对【当前轮】生效（用户裁定 2026-10-15）：归档轮即使 file_snapshots
         # 仍残留在内存也不内嵌（见 _is_current_steps）。
         constr = self._construction_mode() and self._is_current_steps(steps)
-        # 步数窗口折叠（滞回批量·2026-10-20 用户报障 t266·s81 命中 95%→40%）：原滚动截断
-        # （每步保留 [-80:] + 计数文案"N 个早期步骤已省略"）双重断缓存——文案每步变 +
-        # 窗口每步前滚错位一条 → 超窗后每步全断。改为：超 max_steps 时一次折到
-        # max_steps - STEP_HOLD（留滞回余量），此后余量内步数 append-only 前缀稳定，
-        # 再次超窗才折——断点从每步一次 → 每 STEP_HOLD+1 步一次；文案固定无计数。
-        if max_steps and len(steps) > max_steps:
-            keep = max(max_steps - STEP_HOLD, 1)
-            steps = steps[-keep:]
+        # 步数窗口折叠（用户裁定 2026-10-23，替代 2026-10-20 滞回版）：原滞回判断
+        # `len(steps) > max_steps` 在超长轮恒真（源列表每步都传全量）→ 退化成【每步滚动】
+        # ——窗口整体前移，前缀全断（8000 t1022·s125/s126 实锤：窗口 120 条逐字节相同却 0% 命中，
+        # 每步 miss ≈ 窗口内 13 张图 38K tok，命中率恒 86%）。
+        # 新语义：首个顶窗线 = max_steps（默认 200），每次顶窗折叠掉此前全部、保留最近 STEP_HOLD(100) 步；
+        # 触发线随折叠次数 +STEP_HOLD（200 → 300 → 400…）→ 折叠点之后 append-only，
+        # 断点从"每步"降到"每 STEP_HOLD 步一次"。folded 由 len(steps) 确定性推导（无需持久化游标，
+        # 重启/读档逆推一致）。
+        folded = 0
+        if max_steps and len(steps) >= max_steps:
+            folded = STEP_HOLD * ((len(steps) - max_steps) // STEP_HOLD + 1)
+            steps = steps[folded:]
+            # 文案只含 folded（每 STEP_HOLD 步才变一次），不含实时步数——保前缀 byte-stable
             msgs.append({"role": "system",
-                         "content": f"（本轮早期部分步骤已省略，仅保留最近 {keep} 步）"})
+                         "content": f"（本轮早期步骤已折叠：前 {folded} 步）"})
         total = len(steps)
         cur_group = (total - 1) // GROUP_STEPS if total else 0   # 当前步所在组（0-based）
         eff_base = base if base is not None else self.detail_base   # 当前轮 base=None → 用统一 base（显式配置/窗口推导）
@@ -4473,9 +4481,15 @@ class Session:
         ws = workspace or Path.cwd()
         path = _resolve_session_path(path_or_name, ws)
         data = json.loads(path.read_text(encoding="utf-8"))
+        # 步数窗口默认值迁移（用户裁定 2026-10-23：首窗 80→200 / 折叠粒度 100）：
+        # 80 是旧出厂默认且从未暴露配置入口（无设置页/斜杠命令）——读档遇到 80 或缺省
+        # 一律按新默认 200，否则存量 session（meta 里存着 80）会继续每步滑动断缓存。
+        _mst = data.get("max_steps_per_turn")
+        if _mst is None or _mst == 80:
+            _mst = 200
         s = cls(system=data["system"], llm=llm,
                 recent_window_turns=data.get("recent_window_turns", 4),
-                max_steps_per_turn=data.get("max_steps_per_turn", 80), workspace=ws)
+                max_steps_per_turn=_mst, workspace=ws)
         s.name = data.get("name") or path.parent.name  # 旧存档/无 name → 用文件夹名或文件名
         s.created_at = data.get("created_at") or _ts_from_dirname(path.parent) or time.time()
         s.global_summary = data.get("global_summary", "")

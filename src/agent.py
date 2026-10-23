@@ -287,7 +287,7 @@ class Agent:
         temperature: float = 0.7,
         verbose: bool = True,
         recent_window_turns: int = 4,
-        max_steps_per_turn: int = 80,
+        max_steps_per_turn: int = 200,
         model_name: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         snapshot_manager=None,

@@ -176,6 +176,36 @@ exec(sch.code, g)   # 顶层 import 与函数定义同住 g，函数体经 globa
 
 **验证**：修复后最小实验——顶层 `import subprocess` + `def` 内引用 + `result=` 变量 + stdout 双段捕获，全过 ✅。
 
+### 后记：code 通道产物口径升级——result 优先、stdout 不再随发（2026-10-23，push-retry-asmwf 实锤）
+
+**触发（2026-10-23，push-retry-asmwf 实锤）**：同一后台 code 任务第二次被污染——`push-retry-ask-commit` 之后，`push-retry-asmwf`（SSH 推送重试）到点注入的消息里，混进了**一行 hook 工作流日志**：
+
+```
+🔍 自动工作流[wiki_auto_maintenance] 完成: [wiki-updater_6] done：已更新 wiki：装配 workflow 名字键 bug + 长轮多图缓存归因
+```
+
+上一轮实测抓到的是 **CLI spinner**，这一轮换成**自动工作流日志行**——两者同根：`redirect_stdout` 是**进程级**重定向，捕获窗口内**任何线程/工作流**的 print 都会落进同一个 buf。
+
+**结论：过滤追不上噪音形态，改语义**——`_clean_code_tail` 这类「按形态穷举清洗」永远有新变体（spinner → 工作流日志 → …）。code 通道的**权威产物本来就是 `result` 变量**，stdout 只是脚本随手 print 的调试信息，不应与产物同级外发。
+
+**修复（src/background.py `_produce` code 分支）**：
+
+| 情形 | 旧行为 | 新行为 |
+|---|---|---|
+| code 设了 `result`（非空） | `result` + 清洗后 stdout 尾巴**都发** | **只发 `result`**；stdout 一律不外发（仅作调试信息留在进程日志） |
+| code 未设 `result` | 清洗后的 stdout 尾巴 | 清洗后的 stdout 尾巴（保留「靠 print 输出」类任务的既有写法） |
+| 两者皆空 | 静默 | 静默（不变） |
+
+`_clean_code_tail` 仍在无 `result` 路径上兜噪音，但它从「唯一防线」降级为「次要通道的兜底」。
+
+**验证（三场景全过）**：**A** 混入 spinner + hook 日志行 → 只出 `✅ PUSH_OK`、垃圾零外发 ✓；**B** 真实输出 + spinner → 真实内容完整保留 ✓；**C** 全垃圾无 result → 清洗后为空、静默 `None` ✓。
+
+**顺带确认**：本次改动插入位置的事故修复在位——`Scheduler` 类（L479–L900）完整、`_clean_code_tail` 模块级（L903–L921），无上一轮「edit 误删包裹行」式的结构性损失。
+
+**口径变更**：上文 [三通道主从语义](#三通道主从语义codeaction-主通道--message-附言2026-10-05用户两轮裁定commits-458475c--6c3f770) 表格里 code 通道产物「stdout 尾部 + `result` 变量」自本改起应读作 **`result` 优先（设了 result 就不带 stdout）**；上一节「code 通道产物语义不动」的时间点为此前状态。静默判空链（code 空 / tool 空或「(无输出)」/ 主通道全空）不受影响。
+
+**关联**：同根问题在用户侧回显的处置见 [用户交互 · WS 斜杠命令回显清洗](user-interaction.md#ws-斜杠命令回显清洗系统气泡混入-cli-spinneransi-噪音redirect_stdout-进程级全局2026-10-08用户实锤commit-9343107)（那处仍是「形态过滤」路线，治理手段不同）· [三通道主从语义](#三通道主从语义codeaction-主通道--message-附言2026-10-05用户两轮裁定commits-458475c--6c3f770)（产物拼接与静默语义）。
+
 ## 每日闹钟实现要点（src/background.py）
 
 - `_DAILY_RE = ^\d{1,2}:\d{1,2}(:\d{1,2})?$` 判短格式；短格式校验时/分范围（`25:00` 报时间格式错误），ISO 已过时报「时间已过」，at 空串同样报格式错误（不静默吞任务）

@@ -115,6 +115,14 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # 框架「这目录放什么/怎么扩展」一页文档播种到位——agent 一看目录就知道能放什么、怎么写
     from agent_config import seed_dir_docs
     seed_dir_docs(workspace)
+    # 首启 .gitignore 追加（用户提案 2026-10-24）：播种产物 + 运行时目录 → git status 干净
+    try:
+        from agent_config import ensure_gitignore
+        _gi_note = ensure_gitignore(workspace)
+        if _gi_note and verbose:
+            print(f"[seed] {_gi_note}")
+    except Exception:
+        pass
     # 主 agent 元信息：~/.agt/main.yml（首次播种随包 src/assets/main.yml；用户可编辑）
     from agent_config import seed_main_agent, load_agent_yml
     main_yml = seed_main_agent(workspace)

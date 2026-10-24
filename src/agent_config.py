@@ -856,6 +856,43 @@ def seed_dir_docs(workspace: Path) -> int:
     if n:
         _save_state(workspace, st)
     return n
+# 首启 .gitignore 追加清单（用户提案 2026-10-24）：播种产物（.agent/ 全包——agents/skills/
+# plugins/workflows/nodes/tools 模板与 README）+ 运行时目录（.agt/.playwright-mcp/ 等）——
+# 新目录首启后 git status 保持干净，自动生成物不堆未跟踪列表。分节注释标明来源与解法
+# （想提交 .agent/ 配置给团队共享，删除对应行即可）。
+_GITIGNORE_SEED = [
+    "# ===== agt-agent 首次启动自动追加（播种产物与运行时目录；如需提交 .agent/ 配置可删除对应行） =====",
+    ".agent/",
+    ".agt/",
+    ".playwright-mcp/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".DS_Store",
+]
+
+
+def ensure_gitignore(workspace: Path) -> str:
+    """首启把播种产物 + 运行时目录补进 workspace/.gitignore（用户提案 2026-10-24）。
+    幂等：已有条目（尾斜杠归一比对——`.agent` 与 `.agent/` 视为同条）不重复追加；
+    无 .gitignore 则创建；非 git 仓库也写（将来 git init 即生效）。返回描述（追加了
+    几行；无追加/失败返回空——播种链不炸）。"""
+    gi = workspace / ".gitignore"
+    try:
+        existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    except Exception:
+        return ""
+    have = {ln.strip().rstrip("/") for ln in existing.splitlines() if ln.strip()}
+    add = [ln for ln in _GITIGNORE_SEED[1:]
+           if ln.strip().rstrip("/") not in have]
+    if not add:
+        return ""
+    block = "\n".join([_GITIGNORE_SEED[0]] + add) + "\n"
+    try:
+        with gi.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(("\n" if existing and not existing.endswith("\n") else "") + block)
+    except Exception:
+        return ""
+    return f".gitignore 追加 {len(add)} 行（agt 自动生成物忽略）"
 
 def seed_main_agent(workspace: Path = None) -> Path:
     """首次启动把随包默认主 agent 元信息（src/assets/main.yml）播种到 ~/.agt/main.yml。

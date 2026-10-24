@@ -586,15 +586,13 @@ class Agent:
             return None
 
     def _exec_tool(self, name: str, arguments) -> str:
-        """工具执行统一入口（remote_instance_id 路由——多 agt 实例组网）：
-        arguments(dict) 带 "remote_instance_id" 键 → pop 出来 POST 到远程实例的 /api/tool/exec
-        （远程工具箱执行，结果前缀 [remote:id]）；未带 → 本地执行（现状不变）。
+        """工具执行统一入口。远端工具统一走 remote_call_tool（唯一入口，2026-10-12 用户裁定）。
+        本方法内保留 arguments 里 remote_instance_id/server_id 的 pop 兼容层——退役的是
+        schema 注入与粘性路由，历史投影里的旧姿势传参仍能路由（防老存档模型行为回归）；
         路由标记是元数据：pop 后不进远程参数、不进 toollog 存档（记录纯工具参数）。
-        顶层自定义字段会被 provider 的结构化解析丢弃——放 arguments 里是唯一保真通道。
         参数名沿革（2026-09-06 用户提案）：旧名 server_id 与工具自身同名参数易撞名
-        （remote_* 管理族的 server_id 是【管理语义】——remote_connect(server_id=..., url=...)
-        被路由拦截吃掉曾致 "[未知 server_id]" 死循环）；新名 remote_instance_id 不撞名、
-        全工具生效；旧名仅对非 remote_* 工具兼容保留。"""
+        （remote_* 管理族的 server_id 是【管理语义】）；新名 remote_instance_id 不撞名；
+        旧名仅对非 remote_* 工具兼容保留。"""
         # 后台任务发起者标记（用户裁定 2026-10-15）：run_python/run_shell 超时转后台时，
         # real_tools 从线程局部取 owner 记进 _bg_tasks，完成回执按 owner 路由——谁起的谁收。
         # 设位放这里是因为并行工具走线程池（_run_tools_parallel）：线程局部只在"真正执行工具的

@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""remote_tools.py —— 多 agt 实例组网（server_id 工具路由）。
+"""remote_tools.py —— 多 agt 实例组网（远端工具统一走 remote_call_tool）。
 
-模型在任意工具调用的 arguments 里带 "server_id" 字段 → agent 工具循环 pop 出来
-→ route_remote_call POST 到远程实例的 /api/tool/exec → 远程工具箱同步执行
-→ 结果（前缀 [remote:id]）作为 tool result 回本地上下文。
+远端工具调用姿势（2026-10-12 用户裁定：唯一入口 remote_call_tool）：
+  remote_call_tool(remote_instance_id="<id>", name="工具名", arguments={...})
+  → route_remote_call POST 到远程实例的 /api/tool/exec → 远程工具箱同步执行
+  → 结果（前缀 [remote:数字]）作为 tool result 回本地上下文。
+旧姿势（普通工具 arguments 里带 remote_instance_id/server_id）已退役，_exec_tool 里保留
+pop 兼容层（防历史投影里模型仍按旧姿势传参，2026-10-12 裁定）。
 
 连接管理（remote_connect/disconnect/list）+ settings.json remote_servers 持久化
 （启动自动重连，失败标 offline 不炸启动）。
 
 设计要点：
-  - server_id 放 arguments 而非 tool_calls 顶层：顶层结构由 provider 解析，自定义字段被丢弃；
-    arguments 是模型自由生成的 JSON，任何字段保真传输。
-  - 工具级直执行（远程不跑 LLM、不进对方 session）——远程实例只当"手"用；
+  - 远端工具直执行（远程不跑 LLM、不进对方 session）——远程实例只当"手"用；
     与 WS 消息驱动（"脑"，带对方 session 上下文）互补。
   - file_version 跨实例语义：同一远程文件的连续 edit 必须持续带同一 server_id
     （远程乐观锁才对得上）——由 main.yml 的 {func:load_remote_instances()} 注入文案引导。
@@ -217,7 +218,7 @@ def connect(server_id: str, url: str) -> str:
     _persist_current()
     return (f"✅ 已连接 '{server_id}' → {info['url']}"
             f"（{info['tools_count']} 工具 · session={info['session_name']} · model={info['model']}）。"
-            f"现在可在任意工具调用的 arguments 里带 \"remote_instance_id\": \"{server_id}\" 路由执行。")
+            f"远端工具用 remote_call_tool(remote_instance_id=\"{server_id}\", name=..., arguments=...) 执行。")
 
 
 def disconnect(server_id: str) -> str:
@@ -235,7 +236,7 @@ def list_servers() -> str:
     if not items:
         return ("当前无远程实例连接。用 remote_connect(remote_instance_id, url) 注册——"
                 "例如 remote_connect(\"comfy\", \"http://192.168.1.2:8000\")")
-    lines = ["已连接的远程 agt 实例（工具调用 arguments 带 remote_instance_id=<id> 即路由到该实例）："]
+    lines = ["已连接的远程 agt 实例（远端工具用 remote_call_tool(remote_instance_id=<id>, name=..., arguments=...) 在其上执行）："]
     for sid, it in items:
         age = int(time.time() - (it.get("checked_at") or 0))
         lines.append(f"- {sid}: {it['url']} [{it['status']}] · {it.get('tools_count', '?')} 工具 · "
@@ -432,11 +433,12 @@ def make_remote_tools(agent) -> list[Tool]:
     _AGENT = agent
 
     def remote_connect(remote_instance_id: str = "", url: str = "") -> str:
-        """连接一个远程 agt 实例（remote_instance_id 工具路由的注册入口）。url 如 http://192.168.1.2:8000
-        （探测 /api/status 成功才注册）。remote_instance_id 可省略——自动生成（本地 url→agt-{端口}，
-        远程→agt-{host}-{端口}，重复连接同 url 幂等复用），返回消息里带最终 id。
-        连接后任意工具调用的 arguments 里带 "remote_instance_id": "<id>" 即路由到该实例执行
-        （结果前缀 [remote:id]）。连接表随 session 存档持久化（读档恢复；切会话=切组网）。"""
+        """连接一个远程 agt 实例（remote_call_tool 与 remote_message/remote_ask 的目标注册入口）。
+        url 如 http://192.168.1.2:8000（探测 /api/status 成功才注册）。remote_instance_id 可省略
+        ——自动生成（本地 url→agt-{端口}，远程→agt-{host}-{端口}，重复连接同 url 幂等复用），
+        返回消息里带最终 id。连接后远端工具统一用 remote_call_tool(remote_instance_id="<id>",
+        name=..., arguments=...) 执行（结果前缀 [remote:数字]；旧姿势普通工具 arguments 里带
+        remote_instance_id 仍兼容）。连接表随 session 存档持久化（读档恢复；切会话=切组网）。"""
         return connect(remote_instance_id, url)
 
     def remote_disconnect(remote_instance_id: str) -> str:

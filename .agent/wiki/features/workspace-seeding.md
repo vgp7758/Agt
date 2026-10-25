@@ -39,6 +39,22 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 - **通用环境两个前提**（播出去≠能用）：① 需**视觉模型**——无 glm key 回退主模型，非 vision 则 image_feed 门控静默跳过（agent 可起但看不到桌面）；② `pip install pyautogui pyperclip`——缺依赖 import 失败仅 warning 空工具箱，**不炸实例化**
 - **验证**：重播 14 文件（coder / explorer / reviewer / vision / wiki-updater 各 2 件 + desktop-operator 4 件）；site-packages 已同步，本机其它 repo 下次播种即得
 
+## seed_gitignore · 首启 .gitignore 追加清单（`ensure_gitignore` / `_GITIGNORE_SEED`，2026-10-24 提案 → 2026-10-26 事故修正）
+
+- **动机**：新 repo 首启后 `.gitignore` 空白，agt 的自动生成物（快照仓 `.agt/`、`__pycache__`、运行时状态 json……）全冒进 `git status`，用户一上手就是满屏垃圾。首启自动补一份清单，让 status 干净。
+- **形态**（`src/agent_config.py`，紧跟 `seed_dir_docs` 之后）：模块级常量 `_GITIGNORE_SEED`（**首元素是分段注释标题行**，其后为条目）+ `ensure_gitignore(workspace) -> str`
+- **幂等与边界**：已有条目按 **尾斜杠归一**比对（`.agent` 与 `.agent/` 视为同条）不重复追加；无 `.gitignore` 则创建；**非 git 仓库也写**（将来 `git init` 即生效）；任何异常吞掉返回空——播种链不炸（与其它 seed 同纪律）
+- **当前清单（2026-10-26 版，1 行注释 + 12 条）**：`.agt/`、`.playwright-mcp/`、`__pycache__/`、`.pytest_cache/`、`.DS_Store`、`.agent/hooks_state.json`、`.agent/snapshots_state.json`、`.agent/remote_servers.json`、`.agent/wiki_queue/`、`.agent/rag.json`、`.agent/rag/`、`.agent/snapshots/`——**只收运行时状态/缓存，一个种源目录都不收**
+
+### 事故：原版整包追加 `.agent/`，把发版链炸在 ② 里（2026-10-26，release 实锤）
+
+- **原版清单里带一整条 `.agent/`**（整包忽略）——但 `.agent/` 是**工作目录 + 种源目录双身份**：workflows / agents / skills / nodes / plugins / wiki / rules / README 全在里面；本 repo `git ls-files .agent` = **229 个已跟踪文件**
+- **炸点不在首启、在下游**：`release.py` 暂存用**字面路径** `git add .agent/workflows`（不带 `-f`）→ `The following paths are ignored by one of your .gitignore files: .agent` → 发版链在 bump 之后中断，留半成品工作区（`src/paths.py` 已 bump、`version_file.txt` 已改）
+- **修正**：清单改成**只忽略 `.agent/` 下的运行时状态条目**（hooks_state / snapshots_state / remote_servers.json / wiki_queue / rag / snapshots），种源照常进版本控制；本 repo `.gitignore` 同步删掉那条 `.agent/`（该行正是种子追加的，删后 84 → 83 行）
+- **同款教训已是第二次**：[多实例组网](../architecture/multi-instance.md) 记 `remote_servers.json` 落盘时就写明「`.agent/` 不能整目录忽略——workflows/agents/skills/wiki 要提交，精确加单条」；本次是把它**写进种子**放大成全框架默认行为。**口诀：`.agent/` 永不可整包忽略**
+- **未收口的残留**：`ensure_gitignore` 只**追加**、不**删改**存量条目——被上一版种子写进 `.agent/` 的其它 repo 升级后不会自愈，需手工删那一行（本 repo 已删，其它实例自检一次）
+- **发版视角的连带口径**：发版工具 ① 工作区检查只看「脏不脏」，看不见 ignore 规则——**① 通过 ≠ 链路能跑**，被 ignore 的跟踪目录要到 ② 才炸（详见 [release_publish · 第六次实战](release-publish.md)）
+
 ## 验证
 
 

@@ -199,6 +199,56 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟；skills 两笔 + 施工牌一笔均为引擎/声明改动，本机 `pip install -e .` 生产实例 `/restart` 即生效（worker.yml 播种源同步改，新 repo 得新施工牌）。
 
+## 第六次实战：v0.35.8（2026-10-26，part=patch）——① 被「.agent 整包忽略」阻断（种子 bug），修正后 ② 半成功（push 断网），5 笔 + tag 待推
+
+第六次生产运行，用户侧仍是一句「发个补丁吧」。本次**两次调用 + 一次根因修复**——第一次连 build 都没走到，是历史上首个**非网络型**失败：
+
+| 步骤 | 第 1 次调用 | 第 2 次调用（修根因后） |
+|---|---|---|
+| ① 工作区检查 | ✅ 通过 | ✅ 通过 |
+| ② release.py 主体 | ❌ **bump 之后断在 `git add .agent/workflows`**：`The following paths are ignored by one of your .gitignore files: .agent` | ⚠️ **半成功**——build ✓（`agt_agent-0.35.8-py3-none-any.whl` + `.tar.gz`）/ upload ✓（<https://pypi.org/project/agt-agent/0.35.8/>）/ **push ✗**：`ssh: connect to host ssh.github.com port 443: Network is unreachable` |
+| ③ version_file / ③.5 tag / ④ 端点验证 | ❌ 未执行 | ❌ 未执行（② 失败即中断，输出明示「后续步骤未执行」） |
+
+### 根因：首启 `.gitignore` 种子整包忽略了 `.agent/`（跨模块事故）
+
+- 首启 `.gitignore` 追加（2026-10-24 用户提案）原版清单里有一行 `.agent/`——本意挡 agt 自动生成物，实际把**种源目录**一起挡了（workflows / agents / skills / plugins / nodes / wiki / README；本 repo `git ls-files .agent` = **229 个已跟踪文件**）
+- release.py 暂存用**字面路径**（不带 `-f`）→ 被 ignore 即整体判错；且失败点在 bump **之后**：`src/paths.py` 已是 0.35.8、`packaging/version_file.txt` 也已改，形成半成品工作区
+- **口径教训**：① 工作区检查只查「脏不脏」，**看不见 ignore 规则**——① 通过 ≠ 链路能跑；被 ignore 的跟踪目录要到 ② 才炸
+- 修复双管：`src/agent_config.py` `_GITIGNORE_SEED` 改精确条目（13 → 21 行，含事故注释）+ 本 repo `.gitignore` 删该行，详见 [workspace 播种 · seed_gitignore](workspace-seeding.md)
+
+### 处置：回滚半成品 → 修根因 → 重跑（不是手工补尾，也不是重发）
+
+1. `git reset -q HEAD -- src/paths.py packaging/version_file.txt` + `git checkout HEAD --` 两件 → VERSION 回 **0.35.7**、工作区只剩 `.gitignore` 改动
+2. `git ls-files .agent` 取证 **229 个已跟踪文件**（坐实 `.agent/` 是种源目录，不是运行时垃圾）
+3. `_GITIGNORE_SEED` 整段替换 + `.gitignore` 删 `.agent/` 行
+4. 重跑 `release_publish` → ① 过、② build/upload 全绿，卡在 push
+
+**教训**：release.py 的 git 操作全用字面路径、失败即中断——发版前若动过 ignore 规则，先在真实 repo 跑一次 `git add --dry-run .agent/workflows` 自检，比等发版炸便宜得多。
+
+### 收尾（② 半成功，逐项补尾）
+
+- PyPI 0.35.8 已上线（whl + tar.gz 双件）——**绝不重发**（同版本号 upload 会被拒）
+- 本地 **5 笔 commit + tag `v0.35.8`** 待推；挂后台任务 `push-retry-release`（每 600s 三级尝试：SSH 443 → SSH 22 → HTTPS 旁路，**推上后自动补打并推 tag**，成功才出声）
+- tag 上岸 → 桌面版 GitHub Actions 自动构建（口诀不变：PyPI 上线 ≠ 桌面版会出包）
+- ③.5 口径第四次印证：③.5 排在 push 之后，**② 半成功 → tag 环节照旧不执行**，仍靠后台任务补
+
+### 本版收录清单（自 v0.35.7）
+
+| 内容 | 详情页 |
+|---|---|
+| ctx 步数窗口改「首窗 200 + 每次折 100 + 触发线递进」——治超长轮每步滑动断缓存（8000 实锤命中 86%） | [context-engine](../architecture/context-engine.md) |
+| 服务收藏迁 session 存档 `services.json`（保全 `cwd` 等完整启动参数）+ 看板「＋ 服务」直开表单 | [background-scheduler](background-scheduler.md) |
+| 定时任务弹窗退役——添加/编辑复用 `add_schedule` 工具表单（编辑带全参数回填） | [background-scheduler](background-scheduler.md) |
+| 抽屉开合保持主区贴底（push 布局重排的滚动漂移） | [fab-dock](fab-dock.md) |
+| `agent_ask` / `remote_ask` 消费端统一：临时 agent + 只读工具可用 + 写类拒绝 + 60s 无答清空工具 | [多 Agent · ask 消费端统一](../architecture/multi-agent.md) · [多实例组网](../architecture/multi-instance.md) |
+| schedule `code` 通道只认 `result`（stdout 降级日志，根治并发 CLI 输出污染）+ code exec 单 dict 修复 | [background-scheduler](background-scheduler.md) |
+| 实时 thinking 改发 reasoning 全文；图片 base64 投影门控（治 413 EntryTooBig） | [context-engine](../architecture/context-engine.md) · [图片输入](image-input.md) |
+| inbox 恢复时过滤陈旧 `service_exit`（杀进程重开不再收上个生命周期的退出推送） | [background-scheduler](background-scheduler.md) |
+| seed：`.gitignore` 种子改精确条目（不再整包忽略 `.agent/`） | [workspace 播种 · seed_gitignore](workspace-seeding.md) |
+| 其它：assembly workflow 动作项 `name` 键缺失修复、no-window 入口统一、首启忽略与远端调用文案 | [多 Agent · assembly DSL](../architecture/multi-agent.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码，`/reload tools` 即吃到新版 release_publish。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)

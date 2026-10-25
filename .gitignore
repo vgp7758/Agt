@@ -80,5 +80,4 @@ pv_out/
 # BP/PPT/PV 宣传物料（本地产物，不入版本）
 bp/
 # ===== agt-agent 首次启动自动追加（播种产物与运行时目录；如需提交 .agent/ 配置可删除对应行） =====
-.agent/
 .pytest_cache/

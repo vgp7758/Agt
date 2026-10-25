@@ -857,18 +857,26 @@ def seed_dir_docs(workspace: Path) -> int:
     if n:
         _save_state(workspace, st)
     return n
-# 首启 .gitignore 追加清单（用户提案 2026-10-24）：播种产物（.agent/ 全包——agents/skills/
-# plugins/workflows/nodes/tools 模板与 README）+ 运行时目录（.agt/.playwright-mcp/ 等）——
-# 新目录首启后 git status 保持干净，自动生成物不堆未跟踪列表。分节注释标明来源与解法
-# （想提交 .agent/ 配置给团队共享，删除对应行即可）。
+# 首启 .gitignore 追加清单（用户提案 2026-10-24）——只加【运行时状态/缓存】，让新 repo
+# git status 干净。
+# ⚠️ 2026-10-26 修正（release 实锤）：原版整包追加 `.agent/` 是错的——.agent/ 下有需要版本
+# 控制的种源（workflows/ 工作流定义、agents/ 子 Agent 声明、skills/、plugins/、rules/、wiki/、
+# README），整包忽略后 release.py 的 `git add .agent/workflows` 直接失败（"paths are ignored"）。
+# 改成只忽略 .agent/ 下的运行时状态文件/目录（运行时产物不脏 status，种源照常进版本控制）。
 _GITIGNORE_SEED = [
-    "# ===== agt-agent 首次启动自动追加（播种产物与运行时目录；如需提交 .agent/ 配置可删除对应行） =====",
-    ".agent/",
+    "# ===== agt-agent 首次启动自动追加（运行时状态/缓存；.agent 的 workflows/agents/skills 等种源仍进版本控制） =====",
     ".agt/",
     ".playwright-mcp/",
     "__pycache__/",
     ".pytest_cache/",
     ".DS_Store",
+    ".agent/hooks_state.json",
+    ".agent/snapshots_state.json",
+    ".agent/remote_servers.json",
+    ".agent/wiki_queue/",
+    ".agent/rag.json",
+    ".agent/rag/",
+    ".agent/snapshots/",
 ]
 
 

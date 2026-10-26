@@ -131,6 +131,38 @@
 
 **检查清单**（任何在 tool result content 上追加内容的代码先判类型）：施工快照内嵌 · 审批/越界提示行 · 钩子旁注 · [image_feed 挂载](image-feed.md)（已三态归一）。
 
+## 非视觉模型图片代理描述：视觉卡片代看（read_file / 工具产物图 / image_feed，2026-10-27，用户提案）
+
+**动机**：此前非视觉模型对图片一律「放弃」（文字占位 + 指路 vision 子 agent）——read_file 读图 / 工具产物图时模型当步拿不到任何画面信息。用户裁定（2026-10-27）：**图片代理描述**——非视觉模型遇到图时，自动从配置内挑视觉模型代看，把描述文本喂给当前模型。
+
+**两处接线**：
+
+| 场景 | 入口 | 行为 |
+|---|---|---|
+| **read_file 读图 / 工具产物图** | src/agent.py `_materialize_tool_result` | 图落盘 repo images/ 后按宿主 vision 分流：视觉模型 → `<img>{fn}</img>`（投影层 `_IMG_TAG_RE` 命中 → image_url 看像素）；非视觉 → 委托代看，**描述文本随工具结果返回（当步即知画面内容）**，`<img>` 标签照放（切视觉模型 / vision 子 agent 仍可回看像素） |
+| **image_feed 实时画面** | src/session.py `_imgfeed_proxy_text` | 见 [image_feed · 非视觉宿主代看](image-feed.md)——描述替代 base64 注入 tail 桶，话术固定「当前模型为非视觉，image_feed自动获取到实时画面，以下是视觉模型\<卡名\>对画面的描述：…」 |
+
+**代看引擎**（src/llm_client.py `describe_image_with_vision(data_url, instruction="", tries=3, timeout=60.0)`）：
+
+- 从 `config.MODELS` **按序**取 `vision=True` 卡片（最多 tries=3 张）逐个尝试看图，首个成功返回 `(卡片名, 描述文本)`；全失败 / 无可用卡片返回 None
+- **独立临时 LLMClient**：`fallback_chain=[]`——单卡失败直接换下一卡，不滚全局回退链、不写冷却；单次 60s 超时；`scene=img_proxy` 记 llm_calls 流水可观测
+- 失败降级：一行提示（引导配置 vision 卡片），不炸轮；image_feed 侧取帧失败的降级文案原样透传，不进代看链
+
+**缓存（不重复花钱）**：
+
+| 侧 | 缓存 | 效果 |
+|---|---|---|
+| read_file / 工具产物图 | 描述按内容 hash 缓存，上限 20 条 | 同图重读零成本 |
+| image_feed 帧 | 帧 hash 单槽（`_imgfeed_cap`） | 画面没变复用上次描述（桌面静止不烧钱），画面一变即重新代看 |
+
+**顺带修复**：`_materialize_tool_result` 此前实际输出的是**方括号死文本**（docstring 声称的 `<img>` 形态从未落地）——本次重写后视觉模型才真正能回看工具产物图。
+
+**占位文案同步更新**（src/session.py 投影层，非视觉分支）：`[图片 {n}：当前模型无视觉——若本条结果中附有「视觉模型代看」描述，直接阅读即可；需像素级查看可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]`——先读代看描述，不再一上来就劝派子 agent。插话路径（server.py `_materialize_user_images`）文案未动。
+
+**验证**：单测 11 项全过（`<img>` 产出 / 代看描述 / 缓存命中 / 视觉路径零调用 / image_feed 话术格式 / 降级透传 / 失败提示）；引擎层三文件（llm_client / agent / session），`/restart` 生效。注意**代看是真实 LLM 调用**：每张新图 / 每次画面变化一次视觉调用（缓存兜底见上表）。
+
+**关联**：[vision 门控投影](#图片按视觉能力门控投影非视觉模型投影时即降文字占位2026-09-30commit-3591683随-v03011)（门控基建，本轮语义在其上扩展）· [端点拒图自愈](llm-network-resilience.md)（响应侧兜底）· [describe_image_with_vision](llm-network-resilience.md)（代看引擎）
+
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 
 **单张图的 token 与字符量（2026-10-23，8000/comfy t1022 反推实测）**：投影 dump 里一张 base64 图 **1.8~2.5 MB 字符**；从缓存 miss 量反推约 **3.2K tokens/张**（12 张 ≈ 38K tokens，与实测每步 miss 吻合）。43 张图吃掉投影 **99.2% 的字符量**——**图片是投影体积与成本的主项**，不是正文。
@@ -152,7 +184,7 @@
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）
 - `image data N failed: invalid image data` —— base64 损坏或超尺寸上限
 - `1210 messages.content.type 参数非法，取值范围 ['text']` —— **端点不收图**（glm-5.3 等 chat completions 无视觉通道，视觉是 glm-4v/4.5v 系的活）；< 0.30.10 且卡片 vision 卡错时每轮 400，升级后自愈（拒图自动降级：图降文字占位同模型重试，见上节）
-- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（视觉模型 2026-10-03 起原生看图，见上上节；此前一律须委托 vision 子 Agent）
+- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（2026-10-27 起工具产物图 / image_feed 帧自动委托视觉卡片代看，见上「非视觉模型图片代理描述」；插话图仍为占位 + 指路）
 - 本地模型（llama-server）不走 provider 白名单校验，但同样受 2048 边长经验约束
 
 ## 相关页面

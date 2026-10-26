@@ -204,6 +204,15 @@ self.last_failed_messages = copy.deepcopy(messages)   # 冻结副本
 - 消费端：doctor 的 req_inspect / req_probe / req_patch 全部读它——**上两章 L1 自愈是绕过，doctor 是根治线**：定位坏数据所在轮次/步骤、修在源头（存档消息 + 当前轮 toollog 结果）、恢复原流程（顺带清 provider 冷却）
 - 单测：真实 LLMClient + patched `_chat_inner` 验证冻结性与深拷贝隔离（test_doctor_tools.py）
 
+## 九、图片代理描述：describe_image_with_vision——非视觉模型的看图委托（2026-10-27，用户提案）
+
+src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, instruction="", tries=3, timeout=60.0)`：为非视觉宿主模型代看图片（2026-10-27，用户提案「图片代理描述」）。
+
+- **选卡**：从 `config.MODELS` 按序取 `vision=True` 卡片（最多 tries=3 张）逐个尝试看图，首个成功返回 `(卡片名, 描述文本)`；全失败 / 无可用卡片返回 None（调用方降级为提示文案，不炸轮）
+- **独立临时 LLMClient**：`fallback_chain=[]`——单卡失败直接换下一卡，**不滚全局回退链、不写冷却**（代看失败不应搅乱用户主模型的回退链状态）；单次 60s 超时
+- **可观测**：`scene=img_proxy` 记 llm_calls 流水
+- **消费端两处**：read_file / 工具产物图（src/agent.py `_materialize_tool_result`，内容 hash 缓存 20 条）+ image_feed 帧（src/session.py `_imgfeed_proxy_text`，帧 hash 单槽）——机制细节见 [图片输入链路 · 图片代理描述](image-input.md) 与 [image_feed · 非视觉宿主代看](image-feed.md)
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：

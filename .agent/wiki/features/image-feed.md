@@ -27,9 +27,25 @@ services:
 | 维度 | 行为 |
 |---|---|
 | src | `http(s)://`（内存流零落盘，推荐）/ 文件路径（workspace 相对）/ **`tool:` 表达式**（调用工具或技能命令口取帧；2026-10-17 起支持命名参数，见下节） |
-| 视觉门控 | 非视觉模型（`vision_supported=False`）整段**静默跳过** |
+| 视觉门控 | 非视觉模型（`vision_supported=False`）→ **委托视觉卡片代看**（2026-10-27 起，见「非视觉宿主代看」节）；此前为整段静默跳过 |
 | 失联/空帧 | 降级一行文字（`[image_feed 不可用：...]` / `[image_feed 空帧：...]`），**不炸轮** |
-| 哨兵 | 命中返回 `@@IMGFEED@@data:<mime>;base64,<b64>@@`——桶收集处抽走，不进文本桶 |
+| 哨兵 | 命中返回 `@@IMGFEED@@<ts>@@data:<mime>;base64,<b64>@@`——桶收集处抽走，不进文本桶 |
+
+## 非视觉宿主代看：帧自动委托视觉卡片描述（2026-10-27，用户提案）
+
+**动机**：此前「视觉门控」对非视觉模型整段**静默跳过**——装配了 image_feed 的 agent 若宿主模型非 vision，等于睁眼瞎跑。用户裁定（2026-10-27）改为**代理描述**：取帧照常（http / file / `tool:` 三形态不变），画面委托配置内视觉卡片代看，描述文本替代 base64 注入 tail 桶。
+
+**机制（src/session.py `_imgfeed_proxy_text`）**：
+
+- 求值层命中帧哨兵 `@@IMGFEED@@<ts>@@data:…@@` 后先判宿主 vision 位；非视觉 → 调 [describe_image_with_vision](llm-network-resilience.md)（按序回退最多 3 张 vision=True 卡片，单次 60s）→ 描述文本替代 base64 进 tail 桶，话术固定：
+
+  > 当前模型为非视觉，image_feed自动获取到实时画面，以下是视觉模型\<卡名\>对画面的描述：\<描述\>
+
+- **帧 hash 单槽缓存**（`self._imgfeed_cap`，跨组装不落存档）：画面没变（data URL md5 同）复用上次描述，**不重复花视觉调用**——桌面静止时不烧钱；画面一变即重新代看
+- 非哨兵输入（取帧失败的降级文案 `[image_feed 不可用：…]` 等）**原样透传**，不进代看链
+- 视觉模型零变化：照旧 base64 → image_url 块看像素
+
+**代价**：每张**新画面**一次视觉调用（缓存兜底）；瞬态语义不变（不落 events.jsonl / step 存档）。全链路视角见 [图片输入链路 · 图片代理描述](image-input.md)。
 
 ## 帧源 `tool:` 表达式：技能命令口造型 + 命名参数（2026-10-17，用户提案）
 
@@ -183,7 +199,7 @@ else:
 
 ## 进包播种：新 repo 开箱即得（2026-10-06 · 二，commit 789d88e）
 
-desktop-operator 四件（yml + md 人设 + desktop_tools.py + image_feed_poc.py）进 bundled 播种源 `src/agents/desktop-operator/`，随 wheel 分发；seed 改递归拷贝让 `tools/` 随行，services 命令同步自包含化（指向 `.agent/agents/desktop-operator/tools/`）。通用环境两个前提：**视觉模型**（非 vision 则本段门控静默跳过——agent 可起但看不到桌面）+ `pip install pyautogui pyperclip`（缺依赖仅 warning 空工具箱，不炸实例化）。详见 [workspace 播种](workspace-seeding.md)。
+desktop-operator 四件（yml + md 人设 + desktop_tools.py + image_feed_poc.py）进 bundled 播种源 `src/agents/desktop-operator/`，随 wheel 分发；seed 改递归拷贝让 `tools/` 随行，services 命令同步自包含化（指向 `.agent/agents/desktop-operator/tools/`）。通用环境两个前提：**视觉模型**（非 vision 则自动委托其它 vision 卡片代看，2026-10-27 起——无可用 vision 卡片时才退回一行提示）+ `pip install pyautogui pyperclip`（缺依赖仅 warning 空工具箱，不炸实例化）。详见 [workspace 播种](workspace-seeding.md)。
 
 ## 编辑器支持
 
@@ -203,7 +219,7 @@ bg_services 装配段同日增 `start_service(watch_tail=N)`：服务 stdout 日
 
 - 每步一帧有 token 代价：服务端 1280 宽 + JPEG q70 是经济档，更高清改启动第二参（MAX_W）
 - 端点挂了不炸轮但「看不见」——服务起停交给 [services 声明](../architecture/multi-agent.md) 管
-- 非 vision 模型声明了也白声明（静默跳过）——选视觉模型（desktop-operator 用 glm-official-flash）
+- 非 vision 模型不再「白声明」（2026-10-27 起自动委托视觉卡片代看，见上「非视觉宿主代看」）——但每张新画面一次视觉调用；配置里无可用 vision 卡片时代看失败、退回一行提示
 
 ## 相关页面
 

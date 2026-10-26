@@ -484,25 +484,56 @@ class Agent:
             self._print_event(event)
 
     def _materialize_tool_result(self, result, tool_name, args, cid) -> str:
-        """工具结果里的 data-URL 图片段落盘到 repo images/，用 <img>name</img> 标签替换。
-        base64 不进 toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。
-        （2026-10-14 修：此前写成死文本"[图片 name，当前模型无视觉能力…]"——括号形态
-        不被投影层 _IMG_TAG_RE 命中，视觉模型永远无法回看 read_file 的图，vision 子
-        Agent 只见占位文案（用户实锤）。<img> 形态由 _project_imgs 按当前模型 vision
-        门控展开：视觉模型→image_url 看像素；非视觉模型→文字占位+委托 vision 提示。）"""
+        """工具结果里的 data-URL 图片段落盘到 repo images/，替换成 <img> 标签引用。base64 不进
+        toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。
+        按当前模型 vision 分流（用户提案 2026-10-27）：
+        · 视觉模型 → <img>{fn}</img>（投影层 _IMG_TAG_RE 命中 → image_url 看像素）；
+        · 非视觉模型 → 委托配置内视觉卡片代看（describe_image_with_vision 按序回退
+          最多 3 张 vision 卡，单次 60s）——描述文本随结果返回，当步即知画面内容；
+          描述按内容 hash 缓存（同图重读零成本，上限 20 条）；失败退回委托提示。
+          <img> 标签照放（切视觉模型/vision 子 agent 仍可回看像素）。"""
         result = result or ""
         matches = list(_DATA_URL_RE.finditer(result))
         if not matches:
             return result
+        import hashlib
+        vision = bool(getattr(self.llm, "vision_supported", False))
         out_dir = repo_images_dir(self.session.workspace)
+        cache = getattr(self, "_img_desc_cache", None)
+        if cache is None:
+            cache = self._img_desc_cache = {}
         out, last = [], 0
         for idx, m in enumerate(matches):
             out.append(result[last:m.start()])
             try:
                 ext = m.group(1).replace("jpg", "jpeg")
                 fn = f"{cid}_{idx}.{ext}"
+                data_url = m.group(0)
                 (out_dir / fn).write_bytes(base64.b64decode(m.group(2)))
-                out.append(f"<img>{fn}</img>")
+                if vision:
+                    out.append(f"<img>{fn}</img>")
+                    last = m.end()
+                    continue
+                h = hashlib.md5(data_url.encode()).hexdigest()[:16]
+                if h not in cache:
+                    from llm_client import describe_image_with_vision
+                    r = describe_image_with_vision(
+                        data_url, timeout=60,
+                        instruction="请看这张图片并用中文描述：画面内容、界面元素、"
+                                    "文字信息、值得注意的细节。")
+                    if r:
+                        cache[h] = r
+                        if len(cache) > 20:   # 防膨胀：只留最新 20 条
+                            for k in list(cache)[:-20]:
+                                cache.pop(k, None)
+                if h in cache:
+                    used, desc = cache[h]
+                    out.append(f"<img>{fn}</img>\n[视觉模型 {used} 代看] {desc}")
+                else:
+                    out.append(f"<img>{fn}</img>"
+                               f"[图片 {fn}：当前模型无视觉且视觉代理不可用（配置里加 vision 卡片"
+                               f"可自动代看）；可委托视觉子 agent"
+                               f'（agent_prompt("vision", "请描述 图片 {fn}")）]')
             except Exception:
                 out.append(m.group(0))   # 落盘失败保留原 data URL（不丢信息）
             last = m.end()

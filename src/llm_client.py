@@ -1298,3 +1298,35 @@ class LLMClient:
             f"连续 {self.max_retries} 次流式调用都返回空（疑似限流/服务波动）。"
             f" 最后 usage={last_usage}"
         )
+
+
+# ========== 图片代理描述（用户提案 2026-10-27） ==========
+def describe_image_with_vision(data_url: str, instruction: str = "",
+                               tries: int = 3, timeout: float = 60.0):
+    """非视觉模型的图片代理描述：从 config.MODELS 按序取 vision=True 的卡片（最多 tries 个）
+    逐个尝试看图，首个成功返回 (卡片名, 描述文本)；全失败/无可用卡片返回 None。
+    独立临时 LLMClient（fallback_chain=[] 显式空链——失败即抛，不滚全局链不碰调用方冷却；
+    scene=img_proxy 记流水供 /stats 观测）。用途：
+    ① 非视觉模型 read_file 图片 → _materialize_tool_result 委托代看，描述随结果返回；
+    ② image_feed 非视觉宿主 → 帧描述文本替代 base64 注入（session._imgfeed_proxy_text）。"""
+    cands = [n for n, p in (config.MODELS or {}).items()
+             if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
+    if not cands:
+        return None
+    prompt = instruction or ("请看这张图片并用中文详细描述：画面里有什么、界面元素、"
+                             "文字信息（如有）、值得注意的细节。")
+    for n in cands:
+        try:
+            prof = config.get_profile(n)
+            prof["vision"] = True
+            c = LLMClient(prof, fallback_chain=[], enable_thinking=False)
+            msgs = [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}}]}]
+            r = c.chat(msgs, scene="img_proxy", timeout=timeout)
+            txt = (getattr(r, "content", "") or "").strip()
+            if txt:
+                return n, txt
+        except Exception as e:
+            _LOG.warning("视觉代理 %s 描述失败：%s", n, str(e)[:120])
+    return None

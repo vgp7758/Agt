@@ -81,3 +81,5 @@ pv_out/
 bp/
 # ===== agt-agent 首次启动自动追加（播种产物与运行时目录；如需提交 .agent/ 配置可删除对应行） =====
 .pytest_cache/
+# ===== agt-agent 首次启动自动追加（运行时状态/缓存；.agent 的 workflows/agents/skills 等种源仍进版本控制） =====
+.agent/snapshots/

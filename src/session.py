@@ -723,6 +723,9 @@ class Session:
         self._gen_images_pending: list = []   # [{path, call_id, data(dataURL), kb}]
         self._gen_images_done: set = set()    # 去重记账（同文件一次任务只注入一次）
         self._imgfeed_prev = None             # image_feed 上一步帧 (data_url, ts)：跨组装缓存，
+                                              # 双帧对比挂倒数第二条 tool result 用
+        self._imgfeed_cap = None              # image_feed 非视觉代看缓存 (帧hash, 卡片名, 描述)：
+                                              # 画面没变复用上次描述，不重复花视觉调用（2026-10-27）
                                               # 双帧对比（2026-10-11）——本步帧挂最后一步 tool result、
                                               # 此帧挂倒数第二步，视觉模型对比即可判断画面是否变化
         self.workspace = Path(workspace) if workspace else Path.cwd()
@@ -1889,27 +1892,32 @@ class Session:
                 _src = str(_raw or "").strip()
                 if not _src:
                     return ""
-                if not getattr(getattr(self, "llm", None), "vision_supported", False):
-                    return ""   # 非视觉模型：静默跳过（不注入 base64，省 token + 防 400）
                 if _src.lower().startswith("tool:"):
-                    return _asm_image_feed_from_tool(_src[5:].strip(), self)
-                import urllib.request as _ur, base64 as _b64
-                try:
-                    if _src.lower().startswith(("http://", "https://")):
-                        with _ur.urlopen(_src, timeout=3) as _r:
-                            data = _r.read(6_000_000)
-                            mime = (_r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
-                    else:
-                        _p = Path(_src)
-                        if not _p.is_absolute():
-                            _p = Path(self.workspace) / _p
-                        data = _p.read_bytes()
-                        mime = mimetypes.guess_type(str(_p))[0] or "image/jpeg"
-                except Exception as _e:
-                    return f"[image_feed 不可用：{type(_e).__name__}——画面服务未启动或不可达（{_src}）]"
-                if not data:
-                    return f"[image_feed 空帧：{_src}]"
-                return f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
+                    _sen = _asm_image_feed_from_tool(_src[5:].strip(), self)
+                else:
+                    import urllib.request as _ur, base64 as _b64
+                    try:
+                        if _src.lower().startswith(("http://", "https://")):
+                            with _ur.urlopen(_src, timeout=3) as _r:
+                                data = _r.read(6_000_000)
+                                mime = (_r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+                        else:
+                            _p = Path(_src)
+                            if not _p.is_absolute():
+                                _p = Path(self.workspace) / _p
+                            data = _p.read_bytes()
+                            mime = mimetypes.guess_type(str(_p))[0] or "image/jpeg"
+                    except Exception as _e:
+                        return f"[image_feed 不可用：{type(_e).__name__}——画面服务未启动或不可达（{_src}）]"
+                    if not data:
+                        return f"[image_feed 空帧：{_src}]"
+                    _sen = f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
+                if not getattr(getattr(self, "llm", None), "vision_supported", False):
+                    # 非视觉宿主（用户提案 2026-10-27）：不再整段跳过——照常取帧后委托配置内
+                    # 视觉卡片代看，描述文本替代 base64 注入（_imgfeed_proxy_text；帧 hash 缓存，
+                    # 画面没变复用上次描述不重看）。降级文案（取帧失败）原样透传。
+                    return self._imgfeed_proxy_text(_sen)
+                return _sen
             if kind == "workflow":
                 # name or workflow 双键兼容（2026-10-23）：存量冻结快照（apply_extras 装备期冻结）
                 # 里旧形态 item 只有 workflow 键——与新版产出的 name 键都认。
@@ -1920,6 +1928,32 @@ class Session:
         except Exception as e:
             _LOG.warning("assembly %s 项求值失败（%s），跳过：%s", kind, item.get("name") or item.get("path") or item.get("cmd"), e)
             return ""
+
+    def _imgfeed_proxy_text(self, sen: str) -> str:
+        """非视觉宿主的 image_feed 代看（用户提案 2026-10-27）：从哨兵串提帧 → 委托配置内
+        视觉卡片描述（describe_image_with_vision）→ 描述文本替代 base64 注入 tail 桶。
+        帧 hash 缓存（self._imgfeed_cap 单槽）：画面没变复用上次描述，不重复花视觉调用。
+        非哨兵输入（取帧失败的降级文案）原样透传。"""
+        m = re.match(r"@@IMGFEED@@(\d+)@@(data:[^@]+)@@", sen or "")
+        if not m:
+            return sen
+        durl = m.group(2)
+        h = hashlib.md5(durl.encode()).hexdigest()[:16]
+        c = getattr(self, "_imgfeed_cap", None)
+        if c and c[0] == h:
+            used, desc = c[1], c[2]
+        else:
+            from llm_client import describe_image_with_vision
+            r = describe_image_with_vision(
+                durl, timeout=60,
+                instruction="这是实时画面帧。请简洁描述当前画面（120字内）：界面元素/窗口/文本/明显变化。")
+            if not r:
+                return ("[image_feed：视觉代理描述失败——无可用视觉卡片或调用超时"
+                        "（配置里加 vision 卡片可自动代看）]")
+            used, desc = r
+            self._imgfeed_cap = (h, used, desc)
+        return (f"当前模型为非视觉，image_feed自动获取到实时画面，"
+                f"以下是视觉模型{used}对画面的描述：{desc}")
 
     def _construction_mode(self) -> bool:
         """施工模式（2026-09-13·spec s_e1804804，用户提案）：活动 plan 存在未完成步时投影切换
@@ -3815,8 +3849,9 @@ class Session:
             def _sub(m):
                 n = m.group(1)
                 if not vision:
-                    return (f'[图片 {n}，当前模型无视觉能力无法查看；'
-                            f'如需理解图片内容，可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]')
+                    return (f'[图片 {n}：当前模型无视觉——若本条结果中附有「视觉模型代看」描述，'
+                            f'直接阅读即可；需像素级查看可委托视觉子 agent'
+                            f'（agent_prompt("vision", "请描述 图片 {n}")）]')
                 return (f'[图片 {n}，早期图片已省略以控制请求体体积（模型可看图，但历史图累积会超 '
                         f'provider 请求上限）；如需重看请重新读取/生成该图]')
             return _IMG_TAG_RE.sub(_sub, text)

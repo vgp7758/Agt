@@ -304,6 +304,10 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 - 主 Agent 侧：委托后 [退出施工视图](context-engine.md#后记施工委托让位委托后主-agent-退出施工视图2026-10-15用户提案commit-3dc3f7b)（`session._construction_mode()` 让位）+ [计划注入块](../features/construction-delegation.md)加「施工：已委托 …」行
 - **验证**：六组断言全绿（含幂等与让位）/ worker 声明解析（`tools=''` 继承且排除 `create_plan`·`agent_prompt`）/ L2 隔离实跑轮启动无异常；**实战**：dashboard 施工线（plan p_c0542ede）worker 三断点续跑 + update_plan 标满 10/10，全链路实证
 
+### 后记：派发宿主迁 construction_dispatch.xml 钩子版（2026-10-22 引擎退役）+ worker_id 指派（2026-10-26，用户提案）
+
+**上节「发起侧」描述的引擎版 `_maybe_dispatch_construction()` 已退役（2026-10-22）**：派发宿主迁 `src/workflows/construction_dispatch.xml`（after_tool 钩子，gate 判定 + `.agent/construction_dispatch.json` repo 级幂等标记 + 同步 inject 同轮旁注；删/禁用该文件即关闭委托，引擎版 `_construction_delegate` 开关随之失效）。**2026-10-26 起 `create_plan` / `create_spec` / `commit_spec` 新增 `worker_id` 参数**——指派特定 worker 实例（如上一阶段的 worker-p_xxx）续接施工线（gate 读 `plan.worker_id` 非空即派给它，默认仍 `worker-<plan_id>`）。钩子版与引擎版的逐项对账、参数语义与验证见 [施工委托 · 后记五](../features/construction-delegation.md#后记五worker_id-指派跨阶段施工线续接2026-10-26用户提案)。
+
 ## doctor 自动派单：回退链耗尽 → 引擎派诊断修复（2026-10-16，用户提案，commit 656193a）
 
 第四条派活入口（前三条：LLM 工具调用 / 引擎施工派发 / 用户 `@name` 直派，见上文对照），特征是**失败触发** + **两个触发面**：

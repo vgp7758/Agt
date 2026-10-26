@@ -174,12 +174,60 @@ cmd（及部分 Python 调用）看不见 `.agt` 数据根子目录、**PowerShe
 
 **生效**：`/restart`（引擎代码 + worker.yml 播种源同需）；改动已随 v0.35.5 上 PyPI（当日 push 又断，远端由 `push-retry-v0355` 后台任务补推）。下次 `create_plan` / spec 通过派 worker 即用新施工牌。
 
+## 后记五：worker_id 指派——跨阶段施工线续接（2026-10-26，用户提案）
+
+**用户提案（2026-10-26）**：「有个 worker 在完成一个计划后，agent 又想给它安排下一阶段的施工计划——create_plan / commit_spec 的时候需要带上一个参数 worker_id 可以指派特定 sub-agent 如 worker_p_xxx 去做这件事」——多阶段施工不换人：**复用上一阶段 worker 实例**（带它上一阶段的 session 记忆续接施工线），而不是默认新开 `worker-<plan_id>`。
+
+### 派发宿主背景对账：钩子版（2026-10-22 引擎退役，wiki 欠账补记）
+
+worker_id 的判定宿主**已不是引擎硬编码**——`src/workflows/construction_dispatch.xml`（after_tool 钩子，`seed_scope="global"`）description 自述「引擎退役版 2026-10-22」：`Agent._maybe_dispatch_construction()` + `session.extra_state["_plan_dispatch"]` 已被替代。上文「全链路 / 派发」两节为引擎版历史描述，现行对账：
+
+| 项 | 引擎版（2026-10-15，上文历史描述） | 钩子版（现行，2026-10-22 退役迁移） |
+|---|---|---|
+| 宿主 | `Agent._maybe_dispatch_construction()`（每步工具执行后 + 每轮 run 开头） | `construction_dispatch.xml` after_tool 钩子（**同步非 async**——派发秒级且 inject 需同轮生效） |
+| 幂等标记 | `session.extra_state["_plan_dispatch"]`（session 级，随存档往返） | `.agent/construction_dispatch.json`（**repo 级**，跨 session、重启不丢；join_plan 进来的其它 session 不重复派发） |
+| 施工牌装配 | `_construction_dispatch_prompt()`（src/agent.py） | `_build_dispatch_prompt()`（钩子 gate 节点内联，格式逐字移植引擎版——施工牌 prompt 全文口径不变） |
+| 关闭方式 | 实例设 `_construction_delegate = False` | **删/禁用该工作流文件即可**（可 inspect 可禁用可改） |
+
+gate 判定语义与旧引擎一致：触发集仍三工具（`create_plan` / `commit_spec` / `join_plan`）→ 结果文案正则提 plan_id（`已创建计划|已生成 plan|已加入计划`）→ 读计划文件（读不到=保守不派发，下次触发自然重试）→ 无步骤/全 completed 清标记短路 → 同 plan 已委托幂等短路 → 装配施工牌 + agent_prompt 派发（`reuse=yes`、`caller=_main_`）→ mark_done 写标记 + end inject=True 同轮旁注。
+
+### 三入口参数（本次改动 2026-10-26）
+
+| 入口 | 参数 | 语义 |
+|---|---|---|
+| `create_plan`（src/plan_tools.py，第 4 参） | `worker_id=""` | 非空 → `plan["worker_id"]` 存进计划文件；返回附 `👷 已指派 <wid> 执行` 确认行 |
+| `create_spec`（src/spec_tools.py） | `worker_id=""` | draft 期指派，存 spec；返回附指派确认行 |
+| `commit_spec`（src/spec_tools.py） | `worker_id=""` | 提交时指派/**改派**（非空才覆盖 `spec.worker_id`）；留空=沿用 spec 已指派（若有）/ 默认新开 |
+
+**spec → plan 传递**：`_build_plan_from_spec`（src/spec_tools.py）把 `spec.worker_id` 非空时一并写进生成的 plan——approve 后自动建 plan 即带指派，链路不断。
+
+**派发判定（gate_and_extract 节点，本次核心一处）**：
+
+```python
+# 指派续接（用户提案 2026-10-26）：plan 带 worker_id → 派给该实例而非新开 worker-<pid>
+wid = str(plan.get("worker_id") or "").strip()
+if wid:
+    aid = wid    # 派给指派实例（agent_prompt reuse=yes 复用，带其历史 session 续接）
+# else: aid = f"worker-{pid}"（默认，行为不变）
+```
+
+幂等标记 `.agent/construction_dispatch.json` 存**实际派给的 aid**——指派线与默认线在标记里可分辨。边界：幂等按 `plan_id` 判定（不看 aid）——已委托过的计划随后 `commit_spec(worker_id=…)` 改派**不会触发重派**（属续派场景，走主 Agent 手写指令）。
+
+### 验证与生效（2026-10-26 开发轮）
+
+- gate 四场景单测全绿：指派→wid / 无指派→默认 `worker-<pid>` / commit_spec 路径 / 幂等标记
+- XML 合法性 + 新返回文案与 plan_id 提取正则兼容核对 + 三工具 schema 均含 `worker_id` 参数
+- 运行时副本已同步 `~/.agt/workflows/`；**工具签名进工具箱需 `/restart`**
+- commit 已落本地（GitHub push 又断，`push-retry-release` 后台任务自动补推 + 补 tag）
+
 ## 注意事项
 
 - **需 `/restart` 生效**；重启后**若有活动 plan 会自动派 worker**（正是设计意图）
-- **施工模式全部机制保留**：委托只是新增的一个「出口」——未委托 / 关闭委托 / 当前场景无 `_prompt_subagent` 时，主 Agent 照旧进施工视图自己干
+- **施工模式全部机制保留**：委托只是新增的一个「出口」——未委托 / 当前场景无派发条件时，主 Agent 照旧进施工视图自己干
 - **worker 自己不进施工模式**：plan 归属主 Agent，worker 的 session 里没有活动 plan → 按常规子 Agent 投影（人设 + 当前轮）
-- 一个计划一条 worker 线（`worker-<plan_id>`）；换计划会得到新的 worker 实例——旧线的汇报仍会路由回来，按 plan_id 分辨
+- 一个计划一条 worker 线：默认 `worker-<plan_id>`、换计划新实例——旧线的汇报仍会路由回来，按 plan_id 分辨；**2026-10-26 起例外**：`create_plan` / `create_spec` / `commit_spec` 带 `worker_id` 可指派既有实例续接（跨阶段复用同一施工线），见[后记五](#后记五worker_id-指派跨阶段施工线续接2026-10-26用户提案)
+- **关闭委托**：删/禁用 `construction_dispatch.xml` 即可（2026-10-22 派发宿主迁钩子版后的关法；引擎版 `_construction_delegate` 开关随退役失效）——见[后记五 · 背景对账](#后记五worker_id-指派跨阶段施工线续接2026-10-26用户提案)
+- 调参：模型 / 步数上限改 `.agent/agents/worker/worker.yml`，下次派活即生效
 
 ## 相关页面
 

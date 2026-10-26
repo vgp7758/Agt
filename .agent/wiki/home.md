@@ -110,3 +110,7 @@
 - **发版插曲（本版最重要的修复，不是功能）**：首次调用 ② 直接断在 `git add .agent/workflows`——`The following paths are ignored by one of your .gitignore files: .agent`。根因是首启 `.gitignore` 种子（2026-10-24 提案）**整包追加 `.agent/`**，而这个目录装着 workflows / agents / skills / plugins / wiki 等种源（本 repo 229 个已跟踪文件）。已改种子为精确运行时条目 + 本 repo 删该行，重跑一次上线。**口诀：`.agent/` 永不可整包忽略**，明细见 [workspace 播种 · seed_gitignore](features/workspace-seeding.md)
 - **待推**：5 笔 commit + tag `v0.35.8`（GitHub SSH/HTTPS 全断，`push-retry-release` 每 600s 三级重试，推上后自动补打并推 tag → 桌面版 CI 自动出包）；PyPI 已上线即发布事实成立
 
+## 快速事实增补（2026-10-26 · 二 · 施工委托 worker_id 指派：跨阶段施工线续接）
+
+- **施工委托 `worker_id` 指派（2026-10-26，用户提案）**：worker 完成上一阶段计划后可给**同一实例**安排下一阶段施工——`create_plan(…, worker_id="worker-p_xxx")` / `create_spec(worker_id=…)`（draft 期指派）/ `commit_spec(worker_id=…)`（提交时指派/**改派**，覆盖 draft 值；`_build_plan_from_spec` 转 plan 自动传递）——从团队看板 / `list_team` 查实例名。派发钩子 `construction_dispatch.xml` gate 读 `plan.worker_id` 非空 → 派给该实例（`reuse=yes` 复用，带上一阶段 session 记忆续接施工线）；留空默认新开 `worker-<plan_id>`。gate 四场景单测全绿；运行时副本已同步 `~/.agt/workflows/`，**工具签名需 `/restart`**。**顺带补记 wiki 欠账**：派发宿主 2026-10-22 已从引擎 `Agent._maybe_dispatch_construction()`（`session.extra_state` 标记）迁 `construction_dispatch.xml` after_tool 钩子（`.agent/construction_dispatch.json` repo 级幂等标记，删/禁用该文件即关闭委托）——上文 2026-10-15 条目为引擎版历史描述。详见 [施工委托 · 后记五](features/construction-delegation.md)
+

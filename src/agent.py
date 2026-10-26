@@ -486,22 +486,20 @@ class Agent:
     def _materialize_tool_result(self, result, tool_name, args, cid) -> str:
         """工具结果里的 data-URL 图片段落盘到 repo images/，替换成 <img> 标签引用。base64 不进
         toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。
-        按当前模型 vision 分流（用户提案 2026-10-27）：
+        按当前模型 vision 分流（用户提案 2026-10-27；同日二审改 repo 级 SQLite 缓存）：
         · 视觉模型 → <img>{fn}</img>（投影层 _IMG_TAG_RE 命中 → image_url 看像素）；
         · 非视觉模型 → 委托配置内视觉卡片代看（describe_image_with_vision 按序回退
-          最多 3 张 vision 卡，单次 60s）——描述文本随结果返回，当步即知画面内容；
-          描述按内容 hash 缓存（同图重读零成本，上限 20 条）；失败退回委托提示。
+          最多 3 张 vision 卡，单次 60s）——描述文本随结果返回，当步即知画面内容。
+          描述查/写 repo 级缓存（~/.agt/repos/<repo_key>/img_desc_cache.db，跨 session/
+          重启共享，用户裁定 2026-10-27）：先查命中，miss 才调视觉模型并记录。
           <img> 标签照放（切视觉模型/vision 子 agent 仍可回看像素）。"""
         result = result or ""
         matches = list(_DATA_URL_RE.finditer(result))
         if not matches:
             return result
-        import hashlib
+        import img_cache
         vision = bool(getattr(self.llm, "vision_supported", False))
         out_dir = repo_images_dir(self.session.workspace)
-        cache = getattr(self, "_img_desc_cache", None)
-        if cache is None:
-            cache = self._img_desc_cache = {}
         out, last = [], 0
         for idx, m in enumerate(matches):
             out.append(result[last:m.start()])
@@ -514,20 +512,19 @@ class Agent:
                     out.append(f"<img>{fn}</img>")
                     last = m.end()
                     continue
-                h = hashlib.md5(data_url.encode()).hexdigest()[:16]
-                if h not in cache:
+                h = img_cache.hash_of(data_url)
+                row = img_cache.get_desc(self.session.workspace, h)
+                if not row:
                     from llm_client import describe_image_with_vision
                     r = describe_image_with_vision(
                         data_url, timeout=60,
                         instruction="请看这张图片并用中文描述：画面内容、界面元素、"
                                     "文字信息、值得注意的细节。")
                     if r:
-                        cache[h] = r
-                        if len(cache) > 20:   # 防膨胀：只留最新 20 条
-                            for k in list(cache)[:-20]:
-                                cache.pop(k, None)
-                if h in cache:
-                    used, desc = cache[h]
+                        row = r
+                        img_cache.put_desc(self.session.workspace, h, r[0], r[1])
+                if row:
+                    used, desc = row
                     out.append(f"<img>{fn}</img>\n[视觉模型 {used} 代看] {desc}")
                 else:
                     out.append(f"<img>{fn}</img>"

@@ -724,8 +724,6 @@ class Session:
         self._gen_images_done: set = set()    # 去重记账（同文件一次任务只注入一次）
         self._imgfeed_prev = None             # image_feed 上一步帧 (data_url, ts)：跨组装缓存，
                                               # 双帧对比挂倒数第二条 tool result 用
-        self._imgfeed_cap = None              # image_feed 非视觉代看缓存 (帧hash, 卡片名, 描述)：
-                                              # 画面没变复用上次描述，不重复花视觉调用（2026-10-27）
                                               # 双帧对比（2026-10-11）——本步帧挂最后一步 tool result、
                                               # 此帧挂倒数第二步，视觉模型对比即可判断画面是否变化
         self.workspace = Path(workspace) if workspace else Path.cwd()
@@ -1932,17 +1930,17 @@ class Session:
     def _imgfeed_proxy_text(self, sen: str) -> str:
         """非视觉宿主的 image_feed 代看（用户提案 2026-10-27）：从哨兵串提帧 → 委托配置内
         视觉卡片描述（describe_image_with_vision）→ 描述文本替代 base64 注入 tail 桶。
-        帧 hash 缓存（self._imgfeed_cap 单槽）：画面没变复用上次描述，不重复花视觉调用。
+        描述查/写 repo 级 SQLite 缓存（img_desc_cache.db，跨 session/重启共享，用户裁定
+        2026-10-27）：先查命中（帧没变/跨重启同帧零视觉调用），miss 才调视觉模型并记录。
         非哨兵输入（取帧失败的降级文案）原样透传。"""
         m = re.match(r"@@IMGFEED@@(\d+)@@(data:[^@]+)@@", sen or "")
         if not m:
             return sen
         durl = m.group(2)
-        h = hashlib.md5(durl.encode()).hexdigest()[:16]
-        c = getattr(self, "_imgfeed_cap", None)
-        if c and c[0] == h:
-            used, desc = c[1], c[2]
-        else:
+        import img_cache
+        h = img_cache.hash_of(durl)
+        row = img_cache.get_desc(self.workspace, h)
+        if not row:
             from llm_client import describe_image_with_vision
             r = describe_image_with_vision(
                 durl, timeout=60,
@@ -1950,8 +1948,9 @@ class Session:
             if not r:
                 return ("[image_feed：视觉代理描述失败——无可用视觉卡片或调用超时"
                         "（配置里加 vision 卡片可自动代看）]")
-            used, desc = r
-            self._imgfeed_cap = (h, used, desc)
+            row = r
+            img_cache.put_desc(self.workspace, h, r[0], r[1])
+        used, desc = row
         return (f"当前模型为非视觉，image_feed自动获取到实时画面，"
                 f"以下是视觉模型{used}对画面的描述：{desc}")
 

@@ -572,6 +572,44 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 **生效方式**：后端改动——`/restart`。
 
+### 资产控件悬停小按钮：📂 打开所在目录 / 📋 复制完整路径（2026-10-27，用户提案）
+
+**用户提案（2026-10-27）**：markdown 里的文件引用已可点击预览，但有时需要 copy 文件路径或在资源管理器中查看——资产控件（图框/音频条/视频框/文本预览框）**悬停 1 秒**浮现两个小按钮：📂 一键打开所在目录、📋 一键复制完整路径。
+
+#### 交互时序：纯 CSS 悬停 1s 渐显（无 JS 计时器）
+
+```css
+.asset-box { position:relative; }
+.asset-box .asset-acts { position:absolute; top:4px; right:6px; opacity:0; transition:opacity .2s; z-index:6; }
+.asset-box:hover .asset-acts { opacity:1; transition-delay:1s; }  /* 延迟只挂 hover 态——基态无延迟 */
+.asset-box.video .asset-acts { right:32px; }                      /* 避开右上角 ↗ */
+```
+
+`transition-delay:1s` 只挂在 hover 态是关键：悬停满 1s 才渐显（快速掠过不打扰），移开立即隐（基态无延迟）——零 JS 计时器、不闪烁。playwright 真页面实测时序全对：悬停前 / hover 0.4s opacity=0（延迟窗内不出现）→ hover 1.5s opacity=1 → 移开 0.3s opacity=0。
+
+#### 覆盖与行为
+
+| 项 | 语义 |
+|---|---|
+| 覆盖面 | `_assetActs(path)` 注入 `assetBoxHtml` 图 / 音 / 视频 / 文本四个分支（共 4 处）；未知后缀占位框经 probe 升级重建后自动带上 |
+| 📂 打开所在目录 | 文件 → 打开父目录**并选中该文件**（win：`explorer /select,<path>`，逗号必须并入同一参数；mac：`open -R`；linux：`xdg-open` 父目录）；目录 → 直接打开 |
+| 📋 复制完整路径 | 后端解析绝对路径（相对拼 workspace、绝对原样）→ 剪贴板；**http 非 localhost 页面** clipboard API 受限 → 自动兜底 `execCommand('copy')` 老通道 |
+| 防误触 | 按钮点击 `event.stopPropagation()`——不触发图框放大 / 文本预览抽屉；路径不存在 → 后端 `ok:false` → toast 明确报错 |
+| 转义 | 路径 esc + 单引号转义（`'` → `&#39;`）再拼 inline onclick——「LLM 输出不可信须转义」纪律不变 |
+
+#### 后端：open-folder 插件路由扩展
+
+`POST /api/open-folder/open` body 新增可选 `{path, resolve_only}`——空/缺省走原 workspace 行为（dock 📁 按钮不变），`resolve_only:true` 只解析返回绝对路径不弹窗（📋 取值用）；三平台开目录收敛 `_open_dir_or_parent(p)`；backend 顶部模块级 `from fastapi import Request` 是 [422 注解坑](../architecture/plugin-sdk.md#插件路由-422-根治future-annotations--fastapi-注解-resolve2026-10-1516隔离实例实锤)的直接沿用。插件侧细节见 [plugin-sdk · open-folder 路由扩展](../architecture/plugin-sdk.md#open-folder-路由扩展body-可带-path--resolve_only2026-10-27用户提案资产控件悬停小按钮)。隔离冒烟 5 场景全过。
+
+#### 生效分叉
+
+| 层 | 方式 |
+|---|---|
+| 前端（CSS + `_assetActs` / `assetOpenDir` / `assetCopyPath` + 四分支注入） | **Ctrl+F5 即生效**（静态 mtime 热更） |
+| 后端（open-folder 新参数） | **需 `/restart`**——`/reload plugins` 对已注册路由不替换（见 [plugin-sdk · 插件路由热重载不替换](../architecture/plugin-sdk.md#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)） |
+
+重启过渡期点 📂 退化为「打开 workspace 根」——不报错，是静默降级不是故障。commit 本地待推（GitHub 断连，push-retry 在岗补推）。
+
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 
 用户三问（2026-09-18，commit `3d38959`）：① answer 气泡最小宽度取总宽度 50%；② 表格里的音频播放条 / 视频播放器给足最小尺寸，保证播放按钮点得到；③ 复制按钮放入剪贴板的应是**原始 answer markdown**——③ 查证后为**已然实现**（见[复制内容与剪贴板降级](#复制内容与剪贴板降级)），本轮只补一处排除清单；①② 为纯 CSS 改动。

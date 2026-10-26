@@ -202,11 +202,13 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 
 ### 示例插件五例（2026-10-16 /cmd 迁入前为四例）
 
+#### 示例插件五例（2026-10-16 /cmd 迁入前为四例）
+
 > 表格按播种顺序；2026-10-16 `/cmd` 内置命令迁入后为**五例**（四实用 + demo），cmd 是最后一个——补齐了 `register_command` 这条扩展点的实物示例。
 
 | 插件 | 席位 | 要点 |
 |---|---|---|
-| open-folder | addButton 📁 | `POST /api/open-folder/open`——在跑 agt 的机器上弹文件管理器（win=`os.startfile` / mac=`open` / linux=`xdg-open` 三平台兜底）；`exposed_to_llm: false`（纯前端功能，不占 LLM 投影） |
+| open-folder | addButton 📁 | `POST /api/open-folder/open`——在跑 agt 的机器上弹文件管理器（win=`os.startfile` / mac=`open` / linux=`xdg-open` 三平台兜底）；`exposed_to_llm: false`（纯前端功能，不占 LLM 投影）；2026-10-27 扩展 body 可带 `{path, resolve_only}`——打开指定路径所在目录 / 仅解析绝对路径，见下文[专节](#open-folder-路由扩展body-可带-path--resolve_only2026-10-27用户提案资产控件悬停小按钮) |
 | feedback | addPanel 💬 | 两条插件路由：`POST /api/feedback/meta`（类型选项/作者联系方式/环境预览）+ `POST /api/feedback/submit`；**核心逻辑零复制**——backend.py 直接 `import feedback`，落盘/飞书推送/探针过滤全继承（见 [feedback](../features/feedback.md)） |
 | webide | addButton（VS Code logo） | serve-web 全链路搬迁：端口潜规则 / 复用优先 / `--commit-id` 钉缓存 / 滚动预热 / 12s 上限 / 乐观退页签原样入插件 backend.py（见 [webide](../features/webide.md)）；2026-10-15 缓存误删事故（孤儿 code-tunnel 并发安装 → rmtree 删到在用版本 → spawn 死循环）四修见该页「serve-web 缓存被删致无限 panic」专节（含救场脚本 tools/_fix_serveweb_cache.py）；同日另一案：潜规则口被 Unity Hub 固定占（回 401 `Unauthorized access`）→ `_probe` 升三态 `(alive, ready, ours)`、复用只认自家 serve-web，见该页「Unauthorized access」专节 |
 | example-hello | 面板 + 命令/钩子/卡片 | demo 精简版（见上文），首次入种源 |
@@ -320,6 +322,33 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 
 - 与 422 同款教训：**FastAPI 端点语义 ≠ 插件路由语义**——注解（422 坑）与返回值（本案）都要过 SDK 包装层的约定，不能照搬内置写法
 - 宽容解析的边界：若 body 本身是「首元素为 int 的二元组」会被误判成 (status, body)——极端情况按约定包成 `(200, rv)` 规避
+
+## open-folder 路由扩展：body 可带 path / resolve_only（2026-10-27，用户提案「资产控件悬停小按钮」）
+
+> 用户提案（2026-10-27）「markdown 资产控件悬停 1s 浮现 📂/📋 两按钮」——前端实现落在 [bubble-interaction · 资产控件悬停小按钮](../features/bubble-interaction.md#资产控件悬停小按钮-打开所在目录--复制完整路径2026-10-27用户提案)，两个按钮的后端动作都走 open-folder 既有路由：插件从「弹 workspace 根」扩展为「按路径打开 / 解析」。
+
+**`POST /api/open-folder/open` body 新增可选 `{path, resolve_only}`**（src/assets/plugins/open-folder/backend.py）：
+
+| 入参 | 语义 |
+|---|---|
+| 空 / 缺省 | 原 workspace 行为，dock 📁 按钮不受影响 |
+| `path`（相对） | 拼 workspace 解析 |
+| `path`（绝对） | 原样解析 |
+| `resolve_only: true` | 只解析返回绝对路径、不弹窗（📋 复制按钮取值用） |
+
+- 带 `path` 时打开其**所在目录**：文件=父目录并选中该文件（win：`explorer /select,<path>`，逗号必须并入同一参数；mac：`open -R`；linux：`xdg-open` 父目录），目录=直接打开——三平台收敛进 `_open_dir_or_parent(p)`
+- 路径不存在 → `ok:false`（前端 toast 报错）
+- backend 顶部改**模块级** `from fastapi import Request`——[422 注解坑](#插件路由-422-根治future-annotations--fastapi-注解-resolve2026-10-1516隔离实例实锤)的直接沿用
+- 验证：隔离冒烟 5 场景全过；生效方式见[下节](#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)——前端 Ctrl+F5 即可，后端新参数要 `/restart`
+
+## 插件路由热重载不替换：/reload plugins 后旧 handler 仍响应（2026-10-27，open-folder 扩展实锤）
+
+> open-folder 路由扩展当轮实测抓到的**第三个插件路由坑**：`/reload plugins` 重载后调用新参数 `{path, resolve_only}` **不生效但也不报错**——响应的还是旧 handler（空 body 行为，弹 workspace 根）。
+
+- **语义**：插件热重载替换的是模块代码对象，**已注册的 FastAPI 路由不摘不换**——app 路由表里旧 `_handler` 闭包照常服务，重载进来的新代码没有接线点
+- **危害面是静默降级**：不炸、不 4xx，行为停在旧版——「改了没效果」比报错更难排查
+- **文档口径修正**：开发 README（`.agent/plugins/README.md`）「backend `/reload plugins` 热生效」需加限定——**register_route 已实锤不替换**；register_tool / register_command / 钩子等其它注册面是否同样不替换未验证，改路由逻辑后建议直接 `/restart`
+- 后续方向（未排期）：热重载时摘旧路由再注册；或文档明示「路由改动需重启」
 
 ## 关联
 

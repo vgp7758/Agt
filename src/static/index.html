@@ -296,6 +296,16 @@
   .asset-box.file .asset-cap { color:#2563eb; margin-bottom:0; word-break:break-all; }
   .asset-box.file .asset-cap::before { content:"📄 "; }
   .asset-box.file .asset-cap small { color:#8a9099; font-weight:400; margin-left:6px; }
+  /* 资产控件悬停 1s 浮现的小按钮组（用户提案 2026-10-27）：📂 打开所在目录 / 📋 复制完整路径。
+     transition-delay 只挂在 hover 态——悬停 1s 后渐显，移开立即隐（基态无延迟）；video 避开右上角 ↗ */
+  .asset-box { position:relative; }
+  .asset-box .asset-acts { position:absolute; top:4px; right:6px; display:flex; gap:4px;
+    opacity:0; transition:opacity .2s; z-index:6; }
+  .asset-box:hover .asset-acts { opacity:1; transition-delay:1s; }
+  .asset-box.video .asset-acts { right:32px; }
+  .asset-acts button { font-size:12px; line-height:20px; width:24px; height:22px; padding:0;
+    background:#fff; border:1px solid #94a3b8; border-radius:5px; cursor:pointer; opacity:.92; }
+  .asset-acts button:hover { border-color:#2563eb; opacity:1; }
   /* answer 尾部"未交代变更文件"补充区（2026-09-04 用户提案：快照 diff 补渲染） */
   .ans-changed { margin-top:10px; padding:8px 10px; border-top:1px dashed #cbd5e1;
     background:#f8fafc; border-radius:0 0 10px 10px; }
@@ -881,6 +891,39 @@ const _TEXT_EXTS = ('txt,md,markdown,log,json,py,js,ts,jsx,tsx,html,htm,css,scss
 // 升级为正确形态（文本→📄抽屉 / 图片→图框 / 音频→播放条 / 视频等二进制→新页签由浏览器按
 // 嗅探出的 Content-Type 渲染）。结果缓存 _assetKindCache——重绘（多 agent 分页切换/读档）同步命中。
 var _assetKindCache = {};   // path → {kind, encoding}
+// 资产控件小按钮组（用户提案 2026-10-27）：悬停 1s 浮现——📂 打开所在目录 / 📋 复制完整路径。
+// 动作走 open-folder 插件端点：open=弹资源管理器（文件→父目录选中）；resolve_only=只取绝对路径。
+function _assetActs(path){
+  var p = esc(path).replace(/'/g, '&#39;');
+  return '<span class="asset-acts">'+
+    '<button title="在资源管理器中打开所在目录" onclick="event.stopPropagation();assetOpenDir(\''+p+'\')">📂</button>'+
+    '<button title="复制完整路径" onclick="event.stopPropagation();assetCopyPath(\''+p+'\')">📋</button>'+
+    '</span>';
+}
+async function assetOpenDir(path){
+  try{
+    const r = await fetch('/api/open-folder/open', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({path})}).then(x=>x.json());
+    toast(r && r.ok ? '📂 已打开所在目录' : '❌ ' + ((r && r.error) || '打开失败'));
+  }catch(e){ toast('❌ ' + e.message); }
+}
+async function assetCopyPath(path){
+  try{
+    const r = await fetch('/api/open-folder/open', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path, resolve_only: true})}).then(x=>x.json());
+    const abs = (r && r.ok && r.path) ? r.path : path;
+    let okc = false;
+    try{ await navigator.clipboard.writeText(abs); okc = true; }catch(_){}
+    if(!okc){   // http 非 localhost 页面 clipboard API 不可用兜底（execCommand 老通道）
+      const ta = document.createElement('textarea');
+      ta.value = abs; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      okc = document.execCommand('copy'); ta.remove();
+    }
+    toast(okc ? '📋 已复制路径：' + abs : '❌ 复制失败');
+  }catch(e){ toast('❌ ' + e.message); }
+}
 function assetBoxHtml(title, path){
   var src='/api/asset?path='+encodeURIComponent(path);
   var cap=esc(title||'');
@@ -898,22 +941,22 @@ function assetBoxHtml(title, path){
       else if(ck.kind==='text') isTxt=true;
     }
   }  if(isImg){
-    return '<div class="asset-box">'+(cap?'<div class="asset-cap">'+cap+'</div>':'')+
+    return '<div class="asset-box">'+_assetActs(path)+(cap?'<div class="asset-cap">'+cap+'</div>':'')+
       '<a href="'+src+'" target="_blank" rel="noopener" title="点击查看原图"><img src="'+src+'" loading="lazy" alt="'+alt+'" onerror="this.closest(\'.asset-box\').classList.add(\'err\');this.remove()"></a></div>';
   }
   if(isAud){
-    return '<div class="asset-box audio">'+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
+    return '<div class="asset-box audio">'+_assetActs(path)+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
       '<audio controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></audio></div>';
   }
   if(isVid){   // 视频 → 内嵌播放器（用户提案 2026-09-17：不再当文本开抽屉——mp4 走视频框；
                // 点击标题/右上角链接可新页签看原片，浏览器按 /api/asset 的 Content-Type 直接播）
-    return '<div class="asset-box video">'+(cap?'<div class="asset-cap">🎬 '+cap+'</div>':'')+
+    return '<div class="asset-box video">'+(cap?'<div class="asset-cap">🎬 '+cap+'</div>':'')+_assetActs(path)+
       '<video controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></video>'+
       '<a class="vid-open" href="'+src+'" target="_blank" rel="noopener" title="在新页签打开">↗</a></div>';
   }
   if(isTxt){   // 文本类 → 点击打开预览抽屉（📄）
     var pEsc=esc(path).replace(/'/g,'&#39;');
-    return '<div class="asset-box file" onclick="openFilePreview(\''+pEsc+'\')">'+
+    return '<div class="asset-box file" onclick="openFilePreview(\''+pEsc+'\')">'+_assetActs(path)+
       (cap?'<div class="asset-cap">'+cap+'<small>'+esc(ext)+'</small></div>':
             '<div class="asset-cap">'+esc(path)+'</div>')+'</div>';
   }

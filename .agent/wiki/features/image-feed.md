@@ -37,15 +37,20 @@ services:
 
 **机制（src/session.py `_imgfeed_proxy_text`）**：
 
-- 求值层命中帧哨兵 `@@IMGFEED@@<ts>@@data:…@@` 后先判宿主 vision 位；非视觉 → 调 [describe_image_with_vision](llm-network-resilience.md)（按序回退最多 3 张 vision=True 卡片，单次 60s）→ 描述文本替代 base64 进 tail 桶，话术固定：
+- 求值层命中帧哨兵 `@@IMGFEED@@<ts>@@data:…@@` 后先判宿主 vision 位；非视觉 → 先查 [img_desc_cache.db](image-input.md)（repo 级 SQLite，2026-10-27 · 二起），miss 才调 [describe_image_with_vision](llm-network-resilience.md)（按序回退最多 3 张 vision=True 卡片，单次 60s）并记录 → 描述文本替代 base64 进 tail 桶，话术固定：
 
   > 当前模型为非视觉，image_feed自动获取到实时画面，以下是视觉模型\<卡名\>对画面的描述：\<描述\>
 
-- **帧 hash 单槽缓存**（`self._imgfeed_cap`，跨组装不落存档）：画面没变（data URL md5 同）复用上次描述，**不重复花视觉调用**——桌面静止时不烧钱；画面一变即重新代看
 - 非哨兵输入（取帧失败的降级文案 `[image_feed 不可用：…]` 等）**原样透传**，不进代看链
 - 视觉模型零变化：照旧 base64 → image_url 块看像素
 
-**代价**：每张**新画面**一次视觉调用（缓存兜底）；瞬态语义不变（不落 events.jsonl / step 存档）。全链路视角见 [图片输入链路 · 图片代理描述](image-input.md)。
+**代价**：每张**缓存未命中的新画面**一次视觉调用（持久化缓存兜底，见下方后记）；瞬态语义不变（不落 events.jsonl / step 存档）。全链路视角见 [图片输入链路 · 图片代理描述](image-input.md)。
+
+### 后记：内存单槽退役——描述缓存改 repo 级 SQLite（2026-10-27 · 二，用户裁定）
+
+`_imgfeed_cap`（帧 hash 单槽，跨组装缓存）退役，描述查/写统一走 [img_desc_cache.db](image-input.md)（`src/img_cache.py`，repo 级 SQLite）：先查命中——帧没变 / **跨会话同帧 / 跨重启**同帧均零视觉调用——miss 才委托视觉卡片并记录。`_imgfeed_proxy_text` 对外行为不变（非哨兵输入原样透传）。
+
+持久化的增量价值：「桌面静止不烧钱」从**进程内**扩展到**跨会话**——换会话、重启引擎后同一画面不再重新代看（单测实锤：全新 Agent 实例零视觉调用命中）。机制全貌见 [图片输入链路 · 缓存升级后记](image-input.md)。
 
 ## 帧源 `tool:` 表达式：技能命令口造型 + 命名参数（2026-10-17，用户提案）
 

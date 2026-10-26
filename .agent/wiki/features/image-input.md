@@ -139,7 +139,7 @@
 
 | 场景 | 入口 | 行为 |
 |---|---|---|
-| **read_file 读图 / 工具产物图** | src/agent.py `_materialize_tool_result` | 图落盘 repo images/ 后按宿主 vision 分流：视觉模型 → `<img>{fn}</img>`（投影层 `_IMG_TAG_RE` 命中 → image_url 看像素）；非视觉 → 委托代看，**描述文本随工具结果返回（当步即知画面内容）**，`<img>` 标签照放（切视觉模型 / vision 子 agent 仍可回看像素） |
+| **read_file 读图 / 工具产物图** | src/agent.py `_materialize_tool_result` | 图落盘 repo images/ 后按宿主 vision 分流：视觉模型 → `[图片 {fn}，当前模型无视觉能力无法查看；如需理解图片内容，可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {fn}")）]`（投影层 `_IMG_TAG_RE` 命中 → image_url 看像素）；非视觉 → 委托代看，**描述文本随工具结果返回（当步即知画面内容）**，`<img>` 标签照放（切视觉模型 / vision 子 agent 仍可回看像素） |
 | **image_feed 实时画面** | src/session.py `_imgfeed_proxy_text` | 见 [image_feed · 非视觉宿主代看](image-feed.md)——描述替代 base64 注入 tail 桶，话术固定「当前模型为非视觉，image_feed自动获取到实时画面，以下是视觉模型\<卡名\>对画面的描述：…」 |
 
 **代看引擎**（src/llm_client.py `describe_image_with_vision(data_url, instruction="", tries=3, timeout=60.0)`）：
@@ -148,20 +148,39 @@
 - **独立临时 LLMClient**：`fallback_chain=[]`——单卡失败直接换下一卡，不滚全局回退链、不写冷却；单次 60s 超时；`scene=img_proxy` 记 llm_calls 流水可观测
 - 失败降级：一行提示（引导配置 vision 卡片），不炸轮；image_feed 侧取帧失败的降级文案原样透传，不进代看链
 
-**缓存（不重复花钱）**：
-
-| 侧 | 缓存 | 效果 |
-|---|---|---|
-| read_file / 工具产物图 | 描述按内容 hash 缓存，上限 20 条 | 同图重读零成本 |
-| image_feed 帧 | 帧 hash 单槽（`_imgfeed_cap`） | 画面没变复用上次描述（桌面静止不烧钱），画面一变即重新代看 |
+**缓存（不重复花钱）**：repo 级 SQLite 单源 `src/img_cache.py`（2026-10-27 · 二由两个内存缓存升级而来，用户裁定，详见下方后记）——两条触发路径统一先查 `~/.agt/repos/<repo_key>/img_desc_cache.db`，命中直接复用描述（跨 session / 跨重启共享，零视觉调用），miss 才调视觉模型并记录。
 
 **顺带修复**：`_materialize_tool_result` 此前实际输出的是**方括号死文本**（docstring 声称的 `<img>` 形态从未落地）——本次重写后视觉模型才真正能回看工具产物图。
 
 **占位文案同步更新**（src/session.py 投影层，非视觉分支）：`[图片 {n}：当前模型无视觉——若本条结果中附有「视觉模型代看」描述，直接阅读即可；需像素级查看可委托视觉子 agent（agent_prompt("vision", "请描述 图片 {n}")）]`——先读代看描述，不再一上来就劝派子 agent。插话路径（server.py `_materialize_user_images`）文案未动。
 
-**验证**：单测 11 项全过（`<img>` 产出 / 代看描述 / 缓存命中 / 视觉路径零调用 / image_feed 话术格式 / 降级透传 / 失败提示）；引擎层三文件（llm_client / agent / session），`/restart` 生效。注意**代看是真实 LLM 调用**：每张新图 / 每次画面变化一次视觉调用（缓存兜底见上表）。
+**验证**：单测 11 项全过（`<img>` 产出 / 代看描述 / 缓存命中 / 视觉路径零调用 / image_feed 话术格式 / 降级透传 / 失败提示）；缓存持久化后补测 16 项全过（含**跨重启零调用**实锤，见后记）。引擎层文件（llm_client / agent / session / img_cache 新增），`/restart` 生效。注意**代看是真实 LLM 调用**：每张缓存未命中的新图一次视觉调用（持久化缓存兜底见上）。
 
 **关联**：[vision 门控投影](#图片按视觉能力门控投影非视觉模型投影时即降文字占位2026-09-30commit-3591683随-v03011)（门控基建，本轮语义在其上扩展）· [端点拒图自愈](llm-network-resilience.md)（响应侧兜底）· [describe_image_with_vision](llm-network-resilience.md)（代看引擎）
+
+### 后记：缓存升级 repo 级 SQLite——img_desc_cache.db 跨 session/重启共享（2026-10-27 · 二，用户裁定）
+
+用户裁定（2026-10-27 同日）：「存一份这东西吧，可以是一个 .db 文件放在 ~/.agt/repos/ 里，两种情况触发时先查命中，miss 则调用视觉模型看图并记录」——把首版的两个内存缓存（read_file 侧 20 条 dict + image_feed 侧单槽 `_imgfeed_cap`）统一退役，收敛到 repo 级持久化单源 **`src/img_cache.py`**。
+
+**存储**：`~/.agt/repos/<repo_key>/img_desc_cache.db`（repo_key 与 toollog/repos 目录同款公式）——**同 repo 的所有 session、子 Agent、image_feed 帧共用一份**，跨重启有效：
+
+```sql
+CREATE TABLE img_desc (h TEXT PRIMARY KEY, model TEXT, descr TEXT, ts REAL)
+-- h = data URL 的 md5 前 16 位（base64 本体不落库，只存键）
+```
+
+**语义**：
+
+- 两条触发路径（`_materialize_tool_result` 工具结果物化 / `_imgfeed_proxy_text` image_feed 投影组装）统一走「先查命中 → miss 调 `describe_image_with_vision` → INSERT OR REPLACE 记录」
+- 同图重新代看会**更新记录**（OR REPLACE），不同图不撞键；连接模块级 `threading.Lock` 串行化
+- **容错**：缓存故障（文件锁 / 磁盘 / 损坏）一律吞掉按 miss 处理——不挡主流程，最多多花一次视觉调用
+- `_imgfeed_cap` 内存单槽与 20 条 dict 已删除——**单一真源就是 db**
+
+**验证**（16 项单测全过，临时脚本已清理）：基础存取 / OR REPLACE 更新 / 跨图不撞 / 坏 workspace 不炸；关键实锤——**全新 Agent 实例（无任何内存态）重读同图 → db 命中、视觉调用计数不变**（跨重启零调用）；image_feed 帧没变 / 跨会话同帧同样命中零调用。
+
+**生效**：引擎层三文件（img_cache 新增 + agent / session 接线），`/restart`。
+
+**⚠️ 实践坑（同轮撞出，已入长期记忆）**：非视觉模型会话里 read_file 回读**含 `<img>` 标签的源码段**时，标签会被投影层替换成占位文案显示——模型看到的不是真实源码文本。编辑这类代码段必须走行号 + 自写内容，**不能照抄回读文本**（否则占位文案会被写进代码）。磁盘真容无损，纯投影层显示行为。
 
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 
@@ -185,6 +204,7 @@
 - `image data N failed: invalid image data` —— base64 损坏或超尺寸上限
 - `1210 messages.content.type 参数非法，取值范围 ['text']` —— **端点不收图**（glm-5.3 等 chat completions 无视觉通道，视觉是 glm-4v/4.5v 系的活）；< 0.30.10 且卡片 vision 卡错时每轮 400，升级后自愈（拒图自动降级：图降文字占位同模型重试，见上节）
 - **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（2026-10-27 起工具产物图 / image_feed 帧自动委托视觉卡片代看，见上「非视觉模型图片代理描述」；插话图仍为占位 + 指路）
+- **回读含 `<img>` 标签的源码段，显示出来的是占位文案** —— 非视觉模型会话的正常投影行为（标签被 `_IMG_TAG_RE` 替换，2026-10-27 起）：磁盘真容无损；编辑此类代码段须走行号 + 自写内容，**不能照抄回读文本**（会把占位文案写进代码）
 - 本地模型（llama-server）不走 provider 白名单校验，但同样受 2048 边长经验约束
 
 ## 相关页面

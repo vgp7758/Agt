@@ -236,12 +236,15 @@ def _emit_plan(agent):
 def make_plan_tools(agent) -> list:
     """生成绑定到指定 Agent 的计划工具（创建/导航/查看/修改 共 7 个）。"""
 
-    def create_plan(title: str, steps: list, design: str = "") -> str:
+    def create_plan(title: str, steps: list, design: str = "", worker_id: str = "") -> str:
         """新建一个计划（新 id + 新文件，旧计划保留可被 list/join）并设为当前活动计划。
         title: 计划名称；steps: 步骤描述字符串数组；design: 可选，制定时的设计/目标/背景。
-        建成后每轮自动注入 SYSTEM；用 update_plan 标记进度，add_step/edit_plan 修改，exit_plan 退出。"""
+        worker_id: 可选，指派特定 sub-agent 实例执行本计划（如 worker-p_1b7df7e7——上一阶段的
+        施工 worker，可从团队看板/list_team 查到）。指派后引擎派发复用该实例（带它上一阶段的
+        session 记忆续接施工线）；留空=默认新开 worker-<plan_id>。"""
         if not isinstance(steps, list) or not steps:
             return "[错误] steps 必须是非空字符串数组"
+        wid = (worker_id or "").strip()
         plan = {
             "id": _gen_plan_id(),
             "title": (title or "未命名计划").strip() or "未命名计划",
@@ -251,10 +254,13 @@ def make_plan_tools(agent) -> list:
             "updated_at": _now_iso(),
             "created_session": getattr(agent.session, "name", None),
         }
+        if wid:
+            plan["worker_id"] = wid
         _save_plan(agent.session.workspace, plan)
         _set_active(agent, plan)
         _emit_plan(agent)
-        return f"已创建计划 {plan['id']}（{len(plan['steps'])} 步）：\n" + _plan_text(agent)
+        return (f"已创建计划 {plan['id']}（{len(plan['steps'])} 步）：\n" + _plan_text(agent)
+                + (f"\n\n👷 已指派 {wid} 执行（复用该实例续接施工线）。" if wid else ""))
 
     def join_plan(plan_id: str) -> str:
         """加入一个已存在的计划（按 plan_id 从本仓库加载），设为当前活动计划，每轮注入 SYSTEM。

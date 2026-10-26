@@ -282,9 +282,10 @@ def _step_to_plan_desc(step: dict, idx: int) -> str:
 
 def _build_plan_from_spec(workspace, spec: dict) -> dict:
     """把一个 approved spec 转成 plan_tools 的 plan dict（不落盘，由 plan_tools._save_plan 写）。
-    复用 plan_tools 的数据结构：id/title/design/steps。"""
+    复用 plan_tools 的数据结构：id/title/design/steps；worker_id（指派施工者，用户提案
+    2026-10-26）非空时一并传递——construction_dispatch 派发时复用该实例续接施工线。"""
     from plan_tools import _gen_plan_id
-    return {
+    plan = {
         "id": _gen_plan_id(),
         "title": spec.get("title", "未命名计划"),
         "design": (spec.get("design", "") or "") + f"\n\n[由 spec {spec.get('id')} 生成]",
@@ -295,6 +296,10 @@ def _build_plan_from_spec(workspace, spec: dict) -> dict:
         "created_session": spec.get("created_session"),
         "source_spec": spec.get("id"),
     }
+    wid = str(spec.get("worker_id") or "").strip()
+    if wid:
+        plan["worker_id"] = wid
+    return plan
 
 
 # ========== 工具 ==========
@@ -302,12 +307,14 @@ def _build_plan_from_spec(workspace, spec: dict) -> dict:
 def make_spec_tools(agent) -> list:
     """生成绑定到指定 Agent 的施工方案工具（探索/制定/批阅/施工 共 8 个）。"""
 
-    def create_spec(title: str, steps: list, design: str = "") -> str:
+    def create_spec(title: str, steps: list, design: str = "", worker_id: str = "") -> str:
         """新建一个施工方案 spec（draft 态，新 id + 新文件）。
         title: 方案名称；steps: 结构化步骤数组，每项 {file, action, anchor, content, rationale}：
                file=要改的文件路径；action∈create/insert/edit/replace/delete/move/review；
                anchor=定位（行号/函数名/锚串，如 'after _run_hooks(约605行)'）；content=要插入/替换的内容；
                rationale=为什么这么改。也接受纯字符串 step（降级为 review）。design: 可选，整体设计/思路。
+        worker_id: 可选，指派特定 sub-agent 实例执行（如 worker-p_1b7df7e7，可从团队看板/list_team 查到）——
+               通过后生成的 plan 会复用该实例续接施工线；留空=默认新开 worker-<plan_id>。
         建成后用 commit_spec 提交批阅；用户通过则自动建 plan 开始施工。"""
         if not isinstance(steps, list) or not steps:
             return "[错误] steps 必须是非空数组"
@@ -323,15 +330,22 @@ def make_spec_tools(agent) -> list:
             "created_session": getattr(agent.session, "name", None),
             "feedback": "",
         }
+        wid = (worker_id or "").strip()
+        if wid:
+            spec["worker_id"] = wid
         _save_spec(agent.session.workspace, spec)
         _set_active_spec(agent, spec)
         _emit_spec(agent)
         return (f"已创建施工方案 {spec['id']}（draft 态，{len(spec['steps'])} 步）：\n"
                 + _spec_text(spec)
+                + (f"\n\n👷 已指派 {wid} 执行（通过后复用该实例续接施工线）。" if wid else "")
                 + "\n\n用 commit_spec 提交批阅，或 regenerate_spec 据反馈重新生成。")
 
-    def commit_spec(spec_id: str = "") -> str:
+    def commit_spec(spec_id: str = "", worker_id: str = "") -> str:
         """提交一个 spec 供用户批阅（draft → committed）。spec_id 留空=提交当前活动 spec。
+        worker_id: 可选，指派特定 sub-agent 实例执行（如 worker-p_1b7df7e7，可从团队看板/
+        list_team 查到）——覆盖 create_spec 时的指派；通过后生成的 plan 复用该实例续接施工线，
+        留空=沿用 spec 里已指派的（若有）/ 默认新开 worker-<plan_id>。
         提交后【阻塞等待用户裁定】——你在 WebUI/CLI 看到 spec 详情后点「通过」或「返工」。
         通过 → 自动建 plan 开始施工；返工 → 返回反馈，你用 regenerate_spec 重新生成。"""
         import threading
@@ -343,6 +357,9 @@ def make_spec_tools(agent) -> list:
             return f"[错误] 找不到 spec {sid}"
         if spec.get("review_state") == "approved":
             return f"spec {sid} 已通过，无需再提交"
+        wid = (worker_id or "").strip()
+        if wid:
+            spec["worker_id"] = wid   # commit 时指派/改派（优先于 create_spec 时的值）
         spec["review_state"] = "committed"
         _save_spec(agent.session.workspace, spec)
         _set_active_spec(agent, spec)

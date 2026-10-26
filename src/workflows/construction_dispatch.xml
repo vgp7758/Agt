@@ -92,6 +92,12 @@ async def main(args):
         plan = json.loads(_plan_path(pid).read_text(encoding="utf-8"))
     except Exception as e:
         return {**_short, "reason": f"读计划 {pid}.json 失败: {type(e).__name__}: {e}（短路）"}
+    # 指派续接（用户提案 2026-10-26）：plan 带 worker_id → 派给该实例而非新开 worker-<pid>
+    # ——create_plan(title,steps,design,worker_id=...) / commit_spec(spec_id,worker_id=...) 可指派
+    # （如上一阶段的 worker-p_xxx，带它上一阶段的 session 记忆续接施工线）。
+    wid = str(plan.get("worker_id") or "").strip()
+    if wid:
+        aid = wid
     steps = plan.get("steps") or []
     done_all = bool(steps) and all(str(s.get("status")) == "completed" for s in steps)
     if not pid or not steps or done_all:

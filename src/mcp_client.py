@@ -32,6 +32,114 @@ try:
     from mcp.client.sse import sse_client
 except ImportError:
     sse_client = None
+# OAuth 2.1（用户提案 2026-10-29 · TapNow 接入）：streamable HTTP server 可声明 oauth:true
+# 走授权码 + PKCE + DCR + refresh_token 自动续期；token 持久化 ~/.agt/mcp_oauth/，重启免登。
+try:
+    from mcp.client.auth import OAuthClientProvider
+    from mcp.shared.auth import OAuthClientMetadata, OAuthToken, OAuthClientInformationFull
+except ImportError:
+    OAuthClientProvider = None
+
+
+def _file_token_storage(path: Path):
+    """TokenStorage 协议（duck-typing）的文件实现：tokens/client_info 落
+    ~/.agt/mcp_oauth/<server>.json。SDK 在每次请求前自查过期并用 refresh_token 续期，
+    续期结果经 set_tokens 落盘——重启免登。"""
+
+    class _Storage:
+        def _load(self):
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        def _save(self, d):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+        async def get_tokens(self):
+            d = self._load().get("tokens")
+            return OAuthToken.model_validate(d) if d else None
+
+        async def set_tokens(self, tokens):
+            d = self._load()
+            d["tokens"] = tokens.model_dump(mode="json")
+            self._save(d)
+
+        async def get_client_info(self):
+            d = self._load().get("client_info")
+            return OAuthClientInformationFull.model_validate(d) if d else None
+
+        async def set_client_info(self, info):
+            d = self._load()
+            d["client_info"] = info.model_dump(mode="json")
+            self._save(d)
+
+    return _Storage()
+
+
+_OAUTH_CB_PORT = 19877   # 本地回调端口（redirect_uri 声明与监听一致；避开常用段）
+
+
+def _make_oauth_provider(name: str, url: str):
+    """构造 OAuthClientProvider（授权码 + PKCE + DCR + 自动刷新，SDK 全内置）。
+    授权交互：redirect_handler 打授权 URL 到日志并自动开浏览器；callback_handler 在
+    127.0.0.1:19877 起单次 HTTP server 收 code/state（页面提示后自关）。"""
+    import webbrowser
+    import http.server
+    import urllib.parse
+    from socketserver import TCPServer
+
+    def _open_browser(auth_url: str):
+        print(f"[MCP OAuth] server '{name}' 需要授权——正在打开浏览器（未自动打开请手动访问）：\n"
+              f"  {auth_url}", flush=True)
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            pass
+
+    async def redirect_handler(auth_url: str):
+        import asyncio as _a
+        await _a.get_event_loop().run_in_executor(None, _open_browser, auth_url)
+
+    async def callback_handler():
+        box = {}
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                box["code"] = (q.get("code") or [""])[0]
+                box["state"] = (q.get("state") or [None])[0]
+                box["err"] = (q.get("error") or [""])[0] or (q.get("error_description") or [""])[0]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                msg = ("✅ 授权完成，可关闭此页返回 Agent。" if box.get("code")
+                       else f"❌ 授权失败：{box.get('err') or '未收到授权码'}")
+                self.wfile.write(("<meta charset='utf-8'><body style='font-family:sans-serif'>" +
+                                  msg + "</body>").encode())
+
+            def log_message(self, *a):
+                pass
+
+        srv = TCPServer(("127.0.0.1", _OAUTH_CB_PORT), _H)
+        t = threading.Thread(target=srv.handle_request, daemon=True)   # 单次请求即完成
+        t.start()
+        t.join(timeout=290)
+        srv.server_close()
+        if not box.get("code"):
+            raise RuntimeError(f"OAuth 回调未收到授权码（{box.get('err') or '超时/未完成授权'}）")
+        return box["code"], box.get("state")
+
+    meta = OAuthClientMetadata(
+        client_name="Agt Agent",
+        redirect_uris=[f"http://localhost:{_OAUTH_CB_PORT}/oauth/callback"],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",   # 公共客户端 + PKCE
+    )
+    store = _file_token_storage(Path.home() / ".agt" / "mcp_oauth" / f"{name}.json")
+    return OAuthClientProvider(url, meta, store, redirect_handler, callback_handler, timeout=300.0)
 
 # mcp_client.py 自身目录（保留备查）。注意：server 子进程的默认 cwd 现在跟随 chat.py
 # 的启动目录(cwd)，而不再锚定在这里——这样 .mcp.json 的查找目录(WORKSPACE=cwd)与 server
@@ -125,7 +233,9 @@ class MCPManager:
         servers = config.get("mcpServers", {})
         for name, cfg in servers.items():
             try:
-                self._run_coro(self._connect_one(name, cfg), timeout=60)
+                # OAuth 条目放宽到 330s（首连需浏览器授权交互；SDK provider 自身 300s 上限）
+                tmo = 330 if (cfg.get("oauth") and cfg.get("url")) else 60
+                self._run_coro(self._connect_one(name, cfg), timeout=tmo)
             except Exception as e:
                 print(f"[MCP] 连接 server '{name}' 失败：{type(e).__name__}: {e}")
 
@@ -135,7 +245,18 @@ class MCPManager:
             url = cfg["url"]
             transport = (cfg.get("transport") or ("http" if streamable_http_client else "sse")).lower()
             headers = cfg.get("headers")
-            if transport == "sse":
+            if cfg.get("oauth"):
+                # OAuth 2.1（授权码 + PKCE + DCR + 自动刷新）：token 持久化重启免登；
+                # 首连自动开浏览器授权，本机 19877 单次回调收 code（用户提案 2026-10-29）。
+                if OAuthClientProvider is None:
+                    raise RuntimeError("当前 mcp SDK 不含 OAuth 支持（pip install -U mcp 后重试）")
+                if transport == "sse":
+                    raise RuntimeError("OAuth 仅支持 streamable_http 传输")
+                if streamable_http_client is None:
+                    raise RuntimeError("当前 mcp SDK 不支持 streamable_http 传输")
+                provider = _make_oauth_provider(name, url)
+                ctx = streamable_http_client(url, headers=headers, auth=provider)
+            elif transport == "sse":
                 if sse_client is None:
                     raise RuntimeError("当前 mcp SDK 不支持 sse 传输")
                 ctx = sse_client(url, headers=headers) if headers else sse_client(url)
@@ -184,7 +305,9 @@ class MCPManager:
         if not cfg:
             raise RuntimeError(f"在 .mcp.json 中未找到 server '{name}'")
         self.sessions.pop(name, None)   # 断开旧会话（旧进程不主动杀，等 stack 一起清理）
-        self._run_coro(self._connect_one(name, cfg), timeout=60)
+        # OAuth 条目放宽（首连需浏览器授权交互；token 已缓存时几十 ms 直连不受影响）
+        self._run_coro(self._connect_one(name, cfg),
+                       timeout=330 if (cfg.get("oauth") and cfg.get("url")) else 60)
         print(f"[MCP] 已重连 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
 
     # —— 运行时直接连新 server（不依赖 .mcp.json，供 ensure_lsp 动态装配用）——
@@ -192,7 +315,8 @@ class MCPManager:
         """运行时连一个新 MCP server（直接吃 cfg dict：command/args/env/cwd）。
         同名已存在则先断开旧会话再连。供 ensure_lsp 等按需装配，无需重启 Agent。"""
         self.sessions.pop(name, None)
-        self._run_coro(self._connect_one(name, cfg), timeout=60)
+        self._run_coro(self._connect_one(name, cfg),
+                       timeout=330 if (cfg.get("oauth") and cfg.get("url")) else 60)
         print(f"[MCP] 已动态连接 '{name}'，发现 {len(self.sessions[name]['tools'])} 个工具")
 
     def sync_to_toolbox(self, toolbox) -> list:

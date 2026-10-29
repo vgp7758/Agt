@@ -77,7 +77,12 @@ def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool
     aid = getattr(target_agent, "agent_id", "") or ""
     reg = getattr(target_agent, "registry", None)
     try:
-        if getattr(target_agent, "busy", False):
+        # 忙判定（2026-10-29 worker-p_b9cc8f72 双循环并发实锤修复）：原 getattr(busy) 恒 False
+        # （Agent 对象根本没有 busy 属性——那是 server 侧 state）——bg 回执 owner 路由在
+        # worker 施工中照样起裸线程跑第二条 react 循环：同一 session 被两条循环交替写 steps
+        # （llm_calls 步号乱序/msgs 交叉共涨/顶窗双倍速提前折叠/连环中断归档）。改读 run()
+        # 维护的 _react_running 标志。
+        if getattr(target_agent, "busy", False) or getattr(target_agent, "_react_running", False):
             try:
                 if isinstance(seed, dict):
                     target_agent.push_message(message, source="bg_task", seed=seed, wake=True)
@@ -130,6 +135,10 @@ def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool
                         pass
 
         import threading as _th
+        # 起线程前先占位 _react_running（2026-10-29）：两条通知几乎同时到达时都看到
+        # False 的窗口——第二条会在 run() 尚未执行到置位处抢跑起第二条循环。此处
+        # 先置 True 抢锁（run() 内幂等再置，finally 统一复位）。
+        target_agent._react_running = True
         _th.Thread(target=_run_sub, daemon=True).start()
         return True
     except Exception:

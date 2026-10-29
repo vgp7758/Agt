@@ -2246,10 +2246,23 @@ class Agent:
                         session._current（resume_interrupted 弹回的轮）续 ReAct 循环：
                         user/steps 原样在投影里，跳过 before_turn 钩子与 user 事件（首轮已发过），
                         注入 resume 旁注引导模型从断点续做、不重复已完成步骤。
+
+        运行态标志（2026-10-29 worker-p_b9cc8f72 双循环并发实锤修复）：run 进入即置
+        _react_running=True、finally 复位——multiagent.deliver_notice 的忙判定读它
+        （bg 回执 owner 路由等异步唤醒据此排队而不是起裸线程并发起第二条 react 循环：
+        曾致同一 session 被两条循环交替写 steps——llm_calls 步号乱序/msgs 交叉共涨/
+        顶窗双倍速提前触发折叠投影骤降/连环「中断，本轮未完成」归档）。
         """
         # 用循环替代递归：自主继续时走下一轮迭代而不是 self.run() 递归
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
         seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
+        self._react_running = True
+        try:
+            return self._run_loop(msg, auto_flag, imgs, seeds, _resume_current, _msg_source)
+        finally:
+            self._react_running = False
+
+    def _run_loop(self, msg, auto_flag, imgs, seeds, _resume_current: bool, _msg_source: str) -> str:
         while True:
             # expect_reply 协议（2026-09-17·用户提案）：消息头 ⟨expect_reply:url⟩=发起方
             # remote_message(expect_reply=True) 派活后期望回执——剥头挂轮元数据（模型看不到

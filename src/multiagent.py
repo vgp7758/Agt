@@ -2250,14 +2250,20 @@ def make_subagent_tools(agent) -> list:
         try:
             import collections as _co
             srcs = {f"subagent:{a_}" for a_ in ids}
+            # 锁内只改内存+记数，rewrite 移到【锁外】——_inbox_persist_rewrite 内部要拿
+            # 同一把 _inbox_lock（threading.Lock 非重入）：锁内直调=同线程二次 acquire 自死锁
+            # （20055 实锤 2026-10-30：wait 期间子 Agent 完成→inbox 有 subagent:<aid> 副本→
+            # 去重删了条目→rewrite 卡锁内→busy=True 挂 7.4h，py-spy 栈 multiagent.py:2258→
+            # agent.py:1099 双栈帧实锤）。
+            removed = 0
             with agent._inbox_lock:
                 before = len(agent.inbox)
                 if before:
                     agent.inbox = _co.deque(it for it in agent.inbox if it[0] not in srcs)
-                    if len(agent.inbox) != before:
-                        agent._inbox_persist_rewrite()
-                        _LOG.info("wait_subagents 去重：移除 %d 条已由本工具返回的 inbox 副本",
-                                  before - len(agent.inbox))
+                    removed = before - len(agent.inbox)
+            if removed:
+                agent._inbox_persist_rewrite()
+                _LOG.info("wait_subagents 去重：移除 %d 条已由本工具返回的 inbox 副本", removed)
         except Exception:
             pass
         return "\n\n".join(out)

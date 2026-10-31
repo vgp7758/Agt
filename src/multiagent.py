@@ -1798,7 +1798,7 @@ def make_subagent_tools(agent) -> list:
         # 直接传 workspace 路径会「读取失败」，这里统一搬运后引用，两条根因一起堵住）。
         if images:
             from pathlib import Path as _P
-            import shutil as _sh
+            import shutil as _sh, hashlib as _hl
             from session import repo_images_dir as _rid
             _paths = images if isinstance(images, (list, tuple)) else [
                 x.strip() for x in str(images).replace("\n", ",").split(",") if x.strip()]
@@ -1808,10 +1808,17 @@ def make_subagent_tools(agent) -> list:
                 if not _fp.exists():
                     _miss.append(str(_p)); continue
                 try:
-                    _dst = _rid(WORKSPACE) / _fp.name
+                    # 内容指纹命名（用户报障 2026-10-31：改图后再看，vision 永远看到 repo images
+                    # 里的旧图——旧逻辑同名即跳过拷贝，滞留首版）。指纹形态 stem_<sha8>.ext：
+                    # 同图幂等（sha 同→同名→不重拷）；改图=新指纹=新文件——vision 立刻看到新版；
+                    # 历史轮里旧 <img>旧名</img> 仍指旧文件（历史不漂移——回看旧评估与当时图对得上）。
+                    _raw = _fp.read_bytes()
+                    _sha8 = _hl.sha256(_raw).hexdigest()[:8]
+                    _dst = _rid(WORKSPACE) / f"{_fp.stem[:48]}_{_sha8}{_fp.suffix or '.png'}"
                     if not _dst.exists():
                         _sh.copy2(_fp, _dst)
-                    _tags.append(f"<img>{_fp.name}</img>")
+                    # 标签用尖括号形态（投影端 _IMG_TAG_RE 只认 <img>；方括号长文案走不通短路）
+                    _tags.append(f"<img>{_dst.name}</img>")
                 except Exception:
                     _miss.append(str(_p))
             if _miss:

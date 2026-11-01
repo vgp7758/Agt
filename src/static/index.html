@@ -508,6 +508,24 @@
       </div>
     </div>
   </div>
+  <!-- 项目创建弹窗（p_2d4f784f 2026-11-19：body 级弹窗同 remoteAddModal——填一半不被 3s 看板刷新重置；
+       成员多选数据源 = /api/dash 的 remotes + team（排除主 Agent），零新端点） -->
+  <div id="projAddModal" style="display:none;position:fixed;inset:0;z-index:220;background:rgba(0,0,0,.35);align-items:center;justify-content:center" onclick="if(event.target===this)projAddToggle()">
+    <div style="background:#fff;border-radius:12px;padding:18px 20px;width:min(460px,90vw);box-shadow:0 12px 40px #0004;max-height:85vh;overflow:auto">
+      <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:12px">📁 创建项目组</div>
+      <input id="pjName" placeholder="项目名称（必填，如：官网改版）" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;margin-bottom:8px">
+      <input id="pjDesc" placeholder="说明（可空：这个项目要做成什么）" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;margin-bottom:10px">
+      <div style="font-size:12px;color:#5b6472;margin-bottom:4px">成员（多选：远程实例 + 本机 Agent）</div>
+      <div id="pjMembers" style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;max-height:180px;overflow:auto;margin-bottom:10px;font-size:12.5px"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#374151;margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="pjPatrol" checked> 每 5 分钟巡检（全员空闲且距上次派活 &gt;15 分钟 → 唤醒 coordinator 推进）
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="projAddToggle()">取消</button>
+        <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490" onclick="projAddSubmit()">创建</button>
+      </div>
+    </div>
+  </div>
    <!-- 后台服务看板：服务名/状态/pid，点击服务行展开折叠实时日志 -->
    <div id="svcPanel" class="agtdrawer">
      <div class="agtdrawer-head">
@@ -2892,6 +2910,41 @@ async function renderTeamDash(){
   const list = document.getElementById('teamList');
   if(!list) return;
   let h = '';
+  // —— 项目组区（p_2d4f784f 2026-11-19）：置顶——项目卡 = 成员点阵忙闲 + 计划链接 + 协调页 + 删除 ——
+  // 成员候选（创建弹窗多选用）：remotes + 本机 Agent（排除主）——存全局供 projAddToggle 填充
+  const projCands = [];
+  (d.remotes || []).forEach(r => projCands.push({id: r.server_id, kind: 'remote', label: `🌐 ${r.server_id}`}));
+  (d.team || []).forEach(e => { if(!['_main_','main'].includes(e.agent_id)) projCands.push({id: e.agent_id, kind: 'local', label: `🧑 ${e.name} [${e.agent_id}]`}); });
+  window._projCandidates = projCands;
+  const projects = d.projects || [];
+  h += `<div style="font-size:11px;color:#b45309;font-weight:700;margin:2px 0 6px;display:flex;align-items:center;gap:8px">
+    📁 项目组（${projects.length}）
+    <span style="color:#0e7490;cursor:pointer;font-weight:400;font-size:11.5px" onclick="projAddToggle()">＋ 创建</span>
+  </div>`;
+  projects.forEach(p => {
+    const dots = (p.members || []).map(m => {
+      const ic = m.busy === true ? '<span title="忙" style="color:#d97706">⏳</span>'
+               : m.busy === false ? '<span title="空闲" style="color:#059669">💤</span>'
+               : '<span title="不可达/未知" style="color:#9ca3af">❔</span>';
+      return `<span style="display:inline-flex;align-items:center;gap:2px;border:1px solid #fde68a;border-radius:10px;padding:1px 7px;background:#fffbeb" title="${esc(m.id)}（${esc(m.kind)}）${m.busy===true?'· 忙':m.busy===false?'· 空闲':'· 不可达/未知'}">${ic}<span style="font-size:11px;color:#5b6472">${esc(m.id)}</span></span>`;
+    }).join(' ');
+    const sch = p.schedule
+      ? `<span title="巡检任务 ${esc(p.schedule)}" style="color:#059669">✅ 巡检中</span>`
+      : '<span title="未挂巡检任务" style="color:#9ca3af">⚪ 无巡检</span>';
+    const plan = p.plan_file
+      ? `<span style="color:#1d4ed8;cursor:pointer;text-decoration:underline" onclick="openFilePreview('${esc(p.plan_file)}')" title="${esc(p.plan_file)}">📄 计划</span>` : '';
+    h += `<div style="border:1px solid #fcd34d;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b style="font-size:13px">${esc(p.name)}</b>
+        <span style="font-size:11px;color:#8a9099" title="项目 id">${esc(p.id)}</span>
+        ${sch} ${plan}
+        <a href="/agents/coordinator/" target="_blank" rel="noopener" title="打开协调 Agent 页面（巡检推进在这个页面对话）" style="color:#b45309;text-decoration:underline;font-size:12px">🧭 协调</a>
+        <span style="margin-left:auto;color:#b91c1c;cursor:pointer;font-size:12px" onclick="projDel('${esc(p.id)}','${esc(p.name)}')">✕ 删除</span>
+      </div>
+      ${p.desc ? `<div style="margin-top:2px;font-size:11.5px;color:#5b6472">${esc(p.desc)}</div>` : ''}
+      <div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">${dots || '<span style="font-size:11px;color:#9ca3af">（无成员）</span>'}</div>
+    </div>`;
+  });
   // 顺序：远程实例组在上、本机 Agent 组在下（用户裁定 2026-10-04）；
   // 「＋ 添加」改弹窗（body 级 remoteAddModal——不在 teamList 重渲染区，填一半不会被 3s 刷新重置）
   const remotes = d.remotes || [];
@@ -2943,6 +2996,50 @@ async function renderTeamDash(){
   }
   if(!locals.length && !remotes.length) h += '<div style="color:#8a9099;font-size:12px;padding:2px 0 10px">（无本地活跃 Agent）</div>';
   list.innerHTML = h;
+}
+// —— 项目组：创建/删除（p_2d4f784f 2026-11-19）——经 /api/tool/exec 调项目工具组，零新端点 ——
+function projAddToggle(){
+  const m = document.getElementById('projAddModal');
+  if(!m) return;
+  if(m.style.display === 'none'){
+    // 填成员多选（上一次 dash 数据的候选；无候选提示先 remote_connect/等看板就绪）
+    const cands = (window._projCandidates || []);
+    const box = document.getElementById('pjMembers');
+    box.innerHTML = cands.length
+      ? cands.map(c => `<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" value="${esc(c.id)}" data-kind="${c.kind}"> ${esc(c.label)}
+        </label>`).join('')
+      : '<span style="color:#9ca3af">暂无可用成员——先 remote_connect 添加远程实例，或等本机子 Agent 就绪</span>';
+    m.style.display = 'flex';
+  } else { m.style.display = 'none'; }
+}
+async function projAddSubmit(){
+  const name = (document.getElementById('pjName').value || '').trim();
+  const desc = (document.getElementById('pjDesc').value || '').trim();
+  const patrol = document.getElementById('pjPatrol').checked;
+  const ids = [...document.querySelectorAll('#pjMembers input[type=checkbox]:checked')].map(b => b.value);
+  if(!name){ toast('项目名称必填'); return; }
+  if(!ids.length){ toast('至少勾选 1 个成员'); return; }
+  const btnDisable = true;
+  try {
+    const r = await fetch('/api/tool/exec', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name:'create_project', arguments:{name, member_ids: ids, desc, patrol}})});
+    const j = await r.json();
+    if(!j.ok){ toast('创建失败：' + (j.error || j.result || '未知错误')); return; }
+    projAddToggle();
+    toast('✅ 项目「' + name + '」已创建（成员 ' + ids.length + ' · ' + (patrol ? '巡检已挂' : '无巡检') + '）');
+    renderTeamDash();
+  } catch(e){ toast('创建失败：' + e); }
+}
+async function projDel(pid, pname){
+  if(!confirm('删除项目「' + pname + '」？\n巡检任务一并取消，计划文档归档到 .trash。')) return;
+  try {
+    const r = await fetch('/api/tool/exec', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name:'delete_project', arguments:{project_id: pid}})});
+    const j = await r.json();
+    toast(j.ok ? ('已删除「' + pname + '」') : ('删除失败：' + (j.error || j.result)));
+    renderTeamDash();
+  } catch(e){ toast('删除失败：' + e); }
 }
 function remoteAddToggle(){
   // 弹窗开关（2026-10-04：内联表单被 3s 看板刷新重置——改 body 级弹窗，用户提案）

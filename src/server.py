@@ -1516,7 +1516,8 @@ async def api_dash():
     提案并入看板）：bg_id/工具名/运行态/rc/时长/输出行数/尾部输出——运行中排前、组内新的在前。
     无 Agent 时返回空结构（服务未接入时前端显示空态）。"""
     out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": [],
-           "fav_services": []}   # main.yml services 收藏名单（看板⭐态，2026-10-06）
+           "fav_services": [],   # main.yml services 收藏名单（看板⭐态，2026-10-06）
+           "projects": []}       # 项目组（.agent/projects.json 真源，p_2d4f784f 2026-11-19）
     if _agent is None:
         return out
     agent = _agent
@@ -1590,6 +1591,60 @@ async def api_dash():
                 _th.Thread(target=_bg_probe, daemon=True).start()
         except Exception:
             pass
+    except Exception:
+        pass
+    # —— 项目组（p_2d4f784f 2026-11-19：.agent/projects.json 真源 + 成员忙闲惰性探测）——
+    # 数据由 create_project（项目工具组）落盘；这里只读+探测：
+    #   remote 成员 → POST /api/status 拿 busy/session_turns；local 成员 → registry entry.status=="running"。
+    # 探测带 20s 结果缓存（前端 3s 轮询，remote 探测有网络开销，不能每次 dash 都打）；
+    # 探测失败/超时 busy=null（前端渲染 ❔，不假设）。
+    try:
+        import json as _pjson, time as _ptime, urllib.request as _pureq
+        _ppf = Path(".agent/projects.json")
+        if _ppf.exists():
+            _pdata = _pjson.loads(_ppf.read_text(encoding="utf-8")) or {}
+            _pnow = _ptime.time()
+            _pcache = getattr(api_dash, "_proj_probe", None)
+            if _pcache is None:
+                _pcache = api_dash._proj_probe = {}
+
+            def _proj_probe_member(m):
+                key = (m.get("id"), m.get("kind"))
+                hit = _pcache.get(key)
+                if hit and _pnow - hit[0] < 20:
+                    return hit[1]
+                busy, turns = None, None
+                try:
+                    if m.get("kind") == "remote":
+                        _req = _pureq.Request(str(m.get("url") or "").rstrip("/") + "/api/status",
+                                              data=b"{}", method="POST",
+                                              headers={"Content-Type": "application/json"})
+                        _st = _pjson.loads(_pureq.urlopen(_req, timeout=2).read().decode("utf-8"))
+                        if _st.get("ready"):
+                            busy, turns = bool(_st.get("busy")), _st.get("session_turns")
+                    else:
+                        _reg = getattr(agent, "registry", None)
+                        _e = _reg.lookup(m.get("id")) if _reg else None
+                        if _e is not None:
+                            busy = (getattr(_e, "status", "") == "running")
+                except Exception:
+                    pass
+                _pcache[key] = (_pnow, {"busy": busy, "turns": turns})
+                return _pcache[key][1]
+
+            for _prj in (_pdata.get("projects") or []):
+                _pf = Path(str(_prj.get("plan_file") or ""))
+                try:
+                    _pmtime = _pf.stat().st_mtime if _pf.exists() else 0
+                except Exception:
+                    _pmtime = 0
+                out["projects"].append({
+                    "id": _prj.get("id"), "name": _prj.get("name"), "desc": _prj.get("desc", ""),
+                    "schedule": _prj.get("schedule", ""), "created_at": _prj.get("created_at"),
+                    "plan_file": _prj.get("plan_file"), "plan_mtime": _pmtime,
+                    "members": [{"id": m.get("id"), "kind": m.get("kind"), **_proj_probe_member(m)}
+                                for m in (_prj.get("members") or [])],
+                })
     except Exception:
         pass
     # —— 后台服务（ServiceManager 结构化快照）——

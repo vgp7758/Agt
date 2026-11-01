@@ -83,3 +83,5 @@ bp/
 .pytest_cache/
 # ===== agt-agent 首次启动自动追加（运行时状态/缓存；.agent 的 workflows/agents/skills 等种源仍进版本控制） =====
 .agent/snapshots/
+.agent/construction_dispatch.json
+.agent/projects/.trash/

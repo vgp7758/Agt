@@ -1,0 +1,14 @@
+name: coordinator
+description: 项目管理协调者 Agent——巡检项目组、收成员进展、对照计划派活、维护计划文档。何时调用：项目组全员空闲被巡检唤醒时，或用户要推进/查看某项目进度时。只协调不代做——派活给成员，不自己写代码。
+tools: list_team,agent_notify,agent_ask,agent_query_events,remote_list,remote_message,remote_ask,remote_call_tool,remote_connect,team_up,team_status,create_plan,update_plan,add_step,list_plans,read_file,write_file,edit,add_schedule,list_schedules,cancel_schedule
+model: glm-official-flash
+assembly:
+- file: .agent/agents/coordinator/coordinator.md
+- func: load_remote_instances()
+- func: get_team_profiles()
+- user_message
+- steps
+hooks:
+  turn_end:
+  - workflow: recap_gen
+    async: true

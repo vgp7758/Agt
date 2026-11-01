@@ -1191,29 +1191,23 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
 
 def _inject_agent_enums(agent, tools_list):
     """给多 Agent 工具的参数注入动态 enum（合法值提示 + LLM schema 约束 + 编辑器下拉框）：
-    - agent_prompt / kill_agent 的 name：已声明子 Agent 名（.agent/agents/ 扫描）
+    - agent_prompt / kill_agent 的 name：已声明子 Agent 名（.agent/agents/ 扫描——声明文件变化才变，稳定）
     - agent_prompt 的 caller：['', 'user']（空=自动捕获 / user=fire-and-forget；显式 agent_id 仍可手填）
-    - 通信工具的 target_id：registry 当前全部 agent_id（动态性强，作为提示性候选）
-    enum 是提示性的（不在列表内的值仍可传），过期无害——create/kill 声明变化后重注入刷新。"""
+    enum 是提示性的（不在列表内的值仍可传），过期无害——声明变化后重注入刷新。
+
+    ⚠不再注入 target_id 的运行态 enum（8000 t1196·s4 断缓存 0% 实锤 2026-11-01）：
+    registry 的 agent_id 列表随每次派子 Agent变化（vision_5→vision_6…单调增长），
+    reg.add_on_change 回调即时刷新 → 四个通信工具 schema 变 → tools 是请求最首部，
+    变一个字节全前缀断（142.6K→0 命中，下一步恢复——间歇单步 0% 的根因）。
+    候选信息不丢：SYSTEM 团队清单已列 agent_id，LLM 手填即可；编辑器下拉同样可手填。"""
     try:
         names = sorted(a["name"] for a in load_agents_index(WORKSPACE))
     except Exception:
         names = []
-    reg_ids = []
-    reg = getattr(agent, "registry", None)
-    if reg:
-        try:
-            with reg._lock:
-                reg_ids = sorted(e.agent_id for e in reg._agents.values())
-        except Exception:
-            reg_ids = []
     for t in tools_list:
         props = (t.schema.get("function", {}).get("parameters", {}) or {}).get("properties", {})
         if t.name in ("agent_prompt", "kill_agent") and "name" in props and names:
             props["name"]["enum"] = names
-        if t.name in ("agent_ask", "agent_notify", "agent_query_events",
-                      "agent_query_tool_detail") and "target_id" in props and reg_ids:
-            props["target_id"]["enum"] = reg_ids
         if t.name == "agent_prompt" and "caller" in props:
             props["caller"]["enum"] = ["", "user"]   # 空=自动捕获 / user=fire-and-forget（显式 agent_id 也可手填）
 
@@ -2301,12 +2295,11 @@ def make_subagent_tools(agent) -> list:
                   Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)
-        # 注册表变化时自动刷新 target_id enum（2026-09-04·导演 session 教训：创建时快照的
-        # enum 只有 _main_，模型看枚举就传了 _main_ 误查自己、连跑三轮才绕出来——
-        # 子 Agent 创建/读档恢复/kill 后 enum 需自动跟上；同 subscriber_id 覆盖不叠列表）
-        _self_id = str(getattr(agent, "agent_id", "") or "_main_")
-        reg.add_on_change(_self_id, lambda: _inject_agent_enums(agent, list(agent.tools)))
-    _inject_agent_enums(agent, tools_list)   # name/caller/target_id 动态 enum（编辑器下拉 + LLM schema）
+        # （2026-11-01 移除 reg.add_on_change 重注入回调：target_id 的运行态 enum 已退役——
+        # registry 每次派子 Agent 都变，重注入会让四个通信工具 schema 变化 → tools 请求首部
+        # 变 → 全前缀断缓存（8000 t1196·s4 间歇 0% 实锤）。name enum 只随声明文件变化，
+        # 由下方 _agents_changed_cb 覆盖；target_id 候选在 SYSTEM 团队清单，模型手填。）
+    _inject_agent_enums(agent, tools_list)   # name/caller 动态 enum（编辑器下拉 + LLM schema）
     # 声明变化回调注入（2026-10-06）：write_file 落 .agent/agents/ 后刷新 name enum
     try:
         import real_tools as _rt

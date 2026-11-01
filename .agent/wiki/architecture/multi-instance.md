@@ -282,6 +282,16 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 
 **生效**：纯前端改动——浏览器刷新即见，无需 `/restart`；pip 安装的实例需同步 site-packages 才见（见 [ops · pip 实例跑的是 site-packages 实体](../guides/ops.md)）。
 
+## 团队看板 · 项目组区（置顶，2026-11-19 施工牌 p_2d4f784f）
+
+看板抽屉（`teamPanel`，`renderTeamDash`）顶部新增「📁 项目组（N）＋ 创建」区，排在远程实例组与本机 Agent 组**之前**：
+
+- **成员候选 = remotes + team**（排除主 Agent）——直接复用 `/api/dash` 已有两段数据，**零新端点**；创建/删除经 `/api/tool/exec` 调 `create_project` / `delete_project` 工具（工具组是唯一写盘方）。
+- **项目卡**：巡检态 + 📄 计划（打开 plan.md）+ 🧭 协调（新页签 `/agents/coordinator/`）+ ✕ 删除 + 成员点阵（⏳/💤/❔ 由 `/api/dash` 的 `projects[].members[].busy` 给，服务侧 20s 探测缓存）。
+- 创建弹窗 `projAddModal` 与远程实例添加弹窗同范式——**body 级、不在 3s 重渲染区**，填一半不会被刷掉。
+
+机制全貌（projects.json 真源 / 巡检唤醒 / coordinator SOP）见 [项目组](../features/projects.md)。
+
 ## remote_servers 连接表串台：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit aa73942，用户实锤）
 
 **用户实锤**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例，这个读取是不是串台了？」——9000 连了 director/scriptwriter，director 实例（8100）自己启动时也自动连上了 director（其中还是**自连**）。

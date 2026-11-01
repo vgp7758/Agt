@@ -55,6 +55,18 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 - **未收口的残留**：`ensure_gitignore` 只**追加**、不**删改**存量条目——被上一版种子写进 `.agent/` 的其它 repo 升级后不会自愈，需手工删那一行（本 repo 已删，其它实例自检一次）
 - **发版视角的连带口径**：发版工具 ① 工作区检查只看「脏不脏」，看不见 ignore 规则——**① 通过 ≠ 链路能跑**，被 ignore 的跟踪目录要到 ② 才炸（详见 [release_publish · 第六次实战](release-publish.md)）
 
+### 种子待补两条运行时条目（2026-11-19，项目组收尾实况）
+
+后续新增的运行时产物**本 repo 已手工补进 `.gitignore`，但种子尚未跟上**（新 repo 首启不会自动忽略）：
+
+| 条目 | 产物来源 | 种子状态 |
+|---|---|---|
+| `.agent/construction_dispatch.json` | 施工委托幂等标记（[施工委托](construction-delegation.md)） | ❌ 未入 `_GITIGNORE_SEED` |
+| `.agent/projects/.trash/` | `delete_project` 归档的计划目录（[项目组](projects.md)） | ❌ 未入 `_GITIGNORE_SEED`（2026-11-19 施工收尾手工加的，只作用于本 repo） |
+
+- 两条都是**纯运行时状态**，符合「只收运行时、不收种源」的口径——补进种子即可，不会重演 `.agent/` 整包忽略那类事故。
+- 反向提醒：`projects.json`（项目清单）与 `.agent/projects/<id>/plan.md`（计划文档）**是资产、要进版本控制**，别顺手忽略了——只忽略 `.trash/`。
+
 ## 验证
 
 

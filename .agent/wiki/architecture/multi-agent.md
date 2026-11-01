@@ -345,6 +345,17 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 **关联**：[施工委托 worker](#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（另一条非 LLM 派活入口——引擎侧）· [agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用语义出处）· [caller 汇报对象](#caller-汇报对象与动态-enum-注入2026-08)（`caller="user"` 的完整语义）· [多客户端 target 路由](../features/user-interaction.md#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（`@` 只在主 Agent 视图解析）。
 
+## coordinator 协调 Agent：只协调不代做的第四类子 Agent（2026-11-19，施工牌 p_2d4f784f）
+
+子 Agent 谱系里第四个「引擎/巡检依据状态派活」的成员（其余三个：施工委托 worker、doctor 自动派单、`@name` 用户直派），主体是**项目组**那套机制——协调者负责推进而不是干活。
+
+- **声明**：`.agent/agents/coordinator/`（目录形态）——`model: glm-official-flash`；装配 `file: coordinator.md` + `func: load_remote_instances()` + `func: get_team_profiles()` + `user_message` + `steps`；`turn_end: recap_gen`（async，看板可见）。
+- **工具面刻意收窄**（21 件，通信/查询/计划/团队类）：**无 run_python / run_shell / grep / explore**——「动手的活永远派给成员」在工具层硬约束，不是靠人设自觉；写盘只许维护 `.agent/projects/<id>/plan.md`。
+- **被谁唤醒**：项目巡检 schedule（`project-<id>-patrol`，每 5 分钟 code 型）在「全员空闲且 `last_dispatch` 超 15 分钟」时产出 🔔 消息注入**主 Agent**，主 Agent 转派 coordinator（引擎不直派）；用户也可直接问进度/指派某项。
+- **一轮只推进一轮**：收进展 → 对照里程碑派活（`remote_message` / `agent_notify`）→ 记「进行中」+ `last_dispatch` → 收尾汇报，不等成员干完。
+
+完整链路（数据真源、巡检判定、plan.md 骨架、看板项目区、`member_ids` 数组归一 bug、`.gitignore` 归档行）见 [项目组](../features/projects.md)。
+
 ## main.yml 热重载：改主 Agent DSL 免 /restart（2026-09-07，用户提案）
 
 **背景（用户观察：「改过 agent 的 DSL 以后似乎要 /restart 才生效？」）**——一半对一半错：

@@ -3098,7 +3098,56 @@ class Session:
         return sum(self._count_chars([m]) for m in msgs)
 
     def _compute_turn_chars(self, idx: int) -> dict:
-        """现算第 idx 轮的五级渲染字符数并写缓存（miss 自愈 / rewind 重算共用）。"""
+        """现算第 idx 轮的五级渲染字符数并写缓存（miss 自愈 / rewind 重算共用）。
+
+        跨 profile 校正快速路（2026-11-01 用户批准·20048 重启 2m47s 报障）：新 profile 键
+        miss 时先查该轮【其它 base】的旧行近似推算——level5（工具折叠档）与 base 无关直接
+        复用；level1-4 受截断影响按 base 比例近似（×clip(新/旧, 0.5, 2)）；归档轮图片恒
+        占位形态与 vision 位无关（10-23 步数门控），无额外校正。近似值只喂 tier 边界决策
+        （不进投影内容，byte-stable 渲染不受影响），误差保守方向（高估→早折叠不爆窗）。
+        选 base 最接近的旧行（偏差最小）。查不到旧行才走原真算路径。"""
+        conn = self._render_chars_db()
+        _pfx = ""
+        try:
+            _pfx = str(getattr(self.toollog, "_prefix", "") or "")
+        except Exception:
+            pass
+        if conn is not None and _pfx:
+            try:
+                _nb = int(self.detail_base)
+                try:
+                    _ns = int(self.detail_step or 0)
+                except Exception:
+                    _ns = 0
+                _best = None
+                for k, b, c1, c2, c3, c4, c5 in conn.execute(
+                        "SELECT k, base, c1, c2, c3, c4, c5 FROM render_chars WHERE k LIKE ?",
+                        (f"{_pfx}-%-%-{idx}",)):
+                    if k == f"{_pfx}-{_nb}-{_ns}-{idx}":
+                        continue   # 当前键的行不在这里消费（上层已 miss 才进来）
+                    try:
+                        b = int(b)
+                    except Exception:
+                        continue
+                    if _best is None or abs(b - _nb) < abs(_best[0] - _nb):
+                        _best = (b, c1, c2, c3, c4, c5)
+                if _best is not None:
+                    ob = max(_best[0], 1)
+                    _ratio = max(0.5, min(2.0, _nb / ob))
+                    d = {"base": _nb,
+                         5: int(_best[5]),                      # 工具折叠档与 base 无关
+                         **{lv: int(_best[lv] * _ratio) for lv in range(1, 5)}}
+                    self._render_chars_map()[idx] = d
+                    conn.execute("INSERT OR REPLACE INTO render_chars VALUES (?,?,?,?,?,?,?)",
+                                 (f"{_pfx}-{_nb}-{_ns}-{idx}", _nb, d[1], d[2], d[3], d[4], d[5]))
+                    conn.commit()
+                    return d
+            except Exception:
+                pass
+        turn = self.turns[idx]
+        d = {"base": int(self.detail_base)}
+        for lv in range(1, 6):
+            d[lv] = self._render_turn_at_level(turn, lv)
         turn = self.turns[idx]
         d = {"base": int(self.detail_base)}
         for lv in range(1, 6):

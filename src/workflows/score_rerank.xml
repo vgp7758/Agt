@@ -25,8 +25,19 @@
     <out name="hit" type="boolean"/>
     <out name="value" type="any"/>
   </node>
+  <node id="140004" type="selector" title="kw_route" x="1200" y="340">
+    <branch><cond op="11" left="140001.hit" right="" left_type="boolean"/></branch>
+  </node>
+  <node id="140005" type="subworkflow" title="kw_extract_fallback" x="1400" y="460" workflowId="extract_keywords">
+    <in name="user_message" type="string" ref="100001.query"/>
+    <out name="keywords" type="list"/>
+    <batch enabled="false"/>
+  </node>
+  <node id="140006" type="aggregator" title="pick_kws" x="1600" y="340">
+    <group name="keywords" type="list"><var ref="140001.value" type="any"/><var ref="140005.keywords" type="list"/></group>
+  </node>
   <node id="140002" type="plugin" title="kw_score" x="1320" y="80" toolName="kw_score">
-    <in name="keywords" type="list" ref="140001.value"/>
+    <in name="keywords" type="list" ref="140006.keywords"/>
     <in name="text" type="string" ref="loop-item"/>
     <out name="all_outputs" type="list" itemType="number"/>
     <out name="filtered_outputs" type="list" itemType="number"/>
@@ -64,7 +75,11 @@
   <edge from="120000" to="130001" port="true"/>
   <edge from="130001" to="130002"/>
   <edge from="120000" to="140001" port="false"/>
-  <edge from="140001" to="140002"/>
+  <edge from="140001" to="140004"/>
+  <edge from="140004" to="140006" port="true"/>
+  <edge from="140004" to="140005" port="false"/>
+  <edge from="140005" to="140006"/>
+  <edge from="140006" to="140002"/>
   <edge from="140002" to="140003"/>
   <edge from="130002" to="150001"/>
   <edge from="140003" to="150001"/>

@@ -2633,10 +2633,33 @@ def _current_turn_event(agent):
             "agent_id": getattr(agent, "agent_id", "_main_")}
 
 
+# 历史事件缓存（2026-10-30 用户新页签 30~120s 报障）：to_history 组装要 GIL——agent 轮的
+# CPU 段（投影组装/工具执行）把 server loop 挤到 20s+（实测 busy 21~24s vs idle 0.06s，
+# 与传输量无关——0.2MB）。轮结束后 turns 数不变 → 直接复用缓存秒回；当前轮实时性由
+# _current_turn_event 补发（既有机制），不损信息。
+_HIST_CACHE: dict = {}   # agent_id -> (turns_count, event_dict)
+
+
+def _history_cached(agent, name_override: str = "") -> dict:
+    key = getattr(agent, "agent_id", "") or "_"
+    try:
+        n = len(agent.session.turns)
+    except Exception:
+        n = -1
+    if not name_override:
+        c = _HIST_CACHE.get(key)
+        if c and c[0] == n:
+            return c[1]
+    ev = _history_event(agent, name_override)
+    if not name_override and n >= 0:
+        _HIST_CACHE[key] = (n, ev)
+    return ev
+
+
 def _broadcast_history(agent, name_override: str = ""):
     """广播主 Agent 的 session 历史——带 agent_id="_main_"（只刷与主 Agent 交互的客户端；
     其它页签正与子 Agent 交互时不会被主 session 的历史冲掉视图）。"""
-    ev = _history_event(agent, name_override)
+    ev = _history_cached(agent, name_override)
     ev["agent_id"] = "_main_"
     _broadcast(ev)
 
@@ -2834,7 +2857,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             # 真失效（registry 无此条目且无存档）：退回主 session（client target 一并复位）
             if client is not None:
                 client["target"] = "_main_"
-        await _send(ws, _history_event(agent))
+        await _send(ws, _history_cached(agent))
         # 补发进行中的轮（用户提案 2026-09-02）：新连接的客户端看到当前正在跑的步骤
         cur_ev = _current_turn_event(agent)
         if cur_ev:
@@ -3073,7 +3096,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                                  else f"✅ 已切换到与 '{target_id}' 直接交互"
                                       + ("（正在执行任务：消息将排队注入其当前轮）" if _busy else "")})
         if target_id == "_main_":
-            await _send(ws, _history_event(agent))
+            await _send(ws, _history_cached(agent))
         else:
             entry = reg.lookup(target_id)
             if entry and entry.agent:

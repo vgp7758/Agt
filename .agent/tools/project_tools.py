@@ -517,23 +517,43 @@ def _kr_lines(doc: dict) -> list:
     return [i for i, l in enumerate(doc["krs"]) if _re.match(r"\s*- \[[ xX]\]", l)]
 
 
-def okr_set(project_id: str, objective: str = "", kr_add: str = "", kr_remove: int = 0) -> str:
-    """商议期维护 OKR：改 Objective / 增删 Key Result（coordinator 专用，只写本项目的 okr.md）。
-    objective：新目标一句话（O 级改动应先与用户确认）；kr_add：新增一条 KR 文本；
-    kr_remove：删除第几条 KR（1 起，read okr 后按序号）。三参数可单独用，返回最新 OKR 概览。"""
+def okr_set(project_id: str, objective: str = "", kr_add: str = "",
+            kr_remove: int = 0, kr_index: int = 0, kr_owner: str = "") -> str:
+    """商议期维护 OKR：改 Objective / 增删 KR / 给 KR 标负责成员（coordinator 专用，只写本项目 okr.md）。
+    objective：新目标一句话（O 级改动应先与用户确认）；
+    kr_add：新增一条 KR 文本（与 kr_owner 同传 = 新增即带负责成员，行尾 @id 标记）；
+    kr_remove：删除第几条 KR（1 起）；
+    kr_index + kr_owner：给已有的第 kr_index 条 KR 标/改/清负责成员（kr_owner 留空=清除标记）。
+    三组参数可单独用，返回最新 OKR 概览。"""
     prj = _project_by_id(project_id)
     f = _okr_path(prj)
     doc = _parse_okr(f.read_text(encoding="utf-8"))
     changed = []
     if str(objective or "").strip():
-        # 替换 Objective 节正文（保留标题行）
         body = [l for l in doc["objective"] if l.strip().startswith("## ")]
         doc["objective"] = body + ["", str(objective).strip()]
         changed.append("Objective")
+    if kr_index:   # 仅显式指定序号时进入（kr_add 自带 owner 在下方分支处理）
+        owner = str(kr_owner or "").strip()
+        if owner:
+            mem_ids = [m.get("id") for m in (prj.get("members") or [])]
+            if owner not in mem_ids:
+                raise ValueError(f"kr_owner「{owner}」不是本项目成员（可选：{', '.join(mem_ids) or '（无）'}）"
+                                 "——先 add_project_member 或换成员")
+        idxs = _kr_lines(doc)
+        if not kr_index or kr_index < 1 or kr_index > len(idxs):
+            raise ValueError(f"kr_index 超界（1~{len(idxs)}；先 read okr 看序号）")
+        line = doc["krs"][idxs[kr_index - 1]]
+        core = line.split("@")[0].strip()   # 去旧 owner（保留勾选态与文本）
+        doc["krs"][idxs[kr_index - 1]] = (core + f" @{owner}") if owner else core
+        changed.append(f"KR{kr_index} 负责成员{'→@' + owner if owner else ' 已清除'}")
     if str(kr_add or "").strip():
         idx = next((i for i, l in enumerate(doc["krs"]) if not l.strip()), len(doc["krs"]))
-        doc["krs"].insert(idx, f"- [ ] {str(kr_add).strip()}")
-        changed.append(f"+KR「{str(kr_add).strip()[:30]}」")
+        newl = f"- [ ] {str(kr_add).strip()}"
+        if str(kr_owner or "").strip():
+            newl += f" @{str(kr_owner).strip()}"
+        doc["krs"].insert(idx, newl)
+        changed.append(f"+KR「{str(kr_add).strip()[:30]}」" + (f" @{kr_owner.strip()}" if str(kr_owner or '').strip() else ""))
     if kr_remove and int(kr_remove) > 0:
         lines = _kr_lines(doc)
         if int(kr_remove) > len(lines):

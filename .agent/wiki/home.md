@@ -118,3 +118,7 @@
 
 - **项目组体系落地（2026-11-19，施工牌 `p_2d4f784f` 五步全绿）**：项目 = 一组成员实例 + 一份 `plan.md` + 一个每 5 分钟巡检任务。三件套：`.agent/projects.json`（repo 级真源，工具组 `project_tools.py` 六件写盘）/ `.agent/projects/<id>/plan.md`（coordinator 维护的账本，末行 `last_dispatch` 驱动 15 分钟冷却）/ Scheduler 任务 `project-<id>-patrol`（全员空闲且久未派活 → 🔔 注入主 Agent → 转派 **coordinator**）。coordinator 是第四类「引擎/巡检依据状态派活」的子 Agent，**工具面刻意收窄 21 件、无 run_python/grep**——「只协调不代做」写在工具层。看板「项目组」区置顶（创建弹窗 → 项目卡 → 成员点阵 ⏳/💤/❔ → 计划/协调/删除），成员候选复用 `/api/dash` 的 remotes+team，**零新端点**（写走 `/api/tool/exec`）。**顺手修真 bug**：`create_project(member_ids=[...])` 传数组被 `str()` 成 `"['coder']"` 脏串 → 前端创建 100% 失败，已改宽容归一（list/tuple 逐项取）。删除是归档不是销毁（计划目录 rename 进 `.agent/projects/.trash/<id>-<ts>/`，`.gitignore` 补该行）。详见 [项目组](features/projects.md)、[coordinator](architecture/multi-agent.md#coordinator-协调-agent只协调不代做的第四类子-agent2026-11-19施工牌-p_2d4f784f)
 
+## 快速事实增补（2026-11-19 · 二 · 项目组 OKR 化：okr.md + 协调者与用户商议维护）
+
+- **项目组 OKR 化（2026-11-19 · 二，用户提案「在 dashboard 建，一个项目有一个类似 OKR 的东西，由协调者与用户商议和维护」）**：项目文档 `plan.md` → `okr.md`——**Objective** 一句话不轻改（O 级改动须用户点头）+ **Key Results** 2~5 条可验收复选项（能判「成/没成」）；产出方式改为 coordinator 与用户**商议**：用户提模糊愿望 → 提炼 KR → 复述确认落盘，KR 随演进增删。巡检/推进 SOP 全程对照 KR：找未勾项（同时只推进 1~2 条）→ 带验收标准派活 → 达标勾 `[x]` → 全勾完报「Objective 达成」。数据字段 `plan_file`/`plan_mtime` → `okr_file`/`okr_mtime`（project_tools + server.py 4 处改名）；看板项目卡「📄 计划」→「📄 OKR」。**生效两段式**：工具组已热重载（`create_project` 即产 OKR 项目，隔离冒烟全绿）；server.py / index.html 侧随下次 `/restart`（当前无存量项目，无感切换）。详见 [项目组 · OKR 化](features/projects.md)
+

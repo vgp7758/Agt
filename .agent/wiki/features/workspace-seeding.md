@@ -65,7 +65,7 @@ Agent 打开 SKILL.md 第一眼就是对照表——每个工具该拿这个包�
 | `.agent/projects/.trash/` | `delete_project` 归档的计划目录（[项目组](projects.md)） | ❌ 未入 `_GITIGNORE_SEED`（2026-11-19 施工收尾手工加的，只作用于本 repo） |
 
 - 两条都是**纯运行时状态**，符合「只收运行时、不收种源」的口径——补进种子即可，不会重演 `.agent/` 整包忽略那类事故。
-- 反向提醒：`projects.json`（项目清单）与 `.agent/projects/<id>/plan.md`（计划文档）**是资产、要进版本控制**，别顺手忽略了——只忽略 `.trash/`。
+- 反向提醒：`projects.json`（项目清单）与 `.agent/projects/<id>/okr.md`（OKR 文档；2026-11-19 · 二由 plan.md 改名）**是资产、要进版本控制**，别顺手忽略了——只忽略 `.trash/`。
 
 ## 验证
 

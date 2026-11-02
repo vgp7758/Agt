@@ -456,6 +456,154 @@ def patrol_projects() -> str:
     return msg or "（巡检：无全员空闲且过冷却期的项目——各项目仍在忙 / 刚派过活 / 探测不可达，静默不唤醒）"
 
 
+# ---------------------------------------------------------------- OKR 专用维护工具
+# （用户裁定 2026-11-02：coordinator 不给通用 edit/write_file——它唯一需要维护的就是 okr.md；
+#   专用工具物理上只能写 .agent/projects/<id>/okr.md，碰不了任何其它文件）
+
+def _project_by_id(pid: str) -> dict:
+    pid = str(pid or "").strip()
+    with _LOCK:
+        data = _load_projects()
+        for p in data["projects"]:
+            if p.get("id") == pid:
+                return p
+    raise ValueError(f"项目「{pid or '(空)'}」不存在（list_projects 查 id）")
+
+
+def _okr_path(prj: dict) -> Path:
+    f = _WORKSPACE / str(prj.get("okr_file") or "")
+    if not f.exists():
+        raise ValueError(f"OKR 文档不存在：{prj.get('okr_file')}（先 create_project 生成骨架）")
+    return f
+
+
+def _parse_okr(text: str) -> dict:
+    """okr.md → 节级行列表（objective/krs/ongoing/progress + 头部 + last_dispatch 行）。
+    KR 行保留原文（勾选状态在原行内替换，增删整行）——非模板形态也能容忍。"""
+    import re as _re
+    doc = {"head": [], "objective": [], "krs": [], "ongoing": [], "progress": [],
+           "last": None, "cur": "head"}
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("## "):
+            n = s[3:].lower()
+            doc["cur"] = ("objective" if ("objective" in n or "目标" in s) else
+                          "krs" if ("key result" in n or "关键结果" in s) else
+                          "ongoing" if "进行中" in s else
+                          "progress" if "进展" in s else "head")
+            doc[doc["cur"]].append(line)   # 标题行留在节内（重组时原位）
+            continue
+        if s.startswith("last_dispatch:"):
+            doc["last"] = line
+            continue
+        doc[doc["cur"]].append(line)
+    return doc
+
+
+def _render_okr(doc: dict) -> str:
+    out = []
+    out += doc["head"]
+    out += doc["objective"]
+    out += doc["krs"]
+    out += doc["ongoing"]
+    out += doc["progress"]
+    out.append(doc["last"] or "last_dispatch: 1970-01-01T00:00:00")
+    return "\n".join(out) + "\n"
+
+
+def _kr_lines(doc: dict) -> list:
+    """KR 节里的复选框行下标列表（跳过标题/说明行）。"""
+    import re as _re
+    return [i for i, l in enumerate(doc["krs"]) if _re.match(r"\s*- \[[ xX]\]", l)]
+
+
+def okr_set(project_id: str, objective: str = "", kr_add: str = "", kr_remove: int = 0) -> str:
+    """商议期维护 OKR：改 Objective / 增删 Key Result（coordinator 专用，只写本项目的 okr.md）。
+    objective：新目标一句话（O 级改动应先与用户确认）；kr_add：新增一条 KR 文本；
+    kr_remove：删除第几条 KR（1 起，read okr 后按序号）。三参数可单独用，返回最新 OKR 概览。"""
+    prj = _project_by_id(project_id)
+    f = _okr_path(prj)
+    doc = _parse_okr(f.read_text(encoding="utf-8"))
+    changed = []
+    if str(objective or "").strip():
+        # 替换 Objective 节正文（保留标题行）
+        body = [l for l in doc["objective"] if l.strip().startswith("## ")]
+        doc["objective"] = body + ["", str(objective).strip()]
+        changed.append("Objective")
+    if str(kr_add or "").strip():
+        idx = next((i for i, l in enumerate(doc["krs"]) if not l.strip()), len(doc["krs"]))
+        doc["krs"].insert(idx, f"- [ ] {str(kr_add).strip()}")
+        changed.append(f"+KR「{str(kr_add).strip()[:30]}」")
+    if kr_remove and int(kr_remove) > 0:
+        lines = _kr_lines(doc)
+        if int(kr_remove) > len(lines):
+            raise ValueError(f"kr_remove={kr_remove} 超界（当前 KR 共 {len(lines)} 条）")
+        i = lines[int(kr_remove) - 1]
+        changed.append(f"-KR{kr_remove}「{doc['krs'][i].strip()[:34]}」")
+        doc["krs"].pop(i)
+    if not changed:
+        return "（未变更：objective/kr_add/kr_remove 至少传一个）"
+    f.write_text(_render_okr(doc), encoding="utf-8")
+    return f"✅ okr.md 已更新（{prj['name']}）：{'；'.join(changed)}\n" + _okr_brief(doc)
+
+
+def okr_progress(project_id: str, kr_done: int = 0, progress: str = "") -> str:
+    """勾选达成的 KR / 追加进展记录（coordinator 专用）。kr_done：第几条 KR 达成（1 起，
+    勾 [x] 并自动在进展记录记一笔含时间戳）；progress：追加一段进展（可单独用）。"""
+    from datetime import datetime
+    prj = _project_by_id(project_id)
+    f = _okr_path(prj)
+    doc = _parse_okr(f.read_text(encoding="utf-8"))
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    changed = []
+    if kr_done and int(kr_done) > 0:
+        lines = _kr_lines(doc)
+        if int(kr_done) > len(lines):
+            raise ValueError(f"kr_done={kr_done} 超界（当前 KR 共 {len(lines)} 条）")
+        i = lines[int(kr_done) - 1]
+        import re as _re
+        doc["krs"][i] = _re.sub(r"^- \[[ xX]\]", "- [x]", doc["krs"][i].lstrip())
+        changed.append(f"KR{kr_done} ✅")
+        if not progress:
+            progress = f"KR{kr_done} 达成：{doc['krs'][i].strip()[6:40]}"
+    if str(progress or "").strip():
+        doc["progress"].append(f"- [{ts}] {str(progress).strip()}")
+        changed.append("进展+1")
+    if not changed:
+        return "（未变更：kr_done/progress 至少传一个）"
+    f.write_text(_render_okr(doc), encoding="utf-8")
+    return f"✅ okr.md 已更新（{prj['name']}）：{'；'.join(changed)}\n" + _okr_brief(doc)
+
+
+def okr_dispatch(project_id: str, ongoing: str = "", clear_ongoing: bool = False) -> str:
+    """派活记账（coordinator 专用，派完活立刻调，防下轮巡检重复派）：
+    ongoing＝整段替换「进行中」内容（每行一条：- [成员id] KR几：任务一句话（时间 派））；
+    clear_ongoing=true＝清空进行中段（收尾/全完成时）；两者都自动刷新 last_dispatch 为当前时间
+    （巡检冷却的锚点——不刷会被 5 分钟后的巡检再次唤醒）。"""
+    from datetime import datetime
+    prj = _project_by_id(project_id)
+    f = _okr_path(prj)
+    doc = _parse_okr(f.read_text(encoding="utf-8"))
+    body = [l for l in doc["ongoing"] if l.strip().startswith("## ")]
+    if clear_ongoing:
+        doc["ongoing"] = body + ["", "（空）"]
+        note = "进行中已清空"
+    elif str(ongoing or "").strip():
+        doc["ongoing"] = body + [""] + [l for l in str(ongoing).strip().splitlines() if l.strip()]
+        note = "进行中已更新"
+    else:
+        return "（未变更：ongoing / clear_ongoing 至少传一个）"
+    doc["last"] = "last_dispatch: " + datetime.now().isoformat(timespec="seconds")
+    f.write_text(_render_okr(doc), encoding="utf-8")
+    return f"✅ okr.md 已记账（{prj['name']}）：{note}；last_dispatch 已刷新（巡检 15 分钟冷却生效）"
+
+
+def _okr_brief(doc: dict) -> str:
+    krs = [l.strip() for l in doc["krs"] if _kr_lines(doc) and l.strip().startswith("- [")]
+    done = sum(1 for k in krs if k.startswith("- [x]"))
+    o = next((l.strip() for l in doc["objective"] if l.strip() and not l.strip().startswith(("#", "（"))), "（O 待商定）")
+    return f"  O：{o[:60]}\n  KR：{done}/{len(krs)} 达成" + ("\n  " + "\n  ".join(krs[:5]) if krs else "（KR 待商定）")
+
 # ---------------------------------------------------------------- 注册
 
 def agt_register(ctx=None):
@@ -470,4 +618,7 @@ def agt_register(ctx=None):
         {"name": "remove_project_member", "func": remove_project_member, "group": "项目", "version": 1},
         {"name": "delete_project", "func": delete_project, "group": "项目", "version": 1},
         {"name": "patrol_projects", "func": patrol_projects, "group": "项目", "version": 1},
+        {"name": "okr_set", "func": okr_set, "group": "项目", "version": 1},
+        {"name": "okr_progress", "func": okr_progress, "group": "项目", "version": 1},
+        {"name": "okr_dispatch", "func": okr_dispatch, "group": "项目", "version": 1},
     ]

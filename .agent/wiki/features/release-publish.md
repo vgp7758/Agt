@@ -249,6 +249,37 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码，`/reload tools` 即吃到新版 release_publish。
 
+## 第七次实战：v0.35.9（2026-11-19，part=patch）——② 半成功（push SSH DNS 解析失败），23 笔 + tag 待推（push-retry-0359 自动补推中）
+
+第七次生产运行，用户侧仍是一句「发补丁吧」。与 v0.35.0 / v0.35.2 / v0.35.5 / v0.35.8 同型——② 半成功、push 段断网；失败形态添新变体：**SSH DNS 解析失败**（前四次是 connect timed out / Network is unreachable，本次 `Could not resolve hostname ssh.github.com: No address associated with hostname`——连接还没发起就死在域名解析）。
+
+| 步骤 | 结果 |
+|---|---|
+| ① 工作区检查 | ✅ 通过 |
+| ② release.py 主体 | ⚠️ **半成功**——build ✓（`agt_agent-0.35.9-py3-none-any.whl` + `.tar.gz`）/ upload ✓（<https://pypi.org/project/agt-agent/0.35.9/>）/ **push ✗**：`ssh: Could not resolve hostname ssh.github.com` |
+| ③ version_file / ③.5 tag / ④ 端点验证 | ❌ 未执行（② 失败即中断，输出明示「后续步骤未执行」） |
+
+### 手工补尾（逐项补尾，不是重发）
+
+- PyPI 0.35.9 已上线（端点实测两件就位）——**绝不重发**（同版本号 upload 会被拒）
+- **③ version_file 补同步提交**：bump 后 `packaging/version_file.txt` 的字符串版本行（FileVersion / ProductVersion）仍停 `'0.35.8'`——run_python 全文替换 `'0.35.8' → '0.35.9'`（两行）+ 补提交 `49297c1 chore(release): 桌面版 version_file 同步 0.35.9`（VSVersionInfo 结构文件的字符串字段不在 release.py bump 的自动同步范围内，见首次实战「version_file 结构坑」一节——与 v0.35.5「③ 人工补尾转正」同款操作）
+- 本地 **23 笔 commit + tag `v0.35.9`** 待推；挂后台 `push-retry-0359`（每 600s 三级尝试：SSH 443 → SSH 22 → HTTPS 旁路，**推上后自动补打并推 tag**，成功才出声）——v0.35.8 起的后台补推机制第二次接管失败路径
+- tag 上岸 → 桌面版 GitHub Actions 自动构建（口诀不变：PyPI 上线 ≠ 桌面版会出包）
+
+### 本版收录清单（自 v0.35.8，21 笔含 14 功能）
+
+| 板块 | 内容 | 详情页 |
+|---|---|---|
+| 项目组 + 协调 Agent | 看板创建项目组（成员=远程实例∪本地子 Agent，忙闲点阵）；coordinator 窄工具面专职协调；OKR 体系（O+KR 骨架与用户商议维护、KR @owner 负责成员标记、专用三工具物理白名单只写本项目 okr.md）；每 5 分钟巡检自动推进 | [projects](projects.md) · [多 Agent · coordinator](../architecture/multi-agent.md) |
+| MCP OAuth 2.1 | Streamable HTTP 支持 OAuth 2.1：授权码 + PKCE + DCR + refresh 自动续期，token 持久化重启免登；重连路径 60s 硬编码超时同步放宽——TapNow 实弹验证 | [mcp-config](mcp-config.md) |
+| 非视觉图片代看 | read_file 读图 / image_feed 帧自动委托视觉卡片描述（按序回退 3 张 vision 卡）；描述 repo 级 SQLite 缓存（跨 session/重启零重复调用） | [image-input](image-input.md) · [image-feed](image-feed.md) · [LLM 客户端 · 九](llm-network-resilience.md) |
+| 施工指派 | create_plan / create_spec / commit_spec 带 `worker_id`——跨阶段施工线续接同一 worker | [施工委托 · 后记五](construction-delegation.md) |
+| WebUI | 资产控件悬停小按钮：📂 打开所在目录 / 📋 复制完整路径（纯 CSS 悬停 1s 渐显） | [bubble-interaction](bubble-interaction.md) |
+| 缓存三修 | 渲染字符缓存跨 profile 复用（重定型 2m47s→ms）/ `target_id` 动态 enum 退役（治单步断缓存命中 0%）/ 附图内容指纹命名 | [context-engine](../architecture/context-engine.md) · [多 Agent · enum 后记](../architecture/multi-agent.md) · [image-input](image-input.md) |
+| fix | wait_subagents 锁内自死锁（7.4h 卡死实锤）；deliver_notice 忙判定读真态（治并发双 react） | [多 Agent · wait_subagents](../architecture/multi-agent.md) · [background-scheduler](background-scheduler.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码——push 上岸前远端 repo 看不到本批提交。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)
@@ -262,6 +293,6 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 - ③ 失败只警告不阻断（⚠️）：version_file 推送异常需人工补，否则下次桌面版云构建用旧版本号
 - ③.5 同为只警告不阻断：tag 打推失败时报告附补推命令，人工补即可（v0.35.3 起自动，此前靠手工，见下条历史）
 - ④ 三连失败大概率只是索引同步延迟——按提示稍后手动确认即可，不代表发布失败
-- **② 半成功 ≠ 发布失败**（v0.35.0 / v0.35.2 / v0.35.5 三次实证，均在 push 段断网）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可）
-- **tag 已收口进链路（v0.35.3 起，③.5，commit `a9c0c72`）**：自动打推 + 失败附补推命令，**主链路全绿时 tag 零手工**（v0.35.5 实证修正：③.5 排在 push 之后，② 半成功时后续步骤不执行 → tag 依旧漏打、仍需手工补，见 [v0.35.5 一节](#第五次实战v03552026-10-18partpatch-半成功重现push-又断网tag-手工补打待推)）；此前 v0.35.0 / v0.35.1 / v0.35.2 三次实证「② 只推 **main 分支**、tag 需事后手工补打——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）」降为历史记录，老版本排障可回看 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)与 [v0.35.2 一节](#第三次实战v03522026-10-16partpatch-第三次半成功git-push-断网tag-由-agent-补打待推)
+- **② 半成功 ≠ 发布失败**（v0.35.0 / v0.35.2 / v0.35.5 / v0.35.8 / v0.35.9 五次实证，均在 push 段断网；失败形态从 connect timed out / Network is unreachable 到 DNS 解析失败俱全）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可，v0.35.8 起三级通道 + 上岸自动补 tag）
+- **tag 已收口进链路（v0.35.3 起，③.5，commit `a9c0c72`）**：自动打推 + 失败附补推命令，**主链路全绿时 tag 零手工**（v0.35.5 实证修正：③.5 排在 push 之后，② 半成功时后续步骤不执行 → tag 依旧漏打、仍需手工补，见 [v0.35.5 一节](#第五次实战v03552026-10-18partpatch-半成功重现push-又断网tag-手工补打待推)；v0.35.8 起后台 push-retry 任务在 push 上岸后自动补打并推 tag，失败路径也不再手工）；此前 v0.35.0 / v0.35.1 / v0.35.2 三次实证「② 只推 **main 分支**、tag 需事后手工补打——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）」降为历史记录，老版本排障可回看 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)与 [v0.35.2 一节](#第三次实战v03522026-10-16partpatch-第三次半成功git-push断网tag-由-agent-补打待推)
 

@@ -902,6 +902,12 @@ WebUI 上子 Agent 的实时输出与主 Agent 串台——同一轮 answer 气�
 
 **教训**：给 LLM 的枚举约束若源自动态数据源（registry 就是），必须有刷新通道——「创建时快照」只对静态数据成立。
 
+#### 后记：target_id 动态 enum 退役——治单步断缓存（随 v0.35.9）
+
+发布口径（v0.35.9「缓存三修」之一）：通信工具（agent_ask / agent_notify / agent_query_events 等）的 `target_id` **不再注入 registry 动态枚举**——动态枚举让 tools schema 随注册表漂移，每次变化等于前缀缓存断点前移（发布口径实测该形态缓存命中 0%，即「单步断缓存」）。退役后 `target_id` 回归自由字符串传参（传参语义不变），schema 恒定 → tools 段缓存稳定。
+
+上文「enum 快照过时 → on_change 订阅」的机制描述保留为历史记录；`agent_prompt`/`kill_agent` 的 `name`（声明扫描，仅声明增删时变）与 `caller`（静态 `['', 'user']`）两个 enum 不在本批退役范围。commit 号待后续施工轮补记。
+
 ### 三层全通：LLM schema → /api/tools → 编辑器下拉框
 
 `/api/tools`（server.py `api_tools`）此前只硬编码 `llm_call.model` 一条 enum 透传路；现改为**通用透传**——工具 schema 自带 enum 的参数一律原样带给编辑器（`llm_call.model` 保留 API 侧附加路径——它在 LIGHT_TOOLS 构造时无法静态声明 enum）。前端基建早已就位：`syncToolNode` 同步 enum（工具 schema 更新后已有节点选项跟着变）、`makeInputControl` 检测 enum 渲染 select 下拉（空值选项显示「（跟随）」）。

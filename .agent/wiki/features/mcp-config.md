@@ -152,6 +152,17 @@ CLI 子命令走 `src/chat.py` main() 入口——`/restart` 后即可使用。�
 
 随 v0.34.6 发布上 PyPI（2026-10-11，发布提交 38b2a3f）——已装旧版的实例 `pip install -U agt-agent` 即得，无需手编 mcp.json 的 CLI 通道开箱可用。
 
+## Streamable HTTP 支持 OAuth 2.1：授权码 + PKCE + DCR + refresh 自动续期（随 v0.35.9，TapNow 实弹验证）
+
+HTTP 型 MCP server 侧的鉴权升级：要求 OAuth 2.1 的 Streamable HTTP server（如 TapNow）此前无法接入——`src/mcp_client.py` 连接链路补全 OAuth 2.1 全流程。
+
+- **协议面**：授权码模式 + **PKCE** + **DCR**（动态客户端注册，首次连接自动注册客户端）；access token 过期由 **refresh token 自动续期**——不掉线、不要求人工重走授权
+- **token 持久化**：token 落盘——**重启免登**（进程重启后重连直接复用 / 静默刷新，不重新弹授权）
+- **顺带放宽**：重连路径的 60s 硬编码超时同步放宽（OAuth 握手 / 刷新挂在重连链路上，60s 不够用）
+- **实弹验证**：TapNow（OAuth 2.1 MCP server）连接 + 工具发现 / 调用全通
+- **配置入口不变**：WebUI 弹窗 / `agt mcp add` / mcp.json 手编三通道照旧——OAuth 流程对 agent 透明，连接即鉴权
+- 随 v0.35.9 上 PyPI；施工细节（mcp_client 内部函数面 / commit 号）本节暂缺，待后续轮次补记
+
 ## 注意事项
 
 - 状态徽章基于 mcp_mgr 当前会话快照——「未连接」可能是配置了但未启动/连接失败，点「🔄 状态」刷新

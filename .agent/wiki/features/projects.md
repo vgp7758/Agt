@@ -89,6 +89,10 @@ OKR 化后的骨架（2026-11-19 · 二重写，`plan.md` → `okr.md`）：**Ob
 
 commit 已落本地；GitHub 断网待补推（与此前积压同批）。
 
+## 随 v0.35.9 发布（2026-11-19）
+
+项目组全套（projects.json + okr.md + 巡检 schedule + coordinator 协调 Agent）随 **v0.35.9** 上 PyPI（<https://pypi.org/project/agt-agent/0.35.9/>）——首次对外发布。当日 git push 断网（SSH DNS 解析失败），23 笔 commit + tag `v0.35.9` 挂 `push-retry-0359` 后台自动补推（恢复后自动推 main + tag，tag 上岸触发桌面版 CI）——处置实录见 [release-publish · 第七次实战](release-publish.md)。
+
 ## 注意事项
 
 - **`.gitignore`**：本 repo 已加 `.agent/projects/.trash/`（归档产物不入库；`.agent/construction_dispatch.json` 同批在列）。⚠️ 首启种子 `_GITIGNORE_SEED`（src/agent_config.py）**尚未含这两行**——新 repo 需手工补或待种子更新。

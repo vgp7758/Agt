@@ -2,7 +2,7 @@
 
 项目 = 一组成员实例 + 一份计划文档 + 一个自动巡检定时任务：
   - 数据真源：.agent/projects.json（repo 级，随 git 走）——主 Agent / coordinator / 前端看板三方共用；
-  - 计划文档：.agent/projects/<id>/plan.md——coordinator 用 read/write/edit 维护，与用户商定的大计划落这里；
+  - 计划文档：.agent/projects/<id>/okr.md——coordinator 用 read/write/edit OKR 文档（Objective + Key Results）——coordinator 与用户商议维护；
   - 巡检任务：创建项目时自动 add_schedule（每 5 分钟 code 型）——全员 idle 且距上次派活
     >15 分钟 → 产出唤醒消息（注入主 Agent → 转派 coordinator）；非全 idle / 探测失败 → 静默。
 
@@ -134,7 +134,7 @@ def probe_member(member: dict, timeout: float = 4.0) -> dict:
 # ---------------------------------------------------------------- 巡检（步骤 4：schedule code 体）
 
 def _parse_last_dispatch(plan_text: str) -> float:
-    """从 plan.md 提取 last_dispatch 时间戳（行格式：last_dispatch: 2026-11-19T10:00:00）。
+    """从 okr.md 提取 last_dispatch 时间戳（行格式：last_dispatch: 2026-11-19T10:00:00）。
     无该行/解析失败 → 0.0（=从未派活，立即可唤醒）。"""
     from datetime import datetime
     for line in plan_text.splitlines():
@@ -166,7 +166,7 @@ def patrol_once() -> str:
             break
         if not all_idle:
             continue
-        plan_file = _WORKSPACE / str(prj.get("plan_file") or "")
+        plan_file = _WORKSPACE / str(prj.get("okr_file") or "")
         last = 0.0
         try:
             if plan_file.exists():
@@ -177,9 +177,9 @@ def patrol_once() -> str:
             continue              # 15 分钟内刚派过活，静默
         wake.append((f"🔔 项目《{prj.get('name')}》（{prj.get('id')}）全员空闲"
                      + ("" if not last else "，距上次派活已超 15 分钟")
-                     + "——请巡检推进：read " + str(prj.get("plan_file"))
-                     + " → agent_query_events / remote_ask 收各成员进展 → 对照计划派活或推进下一步"
-                     + "；派活后记得在 plan.md 更新 last_dispatch 与「进行中」段。"))
+                     + "——请巡检推进：read " + str(prj.get("okr_file"))
+                     + " → agent_query_events / remote_ask 收各成员进展 → 对照 OKR 派活或推进下一步"
+                     + "；派活后记得在 okr.md 更新 last_dispatch 与「进行中」段。"))
     return "\n\n".join(wake)
 
 
@@ -222,7 +222,7 @@ try:
                 break
             if not all_idle:
                 continue
-            plan = root / str(prj.get("plan_file") or "")
+            plan = root / str(prj.get("okr_file") or "")
             last = 0.0
             try:
                 if plan.exists():
@@ -239,9 +239,9 @@ try:
             if last and (now - last) < 900:
                 continue
             wake.append("🔔 项目《%s》（%s）全员空闲%s——请巡检推进：read %s → agent_query_events / remote_ask "
-                        "收各成员进展 → 对照计划派活或推进下一步；派活后记得在 plan.md 更新 last_dispatch 与「进行中」段。"
+                        "收各成员进展 → 对照 OKR 派活或推进下一步；派活后记得在 okr.md 更新 last_dispatch 与「进行中」段。"
                         % (prj.get("name"), prj.get("id"),
-                           "" if not last else "，距上次派活已超 15 分钟", prj.get("plan_file")))
+                           "" if not last else "，距上次派活已超 15 分钟", prj.get("okr_file")))
         result = "\\n\\n".join(wake)
 except Exception:
     result = ""
@@ -276,54 +276,56 @@ def _cancel_patrol_schedule(pid: str) -> None:
             pass
 
 
-# ---------------------------------------------------------------- 计划文档骨架
+# ---------------------------------------------------------------- OKR 文档骨架
 
-_PLAN_TEMPLATE = """# 项目 {name}
+_OKR_TEMPLATE = """# {name} — OKR
 
 - id：{pid}
 - 创建：{ts}
 - 成员：{members}
 - 巡检：每 {interval_min} 分钟（schedule：project-{pid}-patrol；全员空闲且距上次派活 >15 分钟时唤醒 coordinator）
 
-## 目标
+## Objective（目标）
 
-（与用户商定的大计划写在这里——要做成什么、验收标准是什么）
+（一句话说清这个项目最终要做成什么——与用户商定后填写；O 不轻易改，改前先和用户确认）
 
-## 里程碑
+## Key Results（关键结果）
 
-- [ ] （里程碑 1）
-- [ ] （里程碑 2）
+（2~5 条可验收的关键结果；完成勾选 [x]——coordinator 派活的依据就是这些 KR）
+
+- [ ] KR1（示例：可验收的具体结果）
+- [ ] KR2
 
 ## 进行中
 
-（coordinator 维护：谁在干什么 + 何时派的。派活前若此段非空且成员 idle——先问询再重派，防重复派活）
+（coordinator 维护：哪个 KR 正在推进、谁在干什么 + 何时派的。派活前若此段非空且成员 idle——先问询再重派，防重复派活）
 
 （空）
 
 ## 进展记录
 
-（各成员回报的进展按时间追加）
+（各成员回报的进展按时间追加；KR 达成时在此记一笔并勾选上方复选框）
 
 last_dispatch: 1970-01-01T00:00:00
 """
 
 
-def _write_plan_skeleton(prj: dict) -> Path:
-    plan = _WORKSPACE / PROJECTS_DIR / prj["id"]
-    plan.mkdir(parents=True, exist_ok=True)
-    f = plan / "plan.md"
+def _write_okr_skeleton(prj: dict) -> Path:
+    d = _WORKSPACE / PROJECTS_DIR / prj["id"]
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "okr.md"
     if not f.exists():
         members = ", ".join(f"{m['id']}({m['kind']})" for m in prj.get("members") or [])
-        f.write_text(_PLAN_TEMPLATE.format(name=prj["name"], pid=prj["id"], ts=prj["created_at"],
-                                           members=members or "（待添加）",
-                                           interval_min=PATROL_INTERVAL // 60), encoding="utf-8")
+        f.write_text(_OKR_TEMPLATE.format(name=prj["name"], pid=prj["id"], ts=prj["created_at"],
+                                          members=members or "（待添加）",
+                                          interval_min=PATROL_INTERVAL // 60), encoding="utf-8")
     return f
 
 
 # ---------------------------------------------------------------- 工具
 
 def create_project(name: str, member_ids: str, desc: str = "", patrol: bool = True) -> str:
-    """创建项目组：写 projects.json + 建 plan.md 骨架 + 自动挂每 5 分钟全员 idle 巡检 schedule。
+    """创建项目组：写 projects.json + 建 okr.md 骨架 + 自动挂每 5 分钟全员 idle 巡检 schedule。
     member_ids：逗号分隔的成员 id（remote 实例的 server_id ∪ 本地子 Agent 的 agent_id）。
     返回项目卡摘要（id/成员/巡检任务名）。"""
     name = str(name or "").strip()
@@ -347,17 +349,17 @@ def create_project(name: str, member_ids: str, desc: str = "", patrol: bool = Tr
         members = [resolve_member(mid) for mid in ids]
         prj = {"id": pid, "name": name, "desc": str(desc or ""),
                "members": members,
-               "plan_file": f"{PROJECTS_DIR}/{pid}/plan.md",
+               "okr_file": f"{PROJECTS_DIR}/{pid}/okr.md",
                "created_at": datetime.now().isoformat(timespec="seconds"),
                "patrol": bool(patrol),
                "schedule": ""}
         data["projects"].append(prj)
         _save_projects(data)
     prj["schedule"] = _ensure_patrol_schedule(prj, enabled=bool(patrol))
-    plan_file = _write_plan_skeleton(prj)
+    okr_file = _write_okr_skeleton(prj)
     lines = [f"✅ 项目「{name}」已创建（id: {pid}）",
              f"  成员：{', '.join(m['id'] + '·' + m['kind'] for m in members)}",
-             f"  计划：{plan_file}",
+             f"  OKR：{okr_file}（Objective/KR 骨架已就位——在 /agents/coordinator 页面与协调者商议填写）",
              f"  巡检：{'✅ ' + prj['schedule'] + '（每 5 分钟；全员空闲且距上次派活>15分钟时唤醒 coordinator）' if prj['schedule'] else '⚠️ 未挂（patrol=false 或 scheduler 不可用——可手动 add_schedule）'}"]
     if desc:
         lines.append(f"  说明：{desc}")
@@ -380,7 +382,7 @@ def list_projects(project_id: str = "", probe: bool = True) -> str:
     for prj in projects:
         out.append(f"  {prj.get('name')}（id: {prj.get('id')}）"
                    + (f" · {prj['desc']}" if prj.get("desc") else ""))
-        out.append(f"    计划：{prj.get('plan_file')} · 创建：{prj.get('created_at')}"
+        out.append(f"    OKR：{prj.get('okr_file')} · 创建：{prj.get('created_at')}"
                    + f" · 巡检：{'✅ ' + prj['schedule'] if prj.get('schedule') else '❌ 未挂'}")
         for m in prj.get("members") or []:
             mark = "  ·"
@@ -406,7 +408,7 @@ def add_project_member(project_id: str, member_id: str) -> str:
             return f"成员「{member_id}」已在项目「{prj['name']}」里（幂等，未变动）"
         prj["members"].append(member)
         _save_projects(data)
-    _write_plan_skeleton(prj)
+    _write_okr_skeleton(prj)
     return (f"✅ 成员「{member['id']}」（{member['kind']}）已加入项目「{prj['name']}」"
             f"（现 {len(prj['members'])} 人）")
 

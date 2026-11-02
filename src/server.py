@@ -1633,7 +1633,7 @@ async def api_dash():
                 return _pcache[key][1]
 
             for _prj in (_pdata.get("projects") or []):
-                _pf = Path(str(_prj.get("plan_file") or ""))
+                _pf = Path(str(_prj.get("okr_file") or ""))
                 try:
                     _pmtime = _pf.stat().st_mtime if _pf.exists() else 0
                 except Exception:
@@ -1641,7 +1641,7 @@ async def api_dash():
                 out["projects"].append({
                     "id": _prj.get("id"), "name": _prj.get("name"), "desc": _prj.get("desc", ""),
                     "schedule": _prj.get("schedule", ""), "created_at": _prj.get("created_at"),
-                    "plan_file": _prj.get("plan_file"), "plan_mtime": _pmtime,
+                    "okr_file": _prj.get("okr_file"), "okr_mtime": _pmtime,
                     "members": [{"id": m.get("id"), "kind": m.get("kind"), **_proj_probe_member(m)}
                                 for m in (_prj.get("members") or [])],
                 })

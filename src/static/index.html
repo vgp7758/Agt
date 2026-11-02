@@ -2931,8 +2931,8 @@ async function renderTeamDash(){
     const sch = p.schedule
       ? `<span title="巡检任务 ${esc(p.schedule)}" style="color:#059669">✅ 巡检中</span>`
       : '<span title="未挂巡检任务" style="color:#9ca3af">⚪ 无巡检</span>';
-    const plan = p.plan_file
-      ? `<span style="color:#1d4ed8;cursor:pointer;text-decoration:underline" onclick="openFilePreview('${esc(p.plan_file)}')" title="${esc(p.plan_file)}">📄 计划</span>` : '';
+    const plan = p.okr_file
+      ? `<span style="color:#1d4ed8;cursor:pointer;text-decoration:underline" onclick="openFilePreview('${esc(p.okr_file)}')" title="${esc(p.okr_file)}">📄 OKR</span>` : '';
     h += `<div style="border:1px solid #fcd34d;border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <b style="font-size:13px">${esc(p.name)}</b>

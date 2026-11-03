@@ -317,6 +317,13 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
             done_ev.set()
         elif t == "message_queued":          # 对方正忙：消息进了它的插话队列（也算送达）
             state["ack"] = True
+        elif t == "system":                  # 服务端 busy 分支的直发回执是 system 文案而非
+            # message_queued 类型（8000→20055 实锤 2026-11-04：消息实际入队并被消费，但回执
+            # 类型不匹配 → 客户端 10s 超时误报"未收到送达回执"）——按文案识别为送达：
+            # 已排队（插话队列）/已入队/已接收（转入新一轮）/已注入。
+            _tx = str(m.get("text") or "")
+            if any(_k in _tx for _k in ("已排队", "已入队", "已接收", "已注入")):
+                state["ack"] = True
 
     # 连接建立（带退避重试，2026-10-11 用户实锤：20048→tabletools:9014 偶发 WinError 10013——
     # 每条消息新建 WS 用完即断 → 主动关闭方堆积 TIME_WAIT（netstat 实测 25+ 条），

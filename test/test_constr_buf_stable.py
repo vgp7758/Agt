@@ -1,6 +1,6 @@
 # 施工投影缓冲（_constr_buf）字节稳定性验证（2026-09-15·用户提案，治 t861_s38-s76 命中率上蹿下跳）：
 #   turn 级 append-only——每 step 定型一次（full 形态 + 内嵌快照渲染），投影只拼不改。
-#   核心断言：早期 step 的投影字节在 step 数增长（跨组边界 GROUP_STEPS=10）后不变；
+#   核心断言：早期 step 的投影字节在 step 数增长（跨组边界 GROUP_STEPS=50）后不变；
 #   前一次投影恒为后一次的字节前缀（LCP == 旧全长 → 前缀缓存只增长不失配）。
 #   旧实现病灶：_steps_to_messages 每次投影按组差动态衰减 limit 重渲染早期 tool result
 #   （full→_summarize_text 形态跳变 + limit 递减字节变化），施工内嵌又把快照全文焊进
@@ -55,8 +55,9 @@ set_construction(s, True)
 s.start_turn("施工轮：逐步定型")
 prev_text = ""
 snapshots = []   # 各次投影串（跨组断言复用）
-N = 24   # 覆盖衰减区：step0 的 group_diff 在 21 步时 =2（旧实现 limit 衰减重截、实测前缀断裂
-         # 于 step21；缓冲路径定型不衰减——本测试锁定的正是这一点）
+N = 102  # 覆盖衰减区（GROUP_STEPS=50，2026-11-04 用户裁定 10→50）：step0 的 group_diff 在
+         # 101 步时 =2（cur_group=101//50=2）——旧实现在该点 limit 衰减重截；缓冲路径定型不衰减，
+         # 本测试锁定的正是这一点（GROUP_STEPS=10 时等价场景为 step21）
 for i in range(N):
     s.add_step(mk_step(s, i, f"f{i % 3}.py", f"v{i}.{i}"))   # 3 个文件轮着写（多文件快照并行）
     cur = serialize(s._seg_msgs_steps())
@@ -67,10 +68,10 @@ for i in range(N):
               f"LCP {'==' if cur.startswith(prev_text) else '<'} 旧全长 {len(prev_text)}")
     prev_text = cur
 
-# 跨组边界显式断言：step0 的块在 24 步后（group_diff=2 衰减区——旧实现 limit 重截点）字节与首次定型一致
+# 跨组边界显式断言：step0 的块在 102 步后（group_diff=2 衰减区——旧实现 limit 重截点）字节与首次定型一致
 first_block = snapshots[0]
 last_snap = snapshots[-1]
-check("跨组边界（24步·group_diff=2 衰减区）：step0 定型块字节不变",
+check("跨组边界（102步·group_diff=2 衰减区）：step0 定型块字节不变",
       last_snap.startswith(first_block),
       f"first={len(first_block)} last={len(last_snap)}")
 

@@ -42,7 +42,10 @@ from mdrender import render_cli   # /recall 回显 answer 时渲染表格/代码
 _LOG = logging.getLogger("agt.session")  # 直接用标准 logging（不 import log.py，避免循环）；handler 由 agent 配置时挂到 agt root
 
 # —— 当前轮 step 级投影策略（保思维链连贯；模型上下文窗口普遍够大，近若干步值得全量）——
-GROUP_STEPS = 10        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）
+GROUP_STEPS = 50        # 步分组大小：每 GROUP_STEPS 步一组，组内 limit 一致（byte-stable 利于前缀缓存）。
+                        # 用户裁定 2026-11-04：10 步一组太细——小毕业（组边界推进→更早组 full→摘要跳变+limit 回缩）
+                        # 每 10 步断一次前缀缓存，收益偏低；改 50。衰减斜率不变（GROUP_STEPS×detail_step/GROUP_STEPS
+                        # = detail_step 字/步），断点频率降为 1/5；副作用：组号差≤1 的全量窗口随之扩到最近 ~51-100 步。
 STEP_HOLD = 100         # 步数窗口折叠粒度（用户裁定 2026-10-23，替代 2026-10-20 的滞回余量版）：
                         # 首个顶窗线 = max_steps_per_turn（默认 200）；每次顶窗【折叠掉此前全部、
                         # 保留最近 STEP_HOLD 步】；触发线随折叠次数 +STEP_HOLD（200 → 300 → 400…）。

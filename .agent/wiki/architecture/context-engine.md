@@ -690,20 +690,20 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 
 老方案按步距衰减（distance×15 字符）——每走一步前面所有步 limit 全变，**轮内缓存每步全 miss**。
 
-新方案：每 `GROUP_STEPS=10` 步一组，组号差决定 limit：
+新方案：每 `GROUP_STEPS` 步一组，组号差决定 limit（**2026-11-04 起 GROUP_STEPS=50**，用户裁定 10→50，见下方后记；2026-08 初版为 10）：
 
 | 组号差 | limit |
 |--------|-------|
 | ≤1（当前组+上一组） | 全量（当前轮 FULL_STEP_CAP_CHARS=32000 上限；老轮用档位 base） |
-| ≥2 | `base - 10 × detail_step × 组号差`（≥DETAIL_FLOOR=20） |
+| ≥2 | `base - GROUP_STEPS × detail_step × 组号差`（≥DETAIL_FLOOR=20；=50 时即 `base - 50 × detail_step × 组号差`） |
 
-组内 10 步字节稳定 → **从"每步全变"变"每 10 步变一次"**，轮内跨步缓存命中大幅提升。
+组内字节稳定 → **从"每步全变"变"每 50 步变一次"**（10→50 后断点频率降为 1/5），轮内跨步缓存命中大幅提升。
 
 **`detail_step` per-provider 化（2026-08-30，commit 27fea56）**：步距衰减字数不再只有全局 settings 一档——models.json profile 可按 provider 覆盖（`session.detail_step` property：profile > settings > 15；clamp 0~200）。**0=不衰减**：所有组 limit 恒定、老步骤渲染字节永不回缩——DeepSeek 类 miss/hit 价差悬殊（~60x）的 provider 推荐配 0（宁可投影大也不让组边界衰减重截断缓存）；GLM（4x）用默认 15 平衡点即可（⚠️ 2026-09-15 起 settings 全局 15 已删——想要衰减须在模型卡片显式填，见下方「全局 detail_step 字段删除」）。详见 [per-provider 缓存经济学参数](#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)。
 
 ### 全局 detail_step 字段删除：只认模型卡片，未填默认 0（2026-09-15，commit 4ad2812，用户裁定）
 
-**诊断收尾（t877_s51 链闭环，2026-09-15）**：[cache_breakpoint 元组解包修复](../features/cache-tools.md) + 原参数重放确认 s51 断点本身是「正常断点」后，用户点破真正根因：「proxy 的步距衰减是全局的 15，s51 发生了**轮内小毕业**」——proxy 未在模型卡片配 `detail_step`，回落全局 settings 15 → 所有 ≥2 组号差的组 limit 持续回缩（`base − 10×15×组号差`）→ 同轮内更早步骤的渲染字节每过一组就变 → **组边界成了轮内缓存断点**。
+**诊断收尾（t877_s51 链闭环，2026-09-15）**：[cache_breakpoint 元组解包修复](../features/cache-tools.md) + 原参数重放确认 s51 断点本身是「正常断点」后，用户点破真正根因：「proxy 的步距衰减是全局的 15，s51 发生了**轮内小毕业**」——proxy 未在模型卡片配 `detail_step`，回落全局 settings 15 → 所有 ≥2 组号差的组 limit 持续回缩（当时口径 `base − 10×15×组号差`，GROUP_STEPS 尚为 10）→ 同轮内更早步骤的渲染字节每过一组就变 → **组边界成了轮内缓存断点**。
 
 **用户裁定（2026-09-15，commit `4ad2812`）**：「把全局步距衰减那个字段去掉，模型卡片的步距衰减不填就默认是 0，填了就按照填了的为准」。
 
@@ -731,6 +731,26 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 **验证**：残留引用扫描 0 + py_compile×4 + JS 语法 + 行为单测（未填→0、填 15→15）全过。改的是引擎层，`/restart` 生效。
 
 **对 t877_s51 类断点的效果**：proxy 卡片未填 → 衰减恒 0 → 轮内组边界**永不回缩** → 轮内小毕业的触发源消失（此前 s50→s51「断点在当前轮第 0 步、前缀 559K 全保」的场景变为完全命中）。
+
+### GROUP_STEPS 10→50：轮内小毕业断点频率降为 1/5（2026-11-04，用户裁定）
+
+**用户裁定（2026-11-04）**：「当前投影时轮内逻辑的每10步一次轮内小毕业，看起来收益偏低，调整为每50步一次吧」——10 步一组太细：每 10 步组边界推进一次 → 更早组（组号差≥2）`full→摘要` 形态跳变 + limit 回缩 `GROUP_STEPS × detail_step` 字 → **每 10 步断一次前缀缓存**；衰减换来的 token 节省不值这个断点代价。
+
+**改动**（src/session.py `GROUP_STEPS = 10 → 50`，一行 + 注释留痕；同步 test/test_constr_buf_stable.py 注释与覆盖点）：
+
+| 语义 | 改动前 | 改动后 |
+|---|---|---|
+| 轮内小毕业（断点）频率 | 每 10 步 | **每 50 步**（1/5） |
+| 衰减斜率（字/步） | detail_step | **不变**——`GROUP_STEPS×detail_step / GROUP_STEPS = detail_step` 自相抵，只是台阶间距从 10 步拉到 50 步 |
+| 全量窗口（组号差≤1） | 最近 ~11-20 步 | 最近 ~51-100 步（同源副作用：保真区随之变宽） |
+
+**测试覆盖力恢复**（test/test_constr_buf_stable.py「缓冲定型不变式：早期 step 的投影字节在 step 数增长后不变」）：该测试的覆盖点依赖组边界位置——GROUP_STEPS=50 下 step0 的 group_diff 要到 101 步才 =2（`101//50=2`，进入 limit 衰减重截区；GROUP_STEPS=10 时等价场景为 step21）→ **N 从 24 提到 102**，否则测试不再踩中它锁定的行为。
+
+**验证**：test_constr_buf_stable ALL PASS；`test_tier_shape_split.py` 11 passed、`test_recent_file_segment.py` PASS（`test_context_panic.py` 3 FAIL 为 HEAD 既有失败，stash 对照确认与本次无关）。
+
+**生效与收尾**：改的是引擎层，待 `/restart` 生效；commit 已落本地，push 挂 `push-retry-group-steps` 定时任务（10 分钟周期）网络恢复自动补推。
+
+**对 t877_s51 类诊断的影响**：触发条件不变（开启衰减才有组边界回缩，默认 detail_step=0 仍恒不回缩，见上节），只是断点密度降为 1/5、组号差算式换用 50——诊断口诀「断点位置乱跳 → 查衰减参数」照旧适用，诊断链见 [cache-tools · 诊断链闭环](../features/cache-tools.md#诊断链闭环断点本身正常根因--全局-detail_step15-的轮内小毕业2026-09-15-同日二轮commit-4ad2812)。
 
 ## 手动切模型 → 投影全量重刷：invalidate_projection（2026-09-30，用户提案，commit ce8ed57）
 

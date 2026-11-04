@@ -462,6 +462,7 @@ class LLMClient:
             _rc = ""
         self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=utility_model）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
+        self.on_switch = None       # Agent 注入：switch_model 尾部统一触发（用户切换/回退/冷却三路径）——档位建档 adopt-or-recalc 决策入口（meta.json 瘦身拆分 2026-11）
         # 初始建链：_user_model（构造时的 model_name）提前 + base 其余。此前只在 switch_model(_user_initiated)
         # 时才 _rebuild_chain——新建实例（utility 通道 / llm_call 的 model 参数缓存 / 子 Agent llm）链恒为空，
         # 限流耗尽 token 后走"无回退链"直接抛（钩子工作流里 429 冒泡的根因）。
@@ -608,13 +609,25 @@ class LLMClient:
     def switch_model(self, name: str, _user_initiated: bool = False) -> "LLMClient":
         """运行时热切换模型。Agent 与 Session 共用同一个 LLMClient 对象，切换即全生效。
         _user_initiated=True 时（/model 或 WebUI 切换）：记为 _user_model 并重建有效回退链
-        （user_model 提前到链首）；False 时（回退路径自动调用）：只换 profile，不动链。"""
+        （user_model 提前到链首）；False 时（回退路径自动调用）：只换 profile，不动链。
+        尾部统一触发 on_switch 钩子（meta.json 瘦身拆分 2026-11）：用户切换 / 回退 _advance /
+        冷却重试三条路径都经本方法——Agent 侧档位建档 adopt-or-recalc 决策在钩子里统一做，
+        回退路径此前根本不经过 Agent.switch_model（窗口副本不同步的已知缺口）由此修复。"""
+        _prev = {"model_name": self.model_name,
+                 "vision_supported": bool(getattr(self, "vision_supported", False))}
         self._apply_profile(config.get_profile(name))
         self.model_name = name
         if _user_initiated:
             self._user_model = name
             self._user_switch_epoch += 1   # 通知进行中的 chat 回退循环：链快照作废，从新链首重来
             self._rebuild_chain()
+        if self.on_switch:   # 统一切换钩子（fire after profile applied——钩子内指纹/窗口按新档判）
+            try:
+                # prev 带旧 provider 名/vision 位：钩子据此 flush 旧 provider 建档（此刻
+                # self.model_name 已是新档，直接取会把旧形态写进新 provider 的 tier 文件）
+                self.on_switch(name, _user_initiated, _prev)
+            except Exception as e:
+                _LOG.warning("on_switch 钩子失败（忽略，不影响切换本身）：%s", e)
         return self
 
     def set_fallback(self, chain, policy: Optional[str] = None) -> "LLMClient":

@@ -317,6 +317,10 @@ class Agent:
                              temperature=temperature, enable_thinking=enable_thinking)
         self.session = Session(system, llm=self.llm, recent_window_turns=recent_window_turns,
                                max_steps_per_turn=max_steps_per_turn, session_dir=session_dir)
+        # 统一切换钩子（meta.json 瘦身拆分 2026-11）：用户切换/回退 _advance/冷却重试都经
+        # llm.switch_model → 这里回调 _on_model_switch（窗口副本同步 + 旧形态 flush + 档位
+        # 建档 adopt-or-recalc）。主/子 Agent 各自注入（各自 session 独立建档，天然隔离）。
+        self.llm.on_switch = self._on_model_switch
         # —— 队友 recap 已读表（用户提案 2026-09-30）：观察到的队友 recap 变化 → 标脏
         # （看板/团队投影提示"从什么变成什么"），与该队友互动（agent_prompt/ask/notify/query、
         # remote_*）时清脏。挂在 session.extra_state 上随档持久化（重启延续已读状态）。
@@ -800,12 +804,37 @@ class Agent:
         """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。
         _user_initiated=True 时（用户 /model 或 WebUI 下拉框），llm 会重建有效回退链
         （把新模型提前到链首）；回退路径切换不传此参数，不动链。
-        切换后同步刷新 session 的窗口副本 + base 缓存（不同 profile 的
-        max_effective_context_window 不同——此前 session 里的是构造时旧值，
-        /context 与折叠计划在切模型后仍按旧窗口算）。"""
+        窗口副本同步 / 旧 provider 形态 flush / 档位建档 adopt-or-recalc 全部在
+        llm.on_switch 钩子（_on_model_switch）里统一做——本方法只负责名字指针，
+        防双触发（meta.json 瘦身拆分 2026-11：回退路径也走同一钩子，修复此前
+        回退时窗口副本不同步的缺口）。"""
         self.llm.switch_model(name, _user_initiated=_user_initiated)
-        self.model_name = name
+        self.model_name = name   # 钩子里也会同步；这里显式保留（钩子异常时不失联）
+
+    def _on_model_switch(self, name: str, user_initiated: bool, prev: Optional[dict] = None):
+        """llm.on_switch 统一切换钩子（用户切换 / 回退 _advance / 冷却重试三路径都经它）：
+        ① session 窗口副本 / fold_target_ratio / profile_detail_step / invalidate_detail_base
+           同步（原 Agent.switch_model 内联逻辑挪入——回退路径此前不同步的缺口修复）；
+        ② 旧 provider 形态 flush 落盘（tier_<旧provider>.json——用 prev 带来的旧名/旧指纹，
+           此刻 llm 已是新档，直接取当前值会把旧形态写错文件）；
+        ③ _decide_switch_shape：adopt 命中 → adopt_tier_shape（纯内存赋值，轮中同步安全）；
+           未命中（无建档/指纹变/超窗/recalc 策略）→ invalidate_projection(async_rebuild=True)
+           异步定型（React 下次装配经 _proj_lock 等待，回退发生在轮中也安全）；
+        ④ adopt 命中发一条系统提示（♻️ fc/边界数）。
+        prev：llm_client.switch_model 在 _apply_profile 之前抓的旧档快照
+        {model_name, vision_supported}——旧 provider 建档的指纹要用它合成。"""
+        prev = prev or {}
+        prev_name = str(prev.get("model_name") or self.model_name or "")
+        prev_vision = bool(prev.get("vision_supported",
+                                   getattr(self.llm, "vision_supported", False)))
+        # 旧 provider 指纹（窗口此刻还是旧值——必须在 ① 同步之前算）
         try:
+            old_fp = "|".join(str(x) for x in (prev_name, prev_vision,
+                                               self.session.max_effective_context_window))
+        except Exception:
+            old_fp = ""
+        try:
+            self.model_name = name
             self.session.max_effective_context_window = getattr(
                 self.llm, "max_effective_context_window", None)
             # per-provider 缓存经济学参数同步（fold_target_ratio / detail_step）——折叠目标线
@@ -813,17 +842,29 @@ class Agent:
             self.session.fold_target_ratio = getattr(self.llm, "fold_target_ratio", None)
             self.session.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
             self.session.invalidate_detail_base()   # 窗口变 → base 重推导（显式配置除外）
-            if _user_initiated:
-                # 投影全量重刷（用户提案 2026-09-30）：按新 profile 重定型全部惰性/
-                # 冻结投影——账本归一化、冻结轮渲染、施工缓冲、图片 vision 门控随新
-                # 模型能力重算。切模型本就断 provider 缓存 → 断点免费清账。
-                # 异步重定型（用户提案 2026-10-12）：apply_simple_tiering 放后台线程——
-                # 切模型命令立即返回（不再同步卡 REPL/React）；React 在下次
-                # messages_for_llm（llm.chat 前）经 _proj_lock 等待重定型完成后才组装发送；
-                # 后台失败保留待办标记，装配入口同步兜底消化。
-                self.session.invalidate_projection(f"模型切换→{name}", async_rebuild=True)
-        except Exception:
-            pass
+        except Exception as e:
+            _LOG.warning("_on_model_switch 窗口副本同步失败（忽略）：%s", e)
+        try:
+            self.session.flush_tier_shape(provider=prev_name, profile_fp=old_fp)  # 切走前保真旧形态
+        except Exception as e:
+            _LOG.warning("_on_model_switch 旧形态 flush 失败（忽略）：%s", e)
+        shape = None
+        try:
+            shape = self.session._decide_switch_shape(name)
+        except Exception as e:
+            _LOG.warning("_decide_switch_shape 失败（按重算处理）：%s", e)
+        if shape is not None:
+            # adopt 命中：纯内存赋值（内部含冻结渲染清 + 账本置 dirty，切 provider 断前缀
+            # 缓存 → 断点清账零成本）。⚠️ 不可再调 invalidate_projection——其 async_rebuild
+            # 会后台跑 apply_simple_tiering 把刚采用的建档整个覆盖掉。
+            self.session.adopt_tier_shape(shape)
+            self._emit({"type": "system",
+                        "text": f"♻️ 已采用 {name} 档位建档（fc={shape.get('fold_count', 0)}"
+                                f" 边界={len(shape.get('tier_boundaries') or [])}）"})
+        else:
+            # 未命中 → 异步全量重定型（apply_simple_tiering 放后台线程，切模型命令立即返回；
+            # React 下次 messages_for_llm 经 _proj_lock 等待重定型完成后才组装发送）
+            self.session.invalidate_projection(f"模型切换→{name}", async_rebuild=True)
 
     def _reload_main_dsl(self):
         """main.yml 热重载（mtime 惰性检测——用户提案 2026-09-07：改主 Agent DSL 免 /restart）。
@@ -1496,15 +1537,25 @@ class Agent:
             aid = ad.name
             if self.registry.lookup(aid):
                 continue  # 已注册（当前运行中的）
-            # 读 meta.json
-            meta_path = ad / "meta.json"
+            # 读 _agent_meta：extra_state.json 优先（meta.json 瘦身拆分新格式，顶层即
+            # extra_state），缺失/空回退 meta.json 旧字段 extra_state._agent_meta（老存档兼容）
             am = {}
-            if meta_path.exists():
+            es_path = ad / "extra_state.json"
+            if es_path.exists():
                 try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    am = (meta.get("extra_state") or {}).get("_agent_meta") or {}
+                    es = json.loads(es_path.read_text(encoding="utf-8"))
+                    if isinstance(es, dict):
+                        am = es.get("_agent_meta") or {}
                 except Exception:
                     pass
+            if not am:
+                meta_path = ad / "meta.json"
+                if meta_path.exists():
+                    try:
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        am = (meta.get("extra_state") or {}).get("_agent_meta") or {}
+                    except Exception:
+                        pass
             # 恢复状态修正：meta 存 running = 进程被杀时任务在跑（_bg 没来得及写终态）——
             # 重启物理上杀掉了所有 daemon 线程，恢复出的条目不可能还在跑。
             # 不修正的话看板谎报"忙"，攒批队列等忙碌消费者的判定会永久死锁

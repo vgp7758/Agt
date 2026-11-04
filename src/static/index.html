@@ -2305,6 +2305,10 @@ function renderModelList(){
         <label class="mi-check" title="多 token 成功后是否轮换到下一个（默认开：ModelScope 多号分摊配额）。GLM 等 prompt cache 按 token 隔离的 provider 取消勾选保持 sticky（缓存不被自己交错驱逐）">
           <input type="checkbox" ${m.token_rotate!==false?'checked':''} onchange="_modelData.models['${escName}'].token_rotate=this.checked"> token轮换
         </label>
+        <select title="切到/回退到本模型时的档位形态策略：采用=直接沿用本会话为该模型记录的 tier 建档（无建档/配置指纹变化/上下文超窗时自动重算）；重算=每次全量重新定型" onchange="_modelData.models['${escName}'].tier_policy=this.value" style="width:170px">
+          <option value="adopt" ${(m.tier_policy||'adopt')==='adopt'?'selected':''}>⚡采用记录形态（默认）</option>
+          <option value="recalc" ${m.tier_policy==='recalc'?'selected':''}>🔁每次重算定型</option>
+        </select>
       </div>
       <div class="mi-row">
         <input value="${esc(m.desc||'')}" placeholder="描述（显示用，会拼进模型下拉框）" onchange="_modelData.models['${escName}'].desc=this.value" style="flex:1;min-width:0">

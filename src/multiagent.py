@@ -1967,24 +1967,34 @@ def make_subagent_tools(agent) -> list:
                         _LOG.error("子 Agent %s 完成后路由 answer 失败: %s", _aid, route_err)
 
                 def _write_meta(status: str, recap: str = ""):
-                    """写 _agent_meta 到子 Agent 的 meta.json（start/done/failed 三时机）。"""
+                    """写 _agent_meta 到子 Agent 的 extra_state.json（start/done/failed 三时机）。
+                    meta.json 瘦身拆分（2026-11）：_agent_meta 随 extra_state 外置到独立旁车文件
+                    （顶层 dict 即 extra_state，与子 Agent session.save 落盘的同文件同构——
+                    派发时已写入 session.extra_state 内存，_write_meta 补终态/状态修正）。
+                    读端 _restore_subagents 双源兼容：extra_state.json 优先、缺失回退
+                    meta.json 旧字段 extra_state._agent_meta（老存档）。"""
                     if not _sub_dir:
                         return
                     try:
                         import json
-                        meta_path = _sub_dir / "meta.json"
+                        es_path = _sub_dir / "extra_state.json"
                         # 首次派发该子 Agent：agents/<id>/ 目录可能尚未建立（用户实测 2026-10-14 告警
                         # "写 _agent_meta 失败: No such file or directory ... agents/vision/meta.json"）
-                        meta_path.parent.mkdir(parents=True, exist_ok=True)
-                        meta = {}
-                        if meta_path.exists():
-                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                        meta.setdefault("extra_state", {})["_agent_meta"] = {
+                        es_path.parent.mkdir(parents=True, exist_ok=True)
+                        es = {}
+                        if es_path.exists():
+                            try:
+                                es = json.loads(es_path.read_text(encoding="utf-8"))
+                            except Exception:
+                                es = {}   # 损坏 → 重建（状态字段本函数是权威写者，无信息损失）
+                        if not isinstance(es, dict):
+                            es = {}
+                        es["_agent_meta"] = {
                             "agent_id": _aid, "name": _name, "model": _model,
                             "task": _prompt, "caller_id": caller_id,
                             "recap": recap, "status": status,
                         }
-                        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                        es_path.write_text(json.dumps(es, ensure_ascii=False, indent=2), encoding="utf-8")
                     except Exception as meta_err:
                         _LOG.warning("子 Agent %s 写 _agent_meta(status=%s) 失败: %s", _aid, status, meta_err)
 

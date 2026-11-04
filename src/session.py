@@ -884,6 +884,80 @@ class Session:
             return self.profile_detail_step
         return 0
 
+    # ========== 旁车持久化辅助（meta.json 瘦身拆分：extra_state/system_ledger/tier 建档外置） ==========
+    def _sidecar_write(self, path, data: dict) -> bool:
+        """旁车 JSON 原子写（.tmp + os.replace；PermissionError 短退避重试一次——与 meta.json
+        同款容错，2026-10-11 实测 WinError 5）。失败仅 warning 不阻塞：内存态仍是真相，
+        旁车丢失的兜底在 load 端（recalc / 回退 meta 旧字段）。"""
+        try:
+            p = Path(path)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            try:
+                os.replace(tmp, p)
+            except PermissionError:
+                time.sleep(0.2)   # 杀软/搜索索引瞬时锁文件的短退避（meta.json 同款）
+                os.replace(tmp, p)
+            return True
+        except Exception as e:
+            _LOG.warning("旁车写盘失败 %s（跳过，不影响内存态）：%s", path, e)
+            return False
+
+    def _sidecar_read(self, path) -> Optional[dict]:
+        """读旁车 JSON；不存在/损坏/非 dict 返回 None（读端双源回退的判据）。"""
+        try:
+            p = Path(path)
+            if not p.exists():
+                return None
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _tier_shape_path(self, provider: str):
+        """档位形态建档路径：session_dir/tier_<sanitize(provider)>.json
+        （sanitize 复用 _sanitize_session_name 同款正则；文件内 provider 字段二次校验防撞名）。"""
+        return Path(self.session_dir) / f"tier_{self._sanitize_session_name(provider or '')}.json"
+
+    def _save_tier_shape(self, provider: Optional[str] = None, profile_fp: Optional[str] = None) -> bool:
+        """当前档位形态快照 → provider 建档（tier_<provider>.json，可多 provider 并存）。
+        自带 provider/指纹/轮数快照——adopt 时校验保真（指纹变了=卡片窗口/vision 位变过，
+        旧形态失真须重算）。session_dir 未就绪/无 llm 静默跳过；失败仅告警（load 端缺失即 recalc）。
+        provider/profile_fp 覆盖参数：模型切换钩子在 llm 已换新档后 flush 旧 provider 形态用
+        （此刻 _profile_fingerprint() 已是新档值——直接取会把新指纹写进旧 provider 建档）。"""
+        sdir = getattr(self, "session_dir", None)
+        llm = getattr(self, "llm", None)
+        if sdir is None or llm is None:
+            return False
+        provider = provider or getattr(llm, "model_name", "") or ""
+        if not provider:
+            return False
+        data = {
+            "provider": provider,
+            "profile_fp": profile_fp or self._profile_fingerprint(),
+            "tiering_mode": getattr(self, "tiering_mode", ""),
+            "saved_at": int(time.time()),
+            "turns": len(self.turns),
+            "tier_boundaries": list(self._tier_boundaries),
+            "fold_count": int(self._planned_fold),
+            "sos_count": int(self._sos_count),
+            "sos_summary": self._sos_text,
+            "global_summary": self.global_summary,
+        }
+        return self._sidecar_write(self._tier_shape_path(provider), data)
+
+    def _read_tier_shape(self, provider: str) -> Optional[dict]:
+        """读 provider 建档并二次校验（data['provider']==provider——防 sanitize 撞名）。
+        缺失/损坏/provider 不符 → None（调用端走 recalc 兜底）。"""
+        if not provider:
+            return None
+        if getattr(self, "session_dir", None) is None:
+            return None
+        data = self._sidecar_read(self._tier_shape_path(provider))
+        if data and data.get("provider") == provider:
+            return data
+        return None
+
     # ========== 投影分段估算（/context 诊断用，只读） ==========
     def _save_proj_stats_sidecar(self, stats: dict) -> None:
         """投影分段统计旁车持久化（用户提案 2026-08-29）：session_dir/proj_stats.json
@@ -2203,21 +2277,7 @@ class Session:
             return self._planned_fold
         n = len(self.turns)
         target = self.fold_target()
-        prefix = [{"role": "system", "content": self.system}]
-        if self._task_guidance_provider:
-            try:
-                _tg = self._task_guidance_provider()
-                if _tg:
-                    prefix.append({"role": "system", "content": _tg})
-            except Exception:
-                pass
-        if self._ltm_static_provider:
-            try:
-                _b = self._ltm_static_provider()
-                if _b:
-                    prefix.append({"role": "system", "content": _b})
-            except Exception:
-                pass
+        prefix = self._tier_prefix_msgs()
         # ① 边界一次铺好（ascending 多重集；new_b 语义与 _graduate_once 对齐）
         bs: list = []
         if n > near_turns:
@@ -2235,33 +2295,8 @@ class Session:
         #    全量渲染）：每刀 _est 都是 _render_tiered_history 全量渲染 1441 轮（40MB toollog
         #    实测单次 ~13s）× ~14 刀。改用 O(n) 体量预扫描的代理估算做收敛判定（折半/sos
         #    迭代 0 次渲染），真渲染只在 sos 入口校准一次——不达标仍走既有 sos 补刀。
-        import bisect as _bisect
+        _w_sum, _w_tier, _pre_chars = self._shape_weight_tables(bs, prefix)
         _cpt = max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))
-        _fold_deep = config.load_fold_deep_tools()
-
-        def _cap_at(lv: int) -> int:
-            return max(self.detail_base >> max(0, lv - 1), DETAIL_FLOOR)
-
-        _w_sum = [0] * (n + 1)    # 轮 i 折进结构摘要段的体量（字符近似）
-        _w_tier = [0] * (n + 1)   # 轮 i 在阶梯档（raw / 折深按 bs 档位）的体量
-        for i in range(n):
-            _t = self.turns[i]
-            _bn = len(_t.user_message or "") + len(_t.answer or "") + len(_t.answer_reasoning or "")
-            _w_sum[i + 1] = _w_sum[i] + _bn + 60          # 摘要块包装
-            _lv = (_bisect.bisect_right(bs, i) + 1) if bs else 1
-            _cap = _cap_at(_lv)
-            _deep = _fold_deep and _lv > self.max_level
-            _tn = _bn
-            for _st in _t.steps:
-                _tn += len(_st.reasoning or "")
-                for _tc in _st.tool_calls:
-                    if _deep:
-                        _tn += 24                          # 折成一行标注
-                    else:
-                        _e = self.toollog.get(_tc.call_id)
-                        _tn += min(len((_e or {}).get("result") or ""), _cap) + 80
-            _w_tier[i + 1] = _w_tier[i] + _tn
-        _pre_chars = sum(len(str(m.get("content") or "")) for m in prefix)
 
         def _est_fast(k: int) -> int:
             k = max(0, min(int(k), n))
@@ -2329,6 +2364,139 @@ class Session:
         _LOG.info("简化分层定型：轮=%d 近窗=%d 边界=%d fc=%d est≈%d/预算%d（折半%d刀）",
                   n, near_turns, len(self._tier_boundaries), fc, _est(fc), target, cuts)
         return fc
+
+    # ========== 档位形态·按 provider 建档（meta.json 瘦身拆分 2026-11） ==========
+    def _tier_prefix_msgs(self) -> list:
+        """tier 估算的 prefix 段（apply_simple_tiering 与 _est_shape_chars 同口径）：
+        system + task guidance + ltm 静态段（provider 缺省/失败静默跳过）。"""
+        prefix = [{"role": "system", "content": self.system}]
+        if getattr(self, "_task_guidance_provider", None):
+            try:
+                _tg = self._task_guidance_provider()
+                if _tg:
+                    prefix.append({"role": "system", "content": _tg})
+            except Exception:
+                pass
+        if getattr(self, "_ltm_static_provider", None):
+            try:
+                _b = self._ltm_static_provider()
+                if _b:
+                    prefix.append({"role": "system", "content": _b})
+            except Exception:
+                pass
+        return prefix
+
+    def _shape_weight_tables(self, bs: list, prefix: list) -> tuple:
+        """O(n) 体量预扫描（apply_simple_tiering 与 _est_shape_chars 共用，零渲染）：
+        按 bs 边界构建前缀和表——
+          w_sum[i+1]：轮 i 折进结构摘要段的体量（原文 + 摘要块包装，字符近似）；
+          w_tier[i+1]：轮 i 在阶梯档（raw / fold_deep 折深按 bs 档位）的体量；
+          pre_chars：prefix 段字符合计。
+        返回 (w_sum, w_tier, pre_chars)。est 快口径与真实渲染有偏差——超窗误判放行由
+        panic 保命阀兜底（轮内应急折叠），可接受。"""
+        import bisect as _bisect
+        n = len(self.turns)
+        _fold_deep = config.load_fold_deep_tools()
+
+        def _cap_at(lv: int) -> int:
+            return max(self.detail_base >> max(0, lv - 1), DETAIL_FLOOR)
+
+        _w_sum = [0] * (n + 1)    # 轮 i 折进结构摘要段的体量（字符近似）
+        _w_tier = [0] * (n + 1)   # 轮 i 在阶梯档（raw / 折深按 bs 档位）的体量
+        for i in range(n):
+            _t = self.turns[i]
+            _bn = len(_t.user_message or "") + len(_t.answer or "") + len(_t.answer_reasoning or "")
+            _w_sum[i + 1] = _w_sum[i] + _bn + 60          # 摘要块包装
+            _lv = (_bisect.bisect_right(bs, i) + 1) if bs else 1
+            _cap = _cap_at(_lv)
+            _deep = _fold_deep and _lv > self.max_level
+            _tn = _bn
+            for _st in _t.steps:
+                _tn += len(_st.reasoning or "")
+                for _tc in _st.tool_calls:
+                    if _deep:
+                        _tn += 24                          # 折成一行标注
+                    else:
+                        _e = self.toollog.get(_tc.call_id)
+                        _tn += min(len((_e or {}).get("result") or ""), _cap) + 80
+            _w_tier[i + 1] = _w_tier[i] + _tn
+        _pre_chars = sum(len(str(m.get("content") or "")) for m in prefix)
+        return _w_sum, _w_tier, _pre_chars
+
+    def _est_shape_chars(self, bs, fc) -> int:
+        """档位形态估算 token（O(n) 预扫描，零渲染）：按给定边界/fc 快速估算当前 turns 的
+        投影体量——_decide_switch_shape 的 adopt 超窗判定用（用户要求『上下文超出新 provider
+        窗口也要重刷』）。prefix + tools schema 与 apply_simple_tiering 的 _est_fast 同口径。"""
+        n = len(self.turns)
+        if not n:
+            return 0
+        _w_sum, _w_tier, _pre_chars = self._shape_weight_tables(list(bs or []), self._tier_prefix_msgs())
+        _cpt = max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))
+        k = max(0, min(int(fc or 0), n))
+        _chars = _pre_chars + _w_sum[k] + (_w_tier[n] - _w_tier[k])
+        _schema = self._tools_schema_chars if getattr(self, "_tools_schema_chars", None) else 0
+        return int((_chars + _schema) / _cpt)
+
+    def _decide_switch_shape(self, name: str) -> Optional[dict]:
+        """切到 provider name 的档位形态决策（Agent._on_model_switch 与 load 异 provider 启动
+        共用同一决策函数，避免两套逻辑漂移；调用前提：llm 已 _apply_profile 新档——指纹/窗口
+        按新 profile 判）。校验链：policy=recalc → None；建档缺失 / 指纹不符（卡片窗口/vision
+        位变过，旧形态失真）/ est 超新窗口（win 空=不分档→视为通过）→ None（调用端重算定型）；
+        全部通过 → 返回建档 dict（调用端 adopt_tier_shape 采用）。"""
+        try:
+            policy = (config.get_profile(name) or {}).get("tier_policy", "adopt")
+        except Exception:
+            policy = "adopt"
+        if policy == "recalc":
+            _LOG.info("tier_policy=recalc（%s）→ 每次全量重算定型", name)
+            return None
+        shape = self._read_tier_shape(name)
+        if not shape:
+            _LOG.info("档位建档未命中（%s 首次接手或建档已丢失）→ 重算定型", name)
+            return None
+        _fp_now = self._profile_fingerprint()
+        if shape.get("profile_fp") != _fp_now:
+            _LOG.info("档位建档指纹不符（%s → 当前 %s）→ 重算：%s", shape.get("profile_fp"), _fp_now, name)
+            return None
+        win = getattr(self.llm, "max_effective_context_window", None)
+        if win:
+            est = self._est_shape_chars(shape.get("tier_boundaries") or [], shape.get("fold_count") or 0)
+            if est > int(win):
+                _LOG.info("档位建档超窗（est=%d > win=%d）→ 重算：%s", est, int(win), name)
+                return None
+        return shape
+
+    def adopt_tier_shape(self, shape: dict) -> None:
+        """采用 provider 建档（运行中切换 / load 异 provider 启动 adopt 命中）：
+        边界/fc/sos 越界钳制到 len(turns)（load 钳制段同款语义）→ 直接赋值 → 清冻结渲染 +
+        账本置 dirty（切 provider 必断前缀缓存 → 断点清账零成本）。
+        纯内存赋值 + 读小 JSON——回退发生在轮中也同步安全。"""
+        n = len(self.turns)
+        self._tier_boundaries = [b for b in (shape.get("tier_boundaries") or []) if 0 < b < n]
+        fc = max(0, min(int(shape.get("fold_count") or 0), n))
+        sos = max(0, min(int(shape.get("sos_count") or 0), n))
+        sos_text = str(shape.get("sos_summary") or "")
+        if fc <= sos:   # fc 过小时 sos 不适用（apply_simple_tiering 落位段同款：rewind/缩水场景）
+            sos, sos_text = 0, ""
+        if fc > 0:      # fc 之前的边界是死重（fc 与边界是同一折叠计划的两端，_plan_fold 每轮 prune）
+            self._tier_boundaries = [b for b in self._tier_boundaries if b >= fc]
+        self._planned_fold = fc
+        self._planned_graduates = 0
+        self._last_fold_count = fc
+        self._sos_count = sos
+        self._sos_text = sos_text
+        self.global_summary = str(shape.get("global_summary") or "")
+        if shape.get("tiering_mode"):
+            self.tiering_mode = str(shape.get("tiering_mode"))
+        self._frozen_renders.clear()   # 档位全变 → 冻结渲染必须重算
+        self.mark_system_dirty(f"采用 provider 档位建档（{shape.get('provider')}）")
+        _LOG.info("档位建档已采用：%s（fc=%d 边界=%d sos=%d turns=%d）",
+                  shape.get("provider"), fc, len(self._tier_boundaries), sos, n)
+
+    def flush_tier_shape(self, provider: Optional[str] = None, profile_fp: Optional[str] = None) -> bool:
+        """切换 provider 前保真旧 provider 形态（=_save_tier_shape 别名，语义命名供切换钩子调）。
+        provider/profile_fp 透传（钩子场景 llm 已换新档——显式传旧名/旧指纹）。"""
+        return self._save_tier_shape(provider=provider, profile_fp=profile_fp)
 
     def _apply_system_ledger(self, msgs: list) -> None:
         """system 段 append-not-replace 后处理（spec s_eb14a8fd；2026-09-12 用户提案；形态 A 修正）。
@@ -4485,7 +4653,10 @@ class Session:
     def save(self, name: Optional[str] = None) -> Path:
         """落盘 meta.json 到 session 专属文件夹。name 参数（可选）用于 /save <name> 改名另存——
         只改 meta.json 里的 name 字段，不挪文件夹（文件夹名始终是创建时间戳）。
-        文件夹未就绪（session_dir 为 None，新 session 还没 _ensure_name）时先创建。"""
+        文件夹未就绪（session_dir 为 None，新 session 还没 _ensure_name）时先创建。
+        meta.json 瘦身拆分（2026-11）：meta 只存纯会话元信息（name/created_at/system/窗口参数/
+        provider/profile_fp/saved_at/branch）；附加状态（extra_state）、system 账本、档位形态
+        分别落旁车 extra_state.json / system_ledger.json / tier_<provider>.json。"""
         if name:
             self.name = name  # /save <name> 改名：只改 self.name，meta.json 会写入新名
         self._capture_state()  # 落盘前收集 Agent 附加状态（plan/自主模式等），无论谁触发 save
@@ -4499,26 +4670,15 @@ class Session:
         # 锁保护「快照 turns + 序列化 + 写文件」整段：与 _autosave 的 daemon 线程、
         # 以及 /save 命令的并发写互斥；list(self.turns) 快照后，主线程 append 新 turn 不影响本次落盘。
         with self._save_lock:
-            # turns/toollog 不存这里——turns 走 events.jsonl（append-only 事件流），
-            # toollog 走 toollog.jsonl。meta.json 只存小体量元信息+状态，全量写无压力。
+            # meta.json 只存纯会话元信息（瘦身拆分 2026-11）——附加状态/账本/档位形态走下方旁车。
             data = {
                 "name": self.name or f"session_{int(self.created_at)}",
                 "created_at": self.created_at,           # 创建时间戳（文件夹名来源 + 排序依据）
                 "system": self.system,
-                "global_summary": self.global_summary,
                 "recent_window_turns": self.recent_window_turns,
                 "max_steps_per_turn": self.max_steps_per_turn,
-                "extra_state": self.extra_state,          # 附加运行时状态（plan/自主模式等）
-                # tier_boundaries 恢复持久化（2026-09-30 回滚——recalc-only 方案在长会话重启时
-                # 引发 _plan_fold 折叠螺旋：运行期演化出的"末端密集边界"（压力毕业/deepen 的多重集）
-                # 无法被卫生性规则复现 → 重启后 L0 窗口暴涨 → 逐步碎刀+全量重渲染 → 数分钟无响应 +
-                # fc 一路吃到 len(turns)（近期上下文全进摘要）。存档优先、缺失才 recalc 兜底）
-                "tier_boundaries": self._tier_boundaries,
-                "fold_count": self._planned_fold,           # 折叠计划持久化（缓存稳定）：重启沿用、未顶窗不清零
-                "system_ledger": self._system_ledger,       # system append-not-replace 账本（last_text 快照字节——重启后前缀仍稳定）
+                "provider": getattr(self.llm, "model_name", ""),  # 当前活跃 provider 指针：load 时与当前模型对比，不一致走切换决策（_decide_switch_shape）
                 "profile_fp": self._profile_fingerprint(),  # 投影相关 profile 指纹（load 时对比——变了才全量重刷，保住同模型重启的缓存延续）
-                "sos_count": self._sos_count,                # sos 档（用户提案 2026-10-02）：LLM 浓缩摘要覆盖的轮数
-                "sos_summary": self._sos_text,               # sos 叙事摘要（内容跨模型通用——切模型不重生成）
                 "saved_at": int(time.time()),
             }
             # 分支元数据（用户提案 2026-10-08）：分支会话才写——load 时据此合成
@@ -4537,6 +4697,23 @@ class Session:
                     os.replace(tmp_path, path)
             except Exception as e:
                 _LOG.warning("meta.json 落盘失败（内存继续，不阻塞）：%s", e)
+            # —— 旁车写盘（meta.json 瘦身拆分 2026-11）：状态与形态按归属分档落盘，同锁内
+            # 写完 meta 后依次落（与 meta 快照同代际，防跨文件半新半旧）；各自 try/except，
+            # 失败仅告警不阻塞——旁车丢失的兜底在 load 端（recalc / 回退 meta 旧字段）。
+            # tier_boundaries 存档优先语义不变（2026-09-30 回滚结论：运行期演化出的末端密集
+            # 边界无法被卫生性规则复现，缺失才 recalc 兜底）——只是从 meta 迁入 tier 建档。
+            try:
+                self._sidecar_write(sdir / "extra_state.json", self.extra_state)
+            except Exception as e:
+                _LOG.warning("extra_state.json 落盘失败（跳过）：%s", e)
+            try:
+                self._sidecar_write(sdir / "system_ledger.json", self._system_ledger)
+            except Exception as e:
+                _LOG.warning("system_ledger.json 落盘失败（跳过）：%s", e)
+            try:
+                self._save_tier_shape()
+            except Exception as e:
+                _LOG.warning("tier 建档落盘失败（跳过）：%s", e)
         return path
 
     def rename(self, new_name: str) -> str:
@@ -4599,19 +4776,8 @@ class Session:
         # （仅新文件夹结构支持——旧扁平迁移路径无主线可指）
         s.branch_meta = data.get("branch") if (isinstance(data.get("branch"), dict) and path.name == "meta.json") else None
         s._system_ledger = data.get("system_ledger") or {"last_text": "", "count": 0, "dirty": True}
-        # 投影 profile 指纹对比（用户提案 2026-09-30·对称切模型重刷）：存档与当前 profile
-        # 不一致（重启期间换过模型/能力位/窗口变）→ 账本置 dirty 归一化 + 冻结渲染等惰性态
-        # 本就为空会按新 profile 重算——首次请求即当前 profile 全量定型。一致 → 延续账本
-        # （同模型重启：新渲染==last_text → byte-stable，端点缓存 TTL 内命中——508 轮优化的前提）。
-        try:
-            _fp_now = s._profile_fingerprint()
-            if data.get("profile_fp") and data.get("profile_fp") != _fp_now:
-                s._system_ledger["dirty"] = True
-                s._simple_pending = True   # 异 profile 重启：load 完成后走简化分层定型（用户提案 2026-10-02）
-                _LOG.info("重启后 profile 变化（存档 %s → 当前 %s）——账本置 dirty，首次投影全量重刷",
-                          data.get("profile_fp"), _fp_now)
-        except Exception as e:
-            _LOG.warning("profile 指纹对比失败（跳过）：%s", e)
+        # （profile 指纹对比挪到 session_dir 就绪后——旁车双源恢复再校验，见下方 load 侧恢复段。
+        #   顺序要点：先读旁车账本再比对指纹，否则旁车的 dirty=False 会盖掉指纹比对置的 dirty。）
         # tier_boundaries：存档优先（2026-09-30 回滚 recalc-only）；缺失/空（旧存档或首次）才
         # 按卫生性规则重算兜底。运行期演化的末端密集边界（压力毕业多重集）只有存档能保真。
         s._tier_boundaries = list(data.get("tier_boundaries") or [])
@@ -4674,6 +4840,29 @@ class Session:
         # 必须早于 load_from_jsonl（counter 恢复用前缀判定）。
         if sdir and not s.toollog._prefix:
             s.toollog._prefix = _call_prefix_of(sdir)
+        # —— 旁车双源恢复（meta.json 瘦身拆分 2026-11）——extra_state / system_ledger 落各自
+        # 旁车文件，读到则覆盖 meta 旧字段；None（老存档无旁车/损坏）→ 维持 meta 旧字段原值
+        # （上面恢复段已按现状逻辑还原）。首次 save 后 meta 不再带旧字段，双源自然收敛单源。
+        _es = s._sidecar_read(sdir / "extra_state.json")
+        if _es is not None:
+            s.extra_state = _es
+        _sl = s._sidecar_read(sdir / "system_ledger.json")
+        if _sl is not None:
+            s._system_ledger = _sl
+        # 投影 profile 指纹对比（用户提案 2026-09-30·对称切模型重刷；位置在旁车账本恢复之后，
+        # 否则旁车的 dirty=False 会盖掉这里置的 dirty）：存档与当前 profile 不一致（重启期间
+        # 换过模型/能力位/窗口变）→ 账本置 dirty 归一化；一致 → 延续账本（同模型重启：
+        # 新渲染==last_text → byte-stable，端点缓存 TTL 内命中——508 轮优化的前提）。
+        # tier 建档命中分支会在下方决策树接管 dirty/_simple_pending 判定。
+        try:
+            _fp_now = s._profile_fingerprint()
+            if data.get("profile_fp") and data.get("profile_fp") != _fp_now:
+                s._system_ledger["dirty"] = True
+                s._simple_pending = True   # 异 profile 重启：load 完成后走简化分层定型（用户提案 2026-10-02）
+                _LOG.info("重启后 profile 变化（存档 %s → 当前 %s）——账本置 dirty，首次投影全量重刷",
+                          data.get("profile_fp"), _fp_now)
+        except Exception as e:
+            _LOG.warning("profile 指纹对比失败（跳过）：%s", e)
         # —— 分支基底链合成（用户提案 2026-10-08；v2 支持支线上再分叉：链式逐层收集）——
         # 在 events 判断之前（新建分支无自己的 events.jsonl，首次 load 也要有基底记忆）。
         # meta.branch 沿 branch_of 链逐层收集基底（根→叶）：主线层=主线 events 前N；支线层=支线
@@ -4778,6 +4967,49 @@ class Session:
             s._last_fold_count = min(s._last_fold_count, _nt)
         if s._sos_count > _nt:
             s._sos_count = _nt
+        # —— 档位形态恢复决策树（meta.json 瘦身拆分 2026-11）——
+        # 优先级：① tier_<cur>.json 建档命中（同 provider 重启：等价旧 meta 直读语义，
+        # 508 轮缓存优化原样保留；dirty 仅当文件指纹 ≠ 当前指纹）→ ② meta 旧档位字段沿用
+        # （老存档升级路径，上面恢复段已按现状逻辑还原，原样不动）→ ③ meta.provider ≠ 当前
+        # 模型（重启期间换了默认模型）：与运行中切换同款决策 _decide_switch_shape——adopt
+        # 命中采用该 provider 建档，未命中 _simple_pending=True（现状重算）→ ④ 无任何档 →
+        # 下方 tier_boundaries 兜底 recalc（2026-09-30 回滚语义不动）。
+        _cur = getattr(getattr(s, "llm", None), "model_name", "") or ""
+        _meta_provider = str(data.get("provider") or "")
+        _has_meta_shape = ("tier_boundaries" in data) or ("fold_count" in data) or ("sos_count" in data)
+        _shape = s._read_tier_shape(_cur)
+        if _shape:
+            # ① 同 provider 重启：直接采用文件形态（越界钳制同上方既有语义）
+            _tb = [b for b in (_shape.get("tier_boundaries") or []) if 0 < b < _nt]
+            s._tier_boundaries = _tb
+            s._planned_fold = max(0, min(int(_shape.get("fold_count") or 0), _nt))
+            s._last_fold_count = s._planned_fold
+            s._sos_count = max(0, min(int(_shape.get("sos_count") or 0), _nt))
+            s._sos_text = str(_shape.get("sos_summary") or "")
+            if _shape.get("global_summary"):
+                s.global_summary = str(_shape.get("global_summary"))
+            if _shape.get("tiering_mode"):
+                s.tiering_mode = str(_shape.get("tiering_mode"))
+            if _shape.get("profile_fp") and _shape.get("profile_fp") != s._profile_fingerprint():
+                s._system_ledger["dirty"] = True   # 卡片窗口/vision 位变过——形态结构仍可用，账本归一化
+            s._simple_pending = False   # 文件形态已接管：不叠加简化重算（同 provider 重启语义）
+        elif _has_meta_shape and (not _meta_provider or _meta_provider == _cur):
+            # ② 老存档升级路径（tier 文件缺失或尚未 autosave 新格式）：meta 旧字段沿用——上面
+            #    恢复段 + 越界钳制 + 指纹比对已是现状逻辑，这里原样放行（_simple_pending 保留）。
+            pass
+        elif _meta_provider and _meta_provider != _cur and _cur:
+            # ③ 重启期间换了默认模型：与运行中切换共用同一决策函数（避免两套逻辑漂移）
+            _sw = None
+            try:
+                _sw = s._decide_switch_shape(_cur)
+            except Exception as e:
+                _LOG.warning("异 provider 启动档位决策失败（按重算处理）：%s", e)
+            if _sw:
+                s.adopt_tier_shape(_sw)     # 内部含越界钳制 + 账本置 dirty
+                s._simple_pending = False
+            else:
+                s._simple_pending = True    # 未命中（无建档/指纹变/超窗）→ 现状重算（下方消化段）
+        # （④ 无任何档：_tier_boundaries 为空 → 下方兜底 recalc 原样生效）
         # tier_boundaries 兜底（2026-09-30 回滚）：存档缺失/空（旧存档/异常）才按卫生性规则重算；
         # 正常路径存档优先——运行期演化的末端密集边界只有存档能保真（recalc-only 曾致折叠螺旋）
         if not s._tier_boundaries:

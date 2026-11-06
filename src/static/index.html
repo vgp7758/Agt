@@ -1558,7 +1558,7 @@ function renderHistTurn(t, box, isLast){
     ans.textContent='⏹ 本轮被中断，未完成'; ans.style.color='#8a9099';
   }
    else finishAnswer(a, undefined, t.changed);
-  attachFavBtn(col, t.turn);   // ⭐ 历史轮：answer 就位后挂收藏按钮（col=.turn）
+  attachFavBtn(col, t.turn, t.answer || '');   // ⭐ 历史轮：answer 就位后挂收藏按钮（col=.turn）
   curTurn=prev;
   return row;
 }
@@ -1726,7 +1726,7 @@ function applyFavMarks(){
     r.dataset.fav = _favs.has(+r.dataset.turn) ? '1' : '0';
   });
 }
-function attachFavBtn(col, turnNo){
+function attachFavBtn(col, turnNo, answer){
   if(!col || !turnNo || col.querySelector('.turn-actions')) return;
   // 按钮组容器（2026-10-08 v2）：⭐ 收藏 + 🌿 分支并列（hover 浮现；已收藏时组恒显）
   const wrap=document.createElement('div'); wrap.className='turn-actions';
@@ -1759,12 +1759,12 @@ function attachFavBtn(col, turnNo){
   bb.className='branch-btn';
   bb.textContent='🌿 分支';
   bb.title='从此轮创建记忆分支：带本轮为止的全部记忆去做支线任务（B站视频/简历/协助其它repo等），不稀释主线';
-  bb.onclick=()=>branchModal(turnNo);
+  bb.onclick=()=>branchModal(turnNo, String(answer||'').slice(0,60));
   wrap.appendChild(bb);
   col.appendChild(wrap);
 }
 // ===== 🌿 分支弹窗（用户提案 2026-10-08：填名确认 → /api/branch → 广播自动刷 UI）=====
-function branchModal(turnNo){
+function branchModal(turnNo, anchor){
   const old=document.getElementById('branchModal'); if(old) old.remove();
   const ov=document.createElement('div'); ov.id='branchModal';
   ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center';
@@ -1789,7 +1789,7 @@ function branchModal(turnNo){
     if(!name){ inp.style.borderColor='#f87171'; inp.placeholder='分支名不能为空'; return; }
     try{
       const r=await fetch('/api/branch',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name, turn:turnNo})});
+        body:JSON.stringify({name, turn:turnNo, anchor:(anchor||'').trim()})});
       const d=await r.json();
       if(d && d.ok){ close(); toast(`🌿 分支「${name}」创建中（继承到第 ${turnNo} 轮），完成后自动切换…`, true); }
       else { toast(d.error || '创建失败', false); }
@@ -4053,7 +4053,7 @@ function onWSMessage(ev){
         const _col = curTurn.answerEl.closest('.turn');
         if(_col){
           const _brow = _col.closest('.row');
-          if(_brow){ _brow.dataset.turn = m.turn; attachFavBtn(_col, m.turn); }
+          if(_brow){ _brow.dataset.turn = m.turn; attachFavBtn(_col, m.turn, ''); }
           const _rows = document.querySelectorAll('#msgArea .row.me');
           for(let k=_rows.length-1;k>=0;k--){ _rows[k].dataset.turn = m.turn; break; }
         }

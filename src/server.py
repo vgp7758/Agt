@@ -1203,6 +1203,34 @@ async def api_branch(request: Request):
     if not name or _agent is None or _work_q is None:
         return {"ok": False, "error": "缺少 name 或服务未就绪"}
     turn = d.get("turn")
+    anchor = str(d.get("anchor") or "").strip()
+    # 锚校准（用户实锤 2026-11-06·20048 分支错位）：气泡轮号（前端 t.turn 口径）与
+    # /branch 的"events 里第 N 个 turn_end"口径可能漂移（events 坏行被 _read_events 跳过、
+    # history 组装跳中断轮等都会造成系统性偏移）。前端把该轮 answer 前 60 字一并送来——
+    # 此处以内容锚定：answer 前缀匹配到的 turn_end 序号才是真锚（±∞ 全局找唯一命中；
+    # 多命中/无命中则保持原 turn 不强校准）。校准后以列表口径（与 _cmd_branch 同源）传参。
+    if anchor and turn:
+        try:
+            from session import _read_events as _re
+            _sd = getattr(_agent.session, "session_dir", None)
+            if _sd and (_sd / "events.jsonl").exists():
+                _ev = _re(_sd / "events.jsonl")
+                _k = _ans = 0
+                for _e in _ev:
+                    if _e.get("event") == "turn_end":
+                        _k += 1
+                        _a = str(_e.get("answer") or "").lstrip()
+                        if _a and _a.startswith(anchor[:40]):
+                            _ans = _ans or _k   # 首命中
+                            if _k != _ans:
+                                _ans = 0; break   # 多命中（前缀撞车）→ 放弃校准
+                if _ans:
+                    if _ans != int(turn):
+                        _LOG.warning("branch 锚校准：turn %s → %s（answer 锚 '%s…'）",
+                                     turn, _ans, anchor[:24])
+                    turn = _ans
+        except Exception as _e:
+            _LOG.warning("branch 锚校准失败（保持原 turn %s）: %s", turn, _e)
     cmd = f"/branch {name}" + (f" {int(turn)}" if turn else "")
     _work_q.put(("user", cmd))          # 串行执行：/branch 里 set_session 不能与运行中的轮并发
     def _sync():

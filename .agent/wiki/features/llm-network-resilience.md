@@ -226,6 +226,15 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 
 **缓存配套**：src/img_cache.py 缓存键混入**提示词版本盐** `PROMPT_VER = "v2-coord"`——此后改提示词 bump 盐即旧描述自动 miss 重看，无需清库。设计动机、两消费端接线与用户中途裁定见 [图片输入链路 · 后记二](image-input.md)。
 
+### 后记二：调用协议升级 JSON 结构化优先 + 解析失败回退文本（2026-11-06，用户提案，commit 820fb7a）
+
+`describe_image_with_vision` 的调用协议升级为**两段式**（2026-11-06，用户提案，commit `820fb7a`；函数签名、选卡 / 空回退链 / 60s 超时 / `scene=img_proxy` 等既有语义全部不动）：
+
+1. **第一段（JSON 结构化优先）**：按 `IMG_DESC_JSON_INSTRUCTION` 调视觉卡片——**read_file 与 image_feed 两路径共用的单源 JSON 提示词**（只输出 JSON；summary / texts≤8 / elements≤10 / details，bbox 0-1000 归一化）→ 程序容错解析（剥围栏 → 全文 load → 首 `{` 末 `}` 截取重试）+ schema 校验 → 成功则**换算渲染**（`px=round(nx×W÷1000)`，原尺寸优先基准）后返回归一化+像素双坐标文本
+2. **第二段（文本回退）**：JSON 解析失败 → 按既有 `IMG_DESC_INSTRUCTION` / `IMG_FEED_INSTRUCTION` 文本指令**再调一次**——描述不丢（用户裁定）
+
+**缓存**：src/img_cache.py `PROMPT_VER` bump `"v2-coord"` → `"v3-json"`，旧格式描述自然 miss 重看。实测样例（误差 ≤1‰）与渲染形态见 [图片输入链路 · 后记四](image-input.md)。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：

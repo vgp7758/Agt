@@ -309,6 +309,21 @@ desktop-ops 一日内完成能力形态整体迁移，最终定型「**画面走
 
 test_skill_command 的 `_resolve_skill` patch 泄漏，污染后续测试文件（合跑 5 failed）——改 autouse fixture 还原（patch 必还愿，测试文件间全局卫生立规矩）。回归：test_skill_assemblies 18 + 合跑 31 passed + subagent_skills rc=0。
 
+### 收尾补记：e2e 测试对齐零 schema 现状 + 运行时副本收口（2026-11-06，plan p_0cc1fdb1 收尾，commits 83d44c5 + bccc30b）
+
+desktop-ops 坐标链施工线（plan p_0cc1fdb1）的测试收尾（2026-11-06，worker-p_0cc1fdb1，commit `83d44c5`，只动测试）：`test/test_subagent_skills.py::test_desktop_operator_instantiation` 的断言此前仍按 tools/ 形态写、已随「键鼠迁命令口」失效，重写为**零 schema 现状形态**：
+
+| 断言组 | 内容 |
+|---|---|
+| 键鼠反向断言 | `not (KEY_MOUSE_TOOLS & names)`——键鼠**不再装配为工具**（全量走 skill_use 命令口）；另加 `sk["tools"] == []` + SKILL.md frontmatter **无 `tools` 键**（`_split_frontmatter` 实读校验）——杜绝「声明悄悄回来」 |
+| 技能包真源在位 | `server.py`（stdin 行协议命令口本体）与 `scripts/commands/screen_capture.py`（帧命令实现）必须存在 |
+| 装配声明形态 | `extras[0].position == "after:steps"` + `_skill_src == "desktop-ops"`（装卸闭环撤销依赖的来源标记） |
+| 帧提供者现状 | `image_feed` 串内含 `skill_command` + `screen_capture`（命令口造型）+ 插段 `_skill_src` 标记 |
+
+保留既有意义断言（yml `skills==["desktop-ops"]` / SOP 与坐标规范在 base_system / yml 无 image_feed 段 / services 已收进技能 / 人设 file 项在清单）。验证：test_subagent_skills **9** + test_skill_assemblies **19** = **28 项全绿**。
+
+同日 `bccc30b`：desktop-ops **运行时副本**（`.agent/skills/desktop-ops/` 的 server.py + SKILL.md，含 `--nx/--ny` 坐标改造）此前只在工作区未提交，已收口进版本控制——「双份真源必同步」（见 §技能包双份真源）在 git 层的落地。
+
 ## 技能包双份真源：种源 src/assets/skills/ ↔ 运行时 .agent/skills/（2026-11，实锤不同步）
 
 **双份存在**：同一技能在两处各有一份，语义不同、**装备/调用只认后者**：

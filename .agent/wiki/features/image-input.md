@@ -225,6 +225,37 @@ PIL 读失败省略尺寸段不炸（退化 `[视觉模型 it-vision3 代看] <�
 
 **验证**：`_shrink_image_bytes` 单测（3000x2000 PNG → note 正确 + 实际缩后 `(2048, 1365)` ✓；早退/异常分支 `note=""` ✓；`note + data URL` 用真实 `_DATA_URL_RE` 提取成功 ✓）；`_imgfeed_proxy_text` 三形态（4 段/3 段/坏帧）✓；进程内集成（真实 `Session._asm_evaluate` + mock 帧服务，覆盖每轮装配路径）与 `_read_image` 端到端（小图无 note / 超限图 note 开头且提取正常）✓；`py_diag` 四改动文件全净。
 
+### 后记四：JSON 结构化优先——JSON Schema 输出 + 归一化/像素双坐标 + 解析失败回退文本（2026-11-06，用户提案，commit 820fb7a）
+
+**动机（用户提案 2026-11-06）**：文本姿势的坐标描述仍要非视觉宿主拿归一化值自己做算术（×尺寸/1000）；提案升级为 **JSON Schema 结构化输出优先**，解析失败**回退现有文本姿势**（用户裁定，描述不丢）。
+
+**机制（commit `820fb7a`，改动 src/llm_client.py + src/img_cache.py + src/agent.py + src/session.py，test/test_img_desc_json.py 新增）**：
+
+| 环节 | 行为 |
+|---|---|
+| 视觉调用 | 先按 **`IMG_DESC_JSON_INSTRUCTION`** 调——**read_file 与 image_feed 两路径共用的 JSON 提示词**（只输出 JSON；summary / texts≤8 / elements≤10 / details；bbox 0-1000 归一化） |
+| 程序解析 | 容错三段式：剥 markdown 围栏 → 全文 `json.loads` → 首 `{` 末 `}` 截取重试；再过 schema 校验 |
+| 换算渲染 | 每元素输出**归一化 + 像素双坐标**：`px = round(nx × W ÷ 1000)`；尺寸基准 = 原尺寸优先（read_file 缩放附注 / image_feed 哨兵 `orig:` 段），帧尺寸兜底（沿用后记三） |
+| **解析失败** | **回退既有文本 instruction（IMG_DESC / IMG_FEED 双常量）再调一次**——退化回文本姿势，描述不丢 |
+| 缓存 | `PROMPT_VER → "v3-json"`——旧文本格式描述自然 miss 重看，无需清库 |
+
+**渲染形态**（换算后注入文本）：
+
+```
+【整体】画面类型一句话
+【元素】名称 归一化[x1,y1→x2,y2] 像素[x1,y1→x2,y2]：描述
+【文字】文字内容 像素[x1,y1→x2,y2]
+【细节】颜色/状态/异常/布局关系
+```
+
+**实测精度**（qwen 视觉卡片 · 测试登录界面 800×500 · 模拟原尺寸 1600×1000）：Username 输入框理论归一化 `[313,320→688,400]`，模型输出 `[311,320→688,401]`——**误差 ≤1‰**；像素换算（×1.6 / ×1.0）正确。
+
+**测试**：`test/test_img_desc_json.py` **15 项全过**（解析五场景 / 换算 round 语义 / 回退路径 mock）。
+
+**注意**：注入的像素坐标是**原尺寸基准**；desktop-ops 点击仍优先 `--nx/--ny`（归一化零换算直点屏幕）——像素坐标主要用于宿主理解画面布局与元素尺寸。
+
+**关联**：[describe_image_with_vision · 后记二](llm-network-resilience.md)（调用协议两段式）· [image_feed · 后记五](image-feed.md)（帧路径同批升级）
+
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 
 **单张图的 token 与字符量（2026-10-23，8000/comfy t1022 反推实测）**：投影 dump 里一张 base64 图 **1.8~2.5 MB 字符**；从缓存 miss 量反推约 **3.2K tokens/张**（12 张 ≈ 38K tokens，与实测每步 miss 吻合）。43 张图吃掉投影 **99.2% 的字符量**——**图片是投影体积与成本的主项**，不是正文。

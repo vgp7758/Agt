@@ -106,6 +106,16 @@ services:
 
 **结论性口径**：`X-Frame-Orig` 是**帧服务侧的通用扩展点**（任何画面服务都能透出尺寸），session 侧对无头帧服务完全后向兼容——跨 repo 采用只需帧服务加一个响应头 + 技能 SOP 写清换算基准，框架侧零改动。
 
+### 后记五：帧代看同批升级 JSON 结构化优先——IMG_DESC_JSON_INSTRUCTION 单源 + 解析失败回退文本版（2026-11-06，用户提案，commit 820fb7a）
+
+帧代看（`_imgfeed_proxy_text`）与 read_file 代看同批升级 **JSON 结构化优先**（2026-11-06，用户提案，commit `820fb7a`）——JSON 版**两路径共用 `IMG_DESC_JSON_INSTRUCTION` 单源**，不再各写一份：
+
+- **第一段**：视觉卡片按 JSON Schema 输出（summary / texts≤8 / elements≤10 / details，bbox 0-1000 归一化）→ 程序容错解析 → 换算渲染为**归一化 + 像素双坐标**文本（`px=round(nx×W÷1000)`；基准沿用后记三：原尺寸 `orig:` 段优先、帧尺寸兜底）注入 tail 桶
+- **回退**：JSON 解析失败 → 按 `IMG_FEED_INSTRUCTION` 文本版**再调一次**（操作版四段【画面】【可交互】【文本】【异常】）——描述不丢（用户裁定）
+- **缓存**：`PROMPT_VER → "v3-json"`，帧描述旧格式自然失效重看，无需清库
+
+JSON 提示词 / 解析 / 换算的完整机制与实测样例见 [图片输入链路 · 后记四](image-input.md)；调用协议两段式见 [describe_image_with_vision · 后记二](llm-network-resilience.md)。
+
 ## 帧源 `tool:` 表达式：技能命令口造型 + 命名参数（2026-10-17，用户提案）
 
 src 三形态中最年轻的一支：`tool:` 表达式最初随技能装配清单落地（双参工具按 schema 位置映射，见 [skills · assemblies](skills.md)）；2026-10-17 用户提案两补：

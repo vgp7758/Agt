@@ -213,6 +213,19 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 - **可观测**：`scene=img_proxy` 记 llm_calls 流水
 - **消费端两处**：read_file / 工具产物图（src/agent.py `_materialize_tool_result`，内容 hash 缓存 20 条）+ image_feed 帧（src/session.py `_imgfeed_proxy_text`，帧 hash 单槽）——机制细节见 [图片输入链路 · 图片代理描述](image-input.md) 与 [image_feed · 非视觉宿主代看](image-feed.md)
 
+### 后记：默认提示词升级坐标定位版——IMG_DESC / IMG_FEED 双常量 + 缓存版本盐（施工牌 p_0cc1fdb1）
+
+#### 后记：默认提示词升级坐标定位版——IMG_DESC / IMG_FEED 双常量 + 缓存版本盐（施工牌 p_0cc1fdb1）
+
+`describe_image_with_vision` 的提示词从空白/临时形态升级为**结构化坐标定位双常量**（src/llm_client.py，消费端 import 单一来源）：
+
+- `IMG_DESC_INSTRUCTION`（详细版，read_file / 工具产物图）：整体 / 文字 / 元素（≤8 项）/ 细节，元素带 `[x1,y1→x2,y2]`
+- `IMG_FEED_INSTRUCTION`（image_feed 操作版）：画面 / 可交互（≤10 项）/ 文本 / 异常
+
+坐标统一 **0-1000 归一化**（Qwen-VL grounding 原生训练格式，视觉卡片输出最稳）。函数签名不变（`instruction` 传空时回落 `IMG_DESC_INSTRUCTION`），`scene=img_proxy` / 空回退链 / 60s 超时等既有语义全部不动。
+
+**缓存配套**：src/img_cache.py 缓存键混入**提示词版本盐** `PROMPT_VER = "v2-coord"`——此后改提示词 bump 盐即旧描述自动 miss 重看，无需清库。设计动机、两消费端接线与用户中途裁定见 [图片输入链路 · 后记二](image-input.md)。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：

@@ -89,7 +89,18 @@ def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool
                 else:
                     target_agent.queue_user_message(message)
             except Exception:
-                target_agent.queue_user_message(message)   # 兜底：至少把文本排进插话队列
+                # 兜底双投防御（用户实锤 2026-11-06·回执双消费）：push_message 半途异常时
+                # inbox.append 可能已成功（emit 层炸）——无条件 queue_user_message 会把同一条
+                # 再写进插话队列 → 轮内步边界消费一次 + 轮末 inbox 再消费一次。兜底前查重：
+                # 已在任何队列（inbox 同文/pending）就不重复投，仅记日志。
+                with getattr(target_agent, "_inbox_lock", __import__("threading").Lock()):
+                    _dupe = any(m == message for (_, m, _) in list(getattr(target_agent, "inbox", [])))
+                _pend = str(message) in list(getattr(target_agent, "pending_messages", []) or [])
+                if not _dupe and not _pend:
+                    target_agent.queue_user_message(message)   # 真没投出去：至少把文本排进插话队列
+                else:
+                    _LOG.warning("deliver_notice 兜底查重命中：消息已投递（inbox=%s pending=%s），跳过重复投递",
+                                 _dupe, _pend)
             return True
         # 空闲唤醒：这条路没有 seed 通道 → 把种子里的结果正文并进消息（否则只有一句标题）
         _msg = message
@@ -946,7 +957,11 @@ def make_communication_tools(agent) -> list:
         if target_agent is None:
             return f"[错误] '{target_id}' 的 Agent 实例不可用"
         _msg = f"[来自队友 '{agent.agent_id}' 的提示] {message}"
-        if entry.status == "running" or getattr(target_agent, "busy", False):
+        # 忙判定对齐（2026-11-06·回执双消费排查顺手修）：deliver_notice 已读 _react_running
+        # （b5d8e2e），这里还只看 registry status + busy 属性——状态未及时刷新/子 Agent 裸跑时
+        # 误判空闲 → 起第二条 react 循环。三态或：任一为忙即走插话排队。
+        if (entry.status == "running" or getattr(target_agent, "busy", False)
+                or getattr(target_agent, "_react_running", False)):
             try:
                 target_agent.queue_user_message(_msg)
                 return f"✅ 已向 '{target_id}' 插话排队，对方下一步边界会看到。"

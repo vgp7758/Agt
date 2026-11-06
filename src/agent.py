@@ -1245,9 +1245,17 @@ class Agent:
         with self._inbox_lock:
             self.inbox.append((source, msg, seed))
         self._inbox_persist_append(source, msg, seed)
-        self._emit({"type": "background_trigger", "source": source,
-                    "text": (msg or "")[:80], "queue_size": len(self.inbox),
-                    "seed": bool(seed)})
+        # _emit 永不抛（用户实锤 2026-11-06·回执双消费）：append/persist 已成后若 _emit
+        # （WS 广播等渲染层）抛异常，调用方（deliver_notice 忙分支等）会走"兜底再投"——
+        # 同一回执既留 inbox 又进插话队列，轮内步边界消费一次、轮末 inbox 再消费一次
+        # （用户观察到的"轮期间已消费，轮结束又触发一轮再消费"）。渲染失败不该回滚
+        # 投递语义：此处吞掉 emit 异常（仅日志）。
+        try:
+            self._emit({"type": "background_trigger", "source": source,
+                        "text": (msg or "")[:80], "queue_size": len(self.inbox),
+                        "seed": bool(seed)})
+        except Exception as _e:
+            _LOG.warning("push_message _emit 失败（不影响投递）: %s", _e)
 
     def pop_inbox(self):
         """取一条 inbox 消息 (source, msg, seed)，空则 None。线程安全。
@@ -1681,7 +1689,11 @@ class Agent:
         """将用户消息加入队列（等下一步边界注入当前任务上下文；任何模式均可用）。
         供 web/CLI 忙时插话：消息会在当前轮的下一步作为 user_hint 注入，模型当步可见、可改向。"""
         self.pending_messages.append(text)
-        self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
+        try:   # 与 push_message 对称（2026-11-06·回执双消费修复）：append 已成后 emit 抛异常
+              # 不该把"已投递"炸成"未投递"——调用方（deliver_notice 兜底等）会误判重投。
+            self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
+        except Exception as _e:
+            _LOG.warning("queue_user_message _emit 失败（不影响入队）: %s", _e)
         return True
 
     def queue_pending_user_message(self, text: str):

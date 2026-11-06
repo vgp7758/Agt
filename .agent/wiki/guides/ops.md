@@ -588,6 +588,14 @@ git config core.sshCommand "ssh -o HostName=github.com -p 22 -o ConnectTimeout=2
 
 **排障口诀**：GitHub SSH 连不上先分清「走 22 还是 443」——`ssh -T git@github.com`（按全局 config）与 `ssh -T -p 22 git@github.com`（强制 22）各试一次，哪条通用哪条；repo 级 `core.sshCommand` 是零侵入的逐仓库覆盖（全局 `~/.ssh/config` 不动，其它仓库不受影响）。
 
+**第三条路：绕开 SSH 协议、https 直连 443（2026-11-19 实战，终极兜底）**：后来遇到 SSH 通道**整体不通**（代理拦 SSH 流量 / DNS 解析失败——22、443 两条 SSH 路全灭）时，`core.sshCommand` 也救不了（它只换 SSH 端口，仍走 SSH 协议）。终极兜底 = **改走 https**：
+
+```bash
+git push https://vgp7758@github.com/vgp7758/Agt.git main
+```
+
+URL 带用户名 → 走凭据管理器（Windows credential manager 已存 token 时免密码直通）。2026-11-19 视觉代看补丁轮实测：SSH 被代理拦 → https 直连**一次推平积压 13 笔 commit**。教训升级：push 失败先探协议层（`ssh -T` 两路）再探域名层；**SSH 全灭时记得还有 https 这条完全独立的通道**——443 上的 TLS 流量通常不与 SSH 同路被拦。
+
 **关联**：[本地发布链](#本地发布链releasepy-版本真源迁移2026-09-10--十八轮)（release.py 的 push 步骤）、[桌面版 · 云构建](../features/desktop-mode.md#云构建--releasegithub-actions-流水线)（另一条发布通道）。
 
 ## PyPI upload 域名 TLS 阻断：pypi.org 通、upload.pypi.org 断 + 后台自动重试（2026-09-26，v0.30.1 发布轮）

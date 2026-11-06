@@ -2020,42 +2020,50 @@ class Session:
 
     def _imgfeed_proxy_text(self, sen: str) -> str:
         """非视觉宿主的 image_feed 代看（用户提案 2026-10-27）：从哨兵串提帧 → 委托配置内
-        视觉卡片描述（describe_image_with_vision）→ 描述文本替代 base64 注入 tail 桶。
+        视觉卡片描述（describe_image_structured：JSON 结构化优先，解析失败回退文本姿势，
+        2026-11-06 用户提案）→ 描述文本替代 base64 注入 tail 桶。
         描述查/写 repo 级 SQLite 缓存（img_desc_cache.db，跨 session/重启共享，用户裁定
         2026-10-27）：先查命中（帧没变/跨重启同帧零视觉调用），miss 才调视觉模型并记录。
         非哨兵输入（取帧失败的降级文案）原样透传。
-        2026-10-28 补丁：前缀附帧尺寸（PIL 从 data URL 内存解码读，失败省略尺寸段不炸）
-        与可选第4段 orig:WxH（poc 缩放帧的原屏尺寸）——宿主据此把 0-1000 归一化坐标
-        换算回像素。"""
+        像素基准：帧尺寸（PIL 从 data URL 内存解码读）+ 可选第4段 orig:WxH（poc 缩放帧的
+        原屏尺寸）——基准行与「归一化+像素」两套坐标由渲染层写进描述正文；两者都读不到时
+        只剩归一化坐标，前缀退化仅留坐标说明不炸。"""
         m = re.match(r"@@IMGFEED@@(\d+)@@(data:[^@]+)@@(?:orig:(\d+)x(\d+)@@)?", sen or "")
         if not m:
             return sen
         durl = m.group(2)
-        # 尺寸段：帧像素尺寸 + 原屏缩放说明（有 orig 段才拼）；PIL 读不到就只保留坐标换算说明
-        _orig_seg = (f"，原屏 {m.group(3)}x{m.group(4)} 等比缩放" if m.group(3) else "")
-        _size_seg = "（坐标0-1000归一化，像素=值×尺寸/1000）"
+        # 像素换算基准（2026-11-06 JSON 结构化版）：_fs=帧像素尺寸（PIL 内存解码，失败 None
+        # 则描述里只留归一化坐标）；_os=第4段 orig:WxH（poc 缩放帧的原屏尺寸，无则 None →
+        # 基准回落帧尺寸）。基准与换算由 describe_image_structured 渲染进描述首行。
+        _fs = _os = None
         try:
             import io as _io
             from PIL import Image as _Img
             with _Img.open(_io.BytesIO(base64.b64decode(durl.split(",", 1)[1]))) as _im:
-                _size_seg = (f"（帧 {_im.width}x{_im.height}px{_orig_seg}；"
-                             f"坐标0-1000归一化，像素=值×尺寸/1000）")
+                _fs = (_im.width, _im.height)
         except Exception:
             pass
+        if m.group(3) and m.group(4):
+            _os = (int(m.group(3)), int(m.group(4)))
         import img_cache
-        from llm_client import describe_image_with_vision, IMG_FEED_INSTRUCTION
+        from llm_client import describe_image_structured
         h = img_cache.hash_of(durl)
         row = img_cache.get_desc(self.workspace, h)
         if not row:
-            r = describe_image_with_vision(
-                durl, timeout=60,
-                instruction=IMG_FEED_INSTRUCTION)
+            # JSON 结构化优先、解析失败回退文本姿势（用户裁定 2026-11-06）
+            r = describe_image_structured(durl, frame_size=_fs, orig_size=_os, timeout=60)
             if not r:
                 return ("[image_feed：视觉代理描述失败——无可用视觉卡片或调用超时"
                         "（配置里加 vision 卡片可自动代看）]")
             row = r
             img_cache.put_desc(self.workspace, h, r[0], r[1])
         used, desc = row
+        if _fs:
+            _size_seg = (f"（帧 {_fs[0]}x{_fs[1]}px"
+                         + (f"，原屏 {_os[0]}x{_os[1]} 等比缩放" if _os else "")
+                         + "；坐标含归一化与像素两套，像素基准见描述首行）")
+        else:
+            _size_seg = "（坐标0-1000归一化）"
         return (f"当前模型为非视觉，image_feed自动获取到实时画面{_size_seg}，"
                 f"以下是视觉模型{used}对画面的描述：{desc}")
 

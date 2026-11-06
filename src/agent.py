@@ -492,8 +492,9 @@ class Agent:
         toollog/事件流/存档。线程安全：文件名含 cid（并行调用唯一）+ 序号。
         按当前模型 vision 分流（用户提案 2026-10-27；同日二审改 repo 级 SQLite 缓存）：
         · 视觉模型 → <img>{fn}</img>（投影层 _IMG_TAG_RE 命中 → image_url 看像素）；
-        · 非视觉模型 → 委托配置内视觉卡片代看（describe_image_with_vision 按序回退
-          最多 3 张 vision 卡，单次 60s）——描述文本随结果返回，当步即知画面内容。
+        · 非视觉模型 → 委托配置内视觉卡片代看（describe_image_structured：先按 JSON 结构化
+          提示词要坐标定位，解析失败回退文本姿势；按序回退最多 3 张 vision 卡，单次 60s）
+          ——描述文本随结果返回，当步即知画面内容（含归一化+像素两套坐标）。
           描述查/写 repo 级缓存（~/.agt/repos/<repo_key>/img_desc_cache.db，跨 session/
           重启共享，用户裁定 2026-10-27）：先查命中，miss 才调视觉模型并记录。
           <img> 标签照放（切视觉模型/vision 子 agent 仍可回看像素）。"""
@@ -516,29 +517,41 @@ class Agent:
                     out.append(f"<img>{fn}</img>")
                     last = m.end()
                     continue
+                # 视觉代看（2026-11-06 JSON 结构化优先）：像素换算基准先备好——
+                #   _fs = 落盘图实际像素尺寸（PIL 读；失败 None → 描述里只留归一化坐标）
+                #   _os = 原图尺寸：read_file 超 2048 缩放时 real_tools 把「[注：原图 WxHpx，
+                #         已等比缩至 …]」注在 data URL 之前（取本 URL 前最后一个；没缩放/
+                #         没附注 → None，像素基准回落 _fs）
+                _fs = _os = None
+                try:
+                    from PIL import Image as _Img
+                    with _Img.open(out_dir / fn) as _im:
+                        _fs = (_im.width, _im.height)
+                except Exception:
+                    pass
+                try:
+                    _notes = list(re.finditer(r"原图\s*(\d+)\s*[x×]\s*(\d+)\s*px",
+                                              result[:m.start()]))
+                    if _notes:
+                        _os = (int(_notes[-1].group(1)), int(_notes[-1].group(2)))
+                except Exception:
+                    pass
                 h = img_cache.hash_of(data_url)
                 row = img_cache.get_desc(self.session.workspace, h)
                 if not row:
-                    from llm_client import describe_image_with_vision, IMG_DESC_INSTRUCTION
-                    r = describe_image_with_vision(
-                        data_url, timeout=60,
-                        instruction=IMG_DESC_INSTRUCTION)
+                    # JSON 结构化优先、解析失败回退文本姿势（用户裁定 2026-11-06）
+                    from llm_client import describe_image_structured
+                    r = describe_image_structured(
+                        data_url, frame_size=_fs, orig_size=_os, timeout=60)
                     if r:
                         row = r
                         img_cache.put_desc(self.session.workspace, h, r[0], r[1])
                 if row:
                     used, desc = row
-                    # 坐标换算需尺寸基准（2026-10-28 补丁）：读落盘图像素尺寸拼进前缀，
-                    # 宿主才能把 0-1000 归一化坐标换算回像素；读失败省略尺寸段不炸。
-                    _dim = ""
-                    try:
-                        from PIL import Image as _Img
-                        with _Img.open(out_dir / fn) as _im:
-                            _dim = f" · 图 {_im.width}x{_im.height}px，" \
-                                   f"0-1000归一化坐标，像素=值×宽(或高)/1000"
-                    except Exception:
-                        pass
-                    out.append(f" [图片 {fn} 读取失败] \n[视觉模型 {used} 代看{_dim}] {desc}")
+                    # 前缀留图尺寸；坐标两套（归一化+像素）已由渲染层带进描述正文
+                    _dim = (f" · 图 {_fs[0]}x{_fs[1]}px，坐标含归一化与像素两套"
+                            f"（像素基准已注）" if _fs else "")
+                    out.append(f"<img>{fn}</img>\n[视觉模型 {used} 代看{_dim}] {desc}")
                 else:
                     out.append(f"<img>{fn}</img>"
                                f"[图片 {fn}：当前模型无视觉且视觉代理不可用（配置里加 vision 卡片"

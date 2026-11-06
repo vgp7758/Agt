@@ -1337,6 +1337,142 @@ IMG_FEED_INSTRUCTION = (
     "【文本】画面上的关键文字，逐条附位置坐标。\n"
     "【异常】错误弹窗/遮挡/加载中（无则省略此段）。"
 )
+# 视觉代看提示词·JSON 结构化版（用户提案 2026-11-06）：read_file 与 image_feed 共用。
+# 要求只输出一个 JSON 对象（Qwen-VL 系输出 JSON 比自由文本稳；解析容错见 _parse_img_json），
+# 坐标沿用 0-1000 归一化。解析失败由 describe_image_structured 回退文本版提示词（用户裁定）。
+# 改版时同步 bump img_cache.PROMPT_VER。
+IMG_DESC_JSON_INSTRUCTION = (
+    "请看这张图片。只输出一个 JSON 对象，不要输出 markdown 代码围栏，也不要输出 JSON "
+    "以外的任何文字。JSON 结构：\n"
+    '{"summary": "画面类型与主要内容（一句话）", '
+    '"texts": [{"t": "画面上的文字", "bbox": [x1,y1,x2,y2]}], '
+    '"elements": [{"name": "界面元素/物体名称", "bbox": [x1,y1,x2,y2], "desc": "一句描述"}], '
+    '"details": "值得注意的细节：颜色/状态/异常/布局关系（一句话）"}\n'
+    "所有 bbox 用 0-1000 归一化坐标 [x1,y1,x2,y2]（左上→右下；x 对应宽度千分比、"
+    "y 对应高度千分比）；texts ≤8 条、elements ≤10 项，均按重要性排序。"
+)
+
+
+def _parse_img_json(txt: str):
+    """解析视觉代看的 JSON 输出，返回 dict；不像样返回 None（调用方回退文本姿势）。
+    容错：剥 ```json 围栏 → json.loads 全文 → 失败再从首个 '{' 到末个 '}' 重试（前后杂文本）。
+    合法判据（余者 None）：dict 且 elements 为合法列表（每项 name 非空字符串 + bbox 4 个数字）
+    或 summary 为非空字符串；elements 想给但给坏了直接判不合法（不拿 summary 兜底）。"""
+    if not isinstance(txt, str):
+        return None
+    t = txt.strip()
+    if not t:
+        return None
+    if t.startswith("```"):
+        t = re.sub(r"^```[^\n]*\n?", "", t, count=1)      # 开头围栏（```json / ```）
+        t = re.sub(r"\n?```\s*$", "", t, count=1)          # 结尾围栏
+        t = t.strip()
+    cands = [t]
+    _a, _b = t.find("{"), t.rfind("}")
+    if _a >= 0 and _b > _a:
+        cands.append(t[_a:_b + 1])
+    obj = None
+    for cand in cands:
+        if not cand:
+            continue
+        try:
+            o = json.loads(cand)
+        except Exception:
+            continue
+        if isinstance(o, dict):
+            obj = o
+            break
+    if obj is None:
+        return None
+
+    def _bbox_ok(v):
+        return (isinstance(v, (list, tuple)) and len(v) == 4
+                and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v))
+
+    els = obj.get("elements")
+    if isinstance(els, list) and els:
+        ok = all(isinstance(e, dict) and isinstance(e.get("name"), str)
+                 and e["name"].strip() and _bbox_ok(e.get("bbox")) for e in els)
+        return obj if ok else None
+    _sm = obj.get("summary")
+    return obj if isinstance(_sm, str) and _sm.strip() else None
+
+
+def _render_img_json(data: dict, frame_size=None, orig_size=None) -> str:
+    """把 _parse_img_json 的结果渲染成注入文本（与 IMG_DESC_INSTRUCTION 输出同风格，
+    坐标给「归一化 + 像素」两套）。像素基准：orig_size（原尺寸）优先、缺则 frame_size；
+    两者都缺 → 省像素段与基准行，只留归一化坐标。返回多行文本（不含前后包裹说明）。"""
+    W, H, _is_orig = None, None, False
+    try:
+        if orig_size:
+            W, H, _is_orig = int(orig_size[0]), int(orig_size[1]), True
+        elif frame_size:
+            W, H = int(frame_size[0]), int(frame_size[1])
+    except Exception:
+        W = H = None
+
+    def _nv(v):
+        try:
+            return int(round(max(0.0, min(1000.0, float(v)))))
+        except Exception:
+            return 0
+
+    def _px(v, total):
+        try:
+            return int(round(max(0.0, min(1000.0, float(v))) * total / 1000.0))
+        except Exception:
+            return 0
+
+    def _bbox_str(bb, mode="both"):
+        """mode: both（归一化+像素）/ norm（只归一化）/ px（只像素，无基准时退归一化）"""
+        if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
+            return ""
+        s = ""
+        if mode in ("both", "norm"):
+            a, b, c, d = (_nv(x) for x in bb)
+            s = f"归一化[{a},{b}→{c},{d}]"
+        if mode in ("both", "px") and W and H:
+            _p = (f"像素[{_px(bb[0], W)},{_px(bb[1], H)}→"
+                  f"{_px(bb[2], W)},{_px(bb[3], H)}]")
+            s = (s + " " + _p) if s else _p
+        elif mode == "px":
+            a, b, c, d = (_nv(x) for x in bb)
+            s = f"归一化[{a},{b}→{c},{d}]"
+        return s
+
+    parts = []
+    if W and H:
+        _tag = "（原尺寸）" if _is_orig else " "
+        parts.append(f"[坐标基准：{W}x{H}px{_tag}| 归一化=0-1000]")
+    _sum = data.get("summary")
+    if isinstance(_sum, str) and _sum.strip():
+        parts.append(f"【整体】{_sum.strip()}")
+    for e in (data.get("elements") or []):
+        if not isinstance(e, dict):
+            continue
+        _ln = f"【元素】{str(e.get('name') or '').strip()}"
+        _bs = _bbox_str(e.get("bbox"))
+        if _bs:
+            _ln += f" {_bs}"
+        _d = e.get("desc")
+        if isinstance(_d, str) and _d.strip():
+            _ln += f"：{_d.strip()}"
+        parts.append(_ln)
+    for t in (data.get("texts") or []):
+        if isinstance(t, str):
+            parts.append(f"【文字】{t.strip()}")
+            continue
+        if not isinstance(t, dict):
+            continue
+        _tx = str(t.get("t") or "").strip()
+        if not _tx:
+            continue
+        _bs = _bbox_str(t.get("bbox"), mode="px" if (W and H) else "norm")
+        parts.append(f"【文字】{_tx}{(' ' + _bs) if _bs else ''}")
+    _det = data.get("details")
+    if isinstance(_det, str) and _det.strip():
+        parts.append(f"【细节】{_det.strip()}")
+    return "\n".join(parts)
 
 
 def describe_image_with_vision(data_url: str, instruction: str = "",
@@ -1367,3 +1503,23 @@ def describe_image_with_vision(data_url: str, instruction: str = "",
         except Exception as e:
             _LOG.warning("视觉代理 %s 描述失败：%s", n, str(e)[:120])
     return None
+
+
+def describe_image_structured(data_url: str, frame_size=None, orig_size=None,
+                              tries: int = 3, timeout: float = 60.0):
+    """非视觉模型图片代看·JSON 结构化优先（用户提案 2026-11-06）：
+    ① 先按 IMG_DESC_JSON_INSTRUCTION 让视觉卡片输出 JSON；
+    ② 解析成功 → _render_img_json 渲染成带「坐标基准」说明的注入文本（归一化+像素两套坐标，
+       像素基准 orig_size 优先、缺则 frame_size）；
+    ③ 解析失败 / 无可用视觉卡片 → 回退 describe_image_with_vision 默认文本姿势原样返回
+       （用户裁定：坏 JSON 退回现有文本处理，不做二次 JSON 重试）。
+    返回 (卡片名, 文本) 或 None，语义与 describe_image_with_vision 一致；消费端
+    （agent._materialize_tool_result / session._imgfeed_proxy_text）缓存的是渲染后文本。"""
+    r = describe_image_with_vision(data_url, instruction=IMG_DESC_JSON_INSTRUCTION,
+                                   tries=tries, timeout=timeout)
+    if r:
+        name, txt = r
+        data = _parse_img_json(txt)
+        if data is not None:
+            return name, _render_img_json(data, frame_size=frame_size, orig_size=orig_size)
+    return describe_image_with_vision(data_url, tries=tries, timeout=timeout)

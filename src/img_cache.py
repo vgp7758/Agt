@@ -40,9 +40,11 @@ def _conn(workspace):
 
 
 # 提示词版本盐：代看提示词/输出格式改版时 bump（与 llm_client.IMG_DESC_INSTRUCTION /
-# IMG_FEED_INSTRUCTION 同一次改动同步改）——盐变则 hash 变，旧缓存条目（旧格式描述）
-# 自然 miss 重看，无需清库。
-PROMPT_VER = "v2-coord"
+# IMG_FEED_INSTRUCTION / IMG_DESC_JSON_INSTRUCTION 同一次改动同步改）——盐变则 hash 变，
+# 旧缓存条目（旧格式描述）自然 miss 重看，无需清库。
+# v3-json（2026-11-06）：视觉代看改 JSON 结构化优先（解析失败回退文本）——旧 v2-coord
+# 文本描述缓存（无像素坐标、无基准行）自然失效重看。
+PROMPT_VER = "v3-json"
 
 
 def hash_of(data_url: str) -> str:

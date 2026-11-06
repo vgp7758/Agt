@@ -170,7 +170,9 @@ def test_desktop_operator_svc_line_parses():
     cmd, url = ma._svc_spec("python x.py 8765 | reuse=http://127.0.0.1:8765/frame")
     assert cmd == "python x.py 8765" and url == "http://127.0.0.1:8765/frame"   # 行式解析语义不变
     skill_md = (root / ".agent" / "skills" / "desktop-ops" / "SKILL.md").read_text(encoding="utf-8")
-    assert "server.py" not in skill_md and "services:" not in skill_md   # desktop-ops 纯工具形态（无服务）
+    # desktop-ops 纯工具形态：frontmatter 无 services: 声明（正文可描述 server.py stdin 行协议，
+    # 2026-10-17 起键鼠能力走 skill_use 命令口——不再拉 8765 帧服务）。
+    assert "services:" not in skill_md
     from agent import Agent
     from tools import Toolbox
     main = Agent(system="t", tools=Toolbox(), model_name=None, verbose=False)

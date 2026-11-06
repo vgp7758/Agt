@@ -686,6 +686,13 @@ def _asm_image_feed_from_tool(expr: str, session) -> str:
             else f"[image_feed 帧提供者 {tname} 无输出]")
 
 
+# image_feed 哨兵抽取正则（模块级，区3 桶收集与单测共用；2026-11-04 4 段兼容）：
+# 哨兵形态 @@IMGFEED@@<ts>@@data:...@@ + 可选第4段 orig:WxH@@（poc 帧源缩放前原屏尺寸）。
+# 可选尾段不加时 sub 只清到 data 段的第一个 @@，orig 段残留成孤儿文本漏进 tail_merge_text。
+# 捕获组 (ts, dataURL) 不变；3 段旧形态不受可选组影响。
+IMGFEED_SENTINEL_RE = re.compile(r"@@IMGFEED@@(\d+)@@(.+?)@@(?:orig:\d+x\d+@@)?")
+
+
 class Session:
     def __init__(self, system: str, llm: Optional[LLMClient] = None,
                  recent_window_turns: int = 4, max_steps_per_turn: int = 200,
@@ -2777,13 +2784,13 @@ class Session:
                         # · 默认/reminder → tail_merge_text（装配后包裹并入末条 content）
                         _pose = str(item.get("mode") or "").strip().lower()
                         _b = "\n".join(str(m.get("content") or "") for m in own)
-                        # image_feed 哨兵抽取（2026-10-06；2026-10-11 带 ts）：@@IMGFEED@@<ts>@@data:...@@
-                        # 不进文本桶——抽进 tail_frames（merge 段组装 image_url 挂 tool result；
-                        # base64 不进统计文本桶）
-                        _imgs = re.findall(r"@@IMGFEED@@(\d+)@@(.+?)@@", _b)
+                        # image_feed 哨兵抽取（2026-10-06；2026-10-11 带 ts；2026-11-04 4 段兼容）：
+                        # @@IMGFEED@@<ts>@@data:...@@[orig:WxH@@] 不进文本桶——抽进 tail_frames
+                        # （merge 段组装 image_url 挂 tool result；base64 不进统计文本桶）
+                        _imgs = IMGFEED_SENTINEL_RE.findall(_b)
                         if _imgs:
                             tail_frames.extend((u, int(ts)) for ts, u in _imgs if u.startswith("data:"))
-                            _b = re.sub(r"@@IMGFEED@@\d+@@.+?@@", "", _b).strip()
+                            _b = IMGFEED_SENTINEL_RE.sub("", _b).strip()
                         if _pose == "reasoning":
                             reasoning_merge_text = (reasoning_merge_text + "\n\n" + _b) if reasoning_merge_text else _b
                             _sec(f"{nm}（尾部·思考链）", own, meta + "·注入思考链(reasoning)", msgs_n=0)

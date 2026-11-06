@@ -26,7 +26,7 @@ import base64
 import pytest
 import multiagent as ma
 import agent_config as ac
-from session import Session, _asm_image_feed_from_tool
+from session import Session, _asm_image_feed_from_tool, IMGFEED_SENTINEL_RE
 from tools import Toolbox, Tool
 
 
@@ -311,15 +311,53 @@ def test_imgfeed_tool_two_arg_mapping_and_degradation(frame_env):
     assert "无效" in _asm_image_feed_from_tool("!!!", s)
 
 
-def test_imgfeed_http_and_file_regression_and_vision_gate(frame_env, tmp_path):
+def test_imgfeed_http_and_file_regression_and_vision_gate(frame_env, tmp_path, monkeypatch):
     s, _, _, _ = frame_env
     p = tmp_path / "direct.png"
     p.write_bytes(b"\x89PNGHTTP")
     assert s._asm_evaluate({"kind": "image_feed", "image_feed": str(p)}).startswith("@@IMGFEED@@")
+    # 非视觉宿主（2026-10-27 代看路径）：不再静默跳过——返回视觉卡片描述替代 base64 注入。
+    # 视觉代理与描述缓存 mock 掉（不调真实网络/不写 repo 缓存）。
+    import llm_client as _lc
+    import img_cache as _ic
+    monkeypatch.setattr(_lc, "describe_image_with_vision",
+                        lambda *a, **k: ("mock-vis", "[画面]测试描述"))
+    monkeypatch.setattr(_ic, "get_desc", lambda *a, **k: None)
+    monkeypatch.setattr(_ic, "put_desc", lambda *a, **k: None)
     class L2:
         vision_supported = False
     s.llm = L2()
-    assert s._asm_evaluate({"kind": "image_feed", "image_feed": {"tool": "frame_tool()"}}) == ""
+    r = s._asm_evaluate({"kind": "image_feed", "image_feed": {"tool": "frame_tool()"}})
+    assert r.startswith("当前模型为非视觉") and "mock-vis" in r and "[画面]测试描述" in r
+    assert "data:image" not in r and "base64" not in r          # base64 不进非视觉宿主的文本桶
+
+
+def test_imgfeed_sentinel_extract_4seg_and_3seg():
+    """视觉宿主桶抽取（session 区3 findall/sub 两行）对 4 段哨兵的兼容 + 3 段回归。
+
+    4 段形态 @@IMGFEED@@ts@@data:...@@orig:WxH@@（2026-10-28 poc 帧源补丁）——旧正则
+    非贪婪只吃到第一个 @@，orig 段残留成孤儿文本漏进 tail_merge_text（本测试锚定）。
+    """
+    durl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    sen4 = f"@@IMGFEED@@1754300000@@{durl}@@orig:2160x1088@@"
+    sen3 = f"@@IMGFEED@@1754300001@@{durl}@@"
+    blob = f"前文\n{sen4}\n{sen3}\n尾文"
+
+    # 桶收集两行逻辑复现（session.py 区3：findall 抽帧 → sub 清文本）
+    tail_frames = [(u, int(ts)) for ts, u in IMGFEED_SENTINEL_RE.findall(blob)
+                   if u.startswith("data:")]
+    _b = IMGFEED_SENTINEL_RE.sub("", blob).strip()
+    assert tail_frames == [(durl, 1754300000), (durl, 1754300001)]   # 4段+3段各抽到 data URL，无 orig 混入
+    assert "data:" not in _b and "orig" not in _b and "@@" not in _b  # 4 段 orig 尾段不残留孤儿文本
+    assert [ln for ln in _b.splitlines() if ln.strip()] == ["前文", "尾文"]   # 哨兵段清除后只剩正文
+
+    # 3 段旧形态单哨兵回归：抽取/清除行为不变
+    ts3, u3 = IMGFEED_SENTINEL_RE.findall(sen3)[0]
+    assert ts3 == "1754300001" and u3 == durl
+    assert IMGFEED_SENTINEL_RE.sub("", sen3).strip() == ""
+    # 4 段捕获组内容与 3 段一致（可选尾段不影响组语义）
+    ts4, u4 = IMGFEED_SENTINEL_RE.findall(sen4)[0]
+    assert (ts4, u4) == ("1754300000", durl)
 
 
 # ── ⑨ 静态口 frontmatter → load_skill_assemblies ──────────

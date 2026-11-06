@@ -16,9 +16,10 @@ assemblies:
 命令表（CLI 风格，`--k v` 传参；文本含空格用引号）：
 
 ```
-skill_use("desktop-ops", "click --x 500 --y 300")                 # 点击（可加 --button right --double True）
-skill_use("desktop-ops", "move --x 500 --y 300")                  # 移动（悬停）
-skill_use("desktop-ops", "drag --x1 10 --y1 10 --x2 200 --y2 200")# 拖拽（可加 --duration 0.4）
+skill_use("desktop-ops", "click --nx 500 --ny 300")               # 点击（0-1000归一化，推荐非视觉宿主；可加 --button right --double True）
+skill_use("desktop-ops", "click --x 500 --y 300")                 # 点击（帧像素路径，视觉宿主用）
+skill_use("desktop-ops", "move --nx 500 --ny 300")                # 移动（悬停；也可 --x --y 帧像素）
+skill_use("desktop-ops", "drag --nx1 100 --ny1 100 --nx2 600 --ny2 400")  # 拖拽（归一化；或 --x1 --y1 --x2 --y2 帧像素）
 skill_use("desktop-ops", "key enter")                             # 单键（--presses 3 连按）
 skill_use("desktop-ops", 'type "hello world"')                    # 输入文本（中文自动走剪切板）
 skill_use("desktop-ops", "hotkey ctrl c")                         # 组合键（键名序列）
@@ -36,9 +37,15 @@ image_feed 帧源走它，装备时自动往宿主 `after:steps` 插画面帧段
 
 ## 坐标规范（重要）
 
-画面帧被等比缩放到宽 1280——你在截图/画面帧里看到的 (x, y) 就是命令要的坐标（画面像素）。
-click/move/drag 内部自动换算到真实屏幕（含 DPI 缩放 125%/150% 场景，换算系数 k=屏幕宽/1280，
-y 同系数），你只管报画面坐标，不要自己乘缩放比。
+坐标有两条路径，**按宿主形态选一条**（两套同时给时归一化优先，返回文案会注明）：
+
+- **归一化 `--nx --ny`（0-1000，非视觉宿主首选）**：取值为代看描述里的
+  "坐标0-1000归一化"同款刻度——`x=值×屏幕宽/1000`、`y=值×屏幕高/1000`
+  （x/y 独立比例锚定屏幕全幅，边界钳制）。**描述里给多少就传多少，零换算**。
+- **帧像素 `--x --y`（视觉宿主用）**：画面帧被等比缩放到宽 1280——你在截图/画面帧里
+  看到的 (x, y) 就是命令要的坐标（画面像素），内部换算 k=屏宽/1280（y 同系数）。
+
+两者都含 DPI 缩放（125%/150%）自动适配；不要自己乘缩放比，也不要混用两套刻度。
 
 ## 工作循环
 

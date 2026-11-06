@@ -203,9 +203,27 @@ CREATE TABLE img_desc (h TEXT PRIMARY KEY, model TEXT, descr TEXT, ts REAL)
 
 **缓存版本盐**（src/img_cache.py `PROMPT_VER = "v2-coord"`）：缓存键从「data URL」扩为「提示词版本盐 + data URL」——此后提示词/输出格式改版只需 bump 盐，旧格式描述**自然 miss 重看，无需清库**（改版纪律写入 llm_client 常量注释：改提示词同步 bump 盐）。
 
-**进行中缺口（续派补丁施工中）**：0-1000 归一化坐标要换算回**像素**需要尺寸基准（原图宽高），而注入文本里没有尺寸信息——宿主目前只能按千分比理解相对位置，无法推出绝对像素。补丁正在同一施工线续派（worker-p_0cc1fdb1），落地后回填本节。
+**缺口闭环（同日 · 续派补丁已落地）**：归一化坐标换算像素的尺寸基准补齐——read_file 代看前缀带图尺寸、image_feed 帧前缀带帧/原屏双尺寸、read_file 缩放附注，详见下方后记三与 [image_feed · 后记三](image-feed.md)。
 
 **关联**：[image_feed · 帧代看操作版提示词](image-feed.md) · [describe_image_with_vision](llm-network-resilience.md)
+
+### 后记三：尺寸基准补齐——代看前缀带图尺寸 + read_file 缩放附注（2026-11-19 · 续派补丁，worker-p_0cc1fdb1，commits d7fb8eb + c72400d）
+
+后记二的遗留缺口（归一化坐标换算像素缺尺寸基准）由同一施工线续派补丁闭环（worker 施工 + 主 Agent 抽查核验，commits `d7fb8eb` + `c72400d`）：
+
+**① read_file / 工具产物图代看前缀带图尺寸**（src/agent.py `_materialize_tool_result` 非视觉代看成功分支）：PIL 读落盘图尺寸，前缀升级为
+
+> `[视觉模型 X 代看 · 图 WxHpx，0-1000归一化坐标，像素=值×宽(或高)/1000]`
+
+PIL 读失败省略尺寸段不炸（退化 `[视觉模型 it-vision3 代看] <描述>`）。视觉模型路径零变化（照旧 image_url 看像素）。
+
+**② image_feed 帧前缀双基准**（src/session.py，http 帧源）：帧尺寸（PIL 从 data URL 内存解码，任何帧源都带）+ 原屏尺寸（帧服务响应头 `X-Frame-Orig`，可选——旧服务无头自动退回 3 段旧形态），`…实时画面（帧 WxHpx[，原屏 WxH 等比缩放]；坐标0-1000归一化，像素=值×尺寸/1000）…`，机制详见 [image_feed · 后记三](image-feed.md)。
+
+**③ read_file 超 2048 缩放附注**（src/real_tools.py `_shrink_image_bytes`）：返回值扩为三元组（新增**缩放附注 note**）——缩放分支 `[注：原图 WxHpx，已等比缩至 WxHpx（上限2048）]`，早退/异常分支 note 为空串；`_read_image` 把 note 拼在 data URL **之前**（实测 agent.py 真实 `_DATA_URL_RE` 正则提取不受影响，随文本自然透传）。此前缩放是**静默的**——非视觉宿主拿到的坐标基准（缩后图）与视觉卡片描述的真实参照无从对齐；附注让「原图 vs 缩后」两级尺寸都可知。
+
+**换算链终态**：视觉卡片输出 0-1000 归一化坐标 → 注入文本带图/帧尺寸 → 宿主一步换算像素（帧源缩过放的再乘原屏/帧尺寸得屏幕绝对坐标）。**`PROMPT_VER` 未 bump**——desc 缓存内容与格式未变，仅外层前缀拼接变化。
+
+**验证**：`_shrink_image_bytes` 单测（3000x2000 PNG → note 正确 + 实际缩后 `(2048, 1365)` ✓；早退/异常分支 `note=""` ✓；`note + data URL` 用真实 `_DATA_URL_RE` 提取成功 ✓）；`_imgfeed_proxy_text` 三形态（4 段/3 段/坏帧）✓；进程内集成（真实 `Session._asm_evaluate` + mock 帧服务，覆盖每轮装配路径）与 `_read_image` 端到端（小图无 note / 超限图 note 开头且提取正常）✓；`py_diag` 四改动文件全净。
 
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 

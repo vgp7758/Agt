@@ -268,6 +268,7 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 - **拉起**：`Agent.restore_runtime_state` 尾部接 `_ensure_session_services`（src/multiagent.py，src/agent.py 接线）——启动恢复 / /resume / 切 session 三条路都过，与 scheduler / remote 连接表恢复同位；幂等（同名在跑温和拒绝）、无文件空跑
 - **main.yml `services:` 段回归纯声明依赖**单一职责：`_ensure_agent_services` 读侧消费不变，写侧只剩声明手写 / 管理页 services textarea 两入口（上文「写侧三入口」中的看板一键收藏已退役出 main.yml）
 - 看板侧配套：`/api/svc_fav` 改写删 services.json、dashboard 快照 `fav_services` 改读 session 存档、服务组头新增「＋ 服务」直开 `start_service` 手动表单——交互与端点细节见 [background-scheduler · 收藏迁 session 后记](../features/background-scheduler.md)
+- **后续（2026-11-06）**：看板新增「⭐ 已收藏」管理区——`/api/dash` 补 `fav_entries` 完整条目字段（服务不在跑时的数据源）+ ▶ 启动 / ✏ 编辑 / 🗑 取消收藏三按钮（零退出通知），见 [background-scheduler · 已收藏服务管理区](../features/background-scheduler.md)
 
 ### 看板📄完整日志：新页签全量日志页（2026-10-06 · 五，用户提案，commit d22bd34）
 

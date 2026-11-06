@@ -620,6 +620,39 @@ _agent = _state.get("agent") or agent   # 部分端点用短名 ag = ...，同�
 
 **验证**：后端单测 13 项全绿（cwd/on_exit_wake/watch_tail 保全传递、坏条目跳过、无文件空跑、同名不重复、收藏写/删往返 TestClient 实测 `/api/svc_fav`）+ 前端 JS 语法与 5 项结构断言。commit 本地待推（GitHub 断网，push-retry-steps 在岗恢复即自动上岸）。
 
+### ⭐ 已收藏服务管理区：fav_entries 完整条目 + ▶/✏/🗑 三按钮（2026-11-06，重启生效验证；顺带 api_dash 默认键修复 commit 6ba19c5）
+
+**动机（收藏叙事的第三段）**：收藏迁 session `services.json` 后（见[上一后记](#后记收藏整体迁出-mainymlsession-存档-servicesjson-保全全参---服务-按钮2026-10-23用户裁定)），已收藏但**不在跑**的服务（手动停了 / 进程重启过登记丢失）在看板上没有落点——服务卡片随进程快照走，停了就消失，「＋ 服务」只能新建，收藏条目无处查看与管理。本功能补上这块：svcPanel 新增「⭐ 已收藏」管理区。
+
+**数据源（src/server.py `api_dash`）**：`/api/dash` 的 `out` 新增 **`fav_entries`** 字段——session 存档 services.json 的**完整条目**（name/command/cwd），服务不在跑时的管理区数据源；既有 `fav_services`（⭐态 name 名单）保留不变。
+
+**前端（src/static/index.html svcPanel）**：
+
+| 件 | 语义 |
+|---|---|
+| 「⭐ 已收藏」区头 | 有条目才渲染；无条目**不显示空区** |
+| 条目行 | name + 命令 / cwd 展示 |
+| ▶ 启动 | `start_service` 同源拉起（条目里保全的 command+cwd） |
+| ✏ 编辑 | 改收藏条目的启动参数 |
+| 🗑 取消收藏 | **纯删 services.json 条目，不碰进程**——零退出通知（见验证） |
+
+**过滤语义（与快照卡的分工）**：收藏区只放「快照里没有的收藏条目」——重启后进程登记丢失的那类；快照内仍存在的服务（含 exited 卡）不重复出现，走卡片上的 ⭐ 收藏/Start 按钮管理。
+
+**顺带一行修复（commit `6ba19c5`，已推送）**：`api_dash` 的 `out` 初始化 dict 原本没有 `fav_entries` 键——无收藏时响应**缺字段**；初始化补默认键 `[]`，字段恒存在（无收藏时空数组）。
+
+**验证闭环（2026-11-06 重启后实测，全绿）**：
+
+1. `GET /api/dash` 返回 `fav_entries` 完整条目（name/command/cwd）✓
+2. playwright 看板 svcPanel：「⭐ 已收藏」区渲染区头 + 条目 + 三按钮 ✓；删光后区隐藏（空态正确）✓
+3. echo 全流程：`start_service` 起 echo → ⭐ 收藏 → ⏹ Stop → 造一条「重启后不在快照」的 fake 条目 → **fake 出现在收藏区**（快照 exited 卡不重复，过滤语义正确）→ 点 🗑 → 条目消失 ✓
+4. **零退出通知**：echo 手动 stop 走 `manual_stop` 静默标记；🗑 取消收藏不碰进程——实测 **inbox_size = 0**，无新 inbox 轮 ✓（用户此前担心的「取消收藏触发退出通知唤醒」证伪）
+
+**生效**：前端 Ctrl+F5 即见；`fav_entries` 初始化行随 `/restart` 自然补全（有收藏时当前进程已返回该字段）。
+
+**排障备注（环境怪象，未定性）**：run_python 子进程的 python 读不到 `E:\.agt\repos\…` 生产存档（powershell 与生产进程均可读，嫌疑沙箱 IO 层）——本轮验证全程走生产进程通道（/api/tool/exec）绕开；已记长期记忆备查，下次遇到优先绕道不纠缠。
+
+**关联**：[收藏迁 session 后记](#后记收藏整体迁出-mainymlsession-存档-servicesjson-保全全参---服务-按钮2026-10-23用户裁定)（services.json 存储与拉起链）· [服务看板四件套](#服务看板交互四件套-收藏--完整日志--stop--start2026-10-06用户提案commits-9a039c5--d22bd34)（快照卡上的 ⭐/📄/⏹/▶ 按钮——收藏区是「快照外」的那一半）· [multi-agent · 收藏迁出 main.yml](../architecture/multi-agent.md)（main.yml 纯声明回归）。
+
 ## watch_tail：bg_services 投影段附服务日志尾部 N 行（2026-10-07，用户提案，commit 9e1d523）
 
 **动机**：image_feed 段已让 Agent 每步看到实时画面（[姊妹特性](image-feed.md)），而后台服务的实况还停在「按需查」——状态行只有 pid + 已跑时长，stdout 里的运行实况每步投影不可见，想知道就得多调一次 `list_services`/`service_logs`。用户提案：仿 image_feed 的每步注入思路，让 bg_services 装配段也带上服务状态信息。

@@ -1517,6 +1517,7 @@ async def api_dash():
     无 Agent 时返回空结构（服务未接入时前端显示空态）。"""
     out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": [],
            "fav_services": [],   # main.yml services 收藏名单（看板⭐态，2026-10-06）
+           "fav_entries": [],    # 收藏完整条目（2026-11-06：服务不在跑时的管理区数据源）
            "projects": []}       # 项目组（.agent/projects.json 真源，p_2d4f784f 2026-11-19）
     if _agent is None:
         return out

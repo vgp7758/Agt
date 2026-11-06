@@ -1645,6 +1645,34 @@ def _cmd_hold(ctx: CommandContext, args):
         print("用法：/hold on [分钟] | /hold off（当前 " + ("⏸ 挂起中" if getattr(agent, '_hold', False) else "▶ 运行中") + "）")
 
 
+def _cmd_pending(ctx: CommandContext, args):
+    """/pending <message> —— 排队一条用户消息：不打断当前轮（不插话），当前任务结束后自动作为新消息注入（用户提案 2026-11-06）。
+    适合"agent 正忙时提前写好下一个需求"；多条按序逐条成轮（msg 原文即 user_message）。
+    /pending list 查看队列；/pending clear 清空；与插话的区别——插话立即注入当前轮（可改向），
+    /pending 等当前轮完整结束后才生效。"""
+    agent = ctx.agent
+    sub = " ".join(args or []).strip()   # dispatch 传 list（消息含空格——原样拼接）
+    if sub.lower() in ("list", "ls", ""):
+        q = agent.pending_user_queue()
+        if not q:
+            print("📭 /pending 队列为空（agent 正忙时 /pending <message> 排队下一个需求，不打断当前任务）")
+        else:
+            print(f"📋 /pending 队列（{len(q)} 条，当前任务结束后按序注入）：")
+            for i, m in enumerate(q, 1):
+                print(f"  {i}. {m[:80]}")
+        return
+    if sub.lower() == "clear":
+        n = agent.pending_user_clear()
+        print(f"🗑 已清空 /pending 队列（{n} 条）")
+        return
+    agent.queue_pending_user_message(sub)
+    q = agent.pending_user_queue()
+    busy = bool(ctx.state and ctx.state.get("busy") and not ctx.state.get("answered"))
+    tip = ("当前任务结束后自动作为新消息注入（不打断）" if busy
+           else "（agent 当前空闲——此消息将直接开新一轮）")
+    print(f"📥 已排队（第 {len(q)} 条）：{sub[:60]}\n{tip}")
+
+
 def _cmd_continue(ctx: CommandContext, args):
     """/continue [分钟] —— 继续被中断的那一轮（断点续跑，不新增 user_message；用户提案 2026-09-23）。
     无参数=立刻续跑（等同 WebUI「继续」按钮）；带分钟数=延时到点自动续跑。
@@ -2488,6 +2516,13 @@ def build_default_registry() -> CommandRegistry:
         "/continue          立刻继续（等同 WebUI 中断轮的「继续」按钮）\n"
         "/continue 30       30 分钟后自动继续（进程内定时器，重启后失效需重设）\n"
         "  续跑 = 从断点接着跑原轮（不新增 user_message）；已完成的步骤完整保留")
+    reg.register("pending", _cmd_pending,
+        "[message]  排队一条用户消息：不打断当前轮，任务结束后自动作为新消息注入",
+        "/pending 修复登录页样式，完成后告诉我   📥 排队下一个需求（agent 正忙时写好，不打断当前任务）\n"
+        "/pending list    查看队列（多条按序注入）\n"
+        "/pending clear   清空队列\n"
+        "  与插话的区别：直接发消息=插话（步边界注入当前轮，模型可改向）；\n"
+        "  /pending=等当前轮【完整结束】后才作为新 user_message 开新一轮")
     reg.register("debug", _cmd_debug,
         "prompt <提示词>  调试用：按当前上下文投影直接调 LLM，不落盘不执行，打印完整回包\n"
         "hook <提示词>    调试用：以提示词触发 before_turn 钩子，不落盘，钩子跑完即 return",

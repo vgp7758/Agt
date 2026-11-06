@@ -1684,6 +1684,30 @@ class Agent:
         self._emit({"type": "message_queued", "text": text, "queue_size": len(self.pending_messages)})
         return True
 
+    def queue_pending_user_message(self, text: str):
+        """/pending 通道（用户提案 2026-11-06）：排队一条用户消息——不打断当前轮（与插话
+        queue_user_message 相对：那是步边界注入【当前轮】，这是【轮结束后】作为新 user_message
+        开新轮）。实现 = inbox 推送 source="pending_user"：busy 时串行排队不打扰运行中的轮，
+        轮末/空闲时两条既有消费点（run 轮末 pop / inbox_thread→work_q background）自动触发
+        新一轮，msg 原文即 user_message（无通知壳）；多条按序；inbox.jsonl 持久化重启不丢。"""
+        self.push_message(text, source="pending_user")
+        return True
+
+    def pending_user_queue(self) -> list:
+        """/pending 队列视图：inbox 里 source=pending_user 的条目（原文列表，按序）。"""
+        with self._inbox_lock:
+            return [m for (s, m, _) in self.inbox if s == "pending_user"]
+
+    def pending_user_clear(self) -> int:
+        """清空 /pending 队列（inbox 里 pending_user 条目全部移除），返回清除条数。"""
+        with self._inbox_lock:
+            before = list(self.inbox)
+            self.inbox.clear()
+            kept = [it for it in before if it[0] != "pending_user"]
+            self.inbox.extend(kept)
+        self._inbox_persist_rewrite()
+        return len(before) - len(kept)
+
     # ========== 工作流生命周期钩子 ==========
     def _hook_tasks(self, hook: str, _apply_switch: bool = True) -> list[dict]:
         """解析本 agent 某 hook 位置的任务清单：yml hook_specs 优先（v2），

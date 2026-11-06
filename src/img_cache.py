@@ -39,9 +39,17 @@ def _conn(workspace):
     return con
 
 
+# 提示词版本盐：代看提示词/输出格式改版时 bump（与 llm_client.IMG_DESC_INSTRUCTION /
+# IMG_FEED_INSTRUCTION 同一次改动同步改）——盐变则 hash 变，旧缓存条目（旧格式描述）
+# 自然 miss 重看，无需清库。
+PROMPT_VER = "v2-coord"
+
+
 def hash_of(data_url: str) -> str:
-    """缓存键：data URL 全文的 md5 前 16 位（不含 base64 本体，省空间；同图不同 mime 不撞）。"""
-    return hashlib.md5((data_url or "").encode()).hexdigest()[:16]
+    """缓存键：(PROMPT_VER 盐 + data URL 全文) 的 md5 前 16 位。
+    混入提示词版本盐：提示词改版（输出格式变）后旧描述自动失效重看；
+    同图不同 mime 的 data URL 文本不同不撞。"""
+    return hashlib.md5((PROMPT_VER + "\x00" + (data_url or "")).encode()).hexdigest()[:16]
 
 
 def get_desc(workspace, h: str):

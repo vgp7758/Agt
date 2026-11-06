@@ -2015,21 +2015,22 @@ class Session:
             return sen
         durl = m.group(2)
         import img_cache
+        from llm_client import describe_image_with_vision, IMG_FEED_INSTRUCTION
         h = img_cache.hash_of(durl)
         row = img_cache.get_desc(self.workspace, h)
         if not row:
-            from llm_client import describe_image_with_vision
             r = describe_image_with_vision(
                 durl, timeout=60,
-                instruction="这是实时画面帧。请简洁描述当前画面（120字内）：界面元素/窗口/文本/明显变化。")
+                instruction=IMG_FEED_INSTRUCTION)
             if not r:
                 return ("[image_feed：视觉代理描述失败——无可用视觉卡片或调用超时"
                         "（配置里加 vision 卡片可自动代看）]")
             row = r
             img_cache.put_desc(self.workspace, h, r[0], r[1])
         used, desc = row
-        return (f"当前模型为非视觉，image_feed自动获取到实时画面，"
-                f"以下是视觉模型{used}对画面的描述：{desc}")
+        return (f"当前模型为非视觉，image_feed自动获取到实时画面。以下是视觉模型{used}对画面的"
+                f"结构化描述（坐标为 0-1000 归一化值，[x1,y1→x2,y2]，左上角→右下角，"
+                f"对应画面宽高的千分比位置）：{desc}")
 
     def _construction_mode(self) -> bool:
         """施工模式（2026-09-13·spec s_e1804804，用户提案）：活动 plan 存在未完成步时投影切换

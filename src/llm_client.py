@@ -1314,6 +1314,31 @@ class LLMClient:
 
 
 # ========== 图片代理描述（用户提案 2026-10-27） ==========
+# 视觉代看提示词·详细版（用户提案：结构化输出 + 0-1000 归一化坐标定位）。
+# 坐标采用 0-1000 归一化（Qwen-VL grounding 原生训练格式，视觉卡片输出最稳）。
+# agent.py read_file 代看路径复用本常量（单一来源防漂移）；改版时同步 bump img_cache.PROMPT_VER。
+IMG_DESC_INSTRUCTION = (
+    "请看这张图片，用中文按以下结构输出；所有坐标用 0-1000 归一化值"
+    "（[x1,y1→x2,y2]，左上角→右下角，对应图片宽高的千分比位置）：\n"
+    "【整体】画面类型与主要内容（一句话）。\n"
+    "【文字】画面中的文字信息，逐条列出并附位置坐标。\n"
+    "【元素】主要界面元素/物体（≤8 项）：名称 + [x1,y1→x2,y2]。\n"
+    "【细节】值得注意的细节：颜色/状态/异常/布局关系。"
+)
+
+# 视觉代看提示词·image_feed 简洁操作版（帧是实时画面，宿主按此决定下一步操作）：
+# 描述只附加在投影尾部、不进存档（用户裁定）——不限字数，可交互元素上限放宽到 10 项；
+# 坐标与结构化格式保持 0-1000 归一化。改版时同步 bump img_cache.PROMPT_VER。
+IMG_FEED_INSTRUCTION = (
+    "这是实时画面帧。用中文按操作视角结构化输出（坐标用 0-1000 归一化值"
+    " [x1,y1→x2,y2]，左上角→右下角）：\n"
+    "【画面】画面类型与主要内容（一句话）。\n"
+    "【可交互】可点击/操作元素（≤10 项）：名称 + [x1,y1→x2,y2]。\n"
+    "【文本】画面上的关键文字，逐条附位置坐标。\n"
+    "【异常】错误弹窗/遮挡/加载中（无则省略此段）。"
+)
+
+
 def describe_image_with_vision(data_url: str, instruction: str = "",
                                tries: int = 3, timeout: float = 60.0):
     """非视觉模型的图片代理描述：从 config.MODELS 按序取 vision=True 的卡片（最多 tries 个）
@@ -1326,8 +1351,7 @@ def describe_image_with_vision(data_url: str, instruction: str = "",
              if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
     if not cands:
         return None
-    prompt = instruction or ("请看这张图片并用中文详细描述：画面里有什么、界面元素、"
-                             "文字信息（如有）、值得注意的细节。")
+    prompt = instruction or IMG_DESC_INSTRUCTION
     for n in cands:
         try:
             prof = config.get_profile(n)

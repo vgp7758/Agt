@@ -519,11 +519,10 @@ class Agent:
                 h = img_cache.hash_of(data_url)
                 row = img_cache.get_desc(self.session.workspace, h)
                 if not row:
-                    from llm_client import describe_image_with_vision
+                    from llm_client import describe_image_with_vision, IMG_DESC_INSTRUCTION
                     r = describe_image_with_vision(
                         data_url, timeout=60,
-                        instruction="请看这张图片并用中文描述：画面内容、界面元素、"
-                                    "文字信息、值得注意的细节。")
+                        instruction=IMG_DESC_INSTRUCTION)
                     if r:
                         row = r
                         img_cache.put_desc(self.session.workspace, h, r[0], r[1])

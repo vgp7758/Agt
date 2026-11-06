@@ -989,6 +989,12 @@ docstring 已写选择指引：常驻关键服务建议 `crash`；单次任务�
 
 **关联**：[user-interaction · 唤醒策略化](user-interaction.md)（策略化起点）/ [user-interaction · 误用收编](user-interaction.md)（自定义文本语义）/ [user-interaction · 语义标签](user-interaction.md)（通知轮渲染）。
 
+### 后记：回执双消费——忙分支 push_message 的 _emit 崩溃曾引发兜底双投（2026-11-06，commit 30a3e68）
+
+本节「不打断（忙时排队到下一步边界注入）」的投递路径曾有一个**双投缝隙**：`push_message` 里 inbox 已入列后 `_emit`（WS 广播渲染层）偶发异常 → `deliver_notice` 兜底又走 `queue_user_message` → 同一条回执在插话队列 + inbox 各一份，**轮内注入消费一次、轮末 inbox 再消费一次**（用户观察的「轮期间已消费，轮结束又触发一轮再消费」，2026-11-06 实锤）。
+
+修复三层（源头 `_emit` 永不抛 / `queue_user_message` 对称防护 / 兜底前查重幂等）见 [multi-agent · 回执双消费根治](../architecture/multi-agent.md#回执双消费根治_emit-崩溃引发兜底双投投递语义与渲染解耦2026-11-06用户实锤commit-30a3e68)。后台任务回执（[按发起者路由](#后台任务完成回执按发起者路由谁起的谁收2026-10-15用户裁定commit-45369c8)）与 sub-agent 回执同走 `deliver_notice`，一并修复。
+
 ## 启动蜜月 quiet_secs：窗口内退出静默——重启拉起的声明服务秒退不再吓醒 agent（2026-10-08，用户实锤，commit 86e36f9）
 
 **动机（用户实锤）**：带 `services:` 声明的实例 /restart 后，agent 被「[服务异常崩溃]」提醒吓一跳、自动开始处理。根因链：restart → 声明服务重新拉起 → **旧孤儿进程还占着端口**（或环境未就绪）→ 新服务秒退（rc≠0）→ `on_exit_wake` 默认 `notify` → 通知进 inbox 唤醒 agent——**启动期抖动被当真崩溃**。

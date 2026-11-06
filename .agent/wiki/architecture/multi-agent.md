@@ -1051,6 +1051,42 @@ agent_notify(target_id, message)
 
 **兼容**：kefu_gate 的悬挂兜底保留为兼容层——新语义下 notify 空闲直达，兜底分支自然不再触发（忙时排队后的消费检测依然有效）。`/restart` 生效。
 
+## 回执双消费根治：_emit 崩溃引发兜底双投——投递语义与渲染解耦（2026-11-06，用户实锤，commit 30a3e68）
+
+**现象（用户报告 2026-11-06）**：后台服务退出回执 / sub-agent 回执，经常在轮期间已被消费，轮结束时又触发 inbox 开新一轮**再消费一次**。用户猜想：「插话的消费和 inbox 的消费是不是放在不同的队列里了？可能应该放同一个队列以某个字段区分」。
+
+**裁定：两队列架构无恙，真凶是投递侧双投**——插话队列（`pending_messages`，管轮内下一步边界注入）与 inbox（管轮末 pop 开新轮）语义本就不同、各司其职，不合并不加区分字段。重复感来自**同一条消息被投进了两个队列各一份**：
+
+```
+回执到达（deliver_notice 忙分支：目标在跑）
+  → push_message(message, source="bg_task", seed=…)
+      ① inbox.append + _inbox_persist_append 成功 ✓
+      ② _emit（WS 广播渲染层）偶发异常 ✗ → 抛出
+  → except 兜底：无条件 queue_user_message()
+      ③ 同一条消息又写进插话队列
+消费侧两份各吃一次：
+  轮内下一步边界 → 插话份作 user_hint 注入（「轮期间已消费」）
+  轮末 pop_inbox → inbox 份开新一轮（「轮结束又消费一次」）
+```
+
+触发条件是 `_emit` 偶发异常（WS 广播层抖动）——所以「经常」但非每次，与用户观察吻合。
+
+**修复三层（commit `30a3e68`）**：
+
+| 层 | 位置 | 修法 |
+|---|---|---|
+| 源头永不抛 | src/agent.py `push_message` | 持锁 append/persist 已成后，`_emit` 包 try/except（仅日志）——渲染失败不回滚投递语义，调用方不再收到「投递失败」假象 |
+| 对称防护 | src/agent.py `queue_user_message` | `_emit` 失败同样只记日志不影响入队——防兜底方把「已投递」误判成「未投递」而重投 |
+| 兜底查重 | src/multiagent.py `deliver_notice` | 进兜底前查两个队列：同文已存在 = 已投递 → 跳过；真没投出去才补投——「消息不丢」语义保留，只消灭重复 |
+
+**顺手修：`agent_notify` 忙判定对齐**（src/multiagent.py）——deliver_notice 的忙判定此前已补读 `_react_running`（b5d8e2e），agent_notify 的还只看 `entry.status == "running" or agent.busy`：registry 状态未及时刷新 / 子 Agent 裸跑（非 react 循环框架路径，busy 未置）时会误判空闲 → 起第二条 react 循环。改**三态或**：`entry.status=="running" or busy or _react_running`，任一为忙即走插话排队。
+
+**验证**：独立实例单测五场景（A~E）全过——emit 炸不抛且 inbox 恰一条 / 无 seed 走插话 / push 半途炸→兜底查重命中→零双投 / 完全炸→兜底补投恰一条 / 忙判定三态对齐。
+
+**生效**：引擎代码，`/restart`；commit `30a3e68` 已推送。
+
+**关联**：[agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5)（本批修补其忙判定）· [wait_subagents](#wait_subagents干等调查与诊断埋点2026-08commit-22cf719) 的消费去重（wait 回复轮后二次消费——同族上一课，commit c160348）· [后台任务完成回执按发起者路由](../features/background-scheduler.md#后台任务完成回执按发起者路由谁起的谁收2026-10-15用户裁定commit-45369c8)（回执的产生端）
+
 ## wait_subagents：干等调查与诊断埋点（2026-08，commit 22cf719）
 
 **现象（/restart 前，t456）**：观测页 wait_subagents 节点一直 running（"干等"）——用户怀疑「判断 agent 状态的逻辑是否被改过」。

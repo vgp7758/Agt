@@ -122,3 +122,11 @@
 
 - **项目组 OKR 化（2026-11-19 · 二，用户提案「在 dashboard 建，一个项目有一个类似 OKR 的东西，由协调者与用户商议和维护」）**：项目文档 `plan.md` → `okr.md`——**Objective** 一句话不轻改（O 级改动须用户点头）+ **Key Results** 2~5 条可验收复选项（能判「成/没成」）；产出方式改为 coordinator 与用户**商议**：用户提模糊愿望 → 提炼 KR → 复述确认落盘，KR 随演进增删。巡检/推进 SOP 全程对照 KR：找未勾项（同时只推进 1~2 条）→ 带验收标准派活 → 达标勾 `[x]` → 全勾完报「Objective 达成」。数据字段 `plan_file`/`plan_mtime` → `okr_file`/`okr_mtime`（project_tools + server.py 4 处改名）；看板项目卡「📄 计划」→「📄 OKR」。**生效两段式**：工具组已热重载（`create_project` 即产 OKR 项目，隔离冒烟全绿）；server.py / index.html 侧随下次 `/restart`（当前无存量项目，无感切换）。详见 [项目组 · OKR 化](features/projects.md)
 
+## 快速事实增补（2026-11-06 · 回执双消费根治：_emit 崩溃引发兜底双投——投递语义与渲染解耦）
+
+- **回执双消费根治（2026-11-06，用户实锤，commit `30a3e68`）**：用户报告「后台服务退出回执/sub-agent 回执轮期间已消费、轮结束又触发 inbox 再消费一次」，猜想两队列该合并——**裁定两队列架构无恙**（插话队列管轮内注入 / inbox 管轮末开新轮，语义不同各司其职），真凶是投递侧双投：`deliver_notice` 忙分支 `push_message` 里 inbox 已入列后 `_emit`（WS 广播）偶发异常 → 兜底无条件 `queue_user_message` → 同一条回执插话 + inbox 各一份、各消费一次。修复三层：①源头 `_emit` 永不抛（渲染失败不回滚投递语义）；②`queue_user_message` 对称防护；③兜底改**查重式**（同文已存在=已投递跳过，「消息不丢」保留）。顺手对齐 `agent_notify` 忙判定补 `_react_running`（registry 状态未刷新/子 Agent 裸跑时误判空闲起第二条 react 循环）。独立实例单测 A~E 全过，`/restart` 生效。详见 [multi-agent · 回执双消费根治](architecture/multi-agent.md)
+
+## 快速事实增补（2026-11-06 · 二 · 分支按钮轮号锚校准：answer 前 60 字内容锚定 + events 坏行口径漂移）
+
+- **分支按钮轮号错位修复（2026-11-06 · 二，20048 实锤，commit `839d5bf`）**：20048 `20261005_180040` 第 518 轮点 🌿 分支，新分支只继承到第 515 轮（中间 3 轮消失）——根因三层：①主线 events.jsonl L4194 **坏行**（turn_end 的 `}` 没换行直拼下一个 turn_start，写盘竞态，`_read_events` 跳过 → 列表轮序少 1）；②分支按钮轮号（前端 history 口径）与 `/branch` 轮号（events 里第 N 个 turn_end）**两套计数**相差 3；③结果 `inherit_lines=11514`，3 轮落界外。修复两层：**数据侧**坏行拆开（11562→11563 行，520 轮全可读，20048 存档已修）+ **代码侧锚校准**——分支按钮随请求带该轮 answer 前 60 字，后端 `/api/branch` 以内容锚定（前 40 字前缀 events 全局**唯一命中**才校准；多命中/无命中/空锚保持原 turn 不强校，宁可不修不修错），单测 4 场景全过。**遗留**：events.jsonl 写盘竞态未根治（append 锁与换行原子性待查）——其它 session 再报「轮数不对/分支错位」先扫 `}{"event":` 拼接坏行；停在 515 轮的旧分支建议删除重建。详见 [session-branching · 锚校准](features/session-branching.md)
+

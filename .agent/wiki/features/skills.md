@@ -309,6 +309,26 @@ desktop-ops 一日内完成能力形态整体迁移，最终定型「**画面走
 
 test_skill_command 的 `_resolve_skill` patch 泄漏，污染后续测试文件（合跑 5 failed）——改 autouse fixture 还原（patch 必还愿，测试文件间全局卫生立规矩）。回归：test_skill_assemblies 18 + 合跑 31 passed + subagent_skills rc=0。
 
+## 技能包双份真源：种源 src/assets/skills/ ↔ 运行时 .agent/skills/（2026-11，实锤不同步）
+
+**双份存在**：同一技能在两处各有一份，语义不同、**装备/调用只认后者**：
+
+| 位置 | 角色 |
+|---|---|
+| `src/assets/skills/<名>/` | **种源**（bundled 播种源，随 wheel 分发 → 首启拷进新 repo 的 `.agent/skills/`） |
+| `.agent/skills/<名>/` | **运行时副本**——`_resolve_skill` 阶梯第一级（本地优先，见 §双层体系），`read_skill` / `skill_navigate` / `skill_run_code` / `skill_command` / `skill_equip` 全部走它 |
+
+**坑（2026-11 实锤，desktop-ops 坐标改造轮）**：worker 只改了种源 `src/assets/skills/desktop-ops/`，**现装实例仍跑旧代码**——两份大小 8379B vs 12818B 直接对不上，装备后新能力（`--nx/--ny`）根本不出现。表现为「代码明明改了、Agent 说没这个参数」，极易误判为缓存或 `/restart` 问题。
+
+**纪律**：
+
+- 改**已有技能的行为** → 先改运行时副本（`.agent/skills/`）让现装实例立刻用上，再同步种源（`robocopy /MIR` 或 `copy` 覆盖），否则新 repo 播种出去的是旧版
+- 只改种源 = 新装有效、现装无效；只改运行时 = 现装有效、播种丢失——**两处必同步**
+- 新建技能一般由 `save_skill` 写运行时副本，再人工/工具提升为种源
+- 校验：比对两处文件大小/哈希；改完跑真装链路（equip → 命令实测）而不是函数级单测
+
+同一教训的邻居形态：改技能包后**运行中的 skill 服务仍跑旧进程**（`skill_equip` replace 或 `skill_unequip` 才会换代码）。跨 repo 消费端（如 unity-repl 技能）由各自 repo 自己的 `.agent/skills/` 承载，框架侧无副本——升级只在该 repo 内做。
+
 ## 技能自带装配清单（assemblies:）
 
 ### 技能自带装配清单（SKILL.md `assemblies:` 字段，2026-10-16）

@@ -30,18 +30,19 @@ MAX_W = int(sys.argv[2]) if len(sys.argv) > 2 else 1280
 THROTTLE = 0.5   # 秒：缓存帧有效期
 
 _lock = threading.Lock()
-_cache = {"jpeg": b"", "ts": 0.0}
+_cache = {"jpeg": b"", "ts": 0.0, "orig": ""}   # orig=原屏尺寸串"WxH"（缩放前，宿主坐标换算基准）
 
 
-def _grab() -> bytes:
-    """抓屏 → JPEG bytes（缩放 + 质量控制）。失败抛异常（上层转 503）。"""
+def _grab() -> tuple[bytes, str]:
+    """抓屏 → (JPEG bytes, 原屏尺寸串"WxH")（缩放 + 质量控制）。失败抛异常（上层转 503）。"""
     from PIL import ImageGrab
     img = ImageGrab.grab()
+    orig = f"{img.width}x{img.height}"
     if img.width > MAX_W:
         img = img.resize((MAX_W, int(img.height * MAX_W / img.width)))
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=70)
-    return buf.getvalue()
+    return buf.getvalue(), orig
 
 
 class H(BaseHTTPRequestHandler):
@@ -52,7 +53,7 @@ class H(BaseHTTPRequestHandler):
             fresh = (time.time() - _cache["ts"]) < THROTTLE and _cache["jpeg"]
             if not fresh:
                 try:
-                    _cache["jpeg"] = _grab()
+                    _cache["jpeg"], _cache["orig"] = _grab()
                     _cache["ts"] = time.time()
                 except Exception as e:
                     self.send_response(503)
@@ -61,9 +62,12 @@ class H(BaseHTTPRequestHandler):
                     self.wfile.write(f"grab failed: {e}".encode("utf-8"))
                     return
             data = _cache["jpeg"]
+            orig = _cache.get("orig") or ""
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
         self.send_header("Content-Length", str(len(data)))
+        if orig:   # 原屏尺寸随响应头透出：session 侧拼进哨兵串第4段（orig:WxH），宿主坐标换算用
+            self.send_header("X-Frame-Orig", orig)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)

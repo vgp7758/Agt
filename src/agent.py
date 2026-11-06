@@ -528,7 +528,17 @@ class Agent:
                         img_cache.put_desc(self.session.workspace, h, r[0], r[1])
                 if row:
                     used, desc = row
-                    out.append(f"<img>{fn}</img>\n[视觉模型 {used} 代看] {desc}")
+                    # 坐标换算需尺寸基准（2026-10-28 补丁）：读落盘图像素尺寸拼进前缀，
+                    # 宿主才能把 0-1000 归一化坐标换算回像素；读失败省略尺寸段不炸。
+                    _dim = ""
+                    try:
+                        from PIL import Image as _Img
+                        with _Img.open(out_dir / fn) as _im:
+                            _dim = f" · 图 {_im.width}x{_im.height}px，" \
+                                   f"0-1000归一化坐标，像素=值×宽(或高)/1000"
+                    except Exception:
+                        pass
+                    out.append(f" [图片 {fn} 读取失败] \n[视觉模型 {used} 代看{_dim}] {desc}")
                 else:
                     out.append(f"<img>{fn}</img>"
                                f"[图片 {fn}：当前模型无视觉且视觉代理不可用（配置里加 vision 卡片"

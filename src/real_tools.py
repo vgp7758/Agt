@@ -598,24 +598,28 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
 _MAX_IMG_EDGE = 2048
 
 
-def _shrink_image_bytes(raw: bytes) -> tuple[bytes, str]:
+def _shrink_image_bytes(raw: bytes) -> tuple[bytes, str, str]:
     """图片任一边超过 _MAX_IMG_EDGE 时等比缩小到限内（需 Pillow；不可用/失败则原样返回）。
-    返回 (bytes, mime)：mime 非空表示已转码（统一存 PNG，无损保文字清晰度；GIF 取首帧）。"""
+    返回 (bytes, mime, note)：mime 非空表示已转码（统一存 PNG，无损保文字清晰度；GIF 取首帧）；
+    note 为缩放附注（发生缩放时非空，告知宿主原图尺寸——视觉模型看到的是缩后图，
+    宿主按原尺寸理解坐标会错位），调用处拼在 data URL 之前随文本透传。"""
     try:
         from PIL import Image
         import io
         img = Image.open(io.BytesIO(raw))
         w, h = img.size
         if w <= _MAX_IMG_EDGE and h <= _MAX_IMG_EDGE:
-            return raw, ""
+            return raw, "", ""
         ratio = min(_MAX_IMG_EDGE / w, _MAX_IMG_EDGE / h)
+        nw, nh = max(1, int(w * ratio)), max(1, int(h * ratio))
         img = img.convert("RGBA" if img.mode in ("P", "LA") else img.mode) \
-            .resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
+            .resize((nw, nh), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        return buf.getvalue(), "image/png"
+        note = f"[注：原图 {w}x{h}px，已等比缩至 {nw}x{nh}px（上限{_MAX_IMG_EDGE}）] "
+        return buf.getvalue(), "image/png", note
     except Exception:
-        return raw, ""
+        return raw, "", ""
 
 
 def _read_image(file: str) -> str:
@@ -647,10 +651,12 @@ def _read_image(file: str) -> str:
                 ext = (p.suffix.lstrip(".") or "png").lower()
                 ext = "jpeg" if ext == "jpg" else ext
                 raw = p.read_bytes()
-                raw, forced_mime = _shrink_image_bytes(raw)   # 超限自动压缩
+                raw, forced_mime, note = _shrink_image_bytes(raw)   # 超限自动压缩（note=缩放附注）
                 mime = forced_mime or mimetypes.guess_type(str(p))[0] or f"image/{ext}"
                 b64 = base64.b64encode(raw).decode()
-                return f"data:{mime};base64,{b64}"
+                # 附注拼在 data URL 之前：不影响 _DATA_URL_RE 提取（正则从 data: 起匹配），
+                # 且随 _materialize_tool_result 的文本段自然透传给宿主
+                return (note or "") + f"data:{mime};base64,{b64}"
         except Exception:
             continue
     return f"[未找到图片] {file}（cwd 和 repo images/ 都没找到）"

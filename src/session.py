@@ -1971,11 +1971,13 @@ class Session:
                     _sen = _asm_image_feed_from_tool(_src[5:].strip(), self)
                 else:
                     import urllib.request as _ur, base64 as _b64
+                    _orig_head = ""
                     try:
                         if _src.lower().startswith(("http://", "https://")):
                             with _ur.urlopen(_src, timeout=3) as _r:
                                 data = _r.read(6_000_000)
                                 mime = (_r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+                                _orig_head = (_r.headers.get("X-Frame-Orig") or "").strip()
                         else:
                             _p = Path(_src)
                             if not _p.is_absolute():
@@ -1987,6 +1989,11 @@ class Session:
                     if not data:
                         return f"[image_feed 空帧：{_src}]"
                     _sen = f"@@IMGFEED@@{int(time.time())}@@data:{mime};base64,{_b64.b64encode(data).decode()}@@"
+                    if _orig_head and re.fullmatch(r"\d+x\d+", _orig_head):
+                        # 第4段 orig:WxH（2026-10-28 补丁）：poc 帧源缩放前的原屏尺寸。
+                        # base64 不产生 @，data:[^@]+ 正则解析不受尾部段影响；
+                        # 旧版画面服务无此响应头→维持 3 段旧形态（完全后向兼容）。
+                        _sen += f"orig:{_orig_head}@@"
                 if not getattr(getattr(self, "llm", None), "vision_supported", False):
                     # 非视觉宿主（用户提案 2026-10-27）：不再整段跳过——照常取帧后委托配置内
                     # 视觉卡片代看，描述文本替代 base64 注入（_imgfeed_proxy_text；帧 hash 缓存，
@@ -2009,11 +2016,25 @@ class Session:
         视觉卡片描述（describe_image_with_vision）→ 描述文本替代 base64 注入 tail 桶。
         描述查/写 repo 级 SQLite 缓存（img_desc_cache.db，跨 session/重启共享，用户裁定
         2026-10-27）：先查命中（帧没变/跨重启同帧零视觉调用），miss 才调视觉模型并记录。
-        非哨兵输入（取帧失败的降级文案）原样透传。"""
-        m = re.match(r"@@IMGFEED@@(\d+)@@(data:[^@]+)@@", sen or "")
+        非哨兵输入（取帧失败的降级文案）原样透传。
+        2026-10-28 补丁：前缀附帧尺寸（PIL 从 data URL 内存解码读，失败省略尺寸段不炸）
+        与可选第4段 orig:WxH（poc 缩放帧的原屏尺寸）——宿主据此把 0-1000 归一化坐标
+        换算回像素。"""
+        m = re.match(r"@@IMGFEED@@(\d+)@@(data:[^@]+)@@(?:orig:(\d+)x(\d+)@@)?", sen or "")
         if not m:
             return sen
         durl = m.group(2)
+        # 尺寸段：帧像素尺寸 + 原屏缩放说明（有 orig 段才拼）；PIL 读不到就只保留坐标换算说明
+        _orig_seg = (f"，原屏 {m.group(3)}x{m.group(4)} 等比缩放" if m.group(3) else "")
+        _size_seg = "（坐标0-1000归一化，像素=值×尺寸/1000）"
+        try:
+            import io as _io
+            from PIL import Image as _Img
+            with _Img.open(_io.BytesIO(base64.b64decode(durl.split(",", 1)[1]))) as _im:
+                _size_seg = (f"（帧 {_im.width}x{_im.height}px{_orig_seg}；"
+                             f"坐标0-1000归一化，像素=值×尺寸/1000）")
+        except Exception:
+            pass
         import img_cache
         from llm_client import describe_image_with_vision, IMG_FEED_INSTRUCTION
         h = img_cache.hash_of(durl)
@@ -2028,9 +2049,8 @@ class Session:
             row = r
             img_cache.put_desc(self.workspace, h, r[0], r[1])
         used, desc = row
-        return (f"当前模型为非视觉，image_feed自动获取到实时画面。以下是视觉模型{used}对画面的"
-                f"结构化描述（坐标为 0-1000 归一化值，[x1,y1→x2,y2]，左上角→右下角，"
-                f"对应画面宽高的千分比位置）：{desc}")
+        return (f"当前模型为非视觉，image_feed自动获取到实时画面{_size_seg}，"
+                f"以下是视觉模型{used}对画面的描述：{desc}")
 
     def _construction_mode(self) -> bool:
         """施工模式（2026-09-13·spec s_e1804804，用户提案）：活动 plan 存在未完成步时投影切换

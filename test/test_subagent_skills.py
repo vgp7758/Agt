@@ -6,7 +6,8 @@
   无 skills 字段零影响、字符串形态兼容；
 - system 尾拼接语义（persona 空/非空两态）；
 - desktop-operator 实例化 e2e：真实声明文件 + 真实技能包 →
-  键鼠 10 工具在箱 / SOP 在 system / image_feed 装配段照常。
+  键鼠工具【不】在箱（迁 stdin 服务后走 skill_use 命令口）/ 工具箱不含键鼠 /
+  SOP 在 system / image_feed 装配段由技能声明提供（帧源 skill_command screen_capture）。
 
 隔离：临时技能用例走 tmp_path + monkeypatch multiagent.WORKSPACE，不污染真实 repo；
 e2e 用例直用 repo 真实声明与技能包（只读，不派活不连网）。
@@ -112,32 +113,47 @@ def test_string_form(ws):
 # ── ⑤ desktop-operator 实例化 e2e（真实声明+真实技能包）──
 
 def test_desktop_operator_instantiation():
-    from agent_config import load_agent_yml
+    """desktop-operator 能实例化且装配形态正确（键鼠走 stdin 服务命令口，不装配成工具）。"""
+    from agent_config import load_agent_yml, _split_frontmatter
     root = Path(__file__).resolve().parent.parent
     meta, system = load_agent_yml(root / ".agent" / "agents" / "desktop-operator" / "desktop-operator.yml")
     assert meta.get("skills") == ["desktop-ops"]
     assert system == ""                                    # yml v2：persona 在 assembly
 
+    # 技能包形态：SKILL.md 无 tools 声明、键鼠全量走 server.py 命令口
+    skill_dir = root / ".agent" / "skills" / "desktop-ops"
+    fm, _ = _split_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+    assert "tools" not in fm, f"键鼠已迁 stdin 服务，SKILL.md 不应再声明 tools: {fm.get('tools')}"
+    assert (skill_dir / "server.py").is_file()                                   # 命令口本体（skill_use 拉起）
+    assert (skill_dir / "scripts" / "commands" / "screen_capture.py").is_file()   # 帧命令实现
+
     main = Agent(system="t", tools=Toolbox(), model_name=None, verbose=False)
     sk = ma._agent_skill_gear("desktop-operator", meta, main)
     assert sk["error"] == ""
+    assert sk["tools"] == [], f"技能不该再注册键鼠工具: {[t.name for t in sk['tools']]}"
     toolbox, _ = ma._resolve_tools(main, meta.get("tools", ""))
     toolbox = Toolbox(*list(toolbox), *ma._agent_own_tools("desktop-operator", main), *sk["tools"])
     system = ((system or "").rstrip() + "\n\n" + sk["sop"]).strip()
 
     sub = ma.SubAgent("desktop-operator", None, system, toolbox, registry=None, agent_id="do_e2e_1")
     names = {t.name for t in sub.agent.tools}
-    assert KEY_MOUSE_TOOLS <= names, f"键鼠工具缺: {KEY_MOUSE_TOOLS - names}"   # 键鼠 10 工具在箱
+    assert not (KEY_MOUSE_TOOLS & names), f"键鼠应走 skill_use 命令口，不该在箱: {KEY_MOUSE_TOOLS & names}"
     assert "坐标规范" in sub.agent.base_system and "操作纪律" in sub.agent.base_system   # SOP 在 system
 
     plan = ma._parse_assembly(meta)                        # yml 基线：image_feed 段已迁进技能 SKILL.md
     assert not [it for it in plan if it.get("kind") == "image_feed"]   # yml 不再手写 image_feed（瘦身）
     assert meta.get("services") in (None, [], {}), "yml services 声明已收进技能（不再有 8765 帧服务）"
-    # 技能自带装配声明合并 → image_feed 段回来（tool: 帧提供者，装备时冻结）
+    # 技能自带装配声明合并 → image_feed 段回来（帧源=技能命令口 screen_capture，装备时冻结）
     plan2, _, errs = ma._apply_extra_assemblies(plan, None, sk["extras"])
     assert errs == [] and sk["extras"], f"desktop-ops 应带装配声明: {sk['extras']}"
+    assert sk["extras"][0]["position"] == "after:steps"
+    assert sk["extras"][0]["_skill_src"] == "desktop-ops"     # 来源标记（装卸闭环按标记撤销）
     feeds = [it for it in plan2 if it.get("kind") == "image_feed"]
-    assert feeds and "screen_frame" in str(feeds[0].get("image_feed")), f"帧提供者应为 screen_frame: {feeds}"
+    assert len(feeds) == 1, f"应插 1 个 image_feed 段: {feeds}"
+    frame_src = str(feeds[0].get("image_feed"))
+    assert "skill_command" in frame_src and "screen_capture" in frame_src, \
+        f"帧提供者应为技能命令口 screen_capture: {feeds}"
+    assert feeds[0].get("_skill_src") == "desktop-ops"
     assert any(it.get("kind") == "file" and "desktop-operator.md" in json.dumps(it) for it in plan2)
 
 

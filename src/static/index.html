@@ -1981,6 +1981,38 @@ async function addSvcByForm(){
   if(!t){ toast('⚠️ 未找到 start_service 工具（工具箱加载失败？）'); return; }
   pickTool('start_service');
 }
+// —— 已收藏服务三操作（用户实锤 2026-11-06：服务不在跑时收藏条目没有管理入口）——
+// 🗑 取消收藏=纯删 services.json，不碰运行进程 → 零退出通知（要停服务先用卡上 Stop——
+//    stop 走 manual_stop 标记本就静默）
+async function favSvcDel(name){
+  try{
+    const r = await fetch('/api/svc_fav', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, on:false})}).then(x=>x.json());
+    toast(r && r.ok ? '🗑 已取消收藏（未动运行中的服务）' : '❌ ' + ((r && r.error) || '失败'));
+    renderSvcDash();
+  }catch(e){ toast('❌ ' + e.message); }
+}
+// ▶ 启动：从 dash 的 fav_entries 取完整参数走 start_service 工具通道（cwd 等保全）
+async function favSvcStart(name){
+  const e = (window._favEnts || []).find(x => x.name === name);
+  if(!e){ toast('⚠️ 条目不在收藏列表（刷新看板后重试）'); return; }
+  try{
+    const r = await fetch('/api/tool/exec', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name:'start_service', arguments:{name:e.name, command:e.command, ...(e.cwd?{cwd:e.cwd}:{})}})}).then(x=>x.json());
+    toast((r && r.ok) ? '▶ 已提交启动（片刻后卡片出现）' : '❌ ' + ((r && r.result) || '失败'));
+    setTimeout(renderSvcDash, 1200);
+  }catch(err){ toast('❌ ' + err.message); }
+}
+// ✏ 编辑：复用手动工具表单（start_service 参数回填，保存=重新收藏同条目覆盖）
+async function favSvcEdit(name){
+  const e = (window._favEnts || []).find(x => x.name === name);
+  if(!e){ toast('⚠️ 条目不在收藏列表'); return; }
+  if(!_toolList.length) await loadToolListForForm();
+  const t = _toolList.find(x => x.name === 'start_service');
+  if(!t){ toast('⚠️ 工具箱未就绪'); return; }
+  _pickedTool = 'start_service';
+  openToolCallForm(t, {name: e.name, command: e.command, ...(e.cwd?{cwd:e.cwd}:{})});
+}
 // 定时任务添加/编辑 → 复用 add_schedule 工具表单（用户提案 2026-10-23：退役手写特殊弹窗——
 // 工具表单本就有全部参数控件 + enum 下拉，且同名覆盖即更新；编辑带初始值回填）
 async function _schedToolForm(iv){
@@ -3141,11 +3173,12 @@ async function renderSvcDash(){
   // 工具调用同款弹窗：填 name/command/cwd… 执行即入板，可再点收藏⭐存进 session services.json）
   h += '<div style="font-size:11px;color:#7c3aed;font-weight:700;margin:10px 0 6px;display:flex;align-items:center;gap:6px">🛠 服务（点击展开实时日志）' +
     '<button onclick="addSvcByForm()" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">＋ 服务</button></div>';
-  if(!svcs.length && !scheds.length && !(d.bg_tasks||[]).length){
+  if(!svcs.length && !scheds.length && !(d.bg_tasks||[]).length && !(d.fav_entries||[]).length){
     list.innerHTML = h + '<div style="color:#8a9099;font-size:12px;padding:10px">（无后台服务/定时任务/后台任务——start_service / add_schedule 启动的、run_python 超时转后台的都会显示在这里）</div>';
     return;
   }
-  window._favSvcs = d.fav_services || [];   // 收藏名单（main.yml services）
+  window._favSvcs = d.fav_services || [];   // 收藏名单（session services.json）
+  window._favEnts = d.fav_entries || [];    // 收藏完整条目（favSvcStart/Edit 取参数用）
   svcs.forEach(s => {
     const icon = s.running ? _SVC_ICON.running : _SVC_ICON.exited;
     const stTxt = s.running ? `运行中 pid=${s.pid} · ${s.uptime}s` : `已退出 rc=${s.rc}`;
@@ -3167,6 +3200,27 @@ async function renderSvcDash(){
       </div>` : ''}
     </div>`;
   });
+  // —— 已收藏服务（session services.json 完整条目；用户实锤 2026-11-06：只回名字时服务
+  //    不在跑（重启未拉起/已退出不在快照）没有管理入口 → 无法取消收藏/改参数。独立渲染
+  //    区只列【不在运行快照里】的条目（在跑/已退出的卡上已有⭐管理）——🗑 取消收藏=纯删
+  //    json 不碰进程零退出通知；▶ 用完整参数走 start_service 启动；✏ 表单回填编辑）——
+  const fEnts = (d.fav_entries || []).filter(e => !svcs.some(s => s.name === e.name));
+  if(fEnts.length){
+    h += '<div style="font-size:11px;color:#b45309;font-weight:700;margin:10px 0 6px">⭐ 已收藏（session services.json · 重启自动拉起）</div>';
+    fEnts.forEach(e => {
+      h += `<div style="border:1px solid #fde68a;border-radius:8px;padding:6px 9px;margin-bottom:5px;background:#fffbeb">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <b style="font-size:12.5px">${esc(e.name)}</b>
+          <span style="font-size:11px;color:#8a9099;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc((e.cwd?e.cwd+' · ':'')+e.command)}">${esc(e.command||'')}${e.cwd?' · '+esc(e.cwd):''}</span>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:6px">
+          <button onclick="favSvcStart('${esc(e.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;cursor:pointer">▶ 启动</button>
+          <button onclick="favSvcEdit('${esc(e.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #d8d2e8;background:#fff;cursor:pointer">✏ 编辑</button>
+          <button onclick="favSvcDel('${esc(e.name)}')" style="font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #f3c1c1;background:#fff;color:#b91c1c;cursor:pointer">🗑 取消收藏</button>
+        </div>
+      </div>`;
+    });
+  }
   // —— 后台任务（run_python/run_shell 超时转后台；2026-09-06 用户提案并入看板）——
   const bgs = d.bg_tasks || [];
   if(bgs.length){

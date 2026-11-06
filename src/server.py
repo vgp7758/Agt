@@ -1663,14 +1663,21 @@ async def api_dash():
             out["schedules"] = []
     # —— 收藏服务（session 存档 services.json；用户裁定 2026-10-23 从 main.yml 迁出——
     #     收藏跟 session 走，main.yml services 段回归纯声明依赖）——
+    # 2026-11-06 用户实锤补全：只回名字列表时，服务不在跑（重启未拉起/已退出）看板没有
+    # 收藏条目的渲染入口 → 无法取消收藏/改参数。补 fav_entries 完整条目（command/cwd
+    # 等），前端独立渲染「已收藏」区（🗑 取消收藏=纯删 json 不碰进程零通知；▶ 用完整
+    # 参数走 start_service 工具启动；✏ 表单回填编辑）
     try:
         import json as _json
         _sd = getattr(_agent.session, "session_dir", None)
         _sf = Path(_sd) / "services.json" if _sd else None
         if _sf and _sf.exists():
-            out["fav_services"] = [str(it.get("name")) for it in
-                                   (_json.loads(_sf.read_text(encoding="utf-8")) or [])
-                                   if isinstance(it, dict) and it.get("name")]
+            _items = [it for it in (_json.loads(_sf.read_text(encoding="utf-8")) or [])
+                      if isinstance(it, dict) and it.get("name")]
+            out["fav_services"] = [str(it.get("name")) for it in _items]
+            out["fav_entries"] = [{"name": str(it.get("name")),
+                                   "command": str(it.get("command") or ""),
+                                   "cwd": str(it.get("cwd") or "")} for it in _items]
     except Exception:
         pass
     # —— 后台任务（run_python/run_shell 超时转后台，real_tools._bg_tasks；2026-09-06 并入看板）——

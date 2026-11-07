@@ -2149,7 +2149,43 @@ def make_subagent_tools(agent) -> list:
                                 f" name='{name}' 不一致——同一实例线的 name 必须恒定（防人设串台）。"
                                 f"请改用 name='{same[0].name}'，或换一个 agent_id。")
                 live = [e for e in same if e.agent is not None and e.status != "reviving"]
-                hist = [e for e in same if e.agent is None and e.status != "reviving"]
+                hist = [e for e in same if e.status != "reviving" and e.agent is None]
+                # —— 磁盘兜底复活（2026-11-07 用户实锤·20048 worker 手动派不带历史）：重启后
+                # registry 清空（_agent_meta 不覆盖施工工作流派的实例），同名派活 same 全空 →
+                # 直接新建空 session——磁盘上明明有该 name 的实例目录（agents/worker、
+                # worker-p_xxx…带完整 session 历史）却接不上。全空时扫盘补 hist entry：目录名
+                # 匹配（定向=agent_id 精确；非定向=name 或 name-*/name_* 前缀——_resolve_agent_id
+                # 三形态），取 mtime 最新且 meta.json 在的 → 走下方 _revive_subagent（Session.load
+                # 恢复完整历史 + current_turn_only 三态投影）。复活失败自然落回新建（现状安全）。
+                if not live and not hist:
+                    try:
+                        from pathlib import Path as _P
+                        _sd = getattr(agent.session, "session_dir", None)
+                        if _sd is not None:
+                            _agdir = _P(_sd) / "agents"
+                            if _agdir.is_dir():
+                                _cands = []
+                                for _dd in _agdir.iterdir():
+                                    if not _dd.is_dir() or not (_dd / "meta.json").exists():
+                                        continue
+                                    _dn = _dd.name
+                                    _hit = (_dn == agent_id.strip()) if (agent_id or "").strip() else (
+                                        _dn == name or _dn.startswith(name + "-") or _dn.startswith(name + "_"))
+                                    if _hit:
+                                        _cands.append(_dd)
+                                if _cands and not any(e.agent_id == _cands[0].name
+                                                       for e in reg._agents.values()):
+                                    _newest = max(_cands, key=lambda x: x.stat().st_mtime)
+                                    _aid = _newest.name
+                                    reg.register(_aid, name, "subagent", agent.model_name,
+                                                 agent=None, task="", status="done",
+                                                 caller_id=caller_id)
+                                    hist = [e for e in reg._agents.values()
+                                            if e.agent_id == _aid and e.role == "subagent"]
+                                    _LOG.info("磁盘兜底复活：%s 命中 %s（%d 个候选目录，取 mtime 最新）",
+                                              name, _aid, len(_cands))
+                    except Exception as _e:
+                        _LOG.warning("磁盘兜底复活扫描失败（落回新建）: %s", _e)
                 if live:
                     idle = [e for e in live if e.status != "running"]
                     if not idle:

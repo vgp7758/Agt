@@ -995,9 +995,9 @@ resp = target_agent.llm.chat(msgs, tools=[])
 
 **关联**：[agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5)（姊妹语义——notify 的空闲唤醒是真 run，装配工具天经地义）· [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)
 
-### 后记：会话侧姊妹命令 /ask——同款语义给用户（2026-10-14，用户提案）
+### 后记：会话侧姊妹命令 /ask——同款语义给用户（2026-10-14 提案 → 2026-11-07 并入统一消费端）
 
-同款语义的**用户侧姊妹命令**：[/ask 旁路询问指令](../features/ask-command.md)（2026-10-14，用户提案）——对象=当前会话自己，`-turn N` 附近 N 轮 user/answer 纯文本对（默认零上下文），同样 `tools=[]` 不装工具、不产生对话轮、不写 events.jsonl，回答显示即弃。
+同款语义的**用户侧姊妹命令**：[/ask 旁路询问指令](../features/ask-command.md)（2026-10-14，用户提案）——对象=当前会话自己，不产生对话轮、不写 events.jsonl，回答显示即弃。**2026-11-07 用户裁定改走本节统一消费端**：`answer_ask(当前会话, …)` 同一单源——完整上下文投影 + 临时 agent（只读工具可用 / 写类拒绝 / 60s 清空逼答），初版的 `-turn N` 纯文本语境参数退役。改版对照见 [/ask · 改版](../features/ask-command.md#改版并入统一-ask-消费端2026-11-07用户裁定)。
 
 ## ask 消费端统一：临时 agent + 只读工具可用 + 写类拒绝 + 60s 无答清空工具（2026-10-22，用户提案）
 
@@ -1005,19 +1005,18 @@ resp = target_agent.llm.chat(msgs, tools=[])
 
 这是对 2026-10-08「agent_ask 不装配工具」的**升级而非否定**：那次解决的是「无执行环境的空转」，代价是它连只读工具也用不上（问「你环境里某文件写了什么」只能答不知道）。本次给它装上**受控的执行环境**，并把 `remote_ask` 从「发普通 WS 文本、对端跑一整轮 agent.run」统一到同一套语义。
 
-### 语义链（两通道同一实现）
+### 语义链（三入口同一实现）
 
 ```
-agent_ask(target_id, q)            remote_ask(rid, q)
-   └── answer_ask(target_agent, q, asker)  ← src/ask_consumer.py（同一函数）
-         ├─ ① 拷贝上下文：list(target.session.messages_for_llm())，只 append 不改原 session
-         ├─ ② new 临时 agent AskAgent（messages + 被问者 llm + 被问者工具箱）
-         │     工具执行三分类：只读/召回 → 真执行；写类/执行类 → 拒绝文案；未知 → fail-closed 拒绝
-         └─ ③ 60s 软预算：带工具轮超时/超步数仍无 answer → 追加「预算已到，立即直接回答」
-                + tools=[] 重发一次（清空工具降级）
+agent_ask(target_id, q)     remote_ask(rid, q)     /ask -prompt <q>（2026-11-07 起，对象=当前会话自己）
+   └────────────┬────────────┘                          │
+                └─→ answer_ask(target_agent, q, asker) ←─┘  ← src/ask_consumer.py（三入口同一函数）
+          ├─ ① 拷贝上下文：list(target.session.messages_for_llm())，只 append 不改原 session
+          ├─ ② new 临时 agent AskAgent（messages + 被问者 llm + 被问者工具箱）
+          │     工具执行三分类：只读/召回 → 真执行；写类/执行类 → 拒绝文案；未知 → fail-closed 拒绝
+          └─ ③ 60s 软预算：带工具轮超时/超步数仍无 answer → 追加「预算已到，立即直接回答」
+                 + tools=[] 重发一次（清空工具降级）
 ```
-
-远端侧（`src/server.py` `_handle_user_input`）：`remote_tools.ask()` 发 `{"action":"ask","text":…,"asker":…}` → 远端识别 action → `asyncio.to_thread(answer_ask, agent, …)`（不阻塞事件循环）→ 回 `answer` 事件 + `_done`。**不再走 `agent.run`**——不写对端 session/events/toollog、不跑钩子、不注册、不触发审批。
 
 ### 为什么是轻量 AskAgent 而不是复用 Agent 类
 
@@ -1056,7 +1055,7 @@ openai SDK 的超时/回退链会把「掐断」放大成分钟级，所以实�
 | 条目 | 关系 |
 |---|---|
 | [agent_ask 不装配工具](#agent_ask-不装配工具克隆历史纯对话问答2026-10-08用户提案commit-16c1708)（2026-10-08） | **被本节取代**：`tools=[]` 的动机（无执行环境空转）由「只读放行 + 写类拒绝」更精确地解决 |
-| [/ask 旁路询问指令](../features/ask-command.md)（2026-10-14） | 用户侧姊妹命令，仍为 `tools=[]` **单次纯问**（用户明确要「只回应」）——未纳入本次统一（如后续需要，可复用 `AskAgent`） |
+| [/ask 旁路询问指令](../features/ask-command.md)（2026-10-14 → 2026-11-07） | **已并入本节**：改走 `answer_ask` 同一单源（完整投影 + 临时 agent 三分类工具），`-turn` 纯文本语境退役——当初「如后续需要可复用 `AskAgent`」的预留已成真 |
 | [agent_notify 忙闲分流](#agent_notify-忙闲分流空闲直接唤醒一轮2026-09-24用户裁定commit-cdb13c5) | 有状态提示，空闲唤醒是真 `run`——与 ask 的「旁路只读」互补 |
 
 ## agent_notify 忙闲分流：空闲直接唤醒一轮（2026-09-24，用户裁定，commit cdb13c5）

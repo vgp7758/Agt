@@ -11,7 +11,7 @@ agent_prompt(name, prompt, tools?, agent_id?, reuse?, assembly?, caller?, new_in
   ├─ 默认【复用】（2026-09-06 用户提案：默认翻转，防同名实例越建越多）：
   │   有同名空闲活实例 → 直接派活（沿用 agent_id/session，current_turn_only 投影隔离）
   │   无活实例但有同名历史条目 → 复活（读声明同源 _agent_def_path+load_agent_yml，+ Session.load 磁盘历史）
-  │   都没有 → 新建（current_turn_only=True）
+  │   都没有 → 扫盘兜底复活（2026-11-07 起：agents/ 目录同名实例目录，见「复活路径 · 复发三」）→ 盘上也没有才新建（current_turn_only=True）
   ├─ new_instance=true（或显式 reuse=false）→ 跳过复用/复活强制新建（完整上下文投影、历史跨任务累积）
   └─ reuse 兼容参数：不传/true=默认复用；显式 false=等价 new_instance=true
   同名实例全在跑 → [忙] 提示（wait_subagents 等它，或 new_instance=true 并行）
@@ -22,7 +22,7 @@ caller: 汇报对象（answer 完成后路由给谁）——留空=自动捕获�
 ```
 
 - 主 Agent id=`_main_`；registry 是唯一事实源（团队看板/recap/路由都读它）
-- `_agent_meta`（agent_id/name/model/task/caller_id/recap/status）无条件写子 meta.json → 读档 `_restore_subagents` 恢复团队
+- `_agent_meta`（agent_id/name/model/task/caller_id/recap/status）无条件写子 meta.json → 读档 `_restore_subagents` 恢复团队（恢复范围有限：施工工作流派活的实例不在其中——2026-11-07 起派活侧同名全空时扫 `agents/` 目录兜底复活，见「复活路径 · 复发三」）
 - 子 Agent 的通信/会话工具**重绑自身**（继承的闭包绑主 Agent，会查错 session）
 - `name`/`caller`/`target_id` 参数动态注入 enum（合法值提示 + 编辑器下拉，见 [caller 汇报对象与动态 enum 注入](#caller-汇报对象与动态-enum-注入2026-08)）
 
@@ -617,7 +617,39 @@ hooks:
 
 **修复（commit `e2c0b24`，v0.30.6）**：恢复构造行 `SubAgent(entry.name, model_name, system, toolbox, session_dir=…, registry=reg, agent_id=entry.agent_id, caller_id=caller_id, current_turn_only=True)`，并在该行之上留注释标注误删史（src/multiagent.py L784-790）——与 6d396af 的教训同款：**重构删代码时，复活路径的「静默落回新建」兜底会把它变成无声的行为漂移**（表面一切正常，只是实例数在涨）。
 
-**排查口诀（两次复发通用）**：见「重启后实例数变多 / 历史没接上」→ 第一步看复活路径有没有 NameError（被 except 吞掉不会报给用户）。
+**排查口诀（两次复发通用；复发三后扩为三步，见下节）**：见「重启后实例数变多 / 历史没接上」→ 第一步看复活路径有没有 NameError（被 except 吞掉不会报给用户）；复发三（2026-11-07）补第三种形态——同名列表全空（registry 恢复范围没盖住该实例），连复活分支都进不了。
+
+### 复发三（2026-11-07，20048 实锤，commit 03fe636）：重启后 registry 清空 × _agent_meta 不覆盖施工实例——同名派活静默新建空 session；磁盘兜底复活
+
+**现象（用户实锤 2026-11-07）**：重启 20048 后手动 `agent_prompt(worker, …)`，回复不带历史。磁盘数据实锤「这不是复活、是新建」：`agents/worker/` 的 events.jsonl 仅 `turn_end=1`、llm_calls 最新一条 `turn:0 / step 24`（内存 turns 从零起）、prompt_tokens 60K 全为本轮 24 步堆出——全新 session 直接写进了同名 `agents/worker` 目录。
+
+**根因：与复发一/二不同——这次根本没进复活分支**：
+
+```
+/restart → registry（内存）清空
+  → _agent_meta 恢复范围不含施工工作流派活的实例（extra_state.json 为空）
+  → agent_prompt("worker") 查同名：live + hist 全空
+  → 直接落「新建」路径——开全新 session
+```
+
+磁盘上明明躺着 `worker-p_f6025a03` 等一排带完整 session 历史的实例目录——**复活机制只认 registry 内存条目，从不看盘**。前一天修的 current_turn_only 三态（投影侧裁剪语义）没错但救不到：它解决「session 有历史但投影被裁」，本案是 **session 本身就没接上**。
+
+**修复（commit `03fe636`，src/multiagent.py，已推送）**：同名派活 registry 全空时**扫 `<主线>/agents/` 目录兜底补 hist entry**：
+
+| 项 | 语义 |
+|---|---|
+| 触发条件 | 同名 live + hist **全空**（registry 零候选）——正常复用/复活路径零影响 |
+| 目录匹配 | 非定向派活：目录名 = `name` / `name-*` / `name_*`（agent_id 三形态，`_resolve_agent_id` 同口径）；显式 `agent_id` 派活 → 精确等值匹配 |
+| 误伤防护 | 无 meta.json 的坏目录跳过；近似名（如 `workerish`）不命中 |
+| 候选择优 | 带 session 的候选按 **mtime 最新**取一 |
+| 复活链 | 走既有复活路径——`Session.load` 恢复完整历史 + current_turn_only 三态投影（worker 声明了 history → 完整装配） |
+| 兜底不变 | 盘上无候选 / 复活失败 → 自然落回新建（安全兜底语义不变） |
+
+**验证**：匹配规则单测 4 项全绿（`worker` 精确 / `worker-*` / `worker_*` / `workerish` 不匹配）；生效需 `/restart` 加载新代码——20048 重启后重派预期复活 mtime 最新的 worker 实例并带完整历史。
+
+**排查口诀（扩为三步，承接复发二）**：「重启后历史没接上 / 实例数变多」→ ① 复活路径有没有 NameError（复发一/二，被 except 静默吞）；② 同名列表是否全空 = registry 恢复范围没盖住（复发三）→ 查盘上 `agents/<name>*` 有无实例目录；③ 盘上也没有才是真新建。
+
+**关联**：[施工委托 worker](#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（施工线实例的派发宿主，本次受害场景）· [agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用/复活/新建三分支语义出处）。
 
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 

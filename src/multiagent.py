@@ -1729,11 +1729,14 @@ def make_subagent_tools(agent) -> list:
 
     def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
                      assembly: str = "", caller: str = "", context_messages: str = "",
-                     current_turn_only: bool = True, max_steps: int = 0, images=None) -> str:
+                     current_turn_only=None, max_steps: int = 0, images=None) -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
         多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
-        current_turn_only: 投影隔离（默认 True=复用模式只投影当前轮，历史轮归档不进上下文）。
+        current_turn_only: 投影隔离（三态，2026-11-07 落实 2026-10-15 用户裁定"声明了 history
+                段就要完整装配"）：不传=读声明——声明 assembly 含 history 段（如 worker）则
+                完整装配（False），否则只投影当前轮（True，防复用 token 膨胀的默认）；
+                显式 true/false 覆盖声明。历史轮始终完整归档（agent_query_events 可查）。
         max_steps: 本任务的 react 步数上限（用户提案 2026-10-07：默认 0=用声明值/50）。
         images: 附图路径数组（workspace 相对或绝对；也兼容逗号分隔字符串）——框架把图复制进
                  repo 图片目录后以 <img> 标签追加到 prompt 尾部；子 Agent 是视觉模型时直接看像素，
@@ -1775,13 +1778,33 @@ def make_subagent_tools(agent) -> list:
         else:
             return (f"[参数错误] reuse 只接受 yes/no（收到 '{reuse}'）。"
                     f"yes=复用同名活实例（默认，不传即是），no=新建独立实例。")
-        # current_turn_only 宽松解析（2026-10-22 随施工委托工作流化补）：工作流 plugin 节点的
-        # boolean 传参历史上以字符串形态到达过（上方 reuse 兼容注释佐证）——bool('False') 恒 True，
-        # 会误裁 worker 的 history 段（违背 2026-10-15 用户裁定：施工 worker 声明了 history 段
-        # 就要完整装配）。与 reuse 同款 str→bool：'false'/'0'/'no' → False，'true'/'1'/'yes' → True。
+        # current_turn_only 宽松解析 + 声明级默认（2026-11-07 落实 2026-10-15 用户裁定：
+        # "施工 worker 声明了 history 段就要完整装配"——当时只修了字符串误裁坑，没做声明级
+        # 默认，主 Agent 手动派 worker 不传该参数时仍被默认 True 裁掉 history）：
+        # · 字符串形态（工作流 plugin 节点历史传参）→ 宽松 bool（'false'/'0'/'no'→False…）；
+        # · None（未传）→ 读声明：yml assembly 含 history 段 → False（声明即装配）；
+        #   不含 → True（复用防 token 膨胀的默认保持）；
+        # · 显式 bool → 直用（覆盖声明）。
         if isinstance(current_turn_only, str):
             _ctv = current_turn_only.strip().lower()
             current_turn_only = _ctv in ("true", "1", "yes", "y")
+        if current_turn_only is None:
+            current_turn_only = True   # 无声明/读取失败的兜底默认
+            try:
+                _p = _agent_def_path(name)
+                if _p is not None and _p.exists():
+                    from agent_config import load_agent_yml as _lay
+                    _meta, _ = _lay(_p)
+                    _asm = _meta.get("assembly") or []
+                    if isinstance(_asm, str):
+                        _asm = [_asm]
+                    for _it in _asm:
+                        if _it == "history" or (isinstance(_it, dict)
+                                                and (_it.get("name") == "history" or _it.get("value") == "history")):
+                            current_turn_only = False   # 声明了 history 段：完整装配
+                            break
+            except Exception:
+                pass
         elif not isinstance(current_turn_only, bool):
             current_turn_only = bool(current_turn_only)
         caller_id = (caller or "").strip().lower() or agent.agent_id   # 汇报对象：显式指定 > 自动捕获
@@ -2313,8 +2336,8 @@ def make_subagent_tools(agent) -> list:
                   Tool(agent_prompt, param_schemas={
                       "reuse": {"type": "string", "enum": ["yes", "no"],
                                 "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"},
-                      "current_turn_only": {"type": "boolean",
-                                "description": "投影隔离：True(默认)=复用模式只投影当前轮；False=完整装配 history（长对话型实例如按客户分线的客服——传 False 且带固定 agent_id 即每客户一条记忆线）"},
+                       "current_turn_only": {"type": "boolean",
+                                 "description": "投影隔离（三态）：不传=读声明——声明 assembly 含 history 段（如 worker）则完整装配，否则只投影当前轮（防复用 token 膨胀的默认）；显式 true=只投影当前轮 / false=完整装配 history（长对话型实例如按客户分线的客服——传 false 且带固定 agent_id 即每客户一条记忆线）。历史轮始终完整归档可查。"},
                       "images": {"type": "array", "items": {"type": "string"},
                                 "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}}),
                   Tool(list_agents), Tool(wait_subagents)]

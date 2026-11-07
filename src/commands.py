@@ -1297,11 +1297,13 @@ def _cmd_clean(ctx: CommandContext, args):
 
 
 def _cmd_ask(ctx: CommandContext, args):
-    """/ask -prompt <问题> [-turn N] —— 无状态旁路询问（用户提案 2026-10-14，效果同 agent_ask，
-    对象是当前会话自己）：不产生对话轮、不写 events.jsonl/历史、不触发工具循环——
-    直接用（近 N 轮）上下文 + 问题调 LLM 一次，回答显示即弃。
-    -turn N   附带最近 N 轮对话上下文（user/answer 纯文本对）；不传 = 零上下文纯问
-    -prompt   询问内容（其后所有参数拼为全文）"""
+    """/ask -prompt <问题> —— 无状态旁路询问（用户提案 2026-10-14；2026-11-07 用户裁定改走
+    agent_ask 同款链路）：不产生对话轮、不写 events.jsonl/历史——拷贝当前会话的上下文投影，
+    用临时 agent 回答（只读/召回类工具可自查，写类拒绝，60s 无收敛清空工具逼答）。
+    回答显示即弃（不进历史）。
+    -prompt   询问内容（其后所有参数拼为全文）
+    （旧 -turn N 参数已退役：ask 链路自带完整上下文投影，比旧版“近 N 轮纯文本”更全，
+      传入会被忽略并提示）"""
     n_turns = 0
     prompt = ""
     i = 0
@@ -1313,29 +1315,19 @@ def _cmd_ask(ctx: CommandContext, args):
             prompt = " ".join(str(x) for x in args[i + 1:]); break
         i += 1
     if not prompt.strip():
-        print("用法：/ask -prompt <问题> [-turn N]   （-turn N=附带最近 N 轮上下文；不传=零上下文纯问）")
-        print("示例：/ask -turn 3 -prompt 刚才改的渲染缓存键是什么格式？")
+        print("用法：/ask -prompt <问题>   （无状态旁路询问：拷贝当前会话上下文 + 临时 agent 回答，不进历史）")
+        print("示例：/ask -prompt 刚才改的渲染缓存键是什么格式？")
         return
-    # 上下文：近 N 轮 (user_message, answer) 纯文本对——旁路问答不走完整投影（分档/工具细节
-    # 是给主循环的，这里要的是轻量对话语境）；只读 turns（append-only，并发读安全）
-    msgs = []
-    if n_turns > 0:
-        for t in ctx.session.turns[-n_turns:]:
-            u = (getattr(t, "user_message", "") or "").strip()
-            ans = (getattr(t, "answer", "") or "").strip()
-            if u:
-                msgs.append({"role": "user", "content": u})
-            if ans:
-                msgs.append({"role": "assistant", "content": ans})
-    msgs.append({"role": "user", "content": prompt})
 
     agent = ctx.agent
-    header = f"💬 /ask 回答（旁路，不进历史{'，含近 ' + str(n_turns) + ' 轮上下文' if n_turns else ''}）："
+    header = "💬 /ask 回答（旁路，不进历史；agent_ask 链路：完整上下文投影 + 临时 agent）："
 
     def _do_ask():
         try:
-            resp = agent.llm.chat(msgs, tools=[], scene="ask")
-            text = (getattr(resp, "content", "") or "").strip() or "(空回答)"
+            # 统一 ask 消费端（2026-11-07 用户裁定：与 agent_ask/remote_ask 同一实现）——
+            # 拷贝 agent 当前上下文 + 临时 agent（只读工具可用/写类拒绝/60s 无答清空工具降级）
+            from ask_consumer import answer_ask
+            text = answer_ask(agent, prompt, asker="用户（/ask 旁路指令）").strip() or "(空回答)"
         except Exception as e:
             text = f"❌ 询问失败：{type(e).__name__}: {e}"
         # CLI：worker 线程里直接 print；Web：on_event=broadcast（内部 call_soon_threadsafe，
@@ -1351,8 +1343,10 @@ def _cmd_ask(ctx: CommandContext, args):
         # 起 daemon 线程旁路执行，完成即 emit 回显；立即回受理提示（redirect_stdout 捕获）
         import threading as _th
         _th.Thread(target=_do_ask, daemon=True, name="cmd-ask").start()
-        print(f"⏳ /ask 已受理（含近 {n_turns} 轮上下文" if n_turns else "⏳ /ask 已受理（零上下文",
-              "），回答稍后以系统消息送达")
+        note = "⏳ /ask 已受理（agent_ask 链路：完整上下文 + 临时 agent）"
+        if n_turns:
+            note += f"（-turn {n_turns} 已忽略：ask 链路自带完整投影）"
+        print(note + "，回答稍后以系统消息送达")
     else:
         # CLI：worker 线程串行，同步执行直接显示
         _do_ask()
@@ -2451,10 +2445,10 @@ def build_default_registry() -> CommandRegistry:
         "/clean             删除整个快照仓库（下一轮起自动重建、重新累积）\n"
         "  ⚠️ 清理前各轮的 /rewind /snapshot restore 失效（快照对象已删）")
     reg.register("ask", _cmd_ask,
-        "-prompt <问题> [-turn N]  无状态旁路询问（同 agent_ask，对象=当前会话）：只回应不进历史、不触发工具循环",
-        "/ask -prompt 这个正则什么意思？           零上下文纯问\n"
-        "/ask -turn 3 -prompt 刚才改的缓存键格式？  附最近 3 轮对话上下文（user/answer 纯文本对）\n"
-        "  回答以系统消息显示即弃（不写 events.jsonl，刷新后消失）")
+        "-prompt <问题>  无状态旁路询问（agent_ask 同款链路，对象=当前会话）：拷贝完整上下文投影 + 临时 agent 回答，只回应不进历史",
+        "/ask -prompt 这个正则什么意思？           旁路询问（完整上下文 + 临时 agent 可自查文件/记忆）\n"
+        "  回答以系统消息送达，不落 events.jsonl（刷新即消失）；\n"
+        "  临时 agent 只读工具可用/写类拒绝/60s 无收敛清空工具逼答（与 agent_ask 完全同链路）")
     reg.register("rag", _cmd_rag,
         "build | config [k v] | stats | query <词>  RAG 文档库管理",
         "/rag stats                         查看索引状态\n"

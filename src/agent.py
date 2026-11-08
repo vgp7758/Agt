@@ -20,7 +20,7 @@ import threading
 import time
 
 import config
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _cf_wait, TimeoutError as _FutureTimeout
 from datetime import datetime
 from typing import Callable, Optional, List
 
@@ -36,6 +36,28 @@ from tools import Toolbox
 from mdrender import render_cli   # LLM 回答的 CLI 渲染（表格→框线表，代码块→带边框）
 
 _LOG = logging.getLogger("agt.agent")
+
+# 看门狗工具硬超时（p_aa314b2f 2026-11）：单次工具执行超过此时长（默认 1200s=20min）→
+# 注入「判卡死」结果文本让宿主继续跑（底层线程不杀——无法安全 kill，孤儿线程泄漏可接受）。
+# 可经 settings.json watchdog_stuck_secs 配置。巡检侧（agent_watchdog.py）用同值判心跳静默。
+_TOOL_STUCK_SECS = config.load_watchdog_stuck_secs()
+
+# 自带超时/长等语义的工具白名单：串行路不重复包超时（双层超时会干扰「转后台」「显式长等」既有语义）。
+_TOOL_TIMEOUT_WHITELIST = frozenset({
+    "run_python", "run_shell",                    # 超时自动转后台（自带管家语义）
+    "sleep", "wait_subagents",                    # 显式长等
+    "remote_ask", "explore", "explore_resume",    # 参数化长等（timeout/budget 参数）
+    "agent_prompt",                               # 全异步派活（立即返回）
+    "skill_equip", "skill_use",                   # 技能服务装配/命令（可能长拉起）
+})
+
+
+def _tool_stuck_text(name: str, secs: float) -> str:
+    """工具判卡死的注入文案（并行路 wait+fill 与串行路 fut.result 超时共用）。
+    时长自适应单位：<90s 显示秒（测试/小阈值场景可读），≥90s 显示分钟。"""
+    dur = f"{max(1, int(round(secs / 60)))}min" if secs >= 90 else f"{max(1, int(round(secs)))}s"
+    return (f"[看门狗] 工具 {name} 执行超 {dur} 判卡死"
+            f"（结果强制返回；底层线程已放弃，若占用资源请检查后台进程）")
 
 # 以 path 为入参、对文件做 read-modify-write 的工具：同文件的多个调用必须串行，
 # 否则并行线程会读同一快照→各自改写→后写覆盖先写（静默丢更新）。
@@ -296,6 +318,9 @@ class Agent:
         agent_id: str = "_main_",
     ):
         self.base_system = system
+        # 看门狗心跳（p_aa314b2f 2026-11）：步循环顶 / 工具执行前后 / LLM 完成点刷新；
+        # float 赋值原子无锁（读写容忍毛刺）——巡检侧读它判「静默超阈值」，只作信号源。
+        self._hb_ts = time.time()
         self.tools = tools
         self.tool_groups: dict = {}   # 工具名 -> 来源模块（build_agent 注册时标注，供 /api/tools 分组）
         self.max_steps = max_steps
@@ -784,10 +809,13 @@ class Agent:
         import copy
         return [copy.deepcopy(s) for s in self.tools.schemas()]
 
-    def _run_tools_parallel(self, calls: list) -> list:
+    def _run_tools_parallel(self, calls: list, timeout: float = None) -> list:
         """并行执行一组工具调用，按原顺序返回结果。
         以【目标文件】为锁：同文件的多个调用按原顺序【串行】（避免 read-modify-write 竞态丢更新），
-        不同文件 / 无文件工具【并行】。等价于"跨文件并行、文件内串行"。"""
+        不同文件 / 无文件工具【并行】。等价于"跨文件并行、文件内串行"。
+        硬超时（p_aa314b2f 2026-11）：as_completed 无限等改 wait(timeout=) 整组限时——到点未完成的
+        task 对应下标注入「判卡死」结果文本，results 恒满、宿主拿到完整结果继续跑；不 cancel
+        （线程无法安全杀，孤儿泄漏可接受）。timeout=None 用 _TOOL_STUCK_SECS；单测传小值走注入路径。"""
         results = [None] * len(calls)
         groups: dict = {}   # file_key -> [orig_idx,...]（保持原顺序）
         free: list = []     # 不锁定文件的调用（各自独立并行）
@@ -807,12 +835,46 @@ class Agent:
                     out.append((i, f"[执行出错] {type(e).__name__}: {e}"))
             return out
 
-        with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as ex:
+        _tmo = _TOOL_STUCK_SECS if timeout is None else max(1.0, float(timeout))
+        ex = ThreadPoolExecutor(max_workers=max(1, len(tasks)))
+        try:
             futs = {ex.submit(_run_seq, idxs): idxs for idxs in tasks}
-            for fut in as_completed(futs):
+            done, not_done = _cf_wait(set(futs), timeout=_tmo)
+            for fut in done:   # 到点的照常收割（收割顺序不再定，results 按 i 回填、原序不变）
+                self._hb_ts = time.time()   # 心跳：并行收割进展
                 for i, r in fut.result():
                     results[i] = r
+            for fut in not_done:   # 超时未完成的 task：组内全部下标注入卡死文本（组内串行跑到一半也统一判卡死）
+                for i in futs[fut]:
+                    results[i] = _tool_stuck_text(calls[i]["name"], _tmo)
+        finally:
+            # shutdown(wait=False)：不阻塞等卡死线程（with 的 __exit__ 是 wait=True，会抵消超时语义）；
+            # 孤儿线程继续跑到自然完成/卡死（无法安全 kill）——文案已提示用户检查后台进程。
+            ex.shutdown(wait=False)
         return results
+
+    # —— 工具硬超时（p_aa314b2f 2026-11）：串行路的统一看门狗包装 ——
+    # 共享线程池（类属性，所有 Agent 实例共用 2 个工作线程）：卡死工具占住线程时，
+    # 后续工具调用排队等 result 超时——串行路本来就是一个接一个，2 并发够用。
+    _TOOL_GUARD_EX = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tool-guard")
+
+    def _exec_tool_guarded(self, name: str, args: dict, timeout: float = None) -> str:
+        """单工具执行 + 硬超时：白名单工具（自带超时/转后台/显式长等语义）直调不重复包；
+        其余提交共享线程池 + fut.result(timeout=) 限时——超时返回「判卡死」结果文本，
+        宿主拿到结果继续跑（底层线程不杀——无法安全 kill，孤儿泄漏可接受）。
+        timeout=None 用 _TOOL_STUCK_SECS；单测传小值走注入路径。非超时异常原样上抛（行为同直调）。"""
+        if name in _TOOL_TIMEOUT_WHITELIST:
+            return self._exec_tool(name, args)
+        _tmo = _TOOL_STUCK_SECS if timeout is None else max(1.0, float(timeout))
+        fut = self._TOOL_GUARD_EX.submit(self._exec_tool, name, args)
+        self._hb_ts = time.time()   # 心跳：工具进入执行
+        try:
+            r = fut.result(timeout=_tmo)
+            self._hb_ts = time.time()   # 心跳：工具完成
+            return r
+        except _FutureTimeout:
+            _LOG.warning("[看门狗] 串行工具 %s 执行超 %ds 判卡死（强制返回，宿主继续）", name, int(_tmo))
+            return _tool_stuck_text(name, _tmo)
 
     def _react_chain(self):
         """react 主调用用的回退链（用户裁定 2026-09-15）：只认 agent 自己的声明。
@@ -2523,6 +2585,7 @@ class Agent:
             continue_loop = False
             try:
                     for step_num in range(1, self.max_steps + 1):
+                        self._hb_ts = time.time()   # 心跳：步循环顶（看门狗判卡死的步进展信号）
                         if self._stop_flag:
                             self._emit({"type": "interrupted"})
                             self.session.abort_current_turn("（被用户停止）")
@@ -2566,6 +2629,7 @@ class Agent:
                                     "model": self.llm.model_name})
                         resp = self.llm.chat(msgs, tools=tool_schemas, scene=f"react·{self.agent_id}",
                                              turn=_t_num, step=_s_num, _chain=_rc)
+                        self._hb_ts = time.time()   # 心跳：LLM 调用完成（LLM 网络挂起时静默从这里起算）
                         _LOG.debug("step %d 累计token=%d model=%s", step_num, self.cumulative_tokens,
                                     self.llm.model_name)
                         # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
@@ -2802,7 +2866,7 @@ class Agent:
                                 if _need_snap:
                                     _snap_before = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                                 _t0 = time.time()
-                                result = self._exec_tool(tc["name"], tc["arguments"])
+                                result = self._exec_tool_guarded(tc["name"], tc["arguments"])   # 硬超时包装（p_aa314b2f）
                                 _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"],
                                           time.time() - _t0, len(result or ""))
                                 cid = self.session.toollog.next_id()
@@ -2845,7 +2909,7 @@ class Agent:
                             if _need1:
                                 _snap_b1 = self._fs_snap if self._fs_snap is not None else _workspace_snapshot()
                             _t0 = time.time()
-                            result = self._exec_tool(tc["name"], tc["arguments"])
+                            result = self._exec_tool_guarded(tc["name"], tc["arguments"])   # 硬超时包装（p_aa314b2f）
                             _LOG.info("工具 %s 耗时%.1fs 结果%d字", tc["name"], time.time() - _t0, len(result or ""))
                             cid = self.session.toollog.next_id()
                             result = self._materialize_tool_result(result, tc["name"], tc["arguments"], cid)

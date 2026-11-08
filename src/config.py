@@ -376,6 +376,16 @@ def load_panic_window() -> int:
         return 0
 
 
+def load_watchdog_stuck_secs() -> int:
+    """工具/Agent 卡死判定阈值秒（settings.json 的 watchdog_stuck_secs；默认 1200，下限 10）。
+    双消费（p_aa314b2f 看门狗）：① agent.py 工具硬超时——超时注入「判卡死」结果让宿主继续；
+    ② agent_watchdog.py 巡检——_react_running 且心跳静默超此值 → py-spy dump + 拉 doctor 诊断。"""
+    try:
+        return max(10, int(load_runtime_settings().get("watchdog_stuck_secs", 1200)))
+    except Exception:
+        return 1200
+
+
 def load_hook_timeout() -> int:
     """同步钩子工作流超时秒数（settings.json 的 hook_timeout；默认 300，0=不限）。
     超时的钩子结果丢弃（auto_wf_error 标记），其它已完成的照常注入——主循环不被卡住。

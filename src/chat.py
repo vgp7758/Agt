@@ -885,6 +885,8 @@ def web_main(port=None):
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
     worker.start()
     agent._work_q = work_q   # restart_agent 工具需要（触发优雅退出）
+    from agent_watchdog import start_watchdog as _start_wd
+    _start_wd(agent, agent.registry)   # 看门狗巡检（p_aa314b2f）：心跳静默判卡死 → py-spy dump + doctor 诊断
     _recover_restart_env(agent, work_q, registry, state)   # 看门狗重启恢复：/resume + 首条消息
 
     def _stdin_thread():
@@ -1137,7 +1139,10 @@ def main():
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
     worker.start()
     agent._work_q = work_q   # restart_agent 工具需要（触发优雅退出）
+    from agent_watchdog import start_watchdog as _start_wd
+    _start_wd(agent, agent.registry)   # 看门狗巡检（p_aa314b2f）：心跳静默判卡死 → py-spy dump + doctor 诊断
     _recover_restart_env(agent, work_q, registry, state)   # 看门狗重启恢复：/resume + 首条消息
+
     print("\n🧑 你：", end="", flush=True)   # 首次输入提示（之后 _render_loop 在 agent 完成后打印）
 
     try:

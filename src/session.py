@@ -2261,7 +2261,20 @@ class Session:
         放后台 daemon 线程——切模型命令立即返回（不再同步卡 REPL/React）；React 在
         下次 messages_for_llm（llm.chat 前）经 _proj_lock 等待重定型完成后才组装发送；
         后台失败保留待办标记，装配入口同步兜底消化。"""
-        with self._proj_lock:
+        got = self._proj_lock.acquire(blocking=False)
+        # 死锁防御（2026-11-08 20048 worker 卡 38min 实锤）：_proj_rebuild_thread 持锁跑
+        # apply_simple_tiering → SOS 并行段 LLM 失败回退 _advance 切模型 → switch_model →
+        # _on_model_switch → 此处等锁——跨线程环（持锁者等 executor、executor 任务等锁）
+        # 曾冻结 worker/SOS×3/重定型五个线程。锁被占时唯一持有者就是重定型/装配链自己：
+        # 不阻塞等待，降级为置待办标记（mark_system_dirty 无锁安全；清缓存延迟到待办消化。
+        # 代价可接受：此路径= SOS 回退切模型且恰逢后台重定型的双重罕见场景）。
+        if not got:
+            self.mark_system_dirty(f"投影全量重刷（{reason}）")
+            self._proj_rebuild_needed = True
+            _LOG.warning("invalidate_projection 降级（_proj_lock 被占——重定型/装配进行中）：%s；"
+                         "置待办标记，由下次装配兜底消化", reason)
+            return
+        try:
             self.mark_system_dirty(f"投影全量重刷（{reason}）")
             try:
                 self._frozen_renders.clear()
@@ -2273,6 +2286,8 @@ class Session:
             except Exception as e:
                 _LOG.warning("invalidate_projection 部分失败（忽略）：%s", e)
             self._proj_rebuild_needed = True
+        finally:
+            self._proj_lock.release()
         if async_rebuild:
             threading.Thread(target=self._proj_rebuild_thread, args=(reason,),
                              daemon=True, name="proj-rebuild").start()

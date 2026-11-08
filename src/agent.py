@@ -1602,27 +1602,27 @@ class Agent:
             return ""
 
     def _restore_subagents(self):
-        """读档后恢复子 Agent 列表：扫描 session_dir/agents/，注册到 registry（status=done）。
-        子 Agent 的 meta.json 里存了 _agent_meta（agent_id/name/model/task/caller_id/recap）；
-        老数据没有则用目录名兜底。agent=None（历史子 Agent，不创建实例——/agent 切换时按需 lazy load）。"""
+        """读档后恢复子 Agent 列表：扫描 session_dir/agents/，注册到 registry（历史条目
+        agent=None，/agent 切换按需 lazy load）。【先扫后清 + 运行中豁免】——正文注释详述。"""
         if not self.registry:
             return
-        # 先清除 registry 中非 _main_ 的旧条目（上个 session 的子 Agent）
-        with self.registry._lock:
-            old_ids = [k for k in self.registry._agents if k != self.agent_id]
-            for k in old_ids:
-                del self.registry._agents[k]
+        # 【先扫后清 + 运行中豁免】（2026-11-08 20048 worker-p_f6025a03 失踪实锤修复）：
+        # 旧实现"先清后扫"非原子——扫描半路异常 = registry 被清空且不补（45→1）；
+        # 且清除段不豁免正在跑的复活实例（线程活着 entry 被删 → 页面/团队清单失踪、
+        # 完成 update_status 落空）。改：①扫描先行（失败不动现 registry）；②清除时
+        # 豁免 agent 活着且 _react_running 的条目（复活实例由自己的 _bg 尾部收尾）。
         sdir = getattr(self.session, "session_dir", None)
         if not sdir:
-            _LOG.warning("_restore_subagents: session_dir 为空，跳过")
+            _LOG.warning("_restore_subagents: session_dir 为空，跳过（registry 不动）")
             return
         from pathlib import Path
         import json
         agents_dir = Path(sdir) / "agents"
         if not agents_dir.exists():
-            _LOG.debug("_restore_subagents: agents/ 目录不存在: %s", agents_dir)
+            _LOG.debug("_restore_subagents: agents/ 目录不存在: %s（registry 不动）", agents_dir)
             return
-        count = 0
+        # ① 先扫描收集（不动 registry——异常时零伤害）
+        to_reg = []   # [(register 参数…)]
         for ad in sorted(agents_dir.iterdir()):
             if not ad.is_dir():
                 continue
@@ -1655,20 +1655,31 @@ class Agent:
             st = am.get("status", "done")
             if st == "running":
                 st = "failed"
+            to_reg.append((am.get("agent_id", aid), am.get("name", aid),
+                           am.get("model", "?"), am.get("task", "(历史任务)"), st,
+                           am.get("caller_id", ""), am.get("recap", "")))
+        # ② 后清除（豁免 _main_ 与运行中复活实例），再补注——此刻不可能再抛（register 内部容错）
+        with self.registry._lock:
+            keep_running = set()
+            for k, e in list(self.registry._agents.items()):
+                _ag = getattr(e, "agent", None)
+                if _ag is not None and getattr(_ag, "_react_running", False):
+                    keep_running.add(k)
+            old_ids = [k for k in self.registry._agents
+                       if k != self.agent_id and k not in keep_running
+                       and k not in {_r[0] for _r in to_reg}]
+            for k in old_ids:
+                del self.registry._agents[k]
+        count = 0
+        for _aid, _name, _model, _task, _st, _caller, _recap in to_reg:
             self.registry.register(
-                am.get("agent_id", aid),
-                am.get("name", aid),
-                "subagent",
-                am.get("model", "?"),
-                agent=None,
-                task=am.get("task", "(历史任务)"),
-                status=st,
-                caller_id=am.get("caller_id", ""),
-                recap=am.get("recap", ""),
+                _aid, _name, "subagent", _model, agent=None,
+                task=_task, status=_st, caller_id=_caller, recap=_recap,
             )
             count += 1
         if count:
-            _LOG.info("_restore_subagents: 从 %s 恢复了 %d 个子 Agent", agents_dir, count)
+            _LOG.info("_restore_subagents: 从 %s 恢复了 %d 个子 Agent（豁免 %d 个运行中条目）",
+                      agents_dir, count, len(keep_running))
 
     def utility_client(self):
         """统一辅助模型 client：所有 LLM 短调用共用（recap / RAG 检索 / 工作流 LLM/意图节点默认）。

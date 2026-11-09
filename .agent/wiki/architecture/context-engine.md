@@ -292,11 +292,11 @@ t{轮号}_s{步号}_{微秒戳}.json
 |------|------|------|
 | `win` | `session.max_effective_context_window` 快照——本次投影判阈**实际用的值** | 700000 |
 | `fold_target` | `int(win × FOLD_TARGET_RATIO)`——折叠目标线（75%） | 525000 |
-| `panic` | `config.load_panic_window()`——保命阀阈值（settings `panic_context_window`，0=跟随窗口） | 900000 |
+| `panic` | `session.panic_window`——保命阀阈值（**三层链实际生效值**：settings 显式 > 模型卡片 > 卡片窗口×2，2026-11-10 起；此前为 `config.load_panic_window()` 全局单源，0=跟随窗口） | 900000 |
 
 win 为 None（未配窗口、分档禁用）时 fold_target/panic 不写。
 
-**诊断口径**：旁车 est 长期贴线（`est ≈ fold_target`）→ 先看 `win` 是否等于当前配置预期值；不等 → `/reload models`（0.22.2+ 会同步 session 副本并打印目标线）或 `/restart`。
+**诊断口径**：旁车 est 长期贴线（`est ≈ fold_target`）→ 先看 `win` 是否等于当前配置预期值；不等 → `/reload models`（0.22.2+ 会同步 session 副本并打印目标线）或 `/restart`。`panic` 值若与预期不符，用 `/config` 的 `panic_context_window_effective` 对照**实际生效值+来源**（settings显式 / 卡片显式 / 卡片窗口×2）。
 
 ### /context 展示侧两修复：scene 精确匹配失配 + markdown 段落表（2026-08-31，commit 3ae7a76）
 
@@ -685,6 +685,40 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 2. 阶梯巡检不受影响（各档渲染字符 ≤1600 阈值不变）✓
 3. 参数切换 → 两套参数行并存（16 → 17 行、2 个参数集）✓
 4. 回切旧参数 → 16 轮旧行**全部命中，零重算** ✓
+
+### 保命阀 panic 跟随模型卡片：三层链——settings 显式 > 卡片 > 卡片窗口×2（2026-11-10，用户裁定，commit 56ce04f）
+
+**用户请求（2026-11-10）**：「我们现在的保命窗口panic是配置给全局的，不过我想跟着模型卡片走吧，默认可以是该模型卡片max_effective_context_window的两倍」——保命阀阈值从「settings.json 单一全局键」升级为 per-provider 三层链。
+
+**三层链（`Session.panic_window` property，src/session.py）**：
+
+| 优先级 | 来源 | 说明 |
+|---|---|---|
+| ① | settings.json `panic_context_window`（>0） | 全局显式覆盖——**向后兼容**，已配值的部署行为不变；设 0/删键=交给卡片链 |
+| ② | 模型卡片 `panic_context_window`（>0） | per-provider 显式（models.json 新字段；WebUI 模型卡片编辑区新增「保命线(空=窗口×2)」输入框） |
+| ③ | **卡片 `max_effective_context_window` × 2** | 默认（用户裁定）——分档窗口常设总窗 ~50%，×2 ≈ 总窗：`75%×win ~ panic` 之间纯追加零调整的**轮内缓存最优区最大化** |
+
+win 未配置（分档禁用）→ 0，保命阀不参与（与旧行为一致）。
+
+**实现三层**：
+
+| 层 | 改动 |
+|---|---|
+| `load_panic_window_opt()`（src/config.py，新函数） | **显式配置检测**：settings 配了（>0）返回 int，否则 None——区分「显式配置」与「没配走卡片链」的关键；旧 `load_panic_window()` 保留（docstring 更新为三层链口径） |
+| `llm.profile_panic_window`（src/llm_client.py） | 卡片值解析：`0 / 负数 / 'abc' / '' / None → None`（回落默认），数字串安全转 int |
+| `Session.panic_window` property（src/session.py） | 三层链落点：① → ② → `win×2`；`win` 未配置 → 0 |
+
+**设计要点（与 win 的固化副本相反）**：`panic_window` **动态读 llm 属性**（`profile_panic_window`）而非 session 构造时快照——切模型/卡片热改自动跟随，**零同步点**。对比：`max_effective_context_window` 是 llm 创建时固化进 session 的副本，需四入口同步（见 [窗口值生命周期](#窗口值生命周期llm-固化副本--改窗口四入口同步2026-08-29commit-f57de5d)）；`fold_target_ratio` 当年也要在 switch_model / /reload / server 保存多处搬副本——本参数直接绕开这一整类同步问题。
+
+**消费点三处原位替换**（`config.load_panic_window() or win` → `self.panic_window or win`）：轮内投影判阈（`_history_tiered_msgs`）、实测 token 判阈（`observe_llm_usage` 的 hit_panic）、proj_stats 旁车快照 `panic` 字段（见 [旁车窗口快照](#旁车窗口快照win--fold_target--panic2026-08-29commit-f57de5d)）。
+
+**观测三面同步**：
+
+- `/config`：新增 `panic_context_window_effective`——**实际生效值+来源**，如 `800,000（卡片窗口×2）`（来源：settings显式 / 卡片显式 / 卡片窗口×2）
+- `/context`：保命线改读 `session.panic_window`（三层链实际生效值）
+- 设置页 tooltip：`0=三层链默认（模型卡片 panic_context_window > 卡片窗口×2）；设值=全局显式覆盖所有模型`
+
+**验证**：三层链单测 5 项全过（默认×2 / 卡片显式 / settings 最高 / win 未配=0 / 非法回落默认）+ 解析层 6 探针全对。改的是引擎层，`/restart` 生效；commit `56ce04f` 已推送。配置键登记见 [配置体系 · panic_context_window](../guides/config-and-models.md)。
 
 ## 分组衰减（轮内，2026-08 新）
 

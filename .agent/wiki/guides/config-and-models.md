@@ -14,6 +14,7 @@
     "vision": false,                     // 多模态能力（投影时 <img> 转 image_url）
     "max_effective_context_window": 60000, // 配了才启用分档投影；触发线=本值（顶窗才毕业折叠，commit 304bc16）
     "fold_target_ratio": 0.75,           // 保留水位占窗口比例（clamp 0.5~0.99；缺省 0.75，GLM 默认即可）——只决定触发后压到多低，不是触发阈值；DeepSeek（miss≈hit 60x）配低如 0.5：触发后压得狠、下次顶窗间隔长，小步升档（断尾部小）即可消化、少大折叠（断头部大）
+    "panic_context_window": null,        // 保命阀阈值（2026-11-10 起 per-provider；未填=卡片窗口×2 默认）——轮内投影超此线才应急折叠；消费链 settings 显式 > 卡片 > 卡片窗口×2，见下方专节
     "detail_step": 0,                    // 组间步距衰减字数（clamp 0~200；未填默认 0=不衰减——全局 settings 的 detail_step 字段已删 2026-09-15，只认模型卡片）——0=不衰减：渲染字节永不回缩、前缀缓存打满
     "requires_reasoning_in_history": false, // DeepSeek 思考模型=true：自动补历史 reasoning_content 占位防 400
     "token_rotate": true                 // 多token成功后预旋转；GLM等cache按token隔离的直连条目配false
@@ -23,7 +24,29 @@
 
 优先级：models.json > 项目根 models.py（gitignored，向后兼容）。
 
-> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56；触发语义修正 commit 304bc16）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=触发后压得狠、涨回窗口需 (1−ratio)×win、顶窗间隔长→折叠事件少——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线/保留线区分见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16)。
+> `fold_target_ratio`/`detail_step` 是 per-provider 缓存经济学参数（用户提案 2026-08-30，commit 27fea56；触发语义修正 commit 304bc16）：GLM miss≈hit 4x 用默认 0.75 即可，DeepSeek ~60x 推荐三件套 `0.5 + 0 + token_rotate:false`（**低 ratio**=触发后压得狠、涨回窗口需 (1−ratio)×win、顶窗间隔长→折叠事件少——升档断尾部小、折叠断头部大，方向见 [方向澄清](../architecture/context-engine.md#方向澄清为什么-deepseek-配低-ratio-才对升档断尾部小折叠断头部大2026-08)）。机制见 [context-engine · per-provider 缓存经济学参数](../architecture/context-engine.md#per-provider-缓存经济学参数fold_target_ratio--detail_step2026-08-30commit-27fea56用户提案)、触发线/保留线区分见 [触发线修复](../architecture/context-engine.md#触发线修复win-才是触发线winratio-是保留水位2026-08-30commit-304bc16)。**第三件 per-provider 参数 `panic_context_window`（2026-11-10，commit 56ce04f）**见下方专节——通常**不用填**：默认即卡片窗口×2 的缓存最优形态。
+
+### panic_context_window：保命阀阈值 per-provider 化——三层链（2026-11-10，用户裁定，commit 56ce04f）
+
+**用户请求（2026-11-10）**：「我们现在的保命窗口panic是配置给全局的，不过我想跟着模型卡片走吧，默认可以是该模型卡片max_effective_context_window的两倍」。
+
+**消费链（`Session.panic_window` property，src/session.py）**——三层取值：
+
+| 优先级 | 来源 | 说明 |
+|---|---|---|
+| ① | settings.json `panic_context_window`（>0） | 全局显式覆盖（旧单源键保留，向后兼容）；设 0/删键=交给卡片链 |
+| ② | 模型卡片 `panic_context_window`（>0） | per-provider 显式 |
+| ③ | **卡片 `max_effective_context_window` × 2** | **默认**——分档窗口常设总窗 ~50%，×2 ≈ 总窗：`75%×win ~ panic` 之间纯追加零调整，轮内缓存最优区最大化 |
+
+窗口未配（分档禁用）→ 0 = 保命阀不参与。
+
+- **通常不用配**：卡片未填即最优默认（③）；只有个别模型想单独收紧/放宽才在它的卡片里填 ②
+- **解析容错**（src/llm_client.py `profile_panic_window`）：卡片值 `0 / 负数 / '' / 非法串 / None` 一律视为未配（回落默认）；数字串安全转 int
+- **UI**：模型卡片编辑区新增「保命线(空=窗口×2)」输入框；设置页 tooltip 同步（`0=三层链默认；设值=全局显式覆盖所有模型`）
+- **观测**：`/config` 新增 `panic_context_window_effective`——实际生效值+来源（如 `800,000（卡片窗口×2）`）；`/context` 保命线与 proj_stats 旁车 `panic` 字段均改读实际生效值
+- **生效**：动态读 llm 属性（非 session 快照）——切模型/卡片热改自动跟随，零同步点；改的是引擎层，`/restart` 生效（commit `56ce04f`）
+
+机制与设计动机详见 [context-engine · 保命阀三层链](../architecture/context-engine.md)。
 
 ## 预设 provider 模板：models.preset.json 播种 + onboarding（2026-09-01，spec s_d4241d58，commit 7b8f156）
 

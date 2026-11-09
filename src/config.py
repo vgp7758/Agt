@@ -376,6 +376,17 @@ def load_panic_window() -> int:
         return 0
 
 
+def load_panic_window_opt():
+    """panic_context_window 的【显式配置检测】（2026-11-10 用户裁定 panic 跟随模型卡片）：
+    settings.json 配了（>0）返回 int，否则 None。None 时消费方（Session.panic_window property）
+    走卡片链：模型卡片 panic_context_window > 卡片 max_effective_context_window × 2。"""
+    try:
+        v = load_runtime_settings().get("panic_context_window")
+        return int(v) if v else None
+    except Exception:
+        return None
+
+
 def load_watchdog_stuck_secs() -> int:
     """工具/Agent 卡死判定阈值秒（settings.json 的 watchdog_stuck_secs；默认 1200，下限 10）。
     双消费（p_aa314b2f 看门狗）：① agent.py 工具硬超时——超时注入「判卡死」结果让宿主继续；

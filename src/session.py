@@ -897,6 +897,26 @@ class Session:
         return int(win * ratio)
 
     @property
+    def panic_window(self) -> int:
+        """轮内保命阀阈值（tok）——三层链（2026-11-10 用户裁定 panic 跟随模型卡片，默认窗口×2）：
+        ① settings.json 显式 panic_context_window（>0 全局手动覆盖，向后兼容）
+        > ② 模型卡片 panic_context_window（per-provider；动态读 llm.profile_panic_window
+            ——切模型/reload 卡片自动跟随，无需各同步点搬副本）
+        > ③ 卡片 max_effective_context_window × 2（默认：分档窗口常设为总窗 ~50%，
+            ×2 ≈ 总窗——75%×win ~ panic 之间纯追加零调整的缓存最优区最大化）。
+        win 未配置（分档禁用）返回 0（窗口模式无保命阀概念，与旧行为一致）。"""
+        explicit = config.load_panic_window_opt()
+        if explicit:
+            return explicit
+        win = self.max_effective_context_window
+        if not win:
+            return 0
+        pw = getattr(self.llm, "profile_panic_window", None)
+        if pw:
+            return int(pw)
+        return int(win) * 2
+
+    @property
     def detail_step(self) -> int:
         """组间步距衰减（字/组距）：只认 profile.detail_step（模型卡片 per-provider），
         未填默认 0=不衰减（用户裁定 2026-09-15：全局 settings 的 detail_step 字段删除——
@@ -1006,8 +1026,7 @@ class Session:
                 data["fold_ratio"] = self.fold_target_ratio or FOLD_TARGET_RATIO
                 data["fold_target"] = self.fold_target()   # win×ratio（per-provider 缓存经济学参数）
                 try:
-                    import config as _cfg
-                    data["panic"] = _cfg.load_panic_window()
+                    data["panic"] = self.panic_window   # 三层链实际生效值（2026-11-10：settings 显式 > 卡片 > 卡片窗口×2）
                 except Exception:
                     pass
             p = Path(sdir) / "proj_stats.json"
@@ -1469,7 +1488,7 @@ class Session:
         轮内以 _planned_fold/_planned_graduates 为起点零调整（75%~panic 纯追加，前缀缓存最优），
         超 panic 才应急：先升档（无损压缩）再折叠。"""
         win = self.max_effective_context_window
-        panic_win = config.load_panic_window() or win
+        panic_win = self.panic_window or win   # 三层链（2026-11-10）：settings 显式 > 卡片 > 卡片窗口×2
         settle = self.fold_target()   # per-provider ratio（DeepSeek≈60x 折扣悬殊→配高如 0.95：晚折叠保前缀）
         fold_count = self._planned_fold
         # 估算辅助：history 之后的段（ltm/当前轮/tail），循环外算一次（tail 含 episodic 召回，避免循环内反复 embed）。
@@ -4076,7 +4095,7 @@ class Session:
         if prompt > 0 and chars > 0:   # 校准用 prompt：chars 对应的正是输入侧
             ratio = min(max(chars / prompt, 1.0), 8.0)
             self._chars_per_token = round(0.5 * self._chars_per_token + 0.5 * ratio, 3)
-        panic = config.load_panic_window() or win
+        panic = self.panic_window or win   # 三层链（2026-11-10）：settings 显式 > 卡片 > 卡片窗口×2
         # 触发判定（用户裁定 2026-08-29）：实测 prompt_tokens 刨除 recent-file 估算后仍超 win 才算 over——
         # rf 是轮内易变项（同文件后写覆盖、归档即消失），它的体积不该推动下轮的历史压缩（毕业不可逆）。
         # panic 判阈不刨（按真实请求体积保命：请求确实超了就必须救——rf 也在真实请求里）。

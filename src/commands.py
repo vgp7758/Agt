@@ -559,6 +559,13 @@ def read_config(agent) -> dict:
         cfg["detail_base_source"] = ("显式" if _cfg2.load_detail_base_opt() else
                                      ("窗口推导" if getattr(agent.session, "max_effective_context_window", None) else "默认"))
         cfg["panic_context_window"] = _cfg2.load_panic_window()
+        try:   # 实际生效值（三层链 2026-11-10：settings 显式 > 卡片 > 卡片窗口×2）
+            _pw = agent.session.panic_window
+            _src = ("settings显式" if _cfg2.load_panic_window_opt() else
+                    ("卡片显式" if getattr(agent.llm, "profile_panic_window", None) else "卡片窗口×2"))
+            cfg["panic_context_window_effective"] = f"{_pw:,}（{_src}）"
+        except Exception:
+            pass
         cfg["hook_timeout"] = _cfg2.load_hook_timeout()
         cfg["fold_deep_tools"] = _cfg2.load_fold_deep_tools()
         cfg["tiering_mode"] = _cfg2.load_tiering_mode()
@@ -2267,7 +2274,7 @@ def _cmd_context(ctx: CommandContext, args):
     fold_on = False
     try:
         import config as _cfg
-        panic = _cfg.load_panic_window()
+        panic = s.panic_window   # 三层链实际生效值（2026-11-10：settings 显式 > 卡片 > 卡片窗口×2）
         fold_on = _cfg.load_fold_deep_tools()
     except Exception:
         pass
@@ -2440,7 +2447,7 @@ def build_default_registry() -> CommandRegistry:
         "/config enable_thinking true   思考模式开关\n"
         "/config max_level 4            分档最高级别\n"
         "/config detail_base 1500       步距衰减初始字数\n"
-        "/config panic_context_window 160000  保命阀阈值（0=跟随分档窗口；轮内超此线才应急折叠，一次压回75%计划水位）\n"
+        "/config panic_context_window 160000  保命阀阈值（全局显式覆盖；0=三层链默认：模型卡片 panic_context_window > 卡片窗口×2；轮内超此线才应急折叠，一次压回75%计划水位）\n"
         "/config hook_timeout 300    同步钩子工作流超时秒数（超时结果丢弃不卡主循环；0=不限；async钩子不受限）\n"
         "/config fold_deep_tools true  超深档(超过max_level)轮的工具调用整体折叠成一行标注，保留回复+reasoning原文\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"

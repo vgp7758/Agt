@@ -519,6 +519,15 @@ class LLMClient:
         self.max_tokens = profile.get("max_tokens") or (_REASONING_DEFAULT_MAX_TOKENS if self.thinking_supported else None)
         # 分档上下文投影的最大有效窗口（token 估算）。None=不启用分档，走 Session 原 recent_window+summary。
         self.max_effective_context_window = profile.get("max_effective_context_window")
+        # 保命阀阈值（per-provider，2026-11-10 用户裁定 panic 跟随模型卡片）：卡片
+        # panic_context_window 显式值；None/0/非法=未配——由 Session.panic_window property 落到
+        # 卡片窗口×2 的默认。消费链：settings 显式全局 > 卡片显式 > 卡片窗口×2。
+        _pw = profile.get("panic_context_window")
+        try:
+            _pwv = int(_pw) if _pw is not None and str(_pw).strip() != "" else 0
+        except (TypeError, ValueError):
+            _pwv = 0
+        self.profile_panic_window = _pwv if _pwv > 0 else None
         # DeepSeek 思考模式要求历史中带 tool_calls 的 assistant 消息必须有 reasoning_content 字段；
         # 跨模型混用时（非思考模型产生的 tool_calls 步骤无 reasoning）会 400。配此标志后发请求前自动补占位。
         # profile 显式配置优先；未显式配置（None）时保留内置规则表已 set 的置位（_match_provider_rules）

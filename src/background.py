@@ -859,45 +859,63 @@ class Scheduler:
 
     def _loop(self):
         """后台轮询：到点 produce → push_message；interval 循环重算 next_fire；
-        at+daily（每日闹钟）触发后推到明天同一时刻；at 单次触发后删除。"""
+        at+daily（每日闹钟）触发后推到明天同一时刻；at 单次触发后删除。
+
+        【线程永不死】（8000 实锤 2026-11-09：两 schedule 倒计时归零不触发——py-spy
+        全程无本线程，静默死亡）：fire 循环原有 try，但【锁定扫描段/next_fire 重算/
+        _persist】在裸奔——任何一次硬异常直接透出 while 杀线程，此后全部任务停摆且
+        零留痕。改：单轮整体兜底——异常记日志（含 traceback）后 sleep 继续下轮，
+        结构性问题也只影响单轮而非永久停摆。"""
         while not self._stop:
-            now = time.time()
-            fire = []
-            with self._lock:
-                for sid, sch in list(self._schedules.items()):
-                    if sch.deadline and now > sch.deadline:   # 过期（2026-10-04·取代 autonomous end_time）
-                        self._schedules.pop(sid, None)
-                        self._by_name.pop(sch.name, None)
-                        _LOG.info("定时任务「%s」已过 deadline，自动删除", sch.name)
-                        continue
-                    if sch.next_fire <= now:
-                        fire.append(sch)
-                        if sch.kind == "interval" and sch.repeat:
-                            sch.next_fire = now + sch.spec
-                        elif sch.kind == "at" and sch.repeat and sch.daily:
-                            sch.next_fire = _next_daily_fire(sch.daily)   # 明天同一时刻
-                        else:  # at 单次 或 interval 单次：触发后删除
+            try:
+                now = time.time()
+                fire = []
+                with self._lock:
+                    for sid, sch in list(self._schedules.items()):
+                      try:
+                        if sch.deadline and now > sch.deadline:   # 过期（2026-10-04·取代 autonomous end_time）
                             self._schedules.pop(sid, None)
                             self._by_name.pop(sch.name, None)
-            for sch in fire:
-                try:
-                    text = self._produce(sch)
-                    if text is None:
-                        continue   # 静默（code 空产物）
-                    busy = getattr(getattr(self._agent, "session", None), "_current", None) is not None
-                    if sch.mode == "skip" and busy:
-                        continue   # busy 时放弃本次注入
-                    if sch.mode == "immediate" and busy:
-                        # 打断当前轮：塞插话队列（步边界注入，与用户插话同款——autonomous 原语义）
-                        pm = getattr(self._agent, "pending_messages", None)
-                        if pm is not None:
-                            pm.append(text)
+                            _LOG.info("定时任务「%s」已过 deadline，自动删除", sch.name)
                             continue
-                    self._agent.push_message(text, source=sch.name)   # idle（默认）：排队等空闲
-                except Exception:
-                    pass
-            if fire:
-                self._persist()   # 单次任务触发完删除——持久化同步消失（RLock 嵌套安全）
+                        if sch.next_fire <= now:
+                            fire.append(sch)
+                            if sch.kind == "interval" and sch.repeat:
+                                sch.next_fire = now + sch.spec
+                            elif sch.kind == "at" and sch.repeat and sch.daily:
+                                sch.next_fire = _next_daily_fire(sch.daily)   # 明天同一时刻
+                            else:  # at 单次 或 interval 单次：触发后删除
+                                self._schedules.pop(sid, None)
+                                self._by_name.pop(sch.name, None)
+                      except Exception as _se:
+                        # per-schedule 隔离（单测实锤：毒任务在扫描段硬炸会饿死同轮其它
+                        # 任务——整轮 try 只保线程不死，同轮其余 schedule 全被跳过）：
+                        # 毒任务本轮放弃（下轮再试），扫描继续。
+                        _LOG.warning("scheduler 扫描「%s」单条异常（本轮跳过该条，其余照常）：%s",
+                                     getattr(sch, "name", sid), repr(_se))
+                for sch in fire:
+                    try:
+                        text = self._produce(sch)
+                        if text is None:
+                            continue   # 静默（code 空产物）
+                        busy = getattr(getattr(self._agent, "session", None), "_current", None) is not None
+                        if sch.mode == "skip" and busy:
+                            continue   # busy 时放弃本次注入
+                        if sch.mode == "immediate" and busy:
+                            # 打断当前轮：塞插话队列（步边界注入，与用户插话同款——autonomous 原语义）
+                            pm = getattr(self._agent, "pending_messages", None)
+                            if pm is not None:
+                                pm.append(text)
+                                continue
+                        self._agent.push_message(text, source=sch.name)   # idle（默认）：排队等空闲
+                    except Exception:
+                        pass
+                if fire:
+                    self._persist()   # 单次任务触发完删除——持久化同步消失（RLock 嵌套安全）
+            except Exception:
+                import traceback
+                _LOG.error("scheduler 单轮异常（已容忍继续，防线程死亡致全部任务停摆）：\n%s",
+                           traceback.format_exc())
             time.sleep(_POLL)
 
     def stop(self):

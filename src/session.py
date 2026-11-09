@@ -214,6 +214,18 @@ def _call_prefix_of(sdir: Path) -> str:
     except Exception:
         return sdir.name
     segs = [p for p in rel.parts if p not in ("agents", "branches")]
+    # 语义化落档分支 root（2026-10-17）：REPOS_DIR/<repo>/<branch>/sessions/——与 REPOS_DIR 隔
+    # 两级目录（repo 名 + 分支名）→ 前插分支名：call_id = branchA-a-N。/merge 回主 repo 时
+    # （跨 root：分支 toollog 与主线 toollog 是不同文件，append 合流）与主线自己的 a-N 不撞。
+    # 判据注记：常规 repo root = REPOS_DIR/<repo>/sessions（root.parent.parent == REPOS_DIR）；
+    # 分支 root 再深一级（root.parent.parent.parent == REPOS_DIR）。施工牌文本 root.parent.parent
+    # 系层数笔误，按"两级形态=分支 root"的意图实现。判据不命中 → 不加前缀（零行为变化）。
+    try:
+        _gpp = root.parent.parent
+        if _gpp != REPOS_DIR and _gpp.parent == REPOS_DIR:
+            segs = [root.parent.name] + segs
+    except Exception:
+        pass
     return "-".join(segs) if segs else sdir.name
 
 
@@ -4938,7 +4950,10 @@ class Session:
             # 下次 load 走直连（不再依赖每次反查）。失败只警告（运行期已按反查结果合成，不阻塞）。
             try:
                 _bo = str((s.branch_meta or {}).get("branch_of") or "")
-                if _bo and _layers:
+                # 跨 root 形态（2026-10-17 语义化落档）：branch_of 为绝对路径——目录名即全路径，
+                # 不存在"目录改名→相对名漂移"场景，跳过回填（relative_to 跨 root 必 ValueError，
+                # 每次.load 刷 warning 纯噪音）。
+                if _bo and _layers and not Path(_bo).is_absolute():
                     _canon = _layers[-1][0].relative_to(_sessions_root_of(sdir)).as_posix()
                     if _canon != _bo:
                         _meta_p = sdir / "meta.json"
@@ -5209,6 +5224,14 @@ def _resolve_base_dir(sessions_root: Path, bo: str) -> Optional[Path]:
     改名前的形态——2026-10-09「目录名即 id」改造会改名既有目录，但 branch_of 字符串
     还指着旧名）→ 按 meta.created_at 反查现目录（目录名会改，创建时间不会）。
     解析失败返回 None（调用方降级为空基底，不断链）。"""
+    # 跨 root 直通（2026-10-17 语义化落档）：bo 为绝对路径（分支落 REPOS_DIR/<repo>/<branch>/
+    # sessions/ 时 branch_of 存父 sdir 绝对路径——跨 root 无法用相对段表达）且目录存在 → 直用。
+    try:
+        _abs = Path(str(bo))
+        if _abs.is_absolute() and _abs.exists():
+            return _abs
+    except Exception:
+        pass
     cur = sessions_root
     for seg in [p for p in str(bo).replace("\\", "/").split("/") if p]:
         if seg == "branches":
@@ -5457,6 +5480,35 @@ def _resolve_session_path(path_or_name: str, workspace=None) -> Path:
         if (dir_cand / "meta.json").exists():
             return dir_cand / "meta.json"
 
+    # 3.2 分支 root 寻址（2026-10-17 语义化落档）：X/Y（repo/branch → 该分支最新目录）或
+    # X/Y/Z（→ 指定 sid），落档形态 REPOS_DIR/X/Y/sessions/。/resume Agt/branchA（或带 sid）
+    # 直达——寻址是用户管理语义化分支会话的主路径。段名已过滤 ".."（无穿越）。
+    _segs = [p for p in re.split(r"[\\/]+", path_or_name) if p and p not in (".", "..")]
+    if len(_segs) in (2, 3):
+        _br_root = REPOS_DIR / _segs[0] / _segs[1] / "sessions"
+        if _br_root.is_dir():
+            if len(_segs) == 3:
+                _sid_cand = _br_root / _segs[2]
+                if (_sid_cand / "meta.json").exists():
+                    return _sid_cand / "meta.json"
+            else:
+                _best, _best_ts = None, -1.0
+                try:
+                    for _d in _br_root.iterdir():
+                        if not _d.is_dir() or not (_d / "meta.json").exists():
+                            continue
+                        try:
+                            _m = json.loads((_d / "meta.json").read_text(encoding="utf-8"))
+                        except Exception:
+                            continue
+                        _ts = float(_m.get("created_at") or 0)
+                        if _ts > _best_ts:
+                            _best, _best_ts = _d, _ts
+                except Exception:
+                    pass
+                if _best is not None:
+                    return _best / "meta.json"
+
     # 3.5 分支（用户提案 2026-10-08）：branches/<名>/meta.json——'主线/分支' 精确形式或纯分支名
     br = _find_branch_dir_by_name(ws, path_or_name)
     if br:
@@ -5597,6 +5649,64 @@ def list_sessions(workspace=None) -> list[dict]:
                 "first": b_first,
                 "branch": True,
             })
+
+    # 语义化落档分支 root 扫描（2026-10-17）：REPOS_DIR/<X>/<Y>/sessions/*/meta.json（两级形态）
+    # ——不扫则分支会话在 /list 不可见、寻址形同虚设。条目 id=X/Y/sid（/resume 三段直达），
+    # name=[X/Y] 前缀标记；限深：仅当 REPOS_DIR/X/Y/sessions 是目录（防误伤单级 repo 目录）。
+    if REPOS_DIR.is_dir():
+        try:
+            _lvl1 = sorted(REPOS_DIR.iterdir())
+        except Exception:
+            _lvl1 = []
+        for _x in _lvl1:
+            if not _x.is_dir():
+                continue
+            try:
+                _lvl2 = sorted(_x.iterdir())
+            except Exception:
+                continue
+            for _y in _lvl2:
+                _br_root = _y / "sessions"
+                if not _br_root.is_dir():
+                    continue
+                try:
+                    _dirs = sorted(_br_root.iterdir())
+                except Exception:
+                    continue
+                for _sd in _dirs:
+                    _mp = _sd / "meta.json"
+                    if not _mp.exists():
+                        continue
+                    try:
+                        _m = json.loads(_mp.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue   # 坏 JSON 跳过
+                    _t_cnt, _f_msg = 0, ""
+                    try:
+                        for line in (_sd / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                e = json.loads(line)
+                            except Exception:
+                                continue
+                            if e.get("event") == "turn_end":
+                                _t_cnt += 1
+                                if not _f_msg and e.get("answer"):
+                                    _f_msg = (e.get("answer") or "")[:30]
+                            elif e.get("event") == "turn_start" and not _f_msg:
+                                _f_msg = (e.get("user") or "")[:30]
+                    except Exception:
+                        pass
+                    results.append({
+                        "id": f"{_x.name}/{_y.name}/{_sd.name}",
+                        "name": f"[{_x.name}/{_y.name}] {_m.get('name') or _sd.name}",
+                        "created_at": _m.get("created_at"),
+                        "turns": _t_cnt,
+                        "first": _f_msg,
+                        "branch": True,
+                    })
 
     # 旧扁平结构兼容：*.json
     if legacy_dir.exists():

@@ -173,11 +173,27 @@ def _cmd_branch(ctx: CommandContext, args):
     /branch <分支名> [轮号]——带主线前 N 轮的记忆做支线任务（B站视频/简历/其它repo协助等），
     支线新轮只写分支目录，不污染主线。/resume 主线名 回主线。"""
     from session import Session as _S, _read_events, _events_fingerprint
-    positional = _parse_args(args)[0]
+    # 语义化落档 flags（用户提案 2026-10-17）：/branch <名> [轮号] -repo <短名> -branch <分支名>
+    # → 分支落 REPOS_DIR/<repo>/<branch>/sessions/<字母id>/（分支 root 自成"准 repo 目录"，
+    # toollog/memories 等天然隔离）。单横线 flags 在此【局部】解析——不动 _parse_args
+    # （它只认 --；改它会波及所有命令的 positional 语义）。
+    repo_flag, branch_flag = None, None
+    _rest, _i = [], 0
+    while _i < len(args):
+        _a = args[_i]
+        if _a in ("-repo", "--repo") and _i + 1 < len(args):
+            repo_flag = args[_i + 1]; _i += 2; continue
+        if _a in ("-branch", "--branch") and _i + 1 < len(args):
+            branch_flag = args[_i + 1]; _i += 2; continue
+        _rest.append(_a); _i += 1
+    positional = _rest
     if not positional:
-        print("用法：/branch <分支名> [轮号]   （不带轮号=继承主线全部记忆）\n"
-              "例：/branch 项目社交卡片制作        —— 带主线全部记忆做支线\n"
-              "    /branch 协助写简历 15           —— 只带主线前 15 轮的记忆")
+        print("用法：/branch <分支名> [轮号] [-repo <repo短名> -branch <分支名>]\n"
+              "     （不带轮号=继承主线全部记忆）\n"
+              "例：/branch 项目社交卡片制作        —— 带主线全部记忆做支线（落本 repo 的 sessions/）\n"
+              "    /branch 协助写简历 15           —— 只带主线前 15 轮的记忆\n"
+              "    /branch 爬虫协助 -repo ProjB -branch dev  —— 落 REPOS_DIR/ProjB/dev/sessions/"
+              "（跨 repo 语义化归档）")
         return
     # 最后一个参数是纯数字 → 轮号；其余拼成分支名（分支名可含空格）
     keep_turns = None
@@ -200,7 +216,35 @@ def _cmd_branch(ctx: CommandContext, args):
     #   记忆合成（load 链式）不变；旧复合形态 "<主线>/branches/<名>" 由解析层兼容（迁移前残留）。
     is_branch = bool(getattr(sess, "branch_meta", None))
     from session import _sessions_root_of
-    sessions_root = _sessions_root_of(sdir)
+    # 目标 root（2026-10-17 语义化落档）：带 -repo/-branch → REPOS_DIR/<repo>/<branch>/sessions/
+    # （分支 root=准 repo 目录，sessions/ 判据天然命中，toollog/memories 等按分支自成一 root）；
+    # 无 flags → 原 root（行为零变化）。origin 防同名异源：_origin.txt 记当前 workspace 真路径，
+    # 已存在且不同 → 拒绝（两个不同 cwd 想落同一个 <repo>/<branch> 会互踩）。
+    semantic_root = None
+    if repo_flag and branch_flag:
+        from session import REPOS_DIR as _RD
+        _rk = _S._sanitize_session_name(str(repo_flag))
+        _bk = _S._sanitize_session_name(str(branch_flag))
+        if not _rk or not _bk:
+            print("❌ -repo / -branch 名清洗后为空（非法字符全部被替换？）")
+            return
+        semantic_root = _RD / _rk / _bk / "sessions"
+        try:
+            semantic_root.mkdir(parents=True, exist_ok=True)
+            origin_p = semantic_root.parent / "_origin.txt"
+            cur_ws = str(Path(str(getattr(sess, "workspace", "") or Path.cwd())).resolve())
+            if origin_p.exists():
+                _old = origin_p.read_text(encoding="utf-8").strip()
+                if _old and _old != cur_ws:
+                    print(f"❌ 分支目录已属于其它工作区（origin={_old} ≠ 当前 {cur_ws}）"
+                          f"——同名异源，拒绝分叉")
+                    return
+            else:
+                origin_p.write_text(cur_ws, encoding="utf-8")
+        except Exception as e:
+            print(f"❌ 创建分支 root 失败：{e}")
+            return
+    sessions_root = semantic_root if semantic_root is not None else _sessions_root_of(sdir)
     base_events_p = sdir / "events.jsonl"                      # 继承源 = 当前会话自己的事件流
     if not base_events_p.exists():
         print("❌ 当前会话无 events.jsonl，无法分叉")
@@ -244,7 +288,11 @@ def _cmd_branch(ctx: CommandContext, args):
         print(f"❌ 创建分支失败：{e}")
         return
     import time as _t
-    branch_of = sdir.name   # 单段父引用（平铺：父目录名即分支关系）
+    # branch_of：默认单段父引用（平铺：父目录名即分支关系）；语义化落档（跨 root）→
+    # 存父 sdir 绝对路径（_resolve_base_dir 对绝对路径直达——跨 root 链解析的关键）。
+    branch_of = sdir.name
+    if semantic_root is not None:
+        branch_of = str(sdir.resolve())
     # 显示链（list_sessions 用）：父链 ⇢ 当前会话名——支线分叉时完整链可见
     parent_chain = (sess.branch_meta or {}).get("display_chain") or (cur_meta.get("name") or sdir.name)
     display_chain = f"{parent_chain} ⇢ {sess.name or sdir.name}" if is_branch else str(parent_chain)
@@ -263,10 +311,15 @@ def _cmd_branch(ctx: CommandContext, args):
         },
         "saved_at": int(_t.time()),
     }
+    if semantic_root is not None:
+        # 语义化落档标记（跨 root 形态的 meta 层证据；list_sessions/寻址层据此识别）
+        bmeta["branch"]["branch_root"] = f"{repo_flag}/{branch_flag}"
     (bdir / "meta.json").write_text(json.dumps(bmeta, ensure_ascii=False, indent=2), encoding="utf-8")
     src_desc = f"分支「{sess.name or sdir.name}」（链：{display_chain}）" if is_branch else f"主线「{sess.name or sdir.name}」"
+    _dir_desc = (f"repos/{repo_flag}/{branch_flag}/sessions/{bid}" if semantic_root is not None
+                 else f"sessions/{bid}")
     print(f"✅ 分支已创建：{src_desc} 前 {keep_turns}/{total_turns} 轮（events 前 {n_lines} 行）"
-          f"→ 分支「{branch_name}」（id={bid}，目录 sessions/{bid}，调用 id {bid}-N）")
+          f"→ 分支「{branch_name}」（id={bid}，目录 {_dir_desc}，调用 id {bid}-N）")
     # 立即加载分支并切换（同 /resume 路径——链式合载恢复全链记忆，counter 全局续号）
     try:
         new_session = _S.load(str(bdir / "meta.json"), llm=ctx.agent.llm,
@@ -351,9 +404,42 @@ def _cmd_merge(ctx: CommandContext, args):
                                   "merged_from": sess.name or sdir.name}, ensure_ascii=False))
     with open(top_dir / "events.jsonl", "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    # ② toollog（2026-10-09 四轮：repo 共享单文件）无需搬运——分支轮的工具调用
-    # 本就 append 在同一个共享 toollog.jsonl 里，events 合流即可解析全部 call_id。
+    # ② toollog：同 root 共享单文件免搬运（2026-10-09 四轮）。跨 root（2026-10-17 语义化落档：
+    # 分支轮记录在 REPOS_DIR/<repo>/<branch>/sessions/toollog.jsonl，主线 root 看不到）→
+    # 把分支记录 append 进主线 root 的 toollog——call_id 自带分支前缀（tb1-a-N）与主线
+    # a-N 不撞；按 call_id 去重（增量 merge 重跑/多次合并不重复 append）。
+    from session import _shared_toollog_path
+    own_tl, top_tl = _shared_toollog_path(sdir), _shared_toollog_path(top_dir)
     moved = []
+    if own_tl != top_tl and own_tl.exists():
+        try:
+            _have = set()
+            if top_tl.exists():
+                for _l in top_tl.read_text(encoding="utf-8").splitlines():
+                    _l = _l.strip()
+                    if _l:
+                        try:
+                            _have.add(_json.loads(_l).get("call_id"))
+                        except Exception:
+                            pass
+            _new = []
+            for _l in own_tl.read_text(encoding="utf-8").splitlines():
+                _l = _l.strip()
+                if not _l:
+                    continue
+                try:
+                    if _json.loads(_l).get("call_id") in _have:
+                        continue
+                except Exception:
+                    pass
+                _new.append(_l)
+            if _new:
+                top_tl.parent.mkdir(parents=True, exist_ok=True)
+                with open(top_tl, "a", encoding="utf-8") as f:
+                    f.write("\n".join(_new) + "\n")
+                moved = [len(_new)]
+        except Exception as e:
+            print(f"⚠️ 分支 toollog 合流失败（events 已合并，仅 call_id 详情可能查不到）：{e}")
     # ③ merged_turns 写回分支 meta（增量续合锚点——重跑无新轮，天然幂等）
     merged_now = merged_before + n
     bm["merged_turns"] = merged_now

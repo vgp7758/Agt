@@ -422,13 +422,17 @@ def ask(server_id: str, question: str, timeout: int = 120) -> str:
     _asker = f"远程实例 {MY_URL}" if MY_URL else "远程实例"
     # 新版对端：action=ask → ask 消费端（不跑 agent.run、不写历史）；
     # 旧版对端：不识别该 action → 落到 _parse_client_msg 取 text 当普通消息（行为降级但可用）。
+    # cb（2026-11-10 用户实锤·迟到补偿）：本机地址随请求带给对端——若本端 timeout 先到断开、
+    # 对端随后才算出回答，对端经此地址反向 WS 把迟到答案投回本端 inbox（不丢失）。
     status, answers = _ws_send_collect(
         it["url"], question, wait_done=True, timeout=timeout,
-        payload={"action": "ask", "text": question, "asker": _asker})
+        payload={"action": "ask", "text": question, "asker": _asker, "cb": MY_URL or ""})
     body = "\n".join(a for a in answers if a).strip()
     if body:
         return f"[remote:{server_id}] {body}"
-    return f"[remote:{server_id}] {status}"
+    late = ("；对端仍在计算，若随后产出回答会以「迟到回答」消息送达你的 inbox"
+            if "timeout" in status.lower() or "超时" in status else "")
+    return f"[remote:{server_id}] {status}{late}"
 
 
 # ===================== 工具（make_remote_tools） =====================

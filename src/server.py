@@ -2789,6 +2789,35 @@ def _refresh_ui_if_session_switched(agent, pre_sess_id: int):
         pass
 
 
+def _late_answer_push(cb_url: str, payload: dict) -> None:
+    """remote_ask 迟到补偿投递（2026-11-10 用户实锤·回答不丢）：发起方 timeout 先断后，
+    对端把迟到答案经 cb_url 反向 WS 投回（action=late_answer → 发起方 push 进询问者 inbox）。
+    同步函数（run_in_executor 里跑）：http(s)→ws(s)+/ws，2 次重试各 8s 超时；失败仅日志。"""
+    import json as _json
+    try:
+        import websocket
+    except ImportError:
+        _LOG.warning("迟到补偿失败：websocket-client 未安装")
+        return
+    u = cb_url.rstrip("/")
+    if u.startswith("https://"):
+        u = "wss://" + u[8:]
+    elif u.startswith("http://"):
+        u = "ws://" + u[7:]
+    u += "/ws"
+    for attempt in (1, 2):
+        try:
+            w = websocket.create_connection(u, timeout=8)
+            try:
+                w.send(_json.dumps(payload, ensure_ascii=False))
+            finally:
+                w.close()
+            _LOG.info("迟到补偿已投递 → %s（第 %d 次）", u, attempt)
+            return
+        except Exception as e:
+            _LOG.warning("迟到补偿投递失败（%d/2）%s：%s", attempt, u, e)
+
+
 async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None):
     """处理一条用户输入（文本/命令/action）。client=来源客户端 dict（含 target——
     文本按其交互目标路由：主 Agent 走 work_q；子 Agent 按忙闲插话/task 直达）。"""
@@ -2881,8 +2910,36 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             _ans = await asyncio.to_thread(answer_ask, agent, _q, _asker)
         except Exception as e:
             _ans = f"[询问失败] {type(e).__name__}: {e}"
-        await _send(ws, {"type": "answer", "text": _ans})
-        await _send(ws, {"type": "_done"})
+        try:
+            await _send(ws, {"type": "answer", "text": _ans})
+            await _send(ws, {"type": "_done"})
+        except Exception:
+            # 迟到补偿（2026-11-10 用户实锤）：发起方 timeout 先到断开（WS 回写失败）——回答
+            # 别丢。请求带 cb（发起方地址）时反向 WS 投递：action=late_answer → 发起方把它
+            # push 进询问者的 inbox（唤醒一轮）——remote_ask 超时文案已预告此路径。
+            _cb = str(_d.get("cb") or "").strip()
+            if _cb and _cb.startswith(("http://", "https://")):
+                _late = {"action": "late_answer", "text": _ans,
+                         "question": _q[:200], "from": _asker}
+                asyncio.get_event_loop().run_in_executor(
+                    None, _late_answer_push, _cb, _late)
+            return
+        return
+    if isinstance(_d, dict) and _d.get("action") == "late_answer":
+        # remote_ask 迟到补偿接收端（2026-11-10 用户实锤·回答不丢）：发起方 timeout 先断后，
+        # 对端算出回答经此 action 反向投回 → push 进询问者的 inbox（唤醒一轮）。与直接断开丢失
+        # 相对：迟到答案以 [remote_ask 迟到回答] 消息形态送达，问题摘要在前方便对账。
+        _t = str(_d.get("text") or "").strip()
+        _q = str(_d.get("question") or "").strip()
+        _fr = str(_d.get("from") or "远程实例").strip()
+        if _t:
+            agent.push_message(
+                f"📨〔remote_ask 迟到回答 · from {_fr}〕问：{_q[:120]}\n\n{_t}",
+                source="remote_ask_late")
+            try:
+                await _send(ws, {"type": "system", "text": "✅ 迟到回答已入 inbox"})
+            except Exception:
+                pass
         return
     if isinstance(_d, dict) and _d.get("action") == "open_terminal":
         import subprocess

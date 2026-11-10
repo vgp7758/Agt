@@ -436,7 +436,7 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 | 位置 | 改动 |
 |---|---|
-| `assetBoxHtml` | 新增 `isVid` 后缀表（mp4/webm/mov/mkv/avi/m4v/flv/ts/3gp/wmv/mpg/mpeg）→ **内嵌 `<video controls preload="metadata">` 播放器**（`src=/api/asset`，metadata 只取首帧不预载全片）+ 右上角 `↗` 新页签链接（`.vid-open`，浏览器按 /api/asset 的 Content-Type 直接播原片，不触发下载） |
+| `assetBoxHtml` | 新增 `isVid` 后缀表（mp4/webm/mov/mkv/avi/m4v/flv/ts/3gp/wmv/mpg/mpeg）→ **内嵌 `<video controls preload="metadata">` 播放器**（`src=/api/asset`，metadata 只取首帧不预载全片；**2026-11-19 起改 `preload="none"`**——metadata 预载在重媒体会话 restore 时成请求风暴拖死整页，见[专节](#媒体控件预载风暴videoaudio-preloadnone重媒体会话整页加载卡死修复2026-11-19用户实锤commit-0131f56)）+ 右上角 `↗` 新页签链接（`.vid-open`，浏览器按 /api/asset 的 Content-Type 直接播原片，不触发下载） |
 | `unmentionedChangesHtml` | 条件补视频类 → 走 `assetBoxHtml` 内嵌播放器（不再进文本抽屉） |
 | 嗅探前置 | 未知后缀探嗅条件补 `&& !isVid`——已知视频后缀短路，不再进 probe 链路 |
 | CSS | `.asset-box.video`（max-width 560px，relative）+ `.vid-open` 右上角定位 |
@@ -609,6 +609,28 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 | 后端（open-folder 新参数） | **需 `/restart`**——`/reload plugins` 对已注册路由不替换（见 [plugin-sdk · 插件路由热重载不替换](../architecture/plugin-sdk.md#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)） |
 
 重启过渡期点 📂 退化为「打开 workspace 根」——不报错，是静默降级不是故障。commit 本地待推（GitHub 断连，push-retry 在岗补推）。
+
+### 媒体控件预载风暴：video/audio preload=none——重媒体会话整页加载卡死修复（2026-11-19，用户实锤，commit 0131f56）
+
+**用户报告（2026-11-19）**：8000 实例的 web 页面在浏览器里加载不出来，怀疑「会话页面引用的图片/视频/音频有些多，加载不动」。
+
+**诊断（临时 PowerShell 脚本正则计数 events.jsonl + /api/status）**：
+
+| 检查 | 结果 | 结论 |
+|---|---|---|
+| 服务本身 | `/api/status` 正常、index.html 秒回 287KB | **实例健在**，不是服务挂 |
+| 最新 session events（1.6MB，仍在活跃） | 视频引用 **270 处** + 音频 **174 处**，图仅 1 处 | **图不是主因**（`loading="lazy"` 原有）；音视频才是 |
+
+**卡死机制**：`assetBoxHtml` 把媒体引用渲染为 `<video controls preload="metadata">` / `<audio controls preload="metadata">`——读档/翻页 restore 时 **444 个媒体控件同时向 `/api/asset` 发预载请求**（每个至少拉一次 metadata），叠加浏览器渲染 444 个控件本体 → 请求风暴 + 渲染卡死 → 页面加载不出来。单控件 `metadata` 只取首帧是 2026-09-17 [视频框初版](#视频资产内嵌播放器渲染2026-09-17用户问诊)的合理设计，但**数百控件同时 restore 时预载成本线性放大**，页面级即风暴。
+
+**修复（src/static/index.html，纯前端 2 处模板，commit 0131f56）**：
+
+- `<video controls preload="metadata">` → **`preload="none"`**（1 处）
+- `<audio controls preload="metadata">` → **`preload="none"`**（1 处）
+
+语义变化：媒体控件**点击播放才开始加载**；`/api/asset` 的 FileResponse 原生支持 **Range 分段**——播放 / 拖进度条不受影响。图片框 `loading="lazy"` 原有，不动。
+
+**生效**：静态 mtime 热更——浏览器 **Ctrl+F5 硬刷新**即生效（8000/20048 跑同一 repo editable、共享同一份前端，无需重启实例）。
 
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 

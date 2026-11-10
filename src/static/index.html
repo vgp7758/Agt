@@ -964,12 +964,12 @@ function assetBoxHtml(title, path){
   }
   if(isAud){
     return '<div class="asset-box audio">'+_assetActs(path)+(cap?'<div class="asset-cap">🔊 '+cap+'</div>':'')+
-      '<audio controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></audio></div>';
+      '<audio controls preload="none" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></audio></div>';
   }
   if(isVid){   // 视频 → 内嵌播放器（用户提案 2026-09-17：不再当文本开抽屉——mp4 走视频框；
                // 点击标题/右上角链接可新页签看原片，浏览器按 /api/asset 的 Content-Type 直接播）
     return '<div class="asset-box video">'+(cap?'<div class="asset-cap">🎬 '+cap+'</div>':'')+_assetActs(path)+
-      '<video controls preload="metadata" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></video>'+
+      '<video controls preload="none" src="'+src+'" onerror="var b=this.closest(\'.asset-box\');if(b)b.classList.add(\'err\');this.remove()"></video>'+
       '<a class="vid-open" href="'+src+'" target="_blank" rel="noopener" title="在新页签打开">↗</a></div>';
   }
   if(isTxt){   // 文本类 → 点击打开预览抽屉（📄）

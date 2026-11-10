@@ -651,6 +651,27 @@ hooks:
 
 **关联**：[施工委托 worker](#施工委托-worker引擎程序化派发子-agent2026-10-15用户提案commit-3dc3f7b)（施工线实例的派发宿主，本次受害场景）· [agent_prompt 默认复用翻转](#agent_prompt-默认复用翻转2026-09-06用户提案commit-595fa2f)（复用/复活/新建三分支语义出处）。
 
+### 复发四（2026-11-08，20048 实锤）：复活实例从团队清单失踪——`_restore_subagents` 先清后扫非原子 + 运行中实例被清
+
+#### 复发四（2026-11-08，20048 实锤）：复活实例从团队清单失踪——`_restore_subagents` 先清后扫非原子 + 运行中实例被清
+
+**现象**：20048 的 `worker-p_f6025a03`（复发三磁盘兜底复活救回的实例）从团队清单/页面失踪——完成时 `update_status` 落空。
+
+**根因**（src/agent.py `_restore_subagents`，读档恢复子 Agent 列表的清扫逻辑）：旧实现「**先清后扫**」非原子——
+
+1. 扫描半路异常 = registry 被清空且不补（条目数 45→1 口径）
+2. 清除段**不豁免正在跑的复活实例**——agent 线程活着但 entry 被删 → 页面/团队清单失踪
+
+**修复【先扫后清 + 运行中豁免】**（src/agent.py）：
+
+| 项 | 语义 |
+|---|---|
+| ① 扫描先行 | 收集 `to_reg` 全程不动 registry——扫描异常时现 registry 零伤害 |
+| ② 运行中豁免 | 清除时跳过 agent 活着且 `_react_running` 的条目——复活实例的收尾由它自己的 `_bg` 尾部负责 |
+| session_dir 缺失防呆 | 为空直接跳过并 warning（registry 不动） |
+
+**承接**：复发三是「复活没接上」（新建冒名），复发四是「复活接上了但被清扫误杀」——恢复/清扫两段 lifecycle 都要豁免活实例。排查口诀三步之外的第四形态：「复活成功又失踪」→ 查 `_restore_subagents` 清扫段。
+
 ## 声明级回退链（fallback 键，2026-08 起管理页表单化）
 
 声明里的 `fallback` 键决定该 Agent 的 LLM 回退链。三形态（`_parse_agent_fallback`，src/multiagent.py）：

@@ -803,6 +803,18 @@ win 未配置（分档禁用）→ 0，保命阀不参与（与旧行为一致�
 
 **验证**：五态全失效（dirty/frozen/buf/stream/stats）、重复调用容错、switch_model(user=True) 联动 + vision 位随新 profile 变化。
 
+### 后记：非阻塞拿锁——SOS 切模型撞后台重定型的跨线程死锁（2026-11-08，20048 worker 卡 38min 实锤）
+
+#### 后记：非阻塞拿锁——SOS 切模型撞后台重定型的跨线程死锁（2026-11-08，20048 worker 卡 38min 实锤）
+
+**症状**：20048 worker 卡 38min——SOS 并行段 LLM 失败回退 `_advance` 切模型 → `switch_model` → `_on_model_switch` → `invalidate_projection` 阻塞等 `_proj_lock`；而锁正被 `_proj_rebuild_thread` 持有跑 `apply_simple_tiering`（后台重定型，async_rebuild 2026-10-12 引入的持锁路径）。**跨线程环**：持锁者等 executor、executor 任务等锁——曾冻结 worker / SOS×3 / 重定型五个线程。
+
+**修复**（session.py）：`_proj_lock.acquire(blocking=False)`——锁被占时**不阻塞等待，降级为置待办标记**：`mark_system_dirty`（无锁安全）+ `_proj_rebuild_needed=True`，由下次装配兜底消化；warning 日志「降级（_proj_lock 被占——重定型/装配进行中）」。
+
+**代价口径**：锁被占时唯一持有者就是重定型/装配链自己——此路径 = SOS 回退切模型 × 恰逢后台重定型的双重罕见场景，重刷延迟到下次装配可接受。
+
+**关联**：[保命阀 panic 跟随模型卡片](#保命阀-panic-跟随模型卡片三层链settings-显式--卡片--卡片窗口2、2026-11-10用户裁定commit-56ce04f)（同批 panic 链）· [agent_watchdog](../features/agent-watchdog.md)（本案属「锁死锁」类非工具卡点——正是巡检兜底的场景类型）。
+
 ## 重启后首次请求 → profile 指纹分流重刷（2026-09-30·二，用户提案，commit b245364）
 
 **提案原话**：「重启以后的第一次请求也按照当前 profile 整个重刷一遍吧」——补上投影重定型的第三个时机，与手动切模型重刷对称。

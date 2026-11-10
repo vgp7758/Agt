@@ -213,6 +213,23 @@ exec(sch.code, g)   # 顶层 import 与函数定义同住 g，函数体经 globa
 - 触发后：每日任务**保留**（重算 next_fire）；单次任务触发后**删除**
 - background.py imports 相应补 `re` / `timedelta` / `Optional`
 
+## `_loop` 线程永不死 + per-schedule 异常隔离：倒计时归零不触发（8000 实锤 2026-11-09）
+
+**症状（8000 实锤 2026-11-09）**：两 schedule 倒计时归零不触发——py-spy 全程**无 scheduler 线程**（静默死亡、零留痕），任务集体停摆无人知晓。
+
+**根因**：fire 循环原有 try 只盖触发段，【锁定扫描段 / next_fire 重算 / `_persist`】在裸奔——任何一次硬异常直接透出 `while` 杀线程，此后全部任务永久停摆。
+
+**修复两层（src/background.py `_loop`）**：
+
+| 层 | 语义 |
+|---|---|
+| 单轮整体兜底 | `_loop` 单轮整体 try/except——异常记日志（含 traceback）后 sleep 继续下轮；结构性问题也只影响单轮而非永久停摆（**线程永不死**） |
+| per-schedule 隔离 | 扫描段单条 try（单测实锤：毒任务在扫描段硬炸会饿死同轮其它任务）——毒任务本轮放弃（下轮再试），其余照常 |
+
+**配套**：`self._lock` 由 Lock 改 **RLock**——`_loop` 触发删除在锁内调 `_persist`（自身再拿锁），Lock 不可重入会死锁。
+
+同批自愈网姊妹篇：[agent_watchdog · Agent 卡住看门狗](agent-watchdog.md)（react 循环层）——同一哲学：**常驻线程任何异常都不许静默死亡**。
+
 ## 组合模式：every_seconds + at = at 相位起步，之后每 N 秒循环（2026-09-18，commit 9a88107，用户提案）
 
 `add_schedule` 第三类触发（`add_interval_at`，src/background.py）：**every_seconds 与 at 同给**时，at 为【首触发相位起点】，之后每 seconds 循环一次。

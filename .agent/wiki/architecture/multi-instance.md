@@ -465,6 +465,24 @@ remote_message(id, 派活, expect_reply=True)
 
 **关联**：[三层组网通道](#跨实例消息通信remote_message--remote_ask2026-08)（remote_ask 定位不变——问它才知道的事，只是处理方式从「跑一轮」改成「旁路问」）· [工具执行审批](../features/tool-approval.md)（ask 场景不触发审批：写类在分流层就被拒绝）
 
+### remote_ask 迟到补偿：超时 ≠ 丢失——回答反向 WS 投回询问者 inbox（2026-11-10，用户实锤）
+
+#### remote_ask 迟到补偿：超时 ≠ 丢失——回答反向 WS 投回询问者 inbox（2026-11-10，用户实锤）
+
+**症状（用户实锤）**：`remote_ask` 发起方 `timeout` 先到断开（对端 WS 回写失败），对端随后才算出回答——回答直接丢失，用户侧表现为「问了但没收到」。
+
+**机制三端（cb 协议）**：
+
+| 端 | 行为 |
+|---|---|
+| 发起端（remote_tools.py `ask()`） | payload 带 `"cb": MY_URL`——本机回发地址随请求带给对端；timeout 空手而归时返回文案预告：「对端仍在计算，若随后产出回答会以『迟到回答』消息送达你的 inbox」 |
+| 对端发送（server.py `action=ask`） | `await _send(answer)` 失败（发起方已断）→ `cb` 非空且 http(s) 开头 → executor 后台 `_late_answer_push` 反向 WS 发 `action=late_answer`（带 text + question 前 200 字 + from，2 次重试） |
+| 发起方接收（server.py `action=late_answer`） | `agent.push_message("📨〔remote_ask 迟到回答 · from X〕问：<前 120 字>…", source="remote_ask_late")`——inbox 唤醒一轮，问题摘要在前方便对账 |
+
+**语义**：同步通道断开不影响异步补偿通道——**超时 ≠ 丢失**。与 [expect_reply](#expect_reply派活后对方完成时回发-answer2026-09-17用户提案commit-d98a36c) 同属「cb/MY_URL 反向回发」家族（那个是派活完成回执，这个是问答迟到答案）。
+
+**同批姊妹修：送达回执文案识别加固**（remote_tools.py `_ws_send_collect`，8000→20055 实锤 2026-11-04）：对方忙时回执不一定是标准 `message_queued` 类型——回执文本含「已排队 / 已入队 / 已接收 / 已注入」任一关键词也算送达。治「未收到」误报：消息实际入队并被对端消费，发起方却因回执形态不标准而漏判送达。
+
 ## remote_call_tool：远端独有工具/MCP 的统一通道（2026-09-17，用户提案）
 
 **动机（用户提案 2026-09-17）**：「给 remote_* 系列工具加一个 remote_call_tool，参数就是 name / arguments / remote_instance_id——语义更明确，模型调用它的欲望应该会增加」；「MCP 不加路由参数，因为远端实例的 MCP 可能和本地不同，需要调用的话走 remote_call_tool」。配合路由参数静态化第一档（见[改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)第三轮），它补上「本地 schema 里根本没有的工具怎么调」的缺口——远端实例装了本地没有的 MCP/外置工具时，唯一通道。

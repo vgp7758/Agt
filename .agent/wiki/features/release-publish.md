@@ -280,6 +280,49 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码——push 上岸前远端 repo 看不到本批提交。
 
+## 第八次实战：v0.35.11（v0.35.9 后首发，part=patch）——0.35.10 李鬼占号：PyPI 版本号被历史误传占用，改号重发三通道全绿
+
+### 第八次实战：v0.35.11（v0.35.9 后首发，part=patch）——0.35.10 李鬼占号：PyPI 版本号被历史误传占用，改号重发三通道全绿
+
+第八次生产运行，用户侧仍是一句「发补丁吧」。本次失败形态是**全新的一种**——既非 push 断网（v0.35.0/2/5/8/9 五次）也非 gitignore 阻断（v0.35.8 ①），而是 **PyPI 版本号环境面**：线上已被一个内容过期的 0.35.10 占号，同名文件不可覆盖。
+
+| 步骤 | 第 1 次调用（attempt 0.35.10） | 处置后重发（0.35.11） |
+|---|---|---|
+| ① 工作区检查 | ✅ 通过 | ✅ 通过 |
+| ② release.py 主体 | ❌ 失败：`📦 版本：0.35.10 → 0.35.10`（bump 无操作——本地 VERSION 已停 0.35.10，11-05 误传时的 bump 残留）→ `🗂 暂存 0 个文件（仅版本号改动，无源码变化！）` → `git commit` 报 nothing to commit → 后续步骤未执行 | ✅ 0.35.10 → 0.35.11：build ✓ / upload ✓ / push ✓（main `6ccfecc`） |
+| ③ version_file / ③.5 tag / ④ 端点验证 | ❌ 未执行（② 失败即中断） | ✅ 全绿：version_file 同步、tag `v0.35.11` 打推、PyPI 两件就位 |
+| 桌面版 | — | 🏗 tag 触发 GitHub Actions 云构建 |
+
+#### 两个叠加坑与查实
+
+1. **本地 VERSION 已停 0.35.10**：11-05 那次发版尝试的 bump 残留——本次 `release_publish` 传的 part 目标也是 0.35.10，bump 无操作
+2. **「暂存 0 个文件（仅版本号改动，无源码变化！）」→ commit 空**：release.py 对「无源码变化」没有防御，空 commit 直接炸掉 ②
+3. **查实 PyPI 线上已有 0.35.10**：11-05 的**误传**（内容过期——hash 与本批不一致，缺本批全部 19 个功能笔）；PyPI 同名文件**不可覆盖**，唯一出路是改号
+
+#### 处置：改号不重传（不是手工补尾，也不是重发）
+
+- run_python 手动 bump **0.35.10 → 0.35.11**（src/paths.py `VERSION` + packaging/version_file.txt 字符串行两处）
+- 手动 commit `6ccfecc chore(release): v0.35.11——0.35.10 已被 11-05 误传占用（内容过期），本批 39 笔以 0.35.11 发布`
+- 重跑发布 → 三通道全绿：PyPI [`0.35.11`](https://pypi.org/project/agt-agent/0.35.11/)（whl+sdist）、GitHub main + tag、桌面版 CI 触发
+
+**用户侧提醒**：这段时间若装过李鬼 0.35.10，`pip install -U agt-agent` 升 0.35.11 即得真内容。
+
+**教训**：发版前先查 PyPI 目标版本号是否已被占（`pip index versions agt-agent` 或端点直查）——版本号 bump 残留会让 ② 的 commit 空转，而「线上占号」只能在 upload 阶段才暴露；两坑叠加时第一坑先把 ② 打死，反而救了 upload 一次白跑。
+
+#### 本版收录清单（自 v0.35.9，39 笔含 19 功能）
+
+| 板块 | 内容 | 详情页 |
+|---|---|---|
+| 自愈网 | agent 卡住看门狗三件套——工具硬超时（默认 20min 注入「判卡死」结果）+ 心跳 `_hb_ts` + 巡检拉 doctor 自愈（agent_prompt 单调用卡 5h+ 也可救，第一版不自动重启）；scheduler `_loop` 线程永不死 + per-schedule 异常隔离（治倒计时归零不触发） | [agent-watchdog](agent-watchdog.md) · [background-scheduler](background-scheduler.md) |
+| remote | remote_ask 迟到补偿——发起方 timeout 先断后，对端算出的回答经 cb 反向 WS 投回询问者 inbox（超时≠丢失）；送达回执按文案识别 busy 排队提示（治「未收到」误报） | [多实例组网](../architecture/multi-instance.md) |
+| context | 保命阀 panic 跟随模型卡片——三层链 settings 显式 > 卡片 panic_context_window > 卡片窗口×2；invalidate_projection 非阻塞拿锁（治 SOS 切模型撞后台重定型跨线程死锁，五线程冻结实锤） | [context-engine](../architecture/context-engine.md) |
+| 指令 | `/pending` 排队用户消息（不打断当前轮，任务结束自动开新轮）；`/ask` 改走 agent_ask 统一消费端（完整投影 + 临时 agent 只读工具） | [user-interaction](user-interaction.md) · [ask-command](ask-command.md) |
+| 子 Agent | 复活三连修——current_turn_only 三态（声明 history 段则完整装配）+ 磁盘兜底复活 + 复活实例失踪（`_restore_subagents` 先扫后清 + 运行中豁免） | [多 Agent · 复活路径](../architecture/multi-agent.md) |
+| 分支 | 气泡分支 answer 锚校准（前 60 字内容锚定，治继承错位） | [session-branching](session-branching.md) |
+| WebUI | ⭐ 已收藏服务管理区（fav_entries 完整条目 + ▶/✏/🗑 三按钮）；媒体控件 preload=none（重媒体会话整页加载卡死修复，8000 实锤） | [background-scheduler](background-scheduler.md) · [bubble-interaction](bubble-interaction.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)

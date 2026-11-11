@@ -423,6 +423,10 @@ class LLMClient:
         # 故障端点。冷却期间该 provider 从可用链剔除；成功后自动清除冷却态（恢复即可用）。
         self._provider_cooldown: dict[str, float] = {}   # {model_name: 上次失败时间戳}
         self._cooldown_seconds: float = 300.0            # 默认 5 分钟（settings.json cooldown_seconds 可覆盖）
+        # 跨调用失败历史（doctor 2026-11-12 诊断建议）：last_failures 每次调用入口清零，冷却窗内
+        # 的后续调用只剩 cooldown 记录、真实首败原因丢失——raise 时无从带回诊断线索。这里滚动
+        # 保留最近 50 条真实失败（不含冷却跳过），供"回退链不可用"错误消息/doctor 派单引用。
+        self._failure_history: list = []
         # 用户切换纪元（2026-09-28 用户实锤）：WebUI 下拉框//model 切模型时递增——进行中 chat 的
         # 回退循环据此感知"链快照已作废"（旧循环的 _advance 会踩掉刚切的模型，或因新模型不在
         # 旧链直接炸"当前模型不在回退链中"）。循环每圈核对纪元，变了→重建链从新链首重来。
@@ -976,6 +980,15 @@ class LLMClient:
                 except Exception:
                     pass
                 _LOG.error("回退链耗尽 tried=%s 原因=%s 冷却=%s", tried, reason, cd_detail or "无")
+                # 冷却覆盖真实原因时找回链上最近一次真实失败（doctor 2026-11-12 诊断建议：
+                # reason 被跳过路径覆盖成"冷却中(剩余Xs)"，spark 首败的 400 详情就此丢失，
+                # 诊断方无从判断数据问题与否——从 last_failures 反查非 cooldown 记录补上）。
+                if reason.startswith("冷却中"):
+                    _real = next((f for f in reversed(getattr(self, "_failure_history", []))
+                                  if f.get("cls") != "cooldown"), None)
+                    if _real:
+                        reason += (f"；链上最近真实失败: [{_real.get('model')}] "
+                                   f"{_real.get('err')}: {str(_real.get('msg'))[:140]}")
                 raise RuntimeError(
                     f"回退链不可用（已试: {', '.join(tried)}）：{reason}"
                     + (f"；其余成员冷却中: {cd_detail}" if cd_detail else ""))
@@ -1101,6 +1114,10 @@ class LLMClient:
                     "model": self.model_name, "err": type(e).__name__,
                     "cls": _classify_err(e), "msg": str(e)[:200] + (f" [{_stg}]" if _stg else ""),
                     "provider": _prov, "url": _rurl})
+                # 跨调用滚动保留（冷却窗内的后续调用 raise 时要引用——见 _failure_history 注释）
+                self._failure_history.append(self.last_failures[-1])
+                if len(self._failure_history) > 50:
+                    del self._failure_history[:-50]
                 if isinstance(e, (PermissionDeniedError, AuthenticationError, NotFoundError)):
                     _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退：%s",
                                  ck, getattr(e, "status_code", "?"), self._cooldown_seconds,

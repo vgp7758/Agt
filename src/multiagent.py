@@ -2113,10 +2113,21 @@ def make_subagent_tools(agent) -> list:
                     if (_name != "doctor" and isinstance(ex, RuntimeError)
                             and "回退链不可用" in str(ex)):
                         try:
+                            # 回退链失败明细（doctor 2026-11-12 诊断建议：目标 llm.last_failures
+                            # 是现成材料——每成员 err/cls/msg 分类，cls=cooldown 为冷却跳过非
+                            # 真实失败；附进派单后 doctor 不再依赖内存现场即可判数据问题与否）。
+                            _lf = getattr(getattr(_sa_ex, "llm", None), "last_failures", None) or []
+                            _lf_s = ""
+                            if _lf:
+                                _lf_s = ("\n\n── 目标回退链失败明细（llm.last_failures；"
+                                         "cls=cooldown 条目为冷却跳过、非真实失败）──\n"
+                                         + "\n".join(f"- [{f.get('model')}] {f.get('err')} "
+                                                     f"(cls={f.get('cls')}): {str(f.get('msg'))[:160]}"
+                                                     for f in _lf[-8:]))
                             _doc_prompt = (
                                 f"[自动派发·BadRequest 诊断] 子 Agent '{_name}' [agent_id={_aid}] "
                                 f"的 LLM 请求刚因回退链耗尽失败（多模型连锁失败，疑似请求数据问题）。\n\n"
-                                f"错误全文：\n{type(ex).__name__}: {ex}\n\n"
+                                f"错误全文：\n{type(ex).__name__}: {ex}{_lf_s}\n\n"
                                 f"── 目标近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}\n\n"
                                 f"请按 doctor.md 工作循环处理：req_inspect(agent_id='{_aid}') 体检 → "
                                 f"req_probe 试修 → req_patch 落盘 → req_resume(agent_id='{_aid}') 恢复，"

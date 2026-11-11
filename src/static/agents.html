@@ -131,6 +131,24 @@ textarea{width:100%;resize:vertical}
 
 <script>
 let curName='', models=[], allTools=[], asmData=[], hkData=[];
+let _scenarios={};   // p_ea32ad4f：场景策略组 {名:{desc,chain}}（/api/model-list 附带）——fModel 双组下拉的场景组
+
+// fModel 双组下拉（p_ea32ad4f）：optgroup1=调用场景（消费点 model 填场景名，解析 miss→default）/
+// optgroup2=模型卡片（老姿势直配）。双轨向后兼容；同名冲突时引擎侧场景优先。
+function renderModelOptions(selected){
+  const sel=selected||'';
+  const scenKeys=Object.keys(_scenarios);
+  let h=`<option value="">（跟随主 Agent 当前模型）</option>`;
+  if(scenKeys.length){
+    h+=`<optgroup label="调用场景（策略组）">`+scenKeys.map(n=>{
+      const d=_scenarios[n]||{};
+      const t=(d.chain||[]).join(' → ')||'（空=跟随主模型）';
+      return `<option value="${esc(n)}" ${sel===n?'selected':''}>${esc(n)}${d.desc?' — '+esc(d.desc):''}</option>`;
+    }).join('')+`</optgroup>`;
+  }
+  h+=`<optgroup label="模型卡片（直配）">`+models.map(x=>`<option value="${esc(x)}" ${sel===x?'selected':''}>${esc(x)}</option>`).join('')+`</optgroup>`;
+  return h;
+}
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -397,7 +415,8 @@ window.addEventListener('hashchange',route);
   try{
     const m=await api('/api/model-list');
     models=Object.keys(m.models||{});
-    $('fModel').innerHTML=`<option value="">（跟随主 Agent 当前模型）</option>`+models.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    _scenarios=(m.scenarios||{});
+    $('fModel').innerHTML=renderModelOptions('');
   }catch(e){}
   try{
     const t=await api('/api/tools');

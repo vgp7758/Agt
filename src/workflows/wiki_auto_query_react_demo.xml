@@ -119,7 +119,7 @@ async def main(args):
     <in name="tools" type="list" ref="__entry__.tools"/>
     <in name="temperature" type="number">0.2</in>
     <in name="enable_thinking" type="boolean">False</in>
-    <in name="model" type="string">utility</in>
+    <in name="model" type="string">short-req</in>
     <out name="raw" type="object"/>
     <out name="content" type="string"/>
     <out name="tool_calls" type="list"><field name="id" type="string"/><field name="name" type="string"/><field name="arguments" type="object"/></out>

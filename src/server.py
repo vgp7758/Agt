@@ -669,10 +669,12 @@ async def api_tools():
             # agent_prompt.caller、llm_call.model）——编辑器检测 enum 渲染下拉控件 + LLM 调用时的合法值约束
             if isinstance(ps, dict) and isinstance(ps.get("enum"), list) and ps["enum"]:
                 pm["enum"] = ps["enum"]
-            # llm_call 的 model 参数：API 侧附加（models.json 的 provider 列表 + 空=跟随）
-            # ——schema 不自带（llm_call 在 LIGHT_TOOLS 构造时 enum 无法静态声明），保持原有路径
+            # llm_call 的 model 参数：API 侧附加（场景组 + models.json 的 provider 列表 + 空=跟随）
+            # ——schema 不自带（llm_call 在 LIGHT_TOOLS 构造时 enum 无法静态声明），保持原有路径。
+            # p_ea32ad4f：场景名在前（消费点可填策略组），同名冲突引擎侧场景优先
             if name == "llm_call" and pn == "model":
-                pm["enum"] = [""] + sorted(config.MODELS.keys())
+                _scen = sorted(config.load_scenarios().keys())
+                pm["enum"] = [""] + [s for s in _scen if s != "default"] + sorted(config.MODELS.keys())
             params.append(pm)
         outputs = getattr(t, "user_outputs", None) or infer_tool_outputs(t)
         if name.startswith("__mcp__"):
@@ -904,9 +906,45 @@ async def api_models(scope: str = "auto"):
 
 @app.get("/api/model-list")
 async def api_model_list():
-    """返回模型名→显示名映射（不含敏感信息），供工作流编辑器选模型用。"""
+    """返回模型名→显示名映射（不含敏感信息），供工作流编辑器/agents 编辑页选模型用。
+    p_ea32ad4f 附带 scenarios：{场景名: {desc, chain}}——前端 model 下拉做双组
+    （optgroup 场景组在前，向后兼容手配卡片）。"""
     return {"models": {name: p.get("display", name) for name, p in config.MODELS.items()},
+            "default": config.DEFAULT_MODEL,
+            "scenarios": {k: {"desc": v.get("desc", ""), "chain": v.get("chain", [])}
+                          for k, v in config.load_scenarios().items()}}
+
+
+@app.get("/api/scenarios")
+async def api_scenarios_get():
+    """调用场景策略表（p_ea32ad4f 设置页管理区）：场景表 + 各场景有效链（无效卡片过滤后）+ 卡片名清单。"""
+    scen = config.load_scenarios()
+    return {"scenarios": scen,
+            "valid": {k: config.resolve_scenario(k) for k in scen},
+            "models": list(config.MODELS.keys()),
             "default": config.DEFAULT_MODEL}
+
+
+@app.put("/api/scenarios")
+async def api_scenarios_save(request: Request):
+    """保存调用场景策略表（整表覆盖；default 自动保底）。保存即热生效：
+    清各 Agent 的 per-scenario client 缓存 + 工作流三件套的场景缓存（commands._invalidate_scenario_caches）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    scen = body.get("scenarios")
+    if not isinstance(scen, dict):
+        return {"error": "scenarios 需为对象 {名: {desc, chain}}"}
+    config.save_scenarios(scen)
+    cleared = []
+    if _agent is not None:
+        try:
+            from commands import _invalidate_scenario_caches
+            cleared = _invalidate_scenario_caches(_agent)
+        except Exception:
+            pass
+    return {"ok": True, "scenarios": config.load_scenarios(), "cleared": cleared}
 
 
 @app.put("/api/models")

@@ -102,7 +102,7 @@ async def main(args):
 
 判断哪个技能匹配用户消息：只回复该技能的 name（一个单词）；都不匹配回复 NONE。不要任何解释。]]></param>
     <param name="output_format" type="string"><![CDATA[text]]></param>
-    <model>local-lfm-vl</model>
+    <model>short-req</model>
     <out name="output" type="string"/>
     <batch enabled="false"/>
   </node>

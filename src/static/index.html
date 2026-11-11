@@ -630,6 +630,13 @@
     </select></label>
     <label>reasoning补全模型 <select id="cfg_reasoning_completer" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"><option value="">（关闭）</option></select></label>
     <label>辅助模型 utility_model <select id="cfg_utility_model" title="所有 LLM 短调用共用的便宜模型：recap总结/RAG检索抽关键字精排/reasoning补全默认/工作流LLM与意图节点默认；留空=跟随主模型，建议配便宜非思考模型"><option value="">（跟随主模型）</option></select></label>
+    <div class="rt-group" title="调用场景策略组（p_ea32ad4f）：所有 LLM 调用点从「选模型」改为「选场景」——sub-agent yml / 工作流 llm 节点 / explore / img_proxy 的 model 字段填场景名；解析 miss→default 兜底；链中的卡片须是左侧已配置的模型名，未配置的解析时自动跳过">调用场景（LLM 调用点「选场景」策略组）</div>
+    <div id="scenList" style="max-height:32vh;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:4px 6px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin:4px 0 6px;flex-wrap:wrap">
+      <button onclick="addScenarioRow()" style="font-size:11px">+ 添加场景</button>
+      <button onclick="saveScenarios()" style="font-size:11px">💾 保存场景（即时生效）</button>
+      <span style="font-size:10px;color:#8a9099">链=卡片名有序数组（逗号分隔）；default 禁删；空链=跟随主模型；同名冲突场景优先</span>
+    </div>
     <div class="rt-group">NanoJev 意图服务（intent_nano 节点用）</div>
     <label>jev_base_url <input id="cfg_jev_base_url" type="text" placeholder="http://your-jev:8766（留空=先试本机 8766，再降级 LLM 生成式）"></label>
     <label>jev_api_token <input id="cfg_jev_api_token" type="password" placeholder="（服务无鉴权可留空）" title="自建 Jev 服务带鉴权时填（请求头 Authorization: Bearer）"></label>
@@ -2195,8 +2202,87 @@ function switchSettingsTab(name, btn){
   // 切到 MCP 标签时加载配置+状态（此前 loadMcpConfig 无调用点——列表恒空，用户实锤：
   // playwright/python-lsp/csharp-lsp 全看不到；每次切入都刷新，读最新盘上配置）
   if(name==='mcp') loadMcpConfig();
+  if(name==='runtime') loadScenarios();   // p_ea32ad4f：调用场景管理区（每次切入读最新）
   if(name==='other'){ loadHookSwitches(); loadSnapSetting(); const ls=document.getElementById('langSel'); if(ls) ls.value=_i18nLang(); if(saveBtn) saveBtn.style.display='none'; }
   else { const sb=document.getElementById('cfgSave'); if(sb) sb.style.display=''; }
+}
+
+// —— 调用场景策略组（p_ea32ad4f，设置·运行时页签）：读 /api/scenarios → 就地编辑 → PUT 保存 ——
+let _scenData={scenarios:{}, valid:{}, models:[]};
+async function loadScenarios(){
+  const box=document.getElementById('scenList'); if(!box) return;
+  try{
+    const r=await fetch('/api/scenarios'); _scenData=await r.json();
+  }catch(e){ box.innerHTML='<div style="color:#b91c1c;font-size:11px">⚠️ 无法获取场景表（旧进程无此端点，重启实例后可用）</div>'; return; }
+  renderScenarios();
+}
+function renderScenarios(){
+  const box=document.getElementById('scenList'); if(!box) return;
+  const scen=_scenData.scenarios||{}; const valid=_scenData.valid||{}; const models=_scenData.models||[];
+  box.innerHTML=Object.keys(scen).map(name=>{
+    const v=scen[name]||{}; const chain=(v.chain||[]).join(',');
+    const eff=(valid[name]||[]);
+    const invalid=(v.chain||[]).filter(c=>!models.includes(c));
+    const isDefault=name==='default';
+    return `<div style="border-bottom:1px dashed var(--line);padding:4px 0" data-scen="${esc(name)}">
+      <div style="display:flex;gap:6px;align-items:center">
+        <input value="${esc(name)}" ${isDefault?'disabled':''} placeholder="场景名"
+          onchange="renameScenarioKey('${esc(name)}',this.value)" style="width:110px;font-weight:600" title="${isDefault?'default 出厂兜底：可改链与描述，不可删':'场景名（消费点的 model 字段填它；不可与已有场景重名）'}">
+        <input value="${esc(v.desc||'')}" placeholder="描述（可选）" onchange="_scenData.scenarios['${esc(name)}'].desc=this.value" style="flex:1">
+        ${isDefault?'<span style="font-size:10px;color:#8a9099">兜底 · 禁删</span>':`<button onclick="delScenario('${esc(name)}')" style="font-size:11px" title="删除场景（引用它的调用点自动回退 default）">✕</button>`}
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:2px">
+        <input value="${esc(chain)}" placeholder="链：卡片名逗号分隔（空=跟随主模型）" onchange="_scenData.scenarios['${esc(name)}'].chain=this.value.split(',').map(s=>s.trim()).filter(Boolean)" style="flex:1"
+          title="模型卡片名有序数组（设置·模型管理页配置卡片）。解析时过滤未配置卡片；空链=跟随主模型${isDefault?'。default 是未识别场景名的兜底':''}">
+        <span style="font-size:10px;color:${invalid.length?'#b45309':'#8a9099'};white-space:nowrap"
+          title="过滤无效卡片后的实际生效链">${invalid.length?'⚠️ 有效链: ':'有效链: '}${esc(eff.join(' → ')||'（空=跟随主模型）')}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+function addScenarioRow(){
+  let n='new-scenario', i=2;
+  while(_scenData.scenarios[n]) n='new-scenario_'+(i++);
+  _scenData.scenarios[n]={desc:'',chain:[]};
+  renderScenarios();
+  // 滚到底让新行可见（新行在末尾）
+  const box=document.getElementById('scenList');
+  if(box) box.scrollTop=box.scrollHeight;
+}
+function renameScenarioKey(oldName,newName){
+  newName=(newName||'').trim();
+  if(!newName||newName===oldName){ renderScenarios(); return; }
+  if(newName==='default'){ alert('default 是出厂兜底场景名，不可占用'); renderScenarios(); return; }
+  if(_scenData.scenarios[newName]){ alert('场景名已存在：'+newName); renderScenarios(); return; }
+  const v=_scenData.scenarios[oldName];
+  const keys=Object.keys(_scenData.scenarios);
+  const rebuilt={};
+  keys.forEach(k=>{ rebuilt[k===oldName?newName:k]=_scenData.scenarios[k]; });
+  _scenData.scenarios=rebuilt;
+  renderScenarios();
+}
+function delScenario(name){
+  if(name==='default') return;
+  if(!confirm('删除场景 '+name+'？（引用它的调用点自动回退 default）')) return;
+  delete _scenData.scenarios[name];
+  renderScenarios();
+}
+async function saveScenarios(){
+  try{
+    const r=await fetch('/api/scenarios',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scenarios:_scenData.scenarios})});
+    const d=await r.json();
+    if(d.error){ alert('保存失败：'+d.error); return; }
+    _scenData.scenarios=d.scenarios||_scenData.scenarios;
+    renderScenarios();
+    if(typeof toast==='function') toast('✅ 场景表已保存（即时生效）'+((d.cleared||[]).length?`，已刷新 ${d.cleared.length} 个 Agent 的场景 client`:''));
+    refreshModelDependentSelects();   // agents 编辑页等打开中的下拉同步新场景组
+  }catch(e){ alert('保存失败：'+e.message); }
+}
+// 场景表变化后，刷新已渲染的「场景+卡片」双组下拉（agents 编辑页 fModel 等——存在才刷）
+function refreshModelDependentSelects(){
+  const f=document.getElementById('fModel');
+  if(f&&typeof renderModelOptions==='function') f.innerHTML=renderModelOptions(f.value);
 }
 
 // —— 回溯快照开关（设置·其它页签，2026-10-05 用户提案）：repo 级持久化 .agent/snapshots_state.json ——

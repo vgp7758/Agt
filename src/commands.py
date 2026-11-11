@@ -765,7 +765,8 @@ def apply_config(agent, values: dict) -> list:
             saved.pop("recap_model", None)
             config.save_runtime_settings(saved)
             agent.utility_model = um
-            agent._utility_llm = None   # 清缓存，下次 utility_client 按新值惰性重建
+            agent._utility_llm = None   # 清旧缓存槽（防旧读点用到 stale 实例）
+            _invalidate_scenario_caches(agent)   # short-req/completer 等场景的旧键兼容链跟着 utility_model 变
             agent.retrieval_llm = agent.utility_client()
             results.append(f"✅ utility_model = {um or '（跟随主模型）'}"
                            "（recap/RAG检索/工作流LLM默认共用；已存 settings.json + 即时生效）")
@@ -873,12 +874,16 @@ def apply_config(agent, values: dict) -> list:
 
 def _cmd_config(ctx: CommandContext, args):
     positional = _parse_args(args)[0]
+    # scenarios 子命令（p_ea32ad4f 调用场景抽象层）：/config scenarios list|set|add|del
+    if positional and positional[0].lower() == "scenarios":
+        _config_scenarios(ctx, positional[1:])
+        return
     if not positional:
         print("当前配置：")
         for k, v in read_config(ctx.agent).items():
             print(f"  {k} = {v}")
         print("用法：/config <key> <value> [<key> <value> ...]；可配置：" + " / ".join(CONFIGURABLE)
-              + " / max_level / max_effective_context_window")
+              + " / max_level / max_effective_context_window / scenarios（调用场景管理，/config scenarios 查看用法）")
         return
     if len(positional) % 2 != 0:
         print("❌ 参数须成对，如：/config max_steps 100 token_budget 100000")
@@ -886,6 +891,139 @@ def _cmd_config(ctx: CommandContext, args):
     values = {positional[i]: positional[i + 1] for i in range(0, len(positional), 2)}
     for line in apply_config(ctx.agent, values):
         print(line)
+
+
+def _iter_live_agents(agent):
+    """当前进程内所有活跃 Agent 实例（主 + 注册表中的子 Agent）——场景缓存失效用。"""
+    seen, out = set(), []
+    for a in [agent]:
+        if a is not None and id(a) not in seen:
+            seen.add(id(a)); out.append(a)
+    reg = getattr(agent, "registry", None)
+    for entry in (reg.list_all() if hasattr(reg, "list_all") else []):
+        a = getattr(entry, "agent", None)
+        if a is not None and id(a) not in seen:
+            seen.add(id(a)); out.append(a)
+    return out
+
+
+def _invalidate_scenario_caches(agent) -> list:
+    """场景表变更后清各 Agent 的场景 client 缓存（下次调用按新链惰性重建）。返回清过的 agent_id。"""
+    cleared = []
+    for a in _iter_live_agents(agent):
+        cache = getattr(a, "_scenario_llms", None)
+        if isinstance(cache, dict) and cache:
+            cache.clear()
+            cleared.append(getattr(a, "agent_id", "?"))
+    # 工作流三件套的全局场景 client 缓存同步失效（llm_call 的 model=场景名）
+    try:
+        import real_tools as _rt, config as _cfg
+        scen_names = set(_cfg.load_scenarios())
+        for k in [k for k in getattr(_rt, "_WF_ALT_LLM_CACHE", {}) if k in scen_names]:
+            _rt._WF_ALT_LLM_CACHE.pop(k, None)
+    except Exception:
+        pass
+    return cleared
+
+
+def _config_scenarios(ctx: CommandContext, args):
+    """调用场景策略组管理（p_ea32ad4f）：settings.json 的 scenarios 键（单一真源 config）。
+    /config scenarios                          列出全部场景（含有效链）
+    /config scenarios set <名> [描述] <卡1,卡2,...>   设定/新建场景链（描述可省=保留原值）
+    /config scenarios add <名> [描述] [卡1,卡2,...]   新增场景（已存在报错）
+    /config scenarios del <名>                        删除场景（default 禁删）
+    链写空串 = 跟随主模型；链中的卡片须是 models.json 已配置的模型名。"""
+    import config
+    sub = (args[0] if args else "list").lower()
+    scen = config.load_scenarios()
+
+    if sub == "list":
+        print("调用场景（解析：场景名命中→其链；miss→default；无效卡片过滤；空链=跟随主模型；同名冲突场景优先）：")
+        for k, v in scen.items():
+            chain_disp = []
+            for c in v["chain"]:
+                chain_disp.append(c if c in config.MODELS else f"{c}✗")
+            mark = ""
+            if k in config.MODELS:
+                mark = "  ⚠️ 与模型卡片同名（场景优先）"
+            legacy = "  [兼容旧 utility_model]" if k in ("short-req", "completer") else ""
+            valid = config.resolve_scenario(k)
+            print(f"  {k}{mark}{legacy}")
+            print(f"      描述: {v['desc'] or '（无）'}")
+            print(f"      链: {' → '.join(chain_disp) if chain_disp else '（空=跟随主模型）'}"
+                  + (f"   有效链: {' → '.join(valid) if valid else '（空=跟随主模型）'}" if v["chain"] else ""))
+        return
+
+    if sub == "set":
+        rest = args[1:]
+        if not rest:
+            print("用法：/config scenarios set <名> [描述] <卡1,卡2,...>（链可空串=跟随主模型）")
+            return
+        name = rest[0]
+        desc, chain_str = None, ""
+        if len(rest) >= 3:
+            desc, chain_str = rest[1], rest[2]
+        elif len(rest) == 2:
+            chain_str = rest[1]
+        chain = [c.strip() for c in chain_str.split(",") if c.strip()]
+        if name not in scen:
+            print(f"❌ 场景 {name} 不存在（现有：{list(scen)}；用 add 新建）")
+            return
+        unknown = [c for c in chain if c not in config.MODELS]
+        if desc is None:
+            desc = scen[name]["desc"]
+        scen[name] = {"desc": desc, "chain": chain}
+        config.save_scenarios(scen)
+        cleared = _invalidate_scenario_caches(ctx.agent)
+        print(f"✅ 场景 {name} 链 = {' → '.join(chain) or '（空=跟随主模型）'}（已存 settings.json）"
+              + (f"；已清 {len(cleared)} 个 Agent 的场景缓存即时生效" if cleared else ""))
+        if unknown:
+            print(f"  ⚠️ 卡片未配置：{unknown}（已照样保存，解析时自动跳过；设置页/模型配置加卡片后生效）")
+        return
+
+    if sub == "add":
+        rest = args[1:]
+        if not rest:
+            print("用法：/config scenarios add <名> [描述] [卡1,卡2,...]")
+            return
+        name = rest[0]
+        if name == "default":
+            print("❌ default 出厂兜底不可新建（用 set 改它的链/描述）")
+            return
+        if name in scen:
+            print(f"❌ 场景 {name} 已存在（用 set 改链）")
+            return
+        desc = rest[1] if len(rest) >= 2 else ""
+        chain_str = rest[2] if len(rest) >= 3 else ""
+        chain = [c.strip() for c in chain_str.split(",") if c.strip()]
+        scen[name] = {"desc": desc, "chain": chain}
+        config.save_scenarios(scen)
+        cleared = _invalidate_scenario_caches(ctx.agent)
+        print(f"✅ 新增场景 {name}（链 = {' → '.join(chain) or '（空=跟随主模型）'}；已存 settings.json"
+              + (f"；已清 {len(cleared)} 个 Agent 的场景缓存" if cleared else "") + "）")
+        unknown = [c for c in chain if c not in config.MODELS]
+        if unknown:
+            print(f"  ⚠️ 卡片未配置：{unknown}（解析时自动跳过）")
+        return
+
+    if sub == "del":
+        name = args[1] if len(args) > 1 else ""
+        if not name:
+            print("用法：/config scenarios del <名>（default 禁删）")
+            return
+        if name == "default":
+            print("❌ default 出厂兜底场景不可删除（可改链，不可删）")
+            return
+        if name not in scen:
+            print(f"❌ 场景 {name} 不存在（现有：{list(scen)}）")
+            return
+        scen.pop(name)
+        config.save_scenarios(scen)
+        cleared = _invalidate_scenario_caches(ctx.agent)
+        print(f"✅ 已删除场景 {name}（引用它的调用点自动回退 default；已清 {len(cleared)} 个 Agent 的场景缓存）")
+        return
+
+    print(f"❌ 未知子命令 {sub}；可用：list / set / add / del（/config scenarios 查看用法）")
 
 
 def _cmd_budget(ctx: CommandContext, args):
@@ -2002,8 +2140,10 @@ def _cmd_reload(ctx: CommandContext, args):
             print(f"  ⚠️ 当前模型 '{cur}' 不在新配置中——保持旧 profile，可用 /model 切换")
     except Exception as e:
         print(f"  ⚠️ 主模型 profile 刷新失败：{e}")
-    # utility 通道：清缓存按新 MODELS 重建（utility_model 设置值不变）
+    # utility 通道：清缓存按新 MODELS 重建（utility_model 设置值不变；场景缓存同步失效——
+    # 场景链中可能引用了刚被增删的卡片）
     agent._utility_llm = None
+    _invalidate_scenario_caches(agent)
     try:
         agent.retrieval_llm = agent.utility_client()
         um = getattr(agent, "utility_model", "")
@@ -2451,6 +2591,7 @@ def build_default_registry() -> CommandRegistry:
         "/config hook_timeout 300    同步钩子工作流超时秒数（超时结果丢弃不卡主循环；0=不限；async钩子不受限）\n"
         "/config fold_deep_tools true  超深档(超过max_level)轮的工具调用整体折叠成一行标注，保留回复+reasoning原文\n"
         "/config fallback_chain glm,deepseek,qwen   回退链\n"
+        "/config scenarios            调用场景策略组管理：list（默认）/ set <名> [描述] <卡1,卡2,...> / add <名> [描述] [卡] / del <名>（default 禁删；链空=跟随主模型）\n"
         "/config dump_projections true  投影转储（调试用；子 Agent 构造时读 settings 同步跟随）\n"
         "/config repos_dir D:\\data\\agt_repos   repos 数据根重定向（绝对路径；空串=回默认 ~/.agt/repos。"
         "只改指向不搬数据；重启生效——迁移：停实例→robocopy 搬 sessions/specs/plans/memories 等→切指向→启动）")

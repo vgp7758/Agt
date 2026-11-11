@@ -609,6 +609,29 @@ def _apply_declared_fallback(sub_agent, fb):
         pass
 
 
+def _resolve_subagent_model(agent, declared: str, entry_model: str = ""):
+    """sub-agent 工作模型解析（p_ea32ad4f 场景化，新建/复活统一入口）。
+    解析优先级：① 声明名命中场景表（场景名与卡片名同名时场景优先）→ 场景链首=工作模型，
+    场景链空（未配/无效卡片过滤后）= 跟随主 agent 模型；② 声明名是 MODELS 里的卡片名 →
+    老卡片直配（回退链跟随全局 settings，原行为）；③ 无声明/声明无效 → default 场景链首
+    （出厂空链=跟随主 agent 模型）。
+    返回 (model_name, scenario_chain)：scenario_chain 非空时调用方经 _apply_declared_fallback
+    双写实例链 + react 链（yml 显式 fallback: 声明仍最高优先，在调用点先判）。"""
+    import config as _cfg
+    scen = _cfg.load_scenarios()
+    decl = str(declared or "").strip()
+    em = str(entry_model or "").strip()
+    for cand in (decl, em):
+        if cand and cand in scen:
+            chain = _cfg.resolve_scenario(cand)
+            return (chain[0], chain) if chain else (agent.model_name, [])
+    for cand in (decl, em):
+        if cand and cand in _cfg.MODELS:
+            return cand, []
+    chain = _cfg.resolve_scenario("default")
+    return (chain[0], chain) if chain else (agent.model_name, [])
+
+
 def _parse_hooks(meta: dict) -> dict:
     """frontmatter/yml 的 hooks 字段 → {hook位置: [{kind, value, async...}]}。
     项格式：'workflow: x' / 'x'（裸名=workflow）/ 'cmd: ...' / 'emit: ...'，
@@ -1168,9 +1191,8 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         toolbox = Toolbox(*list(toolbox), *_agent_own_tools(entry.name, agent), *sk_tools)   # 专属+技能工具（同名覆盖全局）
         if sk_sop:   # 技能 SOP 注入 system 尾（与新建路径同源）
             system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
-        model_name = meta.get("model") or entry.model or agent.model_name
-        if model_name not in config.MODELS:
-            model_name = agent.model_name
+        model_name, _scen_chain = _resolve_subagent_model(agent, meta.get("model") or "",
+                                                          entry.model or "")   # 场景→卡片→default（p_ea32ad4f）
         # 磁盘 session lazy load（历史轮完整恢复，后续落盘仍写原目录）
         from session import Session
         sdir = getattr(agent.session, "session_dir", None)
@@ -1192,12 +1214,14 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
         sub.agent.set_session(loaded)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
         # set_session 会换掉 __init__ 里设过开关的那个 session，这里在 loaded session 上重设
         sub.agent.session.current_turn_only = True
-        if _fb is not None:   # 声明的回退链：实例链（非 react）+ react 链都补上
+        if _fb is not None:   # 声明的回退链：实例链（非 react）+ react 链都补上（显式声明最高优先）
             try:
                 sub.agent.llm.set_fallback(_fb[0], _fb[1])
                 sub.agent._declared_fallback = list(_fb[0])
             except Exception:
                 pass
+        elif _scen_chain:   # 场景链（p_ea32ad4f）：实例链 + react 链双写（链首=工作模型）
+            _apply_declared_fallback(sub.agent, (_scen_chain, None))
         return sub.agent, model_name, (loaded.session_dir or sub_dir)
     except Exception as e:
         _LOG.warning("复活子 Agent %s(%s) 失败: %s", entry.name, entry.agent_id, e)
@@ -2208,6 +2232,12 @@ def make_subagent_tools(agent) -> list:
                     entry.agent.session.hook_specs = base_hooks
                 if base_fb is not None:   # fallback：yml 声明（改链后复用实例下一任务即生效）
                     _apply_declared_fallback(entry.agent, base_fb)
+                else:
+                    _scen = str((_meta or {}).get("model") or "").strip()
+                    if _scen in config.load_scenarios():   # yml model=场景名（p_ea32ad4f）：复用实例也按最新场景链刷新（显式声明缺席时）
+                        chain = config.resolve_scenario(_scen)
+                        if chain:
+                            _apply_declared_fallback(entry.agent, (chain, None))
                 return _launch(entry.agent, entry.agent_id, name, entry.model,
                                getattr(entry.agent.session, "session_dir", None), prompt, _reused=True) + asm_note
             if hist:
@@ -2257,9 +2287,7 @@ def make_subagent_tools(agent) -> list:
             toolbox = Toolbox(*make_doctor_tools(agent))   # 覆盖：诊断 Agent 面板=纯四件套
         if sk_sop:   # 技能 SOP 注入 system 尾（yml v2 场景 persona 在 assembly file 项，system 段只装 SOP）
             system = ((system or "").rstrip() + "\n\n" + sk_sop).strip()
-        model_name = meta.get("model") or agent.model_name
-        if model_name not in config.MODELS:
-            model_name = agent.model_name
+        model_name, _scen_chain = _resolve_subagent_model(agent, meta.get("model") or "")   # 场景→卡片→default（p_ea32ad4f）
         # agent_id（显式优先，否则 name/name_2…）+ 子 session 嵌套到 主 session/agents/<id>/
         aid = _resolve_agent_id(agent.background_tasks, name, agent_id)
         sub_dir = None
@@ -2279,6 +2307,8 @@ def make_subagent_tools(agent) -> list:
                 sub.agent.session.hook_specs = base_hooks
             if base_fb is not None:
                 _apply_declared_fallback(sub.agent, base_fb)
+            elif _scen_chain:   # 场景链（p_ea32ad4f）：显式 fallback 声明缺席时，场景链=实例链+react 链
+                _apply_declared_fallback(sub.agent, (_scen_chain, None))
             if reg:
                 reg.register(aid, name, "subagent", model_name,
                              agent=sub.agent, task=prompt, status="running",

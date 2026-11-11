@@ -2,7 +2,7 @@ name: vision
 description: 看懂图片并给出文字描述。何时调用：工具返回 <img>图片</img> 占位、或需理解/分析图片内容时。推荐
   用 agent_prompt 的 images 参数直接附图（框架自动搬运 + 路径自适应）；也可在 prompt 里手写 <img>文件名或路径</img> 标签。
 tools: ''
-model: qwen
+model: agent-vision   # 调用场景（策略组）：视觉任务（img_proxy 代看同款场景）
 assembly:
 - file: .agent/agents/vision/vision.md
 - history|optional // 连续看图任务或需要对比之前看过的图片时打开

@@ -1,6 +1,6 @@
 name: desktop-operator
 description: 桌面操作 Agent——实时看到桌面（image_feed 每步注入画面）+ 键鼠模拟/剪切板/窗口切换。何时调用：需要操作本机 GUI（点击/输入/切窗/读屏定位元素/自动化桌面流程）时；看桌面不要用 vision（它没有操作能力）。
-model: glm-official-flash
+model: agent-vision   # 调用场景（策略组）：视觉任务（img_proxy 代看同款场景）
 skills: [desktop-ops]
 tools: ""
 assembly:

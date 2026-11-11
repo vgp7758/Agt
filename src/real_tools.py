@@ -1998,7 +1998,9 @@ def _wf_llm_for(model: str):
     """按 model 参数取 client：空名 → 上下文 llm（None=无上下文，llm_call 自行报错）；
     指定名字 → 独立 client 缓存（无则建）——上下文 llm 为 None 也不妨碍按名建（此前
     `llm is None` 与 `not name` 合并判断，导致无上下文+指定名也返回 None，llm_call 直接报
-    'no LLM context'——独立测试/agent=None 场景下指定 model 完全可用）。"""
+    'no LLM context'——独立测试/agent=None 场景下指定 model 完全可用）。
+    p_ea32ad4f 双轨：名字命中场景表（scenarios）→ 场景 client（链首=初始模型、场景链=实例
+    回退链；空场景链=跟随上下文 llm）；否则 per-model 路径。同名冲突场景优先。"""
     llm = _WF_CTX.get("llm")
     name = (model or "").strip()
     if not name:
@@ -2009,6 +2011,16 @@ def _wf_llm_for(model: str):
     if cli is None:
         try:
             import config
+            scen = config.load_scenarios()
+            if name in scen:   # 场景名（p_ea32ad4f；同名冲突场景优先）
+                chain = config.resolve_scenario(name)
+                if not chain:
+                    return llm   # 空场景链=跟随上下文 llm
+                from llm_client import LLMClient
+                cli = LLMClient(model_name=chain[0], fallback_chain=list(chain), max_retries=2)
+                cli.call_recorder = getattr(llm, "call_recorder", None)
+                _WF_ALT_LLM_CACHE[name] = cli
+                return cli
             if name not in config.MODELS:
                 return llm   # 未配置的 provider 名 → 回退上下文 llm（不炸工作流）
             from llm_client import LLMClient
@@ -2027,7 +2039,8 @@ def llm_call(messages: list, tools: list = None, temperature: float = None,
     """原生 LLM 调用（工作流 ReAct 原语）：完整 messages + tools schema → 完整回包。
     messages: OpenAI 格式消息数组（system/user/assistant/tool 均可）；
     tools: get_tool_schemas 输出的 function schema 数组（留空=纯文本对话）；
-    model: 模型选择——models.json 的 provider 名（如 glm-official-1），留空=跟随 utility/主模型；
+    model: 模型/场景双轨选择——场景名（/config scenarios 的策略组，如 agent-work）或 models.json
+           的 provider 名（如 glm-official-1），同名冲突场景优先；留空=跟随 utility/主模型；
            独立 client 缓存复用（同 provider 多节点零开销），流水记 llm_calls.jsonl（scene=wf:llm_call）。
     返回 JSON（plugin 节点自动解析成对象，下游可 .content / .tool_calls.0.name 引用）：
       {content, reasoning, tool_calls:[{id,name,arguments}], usage, finish_reason, error}"""

@@ -347,6 +347,109 @@ def get_retrieval_model() -> str:
     return get_utility_model() or DEFAULT_MODEL
 
 
+# ========== 调用场景（scenario）抽象层（p_ea32ad4f） ==========
+# settings.json 的 scenarios 键：{场景名: {desc: 描述, chain: [模型卡片名有序数组]}}。
+# 所有 LLM 调用点从「选模型」改为「选场景」：播种资产（sub-agent yml / 工作流节点 /
+# 内置工具）不再硬编码本地卡片名——分发后用户没有这些卡片时链退化为空 = 跟随主模型。
+# 场景名与卡片名同名冲突：scenarios 优先（resolve_scenario 是消费方判定的唯一入口）。
+_FACTORY_SCENARIOS: dict = {
+    "default":      {"desc": "兜底场景（未识别的场景名回退到此；空链=跟随主模型）；可改不可删",
+                     "chain": []},
+    "agent-work":   {"desc": "sub-agent 干活（react 主调用链）", "chain": []},
+    "agent-vision": {"desc": "视觉任务（img_proxy 代看 / 视觉 sub-agent）", "chain": []},
+    "short-req":    {"desc": "短调用：recap/摘要/命名/RAG/意图/工作流 LLM 默认（兼容旧 utility_model 键）",
+                     "chain": []},
+    "completer":    {"desc": "reasoning 补全（思考模型只回 reasoning 时据其补正文；兼容旧 utility_model 键）",
+                     "chain": []},
+}
+# 旧键兼容场景：链为空（且用户未在 settings.json 显式配置该场景）时回退
+# settings.utility_model 单元素链——老用户升级零破坏（旧配置继续生效，挂到场景体系下）。
+_LEGACY_UTILITY_SCENARIOS = ("short-req", "completer")
+_SCENARIO_WARNED: set = set()   # (场景名, 卡片名) 一次性 warning 去重
+
+
+def load_scenarios() -> dict:
+    """读运行时生效的场景表（单一真源，settings.json 的 scenarios 键）。
+    出厂播种合并：用户没写的场景用出厂值补齐（default 保证存在）；损坏条目
+    （非 dict / 键空）丢弃。返回 {名称: {"desc": str, "chain": [str, ...]}}。"""
+    out: dict = {}
+    try:
+        saved = load_runtime_settings().get("scenarios")
+    except Exception:
+        saved = None
+    if isinstance(saved, dict):
+        for k, v in saved.items():
+            k = str(k).strip()
+            if not k or not isinstance(v, dict):
+                continue   # 损坏条目丢弃
+            chain = []
+            for c in (v.get("chain") or []):
+                if c is None:
+                    continue
+                c = str(c).strip()
+                if c:
+                    chain.append(c)
+            out[k] = {"desc": str(v.get("desc", "") or ""), "chain": chain}
+    for k, v in _FACTORY_SCENARIOS.items():   # 出厂兜底（浅拷贝链防共享可变）
+        out.setdefault(k, {"desc": v["desc"], "chain": list(v["chain"])})
+    return out
+
+
+def save_scenarios(scenarios: dict):
+    """写场景表到 settings.json 的 scenarios 键（整键覆盖；desc/chain 归一化）。
+    default 出厂必有、不可删——缺失时自动补回出厂定义。"""
+    rt = load_runtime_settings()
+    out: dict = {}
+    for k, v in (scenarios or {}).items():
+        k = str(k).strip()
+        if not k or not isinstance(v, dict):
+            continue
+        chain = []
+        for c in (v.get("chain") or []):
+            if c is None:
+                continue
+            c = str(c).strip()
+            if c:
+                chain.append(c)
+        out[k] = {"desc": str(v.get("desc", "") or ""), "chain": chain}
+    if "default" not in out:
+        out["default"] = {"desc": _FACTORY_SCENARIOS["default"]["desc"], "chain": []}
+    rt["scenarios"] = out
+    save_runtime_settings(rt)
+    _SCENARIO_WARNED.clear()   # 场景表变了，无效卡片 warning 重新评估
+
+
+def resolve_scenario(name: str) -> list:
+    """场景名 → 有效回退链（单一真源；所有 LLM 调用点消费它）。
+    解析规则：
+      ① name 命中 scenarios → 其 chain；② miss → default 的 chain（兜底播种保证必有）；
+      ③ 过滤 MODELS 中不存在的卡片（一次性 warning——分发环境常见，链退化不致命）。
+    链可空 = 消费方跟随主模型/当前模型（与 utility_model 时代行为一致）。
+    旧键兼容：short-req / completer 未被用户显式配置（出厂空链）时，回退
+    settings.utility_model 单元素链——老配置继续生效。
+    场景名与卡片名同名冲突：scenarios 优先（本函数就是消费方判定"是不是场景名"的入口）。"""
+    key = str(name or "").strip()
+    try:
+        rt_scen = load_runtime_settings().get("scenarios")
+    except Exception:
+        rt_scen = None
+    explicit = isinstance(rt_scen, dict) and key in rt_scen
+    scen = load_scenarios()
+    raw = list((scen.get(key) or scen["default"])["chain"])
+    chain: list = []
+    for c in raw:
+        if c in MODELS:
+            chain.append(c)
+        elif (key, c) not in _SCENARIO_WARNED:
+            _SCENARIO_WARNED.add((key, c))
+            print(f"⚠️ 场景 {key}：链中的模型卡片 '{c}' 未配置（models.json 无此卡片），已跳过")
+    if not chain and key in _LEGACY_UTILITY_SCENARIOS and not explicit:
+        um = get_utility_model()
+        if um and um in MODELS:
+            chain = [um]
+    return chain
+
+
 def load_detail_base() -> int:
     """步距衰减的初始摘要字数（settings.json 的 detail_base；默认 1500）。"""
     try:

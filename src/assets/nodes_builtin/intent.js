@@ -16,7 +16,7 @@ EdFW.register({
   section: "意图选项（每项一个分支出口）",
   params: [
     { key: "model", label: "模型", widget: "select",
-      options: () => [["", "（跟随主Agent）"], ...Object.entries(AVAILABLE_MODELS).map(([k, v]) => [k, v])],
+      options: () => wfModelGroupedOptions(),   // p_ea32ad4f 双组下拉：调用场景（策略组）+ 模型卡片（直配）
       get: n => iGet(n, "model"), set: (n, v) => iSet(n, "model", v) },
     { key: "intents", label: "意图", widget: "custom",
       get(n) { return (n.data.inputs?.intents || []).map(x => x.name).join(","); },

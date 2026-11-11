@@ -1545,6 +1545,15 @@ window.NODEP_apply=function(t,k,v){
 };
 function _nodepSelect(opts,cur){
   const list=typeof opts==='function'?opts():(opts||[]);
+  // p_ea32ad4f：分组结构 {groups:[[label,[[v,t]..]]..]} → optgroup 下拉（调用场景/模型卡片双组）
+  if(list&&Array.isArray(list.groups)){
+    let h=`<option value=""${(!cur)?' selected':''}>（默认：跟随 utility/主模型）</option>`;
+    list.groups.forEach(([lb,items])=>{
+      h+=`<optgroup label="${ext(lb)}">`+(items||[]).map(o=>{const[v,t]=Array.isArray(o)?o:[o,o];
+        return `<option value="${ext(v)}"${String(cur)===String(v)?' selected':''}>${ext(t)}</option>`;}).join('')+`</optgroup>`;
+    });
+    return h;
+  }
   return list.map(o=>{const[v,t]=Array.isArray(o)?o:[o,o];
     return `<option value="${ext(v)}"${String(cur)===String(v)?' selected':''}>${ext(t)}</option>`;}).join('');
 }
@@ -3338,9 +3347,24 @@ function renderLegend(){
 // ============ Agent 工具节点 ============
 let AGENT_TOOLS=[];
 let AVAILABLE_MODELS={};   // {name: displayName, ...} 从 /api/model-list 加载
+let WF_SCENARIOS={};       // p_ea32ad4f：调用场景策略组 {名:{desc,chain}}（/api/model-list 附带）——model 下拉双组
 let DEFAULT_MODEL='';
 async function loadModels(){
-  try{const r=await fetch('/api/model-list');const d=await r.json();AVAILABLE_MODELS=d.models||{};DEFAULT_MODEL=d.default||'';}catch(e){}
+  try{const r=await fetch('/api/model-list');const d=await r.json();AVAILABLE_MODELS=d.models||{};DEFAULT_MODEL=d.default||'';WF_SCENARIOS=d.scenarios||{};}catch(e){}
+}
+// 节点插件 select 控件用的分组选项（p_ea32ad4f）：{groups:[[label,[[v,t]..]]..]}——_nodepSelect 认这个结构
+// 渲染 optgroup（调用场景组在前）。llm.js / intent.js 的 model param options 用它；
+// 引擎侧（workflow._get_llm / real_tools._wf_llm_for / multiagent）同名冲突场景优先。
+function wfModelGroupedOptions(){
+  const scenEntries=Object.keys(WF_SCENARIOS||{}).map(n=>{
+    const d=WF_SCENARIOS[n]||{};
+    return [n, n+(d.desc?' — '+d.desc:'')];
+  });
+  const modelEntries=Object.keys(AVAILABLE_MODELS||{}).sort().map(x=>[x,x]);
+  const groups=[];
+  if(scenEntries.length) groups.push(["调用场景（策略组）", scenEntries]);
+  groups.push(["模型卡片（直配）", modelEntries]);
+  return {groups};
 }
 let WFLIST=[];  // 工作流文件列表(供子工作流下拉选择)
 let NODE_DESC={};   // 节点类型描述（/api/wf/nodes：核心+插件目录聚合——画布 tooltip / props 描述段用）

@@ -368,9 +368,11 @@ def _resolve_input_params(params_list: list, ctx) -> dict:
 # ========== 节点处理器（S1：LLM；其余后续阶段补）==========
 
 def _get_llm(ctx, model_name: str = ""):
-    """按模型名获取 LLMClient；空名返回 ctx.llm（None=无上下文，调用方自行处理）。
-    指定名字 → per-model 独立 client 缓存——ctx.llm 为 None 也可按名建（独立测试/
-    agent=None 场景；此前 ctx.llm.model_name 在 None 时直接 AttributeError）。"""
+    """按模型名/场景名获取 LLMClient；空名返回 ctx.llm（None=无上下文，调用方自行处理）。
+    指定名字 → per-model/per-scenario 独立 client 缓存——ctx.llm 为 None 也可按名建（独立测试/
+    agent=None 场景；此前 ctx.llm.model_name 在 None 时直接 AttributeError）。
+    p_ea32ad4f 双轨：名字命中场景表（scenarios）→ 场景 client（链首=初始模型、场景链=实例回退链；
+    空场景链=跟随 ctx.llm）；否则原 per-model 路径。同名冲突场景优先。"""
     if not model_name:
         return ctx.llm
     if ctx.llm is not None and model_name == ctx.llm.model_name:
@@ -379,6 +381,23 @@ def _get_llm(ctx, model_name: str = ""):
     if cache is None:
         ctx._llm_cache = cache = {}
     if model_name not in cache:
+        # p_ea32ad4f：场景名优先（场景名与卡片名同名冲突时 scenarios 赢）
+        try:
+            scen = _config.load_scenarios()
+        except Exception:
+            scen = {}
+        if model_name in scen:
+            chain = _config.resolve_scenario(model_name)
+            if not chain:
+                return ctx.llm   # 空场景链=跟随上下文模型（工作流默认姿势）
+            _c = LLMClient(model_name=chain[0], fallback_chain=list(chain), max_retries=2)
+            # 复制主 client 的调用记录器（llm_calls 写入）：_record_call 对 recorder=None
+            # 静默跳过——独立 client 不挂 recorder 则其调用不进 llm_calls（2026-08-31
+            # 17:42 实测：local-lfm 真实执行成功、日志面板有记录，但 llm_calls 零写入
+            # 的根因）。recorder 写主 session 的流水文件——钩子执行本属主 agent 的 session ✓
+            _c.call_recorder = getattr(ctx.llm, "call_recorder", None) if ctx.llm is not None else None
+            cache[model_name] = _c
+            return cache[model_name]
         try:
             profile = _config.get_profile(model_name)
             _c = LLMClient(profile=profile, model_name=model_name)

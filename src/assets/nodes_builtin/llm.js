@@ -12,10 +12,12 @@ EdFW.register({
       tip: "用户提示词，{{输入字段名}} 引用上游输出",
       get: lpGet("prompt"), set: lpSet("prompt") },
     { key: "model", widget: "select",
-      options: () => Object.keys(AVAILABLE_MODELS || {}).sort(),
+      options: () => wfModelGroupedOptions(),   // p_ea32ad4f 双组下拉：调用场景（策略组）+ 模型卡片（直配）
       hint: n => {
         const m = lpGet("model")(n);
-        return m ? ("已选 " + m) : "（跟随 ctx.llm / utility）";
+        if(!m) return "（跟随 ctx.llm / utility）";
+        const sd = (WF_SCENARIOS||{})[m];
+        return sd ? ("已选场景 " + m + "（链: " + ((sd.chain||[]).join(" → ")||"空=跟随主模型") + "）") : ("已选 " + m);
       },
       get: lpGet("model"), set: lpSet("model") },
     { key: "temperature", widget: "number",

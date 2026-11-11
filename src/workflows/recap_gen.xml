@@ -82,7 +82,7 @@
     <in name="messages" type="list" ref="110001.messages"/>
     <in name="temperature" type="number">0.3</in>
     <in name="enable_thinking" type="boolean">False</in>
-    <in name="model" type="string">local-lfm</in>
+    <in name="model" type="string">short-req</in>
     <out name="raw" type="object"/>
     <out name="content" type="string"/>
     <batch enabled="false"/>

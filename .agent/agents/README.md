@@ -22,7 +22,7 @@ create_agent 工具已退役（DSL 字段越来越多，工具参数面板跟不
 # .agent/agents/<name>/<name>.yml —— 最小模板
 name: my-agent
 description: 一句话作用 + 何时调用（投影给主 Agent 决定何时派活）
-model: glm-official-flash        # 留空=主 Agent 当前模型
+model: agent-work                # 调用场景（策略组，推荐）：解析 miss→default→跟随主模型；也可直配卡片名（老姿势兼容）
 tools: ""                        # 留空=继承全部；或逗号分隔白名单
 assembly:
   - file: .agent/agents/my-agent/my-agent.md   # 人设（可选，也可用 text: 内嵌）

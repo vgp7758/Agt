@@ -452,15 +452,20 @@ class LLMClient:
                     self._cooldown_seconds = max(0, float(_cd))
             except Exception:
                 pass
-        # reasoning 补全模型：settings.json 显式配置优先；未配时回退统一辅助模型（utility_model）
+        # reasoning 补全模型（p_ea32ad4f 场景化）：settings.json 显式配置优先；未配时走 completer
+        # 场景链取链首（resolve_scenario 内部兼容旧 utility_model 键——老配置零破坏；
+        # 显式配置的无效卡片在此过滤——原行为会在补全时才报错）
         try:
             _rt2 = config.load_runtime_settings()
             _rc = (_rt2.get("reasoning_completer") or "").strip()
-            if not _rc:
-                _rc = (_rt2.get("utility_model") or "").strip()
         except Exception:
             _rc = ""
-        self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=utility_model）
+        if not _rc:
+            _sc = config.resolve_scenario("completer")
+            _rc = _sc[0] if _sc else ""
+        if _rc and _rc not in config.MODELS:
+            _rc = ""
+        self.reasoning_completer: Optional[str] = (_rc or None)  # 思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补正文（None=关；默认=completer 场景→旧 utility_model）
         self.call_recorder = None   # Agent 注入：每次 LLM 调用追加一条到 llm_calls.jsonl（可观测性，供 /stats）
         self.on_switch = None       # Agent 注入：switch_model 尾部统一触发（用户切换/回退/冷却三路径）——档位建档 adopt-or-recalc 决策入口（meta.json 瘦身拆分 2026-11）
         # 初始建链：_user_model（构造时的 model_name）提前 + base 其余。此前只在 switch_model(_user_initiated)
@@ -1486,14 +1491,20 @@ def _render_img_json(data: dict, frame_size=None, orig_size=None) -> str:
 
 def describe_image_with_vision(data_url: str, instruction: str = "",
                                tries: int = 3, timeout: float = 60.0):
-    """非视觉模型的图片代理描述：从 config.MODELS 按序取 vision=True 的卡片（最多 tries 个）
-    逐个尝试看图，首个成功返回 (卡片名, 描述文本)；全失败/无可用卡片返回 None。
+    """非视觉模型的图片代理描述（p_ea32ad4f 场景化）：候选卡片优先走 agent-vision 场景链
+    （resolve_scenario 过滤无效卡片；用户可编排视觉卡片顺序）；场景空链（出厂默认）→
+    原兜底：从 config.MODELS 按序取 vision=True 的卡片。最多 tries 个逐个尝试看图，
+    首个成功返回 (卡片名, 描述文本)；全失败/无可用卡片返回 None。
     独立临时 LLMClient（fallback_chain=[] 显式空链——失败即抛，不滚全局链不碰调用方冷却；
     scene=img_proxy 记流水供 /stats 观测）。用途：
     ① 非视觉模型 read_file 图片 → _materialize_tool_result 委托代看，描述随结果返回；
     ② image_feed 非视觉宿主 → 帧描述文本替代 base64 注入（session._imgfeed_proxy_text）。"""
-    cands = [n for n, p in (config.MODELS or {}).items()
-             if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
+    chain = config.resolve_scenario("agent-vision")
+    if chain:
+        cands = chain[:max(1, tries)]
+    else:
+        cands = [n for n, p in (config.MODELS or {}).items()
+                 if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
     if not cands:
         return None
     prompt = instruction or IMG_DESC_INSTRUCTION

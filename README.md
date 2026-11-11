@@ -49,6 +49,7 @@ agt-web      # WebUI → http://localhost:8000
 |---|---|
 | **ReAct 引擎** | 思考 → 工具调用 → 观察 → 循环，最大步数 + Token 预算 + Ctrl+C 中断 |
 | **多模型** | DeepSeek / Qwen / GLM / MiniMax / StepFun / 任意 OpenAI 兼容，热切换 + 回退链 |
+| **调用场景** | 模型策略组（default 兜底）：sub-agent / 工作流 / 内置工具按「场景」调度，不绑具体卡片名 |
 | **MCP** | Model Context Protocol 客户端，自动发现工具 |
 | **工作流** | Coze 原生画布 JSON 执行器，13 类节点，每轮扫描注册为 Agent 工具 |
 | **可视化编辑器** | SVG 画布 + 节点拖拽 + 流程线/变量线(彩色) + 属性面板，零依赖 |
@@ -121,6 +122,36 @@ agt-web --dashboard          # http://localhost:9100（端口可跟在后面：a
 端到端冒烟（隔离 AGT_HOME 起 2 实例 + dashboard → 发现导入 → 拉线 → 真发跨实例消息 →
 验证互动流 → 启停 → 清理）见 `smoke/smoke_launch.py` / `smoke_drive.py`（`python smoke/smoke_launch.py
 && python smoke/smoke_drive.py`，清理 `python smoke/smoke_cleanup.py`）。
+
+---
+
+## 调用场景（模型策略组）
+
+所有 LLM 调用点从「选模型」改为「选场景」——策略组可编辑，`default` 兜底。播种资产
+（sub-agent yml / 内置工作流 / 内置工具）不再硬编码本地卡片名，分发到任何机器都能跑。
+
+- **存储**：`settings.json` 的 `scenarios` 键（repo 级 `.agent/settings.json` 可覆盖全局）：
+
+  ```json
+  "scenarios": {
+    "default":      {"desc": "兜底场景；空链=跟随主模型", "chain": []},
+    "agent-work":   {"desc": "sub-agent 干活", "chain": ["卡片A", "卡片B"]},
+    "agent-vision": {"desc": "视觉任务（img_proxy 代看）", "chain": ["卡片V"]},
+    "short-req":    {"desc": "短调用：recap/摘要/命名/RAG/意图", "chain": ["便宜卡片"]}
+  }
+  ```
+
+- **解析规则**（单一真源 `config.resolve_scenario`）：① 场景名命中 → 其链；② miss →
+  `default` 的链（出厂必有、可改不可删）；③ 链中不存在的卡片自动跳过（一次性 warning）。
+  链空 = 跟随主模型/当前模型。场景名与卡片名同名冲突时**场景优先**。
+- **旧键兼容**：`utility_model` 退居 `short-req` / `completer` 场景的兼容回退（场景未显式配置
+  且链空时生效）——老配置升级零破坏。主 agent 的 `fallback_chain` 保留（那是主 react 链，与场景并行）。
+- **消费点**：sub-agent yml 的 `model:`（场景名/卡片名双轨；显式 `fallback:` 声明仍最高优先）、
+  工作流 llm/intent 节点与 `llm_call` 的 `model` 字段（双轨）、`explore` 工具（默认 short-req）、
+  `img_proxy` 视觉代看（agent-vision）。主 agent react 主调用不参与场景（`/model` 手选）。
+- **管理入口**：设置 ⚙ → 运行时 → 【调用场景】（列表/编辑/添加，default 禁删）；
+  命令行 `/config scenarios list|set|add|del`；agents 编辑页与工作流编辑器的 model 下拉
+  均为双组（调用场景组 + 模型卡片组）。
 
 ---
 

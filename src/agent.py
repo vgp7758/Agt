@@ -425,12 +425,15 @@ class Agent:
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——
         # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认。
         # 兼容旧字段 retrieval_model / recap_model（config.get_utility_model 内部处理）。
+        # p_ea32ad4f：utility_model 退居 short-req 场景的旧键兼容（resolve_scenario 内部处理）；
+        # 短调用统一走 scenario_client（utility_client()=其兼容包装），_utility_llm 保留给旧读点。
         try:
             import config as _cfg
             self.utility_model: str = _cfg.get_utility_model()
         except Exception:
             self.utility_model = ""
-        self._utility_llm = None   # 惰性创建的辅助 client（None=未建；=self.llm 表示回退主模型）
+        self._utility_llm = None   # 旧辅助 client 缓存槽（utility_client 已迁 scenario_client；保留防旧读点 AttributeError）
+        self._scenario_llms: dict = {}   # p_ea32ad4f：per-scenario LLMClient 缓存 {场景名: client}（commands._invalidate_scenario_caches 清）
         if self.registry is not None:
             if self.agent_id == "_main_":
                 # 防覆盖（用户实锤 2026-09-02）：SubAgent 包装创建内嵌 Agent 时也传了 registry——
@@ -1681,21 +1684,37 @@ class Agent:
             _LOG.info("_restore_subagents: 从 %s 恢复了 %d 个子 Agent（豁免 %d 个运行中条目）",
                       agents_dir, count, len(keep_running))
 
+    def scenario_client(self, name: str, *, enable_thinking: bool = False):
+        """场景 client 工厂（p_ea32ad4f：所有 LLM 调用点「选场景」的统一入口）。
+        场景链有效（config.resolve_scenario 过滤无效卡片后非空）且链首≠主模型 → 独立实例：
+        链首=初始模型、场景链=实例回退链（owned，多卡轮流兜底）、enable_thinking=False（短调用类）、
+        挂 llm_calls 流水；链空 或 链首=主模型 → 主 llm（跟随主模型，与 utility_model 时代行为一致）。
+        per-scenario 缓存（self._scenario_llms）；/config scenarios|utility_model 变更时
+        commands._invalidate_scenario_caches 清缓存，下次调用按新链惰性重建。"""
+        import config as _cfg
+        key = (name or "").strip() or "default"
+        if getattr(self, "_scenario_llms", None) is None:
+            self._scenario_llms = {}
+        cached = self._scenario_llms.get(key)
+        if cached is not None:
+            return cached
+        chain = _cfg.resolve_scenario(key)
+        if not chain or chain[0] == self.llm.model_name:
+            return self.llm   # 空链/链首即主模型：跟随主模型（不缓存——主模型切换后自动跟随新值）
+        try:
+            cli = LLMClient(model_name=chain[0], fallback_chain=list(chain),
+                            enable_thinking=enable_thinking, max_retries=2)
+            cli.call_recorder = self.session.llm_calls.record
+        except Exception:
+            return self.llm   # 配置无效退回主模型（与旧 utility_client 行为一致）
+        self._scenario_llms[key] = cli
+        return cli
+
     def utility_client(self):
-        """统一辅助模型 client：所有 LLM 短调用共用（recap / RAG 检索 / 工作流 LLM/意图节点默认）。
-        utility_model 配置了且≠主模型 → 独立实例（enable_thinking=False + 挂 llm_calls 流水）；
-        空/无效/等于主模型 → 主 llm（跟随主模型）。惰性创建、进程内复用。"""
-        um = getattr(self, "utility_model", "")
-        if not um or um == self.llm.model_name:
-            return self.llm
-        if getattr(self, "_utility_llm", None) is None:
-            try:
-                cli = LLMClient(model_name=um, enable_thinking=False, max_retries=2)
-                cli.call_recorder = self.session.llm_calls.record
-                self._utility_llm = cli
-            except Exception:
-                self._utility_llm = self.llm   # 配置无效退回主模型
-        return self._utility_llm
+        """统一辅助 client（兼容包装）：= scenario_client("short-req")。所有 LLM 短调用共用
+        （recap / RAG 检索 / 工作流 LLM/意图节点默认）。short-req 场景出厂空链时 resolve_scenario
+        内部兼容旧键 utility_model（单元素链）；全空 → 主 llm（跟随主模型）——旧配置零破坏迁移。"""
+        return self.scenario_client("short-req")
 
     def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None,
                         turn_idx: int = -1):

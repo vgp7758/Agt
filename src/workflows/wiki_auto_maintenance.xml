@@ -92,7 +92,7 @@ async def main(args):
   </node>
   <node id="682383" type="intent" title="意图识别" x="1320" y="80">
     <in name="query" type="string" ref="1030169.output"/>
-    <model>local-lfm</model>
+    <model>short-req</model>
     <intent name="值得记录"/>
     <intent name="不需要"/>
   </node>

@@ -19,7 +19,7 @@
 
 ## ② 心跳 `_hb_ts`（agent.py，判卡唯一依据）
 
-五个刷新点全覆盖轮生命周期：
+六个刷新点全覆盖轮生命周期：
 
 | 位置 | 注释口径 |
 |---|---|
@@ -27,6 +27,7 @@
 | 工具进入执行 / 工具完成 | 工具层自愈后即恢复于此 |
 | LLM 调用完成 | LLM 网络挂起时静默从这里起算 |
 | 并行收割进展 | 并行工具部分完成也算活着 |
+| hold 闸门等待循环（2026-11-11 新增） | 挂起是用户指令下的正常等待——每次唤醒（0.5s 轮询）touch 一次，防止挂起期静默被误判（见下方后记） |
 
 ## ③ 巡检 daemon（agent_watchdog.py）
 
@@ -50,6 +51,32 @@
 ## 生产实锤（上线当日即触发）
 
 doctor 实例的当前任务即「【看门狗触发】Agent 'main' 疑似卡死（非工具卡点兜底诊断）」——巡检对主 Agent 真实派发过诊断，链路（心跳判定 → py-spy → doctor → 回报）生产闭环。
+
+### 后记：hold 挂起误判拉 doctor——闸门等待循环内维持心跳（2026-11-11，用户提案，commit f3e4ee9）
+
+#### 后记：hold 挂起误判拉 doctor——闸门等待循环内维持心跳（2026-11-11，用户提案，commit f3e4ee9）
+
+**现象**：hold on 挂起时看门狗照样触发「疑似卡死」拉 doctor 自动诊断——挂起明明是用户指令下的正常等待。
+
+**根因**：hold 闸门（`_PROC_HOLD["event"]`，进程级挂起所有 Agent 的 react 步循环，0.5s 轮询便于 Ctrl+C 打断）挂在**步循环顶**——此时 `_react_running=True`（轮未结束）、循环内无人 touch `_hb_ts` → 静默超阈值 → `stuck_candidates` 命中 → 派 doctor。
+
+**修复（一行，src/agent.py）**：闸门等待循环内每次唤醒 touch 心跳——
+
+```python
+while self._hold and not self._stop_flag:
+    _PROC_HOLD["event"].wait(0.5)
+    self._hb_ts = time.time()   # hold 期间维持心跳
+```
+
+**边界语义（两向都保住）**：
+
+| 场景 | 行为 |
+|---|---|
+| hold 挂起等待 | 心跳常新 → 不再误判 ✅ |
+| 轮内真卡死（LLM 挂起 / 工具卡点） | 发生在**闸门外**的步内（LLM 调用完成 / 工具进出才 touch）→ 静默照旧被逮到 ✅ |
+| 空闲 agent | `_react_running=False` 本就不参与判定 ✅ |
+
+生效需 /restart（引擎代码）。
 
 ## 注意事项
 

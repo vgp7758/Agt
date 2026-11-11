@@ -157,8 +157,7 @@ details summary { color:var(--muted); cursor:pointer; font-size:12px; margin-top
     <div id="scenList" style="min-height:160px;border:1px solid var(--line);border-radius:8px;padding:4px 10px;background:#fff"></div>
     <div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap">
       <button class="btn" onclick="addScenarioRow()">+ 添加场景</button>
-      <button class="primary" onclick="saveScenarios()">💾 保存场景（即时生效）</button>
-      <span class="hint">链=卡片名有序序列（chip 顺序即回退顺序，◀▶ 调序）；default 禁删；空链=跟随主模型</span>
+      <span class="hint">链=卡片名有序序列（chip 顺序即回退顺序，◀▶ 调序）；default 禁删；空链=跟随主模型 · <b>随下方「💾 保存运行时」一并保存</b></span>
     </div>
 
     <div class="rt-group">NanoJev 意图服务（intent_nano 节点用）</div>
@@ -175,7 +174,7 @@ details summary { color:var(--muted); cursor:pointer; font-size:12px; margin-top
     <label title="每次向 LLM 发送请求时，将完整投影（messages）以纯文本保存到 sessions/&lt;name&gt;/projections/ 目录，方便调试上下文工程。"><input id="cfg_dump_projections" type="checkbox"> 投影转储（调试用）</label>
     <label title="把 repos 数据根从默认 ~/.agt/repos 重定向到其它目录。只改指向不搬数据：先停实例 → robocopy 搬子目录 → 设置新路径 → 重启生效；清空=回默认。"><input id="cfg_repos_dir" type="text" style="width:260px" placeholder="默认 ~/.agt/repos（留空）"> repos 数据根重定向（重启生效）</label>
     <label title="运行时是否向「支持思考」的模型下发 enable_thinking=true。仅对模型管理里勾了 thinking 能力的模型生效。"><input id="cfg_enable_thinking" type="checkbox"> enable_thinking（运行时开关）</label>
-    <div style="margin-top:14px"><button class="primary" onclick="saveRuntime()">💾 保存运行时</button></div>
+    <div style="margin-top:14px"><button class="primary" onclick="saveRuntime()">💾 保存运行时（含上方场景表）</button></div>
   </div>
 
   <!-- ═══ MCP ═══ -->
@@ -390,9 +389,11 @@ async function saveRuntime(){
   };
   {const _db = document.getElementById('cfg_detail_base').value.trim();
    if(_db){ values.detail_base = parseInt(_db) || 1500; }}
+  values.scenarios = _scenData.scenarios || {};   // 场景表随运行时一次提交（合并保存 2026-11-11：单按钮单链路）
   const r=await api('POST','/api/config',{values, scope:cfgScope});
   if(r.error){ alert('保存失败：'+r.error); return; }
-  toast('✅ 运行时已保存\\n'+(r.text||''), 4500);
+  if(!r.error){ await loadScenarios(); }   // 回显服务端归一化（default 保底等）
+  toast('✅ 运行时已保存（含场景表）\n'+(r.text||''), 4500);
 }
 
 /* ═════════ 模型管理 ═════════ */
@@ -605,7 +606,7 @@ function showPresetOnboard(name){
 let _scenData={scenarios:{}, valid:{}, models:[]};
 async function loadScenarios(){
   const box=document.getElementById('scenList'); if(!box) return;
-  const r=await api('GET','/api/scenarios');
+  const r=await api('GET','/api/scenarios?scope='+encodeURIComponent(cfgScope));
   if(r.error){ box.innerHTML='<div style="color:#b91c1c;font-size:11px">⚠️ 无法获取场景表</div>'; return; }
   _scenData=r;
   renderScenarios();
@@ -687,7 +688,7 @@ function delScenario(name){
   renderScenarios();
 }
 async function saveScenarios(){
-  const d=await api('PUT','/api/scenarios',{scenarios:_scenData.scenarios});
+  const d=await api('PUT','/api/scenarios',{scenarios:_scenData.scenarios, scope:cfgScope});
   if(d.error){ alert('保存失败：'+d.error); return; }
   _scenData.scenarios=d.scenarios||_scenData.scenarios;
   renderScenarios();

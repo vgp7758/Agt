@@ -301,18 +301,23 @@ LLM_THINKING_SUPPORTED = _active.get("thinking", False)
 _AGT_SETTINGS = config_file("settings.json")   # repo 级覆盖：<cwd>/.agent/settings.json 优先
 
 def load_runtime_settings() -> dict:
-    """从 ~/.agt/settings.json 加载运行时设置。"""
-    if _AGT_SETTINGS.exists():
+    """加载运行时设置（config_file 解析：<cwd>/.agent/settings.json 存在则整份生效，否则全局 ~/.agt）。
+    2026-11-11 修复：原实现 import 时把路径锚死在 _AGT_SETTINGS——运行中 local 份被创建后
+    （如 UI 切「📦 本地」保存），active_scope 判 local 而本函数仍读写旧份，读写链分裂，
+    设置页两个保存按钮因写不同文件而"互相覆盖"（用户实锤）。改为每次动态解析。"""
+    p = config_file("settings.json")
+    if p.exists():
         try:
-            return json.loads(_AGT_SETTINGS.read_text(encoding="utf-8"))
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {}
 
 def save_runtime_settings(settings: dict):
-    """写入运行时设置到 ~/.agt/settings.json。"""
-    _AGT_DIR.mkdir(parents=True, exist_ok=True)
-    _AGT_SETTINGS.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    """写入运行时设置（与 load_runtime_settings 同一份——config_file 动态解析，2026-11-11）。"""
+    p = config_file("settings.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_max_level() -> int:
@@ -368,13 +373,15 @@ _LEGACY_UTILITY_SCENARIOS = ("short-req", "completer")
 _SCENARIO_WARNED: set = set()   # (场景名, 卡片名) 一次性 warning 去重
 
 
-def load_scenarios() -> dict:
-    """读运行时生效的场景表（单一真源，settings.json 的 scenarios 键）。
+def load_scenarios(scope: str = "auto") -> dict:
+    """读场景表（settings.json 的 scenarios 键；scope 语义同 save_scenarios，2026-11-11）。
     出厂播种合并：用户没写的场景用出厂值补齐（default 保证存在）；损坏条目
     （非 dict / 键空）丢弃。返回 {名称: {"desc": str, "chain": [str, ...]}}。"""
     out: dict = {}
     try:
-        saved = load_runtime_settings().get("scenarios")
+        _p = (config_file_scoped("settings.json", scope) if scope in ("local", "global")
+              else config_file("settings.json"))
+        saved = (json.loads(_p.read_text(encoding="utf-8")) or {}).get("scenarios") if _p.exists() else None
     except Exception:
         saved = None
     if isinstance(saved, dict):
@@ -395,10 +402,23 @@ def load_scenarios() -> dict:
     return out
 
 
-def save_scenarios(scenarios: dict):
+def save_scenarios(scenarios: dict, scope: str = "auto"):
     """写场景表到 settings.json 的 scenarios 键（整键覆盖；desc/chain 归一化）。
-    default 出厂必有、不可删——缺失时自动补回出厂定义。"""
-    rt = load_runtime_settings()
+    default 出厂必有、不可删——缺失时自动补回出厂定义。
+    scope（2026-11-11）：auto=生效份（config_file 动态解析）；local/global=写指定份
+    （与设置页 scope 切换一致——此前恒写生效份，切 scope 保存时与运行时保存写不同文件，
+    UI 上表现为两个保存按钮互相覆盖，用户实锤）。"""
+    if scope in ("local", "global") and scope != "auto":
+        p = config_file_scoped("settings.json", scope)
+    else:
+        p = config_file("settings.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rt = {}
+    if p.exists():
+        try:
+            rt = json.loads(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            rt = {}
     out: dict = {}
     for k, v in (scenarios or {}).items():
         k = str(k).strip()
@@ -415,7 +435,7 @@ def save_scenarios(scenarios: dict):
     if "default" not in out:
         out["default"] = {"desc": _FACTORY_SCENARIOS["default"]["desc"], "chain": []}
     rt["scenarios"] = out
-    save_runtime_settings(rt)
+    p.write_text(json.dumps(rt, ensure_ascii=False, indent=2), encoding="utf-8")
     _SCENARIO_WARNED.clear()   # 场景表变了，无效卡片 warning 重新评估
 
 

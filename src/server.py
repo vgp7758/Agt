@@ -926,16 +926,35 @@ async def api_config_set(request: Request):
         _act = config.active_scope("settings.json")
         note = ""
         if _scope == _act:
+            _scen = values.pop("scenarios", None)
+            if isinstance(_scen, dict):
+                config.save_scenarios(_scen, _scope)
             _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)
             lines = apply_config(_agent, values) if _agent is not None else ["（实例未就绪，仅落盘）"]
         else:
+            _scen = values.pop("scenarios", None)
+            if isinstance(_scen, dict):
+                config.save_scenarios(_scen, _scope)
             _rs = config.save_settings_scoped(values, _scope)
             lines = []
             note = (f"💾 已写 {_rs.get('path')}\n"
                     f"ℹ️ 非生效份（当前生效：{'📦 本地' if _act == 'local' else '🌐 全局'}）——存档备用，不热应用")
         return {"ok": True, "text": ("\n".join(lines) + "\n" + note).strip()}
+    # 场景表随运行时一次提交（2026-11-11 合并保存：此前场景/运行时两个按钮各走各的
+    # 链路，scope 下写不同文件互相覆盖——用户实锤；现统一为单按钮单链路）
+    _scen = values.pop("scenarios", None)
+    if isinstance(_scen, dict):
+        config.save_scenarios(_scen, "auto")
+        if _agent is not None:
+            try:
+                from commands import _invalidate_scenario_caches
+                _invalidate_scenario_caches(_agent)
+            except Exception:
+                pass
     _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)
     lines = apply_config(_agent, values) if _agent is not None else ["（实例未就绪，仅落盘）"]
+    if _scen is not None:
+        lines = ["✅ 场景表已保存（即时生效）"] + lines
     return {"ok": True, "text": "\n".join(lines) or "（无更改）"}
 
 
@@ -968,9 +987,10 @@ async def api_model_list():
 
 
 @app.get("/api/scenarios")
-async def api_scenarios_get():
-    """调用场景策略表（p_ea32ad4f 设置页管理区）：场景表 + 各场景有效链（无效卡片过滤后）+ 卡片名清单。"""
-    scen = config.load_scenarios()
+async def api_scenarios_get(scope: str = "auto"):
+    """调用场景策略表（p_ea32ad4f 设置页管理区）：场景表 + 各场景有效链（无效卡片过滤后）+ 卡片名清单。
+    scope（2026-11-11）：auto=生效份 / local/global=指定份（设置页 scope 切换时场景区跟随同链路）。"""
+    scen = config.load_scenarios((scope or "auto").strip() or "auto")
     return {"scenarios": scen,
             "valid": {k: config.resolve_scenario(k) for k in scen},
             "models": list(config.MODELS.keys()),
@@ -988,15 +1008,19 @@ async def api_scenarios_save(request: Request):
     scen = body.get("scenarios")
     if not isinstance(scen, dict):
         return {"error": "scenarios 需为对象 {名: {desc, chain}}"}
-    config.save_scenarios(scen)
+    _scope = (body.get("scope") or "auto").strip() or "auto"
+    # 非生效份：scoped 落盘不热应用（与 /api/models、/api/config 的 scope 语义一致）
+    _act = config.active_scope("settings.json")
+    config.save_scenarios(scen, _scope)
     cleared = []
-    if _agent is not None:
-        try:
-            from commands import _invalidate_scenario_caches
-            cleared = _invalidate_scenario_caches(_agent)
-        except Exception:
-            pass
-    return {"ok": True, "scenarios": config.load_scenarios(), "cleared": cleared}
+    if _scope in ("auto", _act):
+        if _agent is not None:
+            try:
+                from commands import _invalidate_scenario_caches
+                cleared = _invalidate_scenario_caches(_agent)
+            except Exception:
+                pass
+    return {"ok": True, "scenarios": config.load_scenarios(_scope), "cleared": cleared}
 
 
 @app.put("/api/models")

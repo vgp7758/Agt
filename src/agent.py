@@ -2605,6 +2605,9 @@ class Agent:
                         #   便于 Ctrl+C 打断；off 经 /api/hold 或命令 set_event 即时放行）
                         while self._hold and not self._stop_flag:      # 进程级锁（所有 agent 同一状态）
                             _PROC_HOLD["event"].wait(0.5)
+                            self._hb_ts = time.time()   # hold 期间维持心跳（用户提案 2026-11-11：
+                            #   挂起是用户指令下的正常等待，非卡死——不 touch 会被看门狗误判拉 doctor。
+                            #   真卡死不受影响：LLM 挂起/工具卡点发生在闸门外的步内，那里心跳不动）
                             if self._stop_flag:
                                 break
                         # 中途插话注入（任何模式）：忙时排队的用户消息挂到"本步将生成"的 pending 位，

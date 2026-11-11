@@ -616,22 +616,14 @@
     </div>
     <div id="mcpList" style="flex:1;overflow-y:auto"></div>
     </div>
-    <div id="panel-runtime" class="settings-panel">
+    <div id="panel-runtime" class="settings-panel" style="overflow-y:auto">
     <div class="rt-group">基础参数</div>
     <label>max_steps <input id="cfg_max_steps" type="number"></label>
     <label>token_budget <input id="cfg_token_budget" type="number"></label>
     <label>max_retries <input id="cfg_max_retries" type="number"></label>
     <label>temperature <input id="cfg_temperature" type="number" step="0.1"></label>
-    <div class="rt-group">模型与回退</div>
-    <label>回退链 <input id="cfg_fallback_chain" type="text" placeholder="glm,deepseek,qwen"></label>
-    <label>回退策略 <select id="cfg_fallback_policy" title="回退后下一轮怎么处理：sticky=永久降级；reset=每轮重新从链首尝试">
-      <option value="sticky">永久降级（sticky）</option>
-      <option value="reset">每轮重试首模型（reset）</option>
-    </select></label>
-    <label>reasoning补全模型 <select id="cfg_reasoning_completer" title="思考模型只回 reasoning 无 content 时，用此非思考模型据 reasoning 补出正文"><option value="">（关闭）</option></select></label>
-    <label>辅助模型 utility_model <select id="cfg_utility_model" title="所有 LLM 短调用共用的便宜模型：recap总结/RAG检索抽关键字精排/reasoning补全默认/工作流LLM与意图节点默认；留空=跟随主模型，建议配便宜非思考模型"><option value="">（跟随主模型）</option></select></label>
     <div class="rt-group" title="调用场景策略组（p_ea32ad4f）：所有 LLM 调用点从「选模型」改为「选场景」——sub-agent yml / 工作流 llm 节点 / explore / img_proxy 的 model 字段填场景名；解析 miss→default 兜底；链中的卡片须是左侧已配置的模型名，未配置的解析时自动跳过">调用场景（LLM 调用点「选场景」策略组）</div>
-    <div id="scenList" style="max-height:32vh;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:4px 6px"></div>
+    <div id="scenList" style="min-height:160px;max-height:32vh;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:4px 6px"></div>
     <div style="display:flex;gap:8px;align-items:center;margin:4px 0 6px;flex-wrap:wrap">
       <button onclick="addScenarioRow()" style="font-size:11px">+ 添加场景</button>
       <button onclick="saveScenarios()" style="font-size:11px">💾 保存场景（即时生效）</button>
@@ -2164,13 +2156,7 @@ function fillSettingsForm(v){
    document.getElementById('cfg_dump_projections').checked = !!v.dump_projections;
    const _rdEl = document.getElementById('cfg_repos_dir'); if (_rdEl) _rdEl.value = v.repos_dir || '';
   document.getElementById('cfg_enable_thinking').checked = !!v.enable_thinking;
-  document.getElementById('cfg_fallback_chain').value = v.fallback_chain || '';
-  document.getElementById('cfg_fallback_policy').value = v.fallback_policy || 'sticky';
-  _cfgWanted.cfg_reasoning_completer=v.reasoning_completer || '';
-  _cfgWanted.cfg_utility_model=v.utility_model || '';
-  fillModelSelect('cfg_reasoning_completer','（关闭）');
-  fillModelSelect('cfg_utility_model','（跟随主模型）');
-  document.getElementById('cfg_tool_timeout').value = v.tool_timeout || '';
+   document.getElementById('cfg_tool_timeout').value = v.tool_timeout || '';
   document.getElementById('cfg_max_level').value = v.max_level || '';
   document.getElementById('cfg_tiering_mode').value = v.tiering_mode || '';
   document.getElementById('cfg_detail_base').value = v.detail_base_source === '显式' ? (v.detail_base || '') : '';
@@ -2186,9 +2172,7 @@ document.getElementById('cfgCancel').onclick=()=>{ settingsModal.style.display='
 // —— 统计已迁移到独立页面 /stats（btnStats 用 inline onclick 打开新标签）——
  
 let _modelData={};
-// 两个模型下拉框（reasoning_completer / retrieval_model）想要选中的值；
-// 用对象存是因为 config 回填与模型列表加载是并行的——谁先到都要能正确选中
-let _cfgWanted={cfg_reasoning_completer:'', cfg_utility_model:''};
+ 
 // 设置弹窗 tab 切换
 function switchSettingsTab(name, btn){
   document.querySelectorAll('.settings-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
@@ -2352,25 +2336,11 @@ async function toggleHook(hook, name, el){
     alert('切换失败：'+e.message); el.disabled = false;
   }
 }
-function fillModelSelect(id, emptyLabel){
-  const sel=document.getElementById(id); if(!sel) return;
-  const val=_cfgWanted[id]!==undefined?_cfgWanted[id]:(sel.value||'');
-  const models=Object.keys(_modelData.models||{});
-  let opts=`<option value="">${emptyLabel}</option>`;
-  for(const n of models){
-    const e=String(n).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    opts+=`<option value="${e}">${e}</option>`;
-  }
-  sel.innerHTML=opts; sel.value=val||'';
-}
-
-async function loadModelList(){
-  try{
-    const r=await fetch('/api/models'+(cfgScope!=='auto'?('?scope='+cfgScope):''));_modelData=await r.json();renderModelList();
-    fillModelSelect('cfg_reasoning_completer','（关闭）');
-    fillModelSelect('cfg_utility_model','（跟随主模型）');
-  }catch(e){}
-}
+  async function loadModelList(){
+   try{
+     const r=await fetch('/api/models'+(cfgScope!=='auto'?('?scope='+cfgScope):''));_modelData=await r.json();renderModelList();
+   }catch(e){}
+ }
 function renderModelList(){
   const box=document.getElementById('modelList');
   const models=_modelData.models||{};
@@ -2571,10 +2541,6 @@ function saveRuntime(){
     enable_thinking: document.getElementById('cfg_enable_thinking').checked,
     dump_projections: document.getElementById('cfg_dump_projections').checked,
     repos_dir: (document.getElementById('cfg_repos_dir') || {}).value || '',
-    fallback_chain: document.getElementById('cfg_fallback_chain').value,
-    fallback_policy: document.getElementById('cfg_fallback_policy').value,
-    reasoning_completer: document.getElementById('cfg_reasoning_completer').value,
-    utility_model: document.getElementById('cfg_utility_model').value,
     tool_timeout: parseInt(document.getElementById('cfg_tool_timeout').value),
     max_level: parseInt(document.getElementById('cfg_max_level').value)||4,
     tiering_mode: document.getElementById('cfg_tiering_mode').value,

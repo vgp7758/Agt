@@ -150,7 +150,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         # v2：persona 在 assembly text: 项里，system 参数传空（_seg_msgs_system 空则跳过）
         agent = Agent(system="", tools=REAL_TOOLS,
                       model_name=model_name if model_name in (config.MODELS or {}) else None,
-                      enable_thinking=True, max_steps=50, token_budget=80000,
+                      enable_thinking=True, max_steps=50, token_budget=0,   # 0=不限（用户裁定 2026-11-11：默认应不限，由 settings.json 显式配置才限）
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
                       registry=agent_registry)
         agent.session.set_assembly_plan(asm_plan)
@@ -172,7 +172,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
                 print(f"[main.yml] 随包 assets/main.yml 读取失败（{_e}），空 system 兜底")
         agent = Agent(system="", tools=REAL_TOOLS,
                       model_name=_fb_model if _fb_model in (config.MODELS or {}) else None,
-                      enable_thinking=True, max_steps=50, token_budget=80000,
+                      enable_thinking=True, max_steps=50, token_budget=0,   # 0=不限（用户裁定 2026-11-11：默认应不限，由 settings.json 显式配置才限）
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
                       registry=agent_registry)
         if _fb_plan is not None:

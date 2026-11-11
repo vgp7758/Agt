@@ -25,7 +25,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 
 import config
 from commands import CommandContext, apply_config, build_default_registry, read_config
@@ -177,10 +177,17 @@ async def workflow_debug():
     return HTMLResponse(_serve_html("workflow_debug.html", _inject_node_plugins))
 
 
+@app.get("/settings")
+async def settings_page():
+    """设置独立页（2026-11-11 用户提案：设置弹窗信息过载 → 浏览器新页签；
+    RAG 文档库并入为其中一个 tab）。五 tab：模型管理/运行时/MCP/其它/RAG。"""
+    return HTMLResponse(_serve_html("settings.html"))
+
+
 @app.get("/rag")
 async def rag_page():
-    """RAG 文档库管理页：配置 + 建库 + 查询测试。"""
-    return HTMLResponse(_serve_html("rag.html"))
+    """RAG 文档库管理已并入设置页（/settings#rag）——老入口重定向，防书签断裂。"""
+    return RedirectResponse("/settings#rag", status_code=302)
 
 
 @app.get("/memory")
@@ -885,7 +892,52 @@ async def api_wf_delete(name: str, scope: str = ""):
     return {"ok": True, "deleted": killed}
 
 
-# ===================== 模型配置 API =====================
+# ===================== 模型配置 API ===================== 
+
+@app.get("/api/config")
+async def api_config_get(scope: str = "auto"):
+    """运行时设置读取（设置独立页 settings.html 用，2026-11-11 与 ws get_config 等价的 HTTP 版）。
+    scope=auto 返回运行时生效值；local/global 返回该份文件原始视图（配置来源切换）。"""
+    _scope = (scope or "auto").strip()
+    if _scope in ("local", "global"):
+        return {"scope": _scope,
+                "models": config.read_models_scoped(_scope),
+                "settings": config.read_settings_scoped(_scope),
+                "active": {"models": config.active_scope("models.json"),
+                           "settings": config.active_scope("settings.json")}}
+    if _agent is None:
+        return {"error": "实例尚未就绪（_agent 为空）——刷新重试"}
+    return {"values": read_config(_agent),
+            "active": {"models": config.active_scope("models.json"),
+                       "settings": config.active_scope("settings.json")}}
+
+
+@app.post("/api/config")
+async def api_config_set(request: Request):
+    """运行时设置保存（ws set_config 等价的 HTTP 版）。body: {values, scope}。
+    写生效份走现状通道（合并写+热应用）；写非生效份 scoped 落盘不热应用。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "请求体需为 JSON"}
+    values = body.get("values") or {}
+    _scope = (body.get("scope") or "auto").strip()
+    if _scope in ("local", "global"):
+        _act = config.active_scope("settings.json")
+        note = ""
+        if _scope == _act:
+            _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)
+            lines = apply_config(_agent, values) if _agent is not None else ["（实例未就绪，仅落盘）"]
+        else:
+            _rs = config.save_settings_scoped(values, _scope)
+            lines = []
+            note = (f"💾 已写 {_rs.get('path')}\n"
+                    f"ℹ️ 非生效份（当前生效：{'📦 本地' if _act == 'local' else '🌐 全局'}）——存档备用，不热应用")
+        return {"ok": True, "text": ("\n".join(lines) + "\n" + note).strip()}
+    _m = config.load_runtime_settings(); _m.update(values); config.save_runtime_settings(_m)
+    lines = apply_config(_agent, values) if _agent is not None else ["（实例未就绪，仅落盘）"]
+    return {"ok": True, "text": "\n".join(lines) or "（无更改）"}
+
 
 @app.get("/api/models")
 async def api_models(scope: str = "auto"):

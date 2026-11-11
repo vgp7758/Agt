@@ -394,9 +394,9 @@ def _openai_client(self) -> OpenAI:
 
 | 键 | 说明 |
 |----|------|
-| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退），见下方分层说明 |
-| fallback_policy | reset=每轮重试 _user_model（默认）；sticky=回退后不回 |
-| utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑） |
+| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退），见下方分层说明。**⚠️ 2026-11-11 起设置页 UI 已移除**（调用场景化后冗余，用户裁定）——配置走 `/config fallback_chain` 命令或手改 settings.json；键仍生效，UI 保存其它设置不会抹掉它（部分更新语义）。详见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定) |
+| fallback_policy | reset=每轮重试 _user_model（默认）；sticky=回退后不回。**⚠️ 2026-11-11 起设置页 UI 已移除**（同 fallback_chain，键仍生效） |
+| utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑）。**⚠️ 2026-11-11 起设置页 UI 已移除**——职责由调用场景组的 **completer / short-req 场景**接替（场景化新入口）；旧键仍从 settings.json 生效、行为不变。详见 [调用场景](../features/call-scenes.md) |
 | detail_base | 分档基准字数(1500)——设置页显示【实际生效值】：显式配置 > 按窗口推导（400K→1500、600K→2250、60K→600）> 1500 |
 | ~~detail_step~~（已删） | **全局 settings 字段已删除**（2026-09-15，commit 4ad2812，用户裁定；t877_s51 轮内小毕业诊断收尾）：步距衰减只认 models.json 条目级 `detail_step`（clamp 0~200，**未填默认 0=不衰减**；想要衰减必须显式填，DeepSeek 类价差悬殊配 0）；`/config detail_step` 收到只提示去向不落盘。见 [全局字段删除](../architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定) |
 | hook_timeout | 同步钩子整组超时秒数（默认 300，0=不限）——超时钩子结果丢弃（`auto_wf_error` 标记），组内已完成/后续完成的其它钩子照常合并注入（**部分组装**）；async 钩子不受限 |
@@ -409,7 +409,7 @@ def _openai_client(self) -> OpenAI:
 > | 调用 | 链来源 | 谁配 |
 > |---|---|---|
 > | react 主调用（`scene=react·*`） | agent .yml 的 `fallback:` 声明（三形态：逗号串 / list / `{chain,policy}`）；**未声明 = 无回退** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=删键）/ main.yml |
-> | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承） | 设置页 / `/config fallback_chain` |
+> | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） |
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 

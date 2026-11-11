@@ -695,7 +695,7 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 | 调用类型 | 回退链来源 | 谁配 | 未声明时 |
 |---|---|---|---|
 | **react 主调用**（`scene=react·{agent_id}`） | **只认 agent .yml 的 `fallback:` 声明** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4) / main.yml | **无回退**（不继承全局 settings 链） |
-| **非 react 调用**（工作流 LLM/llm_call 节点、补全 `reasoning_completer`、utility_model 短调用、recap 等） | **实例链**（构造时从全局 `settings.json` 继承） | 设置页 / `/config fallback_chain` | 用 settings 全局链 |
+| **非 react 调用**（工作流 LLM/llm_call 节点、补全 `reasoning_completer`、utility_model 短调用、recap 等） | **实例链**（构造时从全局 `settings.json` 继承） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） | 用 settings 全局链 |
 
 **动机**：此前「声明覆盖全局」是实例级单链——react 与钩子/工作流/utility 共用一条，全局链在 Agent 场景下被声明链顶掉或反过来被 settings 刷回，语义混淆；且**切模型/WebUI 改配置会重读 settings 覆盖实例链**（用户实测「给 agent 单独配的 provider 回退链看起来没生效，实际走的依然是 settings.json 里的默认回退链」）。分离后 react 链与实例状态解耦，跨轮/跨模型切换都稳定。
 

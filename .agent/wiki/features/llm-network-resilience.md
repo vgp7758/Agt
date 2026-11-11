@@ -235,6 +235,27 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 
 **缓存**：src/img_cache.py `PROMPT_VER` bump `"v2-coord"` → `"v3-json"`，旧格式描述自然 miss 重看。实测样例（误差 ≤1‰）与渲染形态见 [图片输入链路 · 后记四](image-input.md)。
 
+## 十、冷却跳过不再掩盖真实首败：_failure_history 跨调用历史 + 错误消息回查（2026-11-12，doctor 诊断建议，commit 1d304ff）
+
+**病根**：链尽 raise 的 reason 取自最后一次 `_advance`——链上成员冷却跳过时固定为「冷却中(剩余Xs)」，**链上首个真实失败的原因（400 详情 / 403 余额 / 超时阶段）就此丢失**。触发案例：wiki-updater_6 BadRequest 派单，doctor 收到的错误文本没有任何 400 证据，无从判定「是否数据问题」——诊断价值直接受损（见 [doctor · 首例三不达案例](doctor.md)）。
+
+**修法**（两件配套，2026-11-12 落地，commit `1d304ff` 已推送 + site-packages 同步）：
+
+| 件 | 内容 |
+|---|---|
+| `_failure_history` 跨调用滚动历史（≤50 条） | 既有 `last_failures` 每次调用入口清零——冷却窗内的后续调用只剩 cooldown 记录、查不到首败。新列表在每条失败 append `last_failures` 时同步落账（**不含冷却跳过**），超 50 滚动截断 |
+| raise 时回查补真因 | reason 以「冷却中」开头 → `reversed(_failure_history)` 反查最近一条 `cls != "cooldown"` 追加进错误消息；无记录则不加段（不产生空段）；旧实例属性缺失走 `getattr` 兜底 |
+
+修后形态：
+
+```
+回退链不可用（已试: spark, proxy）：冷却中(剩余106s)；
+链上最近真实失败: [spark] APIStatusError: Error code: 403 - Insufficient Balance…；
+其余成员冷却中: spark 剩106s
+```
+
+**验证**（三场景全绿）：真实失败带回 ✓ / 无记录不附加 ✓ / `getattr` 兜底不炸 ✓。消费端两处：doctor 派单静态判定（不再依赖内存现场）+ 人工排障（错误文本即可辨 403 余额 vs 400 数据 vs 超时）。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：
@@ -266,5 +287,5 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 - [多 Agent 体系](../architecture/multi-agent.md) — 回退链职责分离（react 认 .yml / 非 react 认 settings）
 - [运维与排障](../guides/ops.md) — llm_calls 观测、网络类故障定位
 - [agent_watch](agent-watch.md) — 同日网络韧性批：10061 静默跳过
-- [doctor](doctor.md) — BadRequest 诊断修复 Agent：消费本页存档点 `last_failed_messages`；L1 自愈（本页五/七章）的根治搭档
+- [doctor](doctor.md) — BadRequest 诊断修复 Agent：消费本页存档点 `last_failed_messages`；L1 自愈（本页五/七章）的根治搭档；十/后记二联动——错误消息回查真实首败 + 派单附目标失败明细
 

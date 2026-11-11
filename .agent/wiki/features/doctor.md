@@ -75,6 +75,29 @@ BadRequest（数据问题：坏图 / 超长 / 畸形消息）三层防线，越�
 
 **语义收获**：工具跟着角色走——角色专属工具收敛进实例化路径，通用工具箱只留跨角色能力。
 
+## 后记二：首例「三不达」静态诊断 + 派单附目标失败明细（2026-11-12，wiki-updater_6 案例，commit 1d304ff）
+
+**案例**：wiki-updater_6（wiki_auto_maintenance 钩子派活）回退链耗尽自动派单——doctor 三道现场闸全断：
+
+| 闸 | 预期 | 实际 |
+|---|---|---|
+| 四件套 | 实例化专属注入（2026-10-17 后记） | ❌ 本实例工具箱未见 req_*（与既有注入语义不符，本轮未深究、待复查） |
+| registry / 事件 | `agent_query_events` 读目标 | ❌ 目标与派发者都不在本实例注册表（`list_team` 空） |
+| 磁盘兜底 | sessions/ 存档找现场 | ❌ 两个 session 目录均无目标痕迹；`last_failed_messages` 是进程内存态，实例销毁即失 |
+
+probe 计数 0/5——**不是穷尽判定非数据问题，是无失败现场可 probe**，按安全阀如实上报、不瞎试。
+
+**静态诊断法**（错误文本对照 `_chat_with_fallback` 结构）：「已试: spark, proxy」吻合 wiki-updater.yml 的 `model: spark + fallback: [proxy]`；「冷却中(剩余106s)」是被跳过路径覆盖的 reason（首败真因丢失）；cd_detail 只有 spark → spark 先败进冷却、本次冷却跳过、proxy 接手也不可达 → 链尽。错误全文无 400 证据 + wiki 维护纯文本任务起步即断 → **判非数据问题（双 provider 冷却叠加，中高置信）**——后经引擎改动与重派实跑证实。
+
+**两条引擎建议当日全落地**（doctor 只建不修）：
+
+1. **错误消息找回真实首败**——`_failure_history` 跨调用历史 + 冷却跳过 raise 时反查回补（详见 [LLM 客户端韧性 · 十](llm-network-resilience.md)）
+2. **派单附目标失败明细**——派单 prompt 组装处（src/multiagent.py）try 块 `getattr` 链安全取目标 `llm.last_failures`，逐条渲染「模型 / 错误类 / 分类 / 摘要」并标注 **cls=cooldown 是冷却跳过非真实失败**；无明细不产生空段——doctor 不再依赖内存现场即可静态判定
+
+**验证**：L3 三场景 + 派单拼接两形态 + L2 隔离实跑（regr-9612：钩子 7 个全过、回答完成、零 traceback）全绿。wiki-updater_7 重派后 spark 解冻正常运行。commit `1d304ff` 已推送 + site-packages 同步（9000 侧 `/restart` 后生效）。
+
+**经验沉淀**：doctor「三不达」时的错误文本静态诊断法（已入长期记忆）——错误结构本身就是诊断材料：tried 列表 ↔ yml 声明对照、reason 是否被冷却覆盖、cd_detail 缺谁。
+
 ## 声明（.agent/agents/doctor/，目录形态）
 
 - `doctor.yml`：`tools: ""`（留空无碍——2026-10-17 起实例化路径对 doctor 有专属分支，工具箱恒为四件套）/ `model: glm-official-flash` / 最小装配（system + file 人设 + user_message + steps）

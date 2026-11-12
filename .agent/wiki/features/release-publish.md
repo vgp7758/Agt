@@ -282,8 +282,6 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 ## 第八次实战：v0.35.11（v0.35.9 后首发，part=patch）——0.35.10 李鬼占号：PyPI 版本号被历史误传占用，改号重发三通道全绿
 
-### 第八次实战：v0.35.11（v0.35.9 后首发，part=patch）——0.35.10 李鬼占号：PyPI 版本号被历史误传占用，改号重发三通道全绿
-
 第八次生产运行，用户侧仍是一句「发补丁吧」。本次失败形态是**全新的一种**——既非 push 断网（v0.35.0/2/5/8/9 五次）也非 gitignore 阻断（v0.35.8 ①），而是 **PyPI 版本号环境面**：线上已被一个内容过期的 0.35.10 占号，同名文件不可覆盖。
 
 | 步骤 | 第 1 次调用（attempt 0.35.10） | 处置后重发（0.35.11） |
@@ -323,6 +321,34 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码。
 
+## 第九次实战：v0.35.12（part=patch）——② upload 瞬时失败中断链路：twine 手动重试 + tag 手工补打
+
+第九次生产运行，用户侧仍是一句「发补丁吧」。失败形态又是全新的一种——既非 push 段断网（v0.35.0/2/5/8/9）也非 PyPI 占号（v0.35.11），而是 **release.py 内 upload 一步瞬时失败**（非断网，重试即过），后续步骤（main push / tag）未执行。
+
+| 步骤 | 结果 |
+|---|---|
+| 发布前清理 | ✅ 删除两张调试截图（settings_runtime.png / settings_runtime_v2.png），git status 干净 |
+| ① 工作区检查 | ✅ 通过 |
+| ② release.py 主体 | bump 0.35.11 → 0.35.12 ✓ / commit `e50a31a` ✓ / build wheel+sdist 双件 ✓ / **upload ⚠️ 瞬时失败 → 后续步骤未执行** |
+| 处置（upload） | twine 手动重试 → 200 OK；端点验证 `latest: 0.35.12`、双文件在架 |
+| 补尾（push + tag） | main `d7de3f7..e50a31a` ✓ + version_file 同步 `4d2ba79` ✓ + tag `v0.35.12` 手工补打 `e50a31a` 并推送 → 桌面版 Actions 触发 |
+
+与历次半成功同款两步补尾，但断点位置不同：前五次断在 push 段（PyPI 已上线、只差 git 侧），本次断在 upload 段（PyPI 也未上线）——**twine 手动重试一次即过**，证明是瞬时故障而非网络断连；tag 漏打仍是 ③.5 排在 push 之后的既有语义（② 失败则后续步骤不执行），手工补打即可。
+
+#### 本版收录清单（自 v0.35.11，7 笔含 7 功能）
+
+| # | commit | 内容 | 详情页 |
+|---|---|---|---|
+| 1 | `ed21c0e` | 场景抽象层——LLM 调用点从「选模型」改为「选场景」 | [调用场景](call-scenes.md) |
+| 2 | `f6d48cc` | 设置页独立页签化——/settings 五 tab + RAG 并入 + 场景链 chips 可视化 | [调用场景](call-scenes.md) · [RAG](rag.md) |
+| 3 | `05ece4f` | 运行时双保存按钮互相覆盖根治、settings 读写链路收口 | [调用场景](call-scenes.md) |
+| 4 | `f3e4ee9` | hold 挂起期间维持心跳——看门狗不再误判拉 doctor | [agent-watchdog](agent-watchdog.md) |
+| 5 | `1d304ff` | 回退链耗尽错误找回真实首败原因 + doctor 派单附失败明细 | [LLM 客户端韧性](llm-network-resilience.md) · [doctor](doctor.md) |
+| 6 | `0cfa586` | RAG 按钮残留摘除 | [fab-dock](fab-dock.md) · [RAG](rag.md) |
+| 7 | `fe33edc` | 调用场景列表高度塌陷修复 | [调用场景](call-scenes.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)
@@ -336,6 +362,6 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 - ③ 失败只警告不阻断（⚠️）：version_file 推送异常需人工补，否则下次桌面版云构建用旧版本号
 - ③.5 同为只警告不阻断：tag 打推失败时报告附补推命令，人工补即可（v0.35.3 起自动，此前靠手工，见下条历史）
 - ④ 三连失败大概率只是索引同步延迟——按提示稍后手动确认即可，不代表发布失败
-- **② 半成功 ≠ 发布失败**（v0.35.0 / v0.35.2 / v0.35.5 / v0.35.8 / v0.35.9 五次实证，均在 push 段断网；失败形态从 connect timed out / Network is unreachable 到 DNS 解析失败俱全）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可，v0.35.8 起三级通道 + 上岸自动补 tag）
+- **② 半成功 ≠ 发布失败**（六次实证：v0.35.0 / 2 / 5 / 8 / 9 五次 push 段断网——connect timed out / Network is unreachable / DNS 解析失败俱全；v0.35.12 upload 段瞬时失败——非断网、重试即过，twine 手动重试）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可，v0.35.8 起三级通道 + 上岸自动补 tag）
 - **tag 已收口进链路（v0.35.3 起，③.5，commit `a9c0c72`）**：自动打推 + 失败附补推命令，**主链路全绿时 tag 零手工**（v0.35.5 实证修正：③.5 排在 push 之后，② 半成功时后续步骤不执行 → tag 依旧漏打、仍需手工补，见 [v0.35.5 一节](#第五次实战v03552026-10-18partpatch-半成功重现push-又断网tag-手工补打待推)；v0.35.8 起后台 push-retry 任务在 push 上岸后自动补打并推 tag，失败路径也不再手工）；此前 v0.35.0 / v0.35.1 / v0.35.2 三次实证「② 只推 **main 分支**、tag 需事后手工补打——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）」降为历史记录，老版本排障可回看 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)与 [v0.35.2 一节](#第三次实战v03522026-10-16partpatch-第三次半成功git-push断网tag-由-agent-补打待推)
 

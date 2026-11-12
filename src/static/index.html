@@ -2607,7 +2607,8 @@ async function renderSvcDash(){
         <button onclick="window.open('/api/svc_log?name='+encodeURIComponent('${esc(s.name)}'),'_blank')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #d8d2e8;background:#fff;color:#6d28d9;cursor:pointer">📄 完整日志</button>
         ${s.running
           ? `<button onclick="svcOp('${esc(s.name)}','stop')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c;cursor:pointer">⏹ Stop</button>`
-          : `<button onclick="svcOp('${esc(s.name)}','start')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;cursor:pointer">▶ Start</button>`}
+          : `<button onclick="svcOp('${esc(s.name)}','start')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;cursor:pointer">▶ Start</button>
+             <button onclick="if(confirm('删除服务条目「${esc(s.name)}」？（历史日志保留在 ~/.agt/service_logs/）'))svcOp('${esc(s.name)}','remove')" style="font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px solid #d6d3d1;background:#fafaf9;color:#78716c;cursor:pointer">🗑 删</button>`}
       </div>` : ''}
     </div>`;
   });

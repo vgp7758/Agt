@@ -2218,7 +2218,8 @@ async def api_svc_fav(body: dict):
 
 @app.post("/api/svc_op")
 async def api_svc_op(body: dict):
-    """看板服务操作（2026-10-06）：op=stop 停运行中服务；op=start 用原启动参数重启已退出服务。"""
+    """看板服务操作（2026-10-06）：op=stop 停运行中服务；op=start 用原启动参数重启已退出服务；
+    op=remove 删掉已停止的服务条目（2026-11-12 用户实锤：已停止的服务一直挂着，没有删除入口）。"""
     name = str(body.get("name") or "").strip()
     op = str(body.get("op") or "").strip()
     if not _agent or not name:
@@ -2231,9 +2232,11 @@ async def api_svc_op(body: dict):
         if not ent:
             return {"ok": False, "error": "服务不在登记（进程重启过）——用收藏→重启实例拉起"}
         r = svc.start(name, str(ent.get("command") or ""), str(ent.get("cwd") or ""))
+    elif op == "remove":
+        r = svc.remove(name)   # 仅已停止可删（运行中拒绝提示 stop）
     else:
-        return {"ok": False, "error": "op 仅 stop|start"}
-    return {"ok": True, "note": str(r)[:200]}
+        return {"ok": False, "error": "op 仅 stop|start|remove"}
+    return {"ok": not str(r).startswith("[") and "先 stop" not in str(r), "note": str(r)[:200]}
 
 
 @app.get("/api/agents")

@@ -406,6 +406,24 @@ class ServiceManager:
             pass   # _kill_tree 已强制杀，wait 只是确认
         return f"🛑 已停止「{name}」"
 
+    def remove(self, name: str) -> str:
+        """从登记表彻底删掉一个【已停止】的服务条目（用户实锤 2026-11-12：已停止的服务一直挂在
+        看板列表里，没有删除入口——stop 保留 entry 做退出复盘是对的，但复盘完需要能手动清场）。
+        运行中的拒绝（先 stop）；删时关日志句柄、保留 ~/.agt/service_logs 下的历史日志文件不动。"""
+        with self._lock:
+            e = self._services.get(name)
+            if not e:
+                return f"[无此服务] {name}"
+            if e["proc"].poll() is None:
+                return f"「{name}」还在运行，先 stop 再删"
+            self._services.pop(name, None)
+        try:   # 句柄回收（日志文件本身保留）
+            if e.get("_lf"):
+                e["_lf"].close()
+        except Exception:
+            pass
+        return f"🗑 已删除服务条目「{name}」（历史日志仍在 ~/.agt/service_logs/）"
+
     @staticmethod
     def _kill_tree(proc) -> None:
         """跨平台杀整棵进程树。start 时已绑新进程组/会话，故按组杀能覆盖孙进程。"""

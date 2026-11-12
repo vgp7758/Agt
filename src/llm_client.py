@@ -75,13 +75,14 @@ class _SinkHandler(logging.Handler):
 
 def set_log_sink(fn) -> None:
     """注册一个日志转发回调（level ∈ {info,warn,error}）。惰性安装 handler；幂等（不重复注册）。
-    handler 同时挂 agt.llm（回退/限流/截断）与 agt.session（毕业/折叠等上下文工程事件）——
-    "轮边界计划：升档 X 档 + 折叠 N 轮"这类事件进面板（用户提案 2026-08-30：三级日志）。"""
+    handler 挂在 **agt 包 logger** 上（2026-11-12 修）：此前只挂 agt.llm + agt.session，其它
+    子 logger（agt.agent / agt.workflow / agt.multiagent …）的 INFO+ 记录根本到不了面板——
+    "♻️ 已采用 X 档位建档"这类 agent 侧上下文工程事件因此静默丢失。挂包级后全部子 logger 经
+    propagate 汇入（文件日志照常由 root handler 写，二者并存）。"""
     global _LOG_SINK_HANDLER
     if _LOG_SINK_HANDLER is None:
         _LOG_SINK_HANDLER = _SinkHandler()
-        _LOG.addHandler(_LOG_SINK_HANDLER)
-        logging.getLogger("agt.session").addHandler(_LOG_SINK_HANDLER)
+        logging.getLogger("agt").addHandler(_LOG_SINK_HANDLER)
     if fn not in _LOG_SINKS:
         _LOG_SINKS.append(fn)
 

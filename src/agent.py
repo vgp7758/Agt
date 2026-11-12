@@ -948,9 +948,11 @@ class Agent:
             # 缓存 → 断点清账零成本）。⚠️ 不可再调 invalidate_projection——其 async_rebuild
             # 会后台跑 apply_simple_tiering 把刚采用的建档整个覆盖掉。
             self.session.adopt_tier_shape(shape)
-            self._emit({"type": "system",
-                        "text": f"♻️ 已采用 {name} 档位建档（fc={shape.get('fold_count', 0)}"
-                                f" 边界={len(shape.get('tier_boundaries') or [])}）"})
+            # 采用事件进日志抽屉（用户裁定 2026-11-12）：这是上下文工程的可观测事件，与
+            # 毕业/折叠/保命阀同类——走 _LOG.info → agt.session handler → llm_log 事件（日志
+            # 抽屉蓝灰行），不再发 system 事件占对话区（system 气泡是给用户看的交互反馈）。
+            _LOG.info("♻️ 已采用 %s 档位建档（fc=%s 边界=%s）", name,
+                      shape.get("fold_count", 0), len(shape.get("tier_boundaries") or []))
         else:
             # 未命中 → 异步全量重定型（apply_simple_tiering 放后台线程，切模型命令立即返回；
             # React 下次 messages_for_llm 经 _proj_lock 等待重定型完成后才组装发送）

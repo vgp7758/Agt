@@ -816,7 +816,7 @@ function assetBoxHtml(title, path){
   var ext=(String(path).split('.').pop()||'').toLowerCase();
   var isImg=('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0;
   var isAud=('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0;
-  var isVid=('mp4,webm,mov,mkv,avi,m4v,flv,ts,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0;
+   var isVid=('mp4,webm,mov,mkv,avi,m4v,flv,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0;   // ts 移出视频表：留给 TypeScript（_TEXT_EXTS 已含 ts；.d.ts 声明文件曾被当 MPEG-TS 渲染成视频播放器——用户实锤 2026-11-12）
   var isTxt=_TEXT_EXTS.indexOf(ext)>=0;
   if(!isImg && !isAud && !isVid && !isTxt){   // 后缀表全 miss → 查嗅探缓存（同步命中直接定形态）
     var ck=_assetKindCache[path];
@@ -1221,7 +1221,8 @@ function unmentionedChangesHtml(answerText, changed){
       const ext=(f.split('.').pop()||'').toLowerCase();
       if(('png,jpg,jpeg,gif,webp,svg,bmp,avif').split(',').indexOf(ext)>=0 ||
          ('wav,mp3,ogg,oga,m4a,aac,flac,opus').split(',').indexOf(ext)>=0 ||
-         ('mp4,webm,mov,mkv,avi,m4v,flv,ts,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0){
+         // ts 不在视频表（见 assetBoxHtml 同款注：.d.ts 误判视频——用户实锤 2026-11-12；真 .ts 视频走 else 文本抽屉可接受）
+         ('mp4,webm,mov,mkv,avi,m4v,flv,3gp,wmv,mpg,mpeg').split(',').indexOf(ext)>=0){
         // 图片/音频/视频 → 直接内嵌渲染（用户提案 2026-09-06 起；视频 2026-09-17 补——
         // 此前 mp4 落 else 走文本预览抽屉，8000 实测：点 mp4 打开的是文本抽屉）
         h += assetBoxHtml(ic+' '+f, f);

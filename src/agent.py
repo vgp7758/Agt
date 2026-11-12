@@ -93,8 +93,11 @@ _DATA_URL_RE = re.compile(r"data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/
 # —— 工作流生命周期钩子 —— 工具调用前后 workspace mtime 快照（真实副作用检测）——
 # 排除两层：① 框架硬排除（_SNAP_EXCLUDE_DIRS：.git/.agent 等运行时目录，gitignore 没写也要排）
 #          ② workspace/.gitignore 里的全部模式（目录剪枝 + 通配匹配；跳过注释/空行/! 否定模式）
+# node_modules 等包管理器目录（用户实锤 2026-11-12：npm install 后几万依赖文件 mtime 全变，
+# 全量涌入「本轮变更文件」并把 .d.ts 渲染成视频控件）——框架级常识排除，不依赖用户配 .gitignore。
 _SNAP_EXCLUDE_DIRS = frozenset({
     ".git", ".agent", ".agt",
+    "node_modules", ".venv", "venv", "__pycache__",
 })
 
 

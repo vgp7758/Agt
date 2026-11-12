@@ -1833,6 +1833,7 @@ async def api_dash():
             out["bg_tasks"].append({
                 "bg_id": bid,
                 "tool": t.get("name", "?"),
+                "origin": str(t.get("origin") or "")[:4000],   # 原始 code/command（hover tooltip 用，用户提案 2026-11-12）
                 "finished": done,
                 "rc": t.get("returncode"),
                 "started_at": started,

@@ -185,7 +185,14 @@
     #specPanel { --dw-bg:#fafbff; --dw-line:#c7d2fe; --dw-line2:#e0e7ff; --dw-accent:#4338ca; --dw-close-bg:#e0e7ff; }
     #logPanel  { --dw-bg:#fff;    --dw-line:#d1d5db; --dw-line2:#f3f4f6; --dw-accent:#374151; --dw-close-bg:#e5e7eb; }
     #teamPanel { --dw-bg:#fbfdff; --dw-line:#a5d8e8; --dw-line2:#d0ebf3; --dw-accent:#0e7490; --dw-close-bg:#d0ebf3; }
-    #svcPanel  { --dw-bg:#fcfaff; --dw-line:#ddd3f0; --dw-line2:#e9e0f7; --dw-accent:#7c3aed; --dw-close-bg:#e9e0f7; }
+     #svcPanel  { --dw-bg:#fcfaff; --dw-line:#ddd3f0; --dw-line2:#e9e0f7; --dw-accent:#7c3aed; --dw-close-bg:#e9e0f7; }
+     /* 后台任务 hover tooltip（用户提案 2026-11-12：bg_xxxx 看不出任务是啥，hover 左侧弹原始代码）：
+        body 级 fixed 定位——不受抽屉容器 overflow 裁剪（同远程添加弹窗挂 body 的教训） */
+     #bgTip { display:none; position:fixed; z-index:200; max-width:480px; max-height:340px; overflow:auto;
+       background:#0b1220; color:#c7d2fe; border:1px solid #3b4a72; border-radius:8px; padding:8px 10px;
+       font:11px ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-all;
+       box-shadow:0 4px 18px rgba(0,0,0,.35); }
+     #bgTip .bg-tip-head { color:#8f9ec9; font-size:10px; margin-bottom:5px; letter-spacing:.3px; }
     #filePanel { z-index:135; --dw-bg:#fbfdff; --dw-line:#bfdbfe; --dw-line2:#dbeafe; --dw-accent:#1d4ed8; --dw-close-bg:#dbeafe; }
    #specPanel summary { color:#4338ca; padding-right:30px; }
   .spec-item { padding:4px 0; border-left:3px solid #c7d2fe; padding-left:8px; margin:2px 0; }
@@ -2301,7 +2308,25 @@ document.getElementById('specFab').onclick = ()=>toggleSpecPanel(true);
 // 打开时拉取渲染，并 3s 轮询刷新（recap/状态/日志在变）；关闭停轮询。
 let _dashTimers = {};          // panelId -> interval id（团队/服务各自独立轮询）
 let _svcExpanded = {};         // 服务行展开态：name -> true（轮询刷新时保持展开）
-let _bgExpanded = {};          // 后台任务行展开态：bg_id -> true（2026-09-06 看板新增）
+ let _bgExpanded = {};          // 后台任务行展开态：bg_id -> true（2026-09-06 看板新增）
+ let _bgOrigin = {};            // bg_id -> {origin, tool}：hover tooltip 数据（用户提案 2026-11-12）
+ // 后台任务 hover tooltip：bg_xxxx ID 看不出任务是啥 → 左侧弹原始 code/command。
+ // body 级 fixed 单例（#bgTip）——不受抽屉容器 overflow 裁剪；无 origin 的旧任务退化为工具名。
+ function bgTipShow(el, id){
+   let tip = document.getElementById('bgTip');
+   if(!tip){ tip = document.createElement('div'); tip.id='bgTip'; document.body.appendChild(tip); }
+   const info = _bgOrigin[id] || {};
+   const origin = info.origin || '';
+   const head = `<div class="bg-tip-head">${esc(info.tool||'?')} 原始${origin.startsWith('[file=')?'参数':'命令/代码'} · ${esc(id)}${origin.length>800?` · 前 800 字（共 ${origin.length} 字）`:''}</div>`;
+   tip.innerHTML = head + esc(origin ? origin.slice(0,800) : '（无原始参数存档——旧任务/其它来源）');
+   tip.style.display = 'block';
+   const r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+   let left = r.left - tw - 10;                      // 默认弹在行左侧（抽屉在右，左侧空间大）
+   if(left < 8) left = Math.min(r.right + 10, Math.max(8, innerWidth - tw - 8));  // 左缘不够→翻到右侧兜底
+   tip.style.left = left + 'px';
+   tip.style.top = Math.max(8, Math.min(r.top, innerHeight - th - 8)) + 'px';
+ }
+ function bgTipHide(){ const t = document.getElementById('bgTip'); if(t) t.style.display='none'; }
 let _teamExpanded = {};        // 团队行展开态（recap 折叠，点击展开全文）
 
 function _dashFetch(){
@@ -2617,11 +2642,12 @@ async function renderSvcDash(){
     const stColor = b.finished ? (b.rc===0 ? '#047857' : '#b91c1c') : '#92400e';
     const stTxt = b.finished ? `已结束 rc=${b.rc}` : `运行中 · ${b.elapsed}s`;
     const open = !!_bgExpanded[b.bg_id];
+    _bgOrigin[b.bg_id] = {origin: b.origin||'', tool: b.tool||'?'};   // hover tooltip 数据（用户提案 2026-11-12）
     h += `<div style="border:1px solid #e9e0f7;border-radius:8px;margin-bottom:6px;background:#fff;overflow:hidden">
-      <div style="padding:6px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;flex-wrap:wrap" onclick="_bgExpanded['${esc(b.bg_id)}']=!_bgExpanded['${esc(b.bg_id)}'];renderSvcDash()">
+      <div style="padding:6px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;flex-wrap:wrap" onclick="_bgExpanded['${esc(b.bg_id)}']=!_bgExpanded['${esc(b.bg_id)}'];renderSvcDash()" onmouseenter="bgTipShow(this,'${esc(b.bg_id)}')" onmouseleave="bgTipHide()">
         <span>${open?'▼':'▶'}</span><span>${icon}</span><b style="font-size:12.5px;font-family:ui-monospace,Consolas,monospace">${esc(b.bg_id)}</b>
         <span style="font-size:11px;color:${stColor}">${stTxt}</span>
-        <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap">${esc(b.tool)} · ${b.lines} 行输出</span>
+        <span style="font-size:10.5px;color:#8a9099;flex:1;text-align:right;white-space:nowrap">${esc(b.tool)} · ${b.lines} 行输出${b.origin?' · 👈hover':''}</span>
       </div>
       ${open ? `<pre style="margin:0;padding:6px 9px 8px;background:#0b1220;color:#c7d2fe;font:11px ui-monospace,Menlo,Consolas,monospace;max-height:190px;overflow:auto;border-top:1px solid #e9e0f7;white-space:pre-wrap;word-break:break-all">${esc(b.tail||'（暂无输出）')}</pre>` : ''}
     </div>`;

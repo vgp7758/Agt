@@ -275,10 +275,12 @@ def _decode_stream(b: bytes) -> str:
             return b.decode("utf-8", errors="replace")
 
 
-def _run_subprocess_streaming(args, name, shell=False, env=None):
+def _run_subprocess_streaming(args, name, shell=False, env=None, origin=""):
     """运行子进程，实时流式输出 + 30 秒心跳进度。reader 线程兼容 Windows。
     通过 _tool_emit 回调推送 tool_stream / tool_progress 事件。
     env: 附加环境变量（None=继承父进程）；run_python 用它注入 PY_ARGS。
+    origin: 原始工具参数（code/command 原文）——超时转后台时随 bg 任务存档，
+    后台看板 hover tooltip 展示（bg_xxxx ID 本身看不出任务是啥——用户实锤 2026-11-12）。
     Windows 加 CREATE_NO_WINDOW：detached（/restart 看门狗拉起）进程无控制台时，
     子进程默认各弹一个终端窗，闪退即此。"""
     proc = subprocess.Popen(
@@ -376,6 +378,9 @@ def _run_subprocess_streaming(args, name, shell=False, env=None):
             _bg_tasks[bg_id] = {
                 "name": name, "proc": proc, "output": output_lines[:],
                 "started_at": start, "finished": False, "returncode": None,
+                # 原始工具参数存档（后台看板 hover tooltip 用——bg_id 看不出任务是啥，
+                # 用户实锤 2026-11-12；截断 4000 字符防膨胀）
+                "origin": (origin or "")[:4000],
                 # 发起者（用户裁定 2026-10-15）：完成回执按 owner 路由（谁起的谁收）。
                 # 取值走线程局部——此处仍在执行工具的那个线程里（daemon 读线程只消费这个引用）。
                 "owner": get_bg_owner(),
@@ -439,14 +444,15 @@ def run_python(code: str = "", file: str = "", args: str = "") -> str:
         target = _resolve(file)
         if not target.exists():
             return f"[文件不存在] {file}"
-        return _run_subprocess_streaming(_py_child_cmd(str(target)), f"run_python {file}", env=env)
+        return _run_subprocess_streaming(_py_child_cmd(str(target)), f"run_python {file}",
+                                          env=env, origin=f"[file={file}]")
     if not code:
         return "[参数缺失] run_python 需传 code（内联代码）或 file（.py 文件路径）"
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmp = f.name
     try:
-        return _run_subprocess_streaming(_py_child_cmd(tmp), "run_python", env=env)
+        return _run_subprocess_streaming(_py_child_cmd(tmp), "run_python", env=env, origin=code)
     finally:
         try:
             os.unlink(tmp)
@@ -1928,7 +1934,7 @@ def run_shell(command: str) -> str:
     """执行一条系统 shell 命令，实时流式输出。超时由 TOOL_TIMEOUT 控制（可用 set_tool_timeout 调大）。"""
     if not _ask_approval("run_shell", f"执行 shell: {command[:300]}"):
         return "[用户拒绝] run_shell 执行未获批准"
-    return _run_subprocess_streaming(command, "run_shell", shell=True)
+    return _run_subprocess_streaming(command, "run_shell", shell=True, origin=command)
 
 
 def run_script(script: str, payload: str = "") -> str:

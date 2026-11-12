@@ -632,6 +632,27 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 **生效**：静态 mtime 热更——浏览器 **Ctrl+F5 硬刷新**即生效（8000/20048 跑同一 repo editable、共享同一份前端，无需重启实例）。
 
+### .d.ts 被渲染成视频播放器：ts 移出视频后缀表——TypeScript 让位 MPEG-TS（2026-11-12，用户实锤，commit e391bd6）
+
+**用户实锤**：answer 气泡下的「📎 本轮变更文件」里，`web/node_modules/typescript/lib/lib.decorators.d.ts` 不但进了变更列表，还被渲染成**视频播放组件**。两层病根叠加——本节修渲染层这半，数据层（node_modules 为何进列表）见 [snapshot-diff · 快照排除面升级](../architecture/snapshot-diff.md)：
+
+| 层 | 根因 |
+|---|---|
+| 数据层（为什么会进列表） | 变更检测来自 workspace mtime 快照 diff，框架硬排除此前不含 `node_modules`——用户项目 .gitignore 没配 → npm install 后几万依赖文件 mtime 全变全量涌入（`_SNAP_EXCLUDE_DIRS` 扩容，引擎侧 `/restart` 生效） |
+| 渲染层（为什么是视频框） | 视频后缀表里躺着 `ts`——那是 **MPEG-TS 流格式**的 ts，与 TypeScript 的 ts 撞名；`assetBoxHtml` 分流 `isVid` 判定先于文本后缀命中 → `.d.ts` 声明文件进了 `<video>` 分支 |
+
+**修复（src/static/index.html 两处视频表同步移除 `ts`，commit e391bd6，纯前端）**：
+
+| 位置 | 改动 |
+|---|---|
+| `assetBoxHtml`（`[!名](路径)` / `![alt](路径)` 资产链） | `mp4,webm,mov,mkv,avi,m4v,flv,ts,3gp,wmv,mpg,mpeg` → 去 `ts` |
+| `unmentionedChangesHtml`（📎 变更文件内嵌分流） | 同款表同款去 `ts`（两侧同步移除，不存在「引用链认 ts、变更链不认」的劈叉） |
+
+- `ts` / `.d.ts` 归 TypeScript（`_TEXT_EXTS` 已含 ts）→ 📄 文本预览抽屉
+- **取舍**：真 MPEG-TS 流文件在 agent workspace 几乎不会产出，万一出现会落文本抽屉——可接受的误伤
+
+**验证（playwright 真页面调渲染函数）**：`lib.decorators.d.ts` → 📄 文本框 ✓；`demo.mp4` → 仍 video 播放器 ✓。Ctrl+F5 生效；已渲染的历史轮次条目不回溯（events 已存的 changed 数据原样渲染），只对后续轮生效。
+
 ## 气泡最小宽度与表格媒体控件最小尺寸（2026-09-18，用户提案）
 
 用户三问（2026-09-18，commit `3d38959`）：① answer 气泡最小宽度取总宽度 50%；② 表格里的音频播放条 / 视频播放器给足最小尺寸，保证播放按钮点得到；③ 复制按钮放入剪贴板的应是**原始 answer markdown**——③ 查证后为**已然实现**（见[复制内容与剪贴板降级](#复制内容与剪贴板降级)），本轮只补一处排除清单；①② 为纯 CSS 改动。

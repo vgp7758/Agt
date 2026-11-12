@@ -46,7 +46,7 @@
 | 维度 | 引擎内部（after_tool 钩子） | 子工作流（对外暴露） |
 |------|------------------------------|----------------------|
 | 用途 | ReAct 循环内工具副作用检测 → changed_files 注入钩子 ∪ **ToolCall.changed 回流（恒开）** | 任意工作流显式调用，按需快照/diff |
-| 排除范围 | 更广：`.git`/`.agent`/`.agt` + gitignore 全模式 + 嵌套 git 仓库整棵剪枝 | 基础：`.git`/`__pycache__` |
+| 排除范围 | 更广：**框架硬排除 `_SNAP_EXCLUDE_DIRS`**（`.git`/`.agent`/`.agt`/`node_modules`/`.venv`/`venv`/`__pycache__`，2026-11-12 扩容，见[下节](#快照排除面升级node_modulesvenv__pycache-框架级硬排除2026-11-12用户实锤commit-e391bd6)） + workspace/.gitignore 全模式 + 嵌套 git 仓库整棵剪枝 | 基础：`.git`/`__pycache__` |
 | 输出 | `changed_files` 数组直传钩子 + **ToolCall.changed（前端折叠判定 + events 持久化）** | `files`(逗号分隔) + `count` + `changed`(结构化) |
 
 ### 快照恒开：副作用双消费（2026-09-02，commit 2bd25be，用户请求）
@@ -57,6 +57,25 @@
 - **消费二（新增）**：`tool_result` 事件带 changed（实时前端判定展开）+ `step` 事件 `changes` 字段序列化持久化（读档/rewind 后历史渲染同构恢复）
 
 前端折叠判定与效果矩阵见 [trace-fold · 工具调用折叠](../features/trace-fold.md#🔧-工具调用折叠同批基建)。
+
+### 快照排除面升级：node_modules/.venv/__pycache__ 框架级硬排除（2026-11-12，用户实锤，commit e391bd6）
+
+**用户实锤**：web 项目 npm install 之后，answer 气泡「📎 本轮变更文件」涌入几万条 `web/node_modules/**`（typescript 的 `lib.decorators.d.ts` 甚至被前端渲染成视频播放器——渲染层那半修复见 [bubble-interaction · ts 移出视频表](../features/bubble-interaction.md)）。根因在**快照排除面**：此前框架硬排除只有 `.git/.agent/.agt`，包管理器产物目录排不排完全取决于用户 `.gitignore` 写没写——`node_modules/` 没配 → npm install 后几万依赖文件 mtime 全变 → 全量走完 changed 链路（`ToolCall.changed` / `step.changes` / 📎 变更文件补充区）。
+
+**修复（src/agent.py `_SNAP_EXCLUDE_DIRS`）**：包管理器/运行时产物目录升为**框架级常识排除**，不依赖每个 repo 配好 .gitignore：
+
+```python
+_SNAP_EXCLUDE_DIRS = frozenset({
+    ".git", ".agent", ".agt",
+    "node_modules", ".venv", "venv", "__pycache__",
+})
+```
+
+- **排除两层语义不变**：① 框架硬排除（上表 frozenset，gitignore 没写也要排）② workspace/.gitignore 全部模式（目录剪枝 + 通配匹配；跳过注释/空行/`!` 否定模式）
+- **嵌套同排**：`web/node_modules/` 任意深度命中（目录剪枝逐层判）
+- **影响消费面三处同源消失**：`changed_files` 钩子注入、`ToolCall.changed`（trace 折叠展开判定 + events 持久化）、📎 本轮变更文件补充区
+- **验证**（临时 workspace 实跑快照）：`node_modules/`、`web/node_modules/`（嵌套）、`.venv/`、`__pycache__/` 全排除，正常文件保留 ✓
+- **生效**：引擎侧改动，`/restart` 生效；已渲染的历史轮次条目**不回溯**（events 存档里已存的 changed 数据原样渲染），修复只对后续轮生效
 
 ## 与 diff_files 工具的分工（2026-08-19 新）
 

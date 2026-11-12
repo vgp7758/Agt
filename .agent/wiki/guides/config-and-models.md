@@ -536,6 +536,22 @@ repo 级覆盖（上节）落地的是「**读侧自动**本地优先」；本�
 
 用途与角色实例组网见 [multi-instance · 配置 repo 级覆盖](../architecture/multi-instance.md)——10d717e（读侧自动优先）+ ad0f385（UI 显式选择）拼成完整闭环：角色实例（游戏组网的导演/编剧/多媒体）可在各自 repo 的 WebUI 里直接管理自己的配置，也能查看/编辑全局兜底份。
 
+## 设置页页签化与保存链路收口：五 tab + 单保存按钮（2026-11，commits f6d48cc + 05ece4f + 0cfa586）
+
+**页签化（f6d48cc）**：WebUI 设置从 ⚙ 弹窗升级为独立页 **`/settings`**，五个 tab：
+
+| tab | 内容 |
+|---|---|
+| 模型管理 | models.json 卡片编辑（模型卡片 / token 轮换 / thinking 三态等，原功能平移） |
+| 运行时 | settings.json 运行时参数 + **调用场景表**（见 [call-scenes](../features/call-scenes.md)） |
+| MCP | mcp.json 连接管理（见 [mcp-config](../features/mcp-config.md)） |
+| 其它 | 其余杂项设置 |
+| RAG 文档库 | RAG 管理页整体并入（原 `/rag` 独立页签，见 [rag · 管理入口迁移](../features/rag.md)） |
+
+**双保存按钮互相覆盖根治（05ece4f）**：运行时 tab 此前有**两个保存按钮**（上方调用场景表一个、下方运行时参数一个）——各自提交、**后保存的覆盖先保存的**。根治：合并为**单按钮「💾 保存运行时（含上方场景表）」**，一次提交两块内容；配套 **settings 读写链路收口**——src/config.py 改动态解析，消 import 时锚定的分裂（`config_file` 锚定语义见上节，动态化后读写不再分叉）；`scenarios` 键支持 scope（随「配置来源切换」读/写对应份，与 models/settings 同语义）。
+
+**RAG 过渡按钮摘除（0cfa586）**：页签化时 fabDock 留的过渡按钮 📚 `btnRag`（指向 `/settings#rag`）被用户发现残留，摘除；rag.html 无引用随删；**`/rag` 老地址保留 302 重定向**防书签断裂——RAG 管理入口收敛为 ⚙ 设置 → RAG 文档库 tab。见 [fab-dock · 后记七](../features/fab-dock.md)。
+
 ## thinking 三态：bool 开关与档位字符串（GLM 始终思考模型，2026-08-31，commit 99f3bca）
 
 **背景（用户提案 2026-08-31，commit 99f3bca）**：GLM 类「始终思考」模型（glm-5.x coding 系）对 `enable_thinking` 参数直接 **400 code 1210**「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」——provider 的 thinking 不该是 true/false 复选框，而是关/开/档位多选。落地为**三态**（models.json 条目 `"thinking"` 键）：

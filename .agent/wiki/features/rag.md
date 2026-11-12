@@ -1,6 +1,6 @@
 # RAG · 本地文档语义检索 + 共享 embedder 单例
 
-> 核心 `src/rag.py`（LocalRAG）；注册外置件 `src/assets/tools_builtin/rag_tools.py`（+随包副本 `src/assets/tools_builtin/`）；配置 `<workspace>/.agent/rag.json`，WebUI `/rag` 管理页。2026-08 commit 71e0b90 重构为**异步预热 + 惰性单例**架构。
+> 核心 `src/rag.py`（LocalRAG）；注册外置件 `src/assets/tools_builtin/rag_tools.py`（+随包副本 `src/assets/tools_builtin/`）；配置 `<workspace>/.agent/rag.json`，WebUI 管理入口=⚙ 设置 → RAG 文档库 tab（2026-11 起并入设置页，`/rag` 保留 302 重定向，见[管理入口迁移](#管理入口迁移rag-独立页签--设置页第五-tab2026-11f6d48cc--0cfa586)）。2026-08 commit 71e0b90 重构为**异步预热 + 惰性单例**架构。
 
 ## 职责
 
@@ -16,7 +16,7 @@
 | `preload_async(workspace)` | **后台预热**：daemon 线程跑 ensure_rag——模型加载（bge-small-zh 实测 22.8s，含 torch import）不阻塞启动。**单飞**（此前多触发点实测同进程 3 条 rag-preload 线程各自跑，2026-10-10 修）+ 默认延迟 15s 启动（`warmup_delay`） |
 | `get_rag()` | 只读取单例（不构建）——session_vec `_build_embedder` 探测共享用 |
 
-关键状态 `_init_attempted`：首次尝试后置 True，配置缺失场景 `rag_query` 不必每次重试加载；配置变更走 `init_rag → ensure_rag(force=True)` 强制重建（`src/chat.py` 的 `init_rag` 保留，专供 `/rag` 页面保存配置后 server.py 调用）。`make_rag_tools` 已删除。
+关键状态 `_init_attempted`：首次尝试后置 True，配置缺失场景 `rag_query` 不必每次重试加载；配置变更走 `init_rag → ensure_rag(force=True)` 强制重建（`src/chat.py` 的 `init_rag` 保留，专供设置页 RAG 文档库 tab 保存配置后 server.py 调用）。`make_rag_tools` 已删除。
 
 ## 预热时序（谁触发、谁等待）
 
@@ -94,6 +94,20 @@ TF 冻结修复（`ac753c0`）随 **v0.34.4** 打包上线（发布提交 `77c55
 - agt_register()：触发 preload_async + 注册 rag_query（group=rag）+ cosine_sim / emb_probe
 
 与首例 [fs_tools.py](glob-files.md)（纯函数整体外置）对照：rag 是「注册外置 + 实现留框架」——数据主权（向量库）在 rag 组可外置，但 embedder 是被多组共享的进程内单例（按判别标准属"纯进程内状态"），复制实现反而破坏共享。chat.py 不再 `_reg(make_rag_tools())`，rag_query 由外置件提供。外置体系全貌（10 文件）见 [工具外置](tool-externalization.md)。
+
+## 管理入口迁移：/rag 独立页签 → 设置页第五 tab（2026-11，f6d48cc + 0cfa586）
+
+**演进**（2026-11，两笔 commit）：
+
+| 阶段 | commit | 内容 |
+|---|---|---|
+| 并入设置页 | `f6d48cc` | 设置页独立页签化（`/settings` 五 tab），RAG 管理页（原 `/rag` 独立页签 rag.html）并入为**第五 tab「RAG 文档库」**；fabDock 留过渡按钮 📚 `btnRag` 指向 `/settings#rag` |
+| 过渡按钮摘除 | `0cfa586` | 用户发现按钮残留（「不是合并到设置页里了吗，图标还在」）→ `btnRag` 整行删除、rag.html 无引用随删；**`/rag` 老地址保留 302 重定向** → `/settings#rag` 防书签断裂 |
+
+**入口收敛后**：RAG 管理只从 ⚙ 设置 → RAG 文档库 tab 进。
+
+- 配置文件与保存链路**不变**：`<workspace>/.agent/rag.json`；tab 保存后 server.py 仍调 `init_rag → ensure_rag(force=True)` 强制重建
+- 设置页页签化与保存链路收口全貌（单保存按钮 / config.py 动态解析 / scenarios scope）见 [config-and-models · 设置页页签化与保存链路收口](../guides/config-and-models.md)；fabDock 侧见 [fab-dock · 后记七](fab-dock.md)
 
 ## 注意事项
 

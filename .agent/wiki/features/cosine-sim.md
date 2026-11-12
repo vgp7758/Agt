@@ -4,7 +4,7 @@
 
 ## 职责
 
-计算两段文本的语义余弦相似度（-1~1，越大越相关）。复用 `/rag` 页面配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后做归一化点积。
+计算两段文本的语义余弦相似度（-1~1，越大越相关）。复用 设置页 RAG 文档库 tab配置的 embedding 模型（SentenceTransformer 或 API）分别向量化后做归一化点积。
 
 **设计动机**：本地小模型（3B 级）直接做相关性打分区分度差（相关 0.1、无关 0.2、全 0.5），不如 embedding 模型向量化后余弦计算——后者实测 0.69 / 0.42 / 0.16，判别力碾压。本地 LLM 只负责提关键词，余弦裁决交给 embedding。
 
@@ -21,7 +21,7 @@ cosine_sim(text1: str, text2: str) -> float
 
 **输出**：`raw`（number）——余弦相似度，-1~1，越大越相关。
 
-**前置条件**：需先在 `/rag` 页面配置 embedding 模型（SentenceTransformer 或 API）。未配置时抛 `RuntimeError("RAG embedding 未配置")`。
+**前置条件**：需先在 设置页 RAG 文档库 tab配置 embedding 模型（SentenceTransformer 或 API）。未配置时抛 `RuntimeError("RAG embedding 未配置")`。
 
 ## 关键实现
 
@@ -66,7 +66,7 @@ cosine_sim(text1={{loop_item}}, text2={{query}})
 ## 与其他模块的关系
 
 - **[wiki_auto_query v4](../features/wiki-auto-query.md#v4-流水线2026-08-21)**：核心消费者——关键词检索后用 cosine_sim 做语义重排 + 阈值裁决
-- **RAG 模块（`src/rag.py`）**：本体所在（2026-08 迁入）——`ensure_rag()` 惰性获取共享单例 embedder，复用 `/rag` 页面的 embedding 配置，无需独立维护模型
+- **RAG 模块（`src/rag.py`）**：本体所在（2026-08 迁入）——`ensure_rag()` 惰性获取共享单例 embedder，复用 设置页 RAG 文档库 tab的 embedding 配置，无需独立维护模型
 - **外置件 `src/assets/tools_builtin/rag_tools.py`**：注册入口——与 rag_query / emb_probe 同件注册（「本体在框架、注册在外置」），`hidden=True` 不投影给主 LLM，仅工作流 plugin 节点按需调用，主 Agent 工具箱零占用
 
 ## 注意事项

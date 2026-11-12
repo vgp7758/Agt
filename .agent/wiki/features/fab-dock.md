@@ -46,9 +46,9 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 | 时期 | 分法 |
 |---|---|
 | 2026-09-07 ~ 2026-10-15 | 手写双列：第一列（贴右缘）= 原右侧独立 fab 4（📐🐞👥🛠），第二列 = 原控件栏 9——起因是单列 13 个纵向超出小视口（~490px 内收） |
-| 2026-10-15 起（现行） | **平铺 + 自动分列**：16 个图标（11 原生 + 5 插件）自动两列 10+6；插件再增 → 自动往左开新列 |
+| 2026-10-15 起（现行） | **平铺 + 自动分列**：16 个图标（11 原生 + 5 插件）自动两列 10+6；插件再增 → 自动往左开新列。（2026-11 `btnRag` 退役后 15 个 = 10 原生 + 5 插件，两列 10+5，见[后记七](#后记七-btnrag-退役rag-入口收敛进设置页2026-11commit-0cfa586)） |
 
-**当前清单**（功能与 id 不变，仅列位自动化；📁open-folder / 💬feedback / VS Code 三个内置已插件化退役见后记，🔴record / 📸screenshot 为后续插件播种新增）：
+**当前清单**（功能与 id 不变，仅列位自动化；📁open-folder / 💬feedback / VS Code 三个内置已插件化退役见后记，🔴record / 📸screenshot 为后续插件播种新增；📚`btnRag` 已退役——RAG 入口收敛进设置页，见[后记七](#后记七-btnrag-退役rag-入口收敛进设置页2026-11commit-0cfa586)）：
 
 | 图标 | id / 来源 | 功能 |
 |---|---|---|
@@ -57,7 +57,6 @@ WebUI 主对话页的**工具收纳层**：输入框上方控件栏只留**对�
 | 👥 | `teamFab` | Agent 团队看板抽屉 |
 | 🛠 | `svcFab` | 后台看板抽屉（服务/定时/后台任务 + 实时日志） |
 | 🧩 | `btnEditor` | 工作流编辑器（新页签 /editor） |
-| 📚 | `btnRag` | RAG 文档库（新页签 /rag） |
 | 🧠 | `btnMemory` | 记忆管理（新页签 /memory） |
 | 🤖 | `btnAgents` | Agent 声明管理（新页签 /agents） |
 | 📊 | `btnStats` | 统计（新页签 /stats） |
@@ -226,6 +225,22 @@ function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }  // 薄�
 | 不在底部 | **不拽**——用户正在看历史时，开抽屉不会强行拉回最新消息 |
 
 纯前端改动，**Ctrl+F5 刷新即生效**（无需 /restart）。属[后记三](#后记三右侧抽屉统一容器-agtdrawer--drawerctl-调度器2026-10-15用户提案commit-b380fd3)统一容器范式内的一处补丁——push 布局由 DrawerCtl 单源管理，吸底逻辑自然也落在 `_syncPush` 一处。
+
+## 后记七：📚 btnRag 退役——RAG 入口收敛进设置页（2026-11，commit 0cfa586）
+
+**背景**：设置页独立页签化（commit `f6d48cc`，`/settings` 五 tab：模型管理 / 运行时 / MCP / 其它 / **RAG 文档库**）时，RAG 管理页（原 `/rag` 独立页签）并入为设置页第五 tab，fabDock 上的 📚 `btnRag` 改指 `/settings#rag` 作为过渡入口。
+
+**用户实锤**：「RAG文档库 不是合并到设置页里了吗，我看到右侧的按钮图标还在」——过渡按钮成了残留。
+
+**摘除（commit `0cfa586`）**：
+
+| 改动 | 说明 |
+|---|---|
+| `btnRag` 整行删除（src/static/index.html） | dock 恒 15 图标（10 原生 + 5 插件），自动分列两列 10+5 |
+| `src/static/rag.html` 随删 | 页签化后已无引用 |
+| `/rag` 老地址**保留 302 重定向** → `/settings#rag` | 防书签/历史链接断裂 |
+
+**入口收敛**：RAG 管理只从 ⚙ 设置 → RAG 文档库 tab 进。RAG 运行机制（rag.json / `init_rag` 强制重建）不受影响，见 [RAG](rag.md)；设置页页签化与保存链路收口全貌见 [config-and-models · 设置页页签化与保存链路收口](../guides/config-and-models.md)。
 
 ## 相关页面
 

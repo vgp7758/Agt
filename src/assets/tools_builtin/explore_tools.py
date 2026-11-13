@@ -273,7 +273,8 @@ def _resolve_explore_model(agent, model: str):
     """explore 模型解析（p_ea32ad4f 场景化）。model 参数双轨：
     场景名（config.load_scenarios 命中，同名冲突场景优先）→ (链首, 场景链)；
     卡片名 → (卡片名, [])（原直配行为，回退链跟随全局 settings）；
-    未指定 → short-req 场景（出厂空链时 resolve_scenario 兼容旧 utility_model 键；
+    未指定 → explore 场景（2026-11-14 用户提案从 short-req 独立成场景；空链时
+    回退 short-req 链保持旧行为——此前配在 short-req 的探索模型继续生效；
     仍空 = 主模型跟随）。返回 (model_name, fallback_chain|None)。"""
     import config as _cfg
     m = (model or "").strip()
@@ -282,7 +283,7 @@ def _resolve_explore_model(agent, model: str):
             chain = _cfg.resolve_scenario(m)
             return (chain[0], chain) if chain else (agent.model_name, None)
         return m, None
-    chain = _cfg.resolve_scenario("short-req")
+    chain = _cfg.resolve_scenario("explore") or _cfg.resolve_scenario("short-req")
     return (chain[0], chain) if chain else (agent.model_name, None)
 
 
@@ -290,7 +291,7 @@ def _new_llm(agent, model: str):
     """每次调用 new 独立 LLMClient（用户提案 2026-10-12：并行 explore 共用单例 client
     → 同 api_key 的并发请求在 provider 侧被限流排队——半串行；独立 client 各自带
     连接池，多 token 池起始位随机分散——并行 explore 各走各的 key，不叠在同一把锁上）。
-    模型解析见 _resolve_explore_model（p_ea32ad4f：默认 short-req 场景，参数支持场景名/卡片名）。
+    模型解析见 _resolve_explore_model（p_ea32ad4f：默认 explore 场景，参数支持场景名/卡片名）。
     返回 (llm, 模型名)；失败返回 (None, 模型名)。"""
     from llm_client import LLMClient
     _m, _chain = _resolve_explore_model(agent, model)
@@ -425,7 +426,7 @@ def _make_explore(agent):
         goal: 探索目标——尽量具体（要找什么、在哪个模块、关注哪些方面）
         max_steps: 最多工具调用轮数（默认 8，上限 20）
         budget_seconds: 墙钟预算秒（默认 120；超限返回已完成部分）
-        model: 探索用模型名（空=short-req 场景链；支持场景名或卡片名双轨）"""
+        model: 探索用模型名（空=explore 场景链；支持场景名或卡片名双轨）"""
         max_steps = max(1, min(int(max_steps or 8), 20))
         budget_seconds = max(10, int(budget_seconds or 120))
         try:
@@ -559,7 +560,7 @@ def agt_register(ctx=None):
             "goal": "探索目标（要找什么代码/信息——尽量具体：模块/关键词/关注点）",
             "max_steps": "最多工具调用轮数（默认 8）",
             "budget_seconds": "墙钟预算秒（默认 120）",
-            "model": "探索用模型名（空=short-req 场景链；支持场景名或卡片名）",
+            "model": "探索用模型名（空=explore 场景链；支持场景名或卡片名）",
         },
     }, {
         "name": "explore_resume", "func": _make_explore_resume(agent),

@@ -364,6 +364,8 @@ _FACTORY_SCENARIOS: dict = {
     "agent-vision": {"desc": "视觉任务（img_proxy 代看 / 视觉 sub-agent）", "chain": []},
     "short-req":    {"desc": "短调用：recap/摘要/命名/RAG/意图/工作流 LLM 默认（兼容旧 utility_model 键）",
                      "chain": []},
+    "explore":      {"desc": "外置探索 explore（react 探索循环；空链=回退 short-req 再跟随主模型，2026-11-14 用户提案独立成场景）",
+                     "chain": []},
     "completer":    {"desc": "reasoning 补全（思考模型只回 reasoning 时据其补正文；兼容旧 utility_model 键）",
                      "chain": []},
 }

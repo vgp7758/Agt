@@ -122,8 +122,13 @@ def _broadcast(ev: dict):
     for c in _clients:
         if aid and c.get("target", "_main_") != aid:
             # answer 特例：同步工具型子 Agent 的回应需要进主视图的
-            # answer 分页——主 Agent 页签（target=_main_）额外放行其它 Agent 的 answer
-            if not (aid != "_main_" and ev.get("type") in ("answer", "wrap_answer")
+            # answer 分页——主 Agent 页签（target=_main_）额外放行其它 Agent 的 answer。
+            # 审批特例（2026-11-13 用户实锤）：子 Agent 后台跑时弹的 approval_request 卡片
+            # 此前只发到该子 Agent 页签——用户停在主视图就永远看不到，600s 超时自动拒。
+            # 放行到主视图，卡片标注来源 agent_id，应答经 resolve_tool_approval 的全局
+            # 路由表（_APPROVAL_ROUTES）解除，任何页签点都有效。
+            if not (aid != "_main_" and ev.get("type") in
+                    ("answer", "wrap_answer", "approval_request", "approval_resolved")
                     and c.get("target", "_main_") == "_main_"):
                 continue   # Agent 专属事件：只发给与该 Agent 交互的客户端
         try:

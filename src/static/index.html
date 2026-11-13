@@ -2851,14 +2851,17 @@ function renderSurveyBubble(questions){
   scrollBottom();
 }
 // ========== 工具审批渲染（workspace 外路径 / run_shell / run_python 阻塞等用户放行） ==========
- function renderApprovalCard(id, tool, detail){
-   if(!curTurn) newTurn();
-   const card = document.createElement('div');
-   card.id = 'approval_'+id;
-   card.style.cssText = 'border:2px solid #d97706;border-radius:10px;padding:12px;background:#fffbeb;margin:8px 0;max-width:100%';
-   const toolLabel = {file_outside:'📁 Workspace 外路径', run_python:'🐍 run_python', run_shell:'💻 run_shell'}[tool]||tool;
-   card.innerHTML =
-     '<div style="font-size:14px;font-weight:600;color:#92400e;margin-bottom:6px">🔐 '+esc(toolLabel)+' 请求审批</div>' +
+  function renderApprovalCard(id, tool, detail, who){
+    if(!curTurn) newTurn();
+    const card = document.createElement('div');
+    card.id = 'approval_'+id;
+    card.style.cssText = 'border:2px solid #d97706;border-radius:10px;padding:12px;background:#fffbeb;margin:8px 0;max-width:100%';
+    const toolLabel = {file_outside:'📁 Workspace 外路径', run_python:'🐍 run_python', run_shell:'💻 run_shell'}[tool]||tool;
+    // 来源标注（2026-11-13）：子 Agent 后台弹的审批卡也进主视图——标题标注是哪个 agent
+    // 请求的，用户不切页签即可放行（应答走全局路由表，任何页签点都有效）
+    const whoTag = (who && who !== '_main_') ? '<span style="font-size:11.5px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:5px;padding:1px 7px;margin-left:6px;font-weight:500">🤖 '+esc(who)+'</span>' : '';
+    card.innerHTML =
+      '<div style="font-size:14px;font-weight:600;color:#92400e;margin-bottom:6px">🔐 '+esc(toolLabel)+' 请求审批'+whoTag+'</div>' +
      '<div style="font-size:12.5px;color:#5b6470;background:#fff;border:1px solid #fde68a;border-radius:6px;padding:8px;margin-bottom:8px;word-break:break-all;max-height:120px;overflow:auto"><code>'+esc(detail)+'</code></div>' +
      '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
      '<button class="btn" style="background:#059669;color:#fff;border:none;padding:6px 18px;border-radius:6px;cursor:pointer;font-size:13.5px" onclick="respondApproval(\''+id+'\',\'allow\')">✅ 同意</button>' +
@@ -3147,14 +3150,17 @@ function clearToolProgress(){
 window.onerror=function(msg,url,line,col,err){console.error(msg,err);try{addRow('err','JS错误: '+(msg+'').slice(0,100));}catch(e){}};
 function onWSMessage(ev){
   let m; try{m=JSON.parse(ev.data);}catch{m={type:'error',text:'解析事件失败'};}
-  // 事件按 agent_id 过滤（双保险——后端已按各客户端 target 分发，这里再挡一层防漏）：
-  // 事件属于其它 Agent 且本端不在与其交互 → 忽略。
-  // 特例放行：本端在主视图（_main_）时放行其它 Agent 的 answer——同步工具型子 Agent
-  // 的回应要进本视图的 answer 分页（见后端 _broadcast 的同款特判）
-  if(m.agent_id && m.agent_id !== (myTarget||'_main_')){
-    const _am = (myTarget||'_main_') === '_main_' && (m.type==='answer'||m.type==='wrap_answer');
-    if(!_am) return;
-  }
+   // 事件按 agent_id 过滤（双保险——后端已按各客户端 target 分发，这里再挡一层防漏）：
+   // 事件属于其它 Agent 且本端不在与其交互 → 忽略。
+   // 特例放行：本端在主视图（_main_）时放行其它 Agent 的 answer——同步工具型子 Agent
+   // 的回应要进本视图的 answer 分页（见后端 _broadcast 的同款特判）。
+   // 审批特例（2026-11-13）：子 Agent 的 approval_request/approval_resolved 同款放行——
+   // 后台子 Agent 弹的审批卡也要出现在主视图（卡片标注来源），不切页签即可放行。
+   if(m.agent_id && m.agent_id !== (myTarget||'_main_')){
+     const _am = (myTarget||'_main_') === '_main_' &&
+       (m.type==='answer'||m.type==='wrap_answer'||m.type==='approval_request'||m.type==='approval_resolved');
+     if(!_am) return;
+   }
   try{
   // 插件事件分发（AgtPlugin SDK）：订阅者先吃（不拦截）；卡片渲染器命中即渲染并终止默认处理
   if(window.AgtPlugin && AgtPlugin._dispatch(m)===false) return;
@@ -3280,7 +3286,7 @@ function onWSMessage(ev){
       renderSpecBubble(m.spec, m.spec_id, m.spec_title, m.spec_design);
       break;
     case 'approval_request':
-       renderApprovalCard(m.id||'', m.tool||'', m.detail||'');
+       renderApprovalCard(m.id||'', m.tool||'', m.detail||'', m.agent_id||'');
        break;
      case 'approval_resolved':
        resolveApprovalCard(m.id||'', m.result||'');

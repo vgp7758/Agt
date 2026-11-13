@@ -156,7 +156,7 @@ details summary { color:var(--muted); cursor:pointer; font-size:12px; margin-top
     <div class="rt-group" title="调用场景策略组（p_ea32ad4f）：所有 LLM 调用点从「选模型」改为「选场景」——sub-agent yml / 工作流 llm 节点 / explore / img_proxy 的 model 字段填场景名；解析 miss→default 兜底；链中的卡片须是模型管理里已配置的模型名，未配置的解析时自动跳过">调用场景（LLM 调用点「选场景」策略组）</div>
     <div id="scenList" style="min-height:160px;border:1px solid var(--line);border-radius:8px;padding:4px 10px;background:#fff"></div>
     <div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap">
-      <button class="btn" onclick="addScenarioRow()">+ 添加场景</button>
+      <button class="btn" onclick="showAddScenario()">+ 添加场景</button>
       <span class="hint">链=卡片名有序序列（chip 顺序即回退顺序，◀▶ 调序）；default 禁删；空链=跟随主模型 · <b>随下方「💾 保存运行时」一并保存</b></span>
     </div>
 
@@ -663,13 +663,57 @@ function chainMove(name, idx, dir){
   const j=idx+dir; if(j<0||j>=v.chain.length) return;
   [v.chain[idx],v.chain[j]]=[v.chain[j],v.chain[idx]]; renderScenarios();
 }
-function addScenarioRow(){
-  let n='new-scenario', i=2;
-  while(_scenData.scenarios[n]) n='new-scenario_'+(i++);
-  _scenData.scenarios[n]={desc:'',chain:[]};
-  renderScenarios();
-  const box=document.getElementById('scenList');
-  if(box) box.scrollTop=box.scrollHeight;
+/* —— 「添加场景」弹框（2026-11-14 用户提案）：内置场景名是代码里的魔法字符串，
+   用户删了场景再想加回来已不记得名字——做成可点击选择（带内置描述）而非文本输入框；
+   同时保留自定义场景名输入（配到工作流/sub-agent 上的自建场景）。—— */
+function showAddScenario(){
+  const scen=_scenData.scenarios||{};
+  const fac=_scenData.factory||{};
+  const builtin=Object.keys(fac).filter(n=>!scen[n]);
+  const ov=document.createElement('div'); ov.className='modal-overlay';
+  ov.innerHTML=`<div class="modal" style="max-width:540px">
+      <h3 style="margin-top:0">＋ 添加场景</h3>
+      <div style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px">
+        选一个内置场景（带内置描述），或填自定义场景名——添加后在场景表里配回退链，保存即生效。</div>
+      <div style="max-height:46vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px">
+        ${builtin.length?builtin.map(n=>`
+          <div class="ms-item as-add" data-name="${esc(n)}" title="点击添加内置场景「${esc(n)}」">
+            <b>${esc(n)}</b>
+            <span class="ms-host" style="flex:1;text-align:left;margin-left:10px">${esc((fac[n]||{}).desc||'')}</span>
+            <span class="ms-plus" title="添加">➕</span>
+          </div>`).join('')
+          :'<div style="color:var(--muted);padding:12px;text-align:center;font-size:12.5px">内置场景已全部添加（default 出厂兜底、无需添加）</div>'}
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <input id="asName" type="text" placeholder="自定义场景名（如 my-review）" autocomplete="off"
+          style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px">
+        <button class="btn" id="asOk">添加自定义</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <span class="hint" style="margin-right:auto;align-self:center">场景名消费点：工作流 llm 节点 / sub-agent yml / explore 的 model 字段</span>
+        <button class="btn" id="asClose">关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov); ov.style.display='flex';
+  const inp=ov.querySelector('#asName');
+  const doAdd=(name,desc)=>{
+    name=(name||'').trim();
+    if(!name){ toast('⚠️ 请选内置场景或填自定义场景名'); return; }
+    if(name==='default'){ toast('⚠️ default 是出厂兜底场景名，无需添加'); return; }
+    if(_scenData.scenarios[name]){ toast('⚠️ 场景已存在：'+name); return; }
+    _scenData.scenarios[name]={desc:desc||'',chain:[]};
+    ov.remove(); renderScenarios();
+    const box=document.getElementById('scenList');
+    if(box) box.scrollTop=box.scrollHeight;
+    toast('✅ 已添加场景「'+name+'」——配好回退链后点「💾 保存运行时」落盘');
+  };
+  ov.querySelectorAll('.ms-item.as-add').forEach(el=>{
+    el.onclick=()=>doAdd(el.dataset.name,(fac[el.dataset.name]||{}).desc||'');
+  });
+  ov.querySelector('#asOk').onclick=()=>doAdd(inp.value,'');
+  inp.onkeydown=e=>{ if(e.key==='Enter') doAdd(inp.value,''); };
+  ov.querySelector('#asClose').onclick=()=>ov.remove();
+  inp.focus();
 }
 function renameScenarioKey(oldName,newName){
   newName=(newName||'').trim();

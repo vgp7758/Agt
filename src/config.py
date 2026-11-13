@@ -375,10 +375,14 @@ _LEGACY_UTILITY_SCENARIOS = ("short-req", "completer")
 _SCENARIO_WARNED: set = set()   # (场景名, 卡片名) 一次性 warning 去重
 
 
-def load_scenarios(scope: str = "auto") -> dict:
+def load_scenarios(scope: str = "auto", seed: bool = True) -> dict:
     """读场景表（settings.json 的 scenarios 键；scope 语义同 save_scenarios，2026-11-11）。
-    出厂播种合并：用户没写的场景用出厂值补齐（default 保证存在）；损坏条目
-    （非 dict / 键空）丢弃。返回 {名称: {"desc": str, "chain": [str, ...]}}。"""
+    seed=True（默认，运行时语义）：出厂场景自动补齐——用户没写的场景用出厂值补进来
+    （default 保证存在；损坏条目丢弃）。
+    seed=False（2026-11-14 用户裁定，设置页用途）：**只返回用户显式配置过的场景**
+    ——用户视角下装完只有 default，其它内置场景需手动添加后才出现（内置场景的名字/
+    描述由 factory_scenarios() 单独供给给「添加场景」弹框，不再预置进表）。
+    返回 {名称: {"desc": str, "chain": [str, ...]}}。"""
     out: dict = {}
     try:
         _p = (config_file_scoped("settings.json", scope) if scope in ("local", "global")
@@ -399,14 +403,26 @@ def load_scenarios(scope: str = "auto") -> dict:
                 if c:
                     chain.append(c)
             out[k] = {"desc": str(v.get("desc", "") or ""), "chain": chain}
-    for k, v in _FACTORY_SCENARIOS.items():   # 出厂兜底（浅拷贝链防共享可变）
-        out.setdefault(k, {"desc": v["desc"], "chain": list(v["chain"])})
+    if seed:
+        for k, v in _FACTORY_SCENARIOS.items():   # 出厂兜底（浅拷贝链防共享可变）
+            out.setdefault(k, {"desc": v["desc"], "chain": list(v["chain"])})
     return out
+
+
+def factory_scenarios() -> dict:
+    """内置（出厂）场景定义——供设置页「添加场景」弹框展示可选内置场景及其描述
+    （2026-11-14 用户提案：内置场景名是代码里的魔法字符串，用户删了场景再想加回来
+    已不记得名字，必须做成可点击选择而非文本输入）。返回 {名称: {desc, chain}}。"""
+    return {k: {"desc": v["desc"], "chain": list(v["chain"])}
+            for k, v in _FACTORY_SCENARIOS.items()}
 
 
 def save_scenarios(scenarios: dict, scope: str = "auto"):
     """写场景表到 settings.json 的 scenarios 键（整键覆盖；desc/chain 归一化）。
     default 出厂必有、不可删——缺失时自动补回出厂定义。
+    **其余出厂场景不自动补回**（2026-11-14 用户裁定）：设置页只展示用户显式配置过的
+    场景，删掉就是删掉（运行时 resolve_scenario 仍按出厂表兜底解析，行为不变）；
+    想加回来走「添加场景」弹框选内置场景。
     scope（2026-11-11）：auto=生效份（config_file 动态解析）；local/global=写指定份
     （与设置页 scope 切换一致——此前恒写生效份，切 scope 保存时与运行时保存写不同文件，
     UI 上表现为两个保存按钮互相覆盖，用户实锤）。"""

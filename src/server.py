@@ -994,9 +994,12 @@ async def api_model_list():
 @app.get("/api/scenarios")
 async def api_scenarios_get(scope: str = "auto"):
     """调用场景策略表（p_ea32ad4f 设置页管理区）：场景表 + 各场景有效链（无效卡片过滤后）+ 卡片名清单。
-    scope（2026-11-11）：auto=生效份 / local/global=指定份（设置页 scope 切换时场景区跟随同链路）。"""
-    scen = config.load_scenarios((scope or "auto").strip() or "auto")
+    scope（2026-11-11）：auto=生效份 / local/global=指定份（设置页 scope 切换时场景区跟随同链路）。
+    scenarios 只含用户显式配置过的场景（load_scenarios seed=False，2026-11-14 用户裁定）；
+    factory 给出内置场景名+描述供「添加场景」弹框选择（魔法字符串→可点选项）。"""
+    scen = config.load_scenarios((scope or "auto").strip() or "auto", seed=False)
     return {"scenarios": scen,
+            "factory": config.factory_scenarios(),
             "valid": {k: config.resolve_scenario(k) for k in scen},
             "models": list(config.MODELS.keys()),
             "default": config.DEFAULT_MODEL}
@@ -1025,7 +1028,7 @@ async def api_scenarios_save(request: Request):
                 cleared = _invalidate_scenario_caches(_agent)
             except Exception:
                 pass
-    return {"ok": True, "scenarios": config.load_scenarios(_scope), "cleared": cleared}
+    return {"ok": True, "scenarios": config.load_scenarios(_scope, seed=False), "cleared": cleared}
 
 
 @app.put("/api/models")

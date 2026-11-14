@@ -1751,7 +1751,9 @@ def make_subagent_tools(agent) -> list:
         _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 enum
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, agent_id: str, tools: str = "", reuse: str = "yes",
+    # 签名带默认值：漏传时走函数内手工校验（友好 [缺参数] 提示）而非 TypeError；
+    # schema 的 required 由构造后补丁补进（签名默认值会让 _build_schema 漏标）
+    def agent_prompt(name: str, prompt: str, agent_id: str = "", tools: str = "", reuse: str = "yes",
                      assembly: str = "", caller: str = "", context_messages: str = "",
                      current_turn_only=None, max_steps: int = 0, images=None) -> str:
         """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回（agent_id 必传，见下）。
@@ -2402,14 +2404,21 @@ def make_subagent_tools(agent) -> list:
     # create_agent 退役（2026-10-06 用户裁定：DSL 字段越来越多，参数面板跟不上——
     # 官方路径=直接 write_file .agent/agents/<name>/<name>.yml（README 有最小模板）；
     # hidden 保留：工具箱可调（plugin/旧会话），不再投影给 LLM
-    tools_list = [Tool(create_agent, hidden=True), Tool(kill_agent),
-                  Tool(agent_prompt, param_descriptions={
-                      "agent_id": "【必传】子 Agent 实例唯一句柄（2026-11-15 用户裁定）：该 id 有活实例则直接派活；无活实例但磁盘有 session 则唤醒（复活历史）后派活；都没有则拉起全新实例（用该 id 命名）。不传返回缺参数提示，不再自动生成 id。同一 id 的 name 必须恒定（人设锁定）；要并行多实例就换新 id。命名建议：短任务「<name>-<用途>」（如 explorer-config）；长线「<name>-<线>」（如 worker-p_xxx、kefu-c123）。"},
-                      param_schemas={
-                       "current_turn_only": {"type": "boolean",
-                                 "description": "投影隔离（三态）：不传=读声明——声明 assembly 含 history 段（如 worker）则完整装配，否则只投影当前轮（防复用 token 膨胀的默认）；显式 true=只投影当前轮 / false=完整装配 history（长对话型实例如按客户分线的客服——传 false 且带固定 agent_id 即每客户一条记忆线）。历史轮始终完整归档可查。"},
-                       "images": {"type": "array", "items": {"type": "string"},
-                                 "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}}),
+    # agent_id 必传：签名带默认值（漏传走函数内友好校验），schema required 由构造后补丁补进
+    _ap_tool = Tool(agent_prompt, param_descriptions={
+        "agent_id": "【必传】子 Agent 实例唯一句柄（2026-11-15 用户裁定）：该 id 有活实例则直接派活；无活实例但磁盘有 session 则唤醒（复活历史）后派活；都没有则拉起全新实例（用该 id 命名）。不传返回缺参数提示，不再自动生成 id。同一 id 的 name 必须恒定（人设锁定）；要并行多实例就换新 id。命名建议：短任务「<name>-<用途>」（如 explorer-config）；长线「<name>-<线>」（如 worker-p_xxx、kefu-c123）。"},
+        param_schemas={
+         "current_turn_only": {"type": "boolean",
+                   "description": "投影隔离（三态）：不传=读声明——声明 assembly 含 history 段（如 worker）则完整装配，否则只投影当前轮（防复用 token 膨胀的默认）；显式 true=只投影当前轮 / false=完整装配 history（长对话型实例如按客户分线的客服——传 false 且带固定 agent_id 即每客户一条记忆线）。历史轮始终完整归档可查。"},
+         "images": {"type": "array", "items": {"type": "string"},
+                   "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}})
+    try:
+        _req = _ap_tool.schema["function"]["parameters"].setdefault("required", [])
+        if "agent_id" not in _req:
+            _req.append("agent_id")
+    except Exception:
+        pass
+    tools_list = [Tool(create_agent, hidden=True), Tool(kill_agent), _ap_tool,
                    Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)

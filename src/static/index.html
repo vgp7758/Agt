@@ -235,6 +235,13 @@
   /* —— LLM 回答里的 markdown 表格 / 代码块渲染（renderAnswer 注入）—— */
   .bubble .md-p { margin:0; white-space:pre-wrap; word-break:break-word; }
   .bubble .md-p code { background:#f0f2f5; padding:0 4px; border-radius:4px; font:12px ui-monospace,Menlo,Consolas,monospace; }
+  /* ATX 标题（2026-11-14 用户提案）：## 文本 → h2（1:1 层级）；色随气泡继承
+     （user 主题色底自动白字）；h1~h4 字号递减，h5/h6 同正文仅加粗 */
+  .bubble h1,.bubble h2,.bubble h3,.bubble h4,.bubble h5,.bubble h6 { color:inherit;
+    margin:10px 0 4px; line-height:1.3; font-weight:700; font-size:1em; }
+  .bubble h1 { font-size:1.28em; } .bubble h2 { font-size:1.2em; }
+  .bubble h3 { font-size:1.12em; } .bubble h4 { font-size:1.06em; }
+  /* 粗体（**文本** → <b>）继承气泡色，无需额外规则 */
   .bubble a.md-link { color:#1a66e0; text-decoration:underline; word-break:break-all; }
    /* code span 可点击追加到输入框（2026-09-04 用户提案）——hover 高亮示意可交互 */
    code.code-append { cursor:copy; transition:background .12s, color .12s; }
@@ -761,6 +768,12 @@ function inlineRich(t){
   t=t.replace(/\*\*((?:https?|ftp):\/\/[^\s*<>"']+)\*\*/g, function(_,u){
     hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link"><strong>'+esc(u)+'</strong></a>');
     return '\x02'+(hold.length-1)+'\x02'; });
+  // ①'' 通用粗体 **文本** → <b>（2026-11-14 用户提案；单行、内文无 * 即成对匹配）。
+  // 内文先 esc 再就地还原此前规则留下的占位符（hold 只在末尾对 t 整体还原，push 的
+  // 内容必须自带成品）——**a `b` c** 的 code 徽章嵌在粗体内也正确成型
+  t=t.replace(/\*\*([^*\n]+?)\*\*/g, function(_,x){
+    var inner = esc(x).replace(/\x02(\d+)\x02/g, function(_,k){ return hold[+k]||''; });
+    hold.push('<b>'+inner+'</b>'); return '\x02'+(hold.length-1)+'\x02'; });
   t=t.replace(/<((?:https?|ftp):\/\/[^<>\s]+)>/g, function(_,u){ hold.push('<a href="'+esc(u)+'" target="_blank" rel="noopener" class="md-link">'+esc(u)+'</a>'); return '\x02'+(hold.length-1)+'\x02'; });   // ② <url> autolink
   t=t.replace(/\[!([^\]]*)\]\(([^)\s]+)\)/g, function(_,title,path){ hold.push(assetBoxHtml(title,path)); return '\x02'+(hold.length-1)+'\x02'; });   // ③ [!title](path) 资源框
   // 标准 markdown 图片 ![alt](path)（用户问诊 2026-09-14：zai_file_parser 图片转 md 的输出格式
@@ -1039,6 +1052,12 @@ function renderAnswer(text){
       }
       out.push(html);
       continue;
+    }
+    if(/^#{1,6}\s+\S/.test(s)){                          // ATX 标题（2026-11-14 用户提案）
+      flush();                                            // ## 文本 → h2~（1:1 级别）；# 数即层级
+      var lv=s.match(/^#+/)[0].length;
+      out.push('<h'+lv+' class="md-h">'+inlineRich(s.replace(/^#+\s+/,''))+'</h'+lv+'>');
+      i++; continue;
     }
     if(/^\s*\|.*\|\s*$/.test(line)){                     // table
       var tbl=[];

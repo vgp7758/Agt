@@ -59,6 +59,20 @@
 
 全貌见 [config-and-models · 设置页页签化与保存链路收口](../guides/config-and-models.md)。
 
+## default 唯一兜底：未配置场景统一回退 default 链（2026-11-14，用户裁定，commits 76593f2 + 6e76d04）
+
+**语义收口（76593f2）**：`resolve_scenario` 改**显式表判命中**——场景表只含用户显式配置过的场景（`load_scenarios(seed=False)`，内置场景不再播种进表）；命中按表取链，**未配置场景（含内置名）统一回退 default 链**，default 成为唯一兜底。此前 explore 等内置场景自带的**硬编码回退链退役**——内置名不再是有私有默认链的特殊场景，未配置 = default。配套：代看候选链过滤非视觉卡片（见 [image-input · 非视觉模型图片代理描述](image-input.md)）。
+
+**API 可见形态（6e76d04，验证轮顺手补）**：`/api/scenarios` 的 `valid` 此前只按显式表生成——未配置场景连条目都没有，「未配置 → default 链」在 API 侧不可见（想验证「explore 显示 default 链」根本看不到）。现 `valid` 覆盖**显式表 ∪ 内置名全集**（内置名来自 `factory_scenarios()`，同时供「+ 添加场景」弹框选择）：未配置的内置场景直接给出它将拿到的链。设置页渲染按名字取 valid、多出的键无影响。
+
+**实测（9000）**：
+
+- 显式配置的 5 个场景 valid 全部正确（agent-work / agent-vision / short-req / completer / default）
+- `explore`（未配置）→ `['glm-official','proxy','deepseek']` = default 链 ✓
+- UI「+ 添加场景」选内置名 → 场景表新增行、描述自动带上（测试行未保存、settings.json 无变更）
+
+**生效**：引擎侧 `/restart`（重启后 `valid.explore == valid.default` 即最终确认）。
+
 ## 验证（playwright 实测 9000）
 
 - 场景列表高度 **160px**、6 个场景行正常渲染（含有效链展示）

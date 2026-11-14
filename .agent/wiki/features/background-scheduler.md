@@ -533,6 +533,31 @@ ag = _state.get("agent") or agent   # ← NameError: name 'agent' is not defined
 
 回执内容不变：仍是 `[后台任务完成·自动通知]` 的 check_bg_task 合成工具记录（工具名/参数正确、尾部输出 4000 字），只换了投递对象。
 
+## 后台任务 hover tooltip：bg_xxxx 行 hover 左侧弹原始 code/command（2026-11-12，用户提案，commit add67b0）
+
+**动机（用户实锤 2026-11-12）**：超时转后台的任务在服务抽屉看板（后台任务区）里只有 `bg_17944xxxxxxxxx` 这种毫秒时间戳 ID——看不出它是什么任务。提案：hover 任务行时左侧弹一块 tooltip，展示该任务的原始代码。
+
+**三层链路**（存档 → 透传 → 展示）：
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 存档 | `src/real_tools.py` | `_run_subprocess_streaming` 新增 `origin` 参数——超时转后台注册 `_bg_tasks[bg_id]` 时随行存**原始工具参数**（截断 4000 字符防膨胀）。取值：run_python 内联代码存 code 原文、file 形态存 `[file=路径]` 标记；run_shell 存 command 原文 |
+| 透传 | `src/server.py` | `/api/dash` 的 `bg_tasks` 条目新增 `origin` 字段（同截 4000） |
+| 展示 | `src/static/index.html` | 渲染时缓存 `_bgOrigin[bg_id] = {origin, tool}`；行 hover → `bgTipShow` 弹 tooltip，移开 `bgTipHide` |
+
+**展示细节**（`bgTipShow` + `#bgTip`）：
+
+- **body 级 fixed 单例**（懒创建 append 到 body）——不受抽屉容器 `overflow` 裁剪（同远程添加弹窗挂 body 的教训，见 [multi-instance · 团队看板手动管理远程实例](../architecture/multi-instance.md)）
+- **默认弹在行左侧**（抽屉在右、左侧空间大），左缘不够 → 翻到右侧兜底；top 夹取屏内
+- 深色代码底（`#0b1220` + 等宽字体 + pre-wrap），最多渲染前 800 字；头部标签 = 工具名 + 「原始参数/命令/代码」 + 任务 ID +（超长时「前 800 字（共 N 字）」）
+- 内容经 `esc()` 转义——代码里塞 `<script>` 不执行（playwright 实测）
+
+**退化行为**：无 origin 存档的任务（本次改动 `/restart` 前已在列表里的旧任务、其它来源）hover 显示「（无原始参数存档——旧任务/其它来源）」——如实退化，不瞎编。重启后**新转后台**的任务才带原始参数。
+
+**生效**：引擎侧（origin 存档）需 `/restart`；前端 Ctrl+F5 即生效。
+
+**验证**（两层全绿）：后端真链路——`set_tool_timeout(3)` + `run_python(sleep 30)` 真转后台，`_bg_tasks` 里 origin 实锤存到 code 原文；前端 playwright 七项（hover 显示 / 头部工具名 / 原始 code 可见 / XSS 转义 / 左侧定位 / 旧任务退化 / 移开隐藏）。
+
 ## 服务看板交互四件套：⭐收藏 / 📄 完整日志 / ⏹Stop / ▶Start（2026-10-06，用户提案，commits 9a039c5 + d22bd34）
 
 服务卡片展开区（日志 pre 下方）按钮排（commit `9a039c5` 三件 + `d22bd34` 补 📄，src/static/index.html + src/server.py）：

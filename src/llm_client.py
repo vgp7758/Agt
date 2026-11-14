@@ -1510,7 +1510,9 @@ def _render_img_json(data: dict, frame_size=None, orig_size=None) -> str:
 def describe_image_with_vision(data_url: str, instruction: str = "",
                                tries: int = 3, timeout: float = 60.0):
     """非视觉模型的图片代理描述（p_ea32ad4f 场景化）：候选卡片优先走 agent-vision 场景链
-    （resolve_scenario 过滤无效卡片；用户可编排视觉卡片顺序）；场景空链（出厂默认）→
+    （resolve_scenario 过滤无效卡片；用户可编排视觉卡片顺序；链中**非视觉卡片自动忽略**
+    ——2026-11-14 default 唯一兜底后未配置 agent-vision 会拿到 default 链，代看必须
+    视觉卡片，链仅作排序偏好）；场景链无可用视觉卡片（含未配置/出厂空链）→
     原兜底：从 config.MODELS 按序取 vision=True 的卡片。最多 tries 个逐个尝试看图，
     首个成功返回 (卡片名, 描述文本)；全失败/无可用卡片返回 None。
     独立临时 LLMClient（fallback_chain=[] 显式空链——失败即抛，不滚全局链不碰调用方冷却；
@@ -1518,11 +1520,11 @@ def describe_image_with_vision(data_url: str, instruction: str = "",
     ① 非视觉模型 read_file 图片 → _materialize_tool_result 委托代看，描述随结果返回；
     ② image_feed 非视觉宿主 → 帧描述文本替代 base64 注入（session._imgfeed_proxy_text）。"""
     chain = config.resolve_scenario("agent-vision")
-    if chain:
-        cands = chain[:max(1, tries)]
-    else:
-        cands = [n for n, p in (config.MODELS or {}).items()
-                 if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
+    vis = [c for c in chain
+           if isinstance((config.MODELS or {}).get(c), dict) and config.MODELS[c].get("vision")]
+    cands = vis[:max(1, tries)] if vis else [
+        n for n, p in (config.MODELS or {}).items()
+        if isinstance(p, dict) and p.get("vision")][:max(1, tries)]
     if not cands:
         return None
     prompt = instruction or IMG_DESC_INSTRUCTION

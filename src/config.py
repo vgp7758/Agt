@@ -358,13 +358,13 @@ def get_retrieval_model() -> str:
 # 内置工具）不再硬编码本地卡片名——分发后用户没有这些卡片时链退化为空 = 跟随主模型。
 # 场景名与卡片名同名冲突：scenarios 优先（resolve_scenario 是消费方判定的唯一入口）。
 _FACTORY_SCENARIOS: dict = {
-    "default":      {"desc": "兜底场景（未识别的场景名回退到此；空链=跟随主模型）；可改不可删",
+    "default":      {"desc": "兜底场景（未识别/未配置的场景名都回退到此；空链=跟随主模型）；可改不可删",
                      "chain": []},
     "agent-work":   {"desc": "sub-agent 干活（react 主调用链）", "chain": []},
-    "agent-vision": {"desc": "视觉任务（img_proxy 代看 / 视觉 sub-agent）", "chain": []},
+    "agent-vision": {"desc": "视觉任务（img_proxy 代看 / 视觉 sub-agent；链中非视觉卡片自动忽略）", "chain": []},
     "short-req":    {"desc": "短调用：recap/摘要/命名/RAG/意图/工作流 LLM 默认（兼容旧 utility_model 键）",
                      "chain": []},
-    "explore":      {"desc": "外置探索 explore（react 探索循环；空链=回退 short-req 再跟随主模型，2026-11-14 用户提案独立成场景）",
+    "explore":      {"desc": "外置探索 explore（react 探索循环；未配置回退 default，2026-11-14 用户提案独立成场景）",
                      "chain": []},
     "completer":    {"desc": "reasoning 补全（思考模型只回 reasoning 时据其补正文；兼容旧 utility_model 键）",
                      "chain": []},
@@ -421,8 +421,8 @@ def save_scenarios(scenarios: dict, scope: str = "auto"):
     """写场景表到 settings.json 的 scenarios 键（整键覆盖；desc/chain 归一化）。
     default 出厂必有、不可删——缺失时自动补回出厂定义。
     **其余出厂场景不自动补回**（2026-11-14 用户裁定）：设置页只展示用户显式配置过的
-    场景，删掉就是删掉（运行时 resolve_scenario 仍按出厂表兜底解析，行为不变）；
-    想加回来走「添加场景」弹框选内置场景。
+    场景，删掉就是删掉（运行时未配置场景统一回退 default 链——resolve_scenario 同日
+    裁定 default 唯一兜底；出厂表只供「添加场景」弹框展示名与描述）。
     scope（2026-11-11）：auto=生效份（config_file 动态解析）；local/global=写指定份
     （与设置页 scope 切换一致——此前恒写生效份，切 scope 保存时与运行时保存写不同文件，
     UI 上表现为两个保存按钮互相覆盖，用户实锤）。"""
@@ -459,21 +459,19 @@ def save_scenarios(scenarios: dict, scope: str = "auto"):
 
 def resolve_scenario(name: str) -> list:
     """场景名 → 有效回退链（单一真源；所有 LLM 调用点消费它）。
-    解析规则：
-      ① name 命中 scenarios → 其 chain；② miss → default 的 chain（兜底播种保证必有）；
+    解析规则（2026-11-14 用户裁定：default 是唯一兜底）：
+      ① name 在显式场景表（settings.json scenarios 键，seed=False）命中 → 其 chain；
+      ② miss（含内置场景名未配置）→ default 的 chain（显式 default；无则出厂空链=跟随主模型）；
       ③ 过滤 MODELS 中不存在的卡片（一次性 warning——分发环境常见，链退化不致命）。
     链可空 = 消费方跟随主模型/当前模型（与 utility_model 时代行为一致）。
-    旧键兼容：short-req / completer 未被用户显式配置（出厂空链）时，回退
-    settings.utility_model 单元素链——老配置继续生效。
-    场景名与卡片名同名冲突：scenarios 优先（本函数就是消费方判定"是不是场景名"的入口）。"""
+    旧键兼容：short-req / completer 未被用户显式配置时，回退 settings.utility_model
+    单元素链（老配置继续生效；只在未配置时触发，优先于 default 兜底）。
+    场景名与卡片名同名冲突：scenarios 优先（本函数就是消费方判定“是不是场景名”的入口）。"""
     key = str(name or "").strip()
-    try:
-        rt_scen = load_runtime_settings().get("scenarios")
-    except Exception:
-        rt_scen = None
-    explicit = isinstance(rt_scen, dict) and key in rt_scen
-    scen = load_scenarios()
-    raw = list((scen.get(key) or scen["default"])["chain"])
+    explicit = load_scenarios(seed=False)   # 显式配置表（=设置页所见，用户视角的场景表）
+    hit = explicit.get(key) or explicit.get("default") \
+        or {"desc": _FACTORY_SCENARIOS["default"]["desc"], "chain": []}
+    raw = list(hit["chain"])
     chain: list = []
     for c in raw:
         if c in MODELS:
@@ -481,7 +479,7 @@ def resolve_scenario(name: str) -> list:
         elif (key, c) not in _SCENARIO_WARNED:
             _SCENARIO_WARNED.add((key, c))
             print(f"⚠️ 场景 {key}：链中的模型卡片 '{c}' 未配置（models.json 无此卡片），已跳过")
-    if not chain and key in _LEGACY_UTILITY_SCENARIOS and not explicit:
+    if not chain and key in _LEGACY_UTILITY_SCENARIOS and key not in explicit:
         um = get_utility_model()
         if um and um in MODELS:
             chain = [um]

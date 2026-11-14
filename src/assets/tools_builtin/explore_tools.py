@@ -273,9 +273,9 @@ def _resolve_explore_model(agent, model: str):
     """explore 模型解析（p_ea32ad4f 场景化）。model 参数双轨：
     场景名（config.load_scenarios 命中，同名冲突场景优先）→ (链首, 场景链)；
     卡片名 → (卡片名, [])（原直配行为，回退链跟随全局 settings）；
-    未指定 → explore 场景（2026-11-14 用户提案从 short-req 独立成场景；空链时
-    回退 short-req 链保持旧行为——此前配在 short-req 的探索模型继续生效；
-    仍空 = 主模型跟随）。返回 (model_name, fallback_chain|None)。"""
+    未指定 → explore 场景（未配置回退 default 链，2026-11-14 用户裁定 default
+    唯一兜底；此前的「空链回退 short-req」硬回退同步退役——与其它场景语义统一：
+    显式空链=跟随主模型）。返回 (model_name, fallback_chain|None)。"""
     import config as _cfg
     m = (model or "").strip()
     if m:
@@ -283,7 +283,7 @@ def _resolve_explore_model(agent, model: str):
             chain = _cfg.resolve_scenario(m)
             return (chain[0], chain) if chain else (agent.model_name, None)
         return m, None
-    chain = _cfg.resolve_scenario("explore") or _cfg.resolve_scenario("short-req")
+    chain = _cfg.resolve_scenario("explore")
     return (chain[0], chain) if chain else (agent.model_name, None)
 
 

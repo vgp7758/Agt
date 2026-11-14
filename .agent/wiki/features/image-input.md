@@ -256,6 +256,10 @@ PIL 读失败省略尺寸段不炸（退化 `[视觉模型 it-vision3 代看] <�
 
 **关联**：[describe_image_with_vision · 后记二](llm-network-resilience.md)（调用协议两段式）· [image_feed · 后记五](image-feed.md)（帧路径同批升级）
 
+### 配套：代看候选链过滤非视觉卡片（2026-11-14，随调用场景 default 唯一兜底，commit 76593f2）
+
+非视觉代看（`describe_image_with_vision`）的候选链构建随[调用场景 · default 唯一兜底](call-scenes.md)解析收口改为**过滤非视觉卡片**——候选只留视觉卡片，非视觉卡片不再混进代看链。与 default 唯一兜底（commits 76593f2 + 6e76d04）同批上线。
+
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 
 **单张图的 token 与字符量（2026-10-23，8000/comfy t1022 反推实测）**：投影 dump 里一张 base64 图 **1.8~2.5 MB 字符**；从缓存 miss 量反推约 **3.2K tokens/张**（12 张 ≈ 38K tokens，与实测每步 miss 吻合）。43 张图吃掉投影 **99.2% 的字符量**——**图片是投影体积与成本的主项**，不是正文。

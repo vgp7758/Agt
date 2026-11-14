@@ -1751,12 +1751,20 @@ def make_subagent_tools(agent) -> list:
         _inject_agent_enums(agent, tools_list)   # 声明变化：刷新 enum
         return f"✅ 已删除子 Agent '{name}'"
 
-    def agent_prompt(name: str, prompt: str, tools: str = "", agent_id: str = "", reuse: str = "yes",
+    def agent_prompt(name: str, prompt: str, agent_id: str, tools: str = "", reuse: str = "yes",
                      assembly: str = "", caller: str = "", context_messages: str = "",
                      current_turn_only=None, max_steps: int = 0, images=None) -> str:
-        """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回。
+        """向子 Agent <name> 派任务（全异步）：后台自主跑，立即返回（agent_id 必传，见下）。
         完成后结果自动入队到调用者（你）的 inbox——你下一步边界就能看到（跟用户插话效果一样）。
-        多次派同名：默认 reuse=yes 复用同名活实例（见下）；reuse=no 才每次新建独立实例。
+        agent_id: 【必传】（2026-11-15 用户裁定）子 Agent 实例的唯一句柄：
+                ① 该 id 有活实例 → 直接派活（复用其会话线）；
+                ② 无活实例但磁盘有该 id 的 session → 唤醒（复活完整历史）后派活；
+                ③ 都没有 → 拉起全新实例（用该 id 命名，session 归档到 agents/<id>/）。
+                不传直接返回缺参数提示（不再自动生成 id——隐式新建是实例失控的根源）。
+                同一 id 的 name 必须恒定（人设锁定，异名拒派）；要并行多实例就换新 id。
+                命名建议：短任务「<name>-<用途>」（如 explorer-config）；长线用「<name>」或
+                「<name>-<线>」（如 worker-<plan_id> 施工线、kefu-<cid> 客户线）。
+                （reuse 参数已退役——语义并入 agent_id 三段式，传入被忽略，兼容旧调用点。）
         current_turn_only: 投影隔离（三态，2026-11-07 落实 2026-10-15 用户裁定"声明了 history
                 段就要完整装配"）：不传=读声明——声明 assembly 含 history 段（如 worker）则
                 完整装配（False），否则只投影当前轮（True，防复用 token 膨胀的默认）；
@@ -1766,42 +1774,38 @@ def make_subagent_tools(agent) -> list:
                  repo 图片目录后以 <img> 标签追加到 prompt 尾部；子 Agent 是视觉模型时直接看像素，
                  非视觉模型降级文字占位（与 <img> 机制同源，免手写标签 + 路径自适应）（用户提案 2026-10-14）。
         长任务（多文件重构/大范围测试）建议显式给大（如 150）——50 步强制收尾对它们不够。
-                长对话型实例（如按客户分线的客服）传 False：完整装配 history——该实例自己的
-                会话历史就是它的记忆（跨轮连续），配合显式 agent_id 定向复用即"每客户一条线"。
+                 长对话型实例（如按客户分线的客服）传 False：完整装配 history——该实例自己的
+                 会话历史就是它的记忆（跨轮连续），配合固定 agent_id 定向复用即"每客户一条线"。
         context_messages: 【一次性前置上下文】JSON 数组 [{"role","content"},...]——投影时展开在
-                本轮 user_message 之前（结构化角色消息：还原的历史对话/工作记录），轮结束即焚
-                （不落 turns、复用实例下一轮不带）——适合"把一批历史记录交给子 Agent 消费"的场景
-                （如 wiki 维护：主 Agent 近几轮的事件序列还原成 messages 传入，避免它 read_file 重探索）。
+                 本轮 user_message 之前（结构化角色消息：还原的历史对话/工作记录），轮结束即焚
+                 （不落 turns、复用实例下一轮不带）——适合"把一批历史记录交给子 Agent 消费"的场景
+                 （如 wiki 维护：主 Agent 近几轮的事件序列还原成 messages 传入，避免它 read_file 重探索）。
         caller: 汇报对象（answer 完成后路由给谁）。留空=自动捕获调用者（你）；
-                'user'/'system'=不路由给任何 Agent（fire-and-forget——工作流节点里派活配合
-                wait_subagents 取结果的场景用它，避免每次完成都唤醒主 Agent 烧一轮 token）；
-                也可显式传某个 agent_id（跨 Agent 委托）。
+                 'user'/'system'=不路由给任何 Agent（fire-and-forget——工作流节点里派活配合
+                 wait_subagents 取结果的场景用它，避免每次完成都唤醒主 Agent 烧一轮 token）；
+                 也可显式传某个 agent_id（跨 Agent 委托）。
         tools: 临时指定本次子 Agent 可用的工具（留空=用 .md 里配置的；all/*=继承主 Agent 全部除
-               管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。复用模式下忽略（实例工具已定）。
-        agent_id: 本次子 agent 的唯一标识（留空=自动 name / name_2…）。复用模式下忽略（沿用原 id）。
-        reuse: 复用模式（枚举 yes/no，默认 yes=复用——不传即复用）：yes=registry 中有同名且空闲
-                (done/failed)的活实例则直接派新任务给它（不新建实例；无活实例则复活同名历史实例，
-                都没有才新建）；no=强制新建独立实例。复用实例的上下文投影【只含当前轮】
-                （历史轮完整归档可 agent_query_events 查但不投影）——每次任务上下文干净、token 不随
-                复用次数增长。同名实例全在跑时返回提示（wait_subagents 等它完成，或 reuse=no 并行开新实例）。
+                管理工具；逗号分隔=只注册这些，如 'read_file,edit,write_file'）。复用/唤醒实例时忽略（实例工具已定）。
          assembly: 上下文装配覆盖（本次调用生效，不改 .md）：逗号分隔 '段=on/off'、
-                'history=window|tiered|full' 或 'steps=reasoning'（steps 后的尾段以思考链姿势注入——
-                末条 assistant 的 reasoning_content 前缀"当前状态：…"；默认 reminder=<system-reminder>
-                包裹并入末条 content）。可关段 rules/history/ltm/hooks/tail。
-               动作项（file/dir/cmd/workflow/text）不能在参数里新增，只走 .md 声明。
-               .md 的 assembly 声明是基线，参数在其上覆盖。
-               ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
-        如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
-        # reuse 字符串枚举解析（用户提案 2026-09-06：默认复用少建实例）。
-        # 宽松兼容 true/false/1/0/bool（工作流 plugin 节点旧传参 type=boolean 直传 Python bool）
-        _rv = str(reuse).strip().lower()
-        if _rv in ("yes", "true", "1", "y", ""):
-            reuse = True
-        elif _rv in ("no", "false", "0", "n"):
-            reuse = False
-        else:
-            return (f"[参数错误] reuse 只接受 yes/no（收到 '{reuse}'）。"
-                    f"yes=复用同名活实例（默认，不传即是），no=新建独立实例。")
+                 'history=window|tiered|full' 或 'steps=reasoning'（steps 后的尾段以思考链姿势注入——
+                 末条 assistant 的 reasoning_content 前缀"当前状态：…"；默认 reminder=<system-reminder>
+                 包裹并入末条 content）。可关段 rules/history/ltm/hooks/tail。
+                动作项（file/dir/cmd/workflow/text）不能在参数里新增，只走 .md 声明。
+                .md 的 assembly 声明是基线，参数在其上覆盖。
+                ⚠️ 子 Agent 未在 .md 声明 assembly 时默认不装 hooks（免每轮重跑 before_turn 检索）。
+         如果需要结果才能继续，可调 wait_subagents(agent_ids) 显式阻塞等待。"""
+        # agent_id 必传（2026-11-15 用户裁定）：不传不自动创建，直接缺参数提示——
+        # 隐式自动生成 id 是实例失控的根源（多次派同名→实例越建越多）。
+        _aid_in = (agent_id or "").strip()
+        if not _aid_in:
+            return ("[缺参数] agent_id 必传（2026-11-15 用户裁定）：它是子 Agent 实例的唯一句柄——"
+                    "该 id 有活实例则直接派活；无活实例但磁盘有 session 则唤醒（复活历史）后派活；"
+                    "都没有则拉起全新实例（用该 id 命名）。不再自动生成 id。"
+                    "命名建议：短任务「<name>-<用途>」（如 explorer-config）；"
+                    "长线「<name>」或「<name>-<线>」（如 worker-<plan_id>、kefu-<cid>）。")
+        agent_id = _aid_in
+        # reuse 已退役（2026-11-15）：语义并入 agent_id 三段式（活实例直派/磁盘唤醒/拉新）；
+        # 参数保留仅为兼容旧调用点与工作流传参，值被忽略。
         # current_turn_only 宽松解析 + 声明级默认（2026-11-07 落实 2026-10-15 用户裁定：
         # "施工 worker 声明了 history 段就要完整装配"——当时只修了字符串误裁坑，没做声明级
         # 默认，主 Agent 手动派 worker 不传该参数时仍被默认 True 裁掉 history）：
@@ -2132,7 +2136,7 @@ def make_subagent_tools(agent) -> list:
                                 f"请按 doctor.md 工作循环处理：req_inspect(agent_id='{_aid}') 体检 → "
                                 f"req_probe 试修 → req_patch 落盘 → req_resume(agent_id='{_aid}') 恢复，"
                                 f"完成后向派发者汇报坏在哪/怎么修的/根因建议。")
-                            _doc_r = agent_prompt("doctor", _doc_prompt)
+                            _doc_r = agent_prompt("doctor", _doc_prompt, agent_id="doctor")
                             _LOG.warning("子 Agent %s 回退链耗尽 → 已自动派 doctor 诊断: %s",
                                          _aid, str(_doc_r)[:120])
                         except Exception as doc_err:
@@ -2157,8 +2161,10 @@ def make_subagent_tools(agent) -> list:
             return (f"{tag}子 Agent '{_name}' [agent_id={_aid}]（异步，不阻塞）。"
                     f"完成后结果自动入队通知你。需要立即要结果可 wait_subagents(agent_ids=\"{_aid}\")。")
 
-        # —— reuse 复用模式：registry 中找同名实例直接派任务（不新建） ——
-        if reuse and reg:
+        # —— 按 agent_id 定位实例（2026-11-15 用户裁定：唯一句柄三段式）——
+        # ① 活实例直接派活（复用其会话线）；② 磁盘有 session → 唤醒后派活；③ 都无 → 落到新建。
+        # reuse 已退役：不再有「跳过复用强制新建」分支——要新实例就换新 agent_id。
+        if reg:
             entry = None
             # 原子复用临界区（用户实锤 2026-09-22·8100 并行 agent_prompt 竞态）：查空闲→选实例→
             # 占位→标 running 必须同一临界区。此前分步加锁，单步并行工具（ThreadPoolExecutor）
@@ -2167,31 +2173,22 @@ def make_subagent_tools(agent) -> list:
             # 锁内调 update_status 重入安全。
             with reg._lock:
                 same = [e for e in reg._agents.values()
-                        if e.name == name and e.role == "subagent"]
-                # 定向复用（用户提案 2026-09-24·淘宝客服按客户分线）：显式 agent_id = 定向到该实例——
-                # 匹配集从「同 name 全体」收窄为「该 agent_id」，杜绝同 name 多实例（多条客户线）时
-                # 按「最近注册的空闲」复用到别的线（任务书串台）。agent_id 不在 registry 时 same 为空
-                # → 落到新建路径（_resolve_agent_id 用显式 id → 每客户一条实例线，重启后按同 id 复活）。
-                if (agent_id or "").strip():
-                    _want = agent_id.strip()
-                    same = [e for e in reg._agents.values()
-                            if e.agent_id == _want and e.role == "subagent"]
-                    # 人设锁定（50052 淘宝店演练实锤 2026-09-24）：同一 agent_id 二次派单若换了 name
-                    # （人设），会往同一条会话线里塞进另一个人设的历史（人设串台污染）。一经创建即锁定，
-                    # 异名派单直接拒绍——SOP 之外的兜底（kefu_<cid> 必须始终用 name="kefu"）。
-                    if same and same[0].name != name:
-                        return (f"[拒绍] agent_id='{_want}' 已绑定人设 '{same[0].name}'，本次传入"
-                                f" name='{name}' 不一致——同一实例线的 name 必须恒定（防人设串台）。"
-                                f"请改用 name='{same[0].name}'，或换一个 agent_id。")
+                        if e.agent_id == agent_id and e.role == "subagent"]
+                # 人设锁定（50052 淘宝店演练实锤 2026-09-24）：同一 agent_id 二次派单若换了 name
+                # （人设），会往同一条会话线里塞进另一个人设的历史（人设串台污染）。一经创建即锁定，
+                # 异名派单直接拒派——SOP 之外的兜底（kefu_<cid> 必须始终用 name="kefu"）。
+                if same and same[0].name != name:
+                    return (f"[拒派] agent_id='{agent_id}' 已绑定人设 '{same[0].name}'，本次传入"
+                            f" name='{name}' 不一致——同一实例线的 name 必须恒定（防人设串台）。"
+                            f"请改用 name='{same[0].name}'，或换一个 agent_id。")
                 live = [e for e in same if e.agent is not None and e.status != "reviving"]
                 hist = [e for e in same if e.status != "reviving" and e.agent is None]
-                # —— 磁盘兜底复活（2026-11-07 用户实锤·20048 worker 手动派不带历史）：重启后
-                # registry 清空（_agent_meta 不覆盖施工工作流派的实例），同名派活 same 全空 →
-                # 直接新建空 session——磁盘上明明有该 name 的实例目录（agents/worker、
-                # worker-p_xxx…带完整 session 历史）却接不上。全空时扫盘补 hist entry：目录名
-                # 匹配（定向=agent_id 精确；非定向=name 或 name-*/name_* 前缀——_resolve_agent_id
-                # 三形态），取 mtime 最新且 meta.json 在的 → 走下方 _revive_subagent（Session.load
-                # 恢复完整历史 + current_turn_only 三态投影）。复活失败自然落回新建（现状安全）。
+                # —— 磁盘唤醒（2026-11-07 用户实锤·20048 worker 手动派不带历史；2026-11-15 收窄
+                # 为 agent_id 精确匹配——id 必传后不再有 name/name-*/name_* 前缀扫描）：重启后
+                # registry 清空，agents/<agent_id>/ 目录明明带完整 session 历史却接不上。
+                # 全空时扫盘补 hist entry：目录名 == agent_id 精确且 meta.json 在的 →
+                # 走下方 _revive_subagent（Session.load 恢复完整历史 + current_turn_only 三态
+                # 投影）。复活失败自然落回拉新（现状安全）。
                 if not live and not hist:
                     try:
                         from pathlib import Path as _P
@@ -2203,10 +2200,7 @@ def make_subagent_tools(agent) -> list:
                                 for _dd in _agdir.iterdir():
                                     if not _dd.is_dir() or not (_dd / "meta.json").exists():
                                         continue
-                                    _dn = _dd.name
-                                    _hit = (_dn == agent_id.strip()) if (agent_id or "").strip() else (
-                                        _dn == name or _dn.startswith(name + "-") or _dn.startswith(name + "_"))
-                                    if _hit:
+                                    if _dd.name == agent_id:
                                         _cands.append(_dd)
                                 if _cands and not any(e.agent_id == _cands[0].name
                                                        for e in reg._agents.values()):
@@ -2217,23 +2211,22 @@ def make_subagent_tools(agent) -> list:
                                                  caller_id=caller_id)
                                     hist = [e for e in reg._agents.values()
                                             if e.agent_id == _aid and e.role == "subagent"]
-                                    _LOG.info("磁盘兜底复活：%s 命中 %s（%d 个候选目录，取 mtime 最新）",
+                                    _LOG.info("磁盘唤醒：%s 命中 %s（%d 个候选目录，取 mtime 最新）",
                                               name, _aid, len(_cands))
                     except Exception as _e:
-                        _LOG.warning("磁盘兜底复活扫描失败（落回新建）: %s", _e)
+                        _LOG.warning("磁盘唤醒扫描失败（落回拉新）: %s", _e)
                 if live:
                     idle = [e for e in live if e.status != "running"]
                     if not idle:
-                        busy = ", ".join(e.agent_id for e in live)
-                        return (f"[忙] '{name}' 的实例都在跑（{busy}）。"
-                                f"先 wait_subagents 等它完成，或传 reuse=no 新建独立实例。")
+                        return (f"[忙] agent_id='{agent_id}' 的实例正在跑。"
+                                f"先 wait_subagents 等它完成；要并行就换一个新 agent_id 开新实例线。")
                     entry = max(idle, key=lambda e: e.registered_at)
                     entry.task = prompt
                     entry.caller_id = caller_id
                     reg.update_status(entry.agent_id, "running")   # 占位即标（锁内）
                 elif hist:
-                    # 复活占位（同款竞态防护）：锁内先标 reviving，并行第二个同名调用看不到它 →
-                    # 落到新建路径，不会双复活（revive 成功后 status 转正常态）
+                    # 唤醒占位（同款竞态防护）：锁内先标 reviving，并行第二个同 id 调用看不到它 →
+                    # 落到拉新路径，不会双复活（revive 成功后 status 转正常态）
                     _hist_entry = max(hist, key=lambda e: e.registered_at)
                     reg.update_status(_hist_entry.agent_id, "reviving")
             if entry is not None:
@@ -2269,7 +2262,7 @@ def make_subagent_tools(agent) -> list:
                                  caller_id=caller_id)
                     return _launch(sub_agent, entry.agent_id, name, model_name,
                                    sub_dir, prompt, _reused=True) + asm_note
-            # 无同名实例（活/历史都没有或复活失败）→ 落到新建路径（current_turn_only=reuse）
+            # 该 agent_id 无活实例/无磁盘 session（或唤醒失败）→ 落到拉新路径
 
         # —— 新建路径：读声明文件（.yml v2 / .md 旧格式）建临时实例 ——
         p = _agent_def_path(name)
@@ -2311,7 +2304,7 @@ def make_subagent_tools(agent) -> list:
             sub = SubAgent(name, model_name, system, toolbox,
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
-                           caller_id=caller_id, current_turn_only=(reuse and bool(current_turn_only)),
+                           caller_id=caller_id, current_turn_only=bool(current_turn_only),
                            max_steps=int(max_steps or meta.get("max_steps") or 50),
                            assembly=(base_asm or None))
             if base_hooks is not None:
@@ -2410,14 +2403,14 @@ def make_subagent_tools(agent) -> list:
     # 官方路径=直接 write_file .agent/agents/<name>/<name>.yml（README 有最小模板）；
     # hidden 保留：工具箱可调（plugin/旧会话），不再投影给 LLM
     tools_list = [Tool(create_agent, hidden=True), Tool(kill_agent),
-                  Tool(agent_prompt, param_schemas={
-                      "reuse": {"type": "string", "enum": ["yes", "no"],
-                                "description": "复用同名活实例：yes=复用（默认，不传即是）；no=强制新建独立实例"},
+                  Tool(agent_prompt, param_descriptions={
+                      "agent_id": "【必传】子 Agent 实例唯一句柄（2026-11-15 用户裁定）：该 id 有活实例则直接派活；无活实例但磁盘有 session 则唤醒（复活历史）后派活；都没有则拉起全新实例（用该 id 命名）。不传返回缺参数提示，不再自动生成 id。同一 id 的 name 必须恒定（人设锁定）；要并行多实例就换新 id。命名建议：短任务「<name>-<用途>」（如 explorer-config）；长线「<name>-<线>」（如 worker-p_xxx、kefu-c123）。"},
+                      param_schemas={
                        "current_turn_only": {"type": "boolean",
                                  "description": "投影隔离（三态）：不传=读声明——声明 assembly 含 history 段（如 worker）则完整装配，否则只投影当前轮（防复用 token 膨胀的默认）；显式 true=只投影当前轮 / false=完整装配 history（长对话型实例如按客户分线的客服——传 false 且带固定 agent_id 即每客户一条记忆线）。历史轮始终完整归档可查。"},
-                      "images": {"type": "array", "items": {"type": "string"},
-                                "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}}),
-                  Tool(list_agents), Tool(wait_subagents)]
+                       "images": {"type": "array", "items": {"type": "string"},
+                                 "description": "附图路径（workspace 相对或绝对）——框架复制进 repo 图片目录后以 <img> 标签追加到 prompt；子 Agent 为视觉模型（如 qwen）时直接看像素，非视觉模型降级文字占位，无需手写 <img> 标签"}}),
+                   Tool(list_agents), Tool(wait_subagents)]
     if reg:
         tools_list += make_communication_tools(agent)
         # （2026-11-01 移除 reg.add_on_change 重注入回调：target_id 的运行态 enum 已退役——

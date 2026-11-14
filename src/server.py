@@ -3512,6 +3512,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             # （复用同名活实例时装配完整 history——"@coder 接着上次那件事"的自然预期）；
             # 新建实例无历史，此参数无害。主 Agent 派活仍默认关（自己按需显式传）。
             _rv = agent.tools.call("agent_prompt", {"name": _name, "prompt": _prompt,
+                                                    "agent_id": _name,   # 必传（2026-11-15）：@name 同名单实例线
                                                     "caller": "user", "assembly": "history=on"})
             await _send(ws, {"type": "system", "text": f"📨 {str(_rv)[:400]}"})
         except Exception as e:

@@ -147,6 +147,7 @@ def probe_stuck_agent(agent, entry, silent: float, stuck_secs: float) -> str:
     dispatch = ""
     try:
         r = agent.tools.call("agent_prompt", {"name": "doctor", "prompt": prompt_text,
+                                              "agent_id": "doctor",   # 必传（2026-11-15）：doctor 单实例线
                                               "caller": "user"})
         dispatch = r if isinstance(r, str) else str(r)
     except Exception as e:

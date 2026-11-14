@@ -996,11 +996,16 @@ async def api_scenarios_get(scope: str = "auto"):
     """调用场景策略表（p_ea32ad4f 设置页管理区）：场景表 + 各场景有效链（无效卡片过滤后）+ 卡片名清单。
     scope（2026-11-11）：auto=生效份 / local/global=指定份（设置页 scope 切换时场景区跟随同链路）。
     scenarios 只含用户显式配置过的场景（load_scenarios seed=False，2026-11-14 用户裁定）；
-    factory 给出内置场景名+描述供「添加场景」弹框选择（魔法字符串→可点选项）。"""
+    factory 给出内置场景名+描述供「添加场景」弹框选择（魔法字符串→可点选项）。
+    valid 覆盖显式表 ∪ 内置名全集（2026-11-14）：未配置的内置场景也给出其将拿到的链
+    （default 唯一兜底语义的 API 侧可见形态——未配置名=default 链，设置页按名字取、多出的键无影响）。"""
     scen = config.load_scenarios((scope or "auto").strip() or "auto", seed=False)
+    fac = config.factory_scenarios()
+    valid = {k: config.resolve_scenario(k) for k in scen}
+    valid.update({k: config.resolve_scenario(k) for k in fac if k not in scen})
     return {"scenarios": scen,
-            "factory": config.factory_scenarios(),
-            "valid": {k: config.resolve_scenario(k) for k in scen},
+            "factory": fac,
+            "valid": valid,
             "models": list(config.MODELS.keys()),
             "default": config.DEFAULT_MODEL}
 

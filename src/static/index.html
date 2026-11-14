@@ -323,6 +323,11 @@
   .bubble code { background:#f0f2f5; padding:1px 5px; border-radius:4px;
     font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.92em; }
   .row.me .bubble code { background:rgba(255,255,255,.22); }
+  /* 用户气泡复用 answer 渲染管线后的可读性适配（2026-11-14 用户提案）：markdown 元素
+     原为白底气泡设计，主题色底上表头浅灰底+白字不可读、蓝色链接撞底色——局部覆盖 */
+  .row.me .bubble thead th { background:rgba(255,255,255,.18); }
+  .row.me .bubble a.md-link { color:#fff; background:rgba(255,255,255,.14);
+    border-radius:4px; padding:0 3px; }
   /* 用户消息前的时间分隔行（居中灰字） */
   .time-divider { text-align:center; color:var(--muted); font-size:11px; margin:2px 0; user-select:none; }
   /* 中断轮的继续按钮区 */
@@ -1389,7 +1394,9 @@ function renderHistTurn(t, box, isLast){
       nrow.appendChild(nb); nrow.dataset.turn = t.turn; box.appendChild(nrow);
     } else {
       const urow=document.createElement('div'); urow.className='row me';
-      const ub=document.createElement('div'); ub.className='bubble'; ub.textContent=t.user;
+      const ub=document.createElement('div'); ub.className='bubble';
+      // 历史用户气泡复用 answer 渲染管线（2026-11-14 用户提案；__md_text 保复制原文）
+      ub.innerHTML=renderAnswer(t.user); ub.__md_text=t.user;
       urow.appendChild(ub);
       urow.dataset.turn = t.turn;   // ⭐ 收藏：user 与 bot 成对标轮号（收藏视角成对显隐）
       attachCopyBtn(urow, ub);   // 历史用户气泡同款复制按钮
@@ -1520,7 +1527,9 @@ function sendInsertMessage(text, imgs){
 function addUserBubble(text, imgs){
   const row=document.createElement('div'); row.className='row me';
   const b=document.createElement('div'); b.className='bubble';
-  if(text){ const t=document.createElement('div'); t.textContent=text; b.appendChild(t); }
+  // 文本渲染复用 answer 管线（2026-11-14 用户提案：markdown/表格/代码块成型，
+  // 仅气泡与文字配色不同——.row.me 自带主题色底白字；__md_text 保复制得原文）
+  if(text){ const t=document.createElement('div'); t.innerHTML=renderAnswer(text); b.appendChild(t); b.__md_text=text; }
   if(imgs && imgs.length){
     const gal=document.createElement('div'); gal.className='gal';
     imgs.forEach(s=>{ const im=document.createElement('img'); im.src=s; gal.appendChild(im); });

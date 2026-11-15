@@ -85,7 +85,13 @@ def _handle_llm(node: dict, ctx) -> dict:
             "LLM 节点 model 配置为空——回退 ctx.llm（%s）。检查 canvas llmParam 的 model 项是否丢失",
             getattr(ctx.llm, "model_name", None))
     llm = get_llm(ctx, _mv)
-    if _mv and getattr(llm, "model_name", "") != _mv:
+    if _mv and getattr(llm, "_scenario_of", "") == _mv:
+        # 场景解析正常路径（2026-11-15 用户误读治理）：场景名 → 场景 client（model_name=链首）。
+        # 此前这里落入「回退」warning——场景解析被误报成 fallback，用户以为节点不识别场景名
+        import logging as _lg
+        _lg.getLogger("agt.workflow").info(
+            "LLM 节点场景 %r → 链首 %r（场景链=该 client 回退链）", _mv, getattr(llm, "model_name", "?"))
+    elif _mv and getattr(llm, "model_name", "") != _mv:
         # fallback 现场观测（2026-08-31·local-qwen 悬案最后一击）：请求 X 却拿到 Y——
         # 带执行时的 llmParam 原文。原文=X（与 canvas 快照同）但 cfg 出 Y → cfg 构造有鬼；
         # 原文=Y（与快照不同）→ canvas 在执行链中被换（run_hook/execute 深挖）

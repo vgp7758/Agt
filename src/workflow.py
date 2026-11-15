@@ -391,6 +391,7 @@ def _get_llm(ctx, model_name: str = ""):
             if not chain:
                 return ctx.llm   # 空场景链=跟随上下文模型（工作流默认姿势）
             _c = LLMClient(model_name=chain[0], fallback_chain=list(chain), max_retries=2)
+            _c._scenario_of = model_name   # 场景标记：llm 节点区分「场景解析→链首」与「未知名回退」
             # 复制主 client 的调用记录器（llm_calls 写入）：_record_call 对 recorder=None
             # 静默跳过——独立 client 不挂 recorder 则其调用不进 llm_calls（2026-08-31
             # 17:42 实测：local-lfm 真实执行成功、日志面板有记录，但 llm_calls 零写入

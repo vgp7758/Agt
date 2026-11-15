@@ -117,6 +117,20 @@ def get_bg_owner():
     return getattr(_tls, "bg_owner", None)
 
 
+def _effective_timeout() -> int:
+    """当前调用者的工具执行超时秒数（实例级，用户裁定 2026-11-15）。
+    优先取「正在执行工具的 Agent」的 tool_timeout（线程局部 owner——主/子 Agent、串行/并行
+    天然隔离不串）；无 Agent 上下文（工作流直调/schedule code/单测）回退模块级 TOOL_TIMEOUT。
+    Agent.tool_timeout 初始值 = settings.json 的 tool_timeout（出厂默认），运行中由
+    set_tool_timeout 独立调整（只改本实例，不写全局、不影响其它 Agent）。"""
+    ag = get_bg_owner()
+    v = getattr(ag, "tool_timeout", None) if ag is not None else None
+    try:
+        return int(v) if v else TOOL_TIMEOUT
+    except Exception:
+        return TOOL_TIMEOUT
+
+
 def _resolve(path: str) -> Path:
     """把路径解析到 workspace 内；越界需审批（默认需审批，2026-11 用户提案）：同意 → 放行并登记
     _approved_paths（快照簿记免二次弹卡）；拒绝/无人可问（CLI、无 UI 子 Agent、工作流节点）→
@@ -334,6 +348,7 @@ def _run_subprocess_streaming(args, name, shell=False, env=None, origin=""):
     stream_buf = []
     last_hb = start
     last_flush = start
+    tmo = _effective_timeout()   # 实例级超时（进入时取定——本调用内不追改）
 
     while True:
         try:
@@ -368,7 +383,7 @@ def _run_subprocess_streaming(args, name, shell=False, env=None, origin=""):
             last_hb = now
 
         # 超时 → 转后台（不杀进程，daemon 线程继续读输出）
-        if elapsed > TOOL_TIMEOUT:
+        if elapsed > tmo:
             # flush 最后的流式输出
             if stream_buf and _tool_emit:
                 _tool_emit({"type": "tool_stream", "name": name, "text": "".join(stream_buf)})
@@ -415,7 +430,7 @@ def _run_subprocess_streaming(args, name, shell=False, env=None, origin=""):
                         except Exception:
                             pass
             threading.Thread(target=_bg_reader, daemon=True).start()
-            return (f"[执行超过 {TOOL_TIMEOUT}s，已转后台运行（任务ID: {bg_id}）。\n"
+            return (f"[执行超过 {tmo}s，已转后台运行（任务ID: {bg_id}）。\n"
                     f"进程继续运行，不阻塞当前工作；完成时会自动推送通知唤醒你（无需轮询）。中途可用 check_bg_task(\"{bg_id}\") 查进度。"
                     f"已捕获 {len(output_lines)} 行输出。]")
 
@@ -1960,10 +1975,10 @@ def run_script(script: str, payload: str = "") -> str:
     env["PYTHONPATH"] = pp
     try:
         proc = subprocess.run(_py_child_cmd(str(target)), capture_output=True,
-                              timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
+                              timeout=_effective_timeout(), env=env, cwd=str(WORKSPACE),
                               creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
     except subprocess.TimeoutExpired:
-        return f"[脚本执行超时（>{TOOL_TIMEOUT}s），可用 set_tool_timeout 调大]"
+        return f"[脚本执行超时（>{_effective_timeout()}s），可用 set_tool_timeout 调大]"
     except Exception as e:
         return f"[执行失败] {type(e).__name__}: {e}"
     out = _decode_stream(proc.stdout or b"").strip()
@@ -1974,20 +1989,28 @@ def run_script(script: str, payload: str = "") -> str:
 
 
 def set_tool_timeout(seconds: int) -> str:
-    """设置 run_python / run_shell 的超时秒数（默认 10）。
+    """设置 run_python / run_shell 的执行超时秒数（默认 10）。
+    实例级（用户裁定 2026-11-15）：只改当前 Agent 自己的超时，不写全局、不影响其它 Agent/实例；
+    各 Agent 初始值在实例化时读 settings.json 的 tool_timeout（出厂默认，设置页可改）。
     某些工具调用可能很长（如模拟、训练），可调大到 600（10分钟）甚至 1800（30分钟）。
     seconds: 超时秒数（1~7200）。"""
-    global TOOL_TIMEOUT
+    global TOOL_TIMEOUT   # 无 Agent 上下文的回退路径用（声明须在一切引用之前——防 SyntaxError）
     if not (1 <= seconds <= 7200):
         return f"❌ seconds 需在 1~7200 之间，收到 {seconds}"
+    ag = get_bg_owner()
+    if ag is not None:
+        old = getattr(ag, "tool_timeout", None) or TOOL_TIMEOUT
+        ag.tool_timeout = seconds
+        return f"✅ 工具超时已从 {old}s 改为 {seconds}s（仅本实例生效，不写全局；其它 Agent 不受影响）"
+    # 无 Agent 上下文（工作流直调/单测等罕见路径）：退回旧语义——改模块级默认（进程内共享）
     old = TOOL_TIMEOUT
     TOOL_TIMEOUT = seconds
-    return f"✅ 工具超时已从 {old}s 改为 {seconds}s"
+    return f"✅ 工具超时已从 {old}s 改为 {seconds}s（无 Agent 上下文——模块级默认，进程内共享）"
 
 
 def get_tool_timeout() -> str:
-    """查看当前 run_python / run_shell 的超时秒数。"""
-    return f"当前工具超时：{TOOL_TIMEOUT}s"
+    """查看当前 run_python / run_shell 的超时秒数（本 Agent 实例的值）。"""
+    return f"当前工具超时：{_effective_timeout()}s"
 
 
 # length/to_uppercase/to_lowercase → tools/builtin/str_tools.py（纯函数外置）

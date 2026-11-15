@@ -539,7 +539,7 @@ def read_config(agent) -> dict:
     cfg["_effective_chain"] = " → ".join(eff_chain) if eff_chain else ""
     try:
         import real_tools
-        cfg["tool_timeout"] = real_tools.TOOL_TIMEOUT
+        cfg["tool_timeout"] = getattr(agent, "tool_timeout", None) or real_tools.TOOL_TIMEOUT
     except Exception:
         cfg["tool_timeout"] = 10
     cfg["max_level"] = agent.session.max_level
@@ -637,12 +637,32 @@ def apply_config(agent, values: dict) -> list:
                 results.append("✅ repos_dir 已清空（回默认 ~/.agt/repos；重启后生效）")
         except Exception as e:
             results.append(f"❌ repos_dir 保存失败：{e}")
-    # tool_timeout 特殊处理（real_tools 全局，不在 agent/llm）
+    # tool_timeout 特殊处理（用户裁定 2026-11-15：实例级化）——settings.json 存【出厂默认】：
+    # 新 Agent 实例化时读它作初始值；保存同时更新当前交互 agent 的实例值（立即生效，只影响
+    # 本 agent）。运行中 agent 各自可用 set_tool_timeout 独立调整（互不影响、不回写 settings）。
     if "tool_timeout" in values:
         v = values.pop("tool_timeout")
         try:
-            import real_tools
-            results.append(real_tools.set_tool_timeout(int(v)))
+            if str(v).strip() in ("", "None"):
+                results.append("⏭ tool_timeout 为空——未改动")
+            else:
+                t = int(str(v).strip())
+                if not (1 <= t <= 7200):
+                    results.append(f"❌ tool_timeout 需在 1~7200 之间：{v}")
+                else:
+                    agent.tool_timeout = t
+                    try:
+                        import real_tools as _rt_tmo
+                        _rt_tmo.TOOL_TIMEOUT = t   # 模块级默认同步（无 Agent 上下文的调用方——钩子工作流/schedule
+                        #  code/工作流直调 run_python——吃它；L2 实锤 2026-11-15：不同步则回退硬编码 10，
+                        #  wiki_auto_query/skill_suggest 等长钩子全超时。与旧版全局行为对齐）
+                    except Exception:
+                        pass
+                    import config
+                    saved = config.load_runtime_settings(); saved["tool_timeout"] = t
+                    config.save_runtime_settings(saved)
+                    results.append(f"✅ tool_timeout = {t}s（本实例立即生效；已存 settings.json 作出厂默认——"
+                                   f"仅新实例化 Agent 继承，运行中实例互不影响）")
         except Exception as e:
             results.append(f"❌ tool_timeout 值非法：{v}（{e}）")
     # enable_snapshots 特殊处理（用户提案 2026-09-30）：回溯快照开关，存 settings.json（每轮读盘，改完下轮生效）
@@ -2283,7 +2303,7 @@ def _cmd_status(ctx: CommandContext, args):
         wq = "?"
     try:
         import real_tools as _rt
-        timeout = _rt.TOOL_TIMEOUT
+        timeout = getattr(a, "tool_timeout", None) or _rt.TOOL_TIMEOUT
     except Exception:
         timeout = "?"
     print(f"会话: {ctx.session.name or '(未命名)'}（{len(ctx.session.turns)} 轮）")

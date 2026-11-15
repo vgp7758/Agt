@@ -165,7 +165,7 @@ details summary { color:var(--muted); cursor:pointer; font-size:12px; margin-top
     <label>jev_api_token <input id="cfg_jev_api_token" type="password" placeholder="（服务无鉴权可留空）" title="自建 Jev 服务带鉴权时填（请求头 Authorization: Bearer）"></label>
 
     <div class="rt-group">执行与上下文</div>
-    <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时"></label>
+    <label>tool_timeout(秒) <input id="cfg_tool_timeout" type="number" min="1" max="7200" title="run_python/run_shell/run_script 的执行超时【出厂默认】：新 Agent 实例化时继承此值；运行中各 Agent 用 set_tool_timeout 独立调整（互不影响、不回写）"></label>
     <label>分档上限 max_level <input id="cfg_max_level" type="number" min="1" title="分档投影的最高档位（默认4）；超过此级别的老 turn 不再压缩，保住前缀缓存"></label>
     <label title="投影分档算法：保守压缩（默认）= 轮数卫生毕业 + 体积压力收敛（现行算法）；steps 固定阶梯 = 按步数的确定性分档。切到 steps 按阶梯规则从零重建当前 session 档位；切回保守压缩保留当前档位续跑。">分档算法 <select id="cfg_tiering_mode"><option value="">保守压缩（默认）</option><option value="steps">steps 固定阶梯</option></select></label>
     <label>步距衰减 base <input id="cfg_detail_base" type="number" min="50" placeholder="自动（按窗口推导）" title="工具结果摘要的初始字数上限（档1 base）。留空=按 max_effective_context_window 自动推导；填写则显式固定"></label>

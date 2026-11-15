@@ -174,7 +174,7 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
     """subprocess 模式执行：stdin 传 {"args":...}，stdout NDJSON 协议解析。"""
     import json as _json
     import subprocess as _sp
-    from real_tools import WORKSPACE, TOOL_TIMEOUT, _tool_emit
+    from real_tools import WORKSPACE, _effective_timeout, _tool_emit
     import os
 
     env = dict(os.environ)
@@ -185,11 +185,11 @@ def _run_subprocess(script_path: str, tool_name: str, kwargs: dict) -> str:
     payload = _json.dumps({"args": kwargs}, ensure_ascii=False, default=str)
     try:
         proc = _sp.run([sys.executable, script_path], input=payload, capture_output=True,
-                       text=True, timeout=TOOL_TIMEOUT, env=env, cwd=str(WORKSPACE),
+                       text=True, timeout=_effective_timeout(), env=env, cwd=str(WORKSPACE),
                        encoding="utf-8", errors="replace",
                        creationflags=(_sp.CREATE_NO_WINDOW if os.name == "nt" else 0))
     except _sp.TimeoutExpired:
-        return f"[脚本工具执行超时（>{TOOL_TIMEOUT}s，可 set_tool_timeout 调大）]"
+        return f"[脚本工具执行超时（>{_effective_timeout()}s，可 set_tool_timeout 调大）]"
     except Exception as e:
         return f"[执行失败] {type(e).__name__}: {e}"
     if proc.returncode != 0:

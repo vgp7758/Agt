@@ -98,7 +98,7 @@ def make_workflow_debug_tools(agent) -> list:
             inp = {"user_message": inputs or ""}
 
         import real_tools as _rt
-        _tmo = float(timeout) if timeout and float(timeout) > 0 else float(getattr(_rt, "TOOL_TIMEOUT", 10))
+        _tmo = float(timeout) if timeout and float(timeout) > 0 else float(_rt._effective_timeout())
         _res: dict = {}
 
         def _run():

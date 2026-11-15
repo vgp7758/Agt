@@ -423,6 +423,13 @@ class Agent:
                     (_json.loads(_st.read_text(encoding="utf-8")) or {}).get("dump_projections"))
         except Exception:
             pass
+        # 工具执行超时（实例级，用户裁定 2026-11-15）：构造时读 settings.json 的 tool_timeout
+        # 作初始值（出厂默认，主/子 Agent 同源继承）；运行中各自 set_tool_timeout 独立调整
+        # （只改本实例，不写全局、不影响其它 Agent——worker 长构建调大不再拖累同进程兄弟）。
+        try:
+            self.tool_timeout: int = config.load_tool_timeout()
+        except Exception:
+            self.tool_timeout = 10
         self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
         self._turn_changed_calls: list = []   # 本轮产生文件变更的工具调用原文 [{call_id,name,arguments,result_preview,changed_files}]——before_answer 钩子（wiki 维护等）直接消费，免子 Agent read_file
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——

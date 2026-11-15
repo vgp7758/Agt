@@ -536,6 +536,17 @@ def load_watchdog_stuck_secs() -> int:
         return 1200
 
 
+def load_tool_timeout() -> int:
+    """run_python/run_shell 执行超时的出厂默认秒数（settings.json 的 tool_timeout；默认 10）。
+    消费：Agent.__init__ 读它作实例初始值（用户裁定 2026-11-15：超时实例级化——
+    settings 存出厂默认，各 Agent 实例化时继承；运行中各自 set_tool_timeout 独立调整，互不影响）。"""
+    try:
+        v = int(load_runtime_settings().get("tool_timeout", 10))
+        return v if 1 <= v <= 7200 else 10
+    except Exception:
+        return 10
+
+
 def load_hook_timeout() -> int:
     """同步钩子工作流超时秒数（settings.json 的 hook_timeout；默认 300，0=不限）。
     超时的钩子结果丢弃（auto_wf_error 标记），其它已完成的照常注入——主循环不被卡住。

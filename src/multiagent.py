@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import copy
 import logging
 import re
@@ -161,13 +163,13 @@ class SubAgent:
     on_event 接主 Agent 的事件流，输出经主线程 _render_loop 渲染（CLI）/ broadcast（Web）。"""
 
     def __init__(self, name: str, model_name: str, system: str, tools: Toolbox,
-                 on_event=None, max_steps: int = 50, token_budget: int = 0, session_dir=None,
+                 on_event=None, max_steps: Optional[int] = None, token_budget: int = 0, session_dir=None,
                  registry=None, agent_id=None, caller_id=None, current_turn_only: bool = False,
                  assembly: dict = None):
         self.name = name
         self.model_name = model_name
         self.agent = Agent(system, tools, model_name=model_name,
-                           enable_thinking=True, max_steps=max_steps,
+                           enable_thinking=True, max_steps=max_steps,   # None → Agent 构造读盘（出厂默认 200，2026-11-15）
                            token_budget=token_budget, verbose=False, on_event=on_event,
                            session_dir=session_dir, registry=registry,
                            agent_id=agent_id or (name or "_main_"))   # 构造即带正确 id —— Agent.__init__ 按 id 分流注册
@@ -2307,7 +2309,8 @@ def make_subagent_tools(agent) -> list:
                            on_event=None, session_dir=sub_dir,
                            registry=reg, agent_id=aid,
                            caller_id=caller_id, current_turn_only=bool(current_turn_only),
-                           max_steps=int(max_steps or meta.get("max_steps") or 50),
+                           max_steps=(int(max_steps or meta.get("max_steps"))
+                                      if (max_steps or meta.get("max_steps")) else None),   # None → 读盘出厂默认（2026-11-15）
                            assembly=(base_asm or None))
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks

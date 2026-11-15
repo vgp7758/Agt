@@ -307,7 +307,7 @@ class Agent:
         tools: Toolbox,
         *,
         enable_thinking: bool = True,
-        max_steps: int = 50,
+        max_steps: Optional[int] = None,
         token_budget: int = 0,
         temperature: float = 0.7,
         verbose: bool = True,
@@ -326,7 +326,7 @@ class Agent:
         self._hb_ts = time.time()
         self.tools = tools
         self.tool_groups: dict = {}   # 工具名 -> 来源模块（build_agent 注册时标注，供 /api/tools 分组）
-        self.max_steps = max_steps
+        self.max_steps = max_steps   # None=未显式指定 → 下方读 settings.json 出厂默认（2026-11-15）
         self.token_budget = token_budget
         # ⏸ 挂起：进程级共享（用户提案 2026-10-19）——_hold 是 property 读全局 _PROC_HOLD，
         #   _main_ 与所有 sub-agent 同一把锁；不再 per-instance 初始化（此处赋值会走 setter
@@ -430,6 +430,14 @@ class Agent:
             self.tool_timeout: int = config.load_tool_timeout()
         except Exception:
             self.tool_timeout = 10
+        # max_steps 出厂默认解析（用户裁定 2026-11-15：默认 50→200）：未显式传时读 settings.json
+        # ——一切构造路径（主/子 Agent、resume 重建）同源跟随；显式传参（子 Agent .yml 声明/
+        # 派活覆盖）优先。治「设置页改了 → 实例值仍 50」的脱节（chat.py 此前硬编码 50 是病灶）。
+        if self.max_steps is None:
+            try:
+                self.max_steps = config.load_max_steps_default()
+            except Exception:
+                self.max_steps = 200
         self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
         self._turn_changed_calls: list = []   # 本轮产生文件变更的工具调用原文 [{call_id,name,arguments,result_preview,changed_files}]——before_answer 钩子（wiki 维护等）直接消费，免子 Agent read_file
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——

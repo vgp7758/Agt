@@ -536,6 +536,17 @@ def load_watchdog_stuck_secs() -> int:
         return 1200
 
 
+def load_max_steps_default() -> int:
+    """Agent react 循环最大步数的出厂默认（settings.json 的 max_steps；默认 200，下限 1）。
+    消费：Agent.__init__ 未显式传 max_steps 时读它（用户裁定 2026-11-15：默认 50→200，且构造时
+    从盘读——主/子 Agent、resume 重建等一切构造路径同源跟随，不再依赖启动链一次性恢复）。"""
+    try:
+        v = int(load_runtime_settings().get("max_steps", 200))
+        return max(1, v)
+    except Exception:
+        return 200
+
+
 def load_tool_timeout() -> int:
     """run_python/run_shell 执行超时的出厂默认秒数（settings.json 的 tool_timeout；默认 10）。
     消费：Agent.__init__ 读它作实例初始值（用户裁定 2026-11-15：超时实例级化——

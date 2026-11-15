@@ -96,6 +96,48 @@ file 迭代：  脚本报错 → edit 只发改动那几行 → 重跑 file= →
 
 意外实证（开发验证时真调了 `sleep(600)`）：宿主 run_python 在 180s 超时转后台，sleep 本身在后台继续睡满 600s 不被掐——inline 工具不超时的直接证据；睡满后走 bg_task 完成通知（上节链路），无害。代价：inline sleep **阻塞当前 react 轮**（UI 工具运行中、插话排队），长睡（sleep 上限 2026-09-16 放宽到 3600s，commit 30fe776）期间整轮不可用——详见 [misc-tools · sleep](misc-tools.md)。
 
+## tool_timeout 实例级化：settings 存出厂默认，Agent 实例各持一份（2026-11-15，用户裁定，commit a8aeb44）
+
+**旧语义**：`tool_timeout` 存全局 settings.json，`set_tool_timeout` 也写全局——一个 Agent（如 worker）为长构建调大超时，同进程所有兄弟 Agent 全被拖累。
+
+**新语义**（用户裁定）：
+
+| 主体 | 行为 |
+|---|---|
+| settings.json 的 `tool_timeout` | 【出厂默认】：Agent **实例化时**读它作初始值（主/子 Agent 同源继承）；设置页保存 = 写盘 + 当前交互实例立即生效 |
+| `set_tool_timeout(n)` | 只改**调用者 Agent 自己**的 `self.tool_timeout`——不写盘、不影响其它 Agent/实例（worker 调大跑长构建不再拖累同进程兄弟） |
+| 执行点 | run_shell 转后台 / run_python file 模式 `subprocess.run` / run_script 全量改吃「正在执行工具的 Agent」的实例值 |
+
+### 实现（四个文件）
+
+- **`src/config.py` `load_tool_timeout()`**：出厂默认加载器——读 settings.json 的 `tool_timeout`（缺省 10；1~7200 越界/异常回退 10）。
+- **`src/agent.py` `Agent.__init__`**：`self.tool_timeout = config.load_tool_timeout()`——主/子 Agent 构造时同源继承。
+- **`src/real_tools.py` `_effective_timeout()`**：取值单点——优先线程局部 `bg_owner`（正在执行工具的 Agent）的 `tool_timeout`（主/子、串行/并行天然隔离不串）；无 Agent 上下文（钩子工作流直调 / schedule code / 单测）回退模块级 `TOOL_TIMEOUT`。`_run_subprocess_streaming` **进入时取定 `tmo`**（本调用内不追改）；超时转后台文案同步用 `tmo`；run_python file 模式的 `timeout=_effective_timeout()` 与「脚本执行超时」提示同改。
+- **`src/commands.py` `apply_config`**：`tool_timeout` 三态特判——非空且合法 → 更新当前交互 agent 实例值 + **同步模块级默认**（`real_tools.TOOL_TIMEOUT = t`）+ 写 settings.json（出厂默认）；空值跳过；越界拒绝。`/config` 与 `/status` 展示改读 `agent.tool_timeout`。
+
+`set_tool_timeout` 有 Agent 上下文只改实例值（返回「仅本实例生效，不写全局」）；无上下文（工作流直调等罕见路径）退回旧语义改模块级 `TOOL_TIMEOUT`（进程内共享）。注意 `global TOOL_TIMEOUT` 声明必须在一切引用之前，否则 SyntaxError——pyright 不报、L3 单测实跑抓到。
+
+### bg_owner 基建复用（第二个消费端）
+
+实例级取值复用 [后台任务回执路由（谁起的谁收，2026-10-15）](#后记完成回执按发起者路由谁起的谁收2026-10-15commit-45369c8) 那套线程局部 `set_bg_owner`（`_exec_tool` 统一入口设位）——零新概念，天然覆盖主/子 Agent、串行/并行全路径。
+
+### L2 回归：钩子工作流超时（当日实锤修复）
+
+首轮隔离实例实跑暴露：钩子工作流（wiki_auto_query / skill_suggest 等）调 run_python 时**无 Agent 上下文** → 回退模块级硬编码 10s → 全部超时（旧版模块级被启动链设为 240，无感）。修复：设置页保存时同步模块级默认——无上下文调用方吃它，与旧版全局行为完全对齐。复验：wiki_auto_query 超时 → 正常完成。
+
+### 验证链（三层）
+
+- **L0**：6 个 .py py_diag 全绿。
+- **L3**：17 场景全过——双 Agent 隔离（A set 600，B 仍 10 且模块级不动）、线程隔离、无上下文回退、apply_config 三态、真执行链路（A@600s 跑 1.5s 脚本正常 vs B@1s 同脚本超时）。
+- **L2**：隔离实例两轮——启动继承出厂默认 240 → `set_tool_timeout(66)` → `get_tool_timeout` 返回 66s（完整链路铁证）；钩子回归修复确认；无 NameError/traceback。
+
+### 注意事项
+
+- `/restart` 生效（初始值在构造时读）；重启后各 Agent 超时彼此独立。
+- 设置页 `tool_timeout` 语义变为「新 Agent 出厂默认」——运行中实例互不影响、`set_tool_timeout` 不回写 settings。
+- inline 工具不受管的边界不变（见上一节 [TOOL_TIMEOUT 边界](#tool_timeout-边界只管-subprocess-系inline-工具不受管2026-09-16commit-30fe776)）。
+- 与引擎层 `_TOOL_STUCK_SECS` 工具硬超时（[agent-watchdog](agent-watchdog.md)）是两个概念：那个判卡并拉 doctor，本页的管 subprocess 超时转后台。
+
 ## 子进程输出自适应解码：utf-8 → gbk 探测——GBK 控制台乱码根治（2026-09-29，vm-qianniu 实锤，v0.30.9）
 
 **实锤**（vm-qianniu，2026-09-29）：remote_call_tool 返回 `����: ��֧��...`——每 2 个 U+FFFD 对应一个中文字，GBK 双字节被按 UTF-8 解码失败的典型形态。链路：Windows cmd/bat 控制台程序输出 GBK（cp936）→ 读侧三处固定 `encoding="utf-8", errors="replace"` → 逐字节替换成 U+FFFD → 乱码进 tool result 原样传回。

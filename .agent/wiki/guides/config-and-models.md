@@ -401,6 +401,8 @@ def _openai_client(self) -> OpenAI:
 | ~~detail_step~~（已删） | **全局 settings 字段已删除**（2026-09-15，commit 4ad2812，用户裁定；t877_s51 轮内小毕业诊断收尾）：步距衰减只认 models.json 条目级 `detail_step`（clamp 0~200，**未填默认 0=不衰减**；想要衰减必须显式填，DeepSeek 类价差悬殊配 0）；`/config detail_step` 收到只提示去向不落盘。见 [全局字段删除](../architecture/context-engine.md#全局-detail_step-字段删除只认模型卡片未填默认-02026-09-15commit-4ad2812用户裁定) |
 | hook_timeout | 同步钩子整组超时秒数（默认 300，0=不限）——超时钩子结果丢弃（`auto_wf_error` 标记），组内已完成/后续完成的其它钩子照常合并注入（**部分组装**）；async 钩子不受限 |
 | hook_timeout_before_turn | **before_turn 检索钩子专用超时**（2026-09-21 用户裁定，v0.29.8）：默认 **60**、0=不限、损坏值兜底 60——入口钩子挂在主循环入口（用户发消息后最先跑），此前共用 300s 等待体验太差；超时同走部分组装。机制见 [workflow-hooks · before_turn 专用超时](../architecture/workflow-hooks.md#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布) |
+| max_steps | **Agent react 循环执行上限的出厂默认**（缺省 **200**，下限 1；旧 50，2026-11-15 起构造时读盘、不再依赖启动链一次性恢复）——派活参数 > agent yml 声明 > 此键。详见下方子章节与 [multi-agent · 三级取值](../architecture/multi-agent.md#子-agent-步数上限三级取值派活-max_steps--声明-max_steps--默认-502026-10-07用户提案) |
+| tool_timeout | **工具执行超时的出厂默认**（缺省 10，1~7200 越界回退）——Agent 实例化时读作初始值；`set_tool_timeout(n)` 只改本实例、不回写盘。详见 [run-python · tool_timeout 实例级化](../features/run-python.md#tool_timeout-实例级化settings-存出厂默认agent-实例各持一份2026-11-15用户裁定commit-a8aeb44) |
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试；**2026-10-15 起子 Agent 构造时同读此键跟随**，见下方双特殊段） |
 | repos_dir | **repos 数据根重定向**（2026-10-15）：`~/.agt/repos/` 整棵数据树可指到其它盘（仅认绝对路径）；**启动时求值一次、重启生效**，只改指向不搬数据。详见 [repos 数据根重定向](../features/repos-dir-redirect.md) |
 
@@ -440,6 +442,19 @@ def _openai_client(self) -> OpenAI:
 **dump_projections（子 Agent 跟随）**：此前 `/config`/设置页只 setattr 主 Agent 实例，SubAgent 新建实例恒 False——worker 施工几十步零转储文件（实例属性孤岛）。修复后**双写**：实例值 + settings.json 持久化，`Agent.__init__` 构造时读 settings——主/子同源；主 Agent 运行中 `/config` 覆盖仍即时生效（实例属性优先）。机制与考古详见 [context-engine · 投影转储后记](../architecture/context-engine.md#投影转储文件名与-t/s-标记commit-4aced81)。
 
 **repos_dir（repos 数据根重定向）**：`~/.agt/repos/` 整棵数据树（sessions/specs/plans/memories/rag…）可重定向到其它盘——C 盘系统区排除杀毒/索引干扰的根治手段。仅认绝对路径（相对路径拒绝保存）；`paths.repos_root()` **启动时求值一次**，重启生效、只改指向不搬数据。实现与迁移流程详见 [repos 数据根重定向](../features/repos-dir-redirect.md)。
+
+### max_steps / tool_timeout 出厂默认键：构造时读盘（2026-11-15，用户裁定，commits a8aeb44 + 16bab58）
+
+两键同范式（**出厂默认 / 实例各持一份**，2026-11-15 同日两笔，commits a8aeb44 + 16bab58）：settings.json 存**出厂默认**，Agent **实例化时**读它作初始值——主/子 Agent、resume 重建等一切构造路径同源继承；设置页 / `/config` 保存 = 写盘 + 当前实例热生效；运行中实例各自调整**不回写盘**、互不影响。
+
+| 键 | 出厂默认（loader） | 实例级调整通道 | 优先级 |
+|---|---|---|---|
+| `max_steps` | **200**（`config.load_max_steps_default()`，下限 1；旧 50）——`Agent.__init__` 未显式传时读盘 | 主 Agent：`/config max_steps` 运行时；子 Agent：派活参数 / yml 声明 | 派活 > 声明 > 出厂默认 |
+| `tool_timeout` | 10（`config.load_tool_timeout()`，1~7200 越界回退） | `set_tool_timeout(n)` 只改调用者实例（无 Agent 上下文退回旧全局语义） | 实例值 > 出厂默认（模块级兜底） |
+
+**max_steps 病灶与根治（16bab58）**：此前盘上值只在**进程启动时**由恢复链盖一次，而 `chat.py build_agent` 两个构造点**硬编码 `max_steps=50`**——实例重建时 50 回归，设置页热应用的值被冲掉（用户实锤：盘存 250、实例 50，「改了以后重新打开又变回 50」）。修复后 `chat.py` 不再传参、构造时读盘（无键缺省 200），取值链实现同步改 `None` 语义（派活/声明有值才传）。全链路与验证见 [multi-agent · 三级取值后记](../architecture/multi-agent.md#后记兜底-50-改出厂默认读盘-200治设置页改了又变回-502026-11-15用户裁定commit-16bab58)；tool_timeout 实例级化详见 [run-python · tool_timeout 实例级化](../features/run-python.md#tool_timeout-实例级化settings-存出厂默认agent-实例各持一份2026-11-15用户裁定commit-a8aeb44)。
+
+> 注意别与 `Session.max_steps_per_turn`（投影窗口保留步数，默认同为 200）混淆——同名不同物，见 [context-engine](../architecture/context-engine.md#后记二折叠语义重做首窗-200--每次折-100--触发线递进2026-10-23--三用户裁定已落地)。
 
 ## 网络韧性配置：分级超时（read/connect/write）+ 断网等网（2026-09-26 / 09-28 扩）
 

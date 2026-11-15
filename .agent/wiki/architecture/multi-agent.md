@@ -442,12 +442,30 @@ reg.update_status(id, "running")                    # ⑤ 标占用（锁外！�
 ## 子 Agent 步数上限三级取值：派活 max_steps → 声明 max_steps → 默认 50（2026-10-07，用户提案）
 
 - **背景**：Agent 基座 `max_steps` 默认 50（src/agent.py），到步数即打「⚠️ 达到最大步数，强制收尾」——多文件重构 / 大范围测试类长任务经常不够，unity-tester_2 被 50 步强制收尾误伤是直接导火索（用户提案 2026-10-07）。
-- **三级取值链**（src/multiagent.py 构造 SubAgent 处：`int(max_steps or meta.get("max_steps") or 50)`）：
+- **三级取值链**（src/multiagent.py 构造 SubAgent 处；⚠️ **2026-11-15 起第三级改为出厂默认读盘**，见下方后记，初版表达式 `int(max_steps or meta.get("max_steps") or 50)`）：
   1. **派活参数**：`agent_prompt(max_steps=N)` 仅本次任务生效（默认 0=不指定）；长任务建议显式给大（如 150）
   2. **声明级**：agent yml 写 `max_steps:`，对该 Agent 的所有派活生效
-  3. **兜底 50**
+  3. **兜底**：~~硬编码 50~~ → **出厂默认**（settings.json `max_steps`，缺省 **200**；Agent 构造时读盘，2026-11-15）
 - 主 Agent 自身步数早有 `/config max_steps` 运行时通道（src/commands.py）；本提案把同等能力下放到子 Agent 的声明与派活两侧。
 - 随 [v0.33.0](../releases/v0.33.0.md) 发布。
+
+### 后记：兜底 50 改出厂默认读盘 200，治「设置页改了又变回 50」（2026-11-15，用户裁定，commit 16bab58）
+
+**病灶**（用户实锤，2026-11-15）：settings.json 存着 `max_steps: 250`，实例却报 50（`GET /api/config` 实测）——盘上值只在**进程启动那一刻**由启动恢复链盖一次（`apply_config(saved)`）；而 `chat.py` 的 `build_agent` 两个构造点**硬编码 `max_steps=50`**，显式覆盖一切。此后实例重建/局部路径回到构造默认时 50 回归，设置页热应用的值被冲掉——「改了以后重新打开又变回 50」。
+
+**修复（默认 50→200 + 构造时读盘，commit 16bab58）**：
+
+| 路径 | 行为 |
+|---|---|
+| `src/config.py` 新增 `load_max_steps_default()` | 读 settings.json 的 `max_steps`（缺省 **200**，下限 1，异常回退 200） |
+| `src/agent.py` `Agent.__init__` | `max_steps: int = 50` → `Optional[int] = None`——None 时构造读盘；**一切构造路径（主/子 Agent、resume 重建）同源跟随**，不再依赖启动链一次性恢复 |
+| `src/chat.py` `build_agent` 两处 | 删硬编码 50、不再传参 → 构造读盘（**病灶点**；主链 + 回退链） |
+| `src/multiagent.py` SubAgent 构造 / 派发兜底 | `int(max_steps or meta.get("max_steps") or 50)` → **None 语义**（`派活 or 声明` 有值才传，否则 `Agent.__init__` 读盘）；`SubAgent.__init__` 签名同步 `Optional[int] = None`；顺补 `Optional` import（L1 自检抓到——缺了会让模块加载炸 NameError） |
+
+- **取值优先级不变**：派活参数 > 声明级 > 出厂默认——只是第三级从「硬编码 50」变成「settings.json 出厂默认（缺省 200）」，且从「启动链一次性恢复」变成「构造时即读」。
+- **验证**：L3 八场景全过（不传 → 读盘 250；盘无键 → 200；显式传 30 → 30；派发表达式四态）+ `multiagent` 模块加载实跑 + `chat.py` py_compile（启动路径双文件）；顺带验证同日 `tool_timeout` 构造读盘（240）同链路正常。
+- 与 [tool_timeout 出厂默认实例级化](../features/run-python.md#tool_timeout-实例级化settings-存出厂默认agent-实例各持一份2026-11-15用户裁定commit-a8aeb44)（同日 a8aeb44）同范式：**settings 存出厂默认、构造时读盘、实例级调整**；配置键总表见 [配置体系 · max_steps / tool_timeout](../guides/config-and-models.md#max_steps--tool_timeout-出厂默认键构造时读盘2026-11-15用户裁定commits-a8aeb44--16bab58)。
+- 别与 `Session.max_steps_per_turn`（投影窗口，默认也是 200）混淆——见 [context-engine · 折叠语义重做](context-engine.md#后记二折叠语义重做首窗-200--每次折-100--触发线递进2026-10-23--三用户裁定已落地)的「别与 Agent.max_steps 混淆」备注。
 
 ## create_agent 传参拓展：assembly / hooks / system 自动抽 md（2026-09-02，commit 9ddaf63）
 

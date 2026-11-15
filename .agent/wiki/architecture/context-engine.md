@@ -1174,7 +1174,7 @@ if max_steps and len(steps) >= max_steps:                    # >= 与旧 > 不�
 
 **落地文件（commit 本地，未推）**：`src/session.py`（常量语义 + 折叠逻辑 + 默认值 + 读档迁移 + docstring）、`src/agent.py`、`src/commands.py`（默认值）。`/restart` 生效（引擎层改动）。上一节「待拍板的补游标 / 图片限量」两条——**游标路线已被本条取代**（确定性推导即游标），**图片限量仍未落地**。
 
-**别与 `Agent.max_steps` 混淆**：本条改的是 `Session.max_steps_per_turn`（**投影窗口**：当前轮保留多少步给模型看，超窗折叠成占位行；存档/events 里的步一条不少）。`Agent.max_steps`（agent.py，默认 50，子 Agent 可声明/派活覆盖）是**执行上限**：到步即打「⚠️ 达到最大步数，强制收尾」（见 [多 Agent · 子 Agent 步数上限三级取值](multi-agent.md#子-agent-步数上限三级取值派活-max_steps--声明-max_steps--默认-502026-10-07用户提案)）——两者同名不同物，调参时别互相套用。
+**别与 `Agent.max_steps` 混淆**：本条改的是 `Session.max_steps_per_turn`（**投影窗口**：当前轮保留多少步给模型看，超窗折叠成占位行；存档/events 里的步一条不少）。`Agent.max_steps`（agent.py，**执行上限**：到步即打「⚠️ 达到最大步数，强制收尾」；出厂默认 200=settings.json 构造时读盘（2026-11-15 起，旧 50），子 Agent 可声明/派活覆盖，见 [多 Agent · 子 Agent 步数上限三级取值](multi-agent.md#子-agent-步数上限三级取值派活-max_steps--声明-max_steps--默认-502026-10-07用户提案)）——两者同名不同物，调参时别互相套用。
 
 ## system 段 append-not-replace（2026-09-12）
 

@@ -3912,6 +3912,14 @@ def start_server(*, agent, work_q, mcp_mgr=None, workspace=WORKSPACE, port=8000,
     if not srv.started:
         _server = None
         return (False, f"启动失败：{_server_error or '未知原因'}")
+    # 自定义端点重放（2026-11-16：serve_endpoint 注册的 /custom/* 路由——盘上清单重挂，零丢失）
+    try:
+        from endpoint_tools import restore_all
+        _n = restore_all(app)
+        if _n:
+            print(f"[endpoints] 已重挂 {_n} 条自定义端点（.agent/endpoints.json）")
+    except Exception as _e:
+        print(f"[endpoints] 自定义端点重放失败（忽略）：{_e}")
     return (True, f"服务已启动 @ 0.0.0.0:{port}")
 
 

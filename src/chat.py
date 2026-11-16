@@ -42,6 +42,7 @@ from plan_tools import make_plan_tools
 from spec_tools import make_spec_tools
 from survey_tools import make_survey_tools
 from memory_tools import make_recall_tools
+from endpoint_tools import make_endpoint_tools
 from session_tools import make_session_tools
 from toollog import make_tool_log_tools
 # wiki CRUD 十件套 + update_wiki 均不再内置：
@@ -281,6 +282,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     from survey_tools import get_human_step_tools
     _reg(get_human_step_tools(agent), "人在环")
     _reg(make_recall_tools(agent), "记忆召回")
+    _reg(make_endpoint_tools(agent), "自定义端点")   # serve_endpoint 三件套（2026-11-16：agent 给运行中服务动态挂 /custom/* 路由）
     _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
     # ltm 五件套与 download 两件套由外置件提供（tools/builtin/ltm_tools.py / download_tools.py，
     # attach_script_tools 注册；ltm 工具经 ensure_ltm 单例与注入 provider 共享实例）

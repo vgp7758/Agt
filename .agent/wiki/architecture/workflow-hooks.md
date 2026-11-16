@@ -458,6 +458,26 @@ turn_end:
 
 **修复记录**：5 个工作流补根属性（before_turn_retrieval/wiki_auto_query 补 `hook="before_turn"`、py_auto_diag/cs_auto_diag 补 `hook="after_tool"`、recap_gen 补 `hook="turn_end" async="true" recap="true"`）+ server PUT 保底合并 + `get_hook_workflows` 修复后识别全部 6 个钩子。
 
+### retrieval-hint 可操作化：命中行带 [第N轮] 轮号 + 尾部展开指引（2026-11-16，用户提案，commit 674891e）
+
+#### retrieval-hint 可操作化：命中行带 [第N轮] 轮号 + 尾部展开指引（2026-11-16，用户提案，commit 674891e）
+
+**背景（用户）**：before_turn_retrieval 的命中只有摘录，agent 缺一个「展开某个命中的详细上下文」的准确入口——检索到了但接不进后续动作。本轮把断点接上：**命中 → 轮号 → `recall_turn(turn=N, offset=M)` 精确展开**（见 [recall_turn · 轮号精确定位](../features/recall-tools.md)）。
+
+**改动**（src/workflows/before_turn_retrieval.xml；种源 + ~/.agt/workflows/ 全局副本同步）：
+
+- hint 每个本会话命中行首带 **`[第N轮]` 轮号标记**（id 就是本会话轮次，不新造 id 体系）
+- hint 尾部追加固定指引：
+
+```
+（展开某命中：recall_turn(turn=该轮号, offset=2)——取该轮 user/answer 原文+前后轮脉络；
+工具调用细节另用 get_tool_detail(call_id)。仅带 [第N轮] 号的命中可这样展开——epi/跨会话命中无本会话轮号）
+```
+
+**与输出纪律的关系**：不违「选择+摘录，禁止生成」——指引是固定模板文本（非生成内容），命中仍全部为原文摘录；轮号是引擎侧确定性标注。
+
+**生效**：`/restart`（工作流每轮重扫本即可热加载，但 engine 侧 `recall_turn` 新参数需重启）。
+
 ## 运行时钩子开关：/hook 命令（2026-09-01，commit c9f82b0）
 
 **用户提案（2026-09-01，`/hook before_turn on/off` 形态）**：钩子的启用/禁用此前只能靠编辑器勾选 `meta.enabled`（持久化基线），调试时临时关某个钩子要改配置——新增 **CLI 斜杠命令 `/hook`** 做**运行时开关**（src/commands.py `_cmd_hook` + src/agent.py `_filter_hook_tasks`，commit c9f82b0）。

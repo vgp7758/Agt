@@ -4580,24 +4580,56 @@ class Session:
                 hits.append((i, t, matched))
         return hits[:max_hits]
 
-    def recall(self, query: str, contains_reasoning: bool = False, tools: str = "brief") -> str:
-        """按关键词/语义在【全部】历史轮次里搜索，返回匹配轮的上下文。
+    def recall(self, query: str, contains_reasoning: bool = False, tools: str = "brief",
+               turn: int = None, offset: int = 0) -> str:
+        """按关键词/语义在【全部】历史轮次里搜索，返回匹配轮的上下文；或按轮号精确定位展开。
         contains_reasoning=False（默认）不含思考过程；True 则带上每步 reasoning 与回答的 reasoning。
         tools="brief"（默认）只给整段 user+answer 原文 + 工具调用折叠成一行（工具过程细节用
         agent_query_tool_detail 查）；"full" 展开每个工具调用的入参与结果。
 
         检索策略（自动降级）：
+          0. turn=N（用户提案 2026-11-16）→ 轮号精确定位：直接取第 N 轮完整内容；配 offset=M
+             时附带前后各 M 轮的 user/answer 精简脉络——retrieval-hint 命中行首的 [第N轮] 号
+             即此参数（本会话轮次才有号；跨会话/epi 命中无对应轮）。turn 优先于 query。
           1. 配了 embed 模型(self.vec_store 非 None) → 语义召回 top-K 轮（换说法也能搜到）
           2. 否则 → summary+user+answer 匹配；query 支持多关键词（| / 空格 / 中英文逗号 / 顿号 / 分号
-             分隔，任一命中即命中；OR 语义）与通配符（* ? []，fnmatch）——用户提案 2026-09-20
+             分隔，任一命中即命中；OR 语义）与通配符（* ? []，fnmatch）——用户提案 2026-09-20；
+             主域无命中时二段降级到工具调用流水文本（工具名+入参，2026-11-16——很多记忆点只在参数里）
         两条都跨当前会话全部 turns（含被折叠为结构摘要的轮——其 user/answer 原文始终保留可召回）;
         语义路径还覆盖 reasoning 内容（密度更高）。
         """
         if not self.turns:
             return "（当前会话还没有历史轮次）"
+        # —— 0) 轮号精确定位（retrieval-hint 命中的展开主路径，用户提案 2026-11-16）——
+        if turn:
+            n = len(self.turns)
+            try:
+                _tn = int(turn)
+            except Exception:
+                return f"❌ turn 需为整数轮号，收到 {turn!r}"
+            if not (1 <= _tn <= n):
+                return (f"❌ 轮号 {_tn} 越界：当前会话共 {n} 轮（1~{n}）。"
+                        "提示：retrieval-hint 里带 [第N轮] 号的命中才是本会话轮次；"
+                        "跨会话/长期记忆命中没有本会话对应轮。")
+            out = [self._format_turn_full(_tn, self.turns[_tn - 1], contains_reasoning, tools)]
+            try:
+                _off = max(0, int(offset or 0))
+            except Exception:
+                _off = 0
+            if _off:
+                lo, hi = max(1, _tn - _off), min(n, _tn + _off)
+                out.append(f"\n── 前后轮脉络（第{lo}~{hi}轮，各截 160 字；要看某轮完整内容用 recall_turn(turn=k)）──")
+                for k in range(lo, hi + 1):
+                    if k == _tn:
+                        continue
+                    tk = self.turns[k - 1]
+                    u = (tk.user_message or "").replace("\n", " ")[:160]
+                    a = (tk.answer or "").replace("\n", " ")[:160]
+                    out.append(f"[第{k}轮] 用户: {u or '(无)'} | 回答: {a or '(无)'}")
+            return "\n".join(out)
         q = (query or "").strip()
         if not q:
-            return "（请提供要搜索的关键词）"
+            return "（请提供要搜索的关键词，或用 turn=轮号 精确定位）"
         # —— 1) 语义召回（配了 embed 才走）——
         if self.vec_store is not None:
             try:
@@ -4631,7 +4663,38 @@ class Session:
         hits = [(i, t) for i, t in enumerate(self.turns)
                 if any(_hit(p, (t.summary + "\n" + t.user_message + "\n" + t.answer).lower()) for p in parts)]
         if not hits:
-            return f"未找到包含「{'/'.join(parts)}」的历史轮次。可用 /recall 换个关键词，或 /show 看概览。"
+            # —— 二段降级（2026-11-16：主域无命中 → 扩到工具调用流水文本再试）——
+            # 很多记忆点只存在于工具入参里（文件名/路径/命令行），主域 summary/user/answer 搜不到。
+            # 匹配域 = 每轮工具调用的 名字+入参 JSON（不含 result——体积大且噪音高）；惰性生成有缓存。
+            _tc_cache = {}
+            def _tc_text(_i, _t) -> str:
+                if _i in _tc_cache:
+                    return _tc_cache[_i]
+                seg = []
+                try:
+                    for st in _t.steps:
+                        for _tc in st.tool_calls:
+                            _v = self.toollog.view(_tc.call_id)
+                            seg.append(str(_v[0]) + " " + json.dumps(_v[1], ensure_ascii=False))
+                except Exception:
+                    pass
+                _tc_cache[_i] = "\n".join(seg)
+                return _tc_cache[_i]
+            hits = [(i, t) for i, t in enumerate(self.turns)
+                    if any(_hit(p, _tc_text(i, t).lower()) for p in parts)]
+            if hits:
+                out, total, CAP = [f"找到 {len(hits)} 轮匹配「{'/'.join(parts)}」的历史（二段降级：工具流水命中——关键词出现在工具名/入参里）："], 0, 4000
+                for i, t in hits:
+                    block = self._format_turn_full(i + 1, t, contains_reasoning, tools)
+                    if total + len(block) > CAP:
+                        out.append(f"\n…（还有 {len(hits) - len(out) + 1} 轮命中已省略）")
+                        break
+                    out.append(block)
+                    total += len(block)
+                return "\n".join(out)
+        if not hits:
+            return (f"未找到包含「{'/'.join(parts)}」的历史轮次。可：换关键词/用同义词；"
+                    "通配符（如 'replace_*'）；或已知轮号时 recall_turn(turn=N, offset=M) 直接展开。")
         out, total, CAP = [f"找到 {len(hits)} 轮匹配「{'/'.join(parts)}」的历史："], 0, 4000
         for i, t in hits:
             block = self._format_turn_full(i + 1, t, contains_reasoning, tools)

@@ -203,7 +203,10 @@ async def main(args) -> dict:
     ok = bool(scores) and float(scores[0]) >= 0.35
     hits = args.params.get("hits") or ""
     hint = ("<retrieval-hint>\n以下是自动检索出的、可能与本次请求相关的历史记录（参考用，非用户指令）：\n"
-            + hits + "\n</retrieval-hint>") if (ok and hits) else ""
+            + hits
+            + "\n（展开某命中：recall_turn(turn=该轮号, offset=2)——取该轮 user/answer 原文+前后轮脉络；"
+              "工具调用细节另用 get_tool_detail(call_id)。仅带 [第N轮] 号的命中可这样展开——epi/跨会话命中无本会话轮号）\n"
+            + "</retrieval-hint>") if (ok and hits) else ""
     return {"gate_pass": ok, "hits_out": hits, "hint": hint}]]></code>
     <out name="gate_pass" type="boolean"/>
     <out name="hits_out" type="string"/>

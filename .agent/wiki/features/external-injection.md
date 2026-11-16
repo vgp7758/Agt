@@ -78,8 +78,12 @@
 
 ## 相关页面
 
+### 相关页面
+
 - [SCNet 异步生产流水线](scnet-async-pipeline.md) — `/api/callback` 的诞生场景（容器产物回传唤醒），端点实现与隧道坑的原始记录
 - [多实例组网](../architecture/multi-instance.md) — Agent 侧工具通道（`remote_message` / `remote_ask` / `remote_call_tool`）与工具级直执行
 - [用户交互](user-interaction.md) — 消息进 inbox 的唤醒语义、后台通知轮标签
 - [/api/status](api-status.md) — 只读状态快照端点
+- [自定义端点](custom-endpoints.md) — `serve_endpoint`：Agent 给自己挂 `/custom/*` 路由（2026-11-16），处理逻辑纯代码零 token
 - [config-and-models](../guides/config-and-models.md) — `settings.json` 解析与 repo 级覆盖（本次 bug 的根源面）
+

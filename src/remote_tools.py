@@ -312,7 +312,9 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
     try:
         import websocket   # websocket-client（run_python 沙箱已验证环境可用）
     except ImportError:
-        return "[缺依赖] websocket-client 未安装（pip install websocket-client）", []
+        return ("[缺依赖] websocket-client 未安装（pip install websocket-client）。\n"
+                "提示：remote_ask/remote_message 可在【本机直接调用】（发起方本机连目标实例的 WS），"
+                "无需经 remote_call_tool 转到对端执行——本机已装该包时直连姿势不受此影响。", [])
     import threading as _th
 
     answers, state = [], {"ack": False, "done": False, "err": ""}

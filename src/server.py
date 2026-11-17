@@ -2821,8 +2821,20 @@ async def ws_endpoint(websocket: WebSocket):
                 await _handle_user_input(websocket, agent, raw, queue, loop, registry, client)
     except WebSocketDisconnect:
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        # 消息处理异常不再静默吞（2026-11-18 用户报障：8200→8000 remote_message 送达无
+        # 回执、不进 inbox 也不跑轮——瞬态异常被这里吃掉，排障无迹可查；两次复现一次
+        # 吞一次正常，真凶待 traceback 现形）。留全栈 + 尽力回执客户端：用户至少看到
+        # "该条未生效"，而非石沉大海。
+        try:
+            _LOG.exception("WS 消息处理异常（连接将关闭）：%s", type(e).__name__)
+        except Exception:
+            pass
+        try:
+            await _send(websocket, {"type": "system",
+                                    "text": f"⚠️ 消息处理异常（{type(e).__name__}: {str(e)[:120]}）——该条未生效，请重发；详情见服务日志"})
+        except Exception:
+            pass
     finally:
         if client in _clients:
             _clients.remove(client)

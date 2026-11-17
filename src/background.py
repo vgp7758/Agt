@@ -875,6 +875,19 @@ class Scheduler:
             return None
         return "\n\n".join(parts)
 
+    def ensure_alive(self) -> bool:
+        """线程死后自愈重建（任务表原样保留——只换线程）。
+        背景（2026-11-17 8000 实锤）：_loop 的整轮兜底 except Exception 扛不住 MemoryError——
+        内存耗尽时 except 块内 traceback.format_exc() 自身分配失败二次抛出，线程静默死亡，
+        此后所有 schedule 停摆（一晚上零消息）。外部看护（watchdog 巡检）每轮调本方法。"""
+        if self._thread.is_alive():
+            return False
+        self._stop = False
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        _LOG.warning("scheduler 线程已死亡——自愈重建（任务表 %d 条保留）", len(self._schedules))
+        return True
+
     def _loop(self):
         """后台轮询：到点 produce → push_message；interval 循环重算 next_fire；
         at+daily（每日闹钟）触发后推到明天同一时刻；at 单次触发后删除。
@@ -930,6 +943,15 @@ class Scheduler:
                         pass
                 if fire:
                     self._persist()   # 单次任务触发完删除——持久化同步消失（RLock 嵌套安全）
+            except MemoryError:
+                # 内存耗尽：except 块里 traceback.format_exc() 自身要分配——会二次抛出杀死线程
+                # （2026-11-17 8000 实锤，一晚上 schedule 停摆）。最小动作：静态串日志+休眠继续。
+                try:
+                    _LOG.error("scheduler 单轮 MemoryError（内存耗尽）——休眠 30s 继续")
+                except Exception:
+                    pass
+                time.sleep(30)
+                continue
             except Exception:
                 import traceback
                 _LOG.error("scheduler 单轮异常（已容忍继续，防线程死亡致全部任务停摆）：\n%s",

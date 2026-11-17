@@ -164,7 +164,16 @@ def probe_stuck_agent(agent, entry, silent: float, stuck_secs: float) -> str:
 
 
 def check_once(agent, registry, cooldown: dict | None = None, now: float | None = None) -> list:
-    """跑一轮巡检（线程循环体与单测共用）：扫 list_active → 判定 → 触发。返回触发的 agent_id 列表。"""
+    """跑一轮巡检（线程循环体与单测共用）：扫 list_active → 判定 → 触发。返回触发的 agent_id 列表。
+    顺带看护 scheduler 线程（2026-11-17 8000 实锤：MemoryError 可杀死 _loop 线程且零留痕，
+    schedule 全停摆——巡检每轮 ensure_alive 自愈重建，任务表保留）。"""
+    # scheduler 线程看护（先于 stuck 扫描：schedule 停摆比 agent 卡死更隐蔽）
+    try:
+        sched = getattr(agent, "scheduler", None)
+        if sched is not None and hasattr(sched, "ensure_alive"):
+            sched.ensure_alive()
+    except Exception as e:
+        _LOG.debug("watchdog: scheduler ensure_alive 异常（跳过）: %s", e)
     cd = cooldown if cooldown is not None else _COOLDOWN
     t = time.time() if now is None else now
     stuck_secs = config.load_watchdog_stuck_secs()   # 每轮读盘：settings 热改即生效

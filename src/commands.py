@@ -1548,26 +1548,29 @@ def _cmd_clean(ctx: CommandContext, args):
 
 
 def _cmd_ask(ctx: CommandContext, args):
-    """/ask -prompt <问题> —— 无状态旁路询问（用户提案 2026-10-14；2026-11-07 用户裁定改走
-    agent_ask 同款链路）：不产生对话轮、不写 events.jsonl/历史——拷贝当前会话的上下文投影，
-    用临时 agent 回答（只读/召回类工具可自查，写类拒绝，60s 无收敛清空工具逼答）。
-    回答显示即弃（不进历史）。
-    -prompt   询问内容（其后所有参数拼为全文）
-    （旧 -turn N 参数已退役：ask 链路自带完整上下文投影，比旧版“近 N 轮纯文本”更全，
-      传入会被忽略并提示）"""
+    """/ask <问题> —— 无状态旁路询问（用户提案 2026-10-14；2026-11-07 用户裁定改走
+    agent_ask 同款链路；2026-11-17 用户提案去掉 -prompt 前缀：裸文本即问）：不产生对话轮、
+    不写 events.jsonl/历史——拷贝当前会话的上下文投影，用临时 agent 回答（只读/召回类工具
+    可自查，写类拒绝，60s 无收敛清空工具逼答）。回答显示即弃（不进历史）。
+    /ask 这个正则什么意思？            —— 新姿势（2026-11-17）：裸文本即问题
+    /ask -prompt 这个正则什么意思？    —— 旧姿势仍兼容（-prompt 后全部拼为问题）
+    （旧 -turn N 参数已退役：ask 链路自带完整上下文投影，传入会被忽略并提示）"""
     n_turns = 0
-    prompt = ""
+    parts: list = []
     i = 0
     while i < len(args):
         a = args[i]
         if a in ("-turn", "--turn") and i + 1 < len(args) and str(args[i + 1]).isdigit():
             n_turns = int(args[i + 1]); i += 2; continue
         if a in ("-prompt", "--prompt"):
-            prompt = " ".join(str(x) for x in args[i + 1:]); break
-        i += 1
-    if not prompt.strip():
-        print("用法：/ask -prompt <问题>   （无状态旁路询问：拷贝当前会话上下文 + 临时 agent 回答，不进历史）")
-        print("示例：/ask -prompt 刚才改的渲染缓存键是什么格式？")
+            # 旧姿势兼容：-prompt 其后所有参数拼为问题全文（历史习惯不炸）
+            parts.append(" ".join(str(x) for x in args[i + 1:])); break
+        parts.append(str(a)); i += 1
+    prompt = " ".join(p for p in parts if p).strip()
+    if not prompt:
+        print("用法：/ask <问题>   （无状态旁路询问：拷贝当前会话上下文 + 临时 agent 回答，不进历史）")
+        print("示例：/ask 刚才改的渲染缓存键是什么格式？")
+        print("      旧姿势 /ask -prompt <问题> 仍兼容")
         return
 
     agent = ctx.agent
@@ -2699,8 +2702,8 @@ def build_default_registry() -> CommandRegistry:
         "/clean             删除整个快照仓库（下一轮起自动重建、重新累积）\n"
         "  ⚠️ 清理前各轮的 /rewind /snapshot restore 失效（快照对象已删）")
     reg.register("ask", _cmd_ask,
-        "-prompt <问题>  无状态旁路询问（agent_ask 同款链路，对象=当前会话）：拷贝完整上下文投影 + 临时 agent 回答，只回应不进历史",
-        "/ask -prompt 这个正则什么意思？           旁路询问（完整上下文 + 临时 agent 可自查文件/记忆）\n"
+        "<问题>  无状态旁路询问（agent_ask 同款链路，对象=当前会话）：拷贝完整上下文投影 + 临时 agent 回答，只回应不进历史",
+        "/ask 这个正则什么意思？                  旁路询问（完整上下文 + 临时 agent 可自查文件/记忆）\n"
         "  回答以系统消息送达，不落 events.jsonl（刷新即消失）；\n"
         "  临时 agent 只读工具可用/写类拒绝/60s 无收敛清空工具逼答（与 agent_ask 完全同链路）")
     reg.register("rag", _cmd_rag,

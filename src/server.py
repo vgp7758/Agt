@@ -1311,8 +1311,31 @@ async def api_tool_exec(request: Request):
         return {"ok": False, "error": "缺少 name（要执行的工具名）"}
     if name not in _agent.tools:
         return {"ok": False, "error": f"未知工具 '{name}'（本实例工具箱共 {len(list(_agent.tools))} 个）"}
+    # remote 调用方回执（2026-11-17 用户报障修复）：调用方在 body.callback 带来自己的
+    # url+token——本端工具超时转后台时把该地址写进 bg owner（线程局部，随执行线程），
+    # 完成回执按外部注入协议 POST 回调用方 /api/callback（进调用方 inbox），不再误投本端 agent。
+    _cb = body.get("callback")
+    _cb_owner = None
+    if isinstance(_cb, dict) and _cb.get("url") and _cb.get("token"):
+        _cb_owner = ("remote_cb", str(_cb["url"]).rstrip("/"), str(_cb["token"]),
+                     str(_cb.get("caller") or "remote"))
+
+    def _exec():
+        if _cb_owner is not None:
+            from real_tools import set_bg_owner
+            set_bg_owner(_cb_owner)
+        try:
+            return _agent.tools.call(name, args)
+        finally:
+            if _cb_owner is not None:
+                try:
+                    from real_tools import set_bg_owner as _sbo
+                    _sbo(None)
+                except Exception:
+                    pass
+
     try:
-        result = await run_in_threadpool(_agent.tools.call, name, args)
+        result = await run_in_threadpool(_exec)
         return {"ok": True, "result": str(result)}
     except Exception as e:
         return {"ok": False, "error": f"工具 {name} 执行失败：{type(e).__name__}: {e}"}

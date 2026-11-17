@@ -244,14 +244,34 @@ def list_servers() -> str:
     return "\n".join(lines)
 
 
+# —— 本实例回执地址（remote bg 回发用，2026-11-17）——
+# remote_call_tool 在远端触发的超时转后台任务，完成通知须回**调用方实例**而非远端自己
+# （用户实锤：结果进了远端 agent 的 inbox，调用者干等）。chat.web_main 启动时注入本实例
+# 的 url+callback_token；远端 /api/tool/exec 转后台时把该地址写进 bg owner，完成回调按
+# 外部注入协议 POST 回本实例 /api/callback → 进本实例 inbox 并唤醒。
+_SELF_CB: dict = {"url": "", "token": ""}
+
+
+def set_self_callback(url: str, token: str) -> None:
+    """注册本实例的回调地址（chat.web_main 在 start_server 成功后注入；CLI 模式不注入=保持旧行为）。"""
+    _SELF_CB["url"] = (url or "").rstrip("/")
+    _SELF_CB["token"] = token or ""
+
+
 def route_remote_call(server_id: str, name: str, args: dict) -> str:
-    """server_id 路由执行：POST /api/tool/exec → 结果文本（前缀 [remote:id]）。"""
+    """server_id 路由执行：POST /api/tool/exec → 结果文本（前缀 [remote:id]）。
+    请求体附带本实例 callback（若已注入）——远端超时转后台的 bg 任务完成时把回执
+    POST 回调用方（进本实例 inbox），而不是误投远端自己的 agent。"""
     with _LOCK:
         it = REMOTE_SERVERS.get(server_id)
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
         return f"[未知实例 id] '{server_id}'——remote_list 查看已连接实例（{known}）"
-    ok, resp = _http_json(f"{it['url']}/api/tool/exec", {"name": name, "arguments": args}, EXEC_TIMEOUT)
+    body = {"name": name, "arguments": args}
+    if _SELF_CB.get("url") and _SELF_CB.get("token"):
+        body["callback"] = {"url": _SELF_CB["url"], "token": _SELF_CB["token"],
+                            "caller": "agt-remote-tool"}
+    ok, resp = _http_json(f"{it['url']}/api/tool/exec", body, EXEC_TIMEOUT)
     if not ok or not isinstance(resp, dict):
         # 连接失败：标 offline 保留配置（下次 connect 或 reconnect 恢复）
         with _LOCK:

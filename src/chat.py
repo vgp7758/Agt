@@ -863,6 +863,15 @@ def web_main(port=None):
     print(f"  本机:   http://127.0.0.1:{port}/")
     print(f"  局域网: {', '.join(lan_urls(port))}")
     print("  （局域网内任何设备可连并驱动 Agent，仅在可信网络使用；Ctrl+C 退出）")
+    # remote bg 回执地址注入（2026-11-17）：remote_call_tool 在远端超时转后台的任务，
+    # 完成回执 POST 回本实例 /api/callback（进本 inbox 唤醒），不再误投远端 agent。
+    try:
+        _cb_tok = str(config.load_runtime_settings().get("callback_token") or "")
+        if _cb_tok:
+            import remote_tools as _rt
+            _rt.set_self_callback(f"http://127.0.0.1:{port}", _cb_tok)
+    except Exception as _e:
+        print(f"  （remote 回执地址注入跳过：{_e}）")
     # /restart 看门狗重启：浏览器模式不开新页签——用户已有页签会自动重连（手机触发重启
     # 时电脑端无端多开一个 tab 正是用户报告的困扰）；桌面模式窗口已随旧进程关闭，必须重开。
     # env 在 _recover_restart_env 才 pop，此处仍在

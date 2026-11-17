@@ -1497,6 +1497,27 @@ class Agent:
         rec = {"tool": "check_bg_task", "args": {"task_id": bg_id},
                "result": (f"[后台任务完成·自动通知] {name}（{bg_id}）{ok}。\n尾部输出：\n{out[-4000:]}")}
         header = f"📨〔后台任务完成〕「{name}」{bg_id}（{ok}）"
+        # remote 调用方回执（2026-11-17 用户报障修复）：owner 是 ("remote_cb", url, token, caller)
+        # ——本端只是"手"（/api/tool/exec 直执行，任务由远端实例经 remote_call_tool 发起），
+        # 完成回执按外部注入协议 POST 回调用方 /api/callback（进调用方 inbox 唤醒），
+        # 不再误投本端 agent。回发失败回落本 Agent 自收（不失联）。
+        if isinstance(owner, tuple) and len(owner) == 4 and owner[0] == "remote_cb":
+            try:
+                import json as _json, urllib.request as _urq
+                _, _cb_url, _cb_token, _cb_label = owner
+                _payload = _json.dumps({"text": header + "\n" + rec["result"],
+                                        "source": f"bg_task:{bg_id}"}, ensure_ascii=False).encode("utf-8")
+                _rq = _urq.Request(_cb_url + "/api/callback", data=_payload,
+                                   headers={"Content-Type": "application/json",
+                                            "X-Cb-Token": _cb_token}, method="POST")
+                with _urq.urlopen(_rq, timeout=10) as _rp:
+                    _rj = _json.loads(_rp.read().decode("utf-8", "replace") or "{}")
+                if _rj.get("ok"):
+                    _LOG.info("bg 回执已回发远端调用方 %s（%s）", _cb_label, bg_id)
+                    return
+                _LOG.warning("bg 回执回发远端失败（%s 应答非 ok），回落本 Agent：%s", _cb_label, _rj)
+            except Exception as _e:
+                _LOG.warning("bg 回执回发远端异常，回落本 Agent：%s", _e)
         # seed=dict 直传（修复 2026-08-31·终验发现）：曾 seed=[rec]（list 包装）违反 dict 契约——
         # 消费侧 _seed_steps 的 sd.get() 崩唤醒轮（AttributeError），是 11:23 bg_task 唤醒崩溃的产地。
         # 三层防御（push 入口/drain/seed_steps）兜住后仍降级显示为 notice——产地修正后恢复标准

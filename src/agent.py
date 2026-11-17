@@ -402,6 +402,10 @@ class Agent:
 
         # —— 工作流生命周期钩子（每轮 run 开头重置）——
         self._hook_notes: list[dict] = []       # 待注入的 system 旁注（before_tool/after_tool/before_answer），每项 {hook, name, result}
+        # 钩子工作流错误挂起队列（2026-11-17 用户裁定：错误与 result 分离）：钩子执行中收集的
+        # 节点级错误（含顶层异常），在下一次投影 _chat_msgs 时作为 system-reminder 尾部一段
+        # 附加（一次性可见，投影后清空）——不再把错误文本混进 result 注入当轮。
+        self._hook_errors_pending: list[dict] = []
         self._answer_redo_draft: Optional[str] = None   # before_answer 重跑时上一次草稿（临时 assistant 续接）
         self._last_answer_draft: Optional[str] = None   # 收敛判据：上次注入所针对的草稿
         self._answer_inject_count: int = 0      # 本轮 before_answer 注入次数（封顶 5 防死循环）
@@ -2110,11 +2114,21 @@ class Agent:
                         from llm_client import _HOOK_SCENE
                         _sc_tok = _HOOK_SCENE.set(f"hook:{_hook}·{_hw['name']}·{_agent_ref.agent_id}")
                         try:
-                            inject, result, message = run_hook(_hw["canvas"], _ctx,
-                                                      tools=_agent_ref.tools, llm=_llm, workspace=_ws,
-                                                      run_id=_rid_c)
+                            inject, result, message, hook_err = run_hook(_hw["canvas"], _ctx,
+                                                                      tools=_agent_ref.tools, llm=_llm, workspace=_ws,
+                                                                      run_id=_rid_c)
                         finally:
                             _HOOK_SCENE.reset(_sc_tok)
+                        # 错误与 result 分离（2026-11-17）：error 通道走 auto_wf_error 事件 +
+                        # 挂起队列（下一次投影 system-reminder 尾部），不再混进 result 注入
+                        if hook_err.strip():
+                            _agent_ref._emit({"type": "auto_wf_error", "name": _hw["name"], "hook": _hook,
+                                        "run_id": _rid_c, "text": hook_err[:300]})
+                            try:
+                                _agent_ref._hook_errors_pending.append(
+                                    {"hook": _hook, "name": _hw["name"], "rid": _rid_c, "error": hook_err[:2000]})
+                            except Exception:
+                                pass
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": result[:300] or message[:300]})
                         # 【recap 回写已移到工作流数据流】：钩子工作流经 hook_ctx 拿 turn_idx，
@@ -2143,17 +2157,26 @@ class Agent:
                     _sc_tok = _HOOK_SCENE.set(f"hook:{hook}·{hw['name']}·{self.agent_id}")
                     try:
                         try:
-                            inject, result, message = run_hook(hw["canvas"], context,
-                                                      tools=self.tools, llm=hook_llm, workspace=_ws,
-                                                      run_id=rid)
+                            inject, result, message, hook_err = run_hook(hw["canvas"], context,
+                                                                      tools=self.tools, llm=hook_llm, workspace=_ws,
+                                                                      run_id=rid)
                         finally:
                             _HOOK_SCENE.reset(_sc_tok)
-                        return hw["name"], inject, result, message, rid
+                        # 错误与 result 分离（2026-11-17）：错误走 error 通道（第六元）——
+                        # _collect_hooks 据此发 auto_wf_error + 进挂起队列（投影尾部附加）
+                        return hw["name"], inject, result, message, rid, hook_err
                     except Exception as e2:
                         # 单个钩子失败不拖垮并行组：发错误事件 + 返回空结果（不注入）
+                        _err2 = f"{type(e2).__name__}: {str(e2)[:200]}"
                         self._emit({"type": "auto_wf_error", "name": hw["name"], "hook": hook,
-                                    "run_id": rid, "text": f"{type(e2).__name__}: {str(e2)[:200]}"})
-                        return hw["name"], False, "", "", rid
+                                    "run_id": rid, "text": _err2})
+                        try:
+                            # 顶层异常同样进挂起队列（与节点错误同通道，投影尾部一次性可见）
+                            self._hook_errors_pending.append(
+                                {"hook": hook, "name": hw["name"], "rid": rid, "error": _err2})
+                        except Exception:
+                            pass
+                        return hw["name"], False, "", "", rid, _err2
                 ex = ThreadPoolExecutor(max_workers=max(1, len(sync_hws)))
                 futs = {hw["name"]: ex.submit(_run_one, hw) for hw in sync_hws}
                 return {"hook": hook, "hws": sync_hws, "futs": futs, "ex": ex,
@@ -2203,12 +2226,19 @@ class Agent:
                     nm = hw["name"]
                     try:
                         _r = futs[nm].result(timeout=max(0.05, _deadline - time.time()))
-                        results[nm] = (_r[1], _r[2], _r[3], _r[4])
+                        results[nm] = (_r[1], _r[2], _r[3], _r[4], _r[5] if len(_r) > 5 else "")
                     except _cf.TimeoutError:
                         futs[nm].cancel()
                         _LOG.warning("钩子工作流 %s 超时（%ss）结果丢弃", nm, _timeout_s)
+                        _terr = f"⏱ 超时（投影并行+{_timeout_s}s）结果已丢弃，主循环继续"
                         self._emit({"type": "auto_wf_error", "name": nm, "hook": hook,
-                                    "run_id": "", "text": f"⏱ 超时（投影并行+{_timeout_s}s）结果已丢弃，主循环继续"})
+                                    "run_id": "", "text": _terr})
+                        try:
+                            # 超时也进挂起队列（错误与 result 分离，投影尾部一次性可见）
+                            self._hook_errors_pending.append(
+                                {"hook": hook, "name": nm, "rid": "", "error": _terr})
+                        except Exception:
+                            pass
                     except Exception as e3:
                         _LOG.warning("钩子 %s 收集异常: %s", nm, e3)
             finally:
@@ -2218,7 +2248,17 @@ class Agent:
                 try:
                     for hw in hws:
                         nm = hw["name"]
-                        inject, result, message, rid = results.get(nm, (False, "", "", ""))
+                        inject, result, message, rid, h_err = results.get(nm, (False, "", "", "", ""))
+                        # 错误通道（2026-11-17）：节点级错误已与 result 分离——发 auto_wf_error
+                        # 事件 + 进挂起队列（下一次投影 system-reminder 尾部一次性可见）
+                        if h_err.strip():
+                            self._emit({"type": "auto_wf_error", "name": nm, "hook": hook,
+                                        "run_id": rid, "text": h_err[:300]})
+                            try:
+                                self._hook_errors_pending.append(
+                                    {"hook": hook, "name": nm, "rid": rid, "error": h_err[:2000]})
+                            except Exception:
+                                pass
                         self._emit({"type": "auto_wf", "name": nm, "hook": hook,
                                 "run_id": rid, "text": result[:300] or message[:300], "auto": True})
                         if message.strip():
@@ -2304,6 +2344,30 @@ class Agent:
                     msgs[-1] = _m2
                 else:
                     msgs.append({"role": "user", "content": _blk})
+        # 钩子错误挂起队列（2026-11-17 用户裁定）：错误与 result 分离后，节点级/顶层/超时
+        # 错误在此一次性注入（system-reminder 尾部一段，merge 进末条），投影后清空——
+        # agent 下一轮知道钩子挂了，但错误不再混进 result 打扰当轮。
+        _pend = getattr(self, "_hook_errors_pending", None)
+        if _pend:
+            self._hook_errors_pending = []   # 先清空（一次性语义；渲染异常也不重复注入）
+            _eparts = [f'<hook-error name="{p.get("name")}" hook="{p.get("hook")}" run="{p.get("rid", "")}">\n'
+                       f'{p.get("error", "")}\n</hook-error>' for p in _pend]
+            _eblock = ('<system-reminder pos="hook_errors">\n'
+                       '⚠️ 钩子工作流在上一轮执行中出现错误（已与正常 result 分离，此处一次性通知）：\n'
+                       + "\n".join(_eparts) + '\n</system-reminder>')
+            if msgs and msgs[-1].get("role") != "assistant":
+                _last = msgs[-1]
+                _c = _last.get("content")
+                _m3 = {**_last}   # 浅拷贝（同 notes merge），不就地改 session 数据
+                if isinstance(_c, str):
+                    _m3["content"] = _c + "\n" + _eblock
+                elif isinstance(_c, list):
+                    _m3["content"] = list(_c) + [{"type": "text", "text": "\n" + _eblock}]
+                else:
+                    _m3["content"] = _eblock
+                msgs[-1] = _m3
+            else:
+                msgs.append({"role": "user", "content": _eblock})
         # 投影转储（调试用）：把完整 messages 以纯文本写到 projections/ 目录
         if getattr(self, "dump_projections", False):
             self._dump_projection(msgs)

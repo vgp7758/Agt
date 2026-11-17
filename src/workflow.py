@@ -1265,6 +1265,10 @@ class _Ctx:
     """运行时上下文：各节点输出、全局变量、循环变量、workspace、以及 tools/llm 引用。"""
     def __init__(self, *, tools, llm, emit=None, workspace=None):
         self.node_outputs: dict[str, dict] = {}
+        # 节点级错误累积（2026-11-17 用户裁定：错误与 result 分离）：节点异常时 append
+        # "节点id(标题): 错误文本"——execute 在 return_exit_dict 分支附进返回 dict 的 _wf_errors，
+        # run_hook 消费后走 error 通道（钩子侧不再把错误文本混进 result 注入）。
+        self.wf_errors: list[str] = []
         self.on_round = None   # 每轮迭代完成回调（调试页逐轮刷新）：fn(node_id, round_idx, outputs_snapshot)。None=无观察者
         self.global_vars: dict = {}
         self.loop_vars: dict | None = None   # 当前循环的累加变量（LoopSetVariable 读写）
@@ -1670,6 +1674,12 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                                           "title": _node_title(node), "ntype": "2"})
                     _track_dispatch(ctx, {"ev": "node_end", "id": current, "preview": _preview_str(raw),
                                           "full": _full_str(raw)})
+                if return_exit_dict and ctx.wf_errors:
+                    # 节点错误与 result 分离（2026-11-17 用户裁定）：错误以 _wf_errors 附在
+                    # exit dict 上（run_hook 消费走 error 通道），不再混进 result 注入主 LLM。
+                    if isinstance(raw, dict):
+                        raw = dict(raw)
+                        raw["_wf_errors"] = list(ctx.wf_errors)
                 return raw if return_exit_dict else _stringify_result(raw)
             if node is None:
                 raise WorkflowError(f"节点 {current} 不存在")
@@ -1692,6 +1702,12 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                 # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
                 # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
                 ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
+                # 错误与 result 分离（2026-11-17）：同时累积到 wf_errors（随 exit dict 的
+                # _wf_errors 走 error 通道，run_hook 消费）——分支静默终止时错误也不失联
+                try:
+                    ctx.wf_errors.append(f"{current}({_node_title(node)}): {type(e).__name__}: {e}")
+                except Exception:
+                    pass
                 port = f"{current}_error"   # 每个节点默认 error 端口名
                 if run_id:
                     _track_dispatch(ctx, {"ev": "node_error", "id": current,
@@ -1717,9 +1733,17 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
         if executed:
             last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
             if last and last in ctx.node_outputs:
-                return (ctx.node_outputs[last] if return_exit_dict
-                        else _stringify_result(ctx.node_outputs[last]))
-        return {} if return_exit_dict else _stringify_result({})
+                _raw_implicit = ctx.node_outputs[last]
+                if return_exit_dict and ctx.wf_errors and isinstance(_raw_implicit, dict):
+                    # 错误与 result 分离（2026-11-17）：错误分支静默终止导致 exit 不可达时，
+                    # 错误也要经 error 通道带出（附 _wf_errors），不能只留在 node_outputs 里失联
+                    _raw_implicit = dict(_raw_implicit)
+                    _raw_implicit["_wf_errors"] = list(ctx.wf_errors)
+                return (_raw_implicit if return_exit_dict
+                        else _stringify_result(_raw_implicit))
+        if return_exit_dict:
+            return {"_wf_errors": list(ctx.wf_errors)} if ctx.wf_errors else {}
+        return _stringify_result({})
     finally:
         if run_id and not _nested:
             # 整体结束态：正常返回=done；异常抛出=failed（finally 里判断——except 重抛前记录）。
@@ -2208,13 +2232,16 @@ def get_auto_workflows(workspace: Path = None) -> list[dict]:
 
 
 def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id: str = None) -> tuple:
-    """执行一个钩子工作流，返回 (inject: bool, result: str, message: str)。
+    """执行一个钩子工作流，返回 (inject: bool, result: str, message: str, error: str)。
     run_id：观测注册表 id（_run_hooks 生成），透传给 execute。
 
     结束节点约定返回 {inject: bool, result: str, message: str}：
       - inject=true + result → 作 system 旁注喂主 LLM（注入语义）；
       - message（无论 inject）→ 发 workflow_message 事件到 UI，【不进主 LLM】
-        （用于"静默执行+系统通知"类钩子，如 wiki 自动维护）。
+        （用于"静默执行+系统通知"类钩子，如 wiki 自动维护）；
+      - error（2026-11-17 用户裁定：错误与 result 分离）→ 节点级错误文本（execute 附在
+        exit dict 的 _wf_errors，exit 引用 _error 输出时不再混进 result）——钩子侧据此走
+        error 通道（auto_wf_error 事件 + 下一次投影 system-reminder 尾部）。
     解析规则——
       - 显式 end 返回 dict：inject 缺省按 result 非空推断；result 兜底 output；
       - dict 无 inject（旧式 {output:x} / 引用未解析 {result:None}）：取唯一值，None/空 → 不注入；
@@ -2235,25 +2262,50 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id:
 
     ret = execute(canvas, context, tools=tools, llm=llm, workspace=workspace,
                   return_exit_dict=True, run_id=run_id)
+    # 节点错误通道（2026-11-17）：execute 附在 exit dict 的 _wf_errors（仅 return_exit_dict 分支）
+    _errors: list = []
+    if isinstance(ret, dict):
+        _raw_errs = ret.pop("_wf_errors", None)
+        if isinstance(_raw_errs, list):
+            _errors = [str(x) for x in _raw_errs if str(x).strip()]
+        # 失败节点的 _error 输出被 exit 引用/隐式结束兜底返回（end 不可达，raw=node_outputs[last]
+        # ={"_error":...}，如 recap_gen check_style 超时分支终止）——错误文本并入 error 通道，
+        # 不再经"取唯一值"分支混进 result 注入（用户实锤：日志出现"完成: TimeoutExpired"）
+        _e_node = ret.pop("_error", None)
+        if _e_node is not None and str(_e_node).strip():
+            _errors.insert(0, str(_e_node))
+    err_text = "\n".join(_errors)
     if isinstance(ret, dict):
         msg = _msg(ret)
         if "inject" in ret:
-            return _to_bool(ret.get("inject")), str(ret.get("result") or ret.get("output") or ""), msg
+            _inj = _to_bool(ret.get("inject"))
+            _res = str(ret.get("result") or ret.get("output") or "")
+            if _errors and not _res:
+                _inj = False   # 只有错误无产出：不注入（错误走 error 通道，不打扰当轮）
+            return _inj, _res, msg, err_text
         # 无 inject 键（旧式 {output:x} / 引用未解析的 {result:None}）：取唯一值，None/空 → 不注入
         v = next((ret.get(k) for k in ("result", "output") if k in ret), None)
         if v is None and ret:
             v = next(iter(ret.values()))
         vs = "" if v is None else str(v)
-        return (bool(vs), vs, msg)
+        if _errors and not vs:
+            return False, "", msg, err_text
+        return (bool(vs), vs, msg, err_text)
     s = str(ret).strip()
     if s.startswith("{"):
         try:
             d = json.loads(s)
             if isinstance(d, dict) and "inject" in d:
-                return _to_bool(d.get("inject")), str(d.get("result") or d.get("output") or ""), _msg(d)
+                _errs2 = d.pop("_wf_errors", None)
+                _et2 = "\n".join(str(x) for x in _errs2) if isinstance(_errs2, list) else err_text
+                _inj2 = _to_bool(d.get("inject"))
+                _res2 = str(d.get("result") or d.get("output") or "")
+                if _et2 and not _res2:
+                    _inj2 = False
+                return _inj2, _res2, _msg(d), _et2
         except Exception:
             pass
-    return (bool(s), s, "")
+    return (bool(s), s, "", err_text)
 
 
 def seed_default_workflows(workspace: Path = None) -> int:

@@ -1036,6 +1036,43 @@ async def api_scenarios_save(request: Request):
     return {"ok": True, "scenarios": config.load_scenarios(_scope, seed=False), "cleared": cleared}
 
 
+def _hotapply_models():
+    """模型配置保存后的实例层热应用（PUT /api/models、onboard、add-one 三端点共用）。
+    - 当前模型仍在 → 同名 profile 重应用（token/model id 刷新，不动链）+ session 窗口副本同步；
+    - 当前模型不存在（**从零到一首卡** 2026-11-17 用户实锤 / 卡片被删）→ 接入 DEFAULT_MODEL
+      （走 Agent.switch_model 完整路径：链重建 + on_switch 钩子投影/窗口/档位建档统一处理）——
+      此前三端点只在 `cur in MODELS` 时重应用，新机器加第一张卡后 cur 为空 → 跳过热应用 →
+      主 llm 仍是空 profile，调用报"回退链不可用…尚未配置任何模型"，须重启才生效。
+    - utility 通道重建。返回 adopted（首卡接入的模型名）或 None。"""
+    if _agent is None:
+        return None
+    adopted = None
+    try:
+        cur = _agent.llm.model_name
+        if cur in config.MODELS:
+            _agent.llm._apply_profile(config.get_profile(cur))
+            # session 窗口副本同步（switch_model/_cmd_reload 同款）：窗口随新 profile 生效，
+            # 折叠计划/detail_base 不再按旧窗口算
+            try:
+                _agent.session.max_effective_context_window = getattr(
+                    _agent.llm, "max_effective_context_window", None)
+                _agent.session.fold_target_ratio = getattr(_agent.llm, "fold_target_ratio", None)
+                _agent.session.profile_detail_step = getattr(_agent.llm, "profile_detail_step", None)
+                _agent.session.invalidate_detail_base()
+            except Exception:
+                pass
+        else:
+            tgt = config.DEFAULT_MODEL
+            if tgt and tgt in config.MODELS:
+                _agent.switch_model(tgt, _user_initiated=True)
+                adopted = tgt
+        _agent._utility_llm = None
+        _agent.retrieval_llm = _agent.utility_client()
+    except Exception:
+        pass
+    return adopted
+
+
 @app.put("/api/models")
 async def api_models_save(request: Request):
     """保存模型配置。body.scope=local/global 写指定份；写非生效份只落盘不热应用（存档备用），
@@ -1053,29 +1090,9 @@ async def api_models_save(request: Request):
         return {"ok": True, "path": r["path"], "scope": _scope, "reloaded": False,
                 "note": f"已写非生效份（当前生效：{config.active_scope('models.json')}）——存档备用，不热应用"}
     config.save_user_models(models, default)
-    # 实例层热应用：主 llm 同名 profile 重应用（token/model id 刷新）+ utility 通道重建
-    # （save_user_models 已自动 reload_models 刷新 config.MODELS；LLMClient 实例 profile 是
-    #  创建时固化的，这里补上实例层——否则保存后当前进程跑的还是旧配置）
-    if _agent is not None:
-        try:
-            cur = _agent.llm.model_name
-            if cur in config.MODELS:
-                _agent.llm._apply_profile(config.get_profile(cur))
-                # session 窗口副本同步（switch_model/_cmd_reload 同款）：窗口随新 profile 生效，
-                # 折叠计划/detail_base 不再按旧窗口算
-                try:
-                    _agent.session.max_effective_context_window = getattr(
-                        _agent.llm, "max_effective_context_window", None)
-                    _agent.session.fold_target_ratio = getattr(_agent.llm, "fold_target_ratio", None)
-                    _agent.session.profile_detail_step = getattr(_agent.llm, "profile_detail_step", None)
-                    _agent.session.invalidate_detail_base()
-                except Exception:
-                    pass
-            _agent._utility_llm = None
-            _agent.retrieval_llm = _agent.utility_client()
-        except Exception:
-            pass
-    return {"ok": True, "default": config.DEFAULT_MODEL}
+    # 实例层热应用（含从零到一首卡接入）：详见 _hotapply_models
+    adopted = _hotapply_models()
+    return {"ok": True, "default": config.DEFAULT_MODEL, "adopted": adopted}
 
 
 @app.post("/api/models/onboard")
@@ -1122,16 +1139,8 @@ async def api_models_onboard(request: Request):
     if not added:
         return {"error": "该 provider 无可落地的预设条目"}
     config.save_user_models(models, config.DEFAULT_MODEL)
-    # 实例层热应用（与 PUT /api/models 同款——主 llm 同名刷新 + utility 通道重建）
-    if _agent is not None:
-        try:
-            cur = _agent.llm.model_name
-            if cur in config.MODELS:
-                _agent.llm._apply_profile(config.get_profile(cur))
-            _agent._utility_llm = None
-            _agent.retrieval_llm = _agent.utility_client()
-        except Exception:
-            pass
+    # 实例层热应用（含从零到一首卡接入——_hotapply_models）：与 PUT /api/models 同款
+    _hotapply_models()
     return {"ok": True, "name": name, "reload": True, "cascade": added}
 @app.post("/api/models/add-one")
 async def api_models_add_one(request: Request):
@@ -1180,16 +1189,8 @@ async def api_models_add_one(request: Request):
     models = dict(config.MODELS)
     models[name] = entry
     config.save_user_models(models, config.DEFAULT_MODEL)
-    # 实例层热应用（与 onboard 同款）
-    if _agent is not None:
-        try:
-            cur = _agent.llm.model_name
-            if cur in config.MODELS:
-                _agent.llm._apply_profile(config.get_profile(cur))
-            _agent._utility_llm = None
-            _agent.retrieval_llm = _agent.utility_client()
-        except Exception:
-            pass
+    # 实例层热应用（含从零到一首卡接入——_hotapply_models）：与 PUT /api/models 同款
+    _hotapply_models()
     return {"ok": True, "name": name, "reload": True, "key_from": key_from}
 
 

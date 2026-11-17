@@ -2985,9 +2985,32 @@ def _late_answer_push(cb_url: str, payload: dict) -> None:
             _LOG.warning("迟到补偿投递失败（%d/2）%s：%s", attempt, u, e)
 
 
+# remote_message 可靠投递·接收侧去重表（用户提案 2026-11-18）：_rmid → ts。
+# 发送方首发未确认会带同一 _rmid 重发——这里记住近期 id，重复消息回执丢弃不重复入队。
+_RMSG_SEEN: dict = {}
+
+
 async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None):
     """处理一条用户输入（文本/命令/action）。client=来源客户端 dict（含 target——
     文本按其交互目标路由：主 Agent 走 work_q；子 Agent 按忙闲插话/task 直达）。"""
+    # —— remote_message 可靠投递·接收侧幂等去重（用户提案 2026-11-18）——
+    # 发送方未拿到回执会带同一 _rmid 重发（remote_tools._deliver_reliable）：这里记住
+    # 近期 rmid，重复的直接回执丢弃（文案含"已入队"——发送端 ack 判定按文案命中，视为送达）。
+    try:
+        _rmid_d = json.loads(raw) if raw.lstrip().startswith("{") else None
+    except Exception:
+        _rmid_d = None
+    if isinstance(_rmid_d, dict) and _rmid_d.get("_rmid"):
+        _rmid = str(_rmid_d["_rmid"])[:64]
+        _now = time.time()
+        if len(_RMSG_SEEN) > 256:   # 简易 LRU：超量清 30 分钟前的
+            for _k in [k for k, v in _RMSG_SEEN.items() if _now - v > 1800][:128]:
+                _RMSG_SEEN.pop(_k, None)
+        if _rmid in _RMSG_SEEN:
+            await _send(ws, {"type": "system", "transient": True,
+                             "text": "♻️ 重复消息已去重（此前已入队）"})
+            return
+        _RMSG_SEEN[_rmid] = _now
     # JSON action?
     try:
         _d = json.loads(raw) if raw.lstrip().startswith("{") else None

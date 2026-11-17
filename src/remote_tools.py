@@ -27,6 +27,9 @@ import urllib.request
 
 from tools import Tool
 
+import logging
+_LOG = logging.getLogger("agt.remote_tools")
+
 _LOCK = threading.RLock()
 REMOTE_SERVERS: dict[str, dict] = {}   # server_id → {url, status, tools_count, session_name, model, checked_at}
 EXEC_TIMEOUT = 180                      # 工具直执行 HTTP 超时（远程可能跑长任务）
@@ -409,9 +412,11 @@ def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
             else f"[错误] {state['err']}"), answers
 
 
-def send_message(server_id: str, message: str, expect_reply: bool = False) -> str:
-    """异步消息：发给对方 agent 后立即返回（fire-and-forget）。它将带着自己的 session
-    上下文异步跑一轮处理（消耗它的 LLM）。送达确认 = 收到 user/message_queued 回执。
+def send_message(server_id: str, message: str, expect_reply: bool = False, _agent=None) -> str:
+    """异步消息：发给对方 agent 后立即返回（fire-and-forget + 未确认转可靠投递）。
+    它将带着自己的 session 上下文异步跑一轮处理（消耗它的 LLM）。送达确认 = 收到
+    user/message_queued 回执；首发确认即返回——否则转入后台可靠投递（用户提案
+    2026-11-18：异步跟进+带 rmid 重发，对端新版本幂等去重，终态推送通知）。
     expect_reply（2026-09-17·用户提案）：True=期望对方完成时回发 answer——消息头注入
     ⟨expect_reply:url⟩ 协议行（对方剥头挂轮元数据，本轮 answer 生成后临时 connect 回发；
     需本机 WebUI 服务在线——MY_URL 已设，CLI 裸进程不支持）。"""
@@ -428,7 +433,64 @@ def send_message(server_id: str, message: str, expect_reply: bool = False) -> st
         message = f"⟨expect_reply:{MY_URL}⟩\n{message}"
         note = "（对方完成时将回发回答唤醒你）"
     status, _ = _ws_send_collect(it["url"], message, wait_done=False, timeout=10, ack_timeout=10)
-    return f"[remote:{server_id}] {status}{note}：{message[:80]}" + ("…" if len(message) > 80 else "")
+    _tail = f"：{message[:80]}" + ("…" if len(message) > 80 else "")
+    if "已送达" in status:
+        return f"[remote:{server_id}] {status}{note}{_tail}"
+    # —— 未拿到送达证据 → 转可靠投递（用户提案 2026-11-18）——
+    # 三次丢消息实锤（10-24 20055→20048、11-17 03:12 8200→8000 瞬态吞、11-18 换血窗口）
+    # 都是"连接建立但无回执/无轮启动"——fire-and-forget 静默丢。后台重发至拿到 ack
+    #（payload 带 _rmid，对端幂等去重），终态 push 通知发送方 agent。
+    import random as _rd
+    rmid = f"rm_{int(time.time()*1000):x}{_rd.randrange(1 << 20):05x}"
+    threading.Thread(target=_deliver_reliable, daemon=True,
+                     args=(server_id, message, rmid, _agent, note)).start()
+    return (f"[remote:{server_id}] {status}{note}{_tail}\n"
+            f"⏳ 首发未确认——已转可靠投递（rmid={rmid}，至多 {len(_DELIVERY_RETRIES)} 次重试、"
+            f"约 {sum(_DELIVERY_RETRIES) // 60} 分钟窗口；对方确认送达或最终失败会推送通知你）")
+
+
+# 可靠投递重试间隔（秒）：首发未确认后的异步跟进节奏——总窗口 ~5 分钟
+_DELIVERY_RETRIES = (30, 90, 180)
+
+
+def _deliver_reliable(server_id: str, message: str, rmid: str, agent=None, note: str = "") -> None:
+    """可靠投递后台线程：按 _DELIVERY_RETRIES 间隔重发（payload 带 _rmid，对端新版本
+    幂等去重；老版本无去重——重发仅在"无任何回执"时发生，消息实际已到但回执丢失的
+    窗口很窄，重复处理风险可接受）。终态 push 发送方 agent：重试后送达 / 最终失败。"""
+    import threading as _th
+    for i, wait_s in enumerate(_DELIVERY_RETRIES, 1):
+        time.sleep(wait_s)
+        with _LOCK:
+            it = REMOTE_SERVERS.get(server_id)
+        if it is None:
+            return   # 实例已断开——放弃
+        try:
+            status, _ = _ws_send_collect(it["url"], payload={"text": message, "_rmid": rmid},
+                                         wait_done=False, timeout=10, ack_timeout=10)
+        except Exception as e:
+            status = f"[异常] {e}"
+        if "已送达" in status:
+            _LOG.info("可靠投递 %s rmid=%s 第 %d 次送达", server_id, rmid, i + 1)
+            if agent is not None:
+                try:
+                    agent.push_message(
+                        f"✅〔remote_message 可靠投递〕→ {server_id} 第 {i + 1} 次尝试确认送达"
+                        f"（rmid={rmid}）{note}：{message[:120]}"
+                        + ("…" if len(message) > 120 else ""), source="remote_delivery")
+                except Exception:
+                    pass
+            return
+    _LOG.warning("可靠投递 %s rmid=%s 最终失败（%d 次）", server_id, rmid, len(_DELIVERY_RETRIES) + 1)
+    if agent is not None:
+        try:
+            agent.push_message(
+                f"❌〔remote_message 投递失败〕→ {server_id} 持续无送达确认（首发"
+                f"+{len(_DELIVERY_RETRIES)} 次重试、~{sum(_DELIVERY_RETRIES) // 60} 分钟窗口，rmid={rmid}）：\n"
+                f"{message[:200]}" + ("…" if len(message) > 200 else "")
+                + "\n对方可能不在线/换血中/回执异常——建议稍后重发或改用 remote_ask。",
+                source="remote_delivery")
+        except Exception:
+            pass
 
 
 def ask(server_id: str, question: str, timeout: int = 120) -> str:
@@ -493,7 +555,7 @@ def make_remote_tools(agent) -> list[Tool]:
             agent.recap_interact("r:" + remote_instance_id)
         except Exception:
             pass
-        return send_message(remote_instance_id, message, expect_reply=expect_reply)
+        return send_message(remote_instance_id, message, expect_reply=expect_reply, _agent=agent)
 
     def remote_ask(remote_instance_id: str, question: str, timeout: int = 120) -> str:
         """向远程实例的 agent 提问并等待它的最终回答（挂流到回答完成，默认 120s）。

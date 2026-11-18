@@ -1665,6 +1665,7 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
     ready = deque(nid for nid in nodes if nid != ENTRY_ID and pending_in.get(nid, 0) <= 0
                   and not (str(nodes[nid].get("type")) == "2" and nid not in _entry_succs))
     executed: set[str] = set()
+    exec_order: list[str] = []   # 执行时间序（隐式结束取"最后执行节点"——set 是哈希随机序，8000 31M 注入事故根因）
 
     try:
         for _ in range(max_steps):
@@ -1674,6 +1675,7 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             if current in executed:
                 continue   # 防重复
             executed.add(current)
+            exec_order.append(current)
             node = nodes.get(current)
             # 到达结束节点即返回：EXIT_ID(900001) 之外的多个 Exit 同样生效（多出口画布的
             # 常规模式：不同分支各挂一个 end，各自 ref 不同来源——单 id 特判会漏掉第二个
@@ -1741,8 +1743,11 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
                 if pending_in[tid] <= 0 and tid not in executed:
                     ready.append(tid)
         # 循环结束：走完所有路径但无 exit（隐式结束）→ 返回最后一个执行的节点输出
-        if executed:
-            last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
+        # exec_order=执行时间序（2026-11-18 修复：原 reversed(list(set)) 是哈希随机序，
+        # "最后执行节点"随机漂移——曾把 get_session_history 的全量历史输出当 result 返回，
+        # str(list) 31M 字符注入上下文直接打爆 provider 上下文上限，8000 实例炸线铁证）
+        if exec_order:
+            last = next((nid for nid in reversed(exec_order) if nid != EXIT_ID), None)
             if last and last in ctx.node_outputs:
                 _raw_implicit = ctx.node_outputs[last]
                 if return_exit_dict and ctx.wf_errors and isinstance(_raw_implicit, dict):
@@ -1868,8 +1873,9 @@ def execute_debug(canvas: dict, inputs: dict, *, tools, llm, on_node,
             pending_in[tid] -= 1
             if pending_in[tid] <= 0 and tid not in executed:
                 ready.append(tid)
-    # 走完所有路径但无 exit（隐式结束）
-    last = next((nid for nid in reversed(list(executed)) if nid != EXIT_ID), None)
+    # 走完所有路径但无 exit（隐式结束）——order 即执行时间序（execute 同款修复 2026-11-18：
+    # 不再用哈希随机序的 set，隐式结束稳定返回真正最后执行的节点输出）
+    last = next((nid for nid in reversed(order) if nid != EXIT_ID), None)
     last_outs = ctx.node_outputs.get(last, {}) if last else {}
     return (last_outs, order, trace)
 
@@ -2307,6 +2313,11 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id:
         if v is None and ret:
             v = next(iter(ret.values()))
         vs = "" if v is None else str(v)
+        # 巨长封顶（2026-11-18）：隐式结束兜底可能返回大输出节点（如全量历史）——
+        # str(list) 可达数千万字符（8000 实例 31M 注入打爆 provider 上下文上限实锤）。
+        # 头 4000 + 尾 1500，与 agent 侧 notes 6000 封顶构成双保险
+        if len(vs) > 8000:
+            vs = vs[:4000] + f"\n…(隐式结束兜底输出超长，已截断 {len(vs) - 5500} 字)…" + vs[-1500:]
         if _errors and not vs:
             return False, "", msg, err_text
         return (bool(vs), vs, msg, err_text)

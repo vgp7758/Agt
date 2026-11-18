@@ -8,6 +8,3 @@ assembly:
 - user_message
 - steps
 - recent_file
-fallback:
-- proxy
-- deepseek

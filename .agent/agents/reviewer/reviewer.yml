@@ -12,10 +12,3 @@ hooks:
   turn_end:
   - workflow: recap_gen
     async: true
-fallback:
-  chain:
-  - glm
-  - ms-deepseek
-  - deepseek-chat
-  - local-lfm
-  policy: reset

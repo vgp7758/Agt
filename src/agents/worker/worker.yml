@@ -16,6 +16,3 @@ hooks:
     async: true
   after_tool:
   - workflow: py_auto_diag
-fallback:
-- glm-official
-- deepseek

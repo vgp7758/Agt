@@ -1,6 +1,8 @@
 name: _main_
 description: 主 Agent——自主完成任务。用户自然语言布置任务，自主决定工具、步骤；支持多子 Agent 协作、工作流编排、长期记忆、自动 wiki 维护。
-model: glm
+# 首模型由会话存档 / WebUI 下拉框（/model）决定——yml 的 model 字段已退役（用户裁定 2026-11-18），写了也忽略。
+# fallback 填【场景名】（settings.scenarios；逗号分隔）；未命中任何场景 → 按 default 场景链兜底。模型卡名仍兼容（旧配置不断）。
+fallback: default
 assembly:
   - text: |
       你是一个强大的自主 Agent。用户用自然语言布置任务，你自主决定用哪些工具、分几步完成。

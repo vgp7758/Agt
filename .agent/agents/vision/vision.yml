@@ -14,10 +14,3 @@ hooks:
   turn_end:
   - workflow: recap_gen
     async: true
-fallback:
-  chain:
-  - qwen
-  - glm-official-flash
-  - local-lfm-vl
-  - deepseek
-  policy: reset

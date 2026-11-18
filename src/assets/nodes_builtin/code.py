@@ -19,6 +19,7 @@ def _handle_code(node: dict, ctx) -> dict:
     import subprocess
     import sys
     import tempfile
+    import time
 
     inputs = node.get("data", {}).get("inputs", {})
     language = inputs.get("language", 3)
@@ -38,7 +39,7 @@ def _handle_code(node: dict, ctx) -> dict:
         "if 'main' in dir():\n"
         "    _m = main\n"
         "    if inspect.iscoroutinefunction(_m):\n"
-        "        _r = asyncio.get_event_loop().run_until_complete(_m(args))\n"
+        "        _r = asyncio.run(_m(args))\n"
         "    else:\n"
         "        _r = _m(args)\n"
         "print('__WF_RESULT__', json.dumps(_r, ensure_ascii=False, default=str))\n"
@@ -48,10 +49,21 @@ def _handle_code(node: dict, ctx) -> dict:
         tmp = f.name
     env = dict(os.environ)
     env["WF_PARAMS"] = json.dumps(params, ensure_ascii=False, default=str)
+    # 超时 45s + 超时重试 1 次（2026-11-18 用户报障：8000 等实例 code 节点间歇性 30s 卡满
+    # ——纯组装代码也超时；闲时同进程实测 0.08s。根因是环境级尖峰（Defender 扫新 tmp 脚本
+    # /IO 高峰下 python 冷启动挂起），单次重试即可自愈绝大多数尖峰，重试再超时才报错）
+    proc = None
     try:
-        proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
-                              timeout=30, encoding="utf-8", errors="replace", env=env,
-                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+        for _attempt in (1, 2):
+            try:
+                proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
+                                      timeout=45, encoding="utf-8", errors="replace", env=env,
+                                      creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+                break
+            except subprocess.TimeoutExpired:
+                if _attempt == 2:
+                    raise
+                time.sleep(0.5)
     finally:
         try:
             os.unlink(tmp)

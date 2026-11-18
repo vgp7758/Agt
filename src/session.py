@@ -790,6 +790,9 @@ class Session:
         # 老步骤渲染字节稳定 → 前缀缓存打满。DeepSeek 类 60x 差价 provider 推荐 0：
         # 宁可投影大（命中便宜）也不让组边界衰减重截老步骤断缓存——用户裁定 2026-08-30）。
         self.profile_detail_step = getattr(self.llm, "profile_detail_step", None)
+        # 存档模型指针（Session.load 从 meta.provider 填入；Agent.set_session 据此恢复模型——
+        # 用户裁定 2026-11-18：main.yml 的 model 字段退役，首模型以会话存档为准）
+        self._saved_provider = ""
         self._detail_base = None   # 惰性缓存（detail_base property；/config / switch_model / /context 时失效重读）
         self.max_level = config.load_max_level()
         # steps 分档模式（用户提案 2026-10-10）：按步数的确定性阶梯替代「卫生性毕业+体积压力收敛」。
@@ -5125,6 +5128,10 @@ class Session:
         # 模型（重启期间换了默认模型）：与运行中切换同款决策 _decide_switch_shape——adopt
         # 命中采用该 provider 建档，未命中 _simple_pending=True（现状重算）→ ④ 无任何档 →
         # 下方 tier_boundaries 兜底 recalc（2026-09-30 回滚语义不动）。
+        # 存档模型指针（用户裁定 2026-11-18：main.yml 的 model 字段退役，首模型以会话存档为准）——
+        # 暴露给 Agent 层：Agent.set_session 据此恢复上次用的模型（/resume、/branch、重启恢复全覆盖）。
+        # 只做指针供给，不改变下方档位决策逻辑。
+        s._saved_provider = str(data.get("provider") or "")
         _cur = getattr(getattr(s, "llm", None), "model_name", "") or ""
         _meta_provider = str(data.get("provider") or "")
         _has_meta_shape = ("tier_boundaries" in data) or ("fold_count" in data) or ("sos_count" in data)

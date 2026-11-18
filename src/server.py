@@ -2290,8 +2290,8 @@ async def api_agents_list():
         mhooks = mmeta.get("hooks")
         out.append({
             "name": "_main_",
-            "description": mmeta.get("description") or "主 Agent 全局声明（assembly 装配清单 + hooks + model 覆盖）",
-            "model": mmeta.get("model") or "",
+            "description": mmeta.get("description") or "主 Agent 全局声明（assembly 装配清单 + hooks；首模型由会话存档决定）",
+            "model": "",   # 已废弃：首模型由会话存档/WebUI 下拉框决定（用户裁定 2026-11-18）
             "tools": "",
             "assembly_count": len(masm) if isinstance(masm, list) else 0,
             "hooks_positions": sorted(mhooks.keys()) if isinstance(mhooks, dict) else [],
@@ -2438,7 +2438,7 @@ async def api_agents_get(name: str):
         return {
             "name": "_main_", "is_main": True,
             "description": meta.get("description", ""),
-            "model": meta.get("model") or "",
+            "model": "",   # 已废弃：首模型由会话存档/WebUI 下拉框决定（用户裁定 2026-11-18）
             "tools": "", "persona": "",
             "services": _msv_txt,
             "fallback": _fb, "fallback_policy": _fbp,
@@ -2592,7 +2592,9 @@ async def api_agents_save(name: str, request: Request):
         if "description" in body:
             base["description"] = body.get("description", "")
         if "model" in body:
-            base["model"] = (body.get("model") or "").strip() or None
+            # model 字段已退役（用户裁定 2026-11-18）：首模型由会话存档/WebUI 下拉框决定；
+            # 界面若仍传 model 一律忽略，并从声明里摘掉（防继续往 main.yml 写模型 id）
+            base.pop("model", None)
         asm = body.get("assembly")
         if isinstance(asm, list) and asm:
             base["assembly"] = asm

@@ -78,17 +78,18 @@ textarea{width:100%;resize:vertical}
       <div class="frow"><label>名称</label><input type="text" id="fName" readonly style="background:#1a2332"></div>
       <div class="frow"><label>描述</label><textarea id="fDesc" rows="2" placeholder="一句话作用 + 何时调用（投影给主 Agent 决定何时派活）"></textarea></div>
       <div class="frow"><label>模型</label><select id="fModel"></select>
+        <span id="modelDeprecated" class="hint" style="display:none;margin:0 6px 0 4px">已废弃：首模型由会话下拉框决定（存档为准）</span>
         <label style="min-width:auto">工具</label><input type="text" id="fTools" style="flex:1;min-width:180px" placeholder="逗号分隔；留空=继承主 Agent 全部"></div>
       <div class="chips" id="toolChips"></div>
       <div class="hint" id="toolsHint">点工具 chip 快速增删；留空=继承全部（除管理工具）。</div>
-      <div class="frow" style="margin-top:10px"><label>回退链</label><input type="text" id="fFallback" style="flex:1;min-width:180px" placeholder="逗号分隔模型名；留空=继承全局 settings 配置">
+      <div class="frow" style="margin-top:10px"><label>回退链</label><input type="text" id="fFallback" style="flex:1;min-width:180px" placeholder="场景名，逗号分隔，如 default, agent-work（未命中按 default）">
         <select id="fFbPolicy" title="sticky=回退后停在新模型直到手动切换；reset=每轮从链首重试" style="width:120px">
           <option value="">策略:跟随全局</option>
           <option value="sticky">sticky 粘住</option>
           <option value="reset">reset 每轮重试</option>
         </select></div>
       <div class="chips" id="fbChips"></div>
-      <div class="hint">点模型 chip 快速增删回退链（声明级：该 Agent 的 llm 独立生效；留空=继承全局）。</div>
+      <div class="hint">点 chip 快速增删回退链（优先填<b>场景名</b>：default / agent-work…，未命中任何场景按 default；模型卡名仍兼容）。声明级：该 Agent 的 llm 独立生效；留空=继承全局。</div>
     </div>
 
     <div class="fgroup" id="gPersona">
@@ -164,7 +165,7 @@ async function loadList(){
   $('cards').innerHTML=(d.items||[]).map(a=>`
     <div class="acard" onclick="location.hash='edit='+encodeURIComponent('${a.name}')">
       <div class="nm"><span>${esc(a.name)}</span>
-        <span class="tag ${a.model?'m':''}">${a.model?esc(a.model):'跟随主模型'}</span></div>
+        <span class="tag ${a.model?'m':''}">${a.is_main?'模型随会话存档':(a.model?esc(a.model):'跟随主模型')}</span></div>
       <div class="ds">${esc(a.description)}</div>
       <div class="tagrow">
         <span class="tag">装配 ${a.assembly_count} 段</span>
@@ -341,7 +342,9 @@ function toggleTool(t){
 // 回退链 chips（与工具选择同款交互：点模型 chip 增删，顺序=点击顺序即链序）
 function renderFbChips(){
   const cur=new Set(($('fFallback').value||'').split(',').map(x=>x.trim()).filter(Boolean));
-  $('fbChips').innerHTML=models.map(m=>`<span class="chip ${cur.has(m)?'on':''}" onclick="toggleFb('${m}')">${esc(m)}</span>`).join('');
+  // chip 源：场景名在前（新语义首选），模型卡名在后（向后兼容）
+  const names=[...Object.keys(_scenarios),...models];
+  $('fbChips').innerHTML=names.map(m=>`<span class="chip ${cur.has(m)?'on':''}" onclick="toggleFb('${esc(m)}')">${esc(m)}</span>`).join('');
 }
 function toggleFb(m){
   const cur=($('fFallback').value||'').split(',').map(x=>x.trim()).filter(Boolean);
@@ -368,6 +371,9 @@ async function loadEdit(name){
   $('btnMainGlobal').style.display=isMain?'':'none';
   $('btnMainDelLocal').style.display=(isMain&&d.has_local)?'':'none';
   $('fName').value=d.name;$('fDesc').value=d.description||'';$('fModel').value=d.model||'';$('fTools').value=d.tools||'';
+  // 主 Agent 的 model 字段已退役（用户裁定 2026-11-18）：首模型由会话存档/WebUI 下拉框决定 → 置灰并说明
+  $('fModel').disabled=isMain;
+  $('modelDeprecated').style.display=isMain?'':'none';
   $('fFallback').value=d.fallback||'';$('fFbPolicy').value=d.fallback_policy||'';
   $('fPersona').value=d.persona||'';
     $('fServices').value=d.services||'';
@@ -380,7 +386,8 @@ async function loadEdit(name){
 
 async function saveAgent(saveTo){
   const body={
-    description:$('fDesc').value,tools:$('fTools').value.trim(),model:$('fModel').value,
+    description:$('fDesc').value,tools:$('fTools').value.trim(),
+    ...(curName==='_main_'?{}:{model:$('fModel').value}),   // 主 Agent 的 model 已退役，不再提交（用户裁定 2026-11-18）
     fallback:$('fFallback').value.trim(),fallback_policy:$('fFbPolicy').value,
     persona:$('fPersona').value,services:$('fServices').value,assembly:asmData.map(rowToItem),hooks:rowsToHooks(hkData),
   };

@@ -570,11 +570,47 @@ def _hook_item_from_str(s: str) -> dict:
     return {"kind": "workflow", "value": main.strip(), **flags}
 
 
+def _expand_fallback_items(items) -> list:
+    """fallback 条目 → 模型卡名链（场景化解析，用户裁定 2026-11-18）。
+    三档优先级（逐条判定）：
+      ① 名字命中场景表（settings.scenarios）→ resolve_scenario(name) 展开（空链跳过该条）；
+      ② 名字是 MODELS 里的模型卡名 → 原样保留（旧 yml 手写模型名的向后兼容）；
+      ③ 都不命中 → 按 default 场景链展开（未命中统一兜底给 default，不再把裸名字硬当卡片用）。
+    整链去重保序。解析异常（config 不可用/场景表损坏等）→ 原样返回条目（不炸，退回老语义）。"""
+    try:
+        import config as _cfg
+        scen = _cfg.load_scenarios()
+        out: list = []
+        for raw in (items or []):
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            if name in scen:
+                seg = _cfg.resolve_scenario(name)
+            elif name in (_cfg.MODELS or {}):
+                seg = [name]
+            else:
+                seg = _cfg.resolve_scenario("default")
+            for m in seg:
+                m = str(m or "").strip()
+                if m and m not in out:
+                    out.append(m)
+        return out
+    except Exception as e:
+        _LOG.warning("fallback 条目场景化解析失败（按原样模型名处理）：%s", e)
+        return [str(x) for x in (items or [])]
+
+
 def _parse_agent_fallback(meta: dict):
     """frontmatter/yml 的 fallback 字段 → (chain: list[str], policy: str|None) 或 None（未声明）。
     形态：'a, b'（串=只有链）/ [a, b]（list）/ {chain: ..., policy: sticky|reset}（完整声明）。
     显式空串/空 list = 关回退（与全局 settings 隔离）；未声明（None）= 继承全局 settings
-    （/model、WebUI 配的——语义上是主 Agent 的用户配置）。"""
+    （/model、WebUI 配的——语义上是主 Agent 的用户配置）。
+
+    **条目是「场景名」**（用户裁定 2026-11-18）：条目命中 scenarios → 展开该场景链；命中 MODELS
+    卡片名 → 原样保留（旧配置兼容）；都不命中 → 按 default 场景链展开（未命中统一兜底）。
+    这样播种文件只写场景名（如 fallback: default），永远不出现具体模型 id。
+    解析细则见 _expand_fallback_items。"""
     raw = meta.get("fallback")
     if raw is None:
         return None
@@ -591,7 +627,7 @@ def _parse_agent_fallback(meta: dict):
     if policy not in ("sticky", "reset", None):
         _LOG.warning("fallback policy '%s' 未知（sticky|reset），按默认", policy)
         policy = None
-    return chain, policy
+    return _expand_fallback_items(chain), policy
 
 
 def _apply_declared_fallback(sub_agent, fb):
@@ -1213,7 +1249,9 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
                        session_dir=loaded.session_dir or sub_dir,
                        registry=reg, agent_id=entry.agent_id,
                        caller_id=caller_id, current_turn_only=True)
-        sub.agent.set_session(loaded)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
+        sub.agent.set_session(loaded, restore_model=False)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
+        # restore_model=False（用户裁定 2026-11-18）：子 Agent 的模型由声明场景（_resolve_subagent_model）
+        # 决定，声明优先于存档——否则复活时会被上次跑过的模型卡覆盖掉声明的场景链。
         # set_session 会换掉 __init__ 里设过开关的那个 session，这里在 loaded session 上重设
         sub.agent.session.current_turn_only = True
         if _fb is not None:   # 声明的回退链：实例链（非 react）+ react 链都补上（显式声明最高优先）

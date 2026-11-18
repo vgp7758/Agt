@@ -980,7 +980,8 @@ class Agent:
     def _reload_main_dsl(self):
         """main.yml 热重载（mtime 惰性检测——用户提案 2026-09-07：改主 Agent DSL 免 /restart）。
         每轮 run 开始 stat 一次（~0.1ms）；mtime 变了才重读：
-        assembly 清单 / hooks / fallback / model 四项全部重新应用——与 build_agent 启动路径同源。
+        assembly 清单 / hooks / fallback 三项全部重新应用——与 build_agent 启动路径同源
+        （model 字段已退役，用户裁定 2026-11-18：首模型以会话存档为准，这里不再消费）。
         子 Agent 声明（.agent/agents/*.yml）本就每次 agent_prompt 现场读（即时生效），不归这里管。"""
         import os
         p = getattr(self, "_main_yml_path", None)
@@ -997,7 +998,6 @@ class Agent:
             from agent_config import load_agent_yml
             from pathlib import Path as _P
             from multiagent import _parse_assembly, _parse_hooks, _parse_agent_fallback
-            from config import MODELS
             meta, _ = load_agent_yml(_P(p))   # ⚠️ 必须 Path：str 走 path.suffix 会 AttributeError（静默吞）
             fb = _parse_agent_fallback(meta)
             if fb is not None:
@@ -1012,16 +1012,8 @@ class Agent:
             hs = _parse_hooks(meta)
             if hs is not None:
                 self.session.hook_specs = hs
-            mn = (meta.get("model") or "").strip()
-            if mn and mn in (MODELS or {}) and mn != getattr(self, "_main_yml_model", None):
-                self.switch_model(mn, _user_initiated=True)
-                if fb is None:   # 声明了 fallback 时 set_fallback 已在 switch 后被上面调用（顺序：先 fb 后 model 会盖）——model 切换重建链后，声明 fb 需再压一遍
-                    pass
-                else:
-                    self.llm.set_fallback(fb[0], fb[1])
-            self._main_yml_model = mn or getattr(self, "_main_yml_model", None)
             self._emit({"type": "system",
-                        "text": f"♻️ main.yml 已热重载（assembly/hooks/fallback/model 按最新声明生效）"})
+                        "text": "♻️ main.yml 已热重载（assembly/hooks/fallback 按最新声明生效；model 字段已退役）"})
         except Exception as e:
             self._emit({"type": "warn", "text": f"main.yml 热重载失败：{type(e).__name__}: {e}"})
 
@@ -1085,9 +1077,12 @@ class Agent:
         self._emit_plan_if_any()
         self._emit_spec_if_any()
 
-    def set_session(self, session):
+    def set_session(self, session, restore_model: bool = True):
         """切换到指定 session：换引用 + 重新挂状态收集回调 + 恢复附加状态 + 同步 UI。
-        所有 resume / reset / new_session 都应走这里，保证 provider 与附加状态一致。"""
+        所有 resume / reset / new_session 都应走这里，保证 provider 与附加状态一致。
+        restore_model=True（默认）：按存档 meta.provider 恢复上次用的模型（用户裁定 2026-11-18：
+        main.yml 的 model 字段退役，首模型只能以会话存档为准）；子 Agent 复活传 False——
+        其模型由声明场景决定，声明优先于存档。"""
         _prev = self.session
         self.session = session
         # assembly DSL v2 转挂：清单/钩子声明/hooks 默认开关跟到新 session
@@ -1118,7 +1113,26 @@ class Agent:
         self._log_handler.set_session(session.workspace, session.name)
         self.restore_runtime_state(session.extra_state)
         self._restore_subagents()   # 扫描 session_dir/agents/ 恢复子 Agent 列表到 registry
+        # —— 存档模型恢复（用户裁定 2026-11-18：main.yml 的 model 字段退役，首模型以存档为准）——
+        # 覆盖全部恢复入口（/resume、/branch、/restart 恢复、WebUI 刷新恢复均经 set_session）。
+        # 切换放在 load 之后：档位会经 _on_model_switch 再决策一次（adopt 命中零成本，未命中一次重算），
+        # 且不会让钩子作用到旧 session。
+        if restore_model:
+            _sp = str(getattr(session, "_saved_provider", "") or "")
+            _cur_model = getattr(self.llm, "model_name", "") or ""
+            if _sp and _sp in (config.MODELS or {}) and _sp != _cur_model:
+                try:
+                    self.switch_model(_sp, _user_initiated=True)
+                    _LOG.info("按会话存档恢复模型：%s", _sp)
+                except Exception as _e:
+                    _LOG.warning("按存档恢复模型 %s 失败（保留当前 %s）：%s", _sp, _cur_model, _e)
+                if getattr(self, "_declared_fallback", None) is not None:
+                    try:   # switch_model 重建了回退链，声明链需再压一遍
+                        self.llm.set_fallback(list(self._declared_fallback), None)
+                    except Exception:
+                        pass
         self._inbox_restore()       # 从 inbox.jsonl 恢复未消费的后台消息（/restart 或崩溃后不丢）
+
     def _install_recorder(self, session=None):
         """给 self.llm 挂 llm_calls recorder（用户提案 2026-09-16）：react 记录附投影分布
         proj=[{n:段名, tok, pct}]——/stats 拖拽 tooltip 直接渲染当时上下文构成。

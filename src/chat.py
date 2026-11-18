@@ -129,7 +129,6 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     main_yml = seed_main_agent(workspace)
     asm_plan = None
     hook_specs = None
-    model_name = None
     main_fb = None
     try:
         meta, _ = load_agent_yml(main_yml)
@@ -137,7 +136,12 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
             from multiagent import _parse_assembly, _parse_hooks, _parse_agent_fallback
             asm_plan = _parse_assembly(meta)
             hook_specs = _parse_hooks(meta)
-            model_name = (meta.get("model") or "").strip() or None
+            if (meta.get("model") or "").strip():
+                # 首模型以会话存档 meta.provider 为准（WebUI 下拉框 / /model 选择随会话走，
+                # 用户裁定 2026-11-18：yml 的 model 字段退役，写了也忽略）
+                import logging as _lg
+                _lg.getLogger("agt.chat").info(
+                    "main.yml 的 model 字段已废弃（首模型以会话存档为准，用户裁定 2026-11-18），已忽略")
             main_fb = _parse_agent_fallback(meta)
     except Exception as e:
         if verbose:
@@ -150,7 +154,7 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     if asm_plan is not None:
         # v2：persona 在 assembly text: 项里，system 参数传空（_seg_msgs_system 空则跳过）
         agent = Agent(system="", tools=REAL_TOOLS,
-                      model_name=model_name if model_name in (config.MODELS or {}) else None,
+                      model_name=None,   # 首模型以会话存档为准（yml model 字段已退役，用户裁定 2026-11-18）
                       enable_thinking=True, token_budget=0,   # max_steps 不传 → 构造读 settings.json
                       # （出厂默认 200，用户裁定 2026-11-15；此前硬编码 50 是「改了又变回 50」的病灶）
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
@@ -161,19 +165,18 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
         # 回退（~/.agt/main.yml 损坏/读不到）：直接读随包 src/assets/main.yml 的 assembly——
         # 单源（用户裁定 2026-09-16：删掉 chat.py 里手工维护的 SYSTEM 副本，它曾与播种源漂移；
         # 随包文件随版本发布恒可解析，保底不炸）。仍失败则空 system + 默认装配兜底。
-        _fb_plan, _fb_model, _fb_hooks = None, None, {}
+        _fb_plan, _fb_hooks = None, {}
         try:
             _meta, _ = load_agent_yml(Path(__file__).resolve().parent / "assets" / "main.yml")
             if _meta:
                 from multiagent import _parse_assembly, _parse_hooks
                 _fb_plan = _parse_assembly(_meta)
                 _fb_hooks = _parse_hooks(_meta) or {}
-                _fb_model = (_meta.get("model") or "").strip() or None
         except Exception as _e:
             if verbose:
                 print(f"[main.yml] 随包 assets/main.yml 读取失败（{_e}），空 system 兜底")
         agent = Agent(system="", tools=REAL_TOOLS,
-                      model_name=_fb_model if _fb_model in (config.MODELS or {}) else None,
+                      model_name=None,   # 同上：首模型以会话存档为准
                       enable_thinking=True, token_budget=0,   # max_steps 不传 → 构造读 settings.json
                       # （出厂默认 200，用户裁定 2026-11-15；此前硬编码 50 是「改了又变回 50」的病灶）
                       verbose=verbose, on_event=on_event, snapshot_manager=snap,
@@ -192,12 +195,11 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
             agent._declared_fallback = list(main_fb[0])
         except Exception:
             pass
-    # 热重载锚点（用户提案 2026-09-07）：记录 main.yml 路径+mtime+声明的 model——
+    # 热重载锚点（用户提案 2026-09-07）：记录 main.yml 路径+mtime——
     # 每轮 run 开始 _reload_main_dsl 检测变更，改 DSL 免 /restart
     import os as _os
     agent._main_yml_path = main_yml
     agent._main_yml_mtime = _os.path.getmtime(main_yml) if _os.path.isfile(str(main_yml)) else None
-    agent._main_yml_model = model_name or ""
     # 绑 mcp_mgr / workspace 到 agent，供 /web 等命令复用
     agent.mcp_mgr = mcp_mgr
     agent.workspace = workspace

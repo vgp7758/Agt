@@ -2126,7 +2126,7 @@ class Agent:
                                         "run_id": _rid_c, "text": hook_err[:300]})
                             try:
                                 _agent_ref._hook_errors_pending.append(
-                                    {"hook": _hook, "name": _hw["name"], "rid": _rid_c, "error": hook_err[:2000]})
+                                    {"hook": _hook, "name": _hw["name"], "rid": _rid_c, "error": hook_err[:1000]})
                             except Exception:
                                 pass
                         _agent_ref._emit({"type": "auto_wf", "name": _hw["name"], "hook": _hook,
@@ -2137,7 +2137,7 @@ class Agent:
                         # "以谁为准"由工作流显式决定（谁调 hook_write 谁负责），引擎不再特判。
                         if message.strip():
                             _agent_ref._emit({"type": "workflow_message", "name": _hw["name"], "hook": _hook,
-                                        "text": message, "auto": True})
+                                        "text": message[:2000], "auto": True})
                     except Exception as e2:
                         _agent_ref._emit({"type": "auto_wf_error", "name": _hw["name"], "hook": _hook,
                                     "run_id": _rid_c, "text": str(e2)[:200]})
@@ -2256,17 +2256,25 @@ class Agent:
                                         "run_id": rid, "text": h_err[:300]})
                             try:
                                 self._hook_errors_pending.append(
-                                    {"hook": hook, "name": nm, "rid": rid, "error": h_err[:2000]})
+                                    {"hook": hook, "name": nm, "rid": rid, "error": h_err[:1000]})
                             except Exception:
                                 pass
                         self._emit({"type": "auto_wf", "name": nm, "hook": hook,
                                 "run_id": rid, "text": result[:300] or message[:300], "auto": True})
                         if message.strip():
                             self._emit({"type": "workflow_message", "name": nm, "hook": hook,
-                                    "text": message, "auto": True})
+                                    "text": message[:2000], "auto": True})
                         if inject and result.strip():
                             # rid（run registry id）随结果带进 notes——注入溯源（用户提案 2026-08-31）
-                            notes.append({"hook": hook, "name": nm, "result": result.strip(), "rid": rid})
+                            # result 巨长封顶（2026-11-18 用户报障）：正常通道由工作流编排决定大小，
+                            # 但隐式结束/错误分支兜底返回（如批处理 all_outputs 全文）可达数万字——
+                            # 头 4000 + 尾 1500，全文走 debug_workflow 按节点查
+                            _res_n = result.strip()
+                            if len(_res_n) > 6000:
+                                _res_n = (_res_n[:4000]
+                                          + f"\n…(钩子 result 超长，已截断 {len(_res_n) - 5500} 字，可 debug_workflow 查全文)…"
+                                          + _res_n[-1500:])
+                            notes.append({"hook": hook, "name": nm, "result": _res_n, "rid": rid})
                 except Exception as e2:
                     self._emit({"type": "auto_wf_error", "name": (hws[0]["name"] if hws else "?"), "hook": hook,
                                 "text": str(e2)[:200]})
@@ -2301,6 +2309,22 @@ class Agent:
                     res = res[:147] + "..."
                 lines.append(f"- {name}({args_s}) → {res}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_hook_error_block(pend: list) -> str:
+        """钩子错误挂起队列 → 投影尾部 system-reminder 段（2026-11-18 收紧）：
+        单条 1000 字、最多展开 6 条、余条只留计数——错误通道不再被多条/巨长节点错误
+        撑爆上下文（workflow.execute 源头每条已 _clip_err≈660 字，此处是 agent 侧第二道防线）。"""
+        parts = []
+        for i, p in enumerate(pend):
+            if i >= 6:
+                parts.append(f'…(另有 {len(pend) - 6} 个钩子错误未展开)')
+                break
+            parts.append(f'<hook-error name="{p.get("name")}" hook="{p.get("hook")}" run="{p.get("rid", "")}">\n'
+                         f'{str(p.get("error", ""))[:1000]}\n</hook-error>')
+        return ('<system-reminder pos="hook_errors">\n'
+                '⚠️ 钩子工作流在上一轮执行中出现错误（已与正常 result 分离，此处一次性通知）：\n'
+                + "\n".join(parts) + '\n</system-reminder>')
 
     def _chat_msgs(self) -> list:
         """构造喂给 LLM 的消息：session 上下文 + 排空 hook 旁注 + before_answer 重做草稿（临时 assistant 续接）。
@@ -2350,11 +2374,7 @@ class Agent:
         _pend = getattr(self, "_hook_errors_pending", None)
         if _pend:
             self._hook_errors_pending = []   # 先清空（一次性语义；渲染异常也不重复注入）
-            _eparts = [f'<hook-error name="{p.get("name")}" hook="{p.get("hook")}" run="{p.get("rid", "")}">\n'
-                       f'{p.get("error", "")}\n</hook-error>' for p in _pend]
-            _eblock = ('<system-reminder pos="hook_errors">\n'
-                       '⚠️ 钩子工作流在上一轮执行中出现错误（已与正常 result 分离，此处一次性通知）：\n'
-                       + "\n".join(_eparts) + '\n</system-reminder>')
+            _eblock = Agent._render_hook_error_block(_pend)
             if msgs and msgs[-1].get("role") != "assistant":
                 _last = msgs[-1]
                 _c = _last.get("content")

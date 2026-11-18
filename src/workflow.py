@@ -1481,9 +1481,9 @@ def _run_node_with_batch(node: dict, handler, ctx):
                 out = r.get("outputs") or {}
                 all_outputs.append(_fill_one(out, idx, item))
             except WorkflowError as e:
-                all_outputs.append(None if (fill_path or _assemble) else {"_error": str(e)})  # 单次失败不中断（装填模式 None 会被过滤）
+                all_outputs.append(None if (fill_path or _assemble) else {"_error": _clip_err(str(e), 200, 100)})  # 单次失败不中断（装填模式 None 会被过滤）
             except Exception as e:
-                all_outputs.append(None if (fill_path or _assemble) else {"_error": f"{type(e).__name__}: {e}"})
+                all_outputs.append(None if (fill_path or _assemble) else {"_error": _clip_err(f"{type(e).__name__}: {e}", 200, 100)})
             if ctx.on_round:   # 调试页逐轮刷新：节点级批处理每轮迭代完成即回调
                 try:
                     ctx.on_round(_nid, idx, all_outputs[-1])
@@ -1621,6 +1621,17 @@ def _node_title(n: dict) -> str:
     return ((n.get("data", {}).get("nodeMeta", {}) or {}).get("title") or f"节点{n.get('id')}")
 
 
+def _clip_err(s, head: int = 400, tail: int = 200) -> str:
+    """错误文本头尾截断（2026-11-18）：错误最有价值的是类型（头部）与最深栈帧（尾部）。
+    节点返回巨长（HTTP body / LLM 响应全文 / 大对象 raise）时不再整体塞进错误通道
+    撑爆上下文——源头上每条节点错误封顶 head+tail+标注 ≈ 660 字。"""
+    s = str(s)
+    n = len(s)
+    if n <= head + tail + 60:
+        return s
+    return f"{s[:head]}\n…(错误文本超长，已截断 {n - head - tail} 字)…\n{s[-tail:]}"
+
+
 def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None, max_steps: int = 1000, return_exit_dict: bool = False, run_id: str = None, track_stack: list = None):
     """执行一个 Coze 画布，返回结束节点的输出（字符串）。
     run_id：传 new_wf_run() 的 id 时，节点执行事件写入 _WF_RUNS（观测页 /wf/monitor 实时轮询）。
@@ -1701,11 +1712,11 @@ def execute(canvas: dict, inputs: dict, *, tools, llm, emit=None, workspace=None
             except Exception as e:
                 # 节点报错：默认 error 输出端口（{node_id}_error），工作流可从此端口拉边做错误处理
                 # 未声明 error 边时该分支静默终止（不阻塞并行分支），整个工作流不崩
-                ctx.node_outputs[current] = {"_error": f"{type(e).__name__}: {e}"}
+                ctx.node_outputs[current] = {"_error": _clip_err(f"{type(e).__name__}: {e}")}
                 # 错误与 result 分离（2026-11-17）：同时累积到 wf_errors（随 exit dict 的
                 # _wf_errors 走 error 通道，run_hook 消费）——分支静默终止时错误也不失联
                 try:
-                    ctx.wf_errors.append(f"{current}({_node_title(node)}): {type(e).__name__}: {e}")
+                    ctx.wf_errors.append(f"{current}({_node_title(node)}): {_clip_err(f'{type(e).__name__}: {e}')}")
                 except Exception:
                     pass
                 port = f"{current}_error"   # 每个节点默认 error 端口名
@@ -2273,8 +2284,16 @@ def run_hook(canvas: dict, context: dict, *, tools, llm, workspace=None, run_id:
         # 不再经"取唯一值"分支混进 result 注入（用户实锤：日志出现"完成: TimeoutExpired"）
         _e_node = ret.pop("_error", None)
         if _e_node is not None and str(_e_node).strip():
-            _errors.insert(0, str(_e_node))
+            _errors.insert(0, _clip_err(str(_e_node)))
+    # 错误合并总量封顶（2026-11-18 用户报障：批处理/循环批量失败时 N 条错误 join 后仍可撑爆
+    # 上下文）——条数多或总量超限时降级：前 8 条各压到 ~470 字，余条只留计数行。
     err_text = "\n".join(_errors)
+    if len(_errors) > 12 or len(err_text) > 4000:
+        _kept = [_clip_err(x, 300, 150) for x in _errors[:8]]
+        _rest = len(_errors) - 8
+        if _rest > 0:
+            _kept.append(f"…(另有 {_rest} 条节点错误未展开——多为同源批量失败，可 debug_workflow 逐节点查看)")
+        err_text = "\n".join(_kept)
     if isinstance(ret, dict):
         msg = _msg(ret)
         if "inject" in ret:

@@ -3495,6 +3495,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
     # 文本消息
     text, images = _parse_client_msg(raw)
     text = text.strip()
+    # 远程来源首行前缀（用户提案 2026-11-20）：remote_message 帧带 _from（发送方 host:port，
+    # 见 remote_tools._self_tag）——消费方一眼看清"这条是哪个实例发来的"。本机 WebUI/CLI
+    # 消息不带 _from，零影响；旧版对端亦不带（保持原样）。expect_reply 协议行必须留在行首
+    # （agent.py 按 ^⟨expect_reply:…⟩ 正则剥头挂轮元数据），有协议行时前缀插在协议行之后。
+    _from_tag = str((_d or {}).get("_from") or "").strip() if isinstance(_d, dict) else ""
+    if _from_tag and text:
+        _from_tag = _from_tag.replace("\n", " ").replace("\r", " ")[:64]
+        _pfx = f"【{_from_tag} 实例发来的消息】"
+        if text.startswith("⟨expect_reply:"):
+            _nl = text.find("\n")
+            text = (text[:_nl + 1] + _pfx + "\n" + text[_nl + 1:]) if _nl != -1 else f"{text}\n{_pfx}"
+        else:
+            text = f"{_pfx}\n{text}"
     if not text and not images:
         return
 

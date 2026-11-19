@@ -38,6 +38,23 @@ MY_URL: str = ""                        # 本机回发地址（server.py 启动�
                                         # 空=expect_reply 不可用——CLI 无服务时发不了回执）
 
 
+def _self_tag() -> str:
+    """本实例标识（供对端首行标注"谁发来的"，用户提案 2026-11-20）：MY_URL 剥 scheme →
+    host:port（如 127.0.0.1:8000）。MY_URL 空（CLI 裸进程）→ ""——对端据此不加前缀。
+    随 remote_message 帧的 _from 字段传给对端消费侧（server.py 文本入口据此拼首行前缀）。"""
+    u = (MY_URL or "").strip()
+    if not u:
+        return ""
+    try:
+        from urllib.parse import urlsplit
+        sp = urlsplit(u if "://" in u else "http://" + u)
+        if sp.hostname:
+            return f"{sp.hostname}:{sp.port}" if sp.port else sp.hostname
+    except Exception:
+        pass
+    return u.replace("https://", "").replace("http://", "").rstrip("/")
+
+
 # ===================== 持久化（session 存档 extra_state.remote_servers） =====================
 
 _AGENT = None   # make_remote_tools 时注入（_persist_current 要触发 session 落盘）
@@ -305,7 +322,7 @@ def _ws_endpoint(url: str) -> str:
     return u + "/ws"
 
 
-def _ws_send_collect(url: str, text: str, wait_done: bool, timeout: float,
+def _ws_send_collect(url: str, text: str = "", wait_done: bool = False, timeout: float = 30,
                      ack_timeout: float = 10.0, payload: dict = None) -> tuple[str, list[str]]:
     """WS 客户端：发一条消息；wait_done=True 时挂流收 answer 直到 _done（或 timeout）。
     payload: 自定义发送体（None=普通文本 {"text","images"}）。ask 用它发 JSON action
@@ -432,7 +449,8 @@ def send_message(server_id: str, message: str, expect_reply: bool = False, _agen
                     "CLI 裸进程收不到回执，请用 remote_ask 或去掉 expect_reply）")
         message = f"⟨expect_reply:{MY_URL}⟩\n{message}"
         note = "（对方完成时将回发回答唤醒你）"
-    status, _ = _ws_send_collect(it["url"], message, wait_done=False, timeout=10, ack_timeout=10)
+    status, _ = _ws_send_collect(it["url"], wait_done=False, timeout=10, ack_timeout=10,
+                                 payload={"text": message, "images": [], "_from": _self_tag()})
     _tail = f"：{message[:80]}" + ("…" if len(message) > 80 else "")
     if "已送达" in status:
         return f"[remote:{server_id}] {status}{note}{_tail}"
@@ -465,8 +483,8 @@ def _deliver_reliable(server_id: str, message: str, rmid: str, agent=None, note:
         if it is None:
             return   # 实例已断开——放弃
         try:
-            status, _ = _ws_send_collect(it["url"], payload={"text": message, "_rmid": rmid},
-                                         wait_done=False, timeout=10, ack_timeout=10)
+            status, _ = _ws_send_collect(it["url"], wait_done=False, timeout=10, ack_timeout=10,
+                                         payload={"text": message, "_rmid": rmid, "_from": _self_tag()})
         except Exception as e:
             status = f"[异常] {e}"
         if "已送达" in status:

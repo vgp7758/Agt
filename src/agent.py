@@ -386,6 +386,13 @@ class Agent:
         self._notices: collections.deque = collections.deque()   # 非唤醒通知登记（service_exit 等）：不独立触发轮，下次自然轮以 seed 并入
         self._crash_wake_ts: dict = {}   # 服务异常退出唤醒退避表 {name: last_wake_ts}——5 分钟内同名第二次异常降级登记
         self._inbox_lock = threading.Lock()
+        # 已消费 sub-agent 回执登记表（消费点对账，治双消费 2026-11）：wait_subagents 把
+        # 子 Agent 结果作为工具返回交付当前轮后登记 aid；两个消费点（chat._worker batch
+        # 过滤 / run() 轮末 pop）对账查询，命中即丢弃——防 inbox 副本被 _inbox_thread 抢跑
+        # 进 work_q（去重删除扑空）后轮后再消费一次。source 级指纹仅限 subagent:<aid> 前缀
+        # （aid 一次性实例、完成即终结不二次 push，source 级查杀无误杀；其它 source 零变化）。
+        self._consumed_subagent = collections.deque(maxlen=500)  # FIFO 容量上限（防无界增长）
+        self._consumed_subagent_set: set = set()                 # 并存 set：O(1) 查询
         self.services = ServiceManager(on_exit=self._on_service_exit)
         # 服务退出多播路由（用户提案 2026-10-16）：watcher(agent_id) → 该实例 inbox。
         # 由 multiagent 装配时注入（registry 在那侧）；None = 单播现行为。
@@ -1370,6 +1377,28 @@ class Agent:
             item = self.inbox.popleft()
         self._inbox_persist_rewrite()
         return item
+
+    def mark_subagent_consumed(self, aid: str):
+        """登记一个已交付（结果已随 wait_subagents 工具返回）的子 Agent id——消费点对账登记表。
+        幂等：重复登记无副作用。_inbox_lock 保护（与消费点 pop 同一把锁，读写互斥）；
+        deque 满（500）淘汰最旧时同步从 set 移除，保持两者一致。"""
+        with self._inbox_lock:
+            if aid in self._consumed_subagent_set:
+                return
+            if len(self._consumed_subagent) >= self._consumed_subagent.maxlen:
+                self._consumed_subagent_set.discard(self._consumed_subagent[0])  # 先摘最旧
+            self._consumed_subagent.append(aid)   # 满 maxlen 时 append 自动淘汰队首
+            self._consumed_subagent_set.add(aid)
+
+    def is_consumed_subagent(self, source) -> bool:
+        """查询某 inbox source 是否为已交付的 sub-agent 回执（消费点对账判据）。
+        仅命中 subagent:<aid> 前缀且 aid 已登记 → True；其它 source（schedule/
+        service_exit/bg_task 等可重复触发源）恒 False，行为零变化。"""
+        if not isinstance(source, str) or not source.startswith("subagent:"):
+            return False
+        aid = source[len("subagent:"):]
+        with self._inbox_lock:
+            return aid in self._consumed_subagent_set
 
     def _drain_notices(self) -> list:
         """取出全部积压的非唤醒通知（wake=False 登记），返回 seeds 列表。
@@ -2970,7 +2999,17 @@ class Agent:
                             except Exception as _e:
                                 _LOG.warning("轮结束自动卸载技能异常: %s", _e)
                             # 后台推送（调度器/服务）：消费 inbox 触发下一轮
-                            item = self.pop_inbox()
+                            # 消费点对账 B（2026-11 治双消费）：已由 wait_subagents 交付的
+                            # sub-agent 回执副本（_inbox_thread 抢跑进 work_q 致多 agent 去重
+                            # 删 inbox 扑空）在此拦截丢弃，继续取下一条未消费项。
+                            while True:
+                                item = self.pop_inbox()
+                                if item is None:
+                                    break
+                                if self.is_consumed_subagent(item[0]):
+                                    _LOG.warning("消费点对账(run轮末)：丢弃已交付的 sub-agent 回执副本（%s），防双消费", item[0])
+                                    continue
+                                break
                             if item:
                                 src, next_msg, seed = item
                                 self._emit({"type": "background_trigger", "source": src,

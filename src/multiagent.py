@@ -71,8 +71,11 @@ def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:
 def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool:
     """把一条系统提示投给【指定 Agent 实例】并保证被看到（用户裁定 2026-10-15 从 agent_notify 抽出
     复用）：bg_task 完成回执按 owner 路由时调它——谁起的后台任务，回执投给谁。
-    忙（run 中）→ 有 seed 走 push_message（保留 check_bg_task 合成工具记录，与主线同口径），
-    否则 queue_user_message；空闲 → 起裸线程跑一轮直接消费（与 agent_notify 的空闲分支同款）。
+    忙（run 中）→ 有 seed 走 push_message（保留 check_bg_task 合成工具记录，与主线同口径；
+        注意 push_message 实为进 inbox：忙时不打断当前轮，轮末 pop / 空闲时自动消费成
+        【新一轮】——并非旧注释说的"忙时排队到下一步边界注入"，边界注入是 queue_user_message
+        插话队列的语义），否则 queue_user_message（插话：下一步边界注入当前轮）；
+    空闲 → 起裸线程跑一轮直接消费（与 agent_notify 的空闲分支同款）。
     返回 True=已投递 / False=实例不可用（调用方兜底自收）。不抛异常。"""
     if target_agent is None or getattr(target_agent, "session", None) is None:
         return False
@@ -2389,6 +2392,7 @@ def make_subagent_tools(agent) -> list:
                    for aid in ids},
                   {aid: agent.background_tasks.get(aid, {}).get("status", "?") for aid in ids})
         out = []
+        delivered_ids = []   # 已完成（still=False）且结果已随本工具返回的 aid——稍后登记消费点对账
         for aid in ids:
             th = agent._bg_threads.get(aid)
             if th is not None and th.is_alive():
@@ -2403,7 +2407,19 @@ def make_subagent_tools(agent) -> list:
             if still:
                 _LOG.info("wait_subagents: %s join 超时仍 running（timeout=%ds）——任务未完成而非卡死判定",
                           aid, int(timeout))
+            else:
+                delivered_ids.append(aid)
             out.append(f"[{aid}] {'⏳仍在跑（超时，稍后再 wait）' if still else f'{st}：{res}'}")
+        # 【登记】（消费点对账 2026-11·治双消费）：上面循环已把这些子 Agent 的结果作为本工具
+        # 返回交付本轮——登记 agent._consumed_subagent 作为「轮内已交付」的权威标记。
+        # 登记不依赖下面 inbox 删除是否成功：副本被 chat._inbox_thread 抢跑进 work_q 时
+        # 删除扑空（removed=0），但两个消费点（worker batch 过滤 / run 轮末 pop）仍按
+        # 登记表拦截丢弃——正是抢跑场景的修复核心。其它 source（可重复触发）不登记，零变化。
+        try:
+            for _d in delivered_ids:
+                agent.mark_subagent_consumed(_d)
+        except Exception:
+            pass
         # 【去重】（用户实锤 2026-09-28）：上面的循环已把这些子 Agent 的结果作为本工具返回
         # 交给本轮上下文——把 inbox 里同源（subagent:<aid>）的副本移除并同步 inbox.jsonl，
         # 防轮结束后 inbox 出队再消费一次同一回复（wait 返回 + inbox 唤醒轮 = 双消费）。

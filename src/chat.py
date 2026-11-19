@@ -503,6 +503,23 @@ def _worker(agent, work_q, registry, state):
                             work_q.put(nxt)
                             break
                         batch.append(nxt)
+                    # 消费点对账 A（2026-11 治双消费）：wait_subagents 已交付的 sub-agent
+                    # 回执副本可能被 _inbox_thread 抢跑进 work_q（多 agent 去重删 inbox 扑空）
+                    # ——worker 消费前（_merge_batch 前）过滤拦截丢弃，这是去重扑空的补口；
+                    # 正常后台消息 / 其它 source（schedule/service_exit/bg_task）不受影响。
+                    # 过滤后批空 → continue（不空跑一轮 agent.run）。
+                    import logging as _lgf
+                    _kept = []
+                    for _it in batch:
+                        if (_it[0] == "background" and len(_it) > 1
+                                and agent.is_consumed_subagent(_it[1][0])):
+                            _lgf.getLogger("agt.chat").warning(
+                                "消费点对账(worker)：丢弃已交付的 sub-agent 回执副本（%s），防双消费", _it[1][0])
+                            continue
+                        _kept.append(_it)
+                    batch = _kept
+                    if not batch:
+                        continue
                     user_msg, seeds, first_src, _batch_imgs = _merge_batch(batch)
                     if not user_msg and not seeds:
                         continue

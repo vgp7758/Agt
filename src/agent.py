@@ -1804,6 +1804,97 @@ class Agent:
         内部兼容旧键 utility_model（单元素链）；全空 → 主 llm（跟随主模型）——旧配置零破坏迁移。"""
         return self.scenario_client("short-req")
 
+    def _repair_dsml_via_short_call(self, resp, tool_schemas, turn: int = None,
+                                    step: int = None) -> bool:
+        """DSML 泄漏兜底：正则解析（llm_client._parse_dsml_calls）没救回来时，
+        用一次【短调用】把泄漏的 reasoning+content 改写成标准 JSON tool_calls（2026-11-21 用户方案）。
+
+        输入：泄漏原文（resp.dsml_raw 或 content）+ 相关工具 schema（从原文的 invoke name 抽候选，
+        抽不到给全量、封顶 25 个防爆上下文）；
+        输出契约：模型只回 {"tool_calls":[{"name":..,"arguments":{..}}]}（不要解释/围栏）；
+        校验：工具名必须在可用集合内、arguments 归一成 dict（字符串则尝试 JSON 解析）；
+        成功 → 回填 resp.tool_calls（这条 message 变成正常工具调用继续执行）+ 剥除 content 里的
+        DSML 文本，返回 True；任何失败（请求异常/JSON 坏/校验不过/空数组）→ 返回 False，
+        由调用方回退老保险丝（提示主模型改用标准 function calling 重发一次）。"""
+        raw = (getattr(resp, "dsml_raw", "") or resp.content or "").strip()
+        if not raw:
+            return False
+        avail = {}
+        for s in (tool_schemas or []):
+            fn = (s or {}).get("function") or {}
+            _n = fn.get("name")
+            if _n:
+                avail[_n] = s
+        if not avail:
+            return False
+        try:
+            from llm_client import _norm_dsml
+            norm = _norm_dsml(raw)
+        except Exception:
+            norm = raw
+        # 候选工具名：单/双引号都认（泄漏形态里引号也不统一）
+        names = set(re.findall(r"invoke\s+name=[\"']([^\"']+)[\"']", norm))
+        cand = [avail[n] for n in names if n in avail]
+        if not cand:   # 抽不到工具名（原文被截断/形态未知）→ 全量给，封顶防爆上下文
+            cand = list(avail.values())[:25]
+        _sys = ("你是工具调用格式转换器。上一次模型把工具调用写成了 DSML 文本标记"
+                '（形如 <｜｜DSML｜｜invoke name="工具名">…参数…），系统无法执行。'
+                "请把它改写成标准 JSON。只输出一个 JSON 对象，不要任何解释、不要代码围栏：\n"
+                '{"tool_calls":[{"name":"工具名","arguments":{参数对象}}]}\n'
+                "规则：① 工具名必须取自「可用工具」；② 参数按 schema 的类型给原生类型"
+                "（数字/布尔不要加引号，嵌套结构用 JSON）；③ 原文里没有可提取的工具调用就输出 "
+                '{"tool_calls":[]}。')
+        _user = ("# 可用工具（function schema）\n" + json.dumps(cand, ensure_ascii=False)
+                 + "\n\n# 上一次模型的 reasoning\n" + ((resp.reasoning or "")[:4000] or "（无）")
+                 + "\n\n# 上一次模型的正文（含泄漏的 DSML 工具调用文本）\n" + raw[:12000])
+        try:
+            cli = self.utility_client()
+            r = cli.chat([{"role": "system", "content": _sys}, {"role": "user", "content": _user}],
+                         scene="dsml_repair", turn=turn, step=step)
+        except Exception as e:
+            _LOG.warning("DSML 短调用修正：请求失败（%s）", e)
+            return False
+        txt = (r.content or "").strip()
+        if txt.startswith("```"):   # 模型偶尔仍加代码围栏
+            txt = re.sub(r"^```[a-zA-Z]*\s*", "", txt)
+            txt = re.sub(r"\s*```$", "", txt)
+        try:
+            lo, hi = txt.find("{"), txt.rfind("}")
+            data = json.loads(txt[lo:hi + 1]) if lo >= 0 and hi > lo else {}
+        except Exception:
+            _LOG.warning("DSML 短调用修正：返回不是合法 JSON（%d 字）", len(txt))
+            return False
+        calls = []
+        for tc in (data.get("tool_calls") or []):
+            if not isinstance(tc, dict):
+                continue
+            _n = str(tc.get("name") or "").strip()
+            _a = tc.get("arguments")
+            if _n not in avail:
+                continue
+            if isinstance(_a, str):
+                try:
+                    _a = json.loads(_a)
+                except Exception:
+                    _a = {}
+            if not isinstance(_a, dict):
+                _a = {}
+            calls.append({"id": f"dsmlfix_{len(calls)}", "name": _n, "arguments": _a})
+        if not calls:
+            _LOG.info("DSML 短调用修正：未提取到有效工具调用（模型回空/名字不在表内）")
+            return False
+        resp.tool_calls = calls
+        try:   # 正文剥除泄漏文本（保留头之前的真实思考）
+            from llm_client import _parse_dsml_calls
+            _p = _parse_dsml_calls(resp.content or "")
+            if _p is not None:
+                resp.content = _p[0]
+        except Exception:
+            pass
+        _LOG.info("DSML 短调用修正成功：还原 %d 个工具调用（%s）", len(calls),
+                  ", ".join(c["name"] for c in calls))
+        return True
+
     def _generate_recap(self, user_msg: str, answer: str, tool_names: list = None,
                         turn_idx: int = -1):
         """异步用 LLM 生成一句话 recap（最近在干嘛），不阻塞主循环。
@@ -2833,19 +2924,42 @@ class Agent:
                         self._hb_ts = time.time()   # 心跳：LLM 调用完成（LLM 网络挂起时静默从这里起算）
                         _LOG.debug("step %d 累计token=%d model=%s", step_num, self.cumulative_tokens,
                                     self.llm.model_name)
-                        # DSML 泄漏保险丝：llm_client 已尝试兜底解析；若 content 仍残留 DSML
-                        # 工具调用标记且无 tool_calls，说明这次没解析出来 → 提示模型用标准
-                        # function calling 重试一次（重试结果不再二次检查，避免无限循环）。
-                        if (not resp.tool_calls and resp.content and "DSML" in resp.content
-                                and "invoke" in resp.content):
-                            self._emit({"type": "warn",
-                                        "text": "⚠️ 工具调用格式泄漏(DSML)，已提示模型改用标准 function calling 重试"})
-                            resp = self.llm.chat(msgs + [{
-                                "role": "system",
-                                "content": "你上一轮的工具调用以文本(DSML 标记)泄漏进了回复正文，系统没能解析执行。"
-                                          "请重新发起这些工具调用，务必使用标准的 function calling（tool_calls 字段），"
-                                          "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
-                            }], tools=tool_schemas, scene=f"react·{self.agent_id}")
+                        # —— DSML 泄漏处理（2026-11-21 用户方案，两级半）——
+                        # ① llm_client 出口已做正则兜底解析：解析成功则 tool_calls 已还原，走正常执行；
+                        # ② 兜不住（结构残缺/未知变体）→ resp.dsml_raw 把原文带上来：一次【短调用】
+                        #    把泄漏的 reasoning+content + 相关工具 schema 交辅助模型，要求输出标准
+                        #    JSON tool_calls，校验后回填 resp——这条 message 变成正常工具调用继续执行；
+                        # ③ 短调用也救不回 → 老保险丝：提示模型改用标准 function calling 重发一次
+                        #    （重试结果不再二次检查，避免无限循环）。
+                        _dsml_leak = bool(getattr(resp, "dsml_raw", ""))
+                        if not _dsml_leak and not resp.tool_calls:
+                            try:
+                                from llm_client import looks_like_dsml_toolcall as _looks_dsml
+                                _dsml_leak = _looks_dsml(resp.content or "")
+                            except Exception:
+                                _dsml_leak = False
+                        if _dsml_leak and not resp.tool_calls:
+                            if self._repair_dsml_via_short_call(resp, tool_schemas,
+                                                                turn=_t_num, step=_s_num):
+                                self._emit({"type": "warn",
+                                            "text": "⚠️ 工具调用格式泄漏(DSML)，已用短调用修正为标准 tool_calls"})
+                            else:
+                                self._emit({"type": "warn",
+                                            "text": "⚠️ 工具调用格式泄漏(DSML)，短调用未修正成功，已提示模型改用标准 function calling 重试"})
+                                resp = self.llm.chat(msgs + [{
+                                    "role": "system",
+                                    "content": "你上一轮的工具调用以文本(DSML 标记)泄漏进了回复正文，系统没能解析执行。"
+                                              "请重新发起这些工具调用，务必使用标准的 function calling（tool_calls 字段），"
+                                              "不要在回复正文里输出任何 <｜｜DSML｜｜> 标记。"
+                                }], tools=tool_schemas, scene=f"react·{self.agent_id}")
+                                if not resp.tool_calls and getattr(resp, "dsml_raw", ""):
+                                    try:   # 重试仍泄漏：至少别把 DSML 文本当最终答案
+                                        from llm_client import _parse_dsml_calls as _pdsml
+                                        _pp = _pdsml(resp.dsml_raw)
+                                        resp.content = _pp[0] if _pp else ""
+                                        resp.dsml_raw = ""
+                                    except Exception:
+                                        pass
                         # 空回答保险丝：无工具调用且 content 为空（ModelScope 等偶发空响应）→ 提示重试一次
                         if not resp.tool_calls and not (resp.content or "").strip():
                             self._emit({"type": "warn", "text": "⚠️ 模型返回空回答，已提示重试"})

@@ -104,14 +104,35 @@ def _bump_max_tokens(cur):
 #   <｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="工具名">..参数..<／｜｜DSML｜｜invoke>
 # （｜是全角竖线 U+FF5C）。此时标准解析会误判"无工具调用"→把整段 DSML 当最终答案。
 # 下面的兜底解析把这种文本还原成标准 tool_calls，并从 content 剥除 DSML 文本。
-_DSML = "｜｜DSML｜｜"   # ｜｜DSML｜｜
+_DSML = "｜｜DSML｜｜"   # 规范形态（全角竖线 U+FF5C）
+# 2026-11-21 实测：provider 竖线并不统一（半角 ||DSML|| / 单竖线 ｜DSML｜ / 夹空格）——
+# 解析前先归一到规范形态，正则只认一种；旧版只认全角双竖线，换个体就整层失效。
+_DSML_LOOSE_RE = re.compile(r"[｜|]{1,2}\s*DSML\s*[｜|]{1,2}")
+# 泄漏判据：标记与 invoke/tool_calls 头【邻接】才算（容忍竖线变体）——
+# 只认裸 "DSML" 字样会把"模型在正文里讨论/引用这套机制（贴源码、贴日志）"误判成泄漏。
+_DSML_LEAK_RE = re.compile(re.escape(_DSML) + r"\s*(?:invoke\b|tool_calls\s*>)")
+
+
+def _norm_dsml(text: str) -> str:
+    """竖线变体归一成规范形态（后续正则只认一种）。"""
+    return _DSML_LOOSE_RE.sub(_DSML, text or "")
+
+
+def looks_like_dsml_toolcall(text: str) -> bool:
+    """文本是否含【泄漏形态】的 DSML 工具调用（标记与 invoke/头邻接，见 _DSML_LEAK_RE）。
+    用于 Agent 侧泄漏保险丝的判定——比旧版裸 "DSML"+"invoke" 子串判定精确得多。"""
+    return bool(_DSML_LEAK_RE.search(_norm_dsml(text or "")))
+
+
 _INVOKE_RE = re.compile(
-    re.escape(_DSML) + r'invoke name="([^"]+)">(.*?)</' + re.escape(_DSML) + r'invoke>',
+    re.escape(_DSML) + r'invoke\s+name="([^"]+)"\s*>(.*?)</(?:' + re.escape(_DSML) + r')?invoke>',
     re.DOTALL,
 )
+# string 属性可省（provider 变体实测省略过）：缺省按字符串处理——
+# 旧版缺属性会解析出空 arguments（参数全丢，执行必报缺参），比类型不精确更致命。
 _PARAM_RE = re.compile(
-    re.escape(_DSML) + r'parameter name="([^"]+)"\s+string="(true|false)">(.*?)</'
-    + re.escape(_DSML) + r'parameter>',
+    re.escape(_DSML) + r'parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?\s*>(.*?)</(?:'
+    + re.escape(_DSML) + r')?parameter>',
     re.DOTALL,
 )
 _BARE_TAG_RE = re.compile(r'</?' + re.escape(_DSML) + r'[a-z_]*>')
@@ -119,11 +140,15 @@ _BARE_TAG_RE = re.compile(r'</?' + re.escape(_DSML) + r'[a-z_]*>')
 
 def _parse_dsml_calls(content: str) -> Optional[tuple[str, list[dict]]]:
     """若 content 含 DSML 工具调用文本，解析成 (剥除 DSML 后的 content, [tool_calls])。
-    无 DSML 标记返回 None（调用方据此判断是否兜底）。"""
-    if not content or _DSML not in content:
+    无 DSML 标记返回 None（调用方据此判断是否兜底）。
+    有标记但解析不出任何 invoke（结构残缺/未知变体）→ 返回 (cleaned, [])：调用方
+    【不清洗】content（清洗会丢信息），把原文挂 resp.dsml_raw 交上层短调用修正
+    （2026-11-21 用户方案）。"""
+    if not content or not _DSML_LOOSE_RE.search(content):
         return None
+    text = _norm_dsml(content)
     calls = []
-    for m in _INVOKE_RE.finditer(content):
+    for m in _INVOKE_RE.finditer(text):
         name, body = m.group(1), m.group(2)
         args = {}
         for pm in _PARAM_RE.finditer(body):
@@ -147,10 +172,10 @@ def _parse_dsml_calls(content: str) -> Optional[tuple[str, list[dict]]]:
     # 剥除 DSML 文本：有 <｜｜DSML｜｜tool_calls> 头则从头截断(保留前面真实思考)，
     # 否则逐块移除 invoke 块，再清残留裸标签。
     head = "<" + _DSML + "tool_calls>"
-    if head in content:
-        cleaned = content.split(head, 1)[0]
+    if head in text:
+        cleaned = text.split(head, 1)[0]
     else:
-        cleaned = _INVOKE_RE.sub("", content)
+        cleaned = _INVOKE_RE.sub("", text)
     cleaned = _BARE_TAG_RE.sub("", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned, calls
@@ -159,6 +184,9 @@ def _parse_dsml_calls(content: str) -> Optional[tuple[str, list[dict]]]:
 def _postprocess_response(resp: "LLMResponse") -> "LLMResponse":
     """响应规范化（所有构造点的统一出口）：
     1. DSML 兜底：标准 tool_calls 为空时，尝试从 content 里解析 DSML 工具调用文本。
+       解析成功 → 还原成标准 tool_calls 并剥除文本（走正常执行）。
+       有标记但解析不出调用（结构残缺/未知变体）→ 原文挂 resp.dsml_raw，**不清洗**
+       content（清洗会丢信息），交 Agent 侧一次短调用修正（2026-11-21 用户方案）。
     2. content 错位转移：tool_calls 非空 && content 非空 && reasoning 为空 → 有的 provider
        偶尔把思考过程误放 content（规范上带 tool_calls 的 assistant content 应为空）。
        转移 content→reasoning、content 置空——思考进 reasoning_content（投影/DeepSeek 兼容/
@@ -167,9 +195,14 @@ def _postprocess_response(resp: "LLMResponse") -> "LLMResponse":
         parsed = _parse_dsml_calls(resp.content or "")
         if parsed is not None:
             cleaned, calls = parsed
-            resp.content = cleaned
             if calls:
+                resp.content = cleaned
                 resp.tool_calls = calls
+            else:
+                resp.dsml_raw = resp.content or ""
+        elif _DSML_LOOSE_RE.search(resp.reasoning or ""):
+            # 个别 provider 把工具调用标记写进 reasoning_content：也算泄漏，原文带给上层修正
+            resp.dsml_raw = resp.reasoning or ""
     if resp.tool_calls and (resp.content or "").strip() and not (resp.reasoning or "").strip():
         _LOG.info("tool_calls 与 content 同现且 reasoning 为空：content 疑似思考文本，转移至 reasoning（%d 字）",
                   len(resp.content))
@@ -188,6 +221,7 @@ class LLMResponse:
     usage: Optional[dict] = None          # token 用量
     finish_reason: Optional[str] = None   # stop / tool_calls / length（调试/截断判读）
     raw_message: Optional[dict] = field(default=None, repr=False)  # 原始 message，调试用
+    dsml_raw: str = ""                    # DSML 工具调用文本【未能解析】时的原文（供 Agent 侧短调用修正）
 
     @property
     def has_tool_calls(self) -> bool:

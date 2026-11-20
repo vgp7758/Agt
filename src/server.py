@@ -2842,15 +2842,22 @@ async def ws_endpoint(websocket: WebSocket):
             _clients.remove(client)
 
 
+_HIST_INITIAL = 60   # 历史初始渲染硬上限（轮）：防无分档长会话全量推爆前端 DOM（2026-11-20 实锤）
+
 def _history_event(agent, name_override: str = "") -> dict:
     """构造 session_history 事件：默认只渲染【当前档位】的轮次（最后边界之后），
     并附 expand_from（当前渲染起点）/ total_turns——前端据此显示"展开更早"蓝字，
-    点击请求 expand_history 再往前展开一档。无分档（无边界）时全量（行为同旧版）。"""
+    点击请求 expand_history 再往前展开一档。无分档（无边界）时兜底只渲染最近
+    _HIST_INITIAL 轮（用户实锤 2026-11-20：8000 comfy-aigc 1610 轮 boundaries=0 →
+    全量推 → 前端 DOM 27.9 万节点 → 浏览器 tab 渲染进程 OOM 崩溃；「展开更早」
+    机制照常可回看全部历史，不影响任何信息可达性）。"""
     s = agent.session
     try:
         bounds = sorted(getattr(s, "_tier_boundaries", None) or [])
         start = bounds[-1] if bounds else 0
         total = len(s.turns)
+        if total - start > _HIST_INITIAL:
+            start = total - _HIST_INITIAL
         # 钳制（2026-10-09 分支失链实锤）：存档边界可能 ≥ 实际轮数（基底链断导致 turns 缩水，
         # load 侧已修剪，此处再兜一层——start≥total 会渲染 0 轮且"展开更早"永远切空）
         if start >= total:
@@ -2914,6 +2921,24 @@ def _history_cached(agent, name_override: str = "") -> dict:
     if not name_override and n >= 0:
         _HIST_CACHE[key] = (n, ev)
     return ev
+
+
+def _sub_history_event(sub_session, name: str, agent_id: str) -> dict:
+    """子 Agent 的 session_history 事件：切片语义与 _history_event 对齐（初始只渲染
+    最近 _HIST_INITIAL 轮 + expand_from，前端展开条通用）——此前 4 处调用点全量
+    to_history()，长 sub session 同样会推爆前端 DOM（同 2026-11-20 崩溃实锤）。"""
+    s = sub_session
+    try:
+        total = len(s.turns)
+    except Exception:
+        total = 0
+    start = max(0, total - _HIST_INITIAL)
+    return {"type": "session_history",
+            "name": name, "agent_id": agent_id,
+            "sid": (s.session_dir.name if getattr(s, "session_dir", None) else ""),
+            "turns": s.to_history(start_turn=start),
+            "expand_from": start, "total_turns": total,
+            "favorites": sorted(((getattr(s, "extra_state", None) or {}).get("favorites")) or [])}
 
 
 def _broadcast_history(agent, name_override: str = ""):
@@ -3168,9 +3193,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
             reg0 = getattr(agent, "registry", None)
             e0 = reg0.lookup(cur) if reg0 else None
             if e0 is not None and e0.agent is not None:
-                await _send(ws, {"type": "session_history",
-                                 "name": f"{e0.name} [{cur}]", "agent_id": cur,
-                                 "turns": e0.agent.session.to_history()})
+                await _send(ws, _sub_history_event(e0.agent.session, f"{e0.name} [{cur}]", cur))
                 # 补发子 Agent 进行中的轮（同主 Agent——观测正在跑的子 Agent 是切换页的核心场景）
                 cur_ev0 = _current_turn_event(e0.agent)
                 if cur_ev0:
@@ -3188,9 +3211,7 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                         from session import Session
                         sub_session = Session.load(str(sub_meta), llm=agent.llm,
                                                    workspace=agent.session.workspace)
-                        await _send(ws, {"type": "session_history",
-                                         "name": f"{e0.name} [{cur}]", "agent_id": cur,
-                                         "turns": sub_session.to_history()})
+                        await _send(ws, _sub_history_event(sub_session, f"{e0.name} [{cur}]", cur))
                         return
                 except Exception:
                     pass
@@ -3440,10 +3461,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
         else:
             entry = reg.lookup(target_id)
             if entry and entry.agent:
-                await _send(ws, {"type": "session_history",
-                                 "name": f"{entry.name} [{target_id}]",
-                                 "agent_id": target_id,
-                                 "turns": entry.agent.session.to_history()})
+                await _send(ws, _sub_history_event(entry.agent.session,
+                                                   f"{entry.name} [{target_id}]", target_id))
             else:
                 # 历史子 Agent（从磁盘恢复，agent=None）：磁盘加载历史
                 try:
@@ -3453,10 +3472,8 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                         from session import Session
                         sub_session = Session.load(str(sub_meta), llm=agent.llm,
                                                    workspace=agent.session.workspace)
-                        await _send(ws, {"type": "session_history",
-                                         "name": f"{entry.name} [{target_id}]",
-                                         "agent_id": target_id,
-                                         "turns": sub_session.to_history()})
+                        await _send(ws, _sub_history_event(sub_session,
+                                                           f"{entry.name} [{target_id}]", target_id))
                     else:
                         await _send(ws, {"type": "system", "text": f"⚠️ 子 Agent '{target_id}' 的存档不存在"})
                 except Exception as e:

@@ -816,6 +816,11 @@ class Session:
         # _estimate_tokens 的除数由此取代写死的 chars/4（中文 ≈1.5 字/token，chars/4 可低估 2~3 倍）
         self._chars_per_token: float = 4.0    # 实测字符/token 比率（EMA 平滑；初值 4=旧行为）
         self._over_window_mark: bool = False  # 实测 total 超 win（未超 panic）标记，下轮 start_turn 消费记日志
+        # 最近一次 react 实测快照（2026-11-22 用户方案·adopt 锚点数据源，observe_llm_usage
+        # 每步更新；flush_tier_shape 落进建档 est_tokens）：{"net_prompt": 净输入 token（刨
+        # recent-file 估算），"prompt"/"rf_tok"/"ts"/"turns" 诊断配套——大体量会话切回旧模型
+        # 时 est 用实测存量+增量换算，不再整场字符近似（详见 _est_shape_tokens）。
+        self._last_react_usage: dict = {}
         self._tools_schema_chars: int = 0     # 当前请求的 tools schema 字符数（agent.run 每步更新）
                                               # ——校准分子含它（observe_llm_usage 的 extra_chars），
                                               #   估算分子必须同口径（否则系统性少算 schema token，
@@ -969,7 +974,10 @@ class Session:
         自带 provider/指纹/轮数快照——adopt 时校验保真（指纹变了=卡片窗口/vision 位变过，
         旧形态失真须重算）。session_dir 未就绪/无 llm 静默跳过；失败仅告警（load 端缺失即 recalc）。
         provider/profile_fp 覆盖参数：模型切换钩子在 llm 已换新档后 flush 旧 provider 形态用
-        （此刻 _profile_fingerprint() 已是新档值——直接取会把新指纹写进旧 provider 建档）。"""
+        （此刻 _profile_fingerprint() 已是新档值——直接取会把新指纹写进旧 provider 建档）。
+        锚点字段 est_tokens/est_chars（2026-11-22 用户方案）：该模型最后一次成功 react 的
+        实测净 token + 当时体量字符——adopt 超窗判定改锚定外推（实测存量 + 增量按该模型
+        自己的实测比率换算，见 _est_shape_tokens），不再整场字符近似换算。"""
         sdir = getattr(self, "session_dir", None)
         llm = getattr(self, "llm", None)
         if sdir is None or llm is None:
@@ -977,6 +985,24 @@ class Session:
         provider = provider or getattr(llm, "model_name", "") or ""
         if not provider:
             return False
+        # —— 锚点三级取值：本进程实测快照（observe_llm_usage 每步更新；【model 必须匹配】
+        #    provider——快照是全局单值，切到 A 未跑轮就切走时快照仍属于上一模型，不校验会把
+        #    B 的实测写进 A 建档（L2·9642 实锤））> 旧建档成对沿用（(lt,lc) 成对快照——重启后
+        #    未跑轮就切走，无论体量变没变，差值换算都自洽）> 0（锚点退化，adopt 走老字符路径）——
+        _anch = dict(getattr(self, "_last_react_usage", None) or {})
+        _old = {}
+        try:
+            _old = self._read_tier_shape(provider) or {}
+        except Exception:
+            pass
+        if (int(_anch.get("net_prompt") or 0) > 0
+                and str(_anch.get("model") or "") == provider):
+            _est_tok = int(_anch["net_prompt"])
+            _est_char = self._shape_chars_now(list(self._tier_boundaries), int(self._planned_fold))
+        elif int(_old.get("est_tokens") or 0) > 0:
+            _est_tok, _est_char = int(_old["est_tokens"]), int(_old.get("est_chars") or 0)
+        else:
+            _est_tok, _est_char = 0, 0
         data = {
             "provider": provider,
             "profile_fp": profile_fp or self._profile_fingerprint(),
@@ -988,6 +1014,8 @@ class Session:
             "sos_count": int(self._sos_count),
             "sos_summary": self._sos_text,
             "global_summary": self.global_summary,
+            "est_chars": _est_char,
+            "est_tokens": _est_tok,
         }
         return self._sidecar_write(self._tier_shape_path(provider), data)
 
@@ -2511,26 +2539,57 @@ class Session:
         _pre_chars = sum(len(str(m.get("content") or "")) for m in prefix)
         return _w_sum, _w_tier, _pre_chars
 
-    def _est_shape_chars(self, bs, fc) -> int:
-        """档位形态估算 token（O(n) 预扫描，零渲染）：按给定边界/fc 快速估算当前 turns 的
-        投影体量——_decide_switch_shape 的 adopt 超窗判定用（用户要求『上下文超出新 provider
-        窗口也要重刷』）。prefix + tools schema 与 apply_simple_tiering 的 _est_fast 同口径。"""
+    def _shape_chars_now(self, bs, fc) -> int:
+        """档位形态体量字符数（O(n) 预扫描，零渲染）：按给定边界/fc 估算当前 turns 的投影
+        字符分子 = prefix + 折叠结构摘要段 + 阶梯档区间 + tools schema——_est_shape_chars
+        （token 换算）与建档锚点 est_chars（_est_shape_tokens 锚定外推用）共用同口径。"""
         n = len(self.turns)
         if not n:
             return 0
         _w_sum, _w_tier, _pre_chars = self._shape_weight_tables(list(bs or []), self._tier_prefix_msgs())
-        _cpt = max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))
         k = max(0, min(int(fc or 0), n))
-        _chars = _pre_chars + _w_sum[k] + (_w_tier[n] - _w_tier[k])
         _schema = self._tools_schema_chars if getattr(self, "_tools_schema_chars", None) else 0
-        return int((_chars + _schema) / _cpt)
+        return _pre_chars + _w_sum[k] + (_w_tier[n] - _w_tier[k]) + _schema
+
+    def _est_shape_chars(self, bs, fc) -> int:
+        """档位形态估算 token（O(n) 预扫描，零渲染）：按给定边界/fc 快速估算当前 turns 的
+        投影体量——_decide_switch_shape 的 adopt 超窗判定用（用户要求『上下文超出新 provider
+        窗口也要重刷』）。prefix + tools schema 与 apply_simple_tiering 的 _est_fast 同口径。"""
+        _cpt = max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))
+        return int(self._shape_chars_now(bs, fc) / _cpt)
+
+    def _est_shape_tokens(self, shape: dict) -> tuple:
+        """adopt 超窗判定的 token 估算·两级（2026-11-22 用户方案，治后期切换必重算）：
+        ① 锚定外推（anchor）：建档快照了该模型【最后一次成功 react】的实测净 token
+           （est_tokens，prompt 刨 recent-file）与当时体量字符（est_chars，与
+           _shape_chars_now 同口径）。当前体量 chars_now 现算，est = est_tokens +
+           (chars_now - est_chars) / cpt，cpt = est_chars/est_tokens（该模型自己的实测
+           比率，clamp 1.0~8.0 防坏数据）——存量用实测、只对增量做换算：避免全局
+           _chars_per_token 被其它模型的校准污染（切来之前刚用别的模型），也消除字符
+           近似对存量的系统性偏差——大体量会话后期不再每次切换都被 est>win 误判重算，
+           建档形态的复用价值得以发挥。Δ 为负（rewind 后体量变小）同样成立
+           （(lt,lc) 是成对快照，差值反映体量变化，非对称风险由 panic 保命阀兑底）。
+        ② 老路径兑底（chars）：建档无锚点（老建档未迁移/该模型从未跑过 react）→
+           chars_now 除全局 _chars_per_token（原行为，零破坏）。
+        返回 (est_tokens:int, mode:"anchor"|"chars")。"""
+        bs = shape.get("tier_boundaries") or []
+        fc = int(shape.get("fold_count") or 0)
+        chars_now = self._shape_chars_now(bs, fc)
+        lt = int(shape.get("est_tokens") or 0)
+        lc = int(shape.get("est_chars") or 0)
+        if lt > 0 and lc > 0:
+            cpt = max(1.0, min(8.0, lc / lt))   # 该模型实测比率
+            return max(0, int(lt + (chars_now - lc) / cpt)), "anchor"
+        return int(chars_now / max(1.0, float(getattr(self, "_chars_per_token", 4) or 4))), "chars"
 
     def _decide_switch_shape(self, name: str) -> Optional[dict]:
         """切到 provider name 的档位形态决策（Agent._on_model_switch 与 load 异 provider 启动
         共用同一决策函数，避免两套逻辑漂移；调用前提：llm 已 _apply_profile 新档——指纹/窗口
         按新 profile 判）。校验链：policy=recalc → None；建档缺失 / 指纹不符（卡片窗口/vision
         位变过，旧形态失真）/ est 超新窗口（win 空=不分档→视为通过）→ None（调用端重算定型）；
-        全部通过 → 返回建档 dict（调用端 adopt_tier_shape 采用）。"""
+        全部通过 → 返回建档 dict（调用端 adopt_tier_shape 采用）。
+        est 判定两级（2026-11-22 用户方案）：锚定外推（实测存量+增量换算）优先，无锚点退
+        全场字符换算——见 _est_shape_tokens。"""
         try:
             policy = (config.get_profile(name) or {}).get("tier_policy", "adopt")
         except Exception:
@@ -2548,10 +2607,12 @@ class Session:
             return None
         win = getattr(self.llm, "max_effective_context_window", None)
         if win:
-            est = self._est_shape_chars(shape.get("tier_boundaries") or [], shape.get("fold_count") or 0)
+            est, _mode = self._est_shape_tokens(shape)
             if est > int(win):
-                _LOG.info("档位建档超窗（est=%d > win=%d）→ 重算：%s", est, int(win), name)
+                _LOG.info("档位建档超窗（est=%d[%s] > win=%d）→ 重算：%s", est, _mode, int(win), name)
                 return None
+            _LOG.info("超窗校验通过（est=%d[%s] ≤ win=%d，余量 %d）：%s",
+                      est, _mode, int(win), int(win) - est, name)
         return shape
 
     def adopt_tier_shape(self, shape: dict) -> None:
@@ -4105,6 +4166,13 @@ class Session:
         rf_tok = self._rf_chars() / max(0.1, self._chars_per_token)
         over = (prompt - rf_tok) > win
         hit_panic = total > panic
+        # 最近一次 react 实测快照（2026-11-22 用户方案·adopt 锚点数据源）：净 prompt（刨 rf，
+        # 与建档 est_chars 的"干净体量"口径匹配）——flush_tier_shape 落进建档 est_tokens。
+        # 带 model 标记：flush 旧 provider 时校验快照归属（L2 实测 9642：切到 deepseek 未跑轮
+        # 就切回，glm 的实测被写进 deepseek 建档——张冠李戴，锚点比率完全失真）。
+        self._last_react_usage = {"net_prompt": max(0, prompt - int(rf_tok)), "prompt": prompt,
+                                  "rf_tok": int(rf_tok), "ts": time.time(), "turns": len(self.turns),
+                                  "model": getattr(self.llm, "model_name", "") or ""}
         self._append_token_usage({
             "ts": int(time.time()), "model": getattr(self.llm, "model_name", "") or "",
             "chars": chars, "prompt_tokens": prompt, "completion_tokens": completion,

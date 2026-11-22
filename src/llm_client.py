@@ -683,6 +683,25 @@ class LLMClient:
                 _LOG.warning("on_switch 钩子失败（忽略，不影响切换本身）：%s", e)
         return self
 
+    def temp_ban(self, model: str, secs: float):
+        """临时禁用某模型 secs 秒（loop_breaker·2026-11-22 用户提案：检测到重复工具调用
+        循环时 ban 当前模型，让回退链下一位接管收尾）。复用 provider 冷却容器——时长按
+        【预折旧时间戳】实现：写入 now-(窗口-secs)，全局 _cooldown_seconds 不动，剩余恰为
+        secs（不改任何读取逻辑零侵入）。已有更长冷却的键不缩短（保守）。键与 _ck() 同构
+        （model:token签名——多 token 轮换的其它签名不在冷却属已知边缘，注释存档）。"""
+        import hashlib as _hl
+        keys = [k for k in self._provider_cooldown if k.startswith(f"{model}:")]
+        if not keys:
+            _key = ""
+            try:
+                _key = str((config.get_profile(model) or {}).get("api_key") or "")
+            except Exception:
+                pass
+            keys = [f"{model}:{_hl.md5(_key.encode()).hexdigest()[:8] if _key else '0'}"]
+        ts = time.time() - max(0.0, self._cooldown_seconds - max(1.0, float(secs)))
+        for k in keys:
+            self._provider_cooldown[k] = max(ts, self._provider_cooldown.get(k, 0.0))
+
     def set_fallback(self, chain, policy: Optional[str] = None) -> "LLMClient":
         """设置本实例的回退链/策略（agent .yml 声明的 fallback 注入用，SubAgent 三路径调用）。
         chain: list[str] 或逗号分隔串（空 = 关回退——显式声明空即与全局 settings 隔离）；

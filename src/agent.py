@@ -451,6 +451,12 @@ class Agent:
                 self.max_steps = 200
         self._fs_snap: Optional[dict] = None  # 最近一次 workspace mtime 快照（after_tool 钩子的 changed_files 基准；链式复用省一半扫描）
         self._turn_changed_calls: list = []   # 本轮产生文件变更的工具调用原文 [{call_id,name,arguments,result_preview,changed_files}]——before_answer 钩子（wiki 维护等）直接消费，免子 Agent read_file
+        # —— 重复工具调用检测（loop_breaker·2026-11-22 用户提案，详见 _check_tool_loop）——
+        # 窗口跨轮保留（循环行为常跨轮尾巴），触发标记每轮复位（每轮最多切一次）。
+        self._recent_tool_calls = collections.deque(maxlen=self._LOOP_WINDOW)
+        self._loop_breaker_fired = False    # 本轮已触发（防重入；轮初复位）
+        self._loop_breaker_restore = ""     # 被临时 ban 的模型名（轮结束 finally 恢复）
+        self._loop_breaker_on = True        # 开关（轮初读 settings loop_breaker，默认开）
         # 统一辅助模型（settings.json utility_model；空=跟随主模型）：所有 LLM 短调用共用——
         # recap 总结 / RAG 检索 / reasoning 补全默认 / 工作流 LLM/意图节点默认。
         # 兼容旧字段 retrieval_model / recap_model（config.get_utility_model 内部处理）。
@@ -915,6 +921,87 @@ class Agent:
         if getattr(self, "_declared_fallback", None) is None:
             return None
         return list(self._declared_fallback)
+
+    # —— 重复工具调用检测（loop_breaker·2026-11-22 用户提案）——
+    # 场景：个别模型（如 moss）思考很长、干完活后陷入 rename_session/add_memory 之类的
+    # 无意义重复调用一直不收尾。近 10 次调用中同工具同参 ≥5 次（或管理类工具同名 ≥5 次，
+    # 防参数微调变体）→ 判定循环：当前模型 temp_ban ~2 分钟 + 回退链下一位接管收尾，
+    # 本轮结束自动恢复（步循环 finally 统一出口——正常/收尾/中断/异常全覆盖）。
+    _LOOP_WINDOW = 10          # 检测窗口（最近 N 次工具调用）
+    _LOOP_THRESHOLD = 5        # 触发阈值（窗口内同指纹出现次数）
+    _LOOP_BAN_SECS = 120.0     # ban 时长（轮结束恢复时提前解禁）
+    # 管理类一次性工具名单：正常流程不会窗口内连调 5 次——参数微调变体也按名字计（B 判据）
+    _LOOP_PRONE_TOOLS = {"rename_session", "add_memory", "update_memory", "save_skill"}
+
+    def _check_tool_loop(self, calls) -> Optional[tuple]:
+        """把本批 calls 记入滚动窗口并检测循环。返回 (name, count, why) 或 None。
+        A 判据=同 (工具名, 参数指纹) ≥阈值（用户原案）；B 判据=管理类工具同名 ≥阈值
+        （add_memory 每次微调 title/content 的变体循环抓得住）。触发方负责清窗防误伤。"""
+        import hashlib as _hl
+        for tc in (calls or []):
+            try:
+                fp = _hl.md5(json.dumps(tc.get("arguments") or {}, sort_keys=True,
+                                        ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+            except Exception:
+                fp = ""
+            self._recent_tool_calls.append((str(tc.get("name") or ""), fp))
+        if not self._recent_tool_calls:
+            return None
+        cnt = collections.Counter(self._recent_tool_calls)
+        for (n, _fp), c in cnt.items():
+            if n and c >= self._LOOP_THRESHOLD:
+                return n, c, "同参重复"
+        for n, c in collections.Counter(n for n, _ in self._recent_tool_calls).items():
+            if n and c >= self._LOOP_THRESHOLD and n in self._LOOP_PRONE_TOOLS:
+                return n, c, "管理工具高频"
+        return None
+
+    def _fire_loop_breaker(self, name: str, count: int, why: str):
+        """触发循环熔断：temp_ban 当前模型 + 沿 react 链切下一位接管；轮结束恢复（finally）。
+        链选取：react 链（yml 声明）优先，空则实例链（settings 全局）；环形取下一位。
+        无链可切只 emit warn 提示手动 /model（不 ban——ban 了没接班人只会把轮卡死）。"""
+        cur = self.llm.model_name
+        chain = self._react_chain() or list(getattr(self.llm, "fallback_chain") or [])
+        nxt = None
+        if cur in chain:
+            i = chain.index(cur)
+            ordered = chain[i + 1:] + [m for m in chain[:i] if m != cur]
+            nxt = next((m for m in ordered if m and m != cur), None)
+        elif chain:
+            nxt = chain[0] or None
+        if not nxt:
+            self._emit({"type": "warn",
+                        "text": f"⚠️ 检测到疑似工具调用循环（{name} ×{count}，{why}），"
+                                f"但无可用回退链——请手动 /model 切换模型收尾"})
+            return
+        try:
+            self.llm.temp_ban(cur, self._LOOP_BAN_SECS)
+        except Exception as e:
+            _LOG.warning("loop_breaker temp_ban 失败（继续切换）：%s", e)
+        self._loop_breaker_restore = cur
+        self.switch_model(nxt, _user_initiated=False)
+        self._emit({"type": "warn",
+                    "text": f"⚠️ 检测到疑似工具调用循环（{name} ×{count} 次，{why}）——"
+                            f"已临时 ban {cur} 约{int(self._LOOP_BAN_SECS)}s，由 {nxt} 接管收尾；"
+                            f"本轮结束后自动恢复 {cur}"})
+
+    def _loop_breaker_restore_model(self):
+        """轮结束恢复（步循环 finally 统一调）：切回被 ban 的模型 + 清其冷却键
+        （恢复=选择与可用性都还原；ban 只为轮内换人收尾）。"""
+        m = getattr(self, "_loop_breaker_restore", "") or ""
+        if not m:
+            return
+        self._loop_breaker_restore = ""
+        try:
+            cd = getattr(self.llm, "_provider_cooldown", None)
+            if isinstance(cd, dict):
+                for k in [k for k in cd if k.startswith(m + ":")]:
+                    cd.pop(k, None)
+            if self.llm.model_name != m:
+                self.switch_model(m, _user_initiated=False)
+                _LOG.info("loop_breaker：轮结束，恢复模型 %s", m)
+        except Exception as e:
+            _LOG.warning("loop_breaker 恢复失败（忽略）：%s", e)
 
     def switch_model(self, name: str, _user_initiated: bool = False):
         """热切换模型。Session 共用 self.llm，故摘要调用也跟着切。
@@ -2763,6 +2850,14 @@ class Agent:
             self._answer_inject_count = 0
             self._turn_end_inject_count = 0
             self._active_hooks = set()
+            # loop_breaker（2026-11-22 用户提案）：触发标记每轮复位（每轮最多切一次；
+            # 检测窗口跨轮保留——循环行为常跨轮尾巴）；开关每轮重读 settings（loop_breaker）。
+            self._loop_breaker_fired = False
+            try:
+                self._loop_breaker_on = str(config.load_runtime_settings().get(
+                    "loop_breaker", True)).strip().lower() not in ("0", "false", "off", "no")
+            except Exception:
+                self._loop_breaker_on = True
             if resumed:
                 # resume 提示旁注：引导模型从断点续做（投影里 user+steps 完整，模型能看到断在哪；
                 # 若断前某工具调用已发起未完成，该 step 未归档——模型据上下文自然重新发起）
@@ -3145,6 +3240,16 @@ class Agent:
 
                         # 执行工具
                         calls = resp.tool_calls
+                        # —— 重复工具调用检测（loop_breaker·2026-11-22 用户提案）——
+                        # 干完活陷进 rename_session/add_memory 式无意义循环的模型（如 moss）
+                        # 在此被打断：temp_ban 当前模型 + 回退链下一位接管收尾，轮结束恢复。
+                        # 关闭或已触发时不记录（省每步指纹开销；触发后清窗，新模型不背旧计数）。
+                        if self._loop_breaker_on and not self._loop_breaker_fired:
+                            _hit = self._check_tool_loop(calls)
+                            if _hit:
+                                self._loop_breaker_fired = True
+                                self._recent_tool_calls.clear()
+                                self._fire_loop_breaker(*_hit)
                         # 首轮首次工具调用前：提前为 session 命名并异步落盘（不阻塞工具执行）
                         if not self.session.name:
                             tool_names = [tc["name"] for tc in calls]
@@ -3357,6 +3462,12 @@ class Agent:
                 except Exception:
                     pass   # abort 自身失败不掩盖原异常
                 raise
+            finally:
+                # loop_breaker（2026-11-22 用户提案）：轮结束统一出口——正常 return / wrap_up
+                # 收尾 / 用户中断 / 异常 re-raise / continue 开新轮全覆盖：切回被 ban 的模型
+                # 并清其冷却键（恢复=选择与可用性都还原）。步循环的 try 原无 finally，
+                # 逐出口插入易漏，故补在此（对 continue 离开 try 也生效）。
+                self._loop_breaker_restore_model()
 
     def _wrap_up(self) -> str:
         """预算/步数到顶时，做一次无工具的总结性收尾。"""

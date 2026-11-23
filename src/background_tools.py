@@ -124,8 +124,10 @@ def make_background_tools(agent) -> list:
         - 【组合】（every_seconds + at 同给）＝ at 为首次触发时刻，之后每 every_seconds 循环一次
           （at 要求完整 ISO——含日期；at 已过去则自动对齐到下一个相位点立即起步）
         推送内容三选一：message = 静态文本；tool(+tool_args) = 到点执行该工具拿结果；
-        code = 一段 Python 代码（2026-10-04·autonomous 融合）——触发时执行，stdout 尾部 +
-        result 变量作为消息返回；空产物该次静默（不注入）——自主循环用 code 判断目标/进度，有话要说才返回。
+        code = 一段 Python 代码（2026-10-04·autonomous 融合）——【只认顶层 result 变量】：代码里
+         `result = "..."`（字符串）即本次推送的消息；print/stdout 只进调试日志【不入消息】（进程级
+         stdout 会被并发 CLI 输出污染，2026-10-23 三连实锤后停用）。result 为空该次静默（不注入）
+         ——自主循环用 code 判断目标/进度，有话要说才赋值 result（赋值放 if 分支里，不满足即静默）。
         deadline（ISO，如 2026-10-05T18:00）＝截止：过期任务自动删除（取代旧 autonomous 的 end_time）。
         mode = 注入方式：idle（默认，busy 时排队等空闲）| immediate（busy 时打断当前轮，步边界插话注入——
         旧 autonomous 语义）| skip（busy 时放弃本次注入）。
@@ -217,7 +219,7 @@ def make_background_tools(agent) -> list:
                      "message": "推送内容①静态文本：到点注入给 Agent 的这条消息。支持 @file:相对路径 整值引用（读文件全文填入）",
                      "tool": "推送内容②到点执行工具：工具名（如 web_search）",
                      "tool_args": "推送内容②的参数对象（如 {\"query\": \"AI最新进展\"}）",
-                     "code": "推送内容③Python 代码：触发时执行，stdout 尾部+result 变量作为消息；空产物该次静默",
+                     "code": "推送内容③Python 代码：触发时执行；【只认顶层 result 变量作为消息】（result='...' 即推送）；print/stdout 只进日志不入消息；result 为空该次静默",
                      "repeat": "是否循环（every_seconds 默认 True；at 短格式默认 True、ISO 默认单次）",
                      "deadline": "截止（ISO 如 2026-10-05T18:00）：过期任务自动删除",
                      "mode": "注入方式：idle（默认，Agent 忙时排队等空闲）/ immediate（忙时打断当前轮，步边界插话注入）/ skip（忙时放弃本次）",

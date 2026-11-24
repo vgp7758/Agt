@@ -38,17 +38,19 @@
 
 repo 级共享单文件解决的是**落盘**（一个 repo 一份 JSONL，见上节）；这一步把**内存态**也共享化——同进程内所有 session（主线 / 分支 / 子 Agent）不再各持一份 `_data` 副本。
 
-**动机（内存治理）**：大 repo 的 toollog `_data`（数万条工具详情）此前每个 session 实例各加载一份内存副本，同进程多 session（尤其子 Agent 群）线性放大内存占用。
+**动机（内存治理）**：大 repo 的 toollog `_data`（数万条工具详情）此前每个 session 实例各加载一份内存副本，同进程多 session（尤其子 Agent 群）线性放大内存占用。**实测收益**：6 实例 × 22.9MB jsonl（2 万条），进程 Private **262MB → 55MB（省 207MB）**——旧版每实例线性 +42MB，共享后恒定一份。
 
 | 件 | 说明 |
 |---|---|
-| `ToolLog.shared(sessions_root, prefix)`（src/toollog.py） | **进程级单例入口**：按 `sessions_root` 键控——同进程同 repo 的所有 session 拿到同一个 ToolLog 实例（`_data` / `_path` / 落盘全部共享） |
-| counter 分区 | `next_id` / counter 按会话前缀分区（`_counters` dict）——共享实例下各 session 的 `a-N` / `b-N` / `a-coder-N` 序号互不干扰、互不顶号 |
-| 并发安全 | `record` / `append` 加锁（多 session 线程并发写同一实例） |
-| 公开接口 | 签名不变；旧 `cN` / 分支锚点 id 兼容可查 |
-| session.py 接入 | `self.toollog` 改取共享实例（`ToolLog.shared(sessions_root, prefix)`）；`_data` 保存/回填逻辑随之简化；主线 / 分支 / 子 Agent 三条加载路径行为不变 |
+| `_ToolLogStore`（src/toollog.py） | 按 `sessions_root` 键控的**进程级单例仓库**：`_data` / `_path` / 落盘全部收归 store；`record` / `append` 持 store 锁 |
+| `ToolLog.shared(sessions_root, prefix)` | **进程级单例入口**——同进程同 repo 的所有 session 拿到同一 store 上的 ToolLog 视图 |
+| counter 分区 | counter 按会话前缀分区（`store.counters`）——共享实例下各 session 的 `a-N` / `b-N` / `a-coder-N` 序号互不干扰、互不顶号 |
+| 公开接口 | 签名全部不变；旧 `cN` / 分支锚点 id（`m1000-c1`）兼容可查 |
+| session.py 三条路径 | ① 主线：buffer → `set_path` 绑定共享 store；② 分支：`bind` 替代旧「换实例搬 `_data`」；③ 子 Agent：`ToolLog.shared` 预设目录直绑 |
 
-**验证**：`test/test_toollog_shared.py` 四场景——① 多 session 共享一份数据 ② counter 按前缀独立 ③ 并发 record 不交错 ④ search/list 正常。
+**验证（8/8，`test/test_toollog_shared.py`）**：共享一份数据 / counter 按前缀分区 / 8 线程并发 record 400 条不交错 / search 与 list_tool_logs 过滤不变 / 旧 `cN` 与 `m1000-c1` 锚点 id 兼容 / 同 store 只整表 load 一次 / Session 三条加载路径。另 L2 隔离实例（临时 AGT_HOME）真实 Agent 管线 **14/14**：recall_turn / get_tool_detail / call_again / list_tool_logs / 落盘重载续号 / 跨会话共享与前缀隔离。
+
+**边界**：本方案是**进程内**共享——多 agt 进程间仍各有一份 toollog 内存（跨进程共享需改 IPC，暂无必要）；向量栈的跨进程共享已由 [vector_hub](vector-hub.md) 覆盖。
 
 **与上节的关系**：落盘形态不变（仍是 repo 一份 `sessions/toollog.jsonl` append-only）；变的是进程内不再重复持有同一份数据的多个副本。
 

@@ -79,7 +79,7 @@ if action not in _VALID_ACTIONS:
 ## 注意事项
 
 - **save 路由未防路径穿越**：实测 `path=tmp/../evil.webm` 成功写到 workspace 根（`{"ok":true,"abs":"D:\...\evil.webm"}`，测试产物已删）。与[静态资产路由](../architecture/plugin-sdk.md)的防 `../` 穿越**不是一回事**——落盘类路由本来就持有全 workspace 写权，但 HTTP 端点无鉴权直达，内网本机信任模型下暂未收窄；若日后暴露公网需补 resolve-in-workspace 校验
-- `register_route` 挂载一次永久：改 backend.py 后 `/reload plugins` 热生效，但路由不随 reload 摘挂（引擎既有设计）
+- ~~`register_route` 挂载一次永久：改 backend.py 后 `/reload plugins` 热生效，但路由不随 reload 摘挂（引擎既有设计）~~ → **2026-11-24 已修（commit e870092）**：`/reload plugins` 后同 path 同 method 的旧插件路由先摘再挂，改路由处理器也热生效（[plugin-sdk · 后记](../architecture/plugin-sdk.md)）
 - 改 frontend.js 刷新页面即生效（静态路由 no-cache）
 
 ## 相关页面

@@ -339,7 +339,7 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 带 `path` 时打开其**所在目录**：文件=父目录并选中该文件（win：`explorer /select,<path>`，逗号必须并入同一参数；mac：`open -R`；linux：`xdg-open` 父目录），目录=直接打开——三平台收敛进 `_open_dir_or_parent(p)`
 - 路径不存在 → `ok:false`（前端 toast 报错）
 - backend 顶部改**模块级** `from fastapi import Request`——[422 注解坑](#插件路由-422-根治future-annotations--fastapi-注解-resolve2026-10-1516隔离实例实锤)的直接沿用
-- 验证：隔离冒烟 5 场景全过；生效方式见[下节](#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)——前端 Ctrl+F5 即可，后端新参数要 `/restart`
+- 验证：隔离冒烟 5 场景全过；生效方式见[下节](#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)——前端 Ctrl+F5 即可；后端新参数**当时**要 `/restart`（⚠️ 2026-11-24 路由 reload 接管修复后，`/reload plugins` 即可——见下节后记）
 
 ## 插件路由热重载不替换：/reload plugins 后旧 handler 仍响应（2026-10-27，open-folder 扩展实锤）
 
@@ -349,6 +349,25 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - **危害面是静默降级**：不炸、不 4xx，行为停在旧版——「改了没效果」比报错更难排查
 - **文档口径修正**：开发 README（`.agent/plugins/README.md`）「backend `/reload plugins` 热生效」需加限定——**register_route 已实锤不替换**；register_tool / register_command / 钩子等其它注册面是否同样不替换未验证，改路由逻辑后建议直接 `/restart`
 - 后续方向（未排期）：热重载时摘旧路由再注册；或文档明示「路由改动需重启」
+
+### 后记：已修——插件路由 reload 接管，同 path 同 method 旧插件路由先摘再挂（2026-11-24，voice-input 插件实锤，commit e870092）
+
+> 上节「后续方向（未排期）」已落地。触发实锤：调试 voice-input 语音输入插件（见 [voice-input](../features/voice-input.md)）时 backend 路由处理器改了两版，`/reload plugins` 两次都「不生效也不报错」——工具/命令/钩子是真换了，唯独路由还连着旧模块的旧闭包。
+
+**根因复述**：`_attach_one` 的幂等口径是「同 path 已存在即跳过」，但「已存在」既可能是**内置路由**（该跳过），也可能是**上一次加载挂的旧插件路由**（该替换）——两者没区分。
+
+**修复（src/plugins.py `_attach_one`，commit `e870092`）**——按路由 `name` 前缀 `plugin_` 区分内置与插件路由：
+
+| 同 path 的现状 | 处置 |
+|---|---|
+| 同 method 是**内置**路由 | 不顶替（插件不得覆盖内置端点，语义不变） |
+| 只有内置路由、method 不同 | 不挂（既有语义不变） |
+| 同 method 是**旧插件路由** | **先摘再挂**——路由绑到新模块的新函数；按注册顺序逐条接管，同 path 的 GET / POST 各自独立 |
+
+- 摘旧路由用**换新列表**而非原地删（`app.router.routes = [r for r in … if r not in same_method]`）：reload 可能在线程池里跑，事件循环正在遍历该列表做路由匹配
+- `unload_all` 注释同步改写：app 上已挂的旧插件路由不在卸载期摘，reload 时由 `_attach_one` 就地替换
+- 单测 test/test_plugins_routes.py 三例：reload 重绑新 handler 且不留双份 / 同 path 的 GET·POST 逐条接管 / 同 path 内置路由不被遮蔽（GET 仍走内置、POST 405）
+- **文档口径恢复**：改 backend 里的路由处理器，`/reload plugins` 即热生效，不再需要 `/restart`（上节「需加限定」的结论作废；引擎修复本身要实例 `/restart` 一次载入新 plugins.py）
 
 ## 插件层间转移：repo ⇄ 全局 + global_plugins_dir() 单源（2026-11-27，施工牌 p_a8823fda）
 
@@ -363,6 +382,18 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 
 **边界**：转移后的热重载走既有 `reload_plugins`（重新 `discover` 两层）；`plugins.discover` 只返回覆盖后的一份（repo 后扫 = 覆盖），市场要两层完整视图时自己扫（`market._scan_plugin_dirs`）——不要拿 `discover` 做装态检测。
 
+## emit 事件目标路由：默认 `_main_`，页面级广播须显式 `agent_id=""`（2026-11-24，voice-input 插件实锤）
+
+> `api.emit()` 内部走 `agent._emit(ev)`（引擎补 `plugin` 名与缺省 `type=plugin_event`；emit 自身异常只 warn，不炸管线）。而 `_emit → _broadcast` 与**前端**都按 `agent_id` 做**目标路由**（机制见 [多 Agent · 事件广播 target 过滤](multi-agent.md)）——插件事件默认继承主 Agent 的 `agent_id=_main_`，**只有与主 Agent 交互的页签收得到，子 Agent 页签收不到**。
+
+| 想发给谁 | 写法 |
+|---|---|
+| 主 Agent 页签（缺省） | `api.emit({"type": "my_event", ...})` |
+| **所有页签**（含子 Agent 页签）——页面级事件 | 调用方显式 `event["agent_id"] = ""`（置空 = 系统级广播；`Agent._emit` 不覆盖已有键） |
+
+- **行为零变化，只是把契约写进 docstring**（src/plugins.py `PluginAPI.emit`）：voice-input 的 `voice_partial / voice_final / voice_error` 属于页面级事件（发起页签可能正停在某个子 Agent 的对话上），在 9621 隔离实例验证「子 Agent 目标页签能收到」后补的说明
+- `agent_id` 只解决 Agent 级归属，**到不了页签粒度**——多页签各自归属要由插件自己在事件里带页签标识（voice-input 带 `client_id`，前端只在对应该页签的页面落字）
+
 ## 关联
 
 
@@ -370,6 +401,7 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 开发指南：[docs/plugins.md](../../docs/plugins.md)（插件目录约定 + PluginAPI + AgtPlugin + 安全模型声明）；设计全文：[docs/plugin-sdk-design.md](../../docs/plugin-sdk-design.md)
 - [workspace 播种](../features/workspace-seeding.md) — seed_dir_docs 播种管道：随包插件 README（src/dir_docs/plugins.md，见上文「开发文档播种」节）与其余 5 份目录说明同管道分发到各 repo；main.yml【扩展点·特殊目录】索引同见上文
 - 示例插件进阶档 [record · 页面录屏](../features/record-plugin.md)（2026-10-16，三桥进阶：状态机 + user activation + 大 blob 回传）；其余五例见上文「示例插件六实用例」表
+- 首个全局层自用实战件 [voice-input · 语音输入](../features/voice-input.md)（2026-11-24，`~/.agt/plugins/`，不进仓库）——`position:'input'` 席位 + ASR SSE 中继 + 页面级事件 `agent_id=""`；调试中顺带修出路由 reload 接管（见上文后记）
 - [节点插件化](node-plugins.md) — 单切面先行示范（工作流节点「写两个文件即得」）；本方案是聚合层推广
 - [工具外置](../features/tool-externalization.md) — `.agent/tools/` 协议被插件 register_tool 同款复用
 - [工作流引擎与钩子](workflow-hooks.md) — 钩子=固定挂点的工作流；插件 on_tool_pre/post=代码级 waterfall 拦截链

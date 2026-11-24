@@ -627,10 +627,11 @@ const _base = s => _norm(s).split('/').pop().toLowerCase(); // 两种分隔符�
 
 #### 生效分叉
 
+
 | 层 | 方式 |
 |---|---|
 | 前端（CSS + `_assetActs` / `assetOpenDir` / `assetCopyPath` + 四分支注入） | **Ctrl+F5 即生效**（静态 mtime 热更） |
-| 后端（open-folder 新参数） | **需 `/restart`**——`/reload plugins` 对已注册路由不替换（见 [plugin-sdk · 插件路由热重载不替换](../architecture/plugin-sdk.md#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)） |
+| 后端（open-folder 新参数） | 当时**需 `/restart`**——`/reload plugins` 对已注册路由不替换（见 [plugin-sdk · 插件路由热重载不替换](../architecture/plugin-sdk.md#插件路由热重载不替换reload-plugins-后旧-handler-仍响应2026-10-27open-folder-扩展实锤)）；⚠️ 2026-11-24 引擎修复（commit e870092）后 **`/reload plugins` 即生效**（同 path 同 method 旧插件路由先摘再挂，见该节后记） |
 
 重启过渡期点 📂 退化为「打开 workspace 根」——不报错，是静默降级不是故障。commit 本地待推（GitHub 断连，push-retry 在岗补推）。
 

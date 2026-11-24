@@ -98,6 +98,30 @@ probe 计数 0/5——**不是穷尽判定非数据问题，是无失败现场�
 
 **经验沉淀**：doctor「三不达」时的错误文本静态诊断法（已入长期记忆）——错误结构本身就是诊断材料：tried 列表 ↔ yml 声明对照、reason 是否被冷却覆盖、cd_detail 缺谁。
 
+## 后记三：通道类失败门控——全通道失败不再派 doctor（2026-11-25，用户问诊，commit 900c76d）
+
+**案例（2026-11-25 晚）**：wiki-updater 回退链耗尽（`Connection error`）→ 引擎自动派 doctor → doctor 自己也撞同一通道失败（glm-official-flash `Connection error`）。当晚同类白耗累计 **4 次派单、4 条噪音通知**（429 限流 ×2、Connection error ×2）——doctor 每次起步即断，连失败现场都留不下。
+
+**根因**：引擎在「回退链耗尽」时**不区分错误类型**就派 doctor。但 429 限流 / Connection error / 配额不足属于**通道问题**——没有请求数据可修，doctor（专治 400 数据问题）治不了，派过去只会自己再撞同一通道再败一次（连锁白耗）。
+
+**门控规则**（黑名单式，宁多勿漏）：回退链耗尽时，若 `llm.last_failures` 里的**真实失败**（排除 `cls=cooldown` 冷却跳过项）**全部**属于通道类 → 跳过派发：
+
+| last_failures 明细 | 定性 | 判定 |
+|---|---|---|
+| 真实失败全为 `rate_limit`（429 限流）/ `network`（连接错误/超时）/ `quota`（配额不足） | 通道类——无请求数据可修 | **跳过派发**（`_LOG.warning` 说明原因） |
+| 含 `other`（含 400 BadRequest）/ `not_found` / `auth` | 数据/配置类——doctor 可修 | 照旧派发 |
+| 明细为空或只剩 cooldown 记录 | 信息不足 | 照旧派发（宁多勿漏） |
+
+**实现**（src/multiagent.py + src/agent.py，两条派发路径同规则）：
+
+- `_CHANNEL_ONLY_CLS = {"rate_limit", "network", "quota"}` + 判定函数 `_all_channel_failures(last_failures)`（src/multiagent.py 模块级单源）
+- 子 Agent 路径：`_bg` 异常分支派单 try 块内先过门控（与后记二「派单附目标失败明细」同位同源——`last_failures` 的第二个消费端）
+- 主 Agent 路径：`Agent.run()` 轮异常出口（emit interrupted 处）同款门控
+
+**验证**：test/test_doctor_dispatch_gate.py **6/6 通过**——门控 4 组场景（全通道跳过 / 含 400 照派 / 信息不足照派 / 分类集合精确）+ 两条路径的 **ast 结构回归**（`dispatch_doctor` 调用必须位于门控 else 分支内，防后续重构把门控挪坏）；L2 隔离实例真实跑通一轮对话（含 3 个 before_turn 钩子）零异常。
+
+**生效**：commit `900c76d` 已推送，`/restart` 后生效——通道抖动（限流/断网/配额）时子 Agent 失败只产生一条失败通知，不再连锁派 doctor。
+
 ## 声明（.agent/agents/doctor/，目录形态）
 
 - `doctor.yml`：`tools: ""`（留空无碍——2026-10-17 起实例化路径对 doctor 有专属分支，工具箱恒为四件套）/ `model: glm-official-flash` / 最小装配（system + file 人设 + user_message + steps）

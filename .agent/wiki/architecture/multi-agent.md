@@ -331,6 +331,10 @@ dashboard 快照（`/api/dashboard` 的 `out`）加 `fav_services` 名单——*
 
 四件套工具（req_inspect / req_probe / req_patch / req_resume）由 `make_doctor_tools` 闭包生成、经 chat.py 挂主 Agent 工具箱，doctor.yml `tools: ""` 自动继承——doctor 无自有工具目录，与 worker 同为「纯人设 + 继承工具箱」的轻声明。完整闭环见 [doctor](../features/doctor.md)。
 
+### 通道类门控：全通道失败不派 doctor（2026-11-25，commit 900c76d）
+
+2026-11-25 起派发前过**通道类门控**：`llm.last_failures` 的真实失败（排除 cooldown 跳过项）**全部**为通道类（`rate_limit` / `network` / `quota`）→ **跳过派发**——限流/断网/配额无请求数据可修，doctor 派过去只会再撞同一通道（当晚 4 次连锁白耗实证）。两条派发路径（`_bg` 子 Agent + 主 Agent 轮异常出口）同规则；明细缺失或含 `other`/`not_found`/`auth` 照旧派（宁多勿漏）。判定函数 `_all_channel_failures`（src/multiagent.py），测试 test/test_doctor_dispatch_gate.py 含 ast 结构回归。详见 [doctor · 后记三](../features/doctor.md)。
+
 ## 用户直派通道：`@name <任务>` ——第三条派活入口（2026-10-15，用户提案）
 
 派活**发起方**至今有三种，走的都是同一个 `agent_prompt` 实现（声明解析 / 新建·复用·复活 / 回退链 / 专属工具装配全同源，差异只在参数与路由）：

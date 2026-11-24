@@ -195,6 +195,12 @@ sessions/
 
 **消费端不变**：`get_tool_detail` / `agent_query_tool_detail` / [recall_turn](recall-tools.md) / 折叠摘要都按 call_id 直查同一份文件；旧 `c1` / `c3309` 式 id 兼容可查。完整机制见 [toollog · 工具调用详情库](toollog.md)。
 
+### 后记：进程内也共享了——多 session 一份 _data（2026-11-24，施工牌 p_fd248b88）
+
+#### 后记：进程内也共享了——多 session 一份 _data（2026-11-24，施工牌 p_fd248b88）
+
+上文的共享是**落盘层**（一个 repo 一份 JSONL）；2026-11-24 内存治理把**内存层**也共享化：`ToolLog.shared(sessions_root, prefix)` 进程级单例，同进程所有 session（主线/分支/子 Agent）共用一个 ToolLog 实例（`_data`/`_path`/落盘共享），counter 按会话前缀分区（`_counters` dict）、record/append 加锁，公开接口与旧 id 兼容不变。动机：大 repo 的 `_data` 此前每 session 一份内存副本，多 session 线性放大。详见 [toollog · 进程内共享](toollog.md)。
+
 ## v0.34.1 收尾配套：历史展开卡死三连修 + 越界 tier 状态修剪（2026-10-09，随 v0.34.1 发布）
 
 与平铺化 / 共享 toollog 同批打包的两件收尾（发布摘要口径，详见 [v0.34.1 发布记录](../releases/v0.34.1.md)）：

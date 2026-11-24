@@ -86,6 +86,12 @@ TF 冻结修复（`ac753c0`）随 **v0.34.4** 打包上线（发布提交 `77c55
 - `cosine_sim` 走 `ensure_rag()`——启动初期首次调用可能等几秒（等预热）
 - `emb_probe`：**等预热完成再判定**——避免预热期误降级到关键词路径，且 5 分钟探测缓存把误判粘住
 
+### 机器级共享：vector_hub 本地向量栈服务（2026-11-24，用户提案，施工中）
+
+**2026-11-24 升级（用户提案，施工牌 p_fd248b88）**：进程内单例再升**机器级单例**——独立轻量服务 `src/vector_hub.py`（HTTP，默认端口 8097，设置页 RAG tab 可配，0=禁用）。本机所有 agt 实例共用一份向量栈：实例首次需要 embedding 时懒拉起 hub 并连接（`HubEmbedder`，探活 `/health` → subprocess 拉起 → 轮询就绪 ≤120s）；所有实例离线后 hub 空闲自关（默认 600s 无请求）；hub 不可达自动回退本地 SentenceTransformer。详见 [vector_hub](vector-hub.md)。
+
+落地后本页的「共享 embedder」语义分层：**同进程**共享 `rag.get_rag().embedder`（本节）→ **跨实例**共享 vector_hub（`vector_hub_port>0` 时 `HubEmbedder` 优先于本地加载）。
+
 ## 外置件：rag_tools.py（混合形态：注册外置 + 实现留框架）
 
 外置的是【注册】与【预热触发】，不是复制实现：

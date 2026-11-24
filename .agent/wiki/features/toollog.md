@@ -34,6 +34,24 @@
 | `set_path` / `_append_line` | 文件不存在才 flush 建立，存在即假定已 load；一行一次 append |
 | `list_tool_logs` | 只列**本前缀**的 id |
 
+## 进程内共享：多 session 一份 _data（2026-11-24，内存治理施工牌 p_fd248b88）
+
+repo 级共享单文件解决的是**落盘**（一个 repo 一份 JSONL，见上节）；这一步把**内存态**也共享化——同进程内所有 session（主线 / 分支 / 子 Agent）不再各持一份 `_data` 副本。
+
+**动机（内存治理）**：大 repo 的 toollog `_data`（数万条工具详情）此前每个 session 实例各加载一份内存副本，同进程多 session（尤其子 Agent 群）线性放大内存占用。
+
+| 件 | 说明 |
+|---|---|
+| `ToolLog.shared(sessions_root, prefix)`（src/toollog.py） | **进程级单例入口**：按 `sessions_root` 键控——同进程同 repo 的所有 session 拿到同一个 ToolLog 实例（`_data` / `_path` / 落盘全部共享） |
+| counter 分区 | `next_id` / counter 按会话前缀分区（`_counters` dict）——共享实例下各 session 的 `a-N` / `b-N` / `a-coder-N` 序号互不干扰、互不顶号 |
+| 并发安全 | `record` / `append` 加锁（多 session 线程并发写同一实例） |
+| 公开接口 | 签名不变；旧 `cN` / 分支锚点 id 兼容可查 |
+| session.py 接入 | `self.toollog` 改取共享实例（`ToolLog.shared(sessions_root, prefix)`）；`_data` 保存/回填逻辑随之简化；主线 / 分支 / 子 Agent 三条加载路径行为不变 |
+
+**验证**：`test/test_toollog_shared.py` 四场景——① 多 session 共享一份数据 ② counter 按前缀独立 ③ 并发 record 不交错 ④ search/list 正常。
+
+**与上节的关系**：落盘形态不变（仍是 repo 一份 `sessions/toollog.jsonl` append-only）；变的是进程内不再重复持有同一份数据的多个副本。
+
 ## call_id 三代形态
 
 | 代 | 形态 | 说明 |

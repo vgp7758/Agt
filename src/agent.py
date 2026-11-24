@@ -3453,8 +3453,13 @@ class Agent:
                 # 工具面 agent_prompt（无 LLM 决策），doctor 失败熔断在 _bg 侧。
                 if "回退链不可用" in str(e) and getattr(self, "agent_id", "_main_") in ("", "_main_"):
                     try:
-                        from multiagent import dispatch_doctor
-                        dispatch_doctor(self, f"主 Agent 回退链耗尽：{str(e)[:600]}")
+                        from multiagent import dispatch_doctor, _all_channel_failures
+                        # 通道类门控（2026-11-25，与 multiagent._bg 子 Agent 路径同规则）：真实失败全为
+                        # 限流/网络/配额 → 无请求数据可修，不派 doctor（它也会撞同一通道再败一次）。
+                        if _all_channel_failures(getattr(self.llm, "last_failures", None)):
+                            _LOG.warning("回退链耗尽但真实失败全为通道类（限流/网络/配额）——非数据问题，跳过 doctor 派发")
+                        else:
+                            dispatch_doctor(self, f"主 Agent 回退链耗尽：{str(e)[:600]}")
                     except Exception as _de:
                         _LOG.warning("派 doctor 失败（不掩盖原异常）: %s", _de)
                 try:

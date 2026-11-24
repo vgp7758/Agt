@@ -54,6 +54,22 @@ _AGENT_TOOL_NAMES = {"create_agent", "agent_prompt", "kill_agent", "list_agents"
                      "create_spec", "commit_spec", "regenerate_spec", "list_specs"}
 
 
+# doctor 派发门控（2026-11-25 用户问诊）：回退链耗尽时若真实失败全属通道类（限流/网络/配额），
+# 则无请求数据可修——doctor（专治 400 数据问题）跳过派发，免得它自己再撞同一通道白耗一次。
+_CHANNEL_ONLY_CLS = {"rate_limit", "network", "quota"}
+
+
+def _all_channel_failures(last_failures) -> bool:
+    """last_failures 的真实失败（cls≠cooldown）是否全为通道类（限流/网络/配额）。
+    明细为空或只剩 cooldown 记录 → False（信息不足，照旧派 doctor，宁多勿漏）；
+    含 other（含 400 BadRequest）/ not_found / auth → False（照旧派）。"""
+    real = [f for f in (last_failures or [])
+            if str((f or {}).get("cls", "")).lower() != "cooldown"]
+    if not real:
+        return False
+    return all(str((f or {}).get("cls", "")).lower() in _CHANNEL_ONLY_CLS for f in real)
+
+
 def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:
     """子 agent 的唯一 id：显式 agent_id 优先（原样用）；否则 name / name_2… 避让已有键。
     因为多次 agent_prompt 同名 = 多个独立实例，id 必须唯一以区分各自嵌套的 session 目录。"""
@@ -2166,24 +2182,31 @@ def make_subagent_tools(agent) -> list:
                             # 是现成材料——每成员 err/cls/msg 分类，cls=cooldown 为冷却跳过非
                             # 真实失败；附进派单后 doctor 不再依赖内存现场即可判数据问题与否）。
                             _lf = getattr(getattr(_sa_ex, "llm", None), "last_failures", None) or []
-                            _lf_s = ""
-                            if _lf:
-                                _lf_s = ("\n\n── 目标回退链失败明细（llm.last_failures；"
-                                         "cls=cooldown 条目为冷却跳过、非真实失败）──\n"
-                                         + "\n".join(f"- [{f.get('model')}] {f.get('err')} "
-                                                     f"(cls={f.get('cls')}): {str(f.get('msg'))[:160]}"
-                                                     for f in _lf[-8:]))
-                            _doc_prompt = (
-                                f"[自动派发·BadRequest 诊断] 子 Agent '{_name}' [agent_id={_aid}] "
-                                f"的 LLM 请求刚因回退链耗尽失败（多模型连锁失败，疑似请求数据问题）。\n\n"
-                                f"错误全文：\n{type(ex).__name__}: {ex}{_lf_s}\n\n"
-                                f"── 目标近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}\n\n"
-                                f"请按 doctor.md 工作循环处理：req_inspect(agent_id='{_aid}') 体检 → "
-                                f"req_probe 试修 → req_patch 落盘 → req_resume(agent_id='{_aid}') 恢复，"
-                                f"完成后向派发者汇报坏在哪/怎么修的/根因建议。")
-                            _doc_r = agent_prompt("doctor", _doc_prompt, agent_id="doctor")
-                            _LOG.warning("子 Agent %s 回退链耗尽 → 已自动派 doctor 诊断: %s",
-                                         _aid, str(_doc_r)[:120])
+                            if _all_channel_failures(_lf):
+                                # 通道类门控（2026-11-25）：限流/网络/配额打穿全链——无请求数据可修，
+                                # doctor（专治 400）治不了；跳过派发，免得它自己再撞同一通道白耗一次。
+                                _LOG.warning("子 Agent %s 回退链耗尽但真实失败全为通道类（%s）——非数据问题，跳过 doctor 派发",
+                                             _aid, ",".join(sorted({str((f or {}).get("cls", "")) for f in _lf
+                                                                 if str((f or {}).get("cls", "")).lower() != "cooldown"})) or "-")
+                            else:
+                                _lf_s = ""
+                                if _lf:
+                                    _lf_s = ("\n\n── 目标回退链失败明细（llm.last_failures；"
+                                             "cls=cooldown 条目为冷却跳过、非真实失败）──\n"
+                                             + "\n".join(f"- [{f.get('model')}] {f.get('err')} "
+                                                         f"(cls={f.get('cls')}): {str(f.get('msg'))[:160]}"
+                                                         for f in _lf[-8:]))
+                                _doc_prompt = (
+                                    f"[自动派发·BadRequest 诊断] 子 Agent '{_name}' [agent_id={_aid}] "
+                                    f"的 LLM 请求刚因回退链耗尽失败（多模型连锁失败，疑似请求数据问题）。\n\n"
+                                    f"错误全文：\n{type(ex).__name__}: {ex}{_lf_s}\n\n"
+                                    f"── 目标近期上下文 ──\n{_interrupt_ctx(_sa_ex, enriched)}\n\n"
+                                    f"请按 doctor.md 工作循环处理：req_inspect(agent_id='{_aid}') 体检 → "
+                                    f"req_probe 试修 → req_patch 落盘 → req_resume(agent_id='{_aid}') 恢复，"
+                                    f"完成后向派发者汇报坏在哪/怎么修的/根因建议。")
+                                _doc_r = agent_prompt("doctor", _doc_prompt, agent_id="doctor")
+                                _LOG.warning("子 Agent %s 回退链耗尽 → 已自动派 doctor 诊断: %s",
+                                             _aid, str(_doc_r)[:120])
                         except Exception as doc_err:
                             _LOG.warning("子 Agent %s 派 doctor 失败: %s", _aid, doc_err)
                     # 失败也立即路由（caller 需要知道子 Agent 出错了）+ 主 Agent 兜底

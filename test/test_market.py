@@ -308,3 +308,213 @@ def test_uninstall_global_dir_cleans_nested_parent(ws, ghome):
     market.install("test-svc", scope="global", workspace=ws)
     market.uninstall("test-svc", scope="global", workspace=ws)
     assert not (ghome / "skills" / "test-svc").exists()
+
+# ---------- 层间转移 move_plugin + 本地插件清单（plan p_a8823fda） ----------
+
+def _mk_plugin(root: Path, name: str, backend: str = "def setup(api):\n    pass\n") -> Path:
+    """造一个最小有效插件（manifest.yml + backend.py + 一个应被忽略的 __pycache__）。"""
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "manifest.yml").write_text(
+        f"name: {name}\nversion: 1.2.3\ndescription: 测试插件 {name}\n", encoding="utf-8")
+    (d / "backend.py").write_text(backend, encoding="utf-8")
+    pc = d / "__pycache__"
+    pc.mkdir(exist_ok=True)
+    (pc / "junk.pyc").write_bytes(b"\x00")
+    return d
+
+
+def test_move_plugin_repo_to_global(ws, ghome):
+    _mk_plugin(ws / ".agent" / "plugins", "alpha")
+    out = market.move_plugin("alpha", workspace=ws, to="global")
+    assert "已转移" in out
+    assert (ghome / "plugins/alpha/manifest.yml").exists()
+    assert (ghome / "plugins/alpha/backend.py").exists()
+    assert not (ghome / "plugins/alpha/__pycache__").exists()      # ignore 掉编译产物
+    assert not (ws / ".agent/plugins/alpha").exists()              # 移动不是复制
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["alpha"]["installed_scope"] == "global"
+
+
+def test_move_plugin_global_to_repo(ws, ghome):
+    _mk_plugin(ghome / "plugins", "beta")
+    out = market.move_plugin("beta", workspace=ws, to="repo")
+    assert "已转移" in out
+    assert (ws / ".agent/plugins/beta/manifest.yml").exists()
+    assert not (ghome / "plugins/beta").exists()
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["beta"]["installed_scope"] == "repo"
+
+
+def test_move_plugin_conflict_rejected_then_force(ws, ghome):
+    """目标层同名：默认拒绝（[已存在]，源/目标都原样）；force 才用源这份覆盖。"""
+    _mk_plugin(ws / ".agent/plugins", "gamma")
+    _mk_plugin(ghome / "plugins", "gamma")
+    (ws / ".agent/plugins/gamma/manifest.yml").write_text(
+        "name: gamma\nversion: 9.9\n", encoding="utf-8")
+    out = market.move_plugin("gamma", workspace=ws, to="global")
+    assert out.startswith("[已存在]")
+    assert (ws / ".agent/plugins/gamma").exists()                  # 源保持原样
+    assert "9.9" not in (ghome / "plugins/gamma/manifest.yml").read_text(encoding="utf-8")
+    out = market.move_plugin("gamma", workspace=ws, to="global", force=True)
+    assert "已转移" in out
+    assert "9.9" in (ghome / "plugins/gamma/manifest.yml").read_text(encoding="utf-8")
+    assert not (ws / ".agent/plugins/gamma").exists()
+
+
+def test_move_plugin_edge_cases(ws, ghome):
+    assert market.move_plugin("nope", workspace=ws, to="global").startswith("[未找到]")
+    assert "参数" in market.move_plugin("x", workspace=ws, to="home")
+    _mk_plugin(ghome / "plugins", "onlyg")
+    out = market.move_plugin("onlyg", workspace=ws, to="global")   # 源层（repo）没有
+    assert out.startswith("⏭") and "未安装" in out
+    assert (ghome / "plugins/onlyg/manifest.yml").exists()         # 原样未动
+
+
+def test_move_plugin_failure_keeps_source(ws, ghome, monkeypatch):
+    """转移中断（manifest 校验失败模拟）：[失败]、源保持原样、目标层无临时目录残留。
+    校验桩只对落位临时目录（.moving- 名）抛错——源目录仍需可解析（否则扫描阶段就找不到）。"""
+    import plugins as _p
+    _mk_plugin(ws / ".agent/plugins", "delta")
+    _real = _p._parse_manifest
+
+    def _boom(d):
+        if ".moving-" in d.name:
+            raise ValueError("boom")
+        return _real(d)
+
+    monkeypatch.setattr(_p, "_parse_manifest", _boom)
+    out = market.move_plugin("delta", workspace=ws, to="global")
+    assert out.startswith("[失败]") and "boom" in out
+    assert (ws / ".agent/plugins/delta/manifest.yml").exists()     # 源完好
+    gplugs = ghome / "plugins"
+    assert not gplugs.exists() or not any(gplugs.iterdir())        # 无 tmp 残留
+
+
+def test_local_plugins_listed_and_dedup(ws, ghome):
+    """非索引本地插件并入清单（source=local）；与索引同名不重复列。"""
+    _mk_plugin(ws / ".agent/plugins", "locrepo")
+    _mk_plugin(ghome / "plugins", "locglob")
+    _mk_plugin(ws / ".agent/plugins", "webide")                    # 索引内同名
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    a = items["locrepo"]
+    assert a["local"] is True and a["source"] == "local" and a["installed"] is True
+    assert a["installed_scope"] == "repo" and a["available"] is True
+    assert a["type"] == "plugin" and a["type_label"] == "插件" and a["tags"] == ["本地"]
+    assert items["locglob"]["installed_scope"] == "global"
+    webides = [x for x in market.marketplace_items(workspace=ws) if x["name"] == "webide"]
+    assert len(webides) == 1 and webides[0].get("local") is not True   # 索引条目优先
+
+
+def test_api_marketplace_move(ws, monkeypatch):
+    from fastapi.testclient import TestClient
+    import server
+    monkeypatch.setattr(server, "_workspace", ws)
+    monkeypatch.setattr(server, "_agent", None)
+    with TestClient(server.app) as c:
+        _mk_plugin(ws / ".agent/plugins", "mv1")
+        r = c.post("/api/marketplace/move", json={"name": "mv1", "to": "global"})
+        d = r.json()
+        assert r.status_code == 200 and d["ok"] is True
+        assert (market._GLOBAL_ROOT / "plugins/mv1/manifest.yml").exists()
+        assert "生效" in d["message"]                              # 无 agent → 提示手动 reload
+        assert c.get("/api/marketplace").json()["local_count"] == 1
+
+        # 冲突 → ok=false + conflict=true；force 重发成功
+        _mk_plugin(ws / ".agent/plugins", "mv2")
+        _mk_plugin(market._GLOBAL_ROOT / "plugins", "mv2")
+        d = c.post("/api/marketplace/move", json={"name": "mv2", "to": "global"}).json()
+        assert d["ok"] is False and d["conflict"] is True
+        assert c.post("/api/marketplace/move",
+                      json={"name": "mv2", "to": "global", "force": True}).json()["ok"] is True
+        # 未知名 → ok=false（非 conflict）
+        d = c.post("/api/marketplace/move", json={"name": "__x__"}).json()
+        assert d["ok"] is False and not d.get("conflict")
+
+
+class _FakeAgent:
+    """reload_plugins 桩：load_plugins 只需要 agent 可赋给 _RT.agent（workspace 走参数）。"""
+
+
+def test_api_marketplace_move_hot_reload(ws, monkeypatch):
+    """_agent 在场：转移成功自动热重载，摘要以 🔁 附进 message。"""
+    from fastapi.testclient import TestClient
+    import server, plugins
+    monkeypatch.setattr(server, "_workspace", ws)
+    monkeypatch.setattr(server, "_agent", _FakeAgent())
+    _mk_plugin(ws / ".agent/plugins", "hre")
+    with TestClient(server.app) as c:
+        d = c.post("/api/marketplace/move", json={"name": "hre", "to": "global"}).json()
+        assert d["ok"] is True and "🔁" in d["message"]
+        assert (market._GLOBAL_ROOT / "plugins/hre/manifest.yml").exists()
+    plugins.unload_all()   # 清桩运行时，不污染后续用例
+
+
+def test_move_plugin_same_layer_refused(ws, ghome, monkeypatch):
+    """两层是同一目录（AGT_HOME 指到 <ws>/.agt）：移动=自删，必须拒绝且目录原样。"""
+    same = ws / ".agt"
+    (same / "plugins").mkdir(parents=True)
+    monkeypatch.setattr(market, "_GLOBAL_ROOT", same)
+    _mk_plugin(same / "plugins", "same1")
+    out = market.move_plugin("same1", workspace=ws, to="global", force=True)
+    assert out.startswith("⏭")
+    assert (same / "plugins/same1/manifest.yml").exists()
+    assert not any(p.name.startswith(".") for p in (same / "plugins").iterdir())
+
+
+def test_move_plugin_skips_and_cleans_stale_tmp(ws, ghome):
+    """中断残留的 .<名>.moving-* 不被当插件（清单不误报 both），下次转移同名时顺手清掉。"""
+    _mk_plugin(ws / ".agent/plugins", "stale")
+    gplugs = ghome / "plugins"
+    stale = gplugs / ".stale.moving-9999"
+    stale.mkdir(parents=True)                      # 残留：带合法 manifest 的隐藏目录
+    (stale / "manifest.yml").write_text("name: stale\nversion: 0.1\n", encoding="utf-8")
+    items = {x["name"]: x for x in market.marketplace_items(workspace=ws)}
+    assert items["stale"]["installed_scope"] == "repo"          # 残留不算全局层
+    assert not any(x["name"].startswith(".") for x in items.values())
+    out = market.move_plugin("stale", workspace=ws, to="global")
+    assert "已转移" in out
+    assert not stale.exists()                                       # 残留已清
+    assert sorted(p.name for p in gplugs.iterdir()) == ["stale"]   # 目录里只剩就位的插件
+
+
+def test_move_plugin_force_restores_old_on_replace_failure(ws, ghome, monkeypatch):
+    """force 覆盖：旧目标已挪开而新副本就位失败 → 旧目标放回原样、源完好、无残留。"""
+    import os
+    _mk_plugin(ws / ".agent/plugins", "omega")
+    _mk_plugin(ghome / "plugins", "omega")
+    old_text = (ghome / "plugins/omega/manifest.yml").read_text(encoding="utf-8")
+    _real = os.replace
+
+    def _boom(a, b, *args, **kw):
+        fa = os.fspath(a)
+        if ".moving-" in fa and ".moving-old-" not in fa:
+            raise OSError("disk full")     # 只让「新副本 → 目标」这一步失败
+        return _real(a, b, *args, **kw)
+
+    monkeypatch.setattr(market.os, "replace", _boom)
+    out = market.move_plugin("omega", workspace=ws, to="global", force=True)
+    assert out.startswith("[失败]")
+    assert (ghome / "plugins/omega/manifest.yml").read_text(encoding="utf-8") == old_text
+    assert (ws / ".agent/plugins/omega/manifest.yml").exists()
+    assert sorted(p.name for p in (ghome / "plugins").iterdir()) == ["omega"]
+
+
+def test_move_plugin_src_removal_failure_reported(ws, ghome, monkeypatch):
+    """就位后删源失败：以 ✅ 开头（调用方照常 reload）+ ⚠️ 提示手动清理；目标层完整。"""
+    import shutil as _sh
+    _mk_plugin(ws / ".agent/plugins", "theta")
+    real_rmtree = _sh.rmtree
+    src = (ws / ".agent/plugins/theta").resolve()
+
+    def _boom(p, *a, **kw):
+        if Path(_sh.os.fspath(p)).resolve() == src:
+            raise PermissionError("in use")
+        return real_rmtree(p, *a, **kw)
+
+    monkeypatch.setattr(market.shutil, "rmtree", _boom)
+    out = market.move_plugin("theta", workspace=ws, to="global")
+    assert out.startswith("✅") and "⚠️" in out and "请手动删除" in out
+    assert (ghome / "plugins/theta/manifest.yml").exists()
+    assert (ws / ".agent/plugins/theta/manifest.yml").exists()      # 删不掉，如实保留
+    assert not any(p.name.startswith(".") for p in (ws / ".agent/plugins").iterdir())

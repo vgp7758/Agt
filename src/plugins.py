@@ -102,9 +102,16 @@ def set_enabled(workspace: Path, name: str, enabled: bool) -> str:
     return f"✅ 插件 {name} 已{'启用' if enabled else '禁用'}（reload 后生效：/reload plugins 或 /restart）"
 
 
+def global_plugins_dir() -> Path:
+    """全局插件目录唯一真源：paths.AGT_DIR/plugins（AGT_HOME 隔离环境自动跟随，
+    与 workflow/skill 等全局层同一数据根）。"""
+    from paths import AGT_DIR
+    return Path(AGT_DIR) / "plugins"
+
+
 def discover(workspace: Path) -> list[PluginManifest]:
     found: dict[str, PluginManifest] = {}
-    global_dir = Path.home() / ".agt" / "plugins"
+    global_dir = global_plugins_dir()
     repo_dir = Path(workspace) / ".agent" / "plugins"
     for scope, base in (("global", global_dir), ("repo", repo_dir)):   # repo 后扫=覆盖
         if not base.is_dir():
@@ -561,8 +568,27 @@ def run_plugin_cli(argv: list) -> int:
         print(f"🗑️ 已删除全局插件 {arg}（{m.dir}）")
         return 0
 
+    if sub == "move" and arg:
+        # 已装插件层间转移（复用 market.move_plugin 的安全移动语义）：
+        # agt plugin move <名> [--to repo|global] [--force]，默认 --to global
+        to, force, rest, i = "global", False, argv[2:], 0
+        while i < len(rest):
+            a = rest[i]
+            if a == "--to" and i + 1 < len(rest):
+                to = rest[i + 1].strip().lower(); i += 2; continue
+            if a == "--force":
+                force = True; i += 1; continue
+            i += 1
+        from market import move_plugin
+        out = move_plugin(arg, workspace=Path.cwd(), to=to, force=force)
+        print(out)
+        if out.startswith(("✅", "⏭")) and "⚠️" not in out:
+            print("  生效：重启或 /reload plugins（转移是纯文件操作，未热重载）")
+            return 0
+        return 1
+
     if sub == "install" and arg:
-        dest_root = Path.home() / ".agt" / "plugins"
+        dest_root = global_plugins_dir()
         dest_root.mkdir(parents=True, exist_ok=True)
         src = Path(arg)
         if src.is_dir():
@@ -595,6 +621,7 @@ def run_plugin_cli(argv: list) -> int:
     print("用法：agt plugin list                    列出全部插件")
     print("      agt plugin enable <名>             启用（重启/reload 后生效）")
     print("      agt plugin disable <名>            禁用")
-    print("      agt plugin install <目录|git-url>  安装到 ~/.agt/plugins/")
+    print("      agt plugin install <目录|git-url>  安装到全局层（paths.AGT_DIR/plugins/）")
+    print("      agt plugin move <名> [--to repo]   已装插件层间转移（默认 → 全局；--force 覆盖）")
     print("      agt plugin remove <名>             删除全局插件（repo 级随仓库管理）")
     return 0 if sub in ("list", "help", "-h") else 1

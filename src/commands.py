@@ -1289,8 +1289,9 @@ def _cmd_marketplace(ctx: CommandContext, args):
             mark = marks.get(x.get("installed_scope", ""), "⬇ ")
             miss = " ⚠随包缺失" if not x.get("available") else ""
             print(f"  [{mark}] {x['name']} v{x.get('version', '1.0')} — {x['desc']}{miss}")
-    print("\n用法：/install <name> [--force] [--global]  安装（已存在不覆盖；--global 落 ~/.agt 用户级）")
+    print("\n用法：/install <name> [--force] [--global]  安装（已存在不覆盖；--global 落全局层）")
     print("      /uninstall <name>           卸载（卸实际已装层；双层全卸）")
+    print("      /plugins move <name> [--to repo] [--force]  已装插件层间转移（/market 页也可点按钮）")
     print("      /marketplace --type workflow  只看某类（workflow/agent_decl/plugin/skill/tool）")
 
 
@@ -2082,7 +2083,7 @@ def _debug_hook(ctx: CommandContext, text: str):
 
 
 def _cmd_plugins(ctx: CommandContext, args):
-    """插件管理：/plugins（清单）/ enable|disable <名> / reload。"""
+    """插件管理：/plugins（清单）/ enable|disable <名> / reload / move <名>。"""
     from real_tools import WORKSPACE
     import plugins as _plugins
     sub = args[0].lower() if args else "list"
@@ -2096,9 +2097,28 @@ def _cmd_plugins(ctx: CommandContext, args):
     if sub == "reload":
         print(_plugins.reload_plugins(ctx.agent, WORKSPACE))
         return
+    if sub == "move" and rest:
+        # 已装插件层间转移（repo ⇄ 全局）：/plugins move <名> [--to repo] [--force]
+        name, to, force, i = rest[0], "global", False, 1
+        while i < len(rest):
+            a = rest[i]
+            if a == "--to" and i + 1 < len(rest):
+                to = rest[i + 1].strip().lower(); i += 2; continue
+            if a == "--force":
+                force = True; i += 1; continue
+            i += 1
+        from market import move_plugin
+        out = move_plugin(name, workspace=WORKSPACE, to=to, force=force)
+        print(out)
+        if out.startswith("✅"):          # 转移成功才热重载（失败/无需转移不折腾）
+            if ctx.agent is not None:
+                print(_plugins.reload_plugins(ctx.agent, WORKSPACE))
+            else:
+                print("  生效：重启或 /reload plugins")
+        return
     view = _plugins.plugins_view(WORKSPACE)
     if not view:
-        print("(未发现插件。目录：<repo>/.agent/plugins/<name>/ 或 ~/.agt/plugins/<name>/，含 manifest.yml)")
+        print("(未发现插件。目录：<repo>/.agent/plugins/<name>/ 或全局层 plugins/，含 manifest.yml)")
     else:
         print(f"发现 {len(view)} 个插件：")
         for p in view:
@@ -2112,6 +2132,7 @@ def _cmd_plugins(ctx: CommandContext, args):
     print("用法：/plugins enable <名>   启用（reload 后生效）")
     print("      /plugins disable <名>  禁用")
     print("      /plugins reload        全量重载（改 backend.py 后热生效）")
+    print("      /plugins move <名>     层间转移（默认 → 全局；--to repo 反向；--force 覆盖同名）")
 
 
 def _cmd_reload(ctx: CommandContext, args):
@@ -2728,12 +2749,13 @@ def build_default_registry() -> CommandRegistry:
     reg.register("update", _cmd_update,
         "检查并升级到 PyPI 最新版（editable/本地安装自动跳过）")
     reg.register("plugins", _cmd_plugins,
-        "[enable|disable <名>|reload]  插件管理（发现/启用/禁用/热重载）",
+        "[enable|disable <名>|reload|move <名>]  插件管理（发现/启用/禁用/热重载/层间转移）",
         "/plugins                    列出全部插件（版本/来源/启停状态）\n"
         "/plugins enable <名>        启用（/plugins reload 后生效）\n"
         "/plugins disable <名>       禁用\n"
         "/plugins reload             全量重载（改 backend.py 后热生效）\n"
-        "  插件目录：<repo>/.agent/plugins/<名>/ 或 ~/.agt/plugins/<名>/（repo 级覆盖全局同名）")
+        "/plugins move <名> [--to repo] [--force]  已装插件层间转移（默认 → 全局；成功后自动热重载）\n"
+        "  插件目录：<repo>/.agent/plugins/<名>/ 或全局层（AGT_DIR）/plugins/<名>/（repo 级覆盖全局同名）")
     reg.register("reload", _cmd_reload,
         "models|tools|plugins  热重载：模型配置/脚本工具/引擎插件 改后免重启生效",
         "/reload models\n"

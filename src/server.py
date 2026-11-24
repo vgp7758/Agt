@@ -583,6 +583,7 @@ async def api_marketplace(type: str = ""):
     idx = load_index()
     return {"updated": idx.get("updated", ""),
             "total": len(items), "installed_count": sum(1 for x in items if x.get("installed")),
+            "local_count": sum(1 for x in items if x.get("local")),
             "items": items}
 
 
@@ -626,6 +627,41 @@ async def api_marketplace_uninstall(request: Request):
     msg = await run_in_threadpool(lambda: uninstall(name, workspace=_workspace, scope=scope))
     ok = not msg.startswith(("[未找到]", "[参数]"))
     return {"ok": ok, "name": name, "message": msg} if ok else {"ok": False, "error": msg}
+
+
+@app.post("/api/marketplace/move")
+async def api_marketplace_move(request: Request):
+    """已装插件层间转移：{name, to, force?} → {ok, message}。to="global"（repo → 全局
+    AGT_DIR/plugins，默认）/"repo"（全局 → .agent/plugins）。目标层同名且非 force →
+    conflict=true（前端二次确认后带 force 重发）。成功后热重载插件（_agent 在场时），
+    reload 摘要首行以 "🔁 " 附进 message；reload 异常不回滚转移（文件已就位，附警告仍算 ok）。"""
+    from fastapi.concurrency import run_in_threadpool
+    from market import move_plugin
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"请求体不是合法 JSON：{e}"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少 name"}
+    to = str(body.get("to") or "global").strip().lower()
+    force = bool(body.get("force"))
+    msg = await run_in_threadpool(
+        lambda: move_plugin(name, workspace=_workspace, to=to, force=force))
+    # 转移特有失败面比 install/uninstall 多 [已存在]（冲突）与 [失败]（中断，源保持原样）
+    fail_prefixes = ("[未找到]", "[缺失]", "[不支持]", "[参数]", "[已存在]", "[失败]")
+    if msg.startswith(fail_prefixes):
+        return {"ok": False, "error": msg, "conflict": msg.startswith("[已存在]")}
+    if _agent is not None:
+        import plugins as _plugins
+        try:
+            summary = await run_in_threadpool(_plugins.reload_plugins, _agent, _workspace)
+            note = "🔁 " + ((summary.splitlines() or [""])[0])
+        except Exception as e:
+            note = f"⚠️ 热重载失败（下次启动生效）：{type(e).__name__}: {e}"
+    else:
+        note = "  生效：重启或 /reload plugins"
+    return {"ok": True, "name": name, "message": f"{msg}\n{note}"}
 
 
 @app.get("/plugins-assets/{name}/{file_path:path}")

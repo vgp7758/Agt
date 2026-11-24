@@ -79,6 +79,26 @@ AgtPlugin.ui.addButton({ icon: '<img src="/plugins-assets/my-plugin/logo.png" st
 - 启用/禁用：设置页插件区 或 `/plugins` 页；两级目录：repo 级 `.agent/plugins/` 覆盖全局级 `~/.agt/plugins/` 同名
 - 本目录随包播种的示例插件升级走 `/update-assets`（三方 hash：种源/基线/本地不一致才提示）
 
+## 层间转移（repo ⇄ 全局）
+
+已装插件可整目录在两层之间**移动**（不是复制——源目录移除）：
+
+- **市场页**（/market）：插件卡片「⇪ 移到全局 / ⇩ 移到项目」按钮；目标层已有同名时二次确认，
+  确认后用源这份覆盖（--force 语义）。不在市场索引的**本地插件**也在此清单中（标「本地」徽章），
+  无安装/重装/卸载（无随包源），仅可层间转移。
+- **会话命令**：`/plugins move <名> [--to repo] [--force]`——默认 → 全局；成功后自动热重载插件。
+- **CLI**：`agt plugin move <名> [--to repo] [--force]`——纯文件操作（CLI 无 agent），提示重启或
+  `/reload plugins` 生效。
+
+安全语义（`market.move_plugin`）：copytree 到目标层落位目录下的临时名（防跨盘 EXDEV，
+ignore `__pycache__`/`*.pyc`）→ 校验副本 manifest 可解析 → force 时旧目标先原子挪开（不直接删，
+就位后再清）→ `os.replace` 原子就位 → 删源。就位前任一步失败：清理临时目录、源与旧目标保持
+原样（`[失败]` 前缀）；就位后删源失败则如实提示手动清理（此时两层都在，repo 级仍生效）。
+两层指向同一目录（如 AGT_HOME 落在 `<ws>/.agt`）时拒绝转移；中断残留的 `.<名>.moving-*`
+不被当作插件，下次转移同名时顺手清掉。
+全局层落位 `AGT_DIR/plugins/`（即 `~/.agt/plugins/`；AGT_HOME 隔离环境自动跟随），
+HTTP 入口 `POST /api/marketplace/move {name, to, force?}`（成功带热重载，冲突返回 `conflict: true`）。
+
 ## 播种自己写好的插件（进随包分发包）
 
 放到 `src/assets/plugins/<name>/`（pip 包内）→ 新 workspace 首启 `seed_default_plugins` 自动播种（已装同名跳过）。manifest.yml 是存在判据。

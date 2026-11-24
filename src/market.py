@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -64,7 +65,17 @@ def _is_installed(item: dict, workspace=None) -> bool:
 # workflow（seed_scope=global 播种）/skill/plugin 有用户级全局层；
 # agent_decl/tool 无全局约定（repo-only）。
 _GLOBAL_DIRS = {"workflow": "workflows", "skill": "skills", "plugin": "plugins"}
-_GLOBAL_ROOT = Path.home() / ".agt"   # 测试经 monkeypatch 注入临时根，不污染真实 ~/.agt
+_GLOBAL_ROOT: Path | None = None   # 测试注入点（monkeypatch market._GLOBAL_ROOT=临时根）；
+                                   # 缺省 None → 运行时经 _global_root() 读 paths.AGT_DIR
+                                   # （AGT_HOME 隔离环境全局层跟随，不再写死 ~/.agt）
+
+
+def _global_root() -> Path:
+    """全局层根唯一入口：测试注入的 _GLOBAL_ROOT 优先，否则 paths.AGT_DIR。"""
+    if _GLOBAL_ROOT is not None:
+        return Path(_GLOBAL_ROOT)
+    import paths
+    return Path(paths.AGT_DIR)
 
 
 def _rel_under(installed_path: str, install_dir: str) -> Path:
@@ -88,7 +99,7 @@ def installed_scope(item: dict, workspace=None) -> str:
     gdir = _GLOBAL_DIRS.get(item.get("type", ""))
     if gdir and inst:
         paths = [inst] if isinstance(inst, str) else list(inst)
-        glob = all((_GLOBAL_ROOT / gdir / _rel_under(p, item.get("install_dir", ""))).exists()
+        glob = all((_global_root() / gdir / _rel_under(p, item.get("install_dir", ""))).exists()
                    for p in paths)
     if repo and glob:
         return "both"
@@ -111,8 +122,35 @@ def _is_available(item: dict) -> bool:
     return all((_PKG_ROOT / f).exists() for f in files)
 
 
+def _scan_plugin_dirs(workspace=None) -> dict:
+    """扫两层插件目录（repo=<ws>/.agent/plugins、global=<AGT_DIR>/plugins），
+    返回 {name: {"repo": Path|None, "global": Path|None, "manifest": PluginManifest}}。
+    manifest 解析失败（无效插件）跳过；不调 plugins.discover——它走 paths.AGT_DIR 且只返回
+    覆盖后的一份；这里要两层完整视图，且全局层必须走 _global_root()（测试 monkeypatch
+    market._GLOBAL_ROOT 即完全隔离）。"""
+    import plugins as _plugins
+    ws = Path(workspace) if workspace else Path.cwd()
+    layers = {"repo": ws / ".agent" / "plugins", "global": _global_root() / "plugins"}
+    out: dict = {}
+    for scope, base in layers.items():
+        if not base.is_dir():
+            continue
+        for d in sorted(base.iterdir()):
+            if (not d.is_dir() or d.name.startswith(".")
+                    or not (d / "manifest.yml").is_file()):
+                continue   # 隐藏/临时目录（如转移中断残留的 .<名>.moving-*）不算插件
+            try:
+                m = _plugins._parse_manifest(d)
+            except Exception:
+                continue   # 无效插件（manifest 缺失/坏）：市场不展示、不可转移
+            e = out.setdefault(m.name, {"repo": None, "global": None, "manifest": m})
+            e[scope] = d
+    return out
+
+
 def marketplace_items(workspace=None) -> list[dict]:
-    """市场清单：索引条目 + installed/installed_scope/available 运行时态（type_label 中文名同步）。"""
+    """市场清单：索引条目 + installed/installed_scope/available 运行时态（type_label 中文名同步）；
+    末尾合并「本地插件」——两层插件目录里不在索引的已装插件（source=local），仅可层间转移。"""
     out = []
     for it in load_index()["items"]:
         item = dict(it)
@@ -122,6 +160,17 @@ def marketplace_items(workspace=None) -> list[dict]:
         item["installed_scope"] = scope   # repo/global/both/""（前端徽章用）
         item["available"] = _is_available(it)
         out.append(item)
+    indexed = {x.get("name") for x in out}
+    for name, e in sorted(_scan_plugin_dirs(workspace).items()):
+        if name in indexed:
+            continue   # 与索引同名：索引条目已表达（它还带随包源/安装通道），不重复列
+        m = e["manifest"]
+        r, g = e["repo"], e["global"]
+        scope = "both" if (r and g) else "repo" if r else "global"
+        out.append({"name": name, "type": "plugin", "type_label": "插件",
+                    "desc": m.description, "version": m.version, "tags": ["本地"],
+                    "source": "local", "local": True, "install_dir": ".agent/plugins",
+                    "installed": True, "installed_scope": scope, "available": True})
     return out
 
 
@@ -162,7 +211,7 @@ def install(name: str, force: bool = False, workspace=None, scope: str = "repo")
         lines = []
         if item.get("dir"):
             src = _PKG_ROOT / item["dir"]
-            dst = _GLOBAL_ROOT / gdir / src.name
+            dst = _global_root() / gdir / src.name
             if dst.exists() and not force:
                 return f"⏭ 已存在（未覆盖）：~/.agt/{gdir}/{src.name}（--force 覆盖重装）"
             shutil.copytree(src, dst, dirs_exist_ok=bool(force))   # copytree 自建含父目录
@@ -172,7 +221,7 @@ def install(name: str, force: bool = False, workspace=None, scope: str = "repo")
             files = [files] if isinstance(files, str) else list(files)
             for f in files:
                 src = _PKG_ROOT / f
-                dst_dir = _GLOBAL_ROOT / gdir
+                dst_dir = _global_root() / gdir
                 dst_dir.mkdir(parents=True, exist_ok=True)
                 dst = dst_dir / src.name
                 if dst.exists() and not force:
@@ -261,14 +310,80 @@ def uninstall(name: str, workspace=None, scope=None):
         name, item.get("type", ""), "+".join(targets), "\n  ".join(removed))
 
 
+# ---- 层间转移（2026-11-27 plan p_a8823fda）：已装插件 repo ⇄ 全局 ----
+
+def move_plugin(name: str, workspace=None, to: str = "global", force: bool = False) -> str:
+    """已装插件层间转移（移动不是复制）：to="global"（repo → 全局 ~/.agt/plugins/）/
+    "repo"（全局 → .agent/plugins/）。安全流程：copytree → 目标层落位目录下的临时名
+    （防跨盘 EXDEV——os.replace 必须同盘；ignore __pycache__/*.pyc）→ 校验 manifest
+    可解析 → force 时先删旧目标 → os.replace 就位 → 删源。任何一步异常：清理临时目录、
+    源保持原样（[失败] 前缀）。纯文件操作不 reload——CLI（无 agent）也用它；
+    端点层（server /api/marketplace/move）负责成功后的热重载。
+    失败前缀约定：[参数]/[未找到]/[已存在]/[失败]；信息性跳过以 "⏭ " 开头。"""
+    if to not in ("global", "repo"):
+        return f"[参数] to 只支持 global/repo，收到：{to}"
+    found = _scan_plugin_dirs(workspace).get(name)
+    if found is None:
+        return (f"[未找到] 插件「{name}」两层都没有"
+                f"（.agent/plugins/ 与 {_global_root() / 'plugins'}/）")
+    src_scope = "repo" if to == "global" else "global"
+    src = found.get(src_scope)
+    if src is None:
+        where = "repo 工作区" if src_scope == "repo" else "全局层"
+        return f"⏭ 「{name}」未安装在{where}，无需转移"
+    dst_dir = (_global_root() / "plugins") if to == "global" else _ws_path(workspace, ".agent/plugins")
+    dst = dst_dir / src.name
+    if dst.exists() and not force:
+        return (f"[已存在] 目标层已有同名「{name}」（{dst}）。"
+                f"--force / 二次确认可用源这份覆盖")
+    label = f"「{name}」→ ~/.agt/plugins/{src.name}/" if to == "global" \
+        else f"「{name}」→ .agent/plugins/{src.name}/"
+    if src.resolve() == dst.resolve():
+        # 两层是同一目录（AGT_HOME 指到 <ws>/.agt 这类配置）：移动=自删，直接拒绝
+        return (f"⏭ 「{name}」的两层是同一目录（{dst}），无需转移"
+                f"（全局层根 {_global_root()} 与 repo 层重合）")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    # 清历史残留（进程曾中断在复制与就位之间）：同名的 .moving-* 全清，不只本 pid 的
+    for stale in dst_dir.glob(f".{src.name}.moving-*"):
+        shutil.rmtree(stale, ignore_errors=True)
+    tmp = dst_dir / f".{src.name}.moving-{os.getpid()}"
+    old = None
+    import plugins as _plugins
+    try:
+        shutil.copytree(src, tmp, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        if not (tmp / "manifest.yml").is_file():
+            raise RuntimeError("转移副本缺 manifest.yml（不会被识别为插件）")
+        _plugins._parse_manifest(tmp)   # 解析失败抛 ValueError → 走清理分支
+        if dst.exists():                # force：旧目标原子挪开而非直接删（删一半失败会留残缺目录）
+            old = dst_dir / f".{dst.name}.moving-old-{os.getpid()}"
+            os.replace(dst, old)
+        os.replace(tmp, dst)
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if old is not None and old.exists() and not dst.exists():
+            os.replace(old, dst)        # 旧目标已挪开而新副本就位失败：把旧的放回去
+        return f"[失败] 转移{label}未完成（源保持原样）：{type(e).__name__}: {e}"
+    if old is not None:
+        shutil.rmtree(old, ignore_errors=True)   # 旧版本清不掉也无碍（隐藏目录，下次转移时清）
+    origin = "原 repo 目录已移除" if to == "global" else "原全局目录已移除"
+    arrow = "repo → 全局 ~/.agt/plugins/" if to == "global" else "全局 → repo .agent/plugins/"
+    out = f"✅ 已转移「{name}」{arrow}{src.name}/（{origin}）"
+    try:
+        shutil.rmtree(src)
+    except Exception as e:   # 已就位但删源失败：两层都在（repo 级仍生效）——如实提示手动清理
+        out += (f"\n  ⚠️ 目标层已就位，但源目录删除失败（现为双层都有，请手动删除 {src}）："
+                f"{type(e).__name__}: {e}")
+    return out
+
+
 def _remove_scope(item: dict, scope: str, workspace=None) -> list[str]:
     """删除某一层的已装文件/目录，返回展示行列表。"""
     if scope == "global":
         gdir = _GLOBAL_DIRS.get(item.get("type", ""))
         if not gdir:
             return []
-        root = _GLOBAL_ROOT / gdir                       # 全局落位根（相当于 install_dir）
-        prefix, base = "~/.agt/", _GLOBAL_ROOT
+        root = _global_root() / gdir                       # 全局落位根（相当于 install_dir）
+        prefix, base = "~/.agt/", _global_root()
     else:
         root = _ws_path(workspace, item.get("install_dir", "."))
         prefix, base = "", _ws_path(workspace, ".")      # 展示相对 workspace 的路径

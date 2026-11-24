@@ -80,9 +80,24 @@ function badge(x){
   return b ? `<span class="installed-badge ${b[1]}">${b[0]}</span>` : '';
 }
 
+// 层间转移按钮（plan p_a8823fda）：repo 层有 → 可移到全局；global 层有 → 可移到项目；both 不给
+function moveBtns(x){
+  const n = x.name, scope = x.installed_scope || '';
+  const b = [];
+  if(scope === 'repo')
+    b.push(`<button class="btn small" title="整目录移动 .agent/plugins/${n} → 全局层（AGT_DIR/plugins，原目录移除，随即热重载）" onclick="movePlugin('${n}','global')">⇪ 移到全局</button>`);
+  if(scope === 'global')
+    b.push(`<button class="btn small" title="整目录移动全局层 ${n} → 本项目 .agent/plugins（原目录移除，随即热重载）" onclick="movePlugin('${n}','repo')">⇩ 移到项目</button>`);
+  return b.join('');
+}
+
 function actions(x){
   const n = x.name, scope = x.installed_scope || '';
   const canGlobal = GLOBAL_TYPES.includes(x.type);
+  if(x.local){   // 本地插件（不在市场索引）：无随包源，只可层间转移，无 安装/重装/卸载
+    const mv = moveBtns(x);
+    return mv || `<span class="tag">双层已装（无需转移）</span>`;
+  }
   const btns = [];
   if(!scope){
     btns.push(`<button class="btn small primary" id="btn-${n}" onclick="install('${n}','repo')">安装</button>`);
@@ -92,9 +107,11 @@ function actions(x){
     const main = scope === 'global' ? 'global' : 'repo';   // 重装作用于已装那层
     btns.push(`<button class="btn small ghost" onclick="reinstall('${n}','${main}')">重装</button>`);
     if(scope === 'repo' && canGlobal)
-      btns.push(`<button class="btn small ghost" onclick="install('${n}','global')">+ 全局</button>`);
+      btns.push(`<button class="btn small ghost" title="从随包官方版安装到全局（不含本 repo 里的本地修改）；要把 repo 这份移过去请用 ⇪ 移到全局" onclick="install('${n}','global')">+ 全局</button>`);
     if(scope === 'global' && canGlobal)
       btns.push(`<button class="btn small ghost" onclick="install('${n}','repo')">+ 项目</button>`);
+    if(x.type === 'plugin' && scope !== 'both')             // 索引内已装插件也可直接转移
+      btns.push(moveBtns(x));
     btns.push(`<button class="btn small danger" onclick="uninstall('${n}','${scope}')">卸载</button>`);
   }
   return btns.join('');
@@ -105,8 +122,10 @@ async function load(){
     const r = await fetch('/api/marketplace');
     const d = await r.json();
     ALL = d.items || [];
+    const local = d.local_count || 0;
     document.getElementById('counts').textContent =
-      `官方精选 ${d.total} 项 · 已装 ${d.installed_count}` + (d.updated ? ` · 策展 ${d.updated}` : '');
+      `官方精选 ${d.total - local} 项` + (local ? ` · 本地 ${local} 个` : '')
+      + ` · 已装 ${d.installed_count}` + (d.updated ? ` · 策展 ${d.updated}` : '');
   }catch(e){
     document.getElementById('counts').textContent = '加载失败：' + e;
   }
@@ -180,6 +199,25 @@ async function uninstall(name, scope){
     const d = await r.json();
     if(d.ok){ toast(d.message); await load(); }
     else toast(d.error || '卸载失败', true);
+  }catch(e){ toast('请求失败：' + e, true); }
+}
+
+// 层间转移：移动不是复制（源目录移除）；目标层同名 → conflict 二次确认带 force 覆盖
+async function movePlugin(name, to, force){
+  const dst = to === 'global' ? '全局层（AGT_DIR/plugins，本机个人）' : '本项目（.agent/plugins，随仓库走）';
+  if(!force && !confirm(`把「${name}」移动到${dst}？\n这是移动：源目录将被移除；完成后立即热重载插件。继续？`)) return;
+  try{
+    const r = await fetch('/api/marketplace/move', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, to, force: !!force})});
+    const d = await r.json();
+    if(d.ok){ toast(d.message); await load(); return; }
+    if(d.conflict && !force){
+      if(confirm(`目标层已有同名插件「${name}」。用源这份覆盖目标层的？（目标层原内容将被替换）`))
+        return movePlugin(name, to, true);
+      return;
+    }
+    toast(d.error || '转移失败', true);
   }catch(e){ toast('请求失败：' + e, true); }
 }
 

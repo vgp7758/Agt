@@ -66,9 +66,11 @@ def _rules_and_skills_section(workspace=WORKSPACE) -> str:
     rules = load_rules(workspace)
     if rules:
         parts.append("=== 规则（.agent/rules/，始终生效）===\n" + rules)
-    # 技能清单不再常驻 SYSTEM（token 底噪）——由 before_turn 钩子 skill_suggest 按需建议：
+    # 默认 SYSTEM 模板本身不带技能清单（token 底噪）：清单经 main.yml 装配段的 {func:load_skills()}
+    # 常驻（随包 main.yml 即含该段），另有 before_turn 钩子 skill_suggest 按需建议：
     # jev/LLM 判别 user_message 与技能的匹配 → 注入 name/description + read_skill/skill_equip 引导。
-    # Agent 需要全量清单时用 /skills 命令或直接读 .agent/skills/ 各 SKILL.md。
+    # 外部 ~/.agents/skills/ 免激活生效，但只进清单的名字索引行（description 不进 SYSTEM）。
+    # 全量清单（含全局未激活项）用 /skills 命令。
     agents = agents_summary(workspace)
     if agents:
         parts.append("=== 可用子 Agent（.agent/agents/，一次性）===\n"

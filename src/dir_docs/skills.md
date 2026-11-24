@@ -20,11 +20,17 @@ my-skill/
 启动后 stdout 打印能力清单到 `===CAPS_END===`；之后每读 stdin 一行命令，
 输出结果若干行到 `===DONE===`。示例见本框架自带技能 `test-svc`。
 
-## 双层与激活
+## 三层与激活
 
 - repo 本地 `.agent/skills/` 直接可用；全局 `~/.agt/skills/` 需在本 repo
   `.agent/skills/global-skills.json`（纯字符串数组）里点名激活。
-- 同名时本地覆盖全局（shadow）。
+- 外部生态目录 `~/.agents/skills/`（跨 agent 工具的开放约定，各类 `skills` 安装器的落位处）
+  **免激活直接生效**：按目录名 `read_skill("<名>")` 即可读 SOP，无需任何配置。
+- 同名时的优先级：repo 本地 > 已激活全局 > 外部（shadow）。
+- SYSTEM 里的技能清单对本地/已激活全局是一行一技能；对外部层只追加一行**名字索引**
+  （外部包的 description 普遍数百字符，逐条进清单会把 SYSTEM 撑大一个量级）——
+  各自用途用 `/skills` 看全文描述，或直接 `read_skill` / `skill_navigate`。
+- `/skills` 列出三层清单（含全局未激活项）。
 
 ## 深入
 

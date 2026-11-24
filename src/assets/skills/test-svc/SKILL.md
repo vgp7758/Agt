@@ -35,3 +35,4 @@ skill_use("test-svc", "add 5")        # → count=5（跨调用状态保持）
 
 - 协议与七件套详解：wiki `features/skills.md`
 - 双层激活：全局 `~/.agt/skills/` + 本 repo `.agent/skills/global-skills.json`
+- 外部生态目录 `~/.agents/skills/` 免激活直接生效（优先级最低；SYSTEM 只列名字索引，`/skills` 看全文）

@@ -1317,6 +1317,12 @@ def _cmd_uninstall(ctx: CommandContext, args):
     print(uninstall(positional[0], workspace=ctx.session.workspace))
 
 
+def _cmd_skills(ctx: CommandContext, args):
+    """/skills  三层技能清单（repo 本地 / 全局已激活 / 外部 ~/.agents/skills 免激活）+ 全局未激活项。"""
+    from agent_config import skills_listing
+    print(skills_listing(ctx.session.workspace))
+
+
 def _cmd_skill_equip(ctx: CommandContext, args):
     """/skill_equip <技能名>  装备技能（server.py 常驻服务 + services 依赖拉起 + 装配清单冻结应用）。
     与 agent_config.skill_equip 同源（模型工具口 / 斜杠命令口双入口同一实现）。"""
@@ -2689,6 +2695,8 @@ def build_default_registry() -> CommandRegistry:
     reg.register("uninstall", _cmd_uninstall,
         "<name>  卸载市场条目（卸实际已装层：repo/global/both 全卸）",
         "/uninstall reload_hot           卸载并清理落位文件（repo+全局两层）")
+    reg.register("skills", _cmd_skills,
+        "列出全部可用技能（repo 本地 / 全局已激活 / 外部 ~/.agents/skills 免激活；含全局未激活项）")
     reg.register("skill_equip", _cmd_skill_equip,
         "<技能名>  装备技能（server.py 服务 + services 依赖 + 装配清单冻结应用；重复=replace）",
         "/skill_equip test-svc       装备（能力清单 + 装配应用 + 登记内存）\n"

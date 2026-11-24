@@ -155,3 +155,94 @@ def test_navigate_sections(env):
     assert "run it" in sec and "step1" not in sec          # 只含本章节
     missing = ac.skill_navigate("s1", section="不存在")
     assert missing.startswith("📦") and "可用章节" in missing
+
+
+# ── 外部生态技能层 ~/.agents/skills（免激活——用户裁定 2026-11-24）──────────
+# conftest 已把 _EXT_SKILLS_ROOT 隔离成不存在的目录；xroot 换成带内容的。
+
+@pytest.fixture
+def xroot(tmp_path, monkeypatch):
+    x = tmp_path / "ext_skills"
+    monkeypatch.setattr(ac, "_EXT_SKILLS_ROOT", x)
+    return x
+
+
+def test_external_needs_no_activation(env, xroot):
+    ws, _ = env
+    _mk_skill(xroot, "x-skill", "external desc", body="external SOP")
+    assert [(s["name"], s["scope"]) for s in ac.load_skills_index(ws)] == [("x-skill", "external")]
+    d, scope = ac._resolve_skill("x-skill", ws)
+    assert scope == "external" and d == xroot / "x-skill"
+    assert "external SOP" in ac.read_skill("x-skill")            # 模型工具口按目录名直接可读
+    assert "🧩 外部 ~/.agents/skills" in ac.skill_navigate("x-skill", list_only=True)
+
+
+def test_external_is_lowest_priority(env, xroot):
+    ws, groot = env
+    _mk_skill(ws / ".agent/skills", "dup", "local one")
+    _mk_skill(groot, "dup2", "global one")
+    _mk_skill(xroot, "dup", "external one")
+    _mk_skill(xroot, "dup2", "external two")
+    (ws / ".agent/skills/global-skills.json").write_text('["dup2"]', encoding="utf-8")
+    idx = {s["name"]: s["description"] for s in ac.load_skills_index(ws)}
+    assert idx == {"dup": "local one", "dup2": "global one"}    # 外部同名被 shadow，且不重复列
+    assert ac._resolve_skill("dup", ws)[1] == "local"
+    assert ac._resolve_skill("dup2", ws)[1] == "global"
+
+
+def test_summary_external_names_only(env, xroot):
+    """外部层的 description 不进 SYSTEM，只追加一行名字索引（含用途提示）。"""
+    ws, _ = env
+    _mk_skill(ws / ".agent/skills", "mine", "short desc")
+    _mk_skill(xroot, "x-one", "X" * 700)
+    _mk_skill(xroot, "x-two", "Y" * 700)
+    s = ac.skills_summary(ws)
+    lines = s.split("\n")
+    assert len(lines) == 2
+    assert lines[0] == "- mine: short desc（使用时机: anytime）"
+    assert lines[1].startswith("外部技能（~/.agents/skills，免激活")
+    assert lines[1].endswith("x-one, x-two")
+    assert "X" * 10 not in s and "Y" * 10 not in s
+
+
+def test_summary_with_only_external_is_not_empty(env, xroot):
+    """repo/全局都没技能时清单也不能为空——否则模型无从得知外部技能存在。"""
+    ws, _ = env
+    _mk_skill(xroot, "x-solo")
+    s = ac.skills_summary(ws)
+    assert s.startswith("外部技能（") and s.endswith("x-solo")
+
+
+def test_summary_caps_external_names(env, xroot):
+    cap = ac._EXT_SKILLS_CAP
+    for i in range(cap + 5):
+        _mk_skill(xroot, f"x{i:02d}")
+    s = ac.skills_summary(env[0])
+    assert f"x{cap - 1:02d}" in s
+    assert f"x{cap:02d}" not in s and f"…等共 {cap + 5} 个" in s
+
+
+def test_external_dir_missing_is_silent(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "_EXT_SKILLS_ROOT", tmp_path / "not_there")
+    ws, groot = env
+    _mk_skill(groot, "g-skill")
+    (ws / ".agent/skills/global-skills.json").write_text('["g-skill"]', encoding="utf-8")
+    idx = ac.load_skills_index(ws)
+    assert [s["scope"] for s in idx] == ["global"]              # 原有两层行为不受外部层缺席影响
+    assert ac._resolve_skill("nope", ws) == (None, "")
+
+
+def test_skills_listing_three_layers_and_unactivated(env, xroot):
+    ws, groot = env
+    _mk_skill(ws / ".agent/skills", "mine", "local desc")
+    _mk_skill(groot, "g-on", "activated")
+    _mk_skill(groot, "g-off", "dormant")
+    _mk_skill(xroot, "x-one", "external desc " + "Z" * 200)
+    (ws / ".agent/skills/global-skills.json").write_text('["g-on"]', encoding="utf-8")
+    out = ac.skills_listing(ws)
+    assert "生效 3 个" in out
+    assert "【repo 本地 .agent/skills/（直接生效）】1 个" in out and "  mine — local desc" in out
+    assert "【全局 ~/.agt/skills/（已激活）】1 个" in out and "  🌐 g-on — activated" in out
+    assert "【外部 ~/.agents/skills/（免激活直接生效）】1 个" in out and "  🧩 x-one — external desc " in out
+    assert "Z" * 101 not in out                                  # 描述截 100 字
+    assert "【全局 ~/.agt/skills/ 未激活】1 个" in out and "  ⏸ g-off" in out

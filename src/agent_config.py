@@ -5,6 +5,8 @@
   .agent/skills/<名>/SKILL.md → 技能(YAML frontmatter name/description/when_to_use + markdown SOP)。
                                 只把 frontmatter 摘要放进 SYSTEM；LLM 用 read_skill(name) 按需读完整 SOP。
 save_skill 让 Agent 自主把可复用任务的 SOP 沉淀成新技能(或更新)，积累经验。
+技能寻址三层（优先级从高到低）：repo .agent/skills/ > 已激活全局 ~/.agt/skills/ > 外部 ~/.agents/skills/
+（免激活直接生效；SYSTEM 清单对外部层只列一行名字索引——用户裁定 2026-11-24）。
 """
 from __future__ import annotations
 
@@ -472,9 +474,29 @@ def _enabled_global_skills(workspace: Path) -> list[str]:
     return [x.strip() for x in data if isinstance(x, str) and x.strip()] if isinstance(data, list) else []
 
 
+# ===== 外部生态技能目录（用户裁定 2026-11-24：免激活直接生效）=====
+# ~/.agents/skills/ 是跨 agent 工具的开放约定目录（各类 `skills` 安装器落位于此）。与 ~/.agt/skills/ 的
+# 区别：不需要激活清单；优先级最低（repo 本地 > 已激活全局 > 外部）。感知上刻意省着 SYSTEM 用：
+# 外部包的 description 普遍数百字符、SKILL.md 正文动辄上万——逐条进常驻清单会把 SYSTEM 撑大一个
+# 量级，所以常驻清单只追加一行名字索引（skills_summary），用途与 SOP 用 read_skill/skill_navigate 取；
+# before_turn 的 skill_suggest 钩子也**不扫**这一层（jev 一级判别有 512 token 上限、二级复核吃全文）。
+_EXT_SKILLS_ROOT: Path | None = None      # 测试注入点（None → ~/.agents/skills）
+_EXT_SKILLS_CAP = 30                      # SYSTEM 名字索引行最多列这么多，超出折叠为计数
+
+
+def _external_skills_root() -> Path:
+    """外部生态技能目录 ~/.agents/skills/（跟 Path.home() 走，与 AGT_DIR 无关——它是别的工具的目录）。"""
+    if _EXT_SKILLS_ROOT is not None:
+        return Path(_EXT_SKILLS_ROOT)
+    return Path.home() / ".agents" / "skills"
+
+
 def _resolve_skill(name: str, workspace: Path | None = None):
-    """统一寻址（本地/全局透明）：先 repo .agent/skills/<name>/（本地优先 shadow），
-    再全局 ~/.agt/skills/<name>/（须在激活清单）。返回 (技能目录|None, scope: ''|'local'|'global')。"""
+    """统一寻址（三层透明，优先级从高到低）：
+    ① repo .agent/skills/<name>/（本地 shadow）
+    ② 全局 ~/.agt/skills/<name>/（须在激活清单 global-skills.json）
+    ③ 外部 ~/.agents/skills/<name>/（免激活）
+    返回 (技能目录|None, scope: ''|'local'|'global'|'external')。"""
     if not _NAME_RE.match(name or ""):
         return None, ""
     ws = workspace or WORKSPACE
@@ -485,6 +507,9 @@ def _resolve_skill(name: str, workspace: Path | None = None):
         g = _global_skills_root() / name
         if (g / "SKILL.md").exists():
             return g, "global"
+    ext = _external_skills_root() / name
+    if (ext / "SKILL.md").exists():
+        return ext, "external"
     return None, ""
 
 
@@ -600,59 +625,99 @@ def parse_caps_extra_assemblies(caps_text: str, skill_name: str = "") -> tuple:
     return parse_extra_assemblies(data, skill_name=skill_name)
 
 
+def _skill_frontmatter(skill_md: Path) -> tuple | None:
+    """SKILL.md frontmatter → (name, description, when_to_use)；无 frontmatter/读失败返回 None。
+    name 缺省回落目录名。"""
+    try:
+        meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return None
+    return (meta.get("name", skill_md.parent.name),
+            meta.get("description", ""), meta.get("when_to_use", ""))
+
+
 def load_skills_index(workspace: Path) -> list[dict]:
-    """扫 repo .agent/skills/*/SKILL.md + 全局 ~/.agt/skills/ 中已激活技能。
-    返回 [{name, description, when_to_use, path, scope}, ...]（scope=local/global；本地同名 shadow 全局）。"""
-    out = []
+    """扫三层技能：repo .agent/skills/*/SKILL.md + 全局 ~/.agt/skills/ 中已激活技能
+    + 外部 ~/.agents/skills/*/SKILL.md（免激活）。同名按 repo > 已激活全局 > 外部 shadow。
+    返回 [{name, description, when_to_use, path, scope}, ...]（scope=local/global/external）。"""
+    out, occupied = [], set()      # occupied=已被更高优先级层占用的【目录名】（与 _resolve_skill 判定口径一致）
+
+    def _add(skill_md: Path, scope: str, rel_to: Path | None = None) -> None:
+        m = _skill_frontmatter(skill_md)
+        if m is None:
+            return
+        name, desc, when = m
+        path = str(skill_md.relative_to(rel_to) if rel_to is not None else skill_md).replace("\\", "/")
+        out.append({"name": name, "description": desc, "when_to_use": when, "path": path, "scope": scope})
+
     local_dir = workspace / _AGENT_DIR / "skills"
-    local_names = set()
     if local_dir.exists():
         for skill_md in sorted(local_dir.glob("*/SKILL.md")):
-            try:
-                meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
-            except Exception:
-                continue
-            local_names.add(skill_md.parent.name)
-            out.append({
-                "name": meta.get("name", skill_md.parent.name),
-                "description": meta.get("description", ""),
-                "when_to_use": meta.get("when_to_use", ""),
-                "path": str(skill_md.relative_to(workspace)).replace("\\", "/"),
-                "scope": "local",
-            })
-    enabled = set(_enabled_global_skills(workspace))
-    if enabled:
-        g_root = _global_skills_root()
-        for name in sorted(enabled):
-            if name in local_names:  # 本地同名技能优先（shadow 全局）
-                continue
-            skill_md = g_root / name / "SKILL.md"
-            if not skill_md.exists():
-                continue
-            try:
-                meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8", errors="ignore"))
-            except Exception:
-                continue
-            out.append({
-                "name": meta.get("name", name),
-                "description": meta.get("description", ""),
-                "when_to_use": meta.get("when_to_use", ""),
-                "path": str(skill_md).replace("\\", "/"),
-                "scope": "global",
-            })
+            occupied.add(skill_md.parent.name)
+            _add(skill_md, "local", workspace)
+    for name in sorted(_enabled_global_skills(workspace)):
+        if name in occupied:
+            continue                      # 本地同名技能优先（shadow 全局）
+        skill_md = _global_skills_root() / name / "SKILL.md"
+        if skill_md.exists():
+            occupied.add(name)
+            _add(skill_md, "global")
+    x_root = _external_skills_root()
+    if x_root.is_dir():
+        for skill_md in sorted(x_root.glob("*/SKILL.md")):
+            if skill_md.parent.name in occupied:
+                continue                  # 被 repo 本地或已激活全局的同名技能 shadow
+            _add(skill_md, "external")
     return out
 
 
 def skills_summary(workspace: Path) -> str:
-    """拼成 SYSTEM 里一行一技能的摘要。无技能返回空串。"""
+    """拼成 SYSTEM 里的技能清单。本地/已激活全局：一行一技能（名: 描述（使用时机））；
+    外部层（~/.agents/skills，免激活）：只追加**一行名字索引**——外部包 description 普遍数百字符，
+    逐条进清单会把 SYSTEM 撑大一个量级，用途与 SOP 留给 read_skill/skill_navigate 按需取。
+    无技能返回空串。"""
     idx = load_skills_index(workspace)
     if not idx:
         return ""
-    lines = []
+    lines, ext = [], []
     for s in idx:
+        if s.get("scope") == "external":
+            ext.append(s["name"])
+            continue
         when = f"（使用时机: {s['when_to_use']}）" if s["when_to_use"] else ""
         g = "🌐 " if s.get("scope") == "global" else ""
         lines.append(f"- {g}{s['name']}: {s['description']}{when}")
+    if ext:
+        shown = ", ".join(ext[:_EXT_SKILLS_CAP]) + (f" …等共 {len(ext)} 个" if len(ext) > _EXT_SKILLS_CAP else "")
+        lines.append("外部技能（~/.agents/skills，免激活，匹配时同样 read_skill 取 SOP；/skills 看各自用途）：" + shown)
+    return "\n".join(lines)
+
+
+def skills_listing(workspace: Path | None = None) -> str:
+    """人类可读的三层技能清单（/skills 命令）：按来源分组，全局层连**未激活**的一并列出（标 ⏸）。
+    每行：标记 名 — 描述（截 100 字）。"""
+    ws = workspace or WORKSPACE
+    idx = load_skills_index(ws)
+    marks = {"global": "🌐 ", "external": "🧩 "}
+    lines = [f"🧩 技能清单（生效 {len(idx)} 个）"]
+    for scope, title in (("local", "repo 本地 .agent/skills/（直接生效）"),
+                         ("global", "全局 ~/.agt/skills/（已激活）"),
+                         ("external", "外部 ~/.agents/skills/（免激活直接生效）")):
+        group = [s for s in idx if s.get("scope") == scope]
+        if not group:
+            continue
+        lines.append(f"\n【{title}】{len(group)} 个")
+        lines.extend(f"  {marks.get(scope, '')}{s['name']} — {(s['description'] or '(无描述)')[:100]}"
+                     for s in group)
+    g_root = _global_skills_root()
+    taken = {s["name"] for s in idx} | set(_enabled_global_skills(ws))
+    if g_root.is_dir():
+        off = sorted(d.name for d in g_root.iterdir()
+                     if d.is_dir() and (d / "SKILL.md").is_file() and d.name not in taken)
+        if off:
+            lines.append(f"\n【全局 ~/.agt/skills/ 未激活】{len(off)} 个——写进 .agent/skills/global-skills.json 即启用")
+            lines.extend(f"  ⏸ {n}" for n in off)
+    lines.append("\n用法：read_skill(<名>) 取 SOP；/skill_equip <名> 装备服务型技能")
     return "\n".join(lines)
 
 
@@ -952,7 +1017,8 @@ def migrate_agents_md_to_yml(workspace: Path) -> int:
 
 def read_skill(name: str) -> str:
     """读取某个技能的完整 SKILL.md（含详细 SOP）。任务匹配某技能时，先调它取执行步骤。
-    name: 技能名（repo .agent/skills/ 与已激活全局技能统一寻址，本地优先；大技能建议先 skill_navigate 浏览结构）。"""
+    name: 技能名（三层统一寻址：repo .agent/skills/ > 已激活全局 ~/.agt/skills/ > 外部 ~/.agents/skills/ 免激活；
+    大技能建议先 skill_navigate 浏览结构）。"""
     if not _NAME_RE.match(name or ""):
         return f"[非法名称] '{name}'，技能名只能含字母数字、下划线、连字符"
     d, _scope = _resolve_skill(name)
@@ -1013,8 +1079,8 @@ def _skill_workflows_brief(d: Path) -> str:
 
 
 def _skill_not_found(name: str) -> str:
-    return (f"[未找到技能] {name}（可用技能见 SYSTEM 的【可用技能】清单；"
-            f"若是全局技能，需在本 repo 的 .agent/skills/global-skills.json 激活清单里启用）")
+    return (f"[未找到技能] {name}（/skills 列出全部可用技能；全局 ~/.agt/skills/ 的技能需在本 repo 的 "
+            f".agent/skills/global-skills.json 激活；~/.agents/skills/ 的免激活，按目录名寻址）")
 
 
 def _skill_invalid_name(name: str) -> str:
@@ -1073,11 +1139,12 @@ def skill_navigate(name: str, section: str = "", list_only: bool = False, file: 
     file=文件名或相对路径（如 '08-CINEDANCE视频提示词.md' 或 '专业模块/08-CINEDANCE视频提示词.md'）→ 读该文件
     （.md 可配合 section 分节读；同名多文件时列出候选；截断 12000 字）；
     section=章节标题 → 读 SKILL.md（或 file 指定文件）的该章节；list_only=True 只列结构。
-    name: 技能名（本地/全局统一寻址）。"""
+    name: 技能名（本地/全局/外部 ~/.agents/skills 三层统一寻址）。"""
     d, scope = _resolve_skill(name)
     if d is None:
         return _skill_invalid_name(name) if not _NAME_RE.match(name or "") else _skill_not_found(name)
-    src = "🌐 全局 ~/.agt/skills" if scope == "global" else "repo .agent/skills"
+    src = {"global": "🌐 全局 ~/.agt/skills",
+           "external": "🧩 外部 ~/.agents/skills"}.get(scope, "repo .agent/skills")
     lines = [f"📦 技能 '{name}'（{src}）", f"路径: {d}"]
     # 目录树（≤3 层，跳过隐藏/缓存目录；.md 附 #/## 级标题——每文件≤6 条 + …，总预算 160 行防刷屏）
     shown = 0

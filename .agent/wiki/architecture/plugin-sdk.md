@@ -170,8 +170,8 @@ AgtPlugin.api.post('/api/my/echo', {...})                  // 带回调 token �
 
 ### 管理面
 
-- 会话内：`/plugins`（清单：版本/来源/启停）/ `enable|disable <名>` / `reload`（改 backend.py 热生效）；`/reload plugins` 同款
-- CLI：`agt plugin list|enable|disable|install|remove`
+- 会话内：`/plugins`（清单：版本/来源/启停）/ `enable|disable <名>` / `reload`（改 backend.py 热生效）/ `move <名> [--to repo] [--force]`（层间转移，默认 → 全局，成功后自动热重载；2026-11-27 增补）；`/reload plugins` 同款
+- CLI：`agt plugin list|enable|disable|install|remove|move`
 - 启停状态持久化，disable 后 reload 不复活
 
 ### 与设计的差异对账
@@ -349,6 +349,19 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - **危害面是静默降级**：不炸、不 4xx，行为停在旧版——「改了没效果」比报错更难排查
 - **文档口径修正**：开发 README（`.agent/plugins/README.md`）「backend `/reload plugins` 热生效」需加限定——**register_route 已实锤不替换**；register_tool / register_command / 钩子等其它注册面是否同样不替换未验证，改路由逻辑后建议直接 `/restart`
 - 后续方向（未排期）：热重载时摘旧路由再注册；或文档明示「路由改动需重启」
+
+## 插件层间转移：repo ⇄ 全局 + global_plugins_dir() 单源（2026-11-27，施工牌 p_a8823fda）
+
+> 已装插件在 repo 层（`.agent/plugins/`）与全局层之间搬家——安全移动流程、三入口（市场页按钮 / `/plugins move` / `agt plugin move`）、冲突语义与验证全文见 [插件市场 · 后记三](../features/marketplace.md)；本节只记引擎侧落点。
+
+**src/plugins.py 两处**：
+
+- **`global_plugins_dir()` = `paths.AGT_DIR / "plugins"`——全局插件目录唯一真源**：`discover()` 与 CLI `install` 此前各自硬编码 `~/.agt/plugins`，现统一走它（`AGT_HOME` 隔离环境 / 桌面版数据根不再落错位置）；`market._global_root()` 同源取 `paths.AGT_DIR`
+- **`run_plugin_cli` 新增 `move` 子命令**：`agt plugin move <名> [--to repo|global] [--force]`（默认 → 全局），复用 `market.move_plugin` 的安全移动语义；无 agent 不热重载（提示重启 / `/reload plugins`），`✅`/`⏭` 且无 ⚠️ → 退出码 0，否则 1
+
+**依赖方向**：`plugins` 与 `market` 模块顶层互不 import，全是函数体内惰性 import——`market` 侧 `import plugins as _plugins` 取 `_parse_manifest`（`_scan_plugin_dirs` / `move_plugin`），`plugins` 侧 `from market import move_plugin`（`run_plugin_cli`）。新增跨模块调用请沿用这个姿势，避免循环 import。
+
+**边界**：转移后的热重载走既有 `reload_plugins`（重新 `discover` 两层）；`plugins.discover` 只返回覆盖后的一份（repo 后扫 = 覆盖），市场要两层完整视图时自己扫（`market._scan_plugin_dirs`）——不要拿 `discover` 做装态检测。
 
 ## 关联
 

@@ -54,6 +54,8 @@ repo 级共享单文件解决的是**落盘**（一个 repo 一份 JSONL，见�
 
 **与上节的关系**：落盘形态不变（仍是 repo 一份 `sessions/toollog.jsonl` append-only）；变的是进程内不再重复持有同一份数据的多个副本。
 
+**状态**：✅ 已随 v0.35.17 打包上线（2026-11-27；同批内存治理：向量栈懒加载 + [vector_hub](vector-hub.md) 机器级共享）。
+
 ## call_id 三代形态
 
 | 代 | 形态 | 说明 |

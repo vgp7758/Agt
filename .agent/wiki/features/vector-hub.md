@@ -51,7 +51,7 @@ HTTP 无状态，hub 无法直接感知「还有没有实例连着」——用**
 
 ## 状态
 
-施工中（worker-p_fd248b88 步骤 4-7）：toollog 进程内共享（步骤 1-3）已落地，vector_hub 服务 / HubEmbedder 接入 / 设置页端口进行中。
+✅ **已随 v0.35.17 发布**（2026-11-27；内存治理施工牌 p_fd248b88 全步落地——toollog 进程内共享 + 向量栈懒加载 + vector_hub 服务 / HubEmbedder 接入 / 设置页端口同批上线）。pip ≥ 0.35.17 或本机 `/restart` 生效；设置页 RAG tab「本地向量栈服务端口」默认 8097、0=禁用；hub 不可达/超时自动回退本地 SentenceTransformer。
 
 ## 相关页面
 

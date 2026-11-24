@@ -7,12 +7,13 @@
 | 步骤 | 做什么 | 失败语义 |
 |---|---|---|
 | ① 工作区检查 | `git status --short`，脏则停并列出改动（截前 10 行） | ❌ 中断（dry_run 豁免——预览允许脏） |
-| ② release.py 主体 | `python release.py {part} [-m msg] -y`：版本 bump（src/paths.py）+ build + upload + push | ❌ 中断，输出尾部 8 行带回，后续步骤不执行 |
+| ② release.py 主体 | `python release.py {part} [-m msg] -y`：版本 bump（src/paths.py）+ build + upload + push | ❌ 中断（**只认退出码 rc≠0**——输出含「失败/❌」字样不参与判定，v0.35.17 误判教训见[第十次实战](#第十次实战v035172026-11-27partpatch-全绿却被误判失败关键字门控误伤成败判定改只认退出码commit-ecd1b17)），输出尾部 8 行带回，后续步骤不执行 |
 | ③ version_file.txt 同步提交 | `git add packaging/version_file.txt` + commit + push | ⚠️ 只警告不中断（rc 非 0 时附输出前 200 字） |
 | ③.5 tag 打推（v0.35.3 起，commit `a9c0c72`） | `git tag v{ver}` + push + 远端核验——打在含 ③ 的**最终 commit** 上（正是桌面版 CI 需要的状态） | ⚠️ 只警告不中断，报告附手工补推命令 |
 | ④ PyPI 上线验证 | GET `pypi.org/pypi/agt-agent/{ver}/json`，报告上线件数与文件名 | 20s × 3 重试，三连失败 ⚠️ 提示「索引可能仍在同步，稍后手动确认」 |
 
 - **失败即中断、如实报告**：②（含 upload）失败时 ③③.5④ 不执行
+- **成败判定只认退出码（v0.35.17 起，commit `ecd1b17`）**：release.py 所有失败路径都是 `sys.exit(非0)`，退出码即权威信号；输出文本里的「失败/❌」不参与判定——发布报告会全文打印 commit message，措辞带「失败」是常态（回归测试 `test/test_release_publish_gate.py`）
 - **版本号解析**：从 release.py 输出「📦 版本：X → Y」正则取 Y；解析不到则 ④ 跳过并注明「⏭ 跳过（版本号未解析到）」
 - **④ 的 20s×3 重试**：PyPI 索引生效有 ~20s 延迟，上传完立即查必 404
 - **③.5 的来历**：v0.35.0 / v0.35.1 / v0.35.2 三次实证「② 只推 main、tag 无人管 → 桌面版静默不出包」后收口进链路（详见 [第四次实战](#第四次实战v03532026-10-16partpatch主链路一次全绿--tag-缺口当日收口-35-落地)）
@@ -349,6 +350,45 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 
 **生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码。
 
+## 第十次实战：v0.35.17（2026-11-27，part=patch）——② 全绿却被误判失败：关键字门控误伤，成败判定改只认退出码（commit ecd1b17）
+
+第十次生产运行，用户侧仍是一句「发补丁吧」。失败形态是**全新的一种**——发布实际**全绿**，却被工具自己的成败判定**误判成失败**：既非 push 断网（v0.35.0/2/5/8/9）、非 upload 瞬时失败（v0.35.12）、非占号（v0.35.11）、也非 gitignore 阻断（v0.35.8），而是**判定逻辑误伤**。
+
+| 步骤 | 结果 |
+|---|---|
+| ① 工作区检查 | ⚠️ 被用户未提交的 `worker.yml` 拦下 → **stash 暂存后放行，发完原样 pop**（内容一字未动、仍不提交；该文件按「播种资产零模型 id」口径建议留本地不入库） |
+| ② release.py 主体 | ✅ **实际全绿**——bump 0.35.16 → 0.35.17（`c23886f`）/ build `agt_agent-0.35.17` whl+sdist 双件 / upload ✓（<https://pypi.org/project/agt-agent/0.35.17/>）/ push ✓ `origin main` |
+| ③ version_file / ③.5 tag / ④ 端点验证 | ❌ 被**误判**跳过（工具报「❌ release.py 失败（后续步骤未执行）」）→ 人工补尾 |
+
+### 根因：成败判定扫输出关键字，而发布报告会全文打印 commit message
+
+旧判定是 `rc != 0 or ("❌" in out or "失败" in out)`——而 release.py 的发布报告把 **commit message 全文**打印出来，说明里带「失败」二字是常见措辞：本次 message 里「**失败回退本地**」（vector_hub 的正常功能描述）正中关键字。于是 rc=0、PyPI 已上线、push 已完成，工具仍判失败并跳过 ③③.5④。
+
+**推论**：历史上那几次「半成功」，可能有一部分根本不是断网，而是这个关键字误判——回看旧版发布报告时注意甄别（真断网的报错是 ssh/twine 异常栈；误判的「失败」只是报告正文里的普通字样）。
+
+### 修复：只认退出码（commit `ecd1b17`）+ 3 个回归测试
+
+- release.py 所有失败路径都是 `sys.exit(非0)`——**退出码即权威信号**，输出文本里的「失败/❌」字样不再参与成败判定
+- 回归测试 `test/test_release_publish_gate.py` 三场景：**说明含「失败」仍判成功**（不再跳过后续步骤）/ **rc≠0 仍中断** / 正常路径不变
+
+### 补尾（逐项补，不是重发）
+
+- ③ version_file 同步提交 `c5c7b5f`；③.5 tag `v0.35.17` 打在 `c5c7b5f` 并推送 → 桌面版 GitHub Actions 自动触发；④ 端点验证两件就位
+- PyPI 0.35.17 已上线——**绝不重发**（同版本号 upload 会被拒）
+
+### 本版收录清单（自 v0.35.16，26 笔）
+
+| 板块 | 内容 | 详情页 |
+|---|---|---|
+| 内存治理 | ToolLog 进程级共享（同进程 N 份全量副本→1 份）+ 向量栈懒加载 + **vector_hub 本地向量栈共享服务**（设置页配端口 / 懒拉起 / 空闲自关 / 失败回退本地） | [toollog](toollog.md) · [vector-hub](vector-hub.md) · [rag](rag.md) |
+| doctor 门控 | 限流/网络/配额打穿回退链时跳过 doctor 自动派发（子 Agent 与主 Agent 两条路径），不再连锁白耗 | [doctor](doctor.md) |
+| 插件 | HTTP 路由 `/reload` 后接管新代码 + emit 页面级事件约定；已装插件 repo ⇄ 全局层间转移 | [plugin-sdk](../architecture/plugin-sdk.md) · [marketplace](marketplace.md) |
+| skills | `~/.agents/skills` 外部技能目录免激活生效 | [skills · 外部生态技能层](skills.md) |
+| react / WebUI / llm | 重复工具调用熔断 loop_breaker；历史初始渲染硬上限 60 轮；DSML 泄露两级修复 | — |
+| context / workflow / agent | adopt 超窗判定改锚定外推；code 节点超时 30→45s + 尖峰自愈重试；yml fallback 改「选场景」 | [context-engine](../architecture/context-engine.md) · [workflow-hooks](../architecture/workflow-hooks.md) |
+
+**生效提示**：pip 索引约 20s 延迟，`pip install -U agt-agent` 后 `/restart` 生效；本机 `pip install -e .` 生产实例改的就是本 repo 代码。
+
 ## 与其他模块的关系
 
 - **release.py**（repo 根）：发布主体（bump/build/upload/push），本工具是它的编排外壳；release.py 版本真源迁移史见 [desktop-mode · 发布链修复](desktop-mode.md)
@@ -358,10 +398,11 @@ dry-run、v0.35.0 之后的第二个生产运行：**一次调用走完四步、
 ## 注意事项
 
 - **不随包播种**（本地私有工具层，同 team_tools / agentid_tools）——发版编排只属于本 repo，src/assets/tools_builtin/ 不放副本
-- ① 的脏检查只在非 dry_run 生效：正式发版前保持工作区干净是硬约束（release.py 会 bump src/paths.py，混合未提交改动发出去不可控）
+- ① 的脏检查只在非 dry_run 生效：正式发版前保持工作区干净是硬约束（release.py 会 bump src/paths.py，混合未提交改动发出去不可控）；工作区被未提交改动拦住时，可 `git stash` 暂存 → 发完 pop 原样恢复（v0.35.17 实操——改动一字不动、仍不提交）
 - ③ 失败只警告不阻断（⚠️）：version_file 推送异常需人工补，否则下次桌面版云构建用旧版本号
 - ③.5 同为只警告不阻断：tag 打推失败时报告附补推命令，人工补即可（v0.35.3 起自动，此前靠手工，见下条历史）
 - ④ 三连失败大概率只是索引同步延迟——按提示稍后手动确认即可，不代表发布失败
 - **② 半成功 ≠ 发布失败**（六次实证：v0.35.0 / 2 / 5 / 8 / 9 五次 push 段断网——connect timed out / Network is unreachable / DNS 解析失败俱全；v0.35.12 upload 段瞬时失败——非断网、重试即过，twine 手动重试）：PyPI 已上线时**绝不重发**（同版本号 upload 会被拒），按报告逐项补尾——验端点 → 补 version_file 提交 → 补 tag → 重试 push（挂静默重试即可，v0.35.8 起三级通道 + 上岸自动补 tag）
+- **② 报告含「失败/❌」字样 ≠ 失败（v0.35.17 实证，第十种失败形态：误判）**：发布报告会全文打印 commit message，措辞带「失败」是常态——成败判定**只认退出码**（v0.35.17 起，commit `ecd1b17`，回归测试 `test/test_release_publish_gate.py`）；此前关键字判定曾把全绿发布误判成失败而跳过 ③③.5④（历史上个别「半成功」或系此误判，回看旧报告注意甄别）
 - **tag 已收口进链路（v0.35.3 起，③.5，commit `a9c0c72`）**：自动打推 + 失败附补推命令，**主链路全绿时 tag 零手工**（v0.35.5 实证修正：③.5 排在 push 之后，② 半成功时后续步骤不执行 → tag 依旧漏打、仍需手工补，见 [v0.35.5 一节](#第五次实战v03552026-10-18partpatch-半成功重现push-又断网tag-手工补打待推)；v0.35.8 起后台 push-retry 任务在 push 上岸后自动补打并推 tag，失败路径也不再手工）；此前 v0.35.0 / v0.35.1 / v0.35.2 三次实证「② 只推 **main 分支**、tag 需事后手工补打——缺 tag = 桌面版 CI 不触发、包不出且无报错（口诀：PyPI 上线 ≠ 桌面版会出包）」降为历史记录，老版本排障可回看 [v0.35.1 缺口一节](#第二次实战v03512026-10-16partpatch主链路一次全绿但-tag-不在链路里手工补打)与 [v0.35.2 一节](#第三次实战v03522026-10-16partpatch-第三次半成功git-push断网tag-由-agent-补打待推)
 

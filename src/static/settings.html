@@ -238,6 +238,8 @@ details summary { color:var(--muted); cursor:pointer; font-size:12px; margin-top
       </select>
       <label>embedding 模型路径（本地 sentence-transformers 目录）</label>
       <input id="cfg_embed" type="text" placeholder="D:/models/bge-small-zh-v1.5">
+      <label>本地向量栈服务端口（0=禁用；&gt;0 时本机所有 agt 实例共享 hub 里的一份 embedding 模型，省 N×~560MB 内存）</label>
+      <input id="cfg_hub_port" type="number" placeholder="8097">
       <div id="api_fields" style="display:none">
         <label>API base_url（如 https://api.siliconflow.cn/v1）</label>
         <input id="cfg_apiurl" type="text" placeholder="https://api.siliconflow.cn/v1">
@@ -942,6 +944,7 @@ const RAG = {
     const $ = id => document.getElementById(id);
     $('cfg_enabled').checked = !!c.enabled;
     $('cfg_embed').value = c.embed_model_path||'';
+    $('cfg_hub_port').value = c.vector_hub_port??8097;
     $('cfg_provider').value = c.embed_provider||'local';
     $('cfg_apiurl').value = c.embed_api_url||'';
     $('cfg_apitoken').value = c.embed_api_token||'';
@@ -966,6 +969,7 @@ const RAG = {
     return {
       enabled: document.getElementById('cfg_enabled').checked,
       embed_model_path: document.getElementById('cfg_embed').value.trim(),
+      vector_hub_port: num('cfg_hub_port'),
       embed_provider: document.getElementById('cfg_provider').value,
       embed_api_url: document.getElementById('cfg_apiurl').value.trim(),
       embed_api_token: document.getElementById('cfg_apitoken').value.trim(),

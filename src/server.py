@@ -1981,21 +1981,39 @@ async def api_stats(scope: str = "current"):
 
 @app.get("/api/rag/config")
 async def api_rag_config():
-    """返回当前 RAG 配置（repo 字段 merge 全局 embed）。额外返回 global_embed_keys 供 UI 标注。"""
+    """返回当前 RAG 配置（repo 字段 merge 全局 embed）。额外返回 global_embed_keys 供 UI 标注；
+    vector_hub_port 供「本地向量栈服务端口」表单回显（settings.json，缺省 8097）。"""
     result = dict(config.load_rag_config(_workspace))
     result["_global_embed_keys"] = list(config._GLOBAL_EMBED_KEYS)
+    try:
+        from paths import AGT_DIR
+        _sp = AGT_DIR / "settings.json"
+        _raw = None
+        if _sp.exists():
+            _raw = (json.loads(_sp.read_text(encoding="utf-8")) or {}).get("vector_hub_port")
+        result["vector_hub_port"] = int(_raw) if _raw is not None else 8097
+    except Exception:
+        result["vector_hub_port"] = 8097
     return result
 
 
 @app.put("/api/rag/config")
 async def api_rag_config_save(request: Request):
-    """保存 RAG 配置并热重建实例（复用 chat.init_rag，保持两端一致）。"""
+    """保存 RAG 配置并热重建实例（复用 chat.init_rag，保持两端一致）。
+    vector_hub_port 不属 rag.json——从 body 摘出走现有 settings 链路写 settings.json
+    （用户设计 2026-11-24：本地向量栈服务端口，0=禁用 hub）。"""
     try:
         body = await request.json()
     except Exception:
         return {"error": "请求体需为 JSON"}
     if not isinstance(body, dict):
         return {"error": "配置需为对象"}
+    _hub = body.pop("vector_hub_port", None)
+    if _hub is not None:
+        try:
+            config.save_settings_scoped({"vector_hub_port": max(0, int(_hub))}, "auto")
+        except Exception:
+            pass   # 端口写失败不阻塞 RAG 配置保存
     config.save_rag_config(_workspace, body)
     import chat as chatmod
     chatmod.init_rag(_workspace)

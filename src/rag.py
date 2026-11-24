@@ -167,10 +167,15 @@ class LocalRAG:
             else:
                 if not cfg.get("embed_model_path"):
                     return None
-                print(f"[rag] 加载本地 embedding 模型 {cfg['embed_model_path']} ...")
-                _hf_local_offline()
-                from sentence_transformers import SentenceTransformer
-                embedder = SentenceTransformer(cfg["embed_model_path"])
+                # 本地向量栈 hub（用户设计 2026-11-24）：settings.vector_hub_port>0 时懒拉起
+                # 共享服务、经 HTTP 取向量（全机一份模型）；hub 不可达/超时 → 回退本地加载。
+                from vector_hub import try_hub_embedder
+                embedder = try_hub_embedder(cfg)
+                if embedder is None:
+                    print(f"[rag] 加载本地 embedding 模型 {cfg['embed_model_path']} ...")
+                    _hf_local_offline()
+                    from sentence_transformers import SentenceTransformer
+                    embedder = SentenceTransformer(cfg["embed_model_path"])
             # LRU 缓存包装：cosine_sim 批处理中 query 重复 encode、RAG 同句重复检索等场景受益
             embedder = _CachedEmbedder(embedder)
         except Exception as e:

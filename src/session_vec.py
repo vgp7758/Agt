@@ -18,8 +18,9 @@ import threading
 import time
 from pathlib import Path
 
-import faiss
-import numpy as np
+# 重依赖（faiss / numpy）不在顶层 import（内存治理 2026-11-24，与 rag.py 同策略）：
+# 未启用向量检索的实例不再为 import 本模块付出 ~560MB 提交（torch+bge+faiss+BLAS+numpy）。
+# 用到时局部 import——见各方法。
 
 # 复用 rag.py 的两种 embedder（local: SentenceTransformer / api: OpenAI 兼容），
 # 避免再写一遍 embedder 装配逻辑——配了哪个用哪个，没配就返回 None。
@@ -50,6 +51,12 @@ def _build_embedder(cfg: dict):
         # local：必须有模型路径
         if not cfg.get("embed_model_path"):
             return None
+        # 本地向量栈 hub（用户设计 2026-11-24）：settings.vector_hub_port>0 时懒拉起共享
+        # 服务、经 HTTP 取向量（全机一份模型）；hub 不可达/超时 → 回退本地加载（功能保底）。
+        from vector_hub import try_hub_embedder
+        hub = try_hub_embedder(cfg)
+        if hub is not None:
+            return hub
         from rag import _hf_local_offline   # 同款环境隔离（USE_TORCH=1 跳过 TF 探测——本链独立装配时
         _hf_local_offline()                 # 也可能撞 transformers 的 TF 连带 import，见 rag.py 2026-10-10 注释）
         from sentence_transformers import SentenceTransformer
@@ -81,6 +88,7 @@ class SessionVectorStore:
         self._next_id = 0
         if self.faiss_path.exists():
             try:
+                import faiss
                 loaded = faiss.read_index(str(self.faiss_path))
                 if loaded.d == self.dim:
                     self.index = loaded
@@ -107,6 +115,7 @@ class SessionVectorStore:
         return conn
 
     def _new_index(self):
+        import faiss
         idx = faiss.IndexHNSWFlat(self.dim, 32, faiss.METRIC_INNER_PRODUCT)
         idx.hnsw.efConstruction = 200
         idx.hnsw.efSearch = 64
@@ -155,6 +164,8 @@ class SessionVectorStore:
                 # 注意：向量不更新（HNSW 无单条改）——重建全库时刷新。增量场景下 search_text
                 # 可能与向量略不同步，但语义相近，召回仍有效；真要精确就重建。
                 return
+            import faiss
+            import numpy as np
             vecs = self.embedder.encode([search_text], normalize_embeddings=True,
                                         show_progress_bar=False)
             vecs = np.ascontiguousarray(vecs, dtype="float32")
@@ -172,6 +183,7 @@ class SessionVectorStore:
     def rebuild(self, turns_iter, session_id_fn):
         """全量重建：turns_iter 产出 (turn_no, user, answer, summary, reasoning, call_ids)；
         session_id_fn(turn_no)→session_id。清空旧索引+db 后重建。供 /rewind 或手动重建用。"""
+        import faiss
         with self._lock:
             self.index = self._new_index()
             self._next_id = 0
@@ -195,6 +207,7 @@ class SessionVectorStore:
             self.conn.commit()
 
     def _flush_batch(self, rows):
+        import numpy as np
         texts = [r[6] for r in rows]
         vecs = self.embedder.encode(texts, batch_size=len(texts),
                                     normalize_embeddings=True, show_progress_bar=False)
@@ -217,6 +230,7 @@ class SessionVectorStore:
         """
         if self.index.ntotal == 0:
             return []
+        import numpy as np
         with self._lock:
             qv = self.embedder.encode([query], normalize_embeddings=True,
                                        show_progress_bar=False)

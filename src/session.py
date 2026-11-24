@@ -770,7 +770,15 @@ class Session:
         self._spec_provider: Optional[Callable[[], str]] = None  # 当前活动 spec 块（Agent 注册；draft/committed/rejected 态注入，approved/无返回空）
         self._task_guidance_provider: Optional[Callable[[], str]] = None  # 任务指引(AGENTS.md/rules/skills/子Agent)：每轮重读，紧跟 system 之后
         self._log_handler = None  # agent 注册的日志 handler（duck typing）；_ensure_name 时通知它 flush 缓冲并切到 <name>.log
-        self.toollog = ToolLog()  # 工具调用完整详情库：ToolCall 只存 call_id，组装上下文时按 id 召回 + 按步距衰减摘要
+        # 工具调用完整详情库（内存治理 2026-11-24 进程级共享）：ToolCall 只存 call_id，组装
+        # 上下文时按 id 召回 + 按步距衰减摘要。session_dir 已知（子 Agent/预设目录）时直接绑
+        # 共享 store；主线（目录未定）先 buffer 态，name 就绪 _bind_persistence_paths 时绑定。
+        # 同 repo 所有 session 共享一份数据/落盘，counter 按会话前缀分区——不再每实例整表 load。
+        if self.session_dir is not None:
+            self.toollog = ToolLog.shared(_sessions_root_of(self.session_dir),
+                                          _call_prefix_of(self.session_dir))
+        else:
+            self.toollog = ToolLog()
         self.llm_calls = LLMCallLog()  # LLM 调用流水（可观测性）：每次调用追加一条，供 /stats 聚合
         # 分支元数据（用户提案 2026-10-08）：None=主线/普通会话；分支会话为
         # {branch_of: 主线目录名(时间戳文件夹名), inherit_lines: 继承主线 events.jsonl 前 N 行,
@@ -5094,9 +5102,9 @@ class Session:
         if s.branch_meta:
             # ToolLog 前缀 = 本 session 目录名（2026-10-09 二轮定稿）：call_id = "<sid>-N"，
             # 共享 toollog 下别的 session 记录不顶本 counter、也无需任何合载/归属过滤。
-            _saved = s.toollog._data          # __init__ 后可能已载入的部分（不丢）
-            s.toollog = ToolLog(prefix=_call_prefix_of(sdir))
-            s.toollog._data = _saved
+            # 进程级共享 store（内存治理 2026-11-24）：数据/counter 在 store，不再换实例搬
+            # _data——bind（buffer 并入）+ 校准前缀即可；旧 cN/分支锚点 id 仍在共享数据里可查。
+            s.toollog.bind(_sessions_root_of(sdir), _call_prefix_of(sdir))
             _chain_dirs, _layers = [], _branch_chain_bases(s.branch_meta, _sessions_root_of(sdir))
             # 失链自愈回填（2026-10-09）：branch_of 指向的目录已被改名（时间戳名→字母 id）时，
             # 解析层按 created_at 反查命中了新目录——把 meta.branch.branch_of 刷成现路径，

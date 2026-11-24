@@ -335,6 +335,58 @@ if not resumed:
 
 关联：[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)（短路的是整组并行执行）、[60s 专用超时](#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)（只对实际执行的轮生效）、[wiki_auto_query](../features/wiki-auto-query.md)、[skill_suggest](../features/skills.md)。
 
+## before_turn 检索钩子撞 WinError 1455：宿主机提交内存耗尽，非工作流逻辑（2026-11-28，8000 实锤）
+
+**现象（用户问诊 `/wf/monitor?run=e66c734d`）**：run `e66c734d` 是 8000 实例 comfy-aigc 会话的 `before_turn_retrieval` 钩子（触发消息正是「任务管理器显示内存 74% 但浏览器提示内存不足」那条）。9 个节点前 8 个全部正常（关键词提取、RAG、情景记忆都跑通），最后一步 **`collect_candidates`（code 节点）失败**：
+
+```
+OSError: [WinError 1455] 页面文件太小，无法完成操作。
+```
+
+WinError 1455 = `ERROR_COMMITMENT_LIMIT`——**系统提交内存（commit）额度耗尽**，新建子进程 / 大块分配直接被拒；code 节点要起 Python 子进程，正好撞上。该轮检索结果丢弃（钩子失败不伤主流程，内存缓解后下一轮自愈）。
+
+- **不是首次**：2026-11-24 voice-input 开发轮开头，同一个钩子报过一次 `MemoryError`（当时定性「机器内存偏紧」未深究，见 [voice-input · 注意事项](../features/voice-input.md)）——本次拿到根因。
+- **顺带甄别**：`semantic_search` 节点 0ms 返回空结果是另一个独立小现象（该会话向量检索无命中），与本案无关。
+
+**根因：两个「内存」口径，任务管理器只显示了其中一个**
+
+| 口径 | 数值 | 说明 |
+|---|---|---|
+| 物理内存 | 15.8 GB 总量，已用 74.9% | 任务管理器那个 74%——看着还行 |
+| **已提交（commit）** | **35.7 / 35.8 GB = 99%** | 上限 = 物理 15.8 + 页面文件 C:4GB + D:16GB。**爆掉的是这个指标** |
+
+浏览器开新页签、工作流起子进程，要的都是 commit 额度——所以「物理才 74% 却提示内存不足」。页面文件实际换出只有 0.8GB：大头是各进程**预留**的提交额度（Python / 驱动常见行为）。两个关键事实：
+
+- **E 盘 16GB 页面文件设置了但没生效**（`E:\pagefile.sys` 不存在，实际只有 C:4G + D:16G）。若生效，上限变 ~51.8GB。
+- 全部用户态进程 Private 之和仅 16.0GB，另外 ~19.7GB 提交在内核 / 驱动 / 共享段等处——诊断时连 PowerShell 细查都 OOM，9000 会话进程当日也被中断过一次，同一根因。
+
+**谁在占（Top，当日快照）**
+
+| 进程 | 提交 | 说明 |
+|---|---|---|
+| agt-web 9000 | 2.87 GB | 2500+ 轮大会话 |
+| asr_server | 2.40 GB | 语音功能 SenseVoice（torch 常驻，见 [voice-input](../features/voice-input.md)） |
+| agt-web 20048 | 1.16 GB | |
+| agt-web 8000 | 0.66 GB | 报错的这个 |
+| Edge（含 playwright 专用 profile） | ~1.7 GB | |
+| 6 个 agt-web 实例各自的 MCP 子进程 | ~1 GB 重复开销 | Playwright-MCP node ×4~5、python-lsp ×5、zai-mcp ×5——每实例各挂一套 |
+
+35 个 python 进程合计 8.83GB。
+
+**处置建议（按性价比，待用户裁定）**
+
+1. **页面文件落实**（治本）：E 盘 16GB 生效，或改系统托管 / 加大 D 盘到 32GB——需重启一次；commit 上限上去后 1455 基本消失。
+2. **关闲置实例**：9013、2000 停掉，每个实例连 MCP 子进程省 0.3~0.5GB。
+3. **ASR 空闲卸载**：2.4GB 是语音功能的代价，不用时可挂 8090 托管、同 lfm 的 idle 自动卸载。
+4. 15.8GB 物理内存跑 6 个 agt 实例 + 本地模型服务确实紧，页面文件给足是最低成本的解。
+
+**诊断方法沉淀**
+
+- 看到 WinError 1455 /「内存不足」但物理内存不满 → 先看任务管理器「性能」页的**已提交**，不是物理内存。
+- 口径对照：`Get-Counter '\Memory\Committed Bytes'` vs `'\Memory\Commit Limit'`；用户态进程 Private 求和与 commit 总量的差额 = 内核 / 驱动 / 共享段占用。
+- 影响面不止 code 节点：一切「起新进程 / 大块分配」的点（code 节点、shell 工具、MCP 子进程拉起）都可能在同一台机器上撞 1455——**这是宿主机故障，不是工作流逻辑错误**，run registry（本页「运行观测」章节，`/wf/monitor` 即其消费端）里看到此错先查 commit。
+- 临时探针脚本（`logs/mem_probe.ps1`）用后即删，不留工作区垃圾。
+
 ## async 元信息字段（2026-08 新，v0.18.2 正式发布）
 
 钩子工作流可标记 `async=true`，使其**异步执行不阻塞主循环**。全链路读写：

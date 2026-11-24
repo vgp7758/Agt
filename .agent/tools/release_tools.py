@@ -34,7 +34,9 @@ def release_publish(part: str = "patch", message: str = "", dry_run: bool = Fals
     cmd += (["--dry-run"] if dry_run else ["-y"])
     rc, out = _sh(cmd)
     tail = out.strip().splitlines()[-8:]
-    if rc != 0 or ("❌" in out or "失败" in out):
+    if rc != 0:   # 只认退出码：release.py 所有失败路径都是 sys.exit(非 0)。此前还查 "❌"/"失败" 关键字——
+        #            而发布报告会打印 commit message 全文，说明里带「失败」二字（如"修 X 失败"）就被误判成
+        #            失败并跳过后续三步（v0.35.17 实锤：rc=0 全成功，却因"失败回退本地"六个字被打回）。
         return "❌ release.py 失败（后续步骤未执行）：\n" + "\n".join(tail)
 
     # 版本号（"📦 版本：0.34.6 → 0.34.7" 的右侧）

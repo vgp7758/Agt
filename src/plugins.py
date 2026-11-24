@@ -250,7 +250,10 @@ class PluginAPI:
     # —— 输出 ——
 
     def emit(self, event: dict):
-        """广播一条 WS 事件（前端 AgtPlugin.ws.on / addChatCard 可接）。建议 type 唯一命名。"""
+        """广播一条 WS 事件（前端 AgtPlugin.ws.on / addChatCard 可接）。建议 type 唯一命名。
+        默认带主 Agent 的 agent_id=_main_：后端 _broadcast 与前端都按 agent_id 做目标路由，
+        只有与主 Agent 交互的页签收得到。要发给**所有页签**（含子 Agent 页签）的页面级事件，
+        调用方显式写 event["agent_id"] = ""（置空 = 系统级广播，Agent._emit 不会覆盖已有键）。"""
         agent = _RT.agent
         if agent is not None and isinstance(event, dict):
             ev = dict(event)
@@ -356,8 +359,8 @@ def unload_all():
     _RT.commands.clear()
     _RT.pre_hooks.clear()
     _RT.post_hooks.clear()
-    # routes 不清空：attached_app 上的 FastAPI 路由无法摘除（挂一次永久）——
-    # reload 时同名路由重新挂会 409 冲突，由 _attach_one 幂等处理（已存在同 path 跳过）
+    # routes 注册表不在此清空（attach_routes 启动期全量挂载要用；_RT 随后整体重建）：
+    # app 上已挂的旧插件路由也不在这里摘——reload 时 _attach_one 就地替换（同 path 先摘旧插件路由再挂新）
 
 
 # ===================== 引擎钩子（agent._exec_tool 调用；零插件零开销） =====================
@@ -406,10 +409,23 @@ def append_commands(reg) -> None:
 
 
 def _attach_one(app, route: dict):
-    """把一条插件路由挂上 FastAPI（幂等：同 method+path 已存在则跳过——reload 防冲突）。"""
-    paths = {getattr(r, "path", None) for r in app.routes}
-    if route["path"] in paths:
-        return
+    """把一条插件路由挂上 FastAPI。
+    · 同 path 同 method 已有内置路由 → 不顶替（插件不得覆盖内置端点）；
+    · 同 path 只有内置路由（method 不同）→ 不挂（既有语义）；
+    · 同 path 同 method 已有旧插件路由 → 先摘再挂（2026-11-24 实锤：此前"已存在即跳过"，
+      /reload plugins 后路由仍绑着旧模块的旧函数——改 backend 里的路由处理器永不生效，
+      工具/命令/钩子倒是真的换了）。"""
+    path, method = route["path"], route["method"]
+    existing = [r for r in app.router.routes if getattr(r, "path", None) == path]
+    same_method = [r for r in existing if method in (getattr(r, "methods", None) or set())]
+    _plugin_named = lambda r: (getattr(r, "name", "") or "").startswith("plugin_")
+    if same_method and not all(_plugin_named(r) for r in same_method):
+        return                      # 同 path 同 method 是内置路由 → 插件不顶替
+    if not same_method and existing and not all(_plugin_named(r) for r in existing):
+        return                      # 同 path 已有内置路由（method 不同）→ 既有语义：插件不挂
+    if same_method:
+        # 换成新列表而不是在旧列表上原地删：reload 可能在线程池里跑，事件循环正在遍历它做路由匹配
+        app.router.routes = [r for r in app.router.routes if r not in same_method]
     fn = route["fn"]
 
     # 注解修复（2026-10-15 隔离实例实锤 422）：request 参数必须带 fastapi.Request 注解——

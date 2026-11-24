@@ -1,29 +1,31 @@
-# 技能体系 · SKILL.md 技能包 + 双层寻址（repo 本地 / 全局 ~/.agt/skills）+ 技能工具九件套（含装卸闭环 + 命令口）
+# 技能体系 · SKILL.md 技能包 + 三层寻址（repo 本地 / 全局 ~/.agt/skills / 外部 ~/.agents/skills）+ 技能工具九件套（含装卸闭环 + 命令口）
 
-> 技能 = 「frontmatter（name/description/when_to_use）+ SOP 正文」的 `SKILL.md` 目录包，可选带脚本/资产。SYSTEM 注入一行一技能的【可用技能】清单，Agent 任务匹配时按需取 SOP 执行；完成可复用任务后 `save_skill` 沉淀。核心实现全在 `src/agent_config.py`（技能工具注册处），SYSTEM 摘要文案在 `src/chat.py`。
+> 技能 = 「frontmatter（name/description/when_to_use）+ SOP 正文」的 `SKILL.md` 目录包，可选带脚本/资产。SYSTEM 注入【可用技能】清单（本地 / 已激活全局一行一技能，外部层只追加一行名字索引），Agent 任务匹配时按需取 SOP 执行；完成可复用任务后 `save_skill` 沉淀。核心实现全在 `src/agent_config.py`（技能工具注册处），SYSTEM 摘要文案在 `src/chat.py`。
 
 ## 职责
 
-- **可复用任务的知识封装**：技能名 + 一句话作用 + 使用时机常驻 SYSTEM（token 便宜），详细 SOP 按需 `read_skill`（大技能再 `skill_navigate` 分节读）——三级递进的上下文经济
-- **双层技能源（2026-09 双层化后）**：repo 本地 `.agent/skills/`（随 repo 提交，项目私有）+ 全局 `~/.agt/skills/`（跨 repo 共享，一次安装处处可用、按 repo 激活）
+- **可复用任务的知识封装**：技能名 + 一句话作用 + 使用时机常驻 SYSTEM（token 便宜；外部层只列名字索引），详细 SOP 按需 `read_skill`（大技能再 `skill_navigate` 分节读）——三级递进的上下文经济
+- **三层技能源**：repo 本地 `.agent/skills/`（随 repo 提交，项目私有）+ 全局 `~/.agt/skills/`（跨 repo 共享，一次安装处处可用、按 repo 激活；2026-09 双层化）+ 外部生态 `~/.agents/skills/`（跨 agent 工具开放约定目录，**免激活直接生效**、优先级最低；2026-11-24）
 - **技能包可执行**：技能不止是文档——自带脚本（`scripts/`、`tools/`）经 `skill_run_code` 执行，评测约定经 `skill_evaluate` 走起
 
 ## 双层体系：全局技能目录 + repo 激活清单（2026-09，用户提案，spec s_4ac5ccb6）
 
 用户原案：「全局目录 `~/.agt/` 里放一个 skill 目录放技能包；每 repo 放一个 `.agent/skills/global-skills.json` 标记本 repo 激活哪些全局技能；给技能添加 skill_run_code / skill_evaluate / skill_navigate 等工具，**混淆本地技能和全局技能的读和用**」——最后半句是设计灵魂：统一寻址，Agent 用起来不分本地全局。
 
-### 统一寻址 `_resolve_skill`：本地优先 shadow，全局须激活
+### 统一寻址 `_resolve_skill`：本地优先 shadow，全局须激活，外部免激活
 
 ```python
 def _resolve_skill(name, workspace=None):
     # 1) repo .agent/skills/<name>/SKILL.md 存在 → (dir, "local")
     # 2) name ∈ 激活清单 且 ~/.agt/skills/<name>/SKILL.md 存在 → (dir, "global")
-    # 3) 否则 → (None, "")
+    # 3) ~/.agents/skills/<name>/SKILL.md 存在 → (dir, "external")   ← 2026-11-24 新增第三级（免激活）
+    # 4) 否则 → (None, "")
 ```
 
 - **本地优先（shadow）**：同名技能本地覆盖全局——repo 可 fork 全局技能做项目特化，不必改全局份
 - **全局须激活**：`~/.agt/skills/` 里躺着不等于可用，必须在 repo 的激活清单里点名——防全局技能无限膨胀撑爆每个 repo 的 SYSTEM
-- 所有技能工具（read/navigate/run_code/evaluate）**透明走它**，「读」和「用」都不感知层级；返回 scope 仅供展示（navigate 输出 `🌐 全局 ~/.agt/skills` / `repo .agent/skills`）
+- **外部免激活、优先级最低**（2026-11-24）：`~/.agents/skills/` 下的包按目录名直接可寻址，被 repo 本地 / 已激活全局的同名包 shadow——详见 §外部生态技能层
+- 所有技能工具（read/navigate/run_code/evaluate）**透明走它**，「读」和「用」都不感知层级；返回 scope 仅供展示（navigate 输出 `🌐 全局 ~/.agt/skills` / `🧩 外部 ~/.agents/skills` / `repo .agent/skills`）
 
 ### 激活边界（静默语义，现行为零影响）
 
@@ -31,13 +33,72 @@ def _resolve_skill(name, workspace=None):
 - 清单里点了但包不存在/无 SKILL.md → 静默跳过（`load_skills_index` 不报错）
 - 组件：`_global_skills_root()`（`AGT_DIR/skills`，经 paths 单一数据根）+ `_enabled_global_skills(workspace)`（清单解析）+ `load_skills_index(workspace)`（本地扫 + 全局已激活合并，条目带 `scope` 字段）
 
+## 外部生态技能层 ~/.agents/skills/：免激活直接生效 + /skills 清单命令（2026-11-24，用户裁定，commit d37bf56）
+
+用户请求（2026-11-24）：「我们的技能现在是通过钩子惰性感知的吧，我觉得免激活直接生效好了」——对象是 `~/.agents/skills/`：**跨 agent 工具的开放约定目录**（各类 `skills` 安装器的落位处，本机实装 12 个包）。裁定：**免激活直接生效**、优先级最低；代价放在 SYSTEM 上省——常驻清单只追加一行名字索引。
+
+### 前提校正：技能清单其实常驻 SYSTEM
+
+「靠钩子惰性感知」只对了一半：[skill_suggest](#skill_suggest--技能按需建议钩子system-技能清单下线jev-快判--llm-全文复核2026-09-2728用户提案) 是**额外的**按需建议层；清单本体经随包 `src/assets/main.yml` 的【可用技能】text 段 `{func:load_skills()}` 常驻 SYSTEM（`src/chat.py` 注释已同口径校正：默认 SYSTEM 模板不带清单、main.yml 装配段带）。免激活后每轮多付的是「一行名字」，不是逐条 description。
+
+### 三层寻址与感知（前后对照）
+
+| | 以前 | 现在 |
+|---|---|---|
+| 按名字读到 | 外部层不参与寻址，`read_skill` 报未找到 | 能——`read_skill` / `skill_navigate` / `skill_run_code` / `skill_command` / `skill_equip` 全走同一阶梯；子 Agent yml `skills:` 声明同样按名解析 |
+| SYSTEM 技能清单 | 不含 | 只追加**一行名字索引**：`外部技能（~/.agents/skills，免激活，匹配时同样 read_skill 取 SOP；/skills 看各自用途）：a, b, c…` |
+| 优先级 | — | repo 本地 > 已激活全局 > 外部——同名被上层 shadow，按**目录名**判占用（`load_skills_index` 的 `occupied` 与 `_resolve_skill` 同口径，不重复列） |
+| 查用途 | 无入口 | 新增 `/skills` 命令（下节） |
+
+### 为什么 SYSTEM 只给名字、钩子不扫
+
+本机体量实测：12 个外部包 description 合计 **5,739 字符**（现有 6 个本地/全局技能合计 405 字符），SKILL.md 正文 7.5K → 含外部包 66K。
+
+- **SYSTEM 名字索引行 286 字符**：`skills_summary` 对 local/global 仍一行一技能，external 只收名字；封顶 `_EXT_SKILLS_CAP = 30` 个，超出折叠成「…等共 N 个」；只有外部技能时清单也不为空（否则模型无从得知其存在）
+- **`skill_suggest` 钩子刻意不扫这一层**（扫技能节点只遍历 `.agent/skills/` + `~/.agt/skills/` 已激活项）——按实现注释口径：一级 jev 判别的输入是全部候选 description、有 **512 token 上限**（405 字符 → 6.1K）；二级 LLM 复核吃每个技能的 SKILL.md 全文（7.5K → 66K）。外部技能的感知靠 SYSTEM 那行名字，由模型自行判断要不要 `read_skill`
+- 改善路径（**未做**，需另议）：二级复核只带名字 + 描述、不带全文，钩子即可纳入外部层
+
+### `/skills` 命令 + 实现落点
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent_config.py` | `_EXT_SKILLS_ROOT`（测试注入点）/ `_EXT_SKILLS_CAP = 30` / `_external_skills_root()`（`Path.home()/.agents/skills`，**与 AGT_DIR 无关**——它是别的工具的目录）；`_resolve_skill` 升三级（scope 增 `external`）；`load_skills_index` 三层合并；`skills_summary` 外部只列名；新 `skills_listing()`；`_skill_not_found` 指路改写（先提 `/skills`）；`read_skill` / `save_skill` 说明同步三层 |
+| `src/commands.py` | 新增 `/skills`（`_cmd_skills` → `skills_listing`）——此前只在代码注释里被提及，命令本身并不存在 |
+| `src/chat.py` | SYSTEM 模板注释校正（清单经 main.yml 常驻 + 钩子按需 + 外部只列名） |
+| `src/dir_docs/skills.md` · `src/assets/skills/test-svc/SKILL.md` | 「双层与激活」→「三层与激活」 |
+| `test/conftest.py`（新） | **autouse 夹具** `_isolate_external_skills`——把 `_EXT_SKILLS_ROOT` 指到每个测试独立的不存在目录 |
+| `test/test_global_skills.py` | 外部层 7 例（`xroot` 夹具换成带内容的目录） |
+
+`/skills` 输出（`skills_listing`）：`🧩 技能清单（生效 N 个）` → 按【repo 本地 .agent/skills/（直接生效）】【全局 ~/.agt/skills/（已激活）】【外部 ~/.agents/skills/（免激活直接生效）】分组，每行 `名 — 描述`（截 100 字；🌐 / 🧩 标记）→【全局 ~/.agt/skills/ 未激活】`⏸` 列表 + 启用方法 → 用法尾注（`read_skill(<名>)` / `/skill_equip <名>`）。
+
+### 验证
+
+- **单测**：技能域 5 个测试文件 + 市场测试共 **97 passed**；新增 7 例——免激活可读（index / resolve / `read_skill` / `skill_navigate` 带 `🧩 外部 ~/.agents/skills`）/ 优先级最低且不重复列 / summary 只列名（700 字 description 不进）/ 仅外部技能时清单非空 / 名字封顶折叠 / 外部目录缺席静默（原两层零影响）/ listing 三层 + 未激活项
+- **隔离实例实跑**：SYSTEM 账本里的技能清单原文如下（外部 description 未进 SYSTEM）：
+
+```
+技能清单：- desktop-ops: …
+- test-svc: …
+外部技能（~/.agents/skills，免激活，匹配时同样 read_skill 取 SOP；/skills 看各自用途）：find-skills, okx-agent-payments-protocol, okx-agentic-wallet, okx-ai, okx-dapp-discovery, okx-defi, okx-dex-market, okx-guide, volcengine-cli, volcengine-find-skills, volcengine-knowledge-search, volcengine-troubleshooting
+```
+
+- **未验到**：让模型复述「你看到了哪些技能」——隔离环境的内置预设通道返回 429（额度不足），模型没回复；启动 / 装配 / 钩子 / 投影到发起 LLM 请求之前的路径无异常
+
+### 注意事项（外部层）
+
+- **缓存断一次**：SYSTEM 多一行 + `read_skill` / `skill_navigate` 工具说明变化（工具 schema 变化即断前缀缓存，见 [上下文引擎](../architecture/context-engine.md)）——各会话首次请求缓存失效
+- **该目录自此是可信区**：外部包脚本可被 `skill_run_code` / `skill_command` 执行、`server.py` 可被 `skill_equip` 拉起——装什么包 = 信任什么包。现有 12 个包均无 `server.py`，`skill_equip` 用不上
+- **`~/.agents/skills/` 跟 `Path.home()` 走、不受 AGT_HOME 隔离**：开发机上真装的外部技能会漏进所有技能断言（`load_skills_index(ws) == []` 之类随机翻红）——故 conftest autouse 隔离；要测外部层自己 `monkeypatch` 成带内容的目录
+- **`/restart` 生效**（引擎代码 + 工具说明进 schema）
+- **环境观察（主 Agent 报告，未处理）**：`~/.agt/workflows/skill_suggest.xml` 运行时副本与 repo 种源 `src/workflows/skill_suggest.xml` 不一致（多一个独立的大段粘贴剥离节点，模型 `short-req` → `proxy`），疑似手改——未动未回灌
+
 ## 技能工具九件套（原二 + 新五 + 装卸配对 skill_unequip + 命令口 skill_command）
 
 `SKILL_TOOLS = Toolbox(Tool(read_skill), Tool(save_skill), Tool(skill_navigate), Tool(skill_run_code), Tool(skill_evaluate), Tool(skill_equip), Tool(skill_use), Tool(skill_unequip), Tool(skill_command))`
 
 | 工具 | 职责 | 关键语义 |
 |---|---|---|
-| `read_skill(name)` | 读完整 SKILL.md（含详细 SOP） | 统一寻址；找不到时 `_skill_not_found` 指路：「若是全局技能，需在本 repo 的 global-skills.json 激活清单里启用」 |
+| `read_skill(name)` | 读完整 SKILL.md（含详细 SOP） | 统一寻址（三层透明）；找不到时 `_skill_not_found` 指路：「/skills 列出全部可用技能；全局 ~/.agt/skills/ 的技能需在本 repo 的 .agent/skills/global-skills.json 激活；~/.agents/skills/ 的免激活，按目录名寻址」 |
 | `save_skill(name, description, when_to_use, sop)` | 沉淀新技能 | **仍写 repo 本地** `.agent/skills/`（全局技能的维护直接编辑 `~/.agt/skills/` 文件） |
 | `skill_navigate(name, section, list_only, file)` | 结构浏览 / 分节读 / 读包内文件 | 见下 |
 | `skill_run_code(name, script, args)` | 执行技能包内 .py（一次性无状态） | 见下 |
@@ -425,9 +486,15 @@ start → 扫技能(.agent/skills/*/SKILL.md：description + 全文各截 6000 �
 
 pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打平）→ 落 LLM 复核兜底，不算漏报；改善路径：技能 description 措辞迭代（补 grpc-web / 流量解码 / 逆向等高频词）或调低 threshold（放行更多模糊匹配，自行权衡）。
 
+### 后记：清单其实常驻 SYSTEM + 钩子不扫外部层（2026-11-24 校正）
+
+本节标题的「SYSTEM 技能清单下线」只对**默认 SYSTEM 模板**成立（`src/chat.py` 不带清单）；随包 `src/assets/main.yml` 的【可用技能】text 段带 `{func:load_skills()}`——**清单实际经 main.yml 装配常驻 SYSTEM**，本钩子是其上的额外按需建议层（2026-11-24 随外部技能层落地时核实，`src/chat.py` 注释已校正）。
+
+**钩子不扫外部层 `~/.agents/skills/`**（扫技能节点只遍历 `.agent/skills/` 与 `~/.agt/skills/` 已激活项）：按实现注释口径，一级 jev 判别的输入有 512 token 上限（纳入后候选 description 405 字符 → 6.1K）、二级 LLM 复核吃 SKILL.md 全文（7.5K → 66K）。外部技能的感知靠 SYSTEM 名字索引行；要让钩子纳入，需先把二级复核改成只带名字 + 描述（未做）。详见 §外部生态技能层。
+
 ## SYSTEM 摘要与使用教育（src/chat.py）
 
-> **【2026-09-27/28 已下线】** `skills_summary` 注入段已从装配中移除——技能清单不再常驻 SYSTEM（每轮省一份清单 token），改为 [skill_suggest](#skill_suggest--技能按需建议钩子system-技能清单下线jev-快判--llm-全文复核2026-09-2728用户提案) 按需建议（见上节）。以下为退役前形态存档。
+> **【2026-09-27/28 模板下线 → 2026-11-24 现状校正】** 默认 SYSTEM **模板**（`src/chat.py`）确已不带 `skills_summary` 段；但随包 `src/assets/main.yml` 的【可用技能】text 段带 `{func:load_skills()}`（FUNC_REGISTRY → `_func_load_skills` → `skills_summary(WORKSPACE)`，空时回 `(无技能)`）——**清单实际经 main.yml 装配常驻 SYSTEM**，[skill_suggest](#skill_suggest--技能按需建议钩子system-技能清单下线jev-快判--llm-全文复核2026-09-2728用户提案) 是其上的按需建议层。现状形态：本地 / 已激活全局一行一技能；外部层 `~/.agents/skills/` 只追加一行名字索引（见 §外部生态技能层）。以下为 2026-09 退役前形态存档。
 
 装配 SYSTEM 技能段（`skills_summary`）时一行一技能，全局技能加 **🌐 前缀**：
 
@@ -453,6 +520,8 @@ pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打�
 
 施工中一插曲：`test_navigate_sections` 首跑失败——测试直接用未激活环境的解包变量，修为解包 `env` 后先写激活清单再断言（13 passed）。
 
+**2026-11-24 增补**：外部生态技能层 7 例并入本文件（commit d37bf56；`xroot` 夹具 + `test/conftest.py` autouse 隔离 `_EXT_SKILLS_ROOT`），技能域回归 **97 passed**——用例清单与隔离实例实跑验证见 §外部生态技能层。
+
 ## 注意事项
 
 - **/restart 生效**：SYSTEM 技能摘要在 agent 构建时装配——新装全局技能 / 改激活清单后需重启实例（无热重载）
@@ -462,6 +531,13 @@ pbridge 类消息 jev 一级判分偏低（conf 0.37 vs __none__ 0.36 几乎打�
 - 技能名只允许字母数字/下划线/连字符（`_NAME_RE` 校验，各工具入口统一报 `[非法名称]`）
 - **装备生命周期（2026-10-17 轮级化）**：装备默认**轮收尾自动卸载**（走 `skill_unequip` 全套撤销，recap 后、inbox 消费前）——跨轮使用由 `skill_use` 未装备自动装备兜住（服务重启秒级）；atexit 全杀保留为进程退出兜底；`PYTHONUNBUFFERED=1` 由框架注入——server.py 忘写 flush 也能工作；命令协议（能力清单格式）由技能作者自定，`===CAPS_END===`/`===DONE===` 两个标记是唯一硬约定（详见 §轮结束自动卸载）
 - **装卸配对（2026-10-16）**：`skill_unequip(name)` / 重复 equip（replace）/ 轮收尾自动卸——三者同走一条撤销链：按 `_skill_src` 标记撤插段/钩子 + 只停自己拉起的服务 + 清 `session._equipped_skills`；登记纯内存——没有持久「已卸载」清单
+
+### 注意事项（外部生态技能层，2026-11-24）
+
+- **外部层免激活 = 信任面扩大**：`~/.agents/skills/` 里的包按目录名直接可寻址，脚本可被 `skill_run_code` / `skill_command` 执行、`server.py` 可被 `skill_equip` 拉起——装什么包 = 信任什么包
+- **外部目录不受 AGT_HOME 隔离**（跟 `Path.home()` 走）：隔离实例 / 测试环境里本机真装的外部技能照样漏进来——技能断言靠 `test/conftest.py` autouse 夹具兜住
+- **外部技能只能靠 SYSTEM 名字索引被感知**：`skill_suggest` 钩子不扫这一层，用途看 `/skills` 或直接 `read_skill`
+- 落地后会断一次缓存（SYSTEM 多一行 + 工具说明变化），详见 §外部生态技能层
 
 ## 相关页面
 

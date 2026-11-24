@@ -112,6 +112,15 @@ yml: skills: [desktop-ops]
 - **播种源**：`src/agents/desktop-operator/` 同构更新（yml 加 skills 行、md 瘦身、tools/ 移除 desktop_tools.py）
 - **市场**：`src/assets/market/index.json` 新增 `desktop-ops` skill 条目；desktop-operator 条目升 1.1、desc 注明「依赖 desktop-ops 技能需一并安装」（无级联安装机制，`needs` 字段设想被否——没人消费的字段不造）
 
+### 后记：外部生态技能进 `skills:` 寻址——三层透明（2026-11-24）
+
+`~/.agents/skills/`（跨 agent 工具开放约定目录）免激活直接生效后（[技能体系 · 外部生态技能层](../features/skills.md)，commit d37bf56），`_agent_skill_gear` 无需改动即覆盖外部技能——它经同一阶梯 `_resolve_skill(名)` 取目录，返回 scope 多一个 `external`：
+
+- 子 Agent yml `skills: [外部技能名]` 按目录名直接解析；SOP 拼接、`tools/` 扫描、`assemblies:` 装配清单读取与本地/全局技能同链路
+- 未知技能名的报错清单（`load_skills_index`）现在也含外部层
+- **信任面同步扩大**：外部包的 `tools/` 脚本会注册进子 Agent 工具箱——装什么包 = 信任什么包
+- 验证口径：寻址三级有单测（`test/test_global_skills.py`）；外部技能的子 Agent 装备未单独 e2e
+
 ### 验证
 
 test/test_subagent_skills.py 九例全绿：技能 tools 注册（外置工具协议不变）/ 仅 SOP 无 tools/、SOP 拼接语义（persona 空/非空两态）/ 未知技能报错（含已安装清单）/ 未知+已知混合（已知照常装备）/ 无 skills 零影响 / 字符串形态 / **desktop-operator 实例化 e2e**（真实声明+真实技能包→键鼠 10 工具在箱、SOP 在 system、image_feed 装配段在）/ tools/ 目录干净（只剩服务脚本，扫不出工具）。既有回归：test_global_skills + test_market 37 过、test_script_tools 12 过 3 失败（HEAD 基线复验为既有失败，与本次无关）。

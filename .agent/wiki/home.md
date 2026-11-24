@@ -130,3 +130,7 @@
 
 - **分支按钮轮号错位修复（2026-11-06 · 二，20048 实锤，commit `839d5bf`）**：20048 `20261005_180040` 第 518 轮点 🌿 分支，新分支只继承到第 515 轮（中间 3 轮消失）——根因三层：①主线 events.jsonl L4194 **坏行**（turn_end 的 `}` 没换行直拼下一个 turn_start，写盘竞态，`_read_events` 跳过 → 列表轮序少 1）；②分支按钮轮号（前端 history 口径）与 `/branch` 轮号（events 里第 N 个 turn_end）**两套计数**相差 3；③结果 `inherit_lines=11514`，3 轮落界外。修复两层：**数据侧**坏行拆开（11562→11563 行，520 轮全可读，20048 存档已修）+ **代码侧锚校准**——分支按钮随请求带该轮 answer 前 60 字，后端 `/api/branch` 以内容锚定（前 40 字前缀 events 全局**唯一命中**才校准；多命中/无命中/空锚保持原 turn 不强校，宁可不修不修错），单测 4 场景全过。**遗留**：events.jsonl 写盘竞态未根治（append 锁与换行原子性待查）——其它 session 再报「轮数不对/分支错位」先扫 `}{"event":` 拼接坏行；停在 515 轮的旧分支建议删除重建。详见 [session-branching · 锚校准](features/session-branching.md)
 
+## 快速事实增补（2026-11-24 · 外部生态技能目录 ~/.agents/skills 免激活直接生效 + /skills 命令）
+
+- **外部生态技能层落地（2026-11-24，用户裁定「免激活直接生效好了」，commit `d37bf56` 已推送）**：`~/.agents/skills/`（跨 agent 工具开放约定目录，本机实装 12 包）进技能寻址第三级——**repo 本地 > 已激活全局 > 外部**，按目录名 `read_skill` 即读，全技能工具与子 Agent `skills:` 声明同链路。**前提校正**：技能清单并非只靠钩子惰性感知——随包 `main.yml` 的【可用技能】段带 `{func:load_skills()}` 常驻 SYSTEM，`skill_suggest` 只是额外建议层；故 SYSTEM 上省着用——外部层**只追加一行名字索引**（286 字符；封顶 30 个名字，description 不进——12 包 description 合计 5,739 字符 vs 现有 6 技能 405 字符），钩子**不扫**这一层（按实现注释：jev 一级判别 512 token 上限、二级复核吃全文）。新增 `/skills` 命令（三层分组 + 全局未激活项；此前只在注释里被提及、命令并不存在）。测试：`test/conftest.py` autouse 隔离 `_EXT_SKILLS_ROOT`（外部目录跟 `Path.home()` 走、不受 AGT_HOME 隔离）+ 外部层 7 例，技能域 97 passed；隔离实例实跑 SYSTEM 账本实证。**代价**：缓存断一次（SYSTEM + 工具说明变化）；外部目录自此是可信区（脚本可被 `skill_run_code` 执行）。未验：模型复述清单（隔离环境 429）。详见 [技能体系 · 外部生态技能层](features/skills.md)
+

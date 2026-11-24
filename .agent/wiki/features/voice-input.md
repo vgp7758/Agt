@@ -64,7 +64,7 @@
 
 - 全局层插件 = 本机自用，**别写进随包种源 `src/assets/plugins/`**（依赖本机 8095 ASR，换机器即不可用）；其它机器要让 🎤 可用，先起 ASR 并把 `asr-local` 挂上
 - 录音端是「跑 agt 的那台机器」——远程页面点 🎤，录的是服务器所在机器的麦克风，不是你面前的
-- ASR 是 CPU 常驻模型；开发轮开头 `before_turn_retrieval` 钩子报过一次 `MemoryError`——根因 2026-11-28 查清：**宿主机提交内存（commit）额度耗尽**，非物理内存（asr_server 占提交 2.40GB，本机第 2 大）——语音功能常开时留意；是否挂 8090 托管空闲卸载待裁定，详见 [workflow-hooks · WinError 1455 诊断](../architecture/workflow-hooks.md)
+- ASR 是 CPU 常驻模型；开发轮开头 `before_turn_retrieval` 钩子报过一次 `MemoryError`——根因当日（2026-11-24）查清：**宿主机提交内存（commit）额度耗尽**，非物理内存（asr_server 占提交 2.40GB，本机第 2 大）——语音功能常开时留意；是否挂 8090 托管空闲卸载待裁定，详见 [workflow-hooks · WinError 1455 诊断](../architecture/workflow-hooks.md)
 
 ## 相关页面
 

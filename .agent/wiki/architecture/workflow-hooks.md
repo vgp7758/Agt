@@ -335,7 +335,7 @@ if not resumed:
 
 关联：[before_turn 并行执行](#before_turn-钩子并行执行2026-08-新v0182-发布)（短路的是整组并行执行）、[60s 专用超时](#before_turn-钩子专用超时-60s2026-09-21-用户裁定v0298-发布)（只对实际执行的轮生效）、[wiki_auto_query](../features/wiki-auto-query.md)、[skill_suggest](../features/skills.md)。
 
-## before_turn 检索钩子撞 WinError 1455：宿主机提交内存耗尽，非工作流逻辑（2026-11-28，8000 实锤）
+## before_turn 检索钩子撞 WinError 1455：宿主机提交内存耗尽，非工作流逻辑（2026-11-24，8000 实锤）
 
 **现象（用户问诊 `/wf/monitor?run=e66c734d`）**：run `e66c734d` 是 8000 实例 comfy-aigc 会话的 `before_turn_retrieval` 钩子（触发消息正是「任务管理器显示内存 74% 但浏览器提示内存不足」那条）。9 个节点前 8 个全部正常（关键词提取、RAG、情景记忆都跑通），最后一步 **`collect_candidates`（code 节点）失败**：
 

@@ -56,3 +56,22 @@ s_7edebd56 已由 [施工委托](construction-delegation.md) 线落地：worker-
 
 s_7edebd56 全量（投影层内插 + run_id 旁车 + 断点续跑）随 **v0.35.0** 进包（2026-10-16）。同版主打 [dashboard 多实例看板](dashboard.md)，姊妹件 [repos 数据根重定向](repos-dir-redirect.md)。
 
+## 只读白名单扩容：+wiki_read / rag_query / open_url（2026-11-25，用户提案，commit c1d587e）
+
+`_READ_ONLY` 白名单 5 → 8，探索 agent 新增三个只读信息源（`src/assets/tools_builtin/explore_tools.py`）：
+
+| 新增工具 | 用途 |
+|---|---|
+| `wiki_read` | 读 `.agent/wiki/` 仓库知识库页面 |
+| `rag_query` | 本地文档库语义检索（见 [RAG](rag.md)） |
+| `open_url` | 抓网页正文（官方文档 / 报错线索等外部资料） |
+
+- **两道闸同步**：schema 过滤与运行时拒绝共用 `_READ_ONLY`——探索模型能看到并调用这三个工具；越界工具（如 `edit`）照旧双拒（schema 不出现 + 运行时拒绝）。
+- **探索员 system 规则加 1.5 条**：优先 grep 定位 → read_file/find_function 看实现；仓库知识可 wiki_read / rag_query；外部资料用 open_url。
+- **越界预检不误伤**：预检只检查 `path` 参数——`open_url` 的 `url`、`rag_query` 的 `query` 不经过它；`wiki_read` 相对路径解析后落在 workspace 内。
+- **结果截断不变**：单次结果仍按 `_RESULT_CAP=6000` 截断，网页正文再长也不会撑爆探索上下文。
+- **顺带修复（运行时副本漂移）**：`.agent/tools/explore_tools.py` 一直落后种源——缺 2026-10-21 的越界预检与 explore 场景化模型解析（本实例此前实际跑的是旧逻辑）；本次以种源为准同步，双份同构恢复。
+- **生效**：本实例已 `/reload tools` 热加载（重注册 64 工具）即时可用；其它实例 `/reload tools` 或 `/restart`。
+- `web_search` 未纳入（用户只点名这三个）。
+- 验证：explore 端到端脚本全过（旁车 / 内插 / 续跑 seq 接续 / 损坏截断 / 白名单拒绝），双份文件 LSP 诊断无问题。
+

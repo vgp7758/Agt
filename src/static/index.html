@@ -3786,7 +3786,9 @@ window.AgtPlugin = (function(){
         // position:'input'（用户提案 2026-10-15）→ 挂输入框上方工具条（icon+文字横排小按钮，
         // 更贴消息流/更醒目）；缺省 'fab' → 右侧 dock 图标。同一 API 两位置。
         if(spec.position === 'input'){
-          const bar = document.getElementById('pluginInputBar');
+          // 2026-11-25 用户反馈：并入输入框上方那排按钮（#controls：模型/加图/工具/会话/Agent 一排），
+          // 不再单开一条插件横排。#pluginInputBar 容器保留但闲置（旧页面缓存兼容）。
+          const bar = document.getElementById('controls') || document.getElementById('pluginInputBar');
           if(!bar) return null;
           const btn = document.createElement('button');
           btn.className = 'pluginInputBtn';

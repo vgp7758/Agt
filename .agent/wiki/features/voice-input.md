@@ -5,9 +5,34 @@
 
 ## 职责与用法
 
-输入框上方工具条 **🎤 语音输入**（`AgtPlugin.ui.addButton` 的 `position:'input'` 席位，见 [fabDock · 后记二](fab-dock.md)）：
+输入框上方按钮排（`#controls`：模型 / 📁 加图 / 🔧 工具 / 会话 / Agent 同排）里的 **🎤 语音输入**（`AgtPlugin.ui.addButton` 的 `position:'input'` 席位；2026-11-25 起该席位并入 `#controls`，见 [fabDock · 后记二](fab-dock.md)）。
 
-点一下 → 对麦克风说话 → 文字**边说边追加**进输入框（保留已有文字）→ 停顿 1.5 秒自动结束（或再点 ⏹）→ 自己编辑后发送——**不自动发送**。
+两种触发方式（2026-11-25 起）：
+
+- **点一下 🎤** → 对麦克风说话 → 文字**边说边追加**进输入框（保留已有文字）→ 停顿 1.5 秒自动结束（或再点 ⏹）
+- **按住空格键说话、松手结束**（焦点不在输入框时；详见下节）
+
+转写完成后自己编辑再发送——**不自动发送**。
+
+## 2026-11-25 二轮：按钮并入 #controls + 按住空格说话（松手结束）
+
+用户两条反馈：① 🎤 按钮所在的「输入框上方工具条」看着像新开了一个固定区域，希望并进上面那排按钮；② 希望支持**按住空格键说话、松手结束**。
+
+**① 按钮并入 `#controls`**（src/static/index.html，repo，commit `aa8249e`）：插件 SDK `position:'input'` 席位渲染目标由独立横排 `#pluginInputBar` 改为 `#controls`（容器保留闲置，兼容旧页面缓存）——SDK 层变化，详见 [插件 SDK · position:'input' 后记](../architecture/plugin-sdk.md)。
+
+**② 按住空格说话**（插件前端 `frontend.js`，全局层 `~/.agt/plugins/voice-input/`，不入仓库）：
+
+| 规则 | 行为 |
+|---|---|
+| 焦点不在输入框时按住空格 | 开始录音（🎤 变 ⏹ + 计时）；**松手结束** → 文字填入输入框（不自动发送） |
+| 焦点在输入框时 | **不触发**——空格要正常打字。页面加载后输入框自动聚焦，想用空格说话先点一下页面空白处让焦点离开 |
+| 录音中重复按键 | 忽略 |
+| 录音中窗口失焦 | 只复位按键态；录音由静音自动结束兜底 |
+| 点击 🎤 | 老交互保留，与空格键并存 |
+
+**验证（Playwright 实测）**：按钮在 `#controls` 内且旧横排无按钮、按住空格触发（后端 active=true）、松手复位、焦点在输入框按空格不触发、点击开始/停止回归、无 JS 错误——全过。
+
+**生效**：两处均为前端（index.html 磁盘 serve + 插件 frontend.js no-cache），**刷新页面即生效**，无需 /restart。
 
 ## 链路
 
@@ -68,8 +93,6 @@
 
 ## 相关页面
 
-- [插件 SDK](../architecture/plugin-sdk.md) — 插件包形态 / `position:'input'` 席位 / 路由 reload 接管后记 / emit 目标路由约定
-- [fabDock](fab-dock.md) — 输入框上方工具条席位（`#pluginInputBar`）
-- [record · 页面录屏](record-plugin.md) — 同为「前端按钮 + 后端路由 + WS 事件」三桥形态的随包示例
-- [i18n](i18n.md) — 5 条按钮文案进字典
-- [proxy_supervisor](proxy-supervisor.md) — 同为 `D:\Programs\env` 的 repo 外基础设施（LLM 聚合代理；8090 `/run/*` 聚合口是同仓另一个常驻服务）
+- [插件 SDK](../architecture/plugin-sdk.md) — 插件包形态 / `position:'input'` 席位（2026-11-25 起并入 `#controls`）/ 路由 reload 接管后记 / emit 目标路由约定
+- [fabDock](fab-dock.md) — 按钮席位（`position:'input'`，2026-11-25 起并入 `#controls` 按钮排）
+

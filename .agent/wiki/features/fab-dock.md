@@ -135,6 +135,8 @@ function toggleFabDock(force){
 
 `AgtPlugin.ui.addButton` 增 `position` 参数：**`'fab'`（缺省）= 本页右侧 dock 图标**（现有插件不动）/**`'input'` = 输入框上方工具条**——`#pluginInputBar`（`#inputBar` 之前的横排容器，icon+文字胶囊小按钮；无按钮时隐藏，有则显示，flex wrap）。dock 仍是插件按钮的缺省席位，`input` 席位适合对话高频操作类按钮（更贴消息流、更醒目）；抽屉 push 布局（横竖屏两组选择器）同步纳入新容器防错位。机制与验证详见 [插件 SDK](../architecture/plugin-sdk.md)「SDK 增强：addButton position:'input'」节。
 
+**2026-11-25 更新（用户反馈，commit aa8249e）**：`input` 席位不再渲染进独立横排 `#pluginInputBar`，改**并入 `#controls` 按钮排**（模型 / 📁 加图 / 🔧 工具 / 会话 / Agent 同排）——单开一条插件横排被反馈「像是一个新的固定区域」；`#pluginInputBar` 容器保留但闲置（旧页面缓存兼容）。插件 API 面不变。
+
 ## 后记三：右侧抽屉统一容器 .agtdrawer + DrawerCtl 调度器（2026-10-15，用户提案，commit b380fd3）
 
 > 用户提案：「右侧抽屉的实现逻辑现在是各实现各的，每一个面板自己在各自管理面板的布局；能不能统一一下，比如 spec 面板的那种布局方式提取为一个容器，然后所有抽屉的逻辑统一为在这个容器里添加一个特定的业务面板。」

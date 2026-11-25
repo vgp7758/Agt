@@ -234,6 +234,8 @@ src/plugins.py 新增播种函数（与 `seed_default_skills` 同款模式），
 - 验证（隔离实例 Playwright 实测 + 截图）：注册两按钮 → 容器自动显示、DOM 顺序 `[pluginInputBar, inputBar]`（确在输入框上方）、胶囊文本/样式正确
 - 生效方式：纯前端（index.html 磁盘 serve），Ctrl+F5 即生效
 
+> **后记（2026-11-25，用户反馈，commit aa8249e）**：`position:'input'` 席位的渲染目标从独立横排 `#pluginInputBar` 改为**并入 `#controls` 按钮排**（模型下拉 / 📁 加图 / 🔧 工具 / 会话 / Agent 那一排）——用户反馈插件按钮单开一条横排「像是一个新的固定区域」，不如并进既有按钮排自然。实现：addButton 的 input 分支取 `document.getElementById('controls') || document.getElementById('pluginInputBar')`；**`#pluginInputBar` 容器保留但闲置**（旧页面缓存兼容）。API 面零变化，插件无感；首个消费端 [voice-input](../features/voice-input.md) 的 🎤 按钮随之进排。
+
 ### 内置全面退役：单一实现源收敛到插件
 
 - index.html **-93 行**：📁/💬/VS Code logo 三按钮 DOM + `openWebIde()` + 反馈弹窗 DOM/JS + open-workspace fetch

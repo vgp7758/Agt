@@ -442,6 +442,8 @@ def send_message(server_id: str, message: str, expect_reply: bool = False, _agen
     if it is None:
         known = ", ".join(sorted(REMOTE_SERVERS)) or "无已连接实例"
         return f"[未知实例 id] '{server_id}'（remote_list 查看：{known}）"
+    _turn = len(getattr(getattr(_agent, "session", None), "turns", []) or [])   # 当前轮号（处理中轮未入 turns）
+    fp = _msg_fingerprint(server_id, message, expect_reply, _turn, _self_tag())   # 工具调用指纹（协议头注入前算——只含原始参数）
     note = ""
     if expect_reply:
         if not MY_URL:
@@ -450,7 +452,7 @@ def send_message(server_id: str, message: str, expect_reply: bool = False, _agen
         message = f"⟨expect_reply:{MY_URL}⟩\n{message}"
         note = "（对方完成时将回发回答唤醒你）"
     status, _ = _ws_send_collect(it["url"], wait_done=False, timeout=10, ack_timeout=10,
-                                 payload={"text": message, "images": [], "_from": _self_tag()})
+                                 payload={"text": message, "images": [], "_from": _self_tag(), "_fp": fp})
     _tail = f"：{message[:80]}" + ("…" if len(message) > 80 else "")
     if "已送达" in status:
         return f"[remote:{server_id}] {status}{note}{_tail}"
@@ -461,7 +463,7 @@ def send_message(server_id: str, message: str, expect_reply: bool = False, _agen
     import random as _rd
     rmid = f"rm_{int(time.time()*1000):x}{_rd.randrange(1 << 20):05x}"
     threading.Thread(target=_deliver_reliable, daemon=True,
-                     args=(server_id, message, rmid, _agent, note)).start()
+                     args=(server_id, message, rmid, _agent, note, fp)).start()
     return (f"[remote:{server_id}] {status}{note}{_tail}\n"
             f"⏳ 首发未确认——已转可靠投递（rmid={rmid}，至多 {len(_DELIVERY_RETRIES)} 次重试、"
             f"约 {sum(_DELIVERY_RETRIES) // 60} 分钟窗口；对方确认送达或最终失败会推送通知你）")
@@ -471,7 +473,21 @@ def send_message(server_id: str, message: str, expect_reply: bool = False, _agen
 _DELIVERY_RETRIES = (30, 90, 180)
 
 
-def _deliver_reliable(server_id: str, message: str, rmid: str, agent=None, note: str = "") -> None:
+def _msg_fingerprint(remote_instance_id: str, message: str, expect_reply: bool,
+                     turn_no: int = 0, sender: str = "") -> str:
+    """工具调用指纹（用户方案 2026-11-25：工具调用参数 + 当前轮号）：sha1(规范化 JSON)[:16]。
+    覆盖发送内容 / 发送对象 / 其它工具参数 / 当前轮号 / 发送方——同轮内的可靠投递重发与
+    手滑连发同指纹（对端去重）；跨轮再发同内容 = 新意图（轮号不同）放行；不同发送方
+    （多实例互发同内容）互不误吞。在 expect_reply 协议头注入【之前】计算（只含原始参数）。"""
+    import hashlib as _hl
+    basis = json.dumps({"tool": "remote_message", "to": remote_instance_id,
+                        "message": message, "expect_reply": bool(expect_reply),
+                        "turn": int(turn_no or 0), "from": sender or ""},
+                       ensure_ascii=False, sort_keys=True)
+    return "fp_" + _hl.sha1(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def _deliver_reliable(server_id: str, message: str, rmid: str, agent=None, note: str = "", fp: str = "") -> None:
     """可靠投递后台线程：按 _DELIVERY_RETRIES 间隔重发（payload 带 _rmid，对端新版本
     幂等去重；老版本无去重——重发仅在"无任何回执"时发生，消息实际已到但回执丢失的
     窗口很窄，重复处理风险可接受）。终态 push 发送方 agent：重试后送达 / 最终失败。"""
@@ -484,7 +500,7 @@ def _deliver_reliable(server_id: str, message: str, rmid: str, agent=None, note:
             return   # 实例已断开——放弃
         try:
             status, _ = _ws_send_collect(it["url"], wait_done=False, timeout=10, ack_timeout=10,
-                                         payload={"text": message, "_rmid": rmid, "_from": _self_tag()})
+                                         payload={"text": message, "_rmid": rmid, "_fp": fp, "_from": _self_tag()})
         except Exception as e:
             status = f"[异常] {e}"
         if "已送达" in status:

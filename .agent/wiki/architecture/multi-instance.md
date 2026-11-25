@@ -356,7 +356,7 @@ remote_tools.REMOTE_SERVERS（运行时真源）
 |---|---|---|
 | `/api/tool/exec` 端点 | server.py | `{name, arguments}` → 工具箱执行 → `{ok, result}`；异步壳 + run_in_threadpool（长工具不占事件循环）；不进 agent.run/不碰 session |
 | `/api/remote/add` · `/api/remote/remove` 端点 | server.py | 团队看板手动添加/移除远程实例（2026-09-14，用户提案）：**薄封装直接复用 remote_tools.connect/disconnect**——探测/幂等/持久化与 Agent 侧工具同一条链单源；server_id 可空自动生成。见 [看板手动管理章节](#团队看板手动管理远程实例添加--移除控件2026-09-14用户提案) |
-| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **session 存档持久化**（`extra_state.remote_servers`——2026-09-18 二轮裁定起：capture/restore 挂 `set_session` 标准恢复点、失败标 offline、自连过滤；弃全局 settings 共享与一轮本地文件方案，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端） |
+| `remote_tools.py` | src/ | `REMOTE_SERVERS` 注册表 + **session 存档持久化**（`extra_state.remote_servers`——2026-09-18 二轮裁定起：capture/restore 挂 `set_session` 标准恢复点、失败标 offline、自连过滤；弃全局 settings 共享与一轮本地文件方案，见 [串台章节](#remote_servers-连接表串台全局-settings-共享--实例本地存储--自连过滤2026-09-18commit-aa73942用户实锤)）+ `route_remote_call`（HTTP 执行，结果前缀 `[remote:id]`，180s 超时）+ `_auto_server_id`（url → id 推导）+ `_ws_send_collect`（WS 消息客户端）+ `_msg_fingerprint`（remote_message 幂等去重·工具调用指纹：内容+对象+其它参数+轮号+发送方）+ `_deliver_reliable` / `_DELIVERY_RETRIES`（可靠投递重发 30/90/180s，~5 分钟窗口）——2026-11-25 用户方案，见上文『remote_message 幂等去重：工具调用指纹』章节 |
 | `Agent._exec_tool` | agent.py | 工具执行统一入口（逐 call/并行两条路径）。**远端调用统一走 `remote_call_tool`**（2026-10-11 起普通工具 schema 不再暴露路由参数）；**兼容层保留**：arguments 显式带 remote_instance_id（或旧名 server_id）仍 pop 路由（历史投影/模型旧习惯不炸）、显式 `self`/`local`/`_main_` 归一本地；**粘性路由已退役**（2026-10-12，commit eee624f——无状态路由，见[粘性路由章节](#粘性路由远端成功一次后自动粘住漏传根治2026-09-29用户提案commit-ff00b75)）。⚠️ **`_REMOTE_ADMIN` 管理工具族豁免路由**（见下） |
 | `Agent._llm_tool_schemas` | agent.py | LLM 视图 schema 构造。**2026-10-11 起不再注入 remote_instance_id**——普通工具 schema 回归干净参数（`_REMOTE_ROUTABLE` 白名单退役留注记）；deepcopy 不污染原件。历史：2026-09-06 全工具注入 → 09-14 瘦身 → 09-17 白名单恒定注入（见[改名章节](#路由参数改名-remote_instance_id--全工具-schema-自动注入2026-09-06用户提案)） |
 | `{func:load_remote_instances()}` | agent_config.py | SYSTEM 注入：已连接实例清单 + 远端调用使用规则（2026-10-11 起引导走 `remote_call_tool`）；**无连接渲染为空串不注入**（零噪声） |
@@ -482,6 +482,55 @@ remote_message(id, 派活, expect_reply=True)
 **语义**：同步通道断开不影响异步补偿通道——**超时 ≠ 丢失**。与 [expect_reply](#expect_reply派活后对方完成时回发-answer2026-09-17用户提案commit-d98a36c) 同属「cb/MY_URL 反向回发」家族（那个是派活完成回执，这个是问答迟到答案）。
 
 **同批姊妹修：送达回执文案识别加固**（remote_tools.py `_ws_send_collect`，8000→20055 实锤 2026-11-04）：对方忙时回执不一定是标准 `message_queued` 类型——回执文本含「已排队 / 已入队 / 已接收 / 已注入」任一关键词也算送达。治「未收到」误报：消息实际入队并被对端消费，发起方却因回执形态不标准而漏判送达。
+
+### remote_message 幂等去重：工具调用指纹（2026-11-25，用户方案；前身 2026-11-18 _rmid 方案）
+
+**问题面**：`remote_message` 走**可靠投递**（首发未确认 → 后台按 `_DELIVERY_RETRIES = (30, 90, 180)` 秒重发，总窗口 ~5 分钟，`_deliver_reliable`，载荷带 `_rmid`）。2026-11-18 首版接收侧去重只认 `_rmid`——覆盖「重发」，但漏两类：① 模型手滑在同一轮连发两条相同消息（`_rmid` 各不相同 → 对端跑两轮）；② 首发实际已到、回执丢失 → 重发被当新消息（重复窗口）。
+
+**用户裁定（2026-11-25）**：「我觉得按照工具调用指纹管理就行，包括发送内容、发送对象和发送时的其它工具参数」——去重键从「投递实例 id」上移到**工具调用身份**：同一次发送意图 = 同指纹。
+
+**指纹定义**（src/remote_tools.py `_msg_fingerprint`）：
+
+```python
+fp = "fp_" + sha1(json.dumps({tool:"remote_message", to:<对象>, message:<内容>,
+                              expect_reply:<参数>, turn:<当前轮号>, from:<发送方>},
+                             ensure_ascii=False, sort_keys=True))[:16]
+```
+
+| 维度 | 作用 |
+|---|---|
+| 发送内容 `message` / 发送对象 `to` / 其它参数 `expect_reply` | 用户方案本体——内容或对象不同 = 两次意图，绝不互吞 |
+| **当前轮号 `turn`** | 取 `len(session.turns)`（处理中的轮还没入 turns，故同轮内所有调用同号）——同轮重复 = 冗余（去重）；**跨轮再发同内容 = 新意图，放行** |
+| **发送方 `from`**（`_self_tag()`） | 两个实例在同一轮把相同内容发给同一对端时互不误吞（不加这一维会静默丢一条） |
+
+**关键时序**：指纹在 `expect_reply` 协议头（`⟨expect_reply:<MY_URL>⟩`）注入**之前**计算——只含原始工具参数，本机回发 URL 变了不换指纹。
+
+**发送侧接线**（remote_tools.py `send_message`）：算 `fp` → 首发 payload 带 `{"text": message, "_rmid": rmid, "_fp": fp, ...}`；可靠投递线程 `_deliver_reliable(server_id, message, rmid, agent, note, fp)` 的每次重发都带**同一 `fp`**——首发与重发因此同键，上述重复窗口关闭。
+
+**接收侧**（src/server.py `_handle_user_input` 入口）：
+
+| 件 | 内容 |
+|---|---|
+| 表 | `_RMSG_SEEN: dict`（键 → ts），`_FP_WINDOW = 600.0` 秒（盖过发送端 ~5 分钟重发窗口） |
+| 判定 | `_fp_seen_and_register(keys)`——`keys = [_fp, _rmid]`，**任一键**在窗口内出现过 → True（重复）；否则全部登记。简易 LRU：表超 256 条清 30 分钟前的 |
+| 命中动作 | 回话 `{"type":"system","transient":true,"text":"♻️ 重复消息已去重（工具调用指纹相同，此前已入队）"}` 后 `return`——**不重复入队/不开轮**；文案含「已入队」使发送端 ack 判定视作送达 |
+| 兼容 | 旧发送端只带 `_rmid`（无 `_fp`）同表照旧去重；`_fp` 优先 |
+| 并发 | 只在事件循环内调用，无锁 |
+
+**语义一张表**：
+
+| 场景 | 结果 |
+|---|---|
+| 同轮内可靠投递重发 / 手滑连发相同消息 | 同指纹 → 对端去重，只消费一次 |
+| 下一轮再发相同内容 | 轮号不同 → 新意图，正常放行 |
+| 不同实例发相同内容给同一对端 | 发送方不同 → 互不误吞 |
+| 窗口外（>600s）同指纹 | 视为新意图，放行 |
+
+**验证**：单测 4/4（`test/test_remote_msg_dedup.py`：指纹确定性 / 协议头无关（注入前算）/ 轮号与发送方维度 / 窗口 + 旧 `_rmid` 兼容）；**L2 双实例实跑**：9623 同轮连发两条相同「去重测试 same」→ 9624 events 实锤只消费 1 次（`turn_start`=1），不同内容正常入队；隔离实例已清。调试中被单测抓到一处笔误（`remote_instance_id` 误作 `server_id` 传参），已修。
+
+**生效**：commit `213fa5d`，`/restart` 后生效；发送端与接收端需同版本才全效（旧接收端无 `_fp` 去重 → 退化为仅 `_rmid`）。
+
+**注意事项**：去重粒度 = 工具调用参数 + 轮号，**不含轮内步号**——同一轮里两次同参数发送视为冗余（符合意图：同轮重复内容本无意义）；若将来需要「同轮合法重复」，把步号并入指纹即可（一处改动）。
 
 ## remote_call_tool：远端独有工具/MCP 的统一通道（2026-09-17，用户提案）
 

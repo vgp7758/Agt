@@ -27,13 +27,15 @@ from pathlib import Path
 _WORKSPACE = Path.cwd()
 
 # 只读工具白名单：探索 agent 可用的全部工具（改文件类一律拒绝）
-_READ_ONLY = frozenset({"grep", "read_file", "glob_files", "find_function", "list_dir"})
+_READ_ONLY = frozenset({"grep", "read_file", "glob_files", "find_function", "list_dir",
+                        "wiki_read", "rag_query", "open_url"})   # 后三项（用户提案 2026-11-25）：仓库知识库 / 本地文档库语义检索 / 网页正文
 
 _SYSTEM = (
     "你是代码探索员，在一个代码仓库里定位与目标相关的代码。规则：\n"
     "0. 下方已附 workspace 文件树（已排除 .gitignore/构建产物）——先扫树：看到与目标相关的可疑文件"
     "【直接 read_file 查看】，无需先 list_dir 摸结构；树被截断时用 glob_files 补充。\n"
     "1. 只能调用给定工具（全部只读）；优先 grep 定位 → read_file/find_function 看实现。\n"
+    "1.5 仓库知识可 wiki_read 读 .agent/wiki/ 页面、rag_query 语义检索本地文档库；外部资料（官方文档/报错线索）用 open_url 抓网页正文。\n"
     "2. 每步少读：read_file 用 start_line/end_line 分段，不要整读大文件。\n"
     "3. 信息足够后【立即停止调用工具】，用要点输出总结：相关位置（文件:行号）、关键函数/类、"
     "与目标的关系、值得注意的细节。总结要具体（带行号与函数名），这是调用方唯一确定保留的内容。"

@@ -27,13 +27,15 @@ from pathlib import Path
 _WORKSPACE = Path.cwd()
 
 # 只读工具白名单：探索 agent 可用的全部工具（改文件类一律拒绝）
-_READ_ONLY = frozenset({"grep", "read_file", "glob_files", "find_function", "list_dir"})
+_READ_ONLY = frozenset({"grep", "read_file", "glob_files", "find_function", "list_dir",
+                        "wiki_read", "rag_query", "open_url"})   # 后三项（用户提案 2026-11-25）：仓库知识库 / 本地文档库语义检索 / 网页正文
 
 _SYSTEM = (
     "你是代码探索员，在一个代码仓库里定位与目标相关的代码。规则：\n"
     "0. 下方已附 workspace 文件树（已排除 .gitignore/构建产物）——先扫树：看到与目标相关的可疑文件"
     "【直接 read_file 查看】，无需先 list_dir 摸结构；树被截断时用 glob_files 补充。\n"
     "1. 只能调用给定工具（全部只读）；优先 grep 定位 → read_file/find_function 看实现。\n"
+    "1.5 仓库知识可 wiki_read 读 .agent/wiki/ 页面、rag_query 语义检索本地文档库；外部资料（官方文档/报错线索）用 open_url 抓网页正文。\n"
     "2. 每步少读：read_file 用 start_line/end_line 分段，不要整读大文件。\n"
     "3. 信息足够后【立即停止调用工具】，用要点输出总结：相关位置（文件:行号）、关键函数/类、"
     "与目标的关系、值得注意的细节。总结要具体（带行号与函数名），这是调用方唯一确定保留的内容。"
@@ -269,15 +271,35 @@ def _read_sidecar(path: Path):
     return meta, msgs, done, truncated, tool_n
 
 
+def _resolve_explore_model(agent, model: str):
+    """explore 模型解析（p_ea32ad4f 场景化）。model 参数双轨：
+    场景名（config.load_scenarios 命中，同名冲突场景优先）→ (链首, 场景链)；
+    卡片名 → (卡片名, [])（原直配行为，回退链跟随全局 settings）；
+    未指定 → explore 场景（未配置回退 default 链，2026-11-14 用户裁定 default
+    唯一兜底；此前的「空链回退 short-req」硬回退同步退役——与其它场景语义统一：
+    显式空链=跟随主模型）。返回 (model_name, fallback_chain|None)。"""
+    import config as _cfg
+    m = (model or "").strip()
+    if m:
+        if m in _cfg.load_scenarios():
+            chain = _cfg.resolve_scenario(m)
+            return (chain[0], chain) if chain else (agent.model_name, None)
+        return m, None
+    chain = _cfg.resolve_scenario("explore")
+    return (chain[0], chain) if chain else (agent.model_name, None)
+
+
 def _new_llm(agent, model: str):
     """每次调用 new 独立 LLMClient（用户提案 2026-10-12：并行 explore 共用单例 client
     → 同 api_key 的并发请求在 provider 侧被限流排队——半串行；独立 client 各自带
     连接池，多 token 池起始位随机分散——并行 explore 各走各的 key，不叠在同一把锁上）。
+    模型解析见 _resolve_explore_model（p_ea32ad4f：默认 explore 场景，参数支持场景名/卡片名）。
     返回 (llm, 模型名)；失败返回 (None, 模型名)。"""
     from llm_client import LLMClient
-    _m = model or getattr(agent, "utility_model", "") or agent.model_name
+    _m, _chain = _resolve_explore_model(agent, model)
     try:
-        llm = LLMClient(model_name=_m, enable_thinking=False, max_retries=2)
+        llm = LLMClient(model_name=_m, enable_thinking=False, max_retries=2,
+                        fallback_chain=_chain)
         llm.call_recorder = agent.session.llm_calls.record
         if len(llm.api_tokens) > 1:
             import random as _rnd
@@ -327,10 +349,28 @@ def _react(agent, llm, schemas, messages, max_steps: int, deadline: float, sc: _
                 if name not in _READ_ONLY:
                     result = f"[explore 白名单拒绝] {name} 不可用（探索只读）"
                 else:
-                    try:
-                        result = str(agent._exec_tool(name, args))
-                    except Exception as e:
-                        result = f"[执行出错] {type(e).__name__}: {e}"
+                    # 越界预检（2026-10-21 用户提案）：workspace 外路径直接拒绝，不进 _exec_tool——
+                    # 否则触发 file_outside 审批（ev.wait 600s）：审批卡虽能渲染（on_event 线程无关）
+                    # 且点了可解除，但 explore 的预算/超时不含审批段，没人点卡=白等 10 分钟。
+                    # 预检即时返回，探索模型当步改道（换相对路径或放弃）。
+                    _p = args.get("path")
+                    _outside = False
+                    if isinstance(_p, str) and _p.strip():
+                        try:
+                            _rp = Path(_p)
+                            if not _rp.is_absolute():
+                                _rp = _WORKSPACE / _rp
+                            _outside = not _rp.resolve().is_relative_to(_WORKSPACE.resolve())
+                        except Exception:
+                            _outside = False
+                    if _outside:
+                        result = (f"[explore 越界拒绝] {_p} 在 workspace 外——探索范围仅限当前仓库；"
+                                  f"请改用仓库内相对路径，或放弃该目标")
+                    else:
+                        try:
+                            result = str(agent._exec_tool(name, args))
+                        except Exception as e:
+                            result = f"[执行出错] {type(e).__name__}: {e}"
                 if len(result) > _RESULT_CAP:
                     result = result[:_RESULT_CAP] + "\n…[explore 截断]"
                 # reasoning 置空 + 标注来源（[外置探索] 前缀在投影时挂 reasoning_content）
@@ -388,7 +428,7 @@ def _make_explore(agent):
         goal: 探索目标——尽量具体（要找什么、在哪个模块、关注哪些方面）
         max_steps: 最多工具调用轮数（默认 8，上限 20）
         budget_seconds: 墙钟预算秒（默认 120；超限返回已完成部分）
-        model: 探索用模型名（空=utility_model）"""
+        model: 探索用模型名（空=explore 场景链；支持场景名或卡片名双轨）"""
         max_steps = max(1, min(int(max_steps or 8), 20))
         budget_seconds = max(10, int(budget_seconds or 120))
         try:
@@ -522,7 +562,7 @@ def agt_register(ctx=None):
             "goal": "探索目标（要找什么代码/信息——尽量具体：模块/关键词/关注点）",
             "max_steps": "最多工具调用轮数（默认 8）",
             "budget_seconds": "墙钟预算秒（默认 120）",
-            "model": "探索用模型名（空=utility_model）",
+            "model": "探索用模型名（空=explore 场景链；支持场景名或卡片名）",
         },
     }, {
         "name": "explore_resume", "func": _make_explore_resume(agent),

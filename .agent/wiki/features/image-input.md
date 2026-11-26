@@ -115,6 +115,74 @@
 
 **根因**未程序化实锤，但与上节验证插曲的契约完全吻合：**`<img>` 展开只认 `repo_images_dir()` 落盘位置**——抽帧产物当时落在 workspace 根（`D:\AI_Usings\Agt\probe_q1.png`），投影解析端按 `repo_images_dir` 真源找不到文件。教训：**给子 Agent 发 `<img>` 前，图必须先落 `repo_images_dir()`**；工具产物默认落 workspace 根 ≠ 契约位置。
 
+### 后记：插话带图回归修复——入口帧重接 images（2026-11-26，用户实锤，commit f6e3e49）
+
+**现象**（用户问诊 2026-11-26：「我在插话的时候能带图发送消息吗？」）：上文的投影层门控一直是好的，但**真实入口断了**——Agent 忙碌时带图插话，图被悄悄丢弃：前端发送后缩略图照常清空（看着像发出去了），后端只入队了文字。
+
+**根因（两端各一半，缺一不可）**：
+
+| 端 | 断点 |
+|---|---|
+| 前端 `sendInsertMessage`（src/static/index.html） | WS 帧只有 `{action:'insert_message', text}`，**不带 images**——`send()` 插话分支取了 `attachments.slice()` 却传不出去，随后 `attachments.length=0` 清空缩略图 |
+| 服务端 `insert_message` 分支（src/server.py `_handle_user_input`，L3430 起） | **不读 `images`**，判定入口是 `if text:`——帧里即使带了图也没人消费 |
+
+**三次断点、三个不同层**（同一条链路的修复史，前两次见 `_materialize_user_images` docstring）：
+
+| # | 日期 | 断在哪层 | 症状 |
+|---|---|---|---|
+| ① | 2026-09-29（`e2c0b24` ③） | 传参——server 解析出 images 后从未使用 | WebUI 截图静默丢弃 |
+| ② | 2026-10-14 | 标签形态——注释早已声明 `<img>`，代码却一直写死方括号文本，不被 `_IMG_TAG_RE` 命中 | 视觉模型看不到插话附图 |
+| ③ | 2026-11-26（本节） | **入口帧**——前端帧不带 images + 后端分支不读 | 忙时带图插话静默丢图 |
+
+每次都是**单层验证通过、隔层才暴露**：2026-10-03 一节的五通道验证全部打在投影层（`_project_imgs` / 当前轮 steps / pending hint / 历史档 / byte-stable），没有一条从「前端发帧」起算——入口断了，投影层测试照样全绿。教训：**涉及 WS 帧契约的改动，验证要从发帧那一行走到投影，跨层过一遍**。
+
+**修复**（commit `f6e3e49`，已推送——据主 Agent 回报）：
+
+```python
+_imgs = _d.get("images") or []
+_busy = _state is not None and _state.get("busy") and not _state.get("answered")
+_text_q = text + ("" if (_imgs and not _busy and _work_q is not None) else _materialize_user_images(_imgs))
+if _text_q.strip():   # 原 if text: ——纯图（无文字）插话也能入队
+    ...               # target 路由 / 真态兜底两条既有分支原样保留
+    if not _busy and _work_q is not None:
+        _work_q.put(("user", text, _imgs) if _imgs else ("user", text))   # 空闲兜底：原生多模态，不落盘
+    else:
+        agent.queue_user_message(_text_q)
+```
+
+```js
+function sendInsertMessage(text, imgs){
+  ws.send(JSON.stringify({action:'insert_message', text, images: imgs||[]}));   // 帧随带 images
+}
+if(m.text) _queuedTexts.push(String(m.text).replace(/<img[^>]*>/g, '🖼'));     // 排队气泡：标签显示为 🖼，不露原始标签
+```
+
+判定序：`_busy`（后端真态）为假且带图 → **不物化**，images 直传 `work_q`（与正常发送同路径）；否则 → 落盘 `repo_images_dir()` + `<img>` 标签拼进文本入队 → 投影按上文三态门控展开。含 target 路由的完整判定矩阵见 [用户交互 · 插话带图](user-interaction.md)。
+
+**行为对照**：
+
+| 场景 | 修前 | 修后 |
+|---|---|---|
+| 忙 + 图 + 文字 | 只入队文字，图丢 | 图落盘 + 标签随文字入 pending，步边界注入；视觉模型看像素，非视觉模型降占位（可 `read_file` 走代看） |
+| 忙 + 纯图 | 不入队 | 照样入队 |
+| 忙 + 纯文字 | 入队 | 入队文本逐字节不变（`_materialize_user_images([])` 返回空串） |
+| 空（无字无图） | 不入队 | 不入队 |
+| 后端空闲 + 图 | 图丢 | 原生多模态：`("user", text, images)` 进 `work_q`，不落盘 |
+| 子 Agent 页签（忙） | 只入队文字到该子 Agent | 带图文本进它的 pending，不误投主 Agent |
+
+**验证**：`test/test_insert_message_images.py` 六场景（直调 `server._handle_user_input`，对应上表逐行）；9000 真页面发帧捕获四场景、无 JS 报错（据主 Agent 回报——测试在更底层截帧，未真发给生产实例）。「非视觉模型降占位 + 可 `read_file` 代看」一行依据 `_project_imgs` 语义，未单独实跑。
+
+**测试隔离坑**（首版测试把图写进了真实 `~/.agt/repos`，已清理）：`repo_images_dir()` 落在 `<REPOS_DIR>/<repo_key>/images/`——**数据根下、不在 workspace 内**，只重定向 `server._workspace` 拦不住；须同时 monkeypatch `session.REPOS_DIR`。凡触发落盘的测试先做这层隔离。
+
+**生效**：前端（刷新页面）+ 引擎层 server.py（`/restart`）两侧齐备才生效；重启前旧 handler 忽略 images——行为同修前（丢图），不会更糟。
+
+**未覆盖边界（代码审读推断，未实测）**：
+
+- `_busy` 取的是**主 Agent 全局态**、不看 target：子 Agent 页签 × 该子 Agent 忙 × 主 Agent 空闲（异步派发场景；前端 `_verifyBusy` 对子 Agent 按 registry 状态判忙）× 附图 → 走「空闲不物化」分支后 target 路由只入队文字，**图仍丢**；纯图则 `_text_q.strip()` 为空，整条消息跳过且无提示。
+- `message_injected` 分支用 `esc(m.text)` 写 innerHTML——`<img>` 标签应以转义文本显示而非渲染成图，与前端注释「注入后的插话气泡才渲染成图」口径不一，待核。
+
+**关联**：上文「插话原生看图」一节（本节父章节：三态门控与落盘契约）· [用户交互 · 插话带图](user-interaction.md)（insert_message 通道判定矩阵）· [投影返回类型契约](#投影返回类型契约_project_imgs-返回-str--块数组2026-10-11数组感知消费)（下游数组感知）
+
 ## 投影返回类型契约：_project_imgs 返回 str | 块数组（2026-10-11，数组感知消费）
 
 **契约**：`_project_imgs(text)`（src/session.py）按上文门控有**三种返回形态**——调用方不能假设它总是 str：
@@ -309,7 +377,7 @@ PIL 读失败省略尺寸段不炸（退化 `[视觉模型 it-vision3 代看] <�
 - `image data N failed: Unsupported image format` —— 第 N 张图格式不在 provider 白名单（< 0.30.5 未规范化，升级即愈）
 - `image data N failed: invalid image data` —— base64 损坏或超尺寸上限
 - `1210 messages.content.type 参数非法，取值范围 ['text']` —— **端点不收图**（glm-5.3 等 chat completions 无视觉通道，视觉是 glm-4v/4.5v 系的活）；< 0.30.10 且卡片 vision 卡错时每轮 400，升级后自愈（拒图自动降级：图降文字占位同模型重试，见上节）
-- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（2026-10-27 起工具产物图 / image_feed 帧自动委托视觉卡片代看，见上「非视觉模型图片代理描述」；插话图仍为占位 + 指路）
+- **图片发了但 Agent 说没看到** —— ① 版本 < 0.30.6（传参断链，静默丢图）② busy 插话路径 + 当前模型非视觉：图经 `<img>` 标签降文字占位（2026-10-27 起工具产物图 / image_feed 帧自动委托视觉卡片代看，见上「非视觉模型图片代理描述」；插话图仍为占位 + 指路）③ **忙时带图插话图被静默丢弃**（2026-11-26 前的入口回归：前端帧不带 images + 后端分支不读——缩略图清了、只入队文字；修后需刷新 + `/restart`，见上「插话带图回归修复」后记）
 - **回读含 `<img>` 标签的源码段，显示出来的是占位文案** —— 非视觉模型会话的正常投影行为（标签被 `_IMG_TAG_RE` 替换，2026-10-27 起）：磁盘真容无损；编辑此类代码段须走行号 + 自写内容，**不能照抄回读文本**（会把占位文案写进代码）
 - **投影图块旁多出 `orig:2160x1088@@` 之类垃圾串** —— 4 段帧哨兵被 3 段正则消费的残留（视觉宿主路径漏改，2026-11 已修，commit 7a387b7）：哨兵轴一改（3 段→4 段），**所有读它的路径都要同源解析**，详见 [image_feed · 后记四](image-feed.md)
 - 本地模型（llama-server）不走 provider 白名单校验，但同样受 2048 边长经验约束

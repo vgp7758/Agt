@@ -4,7 +4,7 @@
 
 ## 职责
 
-- **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）；带图插话 2026-10-03 起原生看图——`<img>` 标签按当前模型 vision 门控展开（见 [图片输入链路 · 插话原生看图](image-input.md)）
+- **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）；带图插话 2026-10-03 起原生看图——`<img>` 标签按当前模型 vision 门控展开（见 [图片输入链路 · 插话原生看图](image-input.md)）；入口帧 2026-11-26 修回归——此前忙时插话帧只带文字、附图静默丢弃，现随帧带图（见下文「插话带图」一节）
 - **排队（/pending，2026-11-06）**：agent 忙时提前写好下一个需求、不打断当前轮——`/pending <message>` 经 inbox（`source="pending_user"`）串行排队，当前轮**完整结束后**按序作为新 user_message 开新一轮（与插话互补：插话是步边界注入【当前轮】）；见 [专节](#pending--排队用户消息忙时写好下一个需求不打断当前轮2026-11-06用户提案)
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明（crash/always 可主动唤醒）；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编）；**2026-09-23 起默认从 never 翻转为 `notify`——退出通知默认进 inbox**（持久化 + 空闲自动消费成轮 + 忙时步边界排队注入，见下文专节）；同族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
@@ -691,6 +691,37 @@ if text:
 **生效方式**：引擎层（src/server.py），需 `/restart`；commit `42f70e3` 已推送 + site-packages 已同步（20048 实例 restart 后生效）。
 
 **关联**：[多客户端 target 路由](#多客户端-target-路由--页签级-agent-隔离2026-08-commit-30ac45b)（target 语义总纲——本节把最后一条通道纳入）、[模型下拉框 target 感知](#模型下拉框-target-感知model-读写跟随本页签交互对象子-agent-页面不再错切主-agent2026-10-07用户实锤commit-38b3b46)（命令侧姊妹修复，`_target_agent` 模式参照）、[插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)（同通道时机侧姊妹修复）、[多 Agent 体系](../architecture/multi-agent.md)（`registry.lookup` 与 Agent 实例挂载——`e.agent is None` 的磁盘恢复条目形态）。
+
+## 插话带图：insert_message 帧随带 images——忙时附图不再静默丢弃（2026-11-26，用户实锤，回归修复）
+
+> src/static/index.html（`sendInsertMessage` + `message_queued` 气泡）+ src/server.py（`insert_message` 分支，L3430 起）。用户问诊（2026-11-26）：「我在插话的时候能带图发送消息吗？」——答案是不能：回归，图被悄悄丢；当日修复（commit `f6e3e49`，已推送——据主 Agent 回报）。
+
+**断点**：上两节（死信修复 / target 路由）改造的 `insert_message` 分支一直是**纯文字通道**——前端 `sendInsertMessage(text)` 的帧只带 `text`，服务端判定入口是 `if text:`、不读 `images`。而 `send()` 的插话分支明明取了 `attachments.slice()`，发送后还照常清空缩略图——用户看着像发出去了，实际只入队了文字。投影层的 `<img>` 门控展开（2026-10-03）完好无损，断的是**入口帧**。
+
+**修后 `insert_message` 分支判定序**（自上而下，命中即止）：
+
+| 序 | 条件 | 行为 |
+|---|---|---|
+| ⓪ | 带图且 `_busy` 为假 | 不物化（`_text_q = text`），images 留给 ④ 直传 |
+| ① | 带图且 `_busy` 为真 | `_materialize_user_images` 落盘 + `<img>` 标签拼进 `_text_q` |
+| — | `_text_q.strip()` 为空 | 不入队（纯图经 ① 后非空，可入队） |
+| ② | `client.target` 是子 Agent 且 registry 有实例 | `_tgt_ag.queue_user_message(_text_q)`——带图文本进**它的** pending |
+| ③ | `_busy` 为真 | `agent.queue_user_message(_text_q)`，步边界注入 |
+| ④ | `_busy` 为假且有 work_q | `("user", text, images)` 直传 work_q 开新轮——**原生多模态，不落盘** |
+
+`_busy` = 后端真态 `busy and not answered`（与前两节同源）。判定入口由 `if text:` 换成 `if _text_q.strip():`——**纯图插话也能入队**；纯文字插话的入队文本逐字节不变（`_materialize_user_images([])` 返回空串）。
+
+**前端两处**：`sendInsertMessage(text, imgs)` 帧改带 `images`；`message_queued` 排队气泡把 `<img …>` 标签替换为 🖼 再显示（不露原始标签）。
+
+**可观测**：忙时带图插话 → 「✅ 消息已入队（队列：N 条）」；后端空闲 → 「✅ 已接收（agent 空闲，转入新一轮处理）…」。
+
+**验证**：`test/test_insert_message_images.py` 六场景（忙带图落盘 / 忙纯图 / 忙纯文字不变 / 空不入队 / 空闲原生多模态不落盘 / 子 Agent target 带图，直调 `server._handle_user_input`）；9000 真页面发帧四场景（均据主 Agent 回报）。
+
+**已知边界（代码审读推断，未实测）**：`_busy` 是**主 Agent 全局态**、不看 target——子 Agent 页签 × 该子 Agent 忙 × 主 Agent 空闲（异步派发场景；前端 `_verifyBusy` 对子 Agent 按 registry 状态判忙）× 附图 → ⓪ 不物化，② 只入队文字，**图仍丢**；纯图则整条跳过且无提示。
+
+**生效**：前端刷新 + `/restart`（引擎层 server.py）两侧齐备才生效。
+
+**关联**：[图片输入链路 · 插话带图回归修复](image-input.md)（投影侧三态门控、落盘契约 `repo_images_dir()`、测试隔离坑、三次断点的分层教训）· 上一节「插话 target 路由」（判定 ② 的原型）· [插话死信修复](#插话死信修复前端-busy-陈旧--空闲态消息走插话通道永不消费2026-10-0720048-实锤commit-1c0d2f9)（判定 ④ 的原型）
 
 ## busy 恒亮双层根因：worker 永卡（快照 git 超时不杀树）× 斜杠命令自标忙（2026-10-16，用户实锤·9634/9635/9637）
 

@@ -292,6 +292,31 @@ curl 实测旧进程：`POST /api/remote/remove` → `{"detail":"Not Found"}`（
 
 机制全貌（projects.json 真源 / 巡检唤醒 / coordinator SOP）见 [项目组](../features/projects.md)。
 
+## 团队看板 · 本机 Agent 组按近期活跃倒序（2026-11-27 用户提案，commit 6c8d48c）
+
+**动机**（用户提案 2026-11-27）：「🧑 本机 Agent」组原按 registry 注册序渲染（主先、子按创建先后），长寿实例一直沉在底部——改为**近期活跃在上**，卡片带「最近活跃 N 前」角标。
+
+**数据侧**（src/registry.py）：`AgentEntry.last_active`（epoch 秒）
+
+| 时机 | 取值 |
+|---|---|
+| 事件流经 `server._broadcast` | `registry.mark_active(agent_id)` 刷新——打点放在「无 WS 客户端即返回」**之前**，没开浏览器/纯 CLI 时 Agent 照样被记录 |
+| 派活注册（`register(status="running")`） | 当前时刻 |
+| 交互 `touch()`（agent_prompt / answer 回流 / ask / notify / query） | 当前时刻 |
+| 磁盘唤醒的已结束条目（`status="done"`） | 0 = 未知 → 排最后 |
+
+`mark_active` 锁外直改（`dict.get` + 属性赋值）：事件是高频路径，不抢注册表的锁。
+
+**接口**（`/api/dash`）：team 条目带 `last_active`；载荷带 `now`（服务端时刻——前端按它算相对时间，不受浏览器时钟偏差影响）。
+
+**前端**（`renderTeamDash`）：对 `locals` 稳定排序 `last_active` 倒序（旧服务端无该字段 → 全 0 → 保持注册序，平滑降级）；卡片角标 `_agoText`：刚刚（<5s）/ N 秒前 / N 分钟前 / N 小时前 / N 天前；分组标题加「· 近期活跃在前」。
+
+**边界**：主 Agent 不固定置顶（子 Agent 更近活跃则在其上）；远程实例组顺序未动（用户裁定 2026-10-04 远程在上）；项目组成员候选 `projCands` 仍用 API 原序。
+
+**验证**：test/test_team_recent_first.py 5 项（注册打点 / touch 与 mark_active / 无 WS 客户端仍打点 / 无注册表不炸 / api_dash 字段）；9000 真页面 Playwright 受控数据 4 条乱序 → fresh(刚刚) / 主 Agent(8 分钟前) / old(3 小时前) / unknown(无角标)。
+
+**生效**：前端刷新即见排序框架；`last_active` 需 `/restart` 后服务端才输出。
+
 ## remote_servers 连接表串台：全局 settings 共享 → 实例本地存储 + 自连过滤（2026-09-18，commit aa73942，用户实锤）
 
 **用户实锤**：「本机启动的其它实例都会自动 remote 连接到上一个实例连接的 remote 实例，这个读取是不是串台了？」——9000 连了 director/scriptwriter，director 实例（8100）自己启动时也自动连上了 director（其中还是**自连**）。

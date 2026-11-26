@@ -36,6 +36,20 @@ sleep(seconds: float) -> str   # 秒数，现上限 3600
 
 开发验证时为测「600 在新范围内」直接真调了 `sleep(600)`：宿主 run_python 在 180s 超时转后台（bg_task），而 **sleep 本身在后台继续睡满 600s**（不被掐）——恰好构成 inline 工具不超时的直接证据；睡满后走 bg_task 完成通知唤醒（见 [run-python · 转后台自动通知](run-python.md#超时转后台与完成自动通知2026-08-30commit-6460ad1)），无害。
 
+### 长等期间心跳续期：sleep(1800) 不再 20 分钟拉 doctor（2026-11-26，用户实锤，commit e01bed2）
+
+**用户实锤**：Agent 主动调 `sleep(1800)`，到 20 分钟仍触发 doctor——「这个 sleep 期间是不是也需要加一下心跳？」
+
+**根因不在 sleep 本体**：sleep 属于工具硬超时白名单（显式长等，直调不包超时——就是上面「inline 不受 TOOL_TIMEOUT 管」的同一条边界的看门狗侧），但直调期间引擎心跳不动；看门狗巡检按 `stuck_secs`（默认 1200s）判静默，`sleep(1800)` 第 20 分钟必中。即「不受工具超时管」与「不被判卡死」此前是一对矛盾——豁免了第一道防线，第二道防线却不认。
+
+**修复在引擎侧**（`src/agent.py` `_HeartbeatKeeper`，misc_tools.py 只动了 docstring）：白名单工具执行期间进入即刷心跳 + daemon 线程每 30s 续一次，累计超 `_HB_KEEPALIVE_MAX`=3600s（= sleep 的合法上限）停止续期、交回巡检常规判定；工具返回即停。机制、边界与验证详见 [agent-watchdog · 后记二](agent-watchdog.md#后记二白名单长等工具执行期间心跳续期sleep1800-不再-20-分钟拉-doctor2026-11-26用户实锤commit-e01bed2)。
+
+**sleep 侧唯一改动**：docstring 补一行「等待期间引擎维持心跳，不会被看门狗判卡死」（`src/assets/tools_builtin/misc_tools.py`，外置工具 `/reload tools` 即生效）——Agent 选工具时即知道长 sleep 是安全的。
+
+- 3600 上限对齐：合法范围内的 sleep 全程有心跳；超范围的异常长等才回到巡检常规判定
+- 引擎侧续期需 `/restart` 生效——重启前 `sleep(1800)` 仍会触发 doctor
+- 语义不变项：下节「代价与适用场景」里的长 sleep 仍然阻塞当前轮、插话排队——心跳续期只改变「不被误判卡死」，不改变阻塞语义
+
 ### 代价与适用场景
 
 - **阻塞当前 react 轮**：inline 睡眠期间 UI 显示工具运行中，用户插话排队等睡醒——语义上恰好符合「等外部事件」，但若 Agent 睡满 3600s，这一整轮期间都不可用

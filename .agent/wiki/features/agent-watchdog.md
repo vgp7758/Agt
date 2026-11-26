@@ -15,19 +15,29 @@
 
 - 默认 **1200s=20min**，可经 settings.json `watchdog_stuck_secs` 配置（`config.load_watchdog_stuck_secs()`）——与巡检判心跳静默**共用同值**（一处配置两处消费）
 - 超时动作：注入「判卡死」结果文本让宿主继续跑；**底层线程不杀**（无法安全 kill，孤儿线程泄漏可接受）
-- 白名单 `_TOOL_TIMEOUT_WHITELIST` 不重复包（双层超时会干扰既有语义）：`run_python` / `run_shell`（超时自动转后台的管家语义）、`sleep` / `wait_subagents`（显式长等）等
+- 实现位置：`_exec_tool_guarded`——**串行路**的统一包装；非白名单工具提交共享线程池 `_TOOL_GUARD_EX`（类属性，全实例共用 2 个工作线程）+ `fut.result(timeout=)` 限时
+- 白名单 `_TOOL_TIMEOUT_WHITELIST` 不重复包（双层超时会干扰既有语义）——直调、不包硬超时：
+  - `run_python` / `run_shell`：超时自动转后台（自带管家语义）
+  - `sleep` / `wait_subagents`：显式长等
+  - `remote_ask` / `explore` / `explore_resume`：参数化长等（timeout / budget 参数）
+  - `agent_prompt`：全异步派活（立即返回）
+  - `skill_equip` / `skill_use`：技能服务装配 / 命令（可能长拉起）
+- **白名单只豁免硬超时，不豁免巡检**：直调期间心跳原本不动，`sleep(1800)` 到 20 分钟照样被巡检判静默拉 doctor——2026-11-26 起白名单分支由 `_HeartbeatKeeper` 包住调用维持心跳（见下方后记二）
 
 ## ② 心跳 `_hb_ts`（agent.py，判卡唯一依据）
 
-六个刷新点全覆盖轮生命周期：
+七个刷新点覆盖轮生命周期：
 
 | 位置 | 注释口径 |
 |---|---|
 | 步循环顶 | 看门狗判卡死的步进展信号 |
-| 工具进入执行 / 工具完成 | 工具层自愈后即恢复于此 |
+| 工具进入执行 / 工具完成 | 工具层自愈后即恢复于此（线程池分支；白名单分支不走这里，改走末行的续期器） |
 | LLM 调用完成 | LLM 网络挂起时静默从这里起算 |
 | 并行收割进展 | 并行工具部分完成也算活着 |
 | hold 闸门等待循环（2026-11-11 新增） | 挂起是用户指令下的正常等待——每次唤醒（0.5s 轮询）touch 一次，防止挂起期静默被误判（见下方后记） |
+| 白名单长等工具执行期间（2026-11-26 新增） | `_HeartbeatKeeper`：进入即刷一次 + daemon 线程每 30s 续一次（上限 3600s）——`sleep(1800)` 这类设计内的等待不再被巡检判静默（见下方后记二） |
+
+末两行是同一条思想的两个落点：**设计内的等待不算卡死**——hold 是用户指令下的等待，白名单长等是工具语义内的等待。
 
 ## ③ 巡检 daemon（agent_watchdog.py）
 
@@ -77,6 +87,46 @@ while self._hold and not self._stop_flag:
 | 空闲 agent | `_react_running=False` 本就不参与判定 ✅ |
 
 生效需 /restart（引擎代码）。
+
+### 后记二：白名单长等工具执行期间心跳续期——sleep(1800) 不再 20 分钟拉 doctor（2026-11-26，用户实锤，commit e01bed2）
+
+**现象**：Agent 主动调 `sleep(1800)`，到第 20 分钟仍触发巡检、拉 doctor。用户问诊：「这个 sleep 期间是不是也需要加一下心跳？」——结论：需要。
+
+**根因**：`sleep` 在 `_TOOL_TIMEOUT_WHITELIST` 里，走 `_exec_tool_guarded` 的白名单分支**直调不包硬超时**（豁免本身是对的）；但直调期间**心跳一次都不刷**——「工具进入执行 / 工具完成」两个刷新点都在线程池分支里，白名单分支碰不到。巡检按 `stuck_secs`（默认 1200s）判静默 → `sleep(1800)` 第 20 分钟必中。一句话：**第一道防线豁免了它，第二道防线不认**——两道防线对「设计内的等待」口径不一致。
+
+**修复（src/agent.py，`_HeartbeatKeeper` 上下文管理器）**：白名单分支由裸直调改为续期器包住调用——
+
+```python
+if name in _TOOL_TIMEOUT_WHITELIST:
+    # 白名单直调（不包硬超时）——但执行期间要维持心跳
+    with _HeartbeatKeeper(self, name):
+        return self._exec_tool(name, args)
+```
+
+| 要素 | 值 | 语义 |
+|---|---|---|
+| 进入即刷 | `__enter__` touch 一次 `_hb_ts` | 与线程池分支的「工具进入执行」对称 |
+| `_HB_KEEPALIVE_INTERVAL` | 30.0s | daemon 线程 `hb-keepalive` 按间隔续期 |
+| `_HB_KEEPALIVE_MAX` | 3600.0s | sleep 的合法上限；累计超过即停止续期 + log warning「之后交由看门狗按常规判定」 |
+| 退出即停 | `__exit__` 置 `_stop` | 工具返回线程即止，不留孤儿续期 |
+
+续期线程启动失败静默降级（`try/except pass`，行为同修复前）。**一处改动覆盖整个白名单 10 个工具**（清单见上文 ①）。
+
+**边界语义**：
+
+| 场景 | 行为 |
+|---|---|
+| 串行路白名单长等（`sleep(1800)` / `wait_subagents` 长 join / `remote_ask` 长等） | 心跳常新 → 不再误判 ✅ |
+| 白名单工具真卡死 | 续期到 3600s 停 → 静默满 1200s 后巡检照常逮到；**代价：捕获时刻从 20min 推迟到约 80min**（3600 + 1200） |
+| 非白名单工具 | 行为不变：线程池限时 + 超时注入判卡死文本 ✅ |
+| 审批等待（`run_python` / `run_shell` 的 `_ask_approval`，在工具函数体内，src/real_tools.py） | 位于 `_exec_tool` 之内 → 串行路上这段等待现在也在续期范围内（此前同样算静默） |
+| **并行路不受影响** | 多工具并行走 `_exec_tool` 直连、不经 `_exec_tool_guarded`：`sleep` 与其它工具同批并行时整组仍受 `_tmo` 兜底，到点给未完成项注入判卡死文本——原有行为未动，需要的话可另行放开 |
+
+与 [hold 闸门维持心跳](#后记hold-挂起误判拉-doctor闸门等待循环内维持心跳2026-11-11用户提案commit-f3e4ee9) 同一思想：**设计内的等待不算卡死**——这是该思想的第二个落点。
+
+**验证**：`test/test_heartbeat_keepalive.py` 四项——① 进入即刷 / 执行期间持续续期 / 退出即停；② 超上限后不再续期；③ 巡检端到端语义（纯函数拼装）：无续期对照判卡死 → 续期期间 `stuck_candidates` 判不出 → 越过续期上限恢复判定；④ `_exec_tool_guarded` 接线：白名单分支真 `sleep(0.12)` 返回时心跳仍新鲜，非白名单正常路径不变、卡死仍走既有硬超时注入。隔离实例真实每轮路径跑 3 轮全过（其中一轮模型真调了白名单工具 `run_python`）。**未覆盖**：真实 20 分钟阈值的端到端验证（单测把间隔 / 阈值缩到测试尺度）；让模型调 `sleep(3)` 的那一轮模型只推理未真调——长等分支由单测的真实短时 `sleep` 覆盖。
+
+**生效**：引擎代码，需 `/restart`；重启前 `sleep(1800)` 仍会触发 doctor。配套：`sleep` docstring 补一句「等待期间引擎维持心跳，不会被看门狗判卡死」（见 [misc_tools](misc-tools.md)）；`wait_subagents` 侧指针见 [多 Agent · wait_subagents](../architecture/multi-agent.md#wait_subagents干等调查与诊断埋点2026-08commit-22cf719)。
 
 ## 注意事项
 

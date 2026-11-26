@@ -1246,6 +1246,10 @@ res = (entry.get("result") or "").strip()
 
 **验证**（mock 双 agent）：`subagent:aid_a` 移除 ✓ / 无关消息（schedule）保留 ✓ / 持久化重写 1 次 ✓ / running 的 aid_b 零影响 ✓
 
+### 长等期间心跳续期：长 wait 不再被巡检判静默（2026-11-26，commit e01bed2）
+
+`wait_subagents` 属于工具硬超时白名单（显式长等，直调不包 20min 硬超时），但此前直调期间引擎心跳不动——长 join（如上面「真在等一个慢任务」的场景）满 20 分钟会被巡检 `stuck_candidates` 判静默、拉 doctor。2026-11-26 起（同批动机是 `sleep(1800)` 实锤）白名单分支统一由 `_HeartbeatKeeper` 维持心跳：进入即刷 + 每 30s 续一次，累计超 3600s 停止续期交回巡检常规判定；工具返回即停。仅串行路生效（多工具并行路不经 `_exec_tool_guarded`，整组仍受 20min 兜底，原行为未动）。机制与边界详见 [agent-watchdog · 后记二](../features/agent-watchdog.md#后记二白名单长等工具执行期间心跳续期sleep1800-不再-20-分钟拉-doctor2026-11-26用户实锤commit-e01bed2)。
+
 ## recap（每轮一句话总结）
 
 finish_turn 后异步生成（utility_client，scene=recap）——不进自己上下文，但显示在队友的 teammates_block；子 Agent 完成后 recap 写入 `_agent_meta` 随 meta.json 持久化。

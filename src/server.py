@@ -3427,7 +3427,13 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 await _send(ws, {"type": "system", "text": out})
             _refresh_ui_if_session_switched(agent, _pre_sess)   # /branch /resume /reset 切了会话 → 自动刷 UI
             return
-        if text:
+        # 附图（2026-11-26 修回归：autonomous 时代的 insert 帧只带 text、本分支也不读——忙时插话的
+        # 附图被悄悄丢弃）：入队通道把 data URL 落盘并转 <img> 标签随文本入队（投影 _project_imgs
+        # 按 vision 门控展开，视觉模型直接看像素）；空闲兜底走原生多模态（images 直传 agent.run）。
+        _imgs = _d.get("images") or []
+        _busy = _state is not None and _state.get("busy") and not _state.get("answered")
+        _text_q = text + ("" if (_imgs and not _busy and _work_q is not None) else _materialize_user_images(_imgs))
+        if _text_q.strip():
             # target 路由（2026-10-07 用户实锤：子 Agent 页面发的"继续"被插话给了主 Agent）：
             # 插话按本客户端交互对象路由——子 Agent 的 run 同样在步边界消费 pending。
             _tgt = (client or {}).get("target", "_main_")
@@ -3438,19 +3444,19 @@ async def _handle_user_input(ws, agent, raw, queue, loop, registry, client=None)
                 if _e2 is not None and _e2.agent is not None:
                     _tgt_ag = _e2.agent
             if _tgt_ag is not None:
-                _tgt_ag.queue_user_message(text)
+                _tgt_ag.queue_user_message(_text_q)
                 await _send(ws, {"type": "system", "transient": True,
                                  "text": f"📥 已排队并将在下一步注入 '{_tgt}' 的当前任务"})
                 return
             # 真态兜底（2026-10-07·20048 实锤）：前端 busy 变量可能陈旧（WS 断线重连/事件丢失），
             # 导致空闲态的消息走了插话通道——入 pending 后无下一轮消费 = 死信（"插话已入队"
             # 却始终不开新轮）。后端权威判定：agent 实际空闲 → 直接转 work_q 开新轮（同正常发送）。
-            if not (_state is not None and _state.get("busy") and not _state.get("answered")) and _work_q is not None:
-                _work_q.put(("user", text))
+            if not _busy and _work_q is not None:
+                _work_q.put(("user", text, _imgs) if _imgs else ("user", text))
                 await _send(ws, {"type": "system", "transient": True,
                                  "text": "✅ 已接收（agent 空闲，转入新一轮处理）…"})
             else:
-                agent.queue_user_message(text)
+                agent.queue_user_message(_text_q)
                 await _send(ws, {"type": "system", "text": f"✅ 消息已入队（队列：{len(agent.pending_messages)} 条）"})
         return
     if isinstance(_d, dict) and _d.get("action") == "list_workflows":

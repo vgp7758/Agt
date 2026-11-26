@@ -1545,8 +1545,9 @@ function sendRaw(text, images){
   ws.send(JSON.stringify({text, images: images||[]}));
 }
 function sendInsertMessage(text, imgs){
-  // 自主模式下插入消息（即使 busy；当前不带图片，预留 imgs）
-  ws.send(JSON.stringify({action:'insert_message', text}));
+  // 忙时插话（2026-11-26 修回归：autonomous 时代的 insert 帧只带 text、附图被悄悄丢弃——现随帧带
+  // images，服务端 insert_message 分支落盘并转 <img> 标签入队，投影按 vision 门控展开看图）
+  ws.send(JSON.stringify({action:'insert_message', text, images: imgs||[]}));
 }
 function addUserBubble(text, imgs){
   const row=document.createElement('div'); row.className='row me';
@@ -3511,7 +3512,7 @@ function onWSMessage(ev){
       addRow('sys','⏹ 已中断'); setBusy(false); break;
     case 'message_queued':
       updateQueueStatus(m.queue_size);
-      if(m.text) _queuedTexts.push(m.text);
+      if(m.text) _queuedTexts.push(String(m.text).replace(/<img[^>]*>/g, '🖼'));   // 附图标签在排队气泡里显示为 🖼（注入后的插话气泡才渲染成图）
       if(!_queueBubbleRow || !_queueBubbleRow.isConnected){
         _queueBubbleRow = addRow('sys', '');
       }

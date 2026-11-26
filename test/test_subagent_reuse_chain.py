@@ -3,7 +3,8 @@
 背景：wiki-updater 的 yml 写 model: spark——本机既非场景也非卡片（悬空名），创建时按
 default 场景链兜底；旧逻辑复用路径只对"场景名"刷新链，悬空名永不刷新 → 长寿命实例一直
 带着创建当时的旧链（[moss]），settings 里改了 default 链也不跟随，moss 欠费后仍只试 moss。
-_reuse_refresh_chain：场景名 → 该场景最新链；悬空名/空 → default 最新链；卡片名 → None。
+_reuse_refresh_chain：场景名 → 该场景最新链；悬空名/空 → default 最新链；卡片名 → [卡片] + default 最新链
+（2026-11-27 用户裁定「fallback 默认都按 default 处理，选了就用选的」——此前卡片恒 None 不刷新）。
 """
 import ast
 import sys

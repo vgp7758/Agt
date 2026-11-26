@@ -364,6 +364,45 @@ if _ag is not None and getattr(_ag, "active_plan", None):
 
 **模式推广（2026-10-08，commit 2ecc6f4）**：`_state.get("agent") or agent` 兜底自此推广到服务看板/定时任务家族**六端点**（`svc_op` / `svc_log` / `svc_fav` / `sched_upd` / `sched_add` / `sched_del`）——20048 实锤「Stop 恒报缺少agent/name」（缺的其实是 agent 不是 name）后统一收编，详见 [background-scheduler · 服务看板四件套后记](background-scheduler.md)。
 
+## plan 面板标题栏固定：summary 粘性定位、仅步骤列表滚动（2026-11-26，用户请求，commit 36ad593）
+
+> src/static/index.html（CSS `.plan-panel` / `summary` / `#planList`，L131-L137；**JS 零改动**——DOM 结构与 `renderPlan` 均未动）。用户请求（2026-11-26）：「顶部 todolist，标题栏和 steps 都在滚动区域内，一滚动列表标题栏就滚动到上面去了，需要让标题栏固定，滚动区域只包括下面的 steps」。commit `36ad593`。
+
+**面板结构**（index.html L432，位于顶栏 `</header>` 与消息区之间）：
+
+```html
+<div id="planPanel" class="plan-panel" style="display:none">
+  <details open><summary id="planSummary">📋 计划清单</summary><div id="planList"></div></details>
+</div>
+```
+
+**现象与根因**：面板自带 `max-height:200px; overflow-y:auto`（步骤多时封顶滚动），**滚动容器是面板本身**——标题（`summary`）与步骤（`#planList`）同为滚动内容，一滚标题就被带走。
+
+**修法（终版，纯 CSS 三条规则）**：
+
+| 选择器 | 规则 | 作用 |
+|---|---|---|
+| `.plan-panel` | `padding:0 14px; max-height:200px; overflow-y:auto` | 仍是滚动容器；**上下 padding 清零**，只留左右 |
+| `.plan-panel summary` | `position:sticky; top:0; z-index:1; background:#fff; padding:6px 0 2px` | 标题钉在滚动区顶部；不透明背景盖住从底下滚上来的步骤 |
+| `#planList` | `padding-bottom:6px` | 承接原容器的下内边距 |
+
+**padding 为什么要挪**（实现注释口径：「避免粘性偏移受容器 padding 影响」）：sticky 的 `top` 偏移以滚动容器 padding box 边缘为基准，容器自身 padding 不参与——容器带上下 padding 时标题的静止位与粘住位会错位（`top:0` 一粘就上跳；把 `top` 调去对齐又会在标题上方留出透缝、步骤从中露出）。挪到 summary / 列表自身后两态同位、无透缝。（原理说明，未做前后对照实测。）
+
+**弯路——`<details>` 内部 flex 方案不成立（已废弃）**：第一版想「面板不滚、列表单独滚」：`.plan-panel > details { display:flex; flex-direction:column; max-height:200px }` + `#planList { flex:1; min-height:0; overflow-y:auto }`。实测不生效、面板溢出到 630px：`<details>` 会把 summary 以外的子节点**包进一个匿名 slot**，`#planList` 并不是 `details` 的直接 flex item，`flex:1` / `min-height:0` 落空、压不进 `max-height`。**教训：要在 `<details>` 内让某一块限高滚动，用 sticky 比拆 flex 稳。**
+
+**验证（用户 9000 实例页面，灌 30 步假计划实测）**：面板封顶 200px 可滚 / 滚到中部与底部标题位置不变 / 列表整体上移、滚到底见第 30 项 / 标题底下的步骤被遮挡不透出 / 折叠后只剩标题一行、展开恢复 / 步骤少时高度随内容、无滚动条 / 无计划时面板隐藏 / 无 JS 报错。**未验**：手机窄屏（样式本身不依赖屏宽）。
+
+**生效方式**：纯前端静态文件，**Ctrl+F5 刷新即生效，无需 `/restart`**。
+
+**注意事项**：
+
+- sticky 成立的前提是**面板自己仍是滚动容器**（`max-height` + `overflow-y:auto` 留在 `.plan-panel` 上）——日后若把滚动再往里挪，标题固定即失效
+- `summary` 背景必须不透明且与面板同色（`#fff`），否则步骤从标题下透出；换主题色时两处一起改
+- `.plan-panel` 保持 `display:block`：`renderPlan` 用内联 `style.display = 'block' / 'none'` 显隐面板，别在 CSS 上把它改成 flex
+- 折叠态（`<details>` 收起）列表不参与布局、面板只剩标题一行——原生行为，非 bug
+
+**关联**：[plan 面板刷新恢复 · WS 连接即推活动 plan](#plan-面板刷新恢复ws-连接即推活动-plan2026-10-06用户实锤commit-d573e1e)（同一面板的数据来源：`case 'plan'` → `renderPlan`）、[施工委托](construction-delegation.md)（worker `update_plan` 标进度，主/子双方面板同步）、[气泡交互](bubble-interaction.md)（同在 index.html 的其它 WebUI 交互）、[工作流编辑器 · 批次十二](editor-ux-improvements.md)（同类「标题栏钉顶 + 滚动区独立」诉求在抽屉上的做法——headbar 钉顶 + 滚动区拆开）。
+
 ## /restart 重启双坑：电脑无端多开 tab + 早连页签空白（2026-08，commit 7ca6cfc）
 
 > 用户报告（手机 `/restart` 场景）：① 电脑端每次无端多开一个浏览器 tab；② 新开 tab 显示「(当前对话) · Agt」，需手动刷新才见 session。两个现象是**同一条时序链上的两个 bug**（src/chat.py + src/server.py，commit 7ca6cfc）。

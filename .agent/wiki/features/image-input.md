@@ -260,6 +260,34 @@ PIL 读失败省略尺寸段不炸（退化 `[视觉模型 it-vision3 代看] <�
 
 非视觉代看（`describe_image_with_vision`）的候选链构建随[调用场景 · default 唯一兜底](call-scenes.md)解析收口改为**过滤非视觉卡片**——候选只留视觉卡片，非视觉卡片不再混进代看链。与 default 唯一兜底（commits 76593f2 + 6e76d04）同批上线。
 
+### 配套二：read_file 工具说明补「非视觉模型自动代看」——治 agent 不用 read_file 看图（2026-11-26，commit d9ab968）
+
+**现象**（用户实锤 2026-11-26）：agent 基本不用 `read_file` 看图，倾向派 vision 子 Agent。
+
+**根因**：`read_file` 的工具说明（src/real_tools.py docstring，即模型看到的工具描述）只写了「图片自动转 data URL（**视觉模型**可直接查看）」——没提非视觉模型会自动代看。非视觉模型的 agent 读到会以为读图对自己没用，转而派 vision 子 Agent；子 Agent 清单里 vision 的描述（"何时调用：…需理解/分析图片内容时"）又进一步把它往那边推。
+
+**修复**（commit `d9ab968`）：说明改为
+
+> 图片（png/jpg/gif/webp/bmp）直接可看——视觉模型看像素；非视觉模型会自动委托配置内的视觉模型代看，描述随本结果返回（无需另派 vision 子 agent）。
+
+同批修正 `_read_image` 处过时的注释（原写"非视觉模型调用也只会得到占位提示"——代看上线后已不成立）。
+
+**代看逻辑的位置**（容易找不到——它不在 `read_file` 函数里）：`read_file` 只负责把图片转成 `<img>` 标签 + data URL；代看发生在**工具结果后处理**：
+
+| 环节 | 位置 |
+|---|---|
+| 入口：扫描工具结果里的图片、按 `vision_supported` 分流 | src/agent.py `_materialize_tool_result` |
+| 先查缓存，未命中才调视觉模型 | src/agent.py + src/img_cache.py（`img_desc_cache.db`） |
+| 选卡与调用（`agent-vision` 场景链优先，无则 MODELS 里的 vision 卡；最多 3 张、单次 60s） | src/llm_client.py `describe_image_with_vision` |
+| JSON 结构化优先、失败回退文本 | src/llm_client.py `describe_image_structured` |
+| 描述随结果返回 | `[视觉模型 X 代看 · 图 WxHpx…] {描述}`，`<img>` 标签保留 |
+
+**验证**（L3 真调，非视觉假 Agent 读一张红圆 + 蓝方块测试图）：`glm-official-flash` 代看 22.9s 返回结构化描述（元素、坐标正确）；同图第二次 0.00s 命中缓存；data URL 未泄漏进结果。
+
+**生效**：`/restart`（工具 schema 在启动时构建）；tools schema 变了，各会话缓存断一次。
+
+**可选后续**（未做）：vision 子 Agent 的描述（src/agents/vision/vision.yml）仍写"需理解图片内容时调用"——对视觉模型的 agent 而言直接 `read_file` 更省一步。
+
 ## 图片的投影成本：长轮多图 = 缓存 miss 主因（2026-10-23，8000 归因）
 
 **单张图的 token 与字符量（2026-10-23，8000/comfy t1022 反推实测）**：投影 dump 里一张 base64 图 **1.8~2.5 MB 字符**；从缓存 miss 量反推约 **3.2K tokens/张**（12 张 ≈ 38K tokens，与实测每步 miss 吻合）。43 张图吃掉投影 **99.2% 的字符量**——**图片是投影体积与成本的主项**，不是正文。

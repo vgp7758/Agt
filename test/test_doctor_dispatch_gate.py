@@ -92,3 +92,32 @@ def test_main_agent_dispatch_doctor_also_gated():
             break
         cur = p
     assert guarded, "dispatch_doctor 调用不在 _all_channel_failures 门控的 else 分支内"
+
+
+# ---------- 5xx 计费错误按文案归 quota（moss 实锤 2026-11-26）----------
+def test_billing_5xx_classified_as_quota():
+    """代理把上游 402 计费错误包成 502 proxy_error——SDK 归 InternalServerError。
+    旧逻辑落 other → 不属通道类 → doctor 照派（而它治不了欠费）。按文案识别为 quota：
+    doctor 派发门控按通道类跳过；UI 充值入口（按 cls=quota/auth）同批生效。"""
+    import httpx
+    import openai
+    from llm_client import _classify_err
+
+    def _err(status, msg):
+        resp = httpx.Response(status, request=httpx.Request("POST", "http://x/v1/chat/completions"))
+        cls = openai.InternalServerError if status >= 500 else openai.BadRequestError
+        return cls(msg, response=resp, body=None)
+
+    billing = ("Error code: 502 - {'error': {'message': 'RuntimeError: backend HTTP 402: "
+               '{\"error\":{\"message\":\"billing error\",\"code\":\"insufficient_credits\"}}',
+               "'type': 'proxy_error', 'code': 502}}")
+    e = _err(502, billing)
+    assert isinstance(e, openai.InternalServerError)
+    cls = _classify_err(e)
+    assert cls == "quota", f"5xx 计费错误应归 quota，实得 {cls}"
+    # 端到端语义：这条失败明细进门控 → 判定为通道类 → 不派 doctor
+    assert _all_channel_failures([{"model": "moss", "err": "InternalServerError",
+                                   "cls": cls, "msg": billing}]) is True
+    assert _classify_err(_err(502, "Error code: 502 - bad gateway")) == "other"        # 无计费词的 5xx 仍归 other
+    assert _classify_err(_err(400, "insufficient permissions for this field")) == "other"  # 400 保守不转
+    assert _classify_err(_err(500, "Error code: 500 - insufficient_quota")) == "quota"   # 上游配额词同样命中

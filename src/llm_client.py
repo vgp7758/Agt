@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from openai import (OpenAI, RateLimitError, APITimeoutError, APIConnectionError,
-                    BadRequestError, InternalServerError,
+                    BadRequestError, InternalServerError, APIStatusError,
                     PermissionDeniedError, AuthenticationError, NotFoundError)
 
 import config
@@ -261,6 +261,13 @@ def _classify_err(e) -> str:
         return "network"
     if isinstance(e, NotFoundError):
         return "not_found"
+    # 5xx 等通用状态错误按文案识别配额问题（moss 实锤 2026-11-26：代理把上游 402
+    # billing_error/insufficient_credits 包成 502 proxy_error——SDK 归 InternalServerError，
+    # 旧逻辑落 other → doctor 派发门控当"疑似数据问题"照派）。归 quota 后：UI 出充值入口、
+    # doctor 派发按通道类跳过。400 仍归 other（真·数据问题的领地，保守不动）。
+    if (isinstance(e, APIStatusError) and getattr(e, "status_code", 0) >= 500
+            and _QUOTA_PAT.search(str(e))):
+        return "quota"
     return "other"
 
 

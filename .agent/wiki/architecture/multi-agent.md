@@ -744,6 +744,25 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 
 **实测（六场景全过）**：主 Agent 未声明时 `_declared_fallback=None` → `_react_chain()=None`；① react（`_chain=[]`）→ `['glm-official-flash']` 无回退 ✓；② react + 声明 `['qwen','kimi']` → `['glm-official-flash','qwen','kimi']` ✓；③ 非 react（`_chain=None`）→ settings 链 ✓；④ 切模型到 deepseek；⑤ react（未声明）→ `['deepseek']` 仍无回退（跨轮稳定）✓；⑥ 非 react → `['deepseek','proxy']` ✓。
 
+## 复用实例的链刷新：悬空名/空 model 也跟随最新 default 链（2026-11-26，wiki-updater 实锤，commit af2831e）
+
+**实锤**：wiki-updater 的 yml 写 `model: spark`——本机既非场景也非卡片（**悬空名**）。新建实例按 `_resolve_subagent_model` ③ 兜底到 default 场景链（当时 glm-official → basalt → proxy 三成员）；但**复用路径只对"场景名"刷新链**，悬空名永不刷新 → 长寿命实例一直带着创建当时的旧链（先后实锤 `[moss]`、`[glm-official]` 单成员），settings 里改了 default 链也不跟随——moss 欠费 / glm-official 连接错误时每次都「已试: X」单成员失败。
+
+**修复**（src/multiagent.py）：新增纯函数 `_reuse_refresh_chain(declared)`，复用路径（`base_fb is None` 分支）改走它：
+
+| yml 的 model | 复用实例本次派活应用的链 |
+|---|---|
+| 场景名 | 该场景**最新**链（原行为） |
+| 悬空名 / 空 | **default 最新链**（新增） |
+| MODELS 卡片名 | 不动（卡片直配跟随全局 settings） |
+| 解析异常 | 不动（退回老语义） |
+
+链为空（场景未配）→ 不应用（与旧行为一致）。
+
+**单测**：test/test_subagent_reuse_chain.py 8 项（含「default 链被改后下次派活即跟随」与调用点结构回归）。
+
+**生效**：`/restart`；重启前活着的复用实例仍持旧链。配套建议（未做，待用户裁定）：wiki-updater.yml 的 `model: spark` 对所有用户都是悬空名——删掉该行即显式跟随 default 链（符合「播种资产零模型 id」）。
+
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 
 ### 旧版根因

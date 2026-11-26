@@ -122,6 +122,16 @@ probe 计数 0/5——**不是穷尽判定非数据问题，是无失败现场�
 
 **生效**：commit `900c76d` 已推送，`/restart` 后生效——通道抖动（限流/断网/配额）时子 Agent 失败只产生一条失败通知，不再连锁派 doctor。
 
+### 后记三·补：5xx 计费错误按文案归 quota（2026-11-26，moss 欠费实锤，commit 2aff42a）
+
+**实锤**：wiki-updater 撞 moss「backend HTTP 402 billing_error / insufficient_credits」，本地代理把它包成 **502 proxy_error** 返回——SDK 归 `InternalServerError`，`_classify_err` 落 `other` → 不属通道类 → 门控放行，doctor 照派（它治不了欠费，白耗一次）。
+
+**修复**（src/llm_client.py `_classify_err`）：通用状态错误（`APIStatusError`）且 `status ≥ 500` 且文案命中 `_QUOTA_PAT`（quota / credit / balance / 余额 / 欠费 / insufficient / …）→ 归 `quota`。两个消费端同时受益：① doctor 派发门控按通道类跳过；② UI 充值入口（按 cls=quota/auth 提取链接）。**400 不转**（真·数据问题的领地，保守不动）。
+
+**单测**：test/test_doctor_dispatch_gate.py 新增 4 场景（502 计费 → quota 且门控判通道类 / 无计费词的 5xx 仍 other / 400 含 insufficient 仍 other / 500 insufficient_quota → quota）。
+
+**doctor 诊断报告的两点校正**（同案例）：① doctor 称「wiki-updater 是 moss 单成员链」——配置上并非如此，真相是**复用实例带着创建当时的旧链**，见 [multi-agent · 复用实例的链刷新](../architecture/multi-agent.md)；② doctor 建议「401/402/403 应直接切下一成员而非进冷却」——现有逻辑（`_provider_cooldown` + `_advance`）本来就是失败即冷却该成员并切下一个，单成员失败是旧链里没有下一个可切。
+
 ## 声明（.agent/agents/doctor/，目录形态）
 
 - `doctor.yml`：`tools: ""`（留空无碍——2026-10-17 起实例化路径对 doctor 有专属分支，工具箱恒为四件套）/ `model: glm-official-flash` / 最小装配（system + file 人设 + user_message + steps）

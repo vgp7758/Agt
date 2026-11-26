@@ -27,6 +27,8 @@ class AgentEntry:
     registered_at: float = field(default_factory=time.time)
     last_turn: int = 0       # 最近一次与主 Agent 交互时的轮次（agent_prompt 派活/answer 回流/ask 等 touch）；
                              # 0=存量/未知（视为早期，团队投影中隐藏）——用户提案 2026-09-20：投影只列近 30 轮活跃者
+    last_active: float = 0.0 # 最近活跃时刻（epoch 秒）：事件流经 server._broadcast 时刷新、派活注册/交互时置当前；
+                             # 0=未知（磁盘唤醒的已结束条目）。看板「本机 Agent」按它倒序（用户提案 2026-11-27）
 
 
 class AgentRegistry:
@@ -50,6 +52,14 @@ class AgentRegistry:
             entry = self._agents.get(agent_id)
             if entry:
                 entry.last_turn = self._cur_turn
+                entry.last_active = time.time()
+
+    def mark_active(self, agent_id: str, ts: float = 0.0):
+        """记一次活跃（事件流经 server._broadcast 时调用——用户提案 2026-11-27：看板按近期活跃倒序）。
+        锁外直改：事件是高频路径，dict.get + 属性赋值在 CPython 下原子，不抢注册表的锁。"""
+        entry = self._agents.get(agent_id)
+        if entry is not None:
+            entry.last_active = ts or time.time()
 
     def add_on_change(self, subscriber_id: str, cb):
         """订阅注册表变化（如刷新自己工具 schema 的 target_id enum）。
@@ -78,6 +88,7 @@ class AgentRegistry:
                 agent=agent, task=task, status=status, caller_id=caller_id,
                 recap=recap,
             )
+            entry.last_active = time.time() if status == "running" else 0.0   # 磁盘唤醒的已结束条目=未知 → 排后
             self._agents[agent_id] = entry
         self._fire_change()   # 子 Agent 创建/读档恢复后刷新通信工具的 target_id enum
         return entry

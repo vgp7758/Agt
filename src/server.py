@@ -100,8 +100,18 @@ def _broadcast(ev: dict):
     事件带 agent_id（Agent._emit 自动打标：主=_main_、子 Agent=各自 id）→ 只发给
     target 匹配的客户端（多页签各与不同 Agent 交互时互不串台）；无 agent_id
     （系统级：sessions/workflows/config/wf_debug/命令回显）→ 广播全部。
-    无 WS 客户端（服务未起 / 无连接）时直接 return —— 纯 CLI 模式零开销，
-    且 _main_loop 未就绪时也不会因 call_soon_threadsafe 报错。"""
+    无 WS 客户端（服务未起 / 无连接）时直接 return（此前只做一次 O(1) 活跃打点）——
+    纯 CLI 模式近乎零开销，且 _main_loop 未就绪时也不会因 call_soon_threadsafe 报错。"""
+    aid = str(ev.get("agent_id") or "")
+    # 活跃打点（用户提案 2026-11-27：看板「本机 Agent」按近期活跃倒序）——放在「无 WS 客户端即返回」
+    # 之前：没开浏览器/纯 CLI 时 Agent 照样在动，打开看板时顺序才正确。
+    if aid:
+        _reg = getattr(_agent, "registry", None)
+        if _reg is not None:
+            try:
+                _reg.mark_active(aid)
+            except Exception:
+                pass
     if not _clients:
         return
     global _seq
@@ -112,7 +122,6 @@ def _broadcast(ev: dict):
     loop = _main_loop
     if loop is None:
         return
-    aid = str(ev.get("agent_id") or "")
     # answer 已发 = 对用户而言本轮完成（用户实测 2026-10-03：answer 气泡出来后秒发的
     # "做"被 busy 误判成插话滞留成〔用户中途补充〕）：answer 后的收尾期（wrap_up/turn_end
     # 钩子/落盘，秒级窗口）里跟进的消息应走 work_q 开新轮（worker 串行，收尾完自动消费，
@@ -1733,7 +1742,8 @@ async def api_dash():
     out = {"team": [], "remotes": [], "services": [], "schedules": [], "bg_tasks": [],
            "fav_services": [],   # main.yml services 收藏名单（看板⭐态，2026-10-06）
            "fav_entries": [],    # 收藏完整条目（2026-11-06：服务不在跑时的管理区数据源）
-           "projects": []}       # 项目组（.agent/projects.json 真源，p_2d4f784f 2026-11-19）
+           "projects": [],       # 项目组（.agent/projects.json 真源，p_2d4f784f 2026-11-19）
+           "now": time.time()}   # 服务端当前时刻（前端算「最近活跃 N 前」——不受浏览器时钟偏差影响）
     if _agent is None:
         return out
     agent = _agent
@@ -1760,6 +1770,7 @@ async def api_dash():
                     "recap_dirty": bool(_re.get("dirty")),
                     "recap_prev": (_re.get("seen") or "")[:120],
                     "url": "" if e.agent_id in ("_main_", "main") else f"/agents/{e.agent_id}",
+                    "last_active": float(getattr(e, "last_active", 0.0) or 0.0),   # 最近活跃（看板倒序键，2026-11-27）
                 })
     # —— 远程 agt 实例（remote_tools.REMOTE_SERVERS 内存态）——
     try:

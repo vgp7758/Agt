@@ -2384,6 +2384,15 @@ DrawerCtl.register('svcPanel', { fab: 'svcFab',
 DrawerCtl.register('filePanel', {});   // 文件预览：无 fab（点击资产触发），只托管互斥/push
 function toggleTeamPanel(open){ DrawerCtl.toggle('teamPanel', open); }
 function toggleSvcPanel(open){ DrawerCtl.toggle('svcPanel', open); }
+// 「最近活跃」相对时间（看板卡片角标；sec=距活跃时刻的秒数，按服务端 now 算——不受浏览器时钟偏差影响）
+function _agoText(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if(sec < 5) return '刚刚';
+  if(sec < 60) return sec + ' 秒前';
+  if(sec < 3600) return Math.round(sec / 60) + ' 分钟前';
+  if(sec < 86400) return Math.round(sec / 3600) + ' 小时前';
+  return Math.round(sec / 86400) + ' 天前';
+}
 // —— 团队看板渲染：主 + 子 Agent（registry）+ 远程实例分组 ——
 async function renderTeamDash(){
   const d = await _dashFetch();
@@ -2452,11 +2461,14 @@ async function renderTeamDash(){
         <span style="color:#7c3aed;cursor:pointer" onclick="_teamExpanded['${key}']=!_teamExpanded['${key}'];renderTeamDash()">${open?'▲ 收起':'▼ 展开'}</span></div>` : '<div style="margin-top:3px;font-size:11px;color:#8a9099">（无 recap——对方实例较旧未上报，🔄 重连后可见）</div>'}
     </div>`;
   });
-  // 本地 Agent（registry：主 + 子，含 recap/状态/url）
+  // 本地 Agent（registry：主 + 子，含 recap/状态/url）——显示顺序：近期活跃在上（用户提案 2026-11-27；
+  // 按 /api/dash 的 last_active 倒序；旧服务端无该字段 → 全 0 → 稳定排序保持注册序）
   const locals = d.team || [];
   if(locals.length){
-    h += '<div style="font-size:11px;color:#0e7490;font-weight:700;margin:10px 0 6px">🧑 本机 Agent</div>';
-    locals.forEach(e => {
+    h += '<div style="font-size:11px;color:#0e7490;font-weight:700;margin:10px 0 6px">🧑 本机 Agent <span style="font-weight:400;color:#8a9099">· 近期活跃在前</span></div>';
+    const _nowS = d.now || (Date.now() / 1000);
+    const shown = locals.slice().sort((a, b) => (b.last_active || 0) - (a.last_active || 0));
+    shown.forEach(e => {
       const icon = _AGENT_ICON[e.status] || '❓';
       const name = e.agent_id==='_main_' ? '主 Agent' : `${e.name} [${e.agent_id}]`;
       const url = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" title="打开该 Agent 专属页（新页签）" style="color:#0e7490;text-decoration:underline">🔗 专属页</a>` : '';
@@ -2468,6 +2480,7 @@ async function renderTeamDash(){
           <span title="状态">${icon}</span><b style="font-size:13px">${esc(name)}</b>
           ${e.recap_dirty ? `<span title="新动态：${esc((e.recap_prev||'（无）'))} → ${esc((rec||''))}" style="font-size:11px;color:#b45309;cursor:help">🔄 有新动态（悬停看变化）</span>` : ''}
           <span style="font-size:11px;color:#5b6472">${esc(e.model||'')}</span>
+          ${e.last_active ? `<span style="font-size:11px;color:#9ca3af" title="最近活跃">${esc(_agoText(_nowS - e.last_active))}</span>` : ''}
           ${url}
         </div>
         ${rec ? `<div style="margin-top:4px;font-size:11.5px;color:#374151;line-height:1.5">${open ? esc(rec) : esc(rec.slice(0,80)) + (rec.length>80?'…':'')}${rec.length>80?'':' '}

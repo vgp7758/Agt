@@ -689,6 +689,26 @@ def _resolve_subagent_model(agent, declared: str, entry_model: str = ""):
     return (chain[0], chain) if chain else (agent.model_name, [])
 
 
+def _reuse_refresh_chain(declared) -> list:
+    """复用实例的链刷新决策（2026-11-26 用户实锤）：返回本次派活应应用的最新链，None=不动。
+    yml 的 model：① 场景名 → 该场景最新链；② 悬空名/空（创建时按 default 链兜底，见
+    _resolve_subagent_model ③）→ default 最新链；③ MODELS 卡片名 → None（卡片直配，不动）。
+    旧逻辑只对①刷新——悬空名（如 wiki-updater 的 model: spark，本机既非场景也非卡片）永不
+    刷新，长寿命实例一直带着创建当时的旧链，settings 里改了 default 链也不跟随。
+    解析异常 → None（不炸，退回老语义）。"""
+    import config as _cfg
+    try:
+        name = str(declared or "").strip()
+        scen = _cfg.load_scenarios()
+        if name in scen:
+            return list(_cfg.resolve_scenario(name) or [])
+        if not name or name not in (_cfg.MODELS or {}):
+            return list(_cfg.resolve_scenario("default") or [])
+    except Exception as e:
+        _LOG.warning("复用实例链刷新解析失败（保持原链）：%s", e)
+    return None
+
+
 def _parse_hooks(meta: dict) -> dict:
     """frontmatter/yml 的 hooks 字段 → {hook位置: [{kind, value, async...}]}。
     项格式：'workflow: x' / 'x'（裸名=workflow）/ 'cmd: ...' / 'emit: ...'，
@@ -2305,11 +2325,13 @@ def make_subagent_tools(agent) -> list:
                 if base_fb is not None:   # fallback：yml 声明（改链后复用实例下一任务即生效）
                     _apply_declared_fallback(entry.agent, base_fb)
                 else:
-                    _scen = str((_meta or {}).get("model") or "").strip()
-                    if _scen in config.load_scenarios():   # yml model=场景名（p_ea32ad4f）：复用实例也按最新场景链刷新（显式声明缺席时）
-                        chain = config.resolve_scenario(_scen)
-                        if chain:
-                            _apply_declared_fallback(entry.agent, (chain, None))
+                    # yml model=场景名/悬空名/空（创建时按场景链或 default 兜底）：复用实例也按【最新】链刷新
+                    # （显式 fallback 声明缺席时）。2026-11-26 用户实锤：旧逻辑只对场景名刷新——悬空名
+                    # （如 wiki-updater 的 model: spark，本机既非场景也非卡片）永不刷新，长寿命实例一直带着
+                    # 创建当时的旧链，settings 里改了 default 链也不跟随（moss 欠费后仍只试 moss）。
+                    _chain = _reuse_refresh_chain((_meta or {}).get("model"))
+                    if _chain:
+                        _apply_declared_fallback(entry.agent, (_chain, None))
                 return _launch(entry.agent, entry.agent_id, name, entry.model,
                                getattr(entry.agent.session, "session_dir", None), prompt, _reused=True) + asm_note
             if hist:

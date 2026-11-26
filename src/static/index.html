@@ -128,8 +128,13 @@
   /* —— 设置域（弹窗/CSS/JS）已整体迁出至独立页 /settings（2026-11-11 用户提案）：
      src/static/settings.html 五 tab（模型管理/运行时/MCP/其它/RAG 文档库）；
      .modal-overlay/.modal 保留——showPresetOnboard 预设弹窗仍在用 —— */
-  .plan-panel { background:#fff; border-bottom:1px solid var(--line); padding:6px 14px; font-size:13px; max-height:200px; overflow-y:auto; }
-  .plan-panel summary { cursor:pointer; font-weight:600; color:#374151; }
+  /* 计划面板（用户提案 2026-11-26）：标题栏固定、仅步骤列表滚动——summary 粘性定位（sticky）钉在
+     面板滚动区顶部。不走 <details> 内部 flex：details 把非 summary 子节点包进 shadow slot，
+     #planList 不是 flex item、压不进 max-height（实测溢出 630px）。上下 padding 从滚动容器挪到
+     summary/列表上，避免粘性偏移受容器 padding 影响。 */
+  .plan-panel { background:#fff; border-bottom:1px solid var(--line); padding:0 14px; font-size:13px; max-height:200px; overflow-y:auto; }
+  .plan-panel summary { position:sticky; top:0; z-index:1; background:#fff; padding:6px 0 2px; cursor:pointer; font-weight:600; color:#374151; }
+  #planList { padding-bottom:6px; }
   .plan-item { display:flex; gap:6px; align-items:center; padding:2px 0; }
   .plan-item .pi { width:20px; text-align:center; }
    /* spec 面板（施工方案）：浮层抽屉——默认折叠成图标按钮（在右侧 fabDock 内）；

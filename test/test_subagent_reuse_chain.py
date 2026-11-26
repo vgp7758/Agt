@@ -50,9 +50,10 @@ def test_empty_declared_model_follows_default_chain(monkeypatch):
     assert _reuse_refresh_chain(None) == ["glm-official", "basalt", "proxy"]
 
 
-def test_card_name_keeps_unchanged(monkeypatch):
+def test_card_name_refreshes_to_card_plus_default(monkeypatch):
     _setup(monkeypatch)
-    assert _reuse_refresh_chain("moss") is None      # 卡片直配：回退链跟随全局 settings，不动
+    # 卡片直配：工作模型钉链首 + default 最新链兜底（用户裁定 2026-11-27「fallback 默认按 default 处理」）
+    assert _reuse_refresh_chain("moss") == ["moss", "glm-official", "basalt", "proxy"]
 
 
 def test_empty_resolved_chain_means_no_refresh(monkeypatch):

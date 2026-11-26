@@ -274,7 +274,8 @@ def _read_sidecar(path: Path):
 def _resolve_explore_model(agent, model: str):
     """explore 模型解析（p_ea32ad4f 场景化）。model 参数双轨：
     场景名（config.load_scenarios 命中，同名冲突场景优先）→ (链首, 场景链)；
-    卡片名 → (卡片名, [])（原直配行为，回退链跟随全局 settings）；
+    卡片名 → (卡片名, None)——回退由 LLMClient 未选链分支给 default 场景链兜底（用户裁定 2026-11-27：
+    fallback 默认按 default 处理，选了就用选的）；
     未指定 → explore 场景（未配置回退 default 链，2026-11-14 用户裁定 default
     唯一兜底；此前的「空链回退 short-req」硬回退同步退役——与其它场景语义统一：
     显式空链=跟随主模型）。返回 (model_name, fallback_chain|None)。"""

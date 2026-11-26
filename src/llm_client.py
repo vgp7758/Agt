@@ -473,11 +473,12 @@ class LLMClient:
         # 回退循环据此感知"链快照已作废"（旧循环的 _advance 会踩掉刚切的模型，或因新模型不在
         # 旧链直接炸"当前模型不在回退链中"）。循环每圈核对纪元，变了→重建链从新链首重来。
         self._user_switch_epoch: int = 0
-        # 回退链来源（用户裁定 2026-09-15，语义干脆化）：
-        #   ① agent .yml 显式声明（fallback_chain 构造参数 / set_fallback）→ owned=True，权威
-        #   ② 未声明（owned=False）→ 引擎默认链 = 全局 settings（/config fallback_chain 配置的）
-        #      —— 但这条链只对该实例的【非 react 调用】生效：react 主调用用 Agent 自己的回退策略
-        #      （见 agent._current_fallback），不需要改实例状态，跨轮/跨模型切换都稳定。
+        # 回退链来源（用户裁定 2026-11-27：「所有调用场景 fallback 默认都按 default 处理，选了就用选的」）：
+        #   ① 显式选链（yml 声明 / set_fallback / fallback_chain 构造参数）→ owned=True，权威（含显式空链=隔离）
+        #   ② 未选链（None）→ 引擎默认链 = **default 场景链**；default 空链（出厂空链）时退回旧全局键
+        #      settings.fallback_chain（兼容）。此前恒读旧键——设置页 2026-11-11 起不暴露该键，与 default
+        #      场景链分叉（本机实锤：旧键 proxy,deepseek ≠ default glm-official,proxy,basalt）。
+        #      非 react 调用走实例链；react 主调用见 Agent._react_chain（同样默认 default）。
         if fallback_chain is not None:
             self._base_fallback_chain = [str(m).strip() for m in fallback_chain if str(m).strip()]
             self._fallback_owned = True
@@ -486,9 +487,16 @@ class LLMClient:
         else:
             try:
                 _rt = config.load_runtime_settings()
-                _bc = (_rt.get("fallback_chain") or "").strip()
-                if _bc:
-                    self._base_fallback_chain = [m.strip() for m in _bc.split(",") if m.strip()]
+                _def = []
+                try:
+                    _def = [str(m).strip() for m in (config.resolve_scenario("default") or []) if str(m).strip()]
+                except Exception:
+                    _def = []
+                if not _def:
+                    _bc = (_rt.get("fallback_chain") or "").strip()
+                    _def = [m.strip() for m in _bc.split(",") if m.strip()]
+                if _def:
+                    self._base_fallback_chain = _def
                 _fp = (_rt.get("fallback_policy") or "").strip().lower()
                 if _fp in ("sticky", "reset"):
                     self.fallback_policy = _fp

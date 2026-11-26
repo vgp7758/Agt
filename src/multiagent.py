@@ -666,12 +666,23 @@ def _apply_declared_fallback(sub_agent, fb):
         pass
 
 
+def _card_chain(name: str) -> list:
+    """选了卡片（模型直配）时的回退链（用户裁定 2026-11-27：fallback 默认按 default 处理，选了就用选的）：
+    卡片=工作模型置链首 + default 场景链去重兜底；default 空链 → 仅 [卡片]（等同无回退，语义不变）。"""
+    import config as _cfg
+    try:
+        _d = [str(m).strip() for m in (_cfg.resolve_scenario("default") or []) if str(m).strip()]
+    except Exception:
+        _d = []
+    return [name] + [m for m in _d if m != name]
+
+
 def _resolve_subagent_model(agent, declared: str, entry_model: str = ""):
     """sub-agent 工作模型解析（p_ea32ad4f 场景化，新建/复活统一入口）。
     解析优先级：① 声明名命中场景表（场景名与卡片名同名时场景优先）→ 场景链首=工作模型，
     场景链空（未配/无效卡片过滤后）= 跟随主 agent 模型；② 声明名是 MODELS 里的卡片名 →
-    老卡片直配（回退链跟随全局 settings，原行为）；③ 无声明/声明无效 → default 场景链首
-    （出厂空链=跟随主 agent 模型）。
+    卡片直配，回退=default 场景链兜底（_card_chain——用户裁定 2026-11-27）；③ 无声明/声明无效 →
+    default 场景链首（出厂空链=跟随主 agent 模型）。
     返回 (model_name, scenario_chain)：scenario_chain 非空时调用方经 _apply_declared_fallback
     双写实例链 + react 链（yml 显式 fallback: 声明仍最高优先，在调用点先判）。"""
     import config as _cfg
@@ -684,17 +695,16 @@ def _resolve_subagent_model(agent, declared: str, entry_model: str = ""):
             return (chain[0], chain) if chain else (agent.model_name, [])
     for cand in (decl, em):
         if cand and cand in _cfg.MODELS:
-            return cand, []
+            return cand, _card_chain(cand)
     chain = _cfg.resolve_scenario("default")
     return (chain[0], chain) if chain else (agent.model_name, [])
 
 
 def _reuse_refresh_chain(declared) -> list:
-    """复用实例的链刷新决策（2026-11-26 用户实锤）：返回本次派活应应用的最新链，None=不动。
+    """复用实例的链刷新决策（2026-11-26 用户实锤；2026-11-27 扩卡片）：返回本次派活应应用的最新链，None=不动。
     yml 的 model：① 场景名 → 该场景最新链；② 悬空名/空（创建时按 default 链兜底，见
-    _resolve_subagent_model ③）→ default 最新链；③ MODELS 卡片名 → None（卡片直配，不动）。
-    旧逻辑只对①刷新——悬空名（如 wiki-updater 的 model: spark，本机既非场景也非卡片）永不
-    刷新，长寿命实例一直带着创建当时的旧链，settings 里改了 default 链也不跟随。
+    _resolve_subagent_model ③）→ default 最新链；③ MODELS 卡片名 → [卡片] + default 最新链
+    （卡片=工作模型不动，兜底跟随 default——用户裁定 2026-11-27「fallback 默认按 default 处理」）。
     解析异常 → None（不炸，退回老语义）。"""
     import config as _cfg
     try:
@@ -704,6 +714,7 @@ def _reuse_refresh_chain(declared) -> list:
             return list(_cfg.resolve_scenario(name) or [])
         if not name or name not in (_cfg.MODELS or {}):
             return list(_cfg.resolve_scenario("default") or [])
+        return _card_chain(name)
     except Exception as e:
         _LOG.warning("复用实例链刷新解析失败（保持原链）：%s", e)
     return None

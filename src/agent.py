@@ -955,12 +955,17 @@ class Agent:
             return _tool_stuck_text(name, _tmo)
 
     def _react_chain(self):
-        """react 主调用用的回退链（用户裁定 2026-09-15）：只认 agent 自己的声明。
-        .yml 声明了 fallback → 声明的链；未声明 → None（无回退，不继承全局 settings 链）。
-        与实例状态无关（set_fallback 只管非 react 调用的实例链）——跨轮/跨模型切换都稳定。"""
-        if getattr(self, "_declared_fallback", None) is None:
+        """react 主调用用的回退链（用户裁定 2026-11-27：所有调用场景 fallback 默认按 default 处理，选了就用选的）：
+        .yml 声明了 fallback → 声明的链（最高优先）；未声明 → default 场景链；default 空链 → None（跟随
+        主模型、无回退，语义不变）。每次现算——用户改设置页 default 链后下一轮即生效。"""
+        df = getattr(self, "_declared_fallback", None)
+        if df is not None:
+            return list(df)
+        try:
+            import config as _cfg
+            return list(_cfg.resolve_scenario("default") or []) or None
+        except Exception:
             return None
-        return list(self._declared_fallback)
 
     # —— 重复工具调用检测（loop_breaker·2026-11-22 用户提案）——
     # 场景：个别模型（如 moss）思考很长、干完活后陷入 rename_session/add_memory 之类的

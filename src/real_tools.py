@@ -555,7 +555,8 @@ def _md_snapshot(text: str) -> str:
 def read_file(path: str, start_line: int = None, end_line: int = None,
               line_numbers: bool = True) -> str:
     """读取 workspace 内某个文件的内容（统一入口）：文本/Word/Excel/PDF 自动提取、
-    图片（png/jpg/gif/webp/bmp）自动转 data URL（视觉模型可直接查看），任何文件都
+    图片（png/jpg/gif/webp/bmp）直接可看——视觉模型看像素；非视觉模型会自动委托
+    配置内的视觉模型代看，描述随本结果返回（无需另派 vision 子 agent）。任何文件都
     只用 read_file。末尾附 file_version（图片除外）。
     start_line/end_line: 只读指定行范围（1-based，含两端；不传=全文）。
     line_numbers: 默认 True，每行前加行号（宽度按本段最大行号自适应对齐），用于接下来要用
@@ -565,9 +566,10 @@ def read_file(path: str, start_line: int = None, end_line: int = None,
     返回末尾的 file_version 是该文件当前的内容版本号——传给 insert/delete/move 的 version 参数；
     若编辑时版本对不上，说明文件已被改动、需重读。"""
     target = _resolve(path)
-    # 图片类型 → 走读图逻辑（data URL，视觉模型可查看）。放在存在性检查之前：
+    # 图片类型 → 走读图逻辑（data URL + <img> 标签）。放在存在性检查之前：
     # _read_image 自带候选查找（cwd + repo images/，供 <img> 标签裸文件名回读），
-    # 找不到时给 [未找到图片]；非视觉模型调用也只会得到 <img> 占位提示。
+    # 找不到时给 [未找到图片]。非视觉模型的代看不在这里做——在工具结果后处理
+    # Agent._materialize_tool_result（agent.py）按 vision_supported 分流委托视觉卡片。
     if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
         return _read_image(path)
     if not target.exists():

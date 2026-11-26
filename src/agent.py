@@ -59,6 +59,43 @@ def _tool_stuck_text(name: str, secs: float) -> str:
     return (f"[看门狗] 工具 {name} 执行超 {dur} 判卡死"
             f"（结果强制返回；底层线程已放弃，若占用资源请检查后台进程）")
 
+# 白名单长等工具执行期间的心跳续期（用户提案 2026-11-26）：白名单工具不被工具硬超时包
+# （自带超时/转后台/显式长等语义），但执行期间心跳不动——巡检（agent_watchdog）按 stuck_secs
+# 判静默，sleep(1800) 20 分钟必中、拉 doctor。续期线程按间隔刷心跳，工具返回即停；
+# 累计超 _HB_KEEPALIVE_MAX 停止续期（真卡死留给出巡检按常规判定）。
+# 与 hold 闸门同一思想：设计内的等待不算卡死。
+_HB_KEEPALIVE_INTERVAL = 30.0
+_HB_KEEPALIVE_MAX = 3600.0      # sleep 的合法上限；超过即视为异常长等
+
+
+class _HeartbeatKeeper:
+    """with _HeartbeatKeeper(agent, name): —— 包住一次长等工具调用，期间维持 agent._hb_ts。"""
+
+    def __init__(self, agent, name: str = ""):
+        self._agent, self._name = agent, name
+        self._stop = threading.Event()
+
+    def __enter__(self):
+        self._agent._hb_ts = time.time()   # 进入即刷（与线程池分支对称）
+        try:
+            threading.Thread(target=self._loop, name="hb-keepalive", daemon=True).start()
+        except Exception:
+            pass
+        return self
+
+    def _loop(self):
+        t0 = time.time()
+        while not self._stop.wait(_HB_KEEPALIVE_INTERVAL):
+            if time.time() - t0 > _HB_KEEPALIVE_MAX:
+                _LOG.warning("[心跳续期] 白名单工具 %s 已执行超 %ds，停止续期——之后交由看门狗按常规判定",
+                             self._name, int(_HB_KEEPALIVE_MAX))
+                return
+            self._agent._hb_ts = time.time()
+
+    def __exit__(self, *exc):
+        self._stop.set()
+
+
 # 以 path 为入参、对文件做 read-modify-write 的工具：同文件的多个调用必须串行，
 # 否则并行线程会读同一快照→各自改写→后写覆盖先写（静默丢更新）。
 _FILE_TOOLS = frozenset({"read_file", "write_file", "edit", "insert", "delete", "move",
@@ -902,7 +939,10 @@ class Agent:
         宿主拿到结果继续跑（底层线程不杀——无法安全 kill，孤儿泄漏可接受）。
         timeout=None 用 _TOOL_STUCK_SECS；单测传小值走注入路径。非超时异常原样上抛（行为同直调）。"""
         if name in _TOOL_TIMEOUT_WHITELIST:
-            return self._exec_tool(name, args)
+            # 白名单直调（不包硬超时）——但执行期间要维持心跳（用户实锤 2026-11-26：sleep(1800)
+            # 到 20 分钟被巡检判静默、拉 doctor）。续期器包住调用：返回即停；超 _HB_KEEPALIVE_MAX 停止续期。
+            with _HeartbeatKeeper(self, name):
+                return self._exec_tool(name, args)
         _tmo = _TOOL_STUCK_SECS if timeout is None else max(1.0, float(timeout))
         fut = self._TOOL_GUARD_EX.submit(self._exec_tool, name, args)
         self._hb_ts = time.time()   # 心跳：工具进入执行

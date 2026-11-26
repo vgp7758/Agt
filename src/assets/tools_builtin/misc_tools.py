@@ -31,6 +31,7 @@ def divide(a: float, b: float) -> float:
 def sleep(seconds: float) -> str:
     """等待指定秒数后返回。适用场景：轮询间隔/限速/等待外部事件（如后台任务/实例就绪）。
     inline 执行不受 tool_timeout 影响（会真实睡满）；期间阻塞当前轮，插话会排队。
+    等待期间引擎维持心跳，不会被看门狗判卡死。
     seconds: 秒数（0~3600）。"""
     try:
         s = float(seconds)

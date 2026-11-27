@@ -26,12 +26,11 @@ class _FA:
 
 
 def _fake_agent(workspace, agent_id):
-    """最小 Agent 替身：plan/spec 工厂与 session 槽位需要的全部属性。"""
+    """最小 Agent 替身：plan/spec 工厂与 session 槽位需要的全部属性。
+    （p_c6cde42a：替身不持有计划副本——只记 active_plan_id，读端按 id 查 store。）"""
     a = _FA()
     a.session = SimpleNamespace(workspace=workspace)
     a.agent_id = agent_id
-    a.plan = None
-    a.active_plan = None
     a.active_plan_id = None
     a.active_spec = None
     a.active_spec_id = None
@@ -72,12 +71,12 @@ def test_rebind_rebuilds_bound_groups_and_updates_plan_is_isolated(tmp_path):
     # 子 Agent 的 update_plan：自己名下无计划 → 明确报错，不写到 main 的计划
     msg = _tools_map(sub)["update_plan"](1, "completed")
     assert "还没有活动计划" in msg
-    assert main.active_plan["steps"][0]["status"] == "pending"      # main 不受影响
-    # join 之后 worker 的标进度落在自己的计划视图上
+    assert pt.PLAN_STORE.get(tmp_path, main.active_plan_id)["steps"][0]["status"] == "pending"   # main 不受影响
+    # join 之后 worker 的标进度落在共享仓库上（p_c6cde42a：同一进程一份快照，main 查即见）
     worker_ts = _tools_map(sub)
     assert "已加入计划" in worker_ts["join_plan"](main.active_plan_id)
     assert "▶" in worker_ts["update_plan"](1, "in_progress")
-    assert main.active_plan["steps"][0]["status"] == "pending"      # main 的内存副本仍未被动
+    assert pt.PLAN_STORE.get(tmp_path, main.active_plan_id)["steps"][0]["status"] == "in_progress"
 
 
 # ---------- ② contextvar：子线程装配读自己的活动计划 ----------
@@ -119,16 +118,16 @@ def test_update_plan_reads_file_writes_back_under_lock(tmp_path):
     wts["join_plan"](pid)
     wts["update_plan"](2, "completed")
 
-    # main 内存副本落后（0 完成）——它记账标步 3 完成
-    assert main.active_plan["steps"][1]["status"] == "pending"
+    # main 视角（store 快照）与文件一致：worker 标的步 2 已可见（p_c6cde42a：不再有「落后内存副本」）
+    assert pt.PLAN_STORE.get(tmp_path, pid)["steps"][1]["status"] == "completed"
     ts["update_plan"](3, "completed")
 
     # 文件终态：步2（worker 标）未被覆盖回 pending，步3（main 标）已写入
     plan = pt._load_plan(tmp_path, pid)
     assert [s["status"] for s in plan["steps"]] == ["pending", "completed", "completed"]
-    # main 内存被刷新为文件最新 + legacy 镜像同步
-    assert [s["status"] for s in main.active_plan["steps"]] == ["pending", "completed", "completed"]
-    assert main.plan[2]["status"] == "completed"
+    # main 视图=store 快照=文件最新（同一份；辅助读法两条路都通）
+    assert [s["status"] for s in pt.PLAN_STORE.get(tmp_path, pid)["steps"]] == ["pending", "completed", "completed"]
+    assert [s["status"] for s in pt._plan_steps_of(main)] == ["pending", "completed", "completed"]
     # 校验错误分支原样保留
     assert "越界" in ts["update_plan"](9, "completed")
     assert "至少提供" in ts["update_plan"](1)

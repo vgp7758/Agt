@@ -31,9 +31,7 @@ def _fake_main(tmp_path):
     m = _FA()
     m.agent_id = "_main_"
     m.session = SimpleNamespace(session_dir=tmp_path, workspace=tmp_path)
-    m.active_plan = None
     m.active_plan_id = None
-    m.plan = None
     m.active_spec = None
     m.active_spec_id = None
     m.on_event = None
@@ -159,7 +157,7 @@ def test_agent_ask_on_disk_restored_entry_uses_standin(tmp_path, monkeypatch):
     out = ask("worker-p_test", "你的收口报告？")
     assert out.startswith("[worker-p_test 回答] ")
     assert "还没有活动计划" in out                       # 计划工具已按替身重绑
-    assert m.active_plan["steps"][0]["status"] == "pending"   # main 的计划没被动
+    assert pt.PLAN_STORE.get(str(tmp_path), m.active_plan_id)["steps"][0]["status"] == "pending"   # main 的计划没被动
     t = seen["target"]
     assert t.agent_id == "worker-p_test"
     assert isinstance(t.session, Session) and t.session.session_dir.name == "worker-p_test"

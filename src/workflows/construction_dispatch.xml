@@ -61,8 +61,10 @@ def _build_dispatch_prompt(plan: dict) -> str:
         parts.append(f"\n## 步骤（共 {len(steps)} 步，逐项推进）")
         for i, s in enumerate(steps):
             parts.append(f"{i + 1}. {s.get('description', '')}")
-    parts.append("\n按你的角色约定推进，用 update_plan 标进度（状态轻量视图每轮装配注入）。"
-                 "完成后按汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
+    parts.append(f"\n开工第一步：join_plan('{pid}')——计划在你自己名下，update_plan 才有落点；"
+                 f"收尾不必 exit_plan（计划仍归派发方记账）。\n"
+                 f"按你的角色约定推进，用 update_plan 标进度（状态轻量视图每轮装配注入）。"
+                 f"完成后按汇报格式给结论（完成到第几步 / 改动清单 / 验证结果 / 遗留风险）。")
     return "\n".join(parts)
 
 
@@ -132,7 +134,6 @@ async def main(args):
     <in name="name" type="string">worker</in>
     <in name="prompt" type="string" ref="500001.prompt_text"/>
     <in name="agent_id" type="string" ref="500001.agent_id"/>
-    <in name="reuse" type="string">yes</in>
     <in name="caller" type="string">_main_</in>
     <in name="current_turn_only" type="boolean">False</in>
     <out name="raw" type="string" description="工具原始返回（派发确认文本）"/>

@@ -1209,6 +1209,7 @@ class Agent:
     def plan(self, value):
         """历史赋值点/构造参数兼容：no-op（steps 真相在 store，读时派生）。"""
         pass
+
     def capture_runtime_state(self) -> dict:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
         out = {
@@ -1403,6 +1404,7 @@ class Agent:
                                "plan_title": (self.active_plan or {}).get("title", "")})
             except Exception:
                 pass
+
     def _plan_system_block(self) -> str:
         """当前活动计划的 SYSTEM 注入块（加入计划后每轮注入；退出/无计划返回 ''，session 不注入）。
         格式化逻辑在 plan_tools._format_plan_block，这里只做转发 + 异常兜底。"""

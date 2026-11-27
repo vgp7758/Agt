@@ -83,6 +83,158 @@ import threading
 # 写回 pending）。读文件→改→写全程持锁互斥。
 _PLAN_LOCK = threading.Lock()
 
+# ========== 进程级计划仓库 PlanStore（p_c6cde42a，2026-11-28）==========
+
+import copy
+import logging
+import weakref
+
+_LOG = logging.getLogger("agt")
+
+
+class PlanStore:
+    """进程级 plan_id → 不可变快照的单例仓库（p_c6cde42a，2026-11-28）。
+
+    - 条目 key = 计划文件绝对路径（str(_plan_path(ws, pid).resolve())，多 workspace 共存不串）；
+      条目 = {"snapshot": plan dict, "stamp": (st_mtime_ns, st_size)}。
+    - 快照视为不可变：改动一律 mutate（深拷贝→改→原子落盘→原子换快照），读方持有的旧快照
+      引用不受影响；同一进程内所有读方拿到的是同一份快照对象（get 不拷贝，保身份不变量）。
+    - 文件是持久化真源（重启恢复靠它）；仓库是进程内真源；文件戳兜底外部手改/别的进程写。
+    - watch/unwatch 登记「谁把它设为活动计划」（weakref——Agent 死了自动掉，不延长生命周期）；
+      mutate/put 成功后锁外通知全部订阅 Agent（main/worker、含空闲），各自面板在写盘瞬间刷新。
+    """
+
+    NO_PLAN_ERR = "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._entries = {}      # {key: {"snapshot": dict, "stamp": (mtime_ns, size)}}
+        self._watchers = {}     # {key: weakref.WeakSet[agent]}
+
+    # —— 内部 ——
+
+    @staticmethod
+    def _key(workspace, pid) -> str:
+        return str(_plan_path(workspace, pid).resolve())
+
+    @staticmethod
+    def _stamp_of(key: str):
+        """文件当前戳（mtime_ns, size）；读不到返回 None。恰好一次 os.stat。"""
+        try:
+            st = os.stat(key)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def _refresh_locked(self, key: str):
+        """（持锁前提）按文件戳校验条目：没动→现有快照；变了/无条目→重读换快照；
+        文件没了/损坏→保留现有快照或 None。读文件也在锁内：与 mutate 的读→改→写互斥，
+        不会读到半改状态。"""
+        e = self._entries.get(key)
+        stamp = self._stamp_of(key)
+        if e is not None and stamp is not None and e["stamp"] == stamp:
+            return e["snapshot"]                                # 文件没动：零读盘
+        try:
+            fresh = json.loads(Path(key).read_text(encoding="utf-8"))
+        except Exception:
+            fresh = None
+        if fresh is None:
+            return e["snapshot"] if e is not None else None     # 文件没了/损坏：保留现有快照
+        self._entries[key] = {"snapshot": fresh, "stamp": stamp}
+        return fresh
+
+    # —— 读 ——
+
+    def get(self, workspace, pid):
+        """按 id 取计划快照（懒加载 + 文件戳校验）。无 id / 文件不存在且无缓存 → None。
+        返回的 dict 视为不可变；同进程内读到的是同一份快照对象（不做拷贝，保快照身份）。"""
+        if not pid:
+            return None
+        with self._lock:
+            return self._refresh_locked(self._key(workspace, pid))
+
+    # —— 写 ——
+
+    def put(self, workspace, plan: dict):
+        """落盘 + 入库 + 通知订阅者（create_plan / 旧存档迁移的写入口）。"""
+        key = self._key(workspace, plan["id"])
+        _save_plan(workspace, plan)                             # 原子替换（刷新 updated_at）
+        with self._lock:
+            self._entries[key] = {"snapshot": plan, "stamp": self._stamp_of(key)}
+        self._notify(key)                                       # 锁外通知
+        return plan
+
+    def mutate(self, workspace, pid, mutator):
+        """持锁取最新快照→深拷贝→mutator(copy)（返回 None=成功 / 文案=中止不写盘）→
+        原子落盘→换快照（stamp 取写后 stat）→锁外通知订阅者。返回 None=成功 / 错误文案。"""
+        if not pid:
+            return self.NO_PLAN_ERR
+        key = self._key(workspace, pid)
+        with self._lock:
+            snap = self._refresh_locked(key)
+            if snap is None:
+                return self.NO_PLAN_ERR
+            plan = copy.deepcopy(snap)
+            err = mutator(plan)
+            if err:
+                return err
+            _save_plan(workspace, plan)                         # 原子替换（刷新 updated_at）
+            self._entries[key] = {"snapshot": plan, "stamp": self._stamp_of(key)}
+        self._notify(key)                                       # 锁外通知
+        return None
+
+    # —— 订阅与通知 ——
+
+    def watch(self, workspace, pid, agent):
+        """登记「agent 把该计划设为活动计划」：写盘变更通知它。weakref 不延长 Agent 生命周期；
+        对象不可弱引用（SimpleNamespace 等替身）时 TypeError 兜底跳过（debug 日志），不炸。"""
+        if not pid or agent is None:
+            return
+        key = self._key(workspace, pid)
+        with self._lock:
+            subs = self._watchers.setdefault(key, weakref.WeakSet())
+            try:
+                subs.add(agent)
+            except TypeError:
+                _LOG.debug("plan watch 跳过（对象不可弱引用）：%r", agent)
+
+    def unwatch(self, agent):
+        """从所有计划条目移除该 Agent 的订阅（exit_plan / _clear_active / 换计划前调用）。"""
+        if agent is None:
+            return
+        with self._lock:
+            for key in list(self._watchers.keys()):
+                subs = self._watchers[key]
+                try:
+                    subs.discard(agent)
+                except TypeError:
+                    pass
+                if len(subs) == 0:
+                    self._watchers.pop(key, None)
+
+    def _notify(self, key):
+        """写盘成功后通知该计划全部订阅 Agent：逐个 _emit_plan（各自面板在写盘瞬间刷新）。
+        单个异常吞并留 debug 日志——面板刷新失败不能影响写盘结果。"""
+        with self._lock:
+            subs = self._watchers.get(key)
+            targets = list(subs) if subs else []
+        for ag in targets:
+            if ag is None:
+                continue
+            try:
+                _emit_plan(ag)
+            except Exception as e:
+                _LOG.debug("plan 变更通知 emit 失败（忽略）：%s", e)
+
+    def _reset(self):
+        """清空条目与订阅（测试用）。"""
+        with self._lock:
+            self._entries.clear()
+            self._watchers.clear()
+
+
+PLAN_STORE = PlanStore()   # 进程级单例
+
 
 def _mutate_active_plan(agent, mutator):
     """活动计划的读文件→改→写（p_c0eebb19 步 4）：持 _PLAN_LOCK，按 active_plan_id 重新读盘

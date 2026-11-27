@@ -1025,6 +1025,47 @@ def make_communication_tools(agent) -> list:
             _LOG.warning("lazy load 子 Agent %s session 失败: %s", target_id, e)
             return None
 
+    def _standin_for_disk_target(target_id: str):
+        """磁盘恢复条目（重启后 agent=None）的临时替身——给 agent_ask 这类【无状态旁路】用：
+        加载它的会话 + 借 main 的工具箱（agent-bound 五族按替身重建，召回/计划读它自己）+
+        声明场景的 llm。不注册、不落盘、不改它的存档，也不必先复活实例（2026-11-27 20048
+        实锤：重启后 main 问 worker 被拒「实例不可用」，续派又因人设锁被拒，彻底失联）。"""
+        got = _resolve_target(target_id)
+        if got is None:
+            return None
+        sub_session, fallback_llm = got
+        from types import SimpleNamespace
+        st = SimpleNamespace(agent_id=target_id, session=sub_session, llm=fallback_llm,
+                             registry=reg, active_plan=None, active_plan_id=None, plan=None,
+                             active_spec=None, active_spec_id=None, on_event=None,
+                             tool_groups={}, pending_messages=[], inbox=[], background_tasks={},
+                             _revoked=False, _revoked_reason="")
+        try:   # 模型跟它生前一致：声明场景（yml model:）的 client；拿不到就用 main 的
+            entry = reg.lookup(target_id)
+            p = _agent_def_path(entry.name) if entry is not None else None
+            if p is not None and p.exists():
+                from agent_config import load_agent_yml
+                m, _ = load_agent_yml(p)
+                scene = str(m.get("model") or "").strip()
+                if scene:
+                    st.llm = agent.scenario_client(scene)
+        except Exception:
+            pass
+        try:
+            sub_session.llm = st.llm
+        except Exception:
+            pass
+        try:   # 只读工具照常可用（执行侧 classify_tool 仍按名单分流）：借 main 的箱子再按替身重绑
+            from tools import Toolbox
+            from agent_bound_tools import rebind_agent_tools
+            st.tools = Toolbox(*[t for t in agent.tools if t.name not in _AGENT_TOOL_NAMES])
+            rebind_agent_tools(st, agent)
+        except Exception as e:
+            _LOG.warning("磁盘替身 %s 装配工具箱失败（本次询问不带工具）：%s", target_id, e)
+            from tools import Toolbox
+            st.tools = Toolbox()
+        return st
+
     def list_team() -> str:
         """列出当前所有活跃的 Agent（主 Agent + 运行中的子 Agent），含它们的 agent_id、名称、模型、任务和状态。
         用于了解当前团队构成，与队友通信时需要知道对方的 agent_id。"""
@@ -1033,7 +1074,8 @@ def make_communication_tools(agent) -> list:
         return reg.format_team(exclude_id=agent.agent_id, active_window=False)   # 工具查询=全量（含隐藏的历史实例）
 
     def agent_ask(target_id: str, question: str) -> str:
-        """向另一个活跃 Agent 发起无状态询问：拷贝对方的上下文，用一个【临时 agent】回答。
+        """向另一个 Agent 发起无状态询问：拷贝对方的上下文，用一个【临时 agent】回答（重启后
+        尚未复活的实例也能问——按需从磁盘加载它的会话）。
         临时 agent 只读/召回类工具可正常调用（它能自查文件/记忆/知识库），
         run_shell / run_python / 写类工具会被拒绝（无状态旁路，不改动它的环境/历史）；
         60s 内没收敛出回答则清空工具再问一次，逼它直接作答。
@@ -1051,7 +1093,10 @@ def make_communication_tools(agent) -> list:
             pass
         target_agent = entry.agent
         if target_agent is None:
-            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+            target_agent = _standin_for_disk_target(target_id)   # 重启后的磁盘恢复条目
+            if target_agent is None:
+                return (f"[错误] '{target_id}' 的 Agent 实例不可用（重启后未复活，磁盘也无存档）——"
+                        f"可用 agent_prompt(name='{entry.name}', agent_id='{target_id}', prompt=…) 续派唤醒")
         try:
             # 统一 ask 消费端（用户提案 2026-10-22）：拷贝上下文 + 临时 agent（只读工具可用/
             # 写类拒绝/60s 无答清空工具降级）——与 remote_ask 对端同一实现（ask_consumer）。
@@ -1076,7 +1121,9 @@ def make_communication_tools(agent) -> list:
         reg.touch(target_id)   # 通信即交互（团队投影活跃窗口）
         target_agent = entry.agent
         if target_agent is None:
-            return f"[错误] '{target_id}' 的 Agent 实例不可用"
+            return (f"[错误] '{target_id}' 重启后尚未复活（磁盘有存档）——提示要对方跑一轮才看得到，"
+                    f"请用 agent_prompt(name='{entry.name}', agent_id='{target_id}', prompt=…) 续派唤醒；"
+                    f"只想了解情况可用 agent_ask")
         _msg = f"[来自队友 '{agent.agent_id}' 的提示] {message}"
         # 忙判定对齐（2026-11-06·回执双消费排查顺手修）：deliver_notice 已读 _react_running
         # （b5d8e2e），这里还只看 registry status + busy 属性——状态未及时刷新/子 Agent 裸跑时
@@ -2220,12 +2267,20 @@ def make_subagent_tools(agent) -> list:
                                 es = {}   # 损坏 → 重建（状态字段本函数是权威写者，无信息损失）
                         if not isinstance(es, dict):
                             es = {}
-                        es["_agent_meta"] = {
+                        _meta_now = {
                             "agent_id": _aid, "name": _name, "model": _model,
                             "task": _prompt, "caller_id": caller_id,
                             "recap": recap, "status": status,
                         }
+                        es["_agent_meta"] = _meta_now
                         es_path.write_text(json.dumps(es, ensure_ascii=False, indent=2), encoding="utf-8")
+                        try:   # 内存副本同步（2026-11-27）：extra_state 落盘现在保留直写键，派发时写进内存的
+                            # _agent_meta（没有 status/recap）若不同步，会被下次 save 带回文件盖掉终态
+                            _sess = getattr(getattr(_target, "agent", _target), "session", None)
+                            if _sess is not None:
+                                _sess.extra_state["_agent_meta"] = dict(_meta_now)
+                        except Exception:
+                            pass
                     except Exception as meta_err:
                         _LOG.warning("子 Agent %s 写 _agent_meta(status=%s) 失败: %s", _aid, status, meta_err)
 

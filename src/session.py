@@ -4622,14 +4622,31 @@ class Session:
         threading.Thread(target=_do_name, daemon=True).start()
 
     # ========== 异步自动落盘 ==========
+    # extra_state 直写保留区（2026-11-27 20048 实锤）：provider 是覆盖式重建——它不输出的键视为
+    # 已清空（如 schedules 全删后不再输出），这个语义要保住；但下划线前缀键与施工源头键是各处
+    # 【直写】进 extra_state、不在 provider 清单里的，此前被任意落盘整体抹掉：
+    #   · _agent_meta（子 Agent 人设/状态，_write_meta 直写旁车文件）——worker-p_7dffae8b 的
+    #     被一次 save 冲掉 → 重启恢复人设退化成 agent_id → 续派被人设锁拒绝；
+    #   · _pending_explores / _pending_approval / _pending_spec / constr_* 同类静默丢失。
+    # 规则：下划线前缀 + _EXTRA_STATE_KEEP 直写键落盘时原样带过去，其余以 provider 输出为准。
+    _EXTRA_STATE_KEEP = ("constr_plan_id", "constr_start_idx")
+
     def _capture_state(self):
         """落盘前从 Agent 收集附加运行时状态（plan/自主模式等）进 extra_state。
-        Agent 通过 self._state_provider 回调注册收集器；未注册则跳过。"""
+        Agent 通过 self._state_provider 回调注册收集器；未注册则跳过。
+        provider 输出的键覆盖旧值、不输出的非直写键清除；直写键（_ 前缀 / constr_*）保留。"""
         if self._state_provider is not None:
             try:
-                self.extra_state = self._state_provider() or {}
+                new = self._state_provider()
             except Exception:
-                pass
+                return
+            if not isinstance(new, dict):
+                return
+            kept = {k: v for k, v in (self.extra_state or {}).items()
+                    if k not in new and (k.startswith("_") or k in self._EXTRA_STATE_KEEP)}
+            if kept:
+                new.update(kept)
+            self.extra_state = new
 
     def _autosave(self):
         """每轮结束后异步落盘（daemon 线程，不阻塞主循环）。失败静默，绝不影响主循环。

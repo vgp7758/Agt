@@ -1856,6 +1856,63 @@ class Agent:
         except Exception:
             return ""
 
+    @staticmethod
+    def _infer_persona_name(aid: str) -> str:
+        """存档缺 _agent_meta 时按 agent_id 推断人设名（2026-11-27）：子 Agent 命名约定
+        「<name>-<用途>」/「<name>_<用途>」——取能对上声明的最长前缀（worker-p_7dffae8b → worker、
+        wiki-updater_4 → wiki-updater）；都对不上退回 agent_id（旧行为）。"""
+        try:
+            from multiagent import _agent_def_path
+        except Exception:
+            return aid
+        best = None
+        for i, ch in enumerate(aid):
+            if ch in "-_" and i > 0:
+                cand = aid[:i]
+                try:
+                    p = _agent_def_path(cand)
+                except Exception:
+                    p = None
+                if p is not None and p.exists() and (best is None or len(cand) > len(best)):
+                    best = cand
+        return best or aid
+
+    @staticmethod
+    def _heal_agent_meta(agent_dir, aid: str, name: str, status: str):
+        """存档缺 _agent_meta 时补写一份最小元信息并返回它（best-effort，失败返回 None 只记日志）。
+        2026-11-27 20048 实锤：旧版 extra_state 覆盖式落盘把 _agent_meta 冲掉 → 重启恢复人设退化成
+        agent_id → 续派被人设锁拒绝。model 取 meta.json 的 provider（有则用）。"""
+        import json
+        try:
+            es_path = agent_dir / "extra_state.json"
+            es = {}
+            if es_path.exists():
+                try:
+                    es = json.loads(es_path.read_text(encoding="utf-8"))
+                except Exception:
+                    es = {}
+            if not isinstance(es, dict):
+                es = {}
+            if es.get("_agent_meta"):
+                return es["_agent_meta"]
+            model = "?"
+            mp = agent_dir / "meta.json"
+            if mp.exists():
+                try:
+                    model = str(json.loads(mp.read_text(encoding="utf-8")).get("provider") or "?")
+                except Exception:
+                    pass
+            meta = {"agent_id": aid, "name": name, "model": model, "task": "(历史任务)",
+                    "caller_id": "", "recap": "", "status": status}
+            es["_agent_meta"] = meta
+            es_path.write_text(json.dumps(es, ensure_ascii=False, indent=2), encoding="utf-8")
+            _LOG.info("_restore_subagents: %s 存档缺 _agent_meta，按声明名 '%s' 补写（status=%s）",
+                      aid, name, status)
+            return meta
+        except Exception as e:
+            _LOG.warning("_restore_subagents: %s 补写 _agent_meta 失败（忽略）：%s", aid, e)
+            return None
+
     def _restore_subagents(self):
         """读档后恢复子 Agent 列表：扫描 session_dir/agents/，注册到 registry（历史条目
         agent=None，/agent 切换按需 lazy load）。【先扫后清 + 运行中豁免】——正文注释详述。"""
@@ -1910,6 +1967,9 @@ class Agent:
             st = am.get("status", "done")
             if st == "running":
                 st = "failed"
+            if not am:
+                # 自愈（2026-11-27）：人设名按声明推断 + 最小 _agent_meta 回写存档（下次重启/其它读者都对）
+                am = self._heal_agent_meta(ad, aid, self._infer_persona_name(aid), st) or {}
             to_reg.append((am.get("agent_id", aid), am.get("name", aid),
                            am.get("model", "?"), am.get("task", "(历史任务)"), st,
                            am.get("caller_id", ""), am.get("recap", "")))

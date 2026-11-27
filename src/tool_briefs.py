@@ -72,7 +72,7 @@ TOOL_BRIEFS = {
     "subtract": "两个数相减",
     "multiply": "两个数相乘",
     "divide": "两个数相除",
-    "sleep": "等待 N 秒：轮询间隔/限速用",
+    "sleep": "等待 N 秒（收到新消息/被停止会提前醒来）：轮询间隔/限速用",
     "kw_score": "关键词命中率评分，无 embedding 时的降级重排",
     "cosine_sim": "两段文本的语义相似度（embedding 余弦）",
     "emb_probe": "探测 embedding 模型当前是否可用",

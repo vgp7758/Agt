@@ -1711,3 +1711,4 @@ agent_revoke(target_id, reason="")   # 立刻没收某子 Agent 的全部工具�
 
 **实现索引**：`src/agent_bound_tools.py`（工厂表 + rebind）、`agent_config.py`（`_CURRENT_AGENT` / `bind_session_owner` / `adopt_session_owner`）、`plan_tools.py`（`_PLAN_LOCK` / `_mutate_active_plan`）、`multiagent.py`（`agent_revoke` / `_final_status` / 复用路径清旗标）、`agent.py`（`_revoked` fail-closed / 步边界断轮 / run 静默门）、`real_tools.revoke_bg_tasks`、`assets/tools_builtin/misc_tools.sleep`（分片）。单测 `test/test_agent_bound_tools.py`（8 项）。
 
+**sleep 不睡过头（2026-11-27·用户提案）**：`sleep` 每 0.5s 看一眼执行者的消息水位（插话队列 + 后台 inbox）——等待中有新消息到达立即提前返回，并附首批消息摘要（标明「插话·下一步即注入」/「后台·本轮结束后消费」）与剩余秒数，模型据此决定接着等还是处理；用户停止本轮、被主 Agent 没收同样立即中断（Stop 不再被长睡拖住）。纯冷却/限速不想被打断时传 `wake_on_message=False` 睡满。判据是「长度 + 末条对象」双水位——新消息入队后旧条被后台泵弹出的瞬态（长度不变）也能识别。起点前已在队的消息不触发（防睡下即醒的死循环）。单测 `test/test_sleep_wake.py`（9 项）；脚本体在 `assets/tools_builtin/misc_tools.py`，改完 `/reload tools` 免重启。

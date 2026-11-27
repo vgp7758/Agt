@@ -1695,6 +1695,10 @@ def make_doctor_tools(agent) -> list:
         if isinstance(cd, dict):
             cleared = len(cd)
             cd.clear()
+        # 斐波那契退避：同步清 per-key 实际冷却时长（否则残留陈旧项）
+        cds = getattr(llm, "_cooldown_sec_by_key", None)
+        if isinstance(cds, dict):
+            cds.clear()
         try:
             r = target.resume_interrupted()
         except Exception as e:

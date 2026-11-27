@@ -1042,6 +1042,11 @@ class Agent:
             if isinstance(cd, dict):
                 for k in [k for k in cd if k.startswith(m + ":")]:
                     cd.pop(k, None)
+                # 斐波那契退避：同步清 per-key 实际冷却时长（否则残留陈旧项）
+                cds = getattr(self.llm, "_cooldown_sec_by_key", None)
+                if isinstance(cds, dict):
+                    for k in [k for k in cds if k.startswith(m + ":")]:
+                        cds.pop(k, None)
             if self.llm.model_name != m:
                 self.switch_model(m, _user_initiated=False)
                 _LOG.info("loop_breaker：轮结束，恢复模型 %s", m)
@@ -1499,14 +1504,25 @@ class Agent:
         except Exception as _e:
             _LOG.warning("push_message _emit 失败（不影响投递）: %s", _e)
 
-    def pop_inbox(self):
+    def pop_inbox(self, skip=None, only=None):
         """取一条 inbox 消息 (source, msg, seed)，空则 None。线程安全。
         两处消费点（run() 内循环 / chat/web 主循环 drain）都调它，锁保证不重复消费。
+        skip：来源集合——这些来源的条目跳过、留在队列里（/pending -each 的逐条条目不走后台泵，
+        留给轮末 / 专用触发逐条成轮——2026-11-27 用户裁定）；only：只取这些来源的条目。
         消费后重写 inbox.jsonl（移除已消费的条目）。"""
         with self._inbox_lock:
-            if not self.inbox:
+            item = None
+            for i, it in enumerate(self.inbox):
+                s = it[0]
+                if skip and s in skip:
+                    continue
+                if only and s not in only:
+                    continue
+                item = it
+                del self.inbox[i]
+                break
+            if item is None:
                 return None
-            item = self.inbox.popleft()
         self._inbox_persist_rewrite()
         return item
 
@@ -2099,29 +2115,53 @@ class Agent:
             _LOG.warning("queue_user_message _emit 失败（不影响入队）: %s", _e)
         return True
 
-    def queue_pending_user_message(self, text: str):
-        """/pending 通道（用户提案 2026-11-06）：排队一条用户消息——不打断当前轮（与插话
-        queue_user_message 相对：那是步边界注入【当前轮】，这是【轮结束后】作为新 user_message
-        开新轮）。实现 = inbox 推送 source="pending_user"：busy 时串行排队不打扰运行中的轮，
-        轮末/空闲时两条既有消费点（run 轮末 pop / inbox_thread→work_q background）自动触发
-        新一轮，msg 原文即 user_message（无通知壳）；多条按序；inbox.jsonl 持久化重启不丢。"""
-        self.push_message(text, source="pending_user")
+    _PENDING_SRC_MERGE = "pending_user"     # /pending 默认：合并成一轮（worker 批合并）
+    _PENDING_SRC_EACH = "pending_each"      # /pending -each：逐条成轮（每条独立一轮、原文、普通 user 气泡）
+
+    def queue_pending_user_message(self, text: str, mode: str = "merge"):
+        """排队一条用户消息——不打断当前轮，轮结束后才生效（用户提案 2026-11-06；2026-11-27 加 mode
+        参数——按需逐条或合并）。实现 = inbox 推送，按 mode 分两种来源：
+        · "merge"（默认，source="pending_user"）：后台泵线程弹出进 work_q，worker 批合并——轮结束时
+          队列里的合并型条目（连同同批的其它后台通知）拼成一条 user_message 开一轮。
+        · "each"（source="pending_each"）：不走后台泵——留在 inbox，由 run 轮末逐条弹出开下一轮
+          （原文、无通知壳）；agent 空闲时泵线程投 pending_each 触发项唤醒一轮。
+        两种都经 inbox.jsonl 持久化，重启不丢。"""
+        src = self._PENDING_SRC_EACH if mode == "each" else self._PENDING_SRC_MERGE
+        self.push_message(text, source=src)
         return True
 
     def pending_user_queue(self) -> list:
-        """/pending 队列视图：inbox 里 source=pending_user 的条目（原文列表，按序）。"""
+        """/pending 队列视图（原文列表，按序；合并型与逐条型都在内）。"""
         with self._inbox_lock:
-            return [m for (s, m, _) in self.inbox if s == "pending_user"]
+            return [m for (s, m, _) in self.inbox
+                    if s in (self._PENDING_SRC_MERGE, self._PENDING_SRC_EACH)]
+
+    def pending_user_items(self) -> list:
+        """/pending 队列明细：[(mode, msg)]，mode ∈ {"merge", "each"}，按入队序。"""
+        with self._inbox_lock:
+            return [("each" if s == self._PENDING_SRC_EACH else "merge", m)
+                    for (s, m, _) in self.inbox
+                    if s in (self._PENDING_SRC_MERGE, self._PENDING_SRC_EACH)]
 
     def pending_user_clear(self) -> int:
-        """清空 /pending 队列（inbox 里 pending_user 条目全部移除），返回清除条数。"""
+        """清空 /pending 队列（inbox 里合并型 + 逐条型条目全部移除），返回清除条数。"""
         with self._inbox_lock:
             before = list(self.inbox)
+            kept = [it for it in before
+                    if it[0] not in (self._PENDING_SRC_MERGE, self._PENDING_SRC_EACH)]
             self.inbox.clear()
-            kept = [it for it in before if it[0] != "pending_user"]
             self.inbox.extend(kept)
         self._inbox_persist_rewrite()
         return len(before) - len(kept)
+
+    def count_pending_each(self) -> int:
+        """inbox 里逐条型 pending 的条数（后台泵据此在 agent 空闲时投触发项）。"""
+        with self._inbox_lock:
+            return sum(1 for it in self.inbox if it[0] == self._PENDING_SRC_EACH)
+
+    def pop_pending_each(self):
+        """取第一条逐条型 pending 条目 (source, msg, seed)，没有返回 None。"""
+        return self.pop_inbox(only=(self._PENDING_SRC_EACH,))
 
     # ========== 工作流生命周期钩子 ==========
     def _hook_tasks(self, hook: str, _apply_switch: bool = True) -> list[dict]:
@@ -3266,8 +3306,15 @@ class Agent:
                                 break
                             if item:
                                 src, next_msg, seed = item
-                                self._emit({"type": "background_trigger", "source": src,
-                                            "text": next_msg[:100], "seed": bool(seed)})
+                                if src == "pending_each":
+                                    # /pending -each 逐条成轮（2026-11-27 用户裁定）：原文开下一轮、按普通
+                                    # 用户消息渲染——不发 background_trigger，并清 _msg_source（它是 _run_loop
+                                    # 的形参、下一轮迭代会沿用；上一轮若由后台通知触发，不清会把用户排队的
+                                    # 需求显示成系统通知气泡）。source 清空后 before_turn 检索钩子照常跑。
+                                    _msg_source = ""
+                                else:
+                                    self._emit({"type": "background_trigger", "source": src,
+                                                "text": next_msg[:100], "seed": bool(seed)})
                                 msg, auto_flag, imgs, continue_loop = next_msg, False, None, True
                                 seeds = [seed] if seed else []   # 下一轮迭代预置该合成 Step
                                 break

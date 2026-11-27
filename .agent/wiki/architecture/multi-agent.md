@@ -713,7 +713,7 @@ fallback: [glm, deepseek-chat]            # ② list
 fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 ```
 
-> **作用域（2026-09-15 用户裁定后）**：声明链现为 **react 主调用专用**（`Agent._react_chain` → `chat(_chain=…)`）；非 react 调用（钩子/工作流/补全/utility）走实例链（全局 settings）。**未声明 = react 无回退**（不再继承全局）。详见下节 [回退链职责分离](#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
+> **作用域（2026-09-15 用户裁定后）**：声明链现为 **react 主调用专用**（`Agent._react_chain` → `chat(_chain=…)`）；非 react 调用（钩子/工作流/补全/utility）走实例链（全局 settings）。**未声明 = react 无回退**（不再继承全局）——**2026-11-27 起改判：未声明 = default 场景链**，见 [回退链默认按 default 场景链处理](#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)。详见下节 [回退链职责分离](#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 
 - **agent_prompt 新建/复活/reuse 三条路径都消费**——改链后 reuse 实例下一任务即生效。**复活路径补注（2026-09-15）**：`_revive_subagent` 此前只设 `current_turn_only`，漏了 `set_fallback` / `_declared_fallback`（复活实例带着构造时从 settings 继承的链跑，「重启后子 Agent 回退链不对」的根因）——现读声明后**双补**（实例链 + react 链），见 src/multiagent.py L715-720
 - 2026-08（commit a667da4）起 [/agents 管理页表单化编辑](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（此前只能手写 yml）：模型 chips 点选（顺序=链序）+ 策略下拉；**留空 = 继承全局**（保存不写键）；「显式关回退」（区别于继承）手写 yml 空串；`_main_` 主 Agent 同样支持声明级回退链（main.yml，留空=删键）
@@ -725,8 +725,8 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 
 | 调用类型 | 回退链来源 | 谁配 | 未声明时 |
 |---|---|---|---|
-| **react 主调用**（`scene=react·{agent_id}`） | **只认 agent .yml 的 `fallback:` 声明** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4) / main.yml | **无回退**（不继承全局 settings 链） |
-| **非 react 调用**（工作流 LLM/llm_call 节点、补全 `reasoning_completer`、utility_model 短调用、recap 等） | **实例链**（构造时从全局 `settings.json` 继承） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） | 用 settings 全局链 |
+| **react 主调用**（`scene=react·{agent_id}`） | **只认 agent .yml 的 `fallback:` 声明** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4) / main.yml | **无回退**（不继承全局 settings 链）——**2026-11-27 起：default 场景链** |
+| **非 react 调用**（工作流 LLM/llm_call 节点、补全 `reasoning_completer`、utility_model 短调用、recap 等） | **实例链**（构造时从全局 `settings.json` 继承） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） | 用 settings 全局链——**2026-11-27 起：default 场景链**（旧键仅 default 空链时兜底） |
 
 **动机**：此前「声明覆盖全局」是实例级单链——react 与钩子/工作流/utility 共用一条，全局链在 Agent 场景下被声明链顶掉或反过来被 settings 刷回，语义混淆；且**切模型/WebUI 改配置会重读 settings 覆盖实例链**（用户实测「给 agent 单独配的 provider 回退链看起来没生效，实际走的依然是 settings.json 里的默认回退链」）。分离后 react 链与实例状态解耦，跨轮/跨模型切换都稳定。
 
@@ -735,12 +735,12 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 | 文件 | 改动 |
 |---|---|
 | `src/llm_client.py` | 新增 `_CHAIN_OVERRIDE` contextvar（线程隔离）；`chat(..., _chain=None)` 新参数——`list`（含空 list）= 本次调用显式指定链，`None`（默认）= 不覆盖走实例链。`_chat_with_fallback` 入口按 `_CHAIN_OVERRIDE` 决定本次链（`_user_model` 恒在首 + 去重），**不写 `self.fallback_chain`** |
-| `src/agent.py` | 新增 `_declared_fallback` 实例属性（`__init__` 置 `None`）+ `_react_chain()`——声明了返回声明的链，未声明返回 `None`；react 主调用改为 `_rc = self._react_chain() or []; self.llm.chat(msgs, ..., _chain=_rc)`；`_reload_main_dsl` 重读声明时同步 `set_fallback`（实例链）+ `_declared_fallback`（react 链） |
+| `src/agent.py` | 新增 `_declared_fallback` 实例属性（`__init__` 置 `None`）+ `_react_chain()`——声明了返回声明的链，未声明返回 `None`——2026-11-27 起未声明返回 default 场景链、default 空链才 `None`；react 主调用改为 `_rc = self._react_chain() or []; self.llm.chat(msgs, ..., _chain=_rc)`；`_reload_main_dsl` 重读声明时同步 `set_fallback`（实例链）+ `_declared_fallback`（react 链） |
 | `src/commands.py` | `apply_config` 的 `fallback_chain` 分支注释与回执文案改为「**非 react 调用回退链**」（`✅ 非 react 调用回退链 = …` + 「适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明（主 Agent 未声明=无回退）」） |
 
-**`_chain` 语义细节**：`_chain=[]`（空 list）与 `_chain=None` 不同——前者是**显式无回退**（react 未声明时走这条），后者是**不覆盖**（钩子/工作流/utility 走实例链）。contextvar 在 `chat()` 的 `finally` 中 reset，钩子/工作流/子 Agent 各自线程取值互不干扰。
+**`_chain` 语义细节**：`_chain=[]`（空 list）与 `_chain=None` 不同——前者是**显式无回退**（2026-11-27 前 react 未声明时走这条；现在只有显式空链 / default 空链才走），后者是**不覆盖**（钩子/工作流/utility 走实例链）。contextvar 在 `chat()` 的 `finally` 中 reset，钩子/工作流/子 Agent 各自线程取值互不干扰。
 
-**副作用（须知）**：主 Agent 的 `main.yml` 若未声明 `fallback`，其 **react 调用丧失回退能力**（硬刚当前 provider）；要恢复需在 main.yml 里显式加 `fallback: [glm, ms-deepseek, proxy]` 之类。
+**副作用（须知）**：主 Agent 的 `main.yml` 若未声明 `fallback`，其 **react 调用丧失回退能力**（硬刚当前 provider）；要恢复需在 main.yml 里显式加 `fallback: [glm, ms-deepseek, proxy]` 之类。**2026-11-27 起撤销**：未声明 = default 场景链，改设置页 default 场景行即可。
 
 **实测（六场景全过）**：主 Agent 未声明时 `_declared_fallback=None` → `_react_chain()=None`；① react（`_chain=[]`）→ `['glm-official-flash']` 无回退 ✓；② react + 声明 `['qwen','kimi']` → `['glm-official-flash','qwen','kimi']` ✓；③ 非 react（`_chain=None`）→ settings 链 ✓；④ 切模型到 deepseek；⑤ react（未声明）→ `['deepseek']` 仍无回退（跨轮稳定）✓；⑥ 非 react → `['deepseek','proxy']` ✓。
 
@@ -754,14 +754,51 @@ fallback: {chain: [glm], policy: sticky}  # ③ 链 + 策略
 |---|---|
 | 场景名 | 该场景**最新**链（原行为） |
 | 悬空名 / 空 | **default 最新链**（新增） |
-| MODELS 卡片名 | 不动（卡片直配跟随全局 settings） |
+| MODELS 卡片名 | ~~不动~~ → **[卡片] + default 最新链**（2026-11-27 改判，见下节） |
 | 解析异常 | 不动（退回老语义） |
 
 链为空（场景未配）→ 不应用（与旧行为一致）。
 
 **单测**：test/test_subagent_reuse_chain.py 8 项（含「default 链被改后下次派活即跟随」与调用点结构回归）。
 
-**生效**：`/restart`；重启前活着的复用实例仍持旧链。配套建议（未做，待用户裁定）：wiki-updater.yml 的 `model: spark` 对所有用户都是悬空名——删掉该行即显式跟随 default 链（符合「播种资产零模型 id」）。
+**生效**：`/restart`；重启前活着的复用实例仍持旧链。配套建议（未做，待用户裁定）：wiki-updater.yml 的 `model: spark` 对所有用户都是悬空名——删掉该行即显式跟随 default 链（符合「播种资产零模型 id」）。**2026-11-27 后记**：用户已把本 repo 的 wiki-updater.yml 改为 `model: default`（显式场景名——旧运行代码的复用路径同样认，下次派活即带 default 链，无需重启）。
+
+## 回退链默认按 default 场景链处理：选了就用选的（2026-11-27，用户裁定）
+
+**用户裁定（2026-11-27）**：「所有调用场景 fallback 默认都按照 default 处理，如果选了就用选的」——此前「未选链」在三处消费点各有各的默认（旧全局键 / 无回退 / 空链），现统一为 **default 场景链**；显式选择一律权威。
+
+| 消费点 | 代码锚点 | 未选链时：改前 → **改后** |
+|---|---|---|
+| LLMClient 实例链（钩子 / 工作流 / 补全 / utility / recap 等非 react 调用） | `src/llm_client.py` `__init__` 的 `fallback_chain is None` 分支 | 旧全局键 `settings.fallback_chain` → **default 场景链**；default 空链（出厂）才退回旧键（兼容） |
+| react 主调用链 | `src/agent.py` `Agent._react_chain()` | yml 未声明 = `None`（react 无回退）→ **default 场景链**；default 空链才回 `None` |
+| 子 Agent 卡片直配（`model: <卡片名>`，新建 / 复活） | `src/multiagent.py` `_card_chain` ← `_resolve_subagent_model` ② | 卡片单成员链（react 无回退）→ **`[卡片] + default`**（去重） |
+| 子 Agent 复用实例的链刷新 | `_reuse_refresh_chain` ③ | 卡片名恒 `None` 不刷新 → **`[卡片] + default 最新链`** |
+
+**顺带挖出的两处真缺口（本机实锤）**：
+
+1. **旧全局键早已和 default 分叉**——`settings.fallback_chain = proxy,deepseek`，default 场景链却是 `glm-official,proxy,basalt`。设置页 2026-11-11 起撤下旧键入口，凡未选链的 client（钩子 / 工作流 / recap / utility）一直按旧键回退，**改 default 链它们不跟**。
+2. **主 Agent 的 react 调用此前完全没有回退**——本机没有 main.yml，`.agent/agents/` 下也没有任何 yml 声明 `fallback:` → `_react_chain()` 恒 `None` → 每步都是 `[当前模型]` 单成员链。此前报错里的「回退链不可用（已试: glm-official）」是单成员链，不是冷却问题。
+
+**不变的部分（「选了就用选的」）**：yml 显式 `fallback:`（最高优先）/ 显式场景名（用该场景链）/ 显式卡片名（卡片 = 工作模型）/ **显式空链**（`fallback: ""` 或 `fallback_chain=[]`——隔离语义，doctor 与代看的临时 client 仍不跟 default）/ `set_fallback` 注入的实例链。
+
+**实现要点**：
+
+- `_card_chain(name)` = `[name] + default 去重`；default 空链时退化为 `[name]`（等同无回退，语义不变）
+- **react 链每轮现算、实例链构造时快照**——`_react_chain()` 不缓存，设置页改 default 行后 react 下一轮即生效；长寿命实例（主 Agent、复用中的子 Agent）的非 react 实例链要 `/restart` 才跟
+- `_react_chain()` 的第二消费端同步受益：loop_breaker「回退链下一位接管收尾」的取链（`self._react_chain() or 实例链`）在未声明时也从「无回退」变为 default 链
+- 连带生效面：凡未显式传 `fallback_chain` 的 `LLMClient(...)` 构造点（主 Agent 实例、explore 卡片名路径、工作流 / llm_call 的卡片名直构路径）一律 default 链
+- `fallback_policy` 旧键仍在未选链分支读取——策略来源不变，只有链来源收口
+
+**验证**：`test/test_fallback_default_rule.py` 新增 10 项（LLMClient 四态 / `_react_chain` 三态 / 子 Agent 卡片·场景·悬空·复用刷新）+ `test/test_subagent_reuse_chain.py` 卡片用例改写为 `test_card_name_refreshes_to_card_plus_default`，合计 **17 passed**；真配置冒烟：主 Agent 未选链 → `['glm-official','proxy','basalt']`，`_card_chain('deepseek')` → `['deepseek','glm-official','proxy','basalt']`。
+
+**生效与注意事项**：
+
+- 引擎侧 `/restart`（commit 待推）；重启前已构造的实例仍持旧链
+- **本机影响**：未选链的回退不再含 `deepseek`（它只在旧键里）——要让它回到回退序列，加进设置页 default 场景行
+- `/config fallback_chain` 现在只改**当前主实例**的非 react 实例链（并把旧键落盘），react 链与其它实例不跟；其回执尾句「主 Agent 未声明=无回退」是旧文案，以本节为准
+- 排障口径：报错「回退链不可用（已试: X）」只列一个成员 = 该调用点**选了**单成员链（显式空链 / default 空链 / 场景只配一张卡），不再是「未声明」的常态
+
+**关联**：[调用场景 · fallback 默认走 default 场景链](../features/call-scenes.md#fallback-默认走-default-场景链旧键-fallback_chain-降为兼容层2026-11-27用户裁定)（旧键降为兼容层与配置动作）· [LLM 客户端韧性 · 十一](../features/llm-network-resilience.md#十一回退链默认来源未选链走-default-场景链2026-11-27用户裁定)（`LLMClient` 侧分支）· [Agent 管理页 · 默认值再改判](../features/agents-admin.md)（回退链表单留空语义）· [explore · 后记](../features/explore-tool.md)（卡片名路径）
 
 ## AgentRegistry 与 answer 路由修复（2026-08，v0.18.2 正式发布）
 

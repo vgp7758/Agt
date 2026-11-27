@@ -453,6 +453,34 @@ def _install_signal_handlers(agent, work_q):
             pass   # 必须主线程注册；非主线程/不支持则跳过
 
 
+# 后台泵跳过的来源（2026-11-27 用户裁定：/pending -each 逐条成轮）：逐条型 pending 不走后台泵——
+# 留在 inbox 由 run 轮末逐条弹出；agent 空闲时泵投 pending_each 触发项唤醒一轮。
+_INBOX_PUMP_SKIP = frozenset({"pending_each"})
+
+
+def _make_inbox_pump(agent, work_q, state):
+    """inbox → work_q 的后台泵线程体（web_main / cli_main 共用，2026-11-27 抽出）。
+    常规条目：弹出即投 work_q（("background", item)——worker 批合并）。
+    逐条型 pending（source=pending_each）：跳过不弹；仅当 agent 空闲且 inbox 里有此类条目时投一个
+    ("pending_each", None) 触发项——worker 取一条逐条 pending 原文开一轮（不合并），run 轮末会
+    继续消费剩余的逐条条目。触发项取不到条目时空过（重复触发无害）。"""
+    import logging as _lg
+    _il = _lg.getLogger("agt.chat")
+
+    def _pump():
+        while True:
+            item = agent.pop_inbox(skip=_INBOX_PUMP_SKIP)
+            if item:
+                _il.info("inbox_thread: (%s) %s → work_q", item[0], (item[1] or "")[:60])
+                work_q.put(("background", item))
+            elif not state.get("busy") and agent.count_pending_each():
+                work_q.put(("pending_each", None))
+                time.sleep(0.2)   # 给 worker 取走触发项并置 busy 的时间（防重复投）
+            else:
+                time.sleep(0.2)
+    return _pump
+
+
 def _worker(agent, work_q, registry, state):
     """后台 worker：串行消费 work_q，跑 agent.run / task / background。
     维护 state(busy/started/desc) 供主线程心跳。agent verbose=False（事件经 on_event
@@ -488,6 +516,14 @@ def _worker(agent, work_q, registry, state):
                     # 斜杠命令：即时分发，不合并、不进 agent.run
                     state["desc"] = payload[:40]
                     registry.dispatch(payload, CommandContext(agent=agent, work_q=work_q, state=state))
+                elif kind == "pending_each":
+                    # /pending -each 的空闲触发项（2026-11-27 用户裁定：逐条成轮）：取一条逐条 pending，
+                    # 原文开一轮（不批合并、普通 user 气泡）；run 轮末会继续消费剩余的逐条条目。
+                    # 取不到（已被轮末弹走）→ 空过。
+                    _it = agent.pop_pending_each()
+                    if _it is not None:
+                        state["desc"] = (_it[1] or "")[:40] or "(pending)"
+                        agent.run(_it[1], _msg_source="")
                 else:
                     # user(普通文本) / background：drain 期间累积的同类项，合并成一批一次 agent.run
                     batch = [item]
@@ -500,8 +536,8 @@ def _worker(agent, work_q, registry, state):
                             work_q.put(None)   # 退出哨兵放回，本轮处理后退出
                             break
                         nk, np_ = nxt[0], nxt[1]
-                        # task / 斜杠命令不能合并进 agent.run：放回队尾停止 drain
-                        if nk == "task" or (nk == "user" and np_.startswith("/")):
+                        # task / 斜杠命令 / 逐条 pending 触发项不能合并进 agent.run：放回队尾停止 drain
+                        if nk == "task" or nk == "pending_each" or (nk == "user" and np_.startswith("/")):
                             work_q.put(nxt)
                             break
                         batch.append(nxt)
@@ -903,17 +939,8 @@ def web_main(port=None):
         else:
             open_browser(port)
 
-    def _inbox_thread():
-        import logging as _lg
-        _il = _lg.getLogger("agt.chat")
-        while True:
-            item = agent.pop_inbox()
-            if item:
-                _il.info("inbox_thread: (%s) %s → work_q", item[0], (item[1] or "")[:60])
-                work_q.put(("background", item))
-            else:
-                time.sleep(0.2)
-    threading.Thread(target=_inbox_thread, daemon=True).start()
+    # inbox → work_q 后台泵（含 /pending -each 逐条触发，2026-11-27）：实现见 _make_inbox_pump
+    threading.Thread(target=_make_inbox_pump(agent, work_q, state), daemon=True).start()
 
     # worker 线程：串行消费 work_q 跑 agent.run（长任务后台化）
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)
@@ -1158,16 +1185,8 @@ def main():
             if state.get("busy"):
                 print(f"\n📥 已排队（当前任务结束后处理）：{user[:40]!r}", flush=True)
 
-    def _inbox_thread():
-        while True:
-            item = agent.pop_inbox()
-            if item:
-                work_q.put(("background", item))
-            else:
-                time.sleep(0.2)
-
     threading.Thread(target=_input_thread, daemon=True).start()
-    threading.Thread(target=_inbox_thread, daemon=True).start()
+    threading.Thread(target=_make_inbox_pump(agent, work_q, state), daemon=True).start()
 
     # worker 线程：串行消费 work_q 跑 agent.run（长任务后台化，不卡主线程）
     worker = threading.Thread(target=_worker, args=(agent, work_q, registry, state), daemon=True)

@@ -372,6 +372,20 @@ load_agents_index 返回的 path 是 str（".agent/agents/coder.yml"）
 
 **复活路径补注（2026-09-15）**：`_revive_subagent` 此前只设 `current_turn_only`，漏了 `set_fallback` / `_declared_fallback`——复活实例带着构造时从 settings 继承的链跑（「重启后子 Agent 回退链不对」的根因）。现读声明后**双补**（实例链 + react 链），见 src/multiagent.py L715-720。
 
+### 默认值再改判：留空 = default 场景链（2026-11-27，用户裁定）
+
+**用户裁定（2026-11-27）**：「所有调用场景 fallback 默认都按照 default 处理，如果选了就用选的」。管理页回退链表单的三态语义随之更新：
+
+| 表单状态 | 落盘 | react 链 | 非 react 实例链 |
+|---|---|---|---|
+| 选了模型 chips | 写 `fallback:` | 声明的链（最高优先，**不变**） | 声明的链 |
+| 留空保存 | 删键 | **default 场景链**（2026-09-15 ~ 11-26 为「无回退」，2026-08 为「继承全局 settings」） | default 场景链 |
+| 「显式关回退」（手写 yml `fallback: ""`，表单不做这个语义） | 空串 | **无回退**（`_chain=[]`，隔离语义不变） | 空链 |
+
+- 留空的 react 链**每轮现算**（`Agent._react_chain`）——设置页改 default 场景行后下一轮生效，**不必回本页重存**
+- 上节「留空保存 = 删 fallback 键 = react 无回退」自此过时
+- 实现、验证与排障口径见 [multi-agent · 回退链默认按 default 场景链处理](../architecture/multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)
+
 ### 钩子行布局：async/× 不再被挤下一行
 
 用户观察："async 复选框和 ✕ 可以和位置选择/类型选择两个下拉框放在一排"——本该如此，根因是全局 `input[type=text]{width:100%}` 把值输入框撑满整行。一行 CSS 修复（agents.html）：

@@ -615,7 +615,7 @@ t16  bs=[7,9,11,13] fc=6   终态五级 1382/782/482/324/56 全部 ≤1600 ✅
 - **落账仍是前缀语义**：按序检查，**首个失败段之前的成功段**才写入 `_sos_text`——sos 覆盖 `[0, _sos_count)` 必须**连续无洞**；中间段失败时其后成功段**弃用**（那些轮仍在清单里，信息不丢），下次顶窗从 `_sos_count` 续接
 - 预检注定不达标（est > 3×预算）→ 跳过（原有语义保留）
 
-**回退链确认（每段自带实例级回退链）**：`_generate_sos` 的调用是 `(self.utility_llm or self.llm).chat(msgs, scene="sos")`——不带 `_chain` 参数，按 `chat()` 语义走**实例链** = settings 默认回退链（`/config fallback_chain`），完整享受链上全部机制：provider 冷却（300s）、断网等待重试（不空转换链）、空响应退避。**一段"浓缩失败"意味着整条链打穿**，不是单次失败就放弃——失败进弃用分支的门槛天然很高。
+**回退链确认（每段自带实例级回退链）**：`_generate_sos` 的调用是 `(self.utility_llm or self.llm).chat(msgs, scene="sos")`——不带 `_chain` 参数，按 `chat()` 语义走**实例链** = settings 默认回退链（`/config fallback_chain`；**2026-11-27 起未选链实例 = default 场景链**，见 [回退链默认按 default 场景链处理](multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)），完整享受链上全部机制：provider 冷却（300s）、断网等待重试（不空转换链）、空响应退避。**一段"浓缩失败"意味着整条链打穿**，不是单次失败就放弃——失败进弃用分支的门槛天然很高。
 
 **并发安全**：`utility_llm` 本就是多线程并发安全设计（钩子/工作流共用，ContextVar 隔离 scene/turnstep），三段并发无新风险。
 

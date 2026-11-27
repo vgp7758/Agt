@@ -41,7 +41,7 @@
 | 撤下的键 | 现在怎么配 | 旧行为 |
 |---|---|---|
 | `reasoning_completer` / `utility_model` | **completer / short-req 场景**接管（调用场景组新入口）；旧键仍从 settings.json 生效 | 键值行为不变 |
-| `fallback_chain` / `fallback_policy` | 保留在 settings.json 生效（非 react 调用链，见 [回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)）；**UI 不再暴露**，走 `/config fallback_chain` 命令 | 键值行为不变 |
+| `fallback_chain` / `fallback_policy` | 保留在 settings.json 生效（非 react 调用链，见 [回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)）；**UI 不再暴露**，走 `/config fallback_chain` 命令。**2026-11-27 起 `fallback_chain` 降为兼容层**——未选链的调用点改读 default 场景链，旧键仅在 default 空链时生效（`fallback_policy` 不变），见下文 [fallback 默认走 default 场景链](#fallback-默认走-default-场景链旧键-fallback_chain-降为兼容层2026-11-27用户裁定) | 键值行为不变（至 2026-11-26） |
 
 **保存不抹掉**：后端是**部分更新语义**（set_config 合并写，见 [set_config 保存语义修复](../guides/config-and-models.md#set_config-保存语义修复合并替代整体覆盖ui-保存不再抹掉非表单键随-v0300commit-54e7eda)）——保存其它设置不会抹掉这四个手改键（已实测 settings.json 四键幸存）。
 
@@ -73,6 +73,28 @@
 
 **生效**：引擎侧 `/restart`（重启后 `valid.explore == valid.default` 即最终确认）。
 
+## fallback 默认走 default 场景链：旧键 fallback_chain 降为兼容层（2026-11-27，用户裁定）
+
+**用户裁定（2026-11-27）**：「所有调用场景 fallback 默认都按照 default 处理，选了就用选的」。default 场景由此成为**三层默认的唯一真源**——场景名 miss 兜底、未配置场景兜底（上两节）、**未选回退链兜底**（本节新增）。
+
+| 场景 | 2026-11-27 前 | **现行** |
+|---|---|---|
+| 未显式选链的 LLMClient（钩子 / 工作流 / 补全 / utility / recap） | 旧全局键 `settings.fallback_chain` | **default 场景链**；旧键只在 default 空链（出厂）时兜底 |
+| react 主调用，yml 未声明 `fallback` | 无回退（单成员链） | **default 场景链** |
+| 子 Agent `model: <卡片名>` | 卡片单成员链（react 无回退） | `[卡片] + default 场景链` |
+
+**为什么要收口**：旧键与 default 场景链在本机早已分叉（`proxy,deepseek` vs `glm-official,proxy,basalt`）——设置页 2026-11-11 撤下旧键入口后，未选链的调用点读的是一条**用户看不见也改不到**的链。
+
+**配置动作的变化**：
+
+- **改回退链 = 改设置页 default 场景行**（react 链每轮现算，下一轮生效；长寿命实例的非 react 实例链是构造时快照，需 `/restart`）
+- `/config fallback_chain a,b` 仍在：即时改**当前主实例**的非 react 链并把旧键落盘；react 链不跟，其它实例 / 新建 client 也不跟（除非 default 为空）。其回执尾句「主 Agent 未声明=无回退」是旧文案
+- `fallback_policy` 旧键仍是未选链实例的策略来源（reset / sticky），未变
+
+**显式选择一律权威**（不变）：yml `fallback:` / 场景名 / 卡片名 / 显式空链（`fallback_chain=[]`，doctor 与代看的临时 client 靠它隔离）。
+
+实现、验证（17 passed）与排障口径见 [multi-agent · 回退链默认按 default 场景链处理](../architecture/multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)；`LLMClient` 侧分支见 [LLM 客户端韧性 · 十一](llm-network-resilience.md#十一回退链默认来源未选链走-default-场景链2026-11-27用户裁定)。引擎侧 `/restart` 生效。
+
 ## 验证（playwright 实测 9000）
 
 - 场景列表高度 **160px**、6 个场景行正常渲染（含有效链展示）
@@ -85,7 +107,8 @@
 
 - 场景名写错不炸轮（miss → default 兜底），但配置等于没生效——排障先核对场景名与列表展示的一致性
 - 场景链中的模型名必须与「左侧已配置的模型卡片」一致，未配置的自动跳过——新加模型先建卡片再挂进链
-- 手改 settings.json 的 fallback_chain / fallback_policy / utility_model / reasoning_completer 仍是有效配置源（UI 移除 ≠ 键退役）；想改回退链用 `/config fallback_chain`
+- **default 场景行是全实例的默认回退链**（2026-11-27 起连「未选链」的调用点也读它）——它配窄了（如只留一张卡），主 Agent react 与所有未选链调用就都只有单成员回退；想给某个 Agent 单独指定，去它的 yml `fallback:` 或管理页回退链表单（显式选择权威）
+- 手改 settings.json 的 `utility_model` / `reasoning_completer` 仍是有效配置源（UI 移除 ≠ 键退役）；`fallback_policy` 仍管未选链实例的策略；**`fallback_chain` 旧键已降为兼容层**（仅 default 场景链为空时生效）——想改回退链改 default 场景行，别再改旧键
 
 ## 相关页面
 

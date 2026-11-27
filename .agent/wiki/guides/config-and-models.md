@@ -394,7 +394,7 @@ def _openai_client(self) -> OpenAI:
 
 | 键 | 说明 |
 |----|------|
-| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退），见下方分层说明。**⚠️ 2026-11-11 起设置页 UI 已移除**（调用场景化后冗余，用户裁定）——配置走 `/config fallback_chain` 命令或手改 settings.json；键仍生效，UI 保存其它设置不会抹掉它（部分更新语义）。详见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定) |
+| fallback_chain | 回退链（逗号分隔 provider 名）；**运行时有效链 = _user_model 提前到链首** + base 链其余（/model 切换即重建）。**2026-09-15 起作用域收窄为「非 react 调用」**——工作流 LLM/llm_call 节点、补全（reasoning_completer）、utility_model 短调用用它；**react 主调用只认 agent .yml 的 `fallback:` 声明**（未声明=无回退 → **2026-11-27 起改判：未声明 = default 场景链**），见下方分层说明。**2026-11-27 起本键降为兼容层**：未选链的 LLMClient 默认读 **default 场景链**，本键只在 default 场景链为空（出厂空链）时兜底——改回退链请改设置页 default 场景行（见 [multi-agent · 回退链默认按 default 场景链处理](../architecture/multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)）。**⚠️ 2026-11-11 起设置页 UI 已移除**（调用场景化后冗余，用户裁定）——配置走 `/config fallback_chain` 命令或手改 settings.json；键仍生效，UI 保存其它设置不会抹掉它（部分更新语义）。详见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定) |
 | fallback_policy | reset=每轮重试 _user_model（默认）；sticky=回退后不回。**⚠️ 2026-11-11 起设置页 UI 已移除**（同 fallback_chain，键仍生效） |
 | utility_model | 统一辅助模型：recap/RAG检索/工作流LLM/reasoning补全默认 全走它（**必须独立 api_token**，见缓存坑）。**⚠️ 2026-11-11 起设置页 UI 已移除**——职责由调用场景组的 **completer / short-req 场景**接替（场景化新入口）；旧键仍从 settings.json 生效、行为不变。详见 [调用场景](../features/call-scenes.md) |
 | detail_base | 分档基准字数(1500)——设置页显示【实际生效值】：显式配置 > 按窗口推导（400K→1500、600K→2250、60K→600）> 1500 |
@@ -406,12 +406,12 @@ def _openai_client(self) -> OpenAI:
 | 其余 | max_retries/temperature/enable_thinking/dump_projections（投影转储调试；**2026-10-15 起子 Agent 构造时同读此键跟随**，见下方双特殊段） |
 | repos_dir | **repos 数据根重定向**（2026-10-15）：`~/.agt/repos/` 整棵数据树可指到其它盘（仅认绝对路径）；**启动时求值一次、重启生效**，只改指向不搬数据。详见 [repos 数据根重定向](../features/repos-dir-redirect.md) |
 
-> **回退链分层（2026-09-15 用户裁定后，两链分离）**：
+> **回退链分层（2026-09-15 用户裁定后，两链分离；2026-11-27 起两链的「未声明」默认值统一为 default 场景链）**：
 >
 > | 调用 | 链来源 | 谁配 |
 > |---|---|---|
-> | react 主调用（`scene=react·*`） | agent .yml 的 `fallback:` 声明（三形态：逗号串 / list / `{chain,policy}`）；**未声明 = 无回退** | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=删键）/ main.yml |
-> | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） |
+> | react 主调用（`scene=react·*`） | agent .yml 的 `fallback:` 声明（三形态：逗号串 / list / `{chain,policy}`）；**未声明 = 无回退**（**2026-11-27 起：default 场景链**） | [/agents 管理页](../features/agents-admin.md#回退链表单--钩子行布局修复2026-08commit-a667da4)（模型 chips 点选，留空=删键）/ main.yml |
+> | 非 react（工作流 LLM、补全、utility 短调用、recap） | **settings 全局链**（实例构造时继承）——**2026-11-27 起：default 场景链**（旧键 `fallback_chain` 仅 default 空链时兜底） | `/config fallback_chain` / 手改 settings.json（设置页 UI 已移除，2026-11-11，见 [调用场景](../features/call-scenes.md#移除模型与回退栏2026-11-11用户裁定)） |
 >
 > 设置页/`/config` 的回执文案已明确为「✅ **非 react 调用**回退链 = …（适用：工作流 LLM/llm_call、补全、utility 短调用；react 主回退链由 agent .yml 的 fallback 单独声明）」。实现（`_CHAIN_OVERRIDE` contextvar / `Agent._react_chain` / `chat(_chain=…)`）与实测见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)。
 

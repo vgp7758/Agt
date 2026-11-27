@@ -75,3 +75,16 @@ s_7edebd56 全量（投影层内插 + run_id 旁车 + 断点续跑）随 **v0.35
 - `web_search` 未纳入（用户只点名这三个）。
 - 验证：explore 端到端脚本全过（旁车 / 内插 / 续跑 seq 接续 / 损坏截断 / 白名单拒绝），双份文件 LSP 诊断无问题。
 
+## 后记：卡片名直配的回退 = default 场景链（2026-11-27，用户裁定）
+
+`_resolve_explore_model` 的卡片名分支返回 `(卡片名, None)`——不显式选链，回退由 `LLMClient` 未选链分支兜底。用户裁定（2026-11-27）「fallback 默认按 default 处理，选了就用选的」后，这条兜底从旧全局键 `settings.fallback_chain` 变为 **default 场景链**：
+
+| `explore(model=…)` | 工作模型 | 回退 |
+|---|---|---|
+| 场景名 | 该场景链首 | 该场景链（显式选择，不变） |
+| 卡片名 | 卡片 | **default 场景链**（此前读旧键 `settings.fallback_chain`，本机已与 default 分叉） |
+| 未指定 | explore 场景链首（未配置 = default 链首） | explore 场景链（未配置 = default 链） |
+
+- 本次改动仅 docstring 对齐（种源与运行时副本 `.agent/tools/explore_tools.py` 同步，双份同构保持）；行为随 `LLMClient` 改动在 `/restart` 后生效
+- 机制全貌见 [multi-agent · 回退链默认按 default 场景链处理](../architecture/multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)
+

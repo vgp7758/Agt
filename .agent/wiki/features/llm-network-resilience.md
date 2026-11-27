@@ -256,6 +256,28 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 
 **验证**（三场景全绿）：真实失败带回 ✓ / 无记录不附加 ✓ / `getattr` 兜底不炸 ✓。消费端两处：doctor 派单静态判定（不再依赖内存现场）+ 人工排障（错误文本即可辨 403 余额 vs 400 数据 vs 超时）。
 
+## 十一、回退链默认来源：未选链走 default 场景链（2026-11-27，用户裁定）
+
+### 现象与根因
+
+用户裁定（2026-11-27）：「所有调用场景 fallback 默认都按照 default 处理，如果选了就用选的」。此前 `LLMClient.__init__` 的**未选链分支**（`fallback_chain=None`）恒读旧全局键 `settings.fallback_chain`——设置页 2026-11-11 撤下该键入口后，它与 default 场景链在本机早已分叉（旧键 `proxy,deepseek` ≠ default `glm-official,proxy,basalt`）：未显式传链的 client（主 Agent 实例、钩子 / 工作流 / recap / utility、explore 卡片名路径）一直按一条用户看不见也改不到的链回退。
+
+### 修法（src/llm_client.py `__init__`）
+
+| 构造入参 | `_base_fallback_chain` | `_fallback_owned` |
+|---|---|---|
+| `fallback_chain=[…]`（显式链） | 该链 | `True` |
+| `fallback_chain=[]`（显式空链） | `[]`——隔离语义不变（doctor / 代看的临时 client 靠它不滚链） | `True` |
+| `fallback_chain=None`（未选链，默认） | **default 场景链**（`config.resolve_scenario("default")`）；default 空链才退回旧键 `settings.fallback_chain`（兼容） | `False` |
+
+- **链与策略分家**：链来源改了，策略没改——未选链分支仍读 `settings.fallback_policy`（reset / sticky）与 `cooldown_seconds`
+- **快照语义不变**：实例链是构造时快照，不随设置页 default 行热跟——长寿命实例（主 Agent、复用中的子 Agent）要 `/restart`；react 主调用例外，`Agent._react_chain()` 每轮现算
+- `_CHAIN_OVERRIDE` / `chat(_chain=…)` 覆盖机制不动（见 [multi-agent · 回退链职责分离](../architecture/multi-agent.md#回退链职责分离react-只认-yml-声明设置页链只管非-react2026-09-15用户裁定)），只是 yml 未声明时 react 拿到的覆盖链从「空」变成 default 链
+
+### 验证
+
+`test/test_fallback_default_rule.py` 的 LLMClient 四态：未选链 → default 链 ✓ / default 空链 → 旧键 ✓ / 显式链权威 ✓ / 显式空链隔离 ✓（本页四态 + `_react_chain` 三态 + 子 Agent 三态 = 新增 10 项；连同 `test/test_subagent_reuse_chain.py` 7 项共 17 passed）。`/restart` 生效。全貌（react 链 / 子 Agent 卡片直配 / 排障口径）见 [multi-agent · 回退链默认按 default 场景链处理](../architecture/multi-agent.md#回退链默认按-default-场景链处理选了就用选的2026-11-27用户裁定)。
+
 ## 配置键（详见 [配置体系](../guides/config-and-models.md)）
 
 配置键速查（`connect`/`write` 为 2026-09-28 新增，commit 83c732d；详见 [配置体系 · 网络韧性配置](../guides/config-and-models.md)）：
@@ -284,7 +306,7 @@ src/llm_client.py 新增模块级函数 `describe_image_with_vision(data_url, in
 ## 相关页面
 
 - [配置体系与模型调优](../guides/config-and-models.md) — settings / 模型卡片键、回退链与失败归类
-- [多 Agent 体系](../architecture/multi-agent.md) — 回退链职责分离（react 认 .yml / 非 react 认 settings）
+- [多 Agent 体系](../architecture/multi-agent.md) — 回退链职责分离（react 认 .yml / 非 react 认 settings；**2026-11-27 起两处未选链一律 default 场景链**）
 - [运维与排障](../guides/ops.md) — llm_calls 观测、网络类故障定位
 - [agent_watch](agent-watch.md) — 同日网络韧性批：10061 静默跳过
 - [doctor](doctor.md) — BadRequest 诊断修复 Agent：消费本页存档点 `last_failed_messages`；L1 自愈（本页五/七章）的根治搭档；十/后记二联动——错误消息回查真实首败 + 派单附目标失败明细

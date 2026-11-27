@@ -249,6 +249,12 @@ COOLDOWN_WAIT_MAX = 20.0   # 全链冷却时的最大睡等秒数（2026-09-16 �
                            # 超过此阈值不再睡等重试，直接报错并列出各成员冷却剩余——
                            # 原无脑 sleep(剩余)（可达 300s）会把 react 整轮卡死五分钟
 
+# 斐波那契退避冷却（2026-11-27 用户提案）：连续失败次数驱动冷却时长——首次 30s，
+# 之后按斐波那契递推（每项=前两项之和），封顶 15 分钟；调用成功即清零重来。
+# 序列（第 n 次连续失败）：30, 60, 90, 150, 240, 390, 630, 900, 900, ...
+COOLDOWN_BASE_SECS = 30.0
+COOLDOWN_MAX_SECS = 900.0
+
 
 def _classify_err(e) -> str:
     """失败归类（充值提示用）：quota=配额/余额不足（一键充值有意义）；
@@ -461,10 +467,15 @@ class LLMClient:
         self.fallback_chain: list[str] = []   # 运行时有效回退链（= _user_model 提前 + base 其余）
         self.fallback_policy: str = "sticky"  # reset=每轮回 _user_model / sticky=回退后不动
         self._fallback_owned = False          # 本实例的回退链来自 agent .yml 显式声明（而非全局 settings）
-        # 回退冷却（用户提案 2026-09-02）：provider（model 名）失败后 N 秒内跳过——避免连续撞同一个
-        # 故障端点。冷却期间该 provider 从可用链剔除；成功后自动清除冷却态（恢复即可用）。
-        self._provider_cooldown: dict[str, float] = {}   # {model_name: 上次失败时间戳}
-        self._cooldown_seconds: float = 300.0            # 默认 5 分钟（settings.json cooldown_seconds 可覆盖）
+        # 回退冷却（用户提案 2026-09-02 / 斐波那契退避 2026-11-27）：provider（model+token 签名）
+        # 失败后 N 秒内跳过——避免连续撞同一个故障端点。冷却期间该 provider 从可用链剔除；
+        # 成功后自动清除冷却态（恢复即可用）。
+        self._provider_cooldown: dict[str, float] = {}   # {签名 key: 失败时间戳}
+        self._cooldown_sec_by_key: dict[str, float] = {} # {签名 key: 该次失败实际冷却秒数}（动态退避）
+        self._cooldown_seconds: float = 300.0            # temp_ban 预折旧基准 / 无动态记录时的回退窗口
+        self._cooldown_base_seconds: float = COOLDOWN_BASE_SECS  # 斐波那契首项（30s）
+        self._cooldown_max_seconds: float = COOLDOWN_MAX_SECS    # 斐波那契封顶（900s=15min）
+        self._consecutive_failures: int = 0             # 连续失败次数（成功清零 → 数列重置）
         # 跨调用失败历史（doctor 2026-11-12 诊断建议）：last_failures 每次调用入口清零，冷却窗内
         # 的后续调用只剩 cooldown 记录、真实首败原因丢失——raise 时无从带回诊断线索。这里滚动
         # 保留最近 50 条真实失败（不含冷却跳过），供"回退链不可用"错误消息/doctor 派单引用。
@@ -500,10 +511,19 @@ class LLMClient:
                 _fp = (_rt.get("fallback_policy") or "").strip().lower()
                 if _fp in ("sticky", "reset"):
                     self.fallback_policy = _fp
-                # provider 冷却时长（settings.json 可覆盖默认 300s）
+                # provider 冷却参数（settings.json 可覆盖）：
+                #   cooldown_seconds      = temp_ban/回退窗口基准（原 300s 语义，保留）
+                #   cooldown_base_seconds = 斐波那契首项（默认 30s）
+                #   cooldown_max_seconds  = 斐波那契封顶（默认 900s=15min）
                 _cd = _rt.get("cooldown_seconds")
                 if _cd is not None and str(_cd).strip() != "":
                     self._cooldown_seconds = max(0, float(_cd))
+                _cb = _rt.get("cooldown_base_seconds")
+                if _cb is not None and str(_cb).strip() != "":
+                    self._cooldown_base_seconds = max(0, float(_cb))
+                _cm = _rt.get("cooldown_max_seconds")
+                if _cm is not None and str(_cm).strip() != "":
+                    self._cooldown_max_seconds = max(0, float(_cm))
             except Exception:
                 pass
         # reasoning 补全模型（p_ea32ad4f 场景化）：settings.json 显式配置优先；未配时走 completer
@@ -698,6 +718,33 @@ class LLMClient:
                 _LOG.warning("on_switch 钩子失败（忽略，不影响切换本身）：%s", e)
         return self
 
+    def _cooldown_for(self, n: int) -> float:
+        """第 n 次连续失败的冷却秒数（n 从 1 起）：斐波那契递推、封顶 _cooldown_max_seconds。
+        种子为 (base, 2*base)：30, 60, 90, 150, 240, 390, 630, 900, 900...
+        """
+        base = self._cooldown_base_seconds
+        cap = self._cooldown_max_seconds
+        if n <= 1:
+            return min(base, cap)
+        if n == 2:
+            return min(2 * base, cap)
+        prev, cur = base, 2 * base   # 第 1、2 次
+        for _ in range(2, n):
+            prev, cur = cur, min(prev + cur, cap)
+            if cur >= cap:
+                break
+        return min(cur, cap)
+
+    def _cooldown_remain(self, key: str, now: Optional[float] = None) -> float:
+        """该冷却 key 的剩余秒数（<=0 即到期）。读 per-key 实际时长（失败时记录），
+        无记录则回退全局 _cooldown_seconds（兼容 temp_ban / 外部手工写入）。"""
+        ts = self._provider_cooldown.get(key)
+        if ts is None:
+            return 0.0
+        now = time.time() if now is None else now
+        secs = getattr(self, "_cooldown_sec_by_key", {}).get(key, self._cooldown_seconds)
+        return secs - (now - ts)
+
     def temp_ban(self, model: str, secs: float):
         """临时禁用某模型 secs 秒（loop_breaker·2026-11-22 用户提案：检测到重复工具调用
         循环时 ban 当前模型，让回退链下一位接管收尾）。复用 provider 冷却容器——时长按
@@ -715,6 +762,8 @@ class LLMClient:
             keys = [f"{model}:{_hl.md5(_key.encode()).hexdigest()[:8] if _key else '0'}"]
         ts = time.time() - max(0.0, self._cooldown_seconds - max(1.0, float(secs)))
         for k in keys:
+            # 清掉动态退避时长——temp_ban 的语义是"恰好 secs"，按全局基准预折旧计算
+            getattr(self, "_cooldown_sec_by_key", {}).pop(k, None)
             self._provider_cooldown[k] = max(ts, self._provider_cooldown.get(k, 0.0))
 
     def set_fallback(self, chain, policy: Optional[str] = None) -> "LLMClient":
@@ -970,12 +1019,10 @@ class LLMClient:
             return f"{self.model_name}:{tok_sig}"
 
         def _cooled(key):
-            ts = self._provider_cooldown.get(key)
-            if ts is None:
-                return False
-            remain = self._cooldown_seconds - (time.time() - ts)
+            remain = self._cooldown_remain(key)
             if remain <= 0:
                 self._provider_cooldown.pop(key, None)
+                self._cooldown_sec_by_key.pop(key, None)
                 return False
             return True
 
@@ -988,7 +1035,7 @@ class LLMClient:
                 for k, ts in self._provider_cooldown.items():
                     if not k.startswith(m + ":"):
                         continue
-                    remain = self._cooldown_seconds - (now - ts)
+                    remain = self._cooldown_remain(k, now)
                     if remain > 0 and (best is None or remain < best[1]):
                         best = (m, remain)
             return best
@@ -1028,7 +1075,7 @@ class LLMClient:
                     for _k, _ts in self._provider_cooldown.items():
                         if not _k.startswith(_m + ":"):
                             continue
-                        _remain = self._cooldown_seconds - (_cd_now - _ts)
+                        _remain = self._cooldown_remain(_k, _cd_now)
                         if _remain > 0 and (_m not in _cd_best or _remain < _cd_best[_m]):
                             _cd_best[_m] = _remain
                 cd_detail = ", ".join("%s 剩%.0fs" % (_m, _v) for _m, _v in _cd_best.items())
@@ -1103,7 +1150,7 @@ class LLMClient:
 
             # 冷却检查：该 model+token 组合还在冷却窗口 → 直接跳过（不走 _chat_inner）
             if _cooled(ck):
-                remain = self._cooldown_seconds - (time.time() - self._provider_cooldown[ck])
+                remain = self._cooldown_remain(ck)
                 self.last_failures.append({"model": self.model_name, "err": "Cooldown",
                                             "cls": "cooldown",
                                             "msg": f"冷却中跳过(剩余{remain:.0f}s，上次失败)",
@@ -1122,7 +1169,10 @@ class LLMClient:
             try:
                 resp = self._chat_inner(messages, **overrides)
                 # 成功！清除该 provider+token 的冷却态（恢复即可用）
+                # 斐波那契退避：调用成功 → 连续失败计数清零，下次失败从 30s 重新起算
                 self._provider_cooldown.pop(ck, None)
+                self._cooldown_sec_by_key.pop(ck, None)
+                self._consecutive_failures = 0
                 if len(self.api_tokens) > 1 and self.token_rotate:
                     self._rotate_token()
                 if (self.reasoning_completer and (resp.reasoning or "").strip()
@@ -1167,7 +1217,11 @@ class LLMClient:
                 # 其它失败 → 记录冷却（model+token 签名）
                 # 401/403/404（鉴权/配额/模型不存在）也走回退（2026-09-08 用户调试 flatkey 余额 403 直接炸轮的根因）：
                 # 该 provider 不可用不代表链上其它也不可用——冷却后切下一个，保证会话不断
+                # 斐波那契退避：连续失败次数 +1 → 该 key 的实际冷却秒数（成功后清零重来）
+                self._consecutive_failures += 1
+                _fail_cd = self._cooldown_for(self._consecutive_failures)
                 self._provider_cooldown[ck] = time.time()
+                self._cooldown_sec_by_key[ck] = _fail_cd
                 try:
                     _prov, _rurl = _recharge_url_for(self.model_name, str(e))
                 except Exception:
@@ -1188,12 +1242,12 @@ class LLMClient:
                 if len(self._failure_history) > 50:
                     del self._failure_history[:-50]
                 if isinstance(e, (PermissionDeniedError, AuthenticationError, NotFoundError)):
-                    _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退：%s",
-                                 ck, getattr(e, "status_code", "?"), self._cooldown_seconds,
-                                 str(e)[:200])
+                    _LOG.warning("provider %s 鉴权/配额/模型错误（%s），冷却 %ds 并回退（连续失败第%d次）：%s",
+                                 ck, getattr(e, "status_code", "?"), _fail_cd,
+                                 self._consecutive_failures, str(e)[:200])
                 else:
-                    _LOG.warning("provider %s 失败，进入 %ds 冷却：%s%s",
-                                 ck, self._cooldown_seconds, type(e).__name__,
+                    _LOG.warning("provider %s 失败，进入 %ds 冷却（连续失败第%d次）：%s%s",
+                                 ck, _fail_cd, self._consecutive_failures, type(e).__name__,
                                  (f"（超时阶段：{_stg}）" if _stg else ""))
                 _advance(str(e))
 

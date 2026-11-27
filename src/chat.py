@@ -38,12 +38,8 @@ import config
 from agent import Agent
 from agent_config import SKILL_TOOLS, load_rules, agents_summary, seed_default_agents, seed_default_skills
 from background_tools import make_background_tools
-from plan_tools import make_plan_tools
-from spec_tools import make_spec_tools
 from survey_tools import make_survey_tools
-from memory_tools import make_recall_tools
 from endpoint_tools import make_endpoint_tools
-from session_tools import make_session_tools
 from toollog import make_tool_log_tools
 # wiki CRUD 十件套 + update_wiki 均不再内置：
 #   - CRUD/章节四件套 → tools/builtin/wiki_tools.py（外置，真限界上下文）
@@ -280,14 +276,14 @@ def build_agent(mcp_mgr, *, on_event=None, snapshot_manager=None, verbose=True, 
     # "回退链不可用"特征自动派 doctor。四件套 req_inspect/req_probe/req_patch/req_resume。
     # doctor 四件套已收敛为 doctor 专属（实例化注入，用户裁定 2026-10-16）
     _reg(SKILL_TOOLS, "技能")
-    _reg(make_plan_tools(agent), "计划")
-    _reg(make_spec_tools(agent), "施工方案")
+    # 有状态工具族（计划/施工方案/记忆召回/会话/钩子）由 agent_bound_tools 工厂表驱动——
+    # 单一事实源（p_c0eebb19 步 2）：子 Agent 侧 rebind 用同一张表按实例重建。
+    from agent_bound_tools import register_agent_bound_groups
+    register_agent_bound_groups(agent, _reg)
     _reg(make_survey_tools(agent), "用户交互")
     from survey_tools import get_human_step_tools
     _reg(get_human_step_tools(agent), "人在环")
-    _reg(make_recall_tools(agent), "记忆召回")
     _reg(make_endpoint_tools(agent), "自定义端点")   # serve_endpoint 三件套（2026-11-16：agent 给运行中服务动态挂 /custom/* 路由）
-    _reg(make_session_tools(agent), "会话")  # get_session_history: hidden，工作流节点用
     # ltm 五件套与 download 两件套由外置件提供（tools/builtin/ltm_tools.py / download_tools.py，
     # attach_script_tools 注册；ltm 工具经 ensure_ltm 单例与注入 provider 共享实例）
     _reg(make_tool_log_tools(agent), "工具日志")

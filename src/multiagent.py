@@ -1299,6 +1299,11 @@ def _revive_subagent(agent, reg, entry, caller_id: str, prompt: str = ""):
                        session_dir=loaded.session_dir or sub_dir,
                        registry=reg, agent_id=entry.agent_id,
                        caller_id=caller_id, current_turn_only=True)
+        # agent-bound 工具族按子 Agent 重建（p_c0eebb19 步 2）：toolbox 里 plan/spec/recall/
+        # session/hook_write 的闭包 agent 原为 main（_resolve_tools 直接复用 main.tools 的
+        # Tool 对象）——worker 的 update_plan 会写进 main 的计划。
+        from agent_bound_tools import rebind_agent_tools
+        rebind_agent_tools(sub.agent, agent)
         sub.agent.set_session(loaded, restore_model=False)   # 换上磁盘 session：重挂 provider + 流水记录指到原目录
         # restore_model=False（用户裁定 2026-11-18）：子 Agent 的模型由声明场景（_resolve_subagent_model）
         # 决定，声明优先于存档——否则复活时会被上次跑过的模型卡覆盖掉声明的场景链。
@@ -2413,6 +2418,11 @@ def make_subagent_tools(agent) -> list:
                            max_steps=(int(max_steps or meta.get("max_steps"))
                                       if (max_steps or meta.get("max_steps")) else None),   # None → 读盘出厂默认（2026-11-15）
                            assembly=(base_asm or None))
+            # agent-bound 工具族按子 Agent 重建（p_c0eebb19 步 2）：toolbox 直接复用 main.tools
+            # 的 Tool 对象，plan/spec/recall/session/hook_write 闭包的 agent 恒为 main——
+            # worker 的 update_plan 会写进 main 的计划、hook_write 写 main 的 recap。原地替换。
+            from agent_bound_tools import rebind_agent_tools
+            rebind_agent_tools(sub.agent, agent)
             if base_hooks is not None:
                 sub.agent.session.hook_specs = base_hooks
             if base_fb is not None:

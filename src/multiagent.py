@@ -2052,6 +2052,14 @@ def make_subagent_tools(agent) -> list:
             }
 
             def _bg():
+                # 本线程归属（p_c0eebb19 步 3）：装配函数（plan_steps/plan_content 等）经
+                # agent_config.current_agent() 读【本子 Agent】的实例状态——不再恒读 main 的
+                # （20048 实锤：worker 装配注入的是 main 的活动计划进度）。
+                from agent_config import set_current_agent
+                try:
+                    set_current_agent(getattr(_target, "agent", _target))
+                except Exception:
+                    pass
                 # 增强 prompt：告知子 Agent 谁派的任务 + 如何反查派发者上下文
                 enriched = _prompt
                 if caller_id and caller_id != "user":

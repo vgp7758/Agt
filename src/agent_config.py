@@ -10,6 +10,7 @@ save_skill 让 Agent 自主把可复用任务的 SOP 沉淀成新技能(或更�
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import re
 from pathlib import Path
@@ -242,6 +243,23 @@ def _func_team_profiles(viewer_id: str = "") -> str:
 # → 相关函数返回空（内插空判语义：整段不注入，不炸装配）。
 _RUNTIME_AGENT = None
 
+# 当前线程所属 Agent（p_c0eebb19 步 3，2026-11-27）：contextvar——子 Agent 在自己的运行线程
+# 起点设为自己，装配函数（plan_steps/plan_content 等）读它；未设（主线程/无子 Agent）落回
+# _RUNTIME_AGENT（=main）。解决 20048 实锤：子 Agent 装配的 {func:plan_steps()} 恒读 main 的
+# 活动计划——worker 看板显示的是 main 的计划进度。团队看板/bg_services/skill_equip 等仍读 main。
+_CURRENT_AGENT = contextvars.ContextVar("agt_current_agent", default=None)
+
+
+def set_current_agent(agent) -> None:
+    """子 Agent 运行线程起点调用：本线程内的装配函数读 agent 自己的实例状态。"""
+    _CURRENT_AGENT.set(agent)
+
+
+def current_agent():
+    """当前线程应读的 Agent 实例：contextvar 优先，缺省落回 main 挂点。"""
+    a = _CURRENT_AGENT.get()
+    return a if a is not None else _RUNTIME_AGENT
+
 
 def set_runtime_agent(agent) -> None:
     """主 Agent 构造时挂引用（幂等——重建/复用时覆盖为最新主实例）。"""
@@ -250,8 +268,9 @@ def set_runtime_agent(agent) -> None:
 
 
 def _active_spec_dict():
-    """活动 spec dict 或 None（approved 态返回 None——已生成 plan，由 plan_* 接管注入，防双重）。"""
-    a = _RUNTIME_AGENT
+    """活动 spec dict 或 None（approved 态返回 None——已生成 plan，由 plan_* 接管注入，防双重）。
+    读当前线程所属 Agent（contextvar 优先，p_c0eebb19 步 3）：子 Agent 线程装配读自己的 spec。"""
+    a = current_agent()
     s = getattr(a, "active_spec", None) if a is not None else None
     if not s or not s.get("steps") or s.get("review_state") == "approved":
         return None
@@ -259,7 +278,9 @@ def _active_spec_dict():
 
 
 def _active_plan_dict():
-    a = _RUNTIME_AGENT
+    """活动 plan dict 或 None。读当前线程所属 Agent（contextvar 优先，p_c0eebb19 步 3）：
+    子 Agent 线程装配 plan_steps()/plan_content() 读自己的活动计划，不再恒读 main 的。"""
+    a = current_agent()
     p = getattr(a, "active_plan", None) if a is not None else None
     return p if (p and p.get("steps")) else None
 

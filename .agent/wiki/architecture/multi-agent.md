@@ -1676,3 +1676,38 @@ system_append:
 - 长报告类子 Agent answer 上限 4000 字，超长指引用 `agent_query_events(id, 1)` 取全文
 - 派视觉任务时，prompt 中带图片占位（如 `[图片 文件名]`），并按 vision.md description 的提示委托：`agent_prompt("vision", "请描述 [图片 文件名] 的内容")`——主 Agent 无法直接查看图片内容
 
+## 子 Agent 工具归属 + agent_revoke 没收中断（2026-11-27）
+
+**实锤（20048）**：worker-s185 的 `exit_plan` 退掉了 main 的活动计划 p_7dffae8b；worker-p_7dffae8b 的 `list_plans` 显示「当前活动」、`update_plan` 直接改 main 的计划文件。根因两层同源——子 Agent 借的是 main 的同一批 Tool 对象，装配读的也是 main 的实例状态。
+
+**修复后的归属规则**
+
+| 层 | 修复前 | 修复后 |
+|---|---|---|
+| 工具 | `_resolve_tools()` 把 `main.tools` 的 Tool 对象原样给子 Agent，`make_plan/spec/recall/session/hook_write(agent)` 闭包里的 agent 恒为 main | `agent_bound_tools.rebind_agent_tools(sub, main)`：**计划 / 施工方案 / 记忆召回 / 会话 / 钩子副作用**五族按子 Agent 重建并原地替换（新建、复活两条路径都调）；只重绑「借来的 main 同一对象」，子 Agent 专属/技能同名工具不动 |
+| 装配 | `_RUNTIME_AGENT` 模块级单例 = main，worker 的 `plan_steps()` 注入的是 main 的计划 | `_CURRENT_AGENT` contextvar：子 Agent `run()` 起点设为自己；后台重定型线程经 `session→owner` 弱引用反查（`adopt_session_owner`）；主线程留空落回 main |
+| 计划写入 | `update_plan` 改内存副本再整盘写回，main 记账与 worker 标进度互相覆盖 | `_mutate_active_plan`：进程内 `_PLAN_LOCK` 下「读文件→改→写」，内存副本换成刚读到的 |
+
+**仍然读 main 的（实例级设计，不重绑）**：用户交互（ask_user/human_step 走 main 的 UI 通道）、后台/调度、自定义端点、子 Agent 管理、团队看板、bg_services。
+
+**施工线约定**：`construction_dispatch` 的施工牌第一步是 `join_plan('<pid>')`——计划在 worker 自己名下，`update_plan` 才有落点；收尾不必 `exit_plan`（计划仍归派发方记账）。未 join 的 worker 调 `update_plan` 会得到「[错误] 还没有活动计划」——这是预期行为，不是故障。
+
+**agent_revoke（仅主 Agent 持有）**
+
+```
+agent_revoke(target_id, reason="")   # 立刻没收某子 Agent 的全部工具并中断其工作
+```
+
+- 置 `_revoked` 旗标 → 该实例任何工具调用在 `_exec_tool` 入口 fail-closed（返回「[工具已没收]…」）；
+- `sleep` 改 0.5s 分片，每片查旗标——长睡中的 worker 在没收后 0.1s 内醒来；
+- 名下后台进程（run_python/run_shell 超时转后台的）一并 terminate；
+- 最近的步边界断轮：不再发 LLM 请求，以合成回答「⛔ 工具已被主 Agent 没收，任务中止（原因：…）」收尾并照常写 turn_end（含 changed 文件清单），回答照常回流传给 main；
+- 空闲时被没收同样置旗标，之后的 inbox/notify 唤醒静默跳过；registry / meta / 后台任务面板终态保持 `revoked`（不被 done 覆盖），团队看板图标 ⛔，`/api/status` 的 registry 条目带 `revoked` 字段；
+- **同一 agent_id 再 `agent_prompt` 即自动清旗标恢复**（工具重新可用）。
+
+**边界**：正在飞行中的那一次 LLM 请求拦不住——它返回后才在步边界断轮；前台阻塞型工具（未转后台的长 run_shell）同理要等它返回。`agent_notify` 给被没收的实例发消息不会恢复它（只有重新派活才算）。
+
+**插话留痕**：子 Agent 收到的步边界插话现在落进它自己的 events.jsonl（`{"event":"inject"}`），「收到没」可查——此前子 Agent `on_event=None`，`message_injected` 事件无人接收、零留痕。
+
+**实现索引**：`src/agent_bound_tools.py`（工厂表 + rebind）、`agent_config.py`（`_CURRENT_AGENT` / `bind_session_owner` / `adopt_session_owner`）、`plan_tools.py`（`_PLAN_LOCK` / `_mutate_active_plan`）、`multiagent.py`（`agent_revoke` / `_final_status` / 复用路径清旗标）、`agent.py`（`_revoked` fail-closed / 步边界断轮 / run 静默门）、`real_tools.revoke_bg_tasks`、`assets/tools_builtin/misc_tools.sleep`（分片）。单测 `test/test_agent_bound_tools.py`（8 项）。
+

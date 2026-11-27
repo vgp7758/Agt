@@ -3124,6 +3124,13 @@ class Agent:
                             inject = "；".join(self.pending_messages)
                             self.pending_messages.clear()
                             self._emit({"type": "message_injected", "text": inject})
+                            # 插话留痕（p_c0eebb19 步 6，2026-11-27）：落进该 agent 自己的
+                            # events.jsonl（与 turn_start/step/turn_end 同一入口）——子 Agent
+                            # on_event=None 时 _emit 没人收，插话此前只在投影里、events 流无痕。
+                            try:
+                                self.session._emit_event({"event": "inject", "text": inject})
+                            except Exception:
+                                pass
                             self.session._current._pending_step_hint = inject
                         else:
                             self.session._current._pending_step_hint = None

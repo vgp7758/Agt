@@ -5,7 +5,7 @@
 ## 职责
 
 - **插话**：用户在 Agent 思考/生成 answer 期间发送消息，赶得上步边界则当步注入（`message_injected`），赶不上则暂存 `pending_messages`，待 answer 完成后自动开新轮（`background_trigger`·`user_insert`）；带图插话 2026-10-03 起原生看图——`<img>` 标签按当前模型 vision 门控展开（见 [图片输入链路 · 插话原生看图](image-input.md)）；入口帧 2026-11-26 修回归——此前忙时插话帧只带文字、附图静默丢弃，现随帧带图（见下文「插话带图」一节）
-- **排队（/pending，2026-11-06）**：agent 忙时提前写好下一个需求、不打断当前轮——`/pending <message>` 经 inbox（`source="pending_user"`）串行排队，当前轮**完整结束后**按序作为新 user_message 开新一轮（与插话互补：插话是步边界注入【当前轮】）；见 [专节](#pending--排队用户消息忙时写好下一个需求不打断当前轮2026-11-06用户提案)
+- **排队（/pending，2026-11-06）**：agent 忙时提前写好下一个需求、不打断当前轮——`/pending <message>` 经 inbox（`source="pending_user"`）串行排队，当前轮**完整结束后**作为新 user_message 开新一轮（与插话互补：插话是步边界注入【当前轮】）；**2026-11-27 起带模式参数**——默认合并成一轮、`-each` 每条独立一轮（来源 `pending_each`，不走后台泵）；见 [专节](#pending--排队用户消息忙时写好下一个需求不打断当前轮2026-11-06用户提案)
 - **后台触发**：answer 完成后检查 `inbox`（后台队列）+ `pending_messages`（插话队列）**双队列**，有消息则自动触发新一轮处理（无需用户手动发送）
 - **后台通知 wake 语义**：默认**不独立唤醒轮**——service_exit 等并入下一次自然轮处理（v0.19.2 修复）；2026-08-30 起按服务策略化——`start_service(on_exit_wake=...)` 启动参数声明（crash/always 可主动唤醒）；**2026-09-14 起（commit 7283f52）非枚举任意文本 = 自定义作业指令 + 无条件唤醒**（误用收编）；**2026-09-23 起默认从 never 翻转为 `notify`——退出通知默认进 inbox**（持久化 + 空闲自动消费成轮 + 忙时步边界排队注入，见下文专节）；同族：run_python/run_shell **超时转后台任务完成时恒唤醒通知**（一次性任务无套娃）（见下节）
 - **user 消息语义标签**（2026-08-30，用户提案）：inbox 唤醒轮与真用户消息**渲染分流**——user 事件带 `source` 标签 → 系统通知气泡（默认折叠，图标按来源 📪📨⏰🤝）；无标签 → 蓝色 user 气泡；历史轮以 `[后台通知·` 文本前缀判别、混合批按**批首归属**定轮（commit 803b3a5，见下文专节）；**2026-10-14 时机语义精修**：到达时刻只写 🐞 日志抽屉（噪音不刷屏），inbox 出队消费时才显示通知气泡（见下文专节）
@@ -560,7 +560,7 @@ answer 事件（气泡出来，用户视角 = 轮已结束）
 
 ## /pending · 排队用户消息：忙时写好下一个需求，不打断当前轮（2026-11-06，用户提案）
 
-> src/agent.py（`queue_pending_user_message` / `pending_user_queue`）+ src/commands.py（`_cmd_pending` + registry）+ src/chat.py（/help 清单两处）。用户提案原文：「我有时候在agent正在忙的时候会写好下一个需求，不过我不希望以插话的形式打断它当前的工作，添加一个 /pending <message> 指令吧」。commit 93f9589（已推送）。
+> src/agent.py（`queue_pending_user_message` / `pending_user_queue` / `pending_user_items` / `pending_user_clear` / `count_pending_each` / `pop_pending_each` / `pop_inbox`）+ src/commands.py（`_cmd_pending` + registry）+ src/chat.py（`_make_inbox_pump` / `_worker` + /help 清单两处）。用户提案原文：「我有时候在agent正在忙的时候会写好下一个需求，不过我不希望以插话的形式打断它当前的工作，添加一个 /pending <message> 指令吧」。commit 93f9589（已推送）。**2026-11-27 加模式参数**（用户裁定「带个参数吧，按需走A或者B」）——默认合并成一轮、`-each` 逐条成轮，详见下文「模式参数」小节；本节表格已按新语义修订。
 
 **三条用户消息通道对照**（本命令的定位）：
 
@@ -568,34 +568,79 @@ answer 事件（气泡出来，用户视角 = 轮已结束）
 |---|---|---|---|
 | 正常消息（空闲） | 直接发 | 立即开新一轮 | 常规任务 |
 | **插话**（busy） | 直接发 | **步边界注入当前轮**（`user_hint`，模型当步可见、可改向；answer 生成中赶不上则降级〔用户中途补充〕） | 补充/纠正当前任务 |
-| **/pending**（本节） | `/pending <msg>` | **当前轮完整结束后**作为新 user_message 开新一轮 | 提前写好下一个独立需求，零打扰 |
+| **/pending**（本节） | `/pending [-each / -merge] <msg>` | **当前轮完整结束后**作为新 user_message 开新一轮——默认多条合并成一轮，`-each` 每条一轮 | 提前写好下一个独立需求，零打扰 |
 
 **用法**：
 
 ```
-/pending 修复登录页样式，完成后告诉我    ← 排队（agent 正忙时写好，不打断当前任务）
-/pending 然后跑一遍冒烟测试             ← 可排多条，按序逐条成轮
-/pending list                           ← 查看队列（list / ls / 空参数）
-/pending clear                          ← 清空（只动 pending_user 条目，其它后台消息不碰）
+/pending 修复登录页样式，完成后告诉我    ← 排队（agent 正忙时写好，不打断当前任务）；默认合并
+/pending -each 需求A                     ← 逐条：每条独立一轮、原文、普通 user 气泡（互不相关的需求）
+/pending -merge 需求B                    ← 显式合并（= 默认）：轮末队列里的合并型条目拼成一轮
+/pending list                            ← 查看队列（list / ls / 空参数；条目标 [合并] / [逐条]）
+/pending clear                           ← 清空（合并型 + 逐条型都清，其它后台消息不碰）
 ```
 
-**实现要点**：
+**实现要点**（2026-11-27 按模式语义修订）：
 
 | 设计点 | 实现 |
 |---|---|
-| **inbox 单通道复用** | 新增 `queue_pending_user_message`（与既有插话入口 `queue_user_message` 并排）= `push_inbox("pending_user", text)`——轮末/空闲由两条既有消费点（answer 后 pop_inbox 兜底 + worker 空闲循环）自动触发新轮，**不新增触发点** |
-| **消息原文即 user_message** | 消费时无通知壳——开出的轮与用户亲手发的消息同形态 |
-| **多条按序** | inbox FIFO——多条 /pending 逐条成轮 |
-| **持久化** | `inbox.jsonl`——/restart 或崩溃都不丢 |
-| **CLI/Web 一致** | 同一 registry dispatch 表（`reg.register("pending", …)`，用法示例含与插话的区别说明），WebUI 斜杠兜底通道零改动即通；消息含空格——dispatch 传 list，`" ".join(args)` 原样拼接 |
+| **inbox 单通道复用** | `queue_pending_user_message(text, mode="merge")` = `push_message(text, source=…)`，按 mode 分两种来源：合并 `pending_user` / 逐条 `pending_each`（未知 mode 值一律按合并）。合并型沿用两条既有消费点（answer 后 `pop_inbox` 兜底 + 后台泵→worker）自动触发新轮；逐条型另加一条专用触发项（下节）。**未新增用户可见入口** |
+| **消息形态** | 逐条型：原文开轮、无通知壳（轮末分支不发 `background_trigger` 并清 `_msg_source`）→ 普通 user 气泡。合并型：走后台通知批合并路径（`_merge_batch`）——user_message 带 `[后台通知·pending_user]` 前缀、批首时按通知气泡渲染（**按现码核对，该路径本次未改、未实测**；2026-11-06 初版表格写的「消费时无通知壳」只对逐条型成立） |
+| **多条怎么成轮** | 合并型：同一时刻堆在 work_q 的条目被 worker drain 成一批、`---` 拼接开一轮（连同同批后台通知）；逐条型：inbox FIFO，每条各开一轮 |
+| **持久化** | `inbox.jsonl`——两种来源都落盘，/restart 或崩溃都不丢 |
+| **CLI/Web 一致** | 同一 registry dispatch 表（`reg.register("pending", …)`，签名 `[-each / -merge] [message]`，用法示例含与插话的区别说明），WebUI 斜杠兜底通道零改动即通；消息含空格——dispatch 传 list，`" ".join(args)` 原样拼接 |
 
-**验证与生效**：
+**验证与生效（2026-11-06 初版）**：
 
 - 函数级 mock 单测 **7 项 ALL PASS**：busy 排队回显 / list 按序 / inbox 形态（原文） / clear / 空态 / idle 语义（空闲时 /pending 直接开新轮，不进队列干等）/ registry 完整性
 - 施工插曲：一轮 edit 误吃 `_cmd_continue` 函数头（def 行悬空只剩 docstring）——单测当场抓出，补行恢复
 - **需 `/restart` 生效**（引擎层三文件 + 命令注册在启动期）；CLI 与 WebUI 同批生效
 
-**关联**：[插话全生命周期](#插话全生命周期2026-08-19-修复闭环commit-fb115aa)（插话通道的完整闭环——/pending 与之互补：插话进当前轮、/pending 开新轮）、[busy 误判插话修复](#busy-误判插话修复answer-后收尾期秒跟进开新轮2026-10-03用户实锤commit-3e0714a)（answer 前=插话、answer 后=新轮的判定边界；/pending 是**显式声明要新轮**，不参与 busy 判定竞态）、[user 消息语义标签](#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)（inbox 消费侧的渲染分流）、[/ask](ask-command.md)（姊妹斜杠命令：旁路询问不进历史）、/hold 挂起（本页上文——对运行中 Agent 的另一种不打断控制）
+### 模式参数 `-each` / `-merge`：逐条成轮 or 合并成一轮（2026-11-27，用户裁定）
+
+> 用户请求原文：「带个参数吧，按需走A或者B」——A/B 即「逐条成轮 / 合并成一轮」两条路径。改动：src/agent.py（`pop_inbox` 加 skip/only 过滤 + 队列视图四方法 + run 轮末分支）、src/commands.py（`_cmd_pending` 解析开关 + registry 说明）、src/chat.py（后台泵抽成 `_make_inbox_pump` + worker 逐条分支）、[test/test_pending_modes.py](../../../test/test_pending_modes.py)（新建）。**施工收官时未提交（提交号待补）；需 `/restart` 生效**——重启前运行中的仍是旧逻辑，`-each` 开关认不出（被当作消息正文入队）。
+
+**两种模式对照**：
+
+| | merge（默认 / `-merge`） | each（`-each`） |
+|---|---|---|
+| inbox source | `pending_user` | `pending_each` |
+| 后台泵 | 走：泵弹出 → `work_q.put(("background", item))` | **不走**：泵 `pop_inbox(skip=_INBOX_PUMP_SKIP)` 跳过，留在 inbox |
+| 谁开轮 | worker drain 整批 → `_merge_batch` → 一轮 | **run 轮末** `pop_inbox()` 逐条弹出 → 下一轮迭代原文开一轮；agent 空闲时由泵投触发项、worker 开第一轮 |
+| 消息形态 | 见上表「消息形态」（通知壳，读码结论） | 原文、无通知壳、普通 user 气泡（空闲路径已实测） |
+| 适合 | 同一任务的几条补充 | 互不相关的几个需求 |
+
+**关键实现**：
+
+| 件 | 说明 |
+|---|---|
+| `Agent.pop_inbox(skip=None, only=None)` | `skip`=跳过并**留在队列**的来源集合；`only`=只取的来源。锁内扫描首个命中项，成功弹出才重写 `inbox.jsonl`。两个参数均可选——既有调用点零改动 |
+| `count_pending_each()` / `pop_pending_each()` | 泵的空闲判定用 / worker 触发项取条用（= `pop_inbox(only=…)`，队首的其它来源不动） |
+| `pending_user_items()` / `pending_user_clear()` | `/pending list` 的 `[(mode, msg)]` 视图；clear 两种来源一起清、其它来源（schedule / service_exit…）保留 |
+| run 轮末分支（src/agent.py） | `src == "pending_each"` → `_msg_source = ""` 且不 emit `background_trigger`。**清 source 的原因**：它是 `_run_loop` 的形参、下一轮迭代沿用——上一轮若由后台通知触发，不清会把排队需求渲染成通知气泡；清空后 before_turn 检索钩子照常跑 |
+| `_make_inbox_pump(agent, work_q, state)`（src/chat.py） | 后台泵线程体从 web_main / cli_main 两处内联闭包抽成公共函数（两处各一行 `threading.Thread(target=_make_inbox_pump(…))`）。循环三态：① `pop_inbox(skip=_INBOX_PUMP_SKIP)` 有 → 投 `("background", item)`；② 无、且 agent 不忙且 `count_pending_each()` > 0 → 投一个 `("pending_each", None)` 触发项；③ 否则空转。常量 `_INBOX_PUMP_SKIP = frozenset({"pending_each"})` |
+| `_worker` 逐条分支 | `kind == "pending_each"` → `pop_pending_each()` 取一条 `agent.run(原文, _msg_source="")`（不批合并）；取不到（已被轮末弹走）→ 空过。批 drain 的「不可合并」判据同步加 `pending_each`——与 task / 斜杠命令同款：放回队尾、停止 drain |
+| `_cmd_pending` 开关解析 | 大小写不敏感、只认**首个 token**（`-each` / `-each …` / `-merge` / `-merge …`）；**只给开关不给内容 → 用法提示、不入队**（多半是漏写了需求）；裸 `/pending` 仍 = list；回显带模式与时机提示（忙：「当前任务结束后生效：逐条成轮 / 与其它排队项合并成一轮」；空闲：「agent 当前空闲——此消息将直接开新一轮」） |
+| 防重复投触发项 | 投触发项后 `sleep(0.2)`，给 worker 取走并置 busy 的时间；重复触发无害（取不到条目即空过） |
+
+**设计时序（读码）**：
+
+```
+agent 忙：/pending -each A → /pending -each B
+  A、B 入 inbox(pending_each) → 泵跳过 → 当前轮轮末 pop_inbox()=A → 新一轮(A 原文)
+  → 轮末 pop=B → 新一轮(B) → 轮末 inbox 空 → 结束
+agent 空闲：/pending -each A
+  A 入 inbox → 泵见 !busy 且 count>0 → work_q 投 ("pending_each", None)
+  → worker pop_pending_each()=A → agent.run(A) → 轮末 inbox 已空
+```
+
+**验证**：
+
+- 单测 [test/test_pending_modes.py](../../../test/test_pending_modes.py) **6 项**（mode→source 映射含未知值 / `skip` 留队 / `only` 取条与计数 / list·clear 双模式覆盖 / 命令解析含「只给开关」/ 泵跳过逐条型 + 仅空闲投一次）+ `test_remote_msg_dedup.py` 4 项 = **10 passed**；三个源文件语法校验通过。worker 分支与批合并行为单测不覆盖（留给隔离实例实测）
+- 隔离实例实测**跑到一半**（施工期间宿主进程重启、隔离实例随之终止）：已确认 ① 空闲时 `/pending -each 空闲E` 自动开一轮，user 消息为原文「空闲E：只回复「E」」、无通知前缀；② `/pending list` 列出 2 条逐条 + 2 条合并
+- **未验证**（仅单测 + 读码）：忙时排入多条逐条是否每条各一轮；合并型 C、D 是否拼成一轮（合并型的通知壳形态一并待看）
+
+**关联**：[插话全生命周期](#插话全生命周期2026-08-19-修复闭环commit-fb115aa)（插话通道的完整闭环——/pending 与之互补：插话进当前轮、/pending 开新轮）、[busy 误判插话修复](#busy-误判插话修复answer-后收尾期秒跟进开新轮2026-10-03用户实锤commit-3e0714a)（answer 前=插话、answer 后=新轮的判定边界；/pending 是**显式声明要新轮**，不参与 busy 判定竞态）、[user 消息语义标签](#user-消息语义标签--后台通知轮-vs-用户轮2026-08-30用户提案批首归属-commit-803b3a5)（`_msg_source` → source 标签 → 气泡分流；合并型与逐条型的渲染差异即由此来）、[后台通知 wake 语义](#后台通知-wake-语义service_exit-不再独立触发轮2026-08v0192)（后台泵是 inbox 全体来源的共用通道——schedule / service_exit 与两种 pending 同走）、[定时/后台任务调度](background-scheduler.md)（同批合并的另一个来源：schedule 消息与合并型 pending 拼同一轮）、[/ask](ask-command.md)（姊妹斜杠命令：旁路询问不进历史）、/hold 挂起（本页上文——对运行中 Agent 的另一种不打断控制）
 
 ## 插话死信修复：前端 busy 陈旧 → 空闲态消息走插话通道永不消费（2026-10-07，20048 实锤，commit 1c0d2f9）
 

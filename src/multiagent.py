@@ -1180,10 +1180,56 @@ def make_communication_tools(agent) -> list:
         except Exception as e:
             return f"[查询失败] {type(e).__name__}: {e}"
 
+    def agent_revoke(target_id: str, reason: str = "") -> str:
+        """没收目标子 Agent 的全部工具并中断其当前工作（p_c0eebb19 步 5，2026-11-27）。
+        行为：① 目标置 _revoked 旗标（工具 fail-closed、步边界断轮、sleep 分片提前返回）；
+        ② 终止它名下的后台进程（run_python/run_shell 超时转后台的）；③ 清它的 pending 插话；
+        ④ registry 状态置 revoked。目标空闲也照常置旗标——之后 inbox 唤醒不再跑轮。
+        再派活（agent_prompt）时自动清旗标恢复。只有主 Agent 持有本工具。
+        target_id: 目标 agent_id（用 list_team 查看）；reason: 没收原因（会展示给目标）。"""
+        if not reg:
+            return "(多 Agent 通信未启用：无 registry)"
+        if agent.agent_id != "_main_":
+            return "[拒绝] 只有主 Agent 可以没收子 Agent 的工具"
+        entry = reg.lookup(target_id)
+        if entry is None:
+            return f"[未找到] agent_id='{target_id}' 不在注册表中。用 list_team 查看当前活跃 Agent。"
+        target_agent = entry.agent
+        if target_agent is None:
+            return f"[错误] '{target_id}' 的 Agent 实例不可用（已退出的实例无法没收）"
+        if target_agent is agent:
+            return "[拒绝] 不能没收自己"
+        target_agent._revoked = True
+        target_agent._revoked_reason = str(reason or "").strip() or "未说明"
+        try:
+            target_agent.pending_messages.clear()
+        except Exception:
+            pass
+        killed = []
+        try:
+            import real_tools as _rt
+            killed = _rt.revoke_bg_tasks(target_agent)
+        except Exception:
+            pass
+        try:
+            reg.update_status(target_id, "revoked")
+        except Exception:
+            pass
+        _LOG.info("主 Agent 没收子 Agent %s（原因：%s；终止后台任务 %d 个）",
+                  target_id, target_agent._revoked_reason, len(killed))
+        out = (f"✅ 已没收 '{target_id}' 的工具并中止其任务（原因：{target_agent._revoked_reason}）。"
+               f"它当前轮会在最近的步边界以中止文案收尾；之后的工具调用一律 fail-closed。")
+        if killed:
+            out += f"\n已终止它名下 {len(killed)} 个后台进程：{', '.join(killed)}"
+        return out
+
     if not reg:
         return []
-    return [Tool(list_team), Tool(agent_ask), Tool(agent_notify),
-            Tool(agent_query_events), Tool(agent_query_tool_detail)]
+    _comm = [Tool(list_team), Tool(agent_ask), Tool(agent_notify),
+             Tool(agent_query_events), Tool(agent_query_tool_detail)]
+    if getattr(agent, "agent_id", "") == "_main_":
+        _comm.append(Tool(agent_revoke))   # 只有 main 有（p_c0eebb19 步 5）
+    return _comm
 
 
 # recap 错误特征：LLM 端点挂掉/回退链耗尽时 run_hook 会把错误文本当 result 返回——
@@ -2337,6 +2383,13 @@ def make_subagent_tools(agent) -> list:
                         return (f"[忙] agent_id='{agent_id}' 的实例正在跑。"
                                 f"先 wait_subagents 等它完成；要并行就换一个新 agent_id 开新实例线。")
                     entry = max(idle, key=lambda e: e.registered_at)
+                    # 再派活自动恢复（p_c0eebb19 步 5，2026-11-27）：agent_prompt 命中被没收
+                    # （revoked）的实例 = 主 Agent 重新派活——清旗标恢复正常（工具重新可用；
+                    # 此前挂起的步边界断轮不会触发，因为本路径走新轮 run）。
+                    if getattr(entry.agent, "_revoked", False):
+                        entry.agent._revoked = False
+                        entry.agent._revoked_reason = ""
+                        _LOG.info("子 Agent %s 被重新派活，没收旗标清除（工具恢复）", entry.agent_id)
                     entry.task = prompt
                     entry.caller_id = caller_id
                     reg.update_status(entry.agent_id, "running")   # 占位即标（锁内）

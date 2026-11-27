@@ -117,6 +117,33 @@ def get_bg_owner():
     return getattr(_tls, "bg_owner", None)
 
 
+def revoke_bg_tasks(agent) -> list:
+    """终止指定 Agent 名下的后台任务（p_c0eebb19 步 5，2026-11-27）：agent_revoke 没收时，
+    该 Agent 起的 run_python/run_shell 超时转后台进程（_bg_tasks 里 owner==它且未结束的）
+    一并 terminate——被没收的 worker 不能留着后台进程继续干活。返回被终止的 bg_id 清单。"""
+    killed = []
+    for bg_id, task in list(_bg_tasks.items()):
+        if task.get("owner") is not agent:
+            continue
+        if task.get("finished"):
+            continue
+        proc = task.get("proc")
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                killed.append(bg_id)
+        except Exception:
+            pass
+    if killed:
+        try:
+            import logging
+            logging.getLogger("agt.real_tools").info(
+                "没收终止后台任务 %s（owner=%s）", killed, getattr(agent, "agent_id", "?"))
+        except Exception:
+            pass
+    return killed
+
+
 def _effective_timeout() -> int:
     """当前调用者的工具执行超时秒数（实例级，用户裁定 2026-11-15）。
     优先取「正在执行工具的 Agent」的 tool_timeout（线程局部 owner——主/子 Agent、串行/并行

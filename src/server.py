@@ -1526,6 +1526,8 @@ async def api_status(request: Request):
                     "caller_id": e.caller_id,
                     "recap": (e.recap or "")[:80],
                     "has_agent": e.agent is not None,
+                    # 没收标记（p_c0eebb19 步 5，2026-11-27）：看板/诊断可见——工具已被收回
+                    "revoked": bool(getattr(e.agent, "_revoked", False)),
                 })
         st["registry"] = team
     else:

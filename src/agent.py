@@ -443,6 +443,11 @@ class Agent:
         self.active_spec_id: Optional[str] = None    # 当前活动 spec id（= 文件名 stem）；None=无活动 spec
         self.active_spec: Optional[dict] = None      # 当前活动 spec 完整 dict（单一事实源）
         self.pending_messages: List[str] = []  # 用户插入的消息队列（忙时插话 + schedule immediate 的步边界打断通道）
+        # —— 工具没收（p_c0eebb19 步 5，2026-11-27）——
+        # main 可经 agent_revoke 立刻收回子 Agent 的工具并中断其工作：置位后工具 fail-closed、
+        # 步边界断轮、sleep 分片提前返回、名下后台进程终止。agent_prompt 再派活时自动清位恢复。
+        self._revoked: bool = False
+        self._revoked_reason: str = ""
 
         # —— 工作流生命周期钩子（每轮 run 开头重置）——
         self._hook_notes: list[dict] = []       # 待注入的 system 旁注（before_tool/after_tool/before_answer），每项 {hook, name, result}
@@ -747,6 +752,12 @@ class Agent:
         参数名沿革（2026-09-06 用户提案）：旧名 server_id 与工具自身同名参数易撞名
         （remote_* 管理族的 server_id 是【管理语义】）；新名 remote_instance_id 不撞名；
         旧名仅对非 remote_* 工具兼容保留。"""
+        # 工具没收 fail-closed（p_c0eebb19 步 5，2026-11-27）：main 经 agent_revoke 没收后，
+        # 本 Agent 的任何工具调用直接返回固定文案——不再执行（含远程路由/插件管线全跳过）。
+        if getattr(self, "_revoked", False):
+            reason = getattr(self, "_revoked_reason", "") or "未说明"
+            return (f"[工具已没收] 主 Agent 已收回你的工具并中止本任务（原因：{reason}）"
+                    f"——不要再调用任何工具，也不要尝试其它工具绕行。")
         # 后台任务发起者标记（用户裁定 2026-10-15）：run_python/run_shell 超时转后台时，
         # real_tools 从线程局部取 owner 记进 _bg_tasks，完成回执按 owner 路由——谁起的谁收。
         # 设位放这里是因为并行工具走线程池（_run_tools_parallel）：线程局部只在"真正执行工具的
@@ -2886,6 +2897,14 @@ class Agent:
         顶窗双倍速提前触发折叠投影骤降/连环「中断，本轮未完成」归档）。
         """
         # 用循环替代递归：自主继续时走下一轮迭代而不是 self.run() 递归
+        # 没收静默门（p_c0eebb19 步 5，2026-11-27）：被没收的实例被 inbox/notify 唤醒时不跑轮
+        # ——显式重新派活走 agent_prompt（复用路径先清旗标），能带旗标进到这里的唤醒一律静默
+        # 跳过并留日志（没收后不再自行消费任何消息）。
+        if getattr(self, "_revoked", False) and not _resume_current:
+            _LOG.info("Agent %s 已被没收工具，本次唤醒静默跳过（消息头 80 字）：%s",
+                      self.agent_id, " ".join(str(user_message).split())[:80])
+            return ("[工具已被没收] 主 Agent 已中止本任务，本次唤醒消息不执行——"
+                    "主 Agent 重新派活会自动恢复你的工具。")
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
         seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
         self._react_running = True
@@ -3079,6 +3098,28 @@ class Agent:
                             self._emit({"type": "warn",
                                         "text": "⚠️ 会话锚点已变更（可能被切换/恢复）——本轮提前收尾"})
                             return ""
+                        # 工具没收断轮（p_c0eebb19 步 5，2026-11-27）：步边界发现被没收 → 不再发
+                        # LLM 请求，清空 pending 插话、以合成回答收尾本轮（照常写 turn_end/changed），
+                        # registry 置 revoked。再派活由 agent_prompt 清旗标自动恢复。
+                        if getattr(self, "_revoked", False):
+                            _rv_reason = getattr(self, "_revoked_reason", "") or "未说明"
+                            _rv_text = (f"⛔ 工具已被主 Agent 没收，任务中止（原因：{_rv_reason}）。"
+                                        f"不要继续本任务；主 Agent 重新派活会自动恢复你的工具。")
+                            self.pending_messages.clear()
+                            if self.session._current is not None:
+                                self.session.finish_turn(_rv_text)
+                            _rv_chg = list(self.session.turns[-1].changed) if self.session.turns else []
+                            self._emit({"type": "answer", "text": _rv_text,
+                                        "tokens": self.cumulative_tokens, "changed": _rv_chg,
+                                        "turn": len(self.session.turns)})
+                            _rv_reg = getattr(self, "registry", None)
+                            if _rv_reg:
+                                try:
+                                    _rv_reg.update_status(self.agent_id, "revoked")
+                                except Exception:
+                                    pass
+                            _LOG.info("Agent %s 步边界被没收断轮（原因：%s）", self.agent_id, _rv_reason)
+                            return _rv_text
                         if self.pending_messages:
                             inject = "；".join(self.pending_messages)
                             self.pending_messages.clear()

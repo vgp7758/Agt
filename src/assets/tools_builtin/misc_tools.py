@@ -32,14 +32,29 @@ def sleep(seconds: float) -> str:
     """等待指定秒数后返回。适用场景：轮询间隔/限速/等待外部事件（如后台任务/实例就绪）。
     inline 执行不受 tool_timeout 影响（会真实睡满）；期间阻塞当前轮，插话会排队。
     等待期间引擎维持心跳，不会被看门狗判卡死。
-    seconds: 秒数（0~3600）。"""
+    seconds: 秒数（0~3600）。
+    没收中断（p_c0eebb19 步 5，2026-11-27）：0.5s 一片循环分片睡——每片查执行者 owner 的
+    _revoked，被主 Agent 没收立即返回中断文案（长睡不再吞掉没收信号）。"""
     try:
         s = float(seconds)
     except (TypeError, ValueError):
         return f"[错误] seconds 需为数字，收到 {seconds!r}"
     if not (0 <= s <= 3600):
         return f"[错误] seconds 需在 0~3600 之间，收到 {s:g}"
-    time.sleep(s)
+    slept = 0.0
+    while slept < s:
+        owner = None
+        try:
+            from real_tools import get_bg_owner
+            owner = get_bg_owner()
+        except Exception:
+            owner = None
+        if owner is not None and getattr(owner, "_revoked", False):
+            return (f"[已中断] 等待被主 Agent 没收中断（已等 {slept:g}/{s:g} 秒）"
+                    f"——工具已收回，任务中止。")
+        piece = min(0.5, s - slept)
+        time.sleep(piece)
+        slept += piece
     return f"已等待 {s:g} 秒"
 
 

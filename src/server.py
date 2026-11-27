@@ -2855,11 +2855,17 @@ async def ws_endpoint(websocket: WebSocket):
     # （与上方 team_list 同款修法——刷新即恢复）。
     try:
         _ag = _agent
-        if _ag is not None and getattr(_ag, "active_plan", None):
-            await _send(websocket, {"type": "plan",
-                                    "plan": [dict(s) for s in (_ag.plan or [])],
-                                    "plan_id": _ag.active_plan_id,
-                                    "plan_title": (_ag.active_plan or {}).get("title", "")})
+        if _ag is not None and getattr(_ag, "active_plan_id", None):
+            try:
+                from plan_tools import view_active_plan as _vap   # 读侧校验：面板不吃陈旧内存副本
+                _vap(_ag)
+            except Exception:
+                pass
+            if getattr(_ag, "active_plan", None):
+                await _send(websocket, {"type": "plan",
+                                        "plan": [dict(s) for s in (_ag.plan or [])],
+                                        "plan_id": _ag.active_plan_id,
+                                        "plan_title": (_ag.active_plan or {}).get("title", "")})
     except Exception:
         pass
 

@@ -105,6 +105,50 @@ def _mutate_active_plan(agent, mutator):
         return None
 
 
+def _plan_sig(p):
+    """计划内容签名（面板可见部分：id/标题/各步状态+描述）——视图刷新时判断「内容真变了没」。"""
+    if not p:
+        return None
+    return (p.get("id"), p.get("title"),
+            tuple((s.get("status"), s.get("description")) for s in (p.get("steps") or [])))
+
+
+def view_active_plan(agent):
+    """读侧视图校验（2026-11-28·用户问诊「main 看到的还是内存里自己那份」）：计划文件是唯一
+    事实源，agent.active_plan 只是缓存——另一个 Agent（如施工 worker）update_plan 写盘后，
+    本 Agent 的 SYSTEM 进度块 / 计划面板若仍读内存副本就永远是旧进度。文件比上次看到的新
+    （mtime/size 变了）就重读并替换内存视图（含 agent.plan 镜像），内容真变了再 emit 给 UI。
+    每次调用一次 os.stat（微秒级），没变直接返回——放在每步装配路径上无感。"""
+    cur = getattr(agent, "active_plan", None)
+    pid = getattr(agent, "active_plan_id", None)
+    if not pid:
+        return cur
+    ws = getattr(getattr(agent, "session", None), "workspace", None)
+    try:
+        _st = _plan_path(ws, pid).stat()
+        stamp = (_st.st_mtime_ns, _st.st_size)
+    except Exception:
+        return cur                      # 文件没了/路径不可用：保留现有视图
+    if cur is not None and getattr(agent, "_plan_view_stamp", None) == stamp:
+        return cur                      # 文件没动：零开销
+    fresh = _load_plan(ws, pid)
+    if fresh is None:
+        return cur                      # 读到损坏内容（写端是原子替换，正常不会出现）：保留现有视图
+    try:
+        agent._plan_view_stamp = stamp
+    except Exception:
+        pass
+    if cur is None:
+        _set_active(agent, fresh)
+        return fresh
+    if _plan_sig(cur) == _plan_sig(fresh):
+        agent.active_plan = fresh       # 内容没变（如仅 updated_at）：只换引用，不打扰 UI
+        return fresh
+    _set_active(agent, fresh)           # 内容变了（多半是别的 Agent 标了进度）：换视图 + 刷镜像
+    _emit_plan(agent)                   # + 推 UI（面板实时跟上）
+    return fresh
+
+
 def _sync_legacy(agent):
     """把 active_plan['steps'] 镜像到 agent.plan（供 wiki/commands/web 等旧读者）。"""
     if getattr(agent, "active_plan", None):
@@ -220,8 +264,9 @@ def _plan_text(agent) -> str:
 
 
 def _format_plan_block(agent) -> str:
-    """活动计划的 SYSTEM 注入块。无活动计划 / 空步骤返回 ''（session 不注入）。"""
-    p = getattr(agent, "active_plan", None)
+    """活动计划的 SYSTEM 注入块。无活动计划 / 空步骤返回 ''（session 不注入）。
+    先走 view_active_plan 读侧校验（2026-11-28）：别的 Agent 标的进度实时可见。"""
+    p = view_active_plan(agent)
     if not p or not p.get("steps"):
         return ""
     steps = p["steps"]
@@ -237,8 +282,8 @@ def _format_plan_block(agent) -> str:
         _mf = (Path(_ws) / ".agent" / "construction_dispatch.json") if _ws else Path(".agent/construction_dispatch.json")
         _d = json.loads(_mf.read_text(encoding="utf-8")) if _mf.exists() else {}
         if _d.get("agent_id") and str(_d.get("plan_id") or "") == str(p.get("id") or ""):
-            lines.append(f"施工：已委托 {_d.get('agent_id')}（施工细节在其 session；完成会自动汇报——"
-                         f"收到汇报后用 update_plan 记账）")
+            lines.append(f"施工：已委托 {_d.get('agent_id')}（施工细节在其 session；完成会自动汇报。"
+                         f"进度随其标步实时同步——收到汇报后验收即可，不必重复记账）")
     except Exception:
         pass
     lines.append("设计：" + (design or "（无）"))

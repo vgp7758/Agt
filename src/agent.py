@@ -28,7 +28,7 @@ from background import ServiceManager, Scheduler
 from llm_client import LLMClient, ImageUnsupportedError
 from log import configure_logging
 from longterm_memory import ensure_ltm
-from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block
+from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block, view_active_plan
 from spec_tools import (restore_active_spec, clear_active_spec, _format_spec_block,
                         _clear_active_spec, _set_active_spec, _emit_spec)
 from session import Session, Step, ToolCall, repo_images_dir
@@ -1358,9 +1358,11 @@ class Agent:
 
 
     def _emit_plan_if_any(self):
-        """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。"""
+        """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。
+        推之前先做读侧校验（2026-11-28）：面板不吃陈旧内存副本。"""
         if getattr(self, "on_event", None):
             try:
+                view_active_plan(self)
                 self.on_event({"type": "plan", "plan": [dict(s) for s in self.plan],
                                "plan_id": self.active_plan_id,
                                "plan_title": (self.active_plan or {}).get("title", "")})

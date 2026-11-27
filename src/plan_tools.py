@@ -76,6 +76,35 @@ def _list_plans(workspace) -> list:
 
 # ========== 内存 ↔ 落盘 同步 ==========
 
+import threading
+
+# 进程内锁（p_c0eebb19 步 4，2026-11-27）：main 记账与 worker 标进度并发改同一计划文件——
+# 此前 update_plan 直接改内存副本再写盘，两边互相覆盖（worker 标的步被 main 的旧内存副本
+# 写回 pending）。读文件→改→写全程持锁互斥。
+_PLAN_LOCK = threading.Lock()
+
+
+def _mutate_active_plan(agent, mutator):
+    """活动计划的读文件→改→写（p_c0eebb19 步 4）：持 _PLAN_LOCK，按 active_plan_id 重新读盘
+    （读不到再退回内存副本），跑 mutator(plan)（返回 None=成功 / 错误文案=中止不写盘），
+    写盘并把内存 active_plan 换成刚读到的 dict。内存副本落后于文件时不会用旧状态覆盖文件里
+    其它步骤的最新状态（main 记账与 worker 标进度互不踩）。"""
+    pid = getattr(agent, "active_plan_id", None)
+    ws = getattr(getattr(agent, "session", None), "workspace", None)
+    with _PLAN_LOCK:
+        fresh = _load_plan(ws, pid) if pid else None
+        plan = fresh if fresh is not None else getattr(agent, "active_plan", None)
+        if not plan:
+            return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
+        err = mutator(plan)
+        if err:
+            return err
+        _save_plan(ws, plan)
+        _set_active(agent, plan)   # 内存换成刚读到的 dict（镜像 agent.plan 一并刷新）
+        _emit_plan(agent)
+        return None
+
+
 def _sync_legacy(agent):
     """把 active_plan['steps'] 镜像到 agent.plan（供 wiki/commands/web 等旧读者）。"""
     if getattr(agent, "active_plan", None):
@@ -282,7 +311,9 @@ def make_plan_tools(agent) -> list:
         pid = agent.active_plan_id
         _clear_active(agent)
         _emit_plan(agent)
-        return f"已退出计划 {pid}（文件保留，可用 join_plan 重新加入）"
+        aid = str(getattr(agent, "agent_id", "") or "").strip()
+        by = f"（由 {aid}）" if aid else ""
+        return f"已退出计划 {pid}{by}（文件保留，可用 join_plan 重新加入）"
 
     def list_plans() -> str:
         """列出本仓库的全部计划：plan_id / 标题 / 完成进度，并标注当前活动计划。"""
@@ -300,49 +331,61 @@ def make_plan_tools(agent) -> list:
 
     def update_plan(step: int, status: str = "", description: str = "") -> str:
         """更新当前计划某一步：status∈pending/in_progress/completed 标记进度；description 非空则改写该步描述。至少给一个。"""
-        if not getattr(agent, "active_plan", None):
+        if not getattr(agent, "active_plan", None) and not getattr(agent, "active_plan_id", None):
             return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
-        steps = agent.active_plan["steps"]
-        if not (1 <= step <= len(steps)):
-            return f"[错误] step 越界（共 {len(steps)} 步）"
-        if not status and not description:
-            return "[错误] 至少提供 status 或 description 之一"
-        if status and status not in _VALID_STATUS:
-            return "[错误] status 必须是 pending / in_progress / completed"
-        if status:
-            steps[step - 1]["status"] = status
-        if description:
-            steps[step - 1]["description"] = _step_desc(description) or str(description)
-        _flush(agent)
-        _emit_plan(agent)
+        step_i = int(step) if isinstance(step, (int, float)) else step
+
+        def mut(plan):
+            steps = plan.get("steps") or []
+            if not (1 <= step_i <= len(steps)):
+                return f"[错误] step 越界（共 {len(steps)} 步）"
+            if not status and not description:
+                return "[错误] 至少提供 status 或 description 之一"
+            if status and status not in _VALID_STATUS:
+                return "[错误] status 必须是 pending / in_progress / completed"
+            if status:
+                steps[step_i - 1]["status"] = status
+            if description:
+                steps[step_i - 1]["description"] = _step_desc(description) or str(description)
+            return None
+
+        # 读文件→改→写（进程内锁，p_c0eebb19 步 4）：内存副本落后于文件时不覆盖其它步骤状态
+        err = _mutate_active_plan(agent, mut)
+        if err:
+            return err
         return _plan_text(agent)
 
     def add_step(description: str) -> str:
         """给当前活动计划追加一步（状态 pending）。"""
-        if not getattr(agent, "active_plan", None):
-            return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
         desc = _step_desc(description)
-        if not desc:
-            return "[错误] description 不能为空"
-        agent.active_plan["steps"].append({"description": desc, "status": "pending"})
-        _flush(agent)
-        _emit_plan(agent)
+
+        def mut(plan):
+            if not desc:
+                return "[错误] description 不能为空"
+            plan.setdefault("steps", []).append({"description": desc, "status": "pending"})
+            return None
+
+        err = _mutate_active_plan(agent, mut)   # 同一把锁（p_c0eebb19 步 4）
+        if err:
+            return err
         return f"已追加第 {len(agent.active_plan['steps'])} 步：\n" + _plan_text(agent)
 
     def edit_plan(title: str = "", design: str = "") -> str:
         """改写当前活动计划的标题（title）和/或设计（design）；至少给一个。"""
-        if not getattr(agent, "active_plan", None):
-            return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
-        if not title and not design:
-            return "[错误] 至少提供 title 或 design 之一"
-        if title:
-            t = str(title).strip()
-            if t:
-                agent.active_plan["title"] = t
-        if design:
-            agent.active_plan["design"] = str(design)
-        _flush(agent)
-        _emit_plan(agent)
+        def mut(plan):
+            if not title and not design:
+                return "[错误] 至少提供 title 或 design 之一"
+            if title:
+                t = str(title).strip()
+                if t:
+                    plan["title"] = t
+            if design:
+                plan["design"] = str(design)
+            return None
+
+        err = _mutate_active_plan(agent, mut)   # 同一把锁（p_c0eebb19 步 4）
+        if err:
+            return err
         return (f"计划 {agent.active_plan_id} 已更新："
                 f"标题={agent.active_plan.get('title', '')}；设计长度={len(agent.active_plan.get('design', ''))}")
 

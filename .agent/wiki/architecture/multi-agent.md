@@ -1713,4 +1713,35 @@ agent_revoke(target_id, reason="")   # 立刻没收某子 Agent 的全部工具�
 
 **sleep 不睡过头（2026-11-27·用户提案）**：`sleep` 每 0.5s 看一眼执行者的消息水位（插话队列 + 后台 inbox）——等待中有新消息到达立即提前返回，并附首批消息摘要（标明「插话·下一步即注入」/「后台·本轮结束后消费」）与剩余秒数，模型据此决定接着等还是处理；用户停止本轮、被主 Agent 没收同样立即中断（Stop 不再被长睡拖住）。纯冷却/限速不想被打断时传 `wake_on_message=False` 睡满。判据是「长度 + 末条对象」双水位——新消息入队后旧条被后台泵弹出的瞬态（长度不变）也能识别。起点前已在队的消息不触发（防睡下即醒的死循环）。单测 `test/test_sleep_wake.py`（9 项）；脚本体在 `assets/tools_builtin/misc_tools.py`，改完 `/reload tools` 免重启。
 
-**计划视图读侧校验（2026-11-28·用户问诊「main 看到的还是内存里自己那份」）**：计划文件 `plans/<pid>.json` 是唯一事实源，`agent.active_plan` 只是每个 Agent 各自的缓存——worker 经 update_plan 写盘后，main 的 SYSTEM 进度块（plan_steps）、计划面板若只读内存副本就永远是旧进度。现由 `plan_tools.view_active_plan(agent)` 统一读端：以文件 mtime/size 为缓存戳，变了就重读并替换内存视图（含 `agent.plan` 镜像），内容签名真变了再 emit 给 UI；没变零开销（一次 os.stat）。接入点：`_active_plan_dict`（plan_steps/plan_content 装配）、`_format_plan_block`、`_emit_plan_if_any`、WS 连接时的面板补推。plan_steps 在 main.yml 里位于 history 之后——进度变化不碰 system/history 前缀缓存。委托提示口径同步改为「进度随 worker 实时同步，收到汇报验收即可、不必重复记账」。单测 `test/test_plan_view_sync.py`（5 项）；L2 e2e：worker 改标题+标完第 1 步后 main 未动计划工具，WS 面板连上即显示新状态。
+**计划视图读侧校验（2026-11-28·用户问诊「main 看到的还是内存里自己那份」）**：计划文件 `plans/<pid>.json` 是唯一事实源，`agent.active_plan` 只是每个 Agent 各自的缓存——worker 经 update_plan 写盘后，main 的 SYSTEM 进度块（plan_steps）、计划面板若只读内存副本就永远是旧进度。初版由 `plan_tools.view_active_plan(agent)` 做读侧校验（已被下一节的 PlanStore 取代——每个 Agent 各持缓存的模型整体退役）。接入点：`_active_plan_dict`（plan_steps/plan_content 装配）、`_format_plan_block`、`_emit_plan_if_any`、WS 连接时的面板补推。plan_steps 在 main.yml 里位于 history 之后——进度变化不碰 system/history 前缀缓存。委托提示口径同步改为「进度随 worker 实时同步，收到汇报验收即可、不必重复记账」。单测 `test/test_plan_view_sync.py`（5 项）；L2 e2e：worker 改标题+标完第 1 步后 main 未动计划工具，WS 面板连上即显示新状态。
+## 计划仓库化 PlanStore：进程级 plan_id→plan 映射（2026-11-28）
+
+**用户提案**：一个 agt 进程维护一张 plan_id → plan 的映射；Agent 实例只持有 plan_id，计划情况一律按 id 查。取代此前「每个 Agent 各持一份 active_plan 缓存 + 文件戳校验」的模型（spec `s_6cf224be`，plan `p_c6cde42a`）。
+
+#### 模型
+
+| 层 | 实现 |
+|---|---|
+| 仓库 | `plan_tools.PlanStore`（模块级单例 `PLAN_STORE`）：条目 key = 计划文件绝对路径；条目 = 不可变快照 `dict` + 文件戳 `(mtime_ns, size)` |
+| 读 | `get(ws, pid)`：懒加载；文件戳变了（外部手改/别的进程写）重读换快照；文件没了/损坏保留现有快照。**不拷贝**——同进程所有读方拿到同一份快照对象 |
+| 写 | `mutate(ws, pid, mutator)`：持锁取最新快照 → 深拷贝 → `mutator(copy)`（None=成功 / 文案=中止不写盘）→ `_save_plan`（原子替换）→ 换快照 → **锁外**通知订阅者；`put(ws, plan)`：落盘 + 入库 + 通知 |
+| 订阅 | `watch / unwatch`：谁把它设为活动计划（`weakref.WeakSet`，Agent 死了自动掉；SimpleNamespace 等替身不可弱引用 → TypeError 兜底跳过） |
+| Agent | 唯一状态 `active_plan_id`；`active_plan` / `plan` 是只读派生 property（getter 查仓库；`active_plan` setter 兼容旧赋值：dict→记 id / None→清；`plan` setter no-op） |
+
+#### 不变量
+1. 进程内同一计划只有一份快照；读方拿到的 dict 视为不可变（就地改不会被保存，也不会通知任何人）。
+2. 文件 `plans/<pid>.json` 是持久化真源（重启恢复）；仓库是进程内真源；文件戳兜底外部修改。
+3. 写路径全部收口到仓库（create/join/update/add_step/edit/exit），所以「谁写都通知到所有持有者」——含空闲的 main，面板在写盘瞬间刷新。
+4. 跨进程并发操作同一 repo 仍不支持（既有约定）。
+5. `plan_steps`/`plan_content` 在 main.yml 里位于 history 之后——进度变化不碰 system/history 前缀缓存。
+
+#### 已删除
+`_mutate_active_plan` / `_PLAN_LOCK` / `view_active_plan` / `_plan_sig` / `_sync_legacy` / `_flush`；Agent 上的 `active_plan` 字段、`plan` 镜像字段、`_plan_view_stamp`。
+
+#### 不动 / 后续
+- `session.py` 的 `_active_plan_id` / `_construction_mode` / 施工牌三处带「session 同一性」守卫、只服务 main 的施工视图——语义不变。
+- **spec 侧同构**：`active_spec` 仍是每 Agent 一份 dict——后续可照 PlanStore 同款收口。
+- 替身兼容：`_active_plan_of` / `_plan_steps_of` 对真实 Agent 走 property，对普通属性替身按 id 兜底查仓库（存量单测不必持双状态）。
+
+#### 验证
+`test/test_plan_store.py`（15 项：同一快照身份 / mutate 双方可见 / 订阅者收通知含空闲 main / 外部手改可见 / 文件损坏保留 / 并发 mutate 不丢更新 / exit 后不再收通知 / setter 兼容…）+ 存量四件套共 45 passed。L2 隔离实例双 Agent e2e：main 空闲且未动计划工具，worker join + 改标题 + 标步后，main 的 WS 面板**不断连**即收到两次推送（改名、completed/pending）；日志零 Traceback。

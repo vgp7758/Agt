@@ -28,7 +28,7 @@ from background import ServiceManager, Scheduler
 from llm_client import LLMClient, ImageUnsupportedError
 from log import configure_logging
 from longterm_memory import ensure_ltm
-from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block, view_active_plan
+from plan_tools import restore_active_plan, clear_active_plan, _format_plan_block, PLAN_STORE
 from spec_tools import (restore_active_spec, clear_active_spec, _format_spec_block,
                         _clear_active_spec, _set_active_spec, _emit_spec)
 from session import Session, Step, ToolCall, repo_images_dir
@@ -436,9 +436,7 @@ class Agent:
         self._watch_router = None
         self.scheduler = Scheduler(self)
         self.cumulative_tokens = 0
-        self.plan: list = []        # 计划 steps 镜像（兼容旧读者；真相在 active_plan）
-        self.active_plan_id: Optional[str] = None  # 当前活动计划 id（= 文件名 stem）；None=无活动计划
-        self.active_plan: Optional[dict] = None     # 当前活动计划完整 dict（单一事实源：id/title/design/steps/...）
+        self.active_plan_id: Optional[str] = None  # 当前活动计划 id（Agent 上唯一的计划状态；完整计划在进程级 PLAN_STORE，active_plan/plan 均为派生 property）
         # —— 施工方案（spec）状态 ——
         self.active_spec_id: Optional[str] = None    # 当前活动 spec id（= 文件名 stem）；None=无活动 spec
         self.active_spec: Optional[dict] = None      # 当前活动 spec 完整 dict（单一事实源）
@@ -1173,6 +1171,44 @@ class Agent:
             self._emit({"type": "warn", "text": f"main.yml 热重载失败：{type(e).__name__}: {e}"})
 
     # ========== 运行时状态的存取（随 session 落盘/恢复）==========
+    # —— 计划状态：进程级仓库派生（p_c6cde42a，2026-11-28）——
+    # Agent 只持有 active_plan_id；完整计划在 PLAN_STORE（按 id 查、文件戳兜底外部修改）。
+    # 旧读者（面板/装配/emit）继续读 active_plan/plan 属性，零改动自动走 store。
+
+    @property
+    def active_plan(self):
+        """活动计划完整 dict 或 None（只读派生：PLAN_STORE 按 active_plan_id 取）。
+        无 session/workspace、无 id、任何异常 → None（装配路径不能炸）。"""
+        try:
+            ws = getattr(getattr(self, "session", None), "workspace", None)
+            pid = self.active_plan_id
+            if ws is None or not pid:
+                return None
+            return PLAN_STORE.get(ws, pid)
+        except Exception:
+            return None
+
+    @active_plan.setter
+    def active_plan(self, value):
+        """兼容旧赋值点：dict → 只记其 id（不 watch——订阅统一在 plan_tools._set_active）；
+        None → 清 id。计划本体永远在 store，Agent 不持有副本。"""
+        if value is None:
+            self.active_plan_id = None
+        elif isinstance(value, dict):
+            self.active_plan_id = value.get("id")
+
+    @property
+    def plan(self):
+        """计划 steps 的拷贝列表（兼容旧读者：wiki/commands/web/面板）。无活动计划 → []。"""
+        try:
+            return [dict(s) for s in (self.active_plan or {}).get("steps", [])]
+        except Exception:
+            return []
+
+    @plan.setter
+    def plan(self, value):
+        """历史赋值点/构造参数兼容：no-op（steps 真相在 store，读时派生）。"""
+        pass
     def capture_runtime_state(self) -> dict:
         """收集要随 session 存档保留的运行时状态（resume 时恢复）。"""
         out = {
@@ -1359,16 +1395,14 @@ class Agent:
 
     def _emit_plan_if_any(self):
         """把当前 plan 推给 UI（resume 后让前端 plan 面板同步）。
-        推之前先做读侧校验（2026-11-28）：面板不吃陈旧内存副本。"""
+        读 self.plan/self.active_plan 属性即走 PLAN_STORE（p_c6cde42a）：面板不吃陈旧副本。"""
         if getattr(self, "on_event", None):
             try:
-                view_active_plan(self)
                 self.on_event({"type": "plan", "plan": [dict(s) for s in self.plan],
                                "plan_id": self.active_plan_id,
                                "plan_title": (self.active_plan or {}).get("title", "")})
             except Exception:
                 pass
-
     def _plan_system_block(self) -> str:
         """当前活动计划的 SYSTEM 注入块（加入计划后每轮注入；退出/无计划返回 ''，session 不注入）。
         格式化逻辑在 plan_tools._format_plan_block，这里只做转发 + 异常兜底。"""

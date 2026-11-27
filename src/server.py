@@ -2852,15 +2852,11 @@ async def ws_endpoint(websocket: WebSocket):
             pass
     # plan 面板初始化（用户实锤 2026-10-06）：plan 事件只在 create/update 工具变更时广播，
     # 页面刷新后前端收不到 → 顶部步骤列表面板空。连接建立即补推当前 active plan
-    # （与上方 team_list 同款修法——刷新即恢复）。
+    # （与上方 team_list 同款修法——刷新即恢复）。（p_c6cde42a：属性读法即走 PLAN_STORE，
+    # 按 id 查+文件戳校验，无需读侧校验调用。）
     try:
         _ag = _agent
         if _ag is not None and getattr(_ag, "active_plan_id", None):
-            try:
-                from plan_tools import view_active_plan as _vap   # 读侧校验：面板不吃陈旧内存副本
-                _vap(_ag)
-            except Exception:
-                pass
             if getattr(_ag, "active_plan", None):
                 await _send(websocket, {"type": "plan",
                                         "plan": [dict(s) for s in (_ag.plan or [])],

@@ -309,12 +309,13 @@ def _active_spec_dict():
 
 def _active_plan_dict():
     """活动 plan dict 或 None。读当前线程所属 Agent（contextvar 优先，p_c0eebb19 步 3）：
-    子 Agent 线程装配 plan_steps()/plan_content() 读自己的活动计划，不再恒读 main 的。"""
+    子 Agent 线程装配 plan_steps()/plan_content() 读自己的活动计划，不再恒读 main 的。
+    （p_c6cde42a：真实 Agent 的 active_plan 属性自动走进程级 PLAN_STORE——按 id 查 +
+    文件戳校验，别的 Agent 标的进度实时可见，无需显式读侧校验。）"""
     a = current_agent()
     if a is None:
         return None
-    from plan_tools import view_active_plan   # 延迟 import：防顶层循环
-    p = view_active_plan(a)                   # 读侧校验（2026-11-28）：别的 Agent 标的进度实时可见
+    p = getattr(a, "active_plan", None)   # 属性即 store 派生；替身无属性→None
     return p if (p and p.get("steps")) else None
 
 

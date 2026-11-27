@@ -85,3 +85,5 @@ bp/
 .agent/snapshots/
 .agent/construction_dispatch.json
 .agent/projects/.trash/
+# 第三方工具 WorkBuddy 的本地目录（会话/缓存，不入版本）
+.workbuddy/

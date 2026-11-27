@@ -8,8 +8,10 @@
 （见 agent._plan_system_block / session.messages_for_llm 的 _plan_provider 槽），让 Agent 始终
 清楚在干哪一步；exit_plan() 退出后停止注入（文件仍保留）。
 
-内存模型：agent.active_plan（完整 dict，单一事实源）+ agent.plan（steps 的镜像，兼容旧读者）
-+ agent.active_plan_id。所有变更工具改 active_plan → _flush（同步镜像 + 原子落盘）→ emit。
+内存模型（p_c6cde42a，2026-11-28）：进程级 PlanStore 单例按 plan_id 持有唯一不可变快照；
+Agent 实例只持有 active_plan_id（active_plan/plan 均为派生只读属性，见 agent.py）。所有变更走
+PLAN_STORE.mutate/put（深拷贝→改→原子落盘→换快照→锁外通知全部订阅 Agent）——谁写都通知，
+空闲的持有者面板也在写盘瞬间刷新，不再依赖「谁碰巧来读」。
 """
 from __future__ import annotations
 
@@ -74,14 +76,7 @@ def _list_plans(workspace) -> list:
     return out
 
 
-# ========== 内存 ↔ 落盘 同步 ==========
-
 import threading
-
-# 进程内锁（p_c0eebb19 步 4，2026-11-27）：main 记账与 worker 标进度并发改同一计划文件——
-# 此前 update_plan 直接改内存副本再写盘，两边互相覆盖（worker 标的步被 main 的旧内存副本
-# 写回 pending）。读文件→改→写全程持锁互斥。
-_PLAN_LOCK = threading.Lock()
 
 # ========== 进程级计划仓库 PlanStore（p_c6cde42a，2026-11-28）==========
 
@@ -236,109 +231,61 @@ class PlanStore:
 PLAN_STORE = PlanStore()   # 进程级单例
 
 
-def _mutate_active_plan(agent, mutator):
-    """活动计划的读文件→改→写（p_c0eebb19 步 4）：持 _PLAN_LOCK，按 active_plan_id 重新读盘
-    （读不到再退回内存副本），跑 mutator(plan)（返回 None=成功 / 错误文案=中止不写盘），
-    写盘并把内存 active_plan 换成刚读到的 dict。内存副本落后于文件时不会用旧状态覆盖文件里
-    其它步骤的最新状态（main 记账与 worker 标进度互不踩）。"""
-    pid = getattr(agent, "active_plan_id", None)
-    ws = getattr(getattr(agent, "session", None), "workspace", None)
-    with _PLAN_LOCK:
-        fresh = _load_plan(ws, pid) if pid else None
-        plan = fresh if fresh is not None else getattr(agent, "active_plan", None)
-        if not plan:
-            return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
-        err = mutator(plan)
-        if err:
-            return err
-        _save_plan(ws, plan)
-        _set_active(agent, plan)   # 内存换成刚读到的 dict（镜像 agent.plan 一并刷新）
-        _emit_plan(agent)
-        return None
 
-
-def _plan_sig(p):
-    """计划内容签名（面板可见部分：id/标题/各步状态+描述）——视图刷新时判断「内容真变了没」。"""
-    if not p:
-        return None
-    return (p.get("id"), p.get("title"),
-            tuple((s.get("status"), s.get("description")) for s in (p.get("steps") or [])))
-
-
-def view_active_plan(agent):
-    """读侧视图校验（2026-11-28·用户问诊「main 看到的还是内存里自己那份」）：计划文件是唯一
-    事实源，agent.active_plan 只是缓存——另一个 Agent（如施工 worker）update_plan 写盘后，
-    本 Agent 的 SYSTEM 进度块 / 计划面板若仍读内存副本就永远是旧进度。文件比上次看到的新
-    （mtime/size 变了）就重读并替换内存视图（含 agent.plan 镜像），内容真变了再 emit 给 UI。
-    每次调用一次 os.stat（微秒级），没变直接返回——放在每步装配路径上无感。"""
-    cur = getattr(agent, "active_plan", None)
+def _active_plan_of(agent):
+    """活动计划快照：真实 Agent 的 active_plan 是 property（PLAN_STORE 按 id 派生）；
+    替身（SimpleNamespace/普通对象，无 property）在此返回默认 None → 按 id 兜底查 store。
+    两条路最终都拿到仓库快照——替身测试不必再持有双状态副本。"""
+    p = getattr(agent, "active_plan", None)
+    if p is not None:
+        return p
     pid = getattr(agent, "active_plan_id", None)
     if not pid:
-        return cur
+        return None
     ws = getattr(getattr(agent, "session", None), "workspace", None)
-    try:
-        _st = _plan_path(ws, pid).stat()
-        stamp = (_st.st_mtime_ns, _st.st_size)
-    except Exception:
-        return cur                      # 文件没了/路径不可用：保留现有视图
-    if cur is not None and getattr(agent, "_plan_view_stamp", None) == stamp:
-        return cur                      # 文件没动：零开销
-    fresh = _load_plan(ws, pid)
-    if fresh is None:
-        return cur                      # 读到损坏内容（写端是原子替换，正常不会出现）：保留现有视图
-    try:
-        agent._plan_view_stamp = stamp
-    except Exception:
-        pass
-    if cur is None:
-        _set_active(agent, fresh)
-        return fresh
-    if _plan_sig(cur) == _plan_sig(fresh):
-        agent.active_plan = fresh       # 内容没变（如仅 updated_at）：只换引用，不打扰 UI
-        return fresh
-    _set_active(agent, fresh)           # 内容变了（多半是别的 Agent 标了进度）：换视图 + 刷镜像
-    _emit_plan(agent)                   # + 推 UI（面板实时跟上）
-    return fresh
+    return PLAN_STORE.get(ws, pid) if ws is not None else None
 
 
-def _sync_legacy(agent):
-    """把 active_plan['steps'] 镜像到 agent.plan（供 wiki/commands/web 等旧读者）。"""
-    if getattr(agent, "active_plan", None):
-        agent.plan = [dict(s) for s in agent.active_plan.get("steps", [])]
-    else:
-        agent.plan = []
+def _plan_steps_of(agent) -> list:
+    """steps 的拷贝列表：优先 agent.plan 属性（真实 Agent property 派生 / 替身普通属性），
+    无则按 id 查 store。旧读者（wiki/commands/web/面板）语义不变。"""
+    try:
+        pl = agent.plan
+    except AttributeError:
+        pl = None
+    if pl is None:
+        p = _active_plan_of(agent)
+        pl = (p or {}).get("steps") or []
+    return [dict(s) for s in pl]
 
 
 def _set_active(agent, plan: dict):
-    """把一个计划 dict 设为当前活动计划（同步 id / 镜像）。"""
-    agent.active_plan = plan
+    """把一个计划设为当前活动计划（p_c6cde42a）：Agent 只记 id + 向 PLAN_STORE 订阅变更。
+    先 unwatch（换计划场景，从所有条目移除）再 watch 新计划——订阅随活动计划走，不漏收不多收。"""
+    PLAN_STORE.unwatch(agent)
     agent.active_plan_id = plan.get("id")
-    _sync_legacy(agent)
+    ws = getattr(getattr(agent, "session", None), "workspace", None)
+    if ws is not None and plan.get("id"):
+        PLAN_STORE.watch(ws, plan["id"], agent)
 
 
 def _clear_active(agent):
-    """清空活动计划（/reset、新 session、exit_plan 调用）。文件不动。"""
-    agent.active_plan = None
+    """清空活动计划（/reset、新 session、exit_plan 调用）。文件不动，订阅移除。"""
+    PLAN_STORE.unwatch(agent)
     agent.active_plan_id = None
-    agent.plan = []
 
-
-def _flush(agent):
-    """把内存里的活动计划同步镜像并原子落盘。"""
-    if getattr(agent, "active_plan", None):
-        _sync_legacy(agent)  # active_plan['steps'] 可能被工具就地改过 → 刷到 agent.plan
-        _save_plan(agent.session.workspace, agent.active_plan)
 
 
 def restore_active_plan(agent, state: dict) -> None:
-    """从 session 存档恢复活动计划：优先按 plan_id 从文件读回；
+    """从 session 存档恢复活动计划：按 plan_id 从仓库取（懒加载入库）并订阅变更；
     旧存档只有 plan 列表（无 plan_id）则迁移成计划文件。供 agent.restore_runtime_state 调用。"""
     if not state:
         _clear_active(agent)
         return
+    ws = getattr(getattr(agent, "session", None), "workspace", None)
     plan_id = state.get("plan_id")
     if plan_id:
-        plan = _load_plan(agent.session.workspace, plan_id)
+        plan = PLAN_STORE.get(ws, plan_id) if ws is not None else None
         if plan:
             _set_active(agent, plan)
         else:
@@ -355,7 +302,7 @@ def restore_active_plan(agent, state: dict) -> None:
             "updated_at": _now_iso(),
             "created_session": getattr(agent.session, "name", None),
         }
-        _save_plan(agent.session.workspace, plan)
+        PLAN_STORE.put(ws, plan)   # 落盘 + 入库
         _set_active(agent, plan)
     else:
         _clear_active(agent)
@@ -409,16 +356,18 @@ def _step_desc(s) -> str:
 
 def _plan_text(agent) -> str:
     """计划 steps 的纯文本视图（工具返回值用）。"""
-    if not agent.plan:
+    steps = _plan_steps_of(agent)
+    if not steps:
         return "(空计划)"
     return "\n".join(f"{_PLAN_ICON.get(s.get('status'), '?')} {i + 1}. {s.get('description', '')}"
-                     for i, s in enumerate(agent.plan))
+                     for i, s in enumerate(steps))
 
 
 def _format_plan_block(agent) -> str:
     """活动计划的 SYSTEM 注入块。无活动计划 / 空步骤返回 ''（session 不注入）。
-    先走 view_active_plan 读侧校验（2026-11-28）：别的 Agent 标的进度实时可见。"""
-    p = view_active_plan(agent)
+    读 _active_plan_of(agent)（p_c6cde42a：真实 Agent 的属性自动走 PLAN_STORE——按 id 查
+    + 文件戳校验），别的 Agent 标的进度实时可见，无需显式读侧校验。"""
+    p = _active_plan_of(agent)
     if not p or not p.get("steps"):
         return ""
     steps = p["steps"]
@@ -448,11 +397,13 @@ def _format_plan_block(agent) -> str:
 
 
 def _emit_plan(agent):
+    """把当前 plan 推给该 Agent 的 UI（面板刷新）。真实 Agent 的属性走 PLAN_STORE 派生，
+    替身（无 property）经 _active_plan_of/_plan_steps_of 按 id 兜底查 store。"""
     if getattr(agent, "on_event", None):
         try:
-            agent.on_event({"type": "plan", "plan": [dict(s) for s in agent.plan],
-                            "plan_id": agent.active_plan_id,
-                            "plan_title": (agent.active_plan or {}).get("title", "")})
+            agent.on_event({"type": "plan", "plan": _plan_steps_of(agent),
+                            "plan_id": getattr(agent, "active_plan_id", None),
+                            "plan_title": (_active_plan_of(agent) or {}).get("title", "")})
         except Exception:
             pass
 
@@ -482,7 +433,7 @@ def make_plan_tools(agent) -> list:
         }
         if wid:
             plan["worker_id"] = wid
-        _save_plan(agent.session.workspace, plan)
+        PLAN_STORE.put(agent.session.workspace, plan)   # 落盘 + 入库（谁写都通知订阅者）
         _set_active(agent, plan)
         _emit_plan(agent)
         return (f"已创建计划 {plan['id']}（{len(plan['steps'])} 步）：\n" + _plan_text(agent)
@@ -494,7 +445,7 @@ def make_plan_tools(agent) -> list:
         pid = (plan_id or "").strip()
         if not pid:
             return "[错误] plan_id 不能为空；先用 list_plans() 查看可用计划"
-        plan = _load_plan(agent.session.workspace, pid)
+        plan = PLAN_STORE.get(agent.session.workspace, pid)   # 懒加载入库（带文件戳校验）
         if not plan:
             return f"[错误] 找不到计划 {pid}；用 list_plans() 查看可用计划"
         _set_active(agent, plan)
@@ -528,8 +479,8 @@ def make_plan_tools(agent) -> list:
 
     def update_plan(step: int, status: str = "", description: str = "") -> str:
         """更新当前计划某一步：status∈pending/in_progress/completed 标记进度；description 非空则改写该步描述。至少给一个。"""
-        if not getattr(agent, "active_plan", None) and not getattr(agent, "active_plan_id", None):
-            return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
+        if not getattr(agent, "active_plan_id", None):
+            return PLAN_STORE.NO_PLAN_ERR
         try:
             step_i = int(step)
         except (TypeError, ValueError):
@@ -549,8 +500,9 @@ def make_plan_tools(agent) -> list:
                 steps[step_i - 1]["description"] = _step_desc(description) or str(description)
             return None
 
-        # 读文件→改→写（进程内锁，p_c0eebb19 步 4）：内存副本落后于文件时不覆盖其它步骤状态
-        err = _mutate_active_plan(agent, mut)
+        # 持锁读→改→写（p_c6cde42a：写路径收口 PLAN_STORE.mutate——谁写都通知全部持有者，
+        # 内存副本落后于文件时不会用旧状态覆盖其它步骤的最新状态）
+        err = PLAN_STORE.mutate(agent.session.workspace, agent.active_plan_id, mut)
         if err:
             return err
         return _plan_text(agent)
@@ -565,10 +517,10 @@ def make_plan_tools(agent) -> list:
             plan.setdefault("steps", []).append({"description": desc, "status": "pending"})
             return None
 
-        err = _mutate_active_plan(agent, mut)   # 同一把锁（p_c0eebb19 步 4）
+        err = PLAN_STORE.mutate(agent.session.workspace, agent.active_plan_id, mut)   # 同一把锁
         if err:
             return err
-        return f"已追加第 {len(agent.active_plan['steps'])} 步：\n" + _plan_text(agent)
+        return f"已追加第 {len(_plan_steps_of(agent))} 步：\n" + _plan_text(agent)
 
     def edit_plan(title: str = "", design: str = "") -> str:
         """改写当前活动计划的标题（title）和/或设计（design）；至少给一个。"""
@@ -583,11 +535,12 @@ def make_plan_tools(agent) -> list:
                 plan["design"] = str(design)
             return None
 
-        err = _mutate_active_plan(agent, mut)   # 同一把锁（p_c0eebb19 步 4）
+        err = PLAN_STORE.mutate(agent.session.workspace, agent.active_plan_id, mut)   # 同一把锁
         if err:
             return err
+        p = _active_plan_of(agent) or {}
         return (f"计划 {agent.active_plan_id} 已更新："
-                f"标题={agent.active_plan.get('title', '')}；设计长度={len(agent.active_plan.get('design', ''))}")
+                f"标题={p.get('title', '')}；设计长度={len(p.get('design', ''))}")
 
     return [Tool(create_plan), Tool(update_plan), Tool(add_step), Tool(edit_plan),
             Tool(join_plan), Tool(list_plans), Tool(exit_plan)]

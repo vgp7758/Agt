@@ -1240,6 +1240,11 @@ class Agent:
         其模型由声明场景决定，声明优先于存档。"""
         _prev = self.session
         self.session = session
+        try:   # 会话→owner 弱引用登记（p_c0eebb19 步 3 复核补强）：后台线程装配按 owner 读数
+            from agent_config import bind_session_owner
+            bind_session_owner(session, self)
+        except Exception:
+            pass
         # assembly DSL v2 转挂：清单/钩子声明/hooks 默认开关跟到新 session
         # （persona 在 assembly text: 项的场景，不转挂则切档后 persona 丢失）
         if getattr(_prev, "assembly_plan", None) is not None:
@@ -2905,6 +2910,17 @@ class Agent:
                       self.agent_id, " ".join(str(user_message).split())[:80])
             return ("[工具已被没收] 主 Agent 已中止本任务，本次唤醒消息不执行——"
                     "主 Agent 重新派活会自动恢复你的工具。")
+        # 本线程归属（p_c0eebb19 步 3 复核补强）：子 Agent 的 run 线程（_bg 派发、inbox/notify
+        # 空闲唤醒都走这里）起点把装配读数对象设为自己并登记会话 owner——plan_steps()/
+        # plan_content() 等不再恒读 main。主 Agent 不设（contextvar 留空 → 落回 _RUNTIME_AGENT）。
+        if getattr(self, "agent_id", "") != "_main_":
+            try:
+                from agent_config import set_current_agent, bind_session_owner
+                set_current_agent(self)
+                if getattr(self, "session", None) is not None:
+                    bind_session_owner(self.session, self)
+            except Exception:
+                pass
         msg, auto_flag, imgs = user_message, _autonomous_continue, images
         seeds = _seeds or []   # 本轮迭代要预置的合成 Step（后台事件）；用完即清空
         self._react_running = True

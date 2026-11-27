@@ -2373,7 +2373,7 @@ function _dashPoll(panelId){
 function _dashStop(panelId){
   if(_dashTimers[panelId]){ clearInterval(_dashTimers[panelId]); delete _dashTimers[panelId]; }
 }
-const _AGENT_ICON = {running:'🏃', idle:'💤', done:'✅', failed:'❌'};
+const _AGENT_ICON = {running:'🏃', idle:'💤', done:'✅', failed:'❌', revoked:'⛔'};
 const _SVC_ICON   = {running:'🟢', exited:'🔴', '?':'⚪'};
 
 // —— 团队/服务看板抽屉：统一容器 + DrawerCtl 托管开合；onOpen 渲染+3s 轮询，onClose 停轮询 ——

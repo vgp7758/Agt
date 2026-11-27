@@ -84,6 +84,16 @@ def _resolve_agent_id(existing: dict, name: str, agent_id: str) -> str:
     return aid
 
 
+def _final_status(sa, default: str) -> str:
+    """子 Agent 一轮结束后的终态（registry / meta / 后台任务面板）：被没收（_revoked）保持
+    "revoked"，不被 done/failed 覆盖——没收后步边界断轮 → run 正常返回，各唤醒路径的收尾
+    若照旧标 done，看板会显示 ✅ 而看不出工具已被收回（p_c0eebb19 步 8 复核补强）。"""
+    try:
+        return "revoked" if getattr(sa, "_revoked", False) else default
+    except Exception:
+        return default
+
+
 def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool:
     """把一条系统提示投给【指定 Agent 实例】并保证被看到（用户裁定 2026-10-15 从 agent_notify 抽出
     复用）：bg_task 完成回执按 owner 路由时调它——谁起的后台任务，回执投给谁。
@@ -162,7 +172,7 @@ def deliver_notice(target_agent, message: str, seed=None, on_event=None) -> bool
                 _a.on_event = _old
                 if reg is not None and aid:
                     try:
-                        reg.update_status(aid, "failed" if _dead is not None else "done")
+                        reg.update_status(aid, _final_status(_a, "failed" if _dead is not None else "done"))
                     except Exception:
                         pass
 
@@ -1106,7 +1116,7 @@ def make_communication_tools(agent) -> list:
             finally:
                 _a.on_event = _old
                 try:
-                    reg.update_status(target_id, "failed" if _dead is not None else "done")
+                    reg.update_status(target_id, _final_status(_a, "failed" if _dead is not None else "done"))
                 except Exception:
                     pass
         import threading as _th
@@ -2254,11 +2264,12 @@ def make_subagent_tools(agent) -> list:
                         time.sleep(0.1)
                     recap = getattr(_target, '_recap', '')
                     _is_fail = res.startswith("[失败]") or res.startswith("[中断]")
-                    _write_meta("failed" if _is_fail else "done", recap)
-                    agent.background_tasks[_aid].update(status="failed" if _is_fail else "done",
+                    _st = _final_status(_sa, "failed" if _is_fail else "done")   # 被没收保持 revoked（复核补强）
+                    _write_meta(_st, recap)
+                    agent.background_tasks[_aid].update(status=_st,
                                                         result=res, finished_at=time.time())
                     if reg:
-                        reg.update_status(_aid, "failed" if _is_fail else "done")
+                        reg.update_status(_aid, _st)
                         reg.touch(_aid)   # answer 回流即交互（活跃窗口）
                 except Exception as ex:
                     _sa_ex = getattr(_target, "agent", _target)

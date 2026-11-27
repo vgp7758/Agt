@@ -333,7 +333,10 @@ def make_plan_tools(agent) -> list:
         """更新当前计划某一步：status∈pending/in_progress/completed 标记进度；description 非空则改写该步描述。至少给一个。"""
         if not getattr(agent, "active_plan", None) and not getattr(agent, "active_plan_id", None):
             return "[错误] 还没有活动计划，先用 create_plan 新建或 join_plan 加入"
-        step_i = int(step) if isinstance(step, (int, float)) else step
+        try:
+            step_i = int(step)
+        except (TypeError, ValueError):
+            return f"[错误] step 需为整数序号，收到 {step!r}"
 
         def mut(plan):
             steps = plan.get("steps") or []

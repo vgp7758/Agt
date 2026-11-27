@@ -76,26 +76,34 @@ def rebind_agent_tools(sub, main) -> list:
         except Exception as e:
             _LOG.warning("工厂 %s 以 main 试跑失败（跳过）：%s", getattr(factory, "__name__", factory), e)
     main_groups = getattr(main, "tool_groups", {}) or {}
+    main_tools = getattr(getattr(main, "tools", None), "_tools", {}) or {}
+    _built = {}      # id(factory) -> {工具名: Tool}：以 sub 为 agent 每族只重建一次
 
     replaced = []
     for t in list(sub.tools):
+        # 只重绑「借来的 main 同一对象」（复核补强）：子 Agent 专属工具 / 技能工具若与某计划工具
+        # 同名（_agent_own_tools / sk_tools 覆盖注册），它们不是借来的——不动，保住专属实现。
+        if main_tools.get(t.name) is not t:
+            continue
         hit = main_bound.get(t.name)
-        in_bound_group = main_groups.get(t.name) in AGENT_BOUND_GROUPS
         if hit is None:
-            if in_bound_group:
+            if main_groups.get(t.name) in AGENT_BOUND_GROUPS:
                 # 组名说该重绑，但工厂表以 main 跑不出这个名字（如 main 未装配该组）
                 # → 不动它：重建无从谈起，保留现状比丢失工具安全。
-                _LOG.debug("工具 '%s' 组 '%s' 属 agent-bound 但工厂表无产出，保留原样", t.name, main_groups.get(t.name))
-            continue
-        if not in_bound_group and hit[0] not in AGENT_BOUND_GROUPS:
+                _LOG.debug("工具 '%s' 组 '%s' 属 agent-bound 但工厂表无产出，保留原样",
+                           t.name, main_groups.get(t.name))
             continue
         _group, factory = hit
-        try:
-            new_tools = factory(sub)
-        except Exception as e:
-            _LOG.warning("工具 '%s' 按子 Agent 重建失败（保留 main 版）：%s", t.name, e)
-            continue
-        new_tool = next((x for x in new_tools if x.name == t.name), None)
+        fam = _built.get(id(factory))
+        if fam is None:
+            try:
+                fam = {x.name: x for x in factory(sub)}
+            except Exception as e:
+                _LOG.warning("工具族 %s 按子 Agent 重建失败（保留 main 版）：%s",
+                             getattr(factory, "__name__", factory), e)
+                fam = {}
+            _built[id(factory)] = fam
+        new_tool = fam.get(t.name)
         if new_tool is None:
             continue
         new_tool.hidden = getattr(t, "hidden", False)   # hidden 标志（如 get_session_history）随旧工具

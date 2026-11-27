@@ -11,6 +11,7 @@ save_skill 让 Agent 自主把可复用任务的 SOP 沉淀成新技能(或更�
 from __future__ import annotations
 
 import contextvars
+import weakref
 import json
 import re
 from pathlib import Path
@@ -259,6 +260,35 @@ def current_agent():
     """当前线程应读的 Agent 实例：contextvar 优先，缺省落回 main 挂点。"""
     a = _CURRENT_AGENT.get()
     return a if a is not None else _RUNTIME_AGENT
+
+
+# 会话 → owner 弱引用（p_c0eebb19 步 8 复核补强）：子 Agent 的后台线程（异步重定型
+# proj-rebuild 等）不继承 contextvar——线程入口按 session 反查 owner 再设归属，装配读数才落到
+# 子 Agent 自己身上。弱引用：不延长 Agent 生命周期、不往 Session 上挂属性（快照/深拷贝零影响）。
+_SESSION_OWNER = weakref.WeakKeyDictionary()
+
+
+def bind_session_owner(session, agent) -> None:
+    """登记 session 的 owner（Agent.set_session / 子 Agent run 起点调用；幂等）。"""
+    try:
+        _SESSION_OWNER[session] = weakref.ref(agent)
+    except Exception as e:
+        import logging
+        logging.getLogger("agt.agent_config").debug(
+            "会话 owner 登记失败（后台线程装配归属落回 main）：%s", e)
+
+
+def adopt_session_owner(session):
+    """后台线程入口调用：把本线程的装配归属设为该 session 的 owner（非主 Agent 才设；
+    主 Agent 的会话保持 contextvar 为空 → 落回 _RUNTIME_AGENT）。返回 owner 或 None。"""
+    try:
+        ref = _SESSION_OWNER.get(session)
+        owner = ref() if ref is not None else None
+    except Exception:
+        owner = None
+    if owner is not None and getattr(owner, "agent_id", "") != "_main_":
+        _CURRENT_AGENT.set(owner)
+    return owner
 
 
 def set_runtime_agent(agent) -> None:

@@ -2366,6 +2366,8 @@ class Session:
         """异步重定型线程（invalidate_projection(async_rebuild=True) 拉起）：
         持 _proj_lock 跑 apply_simple_tiering——期间 React 的 messages_for_llm 在锁上
         等待（等到即已定型，不阻塞命令返回）。失败保留待办标记走同步兜底。"""
+        from agent_config import adopt_session_owner
+        adopt_session_owner(self)   # 线程归属（复核补强）：子 Agent 的会话重定型读它自己的装配状态
         try:
             with self._proj_lock:
                 if not self._proj_rebuild_needed:
